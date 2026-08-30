@@ -125,8 +125,6 @@ type Server struct {
 	// selections can be committed back-to-back without overlapping git index
 	// writes. See project_commit_queue.go.
 	commitQueues *commitQueueRegistry
-
-	todoRuns todoRunRegistry
 }
 
 const orgsCacheTTL = 5 * time.Minute
@@ -453,13 +451,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/tests/run", s.handleTestRun)
 	mux.HandleFunc("/api/todos", s.handleTodos)
 	mux.HandleFunc("POST /api/todos/batch", s.handleTodoBatch)
-	mux.HandleFunc("POST /api/todos/bulk", s.handleTodoBulk)
 	mux.HandleFunc("POST /api/todos/new", s.handleTodoNew)
 	mux.HandleFunc("POST /todos/new", s.handleTodoNew)
 	mux.HandleFunc("/api/todos/attachments", s.handleTodoAttachmentUpload)
 	mux.HandleFunc("GET /api/todos/attachments/{id}", s.handleTodoAttachment)
 	mux.HandleFunc("/api/todos/item", s.handleTodoItem)
 	mux.HandleFunc("/api/todos/links", s.handleTodoLinks)
+	mux.HandleFunc("/api/todos/labels", s.handleTodoLabels)
 	mux.HandleFunc("/api/todos/run", s.handleTodoRun)
 	mux.HandleFunc("GET /api/todos/run/context", s.handleTodoRunContext)
 	mux.HandleFunc("/api/todos/run/preview", s.handleTodoRunPreview)
@@ -531,6 +529,7 @@ func (s *Server) Handler() http.Handler {
 		taskSource = newSupervisorTaskSource()
 	}
 	clickytask.RegisterHandlersWithSource(mux, "/api/v1", taskSource)
+	s.registerTodoEntityRoutes(mux)
 	registerPromptRoutes(mux)
 	registerPprof(mux)
 	registerIngestStats(mux, s.readIngestStats)
@@ -1239,6 +1238,16 @@ type prDetail struct {
 	Error        string                 `json:"error,omitempty"`
 }
 
+// prFrame builds the SSE `pr` payload. Comments are normalized to a non-nil
+// slice: a PR with no actionable comments would otherwise marshal as
+// `"comments":null`, which the UI rejects as a malformed frame.
+func prFrame(pr *github.PRInfo, comments []github.PRComment) map[string]any {
+	if comments == nil {
+		comments = []github.PRComment{}
+	}
+	return map[string]any{"pr": pr, "comments": comments}
+}
+
 func (s *Server) handleDetail(w http.ResponseWriter, r *http.Request) {
 	repo := r.URL.Query().Get("repo")
 	numStr := r.URL.Query().Get("number")
@@ -1277,7 +1286,7 @@ func (s *Server) handleDetail(w http.ResponseWriter, r *http.Request) {
 	if entry, ok := s.detailCache.Get(cacheKey); ok {
 		d := entry.Detail
 		if d.PR != nil {
-			emit("pr", map[string]any{"pr": d.PR, "comments": d.Comments})
+			emit("pr", prFrame(d.PR, d.Comments))
 		}
 		if len(d.Runs) > 0 {
 			emit("runs", map[string]any{"runs": d.Runs})
@@ -1308,7 +1317,7 @@ func (s *Server) handleDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	comments := prwatch.MergeAndFilter(pr.Comments, pr.ReviewThreads)
-	emit("pr", map[string]any{"pr": pr, "comments": comments})
+	emit("pr", prFrame(pr, comments))
 
 	// Phase 2: Workflow runs + gavel results in parallel
 	type runResult struct {

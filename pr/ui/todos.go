@@ -10,19 +10,18 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
-	"github.com/flanksource/captain/pkg/ai/agent"
 	"github.com/flanksource/captain/pkg/api"
-	"github.com/flanksource/commons-db/shell"
 	"github.com/flanksource/commons/logger"
 	gavelgit "github.com/flanksource/gavel/git"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/prwatch"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/drivers"
+	"github.com/flanksource/gavel/todos/labels"
 	"github.com/flanksource/gavel/todos/native"
+	"github.com/flanksource/gavel/todos/run"
 	todoruntime "github.com/flanksource/gavel/todos/runtime"
 	todospec "github.com/flanksource/gavel/todos/spec"
 	"github.com/flanksource/gavel/todos/types"
@@ -92,6 +91,11 @@ type todoSummary struct {
 	// on both list and detail responses since they cost no extra parsing.
 	HasPlan         bool `json:"hasPlan,omitempty"`
 	HasVerification bool `json:"hasVerification,omitempty"`
+	// Phases is the latest run per lifecycle phase (plan/triage/run/verify).
+	// Populated on list responses too: the provider reads the whole workspace's
+	// phases in one query, so the dashboard's phase columns cost nothing per
+	// row and need no follow-up request.
+	Phases types.PhaseRuns `json:"phases,omitempty"`
 	// Envelope-driven fields from the last agent run: the native plan file the
 	// agent reported (rendered by the Plan tab / review mode), its status, the
 	// run mode an answer-resume continues in, the final summary, and the
@@ -137,6 +141,9 @@ type todoCreatePayload struct {
 	// fixture in "## Verification" so GitHub comments/actions are checked by the
 	// fixture runner rather than duplicated as AI-scored acceptance criteria.
 	PRVerification *todoPRVerificationPayload `json:"prVerification,omitempty"`
+	// Labels tags the new todo. Presentation for each label is resolved from the
+	// label definitions, not stored here.
+	Labels []string `json:"labels,omitempty"`
 }
 
 type todoNewPayload struct {
@@ -172,6 +179,9 @@ type todoUpdatePayload struct {
 	// Comment, when set, appends a comment. Combined with status it reopens (or
 	// closes) the TODO with a comment in one request.
 	Comment string `json:"comment,omitempty"`
+	// Labels replaces the TODO's whole label set. A nil pointer leaves them
+	// unchanged; a non-nil empty array clears every label.
+	Labels *[]string `json:"labels,omitempty"`
 }
 
 // todoTransferPayload moves the todo at Ref from one native workspace to another.
@@ -210,16 +220,25 @@ type todoRunPayload struct {
 	// collision between this payload's `mode`/`resume` and api.Model's own.
 	Spec api.Spec `json:"spec,omitempty"`
 
-	// RunMode selects the built-in prompt: run (implement) or plan (read-only
-	// investigation producing a reviewable plan). It supersedes the legacy Plan
-	// bool, which is still accepted until the dashboard sends runMode.
+	// RunMode selects the behaviour class: run (implement and commit) or plan
+	// (neither). It supersedes the legacy Plan bool, which is still accepted until
+	// the dashboard sends runMode.
 	RunMode string `json:"runMode,omitempty"`
 	Plan    bool   `json:"plan,omitempty"`
+	// Prompt names the template to run — run, plan, triage, or a name declared in
+	// .gavel.yaml todos.prompts. It is a separate axis from RunMode: each prompt
+	// declares the class it runs as, so several prompts share one. Supplying both
+	// and disagreeing is rejected rather than silently resolved.
+	Prompt string `json:"prompt,omitempty"`
 	// Resume continues the todo's prior agent session (claude --resume) instead of
 	// starting fresh. It stays a sibling flag rather than a Spec field because it is
 	// a session-identity decision: a fresh run also carries a (minted) sessionId, so
 	// resume cannot be inferred from Spec.SessionID.
 	Resume bool `json:"resume,omitempty"`
+	// Force dispatches even when the todo already has a live run owned by a
+	// running process: the two runs proceed in parallel. Without it such a
+	// dispatch is refused and the client is told which run is in the way.
+	Force bool `json:"force,omitempty"`
 	// Dirty/DryRun/Commit/Check are no longer sibling flags — the run's dirty-tree
 	// carry-across, dry-run, auto-commit, and checks all come from Spec
 	// (Setup.Checkout.Worktree.Uncommitted and Workflow.Verify/Commits), surfaced
@@ -259,93 +278,36 @@ type todoRunPreviewResponse struct {
 	Count    int    `json:"count"`
 }
 
-type todoRunStartResult struct {
-	Status    string
-	SessionID string
-	Message   string
-}
+// Run execution lives in todos/run, not here: executing a TODO is not an HTTP
+// concern, and the CLI and the clicky entity need the same seam. What stays in
+// this package is the dashboard's own resolution — the (driver, backend)
+// catalog the run dialog offers, which the other entrypoints have no equivalent
+// of — plus the handlers. These aliases keep the existing call sites reading in
+// the dashboard's vocabulary.
+type (
+	todoRunStartResult = run.StartResult
+	todoRunRequest     = run.Request
+	todoRunOptions     = run.Options
+)
 
-type todoRunRequest struct {
-	Provider todos.Provider
-	Registry *todoRunRegistry
-	// Todos are executed together in a single agent session (multi-select run);
-	// a single-element slice is the ordinary one-todo run.
-	Todos   []*types.TODO
-	Source  todoSource
-	Backend string
-	Options todoRunOptions
-}
+// run.Start is deliberately NOT aliased here. An alias copies the function
+// value at init, so a test replacing the copy would leave every run started
+// through the todos entity — which calls run.Start directly — going to the real
+// driver. One seam, called by its own name.
 
-type todoRunOptions struct {
-	// Spec carries the model/backend/effort/budget/prompt/permissions/session knobs
-	// plus the run's Setup (dirty/checkout) and Workflow (verify/commits), resolved
-	// and validated by normalizeTodoRunOptions. dirty/checks/commit/dryRun are read
-	// from Spec.Setup/Spec.Workflow (see specDirty/specVerify/specCommit/specDryRun),
-	// not sibling flags.
-	//
-	// Named, not embedded: api.Spec's promoted MarshalJSON/MarshalYAML would emit
-	// only the spec and drop Driver/RunMode/Resume.
-	Spec    api.Spec
-	Driver  string
-	RunMode types.RunMode
-	Resume  bool
-	// Template is the .gavel.yaml prompt override source resolved alongside Spec;
-	// empty renders the mode's embedded default. It travels with the options so
-	// the preview and the executor cannot resolve different overrides.
-	Template string
-	// Approvals gates Bash behind human approval. The dashboard drains the
-	// approval queue, so it is answerable here; whether it is *enabled* is a
-	// .gavel.yaml decision (todos.approvals), not an entrypoint constant.
-	Approvals bool
-	// Timeout is Spec.Budget.Timeout already parsed by the resolution seam, so no
-	// consumer re-parses a string it cannot fail on.
-	Timeout time.Duration
-}
+var (
+	specCommit            = run.Commit
+	specDryRun            = run.DryRun
+	specDirty             = run.Dirty
+	runIsStoppable        = run.IsStoppable
+	todoRunRefs           = run.Refs
+	todoRunStartedMessage = run.StartedMessage
+	todoRunLabel          = run.Label
+	resolveRunSessionID   = run.ResolveSessionID
 
-// specCommits returns the run's commit policies (nil when the spec asks for
-// none). Each entry names the lifecycle phase it fires at, so a run can commit
-// per turn, once the agent loop ends, or once at the end.
-func specCommits(spec api.Spec) []api.Commit {
-	if spec.Workflow == nil {
-		return nil
-	}
-	return spec.Workflow.Commits
-}
-
-// specCommit reports whether the run auto-commits at all. The run dialog seeds
-// one `{on: run}` stanza on the Commit section so a default dashboard run still
-// auto-commits.
-func specCommit(spec api.Spec) bool {
-	return len(specCommits(spec)) > 0
-}
-
-// specDryRun reports whether the run is a dry run: the agent runs normally but
-// every commit is reported rather than cut. A spec that mixes dry and live
-// stanzas is not a dry run — only the stanzas marked so are suppressed, and this
-// reports the whole-run view the dashboard badge shows.
-func specDryRun(spec api.Spec) bool {
-	commits := specCommits(spec)
-	for _, c := range commits {
-		if !c.DryRun {
-			return false
-		}
-	}
-	return len(commits) > 0
-}
-
-// specDirty reports whether the run's checkout carries the working tree's
-// uncommitted changes across (surfaced by the Workspace section). It reads the
-// worktree's clone mode rather than the pointer: uncommitted work is only ever
-// carried into a worktree, so a checkout without one has nothing to carry — the
-// run already happens in the dirty tree.
-func specDirty(spec api.Spec) bool {
-	if spec.Setup == nil || spec.Setup.Checkout == nil || spec.Setup.Checkout.Worktree == nil {
-		return false
-	}
-	return spec.Setup.Checkout.Worktree.Uncommitted == shell.CloneClone
-}
-
-var startTodoRun = defaultStartTodoRun
+	newTodoRunExecutor        = run.NewExecutor
+	newTodoRunExecutorContext = run.NewExecutorContext
+)
 
 func (s *Server) handleTodos(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
@@ -557,6 +519,7 @@ func (s *Server) handleTodoCreate(w http.ResponseWriter, r *http.Request) {
 		Body:     bodyWithCreateSections(payload.Body, payload.Criteria, payload.PRVerification),
 		Priority: payload.Priority,
 		Status:   payload.Status,
+		Labels:   payload.Labels,
 	})
 	if err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)
@@ -696,6 +659,15 @@ func (s *Server) handleTodoPatch(w http.ResponseWriter, r *http.Request) {
 	if payload.Body != nil {
 		edit.Body = payload.Body
 	}
+	if payload.Labels != nil {
+		normalized := make([]string, 0, len(*payload.Labels))
+		for _, label := range *payload.Labels {
+			if label = labels.Normalize(label); label != "" {
+				normalized = append(normalized, label)
+			}
+		}
+		edit.Labels = &normalized
+	}
 	comment := strings.TrimSpace(payload.Comment)
 	if len(attachments) > 0 {
 		comment = todoBodyWithAttachments(comment, attachments)
@@ -703,7 +675,7 @@ func (s *Server) handleTodoPatch(w http.ResponseWriter, r *http.Request) {
 
 	hasState := update.Status != nil || update.Priority != nil
 	if !hasState && edit.IsEmpty() && comment == "" {
-		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("status, priority, title, body, or comment is required"))
+		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("status, priority, title, body, labels, or comment is required"))
 		return
 	}
 
@@ -823,6 +795,21 @@ func (s *Server) resolveTodoRunRequest(r *http.Request) (todos.Provider, todoSou
 		return nil, todoSource{}, nil, todoRunOptions{}, http.StatusBadRequest, fmt.Errorf("invalid json")
 	}
 	refs := normalizeTodoRunRefs(payload, r)
+	return s.resolveTodoRunPayload(r.Context(), payload, refs, todoSourceFromRequest(r), requestOrigin(r))
+}
+
+// resolveTodoRunPayload turns an already-decoded payload into everything a run
+// needs. It is separate from resolveTodoRunRequest so a fan-out handler can
+// resolve one synthetic payload per selected TODO through exactly the same path
+// a single run takes — a second resolution path would be one more place for the
+// dashboard's runs to diverge from each other.
+func (s *Server) resolveTodoRunPayload(
+	ctx context.Context,
+	payload todoRunPayload,
+	refs []string,
+	source todoSource,
+	origin string,
+) (todos.Provider, todoSource, []*types.TODO, todoRunOptions, int, error) {
 	if len(refs) == 0 {
 		return nil, todoSource{}, nil, todoRunOptions{}, http.StatusBadRequest, fmt.Errorf("ref is required")
 	}
@@ -833,7 +820,6 @@ func (s *Server) resolveTodoRunRequest(r *http.Request) (todos.Provider, todoSou
 	if _, err := validateTodoRunPayload(payload); err != nil {
 		return nil, todoSource{}, nil, todoRunOptions{}, http.StatusBadRequest, err
 	}
-	source := todoSourceFromRequest(r)
 	if payload.Dir != "" {
 		source.Dir = payload.Dir
 	}
@@ -841,25 +827,24 @@ func (s *Server) resolveTodoRunRequest(r *http.Request) (todos.Provider, todoSou
 	if err := validateTodoRunCardinality(len(refs)); err != nil {
 		return nil, source, nil, todoRunOptions{}, http.StatusBadRequest, err
 	}
-	origin := requestOrigin(r)
 
 	var provider todos.Provider
 	var todoList []*types.TODO
 	if globalLookup {
-		p, owningSource, todo, err := s.resolveTodoReference(r.Context(), source, refs[0])
+		p, owningSource, todo, err := s.resolveTodoReference(ctx, source, refs[0])
 		if err != nil {
 			return p, owningSource, nil, todoRunOptions{}, http.StatusNotFound, err
 		}
 		provider, source, todoList = p, owningSource, []*types.TODO{todo}
 	} else {
-		p, resolvedSource, err := s.todoProviderContext(r.Context(), source)
+		p, resolvedSource, err := s.todoProviderContext(ctx, source)
 		if err != nil {
 			return nil, resolvedSource, nil, todoRunOptions{}, http.StatusBadRequest, err
 		}
 		provider, source = p, resolvedSource
 		todoList = make([]*types.TODO, 0, len(refs))
 		for _, ref := range refs {
-			todo, err := provider.Get(r.Context(), ref)
+			todo, err := provider.Get(ctx, ref)
 			if err != nil {
 				return provider, source, nil, todoRunOptions{}, http.StatusNotFound, err
 			}
@@ -902,9 +887,9 @@ func (s *Server) handleTodoRun(w http.ResponseWriter, r *http.Request) {
 	opts.Spec.SessionID = resolveRunSessionID(opts, todoList)
 	req := todoRunRequest{
 		Provider: provider,
-		Registry: &s.todoRuns,
+		Registry: todoRuns(),
 		Todos:    todoList,
-		Source:   source,
+		Dir:      source.Dir,
 		Backend:  backend,
 		Options:  opts,
 	}
@@ -932,8 +917,16 @@ func (s *Server) handleTodoRun(w http.ResponseWriter, r *http.Request) {
 	}
 	// A dry run still executes the agent; Captain's commit hook reports rather
 	// than cuts the declared commit. Prompt-only inspection uses the preview API.
-	started, err := startTodoRun(req)
+	started, err := run.Start(req)
 	if err != nil {
+		// A todo that is already running is a question for the user, not a bad
+		// request: answer it by retrying with force, and the two runs proceed in
+		// parallel. The dialog needs the incumbent's identity to say so.
+		var owned *todos.ErrRunOwnedElsewhere
+		if errors.As(err, &owned) {
+			writeTodoRunConflict(w, owned)
+			return
+		}
 		writeTodoError(w, http.StatusBadRequest, err)
 		return
 	}
@@ -991,7 +984,7 @@ func buildTodoRunSpecPreview(ctx context.Context, provider todos.Provider, sourc
 	executor, _, err := newTodoRunExecutorContext(ctx, todoRunRequest{
 		Provider: provider,
 		Todos:    todoList,
-		Source:   source,
+		Dir:      source.Dir,
 		Backend:  todos.ProviderDB,
 		Options:  opts,
 	})
@@ -1042,6 +1035,12 @@ func ProviderForProject(ctx context.Context, p Project) (todos.Provider, error) 
 	}
 	return todoruntime.Open(ctx, p.WorkspaceOptions())
 }
+
+// todoRuns is the in-flight run registry the dashboard starts and stops runs
+// through. It is the process-wide one rather than Server state because the CLI
+// and the todos entity start runs through the same registry, and a run the
+// dashboard cannot see is a run it cannot stop.
+func todoRuns() *run.Registry { return run.Shared() }
 
 // openTodoProvider is the single API/UI native runtime seam. It is a variable so
 // package tests can inject an in-memory implementation without opening PostgreSQL.
@@ -1113,6 +1112,7 @@ func summarizeTodo(todo *types.TODO, detail bool) todoSummary {
 		Created:        todo.Created,
 		LastRun:        todo.LastRun,
 		ExternalIssue:  todo.ExternalIssue,
+		Phases:         todo.PhaseRuns,
 	}
 	if todo.LLM != nil {
 		out.SessionID = todo.LLM.SessionId
@@ -1203,6 +1203,22 @@ func writeTodoError(w http.ResponseWriter, status int, err error) {
 		msg = err.Error()
 	}
 	json.NewEncoder(w).Encode(map[string]string{"error": msg}) //nolint:errcheck
+}
+
+// writeTodoRunConflict answers a dispatch that lost to a live run with what the
+// client needs to decide: which run is in the way, who is driving it, and that
+// retrying with force runs the two in parallel.
+func writeTodoRunConflict(w http.ResponseWriter, owned *todos.ErrRunOwnedElsewhere) {
+	w.WriteHeader(http.StatusConflict)
+	json.NewEncoder(w).Encode(map[string]any{ //nolint:errcheck
+		"error":       owned.Error(),
+		"reason":      "run_owned_elsewhere",
+		"promptRunId": owned.PromptRunID,
+		"stepKind":    owned.StepKind,
+		"owner":       owned.Owner,
+		"runningFor":  owned.Since.Round(time.Second).String(),
+		"retryWith":   map[string]bool{"force": true},
+	})
 }
 
 func parseTodoNewPayload(r *http.Request) (todoNewPayload, []todoAttachmentSummary, error) {
@@ -1408,29 +1424,6 @@ func normalizeTodoRunRefs(payload todoRunPayload, r *http.Request) []string {
 	return refs
 }
 
-func todoRunRefs(todoList []*types.TODO) []string {
-	refs := make([]string, len(todoList))
-	for i, todo := range todoList {
-		refs[i] = todos.TODOReference(todo)
-	}
-	return refs
-}
-
-func todoRunStartedMessage(count int) string {
-	if count > 1 {
-		return fmt.Sprintf("Started run for %d todos", count)
-	}
-	return "Todo run started"
-}
-
-func todoRunLabel(todoList []*types.TODO) string {
-	if len(todoList) == 1 {
-		return todos.TODOReference(todoList[0])
-	}
-	return fmt.Sprintf("%d todos", len(todoList))
-}
-
-// todoRunWire is a run payload after wire validation: the request layer of the
 // resolution fold, plus the sibling flags that are deliberately not spec fields.
 type todoRunWire struct {
 	// Override is the payload's spec as the HIGHEST resolution layer — a knob the
@@ -1439,9 +1432,16 @@ type todoRunWire struct {
 	Override api.Spec
 	// Driver is the requested mechanism, empty when the payload named none and
 	// .gavel.yaml todos.driver should decide.
-	Driver  string
+	Driver string
+	// RunMode is empty when the client named a prompt but asserted no class, so
+	// the prompt's own declared class decides.
 	RunMode types.RunMode
-	Resume  bool
+	// Prompt is the requested prompt name, empty when the client named none.
+	Prompt string
+	Resume bool
+	// Force is the client's answer to "this todo already has a live run": run
+	// alongside it. It is not a spec knob — it decides admission, not behaviour.
+	Force bool
 }
 
 // validateTodoRunPayload rejects a malformed payload at the wire boundary,
@@ -1464,9 +1464,17 @@ func validateTodoRunPayload(payload todoRunPayload) (todoRunWire, error) {
 	if runModeValue == "" && payload.Plan {
 		runModeValue = string(types.ModePlan)
 	}
-	runMode, err := types.ParseRunMode(runModeValue)
-	if err != nil {
-		return todoRunWire{}, err
+	// A named prompt declares its own class. Only a class the client actually
+	// asserted is forwarded, so todos/spec can check the two for agreement
+	// instead of a defaulted "run" contradicting every non-run prompt.
+	promptName := strings.TrimSpace(payload.Prompt)
+	var runMode types.RunMode
+	if runModeValue != "" || promptName == "" {
+		parsed, err := types.ParseRunMode(runModeValue)
+		if err != nil {
+			return todoRunWire{}, err
+		}
+		runMode = parsed
 	}
 
 	spec := payload.Spec
@@ -1497,7 +1505,10 @@ func validateTodoRunPayload(payload todoRunPayload) (todoRunWire, error) {
 		return todoRunWire{}, fmt.Errorf("workflow: %w", err)
 	}
 
-	return todoRunWire{Override: spec, Driver: driver, RunMode: runMode, Resume: payload.Resume}, nil
+	return todoRunWire{
+		Override: spec, Driver: driver, RunMode: runMode, Prompt: promptName,
+		Resume: payload.Resume, Force: payload.Force,
+	}, nil
 }
 
 // normalizeTodoRunOptions resolves the run a payload asks for. The payload is
@@ -1516,6 +1527,7 @@ func normalizeTodoRunOptions(dir string, todoList []*types.TODO, payload todoRun
 	resolved, err := todospec.Resolve(todospec.Input{
 		WorkDir:  dir,
 		Mode:     wire.RunMode,
+		Prompt:   wire.Prompt,
 		Todos:    todoList,
 		Override: wire.Override,
 		Driver:   wire.Driver,
@@ -1540,78 +1552,17 @@ func normalizeTodoRunOptions(dir string, todoList []*types.TODO, payload todoRun
 	spec.Mode = api.RuntimeMode(backend)
 
 	return todoRunOptions{
-		Spec:      spec,
-		Driver:    string(resolved.Driver),
-		RunMode:   resolved.Mode,
-		Resume:    wire.Resume,
-		Template:  resolved.Template,
-		Approvals: resolved.Approvals,
-		Timeout:   resolved.Timeout,
+		Spec:       spec,
+		Driver:     string(resolved.Driver),
+		RunMode:    resolved.Mode,
+		Prompt:     resolved.Prompt,
+		Envelope:   resolved.Envelope,
+		Resume:     wire.Resume,
+		Concurrent: wire.Force,
+		Template:   resolved.Template,
+		Approvals:  resolved.Approvals,
+		Timeout:    resolved.Timeout,
 	}, nil
-}
-
-func defaultStartTodoRun(req todoRunRequest) (todoRunStartResult, error) {
-	if req.Registry == nil {
-		return todoRunStartResult{}, errors.New("todo run registry is required")
-	}
-	executor, sessionID, err := newTodoRunExecutor(req)
-	if err != nil {
-		return todoRunStartResult{}, err
-	}
-	ctx, timeoutCancel := context.WithTimeout(context.Background(), req.Options.Timeout)
-	runCtx, stop := context.WithCancelCause(ctx)
-	cleanup, err := req.Registry.register(todoRunIssueIDs(req.Todos), runIsStoppable(req.Options), stop)
-	if err != nil {
-		timeoutCancel()
-		return todoRunStartResult{}, err
-	}
-	type startOutcome struct {
-		result todoRunStartResult
-		err    error
-	}
-	started := make(chan startOutcome, 1)
-	var notifyOnce sync.Once
-	notify := func(result todoRunStartResult, err error) {
-		notifyOnce.Do(func() { started <- startOutcome{result: result, err: err} })
-	}
-	go func() {
-		defer timeoutCancel()
-		defer cleanup()
-
-		execCtx := todos.NewExecutorContext(runCtx, logger.StandardLogger(), nil)
-		execCtx.SetRunPreparedHook(func(preparation todos.RunPreparationResult) {
-			notify(todoRunStartResult{Status: "started", SessionID: preparation.SessionID}, nil)
-		})
-		runner := todos.NewTODOExecutor(req.Source.Dir, executor, sessionID, req.Provider)
-		runner.SetMode(req.Options.RunMode)
-		runner.SetResume(req.Options.Resume)
-		var runErr error
-		var result *todos.ExecutionResult
-		// A single selection runs through Execute; a multi-select runs every todo
-		// in one combined agent session via ExecuteGroup.
-		if len(req.Todos) == 1 {
-			result, runErr = runner.Execute(execCtx, req.Todos[0])
-		} else {
-			var results []*todos.ExecutionResult
-			results, runErr = runner.ExecuteGroup(execCtx, req.Todos)
-			if len(results) > 0 {
-				result = results[0]
-			}
-		}
-		if runErr != nil && (result == nil || !result.Cancelled) {
-			logger.Warnf("todo run %s failed: %v", todoRunLabel(req.Todos), runErr)
-		}
-		switch {
-		case runErr != nil:
-			notify(todoRunStartResult{}, runErr)
-		case result != nil && result.Skipped:
-			notify(todoRunStartResult{Status: "skipped", Message: "TODO already passes; run skipped"}, nil)
-		default:
-			notify(todoRunStartResult{}, errors.New("todo run completed before Captain admission"))
-		}
-	}()
-	outcome := <-started
-	return outcome.result, outcome.err
 }
 
 // payloadDriver validates the canonical mechanism-only driver. Provider and
@@ -1631,109 +1582,9 @@ func payloadDriver(p todoRunPayload) (string, error) {
 	return string(kind), nil
 }
 
-func newTodoRunExecutor(req todoRunRequest) (todos.Executor, string, error) {
-	return newTodoRunExecutorContext(context.Background(), req)
-}
-
-func newTodoRunExecutorContext(ctx context.Context, req todoRunRequest) (todos.Executor, string, error) {
-	kind, err := drivers.Parse(req.Options.Driver)
-	if err != nil {
-		return nil, "", err
-	}
-	// cmux returns "" as the orchestrator session id (it manages its own
-	// --session-id, passed via SessionID) so TODOExecutor does not overwrite the
-	// todo's recorded prior session.
-	mode := req.Options.RunMode
-	// Post-run checks run inside the agent loop as fixture-backed verify
-	// plugins; a failing round's feedback re-runs the same session.
-	var verifiers []agent.Verify
-	var maxIterations int
-	if mode == types.ModeRun {
-		// The grader has its own chain (.gavel.yaml todos.verify > ai:); the run
-		// spec decides only whether to verify and for how many rounds, so the
-		// implementer's model, backend and session never mark their own work.
-		// CanApprove mirrors the run's own resolve: this entrypoint drains the
-		// approval queue, so a repo with todos.approvals: true must not fail here
-		// while its run resolves fine.
-		grader, err := todospec.Resolve(todospec.Input{
-			WorkDir:    req.Source.Dir,
-			Mode:       types.ModeVerify,
-			CanApprove: true,
-		})
-		if err != nil {
-			return nil, "", err
-		}
-		verifiers, maxIterations, err = todos.BuildCheckVerifiers(todos.CheckVerifierOptions{
-			WorkDir: req.Source.Dir,
-			Todos:   req.Todos,
-			Run:     &req.Options.Spec,
-			Grader:  grader.Spec,
-		})
-		if err != nil {
-			return nil, "", err
-		}
-	}
-	// The todo's recorded plan feeds both flows: a plan re-run reports
-	// updated/unchanged, and an implement run follows the approved/edited plan.
-	// Single-todo only — a group run has no single plan to attribute.
-	existingPlan, err := todoPlanMarkdown(ctx, req.Provider, req.Todos, mode)
-	if err != nil {
-		return nil, "", err
-	}
-	return drivers.New(kind, todos.AgentRunConfig{
-		Spec:          req.Options.Spec,
-		WorkDir:       req.Source.Dir,
-		Mode:          mode,
-		Template:      req.Options.Template,
-		ExistingPlan:  existingPlan,
-		Verifiers:     verifiers,
-		MaxIterations: maxIterations,
-		Resume:        req.Options.Resume,
-		Approvals:     req.Options.Approvals,
-	})
-}
-
-func todoPlanMarkdown(ctx context.Context, provider todos.Provider, todoList []*types.TODO, mode types.RunMode) (string, error) {
-	if len(todoList) != 1 || (mode != types.ModePlan && mode != types.ModeRun) {
-		return "", nil
-	}
-	content, ok := provider.(todos.PlanContentProvider)
-	if !ok {
-		return "", fmt.Errorf("PostgreSQL TODO runtime does not support durable plan content")
-	}
-	return content.PlanMarkdown(ctx, todoList[0], mode)
-}
-
-// resolveRunSessionID determines the claude session id a run will use, so the
-// caller knows it up front. A resume run reuses the todo's prior session; a
-// fresh cmux run mints a new id (claude is launched with it, so the dashboard
-// can follow the log immediately); inline resumes a single todo's session if it
+// backlog that cannot be listed degrades duplicate detection but not the other
+// four verdicts, so it is logged rather than fatal.
 // has one and otherwise lets claude manage its own id.
-func resolveRunSessionID(opts todoRunOptions, todoList []*types.TODO) string {
-	if opts.Resume {
-		if sid := firstTodoSessionID(todoList); sid != "" {
-			return sid
-		}
-	}
-	switch opts.Driver {
-	case string(drivers.Cmux):
-		return uuid.NewString()
-	default:
-		if len(todoList) == 1 {
-			return firstTodoSessionID(todoList)
-		}
-	}
-	return ""
-}
-
-func firstTodoSessionID(todoList []*types.TODO) string {
-	for _, todo := range todoList {
-		if todo != nil && todo.LLM != nil && todo.LLM.SessionId != "" {
-			return todo.LLM.SessionId
-		}
-	}
-	return ""
-}
 
 func countProjectTodos(ctx context.Context, project Project) (todoCounts, error) {
 	if project.ResolvedDir() == "" {

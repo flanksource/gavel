@@ -144,7 +144,7 @@ func (s *Server) handleTodoSessionDetail(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if issue.ActivePromptRunID != nil {
-		status := s.todoRuns.status(issueID)
+		status := todoRuns().Status(issueID)
 		for index := range response.Attempts {
 			if response.Attempts[index].PromptRunID == *issue.ActivePromptRunID {
 				response.Attempts[index].CanStop = status.CanStop

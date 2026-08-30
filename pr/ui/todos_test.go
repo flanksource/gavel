@@ -20,6 +20,7 @@ import (
 	"github.com/flanksource/commons-db/shell"
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/todos"
+	"github.com/flanksource/gavel/todos/run"
 	"github.com/flanksource/gavel/todos/types"
 )
 
@@ -825,13 +826,13 @@ func TestTodoAPIRunStartsSelectedTodo(t *testing.T) {
 		t.Fatalf("seed create: %v", err)
 	}
 
-	oldStart := startTodoRun
+	oldStart := run.Start
 	var got todoRunRequest
-	startTodoRun = func(req todoRunRequest) (todoRunStartResult, error) {
+	run.Start = func(req todoRunRequest) (todoRunStartResult, error) {
 		got = req
 		return todoRunStartResult{Status: "started", SessionID: "11111111-1111-4111-8111-111111111111"}, nil
 	}
-	t.Cleanup(func() { startTodoRun = oldStart })
+	t.Cleanup(func() { run.Start = oldStart })
 
 	body, _ := json.Marshal(todoRunPayload{
 		Ref:    todos.TODOReference(created),
@@ -865,8 +866,8 @@ func TestTodoAPIRunStartsSelectedTodo(t *testing.T) {
 	if len(got.Todos) != 1 || got.Todos[0].Title != "Run me" {
 		t.Fatalf("run starter did not receive selected todo: %+v", got.Todos)
 	}
-	if got.Source.Dir != workDir || got.Backend != todos.ProviderDB {
-		t.Fatalf("unexpected run source: dir=%q backend=%q", got.Source.Dir, got.Backend)
+	if got.Dir != workDir || got.Backend != todos.ProviderDB {
+		t.Fatalf("unexpected run source: dir=%q backend=%q", got.Dir, got.Backend)
 	}
 	if got.Options.Spec.Name != captainai.NormalizeModelForBackend(captainai.BackendCodexCmux, "codex") || got.Options.Spec.Backend != "codex-cmux" || got.Options.Spec.Effort != "high" || got.Options.Spec.Budget.Cost != 1.25 || got.Options.Spec.Budget.MaxTurns != 12 || !specDirty(got.Options.Spec) {
 		t.Fatalf("unexpected run options: %+v", got.Options)
@@ -1131,13 +1132,13 @@ func TestTodoAPIRunThreadsCommitOption(t *testing.T) {
 				t.Fatalf("seed create: %v", err)
 			}
 
-			oldStart := startTodoRun
+			oldStart := run.Start
 			var got todoRunRequest
-			startTodoRun = func(req todoRunRequest) (todoRunStartResult, error) {
+			run.Start = func(req todoRunRequest) (todoRunStartResult, error) {
 				got = req
 				return todoRunStartResult{Status: "started", SessionID: "11111111-1111-4111-8111-111111111111"}, nil
 			}
-			t.Cleanup(func() { startTodoRun = oldStart })
+			t.Cleanup(func() { run.Start = oldStart })
 
 			payload := todoRunPayload{
 				Ref:    todos.TODOReference(created),
@@ -1179,13 +1180,13 @@ func TestTodoAPIRunDryRunStartsButSkipsCommit(t *testing.T) {
 		t.Fatalf("seed create: %v", err)
 	}
 
-	oldStart := startTodoRun
+	oldStart := run.Start
 	started := false
-	startTodoRun = func(todoRunRequest) (todoRunStartResult, error) {
+	run.Start = func(todoRunRequest) (todoRunStartResult, error) {
 		started = true
 		return todoRunStartResult{Status: "started", SessionID: "11111111-1111-4111-8111-111111111111"}, nil
 	}
-	t.Cleanup(func() { startTodoRun = oldStart })
+	t.Cleanup(func() { run.Start = oldStart })
 
 	payload := todoRunPayload{
 		Ref:    todos.TODOReference(created),
@@ -1235,12 +1236,12 @@ func TestTodoAPIRunRejectsMultipleTodos(t *testing.T) {
 		t.Fatalf("seed second: %v", err)
 	}
 
-	oldStart := startTodoRun
-	startTodoRun = func(todoRunRequest) (todoRunStartResult, error) {
+	oldStart := run.Start
+	run.Start = func(todoRunRequest) (todoRunStartResult, error) {
 		t.Fatal("grouped native run must be rejected before dispatch")
 		return todoRunStartResult{}, nil
 	}
-	t.Cleanup(func() { startTodoRun = oldStart })
+	t.Cleanup(func() { run.Start = oldStart })
 
 	body, _ := json.Marshal(todoRunPayload{
 		Refs:   []string{todos.TODOReference(first), todos.TODOReference(second), todos.TODOReference(first)},
@@ -1294,13 +1295,13 @@ func TestTodoAPIRunPlanThreadsPlanOption(t *testing.T) {
 		t.Fatalf("seed create: %v", err)
 	}
 
-	oldStart := startTodoRun
+	oldStart := run.Start
 	var got todoRunRequest
-	startTodoRun = func(req todoRunRequest) (todoRunStartResult, error) {
+	run.Start = func(req todoRunRequest) (todoRunStartResult, error) {
 		got = req
 		return todoRunStartResult{Status: "started", SessionID: "11111111-1111-4111-8111-111111111111"}, nil
 	}
-	t.Cleanup(func() { startTodoRun = oldStart })
+	t.Cleanup(func() { run.Start = oldStart })
 
 	body, _ := json.Marshal(todoRunPayload{
 		Ref:    todos.TODOReference(created),
@@ -1339,13 +1340,13 @@ func TestTodoAPIRunModeField(t *testing.T) {
 		t.Fatalf("seed create: %v", err)
 	}
 
-	oldStart := startTodoRun
+	oldStart := run.Start
 	var got todoRunRequest
-	startTodoRun = func(req todoRunRequest) (todoRunStartResult, error) {
+	run.Start = func(req todoRunRequest) (todoRunStartResult, error) {
 		got = req
 		return todoRunStartResult{Status: "started", SessionID: "11111111-1111-4111-8111-111111111111"}, nil
 	}
-	t.Cleanup(func() { startTodoRun = oldStart })
+	t.Cleanup(func() { run.Start = oldStart })
 
 	body, _ := json.Marshal(todoRunPayload{
 		Ref:     todos.TODOReference(created),
@@ -1453,7 +1454,7 @@ func TestTodoRunContextListsCaptainBackends(t *testing.T) {
 	}
 	t.Cleanup(func() { runCaptainWhoami = prev })
 
-	resp, err := todoRunContext()
+	resp, err := todoRunContext("")
 	if err != nil {
 		t.Fatalf("todo run context: %v", err)
 	}
@@ -1579,13 +1580,13 @@ func TestTodoAPIRunThreadsCaptainBackend(t *testing.T) {
 		t.Fatalf("seed create: %v", err)
 	}
 
-	oldStart := startTodoRun
+	oldStart := run.Start
 	var got todoRunRequest
-	startTodoRun = func(req todoRunRequest) (todoRunStartResult, error) {
+	run.Start = func(req todoRunRequest) (todoRunStartResult, error) {
 		got = req
 		return todoRunStartResult{Status: "started", SessionID: "11111111-1111-4111-8111-111111111111"}, nil
 	}
-	t.Cleanup(func() { startTodoRun = oldStart })
+	t.Cleanup(func() { run.Start = oldStart })
 
 	body, _ := json.Marshal(todoRunPayload{
 		Ref:    todos.TODOReference(created),

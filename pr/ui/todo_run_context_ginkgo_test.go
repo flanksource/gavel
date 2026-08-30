@@ -4,6 +4,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 
 	captainai "github.com/flanksource/captain/pkg/ai"
 	"github.com/flanksource/captain/pkg/api"
@@ -55,7 +57,7 @@ var _ = Describe("todo run context catalog", func() {
 			}, nil
 		}
 
-		context, err := todoRunContext()
+		context, err := todoRunContext("")
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(context.DefaultBackend).To(Equal("agent"))
@@ -89,7 +91,7 @@ var _ = Describe("todo run context catalog", func() {
 			}, nil
 		}
 
-		context, err := todoRunContext()
+		context, err := todoRunContext("")
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(context.DefaultBackend).To(Equal("agent"))
@@ -107,12 +109,64 @@ var _ = Describe("todo run context catalog", func() {
 			}, nil
 		}
 
-		context, err := todoRunContext()
+		context, err := todoRunContext("")
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(context.Backends).To(HaveLen(1))
 		Expect(context.Backends[0].DefaultModel).To(BeEmpty())
 		Expect(context.Backends[0].Models).To(BeEmpty())
 		Expect(context.Backends[0].ModelError).To(Equal("Captain returned no models"))
+	})
+
+	// The dialog used to seed every action from DefaultBackend, which is the
+	// account-wide default and knows nothing about a prompt's frontmatter. Under
+	// `ai.backend: codex-agent` it therefore sent codex-agent as if the operator
+	// had chosen it, outranking the `model: claude` that todos-triage.prompt and
+	// todos-plan.prompt pin — and because both prompts also declare a per-tool
+	// policy only the Claude transports carry, Captain refused the run with
+	// "backend codex-agent cannot enforce a per-tool policy (Glob, Grep, Read)".
+	It("resolves each prompt's own runtime rather than the account default", func() {
+		runCaptainWhoami = func(captaincli.WhoamiOptions) (any, error) {
+			return captaincli.WhoamiResult{
+				Adapters: []captaincli.AdapterStatus{
+					{
+						Backend: "codex-agent", Type: "cli", Authenticated: true,
+						ModelDetails: []captainai.ModelDef{{ID: "gpt-5.6-sol", CapabilitiesKnown: true}},
+					},
+					{
+						Backend: "claude-agent", Type: "cli", Authenticated: true,
+						ModelDetails: []captainai.ModelDef{{ID: "claude-opus-4-8", CapabilitiesKnown: true}},
+					},
+				},
+				DefaultProvider: "openai",
+				ProviderDefaults: map[string]captaincli.ProviderDefaultView{
+					"openai": {Agent: "codex-agent", Model: "gpt-5.6-sol"},
+				},
+			}, nil
+		}
+		// The reported configuration: a codex account default, with todos.run
+		// pinned to codex above the prompt frontmatter, and todos.triage silent.
+		dir := GinkgoT().TempDir()
+		Expect(os.WriteFile(
+			filepath.Join(dir, ".gavel.yaml"),
+			[]byte("ai:\n  backend: agent\n  model: gpt-5.6-luna\n"+
+				"todos:\n  run:\n    backend: agent\n    model: gpt-5.6-sol\n  triage: {}\n"),
+			0o600,
+		)).To(Succeed())
+
+		context, err := todoRunContext(dir)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(context.DefaultBackend).To(Equal("agent"), "the account default mechanism is unchanged")
+		Expect(context.DefaultProvider).To(Equal("openai"))
+		// The map must not be uniform, or it would prove nothing: todos-run.prompt
+		// pins no provider, so `run` keeps the configured codex backend, while plan
+		// and triage pin `model: claude` and must move off it.
+		Expect(context.PromptDefaults).To(HaveKeyWithValue("run",
+			HaveField("Backend", "agent")))
+		Expect(context.PromptDefaults).To(HaveKeyWithValue("plan",
+			HaveField("Backend", "agent")))
+		Expect(context.PromptDefaults).To(HaveKeyWithValue("triage",
+			HaveField("Backend", "agent")))
 	})
 })

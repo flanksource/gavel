@@ -9,6 +9,7 @@ import (
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/todos"
+	"github.com/flanksource/gavel/todos/run"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/ghodss/yaml"
 	. "github.com/onsi/ginkgo/v2"
@@ -64,9 +65,9 @@ var _ = Describe("todo run admission contract", func() {
 		})
 		Expect(err).NotTo(HaveOccurred())
 
-		previousStart := startTodoRun
-		DeferCleanup(func() { startTodoRun = previousStart })
-		startTodoRun = func(todoRunRequest) (todoRunStartResult, error) {
+		previousStart := run.Start
+		DeferCleanup(func() { run.Start = previousStart })
+		run.Start = func(todoRunRequest) (todoRunStartResult, error) {
 			return todoRunStartResult{Status: "started", SessionID: "11111111-1111-4111-8111-111111111111"}, nil
 		}
 

@@ -13,6 +13,7 @@ import (
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/drivers"
+	"github.com/flanksource/gavel/todos/run"
 	"github.com/flanksource/gavel/todos/types"
 )
 
@@ -208,16 +209,16 @@ func TestTodoAPIPlanApproveAndRunInheritsPlanRunRuntime(t *testing.T) {
 	}
 	uiTestProviderFor(workDir).activeRun = codexPlanRun(t, sid)
 
-	oldStart := startTodoRun
+	oldStart := run.Start
 	var got todoRunRequest
 	// The stub answers with the session it was handed, as the real dispatcher
 	// does. Returning an unrelated literal would make the report-matches-dispatch
 	// assertion below compare a constant against a derived value.
-	startTodoRun = func(req todoRunRequest) (todoRunStartResult, error) {
+	run.Start = func(req todoRunRequest) (todoRunStartResult, error) {
 		got = req
 		return todoRunStartResult{Status: "started", SessionID: req.Options.Spec.SessionID}, nil
 	}
-	t.Cleanup(func() { startTodoRun = oldStart })
+	t.Cleanup(func() { run.Start = oldStart })
 
 	body, _ := json.Marshal(todoApprovePayload{Ref: todos.TODOReference(created), Run: true})
 	rec := httptest.NewRecorder()

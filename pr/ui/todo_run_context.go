@@ -12,6 +12,9 @@ import (
 	"github.com/flanksource/captain/pkg/api/registry"
 	captaincli "github.com/flanksource/captain/pkg/cli"
 	"github.com/flanksource/gavel/todos/drivers"
+	todoprompt "github.com/flanksource/gavel/todos/prompt"
+	todospec "github.com/flanksource/gavel/todos/spec"
+	"github.com/flanksource/gavel/verify"
 )
 
 type todoRunContextResponse struct {
@@ -29,6 +32,23 @@ type todoRunContextResponse struct {
 	// fixture fences) so the dashboard can render the schema-driven run form
 	// (clicky PromptDialog/JsonSchemaForm). Modes with no inputs are omitted.
 	InputSchemas map[string]json.RawMessage `json:"inputSchemas,omitempty"`
+	// PromptDefaults is the (backend, model) each named prompt actually resolves
+	// to, keyed by prompt name.
+	//
+	// DefaultBackend is Captain's account-wide default and knows nothing about a
+	// prompt's frontmatter, so a dialog seeded from it sends that backend as if
+	// the operator had chosen it — which outranks the frontmatter it was supposed
+	// to defer to. `todos-triage.prompt` pins `model: claude` and declares a
+	// per-tool policy only the Claude transports carry, so under a codex
+	// `ai.backend` the run was rejected for a pairing nobody configured. These
+	// come from todos/spec.Resolve, the same resolution the run itself performs.
+	PromptDefaults map[string]todoRunPromptDefault `json:"promptDefaults,omitempty"`
+}
+
+// todoRunPromptDefault is one prompt's resolved runtime.
+type todoRunPromptDefault struct {
+	Backend string `json:"backend,omitempty"`
+	Model   string `json:"model,omitempty"`
 }
 
 type todoRunBackendOption struct {
@@ -65,7 +85,11 @@ func (s *Server) handleTodoRunContext(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	context, err := todoRunContext()
+	// The prompt defaults are read from the workspace's .gavel.yaml layers, so the
+	// dialog reflects the project the operator is looking at rather than the
+	// process's own directory. An unknown dir resolves against the cwd, matching
+	// how the CLI reads configuration.
+	context, err := todoRunContext(strings.TrimSpace(r.URL.Query().Get("dir")))
 	if err != nil {
 		writeTodoError(w, http.StatusServiceUnavailable, fmt.Errorf("load run providers from Captain: %w", err))
 		return
@@ -73,7 +97,7 @@ func (s *Server) handleTodoRunContext(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(context) //nolint:errcheck
 }
 
-func todoRunContext() (todoRunContextResponse, error) {
+func todoRunContext(workDir string) (todoRunContextResponse, error) {
 	who, err := todoRunWhoami()
 	if err != nil {
 		return todoRunContextResponse{}, err
@@ -96,6 +120,10 @@ func todoRunContext() (todoRunContextResponse, error) {
 		return todoRunContextResponse{}, fmt.Errorf("captain returned no supported TODO run providers")
 	}
 	defaultBackend := defaultTodoRunBackend(who, backends)
+	promptDefaults, err := todoRunPromptDefaults(workDir)
+	if err != nil {
+		return todoRunContextResponse{}, err
+	}
 	return todoRunContextResponse{
 		Backends:        backends,
 		Runtimes:        who.Runtimes,
@@ -105,7 +133,40 @@ func todoRunContext() (todoRunContextResponse, error) {
 		DefaultProvider: who.DefaultProvider,
 		Tools:           todoRunToolCatalog(),
 		InputSchemas:    todoRunInputSchemas(),
+		PromptDefaults:  promptDefaults,
 	}, nil
+}
+
+// todoRunPromptDefaults resolves every catalogued prompt to the (backend, model)
+// its run would use, so the dialog can seed itself from the prompt rather than
+// from an account-wide default that overrides the prompt's own frontmatter.
+//
+// A prompt that fails to resolve is reported rather than skipped: it would fail
+// the same way when run, and a silently absent default sends the operator back
+// to the account default — the exact substitution this exists to prevent.
+func todoRunPromptDefaults(workDir string) (map[string]todoRunPromptDefault, error) {
+	cfg, err := verify.LoadGavelConfig(workDir)
+	if err != nil {
+		return nil, fmt.Errorf("load .gavel.yaml: %w", err)
+	}
+	catalog, err := todoprompt.NewCatalog(cfg.Todos)
+	if err != nil {
+		return nil, err
+	}
+	defaults := make(map[string]todoRunPromptDefault)
+	for _, name := range catalog.Names() {
+		resolved, err := todospec.Resolve(todospec.Input{WorkDir: workDir, Prompt: name})
+		if err != nil {
+			return nil, fmt.Errorf("resolve the %s prompt's runtime: %w", name, err)
+		}
+		backend, model, err := resolveTodoRunBackendModel(
+			resolved.Driver, string(resolved.Spec.Mode), resolved.Spec.Name)
+		if err != nil {
+			return nil, fmt.Errorf("resolve the %s prompt's backend: %w", name, err)
+		}
+		defaults[name] = todoRunPromptDefault{Backend: backend, Model: model}
+	}
+	return defaults, nil
 }
 
 func todoRunBackendOptionFor(

@@ -15,6 +15,7 @@ import (
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/drivers"
+	"github.com/flanksource/gavel/todos/run"
 	"github.com/flanksource/gavel/todos/types"
 )
 
@@ -65,13 +66,13 @@ func TestTodoAPIPlanApproveAndRun(t *testing.T) {
 	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
 	created := seedReviewTodo(t, workDir, types.StatusReview)
 
-	oldStart := startTodoRun
+	oldStart := run.Start
 	var got todoRunRequest
-	startTodoRun = func(req todoRunRequest) (todoRunStartResult, error) {
+	run.Start = func(req todoRunRequest) (todoRunStartResult, error) {
 		got = req
 		return todoRunStartResult{Status: "started", SessionID: "11111111-1111-4111-8111-111111111111"}, nil
 	}
-	t.Cleanup(func() { startTodoRun = oldStart })
+	t.Cleanup(func() { run.Start = oldStart })
 
 	body, _ := json.Marshal(todoApprovePayload{
 		Ref: todos.TODOReference(created),
@@ -150,7 +151,7 @@ func TestTodoAPIPlanRevise(t *testing.T) {
 	}
 
 	oldStart := startTodoAnswer
-	oldStartRun := startTodoRun
+	oldStartRun := run.Start
 	var gotReq todoRunRequest
 	var gotFeedback string
 	var gotFreshReq todoRunRequest
@@ -159,13 +160,13 @@ func TestTodoAPIPlanRevise(t *testing.T) {
 		gotFeedback = feedback
 		return nil
 	}
-	startTodoRun = func(req todoRunRequest) (todoRunStartResult, error) {
+	run.Start = func(req todoRunRequest) (todoRunStartResult, error) {
 		gotFreshReq = req
 		return todoRunStartResult{Status: "started", SessionID: "11111111-1111-4111-8111-111111111111"}, nil
 	}
 	t.Cleanup(func() {
 		startTodoAnswer = oldStart
-		startTodoRun = oldStartRun
+		run.Start = oldStartRun
 	})
 
 	body, _ := json.Marshal(todoRevisePayload{

@@ -13,7 +13,7 @@ import (
 	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/todos"
-	"github.com/flanksource/gavel/todos/drivers"
+	"github.com/flanksource/gavel/todos/run"
 	"github.com/flanksource/gavel/todos/types"
 )
 
@@ -90,8 +90,8 @@ func (s *Server) handleTodoPlanApprove(w http.ResponseWriter, r *http.Request) {
 			writeTodoError(w, http.StatusBadRequest, err)
 			return
 		}
-		req := todoRunRequest{Provider: provider, Registry: &s.todoRuns, Todos: []*types.TODO{todo}, Source: source, Backend: todos.ProviderDB, Options: opts}
-		started, err := startTodoRun(req)
+		req := todoRunRequest{Provider: provider, Registry: todoRuns(), Todos: []*types.TODO{todo}, Dir: source.Dir, Backend: todos.ProviderDB, Options: opts}
+		started, err := run.Start(req)
 		if err != nil {
 			writeTodoError(w, http.StatusBadRequest, err)
 			return
@@ -221,13 +221,13 @@ func (s *Server) handleTodoPlanRevise(w http.ResponseWriter, r *http.Request) {
 		writeTodoError(w, http.StatusBadRequest, err)
 		return
 	}
-	req := todoRunRequest{Provider: provider, Registry: &s.todoRuns, Todos: []*types.TODO{todo}, Source: source, Backend: todos.ProviderDB, Options: opts}
+	req := todoRunRequest{Provider: provider, Registry: todoRuns(), Todos: []*types.TODO{todo}, Dir: source.Dir, Backend: todos.ProviderDB, Options: opts}
 	if opts.Resume {
 		err = startTodoAnswer(req, feedback)
 	} else {
 		todo.Prompt = "Revise the existing plan using this reviewer feedback:\n\n" + feedback
 		var started todoRunStartResult
-		started, err = startTodoRun(req)
+		started, err = run.Start(req)
 		if err == nil {
 			sessionID = started.SessionID
 		}
@@ -336,7 +336,7 @@ func (s *Server) handleTodoAnswer(w http.ResponseWriter, r *http.Request) {
 		writeTodoError(w, http.StatusBadRequest, err)
 		return
 	}
-	req := todoRunRequest{Provider: provider, Registry: &s.todoRuns, Todos: []*types.TODO{todo}, Source: source, Backend: todos.ProviderDB, Options: opts}
+	req := todoRunRequest{Provider: provider, Registry: todoRuns(), Todos: []*types.TODO{todo}, Dir: source.Dir, Backend: todos.ProviderDB, Options: opts}
 	// Pre-flight the executor before recording the answer, so a resume that
 	// cannot start fails as a 4xx the answer box renders instead of leaving the
 	// user with a recorded answer and a todo that never moves.
@@ -433,17 +433,24 @@ func defaultStartTodoAnswer(req todoRunRequest, answer string) error {
 	}
 	ctx, timeoutCancel := context.WithTimeout(context.Background(), req.Options.Timeout)
 	runCtx, stop := context.WithCancelCause(ctx)
-	cleanup, err := req.Registry.register(todoRunIssueIDs(req.Todos), runIsStoppable(req.Options), stop)
+	handle, err := req.Registry.Register(run.RegisterOptions{
+		IssueIDs:  todoRunIssueIDs(req.Todos),
+		Stoppable: runIsStoppable(req.Options),
+		Cancel:    stop,
+	})
 	if err != nil {
 		timeoutCancel()
 		return err
 	}
 	go func() {
 		defer timeoutCancel()
-		defer cleanup()
+		defer handle.Release()
 
 		execCtx := todos.NewExecutorContext(runCtx, logger.StandardLogger(), nil)
-		runner := todos.NewTODOExecutor(req.Source.Dir, executor, sessionID, req.Provider)
+		execCtx.SetRunPreparedHook(func(preparation todos.RunPreparationResult) {
+			handle.BindPromptRun(preparation.PromptRunID)
+		})
+		runner := todos.NewTODOExecutor(req.Dir, executor, sessionID, req.Provider)
 		runner.SetMode(req.Options.RunMode)
 		results, runErr := runner.Resume(execCtx, req.Todos, answer)
 		var result *todos.ExecutionResult
@@ -459,14 +466,6 @@ func defaultStartTodoAnswer(req todoRunRequest, answer string) error {
 		}
 	}()
 	return nil
-}
-
-// runIsStoppable reports whether a run's driver can be cancelled mid-flight.
-// Headless drivers own the agent process and honour context cancellation; a cmux
-// run is driven through a detached surface that outlives the request.
-func runIsStoppable(opts todoRunOptions) bool {
-	kind, err := drivers.Parse(opts.Driver)
-	return err == nil && kind != drivers.Cmux
 }
 
 // recordAnswerFailure marks an asynchronously-failed resume on the todo. Resume

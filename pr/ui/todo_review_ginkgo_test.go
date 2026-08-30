@@ -8,6 +8,7 @@ import (
 
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/todos"
+	"github.com/flanksource/gavel/todos/run"
 	"github.com/flanksource/gavel/todos/types"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -26,9 +27,9 @@ var _ = Describe("todo plan review", func() {
 		Expect(uiTestProviderFor(workDir).UpdateState(GinkgoT().Context(), created, todos.StateUpdate{PlanStatus: &planStatus})).To(Succeed())
 
 		var request todoRunRequest
-		previousStartRun := startTodoRun
+		previousStartRun := run.Start
 		previousStartAnswer := startTodoAnswer
-		startTodoRun = func(got todoRunRequest) (todoRunStartResult, error) {
+		run.Start = func(got todoRunRequest) (todoRunStartResult, error) {
 			request = got
 			return todoRunStartResult{Status: "started", SessionID: "11111111-1111-4111-8111-111111111111"}, nil
 		}
@@ -37,7 +38,7 @@ var _ = Describe("todo plan review", func() {
 			return nil
 		}
 		DeferCleanup(func() {
-			startTodoRun = previousStartRun
+			run.Start = previousStartRun
 			startTodoAnswer = previousStartAnswer
 		})
 
