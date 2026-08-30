@@ -7,8 +7,10 @@ import (
 
 	commonsdb "github.com/flanksource/commons-db/db"
 	"github.com/flanksource/gavel/internal/database"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func TestNativeTodoHCLMigrationAndRepeatedApply(t *testing.T) {
@@ -36,6 +38,7 @@ func TestNativeTodoHCLMigrationAndRepeatedApply(t *testing.T) {
 	nativeTables := []string{
 		"todo_workspaces",
 		"todo_workspace_paths",
+		"todo_labels",
 		"todo_issues",
 		"todo_issue_aliases",
 		"todo_issue_relationships",
@@ -122,6 +125,10 @@ func TestNativeTodoHCLMigrationAndRepeatedApply(t *testing.T) {
 		INSERT INTO todo_issue_prompt_runs (issue_id, prompt_run_id, step_kind, ordinal)
 		VALUES (?, ?, 'run', 0)`, issueTwo, promptRun).Error)
 
+	// Triage earned its own step kind so a backlog can tell a triage pass from a
+	// planning pass; anything outside the four is still refused.
+	assertTriageStepKind(t, db.Gorm(), issueTwo, captainSession)
+
 	assert.Error(t, db.Gorm().Exec(`
 		UPDATE todo_issues SET selected_plan_id = ? WHERE id = ?`, plan, issueOne).Error)
 	require.NoError(t, db.Gorm().Exec(`
@@ -186,4 +193,135 @@ func TestNativeTodoHCLMigrationAndRepeatedApply(t *testing.T) {
 	for _, table := range nativeTables {
 		require.True(t, db.Gorm().Migrator().HasTable(table), "%s should be recreated", table)
 	}
+}
+
+// assertTriageStepKind covers the widened step_kind CHECK and the backfill that
+// accompanies it. Triage has always been a plan-CLASS run, so before it earned
+// its own kind every triage pass was linked as step_kind='plan' and was
+// distinguishable only by the prompt name Captain recorded (spec_profile).
+func assertTriageStepKind(t *testing.T, db *gorm.DB, issueID, _ string) {
+	t.Helper()
+
+	// Each run gets its own root session: captain_prompt_runs_active_root_key
+	// allows only one active run per root, so reusing the fixture's session
+	// would collide rather than exercise the step kind.
+	newTriageRun := func() string {
+		session, run := uuid.NewString(), uuid.NewString()
+		require.NoError(t, db.Exec(`
+			INSERT INTO captain_sessions (id, source, provider, host_id)
+			VALUES (?, 'gavel-test', 'test', 'local')`, session).Error)
+		require.NoError(t, db.Exec(`
+			INSERT INTO captain_prompt_runs (id, session_id, root_session_id, origin, spec_profile)
+			VALUES (?, ?, ?, 'gavel-test', 'triage')`, run, session, session).Error)
+		return run
+	}
+
+	triageRun := newTriageRun()
+	require.NoError(t, db.Exec(`
+		INSERT INTO todo_issue_prompt_runs (issue_id, prompt_run_id, step_kind, ordinal)
+		VALUES (?, ?, 'triage', 0)`, issueID, triageRun).Error,
+		"the widened CHECK must accept triage as its own step kind")
+
+	assert.Error(t, db.Exec(`
+		INSERT INTO todo_issue_prompt_runs (issue_id, prompt_run_id, step_kind, ordinal)
+		VALUES (?, ?, 'compact', 1)`, issueID, uuid.NewString()).Error,
+		"the CHECK must still refuse a kind outside the four")
+
+	// The backfill is a one-time reclassification, so re-running its statement
+	// against a plan-linked triage run must move it exactly as the migration did.
+	legacyRun := newTriageRun()
+	require.NoError(t, db.Exec(`
+		INSERT INTO todo_issue_prompt_runs (issue_id, prompt_run_id, step_kind, ordinal)
+		VALUES (?, ?, 'plan', 7)`, issueID, legacyRun).Error)
+	require.NoError(t, db.Exec(`
+		UPDATE todo_issue_prompt_runs AS link
+		SET step_kind = 'triage'
+		FROM captain_prompt_runs AS run
+		WHERE run.id = link.prompt_run_id
+		  AND link.step_kind = 'plan'
+		  AND run.spec_profile = 'triage'`).Error)
+
+	var kind string
+	require.NoError(t, db.Raw(
+		`SELECT step_kind FROM todo_issue_prompt_runs WHERE prompt_run_id = ?`, legacyRun).Scan(&kind).Error)
+	assert.Equal(t, "triage", kind, "a historical triage run must not keep reporting as a planning pass")
+}
+
+// TestTodoStepKindCheckWidensOnAnExistingDatabase covers the upgrade path the
+// fresh-install test cannot reach. Atlas creates a new table straight from the
+// HCL, so a widened CHECK expression always looks correct on an empty database;
+// on a database that already has the table Atlas silently keeps the old
+// expression (sqlx.checksSimilarDiff matches the declared CHECK to the live one
+// by name and then only compares NO INHERIT, so ModifyCheck is never emitted).
+// The schema bundle has to reconcile the CHECK itself, before the backfill
+// writes the new kind.
+func TestTodoStepKindCheckWidensOnAnExistingDatabase(t *testing.T) {
+	if os.Getenv("GAVEL_DB_EMBEDDED_TEST") == "" {
+		t.Skip("set GAVEL_DB_EMBEDDED_TEST=1 to run embedded-postgres migration tests")
+	}
+	dsn, stop, err := commonsdb.StartEmbedded(commonsdb.EmbeddedConfig{
+		DataDir:  filepath.Join(t.TempDir(), "postgres"),
+		Database: "gavel_step_kind_widen",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, stop()) })
+
+	t.Setenv(database.EnvDSN, dsn)
+	t.Setenv(database.EnvDisable, "")
+	t.Setenv(database.LegacyEnvDSN, "")
+	t.Setenv(database.LegacyEnvDisable, "")
+	t.Setenv("HOME", t.TempDir())
+
+	db, err := database.Open(t.Context(), database.WithMigrations())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+
+	// Rewind to the shape a database provisioned before triage had its own step
+	// kind is in: the narrow CHECK, a triage pass linked as a planning pass, and
+	// no record that the triage scripts ever ran.
+	require.NoError(t, db.Gorm().Exec(`
+		ALTER TABLE public.todo_issue_prompt_runs
+			DROP CONSTRAINT todo_issue_prompt_runs_step_kind_check;
+		ALTER TABLE public.todo_issue_prompt_runs
+			ADD CONSTRAINT todo_issue_prompt_runs_step_kind_check
+			CHECK (step_kind = ANY (ARRAY['plan'::text, 'run'::text, 'verify'::text]))`).Error)
+
+	workspaceID, issueID := uuid.NewString(), uuid.NewString()
+	sessionID, legacyRun := uuid.NewString(), uuid.NewString()
+	require.NoError(t, db.Gorm().Exec(`
+		INSERT INTO todo_workspaces (id, repo_key, display_name)
+		VALUES (?, 'github.com/flanksource/gavel', 'gavel')`, workspaceID).Error)
+	require.NoError(t, db.Gorm().Exec(`
+		INSERT INTO todo_issues (id, workspace_id, title) VALUES (?, ?, 'legacy triage pass')`,
+		issueID, workspaceID).Error)
+	require.NoError(t, db.Gorm().Exec(`
+		INSERT INTO captain_sessions (id, source, provider, host_id)
+		VALUES (?, 'gavel-test', 'test', 'local')`, sessionID).Error)
+	require.NoError(t, db.Gorm().Exec(`
+		INSERT INTO captain_prompt_runs (id, session_id, root_session_id, origin, spec_profile)
+		VALUES (?, ?, ?, 'gavel-test', 'triage')`, legacyRun, sessionID, sessionID).Error)
+	require.NoError(t, db.Gorm().Exec(`
+		INSERT INTO todo_issue_prompt_runs (issue_id, prompt_run_id, step_kind, ordinal)
+		VALUES (?, ?, 'plan', 0)`, issueID, legacyRun).Error)
+	require.NoError(t, db.Gorm().Exec(`
+		DELETE FROM schema_migration_scripts
+		WHERE scope = 'gavel' AND path IN (
+			'102_todo_prompt_run_step_kind.sql',
+			'116_backfill_triage_step_kind.sql')`).Error)
+
+	upgraded, err := database.Open(t.Context(), database.WithMigrations())
+	require.NoError(t, err, "migrating a pre-triage database must widen the CHECK before backfilling it")
+	require.NoError(t, upgraded.Close())
+
+	var definition string
+	require.NoError(t, db.Gorm().Raw(`
+		SELECT pg_get_constraintdef(oid) FROM pg_constraint
+		WHERE conrelid = 'public.todo_issue_prompt_runs'::regclass
+		  AND conname = 'todo_issue_prompt_runs_step_kind_check'`).Scan(&definition).Error)
+	assert.Contains(t, definition, "'triage'::text", "the live CHECK must match the widened HCL declaration")
+
+	var kind string
+	require.NoError(t, db.Gorm().Raw(
+		`SELECT step_kind FROM todo_issue_prompt_runs WHERE prompt_run_id = ?`, legacyRun).Scan(&kind).Error)
+	assert.Equal(t, "triage", kind, "the backfill must reclassify the historical triage pass")
 }

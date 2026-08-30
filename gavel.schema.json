@@ -418,8 +418,39 @@
     },
     "MCP": {
       "additionalProperties": false,
-      "properties": {},
+      "description": "Model-Context-Protocol server controls.",
+      "properties": {
+        "disabled": {
+          "description": "Turn off all MCP servers. Honoured on claude-cli and codex-agent; accepted and dropped elsewhere.",
+          "type": "boolean"
+        },
+        "modes": {
+          "additionalProperties": {
+            "description": "Whether this resource is loaded for the run.",
+            "enum": [
+              "enabled",
+              "disabled"
+            ],
+            "type": "string"
+          },
+          "description": "Enable or disable named configured servers.",
+          "type": "object"
+        },
+        "servers": {
+          "description": "Allowlist subset of configured servers.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
       "type": "object"
+    },
+    "MatchPatterns": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
     },
     "Memory": {
       "additionalProperties": false,
@@ -562,6 +593,66 @@
       },
       "type": "object"
     },
+    "PermissionMode": {
+      "description": "Base permission posture. Which of these a backend honours is declared per backend; see the permissions capability matrix.",
+      "enum": [
+        "acceptEdits",
+        "auto",
+        "bypassPermissions",
+        "default",
+        "dontAsk",
+        "plan"
+      ],
+      "type": "string"
+    },
+    "PermissionPolicy": {
+      "items": {
+        "$ref": "#/$defs/PermissionRule"
+      },
+      "type": "array"
+    },
+    "PermissionRule": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/MatchPatterns"
+        },
+        "destructive": {
+          "type": "boolean"
+        },
+        "entity": {
+          "$ref": "#/$defs/MatchPatterns"
+        },
+        "group": {
+          "$ref": "#/$defs/MatchPatterns"
+        },
+        "idempotent": {
+          "type": "boolean"
+        },
+        "method": {
+          "$ref": "#/$defs/MatchPatterns"
+        },
+        "name": {
+          "$ref": "#/$defs/MatchPatterns"
+        },
+        "parent": {
+          "$ref": "#/$defs/MatchPatterns"
+        },
+        "policy": {
+          "$ref": "#/$defs/ToolPolicy"
+        },
+        "readOnly": {
+          "type": "boolean"
+        },
+        "scope": {
+          "$ref": "#/$defs/MatchPatterns"
+        },
+        "verb": {
+          "$ref": "#/$defs/MatchPatterns"
+        }
+      },
+      "type": "object"
+    },
     "Permissions": {
       "additionalProperties": false,
       "properties": {
@@ -569,14 +660,14 @@
           "$ref": "#/$defs/MCP"
         },
         "mode": {
-          "type": "string"
+          "$ref": "#/$defs/PermissionMode"
         },
         "plugins": {
           "$ref": "#/$defs/ResourcePolicies"
         },
         "presets": {
           "items": {
-            "type": "string"
+            "$ref": "#/$defs/Preset"
           },
           "type": "array"
         },
@@ -588,6 +679,14 @@
         }
       },
       "type": "object"
+    },
+    "Preset": {
+      "description": "Named bundle of safety defaults applied before per-tool rules.",
+      "enum": [
+        "edit",
+        "bare"
+      ],
+      "type": "string"
     },
     "Prompt": {
       "additionalProperties": false,
@@ -627,39 +726,62 @@
       "type": "object"
     },
     "ResourcePolicies": {
-      "additionalProperties": {
-        "type": "string"
-      },
-      "type": "object"
-    },
-    "SandboxRef": {
-      "description": "Sandbox the run executes under: a backend name, or an object with overrides",
+      "description": "Resource IDs mapped to enabled|disabled. A bare string array is accepted and means every listed item is enabled.",
       "oneOf": [
         {
-          "description": "Backend name or adapter kind (none, srt, container, git-agent)",
+          "additionalProperties": {
+            "description": "Whether this resource is loaded for the run.",
+            "enum": [
+              "enabled",
+              "disabled"
+            ],
+            "type": "string"
+          },
+          "type": "object"
+        },
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      ]
+    },
+    "SandboxRef": {
+      "description": "Unified sandbox mode and provider-neutral isolation policy",
+      "oneOf": [
+        {
+          "description": "Isolation boundary: off, provider-native, Docker, or Git Agent",
+          "enum": [
+            "off",
+            "native",
+            "docker",
+            "git-agent"
+          ],
           "type": "string"
         },
         {
           "additionalProperties": false,
           "properties": {
             "agent": {
-              "description": "Pin one enrolled agent of a git-agent backend",
+              "description": "Pin one enrolled Git Agent worker",
               "type": "string"
             },
             "backend": {
-              "description": "Configured sandbox backend from ~/.captain.yaml, or a bare adapter kind",
+              "description": "Configured Docker or Git Agent backend",
               "type": "string"
             },
-            "policy": {
+            "dispatch": {
               "additionalProperties": false,
+              "description": "Git Agent dispatch policy",
               "properties": {
                 "maxAttempts": {
-                  "description": "Bound on submit cycles per task",
+                  "description": "Maximum Git Agent submit cycles",
                   "minimum": 0,
                   "type": "integer"
                 },
                 "paths": {
-                  "description": "Path allow/deny list, gitignore syntax with ! negating",
+                  "description": "Gitignore-style path policy for submitted changes",
                   "items": {
                     "type": "string"
                   },
@@ -667,8 +789,208 @@
                 }
               },
               "type": "object"
+            },
+            "mode": {
+              "description": "Isolation boundary: off, provider-native, Docker, or Git Agent",
+              "enum": [
+                "off",
+                "native",
+                "docker",
+                "git-agent"
+              ],
+              "type": "string"
+            },
+            "policy": {
+              "additionalProperties": false,
+              "description": "Provider-neutral native sandbox policy",
+              "properties": {
+                "commands": {
+                  "additionalProperties": false,
+                  "description": "Command isolation",
+                  "properties": {
+                    "allowUnsandboxed": {
+                      "description": "Allow a provider to request unsandboxed command execution",
+                      "type": "boolean"
+                    },
+                    "excludedFromSandbox": {
+                      "description": "Commands that run outside native process isolation",
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "type": "object"
+                },
+                "credentials": {
+                  "additionalProperties": false,
+                  "description": "Credential isolation",
+                  "properties": {
+                    "deniedEnv": {
+                      "description": "Environment variables removed from built-in tools",
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "deniedFiles": {
+                      "description": "Credential files hidden from built-in tools",
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "maskedEnv": {
+                      "description": "Environment variables masked in output",
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "type": "object"
+                },
+                "filesystem": {
+                  "additionalProperties": false,
+                  "description": "Filesystem isolation",
+                  "properties": {
+                    "access": {
+                      "description": "Native filesystem access granted to built-in provider tools",
+                      "enum": [
+                        "read-only",
+                        "workspace-write"
+                      ],
+                      "type": "string"
+                    },
+                    "deniedReadRoots": {
+                      "description": "Roots built-in tools cannot read",
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "deniedWriteRoots": {
+                      "description": "Roots built-in tools cannot write",
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "includeSystemTemp": {
+                      "description": "Include system temporary directories in writable roots",
+                      "type": "boolean"
+                    },
+                    "readableRoots": {
+                      "description": "Additional readable roots",
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "writableRoots": {
+                      "description": "Additional writable roots",
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "type": "object"
+                },
+                "network": {
+                  "additionalProperties": false,
+                  "description": "Network isolation",
+                  "properties": {
+                    "access": {
+                      "description": "Native network access granted to built-in provider tools",
+                      "enum": [
+                        "disabled",
+                        "restricted",
+                        "unrestricted"
+                      ],
+                      "type": "string"
+                    },
+                    "allowAllUnixSockets": {
+                      "description": "Allow every Unix-domain socket",
+                      "type": "boolean"
+                    },
+                    "allowLocalBinding": {
+                      "description": "Allow binding local listening ports",
+                      "type": "boolean"
+                    },
+                    "allowedDomains": {
+                      "description": "Allowed outbound domains",
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "allowedMachServices": {
+                      "description": "Allowed macOS Mach services",
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "allowedUnixSockets": {
+                      "description": "Allowed Unix-domain socket paths",
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "deniedDomains": {
+                      "description": "Denied outbound domains",
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "httpProxyPort": {
+                      "description": "HTTP proxy port",
+                      "maximum": 65535,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "socksProxyPort": {
+                      "description": "SOCKS proxy port",
+                      "maximum": 65535,
+                      "minimum": 1,
+                      "type": "integer"
+                    }
+                  },
+                  "type": "object"
+                },
+                "platform": {
+                  "additionalProperties": false,
+                  "description": "Platform-specific isolation",
+                  "properties": {
+                    "allowAppleEvents": {
+                      "description": "Allow macOS Apple Events",
+                      "type": "boolean"
+                    },
+                    "weakerNestedIsolation": {
+                      "description": "Permit weaker isolation in nested environments",
+                      "type": "boolean"
+                    },
+                    "weakerNetworkIsolation": {
+                      "description": "Permit weaker network isolation when proxy enforcement is unavailable",
+                      "type": "boolean"
+                    }
+                  },
+                  "type": "object"
+                },
+                "required": {
+                  "description": "Fail when the provider-native sandbox is unavailable",
+                  "type": "boolean"
+                }
+              },
+              "type": "object"
             }
           },
+          "required": [
+            "mode"
+          ],
           "type": "object"
         }
       ]
@@ -811,6 +1133,9 @@
         "toolApproval": {
           "$ref": "#/$defs/ToolApprovalResume"
         },
+        "toolPolicy": {
+          "$ref": "#/$defs/PermissionPolicy"
+        },
         "toolPreferences": {
           "$ref": "#/$defs/ToolPreferences"
         },
@@ -906,10 +1231,28 @@
       },
       "type": "object"
     },
+    "ToolPolicy": {
+      "description": "Authority for one tool: auto inherits the posture, ask requires approval, allow auto-approves, deny forbids.",
+      "enum": [
+        "auto",
+        "ask",
+        "allow",
+        "deny"
+      ],
+      "type": "string"
+    },
     "ToolPreferences": {
       "additionalProperties": {
+        "description": "Preference for one tool or group. The legacy on|off spellings are accepted and mean allow|deny.",
+        "enum": [
+          "auto",
+          "ask",
+          "allow",
+          "deny"
+        ],
         "type": "string"
       },
+      "description": "Per-turn preference keyed by tool name or group. A tool-name entry overrides its group entry.",
       "type": "object"
     },
     "ToolRequest": {
@@ -939,8 +1282,17 @@
       "type": "object"
     },
     "Tools": {
-      "additionalProperties": false,
-      "properties": {},
+      "additionalProperties": {
+        "description": "Authority for one tool: auto inherits the posture, ask requires approval, allow auto-approves, deny forbids.",
+        "enum": [
+          "auto",
+          "ask",
+          "allow",
+          "deny"
+        ],
+        "type": "string"
+      },
+      "description": "Per-tool policy, keyed by tool name. An absent tool inherits the posture.",
       "type": "object"
     },
     "Verify": {
@@ -1144,6 +1496,9 @@
         },
         "toolApproval": {
           "$ref": "#/$defs/ToolApprovalResume"
+        },
+        "toolPolicy": {
+          "$ref": "#/$defs/PermissionPolicy"
         },
         "toolPreferences": {
           "$ref": "#/$defs/ToolPreferences"
@@ -2170,6 +2525,10 @@
           "description": "Absolute origin this gavel dashboard is reachable at (e.g. https://gavel.example.com). Todo bodies store attachments as server-relative links, so pushing a todo to an external tracker rewrites them against this origin. A loopback origin only renders for viewers on the same machine.",
           "type": "string"
         },
+        "checkConcurrency": {
+          "description": "How many definition-of-done checks run at once (`gavel todos check`, and the verification phase after a bulk triage). Each check runs the TODO's fixture, so an unbounded fan-out over a large selection thrashes the machine. Defaults to 4.",
+          "type": "integer"
+        },
         "driver": {
           "description": "Execution mechanism for a run: api, agent, cli, or cmux. The coding agent is derived from the model. Last-write-wins across layers.",
           "type": "string"
@@ -2255,6 +2614,101 @@
           ],
           "x-prompt-id": "todos.plan"
         },
+        "prompts": {
+          "additionalProperties": {
+            "additionalProperties": false,
+            "description": "One named prompt, runnable with `gavel todos run --prompt \u003cname\u003e`.",
+            "properties": {
+              "budget": {
+                "additionalProperties": false,
+                "description": "Resource ceilings for the run. Zero/unset means unbounded.",
+                "properties": {
+                  "cost": {
+                    "description": "Maximum spend in USD; 0 = no ceiling.",
+                    "type": "number"
+                  },
+                  "maxTokens": {
+                    "description": "Cap on output tokens per model call; 0 = backend default.",
+                    "type": "integer"
+                  },
+                  "maxTurns": {
+                    "description": "Cap on agent turns; 0 = backend default.",
+                    "type": "integer"
+                  }
+                },
+                "type": "object"
+              },
+              "class": {
+                "description": "Behaviour class this prompt runs as: run commits and verifies its work, plan does neither. Defaults to plan — a prompt that was never told it may commit must not inherit the right to.",
+                "enum": [
+                  "run",
+                  "plan"
+                ]
+              },
+              "description": {
+                "description": "What this prompt does and when to run it.",
+                "type": "string"
+              },
+              "effort": {
+                "description": "Reasoning effort for thinking-capable models.",
+                "enum": [
+                  "",
+                  "low",
+                  "medium",
+                  "high",
+                  "xhigh",
+                  "max",
+                  "ultra"
+                ],
+                "type": "string"
+              },
+              "fallbacks": {
+                "description": "Alternative model slugs tried in order when the primary is unavailable or its provider cannot be constructed.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "file": {
+                "description": "Path to a .prompt file whose frontmatter/body supply this operation's spec. Relative paths resolve against the .gavel.yaml directory.",
+                "type": "string"
+              },
+              "model": {
+                "description": "Catalog model slug for this operation (e.g. claude-haiku-4-5). Overrides the base ai.model.",
+                "type": "string"
+              },
+              "prompt": {
+                "additionalProperties": false,
+                "description": "The prompt body. A bare string in place of the whole spec is shorthand for prompt.user.",
+                "properties": {
+                  "system": {
+                    "description": "Optional system-prompt framing.",
+                    "type": "string"
+                  },
+                  "user": {
+                    "description": "The user prompt / template body (Handlebars).",
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "title": {
+                "description": "Short label shown by `gavel todos prompts` and the dashboard.",
+                "type": "string"
+              },
+              "workflow": {
+                "$ref": "#/$defs/Workflow",
+                "description": "Loop shape for operations that run one: verify commands (the definition of done, whose exit code gates a re-run and whose output tail becomes the feedback) and the commit policy. Overriding it replaces the operation's declared workflow field-wise."
+              }
+            },
+            "type": [
+              "string",
+              "object"
+            ]
+          },
+          "description": "Additional named prompts, keyed by name. A named prompt supplies the template and model; class says which behaviour it runs as, so a project can add a security or docs pass without gavel gaining a run mode. Built-in names (run, plan, triage) may be redeclared here to replace their template wholesale.",
+          "type": "object"
+        },
         "run": {
           "additionalProperties": false,
           "description": "AI spec for the todo run prompt: the framing, the TODO items injected as {{{body}}}, and the instructions.",
@@ -2335,6 +2789,83 @@
         "timeout": {
           "description": "Wall-clock timeout for a run (e.g. 30m). Last-write-wins across layers.",
           "type": "string"
+        },
+        "triage": {
+          "additionalProperties": false,
+          "description": "AI spec for the triage prompt: a read-only pass that compacts the TODO's description and reviews its verification fixture, reporting the edits for gavel to apply.",
+          "properties": {
+            "budget": {
+              "additionalProperties": false,
+              "description": "Resource ceilings for the run. Zero/unset means unbounded.",
+              "properties": {
+                "cost": {
+                  "description": "Maximum spend in USD; 0 = no ceiling.",
+                  "type": "number"
+                },
+                "maxTokens": {
+                  "description": "Cap on output tokens per model call; 0 = backend default.",
+                  "type": "integer"
+                },
+                "maxTurns": {
+                  "description": "Cap on agent turns; 0 = backend default.",
+                  "type": "integer"
+                }
+              },
+              "type": "object"
+            },
+            "effort": {
+              "description": "Reasoning effort for thinking-capable models.",
+              "enum": [
+                "",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max",
+                "ultra"
+              ],
+              "type": "string"
+            },
+            "fallbacks": {
+              "description": "Alternative model slugs tried in order when the primary is unavailable or its provider cannot be constructed.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "file": {
+              "description": "Path to a .prompt file whose frontmatter/body supply this operation's spec. Relative paths resolve against the .gavel.yaml directory.",
+              "type": "string"
+            },
+            "model": {
+              "description": "Catalog model slug for this operation (e.g. claude-haiku-4-5). Overrides the base ai.model.",
+              "type": "string"
+            },
+            "prompt": {
+              "additionalProperties": false,
+              "description": "The prompt body. A bare string in place of the whole spec is shorthand for prompt.user.",
+              "properties": {
+                "system": {
+                  "description": "Optional system-prompt framing.",
+                  "type": "string"
+                },
+                "user": {
+                  "description": "The user prompt / template body (Handlebars).",
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "workflow": {
+              "$ref": "#/$defs/Workflow",
+              "description": "Loop shape for operations that run one: verify commands (the definition of done, whose exit code gates a re-run and whose output tail becomes the feedback) and the commit policy. Overriding it replaces the operation's declared workflow field-wise."
+            }
+          },
+          "type": [
+            "string",
+            "object"
+          ],
+          "x-prompt-id": "todos.triage"
         },
         "verify": {
           "additionalProperties": false,
@@ -2434,6 +2965,9 @@
             },
             "toolApproval": {
               "$ref": "#/$defs/ToolApprovalResume"
+            },
+            "toolPolicy": {
+              "$ref": "#/$defs/PermissionPolicy"
             },
             "toolPreferences": {
               "$ref": "#/$defs/ToolPreferences"

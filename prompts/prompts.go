@@ -24,6 +24,7 @@ const (
 	PRFix              = "pr.fix"
 	TodosRun           = "todos.run"
 	TodosPlan          = "todos.plan"
+	TodosTriage        = "todos.triage"
 	StatusSummary      = "status.summary"
 	TestOutlineSummary = "test.outlineSummary"
 )

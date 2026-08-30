@@ -159,6 +159,12 @@ tasks:
       - ./**/*.go
       - go.mod
       - go.sum
+      # Both UIs are //go:embed-ed, so a frontend-only change still changes the
+      # binary. Without them here Task calls the build up to date after the
+      # bundles are rebuilt, and `make build` silently ships the previous UI —
+      # which looks exactly like the fix not working.
+      - ./pr/ui/dist/**
+      - ./testrunner/ui/dist/**
     generates:
       - ./{{.BINARY_NAME}}
 
@@ -249,7 +255,10 @@ tasks:
     cmds:
       - go test -v -race -coverprofile=coverage.out $(go list ./... | grep -v '/hack/' | grep -v '/vendor/')
     env:
-      CGO_ENABLED: 0
+      # arch-unit is a member of this workspace and requires cgo for its
+      # treesitter plugin, so it builds with CGO_ENABLED=1. Testing here with 0
+      # compiled the entire shared graph a second time.
+      CGO_ENABLED: 1
 
   test:unit:
     desc: Run unit tests only
@@ -263,7 +272,8 @@ tasks:
       - go tool cover -html=coverage.out -o coverage.html
       - echo "Coverage report generated at coverage.html"
     env:
-      CGO_ENABLED: 0
+      # Matches task test; see the note there.
+      CGO_ENABLED: 1
 
   lint:
     desc: Run linters

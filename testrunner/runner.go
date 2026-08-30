@@ -33,7 +33,6 @@ import (
 	"github.com/flanksource/gavel/verify"
 	"github.com/samber/lo"
 	gopsutilProcess "github.com/shirou/gopsutil/v3/process"
-	"golang.org/x/mod/modfile"
 )
 
 var (
@@ -560,26 +559,13 @@ func executionRootLabel(baseWorkDir, rootWorkDir string) string {
 }
 
 func executionRootProjectLabel(rootWorkDir string) (string, bool) {
-	if modulePath, ok := goModuleName(rootWorkDir); ok {
+	if modulePath, ok := parsers.GoModuleName(rootWorkDir); ok {
 		return modulePath, true
 	}
 	if packageName, ok := packageJSONName(rootWorkDir); ok {
 		return packageName, true
 	}
 	return "", false
-}
-
-func goModuleName(rootWorkDir string) (string, bool) {
-	data, err := os.ReadFile(filepath.Join(rootWorkDir, "go.mod"))
-	if err != nil {
-		return "", false
-	}
-	f, err := modfile.Parse("go.mod", data, nil)
-	if err != nil || f.Module == nil {
-		return "", false
-	}
-	name := strings.TrimSpace(f.Module.Mod.Path)
-	return name, name != ""
 }
 
 func packageJSONName(rootWorkDir string) (string, bool) {

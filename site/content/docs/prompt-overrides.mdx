@@ -45,8 +45,10 @@ Gavel validates the parsed output and fails loudly on a shape mismatch (no zero-
 | `commit.summaryPrompt` | Commit-group summary (`git analyze --summary`) | scope/commit fields | frontmatter |
 | `commit.groupingPrompt` | AI commit grouping (`commit -G`) | `{{table}}`, `{{groupByScope}}`, `{{maxCommits}}`, `{{consolidation}}`, `{{prevCount}}`, `{{prevGroups}}` | frontmatter (`groups[]`+`ignore[]`) |
 | `commit.prContentPrompt` | PR title/body/branch | PR input fields | frontmatter |
-| `todos.runPrompt` | Todo run | `{{body}}`, `{{count}}`, `{{multiple}}`, `{{existingPlan}}` | **fixed** (run envelope) |
-| `todos.planPrompt` | Todo plan | `{{body}}`, `{{count}}`, `{{existingPlan}}` | **fixed** (plan envelope) |
+| `todos.run` | Todo run | `{{body}}`, `{{count}}`, `{{multiple}}`, `{{existingPlan}}` | **fixed** (run envelope) |
+| `todos.plan` | Todo plan | `{{body}}`, `{{count}}`, `{{existingPlan}}` | **fixed** (plan envelope) |
+| `todos.triage` | Todo triage | `{{body}}`, `{{count}}`, `{{multiple}}`, `{{backlog}}` | **fixed** (triage envelope) |
+| `todos.prompts.<name>` | A project-declared prompt | `{{body}}`, `{{count}}`, `{{multiple}}`, `{{existingPlan}}`, `{{backlog}}` | **fixed** (its class's envelope) |
 | `status.summaryPrompt` | Per-file summary (`status --ai`) | `{{details}}` | frontmatter (`{summary}`) |
 | `test.outlineSummaryPrompt` | Per-test summary (`test outline --ai-summary`) | `{{ids}}`, `{{file}}`, `{{source}}` | frontmatter (`tests[]`) |
 
@@ -59,4 +61,26 @@ The verify prompt is white-box or black-box by **which variables it references**
 
 ### Fixed-schema prompts
 
-`todos.runPrompt` and `todos.planPrompt` carry a structured result **envelope** whose schema is generated in Go and applied to the request natively. Overriding these prompts changes the framing and instructions, but the output shape is enforced by the driver and cannot be altered from `.gavel.yaml` — this is what keeps a hand-edited prompt from breaking the run loop.
+`todos.run`, `todos.plan`, and `todos.triage` each carry a structured result **envelope** whose schema is generated in Go and applied to the request natively. Overriding these prompts changes the framing and instructions, but the output shape is enforced by the driver and cannot be altered from `.gavel.yaml` — this is what keeps a hand-edited prompt from breaking the run loop.
+
+### Named prompts
+
+A prompt's **name** selects the template; its **class** selects the behaviour. They are separate axes, so a project can add a prompt without gavel gaining a run mode:
+
+```yaml
+todos:
+  prompts:
+    security:
+      class: plan          # run implements and commits; plan does neither. Default: plan
+      title: Security pass
+      model: claude-opus-4-5
+      file: .gavel/prompts/security.prompt
+```
+
+Run it with `gavel todos run <ref> --prompt security`, and list what is available with `gavel todos prompts`. `--mode` is only needed to *assert* a class; supplying one that disagrees with the prompt is an error rather than a silently resolved preference.
+
+Built-in names (`run`, `plan`, `triage`) may be redeclared under `todos.prompts` to replace their template wholesale, but their class and envelope are fixed — the run loop parses against them.
+
+### Triage
+
+`todos.triage` is a read-only pass: it compacts a TODO's description, reviews its `## Verification` fixture, and reports the edits it wants in its envelope. **Gavel performs the writes**, not the agent — which is why the fixture is parse-checked before it is stored, and why a status the agent cannot assign fails loudly instead of being dropped. The prompt receives the fixture source verbatim (the run prompt sees only the commands it contains) plus `{{backlog}}`, a compact index of the other open TODOs, so it can spot duplicates.

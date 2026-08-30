@@ -92,6 +92,91 @@ table "todo_workspace_paths" {
   }
 }
 
+# todo_labels stores the presentation of a label — its colour, glyph and
+# description. A row with a NULL workspace_id is a global definition applying to
+# every workspace; a workspace-scoped row of the same name shadows it. Built-in
+# defaults are NOT seeded here: they are a lower tier in the resolution chain, so
+# this table only ever holds what someone actually edited.
+table "todo_labels" {
+  schema = schema.public
+
+  column "id" {
+    null    = false
+    type    = uuid
+    default = sql("gen_random_uuid()")
+  }
+  column "workspace_id" {
+    null = true
+    type = uuid
+  }
+  column "name" {
+    null = false
+    type = text
+  }
+  column "color" {
+    null = false
+    type = text
+  }
+  column "icon" {
+    null    = false
+    type    = text
+    default = ""
+  }
+  column "description" {
+    null    = false
+    type    = text
+    default = ""
+  }
+  column "created_at" {
+    null    = false
+    type    = timestamptz
+    default = sql("now()")
+  }
+  column "updated_at" {
+    null    = false
+    type    = timestamptz
+    default = sql("now()")
+  }
+
+  primary_key {
+    columns = [column.id]
+  }
+
+  foreign_key "todo_labels_workspace_id_fkey" {
+    columns     = [column.workspace_id]
+    ref_columns = [table.todo_workspaces.column.id]
+    on_update   = NO_ACTION
+    on_delete   = CASCADE
+  }
+
+  # Two partial unique indexes rather than one composite: Postgres treats NULLs
+  # as distinct in a unique index, so a plain unique(workspace_id, name) would
+  # happily allow two global rows for the same label.
+  index "todo_labels_workspace_name_key" {
+    unique  = true
+    columns = [column.workspace_id, column.name]
+    where   = "workspace_id IS NOT NULL"
+  }
+  index "todo_labels_global_name_key" {
+    unique  = true
+    columns = [column.name]
+    where   = "workspace_id IS NULL"
+  }
+
+  # Mirrors labels.Normalize (lowercase + trim), which is also what
+  # native.normalizeStrings applies to todo_issues.labels — so a definition
+  # written here always matches a label stored there.
+  check "todo_labels_name_normalized" {
+    expr = "name <> '' AND name = lower(btrim(name))"
+  }
+  # The palette in todos/labels/palette.go. Colour is a hue token rather than a
+  # hex value so one stored value renders in the terminal (clicky resolves the
+  # tailwind classes to termenv colours) and in the dashboard.
+  check "todo_labels_color_check" {
+    expr = "color = ANY (ARRAY['slate'::text, 'red'::text, 'orange'::text, 'amber'::text, 'yellow'::text, 'lime'::text, 'green'::text, 'emerald'::text, 'teal'::text, 'cyan'::text, 'sky'::text, 'blue'::text, 'indigo'::text, 'violet'::text, 'purple'::text, 'fuchsia'::text, 'pink'::text, 'rose'::text])"
+  }
+}
+
 table "todo_issues" {
   schema = schema.public
 
@@ -430,6 +515,32 @@ table "todo_issue_prompt_runs" {
     type    = timestamptz
     default = sql("now()")
   }
+  # The process driving this run. A prompt run is finalized in-process, so a
+  # dispatcher that exits without finalizing would otherwise leave the run
+  # non-terminal forever and Captain's active-run index would block the issue
+  # for good. These columns let another process prove the owner is gone and
+  # reclaim the run. NULL means unowned: never claimed, already released, or
+  # written before ownership existed — all of which read as orphaned.
+  column "owner_host_id" {
+    null = true
+    type = text
+  }
+  column "owner_pid" {
+    null = true
+    type = bigint
+  }
+  column "owner_started_at" {
+    null = true
+    type = timestamptz
+  }
+  column "owner_token" {
+    null = true
+    type = uuid
+  }
+  column "owner_heartbeat_at" {
+    null = true
+    type = timestamptz
+  }
 
   primary_key {
     columns = [column.issue_id, column.prompt_run_id]
@@ -452,10 +563,13 @@ table "todo_issue_prompt_runs" {
   }
 
   check "todo_issue_prompt_runs_step_kind_check" {
-    expr = "step_kind = ANY (ARRAY['plan'::text, 'run'::text, 'verify'::text])"
+    expr = "step_kind = ANY (ARRAY['plan'::text, 'run'::text, 'verify'::text, 'triage'::text])"
   }
   check "todo_issue_prompt_runs_ordinal_nonnegative" {
     expr = "ordinal >= 0"
+  }
+  check "todo_issue_prompt_runs_owner_complete" {
+    expr = "owner_host_id IS NULL OR (owner_pid > 0 AND owner_started_at IS NOT NULL AND owner_token IS NOT NULL)"
   }
 }
 
