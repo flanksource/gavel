@@ -43,8 +43,12 @@ func sampleCommit() models.CommitAnalysis {
 	}
 }
 
+// defaultTypes is the shipped vocabulary, so the goldens document the prompt as
+// a project with no commit.types override actually sees it.
+func defaultTypes() []string { return commitTypeNames(models.SelectableCommitTypes()) }
+
 func TestPromptCommitMessage_WithMaxBodyLines(t *testing.T) {
-	got, _, err := renderCommitPrompt(sampleCommit(), commitMessagePrompt, map[string]any{"maxBodyLines": 3})
+	got, _, err := renderCommitPrompt(sampleCommit(), commitMessagePrompt, commitPromptData(3, defaultTypes()))
 	require.NoError(t, err)
 	require.Contains(t, got, "- body: at most 3 line(s)", "maxBodyLines must select the if-branch")
 	require.NotContains(t, got, "&lt;", "diff must not be HTML-escaped")
@@ -53,7 +57,7 @@ func TestPromptCommitMessage_WithMaxBodyLines(t *testing.T) {
 }
 
 func TestPromptCommitMessage_WithoutMaxBodyLines(t *testing.T) {
-	got, _, err := renderCommitPrompt(sampleCommit(), commitMessagePrompt, map[string]any{"maxBodyLines": 0})
+	got, _, err := renderCommitPrompt(sampleCommit(), commitMessagePrompt, commitPromptData(0, defaultTypes()))
 	require.NoError(t, err)
 	require.Contains(t, got, "- body: omit unless the change is non-trivial", "zero maxBodyLines must select the else-branch")
 	require.NotContains(t, got, "at most", "else-branch must not mention a line cap")

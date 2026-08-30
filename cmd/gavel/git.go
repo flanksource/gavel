@@ -83,6 +83,12 @@ func init() {
 				return nil, err
 			}
 
+			// Rewritten messages come from the same prompt as `gavel commit`, so
+			// they answer to the same .gavel.yaml commit.types vocabulary.
+			if cfg, cfgErr := verify.LoadGavelConfig(options.Path); cfgErr == nil {
+				options.AllowedCommitTypes = cfg.Commit.Types
+			}
+
 			logger.Debugf("git-analyzer: retrieved %d commits, starting analysis", len(commits))
 			analyses, err = git.AnalyzeCommitHistory(analyzerCtx, commits, options)
 			if err != nil {

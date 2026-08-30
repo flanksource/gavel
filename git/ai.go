@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/flanksource/captain/pkg/ai/prompt"
@@ -25,7 +26,7 @@ const commitMessagePromptFile = "ai-commit-message.prompt"
 // Subject is required (no json omitempty) so the provider's schema
 // generator marks it required, causing the model to always emit it.
 type commitMessageSchema struct {
-	Type    string `json:"type" description:"Conventional commit type: feat|fix|perf|refactor|test|docs|build|ci|chore|revert"`
+	Type    string `json:"type" description:"Conventional commit type, one of the values enumerated in the schema"`
 	Scope   string `json:"scope,omitempty" description:"Optional scope, e.g. db, api, fe, kubernetes"`
 	Subject string `json:"subject" description:"Imperative subject line, max 100 chars, no trailing period"`
 	Body    string `json:"body,omitempty" description:"Optional body explaining why and impact"`
@@ -36,7 +37,7 @@ func AnalyzeWithAI(ctx context.Context, commit models.CommitAnalysis, agent ai.A
 		return commit, nil
 	}
 
-	analyzed, err := analyzeCommitMessageWithAI(ctx, commit, agent, opts.MaxBodyLines, opts.MessagePrompt)
+	analyzed, err := analyzeCommitMessageWithAI(ctx, commit, agent, opts.MaxBodyLines, opts.MessagePrompt, opts.AllowedCommitTypes)
 	if err != nil {
 		return commit, err
 	}
@@ -47,13 +48,18 @@ func AnalyzeWithAI(ctx context.Context, commit models.CommitAnalysis, agent ai.A
 	return analyzed, nil
 }
 
-func analyzeCommitMessageWithAI(ctx context.Context, commit models.CommitAnalysis, agent ai.Agent, maxBodyLines int, override string) (models.CommitAnalysis, error) {
+func analyzeCommitMessageWithAI(ctx context.Context, commit models.CommitAnalysis, agent ai.Agent, maxBodyLines int, override string, configuredTypes []string) (models.CommitAnalysis, error) {
 	template := promptOrDefault(override, commitMessagePrompt)
 	if template == "" {
 		return commit, fmt.Errorf("AI commit message prompt template is empty")
 	}
 
-	promptText, schemaJSON, err := renderCommitPrompt(commit, template, map[string]any{"maxBodyLines": maxBodyLines})
+	allowedTypes, err := allowedCommitTypes(configuredTypes)
+	if err != nil {
+		return commit, err
+	}
+
+	promptText, schemaJSON, err := renderCommitPrompt(commit, template, commitPromptData(maxBodyLines, allowedTypes))
 	if err != nil {
 		return commit, err
 	}
@@ -82,6 +88,10 @@ func analyzeCommitMessageWithAI(ctx context.Context, commit models.CommitAnalysi
 	}
 
 	if schema.Type != "" {
+		if !slices.Contains(allowedTypes, schema.Type) {
+			return commit, fmt.Errorf("AI analysis returned commit type %q, which is not one of %s",
+				truncate(schema.Type, 60), strings.Join(allowedTypes, "|"))
+		}
 		commit.CommitType = models.CommitType(schema.Type)
 	}
 	if schema.Scope != "" {
@@ -99,6 +109,49 @@ func analyzeCommitMessageWithAI(ctx context.Context, commit models.CommitAnalysi
 	}
 
 	return commit, nil
+}
+
+// commitPromptData is the template data for the commit-message prompt: the
+// body's {{maxBodyLines}} branch, plus the type vocabulary that fills both the
+// schema's `type` enum ({{commitTypes}}) and the prose requirement
+// ({{commitTypesList}}).
+func commitPromptData(maxBodyLines int, allowedTypes []string) map[string]any {
+	return map[string]any{
+		"maxBodyLines":    maxBodyLines,
+		"commitTypes":     allowedTypes,
+		"commitTypesList": strings.Join(allowedTypes, "|"),
+	}
+}
+
+// allowedCommitTypes resolves the conventional-commit types the model may pick
+// from: the `.gavel.yaml` commit.types list when a project names one, otherwise
+// gavel's defaults. They become the prompt schema's `type` enum, so the model
+// picks from the project's vocabulary instead of inventing one. An unrecognised
+// configured type is an error rather than a silent drop — quietly ignoring it
+// would generate messages the project never asked for.
+func allowedCommitTypes(configured []string) ([]string, error) {
+	known := commitTypeNames(models.SelectableCommitTypes())
+	if len(configured) == 0 {
+		return known, nil
+	}
+	out := make([]string, 0, len(configured))
+	for _, name := range configured {
+		name = strings.TrimSpace(name)
+		if !models.CommitType(name).IsValid() {
+			return nil, fmt.Errorf("commit.types: unknown commit type %q (known types: %s)",
+				name, strings.Join(known, ", "))
+		}
+		out = append(out, name)
+	}
+	return out, nil
+}
+
+func commitTypeNames(types []models.CommitType) []string {
+	out := make([]string, len(types))
+	for i, t := range types {
+		out[i] = string(t)
+	}
+	return out
 }
 
 // promptOrDefault returns the .gavel.yaml override when set, otherwise the

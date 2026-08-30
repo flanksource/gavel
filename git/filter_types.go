@@ -97,9 +97,14 @@ type AnalyzeOptions struct {
 	// MessagePrompt overrides the embedded AI commit-message prompt template.
 	// Resolved from .gavel.yaml by the commit package; empty falls back to the
 	// built-in template. Not a CLI flag.
-	MessagePrompt string           `json:"-"`
-	agent         ai.Agent         `json:"-"`
-	arch          repomap.ArchConf `json:"-"`
+	MessagePrompt string `json:"-"`
+	// AllowedCommitTypes restricts the types AI message generation may choose
+	// from (.gavel.yaml commit.types); empty uses gavel's defaults. Distinct
+	// from CommitTypes above, which filters which existing commits to analyze.
+	// Resolved from .gavel.yaml by the commit package. Not a CLI flag.
+	AllowedCommitTypes []string         `json:"-"`
+	agent              ai.Agent         `json:"-"`
+	arch               repomap.ArchConf `json:"-"`
 }
 
 func techToStrings(techs []models.ScopeTechnology) []string {

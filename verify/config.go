@@ -232,6 +232,12 @@ type CommitConfig struct {
 	Summary  PromptSpec `yaml:"summary,omitempty" json:"summary,omitempty"`
 	// MaxCommits caps the number of commits AI grouping may produce (0 = default).
 	MaxCommits int `yaml:"maxCommits,omitempty" json:"maxCommits,omitempty"`
+	// Types is the set of conventional-commit types AI message generation may
+	// choose from; it becomes the generated message's `type:` enum, so the model
+	// cannot invent one. Empty uses models.SelectableCommitTypes(). Unlike the
+	// lists above this replaces rather than appends — naming types here narrows
+	// the vocabulary, and appending would make narrowing impossible.
+	Types []string `yaml:"types,omitempty" json:"types,omitempty"`
 }
 
 // CommitTidyConfig controls whether `gavel commit` runs `go mod tidy` in every

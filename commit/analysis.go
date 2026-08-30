@@ -40,13 +40,16 @@ func generateCommitAnalysis(ctx context.Context, opts Options, diff string) (ana
 	if err != nil {
 		return commitAIAnalysis{}, err
 	}
-	return generateCommitAnalysisWithAgent(ctx, diff, agent, messagePrompt)
+	return generateCommitAnalysisWithAgent(ctx, diff, agent, git.AnalyzeOptions{
+		MessagePrompt:      messagePrompt,
+		AllowedCommitTypes: opts.Config.Types,
+	})
 }
 
-func generateCommitAnalysisWithAgent(ctx context.Context, diff string, agent clickyai.Agent, messagePrompt string) (commitAIAnalysis, error) {
+func generateCommitAnalysisWithAgent(ctx context.Context, diff string, agent clickyai.Agent, opts git.AnalyzeOptions) (commitAIAnalysis, error) {
 	analysis := models.CommitAnalysis{Commit: models.Commit{Patch: diff}}
-	maxBodyLines := maxBodyLinesForDiff(countDiffLines(diff))
-	analyzed, err := analyzeCommitMessageWithAIFunc(ctx, analysis, agent, git.AnalyzeOptions{MaxBodyLines: maxBodyLines, MessagePrompt: messagePrompt})
+	opts.MaxBodyLines = maxBodyLinesForDiff(countDiffLines(diff))
+	analyzed, err := analyzeCommitMessageWithAIFunc(ctx, analysis, agent, opts)
 	if err != nil {
 		return commitAIAnalysis{}, err
 	}

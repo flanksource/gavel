@@ -692,6 +692,21 @@ func TestMerge_CommitGitIgnoreAndAllow(t *testing.T) {
 		assert.Equal(t, 5, out.MaxCommits)
 	})
 
+	// Unlike gitignore/allow, types must REPLACE rather than append: a repo that
+	// narrows generation to feat/fix cannot narrow anything if a broader layer's
+	// entries survive the merge.
+	t.Run("types override replaces the base list", func(t *testing.T) {
+		base := CommitConfig{Types: []string{"feat", "fix", "chore", "docs"}}
+		out := Merge(base, CommitConfig{Types: []string{"feat", "fix"}})
+		assert.Equal(t, []string{"feat", "fix"}, out.Types)
+	})
+
+	t.Run("types empty override preserves base", func(t *testing.T) {
+		base := CommitConfig{Types: []string{"feat", "fix"}}
+		out := Merge(base, CommitConfig{})
+		assert.Equal(t, []string{"feat", "fix"}, out.Types)
+	})
+
 	t.Run("message spec override wins when set", func(t *testing.T) {
 		base := CommitConfig{Message: PromptSpec{Spec: api.Spec{Model: api.Model{Name: "base-m"}}}}
 		override := CommitConfig{Message: PromptSpec{Spec: api.Spec{Model: api.Model{Name: "over-m"}}}}

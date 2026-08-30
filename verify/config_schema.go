@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 
 	"github.com/flanksource/captain/pkg/api"
+	"github.com/flanksource/gavel/models"
 	"github.com/flanksource/gavel/prompts"
 	"github.com/flanksource/gavel/todos/types"
 )
@@ -234,6 +235,17 @@ func lintSchema() map[string]any {
 	)
 }
 
+// commitTypeNames is the vocabulary offered for commit.types, read from the same
+// source as the prompt's enum so the two cannot drift apart.
+func commitTypeNames() []string {
+	types := models.SelectableCommitTypes()
+	out := make([]string, len(types))
+	for i, t := range types {
+		out[i] = string(t)
+	}
+	return out
+}
+
 func commitSchema() map[string]any {
 	return object(
 		"Settings for `gavel commit`.",
@@ -249,6 +261,11 @@ func commitSchema() map[string]any {
 				"AI spec for naming and summarising a group of commits (`gavel git analyze --summary`)."),
 			"maxCommits": intProp(
 				"Maximum number of commits AI grouping may produce. 0 uses the built-in default."),
+			"types": enumStringArray(
+				"Conventional-commit types AI message generation may choose from; they become the "+
+					"generated message's type enum. Replaces the built-in list rather than adding to it. "+
+					"Empty allows every type below.",
+				commitTypeNames()),
 			"hooks": arrayOf(
 				"Hooks run during `gavel commit` before the final commit is written. Appended across "+
 					"layers in declaration order.",
@@ -675,6 +692,19 @@ func stringArray(desc string) map[string]any {
 		"description": desc,
 		"items":       map[string]any{"type": "string"},
 	}
+}
+
+// enumStringArray models a string list whose entries are restricted to a known
+// vocabulary, so an editor completes them and a typo is caught in .gavel.yaml
+// rather than at generation time.
+func enumStringArray(desc string, values []string) map[string]any {
+	allowed := make([]any, len(values))
+	for i, v := range values {
+		allowed[i] = v
+	}
+	m := stringArray(desc)
+	m["items"] = map[string]any{"type": "string", "enum": allowed}
+	return m
 }
 
 func stringArrayWithDefault(desc string, def []string) map[string]any {
