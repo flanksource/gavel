@@ -7,12 +7,14 @@ import (
 
 	captainai "github.com/flanksource/captain/pkg/ai"
 	todopkg "github.com/flanksource/gavel/todos"
+	todoprompt "github.com/flanksource/gavel/todos/prompt"
 	"github.com/flanksource/gavel/todos/types"
 )
 
 type envelope struct {
 	types.ResultEnvelope
-	Plan *types.PlanResult
+	Plan   *types.PlanResult
+	Triage *types.TriageEnvelope
 }
 
 func (e *Executor) captureEnvelope(result *todopkg.ExecutionResult, response *captainai.Response) error {
@@ -141,8 +143,24 @@ func structuredDataText(value any) (string, error) {
 	return string(data), nil
 }
 
-func (e *Executor) parseEnvelope(text string) (*envelope, error) {
+// envelope reports which structured result this run's prompt returns, falling
+// back to the behaviour class for callers that predate named prompt selection.
+func (e *Executor) envelope() todoprompt.EnvelopeKind {
+	if e.config.Envelope != "" {
+		return e.config.Envelope
+	}
 	if e.config.Mode == types.ModePlan {
+		return todoprompt.EnvelopePlan
+	}
+	return todoprompt.EnvelopeResult
+}
+
+// parseEnvelope decodes the agent's final result into the shape its prompt
+// promised. It switches on the envelope kind rather than the run mode: triage is
+// plan-class but returns something entirely unlike a plan.
+func (e *Executor) parseEnvelope(text string) (*envelope, error) {
+	switch e.envelope() {
+	case todoprompt.EnvelopePlan:
 		parsed, err := captainai.ParseStructured(text, (*types.PlanEnvelope).Validate)
 		if err != nil {
 			return nil, err
@@ -150,12 +168,19 @@ func (e *Executor) parseEnvelope(text string) (*envelope, error) {
 		return &envelope{ResultEnvelope: parsed.ResultEnvelope, Plan: &types.PlanResult{
 			Status: parsed.PlanStatus, Path: parsed.PlanPath, Content: parsed.PlanContent,
 		}}, nil
+	case todoprompt.EnvelopeTriage:
+		parsed, err := captainai.ParseStructured(text, (*types.TriageEnvelope).Validate)
+		if err != nil {
+			return nil, err
+		}
+		return &envelope{ResultEnvelope: parsed.ResultEnvelope, Triage: parsed}, nil
+	default:
+		parsed, err := captainai.ParseStructured(text, (*types.ResultEnvelope).Validate)
+		if err != nil {
+			return nil, err
+		}
+		return &envelope{ResultEnvelope: *parsed}, nil
 	}
-	parsed, err := captainai.ParseStructured(text, (*types.ResultEnvelope).Validate)
-	if err != nil {
-		return nil, err
-	}
-	return &envelope{ResultEnvelope: *parsed}, nil
 }
 
 func applyEnvelope(result *todopkg.ExecutionResult, env *envelope) {
@@ -163,4 +188,5 @@ func applyEnvelope(result *todopkg.ExecutionResult, env *envelope) {
 	result.EndStatus = env.EndStatus
 	result.Questions = env.Questions
 	result.Plan = env.Plan
+	result.Triage = env.Triage
 }

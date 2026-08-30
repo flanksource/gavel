@@ -782,7 +782,7 @@ func TestHeadlessBuildsPermissionsFromToolModes(t *testing.T) {
 		}
 	}
 
-	t.Run("agent backend maps modes to allow/deny and honours permission mode", func(t *testing.T) {
+	t.Run("sdk backend maps modes to allow/deny and honours permission mode", func(t *testing.T) {
 		var req captainai.Request
 		e := newTestExecutor(Config{
 			WorkDir:        t.TempDir(),

@@ -77,6 +77,16 @@ func (e *Executor) Name() string {
 	return e.driver() + "-" + e.agent
 }
 
+// RunPromptName implements todos.RunPromptProvider: it reports which named
+// prompt this executor renders, so the run's durable identity distinguishes two
+// prompts of the same behaviour class.
+func (e *Executor) RunPromptName() string {
+	if name := strings.TrimSpace(e.config.Prompt); name != "" {
+		return name
+	}
+	return string(e.config.Mode)
+}
+
 func (e *Executor) driver() string {
 	return string(e.config.Spec.Mode)
 }
@@ -123,13 +133,7 @@ func (e *Executor) renderInitialRequest(todosInGroup []*types.TODO) (captainai.R
 		return captainai.Request{}, fmt.Errorf("no todos supplied")
 	}
 	workDir := groupWorkDir(e.config.WorkDir, todosInGroup)
-	rendered, _, err := todoprompt.Render(todosInGroup, todoprompt.Options{
-		WorkDir:      workDir,
-		Mode:         e.config.Mode,
-		Spec:         e.config.Spec,
-		Template:     e.config.Template,
-		ExistingPlan: e.config.ExistingPlan,
-	})
+	rendered, _, err := todoprompt.Render(todosInGroup, e.config.PromptOptions(workDir))
 	if err != nil {
 		return captainai.Request{}, err
 	}
@@ -152,7 +156,7 @@ func (e *Executor) SendFeedback(ctx *todopkg.ExecutorContext, todosInGroup []*ty
 		err := fmt.Errorf("%s: no prior session to resume for feedback", e.Name())
 		return e.failed(start, err), err
 	}
-	schema, err := todoprompt.EnvelopeSchemaJSON(e.config.Mode)
+	schema, err := todoprompt.EnvelopeSchemaJSON(e.envelope())
 	if err != nil {
 		return e.failed(start, err), err
 	}
