@@ -106,8 +106,12 @@ func TestRenderFoldsFrontmatter(t *testing.T) {
 	if req.Permissions.Mode != api.PermissionPlan {
 		t.Errorf("plan template Permissions.Mode = %q, want %q", req.Permissions.Mode, api.PermissionPlan)
 	}
-	if req.Model.Name != "claude" {
-		t.Errorf("plan template Model.Name = %q, want claude", req.Model.Name)
+	// The frontmatter says `model: claude`. Rendering resolves that family alias
+	// to the exact id a driver receives — which id is a catalog decision, so the
+	// assertion is that it resolved at all and stayed in the family.
+	if req.Model.Name == "claude" || req.Model.Provider != api.Anthropic {
+		t.Errorf("plan template Model = %q on %v, want a resolved anthropic model",
+			req.Model.Name, req.Model.Provider)
 	}
 	if !strings.Contains(string(req.Prompt.SchemaJSON), `"planStatus"`) || !strings.Contains(string(req.Prompt.SchemaJSON), `"planPath"`) {
 		t.Errorf("plan envelope schema missing planStatus/planPath: %s", req.Prompt.SchemaJSON)
@@ -164,7 +168,7 @@ func TestRenderOverridesKeepSchema(t *testing.T) {
 	tmplReq, _, err := Render(todoList, Options{
 		Mode:     types.ModeRun,
 		Template: "CUSTOM FRAMING for {{count}} item(s)\n\n{{{body}}}END",
-		Spec:     api.Spec{Model: api.Model{Name: "test-model"}},
+		Spec:     api.Spec{Model: api.Model{Name: "claude-sonnet-5"}},
 	})
 	if err != nil {
 		t.Fatalf("Render(template override): %v", err)
@@ -208,7 +212,7 @@ func TestRenderEffortDirective(t *testing.T) {
 
 func TestRenderMergesCanonicalSpecWithoutDroppingRuntimeFields(t *testing.T) {
 	spec := api.Spec{
-		Model:  api.Model{Name: "gpt-5.6-sol", Backend: "codex-agent", Effort: api.EffortHigh},
+		Model:  api.Model{Name: "gpt-5.6-sol", Mode: api.ModeAgent, Effort: api.EffortHigh},
 		Prompt: api.Prompt{User: "Use the reviewed implementation instructions.", System: "Keep changes surgical."},
 		Budget: api.Budget{Cost: 2.5, MaxTurns: 8, Timeout: "12m"},
 		Memory: api.Memory{Skills: []string{"gavel-todos"}},
@@ -246,7 +250,16 @@ func TestRenderMergesCanonicalSpecWithoutDroppingRuntimeFields(t *testing.T) {
 	// want is the caller's spec plus the fields the template itself contributes.
 	// Those are not drift: a .prompt declaring schemaStrictness is the template
 	// doing its job, and the caller's spec never modelled it.
+	//
+	// The model is resolved too — rendering hands back a driver-ready one — so
+	// the expectation resolves the caller's model rather than restating the
+	// capability flags resolution fills in.
 	want := spec
+	resolvedModel, err := captainai.Resolve(spec.Model)
+	if err != nil {
+		t.Fatalf("resolve the caller's model: %v", err)
+	}
+	want.Model = resolvedModel
 	want.Prompt.User = req.Prompt.User
 	want.Prompt.Source = "todos.run"
 	want.Prompt.SchemaJSON = req.Prompt.SchemaJSON
@@ -267,9 +280,9 @@ func TestPlanEnvelopeSchemaUsesFlatScalarFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EnvelopeSchemaJSON: %v", err)
 	}
-	got, err := captainai.SchemaJSONForBackend(captainai.BackendCodexAgent, api.Prompt{SchemaJSON: raw})
+	got, err := captainai.SchemaJSONForRuntime(api.Anthropic, captainai.ModeAgent, api.Prompt{SchemaJSON: raw})
 	if err != nil {
-		t.Fatalf("SchemaJSONForBackend: %v", err)
+		t.Fatalf("SchemaJSONForRuntime: %v", err)
 	}
 
 	var root map[string]any
@@ -310,9 +323,9 @@ func TestTriageEnvelopeSchemaUsesFlatScalarFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EnvelopeSchemaJSON: %v", err)
 	}
-	got, err := captainai.SchemaJSONForBackend(captainai.BackendCodexAgent, api.Prompt{SchemaJSON: raw})
+	got, err := captainai.SchemaJSONForRuntime(api.Anthropic, captainai.ModeAgent, api.Prompt{SchemaJSON: raw})
 	if err != nil {
-		t.Fatalf("SchemaJSONForBackend: %v", err)
+		t.Fatalf("SchemaJSONForRuntime: %v", err)
 	}
 
 	var root map[string]any

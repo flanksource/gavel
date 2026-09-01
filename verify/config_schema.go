@@ -352,9 +352,9 @@ func todosSchema(specSchema map[string]any) map[string]any {
 					"ai: and is overridden by the request. There is no prompt to override — the checklist is "+
 					"generated from the todo's acceptance criteria.",
 				DefaultVerifyModel,
-				"Catalog model slug the grader runs as. It must be agentic (e.g. claude-code-sonnet): the "+
-					"grader is told to inspect the change with its own tools, and an API model returns "+
-					"confident verdicts without reading the diff."),
+				"Catalog model slug the grader runs as. It must run on an agentic mechanism (mode agent, "+
+					"cli or cmux — e.g. `agent:sonnet`): the grader is told to inspect the change with its "+
+					"own tools, and an API model returns confident verdicts without reading the diff."),
 			"driver": stringProp(
 				"Execution mechanism for a run: api, agent, cli, or cmux. The coding agent is derived from " +
 					"the model. Last-write-wins across layers."),

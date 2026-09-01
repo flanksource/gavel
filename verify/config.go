@@ -24,13 +24,16 @@ import (
 const DefaultAIModel = "claude-haiku-4-5"
 
 // DefaultVerifyModel is the built-in model for the grader that marks a
-// definition of done. It is an agentic backend (claude-code) because the grader
-// is told to inspect the change with its own tools — DefaultAIModel is an API
-// model with none, and a grader that cannot read the diff still returns
-// confident verdicts. It seeds todos.verify rather than being applied where the
+// definition of done. It seeds todos.verify rather than being applied where the
 // grader is built, so a repo can override it and the settings trace can say
 // where the value came from.
-const DefaultVerifyModel = "claude-code-sonnet"
+const DefaultVerifyModel = "claude-sonnet-5"
+
+// DefaultVerifyMode is pinned rather than left to the model's provider default:
+// the grader is told to inspect the change with its own tools, so it must run on
+// an agentic mechanism. DefaultAIModel is an API model with none, and a grader
+// that cannot read the diff still returns confident verdicts.
+const DefaultVerifyMode = api.ModeAgent
 
 // DefaultAIConfig is the built-in global default base spec (precedence floor).
 func DefaultAIConfig() api.Spec {
@@ -41,7 +44,7 @@ func DefaultAIConfig() api.Spec {
 func DefaultGavelConfig() GavelConfig {
 	return GavelConfig{
 		AI:    DefaultAIConfig(),
-		Todos: TodosConfig{Verify: api.Spec{Model: api.Model{Name: DefaultVerifyModel}}},
+		Todos: TodosConfig{Verify: api.Spec{Model: api.Model{Name: DefaultVerifyModel, Mode: DefaultVerifyMode}}},
 	}
 }
 

@@ -155,6 +155,17 @@ func Render(todoList []*types.TODO, opts Options) (captainai.Request, captainai.
 	override.Prompt.Schema = nil
 	override.Prompt.SchemaJSON = nil
 	req = req.Merge(override)
+	// Resolve last, after the merge: the template's model is resolved when it is
+	// rendered, and an override that names a different one leaves the request
+	// carrying a name from the caller with nothing else filled in. Callers are
+	// handed a driver-ready model, which is the contract the executor relies on.
+	if strings.TrimSpace(req.Model.Name) != "" {
+		resolved, err := captainai.Resolve(req.Model)
+		if err != nil {
+			return captainai.Request{}, captainai.Config{}, fmt.Errorf("resolve todos %s runtime: %w", opts.promptName(), err)
+		}
+		req.Model = resolved
+	}
 
 	effort := string(req.Effort)
 	if directive := EffortDirective(effort); directive != "" {

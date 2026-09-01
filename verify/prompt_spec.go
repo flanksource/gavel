@@ -169,7 +169,7 @@ func (s *PromptSpec) adoptString(str string) error {
 // or default) is rendered with data — so a default that templates its frontmatter
 // (e.g. a maxItems constraint) resolves too. The result is validated.
 func (s PromptSpec) Resolve(base api.Spec, defaultPrompt string, data map[string]any, dir string) (api.Spec, error) {
-	defaultSpec, err := RenderPromptSpec(defaultPrompt, data)
+	defaultSpec, err := RenderPromptSpec(defaultPrompt, data, PromptSpecOptions{})
 	if err != nil {
 		return api.Spec{}, fmt.Errorf("render default prompt: %w", err)
 	}
@@ -181,13 +181,13 @@ func (s PromptSpec) Resolve(base api.Spec, defaultPrompt string, data map[string
 		if err != nil {
 			return api.Spec{}, fmt.Errorf("read prompt override file: %w", err)
 		}
-		fileSpec, err := RenderPromptSpec(string(raw), data)
+		fileSpec, err := RenderPromptSpec(string(raw), data, PromptSpecOptions{})
 		if err != nil {
 			return api.Spec{}, fmt.Errorf("render prompt override file: %w", err)
 		}
 		opSpec = fileSpec.Merge(s.Spec) // inline spec fields win over the file
 	case strings.TrimSpace(s.Spec.Prompt.User) != "":
-		rendered, err := RenderPromptSpec(s.Spec.Prompt.User, data)
+		rendered, err := RenderPromptSpec(s.Spec.Prompt.User, data, PromptSpecOptions{})
 		if err != nil {
 			return api.Spec{}, fmt.Errorf("render inline prompt: %w", err)
 		}
@@ -286,12 +286,25 @@ func setPromptSpecBaseDirs(cfg *GavelConfig, dir string) {
 	walk(reflect.ValueOf(cfg))
 }
 
+// PromptSpecOptions configures RenderPromptSpec.
+type PromptSpecOptions struct {
+	// Declared keeps the frontmatter model exactly as the prompt wrote it instead
+	// of the driver-ready (name, mode) pair rendering resolves it to.
+	//
+	// A configuration layer must carry what it declares. Resolution fills the mode
+	// from the model's provider default, and once folded that mode is
+	// indistinguishable from one the prompt asked for: a built-in template naming
+	// `model: claude` would silently outrank todos.driver and every mode layered
+	// above it. The folded spec is resolved once, at the end.
+	Declared bool
+}
+
 // RenderPromptSpec renders a .prompt source (frontmatter + Handlebars body)
 // with data, returning the resulting spec. An empty source yields the zero spec.
 // Exported for call sites that layer frontmatter one source at a time — Resolve
 // merges all three internally, which loses the per-layer contribution a
 // provenance trace needs.
-func RenderPromptSpec(source string, data map[string]any) (api.Spec, error) {
+func RenderPromptSpec(source string, data map[string]any, opts PromptSpecOptions) (api.Spec, error) {
 	if strings.TrimSpace(source) == "" {
 		return api.Spec{}, nil
 	}
@@ -302,6 +315,14 @@ func RenderPromptSpec(source string, data map[string]any) (api.Spec, error) {
 	spec := api.Spec(req)
 	if spec.Name == "" {
 		spec.Model = cfg.Model
+	}
+	// Frontmatter that templates itself, or that mixes in the dotprompt dialect,
+	// cannot be read before rendering — it keeps the resolved model, and is the
+	// one layer that still contributes a mode nobody wrote.
+	if opts.Declared {
+		if doc, perr := dotprompt.Parse(source); perr == nil {
+			spec.Model = doc.Spec.Model
+		}
 	}
 	return spec, nil
 }
