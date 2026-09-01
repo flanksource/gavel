@@ -159,7 +159,7 @@ func Render(todoList []*types.TODO, opts Options) (captainai.Request, captainai.
 	// rendered, and an override that names a different one leaves the request
 	// carrying a name from the caller with nothing else filled in. Callers are
 	// handed a driver-ready model, which is the contract the executor relies on.
-	if strings.TrimSpace(req.Model.Name) != "" {
+	if strings.TrimSpace(req.Name) != "" {
 		resolved, err := captainai.Resolve(req.Model)
 		if err != nil {
 			return captainai.Request{}, captainai.Config{}, fmt.Errorf("resolve todos %s runtime: %w", opts.promptName(), err)

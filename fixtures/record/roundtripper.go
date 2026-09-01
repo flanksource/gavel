@@ -38,7 +38,7 @@ type ClientLog struct {
 // StartClients begins recording gavel's own HTTP calls. Only one recording is
 // active at a time — the sink is global — so a second call replaces the first.
 func StartClients(opts ClientOptions) *ClientLog {
-	log := &ClientLog{policy: capturePolicy{Bodies: opts.Bodies, Redact: opts.Redact}}
+	log := &ClientLog{policy: capturePolicy(opts)}
 	clients.Store(log)
 	return log
 }

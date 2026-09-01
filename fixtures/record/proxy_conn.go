@@ -82,4 +82,4 @@ type countingHalfCloser struct {
 func (c *countingHalfCloser) CloseWrite() error { return c.inner().CloseWrite() }
 func (c *countingHalfCloser) CloseRead() error  { return c.inner().CloseRead() }
 
-func (c *countingHalfCloser) inner() halfCloser { return c.countingConn.Conn.(halfCloser) }
+func (c *countingHalfCloser) inner() halfCloser { return c.Conn.(halfCloser) }

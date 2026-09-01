@@ -50,7 +50,7 @@ func (o *TestOrchestrator) preBuildGoPackages(pkgs []string) error {
 	}
 
 	name := fmt.Sprintf("Pre-build (compiling %d Go test %s)", len(pkgs), plural(len(pkgs), "package", "packages"))
-	process := exec.NewExec("go", goPreBuildArgs(pkgs)...).WithCwd(o.WorkDir).WithProcessGroup()
+	process := exec.NewExec("go", goPreBuildArgs(pkgs, o.Tags)...).WithCwd(o.WorkDir).WithProcessGroup()
 	if o.OutputTee != nil {
 		process = process.Stream(o.OutputTee, o.OutputTee)
 	}
