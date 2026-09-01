@@ -1,6 +1,8 @@
 package oxlint
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -130,4 +132,25 @@ func TestBuildArgs(t *testing.T) {
 	o.Fix = false
 	args = o.buildArgs()
 	require.Equal(t, []string{"--format=json", "src/a.ts"}, args)
+}
+
+func TestExecutableCandidatesPreferWorkspaceLocalBinary(t *testing.T) {
+	repo := t.TempDir()
+	packageDir := filepath.Join(repo, "packages", "ui")
+	localBinary := filepath.Join(repo, "node_modules", ".bin", "oxlint")
+	require.NoError(t, os.MkdirAll(filepath.Join(repo, ".git"), 0o755))
+	require.NoError(t, os.MkdirAll(packageDir, 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Dir(localBinary), 0o755))
+	require.NoError(t, os.WriteFile(localBinary, []byte("#!/bin/sh\nexit 0\n"), 0o755))
+
+	require.Equal(t, []string{localBinary, "oxlint"}, NewOxlint(packageDir).ExecutableCandidates(packageDir))
+}
+
+func TestDryRunCommandUsesResolvedExecutable(t *testing.T) {
+	o := NewOxlint(t.TempDir())
+	o.Executable = filepath.Join(o.WorkDir, "node_modules", ".bin", "oxlint")
+
+	command, args := o.DryRunCommand()
+	require.Equal(t, o.Executable, command)
+	require.Equal(t, []string{"."}, args)
 }

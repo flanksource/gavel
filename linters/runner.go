@@ -107,7 +107,7 @@ func (r *Runner) RunEnabledLintersOnFiles(specificFiles []string, fix bool) ([]L
 			})
 			continue
 		}
-		logger.Infof(result.Pretty().ANSI())
+		logger.Infof("%s", result.Pretty().ANSI())
 
 		results = append(results, *result)
 	}

@@ -12,6 +12,7 @@ import (
 	"github.com/flanksource/gavel/linters/eslint"
 	"github.com/flanksource/gavel/linters/golangci"
 	"github.com/flanksource/gavel/linters/markdownlint"
+	"github.com/flanksource/gavel/linters/oxlint"
 	"github.com/flanksource/gavel/linters/reactdoctor"
 	"github.com/flanksource/gavel/models"
 	"github.com/flanksource/gavel/verify"
@@ -559,6 +560,99 @@ func TestResolveLinterInvocationsBucketsByProjectRoot(t *testing.T) {
 			t.Fatalf("expected 0 invocations for file without go.mod, got %+v", invs)
 		}
 	})
+}
+
+func TestResolveLinterInvocationsIncludesNestedProjectRoots(t *testing.T) {
+	repo := t.TempDir()
+	nested := filepath.Join(repo, "packages", "ui")
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatalf("create .git: %v", err)
+	}
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatalf("create nested project: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "package.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatalf("write root package.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(nested, "package.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatalf("write nested package.json: %v", err)
+	}
+
+	invs := resolveLinterInvocations(oxlint.NewOxlint(repo), Options{WorkDir: repo})
+	if len(invs) != 2 {
+		t.Fatalf("invocations = %d, want root and nested: %+v", len(invs), invs)
+	}
+	if invs[0].projectRoot != repo || invs[1].projectRoot != nested {
+		t.Fatalf("project roots = [%s, %s], want [%s, %s]", invs[0].projectRoot, invs[1].projectRoot, repo, nested)
+	}
+}
+
+func TestProjectRootCoveredOnlyByScheduledAncestor(t *testing.T) {
+	repo := t.TempDir()
+	nested := filepath.Join(repo, "packages", "ui")
+
+	if isProjectRootCovered(repo, nil) {
+		t.Fatal("root without scheduled ancestors must not be covered")
+	}
+	if !isProjectRootCovered(nested, []string{repo}) {
+		t.Fatal("nested project must be covered by a scheduled ancestor")
+	}
+	if isProjectRootCovered(nested, []string{filepath.Join(repo, "sibling")}) {
+		t.Fatal("sibling project must not cover nested project")
+	}
+}
+
+func TestExecuteRunsNestedOxlintWithWorkspaceLocalBinary(t *testing.T) {
+	clicky.ClearGlobalTasks()
+	t.Cleanup(clicky.ClearGlobalTasks)
+
+	repo := t.TempDir()
+	nested := filepath.Join(repo, "packages", "ui")
+	localBinary := filepath.Join(repo, "node_modules", ".bin", "oxlint")
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatalf("create .git: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(nested, "src"), 0o755); err != nil {
+		t.Fatalf("create nested source: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(localBinary), 0o755); err != nil {
+		t.Fatalf("create workspace bin: %v", err)
+	}
+	files := map[string]string{
+		filepath.Join(repo, ".gitignore"):        "node_modules/\n",
+		filepath.Join(repo, "package.json"):      "{}\n",
+		filepath.Join(nested, "package.json"):    "{}\n",
+		filepath.Join(nested, ".oxlintrc.json"):  "{}\n",
+		filepath.Join(nested, "src", "index.ts"): "export const value = 1;\n",
+		localBinary:                              "#!/bin/sh\nprintf '%s\\n' '{\"diagnostics\":[],\"number_of_files\":1,\"number_of_rules\":1}'\n",
+	}
+	for path, contents := range files {
+		mode := os.FileMode(0o644)
+		if path == localBinary {
+			mode = 0o755
+		}
+		if err := os.WriteFile(path, []byte(contents), mode); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+	t.Setenv("PATH", t.TempDir())
+
+	results, err := Execute(Options{WorkDir: repo, Timeout: "5s"})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	var oxlintResults []*linters.LinterResult
+	for _, result := range results {
+		if result != nil && result.Linter == "oxlint" {
+			oxlintResults = append(oxlintResults, result)
+		}
+	}
+	if len(oxlintResults) != 1 {
+		t.Fatalf("oxlint results = %d, want 1: %+v", len(oxlintResults), oxlintResults)
+	}
+	if oxlintResults[0].WorkDir != nested {
+		t.Fatalf("oxlint work dir = %q, want %q", oxlintResults[0].WorkDir, nested)
+	}
 }
 
 // TestApplyPostLintFiltersHonorsGavelIgnore is a regression for the commit

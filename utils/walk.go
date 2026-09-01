@@ -54,11 +54,10 @@ func FindNearestGoModRoot(dir string) string {
 	return FindNearestProjectRoot(dir, []string{"go.mod"})
 }
 
-// FindAllProjectRoots returns every outermost directory under root that
-// contains one of the given marker filenames. Descent stops once a project
-// root is found (nested sub-projects are ignored here; their files fan out to
-// the innermost root via FindNearestProjectRoot at invocation time). Respects
-// gitignore via WalkGitIgnored. Results are absolute paths.
+// FindAllProjectRoots returns every directory under root that contains one of
+// the given marker filenames. Nested projects are included, while dependency
+// trees and nested git repositories are pruned. Respects gitignore via
+// WalkGitIgnored. Results are absolute paths in shallowest-first walk order.
 func FindAllProjectRoots(root string, markers []string) []string {
 	if len(markers) == 0 {
 		return nil
@@ -69,10 +68,18 @@ func FindAllProjectRoots(root string, markers []string) []string {
 		if err != nil || !d.IsDir() {
 			return nil
 		}
+		if path != root {
+			if d.Name() == "node_modules" {
+				return fs.SkipDir
+			}
+			if _, err := os.Stat(filepath.Join(path, ".git")); err == nil {
+				return fs.SkipDir
+			}
+		}
 		for _, marker := range markers {
 			if info, err := os.Stat(filepath.Join(path, marker)); err == nil && !info.IsDir() {
 				roots = append(roots, path)
-				return fs.SkipDir
+				break
 			}
 		}
 		return nil

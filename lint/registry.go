@@ -131,6 +131,15 @@ func resolveLinterInvocations(linter linters.Linter, opts Options) []linterInvoc
 	return out
 }
 
+func isProjectRootCovered(projectRoot string, scheduledRoots []string) bool {
+	for _, root := range scheduledRoots {
+		if projectRoot != root && utils.IsWithin(projectRoot, root) {
+			return true
+		}
+	}
+	return false
+}
+
 // linterAliases maps CLI-friendly aliases onto registered linter names.
 var linterAliases = map[string]string{
 	"secrets":       "betterleaks",

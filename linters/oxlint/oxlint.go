@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/flanksource/clicky"
@@ -13,6 +15,7 @@ import (
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/models"
+	"github.com/flanksource/gavel/utils"
 )
 
 // Oxlint implements the Linter interface for the oxlint JavaScript/TypeScript linter.
@@ -52,6 +55,37 @@ func (o *Oxlint) ProjectRootMarkers() []string {
 		"oxlint.json",
 		"oxlintrc.json",
 	}
+}
+
+// ExecutableCandidates prefers the nearest workspace-local oxlint binary,
+// bounded by the current git repository, before falling back to PATH.
+func (o *Oxlint) ExecutableCandidates(workDir string) []string {
+	current, _ := filepath.Abs(workDir)
+	boundary := utils.FindGitRoot(current)
+	if boundary == "" {
+		boundary = current
+	}
+	binaryName := "oxlint"
+	if runtime.GOOS == "windows" {
+		binaryName += ".cmd"
+	}
+
+	var candidates []string
+	for {
+		candidate := filepath.Join(current, "node_modules", ".bin", binaryName)
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			candidates = append(candidates, candidate)
+		}
+		if current == boundary {
+			break
+		}
+		parent := filepath.Dir(current)
+		if parent == current || !utils.IsWithin(parent, boundary) {
+			break
+		}
+		current = parent
+	}
+	return append(candidates, "oxlint")
 }
 
 // DefaultIncludes returns default file patterns this linter should process.
@@ -167,7 +201,7 @@ func (o *Oxlint) buildArgs() []string {
 
 // DryRunCommand reports the command oxlint would execute.
 func (o *Oxlint) DryRunCommand() (string, []string) {
-	return "oxlint", o.buildArgs()
+	return o.commandName(), o.buildArgs()
 }
 
 // Run executes oxlint and returns violations.
@@ -178,14 +212,15 @@ func (o *Oxlint) DryRunCommand() (string, []string) {
 func (o *Oxlint) Run(ctx commonsContext.Context, task *clicky.Task) ([]models.Violation, error) {
 	args := o.buildArgs()
 
-	cmd := exec.CommandContext(ctx, "oxlint", args...)
+	command := o.commandName()
+	cmd := exec.CommandContext(ctx, command, args...)
 	cmd.Dir = o.WorkDir
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = o.WrapWriter(&stdout)
 	cmd.Stderr = &stderr
 
-	logger.Infof("Executing: oxlint %s", strings.Join(args, " "))
+	logger.Infof("Executing: %s %s", command, strings.Join(args, " "))
 
 	err := cmd.Run()
 
@@ -209,6 +244,13 @@ func (o *Oxlint) Run(ctx commonsContext.Context, task *clicky.Task) ([]models.Vi
 	}
 
 	return o.parseViolations(stdout.Bytes())
+}
+
+func (o *Oxlint) commandName() string {
+	if o.Executable != "" {
+		return o.Executable
+	}
+	return "oxlint"
 }
 
 // hasFormatArg checks if the args already contain a format argument.

@@ -43,13 +43,7 @@ var (
 	hookTests   []parsers.Test
 )
 
-func runTests(opts testrunner.RunOptions) (any, error) {
-	opts.AutoStop = testDurationFlags.AutoStop
-	opts.IdleTimeout = testDurationFlags.IdleTimeout
-	opts.Timeout = testDurationFlags.Timeout
-	opts.LintTimeout = testDurationFlags.LintTimeout
-	opts.TestTimeout = testDurationFlags.TestTimeout
-
+func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
 	diagnostics := newRunDiagnosticsReporter(runDiagnosticsOptions{Output: logger.GetOutput()})
 	runCtx, cancelRun := newMonitoredStopContext(opts.Context, monitoredStopOptions{
 		Timeout:  opts.Timeout,

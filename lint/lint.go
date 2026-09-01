@@ -141,7 +141,12 @@ func Execute(opts Options) ([]*linters.LinterResult, error) {
 
 		anyScheduled := false
 		skipReason := ""
+		var scheduledRoots []string
 		for _, inv := range invocations {
+			if len(opts.Files) == 0 && isProjectRootCovered(inv.projectRoot, scheduledRoots) {
+				logger.V(2).Infof("Skipping %s at %s: covered by scheduled ancestor", linter.Name(), inv.projectRoot)
+				continue
+			}
 			projectCfg, _ := verify.LoadGavelConfig(inv.projectRoot)
 			if ok, reason := shouldSelectLinter(inv.projectRoot, projectCfg, linter, explicit); !ok {
 				logger.V(2).Infof("Skipping %s at %s: %s", linter.Name(), inv.projectRoot, reason)
@@ -191,6 +196,7 @@ func Execute(opts Options) ([]*linters.LinterResult, error) {
 				result.WorkDir = invCopy.projectRoot
 				return result, nil
 			}))
+			scheduledRoots = append(scheduledRoots, inv.projectRoot)
 			anyScheduled = true
 		}
 		if !anyScheduled && skipReason != "" {
@@ -361,7 +367,12 @@ func dryRunGroup(opts Options) error {
 			continue
 		}
 
+		var scheduledRoots []string
 		for _, inv := range invocations {
+			if len(opts.Files) == 0 && isProjectRootCovered(inv.projectRoot, scheduledRoots) {
+				testrunner.PrintDryRunSkipped("lint", linter.Name()+" @ "+inv.projectRoot, "covered by scheduled ancestor")
+				continue
+			}
 			projectCfg, _ := verify.LoadGavelConfig(inv.projectRoot)
 			if ok, reason := shouldSelectLinter(inv.projectRoot, projectCfg, linter, explicit); !ok {
 				testrunner.PrintDryRunSkipped("lint", linter.Name()+" @ "+inv.projectRoot, reason)
@@ -397,6 +408,7 @@ func dryRunGroup(opts Options) error {
 			}
 			cmdName, args := linters.PrepareCommand(linter, runOpts)
 			testrunner.PrintDryRunCommand("lint", linter.Name(), cmdName, args, inv.projectRoot)
+			scheduledRoots = append(scheduledRoots, inv.projectRoot)
 		}
 	}
 	return nil

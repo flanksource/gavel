@@ -361,13 +361,26 @@ var _ = Describe("FindAllProjectRoots", func() {
 		))
 	})
 
-	It("stops descending once a root is found (nested package.json is ignored)", func() {
-		Expect(os.MkdirAll(filepath.Join(root, "app", "node_modules", "inner"), 0o755)).To(Succeed())
+	It("finds nested project roots while pruning dependencies", func() {
+		Expect(os.MkdirAll(filepath.Join(root, "app", "packages", "inner"), 0o755)).To(Succeed())
+		Expect(os.MkdirAll(filepath.Join(root, "app", "node_modules", "dependency"), 0o755)).To(Succeed())
 		Expect(os.WriteFile(filepath.Join(root, "app", "package.json"), []byte("{}"), 0o644)).To(Succeed())
-		Expect(os.WriteFile(filepath.Join(root, "app", "node_modules", "inner", "package.json"), []byte("{}"), 0o644)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(root, "app", "packages", "inner", "package.json"), []byte("{}"), 0o644)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(root, "app", "node_modules", "dependency", "package.json"), []byte("{}"), 0o644)).To(Succeed())
 
 		got := FindAllProjectRoots(root, []string{"package.json"})
-		Expect(got).To(ConsistOf(filepath.Join(root, "app")))
+		Expect(got).To(Equal([]string{
+			filepath.Join(root, "app"),
+			filepath.Join(root, "app", "packages", "inner"),
+		}))
+	})
+
+	It("does not cross into nested git repositories", func() {
+		Expect(os.MkdirAll(filepath.Join(root, "nested", ".git"), 0o755)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(root, "nested", "package.json"), []byte("{}"), 0o644)).To(Succeed())
+
+		got := FindAllProjectRoots(root, []string{"package.json"})
+		Expect(got).To(BeEmpty())
 	})
 
 	It("returns the root itself when it carries the marker", func() {
