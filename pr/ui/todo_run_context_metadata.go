@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"strings"
 
-	captainai "github.com/flanksource/captain/pkg/ai"
-	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/captain/pkg/api/registry"
 	captaincli "github.com/flanksource/captain/pkg/cli"
 	"github.com/flanksource/commons/logger"
@@ -63,29 +61,36 @@ func todoRunInputSchemas() map[string]json.RawMessage {
 	return out
 }
 
-func defaultTodoRunBackend(who captaincli.WhoamiResult, backends []todoRunBackendOption) string {
+// defaultTodoRunMode picks the run dialog's preselected runtime from the
+// user's saved default. The provider and the mode are read as the two fields
+// they are; the composite adapter id this used to parse carried both in one
+// token and had to be split apart again here.
+func defaultTodoRunMode(who captaincli.WhoamiResult, modes []todoRunModeOption) string {
 	defaults, ok := who.ProviderDefaults[who.DefaultProvider]
 	if !ok {
 		return ""
 	}
-	preferred := captainai.Backend(strings.TrimSpace(defaults.Agent))
-	_, mode, known := registry.ProviderFor(preferred)
-	provider := api.CatalogPrefixFor(preferred)
-	if known && mode == registry.ModeCLI {
-		if todoRunBackendHasModels(backends, provider, string(registry.ModeAgent)) {
-			return string(registry.ModeAgent)
-		}
+	provider, known := registry.ProviderByName(strings.TrimSpace(who.DefaultProvider))
+	if !known {
+		return ""
 	}
-	if known && todoRunBackendHasModels(backends, provider, string(mode)) {
+	mode := registry.RuntimeMode(strings.TrimSpace(defaults.Mode))
+	// A cli default prefers the agent runtime when that one has models: the
+	// dashboard drives agents headlessly, where the SDK is the richer surface.
+	if mode == registry.ModeCLI &&
+		todoRunModeHasModels(modes, provider.Name, string(registry.ModeAgent)) {
+		return string(registry.ModeAgent)
+	}
+	if todoRunModeHasModels(modes, provider.Name, string(mode)) {
 		return string(mode)
 	}
 	return ""
 }
 
-func todoRunBackendHasModels(backends []todoRunBackendOption, provider, id string) bool {
-	for _, backend := range backends {
-		if backend.Provider == provider && backend.ID == id {
-			return len(backend.Models) > 0
+func todoRunModeHasModels(modes []todoRunModeOption, provider, id string) bool {
+	for _, option := range modes {
+		if option.Provider == provider && option.ID == id {
+			return len(option.Models) > 0
 		}
 	}
 	return false

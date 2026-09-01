@@ -79,7 +79,7 @@ func TestPromptOverridePtr_BadPath(t *testing.T) {
 
 func TestModeledSpecKeys(t *testing.T) {
 	keys := modeledSpecKeys()
-	for _, want := range []string{"model", "backend", "effort", "prompt", "permissions", "budget", "setup", "cliArgs"} {
+	for _, want := range []string{"model", "mode", "effort", "prompt", "permissions", "budget", "setup", "cliArgs"} {
 		if !keys[want] {
 			t.Errorf("modeledSpecKeys missing %q", want)
 		}

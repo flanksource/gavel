@@ -4,16 +4,16 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { TodoSessionStart } from './TodoSessionStart';
 import type { TodoItem, TodoRunOptions } from '../../types';
 
-const RESOLVED_OPTIONS: TodoRunOptions = { driver: 'agent', runMode: 'run', spec: { backend: 'agent', model: 'claude-sonnet-5', effort: 'medium' } };
-const UPDATED_OPTIONS: TodoRunOptions = { driver: 'cmux', runMode: 'run', spec: { backend: 'cmux', model: 'gpt-5.6-sol', effort: 'high' } };
+const RESOLVED_OPTIONS: TodoRunOptions = { driver: 'agent', runMode: 'run', spec: { mode: 'agent', model: 'claude-sonnet-5', effort: 'medium' } };
+const UPDATED_OPTIONS: TodoRunOptions = { driver: 'cmux', runMode: 'run', spec: { mode: 'cmux', model: 'gpt-5.6-sol', effort: 'high' } };
 
 vi.mock('./run', () => ({
-  useTodoRunContext: () => ({ context: { backends: [], runtimes: [], models: [], efforts: [], defaultBackend: '', tools: [] }, loading: false, error: '' }),
+  useTodoRunContext: () => ({ context: { modes: [], runtimes: [], models: [], efforts: [], defaultMode: '', tools: [] }, loading: false, error: '' }),
   TodoRunContextError: ({ error }: { error: string }) => error ? <div role="alert">{error}</div> : null,
   loadLastTodoRunOptions: () => ({ ...RESOLVED_OPTIONS }),
   reconcileTodoRunOptions: (_action: string, options: unknown) => options,
   todoRunButtonPresentation: (options: TodoRunOptions) => ({ provider: undefined, model: options.spec?.model?.replace(/^claude-/, ''), effort: options.spec?.effort }),
-  todoRunModeLabel: (options: TodoRunOptions) => options.spec?.backend === 'cmux' ? 'cmux' : 'Agent',
+  todoRunModeLabel: (options: TodoRunOptions) => options.spec?.mode === 'cmux' ? 'cmux' : 'Agent',
   useTodoRunPreview: () => ({
     isPending: false,
     mutate: (
@@ -69,7 +69,7 @@ afterEach(() => {
 function stubPreviewFetch(prompt: string) {
   const fetchMock = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) => ({
     ok: true,
-    json: async () => ({ prompt, provider: 'anthropic', backend: 'agent', count: 1 }),
+    json: async () => ({ prompt, provider: 'anthropic', mode: 'agent', count: 1 }),
   }));
   vi.stubGlobal('fetch', fetchMock);
   return fetchMock;
@@ -125,7 +125,7 @@ describe('TodoSessionStart', () => {
     const lastRequest = fetchMock.mock.calls.at(-1)?.[1];
     expect(JSON.parse(String(lastRequest?.body))).toMatchObject({
       driver: 'cmux',
-      spec: { backend: 'cmux', model: 'gpt-5.6-sol', effort: 'high' },
+      spec: { mode: 'cmux', model: 'gpt-5.6-sol', effort: 'high' },
     });
   });
 

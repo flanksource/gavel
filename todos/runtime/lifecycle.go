@@ -633,13 +633,14 @@ func agentSessionSource(executor string) string {
 // turn knows only its session and mode, and a blank provider resolves to a
 // different Captain session because provider is part of the session identity
 // key — so fall back to what the run already resolved.
+//
+// The two composite fallbacks this used to end with are gone: a mode never
+// carried a provider, so deriving one from it was always a guess.
 func runStartProvider(runtime captaindb.PromptRunRuntime, metadata todos.RunStartMetadata) string {
 	return firstNonBlank(
 		metadata.Provider,
 		runtime.Resolved.Provider,
 		runtime.Requested.Provider,
-		string(api.Backend(metadata.Backend).Provider()),
-		string(api.Backend(runtime.Resolved.Backend).Provider()),
 	)
 }
 
@@ -652,7 +653,7 @@ func mergeRunStartRuntime(current captaindb.PromptRunRuntime, metadata todos.Run
 	merged.Driver = firstNonBlank(metadata.Driver, current.Driver)
 	merged.Resolved = captaindb.PromptRunRuntimeSelection{
 		Provider: firstNonBlank(metadata.Provider, current.Resolved.Provider),
-		Backend:  firstNonBlank(metadata.Backend, current.Resolved.Backend),
+		Mode:     firstNonBlank(metadata.RuntimeMode, current.Resolved.Mode),
 		Model:    firstNonBlank(metadata.ResolvedModel, current.Resolved.Model),
 		Effort:   firstNonBlank(metadata.Effort, current.Resolved.Effort),
 	}

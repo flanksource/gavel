@@ -87,7 +87,7 @@ function renderSettings(fetchImpl: (url: string, init?: RequestInit) => Promise<
     },
   });
   client.setQueryData(settingsPromptsQuery().queryKey, {});
-  client.setQueryData(settingsRunContextQuery().queryKey, { backends: [], runtimes: [], models: [], efforts: [], tools: [] });
+  client.setQueryData(settingsRunContextQuery().queryKey, { modes: [], runtimes: [], models: [], efforts: [], tools: [] });
   client.setQueryData(settingsTraceQuery('scope=global').queryKey, { sources: [], merged: {} });
   client.setQueryData(settingsConfigQuery('scope=global').queryKey, {
     config: { ai: { model: 'initial' } },

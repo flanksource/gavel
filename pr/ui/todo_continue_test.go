@@ -43,7 +43,7 @@ func codexPlanRun(t *testing.T, sessionID string) *captaindb.PromptRun {
 		Runtime: captaindb.PromptRunRuntime{
 			Mode: string(types.ModePlan), Driver: string(drivers.Agent),
 			Resolved: captaindb.PromptRunRuntimeSelection{
-				Provider: "openai", Backend: "codex-agent", Model: priorCodexModel, Effort: "high",
+				Provider: "openai", Mode: "agent", Model: priorCodexModel, Effort: "high",
 			},
 		},
 		RenderedSpec: persistedSpec(t, api.Spec{
@@ -81,16 +81,16 @@ func TestContinueRunInheritsTheDispatchedSpecWithinAMode(t *testing.T) {
 	}
 
 	if opts.Driver != string(drivers.Agent) {
-		t.Errorf("driver = %q, want %q (the prior run's backend)", opts.Driver, drivers.Agent)
+		t.Errorf("driver = %q, want %q (the prior run's mode)", opts.Driver, drivers.Agent)
 	}
 	if opts.Spec.Name != priorCodexModel {
 		t.Errorf("model = %q, want the prior run's resolved %q", opts.Spec.Name, priorCodexModel)
 	}
-	if string(opts.Spec.Backend) != "codex-agent" {
-		t.Errorf("backend = %q, want codex-agent", opts.Spec.Backend)
+	if string(opts.Spec.Mode) != "agent" {
+		t.Errorf("mode = %q, want agent", opts.Spec.Mode)
 	}
 	if opts.Spec.Mode != api.ModeAgent {
-		t.Errorf("authored backend = %q, want agent", opts.Spec.Mode)
+		t.Errorf("authored mode = %q, want agent", opts.Spec.Mode)
 	}
 	if string(opts.Spec.Effort) != "high" {
 		t.Errorf("effort = %q, want high", opts.Spec.Effort)
@@ -144,9 +144,9 @@ func TestContinueRunAcrossAModeChangeInheritsOnlyTheRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatalf("continueRun: %v", err)
 	}
-	if opts.Spec.Name != priorCodexModel || string(opts.Spec.Backend) != "codex-agent" {
-		t.Errorf("model/backend = %q/%q, want the plan run's resolved codex runtime",
-			opts.Spec.Name, opts.Spec.Backend)
+	if opts.Spec.Name != priorCodexModel || string(opts.Spec.Mode) != "agent" {
+		t.Errorf("model/mode = %q/%q, want the plan run's resolved codex runtime",
+			opts.Spec.Name, opts.Spec.Mode)
 	}
 	if opts.Spec.Permissions.Mode == api.PermissionPlan {
 		t.Error("implement run inherited the plan run's read-only permission mode")
@@ -181,10 +181,10 @@ func TestTodoAPIPlanReviseInheritsPlanRunRuntime(t *testing.T) {
 		t.Fatal("revise never dispatched a resume")
 	}
 	if gotReq.Options.Driver != string(drivers.Agent) {
-		t.Errorf("driver = %q, want %q (the plan run's backend)", gotReq.Options.Driver, drivers.Agent)
+		t.Errorf("driver = %q, want %q (the plan run's mode)", gotReq.Options.Driver, drivers.Agent)
 	}
-	if gotReq.Options.Spec.Backend.Family() != "codex" {
-		t.Errorf("family = %q, want codex — a codex plan must not be revised by claude", gotReq.Options.Spec.Backend.Family())
+	if providerKey(gotReq.Options.Spec.Model) != "openai" {
+		t.Errorf("provider = %q, want openai — a codex plan must not be revised by claude", providerKey(gotReq.Options.Spec.Model))
 	}
 	if gotReq.Options.Spec.Name != priorCodexModel {
 		t.Errorf("model = %q, want %q", gotReq.Options.Spec.Name, priorCodexModel)
@@ -230,10 +230,10 @@ func TestTodoAPIPlanApproveAndRunInheritsPlanRunRuntime(t *testing.T) {
 		t.Errorf("chained run mode = %q, want run", got.Options.RunMode)
 	}
 	if got.Options.Driver != string(drivers.Agent) {
-		t.Errorf("driver = %q, want %q (the plan run's backend)", got.Options.Driver, drivers.Agent)
+		t.Errorf("driver = %q, want %q (the plan run's mode)", got.Options.Driver, drivers.Agent)
 	}
-	if got.Options.Spec.Backend.Family() != "codex" {
-		t.Errorf("family = %q, want codex — a codex plan must not be implemented by claude", got.Options.Spec.Backend.Family())
+	if providerKey(got.Options.Spec.Model) != "openai" {
+		t.Errorf("provider = %q, want openai — a codex plan must not be implemented by claude", providerKey(got.Options.Spec.Model))
 	}
 	if got.Options.Spec.Name != priorCodexModel {
 		t.Errorf("model = %q, want %q", got.Options.Spec.Name, priorCodexModel)

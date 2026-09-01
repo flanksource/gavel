@@ -10,9 +10,9 @@ import (
 // Since todo runs resolve their spec through todos/spec, every layer
 // verify.LoadGavelConfig reads is an input to these tests — and one of those
 // layers is ~/.gavel.yaml. Without this, whoever runs the suite is a hidden
-// input to it: a developer whose own config sets `ai.backend` or
+// input to it: a developer whose own config sets `ai.mode` or
 // `todos.run.model` gets different assertions than CI, and the failure surfaces
-// as an unrelated-looking rejection deep in backend/model validation.
+// as an unrelated-looking rejection deep in runtime/model validation.
 //
 // It is done once here rather than per test because the dependency is a
 // property of the package, not of the individual test that happens to trip over

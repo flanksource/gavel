@@ -204,12 +204,12 @@ type todoRunPayload struct {
 	// with a useful boundary error.
 	Agent string `json:"agent,omitempty"`
 	Mode  string `json:"mode,omitempty"`
-	// Driver is the canonical execution backend: api, agent, cli, or cmux.
+	// Driver is the canonical execution mode: api, agent, cli, or cmux.
 	Driver string `json:"driver,omitempty"`
 
-	// Spec carries the model/backend/effort/prompt/budget/permissions/session
+	// Spec carries the model/mode/effort/prompt/budget/permissions/session
 	// knobs — the same request shape captain's prompt run editor produces
-	// (model, backend, effort, prompt.user, budget.{cost,maxTurns,timeout},
+	// (model, mode, effort, prompt.user, budget.{cost,maxTurns,timeout},
 	// permissions.{mode,tools}, sessionId, ...).
 	//
 	// It is a named field under its own `spec` key, not embedded. api.Spec
@@ -253,7 +253,7 @@ type todoRunResponse struct {
 	Dir       string   `json:"dir"`
 	Provider  string   `json:"provider,omitempty"`
 	Model     string   `json:"model,omitempty"`
-	Backend   string   `json:"backend,omitempty"`
+	Mode      string   `json:"mode,omitempty"`
 	Effort    string   `json:"effort,omitempty"`
 	Driver    string   `json:"driver,omitempty"`
 	RunMode   string   `json:"runMode,omitempty"`
@@ -271,7 +271,7 @@ type todoRunPreviewResponse struct {
 	Prompt   string `json:"prompt"`
 	SpecYAML string `json:"specYaml"`
 	Provider string `json:"provider,omitempty"`
-	Backend  string `json:"backend,omitempty"`
+	Mode     string `json:"mode,omitempty"`
 	Effort   string `json:"effort,omitempty"`
 	RunMode  string `json:"runMode,omitempty"`
 	Plan     bool   `json:"plan,omitempty"`
@@ -280,7 +280,7 @@ type todoRunPreviewResponse struct {
 
 // Run execution lives in todos/run, not here: executing a TODO is not an HTTP
 // concern, and the CLI and the clicky entity need the same seam. What stays in
-// this package is the dashboard's own resolution — the (driver, backend)
+// this package is the dashboard's own resolution — the (driver, mode)
 // catalog the run dialog offers, which the other entrypoints have no equivalent
 // of — plus the handlers. These aliases keep the existing call sites reading in
 // the dashboard's vocabulary.
@@ -902,9 +902,9 @@ func (s *Server) handleTodoRun(w http.ResponseWriter, r *http.Request) {
 		Refs:      todoRunRefs(todoList),
 		Count:     len(todoList),
 		Dir:       source.Dir,
-		Provider:  string(opts.Spec.Backend.Provider()),
+		Provider:  providerKey(opts.Spec.Model),
 		Driver:    opts.Driver,
-		Backend:   string(opts.Spec.Mode),
+		Mode:      string(opts.Spec.Mode),
 		Model:     opts.Spec.Name,
 		Effort:    string(opts.Spec.Effort),
 		RunMode:   string(opts.RunMode),
@@ -965,8 +965,8 @@ func (s *Server) handleTodoRunPreview(w http.ResponseWriter, r *http.Request) {
 	resp := todoRunPreviewResponse{
 		Prompt:   renderedSpec.Prompt.User,
 		SpecYAML: specYAML,
-		Provider: string(opts.Spec.Backend.Provider()),
-		Backend:  string(opts.Spec.Mode),
+		Provider: providerKey(opts.Spec.Model),
+		Mode:     string(opts.Spec.Mode),
 		Effort:   string(opts.Spec.Effort),
 		RunMode:  string(opts.RunMode),
 		Plan:     opts.RunMode == types.ModePlan,
@@ -1539,17 +1539,17 @@ func normalizeTodoRunOptions(dir string, todoList []*types.TODO, payload todoRun
 		return todoRunOptions{}, err
 	}
 
-	// Backend selection is the dashboard's own concern: it offers a (driver,
-	// backend) catalog the CLI has no equivalent of, and it runs against the
+	// Mode selection is the dashboard's own concern: it offers a (driver,
+	// mode) catalog the CLI has no equivalent of, and it runs against the
 	// resolved model rather than the payload's, so a model that arrived from
 	// .gavel.yaml gets the same treatment as one the dialog picked.
 	spec := resolved.Spec
-	backend, model, err := resolveTodoRunBackendModel(resolved.Driver, string(spec.Mode), spec.Name)
+	mode, model, err := resolveTodoRunRuntime(resolved.Driver, string(spec.Mode), spec.Name)
 	if err != nil {
 		return todoRunOptions{}, err
 	}
 	spec.Name = model
-	spec.Mode = api.RuntimeMode(backend)
+	spec.Mode = api.RuntimeMode(mode)
 
 	return todoRunOptions{
 		Spec:       spec,

@@ -27,7 +27,7 @@ interface Props {
   scopeQuery: string;
   /** Model catalog shown by the shared SpecRuntimeEditor dialog. */
   models?: ChatModel[];
-  /** Backend/family catalog used to scope models to the selected runtime. */
+  /** Runtime family catalog used to scope models to the selected runtime. */
   families?: SpecRuntimeFamily[];
 }
 

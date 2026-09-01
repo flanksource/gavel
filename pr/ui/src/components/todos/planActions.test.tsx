@@ -90,7 +90,7 @@ vi.mock('@flanksource/clicky-ui/ai', async importOriginal => ({
       type="button"
       aria-label={ariaLabel}
       className={className}
-      onClick={() => onChange({ ...value, backend: 'agent', model: 'claude-opus-4-8', effort: 'high' })}
+      onClick={() => onChange({ ...value, mode: 'agent', model: 'claude-opus-4-8', effort: 'high' })}
     >
       Select Claude runtime
     </button>
@@ -148,19 +148,19 @@ vi.mock('@flanksource/clicky-ui/icons', () => {
 });
 
 const context: RunContext = {
-  defaultBackend: 'agent',
+  defaultMode: 'agent',
   defaultProvider: 'openai',
   efforts: ['low', 'medium', 'high', 'xhigh'],
   tools: [],
   runtimes: [
-    { family: 'codex', provider: 'openai', catalogPrefix: 'openai', modes: [{ backend: 'agent', schema: { type: 'object' } }, { backend: 'cmux', schema: { type: 'object' } }] },
-    { family: 'claude', provider: 'anthropic', catalogPrefix: 'anthropic', modes: [{ backend: 'agent', schema: { type: 'object' } }] },
+    { family: 'codex', provider: 'openai', catalogPrefix: 'openai', modes: [{ mode: 'agent', schema: { type: 'object' } }, { mode: 'cmux', schema: { type: 'object' } }] },
+    { family: 'claude', provider: 'anthropic', catalogPrefix: 'anthropic', modes: [{ mode: 'agent', schema: { type: 'object' } }] },
   ],
   models: [
-    { id: 'gpt-5.5', provider: 'openai', label: 'GPT-5.5', reasoning: true, configured: true, backends: ['agent', 'cmux'], runtime: { model: 'gpt-5.5' } },
-    { id: 'claude-opus-4-8', provider: 'anthropic', label: 'Claude Opus 4.8', reasoning: true, configured: true, backends: ['agent'], runtime: { model: 'claude-opus-4-8' } },
+    { id: 'gpt-5.5', provider: 'openai', label: 'GPT-5.5', reasoning: true, configured: true, runtime: { model: 'gpt-5.5' } },
+    { id: 'claude-opus-4-8', provider: 'anthropic', label: 'Claude Opus 4.8', reasoning: true, configured: true, runtime: { model: 'claude-opus-4-8' } },
   ],
-  backends: [
+  modes: [
     {
       id: 'cmux',
       label: 'Codex cmux',
@@ -259,7 +259,7 @@ describe('PlanApproveButtons', () => {
           run: {
             driver: 'agent',
             runMode: 'run',
-            spec: { backend: 'agent', model: 'claude-opus-4-8', effort: 'high' },
+            spec: { mode: 'agent', model: 'claude-opus-4-8', effort: 'high' },
           },
         },
         recentAdvanced: {},
@@ -285,7 +285,7 @@ describe('PlanApproveButtons', () => {
       driver: 'agent',
       runMode: 'run',
       spec: expect.objectContaining({
-        backend: 'agent',
+        mode: 'agent',
         model: 'claude-opus-4-8',
         effort: 'high',
       }),
@@ -309,7 +309,7 @@ describe('PlanApproveButtons', () => {
         driver: 'agent',
         runMode: 'run',
         spec: expect.objectContaining({
-          backend: 'agent',
+          mode: 'agent',
           model: 'claude-opus-4-8',
           effort: 'high',
         }),
@@ -317,7 +317,7 @@ describe('PlanApproveButtons', () => {
     );
     expect(JSON.parse(localStorage.getItem('gavel.pr-ui.promptRunChoices.v2') || '{}').approval.last).toMatchObject({
       runMode: 'run',
-      spec: { backend: 'agent', model: 'claude-opus-4-8', effort: 'high' },
+      spec: { mode: 'agent', model: 'claude-opus-4-8', effort: 'high' },
     });
   });
 
@@ -327,9 +327,9 @@ describe('PlanApproveButtons', () => {
       'gavel.pr-ui.promptRunChoices.v2',
       JSON.stringify({
         approval: {
-          last: { spec: { backend: 'agent', model: 'gpt-5.5', effort: 'medium' } },
+          last: { spec: { mode: 'agent', model: 'gpt-5.5', effort: 'medium' } },
           recent: [
-            { spec: { backend: 'agent', model: 'claude-opus-4-8', effort: 'high' } },
+            { spec: { mode: 'agent', model: 'claude-opus-4-8', effort: 'high' } },
           ],
         },
       }),

@@ -328,7 +328,7 @@ func TestTodoAPIAnswerInheritsAskingRunRuntime(t *testing.T) {
 			Mode:   "run",
 			Driver: "agent",
 			Resolved: captaindb.PromptRunRuntimeSelection{
-				Provider: "openai", Backend: "codex-agent", Model: codexModel, Effort: "high",
+				Provider: "openai", Mode: "agent", Model: codexModel, Effort: "high",
 			},
 		},
 	})
@@ -344,16 +344,16 @@ func TestTodoAPIAnswerInheritsAskingRunRuntime(t *testing.T) {
 		t.Fatal("resume was never dispatched")
 	}
 	if gotReq.Options.Driver != string(drivers.Agent) {
-		t.Errorf("driver = %q, want %q (the asking run's backend)", gotReq.Options.Driver, drivers.Agent)
+		t.Errorf("driver = %q, want %q (the asking run's mode)", gotReq.Options.Driver, drivers.Agent)
 	}
-	if gotReq.Options.Spec.Backend.Family() != "codex" {
-		t.Errorf("family = %q, want codex — a codex session must not resume under claude", gotReq.Options.Spec.Backend.Family())
+	if providerKey(gotReq.Options.Spec.Model) != "openai" {
+		t.Errorf("provider = %q, want openai — a codex session must not resume under claude", providerKey(gotReq.Options.Spec.Model))
 	}
-	if string(gotReq.Options.Spec.Backend) != "codex-agent" {
-		t.Errorf("backend = %q, want codex-agent", gotReq.Options.Spec.Backend)
+	if string(gotReq.Options.Spec.Mode) != "agent" {
+		t.Errorf("mode = %q, want agent", gotReq.Options.Spec.Mode)
 	}
 	if gotReq.Options.Spec.Mode != api.ModeAgent {
-		t.Errorf("authored backend = %q, want agent", gotReq.Options.Spec.Mode)
+		t.Errorf("authored mode = %q, want agent", gotReq.Options.Spec.Mode)
 	}
 	if gotReq.Options.Spec.Name != codexModel {
 		t.Errorf("model = %q, want %q", gotReq.Options.Spec.Name, codexModel)
@@ -374,7 +374,7 @@ func TestTodoAPIAnswerOptionsOverrideInheritedRuntime(t *testing.T) {
 		State: captaindb.PromptRunStateWaiting,
 		Runtime: captaindb.PromptRunRuntime{
 			Driver:   "agent",
-			Resolved: captaindb.PromptRunRuntimeSelection{Backend: "codex-agent", Model: "gpt-5.6-sol", Effort: "high"},
+			Resolved: captaindb.PromptRunRuntimeSelection{Provider: "openai", Mode: "agent", Model: "gpt-5.6-sol", Effort: "high"},
 		},
 	})
 	gotReq, _ := stubTodoAnswer(t)
@@ -437,7 +437,7 @@ func TestTodoAPIAnswerPreflightFailureLeavesNoComment(t *testing.T) {
 		State: captaindb.PromptRunStateWaiting,
 		Runtime: captaindb.PromptRunRuntime{
 			Driver:   "agent",
-			Resolved: captaindb.PromptRunRuntimeSelection{Backend: "codex-agent", Model: "gpt-5.6-sol", Effort: "high"},
+			Resolved: captaindb.PromptRunRuntimeSelection{Provider: "openai", Mode: "agent", Model: "gpt-5.6-sol", Effort: "high"},
 		},
 	})
 	// An unreadable plan fails executor construction: the recorded plan is an

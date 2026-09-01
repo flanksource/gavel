@@ -62,10 +62,10 @@ type promptRenderRequest struct {
 }
 
 type promptRenderResponse struct {
-	User    string `json:"user"`
-	System  string `json:"system,omitempty"`
-	Model   string `json:"model,omitempty"`
-	Backend string `json:"backend,omitempty"`
+	User   string `json:"user"`
+	System string `json:"system,omitempty"`
+	Model  string `json:"model,omitempty"`
+	Mode   string `json:"mode,omitempty"`
 }
 
 func (s *Server) handleSettingsPromptRender(w http.ResponseWriter, r *http.Request) {
@@ -97,7 +97,7 @@ func (s *Server) handleSettingsPromptRender(w http.ResponseWriter, r *http.Reque
 	spec := api.Spec(rendered)
 	respondJSON(w, http.StatusOK, promptRenderResponse{
 		User: spec.Prompt.User, System: spec.Prompt.System,
-		Model: cfg.Model.Name, Backend: string(cfg.Model.Mode),
+		Model: cfg.Model.Name, Mode: string(cfg.Model.Mode),
 	})
 }
 

@@ -101,9 +101,9 @@ func (s *Server) handleTodoPlanApprove(w http.ResponseWriter, r *http.Request) {
 			Ref:       todos.TODOReference(todo),
 			Count:     1,
 			Dir:       source.Dir,
-			Provider:  string(opts.Spec.Backend.Provider()),
+			Provider:  providerKey(opts.Spec.Model),
 			Driver:    opts.Driver,
-			Backend:   string(opts.Spec.Mode),
+			Mode:      string(opts.Spec.Mode),
 			Model:     opts.Spec.Name,
 			Effort:    string(opts.Spec.Effort),
 			RunMode:   string(opts.RunMode),
@@ -259,7 +259,7 @@ type todoAnswerPayload struct {
 	Answer   string         `json:"answer"`
 	Answers  map[string]any `json:"answers,omitempty"`
 	Rejected bool           `json:"rejected,omitempty"`
-	// Optional run knobs for the resumed turn (model/backend/effort/timeout);
+	// Optional run knobs for the resumed turn (model/mode/effort/timeout);
 	// omitted fields keep the defaults derived from the todo.
 	Options *todoRunPayload `json:"options,omitempty"`
 }

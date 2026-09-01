@@ -16,7 +16,7 @@ func (p *plainProvider) Execute(context.Context, api.Spec) (*api.Response, error
 	return nil, errors.New("not implemented")
 }
 func (p *plainProvider) GetModel() string        { return "test-model" }
-func (p *plainProvider) GetBackend() api.Backend { return "test" }
+func (p *plainProvider) GetRuntime() api.Runtime { return api.Runtime{Provider: "anthropic", Mode: api.ModeAgent} }
 
 // closableProvider stands in for the process-backed backends (claude-agent,
 // cmux, codex-appserver) whose supervised child only stops on Close.
@@ -42,7 +42,7 @@ func (w *wrappedProvider) Execute(ctx context.Context, spec api.Spec) (*api.Resp
 	return w.inner.Execute(ctx, spec)
 }
 func (w *wrappedProvider) GetModel() string        { return w.inner.GetModel() }
-func (w *wrappedProvider) GetBackend() api.Backend { return w.inner.GetBackend() }
+func (w *wrappedProvider) GetRuntime() api.Runtime { return w.inner.GetRuntime() }
 func (w *wrappedProvider) Unwrap() api.Provider    { return w.inner }
 
 func TestCloseProvider_ReachesCloserThroughWrappers(t *testing.T) {
@@ -68,7 +68,7 @@ func TestCloseProvider_NoCloserIsNoOp(t *testing.T) {
 // the claude-agent tsx child running and block process exit.
 func TestCloseProvider_ReachesRealMiddlewareStack(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.Model = api.Model{Name: "claude-sonnet-5", Backend: api.BackendClaudeAgent}
+	cfg.Model = api.Model{Name: "claude-sonnet-5", Mode: api.ModeAgent}
 
 	provider, err := NewProvider(cfg)
 	if err != nil {

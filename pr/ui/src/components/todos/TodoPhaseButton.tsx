@@ -70,8 +70,8 @@ function phaseItems({
   return otherPhases(state).map(entry => {
     const phaseOptions = options[entry.id];
     const spec = phaseOptions ? runSpec(phaseOptions) : {};
-    const models = context?.backends.find(backend => backend.id === spec.backend)?.models
-      ?? context?.backends.flatMap(backend => backend.models)
+    const models = context?.modes.find(runtime => runtime.id === spec.mode)?.models
+      ?? context?.modes.flatMap(runtime => runtime.models)
       ?? [];
     const children: DropdownMenuItem[] = [
       { label: `${phaseVerb(state, entry.id)} now`, icon: entry.icon, onSelect: () => onRunPhase(entry.id) },

@@ -58,7 +58,7 @@ type promptCatalogLayer struct {
 // selectors are expanded — what the runtime will actually see.
 type promptCatalogRuntime struct {
 	Model       string   `json:"model,omitempty"`
-	Backend     string   `json:"backend,omitempty"`
+	Mode        string   `json:"mode,omitempty"`
 	Effort      string   `json:"effort,omitempty"`
 	Fallbacks   []string `json:"fallbacks,omitempty"`
 	ModelSource string   `json:"modelSource"`
@@ -198,7 +198,7 @@ func promptLayers(scope promptCatalogScope, at func(*verify.GavelConfig) (verify
 }
 
 // promptSpecFields lists the keys an override sets, in the flat form it takes in
-// .gavel.yaml (model, backend, effort, file, prompt.user, prompt.system, budget, …).
+// .gavel.yaml (model, mode, effort, file, prompt.user, prompt.system, budget, …).
 func promptSpecFields(ov verify.PromptSpec) []string {
 	data, err := json.Marshal(ov)
 	if err != nil {
@@ -262,7 +262,7 @@ func promptProvenance(
 		}
 	}
 	attribute("model", "model", declared.Name != "", defaultSpec.Name != "", base.Name != "")
-	attribute("backend", "backend", declared.Mode != "", defaultSpec.Mode != "", base.Mode != "")
+	attribute("mode", "mode", declared.Mode != "", defaultSpec.Mode != "", base.Mode != "")
 	attribute("effort", "effort", declared.Effort != "", defaultSpec.Effort != "", base.Effort != "")
 	if modelSource == "runtime" && prov["model"] == "runtime" {
 		prov["model"] = modelSource
@@ -297,11 +297,11 @@ func modelSourceFor(operation, promptDefault, base string) string {
 }
 
 // catalogRuntime expands a compact model selector (`agent:opus:medium`,
-// `claude`, a fallback list) into the plain name, backend, effort and fallback
+// `claude`, a fallback list) into the plain name, mode, effort and fallback
 // chain the drivers see, so the table shows what will run — not the shorthand.
 func catalogRuntime(model api.Model, modelSource string) promptCatalogRuntime {
 	runtime := promptCatalogRuntime{
-		Model: model.Name, Backend: string(model.Mode), Effort: string(model.Effort), ModelSource: modelSource,
+		Model: model.Name, Mode: string(model.Mode), Effort: string(model.Effort), ModelSource: modelSource,
 	}
 	if model.Name == "" {
 		return runtime
@@ -311,7 +311,7 @@ func catalogRuntime(model api.Model, modelSource string) promptCatalogRuntime {
 		runtime.Error = err.Error()
 		return runtime
 	}
-	runtime.Model, runtime.Backend, runtime.Effort = expanded.Name, string(expanded.Mode), string(expanded.Effort)
+	runtime.Model, runtime.Mode, runtime.Effort = expanded.Name, string(expanded.Mode), string(expanded.Effort)
 	for _, fallback := range expanded.Fallbacks {
 		runtime.Fallbacks = append(runtime.Fallbacks, fallback.Name)
 	}

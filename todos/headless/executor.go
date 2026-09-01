@@ -62,9 +62,6 @@ func NewExecutor(config todopkg.AgentRunConfig, options ...option) *Executor {
 	if config.Mode == "" {
 		config.Mode = types.ModeRun
 	}
-	if config.Spec.Mode == "" && config.Spec.Backend.Valid() {
-		config.Spec.Mode = config.Spec.Backend.Mode()
-	}
 	agentName, _ := claude.ResolveAgent(config.Spec.Name)
 	executor := &Executor{config: config, agent: agentName}
 	for _, option := range options {
@@ -93,8 +90,8 @@ func (e *Executor) driver() string {
 
 func (e *Executor) RunRuntimeSelection() captaindb.PromptRunRuntimeSelection {
 	return captaindb.PromptRunRuntimeSelection{
-		Provider: string(captainapi.Backend(e.config.Spec.Backend).Provider()),
-		Backend:  string(e.config.Spec.Backend),
+		Provider: captainapi.RuntimeOf(e.config.Spec.Provider, e.config.Spec.Mode).Provider,
+		Mode:     string(e.config.Spec.Mode),
 		Model:    e.config.Spec.Name,
 		Effort:   string(e.config.Spec.Effort),
 	}
@@ -197,14 +194,14 @@ func (e *Executor) run(ctx *todopkg.ExecutorContext, start time.Time, req captai
 		Mode:          string(e.config.Mode),
 		Driver:        e.driver(),
 		Agent:         e.agent,
-		Provider:      string(captainapi.Backend(provider.GetBackend()).Provider()),
-		Backend:       string(provider.GetBackend()),
+		Provider:      provider.GetRuntime().Provider,
+		RuntimeMode:   string(provider.GetRuntime().Mode),
 		ResolvedModel: provider.GetModel(),
 		Effort:        string(req.Effort),
 	}
 	ctx.RecordRunStart(runMeta)
 
-	modelSource := "backend-default"
+	modelSource := "runtime-default"
 	if strings.TrimSpace(req.Name) != "" {
 		modelSource = "todos." + string(e.config.Mode) + "-prompt"
 	}
@@ -212,9 +209,9 @@ func (e *Executor) run(ctx *todopkg.ExecutorContext, start time.Time, req captai
 		modelSource = "run-option"
 	}
 	ctx.Logger.Infof(
-		"Resolved TODO runtime: driver=%s agent=%s provider=%s backend=%s model=%s effort=%s model_source=%s; dispatching %d TODO(s) cwd=%s",
+		"Resolved TODO runtime: driver=%s agent=%s provider=%s mode=%s model=%s effort=%s model_source=%s; dispatching %d TODO(s) cwd=%s",
 		runMeta.Driver, runMeta.Agent, firstNonEmpty(runMeta.Provider, "unknown"),
-		firstNonEmpty(runMeta.Backend, "default"), firstNonEmpty(runMeta.ResolvedModel, "default"),
+		firstNonEmpty(runMeta.RuntimeMode, "default"), firstNonEmpty(runMeta.ResolvedModel, "default"),
 		firstNonEmpty(runMeta.Effort, "default"), modelSource, len(todosInGroup), workDir,
 	)
 	gavelai.NormalizeEnv()
@@ -436,14 +433,9 @@ func (e *Executor) failed(start time.Time, err error) *todopkg.ExecutionResult {
 }
 
 // isCmuxBackend reports whether this executor drives the interactive cmux TUI
-// provider (vs the headless SDK backends).
+// provider (vs the headless agent and cli modes).
 func (e *Executor) isCmuxBackend() bool {
-	switch captainai.Backend(strings.TrimSpace(string(e.config.Spec.Backend))) {
-	case captainai.BackendClaudeCmux, captainai.BackendCodexCmux:
-		return true
-	default:
-		return false
-	}
+	return e.config.Spec.Mode == captainapi.ModeCmux
 }
 
 func (e *Executor) timeout() (time.Duration, error) {

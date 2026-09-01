@@ -199,7 +199,7 @@ func (p *Provider) SaveAttempt(ctx context.Context, todo *types.TODO, result *to
 			"driver":         result.Runtime.Driver,
 			"agent":          result.Runtime.Agent,
 			"provider":       result.Runtime.Provider,
-			"backend":        result.Runtime.Backend,
+			"mode":           result.Runtime.RuntimeMode,
 			"model":          result.Runtime.ResolvedModel,
 			"effort":         result.Runtime.Effort,
 			"durationMillis": result.Duration.Milliseconds(),
@@ -357,7 +357,7 @@ func renderAttempt(todo *types.TODO, result *todos.ExecutionResult) string {
 		{"Driver", result.Runtime.Driver},
 		{"Agent", result.Runtime.Agent},
 		{"Provider", result.Runtime.Provider},
-		{"Backend", result.Runtime.Backend},
+		{"Mode", result.Runtime.RuntimeMode},
 		{"Model", result.Runtime.ResolvedModel},
 		{"Effort", result.Runtime.Effort},
 	} {

@@ -112,7 +112,7 @@ func priorRunSpec(prior *captaindb.PromptRun, mode types.RunMode) (api.Spec, err
 }
 
 // priorRunRuntime is what a continuation inherits across any mode change: the
-// model, backend and effort the prior turn actually resolved. It is the concrete
+// model, mode and effort the prior turn actually resolved. It is the concrete
 // selection behind a family alias, so a codex session can never be continued by
 // claude.
 func priorRunRuntime(prior *captaindb.PromptRun) api.Spec {
@@ -120,10 +120,9 @@ func priorRunRuntime(prior *captaindb.PromptRun) api.Spec {
 		return api.Spec{}
 	}
 	resolved := prior.Runtime.Resolved
-	backend := api.Backend(strings.TrimSpace(resolved.Backend))
 	return api.Spec{Model: api.Model{
 		Name:   strings.TrimSpace(resolved.Model),
-		Mode:   backend.Mode(),
+		Mode:   api.RuntimeMode(strings.TrimSpace(resolved.Mode)),
 		Effort: api.Effort(strings.TrimSpace(resolved.Effort)),
 	}}
 }

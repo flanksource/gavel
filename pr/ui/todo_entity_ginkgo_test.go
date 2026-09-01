@@ -336,8 +336,8 @@ var _ = Describe("todo entity run actions", func() {
 
 		Expect(result.Applied).To(Equal(1))
 		Expect(dispatched).To(HaveLen(1))
-		Expect(dispatched[0].Options.Spec.Backend).NotTo(BeEmpty(),
-			"the dashboard's (driver, backend) catalog must have been applied")
+		Expect(dispatched[0].Options.Spec.Mode).NotTo(BeEmpty(),
+			"the dashboard's (driver, mode) catalog must have been applied")
 	})
 
 	It("reports per-item run failures without abandoning the rest of the batch", func() {

@@ -11,7 +11,7 @@ export { TodoRunEffortBadge, todoRunEffortPresentation } from "./TodoRunEffortBa
 import {
   agentForRuntime,
   PROVIDERS,
-  type RunBackendCatalog,
+  type RunModeCatalog,
   type RunContext,
 } from "./providers";
 
@@ -41,9 +41,9 @@ type RunChoiceState = {
   recentAdvanced: Partial<Record<TodoRunAction, TodoRunOptions[]>>;
 };
 
-// v2: TodoRunOptions moved model/backend/effort/budget under a nested `spec`.
+// v2: TodoRunOptions moved model/mode/effort/budget under a nested `spec`.
 // A v1 entry would still parse, but every spec field would read as unset and the
-// remembered model would silently revert to the backend default, so the version
+// remembered model would silently revert to the mode default, so the version
 // is bumped to discard it instead.
 const RUN_CHOICE_STORAGE_KEY = "gavel.pr-ui.todoRunChoices.v2";
 
@@ -75,7 +75,7 @@ function cloneRunOptions(options: TodoRunOptions): TodoRunOptions {
 
 // runSpec is the api.Spec half of a run's options. The spec is nested under its
 // own key rather than inlined (see TodoRunOptions), so the many helpers that only
-// care about model/backend/effort read it through here.
+// care about model/mode/effort read it through here.
 export function runSpec(options: TodoRunOptions): AISpecRuntimeValue {
   return options.spec ?? {};
 }
@@ -168,8 +168,8 @@ export interface TodoRunContextState {
 
 function unavailableRunContextError(context: RunContext): string {
   if (context.runtimes.length === 0) return "Captain returned no runtime catalog";
-  if (context.backends.some(backend => backend.models.length > 0)) return "";
-  const details = context.backends.map(backend => backend.modelError?.trim()).filter(Boolean);
+  if (context.modes.some(runtime => runtime.models.length > 0)) return "";
+  const details = context.modes.map(runtime => runtime.modelError?.trim()).filter(Boolean);
   return details[0] || "Captain returned no run models";
 }
 
@@ -181,7 +181,7 @@ export function useTodoRunContext(enabled = true): TodoRunContextState {
   }
   const context = query.data ?? null;
   if (context && (
-    !Array.isArray(context.backends) ||
+    !Array.isArray(context.modes) ||
     !Array.isArray(context.runtimes) ||
     !Array.isArray(context.models) ||
     !Array.isArray(context.efforts) ||
@@ -198,61 +198,61 @@ export function TodoRunContextError({ error }: { error: string }) {
 }
 
 // promptDefaultFor is the runtime the server resolved for one action's prompt.
-// It outranks defaultBackend because it already accounts for the prompt's own
+// It outranks defaultMode because it already accounts for the prompt's own
 // frontmatter — todos-triage.prompt and todos-plan.prompt pin `model: claude`
 // and declare a per-tool policy only the Claude transports carry, so seeding
 // them from a codex account default produced a run Captain refuses.
-function promptDefaultFor(context: RunContext, action: TodoRunAction): { backend?: string; model?: string } {
+function promptDefaultFor(context: RunContext, action: TodoRunAction): { mode?: string; model?: string } {
   return context.promptDefaults?.[action] ?? {};
 }
 
-function backendById(context: RunContext, id: string | undefined, model?: string): RunBackendCatalog | undefined {
+function modeById(context: RunContext, id: string | undefined, model?: string): RunModeCatalog | undefined {
   if (!id) return undefined;
   const agent = agentForRuntime(context, id, model);
-  return context.backends.find(backend => backend.id === id && backend.agent === agent && backend.models.length > 0);
+  return context.modes.find(runtime => runtime.id === id && runtime.agent === agent && runtime.models.length > 0);
 }
 
-function primaryBackendForAction(context: RunContext, action: TodoRunAction): RunBackendCatalog {
+function primaryModeForAction(context: RunContext, action: TodoRunAction): RunModeCatalog {
   const promptDefault = promptDefaultFor(context, action);
-  return backendById(context, promptDefault.backend, promptDefault.model)
-    ?? backendById(context, context.defaultBackend)
-    ?? context.backends.find(backend => backend.models.length > 0)
+  return modeById(context, promptDefault.mode, promptDefault.model)
+    ?? modeById(context, context.defaultMode)
+    ?? context.modes.find(runtime => runtime.models.length > 0)
     ?? (() => { throw new Error("Captain returned no run models"); })();
 }
 
-function backendForOptions(context: RunContext, options: TodoRunOptions): RunBackendCatalog {
+function modeForOptions(context: RunContext, options: TodoRunOptions): RunModeCatalog {
   const spec = runSpec(options);
-  const requested = spec.backend || options.driver || "";
+  const requested = spec.mode || options.driver || "";
   const actionDefault = promptDefaultFor(context, actionFromRunOptions(options));
   return (
-    backendById(context, requested, spec.model) ??
-    backendById(context, actionDefault.backend, actionDefault.model) ??
-    backendById(context, context.defaultBackend) ??
-    context.backends.find(backend => backend.models.length > 0) ??
+    modeById(context, requested, spec.model) ??
+    modeById(context, actionDefault.mode, actionDefault.model) ??
+    modeById(context, context.defaultMode) ??
+    context.modes.find(runtime => runtime.models.length > 0) ??
     (() => { throw new Error("Captain returned no run models"); })()
   );
 }
 
-function runtimeModeForBackend(backend: RunBackendCatalog): TodoRunRuntimeMode {
-  if (backend.id in RUNTIME_MODE_CONFIG) return backend.id as TodoRunRuntimeMode;
-  throw new Error(`Invalid run backend ${JSON.stringify(backend.id)}`);
+function runtimeModeForCatalog(runtime: RunModeCatalog): TodoRunRuntimeMode {
+  if (runtime.id in RUNTIME_MODE_CONFIG) return runtime.id as TodoRunRuntimeMode;
+  throw new Error(`Invalid run mode ${JSON.stringify(runtime.id)}`);
 }
 
 function runtimeModeLabel(mode: TodoRunRuntimeMode): string {
   return RUNTIME_MODE_CONFIG[mode].label;
 }
 
-function modelsForRunBackend(backend: RunBackendCatalog): RunBackendCatalog["models"] {
-  return backend.models;
+function modelsForRunMode(runtime: RunModeCatalog): RunModeCatalog["models"] {
+  return runtime.models;
 }
 
 const ALL_EFFORTS: TodoRunEffort[] = ["low", "medium", "high", "xhigh", "max", "ultra"];
 
-function modelForRunBackend(backend: RunBackendCatalog, modelID: string | undefined): ChatModel {
-  const model = modelsForRunBackend(backend).find(item => item.id === modelID)
-    ?? modelsForRunBackend(backend).find(item => item.id === backend.defaultModel)
-    ?? modelsForRunBackend(backend)[0];
-  if (!model) throw new Error(backend.modelError || `Captain returned no models for ${backend.label}`);
+function modelForRunMode(runtime: RunModeCatalog, modelID: string | undefined): ChatModel {
+  const model = modelsForRunMode(runtime).find(item => item.id === modelID)
+    ?? modelsForRunMode(runtime).find(item => item.id === runtime.defaultModel)
+    ?? modelsForRunMode(runtime)[0];
+  if (!model) throw new Error(runtime.modelError || `Captain returned no models for ${runtime.label}`);
   return model;
 }
 
@@ -295,32 +295,32 @@ export function shortTodoRunModelName(id: string | undefined): string {
   return label;
 }
 
-function labelForRunModel(backend: RunBackendCatalog, modelID: string): string {
-  const model = modelsForRunBackend(backend).find(item => item.id === modelID);
+function labelForRunModel(runtime: RunModeCatalog, modelID: string): string {
+  const model = modelsForRunMode(runtime).find(item => item.id === modelID);
   return model?.label || modelID;
 }
 
-function runOptionsForBackendModel(action: TodoRunAction, backend: RunBackendCatalog, modelID: string, effort: TodoRunEffort = "medium"): TodoRunOptions {
+function runOptionsForModeModel(action: TodoRunAction, runtime: RunModeCatalog, modelID: string, effort: TodoRunEffort = "medium"): TodoRunOptions {
   const spec = reconcileModelCapabilities({
-    backend: backend.id,
-    model: modelID || backend.defaultModel,
+    mode: runtime.id,
+    model: modelID || runtime.defaultModel,
     effort,
     ...(action === "run" ? AUTO_COMMIT : {}),
-  } satisfies AISpecRuntimeValue, modelForRunBackend(backend, modelID), ALL_EFFORTS);
-  return normalizeRunOptions(action, { driver: backend.driver, spec });
+  } satisfies AISpecRuntimeValue, modelForRunMode(runtime, modelID), ALL_EFFORTS);
+  return normalizeRunOptions(action, { driver: runtime.driver, spec });
 }
 
 export function runButtonQualifierForOptions(options: TodoRunOptions, context: RunContext): string {
-  const backend = backendForOptions(context, options);
-  const model = runSpec(options).model || backend.defaultModel;
-  return `(${runtimeModeLabel(runtimeModeForBackend(backend))}:${shortTodoRunModelName(labelForRunModel(backend, model))})`;
+  const runtime = modeForOptions(context, options);
+  const model = runSpec(options).model || runtime.defaultModel;
+  return `(${runtimeModeLabel(runtimeModeForCatalog(runtime))}:${shortTodoRunModelName(labelForRunModel(runtime, model))})`;
 }
 
 // todoRunModeLabel is the runtime mechanism a run would use (Agent/cmux/cli/API),
-// resolved from the run options against the backend catalog — the same derivation
+// resolved from the run options against the runtime catalog — the same derivation
 // the run buttons use, exposed for the start-of-session hero's "Runtime" chip.
 export function todoRunModeLabel(options: TodoRunOptions, context: RunContext): string {
-  return runtimeModeLabel(runtimeModeForBackend(backendForOptions(context, options)));
+  return runtimeModeLabel(runtimeModeForCatalog(modeForOptions(context, options)));
 }
 
 export function runButtonLabelForOptions(action: TodoRunAction, options: TodoRunOptions, context: RunContext): string {
@@ -328,11 +328,11 @@ export function runButtonLabelForOptions(action: TodoRunAction, options: TodoRun
 }
 
 export function todoRunButtonPresentation(options: TodoRunOptions, context: RunContext) {
-  const backend = backendForOptions(context, options);
+  const runtime = modeForOptions(context, options);
   const spec = runSpec(options);
-  const modelID = spec.model || backend.defaultModel;
-  const model = modelForRunBackend(backend, modelID);
-  const provider = PROVIDERS.find(item => item.id === backend.agent);
+  const modelID = spec.model || runtime.defaultModel;
+  const model = modelForRunMode(runtime, modelID);
+  const provider = PROVIDERS.find(item => item.id === runtime.agent);
   const supportedEfforts = effortOptionsForModel(model, contextEfforts(context));
   const effort = spec.effort && supportedEfforts.includes(spec.effort)
     ? spec.effort as TodoRunEffort
@@ -340,29 +340,29 @@ export function todoRunButtonPresentation(options: TodoRunOptions, context: RunC
 
   return {
     provider,
-    model: shortTodoRunModelName(labelForRunModel(backend, modelID)),
+    model: shortTodoRunModelName(labelForRunModel(runtime, modelID)),
     effort,
   };
 }
 
 export function defaultRunOptionsForAction(action: TodoRunAction, context?: RunContext | null): TodoRunOptions {
   if (context) {
-    const backend = primaryBackendForAction(context, action);
-    return runOptionsForBackendModel(action, backend, promptDefaultFor(context, action).model || backend.defaultModel);
+    const runtime = primaryModeForAction(context, action);
+    return runOptionsForModeModel(action, runtime, promptDefaultFor(context, action).model || runtime.defaultModel);
   }
   return normalizeRunOptions(action, defaultRunOptions);
 }
 
 export function reconcileTodoRunOptions(action: TodoRunAction, options: TodoRunOptions, context: RunContext): TodoRunOptions {
   const normalized = normalizeRunOptions(action, options);
-  const backend = backendForOptions(context, normalized);
+  const runtime = modeForOptions(context, normalized);
   const spec = runSpec(normalized);
-  const modelIsCurrent = !!spec.model && backend.models.some(model => model.id === spec.model);
-  const model = modelIsCurrent ? spec.model! : backend.defaultModel;
+  const modelIsCurrent = !!spec.model && runtime.models.some(model => model.id === spec.model);
+  const model = modelIsCurrent ? spec.model! : runtime.defaultModel;
   return normalizeRunOptions(action, {
     ...normalized,
-    driver: backend.driver,
-    spec: reconcileModelCapabilities({ ...spec, backend: backend.id, model }, modelForRunBackend(backend, model), contextEfforts(context)),
+    driver: runtime.driver,
+    spec: reconcileModelCapabilities({ ...spec, mode: runtime.id, model }, modelForRunMode(runtime, model), contextEfforts(context)),
   });
 }
 
@@ -487,11 +487,11 @@ export function todoRunOptionsForRuntimeChange({
 
 export function runChoiceDetail(options: TodoRunOptions, fallback: string, context?: RunContext | null): string {
   if (!context) return fallback;
-  const backend = backendForOptions(context, options);
+  const runtime = modeForOptions(context, options);
   const spec = runSpec(options);
-  const mode = runtimeModeLabel(runtimeModeForBackend(backend));
-  const modelID = spec.model || backend.defaultModel;
-  const model = shortTodoRunModelName(labelForRunModel(backend, modelID));
+  const mode = runtimeModeLabel(runtimeModeForCatalog(runtime));
+  const modelID = spec.model || runtime.defaultModel;
+  const model = shortTodoRunModelName(labelForRunModel(runtime, modelID));
   const effort = spec.effort ? ` · ${spec.effort}` : "";
   return `${mode} · ${model}${effort}`;
 }
@@ -499,7 +499,7 @@ export function runChoiceDetail(options: TodoRunOptions, fallback: string, conte
 export function buildTodoRunPayload({
   ref,
   driver,
-  runBackend,
+  runMode,
   runtime,
   mode,
   resume,
@@ -508,7 +508,7 @@ export function buildTodoRunPayload({
 }: {
   ref: string;
   driver: TodoRunDriver;
-  runBackend?: string;
+  runMode?: string;
   runtime: AISpecRuntimeValue;
   mode: TodoRunAction;
   resume: boolean;
@@ -526,7 +526,7 @@ export function buildTodoRunPayload({
       resume: resume || undefined,
       spec: {
         ...spec,
-        backend: runBackend,
+        mode: runMode,
         prompt,
       },
     }),

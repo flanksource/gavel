@@ -81,7 +81,7 @@ var _ = Describe("TODO verification runtime spec", func() {
 	// what grades.
 	It("grades on the verify spec, not the implementer's", func() {
 		run := api.Spec{
-			Model:     api.Model{Name: "claude-cmux", Backend: api.BackendClaudeCmux},
+			Model:     api.Model{Name: "claude-sonnet-5", Mode: api.ModeCmux},
 			SessionID: "the-implementer-session",
 			Workflow:  &api.Workflow{Verify: &api.Verify{MaxIterations: 2}},
 		}
@@ -101,7 +101,7 @@ var _ = Describe("TODO verification runtime spec", func() {
 		cel, ok := verifiers[0].(*celVerifier)
 		Expect(ok).To(BeTrue())
 		Expect(cel.spec.Name).To(Equal("claude-code-sonnet"))
-		Expect(cel.spec.Backend).To(BeEmpty(), "the implementer's cmux backend must not grade")
+		Expect(cel.spec.Mode).To(BeEmpty(), "the implementer's cmux mode must not grade")
 		Expect(cel.spec.SessionID).To(BeEmpty(), "the grader never resumes the session it judges")
 	})
 

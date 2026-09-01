@@ -218,18 +218,18 @@ var _ = Describe("settings prompt catalog", func() {
 })
 
 var _ = Describe("prompt catalog runtime validation", func() {
-	It("reports legacy backend values without translating them", func() {
+	It("reports a mode that names a provider without translating it", func() {
 		runtime := catalogRuntime(api.Model{Name: "haiku", Mode: "anthropic"}, "operation")
 
-		Expect(runtime.Backend).To(Equal("anthropic"))
+		Expect(runtime.Mode).To(Equal("anthropic"))
 		Expect(runtime.Error).To(ContainSubstring("invalid model configuration"))
 	})
 
-	It("lets the compact model backend override the sibling field", func() {
+	It("lets the compact model prefix override the sibling mode field", func() {
 		runtime := catalogRuntime(api.Model{Name: "agent:opus", Mode: api.ModeAPI}, "operation")
 
 		Expect(runtime.Error).To(BeEmpty())
-		Expect(runtime.Backend).To(Equal("agent"))
+		Expect(runtime.Mode).To(Equal("agent"))
 		Expect(runtime.Model).To(Equal("claude-opus-5"))
 	})
 })

@@ -146,7 +146,7 @@ var _ = Describe("verify.Merge of CommitConfig", func() {
 })
 
 // modelName resolves a ladder and returns just the name, for the precedence
-// tables below. Backend/effort fidelity is asserted separately, in
+// tables below. Mode/effort fidelity is asserted separately, in
 // "carries a compact model's backend and effort through to the agent".
 func modelName(m api.Model, err error) string {
 	Expect(err).ToNot(HaveOccurred())
@@ -194,7 +194,7 @@ var _ = Describe("Options model resolution", func() {
 
 	// The reported bug, end to end: `gavel commit --model agent:gpt-5.6-luna:medium`
 	// ran as api:gpt-5.6-luna. It failed three independent ways — the config beat
-	// the flag, the string return dropped Backend/Effort, and BuildAgent's
+	// the flag, the string return dropped Mode/Effort, and BuildAgent's
 	// DefaultConfig() re-inferred the backend from the bare name.
 	It("carries a compact model's backend and effort through to the agent", func() {
 		var got clickyai.AgentConfig
@@ -208,14 +208,14 @@ var _ = Describe("Options model resolution", func() {
 		opts := Options{
 			Flags: modelFlags("agent:gpt-5.6-luna:medium"),
 			// The ~/.gavel.yaml `ai:` block that used to win over --model.
-			AI: api.Spec{Model: api.Model{Name: "sonnet", Backend: api.BackendAnthropic}},
+			AI: api.Spec{Model: api.Model{Name: "sonnet", Mode: api.ModeAPI}},
 		}
 		model, err := opts.groupModel()
 		Expect(err).ToNot(HaveOccurred())
 		_, _ = BuildAgent(opts, model)
 
 		Expect(got.Model.Name).To(Equal("gpt-5.6-luna"))
-		Expect(got.Model.Backend).To(Equal(api.BackendCodexAgent), "the agent: mode must survive; it used to become openai")
+		Expect(got.Model.Mode).To(Equal(api.ModeAgent), "the agent: mode must survive; it used to become the api mode")
 		Expect(got.Model.Effort).To(Equal(api.EffortMedium), "the :medium effort must survive; it used to be dropped")
 	})
 
@@ -243,7 +243,7 @@ var _ = Describe("BuildAgent errors", func() {
 		}
 		DeferCleanup(func() { newAgentFunc = previousAgent })
 
-		_, err := BuildAgent(Options{}, api.Model{Name: "gpt-5.6-terra", Backend: api.BackendOpenAI})
+		_, err := BuildAgent(Options{}, api.Model{Name: "gpt-5.6-terra", Mode: api.ModeAPI})
 		Expect(err).To(MatchError("LLM agent unavailable: API key not found for backend openai; similar environment variable found: OPEN_AI_API_KEY (did you mean OPENAI_API_KEY?)"))
 		Expect(err.Error()).ToNot(ContainSubstring("ANTHROPIC_API_KEY"))
 		Expect(errors.Is(err, ErrLLMUnavailable)).To(BeTrue())

@@ -35,7 +35,7 @@ func TestBuildAIFixRequestUsesOperationModelIndependently(t *testing.T) {
 	cfg, req, err := buildAIFixRequest(captaincli.AIRuntimeOptions{}, operation, t.TempDir())
 	require.NoError(t, err)
 	assert.Equal(t, "claude-sonnet-5", cfg.Model.Name)
-	assert.Equal(t, api.BackendClaudeAgent, cfg.Model.Backend)
+	assert.Equal(t, api.ModeAgent, cfg.Model.Mode)
 	assert.Equal(t, api.EffortHigh, req.Model.Effort)
 	assert.Equal(t, 2.0, cfg.Budget.Cost)
 	assert.Equal(t, 8192, req.Budget.MaxTokens)

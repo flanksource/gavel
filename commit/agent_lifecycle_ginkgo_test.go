@@ -69,7 +69,7 @@ var _ = Describe("commit AI agent lifecycle", func() {
 	It("rejects a nil agent returned without a factory error", func() {
 		newAgentFunc = func(clickyai.AgentConfig) (clickyai.Agent, error) { return nil, nil }
 
-		agent, err := BuildAgent(Options{}, captainapi.Model{Name: "test-model", Backend: captainapi.BackendCodexAgent})
+		agent, err := BuildAgent(Options{}, captainapi.Model{Name: "test-model", Mode: captainapi.ModeAgent})
 
 		Expect(agent).To(BeNil())
 		Expect(err).To(MatchError(ContainSubstring("agent factory returned nil")))

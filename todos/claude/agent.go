@@ -22,7 +22,7 @@ func ResolveAgent(model string) (agent string, modelFlag string) {
 	if strings.TrimSpace(model) == "" {
 		return "claude", ""
 	}
-	if p, _, _, ok := registry.ProviderForToken(model); ok && p == registry.OpenAI {
+	if p, _, ok := registry.ProviderForToken(model); ok && p == registry.OpenAI {
 		if strings.EqualFold(model, "codex") {
 			return "codex", ""
 		}

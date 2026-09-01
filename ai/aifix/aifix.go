@@ -101,7 +101,7 @@ func Run(ctx context.Context, req Request) (*Result, error) {
 	}()
 	streamer, ok := p.(captainai.StreamingProvider)
 	if !ok {
-		return nil, fmt.Errorf("aifix: backend %q is not streaming; choose a streaming agent backend", req.AIConfig.Model.Backend)
+		return nil, fmt.Errorf("aifix: runtime %q is not streaming; choose a streaming runtime", p.GetRuntime())
 	}
 
 	current := req.Initial

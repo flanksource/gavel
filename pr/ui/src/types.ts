@@ -304,7 +304,8 @@ export interface SessionStats {
 
 export interface SessionRuntimeSelection {
   provider?: string;
-  backend?: string;
+  // mode is the runtime mechanism: api | agent | cli | cmux.
+  mode?: string;
   model?: string;
   effort?: string;
 }
@@ -318,7 +319,9 @@ export interface TodoSessionAttempt {
   requested: SessionRuntimeSelection;
   resolved: SessionRuntimeSelection;
   provider?: string;
-  backend?: string;
+  // runtimeMode is the mechanism the model ran on; `mode` above is the run mode
+  // (run/plan) — two different axes that share a word.
+  runtimeMode?: string;
   model?: string;
   effort?: string;
   status: string;
@@ -374,7 +377,8 @@ export interface TodoSessionOverview {
   processStatus?: string;
   pid?: number;
   model?: string;
-  backend?: string;
+  modelProvider?: string;
+  modelMode?: string;
   effort?: string;
   messageCount: number;
   turnCount: number;
@@ -395,7 +399,8 @@ export interface TodoSessionTurn {
   startedAt?: string;
   endedAt?: string;
   model?: string;
-  backend?: string;
+  modelProvider?: string;
+  modelMode?: string;
   effort?: string;
   inputTokens: number;
   outputTokens: number;
@@ -436,7 +441,8 @@ export interface TodoSessionCost {
   id: string;
   sessionId: string;
   model: string;
-  backend: string;
+  provider?: string;
+  modelMode?: string;
   effort?: string;
   currency: string;
   modelCallCount: number;
@@ -492,7 +498,7 @@ export interface TodoSessionApproval {
 
 export type TodoRunAgent = 'claude' | 'codex';
 export type TodoRunEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
-// TodoRunDriver is the canonical backend. Provider identity comes from model.
+// TodoRunDriver is the canonical runtime mode. Provider identity comes from model.
 export type TodoRunDriver = 'api' | 'agent' | 'cli' | 'cmux';
 
 // TodoRunOptions is the run POST body's options: the api.Spec under its own
@@ -507,11 +513,11 @@ export type TodoRunDriver = 'api' | 'agent' | 'cli' | 'cmux';
 // driver/runMode/resume. Nesting also dissolves the wire collision between this
 // payload's `mode`/`resume` and api.Model's own.
 export interface TodoRunOptions {
-  // Spec is the captain api.Spec: model/backend/effort flat inside it;
+  // Spec is the captain api.Spec: model/mode/effort flat inside it;
   // prompt/budget/permissions/setup/workflow/sessionId nested, mirroring
   // clicky's AISpecRuntimeValue.
   spec?: AISpecRuntimeValue;
-  // Driver is the authoritative canonical backend.
+  // Driver is the authoritative canonical runtime mode.
   driver?: TodoRunDriver;
   // runMode is the behaviour class the run executes as (run/plan). Supersedes
   // the `plan` bool; the server accepts both (plan:true is treated as
@@ -541,7 +547,7 @@ export interface TodoRunResponse {
   dir: string;
   provider?: string;
   driver?: TodoRunDriver;
-  backend?: string;
+  mode?: string;
   model?: string;
   effort?: TodoRunEffort;
   plan?: boolean;
@@ -562,7 +568,7 @@ export interface TodoRunPreviewResponse {
   prompt: string;
   specYaml: string;
   provider?: string;
-  backend?: string;
+  mode?: string;
   effort?: TodoRunEffort;
   plan?: boolean;
   count: number;

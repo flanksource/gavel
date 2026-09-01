@@ -13,13 +13,13 @@ import {
 } from './run';
 
 const context: RunContext = {
-  defaultBackend: 'cmux',
+  defaultMode: 'cmux',
   defaultProvider: 'openai',
   efforts: ['low', 'medium', 'high', 'xhigh'],
   tools: [],
   runtimes: [],
   models: [],
-  backends: [
+  modes: [
     {
       id: 'cmux',
       label: 'Codex cmux',
@@ -63,7 +63,7 @@ const context: RunContext = {
 describe('todo run runtime adapter', () => {
   it('uses one complete payload for preview and submit without resending a generated prompt', () => {
     const runtime = {
-      backend: 'cmux',
+      mode: 'cmux',
       model: 'gpt-5.5',
       effort: 'high' as const,
       budget: { timeout: '45m', maxTurns: 12 },
@@ -75,7 +75,7 @@ describe('todo run runtime adapter', () => {
     expect(buildTodoRunPayload({
       ref: 'todo-123',
       driver: 'cmux',
-      runBackend: 'cmux',
+      runMode: 'cmux',
       runtime,
       mode: 'run',
       resume: true,
@@ -88,14 +88,14 @@ describe('todo run runtime adapter', () => {
       resume: true,
       spec: {
         ...runtime,
-        backend: 'cmux',
+        mode: 'cmux',
       },
     });
 
     expect(buildTodoRunPayload({
       ref: 'todo-123',
       driver: 'cmux',
-      runBackend: 'cmux',
+      runMode: 'cmux',
       runtime,
       mode: 'plan',
       resume: false,
@@ -115,13 +115,13 @@ describe('todo run runtime adapter', () => {
 
   it('rejects a missing Captain runtime catalog instead of inventing one', () => {
     const captainContext: RunContext = {
-      defaultBackend: 'agent',
+      defaultMode: 'agent',
       defaultProvider: 'openai',
       efforts: ['medium'],
       tools: [],
       runtimes: [],
       models: [],
-      backends: [{
+      modes: [{
         id: 'agent',
         label: 'Codex Agent',
         provider: 'openai',
@@ -157,7 +157,7 @@ describe('todo run runtime adapter', () => {
       options: initial,
       runtime: {
         ...runSpec(initial),
-        backend: 'agent',
+        mode: 'agent',
         model: 'claude-opus-4-8',
         effort: 'high',
       },
@@ -167,7 +167,7 @@ describe('todo run runtime adapter', () => {
       driver: 'agent',
       runMode: 'run',
       spec: {
-        backend: 'agent',
+        mode: 'agent',
         model: 'claude-opus-4-8',
         effort: 'high',
         budget: { timeout: '45m', maxTurns: 12 },
@@ -180,43 +180,43 @@ describe('todo run runtime adapter', () => {
     expect(options.spec).not.toHaveProperty('temperature');
   });
 
-  // Seeding every action from defaultBackend sent that backend as if the
+  // Seeding every action from defaultMode sent that mode as if the
   // operator had chosen it, which outranks the frontmatter the prompt pins.
   // todos-triage.prompt pins `model: claude` and allows only Read/Glob/Grep, so
-  // under a codex default Captain refused the run outright: "backend
+  // under a codex default Captain refused the run outright: "mode
   // codex-agent cannot enforce a per-tool policy (Glob, Grep, Read)".
   it('seeds a prompt from its own resolved runtime, not the account default', () => {
     const withPromptDefaults: RunContext = {
       ...context,
       promptDefaults: {
-        triage: { backend: 'agent', model: 'claude-opus-4-8' },
+        triage: { mode: 'agent', model: 'claude-opus-4-8' },
       },
     };
 
     expect(runSpec(defaultRunOptionsForAction('triage', withPromptDefaults))).toMatchObject({
-      backend: 'agent',
+      mode: 'agent',
       model: 'claude-opus-4-8',
     });
     // An action the server reported no default for still falls back to it.
     expect(runSpec(defaultRunOptionsForAction('run', withPromptDefaults))).toMatchObject({
-      backend: 'cmux',
+      mode: 'cmux',
     });
   });
 
-  it('keeps a remembered backend that disagrees with the prompt default', () => {
+  it("keeps a remembered mode that disagrees with the prompt default", () => {
     const withPromptDefaults: RunContext = {
       ...context,
-      promptDefaults: { triage: { backend: 'agent', model: 'claude-opus-4-8' } },
+      promptDefaults: { triage: { mode: 'agent', model: 'claude-opus-4-8' } },
     };
 
     expect(runSpec(reconcileTodoRunOptions('triage', {
       prompt: 'triage',
       driver: 'cmux',
-      spec: { backend: 'cmux', model: 'gpt-5.5' },
-    }, withPromptDefaults))).toMatchObject({ backend: 'cmux' });
+      spec: { mode: 'cmux', model: 'gpt-5.5' },
+    }, withPromptDefaults))).toMatchObject({ mode: 'cmux' });
   });
 
-  it('keeps plan lifecycle fields when RuntimeBar changes backend, model, and effort', () => {
+  it("keeps plan lifecycle fields when RuntimeBar changes mode, model, and effort", () => {
     const initial = defaultRunOptionsForAction('plan', context);
     expect(todoRunOptionsForRuntimeChange({
       action: 'plan',
@@ -224,7 +224,7 @@ describe('todo run runtime adapter', () => {
       options: initial,
       runtime: {
         ...runSpec(initial),
-        backend: 'agent',
+        mode: 'agent',
         model: 'claude-opus-4-8',
         effort: 'high',
       },
@@ -232,20 +232,20 @@ describe('todo run runtime adapter', () => {
       driver: 'agent',
       runMode: 'plan',
       plan: true,
-      spec: { backend: 'agent', model: 'claude-opus-4-8', effort: 'high' },
+      spec: { mode: 'agent', model: 'claude-opus-4-8', effort: 'high' },
     });
   });
 
 	it('labels primary buttons with mechanism and short model', () => {
-    expect(runButtonLabelForOptions('plan', { driver: 'cmux', runMode: 'plan', spec: { backend: 'cmux', model: 'gpt-5.5' } }, context)).toBe('Plan (cmux:gpt-5.5)');
-    expect(runButtonLabelForOptions('run', { driver: 'agent', runMode: 'run', spec: { backend: 'agent', model: 'claude-opus-4-8' } }, context)).toBe('Run (Agent:opus-4.8)');
+    expect(runButtonLabelForOptions('plan', { driver: 'cmux', runMode: 'plan', spec: { mode: 'cmux', model: 'gpt-5.5' } }, context)).toBe('Plan (cmux:gpt-5.5)');
+    expect(runButtonLabelForOptions('run', { driver: 'agent', runMode: 'run', spec: { mode: 'agent', model: 'claude-opus-4-8' } }, context)).toBe('Run (Agent:opus-4.8)');
 	});
 
   it('builds compact primary-button model and effort presentation', () => {
     expect(todoRunButtonPresentation({
       driver: 'agent',
       runMode: 'run',
-      spec: { backend: 'agent', model: 'claude-opus-4-8', effort: 'high' },
+      spec: { mode: 'agent', model: 'claude-opus-4-8', effort: 'high' },
     }, context)).toMatchObject({
       model: 'opus-4.8',
       effort: 'high',
@@ -254,9 +254,9 @@ describe('todo run runtime adapter', () => {
 
     const fixedEffortContext: RunContext = {
       ...context,
-      backends: context.backends.map(backend => backend.agent !== 'claude' ? backend : {
-        ...backend,
-        models: backend.models.map(model => ({
+      modes: context.modes.map(runtime => runtime.agent !== "claude" ? runtime : {
+        ...runtime,
+        models: runtime.models.map(model => ({
           ...model,
           capabilitiesKnown: true,
           reasoning: false,
@@ -267,24 +267,24 @@ describe('todo run runtime adapter', () => {
     expect(todoRunButtonPresentation({
       driver: 'agent',
       runMode: 'run',
-      spec: { backend: 'agent', model: 'claude-opus-4-8', effort: 'high' },
+      spec: { mode: 'agent', model: 'claude-opus-4-8', effort: 'high' },
     }, fixedEffortContext).effort).toBeUndefined();
 
     const openAI = todoRunButtonPresentation({
       driver: 'cmux',
       runMode: 'run',
-      spec: { backend: 'cmux', model: 'gpt-5.5', effort: 'medium' },
+      spec: { mode: 'cmux', model: 'gpt-5.5', effort: 'medium' },
     }, context);
     expect(openAI).toMatchObject({ model: 'gpt-5.5', provider: { id: 'codex' } });
     expect(openAI.provider?.iconColor).toBe('#10A37F');
   });
 
-	it('reconciles stale remembered backend models while preserving advanced options', () => {
+	it("reconciles stale remembered runtime models while preserving advanced options", () => {
 		expect(reconcileTodoRunOptions('run', {
 			driver: 'cmux',
 			runMode: 'run',
 			spec: {
-				backend: 'cmux',
+				mode: 'cmux',
 				model: 'gpt-5.3-removed',
 				effort: 'high',
 				budget: { timeout: '45m', maxTurns: 12 },
@@ -293,7 +293,7 @@ describe('todo run runtime adapter', () => {
 			driver: 'cmux',
 			runMode: 'run',
 			spec: {
-				backend: 'cmux',
+				mode: 'cmux',
 				model: 'gpt-5.5',
 				effort: 'high',
 				budget: { timeout: '45m', maxTurns: 12 },
@@ -303,18 +303,18 @@ describe('todo run runtime adapter', () => {
 		expect(reconcileTodoRunOptions('plan', {
 			driver: 'agent',
 			runMode: 'plan',
-			spec: { backend: 'agent', model: 'claude-opus-4-8', effort: 'xhigh', temperature: 0.7 },
+			spec: { mode: 'agent', model: 'claude-opus-4-8', effort: 'xhigh', temperature: 0.7 },
 		}, context)).toEqual(expect.objectContaining({
 			runMode: 'plan',
 			spec: expect.objectContaining({
-				backend: 'agent',
+				mode: 'agent',
 				model: 'claude-opus-4-8',
 				effort: 'high',
 			}),
 		}));
 		expect(reconcileTodoRunOptions('plan', {
 			driver: 'agent',
-			spec: { backend: 'agent', model: 'claude-opus-4-8', effort: 'xhigh', temperature: 0.7 },
+			spec: { mode: 'agent', model: 'claude-opus-4-8', effort: 'xhigh', temperature: 0.7 },
 		}, context)).not.toHaveProperty('spec.temperature');
 	});
 

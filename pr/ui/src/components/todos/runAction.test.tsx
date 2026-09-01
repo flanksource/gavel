@@ -5,19 +5,19 @@ import type { RunContext } from './providers';
 import { queryTestWrapper } from './queryTestWrapper';
 
 const context: RunContext = {
-  defaultBackend: 'agent',
+  defaultMode: 'agent',
   defaultProvider: 'openai',
   efforts: ['low', 'medium', 'high', 'xhigh'],
   tools: [],
   runtimes: [
-    { family: 'codex', provider: 'openai', catalogPrefix: 'openai', modes: [{ backend: 'agent', schema: { type: 'object' } }] },
-    { family: 'claude', provider: 'anthropic', catalogPrefix: 'anthropic', modes: [{ backend: 'agent', schema: { type: 'object' } }, { backend: 'cli', schema: { type: 'object' } }] },
+    { family: 'codex', provider: 'openai', catalogPrefix: 'openai', modes: [{ mode: 'agent', schema: { type: 'object' } }] },
+    { family: 'claude', provider: 'anthropic', catalogPrefix: 'anthropic', modes: [{ mode: 'agent', schema: { type: 'object' } }, { mode: 'cli', schema: { type: 'object' } }] },
   ],
   models: [
-    { id: 'gpt-5.5', provider: 'openai', label: 'GPT-5.5', reasoning: true, configured: true, backends: ['agent'], runtime: { model: 'gpt-5.5' } },
-    { id: 'claude-opus-4-8', provider: 'anthropic', label: 'Claude Opus 4.8', capabilitiesKnown: true, reasoning: true, supportedEfforts: ['low', 'high'], defaultEffort: 'high', configured: true, backends: ['agent', 'cli'], runtime: { model: 'claude-opus-4-8' } },
+    { id: 'gpt-5.5', provider: 'openai', label: 'GPT-5.5', reasoning: true, configured: true, runtime: { model: 'gpt-5.5' } },
+    { id: 'claude-opus-4-8', provider: 'anthropic', label: 'Claude Opus 4.8', capabilitiesKnown: true, reasoning: true, supportedEfforts: ['low', 'high'], defaultEffort: 'high', configured: true, runtime: { model: 'claude-opus-4-8' } },
   ],
-  backends: [
+  modes: [
     {
       id: 'agent',
       label: 'Codex Agent',
@@ -124,7 +124,7 @@ describe('TodoRunActionButton RuntimeBar', () => {
           driver: 'cli',
           runMode: 'run',
           spec: {
-            backend: 'cli',
+            mode: 'cli',
             model: 'claude-opus-4-8',
             effort: 'high',
             workflow: { commits: [{ on: 'run', gates: 'full' }] },
@@ -137,7 +137,7 @@ describe('TodoRunActionButton RuntimeBar', () => {
     expect(onRun).toHaveBeenCalledWith(expect.objectContaining({
       driver: 'cli',
       runMode: 'run',
-      spec: expect.objectContaining({ backend: 'cli', model: 'claude-opus-4-8', effort: 'high' }),
+      spec: expect.objectContaining({ mode: 'cli', model: 'claude-opus-4-8', effort: 'high' }),
     }));
   });
 

@@ -106,10 +106,10 @@ func permissionDefaults(permissions api.Permissions, cmux bool) api.Permissions 
 }
 
 // provider returns the streaming provider for a run: the test seam when set,
-// otherwise a captain provider built from the request's resolved model/backend.
+// otherwise a captain provider built from the request's resolved model and mode.
 func (e *Executor) provider(req captainai.Request, canUseTool captainai.PermissionFunc, providerSessionID string) (captainai.StreamingProvider, error) {
 	if e.stream != nil {
-		return seamProvider{fn: e.stream, canUseTool: canUseTool, model: req.Name, backend: req.Backend}, nil
+		return seamProvider{fn: e.stream, canUseTool: canUseTool, model: req.Model}, nil
 	}
 	return e.newStreamer(req, canUseTool, providerSessionID)
 }
@@ -118,8 +118,7 @@ func (e *Executor) provider(req captainai.Request, canUseTool captainai.Permissi
 type seamProvider struct {
 	fn         streamFunc
 	canUseTool captainai.PermissionFunc
-	model      string
-	backend    captainai.Backend
+	model      api.Model
 }
 
 func (p seamProvider) ExecuteStream(ctx context.Context, req captainai.Request) (<-chan captainai.Event, error) {
@@ -140,21 +139,22 @@ func (p seamProvider) Execute(ctx context.Context, req captainai.Request) (*capt
 	return &captainai.Response{Text: text.String()}, nil
 }
 
-func (p seamProvider) GetModel() string              { return p.model }
-func (p seamProvider) GetBackend() captainai.Backend { return p.backend }
+func (p seamProvider) GetModel() string { return p.model.Name }
+func (p seamProvider) GetRuntime() captainai.Runtime {
+	return api.RuntimeOf(p.model.Provider, p.model.Mode)
+}
 
-// newStreamer constructs the real captain provider for the resolved
-// model/backend. cmux backends route to the interactive-TUI provider; headless
-// claude/codex use the SDK backends.
+// newStreamer constructs the real captain provider for the resolved model and
+// mode. The cmux mode routes to the interactive-TUI provider; the headless
+// claude/codex agents use the agent and cli modes.
+//
+// The agent name and the mode are two axes now, not one composite: e.agent says
+// which family, req.Mode says which mechanism. The pair used to arrive as a
+// single "claude-cmux"-shaped token that this function took apart again.
 func (e *Executor) newStreamer(req captainai.Request, canUseTool captainai.PermissionFunc, sessionID string) (captainai.StreamingProvider, error) {
-	model := req.Name
-	backend := string(req.Backend)
-	model = strings.TrimSpace(model)
-	backend = strings.TrimSpace(backend)
-	// cmux backends route to the interactive-TUI provider regardless of agent; the
-	// provider reads the agent from the backend and the fresh session id from
-	// Config.SessionID (a resume takes the prior id from req.SessionID instead).
-	if b := captainai.Backend(backend); b == captainai.BackendClaudeCmux || b == captainai.BackendCodexCmux {
+	model := strings.TrimSpace(req.Name)
+	mode := req.Mode
+	if mode == api.ModeCmux {
 		// NewProvider rejects an empty model name; a default cmux run carries none,
 		// so fall back to the agent sentinel ("claude"/"codex"). The cmux provider's
 		// modelFlag strips that sentinel back to "" (launch with no --model).
@@ -164,7 +164,7 @@ func (e *Executor) newStreamer(req captainai.Request, canUseTool captainai.Permi
 		}
 		runtimeModel := req.Model
 		runtimeModel.Name = name
-		runtimeModel.Backend = b
+		runtimeModel.Mode = api.ModeCmux
 		provider, err := captainai.NewProvider(captainai.Config{
 			Model:      runtimeModel,
 			Budget:     req.Budget,
@@ -177,21 +177,21 @@ func (e *Executor) newStreamer(req captainai.Request, canUseTool captainai.Permi
 		}
 		streamer, ok := provider.(captainai.StreamingProvider)
 		if !ok {
-			return nil, fmt.Errorf("cmux backend %q does not support streaming", backend)
+			return nil, fmt.Errorf("the cmux runtime does not support streaming")
 		}
 		return streamer, nil
 	}
 	switch e.agent {
 	case "codex":
-		if backend != "" && captainai.Backend(backend) != captainai.BackendCodexAgent {
-			return nil, fmt.Errorf("headless codex does not support backend %q", backend)
+		if mode != "" && mode != api.ModeAgent {
+			return nil, fmt.Errorf("headless codex runs in agent mode; %q was requested", mode)
 		}
 		if model == "codex" {
 			model = ""
 		}
 		runtimeModel := req.Model
 		runtimeModel.Name = model
-		runtimeModel.Backend = captainai.BackendCodexAgent
+		runtimeModel.Mode = api.ModeAgent
 		return captainprovider.NewCodexAppServer(captainai.Config{
 			Model:      runtimeModel,
 			Budget:     req.Budget,
@@ -199,20 +199,18 @@ func (e *Executor) newStreamer(req captainai.Request, canUseTool captainai.Permi
 			CanUseTool: canUseTool,
 		})
 	case "claude":
-		if backend == "" {
-			backend = string(captainai.BackendClaudeAgent)
+		if mode == "" {
+			mode = api.ModeAgent
 		}
-		switch captainai.Backend(backend) {
-		case captainai.BackendClaudeAgent, captainai.BackendClaudeCLI:
-		default:
-			return nil, fmt.Errorf("headless claude does not support backend %q", backend)
+		if mode != api.ModeAgent && mode != api.ModeCLI {
+			return nil, fmt.Errorf("headless claude runs in agent or cli mode; %q was requested", mode)
 		}
 		if model == "" || model == "claude" {
-			model = "claude-agent-sonnet"
+			model = api.DefaultModelID
 		}
 		runtimeModel := req.Model
 		runtimeModel.Name = model
-		runtimeModel.Backend = captainai.Backend(backend)
+		runtimeModel.Mode = mode
 		provider, err := captainai.NewProvider(captainai.Config{
 			Model:      runtimeModel,
 			Budget:     req.Budget,
@@ -224,7 +222,7 @@ func (e *Executor) newStreamer(req captainai.Request, canUseTool captainai.Permi
 		}
 		streamer, ok := provider.(captainai.StreamingProvider)
 		if !ok {
-			return nil, fmt.Errorf("headless claude backend %q does not support streaming", backend)
+			return nil, fmt.Errorf("the claude %s runtime does not support streaming", mode)
 		}
 		return streamer, nil
 	default:

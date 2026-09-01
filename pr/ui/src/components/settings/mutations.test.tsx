@@ -52,7 +52,7 @@ describe('settings mutations', () => {
     client.setQueryData(promptDetailQuery('verify', scopeQuery).queryKey, currentDetail);
     client.setQueryData(promptDetailQuery('verify', otherScopeQuery).queryKey, currentDetail);
     client.setQueryData(settingsPromptsQuery().queryKey, {});
-    client.setQueryData(settingsRunContextQuery().queryKey, { backends: [], runtimes: [], models: [], efforts: [], tools: [] });
+    client.setQueryData(settingsRunContextQuery().queryKey, { modes: [], runtimes: [], models: [], efforts: [], tools: [] });
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => saved }));
     const { result } = renderHook(() => useSaveSettingsMutation(scopeQuery), { wrapper: wrapper(client) });
 
@@ -109,7 +109,7 @@ describe('settings mutations', () => {
     client.setQueryData(settingsTraceQuery(scopeQuery).queryKey, { merged: {} });
     client.setQueryData(settingsTraceQuery(otherScopeQuery).queryKey, { merged: {} });
     client.setQueryData(settingsPromptsQuery().queryKey, {});
-    client.setQueryData(settingsRunContextQuery().queryKey, { backends: [], runtimes: [], models: [], efforts: [], tools: [] });
+    client.setQueryData(settingsRunContextQuery().queryKey, { modes: [], runtimes: [], models: [], efforts: [], tools: [] });
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => saved }));
     const { result } = renderHook(() => useSavePromptMutation('verify', scopeQuery), { wrapper: wrapper(client) });
 

@@ -139,7 +139,7 @@ describe('PromptOverrideField adapter', () => {
         id: 'claude',
         label: 'Claude',
         provider: 'anthropic',
-        modes: [{ id: 'agent', label: 'Agent', backend: 'agent' }],
+        modes: [{ id: 'agent', label: 'Agent' }],
       },
     ]);
 

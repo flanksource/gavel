@@ -96,7 +96,7 @@ func TestResolveRuntimeModel(t *testing.T) {
 func TestResolveStructuredInlinePrompt(t *testing.T) {
 	cfg := verify.GavelConfig{
 		Todos: verify.TodosConfig{Plan: verify.PromptSpec{Spec: api.Spec{
-			Model:  api.Model{Name: "claude-sonnet-5", Backend: api.BackendAnthropic, Effort: api.EffortHigh},
+			Model:  api.Model{Name: "claude-sonnet-5", Mode: api.ModeAPI, Effort: api.EffortHigh},
 			Prompt: api.Prompt{User: "Plan {{body}}", System: "Be exact"},
 		}}},
 	}
@@ -109,7 +109,7 @@ func TestResolveStructuredInlinePrompt(t *testing.T) {
 	assert.Equal(t, "Be exact", plan.Declared.Prompt.System)
 	assert.Equal(t, "claude-sonnet-5", plan.EffectiveModel.Name)
 	assert.Equal(t, api.EffortHigh, plan.EffectiveModel.Effort)
-	assert.Equal(t, api.BackendAnthropic, plan.EffectiveModel.Backend)
+	assert.Equal(t, api.ModeAPI, plan.EffectiveModel.Mode)
 	assert.Equal(t, "operation", plan.ModelSource)
 }
 

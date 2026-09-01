@@ -41,7 +41,8 @@ var _ = Describe("todo run context catalog", func() {
 		runCaptainWhoami = func(captaincli.WhoamiOptions) (any, error) {
 			return captaincli.WhoamiResult{
 				Adapters: []captaincli.AdapterStatus{{
-					Backend:       "codex-agent",
+					Provider:      "openai",
+					Mode:          "agent",
 					Type:          "cli",
 					Authenticated: true,
 					Binary:        "/usr/local/bin/codex",
@@ -52,7 +53,7 @@ var _ = Describe("todo run context catalog", func() {
 				}},
 				DefaultProvider: "openai",
 				ProviderDefaults: map[string]captaincli.ProviderDefaultView{
-					"openai": {Agent: "codex-agent", Model: "gpt-captain-default", Effort: string(api.EffortHigh)},
+					"openai": {Mode: "agent", Model: "gpt-captain-default", Effort: string(api.EffortHigh)},
 				},
 			}, nil
 		}
@@ -60,33 +61,33 @@ var _ = Describe("todo run context catalog", func() {
 		context, err := todoRunContext("")
 
 		Expect(err).NotTo(HaveOccurred())
-		Expect(context.DefaultBackend).To(Equal("agent"))
+		Expect(context.DefaultMode).To(Equal("agent"))
 		Expect(context.DefaultProvider).To(Equal("openai"))
-		Expect(context.Backends).To(HaveLen(1))
-		Expect(context.Backends[0].ID).To(Equal("agent"))
-		Expect(context.Backends[0].Driver).To(Equal("agent"))
-		Expect(context.Backends[0].DefaultModel).To(Equal("gpt-captain-default"))
-		Expect(context.Backends[0].Models).To(HaveExactElements(
+		Expect(context.Modes).To(HaveLen(1))
+		Expect(context.Modes[0].ID).To(Equal("agent"))
+		Expect(context.Modes[0].Driver).To(Equal("agent"))
+		Expect(context.Modes[0].DefaultModel).To(Equal("gpt-captain-default"))
+		Expect(context.Modes[0].Models).To(HaveExactElements(
 			HaveField("ID", "gpt-captain-default"),
 			HaveField("ID", "gpt-captain-other"),
 		))
 		Expect(context.Models[0]).To(SatisfyAll(
 			HaveField("Provider", "openai"),
-			HaveField("Backends", []string{"agent"}),
+			HaveField("Modes", []string{"agent"}),
 			HaveField("Runtime", api.Model{Name: "gpt-captain-default"}),
 		))
 	})
 
-	It("prefers the agent backend when Captain defaults the provider to CLI", func() {
+	It("prefers the agent mode when Captain defaults the provider to CLI", func() {
 		runCaptainWhoami = func(captaincli.WhoamiOptions) (any, error) {
 			return captaincli.WhoamiResult{
 				Adapters: []captaincli.AdapterStatus{
-					{Backend: "claude-cli", Models: []string{"claude-opus-4-8"}},
-					{Backend: "claude-agent", Models: []string{"claude-opus-4-8"}},
+					{Provider: "anthropic", Mode: "cli", Models: []string{"claude-opus-4-8"}},
+					{Provider: "anthropic", Mode: "agent", Models: []string{"claude-opus-4-8"}},
 				},
 				DefaultProvider: "anthropic",
 				ProviderDefaults: map[string]captaincli.ProviderDefaultView{
-					"anthropic": {Agent: "claude-cli", Model: "claude-opus-4-8"},
+					"anthropic": {Mode: "cli", Model: "claude-opus-4-8"},
 				},
 			}, nil
 		}
@@ -94,7 +95,7 @@ var _ = Describe("todo run context catalog", func() {
 		context, err := todoRunContext("")
 
 		Expect(err).NotTo(HaveOccurred())
-		Expect(context.DefaultBackend).To(Equal("agent"))
+		Expect(context.DefaultMode).To(Equal("agent"))
 		Expect(context.DefaultProvider).To(Equal("anthropic"))
 	})
 
@@ -102,7 +103,8 @@ var _ = Describe("todo run context catalog", func() {
 		runCaptainWhoami = func(captaincli.WhoamiOptions) (any, error) {
 			return captaincli.WhoamiResult{
 				Adapters: []captaincli.AdapterStatus{{
-					Backend:    "claude-agent",
+					Provider:   "anthropic",
+					Mode:       "agent",
 					Type:       "cli",
 					ModelError: "Captain returned no models",
 				}},
@@ -112,35 +114,35 @@ var _ = Describe("todo run context catalog", func() {
 		context, err := todoRunContext("")
 
 		Expect(err).NotTo(HaveOccurred())
-		Expect(context.Backends).To(HaveLen(1))
-		Expect(context.Backends[0].DefaultModel).To(BeEmpty())
-		Expect(context.Backends[0].Models).To(BeEmpty())
-		Expect(context.Backends[0].ModelError).To(Equal("Captain returned no models"))
+		Expect(context.Modes).To(HaveLen(1))
+		Expect(context.Modes[0].DefaultModel).To(BeEmpty())
+		Expect(context.Modes[0].Models).To(BeEmpty())
+		Expect(context.Modes[0].ModelError).To(Equal("Captain returned no models"))
 	})
 
-	// The dialog used to seed every action from DefaultBackend, which is the
+	// The dialog used to seed every action from DefaultMode, which is the
 	// account-wide default and knows nothing about a prompt's frontmatter. Under
-	// `ai.backend: codex-agent` it therefore sent codex-agent as if the operator
+	// an openai agent default it therefore sent that runtime as if the operator
 	// had chosen it, outranking the `model: claude` that todos-triage.prompt and
 	// todos-plan.prompt pin — and because both prompts also declare a per-tool
 	// policy only the Claude transports carry, Captain refused the run with
-	// "backend codex-agent cannot enforce a per-tool policy (Glob, Grep, Read)".
+	// "the openai agent cannot enforce a per-tool policy (Glob, Grep, Read)".
 	It("resolves each prompt's own runtime rather than the account default", func() {
 		runCaptainWhoami = func(captaincli.WhoamiOptions) (any, error) {
 			return captaincli.WhoamiResult{
 				Adapters: []captaincli.AdapterStatus{
 					{
-						Backend: "codex-agent", Type: "cli", Authenticated: true,
+						Provider: "openai", Mode: "agent", Type: "cli", Authenticated: true,
 						ModelDetails: []captainai.ModelDef{{ID: "gpt-5.6-sol", CapabilitiesKnown: true}},
 					},
 					{
-						Backend: "claude-agent", Type: "cli", Authenticated: true,
+						Provider: "anthropic", Mode: "agent", Type: "cli", Authenticated: true,
 						ModelDetails: []captainai.ModelDef{{ID: "claude-opus-4-8", CapabilitiesKnown: true}},
 					},
 				},
 				DefaultProvider: "openai",
 				ProviderDefaults: map[string]captaincli.ProviderDefaultView{
-					"openai": {Agent: "codex-agent", Model: "gpt-5.6-sol"},
+					"openai": {Mode: "agent", Model: "gpt-5.6-sol"},
 				},
 			}, nil
 		}
@@ -149,24 +151,24 @@ var _ = Describe("todo run context catalog", func() {
 		dir := GinkgoT().TempDir()
 		Expect(os.WriteFile(
 			filepath.Join(dir, ".gavel.yaml"),
-			[]byte("ai:\n  backend: agent\n  model: gpt-5.6-luna\n"+
-				"todos:\n  run:\n    backend: agent\n    model: gpt-5.6-sol\n  triage: {}\n"),
+			[]byte("ai:\n  mode: agent\n  model: gpt-5.6-luna\n"+
+				"todos:\n  run:\n    mode: agent\n    model: gpt-5.6-sol\n  triage: {}\n"),
 			0o600,
 		)).To(Succeed())
 
 		context, err := todoRunContext(dir)
 
 		Expect(err).NotTo(HaveOccurred())
-		Expect(context.DefaultBackend).To(Equal("agent"), "the account default mechanism is unchanged")
+		Expect(context.DefaultMode).To(Equal("agent"), "the account default mechanism is unchanged")
 		Expect(context.DefaultProvider).To(Equal("openai"))
 		// The map must not be uniform, or it would prove nothing: todos-run.prompt
-		// pins no provider, so `run` keeps the configured codex backend, while plan
+		// pins no provider, so `run` keeps the configured codex mode, while plan
 		// and triage pin `model: claude` and must move off it.
 		Expect(context.PromptDefaults).To(HaveKeyWithValue("run",
-			HaveField("Backend", "agent")))
+			HaveField("Mode", "agent")))
 		Expect(context.PromptDefaults).To(HaveKeyWithValue("plan",
-			HaveField("Backend", "agent")))
+			HaveField("Mode", "agent")))
 		Expect(context.PromptDefaults).To(HaveKeyWithValue("triage",
-			HaveField("Backend", "agent")))
+			HaveField("Mode", "agent")))
 	})
 })

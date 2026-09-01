@@ -33,8 +33,8 @@ export function TodoRuntimeSummary({
   const presentation = todoRunButtonPresentation(options, context);
   const mode = todoRunModeLabel(options, context);
   const spec = runSpec(options);
-  const family = buildRunFamilies(context).find(entry => entry.modes.some(item => item.backend === spec.backend));
-  const modeIcon = family?.modes.find(item => item.backend === spec.backend)?.icon;
+  const family = buildRunFamilies(context).find(entry => entry.modes.some(item => item.id === spec.mode));
+  const modeIcon = family?.modes.find(item => item.id === spec.mode)?.icon;
   // provider.icon may be a runtime icon name rather than a component, so fall
   // back to the generic agent glyph unless it can be rendered directly.
   const provider = presentation.provider?.icon;

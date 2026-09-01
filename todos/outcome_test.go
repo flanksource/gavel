@@ -379,7 +379,7 @@ func TestResumeRecordsRunStartFromExecutor(t *testing.T) {
 		Driver:    "headless-codex",
 		Agent:     "codex",
 		Provider:  "openai",
-		Backend:   "codex-agent",
+		RuntimeMode: "agent",
 
 		ResolvedModel: "gpt-5.6-sol",
 		Effort:        "high",

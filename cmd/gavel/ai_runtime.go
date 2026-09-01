@@ -28,16 +28,16 @@ func defaultAIRuntimeOptions() captaincli.AIRuntimeOptions {
 //
 //   - Cwd: Captain launches the provider from the target repository even when
 //     Gavel was invoked elsewhere with --cwd.
-//   - Edit: ai-fix must edit files in place. Without it codex-cli runs
-//     read-only ("workspace is mounted read-only") and claude-cli refuses
+//   - Edit: ai-fix must edit files in place. Without it the openai cli runs
+//     read-only ("workspace is mounted read-only") and the claude CLI refuses
 //     the apply_patch tool. Captain's ToRequest converts opts.Edit into the
 //     PresetEdit permission preset, so it is set before building the request.
 func buildAIFixRequest(opts captaincli.AIRuntimeOptions, operation api.Spec, workDir string) (captainai.Config, captainai.Request, error) {
 	if opts.Model == "" {
 		opts.Model = operation.Name
 	}
-	if opts.Backend == "" {
-		opts.Backend = string(operation.Backend)
+	if opts.Mode == "" {
+		opts.Mode = string(operation.Mode)
 	}
 	if opts.Effort == "" {
 		opts.Effort = string(operation.Effort)
@@ -63,13 +63,13 @@ func buildAIFixRequest(opts captaincli.AIRuntimeOptions, operation api.Spec, wor
 	req.SetCwd(workDir)
 	if len(opts.Fallback) == 0 && len(operation.Fallbacks) > 0 {
 		cfg.Model.Fallbacks = operation.Fallbacks
-		cfg.Model, err = captainai.ResolveModelSelectors(cfg.Model)
+		cfg.Model, err = captainai.Resolve(cfg.Model)
 		if err != nil {
 			return captainai.Config{}, captainai.Request{}, err
 		}
 	}
 	req.Name = cfg.Model.Name
-	req.Backend = cfg.Model.Backend
+	req.Mode = cfg.Model.Mode
 	req.Fallbacks = cfg.Model.Fallbacks
 	if operation.NoCache {
 		req.NoCache = true

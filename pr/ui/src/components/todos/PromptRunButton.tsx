@@ -60,7 +60,7 @@ export function verificationSpec(spec: AISpecRuntimeValue): AISpecRuntimeValue {
   return {
     model: spec.model,
     id: spec.id,
-    backend: spec.backend,
+    mode: spec.mode,
     temperature: spec.temperature,
     effort: spec.effort,
     noCache: spec.noCache,
@@ -291,7 +291,7 @@ export function PromptRunAdvancedDialog({
 }) {
   const { context, loading: contextLoading, error: contextError } = useTodoRunContext(open);
   // The editor edits the spec half only; the driver/runMode siblings are decided
-  // on save from the spec's backend.
+  // on save from the spec's mode.
   const initialSpec = (options: TodoRunOptions) =>
     scope === 'verification' ? verificationSpec(runSpec(options)) : cloneSpec(runSpec(options));
   const [value, setValue] = useState<AISpecRuntimeValue>(() => initialSpec(initial));
@@ -325,12 +325,12 @@ export function PromptRunAdvancedDialog({
             onRun(rememberPromptRunOptions(scope, { spec: verificationSpec(runtimeSpec) }, context));
             return;
           }
-          const agent = agentForRuntime(context, runtimeSpec.backend, runtimeSpec.model);
-          const selection = driverForSelection(context, agent, runtimeSpec.backend);
+          const agent = agentForRuntime(context, runtimeSpec.mode, runtimeSpec.model);
+          const selection = driverForSelection(context, agent, runtimeSpec.mode);
           onRun(rememberPromptRunOptions(scope, {
             driver: selection.driver,
             runMode: 'run',
-            spec: { ...runtimeSpec, backend: selection.runBackend },
+            spec: { ...runtimeSpec, mode: selection.runMode },
           }, context));
         }}
         saveLabel={loading ? 'Running…' : verification ? 'Run verification' : 'Approve & run'}

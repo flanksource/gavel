@@ -7,7 +7,6 @@ import (
 	"slices"
 	"strings"
 
-	captainai "github.com/flanksource/captain/pkg/ai"
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/captain/pkg/api/registry"
 	captaincli "github.com/flanksource/captain/pkg/cli"
@@ -18,12 +17,15 @@ import (
 )
 
 type todoRunContextResponse struct {
-	Backends        []todoRunBackendOption `json:"backends"`
-	Runtimes        []api.RuntimeFamily    `json:"runtimes"`
-	Models          []todoRunModelOption   `json:"models"`
-	Efforts         []string               `json:"efforts"`
-	DefaultBackend  string                 `json:"defaultBackend,omitempty"`
-	DefaultProvider string                 `json:"defaultProvider,omitempty"`
+	// Modes is one row per (provider, mode) Captain can actually run, decorated
+	// with that runtime's models, auth state and binary. Runtimes below is
+	// Captain's own family catalog, which the display projection consumes.
+	Modes           []todoRunModeOption  `json:"modes"`
+	Runtimes        []api.RuntimeFamily  `json:"runtimes"`
+	Models          []todoRunModelOption `json:"models"`
+	Efforts         []string             `json:"efforts"`
+	DefaultMode     string               `json:"defaultMode,omitempty"`
+	DefaultProvider string               `json:"defaultProvider,omitempty"`
 	// Tools is the catalog the run dialog's tool-permissions control renders, so
 	// the per-tool Auto/Ask/Off choices map to real agent tools.
 	Tools []todoRunToolOption `json:"tools"`
@@ -32,26 +34,26 @@ type todoRunContextResponse struct {
 	// fixture fences) so the dashboard can render the schema-driven run form
 	// (clicky PromptDialog/JsonSchemaForm). Modes with no inputs are omitted.
 	InputSchemas map[string]json.RawMessage `json:"inputSchemas,omitempty"`
-	// PromptDefaults is the (backend, model) each named prompt actually resolves
-	// to, keyed by prompt name.
+	// PromptDefaults is the (mode, model) each named prompt actually resolves to,
+	// keyed by prompt name.
 	//
-	// DefaultBackend is Captain's account-wide default and knows nothing about a
-	// prompt's frontmatter, so a dialog seeded from it sends that backend as if
-	// the operator had chosen it — which outranks the frontmatter it was supposed
-	// to defer to. `todos-triage.prompt` pins `model: claude` and declares a
-	// per-tool policy only the Claude transports carry, so under a codex
-	// `ai.backend` the run was rejected for a pairing nobody configured. These
-	// come from todos/spec.Resolve, the same resolution the run itself performs.
+	// DefaultMode is Captain's account-wide default and knows nothing about a
+	// prompt's frontmatter, so a dialog seeded from it sends that mode as if the
+	// operator had chosen it — which outranks the frontmatter it was supposed to
+	// defer to. `todos-triage.prompt` pins `model: claude` and declares a per-tool
+	// policy only the Claude transports carry, so under a codex `ai.mode` the run
+	// was rejected for a pairing nobody configured. These come from
+	// todos/spec.Resolve, the same resolution the run itself performs.
 	PromptDefaults map[string]todoRunPromptDefault `json:"promptDefaults,omitempty"`
 }
 
 // todoRunPromptDefault is one prompt's resolved runtime.
 type todoRunPromptDefault struct {
-	Backend string `json:"backend,omitempty"`
-	Model   string `json:"model,omitempty"`
+	Mode  string `json:"mode,omitempty"`
+	Model string `json:"model,omitempty"`
 }
 
-type todoRunBackendOption struct {
+type todoRunModeOption struct {
 	ID            string                 `json:"id"`
 	Label         string                 `json:"label"`
 	Provider      string                 `json:"provider"`
@@ -103,33 +105,32 @@ func todoRunContext(workDir string) (todoRunContextResponse, error) {
 		return todoRunContextResponse{}, err
 	}
 	models := captaincli.PromptModelCatalog(who.Adapters)
-	backends := make([]todoRunBackendOption, 0, len(who.Adapters))
+	modes := make([]todoRunModeOption, 0, len(who.Adapters))
 	for _, status := range who.Adapters {
-		backend := captainai.Backend(strings.TrimSpace(status.Backend))
-		provider := backend.ModelProvider()
-		mode := backend.Mode()
-		if provider == nil || !supportedTodoRunFamily(provider.AgentName) {
+		provider, ok := api.ProviderByName(strings.TrimSpace(status.Provider))
+		mode := api.RuntimeMode(strings.TrimSpace(status.Mode))
+		if !ok || !supportedTodoRunFamily(provider.AgentName) {
 			continue
 		}
 		if _, err := drivers.Parse(string(mode)); err != nil {
 			continue
 		}
-		backends = append(backends, todoRunBackendOptionFor(backend, status, who.ProviderDefaults[provider.Name].Model, models))
+		modes = append(modes, todoRunModeOptionFor(provider, mode, status, who.ProviderDefaults[provider.Name].Model, models))
 	}
-	if len(backends) == 0 {
+	if len(modes) == 0 {
 		return todoRunContextResponse{}, fmt.Errorf("captain returned no supported TODO run providers")
 	}
-	defaultBackend := defaultTodoRunBackend(who, backends)
+	defaultMode := defaultTodoRunMode(who, modes)
 	promptDefaults, err := todoRunPromptDefaults(workDir)
 	if err != nil {
 		return todoRunContextResponse{}, err
 	}
 	return todoRunContextResponse{
-		Backends:        backends,
+		Modes:           modes,
 		Runtimes:        who.Runtimes,
 		Models:          models,
 		Efforts:         todoRunEfforts(),
-		DefaultBackend:  defaultBackend,
+		DefaultMode:     defaultMode,
 		DefaultProvider: who.DefaultProvider,
 		Tools:           todoRunToolCatalog(),
 		InputSchemas:    todoRunInputSchemas(),
@@ -137,7 +138,7 @@ func todoRunContext(workDir string) (todoRunContextResponse, error) {
 	}, nil
 }
 
-// todoRunPromptDefaults resolves every catalogued prompt to the (backend, model)
+// todoRunPromptDefaults resolves every catalogued prompt to the (mode, model)
 // its run would use, so the dialog can seed itself from the prompt rather than
 // from an account-wide default that overrides the prompt's own frontmatter.
 //
@@ -159,31 +160,28 @@ func todoRunPromptDefaults(workDir string) (map[string]todoRunPromptDefault, err
 		if err != nil {
 			return nil, fmt.Errorf("resolve the %s prompt's runtime: %w", name, err)
 		}
-		backend, model, err := resolveTodoRunBackendModel(
+		mode, model, err := resolveTodoRunRuntime(
 			resolved.Driver, string(resolved.Spec.Mode), resolved.Spec.Name)
 		if err != nil {
-			return nil, fmt.Errorf("resolve the %s prompt's backend: %w", name, err)
+			return nil, fmt.Errorf("resolve the %s prompt's runtime mode: %w", name, err)
 		}
-		defaults[name] = todoRunPromptDefault{Backend: backend, Model: model}
+		defaults[name] = todoRunPromptDefault{Mode: mode, Model: model}
 	}
 	return defaults, nil
 }
 
-func todoRunBackendOptionFor(
-	backend captainai.Backend,
+func todoRunModeOptionFor(
+	provider *api.ModelProvider,
+	runtimeMode api.RuntimeMode,
 	status captaincli.AdapterStatus,
 	captainDefaultModel string,
 	catalog []captaincli.PromptModelCatalogEntry,
-) todoRunBackendOption {
-	provider := backend.ModelProvider()
-	if provider == nil {
-		panic(fmt.Sprintf("Captain returned invalid backend %q", backend))
-	}
+) todoRunModeOption {
 	configured := status.Ready()
-	mode := string(backend.Mode())
-	models := todoRunModelsForBackend(catalog, provider.Name, mode, configured)
+	mode := string(runtimeMode)
+	models := todoRunModelsForMode(catalog, provider.Name, mode, configured)
 	label := strings.ToUpper(provider.AgentName[:1]) + provider.AgentName[1:] + " " + mechanismLabel(mode)
-	return todoRunBackendOption{
+	return todoRunModeOption{
 		ID:            mode,
 		Label:         label,
 		Provider:      provider.Name,
@@ -220,15 +218,15 @@ func todoRunWhoami() (captaincli.WhoamiResult, error) {
 	return who, nil
 }
 
-func todoRunModelsForBackend(
+func todoRunModelsForMode(
 	catalog []captaincli.PromptModelCatalogEntry,
 	provider string,
-	backend string,
+	runtimeMode string,
 	configured bool,
 ) []todoRunModelOption {
 	out := make([]todoRunModelOption, 0)
 	for _, model := range catalog {
-		if model.Provider != provider || !slices.Contains(model.Backends, backend) {
+		if model.Provider != provider || !slices.Contains(model.Modes, runtimeMode) {
 			continue
 		}
 		model.Configured = configured
@@ -351,20 +349,37 @@ func validTodoRunEffort(effort string) bool {
 	return api.Effort(effort).Valid() && effort != ""
 }
 
-func resolveTodoRunBackendModel(kind drivers.Kind, backend, model string) (string, string, error) {
-	backend = strings.TrimSpace(backend)
+// resolveTodoRunRuntime returns the (mode, model) pair a run would execute on,
+// falling back to the driver's own mechanism when the spec names none.
+func resolveTodoRunRuntime(kind drivers.Kind, mode, model string) (string, string, error) {
+	mode = strings.TrimSpace(mode)
 	model = strings.TrimSpace(model)
-	if backend == "" {
-		backend = string(kind)
+	if mode == "" {
+		mode = string(kind)
 	}
 	if model == "" {
 		model = "claude"
 	}
-	resolved, err := registry.ResolveModel(api.Model{Name: model, Mode: registry.RuntimeMode(backend)})
+	resolved, err := registry.ResolveModel(api.Model{Name: model, Mode: registry.RuntimeMode(mode)})
 	if err != nil {
 		return "", "", err
 	}
 	return string(resolved.Mode), resolved.Name, nil
+}
+
+// providerKey names the family a spec's model belongs to. It reads the resolved
+// descriptor when there is one and derives it from the name otherwise — the
+// provider is a resolution result, never something the spec authored, so there
+// is no field to read it from directly.
+func providerKey(model api.Model) string {
+	if model.Provider != nil {
+		return model.Provider.Name
+	}
+	provider, err := api.ProviderFor(model.Name)
+	if err != nil {
+		return ""
+	}
+	return provider.Name
 }
 
 func mechanismLabel(mechanism string) string {

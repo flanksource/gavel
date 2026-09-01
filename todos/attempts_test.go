@@ -119,7 +119,7 @@ func TestSaveAttempt_WritesTranscriptAndTable(t *testing.T) {
 			Driver:        "cli",
 			Agent:         "claude",
 			Provider:      "anthropic",
-			Backend:       "claude-agent",
+			RuntimeMode:   "agent",
 			ResolvedModel: "claude-sonnet-5",
 			Effort:        "high",
 		},
@@ -145,7 +145,7 @@ func TestSaveAttempt_WritesTranscriptAndTable(t *testing.T) {
 		"**Driver:** cli",
 		"**Agent:** claude",
 		"**Provider:** anthropic",
-		"**Backend:** claude-agent",
+		"**Mode:** agent",
 		"**Model:** claude-sonnet-5",
 		"**Effort:** high",
 	} {

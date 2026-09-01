@@ -61,7 +61,7 @@ vi.mock('@flanksource/clicky-ui/ai', () => ({
     id: 'codex',
     label: 'Codex',
     provider: 'openai',
-    modes: [{ id: 'agent', label: 'Agent', backend: 'agent', defaultModel: 'gpt-5.6-sol' }],
+    modes: [{ id: 'agent', label: 'Agent', defaultModel: 'gpt-5.6-sol' }],
   }],
   promptRuntimeValueToPayload: (value: unknown) => ({ spec: value }),
   reconcileModelCapabilities: (value: unknown) => value,
@@ -96,7 +96,7 @@ const todo: TodoItem = {
 const testSchema = { type: 'object' as const, properties: { paths: { type: 'array' } } };
 const lintSchema = { type: 'object' as const, properties: { files: { type: 'array' } } };
 const verificationRunContext = {
-  defaultBackend: 'agent',
+  defaultMode: 'agent',
   defaultProvider: 'openai',
   efforts: ['low', 'medium', 'high'],
   tools: [],
@@ -104,7 +104,7 @@ const verificationRunContext = {
     family: 'codex',
     provider: 'openai',
     catalogPrefix: 'openai',
-    modes: [{ backend: 'agent', schema: { type: 'object' }, defaultModel: 'gpt-5.6-sol' }],
+    modes: [{ mode: 'agent', schema: { type: 'object' }, defaultModel: 'gpt-5.6-sol' }],
   }],
   models: [{
     id: 'gpt-5.6-sol',
@@ -112,10 +112,9 @@ const verificationRunContext = {
     label: 'GPT-5.6 Sol',
     reasoning: true,
     configured: true,
-    backends: ['agent'],
     runtime: { model: 'gpt-5.6-sol' },
   }],
-  backends: [{
+  modes: [{
     id: 'agent',
     label: 'Codex Agent',
     provider: 'openai',
@@ -278,7 +277,7 @@ describe('TodoVerification', () => {
       'gavel.pr-ui.promptRunChoices.v2',
       JSON.stringify({
         verification: {
-          last: { spec: { backend: 'agent', model: 'gpt-5.6-sol', effort: 'high' } },
+          last: { spec: { mode: 'agent', model: 'gpt-5.6-sol', effort: 'high' } },
           recent: [],
         },
       }),

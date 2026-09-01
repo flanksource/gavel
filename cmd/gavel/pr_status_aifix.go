@@ -87,12 +87,12 @@ func runPRStatusAIFix(ctx context.Context, opts PRStatusOptions, result *prwatch
 	}()
 	streamer, ok := p.(captainai.StreamingProvider)
 	if !ok {
-		return fmt.Errorf("backend %q is not streaming; choose a streaming backend (claude-cli, codex-cli, gemini-cli)", aiCfg.Model.Backend)
+		return fmt.Errorf("runtime %q is not streaming; choose a cli, agent or cmux runtime", p.GetRuntime())
 	}
 
 	maxIters := capverify.MaxIterationsForWorkflow(req.Workflow)
 	logger.Infof("pr ai-fix: invoking %s (%s), max-iter=%d, budget=$%.2f",
-		aiCfg.Model.Name, aiCfg.Model.Backend, maxIters, aiCfg.Budget.Cost)
+		aiCfg.Model.Name, p.GetRuntime(), maxIters, aiCfg.Budget.Cost)
 
 	// Commit hooks lead the list so that at PhaseRun they cut their commits
 	// before any later hook acts on the result. Pushing per turn is what makes the

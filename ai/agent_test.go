@@ -91,7 +91,7 @@ func TestNormalizeEnv_NoKeyNoChange(t *testing.T) {
 	}
 }
 
-func TestNewProvider_ReportsBackendKeyAndSimilarEnvName(t *testing.T) {
+func TestNewProvider_ReportsRuntimeKeyAndSimilarEnvName(t *testing.T) {
 	clearAllKnownKeys(t)
 	t.Setenv("OPEN_AI_API_KEY", "must-not-leak")
 
@@ -101,7 +101,7 @@ func TestNewProvider_ReportsBackendKeyAndSimilarEnvName(t *testing.T) {
 	}
 	message := err.Error()
 	for _, want := range []string{
-		`API key not found for backend "openai"`,
+		`API key not found for runtime "openai api"`,
 		`model "api:terra"`,
 		"set OPENAI_API_KEY (also accepts OPENAI_KEY)",
 		"similar environment variable found: OPEN_AI_API_KEY (did you mean OPENAI_API_KEY?)",
@@ -141,11 +141,17 @@ func TestWithCredentialHint_IgnoresNonCredentialErrors(t *testing.T) {
 	}
 }
 
-// clearAllKnownKeys unsets every canonical + alias in envAliases for the
-// duration of the test. Uses t.Setenv so the originals are restored on
-// cleanup.
+// clearAllKnownKeys makes every credential unreachable for one test: every
+// canonical + alias in envAliases, via t.Setenv so the originals are restored
+// on cleanup.
+//
+// It also moves HOME: an api-mode key is resolved from captain's credential
+// vault (~/.config/captain/vault) before the environment is consulted, so
+// clearing env vars alone left a developer's real stored key answering — and
+// the "no key" tests passed or failed by machine.
 func clearAllKnownKeys(t *testing.T) {
 	t.Helper()
+	t.Setenv("HOME", t.TempDir())
 	for canonical, aliases := range envAliases {
 		t.Setenv(canonical, "")
 		_ = os.Unsetenv(canonical)

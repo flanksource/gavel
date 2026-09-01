@@ -52,7 +52,7 @@ func writeTranscript(todo *types.TODO, result *ExecutionResult) (string, error) 
 		{"Driver", result.Runtime.Driver},
 		{"Agent", result.Runtime.Agent},
 		{"Provider", result.Runtime.Provider},
-		{"Backend", result.Runtime.Backend},
+		{"Mode", result.Runtime.RuntimeMode},
 		{"Model", result.Runtime.ResolvedModel},
 		{"Effort", result.Runtime.Effort},
 	} {

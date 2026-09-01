@@ -53,7 +53,7 @@ func registerTodoEntity() error {
 
 // resolveBulkRunOptions resolves a bulk run the way the dashboard's own single
 // run resolves: through normalizeTodoRunOptions, which applies the (driver,
-// backend) catalog and admits the run to ask for a Bash approval because the
+// mode) catalog and admits the run to ask for a Bash approval because the
 // dashboard serves /api/todos/session/approve. Without this a bulk run would
 // quietly differ from the single run started from the same page.
 func resolveBulkRunOptions(_ context.Context, req bulk.RunRequest) (run.Options, error) {

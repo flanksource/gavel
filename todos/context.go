@@ -37,7 +37,7 @@ type RunStartMetadata struct {
 	Driver        string
 	Agent         string
 	Provider      string
-	Backend       string
+	RuntimeMode   string
 	ResolvedModel string
 	Effort        string
 	// Spec, when set, is the request as it stands after setup has run: the

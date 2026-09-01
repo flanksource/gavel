@@ -121,7 +121,7 @@ func TestRenderAttemptReportsResolvedRuntimeAndMultilineError(t *testing.T) {
 	body := renderAttempt(&types.TODO{TODOFrontmatter: types.TODOFrontmatter{Attempts: 1}}, &todos.ExecutionResult{
 		Runtime: todos.RunStartMetadata{
 			Driver: "cli", Agent: "claude", Provider: "anthropic",
-			Backend: "claude-agent", ResolvedModel: "claude-sonnet-5", Effort: "high",
+			RuntimeMode: "agent", ResolvedModel: "claude-sonnet-5", Effort: "high",
 		},
 		ErrorMessage: "Claude Code process exited with code 1\nstderr:\nauthentication failed",
 	})
@@ -130,7 +130,7 @@ func TestRenderAttemptReportsResolvedRuntimeAndMultilineError(t *testing.T) {
 		"- **Driver:** cli",
 		"- **Agent:** claude",
 		"- **Provider:** anthropic",
-		"- **Backend:** claude-agent",
+		"- **Mode:** agent",
 		"- **Model:** claude-sonnet-5",
 		"- **Effort:** high",
 		"- **Error:**\n\n```text\nClaude Code process exited with code 1\nstderr:\nauthentication failed\n```",

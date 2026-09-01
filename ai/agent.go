@@ -56,9 +56,9 @@ var normalizeOnce sync.Once
 // wrapper cannot express. NewAgent is the higher-level surface built on top.
 func NewProvider(cfg AgentConfig) (captainai.Provider, error) {
 	NormalizeEnv()
-	// Resolve once, here, so the provider is built from a model that already
-	// carries its concrete backend rather than one re-derived from a bare name.
-	resolved, err := captainai.ResolveModelSelectors(cfg.Model)
+	// Resolve once, here, so the provider is built from a driver-ready model
+	// rather than one re-derived from a bare name at dispatch.
+	resolved, err := captainai.Resolve(cfg.Model)
 	if err != nil {
 		return nil, err
 	}
@@ -145,8 +145,11 @@ func withCredentialHint(cfg AgentConfig, err error) error {
 	if !captainai.IsMissingAPIKey(err) {
 		return err
 	}
-	backend := credentialBackend(cfg)
-	canonical := captainai.AuthEnvVars(backend)
+	runtime, err2 := credentialRuntime(cfg)
+	if err2 != nil {
+		return err
+	}
+	canonical := captainai.AuthEnvVars(runtime.Provider, runtime.Mode)
 	if len(canonical) == 0 {
 		return err
 	}
@@ -174,7 +177,7 @@ func withCredentialHint(cfg AgentConfig, err error) error {
 	return &credentialHintError{
 		cause:   err,
 		model:   cfg.Model.Name,
-		backend: backend,
+		runtime: api.RuntimeOf(runtime.Provider, runtime.Mode).String(),
 		hint:    hint,
 	}
 }
@@ -182,30 +185,26 @@ func withCredentialHint(cfg AgentConfig, err error) error {
 type credentialHintError struct {
 	cause   error
 	model   string
-	backend captainai.Backend
+	runtime string
 	hint    string
 }
 
 func (e *credentialHintError) Error() string {
-	return fmt.Sprintf("API key not found for backend %q (model %q; %s)", e.backend, e.model, e.hint)
+	return fmt.Sprintf("API key not found for runtime %q (model %q; %s)", e.runtime, e.model, e.hint)
 }
 
 func (e *credentialHintError) Unwrap() error { return e.cause }
 
-// credentialBackend reports which provider's credentials a config needs.
+// credentialRuntime reports which runtime's credentials a config needs.
 //
-// It reads the backend off the model rather than re-deriving it from the name:
+// It reads the pair off the model rather than re-deriving it from the name:
 // NewProvider resolves cfg.Model before this can be reached, and re-inferring
-// from a bare name is how a model's backend gets replaced by a guess.
-func credentialBackend(cfg AgentConfig) captainai.Backend {
-	if cfg.Model.Backend.Valid() {
-		return cfg.Model.Backend
+// from a bare name is how a model's runtime gets replaced by a guess.
+func credentialRuntime(cfg AgentConfig) (api.Model, error) {
+	if cfg.Model.Provider != nil && cfg.Model.Mode != "" {
+		return cfg.Model, nil
 	}
-	resolved, err := captainai.ResolveModelSelectors(cfg.Model)
-	if err != nil {
-		return ""
-	}
-	return resolved.Backend
+	return captainai.Resolve(cfg.Model)
 }
 
 func appendUnique(values []string, additions ...string) []string {

@@ -57,7 +57,7 @@ func TestResolvedConfigResultStructuredAndPrettyOutput(t *testing.T) {
 		Prompts: []promptregistry.ResolvedPrompt{{
 			ID: "commit.message", Title: "Commit message", ConfigPath: "commit.message",
 			Source: "inline", Raw: "Review {{patch}}", Body: "Review {{patch}}",
-			EffectiveModel: api.Model{Name: "claude-code-sonnet", Backend: api.BackendClaudeCLI},
+			EffectiveModel: api.Model{Name: "claude-sonnet-5", Mode: api.ModeCLI},
 			ModelSource:    "operation",
 		}},
 	}

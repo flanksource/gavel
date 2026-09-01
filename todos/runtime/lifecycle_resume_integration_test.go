@@ -74,14 +74,14 @@ func TestRecordRunStartResumeKeepsExecutionSession(t *testing.T) {
 	preparation, err := provider.PrepareRun(t.Context(), todo, todos.RunPreparation{
 		Mode: types.ModeRun, ExecutorName: "headless-codex",
 		Requested: captaindb.PromptRunRuntimeSelection{
-			Provider: "openai", Backend: "codex-agent", Model: "gpt-5.6-sol", Effort: "high",
+			Provider: "openai", Mode: "agent", Model: "gpt-5.6-sol", Effort: "high",
 		},
 	})
 	require.NoError(t, err)
 	require.NotEmpty(t, preparation.SessionID)
 	require.NoError(t, provider.RecordRunStart(t.Context(), todo, todos.RunStartMetadata{
 		SessionID: providerSessionID, Mode: "run", Driver: "headless-codex", Agent: "codex",
-		Provider: "openai", Backend: "codex-agent", ResolvedModel: "gpt-5.6-sol", Effort: "high",
+		Provider: "openai", RuntimeMode: "agent", ResolvedModel: "gpt-5.6-sol", Effort: "high",
 	}))
 
 	issue, err := provider.Repository().GetIssue(t.Context(), mustUUID(t, todo.ID))
@@ -127,7 +127,7 @@ func TestRecordRunStartResumeKeepsExecutionSession(t *testing.T) {
 
 	assert.Equal(t, "headless-codex", resumed.Runtime.Driver, "resume must not erase the recorded driver")
 	assert.Equal(t, captaindb.PromptRunRuntimeSelection{
-		Provider: "openai", Backend: "codex-agent", Model: "gpt-5.6-sol", Effort: "high",
+		Provider: "openai", Mode: "agent", Model: "gpt-5.6-sol", Effort: "high",
 	}, resumed.Runtime.Resolved, "resume must not erase the resolved runtime")
 
 	require.NoError(t, provider.reloadTODO(t.Context(), todo, todo.CWD))

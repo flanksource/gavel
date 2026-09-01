@@ -11,14 +11,14 @@ describe('promptModelCatalog', () => {
         label: 'Sonnet',
         reasoning: true,
         configured: true,
-        backends: ['agent', 'cli', 'cmux'],
+        modes: ['agent', 'cli', 'cmux'],
         runtime: { model: 'claude-sonnet' },
       },
     ];
     const context: RunContext = {
       efforts: [],
       tools: [],
-      backends: [],
+      modes: [],
       runtimes: [],
       models,
     };

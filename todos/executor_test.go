@@ -125,10 +125,10 @@ func TestExecutorContextRecordsResolvedRuntimeBeforeSessionID(t *testing.T) {
 
 	execCtx.RecordRunStart(RunStartMetadata{
 		Mode: "run", Driver: "cli", Agent: "claude", Provider: "anthropic",
-		Backend: "claude-agent", ResolvedModel: "claude-sonnet-5", Effort: "high",
+		RuntimeMode: "agent", ResolvedModel: "claude-sonnet-5", Effort: "high",
 	})
 
-	if recorded.ResolvedModel != "claude-sonnet-5" || recorded.Backend != "claude-agent" {
+	if recorded.ResolvedModel != "claude-sonnet-5" || recorded.RuntimeMode != "agent" {
 		t.Fatalf("run metadata was not recorded before a provider session ID existed: %+v", recorded)
 	}
 }

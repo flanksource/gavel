@@ -144,12 +144,12 @@ func TestRun_ErrorsWhenReLintMissingAndViolationsPresent(t *testing.T) {
 type fakeStreaming struct {
 	mu       sync.Mutex
 	model    string
-	backend  captainai.Backend
+	runtime  captainai.Runtime
 	requests []captainai.Request
 }
 
 func (f *fakeStreaming) GetModel() string              { return f.model }
-func (f *fakeStreaming) GetBackend() captainai.Backend { return f.backend }
+func (f *fakeStreaming) GetRuntime() captainai.Runtime { return f.runtime }
 func (f *fakeStreaming) Execute(ctx context.Context, req captainai.Request) (*captainai.Response, error) {
 	return nil, errors.New("not used")
 }
@@ -168,7 +168,9 @@ func (f *fakeStreaming) ExecuteStream(ctx context.Context, req captainai.Request
 type fakeBuffered struct{}
 
 func (f *fakeBuffered) GetModel() string              { return "buf" }
-func (f *fakeBuffered) GetBackend() captainai.Backend { return captainai.Backend("buffered-only") }
+func (f *fakeBuffered) GetRuntime() captainai.Runtime {
+	return captainai.Runtime{Provider: "anthropic", Mode: captainai.ModeAPI}
+}
 func (f *fakeBuffered) Execute(ctx context.Context, req captainai.Request) (*captainai.Response, error) {
 	return &captainai.Response{}, nil
 }
@@ -177,8 +179,8 @@ func (f *fakeBuffered) Execute(ctx context.Context, req captainai.Request) (*cap
 // fields callers set on AIConfig + AIRequestProto — the saved captain
 // configure defaults that gavel just learned to honour.
 func TestRun_UsesAIConfigFromCaller(t *testing.T) {
-	p := &fakeStreaming{model: "gpt-5.5", backend: captainai.Backend("test-streaming")}
-	captainai.RegisterProvider(captainai.Backend("test-streaming"), func(cfg captainai.Config) (captainai.Provider, error) {
+	p := &fakeStreaming{model: "gpt-5.5", runtime: captainai.Runtime{Provider: "openai", Mode: captainai.ModeAgent}}
+	captainai.RegisterProvider(captainai.Runtime{Provider: "openai", Mode: captainai.ModeAgent}, func(cfg captainai.Config) (captainai.Provider, error) {
 		p.model = cfg.Model.Name
 		return p, nil
 	})
@@ -189,7 +191,7 @@ func TestRun_UsesAIConfigFromCaller(t *testing.T) {
 		Initial:       resultsWith("fakelint", violation("x.go", "missing comma", "RULE", 7)),
 		MaxIterations: 1,
 		AIConfig: captainai.Config{
-			Model: api.Model{Name: "gpt-5.5", Backend: captainai.Backend("test-streaming")},
+			Model: api.Model{Name: "gpt-5.5", Mode: captainai.ModeAgent},
 		},
 		AIRequestProto: captainai.Request{
 			Model:       api.Model{Effort: api.EffortHigh},
@@ -255,8 +257,8 @@ func TestRun_NoModelErrors(t *testing.T) {
 // is reported back to the caller instead of being silently swallowed. The
 // loop must stop fast so the model isn't asked to fix stale violations.
 func TestRun_SurfacesReLintError(t *testing.T) {
-	p := &fakeStreaming{model: "rl", backend: captainai.Backend("test-relint-err")}
-	captainai.RegisterProvider(captainai.Backend("test-relint-err"), func(cfg captainai.Config) (captainai.Provider, error) {
+	p := &fakeStreaming{model: "gpt-5.6-sol", runtime: captainai.Runtime{Provider: "openai", Mode: captainai.ModeAgent}}
+	captainai.RegisterProvider(captainai.Runtime{Provider: "openai", Mode: captainai.ModeAgent}, func(cfg captainai.Config) (captainai.Provider, error) {
 		return p, nil
 	})
 	boom := errors.New("re-lint command failed: exit status 1")
@@ -264,7 +266,7 @@ func TestRun_SurfacesReLintError(t *testing.T) {
 		Initial:       resultsWith("fakelint", violation("a", "x", "R", 1)),
 		MaxIterations: 3,
 		AIConfig: captainai.Config{
-			Model: api.Model{Name: "rl", Backend: captainai.Backend("test-relint-err")},
+			Model: api.Model{Name: "gpt-5.6-sol", Mode: captainai.ModeAgent},
 		},
 		ReLint: func(ctx context.Context) ([]*linters.LinterResult, error) {
 			return nil, boom
@@ -281,24 +283,24 @@ func TestRun_SurfacesReLintError(t *testing.T) {
 	}
 }
 
-// TestRun_NonStreamingBackendErrors guards against backends that only
+// TestRun_NonStreamingRuntimeErrors guards against runtimes that only
 // implement buffered Execute. Aifix needs streaming for live progress, so
 // it must error rather than silently degrade to one-shot calls.
-func TestRun_NonStreamingBackendErrors(t *testing.T) {
-	captainai.RegisterProvider(captainai.Backend("test-buffered-only"), func(cfg captainai.Config) (captainai.Provider, error) {
+func TestRun_NonStreamingRuntimeErrors(t *testing.T) {
+	captainai.RegisterProvider(captainai.Runtime{Provider: "anthropic", Mode: captainai.ModeAPI}, func(cfg captainai.Config) (captainai.Provider, error) {
 		return &fakeBuffered{}, nil
 	})
 	_, err := Run(context.Background(), Request{
 		Initial: resultsWith("fakelint", violation("a", "x", "R", 1)),
 		ReLint:  func(ctx context.Context) ([]*linters.LinterResult, error) { return nil, nil },
 		AIConfig: captainai.Config{
-			Model: api.Model{Name: "buf", Backend: captainai.Backend("test-buffered-only")},
+			Model: api.Model{Name: "claude-sonnet-5", Mode: captainai.ModeAPI},
 		},
 	})
 	if err == nil {
-		t.Fatal("expected error for non-streaming backend, got nil")
+		t.Fatal("expected error for a non-streaming runtime, got nil")
 	}
 	if !strings.Contains(err.Error(), "not streaming") {
-		t.Errorf("error %q should explain the backend is not streaming", err.Error())
+		t.Errorf("error %q should explain the runtime is not streaming", err.Error())
 	}
 }

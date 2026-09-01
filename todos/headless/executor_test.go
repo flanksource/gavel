@@ -24,7 +24,7 @@ type Config struct {
 	WorkDir        string
 	Agent          string
 	Model          string
-	Backend        string
+	RuntimeMode    string
 	Effort         string
 	Fallbacks      api.ModelList
 	MaxTurns       int
@@ -52,9 +52,8 @@ func newTestExecutor(config Config) *Executor {
 	if model.Name == "" && config.Agent == "codex" {
 		model.Name = "codex"
 	}
-	if config.Backend != "" {
-		model.Backend = captainai.Backend(config.Backend)
-		model.Mode = model.Backend.Mode()
+	if config.RuntimeMode != "" {
+		model.Mode = captainai.RuntimeMode(config.RuntimeMode)
 	} else if model.Mode == "" {
 		model.Mode = api.ModeAgent
 	}
@@ -147,7 +146,7 @@ func TestHeadlessCompletesOnResult(t *testing.T) {
 	log := logger.NewBufferedLogger(20)
 	e := newTestExecutor(Config{
 		WorkDir: t.TempDir(), Agent: "claude", Model: "claude-agent-sonnet",
-		Backend: string(captainai.BackendClaudeAgent), Effort: "high", Stream: fakeStream(
+		RuntimeMode: string(captainai.ModeAgent), Effort: "high", Stream: fakeStream(
 			captainai.Event{Kind: captainai.EventSystem, SessionID: "sess-1"},
 			captainai.Event{Kind: captainai.EventText, Text: "working on it"},
 			captainai.Event{Kind: captainai.EventToolUse, Tool: "Edit", Input: map[string]any{"file_path": "/repo/x.go"}},
@@ -201,7 +200,7 @@ func TestHeadlessCompletesOnResult(t *testing.T) {
 		messages = append(messages, entry.Message)
 	}
 	if got := strings.Join(messages, "\n"); !strings.Contains(got,
-		"Resolved TODO runtime: driver=agent agent=claude provider=anthropic backend=claude-agent model=claude-agent-sonnet effort=high model_source=run-option") {
+		"Resolved TODO runtime: driver=agent agent=claude provider=anthropic mode=agent model=claude-agent-sonnet effort=high model_source=run-option") {
 		t.Fatalf("resolved runtime log missing selection details:\n%s", got)
 	}
 }
@@ -222,7 +221,7 @@ func TestHeadlessLogsPromptDefaultModelSource(t *testing.T) {
 		messages = append(messages, entry.Message)
 	}
 	if got := strings.Join(messages, "\n"); !strings.Contains(got,
-		"driver=agent agent=claude provider=unknown backend=default model=claude effort=default model_source=todos.run-prompt") {
+		"driver=agent agent=claude provider=anthropic mode=agent model=claude-opus-5 effort=default model_source=todos.run-prompt") {
 		t.Fatalf("prompt-default runtime log missing selection source:\n%s", got)
 	}
 }
@@ -325,7 +324,7 @@ func TestHeadlessPreservesCanonicalSpecAndRunsNativeWorkflow(t *testing.T) {
 		t.Fatalf("write verifier fixture: %v", err)
 	}
 	spec := api.Spec{
-		Model:  api.Model{Name: "claude-sonnet-5", Backend: captainai.BackendClaudeAgent, Effort: api.EffortHigh},
+		Model:  api.Model{Name: "claude-sonnet-5", Mode: captainai.ModeAgent, Effort: api.EffortHigh},
 		Prompt: api.Prompt{User: "Implement the reviewed change.", System: "Keep the patch narrow."},
 		Budget: api.Budget{Cost: 3, MaxTurns: 9, Timeout: "2m"},
 		Memory: api.Memory{Skills: []string{"gavel-todos"}},
@@ -787,7 +786,7 @@ func TestHeadlessBuildsPermissionsFromToolModes(t *testing.T) {
 		e := newTestExecutor(Config{
 			WorkDir:        t.TempDir(),
 			Agent:          "claude",
-			Backend:        string(captainai.BackendClaudeAgent),
+			RuntimeMode:    string(captainai.ModeAgent),
 			ToolModes:      map[string]string{"Read": "enabled", "Write": "disabled", "Bash": "ask"},
 			PermissionMode: "acceptEdits",
 			Stream:         capture(&req),
@@ -816,7 +815,7 @@ func TestHeadlessBuildsPermissionsFromToolModes(t *testing.T) {
 		e := newTestExecutor(Config{
 			WorkDir: t.TempDir(),
 			Agent:   "claude",
-			Backend: string(captainai.BackendClaudeCmux),
+			RuntimeMode: string(captainai.ModeCmux),
 			Mode:    types.ModePlan,
 			Stream:  capture(&req),
 		})
@@ -842,7 +841,7 @@ func TestHeadlessBuildsPermissionsFromToolModes(t *testing.T) {
 		e := newTestExecutor(Config{
 			WorkDir:        t.TempDir(),
 			Agent:          "claude",
-			Backend:        string(captainai.BackendClaudeAgent),
+			RuntimeMode:    string(captainai.ModeAgent),
 			Mode:           types.ModePlan,
 			PermissionMode: "default",
 			Stream: func(_ context.Context, r captainai.Request, _ captainai.PermissionFunc) (<-chan captainai.Event, error) {
@@ -884,13 +883,13 @@ func TestHeadlessPlanRunIsReadOnly(t *testing.T) {
 		}
 	}
 
-	for _, backend := range []captainai.Backend{captainai.BackendClaudeAgent, captainai.BackendClaudeCmux} {
-		t.Run(string(backend), func(t *testing.T) {
+	for _, runtimeMode := range []captainai.RuntimeMode{captainai.ModeAgent, captainai.ModeCmux} {
+		t.Run(string(runtimeMode), func(t *testing.T) {
 			var req captainai.Request
 			e := newTestExecutor(Config{
-				WorkDir: t.TempDir(),
-				Agent:   "claude",
-				Backend: string(backend),
+				WorkDir:     t.TempDir(),
+				Agent:       "claude",
+				RuntimeMode: string(runtimeMode),
 				Mode:    types.ModePlan,
 				Stream:  planStream(&req),
 			})
@@ -957,30 +956,34 @@ func TestPermissionDefaults(t *testing.T) {
 	}
 }
 
+// TestHeadlessModelDefaults pins which runtime each agent name resolves to. The
+// family comes from the agent, the mechanism from the mode: headless runs land
+// on agent mode for both, and a cli mode against codex is refused rather than
+// quietly substituted.
 func TestHeadlessModelDefaults(t *testing.T) {
+	wantRuntime := func(t *testing.T, provider string, got captainai.Runtime) {
+		t.Helper()
+		if got.Provider != provider || got.Mode != captainai.ModeAgent {
+			t.Errorf("runtime = %v, want %s agent", got, provider)
+		}
+	}
 	claudeP, err := newTestExecutor(Config{Agent: "claude"}).newStreamer(captainai.Request{Model: api.Model{Name: "claude"}}, nil, "")
 	if err != nil {
 		t.Fatalf("claude streamer: %v", err)
 	}
-	if claudeP.GetBackend() != captainai.BackendClaudeAgent {
-		t.Errorf("claude backend = %v, want claude-agent", claudeP.GetBackend())
-	}
+	wantRuntime(t, "anthropic", claudeP.GetRuntime())
 	codexP, err := newTestExecutor(Config{Agent: "codex"}).newStreamer(captainai.Request{Model: api.Model{Name: "codex"}}, nil, "")
 	if err != nil {
 		t.Fatalf("codex streamer: %v", err)
 	}
-	if codexP.GetBackend() != captainai.BackendCodexAgent {
-		t.Errorf("codex backend = %v, want codex-agent", codexP.GetBackend())
-	}
-	codexAgentP, err := newTestExecutor(Config{Agent: "codex"}).newStreamer(captainai.Request{Model: api.Model{Name: "gpt-5.5", Backend: captainai.BackendCodexAgent}}, nil, "")
+	wantRuntime(t, "openai", codexP.GetRuntime())
+	codexAgentP, err := newTestExecutor(Config{Agent: "codex"}).newStreamer(captainai.Request{Model: api.Model{Name: "gpt-5.5", Mode: captainai.ModeAgent}}, nil, "")
 	if err != nil {
-		t.Fatalf("codex-agent streamer: %v", err)
+		t.Fatalf("codex agent streamer: %v", err)
 	}
-	if codexAgentP.GetBackend() != captainai.BackendCodexAgent {
-		t.Errorf("codex explicit backend = %v, want codex-agent", codexAgentP.GetBackend())
-	}
-	if _, err := newTestExecutor(Config{Agent: "codex"}).newStreamer(captainai.Request{Model: api.Model{Name: "gpt-5.5", Backend: captainai.BackendCodexCLI}}, nil, ""); err == nil {
-		t.Fatal("codex-cli backend should be rejected")
+	wantRuntime(t, "openai", codexAgentP.GetRuntime())
+	if _, err := newTestExecutor(Config{Agent: "codex"}).newStreamer(captainai.Request{Model: api.Model{Name: "gpt-5.5", Mode: captainai.ModeCLI}}, nil, ""); err == nil {
+		t.Fatal("the headless codex executor should refuse cli mode")
 	}
 }
 

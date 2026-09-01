@@ -35,7 +35,7 @@ function useRunPromptPreview(dir: string, ref: string, options: TodoRunOptions |
         ref,
         driver: options.driver,
         runMode: 'run',
-        spec: { backend: options.spec?.backend, model: options.spec?.model, effort: options.spec?.effort },
+        spec: { mode: options.spec?.mode, model: options.spec?.model, effort: options.spec?.effort },
       },
       signal: controller.signal,
     }, {
@@ -50,7 +50,7 @@ function useRunPromptPreview(dir: string, ref: string, options: TodoRunOptions |
       cancelled = true;
       controller.abort();
     };
-  }, [dir, ref, options?.driver, options?.spec?.backend, options?.spec?.model, options?.spec?.effort, previewMutation.mutate]);
+  }, [dir, ref, options?.driver, options?.spec?.mode, options?.spec?.model, options?.spec?.effort, previewMutation.mutate]);
 
   return { prompt, loading: previewMutation.isPending, error };
 }

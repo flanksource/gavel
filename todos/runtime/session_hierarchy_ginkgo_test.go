@@ -128,7 +128,7 @@ var _ = Describe("TODO Captain session hierarchy", Ordered, func() {
 		Expect(preparation.SessionID).NotTo(BeEmpty())
 		Expect(provider.RecordRunStart(ctx, created, todos.RunStartMetadata{
 			SessionID: "todo-hierarchy-provider", Provider: "openai",
-			Backend: "codex-agent", Mode: "run",
+			RuntimeMode: "agent", Mode: "run",
 		})).To(Succeed())
 
 		issue, err := provider.Repository().GetIssue(ctx, uuid.MustParse(created.ID))

@@ -559,7 +559,7 @@ func renderRunStartComment(meta RunStartMetadata) string {
 	b.WriteString("- **Driver:** `" + commentValue(meta.Driver, "unknown") + "`\n")
 	b.WriteString("- **Agent:** `" + commentValue(meta.Agent, "unknown") + "`\n")
 	b.WriteString("- **Provider:** `" + commentValue(meta.Provider, "unknown") + "`\n")
-	b.WriteString("- **Backend:** `" + commentValue(meta.Backend, "default") + "`\n")
+	b.WriteString("- **Mode:** `" + commentValue(meta.RuntimeMode, "default") + "`\n")
 	b.WriteString("- **Resolved Model:** `" + commentValue(meta.ResolvedModel, "default") + "`\n")
 	b.WriteString("- **Effort:** `" + commentValue(meta.Effort, "default") + "`")
 	return b.String()

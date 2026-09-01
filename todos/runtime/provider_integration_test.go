@@ -210,7 +210,7 @@ func TestProviderNativeLifecycleIntegration(t *testing.T) {
 	require.NoError(t, err)
 	preparation, err := provider.PrepareRun(t.Context(), runTodo, todos.RunPreparation{
 		Mode: types.ModeRun, ExecutorName: "codex",
-		Requested: captaindb.PromptRunRuntimeSelection{Provider: "openai", Backend: "codex-agent", Model: "gpt-requested", Effort: "high"},
+		Requested: captaindb.PromptRunRuntimeSelection{Provider: "openai", Mode: "agent", Model: "gpt-requested", Effort: "high"},
 	})
 	require.NoError(t, err)
 	require.NotEmpty(t, preparation.SessionID)
@@ -218,7 +218,7 @@ func TestProviderNativeLifecycleIntegration(t *testing.T) {
 	assert.Equal(t, string(native.ExecutionRunning), runTodo.ExecutionState)
 	require.NoError(t, provider.RecordRunStart(t.Context(), runTodo, todos.RunStartMetadata{
 		SessionID: "runtime-run-1", Mode: "run", Driver: "codex", Provider: "openai",
-		Backend: "codex-agent", ResolvedModel: "gpt-runtime", Effort: "high",
+		RuntimeMode: "agent", ResolvedModel: "gpt-runtime", Effort: "high",
 	}))
 	require.NotNil(t, runTodo.LLM)
 	assert.Equal(t, "runtime-run-1", runTodo.LLM.SessionId)
@@ -272,7 +272,7 @@ func TestProviderNativeLifecycleIntegration(t *testing.T) {
 	require.NotEmpty(t, preparation.SessionID)
 	require.NoError(t, provider.RecordRunStart(t.Context(), cancelledTodo, todos.RunStartMetadata{
 		SessionID: "runtime-cancelled-1", Mode: "run", Driver: "headless-codex", Provider: "openai",
-		Backend: "codex-agent", ResolvedModel: "gpt-runtime", Effort: "high",
+		RuntimeMode: "agent", ResolvedModel: "gpt-runtime", Effort: "high",
 	}))
 	cancelledIssue, err := repository.GetIssue(t.Context(), mustUUID(t, cancelledTodo.ID))
 	require.NoError(t, err)

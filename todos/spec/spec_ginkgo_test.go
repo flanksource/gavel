@@ -133,7 +133,7 @@ todos:
 		})
 
 		// The grader is told to inspect the repository with its own tools, so it
-		// needs an agentic backend. The ai: floor is an API model with none —
+		// needs an agentic mechanism. The ai: floor is an API model with none —
 		// letting a verification run fall through to it would produce confident
 		// verdicts from a model that cannot read the diff.
 		It("keeps the built-in verify model when only ai: names one", func() {
@@ -193,15 +193,14 @@ todos:
 	})
 
 	Describe("driver", func() {
-		It("uses the compact model backend over the sibling backend field", func() {
+		It("uses the compact model prefix over the sibling mode field", func() {
 			resolved, err := Resolve(Input{
-				WorkDir: workspace("todos:\n  run:\n    model: agent:opus\n    backend: api\n"),
+				WorkDir: workspace("todos:\n  run:\n    model: agent:opus\n    mode: api\n"),
 				Mode:    types.ModeRun,
 			})
 
 			Expect(err).ToNot(HaveOccurred())
 			Expect(resolved.Spec.Mode).To(Equal(api.ModeAgent))
-			Expect(resolved.Spec.Backend).To(Equal(api.BackendClaudeAgent))
 			Expect(resolved.Driver).To(Equal(drivers.Agent))
 		})
 
@@ -221,9 +220,9 @@ todos:
 			Expect(resolved.Driver).To(Equal(drivers.Default))
 		})
 
-		It("uses a configured canonical backend as the execution driver", func() {
+		It("uses a configured canonical mode as the execution driver", func() {
 			resolved, err := Resolve(Input{
-				WorkDir: workspace("ai:\n  backend: agent\ntodos:\n  run:\n    model: gpt-5.6-sol\n"),
+				WorkDir: workspace("ai:\n  mode: agent\ntodos:\n  run:\n    model: gpt-5.6-sol\n"),
 				Mode:    types.ModeRun,
 			})
 			Expect(err).ToNot(HaveOccurred())
@@ -231,9 +230,9 @@ todos:
 			Expect(resolved.Spec.Mode).To(Equal(api.ModeAgent))
 		})
 
-		It("keeps the canonical spec backend ahead of a duplicate driver field", func() {
+		It("keeps the canonical spec mode ahead of a duplicate driver field", func() {
 			resolved, err := Resolve(Input{
-				WorkDir: workspace("ai:\n  backend: agent\ntodos:\n  run:\n    model: gpt-5.6-sol\n"),
+				WorkDir: workspace("ai:\n  mode: agent\ntodos:\n  run:\n    model: gpt-5.6-sol\n"),
 				Mode:    types.ModeRun,
 				Driver:  "api",
 			})
@@ -241,9 +240,9 @@ todos:
 			Expect(resolved.Driver).To(Equal(drivers.Agent))
 		})
 
-		It("keeps a provider-independent backend when a higher layer changes model family", func() {
+		It("keeps a provider-independent mode when a higher layer changes model family", func() {
 			resolved, err := Resolve(Input{
-				WorkDir: workspace("ai:\n  backend: agent\n  model: gpt-5.6-sol\n"),
+				WorkDir: workspace("ai:\n  mode: agent\n  model: gpt-5.6-sol\n"),
 				Mode:    types.ModeRun,
 			})
 			Expect(err).ToNot(HaveOccurred())
@@ -289,10 +288,10 @@ todos:
 	})
 
 	Describe("failing loud", func() {
-		DescribeTable("rejects legacy backend values instead of translating them",
-			func(backend string) {
+		DescribeTable("rejects a mode that names a provider or a composite adapter",
+			func(mode string) {
 				_, err := Resolve(Input{
-					WorkDir: workspace("ai:\n  model: opus\n  backend: " + backend + "\n"),
+					WorkDir: workspace("ai:\n  model: opus\n  mode: " + mode + "\n"),
 					Mode:    types.ModeRun,
 				})
 

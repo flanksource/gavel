@@ -9,6 +9,7 @@ import (
 
 	"github.com/flanksource/captain/pkg/ai/prompt"
 	"github.com/flanksource/captain/pkg/api"
+	"github.com/flanksource/captain/pkg/api/registry"
 	"github.com/flanksource/clicky"
 	clickyapi "github.com/flanksource/clicky/api"
 	"github.com/flanksource/gavel/ai/aifix"
@@ -148,9 +149,15 @@ func effectiveModelFor(base, defaultSpec, opOverride api.Spec) (api.Model, strin
 		source = "ai base"
 	}
 
-	if model.Name != "" && model.Backend == "" {
-		if backend, err := model.ResolveBackend(); err == nil {
-			model.Backend = backend
+	// Fill only the mode, from the family the name claims. This is a reporting
+	// path: EffectiveModel is the selector after layering, not the driver-ready
+	// id, so it deliberately stops short of a full Resolve — which would collapse
+	// a fallback chain to its primary and rewrite an alias the operator wrote.
+	// A name that claims no family (a compact multi-model selector) simply keeps
+	// an empty mode; execution resolves it properly and fails loudly there.
+	if model.Name != "" && model.Mode == "" {
+		if provider, err := registry.ProviderFor(model.Name); err == nil {
+			model.Mode = provider.DefaultMode
 		}
 	}
 	return model, source
@@ -236,12 +243,12 @@ func (p ResolvedPrompt) Pretty() clickyapi.Text {
 		t = t.Append("inherited", "font-medium")
 	} else {
 		t = t.Append(p.EffectiveModel.Name, "font-medium")
-		if p.EffectiveModel.Backend != "" {
-			t = t.Append("  backend=").Append(string(p.EffectiveModel.Backend), "font-mono")
+		if p.EffectiveModel.Mode != "" {
+			t = t.Append("  mode=").Append(string(p.EffectiveModel.Mode), "font-mono")
 		}
 	}
 	t = t.Append("  from=").Append(p.ModelSource, "font-mono")
-	if p.Declared.Name != "" || p.Declared.Backend != "" || p.Declared.Effort != "" || p.Declared.Temperature != nil {
+	if p.Declared.Name != "" || p.Declared.Mode != "" || p.Declared.Effort != "" || p.Declared.Temperature != nil {
 		data, _ := json.Marshal(p.Declared.Model)
 		t = t.NewLine().Append("  declared model: ", "text-muted").Append(string(data), "font-mono")
 	}

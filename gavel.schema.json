@@ -421,7 +421,7 @@
       "description": "Model-Context-Protocol server controls.",
       "properties": {
         "disabled": {
-          "description": "Turn off all MCP servers. Honoured on claude-cli and codex-agent; accepted and dropped elsewhere.",
+          "description": "Turn off all MCP servers. Honoured on the anthropic cli and the openai agent; accepted and dropped elsewhere.",
           "type": "boolean"
         },
         "modes": {
@@ -500,9 +500,6 @@
     "Model": {
       "additionalProperties": false,
       "properties": {
-        "backend": {
-          "type": "string"
-        },
         "callerTools": {
           "type": "boolean"
         },
@@ -536,8 +533,8 @@
         "mode": {
           "enum": [
             "api",
-            "cli",
             "agent",
+            "cli",
             "cmux"
           ],
           "type": "string"
@@ -594,7 +591,7 @@
       "type": "object"
     },
     "PermissionMode": {
-      "description": "Base permission posture. Which of these a backend honours is declared per backend; see the permissions capability matrix.",
+      "description": "Base permission posture. Which of these a runtime honours is declared per runtime; see the permissions capability matrix.",
       "enum": [
         "acceptEdits",
         "auto",
@@ -1040,9 +1037,6 @@
     "Spec": {
       "additionalProperties": false,
       "properties": {
-        "backend": {
-          "type": "string"
-        },
         "budget": {
           "$ref": "#/$defs/Budget"
         },
@@ -1091,8 +1085,8 @@
         "mode": {
           "enum": [
             "api",
-            "cli",
             "agent",
+            "cli",
             "cmux"
           ],
           "type": "string"
@@ -1402,9 +1396,6 @@
       "additionalProperties": false,
       "description": "Base AI spec inherited by every AI operation. Configure model, prompt, workspace, permissions, environment, and runtime defaults here.",
       "properties": {
-        "backend": {
-          "type": "string"
-        },
         "budget": {
           "$ref": "#/$defs/Budget"
         },
@@ -1453,8 +1444,8 @@
         "mode": {
           "enum": [
             "api",
-            "cli",
             "agent",
+            "cli",
             "cmux"
           ],
           "type": "string"
@@ -1911,6 +1902,29 @@
             }
           },
           "type": "object"
+        },
+        "types": {
+          "description": "Conventional-commit types AI message generation may choose from; they become the generated message's type enum. Replaces the built-in list rather than adding to it. Empty allows every type below.",
+          "items": {
+            "enum": [
+              "feat",
+              "fix",
+              "perf",
+              "refactor",
+              "test",
+              "docs",
+              "style",
+              "build",
+              "ci",
+              "chore",
+              "revert",
+              "config",
+              "security",
+              "dependency"
+            ],
+            "type": "string"
+          },
+          "type": "array"
         }
       },
       "type": "object"
@@ -2871,9 +2885,6 @@
           "additionalProperties": false,
           "description": "Spec a verification run executes as: `gavel todos check`, the dashboard's verify action, and the acceptance-criteria grader inside a run's definition-of-done loop. It overrides ai: and is overridden by the request. There is no prompt to override — the checklist is generated from the todo's acceptance criteria.",
           "properties": {
-            "backend": {
-              "type": "string"
-            },
             "budget": {
               "$ref": "#/$defs/Budget"
             },
@@ -2922,15 +2933,15 @@
             "mode": {
               "enum": [
                 "api",
-                "cli",
                 "agent",
+                "cli",
                 "cmux"
               ],
               "type": "string"
             },
             "model": {
-              "default": "claude-code-sonnet",
-              "description": "Catalog model slug the grader runs as. It must be agentic (e.g. claude-code-sonnet): the grader is told to inspect the change with its own tools, and an API model returns confident verdicts without reading the diff.",
+              "default": "claude-sonnet-5",
+              "description": "Catalog model slug the grader runs as. It must run on an agentic mechanism (mode agent, cli or cmux — e.g. `agent:sonnet`): the grader is told to inspect the change with its own tools, and an API model returns confident verdicts without reading the diff.",
               "type": "string"
             },
             "noCache": {

@@ -274,7 +274,7 @@ func templateLayers(in Input, definition todoprompt.Definition) ([]Layer, string
 	key := "todos." + definition.Name
 	var layers []Layer
 	if strings.TrimSpace(definition.Builtin) != "" {
-		builtinSpec, err := verify.RenderPromptSpec(definition.Builtin, data)
+		builtinSpec, err := verify.RenderPromptSpec(definition.Builtin, data, verify.PromptSpecOptions{Declared: true})
 		if err != nil {
 			return nil, "", fmt.Errorf("render built-in %s prompt frontmatter: %w", definition.Name, err)
 		}
@@ -286,7 +286,7 @@ func templateLayers(in Input, definition todoprompt.Definition) ([]Layer, string
 		return nil, "", err
 	}
 	if definition.Override.File != "" {
-		fileSpec, err := verify.RenderPromptSpec(template, data)
+		fileSpec, err := verify.RenderPromptSpec(template, data, verify.PromptSpecOptions{Declared: true})
 		if err != nil {
 			return nil, "", fmt.Errorf("render %s file frontmatter: %w", key, err)
 		}

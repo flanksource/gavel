@@ -136,17 +136,17 @@ vi.mock('@flanksource/clicky-ui/icons', async (importOriginal) => ({
 }));
 
 const RUN_CONTEXT: RunContext = {
-  defaultBackend: 'cmux',
+  defaultMode: 'cmux',
   defaultProvider: 'anthropic',
   efforts: ['low', 'medium', 'high', 'xhigh'],
   tools: [],
   runtimes: [
-    { family: 'claude', provider: 'anthropic', catalogPrefix: 'anthropic', modes: [{ backend: 'cmux', schema: { type: 'object' } }] },
+    { family: 'claude', provider: 'anthropic', catalogPrefix: 'anthropic', modes: [{ mode: 'cmux', schema: { type: 'object' } }] },
   ],
   models: [
-    { id: 'claude-sonnet-5', provider: 'anthropic', label: 'Sonnet 5', reasoning: true, configured: true, backends: ['cmux'], runtime: { model: 'claude-sonnet-5' } },
+    { id: 'claude-sonnet-5', provider: 'anthropic', label: 'Sonnet 5', reasoning: true, configured: true, runtime: { model: 'claude-sonnet-5' } },
   ],
-  backends: [
+  modes: [
     {
       id: 'cmux',
       label: 'Claude cmux',

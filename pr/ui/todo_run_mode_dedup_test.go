@@ -8,12 +8,12 @@ import (
 )
 
 var _ = Describe("canonical TODO runtime selection", func() {
-	DescribeTable("resolves the shared backend grammar through Captain",
-		func(driver drivers.Kind, backend, model, wantBackend, wantModel string) {
-			gotBackend, gotModel, err := resolveTodoRunBackendModel(driver, backend, model)
+	DescribeTable("resolves the shared runtime grammar through Captain",
+		func(driver drivers.Kind, mode, model, wantMode, wantModel string) {
+			gotMode, gotModel, err := resolveTodoRunRuntime(driver, mode, model)
 
 			Expect(err).ToNot(HaveOccurred())
-			Expect(gotBackend).To(Equal(wantBackend))
+			Expect(gotMode).To(Equal(wantMode))
 			Expect(gotModel).To(Equal(wantModel))
 		},
 		Entry("agent Claude", drivers.Agent, "agent", "opus", "agent", "claude-opus-5"),
@@ -21,9 +21,9 @@ var _ = Describe("canonical TODO runtime selection", func() {
 		Entry("model prefix wins", drivers.Cmux, "api", "agent:opus", "agent", "claude-opus-5"),
 	)
 
-	DescribeTable("rejects legacy values",
-		func(backend string) {
-			_, _, err := resolveTodoRunBackendModel(drivers.Agent, backend, "opus")
+	DescribeTable("rejects a mode that names a provider or a composite adapter",
+		func(mode string) {
+			_, _, err := resolveTodoRunRuntime(drivers.Agent, mode, "opus")
 			Expect(err).To(MatchError(ContainSubstring("invalid model configuration")))
 		},
 		Entry("provider", "anthropic"),
