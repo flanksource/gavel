@@ -448,6 +448,15 @@ func (r *Repository) CountIssuesByStatus(ctx context.Context, workspaceID uuid.U
 //   - It reads captain_prompt_run_overview rather than captain_prompt_runs. The
 //     view already computes duration, iteration counts and cost that
 //     ListPromptRunOverviews does not return.
+//   - The workspace's runs are resolved by primary key through a LATERAL join
+//     fenced with OFFSET 0, not by joining the view directly. The view computes
+//     four correlated aggregates per row, and nothing pushes the workspace
+//     predicate into it: a plain join makes the planner evaluate every prompt
+//     run in the database — twice, once per UNION arm — and then discard all but
+//     this workspace's. The fence blocks subquery pull-up so the aggregates run
+//     only for the ids this workspace actually links. Removing OFFSET 0 silently
+//     restores the full scan; measured on a developer database it cost 24.8ms
+//     and 7752 shared buffers against 3.8ms and 1192 for this shape.
 func (r *Repository) ListIssuePhaseRuns(ctx context.Context, workspaceID uuid.UUID) ([]IssuePhaseRun, error) {
 	const phaseColumns = `
 		link.issue_id,
@@ -465,21 +474,38 @@ func (r *Repository) ListIssuePhaseRuns(ctx context.Context, workspaceID uuid.UU
 		COALESCE(run.latest_verification_result::text, '') AS verification_result,
 		run.cost_usd,
 		run.result_json,
-		(run.id = issue.active_prompt_run_id)             AS active`
+		(run.id = link.active_prompt_run_id)              AS active`
 
 	const phaseFrom = `
-		FROM todo_issue_prompt_runs AS link
-		JOIN todo_issues AS issue ON issue.id = link.issue_id
-		JOIN captain_prompt_run_overview AS run ON run.id = link.prompt_run_id
-		WHERE issue.workspace_id = ?`
+		FROM workspace_links AS link
+		JOIN workspace_runs AS run ON run.id = link.prompt_run_id`
 
 	var records []IssuePhaseRun
 	result := r.db.WithContext(ctx).Raw(`
-		WITH phase_runs AS (
-			SELECT `+fmt.Sprintf(phaseColumns, "link.step_kind::text")+phaseFrom+`
+		WITH workspace_links AS MATERIALIZED (
+			SELECT link.issue_id, link.step_kind::text AS step_kind, link.ordinal,
+			       link.prompt_run_id, issue.active_prompt_run_id
+			FROM todo_issue_prompt_runs AS link
+			JOIN todo_issues AS issue ON issue.id = link.issue_id
+			WHERE issue.workspace_id = ?
+		),
+		workspace_runs AS MATERIALIZED (
+			SELECT run.id, run.state, run.phase, run.started_at, run.finished_at,
+			       run.queued_at, run.duration_seconds, run.iteration_count,
+			       run.succeeded_iteration_count, run.failed_iteration_count,
+			       run.latest_verification_result, run.cost_usd, run.result_json
+			FROM (SELECT DISTINCT prompt_run_id FROM workspace_links) AS ids
+			JOIN LATERAL (
+				SELECT * FROM captain_prompt_run_overview AS o
+				WHERE o.id = ids.prompt_run_id
+				OFFSET 0
+			) AS run ON true
+		),
+		phase_runs AS (
+			SELECT `+fmt.Sprintf(phaseColumns, "link.step_kind")+phaseFrom+`
 			UNION ALL
 			SELECT `+fmt.Sprintf(phaseColumns, "'verify'")+phaseFrom+`
-			  AND link.step_kind = 'run'
+			WHERE link.step_kind = 'run'
 			  AND (run.phase = 'verify' OR run.latest_verification_result IS NOT NULL)
 		)
 		SELECT DISTINCT ON (issue_id, phase)
@@ -492,7 +518,7 @@ func (r *Repository) ListIssuePhaseRuns(ctx context.Context, workspaceID uuid.UU
 		-- standalone verify at ordinal 0 would otherwise lose to an older run at
 		-- ordinal 3. Within one kind the two agree anyway.
 		ORDER BY issue_id, phase, queued_at DESC NULLS LAST, ordinal DESC`,
-		workspaceID, workspaceID,
+		workspaceID,
 	).Scan(&records)
 	if result.Error != nil {
 		return nil, result.Error

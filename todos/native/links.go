@@ -185,6 +185,31 @@ func (r *Repository) ListPromptRuns(ctx context.Context, issueID uuid.UUID) ([]P
 	return links, result.Error
 }
 
+// ListPromptRunLinks reads a whole workspace's prompt run links in one query,
+// keyed by issue, in the same order ListPromptRuns returns them. Listing
+// decorates every issue with its attempt count and active step, so the
+// per-issue ListPromptRuns is an N+1 across the entire backlog — the same
+// reason ListAliasesByKind exists alongside ListAliases.
+func (r *Repository) ListPromptRunLinks(ctx context.Context, workspaceID uuid.UUID) (map[uuid.UUID][]PromptRunLink, error) {
+	var links []PromptRunLink
+	result := r.db.WithContext(ctx).Raw(promptRunLinkSelect+`
+		FROM todo_issue_prompt_runs AS link
+		WHERE EXISTS (
+			SELECT 1 FROM todo_issues AS issue
+			WHERE issue.id = link.issue_id AND issue.workspace_id = ?
+		)
+		ORDER BY issue_id, step_kind, ordinal, created_at`, workspaceID,
+	).Scan(&links)
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	byIssue := make(map[uuid.UUID][]PromptRunLink, len(links))
+	for _, link := range links {
+		byIssue[link.IssueID] = append(byIssue[link.IssueID], link)
+	}
+	return byIssue, nil
+}
+
 func (r *Repository) LinkPlan(
 	ctx context.Context,
 	issueID, planID uuid.UUID,
