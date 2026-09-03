@@ -77,14 +77,27 @@ func validateRecord(record Record) error {
 	return nil
 }
 
-func LoadRoots(roots []string, now time.Time) ([]Record, error) {
+// LoadOptions controls which spool files LoadRoots parses.
+type LoadOptions struct {
+	// Now bounds retention: records archived more than Retention ago are dropped.
+	Now time.Time
+	// Skip, when set, is consulted for every spool file before it is read. A
+	// sweep that already folded a file into the database uses it to avoid
+	// re-parsing and re-offering content that cannot have changed.
+	Skip func(path string, modTime time.Time) bool
+}
+
+func LoadRoots(roots []string, opts LoadOptions) ([]Record, error) {
+	if opts.Now.IsZero() {
+		return nil, errors.New("task history load requires a reference time")
+	}
 	seen := map[string]struct{}{}
 	var records []Record
 	for _, root := range roots {
 		if strings.TrimSpace(root) == "" {
 			continue
 		}
-		loaded, err := loadDir(spoolDir(root), now)
+		loaded, err := loadDir(spoolDir(root), opts)
 		if err != nil {
 			return nil, err
 		}
@@ -102,7 +115,7 @@ func LoadRoots(roots []string, now time.Time) ([]Record, error) {
 	return records, nil
 }
 
-func loadDir(dir string, now time.Time) ([]Record, error) {
+func loadDir(dir string, opts LoadOptions) ([]Record, error) {
 	entries, err := os.ReadDir(dir)
 	if os.IsNotExist(err) {
 		return nil, nil
@@ -116,6 +129,15 @@ func loadDir(dir string, now time.Time) ([]Record, error) {
 			continue
 		}
 		path := filepath.Join(dir, entry.Name())
+		if opts.Skip != nil {
+			info, err := entry.Info()
+			if err != nil {
+				return nil, fmt.Errorf("stat task history %s: %w", path, err)
+			}
+			if opts.Skip(path, info.ModTime()) {
+				continue
+			}
+		}
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return nil, fmt.Errorf("read task history %s: %w", path, err)
@@ -127,7 +149,7 @@ func loadDir(dir string, now time.Time) ([]Record, error) {
 		if err := validateRunID(record.Run.ID); err != nil {
 			return nil, fmt.Errorf("parse task history %s: %w", path, err)
 		}
-		if record.ArchivedAt.Add(Retention).After(now) {
+		if record.ArchivedAt.Add(Retention).After(opts.Now) {
 			records = append(records, record)
 		}
 	}

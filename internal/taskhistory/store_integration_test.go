@@ -54,10 +54,16 @@ var _ = Describe("Task history database store", func() {
 		fresh.Run.Name = "Updated"
 		Expect(store.Import(GinkgoT().Context(), []taskhistory.Record{fresh})).To(Succeed())
 		Expect(store.Prune(GinkgoT().Context(), now)).To(Succeed())
-		records, err := store.List(GinkgoT().Context(), now)
+		runs, err := store.ListRuns(GinkgoT().Context(), now)
 
 		Expect(err).NotTo(HaveOccurred())
-		Expect(records).To(Equal([]taskhistory.Record{fresh}))
+		Expect(runs).To(Equal([]taskhistory.RunSummary{{Run: fresh.Run, ArchivedAt: fresh.ArchivedAt}}))
+		snapshots, err := store.Snapshot(GinkgoT().Context(), fresh.Run.ID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(snapshots).To(Equal(fresh.Snapshots))
+		missing, err := store.Snapshot(GinkgoT().Context(), expired.Run.ID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(missing).To(BeNil(), "a pruned run has no archived snapshot")
 
 		// Archived runs are immutable, and the periodic spool sweep re-offers
 		// every one of them. Re-importing identical content must not touch the

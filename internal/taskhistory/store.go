@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	clickytask "github.com/flanksource/clicky/task"
 	"gorm.io/gorm"
 )
 
@@ -14,9 +15,17 @@ type Store struct {
 	db *gorm.DB
 }
 
-type storedRecord struct {
+// RunSummary is the listing projection of an archived run: everything a run
+// listing needs and nothing a run detail needs. Snapshots stay in the database
+// until Snapshot asks for one run, because the archive's snapshot payload is
+// two orders of magnitude larger than its run metadata.
+type RunSummary struct {
+	Run        clickytask.RunMeta
+	ArchivedAt time.Time
+}
+
+type storedRun struct {
 	Run        string    `gorm:"column:run"`
-	Snapshots  string    `gorm:"column:snapshots"`
 	ArchivedAt time.Time `gorm:"column:archived_at"`
 }
 
@@ -86,36 +95,55 @@ func (s *Store) Prune(ctx context.Context, now time.Time) error {
 	return nil
 }
 
-func (s *Store) List(ctx context.Context, now time.Time) ([]Record, error) {
-	var stored []storedRecord
+// ListRuns returns every retained run's metadata, newest first. It never reads
+// the snapshots column: with hundreds of runs that column is tens of megabytes
+// of captured output, and sorting rows that wide spills the sort to disk.
+func (s *Store) ListRuns(ctx context.Context, now time.Time) ([]RunSummary, error) {
+	var stored []storedRun
 	if err := s.db.WithContext(ctx).Raw(`
-		SELECT CAST(run AS text) AS run, CAST(snapshots AS text) AS snapshots, archived_at
+		SELECT CAST(run AS text) AS run, archived_at
 		FROM task_run_history
 		WHERE expires_at > ?
 		ORDER BY started_at DESC`, now).Scan(&stored).Error; err != nil {
 		return nil, fmt.Errorf("list task history database: %w", err)
 	}
-	records := make([]Record, 0, len(stored))
+	runs := make([]RunSummary, 0, len(stored))
 	for _, row := range stored {
-		record, err := row.record()
-		if err != nil {
-			return nil, err
+		summary := RunSummary{ArchivedAt: row.ArchivedAt.UTC()}
+		if err := json.Unmarshal([]byte(row.Run), &summary.Run); err != nil {
+			return nil, fmt.Errorf("parse stored task run: %w", err)
 		}
-		records = append(records, record)
+		if err := validateRunID(summary.Run.ID); err != nil {
+			return nil, fmt.Errorf("parse stored task run: %w", err)
+		}
+		runs = append(runs, summary)
 	}
-	return records, nil
+	return runs, nil
 }
 
-func (row storedRecord) record() (Record, error) {
-	record := Record{ArchivedAt: row.ArchivedAt.UTC()}
-	if err := json.Unmarshal([]byte(row.Run), &record.Run); err != nil {
-		return Record{}, fmt.Errorf("parse stored task run: %w", err)
+// Snapshot returns one archived run's task snapshots by primary key. A run
+// that was never archived yields nil: that is the ordinary case for a run
+// still owned by a live process, not an error.
+func (s *Store) Snapshot(ctx context.Context, id string) ([]clickytask.TaskSnapshot, error) {
+	if err := validateRunID(id); err != nil {
+		return nil, err
 	}
-	if err := json.Unmarshal([]byte(row.Snapshots), &record.Snapshots); err != nil {
-		return Record{}, fmt.Errorf("parse stored task snapshots %q: %w", record.Run.ID, err)
+	var stored []string
+	if err := s.db.WithContext(ctx).Raw(`
+		SELECT CAST(snapshots AS text)
+		FROM task_run_history
+		WHERE id = ?`, id).Scan(&stored).Error; err != nil {
+		return nil, fmt.Errorf("load task history snapshot %q: %w", id, err)
 	}
-	if err := validateRecord(record); err != nil {
-		return Record{}, fmt.Errorf("parse stored task history: %w", err)
+	if len(stored) == 0 {
+		return nil, nil
 	}
-	return record, nil
+	var snapshots []clickytask.TaskSnapshot
+	if err := json.Unmarshal([]byte(stored[0]), &snapshots); err != nil {
+		return nil, fmt.Errorf("parse stored task snapshots %q: %w", id, err)
+	}
+	if len(snapshots) == 0 {
+		return nil, fmt.Errorf("stored task history %q has no snapshots", id)
+	}
+	return snapshots, nil
 }
