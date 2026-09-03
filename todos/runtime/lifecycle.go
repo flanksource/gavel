@@ -266,6 +266,7 @@ func (p *Provider) PrepareRun(ctx context.Context, todo *types.TODO, preparation
 	// This dispatch is a new phase run; drop the memo so a read through this
 	// provider sees it rather than the index loaded before the launch.
 	p.dropPhaseRuns(issue.WorkspaceID)
+	p.dropExecutionIndex(issue.WorkspaceID)
 	if !launch.DispatchOwned {
 		return todos.RunPreparationResult{}, fmt.Errorf(
 			"%w: Captain prompt run %s for issue %s already has an external dispatcher",
@@ -843,6 +844,8 @@ func (p *Provider) decorateExecution(ctx context.Context, issue *native.Issue, t
 	}
 	activeStep := native.StepKind("")
 	if issue.ActivePromptRunID != nil {
+		// Two point reads rather than one batched overview: see executionIndex
+		// for why ListPromptRunOverviews is not usable here.
 		run, err := p.captain.GetPromptRun(ctx, *issue.ActivePromptRunID)
 		if err != nil {
 			return err
@@ -875,7 +878,7 @@ func (p *Provider) decorateExecution(ctx context.Context, issue *native.Issue, t
 		if questions, ok := run.ResultJSON["questions"]; ok {
 			todo.Questions = decodeQuestions(questions)
 		}
-		links, err := p.repository.ListPromptRuns(ctx, issue.ID)
+		links, err := p.promptRunLinks(ctx, issue.WorkspaceID, issue.ID)
 		if err != nil {
 			return err
 		}

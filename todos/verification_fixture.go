@@ -31,6 +31,15 @@ type verificationSectionRange struct {
 // SplitVerificationFixture removes top-level H1 and H2 Verification sections
 // from body and returns their markdown in document order.
 func SplitVerificationFixture(body string) (cleanBody, verification string, found bool) {
+	// A matching heading's text is compared against verificationFixtureSection,
+	// so a body that never contains that word cannot hold one — whatever heading
+	// syntax it uses. Checking first keeps the markdown parse off the common
+	// path: every todo body is split when a backlog is listed, and on a
+	// developer database only 42 of 326 bodies mention the word at all.
+	if !strings.Contains(strings.ToLower(body), strings.ToLower(verificationFixtureSection)) {
+		return body, "", false
+	}
+
 	source := []byte(body)
 	document := goldmark.New().Parser().Parse(text.NewReader(source))
 	headings := documentHeadings(document)
