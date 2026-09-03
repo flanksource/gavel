@@ -1,6 +1,7 @@
 package snapshots
 
 import (
+	"os"
 	"testing"
 	"time"
 
@@ -15,6 +16,8 @@ var (
 	tTest     = time.Date(2026, 6, 28, 10, 0, 0, 0, time.UTC)
 	tLint     = time.Date(2026, 6, 28, 11, 0, 0, 0, time.UTC)
 	tTestLint = time.Date(2026, 6, 28, 12, 0, 0, 0, time.UTC)
+	// tCorrupt is before tTest so a tTest watermark excludes it.
+	tCorrupt = time.Date(2026, 6, 28, 9, 0, 0, 0, time.UTC)
 )
 
 func leafTests() []parsers.Test {
@@ -117,6 +120,47 @@ func TestListRunsSinceWatermarkSkipsOlderOrEqual(t *testing.T) {
 		if !r.Started.After(tTest) {
 			t.Errorf("run %s started %v is not after watermark %v", r.RunID, r.Started, tTest)
 		}
+	}
+}
+
+// A run at or before the watermark must be skipped from its dirent alone,
+// without being opened: an incremental sweep re-reads the whole .gavel
+// directory, and parsing every snapshot only to discard it by start time made an
+// incremental sweep cost the same as a full scan.
+func TestListRunsSkipsOlderRunsWithoutReadingThem(t *testing.T) {
+	workDir := t.TempDir()
+	seedRuns(t, workDir)
+
+	// ListRuns reports a parse failure as an error, so corrupting the oldest run
+	// turns "was it opened?" into an observable outcome.
+	corrupt, err := SavePerRun(workDir, &testui.Snapshot{
+		Metadata: &testui.SnapshotMetadata{Started: tCorrupt, Ended: tCorrupt},
+	}, tCorrupt, "")
+	if err != nil {
+		t.Fatalf("SavePerRun: %v", err)
+	}
+	if err := os.WriteFile(corrupt, []byte("{ not valid json"), 0o600); err != nil {
+		t.Fatalf("corrupt run file: %v", err)
+	}
+	// The mtime is the gate ListRuns reads, and writing the file just now set it
+	// to the present. Restore it to the run's own time, which is what a real
+	// run-*.json carries.
+	if err := os.Chtimes(corrupt, tCorrupt, tCorrupt); err != nil {
+		t.Fatalf("set run file mtime: %v", err)
+	}
+
+	runs, err := ListRuns(workDir, tTest)
+	if err != nil {
+		t.Fatalf("ListRuns opened a run at or before the watermark: %v", err)
+	}
+	if len(runs) != 2 {
+		t.Fatalf("want 2 runs after watermark, got %d", len(runs))
+	}
+
+	// Without this the assertion above would also pass if the corrupt file were
+	// simply being ignored rather than skipped by start time.
+	if _, err := ListRuns(workDir, time.Time{}); err == nil {
+		t.Fatal("a full scan must still fail on the corrupt run file")
 	}
 }
 

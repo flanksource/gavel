@@ -96,6 +96,23 @@ func ListRuns(workDir string, since time.Time) ([]RunInfo, error) {
 			continue
 		}
 		path := filepath.Join(dir, name)
+		// Decide the cutoff from the dirent before opening the file. A run
+		// snapshot carries the whole test tree and lint violation set — the
+		// workspaces on one developer machine total 320MB across 1171 files — so
+		// parsing every run only to discard it by start time made an incremental
+		// sweep cost the same as a full one.
+		//
+		// Only the mtime can gate this. A run file is written once, after the run
+		// starts, so its mtime is an upper bound on the recorded start: an mtime
+		// at or before the watermark guarantees the start is too. The filename
+		// timestamp is NOT usable here even though runStartTime prefers it —
+		// PerRunTimestampLayout is second-precision, so it floors a sub-second
+		// start and would skip a run that belongs just after the watermark.
+		if !since.IsZero() {
+			if modTime := runFileModTime(path, entry); !modTime.IsZero() && !modTime.After(since) {
+				continue
+			}
+		}
 		snap, err := loadSnapshot(path)
 		if err != nil {
 			return nil, err
@@ -189,6 +206,14 @@ func runStartTime(snap testui.Snapshot, name, path string, entry os.DirEntry) ti
 	if ts, err := time.Parse(PerRunTimestampLayout, stem); err == nil {
 		return ts.UTC()
 	}
+	return runFileModTime(path, entry)
+}
+
+// runFileModTime reads a run file's mtime without opening it, preferring the
+// dirent os.ReadDir already stat'd. Run files are written once and never
+// rewritten, so this is an upper bound on the run's start time — which is what
+// lets ListRuns skip a file without decoding it.
+func runFileModTime(path string, entry os.DirEntry) time.Time {
 	if entry != nil {
 		if info, err := entry.Info(); err == nil {
 			return info.ModTime().UTC()
