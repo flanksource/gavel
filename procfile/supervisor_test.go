@@ -195,7 +195,7 @@ var _ = Describe("Supervisor", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(terminal[0].Status).To(Equal(string(clickytask.StatusCancelled)))
 		Expect(terminal[0].Controls).To(BeEmpty())
-		history, err := taskhistory.LoadRoots([]string{root}, time.Now().UTC())
+		history, err := taskhistory.LoadRoots([]string{root}, taskhistory.LoadOptions{Now: time.Now().UTC()})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(history).To(ContainElement(WithTransform(func(record taskhistory.Record) string { return record.Run.ID }, Equal(first))))
 	})
