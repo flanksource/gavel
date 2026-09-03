@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/flanksource/commons/logger"
+	cache "github.com/flanksource/gavel/github/cache"
 	"github.com/flanksource/gavel/snapshots"
 )
 
@@ -49,7 +51,7 @@ type testRunsResponse struct {
 // project.
 func (s *Server) handleTestRuns(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	projects, err := collectTestRuns()
+	projects, err := collectTestRuns(r.Context())
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -71,7 +73,7 @@ func (s *Server) handleTestRunsStream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Connection", "keep-alive")
 
 	writeSnap := func() bool {
-		projects, err := collectTestRuns()
+		projects, err := collectTestRuns(r.Context())
 		if err != nil {
 			payload, _ := json.Marshal(map[string]string{"error": err.Error()})
 			fmt.Fprintf(w, "event: error\ndata: %s\n\n", payload)
@@ -152,24 +154,128 @@ func (s *Server) handleTestRun(w http.ResponseWriter, r *http.Request) {
 
 // collectTestRuns groups each project's .gavel/last.json snapshot under the
 // live project list so the tree shows only the current run.
-func collectTestRuns() ([]projectRuns, error) {
+//
+// The `last` pointer is always read from disk, so the view never lags a run that
+// just finished. Only the run's counts come from the cache, and only when the
+// syncer has already scanned that exact run — run-*.json files are immutable, so
+// a row for a given run id can never be a stale view of it. Decoding those
+// snapshots was 61% of this server's CPU while the Tests tab was open: the
+// pointer file is a few hundred bytes, but the run it names carries the whole
+// test tree and lint violation set, and there is one per project per request.
+func collectTestRuns(ctx context.Context) ([]projectRuns, error) {
 	projects, err := LoadProjects()
 	if err != nil {
 		return nil, err
 	}
+	store := cache.Shared()
 	byDir := map[string][]testRunView{}
 	for _, project := range projects {
 		dir := project.ResolvedDir()
-		run, err := snapshots.LastRun(dir)
+		view, err := lastRunView(ctx, store, dir)
 		if err != nil {
 			logger.Warnf("load last test run %s: %v", dir, err)
 			continue
 		}
-		if run != nil {
-			byDir[dir] = []testRunView{viewFromInfo(*run)}
+		if view != nil {
+			byDir[dir] = []testRunView{*view}
 		}
 	}
 	return groupRuns(projects, byDir), nil
+}
+
+// lastRunView resolves a workspace's current run, preferring the cached summary
+// of the run the `last` pointer names and decoding the snapshot only when the
+// scanner has not reached it yet (or no cache is configured).
+func lastRunView(ctx context.Context, store *cache.Store, dir string) (*testRunView, error) {
+	if dir == "" {
+		return nil, nil
+	}
+	pointer, err := snapshots.LoadPointer(dir, snapshots.PointerLast)
+	if err != nil || pointer == nil {
+		return nil, err
+	}
+	if row := cachedRunRow(ctx, store, dir, pointer); row != nil {
+		// The pointer's own name, not the row's run id: this view is always "the
+		// run `last` names", and the detail endpoint resolves PointerLast through
+		// the pointer. Reporting the underlying run id only on a cache hit would
+		// make the same request answer differently before and after a sweep.
+		return viewFromCache(*row, snapshots.PointerLast), nil
+	}
+	run, err := snapshots.LastRun(dir)
+	if err != nil || run == nil {
+		return nil, err
+	}
+	view := viewFromInfo(*run)
+	return &view, nil
+}
+
+// pointerRunID is the cache key for the snapshot a pointer names: the file's
+// stem. The reader and the syncer must derive it identically or every lookup
+// misses, so both call this.
+//
+// Note this is NOT a run-*.json stem. Save writes sha-<id>.json and points
+// `last` at it; SavePerRun writes run-*.json. The Tests tab renders the former
+// and the sweep enumerates the latter, which is why caching the sweep alone left
+// this view uncached.
+func pointerRunID(pointer *snapshots.Pointer) string {
+	if pointer == nil || strings.TrimSpace(pointer.Path) == "" {
+		return ""
+	}
+	stem := strings.TrimSuffix(filepath.Base(pointer.Path), ".json")
+	if stem == "" || stem == snapshots.PointerLast {
+		return ""
+	}
+	return stem
+}
+
+// cachedRunRow looks up the run a pointer names. A cache miss, a disabled cache
+// and a read error are all "decode the snapshot instead", so the Tests tab keeps
+// working before the first sweep and with no database configured.
+func cachedRunRow(ctx context.Context, store *cache.Store, dir string, pointer *snapshots.Pointer) *cache.TestRunCache {
+	runID := pointerRunID(pointer)
+	if runID == "" {
+		return nil
+	}
+	row, err := store.GetTestRun(ctx, dir, runID)
+	if err != nil {
+		logger.Debugf("read cached test run %s/%s: %v", dir, runID, err)
+		return nil
+	}
+	return row
+}
+
+func viewFromCache(row cache.TestRunCache, runID string) *testRunView {
+	var frameworks []string
+	if len(row.Frameworks) > 0 {
+		if err := json.Unmarshal(row.Frameworks, &frameworks); err != nil {
+			logger.Debugf("decode cached frameworks for %s: %v", row.RunID, err)
+		}
+	}
+	return &testRunView{
+		RunID:          runID,
+		Kind:           row.Kind,
+		Started:        timeFromNanos(row.StartedTS),
+		Ended:          timeFromNanos(row.EndedTS),
+		Repo:           row.Repo,
+		SHA:            row.SHA,
+		Frameworks:     frameworks,
+		Passed:         row.Passed,
+		Failed:         row.Failed,
+		Skipped:        row.Skipped,
+		Warned:         row.Warned,
+		Total:          row.Total,
+		LintViolations: row.LintViolations,
+		LintLinters:    row.LintLinters,
+	}
+}
+
+// timeFromNanos mirrors test_run_syncer.nanos: 0 means the field was unset, not
+// the unix epoch.
+func timeFromNanos(ts int64) time.Time {
+	if ts == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, ts).UTC()
 }
 
 // groupRuns projects the current runs onto the live project list. Every project

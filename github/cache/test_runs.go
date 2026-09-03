@@ -90,21 +90,24 @@ func (s *Store) ListTestRunsForDir(ctx context.Context, dir string) ([]TestRunCa
 	return rows, nil
 }
 
-// GetTestRunPath returns the on-disk path of a cached run, or "" when absent.
-func (s *Store) GetTestRunPath(ctx context.Context, dir, runID string) (string, error) {
+// GetTestRun returns one cached run summary, or nil when it has not been
+// scanned yet. run-*.json files are immutable once written, so a row found here
+// is never a stale view of that run — a caller that already knows which run it
+// wants can use this instead of re-reading and decoding the snapshot.
+func (s *Store) GetTestRun(ctx context.Context, dir, runID string) (*TestRunCache, error) {
 	if s.Disabled() {
-		return "", nil
+		return nil, nil
 	}
 	var row TestRunCache
 	err := s.gorm().WithContext(ctx).
 		Where("workspace_dir = ? AND run_id = ?", dir, runID).First(&row).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return "", nil
+		return nil, nil
 	}
 	if err != nil {
-		return "", fmt.Errorf("get test run path %s/%s: %w", dir, runID, err)
+		return nil, fmt.Errorf("get test run %s/%s: %w", dir, runID, err)
 	}
-	return row.Path, nil
+	return &row, nil
 }
 
 // UpsertTestRuns writes the run summaries and advances the workspace cursor in

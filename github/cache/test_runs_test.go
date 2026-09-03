@@ -23,9 +23,9 @@ func TestTestRunCacheDisabledNoOp(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, runs)
 
-	path, err := s.GetTestRunPath(context.Background(), "/ws", "run-x")
+	row, err := s.GetTestRun(context.Background(), "/ws", "run-x")
 	require.NoError(t, err)
-	assert.Equal(t, "", path)
+	assert.Nil(t, row)
 
 	assert.NoError(t, s.UpsertTestRuns(context.Background(), "/ws",
 		[]TestRunCache{{RunID: "run-x", Path: "/ws/.gavel/run-x.json"}}, 1))
@@ -68,13 +68,18 @@ func TestTestRunCacheRoundtripIntegration(t *testing.T) {
 	assert.Equal(t, "run-2", listed[0].RunID)
 	assert.Equal(t, "test", listed[1].Kind)
 
-	path, err := store.GetTestRunPath(ctx, ws, "run-1")
+	row, err := store.GetTestRun(ctx, ws, "run-1")
 	require.NoError(t, err)
-	assert.Equal(t, ws+"/.gavel/run-1.json", path)
+	require.NotNil(t, row)
+	assert.Equal(t, ws+"/.gavel/run-1.json", row.Path)
+	// The whole summary comes back, not just the path: collectTestRuns renders
+	// the counts from this row instead of decoding the snapshot.
+	assert.Equal(t, "test", row.Kind)
+	assert.Equal(t, 5, row.Passed)
 
-	missing, err := store.GetTestRunPath(ctx, ws, "run-nope")
+	missing, err := store.GetTestRun(ctx, ws, "run-nope")
 	require.NoError(t, err)
-	assert.Equal(t, "", missing)
+	assert.Nil(t, missing)
 
 	// Re-upsert overwrites in place (no duplicate row) and advances the cursor.
 	require.NoError(t, store.UpsertTestRuns(ctx, ws,

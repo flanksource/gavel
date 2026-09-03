@@ -104,11 +104,8 @@ func (trs *TestRunSyncer) syncWorkspace(ctx context.Context, store *cache.Store,
 		logger.Warnf("scan test runs %s: %v", dir, err)
 		return false
 	}
-	if len(runs) == 0 {
-		return false
-	}
 
-	rows := make([]cache.TestRunCache, 0, len(runs))
+	rows := make([]cache.TestRunCache, 0, len(runs)+1)
 	highWater := sinceNanos
 	for _, r := range runs {
 		rows = append(rows, testRunRow(dir, r))
@@ -116,11 +113,53 @@ func (trs *TestRunSyncer) syncWorkspace(ctx context.Context, store *cache.Store,
 			highWater = ts
 		}
 	}
+	// The `last` pointer is a different snapshot family from the run-*.json
+	// sweep above and is what the Tests tab renders for every project on every
+	// request, so it is summarized here too. Without it that view decodes the
+	// full snapshot per project per request — 61% of this server's CPU with the
+	// tab open.
+	if row, ok := lastPointerRow(ctx, store, dir); ok {
+		rows = append(rows, row)
+	}
+	if len(rows) == 0 {
+		// Nothing new, but stamp the cursor so SyncedAt still advances.
+		if err := store.UpsertTestRuns(ctx, dir, nil, highWater); err != nil {
+			logger.Warnf("refresh test run cursor %s: %v", dir, err)
+		}
+		return false
+	}
+
 	if err := store.UpsertTestRuns(ctx, dir, rows, highWater); err != nil {
 		logger.Warnf("upsert test runs %s: %v", dir, err)
 		return false
 	}
 	return true
+}
+
+// lastPointerRow summarizes the snapshot .gavel/last.json names, unless the
+// cache already holds it. Run snapshots are immutable, so an existing row is
+// never stale and re-decoding would defeat the point.
+func lastPointerRow(ctx context.Context, store *cache.Store, dir string) (cache.TestRunCache, bool) {
+	pointer, err := snapshots.LoadPointer(dir, snapshots.PointerLast)
+	if err != nil || pointer == nil {
+		return cache.TestRunCache{}, false
+	}
+	runID := pointerRunID(pointer)
+	if runID == "" {
+		return cache.TestRunCache{}, false
+	}
+	if existing, err := store.GetTestRun(ctx, dir, runID); err == nil && existing != nil {
+		return cache.TestRunCache{}, false
+	}
+	run, err := snapshots.LastRun(dir)
+	if err != nil || run == nil {
+		return cache.TestRunCache{}, false
+	}
+	row := testRunRow(dir, *run)
+	// LastRun reports the pointer's own name as the run id; key the row by the
+	// file it resolved to so the reader finds it from the pointer alone.
+	row.RunID = runID
+	return row, true
 }
 
 func testRunRow(dir string, r snapshots.RunInfo) cache.TestRunCache {

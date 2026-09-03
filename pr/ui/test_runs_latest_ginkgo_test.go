@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -53,7 +54,7 @@ var _ = Describe("project tree test runs", func() {
 	})
 
 	It("shows only the snapshot referenced by .gavel/last.json", func() {
-		projects, err := collectTestRuns()
+		projects, err := collectTestRuns(context.Background())
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(projects).To(ConsistOf(MatchFields(IgnoreExtras, Fields{
