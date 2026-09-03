@@ -49,6 +49,11 @@ type Provider struct {
 	// columns off the per-row query path.
 	phasesMu    sync.RWMutex
 	phasesCache map[uuid.UUID]map[uuid.UUID]types.PhaseRuns
+	// execCache memoizes one workspace's prompt-run overviews and links, primed
+	// by List. See execution_index.go — it is what keeps the active run, its
+	// provider session and the attempt count off the per-row query path.
+	execMu    sync.RWMutex
+	execCache map[uuid.UUID]*executionIndex
 }
 
 var _ todos.Provider = (*Provider)(nil)
@@ -273,6 +278,10 @@ func (p *Provider) List(ctx context.Context, filters todos.DiscoveryFilters) (ty
 	// One query for the whole workspace's GitHub links, not one per issue.
 	links, err := p.repository.ListAliasesByKind(ctx, p.workspace.ID, githubpush.AliasKind)
 	if err != nil {
+		return nil, err
+	}
+	// Two more for every issue's active run and run links, for the same reason.
+	if err := p.primeExecutionIndex(ctx, p.workspace.ID); err != nil {
 		return nil, err
 	}
 	result := make(types.TODOS, 0, len(issues))
