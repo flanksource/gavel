@@ -35,6 +35,10 @@ func (m *managed) snapshot() ProcState {
 	st.MemoryRSS = res.RSSBytes
 	st.MemoryVMS = res.VMSBytes
 	st.OpenFiles = res.OpenFiles
+	if !res.SampledAt.IsZero() {
+		sampledAt := res.SampledAt
+		st.SampledAt = &sampledAt
+	}
 	peak := p.Peak()
 	st.PeakCPU = peak.CPUPercent
 	st.PeakRSS = peak.RSSBytes

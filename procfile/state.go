@@ -50,10 +50,15 @@ type ProcState struct {
 	MemoryRSS  uint64  `json:"memoryRss,omitempty"`
 	MemoryVMS  uint64  `json:"memoryVms,omitempty"`
 	OpenFiles  int     `json:"openFiles,omitempty"`
-	PeakCPU    float64 `json:"peakCpuPercent,omitempty"`
-	PeakRSS    uint64  `json:"peakMemoryRss,omitempty"`
-	PeakVMS    uint64  `json:"peakMemoryVms,omitempty"`
-	PeakFiles  int     `json:"peakOpenFiles,omitempty"`
+	// SampledAt is when the supervisor last measured the fields above. Without
+	// it a reader cannot tell a live sample from one frozen at the last
+	// lifecycle transition — which is why status used to be pulled over the
+	// control socket rather than read from this file.
+	SampledAt *time.Time `json:"sampledAt,omitempty"`
+	PeakCPU   float64    `json:"peakCpuPercent,omitempty"`
+	PeakRSS   uint64     `json:"peakMemoryRss,omitempty"`
+	PeakVMS   uint64     `json:"peakMemoryVms,omitempty"`
+	PeakFiles int        `json:"peakOpenFiles,omitempty"`
 	// Tree is the per-process breakdown of the process group behind the
 	// aggregate fields above (the leader and its descendants). Empty for a
 	// stopped process or a supervisor that predates resource sampling.
@@ -85,6 +90,19 @@ type State struct {
 	Profile       string      `json:"profile,omitempty"`
 	Started       *time.Time  `json:"started,omitempty"`
 	Processes     []ProcState `json:"processes"`
+	// PublishedAt is when the supervisor last wrote this file. The supervisor
+	// republishes on a timer as well as on lifecycle transitions, so a reader
+	// that finds a recent value can serve resource fields straight from disk
+	// instead of dialing the control socket. Zero for a state written by a
+	// supervisor that predates the publish loop.
+	PublishedAt *time.Time `json:"publishedAt,omitempty"`
+}
+
+// Fresh reports whether the persisted snapshot was published within window, and
+// so still describes the running processes closely enough to serve a read
+// without a control-socket round trip.
+func (s State) Fresh(window time.Duration) bool {
+	return s.PublishedAt != nil && time.Since(*s.PublishedAt) <= window
 }
 
 // Running reports whether the supervisor process is currently alive.
@@ -102,13 +120,22 @@ func (s State) Process(name string) (ProcState, bool) {
 	return ProcState{}, false
 }
 
-// StateDir returns <root>/.gavel/proc, creating it if necessary.
+// StateDir returns <root>/.gavel/proc, creating it if necessary. Use it from
+// paths that are about to write; a read should use StateDirPath so that merely
+// looking at a project's process status does not create directories in it.
 func StateDir(root string) (string, error) {
-	dir := filepath.Join(root, stateDirComponents)
+	dir := StateDirPath(root)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", fmt.Errorf("create state dir %s: %w", dir, err)
 	}
 	return dir, nil
+}
+
+// StateDirPath is <root>/.gavel/proc without touching the filesystem. Reading a
+// missing state dir already degrades correctly: ReadState treats an absent file
+// as the zero State, which is exactly "nothing has been supervised here".
+func StateDirPath(root string) string {
+	return filepath.Join(root, stateDirComponents)
 }
 
 // StatePath is the path of the JSON state file inside dir.

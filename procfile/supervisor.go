@@ -225,6 +225,7 @@ func (s *Supervisor) Start() (err error) {
 		}
 	}
 	s.persist()
+	go s.publishLoop()
 
 	s.mu.Lock()
 	s.fullyStarted = true
@@ -476,7 +477,39 @@ func (s *Supervisor) persist() {
 	}
 	s.persistMu.Lock()
 	defer s.persistMu.Unlock()
-	if err := WriteState(s.dir, s.State()); err != nil {
+	state := s.State()
+	now := time.Now()
+	state.PublishedAt = &now
+	if err := WriteState(s.dir, state); err != nil {
 		logger.Warnf("write proc state: %v", err)
+	}
+}
+
+// publishInterval is how often the supervisor republishes state.json while it
+// runs. It matches clicky's own resource sample cadence, so each publish carries
+// a sample the reader could not otherwise have seen without dialing the control
+// socket.
+const publishInterval = 2 * time.Second
+
+// publishLoop republishes state.json on a timer for as long as the daemon runs.
+//
+// Before it existed, persist() ran only on lifecycle transitions, so the
+// resource fields on disk were frozen at the last start/stop and every reader
+// had to dial the control socket to get a live sample — per project, per poll.
+// Publishing on the same cadence the samples are taken makes the file the
+// readable copy of what the supervisor already knows.
+func (s *Supervisor) publishLoop() {
+	ticker := time.NewTicker(publishInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.done:
+			return
+		case <-ticker.C:
+			if s.isStopping() {
+				return
+			}
+			s.persist()
+		}
 	}
 }

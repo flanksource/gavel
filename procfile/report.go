@@ -37,11 +37,16 @@ type ListReport struct{ Report }
 
 // gather merges the Procfile entries with the live (socket) or last-persisted
 // (state.json) supervisor state for root.
+// stateFreshness is how old a published state.json may be before a status read
+// falls back to the control socket. It allows for one missed publish tick plus
+// the write itself, so an alive supervisor is served from disk in the steady
+// state while a wedged one still gets probed.
+const stateFreshness = 2*publishInterval + time.Second
+
 func gather(root, pf string) (Report, error) {
-	dir, err := StateDir(root)
-	if err != nil {
-		return Report{}, err
-	}
+	// StateDirPath, not StateDir: this is a read, and creating .gavel/proc in
+	// every project just to look at its status is a write on the read path.
+	dir := StateDirPath(root)
 	entries, err := Load(pf)
 	if err != nil {
 		return Report{}, err
@@ -51,7 +56,11 @@ func gather(root, pf string) (Report, error) {
 		return Report{}, err
 	}
 	running := st.Running()
-	if running {
+	// The socket is only needed when the persisted snapshot is too old to trust.
+	// The supervisor republishes on publishInterval, so a fresh file already
+	// carries the live status, ports and resource sample the socket would
+	// return — and a status read happens per project, per dashboard poll.
+	if running && !st.Fresh(stateFreshness) {
 		if resp, err := sendControl(root, ctrlRequest{Action: actionStatus}); err == nil {
 			st = resp.State
 		}

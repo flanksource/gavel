@@ -373,6 +373,50 @@ var _ = Describe("Supervisor", func() {
 		Expect(*p.ExitCode).To(Equal(7))
 	})
 
+	It("republishes state.json on a timer so readers see live samples without the socket", func() {
+		// persist() used to run only on lifecycle transitions, which left the
+		// resource fields on disk frozen at the last start/stop — the reason every
+		// status read had to dial the control socket for a live sample.
+		sup, dir := newSupervisor("web: sh -c 'sleep 30'\n", verify.ProcfileConfig{})
+		defer sup.Shutdown()
+		waitFor(5*time.Second, func() bool { return statusOf(sup, "web") == pf.StatusRunning })
+
+		first, err := pf.ReadState(dir)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(first.PublishedAt).NotTo(BeNil(), "the start-time persist must stamp PublishedAt")
+
+		// A later publish must advance the stamp with no lifecycle event at all.
+		waitFor(10*time.Second, func() bool {
+			later, err := pf.ReadState(dir)
+			return err == nil && later.PublishedAt != nil && later.PublishedAt.After(*first.PublishedAt)
+		})
+
+		published, err := pf.ReadState(dir)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(published.Fresh(30 * time.Second)).To(BeTrue())
+		Expect(published.Fresh(0)).To(BeFalse(), "a zero window can never be fresh")
+
+		p, ok := published.Process("web")
+		Expect(ok).To(BeTrue())
+		Expect(p.Status).To(Equal(pf.StatusRunning))
+		Expect(p.SampledAt).NotTo(BeNil(), "a published sample must say when it was taken")
+	})
+
+	It("does not create the state directory when only reading status", func() {
+		// gather() ran StateDir (os.MkdirAll) before reading, so looking at a
+		// project's status wrote into it. A project that has never been supervised
+		// must stay untouched.
+		root := GinkgoT().TempDir()
+		Expect(os.WriteFile(filepath.Join(root, "Procfile"), []byte("web: sh -c 'sleep 30'\n"), 0o644)).To(Succeed())
+
+		report, err := pf.Status(root, filepath.Join(root, "Procfile"))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(report.Running).To(BeFalse())
+
+		_, statErr := os.Stat(pf.StateDirPath(root))
+		Expect(os.IsNotExist(statErr)).To(BeTrue(), "reading status must not create %s", pf.StateDirPath(root))
+	})
+
 	It("stops every process and cleans up on Shutdown", func() {
 		sup, dir := newSupervisor("a: sh -c 'sleep 30'\nb: sh -c 'sleep 30'\n", verify.ProcfileConfig{})
 
