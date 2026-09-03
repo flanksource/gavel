@@ -178,6 +178,7 @@ func NewServer(interval time.Duration, ghOpts github.Options, config SearchConfi
 		gavelCache:        make(map[string]*GavelResultsSummary),
 		knownBots:         make(map[string]struct{}),
 		procMetrics:       metrics.NewMemory(metrics.MemoryConfig{Retention: 15 * time.Minute, MaxPoints: 512}),
+		taskSource:        newSupervisorTaskSource(),
 		taskHistoryImport: make(chan struct{}, 1),
 	}
 	// Probe runs in the background so NewServer stays fast. First /api/status
@@ -1195,7 +1196,9 @@ func (s *Server) handleRepoFavicon(w http.ResponseWriter, r *http.Request) {
 		logger.Warnf("favicon cache read %s: %v", homepage, err)
 	}
 	if !hit {
-		data, mime, err = store.FetchFavicon(r.Context(), homepage)
+		// No AllowLocal: a repo homepage is attacker-influenced, so this fetch
+		// keeps the full public-address guard.
+		data, mime, err = store.FetchFavicon(r.Context(), homepage, cache.FaviconOptions{})
 		if err != nil {
 			logger.Debugf("favicon fetch %s: %v", homepage, err)
 			http.Error(w, "favicon unavailable", http.StatusNotFound)

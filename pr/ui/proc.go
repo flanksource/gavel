@@ -245,7 +245,9 @@ func (s *Server) handleProcFavicon(w http.ResponseWriter, r *http.Request) {
 		logger.Warnf("process favicon cache read %s: %v", homepage, err)
 	}
 	if !hit {
-		data, mime, err = store.FetchFavicon(r.Context(), homepage)
+		// AllowLocal: the target is a loopback port this server already matched
+		// against a supervised process above, not a URL the caller chose.
+		data, mime, err = store.FetchFavicon(r.Context(), homepage, cache.FaviconOptions{AllowLocal: true})
 		if err != nil {
 			logger.Debugf("process favicon fetch %s: %v", homepage, err)
 			http.Error(w, "favicon unavailable", http.StatusNotFound)
@@ -319,6 +321,10 @@ func (s *Server) handleProcControl(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusInternalServerError, actErr)
 		return
 	}
+	// A supervisor just came up or went down, so the task source's memoized
+	// live-root set is stale by definition — don't make the task streams wait
+	// out its TTL to notice.
+	s.taskSource.invalidateRoots()
 	json.NewEncoder(w).Encode(projectStatus(p)) //nolint:errcheck
 }
 
