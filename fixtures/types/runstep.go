@@ -55,6 +55,9 @@ func RunTestStep(fixture fixtures.FixtureTest, opts fixtures.RunOptions) fixture
 	if ro.WorkDir == "" {
 		ro.WorkDir = resolveStepWorkDir(fixture, opts)
 	}
+	// A verification scoped to the change under review narrows the run to the
+	// packages those files affect, on top of whatever selector the step declares.
+	ro.ChangedFiles = append(ro.ChangedFiles, opts.Changed...)
 	var summary parsers.TestSummary
 	ro.SummaryOut = &summary
 	var progressDone chan struct{}
@@ -132,6 +135,11 @@ func RunLintStep(fixture fixtures.FixtureTest, opts fixtures.RunOptions) fixture
 	lo.OutputTee = nil
 	if lo.WorkDir == "" {
 		lo.WorkDir = resolveStepWorkDir(fixture, opts)
+	}
+	// A step that names its own files has already scoped itself; otherwise the
+	// change under review is the scope.
+	if len(lo.Files) == 0 {
+		lo.Files = opts.Changed
 	}
 	ctx := context.Background()
 	lo.Context = ctx

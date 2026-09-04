@@ -6,6 +6,8 @@ import (
 	"sync"
 
 	"github.com/flanksource/captain/pkg/api"
+
+	"github.com/flanksource/gavel/fixtures/record"
 )
 
 // FixtureType defines the interface for different types of fixture tests.
@@ -54,6 +56,27 @@ type RunOptions struct {
 	// the same reason as Setup: a proxy address is runtime state, not part of the
 	// fixture's declaration.
 	Recorder *RecorderContext
+
+	// Record is the recorder declaration in force for this fixture — its own
+	// `record:` or the run-wide default — so RunNode can refuse a recorder that
+	// has no implementation before the fixture runs. Nil records nothing.
+	Record *record.Spec
+
+	// DaemonPort is the port the file's `daemon:` was started on, exposed to
+	// exec fixtures as the `{{.port}}` template variable. Zero means no daemon.
+	DaemonPort int
+
+	// Changed are the workdir-relative files the change under verification
+	// touched, when the caller scoped verification to them (captain's
+	// `workflow.verify.scope: changed`). Nil or empty verifies the whole tree.
+	//
+	// Every node kind honours it: a `yaml test` step narrows to the packages
+	// those files affect, a `yaml lint` step lints only them, an `ai` step names
+	// them to the grader, and an exec fixture's expectation can read them as the
+	// CEL variable `changed_files`. RunNode records the list under
+	// Metadata["changed_files"] on every result so a verdict shows the scope it
+	// was reached under.
+	Changed []string
 }
 
 // OutputMode controls when captured command output is shown in rendered

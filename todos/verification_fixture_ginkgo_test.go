@@ -3,6 +3,8 @@ package todos
 import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+
+	"github.com/flanksource/gavel/todos/types"
 )
 
 var _ = Describe("verification fixture sections", func() {
@@ -233,6 +235,6 @@ results.all(r, r.passed)
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(nodes).NotTo(BeEmpty())
-		Expect(hasFixtureTests(nodes)).To(BeTrue())
+		Expect(types.CountTests(nodes)).To(BeNumerically(">", 0))
 	})
 })

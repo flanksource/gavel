@@ -40,6 +40,17 @@ type FixtureAIConfig struct {
 	MaxConcurrent int           `yaml:"maxConcurrent,omitempty" json:"maxConcurrent,omitempty"`
 	CacheTTL      time.Duration `yaml:"cacheTTL,omitempty" json:"cacheTTL,omitempty"`
 	NoCache       bool          `yaml:"noCache,omitempty" json:"noCache,omitempty"`
+	// CriteriaSection names the heading whose task list is the step's checklist.
+	// Empty means the whole document, which is right for a file that is only an
+	// AI review.
+	//
+	// It exists because an `ai:` document may also hold ordinary fixture steps —
+	// a TODO's definition of done is exactly that — and those steps carry their
+	// own `- cel:` expectation bullets and may carry task lists of their own.
+	// Read whole-document, one of those bullets becomes the AI step's CEL
+	// expectation and is then evaluated against the checklist JSON, failing a
+	// step that graded perfectly well.
+	CriteriaSection string `yaml:"criteriaSection,omitempty" json:"criteriaSection,omitempty"`
 }
 
 // ToAgentConfig maps the `ai:` front matter onto an ai.AgentConfig. A nil
@@ -77,13 +88,34 @@ func (c *FixtureAIConfig) ToAgentConfig() ai.AgentConfig {
 }
 
 // FixtureVerifyConfig is the `verify:` front-matter block: the review scope
-// (default: working-tree diff), the pass threshold (default 80), and check IDs
-// to disable for this step.
+// (default: working-tree diff), the pass threshold (default 80), check IDs to
+// disable for this step, and the definition-of-done retry predicate.
 type FixtureVerifyConfig struct {
 	Scope     string   `yaml:"scope,omitempty" json:"scope,omitempty"`
 	Threshold int      `yaml:"threshold,omitempty" json:"threshold,omitempty"`
 	Disabled  []string `yaml:"disabled,omitempty" json:"disabled,omitempty"`
+	// Retry is the CEL predicate deciding whether the agent is re-run after this
+	// document has been executed. It reads the verification report under the
+	// variable `verify` (see captain's api.VerifyReport.CELVars) — for example
+	// `verify.summary.failed > 0`. Empty resolves to DefaultRetryExpr.
+	//
+	// It lives in the document rather than alongside it because the document is
+	// the whole contract: an external fixture runner receives nothing but this
+	// markdown on stdin, so a predicate kept anywhere else would not reach it.
+	Retry string `yaml:"retry,omitempty" json:"retry,omitempty"`
 }
+
+// DefaultRetryExpr is the definition-of-done retry predicate applied when a
+// fixture document declares none: re-run the agent while anything in the tree
+// failed, warned, timed out, or left an acceptance criterion unmet.
+//
+// A predicate can only make the verdict stricter — it adds reasons to re-run,
+// and can never talk a red tree into passing. The report's verdict is the tree
+// it ran (captain's api.VerifyReport.Validate enforces exactly that), so a
+// predicate that "passes" a failing document would be a report that contradicts
+// itself.
+const DefaultRetryExpr = "verify.summary.failed > 0 || verify.summary.warned > 0 || " +
+	"verify.summary.timedout > 0 || verify.checklist.exists(i, !i.passed)"
 
 // ChecklistItem is one GitHub-style task-list entry from the document body. Each
 // item becomes one scored acceptance criterion.
@@ -169,8 +201,18 @@ func parseAIFixtureTree(content string, frontMatter *FrontMatter, sourceDir stri
 		goldmark.WithExtensions(extension.Table, extension.TaskList),
 		goldmark.WithParserOptions(parser.WithAutoHeadingID()),
 	)
+	// criteria is the slice of the document the checklist and its validation
+	// bullets are read from: the declared section, or the whole document when
+	// none is declared. The step's name and description still come from the whole
+	// document — those describe the review, not the criteria.
+	criteria := content
+	if frontMatter != nil && frontMatter.AI != nil && frontMatter.AI.CriteriaSection != "" {
+		criteria = markdownSection(content, frontMatter.AI.CriteriaSection)
+	}
 	source := []byte(content)
 	doc := md.Parser().Parse(text.NewReader(source))
+	criteriaSource := []byte(criteria)
+	criteriaDoc := md.Parser().Parse(text.NewReader(criteriaSource))
 
 	var name, promptBody string
 	var descParts, validations []string
@@ -201,11 +243,21 @@ func parseAIFixtureTree(content string, frontMatter *FrontMatter, sourceDir stri
 					promptBody = extractCodeBlockContent(&node.BaseBlock, source)
 				}
 			}
-		case *ast.List:
-			listText := extractNodeText(node, source)
-			if strings.Contains(listText, "cel:") || strings.Contains(listText, "contains:") || strings.Contains(listText, "regex:") {
-				validations = append(validations, extractValidationsFromList(node, source)...)
-			}
+		}
+		return ast.WalkContinue, nil
+	})
+
+	// Validation bullets come from the criteria slice only: read from the whole
+	// document, an ordinary fixture step's `- cel: exitCode == 0` would become
+	// the AI step's expectation and be evaluated against the checklist JSON.
+	_ = ast.Walk(criteriaDoc, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		list, ok := n.(*ast.List)
+		if !entering || !ok {
+			return ast.WalkContinue, nil
+		}
+		listText := extractNodeText(list, criteriaSource)
+		if strings.Contains(listText, "cel:") || strings.Contains(listText, "contains:") || strings.Contains(listText, "regex:") {
+			validations = append(validations, extractValidationsFromList(list, criteriaSource)...)
 		}
 		return ast.WalkContinue, nil
 	})
@@ -221,7 +273,7 @@ func parseAIFixtureTree(content string, frontMatter *FrontMatter, sourceDir stri
 		AIStep: &AIStepSpec{
 			Prompt:      promptBody,
 			Description: strings.Join(descParts, "\n\n"),
-			Criteria:    ExtractChecklist(content),
+			Criteria:    ExtractChecklist(criteria),
 		},
 	}
 	if frontMatter != nil {

@@ -1,17 +1,12 @@
 package fixtures
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
-	"runtime"
-	"strconv"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/bmatcuk/doublestar/v4"
@@ -20,7 +15,6 @@ import (
 	"github.com/flanksource/clicky/task"
 	flanksourceContext "github.com/flanksource/commons/context"
 	"github.com/flanksource/commons/logger"
-	"github.com/flanksource/gomplate/v3"
 
 	"github.com/flanksource/gavel/fixtures/record"
 )
@@ -438,202 +432,28 @@ func (r *Runner) attachResult(node *FixtureNode, result FixtureResult) {
 	}
 }
 
-// getBuildCommand extracts build command from first fixture that has one
-func (r *Runner) getBuildCommand() (string, *PreparedSetup) {
-	return r.firstDeclared("build", func(f FixtureTest) string { return f.Build })
-}
-
-// firstDeclared returns the first command any fixture declares, together with
-// the setup prepared for the file that declared it. Tree order is the order
-// parseFixtureFiles builds r.fixtures in, so first-wins means the same fixture
-// either way.
-//
-// build: and daemon: are run-wide, but a setup is per file, so a run with more
-// than one prepared tree can only put them in one of them. That is a real
-// ambiguity rather than a bug to paper over — warn and name the file, and make
-// them per-file only if the warning proves common.
-func (r *Runner) firstDeclared(kind string, pick func(FixtureTest) string) (string, *PreparedSetup) {
-	var command, owner string
-	r.tree.Walk(func(node *FixtureNode) {
-		if command != "" || node.Test == nil {
-			return
-		}
-		if value := pick(*node.Test); value != "" {
-			command = value
-			if node.Origin != nil {
-				owner = node.Origin.File
-			}
-		}
-	})
-
-	setup := r.setups[owner]
-	switch {
-	case command == "" || len(r.setups) == 0:
-	case setup == nil:
-		logger.Warnf("%s: runs in %s because %s declares no setup:, while other files in this run do",
-			kind, r.options.WorkDir, owner)
-	case len(r.setups) > 1:
-		logger.Warnf("%s: runs in %s (declared by %s); the other %d prepared setup(s) in this run do not get their own",
-			kind, setup.Cwd, owner, len(r.setups)-1)
-	}
-	return command, setup
-}
-
-// executeBuildCommand runs the build command with context cancellation and gomplate templating
-func (r *Runner) executeBuildCommand(ctx flanksourceContext.Context, buildCmd string, setup *PreparedSetup) error {
-	workDir := setup.Dir(r.options.WorkDir)
-
-	// Prepare template context for build command
-	templateData := make(map[string]interface{})
-	templateData["PWD"] = workDir
-	templateData["WorkDir"] = workDir
-	templateData["GOOS"] = runtime.GOOS
-	templateData["GOARCH"] = runtime.GOARCH
-	templateData["GOPATH"] = os.Getenv("GOPATH")
-
-	// Template the build command (expand $VAR first, then gomplate)
-	buildCmd = ExpandVars(buildCmd, templateData)
-	templatedCmd, err := renderBuildTemplate(buildCmd, templateData)
-	if err != nil {
-		ctx.Errorf("Failed to template build command: %v", err)
-		return fmt.Errorf("failed to template build command: %w", err)
-	}
-
-	ctx.Logger.V(4).Infof("🔨 Build command: %s", templatedCmd)
-
-	cmd := exec.CommandContext(ctx, "sh", "-c", templatedCmd)
-	cmd.Dir = workDir
-	cmd.Env = setup.Environ()
-
-	var buildOut bytes.Buffer
-	cmd.Stdout = &buildOut
-	cmd.Stderr = &buildOut
-
-	if err := cmd.Run(); err != nil {
-		ctx.Errorf("Build failed: %v\nOutput: %s", err, buildOut.String())
-		return fmt.Errorf("build command failed: %v\nOutput: %s", err, buildOut.String())
-	}
-
-	if buildOut.Len() > 0 {
-		ctx.Logger.V(5).Infof("Build output: %s", buildOut.String())
-	}
-
-	return nil
-}
-
 // executeFixture runs a single fixture test in the environment prepared for the
 // file that declared it (zero-valued when that file declared neither `setup:`
-// nor `record:`).
+// nor `record:`). The dispatch itself is RunNode's: this only assembles the
+// run's environment around it and stamps the runner's own presentation.
 func (r *Runner) executeFixture(ctx flanksourceContext.Context, fixture FixtureTest, env fixtureEnv) (FixtureResult, error) {
-	setup := env.setup
-
-	if missing := r.effectiveRecord(fixture).Missing(); len(missing) > 0 {
-		return FixtureResult{
-			Name:   fixture.Name,
-			Status: task.StatusERR,
-			Test:   fixture,
-			Error:  fmt.Sprintf("record: %v is not implemented yet", missing),
-		}, nil
-	}
-
-	if reason := fixture.ShouldSkip(); reason != "" {
-		return FixtureResult{
-			Name:   fixture.Name,
-			Status: task.StatusSKIP,
-			Test:   fixture,
-			Error:  reason,
-		}, nil
-	}
-
-	// AI verification steps are dispatched through the AIStepRunner hook (not a
-	// registered type). The implementation lives in fixtures/types to keep this
-	// package free of a verify import (which would cycle via todos/types).
-	if fixture.IsAIStep() {
-		if AIStepRunner == nil {
-			return FixtureResult{
-				Name:   fixture.Name,
-				Status: task.StatusERR,
-				Test:   fixture,
-				Error:  "AI step runner not registered; import _ \"github.com/flanksource/gavel/fixtures/types\"",
-			}, nil
-		}
-		if r.options.WorkDir == "" {
-			r.options.WorkDir, _ = os.Getwd()
-		}
-		return AIStepRunner(fixture, RunOptions{
-			Context:        ctx,
-			WorkDir:        r.options.WorkDir,
-			ExecutablePath: r.options.ExecutablePath,
-			Spec:           r.options.Spec,
-			Setup:          setup,
-			Progress:       fixtureProgressFromContext(ctx),
-		}), nil
-	}
-
-	// Runner steps (`yaml test` / `yaml lint`) drive the test/lint engine via
-	// the TestStepRunner/LintStepRunner hooks (implemented in fixtures/types to
-	// keep this package free of a testrunner/lint import that would cycle).
-	if fixture.IsRunnerStep() {
-		runner := TestStepRunner
-		if fixture.IsLintStep() {
-			runner = LintStepRunner
-		}
-		if runner == nil {
-			return FixtureResult{
-				Name:   fixture.Name,
-				Status: task.StatusERR,
-				Test:   fixture,
-				Error:  "runner step hook not registered; import _ \"github.com/flanksource/gavel/fixtures/types\"",
-			}, nil
-		}
-		if r.options.WorkDir == "" {
-			r.options.WorkDir, _ = os.Getwd()
-		}
-		return runner(fixture, RunOptions{
-			Context:        ctx,
-			WorkDir:        r.options.WorkDir,
-			ExecutablePath: r.options.ExecutablePath,
-			Spec:           r.options.Spec,
-			Setup:          setup,
-			Progress:       fixtureProgressFromContext(ctx),
-		}), nil
-	}
-
-	// Get the appropriate fixture type from registry
-	fixtureType, err := DefaultRegistry.GetForFixture(fixture)
-	if err != nil {
-		return FixtureResult{
-			Name:   fixture.Name,
-			Status: task.StatusERR,
-			Test:   fixture,
-			Error:  err.Error(),
-		}, nil
-	}
-
-	if r.daemonPort > 0 {
-		if fixture.TemplateVars == nil {
-			fixture.TemplateVars = make(map[string]any)
-		}
-		fixture.TemplateVars["port"] = strconv.Itoa(r.daemonPort)
-	}
-
 	if r.options.WorkDir == "" {
 		r.options.WorkDir, _ = os.Getwd()
 	}
 	ctx.Logger.V(5).Infof("Using CWD: %s", r.options.WorkDir)
 
-	// Prepare run options with flanksource context
 	opts := RunOptions{
 		Context:        ctx,
 		WorkDir:        r.options.WorkDir,
 		Verbose:        ctx.Logger.IsLevelEnabled(logger.Debug),
-		NoCache:        false,
 		Spec:           r.options.Spec,
 		Evaluator:      r.evaluator,
 		ExecutablePath: r.options.ExecutablePath,
 		UpdateGolden:   r.options.UpdateGolden,
-		Setup:          setup,
+		Setup:          env.setup,
 		Recorder:       r.recorderContext(env.file),
+		Record:         r.effectiveRecord(fixture),
+		DaemonPort:     r.daemonPort,
 		Progress:       fixtureProgressFromContext(ctx),
 		ExtraArgs: map[string]interface{}{
 			"flanksource_context": ctx,
@@ -641,119 +461,10 @@ func (r *Runner) executeFixture(ctx flanksourceContext.Context, fixture FixtureT
 	}
 
 	start := time.Now()
-	// Run the fixture test
-	result := fixtureType.Run(ctx, fixture, opts)
+	result := RunNode(ctx, fixture, opts)
 	result.Duration = time.Since(start)
 	if r.options.Display != nil {
 		result.Display = r.options.Display
 	}
-
 	return result, nil
-}
-
-// getDaemonCommand extracts daemon command from first fixture that has one
-func (r *Runner) getDaemonCommand() (string, *PreparedSetup) {
-	return r.firstDeclared("daemon", func(f FixtureTest) string { return f.FrontMatter.Daemon })
-}
-
-// startDaemon picks a free port, templates the command, starts the process, and waits for the port to be ready.
-func (r *Runner) startDaemon(ctx flanksourceContext.Context, daemonCmd string, setup *PreparedSetup) error {
-	port, err := freePort()
-	if err != nil {
-		return fmt.Errorf("failed to find free port: %w", err)
-	}
-	r.daemonPort = port
-
-	workDir := setup.Dir(r.options.WorkDir)
-	templateData := map[string]interface{}{
-		"port":    strconv.Itoa(port),
-		"PWD":     workDir,
-		"WorkDir": workDir,
-		"GOOS":    runtime.GOOS,
-		"GOARCH":  runtime.GOARCH,
-	}
-
-	daemonCmd = ExpandVars(daemonCmd, templateData)
-	templated, err := renderBuildTemplate(daemonCmd, templateData)
-	if err != nil {
-		return fmt.Errorf("failed to template daemon command: %w", err)
-	}
-
-	logger.Infof("Starting daemon on port %d: %s", port, templated)
-
-	cmd := exec.CommandContext(ctx, "sh", "-c", templated)
-	cmd.Dir = workDir
-	cmd.Env = setup.Environ()
-	cmd.Stdout = os.Stderr
-	cmd.Stderr = os.Stderr
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("failed to start daemon: %w", err)
-	}
-	r.daemonCmd = cmd
-
-	// Wait for port to be ready
-	addr := net.JoinHostPort("localhost", strconv.Itoa(port))
-	for i := 0; i < 60; i++ {
-		conn, err := net.DialTimeout("tcp", addr, 200*time.Millisecond)
-		if err == nil {
-			conn.Close()
-			logger.Infof("Daemon ready on port %d", port)
-			return nil
-		}
-		// Check if process died
-		if cmd.ProcessState != nil {
-			return fmt.Errorf("daemon exited prematurely with code %d", cmd.ProcessState.ExitCode())
-		}
-		time.Sleep(500 * time.Millisecond)
-	}
-	r.stopDaemon()
-	return fmt.Errorf("daemon did not start listening on port %d within 30s", port)
-}
-
-// stopDaemon sends SIGTERM, waits up to 5s, then SIGKILL.
-func (r *Runner) stopDaemon() {
-	if r.daemonCmd == nil || r.daemonCmd.Process == nil {
-		return
-	}
-
-	logger.Infof("Stopping daemon (PID %d)", r.daemonCmd.Process.Pid)
-
-	// Kill the process group to include child processes
-	pgid := -r.daemonCmd.Process.Pid
-	_ = syscall.Kill(pgid, syscall.SIGTERM)
-
-	done := make(chan struct{})
-	go func() {
-		_ = r.daemonCmd.Wait()
-		close(done)
-	}()
-
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		logger.Warnf("Daemon did not exit after SIGTERM, sending SIGKILL")
-		_ = syscall.Kill(pgid, syscall.SIGKILL)
-		<-done
-	}
-
-	r.daemonCmd = nil
-}
-
-func freePort() (int, error) {
-	l, err := net.Listen("tcp", "localhost:0")
-	if err != nil {
-		return 0, err
-	}
-	port := l.Addr().(*net.TCPAddr).Port
-	l.Close()
-	return port, nil
-}
-
-// renderBuildTemplate renders a gomplate template for build commands
-func renderBuildTemplate(template string, data map[string]interface{}) (string, error) {
-	return gomplate.RunTemplate(data, gomplate.Template{
-		Template: template,
-	})
 }

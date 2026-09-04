@@ -25,6 +25,15 @@ func NewExecutionReporter(nodes []*FixtureNode, workDir string, steps []Executio
 	return &ExecutionReporter{tracker: newExecutionTracker(root, workDir, steps, sink)}
 }
 
+// Snapshot returns the reporter's current execution tree, so a caller that
+// registered no sink can still read the state the run ended in.
+func (r *ExecutionReporter) Snapshot() ExecutionSnapshot {
+	if r == nil {
+		return ExecutionSnapshot{}
+	}
+	return r.tracker.Snapshot()
+}
+
 func (r *ExecutionReporter) Publish(ctx context.Context) error {
 	if r == nil {
 		return nil

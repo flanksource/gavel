@@ -93,7 +93,7 @@ func resolveAIStepSpec(fixture fixtures.FixtureTest, opts fixtures.RunOptions, s
 	config := fixture.AI.ToAgentConfig()
 	spec = spec.Merge(api.Spec{Model: config.Model, Budget: config.Budget})
 
-	spec.Prompt.User = buildChecklistPrompt(fixture, fixtureRepoPath(fixture, opts), checklistItems(fixture))
+	spec.Prompt.User = buildChecklistPrompt(fixture, fixtureRepoPath(fixture, opts), checklistItems(fixture), opts.Changed)
 	spec.Prompt.Source = "fixtures.ai-step"
 	spec.Prompt.Schema = schema
 	spec.Prompt.SchemaJSON = nil
@@ -153,10 +153,19 @@ func checklistItems(fixture fixtures.FixtureTest) []fixtures.ChecklistItem {
 // buildChecklistPrompt renders the acceptance-criteria review prompt: the
 // document prose and any custom instructions, then the numbered criteria, asking
 // the agent to inspect the change at repoPath and return a per-item verdict.
-func buildChecklistPrompt(fixture fixtures.FixtureTest, repoPath string, items []fixtures.ChecklistItem) string {
+// When the verification is scoped to particular files, the grader is told which,
+// so it judges the change under review rather than everything dirty in the tree.
+func buildChecklistPrompt(fixture fixtures.FixtureTest, repoPath string, items []fixtures.ChecklistItem, changed []string) string {
 	var b strings.Builder
 	b.WriteString("You are verifying whether a code change satisfies its acceptance criteria.\n")
 	fmt.Fprintf(&b, "Inspect the current change in the git repository at %s — the working-tree diff, staged changes, and the most recent commits — using your tools.\n\n", repoPath)
+	if len(changed) > 0 {
+		b.WriteString("The change under review is limited to these files (relative to the repository root); judge the criteria against them:\n")
+		for _, path := range changed {
+			fmt.Fprintf(&b, "- %s\n", path)
+		}
+		b.WriteString("\n")
+	}
 	if fixture.AIStep != nil {
 		if desc := strings.TrimSpace(fixture.AIStep.Description); desc != "" {
 			b.WriteString(desc)

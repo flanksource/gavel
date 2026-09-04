@@ -188,6 +188,15 @@ func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opt
 		result.Recordings = harvest.Recordings
 		evaluate.CELVars = harvest.CELVars
 	}
+	// The change under review, as the CEL root `changed_files`, so a fixture that
+	// only makes sense against particular files can say so; absent, not empty,
+	// when the verification is not scoped to a change.
+	if len(opts.Changed) > 0 {
+		if evaluate.CELVars == nil {
+			evaluate.CELVars = map[string]any{}
+		}
+		evaluate.CELVars["changed_files"] = opts.Changed
+	}
 
 	// Deliberately fixture.SourceDir, not execBase: `@golden` files belong next
 	// to the markdown that asserts them. A worktree is disposable, so writing

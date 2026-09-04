@@ -1,8 +1,7 @@
 // Package report renders compact, PR-comment / agent-feedback markdown summaries
 // from gavel test and lint results. It lives in its own importable package so
-// both the CLI (`gavel summary`) and the post-completion agent check loop
-// (todos/checks) can produce the same compact failure digest without the loop
-// depending on package main.
+// both the CLI (`gavel summary`) and the fixture engine's runner steps can
+// produce the same compact failure digest without depending on package main.
 package report
 
 import (
