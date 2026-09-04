@@ -52,7 +52,7 @@ func TestExecutionIntegrationAtomicLinksAndReplay(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, issue.ActivePromptRunID)
 	assert.Equal(t, runID, *issue.ActivePromptRunID)
-	assert.Equal(t, originalVersion+2, issue.Version, "activation and initial Captain projection each mutate once")
+	assert.Equal(t, originalVersion+1, issue.Version, "activation mutates once; execution state is derived at read time, not projected")
 	assert.Equal(t, native.ExecutionRunning, issue.ExecutionState)
 
 	// A lost-response retry carries the original version. The complete link and
@@ -118,7 +118,9 @@ func TestExecutionIntegrationAtomicLinksAndReplay(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, issue.ActivePromptRunID)
 	assert.Equal(t, native.ExecutionIdle, issue.ExecutionState)
-	assert.Equal(t, beforeClearVersion+2, issue.Version, "pointer clear and idle projection each mutate once")
+	// Execution state is read-time only: clearing the pointer is the one
+	// mutation, and nothing projects a status back onto the issue.
+	assert.Equal(t, beforeClearVersion+1, issue.Version, "pointer clear mutates once")
 
 	planID := insertCaptainPlan(t, db, runID)
 	planOriginalVersion := issue.Version
@@ -174,10 +176,13 @@ func TestExecutionIntegrationAtomicLinksAndReplay(t *testing.T) {
 		Provider:          "test",
 		CWD:               "/workspace/gavel-execution-integration",
 	}
+	// The projection classifies a run by what it was asked to do, never by the
+	// step's name: a plan run is one whose rendered spec runs in plan mode.
 	promptInput := captaindb.CreatePromptRunInput{
 		AdmissionKey:   "gavel:coordinated-launch:plan:0",
 		Origin:         "gavel.todos.plan",
 		PromptMarkdown: "Draft a plan",
+		RenderedSpec:   map[string]any{"permissions": map[string]any{"mode": "plan"}},
 	}
 	attachment := native.PromptRunLaunchAttachment{
 		IssueID:              coordinatedIssue.ID,
@@ -204,7 +209,7 @@ func TestExecutionIntegrationAtomicLinksAndReplay(t *testing.T) {
 	require.NotNil(t, launch.Issue.ActivePromptRunID)
 	assert.Equal(t, launch.PromptRun.ID, *launch.Issue.ActivePromptRunID)
 	assert.Equal(t, native.ExecutionPlanning, launch.Issue.ExecutionState)
-	assert.Equal(t, coordinatedIssue.Version+2, launch.Issue.Version)
+	assert.Equal(t, coordinatedIssue.Version+1, launch.Issue.Version, "attaching the run is the one mutation; execution state is derived at read time")
 
 	// The Captain admission key and native exact-replay guard make the whole
 	// operation retryable with the original issue version.

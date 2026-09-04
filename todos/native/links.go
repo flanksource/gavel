@@ -85,9 +85,6 @@ func (r *Repository) SetActivePromptRun(
 			return err
 		}
 		if sameUUIDPointer(current.ActivePromptRunID, promptRunID) {
-			if promptRunID == nil {
-				return projectIssue(tx, issueID)
-			}
 			return nil
 		}
 		if promptRunID != nil {
@@ -120,8 +117,11 @@ func (r *Repository) SetActivePromptRun(
 		if err != nil {
 			return err
 		}
+		// Clearing the pointer needs no projection: execution state is derived at
+		// read time, and there is no run left whose activity could advance the
+		// issue's watermark.
 		if promptRunID == nil {
-			return projectIssue(tx, issueID)
+			return nil
 		}
 		return projectPromptRun(tx, *promptRunID)
 	})
@@ -165,10 +165,7 @@ func (r *Repository) UnlinkPromptRun(
 				"promptRunId": promptRunID,
 			},
 		})
-		if err != nil {
-			return err
-		}
-		return projectIssue(tx, issueID)
+		return err
 	})
 	if err != nil {
 		return nil, err

@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/types"
 )
@@ -19,6 +20,13 @@ var testProviders = struct {
 type testTODOProvider struct {
 	dir   string
 	items types.TODOS
+	// activeRun is the Captain prompt run backing the current attempt, as the
+	// native PostgreSQL runtime would report it. nil means no run history.
+	activeRun *captaindb.PromptRun
+}
+
+func (p *testTODOProvider) ActivePromptRun(context.Context, *types.TODO) (*captaindb.PromptRun, error) {
+	return p.activeRun, nil
 }
 
 func testProviderFor(dir string) *testTODOProvider {
@@ -156,6 +164,12 @@ func (p *testTODOProvider) UpdateState(_ context.Context, todo *types.TODO, upda
 	if update.LastRun != nil {
 		todo.LastRun = update.LastRun
 	}
+	if update.SessionID != nil {
+		if todo.LLM == nil {
+			todo.LLM = &types.LLM{}
+		}
+		todo.LLM.SessionId = *update.SessionID
+	}
 	if update.PlanPath != nil {
 		todo.PlanPath = *update.PlanPath
 	}
@@ -173,4 +187,25 @@ func (p *testTODOProvider) SaveAttempt(context.Context, *types.TODO, *todos.Exec
 	return nil
 }
 
+// RunHistory is empty: a CLI test's todo has never been dispatched, so the
+// lifecycle sees no runs and suggests the first step that applies.
+func (p *testTODOProvider) RunHistory(context.Context, *types.TODO) ([]todos.StepRunRecord, error) {
+	return nil, nil
+}
+
 func (p *testTODOProvider) SupportsGroupedExecution() bool { return false }
+
+// PlanState projects the todo's recorded plan pointer the way the native
+// runtime projects its selected plan, so the lifecycle host can evaluate a
+// step's predicates against a CLI test's todo.
+func (p *testTODOProvider) PlanState(_ context.Context, todo *types.TODO) (todos.PlanState, error) {
+	if strings.TrimSpace(todo.PlanPath) == "" && todo.PlanStatus == "" {
+		return todos.PlanState{}, nil
+	}
+	return todos.PlanState{
+		Exists:   true,
+		Approved: todo.Status == types.StatusPending && todo.PlanStatus != "",
+		Path:     todo.PlanPath,
+		Revision: 1,
+	}, nil
+}

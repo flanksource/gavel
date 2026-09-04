@@ -55,12 +55,17 @@ const (
 	RelationshipBlocks RelationshipKind = "blocks"
 )
 
-// StepKind identifies the purpose of a linked Captain prompt run.
+// StepKind is the lifecycle step a linked Captain prompt run was dispatched as.
 //
-// StepTriage is a step kind but NOT a run mode: triage still behaves as a
-// plan-class run (todos/prompt/catalog.go declares it Class: ModePlan), it just
-// records itself under its own kind so a backlog can tell a triage pass apart
-// from a planning pass. types.RunMode deliberately stays three-valued.
+// It is an OPEN string, not an enum: the steps that exist are declared by the
+// project's lifecycle definition (todos/lifecycle/todos.yaml, overridable from
+// .gavel.yaml), so storage accepts any lower-case name and the host — which is
+// the only thing that has loaded the definition — is what rejects a name the
+// lifecycle does not declare.
+//
+// The constants below are the built-in lifecycle's steps, named here because
+// storage genuinely reasons about two of them: `verify` decides the phase a run
+// is recorded under, and the others are what historical rows contain.
 type StepKind string
 
 const (
@@ -140,19 +145,37 @@ type IssuePhaseRun struct {
 	// DurationSeconds is null until the run starts.
 	DurationSeconds *float64 `json:"durationSeconds,omitempty"`
 	// Iterations/Succeeded/Failed are the progress of a plan, run or triage
-	// pass. Verification counts its own fixture results instead — see
-	// VerificationResult and the definition-of-done snapshot in ResultJSON.
-	Iterations         int     `json:"iterations"`
-	Succeeded          int     `json:"succeeded"`
-	Failed             int     `json:"failed"`
+	// pass. Verification counts its own fixture results instead, from
+	// VerificationResult.
+	Iterations int `json:"iterations"`
+	Succeeded  int `json:"succeeded"`
+	Failed     int `json:"failed"`
+	// VerificationResult is captain's stored api.VerifyReport for the run's
+	// newest verified iteration, as JSON — the ONE record of a verification.
+	// Empty means the run has produced no verdict.
 	VerificationResult string  `json:"verificationResult,omitempty"`
 	CostUSD            float64 `json:"costUsd"`
 	// Active marks the run the issue currently points at, so a caller can tell a
 	// phase that is running now from one that merely ran last.
 	Active bool `json:"active"`
-	// ResultJSON carries the run's structured result; the verify phase reads its
-	// definitionOfDone.progress snapshot out of it for pass/fail counts.
-	ResultJSON []byte `json:"-"`
+}
+
+// IssueRunRecord is one linked Captain prompt run of an issue as the lifecycle's
+// run history reads it. Phase is the step the row is listed under: the link's
+// step kind, or `verify` for the second listing of a run step whose run verified
+// its own work (see ListIssueRunHistory).
+type IssueRunRecord struct {
+	IssueID     uuid.UUID  `json:"issueId"`
+	PromptRunID uuid.UUID  `json:"promptRunId"`
+	Phase       StepKind   `json:"phase"`
+	Ordinal     int        `json:"ordinal"`
+	State       string     `json:"state"`
+	QueuedAt    time.Time  `json:"queuedAt"`
+	StartedAt   *time.Time `json:"startedAt,omitempty"`
+	FinishedAt  *time.Time `json:"finishedAt,omitempty"`
+	// Outcome is the status the lifecycle recorded for this run in its outcome
+	// event; empty while the run is live, or when the step kept the status.
+	Outcome string `json:"outcome,omitempty"`
 }
 
 // Alias is a normalized workspace-scoped reference to an issue.

@@ -298,8 +298,3 @@ func projectPromptRun(tx *gorm.DB, promptRunID uuid.UUID) error {
 	var changed int
 	return tx.Raw(`SELECT public.gavel_project_todo_prompt_run(?)`, promptRunID).Scan(&changed).Error
 }
-
-func projectIssue(tx *gorm.DB, issueID uuid.UUID) error {
-	var changed bool
-	return tx.Raw(`SELECT public.gavel_project_todo_issue(?)`, issueID).Scan(&changed).Error
-}

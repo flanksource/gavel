@@ -6,7 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/flanksource/gavel/fixtures"
+	"github.com/flanksource/captain/pkg/api"
+
 	"github.com/flanksource/gavel/todos/types"
 )
 
@@ -18,7 +19,7 @@ type progressPersister struct {
 	provider  RunProgressProvider
 	todo      *types.TODO
 	lastWrite time.Time
-	pending   *fixtures.ExecutionSnapshot
+	pending   *api.VerifyReport
 	timer     *time.Timer
 	writeErr  error
 	closed    bool
@@ -28,7 +29,10 @@ func newProgressPersister(ctx context.Context, provider RunProgressProvider, tod
 	return &progressPersister{ctx: ctx, provider: provider, todo: todo}
 }
 
-func (p *progressPersister) Sink(_ context.Context, snapshot fixtures.ExecutionSnapshot) error {
+// Sink is the capverify.Options.Progress callback: every in-flight verification
+// report the fixture verifier publishes is persisted, rate-limited to one write
+// per interval with the last one guaranteed.
+func (p *progressPersister) Sink(report api.VerifyReport) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.closed {
@@ -39,9 +43,9 @@ func (p *progressPersister) Sink(_ context.Context, snapshot fixtures.ExecutionS
 	}
 	if p.lastWrite.IsZero() || time.Since(p.lastWrite) >= progressPersistenceInterval {
 		p.stopTimerLocked()
-		return p.writeLocked(snapshot)
+		return p.writeLocked(report)
 	}
-	p.pending = &snapshot
+	p.pending = &report
 	if p.timer == nil {
 		delay := progressPersistenceInterval - time.Since(p.lastWrite)
 		p.timer = time.AfterFunc(delay, p.flush)
@@ -54,9 +58,9 @@ func (p *progressPersister) Close() error {
 	defer p.mu.Unlock()
 	p.stopTimerLocked()
 	if p.pending != nil && p.writeErr == nil {
-		snapshot := *p.pending
+		report := *p.pending
 		p.pending = nil
-		_ = p.writeLocked(snapshot)
+		_ = p.writeLocked(report)
 	}
 	p.closed = true
 	return p.writeErr
@@ -69,15 +73,15 @@ func (p *progressPersister) flush() {
 	if p.closed || p.pending == nil || p.writeErr != nil {
 		return
 	}
-	snapshot := *p.pending
+	report := *p.pending
 	p.pending = nil
-	_ = p.writeLocked(snapshot)
+	_ = p.writeLocked(report)
 }
 
-func (p *progressPersister) writeLocked(snapshot fixtures.ExecutionSnapshot) error {
-	persistCtx, cancel := providerPersistenceContext(p.ctx)
+func (p *progressPersister) writeLocked(report api.VerifyReport) error {
+	persistCtx, cancel := PersistenceContext(p.ctx)
 	defer cancel()
-	if err := p.provider.RecordRunProgress(persistCtx, p.todo, snapshot); err != nil {
+	if err := p.provider.RecordRunProgress(persistCtx, p.todo, report); err != nil {
 		p.writeErr = fmt.Errorf("persist verification progress: %w", err)
 		return p.writeErr
 	}

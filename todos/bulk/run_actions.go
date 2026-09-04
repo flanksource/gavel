@@ -7,8 +7,8 @@ import (
 
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/gavel/todos"
+	"github.com/flanksource/gavel/todos/lifecycle"
 	"github.com/flanksource/gavel/todos/run"
-	todospec "github.com/flanksource/gavel/todos/spec"
 	"github.com/flanksource/gavel/todos/types"
 )
 
@@ -16,9 +16,8 @@ import (
 // the knobs a caller can vary per batch; everything else is resolved from
 // .gavel.yaml and each TODO's own frontmatter, exactly as a single run is.
 type RunFlags struct {
-	Model  string `flag:"model" help:"Override the model for this batch"`
+	Model  string `flag:"model" help:"Override the model for this batch, as the compact mode:model:effort form"`
 	Effort string `flag:"effort" help:"Reasoning effort" enum:"low,medium,high"`
-	Driver string `flag:"driver" help:"Execution driver" enum:"api,agent,cli,cmux"`
 	Resume bool   `flag:"resume" help:"Resume each TODO's prior session instead of starting fresh"`
 }
 
@@ -40,58 +39,44 @@ func (f RunFlags) Spec() api.Spec {
 
 // RunRequest is what a resolver is asked to turn into run options.
 type RunRequest struct {
-	Dir    string
-	Prompt string
-	Todo   *types.TODO
-	Flags  RunFlags
+	Dir string
+	// Step is the lifecycle step this batch runs on every selected TODO.
+	Step  string
+	Todo  *types.TODO
+	Flags RunFlags
 }
 
 // RunResolver produces the run options for one TODO.
 //
 // It is injected because resolving them is genuinely not uniform across
-// entrypoints. The dashboard applies a (driver, backend) catalog the CLI has no
-// equivalent of, and it serves an approval endpoint, so a run of its can be
-// admitted to ask for a Bash approval where an unattended CLI batch cannot. A
+// entrypoints: the dashboard serves an approval endpoint, so a run of its can be
+// admitted to ask for a tool approval where an unattended CLI batch cannot. A
 // single hardcoded resolution would have to be wrong for one of them.
 type RunResolver func(ctx context.Context, req RunRequest) (run.Options, error)
 
-// DefaultRunResolver is the plain resolution: .gavel.yaml plus each TODO's own
-// frontmatter, with the batch's overrides on top and no approval endpoint to
-// answer a prompt.
+// DefaultRunResolver is the plain resolution: the batch's overrides as the
+// request layer, and no approval endpoint to answer a prompt. Everything else
+// — the prompt, the spec layers, the timeout — is the lifecycle's, folded by
+// the host when the run resolves.
 func DefaultRunResolver(_ context.Context, req RunRequest) (run.Options, error) {
-	resolved, err := todospec.Resolve(todospec.Input{
-		WorkDir:  req.Dir,
-		Prompt:   req.Prompt,
-		Todos:    []*types.TODO{req.Todo},
-		Override: req.Flags.Spec(),
-		Driver:   strings.TrimSpace(req.Flags.Driver),
-	})
-	if err != nil {
-		return run.Options{}, err
-	}
 	return run.Options{
-		Spec:      resolved.Spec,
-		Driver:    string(resolved.Driver),
-		RunMode:   resolved.Mode,
-		Prompt:    resolved.Prompt,
-		Envelope:  resolved.Envelope,
-		Resume:    req.Flags.Resume,
-		Template:  resolved.Template,
-		Approvals: resolved.Approvals,
-		Timeout:   resolved.Timeout,
+		Step:    req.Step,
+		Request: req.Flags.Spec(),
+		Resume:  req.Flags.Resume,
+		Host:    lifecycle.HostCLI,
 	}, nil
 }
 
-// StartRun returns the item function for a named-prompt bulk action.
+// StartRun returns the item function for a named-step bulk action.
 //
-// run, plan and triage differ only in the prompt name — a prompt declares its
-// own behaviour class, so no mode is asserted here and the catalog decides.
-// That is what makes "triage these forty" and "plan these forty" one code path
-// rather than three.
-func StartRun(prompt string, flags RunFlags, registry *run.Registry, dir string, resolve RunResolver) (ItemFunc, error) {
-	prompt = strings.TrimSpace(prompt)
-	if prompt == "" {
-		return nil, fmt.Errorf("prompt name is required")
+// run, plan and triage differ only in the step name — a step declares its own
+// prompt, spec and outcomes — so no behaviour is asserted here and the
+// lifecycle decides. That is what makes "triage these forty" and "plan these
+// forty" one code path rather than three.
+func StartRun(step string, flags RunFlags, registry *run.Registry, dir string, resolve RunResolver, broker todos.ApprovalBroker) (ItemFunc, error) {
+	step = strings.TrimSpace(step)
+	if step == "" {
+		return nil, fmt.Errorf("lifecycle step name is required")
 	}
 	if registry == nil {
 		return nil, fmt.Errorf("run registry is required")
@@ -101,24 +86,22 @@ func StartRun(prompt string, flags RunFlags, registry *run.Registry, dir string,
 	}
 
 	return func(ctx context.Context, provider todos.Provider, todo *types.TODO) (ItemResult, error) {
-		opts, err := resolve(ctx, RunRequest{Dir: dir, Prompt: prompt, Todo: todo, Flags: flags})
+		opts, err := resolve(ctx, RunRequest{Dir: dir, Step: step, Todo: todo, Flags: flags})
 		if err != nil {
 			return ItemResult{}, err
 		}
-		todoList := []*types.TODO{todo}
-		opts.Spec.SessionID = run.ResolveSessionID(opts, todoList)
 		req := run.Request{
 			Provider: provider,
 			Registry: registry,
-			Todos:    todoList,
+			Todo:     todo,
 			Dir:      dir,
-			Backend:  todos.ProviderDB,
 			Options:  opts,
+			Broker:   broker,
 		}
-		// Constructing the executor first turns a misconfigured run into a
-		// per-item error before any agent session is admitted, so one bad TODO
-		// does not leave a half-started batch behind it.
-		if _, _, err := run.NewExecutorContext(ctx, req); err != nil {
+		// Resolving first turns a misconfigured run into a per-item error before
+		// any agent session is admitted, so one bad TODO does not leave a
+		// half-started batch behind it.
+		if _, err := run.Resolve(ctx, req); err != nil {
 			return ItemResult{}, err
 		}
 		started, err := run.Start(req)

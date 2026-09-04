@@ -8,7 +8,6 @@ import (
 
 	"github.com/flanksource/captain/pkg/api"
 	captaindb "github.com/flanksource/captain/pkg/database"
-	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/todos/labels"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/google/uuid"
@@ -102,26 +101,6 @@ type RunPreparationResult struct {
 	PromptRunID uuid.UUID
 }
 
-// RunRuntimeProvider exposes the configuration known before dispatch.
-type RunRuntimeProvider interface {
-	RunRuntimeSelection() captaindb.PromptRunRuntimeSelection
-}
-
-// RunPromptProvider reports which named prompt an executor is about to run. It
-// is derived from the executor rather than set alongside the mode because the
-// two must agree, and a caller that remembers one and forgets the other would
-// give the run an identity that collides with a different prompt's.
-type RunPromptProvider interface {
-	RunPromptName() string
-}
-
-// RunSpecProvider exposes the exact request an executor will dispatch.
-// TODOExecutor asks for it before native admission so Captain stores the real
-// runtime and prompt rather than a lossy reconstruction from the issue body.
-type RunSpecProvider interface {
-	RenderRunSpec(ctx *ExecutorContext, todo *types.TODO) (api.Spec, error)
-}
-
 // RunLifecycleProvider is implemented by the native PostgreSQL runtime. Native
 // execution state is owned by Captain and projected into issues.
 type RunLifecycleProvider interface {
@@ -129,8 +108,11 @@ type RunLifecycleProvider interface {
 	RecordRunStart(ctx context.Context, todo *types.TODO, metadata RunStartMetadata) error
 }
 
+// RunProgressProvider persists the in-flight verification report a definition of
+// done publishes while it runs, so the dashboard can watch the tree fill in
+// rather than waiting for the verdict.
 type RunProgressProvider interface {
-	RecordRunProgress(ctx context.Context, todo *types.TODO, snapshot fixtures.ExecutionSnapshot) error
+	RecordRunProgress(ctx context.Context, todo *types.TODO, report api.VerifyReport) error
 }
 
 // RunNoticeProvider persists what a run's lifecycle hooks did — the commits they
@@ -141,10 +123,15 @@ type RunNoticeProvider interface {
 	RecordRunNotices(ctx context.Context, sessionID string, notices []api.Notice) error
 }
 
-// GroupExecutionPolicy lets a persistence boundary reject execution shapes
-// that its data model cannot represent. Native prompt runs are single-issue.
-type GroupExecutionPolicy interface {
-	SupportsGroupedExecution() bool
+// RunIterationProvider files the per-turn account of a run under the prompt
+// run captain admitted: what each turn was asked, how it ended, and the
+// verification report that judged it. Captain derives the rows
+// (promptrun.IterationRecords); the host that dispatched the run writes them,
+// because captain's own CLI is the only host captain persists for. A run whose
+// rows are never written has no verification report anywhere the dashboard or
+// the lifecycle's run history reads from.
+type RunIterationProvider interface {
+	RecordRunIterations(ctx context.Context, promptRunID uuid.UUID, records []captaindb.UpsertPromptRunIterationInput) error
 }
 
 // GlobalReferenceProvider resolves a native UUID or imported alias without a
@@ -205,6 +192,62 @@ type PlanRecoveryProvider interface {
 // revise it; run mode receives only the explicitly approved revision.
 type PlanContentProvider interface {
 	PlanMarkdown(ctx context.Context, todo *types.TODO, mode types.RunMode) (string, error)
+}
+
+// PlanState is a todo's selected plan as the lifecycle sees it: whether one
+// exists, whether a revision of it is approved for implementation, and the
+// latest revision's content.
+type PlanState struct {
+	Exists   bool
+	Approved bool
+	Revision int
+	Path     string
+	Content  string
+}
+
+// PlanStateProvider exposes the selected plan's state without an agent's mode
+// deciding which revision is visible — the lifecycle's predicates decide that.
+type PlanStateProvider interface {
+	PlanState(ctx context.Context, todo *types.TODO) (PlanState, error)
+}
+
+// StepRunRecord is one recorded run of a lifecycle step: the step it was
+// dispatched as, the prompt run's own state, and the status its outcome landed.
+type StepRunRecord struct {
+	Step        string
+	PromptRunID string
+	// State is the prompt run's state: pending, running, waiting, succeeded,
+	// failed or cancelled. It is NOT the todo's status.
+	State string
+	// Outcome is the status the lifecycle chose when the run finished: empty
+	// while it runs, or when the step kept the status it found.
+	Outcome    string
+	StartedAt  *time.Time
+	FinishedAt *time.Time
+}
+
+// RunHistoryProvider lists every recorded step run of a todo, oldest first —
+// the `runs` the lifecycle's predicates read, and the source of `last.<step>`.
+//
+// A run step that verified its own work is listed twice: as the run, and as a
+// `verify` entry with the same timestamps, so `last.verify` reflects the newest
+// verdict wherever it came from. That is the rule the phase index applies, and
+// the two must agree about whether a todo has been verified since it ran.
+type RunHistoryProvider interface {
+	RunHistory(ctx context.Context, todo *types.TODO) ([]StepRunRecord, error)
+}
+
+// Event is one entry appended to a todo's history by the lifecycle: the step
+// that ran and the status its outcome chose.
+type Event struct {
+	Kind    string
+	Body    string
+	Payload any
+}
+
+// EventProvider appends lifecycle events to a todo's durable history.
+type EventProvider interface {
+	AppendEvent(ctx context.Context, todo *types.TODO, event Event) error
 }
 
 // Link is one issue-to-issue relationship seen from the queried TODO. The

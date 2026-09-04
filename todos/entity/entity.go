@@ -46,9 +46,13 @@ type Deps struct {
 	DefaultDir func() string
 	// ResolveRun turns a TODO plus the batch's overrides into run options.
 	// Optional: bulk.DefaultRunResolver is used when unset. The dashboard
-	// supplies its own because it applies a (driver, backend) catalog the CLI
-	// has no equivalent of, and because it can answer an approval prompt.
+	// supplies its own because it applies a runtime catalog the CLI has no
+	// equivalent of, and because it resolves as the approval-serving host.
 	ResolveRun bulk.RunResolver
+	// Broker answers a batched run's tool-permission requests. Optional, and
+	// nil is the CLI's answer: a terminal batch has no one to ask, so a run it
+	// starts must never be configured to.
+	Broker func(dir string) todos.ApprovalBroker
 }
 
 func (d Deps) validate() error {
@@ -62,6 +66,15 @@ func (d Deps) validate() error {
 		return fmt.Errorf("entity deps: Registry is required")
 	}
 	return nil
+}
+
+// broker is the approval callback factory for the batch's workspace, or nil
+// when the host answers no approvals.
+func (d Deps) broker() todos.ApprovalBroker {
+	if d.Broker == nil {
+		return nil
+	}
+	return d.Broker(d.dir(query.ListOpts{}))
 }
 
 func (d Deps) dir(opts query.ListOpts) string {
@@ -188,7 +201,7 @@ func (d Deps) bulkActions() []clicky.EntityBulkAction {
 		name := prompt.name
 		actions = append(actions, action(d, name, prompt.short, runHints, bulk.RunFlags{},
 			func(flags bulk.RunFlags) (bulk.ItemFunc, error) {
-				return bulk.StartRun(name, flags, d.Registry, d.dir(query.ListOpts{}), d.ResolveRun)
+				return bulk.StartRun(name, flags, d.Registry, d.dir(query.ListOpts{}), d.ResolveRun, d.broker())
 			}))
 	}
 	return actions

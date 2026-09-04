@@ -18,7 +18,7 @@ func TestTodosHasNoRuntimeProviderSelection(t *testing.T) {
 }
 
 func TestTodosRunFlagsRegistered(t *testing.T) {
-	for _, name := range []string{"mode", "model", "effort"} {
+	for _, name := range []string{"step", "model", "effort"} {
 		if flag := todosRunCmd.Flags().Lookup(name); flag == nil {
 			t.Fatalf("expected todos run --%s flag to be registered", name)
 		}
@@ -231,112 +231,6 @@ func (p *testPlanReviewProvider) RequestPlanRevision(ctx context.Context, todo *
 	return p.Get(ctx, todo.FilePath)
 }
 
-func TestValidateTodosRunOptions(t *testing.T) {
-	oldMode, oldEffort := todosMode, todoEffort
-	defer func() {
-		todosMode = oldMode
-		todoEffort = oldEffort
-	}()
-
-	for _, mode := range []string{"", "run", "plan"} {
-		todosMode = mode
-		todoEffort = "xhigh"
-		if err := validateTodosRunOptions(); err != nil {
-			t.Fatalf("expected mode %q to validate: %v", mode, err)
-		}
-	}
-
-	// The legacy mechanism values are rejected — --mode is the todo operation
-	// now; the mechanism is --driver.
-	for _, mode := range []string{"verify", "cmux", "inline", "bad"} {
-		todosMode = mode
-		if err := validateTodosRunOptions(); err == nil || !strings.Contains(err.Error(), "run mode") {
-			t.Fatalf("expected mode %q to be rejected, got %v", mode, err)
-		}
-	}
-
-	todosMode = "run"
-	todoEffort = "too-much"
-	if err := validateTodosRunOptions(); err == nil || !strings.Contains(err.Error(), "--effort") {
-		t.Fatalf("expected effort validation error, got %v", err)
-	}
-}
-
-// Review/ask todos must survive the CLI's post-run status cleanup — only
-// in_progress gets reconciled.
-func TestCleanupTODOStatusKeepsReviewAndAsk(t *testing.T) {
-	for _, status := range []types.Status{types.StatusReview, types.StatusAsk} {
-		todo := &types.TODO{TODOFrontmatter: types.TODOFrontmatter{Status: status}}
-		cleanupTODOStatus(todo, &todos.ExecutionResult{Success: true})
-		if todo.Status != status {
-			t.Errorf("cleanup rewrote %s to %s", status, todo.Status)
-		}
-	}
-}
-
-// TestNewAgentRunConfigModelOverride pins the CLI --model flag beating the
-// todo's recorded model in the canonical Spec.
-func TestNewAgentRunConfigModelOverride(t *testing.T) {
-	dir := isolatedTodosRun(t, "")
-	todoModel = "agent:opus"
-	todo := &types.TODO{TODOFrontmatter: types.TODOFrontmatter{LLM: &types.LLM{Model: "sonnet"}}}
-
-	cfg, _, err := newAgentRunConfig(context.Background(), dir, []*types.TODO{todo}, nil)
-	if err != nil {
-		t.Fatalf("newAgentRunConfig: %v", err)
-	}
-
-	if cfg.Spec.Name != "claude-opus-5" {
-		t.Fatalf("expected CLI model override, got %q", cfg.Spec.Name)
-	}
-}
-
-func TestNewAgentRunConfigLoadsPlanThroughActiveDBProvider(t *testing.T) {
-	dir := isolatedTodosRun(t, "")
-
-	provider := &planContentSpy{content: "# Approved durable plan"}
-	todo := &types.TODO{
-		ID: "962e67fe-4556-b837-0666-f0304281d554",
-		TODOFrontmatter: types.TODOFrontmatter{
-			PlanPath: "/definitely/not/a/runtime/plan.md",
-		},
-	}
-	cfg, _, err := newAgentRunConfig(context.Background(), dir, []*types.TODO{todo}, provider)
-	if err != nil {
-		t.Fatalf("newAgentRunConfig: %v", err)
-	}
-	if cfg.ExistingPlan != provider.content {
-		t.Fatalf("ExistingPlan = %q, want durable provider content", cfg.ExistingPlan)
-	}
-	if provider.calls != 1 || provider.mode != types.ModeRun || provider.todo != todo {
-		t.Fatalf("PlanMarkdown call = calls:%d mode:%s todo:%p, want one run-mode call for %p", provider.calls, provider.mode, provider.todo, todo)
-	}
-}
-
-type planContentSpy struct {
-	todos.Provider
-	content string
-	calls   int
-	mode    types.RunMode
-	todo    *types.TODO
-}
-
-func (p *planContentSpy) PlanMarkdown(_ context.Context, todo *types.TODO, mode types.RunMode) (string, error) {
-	p.calls++
-	p.todo = todo
-	p.mode = mode
-	return p.content, nil
-}
-
-func TestEffortDirective(t *testing.T) {
-	if got := effortDirective("high"); !strings.Contains(got, "edge cases") {
-		t.Fatalf("unexpected high effort directive: %q", got)
-	}
-	if got := effortDirective(""); !strings.Contains(got, "Think carefully") {
-		t.Fatalf("unexpected default effort directive: %q", got)
-	}
-}
-
 func TestNewTodosProviderOpensNativeRuntime(t *testing.T) {
 	oldOpen := openRuntimeTodosProvider
 	t.Cleanup(func() {
@@ -389,56 +283,12 @@ func TestResolveRequestedTODOsUsesDirectGetForImportedAlias(t *testing.T) {
 	}
 }
 
-func TestRunTodosRunRejectsGroupedNativeExecution(t *testing.T) {
-	oldOpen := openRuntimeTodosProvider
-	oldWorkingDir := workingDir
-	oldGroupBy := groupBy
-	oldMode := todosMode
-	oldRunMode := todosRunMode
-	t.Cleanup(func() {
-		openRuntimeTodosProvider = oldOpen
-		workingDir = oldWorkingDir
-		groupBy = oldGroupBy
-		todosMode = oldMode
-		todosRunMode = oldRunMode
-	})
-
-	provider := &singleIssueRuntimeStub{todo: &types.TODO{
-		ID:       "962e67fe-4556-b837-0666-f0304281d554",
-		Provider: todos.ProviderDB,
-		TODOFrontmatter: types.TODOFrontmatter{
-			Title:  "One native issue",
-			Status: types.StatusPending,
-		},
-	}}
-	openRuntimeTodosProvider = func(context.Context, string) (todos.Provider, error) { return provider, nil }
-	workingDir = t.TempDir()
-	groupBy = todos.GroupByRepo
-	todosMode = string(types.ModeRun)
-
-	err := runTodosRun(todosRunCmd, nil)
-	if err == nil || !strings.Contains(err.Error(), "--group-by is not supported") || !strings.Contains(err.Error(), "one issue at a time") {
-		t.Fatalf("runTodosRun error = %v, want native grouped-execution rejection", err)
-	}
-}
-
 type referenceSpyProvider struct {
 	todos.Provider
 	todo      *types.TODO
 	getRefs   []string
 	listCalls int
 }
-
-type singleIssueRuntimeStub struct {
-	todos.Provider
-	todo *types.TODO
-}
-
-func (p *singleIssueRuntimeStub) List(context.Context, todos.DiscoveryFilters) (types.TODOS, error) {
-	return types.TODOS{p.todo}, nil
-}
-
-func (p *singleIssueRuntimeStub) SupportsGroupedExecution() bool { return false }
 
 func (p *referenceSpyProvider) Get(_ context.Context, ref string) (*types.TODO, error) {
 	p.getRefs = append(p.getRefs, ref)
