@@ -534,7 +534,7 @@ Use it when you want to:
 - List issues by status or grouping
 - Inspect one issue in detail
 - Re-run verification checks
-- Execute them through the configured Claude or Codex driver
+- Drive an AI coding agent through the project's todo lifecycle
 - Explicitly import or export portable `.todos` Markdown
 
 Common workflows:
@@ -545,11 +545,11 @@ gavel todos list --status pending
 gavel todos get 3f2a1b
 gavel todos create "Fix the parser race"
 gavel todos sync ./pkg/parser
+gavel todos steps 3f2a1b                   # which lifecycle steps apply to this todo now
 gavel todos check
 gavel todos run
 gavel todos run --interactive
-gavel todos run --group-by directory
-gavel todos run --mode plan                # propose a plan; the TODO parks in `review`
+gavel todos run --step plan                # propose a plan; the TODO parks in `review`
 gavel todos plan approve 3f2a1b --run      # accept the plan and implement it
 gavel todos plan revise 3f2a1b --feedback "split the migration in two"
 gavel todos plan reject 3f2a1b             # discard the plan; the TODO returns to pending
@@ -557,34 +557,123 @@ gavel todos import --dir ./archive/todos   # explicit Markdown → PostgreSQL
 gavel todos export 3f2a1b --dir ./backup   # explicit PostgreSQL → Markdown
 ```
 
-`--mode` selects the agent's task: `run` (implement, default) or `plan` (read-only plan
-that parks the TODO in `review`). `--driver` selects the agent and
-mechanism: `claude-cmux` (default), `claude-headless`, or `codex-headless`.
+#### The todo lifecycle
 
-#### Run the tests and linters when the agent is done (`--check`)
+Every todo moves through a **lifecycle**: an ordered list of steps declared in
+`todos/lifecycle/todos.yaml` (overridable from `.gavel.yaml` `todos.lifecycle`,
+see [SCHEMA.md](SCHEMA.md#todoslifecycle)). Each step is:
 
-After an agent reports a TODO done, `--check` runs your real test and lint suite
-and, if anything fails, feeds a compact failure summary back into the *same* agent
-session so it can fix the issues — re-running the suite until it passes or a
-`maxIterations` cap is hit. This closes the loop: the agent doesn't just claim it's
-finished, it has to leave the suite green.
+- a captain **prompt** reference (`todos.run`, `todos.plan`, `todos.triage`,
+  `todos.verify`, or `file:<path>` for a project-owned template),
+- a CEL **`when`** predicate over `subject` (the todo), `runs` (its run
+  history), and `last` (the latest run per step) that decides whether the step
+  currently applies,
+- an ordered list of **`outcomes`** — `{status, when}` pairs evaluated in
+  order, first true wins — that decide which status the finished run lands the
+  todo in. No outcome matching is an error: a run the definition cannot
+  classify must not silently keep the status it started under.
 
-```bash
-gavel todos run --check
-gavel todos run --check --driver claude-cmux   # primary path: resumes the live agent REPL
+The built-in lifecycle's steps, in the order `gavel todos run` considers them,
+are `triage` (auxiliary — never picked automatically, only run by name),
+`plan`, `verify`, and `run`. `review` and `ask` are **human-facing statuses**,
+not steps: a todo in `review` is waiting for `gavel todos plan
+approve|reject|revise`, and one in `ask` is waiting for an answer to the
+agent's blocking questions — nothing in the lifecycle is "next" for either
+until a person acts.
+
+`gavel todos run [--step <name>]` runs one lifecycle step for each selected
+todo. With no `--step`, the host picks the first non-auxiliary step whose
+`when` predicate holds (`Next` in `todos/lifecycle/engine.go`) and prints that
+step's name and its reason next to it before dispatching. Passing `--step
+<name>` runs that named step regardless of what the lifecycle would have
+picked — including an auxiliary step like `triage`, which is never chosen
+automatically. Pass `--dry-run` to print the rendered prompt, the resolved spec
+layer stack (lowest precedence first), and the resolved Captain spec, without
+dispatching anything.
+
+`gavel todos steps [todo]` lists the lifecycle itself when given no argument
+(every step, its prompt reference, whether it is auxiliary, and its `when`
+predicate), or — given a todo — reports where that todo stands: whether each
+step applies to it now and why, which one `gavel todos run` would pick next,
+and how that step's last run ended.
+
+`gavel todos check [ids...] [--concurrency N]` **is** the lifecycle's `verify`
+step, run standalone: the same fixture/CEL definition of done a `run` step's
+in-loop check performs, dispatched by name instead of by the lifecycle picking
+it. `--concurrency` bounds how many todos are checked at once (0 uses
+`.gavel.yaml` `todos.checkConcurrency`, else 4 — each check runs that todo's
+fixture, so unbounded fan-out thrashes the machine).
+
+`--model` selects the model (and, via its compact `mode:model:effort` form,
+the execution mechanism) together: `cli:opus:high`, `api:sonnet`. Empty uses
+the step's `.prompt` frontmatter default.
+
+The `run` step creates a new worktree by default
+(`setup.checkout.worktree.mode: new` in `todos/lifecycle/todos.yaml`) and
+commits its work with `commits[].stage: worktree` — the run commits from
+inside that worktree rather than the caller's working tree. `--dirty` is a
+request-layer shorthand for a worktree that carries the working tree's
+uncommitted and gitignored content across, equivalent to declaring:
+
+```yaml
+setup:
+  checkout:
+    worktree:
+      mode: new
+      uncommitted: clone
+      ignored: clone
 ```
 
-The loop is **opt-in**. It runs when any of these enable it:
+It applies even when the project configures no checkout block of its own, so
+the flag can never be a silent no-op.
 
-- the `--check` flag (forces it on),
-- a project default in `.gavel.yaml` under `checks:`.
+#### Retired flags and config keys
+
+The old ad-hoc run-mode/driver model is gone. These flags and `.gavel.yaml`
+keys no longer exist:
+
+| Retired | Replacement |
+| --- | --- |
+| `todos run --driver` | the compact model form, e.g. `--model cli:opus:high` |
+| `todos run --mode` | `--step` (a run is one lifecycle step for one todo) |
+| `todos run --prompt` | `--step` |
+| `todos run --group-by` | `--step` (grouping is gone; runs dispatch per todo) |
+| `todos run --check` | `.gavel.yaml checks.enabled` (the checks are part of the definition of done, rendered from configuration; the loop budget is `todos.run.workflow.verify.maxIterations`) |
+| `todos.driver` | `ai.model` with the compact `mode:model:effort` form, e.g. `ai.model: "cli:opus:high"` |
+| `todos.prompts` | a lifecycle step under `todos.<step>` |
+| `todos.groupBy` | nothing — grouping was removed; runs dispatch per todo |
+| `todos.approvals` | `permissions.mode: default` on the step (the dashboard brokers each tool call) |
+| `checks.maxIterations` | `todos.run.workflow.verify.maxIterations` |
+
+A `.gavel.yaml` that still declares one of the removed keys fails to load with
+the exact message above (`<path>: <key> is no longer supported; use
+<replacement>`), rather than silently falling back to built-in defaults.
+
+#### Run the tests and linters when the agent is done (`checks:`)
+
+After an agent reports a TODO done, the configured `checks:` suite runs your real
+test and lint suite and, if anything fails, feeds a compact failure summary back
+into the *same* agent session so it can fix the issues — re-running the suite
+until it passes or a `todos.run.workflow.verify.maxIterations` cap is hit. This
+closes the loop: the agent doesn't just claim it's finished, it has to leave the
+suite green.
+
+```bash
+gavel todos run
+gavel todos run --model cmux:opus   # primary path: resumes the live agent REPL
+```
+
+The loop is **opt-in**: it is part of the todo's definition of done only when
+one of these enables it:
+
+- a project default in `.gavel.yaml` under `checks:` (`enabled: true`),
+- the TODO's own `checks:` front matter.
 
 Configure what runs in `.gavel.yaml`:
 
 ```yaml
 checks:
   enabled: true
-  maxIterations: 3          # max agent re-runs before giving up (default 3)
   test:                     # omit to skip tests
     changed: true           # only packages affected by the agent's changes
     timeout: 5m
@@ -592,8 +681,9 @@ checks:
     changed: true           # only new violations vs the base ref
 ```
 
-When enabled with neither `test` nor `lint` set, both run against changed files.
-Feedback works best with a cmux driver such as `--driver claude-cmux` (it resumes the live agent session); the
+When enabled with neither `test` nor `lint` set, both run against changed files. The
+re-run budget is `todos.run.workflow.verify.maxIterations` (default 3).
+Feedback works best on the cmux runtime (`--model cmux:opus`, which resumes the live agent session); the
 inline agent resumes via its session id, and agents that can't resume fall back to
 reporting the failures without iterating. See the [`checks`](SCHEMA.md#checks)
 schema for every field.
@@ -692,7 +782,7 @@ Common workflows:
 
 ```bash
 gavel git analyze
-gavel git analyze --ai --model claude-sonnet-4-20250514
+gavel git analyze --ai --ai-model api:haiku
 gavel git analyze --scope backend --tech kubernetes
 gavel git analyze --summary --summary-window week
 gavel git analyze --include bots --exclude merges --verbose

@@ -13,13 +13,12 @@ verify:
   promptTemplate:
     file: .gavel/prompts/review.prompt                        # file reference
 todos:
-  planPrompt:
-    inline:                                                   # structured api.Spec
-      model: claude-sonnet-5
-      effort: high
-      prompt:
-        system: You produce implementation plans.
-        user: Plan this work: {{{body}}}
+  plan:                                                        # structured api.Spec, flat fields
+    model: claude-sonnet-5
+    effort: high
+    prompt:
+      system: You produce implementation plans.
+      user: Plan this work: {{{body}}}
 ```
 
 An override is a [dotprompt](https://google.github.io/dotprompt/) template. A configured-but-missing file is a hard error — Gavel never silently falls back to the built-in default.
@@ -48,7 +47,6 @@ Gavel validates the parsed output and fails loudly on a shape mismatch (no zero-
 | `todos.run` | Todo run | `{{body}}`, `{{count}}`, `{{multiple}}`, `{{existingPlan}}` | **fixed** (run envelope) |
 | `todos.plan` | Todo plan | `{{body}}`, `{{count}}`, `{{existingPlan}}` | **fixed** (plan envelope) |
 | `todos.triage` | Todo triage | `{{body}}`, `{{count}}`, `{{multiple}}`, `{{backlog}}` | **fixed** (triage envelope) |
-| `todos.prompts.<name>` | A project-declared prompt | `{{body}}`, `{{count}}`, `{{multiple}}`, `{{existingPlan}}`, `{{backlog}}` | **fixed** (its class's envelope) |
 | `status.summaryPrompt` | Per-file summary (`status --ai`) | `{{details}}` | frontmatter (`{summary}`) |
 | `test.outlineSummaryPrompt` | Per-test summary (`test outline --ai-summary`) | `{{ids}}`, `{{file}}`, `{{source}}` | frontmatter (`tests[]`) |
 
@@ -63,23 +61,27 @@ The verify prompt is white-box or black-box by **which variables it references**
 
 `todos.run`, `todos.plan`, and `todos.triage` each carry a structured result **envelope** whose schema is generated in Go and applied to the request natively. Overriding these prompts changes the framing and instructions, but the output shape is enforced by the driver and cannot be altered from `.gavel.yaml` — this is what keeps a hand-edited prompt from breaking the run loop.
 
-### Named prompts
+### Custom lifecycle steps
 
-A prompt's **name** selects the template; its **class** selects the behaviour. They are separate axes, so a project can add a prompt without gavel gaining a run mode:
+A project adds a new prompt by adding a new **lifecycle step**, not a bare named prompt — see [Todo run loop](/docs/todo-run-loop) for the step shape (`prompt`, `when`, `outcomes`). A step's `prompt` field is either a built-in reference (`todos.run`, `todos.plan`, `todos.triage`, `todos.verify`) or `file:<path>` for a project-owned template:
 
 ```yaml
 todos:
-  prompts:
-    security:
-      class: plan          # run implements and commits; plan does neither. Default: plan
-      title: Security pass
-      model: claude-opus-4-5
-      file: .gavel/prompts/security.prompt
+  lifecycle:
+    steps:
+      - name: security-review
+        prompt: "file:.gavel/prompts/security-review.prompt"
+        envelope: result       # result | plan | triage — decides the schema the run is asked for
+        when: "subject.status in ['pending'] && has(last.run) && last.run.state == 'succeeded'"
+        outcomes:
+          - { status: ask, when: "envelope.endStatus == 'ask'" }
+          - { status: failed, when: "run.state != 'succeeded' || envelope.endStatus == 'failed'" }
+          - { status: pending, when: "true" }
 ```
 
-Run it with `gavel todos run <ref> --prompt security`, and list what is available with `gavel todos prompts`. `--mode` is only needed to *assert* a class; supplying one that disagrees with the prompt is an error rather than a silently resolved preference.
+Run it with `gavel todos run <ref> --step security-review`, and list every step the lifecycle declares with `gavel todos steps`.
 
-Built-in names (`run`, `plan`, `triage`) may be redeclared under `todos.prompts` to replace their template wholesale, but their class and envelope are fixed — the run loop parses against them.
+The three built-in steps' names (`run`, `plan`, `triage`) may be redeclared under `todos.run` / `todos.plan` / `todos.triage` to replace their template wholesale, but each carries a fixed envelope — the run loop parses against it.
 
 ### Triage
 

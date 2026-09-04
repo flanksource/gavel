@@ -505,7 +505,7 @@ Analyze commits with scope/technology detection, Kubernetes resource change trac
 
 ```bash
 gavel git analyze
-gavel git analyze --ai --model claude-sonnet-4-20250514
+gavel git analyze --ai --ai-model api:haiku
 gavel git analyze --scope backend --tech kubernetes
 gavel git analyze --summary --summary-window week
 gavel git analyze --include bots --exclude merges --verbose
@@ -672,22 +672,37 @@ and `<target-dir>/.gavel.yaml` (or the parent directory when the target is a fil
 
 Manage and execute native PostgreSQL TODO issues with Claude or Codex.
 
+Every todo moves through a **lifecycle**: an ordered set of steps, each a
+captain prompt reference plus a CEL `when` predicate (deciding whether the
+step applies now) and ordered `outcomes` (deciding which status a finished run
+lands the todo in). `review` and `ask` are human-facing statuses, not steps —
+they wait on `gavel todos plan approve|reject|revise` or an answer to the
+agent's questions. See [MANUAL.md](MANUAL.md#gavel-todos) for the full model
+and the retired-flags table.
+
 ```bash
 gavel todos list
 gavel todos list --status pending
 gavel todos run 3f2a1b
-gavel todos run --mode plan              # propose a reviewable plan first (read-only)
-gavel todos run --check                  # run tests/lint when the agent finishes, feed failures back to it
+gavel todos steps 3f2a1b                 # which lifecycle steps apply to this todo now
+gavel todos run --step plan              # propose a reviewable plan first (read-only)
 gavel todos check 3f2a1b                 # run the TODO's complete definition of done
 ```
 
-`--mode` selects what the agent does: `run` (implement, default) or `plan` (produce a plan that parks the TODO in `review` for `gavel todos plan approve|reject|revise`; `approve --run` implements it straight away). `--driver` selects the agent and mechanism (`claude-cmux` default, `claude-headless`, `codex-headless`).
+`--step` names the lifecycle step to run (`plan`, `verify`, `run`, `triage`, or
+any step the project's lifecycle declares); empty lets the lifecycle pick the
+next applicable step. `--model` selects the model, in the compact
+`mode:model:effort` form (`cli:opus:high`, `api:sonnet`).
 
-`--check` runs the configured `checks:` test/lint suite after the agent reports done and feeds any failures back into the same session until they pass (bounded by `maxIterations`). Opt in via the flag or `.gavel.yaml` `checks:` configuration.
+The configured `checks:` test/lint suite is part of every todo's definition of done: when `.gavel.yaml` `checks.enabled` (or a todo's own `checks:` front matter) turns it on, the run step executes it after the agent reports done and feeds any failures back into the same session until they pass (bounded by `todos.run.workflow.verify.maxIterations`).
 
-`gavel todos check` manually runs the same fixture/CEL definition of done used by
-the implementation loop: configured test/lint checks, the issue's persisted
-`## Verification` fixture, and any acceptance-criteria checklist step.
+`gavel todos check` **is** the lifecycle's `verify` step run standalone: the
+same fixture/CEL definition of done used by the implementation loop —
+configured test/lint checks, the issue's persisted `## Verification` fixture,
+and any acceptance-criteria checklist step.
+
+The old `--driver`, `--mode`, `--prompt`, and `--group-by` flags on `todos run`
+no longer exist; see [MANUAL.md](MANUAL.md#gavel-todos) for their replacements.
 
 ## Output Formats
 
@@ -750,9 +765,8 @@ fixtures:
   enabled: true                      # auto-discover fixture files during gavel test
   files: ["tests/**/*.fixture.md"]   # override default glob (**/*.fixture.md)
 
-checks:                              # post-completion loop for `gavel todos run --check`
+checks:                              # post-completion loop inside `gavel todos run`
   enabled: true                      # run tests/lint after the agent is done, feed failures back
-  maxIterations: 3                   # max agent re-runs before giving up
   test:                              # omit to skip tests
     changed: true                    # only packages affected by the agent's changes
   lint:                              # omit to skip linting

@@ -80,13 +80,12 @@ file is an error.
 
 ```yaml
 todos:
-  planPrompt:
-    inline:
-      model: claude-sonnet-5
-      effort: high
-      prompt:
-        system: You produce implementation plans.
-        user: Plan this work: {{{body}}}
+  plan:
+    prompt:
+      system: You produce implementation plans.
+      user: Plan this work: {{{body}}}
+    model: claude-sonnet-5
+    effort: high
 
 commit:
   messagePrompt:
@@ -95,7 +94,7 @@ commit:
 
 Prompt override paths are `verify.promptTemplate`,
 `commit.{messagePrompt,functionalityRemovedPrompt,compatibilityPrompt,summaryPrompt,groupingPrompt,prContentPrompt}`,
-`todos.{runPrompt,planPrompt}`, `status.summaryPrompt`, and
+`todos.{run,plan,triage}`, `status.summaryPrompt`, and
 `test.outlineSummaryPrompt`. Use `gavel config --resolve` (`-r`) to see each
 prompt's built-in/inline/file source, complete body, declared Captain spec, and
 effective model/backend. Structured `--json`/`--yaml` output has the shape
@@ -158,18 +157,17 @@ Fixture-test discovery for `gavel test`.
 
 ## `checks`
 
-Post-completion check loop for `gavel todos run --check`: after an agent reports
+Post-completion check loop inside `gavel todos run`: after an agent reports
 done, gavel runs the configured tests/lint and feeds any failures back to the
-same agent session, re-running until they pass or `maxIterations` is reached.
-Opt-in — runs only when enabled here, by a TODO's frontmatter `checks` block, or
-by the `--check` flag. Frontmatter overrides these project defaults. Omit `test`
+same agent session, re-running until they pass or `todos.run.workflow.verify.maxIterations` is reached.
+Opt-in — runs only when enabled here or by a TODO's frontmatter `checks` block;
+there is no per-run flag. Frontmatter overrides these project defaults. Omit `test`
 to skip tests and `lint` to skip linting; when enabled with neither set, both run
 against changed files.
 
 | Key | Type | Default | Merge | Description |
 | --- | --- | --- | --- | --- |
-| `checks.enabled` | bool | unset (off) | later set value wins | Turn the loop on. `--check` / frontmatter can force it on. |
-| `checks.maxIterations` | int | `3` | later non-zero wins | Maximum agent re-runs before giving up. |
+| `checks.enabled` | bool | unset (off) | later set value wins | Append the check steps to every todo's definition of done. A TODO's frontmatter `checks` block can force them on for that todo. |
 | `checks.test` | object | — | later non-nil replaces | `gavel test` options for the check run. Omit to skip tests. |
 | `checks.test.paths` | string[] | — | — | Package paths to test. Empty discovers all. |
 | `checks.test.changed` | bool | `false` | — | Only test packages affected by the agent's changes. |
@@ -193,10 +191,14 @@ request (a `gavel todos check` flag or the dashboard's verification payload)
 ```
 
 `todos.verify` is a Captain `api.Spec` (model, budget, permissions — no prompt:
-the checklist is generated from the criteria). It defaults to `claude-code-sonnet`,
-an agentic backend, because the grader is told to inspect the change with its own
-tools; the `ai:` base is an API model with none, so a grader that fell through to
-it would return confident verdicts without having read the diff.
+the checklist is generated from the criteria). The built-in default names **no
+model**: it only pins the run mode to agentic (`api.ModeAgent`), because the
+grader is told to inspect the change with its own tools and a mode that cannot
+read the diff would still return confident-looking verdicts. Which model runs
+under that mode comes from configuration like every other operation — first
+`.gavel.yaml`, then `~/.captain.yaml` — and a repo that configures neither fails
+loudly, telling you to run `gavel configure` or `captain configure`, rather than
+silently seeding a specific model.
 
 ```yaml
 ai:
@@ -207,6 +209,71 @@ todos:
     budget:
       maxTurns: 20
 ```
+
+## `todos`
+
+Settings for `gavel todos run`, `gavel todos check`, and the todo lifecycle.
+See [MANUAL.md](MANUAL.md#gavel-todos) for the lifecycle model itself (steps,
+`when` predicates, `outcomes`) and the CLI flags that drive it.
+
+| Key | Type | Default | Merge | Description |
+| --- | --- | --- | --- | --- |
+| `todos.run` | prompt spec | see below | field-wise override | AI spec for the `run` (implement) step. Overrides the `ai:` base field-wise. |
+| `todos.plan` | prompt spec | see below | field-wise override | AI spec for the `plan` step (read-only investigation that produces a reviewable plan). |
+| `todos.triage` | prompt spec | see below | field-wise override | AI spec for the `triage` step: a read-only pass that compacts a TODO's description and reviews its verification fixture. Auxiliary — never picked automatically, only run with `--step triage`. |
+| `todos.verify` | Captain `api.Spec` | `{model: {mode: agent}}`, no model name | field-wise override | Spec the `verify` step (and `gavel todos check`) grades the definition of done as. No `prompt:` field — the checklist is generated from the TODO's acceptance criteria, not a template. |
+| `todos.checkConcurrency` | int | `4` | last non-zero wins | How many TODOs `gavel todos check` (and the verification phase after a bulk triage) checks at once. |
+| `todos.timeout` | string (Go duration) | unset | last non-empty wins | Wall-clock deadline for a lifecycle step run. A context constraint, not an ordinary spec field — it can only ever lower a budget a step or prompt asked for, never raise one. When nothing in the resolved spec sets a budget timeout at all (this key included), the host stamps its own `30m` ceiling as a last resort. |
+| `todos.baseUrl` | string | `""` | last non-empty wins | Absolute origin this gavel dashboard is reachable at (e.g. `https://gavel.example.com`). TODO bodies store attachments as server-relative links; pushing a TODO to an external tracker rewrites them against this origin. |
+| `todos.lifecycle` | object | the embedded lifecycle | merged by step name over the built-in lifecycle | Overrides the built-in todo lifecycle. See below. |
+| `todos.steps.<name>` | Captain `api.Spec` | unset | field-wise override | Project-level spec layer for a custom lifecycle step (one declared under `todos.lifecycle.steps`), sitting exactly where `todos.run` sits for the built-in run step: above the step's own `spec:` declaration, below the todo's `llm:` block. Naming a built-in step here (`run`, `plan`, `triage`, `verify`) is an error — those keep their typed blocks above. |
+
+`todos.run`, `todos.plan`, and `todos.triage` are prompt specs (bare string,
+`inline`, or `file`, same as the other prompt-override fields — see [Prompt
+overrides](#prompt-overrides) above). `todos.verify` is a plain Captain spec: it
+has no prompt template to override, so a `file:` form here would be a silent
+no-op.
+
+### `todos.lifecycle`
+
+Overrides the built-in todo lifecycle (`todos/lifecycle/todos.yaml`): which
+prompt runs when, and which status its result lands the todo in. Either a
+`file:` path (a lifecycle YAML document, relative to the project root) **or**
+an inline `name`/`subject`/`steps` — the two forms are mutually exclusive, and
+a config that sets both fails to load rather than silently dropping the inline
+definition. A step named like a built-in step (`plan`,
+`verify`, `run`, `triage`) replaces it wholesale; a new name is appended. A
+`verify` step must survive the merge — every lifecycle must declare one.
+
+| Key | Type | Description |
+| --- | --- | --- |
+| `todos.lifecycle.file` | string | Path to a lifecycle YAML document, relative to the project root. |
+| `todos.lifecycle.name` | string | Name of the lifecycle; defaults to the built-in `todos`. |
+| `todos.lifecycle.subject` | map[string]string | Extra subject declarations a custom step's predicates may read, field → CEL type (`string`, `bool`, `int`, `double`, `dyn`, `list<string>`, `list<dyn>`, `map<string,dyn>`). |
+| `todos.lifecycle.steps` | object[] | Steps to replace or add: `{name, prompt, envelope, when, inputs, spec, outcomes, auxiliary}`. `outcomes` is a list of `{status, when}` pairs evaluated in order — first true wins, none true is an error. |
+
+A custom step carries its own run configuration inline under its `spec:` field
+in `todos.lifecycle.steps`; `todos.steps.<name>` (above) is the per-project
+layer on top of that declaration, so a lifecycle file can be shared while each
+project picks the model, budget or permissions its custom steps run with.
+
+See [`gavel.yaml.example`](./gavel.yaml.example) for a worked `todos.lifecycle`
+example with a custom step.
+
+### Retired `todos.*` keys
+
+These keys were removed when the ad-hoc run-mode/driver model was replaced by
+the lifecycle. A `.gavel.yaml` still declaring one fails to load with the exact
+message shown (`<path>: <key> is no longer supported; use <replacement>`)
+rather than silently running on built-in defaults.
+
+| Removed key | Replacement |
+| --- | --- |
+| `todos.driver` | `ai.model` with the compact `mode:model:effort` form, e.g. `ai.model: "cli:opus:high"` |
+| `todos.prompts` | a lifecycle step under `todos.<step>` |
+| `todos.groupBy` | nothing — grouping was removed; runs dispatch per todo |
+| `todos.approvals` | `permissions.mode: default` on the step (the dashboard brokers each tool call) |
+| `checks.maxIterations` | `todos.run.workflow.verify.maxIterations` |
 
 ## `ssh`
 
