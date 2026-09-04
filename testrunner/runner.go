@@ -141,6 +141,7 @@ type RunOptions struct {
 	Cache         bool                  `json:"cache,omitempty" yaml:"cache,omitempty" flag:"cache"`                                       // Skip packages whose content fingerprint matches the last passing run
 	Changed       bool                  `json:"changed,omitempty" yaml:"changed,omitempty" flag:"changed"`                                 // Only run packages affected by staged/unstaged/untracked changes and the diff against origin/main
 	Since         string                `json:"since,omitempty" yaml:"since,omitempty" flag:"since"`                                       // Only run packages affected by the diff since <ref> (merge-base(HEAD,ref)..HEAD) plus the working tree
+	ChangedFiles  []string              `json:"changed_files,omitempty" yaml:"changed-files,omitempty" flag:"changed-files"`               // Only run packages affected by these workdir-relative files (no git query); unions with --changed/--since when either is set
 	Bench         string                `json:"bench,omitempty" yaml:"bench,omitempty" flag:"bench"`                                       // Run Go benchmarks matching this regex ("." or "true" runs all). Auto-enabled for packages containing only Benchmark* funcs.
 	Fixtures      bool                  `json:"fixtures,omitempty" yaml:"fixtures,omitempty" flag:"fixtures"`                              // Discover and run fixture files. Off by default; can also be enabled via .gavel.yaml fixtures.enabled
 	FixtureFiles  []string              `json:"fixture_files,omitempty" yaml:"fixture-files,omitempty" flag:"fixture-files"`               // Globs for fixture discovery. Overrides .gavel.yaml fixtures.files. Default: **/*.fixture.md
@@ -229,7 +230,7 @@ func (opts RunOptions) Pretty() api.Text {
 // hasChangeSelector reports whether any flag in opts narrows execution to a
 // subset of packages via the change graph.
 func (opts RunOptions) hasChangeSelector() bool {
-	return opts.Changed || opts.Since != ""
+	return opts.Changed || opts.Since != "" || len(opts.ChangedFiles) > 0
 }
 
 func (r RunOptions) Help() string {

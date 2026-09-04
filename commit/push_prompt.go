@@ -25,6 +25,12 @@ type PRContentInput struct {
 	// PromptOverride is the resolved .gavel.yaml pr.content prompt template
 	// (inline text or file contents); empty uses the embedded default template.
 	PromptOverride string
+	// WorkDir is the tree the .gavel.yaml was resolved from, so the caller can
+	// load the same config for the model as it did for the prompt. `gavel pr
+	// create` used to resolve only the prompt from config and build its Options
+	// with neither the ai: base nor pr.content, so the model silently skipped
+	// both layers of the ladder.
+	WorkDir string
 }
 
 type PRContent struct {

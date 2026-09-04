@@ -21,9 +21,14 @@ type AgentConfig = captainai.Config
 // pointers straight into a package-level default, so every FlagSet that bound it
 // (status, git analyze, git amend) aliased the same struct and the last one to
 // parse won.
+//
+// It deliberately carries NO model. It used to pin "claude-haiku-4-5", which made
+// the bug class possible twice over: an agent could be built without anyone
+// choosing a model, and because BindFlags merges --ai-model onto this struct, the
+// hardcoded name always outranked whatever .gavel.yaml configured. The model is
+// now the caller's to resolve — see verify.GavelConfig.ModelFor.
 func DefaultConfig() AgentConfig {
 	return AgentConfig{
-		Model:         api.Model{Name: "claude-haiku-4-5"},
 		Budget:        api.Budget{MaxTokens: 10000},
 		MaxConcurrent: 4,
 		CacheTTL:      24 * time.Hour,

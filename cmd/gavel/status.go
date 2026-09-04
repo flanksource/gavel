@@ -93,11 +93,19 @@ func (o StatusOptions) Help() api.Textable {
 	return t
 }
 
+// statusAI holds the --ai-* flag values for `gavel status`. It is package
+// scoped because runStatus is a top-level function handed to AddNamedCommand and
+// so cannot close over an init-local config the way `git analyze`/`git amend` do.
+// While it was init-local, every --ai-* flag parsed into a struct nothing read
+// and status ran on DefaultConfig() regardless. It is still one config per
+// command — not the shared package default BindFlags used to write into, where
+// whichever FlagSet parsed last decided the model for all of them.
+var statusAI = clickyai.DefaultConfig()
+
 func init() {
 	statusCmd := clicky.AddNamedCommand("status", rootCmd, StatusOptions{}, runStatus)
 	statusCmd.Use = "status [folder]"
 	statusCmd.Args = cobra.MaximumNArgs(1)
-	statusAI := clickyai.DefaultConfig()
 	clickyai.BindFlags(statusCmd.Flags(), &statusAI)
 }
 
@@ -117,7 +125,12 @@ func runStatus(opts StatusOptions) (any, error) {
 		})
 	}
 
-	agent, err := clickyai.NewAgent(clickyai.DefaultConfig())
+	runCfg := statusAI
+	runCfg.Model, err = status.ResolveSummaryModel(workDir, statusAI.Model)
+	if err != nil {
+		return nil, err
+	}
+	agent, err := clickyai.NewAgent(runCfg)
 	if err != nil {
 		return nil, fmt.Errorf("create AI agent for status: %w", err)
 	}
@@ -130,7 +143,7 @@ func runStatus(opts StatusOptions) (any, error) {
 		Verbose:      verbose,
 		Agent:        agent,
 		Context:      ctx,
-		AIMaxWorkers: clickyai.DefaultConfig().MaxConcurrent,
+		AIMaxWorkers: statusAI.MaxConcurrent,
 	}
 
 	result, err := status.GatherBase(workDir, gatherOpts)

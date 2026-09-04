@@ -157,17 +157,20 @@ func modelName(m api.Model, err error) string {
 func modelFlags(model string) aiflags.ModelFlags { return aiflags.ModelFlags{Model: model} }
 
 var _ = Describe("Options model resolution", func() {
-	DescribeTable("messageModel prefers --model, then commit.message.model, then ai.model, else the built-in default",
+	DescribeTable("messageModel prefers --model, then commit.message.model, then ai.model",
 		func(opts Options, expected string) {
 			Expect(modelName(opts.messageModel())).To(Equal(expected))
 		},
 		Entry("flag wins", Options{Flags: modelFlags("haiku-flag"), Config: msgSpecCfg("haiku-cfg"), AI: aiBaseSpec("base")}, "haiku-flag"),
 		Entry("message spec used when no flag", Options{Config: msgSpecCfg("haiku-cfg"), AI: aiBaseSpec("base")}, "haiku-cfg"),
 		Entry("ai base used when no flag or op spec", Options{AI: aiBaseSpec("base")}, "base"),
-		Entry("defaults to haiku-class when nothing set", Options{}, defaultMessageModel),
+		// No built-in default: the ladder is configuration only. In a real run the
+		// ai: base is always seeded by LoadGavelConfig, and an empty name here
+		// fails loudly at resolve rather than silently picking a model.
+		Entry("empty when nothing configures a model", Options{}, ""),
 	)
 
-	DescribeTable("groupModel cascades --group-model -> --model -> commit.grouping.model -> ai.model -> default",
+	DescribeTable("groupModel cascades --group-model -> --model -> commit.grouping.model -> ai.model",
 		func(opts Options, expected string) {
 			Expect(modelName(opts.groupModel())).To(Equal(expected))
 		},
@@ -186,10 +189,9 @@ var _ = Describe("Options model resolution", func() {
 		// Grouping deliberately no longer reads commit.message.model: that is the
 		// message operation's model, and borrowing it across operations meant
 		// configuring one silently redirected the other.
-		Entry("ignores commit.message.model and takes the default",
-			Options{Config: msgSpecCfg("haiku-cfg")}, defaultGroupModel),
-		Entry("defaults to sonnet-class when nothing set",
-			Options{}, defaultGroupModel),
+		Entry("ignores commit.message.model and resolves to nothing",
+			Options{Config: msgSpecCfg("haiku-cfg")}, ""),
+		Entry("empty when nothing configures a model", Options{}, ""),
 	)
 
 	// The reported bug, end to end: `gavel commit --model agent:gpt-5.6-luna:medium`

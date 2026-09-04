@@ -10,6 +10,7 @@ import (
 	"github.com/flanksource/commons/logger"
 	clickyai "github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/git"
+	"github.com/flanksource/gavel/internal/prompting"
 	"github.com/flanksource/gavel/models"
 	"github.com/flanksource/gavel/verify"
 )
@@ -49,6 +50,11 @@ func generateCommitAnalysis(ctx context.Context, opts Options, diff string) (ana
 func generateCommitAnalysisWithAgent(ctx context.Context, diff string, agent clickyai.Agent, opts git.AnalyzeOptions) (commitAIAnalysis, error) {
 	analysis := models.CommitAnalysis{Commit: models.Commit{Patch: diff}}
 	opts.MaxBodyLines = maxBodyLinesForDiff(countDiffLines(diff))
+	// Stop the task renderer before the AI prompt takes over the terminal. This
+	// lives here rather than inside git.AnalyzeWithAI because the git analyze path
+	// calls that from inside a clicky batch, where waiting for global completion
+	// deadlocks.
+	prompting.Prepare()
 	analyzed, err := analyzeCommitMessageWithAIFunc(ctx, analysis, agent, opts)
 	if err != nil {
 		return commitAIAnalysis{}, err
@@ -94,61 +100,36 @@ func maxBodyLinesForDiff(changedLines int) int {
 	}
 }
 
-// defaultGroupModel is the model used for AI commit grouping when neither
-// --group-model nor commit.{groupModel,model} is set. Grouping reasons over the
-// whole change set, so it defaults to a more capable tier than the haiku-class
-// model used for message generation.
-const defaultGroupModel = "claude-sonnet-4-5"
-
-// defaultMessageModel is the model used for commit-message generation when
-// nothing else selects one. Message writing is a summarisation task, so it
-// defaults to a fast haiku-class tier.
-const defaultMessageModel = "claude-haiku-4-5"
-
-// modelFor is the single model ladder every commit AI operation runs through,
-// highest precedence first:
+// modelFor adapts commit's flag surface onto verify.ModelFor, the ladder every
+// AI command in gavel now shares. It expands the flags — a compact selector like
+// "agent:sol:high" must carry its own mode into the merge, or the base spec's
+// mode survives and the run silently uses a different runtime.
 //
-//  1. CLI flags (--model/--mode/--backend/--effort)
-//  2. the operation's own spec (commit.message / commit.grouping / pr.content)
-//  3. the base `ai:` spec
-//  4. the built-in default for that operation
-//
-// It exists once because it used to exist three times and disagreed with itself:
-// messageModel read the --model flag first while groupModel read it last, behind
-// the config — so any `ai: model:` in ~/.gavel.yaml silently disabled --model for
-// grouping.
-//
-// Each layer is expanded before it is merged: a compact selector like
-// "agent:sol:high" must set its own backend during the merge, or the base spec's
-// backend survives and the run silently uses a different runtime.
-//
-// It selects but does not resolve — ai.NewProvider resolves the winner against
-// the catalog exactly once, on the way to the provider. Keeping selection and
-// resolution apart is what lets this ladder be about precedence alone.
-func (opts Options) modelFor(op verify.PromptSpec, builtin string) (captainapi.Model, error) {
-	spec := opts.AI.Merge(op.Spec)
-
+// The per-operation built-in defaults this used to apply last are gone. They were
+// unreachable: LoadGavelConfig seeds the ai: base with a model, so the ladder
+// never produced an empty name and the "default" for grouping (sonnet) was in
+// fact always shadowed by the base (haiku). The model now comes from
+// configuration alone.
+func (opts Options) modelFor(op verify.PromptSpec) (captainapi.Model, error) {
 	over, err := opts.Flags.ToModel()
 	if err != nil {
 		return captainapi.Model{}, err
 	}
-	out := spec.Model.Merge(over)
-	if strings.TrimSpace(out.Name) == "" {
-		out.Name = builtin
-	}
-	return out, nil
+	return verify.ModelFor(opts.AI, op, over), nil
 }
 
 // messageModel resolves the LLM for commit-message generation.
 func (opts Options) messageModel() (captainapi.Model, error) {
-	return opts.modelFor(opts.Config.Message, defaultMessageModel)
+	return opts.modelFor(opts.Config.Message)
 }
 
-// groupModel resolves the LLM for AI commit grouping. Grouping reasons over the
-// whole change set, so it defaults to a more capable tier than message writing,
-// and --group-model overrides the shared --model for this operation alone.
+// groupModel resolves the LLM for AI commit grouping, where --group-model
+// overrides the shared --model for this operation alone. Grouping reasons over
+// the whole change set, so it usually wants a more capable tier than message
+// writing — that is now a `commit.grouping.model` in .gavel.yaml rather than a
+// constant here.
 func (opts Options) groupModel() (captainapi.Model, error) {
-	m, err := opts.modelFor(opts.Config.Grouping, defaultGroupModel)
+	m, err := opts.modelFor(opts.Config.Grouping)
 	if err != nil || strings.TrimSpace(opts.GroupModel) == "" {
 		return m, err
 	}
@@ -162,7 +143,7 @@ func (opts Options) groupModel() (captainapi.Model, error) {
 // PRContentModel resolves the LLM for PR title/body/branch generation. Exported
 // because `gavel pr create` builds its own Options and needs the same ladder.
 func (opts Options) PRContentModel() (captainapi.Model, error) {
-	return opts.modelFor(opts.PR.Content, defaultMessageModel)
+	return opts.modelFor(opts.PR.Content)
 }
 
 // BuildAgent constructs an LLM agent for opts using an already-resolved model.

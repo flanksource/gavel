@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/flanksource/captain/pkg/api"
 	clickyai "github.com/flanksource/gavel/ai"
 	. "github.com/onsi/gomega"
 
@@ -48,7 +49,7 @@ var _ = Describe("applyAISummaries", func() {
 
 	It("attaches matched summaries and keeps static descriptions elsewhere", func() {
 		stub := &stubSummaryAgent{}
-		newSummaryAgent = func() (SummaryAgent, error) { return stub, nil }
+		newSummaryAgent = func(api.Model) (SummaryAgent, error) { return stub, nil }
 		Expect(applyAISummaries(context.Background(), report, "testdata")).To(Succeed())
 		Expect(stub.requests).To(HaveLen(1))
 		Expect(report.Entries[0].AISummary).To(Equal("verifies add returns the arithmetic sum"))
@@ -58,7 +59,7 @@ var _ = Describe("applyAISummaries", func() {
 	})
 
 	It("keeps the outline alive when the agent fails for a file", func() {
-		newSummaryAgent = func() (SummaryAgent, error) { return &stubSummaryAgent{fail: true}, nil }
+		newSummaryAgent = func(api.Model) (SummaryAgent, error) { return &stubSummaryAgent{fail: true}, nil }
 		Expect(applyAISummaries(context.Background(), report, "testdata")).To(Succeed())
 		Expect(report.Entries[0].AISummary).To(BeEmpty())
 	})

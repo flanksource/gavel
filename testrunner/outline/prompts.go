@@ -3,6 +3,7 @@ package outline
 import (
 	"fmt"
 
+	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/gavel/prompts"
 	"github.com/flanksource/gavel/verify"
 )
@@ -31,4 +32,18 @@ func resolveSummaryPrompt(workDir string) (string, error) {
 		return "", fmt.Errorf("load .gavel.yaml for test outline summary prompt: %w", err)
 	}
 	return cfg.Test.OutlineSummary.TemplateSource(workDir, testSummaryPromptTemplate)
+}
+
+// resolveSummaryModel returns the model `gavel test outline --ai-summary` runs
+// on: the test.outlineSummary spec over the ai: base.
+//
+// The config slot always carried a model — test.outlineSummary is a PromptSpec —
+// but only its prompt half was read, so the model was pinned to a hardcoded
+// ai.DefaultConfig() and the command had no way to select one at all.
+func resolveSummaryModel(workDir string) (api.Model, error) {
+	cfg, err := verify.LoadGavelConfig(workDir)
+	if err != nil {
+		return api.Model{}, fmt.Errorf("load .gavel.yaml for test outline summary model: %w", err)
+	}
+	return cfg.ModelFor(cfg.Test.OutlineSummary, api.Model{}), nil
 }

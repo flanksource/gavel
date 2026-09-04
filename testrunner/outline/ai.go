@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/flanksource/captain/pkg/ai/prompt"
+	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/commons/logger"
 	clickyai "github.com/flanksource/gavel/ai"
 )
@@ -38,9 +39,12 @@ type SummaryAgent interface {
 	Close() error
 }
 
-// newSummaryAgent is swapped in tests.
-var newSummaryAgent = func() (SummaryAgent, error) {
-	return clickyai.NewAgent(clickyai.DefaultConfig())
+// newSummaryAgent is swapped in tests. It takes a resolved model rather than
+// reaching for a default: nothing may choose a model on the user's behalf.
+var newSummaryAgent = func(model api.Model) (SummaryAgent, error) {
+	cfg := clickyai.DefaultConfig()
+	cfg.Model = model
+	return clickyai.NewAgent(cfg)
 }
 
 // applyAISummaries generates one-line AI summaries for every leaf, batched
@@ -55,7 +59,11 @@ func applyAISummaries(ctx context.Context, report *Report, workDir string) error
 		return nil
 	}
 
-	agent, err := newSummaryAgent()
+	model, err := resolveSummaryModel(workDir)
+	if err != nil {
+		return err
+	}
+	agent, err := newSummaryAgent(model)
 	if err != nil {
 		return fmt.Errorf("create AI agent for --ai-summary: %w", err)
 	}

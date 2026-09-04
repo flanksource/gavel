@@ -3,6 +3,7 @@ package git
 import (
 	"context"
 
+	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/models"
 )
@@ -18,9 +19,13 @@ func ExampleSummarize() {
 		MaxCategories: 6,
 	})
 
-	// Option 2: Use AI-powered descriptions
-	agent, _ := ai.GetDefaultAgent() // or your custom agent
-	defer agent.Close()              //nolint:errcheck // process-backed backends only release their child on Close
+	// Option 2: Use AI-powered descriptions. The model is resolved from
+	// .gavel.yaml by the caller (see verify.GavelConfig.ModelFor); there is no
+	// default agent, because nothing may choose a model on the user's behalf.
+	cfg := ai.DefaultConfig()
+	cfg.Model = api.Model{Name: "api:haiku"}
+	agent, _ := ai.NewAgent(cfg)
+	defer agent.Close() //nolint:errcheck // process-backed backends only release their child on Close
 	summariesWithAI, _ := Summarize(commits, SummaryOptions{
 		Window:        GroupByMonth,
 		MaxCategories: 6,

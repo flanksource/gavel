@@ -89,6 +89,14 @@ func defaultPRCreateDeps() prCreateDeps {
 			opts := commitpkg.Options{
 				Flags: aiflags.ModelFlags{Model: prCreateModel, NoCache: prCreateNoCache},
 			}
+			// The model comes from the same .gavel.yaml the prompt did.
+			if in.WorkDir != "" {
+				cfg, err := verify.LoadGavelConfig(in.WorkDir)
+				if err != nil {
+					return commitpkg.PRContent{}, fmt.Errorf("load .gavel.yaml for PR content model: %w", err)
+				}
+				opts.AI, opts.PR = cfg.AI, cfg.PR
+			}
 			model, err := opts.PRContentModel()
 			if err != nil {
 				return commitpkg.PRContent{}, err
@@ -312,6 +320,7 @@ func prContentInputForSHA(wtPath string) (commitpkg.PRContentInput, error) {
 	return commitpkg.PRContentInput{
 		Commits:        []commitpkg.PRCommitInput{{Message: strings.TrimSpace(msg), Files: files}},
 		PromptOverride: prContentPrompt,
+		WorkDir:        wtPath,
 	}, nil
 }
 

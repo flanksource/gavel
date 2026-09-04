@@ -48,7 +48,7 @@ func sampleCommit() models.CommitAnalysis {
 func defaultTypes() []string { return commitTypeNames(models.SelectableCommitTypes()) }
 
 func TestPromptCommitMessage_WithMaxBodyLines(t *testing.T) {
-	got, _, err := renderCommitPrompt(sampleCommit(), commitMessagePrompt, commitPromptData(3, defaultTypes()))
+	got, _, err := renderCommitPrompt(sampleCommit(), commitMessagePrompt, 3, defaultTypes())
 	require.NoError(t, err)
 	require.Contains(t, got, "- body: at most 3 line(s)", "maxBodyLines must select the if-branch")
 	require.NotContains(t, got, "&lt;", "diff must not be HTML-escaped")
@@ -57,7 +57,7 @@ func TestPromptCommitMessage_WithMaxBodyLines(t *testing.T) {
 }
 
 func TestPromptCommitMessage_WithoutMaxBodyLines(t *testing.T) {
-	got, _, err := renderCommitPrompt(sampleCommit(), commitMessagePrompt, commitPromptData(0, defaultTypes()))
+	got, _, err := renderCommitPrompt(sampleCommit(), commitMessagePrompt, 0, defaultTypes())
 	require.NoError(t, err)
 	require.Contains(t, got, "- body: omit unless the change is non-trivial", "zero maxBodyLines must select the else-branch")
 	require.NotContains(t, got, "at most", "else-branch must not mention a line cap")

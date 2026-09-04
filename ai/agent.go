@@ -16,6 +16,7 @@ import (
 	captainai "github.com/flanksource/captain/pkg/ai"
 	"github.com/flanksource/captain/pkg/ai/middleware"
 	_ "github.com/flanksource/captain/pkg/ai/provider"
+	"github.com/flanksource/captain/pkg/aiflags"
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/captain/pkg/collections"
 )
@@ -58,7 +59,13 @@ func NewProvider(cfg AgentConfig) (captainai.Provider, error) {
 	NormalizeEnv()
 	// Resolve once, here, so the provider is built from a driver-ready model
 	// rather than one re-derived from a bare name at dispatch.
-	resolved, err := captainai.Resolve(cfg.Model)
+	//
+	// ResolveForRun rather than bare Resolve: this is the execution boundary, so
+	// it applies ~/.captain.yaml on top of whatever .gavel.yaml selected and then
+	// REFUSES an incomplete selection instead of borrowing captain's compiled-in
+	// provider default. Being the single place gavel builds a provider, this one
+	// call makes every gavel AI command config-driven.
+	resolved, err := aiflags.ResolveForRun(cfg.Model)
 	if err != nil {
 		return nil, err
 	}
@@ -101,11 +108,6 @@ func NewAgent(cfg AgentConfig) (Agent, error) {
 		return nil, err
 	}
 	return captainai.NewAgentWithProvider(provider, cfg), nil
-}
-
-// GetDefaultAgent returns an agent built from DefaultConfig.
-func GetDefaultAgent() (Agent, error) {
-	return NewAgent(DefaultConfig())
 }
 
 // DecodeStructured unmarshals a prompt response's structured output into target.

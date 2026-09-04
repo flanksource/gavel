@@ -10,7 +10,6 @@ import (
 
 	"github.com/flanksource/captain/pkg/ai/prompt"
 	"github.com/flanksource/gavel/ai"
-	"github.com/flanksource/gavel/internal/prompting"
 	"github.com/flanksource/gavel/models"
 )
 
@@ -59,12 +58,16 @@ func analyzeCommitMessageWithAI(ctx context.Context, commit models.CommitAnalysi
 		return commit, err
 	}
 
-	promptText, schemaJSON, err := renderCommitPrompt(commit, template, commitPromptData(maxBodyLines, allowedTypes))
+	promptText, schemaJSON, err := renderCommitPrompt(commit, template, maxBodyLines, allowedTypes)
 	if err != nil {
 		return commit, err
 	}
 
-	prompting.Prepare()
+	// No prompting.Prepare() here. It waits for the global clicky task manager to
+	// drain, which is correct when a caller owns the terminal (gavel commit) but a
+	// deadlock on the git analyze path: AnalyzeCommitHistory calls this from inside
+	// a clicky batch item, so the item would be waiting for a task set that
+	// includes itself. Callers that own the terminal Prepare before calling in.
 	resp, err := agent.ExecutePrompt(ctx, ai.PromptRequest{
 		Name:       promptName(commit, "commit message"),
 		Source:     commitMessagePromptFile,
@@ -111,14 +114,13 @@ func analyzeCommitMessageWithAI(ctx context.Context, commit models.CommitAnalysi
 	return commit, nil
 }
 
-// commitPromptData is the template data for the commit-message prompt: the
-// body's {{maxBodyLines}} branch, plus the type vocabulary that fills both the
-// schema's `type` enum ({{commitTypes}}) and the prose requirement
-// ({{commitTypesList}}).
+// commitPromptData is the template data for the commit-message prompt's body:
+// the {{maxBodyLines}} branch, plus the type vocabulary as the prose
+// requirement lists it ({{commitTypesList}}). The schema's `type` enum is not
+// template data — see enumerateCommitType.
 func commitPromptData(maxBodyLines int, allowedTypes []string) map[string]any {
 	return map[string]any{
 		"maxBodyLines":    maxBodyLines,
-		"commitTypes":     allowedTypes,
 		"commitTypesList": strings.Join(allowedTypes, "|"),
 	}
 }
@@ -164,17 +166,54 @@ func promptOrDefault(override, embedded string) string {
 }
 
 // renderCommitPrompt renders the template body and returns the user prompt plus
-// the JSON output schema declared in the .prompt frontmatter (empty when none).
-func renderCommitPrompt(commit models.CommitAnalysis, template string, extra map[string]any) (string, json.RawMessage, error) {
+// the JSON output schema declared in the .prompt frontmatter (empty when none),
+// with the allowed commit types enumerated on the schema's `type` property.
+func renderCommitPrompt(commit models.CommitAnalysis, template string, maxBodyLines int, allowedTypes []string) (string, json.RawMessage, error) {
 	data := commit.AsMap()
-	for k, v := range extra {
+	for k, v := range commitPromptData(maxBodyLines, allowedTypes) {
 		data[k] = v
 	}
 	req, _, err := prompt.Load(template).Render(data, nil)
 	if err != nil {
 		return "", nil, fmt.Errorf("render AI prompt template: %w", err)
 	}
-	return req.Prompt.User, req.Prompt.SchemaJSON, nil
+	schema, err := enumerateCommitType(req.Prompt.SchemaJSON, allowedTypes)
+	if err != nil {
+		return "", nil, err
+	}
+	return req.Prompt.User, schema, nil
+}
+
+// enumerateCommitType constrains the output schema's `type` property to the
+// project's commit-type vocabulary, so the model picks from it rather than
+// echoing a list. The enum is set on the parsed schema rather than templated
+// into the frontmatter: frontmatter is parsed as YAML before any templating
+// runs, so a Handlebars block inside it is a document that never parses — for
+// the settings editor as much as for the run.
+//
+// A template that declares no output schema, or one whose schema has no `type`
+// property, has nothing to constrain and is returned as it is; the response
+// check in analyzeCommitMessageWithAI still refuses a type outside the
+// vocabulary.
+func enumerateCommitType(schemaJSON json.RawMessage, allowedTypes []string) (json.RawMessage, error) {
+	if len(schemaJSON) == 0 {
+		return schemaJSON, nil
+	}
+	var schema map[string]any
+	if err := json.Unmarshal(schemaJSON, &schema); err != nil {
+		return nil, fmt.Errorf("decode commit prompt output schema: %w", err)
+	}
+	properties, _ := schema["properties"].(map[string]any)
+	typeProperty, ok := properties["type"].(map[string]any)
+	if !ok {
+		return schemaJSON, nil
+	}
+	typeProperty["enum"] = allowedTypes
+	out, err := json.Marshal(schema)
+	if err != nil {
+		return nil, fmt.Errorf("encode commit prompt output schema: %w", err)
+	}
+	return out, nil
 }
 
 func promptName(commit models.CommitAnalysis, suffix string) string {

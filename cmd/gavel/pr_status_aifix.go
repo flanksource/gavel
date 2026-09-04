@@ -101,7 +101,11 @@ func runPRStatusAIFix(ctx context.Context, opts PRStatusOptions, result *prwatch
 		Commits: req.Workflow.Commits,
 		Push:    true,
 	})
-	hooks = append(hooks, capverify.HooksForWorkflow(req.Workflow)...)
+	verifyHooks, err := capverify.HooksFor(ctx, req.Workflow, capverify.Options{Provider: p})
+	if err != nil {
+		return err
+	}
+	hooks = append(hooks, verifyHooks...)
 
 	runStart := time.Now()
 	renderer := newAIFixRenderer()

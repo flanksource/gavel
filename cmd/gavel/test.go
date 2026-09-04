@@ -825,6 +825,9 @@ func finalizeTestCommandOptions(cmd *cobra.Command, opts testrunner.RunOptions, 
 	opts.Timeout = flags.Timeout
 	opts.LintTimeout = flags.LintTimeout
 	opts.TestTimeout = flags.TestTimeout
+	if err := applyConfiguredTimeouts(cmd, &opts); err != nil {
+		return opts, false, err
+	}
 	if opts.Failed == failedAutoSentinel && opts.Baseline != "" {
 		opts.Failed = opts.Baseline
 	}
@@ -832,6 +835,40 @@ func finalizeTestCommandOptions(cmd *cobra.Command, opts testrunner.RunOptions, 
 		opts.SkipHooks = os.Getenv("CI") == ""
 	}
 	return opts, flags.Detach, nil
+}
+
+// applyConfiguredTimeouts lets `.gavel.yaml` set the run's deadlines, which the
+// SSH git-push backend depends on: it invokes `gavel test` with no timeout
+// flags, so config is the only channel that reaches it. A flag the caller
+// actually typed still wins — cmd.Flags().Changed separates that from the
+// default cobra always supplies.
+func applyConfiguredTimeouts(cmd *cobra.Command, opts *testrunner.RunOptions) error {
+	dir, err := getWorkingDir()
+	if err != nil {
+		return err
+	}
+	cfg, err := verify.LoadGavelConfig(dir)
+	if err != nil {
+		return fmt.Errorf("read test timeouts from .gavel.yaml: %w", err)
+	}
+	global, test, lint, err := cfg.Test.Timeouts()
+	if err != nil {
+		return err
+	}
+	for _, configured := range []struct {
+		flag  string
+		value time.Duration
+		into  *time.Duration
+	}{
+		{flag: "timeout", value: global, into: &opts.Timeout},
+		{flag: "test-timeout", value: test, into: &opts.TestTimeout},
+		{flag: "lint-timeout", value: lint, into: &opts.LintTimeout},
+	} {
+		if configured.value > 0 && !cmd.Flags().Changed(configured.flag) {
+			*configured.into = configured.value
+		}
+	}
+	return nil
 }
 
 func bindTestCommandFlags(cmd *cobra.Command, flags *testCommandFlags) {

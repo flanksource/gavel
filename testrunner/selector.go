@@ -224,20 +224,20 @@ func cachedSuiteResults(hit cacheHit) parsers.TestSuiteResults {
 
 // diffOptionsFromRunOptions translates user-facing flags into the git
 // DiffOptions fed to ComputeFileSet. Changed or Since always imply
-// staged+unstaged+untracked so the working tree is reflected.
+// staged+unstaged+untracked so the working tree is reflected; an explicit
+// ChangedFiles list on its own is taken as given, because the caller naming it
+// already knows what changed and git's view of the tree would only widen it.
 func diffOptionsFromRunOptions(opts RunOptions) changegraph.DiffOptions {
-	diff := changegraph.DiffOptions{
-		IncludeStaged:    true,
-		IncludeUnstaged:  true,
-		IncludeUntracked: true,
+	diff := changegraph.DiffOptions{Files: opts.ChangedFiles}
+	if opts.Since == "" && !opts.Changed {
+		return diff
 	}
+	diff.IncludeStaged, diff.IncludeUnstaged, diff.IncludeUntracked = true, true, true
 	if opts.Since != "" {
 		diff.Since = opts.Since
 		return diff
 	}
-	if opts.Changed {
-		diff.Since = changedBaseRef()
-	}
+	diff.Since = changedBaseRef()
 	return diff
 }
 

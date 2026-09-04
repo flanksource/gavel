@@ -260,6 +260,7 @@ func executeNewPRPush(ctx context.Context, opts Options, ghOpts github.Options, 
 	prIn := PRContentInput{
 		Commits:        commitInputsFromResults(result.Commits),
 		PromptOverride: prContentPrompt,
+		WorkDir:        opts.WorkDir,
 	}
 	content, err := deps.generatePRPrompt(ctx, agent, prIn)
 	if err != nil {

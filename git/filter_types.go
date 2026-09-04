@@ -53,8 +53,8 @@ func (opt HistoryOptions) Pretty() api.Text {
 
 func (opt AnalyzeOptions) Pretty() api.Text {
 	t := opt.HistoryOptions.Pretty()
-	if opt.Model != "" {
-		t = t.Append(" model=", "text-muted").Append(opt.Model, "font-mono")
+	if opt.Agent != nil {
+		t = t.Append(" model=", "text-muted").Append(fmt.Sprintf("%s", opt.Agent), "font-mono")
 	}
 	if opt.MaxConcurrent > 0 {
 		t = t.Append(" max-concurrent=", "text-muted").Append(fmt.Sprintf("%d", opt.MaxConcurrent), "font-mono")
@@ -75,13 +75,16 @@ func (opt AnalyzeOptions) Pretty() api.Text {
 type AnalyzeOptions struct {
 	HistoryOptions `json:",inline"`
 	Input          []string `json:"input" flag:"input" help:"Input JSON files from previous analysis runs (supports multiple files)"`
-	Model          string   `json:"model" flag:"model" help:"AI model to use for analysis"`
-	MaxConcurrent  int      `json:"max_concurrent" flag:"max-concurrent" help:"Maximum concurrent analysis tasks" default:"4"`
-	ScopeTypes     []string `json:"scope_types" flag:"scope" help:"Limit analysis to these scope types"`
-	CommitTypes    []string `json:"commit_types" flag:"commit-types" help:"Limit analysis to these commit types"`
-	Technologies   []string `json:"technologies" flag:"tech" help:"Limit analysis to these technologies"`
-	Debug          bool     `json:"debug" flag:"debug" help:"Enable debug logging"`
-	MinScore       int      `json:"min_score" flag:"ai-min-score" help:"Minimum score for commit to be excluded from ai analysis" default:"15"`
+	// There is deliberately no --model here. It existed, was advertised in the
+	// README and MANUAL, and was read by nothing but Pretty() — so `git analyze
+	// --model X` printed "model=X" and then ran something else. --ai-model is the
+	// single model flag, and it speaks captain's compact grammar ("api:haiku").
+	MaxConcurrent int      `json:"max_concurrent" flag:"max-concurrent" help:"Maximum concurrent analysis tasks" default:"4"`
+	ScopeTypes    []string `json:"scope_types" flag:"scope" help:"Limit analysis to these scope types"`
+	CommitTypes   []string `json:"commit_types" flag:"commit-types" help:"Limit analysis to these commit types"`
+	Technologies  []string `json:"technologies" flag:"tech" help:"Limit analysis to these technologies"`
+	Debug         bool     `json:"debug" flag:"debug" help:"Enable debug logging"`
+	MinScore      int      `json:"min_score" flag:"ai-min-score" help:"Minimum score for commit to be excluded from ai analysis" default:"15"`
 	// MaxBodyLines caps the commit message body length the LLM is asked to
 	// produce. Scaled to the diff size by the commit package; 0 means
 	// subject-only (no body).
@@ -102,9 +105,15 @@ type AnalyzeOptions struct {
 	// from (.gavel.yaml commit.types); empty uses gavel's defaults. Distinct
 	// from CommitTypes above, which filters which existing commits to analyze.
 	// Resolved from .gavel.yaml by the commit package. Not a CLI flag.
-	AllowedCommitTypes []string         `json:"-"`
-	agent              ai.Agent         `json:"-"`
-	arch               repomap.ArchConf `json:"-"`
+	AllowedCommitTypes []string `json:"-"`
+	// Agent is the caller-owned LLM agent. AnalyzeCommitHistory used to build its
+	// own from ai.DefaultConfig(), which is why `git analyze --ai --ai-model X`
+	// and `git amend` silently ran on the hardcoded default no matter what the
+	// CLI or .gavel.yaml selected. The caller now resolves the model and owns the
+	// agent's lifetime, matching SummaryOptions.Agent in this same package.
+	// Nil disables AI analysis.
+	Agent ai.Agent         `json:"-"`
+	arch  repomap.ArchConf `json:"-"`
 }
 
 func techToStrings(techs []models.ScopeTechnology) []string {
