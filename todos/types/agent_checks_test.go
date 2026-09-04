@@ -9,21 +9,18 @@ func TestResolveAgentChecks(t *testing.T) {
 		name          string
 		project       AgentChecksConfig
 		frontmatter   *AgentChecksConfig
-		forceEnabled  bool
 		wantEnabled   bool
-		wantMaxIters  int
+		wantRetry     string
 		wantHasChecks bool
 	}{
 		{
-			name:         "disabled by default when nothing set",
-			wantEnabled:  false,
-			wantMaxIters: DefaultMaxCheckIterations,
+			name:        "disabled by default when nothing set",
+			wantEnabled: false,
 		},
 		{
 			name:          "project enables with explicit checks",
 			project:       AgentChecksConfig{Enabled: boolPtr(true), Test: &AgentTestConfig{Changed: true}},
 			wantEnabled:   true,
-			wantMaxIters:  DefaultMaxCheckIterations,
 			wantHasChecks: true,
 		},
 		{
@@ -31,7 +28,6 @@ func TestResolveAgentChecks(t *testing.T) {
 			project:       AgentChecksConfig{Enabled: boolPtr(false)},
 			frontmatter:   &AgentChecksConfig{Enabled: boolPtr(true)},
 			wantEnabled:   true,
-			wantMaxIters:  DefaultMaxCheckIterations,
 			wantHasChecks: true, // enabled with no checks → default test+lint
 		},
 		{
@@ -39,34 +35,32 @@ func TestResolveAgentChecks(t *testing.T) {
 			project:       AgentChecksConfig{Enabled: boolPtr(true), Test: &AgentTestConfig{Changed: true}},
 			frontmatter:   &AgentChecksConfig{Enabled: boolPtr(false)},
 			wantEnabled:   false,
-			wantMaxIters:  DefaultMaxCheckIterations,
 			wantHasChecks: true, // project test config survives the overlay
 		},
 		{
-			name:          "force enable from flag turns on a silent project",
-			forceEnabled:  true,
+			name:          "project enable with no checks named defaults both",
+			project:       AgentChecksConfig{Enabled: boolPtr(true)},
 			wantEnabled:   true,
-			wantMaxIters:  DefaultMaxCheckIterations,
-			wantHasChecks: true, // forced-on with no checks → default test+lint
+			wantHasChecks: true, // enabled with no checks → default test+lint
 		},
 		{
-			name:          "frontmatter maxIterations overrides project",
-			project:       AgentChecksConfig{Enabled: boolPtr(true), MaxIterations: 2, Test: &AgentTestConfig{Changed: true}},
-			frontmatter:   &AgentChecksConfig{MaxIterations: 7},
+			name:          "frontmatter retry overrides project",
+			project:       AgentChecksConfig{Enabled: boolPtr(true), Retry: "verify.summary.failed > 0", Test: &AgentTestConfig{Changed: true}},
+			frontmatter:   &AgentChecksConfig{Retry: "verify.summary.warned > 0"},
 			wantEnabled:   true,
-			wantMaxIters:  7,
+			wantRetry:     "verify.summary.warned > 0",
 			wantHasChecks: true,
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := ResolveAgentChecks(tc.project, tc.frontmatter, tc.forceEnabled)
+			got := ResolveAgentChecks(tc.project, tc.frontmatter)
 			if got.IsEnabled() != tc.wantEnabled {
 				t.Errorf("IsEnabled() = %v, want %v", got.IsEnabled(), tc.wantEnabled)
 			}
-			if got.MaxIterations != tc.wantMaxIters {
-				t.Errorf("MaxIterations = %d, want %d", got.MaxIterations, tc.wantMaxIters)
+			if tc.wantRetry != "" && got.Retry != tc.wantRetry {
+				t.Errorf("Retry = %q, want %q", got.Retry, tc.wantRetry)
 			}
 			if got.HasChecks() != tc.wantHasChecks {
 				t.Errorf("HasChecks() = %v, want %v", got.HasChecks(), tc.wantHasChecks)
@@ -75,12 +69,12 @@ func TestResolveAgentChecks(t *testing.T) {
 	}
 }
 
-func TestResolveAgentChecksForcedDefaultsBothChecks(t *testing.T) {
-	got := ResolveAgentChecks(AgentChecksConfig{}, nil, true)
+func TestResolveAgentChecksEnabledDefaultsBothChecksToChangedFiles(t *testing.T) {
+	got := ResolveAgentChecks(AgentChecksConfig{Enabled: boolPtr(true)}, nil)
 	if got.Test == nil || !got.Test.Changed {
-		t.Errorf("forced default should run changed tests, got Test=%+v", got.Test)
+		t.Errorf("enabled default should run changed tests, got Test=%+v", got.Test)
 	}
 	if got.Lint == nil || !got.Lint.Changed {
-		t.Errorf("forced default should run changed lint, got Lint=%+v", got.Lint)
+		t.Errorf("enabled default should run changed lint, got Lint=%+v", got.Lint)
 	}
 }

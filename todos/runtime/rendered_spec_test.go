@@ -49,6 +49,22 @@ func TestRenderedSpecStampsTheIssueFixtureOntoTheWorkflow(t *testing.T) {
 	assert.NotContains(t, bare, "workflow", "an issue with no fixture declares no workflow verification")
 }
 
+// A spec that already declares a fixture — the lifecycle step expanded the
+// todo's document into it, or the caller supplied one — is recorded as
+// dispatched: the issue's fixture must not overwrite the document the run
+// actually executed.
+func TestRenderedSpecKeepsAFixtureTheDispatchedSpecDeclares(t *testing.T) {
+	const dispatched = "```bash\necho dispatched\n```"
+	spec := api.Spec{Workflow: &api.Workflow{Verify: &api.Verify{Fixture: dispatched, MaxIterations: 2}}}
+
+	rendered, err := renderedSpec(spec, "```bash\necho issue\n```")
+	require.NoError(t, err)
+
+	verify := rendered["workflow"].(map[string]any)["verify"].(map[string]any)
+	assert.Equal(t, dispatched, verify["fixture"])
+	assert.Equal(t, float64(2), verify["maxIterations"])
+}
+
 // Stamping happens on a copy: the dispatched spec is live on the runner while
 // this projection is built, and a shared Workflow pointer would mutate it.
 func TestRenderedSpecDoesNotMutateTheDispatchedSpec(t *testing.T) {

@@ -3,8 +3,8 @@ package runtime
 import (
 	"testing"
 
+	capapi "github.com/flanksource/captain/pkg/api"
 	captaindb "github.com/flanksource/captain/pkg/database"
-	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/native"
 	"github.com/flanksource/gavel/todos/types"
@@ -18,12 +18,12 @@ var _ = Describe("verification progress projection", func() {
 			"session":          map[string]any{"id": "session-1"},
 			"definitionOfDone": map[string]any{"note": "keep", "progress": "stale"},
 		}
-		snapshot := fixtures.ExecutionSnapshot{Version: 1, Iteration: 4, State: fixtures.ExecutionRunning}
+		report := capapi.VerifyReport{Kind: "fixture", Iteration: 4, State: capapi.VerifyStateRunning}
 
-		projected := progressResultJSON(original, snapshot)
+		projected := progressResultJSON(original, report)
 
 		Expect(projected).To(HaveKeyWithValue("session", original["session"]))
-		Expect(projected["definitionOfDone"]).To(Equal(map[string]any{"note": "keep", "progress": snapshot}))
+		Expect(projected["definitionOfDone"]).To(Equal(map[string]any{"note": "keep", "progress": report}))
 		Expect(original["definitionOfDone"]).To(Equal(map[string]any{"note": "keep", "progress": "stale"}))
 	})
 })

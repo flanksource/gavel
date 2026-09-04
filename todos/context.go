@@ -27,6 +27,8 @@ type ExecutorContext struct {
 	onRunPrepared func(RunPreparationResult)
 	onRunStart    func(RunStartMetadata)
 	onNotices     func(sessionID string, notices []api.Notice)
+	// onVerifyProgress receives the definition of done's in-flight reports.
+	onVerifyProgress func(api.VerifyReport)
 }
 
 // RunStartMetadata is the human-facing run identity recorded on a TODO issue
@@ -264,6 +266,12 @@ func (ctx *ExecutorContext) RecordRunPrepared(result RunPreparationResult) {
 	if result.PromptRunID != uuid.Nil {
 		ctx.Context = WithPromptRun(ctx.Context, result.PromptRunID)
 	}
+	// The admission session is bound alongside the run because the two together
+	// are the identity a durable tool approval is written against; a broker built
+	// mid-execution has no other way to learn them.
+	if sessionID, err := uuid.Parse(result.SessionID); err == nil && sessionID != uuid.Nil {
+		ctx.Context = WithCaptainSession(ctx.Context, sessionID)
+	}
 	if result.SessionID == "" || ctx.onRunPrepared == nil {
 		return
 	}
@@ -271,6 +279,25 @@ func (ctx *ExecutorContext) RecordRunPrepared(result RunPreparationResult) {
 }
 
 type promptRunContextKey struct{}
+
+type captainSessionContextKey struct{}
+
+// WithCaptainSession binds Captain's admission session to a context, so a hook
+// or broker running inside the execution can address the rows Captain keyed on
+// it.
+func WithCaptainSession(ctx context.Context, sessionID uuid.UUID) context.Context {
+	return context.WithValue(ctx, captainSessionContextKey{}, sessionID)
+}
+
+// CaptainSessionFromContext returns the session bound by WithCaptainSession, or
+// uuid.Nil outside an admitted run.
+func CaptainSessionFromContext(ctx context.Context) uuid.UUID {
+	if ctx == nil {
+		return uuid.Nil
+	}
+	sessionID, _ := ctx.Value(captainSessionContextKey{}).(uuid.UUID)
+	return sessionID
+}
 
 // WithPromptRun binds a prompt run to a context so the provider callbacks made
 // while executing it resolve that run and no other.
@@ -302,6 +329,22 @@ func (ctx *ExecutorContext) RecordRunStart(meta RunStartMetadata) {
 		return
 	}
 	ctx.onRunStart(meta)
+}
+
+// SetVerifyProgressHook registers a callback an executor hands to captain's
+// verify Options.Progress, so every in-flight verification report reaches the
+// run's persistence without the executor knowing what persistence is.
+func (ctx *ExecutorContext) SetVerifyProgressHook(fn func(api.VerifyReport)) {
+	ctx.onVerifyProgress = fn
+}
+
+// RecordVerifyProgress reports one in-flight verification snapshot to the
+// registered hook (if any).
+func (ctx *ExecutorContext) RecordVerifyProgress(report api.VerifyReport) {
+	if ctx.onVerifyProgress == nil {
+		return
+	}
+	ctx.onVerifyProgress(report)
 }
 
 // SetNoticesHook registers a callback an executor invokes (via RecordNotices)

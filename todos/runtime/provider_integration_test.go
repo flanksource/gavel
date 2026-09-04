@@ -2,7 +2,6 @@ package runtime
 
 import (
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -11,7 +10,6 @@ import (
 	"github.com/flanksource/captain/pkg/api"
 	captaindb "github.com/flanksource/captain/pkg/database"
 	commonsdb "github.com/flanksource/commons-db/db"
-	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/native"
@@ -20,47 +18,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-type promptObservingExecutor struct {
-	provider      *Provider
-	prompt        string
-	runPrompt     string
-	sessionPrompt string
-}
-
-func (e *promptObservingExecutor) Name() string { return "prompt-observer" }
-
-func (e *promptObservingExecutor) RenderRunSpec(_ *todos.ExecutorContext, _ *types.TODO) (api.Spec, error) {
-	return api.Spec{Prompt: api.Prompt{User: e.prompt}}, nil
-}
-
-func (e *promptObservingExecutor) Execute(ctx *todos.ExecutorContext, todo *types.TODO) (*todos.ExecutionResult, error) {
-	issueID, err := uuid.Parse(todo.ID)
-	if err != nil {
-		return nil, err
-	}
-	issue, err := e.provider.Repository().GetIssue(ctx, issueID)
-	if err != nil {
-		return nil, err
-	}
-	if issue.ActivePromptRunID == nil {
-		return nil, fmt.Errorf("Captain prompt run was not active before dispatch")
-	}
-	run, err := e.provider.Captain().GetPromptRun(ctx, *issue.ActivePromptRunID)
-	if err != nil {
-		return nil, err
-	}
-	session, err := e.provider.Captain().GetSession(ctx, run.SessionID)
-	if err != nil {
-		return nil, err
-	}
-	e.runPrompt = run.PromptMarkdown
-	e.sessionPrompt = session.InitialPrompt
-	return &todos.ExecutionResult{
-		Success: true, ExecutorName: e.Name(), EndStatus: types.EndCompleted,
-		Summary: "observed admitted prompt",
-	}, nil
-}
 
 func TestProviderNativeLifecycleIntegration(t *testing.T) {
 	if os.Getenv("GAVEL_DB_EMBEDDED_TEST") == "" {
@@ -295,14 +252,22 @@ func TestProviderNativeLifecycleIntegration(t *testing.T) {
 		Title: "Runtime exact prompt", Body: "The issue body is not the rendered agent prompt", Status: types.StatusPending,
 	})
 	require.NoError(t, err)
+	// The admitted prompt run must carry the RENDERED prompt, not the issue body:
+	// PrepareRun is what stores it, and it runs before anything is dispatched, so
+	// a reader of the run row never sees a lossy reconstruction of what the agent
+	// was actually asked.
 	exactPrompt := "Rendered prompt with runtime instructions and the full issue envelope"
-	observer := &promptObservingExecutor{provider: provider, prompt: exactPrompt}
-	runner := todos.NewTODOExecutor(newRoot, observer, "", provider)
-	runner.SetMode(types.ModeRun)
-	_, err = runner.Execute(todos.NewExecutorContext(t.Context(), logger.StandardLogger(), nil), tracingTodo)
+	tracingPreparation, err := provider.PrepareRun(t.Context(), tracingTodo, todos.RunPreparation{
+		Mode: types.ModeRun, Prompt: "run", ExecutorName: "prompt-observer",
+		Spec: api.Spec{Prompt: api.Prompt{User: exactPrompt}},
+	})
 	require.NoError(t, err)
-	assert.Equal(t, exactPrompt, observer.runPrompt, "Captain prompt run must be populated before external dispatch")
-	assert.Equal(t, exactPrompt, observer.sessionPrompt, "Captain session must retain the exact initial prompt")
+	tracingRun, err := provider.Captain().GetPromptRun(t.Context(), tracingPreparation.PromptRunID)
+	require.NoError(t, err)
+	tracingSession, err := provider.Captain().GetSession(t.Context(), tracingRun.SessionID)
+	require.NoError(t, err)
+	assert.Equal(t, exactPrompt, tracingRun.PromptMarkdown, "Captain prompt run must be populated before external dispatch")
+	assert.Equal(t, exactPrompt, tracingSession.InitialPrompt, "Captain session must retain the exact initial prompt")
 
 	raceTodo, err := provider.Create(t.Context(), todos.CreateRequest{
 		Title: "Runtime admission race", Body: "Only one caller may dispatch", Status: types.StatusPending,

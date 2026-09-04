@@ -74,6 +74,13 @@ func Open(ctx context.Context, options WorkspaceOptions) (*Provider, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Todo commands open the database without migrating it — only `gavel serve`
+	// applies migrations — so this is where a binary newer than its database is
+	// caught, once, rather than as an obscure failure at whichever read first
+	// touches a column that is not there yet.
+	if err := requireVerificationColumn(db); err != nil {
+		return nil, err
+	}
 	return New(ctx, db, options)
 }
 
@@ -84,6 +91,9 @@ func Open(ctx context.Context, options WorkspaceOptions) (*Provider, error) {
 func OpenGlobal(ctx context.Context) (*Provider, error) {
 	db, err := database.Require(ctx, "native TODO global reference resolution")
 	if err != nil {
+		return nil, err
+	}
+	if err := requireVerificationColumn(db); err != nil {
 		return nil, err
 	}
 	repository, err := native.NewRepository(db)
@@ -265,10 +275,6 @@ func (p *Provider) Workspace() *native.Workspace {
 	workspace := *p.workspace
 	return &workspace
 }
-
-// SupportsGroupedExecution reports the native invariant that one Captain
-// prompt run is attached to exactly one issue.
-func (p *Provider) SupportsGroupedExecution() bool { return false }
 
 func (p *Provider) List(ctx context.Context, filters todos.DiscoveryFilters) (types.TODOS, error) {
 	issues, err := p.repository.ListIssues(ctx, p.workspace.ID)

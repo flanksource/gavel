@@ -3,8 +3,11 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"time"
 
+	"github.com/flanksource/captain/pkg/api"
 	"github.com/google/uuid"
 
 	"github.com/flanksource/gavel/todos/native"
@@ -46,7 +49,11 @@ func (p *Provider) phaseRuns(ctx context.Context, workspaceID uuid.UUID) (map[uu
 			runs = types.PhaseRuns{}
 			index[row.IssueID] = runs
 		}
-		runs[types.Phase(row.Phase)] = phaseRunFromNative(row)
+		run, err := phaseRunFromNative(row)
+		if err != nil {
+			return nil, err
+		}
+		runs[types.Phase(row.Phase)] = run
 	}
 
 	p.phasesMu.Lock()
@@ -66,7 +73,11 @@ func (p *Provider) dropPhaseRuns(workspaceID uuid.UUID) {
 	p.phasesMu.Unlock()
 }
 
-func phaseRunFromNative(row native.IssuePhaseRun) types.PhaseRun {
+func phaseRunFromNative(row native.IssuePhaseRun) (types.PhaseRun, error) {
+	progress, err := phaseProgress(row)
+	if err != nil {
+		return types.PhaseRun{}, fmt.Errorf("phase %s of issue %s: %w", row.Phase, row.IssueID, err)
+	}
 	run := types.PhaseRun{
 		Phase:      types.Phase(row.Phase),
 		State:      row.State,
@@ -74,57 +85,50 @@ func phaseRunFromNative(row native.IssuePhaseRun) types.PhaseRun {
 		FinishedAt: row.FinishedAt,
 		CostUSD:    row.CostUSD,
 		Active:     row.Active,
-		Progress:   phaseProgress(row),
+		Progress:   progress,
 	}
 	if row.DurationSeconds != nil {
 		run.DurationMS = int64(*row.DurationSeconds * float64(time.Second/time.Millisecond))
 	}
-	return run
+	return run, nil
 }
 
 // phaseProgress reads the unit the phase actually counts in. Plan, run and
-// triage count agent iterations; verification counts the checks in its fixture,
-// which the lifecycle records as a definition-of-done snapshot on the run.
-func phaseProgress(row native.IssuePhaseRun) types.PhaseProgress {
+// triage count agent iterations; verification counts the checks in its fixture.
+//
+// The verify counts come from captain's own record —
+// captain_prompt_run_iterations.verification_result, surfaced by
+// captain_prompt_run_overview.latest_verification_result — and from nowhere
+// else. They used to be read back out of a gavel-shaped copy under the run's
+// result_json.definitionOfDone.progress, which meant a run that produced a
+// verdict but never wrote the copy rendered as "no progress" while captain held
+// the counts all along. There is one record of a verification now.
+func phaseProgress(row native.IssuePhaseRun) (types.PhaseProgress, error) {
 	if row.Phase == native.StepVerify {
-		if progress, ok := verificationProgress(row.ResultJSON); ok {
-			return progress
-		}
+		return verificationProgress(row.VerificationResult)
 	}
 	return types.PhaseProgress{
 		Done:   row.Succeeded,
 		Failed: row.Failed,
 		Total:  row.Iterations,
-	}
+	}, nil
 }
 
-// verificationSnapshot is the shape lifecycle.go writes under
-// definitionOfDone.progress — the fixtures.ExecutionSnapshot summary. Only the
-// counts are read here; the node tree belongs to the detail view.
-type verificationSnapshot struct {
-	DefinitionOfDone struct {
-		Progress struct {
-			Summary struct {
-				Total   int `json:"total"`
-				Passed  int `json:"passed"`
-				Failed  int `json:"failed"`
-				Running int `json:"running"`
-			} `json:"summary"`
-		} `json:"progress"`
-	} `json:"definitionOfDone"`
-}
-
-func verificationProgress(resultJSON []byte) (types.PhaseProgress, bool) {
-	if len(resultJSON) == 0 {
-		return types.PhaseProgress{}, false
+// verificationProgress is the check counts of captain's stored report. An empty
+// column is a phase that has not produced a verdict — no progress to show — but
+// a column that will not decode is corrupt, and reporting that as an empty pass
+// is exactly the silence this column exists to prevent.
+func verificationProgress(verificationResult string) (types.PhaseProgress, error) {
+	if strings.TrimSpace(verificationResult) == "" {
+		return types.PhaseProgress{}, nil
 	}
-	var snapshot verificationSnapshot
-	if err := json.Unmarshal(resultJSON, &snapshot); err != nil {
-		return types.PhaseProgress{}, false
+	var report api.VerifyReport
+	if err := json.Unmarshal([]byte(verificationResult), &report); err != nil {
+		return types.PhaseProgress{}, fmt.Errorf("decode Captain verification result: %w", err)
 	}
-	summary := snapshot.DefinitionOfDone.Progress.Summary
-	if summary.Total == 0 && summary.Passed == 0 && summary.Failed == 0 {
-		return types.PhaseProgress{}, false
-	}
-	return types.PhaseProgress{Done: summary.Passed, Failed: summary.Failed, Total: summary.Total}, true
+	return types.PhaseProgress{
+		Done:   report.Summary.Passed,
+		Failed: report.Summary.Failed,
+		Total:  report.Summary.Total,
+	}, nil
 }
