@@ -2,6 +2,7 @@ package database
 
 import (
 	"io/fs"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -9,6 +10,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// stepKindComparisons matches any comparison of a step_kind column against a
+// value: `step_kind = 'run'`, `step_kind <> 'verify'`, `step_kind IN (...)`.
+var stepKindComparisons = regexp.MustCompile(`step_kind\s*(=|<>|!=|IN\s*\()`)
 
 func TestSchemaBundleIncludesOrderedCaptainProjectionSQL(t *testing.T) {
 	t.Parallel()
@@ -32,6 +37,7 @@ func TestSchemaBundleIncludesOrderedCaptainProjectionSQL(t *testing.T) {
 	assert.Contains(t, names, "116_backfill_triage_step_kind.sql")
 	assert.Contains(t, names, "120_backfill_todo_labels.sql")
 	assert.Contains(t, names, "130_task_history_storage_params.sql")
+	assert.Contains(t, names, "140_todo_prompt_run_step_open.sql")
 
 	prepareSQL := readEmbeddedSchemaFile(t, "schema/090_prepare_runtime_state.sql")
 	assert.Contains(t, prepareSQL, "-- phase: pre")
@@ -64,8 +70,34 @@ func TestSchemaBundleIncludesOrderedCaptainProjectionSQL(t *testing.T) {
 	assert.Contains(t, functionsSQL, "gavel_project_todo_prompt_run")
 	assert.Contains(t, functionsSQL, "gavel_todo_issue_execution_state")
 	assert.Contains(t, functionsSQL, "GREATEST(updated_at, p_activity_at)")
-	assert.Contains(t, functionsSQL, "{workflow,autoVerifyWithoutFixture}")
 	assert.GreaterOrEqual(t, strings.Count(functionsSQL, "SET search_path = pg_catalog, public"), 7)
+
+	// Execution state is derived from what the run was asked to do — its
+	// rendered spec's permission mode, the verify-only shape of its spec, its
+	// phase, its iterations' verdicts — never from a step's name. Steps are
+	// project-defined lifecycle data, so any literal the projection compared
+	// against would be one a project may not use.
+	assert.Contains(t, functionsSQL, "#>> '{permissions,mode}' = 'plan'")
+	assert.Contains(t, functionsSQL, "#> '{workflow,verify}' IS NOT NULL")
+	assert.Empty(t, stepKindComparisons.FindAllString(functionsSQL, -1),
+		"the projection must not compare step_kind against any literal step name")
+
+	// Durable status is written exactly once, by the Go lifecycle host's
+	// OnOutcome. The projection must not race it with a second writer, and the
+	// stubbed second writer it used to expose is dropped rather than kept.
+	assert.NotContains(t, functionsSQL, "desired_status")
+	assert.NotContains(t, functionsSQL, "UPDATE public.todo_issues\n     SET status")
+	assert.NotContains(t, functionsSQL, "verification_succeeded")
+	assert.NotContains(t, functionsSQL, "verification_required")
+	assert.NotContains(t, functionsSQL, "{workflow,autoVerifyWithoutFixture}")
+	assert.Contains(t, functionsSQL, "DROP FUNCTION IF EXISTS public.gavel_project_todo_issue(uuid);")
+	assert.NotContains(t, functionsSQL, "CREATE OR REPLACE FUNCTION public.gavel_project_todo_issue")
+	for _, fn := range []string{
+		"gavel_touch_todo_issue", "gavel_project_todo_prompt_run",
+		"gavel_touch_todo_prompt_run", "gavel_project_todo_session",
+	} {
+		assert.Contains(t, functionsSQL, "FUNCTION public."+fn+"(", "%s must survive", fn)
+	}
 	assert.NotContains(t, functionsSQL, "CREATE OR REPLACE TRIGGER",
 		"projection triggers moved to their own file")
 	assert.NotContains(t, functionsSQL, "CREATE OR REPLACE VIEW",
@@ -86,15 +118,30 @@ func TestSchemaBundleIncludesOrderedCaptainProjectionSQL(t *testing.T) {
 
 	// Atlas leaves a renamed-nothing CHECK alone even when its expression
 	// changed, so the declared step_kind domain only reaches an existing
-	// database through 102. The two spellings must stay identical, and the
-	// triage backfill must not run before the widened CHECK lands.
+	// database through an explicit reconciliation script. 102 is the historical
+	// one: it exists solely to admit 'triage' so the 116 backfill can write it,
+	// and it is superseded by 140. Its literal is deliberately frozen rather
+	// than compared against todos.hcl, which now declares the open domain.
 	stepKindSQL := readEmbeddedSchemaFile(t, "schema/102_todo_prompt_run_step_kind.sql")
 	assert.Contains(t, stepKindSQL, "-- phase: post")
-	assert.Contains(t, stepKindSQL, declaredCheckExpr(t, "todo_issue_prompt_runs_step_kind_check"),
-		"102 must reconcile the CHECK exactly as todos.hcl declares it")
+	assert.Contains(t, stepKindSQL,
+		"CHECK (step_kind = ANY (ARRAY['plan'::text, 'run'::text, 'verify'::text, 'triage'::text]))",
+		"102 must keep admitting exactly the kinds the 116 backfill writes")
 
 	triageSQL := readEmbeddedSchemaFile(t, "schema/116_backfill_triage_step_kind.sql")
 	assert.Contains(t, triageSQL, "102_todo_prompt_run_step_kind.sql")
+
+	// Lifecycle steps are project-defined data, so step_kind is an open string
+	// column: 140 replaces the closed enum with a shape constraint. It has to
+	// land after the triage backfill, and — because Atlas will never plan the
+	// ModifyCheck itself — has to spell the declaration in todos.hcl exactly.
+	stepOpenSQL := readEmbeddedSchemaFile(t, "schema/140_todo_prompt_run_step_open.sql")
+	assert.Contains(t, stepOpenSQL, "-- phase: post")
+	assert.Contains(t, stepOpenSQL, "-- dependsOn: 116_backfill_triage_step_kind.sql")
+	assert.Contains(t, stepOpenSQL, declaredCheckExpr(t, "todo_issue_prompt_runs_step_kind_check"),
+		"140 must reconcile the CHECK exactly as todos.hcl declares it")
+	assert.NotContains(t, stepOpenSQL, "'triage'::text",
+		"140 opens the domain rather than extending the closed enum")
 
 	taskHistorySchema := readEmbeddedSchemaFile(t, "schema/task_history.hcl")
 	assert.Contains(t, taskHistorySchema, `table "task_run_history"`)

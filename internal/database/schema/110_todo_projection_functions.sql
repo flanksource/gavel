@@ -1,8 +1,22 @@
 -- phase: post
 
+-- The projection used to expose gavel_project_todo_issue, a second writer of
+-- durable status that was later stubbed to `RETURN false`. Its callers all
+-- discarded the result, so it is dropped rather than kept as a contract nobody
+-- depends on. Activity propagation and read-time state are what remain.
+DROP FUNCTION IF EXISTS public.gavel_project_todo_issue(uuid);
+
 -- Derive transient execution state from Captain at read time. The source='gavel'
 -- session remains only the prompt-run admission root; monitored Claude/Codex
 -- sessions with the same provider identity own agent lifecycle and health.
+--
+-- Nothing here reads a step's NAME. Steps are project-defined lifecycle data,
+-- so any literal the projection compared against would be one a project may
+-- not use; a run is classified by what it was asked to do instead. A planning
+-- pass is a plan-mode spec. A verification pass is a spec that declares a
+-- definition of done and no prompt — the shape the lifecycle's verify-only
+-- step dispatches — or a run whose phase captain moved to verify, or one whose
+-- latest iteration recorded a verifier verdict.
 CREATE OR REPLACE FUNCTION public.gavel_todo_issue_execution_state(p_issue_id uuid)
 RETURNS text
 LANGUAGE sql
@@ -12,11 +26,13 @@ AS $$
 WITH active AS (
   SELECT
     issue.active_prompt_run_id,
-    link.step_kind,
     run.state::text AS prompt_state,
     run.phase::text AS prompt_phase,
+    run.rendered_spec,
     run.root_session_id,
-    root.provider_session_id
+    root.provider_session_id,
+    run.rendered_spec #> '{workflow,verify}' IS NOT NULL
+      AND COALESCE(run.rendered_spec #>> '{prompt,user}', '') = '' AS verify_only
   FROM public.todo_issues issue
   LEFT JOIN public.todo_issue_prompt_runs link
     ON link.issue_id = issue.id
@@ -69,16 +85,15 @@ SELECT CASE
   WHEN active.active_prompt_run_id IS NULL THEN 'idle'
   WHEN active.prompt_state = 'cancelled' THEN 'idle'
   WHEN active.prompt_state = 'failed' THEN
-    CASE WHEN active.step_kind = 'verify'
-           OR (active.step_kind = 'run' AND (active.prompt_phase = 'verify' OR latest_iteration.verification_failed))
+    CASE WHEN active.verify_only OR active.prompt_phase = 'verify' OR latest_iteration.verification_failed
          THEN 'verification_failed' ELSE 'failed' END
   WHEN signals.failed THEN 'failed'
   WHEN signals.stalled THEN 'stalled'
   WHEN active.prompt_state = 'waiting' OR signals.waiting OR pending.waiting THEN 'waiting'
   WHEN signals.terminal THEN 'idle'
   WHEN active.prompt_state = 'succeeded' AND active.prompt_phase = 'finished' THEN 'idle'
-  WHEN active.prompt_phase = 'verify' OR active.step_kind = 'verify' THEN 'verifying'
-  WHEN active.step_kind = 'plan' THEN 'planning'
+  WHEN active.verify_only OR active.prompt_phase = 'verify' THEN 'verifying'
+  WHEN active.rendered_spec #>> '{permissions,mode}' = 'plan' THEN 'planning'
   ELSE 'running'
 END
 FROM active
@@ -112,119 +127,18 @@ BEGIN
 END
 $$;
 
--- Reconcile only durable workflow status. Transient execution state is read
--- directly from Captain and is never copied into the issue row or event log.
-CREATE OR REPLACE FUNCTION public.gavel_project_todo_issue(p_issue_id uuid)
-RETURNS boolean
-LANGUAGE plpgsql
-SET search_path = pg_catalog, public
-AS $$
-DECLARE
-  current_issue public.todo_issues%ROWTYPE;
-  prompt_step text;
-  prompt_state text;
-  prompt_phase text;
-  prompt_verification text;
-  prompt_spec jsonb;
-  prompt_run_version bigint;
-  latest_verification_failed boolean := false;
-  desired_status text;
-  verification_policy text := NULL;
-  next_version bigint;
-  next_sequence bigint;
-  event_kind text;
-BEGIN
-  SELECT * INTO current_issue FROM public.todo_issues WHERE id = p_issue_id FOR UPDATE;
-  IF NOT FOUND OR current_issue.active_prompt_run_id IS NULL THEN
-    RETURN false;
-  END IF;
-
-  SELECT link.step_kind, run.state::text, run.phase::text,
-         run.verification_markdown, run.rendered_spec, run.version
-    INTO prompt_step, prompt_state, prompt_phase,
-         prompt_verification, prompt_spec, prompt_run_version
-  FROM public.todo_issue_prompt_runs link
-  JOIN public.captain_prompt_runs run ON run.id = link.prompt_run_id
-  WHERE link.issue_id = current_issue.id
-    AND link.prompt_run_id = current_issue.active_prompt_run_id;
-  IF NOT FOUND THEN
-    RETURN false;
-  END IF;
-
-  SELECT COALESCE((
-    SELECT iteration.state::text = 'failed' AND iteration.verification_result IS NOT NULL
-    FROM public.captain_prompt_run_iterations iteration
-    WHERE iteration.prompt_run_id = current_issue.active_prompt_run_id
-    ORDER BY iteration.iteration DESC, iteration.created_at DESC, iteration.id DESC
-    LIMIT 1
-  ), false) INTO latest_verification_failed;
-
-  desired_status := current_issue.status;
-  IF prompt_state = 'failed'
-     AND (prompt_step = 'verify'
-       OR (prompt_step = 'run' AND (prompt_phase = 'verify' OR latest_verification_failed)))
-     AND current_issue.status IN ('draft', 'open', 'verified') THEN
-    desired_status := 'open';
-  ELSIF prompt_state = 'succeeded' AND prompt_phase = 'finished' THEN
-    IF prompt_step = 'verify' THEN
-      verification_policy := 'verify_step';
-    ELSIF prompt_step = 'run' AND btrim(COALESCE(prompt_verification, '')) <> '' THEN
-      verification_policy := 'fixture';
-    ELSIF prompt_step = 'run'
-      AND COALESCE(prompt_spec #> '{workflow,autoVerifyWithoutFixture}' = 'true'::jsonb, false) THEN
-      verification_policy := 'auto_verify_without_fixture';
-    END IF;
-    IF verification_policy IS NOT NULL AND current_issue.status IN ('draft', 'open') THEN
-      desired_status := 'verified';
-    ELSIF verification_policy IS NULL AND prompt_step = 'run'
-      AND current_issue.status IN ('draft', 'open', 'verified') THEN
-      desired_status := 'open';
-    END IF;
-  END IF;
-
-  IF desired_status = current_issue.status THEN
-    RETURN false;
-  END IF;
-
-  next_version := current_issue.version + 1;
-  SELECT COALESCE(MAX(sequence), 0) + 1 INTO next_sequence
-  FROM public.todo_issue_events WHERE issue_id = current_issue.id;
-
-  UPDATE public.todo_issues
-     SET status = desired_status, version = next_version,
-         updated_at = GREATEST(updated_at, now())
-   WHERE id = current_issue.id;
-
-  event_kind := CASE
-    WHEN prompt_state = 'failed' THEN 'verification_failed'
-    WHEN desired_status = 'verified' THEN 'verification_succeeded'
-    WHEN desired_status = 'open' AND current_issue.status = 'verified' THEN 'verification_required'
-    ELSE 'verification_failed'
-  END;
-
-  INSERT INTO public.todo_issue_events (
-    id, issue_id, sequence, kind, actor, payload, source, source_id, created_at
-  ) VALUES (
-    gen_random_uuid(), current_issue.id, next_sequence, event_kind, 'captain',
-    jsonb_strip_nulls(jsonb_build_object(
-      'promptRunId', current_issue.active_prompt_run_id,
-      'promptRunVersion', prompt_run_version,
-      'latestVerificationFailed', latest_verification_failed,
-      'stepKind', prompt_step,
-      'oldStatus', current_issue.status,
-      'newStatus', desired_status,
-      'verificationPolicy', verification_policy
-    )),
-    'captain-projection',
-    format('prompt-run:%s:version:%s:issue:%s:version:%s',
-      current_issue.active_prompt_run_id, prompt_run_version,
-      current_issue.id, next_version),
-    now()
-  );
-  RETURN true;
-END
-$$;
-
+-- Durable workflow status has exactly one writer: the Go lifecycle host's
+-- OnOutcome, which records a lifecycle_outcome event alongside the status it
+-- decided. The projection used to be a second writer, re-deriving status from
+-- the active prompt run's terminal shape. Two writers over one column cannot
+-- agree once the lifecycle is data — the projection only ever saw the hard-coded
+-- 'run'/'verify' vocabulary, so a project's own step read as an unverifiable
+-- run and reopened an issue the host had just verified.
+--
+-- What a prompt run's change projects onto its issue is therefore its activity
+-- alone: the watermark advances, nothing durable moves, and transient
+-- execution state is derived at read time by gavel_todo_issue_execution_state.
+-- The result counts the issues whose watermark advanced.
 CREATE OR REPLACE FUNCTION public.gavel_project_todo_prompt_run(p_prompt_run_id uuid)
 RETURNS integer
 LANGUAGE plpgsql
@@ -242,8 +156,7 @@ BEGIN
     JOIN public.captain_prompt_runs run ON run.id = link.prompt_run_id
     WHERE link.prompt_run_id = p_prompt_run_id
   LOOP
-    PERFORM public.gavel_touch_todo_issue(linked.issue_id, linked.activity_at);
-    IF public.gavel_project_todo_issue(linked.issue_id) THEN
+    IF public.gavel_touch_todo_issue(linked.issue_id, linked.activity_at) THEN
       changed_count := changed_count + 1;
     END IF;
   END LOOP;

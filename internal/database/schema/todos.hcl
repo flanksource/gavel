@@ -562,8 +562,12 @@ table "todo_issue_prompt_runs" {
     columns = [column.issue_id, column.step_kind, column.ordinal]
   }
 
+  # Lifecycle steps are project-defined data, so only the shape of the name is a
+  # database concern. Which names are legal belongs to the lifecycle definition.
+  # Mirrored verbatim by 140_todo_prompt_run_step_open.sql — Atlas never plans a
+  # ModifyCheck for an expression-only change.
   check "todo_issue_prompt_runs_step_kind_check" {
-    expr = "step_kind = ANY (ARRAY['plan'::text, 'run'::text, 'verify'::text, 'triage'::text])"
+    expr = "step_kind <> '' AND step_kind = lower(btrim(step_kind))"
   }
   check "todo_issue_prompt_runs_ordinal_nonnegative" {
     expr = "ordinal >= 0"

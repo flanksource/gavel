@@ -4,10 +4,12 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	commonsdb "github.com/flanksource/commons-db/db"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -125,9 +127,9 @@ func TestNativeTodoHCLMigrationAndRepeatedApply(t *testing.T) {
 		INSERT INTO todo_issue_prompt_runs (issue_id, prompt_run_id, step_kind, ordinal)
 		VALUES (?, ?, 'run', 0)`, issueTwo, promptRun).Error)
 
-	// Triage earned its own step kind so a backlog can tell a triage pass from a
-	// planning pass; anything outside the four is still refused.
-	assertTriageStepKind(t, db.Gorm(), issueTwo, captainSession)
+	// Lifecycle steps are project-defined data, so step_kind is an open string
+	// column. Only the shape of the name is still a database concern.
+	assertOpenStepKind(t, db.Gorm(), issueTwo)
 
 	assert.Error(t, db.Gorm().Exec(`
 		UPDATE todo_issues SET selected_plan_id = ? WHERE id = ?`, plan, issueOne).Error)
@@ -195,11 +197,11 @@ func TestNativeTodoHCLMigrationAndRepeatedApply(t *testing.T) {
 	}
 }
 
-// assertTriageStepKind covers the widened step_kind CHECK and the backfill that
-// accompanies it. Triage has always been a plan-CLASS run, so before it earned
-// its own kind every triage pass was linked as step_kind='plan' and was
-// distinguishable only by the prompt name Captain recorded (spec_profile).
-func assertTriageStepKind(t *testing.T, db *gorm.DB, issueID, _ string) {
+// assertOpenStepKind covers the open step_kind domain and the triage backfill
+// that predates it. The lifecycle definition (todos/lifecycle/todos.yaml) owns
+// which step names exist and a project may add its own, so the database only
+// enforces the shape of the name: non-empty, lower-cased and trimmed.
+func assertOpenStepKind(t *testing.T, db *gorm.DB, issueID string) {
 	t.Helper()
 
 	// Each run gets its own root session: captain_prompt_runs_active_root_key
@@ -215,24 +217,27 @@ func assertTriageStepKind(t *testing.T, db *gorm.DB, issueID, _ string) {
 			VALUES (?, ?, ?, 'gavel-test', 'triage')`, run, session, session).Error)
 		return run
 	}
+	link := func(kind string, ordinal int, runID string) error {
+		return db.Exec(`
+			INSERT INTO todo_issue_prompt_runs (issue_id, prompt_run_id, step_kind, ordinal)
+			VALUES (?, ?, ?, ?)`, issueID, runID, kind, ordinal).Error
+	}
 
 	triageRun := newTriageRun()
-	require.NoError(t, db.Exec(`
-		INSERT INTO todo_issue_prompt_runs (issue_id, prompt_run_id, step_kind, ordinal)
-		VALUES (?, ?, 'triage', 0)`, issueID, triageRun).Error,
-		"the widened CHECK must accept triage as its own step kind")
+	require.NoError(t, link("triage", 0, triageRun),
+		"a built-in lifecycle step must still be accepted")
+	require.NoError(t, link("custom-step", 1, newTriageRun()),
+		"a project-defined lifecycle step is the whole point of the open domain")
 
-	assert.Error(t, db.Exec(`
-		INSERT INTO todo_issue_prompt_runs (issue_id, prompt_run_id, step_kind, ordinal)
-		VALUES (?, ?, 'compact', 1)`, issueID, uuid.NewString()).Error,
-		"the CHECK must still refuse a kind outside the four")
+	assertStepKindRejected(t, link("", 2, newTriageRun()),
+		"an unnamed step is not a step")
+	assertStepKindRejected(t, link("Run", 3, newTriageRun()),
+		"a step recorded under a spelling readers never match is a silent orphan")
 
 	// The backfill is a one-time reclassification, so re-running its statement
 	// against a plan-linked triage run must move it exactly as the migration did.
 	legacyRun := newTriageRun()
-	require.NoError(t, db.Exec(`
-		INSERT INTO todo_issue_prompt_runs (issue_id, prompt_run_id, step_kind, ordinal)
-		VALUES (?, ?, 'plan', 7)`, issueID, legacyRun).Error)
+	require.NoError(t, link("plan", 7, legacyRun))
 	require.NoError(t, db.Exec(`
 		UPDATE todo_issue_prompt_runs AS link
 		SET step_kind = 'triage'
@@ -247,15 +252,28 @@ func assertTriageStepKind(t *testing.T, db *gorm.DB, issueID, _ string) {
 	assert.Equal(t, "triage", kind, "a historical triage run must not keep reporting as a planning pass")
 }
 
-// TestTodoStepKindCheckWidensOnAnExistingDatabase covers the upgrade path the
+// assertStepKindRejected demands the step_kind CHECK specifically, so a link
+// that fails for an unrelated reason (a missing run, a duplicate ordinal)
+// cannot masquerade as domain enforcement.
+func assertStepKindRejected(t *testing.T, err error, why string) {
+	t.Helper()
+	var pgErr *pgconn.PgError
+	require.ErrorAs(t, err, &pgErr, why)
+	assert.Equal(t, "23514", pgErr.Code, why)
+	assert.Equal(t, "todo_issue_prompt_runs_step_kind_check", pgErr.ConstraintName, why)
+}
+
+// TestTodoStepKindCheckOpensOnAnExistingDatabase covers the upgrade path the
 // fresh-install test cannot reach. Atlas creates a new table straight from the
-// HCL, so a widened CHECK expression always looks correct on an empty database;
+// HCL, so a changed CHECK expression always looks correct on an empty database;
 // on a database that already has the table Atlas silently keeps the old
 // expression (sqlx.checksSimilarDiff matches the declared CHECK to the live one
 // by name and then only compares NO INHERIT, so ModifyCheck is never emitted).
-// The schema bundle has to reconcile the CHECK itself, before the backfill
-// writes the new kind.
-func TestTodoStepKindCheckWidensOnAnExistingDatabase(t *testing.T) {
+// The schema bundle has to reconcile the CHECK itself: 102 widens it so the 116
+// backfill can write 'triage', and 140 then opens the domain entirely. Applying
+// 140 before 116 would leave the live constraint on 102's closed enum, so the
+// order is asserted from what actually landed.
+func TestTodoStepKindCheckOpensOnAnExistingDatabase(t *testing.T) {
 	if os.Getenv("GAVEL_DB_EMBEDDED_TEST") == "" {
 		t.Skip("set GAVEL_DB_EMBEDDED_TEST=1 to run embedded-postgres migration tests")
 	}
@@ -318,10 +336,151 @@ func TestTodoStepKindCheckWidensOnAnExistingDatabase(t *testing.T) {
 		SELECT pg_get_constraintdef(oid) FROM pg_constraint
 		WHERE conrelid = 'public.todo_issue_prompt_runs'::regclass
 		  AND conname = 'todo_issue_prompt_runs_step_kind_check'`).Scan(&definition).Error)
-	assert.Contains(t, definition, "'triage'::text", "the live CHECK must match the widened HCL declaration")
+	assert.Contains(t, definition, "btrim(step_kind)",
+		"the live CHECK must end on the open domain todos.hcl declares")
+	assert.NotContains(t, definition, "'triage'::text",
+		"140 must land after 102, or the closed enum survives the upgrade")
 
 	var kind string
 	require.NoError(t, db.Gorm().Raw(
 		`SELECT step_kind FROM todo_issue_prompt_runs WHERE prompt_run_id = ?`, legacyRun).Scan(&kind).Error)
 	assert.Equal(t, "triage", kind, "the backfill must reclassify the historical triage pass")
+
+	// dependsOn is what orders 140 behind 116; the recorded apply times are the
+	// evidence that the declared dependency actually held on this database.
+	var applyOrder []struct {
+		Path      string
+		UpdatedAt time.Time
+	}
+	require.NoError(t, db.Gorm().Raw(`
+		SELECT path, updated_at FROM schema_migration_scripts
+		WHERE scope = 'gavel' AND path IN (
+			'102_todo_prompt_run_step_kind.sql',
+			'116_backfill_triage_step_kind.sql',
+			'140_todo_prompt_run_step_open.sql')
+		ORDER BY updated_at`).Scan(&applyOrder).Error)
+	require.Len(t, applyOrder, 3, "all three step-kind scripts must have re-applied")
+	assert.Equal(t, []string{
+		"102_todo_prompt_run_step_kind.sql",
+		"116_backfill_triage_step_kind.sql",
+		"140_todo_prompt_run_step_open.sql",
+	}, []string{applyOrder[0].Path, applyOrder[1].Path, applyOrder[2].Path})
+
+	// A project-defined step is the reason the domain opened; it must be
+	// insertable on an upgraded database, not only a freshly created one.
+	upgradedSession, upgradedRun := uuid.NewString(), uuid.NewString()
+	require.NoError(t, db.Gorm().Exec(`
+		INSERT INTO captain_sessions (id, source, provider, host_id)
+		VALUES (?, 'gavel-test', 'test', 'local')`, upgradedSession).Error)
+	require.NoError(t, db.Gorm().Exec(`
+		INSERT INTO captain_prompt_runs (id, session_id, root_session_id, origin)
+		VALUES (?, ?, ?, 'gavel-test')`, upgradedRun, upgradedSession, upgradedSession).Error)
+	require.NoError(t, db.Gorm().Exec(`
+		INSERT INTO todo_issue_prompt_runs (issue_id, prompt_run_id, step_kind, ordinal)
+		VALUES (?, ?, 'custom-step', 1)`, issueID, upgradedRun).Error)
+}
+
+// TestTodoProjectionDefersStatusToLifecycleHost pins the two consequences of a
+// data-driven lifecycle on the SQL projection: durable status now has exactly
+// one writer (the Go host's OnOutcome, which records a lifecycle_outcome
+// event), and no derivation may key on a hard-coded step name, because a
+// project names its own steps.
+func TestTodoProjectionDefersStatusToLifecycleHost(t *testing.T) {
+	db := openProjectionDatabase(t)
+	workspaceID := uuid.New()
+	require.NoError(t, db.Exec(`
+		INSERT INTO todo_workspaces (id, repo_key)
+		VALUES (?, 'github.com/flanksource/projection-status')`, workspaceID).Error)
+
+	t.Run("a succeeded verified run leaves durable status untouched", func(t *testing.T) {
+		// Exactly the shape the projection used to promote to 'verified': a
+		// finished, succeeded 'run' step carrying fixture verification Markdown.
+		fixture := newProjectionFixture(t, db, workspaceID, "run", "gavel fixture", `{}`)
+		before := todoStatusSnapshot(t, db, fixture.issueID)
+		require.Equal(t, "open", before.Status)
+
+		// The prompt-run trigger fires gavel_project_todo_prompt_run, which is
+		// the path the projection used to write status through.
+		require.NoError(t, db.Exec(`
+			UPDATE captain_prompt_runs
+			SET state = 'succeeded', phase = 'finished', version = 1,
+				finished_at = now(), updated_at = now()
+			WHERE id = ?`, fixture.runID).Error)
+
+		var changed int
+		require.NoError(t, db.Raw(`SELECT public.gavel_project_todo_prompt_run(?)`,
+			fixture.runID).Scan(&changed).Error)
+		assert.Zero(t, changed, "replaying the projection advances no activity watermark and mutates nothing")
+
+		after := todoStatusSnapshot(t, db, fixture.issueID)
+		assert.Equal(t, before.Status, after.Status, "status belongs to the lifecycle host")
+		assert.Equal(t, before.Version, after.Version, "no status write means no version bump")
+		assert.Equal(t, before.Events, after.Events, "no verification_* event may be appended")
+
+		var verificationEvents int64
+		require.NoError(t, db.Raw(`
+			SELECT count(*) FROM todo_issue_events
+			WHERE issue_id = ? AND kind IN
+				('verification_succeeded', 'verification_failed', 'verification_required')`,
+			fixture.issueID).Scan(&verificationEvents).Error)
+		assert.Zero(t, verificationEvents)
+
+		// Transient state is still derived, so dropping the status writer did not
+		// blind the runtime view.
+		assert.Equal(t, "idle", executionState(t, db, fixture.issueID))
+	})
+
+	t.Run("planning is derived from the rendered spec permission mode", func(t *testing.T) {
+		planning := newProjectionFixture(t, db, workspaceID, "shape-it", "", `{
+			"permissions":{"mode":"plan"}
+		}`)
+		assert.Equal(t, "planning", executionState(t, db, planning.issueID),
+			"a plan-mode run is a planning pass whatever its project named the step")
+
+		named := newProjectionFixture(t, db, workspaceID, "plan", "", `{}`)
+		assert.Equal(t, "running", executionState(t, db, named.issueID),
+			"a step merely named 'plan' is not evidence the agent was asked to plan")
+	})
+
+	t.Run("verification is derived from the rendered spec shape", func(t *testing.T) {
+		checking := newProjectionFixture(t, db, workspaceID, "check-it", "", verifyOnlySpec)
+		assert.Equal(t, "verifying", executionState(t, db, checking.issueID),
+			"a spec with a definition of done and no prompt is a verification pass whatever its step is named")
+		require.NoError(t, db.Exec(`
+			UPDATE captain_prompt_runs
+			SET state = 'failed', phase = 'finished', version = 1,
+				finished_at = now(), updated_at = now()
+			WHERE id = ?`, checking.runID).Error)
+		assert.Equal(t, "verification_failed", executionState(t, db, checking.issueID))
+
+		named := newProjectionFixture(t, db, workspaceID, "verify", "", `{"prompt":{"user":"implement it"}}`)
+		assert.Equal(t, "running", executionState(t, db, named.issueID),
+			"a step merely named 'verify' that was handed a prompt is an agent turn, not a verification")
+	})
+}
+
+type todoStatus struct {
+	Status  string
+	Version int64
+	Events  int64
+}
+
+func todoStatusSnapshot(t *testing.T, db *gorm.DB, issueID uuid.UUID) todoStatus {
+	t.Helper()
+	var snapshot todoStatus
+	require.NoError(t, db.Raw(`
+		SELECT issue.status, issue.version,
+		       (SELECT count(*) FROM todo_issue_events event
+		         WHERE event.issue_id = issue.id) AS events
+		FROM todo_issues issue WHERE issue.id = ?`, issueID).Scan(&snapshot).Error)
+	return snapshot
+}
+
+func executionState(t *testing.T, db *gorm.DB, issueID uuid.UUID) string {
+	t.Helper()
+	var state string
+	require.NoError(t, db.Raw(`
+		SELECT execution_state FROM todo_issue_runtime WHERE issue_id = ?`,
+		issueID).Scan(&state).Error)
+	return state
 }
