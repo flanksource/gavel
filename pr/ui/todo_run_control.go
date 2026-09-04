@@ -19,8 +19,8 @@ type todoRunStopRequest struct {
 
 func (s *Server) handleTodoRunStop(w http.ResponseWriter, r *http.Request) {
 	var payload todoRunStopRequest
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("invalid stop request: %w", err))
+	if err := decodeTodoRequest(r, &payload); err != nil {
+		writeTodoError(w, http.StatusBadRequest, err)
 		return
 	}
 	if payload.Ref == "" || payload.PromptRunID == uuid.Nil {
@@ -66,6 +66,15 @@ func (s *Server) handleTodoRunStop(w http.ResponseWriter, r *http.Request) {
 		writeTodoError(w, http.StatusConflict, fmt.Errorf("attempt is already %s", promptRun.State))
 		return
 	}
+	// Cancel the run's outstanding tool approvals before cancelling the run. They
+	// outlive the process that raised them, so a stopped run would otherwise leave
+	// rows a dashboard still offers to answer — and answering one would unblock a
+	// broker that is no longer there to hear it.
+	if err := detailProvider.Captain().CancelPendingTurnRequests(
+		r.Context(), promptRun.SessionID, payload.PromptRunID, "run stopped"); err != nil {
+		writeTodoError(w, http.StatusInternalServerError, err)
+		return
+	}
 	status := "stopping"
 	if err := todoRuns().Stop(payload.PromptRunID); err != nil {
 		// A run this process does not own is either driven by another live
@@ -98,17 +107,3 @@ func (s *Server) handleTodoRunStop(w http.ResponseWriter, r *http.Request) {
 		panic(fmt.Errorf("encode TODO stop response: %w", err))
 	}
 }
-
-// Aliases keep the dashboard's existing call sites reading naturally while the
-// behaviour lives in todos/run.
-var (
-	errTodoRunStopped      = run.ErrStopped
-	errTodoRunNotStoppable = run.ErrNotStoppable
-	errTodoRunStopping     = run.ErrStopping
-)
-
-type todoRunControlStatus = run.ControlStatus
-
-func newTodoRunRegistry() *run.Registry { return run.NewRegistry() }
-
-var todoRunIssueIDs = run.IssueIDs

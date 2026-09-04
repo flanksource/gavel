@@ -19,8 +19,8 @@ import (
 )
 
 var _ = Describe("archived run cache", func() {
-	It("serves Runs and Snapshot for one render from a single archive read", func() {
-		loads := 0
+	It("reads the run listing once per sweep and snapshots only for archived ids", func() {
+		listings, snapshotReads := 0, []string{}
 		record := taskhistory.Record{
 			Run: clickytask.RunMeta{
 				ID: "cached-run", Name: "Cached", Status: string(clickytask.StatusSuccess),
@@ -29,28 +29,40 @@ var _ = Describe("archived run cache", func() {
 			Snapshots:  []clickytask.TaskSnapshot{{ID: "cached-run", GroupID: "cached-run", Type: "group"}},
 			ArchivedAt: time.Now().Add(-time.Hour),
 		}
-		source := &supervisorTaskSource{history: func(context.Context) ([]taskhistory.Record, error) {
-			loads++
-			return []taskhistory.Record{record}, nil
-		}}
+		source := &supervisorTaskSource{
+			runs: func(context.Context) ([]taskhistory.RunSummary, error) {
+				listings++
+				return []taskhistory.RunSummary{{Run: record.Run, ArchivedAt: record.ArchivedAt}}, nil
+			},
+			snapshot: func(_ context.Context, id string) ([]clickytask.TaskSnapshot, error) {
+				snapshotReads = append(snapshotReads, id)
+				return record.Snapshots, nil
+			},
+		}
 
 		originalProjectsPath := projectsPath
 		projectsPath = filepath.Join(GinkgoT().TempDir(), "projects.json")
 		DeferCleanup(func() { projectsPath = originalProjectsPath })
 
-		runs, err := source.Runs(GinkgoT().Context(), clickytask.RunFilter{})
-		Expect(err).NotTo(HaveOccurred())
-		Expect(runs).To(HaveLen(1))
+		for range 3 {
+			runs, err := source.Runs(GinkgoT().Context(), clickytask.RunFilter{})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(runs).To(HaveLen(1))
+		}
 		snapshots, err := source.Snapshot(GinkgoT().Context(), "cached-run")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(snapshots).To(Equal(record.Snapshots))
+		missing, err := source.Snapshot(GinkgoT().Context(), "never-archived")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(missing).To(BeNil())
 
-		Expect(loads).To(Equal(1), "Runs and Snapshot within one TTL window must share one archive read")
+		Expect(listings).To(Equal(1), "repeated polls between sweeps must share one listing read")
+		Expect(snapshotReads).To(Equal([]string{"cached-run"}), "ids absent from the listing must not reach the snapshot store")
 
-		source.cachedAt = time.Now().Add(-2 * historyCacheTTL)
+		source.invalidate()
 		_, err = source.Runs(GinkgoT().Context(), clickytask.RunFilter{})
 		Expect(err).NotTo(HaveOccurred())
-		Expect(loads).To(Equal(2), "an expired cache must re-read the archive")
+		Expect(listings).To(Equal(2), "a sweep must make the next poll re-read the listing")
 	})
 })
 
@@ -90,7 +102,13 @@ var _ = Describe("task manager API", func() {
 		Expect(taskhistory.Write(root, archived)).To(Succeed())
 
 		server := httptest.NewServer((&Server{taskSource: &supervisorTaskSource{
-			history: func(context.Context) ([]taskhistory.Record, error) { return []taskhistory.Record{archived}, nil },
+			runs: func(context.Context) ([]taskhistory.RunSummary, error) {
+				return []taskhistory.RunSummary{{Run: archived.Run, ArchivedAt: archived.ArchivedAt}}, nil
+			},
+			snapshot: func(_ context.Context, id string) ([]clickytask.TaskSnapshot, error) {
+				Expect(id).To(Equal(archived.Run.ID))
+				return archived.Snapshots, nil
+			},
 		}}).Handler())
 		DeferCleanup(server.Close)
 		var run clickytask.RunMeta

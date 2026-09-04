@@ -29,9 +29,8 @@ var _ = Describe("todo run admission contract", func() {
 		Expect(err).NotTo(HaveOccurred())
 
 		body, err := json.Marshal(todoRunPayload{
-			Ref:     todos.TODOReference(created),
-			Driver:  "agent",
-			RunMode: "run",
+			Ref:  todos.TODOReference(created),
+			Step: "run",
 			Spec: api.Spec{
 				Model:  api.Model{Mode: api.ModeAgent, Name: "gpt-5.5", Effort: api.EffortHigh},
 				Budget: api.Budget{Timeout: "45m", MaxTurns: 12},
@@ -72,9 +71,8 @@ var _ = Describe("todo run admission contract", func() {
 		}
 
 		body, err := json.Marshal(todoRunPayload{
-			Ref:    todos.TODOReference(created),
-			Driver: "agent",
-			Spec:   specPayload("gpt-5.5", "high"),
+			Ref:  todos.TODOReference(created),
+			Spec: specPayload("gpt-5.5", "high"),
 		})
 		Expect(err).NotTo(HaveOccurred())
 		recorder := httptest.NewRecorder()

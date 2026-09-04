@@ -95,8 +95,8 @@ func (s *Server) decodeTodoLinkRequest(w http.ResponseWriter, r *http.Request) (
 	todoLinkPayload, types.RelationKind, todos.RelationshipProvider, *types.TODO, bool,
 ) {
 	var payload todoLinkPayload
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("invalid json"))
+	if err := decodeTodoRequest(r, &payload); err != nil {
+		writeTodoError(w, http.StatusBadRequest, err)
 		return payload, "", nil, nil, false
 	}
 	payload.Ref = strings.TrimSpace(payload.Ref)

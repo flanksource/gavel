@@ -11,7 +11,7 @@ import (
 
 var _ = Describe("todo run control", func() {
 	It("cancels an owned headless run once and reports its stopping state", func() {
-		registry := newTodoRunRegistry()
+		registry := run.NewRegistry()
 		issueID, promptRunID := uuid.New(), uuid.New()
 		runContext, cancel := context.WithCancelCause(context.Background())
 
@@ -21,16 +21,16 @@ var _ = Describe("todo run control", func() {
 		Expect(err).NotTo(HaveOccurred())
 		DeferCleanup(handle.Release)
 		handle.BindPromptRun(promptRunID)
-		Expect(registry.Status(issueID)).To(Equal(todoRunControlStatus{CanStop: true}))
+		Expect(registry.Status(issueID)).To(Equal(run.ControlStatus{CanStop: true}))
 
 		Expect(registry.Stop(promptRunID)).To(Succeed())
-		Expect(context.Cause(runContext)).To(MatchError(errTodoRunStopped))
-		Expect(registry.Status(issueID)).To(Equal(todoRunControlStatus{Stopping: true}))
-		Expect(registry.Stop(promptRunID)).To(MatchError(errTodoRunStopping))
+		Expect(context.Cause(runContext)).To(MatchError(run.ErrStopped))
+		Expect(registry.Status(issueID)).To(Equal(run.ControlStatus{Stopping: true}))
+		Expect(registry.Stop(promptRunID)).To(MatchError(run.ErrStopping))
 	})
 
 	It("does not advertise a run whose driver cannot be interrupted", func() {
-		registry := newTodoRunRegistry()
+		registry := run.NewRegistry()
 		issueID, promptRunID := uuid.New(), uuid.New()
 		_, cancel := context.WithCancelCause(context.Background())
 
@@ -40,12 +40,12 @@ var _ = Describe("todo run control", func() {
 		Expect(err).NotTo(HaveOccurred())
 		DeferCleanup(handle.Release)
 		handle.BindPromptRun(promptRunID)
-		Expect(registry.Status(issueID)).To(Equal(todoRunControlStatus{}))
-		Expect(registry.Stop(promptRunID)).To(MatchError(errTodoRunNotStoppable))
+		Expect(registry.Status(issueID)).To(Equal(run.ControlStatus{}))
+		Expect(registry.Stop(promptRunID)).To(MatchError(run.ErrNotStoppable))
 	})
 
 	It("refuses a second run on one todo but admits a confirmed concurrent one", func() {
-		registry := newTodoRunRegistry()
+		registry := run.NewRegistry()
 		issueID := uuid.New()
 		_, cancel := context.WithCancelCause(context.Background())
 		opts := run.RegisterOptions{IssueIDs: []uuid.UUID{issueID}, Stoppable: true, Cancel: cancel}
@@ -64,7 +64,7 @@ var _ = Describe("todo run control", func() {
 	})
 
 	It("stops only the run named by the prompt run id", func() {
-		registry := newTodoRunRegistry()
+		registry := run.NewRegistry()
 		issueID := uuid.New()
 		firstRunID, secondRunID := uuid.New(), uuid.New()
 		firstCtx, cancelFirst := context.WithCancelCause(context.Background())
@@ -85,7 +85,7 @@ var _ = Describe("todo run control", func() {
 		second.BindPromptRun(secondRunID)
 
 		Expect(registry.Stop(secondRunID)).To(Succeed())
-		Expect(context.Cause(secondCtx)).To(MatchError(errTodoRunStopped))
+		Expect(context.Cause(secondCtx)).To(MatchError(run.ErrStopped))
 		Expect(firstCtx.Err()).NotTo(HaveOccurred())
 	})
 })

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -20,6 +21,7 @@ import (
 	"github.com/flanksource/commons-db/shell"
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/todos"
+	"github.com/flanksource/gavel/todos/lifecycle"
 	"github.com/flanksource/gavel/todos/run"
 	"github.com/flanksource/gavel/todos/types"
 )
@@ -59,6 +61,9 @@ func TestTodoAPINativeCRUD(t *testing.T) {
 	if created.Title != "Fix workspace" || created.Status != types.StatusPending || created.Priority != types.PriorityHigh {
 		t.Fatalf("unexpected created todo: %+v", created)
 	}
+	if created.Lifecycle == nil || len(created.Lifecycle.Steps) == 0 {
+		t.Fatalf("create response missing lifecycle steps: %+v", created)
+	}
 	rec = httptest.NewRecorder()
 	s.handleTodos(rec, httptest.NewRequest(http.MethodGet, "/api/todos", nil))
 	if rec.Code != http.StatusOK {
@@ -86,12 +91,30 @@ func TestTodoAPINativeCRUD(t *testing.T) {
 	}
 
 	rec = httptest.NewRecorder()
-	patchBody := `{"ref":` + strconvQuote(created.Ref) + `,"status":"completed"}`
+	patchBody := `{"ref":` + strconvQuote(created.Ref) + `,"status":"pending"}`
 	s.handleTodoItem(rec, httptest.NewRequest(http.MethodPatch, "/api/todos/item", strings.NewReader(patchBody)))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("patch status = %d, want 200; body = %q", rec.Code, rec.Body.String())
 	}
 	var patched todoSummary
+	if err := json.Unmarshal(rec.Body.Bytes(), &patched); err != nil {
+		t.Fatalf("unmarshal patch: %v", err)
+	}
+	if patched.Status != types.StatusPending {
+		t.Fatalf("status = %q, want pending", patched.Status)
+	}
+	// A stale-lifecycle regression: every write path must attach the lifecycle
+	// so the dashboard's cache overwrite doesn't blank the step strip.
+	if patched.Lifecycle == nil || patched.Lifecycle.Next != "plan" {
+		t.Fatalf("patch response lifecycle.next = %+v, want next=\"plan\"", patched.Lifecycle)
+	}
+
+	rec = httptest.NewRecorder()
+	completeBody := `{"ref":` + strconvQuote(created.Ref) + `,"status":"completed"}`
+	s.handleTodoItem(rec, httptest.NewRequest(http.MethodPatch, "/api/todos/item", strings.NewReader(completeBody)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("patch status = %d, want 200; body = %q", rec.Code, rec.Body.String())
+	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &patched); err != nil {
 		t.Fatalf("unmarshal patch: %v", err)
 	}
@@ -106,6 +129,24 @@ func TestTodoAPINativeCRUD(t *testing.T) {
 	}
 	if _, err := uiTestProviderFor(workDir).Get(t.Context(), created.Ref); err == nil {
 		t.Fatal("archived TODO remained in the native test provider")
+	}
+}
+
+// A create body with a key the payload does not declare is rejected before it
+// ever reaches the provider, and the error names the offending key so the
+// caller knows what to drop.
+func TestTodoAPICreateRejectsUnknownField(t *testing.T) {
+	workDir := t.TempDir()
+	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
+
+	rec := httptest.NewRecorder()
+	body := `{"title":"Fix workspace","bogus":true}`
+	s.handleTodos(rec, httptest.NewRequest(http.MethodPost, "/api/todos", strings.NewReader(body)))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("create status = %d, want %d; body = %q", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "bogus") {
+		t.Fatalf("body does not name the offending key: %q", rec.Body.String())
 	}
 }
 
@@ -241,6 +282,40 @@ func TestTodoAPILinks(t *testing.T) {
 	}
 	if len(listed.Links) != 0 {
 		t.Fatalf("links remained after unlink: %+v", listed.Links)
+	}
+}
+
+// A link write with a key the payload does not declare is rejected before it
+// resolves a target or a linker, and the error names the offending key.
+func TestTodoAPILinkCreateRejectsUnknownField(t *testing.T) {
+	workDir := t.TempDir()
+	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
+
+	rec := httptest.NewRecorder()
+	body := `{"ref":"a","target":"b","relation":"depends-on","bogus":true}`
+	s.handleTodoLinks(rec, httptest.NewRequest(http.MethodPost, "/api/todos/links", strings.NewReader(body)))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("link status = %d, want %d; body = %q", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "bogus") {
+		t.Fatalf("body does not name the offending key: %q", rec.Body.String())
+	}
+}
+
+// A label write with a key the payload does not declare is rejected before it
+// resolves a label store, and the error names the offending key.
+func TestTodoAPILabelSetRejectsUnknownField(t *testing.T) {
+	workDir := t.TempDir()
+	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
+
+	rec := httptest.NewRecorder()
+	body := `{"name":"bug","bogus":true}`
+	s.handleTodoLabels(rec, httptest.NewRequest(http.MethodPost, "/api/todos/labels", strings.NewReader(body)))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("label status = %d, want %d; body = %q", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "bogus") {
+		t.Fatalf("body does not name the offending key: %q", rec.Body.String())
 	}
 }
 
@@ -847,8 +922,7 @@ func TestTodoAPIRunStartsSelectedTodo(t *testing.T) {
 	t.Cleanup(func() { run.Start = oldStart })
 
 	body, _ := json.Marshal(todoRunPayload{
-		Ref:    todos.TODOReference(created),
-		Driver: "cmux",
+		Ref: todos.TODOReference(created),
 		Spec: api.Spec{
 			Model:  api.Model{Name: "codex", Mode: api.ModeCmux, Effort: "high"},
 			Budget: api.Budget{Cost: 1.25, MaxTurns: 12, Timeout: "45m"},
@@ -869,21 +943,51 @@ func TestTodoAPIRunStartsSelectedTodo(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("unmarshal run response: %v", err)
 	}
-	if resp.Status != "started" || resp.Provider != "openai" || resp.Mode != "cmux" {
+	if resp.Status != "started" || resp.Provider != "openai" || resp.RuntimeMode != "cmux" {
 		t.Fatalf("unexpected run response: %+v", resp)
 	}
 	if resp.Count != 1 {
 		t.Fatalf("run count = %d, want 1", resp.Count)
 	}
-	if len(got.Todos) != 1 || got.Todos[0].Title != "Run me" {
-		t.Fatalf("run starter did not receive selected todo: %+v", got.Todos)
+	if got.Todo == nil || got.Todo.Title != "Run me" {
+		t.Fatalf("run starter did not receive selected todo: %+v", got.Todo)
 	}
-	if got.Dir != workDir || got.Backend != todos.ProviderDB {
-		t.Fatalf("unexpected run source: dir=%q backend=%q", got.Dir, got.Backend)
+	if got.Dir != workDir {
+		t.Fatalf("unexpected run source: dir=%q", got.Dir)
 	}
-	if got.Options.Spec.Name != resolvedName(t, api.Model{Name: "codex", Mode: captainai.ModeCmux}) || got.Options.Spec.Mode != captainai.ModeCmux || got.Options.Spec.Effort != "high" || got.Options.Spec.Budget.Cost != 1.25 || got.Options.Spec.Budget.MaxTurns != 12 || !specDirty(got.Options.Spec) {
-		t.Fatalf("unexpected run options: %+v", got.Options)
+	// The request layer carries exactly what the dialog sent; the fold — model
+	// expansion, the lifecycle step's own layers — happens when the run resolves.
+	request := got.Options.Request
+	if request.Name != "codex" || request.Mode != captainai.ModeCmux || request.Effort != "high" || request.Budget.Cost != 1.25 || request.Budget.MaxTurns != 12 || !specDirty(request) {
+		t.Fatalf("unexpected request layer: %+v", got.Options)
 	}
+	if got.Options.Host != lifecycle.HostDashboard || got.Options.Step != "" {
+		t.Fatalf("run options = %+v, want the dashboard host and the lifecycle's own step choice", got.Options)
+	}
+	if resp.Step == "" || resp.Model != resolvedName(t, api.Model{Name: "codex", Mode: captainai.ModeCmux}) {
+		t.Fatalf("response did not report the resolved step and model: %+v", resp)
+	}
+}
+
+// dashboardRunSpec resolves a dashboard payload for a fresh todo in dir the way
+// /api/todos/run does — wire validation, then the lifecycle host's fold — and
+// returns the spec captain would be handed.
+func dashboardRunSpec(t *testing.T, dir string, payload todoRunPayload) (api.Spec, error) {
+	t.Helper()
+	provider := uiTestProviderFor(dir)
+	todo, err := provider.Create(t.Context(), todos.CreateRequest{Title: "Resolvable", Status: types.StatusPending})
+	if err != nil {
+		t.Fatalf("seed todo: %v", err)
+	}
+	opts, err := buildTodoRunOptions(payload, nil)
+	if err != nil {
+		return api.Spec{}, err
+	}
+	prepared, err := run.Resolve(t.Context(), todoRunRequest{Provider: provider, Todo: todo, Dir: dir, Options: opts})
+	if err != nil {
+		return api.Spec{}, err
+	}
+	return prepared.Resolution.Spec, nil
 }
 
 func TestTodoAPIRunPreviewReturnsPrompt(t *testing.T) {
@@ -915,8 +1019,8 @@ func TestTodoAPIRunPreviewReturnsPrompt(t *testing.T) {
 		return resp
 	}
 
-	cmuxResp := preview(todoRunPayload{Ref: ref, Driver: "cmux", Spec: api.Spec{Model: api.Model{Name: "claude", Mode: api.ModeCmux, Effort: "high"}}})
-	if cmuxResp.Count != 1 || cmuxResp.Provider != "anthropic" || cmuxResp.Mode != "cmux" {
+	cmuxResp := preview(todoRunPayload{Ref: ref, Spec: api.Spec{Model: api.Model{Name: "claude", Mode: api.ModeCmux, Effort: "high"}}})
+	if cmuxResp.Count != 1 || cmuxResp.Provider != "anthropic" || cmuxResp.RuntimeMode != "cmux" {
 		t.Fatalf("unexpected preview meta: %+v", cmuxResp)
 	}
 	if !strings.Contains(cmuxResp.Prompt, "## Fix the parser") {
@@ -932,12 +1036,15 @@ func TestTodoAPIRunPreviewReturnsPrompt(t *testing.T) {
 		t.Fatalf("cmux preview should include the instructions section: %q", cmuxResp.Prompt)
 	}
 
-	planResp := preview(todoRunPayload{Ref: ref, Driver: "cmux", Spec: api.Spec{Model: api.Model{Name: "claude", Mode: api.ModeCmux, Effort: "medium"}}, Plan: true})
+	planResp := preview(todoRunPayload{Ref: ref, Spec: api.Spec{Model: api.Model{Name: "claude", Mode: api.ModeCmux, Effort: "medium"}}, Step: "plan"})
 	if !strings.Contains(planResp.Prompt, "## Fix the parser") {
 		t.Fatalf("plan preview should contain the title: %q", planResp.Prompt)
 	}
+	if planResp.Step != "plan" {
+		t.Fatalf("plan preview step = %q, want plan", planResp.Step)
+	}
 
-	agentResp := preview(todoRunPayload{Ref: ref, Driver: "agent", Spec: api.Spec{Model: api.Model{Name: "claude", Mode: api.ModeAgent, Effort: "medium"}}})
+	agentResp := preview(todoRunPayload{Ref: ref, Spec: api.Spec{Model: api.Model{Name: "claude", Mode: api.ModeAgent, Effort: "medium"}}})
 	if strings.HasPrefix(agentResp.Prompt, "# Fix the parser") {
 		t.Fatalf("agent preview should be the bare claude prompt, not the cmux instruction: %q", agentResp.Prompt)
 	}
@@ -959,7 +1066,7 @@ func TestTodoRunPreviewAbsolutizesAttachmentURLs(t *testing.T) {
 	}
 	ref := todos.TODOReference(created)
 
-	body, _ := json.Marshal(todoRunPayload{Ref: ref, Driver: "agent", Spec: api.Spec{Model: api.Model{Name: "claude", Mode: api.ModeAgent}}})
+	body, _ := json.Marshal(todoRunPayload{Ref: ref, Spec: api.Spec{Model: api.Model{Name: "claude", Mode: api.ModeAgent}}})
 	rec := httptest.NewRecorder()
 	s.handleTodoRunPreview(rec, httptest.NewRequest(http.MethodPost, "http://gavel.example:9092/api/todos/run/preview", strings.NewReader(string(body))))
 	if rec.Code != http.StatusOK {
@@ -979,48 +1086,61 @@ func TestTodoRunPreviewAbsolutizesAttachmentURLs(t *testing.T) {
 	}
 }
 
-// isolatedTodoWorkspace returns a workspace whose .gavel.yaml layers are empty,
-// so a resolution test reads only what it declares. The home layer is already
-// redirected package-wide by TestMain.
+// isolatedTodoWorkspace returns a workspace whose .gavel.yaml layers are empty
+// apart from a model, so a resolution test reads only what it declares. The home
+// layer is already redirected package-wide by TestMain.
+//
+// The model is not optional any more: gavel has no built-in default, so a run
+// resolved from a genuinely empty workspace fails with "model name is required"
+// before it reaches whatever the test is actually about. Declaring it here keeps
+// these tests about run options rather than about configuration.
 func isolatedTodoWorkspace(t *testing.T) string {
 	t.Helper()
-	return t.TempDir()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ".gavel.yaml"), []byte("ai:\n  model: agent:claude-sonnet-5\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return dir
 }
 
-func TestNormalizeTodoRunOptionsCommitFromWorkflow(t *testing.T) {
+// Auto-commit is sourced from Workflow.Commits. The lifecycle's run step
+// declares one, so a default dashboard run commits; a payload stanza replaces
+// it; and an empty list cannot clear it — captain's merge reads an empty slice
+// as "not stated", which is why the CLI refuses `--commit=false` outright
+// rather than pretending the request layer removed anything.
+func TestDashboardRunCommitFromWorkflow(t *testing.T) {
 	dir := isolatedTodoWorkspace(t)
-	base := todoRunPayload{Driver: "cmux", Spec: api.Spec{Model: api.Model{Name: "claude", Mode: api.ModeCmux, Effort: "medium"}}}
+	// The run step is named: a pending todo with no plan would otherwise be
+	// planned first, and a plan never commits.
+	base := todoRunPayload{Step: "run", Spec: api.Spec{Model: api.Model{Name: "claude", Mode: api.ModeCmux, Effort: "medium"}}}
 
-	// Auto-commit is sourced from Workflow.Commits — no server-side default. The
-	// run dialog seeds one `{on: run}` stanza so a default dashboard run commits;
-	// an absent workflow (or an empty list) means no commit.
 	cases := []struct {
 		name     string
 		workflow *api.Workflow
-		want     bool
+		want     []api.Commit
 	}{
-		{"no workflow means no auto-commit", nil, false},
-		{"a commit policy auto-commits", &api.Workflow{Commits: []api.Commit{{On: api.CommitOnRun}}}, true},
-		{"an empty commit list skips commit", &api.Workflow{Commits: []api.Commit{}}, false},
+		{"no workflow inherits the lifecycle step's commit", nil, []api.Commit{{On: api.CommitOnRun, Stage: "worktree", Gates: api.CommitGatesFull}}},
+		{"a commit policy replaces it", &api.Workflow{Commits: []api.Commit{{On: api.CommitOnRun, Gates: api.CommitGatesCheap}}}, []api.Commit{{On: api.CommitOnRun, Gates: api.CommitGatesCheap}}},
+		{"an empty commit list leaves the step's commit", &api.Workflow{Commits: []api.Commit{}}, []api.Commit{{On: api.CommitOnRun, Stage: "worktree", Gates: api.CommitGatesFull}}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			payload := base
 			payload.Spec.Workflow = tc.workflow
-			opts, err := normalizeTodoRunOptions(dir, nil, payload)
+			spec, err := dashboardRunSpec(t, dir, payload)
 			if err != nil {
-				t.Fatalf("normalize: %v", err)
+				t.Fatalf("resolve: %v", err)
 			}
-			if got := specCommit(opts.Spec); got != tc.want {
-				t.Fatalf("specCommit = %v, want %v", got, tc.want)
+			if !reflect.DeepEqual(run.Commits(spec), tc.want) {
+				t.Fatalf("commits = %+v, want %+v", run.Commits(spec), tc.want)
 			}
 		})
 	}
 }
 
-func TestNormalizeTodoRunOptionsToolPreferences(t *testing.T) {
+func TestDashboardRunToolPreferences(t *testing.T) {
 	dir := isolatedTodoWorkspace(t)
-	base := todoRunPayload{Driver: "cmux", Spec: api.Spec{Model: api.Model{Name: "claude", Mode: api.ModeCmux, Effort: "medium"}}}
+	base := todoRunPayload{Step: "run", Spec: api.Spec{Model: api.Model{Name: "claude", Mode: api.ModeCmux, Effort: "medium"}}}
 
 	t.Run("valid prefs and permission mode are threaded", func(t *testing.T) {
 		payload := base
@@ -1030,14 +1150,14 @@ func TestNormalizeTodoRunOptionsToolPreferences(t *testing.T) {
 				"Bash": api.ToolPolicyAsk, "Write": api.ToolPolicyDeny, "Read": api.ToolPolicyAuto, "Glob": api.ToolPolicyAuto,
 			},
 		}
-		opts, err := normalizeTodoRunOptions(dir, nil, payload)
+		spec, err := dashboardRunSpec(t, dir, payload)
 		if err != nil {
-			t.Fatalf("normalize: %v", err)
+			t.Fatalf("resolve: %v", err)
 		}
-		if opts.Spec.Permissions.Mode != api.PermissionAcceptEdits {
-			t.Fatalf("PermissionMode = %q, want acceptEdits", opts.Spec.Permissions.Mode)
+		if spec.Permissions.Mode != api.PermissionAcceptEdits {
+			t.Fatalf("PermissionMode = %q, want acceptEdits", spec.Permissions.Mode)
 		}
-		policies := opts.Spec.Permissions.Tools.Policies()
+		policies := spec.Permissions.Tools.Policies()
 		if policies["Bash"] != api.ToolPolicyAsk || policies["Write"] != api.ToolPolicyDeny || policies["Read"] != api.ToolPolicyAuto {
 			t.Fatalf("tool policies = %v, want Bash=ask Write=deny Read=auto", policies)
 		}
@@ -1049,28 +1169,33 @@ func TestNormalizeTodoRunOptionsToolPreferences(t *testing.T) {
 		}
 	})
 
-	t.Run("empty prefs normalize to nil", func(t *testing.T) {
-		opts, err := normalizeTodoRunOptions(dir, nil, base)
+	t.Run("empty prefs resolve to the dashboard posture", func(t *testing.T) {
+		spec, err := dashboardRunSpec(t, dir, base)
 		if err != nil {
-			t.Fatalf("normalize: %v", err)
+			t.Fatalf("resolve: %v", err)
 		}
-		if len(opts.Spec.Permissions.Tools.Policies()) != 0 || opts.Spec.Permissions.Mode != "" {
-			t.Fatalf("want no tool policies and empty permission mode, got %v / %q", opts.Spec.Permissions.Tools, opts.Spec.Permissions.Mode)
+		// The dashboard resolves as the approval-serving host, so a payload that
+		// states no posture still leaves with permissions.mode: default — the mode
+		// that makes the broker the thing a tool call is checked against. The
+		// prompt's own preset may allow the read-only tools; nothing here polices
+		// Bash, which is what the broker exists to ask about.
+		if policy := spec.Permissions.Tools.Policies()["Bash"]; policy != "" || spec.Permissions.Mode != api.PermissionDefault {
+			t.Fatalf("want an unpoliced Bash and the dashboard posture, got %v / %q", spec.Permissions.Tools, spec.Permissions.Mode)
 		}
 	})
 
-	t.Run("invalid tool policy fails loud", func(t *testing.T) {
+	t.Run("invalid tool policy fails at the wire", func(t *testing.T) {
 		payload := base
 		payload.Spec.Permissions = api.Permissions{Tools: api.Tools{"Bash": "maybe"}}
-		if _, err := normalizeTodoRunOptions(dir, nil, payload); err == nil {
+		if _, err := buildTodoRunOptions(payload, nil); err == nil {
 			t.Fatal("expected error for invalid tool policy, got nil")
 		}
 	})
 
-	t.Run("invalid permission mode fails loud", func(t *testing.T) {
+	t.Run("invalid permission mode fails at the wire", func(t *testing.T) {
 		payload := base
 		payload.Spec.Permissions = api.Permissions{Mode: "yolo"}
-		if _, err := normalizeTodoRunOptions(dir, nil, payload); err == nil {
+		if _, err := buildTodoRunOptions(payload, nil); err == nil {
 			t.Fatal("expected error for invalid permission mode, got nil")
 		}
 	})
@@ -1084,13 +1209,12 @@ func TestNormalizeTodoRunOptionsToolPreferences(t *testing.T) {
 // the wire in both directions.
 func TestTodoRunPayloadRoundTripsSpecAndSiblings(t *testing.T) {
 	payload := todoRunPayload{
-		Dir:     "/repos/gavel",
-		Ref:     "todo-1",
-		Refs:    []string{"todo-1", "todo-2"},
-		Driver:  "cmux",
-		RunMode: string(types.ModePlan),
-		Plan:    true,
-		Resume:  true,
+		Dir:    "/repos/gavel",
+		Ref:    "todo-1",
+		Refs:   []string{"todo-1", "todo-2"},
+		Step:   "plan",
+		Resume: true,
+		Force:  true,
 		Spec: api.Spec{
 			Model:  api.Model{Name: "claude", Mode: api.ModeCmux, Effort: "medium", Fallbacks: api.ModelList{{Name: "claude-sonnet-5"}}},
 			Prompt: api.Prompt{User: "Implement the reviewed plan.", System: "Keep the patch narrow."},
@@ -1123,6 +1247,9 @@ func TestTodoRunPayloadRoundTripsSpecAndSiblings(t *testing.T) {
 	}
 }
 
+// The response's Commit reports the RESOLVED run: a payload stanza commits, and
+// so does a payload that says nothing, because the lifecycle's run step declares
+// a commit of its own.
 func TestTodoAPIRunThreadsCommitOption(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -1130,7 +1257,7 @@ func TestTodoAPIRunThreadsCommitOption(t *testing.T) {
 		want     bool
 	}{
 		{"a commit policy auto-commits", &api.Workflow{Commits: []api.Commit{{On: api.CommitOnRun}}}, true},
-		{"absent workflow skips commit", nil, false},
+		{"absent workflow inherits the run step's commit", nil, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1153,9 +1280,9 @@ func TestTodoAPIRunThreadsCommitOption(t *testing.T) {
 			t.Cleanup(func() { run.Start = oldStart })
 
 			payload := todoRunPayload{
-				Ref:    todos.TODOReference(created),
-				Driver: "cmux",
-				Spec:   api.Spec{Model: api.Model{Name: "claude", Mode: api.ModeCmux, Effort: "medium"}},
+				Ref:  todos.TODOReference(created),
+				Step: "run",
+				Spec: api.Spec{Model: api.Model{Name: "claude", Mode: api.ModeCmux, Effort: "medium"}},
 			}
 			payload.Spec.Workflow = tc.workflow
 			body, _ := json.Marshal(payload)
@@ -1171,7 +1298,7 @@ func TestTodoAPIRunThreadsCommitOption(t *testing.T) {
 			if resp.Commit != tc.want {
 				t.Fatalf("response Commit = %v, want %v", resp.Commit, tc.want)
 			}
-			if got := specCommit(got.Options.Spec); got != tc.want {
+			if got := specCommit(resolvedRun(t, got).Spec); got != tc.want {
 				t.Fatalf("run starter commit = %v, want %v", got, tc.want)
 			}
 		})
@@ -1201,9 +1328,9 @@ func TestTodoAPIRunDryRunStartsButSkipsCommit(t *testing.T) {
 	t.Cleanup(func() { run.Start = oldStart })
 
 	payload := todoRunPayload{
-		Ref:    todos.TODOReference(created),
-		Driver: "cmux",
-		Spec:   api.Spec{Model: api.Model{Name: "claude", Mode: api.ModeCmux, Effort: "medium"}},
+		Ref:  todos.TODOReference(created),
+		Step: "run",
+		Spec: api.Spec{Model: api.Model{Name: "claude", Mode: api.ModeCmux, Effort: "medium"}},
 	}
 	// A commit policy is declared but marked dryRun: the run executes, the commit
 	// is reported rather than cut.
@@ -1256,9 +1383,8 @@ func TestTodoAPIRunRejectsMultipleTodos(t *testing.T) {
 	t.Cleanup(func() { run.Start = oldStart })
 
 	body, _ := json.Marshal(todoRunPayload{
-		Refs:   []string{todos.TODOReference(first), todos.TODOReference(second), todos.TODOReference(first)},
-		Driver: "cmux",
-		Spec:   api.Spec{Model: api.Model{Name: "sonnet", Mode: api.ModeCmux, Effort: "medium"}},
+		Refs: []string{todos.TODOReference(first), todos.TODOReference(second), todos.TODOReference(first)},
+		Spec: api.Spec{Model: api.Model{Name: "sonnet", Mode: api.ModeCmux, Effort: "medium"}},
 	})
 	rec := httptest.NewRecorder()
 	s.handleTodoRun(rec, httptest.NewRequest(http.MethodPost, "/api/todos/run", strings.NewReader(string(body))))
@@ -1281,18 +1407,29 @@ func TestTodoAPIRunRejectsLegacyCompositeDriver(t *testing.T) {
 		t.Fatalf("seed create: %v", err)
 	}
 
-	body, _ := json.Marshal(todoRunPayload{
-		Ref:    todos.TODOReference(created),
-		Driver: "codex-headless",
-		Spec:   api.Spec{Model: api.Model{Name: "codex", Mode: api.ModeAgent, Effort: "medium"}},
-	})
-	rec := httptest.NewRecorder()
-	s.handleTodoRun(rec, httptest.NewRequest(http.MethodPost, "/api/todos/run", strings.NewReader(string(body))))
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("run status = %d, want 400; body = %q", rec.Code, rec.Body.String())
+	// The retired keys are rejected by name so the client learns what replaced
+	// them; any other unknown key is refused as unknown.
+	for _, tc := range []struct{ field, body string }{
+		{"driver", `{"ref":%q,"driver":"codex-headless","spec":{"model":"codex"}}`},
+		{"runMode", `{"ref":%q,"runMode":"plan"}`},
+		{"prompt", `{"ref":%q,"prompt":"triage"}`},
+		{"plan", `{"ref":%q,"plan":true}`},
+	} {
+		body := fmt.Sprintf(tc.body, todos.TODOReference(created))
+		rec := httptest.NewRecorder()
+		s.handleTodoRun(rec, httptest.NewRequest(http.MethodPost, "/api/todos/run", strings.NewReader(body)))
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("%s: run status = %d, want 400; body = %q", tc.field, rec.Code, rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), `\"`+tc.field+`\" is not supported`) || !strings.Contains(rec.Body.String(), `\"step\"`) {
+			t.Fatalf("%s: error must name the retired field and its replacement: %q", tc.field, rec.Body.String())
+		}
 	}
-	if !strings.Contains(rec.Body.String(), "invalid driver") {
-		t.Fatalf("unexpected error body: %q", rec.Body.String())
+	rec := httptest.NewRecorder()
+	s.handleTodoRun(rec, httptest.NewRequest(http.MethodPost, "/api/todos/run",
+		strings.NewReader(fmt.Sprintf(`{"ref":%q,"unexpected":1}`, todos.TODOReference(created)))))
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "unknown field") {
+		t.Fatalf("unknown key: status = %d, body = %q, want a 400 naming the unknown field", rec.Code, rec.Body.String())
 	}
 }
 
@@ -1316,10 +1453,9 @@ func TestTodoAPIRunPlanThreadsPlanOption(t *testing.T) {
 	t.Cleanup(func() { run.Start = oldStart })
 
 	body, _ := json.Marshal(todoRunPayload{
-		Ref:    todos.TODOReference(created),
-		Driver: "cmux",
-		Spec:   api.Spec{Model: api.Model{Name: "claude", Mode: api.ModeCmux, Effort: "medium"}},
-		Plan:   true,
+		Ref:  todos.TODOReference(created),
+		Spec: api.Spec{Model: api.Model{Name: "claude", Mode: api.ModeCmux, Effort: "medium"}},
+		Step: "plan",
 	})
 	rec := httptest.NewRecorder()
 	s.handleTodoRun(rec, httptest.NewRequest(http.MethodPost, "/api/todos/run", strings.NewReader(string(body))))
@@ -1330,18 +1466,19 @@ func TestTodoAPIRunPlanThreadsPlanOption(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("unmarshal run response: %v", err)
 	}
-	if !resp.Plan || resp.RunMode != "plan" {
-		t.Fatalf("response did not echo plan mode: %+v", resp)
+	if resp.Step != "plan" || !strings.Contains(resp.Reason, "step") {
+		t.Fatalf("response did not echo the requested step and why: %+v", resp)
 	}
-	if got.Options.RunMode != types.ModePlan {
-		t.Fatalf("run starter did not receive plan mode: %+v", got.Options)
+	if got.Options.Step != "plan" {
+		t.Fatalf("run starter did not receive the plan step: %+v", got.Options)
 	}
 }
 
-// Plan runs work on every driver now (the plan template's frontmatter carries
-// the plan posture), so a non-cmux plan run is accepted, and the new runMode
-// field supersedes the plan bool.
-func TestTodoAPIRunModeField(t *testing.T) {
+// The step is the whole vocabulary: a plan step runs on every runtime (the plan
+// prompt's frontmatter carries the plan posture), verify is a step like any
+// other and is refused only when the todo has nothing to verify, and an unknown
+// step is refused by name with the lifecycle's own steps listed.
+func TestTodoAPIRunStepField(t *testing.T) {
 	workDir := t.TempDir()
 	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
 	created, err := uiTestProviderFor(workDir).Create(t.Context(), todos.CreateRequest{
@@ -1351,66 +1488,55 @@ func TestTodoAPIRunModeField(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seed create: %v", err)
 	}
+	got, _ := stubRunStart(t)
 
-	oldStart := run.Start
-	var got todoRunRequest
-	run.Start = func(req todoRunRequest) (todoRunStartResult, error) {
-		got = req
-		return todoRunStartResult{Status: "started", SessionID: "11111111-1111-4111-8111-111111111111"}, nil
+	post := func(payload todoRunPayload) *httptest.ResponseRecorder {
+		t.Helper()
+		body, _ := json.Marshal(payload)
+		rec := httptest.NewRecorder()
+		s.handleTodoRun(rec, httptest.NewRequest(http.MethodPost, "/api/todos/run", strings.NewReader(string(body))))
+		return rec
 	}
-	t.Cleanup(func() { run.Start = oldStart })
 
-	body, _ := json.Marshal(todoRunPayload{
-		Ref:     todos.TODOReference(created),
-		Driver:  "agent",
-		Spec:    api.Spec{Model: api.Model{Name: "claude", Mode: api.ModeAgent, Effort: "medium"}},
-		RunMode: "plan",
+	rec := post(todoRunPayload{
+		Ref:  todos.TODOReference(created),
+		Spec: api.Spec{Model: api.Model{Name: "claude", Mode: api.ModeAgent, Effort: "medium"}},
+		Step: "plan",
 	})
-	rec := httptest.NewRecorder()
-	s.handleTodoRun(rec, httptest.NewRequest(http.MethodPost, "/api/todos/run", strings.NewReader(string(body))))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("run status = %d, want 200; body = %q", rec.Code, rec.Body.String())
 	}
-	if got.Options.RunMode != types.ModePlan {
-		t.Fatalf("runMode not resolved: %+v", got.Options)
+	if got.Options.Step != "plan" {
+		t.Fatalf("step not threaded: %+v", got.Options)
 	}
 
-	// verify routes through its own endpoint, not the run endpoint.
-	body, _ = json.Marshal(todoRunPayload{
-		Ref:     todos.TODOReference(created),
-		Driver:  "agent",
-		RunMode: "verify",
-	})
-	rec = httptest.NewRecorder()
-	s.handleTodoRun(rec, httptest.NewRequest(http.MethodPost, "/api/todos/run", strings.NewReader(string(body))))
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("verify runMode status = %d, want 400; body = %q", rec.Code, rec.Body.String())
+	rec = post(todoRunPayload{Ref: todos.TODOReference(created), Step: "verify"})
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "definition of done") {
+		t.Fatalf("verify on a todo with nothing to verify: status = %d, body = %q, want a 400 naming the missing definition of done", rec.Code, rec.Body.String())
+	}
+
+	rec = post(todoRunPayload{Ref: todos.TODOReference(created), Step: "shape-it"})
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "shape-it") || !strings.Contains(rec.Body.String(), "plan") {
+		t.Fatalf("unknown step: status = %d, body = %q, want a 400 naming the step and listing the lifecycle's", rec.Code, rec.Body.String())
 	}
 }
 
-func TestNormalizeTodoRunOptionsDriverField(t *testing.T) {
+func TestDashboardRunRuntimeFromSpec(t *testing.T) {
 	dir := isolatedTodoWorkspace(t)
-	opts, err := normalizeTodoRunOptions(dir, nil, todoRunPayload{Driver: "agent", Spec: api.Spec{Model: api.Model{Mode: api.ModeAgent, Effort: "medium"}}})
+	spec, err := dashboardRunSpec(t, dir, todoRunPayload{Spec: api.Spec{Model: api.Model{Mode: api.ModeAgent, Effort: "medium"}}})
 	if err != nil {
-		t.Fatalf("agent driver: %v", err)
+		t.Fatalf("agent runtime: %v", err)
 	}
-	if opts.Driver != "agent" || opts.Spec.Mode != api.ModeAgent {
-		t.Fatalf("got driver=%q mode=%q", opts.Driver, opts.Spec.Mode)
+	if spec.Mode != api.ModeAgent {
+		t.Fatalf("got mode=%q", spec.Mode)
 	}
 
-	opts, err = normalizeTodoRunOptions(dir, nil, todoRunPayload{
-		Driver: "cmux",
-		Spec:   api.Spec{Model: api.Model{Name: "codex", Mode: api.ModeCmux}},
-	})
+	spec, err = dashboardRunSpec(t, dir, todoRunPayload{Spec: api.Spec{Model: api.Model{Name: "codex", Mode: api.ModeCmux}}})
 	if err != nil {
 		t.Fatalf("codex cmux runtime: %v", err)
 	}
-	if providerKey(opts.Spec.Model) != "openai" || opts.Spec.Name != resolvedName(t, api.Model{Name: "codex", Mode: api.ModeCmux}) || opts.Spec.Mode != api.ModeCmux {
-		t.Fatalf("got provider=%q model=%q mode=%q", providerKey(opts.Spec.Model), opts.Spec.Name, opts.Spec.Mode)
-	}
-
-	if _, err := normalizeTodoRunOptions(dir, nil, todoRunPayload{Driver: "claude-tui"}); err == nil {
-		t.Fatal("invalid driver should be rejected")
+	if providerKey(spec.Model) != "openai" || spec.Name != resolvedName(t, api.Model{Name: "codex", Mode: api.ModeCmux}) || spec.Mode != api.ModeCmux {
+		t.Fatalf("got provider=%q model=%q mode=%q", providerKey(spec.Model), spec.Name, spec.Mode)
 	}
 }
 
@@ -1501,9 +1627,6 @@ func TestTodoRunContextListsCaptainRuntimeModes(t *testing.T) {
 			t.Fatalf("runtime %s/%s has no model list: %+v", option.Provider, option.ID, option)
 		}
 	}
-	if claudeCmux.Driver != "cmux" || claudeAgent.Driver != "agent" || codexAgent.Driver != "agent" {
-		t.Fatalf("unexpected runtime drivers: claude cmux=%q claude agent=%q codex agent=%q", claudeCmux.Driver, claudeAgent.Driver, codexAgent.Driver)
-	}
 	if !todoRunModelsContain(claudeCmux.Models, "claude-sonnet-5") {
 		t.Fatalf("claude cmux models = %+v, want claude-sonnet-5 from captain whoami", claudeCmux.Models)
 	}
@@ -1539,49 +1662,49 @@ func TestTodoRunContextListsCaptainRuntimeModes(t *testing.T) {
 // TestNormalizeTodoRunOptionsCaptainRuntime pins the (provider, mode) each
 // payload normalizes to. The provider follows from the model name, so it is
 // asserted through providerKey rather than read off the spec.
-func TestNormalizeTodoRunOptionsCaptainRuntime(t *testing.T) {
+func TestDashboardRunCaptainRuntime(t *testing.T) {
 	dir := isolatedTodoWorkspace(t)
-	opts, err := normalizeTodoRunOptions(dir, nil, todoRunPayload{Driver: "cli", Spec: api.Spec{Model: api.Model{Mode: api.ModeCLI, Effort: "xhigh"}}})
+	spec, err := dashboardRunSpec(t, dir, todoRunPayload{Spec: api.Spec{Model: api.Model{Mode: api.ModeCLI, Effort: "xhigh"}}})
 	if err != nil {
 		t.Fatalf("claude cli runtime: %v", err)
 	}
-	if opts.Driver != "cli" || opts.Spec.Mode != api.ModeCLI || providerKey(opts.Spec.Model) != "anthropic" || opts.Spec.Effort != "xhigh" {
-		t.Fatalf("unexpected claude cli options: %+v", opts)
+	if spec.Mode != api.ModeCLI || providerKey(spec.Model) != "anthropic" || spec.Effort != "xhigh" {
+		t.Fatalf("unexpected claude cli spec: %+v", spec.Model)
 	}
 
-	opts, err = normalizeTodoRunOptions(dir, nil, todoRunPayload{Driver: "agent", Spec: api.Spec{Model: api.Model{Name: "codex", Mode: api.ModeAgent}}})
+	spec, err = dashboardRunSpec(t, dir, todoRunPayload{Spec: api.Spec{Model: api.Model{Name: "codex", Mode: api.ModeAgent}}})
 	if err != nil {
 		t.Fatalf("default codex runtime: %v", err)
 	}
-	if opts.Driver != "agent" || opts.Spec.Mode != api.ModeAgent || providerKey(opts.Spec.Model) != "openai" {
-		t.Fatalf("unexpected codex agent defaults: %+v", opts)
+	if spec.Mode != api.ModeAgent || providerKey(spec.Model) != "openai" {
+		t.Fatalf("unexpected codex agent defaults: %+v", spec.Model)
 	}
 
-	opts, err = normalizeTodoRunOptions(dir, nil, todoRunPayload{Driver: "agent", Spec: api.Spec{Model: api.Model{Mode: api.ModeCLI, Name: "gpt-5.5"}}})
+	spec, err = dashboardRunSpec(t, dir, todoRunPayload{Spec: api.Spec{Model: api.Model{Mode: api.ModeCLI, Name: "gpt-5.5"}}})
 	if err != nil {
 		t.Fatalf("the model's mode should override the driver: %v", err)
 	}
-	if opts.Driver != "cli" || opts.Spec.Mode != api.ModeCLI || providerKey(opts.Spec.Model) != "openai" {
-		t.Fatalf("the model's mode did not take precedence: %+v", opts)
+	if spec.Mode != api.ModeCLI || providerKey(spec.Model) != "openai" {
+		t.Fatalf("the model's mode did not take precedence: %+v", spec.Model)
 	}
 
-	opts, err = normalizeTodoRunOptions(dir, nil, todoRunPayload{Driver: "cmux", Spec: api.Spec{Model: api.Model{Name: "sonnet-4-6", Mode: api.ModeCmux}}})
+	spec, err = dashboardRunSpec(t, dir, todoRunPayload{Spec: api.Spec{Model: api.Model{Name: "sonnet-4-6", Mode: api.ModeCmux}}})
 	if err != nil {
 		t.Fatalf("versioned claude cmux model: %v", err)
 	}
-	if opts.Spec.Mode != api.ModeCmux || opts.Spec.Name != "claude-sonnet-4-6" {
-		t.Fatalf("unexpected versioned claude model options: %+v", opts)
+	if spec.Mode != api.ModeCmux || spec.Name != "claude-sonnet-4-6" {
+		t.Fatalf("unexpected versioned claude model spec: %+v", spec.Model)
 	}
 
-	opts, err = normalizeTodoRunOptions(dir, nil, todoRunPayload{Driver: "agent", Spec: api.Spec{Model: api.Model{Mode: api.ModeAgent, Name: "opus-4-8"}}})
+	spec, err = dashboardRunSpec(t, dir, todoRunPayload{Spec: api.Spec{Model: api.Model{Mode: api.ModeAgent, Name: "opus-4-8"}}})
 	if err != nil {
 		t.Fatalf("claude agent opus model: %v", err)
 	}
-	if opts.Spec.Mode != api.ModeAgent || opts.Spec.Name != "claude-opus-4-8" {
-		t.Fatalf("unexpected normalized opus model options: %+v", opts)
+	if spec.Mode != api.ModeAgent || spec.Name != "claude-opus-4-8" {
+		t.Fatalf("unexpected normalized opus model spec: %+v", spec.Model)
 	}
 
-	if _, err := normalizeTodoRunOptions(dir, nil, todoRunPayload{Driver: "agent", Spec: api.Spec{Model: api.Model{Mode: "claude-agent", Name: "claude-sonnet-5"}}}); err == nil {
+	if _, err := dashboardRunSpec(t, dir, todoRunPayload{Spec: api.Spec{Model: api.Model{Mode: "claude-agent", Name: "claude-sonnet-5"}}}); err == nil {
 		t.Fatal("a composite adapter id in the mode field should be rejected")
 	}
 }
@@ -1606,9 +1729,8 @@ func TestTodoAPIRunThreadsCaptainRuntimeMode(t *testing.T) {
 	t.Cleanup(func() { run.Start = oldStart })
 
 	body, _ := json.Marshal(todoRunPayload{
-		Ref:    todos.TODOReference(created),
-		Driver: "agent",
-		Spec:   api.Spec{Model: api.Model{Mode: api.ModeAgent, Name: "claude-sonnet-5", Effort: "medium"}},
+		Ref:  todos.TODOReference(created),
+		Spec: api.Spec{Model: api.Model{Mode: api.ModeAgent, Name: "claude-sonnet-5", Effort: "medium"}},
 	})
 	rec := httptest.NewRecorder()
 	s.handleTodoRun(rec, httptest.NewRequest(http.MethodPost, "/api/todos/run", strings.NewReader(string(body))))
@@ -1619,10 +1741,10 @@ func TestTodoAPIRunThreadsCaptainRuntimeMode(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("unmarshal run response: %v", err)
 	}
-	if resp.Driver != "agent" || resp.Mode != "agent" || resp.Model != "claude-sonnet-5" {
+	if resp.RuntimeMode != "agent" || resp.Model != "claude-sonnet-5" {
 		t.Fatalf("response did not thread mode/model: %+v", resp)
 	}
-	if got.Options.Spec.Mode != api.ModeAgent || got.Options.Spec.Name != "claude-sonnet-5" {
+	if got.Options.Request.Mode != api.ModeAgent || got.Options.Request.Name != "claude-sonnet-5" {
 		t.Fatalf("run starter did not receive mode/model: %+v", got.Options)
 	}
 }

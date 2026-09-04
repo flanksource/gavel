@@ -41,8 +41,8 @@ func (s *Server) handleTodoGitHubPush(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var payload todoGitHubPushPayload
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("invalid json"))
+	if err := decodeTodoRequest(r, &payload); err != nil {
+		writeTodoError(w, http.StatusBadRequest, err)
 		return
 	}
 	if strings.TrimSpace(payload.Ref) == "" {
@@ -82,8 +82,13 @@ func (s *Server) handleTodoGitHubPush(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	sum, err := todoDetail(r.Context(), provider, src.Dir, result.TODO)
+	if err != nil {
+		writeTodoError(w, http.StatusInternalServerError, err)
+		return
+	}
 	json.NewEncoder(w).Encode(todoGitHubPushResponse{ //nolint:errcheck
-		Todo:    summarizeTodo(result.TODO, true),
+		Todo:    sum,
 		Repo:    result.Repo,
 		Number:  result.Number,
 		URL:     result.URL,

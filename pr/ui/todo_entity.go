@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"os"
 	"sync"
@@ -12,7 +13,6 @@ import (
 	"github.com/flanksource/gavel/todos/bulk"
 	todoentity "github.com/flanksource/gavel/todos/entity"
 	"github.com/flanksource/gavel/todos/run"
-	"github.com/flanksource/gavel/todos/types"
 	"github.com/spf13/cobra"
 )
 
@@ -34,8 +34,21 @@ var (
 
 // registerTodoEntity declares the entity exactly once. Registering twice would
 // duplicate every generated command and route.
+//
+// The default workspace — the one a request naming none acts on — is the
+// working directory, resolved here rather than per request. The dashboard's own
+// Server-scoped override (ghOpts.WorkDir) cannot be consulted, because the
+// registration is process-global, and it falls back to the working directory
+// anyway, which is what a CLI invocation means by "here". A working directory
+// that cannot be read fails the registration: a toolbar whose actions act on
+// "." would be acting on a workspace nobody chose.
 func registerTodoEntity() error {
 	todoEntityOnce.Do(func() {
+		workDir, err := os.Getwd()
+		if err != nil {
+			todoEntityErr = fmt.Errorf("resolve the working directory for the todos entity: %w", err)
+			return
+		}
 		todoEntityErr = todoentity.Register(todoentity.Deps{
 			OpenProvider: func(ctx context.Context, dir string) (todos.Provider, error) {
 				return openTodoProvider(ctx, dir)
@@ -44,39 +57,26 @@ func registerTodoEntity() error {
 				return openGlobalTodoProvider(ctx)
 			},
 			Registry:   run.Shared(),
-			DefaultDir: todoEntityDefaultDir,
+			DefaultDir: func() string { return workDir },
 			ResolveRun: resolveBulkRunOptions,
+			Broker:     todoApprovalBroker,
 		})
 	})
 	return todoEntityErr
 }
 
 // resolveBulkRunOptions resolves a bulk run the way the dashboard's own single
-// run resolves: through normalizeTodoRunOptions, which applies the (driver,
-// mode) catalog and admits the run to ask for a Bash approval because the
-// dashboard serves /api/todos/session/approve. Without this a bulk run would
-// quietly differ from the single run started from the same page.
+// run does: the batch's flags validated at the wire boundary and folded as the
+// request layer, dispatched as the dashboard host so a bulk run brokers
+// approvals exactly like the single run started from the same page.
 func resolveBulkRunOptions(_ context.Context, req bulk.RunRequest) (run.Options, error) {
-	payload := todoRunPayload{
+	return buildTodoRunOptions(todoRunPayload{
 		Dir:    req.Dir,
 		Ref:    todos.TODOReference(req.Todo),
-		Prompt: req.Prompt,
+		Step:   req.Step,
 		Spec:   req.Flags.Spec(),
-		Driver: req.Flags.Driver,
 		Resume: req.Flags.Resume,
-	}
-	return normalizeTodoRunOptions(req.Dir, []*types.TODO{req.Todo}, payload)
-}
-
-// todoEntityDefaultDir is the workspace a request that names none acts on. The
-// dashboard's own Server-scoped override (ghOpts.WorkDir) cannot be consulted
-// here — the registration is process-global — and it falls back to the working
-// directory anyway, which is what a CLI invocation means by "here".
-func todoEntityDefaultDir() string {
-	if wd, err := os.Getwd(); err == nil {
-		return wd
-	}
-	return "."
+	}, nil)
 }
 
 // todoEntityRoutes builds the generated REST surface: POST

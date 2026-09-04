@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -39,18 +38,12 @@ type todoBatchError struct {
 func (s *Server) handleTodoBatch(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	var payload todoBatchRequest
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&payload); err != nil {
-		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("invalid request body: %w", err))
+	if err := decodeTodoRequest(r, &payload); err != nil {
+		writeTodoError(w, http.StatusBadRequest, err)
 		return
 	}
 	if payload.Dirs == nil {
 		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("dirs is required and must be an array"))
-		return
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("invalid request body: expected one JSON object"))
 		return
 	}
 	if err := validateTodoBatchDirs(*payload.Dirs); err != nil {

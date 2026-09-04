@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/todos"
@@ -192,5 +193,15 @@ var _ = Describe("todo GitHub push API", func() {
 
 		Expect(recorder.Code).To(Equal(http.StatusBadRequest))
 		Expect(recorder.Body.String()).To(ContainSubstring("absolute http(s) origin"))
+	})
+
+	It("rejects a body with an unrecognized field", func() {
+		body := []byte(`{"ref":` + strconv.Quote(todo.ID) + `,"dir":` + strconv.Quote(dir) + `,"bogus":true}`)
+		request := httptest.NewRequest(http.MethodPost, "/api/todos/github", bytes.NewReader(body))
+		recorder := httptest.NewRecorder()
+		(&Server{ghOpts: github.Options{Repo: "dashboard/prs"}}).Handler().ServeHTTP(recorder, request)
+
+		Expect(recorder.Code).To(Equal(http.StatusBadRequest))
+		Expect(recorder.Body.String()).To(ContainSubstring("bogus"))
 	})
 })

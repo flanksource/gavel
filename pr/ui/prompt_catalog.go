@@ -14,7 +14,6 @@ import (
 	"github.com/flanksource/captain/pkg/api/registry"
 	"github.com/flanksource/gavel/prompts"
 	promptregistry "github.com/flanksource/gavel/prompts/registry"
-	todoprompt "github.com/flanksource/gavel/todos/prompt"
 	"github.com/flanksource/gavel/verify"
 )
 
@@ -81,11 +80,10 @@ func buildPromptCatalog(scope promptCatalogScope) ([]promptCatalogEntry, error) 
 	for _, desc := range descriptors {
 		entries = append(entries, registeredPromptEntry(scope, desc))
 	}
-	named, err := namedTodoPromptEntries(scope)
-	if err != nil {
-		return nil, err
-	}
-	return append(entries, named...), nil
+	// Every runnable todo prompt is a registered one. `todos.prompts` used to let
+	// a project declare extra names here; a project prompt is a lifecycle step
+	// now, and the catalog no longer has a second, undeclared source.
+	return entries, nil
 }
 
 func registeredPromptEntry(scope promptCatalogScope, desc prompts.Prompt) promptCatalogEntry {
@@ -105,7 +103,15 @@ func registeredPromptEntry(scope promptCatalogScope, desc prompts.Prompt) prompt
 		entry.ParseError = err.Error()
 		return entry
 	}
-	defaultSpec, _, _, _ := promptregistry.ParsePromptSource(desc.Default)
+	// The default document is what provenance attributes "prompt default" to. One
+	// that does not parse is a broken built-in, reported on the row like any
+	// other parse failure — a zero-valued spec here would misattribute every
+	// field to the base layer while the settings editor refuses the same text.
+	defaultSpec, _, _, err := promptregistry.ParsePromptSource(desc.Default)
+	if err != nil {
+		entry.ParseError = fmt.Sprintf("default prompt: %v", err)
+		return entry
+	}
 	entry.Source, entry.Path, entry.Raw, entry.Body = item.Source, item.Path, item.Raw, item.Body
 	// The detail endpoint shows an inline override as the default document with
 	// the override's keys laid over; the catalog must hash the same text so the
@@ -121,59 +127,6 @@ func registeredPromptEntry(scope promptCatalogScope, desc prompts.Prompt) prompt
 	entry.Effective = catalogRuntime(item.EffectiveModel, item.ModelSource)
 	entry.Provenance = promptProvenance(entry.Layers, item.Source, item.Declared, defaultSpec, scope.Trace.Merged.AI, item.ModelSource)
 	return entry
-}
-
-// namedTodoPromptEntries lists the prompts declared under todos.prompts that
-// are not built-ins: they are runnable (`gavel todos run --prompt <name>`) but
-// live outside the static registry.
-func namedTodoPromptEntries(scope promptCatalogScope) ([]promptCatalogEntry, error) {
-	catalog, err := todoprompt.NewCatalog(scope.Trace.Merged.Todos)
-	if err != nil {
-		return nil, fmt.Errorf("todos.prompts: %w", err)
-	}
-	var out []promptCatalogEntry
-	for _, def := range catalog.List() {
-		if def.Builtin != "" {
-			continue
-		}
-		name := def.Name
-		entry := promptCatalogEntry{
-			ID: "todos.prompts." + name, Title: firstNonEmpty(def.Title, name), Description: def.Description,
-			ConfigPath: "todos.prompts." + name, Owner: promptOwnerGavel,
-			UsedBy: []string{"gavel todos run --prompt " + name},
-			Source: strings.Replace(overrideSource(&def.Override), "default", "none", 1),
-			Path:   def.Override.ResolvedFilePath(scope.Trace.TargetDir),
-			Layers: promptLayers(scope, func(cfg *verify.GavelConfig) (verify.PromptSpec, bool) {
-				named, ok := cfg.Todos.Prompts[name]
-				return named.PromptSpec, ok
-			}),
-		}
-		// The detail endpoint addresses registered prompts only; a named prompt is
-		// edited through the settings form, so its layers are shown read-only.
-		for i := range entry.Layers {
-			entry.Layers[i].Editable, entry.Layers[i].Scope = false, ""
-		}
-		raw, err := def.Template(scope.Trace.TargetDir)
-		if err != nil {
-			entry.ParseError = err.Error()
-			out = append(out, entry)
-			continue
-		}
-		declared, body, _, err := promptregistry.ParsePromptSource(raw)
-		if err != nil {
-			entry.ParseError = err.Error()
-			out = append(out, entry)
-			continue
-		}
-		entry.Raw, entry.Body, entry.Version = raw, body, promptSourceVersion(raw)
-		entry.Variables = templateVariables(body)
-		effective := scope.Trace.Merged.AI.Merge(declared).Merge(def.Override.Spec).Model
-		modelSource := modelSourceFor(def.Override.Spec.Name, declared.Name, scope.Trace.Merged.AI.Name)
-		entry.Effective = catalogRuntime(effective, modelSource)
-		entry.Provenance = promptProvenance(entry.Layers, entry.Source, declared, api.Spec{}, scope.Trace.Merged.AI, modelSource)
-		out = append(out, entry)
-	}
-	return out, nil
 }
 
 // promptLayers describes each .gavel.yaml in the trace for one prompt: what it
@@ -281,19 +234,6 @@ func lastLayerSetting(layers []promptCatalogLayer, fields ...string) string {
 		}
 	}
 	return ""
-}
-
-func modelSourceFor(operation, promptDefault, base string) string {
-	switch {
-	case operation != "":
-		return "operation"
-	case promptDefault != "":
-		return "prompt default"
-	case base != "":
-		return "ai base"
-	default:
-		return "runtime"
-	}
 }
 
 // catalogRuntime expands a compact model selector (`agent:opus:medium`,

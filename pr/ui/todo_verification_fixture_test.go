@@ -79,6 +79,11 @@ func TestHandleTodoVerificationFixtureSavesSection(t *testing.T) {
 	if !strings.Contains(saved.Body, "Some description.") {
 		t.Fatalf("save must preserve unrelated body content: %+v", saved)
 	}
+	// A stale-lifecycle regression: the save response must carry the lifecycle,
+	// not just the raw todo, or the dashboard's cache overwrite blanks the strip.
+	if saved.Lifecycle == nil || len(saved.Lifecycle.Steps) == 0 {
+		t.Fatalf("save response missing lifecycle steps: %+v", saved)
+	}
 	if strings.Contains(saved.Body, "Verification") {
 		t.Fatalf("save must keep verification out of body: %+v", saved)
 	}
@@ -100,6 +105,39 @@ func TestHandleTodoVerificationFixtureSavesSection(t *testing.T) {
 	}
 }
 
+// A save whose re-read fails is reported as the failure it is. Answering with
+// the pre-edit todo under a 200 would show the user their save silently
+// reverted, and their next save would overwrite a body that had already changed.
+func TestHandleTodoVerificationFixtureReportsAFailedReread(t *testing.T) {
+	workDir := t.TempDir()
+	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
+	provider := uiTestProviderFor(workDir)
+	created, err := provider.Create(t.Context(), todos.CreateRequest{
+		Title: "Fix parser", Body: verificationFixtureBody("Some description.", "```test\nquery: SELECT 1\n```"),
+	})
+	if err != nil {
+		t.Fatalf("seed create: %v", err)
+	}
+	provider.rereadErr = errors.New("connection reset by peer")
+
+	saveRaw, err := json.Marshal(todoVerificationFixturePayload{Ref: todos.TODOReference(created), Fixture: "```test\nquery: SELECT 2\n```"})
+	if err != nil {
+		t.Fatalf("marshal save payload: %v", err)
+	}
+	rec := httptest.NewRecorder()
+	s.handleTodoVerificationFixture(rec, httptest.NewRequest(http.MethodPost, "/api/todos/verification/fixture", bytes.NewReader(saveRaw)))
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500; body = %q", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "connection reset by peer") {
+		t.Fatalf("body = %q, want the re-read failure named", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "SELECT 1") {
+		t.Fatalf("body = %q, want no stale todo state reported as authoritative", rec.Body.String())
+	}
+}
+
 // TestHandleTodoVerificationFixtureRequiresRef mirrors the other todo mutation
 // handlers' validation: a missing ref is a 400, not a panic or silent no-op.
 func TestHandleTodoVerificationFixtureRequiresRef(t *testing.T) {
@@ -114,7 +152,11 @@ func TestHandleTodoVerificationFixtureRequiresRef(t *testing.T) {
 	}
 }
 
-func TestHandleTodoVerificationRunExecutesPersistedFixture(t *testing.T) {
+// The dashboard's Verify action is the lifecycle's verify step posted to
+// /api/todos/run: the persisted fixture is the step's definition of done, the
+// step runs no agent turn and commits nothing, and the report lands on the
+// attempt the run is recorded under (see the session detail's `verification`).
+func TestTodoAPIRunVerifyStepRunsThePersistedFixture(t *testing.T) {
 	workDir := t.TempDir()
 	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
 	provider := uiTestProviderFor(workDir)
@@ -131,77 +173,43 @@ echo dashboard-verification-ok
 	if err != nil {
 		t.Fatalf("seed create: %v", err)
 	}
+	got, called := stubRunStart(t)
 
-	payload, err := json.Marshal(todoCriteriaPayload{Ref: todos.TODOReference(created)})
+	payload, err := json.Marshal(todoRunPayload{Ref: todos.TODOReference(created), Step: "verify"})
 	if err != nil {
 		t.Fatalf("marshal request: %v", err)
 	}
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/todos/verification/run", bytes.NewReader(payload))
-	s.Handler().ServeHTTP(rec, req)
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/todos/run", bytes.NewReader(payload)))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("run status = %d, want 200; body = %q", rec.Code, rec.Body.String())
 	}
-	var response struct {
-		Verification types.CheckResult `json:"verification"`
-		Todo         todoSummary       `json:"todo"`
+	if !*called || got.Options.Step != "verify" {
+		t.Fatalf("verify was not dispatched as the lifecycle's verify step: called=%v options=%+v", *called, got.Options)
 	}
+	resolution := resolvedRun(t, *got)
+	if resolution.Class != types.ModeVerify || resolution.Prompt != "" {
+		t.Fatalf("verify resolved as %q with prompt %q, want a verify-only step with no agent turn", resolution.Class, resolution.Prompt)
+	}
+	spec := resolution.Spec
+	if spec.Workflow == nil || spec.Workflow.Verify == nil || !strings.Contains(spec.Workflow.Verify.Fixture, "dashboard-verification-ok") {
+		t.Fatalf("verify step did not carry the persisted fixture as its definition of done: %+v", spec.Workflow)
+	}
+	if len(spec.Workflow.Commits) != 0 {
+		t.Fatalf("verify step must not commit: %+v", spec.Workflow.Commits)
+	}
+	var response todoRunResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
 		t.Fatalf("unmarshal response: %v", err)
 	}
-	if !response.Verification.AllPassed || response.Verification.Output == nil {
-		t.Fatalf("verification did not pass with evidence: %+v", response.Verification)
-	}
-	if len(response.Verification.Output.Results) != 1 ||
-		!strings.Contains(response.Verification.Output.Results[0].Stdout, "dashboard-verification-ok") {
-		t.Fatalf("unexpected verification evidence: %+v", response.Verification.Output)
-	}
-	if response.Todo.Status != types.StatusVerified {
-		t.Fatalf("todo status = %q, want verified", response.Todo.Status)
-	}
-}
-
-// A verification that cannot start creates no prompt run, so the dashboard's
-// attempt list can never show it — the response's error field is the only place
-// the failure can reach the user.
-func TestHandleTodoVerificationRunReportsPreExecutionFailure(t *testing.T) {
-	workDir := t.TempDir()
-	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
-	provider := uiTestProviderFor(workDir)
-	created, err := provider.Create(t.Context(), todos.CreateRequest{
-		Title: "No definition of done",
-		Body:  "Nothing to verify here.",
-	})
-	if err != nil {
-		t.Fatalf("seed create: %v", err)
-	}
-
-	payload, err := json.Marshal(todoCriteriaPayload{Ref: todos.TODOReference(created)})
-	if err != nil {
-		t.Fatalf("marshal request: %v", err)
-	}
-	rec := httptest.NewRecorder()
-	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/todos/verification/run", bytes.NewReader(payload)))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("run status = %d, want 200; body = %q", rec.Code, rec.Body.String())
-	}
-	var response struct {
-		Verification types.CheckResult `json:"verification"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
-		t.Fatalf("unmarshal response: %v", err)
-	}
-	if response.Verification.AllPassed {
-		t.Fatalf("verification without a definition of done must not pass: %+v", response.Verification)
-	}
-	if !strings.Contains(response.Verification.ErrorText, "no verification fixture") {
-		t.Fatalf("verification error = %q, want the missing definition-of-done reason", response.Verification.ErrorText)
+	if response.Step != "verify" || response.Commit {
+		t.Fatalf("response = %+v, want the verify step reported without a commit", response)
 	}
 }
 
 func TestLegacyTodoVerifyRoutesRemoved(t *testing.T) {
 	s := &Server{}
-	for _, path := range []string{"/api/todos/verify", "/api/todos/verify/preview"} {
+	for _, path := range []string{"/api/todos/verify", "/api/todos/verify/preview", "/api/todos/verification/run"} {
 		t.Run(path, func(t *testing.T) {
 			rec := httptest.NewRecorder()
 			s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{}`)))

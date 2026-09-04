@@ -1,37 +1,18 @@
 package ui
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
-	"github.com/flanksource/captain/pkg/ai/history"
 	cmuxprov "github.com/flanksource/captain/pkg/ai/provider/cmux"
 	captaindb "github.com/flanksource/captain/pkg/database"
-	"github.com/flanksource/captain/pkg/session"
-	"github.com/flanksource/gavel/todos"
 	"github.com/google/uuid"
 )
-
-const (
-	// sessionStreamPoll is how often the tailer re-reads the session log for new
-	// lines and emits a keep-alive when there is nothing new.
-	sessionStreamPoll = 500 * time.Millisecond
-	// sessionLogAppearTimeout bounds how long a just-started run is given to
-	// create its session log before the stream reports it missing.
-	sessionLogAppearTimeout = 60 * time.Second
-)
-
-// errSessionLogMissing signals the session log never appeared within the
-// appear timeout (e.g. a stale/unknown session id, or a run that never started).
-var errSessionLogMissing = errors.New("session log did not appear")
 
 // captainSessionStore is the native session read seam used by the TODO UI.
 // Runtime providers expose Captain's handle over the same pool Gavel owns;
@@ -150,10 +131,9 @@ func (s *Server) handleTodoSessionStats(w http.ResponseWriter, r *http.Request) 
 				writeTodoError(w, http.StatusInternalServerError, err)
 				return
 			}
-			if req, ok := todos.GlobalApprovals().Pending(captainApprovalSessionID(sessionID, resolved)); ok {
-				resp.State = "approval"
-				pending := req
-				resp.Approval = &pending
+			if err := attachPendingApproval(r.Context(), store, resolved, &resp); err != nil {
+				writeTodoError(w, http.StatusInternalServerError, err)
+				return
 			}
 			json.NewEncoder(w).Encode(resp) //nolint:errcheck
 			return
@@ -169,33 +149,47 @@ func (s *Server) handleTodoSessionStats(w http.ResponseWriter, r *http.Request) 
 		writeTodoError(w, http.StatusInternalServerError, err)
 		return
 	}
-	resp := todoSessionStatsResponse{SessionStats: stats}
-	// A pending tool-permission request overrides the derived state so the
-	// dashboard can render the "Needs approval" affordance and its Allow/Deny
-	// buttons regardless of which driver produced it.
-	if req, ok := todos.GlobalApprovals().Pending(sessionID); ok {
-		resp.State = "approval"
-		pending := req
-		resp.Approval = &pending
-	}
-	json.NewEncoder(w).Encode(resp) //nolint:errcheck
+	// A session with no Captain row has no durable approval table behind it, and
+	// therefore nothing that could be awaiting a decision.
+	json.NewEncoder(w).Encode(todoSessionStatsResponse{SessionStats: stats}) //nolint:errcheck
 }
 
-func captainApprovalSessionID(requested string, resolved captainSessionResolution) string {
-	if resolved.transcript != nil && strings.TrimSpace(resolved.transcript.ProviderSessionID) != "" {
-		return strings.TrimSpace(resolved.transcript.ProviderSessionID)
+// attachPendingApproval overrides the derived state when a tool request is
+// outstanding, so the dashboard renders the "needs approval" affordance and its
+// Approve/Deny controls. The request is read from Captain's durable table, so a
+// dashboard that reconnected — or one in a different process from the run —
+// sees it just the same.
+func attachPendingApproval(
+	ctx context.Context,
+	store captainSessionStore,
+	resolved captainSessionResolution,
+	resp *todoSessionStatsResponse,
+) error {
+	approvals, ok := store.(approvalStore)
+	if !ok || resolved.run == nil {
+		return nil
 	}
-	if resolved.run != nil && strings.TrimSpace(resolved.run.ProviderSessionID) != "" {
-		return strings.TrimSpace(resolved.run.ProviderSessionID)
+	pending, err := pendingApprovals(ctx, approvals, resolved.run.ID, nil)
+	if err != nil {
+		return err
 	}
-	return requested
+	if len(pending) == 0 {
+		return nil
+	}
+	resp.State = "approval"
+	resp.Approval = &pending[0]
+	resp.Approvals = pending
+	return nil
 }
 
 // todoSessionStatsResponse is the session-stats payload plus any pending
-// tool-permission request awaiting the user's Allow/Deny.
+// tool-permission requests awaiting a decision. Approval is the oldest of them,
+// kept as a single field for the control that answers one at a time; Approvals
+// is the whole queue.
 type todoSessionStatsResponse struct {
 	cmuxprov.SessionStats
-	Approval *todos.ApprovalRequest `json:"approval,omitempty"`
+	Approval  *todoApproval  `json:"approval,omitempty"`
+	Approvals []todoApproval `json:"approvals,omitempty"`
 }
 
 func captainSessionStats(ctx context.Context, store captainSessionStore, sessionID string, resolved captainSessionResolution) (todoSessionStatsResponse, error) {
@@ -283,49 +277,114 @@ func intValue(value *int64) int {
 	return int(*value)
 }
 
-// handleTodoSessionApprove resolves a pending tool-permission request for a
-// session — the dashboard's Allow/Deny buttons POST here, which unblocks the
-// driver awaiting the decision (see todos.ApprovalRegistry).
+// todoSessionApprovePayload is what the dashboard's approval controls POST.
+//
+// ApprovalID names the durable request rather than the session, because a run
+// can have more than one outstanding and a session id cannot tell them apart.
+type todoSessionApprovePayload struct {
+	ApprovalID string `json:"approvalId"`
+	// Action is approve, deny or respond. `respond` runs the call with Input
+	// substituted; `deny` refuses it and feeds Message back as the reason.
+	Action  string         `json:"action"`
+	Message string         `json:"message,omitempty"`
+	Input   map[string]any `json:"input,omitempty"`
+}
+
+// handleTodoSessionApprove answers one pending tool-permission request — the
+// dashboard's Approve/Deny/Respond controls POST here, which unblocks the
+// broker awaiting the decision.
+//
+// The decision is written to captain's durable approval table, not to an
+// in-process registry: the run may have been started by a different process, and
+// an approval outstanding across a dashboard restart must still be answerable.
 func (s *Server) handleTodoSessionApprove(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	var payload struct {
-		SessionID    string         `json:"sessionId"`
-		Allow        bool           `json:"allow"`
-		Message      string         `json:"message,omitempty"`
-		UpdatedInput map[string]any `json:"updatedInput,omitempty"`
-	}
+	var payload todoSessionApprovePayload
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("invalid request body: %w", err))
 		return
 	}
-	sessionID := strings.TrimSpace(payload.SessionID)
-	if sessionID == "" {
-		sessionID = strings.TrimSpace(r.URL.Query().Get("sessionId"))
+	requestID, err := uuid.Parse(strings.TrimSpace(payload.ApprovalID))
+	if err != nil {
+		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("approvalId must be the pending approval's id: %w", err))
+		return
 	}
-	if sessionID == "" {
-		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("sessionId is required"))
+	action, err := parseApprovalAction(payload.Action)
+	if err != nil {
+		writeTodoError(w, http.StatusBadRequest, err)
 		return
 	}
 	dir := s.resolveTodoDir(strings.TrimSpace(r.URL.Query().Get("dir")))
-	if store, ok := todoCaptainSessionStore(r.Context(), dir); ok {
-		resolved, err := resolveCaptainSession(r.Context(), store, sessionID)
-		if err != nil {
-			writeTodoError(w, http.StatusInternalServerError, err)
-			return
-		}
-		if resolved.known {
-			sessionID = captainApprovalSessionID(sessionID, resolved)
-		}
+	store, err := todoApprovalStore(r.Context(), dir)
+	if err != nil {
+		writeTodoError(w, http.StatusServiceUnavailable, err)
+		return
 	}
-	if err := todos.GlobalApprovals().Resolve(sessionID, todos.ApprovalDecision{
-		Allow:        payload.Allow,
-		Message:      payload.Message,
-		UpdatedInput: payload.UpdatedInput,
-	}); err != nil {
+	sessionID, err := approvalSessionID(r.Context(), store, strings.TrimSpace(r.URL.Query().Get("sessionId")), requestID)
+	if err != nil {
+		writeTodoError(w, http.StatusNotFound, err)
+		return
+	}
+	resolvedRequest, err := resolveApproval(r.Context(), store, sessionID, requestID, action, payload.Message, payload.Input)
+	if err != nil {
 		writeTodoError(w, http.StatusConflict, err)
 		return
 	}
-	json.NewEncoder(w).Encode(map[string]any{"resolved": true, "allow": payload.Allow}) //nolint:errcheck
+	json.NewEncoder(w).Encode(map[string]any{ //nolint:errcheck
+		"resolved":   true,
+		"approvalId": resolvedRequest.ID.String(),
+		"state":      string(resolvedRequest.State),
+	})
+}
+
+// approvalSessionID is the session the approval belongs to. A client that knows
+// the session sends it; one that only has the approval id from a notification
+// does not, and the row itself carries the answer.
+func approvalSessionID(ctx context.Context, store approvalStore, requested string, requestID uuid.UUID) (uuid.UUID, error) {
+	if requested != "" {
+		if sessionID, err := uuid.Parse(requested); err == nil {
+			return sessionID, nil
+		}
+	}
+	request, err := store.GetTurnRequest(ctx, requestID)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	return request.SessionID, nil
+}
+
+// handleTodoSessionApprovals lists a run's unanswered tool requests, so a
+// dashboard that reconnected can show what is blocking it.
+func (s *Server) handleTodoSessionApprovals(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	sessionID, err := uuid.Parse(strings.TrimSpace(r.URL.Query().Get("sessionId")))
+	if err != nil {
+		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("sessionId must be Captain's admitted session id: %w", err))
+		return
+	}
+	var promptRunID *uuid.UUID
+	if raw := strings.TrimSpace(r.URL.Query().Get("promptRunId")); raw != "" {
+		parsed, parseErr := uuid.Parse(raw)
+		if parseErr != nil {
+			writeTodoError(w, http.StatusBadRequest, fmt.Errorf("invalid promptRunId: %w", parseErr))
+			return
+		}
+		promptRunID = &parsed
+	}
+	store, err := todoApprovalStore(r.Context(), s.resolveTodoDir(strings.TrimSpace(r.URL.Query().Get("dir"))))
+	if err != nil {
+		writeTodoError(w, http.StatusServiceUnavailable, err)
+		return
+	}
+	pending, err := pendingApprovals(r.Context(), store, sessionID, promptRunID)
+	if err != nil {
+		writeTodoError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if pending == nil {
+		pending = []todoApproval{}
+	}
+	json.NewEncoder(w).Encode(map[string]any{"approvals": pending}) //nolint:errcheck
 }
 
 // handleTodoSessionFocus switches cmux to the workspace running a TODO's agent
@@ -400,267 +459,4 @@ func resolveCmuxSurface(ctx context.Context, workDir, agent string) (workspace, 
 	}
 	surface, _ = client.ResolveSurface(ctx, ref.String())
 	return ref.String(), surface, nil
-}
-
-// handleTodoSessionStream follows a TODO's agent session log over SSE. The
-// session id is recorded on the issue (session:<id> label) when the run starts,
-// so the transcript itself is never stored — the dashboard streams the raw
-// captain session entries and renders them with clicky-ui's SessionViewer.
-func (s *Server) handleTodoSessionStream(w http.ResponseWriter, r *http.Request) {
-	sessionID := strings.TrimSpace(r.URL.Query().Get("sessionId"))
-	if sessionID == "" {
-		w.Header().Set("Content-Type", "application/json")
-		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("sessionId is required"))
-		return
-	}
-	dir := s.resolveTodoDir(strings.TrimSpace(r.URL.Query().Get("dir")))
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "streaming not supported", http.StatusInternalServerError)
-		return
-	}
-	if store, ok := todoCaptainSessionStore(r.Context(), dir); ok {
-		resolved, err := resolveCaptainSession(r.Context(), store, sessionID)
-		if err != nil {
-			writeTodoSessionStreamError(w, flusher, err)
-			return
-		}
-		if resolved.known {
-			streamCaptainSession(w, r, store, sessionID, resolved)
-			return
-		}
-	}
-	path, err := cmuxprov.SessionLogPath(dir, sessionID)
-	if err != nil {
-		writeTodoSessionStreamError(w, flusher, err)
-		return
-	}
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	streamSessionLog(w, r, flusher, path)
-}
-
-func writeTodoSessionStreamError(w http.ResponseWriter, flusher http.Flusher, err error) {
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("X-Accel-Buffering", "no")
-	payload, marshalErr := json.Marshal(map[string]string{"error": err.Error()})
-	if marshalErr != nil {
-		panic(fmt.Errorf("marshal session stream error: %w", marshalErr))
-	}
-	fmt.Fprintf(w, "event: error\ndata: %s\n\n", payload)
-	flusher.Flush()
-}
-
-// streamCaptainSession replays and follows the monitor-owned unified message
-// projection. It emits a row again when a later ingest enriches the same
-// message (for example, when tool output arrives); the browser deduplicates by
-// message ID and replaces the earlier version.
-func streamCaptainSession(w http.ResponseWriter, r *http.Request, store captainSessionStore, sessionID string, resolved captainSessionResolution) {
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "streaming not supported", http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("X-Accel-Buffering", "no")
-
-	emit := func(event string, data any) {
-		b, _ := json.Marshal(data)
-		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, b)
-		flusher.Flush()
-	}
-	for _, diagnostic := range resolved.diagnostics {
-		emit("warning", diagnostic)
-	}
-	deadline := time.Now().Add(sessionLogAppearTimeout)
-	seen := map[uuid.UUID]string{}
-	owners := map[uuid.UUID]*captaindb.Session{}
-	for {
-		if resolved.transcript == nil {
-			next, err := resolveCaptainSession(r.Context(), store, sessionID)
-			if err != nil {
-				emit("error", map[string]string{"error": err.Error()})
-				return
-			}
-			resolved = next
-			if resolved.transcript == nil && time.Now().After(deadline) {
-				emit("error", map[string]string{"error": "no monitored session activity yet"})
-				return
-			}
-		}
-		if resolved.transcript != nil {
-			var rows []captaindb.TranscriptMessage
-			var err error
-			if threadStore, ok := store.(captainThreadSessionStore); ok {
-				rows, err = threadStore.ListThreadTranscriptMessages(r.Context(), resolved.transcript.ID)
-			} else {
-				rows, err = store.ListTranscriptMessages(r.Context(), captaindb.TranscriptPage{SessionID: resolved.transcript.ID})
-			}
-			if err != nil {
-				emit("error", map[string]string{"error": err.Error()})
-				return
-			}
-			for _, row := range rows {
-				owner := owners[row.SessionID]
-				if owner == nil && row.SessionID == resolved.transcript.ID {
-					owner = resolved.transcript
-					owners[row.SessionID] = owner
-				}
-				if owner == nil {
-					owner, err = store.GetSessionByIdentity(r.Context(), row.SessionID.String(), "", "", "")
-					if err != nil {
-						emit("error", map[string]string{"error": err.Error()})
-						return
-					}
-					owners[row.SessionID] = owner
-				}
-				message, fingerprint, err := captainTranscriptMessage(row, owner)
-				if err != nil {
-					continue
-				}
-				if seen[row.ID] == fingerprint {
-					continue
-				}
-				seen[row.ID] = fingerprint
-				emit("entry", message)
-			}
-		}
-		if len(seen) == 0 {
-			fmt.Fprint(w, ": ping\n\n")
-			flusher.Flush()
-		}
-		select {
-		case <-r.Context().Done():
-			return
-		case <-time.After(sessionStreamPoll):
-		}
-	}
-}
-
-func captainTranscriptMessage(row captaindb.TranscriptMessage, owner *captaindb.Session) (session.Message, string, error) {
-	var parts []session.Part
-	if err := json.Unmarshal(row.Parts, &parts); err != nil {
-		return session.Message{}, "", err
-	}
-	message := session.Message{
-		ID: row.ID.String(), Role: row.Role, Parts: parts,
-		Provenance: &session.Provenance{CWD: owner.CWD, Source: owner.Source, SessionID: owner.ProviderSessionID, AgentID: owner.ID.String()},
-		AgentID:    owner.ID.String(),
-	}
-	if row.TurnID != nil {
-		message.TurnID = row.TurnID.String()
-	}
-	if row.OccurredAt != nil {
-		message.Provenance.Timestamp = row.OccurredAt
-	}
-	if row.Model != nil {
-		message.Provenance.Model = *row.Model
-	}
-	if row.SourceLine != nil {
-		message.SourceLine = *row.SourceLine
-	}
-	fingerprintBytes, err := json.Marshal(message)
-	if err != nil {
-		return session.Message{}, "", err
-	}
-	return message, string(fingerprintBytes), nil
-}
-
-// streamSessionLog tails path, parsing each complete line into a captain
-// SessionEntry and emitting the conversational ones as SSE `entry` frames (the
-// schema clicky-ui's SessionViewer consumes). It first replays the existing log
-// (so reopening the tab shows full history) then follows appended lines until
-// the client disconnects. Unlike the executor's tailer it does not stop at
-// end_turn — a resumed run keeps streaming into the same log.
-func streamSessionLog(w http.ResponseWriter, r *http.Request, flusher http.Flusher, path string) {
-	emit := func(event string, data any) {
-		b, _ := json.Marshal(data)
-		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, b)
-		flusher.Flush()
-	}
-
-	f, err := openSessionLog(r.Context(), path)
-	if err != nil {
-		if errors.Is(err, errSessionLogMissing) {
-			emit("error", map[string]string{"error": "no session activity yet"})
-		}
-		return
-	}
-	defer func() { _ = f.Close() }()
-
-	var pending []byte
-	buf := make([]byte, 32*1024)
-	for {
-		progressed := false
-		for {
-			n, rerr := f.Read(buf)
-			if n > 0 {
-				pending = append(pending, buf[:n]...)
-				for {
-					i := bytes.IndexByte(pending, '\n')
-					if i < 0 {
-						break
-					}
-					line := pending[:i]
-					pending = pending[i+1:]
-					// Emit the raw captain entry for the SessionViewer, but only for
-					// conversational (assistant) lines — Events() is empty for user
-					// tool-results and bookkeeping, which the viewer would drop anyway.
-					var entry history.SessionEntry
-					if json.Unmarshal(line, &entry) != nil || len(entry.Events()) == 0 {
-						continue
-					}
-					progressed = true
-					emit("entry", entry)
-				}
-			}
-			if rerr == io.EOF {
-				break
-			}
-			if rerr != nil {
-				emit("error", map[string]string{"error": rerr.Error()})
-				return
-			}
-		}
-		if !progressed {
-			// Keep-alive comment frame: holds the socket open without firing a
-			// client-side message handler.
-			fmt.Fprint(w, ": ping\n\n")
-			flusher.Flush()
-		}
-		select {
-		case <-r.Context().Done():
-			return
-		case <-time.After(sessionStreamPoll):
-		}
-	}
-}
-
-// openSessionLog waits for the session log to exist, bounded by the appear
-// timeout and the request context. A growing file returns plain io.EOF at the
-// tail, so callers can keep reading for appended lines.
-func openSessionLog(ctx context.Context, path string) (*os.File, error) {
-	deadline := time.Now().Add(sessionLogAppearTimeout)
-	for {
-		f, err := os.Open(path)
-		if err == nil {
-			return f, nil
-		}
-		if !os.IsNotExist(err) {
-			return nil, err
-		}
-		if time.Now().After(deadline) {
-			return nil, errSessionLogMissing
-		}
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(sessionStreamPoll):
-		}
-	}
 }

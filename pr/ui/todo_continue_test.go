@@ -12,7 +12,7 @@ import (
 	"github.com/flanksource/commons-db/shell"
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/todos"
-	"github.com/flanksource/gavel/todos/drivers"
+	"github.com/flanksource/gavel/todos/lifecycle"
 	"github.com/flanksource/gavel/todos/run"
 	"github.com/flanksource/gavel/todos/types"
 )
@@ -41,8 +41,7 @@ func codexPlanRun(t *testing.T, sessionID string) *captaindb.PromptRun {
 	return &captaindb.PromptRun{
 		State: captaindb.PromptRunStateWaiting,
 		Runtime: captaindb.PromptRunRuntime{
-			Mode: string(types.ModePlan), Driver: string(drivers.Agent),
-			Resolved: captaindb.PromptRunRuntimeSelection{
+			Mode: string(types.ModePlan), Resolved: captaindb.PromptRunRuntimeSelection{
 				Provider: "openai", Mode: "agent", Model: priorCodexModel, Effort: "high",
 			},
 		},
@@ -63,46 +62,64 @@ func codexPlanRun(t *testing.T, sessionID string) *captaindb.PromptRun {
 	}
 }
 
-// A continuation that stays in the same mode continues the run it came from: the
-// spec that was dispatched is the base, concretised by the runtime that turn
-// actually resolved. What must not travel is the turn itself — the previous
-// user prompt (todoprompt.Render would re-send it as the request) and the
-// workspace a consumed checkout left behind.
-func TestContinueRunInheritsTheDispatchedSpecWithinAMode(t *testing.T) {
-	workDir := t.TempDir()
-	opts, err := continueRun(continuation{
-		Dir:   workDir,
-		Todos: []*types.TODO{{}},
-		Prior: codexPlanRun(t, "sess-prior-plan"),
-		Mode:  types.ModePlan,
-	})
+// resolvedRun folds a captured run request through the real lifecycle host, so
+// a test asserts against the spec captain would be handed rather than against
+// the request layer alone.
+func resolvedRun(t *testing.T, req todoRunRequest) *lifecycle.Resolution {
+	t.Helper()
+	prepared, err := run.Resolve(t.Context(), req)
 	if err != nil {
-		t.Fatalf("continueRun: %v", err)
+		t.Fatalf("resolve run: %v", err)
 	}
+	return prepared.Resolution
+}
 
-	if opts.Driver != string(drivers.Agent) {
-		t.Errorf("driver = %q, want %q (the prior run's mode)", opts.Driver, drivers.Agent)
+// continuationSpec resolves a continuation for a todo in dir through the seam
+// the dashboard dispatches through, and returns the options it produced
+// alongside the folded spec.
+func continuationSpec(t *testing.T, dir string, c run.Continuation) (run.Options, api.Spec) {
+	t.Helper()
+	c.Dir, c.Provider = dir, uiTestProviderFor(dir)
+	if c.Override.Host == "" {
+		c.Override.Host = lifecycle.HostDashboard
 	}
-	if opts.Spec.Name != priorCodexModel {
-		t.Errorf("model = %q, want the prior run's resolved %q", opts.Spec.Name, priorCodexModel)
+	if c.Todo == nil {
+		created, err := c.Provider.Create(t.Context(), todos.CreateRequest{Title: "Continued", Status: types.StatusPending})
+		if err != nil {
+			t.Fatalf("seed todo: %v", err)
+		}
+		c.Todo = created
 	}
-	if string(opts.Spec.Mode) != "agent" {
-		t.Errorf("mode = %q, want agent", opts.Spec.Mode)
+	opts, err := run.Continue(c)
+	if err != nil {
+		t.Fatalf("run.Continue: %v", err)
 	}
-	if opts.Spec.Mode != api.ModeAgent {
-		t.Errorf("authored mode = %q, want agent", opts.Spec.Mode)
-	}
-	if string(opts.Spec.Effort) != "high" {
-		t.Errorf("effort = %q, want high", opts.Spec.Effort)
-	}
-	if opts.Spec.Budget.Cost != 4.5 || opts.Spec.Budget.MaxTurns != 12 {
-		t.Errorf("budget = %+v, want the continued run's 4.5/12", opts.Spec.Budget)
-	}
+	resolution := resolvedRun(t, todoRunRequest{Provider: c.Provider, Todo: c.Todo, Dir: dir, Options: opts})
+	return opts, resolution.Spec
+}
 
-	if strings.Contains(opts.Spec.Prompt.User, "previous turn") {
-		t.Errorf("prompt.user = %q, want the previous turn's instructions dropped", opts.Spec.Prompt.User)
+// A continuation that stays in the same behaviour class continues the run it
+// came from: the spec that was dispatched is the base, concretised by the
+// runtime that turn actually resolved. What must not travel is the turn itself
+// — the previous user prompt (the renderer would re-send it as the request) and
+// the workspace a consumed checkout left behind.
+func TestContinueRunInheritsTheDispatchedSpecWithinAClass(t *testing.T) {
+	opts, spec := continuationSpec(t, t.TempDir(), run.Continuation{
+		Prior: codexPlanRun(t, "sess-prior-plan"), Step: "plan",
+	})
+	if opts.Step != "plan" {
+		t.Errorf("step = %q, want plan", opts.Step)
 	}
-	if opts.Spec.Setup != nil && opts.Spec.Setup.Cwd == "/previous/worktree" {
+	if spec.Name != priorCodexModel || spec.Mode != api.ModeAgent || string(spec.Effort) != "high" {
+		t.Errorf("runtime = %s/%s/%s, want the prior run's resolved %s/agent/high", spec.Name, spec.Mode, spec.Effort, priorCodexModel)
+	}
+	if spec.Budget.Cost != 4.5 || spec.Budget.MaxTurns != 12 {
+		t.Errorf("budget = %+v, want the continued run's 4.5/12", spec.Budget)
+	}
+	if strings.Contains(spec.Prompt.User, "previous turn") {
+		t.Errorf("prompt.user = %q, want the previous turn's instructions dropped", spec.Prompt.User)
+	}
+	if spec.Setup != nil && spec.Setup.Cwd == "/previous/worktree" {
 		t.Error("continuation pinned to the workspace the previous run's setup produced")
 	}
 }
@@ -110,49 +127,49 @@ func TestContinueRunInheritsTheDispatchedSpecWithinAMode(t *testing.T) {
 // Without an explicit resume the continuation is a fresh conversation, so the
 // session the persisted spec was dispatched with must not come back with it.
 func TestContinueRunWithoutResumeCarriesNoPriorSession(t *testing.T) {
-	workDir := t.TempDir()
 	const priorSession = "sess-prior-plan"
-	opts, err := continueRun(continuation{
-		Dir:   workDir,
-		Todos: []*types.TODO{{}},
-		Prior: codexPlanRun(t, priorSession),
-		Mode:  types.ModePlan,
+	opts, spec := continuationSpec(t, t.TempDir(), run.Continuation{
+		Prior: codexPlanRun(t, priorSession), Step: "plan",
 	})
-	if err != nil {
-		t.Fatalf("continueRun: %v", err)
-	}
 	if opts.Resume {
 		t.Error("resume set on a continuation that did not ask for it")
 	}
-	if opts.Spec.SessionID == priorSession {
-		t.Errorf("session id = %q, want the prior session dropped", opts.Spec.SessionID)
+	if spec.SessionID == priorSession {
+		t.Errorf("session id = %q, want the prior session dropped", spec.SessionID)
 	}
 }
 
-// Approving a plan changes mode, and a mode change is not a continuation of
+// Approving a plan changes class, and a class change is not a continuation of
 // configuration: the plan's read-only posture and its investigation budget
 // belong to planning. Only the runtime selection — which agent actually ran —
 // carries, so a codex plan can never be implemented by claude.
-func TestContinueRunAcrossAModeChangeInheritsOnlyTheRuntime(t *testing.T) {
-	workDir := t.TempDir()
-	opts, err := continueRun(continuation{
-		Dir:   workDir,
-		Todos: []*types.TODO{{}},
-		Prior: codexPlanRun(t, "sess-prior-plan"),
-		Mode:  types.ModeRun,
+func TestContinueRunAcrossAClassChangeInheritsOnlyTheRuntime(t *testing.T) {
+	_, spec := continuationSpec(t, t.TempDir(), run.Continuation{
+		Prior: codexPlanRun(t, "sess-prior-plan"), Step: "run",
 	})
-	if err != nil {
-		t.Fatalf("continueRun: %v", err)
+	if spec.Name != priorCodexModel || spec.Mode != api.ModeAgent {
+		t.Errorf("model/mode = %q/%q, want the plan run's resolved codex runtime", spec.Name, spec.Mode)
 	}
-	if opts.Spec.Name != priorCodexModel || string(opts.Spec.Mode) != "agent" {
-		t.Errorf("model/mode = %q/%q, want the plan run's resolved codex runtime",
-			opts.Spec.Name, opts.Spec.Mode)
-	}
-	if opts.Spec.Permissions.Mode == api.PermissionPlan {
+	if spec.Permissions.Mode == api.PermissionPlan {
 		t.Error("implement run inherited the plan run's read-only permission mode")
 	}
-	if opts.Spec.Budget.Cost == 4.5 {
+	if spec.Budget.Cost == 4.5 {
 		t.Error("implement run inherited the plan run's investigation budget instead of todos.run's")
+	}
+}
+
+// A continuation runs one step by definition — approve implements, revise
+// plans — so dialog options naming a different step are a contradiction, not a
+// choice to honour silently.
+func TestContinueRunRejectsOptionsNamingAnotherStep(t *testing.T) {
+	dir := t.TempDir()
+	provider := uiTestProviderFor(dir)
+	_, err := run.Continue(run.Continuation{
+		Dir: dir, Provider: provider, Todo: &types.TODO{}, Step: "run",
+		Override: run.Options{Step: "plan", Host: lifecycle.HostDashboard},
+	})
+	if err == nil || !strings.Contains(err.Error(), "options.step") {
+		t.Fatalf("run.Continue accepted a contradicting step: %v", err)
 	}
 }
 
@@ -163,13 +180,12 @@ func TestTodoAPIPlanReviseInheritsPlanRunRuntime(t *testing.T) {
 	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
 	created := seedReviewTodo(t, workDir, types.StatusReview)
 	const sid = "019fa17d-622a-7ef3-b8ad-d8b1d7cd3836"
-	mode := types.ModePlan
 	session := sid
-	if err := uiTestProviderFor(workDir).UpdateState(t.Context(), created, todos.StateUpdate{SessionID: &session, RunMode: &mode}); err != nil {
+	if err := uiTestProviderFor(workDir).UpdateState(t.Context(), created, todos.StateUpdate{SessionID: &session}); err != nil {
 		t.Fatalf("seed session: %v", err)
 	}
 	uiTestProviderFor(workDir).activeRun = codexPlanRun(t, sid)
-	gotReq, called := stubTodoAnswer(t)
+	gotReq, called := stubRunStart(t)
 
 	body, _ := json.Marshal(todoRevisePayload{Ref: todos.TODOReference(created), Feedback: "bound the queue"})
 	rec := httptest.NewRecorder()
@@ -180,17 +196,12 @@ func TestTodoAPIPlanReviseInheritsPlanRunRuntime(t *testing.T) {
 	if !*called {
 		t.Fatal("revise never dispatched a resume")
 	}
-	if gotReq.Options.Driver != string(drivers.Agent) {
-		t.Errorf("driver = %q, want %q (the plan run's mode)", gotReq.Options.Driver, drivers.Agent)
+	spec := resolvedRun(t, *gotReq).Spec
+	if providerKey(spec.Model) != "openai" || spec.Name != priorCodexModel {
+		t.Errorf("runtime = %s/%s, want openai/%s — a codex plan must not be revised by claude", providerKey(spec.Model), spec.Name, priorCodexModel)
 	}
-	if providerKey(gotReq.Options.Spec.Model) != "openai" {
-		t.Errorf("provider = %q, want openai — a codex plan must not be revised by claude", providerKey(gotReq.Options.Spec.Model))
-	}
-	if gotReq.Options.Spec.Name != priorCodexModel {
-		t.Errorf("model = %q, want %q", gotReq.Options.Spec.Name, priorCodexModel)
-	}
-	if gotReq.Options.Spec.SessionID != sid {
-		t.Errorf("session id = %q, want the plan session %q", gotReq.Options.Spec.SessionID, sid)
+	if spec.SessionID != sid {
+		t.Errorf("session id = %q, want the plan session %q", spec.SessionID, sid)
 	}
 }
 
@@ -202,21 +213,21 @@ func TestTodoAPIPlanApproveAndRunInheritsPlanRunRuntime(t *testing.T) {
 	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
 	created := seedReviewTodo(t, workDir, types.StatusReview)
 	const sid = "019fa17d-622a-7ef3-b8ad-d8b1d7cd3837"
-	mode := types.ModePlan
 	session := sid
-	if err := uiTestProviderFor(workDir).UpdateState(t.Context(), created, todos.StateUpdate{SessionID: &session, RunMode: &mode}); err != nil {
+	if err := uiTestProviderFor(workDir).UpdateState(t.Context(), created, todos.StateUpdate{SessionID: &session}); err != nil {
 		t.Fatalf("seed session: %v", err)
 	}
 	uiTestProviderFor(workDir).activeRun = codexPlanRun(t, sid)
 
 	oldStart := run.Start
 	var got todoRunRequest
-	// The stub answers with the session it was handed, as the real dispatcher
-	// does. Returning an unrelated literal would make the report-matches-dispatch
-	// assertion below compare a constant against a derived value.
+	// The stub answers with the session the resolved run will use, as the real
+	// dispatcher does. Returning an unrelated literal would make the
+	// report-matches-dispatch assertion below compare a constant against a
+	// derived value.
 	run.Start = func(req todoRunRequest) (todoRunStartResult, error) {
 		got = req
-		return todoRunStartResult{Status: "started", SessionID: req.Options.Spec.SessionID}, nil
+		return todoRunStartResult{Status: "started", SessionID: resolvedRun(t, req).Spec.SessionID}, nil
 	}
 	t.Cleanup(func() { run.Start = oldStart })
 
@@ -226,17 +237,15 @@ func TestTodoAPIPlanApproveAndRunInheritsPlanRunRuntime(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("approve status = %d, want 200; body = %q", rec.Code, rec.Body.String())
 	}
-	if got.Options.RunMode != types.ModeRun {
-		t.Errorf("chained run mode = %q, want run", got.Options.RunMode)
+	if got.Options.Step != "run" || got.Options.Resume {
+		t.Errorf("chained run = step %q resume %v, want a fresh run step", got.Options.Step, got.Options.Resume)
 	}
-	if got.Options.Driver != string(drivers.Agent) {
-		t.Errorf("driver = %q, want %q (the plan run's mode)", got.Options.Driver, drivers.Agent)
+	if got.Prepared == nil || got.Prepared.Step.Name != "run" {
+		t.Errorf("chained run carried no pre-flight resolution; Start would fold a second time")
 	}
-	if providerKey(got.Options.Spec.Model) != "openai" {
-		t.Errorf("provider = %q, want openai — a codex plan must not be implemented by claude", providerKey(got.Options.Spec.Model))
-	}
-	if got.Options.Spec.Name != priorCodexModel {
-		t.Errorf("model = %q, want %q", got.Options.Spec.Name, priorCodexModel)
+	spec := resolvedRun(t, got).Spec
+	if providerKey(spec.Model) != "openai" || spec.Name != priorCodexModel {
+		t.Errorf("runtime = %s/%s, want openai/%s — a codex plan must not be implemented by claude", providerKey(spec.Model), spec.Name, priorCodexModel)
 	}
 
 	var resp todoApproveResponse
@@ -246,10 +255,10 @@ func TestTodoAPIPlanApproveAndRunInheritsPlanRunRuntime(t *testing.T) {
 	if resp.Run == nil {
 		t.Fatal("approve did not report the chained run")
 	}
-	if resp.Run.SessionID == "" {
-		t.Error("approve reported no session id, so the dashboard cannot attach to the run it started")
+	if resp.Run.Step != "run" {
+		t.Errorf("reported step = %q, want run", resp.Run.Step)
 	}
-	if resp.Run.SessionID != got.Options.Spec.SessionID {
-		t.Errorf("reported session %q != dispatched session %q", resp.Run.SessionID, got.Options.Spec.SessionID)
+	if resp.Run.SessionID != spec.SessionID {
+		t.Errorf("reported session %q != dispatched session %q", resp.Run.SessionID, spec.SessionID)
 	}
 }

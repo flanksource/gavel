@@ -80,8 +80,8 @@ func (s *Server) handleTodoLabelsList(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleTodoLabelSet(w http.ResponseWriter, r *http.Request) {
 	var payload todoLabelPayload
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("invalid label payload: %w", err))
+	if err := decodeTodoRequest(r, &payload); err != nil {
+		writeTodoError(w, http.StatusBadRequest, err)
 		return
 	}
 

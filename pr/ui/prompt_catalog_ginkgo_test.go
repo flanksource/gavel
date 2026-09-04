@@ -23,12 +23,11 @@ const (
 	catalogCommitModel   = "claude-sonnet-4-6"
 	catalogRunPromptFile = ".gavel/prompts/todos-run.prompt"
 	catalogRunPrompt     = "---\nmodel: claude-opus-4-6\n---\nRun {{{body}}} now, then {{#if existingPlan}}{{existingPlan}}{{/if}}.\n"
-	catalogNamedPrompt   = "security"
 )
 
 // seedCatalogLayers builds a two-layer chain: ~/.gavel.yaml sets the base ai
 // model and an inline commit.message model, the project sets a file override
-// for todos.run and declares one named todos prompt.
+// for todos.run.
 func seedCatalogLayers(home, dir string) {
 	global := verify.GavelConfig{}
 	global.AI = api.Spec{Model: api.Model{Name: catalogHomeModel}}
@@ -39,13 +38,6 @@ func seedCatalogLayers(home, dir string) {
 	Expect(os.WriteFile(filepath.Join(dir, catalogRunPromptFile), []byte(catalogRunPrompt), 0o644)).To(Succeed())
 	project := verify.GavelConfig{}
 	project.Todos.Run = verify.PromptSpec{File: catalogRunPromptFile}
-	project.Todos.Prompts = map[string]verify.NamedPromptSpec{
-		catalogNamedPrompt: {
-			PromptSpec: verify.PromptSpec{Spec: api.Spec{Prompt: api.Prompt{User: "Audit {{{body}}} for secrets."}}},
-			Class:      "plan",
-			Title:      "Security audit",
-		},
-	}
 	Expect(verify.SaveGavelConfig(dir, project)).To(Succeed())
 }
 
@@ -96,7 +88,7 @@ var _ = Describe("settings prompt catalog", func() {
 		seedCatalogLayers(home, dir)
 	})
 
-	It("resolves every registered prompt plus named todos prompts through the layer chain", func() {
+	It("resolves every registered prompt through the layer chain", func() {
 		entries := catalogCall(scope)
 		ids := make([]string, 0, len(entries))
 		for _, entry := range entries {
@@ -105,7 +97,6 @@ var _ = Describe("settings prompt catalog", func() {
 		for _, desc := range registeredPrompts() {
 			Expect(ids).To(ContainElement(desc.ID))
 		}
-		Expect(ids).To(ContainElement("todos.prompts." + catalogNamedPrompt))
 
 		commit := catalogEntry(entries, prompts.CommitMessage)
 		Expect(commit.Source).To(Equal("inline"))
@@ -137,18 +128,6 @@ var _ = Describe("settings prompt catalog", func() {
 		Expect(lint.UsedBy).To(ContainElement("gavel lint --ai-fix"))
 		Expect(lint.Effective.ModelSource).NotTo(BeEmpty())
 		Expect(lint.Body).NotTo(BeEmpty())
-
-		named := catalogEntry(entries, "todos.prompts."+catalogNamedPrompt)
-		Expect(named).To(MatchFields(IgnoreExtras, Fields{
-			"Title":      Equal("Security audit"),
-			"Source":     Equal("inline"),
-			"UsedBy":     ConsistOf("gavel todos run --prompt " + catalogNamedPrompt),
-			"Variables":  Equal([]string{"body"}),
-			"ConfigPath": Equal("todos.prompts." + catalogNamedPrompt),
-		}))
-		Expect(named.Effective.Model).To(Equal(catalogHomeModel))
-		Expect(named.Effective.ModelSource).To(Equal("ai base"))
-		Expect(catalogLayer(named, "target-directory").Fields).To(ConsistOf("prompt.user"))
 	})
 
 	It("marks a layer read-only when the scope cannot write it", func() {
@@ -207,11 +186,6 @@ var _ = Describe("settings prompt catalog", func() {
 		Expect(json.Unmarshal(rec.Body.Bytes(), &got)).To(Succeed())
 		Expect(got.User).To(Equal("Draft x"))
 		Expect(got.Model).To(Equal("gpt-5"))
-
-		rec = renderCall("todos.prompts."+catalogNamedPrompt, scope, `{"variables":{"body":"the diff"}}`)
-		Expect(rec.Code).To(Equal(http.StatusOK), rec.Body.String())
-		Expect(json.Unmarshal(rec.Body.Bytes(), &got)).To(Succeed())
-		Expect(got.User).To(Equal("Audit the diff for secrets."))
 
 		Expect(renderCall("nope", scope, `{}`).Code).To(Equal(http.StatusNotFound))
 	})

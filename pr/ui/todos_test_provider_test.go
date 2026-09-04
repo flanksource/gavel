@@ -84,6 +84,10 @@ type uiTestTODOProvider struct {
 	activeRun *captaindb.PromptRun
 	comments  []string
 	links     []uiTestLink
+	// rereadErr fails every Get that follows an Edit, standing in for a store
+	// that committed the edit and then could not be read back.
+	rereadErr error
+	edited    bool
 }
 
 type uiTestLink struct {
@@ -116,6 +120,9 @@ func (p *uiTestTODOProvider) CountByStatus(_ context.Context) (map[types.Status]
 }
 
 func (p *uiTestTODOProvider) Get(_ context.Context, ref string) (*types.TODO, error) {
+	if p.edited && p.rereadErr != nil {
+		return nil, p.rereadErr
+	}
 	for _, todo := range p.items {
 		if todo.ID == ref || todo.FilePath == ref || strings.EqualFold(todo.Title, ref) {
 			return todo, nil
@@ -203,6 +210,7 @@ func (p *uiTestTODOProvider) Edit(_ context.Context, todo *types.TODO, edit todo
 		*todo = *parsed
 		todo.ID, todo.FilePath, todo.Provider = id, path, provider
 	}
+	p.edited = true
 	return nil
 }
 
@@ -361,4 +369,30 @@ func (p *uiTestTODOProvider) PlanMarkdown(_ context.Context, todo *types.TODO, _
 		return "", nil
 	}
 	return string(data), err
+}
+
+// PlanState projects the todo's recorded plan pointer the way the native
+// runtime projects its selected plan: a recorded path is a plan that exists,
+// and one whose file cannot be read is an error the lifecycle must surface.
+func (p *uiTestTODOProvider) PlanState(ctx context.Context, todo *types.TODO) (todos.PlanState, error) {
+	if strings.TrimSpace(todo.PlanPath) == "" && todo.PlanStatus == "" {
+		return todos.PlanState{}, nil
+	}
+	content, err := p.PlanMarkdown(ctx, todo, types.ModePlan)
+	if err != nil {
+		return todos.PlanState{}, err
+	}
+	return todos.PlanState{
+		Exists:   true,
+		Approved: todo.Status == types.StatusPending && todo.PlanStatus != "",
+		Path:     todo.PlanPath,
+		Content:  content,
+		Revision: 1,
+	}, nil
+}
+
+// RunHistory is empty: a UI test's todo has never been dispatched, so the
+// lifecycle sees no runs and suggests the first step that applies.
+func (p *uiTestTODOProvider) RunHistory(context.Context, *types.TODO) ([]todos.StepRunRecord, error) {
+	return nil, nil
 }

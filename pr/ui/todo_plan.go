@@ -66,8 +66,8 @@ func (s *Server) handleTodoSessionPlanSave(w http.ResponseWriter, r *http.Reques
 		Content string `json:"content"`
 		Actor   string `json:"actor,omitempty"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("invalid request body: %w", err))
+	if err := decodeTodoRequest(r, &payload); err != nil {
+		writeTodoError(w, http.StatusBadRequest, err)
 		return
 	}
 	if strings.TrimSpace(payload.Ref) == "" {
@@ -82,7 +82,7 @@ func (s *Server) handleTodoSessionPlanSave(w http.ResponseWriter, r *http.Reques
 	if payload.Dir != "" {
 		source.Dir = payload.Dir
 	}
-	provider, _, todo, err := s.resolveTodoReference(r.Context(), source, payload.Ref)
+	provider, source, todo, err := s.resolveTodoReference(r.Context(), source, payload.Ref)
 	if err != nil {
 		writeTodoError(w, http.StatusNotFound, err)
 		return
@@ -101,10 +101,15 @@ func (s *Server) handleTodoSessionPlanSave(w http.ResponseWriter, r *http.Reques
 		writeTodoError(w, http.StatusInternalServerError, err)
 		return
 	}
+	sum, err := todoDetail(r.Context(), provider, source.Dir, updated)
+	if err != nil {
+		writeTodoError(w, http.StatusInternalServerError, err)
+		return
+	}
 	json.NewEncoder(w).Encode(todoPlanResponse{ //nolint:errcheck
 		Found: true, Content: payload.Content,
 		Ref: updated.ID, Version: updated.Version,
-		Todo: todoSummaryPointer(summarizeTodo(updated, true)),
+		Todo: todoSummaryPointer(sum),
 	})
 }
 

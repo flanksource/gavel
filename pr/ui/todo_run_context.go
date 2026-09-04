@@ -10,10 +10,8 @@ import (
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/captain/pkg/api/registry"
 	captaincli "github.com/flanksource/captain/pkg/cli"
-	"github.com/flanksource/gavel/todos/drivers"
-	todoprompt "github.com/flanksource/gavel/todos/prompt"
-	todospec "github.com/flanksource/gavel/todos/spec"
-	"github.com/flanksource/gavel/verify"
+	"github.com/flanksource/gavel/todos/lifecycle"
+	"github.com/flanksource/gavel/todos/types"
 )
 
 type todoRunContextResponse struct {
@@ -29,25 +27,49 @@ type todoRunContextResponse struct {
 	// Tools is the catalog the run dialog's tool-permissions control renders, so
 	// the per-tool Auto/Ask/Off choices map to real agent tools.
 	Tools []todoRunToolOption `json:"tools"`
-	// InputSchemas maps a run mode to the JSON Schema of its prompt inputs (the
-	// test/lint options reflected from the engine structs, yaml-keyed like
+	// Lifecycle is the project's step vocabulary: what the dialog's step picker
+	// offers. The definition is data the browser has no copy of, so it is
+	// served rather than hardcoded on the client.
+	Lifecycle todoRunLifecycle `json:"lifecycle"`
+	// InputSchemas maps a lifecycle step to the JSON Schema of its prompt inputs
+	// (the test/lint options reflected from the engine structs, yaml-keyed like
 	// fixture fences) so the dashboard can render the schema-driven run form
-	// (clicky PromptDialog/JsonSchemaForm). Modes with no inputs are omitted.
+	// (clicky PromptDialog/JsonSchemaForm). Steps with no inputs are omitted.
 	InputSchemas map[string]json.RawMessage `json:"inputSchemas,omitempty"`
-	// PromptDefaults is the (mode, model) each named prompt actually resolves to,
-	// keyed by prompt name.
+	// PromptDefaults is the (mode, model) each lifecycle step actually resolves
+	// to, keyed by step name.
 	//
 	// DefaultMode is Captain's account-wide default and knows nothing about a
 	// prompt's frontmatter, so a dialog seeded from it sends that mode as if the
 	// operator had chosen it — which outranks the frontmatter it was supposed to
 	// defer to. `todos-triage.prompt` pins `model: claude` and declares a per-tool
 	// policy only the Claude transports carry, so under a codex `ai.mode` the run
-	// was rejected for a pairing nobody configured. These come from
-	// todos/spec.Resolve, the same resolution the run itself performs.
+	// was rejected for a pairing nobody configured. These come from the lifecycle
+	// host's own fold of the step's layers.
 	PromptDefaults map[string]todoRunPromptDefault `json:"promptDefaults,omitempty"`
 }
 
-// todoRunPromptDefault is one prompt's resolved runtime.
+// todoRunLifecycle is the lifecycle as the run dialog sees it.
+type todoRunLifecycle struct {
+	Name  string              `json:"name"`
+	Steps []todoRunStepOption `json:"steps"`
+}
+
+// todoRunStepOption is one step the dialog can name.
+type todoRunStepOption struct {
+	Name  string `json:"name"`
+	Label string `json:"label"`
+	// Prompt is the step's prompt reference (`todos.run`, `file:...`).
+	Prompt string `json:"prompt"`
+	// ReadOnly marks a step whose class never edits or commits: a plan or triage
+	// pass, or the verify step, which runs the definition of done rather than an
+	// agent turn.
+	ReadOnly bool `json:"readOnly,omitempty"`
+	// Auxiliary marks a step the lifecycle never picks on its own.
+	Auxiliary bool `json:"auxiliary,omitempty"`
+}
+
+// todoRunPromptDefault is one step's resolved runtime.
 type todoRunPromptDefault struct {
 	Mode  string `json:"mode,omitempty"`
 	Model string `json:"model,omitempty"`
@@ -87,10 +109,10 @@ func (s *Server) handleTodoRunContext(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	// The prompt defaults are read from the workspace's .gavel.yaml layers, so the
-	// dialog reflects the project the operator is looking at rather than the
-	// process's own directory. An unknown dir resolves against the cwd, matching
-	// how the CLI reads configuration.
+	// The lifecycle and the step defaults are read from the workspace's
+	// .gavel.yaml layers, so the dialog reflects the project the operator is
+	// looking at rather than the process's own directory. An unknown dir resolves
+	// against the cwd, matching how the CLI reads configuration.
 	context, err := todoRunContext(strings.TrimSpace(r.URL.Query().Get("dir")))
 	if err != nil {
 		writeTodoError(w, http.StatusServiceUnavailable, fmt.Errorf("load run providers from Captain: %w", err))
@@ -112,7 +134,7 @@ func todoRunContext(workDir string) (todoRunContextResponse, error) {
 		if !ok || !supportedTodoRunFamily(provider.AgentName) {
 			continue
 		}
-		if _, err := drivers.Parse(string(mode)); err != nil {
+		if _, ok := registry.ParseRuntimeMode(string(mode)); !ok {
 			continue
 		}
 		modes = append(modes, todoRunModeOptionFor(provider, mode, status, who.ProviderDefaults[provider.Name].Model, models))
@@ -120,8 +142,16 @@ func todoRunContext(workDir string) (todoRunContextResponse, error) {
 	if len(modes) == 0 {
 		return todoRunContextResponse{}, fmt.Errorf("captain returned no supported TODO run providers")
 	}
-	defaultMode := defaultTodoRunMode(who, modes)
-	promptDefaults, err := todoRunPromptDefaults(workDir)
+	host, err := lifecycle.NewHost(nil, workDir, lifecycle.HostDashboard)
+	if err != nil {
+		return todoRunContextResponse{}, err
+	}
+	definition := host.Def.Definition()
+	promptDefaults, err := todoRunPromptDefaults(host, definition.Steps)
+	if err != nil {
+		return todoRunContextResponse{}, err
+	}
+	inputSchemas, err := todoRunInputSchemas(definition.Steps)
 	if err != nil {
 		return todoRunContextResponse{}, err
 	}
@@ -130,42 +160,59 @@ func todoRunContext(workDir string) (todoRunContextResponse, error) {
 		Runtimes:        who.Runtimes,
 		Models:          models,
 		Efforts:         todoRunEfforts(),
-		DefaultMode:     defaultMode,
+		DefaultMode:     defaultTodoRunMode(who, modes),
 		DefaultProvider: who.DefaultProvider,
 		Tools:           todoRunToolCatalog(),
-		InputSchemas:    todoRunInputSchemas(),
+		Lifecycle:       todoRunLifecycleFor(definition),
+		InputSchemas:    inputSchemas,
 		PromptDefaults:  promptDefaults,
 	}, nil
 }
 
-// todoRunPromptDefaults resolves every catalogued prompt to the (mode, model)
-// its run would use, so the dialog can seed itself from the prompt rather than
-// from an account-wide default that overrides the prompt's own frontmatter.
+// todoRunLifecycleFor projects the definition onto the dialog's step picker.
+func todoRunLifecycleFor(definition lifecycle.Lifecycle) todoRunLifecycle {
+	steps := make([]todoRunStepOption, 0, len(definition.Steps))
+	for _, step := range definition.Steps {
+		steps = append(steps, todoRunStepOption{
+			Name:      step.Name,
+			Label:     stepLabel(step.Name),
+			Prompt:    step.Prompt,
+			ReadOnly:  lifecycle.Class(step) != types.ModeRun,
+			Auxiliary: step.Auxiliary,
+		})
+	}
+	return todoRunLifecycle{Name: definition.Name, Steps: steps}
+}
+
+// stepLabel is a step name as a picker shows it: `shape-it` → `Shape it`.
+func stepLabel(name string) string {
+	words := strings.Fields(strings.NewReplacer("-", " ", "_", " ").Replace(name))
+	if len(words) == 0 {
+		return name
+	}
+	words[0] = strings.ToUpper(words[0][:1]) + words[0][1:]
+	return strings.Join(words, " ")
+}
+
+// todoRunPromptDefaults resolves every lifecycle step to the (mode, model) its
+// run would use, so the dialog can seed itself from the step rather than from
+// an account-wide default that overrides the prompt's own frontmatter.
 //
-// A prompt that fails to resolve is reported rather than skipped: it would fail
+// A step that fails to resolve is reported rather than skipped: it would fail
 // the same way when run, and a silently absent default sends the operator back
 // to the account default — the exact substitution this exists to prevent.
-func todoRunPromptDefaults(workDir string) (map[string]todoRunPromptDefault, error) {
-	cfg, err := verify.LoadGavelConfig(workDir)
-	if err != nil {
-		return nil, fmt.Errorf("load .gavel.yaml: %w", err)
-	}
-	catalog, err := todoprompt.NewCatalog(cfg.Todos)
-	if err != nil {
-		return nil, err
-	}
-	defaults := make(map[string]todoRunPromptDefault)
-	for _, name := range catalog.Names() {
-		resolved, err := todospec.Resolve(todospec.Input{WorkDir: workDir, Prompt: name})
+func todoRunPromptDefaults(host *lifecycle.Host, steps []lifecycle.Step) (map[string]todoRunPromptDefault, error) {
+	defaults := make(map[string]todoRunPromptDefault, len(steps))
+	for _, step := range steps {
+		spec, err := host.StepDefaults(step)
 		if err != nil {
-			return nil, fmt.Errorf("resolve the %s prompt's runtime: %w", name, err)
+			return nil, fmt.Errorf("resolve the %s step's runtime: %w", step.Name, err)
 		}
-		mode, model, err := resolveTodoRunRuntime(
-			resolved.Driver, string(resolved.Spec.Mode), resolved.Spec.Name)
+		mode, model, err := resolveTodoRunRuntime(string(spec.Mode), spec.Name)
 		if err != nil {
-			return nil, fmt.Errorf("resolve the %s prompt's runtime mode: %w", name, err)
+			return nil, fmt.Errorf("resolve the %s step's runtime mode: %w", step.Name, err)
 		}
-		defaults[name] = todoRunPromptDefault{Mode: mode, Model: model}
+		defaults[step.Name] = todoRunPromptDefault{Mode: mode, Model: model}
 	}
 	return defaults, nil
 }
@@ -233,15 +280,6 @@ func todoRunModelsForMode(
 		out = append(out, model)
 	}
 	return out
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return value
-		}
-	}
-	return ""
 }
 
 func defaultModelFromCatalog(models []todoRunModelOption, fallback string) string {
@@ -349,16 +387,19 @@ func validTodoRunEffort(effort string) bool {
 	return api.Effort(effort).Valid() && effort != ""
 }
 
-// resolveTodoRunRuntime returns the (mode, model) pair a run would execute on,
-// falling back to the driver's own mechanism when the spec names none.
-func resolveTodoRunRuntime(kind drivers.Kind, mode, model string) (string, string, error) {
+// resolveTodoRunRuntime returns the (mode, model) pair a step's fold resolves
+// to, with a family alias expanded to the concrete model captain would run.
+//
+// A fold that names no model has no runtime to offer, and none is invented
+// here: a dashboard default seeded into the dialog comes back as the request
+// layer, outranking the `.gavel.yaml` and prompt frontmatter it was meant to
+// defer to — the substitution PromptDefaults exists to prevent. What the dialog
+// sends for an empty default is the operator's own choice.
+func resolveTodoRunRuntime(mode, model string) (string, string, error) {
 	mode = strings.TrimSpace(mode)
 	model = strings.TrimSpace(model)
-	if mode == "" {
-		mode = string(kind)
-	}
 	if model == "" {
-		model = "claude"
+		return mode, "", nil
 	}
 	resolved, err := registry.ResolveModel(api.Model{Name: model, Mode: registry.RuntimeMode(mode)})
 	if err != nil {

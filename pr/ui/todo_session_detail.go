@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flanksource/captain/pkg/api"
 	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/captain/pkg/session"
 	"github.com/flanksource/gavel/todos/native"
@@ -43,8 +44,13 @@ type todoAttemptDetail struct {
 	AdmissionSession uuid.UUID `json:"admissionSessionId"`
 	Ordinal          int       `json:"ordinal"`
 	Step             string    `json:"step"`
-	CanStop          bool      `json:"canStop,omitempty"`
-	Stopping         bool      `json:"stopping,omitempty"`
+	// Verification is the newest definition-of-done report the attempt's
+	// verifiers produced, read from captain's per-iteration record. It is
+	// always present — null for an attempt that was never verified — so a
+	// reader can tell "the server knows there is none" from "not sent".
+	Verification *api.VerifyReport `json:"verification"`
+	CanStop      bool              `json:"canStop,omitempty"`
+	Stopping     bool              `json:"stopping,omitempty"`
 }
 
 type todoProviderThread struct {
@@ -79,10 +85,11 @@ type todoSessionDetailResponse struct {
 }
 
 // todoSessionDetailQuery is the parsed request. AttemptsOnly serves the
-// Verification tab and its badge, which need the attempt list (and the DoD
-// carried in each attempt's result_json) but never the transcript — resolving
-// the full thread means every session, turn, agent, cost and message on a poll
-// that runs while the tab is closed.
+// Verification tab and its badge, which need the attempt list (and the
+// verification report captain stores on each attempt's latest iteration,
+// read from captain_prompt_run_iterations.verification_result) but never the
+// transcript — resolving the full thread means every session, turn, agent,
+// cost and message on a poll that runs while the tab is closed.
 type todoSessionDetailQuery struct {
 	SessionID    string
 	AttemptsOnly bool
@@ -180,12 +187,20 @@ func buildTodoSessionDetail(ctx context.Context, provider sessionDetailProvider,
 	for index := range overviews {
 		byID[overviews[index].ID] = overviews[index]
 	}
+	verifications, err := provider.Captain().LatestPromptRunVerifications(ctx, ids)
+	if err != nil {
+		return response, false, err
+	}
 	for index, link := range links {
 		overview, ok := byID[link.PromptRunID]
 		if !ok {
 			return response, false, fmt.Errorf("%w: linked prompt run %s", captaindb.ErrPromptRunNotFound, link.PromptRunID)
 		}
-		response.Attempts = append(response.Attempts, attemptDetail(index+1, link, overview))
+		attempt := attemptDetail(index+1, link, overview)
+		if verification, ok := verifications[link.PromptRunID]; ok {
+			attempt.Verification = verification.Report
+		}
+		response.Attempts = append(response.Attempts, attempt)
 	}
 	for left, right := 0, len(response.Attempts)-1; left < right; left, right = left+1, right-1 {
 		response.Attempts[left], response.Attempts[right] = response.Attempts[right], response.Attempts[left]

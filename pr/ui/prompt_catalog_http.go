@@ -9,14 +9,12 @@ import (
 
 	dotprompt "github.com/flanksource/captain/pkg/ai/prompt"
 	"github.com/flanksource/captain/pkg/api"
-	todoprompt "github.com/flanksource/gavel/todos/prompt"
 	"github.com/flanksource/gavel/verify"
 )
 
 // handleSettingsPromptCatalog serves every prompt gavel would run for the
 // requested scope (scope=global | project=<name>), resolved through the layered
-// .gavel.yaml chain: effective source and runtime, per-layer provenance, and the
-// named todos prompts the static registry does not know about.
+// .gavel.yaml chain: effective source and runtime, plus per-layer provenance.
 func (s *Server) handleSettingsPromptCatalog(w http.ResponseWriter, r *http.Request) {
 	scope, dir, err := resolveSettingsDir(r)
 	if err != nil {
@@ -102,23 +100,13 @@ func (s *Server) handleSettingsPromptRender(w http.ResponseWriter, r *http.Reque
 }
 
 // effectivePromptSource returns the .prompt text gavel would run for a prompt
-// id in dir's config chain: a registered prompt resolved through the merged
-// config, or a named todos prompt from the todos catalog.
+// id in dir's config chain. Every prompt is a registered one: `todos.prompts`
+// declared a second, unregistered source, and a project prompt is a lifecycle
+// step now.
 func effectivePromptSource(id, dir string) (string, error) {
 	trace, err := verify.LoadGavelConfigTrace(dir)
 	if err != nil {
 		return "", err
-	}
-	if name, ok := strings.CutPrefix(id, "todos.prompts."); ok {
-		catalog, err := todoprompt.NewCatalog(trace.Merged.Todos)
-		if err != nil {
-			return "", err
-		}
-		def, err := catalog.Lookup(name)
-		if err != nil {
-			return "", err
-		}
-		return def.Template(trace.TargetDir)
 	}
 	desc, ok := findRegisteredPrompt(id)
 	if !ok {

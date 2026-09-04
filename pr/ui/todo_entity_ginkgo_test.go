@@ -12,6 +12,7 @@ import (
 
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/bulk"
+	"github.com/flanksource/gavel/todos/lifecycle"
 	"github.com/flanksource/gavel/todos/run"
 	"github.com/flanksource/gavel/todos/types"
 	. "github.com/onsi/ginkgo/v2"
@@ -276,10 +277,10 @@ var _ = Describe("todo entity run actions", func() {
 		original := run.Start
 		run.Start = func(req todoRunRequest) (todoRunStartResult, error) {
 			dispatched = append(dispatched, req)
-			if len(req.Todos) == 1 && req.Todos[0].Title == "Triage explodes" {
+			if req.Todo != nil && req.Todo.Title == "Triage explodes" {
 				return todoRunStartResult{}, errors.New("driver unavailable")
 			}
-			return todoRunStartResult{Status: "started", SessionID: req.Options.Spec.SessionID}, nil
+			return todoRunStartResult{Status: "started", SessionID: "session-" + req.Todo.ID}, nil
 		}
 		DeferCleanup(func() { run.Start = original })
 	})
@@ -296,34 +297,38 @@ var _ = Describe("todo entity run actions", func() {
 		Expect(result.Applied).To(Equal(2))
 		Expect(result.Failed).To(BeZero())
 		Expect(dispatched).To(HaveLen(2))
-		for _, req := range dispatched {
-			Expect(req.Todos).To(HaveLen(1))
-		}
+		Expect(dispatched[0].Todo.ID).To(Equal(first.ID))
+		Expect(dispatched[1].Todo.ID).To(Equal(second.ID))
 	})
 
-	// The prompt name is the whole request: triage declares its own behaviour
-	// class, so the run must resolve to plan — never a committing run.
-	It("dispatches the triage prompt as a plan-class run", func() {
+	// The step name is the whole request: the lifecycle's triage step declares
+	// its own prompt, envelope and read-only posture, so the run resolves to a
+	// plan-class run — never a committing one.
+	It("dispatches the triage step as a plan-class run", func() {
 		todo := newTodo("Triage class")
 
 		_, result := postTodoAction("triage", []string{todo.ID}, nil)
 
 		Expect(result.Applied).To(Equal(1))
 		Expect(dispatched).To(HaveLen(1))
-		Expect(dispatched[0].Options.Prompt).To(Equal("triage"))
-		Expect(dispatched[0].Options.RunMode).To(Equal(types.ModePlan))
+		Expect(dispatched[0].Options.Step).To(Equal("triage"))
+		prepared, err := run.Resolve(GinkgoT().Context(), dispatched[0])
+		Expect(err).NotTo(HaveOccurred())
+		Expect(prepared.Resolution.Class).To(Equal(types.ModePlan))
+		Expect(prepared.Resolution.Spec.Workflow == nil || len(prepared.Resolution.Spec.Workflow.Commits) == 0).To(BeTrue(),
+			"a triage run must not commit")
 	})
 
-	// run, plan and triage are one code path distinguished only by the prompt
-	// name, which is what makes adding a fourth prompt free.
-	It("dispatches each named prompt through the same path", func() {
-		todo := newTodo("Prompt axis")
+	// run, plan and triage are one code path distinguished only by the step
+	// name, which is what makes adding a fourth step free.
+	It("dispatches each named step through the same path", func() {
+		todo := newTodo("Step axis")
 
 		_, result := postTodoAction("plan", []string{todo.ID}, nil)
 
 		Expect(result.Applied).To(Equal(1))
 		Expect(dispatched).To(HaveLen(1))
-		Expect(dispatched[0].Options.Prompt).To(Equal("plan"))
+		Expect(dispatched[0].Options.Step).To(Equal("plan"))
 	})
 
 	// The dashboard serves the approval endpoint, so a run started from it must
@@ -336,8 +341,8 @@ var _ = Describe("todo entity run actions", func() {
 
 		Expect(result.Applied).To(Equal(1))
 		Expect(dispatched).To(HaveLen(1))
-		Expect(dispatched[0].Options.Spec.Mode).NotTo(BeEmpty(),
-			"the dashboard's (driver, mode) catalog must have been applied")
+		Expect(dispatched[0].Options.Host).To(Equal(lifecycle.HostDashboard),
+			"a bulk run must resolve as the approval-serving host")
 	})
 
 	It("reports per-item run failures without abandoning the rest of the batch", func() {

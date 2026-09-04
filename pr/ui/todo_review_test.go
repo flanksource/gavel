@@ -14,7 +14,6 @@ import (
 	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/todos"
-	"github.com/flanksource/gavel/todos/drivers"
 	"github.com/flanksource/gavel/todos/run"
 	"github.com/flanksource/gavel/todos/types"
 )
@@ -32,6 +31,30 @@ func seedReviewTodo(t *testing.T, workDir string, status types.Status) *types.TO
 		t.Fatalf("seed status: %v", err)
 	}
 	return created
+}
+
+// stubbedRunSession is the session the run stub admits a todo with no recorded
+// session under, as the real dispatcher mints one.
+const stubbedRunSession = "11111111-1111-4111-8111-111111111111"
+
+// stubRunStart records the request the handler under test dispatches, without
+// standing up an agent. The stub answers with the todo's recorded session — a
+// resume continues it — or a minted one, as the real dispatcher does.
+func stubRunStart(t *testing.T) (*todoRunRequest, *bool) {
+	t.Helper()
+	var got todoRunRequest
+	called := false
+	old := run.Start
+	run.Start = func(req todoRunRequest) (todoRunStartResult, error) {
+		got, called = req, true
+		session := run.PriorSessionID(req.Todo)
+		if session == "" {
+			session = stubbedRunSession
+		}
+		return todoRunStartResult{Status: "started", SessionID: session}, nil
+	}
+	t.Cleanup(func() { run.Start = old })
+	return &got, &called
 }
 
 func TestTodoAPIPlanApprove(t *testing.T) {
@@ -61,27 +84,19 @@ func TestTodoAPIPlanApprove(t *testing.T) {
 	}
 }
 
+// Approving with --run chains the implement step: the dialog's options are the
+// request layer, but the step is the action's own.
 func TestTodoAPIPlanApproveAndRun(t *testing.T) {
 	workDir := t.TempDir()
 	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
 	created := seedReviewTodo(t, workDir, types.StatusReview)
-
-	oldStart := run.Start
-	var got todoRunRequest
-	run.Start = func(req todoRunRequest) (todoRunStartResult, error) {
-		got = req
-		return todoRunStartResult{Status: "started", SessionID: "11111111-1111-4111-8111-111111111111"}, nil
-	}
-	t.Cleanup(func() { run.Start = oldStart })
+	got, _ := stubRunStart(t)
 
 	body, _ := json.Marshal(todoApprovePayload{
 		Ref: todos.TODOReference(created),
 		Run: true,
 		Options: &todoRunPayload{
-			Driver: "agent",
-			Spec:   api.Spec{Model: api.Model{Name: "claude", Mode: api.ModeAgent, Effort: "medium"}},
-			// Even a stale plan runMode is forced back to run for the chained run.
-			RunMode: "plan",
+			Spec: api.Spec{Model: api.Model{Name: "claude", Mode: api.ModeAgent, Effort: "medium"}},
 		},
 	})
 	rec := httptest.NewRecorder()
@@ -89,18 +104,32 @@ func TestTodoAPIPlanApproveAndRun(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("approve status = %d, want 200; body = %q", rec.Code, rec.Body.String())
 	}
-	if got.Options.RunMode != types.ModeRun {
-		t.Errorf("chained run mode = %q, want run", got.Options.RunMode)
+	if got.Options.Step != "run" {
+		t.Errorf("chained step = %q, want run", got.Options.Step)
 	}
-	if len(got.Todos) != 1 {
-		t.Errorf("chained run todos = %d, want 1", len(got.Todos))
+	if got.Todo == nil || got.Todo.ID != created.ID {
+		t.Errorf("chained run todo = %+v, want the approved todo", got.Todo)
+	}
+	if got.Options.Request.Name != "claude" || got.Options.Request.Mode != api.ModeAgent {
+		t.Errorf("request layer = %+v, want the dialog's model", got.Options.Request.Model)
 	}
 	var resp todoApproveResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if resp.Run == nil || resp.Run.Status != "started" {
-		t.Errorf("run response = %+v, want started", resp.Run)
+	if resp.Run == nil || resp.Run.Status != "started" || resp.Run.Step != "run" {
+		t.Errorf("run response = %+v, want a started run step", resp.Run)
+	}
+
+	// Options naming another step contradict the action and are refused.
+	second := seedReviewTodo(t, workDir, types.StatusReview)
+	body, _ = json.Marshal(todoApprovePayload{
+		Ref: todos.TODOReference(second), Run: true, Options: &todoRunPayload{Step: "plan"},
+	})
+	rec = httptest.NewRecorder()
+	s.handleTodoPlanApprove(rec, httptest.NewRequest(http.MethodPost, "/api/todos/plan/approve", strings.NewReader(string(body))))
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "options.step") {
+		t.Fatalf("approve with options.step=plan: status = %d, body = %q, want 400 naming options.step", rec.Code, rec.Body.String())
 	}
 }
 
@@ -140,38 +169,23 @@ func TestTodoAPIPlanReject(t *testing.T) {
 	}
 }
 
+// Revising resumes the plan session with the feedback as its next turn; a
+// persisted plan without an agent session plans afresh with the feedback in the
+// todo's own prompt.
 func TestTodoAPIPlanRevise(t *testing.T) {
 	workDir := t.TempDir()
 	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
 	created := seedReviewTodo(t, workDir, types.StatusReview)
 	sid := "sess-revise-1"
-	mode := types.ModePlan
-	if err := uiTestProviderFor(workDir).UpdateState(t.Context(), created, todos.StateUpdate{SessionID: &sid, RunMode: &mode}); err != nil {
+	if err := uiTestProviderFor(workDir).UpdateState(t.Context(), created, todos.StateUpdate{SessionID: &sid}); err != nil {
 		t.Fatalf("seed session: %v", err)
 	}
+	got, _ := stubRunStart(t)
 
-	oldStart := startTodoAnswer
-	oldStartRun := run.Start
-	var gotReq todoRunRequest
-	var gotFeedback string
-	var gotFreshReq todoRunRequest
-	startTodoAnswer = func(req todoRunRequest, feedback string) error {
-		gotReq = req
-		gotFeedback = feedback
-		return nil
-	}
-	run.Start = func(req todoRunRequest) (todoRunStartResult, error) {
-		gotFreshReq = req
-		return todoRunStartResult{Status: "started", SessionID: "11111111-1111-4111-8111-111111111111"}, nil
-	}
-	t.Cleanup(func() {
-		startTodoAnswer = oldStart
-		run.Start = oldStartRun
-	})
-
+	const feedback = "use a bounded queue, not unbounded"
 	body, _ := json.Marshal(todoRevisePayload{
 		Ref:      todos.TODOReference(created),
-		Feedback: "use a bounded queue, not unbounded",
+		Feedback: feedback,
 		Options:  &todoRunPayload{Spec: api.Spec{Model: api.Model{Name: "claude", Effort: "medium"}}},
 	})
 	rec := httptest.NewRecorder()
@@ -179,14 +193,8 @@ func TestTodoAPIPlanRevise(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("revise status = %d, want 200; body = %q", rec.Code, rec.Body.String())
 	}
-	if gotFeedback != "use a bounded queue, not unbounded" {
-		t.Errorf("feedback = %q", gotFeedback)
-	}
-	if gotReq.Options.RunMode != types.ModePlan {
-		t.Errorf("revise mode = %q, want plan", gotReq.Options.RunMode)
-	}
-	if !gotReq.Options.Resume {
-		t.Error("resume flag not set")
+	if got.Options.Step != "plan" || !got.Options.Resume || got.Options.Message != feedback {
+		t.Errorf("revise dispatched %+v, want the plan step resumed with the feedback", got.Options)
 	}
 	var resp todoAnswerResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
@@ -196,7 +204,6 @@ func TestTodoAPIPlanRevise(t *testing.T) {
 		t.Errorf("response = %+v", resp)
 	}
 
-	// A persisted plan without an agent session starts a fresh plan run.
 	noSession := seedReviewTodo(t, workDir, types.StatusReview)
 	body2, _ := json.Marshal(todoRevisePayload{Ref: todos.TODOReference(noSession), Feedback: "x"})
 	rec = httptest.NewRecorder()
@@ -204,54 +211,55 @@ func TestTodoAPIPlanRevise(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("no-session revise status = %d, want 200; body = %q", rec.Code, rec.Body.String())
 	}
-	if gotFreshReq.Options.Resume {
-		t.Error("fresh plan revision unexpectedly requested resume")
+	if got.Options.Resume || got.Options.Message != "" {
+		t.Errorf("fresh plan revision = %+v, want no resume and no message", got.Options)
 	}
-	if gotFreshReq.Options.RunMode != types.ModePlan {
-		t.Errorf("fresh plan revision mode = %q, want plan", gotFreshReq.Options.RunMode)
+	if got.Options.Step != "plan" {
+		t.Errorf("fresh plan revision step = %q, want plan", got.Options.Step)
 	}
-	if gotFreshReq.Todos[0].Prompt != "Revise the existing plan using this reviewer feedback:\n\nx" {
-		t.Errorf("fresh plan revision prompt = %q", gotFreshReq.Todos[0].Prompt)
+	if got.Todo.Prompt != "Revise the existing plan using this reviewer feedback:\n\nx" {
+		t.Errorf("fresh plan revision prompt = %q", got.Todo.Prompt)
 	}
 }
 
+// seedActivePhase records the phase the todo's current attempt runs, the way the
+// native runtime's phase index marks it: the latest run of that phase is the
+// todo's active pointer, parked at waiting by the ask outcome.
+func seedActivePhase(todo *types.TODO, phase types.Phase) {
+	todo.PhaseRuns = types.PhaseRuns{phase: {
+		Phase: phase, State: string(captaindb.PromptRunStateWaiting), Active: true,
+	}}
+}
+
+// Answering resumes the step that asked, with the answer as the next turn.
 func TestTodoAPIAnswer(t *testing.T) {
 	workDir := t.TempDir()
 	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
 	created := seedReviewTodo(t, workDir, types.StatusAsk)
 	sid := "sess-answer-1"
-	mode := types.ModePlan
-	if err := uiTestProviderFor(workDir).UpdateState(t.Context(), created, todos.StateUpdate{SessionID: &sid, RunMode: &mode}); err != nil {
+	if err := uiTestProviderFor(workDir).UpdateState(t.Context(), created, todos.StateUpdate{SessionID: &sid}); err != nil {
 		t.Fatalf("seed session: %v", err)
 	}
-
-	oldStart := startTodoAnswer
-	var gotReq todoRunRequest
-	var gotAnswer string
-	startTodoAnswer = func(req todoRunRequest, answer string) error {
-		gotReq = req
-		gotAnswer = answer
-		return nil
-	}
-	t.Cleanup(func() { startTodoAnswer = oldStart })
+	seedActivePhase(created, types.PlanPhase)
+	got, _ := stubRunStart(t)
 
 	body, _ := json.Marshal(todoAnswerPayload{
 		Ref:     todos.TODOReference(created),
 		Answer:  "use postgres",
-		Options: &todoRunPayload{Driver: "agent", Spec: api.Spec{Model: api.Model{Name: "claude", Mode: api.ModeAgent, Effort: "medium"}}},
+		Options: &todoRunPayload{Spec: api.Spec{Model: api.Model{Name: "claude", Mode: api.ModeAgent, Effort: "medium"}}},
 	})
 	rec := httptest.NewRecorder()
 	s.handleTodoAnswer(rec, httptest.NewRequest(http.MethodPost, "/api/todos/answer", strings.NewReader(string(body))))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("answer status = %d, want 200; body = %q", rec.Code, rec.Body.String())
 	}
-	if gotAnswer != "use postgres" {
-		t.Errorf("answer = %q", gotAnswer)
+	if got.Options.Message != "use postgres" {
+		t.Errorf("answer = %q", got.Options.Message)
 	}
-	if gotReq.Options.RunMode != types.ModePlan {
-		t.Errorf("resume mode = %q, want the todo's recorded plan mode", gotReq.Options.RunMode)
+	if got.Options.Step != "plan" {
+		t.Errorf("resumed step = %q, want the plan step that asked", got.Options.Step)
 	}
-	if !gotReq.Options.Resume {
+	if !got.Options.Resume {
 		t.Error("resume flag not set")
 	}
 	var resp todoAnswerResponse
@@ -287,31 +295,20 @@ func TestTodoAPIAnswerRejectsWrongState(t *testing.T) {
 	}
 }
 
-// seedAskTodoWithRun seeds an ask todo whose asking turn left the given prompt
-// run behind — the shape every dashboard answer starts from.
-func seedAskTodoWithRun(t *testing.T, workDir, sessionID string, mode types.RunMode, run *captaindb.PromptRun) *types.TODO {
+// seedAskTodoWithRun seeds an ask todo whose asking turn — a run of the given
+// phase — left the given prompt run behind: the shape every dashboard answer
+// starts from.
+func seedAskTodoWithRun(t *testing.T, workDir, sessionID string, phase types.Phase, run *captaindb.PromptRun) *types.TODO {
 	t.Helper()
 	created := seedReviewTodo(t, workDir, types.StatusAsk)
 	provider := uiTestProviderFor(workDir)
-	if err := provider.UpdateState(t.Context(), created, todos.StateUpdate{SessionID: &sessionID, RunMode: &mode}); err != nil {
+	if err := provider.UpdateState(t.Context(), created, todos.StateUpdate{SessionID: &sessionID}); err != nil {
 		t.Fatalf("seed session: %v", err)
 	}
+	seedActivePhase(created, phase)
 	provider.activeRun = run
 	provider.comments = nil
 	return created
-}
-
-func stubTodoAnswer(t *testing.T) (*todoRunRequest, *bool) {
-	t.Helper()
-	var got todoRunRequest
-	called := false
-	old := startTodoAnswer
-	startTodoAnswer = func(req todoRunRequest, _ string) error {
-		got, called = req, true
-		return nil
-	}
-	t.Cleanup(func() { startTodoAnswer = old })
-	return &got, &called
 }
 
 // A codex rollout answered by the dashboard must resume on codex. The answer box
@@ -322,17 +319,16 @@ func TestTodoAPIAnswerInheritsAskingRunRuntime(t *testing.T) {
 	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
 	const sid = "019fa17d-622a-7ef3-b8ad-d8b1d7cd3836"
 	const codexModel = "gpt-5.6-sol"
-	created := seedAskTodoWithRun(t, workDir, sid, types.ModeRun, &captaindb.PromptRun{
+	created := seedAskTodoWithRun(t, workDir, sid, types.RunPhase, &captaindb.PromptRun{
 		State: captaindb.PromptRunStateWaiting,
 		Runtime: captaindb.PromptRunRuntime{
-			Mode:   "run",
-			Driver: "agent",
+			Mode: "run",
 			Resolved: captaindb.PromptRunRuntimeSelection{
 				Provider: "openai", Mode: "agent", Model: codexModel, Effort: "high",
 			},
 		},
 	})
-	gotReq, called := stubTodoAnswer(t)
+	gotReq, called := stubRunStart(t)
 
 	body, _ := json.Marshal(todoAnswerPayload{Ref: todos.TODOReference(created), Answer: "use postgres"})
 	rec := httptest.NewRecorder()
@@ -343,26 +339,16 @@ func TestTodoAPIAnswerInheritsAskingRunRuntime(t *testing.T) {
 	if !*called {
 		t.Fatal("resume was never dispatched")
 	}
-	if gotReq.Options.Driver != string(drivers.Agent) {
-		t.Errorf("driver = %q, want %q (the asking run's mode)", gotReq.Options.Driver, drivers.Agent)
+	if gotReq.Options.Step != "run" {
+		t.Errorf("resumed step = %q, want the run step that asked", gotReq.Options.Step)
 	}
-	if providerKey(gotReq.Options.Spec.Model) != "openai" {
-		t.Errorf("provider = %q, want openai — a codex session must not resume under claude", providerKey(gotReq.Options.Spec.Model))
+	spec := resolvedRun(t, *gotReq).Spec
+	if providerKey(spec.Model) != "openai" || spec.Name != codexModel || spec.Mode != api.ModeAgent || string(spec.Effort) != "high" {
+		t.Errorf("runtime = %s/%s/%s/%s, want openai/%s/agent/high — a codex session must not resume under claude",
+			providerKey(spec.Model), spec.Name, spec.Mode, spec.Effort, codexModel)
 	}
-	if string(gotReq.Options.Spec.Mode) != "agent" {
-		t.Errorf("mode = %q, want agent", gotReq.Options.Spec.Mode)
-	}
-	if gotReq.Options.Spec.Mode != api.ModeAgent {
-		t.Errorf("authored mode = %q, want agent", gotReq.Options.Spec.Mode)
-	}
-	if gotReq.Options.Spec.Name != codexModel {
-		t.Errorf("model = %q, want %q", gotReq.Options.Spec.Name, codexModel)
-	}
-	if string(gotReq.Options.Spec.Effort) != "high" {
-		t.Errorf("effort = %q, want high", gotReq.Options.Spec.Effort)
-	}
-	if gotReq.Options.Spec.SessionID != sid {
-		t.Errorf("session id = %q, want the todo's recorded session %q", gotReq.Options.Spec.SessionID, sid)
+	if spec.SessionID != sid {
+		t.Errorf("session id = %q, want the todo's recorded session %q", spec.SessionID, sid)
 	}
 }
 
@@ -370,21 +356,19 @@ func TestTodoAPIAnswerInheritsAskingRunRuntime(t *testing.T) {
 func TestTodoAPIAnswerOptionsOverrideInheritedRuntime(t *testing.T) {
 	workDir := t.TempDir()
 	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
-	created := seedAskTodoWithRun(t, workDir, "sess-answer-override", types.ModeRun, &captaindb.PromptRun{
+	created := seedAskTodoWithRun(t, workDir, "sess-answer-override", types.RunPhase, &captaindb.PromptRun{
 		State: captaindb.PromptRunStateWaiting,
 		Runtime: captaindb.PromptRunRuntime{
-			Driver:   "agent",
 			Resolved: captaindb.PromptRunRuntimeSelection{Provider: "openai", Mode: "agent", Model: "gpt-5.6-sol", Effort: "high"},
 		},
 	})
-	gotReq, _ := stubTodoAnswer(t)
+	gotReq, _ := stubRunStart(t)
 
 	raw, err := json.Marshal(todoAnswerPayload{
 		Ref:    todos.TODOReference(created),
 		Answer: "use postgres",
 		Options: &todoRunPayload{
-			Driver: "cmux",
-			Spec:   api.Spec{Model: api.Model{Name: "claude-sonnet-5", Mode: api.ModeCmux, Effort: "medium"}},
+			Spec: api.Spec{Model: api.Model{Name: "claude-sonnet-5", Mode: api.ModeCmux, Effort: "medium"}},
 		},
 	})
 	if err != nil {
@@ -395,11 +379,9 @@ func TestTodoAPIAnswerOptionsOverrideInheritedRuntime(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("answer status = %d, want 200; body = %q", rec.Code, rec.Body.String())
 	}
-	if gotReq.Options.Driver != string(drivers.Cmux) {
-		t.Errorf("driver = %q, want the explicitly requested cmux", gotReq.Options.Driver)
-	}
-	if gotReq.Options.Spec.Name != "claude-sonnet-5" || string(gotReq.Options.Spec.Effort) != "medium" {
-		t.Errorf("model/effort = %q/%q, want the explicitly requested claude-sonnet-5/medium", gotReq.Options.Spec.Name, gotReq.Options.Spec.Effort)
+	spec := resolvedRun(t, *gotReq).Spec
+	if spec.Mode != api.ModeCmux || spec.Name != "claude-sonnet-5" || string(spec.Effort) != "medium" {
+		t.Errorf("runtime = %s/%s/%s, want the explicitly requested cmux/claude-sonnet-5/medium", spec.Mode, spec.Name, spec.Effort)
 	}
 }
 
@@ -408,11 +390,11 @@ func TestTodoAPIAnswerOptionsOverrideInheritedRuntime(t *testing.T) {
 func TestTodoAPIAnswerRejectsLiveRun(t *testing.T) {
 	workDir := t.TempDir()
 	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
-	created := seedAskTodoWithRun(t, workDir, "sess-answer-live", types.ModeRun, &captaindb.PromptRun{
+	created := seedAskTodoWithRun(t, workDir, "sess-answer-live", types.RunPhase, &captaindb.PromptRun{
 		State:   captaindb.PromptRunStateRunning,
 		Runtime: captaindb.PromptRunRuntime{Driver: "agent"},
 	})
-	_, called := stubTodoAnswer(t)
+	_, called := stubRunStart(t)
 
 	body, _ := json.Marshal(todoAnswerPayload{Ref: todos.TODOReference(created), Answer: "use postgres"})
 	rec := httptest.NewRecorder()
@@ -433,20 +415,19 @@ func TestTodoAPIAnswerRejectsLiveRun(t *testing.T) {
 func TestTodoAPIAnswerPreflightFailureLeavesNoComment(t *testing.T) {
 	workDir := t.TempDir()
 	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
-	created := seedAskTodoWithRun(t, workDir, "sess-answer-preflight", types.ModeRun, &captaindb.PromptRun{
+	created := seedAskTodoWithRun(t, workDir, "sess-answer-preflight", types.RunPhase, &captaindb.PromptRun{
 		State: captaindb.PromptRunStateWaiting,
 		Runtime: captaindb.PromptRunRuntime{
-			Driver:   "agent",
 			Resolved: captaindb.PromptRunRuntimeSelection{Provider: "openai", Mode: "agent", Model: "gpt-5.6-sol", Effort: "high"},
 		},
 	})
-	// An unreadable plan fails executor construction: the recorded plan is an
-	// input to every run and plan mode, so the resume cannot be built.
+	// An unreadable plan fails resolution: the recorded plan is part of the
+	// subject every step is evaluated against, so the resume cannot be folded.
 	planPath := t.TempDir()
 	if err := uiTestProviderFor(workDir).UpdateState(t.Context(), created, todos.StateUpdate{PlanPath: &planPath}); err != nil {
 		t.Fatalf("seed plan: %v", err)
 	}
-	_, called := stubTodoAnswer(t)
+	_, called := stubRunStart(t)
 
 	body, _ := json.Marshal(todoAnswerPayload{Ref: todos.TODOReference(created), Answer: "use postgres"})
 	rec := httptest.NewRecorder()
@@ -477,14 +458,17 @@ func TestTodoAPIAnswerPreflightFailureLeavesNoComment(t *testing.T) {
 func TestTodoAPIAnswerResumesStoppedAskSessionFromInProgressTodo(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	// This test replaces TestMain's home, so it must supply the model itself:
+	// resolving a run without one is now an error rather than a silent default.
+	writeHomeModel(t, home)
 	workDir := t.TempDir()
 	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
 	created := seedReviewTodo(t, workDir, types.StatusInProgress)
 	sid := "sess-zombie-ask"
-	mode := types.ModeRun
-	if err := uiTestProviderFor(workDir).UpdateState(t.Context(), created, todos.StateUpdate{SessionID: &sid, RunMode: &mode}); err != nil {
+	if err := uiTestProviderFor(workDir).UpdateState(t.Context(), created, todos.StateUpdate{SessionID: &sid}); err != nil {
 		t.Fatal(err)
 	}
+	seedActivePhase(created, types.RunPhase)
 	logPath, err := cmuxprov.SessionLogPath(workDir, sid)
 	if err != nil {
 		t.Fatal(err)
@@ -496,11 +480,7 @@ func TestTodoAPIAnswerResumesStoppedAskSessionFromInProgressTodo(t *testing.T) {
 	if err := os.WriteFile(logPath, []byte(line), 0o644); err != nil {
 		t.Fatal(err)
 	}
-
-	oldStart := startTodoAnswer
-	var gotAnswer string
-	startTodoAnswer = func(_ todoRunRequest, answer string) error { gotAnswer = answer; return nil }
-	t.Cleanup(func() { startTodoAnswer = oldStart })
+	got, _ := stubRunStart(t)
 
 	body, _ := json.Marshal(todoAnswerPayload{
 		Ref:     todos.TODOReference(created),
@@ -511,7 +491,7 @@ func TestTodoAPIAnswerResumesStoppedAskSessionFromInProgressTodo(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("answer status = %d, want 200; body = %q", rec.Code, rec.Body.String())
 	}
-	if gotAnswer != `{"answers":{"Which database?":"Postgres"}}` {
-		t.Fatalf("resume feedback = %q", gotAnswer)
+	if got.Options.Message != `{"answers":{"Which database?":"Postgres"}}` {
+		t.Fatalf("resume feedback = %q", got.Options.Message)
 	}
 }
