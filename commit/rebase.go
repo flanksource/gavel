@@ -1,6 +1,7 @@
 package commit
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -24,7 +25,7 @@ func runGitFetch(workDir, ref string) error {
 // (clean, err). clean == false with err == nil means the rebase started but
 // hit a conflict (caller is responsible for aborting).
 func runGitRebase(workDir, upstream, strategyOpt string) (bool, error) {
-	args := []string{"rebase"}
+	args := []string{"rebase", "--autostash"}
 	if strategyOpt != "" {
 		args = append(args, "-X"+strategyOpt)
 	}
@@ -90,6 +91,7 @@ func rebaseOnto(workDir, upstreamBranch string) error {
 	logger.Warnf("Rebase onto %s hit conflicts and was aborted.", upstream)
 
 	choice, ok := promptSelectIndex(
+		context.Background(),
 		fmt.Sprintf("Rebase onto %s conflicted. Retry with which strategy?", upstream),
 		[]string{
 			"Cancel push",

@@ -28,38 +28,35 @@ if (!configPath) {
   process.exit(1);
 }
 
-const readResult = ts.readConfigFile(configPath, ts.sys.readFile);
-if (readResult.error) {
+const diagnostics = [];
+const noWriteSystem = Object.assign(Object.create(ts.sys), ts.sys, {
+  writeFile: () => {},
+  createDirectory: () => {},
+  deleteFile: () => {},
+  setModifiedTime: () => {},
+});
+const host = ts.createSolutionBuilderHost(
+  noWriteSystem,
+  undefined,
+  (diagnostic) => diagnostics.push(diagnostic),
+  () => {}
+);
+host.writeFile = () => {};
+
+const builder = ts.createSolutionBuilder(host, [configPath], {
+  force: true,
+  noEmit: true,
+  pretty: false,
+});
+const exitStatus = builder.build();
+if (exitStatus !== ts.ExitStatus.Success && diagnostics.length === 0) {
   process.stderr.write(
-    "gavel-tsc: failed to read " +
-      configPath +
-      ": " +
-      ts.flattenDiagnosticMessageText(readResult.error.messageText, "\n") +
-      "\n"
+    "gavel-tsc: solution build failed without diagnostics (exit status " +
+      exitStatus +
+      ")\n"
   );
   process.exit(1);
 }
-
-const parsed = ts.parseJsonConfigFileContent(
-  readResult.config,
-  ts.sys,
-  "./",
-  undefined,
-  configPath
-);
-
-// Force no-emit: we only want diagnostics.
-parsed.options.noEmit = true;
-
-const program = ts.createProgram({
-  rootNames: parsed.fileNames,
-  options: parsed.options,
-  projectReferences: parsed.projectReferences,
-});
-
-const diagnostics = ts
-  .getPreEmitDiagnostics(program)
-  .concat(parsed.errors || []);
 
 const output = diagnostics.map((d) => {
   let line = 0;

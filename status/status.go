@@ -13,8 +13,10 @@ import (
 	"strings"
 	"time"
 
-	clickyai "github.com/flanksource/clicky/ai"
+	rpchttp "github.com/flanksource/clicky/rpc/http"
+	clickyai "github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/internal/prompting"
+	"github.com/flanksource/gavel/utils"
 	"github.com/flanksource/repomap"
 )
 
@@ -42,20 +44,25 @@ const (
 )
 
 type FileStatus struct {
-	Path           string
-	PreviousPath   string
-	State          FileState
-	StagedKind     ChangeKind
-	WorkKind       ChangeKind
-	Adds           int
-	Dels           int
-	AISummary      string
-	AIError        string
-	AIStatus       AISummaryStatus
-	FileMap        *repomap.FileMap
-	RepomapError   error
-	TestStatus     TestStatus
-	LintStatus     LintStatus
+	Path         string
+	PreviousPath string
+	State        FileState
+	StagedKind   ChangeKind
+	WorkKind     ChangeKind
+	Adds         int
+	Dels         int
+	AISummary    string
+	AIError      string
+	AIStatus     AISummaryStatus
+	FileMap      *repomap.FileMap
+	RepomapError error
+	TestStatus   TestStatus
+	LintStatus   LintStatus
+	// Problems holds the individual failing tests and lint violations for
+	// this file, pulled from the last snapshot. TestStatus/LintStatus carry
+	// the counts for the inline badges; Problems carries the messages the
+	// trailing "Problems" section renders.
+	Problems       []Problem
 	ResultsStale   bool
 	ConflictReason ConflictReason
 	// ModifiedAt is the working-tree mtime of the file. Zero when the file
@@ -96,15 +103,24 @@ type Result struct {
 	ResultsSHA   string
 	CurrentSHA   string
 	ResultsStale bool
+	// Verbose expands the trailing "Problems" section to every failing
+	// test / lint violation with full multi-line messages. When false the
+	// section caps each file and prints a `gavel status -v` hint. Excluded
+	// from JSON output so `--format json` stays a pure data dump.
+	Verbose bool `json:"-"`
 }
 
 type Options struct {
 	NoRepomap bool
+	NoResults bool
 	// FolderFilter, when non-empty, restricts the result to files at or
 	// below this slash-separated path relative to workDir. The filter is
 	// applied before line-count, repomap, and snapshot enrichment so we
 	// don't waste work on files that will be dropped.
 	FolderFilter string
+	// Verbose is threaded onto Result.Verbose so the renderer can expand the
+	// Problems section. Set from the global `-v` count by the CLI.
+	Verbose      bool
 	Agent        clickyai.Agent  `json:"-"`
 	Context      context.Context `json:"-"`
 	AIMaxWorkers int             `json:"-"`
@@ -123,9 +139,14 @@ func Gather(workDir string, opts Options) (*Result, error) {
 		return result, nil
 	}
 
+	template, err := ResolveSummaryPrompt(workDir)
+	if err != nil {
+		return nil, err
+	}
+
 	prompting.Prepare()
 	result.PrepareAISummaries()
-	for update := range StreamAISummaries(opts.Context, workDir, opts.Agent, result.Files, opts.AIMaxWorkers) {
+	for update := range StreamAISummaries(opts.Context, workDir, opts.Agent, result.Files, opts.AIMaxWorkers, template) {
 		result.ApplyAISummaryUpdate(update)
 	}
 
@@ -136,13 +157,17 @@ func GatherBase(workDir string, opts Options) (*Result, error) {
 	if workDir == "" {
 		return nil, errors.New("status.GatherBase: workDir is required")
 	}
+	ctx := opts.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
-	branch, err := currentBranch(workDir)
+	branch, err := currentBranch(ctx, workDir)
 	if err != nil {
 		return nil, err
 	}
 
-	raw, err := runGitStatus(workDir)
+	raw, err := runGitStatus(ctx, workDir)
 	if err != nil {
 		return nil, err
 	}
@@ -153,13 +178,18 @@ func GatherBase(workDir string, opts Options) (*Result, error) {
 	}
 	files = filterGavelCache(files)
 	files = filterByFolder(files, opts.FolderFilter)
+	stopFile := rpchttp.Track(ctx, "file")
+	files = filterGitIgnored(files, workDir)
+	stopFile()
 
-	if err := enrichWithLineCounts(workDir, files); err != nil {
+	if err := enrichWithLineCounts(ctx, workDir, files); err != nil {
 		return nil, err
 	}
 
+	stopFile = rpchttp.Track(ctx, "file")
 	enrichWithModTime(workDir, files)
 	enrichWithConflictMarkers(workDir, files)
+	stopFile()
 
 	if !opts.NoRepomap {
 		for i := range files {
@@ -171,17 +201,22 @@ func GatherBase(workDir string, opts Options) (*Result, error) {
 		WorkDir: workDir,
 		Branch:  branch,
 		Files:   files,
+		Verbose: opts.Verbose,
 	}
 
-	if err := enrichWithSnapshot(workDir, result); err != nil {
-		return nil, err
+	if !opts.NoResults {
+		if err := enrichWithSnapshot(ctx, workDir, result); err != nil {
+			return nil, err
+		}
 	}
 
 	return result, nil
 }
 
-func runGitStatus(workDir string) ([]byte, error) {
-	cmd := exec.Command("git", "status", "--porcelain=v1", "-z")
+func runGitStatus(ctx context.Context, workDir string) ([]byte, error) {
+	stopGit := rpchttp.Track(ctx, "git")
+	defer stopGit()
+	cmd := exec.CommandContext(ctx, "git", "status", "--porcelain=v1", "-z")
 	cmd.Dir = workDir
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
@@ -192,8 +227,10 @@ func runGitStatus(workDir string) ([]byte, error) {
 	return out, nil
 }
 
-func currentBranch(workDir string) (string, error) {
-	cmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
+func currentBranch(ctx context.Context, workDir string) (string, error) {
+	stopGit := rpchttp.Track(ctx, "git")
+	defer stopGit()
+	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--abbrev-ref", "HEAD")
 	cmd.Dir = workDir
 	out, err := cmd.Output()
 	if err != nil {
@@ -275,6 +312,34 @@ func filterByFolder(files []FileStatus, prefix string) []FileStatus {
 	return out
 }
 
+// filterGitIgnored drops files matching the repo's .gitignore, so force-tracked
+// but ignored bundles (e.g. testrunner/ui/dist/testui.js) don't surface as
+// modifications. Staged files are kept regardless: what status shows then
+// matches what `gavel commit` will commit, and a manually `git add`-ed ignored
+// file stays visible. A !-negation in .gitignore re-includes a path.
+func filterGitIgnored(files []FileStatus, workDir string) []FileStatus {
+	paths := make([]string, len(files))
+	for i, f := range files {
+		paths[i] = filepath.Join(workDir, f.Path)
+	}
+	_, ignored := utils.PartitionGitIgnored(paths, workDir)
+	if len(ignored) == 0 {
+		return files
+	}
+	ignoredSet := make(map[string]struct{}, len(ignored))
+	for _, p := range ignored {
+		ignoredSet[p] = struct{}{}
+	}
+	out := files[:0]
+	for i, f := range files {
+		_, isIgnored := ignoredSet[paths[i]]
+		if !isIgnored || f.State == StateStaged || f.State == StateBoth || f.State == StateConflict {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
 func splitNullDelimited(raw []byte) []string {
 	if len(raw) == 0 {
 		return nil
@@ -345,12 +410,12 @@ func isConflictPair(staged, work byte) bool {
 // enrichWithLineCounts fills in Adds/Dels for each FileStatus by combining
 // staged and unstaged numstat output, and by counting lines of any untracked
 // file directly (git numstat does not report untracked content).
-func enrichWithLineCounts(workDir string, files []FileStatus) error {
-	staged, err := numstat(workDir, true)
+func enrichWithLineCounts(ctx context.Context, workDir string, files []FileStatus) error {
+	staged, err := numstat(ctx, workDir, true)
 	if err != nil {
 		return err
 	}
-	unstaged, err := numstat(workDir, false)
+	unstaged, err := numstat(ctx, workDir, false)
 	if err != nil {
 		return err
 	}
@@ -367,7 +432,9 @@ func enrichWithLineCounts(workDir string, files []FileStatus) error {
 			f.Dels += u.dels
 		}
 		if f.State == StateUntracked && f.Adds == 0 && f.Dels == 0 {
+			stopFile := rpchttp.Track(ctx, "file")
 			f.Adds = countFileLines(filepath.Join(workDir, f.Path))
+			stopFile()
 		}
 	}
 	return nil
@@ -378,12 +445,14 @@ type numstatEntry struct {
 	dels int
 }
 
-func numstat(workDir string, cached bool) (map[string]numstatEntry, error) {
+func numstat(ctx context.Context, workDir string, cached bool) (map[string]numstatEntry, error) {
 	args := []string{"diff", "--numstat", "-z", "--find-renames"}
 	if cached {
 		args = append(args, "--cached")
 	}
-	cmd := exec.Command("git", args...)
+	stopGit := rpchttp.Track(ctx, "git")
+	defer stopGit()
+	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = workDir
 	var stderr strings.Builder
 	cmd.Stderr = &stderr

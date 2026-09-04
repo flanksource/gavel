@@ -3,6 +3,7 @@ package ui
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/flanksource/gavel/github"
@@ -63,18 +64,20 @@ func TestComputeGavelSummary_ObjectFormat(t *testing.T) {
 	if s.LintViolations != 2 {
 		t.Errorf("LintViolations = %d, want 2", s.LintViolations)
 	}
-	if len(s.TopFailures) != 1 || s.TopFailures[0].Name != "TestB" {
-		t.Errorf("TopFailures = %+v, want single TestB failure", s.TopFailures)
+	if len(s.Failures) != 1 || s.Failures[0].Name != "TestB" {
+		t.Errorf("Failures = %+v, want single TestB failure", s.Failures)
 	}
-	if len(s.TopLintViolations) != 2 {
-		t.Errorf("TopLintViolations = %d, want 2", len(s.TopLintViolations))
+	// eslint found nothing and did not error, so only the failing linter is
+	// carried; its violations arrive as-is for the shared lint renderer.
+	if len(s.Lint) != 1 || s.Lint[0].Linter != "golangci-lint" {
+		t.Fatalf("Lint = %+v, want only golangci-lint", s.Lint)
 	}
-	if s.TopLintViolations[0].Linter != "golangci-lint" || s.TopLintViolations[0].File != "a.go" {
-		t.Errorf("first lint violation = %+v", s.TopLintViolations[0])
+	if len(s.Lint[0].Violations) != 2 || s.Lint[0].Violations[0].File != "a.go" {
+		t.Errorf("golangci-lint violations = %+v", s.Lint[0].Violations)
 	}
 }
 
-func TestComputeGavelSummary_TopFailuresCap(t *testing.T) {
+func TestComputeGavelSummary_FailureDetailCap(t *testing.T) {
 	// 7 failing tests — summary must cap at 5 and preserve encounter order.
 	tests := `[
 		{"name": "F1", "failed": true},
@@ -89,12 +92,12 @@ func TestComputeGavelSummary_TopFailuresCap(t *testing.T) {
 	if s.TestsFailed != 7 {
 		t.Errorf("TestsFailed = %d, want 7", s.TestsFailed)
 	}
-	if len(s.TopFailures) != 5 {
-		t.Fatalf("TopFailures length = %d, want 5", len(s.TopFailures))
+	if len(s.Failures) != 5 {
+		t.Fatalf("Failures length = %d, want 5", len(s.Failures))
 	}
 	for i, want := range []string{"F1", "F2", "F3", "F4", "F5"} {
-		if s.TopFailures[i].Name != want {
-			t.Errorf("TopFailures[%d] = %s, want %s", i, s.TopFailures[i].Name, want)
+		if s.Failures[i].Name != want {
+			t.Errorf("Failures[%d] = %s, want %s", i, s.Failures[i].Name, want)
 		}
 	}
 }
@@ -164,23 +167,69 @@ func TestComputeGavelSummary_InvalidJSON(t *testing.T) {
 	}
 }
 
-func TestGavelResultJSON_UnmarshalArray(t *testing.T) {
-	var g gavelResultJSON
-	if err := json.Unmarshal([]byte(`[{"name":"T1","passed":true}]`), &g); err != nil {
-		t.Fatal(err)
+func TestAggregateGavelSummariesIgnoresMissingArtifacts(t *testing.T) {
+	if got := aggregateGavelSummaries([]*GavelResultsSummary{nil, nil}); got != nil {
+		t.Fatalf("all-missing aggregate = %+v, want nil", got)
 	}
-	if len(g.Tests) != 1 || g.Tests[0].Name != "T1" {
-		t.Errorf("got %+v", g.Tests)
+
+	want := &GavelResultsSummary{StickyID: "gavel-test", TestsTotal: 3, TestsPassed: 3}
+	if got := aggregateGavelSummaries([]*GavelResultsSummary{nil, want}); got != want {
+		t.Fatalf("single usable aggregate = %+v, want original summary", got)
 	}
 }
 
-func TestGavelResultJSON_UnmarshalObject(t *testing.T) {
-	var g gavelResultJSON
-	if err := json.Unmarshal([]byte(`{"tests":[{"name":"T2"}],"lint":[]}`), &g); err != nil {
+// A run that dies before producing results uploads a crash envelope instead of
+// a result tree. The summary must carry the reason forward so the PR page can
+// explain the empty card rather than claiming there was no data.
+func TestComputeGavelSummary_CrashEnvelope(t *testing.T) {
+	const (
+		artifactID = int64(8753065857)
+		wantErr    = "gavel exited 1 before writing results"
+		wantTail   = "pre-build: compiling Go test binaries failed"
+	)
+	stub, err := json.Marshal(map[string]any{
+		"error":     wantErr,
+		"exit_code": 1,
+		"log_tail":  wantTail,
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if len(g.Tests) != 1 || g.Tests[0].Name != "T2" {
-		t.Errorf("got %+v", g.Tests)
+
+	got := computeGavelSummary(stub, artifactID, "")
+	if got.Error != wantErr {
+		t.Errorf("Error = %q, want %q", got.Error, wantErr)
+	}
+	if got.ExitCode == nil || *got.ExitCode != 1 {
+		t.Errorf("ExitCode = %v, want 1", got.ExitCode)
+	}
+	if got.LogTail != wantTail {
+		t.Errorf("LogTail = %q, want %q", got.LogTail, wantTail)
+	}
+	if got.TestsTotal != 0 || got.LintLinters != 0 {
+		t.Errorf("crash envelope produced counts: %+v", got)
+	}
+}
+
+// Exit code may arrive under metadata.exit_code when gavel itself (rather than
+// the composite action's shell fallback) writes the envelope.
+func TestComputeGavelSummary_CrashExitCodeFromMetadata(t *testing.T) {
+	stub := []byte(`{"metadata":{"exit_code":2},"error":"boom","tests":[]}`)
+	got := computeGavelSummary(stub, 1, "")
+	if got.ExitCode == nil || *got.ExitCode != 2 {
+		t.Fatalf("ExitCode = %v, want 2", got.ExitCode)
+	}
+}
+
+// Regression: the composite action used to build its crash stub with printf +
+// `sed 's/"/\\"/g'`, which left raw control bytes (a tab from `go mod tidy`
+// output) unescaped inside a JSON string. Such an artifact must surface a parse
+// error, never be silently reported as "no data".
+func TestComputeGavelSummary_MalformedJSONReportsParseError(t *testing.T) {
+	malformed := []byte("{\"error\":\"gavel exited 1\",\"log_tail\":\"to update it: \tgo mod tidy\"}")
+	got := computeGavelSummary(malformed, 1, "")
+	if !strings.HasPrefix(got.Error, "parse artifact:") {
+		t.Fatalf("Error = %q, want a parse artifact: error", got.Error)
 	}
 }
 

@@ -2,6 +2,7 @@ package status
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 	"os"
 	"os/exec"
@@ -9,27 +10,14 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	clickyai "github.com/flanksource/clicky/ai"
+	"github.com/flanksource/captain/pkg/ai/prompt"
+	clickyai "github.com/flanksource/gavel/ai"
 )
 
-const (
-	maxAISummaryInputChars = 12000
-	fileSummaryPrompt      = `You are summarizing changes to a single file from git diff context.
+const maxAISummaryInputChars = 12000
 
-Return a JSON object with:
-- summary: a single-line plain-English summary of what changed in this file
-
-Rules:
-- Keep it to one short sentence fragment, ideally under 12 words.
-- Describe the substance of the change, not git mechanics.
-- Mention the file path only when it adds necessary context.
-- Do not mention line counts unless they are the point of the change.
-- The input will be git diff text for tracked files, or file contents for new untracked files.
-
-Change context:
-%s
-`
-)
+//go:embed ai-file-summary.prompt
+var fileSummaryPromptTemplate string
 
 type fileSummarySchema struct {
 	Summary string `json:"summary" description:"One-line plain-English summary of the file change, ideally under 12 words"`
@@ -39,17 +27,25 @@ var summarizeFileChangeWithAIFunc = summarizeFileChangeWithAI
 var diffForStatusFileFunc = diffForStatusFile
 var readUntrackedStatusFileFunc = readUntrackedStatusFile
 
-func summarizeFileChangeWithAI(ctx context.Context, workDir string, agent clickyai.Agent, file FileStatus) (string, error) {
+func summarizeFileChangeWithAI(ctx context.Context, workDir string, agent clickyai.Agent, file FileStatus, template string) (string, error) {
 	details, err := buildFileSummaryDetails(workDir, file)
 	if err != nil {
 		return "", err
 	}
 
-	schema := &fileSummarySchema{}
+	if strings.TrimSpace(template) == "" {
+		template = fileSummaryPromptTemplate
+	}
+	req, _, err := prompt.Load(template).Render(map[string]any{"details": details}, nil)
+	if err != nil {
+		return "", fmt.Errorf("render AI file-summary prompt: %w", err)
+	}
+
 	resp, err := agent.ExecutePrompt(ctx, clickyai.PromptRequest{
-		Name:             fmt.Sprintf("status summary: %s", file.Path),
-		Prompt:           fmt.Sprintf(fileSummaryPrompt, details),
-		StructuredOutput: schema,
+		Name:       fmt.Sprintf("status summary: %s", file.Path),
+		Prompt:     req.Prompt.User,
+		SchemaJSON: req.Prompt.SchemaJSON,
+		Source:     "ai-file-summary.prompt",
 	})
 	if err != nil {
 		return "", fmt.Errorf("execute AI file-summary prompt: %w", err)
@@ -58,7 +54,11 @@ func summarizeFileChangeWithAI(ctx context.Context, workDir string, agent clicky
 		return "", fmt.Errorf("AI file-summary prompt returned error: %s", resp.Error)
 	}
 
-	summary := parseAISummary(schema.Summary, resp.Result)
+	var schema fileSummarySchema
+	if err := clickyai.DecodeStructured(resp, &schema); err != nil {
+		return "", fmt.Errorf("decode AI file-summary response: %w", err)
+	}
+	summary := normalizeAISummary(schema.Summary)
 	if summary == "" {
 		return "", fmt.Errorf("AI file-summary prompt returned empty summary")
 	}
@@ -142,20 +142,6 @@ func truncateAISummaryInput(s string) string {
 		return s
 	}
 	return s[:maxAISummaryInputChars] + "\n... (truncated)"
-}
-
-func parseAISummary(schemaSummary, raw string) string {
-	if summary := normalizeAISummary(schemaSummary); summary != "" {
-		return summary
-	}
-
-	raw = strings.TrimSpace(raw)
-	raw = strings.TrimPrefix(raw, "```json")
-	raw = strings.TrimPrefix(raw, "```")
-	raw = strings.TrimSuffix(raw, "```")
-	raw = strings.TrimSpace(raw)
-	raw = strings.Trim(raw, `"`)
-	return normalizeAISummary(raw)
 }
 
 func normalizeAISummary(summary string) string {

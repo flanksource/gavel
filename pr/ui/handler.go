@@ -3,24 +3,29 @@ package ui
 import (
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"net/http"
+	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/flanksource/captain/pkg/monitor"
+	"github.com/flanksource/clicky/metrics"
+	rpchttp "github.com/flanksource/clicky/rpc/http"
+	clickytask "github.com/flanksource/clicky/task"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/github/cache"
 	"github.com/flanksource/gavel/prwatch"
+	testui "github.com/flanksource/gavel/testrunner/ui"
 )
 
 type SearchConfig struct {
 	Repos       []string `json:"repos"`
 	All         bool     `json:"all,omitempty"`
 	Org         string   `json:"org,omitempty"`
-	Author      string   `json:"author,omitempty"`
-	Any         bool     `json:"any,omitempty"`
-	Bots        bool     `json:"bots,omitempty"`
 	IgnoredOrgs []string `json:"ignoredOrgs,omitempty"`
 }
 
@@ -47,10 +52,39 @@ type Server struct {
 	detailCache  *DetailCache
 	detailSyncer *DetailSyncer
 
+	// testRunSyncer scans registered workspaces' .gavel/run-*.json files into
+	// the DB cache that the Projects tree is served from. nil until wired by the
+	// CLI; the read endpoints degrade to a direct filesystem scan without it.
+	testRunSyncer  *TestRunSyncer
+	projectActions *projectActionRegistry
+	projectRuns    *testui.MultiServer
+	taskSource     *supervisorTaskSource
+
+	// taskHistoryImport nudges the archive sweep after this process writes a
+	// spool record, so a finished run reaches the database without waiting out
+	// taskHistorySweepInterval.
+	taskHistoryImport chan struct{}
+
+	// ingestStats reads the embedded session monitor's counters. nil when serve
+	// runs without persistence, in which case there is no monitor to report on.
+	ingestStats func() monitor.IngestStats
+
 	// gavelCache stores the last computed GavelResultsSummary per PR
 	// (keyed by "repo#number"). Populated as a side-effect of detail
 	// fetches so sidebar badges light up lazily without extra traffic.
 	gavelCache map[string]*GavelResultsSummary
+
+	// knownBots is the set of bot author logins learned from fetch results.
+	// The poller excludes them at the source (`-author:`) unless includeBots
+	// is set, keeping the default fetch lean without a hardcoded bot list.
+	knownBots   map[string]struct{}
+	includeBots bool
+
+	// showClosed widens the poller's fetch from open-only to every state
+	// (open/closed/merged). It's off by default and deliberately transient
+	// (not persisted to settings) so closed PRs are only synced on demand and
+	// the fetch resets to open-only on restart.
+	showClosed bool
 
 	RepoSearchFn func() (github.PRSearchResults, error)
 	repoCache    []repoInfo
@@ -68,6 +102,29 @@ type Server struct {
 	// masking fresh memberships for long.
 	orgs         []github.Org
 	orgsCachedAt time.Time
+
+	// procMetrics stores recent per-process CPU/memory points so the process
+	// dashboard gauges can poll a real timeseries (served under
+	// /api/proc/metrics/{id}) instead of a frozen one-shot value. Written by
+	// procMetricsLoop; lastProcPoll gates that loop to recent UI activity.
+	procMetrics  metrics.Timeseries
+	lastProcPoll time.Time
+
+	// devProxy, when set via SetDevProxy, reverse-proxies the "/" catch-all to
+	// a running Vite dev server so `pr list --ui --dev` serves HMR'd modules
+	// instead of the embedded bundle. nil in production. See devproxy.go.
+	devProxy http.Handler
+
+	// fixtureSchemaProvider returns the same schema document printed by
+	// `gavel fixtures --schema`, injected by cmd/gavel so pr/ui does not
+	// duplicate the CLI-owned fixture schema builder.
+	fixtureSchemaProvider        func() (any, error)
+	projectActionOptionsProvider ProjectActionOptionsProvider
+
+	// commitQueues holds one serialized commit queue per project so several
+	// selections can be committed back-to-back without overlapping git index
+	// writes. See project_commit_queue.go.
+	commitQueues *commitQueueRegistry
 }
 
 const orgsCacheTTL = 5 * time.Minute
@@ -85,7 +142,20 @@ type snapshot struct {
 	Paused      bool                   `json:"paused"`
 	Error       string                 `json:"error,omitempty"`
 	Config      SearchConfig           `json:"config"`
-	RateLimit   *github.RateLimit      `json:"rateLimit,omitempty"`
+	// Viewer is the authenticated GitHub login, surfaced so the UI can resolve
+	// the @me author filter client-side. Empty until the auth probe completes.
+	Viewer string `json:"viewer,omitempty"`
+	// BotsAvailable is true once any bot author has been learned, so the UI can
+	// keep showing the @bots chip even while bots are excluded from the fetch.
+	BotsAvailable bool `json:"botsAvailable,omitempty"`
+	// IncludeBots mirrors the server's current bot-fetch state so the UI only
+	// posts a change (and triggers a refetch) when the @bots chip disagrees.
+	IncludeBots bool `json:"includeBots,omitempty"`
+	// ShowClosed mirrors the server's current closed-PR fetch state so the UI
+	// only posts a change (and triggers a refetch) when the Closed/Merged State
+	// chips disagree.
+	ShowClosed bool              `json:"showClosed,omitempty"`
+	RateLimit  *github.RateLimit `json:"rateLimit,omitempty"`
 	// Unread maps prKey("repo#number") → true for PRs whose UpdatedAt is
 	// newer than the recorded SeenAt (or that have never been seen). PRs
 	// marked as read are omitted to keep the map sparse on the wire.
@@ -99,19 +169,25 @@ type snapshot struct {
 
 func NewServer(interval time.Duration, ghOpts github.Options, config SearchConfig) *Server {
 	s := &Server{
-		interval:    interval,
-		ghOpts:      ghOpts,
-		config:      config,
-		updated:     make(chan struct{}, 1),
-		refreshCh:   make(chan struct{}, 1),
-		detailCache: NewDetailCache(),
-		gavelCache:  make(map[string]*GavelResultsSummary),
+		interval:          interval,
+		ghOpts:            ghOpts,
+		config:            config,
+		updated:           make(chan struct{}, 1),
+		refreshCh:         make(chan struct{}, 1),
+		detailCache:       NewDetailCache(),
+		gavelCache:        make(map[string]*GavelResultsSummary),
+		knownBots:         make(map[string]struct{}),
+		procMetrics:       metrics.NewMemory(metrics.MemoryConfig{Retention: 15 * time.Minute, MaxPoints: 512}),
+		taskSource:        newSupervisorTaskSource(),
+		taskHistoryImport: make(chan struct{}, 1),
 	}
 	// Probe runs in the background so NewServer stays fast. First /api/status
 	// hit before the probe completes returns State="" which handleStatus
 	// treats as "probing" (degraded, "checking token...").
 	go s.refreshAuthProbe()
 	go s.authProbeLoop()
+	go s.procMetricsLoop()
+	go s.taskHistoryImportLoop()
 	return s
 }
 
@@ -142,13 +218,56 @@ func (s *Server) DetailCache() *DetailCache {
 	return s.detailCache
 }
 
+func (s *Server) SetFixtureSchemaProvider(provider func() (any, error)) {
+	s.fixtureSchemaProvider = provider
+}
+
+func (s *Server) SetProjectActionOptionsProvider(provider ProjectActionOptionsProvider) {
+	s.projectActionOptionsProvider = provider
+}
+
+func (s *Server) projectRunServer() *testui.MultiServer {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.projectRuns == nil {
+		s.projectRuns = testui.NewMultiServer()
+	}
+	return s.projectRuns
+}
+
 func (s *Server) SetDetailSyncer(ds *DetailSyncer) {
 	s.detailSyncer = ds
+}
+
+// SetIngestStats wires the embedded session monitor's counters to
+// /debug/ingest. Serve's CPU is mostly transcript ingest, so a profile alone
+// says which functions are hot without saying whether the work was necessary.
+func (s *Server) SetIngestStats(read func() monitor.IngestStats) {
+	s.ingestStats = read
+}
+
+// readIngestStats is resolved per request, not at mux-build time: the monitor
+// is wired after the routes are registered.
+func (s *Server) readIngestStats() (monitor.IngestStats, bool) {
+	if s.ingestStats == nil {
+		return monitor.IngestStats{}, false
+	}
+	return s.ingestStats(), true
 }
 
 func (s *Server) notifyDetailSyncer() {
 	if s.detailSyncer != nil {
 		s.detailSyncer.Notify()
+	}
+}
+
+func (s *Server) SetTestRunSyncer(trs *TestRunSyncer) {
+	s.testRunSyncer = trs
+}
+
+func (s *Server) notifyTestRunSyncer() {
+	if s.testRunSyncer != nil {
+		s.testRunSyncer.Notify()
 	}
 }
 
@@ -164,11 +283,80 @@ func (s *Server) SetConfig(cfg SearchConfig) {
 	s.mu.Unlock()
 }
 
+// KnownBots returns the learned bot author logins, sorted for a stable query.
+func (s *Server) KnownBots() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]string, 0, len(s.knownBots))
+	for login := range s.knownBots {
+		out = append(out, login)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// IncludeBots reports whether the poller should fetch bot-authored PRs (the UI
+// sets this when the @bots author chip is not excluding them).
+func (s *Server) IncludeBots() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.includeBots
+}
+
+// SetIncludeBots toggles bot fetching and requests an immediate refetch so the
+// change is reflected without waiting for the next poll tick.
+func (s *Server) SetIncludeBots(include bool) {
+	s.mu.Lock()
+	changed := s.includeBots != include
+	s.includeBots = include
+	s.mu.Unlock()
+	if changed {
+		select {
+		case s.refreshCh <- struct{}{}:
+		default:
+		}
+	}
+}
+
+// ShowClosed reports whether the poller should fetch closed/merged PRs in
+// addition to open ones (the UI sets this when the "Show closed" toggle is on).
+func (s *Server) ShowClosed() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.showClosed
+}
+
+// SetShowClosed toggles closed-PR fetching and requests an immediate refetch so
+// the change is reflected without waiting for the next poll tick. Turning it off
+// triggers a full refetch too, which drops the now-unwanted closed PRs from the
+// poller's known set.
+func (s *Server) SetShowClosed(show bool) {
+	s.mu.Lock()
+	changed := s.showClosed != show
+	s.showClosed = show
+	s.mu.Unlock()
+	if changed {
+		select {
+		case s.refreshCh <- struct{}{}:
+		default:
+		}
+	}
+}
+
 func (s *Server) SetResults(prs github.PRSearchResults, incremental bool) {
 	s.mu.Lock()
 	s.prs = prs
 	s.fetchedAt = time.Now()
 	s.err = nil
+	// Learn bot authors from whatever came back so subsequent fetches can
+	// exclude them at the source via a search-compatible `-author:` qualifier.
+	// New bots leak through for one cycle (the UI hides them client-side)
+	// before being caught here.
+	for _, pr := range prs {
+		if q := github.BotExcludeQualifier(pr.Author, pr.AuthorIsApp); q != "" {
+			s.knownBots[q] = struct{}{}
+		}
+	}
 	subs := s.subscribers
 	s.mu.Unlock()
 	s.notify()
@@ -230,12 +418,26 @@ func (s *Server) RefreshCh() chan struct{} {
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", s.handleRoute)
+	if s.devProxy != nil {
+		mux.HandleFunc("/", s.handleDevRoute)
+	} else {
+		mux.HandleFunc("/", s.handleRoute)
+		// The ES-module bundle entry + code-split chunks (production only; in dev
+		// the bundle is served by the proxied Vite server).
+		mux.Handle("/_assets/", assetsHandler())
+	}
 	mux.HandleFunc("/api/prs", s.handleJSON)
 	mux.HandleFunc("/api/prs/stream", s.handleSSE)
 	mux.HandleFunc("/api/prs/refresh", s.handleRefresh)
+	mux.HandleFunc("/api/prs/bots", s.handleBots)
+	mux.HandleFunc("/api/prs/closed", s.handleClosed)
 	mux.HandleFunc("/api/prs/pause", s.handlePause)
 	mux.HandleFunc("/api/prs/detail", s.handleDetail)
+	mux.HandleFunc("GET /api/prs/commits/diff", s.handlePRCommitDiff)
+	mux.HandleFunc("GET /api/prs/files/diff", s.handlePRFileDiff)
+	mux.HandleFunc("POST /api/prs/merge", s.handlePRMerge)
+	mux.HandleFunc("POST /api/prs/approve", s.handlePRApprove)
+	mux.HandleFunc("POST /api/prs/update-branch", s.handlePRUpdateBranch)
 	mux.HandleFunc("/api/prs/job-logs", s.handleJobLogs)
 	mux.HandleFunc("/api/config", s.handleConfig)
 	mux.HandleFunc("/api/repos", s.handleRepos)
@@ -245,20 +447,151 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/activity/stream", s.handleActivityStream)
 	mux.HandleFunc("/api/activity/reset", s.handleActivityReset)
 	mux.HandleFunc("/api/activity/cache", s.handleActivityCache)
+	mux.HandleFunc("/api/tests", s.handleTestRuns)
+	mux.HandleFunc("/api/tests/stream", s.handleTestRunsStream)
+	mux.HandleFunc("/api/tests/run", s.handleTestRun)
+	mux.HandleFunc("/api/todos", s.handleTodos)
+	mux.HandleFunc("POST /api/todos/batch", s.handleTodoBatch)
+	mux.HandleFunc("POST /api/todos/new", s.handleTodoNew)
+	mux.HandleFunc("POST /todos/new", s.handleTodoNew)
+	mux.HandleFunc("/api/todos/attachments", s.handleTodoAttachmentUpload)
+	mux.HandleFunc("GET /api/todos/attachments/{id}", s.handleTodoAttachment)
+	mux.HandleFunc("/api/todos/item", s.handleTodoItem)
+	mux.HandleFunc("/api/todos/links", s.handleTodoLinks)
+	mux.HandleFunc("/api/todos/labels", s.handleTodoLabels)
+	mux.HandleFunc("/api/todos/run", s.handleTodoRun)
+	mux.HandleFunc("GET /api/todos/run/context", s.handleTodoRunContext)
+	mux.HandleFunc("/api/todos/run/preview", s.handleTodoRunPreview)
+	mux.HandleFunc("POST /api/todos/criteria", s.handleTodoCriteria)
+	mux.HandleFunc("POST /api/todos/verification/fixture", s.handleTodoVerificationFixture)
+	mux.HandleFunc("GET /api/todos/verification/schema", s.handleTodoVerificationSchema)
+	mux.HandleFunc("GET /api/todos/commits", s.handleTodoCommits)
+	mux.HandleFunc("GET /api/todos/commits/diff", s.handleTodoCommitDiff)
+	mux.HandleFunc("GET /api/todos/commits/files", s.handleTodoCommitFiles)
+	mux.HandleFunc("/api/todos/session/stream", s.handleTodoSessionStream)
+	mux.HandleFunc("/api/todos/session/stats", s.handleTodoSessionStats)
+	mux.HandleFunc("GET /api/todos/session/detail", s.handleTodoSessionDetail)
+	mux.HandleFunc("POST /api/todos/session/stop", s.handleTodoRunStop)
+	mux.HandleFunc("POST /api/todos/session/focus", s.handleTodoSessionFocus)
+	mux.HandleFunc("GET /api/todos/session/cmux", s.handleTodoSessionCmux)
+	mux.HandleFunc("POST /api/todos/session/approve", s.handleTodoSessionApprove)
+	mux.HandleFunc("GET /api/todos/session/approvals", s.handleTodoSessionApprovals)
+	mux.HandleFunc("GET /api/todos/session/plan", s.handleTodoSessionPlan)
+	mux.HandleFunc("POST /api/todos/session/plan", s.handleTodoSessionPlanSave)
+	mux.HandleFunc("POST /api/todos/plan/approve", s.handleTodoPlanApprove)
+	mux.HandleFunc("POST /api/todos/plan/reject", s.handleTodoPlanReject)
+	mux.HandleFunc("POST /api/todos/plan/revise", s.handleTodoPlanRevise)
+	mux.HandleFunc("POST /api/todos/answer", s.handleTodoAnswer)
+	mux.HandleFunc("/api/todos/transfer", s.handleTodoTransfer)
+	mux.HandleFunc("POST /api/todos/github", s.handleTodoGitHubPush)
 	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/favicon.svg", handleFavicon)
+	mux.HandleFunc("/react-grab-plugin.js", handleReactGrabPlugin)
+	mux.HandleFunc("/react-grab", handleReactGrabInstall)
 	mux.HandleFunc("/brand/gavel-logo.svg", handleLogo)
 	mux.HandleFunc("/brand/menubar.png", handleMenubarIcon)
 	mux.HandleFunc("/brand/menubar-unread.png", handleMenubarUnreadIcon)
+	mux.HandleFunc("/manifest.webmanifest", handleManifest)
+	mux.HandleFunc("/brand/apple-touch-icon.png", func(w http.ResponseWriter, r *http.Request) { servePNG(w, appleTouchIconPNG) })
+	mux.HandleFunc("/brand/icon-192.png", func(w http.ResponseWriter, r *http.Request) { servePNG(w, icon192PNG) })
+	mux.HandleFunc("/brand/icon-512.png", func(w http.ResponseWriter, r *http.Request) { servePNG(w, icon512PNG) })
 	mux.HandleFunc("/api/prs/seen", s.handleSeen)
+	mux.HandleFunc("/api/settings/schema", s.handleSettingsSchema)
+	mux.HandleFunc("/api/settings/prompts", s.handleSettingsPrompts)
+	mux.HandleFunc("GET /api/settings/prompts/catalog", s.handleSettingsPromptCatalog)
+	mux.HandleFunc("/api/settings/prompts/{id}", s.handleSettingsPromptDetail)
+	mux.HandleFunc("POST /api/settings/prompts/{id}/render", s.handleSettingsPromptRender)
+	mux.HandleFunc("/api/settings/gavel", s.handleSettingsGavel)
+	mux.HandleFunc("/api/settings/gavel/trace", s.handleSettingsGavelTrace)
+	mux.HandleFunc("/api/projects", s.handleProjects)
+	mux.HandleFunc("GET /api/projects/{name}", s.handleProjectByName)
+	mux.HandleFunc("PUT /api/projects/{name}", s.handleProjectByName)
+	mux.HandleFunc("DELETE /api/projects/{name}", s.handleProjectByName)
+	mux.HandleFunc("GET /api/projects/{name}/status", s.handleProjectStatus)
+	mux.HandleFunc("POST /api/projects/{name}/actions", s.handleProjectAction)
+	mux.HandleFunc("GET /api/projects/{name}/actions/schema", s.handleProjectActionSchema)
+	mux.HandleFunc("POST /api/projects/{name}/commit-queue", s.handleCommitQueue)
+	mux.Handle("/api/project-runs/", http.StripPrefix("/api/project-runs", s.projectRunServer().Handler()))
+	mux.HandleFunc("GET /api/projects/{name}/diff", s.handleProjectDiff)
+	mux.HandleFunc("POST /api/projects/{name}/ignore", s.handleProjectIgnore)
+	mux.HandleFunc("/api/openapi.json", s.handleOpenAPI)
+	mux.HandleFunc("/api/proc/status", s.handleProcStatus)
+	mux.HandleFunc("/api/proc/status/stream", s.handleProcStatusStream)
+	mux.HandleFunc("/api/proc/favicon", s.handleProcFavicon)
+	mux.HandleFunc("/api/proc/start", s.handleProcControl)
+	mux.HandleFunc("/api/proc/stop", s.handleProcControl)
+	mux.HandleFunc("/api/proc/restart", s.handleProcControl)
+	mux.HandleFunc("/api/proc/logs", s.handleProcLogs)
+	// Serves GET /api/proc/metrics/{id}?since= as a timeseries the process
+	// dashboard gauges poll; {id} is one URL-encoded segment (see procRunKey).
+	metrics.RegisterRoutes(mux, s.procMetrics, "/api/proc")
+	taskSource := s.taskSource
+	if taskSource == nil {
+		taskSource = newSupervisorTaskSource()
+	}
+	clickytask.RegisterHandlersWithSource(mux, "/api/v1", taskSource)
+	s.registerTodoEntityRoutes(mux)
+	registerPromptRoutes(mux)
+	registerPprof(mux)
+	registerIngestStats(mux, s.readIngestStats)
 	mux.HandleFunc("/results/", s.handleGavelResults)
-	return mux
+	return rpchttp.TimingMiddleware(mux)
 }
 
 func handleFavicon(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "image/svg+xml")
 	w.Header().Set("Cache-Control", "public, max-age=86400")
 	fmt.Fprint(w, faviconSVG)
+}
+
+// assetsHandler serves the embedded ES-module bundle (prui.js + chunks/*.js)
+// under /_assets/. Hashed chunks are immutable; the stable entry gets a short
+// cache so a new build is picked up promptly.
+func assetsHandler() http.Handler {
+	sub, err := fs.Sub(distFS, "dist")
+	if err != nil {
+		panic("ui: embedded dist FS: " + err.Error()) // static embed; failure is a build error
+	}
+	fileServer := http.FileServer(http.FS(sub))
+	return http.StripPrefix("/_assets", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/chunks/") {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		} else {
+			w.Header().Set("Cache-Control", "public, max-age=300")
+		}
+		fileServer.ServeHTTP(w, r)
+	}))
+}
+
+// requestOrigin reconstructs the scheme+host this request was served from so an
+// asset can target gavel itself even when injected into a different app's page
+// (e.g. via the React Grab bookmarklet, where window.location is the host app).
+func requestOrigin(r *http.Request) string {
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
+		scheme = proto
+	}
+	return scheme + "://" + r.Host
+}
+
+// handleReactGrabPlugin serves the React Grab plugin script with __GAVEL_ORIGIN__
+// substituted for this server's origin. It is intentionally uncached so the
+// origin always matches the host that served it.
+func handleReactGrabPlugin(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	fmt.Fprint(w, strings.ReplaceAll(reactGrabPluginJS, "__GAVEL_ORIGIN__", requestOrigin(r)))
+}
+
+// handleReactGrabInstall serves the install page (bookmarklet + console snippet)
+// for loading the React Grab plugin into any running dev app.
+func handleReactGrabInstall(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	fmt.Fprint(w, strings.ReplaceAll(reactGrabInstallHTML, "__GAVEL_ORIGIN__", requestOrigin(r)))
 }
 
 func handleLogo(w http.ResponseWriter, r *http.Request) {
@@ -283,9 +616,32 @@ func handleMenubarUnreadIcon(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleManifest serves the PWA web app manifest so the dashboard can be added to
+// an iOS/Android home screen as a standalone app.
+func handleManifest(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/manifest+json")
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	fmt.Fprint(w, webManifest)
+}
+
+// servePNG writes an embedded PNG asset (home-screen / manifest icons) with the
+// shared cache policy.
+func servePNG(w http.ResponseWriter, data []byte) {
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	if _, err := w.Write(data); err != nil {
+		logger.Debugf("write png asset: %v", err)
+	}
+}
+
 func (s *Server) handleRoute(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/" && r.URL.RawQuery == "" {
 		http.Redirect(w, r, "/prs", http.StatusFound)
+		return
+	}
+	if (r.URL.Path == "/menubar" || r.URL.Path == "/processes") && r.URL.RawQuery == "" {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, pageHTML())
 		return
 	}
 	req, ok := parseRouteRequest(r)
@@ -322,8 +678,17 @@ func pageHTML() string {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>gavel · PR Dashboard</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://code.iconify.design/iconify-icon/2.0.0/iconify-icon.min.js"></script>
+    <link rel="apple-touch-icon" href="/brand/apple-touch-icon.png">
+    <link rel="manifest" href="/manifest.webmanifest">
+    <meta name="theme-color" content="#3578e5">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="apple-mobile-web-app-title" content="gavel">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;500;600;700&family=Fira+Code:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>` + bundleCSS + `</style>
     <style>
         @keyframes gavel-progress-slide {
             0%   { left: -35%; }
@@ -334,9 +699,10 @@ func pageHTML() string {
         }
     </style>
 </head>
-<body>
+<body class="bg-background text-foreground">
     <div id="root"></div>
-    <script>` + bundleJS + `</script>
+    <script>` + buildGlobalJS() + `</script>
+    <script type="module" src="/_assets/prui.js"></script>
 </body>
 </html>`
 }
@@ -346,12 +712,16 @@ func pageHTML() string {
 // populated by withUnread() outside the lock.
 func (s *Server) snapshotLocked() snapshot {
 	snap := snapshot{
-		PRs:         s.prs,
-		FetchedAt:   s.fetchedAt,
-		NextFetchIn: int(s.interval.Seconds()),
-		Paused:      s.paused,
-		Config:      s.config,
-		RateLimit:   s.rateLimit,
+		PRs:           s.prs,
+		FetchedAt:     s.fetchedAt,
+		NextFetchIn:   int(s.interval.Seconds()),
+		Paused:        s.paused,
+		Config:        s.config,
+		Viewer:        s.auth.Login,
+		BotsAvailable: len(s.knownBots) > 0,
+		IncludeBots:   s.includeBots,
+		ShowClosed:    s.showClosed,
+		RateLimit:     s.rateLimit,
 	}
 	if s.err != nil {
 		snap.Error = s.err.Error()
@@ -579,6 +949,47 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, `{"status":"refresh requested"}`)
 }
 
+// handleBots sets whether the poller fetches bot-authored PRs. The UI calls it
+// when the @bots author chip switches between excluding and showing bots; a
+// change triggers an immediate refetch.
+func (s *Server) handleBots(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		Include bool `json:"include"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
+		return
+	}
+	s.SetIncludeBots(body.Include)
+	w.Header().Set("Content-Type", "application/json")
+	fmt.Fprintf(w, `{"includeBots":%v}`, body.Include)
+}
+
+// handleClosed sets whether the poller fetches closed/merged PRs alongside open
+// ones. The UI calls it when the Closed/Merged State chips are toggled; a change
+// triggers an immediate refetch (widening to every state, or dropping closed PRs
+// back out when turned off).
+func (s *Server) handleClosed(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		Show bool `json:"show"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
+		return
+	}
+	s.SetShowClosed(body.Show)
+	w.Header().Set("Content-Type", "application/json")
+	fmt.Fprintf(w, `{"showClosed":%v}`, body.Show)
+}
+
 func (s *Server) handlePause(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -609,9 +1020,6 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		s.SetConfig(cfg)
 		go SaveSettings(UISettings{
 			Repos:       cfg.Repos,
-			Author:      cfg.Author,
-			Any:         cfg.Any,
-			Bots:        cfg.Bots,
 			IgnoredOrgs: cfg.IgnoredOrgs,
 		})
 		select {
@@ -788,7 +1196,9 @@ func (s *Server) handleRepoFavicon(w http.ResponseWriter, r *http.Request) {
 		logger.Warnf("favicon cache read %s: %v", homepage, err)
 	}
 	if !hit {
-		data, mime, err = store.FetchFavicon(r.Context(), homepage)
+		// No AllowLocal: a repo homepage is attacker-influenced, so this fetch
+		// keeps the full public-address guard.
+		data, mime, err = store.FetchFavicon(r.Context(), homepage, cache.FaviconOptions{})
 		if err != nil {
 			logger.Debugf("favicon fetch %s: %v", homepage, err)
 			http.Error(w, "favicon unavailable", http.StatusNotFound)
@@ -831,6 +1241,16 @@ type prDetail struct {
 	Error        string                 `json:"error,omitempty"`
 }
 
+// prFrame builds the SSE `pr` payload. Comments are normalized to a non-nil
+// slice: a PR with no actionable comments would otherwise marshal as
+// `"comments":null`, which the UI rejects as a malformed frame.
+func prFrame(pr *github.PRInfo, comments []github.PRComment) map[string]any {
+	if comments == nil {
+		comments = []github.PRComment{}
+	}
+	return map[string]any{"pr": pr, "comments": comments}
+}
+
 func (s *Server) handleDetail(w http.ResponseWriter, r *http.Request) {
 	repo := r.URL.Query().Get("repo")
 	numStr := r.URL.Query().Get("number")
@@ -869,7 +1289,7 @@ func (s *Server) handleDetail(w http.ResponseWriter, r *http.Request) {
 	if entry, ok := s.detailCache.Get(cacheKey); ok {
 		d := entry.Detail
 		if d.PR != nil {
-			emit("pr", map[string]any{"pr": d.PR, "comments": d.Comments})
+			emit("pr", prFrame(d.PR, d.Comments))
 		}
 		if len(d.Runs) > 0 {
 			emit("runs", map[string]any{"runs": d.Runs})
@@ -900,7 +1320,7 @@ func (s *Server) handleDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	comments := prwatch.MergeAndFilter(pr.Comments, pr.ReviewThreads)
-	emit("pr", map[string]any{"pr": pr, "comments": comments})
+	emit("pr", prFrame(pr, comments))
 
 	// Phase 2: Workflow runs + gavel results in parallel
 	type runResult struct {
@@ -925,12 +1345,12 @@ func (s *Server) handleDetail(w http.ResponseWriter, r *http.Request) {
 	// don't hammer the artifacts API.
 	allComments := append(pr.Comments, pr.ReviewThreads...)
 	artifacts := github.FindGavelArtifacts(allComments)
-	gavelSummaries := make([]*GavelResultsSummary, len(artifacts))
+	var gavelSummaries []*GavelResultsSummary
 	gavelDone := make(chan struct{})
 	if len(artifacts) > 0 {
 		go func() {
 			defer close(gavelDone)
-			fetchGavelArtifacts(opts, artifacts, gavelSummaries)
+			gavelSummaries = fetchGavelArtifacts(opts, artifacts)
 		}()
 	} else {
 		close(gavelDone)
@@ -1018,8 +1438,7 @@ func (s *Server) fetchPRDetail(repo string, number int) prDetail {
 	allComments := append(pr.Comments, pr.ReviewThreads...)
 	artifacts := github.FindGavelArtifacts(allComments)
 	if len(artifacts) > 0 {
-		summaries := make([]*GavelResultsSummary, len(artifacts))
-		fetchGavelArtifacts(opts, artifacts, summaries)
+		summaries := fetchGavelArtifacts(opts, artifacts)
 		result.GavelResults = summaries
 		s.setGavelSummary(repo, number, aggregateGavelSummaries(summaries))
 	}
@@ -1038,6 +1457,7 @@ func (s *Server) populatePRDetail(node *PRViewNode) error {
 	node.PR = detail.PR
 	node.Runs = detail.Runs
 	node.Comments = detail.Comments
+	node.GavelResults = detail.GavelResults
 	return nil
 }
 

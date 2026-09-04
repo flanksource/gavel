@@ -2,27 +2,36 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
 	captainai "github.com/flanksource/captain/pkg/ai"
+	"github.com/flanksource/captain/pkg/ai/agent"
+	capverify "github.com/flanksource/captain/pkg/ai/agent/verify"
+	"github.com/flanksource/captain/pkg/api"
 	captaincli "github.com/flanksource/captain/pkg/cli"
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/commons/logger"
-	"github.com/flanksource/gavel/ai/aifix"
+	"github.com/flanksource/gavel/ai"
+	"github.com/flanksource/gavel/ai/prfix"
+	commitpkg "github.com/flanksource/gavel/commit"
+	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/prwatch"
+	"github.com/flanksource/gavel/utils"
+	"github.com/flanksource/gavel/verify"
 )
 
-// runPRStatusAIFix feeds the rendered status into the AI configured by
-// `captain configure` (overlaid by any --model/--budget/--backend flags).
-// Unlike `lint --ai-fix`, this is a single-shot prompt by default — the
-// status snapshot is captured once and handed to the model, which is
-// expected to edit files in the local git working tree. We don't re-poll
-// GitHub between iterations because new check results take minutes to
-// produce; users wanting that loop should pass --ai-fix-max-iterations > 1
-// and accept the wall-clock cost.
+// runPRStatusAIFix drives the pr.fix prompt through captain's agent.Runner: the
+// agent edits the working tree, the prompt's workflow.commits policy commits and
+// pushes each turn through gavel's commit pipeline, and its
+// workflow.verify.commands re-poll `gavel pr status` — a non-zero exit feeds the
+// output tail back as the next iteration's feedback, exit 0 stops the loop.
+//
+// Everything about the loop (model, budget, verify commands, iteration cap,
+// commit policy) is declared in ai/prfix/pr-status-fix.prompt and overridable
+// from .gavel.yaml `pr.fix`; CLI flags win over both.
 func runPRStatusAIFix(ctx context.Context, opts PRStatusOptions, result *prwatch.PRWatchResult) error {
 	if result == nil || result.PR == nil {
 		return fmt.Errorf("no PR result available")
@@ -33,73 +42,214 @@ func runPRStatusAIFix(ctx context.Context, opts PRStatusOptions, result *prwatch
 		return fmt.Errorf("rendered status was empty")
 	}
 
-	aiCfg, aiProto := buildAIFixRequest(opts.AIRuntimeOptions)
-	if aiCfg.Model == "" {
-		return fmt.Errorf("no model configured: pass --model or run `captain configure`")
+	workDir, err := getWorkingDir()
+	if err != nil {
+		return fmt.Errorf("get working directory: %w", err)
+	}
+	// Repo is the repo root even when invoked from a subdirectory, while Cwd
+	// stays where the user ran the command: the runner records the agent's edits
+	// relative to Repo, and they only line up with the dirty set the commit hooks
+	// read out of git — which git anchors on the root however deep it is
+	// invoked — when Repo is that same root.
+	repoRoot := utils.GitRoot(workDir)
+
+	gavelCfg, err := verify.LoadGavelConfig(workDir)
+	if err != nil {
+		return fmt.Errorf("load .gavel.yaml: %w", err)
+	}
+	spec, err := prfix.ResolveSpec(gavelCfg.AI, gavelCfg.PR.Fix, workDir, prContextOf(result, statusText))
+	if err != nil {
+		return fmt.Errorf("resolve pr.fix prompt: %w", err)
+	}
+	if err := applyMaxIterations(&spec, opts.AIFixMaxIters); err != nil {
+		return err
 	}
 
-	prompt := buildPRStatusPrompt(result, statusText)
-	systemPrompt := buildPRStatusSystemPrompt(result)
+	aiCfg, req, err := buildAIFixRequest(opts.AIRuntimeOptions, spec, workDir)
+	if err != nil {
+		return err
+	}
+	if aiCfg.Model.Name == "" {
+		return fmt.Errorf("no model configured: pass --model or run `captain configure`")
+	}
+	if req.Workflow == nil || req.Workflow.Verify == nil || len(req.Workflow.Verify.Commands) == 0 {
+		return fmt.Errorf("resolved pr.fix prompt declares no workflow.verify.commands: --ai-fix has no definition of done")
+	}
 
 	p, err := captainai.NewProvider(aiCfg)
 	if err != nil {
 		return err
 	}
+	defer func() {
+		if err := ai.CloseProvider(p); err != nil {
+			logger.Warnf("pr ai-fix: failed to close AI provider: %v", err)
+		}
+	}()
 	streamer, ok := p.(captainai.StreamingProvider)
 	if !ok {
-		return fmt.Errorf("backend %q is not streaming; choose a streaming backend (claude-cli, codex-cli, gemini-cli)", aiCfg.Backend)
+		return fmt.Errorf("runtime %q is not streaming; choose a cli, agent or cmux runtime", p.GetRuntime())
 	}
 
-	maxIters := opts.AIFixMaxIters
-	if maxIters <= 0 {
-		maxIters = 1
-	}
-
+	maxIters := capverify.MaxIterationsForWorkflow(req.Workflow)
 	logger.Infof("pr ai-fix: invoking %s (%s), max-iter=%d, budget=$%.2f",
-		aiCfg.Model, aiCfg.Backend, maxIters, aiCfg.BudgetUSD)
+		aiCfg.Model.Name, p.GetRuntime(), maxIters, aiCfg.Budget.Cost)
 
-	runStart := time.Now()
-	loopRes, err := captainai.RunUntil(ctx, captainai.LoopOptions{
-		Provider:      streamer,
-		MaxIterations: maxIters,
-		MaxCostUSD:    aiCfg.BudgetUSD,
-		SessionReuse:  true,
-		BuildRequest: func(iter int, prev *captainai.LoopIteration) (captainai.Request, bool) {
-			if iter > 0 {
-				return captainai.Request{}, false
-			}
-			turn := aiProto
-			turn.SystemPrompt = systemPrompt
-			turn.Prompt = prompt
-			return turn, true
-		},
-		OnEvent: aifix.NewStderrRenderer(os.Stderr),
+	// Commit hooks lead the list so that at PhaseRun they cut their commits
+	// before any later hook acts on the result. Pushing per turn is what makes the
+	// verify command meaningful: CI only re-runs on what the remote can see.
+	hooks := commitpkg.AgentHooks(commitpkg.AgentHooksOptions{
+		Commits: req.Workflow.Commits,
+		Push:    true,
 	})
+	verifyHooks, err := capverify.HooksFor(ctx, req.Workflow, capverify.Options{Provider: p})
 	if err != nil {
 		return err
 	}
+	hooks = append(hooks, verifyHooks...)
 
-	logger.Infof("pr ai-fix: stop=%s iterations=%d cost=$%.4f",
-		loopRes.StopReason, len(loopRes.Iterations), loopRes.TotalCost)
+	runStart := time.Now()
+	renderer := newAIFixRenderer()
+	runner := &agent.Runner[string]{
+		Provider:      streamer,
+		Request:       req,
+		Hooks:         hooks,
+		MaxIterations: maxIters,
+		Repo:          repoRoot,
+		Cwd:           workDir,
+		Scope:         capverify.ScopeForWorkflow(req.Workflow),
+		OnEvent:       renderer.Handle,
+	}
+	res, runErr := runner.Run(ctx)
+	renderErr := renderer.Flush()
 
-	if err := renderCaptainHistory(runStart); err != nil {
+	logger.Infof("pr ai-fix: stop=%s iterations=%d cost=$%.4f verified=%t",
+		loopReason(res.Loop), loopIterations(res.Loop), loopCost(res.Loop), prFixVerified(res))
+	if sha := lastCommitSHA(res.Response); sha != "" {
+		logger.Infof("pr ai-fix: pushed %s", sha)
+	}
+
+	if err := renderCaptainHistory(runStart, loopSessionID(res.Loop)); err != nil {
 		logger.Warnf("pr ai-fix: failed to render captain history: %v", err)
 	}
+	return errors.Join(runErr, renderErr)
+}
+
+// applyMaxIterations lets --ai-fix-max-iterations have the last word on the
+// verify loop's cap; 0 keeps whatever the prompt or .gavel.yaml declared. A spec
+// with no verify section cannot honour the flag at all, so that is an error
+// rather than a silently ignored flag.
+func applyMaxIterations(spec *api.Spec, iterations int) error {
+	if iterations <= 0 {
+		return nil
+	}
+	if spec.Workflow == nil || spec.Workflow.Verify == nil {
+		return fmt.Errorf("--ai-fix-max-iterations set but the resolved pr.fix prompt declares no workflow.verify")
+	}
+	spec.Workflow.Verify.MaxIterations = iterations
 	return nil
+}
+
+// prContextOf projects the watch result onto the prompt's template data.
+func prContextOf(result *prwatch.PRWatchResult, statusText string) prfix.PRContext {
+	unresolved := 0
+	for _, c := range result.Comments {
+		if !c.IsResolved && !c.IsOutdated {
+			unresolved++
+		}
+	}
+	return prfix.PRContext{
+		Number:             result.PR.Number,
+		Title:              result.PR.Title,
+		URL:                result.PR.URL,
+		Branch:             result.PR.HeadRefName,
+		StatusText:         statusText,
+		UnresolvedComments: unresolved,
+	}
+}
+
+// prFixVerified reports whether the verify commands passed. Any stop reason other
+// than condition-met (max iterations, budget, cost) means a check is still red.
+func prFixVerified(res agent.Result[string]) bool {
+	return res.Loop != nil && res.Loop.StopReason == "condition-met"
+}
+
+func loopReason(res *captainai.LoopResult) string {
+	if res == nil || res.StopReason == "" {
+		return "error"
+	}
+	return res.StopReason
+}
+
+func loopIterations(res *captainai.LoopResult) int {
+	if res == nil {
+		return 0
+	}
+	return len(res.Iterations)
+}
+
+func loopCost(res *captainai.LoopResult) float64 {
+	if res == nil {
+		return 0
+	}
+	return res.TotalCost
+}
+
+// lastCommitSHA returns the final commit the run's hooks recorded — what was
+// pushed to the PR branch. Empty when no turn produced stageable changes.
+func lastCommitSHA(resp *captainai.Response) string {
+	if resp == nil || resp.Workspace == nil || len(resp.Workspace.Commits) == 0 {
+		return ""
+	}
+	return resp.Workspace.Commits[len(resp.Workspace.Commits)-1].SHA
+}
+
+// loopSessionID returns the session the run actually used — the last iteration
+// that reported one. Iterations before the provider emits its session-init
+// event carry an empty id, so the last non-empty wins rather than the last.
+func loopSessionID(res *captainai.LoopResult) string {
+	if res == nil {
+		return ""
+	}
+	sessionID := ""
+	for _, iter := range res.Iterations {
+		if iter.SessionID != "" {
+			sessionID = iter.SessionID
+		}
+	}
+	return sessionID
+}
+
+// historyOptionsForRun builds the captain history query for a finished ai-fix
+// run. Identifying the run by its own session id is the whole point: --last
+// resolves via a trailing-run-of-tools heuristic, which happily selects an
+// unrelated session another agent wrote to more recently (the reported case
+// rendered session 929f3d1b for a run whose session was 24eec7df). SessionID
+// already narrows to exactly one session, so Last would only add clipping on
+// model/effort changes within it.
+//
+// A backend that reports no session id falls back to the old --last behaviour;
+// history rendering is best-effort trailing output, not part of the fix.
+func historyOptionsForRun(runStart time.Time, sessionID string) captaincli.HistoryOptions {
+	opts := captaincli.HistoryOptions{
+		Since: runStart.Add(-2 * time.Second),
+		Limit: 0,
+	}
+	if sessionID == "" {
+		opts.Last = true
+		return opts
+	}
+	opts.SessionID = sessionID
+	return opts
 }
 
 // renderCaptainHistory invokes captain's RunHistory and writes the result to
 // stdout the same way `captain history --last` does — captain prints
 // line-by-line when stdout is a TTY and emits a structured table otherwise.
-// We restrict to sessions newer than the ai-fix start (with a small skew
-// allowance) so the user only sees the run they just triggered.
-func renderCaptainHistory(runStart time.Time) error {
-	since := runStart.Add(-2 * time.Second)
-	result, err := captaincli.RunHistory(captaincli.HistoryOptions{
-		Last:  true,
-		Since: since,
-		Limit: 0,
-	})
+func renderCaptainHistory(runStart time.Time, sessionID string) error {
+	if _, err := database.Shared(context.Background()); err != nil {
+		return fmt.Errorf("prepare Captain database: %w", err)
+	}
+	result, err := captaincli.RunHistory(historyOptionsForRun(runStart, sessionID))
 	if err != nil {
 		return err
 	}
@@ -109,35 +259,4 @@ func renderCaptainHistory(runStart time.Time) error {
 	}
 	clicky.MustPrint(result, clicky.FormatOptions{})
 	return nil
-}
-
-func buildPRStatusSystemPrompt(result *prwatch.PRWatchResult) string {
-	var s strings.Builder
-	s.WriteString("You are running inside a developer's git working tree.")
-	if result.PR != nil {
-		fmt.Fprintf(&s, " The current PR is #%d (%q).", result.PR.Number, result.PR.Title)
-		if result.PR.HeadRefName != "" {
-			fmt.Fprintf(&s, " HEAD branch: %s.", result.PR.HeadRefName)
-		}
-	}
-	s.WriteString(" The user will paste the rendered output of `gavel pr status` below.")
-	s.WriteString(" Read it, identify failing GitHub Actions jobs and unresolved review comments,")
-	s.WriteString(" and edit files in place to fix them. Prefer minimal, targeted edits over rewrites.")
-	s.WriteString(" Do not run any commit-related commands; the user will commit after verification.")
-	return s.String()
-}
-
-func buildPRStatusPrompt(result *prwatch.PRWatchResult, statusText string) string {
-	var s strings.Builder
-	s.WriteString("Fix the failures and unresolved comments visible in this PR status snapshot:\n\n")
-	s.WriteString("```\n")
-	s.WriteString(statusText)
-	if !strings.HasSuffix(statusText, "\n") {
-		s.WriteString("\n")
-	}
-	s.WriteString("```\n")
-	if result.PR != nil && result.PR.URL != "" {
-		fmt.Fprintf(&s, "\nFor reference, the PR URL is %s.\n", result.PR.URL)
-	}
-	return s.String()
 }

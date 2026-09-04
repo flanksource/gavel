@@ -29,15 +29,15 @@ type selectorContext struct {
 
 // newSelectorContext initializes the graph and hasher. The cache store is
 // opened lazily on first cache hit/miss.
-func newSelectorContext(workDir string) (*selectorContext, error) {
-	graph, err := changegraph.Load(workDir)
+func newSelectorContext(workDir string, tags []string) (*selectorContext, error) {
+	graph, err := changegraph.Load(workDir, tags)
 	if err != nil {
 		return nil, fmt.Errorf("load package graph: %w", err)
 	}
 	return &selectorContext{
 		workDir:         workDir,
 		graph:           graph,
-		hasher:          runcache.NewHasher(graph, nil),
+		hasher:          runcache.NewHasher(graph, tags),
 		absDirByPkgPath: map[string]string{},
 	}, nil
 }
@@ -224,20 +224,20 @@ func cachedSuiteResults(hit cacheHit) parsers.TestSuiteResults {
 
 // diffOptionsFromRunOptions translates user-facing flags into the git
 // DiffOptions fed to ComputeFileSet. Changed or Since always imply
-// staged+unstaged+untracked so the working tree is reflected.
+// staged+unstaged+untracked so the working tree is reflected; an explicit
+// ChangedFiles list on its own is taken as given, because the caller naming it
+// already knows what changed and git's view of the tree would only widen it.
 func diffOptionsFromRunOptions(opts RunOptions) changegraph.DiffOptions {
-	diff := changegraph.DiffOptions{
-		IncludeStaged:    true,
-		IncludeUnstaged:  true,
-		IncludeUntracked: true,
+	diff := changegraph.DiffOptions{Files: opts.ChangedFiles}
+	if opts.Since == "" && !opts.Changed {
+		return diff
 	}
+	diff.IncludeStaged, diff.IncludeUnstaged, diff.IncludeUntracked = true, true, true
 	if opts.Since != "" {
 		diff.Since = opts.Since
 		return diff
 	}
-	if opts.Changed {
-		diff.Since = changedBaseRef()
-	}
+	diff.Since = changedBaseRef()
 	return diff
 }
 

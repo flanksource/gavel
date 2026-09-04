@@ -1,0 +1,1984 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>@import 'https://fonts.googleapis.com/css2?family=Fira+Code:wght@300;400;500;600;700&display=swap';
+
+/* Fonts referenced by the Tailwind 'mono' stack — must be loaded explicitly
+ * because Puppeteer's headless Chromium has no system fonts installed.
+ * Without this, PDF output falls back through Consolas/Monaco/Courier New.
+ */
+
+/* Tailwind directives */
+
+*, ::before, ::after{
+  --tw-border-spacing-x: 0;
+  --tw-border-spacing-y: 0;
+  --tw-translate-x: 0;
+  --tw-translate-y: 0;
+  --tw-rotate: 0;
+  --tw-skew-x: 0;
+  --tw-skew-y: 0;
+  --tw-scale-x: 1;
+  --tw-scale-y: 1;
+  --tw-pan-x:  ;
+  --tw-pan-y:  ;
+  --tw-pinch-zoom:  ;
+  --tw-scroll-snap-strictness: proximity;
+  --tw-gradient-from-position:  ;
+  --tw-gradient-via-position:  ;
+  --tw-gradient-to-position:  ;
+  --tw-ordinal:  ;
+  --tw-slashed-zero:  ;
+  --tw-numeric-figure:  ;
+  --tw-numeric-spacing:  ;
+  --tw-numeric-fraction:  ;
+  --tw-ring-inset:  ;
+  --tw-ring-offset-width: 0px;
+  --tw-ring-offset-color: #fff;
+  --tw-ring-color: rgb(59 130 246 / 0.5);
+  --tw-ring-offset-shadow: 0 0 #0000;
+  --tw-ring-shadow: 0 0 #0000;
+  --tw-shadow: 0 0 #0000;
+  --tw-shadow-colored: 0 0 #0000;
+  --tw-blur:  ;
+  --tw-brightness:  ;
+  --tw-contrast:  ;
+  --tw-grayscale:  ;
+  --tw-hue-rotate:  ;
+  --tw-invert:  ;
+  --tw-saturate:  ;
+  --tw-sepia:  ;
+  --tw-drop-shadow:  ;
+  --tw-backdrop-blur:  ;
+  --tw-backdrop-brightness:  ;
+  --tw-backdrop-contrast:  ;
+  --tw-backdrop-grayscale:  ;
+  --tw-backdrop-hue-rotate:  ;
+  --tw-backdrop-invert:  ;
+  --tw-backdrop-opacity:  ;
+  --tw-backdrop-saturate:  ;
+  --tw-backdrop-sepia:  ;
+  --tw-contain-size:  ;
+  --tw-contain-layout:  ;
+  --tw-contain-paint:  ;
+  --tw-contain-style:  ;
+}
+
+::backdrop{
+  --tw-border-spacing-x: 0;
+  --tw-border-spacing-y: 0;
+  --tw-translate-x: 0;
+  --tw-translate-y: 0;
+  --tw-rotate: 0;
+  --tw-skew-x: 0;
+  --tw-skew-y: 0;
+  --tw-scale-x: 1;
+  --tw-scale-y: 1;
+  --tw-pan-x:  ;
+  --tw-pan-y:  ;
+  --tw-pinch-zoom:  ;
+  --tw-scroll-snap-strictness: proximity;
+  --tw-gradient-from-position:  ;
+  --tw-gradient-via-position:  ;
+  --tw-gradient-to-position:  ;
+  --tw-ordinal:  ;
+  --tw-slashed-zero:  ;
+  --tw-numeric-figure:  ;
+  --tw-numeric-spacing:  ;
+  --tw-numeric-fraction:  ;
+  --tw-ring-inset:  ;
+  --tw-ring-offset-width: 0px;
+  --tw-ring-offset-color: #fff;
+  --tw-ring-color: rgb(59 130 246 / 0.5);
+  --tw-ring-offset-shadow: 0 0 #0000;
+  --tw-ring-shadow: 0 0 #0000;
+  --tw-shadow: 0 0 #0000;
+  --tw-shadow-colored: 0 0 #0000;
+  --tw-blur:  ;
+  --tw-brightness:  ;
+  --tw-contrast:  ;
+  --tw-grayscale:  ;
+  --tw-hue-rotate:  ;
+  --tw-invert:  ;
+  --tw-saturate:  ;
+  --tw-sepia:  ;
+  --tw-drop-shadow:  ;
+  --tw-backdrop-blur:  ;
+  --tw-backdrop-brightness:  ;
+  --tw-backdrop-contrast:  ;
+  --tw-backdrop-grayscale:  ;
+  --tw-backdrop-hue-rotate:  ;
+  --tw-backdrop-invert:  ;
+  --tw-backdrop-opacity:  ;
+  --tw-backdrop-saturate:  ;
+  --tw-backdrop-sepia:  ;
+  --tw-contain-size:  ;
+  --tw-contain-layout:  ;
+  --tw-contain-paint:  ;
+  --tw-contain-style:  ;
+}
+
+/* ! tailwindcss v3.4.19 | MIT License | https://tailwindcss.com
+ */
+
+/*
+1. Prevent padding and border from affecting element width. (https://github.com/mozdevs/cssremedy/issues/4)
+2. Allow adding a border to an element by just adding a border-width. (https://github.com/tailwindcss/tailwindcss/pull/116)
+*/
+
+*,
+::before,
+::after {
+  box-sizing: border-box;
+  /* 1 */
+  border-width: 0;
+  /* 2 */
+  border-style: solid;
+  /* 2 */
+  border-color: #e5e7eb;
+  /* 2 */
+}
+
+::before,
+::after {
+  --tw-content: '';
+}
+
+/*
+1. Use a consistent sensible line-height in all browsers.
+2. Prevent adjustments of font size after orientation changes in iOS.
+3. Use a more readable tab size.
+4. Use the user's configured `sans` font-family by default.
+5. Use the user's configured `sans` font-feature-settings by default.
+6. Use the user's configured `sans` font-variation-settings by default.
+7. Disable tap highlights on iOS
+*/
+
+html,
+:host {
+  line-height: 1.5;
+  /* 1 */
+  -webkit-text-size-adjust: 100%;
+  /* 2 */
+  -moz-tab-size: 4;
+  /* 3 */
+  -o-tab-size: 4;
+     tab-size: 4;
+  /* 3 */
+  font-family: ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+  /* 4 */
+  font-feature-settings: normal;
+  /* 5 */
+  font-variation-settings: normal;
+  /* 6 */
+  -webkit-tap-highlight-color: transparent;
+  /* 7 */
+}
+
+/*
+1. Remove the margin in all browsers.
+2. Inherit line-height from `html` so users can set them as a class directly on the `html` element.
+*/
+
+body {
+  margin: 0;
+  /* 1 */
+  line-height: inherit;
+  /* 2 */
+}
+
+/*
+1. Add the correct height in Firefox.
+2. Correct the inheritance of border color in Firefox. (https://bugzilla.mozilla.org/show_bug.cgi?id=190655)
+3. Ensure horizontal rules are visible by default.
+*/
+
+hr {
+  height: 0;
+  /* 1 */
+  color: inherit;
+  /* 2 */
+  border-top-width: 1px;
+  /* 3 */
+}
+
+/*
+Add the correct text decoration in Chrome, Edge, and Safari.
+*/
+
+abbr:where([title]) {
+  -webkit-text-decoration: underline dotted;
+          text-decoration: underline dotted;
+}
+
+/*
+Remove the default font size and weight for headings.
+*/
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-size: inherit;
+  font-weight: inherit;
+}
+
+/*
+Reset links to optimize for opt-in styling instead of opt-out.
+*/
+
+a {
+  color: inherit;
+  text-decoration: inherit;
+}
+
+/*
+Add the correct font weight in Edge and Safari.
+*/
+
+b,
+strong {
+  font-weight: bolder;
+}
+
+/*
+1. Use the user's configured `mono` font-family by default.
+2. Use the user's configured `mono` font-feature-settings by default.
+3. Use the user's configured `mono` font-variation-settings by default.
+4. Correct the odd `em` font sizing in all browsers.
+*/
+
+code,
+kbd,
+samp,
+pre {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  /* 1 */
+  font-feature-settings: normal;
+  /* 2 */
+  font-variation-settings: normal;
+  /* 3 */
+  font-size: 1em;
+  /* 4 */
+}
+
+/*
+Add the correct font size in all browsers.
+*/
+
+small {
+  font-size: 80%;
+}
+
+/*
+Prevent `sub` and `sup` elements from affecting the line height in all browsers.
+*/
+
+sub,
+sup {
+  font-size: 75%;
+  line-height: 0;
+  position: relative;
+  vertical-align: baseline;
+}
+
+sub {
+  bottom: -0.25em;
+}
+
+sup {
+  top: -0.5em;
+}
+
+/*
+1. Remove text indentation from table contents in Chrome and Safari. (https://bugs.chromium.org/p/chromium/issues/detail?id=999088, https://bugs.webkit.org/show_bug.cgi?id=201297)
+2. Correct table border color inheritance in all Chrome and Safari. (https://bugs.chromium.org/p/chromium/issues/detail?id=935729, https://bugs.webkit.org/show_bug.cgi?id=195016)
+3. Remove gaps between table borders by default.
+*/
+
+table {
+  text-indent: 0;
+  /* 1 */
+  border-color: inherit;
+  /* 2 */
+  border-collapse: collapse;
+  /* 3 */
+}
+
+/*
+1. Change the font styles in all browsers.
+2. Remove the margin in Firefox and Safari.
+3. Remove default padding in all browsers.
+*/
+
+button,
+input,
+optgroup,
+select,
+textarea {
+  font-family: inherit;
+  /* 1 */
+  font-feature-settings: inherit;
+  /* 1 */
+  font-variation-settings: inherit;
+  /* 1 */
+  font-size: 100%;
+  /* 1 */
+  font-weight: inherit;
+  /* 1 */
+  line-height: inherit;
+  /* 1 */
+  letter-spacing: inherit;
+  /* 1 */
+  color: inherit;
+  /* 1 */
+  margin: 0;
+  /* 2 */
+  padding: 0;
+  /* 3 */
+}
+
+/*
+Remove the inheritance of text transform in Edge and Firefox.
+*/
+
+button,
+select {
+  text-transform: none;
+}
+
+/*
+1. Correct the inability to style clickable types in iOS and Safari.
+2. Remove default button styles.
+*/
+
+button,
+input:where([type='button']),
+input:where([type='reset']),
+input:where([type='submit']) {
+  -webkit-appearance: button;
+  /* 1 */
+  background-color: transparent;
+  /* 2 */
+  background-image: none;
+  /* 2 */
+}
+
+/*
+Use the modern Firefox focus style for all focusable elements.
+*/
+
+:-moz-focusring {
+  outline: auto;
+}
+
+/*
+Remove the additional `:invalid` styles in Firefox. (https://github.com/mozilla/gecko-dev/blob/2f9eacd9d3d995c937b4251a5557d95d494c9be1/layout/style/res/forms.css#L728-L737)
+*/
+
+:-moz-ui-invalid {
+  box-shadow: none;
+}
+
+/*
+Add the correct vertical alignment in Chrome and Firefox.
+*/
+
+progress {
+  vertical-align: baseline;
+}
+
+/*
+Correct the cursor style of increment and decrement buttons in Safari.
+*/
+
+::-webkit-inner-spin-button,
+::-webkit-outer-spin-button {
+  height: auto;
+}
+
+/*
+1. Correct the odd appearance in Chrome and Safari.
+2. Correct the outline style in Safari.
+*/
+
+[type='search'] {
+  -webkit-appearance: textfield;
+  /* 1 */
+  outline-offset: -2px;
+  /* 2 */
+}
+
+/*
+Remove the inner padding in Chrome and Safari on macOS.
+*/
+
+::-webkit-search-decoration {
+  -webkit-appearance: none;
+}
+
+/*
+1. Correct the inability to style clickable types in iOS and Safari.
+2. Change font properties to `inherit` in Safari.
+*/
+
+::-webkit-file-upload-button {
+  -webkit-appearance: button;
+  /* 1 */
+  font: inherit;
+  /* 2 */
+}
+
+/*
+Add the correct display in Chrome and Safari.
+*/
+
+summary {
+  display: list-item;
+}
+
+/*
+Removes the default spacing and border for appropriate elements.
+*/
+
+blockquote,
+dl,
+dd,
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+hr,
+figure,
+p,
+pre {
+  margin: 0;
+}
+
+fieldset {
+  margin: 0;
+  padding: 0;
+}
+
+legend {
+  padding: 0;
+}
+
+ol,
+ul,
+menu {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/*
+Reset default styling for dialogs.
+*/
+
+dialog {
+  padding: 0;
+}
+
+/*
+Prevent resizing textareas horizontally by default.
+*/
+
+textarea {
+  resize: vertical;
+}
+
+/*
+1. Reset the default placeholder opacity in Firefox. (https://github.com/tailwindlabs/tailwindcss/issues/3300)
+2. Set the default placeholder color to the user's configured gray 400 color.
+*/
+
+input::-moz-placeholder, textarea::-moz-placeholder {
+  opacity: 1;
+  /* 1 */
+  color: #9ca3af;
+  /* 2 */
+}
+
+input::placeholder,
+textarea::placeholder {
+  opacity: 1;
+  /* 1 */
+  color: #9ca3af;
+  /* 2 */
+}
+
+/*
+Set the default cursor for buttons.
+*/
+
+button,
+[role="button"] {
+  cursor: pointer;
+}
+
+/*
+Make sure disabled buttons don't get the pointer cursor.
+*/
+
+:disabled {
+  cursor: default;
+}
+
+/*
+1. Make replaced elements `display: block` by default. (https://github.com/mozdevs/cssremedy/issues/14)
+2. Add `vertical-align: middle` to align replaced elements more sensibly by default. (https://github.com/jensimmons/cssremedy/issues/14#issuecomment-634934210)
+   This can trigger a poorly considered lint error in some tools but is included by design.
+*/
+
+img,
+svg,
+video,
+canvas,
+audio,
+iframe,
+embed,
+object {
+  display: block;
+  /* 1 */
+  vertical-align: middle;
+  /* 2 */
+}
+
+/*
+Constrain images and videos to the parent width and preserve their intrinsic aspect ratio. (https://github.com/mozdevs/cssremedy/issues/14)
+*/
+
+img,
+video {
+  max-width: 100%;
+  height: auto;
+}
+
+/* Make elements with the HTML hidden attribute stay hidden by default */
+
+[hidden]:where(:not([hidden="until-found"])) {
+  display: none;
+}
+
+.m-0{
+  margin: 0px;
+}
+
+.my-\[4mm\]{
+  margin-top: 4mm;
+  margin-bottom: 4mm;
+}
+
+.mb-1{
+  margin-bottom: 0.25rem;
+}
+
+.mb-3{
+  margin-bottom: 0.75rem;
+}
+
+.mb-4{
+  margin-bottom: 1rem;
+}
+
+.mb-\[1px\]{
+  margin-bottom: 1px;
+}
+
+.mb-\[2mm\]{
+  margin-bottom: 2mm;
+}
+
+.ml-auto{
+  margin-left: auto;
+}
+
+.mt-1{
+  margin-top: 0.25rem;
+}
+
+.inline-block{
+  display: inline-block;
+}
+
+.flex{
+  display: flex;
+}
+
+.w-\[16px\]{
+  width: 16px;
+}
+
+.shrink-0{
+  flex-shrink: 0;
+}
+
+.list-disc{
+  list-style-type: disc;
+}
+
+.flex-col{
+  flex-direction: column;
+}
+
+.flex-wrap{
+  flex-wrap: wrap;
+}
+
+.items-start{
+  align-items: flex-start;
+}
+
+.items-baseline{
+  align-items: baseline;
+}
+
+.justify-start{
+  justify-content: flex-start;
+}
+
+.justify-between{
+  justify-content: space-between;
+}
+
+.gap-1{
+  gap: 0.25rem;
+}
+
+.gap-3{
+  gap: 0.75rem;
+}
+
+.gap-\[4mm\]{
+  gap: 4mm;
+}
+
+.overflow-hidden{
+  overflow: hidden;
+}
+
+.rounded{
+  border-radius: 0.25rem;
+}
+
+.rounded-xl{
+  border-radius: 0.75rem;
+}
+
+.border-2{
+  border-width: 2px;
+}
+
+.border-b{
+  border-bottom-width: 1px;
+}
+
+.border-t{
+  border-top-width: 1px;
+}
+
+.border-solid{
+  border-style: solid;
+}
+
+.border-dotted{
+  border-style: dotted;
+}
+
+.border-gray-200{
+  --tw-border-opacity: 1;
+  border-color: rgb(229 231 235 / var(--tw-border-opacity, 1));
+}
+
+.border-gray-300{
+  --tw-border-opacity: 1;
+  border-color: rgb(209 213 219 / var(--tw-border-opacity, 1));
+}
+
+.p-2{
+  padding: 0.5rem;
+}
+
+.py-\[1px\]{
+  padding-top: 1px;
+  padding-bottom: 1px;
+}
+
+.pb-1{
+  padding-bottom: 0.25rem;
+}
+
+.pb-2{
+  padding-bottom: 0.5rem;
+}
+
+.pl-5{
+  padding-left: 1.25rem;
+}
+
+.pt-1{
+  padding-top: 0.25rem;
+}
+
+.text-center{
+  text-align: center;
+}
+
+.font-mono{
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}
+
+.text-\[14pt\]{
+  font-size: 14pt;
+}
+
+.text-\[5\.5pt\]{
+  font-size: 5.5pt;
+}
+
+.text-\[5pt\]{
+  font-size: 5pt;
+}
+
+.text-\[6\.5pt\]{
+  font-size: 6.5pt;
+}
+
+.text-\[6pt\]{
+  font-size: 6pt;
+}
+
+.text-\[7pt\]{
+  font-size: 7pt;
+}
+
+.text-xl{
+  font-size: 1.25rem;
+  line-height: 1.75rem;
+}
+
+.text-xs{
+  font-size: 0.75rem;
+  line-height: 1rem;
+}
+
+.font-bold{
+  font-weight: 700;
+}
+
+.font-semibold{
+  font-weight: 600;
+}
+
+.uppercase{
+  text-transform: uppercase;
+}
+
+.italic{
+  font-style: italic;
+}
+
+.leading-\[10pt\]{
+  line-height: 10pt;
+}
+
+.leading-\[18pt\]{
+  line-height: 18pt;
+}
+
+.leading-\[8pt\]{
+  line-height: 8pt;
+}
+
+.leading-relaxed{
+  line-height: 1.625;
+}
+
+.tracking-wide{
+  letter-spacing: 0.025em;
+}
+
+.text-gray-400{
+  --tw-text-opacity: 1;
+  color: rgb(156 163 175 / var(--tw-text-opacity, 1));
+}
+
+.text-gray-500{
+  --tw-text-opacity: 1;
+  color: rgb(107 114 128 / var(--tw-text-opacity, 1));
+}
+
+.text-gray-600{
+  --tw-text-opacity: 1;
+  color: rgb(75 85 99 / var(--tw-text-opacity, 1));
+}
+
+.text-gray-700{
+  --tw-text-opacity: 1;
+  color: rgb(55 65 81 / var(--tw-text-opacity, 1));
+}
+
+.text-gray-900{
+  --tw-text-opacity: 1;
+  color: rgb(17 24 39 / var(--tw-text-opacity, 1));
+}
+
+.text-white{
+  --tw-text-opacity: 1;
+  color: rgb(255 255 255 / var(--tw-text-opacity, 1));
+}
+
+.shadow-lg{
+  --tw-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+  --tw-shadow-colored: 0 10px 15px -3px var(--tw-shadow-color), 0 4px 6px -4px var(--tw-shadow-color);
+  box-shadow: var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow);
+}
+
+/* Remove max-width from prose class */
+
+.prose {
+  max-width: none !important;
+}
+
+/* Reduce prose font size and line height for PDFs */
+
+@media print {
+  .prose {
+    font-size: 9pt !important;
+    line-height: 1.3 !important;
+  }
+
+  .prose p {
+    font-size: 10pt !important;
+    line-height: 1.3 !important;
+    margin-bottom: 2mm !important;
+  }
+
+  .prose h1, .prose h2, .prose h3, .prose h4 {
+    line-height: 1.2 !important;
+  }
+
+  /* Override typography plugin with higher specificity */
+
+  .prose h1 {
+    font-size: 22pt !important;
+    line-height: 26pt !important;
+    margin-bottom: 4mm !important;
+    font-weight: 700 !important;
+  }
+
+  .prose h2 {
+    font-size: 15pt !important;
+    line-height: 19pt !important;
+    margin-top: 4mm !important;
+    margin-bottom: 3mm !important;
+    font-weight: 600 !important;
+  }
+
+  .prose h3 {
+    font-size: 12pt !important;
+    line-height: 15pt !important;
+    margin-top: 3mm !important;
+    margin-bottom: 2mm !important;
+    font-weight: 500 !important;
+  }
+
+  .prose h4 {
+    font-size: 10pt !important;
+    line-height: 12pt !important;
+    margin-top: 2mm !important;
+    margin-bottom: 2mm !important;
+    font-weight: 600 !important;
+  }
+
+  h1, h2, h3, h4, p{
+    --tw-text-opacity: 1;
+    color: rgb(31 41 55 / var(--tw-text-opacity, 1));
+  }
+
+  h2,h3,h4{
+    display: inline-flex;
+  }
+
+  .subtitle{
+    font-weight: 300;
+    --tw-text-opacity: 1;
+    color: rgb(55 65 81 / var(--tw-text-opacity, 1));
+  }
+
+  .icon{
+    margin-right: 0.25rem;
+    display: inline-flex;
+    height: 100%;
+    place-content: center;
+    vertical-align: middle;
+    --tw-text-opacity: 1;
+    color: rgb(156 163 175 / var(--tw-text-opacity, 1));
+  }
+
+  /* Reduce all typography sizes for PDFs while maintaining hierarchy */
+
+  h1 {
+    font-size: 22pt !important;
+    line-height: 26pt !important;
+    margin-bottom: 4mm !important;
+    --tw-text-opacity: 1;
+    color: rgb(55 65 81 / var(--tw-text-opacity, 1));
+  }
+
+  h2 {
+    font-size: 15pt !important;
+    line-height: 19pt !important;
+    margin-top: 4mm !important;
+    margin-bottom: 3mm !important;
+    display: inline-flex;
+  }
+
+  h3 {
+    font-size: 12pt !important;
+    line-height: 15pt !important;
+    margin-top: 3mm !important;
+    margin-bottom: 2mm !important;
+  }
+
+  h4 {
+    font-size: 10pt !important;
+    line-height: 12pt !important;
+    margin-top: 2mm !important;
+    margin-bottom: 2mm !important;
+  }
+
+  p {
+    font-size: 9pt !important;
+    line-height: 12pt !important;
+    margin-bottom: 3mm !important;
+  }
+
+  .text-xs {
+    font-size: 7pt !important;
+  }
+
+  .text-sm {
+    font-size: 9pt !important;
+  }
+
+  .text-md {
+    font-size: 10pt !important;
+  }
+
+  .text-lg {
+    font-size: 15pt !important;
+  }
+
+  .text-xl {
+    font-size: 18pt !important;
+  }
+
+  .text-2xl {
+    font-size: 24pt !important;
+  }
+
+  tbody td {
+    font-weight: 400 !important;
+  }
+}
+
+/* ==========================================
+   PDF Style Guide Implementation
+   Based on: /docs/style-guide/pdf.mdx
+   Two-Page Datasheet Format
+   ========================================== */
+
+/* CSS Reset */
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+/* Page Setup */
+
+@page {
+  margin: 0;
+
+  padding: 0;
+}
+
+/* Typography System - Open Sans Primary, Fira Code Monospace */
+
+body{
+  --tw-bg-opacity: 1;
+  background-color: rgb(255 255 255 / var(--tw-bg-opacity, 1));
+  --tw-text-opacity: 1;
+  color: rgb(55 65 81 / var(--tw-text-opacity, 1));
+  font-family: 'Open Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, Helvetica, sans-serif;
+  font-size: 10pt;
+  line-height: 14pt;
+  max-width: 210mm;
+  margin: 0 auto;
+  padding: 0;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Print-specific styles */
+
+@media print {
+  @page :first {
+    margin: 0;
+
+    padding: 0;
+  }
+
+  @page {
+    margin: 0;
+
+    padding: 0;
+  }
+
+  body {
+    margin-bottom: 10mm;
+    margin-top: 0;
+    padding: 0;
+  }
+
+  .page-break {
+    page-break-after: always;
+    -moz-column-break-after: page;
+         break-after: page;
+  }
+
+  .no-print {
+    display: none;
+  }
+
+  /* Ensure colors render correctly for electronic PDF distribution (RGB) */
+
+  * {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+    color-adjust: exact;
+  }
+
+  /* Table page break handling */
+
+  table {
+    /* margin-top: 8mm !important; */
+    page-break-inside: auto;
+  }
+
+  /* Ensure table wrappers also respect page margins */
+
+  .overflow-x-auto {
+    margin-top: 8mm !important;
+  }
+
+  thead {
+    display: table-header-group;
+    /* Repeat header on each page */
+  }
+
+  tbody {
+    display: table-row-group;
+  }
+
+  /* Prevent breaking inside rows but allow table continuation */
+
+  tr {
+    page-break-inside: avoid;
+    page-break-after: auto;
+  }
+
+  td {
+    page-break-inside: avoid;
+  }
+
+  /* Add top margin to any element that starts a new page */
+
+  * {
+    orphans: 2;
+    widows: 2;
+  }
+
+  /* Target the last page content to create space for footer */
+
+  main:last-of-type {
+    min-height: 240mm;
+    /* Fill most of A4 page (297mm - margins - footer space) */
+    display: flex;
+    flex-direction: column;
+  }
+
+  main:last-of-type article {
+    flex: 1 0 auto;
+  }
+
+  /* Print header and footer adjustments */
+
+  .datasheet-header {
+    margin: 0;
+  }
+
+  .datasheet-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin: 0 0 10mm;
+    padding: 3mm 10mm;
+    page-break-inside: avoid;
+    page-break-before: avoid;
+  }
+
+  .datasheet-footer .footer-left {
+    padding-left: 3mm;
+  }
+
+  .datasheet-footer .footer-right {
+    padding-right: 3mm;
+  }
+
+  .datasheet-footer p {
+    margin: 0 0 2mm;
+    font-size: 8pt;
+    line-height: 10pt;
+  }
+
+  .datasheet-footer--compact {
+    margin: 8mm 0 0;
+    padding: 2mm 10mm;
+  }
+}
+
+/* Typography Scale from Style Guide (DS-10) */
+
+h1{
+  font-weight: 700;
+  --tw-text-opacity: 1;
+  color: rgb(15 23 42 / var(--tw-text-opacity, 1));
+  font-size: 26pt;
+  /* DS-10: 24-28pt for product name */
+  line-height: 32pt;
+  margin-bottom: 8mm;
+}
+
+h2{
+  font-weight: 600;
+  --tw-text-opacity: 1;
+  color: rgb(15 23 42 / var(--tw-text-opacity, 1));
+  font-size: 18pt;
+  line-height: 24pt;
+  margin-top: 6mm;
+  margin-bottom: 4mm;
+}
+
+h3{
+  font-weight: 500;
+  --tw-text-opacity: 1;
+  color: rgb(59 130 246 / var(--tw-text-opacity, 1));
+  font-size: 13pt;
+  line-height: 16pt;
+  margin-top: 5mm;
+  margin-bottom: 4mm;
+}
+
+h4{
+  font-weight: 600;
+  --tw-text-opacity: 1;
+  color: rgb(75 85 99 / var(--tw-text-opacity, 1));
+  font-size: 11pt;
+  line-height: 14pt;
+  margin-top: 3mm;
+  margin-bottom: 2mm;
+}
+
+p{
+  --tw-text-opacity: 1;
+  color: rgb(55 65 81 / var(--tw-text-opacity, 1));
+  margin-bottom: 4mm;
+}
+
+strong{
+  font-weight: 600;
+  --tw-text-opacity: 1;
+  color: rgb(15 23 42 / var(--tw-text-opacity, 1));
+}
+
+code:not(.shiki *){
+  border-radius: 0.25rem;
+  border-width: 1px;
+  --tw-border-opacity: 1;
+  border-color: rgb(229 231 235 / var(--tw-border-opacity, 1));
+  --tw-bg-opacity: 1;
+  background-color: rgb(243 244 246 / var(--tw-bg-opacity, 1));
+  font-family: 'Fira Code', Monaco, 'Courier New', monospace;
+  font-size: 9pt;
+  line-height: 12pt;
+  padding: 1pt 2pt;
+  border-radius: 1pt;
+}
+
+/* Blockquote - Light Zinc Aside */
+
+blockquote{
+  border-top-right-radius: 0.25rem;
+  border-bottom-right-radius: 0.25rem;
+  border-left-width: 3pt;
+  --tw-border-opacity: 1;
+  border-color: rgb(212 212 216 / var(--tw-border-opacity, 1));
+  background-color: rgb(250 250 250 / 0.75);
+  margin: 4mm 0;
+  padding: 3mm 4mm;
+  font-size: 10pt;
+  line-height: 12pt;
+  color: #52525b;
+  /* zinc-600 */
+}
+
+blockquote p {
+  margin-bottom: 0;
+  color: #52525b;
+  /* zinc-600 */
+}
+
+blockquote.info{
+  --tw-border-opacity: 1;
+  border-left-color: rgb(59 130 246 / var(--tw-border-opacity, 1));
+  background-color: rgb(239 246 255 / 0.5);
+}
+
+blockquote.info p{
+  --tw-text-opacity: 1;
+  color: rgb(29 78 216 / var(--tw-text-opacity, 1));
+}
+
+/* Lists */
+
+ul {
+  margin: 3mm 0 4mm 8mm;
+  padding: 0;
+  list-style-type: disc;
+}
+
+li{
+  --tw-text-opacity: 1;
+  color: rgb(55 65 81 / var(--tw-text-opacity, 1));
+  margin-bottom: 2mm;
+}
+
+/* Tables - Technical Specifications */
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 5mm 0;
+  font-size: 9pt;
+}
+
+thead{
+  --tw-bg-opacity: 1;
+  background-color: rgb(37 99 235 / var(--tw-bg-opacity, 1));
+  --tw-text-opacity: 1;
+  color: rgb(255 255 255 / var(--tw-text-opacity, 1));
+}
+
+thead th{
+  border-width: 1px;
+  --tw-border-opacity: 1;
+  border-color: rgb(59 130 246 / var(--tw-border-opacity, 1));
+  --tw-bg-opacity: 1;
+  background-color: rgb(37 99 235 / var(--tw-bg-opacity, 1));
+  font-weight: 600;
+  --tw-text-opacity: 1;
+  color: rgb(255 255 255 / var(--tw-text-opacity, 1));
+  font-size: calc(1em + 1pt);
+  padding: 2mm;
+  text-align: left;
+}
+
+tbody tr:nth-child(odd){
+  --tw-bg-opacity: 1;
+  background-color: rgb(249 250 251 / var(--tw-bg-opacity, 1));
+}
+
+tbody tr:nth-child(even){
+  --tw-bg-opacity: 1;
+  background-color: rgb(255 255 255 / var(--tw-bg-opacity, 1));
+}
+
+tbody td{
+  border-width: 1px;
+  --tw-border-opacity: 1;
+  border-color: rgb(209 213 219 / var(--tw-border-opacity, 1));
+  --tw-text-opacity: 1;
+  color: rgb(55 65 81 / var(--tw-text-opacity, 1));
+  padding: 2mm 1.5mm;
+  vertical-align: top;
+}
+
+tbody td:first-child {
+  font-weight: 600;
+}
+
+/* Table size variants — apply text-{size} class on <table> */
+
+/* th gets +1pt automatically via calc(1em + 1pt) above */
+
+table.text-xs {
+  font-size: 7pt;
+}
+
+table.text-xs th {
+  padding: 1mm;
+}
+
+table.text-xs td {
+  padding: 0.5mm 1mm;
+}
+
+table.text-sm {
+  font-size: 9pt;
+}
+
+table.text-sm th {
+  padding: 1.5mm;
+}
+
+table.text-sm td {
+  padding: 1mm 1.5mm;
+}
+
+table.text-md {
+  font-size: 10pt;
+}
+
+table.text-md th {
+  padding: 2.5mm;
+}
+
+table.text-md td {
+  padding: 2mm 2.5mm;
+}
+
+/* Section Spacing */
+
+section {
+  margin-bottom: 8mm;
+}
+
+article {
+  margin-bottom: 0;
+}
+
+/* Page Break - Utility Class */
+
+.page-break {
+  page-break-after: always;
+  -moz-column-break-after: page;
+       break-after: page;
+  height: 0;
+  margin: 0;
+  padding: 0;
+}
+
+/* Page 1 Header - Hero Section */
+
+.datasheet-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 2pt solid #e5e7eb;
+  /* margin: 0 0 10mm; */
+  /* padding: 5mm 10mm; */
+}
+
+.logo {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.logo img {
+  -o-object-fit: contain;
+     object-fit: contain;
+}
+
+.header-meta{
+  --tw-text-opacity: 1;
+  color: rgb(107 114 128 / var(--tw-text-opacity, 1));
+  text-align: right;
+  font-size: 10pt;
+  line-height: 1.2;
+}
+
+.header-meta p {
+  margin: 0 !important;
+}
+
+/* CTA Footer */
+
+.cta-footer {
+  background: linear-gradient(to right, #f3f4f6, #f9fafb);
+  border-top: 1pt solid #e5e7eb;
+  margin: 0;
+  padding: 5mm 10mm;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 3mm;
+}
+
+.cta-footer p {
+  margin: 0;
+}
+
+/* Section Header Bar */
+
+.section-header-bar {
+  background: #3578e5;
+  color: #fff;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  height: 15mm;
+  margin: 0;
+  padding: 0 10mm;
+}
+
+.section-header-bar h2 {
+  font-size: 18pt;
+  font-weight: 600;
+  color: #fff;
+  margin: 0 !important;
+}
+
+.section-header-bar .product-name {
+  font-size: 10pt;
+  color: #fff;
+  font-weight: 400;
+}
+
+/* Page 2 Footer - Legal Footer */
+
+.datasheet-footer{
+  --tw-text-opacity: 1;
+  color: rgb(107 114 128 / var(--tw-text-opacity, 1));
+  border-top: 0.2pt solid #d1d5db;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  font-size: 10pt;
+  line-height: 11pt;
+  margin: auto 0 0;
+  padding: 3mm 10mm;
+}
+
+.datasheet-footer p {
+  margin: 0 0 1mm !important;
+  font-size: 8pt;
+  line-height: 10pt;
+}
+
+.datasheet-footer .footer-left p:first-child{
+  font-weight: 600;
+  --tw-text-opacity: 1;
+  color: rgb(15 23 42 / var(--tw-text-opacity, 1));
+}
+
+.footer-right {
+  text-align: right;
+}
+
+.footer-icons {
+  display: flex;
+  flex-direction: row;
+  gap: 3mm;
+  justify-content: flex-end;
+  align-items: center;
+  margin-top: 2mm;
+}
+
+.footer-icon-link{
+  --tw-text-opacity: 1;
+  color: rgb(75 85 99 / var(--tw-text-opacity, 1));
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+}
+
+.footer-icon-link svg {
+  width: 4mm;
+  height: 4mm;
+}
+
+/* Header Solid Variant */
+
+.datasheet-header--solid {
+  background: #3578e5;
+  border: none;
+  color: #fff;
+  margin: 0;
+}
+
+.datasheet-header--solid .logo {
+  width: 40mm;
+  height: auto;
+}
+
+.datasheet-header--solid .logo h1 {
+  color: #fff;
+}
+
+.datasheet-header--solid .header-meta {
+  color: #fff;
+  text-align: right;
+}
+
+.datasheet-header--solid .header-meta p {
+  color: #fff;
+}
+
+/* Header Minimal Variant */
+
+.datasheet-header--minimal {
+  border: none;
+  margin: 0;
+  background: transparent;
+}
+
+.datasheet-header--minimal .logo {
+  width: 35mm;
+  height: auto;
+}
+
+/* Footer Compact Variant */
+
+.datasheet-footer--compact {
+  border-top: 0.5pt solid #d1d5db;
+  display: flex;
+  align-items: center;
+  font-size: 8pt;
+  line-height: 10pt;
+  color: #6b7280;
+  margin: 8mm 0 0;
+  padding: 2mm 10mm;
+  gap: 8mm;
+}
+
+.datasheet-footer--compact .footer-content {
+  display: flex;
+  align-items: center;
+  gap: 4mm;
+  flex-wrap: wrap;
+  width: 100%;
+}
+
+.datasheet-footer--compact .footer-brand {
+  font-weight: 600;
+  color: #131f3b;
+}
+
+.datasheet-footer--compact .footer-copyright {
+  color: #6b7280;
+}
+
+.datasheet-footer--compact .footer-link {
+  color: #3578e5;
+  text-decoration: none;
+  font-weight: 500;
+  transition: color 0.2s ease;
+}
+
+.datasheet-footer--compact .footer-link:hover {
+  color: #2563eb;
+  text-decoration: underline;
+}
+
+/* Footer Minimal Variant */
+
+.datasheet-footer--minimal {
+  border: none;
+  margin: 8mm 0 0;
+  padding: 1mm 10mm;
+  text-align: center;
+  font-size: 7pt;
+  line-height: 9pt;
+  color: #9ca3af;
+}
+
+.datasheet-footer--minimal p {
+  margin: 0 !important;
+}
+
+/* Project links - Utility Class */
+
+.project-link{
+  --tw-text-opacity: 1;
+  color: rgb(37 99 235 / var(--tw-text-opacity, 1));
+  text-decoration: underline;
+  font-weight: 500;
+}
+
+.project-link:hover{
+  --tw-text-opacity: 1;
+  color: rgb(29 78 216 / var(--tw-text-opacity, 1));
+  text-decoration: underline;
+}
+
+/* ==========================================
+   ELECTRONIC DISPLAY OPTIMIZATION
+   Responsive design for screens
+   ========================================== */
+
+/* Screen-optimized defaults */
+
+@media screen {
+  /* Remove page constraints on screens */
+
+  body {
+    max-width: 100%;
+    background: #f5f5f5;
+    padding: 2rem 0;
+  }
+
+  /* Create card-like effect for content */
+
+  .page {
+    background: #fff;
+    border-radius: 0.5rem;
+    box-shadow: 0 1px 3px rgb(0 0 0 / 10%), 0 1px 2px rgb(0 0 0 / 6%);
+    margin-bottom: 2rem;
+    padding: 2rem;
+  }
+
+  /* Hide print-only elements on screen */
+
+  .page-break {
+    display: none;
+  }
+
+  /* Screen-optimized header variations */
+
+  .datasheet-header--solid {
+    margin: 0 0 2rem;
+    padding: 1rem 2rem;
+    border-radius: 0 0 0.5rem 0.5rem;
+  }
+
+  .datasheet-header--solid .logo {
+    width: auto;
+    height: auto;
+  }
+
+  .datasheet-header--minimal {
+    margin: 0;
+    padding: 1rem 2rem;
+  }
+
+  /* Screen-optimized footer variations */
+
+  .datasheet-footer--compact {
+    margin: 1.5rem 0 -2rem;
+    padding: 0.75rem 2rem;
+    background: #f9fafb;
+    border-top: 1px solid #e5e7eb;
+    border-radius: 0 0 0.5rem 0.5rem;
+  }
+
+  .datasheet-footer--compact .footer-content {
+    justify-content: space-between;
+  }
+
+  .datasheet-footer--minimal {
+    margin: 1.5rem 0 -2rem;
+    padding: 0.5rem 2rem;
+    background: #fafafa;
+  }
+
+  .datasheet-footer--minimal p {
+    color: #d1d5db;
+    font-size: 12px;
+  }
+
+  /* Enhance interactive elements */
+
+  a {
+    transition: color 0.2s ease, -webkit-text-decoration 0.2s ease;
+    transition: color 0.2s ease, text-decoration 0.2s ease;
+    transition: color 0.2s ease, text-decoration 0.2s ease, -webkit-text-decoration 0.2s ease;
+  }
+
+  a:hover {
+    color: #2563eb;
+    text-decoration: underline;
+  }
+
+  a:focus {
+    outline: 2px solid #3578e5;
+    outline-offset: 2px;
+    border-radius: 2px;
+  }
+
+  button {
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+
+  .query-response-chat {
+    box-shadow: 0 1px 3px rgb(0 0 0 / 10%);
+  }
+
+  /* Better spacing for screens */
+
+  section {
+    margin-bottom: 3rem;
+  }
+
+  h2 {
+    margin-top: 2rem;
+  }
+}
+
+/* Responsive adjustments for screen viewing - Mobile (max 480px) */
+
+@media screen and (width <= 480px) {
+  body {
+    padding: 0;
+    font-size: 14px;
+    line-height: 20px;
+  }
+
+  .page {
+    padding: 1.5rem;
+    border-radius: 0.375rem;
+  }
+
+  h1 {
+    font-size: clamp(20px, 5vw, 26pt);
+    margin-bottom: 1rem;
+  }
+
+  h2 {
+    font-size: clamp(14px, 4vw, 18pt);
+    margin-bottom: 0.75rem;
+  }
+
+  h3 {
+    font-size: clamp(12px, 3.5vw, 14pt);
+    margin-bottom: 0.5rem;
+  }
+
+  p {
+    margin-bottom: 1rem;
+    line-height: 1.6;
+  }
+
+  .logo {
+    width: 100%;
+  }
+
+  .header-meta {
+    text-align: left;
+    font-size: 12px;
+  }
+
+  .datasheet-header--solid {
+    margin: 0 0 1rem;
+    padding: 0.75rem;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .datasheet-header--solid .header-meta {
+    text-align: left;
+  }
+
+  .datasheet-header--minimal {
+    margin: 0;
+    padding: 0.75rem;
+  }
+
+  /* Mobile footer variations */
+
+  .datasheet-footer {
+    margin: 1rem 0 0;
+    padding: 1rem;
+    flex-direction: column;
+    gap: 1rem;
+    font-size: 11px;
+  }
+
+  .footer-right {
+    text-align: left;
+  }
+
+  .datasheet-footer--compact {
+    flex-direction: column;
+    align-items: flex-start;
+    margin: 1rem 0 -1rem;
+    padding: 0.75rem;
+    gap: 0.5rem;
+  }
+
+  .datasheet-footer--compact .footer-content {
+    flex-direction: column;
+    gap: 0.5rem;
+    width: 100%;
+  }
+
+  .datasheet-footer--minimal {
+    margin: 1rem 0 -1rem;
+    padding: 0.5rem;
+  }
+
+  .cta-footer {
+    flex-direction: column;
+    gap: 1rem;
+    margin: 0;
+    padding: 1rem;
+  }
+
+  .section-header-bar {
+    margin: 0;
+    padding: 0 1rem;
+    height: auto;
+    min-height: 60px;
+    flex-wrap: wrap;
+  }
+
+  /* Larger tap targets */
+
+  button, a[role="button"] {
+    min-height: 44px;
+    min-width: 44px;
+  }
+
+  /* Table scrolling on mobile */
+
+  table {
+    font-size: 12px;
+    display: block;
+    overflow-x: auto;
+    border-collapse: collapse;
+  }
+
+  thead, tbody, th, td, tr {
+    display: block;
+  }
+
+  thead tr {
+    position: absolute;
+    top: -9999px;
+    left: -9999px;
+  }
+
+  tr {
+    margin-bottom: 1rem;
+    border: 1px solid #d1d5db;
+    border-radius: 4px;
+    overflow: hidden;
+  }
+
+  td {
+    padding: 0.5rem;
+    position: relative;
+    padding-left: 50%;
+    text-align: right;
+  }
+
+  td::before {
+    content: attr(data-label);
+    position: absolute;
+    left: 0.5rem;
+    font-weight: 600;
+    text-align: left;
+    width: 45%;
+  }
+}
+
+/* Tablet and Medium screens (481px - 800px) */
+
+@media screen and (width >= 481px) and (width <= 800px) {
+  body {
+    padding: 0;
+    font-size: 15px;
+    line-height: 22px;
+  }
+
+  .page {
+    padding: 1.75rem;
+  }
+
+  h1 {
+    font-size: clamp(22px, 4.5vw, 26pt);
+  }
+
+  h2 {
+    font-size: clamp(16px, 3.5vw, 18pt);
+  }
+
+  .cta-footer {
+    margin: 0;
+    padding: 1.5rem;
+  }
+
+  .section-header-bar {
+    margin: 0;
+    padding: 0 1.5rem;
+  }
+
+  .datasheet-footer {
+    margin: 1.5rem 0 0;
+    padding: 1.5rem;
+  }
+}
+
+/* Desktop screens (801px and above) */
+
+@media screen and (width >= 801px) {
+  body {
+    padding: 0;
+    font-size: 10pt;
+    line-height: 14pt;
+    max-width: 1200px;
+  }
+
+  .page {
+    padding: 2rem;
+  }
+
+  .cta-footer {
+    margin: 0;
+    padding: 2rem;
+  }
+
+  .section-header-bar {
+    margin: 0;
+    padding: 0 2rem;
+  }
+
+  .datasheet-footer {
+    margin: 2rem 0 0;
+    padding: 2rem;
+  }
+
+  section {
+    margin-bottom: 8mm;
+  }
+}
+
+
+</style>
+</head>
+<body>
+<div data-page-size="a4" data-page-type="default" data-margin-top="0" data-margin-right="0" data-margin-bottom="0" data-margin-left="0" style="page-break-after:always;break-after:page"><h2 class="text-xl font-bold text-gray-900 mb-4 border-b border-gray-200 pb-2">Session ERD</h2><main style="overflow:hidden;padding-top:0mm;padding-right:0mm;padding-bottom:0mm;padding-left:0mm"><article><section class="flex flex-col gap-[4mm] my-[4mm] "><h3 class="text-[14pt] leading-[18pt] font-semibold m-0 mb-[2mm]" style="color:#131f3b">captain — sessions and transcript</h3><div class="flex items-start justify-start gap-3 flex-wrap mb-3"><div class="rounded-xl overflow-hidden shadow-lg border-2 border-solid" style="min-width:250px;border-color:#2d7de4"><div class="p-2 text-center text-white text-xs font-bold" style="background-color:#2d7de4">captain_sessions</div><div class="p-2" style="background-color:#ffffff"><div class="flex items-baseline justify-between text-[6pt] font-mono pb-1 mb-1 border-b border-gray-300"><span class="text-gray-600">6,337 rows</span><span class="font-bold" style="color:#1069dc">358 MB</span></div><div class="flex flex-col"><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#f59e0b">PK</span><span class="font-mono font-semibold">id</span><span class="text-gray-500">uuid</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#62758a">UK</span><span class="font-mono font-semibold">provider_session_id</span><span class="text-gray-500">text</span><span class="text-gray-400 italic">null</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#62758a">UK</span><span class="font-mono font-semibold">source</span><span class="text-gray-500">text</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#62758a">UK</span><span class="font-mono font-semibold">provider</span><span class="text-gray-500">text</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#62758a">UK</span><span class="font-mono font-semibold">host_id</span><span class="text-gray-500">text</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#10b981">FK</span><span class="font-mono font-semibold">parent_session_id</span><span class="text-gray-500">uuid</span><span class="text-gray-400 italic">null</span><span class="ml-auto font-mono" style="color:#10b981">→<!-- -->self</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#10b981">FK</span><span class="font-mono font-semibold">root_session_id</span><span class="text-gray-500">uuid</span><span class="text-gray-400 italic">null</span><span class="ml-auto font-mono" style="color:#10b981">→<!-- -->self</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:transparent"></span><span class="font-mono font-semibold">lifecycle_status</span><span class="text-gray-500">enum</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:transparent"></span><span class="font-mono font-semibold">activity_state</span><span class="text-gray-500">enum</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:transparent"></span><span class="font-mono font-semibold">health_state</span><span class="text-gray-500">enum</span></div></div><div class="mt-1 pt-1 border-t border-gray-300"><div class="text-[5.5pt] font-bold uppercase tracking-wide text-gray-400 mb-[1px]">observed</div><div class="text-[5.5pt] leading-[8pt] font-mono"><span class="font-semibold text-gray-700">source</span> <span class="text-gray-500">claude 3,267 · codex 2,433 · captain 567 · gavel 99</span></div><div class="text-[5.5pt] leading-[8pt] font-mono"><span class="font-semibold text-gray-700">provider</span> <span class="text-gray-500">(empty) 5,149 · multi-model 294 · openai 179 · codex-cmux 153 · +12 more</span></div><div class="text-[5.5pt] leading-[8pt] font-mono"><span class="font-semibold text-gray-700">lifecycle_status</span> <span class="text-gray-500">created 5,236 · succeeded 624 · failed 186 · running 164 · partial 156</span></div><div class="text-[5.5pt] leading-[8pt] font-mono"><span class="font-semibold text-gray-700">activity_state</span> <span class="text-gray-500">idle 6,359 · ask 5 · working 2</span></div><div class="text-[5.5pt] leading-[8pt] font-mono"><span class="font-semibold text-gray-700">health_state</span> <span class="text-gray-500">healthy 6,366 — stalled and zombie never observed</span></div></div><div class="text-[6pt] italic text-gray-500 pt-1 leading-[8pt]">316 MB of that is main heap — see the sizing note. Parent/root cascade: deleting a root removes the whole agent subtree.</div></div></div><div class="rounded-xl overflow-hidden shadow-lg border-2 border-solid" style="min-width:256px;border-color:#2d7de4"><div class="p-2 text-center text-white text-xs font-bold" style="background-color:#2d7de4">captain_messages</div><div class="p-2" style="background-color:#ffffff"><div class="flex items-baseline justify-between text-[6pt] font-mono pb-1 mb-1 border-b border-gray-300"><span class="text-gray-600">648,793 rows</span><span class="font-bold" style="color:#1069dc">1057 MB</span></div><div class="flex flex-col"><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#f59e0b">PK</span><span class="font-mono font-semibold">id</span><span class="text-gray-500">uuid</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#10b981">FK</span><span class="font-mono font-semibold">session_id</span><span class="text-gray-500">uuid</span><span class="ml-auto font-mono" style="color:#10b981">→<!-- -->sessions</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#10b981">FK</span><span class="font-mono font-semibold">turn_id</span><span class="text-gray-500">uuid</span><span class="text-gray-400 italic">null</span><span class="ml-auto font-mono" style="color:#10b981">→<!-- -->turns</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#10b981">FK</span><span class="font-mono font-semibold">model_call_id</span><span class="text-gray-500">uuid</span><span class="text-gray-400 italic">null</span><span class="ml-auto font-mono" style="color:#10b981">→<!-- -->model_calls</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#62758a">UK</span><span class="font-mono font-semibold">provider_message_id</span><span class="text-gray-500">text</span><span class="text-gray-400 italic">null</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#62758a">UK</span><span class="font-mono font-semibold">sequence</span><span class="text-gray-500">bigint</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:transparent"></span><span class="font-mono font-semibold">source_line</span><span class="text-gray-500">bigint</span><span class="text-gray-400 italic">null</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:transparent"></span><span class="font-mono font-semibold">role</span><span class="text-gray-500">text</span></div></div><div class="mt-1 pt-1 border-t border-gray-300"><div class="text-[5.5pt] font-bold uppercase tracking-wide text-gray-400 mb-[1px]">observed</div><div class="text-[5.5pt] leading-[8pt] font-mono"><span class="font-semibold text-gray-700">role</span> <span class="text-gray-500">assistant 476,727 · user 171,823 · system 865</span></div><div class="text-[5.5pt] leading-[8pt] font-mono"><span class="font-semibold text-gray-700">sequence</span> <span class="text-gray-500">1..5,228 (avg 374)</span></div></div><div class="text-[6pt] italic text-gray-500 pt-1 leading-[8pt]">402 MB heap + 487 MB toast + 168 MB indexes. Two durable identity keys: (session_id, sequence) and (session_id, provider_message_id).</div></div></div><div class="rounded-xl overflow-hidden shadow-lg border-2 border-solid" style="min-width:222px;border-color:#2d7de4"><div class="p-2 text-center text-white text-xs font-bold" style="background-color:#2d7de4">captain_turns</div><div class="p-2" style="background-color:#ffffff"><div class="flex items-baseline justify-between text-[6pt] font-mono pb-1 mb-1 border-b border-gray-300"><span class="text-gray-600">12,826 rows</span><span class="font-bold" style="color:#1069dc">8.4 MB</span></div><div class="flex flex-col"><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#f59e0b">PK</span><span class="font-mono font-semibold">id</span><span class="text-gray-500">uuid</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#10b981">FK</span><span class="font-mono font-semibold">session_id</span><span class="text-gray-500">uuid</span><span class="ml-auto font-mono" style="color:#10b981">→<!-- -->sessions</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#62758a">UK</span><span class="font-mono font-semibold">provider_turn_id</span><span class="text-gray-500">text</span><span class="text-gray-400 italic">null</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#62758a">UK</span><span class="font-mono font-semibold">turn_index</span><span class="text-gray-500">integer</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:transparent"></span><span class="font-mono font-semibold">status</span><span class="text-gray-500">enum</span></div></div><div class="mt-1 pt-1 border-t border-gray-300"><div class="text-[5.5pt] font-bold uppercase tracking-wide text-gray-400 mb-[1px]">observed</div><div class="text-[5.5pt] leading-[8pt] font-mono"><span class="font-semibold text-gray-700">status</span> <span class="text-gray-500">ended 12,836 — open never observed at rest</span></div><div class="text-[5.5pt] leading-[8pt] font-mono"><span class="font-semibold text-gray-700">turn_index</span> <span class="text-gray-500">1..95 (avg 7)</span></div></div><div class="text-[6pt] italic text-gray-500 pt-1 leading-[8pt]">at most one open turn per session</div></div></div></div><div class="flex items-start justify-start gap-3 flex-wrap mb-3"><div class="rounded-xl overflow-hidden shadow-lg border-2 border-solid" style="min-width:240px;border-color:#2d7de4"><div class="p-2 text-center text-white text-xs font-bold" style="background-color:#2d7de4">captain_model_calls</div><div class="p-2" style="background-color:#ffffff"><div class="flex items-baseline justify-between text-[6pt] font-mono pb-1 mb-1 border-b border-gray-300"><span class="text-gray-600">12,826 rows</span><span class="font-bold" style="color:#1069dc">9.2 MB</span></div><div class="flex flex-col"><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#f59e0b">PK</span><span class="font-mono font-semibold">id</span><span class="text-gray-500">uuid</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#10b981">FK</span><span class="font-mono font-semibold">turn_id</span><span class="text-gray-500">uuid</span><span class="ml-auto font-mono" style="color:#10b981">→<!-- -->turns</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#10b981">FK</span><span class="font-mono font-semibold">prompt_run_id</span><span class="text-gray-500">uuid</span><span class="text-gray-400 italic">null</span><span class="ml-auto font-mono" style="color:#10b981">→<!-- -->prompt_runs</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#10b981">FK</span><span class="font-mono font-semibold">iteration_id</span><span class="text-gray-500">uuid</span><span class="text-gray-400 italic">null</span><span class="ml-auto font-mono" style="color:#10b981">→<!-- -->iterations</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#62758a">UK</span><span class="font-mono font-semibold">call_index</span><span class="text-gray-500">integer</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:transparent"></span><span class="font-mono font-semibold">status</span><span class="text-gray-500">enum</span></div></div><div class="mt-1 pt-1 border-t border-gray-300"><div class="text-[5.5pt] font-bold uppercase tracking-wide text-gray-400 mb-[1px]">observed</div><div class="text-[5.5pt] leading-[8pt] font-mono"><span class="font-semibold text-gray-700">status</span> <span class="text-gray-500">succeeded 12,836 — pending and failed never observed at rest</span></div></div><div class="text-[6pt] italic text-gray-500 pt-1 leading-[8pt]">turn_id is mandatory, so prompt-run costs are always reachable via turns too</div></div></div><div class="rounded-xl overflow-hidden shadow-lg border-2 border-solid" style="min-width:222px;border-color:#2d7de4"><div class="p-2 text-center text-white text-xs font-bold" style="background-color:#2d7de4">captain_events</div><div class="p-2" style="background-color:#ffffff"><div class="flex items-baseline justify-between text-[6pt] font-mono pb-1 mb-1 border-b border-gray-300"><span class="text-gray-600">0 rows</span><span class="font-bold" style="color:#1069dc">72 kB</span></div><div class="flex flex-col"><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#f59e0b">PK</span><span class="font-mono font-semibold">id</span><span class="text-gray-500">uuid</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#10b981">FK</span><span class="font-mono font-semibold">session_id</span><span class="text-gray-500">uuid</span><span class="ml-auto font-mono" style="color:#10b981">→<!-- -->sessions</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#10b981">FK</span><span class="font-mono font-semibold">turn_id</span><span class="text-gray-500">uuid</span><span class="text-gray-400 italic">null</span><span class="ml-auto font-mono" style="color:#10b981">→<!-- -->turns</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#10b981">FK</span><span class="font-mono font-semibold">prompt_run_id</span><span class="text-gray-500">uuid</span><span class="text-gray-400 italic">null</span><span class="ml-auto font-mono" style="color:#10b981">→<!-- -->prompt_runs</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#10b981">FK</span><span class="font-mono font-semibold">model_call_id</span><span class="text-gray-500">uuid</span><span class="text-gray-400 italic">null</span><span class="ml-auto font-mono" style="color:#10b981">→<!-- -->model_calls</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#10b981">FK</span><span class="font-mono font-semibold">parent_event_id</span><span class="text-gray-500">uuid</span><span class="text-gray-400 italic">null</span><span class="ml-auto font-mono" style="color:#10b981">→<!-- -->self</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#62758a">UK</span><span class="font-mono font-semibold">event_key</span><span class="text-gray-500">text</span><span class="text-gray-400 italic">null</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#62758a">UK</span><span class="font-mono font-semibold">stream / sequence</span><span class="text-gray-500">text</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:transparent"></span><span class="font-mono font-semibold">kind / scope</span><span class="text-gray-500">text</span></div></div></div></div><div class="rounded-xl overflow-hidden shadow-lg border-2 border-solid" style="min-width:222px;border-color:#2d7de4"><div class="p-2 text-center text-white text-xs font-bold" style="background-color:#2d7de4">captain_turn_requests</div><div class="p-2" style="background-color:#ffffff"><div class="flex items-baseline justify-between text-[6pt] font-mono pb-1 mb-1 border-b border-gray-300"><span class="text-gray-600">0 rows</span><span class="font-bold" style="color:#1069dc">48 kB</span></div><div class="flex flex-col"><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#f59e0b">PK</span><span class="font-mono font-semibold">id</span><span class="text-gray-500">uuid</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#10b981">FK</span><span class="font-mono font-semibold">session_id</span><span class="text-gray-500">uuid</span><span class="ml-auto font-mono" style="color:#10b981">→<!-- -->sessions</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#10b981">FK</span><span class="font-mono font-semibold">turn_id</span><span class="text-gray-500">uuid</span><span class="text-gray-400 italic">null</span><span class="ml-auto font-mono" style="color:#10b981">→<!-- -->turns</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#10b981">FK</span><span class="font-mono font-semibold">prompt_run_id</span><span class="text-gray-500">uuid</span><span class="text-gray-400 italic">null</span><span class="ml-auto font-mono" style="color:#10b981">→<!-- -->prompt_runs</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#10b981">FK</span><span class="font-mono font-semibold">plan_id</span><span class="text-gray-500">uuid</span><span class="text-gray-400 italic">null</span><span class="ml-auto font-mono" style="color:#10b981">→<!-- -->plans</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:transparent"></span><span class="font-mono font-semibold">kind</span><span class="text-gray-500">enum</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:transparent"></span><span class="font-mono font-semibold">state</span><span class="text-gray-500">enum</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#62758a">UK</span><span class="font-mono font-semibold">idempotency_key</span><span class="text-gray-500">text</span><span class="text-gray-400 italic">null</span></div></div><div class="text-[6pt] italic text-gray-500 pt-1 leading-[8pt]">questions, tool approvals, plan-exit approvals</div></div></div></div><div class="flex items-start justify-start gap-3 flex-wrap mb-3"><div class="rounded-xl overflow-hidden shadow-lg border-2 border-solid" style="min-width:238px;border-color:#2d7de4"><div class="p-2 text-center text-white text-xs font-bold" style="background-color:#2d7de4">captain_session_processes</div><div class="p-2" style="background-color:#ffffff"><div class="flex items-baseline justify-between text-[6pt] font-mono pb-1 mb-1 border-b border-gray-300"><span class="text-gray-600">4,129 rows</span><span class="font-bold" style="color:#1069dc">3.5 MB</span></div><div class="flex flex-col"><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#f59e0b">PK</span><span class="font-mono font-semibold">id</span><span class="text-gray-500">uuid</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#10b981">FK</span><span class="font-mono font-semibold">session_id</span><span class="text-gray-500">uuid</span><span class="ml-auto font-mono" style="color:#10b981">→<!-- -->sessions</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#62758a">UK</span><span class="font-mono font-semibold">host_id / boot_id</span><span class="text-gray-500">text</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#62758a">UK</span><span class="font-mono font-semibold">pid</span><span class="text-gray-500">bigint</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#62758a">UK</span><span class="font-mono font-semibold">process_started_at</span><span class="text-gray-500">tstz</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:transparent"></span><span class="font-mono font-semibold">status</span><span class="text-gray-500">text</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:transparent"></span><span class="font-mono font-semibold">ended_at</span><span class="text-gray-500">tstz</span><span class="text-gray-400 italic">null</span></div></div><div class="mt-1 pt-1 border-t border-gray-300"><div class="text-[5.5pt] font-bold uppercase tracking-wide text-gray-400 mb-[1px]">observed</div><div class="text-[5.5pt] leading-[8pt] font-mono"><span class="font-semibold text-gray-700">status</span> <span class="text-gray-500">exited 4,200 · sleeping 10</span></div></div><div class="text-[6pt] italic text-gray-500 pt-1 leading-[8pt]">at most one live process per session (unique where ended_at is null)</div></div></div><div class="rounded-xl overflow-hidden shadow-lg border-2 border-solid" style="min-width:230px;border-color:#2d7de4"><div class="p-2 text-center text-white text-xs font-bold" style="background-color:#2d7de4">captain_session_sources</div><div class="p-2" style="background-color:#ffffff"><div class="flex items-baseline justify-between text-[6pt] font-mono pb-1 mb-1 border-b border-gray-300"><span class="text-gray-600">3,793 rows</span><span class="font-bold" style="color:#1069dc">3.6 MB</span></div><div class="flex flex-col"><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#f59e0b">PK</span><span class="font-mono font-semibold">id</span><span class="text-gray-500">uuid</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#10b981">FK</span><span class="font-mono font-semibold">session_id</span><span class="text-gray-500">uuid</span><span class="ml-auto font-mono" style="color:#10b981">→<!-- -->sessions</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#62758a">UK</span><span class="font-mono font-semibold">source_kind</span><span class="text-gray-500">text</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#62758a">UK</span><span class="font-mono font-semibold">path</span><span class="text-gray-500">text</span></div></div><div class="mt-1 pt-1 border-t border-gray-300"><div class="text-[5.5pt] font-bold uppercase tracking-wide text-gray-400 mb-[1px]">observed</div><div class="text-[5.5pt] leading-[8pt] font-mono"><span class="font-semibold text-gray-700">source_kind</span> <span class="text-gray-500">claude 2,266 · codex 1,532</span></div></div><div class="text-[6pt] italic text-gray-500 pt-1 leading-[8pt]">a transcript file maps to exactly one session</div></div></div><div class="rounded-xl overflow-hidden shadow-lg border-2 border-solid" style="min-width:222px;border-color:#2d7de4"><div class="p-2 text-center text-white text-xs font-bold" style="background-color:#2d7de4">captain_artifacts</div><div class="p-2" style="background-color:#ffffff"><div class="flex items-baseline justify-between text-[6pt] font-mono pb-1 mb-1 border-b border-gray-300"><span class="text-gray-600">0 rows</span><span class="font-bold" style="color:#1069dc">56 kB</span></div><div class="flex flex-col"><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#f59e0b">PK</span><span class="font-mono font-semibold">id</span><span class="text-gray-500">uuid</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#10b981">FK</span><span class="font-mono font-semibold">session_id</span><span class="text-gray-500">uuid</span><span class="ml-auto font-mono" style="color:#10b981">→<!-- -->sessions</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#10b981">FK</span><span class="font-mono font-semibold">turn_id</span><span class="text-gray-500">uuid</span><span class="text-gray-400 italic">null</span><span class="ml-auto font-mono" style="color:#10b981">→<!-- -->turns</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#10b981">FK</span><span class="font-mono font-semibold">prompt_run_id</span><span class="text-gray-500">uuid</span><span class="text-gray-400 italic">null</span><span class="ml-auto font-mono" style="color:#10b981">→<!-- -->prompt_runs</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:transparent"></span><span class="font-mono font-semibold">kind</span><span class="text-gray-500">text</span></div></div></div></div></div></section><section class="flex flex-col gap-[4mm] my-[4mm] "><h3 class="text-[14pt] leading-[18pt] font-semibold m-0 mb-[2mm]" style="color:#131f3b">captain — prompt runs and plans</h3><div class="flex items-start justify-start gap-3 flex-wrap mb-3"><div class="rounded-xl overflow-hidden shadow-lg border-2 border-solid" style="min-width:262px;border-color:#2d7de4"><div class="p-2 text-center text-white text-xs font-bold" style="background-color:#2d7de4">captain_prompt_runs</div><div class="p-2" style="background-color:#ffffff"><div class="flex items-baseline justify-between text-[6pt] font-mono pb-1 mb-1 border-b border-gray-300"><span class="text-gray-600">850 rows</span><span class="font-bold" style="color:#1069dc">2.0 MB</span></div><div class="flex flex-col"><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#f59e0b">PK</span><span class="font-mono font-semibold">id</span><span class="text-gray-500">uuid</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#10b981">FK</span><span class="font-mono font-semibold">session_id</span><span class="text-gray-500">uuid</span><span class="ml-auto font-mono" style="color:#10b981">→<!-- -->sessions</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#10b981">FK</span><span class="font-mono font-semibold">root_session_id</span><span class="text-gray-500">uuid</span><span class="ml-auto font-mono" style="color:#10b981">→<!-- -->sessions</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#10b981">FK</span><span class="font-mono font-semibold">execution_session_id</span><span class="text-gray-500">uuid</span><span class="text-gray-400 italic">null</span><span class="ml-auto font-mono" style="color:#10b981">→<!-- -->sessions</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#10b981">FK</span><span class="font-mono font-semibold">parent_run_id</span><span class="text-gray-500">uuid</span><span class="text-gray-400 italic">null</span><span class="ml-auto font-mono" style="color:#10b981">→<!-- -->self</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#10b981">FK</span><span class="font-mono font-semibold">input_plan_id</span><span class="text-gray-500">uuid</span><span class="text-gray-400 italic">null</span><span class="ml-auto font-mono" style="color:#10b981">→<!-- -->plans</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:transparent"></span><span class="font-mono font-semibold">phase</span><span class="text-gray-500">enum</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:transparent"></span><span class="font-mono font-semibold">state</span><span class="text-gray-500">enum</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#62758a">UK</span><span class="font-mono font-semibold">admission_key</span><span class="text-gray-500">text</span><span class="text-gray-400 italic">null</span></div></div><div class="mt-1 pt-1 border-t border-gray-300"><div class="text-[5.5pt] font-bold uppercase tracking-wide text-gray-400 mb-[1px]">observed</div><div class="text-[5.5pt] leading-[8pt] font-mono"><span class="font-semibold text-gray-700">phase</span> <span class="text-gray-500">finished 786 · generate 44 · queued 13 · verify 7</span></div><div class="text-[5.5pt] leading-[8pt] font-mono"><span class="font-semibold text-gray-700">state</span> <span class="text-gray-500">succeeded 625 · failed 204 · pending 13 · running 5 · waiting 3</span></div></div><div class="text-[6pt] italic text-gray-500 pt-1 leading-[8pt]">three FKs into sessions; one in-flight run per root_session_id</div></div></div><div class="rounded-xl overflow-hidden shadow-lg border-2 border-solid" style="min-width:234px;border-color:#2d7de4"><div class="p-2 text-center text-white text-xs font-bold" style="background-color:#2d7de4">captain_prompt_run_iterations</div><div class="p-2" style="background-color:#ffffff"><div class="flex items-baseline justify-between text-[6pt] font-mono pb-1 mb-1 border-b border-gray-300"><span class="text-gray-600">0 rows</span><span class="font-bold" style="color:#1069dc">40 kB</span></div><div class="flex flex-col"><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#f59e0b">PK</span><span class="font-mono font-semibold">id</span><span class="text-gray-500">uuid</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#10b981">FK</span><span class="font-mono font-semibold">prompt_run_id</span><span class="text-gray-500">uuid</span><span class="ml-auto font-mono" style="color:#10b981">→<!-- -->prompt_runs</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#62758a">UK</span><span class="font-mono font-semibold">iteration</span><span class="text-gray-500">integer</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:transparent"></span><span class="font-mono font-semibold">state</span><span class="text-gray-500">enum</span></div></div><div class="text-[6pt] italic text-gray-500 pt-1 leading-[8pt]">carries a redundant (prompt_run_id, id) unique as a composite-FK target</div></div></div><div class="rounded-xl overflow-hidden shadow-lg border-2 border-solid" style="min-width:240px;border-color:#2d7de4"><div class="p-2 text-center text-white text-xs font-bold" style="background-color:#2d7de4">captain_plans + revisions</div><div class="p-2" style="background-color:#ffffff"><div class="flex items-baseline justify-between text-[6pt] font-mono pb-1 mb-1 border-b border-gray-300"><span class="text-gray-600">20 + 21 rows</span><span class="font-bold" style="color:#1069dc">128 + 296 kB</span></div><div class="flex flex-col"><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#f59e0b">PK</span><span class="font-mono font-semibold">id</span><span class="text-gray-500">uuid</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#10b981">FK</span><span class="font-mono font-semibold">source_session_id</span><span class="text-gray-500">uuid</span><span class="text-gray-400 italic">null</span><span class="ml-auto font-mono" style="color:#10b981">→<!-- -->sessions</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#10b981">FK</span><span class="font-mono font-semibold">source_prompt_run_id</span><span class="text-gray-500">uuid</span><span class="text-gray-400 italic">null</span><span class="ml-auto font-mono" style="color:#10b981">→<!-- -->prompt_runs</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#10b981">FK</span><span class="font-mono font-semibold">approved_revision_id</span><span class="text-gray-500">uuid</span><span class="text-gray-400 italic">null</span><span class="ml-auto font-mono" style="color:#10b981">→<!-- -->revisions</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:transparent"></span><span class="font-mono font-semibold">approval_state</span><span class="text-gray-500">enum</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#10b981">FK</span><span class="font-mono font-semibold">revision.plan_id</span><span class="text-gray-500">uuid</span><span class="ml-auto font-mono" style="color:#10b981">→<!-- -->plans</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#62758a">UK</span><span class="font-mono font-semibold">revision.revision</span><span class="text-gray-500">integer</span></div></div><div class="mt-1 pt-1 border-t border-gray-300"><div class="text-[5.5pt] font-bold uppercase tracking-wide text-gray-400 mb-[1px]">observed</div><div class="text-[5.5pt] leading-[8pt] font-mono"><span class="font-semibold text-gray-700">approval_state</span> <span class="text-gray-500">approved 12 · pending 9</span></div></div><div class="text-[6pt] italic text-gray-500 pt-1 leading-[8pt]">approval_state lives on the plan, not the revision; a revision carries only its ordinal and body</div></div></div></div></section><section class="flex flex-col gap-[4mm] my-[4mm] "><h3 class="text-[14pt] leading-[18pt] font-semibold m-0 mb-[2mm]" style="color:#131f3b">gavel — todos, and how they bind to captain</h3><div class="flex items-start justify-start gap-3 flex-wrap mb-3"><div class="rounded-xl overflow-hidden shadow-lg border-2 border-solid" style="min-width:196px;border-color:#7c3aed"><div class="p-2 text-center text-white text-xs font-bold" style="background-color:#7c3aed">todo_workspaces</div><div class="p-2" style="background-color:#ffffff"><div class="flex items-baseline justify-between text-[6pt] font-mono pb-1 mb-1 border-b border-gray-300"><span class="text-gray-600">14 rows</span><span class="font-bold" style="color:#1069dc">80 kB</span></div><div class="flex flex-col"><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#f59e0b">PK</span><span class="font-mono font-semibold">id</span><span class="text-gray-500">uuid</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#62758a">UK</span><span class="font-mono font-semibold">repo_key</span><span class="text-gray-500">text</span><span class="text-gray-400 italic">null</span></div></div></div></div><div class="rounded-xl overflow-hidden shadow-lg border-2 border-solid" style="min-width:212px;border-color:#7c3aed"><div class="p-2 text-center text-white text-xs font-bold" style="background-color:#7c3aed">todo_workspace_paths</div><div class="p-2" style="background-color:#ffffff"><div class="flex items-baseline justify-between text-[6pt] font-mono pb-1 mb-1 border-b border-gray-300"><span class="text-gray-600">14 rows</span><span class="font-bold" style="color:#1069dc">96 kB</span></div><div class="flex flex-col"><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#f59e0b">PK</span><span class="font-mono font-semibold">workspace_id</span><span class="text-gray-500">uuid</span><span class="ml-auto font-mono" style="color:#10b981">→<!-- -->workspaces</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#f59e0b">PK</span><span class="font-mono font-semibold">path</span><span class="text-gray-500">text</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:transparent"></span><span class="font-mono font-semibold">is_primary</span><span class="text-gray-500">boolean</span></div></div><div class="mt-1 pt-1 border-t border-gray-300"><div class="text-[5.5pt] font-bold uppercase tracking-wide text-gray-400 mb-[1px]">observed</div><div class="text-[5.5pt] leading-[8pt] font-mono"><span class="font-semibold text-gray-700">is_primary</span> <span class="text-gray-500">true 14 — every workspace currently has exactly one path</span></div></div><div class="text-[6pt] italic text-gray-500 pt-1 leading-[8pt]">at most one primary path per workspace</div></div></div><div class="rounded-xl overflow-hidden shadow-lg border-2 border-solid" style="min-width:256px;border-color:#7c3aed"><div class="p-2 text-center text-white text-xs font-bold" style="background-color:#7c3aed">todo_issues</div><div class="p-2" style="background-color:#ffffff"><div class="flex items-baseline justify-between text-[6pt] font-mono pb-1 mb-1 border-b border-gray-300"><span class="text-gray-600">824 rows</span><span class="font-bold" style="color:#1069dc">4.5 MB</span></div><div class="flex flex-col"><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#f59e0b">PK</span><span class="font-mono font-semibold">id</span><span class="text-gray-500">uuid</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#10b981">FK</span><span class="font-mono font-semibold">workspace_id</span><span class="text-gray-500">uuid</span><span class="ml-auto font-mono" style="color:#10b981">→<!-- -->workspaces</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:transparent"></span><span class="font-mono font-semibold">status</span><span class="text-gray-500">text</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:transparent"></span><span class="font-mono font-semibold">priority</span><span class="text-gray-500">text</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#10b981">FK</span><span class="font-mono font-semibold">active_prompt_run_id</span><span class="text-gray-500">uuid</span><span class="text-gray-400 italic">null</span><span class="ml-auto font-mono" style="color:#10b981">→<!-- -->issue_prompt_runs</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#10b981">FK</span><span class="font-mono font-semibold">selected_plan_id</span><span class="text-gray-500">uuid</span><span class="text-gray-400 italic">null</span><span class="ml-auto font-mono" style="color:#10b981">→<!-- -->issue_plans</span></div></div><div class="mt-1 pt-1 border-t border-gray-300"><div class="text-[5.5pt] font-bold uppercase tracking-wide text-gray-400 mb-[1px]">observed</div><div class="text-[5.5pt] leading-[8pt] font-mono"><span class="font-semibold text-gray-700">status</span> <span class="text-gray-500">closed 488 · open 221 · verified 69 · draft 38 · cancelled 8</span></div><div class="text-[5.5pt] leading-[8pt] font-mono"><span class="font-semibold text-gray-700">priority</span> <span class="text-gray-500">medium 753 · high 50 · low 21 — critical never used</span></div></div><div class="text-[6pt] italic text-gray-500 pt-1 leading-[8pt]">the two pointer FKs are composite on (id, …) so a run or plan must already belong to this issue</div></div></div></div><div class="flex items-start justify-start gap-3 flex-wrap mb-3"><div class="rounded-xl overflow-hidden shadow-lg border-2 border-solid" style="min-width:268px;border-color:#7c3aed"><div class="p-2 text-center text-white text-xs font-bold" style="background-color:#7c3aed">todo_issue_prompt_runs</div><div class="p-2" style="background-color:#ffffff"><div class="flex items-baseline justify-between text-[6pt] font-mono pb-1 mb-1 border-b border-gray-300"><span class="text-gray-600">97 rows</span><span class="font-bold" style="color:#1069dc">104 kB</span></div><div class="flex flex-col"><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#f59e0b">PK</span><span class="font-mono font-semibold">issue_id</span><span class="text-gray-500">uuid</span><span class="ml-auto font-mono" style="color:#10b981">→<!-- -->todo_issues</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#f59e0b">PK</span><span class="font-mono font-semibold">prompt_run_id</span><span class="text-gray-500">uuid</span><span class="ml-auto font-mono" style="color:#10b981">→<!-- -->captain_prompt_runs</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#62758a">UK</span><span class="font-mono font-semibold">step_kind</span><span class="text-gray-500">text</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#62758a">UK</span><span class="font-mono font-semibold">ordinal</span><span class="text-gray-500">integer</span></div></div><div class="mt-1 pt-1 border-t border-gray-300"><div class="text-[5.5pt] font-bold uppercase tracking-wide text-gray-400 mb-[1px]">observed</div><div class="text-[5.5pt] leading-[8pt] font-mono"><span class="font-semibold text-gray-700">step_kind</span> <span class="text-gray-500">plan 51 · verify 28 · run 21</span></div></div><div class="text-[6pt] italic text-gray-500 pt-1 leading-[8pt]">prompt_run_id is globally unique — a captain run belongs to exactly one issue. ON DELETE RESTRICT keeps execution history from vanishing through a session cascade.</div></div></div><div class="rounded-xl overflow-hidden shadow-lg border-2 border-solid" style="min-width:238px;border-color:#7c3aed"><div class="p-2 text-center text-white text-xs font-bold" style="background-color:#7c3aed">todo_issue_plans</div><div class="p-2" style="background-color:#ffffff"><div class="flex items-baseline justify-between text-[6pt] font-mono pb-1 mb-1 border-b border-gray-300"><span class="text-gray-600">18 rows</span><span class="font-bold" style="color:#1069dc">72 kB</span></div><div class="flex flex-col"><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#f59e0b">PK</span><span class="font-mono font-semibold">issue_id</span><span class="text-gray-500">uuid</span><span class="ml-auto font-mono" style="color:#10b981">→<!-- -->todo_issues</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#f59e0b">PK</span><span class="font-mono font-semibold">plan_id</span><span class="text-gray-500">uuid</span><span class="ml-auto font-mono" style="color:#10b981">→<!-- -->captain_plans</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#62758a">UK</span><span class="font-mono font-semibold">ordinal</span><span class="text-gray-500">integer</span></div></div><div class="text-[6pt] italic text-gray-500 pt-1 leading-[8pt]">plan_id is NOT globally unique — one captain plan may bind to several issues</div></div></div><div class="rounded-xl overflow-hidden shadow-lg border-2 border-solid" style="min-width:230px;border-color:#7c3aed"><div class="p-2 text-center text-white text-xs font-bold" style="background-color:#7c3aed">todo_issue_events</div><div class="p-2" style="background-color:#ffffff"><div class="flex items-baseline justify-between text-[6pt] font-mono pb-1 mb-1 border-b border-gray-300"><span class="text-gray-600">6,155 rows</span><span class="font-bold" style="color:#1069dc">5.8 MB</span></div><div class="flex flex-col"><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#f59e0b">PK</span><span class="font-mono font-semibold">id</span><span class="text-gray-500">uuid</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#10b981">FK</span><span class="font-mono font-semibold">issue_id</span><span class="text-gray-500">uuid</span><span class="ml-auto font-mono" style="color:#10b981">→<!-- -->todo_issues</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#62758a">UK</span><span class="font-mono font-semibold">sequence</span><span class="text-gray-500">bigint</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:transparent"></span><span class="font-mono font-semibold">kind</span><span class="text-gray-500">text</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#62758a">UK</span><span class="font-mono font-semibold">source</span><span class="text-gray-500">text</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#62758a">UK</span><span class="font-mono font-semibold">source_id</span><span class="text-gray-500">text</span><span class="text-gray-400 italic">null</span></div></div><div class="mt-1 pt-1 border-t border-gray-300"><div class="text-[5.5pt] font-bold uppercase tracking-wide text-gray-400 mb-[1px]">observed</div><div class="text-[5.5pt] leading-[8pt] font-mono"><span class="font-semibold text-gray-700">kind</span> <span class="text-gray-500">comment 1,435 · label_added 894 · label_removed 773 · issue_created 718 · +14 more</span></div><div class="text-[5.5pt] leading-[8pt] font-mono"><span class="font-semibold text-gray-700">sequence</span> <span class="text-gray-500">1..62 (avg 6)</span></div></div><div class="text-[6pt] italic text-gray-500 pt-1 leading-[8pt]">append-only; (source, source_id) is the import and projection idempotency key</div></div></div></div><div class="flex items-start justify-start gap-3 flex-wrap mb-3"><div class="rounded-xl overflow-hidden shadow-lg border-2 border-solid" style="min-width:210px;border-color:#7c3aed"><div class="p-2 text-center text-white text-xs font-bold" style="background-color:#7c3aed">todo_issue_aliases</div><div class="p-2" style="background-color:#ffffff"><div class="flex items-baseline justify-between text-[6pt] font-mono pb-1 mb-1 border-b border-gray-300"><span class="text-gray-600">718 rows</span><span class="font-bold" style="color:#1069dc">264 kB</span></div><div class="flex flex-col"><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#f59e0b">PK</span><span class="font-mono font-semibold">workspace_id</span><span class="text-gray-500">uuid</span><span class="ml-auto font-mono" style="color:#10b981">→<!-- -->workspaces</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#f59e0b">PK</span><span class="font-mono font-semibold">alias</span><span class="text-gray-500">text</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#10b981">FK</span><span class="font-mono font-semibold">issue_id</span><span class="text-gray-500">uuid</span><span class="ml-auto font-mono" style="color:#10b981">→<!-- -->todo_issues</span></div></div></div></div><div class="rounded-xl overflow-hidden shadow-lg border-2 border-solid" style="min-width:248px;border-color:#7c3aed"><div class="p-2 text-center text-white text-xs font-bold" style="background-color:#7c3aed">todo_issue_relationships</div><div class="p-2" style="background-color:#ffffff"><div class="flex items-baseline justify-between text-[6pt] font-mono pb-1 mb-1 border-b border-gray-300"><span class="text-gray-600">70 rows</span><span class="font-bold" style="color:#1069dc">80 kB</span></div><div class="flex flex-col"><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#f59e0b">PK</span><span class="font-mono font-semibold">workspace_id</span><span class="text-gray-500">uuid</span><span class="ml-auto font-mono" style="color:#10b981">→<!-- -->workspaces</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#f59e0b">PK</span><span class="font-mono font-semibold">issue_id</span><span class="text-gray-500">uuid</span><span class="ml-auto font-mono" style="color:#10b981">→<!-- -->todo_issues</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#f59e0b">PK</span><span class="font-mono font-semibold">target_issue_id</span><span class="text-gray-500">uuid</span><span class="ml-auto font-mono" style="color:#10b981">→<!-- -->todo_issues</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#f59e0b">PK</span><span class="font-mono font-semibold">relation</span><span class="text-gray-500">text</span></div></div><div class="mt-1 pt-1 border-t border-gray-300"><div class="text-[5.5pt] font-bold uppercase tracking-wide text-gray-400 mb-[1px]">observed</div><div class="text-[5.5pt] leading-[8pt] font-mono"><span class="font-semibold text-gray-700">relation</span> <span class="text-gray-500">depends_on 61 · related_to 9</span></div></div><div class="text-[6pt] italic text-gray-500 pt-1 leading-[8pt]">depends_on is directed; related_to is canonicalised issue_id &lt; target so it is stored once</div></div></div></div></section><section class="flex flex-col gap-[4mm] my-[4mm] "><h3 class="text-[14pt] leading-[18pt] font-semibold m-0 mb-[2mm]" style="color:#131f3b">views</h3><div class="flex items-start justify-start gap-3 flex-wrap mb-3"><div class="rounded-xl overflow-hidden shadow-lg border-2 border-solid" style="min-width:236px;border-color:#1069dc"><div class="p-2 text-center text-white text-xs font-bold" style="background-color:#1069dc">captain_session_overview</div><div class="p-2" style="background-color:#ffffff"><div class="flex items-baseline justify-between text-[6pt] font-mono pb-1 mb-1 border-b border-gray-300"><span class="text-gray-600">derived</span><span class="font-bold" style="color:#1069dc">view</span></div><div class="flex flex-col"><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#10b981">FK</span><span class="font-mono font-semibold">session_id</span><span class="text-gray-500">uuid</span><span class="ml-auto font-mono" style="color:#10b981">→<!-- -->sessions</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:transparent"></span><span class="font-mono font-semibold">thread_id</span><span class="text-gray-500">uuid</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:transparent"></span><span class="font-mono font-semibold">process_active</span><span class="text-gray-500">boolean</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:transparent"></span><span class="font-mono font-semibold">lifecycle / activity / health</span><span class="text-gray-500">enum</span></div></div><div class="text-[6pt] italic text-gray-500 pt-1 leading-[8pt]">1:1 with captain_sessions, via ten lateral joins. agent_count counts all descendants + 1.</div></div></div><div class="rounded-xl overflow-hidden shadow-lg border-2 border-solid" style="min-width:228px;border-color:#1069dc"><div class="p-2 text-center text-white text-xs font-bold" style="background-color:#1069dc">captain_session_transcript</div><div class="p-2" style="background-color:#ffffff"><div class="flex items-baseline justify-between text-[6pt] font-mono pb-1 mb-1 border-b border-gray-300"><span class="text-gray-600">derived</span><span class="font-bold" style="color:#1069dc">view</span></div><div class="flex flex-col"><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#10b981">FK</span><span class="font-mono font-semibold">id</span><span class="text-gray-500">uuid</span><span class="ml-auto font-mono" style="color:#10b981">→<!-- -->messages</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#10b981">FK</span><span class="font-mono font-semibold">session_id</span><span class="text-gray-500">uuid</span><span class="ml-auto font-mono" style="color:#10b981">→<!-- -->sessions</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#62758a">UK</span><span class="font-mono font-semibold">sequence</span><span class="text-gray-500">bigint</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:transparent"></span><span class="font-mono font-semibold">model_call_status</span><span class="text-gray-500">enum</span><span class="text-gray-400 italic">null</span></div></div><div class="text-[6pt] italic text-gray-500 pt-1 leading-[8pt]">1:1 with captain_messages, left-joined to model_calls</div></div></div><div class="rounded-xl overflow-hidden shadow-lg border-2 border-solid" style="min-width:216px;border-color:#1069dc"><div class="p-2 text-center text-white text-xs font-bold" style="background-color:#1069dc">captain_session_agents</div><div class="p-2" style="background-color:#ffffff"><div class="flex items-baseline justify-between text-[6pt] font-mono pb-1 mb-1 border-b border-gray-300"><span class="text-gray-600">derived</span><span class="font-bold" style="color:#1069dc">view</span></div><div class="flex flex-col"><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#10b981">FK</span><span class="font-mono font-semibold">session_id</span><span class="text-gray-500">uuid</span><span class="ml-auto font-mono" style="color:#10b981">→<!-- -->sessions</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:transparent"></span><span class="font-mono font-semibold">thread_id</span><span class="text-gray-500">uuid</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:transparent"></span><span class="font-mono font-semibold">is_root</span><span class="text-gray-500">boolean</span></div></div><div class="text-[6pt] italic text-gray-500 pt-1 leading-[8pt]">a view over captain_sessions, 1:1. child_count counts DIRECT children only.</div></div></div></div><div class="flex items-start justify-start gap-3 flex-wrap mb-3"><div class="rounded-xl overflow-hidden shadow-lg border-2 border-solid" style="min-width:248px;border-color:#1069dc"><div class="p-2 text-center text-white text-xs font-bold" style="background-color:#1069dc">captain_session_costs</div><div class="p-2" style="background-color:#ffffff"><div class="flex items-baseline justify-between text-[6pt] font-mono pb-1 mb-1 border-b border-gray-300"><span class="text-gray-600">derived</span><span class="font-bold" style="color:#1069dc">view</span></div><div class="flex flex-col"><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#f59e0b">PK</span><span class="font-mono font-semibold">id</span><span class="text-gray-500">text</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#10b981">FK</span><span class="font-mono font-semibold">session_id</span><span class="text-gray-500">uuid</span><span class="ml-auto font-mono" style="color:#10b981">→<!-- -->sessions</span></div></div><div class="text-[6pt] italic text-gray-500 pt-1 leading-[8pt]">N rows per session. Synthetic text id: session:model:backend:effort:currency.</div></div></div><div class="rounded-xl overflow-hidden shadow-lg border-2 border-solid" style="min-width:228px;border-color:#1069dc"><div class="p-2 text-center text-white text-xs font-bold" style="background-color:#1069dc">captain_prompt_run_overview</div><div class="p-2" style="background-color:#ffffff"><div class="flex items-baseline justify-between text-[6pt] font-mono pb-1 mb-1 border-b border-gray-300"><span class="text-gray-600">derived</span><span class="font-bold" style="color:#1069dc">view</span></div><div class="flex flex-col"><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#10b981">FK</span><span class="font-mono font-semibold">id</span><span class="text-gray-500">uuid</span><span class="ml-auto font-mono" style="color:#10b981">→<!-- -->prompt_runs</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:transparent"></span><span class="font-mono font-semibold">latest_iteration_state</span><span class="text-gray-500">text</span></div></div></div></div><div class="rounded-xl overflow-hidden shadow-lg border-2 border-solid" style="min-width:216px;border-color:#1069dc"><div class="p-2 text-center text-white text-xs font-bold" style="background-color:#1069dc">todo_issue_runtime</div><div class="p-2" style="background-color:#ffffff"><div class="flex items-baseline justify-between text-[6pt] font-mono pb-1 mb-1 border-b border-gray-300"><span class="text-gray-600">derived</span><span class="font-bold" style="color:#1069dc">view</span></div><div class="flex flex-col"><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#10b981">FK</span><span class="font-mono font-semibold">issue_id</span><span class="text-gray-500">uuid</span><span class="ml-auto font-mono" style="color:#10b981">→<!-- -->todo_issues</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:transparent"></span><span class="font-mono font-semibold">execution_state</span><span class="text-gray-500">text</span></div></div><div class="text-[6pt] italic text-gray-500 pt-1 leading-[8pt]">one row per issue; execution_state derived, never cached</div></div></div></div><div class="flex items-start justify-start gap-3 flex-wrap mb-3"><div class="rounded-xl overflow-hidden shadow-lg border-2 border-solid" style="min-width:290px;border-color:#1069dc"><div class="p-2 text-center text-white text-xs font-bold" style="background-color:#1069dc">todo_issue_plan_revision_details</div><div class="p-2" style="background-color:#ffffff"><div class="flex items-baseline justify-between text-[6pt] font-mono pb-1 mb-1 border-b border-gray-300"><span class="text-gray-600">derived</span><span class="font-bold" style="color:#1069dc">view</span></div><div class="flex flex-col"><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#10b981">FK</span><span class="font-mono font-semibold">issue_id</span><span class="text-gray-500">uuid</span><span class="ml-auto font-mono" style="color:#10b981">→<!-- -->todo_issues</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#10b981">FK</span><span class="font-mono font-semibold">plan_id</span><span class="text-gray-500">uuid</span><span class="ml-auto font-mono" style="color:#10b981">→<!-- -->captain_plans</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:#10b981">FK</span><span class="font-mono font-semibold">revision_id</span><span class="text-gray-500">uuid</span><span class="ml-auto font-mono" style="color:#10b981">→<!-- -->captain_plan_revisions</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:transparent"></span><span class="font-mono font-semibold">approval_state</span><span class="text-gray-500">text</span><span class="text-gray-400 italic">null</span></div><div class="flex items-baseline gap-1 text-[6.5pt] leading-[10pt] border-b border-dotted border-gray-200 py-[1px]"><span class="inline-block w-[16px] shrink-0 text-center rounded text-white font-bold text-[5pt]" style="background-color:transparent"></span><span class="font-mono font-semibold">selected / approved</span><span class="text-gray-500">boolean</span></div></div><div class="text-[6pt] italic text-gray-500 pt-1 leading-[8pt]">exposes durable captain revision bodies without copying plan content into todo tables</div></div></div></div></section><section class="flex flex-col gap-[4mm] my-[4mm] "><h3 class="text-[14pt] leading-[18pt] font-semibold m-0 mb-[2mm]" style="color:#131f3b">notes</h3><ul class="text-[7pt] leading-relaxed list-disc pl-5"><li><strong>Sizing and sampling.</strong> Row counts are exact where cheap to count, otherwise <code>reltuples</code> estimates; sizes are <code>pg_total_relation_size</code> <!-- -->(heap + toast + indexes). The <em>observed</em> block on each entity is the actual value distribution for its enum and classifier columns — ids, timestamps and free text are excluded. Measured against the local <code>gavel</code> database on 2026-07-20, 1482 MB total. Not production figures.</li><li><strong>Most sessions never start.</strong> 5,236 of 6,337 sit at<!-- --> <code>lifecycle_status = created</code> and 5,149 have an empty <code>provider</code>, so roughly 82% are admission rows that never became a run. Anything paging or counting sessions should expect that shape.</li><li><strong>Role coverage is not a rounding error.</strong> 171,823 of 648,793 messages are<!-- --> <code>user</code> and 865 are <code>system</code> — 27% of the transcript. A read path that returns only assistant messages drops more than a quarter of the corpus.</li><li><strong>Terminal states dominate at rest.</strong> Turns are 100% <code>ended</code> and model calls 100% <code>succeeded</code>; <code>health_state</code> is uniformly<!-- --> <code>healthy</code>, with <code>stalled</code> and <code>zombie</code> never observed. The in-flight and unhealthy branches are therefore untested by this data.</li><li><strong>captain_messages dominates</strong> at 71% of the database. Its toast segment (487 MB) exceeds its heap (402 MB), because <code>parts</code> and <code>raw</code> hold the full message payload.</li><li><strong>captain_sessions carries heap bloat.</strong> 6,337 live rows occupy a 316 MB main heap — roughly 50 kB per live row, against only 30 MB of toast. It has taken 220,843 updates (158,566 HOT) from state and heartbeat writes. Autovacuum is keeping up with dead tuples (527 outstanding) but only reclaims space for reuse; the file never shrinks without<!-- --> <code>VACUUM FULL</code> or <code>pg_repack</code>.</li><li><strong>Ownership boundary.</strong> gavel binds to captain at exactly two points —<!-- --> <code>todo_issue_prompt_runs.prompt_run_id</code> and <code>todo_issue_plans.plan_id</code>, both <code>ON DELETE RESTRICT</code>. Everything else gavel needs is reached by traversing captain from those two.</li><li><strong>Provider identity is the thread bridge.</strong> One provider session yields a gavel-orchestration row and a Claude/Codex transcript row in <code>captain_sessions</code>; they share <code>provider_session_id</code>. That match is a soft join key with no constraint behind it — the only unenforced edge in the model.</li><li><strong>PK</strong> primary key · <strong>FK</strong> foreign key · <strong>UK</strong> <!-- -->unique-constraint member (composite unless noted).</li></ul></section></article></main></div>
+</body>
+</html>

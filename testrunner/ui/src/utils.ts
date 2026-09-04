@@ -361,7 +361,11 @@ function buildFolderNode(folder: FileTreeNode, linterMeta: Map<string, LinterRes
   return node;
 }
 
-export function groupLintByLinterRuleFile(lint: LinterResult[] | undefined, filters: LintFilters): Test[] {
+export function noLintFilters(): LintFilters {
+  return { severity: new Map(), linter: new Map() };
+}
+
+export function groupLintByLinterRuleFile(lint: LinterResult[] | undefined, filters: LintFilters = noLintFilters()): Test[] {
   const flat = flattenLint(lint, filters);
   const byLinter = new Map<string, Map<string, RuleScopedBucket>>();
   const linterMeta = new Map<string, LinterResult>();

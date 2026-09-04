@@ -144,7 +144,6 @@ func (s *Server) SetEmbeddedDiagnostics(snapshot *DiagnosticsSnapshot) {
 
 func (s *Server) LoadSnapshot(snapshot Snapshot) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.tests = snapshot.Tests
 	s.lint = snapshot.Lint
 	s.lintRun = snapshot.Status.LintRun
@@ -159,6 +158,8 @@ func (s *Server) LoadSnapshot(snapshot Snapshot) {
 	if snapshot.Git != nil && snapshot.Git.Root != "" {
 		s.gitRoot = snapshot.Git.Root
 	}
+	s.mu.Unlock()
+	s.notify()
 }
 
 func (s *Server) SetResults(tests []parsers.Test) {

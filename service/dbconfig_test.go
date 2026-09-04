@@ -2,11 +2,21 @@ package service
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestEmbeddedPostgresConfigEnablesPerformanceDiagnostics(t *testing.T) {
+	home := withTempHome(t)
+	cfg, err := EmbeddedPostgresConfig()
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(home, ".config", "gavel", "embedded-pg"), cfg.DataDir)
+	assert.Equal(t, "gavel", cfg.Database)
+	assert.True(t, cfg.PerformanceDiagnostics)
+}
 
 func TestLoadDBConfig_MissingFileReturnsZero(t *testing.T) {
 	withTempHome(t)

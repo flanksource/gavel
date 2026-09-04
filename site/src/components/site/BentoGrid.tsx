@@ -79,7 +79,7 @@ const features: Feature[] = [
       "Terminal or browser surface",
     ],
     uniqueness:
-      "`gavel pr list --ui` is the only PR dashboard that folds check status, failed logs, and TODO sync into one view.",
+      "`gavel pr list --ui` is the only PR dashboard that folds check status, failed logs, and native TODOs into one view.",
     animation_kind: "pulse-nodes",
     primary_icon: GitPullRequest,
   },

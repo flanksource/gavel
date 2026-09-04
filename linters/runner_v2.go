@@ -11,6 +11,7 @@ import (
 	flanksourceContext "github.com/flanksource/commons/context"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/internal/cache"
+	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/models"
 )
 
@@ -19,26 +20,37 @@ type RunnerV2 struct {
 	registry       *Registry
 	violationCache *cache.ViolationCache
 	linterStats    *cache.LinterStats
+	db             *database.DB
 	config         *models.Config
 	workDir        string
 }
 
 // NewRunnerV2 creates a new V2 linter runner with intelligent debouncing
 func NewRunnerV2(config *models.Config, workDir string) (*RunnerV2, error) {
-	violationCache, err := cache.NewViolationCache()
+	db, err := database.Shared(context.Background())
 	if err != nil {
-		return nil, fmt.Errorf("failed to create violation cache: %w", err)
+		return nil, err
 	}
-
-	linterStats, err := cache.NewLinterStats()
-	if err != nil {
-		return nil, fmt.Errorf("failed to create linter stats: %w", err)
+	var violationCache *cache.ViolationCache
+	var linterStats *cache.LinterStats
+	if !db.Disabled() {
+		violationCache, err = cache.NewViolationCache(db.Gorm())
+		if err != nil {
+			_ = db.Close()
+			return nil, fmt.Errorf("failed to create violation cache: %w", err)
+		}
+		linterStats, err = cache.NewLinterStats(db.Gorm())
+		if err != nil {
+			_ = db.Close()
+			return nil, fmt.Errorf("failed to create linter stats: %w", err)
+		}
 	}
 
 	return &RunnerV2{
 		registry:       DefaultRegistry,
 		violationCache: violationCache,
 		linterStats:    linterStats,
+		db:             db,
 		config:         config,
 		workDir:        workDir,
 	}, nil
@@ -46,24 +58,9 @@ func NewRunnerV2(config *models.Config, workDir string) (*RunnerV2, error) {
 
 // Close closes any resources held by the runner
 func (r *RunnerV2) Close() error {
-	var errs []error
-
-	if r.violationCache != nil {
-		if err := r.violationCache.Close(); err != nil {
-			errs = append(errs, fmt.Errorf("violation cache close error: %w", err))
-		}
+	if r.db != nil {
+		return r.db.Close()
 	}
-
-	if r.linterStats != nil {
-		if err := r.linterStats.Close(); err != nil {
-			errs = append(errs, fmt.Errorf("linter stats close error: %w", err))
-		}
-	}
-
-	if len(errs) > 0 {
-		return fmt.Errorf("close errors: %v", errs)
-	}
-
 	return nil
 }
 
@@ -118,12 +115,13 @@ func (r *RunnerV2) RunWithIntelligentDebounce(ctx context.Context, linterName st
 	defer cancel()
 
 	// Check intelligent debounce first
-	shouldSkip, actualDebounce, err := r.linterStats.ShouldSkipLinter(linterName, r.workDir, config.Debounce)
-	if err != nil {
-		logger.Warnf("Failed to check debounce for %s: %v", linterName, err)
-	} else if shouldSkip {
-		// Load cached violations and return
-		return r.loadCachedResult(linterName, actualDebounce, nil, start)
+	if r.linterStats != nil {
+		shouldSkip, actualDebounce, err := r.linterStats.ShouldSkipLinter(linterName, r.workDir, config.Debounce)
+		if err != nil {
+			logger.Warnf("Failed to check debounce for %s: %v", linterName, err)
+		} else if shouldSkip {
+			return r.loadCachedResult(linterName, actualDebounce, nil, start)
+		}
 	}
 
 	// Start task and execute linter

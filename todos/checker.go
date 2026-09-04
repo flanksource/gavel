@@ -6,266 +6,162 @@ import (
 	"strings"
 	"time"
 
-	"github.com/flanksource/clicky/task"
-	flanksourceContext "github.com/flanksource/commons/context"
+	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/commons/logger"
-	"github.com/flanksource/gavel/fixtures"
+	"golang.org/x/sync/errgroup"
+	"golang.org/x/sync/semaphore"
+
 	"github.com/flanksource/gavel/todos/types"
-	"github.com/flanksource/gavel/verify"
 )
+
+// DefaultCheckConcurrency bounds how many definition-of-done checks run at once
+// when nothing configures it. Each check runs the TODO's fixture — a real test
+// suite — so an unbounded fan-out over a large selection thrashes the machine
+// rather than finishing sooner.
+const DefaultCheckConcurrency = 4
+
+// VerifyRunner runs one todo's verify step and applies its outcome. It is the
+// lifecycle host, named as an interface so this package — which the host itself
+// imports — can call it without a cycle.
+//
+// The check is not a parallel verification path: it is the lifecycle's own
+// `verify` step, dispatched by name. `gavel todos check` and the dashboard's
+// verify action therefore cannot disagree with the verification an implement
+// run performs, because they are the same step.
+type VerifyRunner interface {
+	VerifyStep(ctx context.Context, todo *types.TODO, request api.Spec) (*types.CheckResult, error)
+}
 
 // CheckOptions configures the TODO check operation.
 type CheckOptions struct {
-	WorkDir string        // Working directory for test execution
-	Timeout time.Duration // Timeout for each test execution
-	Logger  logger.Logger // Logger for output
+	// Runner dispatches the verify step. It is required: a check with nowhere to
+	// run the definition of done is an error, never a vacuous pass.
+	Runner VerifyRunner
+	// Request is the caller's spec override for the verify step — `todos check`'s
+	// flags, or the dashboard's payload — folded as the top layer.
+	Request api.Spec
+	Logger  logger.Logger
+	// Concurrency caps how many checks run at once; zero uses
+	// DefaultCheckConcurrency.
+	Concurrency int
 }
 
-// CheckTODOs executes verification tests for the given TODOs in parallel and returns results.
-// For each TODO:
-//  1. Runs the Verification section tests using the TODO executor
-//  2. Updates frontmatter with execution results (last_run, status, attempts)
-//  3. Returns a CheckResult with test outcomes
+// CheckTODOs runs each issue's fixture-backed definition of done as the
+// lifecycle's verify step, bounded to Concurrency at a time.
 //
-// The function uses task.StartGroup for parallel execution, following the pattern
-// established in fixtures/runner.go.
+// The bound is an errgroup semaphore rather than a clicky task group on purpose:
+// a check runs fixture steps that start tasks of their own, and nesting those
+// inside a group deadlocks the drain — the outer task waits for the inner ones
+// while holding the slot they need.
 func CheckTODOs(ctx context.Context, todoList []*types.TODO, opts CheckOptions) ([]*types.CheckResult, error) {
-	// Create task group for parallel TODO checking
-	todoGroup := task.StartGroup[*types.CheckResult]("TODO Checks")
-
-	// Map tasks to TODOs for result correlation
-	taskToTODO := make(map[task.TypedTask[*types.CheckResult]]*types.TODO)
-
-	for _, todo := range todoList {
-		todoRef := todo // capture for closure
-		workDir := opts.WorkDir
-		if todoRef.CWD != "" {
-			workDir = todoRef.CWD
-		}
-
-		executor := &TODOExecutor{workDir: workDir}
-
-		typedTask := todoGroup.Add(
-			todoRef.Filename(),
-			func(fCtx flanksourceContext.Context, t *task.Task) (*types.CheckResult, error) {
-				result := checkSingleTODO(ctx, executor, todoRef, opts)
-
-				// Set task status based on result
-				if result.AllPassed {
-					t.Success()
-				} else {
-					t.Failed()
-				}
-				return result, nil
-			},
-			task.WithTaskTimeout(opts.Timeout),
-		)
-		taskToTODO[typedTask] = todoRef
+	if opts.Logger == nil {
+		opts.Logger = logger.StandardLogger()
+	}
+	concurrency := opts.Concurrency
+	if concurrency <= 0 {
+		concurrency = DefaultCheckConcurrency
 	}
 
-	// Wait for all tasks
-	groupResult := todoGroup.WaitFor()
-	if groupResult.Error != nil {
-		opts.Logger.Warnf("Some TODO checks failed: %v", groupResult.Error)
-	}
-
-	// Collect results and update state
-	taskResults, err := todoGroup.GetResults()
+	results := make([]*types.CheckResult, len(todoList))
+	err := runBounded(ctx, len(todoList), concurrency, func(ctx context.Context, index int) {
+		results[index] = CheckTODO(ctx, todoList[index], opts)
+	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to get results: %w", err)
+		return nil, fmt.Errorf("check TODOs: %w", err)
 	}
-
-	results := make([]*types.CheckResult, 0, len(taskResults))
-	for typedTask, result := range taskResults {
-		results = append(results, result)
-
-		// Update TODO state
-		if todo, exists := taskToTODO[typedTask]; exists {
-			updateTODOAfterCheck(todo, result, opts.Logger)
-		}
-	}
-
 	return results, nil
 }
 
-// updateTODOAfterCheck updates the TODO frontmatter and persists state after a check completes.
-func updateTODOAfterCheck(todo *types.TODO, result *types.CheckResult, log logger.Logger) {
-	now := time.Now()
-	todo.LastRun = &now
-	attempts := todo.Attempts + 1
-	todo.Attempts = attempts
-
-	var status types.Status
-	if result.AllPassed {
-		status = types.StatusCompleted
-	} else {
-		status = types.StatusFailed
-	}
-	todo.Status = status
-
-	updates := StateUpdate{
-		LastRun:  &now,
-		Attempts: &attempts,
-		Status:   &status,
-	}
-	if err := UpdateTODOState(todo, updates); err != nil {
-		log.Warnf("Failed to update TODO state for %s: %v", todo.FilePath, err)
-	}
-
-	if result.TestResult != nil {
-		if err := UpdateLatestFailure(todo, result.TestResult); err != nil {
-			log.Warnf("Failed to update Latest Failure section for %s: %v", todo.FilePath, err)
-		}
-	}
-}
-
-// checkSingleTODO runs verification tests for a single TODO and returns the result.
-func checkSingleTODO(ctx context.Context, executor *TODOExecutor, todo *types.TODO, opts CheckOptions) *types.CheckResult {
-	start := time.Now()
-
-	// Get git info before running tests
-	gitBranch, gitCommit, gitDirty, _ := GetGitInfo(executor.workDir)
-
-	// Collect tests from FileNode (new architecture) or fall back to Verification (legacy)
-	var testNodes []*fixtures.FixtureNode
-	if todo.FileNode != nil {
-		testNodes = types.CollectTests(todo.FileNode)
-	} else if len(todo.Verification) > 0 {
-		// Legacy: use Verification field for backwards compatibility
-		testNodes = todo.Verification
-	}
-
-	// If no tests found, treat as failed
-	if len(testNodes) == 0 {
-		return &types.CheckResult{
-			TODO:      todo,
-			Results:   []fixtures.FixtureResult{},
-			AllPassed: false,
-			Duration:  time.Since(start),
-			Error:     fmt.Errorf("no tests defined"),
-		}
-	}
-
-	// Create context with timeout if specified
-	execCtx := ctx
-	if opts.Timeout > 0 {
-		var cancel context.CancelFunc
-		execCtx, cancel = context.WithTimeout(ctx, opts.Timeout)
-		defer cancel()
-	}
-
-	// Set CWD on test nodes if not already set
-	for _, node := range testNodes {
-		if node.Test != nil && node.Test.CWD == "" {
-			node.Test.CWD = todo.CWD
-		}
-	}
-
-	// Execute tests using the TODO executor
-	testResults := executor.ExecuteSection(execCtx, testNodes)
-
-	// Check if all tests passed
-	allPassed := AllPassed(testResults)
-	duration := time.Since(start)
-
-	// Build TestResultInfo from test results
-	testResultInfo := buildTestResultInfo(testResults, types.BuildTestResultInfoOptions{
-		CWD:       executor.workDir,
-		GitBranch: gitBranch,
-		GitCommit: gitCommit,
-		GitDirty:  gitDirty,
-		Timestamp: start,
-		Passed:    allPassed,
-		Duration:  duration,
-	})
-
-	if allPassed && todo.Verify != nil {
-		allPassed = runVerifyGate(todo.Verify, executor.workDir, opts.Logger)
-	}
-
-	return &types.CheckResult{
-		TODO:       todo,
-		Results:    testResults,
-		AllPassed:  allPassed,
-		Duration:   time.Since(start),
-		TestResult: testResultInfo,
-	}
-}
-
-func runVerifyGate(vc *types.TODOVerifyConfig, workDir string, log logger.Logger) bool {
-	cfg, err := verify.LoadConfig(workDir)
-	if err != nil {
-		log.Warnf("Failed to load verify config: %v", err)
-		return false
-	}
-
-	if len(vc.Categories) > 0 {
-		enabled := make(map[string]bool, len(vc.Categories))
-		for _, c := range vc.Categories {
-			enabled[c] = true
-		}
-		for _, cat := range verify.AllCategories {
-			if !enabled[cat] {
-				cfg.Checks.DisabledCategories = append(cfg.Checks.DisabledCategories, cat)
+// runBounded runs work(0..count-1) concurrently, at most concurrency at a time.
+//
+// It is a semaphore rather than a clicky task group because the work starts
+// tasks of its own: a fixture step is itself a group, and nesting one inside an
+// outer group deadlocks the drain — the outer task holds the slot the inner
+// tasks are queued behind. Cancelling the context releases the waiters, which is
+// the only error this can return.
+func runBounded(ctx context.Context, count, concurrency int, work func(context.Context, int)) error {
+	slots := semaphore.NewWeighted(int64(concurrency))
+	group, groupCtx := errgroup.WithContext(ctx)
+	for i := 0; i < count; i++ {
+		index := i
+		group.Go(func() error {
+			if err := slots.Acquire(groupCtx, 1); err != nil {
+				return err
 			}
-		}
+			defer slots.Release(1)
+			work(groupCtx, index)
+			return nil
+		})
 	}
-
-	result, err := verify.RunVerify(verify.RunOptions{Config: cfg, RepoPath: workDir})
-	if err != nil {
-		log.Warnf("Verify failed: %v", err)
-		return false
-	}
-
-	threshold := vc.ScoreThreshold
-	if threshold <= 0 {
-		threshold = 80
-	}
-
-	log.Infof("Verify score: %d (threshold: %d)", result.Score, threshold)
-	return result.Score >= threshold
+	return group.Wait()
 }
 
-// buildTestResultInfo creates a TestResultInfo from fixture results.
-func buildTestResultInfo(results []fixtures.FixtureResult, opts types.BuildTestResultInfoOptions) *types.TestResultInfo {
-	// Build combined output and command from results
+// CheckTODO runs one issue's complete definition of done — configured test/lint
+// steps, its persisted Verification fixture, and its acceptance-criteria AI
+// checklist — as the lifecycle's verify step. It is the shared entrypoint for
+// `todos check` and the dashboard.
+//
+// The todo's status is written by the step's outcome, in the host, like every
+// other step's: nothing here derives a verified/unverified transition of its
+// own, because two places deciding what a check means is one too many.
+func CheckTODO(ctx context.Context, todo *types.TODO, opts CheckOptions) *types.CheckResult {
+	start := time.Now()
+	if todo == nil {
+		return failedCheck(start, fmt.Errorf("todo is required"))
+	}
+	if opts.Runner == nil {
+		return failedCheck(start, fmt.Errorf("check %s: no lifecycle runner", TODOReference(todo)))
+	}
+	result, err := opts.Runner.VerifyStep(ctx, todo, opts.Request)
+	if err != nil {
+		return failedCheck(start, err)
+	}
+	if result == nil {
+		return failedCheck(start, fmt.Errorf("check %s: verify step produced no result", TODOReference(todo)))
+	}
+	if result.Duration == 0 {
+		result.Duration = time.Since(start)
+	}
+	return result
+}
+
+// failedCheck records a check that could not produce a verdict — a missing
+// definition of done, a fixture that would not run, a step that could not be
+// dispatched. It reports the failure rather than moving the todo: a check that
+// never ran has judged nothing, and writing "unverified" from here would be a
+// verdict the definition of done did not reach.
+func failedCheck(start time.Time, err error) *types.CheckResult {
+	return &types.CheckResult{
+		AllPassed: false, Duration: time.Since(start), Error: err, ErrorText: err.Error(),
+	}
+}
+
+// BuildTestResultInfo summarises a verification report as the "Latest Failure"
+// record persisted onto the TODO.
+func BuildTestResultInfo(report api.VerifyReport, opts types.BuildTestResultInfoOptions) *types.TestResultInfo {
 	var commands []string
-	var outputs []string
-
-	for _, r := range results {
-		if r.Command != "" {
-			commands = append(commands, r.Command)
-		}
-		output := strings.TrimSpace(r.Stdout + r.Stderr)
-		if output != "" {
-			outputs = append(outputs, output)
-		}
-		if r.Error != "" {
-			outputs = append(outputs, "Error: "+r.Error)
+	var walk func(nodes []api.VerifyNode)
+	walk = func(nodes []api.VerifyNode) {
+		for i := range nodes {
+			if nodes[i].Command != "" {
+				commands = append(commands, nodes[i].Command)
+			}
+			walk(nodes[i].Children)
 		}
 	}
+	walk(report.Tests)
 
-	combinedOutput := strings.Join(outputs, "\n---\n")
-	// Truncate output if too long
-	if len(combinedOutput) > 2000 {
-		combinedOutput = combinedOutput[:2000] + "\n... (output truncated)"
+	output := report.Feedback
+	if len(output) > 2000 {
+		output = output[:2000] + "\n... (output truncated)"
 	}
-
 	command := strings.Join(commands, " && ")
-	if command == "" && len(results) > 0 {
-		// Try to get command from test name
-		command = fmt.Sprintf("fixtures check (tests: %d)", len(results))
+	if command == "" {
+		command = fmt.Sprintf("gavel definition of done (checks: %d)", report.Summary.Total)
 	}
-
 	return &types.TestResultInfo{
-		Command:   command,
-		CWD:       opts.CWD,
-		GitBranch: opts.GitBranch,
-		GitCommit: opts.GitCommit,
-		GitDirty:  opts.GitDirty,
-		Timestamp: opts.Timestamp,
-		Passed:    opts.Passed,
-		Output:    combinedOutput,
-		Duration:  opts.Duration,
+		Command: command, CWD: opts.CWD, GitBranch: opts.GitBranch,
+		GitCommit: opts.GitCommit, GitDirty: opts.GitDirty, Timestamp: opts.Timestamp,
+		Passed: opts.Passed, Output: output, Duration: opts.Duration,
 	}
 }

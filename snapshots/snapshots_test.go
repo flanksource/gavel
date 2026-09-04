@@ -1,6 +1,7 @@
 package snapshots
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -143,11 +144,11 @@ func TestSnapshotIDStableAcrossIdenticalDirtyStates(t *testing.T) {
 	repo := initRepo(t)
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "file.txt"), []byte("content\n"), 0o644))
 
-	sha1, u1, err := SnapshotID(repo)
+	sha1, u1, err := SnapshotID(context.Background(), repo)
 	require.NoError(t, err)
 	assert.NotEmpty(t, u1)
 
-	sha2, u2, err := SnapshotID(repo)
+	sha2, u2, err := SnapshotID(context.Background(), repo)
 	require.NoError(t, err)
 	assert.Equal(t, sha1, sha2)
 	assert.Equal(t, u1, u2)

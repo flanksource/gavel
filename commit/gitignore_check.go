@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/flanksource/clicky/prompt"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/verify"
 	"github.com/go-git/go-git/v5/plumbing/format/gitignore"
@@ -107,6 +108,11 @@ func EvaluateGitIgnoreMatches(stagedFiles, patterns, allow []string) ([]Violatio
 		return nil, err
 	}
 	allowMatcher := gitignore.NewMatcher(allowMatchers)
+	// Evaluate commit.gitignore as one matcher so `!` negation lines interact
+	// with earlier patterns the way real .gitignore does (a lone per-pattern
+	// matcher can never let a `!` line rescue a file, silently dropping the
+	// rule). The commit.allow list stays a separate, additional exemption.
+	blockMatcher := gitignore.NewMatcher(blockers)
 
 	var violations []Violation
 	for _, file := range stagedFiles {
@@ -114,20 +120,32 @@ func EvaluateGitIgnoreMatches(stagedFiles, patterns, allow []string) ([]Violatio
 		if allowMatcher.Match(parts, false) {
 			continue
 		}
-		for i, p := range blockers {
-			if p == nil {
-				continue
-			}
-			if gitignore.NewMatcher([]gitignore.Pattern{p}).Match(parts, false) {
-				violations = append(violations, Violation{
-					File:    file,
-					Pattern: patterns[i],
-				})
-				break
-			}
+		if !blockMatcher.Match(parts, false) {
+			continue
 		}
+		violations = append(violations, Violation{
+			File:    file,
+			Pattern: firstBlockingPattern(blockers, patterns, parts),
+		})
 	}
 	return violations, nil
+}
+
+// firstBlockingPattern returns the raw text of the first positive pattern that
+// matches parts, for display in the prompt/label. Negation (`!`) patterns never
+// match in isolation, so they are naturally skipped; a file only reaches here
+// after the whole-list matcher already ruled it ignored, so a positive match
+// exists.
+func firstBlockingPattern(blockers []gitignore.Pattern, raw []string, parts []string) string {
+	for i, p := range blockers {
+		if p == nil {
+			continue
+		}
+		if gitignore.NewMatcher([]gitignore.Pattern{p}).Match(parts, false) {
+			return raw[i]
+		}
+	}
+	return ""
 }
 
 func parsePatterns(raw []string, field string) ([]gitignore.Pattern, error) {
@@ -172,7 +190,7 @@ func RunGitIgnoreCheck(ctx context.Context, p CheckParams) (CheckOutcome, error)
 	// Only escalate on non-TTY if we'd otherwise fall through to the real
 	// interactive prompt. Callers that inject a Decider (tests, future
 	// non-interactive flows) have already decided how to answer.
-	if mode == IgnoreCheckModePrompt && p.Decider == nil && !stdinIsTerminal() {
+	if mode == IgnoreCheckModePrompt && p.Decider == nil && !stdinIsTerminal() && !prompt.HasInteractiveSink() {
 		logger.Warnf("gitignore check: stdin is not a terminal; escalating to --precommit=fail")
 		mode = IgnoreCheckModeFail
 	}
@@ -619,14 +637,14 @@ func applyGitIgnoreCheck(ctx context.Context, opts Options, source stagedSource)
 	return refreshed, nil
 }
 
-func runPromptDecider(_ context.Context, v Violation) (Decision, error) {
+func runPromptDecider(ctx context.Context, v Violation) (Decision, error) {
 	header := fmt.Sprintf("Staged %q matches commit.gitignore pattern %q", v.File, v.Pattern)
 	choices := gitIgnoreChoices(v)
 	items := make([]string, len(choices))
 	for i, choice := range choices {
 		items[i] = choice.Text
 	}
-	idx, ok := promptSelectIndex(header, items)
+	idx, ok := promptSelectIndex(ctx, header, items)
 	if !ok {
 		return DecisionCancel, nil
 	}

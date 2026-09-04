@@ -1,8 +1,13 @@
 package ai
 
 import (
+	"errors"
+	"github.com/flanksource/captain/pkg/api"
 	"os"
+	"strings"
 	"testing"
+
+	captainai "github.com/flanksource/captain/pkg/ai"
 )
 
 func TestNormalizeEnv_CopiesClaudeKeyToAnthropic(t *testing.T) {
@@ -86,11 +91,67 @@ func TestNormalizeEnv_NoKeyNoChange(t *testing.T) {
 	}
 }
 
-// clearAllKnownKeys unsets every canonical + alias in envAliases for the
-// duration of the test. Uses t.Setenv so the originals are restored on
-// cleanup.
+func TestNewProvider_ReportsRuntimeKeyAndSimilarEnvName(t *testing.T) {
+	clearAllKnownKeys(t)
+	t.Setenv("OPEN_AI_API_KEY", "must-not-leak")
+
+	_, err := NewProvider(AgentConfig{Model: api.Model{Name: "api:terra"}})
+	if err == nil {
+		t.Fatal("expected missing OpenAI API key error")
+	}
+	message := err.Error()
+	for _, want := range []string{
+		`API key not found for runtime "openai api"`,
+		`model "api:terra"`,
+		"set OPENAI_API_KEY (also accepts OPENAI_KEY)",
+		"similar environment variable found: OPEN_AI_API_KEY (did you mean OPENAI_API_KEY?)",
+	} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("error = %q, want %q", message, want)
+		}
+	}
+	if strings.Contains(message, "must-not-leak") {
+		t.Fatalf("error leaked environment value: %q", message)
+	}
+	if strings.Contains(message, "ANTHROPIC_API_KEY") || strings.Contains(message, "GEMINI_API_KEY") {
+		t.Fatalf("error contains unrelated provider keys: %q", message)
+	}
+	if !errors.Is(err, captainai.ErrNoAPIKey) {
+		t.Fatalf("error = %v, want ErrNoAPIKey", err)
+	}
+}
+
+func TestNewProvider_DoesNotSuggestKeyWhenConfigured(t *testing.T) {
+	clearAllKnownKeys(t)
+	t.Setenv("OPENAI_API_KEY", "configured")
+
+	provider, err := NewProvider(AgentConfig{Model: api.Model{Name: "api:terra"}})
+	if err != nil {
+		t.Fatalf("NewProvider(api:terra) with OPENAI_API_KEY: %v", err)
+	}
+	if provider == nil {
+		t.Fatal("NewProvider(api:terra) returned nil provider")
+	}
+}
+
+func TestWithCredentialHint_IgnoresNonCredentialErrors(t *testing.T) {
+	cause := errors.New("model unavailable")
+	if got := withCredentialHint(AgentConfig{Model: api.Model{Name: "api:terra"}}, cause); got != cause {
+		t.Fatalf("non-credential error was decorated: %v", got)
+	}
+}
+
+// clearAllKnownKeys makes every credential unreachable for one test: every
+// canonical + alias in envAliases, via t.Setenv so the originals are restored
+// on cleanup.
+//
+// It also moves HOME: an api-mode key is resolved from captain's credential
+// vault (~/.config/captain/vault) before the environment is consulted, so
+// clearing env vars alone left a developer's real stored key answering — and
+// the "no key" tests passed or failed by machine.
 func clearAllKnownKeys(t *testing.T) {
 	t.Helper()
+	t.Setenv("HOME", t.TempDir())
 	for canonical, aliases := range envAliases {
 		t.Setenv(canonical, "")
 		_ = os.Unsetenv(canonical)

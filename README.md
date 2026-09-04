@@ -19,6 +19,10 @@ task install     # installs to $GOPATH/bin
 
 Pre-built binaries for Linux, macOS, and Windows are available on the [Releases](https://github.com/flanksource/gavel/releases) page.
 
+For embedded and externally managed database observability, top-statement
+queries, and safe session-storage maintenance, see
+[PostgreSQL performance diagnostics](docs/postgres-performance.md).
+
 ## GitHub Action
 
 Run `gavel test --lint` in CI, upload JSON + HTML artifacts, and post a sticky PR comment with the markdown summary.
@@ -109,14 +113,22 @@ gavel test --fixtures                                 # discover and run *.fixtu
 gavel test --format "json=out.json,html=report.html"  # write multiple output formats
 gavel test --dry-run                                  # show what would run without executing
 gavel test history                                    # show local test duration/pass history
+gavel test ./pkg -- -run 'TestFoo'                    # focus Go test and Ginkgo by name
+gavel test ./pkg -- --focus 'TestFoo'                 # equivalent native focus spelling
+gavel test ginkgo ./pkg -- --label-filter smoke       # raw args for one framework
 ```
+
+The first `-run` or `--focus` immediately after `--` is normalized through
+each runner's focus mapping. Any other arguments after `--` require exactly
+one selected framework, using a framework subcommand or a single
+`--framework` value.
 
 | Flag | Description |
 |------|-------------|
 | `[paths...]` | Package paths to test (e.g. `./pkg/...`). If empty, all packages are discovered. |
 | `--lint` | Run linters in parallel with tests |
 | `--ui` | Launch browser with real-time test progress dashboard |
-| `--addr` | Interface to bind the UI server (default: `localhost`, use `0.0.0.0` for LAN) |
+| `--addr` | Interface to bind the UI server (default: `0.0.0.0`, all interfaces; set `localhost` to restrict to this machine) |
 | `--cache` | Skip packages whose content fingerprint matches the last passing run |
 | `--changed` | Only run packages affected by staged/unstaged/untracked changes vs `origin/main` |
 | `--since` | Only run packages affected by the diff since `<ref>` (merge-base) |
@@ -129,11 +141,10 @@ gavel test history                                    # show local test duration
 | `--show-stdout` | When to show stdout: `Never`, `OnFailure` (default), `Always` |
 | `--show-stderr` | When to show stderr: `Never`, `OnFailure` (default), `Always` |
 | `--skip-hooks` | Skip `.gavel.yaml` pre/post hooks (default: skip locally, run in CI) |
-| `--sync-todos` | Sync test failures to TODO files |
 | `--dry-run` | Print test commands without executing |
 | `--auto-stop` | With `--ui`, fork a detached UI server that exits after this duration |
 | `--idle-timeout` | With `--ui --auto-stop`, exit the detached UI after no HTTP requests |
-| `--extra-args` | Additional arguments passed through to test runners |
+| `--extra-args` | Additional arguments broadcast to every selected test runner |
 | `--work-dir` | Working directory to run tests in |
 
 #### `gavel test history`
@@ -152,7 +163,7 @@ Each leaf row shows min/avg/max duration, execution count, pass rate, last passe
 
 Run linters on the project. Auto-detects which linters are installed and applicable.
 
-Supported linters: golangci-lint, ruff, eslint, pyright, markdownlint, vale, jscpd, betterleaks.
+Supported linters: golangci-lint, ruff, eslint, oxlint, react-doctor, pyright, tsc, markdownlint, vale, jscpd, betterleaks.
 
 ```bash
 gavel lint
@@ -162,8 +173,8 @@ gavel lint --changed                        # only new issues vs origin/main
 gavel lint --ui                             # view violations in browser
 gavel lint --dry-run                        # show linter commands without executing
 gavel lint secrets                          # run betterleaks only (alias)
+gavel lint react-doctor                     # run React Doctor only
 gavel lint jscpd eslint                     # run specific linters by name
-gavel lint --sync-todos .todos              # sync violations to TODO files
 ```
 
 | Flag | Description |
@@ -176,14 +187,24 @@ gavel lint --sync-todos .todos              # sync violations to TODO files
 | `--since` | Only report new issues since `<ref>` (merge-base with HEAD) |
 | `--ignore` | Glob patterns to exclude from linting |
 | `--ui` | Launch browser UI to view violations |
-| `--addr` | Interface to bind the UI server (default: `localhost`) |
-| `--sync-todos` | Sync violations to TODO files in directory |
-| `--group-by` | Group synced TODOs by: `file`, `package`, `message` (default: `file`) |
+| `--addr` | Interface to bind the UI server (default: `0.0.0.0`, all interfaces; set `localhost` to restrict to this machine) |
 | `--no-cache` | Disable caching/debounce |
 | `--timeout` | Timeout per linter (default: `5m`) |
 | `--dry-run` | Print linter commands without executing |
 
-Config-file-gated linters only run when a usable config is discovered, unless explicitly named. For betterleaks that includes native config files (`.betterleaks.toml` / `.gitleaks.toml`) and any existing paths from `secrets.configs` across layered `.gavel.yaml` files. Disable betterleaks entirely via `secrets.disabled: true` in `.gavel.yaml`.
+Config-file-gated linters only run when a usable config or native project signal is discovered, unless explicitly named. For betterleaks that includes native config files (`.betterleaks.toml` / `.gitleaks.toml`) and any existing paths from `secrets.configs` across layered `.gavel.yaml` files. React Doctor runs when `package.json` declares React or a common React framework/plugin, and can also be enabled with `doctor.config.*`, legacy `react-doctor.config.json`, or `package.json#reactDoctor`. Disable betterleaks entirely via `secrets.disabled: true` in `.gavel.yaml`.
+
+#### `gavel test outline`
+
+Inspect every supported test source without running test bodies:
+
+```bash
+gavel test outline
+gavel test outline --framework jest,playwright
+gavel test outline --framework fixture --fixture-files 'examples/*.fixture.md'
+```
+
+The default outline includes Go test, Ginkgo, Jest, Vitest, Playwright, and Markdown fixtures. Positional paths constrain discovery, while `--fixture-files` overrides fixture globs from `.gavel.yaml`. Use `gavel fixtures outline` when you need fixture-specific sections, tables, AI criteria, and kind counts rather than the unified test view.
 
 #### `gavel fixtures`
 
@@ -195,7 +216,12 @@ gavel fixtures fixtures/**/*.md
 gavel fixtures -v tests.md                  # verbose (stderr on pass, stdout+stderr on fail)
 gavel fixtures -vv tests.md                 # more verbose
 gavel fixtures --no-progress tests.md       # disable progress display
+gavel fixtures outline fixtures/**/*.md     # parse and summarize without executing
 ```
+
+Use `gavel fixtures outline` when you want to inspect fixture files, sections,
+tables, runner steps, AI checks, and source locations without running any build,
+daemon, command, test/lint, skip, or AI work.
 
 The same runner can be used from Go tests. Import the default fixture types when
 using `exec` fixtures:
@@ -313,6 +339,15 @@ See `gavel fixtures --help` for the full reference including CEL variables, vali
 
 </details>
 
+**Example workflows** — ready-made templates in [`examples/`](examples/) that run against the bundled [`examples/sample-app`](examples/sample-app); compose the `yaml test` / `yaml lint` steps and AI verification:
+
+- [`examples/precommit.fixture.md`](examples/precommit.fixture.md) — lint + test only the files you changed, plus a `gofmt` check
+- [`examples/pre-release.fixture.md`](examples/pre-release.fixture.md) — build, then the full test suite and every linter
+- [`examples/smoke-test.fixture.md`](examples/smoke-test.fixture.md) — start the app, run fast smoke tests, and probe `/health`
+- [`examples/ai-review.fixture.md`](examples/ai-review.fixture.md) — AI reviews the change against an acceptance-criteria checklist and scores it (needs `captain configure`)
+
+Run one with `gavel fixtures examples/precommit.fixture.md`, or copy it into your project.
+
 #### `gavel bench`
 
 Run Go benchmarks and compare base vs head results for regression detection.
@@ -349,33 +384,9 @@ gavel bench compare --base base.json --head head.json --threshold 15 --ui
 | `--head-label` | `head` | Display label for the head run |
 | `--threshold` | `10` | Regression threshold in percent |
 | `--ui` | `false` | Launch browser UI with the comparison |
-| `--addr` | `localhost` | Interface to bind the UI server |
+| `--addr` | `0.0.0.0` | Interface to bind the UI server (all interfaces; set `localhost` to restrict to this machine) |
 
 ### Code Review & Commits
-
-#### `gavel verify`
-
-AI-powered code review with structured checks across completeness, code quality, testing, consistency, security, and performance.
-
-```bash
-gavel verify
-gavel verify --range main..HEAD
-gavel verify --model gemini --disable-checks SEC-1,PERF-2
-gavel verify --auto-fix --max-turns 5
-gavel verify --sync-todos
-```
-
-| Flag | Description |
-|------|-------------|
-| `--model` | AI CLI: `claude`, `gemini`, `codex` (or a model name) |
-| `--range` | Commit range to review |
-| `--auto-fix` | Enable iterative AI fix loop |
-| `--fix-model` | Separate model for fixes |
-| `--max-turns` | Max verify-fix cycles (default: 3) |
-| `--score-threshold` | Exit 0 if score >= this (default: 80) |
-| `--disable-checks` | Check IDs to disable |
-| `--sync-todos` | Create TODO files from findings |
-| `--patch-only` | AI outputs patches instead of interactive tool-use |
 
 #### `gavel commit`
 
@@ -384,7 +395,9 @@ Generate a conventional commit message via LLM and run pre-commit hooks from `.g
 ```bash
 gavel commit                          # LLM-generated message, staged changes
 gavel commit -t                       # choose files in an interactive tree picker
-gavel commit -A                       # split staged changes into multiple commits
+gavel commit -i -s                    # stream one-line AI summaries into picker rows
+gavel commit -A                       # stage everything, let the LLM split it into logical commits + a chore commit for lock/generated files
+gavel commit --max-commits=3          # same as -A, capped at 3 logical commits (implies -A)
 gavel commit -m "chore: bump dep"     # explicit message, still run compatibility analysis
 gavel commit --stage all --dry-run    # stage everything, print message
 gavel commit --force                  # skip hooks
@@ -392,11 +405,14 @@ gavel commit --force                  # skip hooks
 
 | Flag | Description |
 |------|-------------|
-| `--stage` | Which changes to commit: `staged` (default), `unstaged`, `all` |
+| `--stage` | Which changes to commit: `session` (default — commits only the running agent's edits, resolving `GAVEL_SESSION_ID`/`CLAUDE_SESSION_ID`/`CODEX_SESSION_ID`, falling back to `staged` when none is set), `staged`, `unstaged`, `all`, or an explicit Claude/Codex session id |
 | `-t` / `--tree`, `-i` / `--interactive` | Open an interactive tree picker over changed files; press `/` in the picker to filter by path, status, language, or scope |
-| `-A` / `--commit-all` | Ask the LLM to group the selected change set into multiple commits; if nothing is staged, stage all first |
+| `-s` / `--summary` | With `-i`/`-t`, stream a one-line AI summary into each candidate file row while the picker remains interactive |
+| `-A` / `--commit-all` | Stage all changes and ask the LLM to split them into logical commit groups (plus a separate chore commit for lock files / build artifacts / generated bundles). Each group is committed as soon as its message is ready |
+| `--max-commits` | Cap the number of logical commits, excluding the chore commit (default 7). Setting it implies `-A`. Rendered into the grouping prompt's output schema as `maxItems` and enforced by captain's `schemaStrictness=retry` policy |
 | `-m` / `--message` | Explicit commit message; skips only the message-generation LLM call |
-| `--model` | Override LLM model from `.gavel.yaml` `commit.model` |
+| `--model` | Override LLM model for commit-message/PR generation from `.gavel.yaml` `commit.model` (fast/haiku-class) |
+| `--group-model` | Override LLM model for AI grouping (`-A`) from `.gavel.yaml` `commit.groupModel` (capable/sonnet-class); falls back to `--model` |
 | `--dry-run` | Print the generated message without committing |
 | `--force` | Skip pre-commit hooks |
 | `--no-cache` | Bypass the LLM response cache |
@@ -417,7 +433,6 @@ gavel pr status 42
 gavel pr status https://github.com/owner/repo/pull/123
 gavel pr status --follow --interval 30s
 gavel pr status --logs --tail-logs 50
-gavel pr status --sync-todos
 ```
 
 | Flag | Description |
@@ -427,7 +442,6 @@ gavel pr status --sync-todos
 | `--interval` | Poll interval (default: `30s`) |
 | `--logs` | Fetch and include failed job logs (uses extra API quota) |
 | `--tail-logs` | Number of failed log lines to show per step (default: `100`) |
-| `--sync-todos` | Sync TODO files for failed jobs to directory |
 
 #### `gavel pr list`
 
@@ -459,28 +473,8 @@ gavel pr list --all --org myorg               # all repos in org
 | `--ui` | Open PR dashboard in browser with live updates |
 | `--menu-bar` | Show macOS menu bar status indicator |
 | `--interval` | Poll interval for `--ui`/`--menu-bar` (default: `60s`) |
-
-#### `gavel pr fix`
-
-Sync TODOs from PR failures and interactively select which to fix with Claude Code.
-
-```bash
-gavel pr fix
-gavel pr fix 42
-gavel pr fix --group-by directory
-gavel pr fix --dry-run
-```
-
-| Flag | Description |
-|------|-------------|
-| `-R` / `--repo` | GitHub repository (`owner/repo`) |
-| `--dir` | TODOs directory (default: `.todos`) |
-| `--group-by` | Group TODOs by: `file`, `directory`, `all`, `none` |
-| `--max-retries` | Maximum retry attempts (default: `3`) |
-| `--max-budget` | Maximum budget in USD |
-| `--max-turns` | Maximum conversation turns |
-| `--dirty` | Skip git stash/checkout |
-| `--dry-run` | Print commands without executing |
+| `--addr` | Interface to bind the `--ui`/`--menu-bar` server (default: `0.0.0.0`, all interfaces; set `localhost` to restrict to this machine) |
+| `--port` | UI port (default: `9092`, `0` to auto-scan upward for a free port) |
 
 ### Git Analysis
 
@@ -511,7 +505,7 @@ Analyze commits with scope/technology detection, Kubernetes resource change trac
 
 ```bash
 gavel git analyze
-gavel git analyze --ai --model claude-sonnet-4-20250514
+gavel git analyze --ai --ai-model api:haiku
 gavel git analyze --scope backend --tech kubernetes
 gavel git analyze --summary --summary-window week
 gavel git analyze --include bots --exclude merges --verbose
@@ -634,7 +628,7 @@ gavel ui serve run.json other-run.json --auto-stop=10m --idle-timeout=5m
 |------|-------------|
 | `run.json [other-run.json ...]` | One or more JSON snapshots to load and merge in order |
 | `--port` | Bind this port (0 = pick ephemeral) |
-| `--addr` | Interface to bind (default: `localhost`) |
+| `--addr` | Interface to bind (default: `0.0.0.0`, all interfaces; set `localhost` to restrict to this machine) |
 | `--auto-stop` | Hard wall-clock deadline from process start (default: `30m`) |
 | `--idle-timeout` | Exit after this long with no HTTP requests (default: `5m`) |
 | `--url-file` | Write the bound URL to this path for scripting |
@@ -654,12 +648,18 @@ View the merged `.gavel.yaml` for a path.
 
 Interactive output shows merged YAML with comments for non-git-root sources.
 Redirected output, `--yaml`, and `--json` emit only the merged config.
+Pass `--resolve` (`-r`) to expand all registered AI prompts, including inline
+Captain specs and file-backed templates, and show both declared and effective
+model/backend details. With `--json` or `--yaml`, resolved output is wrapped as
+`{config, prompts}`.
 
 ```bash
 gavel config
 gavel config ./pkg/api
 gavel config ./cmd/gavel/main.go
 gavel config --yaml ./cmd/gavel/main.go
+gavel config --resolve ./cmd/gavel/main.go
+gavel config --resolve --json
 gavel config > merged.gavel.yaml
 ```
 
@@ -670,14 +670,39 @@ and `<target-dir>/.gavel.yaml` (or the parent directory when the target is a fil
 
 #### `gavel todos`
 
-Manage and execute TODO items with Claude Code integration.
+Manage and execute native PostgreSQL TODO issues with Claude or Codex.
+
+Every todo moves through a **lifecycle**: an ordered set of steps, each a
+captain prompt reference plus a CEL `when` predicate (deciding whether the
+step applies now) and ordered `outcomes` (deciding which status a finished run
+lands the todo in). `review` and `ask` are human-facing statuses, not steps —
+they wait on `gavel todos plan approve|reject|revise` or an answer to the
+agent's questions. See [MANUAL.md](MANUAL.md#gavel-todos) for the full model
+and the retired-flags table.
 
 ```bash
 gavel todos list
 gavel todos list --status pending
-gavel todos run .todos/fix-bug.md
-gavel todos check .todos/fix-bug.md
+gavel todos run 3f2a1b
+gavel todos steps 3f2a1b                 # which lifecycle steps apply to this todo now
+gavel todos run --step plan              # propose a reviewable plan first (read-only)
+gavel todos check 3f2a1b                 # run the TODO's complete definition of done
 ```
+
+`--step` names the lifecycle step to run (`plan`, `verify`, `run`, `triage`, or
+any step the project's lifecycle declares); empty lets the lifecycle pick the
+next applicable step. `--model` selects the model, in the compact
+`mode:model:effort` form (`cli:opus:high`, `api:sonnet`).
+
+The configured `checks:` test/lint suite is part of every todo's definition of done: when `.gavel.yaml` `checks.enabled` (or a todo's own `checks:` front matter) turns it on, the run step executes it after the agent reports done and feeds any failures back into the same session until they pass (bounded by `todos.run.workflow.verify.maxIterations`).
+
+`gavel todos check` **is** the lifecycle's `verify` step run standalone: the
+same fixture/CEL definition of done used by the implementation loop —
+configured test/lint checks, the issue's persisted `## Verification` fixture,
+and any acceptance-criteria checklist step.
+
+The old `--driver`, `--mode`, `--prompt`, and `--group-by` flags on `todos run`
+no longer exist; see [MANUAL.md](MANUAL.md#gavel-todos) for their replacements.
 
 ## Output Formats
 
@@ -707,7 +732,7 @@ A full annotated example lives in `gavel.yaml.example` and is also rendered in `
 
 ```yaml
 verify:
-  model: claude                      # AI model for gavel verify
+  model: claude                      # AI model for generic AI verification fixtures
   checks:
     disabled: [SEC-1, PERF-2]        # disable specific check IDs
     disabledCategories: [performance] # disable entire categories
@@ -721,9 +746,12 @@ lint:
   linters:
     jscpd:
       enabled: true                   # opt in to jscpd duplicate detection
+    react-doctor:
+      enabled: true                   # opt in without React detection or doctor.config.*
 
 commit:
-  model: claude                      # LLM model for gavel commit
+  model: claude-haiku-4-5            # fast model for commit-message/PR generation
+  groupModel: claude-sonnet-4-5      # capable model for AI commit grouping (-A)
   hooks:                             # pre-commit hooks
     - name: lint-staged
       run: "golangci-lint run --new-from-rev=HEAD~1"
@@ -736,6 +764,13 @@ commit:
 fixtures:
   enabled: true                      # auto-discover fixture files during gavel test
   files: ["tests/**/*.fixture.md"]   # override default glob (**/*.fixture.md)
+
+checks:                              # post-completion loop inside `gavel todos run`
+  enabled: true                      # run tests/lint after the agent is done, feed failures back
+  test:                              # omit to skip tests
+    changed: true                    # only packages affected by the agent's changes
+  lint:                              # omit to skip linting
+    changed: true                    # only new violations vs the base ref
 
 ssh:
   cmd: "gavel test --lint --fixtures" # override the command run on git push
@@ -876,12 +911,14 @@ gavel git analyze --verbose            # show skip reasons
 
 ## Agent Skills
 
-Gavel ships [Agent Skills](https://agentskills.io/) that give AI coding agents three complementary capabilities: writing data-driven tests, driving the everyday test+lint loop, *and* migrating CI pipelines onto the gavel composite action. Skills are auto-discovered from `.agents/skills/` by any compatible agent (Claude Code, VS Code Copilot, Cursor, Gemini CLI, and [others](https://agentskills.io/)).
+Gavel ships [Agent Skills](https://agentskills.io/) that teach AI coding agents to reach for gavel across the workflow: writing data-driven tests, driving the everyday test+lint loop, using gavel instead of gh/git for PRs and commits, running the TODO/AI-review loop, and migrating CI pipelines onto the gavel composite action. Skills are auto-discovered from `.agents/skills/` by any compatible agent (Claude Code, VS Code Copilot, Cursor, Gemini CLI, and [others](https://agentskills.io/)).
 
 | Skill | What it teaches the agent |
 |-------|---------------------------|
 | [`gavel-fixture-tester`](.agents/skills/gavel-fixture-tester/SKILL.md) | **Author** fixture-based tests in markdown — YAML front-matter, tables, command blocks, and CEL assertions for stdout/stderr/exitCode/json. |
 | [`gavel-runner`](.agents/skills/gavel-runner/SKILL.md) | **Run** gavel test and lint — focus on a subset (`--changed`, `--cache`, framework, runner pass-through), re-run only failures (`--failed` defaults to `.gavel/last.json`), suppress noise with baselines, pull JSON / markdown / HTML out via `--format`, attach to live runs through the UI server's HTTP+SSE API, and tune the four-layer timeout stack. |
+| [`gavel-git`](.agents/skills/gavel-git/SKILL.md) | **Use gavel over gh/git** — `gavel pr status` for PR + CI status (replaces `gh pr view`/`gh run view`), `gavel commit -p` / `gavel pr create` to open PRs with AI-generated content, and `gavel commit` (session-scoped, conventional message, hooks) for commits. |
+| [`gavel-todos`](.agents/skills/gavel-todos/SKILL.md) | **Run the TODO loop** — have a coding agent implement or plan TODOs, then execute the same fixture/CEL definition of done manually with `gavel todos check`. |
 | [`gavel-ci-migrator`](.agents/skills/gavel-ci-migrator/SKILL.md) | **Migrate CI** — discover existing `golangci-lint` / `go test` / `make lint|test` jobs in `.github/workflows/`, ask per-workflow whether to replace with `flanksource/gavel@…` or add alongside, rewrite YAML with the right `permissions:` and `fetch-depth: 0`, and verify with `actionlint`. Never auto-commits. |
 
 ### Install
@@ -894,7 +931,7 @@ Gavel ships [Agent Skills](https://agentskills.io/) that give AI coding agents t
 /plugin install gavel-skills@flanksource-gavel
 ```
 
-After installation, all three skills become available. The agent picks `gavel-fixture-tester` when you ask it to *write* a fixture, `gavel-runner` when you ask it to *run* tests, *rerun* failures, or *inspect* results, and `gavel-ci-migrator` when you ask it to *switch CI to gavel* or *replace golangci-lint-action / `go test` jobs* with the gavel action.
+After installation, all five skills become available. The agent picks `gavel-fixture-tester` when you ask it to *write* a fixture, `gavel-runner` when you ask it to *run* tests, *rerun* failures, or *inspect* results, `gavel-git` when you ask it to *check a PR*, *see why CI is failing*, or *commit / open a PR*, `gavel-todos` when you ask it to *run the todos* or *verify* committed work, and `gavel-ci-migrator` when you ask it to *switch CI to gavel* or *replace golangci-lint-action / `go test` jobs* with the gavel action.
 
 **For any agent (via the open Skills CLI):**
 

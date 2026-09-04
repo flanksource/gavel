@@ -9,14 +9,15 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/flanksource/clicky"
+	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/github"
-	"github.com/flanksource/gavel/pr/menubar"
 	"github.com/flanksource/gavel/pr/ui"
 	"github.com/flanksource/gavel/service"
 	"github.com/timberio/go-datemath"
@@ -32,19 +33,54 @@ type PRListOptions struct {
 	Org         string   `flag:"org" help:"GitHub org for --all (auto-detected from git remote)"`
 	Limit       int      `flag:"limit" help:"Maximum PRs to return" default:"50"`
 	Status      bool     `flag:"status" help:"Show GitHub Actions check status counts"`
+	CI          bool     `flag:"ci" help:"List default-branch (main) CI status across the org's repos pushed within --since (incl. private; needs repo scope)"`
+	FailedOnly  bool     `flag:"failed-only" help:"With --ci, show only repos whose default branch is currently failing"`
 	Logs        bool     `flag:"logs" help:"Fetch failed job log tails (requires --status -v, uses extra API quota)"`
 	URL         bool     `flag:"url" help:"Show PR URL instead of number"`
 	UI          bool     `flag:"ui" help:"Open PR dashboard in browser with live updates"`
 	MenuBar     bool     `flag:"menu-bar" help:"Show macOS menu bar status indicator"`
 	Interval    string   `flag:"interval" help:"Poll interval for --ui/--menu-bar (e.g. 30s, 1m, 5m)" default:"60s"`
+	Addr        string   `flag:"addr" help:"Interface to bind the --ui/--menu-bar HTTP server. Defaults to 0.0.0.0 (all interfaces); set localhost to restrict to this machine." default:"0.0.0.0"`
 	Port        int      `flag:"port" help:"UI port (default 9092, use 0 to auto-scan from 9092 upward for the first free port)" default:"9092"`
 	PersistPort bool     `flag:"persist-port" help:"Write the bound port to ~/.config/gavel/pr-ui.port so gavel system status and WaitForReady can find it — set automatically by the launchd/systemd service files"`
+	Dev         bool     `flag:"dev" help:"Dev mode: spawn the Vite dev server and reverse-proxy to it for hot-module-reload (requires a source checkout)"`
+	DevDir      string   `flag:"dev-dir" help:"pr/ui source directory for the Vite dev server" default:"pr/ui"`
 	Repos       []string `args:"true"`
+}
+
+func (o PRListOptions) Help() api.Textable {
+	return clicky.Text(`List GitHub pull requests — the gavel alternative to gh pr list.
+
+Defaults to your open PRs (--author @me) updated in the last --since window (7d).
+Optional positional args restrict to specific repos. Add check status with
+--status, widen to the whole org with --all, or open a live browser dashboard
+with --ui. --ci switches to default-branch CI health across the org's repos.
+
+Examples:
+  gavel pr list                    # your open PRs from the last 7 days
+  gavel pr list --status           # with Actions check status counts
+  gavel pr list --all --org acme   # every open PR across the org
+  gavel pr list --state all --any  # all states, all authors
+  gavel pr list --ui               # live browser dashboard (port 9092)
+  gavel pr list --ci --failed-only # org repos whose default branch is red`)
 }
 
 var bareDurationRe = regexp.MustCompile(`^\d+[dhms]$`)
 
-func parseSince(s string) (time.Time, error) {
+// closedPRLookback bounds how far back an on-demand closed-PR sync reaches on a
+// full fetch. Closed/merged PRs accumulate without limit, so the UI's "show
+// closed" opt-in caps the window at 30 days rather than pulling the whole history.
+const closedPRLookback = 30 * 24 * time.Hour
+
+func parseSince(s string) (parsed time.Time, err error) {
+	// go-datemath may panic on malformed lexer input. Treat that the same as a
+	// parse failure so CLI flags never crash the process.
+	defer func() {
+		if recover() != nil {
+			parsed = time.Time{}
+			err = fmt.Errorf("unable to parse since: %s", s)
+		}
+	}()
 	if bareDurationRe.MatchString(s) {
 		s = "now-" + s
 	}
@@ -59,22 +95,23 @@ func parseSince(s string) (time.Time, error) {
 	return expr.Time(datemath.WithNow(time.Now())), nil
 }
 
-// bindUIListener opens the TCP listener for the PR UI and handles the
-// --port=0 auto-scan contract: 0 means "start at DefaultUIPort and try the
-// next 50 ports". Any other value is a fixed bind — a conflict is surfaced
-// as an error so the user knows why the daemon couldn't start.
+// bindUIListener opens the TCP listener for the PR UI on the given interface
+// and handles the --port=0 auto-scan contract: 0 means "start at DefaultUIPort
+// and try the next 50 ports". Any other value is a fixed bind — a conflict is
+// surfaced as an error so the user knows why the daemon couldn't start.
 //
-// Returns the bound listener so the caller doesn't have to re-bind (which
-// could race-lose the port).
-func bindUIListener(requested int) (int, net.Listener, error) {
+// host is the interface to bind (e.g. 0.0.0.0 for the LAN, localhost to
+// restrict to this machine). Returns the bound listener so the caller doesn't
+// have to re-bind (which could race-lose the port).
+func bindUIListener(host string, requested int) (int, net.Listener, error) {
 	if requested == 0 {
-		port, l, err := service.ScanFreePort(service.DefaultUIPort, 50)
+		port, l, err := service.ScanFreePort(host, service.DefaultUIPort, 50)
 		if err != nil {
 			return 0, nil, fmt.Errorf("scan for free UI port: %w", err)
 		}
 		return port, l, nil
 	}
-	addr := fmt.Sprintf("localhost:%d", requested)
+	addr := net.JoinHostPort(host, strconv.Itoa(requested))
 	l, err := net.Listen("tcp", addr)
 	if err != nil {
 		return 0, nil, fmt.Errorf("start PR UI server on %s: %w", addr, err)
@@ -154,7 +191,11 @@ func buildPRSearchOpts(opts PRListOptions) (github.Options, github.PRSearchOptio
 
 func runPRList(opts PRListOptions) (any, error) {
 	if opts.UI || opts.MenuBar {
-		return nil, runPRUI(opts)
+		return nil, runPRUI(opts, serveDatabaseNoMigrations)
+	}
+
+	if opts.CI {
+		return runOrgBranchStatus(opts)
 	}
 
 	ghOpts, searchOpts, err := buildPRSearchOpts(opts)
@@ -174,7 +215,43 @@ func runPRList(opts PRListOptions) (any, error) {
 	return results, nil
 }
 
-func runPRUI(opts PRListOptions) error {
+// runOrgBranchStatus drives `gavel pr list --ci`: it reports default-branch CI
+// status across an org's repos pushed within the --since window. Org is taken
+// from --org or resolved the same way `--all` resolves it, so it works from any
+// directory. Reuses --since/--failed-only so the recency filter matches the PR
+// list's age semantics.
+func runOrgBranchStatus(opts PRListOptions) (any, error) {
+	var since time.Time
+	if opts.Since != "" {
+		var err error
+		since, err = parseSince(opts.Since)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	ghOpts := github.Options{}
+	org := opts.Org
+	if org == "" {
+		resolved, err := github.ResolveDefaultOrg(ghOpts, ui.LoadSettings().IgnoredOrgs)
+		if err != nil {
+			return nil, fmt.Errorf("cannot determine org for --ci (use --org): %w", err)
+		}
+		org = resolved
+	}
+
+	results, _, err := github.FetchOrgDefaultBranchStatus(ghOpts, github.OrgStatusOptions{
+		Org:        org,
+		Since:      since,
+		FailedOnly: opts.FailedOnly,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
+func runPRUI(opts PRListOptions, databaseMode serveDatabaseMode) error {
 	ghOpts, searchOpts, err := buildPRSearchOpts(opts)
 	if err != nil {
 		return err
@@ -187,34 +264,29 @@ func runPRUI(opts PRListOptions) error {
 
 	searchOpts.Status = true
 
-	author := searchOpts.Author
-	isAny := opts.Any
-	isBots := opts.Bots
+	// The UI always fetches every author (including bots) and narrows the list
+	// client-side via the Authors filter (which carries @me / @bots chips), so
+	// there is no server-side author or bot scoping here.
+	searchOpts.Author = ""
 
 	saved := ui.LoadSettings()
 	if len(searchOpts.Repos) == 0 && len(saved.Repos) > 0 {
 		searchOpts.Repos = saved.Repos
-	}
-	if saved.Author != "" {
-		author = saved.Author
-	}
-	if saved.Any {
-		isAny = true
-		author = ""
-	}
-	if saved.Bots {
-		isBots = true
 	}
 
 	srv := ui.NewServer(interval, ghOpts, ui.SearchConfig{
 		Repos:       searchOpts.Repos,
 		All:         searchOpts.All,
 		Org:         searchOpts.Org,
-		Author:      author,
-		Any:         isAny,
-		Bots:        isBots,
 		IgnoredOrgs: saved.IgnoredOrgs,
 	})
+	srv.SetFixtureSchemaProvider(func() (any, error) {
+		return fixturesSchemaDocument()
+	})
+	srv.SetProjectActionOptionsProvider(projectActionCommandProvider{})
+
+	// Surface the backend build metadata to the dashboard (window.__GAVEL__).
+	ui.Build = ui.BuildInfo{Version: version, Commit: commit, Date: date}
 
 	srv.RepoSearchFn = func() (github.PRSearchResults, error) {
 		since, _ := parseSince("30d")
@@ -234,14 +306,19 @@ func runPRUI(opts PRListOptions) error {
 		if !since.IsZero() {
 			so.Since = since
 		}
+		// When the user opts into closed PRs, widen the fetch from open-only to
+		// every state. Cap the lookback at closedPRLookback on a full fetch so an
+		// on-demand sync pulls a bounded recent window rather than the whole
+		// closed history; incremental fetches keep their narrower `since`.
+		if srv.ShowClosed() {
+			so.State = "all"
+			if since.IsZero() {
+				so.Since = time.Now().Add(-closedPRLookback)
+			}
+		}
 		if len(cfg.Repos) > 0 {
 			so.Repos = cfg.Repos
 			so.All = false
-		}
-		if cfg.Any {
-			so.Author = ""
-		} else if cfg.Author != "" {
-			so.Author = cfg.Author
 		}
 		// Propagate IgnoredOrgs so ResolveDefaultOrg skips hidden orgs
 		// when --all is set without an explicit --org.
@@ -249,33 +326,61 @@ func runPRUI(opts PRListOptions) error {
 		if cfg.Org != "" {
 			so.Org = cfg.Org
 		}
-		so.ShowAuthor = so.Author != "@me"
-		results, rl, err := github.SearchPRs(ghOpts, so)
-		if err != nil {
-			return nil, rl, err
+		so.ShowAuthor = true
+		// Drop known bots at the source unless the user asked to see them via
+		// the @bots author chip. The bot set is learned from prior fetches, so
+		// it tracks newly-appearing bots without a hardcoded list.
+		if !srv.IncludeBots() {
+			so.ExcludeAuthors = srv.KnownBots()
 		}
-		if !cfg.Bots {
-			results = filterByBot(results, false)
-		}
-		return results, rl, nil
+		return github.SearchPRs(ghOpts, so)
 	}
 
 	poller := ui.NewPoller(srv, searchFn, interval)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	ingestStats, err := startServeRuntime(ctx, defaultServeRuntimeDependencies, databaseMode)
+	if err != nil {
+		return err
+	}
+	if ingestStats != nil {
+		srv.SetIngestStats(ingestStats)
+	}
 	poller.Start(ctx)
 
 	syncer := ui.NewDetailSyncer(srv, srv.DetailCache(), ghOpts)
 	srv.SetDetailSyncer(syncer)
 	syncer.Start(ctx)
 
-	var dashboardURL string
-	if opts.UI {
-		port, listener, err := bindUIListener(opts.Port)
+	testRunSyncer := ui.NewTestRunSyncer(srv)
+	srv.SetTestRunSyncer(testRunSyncer)
+	testRunSyncer.Start(ctx)
+
+	if opts.Dev {
+		devDir, err := resolveDevDir(opts.DevDir)
 		if err != nil {
 			return err
 		}
-		dashboardURL = fmt.Sprintf("http://localhost:%d", port)
+		if err := ensureVite(devDir); err != nil {
+			return err
+		}
+		if err := srv.SetDevProxy(viteDevURL); err != nil {
+			return err
+		}
+		logger.Infof("dev mode: reverse-proxying UI to %s (HMR live)", viteDevURL)
+	}
+
+	var dashboardURL, menubarURL string
+	if opts.UI || opts.MenuBar {
+		port, listener, err := bindUIListener(opts.Addr, opts.Port)
+		if err != nil {
+			return err
+		}
+		dashboardURL = fmt.Sprintf("http://%s", net.JoinHostPort(announceHost(opts.Addr), strconv.Itoa(port)))
+		// The menu-bar webview dials loopback regardless of the bind interface —
+		// see menubarHost. Using the announced LAN IP here renders a blank
+		// popover (WKWebView App Transport Security blocks cleartext non-loopback).
+		menubarURL = fmt.Sprintf("http://%s", net.JoinHostPort(menubarHost(opts.Addr), strconv.Itoa(port)))
 		if opts.PersistPort {
 			// Only the managed daemon (launchd/systemd) writes to the port
 			// file — foreground `pr list --ui` runs skip this to avoid
@@ -290,13 +395,14 @@ func runPRUI(opts PRListOptions) error {
 		go http.Serve(listener, srv.Handler()) //nolint:errcheck
 
 		logger.Infof("PR Dashboard at %s", dashboardURL)
-		openBrowser(dashboardURL)
+		logger.Infof("React Grab → todo: install the bookmarklet at %s/react-grab", dashboardURL)
+		if opts.UI {
+			openBrowser(dashboardURL)
+		}
 	}
 
 	if opts.MenuBar {
-		mb := menubar.New(srv)
-		mb.DashboardURL = dashboardURL
-		return mb.Run()
+		return runMenuBar(srv, menubarURL)
 	}
 
 	sig := make(chan os.Signal, 1)
@@ -305,16 +411,10 @@ func runPRUI(opts PRListOptions) error {
 	return nil
 }
 
-func isBot(author string) bool {
-	return strings.HasSuffix(author, "[bot]") || strings.HasSuffix(author, "bot")
-}
-
 func filterByBot(items github.PRSearchResults, botsOnly bool) github.PRSearchResults {
 	var filtered github.PRSearchResults
 	for _, item := range items {
-		if botsOnly && isBot(item.Author) {
-			filtered = append(filtered, item)
-		} else if !botsOnly && !isBot(item.Author) {
+		if github.IsBotAuthor(item.Author) == botsOnly {
 			filtered = append(filtered, item)
 		}
 	}

@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"regexp"
@@ -16,6 +17,12 @@ import (
 var artifactURLPattern = regexp.MustCompile(
 	`github\.com/([^/]+/[^/]+)/actions/runs/(\d+)/artifacts/(\d+)`,
 )
+
+// ErrArtifactResultsNotFound means the artifact downloaded successfully but
+// does not contain a JSON results payload. Some workflows publish an empty or
+// non-results gavel artifact; callers may ignore it without reporting a
+// download failure.
+var ErrArtifactResultsNotFound = errors.New("no .json file found in artifact zip")
 
 // ParseArtifactURL extracts the repo, run ID, and artifact ID from a GitHub
 // Actions artifact URL like:
@@ -35,13 +42,14 @@ var artifactLinkPattern = regexp.MustCompile(
 	`\[View full results\]\((https://[^)]+/actions/runs/\d+/artifacts/\d+)\)`,
 )
 
-var stickyIDPattern = regexp.MustCompile(`<!-- sticky-comment:(gavel[^\s>]*) -->`)
+var stickyIDPattern = regexp.MustCompile(`<!-- sticky-comment:(gavel[^\s>]*|[^\s>]+-gavel(?:-[^\s>]*)?) -->`)
 
 // GavelArtifact identifies one gavel sticky comment on a PR — typically
 // one per matrix shard (e.g. gavel-test-pg15, gavel-e2e). A single PR can
 // have many of these.
 type GavelArtifact struct {
 	StickyID    string
+	RunID       int64
 	ArtifactID  int64
 	ArtifactURL string
 	CommentID   int64
@@ -71,12 +79,13 @@ func FindGavelArtifacts(comments []PRComment) []GavelArtifact {
 			continue
 		}
 		url := am[1]
-		_, _, id, err := ParseArtifactURL(url)
+		_, runID, id, err := ParseArtifactURL(url)
 		if err != nil {
 			continue
 		}
 		art := GavelArtifact{
 			StickyID:    stickyID,
+			RunID:       runID,
 			ArtifactID:  id,
 			ArtifactURL: url,
 			CommentID:   c.ID,
@@ -138,5 +147,5 @@ func extractJSONFromZip(data []byte) ([]byte, error) {
 		}
 		return content, nil
 	}
-	return nil, fmt.Errorf("no .json file found in artifact zip")
+	return nil, ErrArtifactResultsNotFound
 }

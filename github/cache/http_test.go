@@ -4,10 +4,10 @@ import (
 	nethttp "net/http"
 	"net/http/httptest"
 	"os"
-	"sync"
 	"testing"
 	"time"
 
+	"github.com/flanksource/gavel/internal/database"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -102,9 +102,13 @@ func TestSharedRespectsDisableEnv(t *testing.T) {
 // assertions). sync.Once has no Reset method so we replace the value.
 func resetSharedStore(t *testing.T) {
 	t.Helper()
+	require.NoError(t, database.ResetDisabledSharedForTest())
+	sharedStoreMu.Lock()
 	sharedStore = nil
-	sharedStoreOnce = sync.Once{}
+	sharedStoreMu.Unlock()
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv(EnvDatabaseDSN, "")
+	t.Setenv(EnvDatabaseDisable, "")
 }
 
 // Integration tests below require GAVEL_GITHUB_CACHE_DSN to point at a real

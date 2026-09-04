@@ -2,6 +2,7 @@ package status
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -12,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	clickyai "github.com/flanksource/clicky/ai"
+	clickyai "github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/models"
 	"github.com/flanksource/gavel/snapshots"
@@ -180,6 +181,58 @@ func TestGatherFromRepo(t *testing.T) {
 	assert.Equal(t, "go", byPath["staged.go"].FileMap.Language)
 }
 
+func TestGatherHidesGitIgnoredTrackedFiles(t *testing.T) {
+	repo := initStatusRepo(t)
+	gitRun(t, repo, "config", "core.excludesFile", "/dev/null")
+	require.NoError(t, os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("dist/*\n!dist/keep.js\n"), 0o644))
+	gitRun(t, repo, "add", ".gitignore")
+
+	require.NoError(t, os.MkdirAll(filepath.Join(repo, "dist"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "dist", "bundle.js"), []byte("v1\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "dist", "keep.js"), []byte("v1\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "app.go"), []byte("package x\n"), 0o644))
+	gitRun(t, repo, "add", "-f", "dist/bundle.js")   // force-track the ignored bundle
+	gitRun(t, repo, "add", "dist/keep.js", "app.go") // keep.js is !-negated, so a plain add works
+	gitRun(t, repo, "commit", "-m", "baseline")
+
+	// Modify all three; leave them unstaged.
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "dist", "bundle.js"), []byte("v2\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "dist", "keep.js"), []byte("v2\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "app.go"), []byte("package x\n// edit\n"), 0o644))
+
+	result, err := Gather(repo, Options{NoRepomap: true})
+	require.NoError(t, err)
+	paths := pathsOf(result.Files)
+	assert.NotContains(t, paths, "dist/bundle.js", "force-tracked .gitignore'd file must be hidden")
+	assert.Contains(t, paths, "dist/keep.js", "!-negated file must remain visible")
+	assert.Contains(t, paths, "app.go", "normal tracked modification must remain visible")
+}
+
+func TestGatherKeepsStagedGitIgnoredFiles(t *testing.T) {
+	repo := initStatusRepo(t)
+	gitRun(t, repo, "config", "core.excludesFile", "/dev/null")
+	require.NoError(t, os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("dist/\n"), 0o644))
+	gitRun(t, repo, "add", ".gitignore")
+	require.NoError(t, os.MkdirAll(filepath.Join(repo, "dist"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "dist", "bundle.js"), []byte("v1\n"), 0o644))
+	gitRun(t, repo, "add", "-f", "dist/bundle.js")
+	gitRun(t, repo, "commit", "-m", "baseline")
+
+	// Modify and stage the ignored bundle: an explicit `git add` keeps it visible.
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "dist", "bundle.js"), []byte("v2\n"), 0o644))
+	gitRun(t, repo, "add", "-f", "dist/bundle.js")
+
+	result, err := Gather(repo, Options{NoRepomap: true})
+	require.NoError(t, err)
+	byPath := map[string]FileStatus{}
+	for _, f := range result.Files {
+		byPath[f.Path] = f
+	}
+	f, ok := byPath["dist/bundle.js"]
+	require.True(t, ok, "manually staged .gitignore'd file must stay visible")
+	assert.Equal(t, StateStaged, f.State)
+}
+
 func TestGatherWithFolderFilter(t *testing.T) {
 	repo := initStatusRepo(t)
 
@@ -267,7 +320,7 @@ func TestGatherWithAIFileSummaries(t *testing.T) {
 	gitRun(t, repo, "add", "staged.go")
 
 	prev := summarizeFileChangeWithAIFunc
-	summarizeFileChangeWithAIFunc = func(_ context.Context, _ string, _ clickyai.Agent, file FileStatus) (string, error) {
+	summarizeFileChangeWithAIFunc = func(_ context.Context, _ string, _ clickyai.Agent, file FileStatus, _ string) (string, error) {
 		return "add helper function", nil
 	}
 	t.Cleanup(func() {
@@ -302,7 +355,7 @@ func TestSummarizeFileChangeWithAISendsDiffOnlyPrompt(t *testing.T) {
 		State: StateStaged,
 		Adds:  3,
 		Dels:  1,
-	})
+	}, "")
 	require.NoError(t, err)
 	assert.Equal(t, "tighten handler flow", summary)
 	assert.Contains(t, agent.prompt, "Staged diff:")
@@ -315,7 +368,7 @@ func TestSummarizeFileChangeWithAISendsDiffOnlyPrompt(t *testing.T) {
 
 func TestStreamAISummariesPreservesFileOrdering(t *testing.T) {
 	prev := summarizeFileChangeWithAIFunc
-	summarizeFileChangeWithAIFunc = func(_ context.Context, _ string, _ clickyai.Agent, file FileStatus) (string, error) {
+	summarizeFileChangeWithAIFunc = func(_ context.Context, _ string, _ clickyai.Agent, file FileStatus, _ string) (string, error) {
 		switch file.Path {
 		case "slow.go":
 			time.Sleep(40 * time.Millisecond)
@@ -339,7 +392,7 @@ func TestStreamAISummariesPreservesFileOrdering(t *testing.T) {
 	result.PrepareAISummaries()
 
 	var running int
-	for update := range StreamAISummaries(context.Background(), "", stubStatusAgent{}, result.Files, 2) {
+	for update := range StreamAISummaries(context.Background(), "", stubStatusAgent{}, result.Files, 2, "") {
 		if update.Status == AISummaryStatusRunning {
 			running++
 		}
@@ -494,7 +547,7 @@ func TestGatherWithFreshSnapshot(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "a.go"), []byte("package x\n"), 0o644))
 	gitRun(t, repo, "add", "a.go")
 
-	restore := stubSnapshot(func(string) (string, string, error) {
+	restore := stubSnapshot(func(context.Context, string) (string, string, error) {
 		return "deadbeef", "", nil
 	}, func(string, string) (*snapshots.Pointer, error) {
 		return &snapshots.Pointer{SHA: "deadbeef", Path: ".gavel/sha-deadbeef.json"}, nil
@@ -522,7 +575,7 @@ func TestGatherWithStaleSnapshot(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "a.go"), []byte("package x\n"), 0o644))
 	gitRun(t, repo, "add", "a.go")
 
-	restore := stubSnapshot(func(string) (string, string, error) {
+	restore := stubSnapshot(func(context.Context, string) (string, string, error) {
 		return "newsha", "ab12cd34", nil
 	}, func(string, string) (*snapshots.Pointer, error) {
 		return &snapshots.Pointer{SHA: "oldsha", Path: ".gavel/sha-oldsha.json"}, nil
@@ -546,7 +599,7 @@ func TestGatherNoSnapshot(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "a.go"), []byte("package x\n"), 0o644))
 	gitRun(t, repo, "add", "a.go")
 
-	restore := stubSnapshot(func(string) (string, string, error) {
+	restore := stubSnapshot(func(context.Context, string) (string, string, error) {
 		return "deadbeef", "", nil
 	}, func(string, string) (*snapshots.Pointer, error) {
 		return nil, nil
@@ -568,7 +621,7 @@ func TestGatherStalePointerMissingSnapshotFile(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "a.go"), []byte("package x\n"), 0o644))
 	gitRun(t, repo, "add", "a.go")
 
-	restore := stubSnapshot(func(string) (string, string, error) {
+	restore := stubSnapshot(func(context.Context, string) (string, string, error) {
 		return "newsha", "ab12cd34", nil
 	}, func(string, string) (*snapshots.Pointer, error) {
 		return &snapshots.Pointer{SHA: "oldsha", Path: ".gavel/sha-oldsha-deadbeef.json"}, nil
@@ -590,7 +643,7 @@ func TestGatherSnapshotLoadErrorPropagates(t *testing.T) {
 	gitRun(t, repo, "add", "a.go")
 
 	wantErr := errors.New("decode snapshot: invalid JSON")
-	restore := stubSnapshot(func(string) (string, string, error) {
+	restore := stubSnapshot(func(context.Context, string) (string, string, error) {
 		return "newsha", "ab12cd34", nil
 	}, func(string, string) (*snapshots.Pointer, error) {
 		return &snapshots.Pointer{SHA: "oldsha", Path: ".gavel/sha-oldsha-deadbeef.json"}, nil
@@ -626,7 +679,7 @@ func TestPrettyShowsTestLintBadgesAndStaleBanner(t *testing.T) {
 }
 
 func stubSnapshot(
-	id func(string) (string, string, error),
+	id func(context.Context, string) (string, string, error),
 	load func(string, string) (*snapshots.Pointer, error),
 	snap func(string, *snapshots.Pointer) (*testui.Snapshot, error),
 ) func() {
@@ -672,11 +725,7 @@ func stubFileMap(fn func(path, commit string) (*repomap.FileMap, error)) func() 
 
 type stubStatusAgent struct{}
 
-func (stubStatusAgent) GetType() clickyai.AgentType { return clickyai.AgentTypeClaude }
-func (stubStatusAgent) GetConfig() clickyai.AgentConfig {
-	return clickyai.AgentConfig{}
-}
-func (stubStatusAgent) ListModels(context.Context) ([]clickyai.Model, error) { return nil, nil }
+func (stubStatusAgent) GetConfig() clickyai.AgentConfig { return clickyai.AgentConfig{} }
 func (stubStatusAgent) ExecutePrompt(context.Context, clickyai.PromptRequest) (*clickyai.PromptResponse, error) {
 	return nil, nil
 }
@@ -690,17 +739,12 @@ type capturePromptAgent struct {
 	prompt string
 }
 
-func (a *capturePromptAgent) GetType() clickyai.AgentType { return clickyai.AgentTypeClaude }
 func (a *capturePromptAgent) GetConfig() clickyai.AgentConfig {
 	return clickyai.AgentConfig{}
 }
-func (a *capturePromptAgent) ListModels(context.Context) ([]clickyai.Model, error) { return nil, nil }
 func (a *capturePromptAgent) ExecutePrompt(_ context.Context, req clickyai.PromptRequest) (*clickyai.PromptResponse, error) {
 	a.prompt = req.Prompt
-	if schema, ok := req.StructuredOutput.(*fileSummarySchema); ok {
-		schema.Summary = "tighten handler flow"
-	}
-	return &clickyai.PromptResponse{}, nil
+	return &clickyai.PromptResponse{StructuredData: json.RawMessage(`{"summary":"tighten handler flow"}`)}, nil
 }
 func (a *capturePromptAgent) ExecuteBatch(context.Context, []clickyai.PromptRequest) (map[string]*clickyai.PromptResponse, error) {
 	return nil, nil

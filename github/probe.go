@@ -8,6 +8,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/flanksource/gavel/internal/httpx"
 )
 
 // AuthState classifies the outcome of ProbeToken — callers (notably pr/ui's
@@ -73,7 +75,7 @@ func probeToken(opts Options, baseURL string) AuthProbeResult {
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/vnd.github+json")
 
-	resp, err := nethttp.DefaultClient.Do(req)
+	resp, err := httpx.Shared.Do(req)
 	if err != nil {
 		return AuthProbeResult{State: AuthStateUnreachable, Message: fmt.Sprintf("GitHub unreachable: %v", err)}
 	}
@@ -130,7 +132,7 @@ func userLoginFromRequest(_ context.Context, baseURL, token string) string {
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/vnd.github+json")
-	resp, err := nethttp.DefaultClient.Do(req)
+	resp, err := httpx.Shared.Do(req)
 	if err != nil {
 		return ""
 	}

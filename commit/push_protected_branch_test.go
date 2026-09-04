@@ -7,7 +7,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	clickyai "github.com/flanksource/clicky/ai"
+	clickyai "github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/github"
 )
 
@@ -65,7 +65,7 @@ var _ = Describe("executeNewPRPush on a protected current branch", func() {
 		// Stub the LLM constructor so generatePRContent isn't actually called.
 		previousAgent := newAgentFunc
 		newAgentFunc = func(clickyai.AgentConfig) (clickyai.Agent, error) {
-			return nil, nil
+			return &agentLifecycleProbe{}, nil
 		}
 		DeferCleanup(func() { newAgentFunc = previousAgent })
 	})

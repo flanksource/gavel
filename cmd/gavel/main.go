@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,7 +12,10 @@ import (
 	"github.com/flanksource/clicky/mcp"
 	"github.com/flanksource/clicky/shutdown"
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/fixtures"
+	"github.com/flanksource/gavel/internal/database"
 	"github.com/spf13/cobra"
+	"gorm.io/gorm"
 )
 
 var (
@@ -57,6 +61,18 @@ func getWorkingDir() (string, error) {
 
 func init() {
 	clicky.BindAllFlags(rootCmd.PersistentFlags(), "format", "tasks")
+	database.BindDatabaseURLFlag(rootCmd.PersistentFlags())
+	// A fixture's `setup:` resolves `connection://…` references against the
+	// process database. Wired here rather than imported by fixtures, which must
+	// stay free of internal/database — the same hook seam as AIStepRunner.
+	fixtures.SetupDBProvider = func(ctx context.Context) *gorm.DB {
+		db, err := database.Shared(ctx)
+		if err != nil {
+			logger.V(2).Infof("fixture setup: database unavailable: %v", err)
+			return nil
+		}
+		return db.Gorm()
+	}
 	logger.Configure(logger.Flags{LogToStderr: true, Color: true})
 	rootCmd.PersistentFlags().StringVar(&workingDir, "cwd", "", "Working directory")
 
@@ -111,10 +127,8 @@ func gavelMCPExcludedCommands() []string {
 		// OS-level daemon/service installers
 		"^system$", "^system ",
 		// expensive AI, history-rewriting, or large-analysis workflows
-		"^verify$",
 		"^todos$", "^todos ",
 		"^bench$", "^bench ",
-		"^pr fix$",
 		"^git amend-commits$",
 		"^git analyze$",
 		"^git history$",
@@ -132,11 +146,9 @@ func gavelMCPGlobalIgnoredParams() []string {
 		"--loglevel",
 		"--ui",
 		"--triage",
-		"--sync-todos",
-		"--todo-template",
-		"--todos-dir",
 		"--baseline",
 		"--work-dir",
+		"--db-url",
 	}
 }
 
@@ -162,12 +174,11 @@ func gavelMCPTestIgnoredParams() []string {
 
 func gavelMCPCommitIgnoredParams() []string {
 	return []string{
+		"batch",
 		"force",
 		"interactive",
 		"lint",
 		"lint-secrets",
-		"max-files",
-		"max-lines",
 		"model",
 		"precommit",
 		"push",
@@ -208,12 +219,19 @@ func gavelMCPFormatIgnoredParams() []string {
 }
 
 func main() {
+	// os.Exit skips deferred functions, so the hooks have to be drained here
+	// rather than via a defer in execute — otherwise every non-zero exit leaves
+	// hooks unrun and the terminal unrestored.
+	code := execute()
+	shutdown.Shutdown()
+	os.Exit(code)
+}
+
+func execute() int {
 	defer shutdown.RecoverAndShutdown()
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		return 1
 	}
-	if exitCode != 0 {
-		os.Exit(exitCode)
-	}
+	return exitCode
 }

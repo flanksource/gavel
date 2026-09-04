@@ -18,7 +18,7 @@ func (opts RepomapViewOptions) GetName() string {
 	return "view"
 }
 
-func (opts RepomapViewOptions) Help() api.Text {
+func (opts RepomapViewOptions) Help() api.Textable {
 	return clicky.Text(`View the merged ArchConf configuration for a given path.
 
 This command shows the effective architecture configuration after merging

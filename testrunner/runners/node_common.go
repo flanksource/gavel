@@ -94,14 +94,14 @@ func hasNpmDep(pkg *pkgJSON, name string) bool {
 	return ok
 }
 
-// detectPackageManager returns the command + prefix args used to invoke a
+// DetectPackageManager returns the command + prefix args used to invoke a
 // node tool from dir. It walks up looking for lockfiles and falls back to npx.
 //   - pnpm-lock.yaml    → ("pnpm", ["exec"])
 //   - yarn.lock         → ("yarn", nil)
 //   - package-lock.json → ("npm", ["exec", "--"])
 //   - bun.lockb         → ("bun", ["x"])
 //   - none              → ("npx", nil)
-func detectPackageManager(dir string) (string, []string) {
+func DetectPackageManager(dir string) (string, []string) {
 	cur, _ := filepath.Abs(dir)
 	for {
 		if _, err := os.Stat(filepath.Join(cur, "pnpm-lock.yaml")); err == nil {
@@ -231,7 +231,9 @@ func hasTestFile(dir string, suffixes []string, deep bool) bool {
 		return false
 	}
 	found := false
-	_ = filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+	// Bounded: a test file inside a nested checkout says nothing about whether
+	// this project has node tests.
+	_ = utils.WalkGitIgnoredBounded(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}

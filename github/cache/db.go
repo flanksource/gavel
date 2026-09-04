@@ -1,26 +1,25 @@
 package cache
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"sync"
 	"time"
 
-	"github.com/flanksource/clicky/shutdown"
-	commonsdb "github.com/flanksource/commons-db/db"
 	"github.com/flanksource/commons/logger"
-	internalcache "github.com/flanksource/gavel/internal/cache"
+	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/service"
 	"gorm.io/gorm"
 )
 
 const (
-	// EnvDSN is the postgres connection string used by the GitHub cache.
-	// When unset (or empty) the cache is disabled and Open returns a no-op
-	// store, so the CLI continues to work without postgres available.
-	EnvDSN = "GAVEL_GITHUB_CACHE_DSN"
-	// EnvDisable forces the cache off regardless of EnvDSN.
-	EnvDisable = "GAVEL_GITHUB_CACHE"
+	// EnvDatabaseDSN and EnvDatabaseDisable are the preferred Gavel-wide names.
+	EnvDatabaseDSN     = database.EnvDSN
+	EnvDatabaseDisable = database.EnvDisable
+	// EnvDSN and EnvDisable are retained for backwards compatibility.
+	EnvDSN     = database.LegacyEnvDSN
+	EnvDisable = database.LegacyEnvDisable
 	// EnvRetention overrides the default 30-day prune horizon for transient
 	// http_cache entries.
 	EnvRetention = "GAVEL_GITHUB_CACHE_RETENTION"
@@ -33,16 +32,14 @@ const (
 // pass-through, so callers don't need to branch on whether caching is
 // configured.
 type Store struct {
-	db        *internalcache.DB
-	disabled  bool
-	writeMu   sync.Mutex
-	dsn       string // resolved DSN, captured for Status() reporting
-	dsnSource string // EnvDSN | "db.json (dsn)" | "db.json (embedded)"
+	db       *database.DB
+	disabled bool
+	writeMu  sync.Mutex
 }
 
-// Open initializes the GitHub cache store. It resolves the DSN in this order:
-//  1. $GAVEL_GITHUB_CACHE_DSN (unchanged fast path)
-//  2. ~/.config/gavel/db.json written by `gavel system install`
+// Open initializes the GitHub cache store through the shared Gavel database.
+// The shared opener resolves GAVEL_DB_DSN, its legacy GitHub-cache alias, and
+// finally ~/.config/gavel/db.json written by `gavel system install`.
 //
 // When db.json selects mode=embedded we launch a per-user postgres via
 // commons-db/db.StartEmbedded and register a shutdown hook so the pr-ui
@@ -50,129 +47,60 @@ type Store struct {
 // the cache remains disabled so the CLI continues to function — but once a
 // mode is configured, failures are surfaced rather than swallowed.
 func Open() (*Store, error) {
-	if os.Getenv(EnvDisable) == "off" {
-		logger.Debugf("github cache disabled via %s=off", EnvDisable)
-		return &Store{disabled: true}, nil
-	}
-	var (
-		dsn       = os.Getenv(EnvDSN)
-		dsnSource string
-	)
-	if dsn != "" {
-		dsnSource = EnvDSN
-	} else {
-		resolved, src, err := resolveConfiguredDSN()
-		if err != nil {
-			return nil, err
-		}
-		dsn = resolved
-		dsnSource = src
-	}
-	if dsn == "" {
-		logger.Debugf("github cache disabled: %s not set and no db config", EnvDSN)
-		return &Store{disabled: true}, nil
-	}
-
-	db, err := internalcache.NewDBRaw("postgres", dsn)
+	db, err := database.Open(context.Background())
 	if err != nil {
-		return nil, fmt.Errorf("open github cache: %w", err)
+		return nil, err
+	}
+	if db.Disabled() {
+		return &Store{db: db, disabled: true}, nil
 	}
 
-	if err := db.GormDB().AutoMigrate(
-		&HTTPCacheEntry{},
-		&WorkflowRunCache{},
-		&JobLogCache{},
-		&WorkflowDefCache{},
-		&SeenPR{},
-		&FaviconCache{},
-	); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("migrate github cache: %w", err)
-	}
-
-	logger.Debugf("github cache ready (postgres, source=%s)", dsnSource)
-	s := &Store{db: db, dsn: dsn, dsnSource: dsnSource}
+	logger.Debugf("github cache ready (postgres, source=%s)", db.DSNSource())
+	s := &Store{db: db}
 	s.pruneOnOpen()
 	return s, nil
 }
 
-// resolveConfiguredDSN reads ~/.config/gavel/db.json. For mode=dsn it returns
-// the stored DSN. For mode=embedded it starts a managed postgres via
-// commons-db and registers a shutdown hook that stops it on daemon exit.
-// Returns ("", "", nil) when no config is present — caller treats that as
-// "cache stays disabled". The second return value names the source so the
-// UI can show "embedded postgres" vs "db.json DSN" in the status panel.
-func resolveConfiguredDSN() (string, string, error) {
-	cfg, err := service.LoadDBConfig()
+func openShared() (*Store, error) {
+	db, err := database.Shared(context.Background())
 	if err != nil {
-		return "", "", fmt.Errorf("load db config: %w", err)
+		return nil, err
 	}
-	switch cfg.Mode {
-	case "":
-		return "", "", nil
-	case service.DBModeDSN:
-		if cfg.DSN == "" {
-			return "", "", fmt.Errorf("db config: mode=dsn but DSN is empty")
-		}
-		return cfg.DSN, "db.json (dsn)", nil
-	case service.DBModeEmbedded:
-		// Fast path: if a postmaster is already running for our embedded data
-		// dir (typically because `gavel system start` is up), connect to it
-		// directly instead of going through StartEmbedded — that avoids the
-		// "try to start, fail with 'another postmaster', read postmaster.pid"
-		// dance and the no-op shutdown hook that goes with it.
-		if running, err := service.FindRunningEmbeddedPostgres(); err != nil {
-			logger.V(1).Infof("probe running embedded postgres: %v", err)
-		} else if running != nil {
-			logger.Debugf("reusing embedded postgres (pid=%d, port=%d)", running.PID, running.Port)
-			return service.EmbeddedDSN(running.Port), "db.json (embedded, reused)", nil
-		}
-
-		dataDir, err := service.EmbeddedDataDir()
-		if err != nil {
-			return "", "", err
-		}
-		dsn, stop, err := commonsdb.StartEmbedded(commonsdb.EmbeddedConfig{
-			DataDir:  dataDir,
-			Database: "gavel",
-		})
-		if err != nil {
-			return "", "", fmt.Errorf("start embedded postgres: %w", err)
-		}
-		shutdown.AddHook("embedded-postgres", func() {
-			if err := stop(); err != nil {
-				logger.Warnf("stop embedded postgres: %v", err)
-			}
-		})
-		return dsn, "db.json (embedded)", nil
-	default:
-		return "", "", fmt.Errorf("unknown db mode %q (expected %q or %q)", cfg.Mode, service.DBModeDSN, service.DBModeEmbedded)
+	if db.Disabled() {
+		return &Store{db: db, disabled: true}, nil
 	}
+	s := &Store{db: db}
+	s.pruneOnOpen()
+	return s, nil
 }
 
 // Disabled reports whether the store is a no-op pass-through.
 func (s *Store) Disabled() bool {
-	return s == nil || s.disabled
+	return s == nil || s.disabled || s.db == nil || s.db.Disabled()
 }
 
 var (
-	sharedStore     *Store
-	sharedStoreOnce sync.Once
+	sharedStore   *Store
+	sharedStoreMu sync.Mutex
 )
 
 // Shared returns a process-wide Store, lazily opened on first access. On
 // open failure we return a disabled store and log the error — the CLI keeps
 // working, just without caching.
 func Shared() *Store {
-	sharedStoreOnce.Do(func() {
-		s, err := Open()
-		if err != nil {
-			logger.Warnf("github cache unavailable: %v", err)
-			sharedStore = &Store{disabled: true}
-			return
-		}
-		sharedStore = s
-	})
+	sharedStoreMu.Lock()
+	defer sharedStoreMu.Unlock()
+	if sharedStore != nil {
+		return sharedStore
+	}
+	s, err := openShared()
+	if err != nil {
+		logger.Warnf("github cache unavailable: %v", err)
+		// Do not cache transient failures: a later caller can retry the shared
+		// database open/migration path.
+		return &Store{disabled: true}
+	}
+	sharedStore = s
 	return sharedStore
 }
 
@@ -187,7 +115,7 @@ func (s *Store) Close() error {
 // gorm returns the underlying *gorm.DB. Callers must hold writeMu when
 // performing writes; reads are safe without locking thanks to postgres MVCC.
 func (s *Store) gorm() *gorm.DB {
-	return s.db.GormDB()
+	return s.db.Gorm()
 }
 
 // retention reads GAVEL_GITHUB_CACHE_RETENTION (a Go duration string) and
@@ -202,9 +130,9 @@ func retention() time.Duration {
 	return defaultRetention
 }
 
-// Status describes the runtime state of the GitHub cache. Exposed via the
-// PR UI's /api/activity/cache endpoint so operators can confirm whether
-// caching is actually active and see how much is being stored.
+// Status describes the shared Gavel database and cache tables. It is exposed
+// through the PR UI so operators can confirm persistence is active and inspect
+// row counts.
 type Status struct {
 	Enabled      bool             `json:"enabled"`
 	Driver       string           `json:"driver"`
@@ -230,42 +158,50 @@ func (s *Store) Status() Status {
 	// the env var for a disabled Store so the UI can still show what the user
 	// configured even when Open() chose not to connect.
 	switch {
-	case s.dsn != "":
-		st.DSNSource = s.dsnSource
-		st.DSNMasked = service.MaskDSN(s.dsn)
+	case s != nil && s.db != nil && s.db.DSN() != "":
+		st.DSNSource = s.db.DSNSource()
+		st.DSNMasked = service.MaskDSN(s.db.DSN())
+	case os.Getenv(EnvDatabaseDSN) != "":
+		st.DSNSource = EnvDatabaseDSN
+		st.DSNMasked = service.MaskDSN(os.Getenv(EnvDatabaseDSN))
 	case os.Getenv(EnvDSN) != "":
 		st.DSNSource = EnvDSN
 		st.DSNMasked = service.MaskDSN(os.Getenv(EnvDSN))
 	}
-	if os.Getenv(EnvDisable) == "off" {
-		st.Error = EnvDisable + "=off"
+	if s != nil && s.db != nil && s.db.DisableSource() != "" {
+		st.Error = s.db.DisableSource() + "=off"
 		return st
 	}
 	if !st.Enabled {
 		if st.DSNMasked == "" {
-			st.Error = EnvDSN + " not set"
+			st.Error = EnvDatabaseDSN + " not set"
 		}
 		return st
 	}
 
-	tables := []struct {
-		name  string
-		model any
-	}{
-		{"http_cache_entries", &HTTPCacheEntry{}},
-		{"workflow_run_caches", &WorkflowRunCache{}},
-		{"job_log_caches", &JobLogCache{}},
-		{"workflow_def_caches", &WorkflowDefCache{}},
-		{"seen_prs", &SeenPR{}},
-		{"favicon_caches", &FaviconCache{}},
+	tables := []string{
+		"http_cache_entries",
+		"workflow_run_caches",
+		"job_log_caches",
+		"workflow_def_caches",
+		"seen_prs",
+		"favicon_caches",
+		"commit_stat_caches",
+		"commit_stat_cursors",
+		"test_run_caches",
+		"test_run_cursors",
+		"file_scans",
+		"violations",
+		"linter_executions",
+		"debounce_metadata",
 	}
-	for _, t := range tables {
+	for _, table := range tables {
 		var n int64
-		if err := s.gorm().Model(t.model).Count(&n).Error; err != nil {
-			st.Error = fmt.Sprintf("count %s: %v", t.name, err)
+		if err := s.gorm().Table(table).Count(&n).Error; err != nil {
+			st.Error = fmt.Sprintf("count %s: %v", table, err)
 			continue
 		}
-		st.Counts[t.name] = n
+		st.Counts[table] = n
 	}
 	return st
 }

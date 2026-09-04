@@ -60,12 +60,31 @@ type DryRunner interface {
 	DryRunCommand() (cmd string, args []string)
 }
 
+// ExecutableCandidateProvider is implemented by linters whose executable does
+// not match Name(), or whose preferred executable depends on the project root.
+// Candidates are tried in order and the first executable found on PATH is used.
+type ExecutableCandidateProvider interface {
+	ExecutableCandidates(workDir string) []string
+}
+
 // ProjectRooted is implemented by linters that must run from their own project
 // root (go.mod, package.json, tsconfig.json, pyproject.toml, ...) rather than
 // the enclosing git root. The lint driver resolves the root per input file via
 // utils.FindNearestProjectRoot; first marker found walking up wins.
 type ProjectRooted interface {
 	ProjectRootMarkers() []string
+}
+
+// DirectConfigDetector is implemented by linters whose "has config" test needs
+// to inspect file contents instead of just checking config file names.
+type DirectConfigDetector interface {
+	HasDirectConfig(workDir string) bool
+}
+
+// DefaultActivationDetector is implemented by config-gated linters that also
+// have a native project signal strong enough for implicit selection.
+type DefaultActivationDetector interface {
+	HasDefaultActivation(workDir string) bool
 }
 
 // MetadataProvider provides file and rule count information from linters

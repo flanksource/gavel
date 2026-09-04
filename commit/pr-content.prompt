@@ -1,0 +1,39 @@
+---
+prompt:
+  schemaStrictness: retry
+output:
+  schema:
+    type: object
+    additionalProperties: false
+    required: [title, branch]
+    properties:
+      title:
+        type: string
+        maxLength: 40
+        description: "PR title: imperative, <=40 characters, conventional-commit style when applicable"
+      body:
+        type: string
+        description: "Markdown body summarising what changed and why; may be empty for trivial PRs"
+      branch:
+        type: string
+        maxLength: 40
+        description: "Suggested branch name: kebab-case, <=40 chars, conventional-commit type prefix (feat/, fix/, chore/, refactor/, docs/) when the commits share a type. Use only [a-z0-9/-]"
+---
+You are opening a GitHub pull request for the following local commits.
+Generate a concise PR title, a short markdown body, and a branch name. Return structured output matching the provided output schema.
+
+Guidelines:
+- Title: imperative mood, <= 40 characters, prefer conventional-commit style when the commits share a type and it fits naturally.
+- Body: 1-4 short sections (What / Why / Notes). Bullet lists over prose. Omit sections that add no value.
+- Branch: kebab-case, <= 40 characters, conventional-commit type prefix (feat/, fix/, chore/, refactor/, docs/) when the commits share a type. Use only [a-z0-9/-]. Example: "feat/user-auth-rate-limit".
+- Do NOT invent context that isn't supported by the commit messages.
+
+Commits (in order):
+{{#each commits}}
+--- commit {{index}} ---
+{{message}}
+{{#if files}}
+files: {{files}}
+{{/if}}
+
+{{/each}}

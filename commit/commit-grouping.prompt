@@ -1,0 +1,53 @@
+---
+prompt:
+  schemaStrictness: retry
+output:
+  schema:
+    type: object
+    additionalProperties: false
+    required: [groups, ignore]
+    properties:
+      groups:
+        type: array
+        description: "logical groups of related files; each becomes one commit"
+        minItems: 1
+{{#if maxCommits}}
+        maxItems: {{maxCommits}}
+{{/if}}
+        items:
+          type: object
+          additionalProperties: false
+          required: [label, files]
+          properties:
+            label:
+              type: string
+              maxLength: 40
+              description: "conventional-commit-style label describing this group's intent, e.g. 'feat: agent check loop'"
+            files:
+              type: array
+              description: "repo-relative paths belonging to this commit, exactly as listed in the summary"
+              items:
+                type: string
+      ignore:
+        type: array
+        description: "paths to exclude from real commits (lock files, build artifacts, generated bundles, vendored output); committed separately as a chore commit"
+        items:
+          type: string
+---
+You are organizing a set of uncommitted changes into clean, logical git commits.
+
+The changed files are listed below with their code scope (derived from the repository map), git status, and +added/-deleted line counts.
+
+{{table}}
+
+Produce the final commit grouping. Rules:
+- Each group MUST represent a single high-level change — one feature, one fix, or one refactor. NEVER put unrelated changes in the same group.
+- Group by logical change, one feature/fix/refactor per commit. The Scope column is a hint, not a hard boundary — split or merge across scopes as the change intent dictates.
+{{#if maxCommits}}
+- Produce at most {{maxCommits}} commits (the chore commit for lock/generated files does NOT count toward this limit). If there are more logical groups, merge the smallest related ones until you are within the limit.
+{{/if}}
+- Keep a test file in the same group as the feature it tests.
+- Every changed file MUST appear in exactly one group's "files" or in "ignore".
+- Put lock files, build artifacts, generated bundles, and vendored output in "ignore" — they are committed separately as a chore commit and never analyzed.
+- Use repo-relative paths exactly as shown above (for renames, use the new path).
+- Give each group a short conventional-commit-style label describing its intent.

@@ -2,17 +2,19 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 
 	"github.com/flanksource/gavel/ai/aifix"
 	commitpkg "github.com/flanksource/gavel/commit"
 	"github.com/flanksource/gavel/linters"
+	"github.com/flanksource/gavel/verify"
 )
 
 // runCommitAIFix is the lintActionAIFix branch of handleCommitLintFindings.
-// It invokes the AI configured by `captain configure` to repair the findings
-// in result.Lint and re-runs the commit lint pass with the SAME gate
+// It resolves lint.fix independently from commit.message to repair the
+// findings in result.Lint and re-runs the commit lint pass with the SAME gate
 // configuration the original commit used. On clean it returns
 // lintFindingsAIFixed; on residual violations it re-prompts the user (so
 // they can pick AI Fix again, triage, bypass, or cancel).
@@ -31,20 +33,38 @@ func runCommitAIFix(workDir string, result *commitpkg.Result, assumeYes bool) li
 	requested := commitGateRequest(result.Lint.Gates)
 	ctx := context.Background()
 
-	aiCfg, aiProto := buildAIFixRequest(defaultAIRuntimeOptions())
+	gavelCfg, err := verify.LoadGavelConfig(workDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ai-fix: %v\n", err)
+		return lintFindingsBlocked
+	}
+	operation, err := aifix.ResolveSpec(gavelCfg.AI, gavelCfg.Lint.Fix, workDir, requested, result.Lint.Results)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ai-fix: %v\n", err)
+		return lintFindingsBlocked
+	}
+	aiCfg, aiProto, err := buildAIFixRequest(defaultAIRuntimeOptions(), operation, workDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ai-fix: %v\n", err)
+		return lintFindingsBlocked
+	}
 
+	renderer := newAIFixRenderer()
 	fixRes, err := aifix.Run(ctx, aifix.Request{
 		WorkDir:        workDir,
+		Linters:        requested,
 		Initial:        result.Lint.Results,
 		AIConfig:       aiCfg,
 		AIRequestProto: aiProto,
+		BaseAI:         gavelCfg.AI,
+		PromptSpec:     gavelCfg.Lint.Fix,
 		ReLint: func(rctx context.Context) ([]*linters.LinterResult, error) {
 			return runCommitLint(rctx, workDir, requested, files)
 		},
-		OnEvent: aifix.NewStderrRenderer(os.Stderr),
+		OnEvent: renderer.Handle,
 	})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "ai-fix: %v\n", err)
+	if runErr := errors.Join(err, renderer.Flush()); runErr != nil {
+		fmt.Fprintf(os.Stderr, "ai-fix: %v\n", runErr)
 		return lintFindingsBlocked
 	}
 

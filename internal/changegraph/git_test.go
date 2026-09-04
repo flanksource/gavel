@@ -102,6 +102,27 @@ var _ = Describe("ComputeFileSet", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(fs.Sorted()).To(ConsistOf("second.txt"))
 	})
+
+	// A caller that already knows what changed — an agent run reporting the
+	// files it touched — names them outright; the set is theirs, not git's view
+	// of the working tree, so an unrelated dirty file stays out.
+	It("takes explicit files as the set without consulting git", func() {
+		Expect(os.WriteFile(filepath.Join(repo, "seed.txt"), []byte("dirty\n"), 0o644)).To(Succeed())
+
+		fs, err := changegraph.ComputeFileSet(repo, changegraph.DiffOptions{Files: []string{"pkg/a.go", "pkg\\b.go"}})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(fs.Sorted()).To(Equal([]string{"pkg/a.go", "pkg/b.go"}))
+	})
+
+	It("unions explicit files with the git views it is asked for", func() {
+		Expect(os.WriteFile(filepath.Join(repo, "seed.txt"), []byte("dirty\n"), 0o644)).To(Succeed())
+
+		fs, err := changegraph.ComputeFileSet(repo, changegraph.DiffOptions{
+			Files: []string{"pkg/a.go"}, IncludeUnstaged: true,
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(fs.Sorted()).To(Equal([]string{"pkg/a.go", "seed.txt"}))
+	})
 })
 
 var _ = Describe("FileSet", func() {

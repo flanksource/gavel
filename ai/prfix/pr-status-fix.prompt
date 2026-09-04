@@ -1,0 +1,43 @@
+---
+model: agent:gpt-5.6-sol:medium,agent:opus:medium
+effort: high
+budget:
+  maxTurns: 40
+  timeout: 45m
+prompt:
+  system: >-
+    You are running inside a developer's git working tree at {{workDir}}
+    on branch {{branch}}, which is open as pull request #{{number}}{{#if title}} ({{title}}){{/if}}.
+    Read the `gavel pr status` snapshot the user pastes, identify the failing
+    GitHub Actions jobs and unresolved review comments, and edit files in place
+    to fix them. Prefer minimal, targeted edits over rewrites.
+    Do not run any commit-related commands and do not push: each turn's changes
+    are committed and pushed for you, after which the PR status is re-polled and
+    any remaining failures are fed back to you.
+workflow:
+  verify:
+    maxIterations: 3
+    scope: changed
+    # --follow is required: the status rollup exits 0 while checks are still
+    # in progress, so polling without it green-lights the run before CI has
+    # re-run the freshly pushed commit.
+    commands:
+      - gavel pr status --follow --logs --tail-logs 40
+  commits:
+    # A real commit per turn, not the `on: turn` default of fixup: the chain is
+    # squashed only at end of run, and these commits are pushed as they are cut.
+    - on: turn
+      mode: commit
+      gates: cheap
+---
+Fix the failures and unresolved comments visible in this PR status snapshot:
+
+```
+{{statusText}}
+```
+{{#if url}}
+The pull request URL is {{url}}.
+{{/if}}
+{{#if unresolvedComments}}
+There are {{unresolvedComments}} unresolved review comments; address each one.
+{{/if}}

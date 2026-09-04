@@ -2,50 +2,151 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/pr/ui"
 	"github.com/flanksource/gavel/todos"
+	"github.com/flanksource/gavel/todos/lifecycle"
+	todoruntime "github.com/flanksource/gavel/todos/runtime"
 	"github.com/flanksource/gavel/todos/types"
+	"github.com/flanksource/gavel/verify"
 	"github.com/spf13/cobra"
 )
+
+var loadTodoProjects = ui.LoadProjects
+
+// openRuntimeTodosProvider is the only production provider constructor used by
+// TODO commands. It is a variable solely so command tests can exercise routing
+// without requiring a process-owned PostgreSQL instance.
+var openRuntimeTodosProvider = func(ctx context.Context, workDir string) (todos.Provider, error) {
+	project, err := ui.ProjectForDir(workDir)
+	if err != nil {
+		return nil, err
+	}
+	return todoruntime.Open(ctx, project.WorkspaceOptions())
+}
 
 func runTodosList(opts TodosListOptions) (any, error) {
 	workDir, err := getWorkingDir()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get working directory: %w", err)
 	}
-
-	dir := opts.Dir
-	if dir == "" {
-		dir = filepath.Join(workDir, ".todos")
-	}
-
-	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		return nil, fmt.Errorf(".todos directory not found: %s", dir)
+	var since time.Time
+	if opts.Since != "" {
+		since, err = parseSince(opts.Since)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	filters := todos.DiscoveryFilters{}
 	if opts.Status != "" {
 		filters.IncludeStatuses = []types.Status{types.Status(opts.Status)}
+	} else if !opts.Done {
+		filters.ExcludeStatuses = []types.Status{types.StatusVerified, types.StatusCompleted}
 	}
 
-	todoList, err := todos.DiscoverTODOs(dir, filters)
-	if err != nil {
-		return nil, err
+	ctx := context.Background()
+	var todoList types.TODOS
+	if opts.All {
+		projects, loadErr := loadTodoProjects()
+		if loadErr != nil {
+			return nil, loadErr
+		}
+		todoList, err = listAllProjectTodos(ctx, projects, filters)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		provider, err := newTodosProvider(workDir)
+		if err != nil {
+			return nil, err
+		}
+		todoList, err = provider.List(ctx, filters)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if !since.IsZero() {
+		todoList = filterTODOsSince(todoList, since)
 	}
 
 	if opts.GroupBy != "" && opts.GroupBy != todos.GroupByNone {
-		groups := todos.GroupTODOs(todoList, opts.GroupBy)
+		groups := todos.GroupTODOsWithWorkDir(todoList, opts.GroupBy, workDir)
 		return todos.FlattenGrouped(groups), nil
 	}
 
 	return todoList, nil
+}
+
+func filterTODOsSince(todoList types.TODOS, since time.Time) types.TODOS {
+	filtered := make(types.TODOS, 0, len(todoList))
+	for _, todo := range todoList {
+		if todo == nil {
+			continue
+		}
+		latest := todo.Created
+		if todo.LastRun != nil && (latest == nil || todo.LastRun.After(*latest)) {
+			latest = todo.LastRun
+		}
+		if latest != nil && !latest.Before(since) {
+			filtered = append(filtered, todo)
+		}
+	}
+	return filtered
+}
+
+// listAllProjectTodos aggregates TODOs from every registered workspace using
+// the native PostgreSQL runtime. Duplicate project entries that resolve to the
+// same directory are queried once; stored legacy provider preferences are
+// intentionally ignored because they can no longer select runtime storage.
+// Every database open/list failure is returned: treating an unavailable
+// database as an empty workspace would be a false successful result.
+func listAllProjectTodos(ctx context.Context, projects []ui.Project, filters todos.DiscoveryFilters) (types.TODOS, error) {
+	seen := map[string]struct{}{}
+	var todoList types.TODOS
+	var failures []error
+	for _, project := range projects {
+		dir := project.ResolvedDir()
+		if strings.TrimSpace(dir) == "" {
+			logger.Warnf("list todos for project %q: workspace directory is empty", project.Name)
+			continue
+		}
+		key := filepath.Clean(dir)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+
+		provider, err := openRuntimeTodosProvider(ctx, dir)
+		if err != nil {
+			failures = append(failures, fmt.Errorf("open native TODO workspace for project %q (%s): %w", project.Name, dir, err))
+			continue
+		}
+		items, err := provider.List(ctx, filters)
+		if err != nil {
+			failures = append(failures, fmt.Errorf("list native TODOs for project %q (%s): %w", project.Name, dir, err))
+			continue
+		}
+		for _, todo := range items {
+			if todo != nil {
+				todo.Workspace = project.Name
+				if todo.CWD == "" {
+					todo.CWD = dir
+				}
+			}
+		}
+		todoList = append(todoList, items...)
+	}
+	todoList.Sort()
+	return todoList, errors.Join(failures...)
 }
 
 func runTodosGet(cmd *cobra.Command, args []string) error {
@@ -54,22 +155,13 @@ func runTodosGet(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to get working directory: %w", err)
 	}
 
-	if todosDir == "" {
-		todosDir = filepath.Join(workDir, ".todos")
-	}
-
-	todoPath := args[0]
-	if !filepath.IsAbs(todoPath) && !strings.Contains(todoPath, string(filepath.Separator)) {
-		todoPath = filepath.Join(todosDir, todoPath)
-	}
-
-	if _, err := os.Stat(todoPath); os.IsNotExist(err) {
-		return fmt.Errorf("TODO file not found: %s", todoPath)
-	}
-
-	todo, err := todos.ParseTODO(todoPath)
+	provider, err := newTodosProvider(workDir)
 	if err != nil {
-		return fmt.Errorf("failed to parse TODO: %w", err)
+		return err
+	}
+	todo, err := provider.Get(context.Background(), args[0])
+	if err != nil {
+		return err
 	}
 
 	fmt.Println(todo.PrettyDetailed().ANSI())
@@ -82,58 +174,19 @@ func runTodosCheck(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to get working directory: %w", err)
 	}
 
-	if todosDir == "" {
-		todosDir = filepath.Join(workDir, ".todos")
+	provider, err := newTodosProvider(workDir)
+	if err != nil {
+		return err
 	}
 
-	var todoList []*types.TODO
-
-	hasFilePaths := len(args) > 0 && (filepath.IsAbs(args[0]) || strings.Contains(args[0], string(filepath.Separator)))
-
-	if hasFilePaths {
-		logger.Infof("Checking specific TODO files...")
-		for _, arg := range args {
-			todoPath := arg
-			if !filepath.IsAbs(todoPath) && !strings.Contains(todoPath, string(filepath.Separator)) {
-				todoPath = filepath.Join(todosDir, todoPath)
-			}
-			if _, err := os.Stat(todoPath); os.IsNotExist(err) {
-				return fmt.Errorf("TODO file not found: %s", todoPath)
-			}
-			todo, err := todos.ParseTODO(todoPath)
-			if err != nil {
-				return fmt.Errorf("failed to parse TODO %s: %w", todoPath, err)
-			}
-			todoList = append(todoList, todo)
-		}
-	} else {
-		if _, err := os.Stat(todosDir); os.IsNotExist(err) {
-			return fmt.Errorf(".todos directory not found: %s", todosDir)
-		}
-		logger.Infof("Discovering TODOs in: %s", todosDir)
-
-		filters := todos.DiscoveryFilters{}
-		if filterStatus != "" {
-			filters.IncludeStatuses = []types.Status{types.Status(filterStatus)}
-		}
-
-		todoList, err = todos.DiscoverTODOs(todosDir, filters)
-		if err != nil {
-			return fmt.Errorf("failed to discover TODOs: %w", err)
-		}
-
-		if len(args) > 0 {
-			var filtered []*types.TODO
-			for _, todo := range todoList {
-				for _, arg := range args {
-					if strings.EqualFold(todo.Filename(), arg) {
-						filtered = append(filtered, todo)
-						break
-					}
-				}
-			}
-			todoList = filtered
-		}
+	logger.Infof("Discovering TODOs from PostgreSQL")
+	filters := todos.DiscoveryFilters{}
+	if filterStatus != "" {
+		filters.IncludeStatuses = []types.Status{types.Status(filterStatus)}
+	}
+	todoList, err := resolveRequestedTODOs(context.Background(), provider, args, filters)
+	if err != nil {
+		return fmt.Errorf("failed to discover TODOs: %w", err)
 	}
 
 	if len(todoList) == 0 {
@@ -143,10 +196,27 @@ func runTodosCheck(cmd *cobra.Command, args []string) error {
 
 	logger.Infof("Found %d TODOs to check", len(todoList))
 
+	// The check is the lifecycle's verify step, dispatched by the host that owns
+	// the workspace's lifecycle: `.gavel.yaml` ai:/todos.verify reach `todos
+	// check` exactly as they reach the dashboard's verify action, and the flag is
+	// the request layer on top.
+	host, err := lifecycle.NewHost(provider, workDir, lifecycle.HostCLI)
+	if err != nil {
+		return err
+	}
+	var request api.Spec
+	if checkTimeout > 0 {
+		request.Budget.Timeout = checkTimeout.String()
+	}
+	concurrency, err := resolveCheckConcurrency(workDir)
+	if err != nil {
+		return err
+	}
 	checkOpts := todos.CheckOptions{
-		WorkDir: workDir,
-		Timeout: checkTimeout,
-		Logger:  logger.StandardLogger(),
+		Runner:      host,
+		Request:     request,
+		Logger:      logger.StandardLogger(),
+		Concurrency: concurrency,
 	}
 
 	ctx := context.Background()
@@ -192,19 +262,77 @@ func init() {
 	todosCmd.AddCommand(todosGetCmd)
 	todosCmd.AddCommand(todosCheckCmd)
 
-	todosRunCmd.Flags().StringVar(&todosDir, "dir", "", "TODOs directory (default: .todos)")
-	todosRunCmd.Flags().IntVar(&maxRetries, "max-retries", 3, "Maximum retry attempts for failed TODOs")
-	todosRunCmd.Flags().StringVar(&filterStatus, "status", "", "Filter TODOs by status (pending, in_progress, failed)")
-	todosRunCmd.Flags().Float64Var(&maxBudget, "max-budget", 0, "Maximum budget in USD")
-	todosRunCmd.Flags().IntVar(&maxTurns, "max-turns", 0, "Maximum conversation turns")
-	todosRunCmd.Flags().BoolVarP(&interactive, "interactive", "i", false, "Interactively select TODOs to run")
-	todosRunCmd.Flags().StringVar(&groupBy, "group-by", "", "Group TODOs by: file, directory, all, or none")
-	todosRunCmd.Flags().BoolVar(&dirty, "dirty", false, "Skip git stash/checkout, run on dirty working tree")
-	todosRunCmd.Flags().BoolVar(&dryRun, "dry-run", false, "Print commands and prompts without executing")
-
-	todosGetCmd.Flags().StringVar(&todosDir, "dir", "", "TODOs directory (default: .todos)")
-
-	todosCheckCmd.Flags().StringVar(&todosDir, "dir", "", "TODOs directory (default: .todos)")
 	todosCheckCmd.Flags().StringVar(&filterStatus, "status", "", "Filter TODOs by status")
-	todosCheckCmd.Flags().DurationVar(&checkTimeout, "timeout", 2*time.Minute, "Test execution timeout")
+	todosCheckCmd.Flags().DurationVar(&checkTimeout, "timeout", 0, "Test execution timeout (empty: .gavel.yaml todos.timeout, else 30m)")
+	todosCheckCmd.Flags().IntVar(&checkConcurrency, "concurrency", 0,
+		"How many TODOs to check at once (0: .gavel.yaml todos.checkConcurrency, else 4). Each check runs that TODO's fixture")
+}
+
+func newTodosProvider(workDir string) (todos.Provider, error) {
+	return openRuntimeTodosProvider(context.Background(), workDir)
+}
+
+// resolveCheckConcurrency reads the configured definition-of-done concurrency,
+// with the --concurrency flag on top. An unreadable .gavel.yaml is the check's
+// own error: every check resolves its verify chain from the same file, so
+// running on a default here would only defer the same failure to each todo.
+func resolveCheckConcurrency(workDir string) (int, error) {
+	if checkConcurrency > 0 {
+		return checkConcurrency, nil
+	}
+	cfg, err := verify.LoadGavelConfig(workDir)
+	if err != nil {
+		return 0, fmt.Errorf("load .gavel.yaml: %w", err)
+	}
+	return cfg.Todos.CheckConcurrency, nil
+}
+
+// resolveRequestedTODOs preserves direct native reference semantics for UUIDs,
+// safe short IDs, and imported aliases. Listing first would discard legacy
+// aliases because list rows expose the canonical native UUID.
+func resolveRequestedTODOs(ctx context.Context, provider todos.Provider, args []string, filters todos.DiscoveryFilters) (types.TODOS, error) {
+	if len(args) == 0 {
+		return provider.List(ctx, filters)
+	}
+
+	resolved := make(types.TODOS, 0, len(args))
+	seen := map[string]struct{}{}
+	var listed types.TODOS
+	for _, ref := range args {
+		todo, err := provider.Get(ctx, ref)
+		if err != nil {
+			// Preserve exact-title CLI compatibility without replacing the native
+			// repository's prefix length and ambiguity checks.
+			if listed == nil {
+				var listErr error
+				if listed, listErr = provider.List(ctx, todos.DiscoveryFilters{}); listErr != nil {
+					return nil, fmt.Errorf("%w (and listing todos to match %q by title failed: %v)", err, ref, listErr)
+				}
+			}
+			var titleMatches types.TODOS
+			for _, candidate := range listed {
+				if candidate != nil && strings.EqualFold(candidate.Title, ref) {
+					titleMatches = append(titleMatches, candidate)
+				}
+			}
+			if len(titleMatches) != 1 {
+				return nil, err
+			}
+			todo = titleMatches[0]
+		}
+		if !filters.Matches(todo) {
+			continue
+		}
+		key := todo.ID
+		if key == "" {
+			key = todos.TODOReference(todo)
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		resolved = append(resolved, todo)
+	}
+	resolved.Sort()
+	return resolved, nil
 }

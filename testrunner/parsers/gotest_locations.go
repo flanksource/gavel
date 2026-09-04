@@ -21,7 +21,9 @@ type TestLocation struct {
 func BuildTestLocationMap(dir string) (map[string]TestLocation, error) {
 	locations := make(map[string]TestLocation)
 
-	err := utils.WalkGitIgnored(dir, func(path string, d fs.DirEntry, err error) error {
+	// Bounded: locations are keyed by bare test name, so a nested checkout's
+	// copy of a test file would overwrite the real one's location.
+	err := utils.WalkGitIgnoredBounded(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() || !strings.HasSuffix(path, "_test.go") {
 			return err
 		}
@@ -42,7 +44,7 @@ func BuildTestLocationMap(dir string) (map[string]TestLocation, error) {
 				locations[fn.Name.Name] = TestLocation{
 					File:              pos.Filename,
 					Line:              pos.Line,
-					IsGinkgoBootstrap: containsRunSpecs(fn),
+					IsGinkgoBootstrap: ContainsRunSpecs(fn),
 				}
 			}
 			return true
@@ -53,9 +55,9 @@ func BuildTestLocationMap(dir string) (map[string]TestLocation, error) {
 	return locations, err
 }
 
-// containsRunSpecs checks if a function body contains a call to RunSpecs,
+// ContainsRunSpecs checks if a function body contains a call to RunSpecs,
 // which indicates a Ginkgo bootstrap test function.
-func containsRunSpecs(fn *ast.FuncDecl) bool {
+func ContainsRunSpecs(fn *ast.FuncDecl) bool {
 	if fn.Body == nil {
 		return false
 	}

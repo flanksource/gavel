@@ -1,0 +1,32 @@
+---
+output:
+  schema:
+    type: object
+    additionalProperties: false
+    required: [tests]
+    properties:
+      tests:
+        type: array
+        description: "one entry per test id"
+        items:
+          type: object
+          additionalProperties: false
+          required: [id, summary]
+          properties:
+            id:
+              type: string
+              description: "the test id exactly as given"
+            summary:
+              type: string
+              description: "one line, <=15 words, stating what behavior the test verifies"
+---
+You are reviewing a test file to describe what each test verifies.
+
+For every test id listed below, return one line (<=15 words) stating WHAT
+behavior the test verifies — the observable outcome, not the mechanics.
+
+Test ids (return each id exactly as given):
+{{ids}}
+
+Test file source ({{file}}):
+{{{source}}}

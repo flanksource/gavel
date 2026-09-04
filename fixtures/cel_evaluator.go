@@ -34,6 +34,7 @@ func (e *CELEvaluator) EvaluateOutput(expression string, output string) (bool, e
 	// Create our own CEL environment to avoid conflicts with gomplate's default AnyType declarations
 	env, err := cel.NewEnv(
 		cel.Variable("output", cel.StringType),
+		cel.CrossTypeNumericComparisons(true),
 		cel.StdLib(),
 		ext.Strings(),
 	)

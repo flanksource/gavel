@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/flanksource/clicky"
+	"github.com/flanksource/clicky/api"
 	commonsdb "github.com/flanksource/commons-db/db"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/github"
@@ -15,7 +16,7 @@ import (
 )
 
 type SystemInstallOptions struct {
-	DSN             string `flag:"dsn" help:"Postgres DSN for the github cache (mutually exclusive with --embedded; overrides the embedded default)"`
+	DSN             string `flag:"dsn" help:"Postgres DSN for Gavel data (mutually exclusive with --embedded; overrides the embedded default)"`
 	Embedded        bool   `flag:"embedded" help:"Launch an embedded postgres managed by the pr-ui daemon (default when --dsn is not supplied)"`
 	Token           string `flag:"token" help:"GitHub token to persist for the daemon (defaults to GITHUB_TOKEN, GH_TOKEN, or gh auth token)"`
 	SkipVerifyToken bool   `flag:"skip-verify-token" help:"Skip the live GitHub API probe of the token (for GHE or unusual token scopes)"`
@@ -24,11 +25,11 @@ type SystemInstallOptions struct {
 	Force           bool   `flag:"force" help:"Overwrite an existing service file"`
 }
 
-func (SystemInstallOptions) Help() string {
-	return `Install a user-level background service that keeps gavel pr list --all --ui
+func (SystemInstallOptions) Help() api.Textable {
+	return clicky.Text(`Install a user-level background service that keeps gavel pr list --all --ui
 running across logins.
 
-Database backend (defaults to --embedded when no flag is given):
+Gavel database backend (defaults to --embedded when no flag is given):
   --embedded            Launch embedded postgres from the pr-ui daemon.
                         Binaries are downloaded on first run; install
                         verifies start/stop immediately so you find out
@@ -39,9 +40,11 @@ Database backend (defaults to --embedded when no flag is given):
                         so bad configs fail here instead of at runtime.
 
 GitHub authentication:
-  A token is required for the daemon to poll pull requests. launchd / systemd
-  --user services do NOT inherit your shell env, so this command persists a
-  token to ~/.config/gavel/auth.json (0600 perms). Discovery order:
+  The service runs as the current user through their login and interactive
+  shell. For zsh users this loads .zprofile and .zshrc, including the user's
+  PATH. This command still persists the GitHub token to
+  ~/.config/gavel/auth.json (0600 perms) so authentication does not depend on
+  shell startup files. Discovery order:
     1. --token=... (explicit)
     2. GITHUB_TOKEN env var
     3. GH_TOKEN env var
@@ -54,12 +57,12 @@ GitHub authentication:
   daemon is launched. Use --skip-verify-token for GHE or unusual scopes.
   If no token is found the install still proceeds with a warning.
 
-On macOS this writes ~/Library/LaunchAgents/com.flanksource.gavel-pr-ui.plist
+On macOS this writes ~/Library/LaunchAgents/com.flanksource.gavel.plist
 and loads it via launchctl. On Linux it writes
-~/.config/systemd/user/gavel-pr-ui.service and starts it via systemctl --user;
+~/.config/systemd/user/gavel.service and starts it via systemctl --user;
 run 'loginctl enable-linger $USER' if you want it to survive logout.
 
-No root required. Use --dry-run to preview.`
+No root required. Use --dry-run to preview.`)
 }
 
 func init() {
@@ -225,15 +228,12 @@ func verifyDBConfig(cfg service.DBConfig) error {
 		logger.Infof("Verified connection to %s", cfg.DSN)
 		return nil
 	case service.DBModeEmbedded:
-		dataDir, err := service.EmbeddedDataDir()
+		embeddedConfig, err := service.EmbeddedPostgresConfig()
 		if err != nil {
 			return err
 		}
-		logger.Infof("Verifying embedded postgres at %s (may download binaries on first run)", dataDir)
-		dsn, stop, err := commonsdb.StartEmbedded(commonsdb.EmbeddedConfig{
-			DataDir:  dataDir,
-			Database: "gavel",
-		})
+		logger.Infof("Verifying embedded postgres at %s (may download binaries on first run)", embeddedConfig.DataDir)
+		dsn, stop, err := commonsdb.StartEmbedded(embeddedConfig)
 		if err != nil {
 			return fmt.Errorf("embedded postgres smoke test: %w", err)
 		}

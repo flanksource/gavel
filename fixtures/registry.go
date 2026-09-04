@@ -4,6 +4,10 @@ import (
 	"context"
 	"fmt"
 	"sync"
+
+	"github.com/flanksource/captain/pkg/api"
+
+	"github.com/flanksource/gavel/fixtures/record"
 )
 
 // FixtureType defines the interface for different types of fixture tests.
@@ -29,13 +33,50 @@ type FixtureType interface {
 // RunOptions provides configuration options for executing fixture tests.
 // It controls execution behavior including working directory, verbosity, and caching.
 type RunOptions struct {
+	Context        context.Context
 	WorkDir        string
 	Verbose        bool
 	NoCache        bool
+	Spec           *api.Spec
 	Evaluator      *CELEvaluator
 	ExtraArgs      map[string]interface{}
 	ExecutablePath string // Path to the current executable
 	UpdateGolden   bool   // When true, mismatched @file expectations are rewritten with actual output instead of failing
+	Progress       func(done, total int) error
+
+	// Setup is the environment prepared for the markdown file this fixture came
+	// from, or nil when that file declared no `setup:`. It lives here rather than
+	// on FixtureTest because RunOptions is the runtime-environment carrier and
+	// FixtureTest is serialized into results — the resolved environment holds
+	// credentials.
+	Setup *PreparedSetup
+
+	// Recorder is the runtime state a fixture type needs to run under the
+	// recorders watching its file — nil when nothing is recording it. Here for
+	// the same reason as Setup: a proxy address is runtime state, not part of the
+	// fixture's declaration.
+	Recorder *RecorderContext
+
+	// Record is the recorder declaration in force for this fixture — its own
+	// `record:` or the run-wide default — so RunNode can refuse a recorder that
+	// has no implementation before the fixture runs. Nil records nothing.
+	Record *record.Spec
+
+	// DaemonPort is the port the file's `daemon:` was started on, exposed to
+	// exec fixtures as the `{{.port}}` template variable. Zero means no daemon.
+	DaemonPort int
+
+	// Changed are the workdir-relative files the change under verification
+	// touched, when the caller scoped verification to them (captain's
+	// `workflow.verify.scope: changed`). Nil or empty verifies the whole tree.
+	//
+	// Every node kind honours it: a `yaml test` step narrows to the packages
+	// those files affect, a `yaml lint` step lints only them, an `ai` step names
+	// them to the grader, and an exec fixture's expectation can read them as the
+	// CEL variable `changed_files`. RunNode records the list under
+	// Metadata["changed_files"] on every result so a verdict shows the scope it
+	// was reached under.
+	Changed []string
 }
 
 // OutputMode controls when captured command output is shown in rendered

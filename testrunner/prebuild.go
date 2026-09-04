@@ -31,8 +31,11 @@ func goPackagesToWarm(packagesByFramework map[parsers.Framework][]string) []stri
 
 // goPreBuildArgs builds the `go test -count=0 <pkgs...>` argument vector that
 // compiles every test binary without executing a single test.
-func goPreBuildArgs(pkgs []string) []string {
+func goPreBuildArgs(pkgs, tags []string) []string {
 	args := []string{"test", "-count=0"}
+	if len(tags) > 0 {
+		args = append(args, "-tags="+strings.Join(tags, ","))
+	}
 	return append(args, pkgs...)
 }
 
@@ -47,7 +50,7 @@ func (o *TestOrchestrator) preBuildGoPackages(pkgs []string) error {
 	}
 
 	name := fmt.Sprintf("Pre-build (compiling %d Go test %s)", len(pkgs), plural(len(pkgs), "package", "packages"))
-	process := exec.NewExec("go", goPreBuildArgs(pkgs)...).WithCwd(o.WorkDir).WithProcessGroup()
+	process := exec.NewExec("go", goPreBuildArgs(pkgs, o.Tags)...).WithCwd(o.WorkDir).WithProcessGroup()
 	if o.OutputTee != nil {
 		process = process.Stream(o.OutputTee, o.OutputTee)
 	}

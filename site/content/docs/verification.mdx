@@ -1,0 +1,41 @@
+---
+title: Verification
+description: The external fixture-runner contract captain dispatches workflow.verify.fixture through.
+order: 8
+---
+
+`gavel fixtures run --format captain-verify-report` is Gavel's half of captain's external fixture-runner contract: the mechanism a `workflow.verify.fixture` declaration on a lifecycle step (or any other captain-driven run) actually executes through. Captain reads the runner command from `~/.captain.yaml` `verify.fixtureRunner`; Gavel is the implementation registered there.
+
+```bash
+gavel fixtures run --format captain-verify-report < verification.fixture.md # [!code focus]
+gavel fixtures run --format captain-verify-report --cwd ./service < verification.fixture.md
+gavel fixtures run --format captain-verify-report --changed pkg/parser/lexer.go --changed pkg/parser/token.go < verification.fixture.md
+```
+
+## The contract
+
+One process, three streams:
+
+- **stdin** carries the fixture markdown document — the same format `gavel fixtures <file>` runs directly, including command blocks, tables, CEL assertions, and `yaml test` / `yaml lint` runner fences.
+- **argv** carries `--cwd <dir>` (where the fixture executes) and zero or more repeated `--changed <path>` flags (one per file the agent changed this turn; omitted or empty means verify the whole tree).
+- **stdout** carries newline-delimited JSON: zero or more `{"progress": <VerifyReport>}` lines while checks run, then exactly one `{"report": <VerifyReport>}` line as the final verdict.
+
+`gavel fixtures run` refuses any `--format` other than `captain-verify-report` — this command has no other output mode.
+
+## Verdicts vs. runner failures
+
+A **failing** definition of done is a verdict, not a runner failure: the process still exits `0`, with a final report whose fields say it failed. A **non-zero exit** means no verdict was produced at all — the fixture document was empty, malformed, or the verifier itself errored before it could grade anything. Callers (captain, `gavel todos check`, the `verify` lifecycle step) must tell these apart: an exit failure is a scheduling problem, while a `0`-exit report with a failing verdict is the thing being verified.
+
+```bash
+echo "" | gavel fixtures run --format captain-verify-report --cwd . # [!code warning] [!code note:no fixture on stdin -> non-zero exit, no report]
+```
+
+## Who grades an `ai` step
+
+A fixture's `ai:` verification step (an AI-scored checklist) grades on the same chain a todo's definition of done resolves: `.gavel.yaml` `todos.verify` over the `ai:` base, with the document's own `ai:` front matter taking precedence over both. This is the same "never grade your own work" chain described in [Todo engine](/docs/todo-engine) for todo verification — `gavel fixtures run` is what a lifecycle step's `workflow.verify.fixture` actually shells out to.
+
+## Where this fits
+
+- A lifecycle step's `spec.workflow.verify.fixture` (see [Todo run loop](/docs/todo-run-loop)) names the fixture document rendered from the todo's `## Verification` section; captain runs it through this exact contract.
+- `gavel todos check` runs the same contract directly, without a coding-agent turn around it.
+- Writing the fixture document itself — command blocks, `yaml test`/`yaml lint` fences, CEL assertions, AI checklists — is covered in [Fixture overview](/docs/fixtures-overview), [Runner steps](/docs/fixture-runner-steps), and [AI review fixtures](/docs/fixture-ai-review). This page is about the process contract those documents run through, not the document format itself.

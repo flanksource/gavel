@@ -11,6 +11,7 @@ import (
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/internal/prompting"
 	"github.com/flanksource/gavel/models"
 
@@ -22,6 +23,14 @@ type AmendCommitsOptions struct {
 	Threshold      float64 `flag:"threshold" help:"Quality score threshold - commits below this will be reviewed" default:"7.0"`
 	Ref            string  `flag:"ref" help:"Base ref for commit range (e.g., origin/main, main)" default:""`
 	DryRun         bool    `flag:"dry-run" help:"Show what would be changed without rebasing"`
+	// Agent is the caller-owned LLM agent used to rewrite commit messages. Amend
+	// is unconditionally an AI command, so this is required. It carries no flag
+	// tag: the model is selected by the caller from .gavel.yaml and --ai-model.
+	Agent ai.Agent `json:"-"`
+	// AllowedCommitTypes restricts the types AI message generation may choose
+	// from (.gavel.yaml commit.types). Amend used to pass none, so it ignored the
+	// repo's configured types where `git analyze` honored them.
+	AllowedCommitTypes []string `json:"-"`
 }
 
 type CommitReview struct {
@@ -84,8 +93,10 @@ func AmendCommits(ctx context.Context, options AmendCommitsOptions) error {
 
 	// Analyze commits
 	analyzeOpts := AnalyzeOptions{
-		HistoryOptions: options.HistoryOptions,
-		AI:             true,
+		HistoryOptions:     options.HistoryOptions,
+		AI:                 true,
+		Agent:              options.Agent,
+		AllowedCommitTypes: options.AllowedCommitTypes,
 	}
 	analyses, err := AnalyzeCommitHistory(analyzerCtx, commits, analyzeOpts)
 	if err != nil {

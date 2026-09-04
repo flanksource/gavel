@@ -111,7 +111,7 @@ func TestSavePerRunWritesTimestampedFile(t *testing.T) {
 	}
 	started := time.Date(2026, 4, 27, 10, 43, 42, 0, time.UTC)
 
-	path, err := SavePerRun(repo, snap, started)
+	path, err := SavePerRun(repo, snap, started, "")
 	require.NoError(t, err)
 	assert.Equal(t,
 		filepath.Join(repo, Dir, "run-2026-04-27T10-43-42Z.json"),
@@ -131,7 +131,7 @@ func TestSavePerRunDoesNotTouchPointers(t *testing.T) {
 	repo := initRepo(t)
 	snap := &testui.Snapshot{}
 
-	_, err := SavePerRun(repo, snap, time.Now())
+	_, err := SavePerRun(repo, snap, time.Now(), "")
 	require.NoError(t, err)
 
 	p, err := LoadPointer(repo, PointerLast)
@@ -141,11 +141,11 @@ func TestSavePerRunDoesNotTouchPointers(t *testing.T) {
 
 func TestSavePerRunRejectsNilSnapshot(t *testing.T) {
 	repo := initRepo(t)
-	_, err := SavePerRun(repo, nil, time.Now())
+	_, err := SavePerRun(repo, nil, time.Now(), "")
 	require.Error(t, err)
 }
 
 func TestSavePerRunRejectsEmptyWorkDir(t *testing.T) {
-	_, err := SavePerRun("", &testui.Snapshot{}, time.Now())
+	_, err := SavePerRun("", &testui.Snapshot{}, time.Now(), "")
 	require.Error(t, err)
 }

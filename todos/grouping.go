@@ -2,8 +2,10 @@ package todos
 
 import (
 	"fmt"
+	"os/exec"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
@@ -13,6 +15,7 @@ import (
 const (
 	GroupByFile      = "file"
 	GroupByDirectory = "directory"
+	GroupByRepo      = "repo"
 	GroupByAll       = "all"
 	GroupByNone      = "none"
 	UngroupedLabel   = "Ungrouped"
@@ -59,6 +62,12 @@ func FlattenGrouped(groups []TODOGroup) []GroupedRow {
 // Returns ordered groups sorted by highest priority TODO in each group.
 // TODOs without a path are placed in an "Ungrouped" group at the end.
 func GroupTODOs(todos types.TODOS, groupBy string) []TODOGroup {
+	return GroupTODOsWithWorkDir(todos, groupBy, "")
+}
+
+// GroupTODOsWithWorkDir groups TODOs by the specified groupBy strategy, using
+// workDir as the fallback repo key when groupBy is repo and a TODO has no CWD.
+func GroupTODOsWithWorkDir(todos types.TODOS, groupBy, workDir string) []TODOGroup {
 	if groupBy == "" || groupBy == GroupByNone {
 		return []TODOGroup{{Name: "", TODOs: todos}}
 	}
@@ -72,7 +81,7 @@ func GroupTODOs(todos types.TODOS, groupBy string) []TODOGroup {
 	var ungrouped types.TODOS
 
 	for _, todo := range todos {
-		keys := groupKeys(todo, groupBy)
+		keys := groupKeys(todo, groupBy, workDir)
 		if len(keys) == 0 {
 			ungrouped = append(ungrouped, todo)
 			continue
@@ -105,7 +114,14 @@ func GroupTODOs(todos types.TODOS, groupBy string) []TODOGroup {
 	return groups
 }
 
-func groupKeys(todo *types.TODO, groupBy string) []string {
+func groupKeys(todo *types.TODO, groupBy, workDir string) []string {
+	if groupBy == GroupByRepo {
+		if key := repoGroupKey(todo.CWD, workDir); key != "" {
+			return []string{key}
+		}
+		return nil
+	}
+
 	if len(todo.Path) == 0 {
 		return nil
 	}
@@ -120,6 +136,31 @@ func groupKeys(todo *types.TODO, groupBy string) []string {
 		}
 	}
 	return keys
+}
+
+func repoGroupKey(cwd, workDir string) string {
+	if cwd == "" {
+		cwd = workDir
+	}
+	if cwd == "" {
+		return ""
+	}
+	if !filepath.IsAbs(cwd) && workDir != "" {
+		cwd = filepath.Join(workDir, cwd)
+	}
+	cwd = filepath.Clean(cwd)
+	if root := gitRoot(cwd); root != "" {
+		return root
+	}
+	return cwd
+}
+
+func gitRoot(cwd string) string {
+	out, err := exec.Command("git", "-C", cwd, "rev-parse", "--show-toplevel").Output()
+	if err != nil {
+		return ""
+	}
+	return filepath.Clean(strings.TrimSpace(string(out)))
 }
 
 func highestPriority(todos types.TODOS) int {

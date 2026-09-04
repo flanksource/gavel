@@ -15,7 +15,7 @@ type HTTPCacheEntry struct {
 	Body         []byte
 	// Headers stores a JSON-encoded map[string]string of response headers we
 	// care about (Content-Type, Link, etc.). Stored as bytes so it round-trips
-	// cleanly across postgres/sqlite without driver-specific JSON columns.
+	// without requiring a driver-specific JSON representation.
 	Headers   []byte
 	FetchedAt time.Time `gorm:"index"`
 	// ExpiresAt is optional. When nil the entry never expires on its own —

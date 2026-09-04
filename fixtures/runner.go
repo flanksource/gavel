@@ -1,23 +1,22 @@
 package fixtures
 
 import (
-	"bytes"
 	"context"
+	"errors"
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
-	"runtime"
-	"strconv"
-	"syscall"
+	"sync"
 	"time"
 
 	"github.com/bmatcuk/doublestar/v4"
+	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/task"
 	flanksourceContext "github.com/flanksource/commons/context"
 	"github.com/flanksource/commons/logger"
-	"github.com/flanksource/gomplate/v3"
+
+	"github.com/flanksource/gavel/fixtures/record"
 )
 
 // RunnerOptions configures the fixture runner
@@ -29,11 +28,15 @@ type RunnerOptions struct {
 	WorkDir        string   // Working directory
 	MaxWorkers     int      // Maximum number of parallel workers
 	Logger         logger.Logger
-	ExecutablePath string              // Path to the current executable (for fixtures to use)
-	OnResult       func(FixtureResult) // Called after each fixture completes
-	OnParsed       func(*FixtureNode)  // Called after fixture files are parsed, before execution
-	UpdateGolden   bool                // When true, mismatched @file expectations are rewritten with actual output instead of failing
-	Display        *DisplayOptions     // Optional result visibility controls for CLI rendering
+	ExecutablePath string          // Path to the current executable (for fixtures to use)
+	ProgressSink   ProgressSink    // Receives immutable execution-tree snapshots
+	UpdateGolden   bool            // When true, mismatched @file expectations are rewritten with actual output instead of failing
+	Display        *DisplayOptions // Optional result visibility controls for CLI rendering
+	Spec           *api.Spec       // Runtime options for embedded AI prompts
+	// Record is the run-wide `--record` default, applied only to fixtures that
+	// declared no `record:` of their own. An explicit `record: none` parses to an
+	// empty (non-nil) Spec precisely so it outranks this.
+	Record *record.Spec
 }
 
 // Runner manages fixture test execution using typed tasks
@@ -44,6 +47,17 @@ type Runner struct {
 	tree       *FixtureNode // Hierarchical tree structure
 	daemonCmd  *exec.Cmd
 	daemonPort int
+	// setups holds one prepared `setup:` per markdown file that declared one,
+	// keyed on FixtureNode.Origin.File. Keyed on the file rather than the source
+	// directory because two fixture files in one directory are independent.
+	setups map[string]*PreparedSetup
+	// recorders holds the diagnostics recorders per markdown file, keyed the
+	// same way. nil when nothing in the run declared `record:` — no goroutine,
+	// no listener, no file.
+	recorders map[string]*recorderSet
+	store     *record.Store
+	progress  *executionTracker
+	resultMu  sync.Mutex
 }
 
 // NewRunner creates a new fixture runner
@@ -65,21 +79,15 @@ func NewRunner(opts RunnerOptions) (*Runner, error) {
 	}, nil
 }
 
-// Tree returns the parsed fixture tree.
-func (r *Runner) Tree() *FixtureNode {
-	return r.tree
-}
-
-// SetOnResult sets the per-fixture completion callback (can be set after NewRunner).
-func (r *Runner) SetOnResult(fn func(FixtureResult)) {
-	r.options.OnResult = fn
-}
-
 // Run executes the fixture tests and returns the result tree.
 // The caller is responsible for formatting/printing the output.
 func (r *Runner) Run() (*FixtureNode, error) {
 	if _, err := r.prepareFixtureTree(); err != nil {
 		return nil, err
+	}
+	r.progress = newExecutionTracker(r.tree, r.options.WorkDir, r.executionSteps(), r.options.ProgressSink)
+	if err := r.progress.Publish(context.Background()); err != nil {
+		return nil, fmt.Errorf("publish queued fixture progress: %w", err)
 	}
 
 	results, err := r.executeFixtures()
@@ -96,13 +104,14 @@ func (r *Runner) Run() (*FixtureNode, error) {
 	return r.tree, nil
 }
 
+// Parse builds the fixture tree without executing any fixture work.
+func (r *Runner) Parse() (*FixtureNode, error) {
+	return r.prepareFixtureTree()
+}
+
 func (r *Runner) prepareFixtureTree() (*FixtureNode, error) {
 	if err := r.parseFixtureFiles(); err != nil {
 		return nil, fmt.Errorf("failed to parse fixture files: %w", err)
-	}
-
-	if r.options.OnParsed != nil {
-		r.options.OnParsed(r.tree)
 	}
 
 	if r.options.Filter != "" {
@@ -125,10 +134,14 @@ func (r *Runner) parseFixtureFiles() error {
 	}
 
 	for _, pattern := range r.options.Paths {
-		// Expand glob patterns
-		matches, err := doublestar.FilepathGlob(pattern)
-		if err != nil {
-			return fmt.Errorf("invalid glob pattern '%s': %w", pattern, err)
+		// Callers that already resolved concrete files (outline discovery) would
+		// otherwise pay a second glob per path.
+		matches := []string{pattern}
+		if info, err := os.Stat(pattern); err != nil || !info.Mode().IsRegular() {
+			matches, err = doublestar.FilepathGlob(pattern)
+			if err != nil {
+				return fmt.Errorf("invalid glob pattern '%s': %w", pattern, err)
+			}
 		}
 
 		if len(matches) == 0 {
@@ -219,39 +232,92 @@ func (r *Runner) executeFixtures() (*FixtureGroup, error) {
 
 	ctx := flanksourceContext.NewContext(context.Background())
 
+	// Setup runs before the build: it can relocate a file's tests into a
+	// worktree, and a build that ran in the original repo would build tree A
+	// while the tests exercise tree B — and pass.
+	if err := r.startProgressStep(ctx, ExecutionKindSetup); err != nil {
+		return nil, err
+	}
+	if err := r.prepareSetups(ctx); err != nil {
+		if progressErr := r.failPrerequisite(ctx, ExecutionKindSetup, err); progressErr != nil {
+			return nil, errors.Join(err, progressErr)
+		}
+		return nil, err
+	}
+	if err := r.completeProgressStep(ctx, ExecutionKindSetup); err != nil {
+		return nil, err
+	}
+	// Registered before the daemon's defer so LIFO stops the daemon first:
+	// removing a worktree a live process is sitting in leaves a stale git
+	// worktree registration behind.
+	defer r.cleanupSetups()
+
 	// Run build command synchronously before any fixtures
-	buildCmd := r.getBuildCommand()
+	buildCmd, buildSetup := r.getBuildCommand()
 	if buildCmd != "" {
+		if err := r.startProgressStep(ctx, ExecutionKindBuild); err != nil {
+			return nil, err
+		}
 		logger.V(2).Infof("Running build command: %s", buildCmd)
-		if err := r.executeBuildCommand(ctx, buildCmd); err != nil {
+		if err := r.executeBuildCommand(ctx, buildCmd, buildSetup); err != nil {
+			if progressErr := r.failPrerequisite(ctx, ExecutionKindBuild, err); progressErr != nil {
+				return nil, errors.Join(err, progressErr)
+			}
 			return nil, fmt.Errorf("build failed, skipping all fixtures: %w", err)
+		}
+		if err := r.completeProgressStep(ctx, ExecutionKindBuild); err != nil {
+			return nil, err
 		}
 		logger.V(2).Infof("Build completed successfully")
 	}
 
 	// Start daemon if configured
-	daemonCmd := r.getDaemonCommand()
+	daemonCmd, daemonSetup := r.getDaemonCommand()
 	if daemonCmd != "" {
-		if err := r.startDaemon(ctx, daemonCmd); err != nil {
+		if err := r.startProgressStep(ctx, ExecutionKindDaemon); err != nil {
+			return nil, err
+		}
+		if err := r.startDaemon(ctx, daemonCmd, daemonSetup); err != nil {
+			if progressErr := r.failPrerequisite(ctx, ExecutionKindDaemon, err); progressErr != nil {
+				return nil, errors.Join(err, progressErr)
+			}
 			return nil, fmt.Errorf("daemon failed to start: %w", err)
+		}
+		if err := r.completeProgressStep(ctx, ExecutionKindDaemon); err != nil {
+			return nil, err
 		}
 		defer r.stopDaemon()
 	}
 
+	// Recorders start after the daemon so its port can be excluded from the
+	// proxy, and their defer is registered after the daemon's so LIFO closes
+	// them first — a daemon shutting down can still emit requests worth
+	// recording.
+	if err := r.prepareRecorders(); err != nil {
+		return nil, err
+	}
+	defer r.closeRecorders()
+
 	// Create typed task group for fixture execution
 	fixtureGroup := task.StartGroup[FixtureResult]("Fixture Tests")
 
-	taskToNodeMap := make(map[task.TypedTask[FixtureResult]]*FixtureNode)
 	r.tree.Walk(func(node *FixtureNode) {
 		if node.Test != nil {
-			typedTask := fixtureGroup.Add(node.Test.String(), func(ctx flanksourceContext.Context, t *task.Task) (FixtureResult, error) {
-				result, err := r.executeFixture(ctx, *node.Test)
-				if r.options.OnResult != nil {
-					r.options.OnResult(result)
+			env := r.envForNode(node)
+			fixtureGroup.Add(node.Test.String(), func(ctx flanksourceContext.Context, t *task.Task) (FixtureResult, error) {
+				if err := r.progress.Start(ctx, node); err != nil {
+					return FixtureResult{Name: node.Name, Status: task.StatusERR, Error: err.Error()}, err
+				}
+				runContext := flanksourceContext.NewContext(withFixtureProgress(ctx, func(done, total int) error {
+					return r.progress.Update(ctx, node, done, total)
+				}))
+				result, err := r.executeFixture(runContext, *node.Test, env)
+				r.attachResult(node, result)
+				if progressErr := r.progress.Complete(ctx, node, result); progressErr != nil {
+					return result, progressErr
 				}
 				return result, err
 			}, clicky.WithTaskTimeout(2*time.Minute))
-			taskToNodeMap[typedTask] = node
 		}
 	})
 
@@ -267,7 +333,7 @@ func (r *Runner) executeFixtures() (*FixtureGroup, error) {
 		return nil, fmt.Errorf("failed to get fixture results: %w", err)
 	}
 
-	for typedTask, result := range fixtureResults {
+	for _, result := range fixtureResults {
 		// Create a FixtureNode for the result
 		resultNode := FixtureNode{
 			Name:    result.Name,
@@ -276,12 +342,6 @@ func (r *Runner) executeFixtures() (*FixtureGroup, error) {
 		}
 		results.Tests = append(results.Tests, resultNode)
 
-		// Update the corresponding tree node with results
-		if testNode, exists := taskToNodeMap[typedTask]; exists {
-			testNode.Results = &result
-		} else {
-			logger.Warnf("No tree node found for task: %s", typedTask.Name())
-		}
 	}
 
 	r.tree.UpdateStatsRecursive()
@@ -297,219 +357,114 @@ func (r *Runner) executeFixtures() (*FixtureGroup, error) {
 	return results, nil
 }
 
-// getBuildCommand extracts build command from first fixture that has one
-func (r *Runner) getBuildCommand() string {
-	for _, fixture := range r.fixtures {
-		if fixture.Build != "" {
-			return fixture.Build
-		}
+func (r *Runner) executionSteps() []ExecutionStep {
+	var steps []ExecutionStep
+	if r.hasSetup() {
+		steps = append(steps, ExecutionStep{Key: "setup", Name: "Setup", Kind: ExecutionKindSetup})
 	}
-	return ""
+	if command, _ := r.getBuildCommand(); command != "" {
+		steps = append(steps, ExecutionStep{Key: "build", Name: "Build", Kind: ExecutionKindBuild})
+	}
+	if command, _ := r.getDaemonCommand(); command != "" {
+		steps = append(steps, ExecutionStep{Key: "daemon", Name: "Daemon", Kind: ExecutionKindDaemon})
+	}
+	return steps
 }
 
-// executeBuildCommand runs the build command with context cancellation and gomplate templating
-func (r *Runner) executeBuildCommand(ctx flanksourceContext.Context, buildCmd string) error {
-	// Prepare template context for build command
-	templateData := make(map[string]interface{})
-	templateData["PWD"] = r.options.WorkDir
-	templateData["WorkDir"] = r.options.WorkDir
-	templateData["GOOS"] = runtime.GOOS
-	templateData["GOARCH"] = runtime.GOARCH
-	templateData["GOPATH"] = os.Getenv("GOPATH")
-
-	// Template the build command (expand $VAR first, then gomplate)
-	buildCmd = ExpandVars(buildCmd, templateData)
-	templatedCmd, err := renderBuildTemplate(buildCmd, templateData)
-	if err != nil {
-		ctx.Errorf("Failed to template build command: %v", err)
-		return fmt.Errorf("failed to template build command: %w", err)
+func (r *Runner) hasSetup() bool {
+	for _, file := range r.tree.Children {
+		if setup, _, _ := fileSetup(file); setup != nil {
+			return true
+		}
 	}
-
-	ctx.Logger.V(4).Infof("🔨 Build command: %s", templatedCmd)
-
-	cmd := exec.CommandContext(ctx, "sh", "-c", templatedCmd)
-	cmd.Dir = r.options.WorkDir
-
-	var buildOut bytes.Buffer
-	cmd.Stdout = &buildOut
-	cmd.Stderr = &buildOut
-
-	if err := cmd.Run(); err != nil {
-		ctx.Errorf("Build failed: %v\nOutput: %s", err, buildOut.String())
-		return fmt.Errorf("build command failed: %v\nOutput: %s", err, buildOut.String())
-	}
-
-	if buildOut.Len() > 0 {
-		ctx.Logger.V(5).Infof("Build output: %s", buildOut.String())
-	}
-
-	return nil
+	return false
 }
 
-// executeFixture runs a single fixture test
-func (r *Runner) executeFixture(ctx flanksourceContext.Context, fixture FixtureTest) (FixtureResult, error) {
-	if reason := fixture.ShouldSkip(); reason != "" {
-		return FixtureResult{
-			Name:   fixture.Name,
-			Status: task.StatusSKIP,
-			Test:   fixture,
-			Error:  reason,
-		}, nil
+func (r *Runner) startProgressStep(ctx context.Context, kind ExecutionKind) error {
+	key := progressStepKey(kind)
+	if key == "" || r.progress.byKey[key] == nil {
+		return nil
 	}
+	return r.progress.StartStep(ctx, key)
+}
 
-	// Get the appropriate fixture type from registry
-	fixtureType, err := DefaultRegistry.GetForFixture(fixture)
-	if err != nil {
-		return FixtureResult{
-			Name:   fixture.Name,
-			Status: task.StatusERR,
-			Test:   fixture,
-			Error:  err.Error(),
-		}, nil
+func (r *Runner) completeProgressStep(ctx context.Context, kind ExecutionKind) error {
+	key := progressStepKey(kind)
+	if key == "" || r.progress.byKey[key] == nil {
+		return nil
 	}
+	return r.progress.CompleteStep(ctx, key, ExecutionPassed, nil)
+}
 
-	if r.daemonPort > 0 {
-		if fixture.TemplateVars == nil {
-			fixture.TemplateVars = make(map[string]any)
-		}
-		fixture.TemplateVars["port"] = strconv.Itoa(r.daemonPort)
+func (r *Runner) failPrerequisite(ctx context.Context, kind ExecutionKind, cause error) error {
+	key := progressStepKey(kind)
+	if key == "" || r.progress.byKey[key] == nil {
+		return r.progress.CancelQueued(ctx, cause)
 	}
+	return errors.Join(
+		r.progress.CompleteStep(ctx, key, ExecutionErrored, cause),
+		r.progress.CancelQueued(ctx, cause),
+	)
+}
 
+func progressStepKey(kind ExecutionKind) string {
+	switch kind {
+	case ExecutionKindSetup:
+		return "setup"
+	case ExecutionKindBuild:
+		return "build"
+	case ExecutionKindDaemon:
+		return "daemon"
+	default:
+		return ""
+	}
+}
+
+func (r *Runner) attachResult(node *FixtureNode, result FixtureResult) {
+	r.resultMu.Lock()
+	defer r.resultMu.Unlock()
+	if len(result.Children) == 0 {
+		node.Results = &result
+		return
+	}
+	for _, child := range result.Children {
+		node.AddChild(child)
+	}
+}
+
+// executeFixture runs a single fixture test in the environment prepared for the
+// file that declared it (zero-valued when that file declared neither `setup:`
+// nor `record:`). The dispatch itself is RunNode's: this only assembles the
+// run's environment around it and stamps the runner's own presentation.
+func (r *Runner) executeFixture(ctx flanksourceContext.Context, fixture FixtureTest, env fixtureEnv) (FixtureResult, error) {
 	if r.options.WorkDir == "" {
 		r.options.WorkDir, _ = os.Getwd()
 	}
 	ctx.Logger.V(5).Infof("Using CWD: %s", r.options.WorkDir)
 
-	// Prepare run options with flanksource context
 	opts := RunOptions{
+		Context:        ctx,
 		WorkDir:        r.options.WorkDir,
 		Verbose:        ctx.Logger.IsLevelEnabled(logger.Debug),
-		NoCache:        false,
+		Spec:           r.options.Spec,
 		Evaluator:      r.evaluator,
 		ExecutablePath: r.options.ExecutablePath,
 		UpdateGolden:   r.options.UpdateGolden,
+		Setup:          env.setup,
+		Recorder:       r.recorderContext(env.file),
+		Record:         r.effectiveRecord(fixture),
+		DaemonPort:     r.daemonPort,
+		Progress:       fixtureProgressFromContext(ctx),
 		ExtraArgs: map[string]interface{}{
 			"flanksource_context": ctx,
 		},
 	}
 
 	start := time.Now()
-	// Run the fixture test
-	result := fixtureType.Run(ctx, fixture, opts)
+	result := RunNode(ctx, fixture, opts)
 	result.Duration = time.Since(start)
 	if r.options.Display != nil {
 		result.Display = r.options.Display
 	}
-
 	return result, nil
-}
-
-// getDaemonCommand extracts daemon command from first fixture that has one
-func (r *Runner) getDaemonCommand() string {
-	for _, fixture := range r.fixtures {
-		if fixture.FrontMatter.Daemon != "" {
-			return fixture.FrontMatter.Daemon
-		}
-	}
-	return ""
-}
-
-// startDaemon picks a free port, templates the command, starts the process, and waits for the port to be ready.
-func (r *Runner) startDaemon(ctx flanksourceContext.Context, daemonCmd string) error {
-	port, err := freePort()
-	if err != nil {
-		return fmt.Errorf("failed to find free port: %w", err)
-	}
-	r.daemonPort = port
-
-	templateData := map[string]interface{}{
-		"port":    strconv.Itoa(port),
-		"PWD":     r.options.WorkDir,
-		"WorkDir": r.options.WorkDir,
-		"GOOS":    runtime.GOOS,
-		"GOARCH":  runtime.GOARCH,
-	}
-
-	daemonCmd = ExpandVars(daemonCmd, templateData)
-	templated, err := renderBuildTemplate(daemonCmd, templateData)
-	if err != nil {
-		return fmt.Errorf("failed to template daemon command: %w", err)
-	}
-
-	logger.Infof("Starting daemon on port %d: %s", port, templated)
-
-	cmd := exec.CommandContext(ctx, "sh", "-c", templated)
-	cmd.Dir = r.options.WorkDir
-	cmd.Stdout = os.Stderr
-	cmd.Stderr = os.Stderr
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("failed to start daemon: %w", err)
-	}
-	r.daemonCmd = cmd
-
-	// Wait for port to be ready
-	addr := net.JoinHostPort("localhost", strconv.Itoa(port))
-	for i := 0; i < 60; i++ {
-		conn, err := net.DialTimeout("tcp", addr, 200*time.Millisecond)
-		if err == nil {
-			conn.Close()
-			logger.Infof("Daemon ready on port %d", port)
-			return nil
-		}
-		// Check if process died
-		if cmd.ProcessState != nil {
-			return fmt.Errorf("daemon exited prematurely with code %d", cmd.ProcessState.ExitCode())
-		}
-		time.Sleep(500 * time.Millisecond)
-	}
-	r.stopDaemon()
-	return fmt.Errorf("daemon did not start listening on port %d within 30s", port)
-}
-
-// stopDaemon sends SIGTERM, waits up to 5s, then SIGKILL.
-func (r *Runner) stopDaemon() {
-	if r.daemonCmd == nil || r.daemonCmd.Process == nil {
-		return
-	}
-
-	logger.Infof("Stopping daemon (PID %d)", r.daemonCmd.Process.Pid)
-
-	// Kill the process group to include child processes
-	pgid := -r.daemonCmd.Process.Pid
-	_ = syscall.Kill(pgid, syscall.SIGTERM)
-
-	done := make(chan struct{})
-	go func() {
-		_ = r.daemonCmd.Wait()
-		close(done)
-	}()
-
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		logger.Warnf("Daemon did not exit after SIGTERM, sending SIGKILL")
-		_ = syscall.Kill(pgid, syscall.SIGKILL)
-		<-done
-	}
-
-	r.daemonCmd = nil
-}
-
-func freePort() (int, error) {
-	l, err := net.Listen("tcp", "localhost:0")
-	if err != nil {
-		return 0, err
-	}
-	port := l.Addr().(*net.TCPAddr).Port
-	l.Close()
-	return port, nil
-}
-
-// renderBuildTemplate renders a gomplate template for build commands
-func renderBuildTemplate(template string, data map[string]interface{}) (string, error) {
-	return gomplate.RunTemplate(data, gomplate.Template{
-		Template: template,
-	})
 }

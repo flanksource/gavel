@@ -7,10 +7,12 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/clicky"
-	"github.com/flanksource/clicky/api"
+	clickyapi "github.com/flanksource/clicky/api"
 	"github.com/flanksource/clicky/api/icons"
 	"github.com/flanksource/commons/logger"
+	"github.com/google/uuid"
 )
 
 // ExecutorContext wraps context.Context with logging and user interaction capabilities.
@@ -18,9 +20,34 @@ import (
 // UserInteraction is for user-facing notifications and clarifying questions.
 type ExecutorContext struct {
 	context.Context
-	Logger      logger.Logger // For executor internal logging
-	interaction *UserInteraction
-	transcript  *ExecutionTranscript
+	Logger        logger.Logger // For executor internal logging
+	interaction   *UserInteraction
+	transcript    *ExecutionTranscript
+	onSessionID   func(sessionID string)
+	onRunPrepared func(RunPreparationResult)
+	onRunStart    func(RunStartMetadata)
+	onNotices     func(sessionID string, notices []api.Notice)
+	// onVerifyProgress receives the definition of done's in-flight reports.
+	onVerifyProgress func(api.VerifyReport)
+}
+
+// RunStartMetadata is the human-facing run identity recorded on a TODO issue
+// when an agent run starts.
+type RunStartMetadata struct {
+	SessionID     string
+	Mode          string
+	Driver        string
+	Agent         string
+	Provider      string
+	RuntimeMode   string
+	ResolvedModel string
+	Effort        string
+	// Spec, when set, is the request as it stands after setup has run: the
+	// checkout consumed and Cwd pointing at the tree the agent works in. It is
+	// reported once, from a hook that trails the setup plugin, and updates the
+	// run's persisted rendered spec. Reports that cannot see it leave it nil
+	// rather than overwriting with the pre-setup request.
+	Spec *api.Spec
 }
 
 // UserInteraction handles user-facing communication during TODO execution.
@@ -44,7 +71,7 @@ type Question struct {
 }
 
 // Pretty returns a formatted text representation of the Question
-func (q Question) Pretty() api.Text {
+func (q Question) Pretty() clickyapi.Text {
 	result := clicky.Text("").Add(icons.Unknown).Append(" Question", "text-orange-600 font-bold")
 
 	if q.Text != "" {
@@ -89,10 +116,11 @@ const (
 	NotifyProgress   NotificationType = "progress"   // Progress update
 	NotifyCompletion NotificationType = "completion" // Task completed
 	NotifyError      NotificationType = "error"      // Error occurred
+	NotifyApproval   NotificationType = "approval"   // Agent is awaiting human approval to use a tool
 )
 
 // Pretty returns a formatted text representation of the NotificationType with appropriate styling
-func (nt NotificationType) Pretty() api.Text {
+func (nt NotificationType) Pretty() clickyapi.Text {
 	switch nt {
 	case NotifyThinking:
 		return clicky.Text("").Add(icons.Lambda).Append(" THINKING", "text-purple-600 font-medium")
@@ -104,12 +132,14 @@ func (nt NotificationType) Pretty() api.Text {
 		return clicky.Text("").Add(icons.Pass).Append(" COMPLETED", "text-green-600 font-bold")
 	case NotifyError:
 		return clicky.Text("").Add(icons.Error).Append(" ERROR", "text-red-600 font-bold")
+	case NotifyApproval:
+		return clicky.Text(" APPROVAL", "text-amber-600 font-bold")
 	default:
 		return clicky.Text(string(nt), "text-gray-500")
 	}
 }
 
-func file(path string) api.Text {
+func file(path string) clickyapi.Text {
 	cwd, err := os.Getwd()
 	if err != nil {
 		cwd = "."
@@ -123,7 +153,7 @@ func file(path string) api.Text {
 }
 
 // Pretty returns a formatted text representation of the Notification
-func (n Notification) Pretty() api.Text {
+func (n Notification) Pretty() clickyapi.Text {
 	result := n.Type.Pretty()
 
 	if n.Message != "" {
@@ -205,6 +235,133 @@ func (ctx *ExecutorContext) GetTranscript() *ExecutionTranscript {
 	return ctx.transcript
 }
 
+// SetSessionIDHook registers a callback an executor invokes (via RecordSessionID)
+// as soon as it has finalized the run's session id and before it launches the
+// agent. The orchestrator uses it to persist the session id up front so it
+// survives a mid-run crash and remains resumable.
+func (ctx *ExecutorContext) SetSessionIDHook(fn func(sessionID string)) {
+	ctx.onSessionID = fn
+}
+
+// RecordSessionID reports the run's session id to the registered hook (if any).
+// Executors call it once, before launching the agent. A blank id is ignored.
+func (ctx *ExecutorContext) RecordSessionID(sessionID string) {
+	if sessionID == "" || ctx.onSessionID == nil {
+		return
+	}
+	ctx.onSessionID(sessionID)
+}
+
+// SetRunPreparedHook registers a callback invoked after Captain has admitted
+// the run and before the external agent starts.
+func (ctx *ExecutorContext) SetRunPreparedHook(fn func(RunPreparationResult)) {
+	ctx.onRunPrepared = fn
+}
+
+// RecordRunPrepared reports Captain's durable admission identity, and binds the
+// admitted run to this execution's context. A TODO can have more than one run
+// in flight, so every later callback has to report against the run it was
+// prepared for rather than against whichever run the TODO points at now.
+func (ctx *ExecutorContext) RecordRunPrepared(result RunPreparationResult) {
+	if result.PromptRunID != uuid.Nil {
+		ctx.Context = WithPromptRun(ctx.Context, result.PromptRunID)
+	}
+	// The admission session is bound alongside the run because the two together
+	// are the identity a durable tool approval is written against; a broker built
+	// mid-execution has no other way to learn them.
+	if sessionID, err := uuid.Parse(result.SessionID); err == nil && sessionID != uuid.Nil {
+		ctx.Context = WithCaptainSession(ctx.Context, sessionID)
+	}
+	if result.SessionID == "" || ctx.onRunPrepared == nil {
+		return
+	}
+	ctx.onRunPrepared(result)
+}
+
+type promptRunContextKey struct{}
+
+type captainSessionContextKey struct{}
+
+// WithCaptainSession binds Captain's admission session to a context, so a hook
+// or broker running inside the execution can address the rows Captain keyed on
+// it.
+func WithCaptainSession(ctx context.Context, sessionID uuid.UUID) context.Context {
+	return context.WithValue(ctx, captainSessionContextKey{}, sessionID)
+}
+
+// CaptainSessionFromContext returns the session bound by WithCaptainSession, or
+// uuid.Nil outside an admitted run.
+func CaptainSessionFromContext(ctx context.Context) uuid.UUID {
+	if ctx == nil {
+		return uuid.Nil
+	}
+	sessionID, _ := ctx.Value(captainSessionContextKey{}).(uuid.UUID)
+	return sessionID
+}
+
+// WithPromptRun binds a prompt run to a context so the provider callbacks made
+// while executing it resolve that run and no other.
+func WithPromptRun(ctx context.Context, promptRunID uuid.UUID) context.Context {
+	return context.WithValue(ctx, promptRunContextKey{}, promptRunID)
+}
+
+// PromptRunFromContext returns the run bound by WithPromptRun, or uuid.Nil for
+// a caller that is not inside a run (a read surface, or a recovery command).
+func PromptRunFromContext(ctx context.Context) uuid.UUID {
+	if ctx == nil {
+		return uuid.Nil
+	}
+	promptRunID, _ := ctx.Value(promptRunContextKey{}).(uuid.UUID)
+	return promptRunID
+}
+
+// SetRunStartHook registers a callback an executor invokes with the resolved
+// runtime before dispatch and again if the provider later supplies a session ID.
+func (ctx *ExecutorContext) SetRunStartHook(fn func(RunStartMetadata)) {
+	ctx.onRunStart = fn
+}
+
+// RecordRunStart reports the run metadata to the registered hook (if any).
+// Executors call it once before dispatch with the resolved runtime, then again
+// when the provider supplies a session ID.
+func (ctx *ExecutorContext) RecordRunStart(meta RunStartMetadata) {
+	if ctx.onRunStart == nil {
+		return
+	}
+	ctx.onRunStart(meta)
+}
+
+// SetVerifyProgressHook registers a callback an executor hands to captain's
+// verify Options.Progress, so every in-flight verification report reaches the
+// run's persistence without the executor knowing what persistence is.
+func (ctx *ExecutorContext) SetVerifyProgressHook(fn func(api.VerifyReport)) {
+	ctx.onVerifyProgress = fn
+}
+
+// RecordVerifyProgress reports one in-flight verification snapshot to the
+// registered hook (if any).
+func (ctx *ExecutorContext) RecordVerifyProgress(report api.VerifyReport) {
+	if ctx.onVerifyProgress == nil {
+		return
+	}
+	ctx.onVerifyProgress(report)
+}
+
+// SetNoticesHook registers a callback an executor invokes (via RecordNotices)
+// once the run is over, with everything its lifecycle hooks reported doing.
+func (ctx *ExecutorContext) SetNoticesHook(fn func(sessionID string, notices []api.Notice)) {
+	ctx.onNotices = fn
+}
+
+// RecordNotices reports the run's lifecycle notices to the registered hook (if
+// any). Executors call it after the run, when the session id is settled.
+func (ctx *ExecutorContext) RecordNotices(sessionID string, notices []api.Notice) {
+	if len(notices) == 0 || ctx.onNotices == nil {
+		return
+	}
+	ctx.onNotices(sessionID, notices)
+}
+
 // ExecutionTranscript records the complete interaction history during TODO execution.
 // This is executor-agnostic and works with any AI system.
 type ExecutionTranscript struct {
@@ -221,7 +378,7 @@ type TranscriptEntry struct {
 }
 
 // Pretty returns a formatted text representation of the TranscriptEntry
-func (te TranscriptEntry) Pretty() api.Text {
+func (te TranscriptEntry) Pretty() clickyapi.Text {
 	result := clicky.Text("")
 
 	// Add timestamp
@@ -256,7 +413,7 @@ const (
 )
 
 // Pretty returns a formatted text representation of the EntryType with appropriate styling
-func (et EntryType) Pretty() api.Text {
+func (et EntryType) Pretty() clickyapi.Text {
 	switch et {
 	case EntryText:
 		return clicky.Text("").Add(icons.File).Append(" TEXT", "text-blue-600 font-medium")

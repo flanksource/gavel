@@ -9,10 +9,7 @@ import (
 )
 
 type UISettings struct {
-	Repos  []string `json:"repos,omitempty"`
-	Author string   `json:"author,omitempty"`
-	Any    bool     `json:"any,omitempty"`
-	Bots   bool     `json:"bots,omitempty"`
+	Repos []string `json:"repos,omitempty"`
 	// IgnoredOrgs are GitHub org logins the user has chosen to hide from
 	// the header chooser and exclude from ResolveDefaultOrg. Persists
 	// across daemon restarts so a user's "don't show this org" decision

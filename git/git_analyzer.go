@@ -1,7 +1,6 @@
 package git
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -12,10 +11,8 @@ import (
 
 	"github.com/flanksource/gavel/models"
 
-	"github.com/flanksource/clicky/ai"
 	"github.com/flanksource/clicky/task"
 	"github.com/flanksource/commons/logger"
-	gavelai "github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/git/kubernetes"
 )
 
@@ -109,8 +106,8 @@ func AnalyzeCommit(ctx *AnalyzerContext, commit models.Commit, options AnalyzeOp
 		out.TotalResourceCount += len(change.KubernetesChanges)
 	}
 
-	if options.agent != nil {
-		out, err = AnalyzeWithAI(context.Background(), out, options.agent, options)
+	if options.Agent != nil {
+		out, err = AnalyzeWithAI(ctx, out, options.Agent, options)
 	}
 
 	return out, err
@@ -131,19 +128,11 @@ func AnalyzeCommitHistory(ctx *AnalyzerContext, commits []models.Commit, options
 	batch := task.Batch[models.CommitAnalysis]{
 		Name:        "Analyze Commit History",
 		ItemTimeout: options.AITimeout,
+		MaxWorkers:  options.MaxConcurrent,
 	}
 
-	if options.AI {
-
-		agent, err := gavelai.NewAgent(ai.DefaultConfig())
-		defer func() {
-			logger.Infof("AI Costs: %s", agent.GetCosts().Pretty().ANSI())
-		}()
-		// agent, err := ai.GetDefaultAgent()
-		if err != nil {
-			return nil, fmt.Errorf("failed to get AI agent: %w", err)
-		}
-		options.agent = agent
+	if options.AI && options.Agent == nil {
+		return nil, fmt.Errorf("AI analysis requested but no agent was supplied: the caller must resolve a model and build the agent")
 	}
 
 	for _, commit := range commits {

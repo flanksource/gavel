@@ -2,17 +2,44 @@
   "name": "@flanksource/gavel-pr-ui",
   "private": true,
   "type": "module",
+  "packageManager": "pnpm@11.22.0+sha512.1ff870c4c6133dfd88fb2afc46dd13d47f09c9794b438c6fdb47ca98caf3bc16381ee0be93a091b8e3824cf01f889f46d7d9e20910fb0be1ab0fb5baa80dd621",
   "scripts": {
     "build": "vite build",
-    "dev": "vite"
+    "dev": "vite",
+    "check": "tsc --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
-    "marked": "^15.0.0",
-    "preact": "^10.25.0"
+    "@ai-sdk/react": "catalog:",
+    "@flanksource/clicky-ui": "^0.3.5",
+    "@flanksource/gavel": "^0.1.2",
+    "@iconify-icons/ph": "^1.2.5",
+    "@iconify-icons/vscode-icons": "catalog:",
+    "@iconify/react": "^6.0.2",
+    "@joplin/turndown": "catalog:",
+    "@joplin/turndown-plugin-gfm": "catalog:",
+    "@mdxeditor/editor": "catalog:",
+    "@tanstack/react-query": "catalog:",
+    "ai": "catalog:",
+    "marked": "^15.0.12",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "streamdown": "catalog:",
+    "strip-ansi": "catalog:"
   },
   "devDependencies": {
-    "@preact/preset-vite": "^2.9.0",
+    "@tailwindcss/vite": "^4.3.1",
+    "@testing-library/react": "^16.1.0",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@types/turndown": "catalog:",
+    "@vitejs/plugin-react": "^4.7.0",
+    "jsdom": "^25.0.1",
+    "oxlint": "catalog:",
+    "react-grab": "catalog:",
+    "tailwindcss": "^4.3.1",
     "typescript": "^5.3.0",
-    "vite": "^6.4.3"
+    "vite": "^6.4.3",
+    "vitest": "^3.2.6"
   }
 }

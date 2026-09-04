@@ -1,0 +1,142 @@
+---
+title: Todo run loop
+description: The lifecycle engine, steps, outcomes, sessions, and fixture-backed definitions of done.
+order: 7
+---
+
+`gavel todos run` drives an AI coding agent through the project's **todo lifecycle** — an ordered list of steps, each a captain prompt plus the CEL predicates that decide when it applies and what its result means.
+
+```bash
+gavel todos run 90ec80f0
+gavel todos steps 90ec80f0 # [!code highlight] [!code note:where this todo stands]
+gavel todos run --step plan 90ec80f0 # [!code highlight] [!code note:reviewable plan]
+gavel todos run --commit 90ec80f0 # [!code focus] [!code note:full loop]
+gavel todos check 90ec80f0 # [!code info] [!code note:manual definition of done]
+```
+
+Line 1 runs whichever lifecycle step applies next. Line 2 reports that without dispatching anything. Line 3 asks for a named step — here, a reviewable plan. Line 4 runs implementation, fixture-backed checks, and auto-commit as one workflow. Line 5 re-runs the same definition of done without an implementation agent.
+
+## The lifecycle
+
+A lifecycle (`todos/lifecycle/todos.yaml`, overridable from `.gavel.yaml` `todos.lifecycle`) is an ordered list of steps. Each step declares:
+
+- **`prompt`** — a captain prompt reference: `todos.run`, `todos.plan`, `todos.triage`, `todos.verify`, or `file:<path>` for a project-owned template.
+- **`when`** — a CEL predicate over `subject` (the todo), `runs` (its run history), and `last` (the latest run per step). Empty means the step always applies.
+- **`outcomes`** — an ordered list of `{status, when}` pairs evaluated against the finished run. The first one whose predicate holds wins; none holding is an error, because a run the definition cannot classify must not silently keep the status it started under.
+- **`auxiliary`** (optional) — an auxiliary step is never picked automatically; it only runs when named with `--step`.
+
+`gavel todos run` with no `--step` picks the first non-auxiliary step whose `when` predicate holds, and prints that step's name plus the reason next to it before dispatching. `gavel todos steps [todo]` lists the lifecycle's steps on their own, or — given a todo — reports each step's applicability, which one would run next, and how that step's last run ended.
+
+`review` and `ask` are **human-facing statuses**, not lifecycle steps: a todo in `review` is a plan waiting for `gavel todos plan approve|reject|revise`, and one in `ask` is waiting for an answer to the agent's blocking questions. Nothing in the lifecycle is "next" for either state until a person acts.
+
+The built-in lifecycle's steps, in the order `Next` considers them:
+
+| Step | Prompt | Auxiliary | Applies when |
+|------|--------|-----------|--------------|
+| `triage` | `todos.triage` | yes | only when named with `--step triage` |
+| `plan` | `todos.plan` | no | status is draft/pending/failed/unverified and there is no unapproved plan |
+| `verify` | `todos.verify` | no | the last `run` succeeded and hasn't been verified since |
+| `run` | `todos.run` | no | status is pending/failed/unverified/verified/completed and any plan is approved |
+
+## Steps and sessions
+
+```bash
+gavel todos run --step plan --model cli:opus:high 90ec80f0 # [!code focus]
+gavel todos run --resume 90ec80f0 # [!code highlight] [!code note:same session]
+gavel todos run --dry-run 90ec80f0 # [!code info] [!code note:preview only]
+```
+
+Line 1 names a step explicitly and pins the model (compact `mode:model:effort` form). Line 2 resumes the prior recorded session instead of starting a new one — the right path for answering questions or continuing interrupted work. Line 3 prints the rendered prompt, the resolved spec layer stack (lowest precedence first), and the resolved Captain spec, without dispatching.
+
+Gavel records session IDs on the todo so later runs can resume or focus the same work. A todo in `ask` stores the agent's blocking questions; answering resumes the prior session and applies the same outcome mapping.
+
+## Result envelopes
+
+A step's prompt returns a structured envelope — `result`, `plan`, or `triage` — matching the step's declared `envelope`. A plain `result` envelope:
+
+```json
+{
+  "summary": "What changed or what blocked progress.",
+  "endStatus": "completed", // [!code focus] [!code note:read by outcome predicates]
+  "questions": []
+}
+```
+
+`summary` is persisted as the last-run summary. `endStatus` is one of the facts an outcome predicate can read (as `envelope.endStatus`); it does not select the status directly — the step's `outcomes` list does. `questions` is only meaningful when `endStatus` is `ask`; otherwise Gavel clears stale questions.
+
+The `plan` envelope adds a `plan` object:
+
+```json
+{
+  "summary": "Investigated the parser and wrote a plan.",
+  "endStatus": "completed",
+  "plan": {
+    "status": "new", // [!code focus] [!code note:new updated unchanged]
+    "path": "/absolute/path/to/plan.md" // [!code warning]
+  }
+}
+```
+
+The built-in `plan` step's outcomes read `plan.status`: `new` or `updated` moves the todo to `review`; `unchanged` returns it to `pending`. The built-in `verify` step's outcomes instead read the verification report (`verify.ran`, `verify.passed`): passing becomes `verified`, failing becomes `unverified`, and a verifier that never ran is `failed`.
+
+## Checks
+
+`.gavel.yaml` `checks.enabled: true` enables the post-completion test/lint loop inside the `run` step; a todo's front matter `checks:` block can override the project defaults. There is no per-run flag: the suite is part of the todo's definition of done, and a run either has it or does not.
+
+```yaml
+checks:
+  enabled: true # [!code focus]
+  test:
+    changed: true
+    timeout: 5m
+  lint:
+    changed: true
+    timeout: 5m
+```
+
+The re-run budget is `todos.run.workflow.verify.maxIterations` (there is no `checks.maxIterations` key — it was retired in favor of this one). When enabled with neither `test` nor `lint` set, both run against changed files.
+
+When checks fail, Gavel feeds a compact failure summary back to the same agent session. The loop continues until checks pass or the iteration budget is exhausted.
+
+Under the hood, checks are fixture runner steps: Gavel marshals the resolved test/lint options into the same shape as a `yaml test` or `yaml lint` fence and runs them through the fixture engine.
+
+## Verification fixture
+
+A todo's `## Verification` section is its definition of done, and it is the **only** verifier — there is no separate scoring pass. The `verify` step runs this fixture on its own; the `run` step's in-loop check runs the same fixture scoped to changed files.
+
+````markdown
+## Verification
+
+### command: parser reports actionable errors
+
+```bash
+gavel fixtures fixtures/parser-errors.fixture.md # [!code focus] [!code note:existing suite]
+```
+
+- cel: exitCode == 0 # [!code info]
+
+### command: changed packages pass
+
+```yaml test
+changed: true # [!code highlight]
+framework: [go]
+test-timeout: 2m
+```
+````
+
+See [Verification](/docs/verification) for the runner contract this fixture executes through — `gavel fixtures run --format captain-verify-report` — and how captain dispatches `workflow.verify.fixture`.
+
+## Commit and manual verification
+
+The `run` step commits by default (`--commit`, on by default) through the same pipeline as `gavel commit`, from inside the worktree it creates.
+
+`gavel todos check` runs the same fixture/CEL definition of done on demand — it **is** the `verify` step, dispatched standalone — and records the resulting verified or unverified lifecycle state.
+
+```bash
+gavel todos run --commit=true 90ec80f0 # [!code focus]
+gavel todos check 90ec80f0 # [!code warning]
+```
+
+The first command feeds failing checks back into the implementation loop before
+committing successful work. The second command can be run later without starting
+an implementation agent.

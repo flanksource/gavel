@@ -1,21 +1,18 @@
 package types
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"os"
-	osExec "os/exec"
 	"path/filepath"
 	"runtime"
 	"time"
 
-	"github.com/creack/pty"
 	"github.com/flanksource/clicky"
 	clickyExec "github.com/flanksource/clicky/exec"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/fixtures"
+	"github.com/flanksource/gavel/fixtures/record"
 	"github.com/flanksource/gomplate/v3"
 	"github.com/flanksource/repomap"
 )
@@ -38,22 +35,30 @@ func (e *ExecFixture) Name() string {
 
 // Run executes the command test with gomplate template support
 func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opts fixtures.RunOptions) fixtures.FixtureResult {
-	// Compute root dirs from the fixture source directory first. The CWD
-	// itself may reference these auto-injected vars, so it must be templated
-	// before we resolve the final working directory.
+	// Two directories, deliberately distinct. sourceDir is where the markdown
+	// lives — golden files resolve against it. execBase is where commands run:
+	// a `setup:` with a checkout moves it into the prepared worktree, and
+	// without one the two are the same directory.
 	sourceDir := ResolveSourceDir(fixture, opts)
-	gitRoot := repomap.FindGitRoot(sourceDir)
-	goRoot := findGoModRoot(sourceDir)
+	execBase := opts.Setup.Dir(sourceDir)
+
+	// Compute root dirs from the exec base, not the markdown's directory: a
+	// worktree fixture that kept GIT_ROOT_DIR pointing at the original repo
+	// would silently exercise the tree it was trying to isolate itself from.
+	// The CWD itself may reference these auto-injected vars, so they must be
+	// resolved before the final working directory.
+	gitRoot := repomap.FindGitRoot(execBase)
+	goRoot := findGoModRoot(execBase)
 	rootDir := gitRoot
 	if rootDir == "" {
 		rootDir = goRoot
 	}
 	if rootDir == "" {
-		rootDir = sourceDir
+		rootDir = execBase
 	}
 
 	if gitRoot != goRoot {
-		logger.V(3).Infof("Directories: source=%s git=%s go=%s root=%s", sourceDir, gitRoot, goRoot, rootDir)
+		logger.V(3).Infof("Directories: source=%s exec=%s git=%s go=%s root=%s", sourceDir, execBase, gitRoot, goRoot, rootDir)
 	}
 
 	// Inject auto-injected vars into TemplateVars so they're available
@@ -61,15 +66,23 @@ func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opt
 	if fixture.TemplateVars == nil {
 		fixture.TemplateVars = make(map[string]any)
 	}
-	fixture.TemplateVars["workDir"] = sourceDir
+	fixture.TemplateVars["workDir"] = execBase
 	fixture.TemplateVars["executablePath"] = opts.ExecutablePath
 	fixture.TemplateVars["GIT_ROOT_DIR"] = gitRoot
 	fixture.TemplateVars["GO_ROOT_DIR"] = goRoot
 	fixture.TemplateVars["ROOT_DIR"] = rootDir
+	fixture.TemplateVars["SETUP_DIR"] = execBase
 	fixture.TemplateVars["GOOS"] = runtime.GOOS
 	fixture.TemplateVars["GOARCH"] = runtime.GOARCH
 	fixture.TemplateVars["GOPATH"] = os.Getenv("GOPATH")
-	fixture.TemplateVars["CWD"] = sourceDir
+	fixture.TemplateVars["CWD"] = execBase
+	// `setup` carries what the prepared tree turned out to be — commit,
+	// worktree, path, dirtyFiles. Absent rather than empty when no setup ran,
+	// so `{{.setup.commit}}` in a fixture without one fails instead of
+	// templating a blank.
+	if opts.Setup != nil {
+		fixture.TemplateVars["setup"] = opts.Setup.Extra
+	}
 
 	result := fixtures.FixtureResult{
 		Test:     fixture,
@@ -83,7 +96,7 @@ func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opt
 	if err != nil {
 		return result.Errorf(err, "failed to template cwd")
 	}
-	workDir := ResolveWorkDirFromCWD(templatedCWD, sourceDir, opts)
+	workDir := ResolveWorkDirFromCWD(templatedCWD, execBase, opts)
 
 	fixture.TemplateVars["workDir"] = workDir
 	fixture.TemplateVars["CWD"] = workDir
@@ -101,7 +114,29 @@ func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opt
 	if exec.Env == nil {
 		exec.Env = make(map[string]any)
 	}
-	for _, k := range []string{"GIT_ROOT_DIR", "GO_ROOT_DIR", "ROOT_DIR", "GOOS", "GOARCH", "GOPATH"} {
+	// Precedence, highest first: the fixture's own `env:` > the setup's
+	// environment > the auto-injected roots > whatever the process already
+	// had. Both clicky and os/exec start the child from os.Environ(), so a
+	// setup's environment is additive and overriding, never hermetic.
+	if opts.Setup != nil {
+		for k, v := range opts.Setup.Env {
+			if _, ok := exec.Env[k]; !ok {
+				exec.Env[k] = v
+			}
+		}
+	}
+	// The recorder's proxy sits below both declarations: a fixture or setup that
+	// names HTTP_PROXY itself is pointing at something it needs, and silently
+	// hijacking it would be worse than not recording. `requireEntries:` is how a
+	// fixture turns "recorded nothing" into a failure.
+	if opts.Recorder != nil {
+		for k, v := range opts.Recorder.ProxyEnv {
+			if _, ok := exec.Env[k]; !ok {
+				exec.Env[k] = v
+			}
+		}
+	}
+	for _, k := range []string{"GIT_ROOT_DIR", "GO_ROOT_DIR", "ROOT_DIR", "SETUP_DIR", "GOOS", "GOARCH", "GOPATH"} {
 		if _, ok := exec.Env[k]; !ok {
 			exec.Env[k] = templateData[k]
 		}
@@ -111,9 +146,17 @@ func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opt
 		return result.Errorf(fmt.Errorf("no command specified"), "no command specified")
 	}
 
+	// `record: ansi` implies a PTY: there is no ANSI to record from a pipe.
+	var ansi *record.ANSIOptions
+	if opts.Recorder != nil {
+		ansi = opts.Recorder.ANSI
+	}
+
+	started := time.Now()
 	var p *clickyExec.ExecResult
-	if exec.Terminal == "pty" {
-		p = runWithPTY(exec, workDir)
+	var capture *fixtures.Capture
+	if exec.Terminal == "pty" || ansi != nil {
+		p, capture = runWithPTY(exec, workDir, ansi)
 	} else {
 		cmd := clicky.Exec(exec.Exec, exec.Args...).WithCwd(workDir)
 		if len(exec.Env) > 0 {
@@ -127,46 +170,95 @@ func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opt
 	}
 
 	result.Actual = p
-	return fixture.Expected.Evaluate(result, *p, fixtures.EvaluateOptions{
-		SourceDir:    fixture.SourceDir,
-		UpdateGolden: opts.UpdateGolden,
-	})
+
+	// Harvested here rather than by the runner because the CEL roots have to
+	// exist before Evaluate runs the fixture's expression. The window is the
+	// child's own lifetime; under the default file scope every test in the file
+	// shares one proxy, so overlapping fixtures see each other's traffic — that
+	// is what `scope: test` is for.
+	var harvest fixtures.Harvest
+	evaluate := fixtures.EvaluateOptions{SourceDir: fixture.SourceDir, UpdateGolden: opts.UpdateGolden}
+	if opts.Recorder != nil && opts.Recorder.Harvest != nil {
+		harvest = opts.Recorder.Harvest(fixtures.HarvestRequest{
+			Label:   fixture.Name,
+			Start:   started,
+			End:     time.Now(),
+			Capture: capture,
+		})
+		result.Recordings = harvest.Recordings
+		evaluate.CELVars = harvest.CELVars
+	}
+	// The change under review, as the CEL root `changed_files`, so a fixture that
+	// only makes sense against particular files can say so; absent, not empty,
+	// when the verification is not scoped to a change.
+	if len(opts.Changed) > 0 {
+		if evaluate.CELVars == nil {
+			evaluate.CELVars = map[string]any{}
+		}
+		evaluate.CELVars["changed_files"] = opts.Changed
+	}
+
+	// Deliberately fixture.SourceDir, not execBase: `@golden` files belong next
+	// to the markdown that asserts them. A worktree is disposable, so writing
+	// an updated golden into one would discard it on cleanup. The command moves;
+	// its expectations do not.
+	evaluated := fixture.Expected.Evaluate(result, *p, evaluate)
+
+	// A `requireEntries` shortfall only decides a fixture the assertions left
+	// passing — the fixture's own expectations are the more specific answer.
+	if harvest.Err != nil && evaluated.Error == "" {
+		return evaluated.Failf("%s", harvest.Err.Error())
+	}
+	return evaluated
 }
 
-func runWithPTY(execBase fixtures.ExecFixtureBase, workDir string) *clickyExec.ExecResult {
+// ptyWidth and ptyHeight are the terminal a fixture sees when it does not say.
+// A size is mandatory: the previous implementation started a 0x0 PTY, which
+// makes a CLI that queries its width fall back to a default that has nothing to
+// do with what the fixture asserts.
+const (
+	ptyWidth  = 120
+	ptyHeight = 40
+)
+
+// runWithPTY runs the command under a pseudo-terminal. ansi is non-nil when the
+// run is being recorded, which adds settled-screen tracking on top; without it
+// the capture is only the output stream, which costs no more than the plain
+// io.Copy this replaced.
+func runWithPTY(execBase fixtures.ExecFixtureBase, workDir string, ansi *record.ANSIOptions) (*clickyExec.ExecResult, *fixtures.Capture) {
 	// Invoke the configured executable directly so shells like bash/sh don't
 	// get double-wrapped (`bash -c "bash -c '<script>'"` mis-parses: the
 	// outer shell treats the inner `bash` as the script and the rest as
 	// positional args — the command never runs and we get the target
 	// program's help banner instead).
-	cmd := osExec.Command(execBase.Exec, execBase.Args...)
-	cmd.Dir = workDir
-	cmd.Env = os.Environ()
+	opts := fixtures.CaptureOptions{
+		Command: append([]string{execBase.Exec}, execBase.Args...),
+		Dir:     workDir,
+		Width:   ptyWidth,
+		Height:  ptyHeight,
+	}
 	for k, v := range execBase.Env {
-		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%v", k, v))
+		opts.Env = append(opts.Env, fmt.Sprintf("%s=%v", k, v))
+	}
+	if ansi != nil {
+		opts.Snapshots = true
+		opts.MaxBytes = int64(ansi.MaxBytes)
+		opts.SnapshotInterval = ansi.Interval
+		if ansi.Width > 0 {
+			opts.Width = ansi.Width
+		}
+		if ansi.Height > 0 {
+			opts.Height = ansi.Height
+		}
 	}
 
 	now := time.Now()
-	var buf bytes.Buffer
-
-	ptmx, err := pty.Start(cmd)
+	capture, err := fixtures.CaptureANSI(opts)
 	if err != nil {
 		return &clickyExec.ExecResult{
-			Stdout:  "",
-			Stderr:  "",
 			Error:   fmt.Errorf("failed to start PTY: %w", err),
 			Started: &now,
-		}
-	}
-	defer ptmx.Close()
-
-	// PTY merges stdout+stderr into a single stream
-	_, _ = io.Copy(&buf, ptmx)
-	_ = cmd.Wait()
-
-	exitCode := 0
-	if cmd.ProcessState != nil {
-		exitCode = cmd.ProcessState.ExitCode()
+		}, nil
 	}
 
 	// PTY merges stdout+stderr into a single byte stream; there is no way
@@ -176,18 +268,20 @@ func runWithPTY(execBase fixtures.ExecFixtureBase, workDir string) *clickyExec.E
 	// doubled form was flagging every non-empty line as a duplicate in
 	// ansi.has_duplicates.
 	return &clickyExec.ExecResult{
-		Stdout:   buf.String(),
-		ExitCode: exitCode,
+		Stdout:   capture.Raw(),
+		ExitCode: capture.ExitCode,
 		Started:  &now,
-		Duration: time.Since(now),
-	}
+		Duration: time.Duration(capture.DurationMs) * time.Millisecond,
+	}, capture
 }
 
 // ResolveWorkDir determines the working directory for fixture execution.
-// Priority: test-level CWD > file-level frontmatter CWD > SourceDir > opts.WorkDir
-// Relative CWD paths are resolved from SourceDir (fixture file location) or opts.WorkDir.
+// Priority: test-level CWD > file-level frontmatter CWD > prepared setup cwd >
+// SourceDir > opts.WorkDir. Relative CWD paths are resolved from the prepared
+// setup's directory when the file declared one, otherwise from SourceDir (the
+// fixture file's location) or opts.WorkDir.
 func ResolveWorkDir(fixture fixtures.FixtureTest, opts fixtures.RunOptions) string {
-	baseDir := ResolveSourceDir(fixture, opts)
+	baseDir := opts.Setup.Dir(ResolveSourceDir(fixture, opts))
 
 	// Get the merged CWD (file-level frontmatter + test-level override)
 	cwd := fixture.ExecBase().CWD

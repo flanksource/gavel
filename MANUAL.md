@@ -11,7 +11,7 @@ This manual is organized around the actual CLI tree and answers two questions fo
 
 The CLI has two layers:
 
-- Root-level feature commands such as `test`, `lint`, `verify`, and `commit`.
+- Root-level feature commands such as `test`, `lint`, and `commit`.
 - Command groups such as `pr`, `git`, `todos`, `ssh`, `system`, and `repomap`.
 
 Many commands also inherit shared output and execution behavior:
@@ -88,10 +88,10 @@ gavel
 |   |-- check
 |   |-- get
 |   |-- list
-|   `-- run
+|   |-- run
+|   `-- verify
 |-- ui
 |   `-- serve
-|-- verify
 `-- version
 ```
 
@@ -131,22 +131,23 @@ The UI is one of Gavel's strongest workflows. If you prefer drilling into failur
 
 UI-related tips:
 
-- Most live UI commands accept `--addr`; use `0.0.0.0` when you want the browser to connect from another machine on the LAN.
+- Live UI commands bind `0.0.0.0` by default, so the dashboard is reachable from another machine on the LAN out of the box. Pass `--addr localhost` to restrict a server to this machine.
 - `gavel test --ui --detach` and `gavel ui serve` support `--auto-stop` and `--idle-timeout` so the server cleans itself up.
 - `gavel ui serve` is the easiest way to inspect CI-produced JSON locally.
 - The test and lint UIs share the same underlying server, so lint results can appear alongside test results when you run `gavel test --lint --ui`.
 
 ### TODO Flows
 
-Several features can turn failures into `.todos` entries:
+Native PostgreSQL is the only runtime TODO store. Use `gavel todos` to create,
+sync, inspect, run, and verify issues in the current registered workspace:
 
-- `gavel test --sync-todos`
-- `gavel lint --sync-todos`
-- `gavel verify --sync-todos`
-- `gavel pr status --sync-todos`
-- `gavel pr fix`
+- `gavel todos create "Describe the work"`
+- `gavel todos sync` to scan source `TODO`/`FIXME` comments into PostgreSQL
+- `gavel todos list`, `get`, `run`, and `verify` for the native queue
 
-If you use TODOs heavily, `gavel todos` becomes the hub for listing, checking, and executing those files.
+Repository-local `.todos` Markdown is an explicit interchange format, not a
+runtime provider. Use `gavel todos import [files...]` to load it into PostgreSQL
+and `gavel todos export [refs...]` to write portable snapshots.
 
 ### `.gavel.yaml`
 
@@ -182,7 +183,8 @@ lint:
       enabled: false
 
 commit:
-  model: claude
+  model: claude-haiku-4-5
+  groupModel: claude-sonnet-4-5
   hooks:
     - name: lint-staged
       run: golangci-lint run ./...
@@ -220,13 +222,14 @@ Field reference:
 
 | Key | Purpose |
 | --- | --- |
-| `verify.model` | Default AI CLI or model name for `gavel verify` |
+| `verify.model` | Default AI CLI or model name for generic AI-verification fixtures |
 | `verify.prompt` | Optional custom verify prompt text |
 | `verify.checks.disabled` | Disable specific verify checks by ID |
 | `verify.checks.disabledCategories` | Disable whole verify categories |
 | `lint.ignore` | Repo-wide or user-wide ignore rules matched by `source`, `rule`, and/or `file` |
 | `lint.linters.<name>.enabled` | Force a linter on or off when Gavel would otherwise rely on detection/default behavior |
-| `commit.model` | Default model for `gavel commit` |
+| `commit.model` | Model for commit-message and PR-content generation (fast/haiku-class); overridable with `--model` |
+| `commit.groupModel` | Model for AI commit grouping (`gavel commit -A`, capable/sonnet-class); overridable with `--group-model`, falls back to `commit.model` |
 | `commit.hooks` | Pre-commit shell hooks run by `gavel commit` |
 | `commit.hooks[].files` | Optional staged-file glob filter; hook runs only if any staged file matches |
 | `commit.precommit.mode` | How `gavel commit` handles gitignore + linked-dependency precommit checks |
@@ -247,7 +250,7 @@ Merge rules matter because `.gavel.yaml` can come from multiple layers:
 | `verify.checks.disabled`, `verify.checks.disabledCategories` | Appended across layers |
 | `lint.ignore` | Appended across layers |
 | `lint.linters.<name>.enabled` | Later layer wins for that linter |
-| `commit.model` | Last non-empty value wins |
+| `commit.model`, `commit.groupModel` | Last non-empty value wins |
 | `commit.precommit.mode` | Last non-empty value wins |
 | `commit.compatibility.mode` | Last non-empty value wins |
 | `commit.hooks` | Appended across layers |
@@ -267,7 +270,7 @@ Notes:
 
 ## Testing And Quality
 
-This is the biggest part of the CLI. The common pattern is: discover work automatically, run it with structured output, then optionally render it in a browser, export JSON/HTML artifacts, or sync failures into TODOs.
+This is the biggest part of the CLI. The common pattern is: discover work automatically, run it with structured output, then optionally render it in a browser or export JSON/HTML artifacts.
 
 ### `gavel test`
 
@@ -279,7 +282,7 @@ Reach for it when you want one of these flows:
 - Run only packages affected by local changes.
 - Open a live dashboard while tests run.
 - Re-run from a previous JSON baseline or only rerun failed targets.
-- Sync broken tests into `.todos`.
+- Re-run the failures a pull request hit in CI, without re-running the whole suite.
 
 Common workflows:
 
@@ -288,11 +291,12 @@ gavel test
 gavel test ./pkg/...
 gavel test --lint --format "json=gavel-results.json,html=gavel-results.html"
 gavel test --changed
+gavel test --failed
+gavel test --pr 42
 gavel test --ui
 gavel test --ui --detach --auto-stop=30m --idle-timeout=5m
 gavel test --bench .
 gavel test --fixtures
-gavel test --sync-todos
 gavel test history
 gavel test history ./pkg/foo
 ```
@@ -314,7 +318,7 @@ Use the framework subcommands when you want the full `test` flag surface but do 
 
 ### `gavel lint`
 
-Use `lint` when you want a single entrypoint for repo linting across languages and tools. Gavel auto-detects installed linters and can narrow to changed files, show a browser UI, auto-fix, or sync findings into TODOs.
+Use `lint` when you want a single entrypoint for repo linting across languages and tools. Gavel auto-detects installed linters and can narrow to changed files, show a browser UI, or auto-fix findings.
 
 It is the right command for:
 
@@ -331,7 +335,6 @@ gavel lint --fix
 gavel lint --triage
 gavel lint --changed
 gavel lint --ui
-gavel lint --sync-todos
 gavel lint eslint
 gavel lint secrets
 ```
@@ -373,6 +376,7 @@ The linter subcommands are shortcuts for pinning `--linters`:
 - `golangci-lint`, `golangci`
 - `ruff`
 - `eslint`
+- `react-doctor`
 - `pyright`
 - `tsc`, `typescript`
 - `markdownlint`
@@ -381,6 +385,18 @@ The linter subcommands are shortcuts for pinning `--linters`:
 - `betterleaks`, `secrets`
 
 Use those shortcuts when you want discoverability and stable command names in scripts.
+
+### `gavel test outline`
+
+`test outline` provides one read-only inventory across Go test, Ginkgo, Jest, Vitest, Playwright, and Markdown fixtures. It uses native framework collection where available, statically parses Jest declarations, and parses fixture Markdown without running setup or commands.
+
+```bash
+gavel test outline
+gavel test outline --framework go,ginkgo ./pkg
+gavel test outline --framework fixture --fixture-files 'examples/*.fixture.md'
+```
+
+An empty `--framework` includes every supported source. Positional paths filter all collectors; `--fixture-files` overrides the configured fixture patterns. Collection failures remain visible as error rows so one broken Node package does not hide the rest of the repository.
 
 ### `gavel fixtures`
 
@@ -400,9 +416,16 @@ gavel fixtures tests/api.fixture.md
 gavel fixtures fixtures/**/*.md
 gavel fixtures -v tests.md
 gavel fixtures --no-progress tests.md
+gavel fixtures outline fixtures/**/*.md
 ```
 
+Use `gavel fixtures outline` to inspect fixture structure, source locations, and
+fixture kind counts without running build commands, daemons, fixture commands,
+test/lint runner steps, skip commands, or AI checks.
+
 If your repo enables fixture discovery in `.gavel.yaml`, `gavel test --fixtures` can run the same files as part of the broader test pass.
+
+Ready-made workflow templates live in `examples/` (they run against the bundled `examples/sample-app`): `precommit.fixture.md` (lint + test the files you changed), `pre-release.fixture.md` (build, then the full suite and every linter), `smoke-test.fixture.md` (fast smoke tests + a `/health` probe), and `ai-review.fixture.md` (an AI reviewer scores the change against an acceptance-criteria checklist — needs `captain configure`). Run one with `gavel fixtures examples/precommit.fixture.md`, or copy it into your project.
 
 ### `gavel bench`
 
@@ -459,30 +482,18 @@ This is the command to reach for when someone hands you `gavel-results.json` and
 
 This part of the CLI is about turning diffs and failure reports into actionable next steps: review findings, generated commit messages, and TODO execution loops.
 
-### `gavel verify`
+### `gavel todos check`
 
-Use `verify` for AI-assisted review of local changes, commit ranges, branches, PRs, files, or directories. It applies a prescribed review structure across completeness, code quality, testing, consistency, security, and performance.
-
-It fits best when you want:
-
-- A review pass before opening or merging a PR
-- A review of a specific commit range or PR
-- An automated fix loop driven by the review findings
-- Findings materialized as TODO files
-
-Common workflows:
+Use `todos check` to run a TODO's complete fixture-backed definition of done
+without starting an implementation agent. It executes configured test/lint
+checks, the persisted `## Verification` fixture, and any acceptance-criteria
+checklist step through the same CEL verdict used inside `todos run`.
 
 ```bash
-gavel verify
-gavel verify main..HEAD
-gavel verify #123
-gavel verify path/to/file.go
-gavel verify --model gemini
-gavel verify --auto-fix --max-turns 5
-gavel verify --sync-todos
+gavel todos check                       # check selected runnable TODOs
+gavel todos check 3f2a1b                 # check one TODO
+gavel todos check --timeout 10m          # bound each verification run
 ```
-
-Use `--patch-only` when the AI side should return patches instead of relying on interactive tool use.
 
 ### `gavel commit`
 
@@ -494,8 +505,10 @@ This is the right command when you want:
 - AI warnings for removed functionality or compatibility issues before the commit is written
 - Hook execution before finalizing the commit
 - Interactive file selection with an in-picker `/` filter for path, status, language, or scope
-- AI-assisted splitting of a large change into multiple commits
+- AI-assisted splitting of a large change into multiple logical commits (`-A`), with a separate chore commit for lock/generated files. `-A` feeds the LLM a `gavel status` table (scope, file, status, line counts), groups by logical change (scope is a hint, not a hard boundary), and caps the result at `--max-commits` (default 7, excluding the chore commit) — rendered into the grouping prompt's output schema as `maxItems` and enforced by captain's `schemaStrictness=retry` policy. Each group is committed as soon as its message is ready
 - Optional follow-up push behavior
+
+By default (`--stage session`) commit scopes itself to the running agent's edits: it resolves a session id from `GAVEL_SESSION_ID`, `CLAUDE_SESSION_ID`, or `CODEX_SESSION_ID` and stages only the files that Claude or Codex session touched. With no session id in the environment it falls back to the previous default of committing the already-staged set. Pass `--stage staged|unstaged|all` or an explicit session id to override.
 
 Common workflows:
 
@@ -503,7 +516,8 @@ Common workflows:
 gavel commit
 gavel commit -t
 gavel commit -A
-gavel commit -A --max=5
+gavel commit -A --max-commits=3
+gavel commit --max-commits=3
 gavel commit -m "chore: bump dep"
 gavel commit --stage all --dry-run
 gavel commit --force
@@ -511,28 +525,168 @@ gavel commit --force
 
 ### `gavel todos`
 
-`todos` is the task-execution side of Gavel's failure-to-fix loop. Other commands create `.todos`; this command helps you inspect, verify, group, and execute them.
+`todos` is the task-execution side of Gavel's failure-to-fix loop. Its runtime
+queue is stored in native PostgreSQL and shared by the CLI and UI.
 
-Use it when you already have TODO files and want to:
+Use it when you want to:
 
-- List them by status or grouping
-- Inspect one TODO in detail
+- Create or sync native issues
+- List issues by status or grouping
+- Inspect one issue in detail
 - Re-run verification checks
-- Execute them through the Claude Code integration
+- Drive an AI coding agent through the project's todo lifecycle
+- Explicitly import or export portable `.todos` Markdown
 
 Common workflows:
 
 ```bash
 gavel todos list
 gavel todos list --status pending
-gavel todos get .todos/fix-bug.md
+gavel todos get 3f2a1b
+gavel todos create "Fix the parser race"
+gavel todos sync ./pkg/parser
+gavel todos steps 3f2a1b                   # which lifecycle steps apply to this todo now
 gavel todos check
 gavel todos run
 gavel todos run --interactive
-gavel todos run --group-by directory
+gavel todos run --step plan                # propose a plan; the TODO parks in `review`
+gavel todos plan approve 3f2a1b --run      # accept the plan and implement it
+gavel todos plan revise 3f2a1b --feedback "split the migration in two"
+gavel todos plan reject 3f2a1b             # discard the plan; the TODO returns to pending
+gavel todos import --dir ./archive/todos   # explicit Markdown → PostgreSQL
+gavel todos export 3f2a1b --dir ./backup   # explicit PostgreSQL → Markdown
 ```
 
-`gavel pr fix` builds on the same execution engine, but starts from a pull request instead of an existing `.todos` directory.
+#### The todo lifecycle
+
+Every todo moves through a **lifecycle**: an ordered list of steps declared in
+`todos/lifecycle/todos.yaml` (overridable from `.gavel.yaml` `todos.lifecycle`,
+see [SCHEMA.md](SCHEMA.md#todoslifecycle)). Each step is:
+
+- a captain **prompt** reference (`todos.run`, `todos.plan`, `todos.triage`,
+  `todos.verify`, or `file:<path>` for a project-owned template),
+- a CEL **`when`** predicate over `subject` (the todo), `runs` (its run
+  history), and `last` (the latest run per step) that decides whether the step
+  currently applies,
+- an ordered list of **`outcomes`** — `{status, when}` pairs evaluated in
+  order, first true wins — that decide which status the finished run lands the
+  todo in. No outcome matching is an error: a run the definition cannot
+  classify must not silently keep the status it started under.
+
+The built-in lifecycle's steps, in the order `gavel todos run` considers them,
+are `triage` (auxiliary — never picked automatically, only run by name),
+`plan`, `verify`, and `run`. `review` and `ask` are **human-facing statuses**,
+not steps: a todo in `review` is waiting for `gavel todos plan
+approve|reject|revise`, and one in `ask` is waiting for an answer to the
+agent's blocking questions — nothing in the lifecycle is "next" for either
+until a person acts.
+
+`gavel todos run [--step <name>]` runs one lifecycle step for each selected
+todo. With no `--step`, the host picks the first non-auxiliary step whose
+`when` predicate holds (`Next` in `todos/lifecycle/engine.go`) and prints that
+step's name and its reason next to it before dispatching. Passing `--step
+<name>` runs that named step regardless of what the lifecycle would have
+picked — including an auxiliary step like `triage`, which is never chosen
+automatically. Pass `--dry-run` to print the rendered prompt, the resolved spec
+layer stack (lowest precedence first), and the resolved Captain spec, without
+dispatching anything.
+
+`gavel todos steps [todo]` lists the lifecycle itself when given no argument
+(every step, its prompt reference, whether it is auxiliary, and its `when`
+predicate), or — given a todo — reports where that todo stands: whether each
+step applies to it now and why, which one `gavel todos run` would pick next,
+and how that step's last run ended.
+
+`gavel todos check [ids...] [--concurrency N]` **is** the lifecycle's `verify`
+step, run standalone: the same fixture/CEL definition of done a `run` step's
+in-loop check performs, dispatched by name instead of by the lifecycle picking
+it. `--concurrency` bounds how many todos are checked at once (0 uses
+`.gavel.yaml` `todos.checkConcurrency`, else 4 — each check runs that todo's
+fixture, so unbounded fan-out thrashes the machine).
+
+`--model` selects the model (and, via its compact `mode:model:effort` form,
+the execution mechanism) together: `cli:opus:high`, `api:sonnet`. Empty uses
+the step's `.prompt` frontmatter default.
+
+The `run` step creates a new worktree by default
+(`setup.checkout.worktree.mode: new` in `todos/lifecycle/todos.yaml`) and
+commits its work with `commits[].stage: worktree` — the run commits from
+inside that worktree rather than the caller's working tree. `--dirty` is a
+request-layer shorthand for a worktree that carries the working tree's
+uncommitted and gitignored content across, equivalent to declaring:
+
+```yaml
+setup:
+  checkout:
+    worktree:
+      mode: new
+      uncommitted: clone
+      ignored: clone
+```
+
+It applies even when the project configures no checkout block of its own, so
+the flag can never be a silent no-op.
+
+#### Retired flags and config keys
+
+The old ad-hoc run-mode/driver model is gone. These flags and `.gavel.yaml`
+keys no longer exist:
+
+| Retired | Replacement |
+| --- | --- |
+| `todos run --driver` | the compact model form, e.g. `--model cli:opus:high` |
+| `todos run --mode` | `--step` (a run is one lifecycle step for one todo) |
+| `todos run --prompt` | `--step` |
+| `todos run --group-by` | `--step` (grouping is gone; runs dispatch per todo) |
+| `todos run --check` | `.gavel.yaml checks.enabled` (the checks are part of the definition of done, rendered from configuration; the loop budget is `todos.run.workflow.verify.maxIterations`) |
+| `todos.driver` | `ai.model` with the compact `mode:model:effort` form, e.g. `ai.model: "cli:opus:high"` |
+| `todos.prompts` | a lifecycle step under `todos.<step>` |
+| `todos.groupBy` | nothing — grouping was removed; runs dispatch per todo |
+| `todos.approvals` | `permissions.mode: default` on the step (the dashboard brokers each tool call) |
+| `checks.maxIterations` | `todos.run.workflow.verify.maxIterations` |
+
+A `.gavel.yaml` that still declares one of the removed keys fails to load with
+the exact message above (`<path>: <key> is no longer supported; use
+<replacement>`), rather than silently falling back to built-in defaults.
+
+#### Run the tests and linters when the agent is done (`checks:`)
+
+After an agent reports a TODO done, the configured `checks:` suite runs your real
+test and lint suite and, if anything fails, feeds a compact failure summary back
+into the *same* agent session so it can fix the issues — re-running the suite
+until it passes or a `todos.run.workflow.verify.maxIterations` cap is hit. This
+closes the loop: the agent doesn't just claim it's finished, it has to leave the
+suite green.
+
+```bash
+gavel todos run
+gavel todos run --model cmux:opus   # primary path: resumes the live agent REPL
+```
+
+The loop is **opt-in**: it is part of the todo's definition of done only when
+one of these enables it:
+
+- a project default in `.gavel.yaml` under `checks:` (`enabled: true`),
+- the TODO's own `checks:` front matter.
+
+Configure what runs in `.gavel.yaml`:
+
+```yaml
+checks:
+  enabled: true
+  test:                     # omit to skip tests
+    changed: true           # only packages affected by the agent's changes
+    timeout: 5m
+  lint:                     # omit to skip linting
+    changed: true           # only new violations vs the base ref
+```
+
+When enabled with neither `test` nor `lint` set, both run against changed files. The
+re-run budget is `todos.run.workflow.verify.maxIterations` (default 3).
+Feedback works best on the cmux runtime (`--model cmux:opus`, which resumes the live agent session); the
+inline agent resumes via its session id, and agents that can't resume fall back to
+reporting the failures without iterating. See the [`checks`](SCHEMA.md#checks)
+schema for every field.
 
 ## Pull Requests, Git History, And Repository Mapping
 
@@ -547,7 +701,21 @@ This is the fastest command for:
 - Checking whether a PR is green
 - Following checks until completion
 - Pulling failed log tails into the CLI
-- Syncing failed jobs or PR comments into TODO files
+- Getting the exact command that re-runs the PR's failures locally
+
+When the PR published gavel results, each failing shard renders its failing tests and lint violations plus a **Reproduce locally** block:
+
+```
+└─ ✖ gavel-test  passed: 41 failed: 2  total: 43
+   ├─ Test failures (2)
+   ├─ Lint summary: 3 of 47 violations
+   ├─ Reproduce locally
+   │  $ gavel test --pr 42
+   │  $ gavel lint --pr 42
+   └─ View full results: https://github.com/owner/repo/actions/runs/…
+```
+
+`--pr` downloads every gavel artifact on the PR, merges the shards into `.gavel/pr-<n>.json`, and narrows the run to those failures — the same narrowing `--failed` applies to a local run. It accepts `42`, `#42`, `owner/repo#42`, or a PR URL, and cannot be combined with `--failed` or `--baseline`.
 
 Common workflows:
 
@@ -557,7 +725,8 @@ gavel pr status 42
 gavel pr status https://github.com/owner/repo/pull/123
 gavel pr status --follow --interval 30s
 gavel pr status --logs --tail-logs 50
-gavel pr status --sync-todos
+gavel test --pr 42        # re-run just the tests that failed on PR #42
+gavel lint --pr 42        # re-run just the linters that flagged PR #42
 ```
 
 ### `gavel pr list`
@@ -583,21 +752,6 @@ gavel pr list --menu-bar
 ```
 
 If you want the UI-first version of PR operations, this is it. `--ui` is for an explicit browser dashboard; `--menu-bar` is for ambient status on macOS.
-
-### `gavel pr fix`
-
-`pr fix` is the bridge from PR breakage to interactive remediation. It fetches PR status, syncs TODOs from failures and comments, lets you choose what to work on, and then executes the selected TODOs.
-
-Use it when your workflow is "show me what's broken on this PR and let me start fixing it now."
-
-Common workflows:
-
-```bash
-gavel pr fix
-gavel pr fix 42
-gavel pr fix --group-by directory
-gavel pr fix --dry-run
-```
 
 ### `gavel git history`
 
@@ -628,7 +782,7 @@ Common workflows:
 
 ```bash
 gavel git analyze
-gavel git analyze --ai --model claude-sonnet-4-20250514
+gavel git analyze --ai --ai-model api:haiku
 gavel git analyze --scope backend --tech kubernetes
 gavel git analyze --summary --summary-window week
 gavel git analyze --include bots --exclude merges --verbose
@@ -724,7 +878,7 @@ gavel system uninstall
 
 Command intent:
 
-- `install`: create the user-level service and persist daemon config such as database mode and GitHub token
+- `install`: create the user-level service, launch it through the user's login and interactive shell so `.zshrc` PATH changes apply, and persist daemon config such as database mode and GitHub token
 - `start`: launch the detached daemon immediately
 - `status`: inspect service state, DB mode, live daemon health, and recent logs
 - `stop`: terminate the daemon process
@@ -757,7 +911,6 @@ gavel version
 
 ```bash
 gavel test --lint --changed
-gavel verify main..HEAD
 gavel commit
 ```
 
@@ -772,9 +925,10 @@ gavel ui serve gavel-results.json
 ### Triage and fix a broken PR
 
 ```bash
-gavel pr status --logs --sync-todos
+gavel pr status --logs
+gavel todos create "Fix the failing PR check" --body "Paste the relevant failure details"
 gavel todos list
-gavel pr fix
+gavel todos run
 ```
 
 ### Stand up a persistent PR dashboard
@@ -794,13 +948,13 @@ If you only remember a few entrypoints, use this map:
 | Run tests across the repo | `gavel test` |
 | Run linters across the repo | `gavel lint` |
 | Run declarative Markdown tests | `gavel fixtures` |
-| Review a diff with AI | `gavel verify` |
+| Re-run a TODO's definition of done | `gavel todos check` |
 | Generate a commit message | `gavel commit` |
 | Check PR status | `gavel pr status` |
 | Browse many PRs | `gavel pr list` |
 | Analyze commit history semantically | `gavel git analyze` |
 | Understand file/scope classification | `gavel repomap` |
-| Work through synced TODOs | `gavel todos` |
+| Work through native TODOs | `gavel todos` |
 | Replay a saved UI snapshot | `gavel ui serve` |
 | Run a background PR dashboard | `gavel system` |
 | Turn pushes into local CI | `gavel ssh` |

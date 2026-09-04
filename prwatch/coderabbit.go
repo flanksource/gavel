@@ -175,6 +175,7 @@ func findMatchingClose(html string, start int) int {
 }
 
 var nestedDetailsRegex = regexp.MustCompile(`(?s)<details>.*?</details>`)
+var leadingNonASCII = regexp.MustCompile(`^[^\x00-\x7F\s]+\s*`)
 
 func stripNestedDetails(body string) string {
 	return nestedDetailsRegex.ReplaceAllString(body, "")

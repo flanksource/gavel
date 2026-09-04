@@ -21,6 +21,7 @@ import (
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/baseline"
 	_ "github.com/flanksource/gavel/fixtures/types"
+	"github.com/flanksource/gavel/lint"
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/snapshots"
 	"github.com/flanksource/gavel/testrunner"
@@ -42,13 +43,7 @@ var (
 	hookTests   []parsers.Test
 )
 
-func runTests(opts testrunner.RunOptions) (any, error) {
-	opts.AutoStop = testDurationFlags.AutoStop
-	opts.IdleTimeout = testDurationFlags.IdleTimeout
-	opts.Timeout = testDurationFlags.Timeout
-	opts.LintTimeout = testDurationFlags.LintTimeout
-	opts.TestTimeout = testDurationFlags.TestTimeout
-
+func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
 	diagnostics := newRunDiagnosticsReporter(runDiagnosticsOptions{Output: logger.GetOutput()})
 	runCtx, cancelRun := newMonitoredStopContext(opts.Context, monitoredStopOptions{
 		Timeout:  opts.Timeout,
@@ -85,6 +80,14 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 		}
 		opts.Failed = resolved
 	}
+	if opts.PR != "" {
+		resolved, err := resolvePRFailed(opts.PR, opts.WorkDir, opts.Failed, opts.Baseline, prNarrowTests)
+		if err != nil {
+			return nil, err
+		}
+		opts.Failed = resolved
+		opts.PR = ""
+	}
 	runStarted := time.Now().UTC()
 	gitInfo := snapshotGitInfo(opts.WorkDir)
 
@@ -99,13 +102,6 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 	defer func() {
 		recorder.Stop(runSucceeded)
 	}()
-
-	// Dynamic default for --skip-hooks: when the user didn't pass the flag,
-	// skip hooks unless $CI is set. This keeps local `gavel test` snappy and
-	// auto-enables pre/post hooks in CI / SSH-push contexts.
-	if testCmd != nil && !testCmd.Flags().Changed("skip-hooks") {
-		opts.SkipHooks = os.Getenv("CI") == ""
-	}
 
 	// Load .gavel.yaml once at the top — previously the lint path loaded it
 	// lazily, but the push-hook support needs Pre/Post from the same config
@@ -127,7 +123,7 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 		}
 		if opts.Lint {
 			for _, workDir := range lintWorkDirs(opts.WorkDir, opts.StartingPaths) {
-				if err := displayLintDryRun(LintOptions{WorkDir: workDir, Timeout: "5m"}); err != nil {
+				if err := lint.DryRun(LintOptions{WorkDir: workDir, Timeout: "5m"}); err != nil {
 					return nil, err
 				}
 			}
@@ -246,7 +242,7 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 				lintTimeout = 5 * time.Minute
 			}
 			for _, dir := range lintWorkDirs(workDir, opts.StartingPaths) {
-				results, err := executeLinters(LintOptions{
+				results, err := lint.Execute(LintOptions{
 					WorkDir: dir,
 					Timeout: lintTimeout.String(),
 					Context: opts.Context,
@@ -317,12 +313,15 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 		// sections; otherwise just the summary.
 		clicky.StopCapturingOutput()
 		clicky.WaitForGlobalCompletion()
-		if tests, ok := result.([]parsers.Test); ok {
+		tests, _ := result.([]parsers.Test)
+		if tests != nil {
 			printTestRunResults(tests, opts, fullSummary, lintResults)
 		} else if isPrettyFormat() {
 			printTestRunSummary(fullSummary, lintResults)
 		}
-		return result, err
+		// Serialized formats get the partial tree plus the failure reason as
+		// a crash envelope, so `--format json=FILE` always produces a file.
+		return nil, testRunFailureValue(opts, tests, lintResults, runStarted, err)
 	}
 	if tests, ok := result.([]parsers.Test); ok {
 		if opts.Baseline != "" {
@@ -337,14 +336,14 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 			exitCode = 1
 		}
 		if uiServer != nil {
-			if testDurationFlags.Detach {
+			if detach {
 				snapshot := buildTestSnapshot(opts, tests, lintResults, runStarted, time.Now().UTC(), captureFinalDiagnostics(opts.Diagnostics, os.Getpid()))
 				if path, err := snapshots.Save(opts.WorkDir, &snapshot); err != nil {
 					logger.Warnf("persist snapshot: %v", err)
 				} else {
 					logger.V(1).Infof("wrote snapshot to %s", path)
 				}
-				if path, err := snapshots.SavePerRun(opts.WorkDir, &snapshot, runStarted); err != nil {
+				if path, err := snapshots.SavePerRun(opts.WorkDir, &snapshot, runStarted, ""); err != nil {
 					logger.Warnf("persist per-run snapshot: %v", err)
 				} else {
 					logger.V(1).Infof("wrote per-run snapshot to %s", path)
@@ -375,7 +374,7 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 			// flooded unless the user opts in.
 			printTestRunResults(tests, opts, fullSummary, lintResults)
 			snapshot := buildTestSnapshot(opts, tests, lintResults, runStarted, time.Now().UTC(), captureFinalDiagnostics(opts.Diagnostics, os.Getpid()))
-			if path, err := snapshots.SavePerRun(opts.WorkDir, &snapshot, runStarted); err != nil {
+			if path, err := snapshots.SavePerRun(opts.WorkDir, &snapshot, runStarted, ""); err != nil {
 				logger.Warnf("persist per-run snapshot: %v", err)
 			} else {
 				logger.V(1).Infof("wrote per-run snapshot to %s", path)
@@ -392,7 +391,7 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 		} else {
 			logger.V(1).Infof("wrote snapshot to %s", path)
 		}
-		if path, err := snapshots.SavePerRun(opts.WorkDir, &snapshot, runStarted); err != nil {
+		if path, err := snapshots.SavePerRun(opts.WorkDir, &snapshot, runStarted, ""); err != nil {
 			logger.Warnf("persist per-run snapshot: %v", err)
 		} else {
 			logger.V(1).Infof("wrote per-run snapshot to %s", path)
@@ -632,7 +631,7 @@ func formatTestRunSummary(summary parsers.TestSummary, lintResults []*linters.Li
 		b.WriteByte('\n')
 	}
 	if len(lintResults) > 0 {
-		b.WriteString(clicky.MustFormat(newLintSummaryView(lintResults, 0), clicky.FormatOptions{Pretty: true}))
+		b.WriteString(clicky.MustFormat(linters.NewSummaryView(lintResults, 0), clicky.FormatOptions{Pretty: true}))
 		b.WriteByte('\n')
 	}
 	return b.String()
@@ -734,7 +733,7 @@ func mergeHooksWithTests(batch []parsers.Test) []parsers.Test {
 func startTestUI(addr string) (*testui.Server, net.Listener) {
 	srv := testui.NewServer()
 	if addr == "" {
-		addr = "localhost"
+		addr = "0.0.0.0"
 	}
 	listener, err := net.Listen("tcp", net.JoinHostPort(addr, "0"))
 	if err != nil {
@@ -792,6 +791,7 @@ func prepareRerunOptions(base testrunner.RunOptions, req testui.RerunRequest, up
 	rerunOpts.Lint = false
 	rerunOpts.Updates = updates
 	rerunOpts.RunKind = "rerun"
+	rerunOpts.PassThroughArgs = nil
 	if req.WorkDir != "" {
 		rerunOpts.WorkDir = req.WorkDir
 	}
@@ -803,10 +803,11 @@ func prepareRerunOptions(base testrunner.RunOptions, req testui.RerunRequest, up
 	return rerunOpts
 }
 
-// testDurationFlags holds duration flags registered imperatively on `gavel
-// test` because clicky cannot bind time.Duration fields via struct tags.
-// runTests reads these back into the RunOptions it receives.
-var testDurationFlags struct {
+// testCmd is the cobra command for `gavel test`. Framework subcommands are
+// registered against it after this file's init function runs.
+var testCmd *cobra.Command
+
+type testCommandFlags struct {
 	AutoStop    time.Duration
 	IdleTimeout time.Duration
 	Timeout     time.Duration
@@ -815,39 +816,119 @@ var testDurationFlags struct {
 	Detach      bool
 }
 
-// testCmd is the cobra command for `gavel test`. Kept as a package var so
-// runTests can query `testCmd.Flags().Changed("skip-hooks")` to distinguish
-// an explicit --skip-hooks=... from the unset default.
-var testCmd *cobra.Command
+func finalizeTestCommandOptions(cmd *cobra.Command, opts testrunner.RunOptions, flags testCommandFlags) (testrunner.RunOptions, bool, error) {
+	if err := splitTestPassThroughArgs(cmd, &opts); err != nil {
+		return opts, false, err
+	}
+	opts.AutoStop = flags.AutoStop
+	opts.IdleTimeout = flags.IdleTimeout
+	opts.Timeout = flags.Timeout
+	opts.LintTimeout = flags.LintTimeout
+	opts.TestTimeout = flags.TestTimeout
+	if err := applyConfiguredTimeouts(cmd, &opts); err != nil {
+		return opts, false, err
+	}
+	if opts.Failed == failedAutoSentinel && opts.Baseline != "" {
+		opts.Failed = opts.Baseline
+	}
+	if !cmd.Flags().Changed("skip-hooks") {
+		opts.SkipHooks = os.Getenv("CI") == ""
+	}
+	return opts, flags.Detach, nil
+}
 
-func init() {
-	testCmd = clicky.AddNamedCommand("test", rootCmd, testrunner.RunOptions{}, runTests)
-	// Allow flags and positional package paths to interleave so callers (e.g. the
-	// flanksource/gavel composite action) can append flags after user-supplied
-	// paths. Use `--` to terminate flag parsing when forwarding flags to the
-	// underlying runner via the `gavel test ./pkg -- --focus X` idiom.
-	testCmd.Flags().SetInterspersed(true)
-	testCmd.Flags().BoolVar(&testDurationFlags.Detach, "detach", false,
+// applyConfiguredTimeouts lets `.gavel.yaml` set the run's deadlines, which the
+// SSH git-push backend depends on: it invokes `gavel test` with no timeout
+// flags, so config is the only channel that reaches it. A flag the caller
+// actually typed still wins — cmd.Flags().Changed separates that from the
+// default cobra always supplies.
+func applyConfiguredTimeouts(cmd *cobra.Command, opts *testrunner.RunOptions) error {
+	dir, err := getWorkingDir()
+	if err != nil {
+		return err
+	}
+	cfg, err := verify.LoadGavelConfig(dir)
+	if err != nil {
+		return fmt.Errorf("read test timeouts from .gavel.yaml: %w", err)
+	}
+	global, test, lint, err := cfg.Test.Timeouts()
+	if err != nil {
+		return err
+	}
+	for _, configured := range []struct {
+		flag  string
+		value time.Duration
+		into  *time.Duration
+	}{
+		{flag: "timeout", value: global, into: &opts.Timeout},
+		{flag: "test-timeout", value: test, into: &opts.TestTimeout},
+		{flag: "lint-timeout", value: lint, into: &opts.LintTimeout},
+	} {
+		if configured.value > 0 && !cmd.Flags().Changed(configured.flag) {
+			*configured.into = configured.value
+		}
+	}
+	return nil
+}
+
+func bindTestCommandFlags(cmd *cobra.Command, flags *testCommandFlags) {
+	cmd.Flags().SetInterspersed(true)
+	cmd.Flags().BoolVar(&flags.Detach, "detach", false,
 		"With --ui, fork a detached UI server and exit. The child serves until --auto-stop (default 30m) or --idle-timeout (default 5m) fires.")
-	testCmd.Flags().DurationVar(&testDurationFlags.AutoStop, "auto-stop", 0,
+	cmd.Flags().DurationVar(&flags.AutoStop, "auto-stop", 0,
 		"With --ui --detach, hard wall-clock deadline for the detached UI server (default 30m when --detach is set).")
-	testCmd.Flags().DurationVar(&testDurationFlags.IdleTimeout, "idle-timeout", 0,
+	cmd.Flags().DurationVar(&flags.IdleTimeout, "idle-timeout", 0,
 		"With --ui --detach, exit the detached UI server after this long with no HTTP requests (default 5m when --detach is set).")
-	testCmd.Flags().DurationVar(&testDurationFlags.Timeout, "timeout", 10*time.Minute,
+	cmd.Flags().DurationVar(&flags.Timeout, "timeout", 10*time.Minute,
 		"Global wall-clock deadline for the entire test+lint run. On timeout, diagnostics are captured and every subprocess is killed.")
-	testCmd.Flags().DurationVar(&testDurationFlags.LintTimeout, "lint-timeout", 5*time.Minute,
+	cmd.Flags().DurationVar(&flags.LintTimeout, "lint-timeout", 5*time.Minute,
 		"Per-linter subprocess deadline when --lint is set. Applies to each linter invocation.")
-	testCmd.Flags().DurationVar(&testDurationFlags.TestTimeout, "test-timeout", 5*time.Minute,
+	cmd.Flags().DurationVar(&flags.TestTimeout, "test-timeout", 5*time.Minute,
 		"Per-test-package subprocess deadline. Applies to each go test / ginkgo / vitest invocation.")
-	if f := testCmd.Flags().Lookup("failed"); f != nil {
-		f.NoOptDefVal = failedAutoSentinel
-		f.Usage = "Path to previous results JSON; re-run only failed tests. Pass without a value to use .gavel/last.json."
+	if failed := cmd.Flags().Lookup("failed"); failed != nil {
+		failed.NoOptDefVal = failedAutoSentinel
+		failed.Usage = "Path to previous results JSON; re-run only failed tests. Pass without a value to use --baseline when set, otherwise .gavel/last.json."
+	}
+	if pr := cmd.Flags().Lookup("pr"); pr != nil {
+		pr.Usage = "PR reference (12, #12, owner/repo#12, or a PR URL); re-run only the tests that failed in that PR's gavel CI artifacts."
 	}
 }
 
+// splitTestPassThroughArgs separates positional package paths from the raw
+// runner arguments supplied after --. Clicky binds every positional token to
+// StartingPaths, while pflag preserves the separator index for us here.
+func splitTestPassThroughArgs(cmd *cobra.Command, opts *testrunner.RunOptions) error {
+	dash := cmd.Flags().ArgsLenAtDash()
+	if dash < 0 {
+		return nil
+	}
+	if dash > len(opts.StartingPaths) {
+		return fmt.Errorf("invalid -- separator index %d for %d test arguments", dash, len(opts.StartingPaths))
+	}
+	opts.PassThroughArgs = append(opts.PassThroughArgs, opts.StartingPaths[dash:]...)
+	opts.StartingPaths = append([]string(nil), opts.StartingPaths[:dash]...)
+	return nil
+}
+
+func init() {
+	var flags testCommandFlags
+	testCmd = clicky.AddNamedCommand("test", rootCmd, testrunner.RunOptions{}, func(opts testrunner.RunOptions) (any, error) {
+		opts, detach, err := finalizeTestCommandOptions(testCmd, opts, flags)
+		if err != nil {
+			return nil, err
+		}
+		return runTests(opts, detach)
+	})
+	// Allow flags and positional package paths to interleave so callers (e.g. the
+	// flanksource/gavel composite action) can append flags after user-supplied
+	// paths. Use `--` to terminate flag parsing for framework-aware focus or
+	// single-framework raw runner arguments.
+	bindTestCommandFlags(testCmd, &flags)
+}
+
 // failedAutoSentinel is the value cobra assigns to --failed when the flag is
-// supplied with no argument (`gavel test --failed`). The runTests/runLint
-// callers swap it for the resolved .gavel/last.json path before the runner
-// sees it. Must not start with "@" — clicky's flag binding treats a leading
-// "@" as "load this path or URL", which would try to open the sentinel.
+// supplied with no argument (`gavel test --failed`). Test option finalization
+// prefers --baseline; runTests and runLint otherwise resolve .gavel/last.json
+// before the runner sees it. Must not start with "@" — clicky's flag binding
+// treats a leading "@" as a path or URL and would try to open the sentinel.
 const failedAutoSentinel = "auto"

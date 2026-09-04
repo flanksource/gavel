@@ -8,7 +8,7 @@ import (
 )
 
 // lintSubcommands enumerates every linter that gavel registers in
-// executeLinters. Each entry becomes `gavel lint <name>` with the Linters
+// lint.Execute. Each entry becomes `gavel lint <name>` with the Linters
 // filter pinned. Aliases (e.g. secrets → betterleaks) get their own
 // subcommand too so `gavel lint secrets` stays discoverable.
 var lintSubcommands = []struct {
@@ -20,6 +20,8 @@ var lintSubcommands = []struct {
 	{"golangci", "golangci-lint", "Alias for golangci-lint"},
 	{"ruff", "ruff", "Run only ruff (Python)"},
 	{"eslint", "eslint", "Run only eslint"},
+	{"oxlint", "oxlint", "Run only oxlint (JS/TS)"},
+	{"react-doctor", "react-doctor", "Run only react-doctor (React diagnostics)"},
 	{"pyright", "pyright", "Run only pyright (Python types)"},
 	{"tsc", "tsc", "Run only tsc (TypeScript compile check)"},
 	{"typescript", "tsc", "Alias for tsc"},

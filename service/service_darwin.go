@@ -68,9 +68,10 @@ func cleanupLegacyService() {
 }
 
 type plistData struct {
-	Label      string
-	BinaryPath string
-	LogFile    string
+	Label            string
+	ProgramArguments []string
+	WorkingDirectory string
+	LogFile          string
 }
 
 // launchdTemplate is kept minimal on purpose. KeepAlive w/ SuccessfulExit=false
@@ -84,15 +85,11 @@ const launchdTemplate = `<?xml version="1.0" encoding="UTF-8"?>
   <key>Label</key><string>{{.Label}}</string>
   <key>ProgramArguments</key>
   <array>
-    <string>{{.BinaryPath}}</string>
-    <string>pr</string>
-    <string>list</string>
-    <string>--all</string>
-    <string>--ui</string>
-    <string>--menu-bar</string>
-    <string>--port=0</string>
-    <string>--persist-port</string>
+  {{- range .ProgramArguments}}
+    <string>{{.}}</string>
+  {{- end}}
   </array>
+  <key>WorkingDirectory</key><string>{{.WorkingDirectory}}</string>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key>
   <dict>
@@ -105,13 +102,18 @@ const launchdTemplate = `<?xml version="1.0" encoding="UTF-8"?>
 </plist>
 `
 
-func renderPlist(bin, logPath string) (string, error) {
+func renderPlist(shell, bin, home, logPath string) (string, error) {
 	t, err := template.New("plist").Parse(launchdTemplate)
 	if err != nil {
 		return "", fmt.Errorf("parse plist template: %w", err)
 	}
 	var buf bytes.Buffer
-	if err := t.Execute(&buf, plistData{Label: launchdLabel, BinaryPath: bin, LogFile: logPath}); err != nil {
+	if err := t.Execute(&buf, plistData{
+		Label:            launchdLabel,
+		ProgramArguments: userShellInvocation(shell, bin),
+		WorkingDirectory: home,
+		LogFile:          logPath,
+	}); err != nil {
 		return "", fmt.Errorf("render plist template: %w", err)
 	}
 	return buf.String(), nil
@@ -127,11 +129,19 @@ func Install(opts InstallOptions) error {
 		}
 		bin = b
 	}
+	shell, err := userShellPath()
+	if err != nil {
+		return err
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("resolve home dir: %w", err)
+	}
 	logPath, err := LogFile()
 	if err != nil {
 		return err
 	}
-	plist, err := renderPlist(bin, logPath)
+	plist, err := renderPlist(shell, bin, home, logPath)
 	if err != nil {
 		return err
 	}

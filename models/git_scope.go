@@ -1,6 +1,8 @@
 package models
 
 import (
+	"slices"
+
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/clicky/api/icons"
@@ -182,6 +184,29 @@ const (
 	CommitTypeDependency CommitType = "dependency"
 	CommitTypeUnknown    CommitType = ""
 )
+
+// selectableCommitTypes is the ordered set of conventional-commit types gavel
+// offers when generating a message, most-common first. CommitTypeOther is the
+// parser's fallback bucket for unrecognised history — valid on input, but never
+// a choice worth offering — so it is deliberately absent.
+var selectableCommitTypes = []CommitType{
+	CommitTypeFeat, CommitTypeFix, CommitTypePerf, CommitTypeRefactor,
+	CommitTypeTest, CommitTypeDocs, CommitTypeStyle, CommitTypeBuild,
+	CommitTypeCi, CommitTypeChore, CommitTypeRevert, CommitTypeConfig,
+	CommitTypeSecurity, CommitTypeDependency,
+}
+
+// SelectableCommitTypes returns the default set a commit-message model may pick
+// from. `.gavel.yaml` commit.types narrows it per project.
+func SelectableCommitTypes() []CommitType {
+	return slices.Clone(selectableCommitTypes)
+}
+
+// IsValid reports whether ct is one of the recognised conventional-commit
+// types. CommitTypeUnknown (the empty string) is not valid.
+func (ct CommitType) IsValid() bool {
+	return ct == CommitTypeOther || slices.Contains(selectableCommitTypes, ct)
+}
 
 func (ct CommitType) Pretty() api.Text {
 	t := clicky.Text("")

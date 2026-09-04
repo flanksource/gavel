@@ -1,8 +1,55 @@
 package github
 
 import (
+	"archive/zip"
+	"bytes"
+	"errors"
 	"testing"
 )
+
+func TestExtractJSONFromZip(t *testing.T) {
+	t.Run("extracts nested JSON result", func(t *testing.T) {
+		data := artifactZip(t, map[string]string{
+			"report/index.html":         "<html></html>",
+			"report/gavel-results.json": `{"tests":[]}`,
+		})
+		got, err := extractJSONFromZip(data)
+		if err != nil {
+			t.Fatalf("extract JSON: %v", err)
+		}
+		if string(got) != `{"tests":[]}` {
+			t.Fatalf("content = %q", got)
+		}
+	})
+
+	t.Run("classifies artifact without JSON as no results", func(t *testing.T) {
+		_, err := extractJSONFromZip(artifactZip(t, map[string]string{
+			"report/index.html": "<html></html>",
+		}))
+		if !errors.Is(err, ErrArtifactResultsNotFound) {
+			t.Fatalf("error = %v, want ErrArtifactResultsNotFound", err)
+		}
+	})
+}
+
+func artifactZip(t *testing.T, files map[string]string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	w := zip.NewWriter(&buf)
+	for name, content := range files {
+		entry, err := w.Create(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := entry.Write([]byte(content)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
 
 func TestParseArtifactURL(t *testing.T) {
 	tests := []struct {
@@ -83,6 +130,22 @@ func TestFindGavelArtifacts(t *testing.T) {
 			want: []want{{StickyID: "gavel", ArtifactID: 555, ArtifactURL: "https://github.com/flanksource/gavel/actions/runs/999/artifacts/555", CommentID: 2}},
 		},
 		{
+			name: "repository-prefixed gavel header",
+			comments: []PRComment{
+				{
+					ID: 42,
+					Body: "<!-- sticky-comment:captain-gavel-test -->\n\n## Gavel summary\n\n" +
+						"[View full results](https://github.com/flanksource/captain/actions/runs/30736694536/artifacts/8829852604)",
+				},
+			},
+			want: []want{{
+				StickyID:    "captain-gavel-test",
+				ArtifactID:  8829852604,
+				ArtifactURL: "https://github.com/flanksource/captain/actions/runs/30736694536/artifacts/8829852604",
+				CommentID:   42,
+			}},
+		},
+		{
 			name: "matrix shards (PR 1926 shape)",
 			comments: []PRComment{
 				{
@@ -149,7 +212,11 @@ func TestFindGavelArtifacts(t *testing.T) {
 		{
 			name: "non-gavel sticky comments are ignored",
 			comments: []PRComment{
-				{ID: 1, Body: "<!-- sticky-comment:codecov -->\nCoverage report"},
+				{
+					ID: 1,
+					Body: "<!-- sticky-comment:codecov -->\nCoverage report\n" +
+						"[View full results](https://github.com/a/b/actions/runs/1/artifacts/23)",
+				},
 				{ID: 2, Body: "LGTM"},
 			},
 			want: nil,
@@ -169,8 +236,15 @@ func TestFindGavelArtifacts(t *testing.T) {
 			}
 			for i, g := range got {
 				w := tt.want[i]
+				_, wantRunID, _, err := ParseArtifactURL(w.ArtifactURL)
+				if err != nil {
+					t.Fatalf("[%d] parse expected artifact URL: %v", i, err)
+				}
 				if g.StickyID != w.StickyID {
 					t.Errorf("[%d] StickyID = %q, want %q", i, g.StickyID, w.StickyID)
+				}
+				if g.RunID != wantRunID {
+					t.Errorf("[%d] RunID = %d, want %d", i, g.RunID, wantRunID)
 				}
 				if g.ArtifactID != w.ArtifactID {
 					t.Errorf("[%d] ArtifactID = %d, want %d", i, g.ArtifactID, w.ArtifactID)

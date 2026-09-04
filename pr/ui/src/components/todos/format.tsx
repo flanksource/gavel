@@ -1,0 +1,616 @@
+import type { ComponentType } from 'react';
+import { Button, ListMenuItem } from '@flanksource/clicky-ui/components';
+import type { IconProps } from '@flanksource/clicky-ui/icons';
+import { UiAdd, UiBeaker, UiCancel, UiCheck, UiCheckFilled, UiChevronDown, UiChevronUp, UiCircleOutline, UiCircleXFilled, UiClock, UiComment, UiError, UiEye, UiFolder, UiGitGraph, UiHistory, UiLightbulb, UiListDashes, UiPass, UiPlay, UiQuestion, UiWarningTriangle } from '@flanksource/clicky-ui/icons';
+import type { SessionStats, TodoCounts, TodoDensity, TodoDiffStat, TodoItem, TodoLayout, TodoPriority, TodoStatus } from '../../types';
+import { TODO_PHASES } from '../../types';
+import { ageShort, timeAgo } from '../../utils';
+import type { FacetModes } from '../../utils';
+import { Spinner } from '../../icons/Spinner';
+import { ISSUE_ICONS, StatusAsk, StatusBlocked, StatusClosed, StatusInProgress, StatusOpen, StatusResolved, StatusReview, StatusTriage, StatusUnverified, StatusWontFix } from '../../icons/issues';
+import { DENSITY_OPTIONS } from './todoDensity';
+import { LAYOUT_OPTIONS } from './todoLayout';
+import { TodoPhaseStrip } from './TodoPhaseCell';
+import { isStatusShown } from './todoFilter';
+import { formatCost, formatDuration, useSessionStats } from './TodoSessionTimer';
+import { TodoTagRow } from './TodoTag';
+import { todoVisibleLabels, type TagIndex } from './tagResolve';
+
+export const inputClass = 'w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring';
+
+export const statuses: TodoStatus[] = ['draft', 'pending', 'in_progress', 'review', 'ask', 'failed', 'unverified', 'verified', 'completed', 'skipped'];
+export const priorities: TodoPriority[] = ['high', 'medium', 'low'];
+
+// The statuses a caller may write directly, mirroring the server's
+// types.AssignableStatuses(). The rest (in_progress/review/ask/failed/unverified)
+// are projected from the last run, so offering them would be a guaranteed 400.
+export const assignableStatuses: TodoStatus[] = ['draft', 'pending', 'verified', 'completed', 'skipped'];
+
+export const emptyCounts: TodoCounts = {
+  total: 0,
+  open: 0,
+  draft: 0,
+  pending: 0,
+  inProgress: 0,
+  review: 0,
+  ask: 0,
+  failed: 0,
+  unverified: 0,
+  verified: 0,
+  completed: 0,
+  skipped: 0,
+};
+
+// Listing/detail/mutation requests are scoped only by native workspace dir.
+export function todoQuery(dir: string) {
+  const params = new URLSearchParams();
+  if (dir.trim()) params.set('dir', dir.trim());
+  return params.toString();
+}
+
+export function addCounts(a: TodoCounts, b: TodoCounts): TodoCounts {
+  return {
+    total: a.total + b.total,
+    open: a.open + b.open,
+    draft: a.draft + b.draft,
+    pending: a.pending + b.pending,
+    inProgress: a.inProgress + b.inProgress,
+    // Server counts omit review/ask until Phase 6; default them to 0 so
+    // aggregation never produces NaN.
+    review: (a.review ?? 0) + (b.review ?? 0),
+    ask: (a.ask ?? 0) + (b.ask ?? 0),
+    failed: a.failed + b.failed,
+    unverified: (a.unverified ?? 0) + (b.unverified ?? 0),
+    verified: a.verified + b.verified,
+    completed: a.completed + b.completed,
+    skipped: a.skipped + b.skipped,
+  };
+}
+
+// countsFromItems tallies a TodoCounts from a list of todos, mirroring the
+// server's summarizeTodos so severity/age bucket headers read the same as the
+// per-workspace counts the list endpoint returns.
+export function countsFromItems(items: TodoItem[]): TodoCounts {
+  const counts: TodoCounts = { ...emptyCounts };
+  for (const item of items) {
+    counts.total++;
+    switch (item.status) {
+      case 'completed': counts.completed++; break;
+      case 'draft': counts.open++; counts.draft++; break;
+      case 'in_progress': counts.open++; counts.inProgress++; break;
+      case 'review': counts.open++; counts.review++; break;
+      case 'ask': counts.open++; counts.ask++; break;
+      case 'failed': counts.open++; counts.failed++; break;
+      case 'unverified': counts.open++; counts.unverified++; break;
+      case 'verified': counts.open++; counts.verified++; break;
+      case 'skipped': counts.open++; counts.skipped++; break;
+      default: counts.open++; counts.pending++; break;
+    }
+  }
+  return counts;
+}
+
+export function statusLabel(status: TodoStatus | string) {
+  return status.replace('_', ' ');
+}
+
+export function statusClass(status: TodoStatus | string) {
+  switch (status) {
+    case 'draft':
+      return 'text-muted-foreground bg-muted border-border';
+    case 'completed':
+      return 'text-green-600 bg-green-500/10 border-green-500/20';
+    case 'verified':
+      return 'text-emerald-700 dark:text-emerald-400 bg-emerald-500/10 border-emerald-500/20';
+    case 'unverified':
+      return 'text-orange-700 dark:text-orange-400 bg-orange-500/10 border-orange-500/20';
+    case 'in_progress':
+      return 'text-blue-600 bg-blue-500/10 border-blue-500/20';
+    case 'review':
+      return 'text-amber-700 dark:text-amber-400 bg-amber-500/10 border-amber-500/20';
+    case 'ask':
+      return 'text-purple-700 dark:text-purple-400 bg-purple-500/10 border-purple-500/20';
+    case 'failed':
+      return 'text-red-600 bg-red-500/10 border-red-500/20';
+    case 'skipped':
+      return 'text-yellow-700 dark:text-yellow-400 bg-yellow-500/10 border-yellow-500/20';
+    default:
+      return 'text-muted-foreground bg-muted border-border';
+  }
+}
+
+// statusIcon/priorityIcon/priorityBadgeClass are the glyph + badge vocabulary the
+// status and priority menus render, shared by the detail header and the bulk-edit
+// bar so a status reads identically wherever it is being set.
+export function statusIcon(status: TodoStatus | string): ComponentType<IconProps> {
+  switch (status) {
+    case 'draft':
+      return UiCircleOutline;
+    case 'in_progress':
+      return Spinner;
+    case 'review':
+      return UiEye;
+    case 'ask':
+      return UiQuestion;
+    case 'failed':
+      return UiCircleXFilled;
+    case 'verified':
+      return UiCheckFilled;
+    case 'completed':
+      return UiPass;
+    case 'skipped':
+      return UiCancel;
+    default:
+      return UiCircleOutline;
+  }
+}
+
+export function priorityIcon(priority: TodoPriority | string): ComponentType<IconProps> {
+  switch (priority) {
+    case 'high':
+      return UiChevronUp;
+    case 'low':
+      return UiChevronDown;
+    default:
+      return UiCircleOutline;
+  }
+}
+
+export function priorityBadgeClass(priority: TodoPriority | string): string {
+  switch (priority) {
+    case 'high':
+      return 'border-red-500/25 bg-red-500/10 text-red-600';
+    case 'low':
+      return 'border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400';
+    default:
+      return 'border-amber-500/25 bg-amber-500/10 text-amber-700 dark:text-amber-400';
+  }
+}
+
+export function priorityClass(priority: TodoPriority | string) {
+  switch (priority) {
+    case 'high':
+      return 'text-red-600';
+    case 'low':
+      return 'text-green-600';
+    default:
+      return 'text-yellow-600';
+  }
+}
+
+export function StatusIcon({ status }: { status: TodoStatus | string }) {
+  const label = statusLabel(status);
+  const Icon = (() => {
+    switch (status) {
+      case 'draft':
+        return StatusTriage;
+      case 'in_progress':
+        return StatusInProgress;
+      case 'review':
+        return StatusReview;
+      case 'ask':
+        return StatusAsk;
+      case 'failed':
+        return StatusBlocked;
+      case 'verified':
+        return StatusResolved;
+      case 'unverified':
+        return StatusUnverified;
+      case 'completed':
+        return StatusClosed;
+      case 'skipped':
+        return StatusWontFix;
+      default:
+        return StatusOpen;
+    }
+  })();
+  return (
+    <span
+      className="inline-flex h-5 w-5 shrink-0 items-center justify-center"
+      title={label}
+      aria-label={label}
+      role="img"
+    >
+      <Icon width={16} height={16} aria-hidden="true" />
+    </span>
+  );
+}
+
+function severityColor(priority: TodoPriority | string): string {
+  if (priority === 'high' || priority === 'medium' || priority === 'low') {
+    return ISSUE_ICONS[priority].color;
+  }
+  return ISSUE_ICONS.medium.color;
+}
+
+interface SessionBadgeView {
+  className: string;
+  icon: ComponentType<IconProps>;
+  label: string;
+}
+
+// sessionBadgeView is the badge's chrome + icon + label, derived from whether the
+// agent's run is still in progress (found && !inProgress) and its high-level
+// state. Once the run ends the badge stops reading "In progress": a clean turn
+// end settles to Done (green), anything else to Ended (neutral), so the row
+// mirrors the real session state instead of a perpetual blue spinner. Before the
+// log appears (found=false) the session is still starting, so it stays live.
+function sessionBadgeView(stats: SessionStats | null): SessionBadgeView {
+  if (stats?.state === 'ask') {
+    return { className: statusClass('skipped'), icon: UiComment, label: 'Awaiting input' };
+  }
+  if (stats && stats.found && !stats.inProgress) {
+    if (stats.state === 'completed') {
+      return { className: statusClass('completed'), icon: UiPass, label: 'Done' };
+    }
+    return { className: statusClass('draft'), icon: UiClock, label: 'Ended' };
+  }
+  switch (stats?.state) {
+    case 'thinking':
+      return { className: statusClass('in_progress'), icon: UiLightbulb, label: 'Thinking' };
+    case 'working':
+      return { className: statusClass('in_progress'), icon: Spinner, label: 'Working' };
+    case 'completed':
+      return { className: statusClass('completed'), icon: UiPass, label: 'Done' };
+    default:
+      return { className: statusClass('in_progress'), icon: Spinner, label: 'In progress' };
+  }
+}
+
+// isLiveRun reports whether a todo's run should still be producing session
+// activity. It reads both axes because they move independently: `status` is the
+// todo's lifecycle (a run can finish and leave the todo in draft/review) while
+// `executionState` is the run's own state.
+export function isLiveRun(todo: TodoItem): boolean {
+  return todo.status === 'in_progress' || todo.executionState === 'running';
+}
+
+// SessionBadge replaces the static status icon for a todo that has an agent
+// session: the session's state drives the chrome, icon, and elapsed time (plus
+// cost, once known), and a finished run settles to Done/Ended rather than
+// spinning forever. Until the session resolves there is nothing to report, so a
+// settled todo falls back to its own status icon and only a live run claims to be
+// in progress. Render it only for a row that has a session id.
+export function SessionBadge({ dir, sessionId, status, live }: {
+  dir: string;
+  sessionId: string;
+  status: TodoStatus | string;
+  live: boolean;
+}) {
+  const { stats, elapsedMs } = useSessionStats({ dir, sessionId, active: true, expectLive: live });
+  if (!stats?.found && !live) return <StatusIcon status={status} />;
+  const view = sessionBadgeView(stats);
+  const ViewIcon = view.icon;
+  const cost = stats ? formatCost(stats.costUsd) : '';
+  return (
+    <span
+      className={`inline-flex shrink-0 items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-medium tabular-nums ${view.className}`}
+      title={`${view.label} · agent session`}
+    >
+      <ViewIcon className="text-[11px]" />
+      {stats?.found ? formatDuration(elapsedMs) : view.label}
+      {cost && <span className="opacity-80">{cost}</span>}
+    </span>
+  );
+}
+
+function CountBadge({ icon: Icon, value, label, className = 'text-muted-foreground', status, statusFilter, onToggle }: {
+  icon: ComponentType<IconProps>;
+  value: number;
+  label: string;
+  className?: string;
+  status?: TodoStatus;
+  statusFilter?: FacetModes;
+  onToggle?: (status: TodoStatus) => void;
+}) {
+  if (!value) return null;
+  const content = (
+    <>
+      <Icon className="text-[12px]" />
+      {value}
+    </>
+  );
+  // A status-mapped badge in a wired counts bar doubles as a filter pill: clicking
+  // it excludes that status from the shared status facet (or clears the
+  // exclusion), dimming while it is filtered out. Aggregate badges (open/total)
+  // and unwired bars stay static.
+  if (status && onToggle) {
+    const active = isStatusShown(statusFilter ?? {}, status);
+    return (
+      <Button
+        variant="ghost"
+        type="button"
+        onClick={() => onToggle(status)}
+        aria-pressed={active}
+        title={active ? `Hide ${label.toLowerCase()}` : `Show ${label.toLowerCase()}`}
+        className={`-mx-0.5 inline-flex h-auto items-center gap-1 rounded px-0.5 text-xs tabular-nums transition-colors hover:bg-muted ${active ? className : 'text-muted-foreground opacity-40 hover:opacity-100'}`}
+      >
+        {content}
+      </Button>
+    );
+  }
+  return (
+    <span className={`inline-flex items-center gap-1 text-xs tabular-nums ${className}`} title={label}>
+      {content}
+    </span>
+  );
+}
+
+// TodoCountsBar renders a workspace/bucket header's status summary. When
+// `statusFilter` and `onToggle` are supplied, each status-mapped badge becomes a
+// filter pill over the shared status facet; without them the badges are static
+// counts (e.g. the aggregate bar in the action header).
+export function TodoCountsBar({ counts, statusFilter, onToggle }: {
+  counts: TodoCounts;
+  statusFilter?: FacetModes;
+  onToggle?: (status: TodoStatus) => void;
+}) {
+  return (
+    <div className="flex shrink-0 items-center gap-1.5 text-xs font-normal tabular-nums">
+      <CountBadge icon={UiCheck} value={counts.open} label="Open todos" className="text-blue-600" />
+      <CountBadge icon={UiClock} value={counts.draft} label="Draft" status="draft" statusFilter={statusFilter} onToggle={onToggle} />
+      <CountBadge icon={UiPlay} value={counts.inProgress} label="In progress" className="text-blue-600" status="in_progress" statusFilter={statusFilter} onToggle={onToggle} />
+      <CountBadge icon={UiEye} value={counts.review} label="Review" className="text-amber-600" status="review" statusFilter={statusFilter} onToggle={onToggle} />
+      <CountBadge icon={UiQuestion} value={counts.ask} label="Ask" className="text-purple-600" status="ask" statusFilter={statusFilter} onToggle={onToggle} />
+      <CountBadge icon={UiError} value={counts.failed} label="Failed" className="text-red-600" status="failed" statusFilter={statusFilter} onToggle={onToggle} />
+      <CountBadge icon={UiWarningTriangle} value={counts.unverified} label="Unverified" className="text-orange-600" status="unverified" statusFilter={statusFilter} onToggle={onToggle} />
+      <CountBadge icon={UiCheckFilled} value={counts.verified} label="Verified" className="text-emerald-600" status="verified" statusFilter={statusFilter} onToggle={onToggle} />
+      <CountBadge icon={UiPass} value={counts.completed} label="Completed" className="text-green-600" status="completed" statusFilter={statusFilter} onToggle={onToggle} />
+      <span className="text-muted-foreground tabular-nums" title="Total todos">{counts.total}</span>
+    </div>
+  );
+}
+
+// TodoDiffBadge shows the aggregated change footprint of a todo's linked commits
+// as `+adds`/`-dels`, with the commit/file totals in the tooltip. Rendered only
+// when the todo has commits, so todos with no work attached stay uncluttered.
+export function TodoDiffBadge({ diff }: { diff: TodoDiffStat }) {
+  return (
+    <span
+      className="inline-flex shrink-0 items-center gap-1 tabular-nums"
+      title={`${diff.commits} commit${diff.commits === 1 ? '' : 's'}, ${diff.files} file${diff.files === 1 ? '' : 's'} changed`}
+    >
+      <UiGitGraph className="text-[11px]" />
+      {diff.adds > 0 && <span className="text-green-600">+{diff.adds}</span>}
+      {diff.dels > 0 && <span className="text-red-600">-{diff.dels}</span>}
+      {diff.adds === 0 && diff.dels === 0 && <span>{diff.commits}</span>}
+    </span>
+  );
+}
+
+// TodoPlanIndicator/TodoVerificationIndicator flag, from the row, that a todo
+// has a plan worth opening or a verification fixture defined, without opening
+// the detail pane's Plan/Verification tabs. Icons match those tabs' own icons
+// (UiListDashes for Plan, UiBeaker for the Verification tab's fixture editor).
+export function TodoPlanIndicator() {
+  return (
+    <span className="inline-flex shrink-0 items-center" title="Plan available">
+      <UiListDashes className="text-[11px]" />
+    </span>
+  );
+}
+
+export function TodoVerificationIndicator() {
+  return (
+    <span className="inline-flex shrink-0 items-center" title="Verification fixture defined">
+      <UiBeaker className="text-[11px]" />
+    </span>
+  );
+}
+
+// TodoAges shows the todo's created age and, when it differs, its last-activity
+// age. Absolute times sit in the tooltips. A todo with neither timestamp (some
+// incomplete records) renders nothing. `short` collapses both ages into a single
+// compact 'X' token (no "ago") for the single-line compact density.
+export function TodoAges({ todo, short = false }: { todo: TodoItem; short?: boolean }) {
+  if (short) {
+    const anchor = todo.created ?? todo.lastRun;
+    if (!anchor) return null;
+    return (
+      <span
+        className="inline-flex shrink-0 items-center gap-1 tabular-nums"
+        title={todo.created ? `Created ${new Date(todo.created).toLocaleString()}` : `Last activity ${new Date(todo.lastRun!).toLocaleString()}`}
+      >
+        <UiClock className="text-[11px]" />
+        {ageShort(anchor)}
+      </span>
+    );
+  }
+  const showLast = !!todo.lastRun && todo.lastRun !== todo.created;
+  return (
+    <>
+      {todo.created && (
+        <span className="inline-flex shrink-0 items-center gap-1" title={`Created ${new Date(todo.created).toLocaleString()}`}>
+          <UiAdd className="text-[11px]" />
+          {timeAgo(todo.created)}
+        </span>
+      )}
+      {showLast && (
+        <span className="inline-flex shrink-0 items-center gap-1" title={`Last activity ${new Date(todo.lastRun!).toLocaleString()}`}>
+          <UiHistory className="text-[11px]" />
+          {timeAgo(todo.lastRun!)}
+        </span>
+      )}
+    </>
+  );
+}
+
+// TodoRow renders one todo in a workspace list. When `selectable` is set it grows
+// a leading checkbox for multi-select (run several todos in one agent session);
+// the checkbox is a sibling of the open-detail button so toggling selection never
+// opens the todo. `density` controls the layout: 'comfortable' (default) stacks
+// secondary metadata on a second line; 'compact' keeps the row to one title line.
+// Severity is intentionally only the ListMenu left border; identifiers and
+// severity labels belong in the detail pane. Tags are the deliberate exception:
+// they are the one cross-cutting dimension a row cannot otherwise surface
+// (workspace, age, plan/verify flags and diff are all already here), so a
+// comfortable row carries value-only chips and a compact row carries glyphs
+// alone, keeping its single-line contract.
+//
+// `dir` locates the row's workspace so a todo with an agent session can swap its
+// status icon for that run's state + elapsed time; they are omitted by callers
+// (e.g. the menubar) that don't surface it.
+export function TodoRow({ todo, active, onClick, density = 'comfortable', selectable = false, selected = false, onToggleSelect, workspace, dir, tags }: {
+  todo: TodoItem;
+  active: boolean;
+  onClick: () => void;
+  density?: TodoDensity;
+  selectable?: boolean;
+  selected?: boolean;
+  onToggleSelect?: () => void;
+  workspace?: string;
+  dir?: string;
+  // Resolved from the row's own workspace by the list. Optional so a caller that
+  // has not wired the taxonomy renders exactly as before.
+  tags?: TagIndex;
+}) {
+  const compact = density === 'compact';
+  const tagLabels = tags ? todoVisibleLabels(todo) : [];
+  // Any todo carrying a session shows that run's duration and cost, whatever
+  // lifecycle status it settled into. Only a live run keeps polling (see
+  // sessionStatsQueryOptions), so a long list of finished todos reads its totals
+  // once instead of firing a request storm.
+  const sessionId = dir ? todo.sessionId : undefined;
+  return (
+    <ListMenuItem
+      active={active}
+      selected={selected}
+      className="flex items-stretch"
+      style={{ borderLeftColor: severityColor(todo.priority) }}
+    >
+      {selectable && (
+        <label className="flex shrink-0 cursor-pointer items-center pl-3" title="Select for batch run">
+          <input
+            type="checkbox"
+            checked={selected}
+            onChange={onToggleSelect}
+            aria-label={`Select ${todo.title}`}
+            className="h-3.5 w-3.5 cursor-pointer accent-primary"
+          />
+        </label>
+      )}
+      {/* WORKAROUND(clicky-button-fixed-height): clicky <Button>'s base h-control-h
+          pins this 2-line row to one control height and clips it; clicky cn()'s plain
+          tailwind-merge drops our h-auto override. Use a bare <button> (auto height)
+          until the clicky-ui cn() fix ships.
+          Correct fix: revert to <Button variant="ghost" className="h-auto …flex-col…">
+            once @flanksource/clicky-ui with the cn() extendTailwindMerge fix is
+            published & the dep is bumped here.
+          Ref: discussed with user 2026-06-28 */}
+      <button
+        type="button"
+        onClick={onClick}
+        className={`flex min-w-0 flex-1 flex-col items-stretch justify-start overflow-hidden px-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring ${compact ? 'py-1' : 'py-2'}`}
+      >
+        <div className="flex min-w-0 max-w-full items-center gap-2 overflow-hidden">
+          {sessionId ? (
+            <SessionBadge dir={dir!} sessionId={sessionId} status={todo.status} live={isLiveRun(todo)} />
+          ) : (
+            <StatusIcon status={todo.status} />
+          )}
+          <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">{todo.title}</span>
+          {compact && (
+            <span className="flex min-w-0 max-w-[55%] items-center gap-2 overflow-hidden text-xs text-muted-foreground">
+              <TodoAges todo={todo} short />
+              {workspace && <span className="min-w-0 max-w-[8rem] truncate" title={workspace}>{workspace}</span>}
+              <TodoPhaseStrip todo={todo} phases={TODO_PHASES} />
+              {todo.hasPlan && !todo.phases?.plan && <TodoPlanIndicator />}
+              {todo.hasVerification && !todo.phases?.verify && <TodoVerificationIndicator />}
+              {todo.diff && <TodoDiffBadge diff={todo.diff} />}
+              {tags && tagLabels.length > 0 && (
+                <TodoTagRow labels={tagLabels} index={tags} max={3} glyphOnly />
+              )}
+            </span>
+          )}
+        </div>
+        {!compact && (
+          <div className="mt-1 flex min-w-0 max-w-full flex-wrap items-center gap-x-2 gap-y-1 overflow-hidden text-xs text-muted-foreground">
+            {workspace && (
+              <span className="inline-flex min-w-0 max-w-[10rem] items-center gap-1" title={workspace}>
+                <UiFolder className="text-[11px]" />
+                <span className="truncate">{workspace}</span>
+              </span>
+            )}
+            <TodoAges todo={todo} />
+            <TodoPhaseStrip todo={todo} phases={TODO_PHASES} />
+            {todo.hasPlan && !todo.phases?.plan && <TodoPlanIndicator />}
+            {todo.hasVerification && !todo.phases?.verify && <TodoVerificationIndicator />}
+            {todo.diff && <TodoDiffBadge diff={todo.diff} />}
+            {tags && tagLabels.length > 0 && (
+              <TodoTagRow labels={tagLabels} index={tags} max={3} size="xxs" showKey={false} />
+            )}
+          </div>
+        )}
+      </button>
+    </ListMenuItem>
+  );
+}
+
+// TodoDensityPicker is the segmented toggle that switches the todo lists between
+// comfortable (two-line) and compact (single-line) rows. It lives in the Todos
+// toolbar and drives the shared density preference.
+export function TodoDensityPicker({ density, onChange }: {
+  density: TodoDensity;
+  onChange: (density: TodoDensity) => void;
+}) {
+  return (
+    <div className="inline-flex items-center gap-0.5 rounded-md border border-border p-0.5" role="group" aria-label="Row density">
+      {DENSITY_OPTIONS.map(opt => {
+        const active = density === opt.value;
+        const OptIcon = opt.icon;
+        return (
+          <Button
+            key={opt.value}
+            variant="ghost"
+            size="icon"
+            type="button"
+            onClick={() => onChange(opt.value)}
+            aria-pressed={active}
+            title={`${opt.label} rows`}
+            aria-label={`${opt.label} rows`}
+            className={`h-6 w-7 rounded transition-colors ${
+              active ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+            }`}
+          >
+            <OptIcon className="text-sm" />
+          </Button>
+        );
+      })}
+    </div>
+  );
+}
+
+// TodoLayoutPicker is the segmented toggle that switches the Todos tab between
+// the split (master-detail) layout and the full-width table. Same shape and
+// same home as TodoDensityPicker — both are display preferences rather than
+// list filters, so they sit together in the navbar rather than in the toolbar.
+export function TodoLayoutPicker({ layout, onChange }: {
+  layout: TodoLayout;
+  onChange: (layout: TodoLayout) => void;
+}) {
+  return (
+    <div className="inline-flex items-center gap-0.5 rounded-md border border-border p-0.5" role="group" aria-label="Layout">
+      {LAYOUT_OPTIONS.map(opt => {
+        const active = layout === opt.value;
+        const OptIcon = opt.icon;
+        return (
+          <Button
+            key={opt.value}
+            variant="ghost"
+            size="icon"
+            type="button"
+            onClick={() => onChange(opt.value)}
+            aria-pressed={active}
+            title={`${opt.label} layout`}
+            aria-label={`${opt.label} layout`}
+            className={`h-6 w-7 rounded transition-colors ${
+              active ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+            }`}
+          >
+            <OptIcon className="text-sm" />
+          </Button>
+        );
+      })}
+    </div>
+  );
+}

@@ -11,13 +11,23 @@ import (
 	"github.com/flanksource/clicky/task"
 )
 
-// relToWorkDir makes absolute file paths relative to workDir. Pure-local
+// relToWorkDir makes reported file paths relative to workDir. Pure-local
 // duplicate of the helper in runners — parsers own path normalization now.
+//
+// Two path shapes arrive here. Without -trimpath ginkgo reports an absolute
+// path, made relative against workDir. With -trimpath it reports an import path
+// (github.com/org/repo/pkg/foo_test.go), which is neither absolute nor
+// ..-prefixed, so it is stripped of the module prefix instead.
 func (p *GinkgoJSON) relToWorkDir(filePath string) string {
 	if filePath == "" || p.workDir == "" {
 		return filePath
 	}
 	if !filepath.IsAbs(filePath) && !strings.HasPrefix(filePath, "..") {
+		if p.modulePath != "" {
+			if rel, ok := strings.CutPrefix(filePath, p.modulePath+"/"); ok {
+				return rel
+			}
+		}
 		return filePath
 	}
 	if rel, err := filepath.Rel(p.workDir, filePath); err == nil {
@@ -28,12 +38,17 @@ func (p *GinkgoJSON) relToWorkDir(filePath string) string {
 
 // GinkgoJSON parses Ginkgo --json-report output format.
 type GinkgoJSON struct {
-	workDir string // used to make File paths relative to the project root
+	workDir    string // used to make File paths relative to the project root
+	modulePath string // go.mod module path, stripped from -trimpath locations
 }
 
 // NewGinkgoJSON creates a new Ginkgo JSON parser.
 func NewGinkgoJSON(workDir string) *GinkgoJSON {
-	return &GinkgoJSON{workDir: workDir}
+	p := &GinkgoJSON{workDir: workDir}
+	if workDir != "" {
+		p.modulePath, _ = GoModuleName(workDir)
+	}
+	return p
 }
 
 // Name returns the parser name.

@@ -1,9 +1,11 @@
 package testrunner
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -390,7 +392,6 @@ func TestPass(t *testing.T) {
 
 func TestRunnerRun(t *testing.T) {
 	tmpDir := t.TempDir()
-	todosDir := filepath.Join(tmpDir, ".todos")
 
 	// Create a simple test file
 	testFile := filepath.Join(tmpDir, "simple_test.go")
@@ -407,9 +408,7 @@ func TestPass(t *testing.T) {
 	}
 
 	opts := RunOptions{
-		TodosDir:  todosDir,
-		WorkDir:   tmpDir,
-		SyncTodos: false,
+		WorkDir: tmpDir,
 	}
 
 	results, err := Run(opts)
@@ -617,19 +616,44 @@ func TestRunSingleRootPreservesPassingStdout(t *testing.T) {
 func TestRunnerNoTests(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	// A directory with no detectable test frameworks is a successful no-op,
-	// not an error: a multi-root run where one root has no tests must not fail
-	// the whole run (see refactor 6686a89). Run returns an empty test tree.
 	result, err := Run(RunOptions{WorkDir: tmpDir})
+	if !errors.Is(err, ErrNoTestsExecuted) {
+		t.Fatalf("expected no-tests error, got %v", err)
+	}
+	tests, ok := result.([]parsers.Test)
+	if !ok || len(tests) != 0 {
+		t.Fatalf("expected empty test results with the error, got %T %+v", result, result)
+	}
+}
+
+func TestRunnerDryRunAllowsNoTests(t *testing.T) {
+	if _, err := Run(RunOptions{WorkDir: t.TempDir(), DryRun: true}); err != nil {
+		t.Fatalf("dry-run should not require executed tests, got %v", err)
+	}
+}
+
+func TestRunMultiRootAllowsAnEmptyRootWhenAnotherRootExecutesTests(t *testing.T) {
+	parent := t.TempDir()
+	emptyRepo := filepath.Join(parent, "empty")
+	testedRepo := filepath.Join(parent, "tested")
+	if err := os.MkdirAll(filepath.Join(emptyRepo, ".git"), 0o755); err != nil {
+		t.Fatalf("create empty repo: %v", err)
+	}
+	writeGoTestPackage(t, testedRepo, "pkg", "example.com/tested")
+
+	result, err := Run(RunOptions{
+		WorkDir:       parent,
+		StartingPaths: []string{emptyRepo, filepath.Join(testedRepo, "pkg")},
+	})
 	if err != nil {
-		t.Fatalf("no-tests dir should not error, got %v", err)
+		t.Fatalf("Run returned error: %v", err)
 	}
 	tests, ok := result.([]parsers.Test)
 	if !ok {
-		t.Fatalf("expected []parsers.Test, got %T", result)
+		t.Fatalf("Run returned %T, want []parsers.Test", result)
 	}
-	if len(tests) != 0 {
-		t.Errorf("expected no tests, got %d", len(tests))
+	if summary := parsers.Tests(tests).Sum(); summary.Total == 0 || summary.Passed == 0 {
+		t.Fatalf("expected executed tests from non-empty root, got %+v", summary)
 	}
 }
 
@@ -650,7 +674,10 @@ func TestDiscoverFixtures(t *testing.T) {
 	mustWrite("fixtures/old.md", "# old style, should be ignored")
 	mustWrite("readme.md", "# readme")
 
-	found := discoverFixtures(tmpDir, nil, []string{"**/*.fixture.md"})
+	found, err := discoverFixtures(tmpDir, nil, []string{"**/*.fixture.md"})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	foundMap := make(map[string]bool)
 	for _, f := range found {
@@ -676,7 +703,11 @@ func TestDiscoverFixturesEmptyGlobs(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(tmpDir, "x.fixture.md"), []byte("# x"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if got := discoverFixtures(tmpDir, nil, nil); len(got) != 0 {
+	got, err := discoverFixtures(tmpDir, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
 		t.Errorf("expected no discovery with empty globs, got %v", got)
 	}
 }
@@ -702,7 +733,12 @@ func TestDiscoverFixturesWithStartingPaths(t *testing.T) {
 	mustWrite("other/other.fixture.md", "# other")
 
 	globs := []string{"**/*.fixture.md"}
-	bases := func(paths []string) map[string]bool {
+	bases := func(t *testing.T, startingPaths []string) map[string]bool {
+		t.Helper()
+		paths, err := discoverFixtures(tmpDir, startingPaths, globs)
+		if err != nil {
+			t.Fatal(err)
+		}
 		m := make(map[string]bool)
 		for _, p := range paths {
 			m[filepath.Base(p)] = true
@@ -711,7 +747,7 @@ func TestDiscoverFixturesWithStartingPaths(t *testing.T) {
 	}
 
 	t.Run("subdir path excludes siblings", func(t *testing.T) {
-		got := bases(discoverFixtures(tmpDir, []string{"sub"}, globs))
+		got := bases(t, []string{"sub"})
 		if !got["sub.fixture.md"] {
 			t.Error("expected sub/sub.fixture.md to be discovered")
 		}
@@ -724,25 +760,106 @@ func TestDiscoverFixturesWithStartingPaths(t *testing.T) {
 	})
 
 	t.Run("absolute starting path", func(t *testing.T) {
-		got := bases(discoverFixtures(tmpDir, []string{filepath.Join(tmpDir, "sub")}, globs))
+		got := bases(t, []string{filepath.Join(tmpDir, "sub")})
 		if !got["sub.fixture.md"] || got["other.fixture.md"] {
 			t.Errorf("absolute path filter wrong: %v", got)
 		}
 	})
 
 	t.Run("multiple starting paths union", func(t *testing.T) {
-		got := bases(discoverFixtures(tmpDir, []string{"sub", "other"}, globs))
+		got := bases(t, []string{"sub", "other"})
 		if !got["sub.fixture.md"] || !got["other.fixture.md"] {
 			t.Errorf("expected union of sub and other fixtures, got %v", got)
 		}
 	})
 
 	t.Run("empty starting paths falls back to workdir", func(t *testing.T) {
-		got := bases(discoverFixtures(tmpDir, nil, globs))
+		got := bases(t, nil)
 		if !got["root.fixture.md"] {
 			t.Error("expected root.fixture.md under no-arg discovery")
 		}
 	})
+}
+
+func TestDiscoverFixturesResolvesGlobsFromWorkDirBeforeFilteringStartingPaths(t *testing.T) {
+	tmpDir := t.TempDir()
+	fixture := filepath.Join(tmpDir, "pkg", "formula", "rates-fixture.md")
+	if err := os.MkdirAll(filepath.Dir(fixture), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(fixture, []byte("# rates"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	found, err := discoverFixtures(tmpDir, []string{"pkg/formula"}, []string{"./pkg/formula/**/*.md"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(found, []string{fixture}) {
+		t.Errorf("discoverFixtures = %v, want %v", found, []string{fixture})
+	}
+}
+
+// Scratch agent worktrees under .runtime/ hold a full copy of the repo, so a
+// blind glob discovers — and the runner then executes — every fixture twice.
+func TestDiscoverFixturesSkipsNestedCheckoutsAndIgnoredDirs(t *testing.T) {
+	tmpDir := t.TempDir()
+	mustWrite := func(rel, body string) {
+		full := filepath.Join(tmpDir, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(tmpDir, ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(".gitignore", "node_modules/\n")
+	mustWrite("examples/a.fixture.md", "# a")
+	mustWrite("node_modules/pkg/a.fixture.md", "# vendored")
+	mustWrite(".runtime/worktrees/copy/examples/a.fixture.md", "# worktree copy")
+	// A linked worktree records .git as a file, not a directory.
+	mustWrite(".runtime/worktrees/copy/.git", "gitdir: /elsewhere/.git/worktrees/copy\n")
+
+	found, err := discoverFixtures(tmpDir, nil, []string{"**/*.fixture.md"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{filepath.Join(tmpDir, "examples", "a.fixture.md")}
+	if !reflect.DeepEqual(found, want) {
+		t.Errorf("discoverFixtures = %v, want %v", found, want)
+	}
+}
+
+// Hand-written .gavel.yaml globs use "./pkg/x/*.md" as often as "pkg/x/*.md".
+func TestDiscoverFixturesNormalizesRelativeGlobs(t *testing.T) {
+	tmpDir := t.TempDir()
+	full := filepath.Join(tmpDir, "pkg", "formula", "rates.md")
+	if err := os.MkdirAll(filepath.Dir(full), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(full, []byte("# rates"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, glob := range []string{"pkg/formula/**/*.md", "./pkg/formula/**/*.md"} {
+		found, err := discoverFixtures(tmpDir, nil, []string{glob})
+		if err != nil {
+			t.Fatalf("%s: %v", glob, err)
+		}
+		if !reflect.DeepEqual(found, []string{full}) {
+			t.Errorf("%s: discoverFixtures = %v, want %v", glob, found, []string{full})
+		}
+	}
+}
+
+// A silently-skipped bad glob turns a .gavel.yaml typo into "no tests found".
+func TestDiscoverFixturesFailsOnInvalidGlob(t *testing.T) {
+	if _, err := discoverFixtures(t.TempDir(), nil, []string{"pkg/[unclosed"}); err == nil {
+		t.Error("expected an error for an unparseable glob")
+	}
 }
 
 func TestResolveFixtureGlobs(t *testing.T) {

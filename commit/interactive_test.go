@@ -1,21 +1,23 @@
 package commit
 
 import (
-	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"sync/atomic"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	clickytask "github.com/flanksource/clicky/task"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	clickyai "github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/status"
 	"github.com/flanksource/repomap"
 )
@@ -28,6 +30,26 @@ func stripANSI(s string) string {
 
 func timeMinus(d time.Duration) time.Time {
 	return time.Now().Add(-d)
+}
+
+type candidateSummaryAgent struct {
+	closed     atomic.Bool
+	closeCalls atomic.Int32
+}
+
+func (a *candidateSummaryAgent) ExecutePrompt(context.Context, clickyai.PromptRequest) (*clickyai.PromptResponse, error) {
+	return &clickyai.PromptResponse{StructuredData: json.RawMessage(`{"summary":"describe streamed chooser change"}`)}, nil
+}
+
+func (a *candidateSummaryAgent) ExecuteBatch(context.Context, []clickyai.PromptRequest) (map[string]*clickyai.PromptResponse, error) {
+	return nil, errors.New("unexpected batch execution")
+}
+
+func (a *candidateSummaryAgent) GetCosts() clickyai.Costs { return nil }
+func (a *candidateSummaryAgent) Close() error {
+	a.closed.Store(true)
+	a.closeCalls.Add(1)
+	return nil
 }
 
 // --- Validation -----------------------------------------------------------
@@ -64,6 +86,47 @@ var _ = Describe("validateInteractiveOptions", func() {
 
 		err := validateInteractiveOptions(Options{Interactive: true})
 		Expect(err).ToNot(HaveOccurred())
+	})
+})
+
+var _ = Describe("startCandidateSummaries", func() {
+	It("streams summaries and restores renderer state when stopped", func() {
+		workDir := initCommitRepoForGinkgo()
+		defer os.RemoveAll(workDir)
+		Expect(os.WriteFile(filepath.Join(workDir, "new.go"), []byte("package new\n"), 0o644)).To(Succeed())
+
+		agent := &candidateSummaryAgent{}
+		previousNewAgent := newAgentFunc
+		newAgentFunc = func(clickyai.AgentConfig) (clickyai.Agent, error) { return agent, nil }
+		defer func() { newAgentFunc = previousNewAgent }()
+
+		previousNoRender := clickytask.IsNoRender()
+		defer clickytask.SetNoRender(previousNoRender)
+
+		session, err := startCandidateSummaries(context.Background(), Options{WorkDir: workDir}, []status.FileStatus{{
+			Path:  "new.go",
+			State: status.StateUntracked,
+		}})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(session.Files).To(HaveLen(1))
+		Expect(session.Files[0].AIStatus).To(Equal(status.AISummaryStatusPending))
+		Expect(clickytask.IsNoRender()).To(BeTrue())
+
+		var updates []status.AISummaryUpdate
+		for update := range session.Updates {
+			updates = append(updates, update)
+		}
+		session.Stop()
+		session.Stop()
+
+		Expect(updates).To(ContainElement(status.AISummaryUpdate{
+			Index:   0,
+			Status:  status.AISummaryStatusDone,
+			Summary: "describe streamed chooser change",
+		}))
+		Expect(agent.closed.Load()).To(BeTrue())
+		Expect(agent.closeCalls.Load()).To(Equal(int32(1)))
+		Expect(clickytask.IsNoRender()).To(Equal(previousNoRender))
 	})
 })
 
@@ -297,6 +360,58 @@ var _ = Describe("treeModel View rendering", func() {
 		Expect(plain).To(ContainSubstring("space=toggle"))
 	})
 
+	It("streams AI summary states into the matching file row", func() {
+		prepared := &status.Result{Files: []status.FileStatus{
+			{Path: "cmd/gavel/main.go", State: status.StateUnstaged},
+			{Path: "ui/App.tsx", State: status.StateUntracked},
+		}}
+		prepared.PrepareAISummaries()
+		updates := make(chan status.AISummaryUpdate, 2)
+		m := newTreeModel(prepared.Files)
+		m.summaryUpdates = updates
+		nodeAtPath(m, "cmd/gavel/main.go").Selected = true
+
+		Expect(stripANSI(m.View())).To(ContainSubstring("⏳ ai"))
+		updates <- status.AISummaryUpdate{Index: 0, Status: status.AISummaryStatusRunning}
+		model, next := m.Update(m.Init()())
+		m = model.(treeModel)
+		Expect(stripANSI(m.View())).To(ContainSubstring("⟳ ai"))
+
+		updates <- status.AISummaryUpdate{Index: 0, Status: status.AISummaryStatusDone, Summary: "stream chooser summaries"}
+		model, next = m.Update(next())
+		m = model.(treeModel)
+		plain := stripANSI(m.View())
+		Expect(plain).To(ContainSubstring("main.go  unstaged · stream chooser summaries"))
+		Expect(nodeAtPath(m, "cmd/gavel/main.go").Selected).To(BeTrue())
+
+		close(updates)
+		model, next = m.Update(next())
+		m = model.(treeModel)
+		Expect(next).To(BeNil())
+		Expect(m.summaryUpdates).To(BeNil())
+	})
+
+	It("renders per-file AI summary failures without blocking the picker", func() {
+		prepared := &status.Result{Files: []status.FileStatus{{Path: "failed.go", State: status.StateUnstaged}}}
+		prepared.PrepareAISummaries()
+		m := newTreeModel(prepared.Files)
+
+		model, cmd := m.Update(aiSummaryUpdateMsg{
+			open: true,
+			update: status.AISummaryUpdate{
+				Index:  0,
+				Status: status.AISummaryStatusFailed,
+				Error:  "provider unavailable",
+			},
+		})
+		m = model.(treeModel)
+		Expect(cmd).To(BeNil())
+		Expect(stripANSI(m.View())).To(ContainSubstring("⚠ ai summary failed"))
+
+		m, _ = updateKey(m, " ")
+		Expect(m.selectedPaths()).To(ConsistOf("failed.go"))
+	})
+
 	It("renders the active filter prompt and match count", func() {
 		m := newTreeModel(files)
 		m.height = 30
@@ -365,7 +480,7 @@ var _ = Describe("runInteractiveStaging", func() {
 				{Path: "c.md", State: status.StateStaged},
 			}}, nil
 		}
-		runTreePickerFunc = func([]status.FileStatus, string) (treePickerResult, error) {
+		runTreePickerFunc = func([]status.FileStatus, string, <-chan status.AISummaryUpdate) (treePickerResult, error) {
 			return treePickerResult{Selected: []string{"a.go", "c.md"}}, nil
 		}
 		var resetCalled bool
@@ -390,7 +505,7 @@ var _ = Describe("runInteractiveStaging", func() {
 			}}, nil
 		}
 		var pickerGitRoot string
-		runTreePickerFunc = func(_ []status.FileStatus, gitRoot string) (treePickerResult, error) {
+		runTreePickerFunc = func(_ []status.FileStatus, gitRoot string, _ <-chan status.AISummaryUpdate) (treePickerResult, error) {
 			pickerGitRoot = gitRoot
 			return treePickerResult{
 				Selected: []string{"a.go"},
@@ -424,7 +539,7 @@ var _ = Describe("runInteractiveStaging", func() {
 		gatherStatusFunc = func(string) (*status.Result, error) {
 			return &status.Result{Files: []status.FileStatus{{Path: "x"}}}, nil
 		}
-		runTreePickerFunc = func([]status.FileStatus, string) (treePickerResult, error) {
+		runTreePickerFunc = func([]status.FileStatus, string, <-chan status.AISummaryUpdate) (treePickerResult, error) {
 			return treePickerResult{}, nil
 		}
 		_, err := runInteractiveStaging(context.TODO(), opts)
@@ -435,7 +550,7 @@ var _ = Describe("runInteractiveStaging", func() {
 		gatherStatusFunc = func(string) (*status.Result, error) {
 			return &status.Result{Files: []status.FileStatus{{Path: "x"}}}, nil
 		}
-		runTreePickerFunc = func([]status.FileStatus, string) (treePickerResult, error) {
+		runTreePickerFunc = func([]status.FileStatus, string, <-chan status.AISummaryUpdate) (treePickerResult, error) {
 			return treePickerResult{}, ErrInteractiveCancelled
 		}
 		_, err := runInteractiveStaging(context.TODO(), opts)
@@ -450,7 +565,7 @@ var _ = Describe("runInteractiveStaging", func() {
 			}}, nil
 		}
 		var candidatesSeen []status.FileStatus
-		runTreePickerFunc = func(c []status.FileStatus, _ string) (treePickerResult, error) {
+		runTreePickerFunc = func(c []status.FileStatus, _ string, _ <-chan status.AISummaryUpdate) (treePickerResult, error) {
 			candidatesSeen = c
 			return treePickerResult{Selected: []string{"ok.go"}}, nil
 		}
@@ -460,7 +575,7 @@ var _ = Describe("runInteractiveStaging", func() {
 		Expect(candidatesSeen[0].Path).To(Equal("ok.go"))
 	})
 
-	It("prints --summary output filtered to candidates before the picker", func() {
+	It("streams --summary updates for non-conflicting candidates into the picker", func() {
 		opts.Summary = true
 		gatherStatusFunc = func(string) (*status.Result, error) {
 			return &status.Result{Files: []status.FileStatus{
@@ -468,19 +583,53 @@ var _ = Describe("runInteractiveStaging", func() {
 				{Path: "ignored.md", State: status.StateConflict},
 			}}, nil
 		}
-		runTreePickerFunc = func([]status.FileStatus, string) (treePickerResult, error) {
+		stopped := false
+		startCandidateSummariesFunc = func(_ context.Context, _ Options, files []status.FileStatus) (*candidateSummarySession, error) {
+			Expect(files).To(HaveLen(1))
+			Expect(files[0].Path).To(Equal("kept.go"))
+			prepared := &status.Result{Files: append([]status.FileStatus(nil), files...)}
+			prepared.PrepareAISummaries()
+			updates := make(chan status.AISummaryUpdate, 1)
+			updates <- status.AISummaryUpdate{Index: 0, Status: status.AISummaryStatusDone, Summary: "tighten commit flow"}
+			close(updates)
+			return &candidateSummarySession{
+				Files:   prepared.Files,
+				Updates: updates,
+				Stop:    func() { stopped = true },
+			}, nil
+		}
+		runTreePickerFunc = func(files []status.FileStatus, _ string, updates <-chan status.AISummaryUpdate) (treePickerResult, error) {
+			Expect(files).To(HaveLen(1))
+			Expect(files[0].AIStatus).To(Equal(status.AISummaryStatusPending))
+			update := <-updates
+			Expect(update.Summary).To(Equal("tighten commit flow"))
 			return treePickerResult{Selected: []string{"kept.go"}}, nil
 		}
-		writer, drain := newCapturedStdout()
-		previousOut := interactiveStdout
-		interactiveStdout = writer
-		defer func() { interactiveStdout = previousOut }()
 
 		_, err := runInteractiveStaging(context.TODO(), opts)
 		Expect(err).ToNot(HaveOccurred())
-		out := drain()
-		Expect(out).To(ContainSubstring("kept.go"))
-		Expect(out).ToNot(ContainSubstring("ignored.md"))
+		Expect(stopped).To(BeTrue())
+	})
+
+	It("returns a summary setup error before opening the picker", func() {
+		opts.Summary = true
+		gatherStatusFunc = func(string) (*status.Result, error) {
+			return &status.Result{Files: []status.FileStatus{{Path: "kept.go", State: status.StateUnstaged}}}, nil
+		}
+		setupErr := errors.New("no AI provider")
+		startCandidateSummariesFunc = func(context.Context, Options, []status.FileStatus) (*candidateSummarySession, error) {
+			return nil, setupErr
+		}
+		pickerCalled := false
+		runTreePickerFunc = func([]status.FileStatus, string, <-chan status.AISummaryUpdate) (treePickerResult, error) {
+			pickerCalled = true
+			return treePickerResult{}, nil
+		}
+
+		_, err := runInteractiveStaging(context.TODO(), opts)
+		Expect(err).To(MatchError(ContainSubstring("start candidate summaries")))
+		Expect(errors.Is(err, setupErr)).To(BeTrue())
+		Expect(pickerCalled).To(BeFalse())
 	})
 })
 
@@ -540,7 +689,7 @@ var _ = Describe("runInteractiveLoop", func() {
 		}
 		picks := [][]string{{"a.go"}, {"b.go"}}
 		callsPicker := 0
-		runTreePickerFunc = func([]status.FileStatus, string) (treePickerResult, error) {
+		runTreePickerFunc = func([]status.FileStatus, string, <-chan status.AISummaryUpdate) (treePickerResult, error) {
 			out := picks[callsPicker]
 			callsPicker++
 			return treePickerResult{Selected: out}, nil
@@ -573,7 +722,7 @@ var _ = Describe("runInteractiveLoop", func() {
 			}}, nil
 		}
 		callsPicker := 0
-		runTreePickerFunc = func([]status.FileStatus, string) (treePickerResult, error) {
+		runTreePickerFunc = func([]status.FileStatus, string, <-chan status.AISummaryUpdate) (treePickerResult, error) {
 			callsPicker++
 			if callsPicker == 1 {
 				return treePickerResult{Selected: []string{"a.go"}}, nil
@@ -601,7 +750,7 @@ var _ = Describe("runInteractiveLoop", func() {
 				{Path: "a.go", State: status.StateUntracked},
 			}}, nil
 		}
-		runTreePickerFunc = func([]status.FileStatus, string) (treePickerResult, error) {
+		runTreePickerFunc = func([]status.FileStatus, string, <-chan status.AISummaryUpdate) (treePickerResult, error) {
 			return treePickerResult{}, ErrInteractiveCancelled
 		}
 
@@ -727,38 +876,23 @@ func installOrchestratorStubs() func() {
 	prevAdd := addFilesFunc
 	prevRm := gitRmCachedFunc
 	prevPicker := runTreePickerFunc
+	prevSummaries := startCandidateSummariesFunc
 	gatherStatusFunc = func(string) (*status.Result, error) { return &status.Result{}, nil }
 	resetAllStagedFn = func(string) error { return nil }
 	addFilesFunc = func(string, []string) error { return nil }
 	gitRmCachedFunc = func(string, []string) error { return nil }
-	runTreePickerFunc = func([]status.FileStatus, string) (treePickerResult, error) { return treePickerResult{}, nil }
+	runTreePickerFunc = func([]status.FileStatus, string, <-chan status.AISummaryUpdate) (treePickerResult, error) {
+		return treePickerResult{}, nil
+	}
+	startCandidateSummariesFunc = func(_ context.Context, _ Options, files []status.FileStatus) (*candidateSummarySession, error) {
+		return &candidateSummarySession{Files: files, Stop: func() {}}, nil
+	}
 	return func() {
 		gatherStatusFunc = prevGather
 		resetAllStagedFn = prevReset
 		addFilesFunc = prevAdd
 		gitRmCachedFunc = prevRm
 		runTreePickerFunc = prevPicker
+		startCandidateSummariesFunc = prevSummaries
 	}
-}
-
-// newCapturedStdout returns an *os.File that interactiveStdout can be set to,
-// plus a drain() that closes the writer, waits for the reader goroutine, and
-// returns the captured bytes. We need an *os.File because interactiveStdout is
-// typed that way to match os.Stdout.
-func newCapturedStdout() (*os.File, func() string) {
-	r, w, err := os.Pipe()
-	Expect(err).ToNot(HaveOccurred())
-	buf := &bytes.Buffer{}
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		_, _ = io.Copy(buf, r)
-	}()
-	drain := func() string {
-		_ = w.Close()
-		<-done
-		_ = r.Close()
-		return buf.String()
-	}
-	return w, drain
 }

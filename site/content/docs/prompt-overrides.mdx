@@ -1,0 +1,88 @@
+---
+title: Prompt overrides
+description: Override Gavel's built-in AI prompts from .gavel.yaml, and the input/output contract each one must honor.
+order: 9
+---
+
+Every AI prompt Gavel ships is overridable from `.gavel.yaml`. Each override is inline `.prompt` text, a structured Captain spec, or a file reference, and layers merge home → git-root → target directory (last write wins):
+
+```yaml
+commit:
+  groupingPrompt: "You are grouping changes. {{table}} ..."   # inline
+verify:
+  promptTemplate:
+    file: .gavel/prompts/review.prompt                        # file reference
+todos:
+  plan:                                                        # structured api.Spec, flat fields
+    model: claude-sonnet-5
+    effort: high
+    prompt:
+      system: You produce implementation plans.
+      user: Plan this work: {{{body}}}
+```
+
+An override is a [dotprompt](https://google.github.io/dotprompt/) template. A configured-but-missing file is a hard error — Gavel never silently falls back to the built-in default.
+In a structured inline object, `prompt.user` is converted to the template body and the remaining Captain fields become `.prompt` frontmatter. Run `gavel config --resolve` to inspect the resulting source, declared spec, and effective runtime model/backend.
+
+## The contract
+
+An override must honor two halves of the contract:
+
+- **Input variables** — the Handlebars variables Gavel binds when it renders your template. Referencing an unknown variable renders empty; the variables below are all that is bound for each prompt.
+- **Output schema** — the JSON shape Gavel parses back. For most prompts the schema is declared in the prompt's frontmatter (`output.schema`) and you may change it if you also change what you ask for. For a few prompts the **schema is fixed in Go and is NOT overridable** — the override changes only the instruction text, and the output shape is enforced regardless. Those are called out below.
+
+Gavel validates the parsed output and fails loudly on a shape mismatch (no zero-value fallback).
+
+## Overridable prompts
+
+| Config path | Prompt | Input variables | Output schema |
+| --- | --- | --- | --- |
+| `verify.promptTemplate` | AI fixture reviewer | `{{scopeInstruction}}`, `{{extraPrompt}}`, `{{issue}}`, `{{sessionId}}`, `{{changedFiles}}`, `{{worktree}}` | Built from checks/criteria (schema.cel) |
+| `commit.messagePrompt` | Commit message | `{{patch}}`, `{{maxBodyLines}}` | frontmatter |
+| `commit.functionalityRemovedPrompt` | Removed functionality | commit fields | frontmatter |
+| `commit.compatibilityPrompt` | Compatibility issues | commit fields | frontmatter |
+| `commit.summaryPrompt` | Commit-group summary (`git analyze --summary`) | scope/commit fields | frontmatter |
+| `commit.groupingPrompt` | AI commit grouping (`commit -G`) | `{{table}}`, `{{groupByScope}}`, `{{maxCommits}}`, `{{consolidation}}`, `{{prevCount}}`, `{{prevGroups}}` | frontmatter (`groups[]`+`ignore[]`) |
+| `commit.prContentPrompt` | PR title/body/branch | PR input fields | frontmatter |
+| `todos.run` | Todo run | `{{body}}`, `{{count}}`, `{{multiple}}`, `{{existingPlan}}` | **fixed** (run envelope) |
+| `todos.plan` | Todo plan | `{{body}}`, `{{count}}`, `{{existingPlan}}` | **fixed** (plan envelope) |
+| `todos.triage` | Todo triage | `{{body}}`, `{{count}}`, `{{multiple}}`, `{{backlog}}` | **fixed** (triage envelope) |
+| `status.summaryPrompt` | Per-file summary (`status --ai`) | `{{details}}` | frontmatter (`{summary}`) |
+| `test.outlineSummaryPrompt` | Per-test summary (`test outline --ai-summary`) | `{{ids}}`, `{{file}}`, `{{source}}` | frontmatter (`tests[]`) |
+
+### White-box vs black-box verify
+
+The verify prompt is white-box or black-box by **which variables it references**, not by a mode flag:
+
+- **White-box** — reference `{{sessionId}}` to have the reviewer inspect the implementation session's transcript.
+- **Black-box** — reference `{{changedFiles}}` / `{{worktree}}` (the final worktree state) to review purely from the result, which lets a cheap non-agentic model verify without agent tools. These are computed lazily, only when the template references them.
+
+### Fixed-schema prompts
+
+`todos.run`, `todos.plan`, and `todos.triage` each carry a structured result **envelope** whose schema is generated in Go and applied to the request natively. Overriding these prompts changes the framing and instructions, but the output shape is enforced by the driver and cannot be altered from `.gavel.yaml` — this is what keeps a hand-edited prompt from breaking the run loop.
+
+### Custom lifecycle steps
+
+A project adds a new prompt by adding a new **lifecycle step**, not a bare named prompt — see [Todo run loop](/docs/todo-run-loop) for the step shape (`prompt`, `when`, `outcomes`). A step's `prompt` field is either a built-in reference (`todos.run`, `todos.plan`, `todos.triage`, `todos.verify`) or `file:<path>` for a project-owned template:
+
+```yaml
+todos:
+  lifecycle:
+    steps:
+      - name: security-review
+        prompt: "file:.gavel/prompts/security-review.prompt"
+        envelope: result       # result | plan | triage — decides the schema the run is asked for
+        when: "subject.status in ['pending'] && has(last.run) && last.run.state == 'succeeded'"
+        outcomes:
+          - { status: ask, when: "envelope.endStatus == 'ask'" }
+          - { status: failed, when: "run.state != 'succeeded' || envelope.endStatus == 'failed'" }
+          - { status: pending, when: "true" }
+```
+
+Run it with `gavel todos run <ref> --step security-review`, and list every step the lifecycle declares with `gavel todos steps`.
+
+The three built-in steps' names (`run`, `plan`, `triage`) may be redeclared under `todos.run` / `todos.plan` / `todos.triage` to replace their template wholesale, but each carries a fixed envelope — the run loop parses against it.
+
+### Triage
+
+`todos.triage` is a read-only pass: it compacts a TODO's description, reviews its `## Verification` fixture, and reports the edits it wants in its envelope. **Gavel performs the writes**, not the agent — which is why the fixture is parse-checked before it is stored, and why a status the agent cannot assign fails loudly instead of being dropped. The prompt receives the fixture source verbatim (the run prompt sees only the commands it contains) plus `{{backlog}}`, a compact index of the other open TODOs, so it can spot duplicates.

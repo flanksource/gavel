@@ -3,6 +3,7 @@ package runners
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -579,5 +580,12 @@ func TestGoTestBuildCommandHonoursTimeoutFlag(t *testing.T) {
 	}
 	if args[0] != "test" || args[1] != "-json" {
 		t.Errorf("expected `test -json` prefix, got: %v", args[:2])
+	}
+}
+
+func TestGoTestFocusArgs(t *testing.T) {
+	runner := NewGoTest(t.TempDir())
+	if got, want := runner.FocusArgs("TestFoo"), []string{"-run", "TestFoo"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("FocusArgs = %v, want %v", got, want)
 	}
 }

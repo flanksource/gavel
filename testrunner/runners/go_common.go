@@ -1,13 +1,26 @@
 package runners
 
 import (
+	"fmt"
+	"go/build"
 	"go/parser"
 	"go/token"
+	"path/filepath"
 	"strconv"
 	"strings"
 
 	"github.com/flanksource/commons/logger"
 )
+
+func matchesBuildConstraints(dir, name string, tags []string) (bool, error) {
+	context := build.Default
+	context.BuildTags = append([]string(nil), tags...)
+	matched, err := context.MatchFile(dir, name)
+	if err != nil {
+		return false, fmt.Errorf("evaluate build constraints for %s: %w", filepath.Join(dir, name), err)
+	}
+	return matched, nil
+}
 
 // hasGinkgoImports reports whether the given Go file imports Ginkgo (v1 or
 // v2). Uses the AST (ImportsOnly) so string literals that mention the import

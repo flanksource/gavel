@@ -28,6 +28,24 @@ func parseCommitTypeAndScope(subject string) (models.CommitType, models.ScopeTyp
 	return models.CommitTypeUnknown, models.ScopeTypeUnknown, subject
 }
 
+// dedupeCommitPrefix strips a conventional-commit prefix the model echoed into
+// the subject (e.g. "chore: update deps"), returning the cleaned subject. The
+// resolved type/scope win; a recognised prefix only fills blanks. An
+// unrecognised leading token (e.g. "Note: ...") is left untouched.
+func dedupeCommitPrefix(ctype models.CommitType, scope models.ScopeType, subject string) (models.CommitType, models.ScopeType, string) {
+	prefixType, prefixScope, rest := parseCommitTypeAndScope(subject)
+	if !prefixType.IsValid() {
+		return ctype, scope, subject
+	}
+	if ctype == models.CommitTypeUnknown {
+		ctype = prefixType
+	}
+	if scope == models.ScopeTypeUnknown && prefixScope != models.ScopeTypeUnknown {
+		scope = prefixScope
+	}
+	return ctype, scope, strings.TrimSpace(rest)
+}
+
 var refRegex = regexp.MustCompile(`#(\d+)`)
 var refWithParansRegex = regexp.MustCompile(`\(#(\d+)\)`)
 

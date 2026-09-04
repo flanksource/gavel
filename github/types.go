@@ -12,8 +12,13 @@ import (
 )
 
 type PRInfo struct {
-	Number            int          `json:"number"`
+	Number int `json:"number"`
+	// NodeID is the GraphQL global node ID, required to merge/approve/enable
+	// auto-merge on this PR. Empty when the PR was loaded from a source that
+	// doesn't request it (e.g. the REST search path).
+	NodeID            string       `json:"nodeId,omitempty"`
 	Title             string       `json:"title"`
+	Body              string       `json:"body,omitempty"`
 	Author            PRAuthor     `json:"author"`
 	HeadRefName       string       `json:"headRefName"`
 	BaseRefName       string       `json:"baseRefName"`
@@ -22,11 +27,40 @@ type PRInfo struct {
 	ReviewDecision    string       `json:"reviewDecision"`
 	Mergeable         string       `json:"mergeable"`
 	URL               string       `json:"url"`
+	Additions         int          `json:"additions"`
+	Deletions         int          `json:"deletions"`
+	ChangedFiles      int          `json:"changedFiles"`
 	StatusCheckRollup StatusChecks `json:"statusCheckRollup"`
+	// PRCommits are the commits in the PR, populated from the GraphQL detail query.
+	PRCommits []PRCommitInfo `json:"prCommits,omitempty"`
+	// PRFiles are the changed files in the PR, populated from the GraphQL detail query.
+	PRFiles []PRFileInfo `json:"prFiles,omitempty"`
 	// Comments and ReviewThreads are populated by FetchPR in a single GraphQL request.
 	// Callers typically pass them through prwatch.MergeAndFilter to produce the actionable set.
 	Comments      []PRComment `json:"comments,omitempty"`
 	ReviewThreads []PRComment `json:"reviewThreads,omitempty"`
+}
+
+// PRCommitInfo is a commit in the PR.
+type PRCommitInfo struct {
+	OID             string `json:"oid"`
+	MessageHeadline string `json:"messageHeadline"`
+	MessageBody     string `json:"messageBody,omitempty"`
+	CommittedDate   string `json:"committedDate"`
+	AuthorName      string `json:"authorName,omitempty"`
+	AuthorLogin     string `json:"authorLogin,omitempty"`
+	AuthorAvatarURL string `json:"authorAvatarUrl,omitempty"`
+	Additions       int    `json:"additions"`
+	Deletions       int    `json:"deletions"`
+	ChangedFiles    int    `json:"changedFiles"`
+}
+
+// PRFileInfo is a changed file in the PR.
+type PRFileInfo struct {
+	Path       string `json:"path"`
+	Additions  int    `json:"additions"`
+	Deletions  int    `json:"deletions"`
+	ChangeType string `json:"changeType"`
 }
 
 type PRAuthor struct {
@@ -242,8 +276,10 @@ func (s Step) Pretty() api.Text {
 func (j Job) Pretty() api.Text {
 	text := clicky.Text("    ", "").
 		Add(StatusIcon(strings.ToUpper(j.Status), strings.ToUpper(j.Conclusion))).
-		Append(" "+j.Name, "").
-		Append(" "+FormatDuration(j), "text-gray-500")
+		Append(" "+j.Name, "")
+	if duration := FormatDuration(j); duration != "" {
+		text = text.Append(" "+duration, "text-gray-500")
+	}
 
 	if !IsFailureConclusion(j.Conclusion) {
 		return text
@@ -272,9 +308,15 @@ func prettyLogTail(logTail string) api.Text {
 }
 
 func (r WorkflowRun) Pretty() api.Text {
+	return r.PrettyAs(r.Name)
+}
+
+// PrettyAs renders the run under a caller-supplied heading, so a workflow that
+// ran more than once on the same PR can be disambiguated at the call site.
+func (r WorkflowRun) PrettyAs(label string) api.Text {
 	text := clicky.Text("  ", "").
 		Add(StatusIcon(strings.ToUpper(r.Status), strings.ToUpper(r.Conclusion))).
-		Append(" "+r.Name, "font-bold")
+		Append(" "+label, "")
 	for _, job := range r.Jobs {
 		text = text.NewLine().Add(job.Pretty())
 	}
@@ -282,8 +324,8 @@ func (r WorkflowRun) Pretty() api.Text {
 }
 
 func (pr PRInfo) Pretty() api.Text {
-	title := clicky.Text(fmt.Sprintf("PR #%d: ", pr.Number), "font-bold").
-		Append(pr.Title, "font-bold")
+	title := clicky.Text(fmt.Sprintf("PR #%d: ", pr.Number), "").
+		Append(pr.Title, "")
 
 	meta := clicky.Text("  ", "").
 		Append(pr.BaseRefName, "text-cyan-600").
@@ -302,8 +344,11 @@ func (pr PRInfo) Pretty() api.Text {
 		meta = meta.Append(" | Review: ", "text-gray-500").
 			Append(pr.ReviewDecision, ReviewStyle(pr.ReviewDecision))
 	}
-	if pr.Mergeable != "" {
-		meta = meta.Append(" | ", "text-gray-500").
+	// Mergeability only means something while the PR is open, and GitHub
+	// reports UNKNOWN once it is merged or closed — an unlabelled "UNKNOWN"
+	// beside the state reads as an error rather than an absent answer.
+	if pr.Mergeable != "" && pr.Mergeable != "UNKNOWN" && pr.State == "OPEN" {
+		meta = meta.Append(" | Mergeable: ", "text-gray-500").
 			Append(pr.Mergeable, MergeableStyle(pr.Mergeable))
 	}
 
@@ -321,6 +366,11 @@ func FormatDuration(job Job) string {
 	if end.IsZero() {
 		end = time.Now()
 		return fmt.Sprintf("(running %s...)", end.Sub(job.StartedAt).Truncate(time.Second))
+	}
+	// A job that never ran (skipped, or cancelled before it started) reports
+	// equal start and end times; "(0s)" reads as a real measurement.
+	if !end.After(job.StartedAt) {
+		return ""
 	}
 	d := end.Sub(job.StartedAt).Truncate(time.Second)
 	if d < time.Minute {

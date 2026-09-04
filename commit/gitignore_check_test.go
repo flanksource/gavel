@@ -84,6 +84,18 @@ func TestEvaluateGitIgnoreMatches(t *testing.T) {
 		require.Len(t, got, 1)
 		assert.Equal(t, "**/*.env", got[0].Pattern)
 	})
+
+	t.Run("intra-list negation rescues a file (standard gitignore semantics)", func(t *testing.T) {
+		got, err := EvaluateGitIgnoreMatches(
+			[]string{"keep.log", "drop.log"},
+			[]string{"*.log", "!keep.log"},
+			nil,
+		)
+		require.NoError(t, err)
+		require.Len(t, got, 1, "!keep.log must exempt keep.log even though it lives in commit.gitignore")
+		assert.Equal(t, "drop.log", got[0].File)
+		assert.Equal(t, "*.log", got[0].Pattern)
+	})
 }
 
 func violationFiles(vs []Violation) []string {

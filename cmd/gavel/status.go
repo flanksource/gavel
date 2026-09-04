@@ -3,17 +3,14 @@ package main
 import (
 	"context"
 	"fmt"
-	"io"
-	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/flanksource/clicky"
-	clickyai "github.com/flanksource/clicky/ai"
 	"github.com/flanksource/clicky/api"
-	gavelai "github.com/flanksource/gavel/ai"
+	clickytask "github.com/flanksource/clicky/task"
+	clickyai "github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/internal/prompting"
-	"github.com/flanksource/gavel/internal/ttyrender"
 	"github.com/flanksource/gavel/status"
 	"github.com/flanksource/repomap"
 	"github.com/spf13/cobra"
@@ -52,6 +49,16 @@ func (o StatusOptions) Help() api.Textable {
 		Append("Starship git_status", "italic").
 		Append(" symbols, plus line deltas, the working-tree age, inferred scopes, and repomap findings (Kubernetes refs, architecture violations).", "").
 		NewLine().
+		Append("When the last ", "").
+		Append("gavel test", "italic").
+		Append("/", "").
+		Append("gavel lint", "italic").
+		Append(" run left failures, a ", "").
+		Append("Problems", "font-bold").
+		Append(" section lists them (file · message). It caps each file by default — pass ", "").
+		Append("-v", flagStyle).
+		Append(" to show every error in full.", "").
+		NewLine().
 		Append("By default the listing is scoped to the current working directory. Pass a ", "").
 		Append("[folder]", flagStyle).
 		Append(" to scope to a different subdirectory of the repo, or ", "").
@@ -73,22 +80,33 @@ func (o StatusOptions) Help() api.Textable {
 		Append("  --work-dir", flagStyle).Append("   path to a git repo (default: cwd)", muted).NewLine().
 		Append("  --no-repomap", flagStyle).Append(" skip repomap enrichment (faster)", muted).NewLine().
 		Append("  --ai", flagStyle).Append("         add one-line AI summaries per changed file", muted).NewLine().
-		Append("  --ai-model", flagStyle).Append("   override the AI model used with --ai", muted).NewLine().NewLine().
+		Append("  --ai-model", flagStyle).Append("   override the AI model used with --ai", muted).NewLine().
+		Append("  -v", flagStyle).Append("           expand the Problems section to full test/lint logs", muted).NewLine().NewLine().
 		Append("EXAMPLES", heading).NewLine().
 		Append("  gavel status", flagStyle).Append("                 changes under cwd", muted).NewLine().
 		Append("  gavel status .", flagStyle).Append("               whole repo (run from git root)", muted).NewLine().
 		Append("  gavel status cmd/gavel", flagStyle).Append("       changes under cmd/gavel", muted).NewLine().
 		Append("  gavel status --no-repomap", flagStyle).Append("    skip repomap lookup", muted).NewLine().
-		Append("  gavel status --ai", flagStyle).Append("             include AI one-line file summaries", muted).NewLine()
+		Append("  gavel status --ai", flagStyle).Append("             include AI one-line file summaries", muted).NewLine().
+		Append("  gavel status -v", flagStyle).Append("               show full test/lint error logs", muted).NewLine()
 
 	return t
 }
+
+// statusAI holds the --ai-* flag values for `gavel status`. It is package
+// scoped because runStatus is a top-level function handed to AddNamedCommand and
+// so cannot close over an init-local config the way `git analyze`/`git amend` do.
+// While it was init-local, every --ai-* flag parsed into a struct nothing read
+// and status ran on DefaultConfig() regardless. It is still one config per
+// command — not the shared package default BindFlags used to write into, where
+// whichever FlagSet parsed last decided the model for all of them.
+var statusAI = clickyai.DefaultConfig()
 
 func init() {
 	statusCmd := clicky.AddNamedCommand("status", rootCmd, StatusOptions{}, runStatus)
 	statusCmd.Use = "status [folder]"
 	statusCmd.Args = cobra.MaximumNArgs(1)
-	clickyai.BindFlags(statusCmd.Flags())
+	clickyai.BindFlags(statusCmd.Flags(), &statusAI)
 }
 
 func runStatus(opts StatusOptions) (any, error) {
@@ -97,14 +115,22 @@ func runStatus(opts StatusOptions) (any, error) {
 		return nil, err
 	}
 
+	verbose := clicky.Flags.LevelCount > 0
+
 	if !opts.AI {
 		return status.Gather(workDir, status.Options{
 			NoRepomap:    opts.NoRepomap,
 			FolderFilter: folderFilter,
+			Verbose:      verbose,
 		})
 	}
 
-	agent, err := gavelai.NewAgent(clickyai.DefaultConfig())
+	runCfg := statusAI
+	runCfg.Model, err = status.ResolveSummaryModel(workDir, statusAI.Model)
+	if err != nil {
+		return nil, err
+	}
+	agent, err := clickyai.NewAgent(runCfg)
 	if err != nil {
 		return nil, fmt.Errorf("create AI agent for status: %w", err)
 	}
@@ -114,9 +140,10 @@ func runStatus(opts StatusOptions) (any, error) {
 	gatherOpts := status.Options{
 		NoRepomap:    opts.NoRepomap,
 		FolderFilter: folderFilter,
+		Verbose:      verbose,
 		Agent:        agent,
 		Context:      ctx,
-		AIMaxWorkers: clickyai.DefaultConfig().MaxConcurrent,
+		AIMaxWorkers: statusAI.MaxConcurrent,
 	}
 
 	result, err := status.GatherBase(workDir, gatherOpts)
@@ -126,10 +153,25 @@ func runStatus(opts StatusOptions) (any, error) {
 
 	prompting.Prepare()
 	result.PrepareAISummaries()
-	updates := status.StreamAISummaries(ctx, workDir, agent, result.Files, gatherOpts.AIMaxWorkers)
-	if err := renderStatusOutput(os.Stdout, result, updates, ttyrender.IsTerminal(os.Stdout)); err != nil {
+
+	// Render the status table through clicky's task manager so it owns the
+	// terminal, ClearLines accounting, and the logger serializer — the AI
+	// agent's per-call log lines then interleave cleanly instead of corrupting
+	// an in-place redraw. The renderer paints result.Pretty() each tick; the
+	// batch's updates are folded into result via renderer.Apply.
+	renderer := status.NewStatusRenderer(result)
+	clickytask.SetLiveRenderer(renderer)
+	defer clickytask.SetLiveRenderer(nil)
+
+	summaryPrompt, err := status.ResolveSummaryPrompt(workDir)
+	if err != nil {
 		return nil, err
 	}
+	updates := status.StreamAISummaries(ctx, workDir, agent, result.Files, gatherOpts.AIMaxWorkers, summaryPrompt)
+	for update := range updates {
+		renderer.Apply(update)
+	}
+	clicky.WaitForGlobalCompletion()
 
 	return nil, nil
 }
@@ -195,34 +237,4 @@ func resolveStatusWorkDir(workDirFlag string, args []string) (string, string, er
 	}
 
 	return absRoot, rel, nil
-}
-
-func renderStatusOutput(w io.Writer, result *status.Result, updates <-chan status.AISummaryUpdate, interactive bool) error {
-	if !interactive {
-		for update := range updates {
-			result.ApplyAISummaryUpdate(update)
-		}
-		_, err := io.WriteString(w, formatStatusResult(result))
-		return err
-	}
-
-	state := ttyrender.State{}
-	if err := state.Write(w, formatStatusResult(result)); err != nil {
-		return err
-	}
-	for update := range updates {
-		result.ApplyAISummaryUpdate(update)
-		if err := state.Write(w, formatStatusResult(result)); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func formatStatusResult(result *status.Result) string {
-	rendered := result.Pretty().ANSI()
-	if !strings.HasSuffix(rendered, "\n") {
-		rendered += "\n"
-	}
-	return rendered
 }
