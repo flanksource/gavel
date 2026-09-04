@@ -29,13 +29,15 @@ Subcommands:
   status   Show a PR's Actions status (replaces gh pr view / gh run view / gh run list)
   create   Cherry-pick a commit into a fresh worktree and open a PR (AI title/body/branch)
   list     List PRs, optionally with CI status or a live browser dashboard (--ui)
+  close    Close a PR without merging it (replaces gh pr close)
 
 Examples:
   gavel pr status                 # current branch's PR + checks
   gavel pr status 123 --logs      # PR #123 with failing-job logs
   gavel pr status --follow        # block until checks complete
   gavel pr create <SHA>           # open a PR from one commit
-  gavel pr list --ui              # live PR dashboard`,
+  gavel pr list --ui              # live PR dashboard
+  gavel pr close 123              # close PR #123 without merging`,
 }
 
 type PRStatusOptions struct {
@@ -100,18 +102,9 @@ func runPRStatus(opts PRStatusOptions) (any, error) {
 		return nil, err
 	}
 
-	var ghOpts github.Options
-	switch {
-	case repo != "":
-		ghOpts.Repo = repo
-	case opts.Repo != "":
-		ghOpts.Repo = opts.Repo
-	default:
-		workDir, err := getWorkingDir()
-		if err != nil {
-			return nil, fmt.Errorf("failed to get working directory: %w", err)
-		}
-		ghOpts.WorkDir = workDir
+	ghOpts, err := prGitHubOptions(repo, opts.Repo)
+	if err != nil {
+		return nil, err
 	}
 
 	if prNumber == 0 {
@@ -165,6 +158,23 @@ func runPRStatus(opts PRStatusOptions) (any, error) {
 	}
 
 	return result, nil
+}
+
+// prGitHubOptions resolves which repo a pr subcommand targets: a repo parsed
+// from the positional ref wins, then --repo, and otherwise the working
+// directory's git remote.
+func prGitHubOptions(argRepo, flagRepo string) (github.Options, error) {
+	switch {
+	case argRepo != "":
+		return github.Options{Repo: argRepo}, nil
+	case flagRepo != "":
+		return github.Options{Repo: flagRepo}, nil
+	}
+	workDir, err := getWorkingDir()
+	if err != nil {
+		return github.Options{}, fmt.Errorf("failed to get working directory: %w", err)
+	}
+	return github.Options{WorkDir: workDir}, nil
 }
 
 func parseStatusArgs(args []string) (repo string, prNumber int, err error) {
