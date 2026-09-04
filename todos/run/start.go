@@ -6,18 +6,72 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/flanksource/captain/pkg/ai/agent"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/todos"
-	"github.com/flanksource/gavel/todos/drivers"
-	todoprompt "github.com/flanksource/gavel/todos/prompt"
-	todospec "github.com/flanksource/gavel/todos/spec"
+	"github.com/flanksource/gavel/todos/lifecycle"
 	"github.com/flanksource/gavel/todos/types"
 )
+
+// Prepared is a run resolved but not dispatched: the host that owns the todo's
+// lifecycle, the step chosen and why, and the exact request captain would be
+// given. The dashboard's preview, `--dry-run`, the pre-flight validation every
+// entrypoint runs, and Start itself all read it — one fold, so a preview can
+// never describe a different run from the one that follows it.
+type Prepared struct {
+	Host *lifecycle.Host
+	Step lifecycle.Step
+	// Reason is why this step was chosen: named by the caller, or picked by the
+	// lifecycle's own predicates.
+	Reason     string
+	Resolution *lifecycle.Resolution
+	// SessionID is the agent session the run will use.
+	SessionID string
+}
+
+// Resolve chooses the step and folds the run, without dispatching or persisting
+// anything. It is a var so tests can substitute a stub without standing up an
+// agent.
+var Resolve = defaultResolve
+
+func defaultResolve(ctx context.Context, req Request) (*Prepared, error) {
+	if req.Todo == nil {
+		return nil, errors.New("todo run: no todo")
+	}
+	host, err := lifecycle.NewHost(req.Provider, req.Dir, req.Options.Host)
+	if err != nil {
+		return nil, err
+	}
+	step, reason, err := host.StepFor(ctx, req.Todo, req.Options.Step)
+	if err != nil {
+		return nil, err
+	}
+	resolution, err := host.Resolve(ctx, req.Todo, step, runOptions(req, nil))
+	if err != nil {
+		return nil, err
+	}
+	sessionID := SessionIDFor(resolution.Spec, req.Todo, req.Options.Resume)
+	resolution.UseSession(sessionID)
+	return &Prepared{Host: host, Step: step, Reason: reason, Resolution: resolution, SessionID: sessionID}, nil
+}
+
+// runOptions is the caller's decisions in the host's own vocabulary. exec is nil
+// for a resolution, and the run's context for a dispatch.
+func runOptions(req Request, exec *todos.ExecutorContext) lifecycle.RunOptions {
+	return lifecycle.RunOptions{
+		Exec:       exec,
+		Request:    req.Options.Request,
+		Prior:      req.Options.Prior,
+		Resume:     req.Options.Resume,
+		Message:    req.Options.Message,
+		Concurrent: req.Options.Concurrent,
+		Broker:     req.Broker,
+	}
+}
 
 // Start admits a run and returns as soon as the agent session is prepared; the
 // run itself continues in the background. It is a var so tests can substitute a
 // stub without standing up an agent.
+//
 // Start reports todos.ErrRunOwnedElsewhere rather than resolving it: whether to
 // run alongside a live run is the caller's question to ask, and its callers are
 // HTTP handlers that must not block on a dialog. Terminal callers ask with
@@ -28,17 +82,21 @@ func defaultStart(req Request) (StartResult, error) {
 	if req.Registry == nil {
 		return StartResult{}, errors.New("todo run registry is required")
 	}
-	executor, sessionID, err := NewExecutor(req)
-	if err != nil {
-		return StartResult{}, err
+	prepared := req.Prepared
+	if prepared == nil {
+		resolved, err := Resolve(context.Background(), req)
+		if err != nil {
+			return StartResult{}, err
+		}
+		prepared = resolved
 	}
 	// The run outlives the call, so it gets its own context rather than the
 	// caller's — a request finishing must not cancel the agent it started.
-	ctx, timeoutCancel := context.WithTimeout(context.Background(), req.Options.Timeout)
+	ctx, timeoutCancel := context.WithTimeout(context.Background(), prepared.Resolution.Timeout)
 	runCtx, stop := context.WithCancelCause(ctx)
 	handle, err := req.Registry.Register(RegisterOptions{
-		IssueIDs:   IssueIDs(req.Todos),
-		Stoppable:  IsStoppable(req.Options),
+		IssueIDs:   IssueIDs([]*types.TODO{req.Todo}),
+		Stoppable:  IsStoppable(prepared.Resolution.Spec),
 		Concurrent: req.Options.Concurrent,
 		Cancel:     stop,
 	})
@@ -51,9 +109,13 @@ func defaultStart(req Request) (StartResult, error) {
 		err    error
 	}
 	started := make(chan startOutcome, 1)
+	done := make(chan error, 1)
 	var notifyOnce sync.Once
 	notify := func(result StartResult, err error) {
-		notifyOnce.Do(func() { started <- startOutcome{result: result, err: err} })
+		notifyOnce.Do(func() {
+			result.Done, result.Stop = done, stop
+			started <- startOutcome{result: result, err: err}
+		})
 	}
 	go func() {
 		defer timeoutCancel()
@@ -66,133 +128,46 @@ func defaultStart(req Request) (StartResult, error) {
 			handle.BindPromptRun(preparation.PromptRunID)
 			notify(StartResult{Status: "started", SessionID: preparation.SessionID}, nil)
 		})
-		runner := todos.NewTODOExecutor(req.Dir, executor, sessionID, req.Provider)
-		runner.SetMode(req.Options.RunMode)
-		runner.SetResume(req.Options.Resume)
-		runner.SetConcurrent(req.Options.Concurrent)
-		var runErr error
-		var result *todos.ExecutionResult
-		// A single selection runs through Execute; a multi-select runs every todo
-		// in one combined agent session via ExecuteGroup.
-		if len(req.Todos) == 1 {
-			result, runErr = runner.Execute(execCtx, req.Todos[0])
-		} else {
-			var results []*todos.ExecutionResult
-			results, runErr = runner.ExecuteGroup(execCtx, req.Todos)
-			if len(results) > 0 {
-				result = results[0]
-			}
+		err := runStep(execCtx, req, prepared)
+		// A run that ended before Captain admitted it never notified: whatever
+		// ended it is Start's error, and ending unadmitted is one even when the
+		// step itself succeeded. A run that ended after admission reports its own
+		// error through Done, the only channel its caller is still reading.
+		startErr := err
+		if startErr == nil {
+			startErr = errors.New("todo run completed before Captain admission")
 		}
-		if runErr != nil && (result == nil || !result.Cancelled) {
-			logger.Warnf("todo run %s failed: %v", Label(req.Todos), runErr)
-		}
-		switch {
-		case runErr != nil:
-			notify(StartResult{}, runErr)
-		case result != nil && result.Skipped:
-			notify(StartResult{Status: "skipped", Message: "TODO already passes; run skipped"}, nil)
-		default:
-			notify(StartResult{}, errors.New("todo run completed before Captain admission"))
-		}
+		notify(StartResult{}, startErr)
+		done <- err
+		close(done)
 	}()
 	outcome := <-started
 	return outcome.result, outcome.err
 }
 
-func NewExecutor(req Request) (todos.Executor, string, error) {
-	return NewExecutorContext(context.Background(), req)
-}
-
-func NewExecutorContext(ctx context.Context, req Request) (todos.Executor, string, error) {
-	kind, err := drivers.Parse(req.Options.Driver)
-	if err != nil {
-		return nil, "", err
-	}
-	// cmux returns "" as the orchestrator session id (it manages its own
-	// --session-id, passed via SessionID) so TODOExecutor does not overwrite the
-	// todo's recorded prior session.
-	mode := req.Options.RunMode
-	// Post-run checks run inside the agent loop as fixture-backed verify
-	// plugins; a failing round's feedback re-runs the same session.
-	var verifiers []agent.Verify
-	var maxIterations int
-	if mode == types.ModeRun {
-		// The grader has its own chain (.gavel.yaml todos.verify > ai:); the run
-		// spec decides only whether to verify and for how many rounds, so the
-		// implementer's model, backend and session never mark their own work.
-		// CanApprove mirrors the run's own resolve: an entrypoint that drains the
-		// approval queue must not fail here while its run resolves fine.
-		grader, err := todospec.Resolve(todospec.Input{
-			WorkDir:    req.Dir,
-			Mode:       types.ModeVerify,
-			CanApprove: true,
-		})
-		if err != nil {
-			return nil, "", err
+// runStep dispatches the prepared step and applies its outcome, returning the
+// run's own error: nil when the step ran and its outcome was persisted.
+func runStep(execCtx *todos.ExecutorContext, req Request, prepared *Prepared) error {
+	outcome, err := prepared.Host.Dispatch(execCtx, req.Todo, prepared.Resolution, runOptions(req, execCtx))
+	if outcome == nil {
+		if err == nil {
+			err = fmt.Errorf("lifecycle step %s produced no outcome", prepared.Step.Name)
 		}
-		verifiers, maxIterations, err = todos.BuildCheckVerifiers(todos.CheckVerifierOptions{
-			WorkDir: req.Dir,
-			Todos:   req.Todos,
-			Run:     &req.Options.Spec,
-			Grader:  grader.Spec,
-		})
-		if err != nil {
-			return nil, "", err
-		}
+		logger.Warnf("todo run %s failed: %v", Label(req.Todo), err)
+		return err
 	}
-	// The todo's recorded plan feeds both flows: a plan re-run reports
-	// updated/unchanged, and an implement run follows the approved/edited plan.
-	// Single-todo only — a group run has no single plan to attribute.
-	existingPlan, err := PlanMarkdown(ctx, req.Provider, req.Todos, mode)
-	if err != nil {
-		return nil, "", err
+	// The outcome is applied even when the step could not be classified: the
+	// attempt happened, and losing the transcript of a run that failed to map
+	// onto a status is exactly the run whose record is worth most.
+	status := outcome.Status
+	if err != nil && status == "" {
+		status = lifecycle.OutcomeKeep
 	}
-	// Triage compares against the rest of the backlog to spot duplicates; every
-	// other prompt sees only the todos it was given.
-	backlog, err := TriageBacklog(ctx, req)
-	if err != nil {
-		return nil, "", err
+	if applyErr := prepared.Host.OnOutcome(execCtx, req.Todo, prepared.Step, outcome, status); applyErr != nil {
+		err = errors.Join(err, applyErr)
 	}
-	return drivers.New(kind, todos.AgentRunConfig{
-		Spec:          req.Options.Spec,
-		WorkDir:       req.Dir,
-		Mode:          mode,
-		Prompt:        req.Options.Prompt,
-		Envelope:      req.Options.Envelope,
-		Template:      req.Options.Template,
-		ExistingPlan:  existingPlan,
-		Backlog:       backlog,
-		Verifiers:     verifiers,
-		MaxIterations: maxIterations,
-		Resume:        req.Options.Resume,
-		Approvals:     req.Options.Approvals,
-	})
-}
-
-// TriageBacklog loads the duplicate-detection index for a triage run. A backlog
-// that cannot be listed degrades duplicate detection but not the other four
-// verdicts, so it is logged rather than fatal.
-func TriageBacklog(ctx context.Context, req Request) (string, error) {
-	if req.Options.Envelope != todoprompt.EnvelopeTriage || req.Provider == nil {
-		return "", nil
+	if err != nil && !outcome.Execution.Cancelled {
+		logger.Warnf("todo run %s failed: %v", Label(req.Todo), err)
 	}
-	candidates, err := req.Provider.List(ctx, todos.DiscoveryFilters{
-		ExcludeStatuses: []types.Status{types.StatusCompleted},
-	})
-	if err != nil {
-		logger.Warnf("triage duplicate detection is degraded: could not list the backlog: %v", err)
-		return "", nil
-	}
-	return todos.BuildBacklogIndex(candidates, req.Todos), nil
-}
-
-func PlanMarkdown(ctx context.Context, provider todos.Provider, todoList []*types.TODO, mode types.RunMode) (string, error) {
-	if len(todoList) != 1 || (mode != types.ModePlan && mode != types.ModeRun) {
-		return "", nil
-	}
-	content, ok := provider.(todos.PlanContentProvider)
-	if !ok {
-		return "", fmt.Errorf("PostgreSQL TODO runtime does not support durable plan content")
-	}
-	return content.PlanMarkdown(ctx, todoList[0], mode)
+	return err
 }

@@ -9,7 +9,7 @@
 // importable by the other two.
 //
 // It is a sibling of `todos` rather than part of it because starting a run
-// needs `todos/drivers`, and `todos/drivers` imports `todos`.
+// needs `todos/headless`, and `todos/headless` imports `todos`.
 package run
 
 import (
@@ -30,7 +30,7 @@ var (
 	ErrStopped      = todos.ErrExecutionCancelled
 	ErrAlreadyOwned = errors.New("todo already has a dashboard-owned run")
 	ErrNotOwned     = errors.New("todo run is not owned by this dashboard process")
-	ErrNotStoppable = errors.New("todo run driver cannot be stopped safely")
+	ErrNotStoppable = errors.New("todo run's runtime cannot be stopped safely")
 	ErrStopping     = errors.New("todo run is already stopping")
 )
 

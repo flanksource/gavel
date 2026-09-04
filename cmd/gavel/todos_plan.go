@@ -7,6 +7,8 @@ import (
 
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/todos"
+	"github.com/flanksource/gavel/todos/lifecycle"
+	"github.com/flanksource/gavel/todos/run"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/spf13/cobra"
 )
@@ -19,7 +21,7 @@ var (
 var todosPlanCmd = &cobra.Command{
 	Use:   "plan",
 	Short: "Act on or recover a todo plan",
-	Long: `Act on a plan produced by 'gavel todos run --mode plan' that is awaiting review.
+	Long: `Act on a plan produced by 'gavel todos run --step plan' that is awaiting review.
 Subcommands: approve (the plan becomes the one a run implements, optionally
 chaining that run with --run), reject (todo returns to pending, plan marked
 rejected) and revise (agent folds your --feedback into the plan and returns it to
@@ -121,7 +123,9 @@ func runTodosPlanRecover(_ *cobra.Command, args []string) error {
 
 // runApprovedTODO dispatches the implement run that --run chains; a var so the
 // approval transition can be tested without spawning an agent.
-var runApprovedTODO = executeSingleTODOs
+var runApprovedTODO = func(workDir string, todo *types.TODO, provider todos.Provider, opts run.Options) error {
+	return runTodoStep(context.Background(), workDir, provider, todo, opts)
+}
 
 func runTodosPlanApprove(_ *cobra.Command, args []string) error {
 	ctx := context.Background()
@@ -133,6 +137,30 @@ func runTodosPlanApprove(_ *cobra.Command, args []string) error {
 	if !ok {
 		return fmt.Errorf("native PostgreSQL TODO provider does not support durable plan review")
 	}
+	// Read the plan's prompt run before approving: the approval retires it, and it
+	// is the record of the runtime the implement run continues.
+	planRun, err := run.PriorRun(ctx, provider, todo)
+	if err != nil {
+		return err
+	}
+	// The implement run is placed in the lifecycle before the plan is approved,
+	// so a continuation the lifecycle refuses changes nothing. An approved plan
+	// is implemented, not re-planned, and the implement run is a fresh turn
+	// rather than a continuation of the planning conversation — the approved
+	// plan reaches it through the provider, not through session history. Only
+	// the runtime the plan run resolved carries: a codex plan is implemented by
+	// codex. Everything else resolves from .gavel.yaml exactly as 'gavel todos
+	// run' would.
+	var opts run.Options
+	if planApproveRun {
+		opts, err = run.Continue(run.Continuation{
+			Dir: workDir, Provider: provider, Todo: todo, Prior: planRun,
+			Override: run.Options{Host: lifecycle.HostCLI}, Step: string(types.RunPhase),
+		})
+		if err != nil {
+			return err
+		}
+	}
 	todo, err = reviewer.ApprovePlan(ctx, todo, "gavel-cli", "")
 	if err != nil {
 		return err
@@ -142,15 +170,7 @@ func runTodosPlanApprove(_ *cobra.Command, args []string) error {
 		logger.Infof("Run it with: gavel todos run %s", todo.Filename())
 		return nil
 	}
-
-	// An approved plan is implemented, not re-planned, and the implement run is a
-	// fresh turn rather than a continuation of the planning conversation — the
-	// approved plan reaches it through the provider (lifecycle loads PlanMarkdown
-	// for ModeRun), not through session history. Everything else resolves from
-	// .gavel.yaml exactly as 'gavel todos run' would.
-	todosRunMode = types.ModeRun
-	resumeSession = false
-	return runApprovedTODO(workDir, types.TODOS{todo}, newInteraction(), provider)
+	return runApprovedTODO(workDir, todo, provider, opts)
 }
 
 func runTodosPlanReject(_ *cobra.Command, args []string) error {
@@ -181,37 +201,40 @@ func runTodosPlanRevise(_ *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	if todo.LLM == nil || todo.LLM.SessionId == "" {
-		return fmt.Errorf("todo has no recorded plan session to revise")
-	}
 	reviewer, ok := provider.(todos.PlanReviewProvider)
 	if !ok {
 		return fmt.Errorf("native PostgreSQL TODO provider does not support durable plan review")
+	}
+	// Read the plan's prompt run before the revision transition retires it.
+	planRun, err := run.PriorRun(ctx, provider, todo)
+	if err != nil {
+		return err
+	}
+	// Revise re-enters the plan step, continuing the plan run's own
+	// configuration and the runtime it resolved. With a recorded session it
+	// resumes that session with the feedback as the next turn, so the agent
+	// updates its plan and the step's outcome lands the todo back in review;
+	// without one it plans afresh with the feedback in the todo's own prompt.
+	c := run.Continuation{
+		Dir: workDir, Provider: provider, Todo: todo, Prior: planRun,
+		Override: run.Options{Host: lifecycle.HostCLI}, Step: string(types.PlanPhase),
+	}
+	resume := run.PriorSessionID(todo) != ""
+	if resume {
+		c.Resume, c.Message = true, feedback
+	}
+	opts, err := run.Continue(c)
+	if err != nil {
+		return err
 	}
 	todo, err = reviewer.RequestPlanRevision(ctx, todo, "gavel-cli", feedback)
 	if err != nil {
 		return err
 	}
-
-	// Resume the plan session in plan mode so the agent updates its native plan
-	// file and the run lands back in review (applyPlanOutcome). Going through
-	// newExecutor is what gives a revise the same .gavel.yaml resolution — model,
-	// budget, timeout, driver — as the plan it revises.
-	//
-	// workDir is the un-joined discovery root: the todo's CWD is joined exactly
-	// once, downstream in headless.groupWorkDir.
-	todosRunMode = types.ModePlan
-	resumeSession = true
-	executor, sessionID, timeout, err := newExecutor(workDir, []*types.TODO{todo}, provider)
-	if err != nil {
-		return err
+	if !resume {
+		todo.Prompt = "Revise the existing plan using this reviewer feedback:\n\n" + feedback
 	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	runner := todos.NewTODOExecutor(workDir, executor, sessionID, provider)
-	runner.SetMode(types.ModePlan)
-	execCtx := todos.NewExecutorContext(ctx, logger.StandardLogger(), nil)
-	if _, err := runner.Resume(execCtx, []*types.TODO{todo}, feedback); err != nil {
+	if err := runTodoStep(ctx, workDir, provider, todo, opts); err != nil {
 		return fmt.Errorf("revise plan: %w", err)
 	}
 	logger.Infof("Revised plan for %s — %s", todo.Filename(), todo.Status.Pretty().ANSI())

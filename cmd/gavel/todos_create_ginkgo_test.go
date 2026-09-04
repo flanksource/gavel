@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"testing"
 
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/types"
@@ -13,10 +12,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func TestTodosCreateCLI(t *testing.T) {
-	RegisterFailHandler(Fail)
-	RunSpecs(t, "TODO create CLI")
-}
+// The package's one ginkgo bootstrap is TestGavelCLI, in
+// gavel_suite_ginkgo_test.go. A second RunSpecs in the same package aborts the
+// whole run with "Rerunning Suite", so the specs below join that suite instead
+// of declaring one of their own.
 
 var _ = Describe("TODO text inputs", func() {
 	It("registers create plan and verification flags without body-file flags", func() {

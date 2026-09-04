@@ -1,14 +1,13 @@
 package run
 
 import (
+	"context"
 	"fmt"
-	"time"
 
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/commons-db/shell"
 	"github.com/flanksource/gavel/todos"
-	"github.com/flanksource/gavel/todos/drivers"
-	todoprompt "github.com/flanksource/gavel/todos/prompt"
+	"github.com/flanksource/gavel/todos/lifecycle"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/google/uuid"
 )
@@ -20,63 +19,82 @@ type StartResult struct {
 	Status    string
 	SessionID string
 	Message   string
+	// Done receives the run's final error (nil on success) once the background
+	// run has applied its outcome, then closes. A caller that must block on the
+	// run — the CLI — reads it; an HTTP handler ignores it. Nil means there is
+	// nothing left to wait for.
+	Done <-chan error
+	// Stop cancels the in-flight run with a cause, for a caller that owns a
+	// terminal and has to honour an interrupt. Nil when the run is not live.
+	Stop context.CancelCauseFunc
 }
 
-// Request is one run: the TODOs to execute, where, and under which resolved
-// options. Registry is the process's in-flight run map, so a TODO cannot be run
+// Request is one run: the TODO to execute, where, and what the caller asked
+// for. Registry is the process's in-flight run map, so a TODO cannot be run
 // twice at once and an in-flight run stays cancellable.
 type Request struct {
 	Provider todos.Provider
 	Registry *Registry
-	// Todos are executed together in a single agent session (multi-select run);
-	// a single-element slice is the ordinary one-todo run.
-	Todos   []*types.TODO
-	Dir     string
-	Backend string
+	// Todo is the issue this run works. Grouped execution does not exist on the
+	// PostgreSQL runtime — one issue, one lifecycle, one run.
+	Todo *types.TODO
+	Dir  string
+	// Options is what the caller decided; everything else comes from the
+	// lifecycle definition.
 	Options Options
+	// Broker answers the run's tool-permission requests. Only a caller that
+	// serves an approval surface supplies one — the CLI leaves it nil, because a
+	// run that asked it for a decision would block until its timeout.
+	Broker todos.ApprovalBroker
+	// Prepared is the resolution a caller already performed as its pre-flight.
+	// Start dispatches exactly that fold instead of folding again, so the step
+	// and session it reported cannot differ from the ones that run: a todo that
+	// changed in between would otherwise run a different step from the one the
+	// caller was told about, and a cmux run would be watched on a session id
+	// nothing writes to. Nil means Start resolves for itself.
+	Prepared *Prepared
 }
 
-// Options is a fully resolved run — the output of the resolution fold, never
-// raw request input. Everything here has already been validated and layered.
+// Options is what a caller decides about one step run. Everything else — which
+// prompt renders, which spec layers fold, how long the run may take, and which
+// status its result lands the todo in — is the lifecycle definition's, resolved
+// by the host.
+//
+// It is deliberately NOT a resolved run any more. Resolution belongs to exactly
+// one place, and a second pre-resolved copy travelling alongside it is a second
+// answer to "what is this run", which is one more than can be right.
 type Options struct {
-	// Spec carries the model/backend/effort/budget/prompt/permissions/session
-	// knobs plus the run's Setup (dirty/checkout) and Workflow (verify/commits).
-	// dirty/checks/commit/dryRun are read from Spec.Setup/Spec.Workflow (see
-	// Dirty/Commit/DryRun below), not sibling flags.
-	//
-	// Named, not embedded: api.Spec's promoted MarshalJSON/MarshalYAML would emit
-	// only the spec and drop Driver/RunMode/Resume.
-	Spec    api.Spec
-	Driver  string
-	RunMode types.RunMode
-	// Prompt is the resolved prompt name and Envelope the structured result it
-	// returns. RunMode says how the run behaves; these say what it runs.
-	Prompt   string
-	Envelope todoprompt.EnvelopeKind
-	Resume   bool
+	// Step names the lifecycle step to run. Empty runs the step the lifecycle
+	// picks next for this todo.
+	Step string
+	// Request is the caller's explicit spec — parsed CLI flags or the dashboard
+	// payload — folded as the TOP layer. A knob the caller did not set must
+	// arrive zero, or it beats the configuration it claims to defer to.
+	Request api.Spec
+	// Prior are the layers a continuation inherits from the run it continues.
+	// See lifecycle.LayerInput.Prior.
+	Prior []api.SpecLayer
+	// Resume continues the todo's recorded agent session instead of opening one.
+	Resume bool
+	// Message is the user turn a resumed session continues with — the answer to
+	// an ask, a reviewer's feedback on a plan. It replaces the rendered prompt:
+	// the session already holds the todo, and re-sending the instructions it has
+	// acted on would ask for the work twice. It requires Resume.
+	Message string
 	// Concurrent dispatches this run alongside one that is already live and
 	// owned by a running process, instead of refusing. It is never a default:
 	// the caller sets it after confirming (--force, or the dashboard dialog).
 	Concurrent bool
-	// Template is the .gavel.yaml prompt override source resolved alongside Spec;
-	// empty renders the mode's embedded default. It travels with the options so
-	// the preview and the executor cannot resolve different overrides.
-	Template string
-	// Approvals gates Bash behind human approval. Whether it is *enabled* is a
-	// .gavel.yaml decision (todos.approvals), not an entrypoint constant; whether
-	// it can be *answered* is up to the caller that sets it.
-	Approvals bool
-	// Timeout is Spec.Budget.Timeout already parsed by the resolution seam, so no
-	// consumer re-parses a string it cannot fail on.
-	Timeout time.Duration
+	// Host is the entrypoint; it decides the permission posture the host itself
+	// contributes. See lifecycle.HostKind.
+	Host lifecycle.HostKind
 }
 
-// IsStoppable reports whether an in-flight run can be cancelled. Headless
-// drivers own the agent process and honour context cancellation; a cmux run is
-// driven through a detached surface that outlives the request.
-func IsStoppable(opts Options) bool {
-	kind, err := drivers.Parse(opts.Driver)
-	return err == nil && kind != drivers.Cmux
+// IsStoppable reports whether an in-flight run can be cancelled. A headless
+// runtime owns the agent process and honours context cancellation; a cmux run
+// is driven through a detached surface that outlives the request.
+func IsStoppable(spec api.Spec) bool {
+	return spec.Mode != api.ModeCmux
 }
 
 // Commits returns the run's commit policies (nil when the spec asks for none).
@@ -136,47 +154,31 @@ func StartedMessage(count int) string {
 	return "Todo run started"
 }
 
-// Label names a run for a log line: the single TODO's reference, or a count.
-func Label(todoList []*types.TODO) string {
-	if len(todoList) == 1 {
-		return todos.TODOReference(todoList[0])
-	}
-	return fmt.Sprintf("%d todos", len(todoList))
+// Label names a run for a log line.
+func Label(todo *types.TODO) string {
+	return todos.TODOReference(todo)
 }
 
-// ResolveSessionID determines the claude session id a run will use, so the
-// caller knows it up front. A resume run reuses the todo's prior session; a
-// fresh cmux run mints a new id (claude is launched with it, so a dashboard can
-// follow the log immediately); other backends reuse a single todo's known
-// session when available and otherwise let the provider establish one.
-func ResolveSessionID(opts Options, todoList []*types.TODO) string {
-	if opts.Resume {
-		if sid := FirstSessionID(todoList); sid != "" {
-			return sid
-		}
+// SessionIDFor is the agent session id a resolved run will use, so a caller can
+// follow the session log from the moment it starts. A resume reuses the todo's
+// prior session; a fresh cmux run mints a new id (claude is launched with it);
+// every other runtime reuses the todo's known session when it has one and
+// otherwise lets the provider establish one.
+func SessionIDFor(spec api.Spec, todo *types.TODO, resume bool) string {
+	prior := PriorSessionID(todo)
+	if resume && prior != "" {
+		return prior
 	}
-	kind, err := drivers.Parse(opts.Driver)
-	if err != nil {
-		panic(fmt.Sprintf("resolved TODO run has invalid driver %q: %v", opts.Driver, err))
-	}
-	switch kind {
-	case drivers.Cmux:
+	if spec.Mode == api.ModeCmux {
 		return uuid.NewString()
-	case drivers.Api, drivers.Agent, drivers.Cli:
-		if len(todoList) == 1 {
-			return FirstSessionID(todoList)
-		}
-	default:
-		panic(fmt.Sprintf("resolved TODO run has unsupported driver %q", opts.Driver))
 	}
-	return ""
+	return prior
 }
 
-func FirstSessionID(todoList []*types.TODO) string {
-	for _, todo := range todoList {
-		if todo != nil && todo.LLM != nil && todo.LLM.SessionId != "" {
-			return todo.LLM.SessionId
-		}
+// PriorSessionID is the todo's recorded agent session.
+func PriorSessionID(todo *types.TODO) string {
+	if todo != nil && todo.LLM != nil {
+		return todo.LLM.SessionId
 	}
 	return ""
 }

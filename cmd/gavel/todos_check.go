@@ -8,12 +8,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/pr/ui"
 	"github.com/flanksource/gavel/todos"
+	"github.com/flanksource/gavel/todos/lifecycle"
 	todoruntime "github.com/flanksource/gavel/todos/runtime"
 	"github.com/flanksource/gavel/todos/types"
+	"github.com/flanksource/gavel/verify"
 	"github.com/spf13/cobra"
 )
 
@@ -193,21 +196,27 @@ func runTodosCheck(cmd *cobra.Command, args []string) error {
 
 	logger.Infof("Found %d TODOs to check", len(todoList))
 
-	// Verification is a run configuration like any other, so it resolves through
-	// the same seam: `.gavel.yaml` ai:/todos: reaches `todos check` exactly as it
-	// reaches the dashboard's verify handler, instead of the command being pinned
-	// to an unconfigurable flag default.
-	resolved, err := todosSpecForMode(workDir, types.ModeVerify, todoList, checkTimeout)
+	// The check is the lifecycle's verify step, dispatched by the host that owns
+	// the workspace's lifecycle: `.gavel.yaml` ai:/todos.verify reach `todos
+	// check` exactly as they reach the dashboard's verify action, and the flag is
+	// the request layer on top.
+	host, err := lifecycle.NewHost(provider, workDir, lifecycle.HostCLI)
+	if err != nil {
+		return err
+	}
+	var request api.Spec
+	if checkTimeout > 0 {
+		request.Budget.Timeout = checkTimeout.String()
+	}
+	concurrency, err := resolveCheckConcurrency(workDir)
 	if err != nil {
 		return err
 	}
 	checkOpts := todos.CheckOptions{
-		WorkDir:     workDir,
-		Timeout:     resolved.Timeout,
+		Runner:      host,
+		Request:     request,
 		Logger:      logger.StandardLogger(),
-		Provider:    provider,
-		Spec:        &resolved.Spec,
-		Concurrency: resolveCheckConcurrency(workDir),
+		Concurrency: concurrency,
 	}
 
 	ctx := context.Background()
@@ -253,29 +262,6 @@ func init() {
 	todosCmd.AddCommand(todosGetCmd)
 	todosCmd.AddCommand(todosCheckCmd)
 
-	todosRunCmd.Flags().StringVar(&filterStatus, "status", "", "Filter TODOs by status (pending, in_progress, failed)")
-	todosRunCmd.Flags().Float64Var(&maxBudget, "max-budget", 0, "Maximum budget in USD")
-	todosRunCmd.Flags().IntVar(&maxTurns, "max-turns", 0, "Maximum conversation turns")
-	todosRunCmd.Flags().BoolVarP(&interactive, "interactive", "i", false, "Interactively select TODOs to run")
-	todosRunCmd.Flags().StringVar(&groupBy, "group-by", "", "Group TODOs by: file, directory, repo, all, or none")
-	todosRunCmd.Flags().StringVar(&todosMode, "mode", "run", "Behaviour class: run (implement and commit) or plan (propose a reviewable plan). Prefer --prompt")
-	todosRunCmd.Flags().StringVar(&todosPrompt, "prompt", "",
-		"Prompt to run: run, plan, triage, or a name from .gavel.yaml todos.prompts. "+
-			"Each declares its own behaviour class, so --mode is only needed to assert one. "+
-			"Run `gavel todos prompts` to list them")
-	todosRunCmd.Flags().StringVar(&todosDriver, "driver", "", "Execution mechanism: api, agent, cli, or cmux (default: cmux). The coding agent is derived from --model")
-	todosRunCmd.Flags().StringVar(&todoModel, "model", "", "LLM model override for TODO execution (empty: the mode's .prompt frontmatter default)")
-	// Empty, not "medium": the flag is the highest resolution layer, so a non-zero
-	// default would beat the .prompt frontmatter it claims to defer to. todos/spec
-	// applies medium once nothing else has spoken.
-	todosRunCmd.Flags().StringVar(&todoEffort, "effort", "", "Reasoning effort directive: low, medium, high, or xhigh (empty: the mode's .prompt frontmatter, else medium)")
-	todosRunCmd.Flags().BoolVar(&resumeSession, "resume", false, "Resume the TODO's prior agent session instead of starting a fresh one")
-	todosRunCmd.Flags().BoolVar(&forceRun, "force", false, "Dispatch even when the TODO already has a live run on another process: the two runs proceed in parallel (without it you are asked)")
-	todosRunCmd.Flags().BoolVar(&dirty, "dirty", false, "Carry the working tree's uncommitted changes into the configured checkout's worktree (no-op without one: the run already happens in the dirty tree)")
-	todosRunCmd.Flags().BoolVar(&dryRun, "dry-run", false, "Print commands and prompts without executing")
-	todosRunCmd.Flags().BoolVar(&commitAfter, "commit", true, "Run the equivalent of `gavel commit` after each TODO's agent completes (use --commit=false to disable)")
-	todosRunCmd.Flags().BoolVar(&checkAfter, "check", false, "After each TODO's agent completes, run the configured `checks` test/lint suite and feed failures back to the agent until they pass (see .gavel.yaml checks / frontmatter)")
-
 	todosCheckCmd.Flags().StringVar(&filterStatus, "status", "", "Filter TODOs by status")
 	todosCheckCmd.Flags().DurationVar(&checkTimeout, "timeout", 0, "Test execution timeout (empty: .gavel.yaml todos.timeout, else 30m)")
 	todosCheckCmd.Flags().IntVar(&checkConcurrency, "concurrency", 0,
@@ -284,6 +270,21 @@ func init() {
 
 func newTodosProvider(workDir string) (todos.Provider, error) {
 	return openRuntimeTodosProvider(context.Background(), workDir)
+}
+
+// resolveCheckConcurrency reads the configured definition-of-done concurrency,
+// with the --concurrency flag on top. An unreadable .gavel.yaml is the check's
+// own error: every check resolves its verify chain from the same file, so
+// running on a default here would only defer the same failure to each todo.
+func resolveCheckConcurrency(workDir string) (int, error) {
+	if checkConcurrency > 0 {
+		return checkConcurrency, nil
+	}
+	cfg, err := verify.LoadGavelConfig(workDir)
+	if err != nil {
+		return 0, fmt.Errorf("load .gavel.yaml: %w", err)
+	}
+	return cfg.Todos.CheckConcurrency, nil
 }
 
 // resolveRequestedTODOs preserves direct native reference semantics for UUIDs,
@@ -303,7 +304,10 @@ func resolveRequestedTODOs(ctx context.Context, provider todos.Provider, args []
 			// Preserve exact-title CLI compatibility without replacing the native
 			// repository's prefix length and ambiguity checks.
 			if listed == nil {
-				listed, _ = provider.List(ctx, todos.DiscoveryFilters{})
+				var listErr error
+				if listed, listErr = provider.List(ctx, todos.DiscoveryFilters{}); listErr != nil {
+					return nil, fmt.Errorf("%w (and listing todos to match %q by title failed: %v)", err, ref, listErr)
+				}
 			}
 			var titleMatches types.TODOS
 			for _, candidate := range listed {
