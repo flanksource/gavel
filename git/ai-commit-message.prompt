@@ -10,10 +10,6 @@ output:
       type:
         type: string
         description: "Conventional commit type"
-        enum:
-{{#each commitTypes}}
-          - {{this}}
-{{/each}}
       scope:
         type: string
         maxLength: 20
