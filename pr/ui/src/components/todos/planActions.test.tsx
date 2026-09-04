@@ -1,7 +1,6 @@
 import React from 'react';
 import { act, fireEvent, render as rtlRender, screen, waitFor, type RenderOptions } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { WORKFLOW_PHASES_MOCK } from './workflowPhasesMock';
 import type { TodoItem, TodoQuestion } from '../../types';
 import type { RunContext } from './providers';
 import {
@@ -76,7 +75,6 @@ vi.mock('@flanksource/clicky-ui/chat', () => ({
 
 vi.mock('@flanksource/clicky-ui/ai', async importOriginal => ({
   ...(await importOriginal<typeof import('@flanksource/clicky-ui/ai')>()),
-  WORKFLOW_PHASES: WORKFLOW_PHASES_MOCK,
   effortOptionsForModel: (_model: unknown, fallback: string[]) => fallback,
   PromptRunEditor: () => null,
   RuntimeBar: ({ value, onChange, ariaLabel, className }: {
@@ -152,6 +150,10 @@ const context: RunContext = {
   defaultProvider: 'openai',
   efforts: ['low', 'medium', 'high', 'xhigh'],
   tools: [],
+  lifecycle: { steps: [
+    { name: 'plan', label: 'Plan', prompt: 'plan', readOnly: false },
+    { name: 'run', label: 'Run', prompt: 'run', readOnly: false },
+  ] },
   runtimes: [
     { family: 'codex', provider: 'openai', catalogPrefix: 'openai', modes: [{ mode: 'agent', schema: { type: 'object' } }, { mode: 'cmux', schema: { type: 'object' } }] },
     { family: 'claude', provider: 'anthropic', catalogPrefix: 'anthropic', modes: [{ mode: 'agent', schema: { type: 'object' } }] },
@@ -252,17 +254,25 @@ describe('PlanApproveButtons', () => {
 
   it('approves and runs with the remembered run options', async () => {
     mockRunContext();
+    // Seed PromptRunButton's own approval-scope storage directly. It used to
+    // be enough to seed run.tsx's old todoRunChoices key and rely on
+    // migrateApprovalHistory's one-time bridge — but that bridge triggers on
+    // the *presence* of run.tsx's v2 key while reading the value through
+    // loadLastTodoRunOptions, which now reads run.tsx's v3 key; with the run
+    // dialog's storage bumped to v3 (see run.tsx's RUN_CHOICE_STORAGE_KEY),
+    // that bridge no longer has anything meaningful to migrate, so it is no
+    // longer this test's concern.
     localStorage.setItem(
-      'gavel.pr-ui.todoRunChoices.v2',
+      'gavel.pr-ui.promptRunChoices.v2',
       JSON.stringify({
-        last: {
-          run: {
+        approval: {
+          last: {
             driver: 'agent',
             runMode: 'run',
             spec: { mode: 'agent', model: 'claude-opus-4-8', effort: 'high' },
           },
+          recent: [],
         },
-        recentAdvanced: {},
       }),
     );
     const onApprove = vi.fn();

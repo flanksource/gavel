@@ -2,7 +2,6 @@ import type React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { WORKFLOW_PHASES_MOCK } from './workflowPhasesMock';
 import type { SessionToolDecision } from '@flanksource/clicky-ui/ai';
 import type { TodoItem, TodoSessionAttempt } from '../../types';
 import { TodoSession, useSessionStatus } from './TodoSession';
@@ -25,11 +24,11 @@ const sessionDetailMock = vi.hoisted(() => ({
     admissionSessionId: 'admission-1',
     createdAt: '2026-08-02T10:00:00Z',
     updatedAt: '2026-08-02T10:01:00Z',
+    verification: null,
   } satisfies TodoSessionAttempt,
 }));
 
 vi.mock('@flanksource/clicky-ui/ai', () => ({
-  WORKFLOW_PHASES: WORKFLOW_PHASES_MOCK,
   SessionInspector: () => <div data-testid="session-inspector" />,
   SessionViewer: () => <div data-testid="session-viewer" />,
 }));
@@ -51,6 +50,16 @@ vi.mock('./TodoSessionDetail', () => ({
         allow: true,
         message: 'Proceed',
       })}>Answer question</button>
+      {/* A decision whose event carries an approvalId is a live tool-approval
+          (clicky-ui's SessionViewer stamps this on from the matched pending
+          tool) — "Reject with comment" wires the reason textarea's value
+          straight into decision.message. */}
+      {/* oxlint-disable-next-line clicky-ui/prefer-clicky-components -- test control for the mocked ThreadInspector callback. */}
+      <button type="button" onClick={() => void onPendingToolDecision({
+        event: { id: 'tool-2', kind: 'tool', tool: 'Bash', approvalId: 'approval-9' },
+        allow: false,
+        message: 'Looks risky',
+      })}>Deny with reason</button>
       {/* oxlint-disable-next-line clicky-ui/prefer-clicky-components -- test control for the mocked ThreadInspector callback. */}
       <button type="button" onClick={() => void onStop(sessionDetailMock.attempt)}>Stop attempt</button>
     </div>
@@ -134,26 +143,29 @@ describe('session errors', () => {
   it('updates the exact session stats cache after approving a pending tool', async () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const statsKey = todoQueryKeys.sessionStats('/repo', 'session-1');
-    vi.stubGlobal('fetch', vi.fn()
+    const approveFetch = vi.fn()
       .mockResolvedValueOnce({
         ok: true,
         json: async () => ({
           found: true,
           state: 'approval',
           inProgress: true,
-          approval: { sessionId: 'session-1', tool: 'Bash', input: {}, toolUseId: 'tool-1' },
+          approvals: [{ approvalId: 'approval-1', sessionId: 'session-1', tool: 'Bash', input: {}, toolUseId: 'tool-1' }],
         }),
       })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ resolved: true, allow: true }) }));
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ resolved: true }) });
+    vi.stubGlobal('fetch', approveFetch);
 
     const { result } = renderHook(() => useSessionStatus('/repo', 'session-1', true), {
       wrapper: ({ children }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>,
     });
-    await waitFor(() => expect(result.current.approval?.toolUseId).toBe('tool-1'));
+    await waitFor(() => expect(result.current.approvals[0]?.approvalId).toBe('approval-1'));
 
-    await act(() => result.current.approve(true));
+    await act(() => result.current.approve('approval-1', 'approve'));
 
-    expect(client.getQueryData<{ approval?: unknown }>(statsKey)?.approval).toBeUndefined();
+    expect(client.getQueryData<{ approvals?: unknown[] }>(statsKey)?.approvals).toEqual([]);
+    const [, init] = approveFetch.mock.calls[1] as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({ approvalId: 'approval-1', action: 'approve' });
   });
 
   it('prefixes approval failures with the session action context', async () => {
@@ -170,7 +182,7 @@ describe('session errors', () => {
     });
     await waitFor(() => expect(result.current.state).toBe('approval'));
 
-    await expect(result.current.approve(false)).rejects.toThrow(/session approval update failed.*approval is no longer pending/i);
+    await expect(result.current.approve('approval-1', 'deny')).rejects.toThrow(/session approval update failed.*approval is no longer pending/i);
   });
 
   it('reveals and copies every labeled session error', async () => {
@@ -279,6 +291,26 @@ describe('TodoSession mutations', () => {
     await waitFor(() => expect(onChanged).toHaveBeenCalledWith(answered));
     expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: todoQueryKeys.sessionStats('/repo', 'session-1') });
     expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: todoQueryKeys.sessionDetail('/repo', 'todo-1', 'session-1', false) });
+  });
+
+  it('denies a pending approval with a reason, posting the new approve/deny/respond body', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/session/stats')) return { ok: true, json: async () => ({ ...sessionStats, state: 'approval' }) };
+      if (url.includes('/session/approve')) {
+        expect(JSON.parse(init?.body as string)).toEqual({ approvalId: 'approval-9', action: 'deny', message: 'Looks risky' });
+        return { ok: true, json: async () => ({ resolved: true }) };
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    });
+    renderSession(fetchMock);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Deny with reason' }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/session/approve'),
+      expect.objectContaining({ method: 'POST' }),
+    ));
   });
 
   it('invalidates the stopped attempt and session caches after the server accepts cancellation', async () => {

@@ -6,8 +6,7 @@ import { UiClose, UiFolder, UiRefresh } from '@flanksource/clicky-ui/icons';
 import { Spinner } from '../../icons/Spinner';
 import type { Project, TodoGroupBy, TodoItem, TodoPhase } from '../../types';
 import { TODO_PHASES } from '../../types';
-import { TodoPhaseCell } from './TodoPhaseCell';
-import { phase as phaseMeta } from './phaseMachine';
+import { TodoPhaseCell, phase as phaseMeta } from './TodoPhaseCell';
 import type { TagIndex } from './tagResolve';
 import { todoVisibleLabels } from './tagResolve';
 import {
@@ -24,18 +23,15 @@ import {
   priorityIcon,
   statusLabel,
 } from './format';
-import { isEntryVisible } from './todoFilter';
 import { TODO_ACTIVITY_FILTER_LABEL, useTodoFilterBar } from './todoFilterBar';
 import {
   AGE_BUCKETS,
   SEVERITY_BUCKETS,
   ageKey,
-  flattenTodos,
   severityKey,
   type TodoEntry,
 } from './todoGroup';
-import { defaultTodoSort, todoComparator, type TodoSortColumn } from './todoSort';
-import { resolveRange } from './todoTimeRange';
+import { defaultTodoSort, type TodoSortColumn } from './todoSort';
 import { selectionKey } from './todoSelection';
 import { useTodoBulkContext, useTodoBulkToolbar } from './todoActions';
 import { TodoTagRow } from './TodoTag';
@@ -283,13 +279,17 @@ function TodoSignalsCell({ todo }: { todo: TodoItem }) {
 // sortable, groupable table under a filter bar wide enough to show its facets
 // inline. It reuses the split layout's filter/sort/group preferences and its
 // data pipeline, so switching layouts changes the arrangement, not the contents.
-export function TodoTable({ todos, projectsLoaded }: {
+export function TodoTable({ todos, projectsLoaded, rows, columns, query, onQueryChange }: {
   todos: WorkspaceTodos;
   projectsLoaded: boolean;
+  rows: TodoTableRow[];
+  columns: DataTableColumn<TodoTableRow>[];
+  query: string;
+  onQueryChange: (query: string) => void;
 }) {
   const {
-    workspaces, byDir, filters, timeRange, setTimeRange, density, groupBy, setGroupBy,
-    sortBy, setSortBy, select, selected, loadingList, refresh, error, selection, tagsByDir,
+    workspaces, timeRange, setTimeRange, density, groupBy, setGroupBy,
+    sortBy, setSortBy, select, selected, loadingList, refresh, error, selection,
   } = todos;
   const { facets, range } = useTodoFilterBar(todos);
   // The same descriptors the split layout renders, so a bulk action added on
@@ -303,21 +303,6 @@ export function TodoTable({ todos, projectsLoaded }: {
     onApplied: refresh,
   });
 
-  // Filtering and ordering stay with the helpers the list layout uses, so both
-  // layouts show the same todos in the same order. manualSort below keeps
-  // DataTable from re-sorting and losing todoComparator's title tie-break.
-  const rows = useMemo<TodoTableRow[]>(() => {
-    const resolved = resolveRange(timeRange, Date.now());
-    const cmp = todoComparator(sortBy);
-    return flattenTodos(workspaces, byDir)
-      .filter(entry => isEntryVisible(entry, filters, resolved))
-      .sort((a, b) => cmp(a.todo, b.todo))
-      // The index signature is DataTable's row constraint, not a shape any
-      // column reads: every column resolves its value through an accessor.
-      .map(entry => entry as TodoTableRow);
-  }, [workspaces, byDir, filters, timeRange, sortBy]);
-
-  const columns = useMemo(() => todoTableColumns({ groupBy, tagsByDir }), [groupBy, tagsByDir]);
   // Re-derived whenever the rows are, so the age buckets track the clock the way
   // the list layout's per-render bucketTodos(…, Date.now()) does. Memoised only
   // on `now` staying put between refreshes would leave a dashboard left open
@@ -345,7 +330,10 @@ export function TodoTable({ todos, projectsLoaded }: {
         externalFilters={facets}
         externalTimeRange={range}
         showGlobalFilter
+        globalFilter={query}
+        onGlobalFilterChange={onQueryChange}
         globalFilterPlaceholder="Search todos"
+        manualFilter
         filterBarProps={{
           className: 'shrink-0 border-b border-border bg-card px-2',
           // This row carries search, the workspace facet, the selection notice

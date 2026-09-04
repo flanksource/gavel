@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query';
-import type { TodoItem, TodoListResponse, TodoPriority, TodoStatus } from '../../types';
+import type { TodoItem, TodoListResponse, TodoPriority, TodoRunResponse, TodoStatus } from '../../types';
 import { todoQuery } from './format';
 import { setTodoQueryData, todoQueryKeys } from './todoQueries';
 import { workspaceTodoBatchKeys } from './workspaceTodoQueries';
@@ -178,17 +178,13 @@ export function useDeleteTodoMutation(dir: string) {
   });
 }
 
-// The response of POST /api/todos/verification/run. Only the parts a caller
-// acts on are modelled: recorded results are read back from the attempt list,
-// never from this payload.
-export interface VerificationRunResponse {
-  todo?: TodoItem;
-  verification?: { allPassed?: boolean; error?: string };
-  error?: string;
-}
-
 /**
- * Run the definition-of-done fixture.
+ * Run the definition-of-done fixture: `POST /api/todos/run` naming the `verify`
+ * lifecycle step, the same endpoint every other run action posts to. The
+ * recorded results are read back from the attempt list (see
+ * verificationReport.ts), never from this response — a verify run answers with
+ * the same bare status/message shape as a run/plan dispatch, not a payload of
+ * its own.
  *
  * Shared by the Verification tab and the header's Verify phase so both post the
  * same body and invalidate the same caches — a check started from the header
@@ -199,17 +195,17 @@ export function useTodoVerificationRun(dir: string, ref: string) {
   const client = useQueryClient();
   return useMutation({
     mutationKey: ['todos', 'verification', 'run', { dir: dir.trim(), ref }],
-    mutationFn: ({ ref: target, spec }: { ref: string; spec: unknown }) => todoMutationJSON<VerificationRunResponse>(
-      `/api/todos/verification/run?${todoQuery(dir)}`,
+    mutationFn: ({ ref: target, spec, resume, force }: { ref: string; spec: unknown; resume?: boolean; force?: boolean }) => todoMutationJSON<TodoRunResponse>(
+      `/api/todos/run?${todoQuery(dir)}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ref: target, spec }),
+        body: JSON.stringify({ ref: target, step: 'verify', spec, resume, force }),
       },
       'Verification run failed',
     ),
-    onSuccess: async (data) => {
-      if (data.todo) await setTodoCaches(client, dir, data.todo);
+    onSuccess: async () => {
+      await invalidateTodoCaches(client, dir, ref);
       await client.invalidateQueries({ queryKey: todoQueryKeys.sessionDetail(dir, ref, undefined, true) });
     },
   });

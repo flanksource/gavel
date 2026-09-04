@@ -9,6 +9,10 @@ const context: RunContext = {
   defaultProvider: 'openai',
   efforts: ['low', 'medium', 'high', 'xhigh'],
   tools: [],
+  lifecycle: { steps: [
+    { name: 'plan', label: 'Plan', prompt: 'plan', readOnly: false },
+    { name: 'run', label: 'Run', prompt: 'run', readOnly: false },
+  ] },
   runtimes: [
     { family: 'codex', provider: 'openai', catalogPrefix: 'openai', modes: [{ mode: 'agent', schema: { type: 'object' } }] },
     { family: 'claude', provider: 'anthropic', catalogPrefix: 'anthropic', modes: [{ mode: 'agent', schema: { type: 'object' } }, { mode: 'cli', schema: { type: 'object' } }] },

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ComponentType, type KeyboardEvent, type ReactNode } from 'react';
-import { Modal } from '@flanksource/clicky-ui/components';
-import { UiGitPr, UiListDashes, UiSearch } from '@flanksource/clicky-ui/icons';
+import { Button, Modal } from '@flanksource/clicky-ui/components';
+import { UiArrowLeft, UiGitPr, UiListDashes, UiSearch } from '@flanksource/clicky-ui/icons';
 import type { IconProps } from '@flanksource/clicky-ui/icons';
 import type { PRItem } from '../types';
 import type { TodoEntry } from './todos/todoGroup';
@@ -170,9 +170,19 @@ export function CommandPalette({ open, onClose, prs, todos, todosLoading, onSele
   const todoBase = directBase + Math.min(prMatches.length, GROUP_CAP);
 
   return (
-    <Modal open={open} onClose={onClose} size="lg" hideClose closeOnBackdrop closeOnEsc>
-      <div className="flex items-center gap-2 border-b border-border pb-3">
-        <UiSearch className="shrink-0 text-base text-muted-foreground" />
+    <Modal open={open} onClose={onClose} size="lg" hideClose expandable={false} closeOnBackdrop closeOnEsc scrollBody={false}>
+      <div className="flex shrink-0 items-center gap-2 border-b border-border pb-3 max-sm:-mx-density-4 max-sm:-mt-density-4 max-sm:min-h-14 max-sm:bg-background max-sm:px-density-4 max-sm:py-density-3">
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="-ml-2 sm:!hidden"
+          aria-label="Back"
+          onClick={onClose}
+        >
+          <UiArrowLeft />
+        </Button>
+        <UiSearch className="shrink-0 text-base text-muted-foreground max-sm:hidden" />
         <input
           ref={inputRef}
           value={query}
@@ -182,10 +192,10 @@ export function CommandPalette({ open, onClose, prs, todos, todosLoading, onSele
           aria-label="Search pull requests, todos, and sessions"
           className="flex-1 min-w-0 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
         />
-        <kbd className="shrink-0 rounded border border-border bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">esc</kbd>
+        <kbd className="hidden shrink-0 rounded border border-border bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground sm:!inline-flex">esc</kbd>
       </div>
 
-      <div ref={listRef} className="pt-2">
+      <div ref={listRef} className="min-h-0 flex-1 overflow-auto pt-2">
         {!q ? (
           <div className="py-8 text-center text-sm text-muted-foreground">
             Type to search pull requests and todos, or paste a Todo or session UUID.

@@ -76,7 +76,8 @@ export function verificationSpec(spec: AISpecRuntimeValue): AISpecRuntimeValue {
 function normalizePromptRunOptions(scope: PromptRunScope, options: TodoRunOptions, context: RunContext): TodoRunOptions {
   const reconciled = reconcileTodoRunOptions('run', options, context);
   // A verification run has no driver or run mode of its own — it posts a bare
-  // spec to /api/todos/verification/run — so only the spec half survives.
+  // spec to /api/todos/run naming the verify step — so only the spec half
+  // survives.
   return scope === 'verification' ? { spec: verificationSpec(runSpec(reconciled)) } : reconciled;
 }
 

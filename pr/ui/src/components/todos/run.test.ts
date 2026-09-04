@@ -1,8 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { buildRunFamilies, type RunContext } from './providers';
 import {
   buildTodoRunPayload,
   defaultRunOptionsForAction,
+	loadLastTodoRunOptions,
+	requestStepFor,
+	rememberTodoRunOptions,
 	runButtonLabelForOptions,
 	reconcileTodoRunOptions,
 	runSpec,
@@ -12,6 +15,9 @@ import {
 	todoRunEffortPresentation,
 } from './run';
 
+const RUN_CHOICE_STORAGE_KEY_V2 = 'gavel.pr-ui.todoRunChoices.v2';
+const RUN_CHOICE_STORAGE_KEY_V3 = 'gavel.pr-ui.todoRunChoices.v3';
+
 const context: RunContext = {
   defaultMode: 'cmux',
   defaultProvider: 'openai',
@@ -19,6 +25,11 @@ const context: RunContext = {
   tools: [],
   runtimes: [],
   models: [],
+  lifecycle: { steps: [
+    { name: 'plan', label: 'Plan', prompt: 'plan', readOnly: false },
+    { name: 'run', label: 'Run', prompt: 'run', readOnly: false },
+    { name: 'triage', label: 'Triage', prompt: 'triage', readOnly: false },
+  ] },
   modes: [
     {
       id: 'cmux',
@@ -61,6 +72,13 @@ const context: RunContext = {
 };
 
 describe('todo run runtime adapter', () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  // POST /api/todos/run decodes strictly and rejects runMode/driver/prompt at
+  // the top level, so the payload builder must not leak them — only `step`
+  // (the lifecycle step name) plus spec/resume/ref survive onto the wire.
   it('uses one complete payload for preview and submit without resending a generated prompt', () => {
     const runtime = {
       mode: 'cmux',
@@ -83,8 +101,7 @@ describe('todo run runtime adapter', () => {
       promptDirty: false,
     })).toEqual({
       ref: 'todo-123',
-      driver: 'cmux',
-      runMode: 'run',
+      step: 'run',
       resume: true,
       spec: {
         ...runtime,
@@ -102,14 +119,75 @@ describe('todo run runtime adapter', () => {
       promptDraft: 'Use this edited prompt',
       promptDirty: true,
     })).toMatchObject({
-      runMode: 'plan',
-      plan: true,
+      step: 'plan',
       spec: {
         budget: { timeout: '45m', maxTurns: 12 },
         permissions: { mode: 'dontAsk' },
         setup: { cwd: '/workspace' },
         prompt: { user: 'Use this edited prompt' },
       },
+    });
+    // Neither payload carries the fields the endpoint now rejects.
+    expect(buildTodoRunPayload({
+      ref: 'todo-123',
+      driver: 'cmux',
+      runMode: 'cmux',
+      runtime,
+      mode: 'triage',
+      resume: false,
+      promptDraft: '',
+      promptDirty: false,
+    })).not.toHaveProperty('driver');
+  });
+
+  it('names triage by its own prompt rather than collapsing it into plan/run', () => {
+    expect(buildTodoRunPayload({
+      ref: 'todo-123',
+      driver: 'cmux',
+      runMode: 'cmux',
+      runtime: { mode: 'cmux' },
+      mode: 'triage',
+      resume: false,
+      promptDraft: '',
+      promptDirty: false,
+    }).step).toBe('triage');
+  });
+
+  describe('requestStepFor', () => {
+    it('prefers an explicit step over the legacy runMode/plan/prompt fields', () => {
+      expect(requestStepFor({ step: 'custom-review', runMode: 'plan', plan: true })).toBe('custom-review');
+    });
+
+    it('falls back to a custom prompt name when no step is set', () => {
+      expect(requestStepFor({ prompt: 'triage' })).toBe('triage');
+    });
+
+    it('derives plan/run from the legacy flags as the last resort', () => {
+      expect(requestStepFor({ runMode: 'plan' })).toBe('plan');
+      expect(requestStepFor({ plan: true })).toBe('plan');
+      expect(requestStepFor({})).toBe('run');
+    });
+  });
+
+  describe('run-choice storage', () => {
+    // v3: the request body now sends `step`, not runMode/driver/prompt — a v2
+    // entry's shape is stale under the new contract, so it must never be read
+    // back, even though the value is still sitting in localStorage.
+    it('ignores a v2 entry instead of migrating it', () => {
+      localStorage.setItem(RUN_CHOICE_STORAGE_KEY_V2, JSON.stringify({
+        last: { run: { driver: 'cmux', runMode: 'run', spec: { mode: 'cmux', model: 'stale-v2-model' } } },
+        recentAdvanced: {},
+      }));
+
+      expect(runSpec(loadLastTodoRunOptions('run', context)).model).not.toBe('stale-v2-model');
+      expect(localStorage.getItem(RUN_CHOICE_STORAGE_KEY_V3)).toBeNull();
+    });
+
+    it('remembers a run under the v3 key, keyed by step', () => {
+      rememberTodoRunOptions('run', { driver: 'cmux', spec: { mode: 'cmux', model: 'gpt-5.5' } });
+      const stored = JSON.parse(localStorage.getItem(RUN_CHOICE_STORAGE_KEY_V3) ?? '{}');
+      expect(stored.last).toHaveProperty('run');
+      expect(stored.last).not.toHaveProperty('plan');
     });
   });
 
@@ -121,6 +199,7 @@ describe('todo run runtime adapter', () => {
       tools: [],
       runtimes: [],
       models: [],
+      lifecycle: { steps: [] },
       modes: [{
         id: 'agent',
         label: 'Codex Agent',
@@ -185,6 +264,9 @@ describe('todo run runtime adapter', () => {
   // todos-triage.prompt pins `model: claude` and allows only Read/Glob/Grep, so
   // under a codex default Captain refused the run outright: "mode
   // codex-agent cannot enforce a per-tool policy (Glob, Grep, Read)".
+  // promptDefaults is keyed by lifecycle step name (run/plan/triage/...), the
+  // same identifier a request's `step` field carries — not by a separate
+  // "prompt name" axis.
   it('seeds a prompt from its own resolved runtime, not the account default', () => {
     const withPromptDefaults: RunContext = {
       ...context,

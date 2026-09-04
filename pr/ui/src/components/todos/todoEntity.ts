@@ -1,5 +1,7 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { invalidateTodoCollections, todoMutationJSON } from './todoMutations';
+import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
+import { todoMutationJSON } from './todoMutations';
+import { todoQueryKeys } from './todoQueries';
+import { workspaceTodoBatchKeys } from './workspaceTodoQueries';
 
 /**
  * The todo action catalog, read from the server rather than declared here.
@@ -158,11 +160,46 @@ export function useTodoBulkActionMutation() {
       { method: request.action.method },
       `Failed to ${todoBulkActionLabel(request.action).toLowerCase()} ${request.refs.length} todo${request.refs.length === 1 ? '' : 's'}`,
     ),
-    onSuccess: async result => {
-      const dirs = new Set(result.results.map(item => item.dir ?? '').filter(dir => dir !== ''));
-      await Promise.all([...dirs].map(dir => invalidateTodoCollections(client, dir)));
-    },
+    onSuccess: (result, request) => invalidateBulkTodoCaches(client, result, request.action),
   });
+}
+
+/**
+ * Refresh everything one bulk action can have changed.
+ *
+ * The workspace listing is refreshed unconditionally rather than derived from
+ * the per-item outcomes: a batch that wrote can still report no workspace —
+ * `dir` is the resolved TODO's, and an item is free to answer without one — and
+ * deriving the refresh from it leaves the table rendering rows the batch has
+ * already changed.
+ *
+ * Each applied item's own detail cache goes with it. `refetchOnWindowFocus` is
+ * off app-wide, so a detail pane open on a bulk-edited todo would otherwise
+ * render its pre-action status until the user reselected it. A failed item is
+ * skipped — nothing was written, and refetching a ref the batch just failed to
+ * resolve only trades a stale row for an error.
+ */
+async function invalidateBulkTodoCaches(
+  client: QueryClient,
+  result: TodoBulkResult,
+  action: TodoBulkAction,
+) {
+  // A removed todo cannot be refetched, so its caches are dropped rather than
+  // invalidated — the same thing the single-todo delete does. The catalog's own
+  // destructive hint is the test, so this never has to know an action's name.
+  const removes = action.tool_hints?.destructiveHint === true;
+  const applied = result.results.filter(item => !item.error);
+  const tasks: Promise<unknown>[] = [client.invalidateQueries({ queryKey: workspaceTodoBatchKeys.all })];
+  for (const dir of new Set(applied.map(item => item.dir ?? ''))) {
+    tasks.push(client.invalidateQueries({ queryKey: todoQueryKeys.list(dir), exact: true }));
+  }
+  for (const item of applied) {
+    for (const queryKey of [todoQueryKeys.item(item.dir ?? '', item.ref), todoQueryKeys.globalItem(item.ref)]) {
+      if (removes) client.removeQueries({ queryKey, exact: true });
+      else tasks.push(client.invalidateQueries({ queryKey, exact: true }));
+    }
+  }
+  await Promise.all(tasks);
 }
 
 /** The one-line outcome a toast reports. Kept next to the mutation so the

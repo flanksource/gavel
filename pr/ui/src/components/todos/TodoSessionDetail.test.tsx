@@ -1,13 +1,11 @@
 import type React from 'react';
 import { fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { WORKFLOW_PHASES_MOCK } from './workflowPhasesMock';
 import type { TodoSessionAttempt, TodoSessionDetailResponse, TodoSessionOverview } from '../../types';
 import { attemptSessionCollection, inspectorSession, SessionDiagnostics, useTodoSessionDetail } from './TodoSessionDetail';
 import { queryTestWrapper } from './queryTestWrapper';
 
 vi.mock('@flanksource/clicky-ui/ai', () => ({
-  WORKFLOW_PHASES: WORKFLOW_PHASES_MOCK,
   SessionInspector: () => <div data-testid="session-inspector" />,
 }));
 
@@ -198,6 +196,7 @@ describe('TODO session details', () => {
         executionSessionId: 'root',
         createdAt: '2026-07-14T12:00:00Z',
         updatedAt: '2026-07-14T12:01:00Z',
+        verification: null,
       },
       {
         promptRunId: 'run-parallel',
@@ -225,6 +224,7 @@ describe('TODO session details', () => {
         executionSessionId: 'parallel',
         createdAt: '2026-07-14T11:00:00Z',
         updatedAt: '2026-07-14T11:02:00Z',
+        verification: null,
       },
     ];
     const detail: TodoSessionDetailResponse = {

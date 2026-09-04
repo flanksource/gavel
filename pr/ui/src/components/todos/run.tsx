@@ -9,6 +9,17 @@ import { settingsRunContextQuery } from "../settings/queries";
 import { invalidateTodoCaches, todoMutationJSON, TodoMutationError } from "./todoMutations";
 export { TodoRunEffortBadge, todoRunEffortPresentation } from "./TodoRunEffortBadge";
 import {
+  actionFromRunOptions,
+  normalizeRunOptions,
+  readRunChoiceState,
+  requestStepFor,
+  runOptionsKey,
+  writeRunChoiceState,
+  TODO_RUN_ACTIONS,
+  type TodoRunAction,
+} from "./runChoiceStorage";
+export { normalizeRunOptions, runOptionsKey, requestStepFor, TODO_RUN_ACTIONS, type TodoRunAction } from "./runChoiceStorage";
+import {
   agentForRuntime,
   PROVIDERS,
   type RunModeCatalog,
@@ -19,11 +30,6 @@ import {
 // or plan (neither). Verification is a fixture-backed issue lifecycle action in
 // the Verification tab, not an agent run mode.
 export type RunMode = "run" | "plan";
-// TodoRunAction is the prompt the dialog runs. Triage shares plan's behaviour
-// class but is a different prompt, which is why action and mode are separate
-// types: several prompts map onto one class.
-export type TodoRunAction = "run" | "plan" | "triage";
-export const TODO_RUN_ACTIONS: readonly TodoRunAction[] = ["run", "plan", "triage"] as const;
 export type TodoRunRuntimeMode = "cmux" | "agent" | "cli" | "api";
 
 // Runs auto-commit by default — the old commit=true default, now expressed as a
@@ -35,17 +41,6 @@ export type TodoRunRuntimeMode = "cmux" | "agent" | "cli" | "api";
 const AUTO_COMMIT: Pick<AISpecRuntimeValue, "workflow"> = { workflow: { commits: [{ on: "run", gates: "full" }] } };
 
 export const defaultRunOptions: TodoRunOptions = { driver: "cli", spec: { effort: "medium", ...AUTO_COMMIT } };
-
-type RunChoiceState = {
-  last: Partial<Record<TodoRunAction, TodoRunOptions>>;
-  recentAdvanced: Partial<Record<TodoRunAction, TodoRunOptions[]>>;
-};
-
-// v2: TodoRunOptions moved model/mode/effort/budget under a nested `spec`.
-// A v1 entry would still parse, but every spec field would read as unset and the
-// remembered model would silently revert to the mode default, so the version
-// is bumped to discard it instead.
-const RUN_CHOICE_STORAGE_KEY = "gavel.pr-ui.todoRunChoices.v2";
 
 export const runActionConfig: Record<TodoRunAction, { label: string; detail: string; icon: ComponentType<IconProps>; title: string }> = {
   run: { label: "Run", detail: "implement", icon: UiPlay, title: "Run todo" },
@@ -65,99 +60,11 @@ const RUNTIME_MODE_CONFIG: Record<TodoRunRuntimeMode, { label: string }> = {
   api: { label: "API" },
 };
 
-function emptyRunChoiceState(): RunChoiceState {
-  return { last: {}, recentAdvanced: {} };
-}
-
-function cloneRunOptions(options: TodoRunOptions): TodoRunOptions {
-  return JSON.parse(JSON.stringify(options)) as TodoRunOptions;
-}
-
 // runSpec is the api.Spec half of a run's options. The spec is nested under its
 // own key rather than inlined (see TodoRunOptions), so the many helpers that only
 // care about model/mode/effort read it through here.
 export function runSpec(options: TodoRunOptions): AISpecRuntimeValue {
   return options.spec ?? {};
-}
-
-function normalizeRunOptions(action: TodoRunAction, options: TodoRunOptions): TodoRunOptions {
-  const next = cloneRunOptions(options);
-  if (action === "triage") {
-    // The prompt name is the whole request: triage declares its own behaviour
-    // class, so asserting a mode alongside it would be rejected as contradictory.
-    next.prompt = "triage";
-    delete next.runMode;
-    delete next.plan;
-    return next;
-  }
-  delete next.prompt;
-  if (action === "plan") {
-    next.runMode = "plan";
-    next.plan = true;
-  } else {
-    next.runMode = "run";
-    delete next.plan;
-  }
-  return next;
-}
-
-function coerceRunOptions(value: unknown): TodoRunOptions | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  return value as TodoRunOptions;
-}
-
-function readRunChoiceState(): RunChoiceState {
-  try {
-    if (typeof localStorage === "undefined") return emptyRunChoiceState();
-    const raw = localStorage.getItem(RUN_CHOICE_STORAGE_KEY);
-    if (!raw) return emptyRunChoiceState();
-    const parsed = JSON.parse(raw) as Partial<RunChoiceState>;
-    const state = emptyRunChoiceState();
-    const last = parsed.last ?? {};
-    const recent = parsed.recentAdvanced ?? {};
-    for (const action of TODO_RUN_ACTIONS) {
-      const lastOptions = coerceRunOptions(last[action]);
-      if (lastOptions) state.last[action] = normalizeRunOptions(action, lastOptions);
-      const recentOptions = Array.isArray(recent[action]) ? recent[action] : [];
-      state.recentAdvanced[action] = recentOptions
-        .map(coerceRunOptions)
-        .filter((item): item is TodoRunOptions => !!item)
-        .map(item => normalizeRunOptions(action, item))
-        .slice(0, 3);
-    }
-    return state;
-  } catch {
-    return emptyRunChoiceState();
-  }
-}
-
-function writeRunChoiceState(state: RunChoiceState): void {
-  try {
-    if (typeof localStorage === "undefined") return;
-    localStorage.setItem(RUN_CHOICE_STORAGE_KEY, JSON.stringify(state));
-  } catch {
-    // Persistence is best-effort; unavailable storage should not block a run.
-  }
-}
-
-function sortForKey(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(sortForKey);
-  if (!value || typeof value !== "object") return value;
-  return Object.fromEntries(
-    Object.entries(value as Record<string, unknown>)
-      .filter(([, entry]) => entry !== undefined)
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([key, entry]) => [key, sortForKey(entry)]),
-  );
-}
-
-export function runOptionsKey(options: TodoRunOptions): string {
-  return JSON.stringify(sortForKey(options));
-}
-
-function actionFromRunOptions(options: TodoRunOptions): TodoRunAction {
-  if (options.prompt === "triage") return "triage";
-  return options.plan || options.runMode === "plan" ? "plan" : "run";
 }
 
 export interface TodoRunContextState {
@@ -185,7 +92,8 @@ export function useTodoRunContext(enabled = true): TodoRunContextState {
     !Array.isArray(context.runtimes) ||
     !Array.isArray(context.models) ||
     !Array.isArray(context.efforts) ||
-    !Array.isArray(context.tools)
+    !Array.isArray(context.tools) ||
+    !Array.isArray(context.lifecycle?.steps)
   )) {
     return { context: null, loading: false, error: "Captain returned an invalid run context" };
   }
@@ -407,12 +315,23 @@ export function useTodoRun(dir: string) {
   const client = useQueryClient();
   const mutation = useMutation({
     mutationKey: ["todos", "run", { dir: dir.trim() }],
+    // The endpoint decodes strictly: only dir/ref/step/spec/resume/force are
+    // accepted, so the body is built fresh from `options` rather than
+    // spreading it — a spread would leak driver/runMode/plan/prompt, which
+    // `options` still carries for the dialog's own bookkeeping (storage,
+    // labels), onto the wire and get rejected with a 400.
     mutationFn: ({ ref, options }: { ref: string; options: TodoRunOptions }) => todoMutationJSON<TodoRunResponse>(
       `/api/todos/run?${todoQuery(dir)}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ref, ...options }),
+        body: JSON.stringify({
+          ref,
+          step: requestStepFor(options),
+          spec: options.spec,
+          resume: options.resume,
+          force: options.force,
+        }),
       },
       `Failed to run todo ${ref}`,
     ),
@@ -455,7 +374,7 @@ export function useTodoRun(dir: string) {
 export function useTodoRunPreview(dir: string) {
   return useMutation({
     mutationKey: ["todos", "run", "preview", { dir: dir.trim() }],
-    mutationFn: ({ body, signal }: { body: TodoRunOptions & { ref: string }; signal?: AbortSignal }) => todoMutationJSON<TodoRunPreviewResponse>(
+    mutationFn: ({ body, signal }: { body: TodoRunRequestPayload; signal?: AbortSignal }) => todoMutationJSON<TodoRunPreviewResponse>(
       `/api/todos/run/preview?${todoQuery(dir)}`,
       {
         method: "POST",
@@ -496,6 +415,18 @@ export function runChoiceDetail(options: TodoRunOptions, fallback: string, conte
   return `${mode} · ${model}${effort}`;
 }
 
+// TodoRunRequestPayload is the exact wire shape POST /api/todos/run (and its
+// /preview sibling) accept: dir travels in the query string alongside it (see
+// todoQuery), so the body is just ref/step/spec/resume/force. The endpoint
+// decodes strictly and rejects runMode/driver/prompt at the top level.
+export interface TodoRunRequestPayload {
+  ref: string;
+  step: string;
+  spec: AISpecRuntimeValue;
+  resume?: boolean;
+  force?: boolean;
+}
+
 export function buildTodoRunPayload({
   ref,
   driver,
@@ -514,21 +445,24 @@ export function buildTodoRunPayload({
   resume: boolean;
   promptDraft: string;
   promptDirty: boolean;
-}): TodoRunOptions & { ref: string } {
+}): TodoRunRequestPayload {
   const { spec } = promptRuntimeValueToPayload(runtime);
   const prompt = promptDirty ? { ...spec.prompt, user: promptDraft } : spec.prompt;
-  // normalizeRunOptions owns which of runMode/plan/prompt a given action sends,
-  // so the dialog cannot drift from what the phase buttons send.
+  // normalizeRunOptions owns which of runMode/plan/prompt a given action
+  // implies, so the dialog cannot drift from what the phase buttons send —
+  // only its outcome (the step name) reaches the wire, not those fields
+  // themselves; `driver` never did select anything on the wire (the runtime
+  // mechanism lives in spec.mode) so it is accepted for symmetry with the
+  // phase buttons' call sites and otherwise unused here.
+  const normalized = normalizeRunOptions(mode, {
+    driver,
+    resume: resume || undefined,
+    spec: { ...spec, mode: runMode, prompt },
+  });
   return {
     ref,
-    ...normalizeRunOptions(mode, {
-      driver,
-      resume: resume || undefined,
-      spec: {
-        ...spec,
-        mode: runMode,
-        prompt,
-      },
-    }),
+    step: requestStepFor(normalized),
+    spec: normalized.spec ?? {},
+    resume: normalized.resume,
   };
 }

@@ -677,9 +677,9 @@ export function App() {
             <PlanReviewBar review={review} todos={todos} />
             <div className="min-h-0 flex-1">
               {todosFullWidth ? (
-                <TodoFullPane todos={todos} projectsLoaded={projectsLoaded} />
+                <TodoFullPane todos={todos} projectsLoaded={projectsLoaded} navigationEnabled={!review.active} />
               ) : (
-                <TodoDetailPane todos={todos} />
+                <TodoDetailPane todos={todos} navigationEnabled={!review.active} />
               )}
             </div>
           </div>

@@ -1,10 +1,14 @@
 import type { AISpecRuntimeValue, SessionUIMessage } from '@flanksource/clicky-ui/ai';
-import type { Test, LinterResult } from '@flanksource/gavel/testrunner';
+import type { Test, VerifyReport } from '@flanksource/clicky-ui/data';
+import type { LinterResult } from '@flanksource/gavel/testrunner';
 
 // Gavel artifact details ride the wire in gavel's own shapes so the dashboard
 // renders them with the testrunner's TestNode / LintView rather than a parallel
-// set of row components.
-export type { Test, LinterResult, Violation } from '@flanksource/gavel/testrunner';
+// set of row components. Test/TestSummary come from clicky-ui/data (the shared
+// test-runner model the Verification tab's VerificationResults also renders),
+// not gavel's own testrunner package, so both surfaces read one shape.
+export type { Test, TestSummary } from '@flanksource/clicky-ui/data';
+export type { LinterResult, Violation } from '@flanksource/gavel/testrunner';
 
 export interface FailedCheck {
   name: string;
@@ -167,17 +171,22 @@ export interface TodoItem {
   // tab's FixtureEditor and saved through /api/todos/verification/fixture.
   verificationMarkdown?: string;
   // Plan-run bookkeeping (present on detail responses once a plan run finishes):
-  // the native plan file's absolute path, whether the last plan was new/updated/
-  // unchanged, and the mode of the last run. The plan CONTENT is fetched lazily
-  // by the Plan tab via /api/todos/session/plan.
+  // the native plan file's absolute path and whether the last plan was new/
+  // updated/unchanged. The plan CONTENT is fetched lazily by the Plan tab via
+  // /api/todos/session/plan.
   planPath?: string;
   planStatus?: TodoPlanStatus;
-  runMode?: TodoRunModeValue;
   // Free-text summary the agent reported in its final-result envelope.
   lastRunSummary?: string;
   // Questions blocking an `ask` todo — the agent needs a human decision before
   // it can continue. Answered via /api/todos/answer, which resumes the session.
   questions?: TodoQuestion[];
+  // The server's verdict on where this todo stands in its lifecycle: every
+  // step's status, which one to run next, and why. Supersedes the client-side
+  // plan/run/verify machine that used to derive this from status + hasPlan +
+  // verification signals — the server now owns that decision. Present on both
+  // list and detail responses.
+  lifecycle?: TodoLifecycle;
 }
 
 // TodoPhase is one step of a todo's lifecycle, as recorded rather than as it
@@ -215,6 +224,41 @@ export interface TodoPhaseRun {
   active?: boolean;
 }
 
+// TodoLifecycleRun is the most recent recorded run for one lifecycle step —
+// the run.state values mirror TodoSessionAttempt.state (a live snapshot while
+// the attempt runs, terminal once it finishes), not TodoPhaseRun's fixed enum.
+export interface TodoLifecycleRun {
+  promptRunId: string;
+  state: string;
+  startedAt?: string;
+  finishedAt?: string;
+}
+
+// TodoLifecycleStep is one step of the server-computed lifecycle: whether it
+// currently applies to this todo, whether the server would suggest it,
+// whether it has ever completed, and its most recent run. `suggested` is
+// carried per-step for completeness; `TodoLifecycle.next` is the single
+// authoritative choice the header renders as primary.
+export interface TodoLifecycleStep {
+  name: string;
+  label: string;
+  applicable: boolean;
+  suggested: boolean;
+  done: boolean;
+  lastRun: TodoLifecycleRun | null;
+}
+
+// TodoLifecycle is the server's verdict on where a todo stands in its
+// plan/run/verify pipeline, from GET /api/todos/item. `next` is null when
+// nothing applies — chiefly the two human-decision statuses (review/ask),
+// which the client still renders as its own review/answer actions rather than
+// a step. `reason` explains the choice (or the absence of one) as a tooltip.
+export interface TodoLifecycle {
+  steps: TodoLifecycleStep[];
+  next: string | null;
+  reason: string;
+}
+
 // TodoExternalIssue is the tracker issue a todo has been pushed to, mirroring
 // the server's types.ExternalIssue. `state` carries the upstream issue's own
 // status once something fetches it — it is absent today and must be read as
@@ -229,10 +273,6 @@ export interface TodoExternalIssue {
 
 // TodoPlanStatus is how a plan run classified its plan relative to any prior one.
 export type TodoPlanStatus = 'new' | 'updated' | 'unchanged';
-
-// TodoRunModeValue includes the internal/historical verify-only lifecycle value.
-// New interactive runs only select run or plan.
-export type TodoRunModeValue = 'run' | 'plan' | 'verify';
 
 // TodoQuestion is one blocking question from an agent that parked in `ask`.
 export interface TodoQuestion {
@@ -297,9 +337,10 @@ export interface SessionStats {
   state?: 'thinking' | 'working' | 'ask' | 'approval' | 'completed' | 'error';
   // API/network failure reason when state === 'error' (the "API Error: …" message).
   error?: string;
-  // A pending tool-permission request awaiting the user's Allow/Deny. Present
-  // (and state === 'approval') only while a driver is blocked on it.
-  approval?: TodoSessionApproval;
+  // Pending tool-permission requests awaiting the user's approve/deny/respond.
+  // Non-empty (and state === 'approval') only while a driver is blocked on at
+  // least one. Also served standalone by GET /api/todos/session/approvals.
+  approvals?: TodoSessionApproval[];
 }
 
 export interface SessionRuntimeSelection {
@@ -336,6 +377,11 @@ export interface TodoSessionAttempt {
   error?: string;
   resultText?: string;
   resultJson?: Record<string, unknown>;
+  // The step's captain VerifyReport — a running snapshot while the attempt is
+  // live, the terminal result once it finishes. Always sent now (null for an
+  // attempt that was never verified) — see todo_session_detail.go's
+  // todoAttemptDetail.Verification.
+  verification: VerifyReport | null;
   admissionSessionId: string;
   executionSessionId?: string;
   providerSessionId?: string;
@@ -488,8 +534,10 @@ export interface TodoSessionDetailResponse {
 }
 
 // TodoSessionApproval is a tool-permission request a driver surfaced for human
-// review; the dashboard answers it via POST /api/todos/session/approve.
+// review; the dashboard answers it via POST /api/todos/session/approve with
+// `{approvalId, action: "approve" | "deny" | "respond", message?, input?}`.
 export interface TodoSessionApproval {
+  approvalId: string;
   sessionId: string;
   toolUseId?: string;
   tool: string;
@@ -517,6 +565,14 @@ export interface TodoRunOptions {
   // prompt/budget/permissions/setup/workflow/sessionId nested, mirroring
   // clicky's AISpecRuntimeValue.
   spec?: AISpecRuntimeValue;
+  // step is the lifecycle step name the request dispatches — the sole
+  // behaviour-selecting field POST /api/todos/run accepts now (the endpoint
+  // decodes strictly and rejects runMode/driver/prompt at the top level).
+  // driver/runMode/plan/prompt below stay for the client's own bookkeeping
+  // (storage, dropdown labels, the advanced dialog's editors) and are folded
+  // into `step` — or into spec.mode for the runtime mechanism — before a
+  // request is built; see run.tsx's requestStepFor/buildTodoRunPayload.
+  step?: string;
   // Driver is the authoritative canonical runtime mode.
   driver?: TodoRunDriver;
   // runMode is the behaviour class the run executes as (run/plan). Supersedes
@@ -547,7 +603,8 @@ export interface TodoRunResponse {
   dir: string;
   provider?: string;
   driver?: TodoRunDriver;
-  mode?: string;
+  // runtimeMode is the mechanism the run dispatched on (api | agent | cli | cmux).
+  runtimeMode?: string;
   model?: string;
   effort?: TodoRunEffort;
   plan?: boolean;
@@ -568,7 +625,7 @@ export interface TodoRunPreviewResponse {
   prompt: string;
   specYaml: string;
   provider?: string;
-  mode?: string;
+  runtimeMode?: string;
   effort?: TodoRunEffort;
   plan?: boolean;
   count: number;

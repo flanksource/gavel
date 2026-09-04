@@ -9,6 +9,7 @@ import {
   TodoRunEffortBadge,
   loadLastTodoRunOptions,
   reconcileTodoRunOptions,
+  requestStepFor,
   todoRunButtonPresentation,
   todoRunModeLabel,
   useTodoRunContext,
@@ -33,8 +34,7 @@ function useRunPromptPreview(dir: string, ref: string, options: TodoRunOptions |
     previewMutation.mutate({
       body: {
         ref,
-        driver: options.driver,
-        runMode: 'run',
+        step: requestStepFor(options),
         spec: { mode: options.spec?.mode, model: options.spec?.model, effort: options.spec?.effort },
       },
       signal: controller.signal,

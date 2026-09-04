@@ -52,6 +52,17 @@ export interface RunModeCatalog {
   modelError?: string;
 }
 
+// RunContextLifecycleStep is one step of the run dialog's lifecycle catalog:
+// its display label, which prompt template it runs, and whether it is
+// read-only (offered for inspection — e.g. from the history — but not a step
+// the dialog's picker dispatches directly).
+export interface RunContextLifecycleStep {
+  name: string;
+  label: string;
+  prompt: string;
+  readOnly: boolean;
+}
+
 export interface RunContext {
   modes: RunModeCatalog[];
   runtimes: RuntimeCatalogFamily[];
@@ -59,12 +70,15 @@ export interface RunContext {
   efforts: TodoRunEffort[];
   defaultMode?: string;
   defaultProvider?: string;
-  // promptDefaults is the (mode, model) each named prompt resolves to,
-  // keyed by prompt name — the server running todos/spec.Resolve, the same
-  // resolution the run performs. Seeding a prompt's dialog from defaultMode
+  // promptDefaults is the (mode, model) each lifecycle step resolves to,
+  // keyed by step name — the server running todos/spec.Resolve, the same
+  // resolution the run performs. Seeding a step's dialog from defaultMode
   // instead sends an account-wide default as if the operator had chosen it,
-  // which outranks the frontmatter that prompt pins.
+  // which outranks the frontmatter that step's prompt pins.
   promptDefaults?: Record<string, { mode?: string; model?: string }>;
+  // lifecycle is the run dialog's step catalog — every step the operator can
+  // pick from, in the order the pipeline runs them.
+  lifecycle: { steps: RunContextLifecycleStep[] };
   // tools is the agent tool catalog the run dialog's tool-permissions control
   // renders; served by /api/todos/run/context (gavel drivers.DefaultTools).
   tools: ToolMeta[];

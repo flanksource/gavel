@@ -20,6 +20,7 @@ describe('promptModelCatalog', () => {
       tools: [],
       modes: [],
       runtimes: [],
+      lifecycle: { steps: [] },
       models,
     };
 

@@ -6,6 +6,7 @@ import { useWorkspaceTodos } from './todos/useWorkspaceTodos';
 import { WorkspaceTodoGroup } from './todos/WorkspaceTodoGroup';
 import { TodoBucketGroup } from './todos/TodoBucketGroup';
 import { TodoDetail } from './todos/TodoDetail';
+import { TodoDetailStack } from './todos/TodoDetailStack';
 import { TodoToolbar } from './todos/TodoToolbar';
 import { CreateTodoDialog } from './todos/CreateTodoDialog';
 import { bucketTodos, flattenTodos } from './todos/todoGroup';
@@ -36,22 +37,6 @@ export function MenubarTodos({ projects, projectsLoaded, projectError }: {
     tagsByDir,
   } = todos;
 
-  if (selected) {
-    return (
-      <div className="flex h-full min-h-0 flex-col">
-        <TodoDetail
-          todo={detail}
-          loading={loadingDetail}
-          loadError={detailError}
-          dir={selected.dir}
-          onChanged={updateItem}
-          onDeleted={deleted}
-          onBack={() => select(null)}
-        />
-      </div>
-    );
-  }
-
   // Severity/age grouping flattens todos across workspaces into buckets; the
   // default 'workspace' grouping keeps the per-workspace sections (the only mode
   // that supports batch runs on the dashboard).
@@ -61,7 +46,7 @@ export function MenubarTodos({ projects, projectsLoaded, projectError }: {
   const pending = loadingList || !projectsLoaded;
   const StatusIcon = pending ? Spinner : UiCheck;
 
-  return (
+  const list = (
     <div className="flex h-full min-h-0 flex-col">
       {workspaces.length > 0 && (
         <div className="flex shrink-0 items-center gap-1.5 border-b border-border px-2">
@@ -135,5 +120,26 @@ export function MenubarTodos({ projects, projectsLoaded, projectError }: {
 
       <CreateTodoDialog open={showCreate} onClose={() => setShowCreate(false)} workspaces={workspaces} onCreated={created} />
     </div>
+  );
+
+  // The detail covers the list rather than replacing it, so the back arrow
+  // returns to the row it was opened from instead of the top of the list.
+  return (
+    <TodoDetailStack
+      list={list}
+      detail={selected && (
+        <div className="flex h-full min-h-0 flex-col">
+          <TodoDetail
+            todo={detail}
+            loading={loadingDetail}
+            loadError={detailError}
+            dir={selected.dir}
+            onChanged={updateItem}
+            onDeleted={deleted}
+            onBack={() => select(null)}
+          />
+        </div>
+      )}
+    />
   );
 }

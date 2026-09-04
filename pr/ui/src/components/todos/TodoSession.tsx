@@ -135,11 +135,17 @@ export function useTodoSession(dir: string, sessionId: string | undefined, activ
   return { entries, connected, error };
 }
 
+// TodoSessionApprovalAction is the decision the server's approval endpoint
+// accepts for one pending approval: approve/deny answer a tool-permission
+// request (deny optionally carrying a rejection reason), respond answers a
+// question-shaped approval with the user's structured input.
+export type TodoSessionApprovalAction = 'approve' | 'deny' | 'respond';
+
 // useSessionStatus polls the session stats endpoint for the high-level agent
-// state and any pending tool-permission request, and exposes a resolver that
-// POSTs the user's Allow/Deny. State is server-derived (the same source the
-// session timer uses), so the header badge and the approval banner stay in sync
-// without re-deriving anything from the event stream.
+// state and any pending tool-permission requests, and exposes a resolver that
+// POSTs the user's approve/deny/respond decision. State is server-derived (the
+// same source the session timer uses), so the header badge and the approval
+// banner stay in sync without re-deriving anything from the event stream.
 export function useSessionStatus(dir: string, sessionId: string | undefined, active: boolean) {
   const queryClient = useQueryClient();
   const enabled = active && !!sessionId;
@@ -148,30 +154,31 @@ export function useSessionStatus(dir: string, sessionId: string | undefined, act
   const stats = enabled ? query.data : undefined;
   const approveMutation = useMutation({
     mutationKey: ['todos', 'session', 'approve', { sessionId: sessionId ?? '' }],
-    mutationFn: ({ allow, message, updatedInput }: {
-      allow: boolean;
+    mutationFn: ({ approvalId, action, message, input }: {
+      approvalId: string;
+      action: TodoSessionApprovalAction;
       message?: string;
-      updatedInput?: Record<string, unknown>;
-    }) => todoMutationJSON<{ resolved: boolean; allow: boolean }>(
+      input?: Record<string, unknown>;
+    }) => todoMutationJSON<{ resolved: boolean }>(
       `/api/todos/session/approve?${todoQuery(dir)}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId, allow, message, updatedInput }),
+        body: JSON.stringify({ approvalId, action, message, input }),
       },
       'Session approval update failed',
     ),
-    onSuccess: () => {
+    onSuccess: (_data, { approvalId }) => {
       queryClient.setQueryData<SessionStats>(options.queryKey, previous => previous
-        ? { ...previous, approval: undefined }
+        ? { ...previous, approvals: (previous.approvals ?? []).filter(item => item.approvalId !== approvalId) }
         : previous);
     },
   });
 
   const approve = useCallback(
-    async (allow: boolean, message?: string, updatedInput?: Record<string, unknown>) => {
+    async (approvalId: string, action: TodoSessionApprovalAction, message?: string, input?: Record<string, unknown>) => {
       if (!sessionId) throw new Error('Session is unavailable');
-      await approveMutation.mutateAsync({ allow, message, updatedInput });
+      await approveMutation.mutateAsync({ approvalId, action, message, input });
     },
     [approveMutation.mutateAsync, sessionId]
   );
@@ -180,7 +187,7 @@ export function useSessionStatus(dir: string, sessionId: string | undefined, act
     state: stats?.state ?? '',
     error: approveMutation.error?.message || query.error?.message || stats?.error || '',
     inProgress: stats?.inProgress ?? false,
-    approval: stats?.approval ?? null,
+    approvals: stats?.approvals ?? [],
     approve,
     busy: approveMutation.isPending,
   };
@@ -227,7 +234,7 @@ export function TodoSession({
   const { detail, error: detailError } = useTodoSessionDetail(dir, todo.ref, sessionId, active);
   const followedSessionId = detail?.thread?.providerSessionId || sessionId;
   const { entries, connected, error } = useTodoSession(dir, followedSessionId, active);
-  const { state, error: statusError, inProgress, approval, approve } = useSessionStatus(dir, followedSessionId, active);
+  const { state, error: statusError, inProgress, approvals, approve } = useSessionStatus(dir, followedSessionId, active);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   // Host element for the SessionViewer's 3-dot menu: the viewer portals its menu
   // into this header slot so the filter/density controls sit in the same fixed
@@ -280,15 +287,14 @@ export function TodoSession({
   }, [entries.length]);
 
   const pendingTools = useMemo<SessionPendingTool[]>(() => {
-    if (approval)
-      return [
-        {
-          tool: approval.tool,
-          input: approval.input,
-          toolCallId: approval.toolUseId,
-          sessionId: approval.sessionId,
-        },
-      ];
+    if (approvals.length > 0)
+      return approvals.map(item => ({
+        tool: item.tool,
+        input: item.input,
+        toolCallId: item.toolUseId,
+        approvalId: item.approvalId,
+        sessionId: item.sessionId,
+      }));
     if (state !== 'ask' || inProgress) return [];
     const latest = latestQuestionTool(entries);
     if (latest)
@@ -320,19 +326,33 @@ export function TodoSession({
       ];
     }
     return [];
-  }, [approval, entries, followedSessionId, inProgress, state, todo.questions]);
+  }, [approvals, entries, followedSessionId, inProgress, state, todo.questions]);
 
+  // decide routes a clicky-ui SessionViewer decision to whichever endpoint
+  // owns it. A decision on a live approval (SessionViewer stamps the matched
+  // event's approvalId onto it — see clicky-ui's SessionViewer.mergePendingTools)
+  // posts approve/deny/respond to /api/todos/session/approve; the reason
+  // textarea on "Reject with comment" already flows through as decision.message,
+  // so denying with a reason is just this wire threading it through. A decision
+  // with no approvalId is the ask-status blocking-question fallback (parsed
+  // from the log or from todo.questions, neither of which is a live approval)
+  // and still resumes the session via /api/todos/answer.
   const decide = useCallback(
     async (decision: SessionToolDecision) => {
       if (!followedSessionId) throw new Error('Session is unavailable');
-      if (approval) {
-        const updatedInput = decision.answers ? { ...approval.input, answers: decision.answers } : undefined;
-        await approve(decision.allow, decision.message, updatedInput);
+      const approvalId = decision.event.approvalId;
+      if (approvalId) {
+        if (decision.answers) {
+          const match = approvals.find(item => item.approvalId === approvalId);
+          await approve(approvalId, 'respond', undefined, { ...match?.input, answers: decision.answers });
+          return;
+        }
+        await approve(approvalId, decision.allow ? 'approve' : 'deny', decision.message);
         return;
       }
       await answerMutation.mutateAsync(decision);
     },
-    [answerMutation.mutateAsync, approval, approve, followedSessionId]
+    [answerMutation.mutateAsync, approvals, approve, followedSessionId]
   );
 
   const stopAttempt = useCallback(

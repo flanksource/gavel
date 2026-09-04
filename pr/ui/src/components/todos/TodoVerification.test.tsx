@@ -2,7 +2,6 @@ import type React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { WORKFLOW_PHASES_MOCK } from './workflowPhasesMock';
 import type { FixtureEditorProps } from '@flanksource/clicky-ui/data';
 import type { TodoItem, TodoSessionDetailResponse } from '../../types';
 import { TodoVerification } from './TodoVerification';
@@ -55,7 +54,6 @@ vi.mock('@flanksource/clicky-ui/chat', () => ({
 }));
 
 vi.mock('@flanksource/clicky-ui/ai', () => ({
-  WORKFLOW_PHASES: WORKFLOW_PHASES_MOCK,
   effortOptionsForModel: (_model: unknown, fallback: string[]) => fallback,
   familiesFromRuntimeCatalog: () => [{
     id: 'codex',
@@ -100,6 +98,7 @@ const verificationRunContext = {
   defaultProvider: 'openai',
   efforts: ['low', 'medium', 'high'],
   tools: [],
+  lifecycle: { steps: [{ name: 'verify', label: 'Verify', prompt: 'verify', readOnly: false }] },
   runtimes: [{
     family: 'codex',
     provider: 'openai',
@@ -253,19 +252,18 @@ describe('TodoVerification', () => {
         expect(init?.method).toBe('POST');
         return { ok: true, json: async () => updatedTodo, text: async (): Promise<string> => '' };
       }
-      if (url.startsWith('/api/todos/verification/run')) {
+      if (url.startsWith('/api/todos/run?')) {
         expect(init?.method).toBe('POST');
         return {
           ok: true,
           json: async () => ({
-            verification: {
-              allPassed: true,
-              duration: 10,
-              output: {
-                results: [{ name: 'smoke', status: 'PASS', command: 'echo ok', stdout: 'ok\n' }],
-              },
-            },
-            todo: { ...updatedTodo, status: 'verified' },
+            status: 'started',
+            ref: 'todo-1',
+            dir: '/workspace',
+            step: 'verify',
+            timeout: '0s',
+            commit: false,
+            message: 'Verification started',
           }),
           text: async (): Promise<string> => '',
         };
@@ -300,6 +298,7 @@ describe('TodoVerification', () => {
           createdAt: '2026-07-30T09:00:00Z',
           updatedAt: '2026-07-30T09:01:00Z',
           resultJson: { definitionOfDone: { ran: true, passed: true } },
+          verification: null,
         },
       ],
       diagnostics: [],
@@ -311,26 +310,28 @@ describe('TodoVerification', () => {
     act(() => fixtureEditorCalls.props.at(-1)?.onChange('### command: smoke'));
     fireEvent.click(screen.getByRole('button', { name: /^run verification$/i }));
 
-    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(2));
-    // Results live in the persisted attempt list, not in this view's state, so a
-    // run neither renders its own copy nor clears what is already listed.
+    // onChanged fires once, from the fixture save — the shared /api/todos/run
+    // endpoint answers a bare run status, not an updated todo, so the attempt
+    // list (invalidated below) is the only place a fresh verdict shows up.
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1));
     expect(screen.queryByText('Verification passed')).toBeNull();
     expect(screen.getByTestId('verification-attempts').textContent).toBe('1 attempts');
     const mutationURLs = fetchMock.mock.calls
       .map(call => String(call[0]))
-      .filter(url => url.includes('/api/todos/verification/') && !url.endsWith('/schema'));
+      .filter(url => url.startsWith('/api/todos/verification/fixture') || url.startsWith('/api/todos/run?'));
     expect(mutationURLs[0]).toContain('/api/todos/verification/fixture');
-    expect(mutationURLs[1]).toContain('/api/todos/verification/run');
-    const runCall = fetchMock.mock.calls.find(call => String(call[0]).includes('/api/todos/verification/run'));
+    expect(mutationURLs[1]).toContain('/api/todos/run?');
+    const runCall = fetchMock.mock.calls.find(call => String(call[0]).startsWith('/api/todos/run?'));
     expect(JSON.parse(String(runCall?.[1]?.body))).toMatchObject({
       ref: 'todo-1',
+      step: 'verify',
       spec: { model: 'gpt-5.6-sol', effort: 'high' },
     });
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Advanced' }));
     });
     expect(screen.getByText('Verification runtime editor')).toBeTruthy();
-    expect(onChanged).toHaveBeenCalledTimes(2);
+    expect(onChanged).toHaveBeenCalledTimes(1);
     expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: workspaceTodoBatchKeys.all });
     expect(invalidateQueries).toHaveBeenCalledWith({
       queryKey: todoQueryKeys.sessionDetail('/workspace', 'todo-1', undefined, true),
@@ -338,8 +339,9 @@ describe('TodoVerification', () => {
     expect(client.getQueryState(todoQueryKeys.verificationSchema())?.isInvalidated).toBe(false);
   });
 
-  // A pre-execution failure creates no prompt run, so it can never reach the
-  // attempt list — the banner is the only place it can be seen.
+  // The shared /api/todos/run endpoint rejects a verify step with nothing to
+  // check as an HTTP error rather than a soft 200 — there is no prompt run to
+  // record, so the banner is the only place this can be seen.
   it('surfaces a pre-execution verification error in the banner', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -349,14 +351,12 @@ describe('TodoVerification', () => {
       if (url === '/api/todos/run/context') {
         return { ok: true, json: async () => verificationRunContext, text: async (): Promise<string> => '' };
       }
-      if (url.startsWith('/api/todos/verification/run')) {
+      if (url.startsWith('/api/todos/run?')) {
         return {
-          ok: true,
-          json: async () => ({
-            verification: { allPassed: false, duration: 0, error: 'no verification fixture, acceptance criteria, or configured checks' },
-            todo,
-          }),
-          text: async (): Promise<string> => '',
+          ok: false,
+          status: 422,
+          json: async () => ({ error: 'no verification fixture, acceptance criteria, or configured checks' }),
+          text: async () => JSON.stringify({ error: 'no verification fixture, acceptance criteria, or configured checks' }),
         };
       }
       throw new Error(`unexpected fetch ${url}`);
@@ -369,9 +369,7 @@ describe('TodoVerification', () => {
     await waitFor(() => expect(fixtureEditorCalls.props.at(-1)).toBeDefined());
     fireEvent.click(screen.getByRole('button', { name: /^run verification$/i }));
 
-    await waitFor(() =>
-      expect(screen.getByText('no verification fixture, acceptance criteria, or configured checks')).toBeTruthy()
-    );
+    expect(await screen.findByText(/verification run failed.*no verification fixture/i)).toBeTruthy();
   });
 
   it('surfaces verification request failures with action context', async () => {
@@ -383,7 +381,7 @@ describe('TodoVerification', () => {
       if (url === '/api/todos/run/context') {
         return { ok: true, json: async () => verificationRunContext, text: async (): Promise<string> => '' };
       }
-      if (url.startsWith('/api/todos/verification/run')) {
+      if (url.startsWith('/api/todos/run?')) {
         return {
           ok: false,
           status: 409,

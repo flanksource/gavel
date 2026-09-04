@@ -12,6 +12,7 @@ vi.mock('./run', () => ({
   TodoRunContextError: ({ error }: { error: string }) => error ? <div role="alert">{error}</div> : null,
   loadLastTodoRunOptions: () => ({ ...RESOLVED_OPTIONS }),
   reconcileTodoRunOptions: (_action: string, options: unknown) => options,
+  requestStepFor: (options: TodoRunOptions) => options.step ?? (options.plan || options.runMode === 'plan' ? 'plan' : 'run'),
   todoRunButtonPresentation: (options: TodoRunOptions) => ({ provider: undefined, model: options.spec?.model?.replace(/^claude-/, ''), effort: options.spec?.effort }),
   todoRunModeLabel: (options: TodoRunOptions) => options.spec?.mode === 'cmux' ? 'cmux' : 'Agent',
   useTodoRunPreview: () => ({
@@ -93,7 +94,8 @@ describe('TodoSessionStart', () => {
     expect(await screen.findByText('## Implement thing')).toBeTruthy();
     const [url, init] = fetchMock.mock.calls[0]!;
     expect(String(url)).toContain('/api/todos/run/preview');
-    expect(JSON.parse(init!.body as string)).toMatchObject({ ref: 'todo:abc', runMode: 'run' });
+    expect(JSON.parse(init!.body as string)).toMatchObject({ ref: 'todo:abc', step: 'run' });
+    expect(JSON.parse(init!.body as string)).not.toHaveProperty('driver');
   });
 
   it('invokes onRun when the Run action is clicked', async () => {
@@ -124,9 +126,10 @@ describe('TodoSessionStart', () => {
     await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(2));
     const lastRequest = fetchMock.mock.calls.at(-1)?.[1];
     expect(JSON.parse(String(lastRequest?.body))).toMatchObject({
-      driver: 'cmux',
+      step: 'run',
       spec: { mode: 'cmux', model: 'gpt-5.6-sol', effort: 'high' },
     });
+    expect(JSON.parse(String(lastRequest?.body))).not.toHaveProperty('driver');
   });
 
   it('surfaces a preview error but still offers the run actions', async () => {

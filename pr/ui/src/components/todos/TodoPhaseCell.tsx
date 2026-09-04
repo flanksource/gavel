@@ -4,8 +4,26 @@ import type { ComponentType } from 'react';
 import { Spinner } from '../../icons/Spinner';
 import type { TodoItem, TodoPhase, TodoPhaseRun } from '../../types';
 import { useNow } from '../../useNow';
-import { phase as phaseMeta } from './phaseMachine';
 import { formatDuration } from './TodoSessionTimer';
+
+// Plain label lookup for the four recorded phases (todo.phases/TodoPhaseRun —
+// the list row's per-phase run history, unrelated to todo.lifecycle). This
+// cell only ever needs a label, so it keeps its own tiny table rather than
+// reaching into TodoPhaseButton's fuller glyph/tone catalog, which exists for
+// the header's primary control and is keyed by dynamic lifecycle step names,
+// not the four fixed TodoPhase values this file renders.
+const PHASE_LABELS: Record<TodoPhase, string> = {
+  plan: 'Plan',
+  triage: 'Triage',
+  run: 'Run',
+  verify: 'Verify',
+};
+
+function phaseMeta(id: TodoPhase): { label: string } {
+  return { label: PHASE_LABELS[id] };
+}
+
+export { phaseMeta as phase };
 
 // A phase's own outcome, styled like the todo statuses in format.tsx so a
 // failed phase reads red wherever it appears. `waiting` is amber rather than

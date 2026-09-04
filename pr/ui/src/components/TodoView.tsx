@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { Button, ListMenu } from '@flanksource/clicky-ui/components';
 import { UiAdd, UiCheck } from '@flanksource/clicky-ui/icons';
 import { Spinner } from '../icons/Spinner';
@@ -10,7 +10,10 @@ import { bucketTodos, flattenTodos } from './todos/todoGroup';
 import { isWorkspaceShown } from './todos/todoFilter';
 import { resolveRange } from './todos/todoTimeRange';
 import { TodoDetail } from './todos/TodoDetail';
-import { TodoTable } from './todos/TodoTable';
+import { TodoDetailStack } from './todos/TodoDetailStack';
+import { TodoTable, todoTableColumns, type TodoTableRow } from './todos/TodoTable';
+import type { TodoNavigationControlsProps } from './todos/TodoNavigationControls';
+import { filterTodoNavigationEntries, orderedTodoNavigationEntries, todoNavigationState } from './todos/todoNavigation';
 import { TodoToolbar } from './todos/TodoToolbar';
 
 // The Todos tab renders its chrome into the shared AppShell's body slots: top-bar
@@ -168,41 +171,86 @@ export function TodoWorkspaceList({ todos, projectsLoaded, projectError }: {
 }
 
 // TodoFullPane is the AppShell body-main in the full-width layout, where there
-// is no body sidebar to hold the list. It swaps between the two rather than
-// stacking them: the table owns the viewport until a todo is selected, then the
-// detail takes it over behind a back arrow — the same shape MenubarTodos uses.
-// Selection is route-backed (/todos/{ref}), so back/forward and deep links work
-// without either half knowing about the other.
+// is no body sidebar to hold the list. The table owns the viewport until a todo
+// is selected, then the detail covers it behind a back arrow — the same shape
+// MenubarTodos uses, through the same TodoDetailStack, which keeps the table
+// mounted underneath so Back returns to the row it left from. Selection is
+// route-backed (/todos/{ref}), so back/forward and deep links work without
+// either half knowing about the other.
 //
 // Unlike the menubar it keeps passing workspaces/onTransferred, so "Move to
 // project" does not silently vanish when the layout changes.
-export function TodoFullPane({ todos, projectsLoaded }: {
+function useTodoNavigator(todos: WorkspaceTodos, query: string, enabled: boolean) {
+  const { workspaces, byDir, filters, groupBy, sortBy, timeRange, selected, select, tagsByDir } = todos;
+  const columns = useMemo(() => todoTableColumns({ groupBy, tagsByDir }), [groupBy, tagsByDir]);
+  const entries = useMemo(() => orderedTodoNavigationEntries({
+    workspaces,
+    byDir,
+    filters,
+    groupBy,
+    sortBy,
+    timeRange,
+    now: Date.now(),
+  }), [workspaces, byDir, filters, groupBy, sortBy, timeRange]);
+  const matched = useMemo(
+    () => filterTodoNavigationEntries(entries, columns, query),
+    [entries, columns, query],
+  );
+  const state = enabled ? todoNavigationState(matched, selected) : null;
+  const navigation: TodoNavigationControlsProps | undefined = state ? {
+    position: state.position,
+    total: state.total,
+    canPrevious: !!state.previous,
+    canNext: !!state.next,
+    onPrevious: () => state.previous && select(state.previous),
+    onNext: () => state.next && select(state.next),
+  } : undefined;
+  return { columns, rows: matched.map(entry => entry as TodoTableRow), navigation };
+}
+
+export function TodoFullPane({ todos, projectsLoaded, navigationEnabled = true }: {
   todos: WorkspaceTodos;
   projectsLoaded: boolean;
+  navigationEnabled?: boolean;
 }) {
+  const [query, setQuery] = useState('');
   const { detail, loadingDetail, detailError, selected, select, updateItem, deleted, workspaces, transferred } = todos;
-  if (!selected) {
-    return <TodoTable todos={todos} projectsLoaded={projectsLoaded} />;
-  }
+  const navigator = useTodoNavigator(todos, query, navigationEnabled);
   return (
-    <TodoDetail
-      todo={detail}
-      loading={loadingDetail}
-      loadError={detailError}
-      dir={selected.dir}
-      onChanged={updateItem}
-      onDeleted={deleted}
-      onBack={() => select(null)}
-      workspaces={workspaces}
-      onTransferred={transferred}
+    <TodoDetailStack
+      list={(
+        <TodoTable
+          todos={todos}
+          projectsLoaded={projectsLoaded}
+          rows={navigator.rows}
+          columns={navigator.columns}
+          query={query}
+          onQueryChange={setQuery}
+        />
+      )}
+      detail={selected && (
+        <TodoDetail
+          todo={detail}
+          loading={loadingDetail}
+          loadError={detailError}
+          dir={selected.dir}
+          onChanged={updateItem}
+          onDeleted={deleted}
+          onBack={() => select(null)}
+          workspaces={workspaces}
+          onTransferred={transferred}
+          navigation={navigator.navigation}
+        />
+      )}
     />
   );
 }
 
 // TodoDetailPane is the AppShell body-main in the split layout: the selected
 // todo's detail (or the empty "Select a todo" prompt).
-export function TodoDetailPane({ todos }: { todos: WorkspaceTodos }) {
+export function TodoDetailPane({ todos, navigationEnabled = true }: { todos: WorkspaceTodos; navigationEnabled?: boolean }) {
   const { detail, loadingDetail, detailError, selected, updateItem, deleted, workspaces, transferred } = todos;
+  const { navigation } = useTodoNavigator(todos, '', navigationEnabled);
   return (
     <TodoDetail
       todo={detail}
@@ -213,6 +261,7 @@ export function TodoDetailPane({ todos }: { todos: WorkspaceTodos }) {
       onDeleted={deleted}
       workspaces={workspaces}
       onTransferred={transferred}
+      navigation={navigation}
     />
   );
 }

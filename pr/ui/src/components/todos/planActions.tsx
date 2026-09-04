@@ -5,7 +5,7 @@ import { UiCancel, UiCheck, UiEdit, UiEye, UiQuestion } from '@flanksource/click
 import type { TodoItem, TodoQuestion, TodoRunOptions } from '../../types';
 import { Spinner } from '../../icons/Spinner';
 import { inputClass, todoQuery } from './format';
-import { defaultRunOptions, loadLastTodoRunOptions } from './run';
+import { defaultRunOptions, loadLastTodoRunOptions, normalizeRunOptions, requestStepFor, type TodoRunAction } from './run';
 import { PromptRunAdvancedDialog, PromptRunButton } from './PromptRunButton';
 import { invalidateTodoWorkflowCaches, todoMutationJSON } from './todoMutations';
 
@@ -48,6 +48,31 @@ export function buildTodoAnswerInput(questions: TodoQuestion[], selections: Todo
   return { answers };
 }
 
+// runRequestOptions sanitizes a TodoRunOptions for the plan-review endpoints'
+// `options` field. /api/todos/plan/approve, /plan/revise, and /answer all
+// continue a run through the same seam as /api/todos/run (see todo_review.go's
+// continuation), which decodes just as strictly and rejects driver/runMode/
+// prompt at the top level — only step/spec/resume/force may travel.
+//
+// `action`, when given, pins the step to the phase the endpoint always
+// continues into (approve always runs, revise always re-plans) via the same
+// normalizeRunOptions/requestStepFor pairing run.tsx itself uses to build
+// /api/todos/run's body, so the two can never disagree on what a chosen
+// options object dispatches as. Left out (answer, whose continuation resumes
+// whatever step the turn was already on), the fields are stripped without
+// asserting a step of its own — the server's own resolution decides, and a
+// mismatched guess here would otherwise make the continuation reject the
+// request outright.
+function runRequestOptions(options: TodoRunOptions, action?: TodoRunAction): TodoRunOptions {
+  const normalized = action ? normalizeRunOptions(action, options) : options;
+  return {
+    step: action ? requestStepFor(normalized) : undefined,
+    spec: normalized.spec,
+    resume: normalized.resume,
+    force: normalized.force,
+  };
+}
+
 function usePlanActionMutation<TResult extends { todo: TodoItem }, TVariables>(
   dir: string,
   action: string,
@@ -75,7 +100,7 @@ export function usePlanActions(dir: string) {
     'approve',
     ({ ref, opts }) => {
       const body: Record<string, unknown> = { ref, run: !!opts.run };
-      if (opts.run) body.options = opts.options ?? defaultRunOptions;
+      if (opts.run) body.options = runRequestOptions(opts.options ?? defaultRunOptions, 'run');
       return { path: '/api/todos/plan/approve', body, context: `Failed to approve plan for todo ${ref}` };
     },
   );
@@ -94,7 +119,7 @@ export function usePlanActions(dir: string) {
     'revise',
     ({ ref, feedback }) => ({
       path: '/api/todos/plan/revise',
-      body: { ref, feedback, options: loadLastTodoRunOptions('plan') },
+      body: { ref, feedback, options: runRequestOptions(loadLastTodoRunOptions('plan'), 'plan') },
       context: `Failed to request plan changes for todo ${ref}`,
     }),
   );
@@ -128,7 +153,7 @@ export function usePlanActions(dir: string) {
     const body: Record<string, unknown> = { ref: ref.trim() };
     if (hasAnswers) body.answers = normalizedAnswers;
     else body.answer = trimmedAnswer;
-    if (input.options) body.options = input.options;
+    if (input.options) body.options = runRequestOptions(input.options);
     try { return await answerMutation.mutateAsync({ ref: ref.trim(), body }); } catch { return null; }
   }, [answerMutation.mutateAsync, busy]);
 

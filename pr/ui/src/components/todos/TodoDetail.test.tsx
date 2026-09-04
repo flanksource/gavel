@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RunContext } from './providers';
 import type { TodoItem } from '../../types';
+import { LIFECYCLE_MOCK_DRAFT } from './lifecycleMock';
 import { TodoDetail } from './TodoDetail';
 import { useSessionStats } from './TodoSessionTimer';
 import { queryTestWrapper } from './queryTestWrapper';
@@ -140,6 +141,11 @@ const RUN_CONTEXT: RunContext = {
   defaultProvider: 'anthropic',
   efforts: ['low', 'medium', 'high', 'xhigh'],
   tools: [],
+  lifecycle: { steps: [
+    { name: 'plan', label: 'Plan', prompt: 'plan', readOnly: false },
+    { name: 'run', label: 'Run', prompt: 'run', readOnly: false },
+    { name: 'verify', label: 'Verify', prompt: 'verify', readOnly: false },
+  ] },
   runtimes: [
     { family: 'claude', provider: 'anthropic', catalogPrefix: 'anthropic', modes: [{ mode: 'cmux', schema: { type: 'object' } }] },
   ],
@@ -169,6 +175,7 @@ const baseTodo: TodoItem = {
   status: 'pending',
   priority: 'medium',
   sessionId: 'session-1',
+  lifecycle: LIFECYCLE_MOCK_DRAFT,
 };
 
 async function renderDetail(todo: TodoItem) {
@@ -214,6 +221,7 @@ afterEach(() => {
 describe('TodoDetail Resume/Run/Plan guard', () => {
   it('adopts the admitted Captain session id as soon as a run starts', async () => {
     const admissionSession = '11111111-1111-4111-8111-111111111111';
+    const runReason = 'Work landed but the definition of done has not been checked.';
     const onChanged = vi.fn();
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -235,19 +243,78 @@ describe('TodoDetail Resume/Run/Plan guard', () => {
       return { ok: true, json: async () => RUN_CONTEXT } as Response;
     }));
 
+    // The server names `run` as `next` (a lifecycle a client machine would
+    // never derive without a plan) — the primary control has to take that at
+    // face value rather than recomputing it from status/hasPlan itself.
     render(
-      <TodoDetail todo={{ ...baseTodo, sessionId: undefined }} loading={false} dir="/repo" onChanged={onChanged} onDeleted={() => {}} />,
+      <TodoDetail
+        todo={{
+          ...baseTodo,
+          sessionId: undefined,
+          lifecycle: {
+            steps: [{ name: 'run', label: 'Run', applicable: true, suggested: true, done: false, lastRun: null }],
+            next: 'run',
+            reason: runReason,
+          },
+        }}
+        loading={false}
+        dir="/repo"
+        onChanged={onChanged}
+        onDeleted={() => {}}
+      />,
       { wrapper: queryTestWrapper() },
     );
     await act(async () => {});
-    const runButton = screen.getAllByRole('button').find(button => button.textContent?.trim() === 'Run' && !(button as HTMLButtonElement).disabled);
-    expect(runButton).toBeTruthy();
-    fireEvent.click(runButton!);
+    await waitFor(() => expect((screen.getByTitle(runReason) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByTitle(runReason));
 
     await waitFor(() => expect(onChanged).toHaveBeenCalledWith(expect.objectContaining({
       status: 'in_progress',
       sessionId: admissionSession,
     })));
+  });
+
+  // The header's one primary control renders whatever step the server names
+  // as `next`, with its own label and `reason` as the tooltip — nothing here
+  // is recomputed from status/hasPlan/verification the way the deleted
+  // client-side phase machine used to.
+  it('follows lifecycle.next for the primary action and its label/reason', async () => {
+    await renderDetail({
+      ...baseTodo,
+      lifecycle: {
+        steps: [
+          { name: 'plan', label: 'Plan', applicable: true, suggested: false, done: true, lastRun: null },
+          { name: 'verify', label: 'Verify', applicable: true, suggested: true, done: false, lastRun: null },
+        ],
+        next: 'verify',
+        reason: 'Work landed but the definition of done has not been checked.',
+      },
+    });
+
+    expect(screen.getByTitle('Work landed but the definition of done has not been checked.').textContent).toContain('Verify');
+    await waitFor(() => expect((screen.getByTitle('Work landed but the definition of done has not been checked.') as HTMLButtonElement).disabled).toBe(false));
+  });
+
+  // next: null outside review/ask (e.g. a verified todo with nothing left to
+  // run) renders as an inert, honestly-disabled primary rather than falling
+  // back to a guessed phase.
+  it('renders an inert primary when the server names no next step', async () => {
+    await renderDetail({
+      ...baseTodo,
+      status: 'verified',
+      lifecycle: {
+        steps: [
+          { name: 'plan', label: 'Plan', applicable: true, suggested: false, done: true, lastRun: null },
+          { name: 'run', label: 'Run', applicable: true, suggested: false, done: true, lastRun: null },
+          { name: 'verify', label: 'Verify', applicable: true, suggested: false, done: true, lastRun: null },
+        ],
+        next: null,
+        reason: 'Done. Nothing left to run.',
+      },
+    });
+
+    const doneButton = screen.getByTitle('Done. Nothing left to run.');
+    expect((doneButton as HTMLButtonElement).disabled).toBe(true);
   });
 
   it('renders a deep-link database error with a menubar back action', () => {
@@ -369,7 +436,13 @@ describe('TodoDetail verification badge', () => {
       admissionSessionId: `admission-${ordinal}`,
       createdAt: `2026-07-30T09:0${ordinal}:00Z`,
       updatedAt: `2026-07-30T09:0${ordinal}:30Z`,
-      resultJson: { definitionOfDone: { ran: true, passed } },
+      verification: {
+        kind: 'todo',
+        ran: true,
+        passed,
+        state: passed ? 'passed' : 'failed',
+        summary: { total: 1, passed: passed ? 1 : 0, failed: passed ? 0 : 1, warned: 0, skipped: 0, pending: 0, running: 0, timedout: 0 },
+      },
     };
   }
 

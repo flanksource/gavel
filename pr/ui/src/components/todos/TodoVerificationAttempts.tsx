@@ -1,33 +1,25 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Button } from '@flanksource/clicky-ui/components';
+import { VerificationResults } from '@flanksource/clicky-ui/data';
 import { UiBeaker, UiError, UiPass, UiStop, UiWarningTriangle } from '@flanksource/clicky-ui/icons';
-import { useQuery } from '@tanstack/react-query';
 import type { TodoSessionDetailResponse } from '../../types';
 import { Spinner } from '../../icons/Spinner';
 import { ageShort } from '../../utils';
 import { formatDuration } from './TodoSessionTimer';
-import { TestRunResults } from '../tests/TestRunResults';
-import { runSnapshotQuery, type RunArtifact } from '../tests/types';
 import { VerificationAttemptSession } from './VerificationAttemptSession';
-import { VerificationFixtureResults } from './VerificationFixtureResults';
-import { VerificationStepOutput } from './VerificationStepOutput';
 import {
-  attemptRunArtifacts,
-  attemptOutputSteps,
-  attemptTabs,
-  defaultAttemptTab,
   verificationAttempts,
   type AttemptOutcome,
-  type AttemptTab,
-  type VerificationAttempt,
-} from './verificationAttempts';
+  type VerificationAttemptEntry,
+} from './verificationReport';
 
-const TAB_LABELS: Record<AttemptTab, string> = { fixtures: 'Fixtures', test: 'Test', lint: 'Lint', session: 'Session', output: 'Output' };
+type EvidenceTab = 'results' | 'session';
 
 /**
  * Every verification attempt this todo has made — the explicit `gavel todos
  * check` runs and the in-loop definition-of-done evaluations — newest first,
- * each with Fixtures / Test / Lint / Session / Output evidence.
+ * each rendered through the shared VerificationResults (the same TestRunner the
+ * captain webapp uses), with the agent session behind it when one was recorded.
  */
 export function TodoVerificationAttempts({
   dir,
@@ -112,10 +104,10 @@ export function TodoVerificationAttempts({
   );
 }
 
-function AttemptRow({ entry, selected, onSelect }: { entry: VerificationAttempt; selected: boolean; onSelect: () => void }) {
-  const { attempt } = entry;
+function AttemptRow({ entry, selected, onSelect }: { entry: VerificationAttemptEntry; selected: boolean; onSelect: () => void }) {
+  const { attempt, report } = entry;
   const started = attempt.startedAt || attempt.queuedAt || attempt.createdAt;
-  const failing = attemptRunArtifacts(entry).reduce((sum, item) => sum + item.artifact.failed + (item.artifact.lint_violations ?? 0), 0);
+  const failing = (report?.summary.failed ?? 0) + (report?.summary.timedout ?? 0);
   return (
     <Button
       variant="ghost"
@@ -144,143 +136,71 @@ function AttemptRow({ entry, selected, onSelect }: { entry: VerificationAttempt;
   );
 }
 
-function AttemptEvidence({ dir, todoRef, entry }: { dir: string; todoRef: string; entry: VerificationAttempt }) {
-  const tabs = attemptTabs(entry);
-  const [tab, setTab] = useState<AttemptTab>(() => defaultAttemptTab(entry));
-  const active = tabs[tab].available ? tab : defaultAttemptTab(entry);
-  const artifacts = attemptRunArtifacts(entry);
+function AttemptEvidence({ dir, todoRef, entry }: { dir: string; todoRef: string; entry: VerificationAttemptEntry }) {
   const sessionId = entry.attempt.executionSessionId || entry.attempt.providerSessionId;
+  const [tab, setTab] = useState<EvidenceTab>('results');
+  const active = tab === 'session' && sessionId ? 'session' : 'results';
 
   return (
     <div className="border-t border-border">
-      <div className="flex flex-nowrap gap-1 overflow-x-auto border-b border-border px-3 pt-2">
-        {(Object.keys(TAB_LABELS) as AttemptTab[]).map((key) => {
-          const state = tabs[key];
-          return (
-            <Button
-              key={key}
-              variant="ghost"
-              type="button"
-              disabled={!state.available}
-              title={state.reason}
-              aria-pressed={key === active}
-              onClick={() => setTab(key)}
-              className={`-mb-px inline-flex h-auto shrink-0 items-center gap-1.5 border-b-2 px-2.5 py-1.5 text-xs font-medium ${
-                key === active ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              {TAB_LABELS[key]}
-              {typeof state.count === 'number' && state.count > 0 && (
-                <span className="rounded-full border border-border bg-background px-1.5 py-0.5 text-[10px] tabular-nums text-muted-foreground">
-                  {state.count}
-                </span>
-              )}
-            </Button>
-          );
-        })}
-      </div>
-      {!tabs[active].available ? (
-        <p className="px-3 py-4 text-xs text-muted-foreground">{tabs[active].reason}</p>
-      ) : active === 'fixtures' ? (
-        <VerificationFixtureResults entry={entry} />
-      ) : active === 'session' ? (
-        <VerificationAttemptSession dir={dir} todoRef={todoRef} sessionId={sessionId!} />
-      ) : active === 'output' ? (
-        <VerificationStepOutput steps={attemptOutputSteps(entry)} checklist={entry.checklist} />
-      ) : (
-        <div className="space-y-2 p-3">
-          {artifacts
-            .filter((item) => item.kind === active)
-            .map((item) => <AttemptRunPanel key={item.artifact.run_id} dir={dir} artifact={item.artifact} stepName={item.step.name} />)}
+      {sessionId && (
+        <div className="flex flex-nowrap gap-1 border-b border-border px-3 pt-2">
+          <EvidenceTabButton label="Results" isActive={active === 'results'} onClick={() => setTab('results')} />
+          <EvidenceTabButton label="Session" isActive={active === 'session'} onClick={() => setTab('session')} />
         </div>
+      )}
+      {active === 'session' && sessionId ? (
+        <VerificationAttemptSession dir={dir} todoRef={todoRef} sessionId={sessionId} />
+      ) : (
+        <VerificationResults
+          report={entry.report}
+          emptyText="This attempt recorded no verification results."
+        />
       )}
     </div>
   );
 }
 
-/**
- * One runner step's results: the recorded summary renders immediately, the full
- * tree is fetched from the .gavel store behind it. A missing artifact file says
- * so and leaves the summary standing.
- */
-function AttemptRunPanel({ dir, artifact, stepName }: { dir: string; artifact: RunArtifact; stepName?: string }) {
-  const identity = useMemo(() => ({ dir, runId: artifact.run_id }), [dir, artifact.run_id]);
-  const query = useQuery({
-    ...runSnapshotQuery(identity),
-    enabled: Boolean(artifact.run_id),
-  });
-
+function EvidenceTabButton({ label, isActive, onClick }: { label: string; isActive: boolean; onClick: () => void }) {
   return (
-    <section className="rounded border border-border">
-      <header className="flex flex-wrap items-center gap-2 border-b border-border px-2.5 py-1.5 text-xs">
-        <span className="min-w-0 flex-1 truncate font-medium">{stepName || artifact.kind}</span>
-        <RunCounts artifact={artifact} />
-      </header>
-      {artifact.error && <p className="px-2.5 py-1.5 text-[11px] text-red-600">{artifact.error}</p>}
-      {artifact.failures && artifact.failures.length > 0 && !query.data && (
-        <ul className="space-y-0.5 px-2.5 py-1.5 text-[11px]">
-          {artifact.failures.map((failure, index) => (
-            <li key={`${failure.name}:${index}`} className="truncate text-red-600" title={failure.message}>
-              {failure.suite ? `${failure.suite} > ` : ''}
-              {failure.name}
-            </li>
-          ))}
-          {artifact.truncated ? <li className="text-muted-foreground">…and {artifact.truncated} more</li> : null}
-        </ul>
-      )}
-      {query.error ? (
-        <p className="px-2.5 py-1.5 text-[11px] text-muted-foreground">Full results unavailable: {query.error.message}</p>
-      ) : !query.data ? (
-        <p className="flex items-center gap-2 px-2.5 py-1.5 text-[11px] text-muted-foreground">
-          <Spinner /> Loading {artifact.run_id}…
-        </p>
-      ) : (
-        <div className="min-h-0">
-          <TestRunResults
-            snapshot={query.data}
-            done
-            runKey={artifact.run_id}
-            projectName={projectNameFor(dir)}
-            projectDir={dir}
-            emptyMessage="This verification run recorded no tests or lint findings."
-          />
-        </div>
-      )}
-    </section>
+    <Button
+      variant="ghost"
+      type="button"
+      aria-pressed={isActive}
+      onClick={onClick}
+      className={`-mb-px inline-flex h-auto shrink-0 items-center gap-1.5 border-b-2 px-2.5 py-1.5 text-xs font-medium ${
+        isActive ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'
+      }`}
+    >
+      {label}
+    </Button>
   );
 }
 
-function RunCounts({ artifact }: { artifact: RunArtifact }) {
-  const parts: string[] = [];
-  if (artifact.total > 0) parts.push(`${artifact.passed}/${artifact.total} passed`);
-  if (artifact.failed > 0) parts.push(`${artifact.failed} failed`);
-  if (artifact.warned > 0) parts.push(`${artifact.warned} warned`);
-  if (artifact.skipped > 0) parts.push(`${artifact.skipped} skipped`);
-  if (artifact.lint_violations) parts.push(`${artifact.lint_violations} violations`);
-  return <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">{parts.join(' · ') || 'no results'}</span>;
-}
-
-function projectNameFor(dir: string): string {
-  const trimmed = dir.replace(/\/+$/, '');
-  return trimmed.slice(trimmed.lastIndexOf('/') + 1) || 'workspace';
-}
-
 function OutcomeIcon({ outcome }: { outcome: AttemptOutcome }) {
-  if (outcome === 'running') return <Spinner className="size-3.5 shrink-0" />;
-  if (outcome === 'passed') return <UiPass className="shrink-0 text-sm text-emerald-600" />;
-  if (outcome === 'cancelled') return <UiStop className="shrink-0 text-sm text-muted-foreground" />;
-  if (outcome === 'errored') return <UiWarningTriangle className="shrink-0 text-sm text-amber-600" />;
-  return <UiError className="shrink-0 text-sm text-red-600" />;
+  switch (outcome) {
+    case 'running':
+      return <Spinner className="size-3.5 shrink-0" />;
+    case 'passed':
+      return <UiPass className="shrink-0 text-sm text-emerald-600" />;
+    case 'cancelled':
+      return <UiStop className="shrink-0 text-sm text-muted-foreground" />;
+    case 'failed':
+      return <UiError className="shrink-0 text-sm text-red-600" />;
+    default:
+      // errored, warned, skipped, timed_out, queued.
+      return <UiWarningTriangle className="shrink-0 text-sm text-amber-600" />;
+  }
 }
 
 function OutcomePill({ outcome }: { outcome: AttemptOutcome }) {
   const tone =
     outcome === 'passed'
       ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
-      : outcome === 'failed'
+      : outcome === 'failed' || outcome === 'timed_out'
         ? 'border-red-500/25 bg-red-500/10 text-red-700 dark:text-red-400'
-        : outcome === 'errored'
-          ? 'border-amber-500/25 bg-amber-500/10 text-amber-700 dark:text-amber-400'
-          : 'border-border bg-background text-muted-foreground';
+        : outcome === 'running' || outcome === 'queued' || outcome === 'cancelled'
+          ? 'border-border bg-background text-muted-foreground'
+          : 'border-amber-500/25 bg-amber-500/10 text-amber-700 dark:text-amber-400';
   return <span className={`rounded border px-1.5 py-0.5 text-[10px] uppercase ${tone}`}>{outcome}</span>;
 }

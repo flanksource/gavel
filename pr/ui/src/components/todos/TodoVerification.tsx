@@ -52,7 +52,6 @@ export function TodoVerification({
   const [fixture, setFixture] = useState(saved);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [advancedOptions, setAdvancedOptions] = useState<TodoRunOptions>(defaultRunOptions);
-  const [verificationError, setVerificationError] = useState('');
   const { data: schemas = {} } = useQuery<unknown, Error, FixtureFenceSchemas>({
     queryKey: todoQueryKeys.verificationSchema(),
     queryFn: ({ signal }) => fetchJSON<unknown>({
@@ -87,7 +86,6 @@ export function TodoVerification({
   // after this todo's own save round-trips back through props.
   useEffect(() => {
     setFixture(saved);
-    setVerificationError('');
     fixtureMutation.reset();
     runMutation.reset();
   }, [todo.ref, saved]);
@@ -96,7 +94,6 @@ export function TodoVerification({
 
   async function save(): Promise<TodoItem | null> {
     if (busy || !dirty) return todo;
-    setVerificationError('');
     fixtureMutation.reset();
     try {
       return await fixtureMutation.mutateAsync(fixture);
@@ -107,14 +104,16 @@ export function TodoVerification({
 
   async function runVerification(options: TodoRunOptions) {
     if (busy || runBusy) return;
-    setVerificationError('');
     runMutation.reset();
     try {
       const current = dirty ? await save() : todo;
       if (!current) return;
-      const data = await runMutation.mutateAsync({ ref: current.ref, spec: verificationSpec(runSpec(options)) });
-      setVerificationError(data.verification?.error ?? '');
-      if (data.todo) onChanged(data.todo);
+      await runMutation.mutateAsync({
+        ref: current.ref,
+        spec: verificationSpec(runSpec(options)),
+        resume: options.resume,
+        force: options.force,
+      });
     } catch {
       // The owning mutation exposes its contextual error below.
     }
@@ -192,9 +191,9 @@ export function TodoVerification({
             placeholder="Write the verification fixture markdown…"
           />
         </div>
-        {(fixtureMutation.error || runMutation.error || verificationError) && (
+        {(fixtureMutation.error || runMutation.error) && (
           <div className="px-3 pb-3 text-xs text-red-600">
-            {fixtureMutation.error?.message || runMutation.error?.message || verificationError}
+            {fixtureMutation.error?.message || runMutation.error?.message}
           </div>
         )}
       </section>

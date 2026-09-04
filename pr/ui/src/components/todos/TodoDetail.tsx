@@ -15,15 +15,15 @@ import { priorities, priorityBadgeClass, priorityIcon, statusClass, statusIcon, 
 import { TodoRunAdvancedDialog } from './TodoRunAdvancedDialog';
 import { defaultRunOptions, loadLastTodoRunOptions, rememberTodoRunOptions, rememberTodoRunOptionsForMode, runActionConfig, runSpec, type TodoRunAction, useTodoRun, useTodoRunContext } from './run';
 import { loadPromptRunOptions, rememberPromptRunOptions, verificationSpec } from './PromptRunButton';
-import { ALL_PHASES, phaseSignals, phaseState, type PhaseId, type PhaseState } from './phaseMachine';
 import { TodoPhaseButton, TodoPhaseTicks, type PhaseRunOptions } from './TodoPhaseButton';
 import { TodoRunStatusStrip } from './TodoRunStatusStrip';
 import { TodoBodyEditor, TodoCommentBox, TodoTitleEditor } from './TodoCompose';
 import { TodoVerification } from './TodoVerification';
 import { TodoDetailTabs, type TodoDetailTabKey } from './TodoDetailTabs';
 import { useTodoSessionDetail } from './TodoSessionDetail';
-import { verificationAttempts, verificationBadge } from './verificationAttempts';
+import { verificationAttempts, verificationBadge } from './verificationReport';
 import { TodoReviewBanner } from './planActions';
+import { TodoNavigationControls, type TodoNavigationControlsProps } from './TodoNavigationControls';
 import { TodoMutationError, useDeleteTodoMutation, useGithubPushTodoMutation, useTodoSessionStop, useTodoVerificationRun, useTransferTodoMutation, useUpdateTodoMutation } from './todoMutations';
 import { TodoTagField, TodoTagRow } from './TodoTag';
 import { useTodoTagCounts, useTodoTagIndex } from './tagQueries';
@@ -39,6 +39,7 @@ export function TodoDetail({
   onBack,
   workspaces = [],
   onTransferred,
+  navigation,
 }: {
   todo: TodoItem | null;
   loading: boolean;
@@ -53,6 +54,7 @@ export function TodoDetail({
   // renders where a caller wires them (the dashboard), not the compact menubar.
   workspaces?: Project[];
   onTransferred?: (toDir: string, todo: TodoItem) => void;
+  navigation?: TodoNavigationControlsProps;
 }) {
   const [advancedMode, setAdvancedMode] = useState<TodoRunAction | null>(null);
   const [runSelections, setRunSelections] = useState<Partial<Record<TodoRunAction, TodoRunOptions>>>({});
@@ -110,16 +112,6 @@ export function TodoDetail({
   // route through TodoReviewBanner's approve/reject/answer flow, not have its
   // review/ask state silently bypassed by re-triggering a run from here.
   const awaitingHumanAction = todo?.status === 'review' || todo?.status === 'ask';
-  // Where the todo stands in plan -> run -> verify. This is what decides the
-  // header's one primary action, replacing the old pair of peer buttons that
-  // offered Plan and Run identically in every state.
-  const machineState: PhaseState = todo
-    ? phaseState(phaseSignals(todo, {
-      sessionInProgress,
-      verificationFailing: verification.failing,
-      verificationAttempted: verification.count > 0,
-    }))
-    : 'draft';
   const phaseOptions: PhaseRunOptions = {
     plan: runSelections.plan,
     run: runSelections.run,
@@ -128,17 +120,18 @@ export function TodoDetail({
   // The running attempt names its own step, so the strip can say "Verify" rather
   // than a generic "Running" when a check is what is in flight.
   const runningPhaseLabel = stoppableAttempt?.step
-    ? ALL_PHASES.find(entry => entry.id === stoppableAttempt.step)?.label
+    ? todo?.lifecycle?.steps.find(entry => entry.name === stoppableAttempt.step)?.label ?? stoppableAttempt.step
     : undefined;
 
-  function changePhaseOptions(id: PhaseId, options: TodoRunOptions) {
+  function changePhaseOptions(name: string, options: TodoRunOptions) {
     if (!runContext) return;
-    if (id === 'verify') {
+    if (name === 'verify') {
       setVerifySelection(rememberPromptRunOptions('verification', options, runContext));
       return;
     }
-    const remembered = rememberTodoRunOptions(id, options);
-    setRunSelections(previous => ({ ...previous, [id]: remembered }));
+    const action = name as TodoRunAction;
+    const remembered = rememberTodoRunOptions(action, options);
+    setRunSelections(previous => ({ ...previous, [action]: remembered }));
   }
 
   useEffect(() => {
@@ -288,27 +281,26 @@ export function TodoDetail({
     }
   }
 
-  // Enter a phase. plan/run/triage dispatch an agent run; verify posts the
-  // definition-of-done fixture, which is a different endpoint entirely — the
-  // machine hides that split from the header, it does not erase it.
-  async function runPhase(id: PhaseId) {
+  // Enter a lifecycle step. All post to the same /api/todos/run endpoint,
+  // naming the step; verify's mutation invalidates the attempt list too, so
+  // the Verification tab it switches to shows the fresh evidence immediately.
+  async function runPhase(name: string) {
     if (!todo) return;
-    if (id === 'verify') {
+    if (name === 'verify') {
       setError('');
       try {
         const options = phaseOptions.verify;
-        const data = await verificationRun.mutateAsync({
+        await verificationRun.mutateAsync({
           ref: todo.ref,
           spec: verificationSpec(options ? runSpec(options) : {}),
         });
-        if (data.todo) onChanged(data.todo);
         setTab('verification');
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Verification run failed');
       }
       return;
     }
-    await runTodo(phaseOptions[id] ?? loadLastTodoRunOptions(id, runContext));
+    await runTodo(phaseOptions[name] ?? loadLastTodoRunOptions(name as TodoRunAction, runContext));
   }
 
   async function stopRun() {
@@ -340,19 +332,24 @@ export function TodoDetail({
   if (!todo) {
     return (
       <div className="flex h-full min-h-0 flex-col text-sm text-muted-foreground">
-        {onBack && (
-          <div className="shrink-0 border-b border-border px-3 py-2">
-            <Button
-              variant="ghost"
-              size="icon"
-              type="button"
-              onClick={onBack}
-              title="Back to todos"
-              aria-label="Back to todos"
-              className="inline-flex h-8 w-8 items-center justify-center rounded-md hover:bg-muted hover:text-foreground"
-            >
-              <UiArrowLeft className="text-base" />
-            </Button>
+        {(onBack || navigation) && (
+          <div className="flex shrink-0 items-center justify-between border-b border-border px-3 py-2">
+            <div>
+              {onBack && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  type="button"
+                  onClick={onBack}
+                  title="Back to todos"
+                  aria-label="Back to todos"
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-md hover:bg-muted hover:text-foreground"
+                >
+                  <UiArrowLeft className="text-base" />
+                </Button>
+              )}
+            </div>
+            {navigation && <TodoNavigationControls {...navigation} />}
           </div>
         )}
         <div className="flex min-h-0 flex-1 items-center justify-center px-4">
@@ -395,6 +392,7 @@ export function TodoDetail({
                   <UiArrowLeft className="text-base" />
                 </Button>
               )}
+              {navigation && <TodoNavigationControls {...navigation} />}
               <div className="min-w-0 flex-1">
                 {editingTitle ? (
                   <TodoTitleEditor
@@ -470,17 +468,18 @@ export function TodoDetail({
                 />
               ) : (
                 <>
-                  <TodoPhaseTicks state={machineState} />
+                  <TodoPhaseTicks todo={todo} />
                   <TodoPhaseButton
-                    state={machineState}
+                    todo={todo}
+                    sessionInProgress={sessionInProgress}
                     context={runContext}
                     options={phaseOptions}
                     disabled={busy || !runContext}
                     busy={runBusy || verificationRun.isPending}
-                    onRunPhase={runPhase}
+                    onRunStep={runPhase}
                     onReview={() => setTab('overview')}
                     onOptionsChange={changePhaseOptions}
-                    onAdvanced={id => setAdvancedMode(id === 'verify' ? 'run' : id)}
+                    onAdvanced={name => setAdvancedMode(name === 'verify' ? 'run' : (name as TodoRunAction))}
                   />
                 </>
               )}
@@ -580,6 +579,7 @@ export function TodoDetail({
         }}
         loading={runBusy}
         initialMode={advancedMode ?? 'run'}
+        nextStep={todo.lifecycle?.next ?? null}
         title={runActionConfig[advancedMode ?? 'run'].title}
         dir={dir}
         refID={todo.ref}

@@ -4,7 +4,20 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CommandPalette } from './CommandPalette';
 
 vi.mock('@flanksource/clicky-ui/components', () => ({
-  Modal: ({ open, children }: { open: boolean; children?: React.ReactNode }) => open ? <div>{children}</div> : null,
+  Button: ({ children, onClick, className, 'aria-label': ariaLabel }: {
+    children?: React.ReactNode;
+    onClick?: React.MouseEventHandler<HTMLSpanElement>;
+    className?: string;
+    'aria-label'?: string;
+  }) => <span role="button" tabIndex={0} className={className} aria-label={ariaLabel} onClick={onClick}>{children}</span>,
+  Modal: ({ open, children, expandable, scrollBody }: {
+    open: boolean;
+    children?: React.ReactNode;
+    expandable?: boolean;
+    scrollBody?: boolean;
+  }) => open ? (
+    <div data-testid="command-palette-modal" data-expandable={String(expandable)} data-scroll-body={String(scrollBody)}>{children}</div>
+  ) : null,
 }));
 
 vi.mock('@flanksource/clicky-ui/icons', async (importOriginal) => ({
@@ -12,6 +25,7 @@ vi.mock('@flanksource/clicky-ui/icons', async (importOriginal) => ({
   UiGitPr: () => null,
   UiListDashes: () => null,
   UiSearch: () => null,
+  UiArrowLeft: () => null,
 }));
 
 beforeEach(() => {
@@ -19,6 +33,32 @@ beforeEach(() => {
 });
 
 describe('CommandPalette UUID entry', () => {
+  it('provides back navigation and a pinned search header for the mobile page', () => {
+    const onClose = vi.fn();
+    render(
+      <CommandPalette
+        open
+        onClose={onClose}
+        prs={[]}
+        todos={[]}
+        todosLoading={false}
+        onSelectPR={vi.fn()}
+        onSelectTodo={vi.fn()}
+        onOpenUUID={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId('command-palette-modal').getAttribute('data-expandable')).toBe('false');
+    expect(screen.getByTestId('command-palette-modal').getAttribute('data-scroll-body')).toBe('false');
+    const back = screen.getByRole('button', { name: 'Back' });
+    expect(back.className).toContain('sm:!hidden');
+    expect(screen.getByText('esc').className).toContain('sm:!inline-flex');
+    expect(screen.getByRole('textbox').parentElement?.className).toContain('shrink-0');
+    expect(screen.getByRole('textbox').parentElement?.className).toContain('max-sm:-mx-density-4');
+    fireEvent.click(back);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   it('opens a canonical Todo or session UUID directly on Enter', () => {
     const onClose = vi.fn();
     const onOpenUUID = vi.fn();

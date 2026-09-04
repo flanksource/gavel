@@ -1,82 +1,135 @@
-import { APPROVAL_ICONS, SESSION_TONES } from '@flanksource/clicky-ui/ai';
+import { APPROVAL_ICONS, SESSION_TONES, WORKFLOW_PHASES, type SessionTone } from '@flanksource/clicky-ui/ai';
 import { Button, DropdownMenu, SplitButton, type DropdownMenuItem } from '@flanksource/clicky-ui/components';
 import { Icon } from '@flanksource/clicky-ui/data';
+import type { StaticIconComponent } from '@flanksource/clicky-ui/data';
 import { cn } from '@flanksource/clicky-ui/utils';
-import { UiCog, UiStop } from '@flanksource/clicky-ui/icons';
-import type { TodoRunEffort, TodoRunOptions } from '../../types';
+import { UiCheckFilled, UiCog, UiListChecks, UiStop } from '@flanksource/clicky-ui/icons';
+import type { TodoItem, TodoLifecycleStep, TodoRunEffort, TodoRunOptions } from '../../types';
 import { Spinner } from '../../icons/Spinner';
-import {
-  PHASES,
-  otherPhases,
-  phase,
-  phaseVerb,
-  primaryAction,
-  stepStatus,
-  type PhaseId,
-  type PhaseState,
-} from './phaseMachine';
 import { TodoRuntimeSummary } from './TodoRuntimeSummary';
 import type { RunContext } from './providers';
 import { runSpec } from './run';
 
 /**
- * The todo header's single phase control.
+ * The todo header's single lifecycle control.
  *
  * It replaces four controls per action (trigger + runtime combo + Advanced cog,
  * rendered twice for Plan and Run) with one split button: the primary does
- * whatever the machine suggests next, and the caret holds every *other* phase,
- * each with its own model and effort submenu, plus Advanced.
+ * whatever `todo.lifecycle.next` says, and the caret holds every other
+ * *applicable* step, each with its own model and effort submenu, plus
+ * Advanced.
  *
- * The runtime rides inside the button rather than beside it, so one control says
- * both what will run and exactly what will run it. That is the combo's own
- * readout — provider, mode, model, effort in that order — not a new vocabulary.
+ * Where the todo stands in plan -> run -> verify used to be a client-side
+ * machine derived from status + hasPlan + verification signals. That machine
+ * is gone: the server now computes it and hands the header `todo.lifecycle`
+ * (every step's status, which one is `next`, and `reason` it picked that one).
+ * The only branches left on this side of the wire are the ones no server
+ * verdict can replace — a session is running right now, or the todo is
+ * parked on a human decision (review/ask).
+ *
+ * The runtime rides inside the button rather than beside it, so one control
+ * says both what will run and exactly what will run it.
  */
 
-export type PhaseRunOptions = Partial<Record<PhaseId, TodoRunOptions>>;
+export type PhaseRunOptions = Partial<Record<string, TodoRunOptions>>;
+
+// primaryLifecycleAction picks the header's one action. A live session and the
+// two human-decision statuses outrank the server's `next` — those are the
+// only client-side decisions left; which step, whether it applies, and why is
+// the server's call.
+export type LifecyclePrimaryAction =
+  | { kind: 'step'; name: string; label: string; reason: string }
+  | { kind: 'stop' }
+  | { kind: 'review' }
+  | { kind: 'answer' }
+  | { kind: 'none'; reason: string };
+
+export function primaryLifecycleAction(todo: TodoItem, sessionInProgress: boolean): LifecyclePrimaryAction {
+  if (sessionInProgress) return { kind: 'stop' };
+  if (todo.status === 'review') return { kind: 'review' };
+  if (todo.status === 'ask') return { kind: 'answer' };
+  const lifecycle = todo.lifecycle;
+  const next = lifecycle?.next ?? null;
+  if (!next) return { kind: 'none', reason: lifecycle?.reason ?? 'Nothing to run.' };
+  const step = lifecycle?.steps.find(entry => entry.name === next);
+  return { kind: 'step', name: next, label: step?.label ?? next, reason: lifecycle?.reason ?? '' };
+}
+
+// otherLifecycleSteps is every applicable step besides the one already
+// suggested — the caret's "run any step" menu. A step the server marked
+// inapplicable is left out: offering it would just produce a rejected run.
+export function otherLifecycleSteps(todo: TodoItem, primary: LifecyclePrimaryAction): TodoLifecycleStep[] {
+  const steps = todo.lifecycle?.steps ?? [];
+  const skip = primary.kind === 'step' ? primary.name : undefined;
+  return steps.filter(entry => entry.applicable && entry.name !== skip);
+}
+
+type StepGlyph = { icon: StaticIconComponent; tone: SessionTone };
+
+// Glyph and tone for the three pipeline steps come from the library's Agent
+// Action Icons set, so a step looks the same in the header as it does in the
+// session viewer. Triage and any other server-declared step name (a
+// `.gavel.yaml` todos.prompts entry) fall back to a generic glyph — the
+// server owns step identity now, so the client cannot enumerate every
+// possible name up front.
+const KNOWN_STEP_GLYPHS: Partial<Record<string, StepGlyph>> = {
+  plan: { icon: WORKFLOW_PHASES.plan.icon, tone: WORKFLOW_PHASES.plan.tone },
+  run: { icon: WORKFLOW_PHASES.run.icon, tone: WORKFLOW_PHASES.run.tone },
+  verify: { icon: WORKFLOW_PHASES.verify.icon, tone: WORKFLOW_PHASES.verify.tone },
+};
+
+const DEFAULT_STEP_GLYPH: StepGlyph = { icon: UiListChecks, tone: 'slate' };
+
+function stepGlyph(name: string): StepGlyph {
+  return KNOWN_STEP_GLYPHS[name] ?? DEFAULT_STEP_GLYPH;
+}
 
 export type TodoPhaseButtonProps = {
-  state: PhaseState;
+  todo: TodoItem;
+  sessionInProgress: boolean;
   context: RunContext | null;
-  /** Effective run options per phase, already reconciled against the catalog. */
+  /** Effective run options per step, already reconciled against the catalog. */
   options: PhaseRunOptions;
   disabled?: boolean;
   busy?: boolean;
-  /** Enter a phase now. */
-  onRunPhase: (id: PhaseId) => void;
+  /** Enter a step now. */
+  onRunStep: (name: string) => void;
   /** Stop the run in flight. Absent when nothing is stoppable. */
   onStop?: (() => void) | undefined;
   /** Scroll to / focus the review banner for a plan awaiting a decision. */
   onReview?: (() => void) | undefined;
-  /** Change one phase's runtime without running it. */
-  onOptionsChange: (id: PhaseId, options: TodoRunOptions) => void;
-  /** Open the full spec editor for a phase. */
-  onAdvanced: (id: PhaseId) => void;
+  /** Change one step's runtime without running it. */
+  onOptionsChange: (name: string, options: TodoRunOptions) => void;
+  /** Open the full spec editor for a step. */
+  onAdvanced: (name: string) => void;
 };
 
 /**
- * The menu rows for every non-suggested phase.
+ * The menu rows for every other applicable step.
  *
- * Each phase is a *submenu*, not a leaf: running it, changing its model and
- * changing its effort are three different intents on the same phase, and
+ * Each step is a *submenu*, not a leaf: running it, changing its model and
+ * changing its effort are three different intents on the same step, and
  * flattening them would put a dozen rows in one menu.
  */
-function phaseItems({
-  state,
+function stepItems({
+  todo,
+  primary,
   context,
   options,
-  onRunPhase,
+  onRunStep,
   onOptionsChange,
-}: Pick<TodoPhaseButtonProps, 'state' | 'context' | 'options' | 'onRunPhase' | 'onOptionsChange'>): DropdownMenuItem[] {
-  return otherPhases(state).map(entry => {
-    const phaseOptions = options[entry.id];
-    const spec = phaseOptions ? runSpec(phaseOptions) : {};
+}: Pick<TodoPhaseButtonProps, 'todo' | 'context' | 'options' | 'onRunStep' | 'onOptionsChange'> & { primary: LifecyclePrimaryAction }): DropdownMenuItem[] {
+  return otherLifecycleSteps(todo, primary).map(entry => {
+    const glyph = stepGlyph(entry.name);
+    const stepOptions = options[entry.name];
+    const spec = stepOptions ? runSpec(stepOptions) : {};
     const models = context?.modes.find(runtime => runtime.id === spec.mode)?.models
       ?? context?.modes.flatMap(runtime => runtime.models)
       ?? [];
     const children: DropdownMenuItem[] = [
-      { label: `${phaseVerb(state, entry.id)} now`, icon: entry.icon, onSelect: () => onRunPhase(entry.id) },
+      { label: `${entry.label} now`, icon: glyph.icon, onSelect: () => onRunStep(entry.name) },
     ];
-    if (context && phaseOptions) {
+    if (context && stepOptions) {
       children.push(
         {
           label: 'Model',
@@ -87,70 +140,74 @@ function phaseItems({
           children: models.map(model => ({
             label: model.id === spec.model ? `✓ ${model.label}` : model.label,
             title: model.id,
-            onSelect: () => onOptionsChange(entry.id, { ...phaseOptions, spec: { ...spec, model: model.id } }),
+            onSelect: () => onOptionsChange(entry.name, { ...stepOptions, spec: { ...spec, model: model.id } }),
           })),
         },
         {
           label: 'Effort',
           group: 'Runtime',
           onSelect: () => {},
-          children: context.efforts.map(value => ({
+          children: (context.efforts ?? []).map(value => ({
             label: value === spec.effort ? `✓ ${value}` : value,
-            onSelect: () => onOptionsChange(entry.id, { ...phaseOptions, spec: { ...spec, effort: value as TodoRunEffort } }),
+            onSelect: () => onOptionsChange(entry.name, { ...stepOptions, spec: { ...spec, effort: value as TodoRunEffort } }),
           })),
         },
       );
     }
     return {
       // The glyph rides in the label rather than the menu's icon slot, which
-      // only takes a raw CSS colour and so cannot carry a dark-mode variant. A
-      // phase is identified by its hue everywhere else; the menu that picks one
-      // is the last place to drop it.
+      // only takes a raw CSS colour and so cannot carry a dark-mode variant.
       label: (
         <span className="flex min-w-0 flex-1 items-center gap-2">
-          <Icon icon={entry.icon} className={cn('size-4 shrink-0', SESSION_TONES[entry.tone].text)} />
-          <span className="shrink-0">{phaseVerb(state, entry.id)}</span>
-          {phaseOptions && context && (
-            <TodoRuntimeSummary options={phaseOptions} context={context} className="ml-auto" />
+          <Icon icon={glyph.icon} className={cn('size-4 shrink-0', SESSION_TONES[glyph.tone].text)} />
+          <span className="shrink-0">{entry.label}</span>
+          {stepOptions && context && (
+            <TodoRuntimeSummary options={stepOptions} context={context} className="ml-auto" />
           )}
         </span>
       ),
-      group: 'Run any phase',
-      title: entry.title,
-      onSelect: () => onRunPhase(entry.id),
+      group: 'Run any step',
+      title: entry.label,
+      onSelect: () => onRunStep(entry.name),
       children,
     };
   });
 }
 
 /**
- * One small glyph per phase, saying where the todo stands.
+ * One small glyph per lifecycle step, saying where the todo stands.
  *
- * Anonymous dots could only say "two of three done" — these say *which* phases,
- * because each keeps its own icon and colour. State rides on the container: a
- * tinted ring for the current phase, a faded glyph for one not reached yet.
+ * Anonymous dots could only say "two of three done" — these say *which*
+ * steps, because each keeps its own icon and colour. State rides on the
+ * container: a tinted ring for `todo.lifecycle.next`, a faded glyph for a
+ * step not done and not next.
  */
-export function TodoPhaseTicks({ state, className }: { state: PhaseState; className?: string }) {
+export function TodoPhaseTicks({ todo, className }: { todo: TodoItem; className?: string }) {
+  const steps = todo.lifecycle?.steps ?? [];
+  if (steps.length === 0) return null;
+  const next = todo.lifecycle?.next ?? null;
+
   return (
     <span
       className={cn('inline-flex shrink-0 items-center gap-0.5 rounded-md border border-border bg-muted/20 px-1 py-0.5', className)}
       role="img"
-      aria-label={PHASES.map(entry => `${entry.label} ${stepStatus(state, entry.id)}`).join(', ')}
+      aria-label={steps.map(entry => `${entry.label} ${entry.name === next ? 'current' : entry.done ? 'done' : 'todo'}`).join(', ')}
     >
-      {PHASES.map(entry => {
-        const status = stepStatus(state, entry.id);
+      {steps.map(entry => {
+        const current = entry.name === next;
+        const glyph = stepGlyph(entry.name);
         return (
           <span
-            key={entry.id}
-            title={`${entry.label}: ${status}`}
+            key={entry.name}
+            title={`${entry.label}: ${current ? 'current' : entry.done ? 'done' : 'todo'}`}
             className={cn(
               'inline-flex size-6 items-center justify-center rounded',
-              status === 'current' && 'bg-background ring-1 ring-border',
+              current && 'bg-background ring-1 ring-border',
             )}
           >
             <Icon
-              icon={entry.icon}
-              className={cn('size-[1.125rem]', status === 'todo' ? 'text-muted-foreground/40' : SESSION_TONES[entry.tone].text)}
+              icon={glyph.icon}
+              className={cn('size-[1.125rem]', !current && !entry.done ? 'text-muted-foreground/40' : SESSION_TONES[glyph.tone].text)}
             />
           </span>
         );
@@ -160,48 +217,59 @@ export function TodoPhaseTicks({ state, className }: { state: PhaseState; classN
 }
 
 export function TodoPhaseButton({
-  state,
+  todo,
+  sessionInProgress,
   context,
   options,
   disabled,
   busy,
-  onRunPhase,
+  onRunStep,
   onStop,
   onReview,
   onOptionsChange,
   onAdvanced,
 }: TodoPhaseButtonProps) {
-  const action = primaryAction(state);
-  const target = action.kind === 'phase' ? phase(action.phase) : undefined;
-  const targetOptions = action.kind === 'phase' ? options[action.phase] : undefined;
+  const primary = primaryLifecycleAction(todo, sessionInProgress);
+  const targetOptions = primary.kind === 'step' ? options[primary.name] : undefined;
+  const targetGlyph = primary.kind === 'step' ? stepGlyph(primary.name) : undefined;
   const items: DropdownMenuItem[] = [
-    ...phaseItems({ state, context, options, onRunPhase, onOptionsChange }),
+    ...stepItems({ todo, primary, context, options, onRunStep, onOptionsChange }),
     {
       label: 'Advanced…',
       icon: UiCog,
       group: 'Configure',
-      onSelect: () => onAdvanced(action.kind === 'phase' ? action.phase : 'run'),
+      onSelect: () => onAdvanced(primary.kind === 'step' ? primary.name : 'run'),
     },
   ];
 
-  const label = action.kind === 'phase'
-    ? action.label
-    : action.kind === 'stop'
+  const label = primary.kind === 'step'
+    ? primary.label
+    : primary.kind === 'stop'
       ? 'Stop'
-      : action.kind === 'answer'
+      : primary.kind === 'answer'
         ? 'Answer'
-        : 'Review plan';
+        : primary.kind === 'review'
+          ? 'Review plan'
+          : 'Done';
 
   function activate() {
-    if (action.kind === 'phase') return onRunPhase(action.phase);
-    if (action.kind === 'stop') return onStop?.();
+    if (primary.kind === 'step') return onRunStep(primary.name);
+    if (primary.kind === 'stop') return onStop?.();
+    if (primary.kind === 'none') return;
     return onReview?.();
   }
 
-  // Stop with nothing stoppable, and review with nowhere to go, are the two
-  // cases where the primary genuinely has no action — better disabled and
-  // honest than a control that looks live and does nothing.
-  const inert = (action.kind === 'stop' && !onStop) || ((action.kind === 'review' || action.kind === 'answer') && !onReview);
+  // Stop with nothing stoppable, review/answer with nowhere to go, and "no
+  // step applies" are the cases where the primary genuinely has no action —
+  // better disabled and honest than a control that looks live and does
+  // nothing.
+  const inert = primary.kind === 'none'
+    || (primary.kind === 'stop' && !onStop)
+    || ((primary.kind === 'review' || primary.kind === 'answer') && !onReview);
+
+  const tooltip = primary.kind === 'step' ? (primary.reason || primary.label)
+    : primary.kind === 'none' ? primary.reason
+      : label;
 
   return (
     <SplitButton
@@ -211,15 +279,17 @@ export function TodoPhaseButton({
             'inline-flex min-w-0 items-center gap-1.5',
             // The neutral bordered shell is kept for Stop and only the label is
             // tinted, rather than switching to a solid destructive button.
-            action.kind === 'stop' && 'text-red-600 [[data-theme=dark]_&]:text-red-400',
+            primary.kind === 'stop' && 'text-red-600 [[data-theme=dark]_&]:text-red-400',
           )}
         >
           {busy ? (
             <Spinner className="shrink-0 text-xs" />
-          ) : target ? (
-            <Icon icon={target.icon} className={cn('size-4 shrink-0', SESSION_TONES[target.tone].text)} />
-          ) : action.kind === 'stop' ? (
+          ) : targetGlyph ? (
+            <Icon icon={targetGlyph.icon} className={cn('size-4 shrink-0', SESSION_TONES[targetGlyph.tone].text)} />
+          ) : primary.kind === 'stop' ? (
             <UiStop className="shrink-0 text-xs" />
+          ) : primary.kind === 'none' ? (
+            <UiCheckFilled className="shrink-0 text-xs text-emerald-600 dark:text-emerald-400" />
           ) : (
             <Icon
               icon={APPROVAL_ICONS.question.icon}
@@ -242,7 +312,7 @@ export function TodoPhaseButton({
       size="sm"
       align="right"
       className="h-8"
-      title={target ? target.title : label}
+      title={tooltip}
     />
   );
 }
