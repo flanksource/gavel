@@ -126,6 +126,9 @@ func TestLintIgnoreRule_MatchesViolation(t *testing.T) {
 }
 
 func TestLoadGavelConfig_WithLintIgnore(t *testing.T) {
+	// LoadGavelConfig layers ~/.gavel.yaml under the repo's, so a test that does
+	// not redirect HOME asserts against whatever the developer happens to have.
+	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	require.NoError(t, os.Mkdir(filepath.Join(dir, ".git"), 0o755))
 
@@ -181,6 +184,7 @@ func TestLoadGavelConfig_SurfacesUnreadableLayer(t *testing.T) {
 }
 
 func TestSaveGavelConfig_RoundTrip(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 
 	cfg := GavelConfig{
@@ -204,6 +208,7 @@ func TestSaveGavelConfig_RoundTrip(t *testing.T) {
 }
 
 func TestLoadGavelConfig_WithFixtures(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	require.NoError(t, os.Mkdir(filepath.Join(dir, ".git"), 0o755))
 
@@ -222,12 +227,12 @@ func TestLoadGavelConfig_WithFixtures(t *testing.T) {
 }
 
 func TestLoadGavelConfig_WithChecks(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	require.NoError(t, os.Mkdir(filepath.Join(dir, ".git"), 0o755))
 
 	cfgData := []byte(`checks:
   enabled: true
-  maxIterations: 5
   test:
     changed: true
     timeout: 3m
@@ -240,7 +245,6 @@ func TestLoadGavelConfig_WithChecks(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, cfg.Checks.Enabled)
 	assert.True(t, *cfg.Checks.Enabled)
-	assert.Equal(t, 5, cfg.Checks.MaxIterations)
 	require.NotNil(t, cfg.Checks.Test)
 	assert.True(t, cfg.Checks.Test.Changed)
 	assert.Equal(t, "3m", cfg.Checks.Test.Timeout)
@@ -254,17 +258,18 @@ func TestLoadGavelConfig_RepoChecksOverrideHome(t *testing.T) {
 	require.NoError(t, os.Mkdir(filepath.Join(repo, ".git"), 0o755))
 
 	t.Setenv("HOME", home)
-	homeCfg := []byte("checks:\n  enabled: false\n  maxIterations: 2\n")
+	const homeRetry = "verify.summary.failed > 0"
+	homeCfg := []byte("checks:\n  enabled: false\n  retry: " + homeRetry + "\n")
 	require.NoError(t, os.WriteFile(filepath.Join(home, ".gavel.yaml"), homeCfg, 0o644))
 	repoCfg := []byte("checks:\n  enabled: true\n")
 	require.NoError(t, os.WriteFile(filepath.Join(repo, ".gavel.yaml"), repoCfg, 0o644))
 
 	cfg, err := LoadGavelConfig(repo)
 	require.NoError(t, err)
-	// repo turns checks on; home's maxIterations survives where repo is silent.
+	// repo turns checks on; home's retry predicate survives where repo is silent.
 	require.NotNil(t, cfg.Checks.Enabled)
 	assert.True(t, *cfg.Checks.Enabled)
-	assert.Equal(t, 2, cfg.Checks.MaxIterations)
+	assert.Equal(t, homeRetry, cfg.Checks.Retry)
 }
 
 func TestFixturesConfig_ResolvedFiles_Default(t *testing.T) {
@@ -367,13 +372,17 @@ func TestMergeGavelConfig_PromptSpecAppliesEveryField(t *testing.T) {
 // tools, and the ai: floor is an API model with none.
 func TestDefaultGavelConfig_SeedsTheVerifyGrader(t *testing.T) {
 	defaults := DefaultGavelConfig()
-	assert.Equal(t, DefaultVerifyModel, defaults.Todos.Verify.Model.Name)
-	assert.NotEqual(t, DefaultAIModel, defaults.Todos.Verify.Model.Name)
+	// The grader pins a MECHANISM, not a model: it must run agentically or it
+	// grades without reading the diff. The model itself is configuration, so the
+	// built-in layer names none.
+	assert.Equal(t, DefaultVerifyMode, defaults.Todos.Verify.Model.Mode)
+	assert.Empty(t, defaults.Todos.Verify.Model.Name)
+	assert.Empty(t, defaults.AI.Model.Name, "the ai: base must not pick a model either")
 
 	repo := GavelConfig{Todos: TodosConfig{Verify: api.Spec{Model: api.Model{Name: "claude-code-opus"}}}}
 	merged := MergeGavelConfig(defaults, repo)
 	assert.Equal(t, "claude-code-opus", merged.Todos.Verify.Model.Name)
-	assert.Equal(t, DefaultAIModel, merged.AI.Model.Name, "the grader layer is not the ai: base")
+	assert.Empty(t, merged.AI.Model.Name, "the grader layer is not the ai: base")
 }
 
 // File and baseDir are one fact — which prompt, and the directory its relative
@@ -422,6 +431,7 @@ func TestMergeGavelConfig_ListsAccumulateAcrossLayers(t *testing.T) {
 }
 
 func TestLoadGavelConfig_WithLintLinterEnablement(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	require.NoError(t, os.Mkdir(filepath.Join(dir, ".git"), 0o755))
 
@@ -438,6 +448,7 @@ func TestLoadGavelConfig_WithLintLinterEnablement(t *testing.T) {
 }
 
 func TestLoadGavelConfig_WithPushHooksAndSSH(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	require.NoError(t, os.Mkdir(filepath.Join(dir, ".git"), 0o755))
 
@@ -485,6 +496,7 @@ func TestMerge_SSHConfig(t *testing.T) {
 // every checked-in config key has a Go field and as dogfooding so a typo in
 // .gavel.yaml fails CI instead of silently breaking the SSH push flow.
 func TestLoadGavelConfig_RepoRoot(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	// Locate the repo root from this test file (verify/config_test.go).
 	wd, err := os.Getwd()
 	require.NoError(t, err)
@@ -791,6 +803,7 @@ func TestMerge_ProcfileConfig(t *testing.T) {
 }
 
 func TestLoadGavelConfig_WithProcfile(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	require.NoError(t, os.Mkdir(filepath.Join(dir, ".git"), 0o755))
 

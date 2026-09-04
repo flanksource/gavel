@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/todos/types"
 )
 
@@ -102,16 +103,34 @@ func buildVerificationSection(todo *types.TODO, rawFixture bool) string {
 		}
 		return fmt.Sprintf("## Verification\n\nThe current fixture, verbatim:\n\n````markdown\n%s\n````\n\n", fixture)
 	}
-	if len(todo.Verification) == 0 {
-		return ""
-	}
-	section := "## Verification\n\nAfter implementing your fix, verify it works by running:\n\n"
+	var commands []string
 	for _, node := range todo.Verification {
 		if node.Test != nil {
-			section += fmt.Sprintf("```bash\n%s\n```\n\n", node.Test.String())
+			commands = append(commands, fixtureCommandProjection(*node.Test)...)
 		}
 	}
-	return section
+	if len(commands) == 0 {
+		return ""
+	}
+	return "## Verification\n\nAfter implementing your fix, verify it works by running:\n\n" + strings.Join(commands, "")
+}
+
+// fixtureCommandProjection is the executable face of one fixture node — what
+// the agent can run itself before the verify loop does. It is never the node's
+// NAME: a bare ```exec fence is named `exec-block` by the parser, and that is
+// not a command. An exec node projects to its command, a runner step to the
+// fence gavel executes, and an AI checklist step — graded, not run — to nothing.
+func fixtureCommandProjection(test fixtures.FixtureTest) []string {
+	if test.IsAIStep() {
+		return nil
+	}
+	if test.IsRunnerStep() {
+		return []string{fmt.Sprintf("```yaml %s\n%s\n```\n\n", test.RunnerStep.Kind, strings.TrimSpace(test.RunnerStep.Config))}
+	}
+	if exec := strings.TrimSpace(test.ExecBase().Exec); exec != "" {
+		return []string{fmt.Sprintf("```bash\n%s\n```\n\n", exec)}
+	}
+	return nil
 }
 
 // buildCommentsSection renders issue comments so the agent sees the discussion

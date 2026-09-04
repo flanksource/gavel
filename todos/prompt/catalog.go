@@ -62,7 +62,7 @@ func (d Definition) Template(workDir string) (string, error) {
 		return "", fmt.Errorf("resolve todos.%s template: %w", d.Name, err)
 	}
 	if strings.TrimSpace(source) == "" {
-		return "", fmt.Errorf("prompt %q has no template: declare a `file:` or a prompt body under todos.prompts.%s", d.Name, d.Name)
+		return "", fmt.Errorf("prompt %q has no template: declare a `file:` under todos.%s", d.Name, d.Name)
 	}
 	return source, nil
 }
@@ -107,11 +107,12 @@ func builtins() []Definition {
 // NewCatalog assembles the runnable prompts from the built-ins and the project's
 // configuration. Layering, lowest precedence first:
 //
-//	builtin  <  .gavel.yaml todos.<name>  <  .gavel.yaml todos.prompts.<name>
+//	builtin  <  .gavel.yaml todos.<name>
 //
-// The typed fields (todos.run, todos.plan, todos.triage) are the ergonomic way to
-// override a built-in; todos.prompts is the general axis and can both re-point a
-// built-in and declare an entirely new prompt.
+// The typed fields (todos.run, todos.plan, todos.triage) are how a built-in is
+// overridden. The set of prompts is a code contract — each pairs a behaviour
+// class with the envelope the run loop parses its result against — so it is
+// exactly these three and configuration re-points them rather than extending them.
 func NewCatalog(cfg verify.TodosConfig) (*Catalog, error) {
 	catalog := &Catalog{byName: map[string]Definition{}}
 	typed := map[string]verify.PromptSpec{
@@ -122,44 +123,8 @@ func NewCatalog(cfg verify.TodosConfig) (*Catalog, error) {
 
 	for _, def := range builtins() {
 		def.Override = typed[def.Name]
-		def.Origin = originFor(def.Name, def.Override, "builtin")
+		def.Origin = originFor(def.Name, def.Override)
 		catalog.byName[def.Name] = def
-	}
-
-	for name, entry := range cfg.Prompts {
-		name = strings.TrimSpace(name)
-		if name == "" {
-			return nil, fmt.Errorf("todos.prompts has an entry with an empty name")
-		}
-		def, isBuiltin := catalog.byName[name]
-		if isBuiltin {
-			// Re-pointing a built-in keeps its envelope: the envelope is a code
-			// contract the run loop parses against, not a configuration choice.
-			def.Override = def.Override.Merge(entry.PromptSpec)
-		} else {
-			def = Definition{Name: name, Override: entry.PromptSpec}
-		}
-
-		class, err := classFor(entry.Class, def.Class)
-		if err != nil {
-			return nil, fmt.Errorf("todos.prompts.%s: %w", name, err)
-		}
-		if isBuiltin && entry.Class != "" && class != def.Class {
-			return nil, fmt.Errorf("todos.prompts.%s: built-in prompt %q runs as class %q and cannot be redeclared as %q",
-				name, name, def.Class, class)
-		}
-		def.Class = class
-		if !isBuiltin {
-			def.Envelope = envelopeFor(class)
-		}
-		if entry.Title != "" {
-			def.Title = entry.Title
-		}
-		if entry.Description != "" {
-			def.Description = entry.Description
-		}
-		def.Origin = originFor(name, def.Override, map[bool]string{true: "builtin", false: ""}[isBuiltin])
-		catalog.byName[name] = def
 	}
 	return catalog, nil
 }
@@ -210,23 +175,8 @@ func (c *Catalog) Names() []string {
 	return names
 }
 
-// classFor resolves a configured class name, defaulting to fallback and then to
-// the read-only plan class. A prompt that was never told it may commit must not
-// inherit the right to, so the default is the restrictive one.
-func classFor(configured string, fallback types.RunMode) (types.RunMode, error) {
-	if strings.TrimSpace(configured) == "" {
-		if fallback != "" {
-			return fallback, nil
-		}
-		return types.ModePlan, nil
-	}
-	class, err := types.ParseRunMode(configured)
-	if err != nil {
-		return "", fmt.Errorf("invalid class: %w", err)
-	}
-	return class, nil
-}
-
+// envelopeFor is the envelope a behaviour class returns, for the callers that
+// know only the class.
 func envelopeFor(class types.RunMode) EnvelopeKind {
 	if class == types.ModePlan {
 		return EnvelopePlan
@@ -234,15 +184,13 @@ func envelopeFor(class types.RunMode) EnvelopeKind {
 	return EnvelopeResult
 }
 
-func originFor(name string, override verify.PromptSpec, builtinOrigin string) string {
+func originFor(name string, override verify.PromptSpec) string {
 	switch {
 	case override.File != "":
 		return override.ResolvedFilePath("")
 	case strings.TrimSpace(override.Spec.Prompt.User) != "":
 		return ".gavel.yaml todos." + name
-	case builtinOrigin != "":
-		return builtinOrigin
 	default:
-		return ".gavel.yaml todos.prompts." + name
+		return "builtin"
 	}
 }

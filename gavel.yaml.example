@@ -17,7 +17,7 @@
 #       ai supplies defaults; each operation spec replaces the same operation
 #       from an earlier layer, then inherits unset fields from ai and its built-in prompt
 #   - Last-write-wins scalars:
-#       commit.precommit.mode, todos.driver, todos.timeout, todos.groupBy,
+#       commit.precommit.mode, todos.timeout,
 #       pr.base, ssh.cmd, procfile.profile/autoRestart/maxRestarts/mem/cpu
 #   - Appended lists:
 #       lint.ignore, commit.hooks, commit.gitignore, commit.allow, pre, post,
@@ -176,11 +176,27 @@ todos:
         Produce a read-only implementation plan for:
         {{{body}}}
 
-  # Execution mechanism: api, agent, cli, or cmux.
-  driver: cli
   timeout: 45m
-  # Group values: file, directory, repo, all, or none.
-  groupBy: none
+
+  # Overrides the built-in todo lifecycle (todos/lifecycle/todos.yaml): the
+  # ordered steps, each a captain prompt reference, a CEL `when` predicate
+  # (subject/runs/last) deciding when the step applies, and ordered `outcomes`
+  # deciding which status a finished run lands the todo in.
+  #
+  # `file:` and this inline form are mutually exclusive. A step named like a
+  # built-in step (plan/verify/run/triage) replaces it wholesale; a new name is
+  # appended. A `verify` step must survive the merge.
+  lifecycle:
+    steps:
+      # Add a security-review pass after `run` lands, before verification.
+      - name: security-review
+        prompt: "file:.gavel/prompts/security-review.prompt"
+        envelope: result
+        when: "subject.status in ['pending'] && has(last.run) && last.run.state == 'succeeded'"
+        outcomes:
+          - { status: ask, when: "envelope.endStatus == 'ask'" }
+          - { status: failed, when: "run.state != 'succeeded' || envelope.endStatus == 'failed'" }
+          - { status: pending, when: "true" }
 
 status:
   # Per-file summary used by `gavel status --ai`; receives {{details}}.
@@ -211,15 +227,13 @@ pr:
   draft: true
 
 checks:
-  # The post-completion check loop for `gavel todos run --check`. Once an agent
+  # The post-completion check loop inside `gavel todos run`. Once an agent
   # reports it is done, gavel runs the configured test/lint suite below; if it
   # fails, gavel feeds a compact failure summary back to the agent and re-runs,
-  # looping until the checks pass or maxIterations is reached. Opt-in: the loop
-  # runs only when enabled here (or forced on by --check / the dashboard toggle).
-  # A TODO's frontmatter `checks:` block overrides these project defaults.
+  # looping until the checks pass or todos.run.workflow.verify.maxIterations is
+  # reached. Opt-in: the loop runs only when enabled here. A TODO's frontmatter
+  # `checks:` block overrides these project defaults.
   enabled: true
-  # Maximum number of agent re-runs before giving up (default 3).
-  maxIterations: 3
   # CEL predicate evaluated after each iteration; true runs the agent again.
   retry: results.failed > 0 || results.warned > 0 || !results.checklist.all(i, i.passed)
   # Omit `test` to skip tests; omit `lint` to skip linting. When the loop is

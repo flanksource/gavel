@@ -65,10 +65,14 @@ type Options struct {
 	// Backlog is a compact index of the other open TODOs in the workspace, so a
 	// triage run can spot duplicates. Empty omits the section.
 	Backlog string
+	// Inputs are the lifecycle step's declared template variables, evaluated
+	// from the todo. They are folded over the built-in variables above, so a
+	// step that declares `existingPlan` decides what the template sees.
+	Inputs map[string]any
 }
 
 // Default returns the embedded .prompt source for a built-in prompt name. It is
-// the lowest template layer: todos/spec renders its frontmatter to seed the run
+// the lowest template layer: todos/headless renders its frontmatter to seed the run
 // spec, and Render falls back to it when no .gavel.yaml override supplies a
 // template.
 //
@@ -87,7 +91,7 @@ func Default(name string) (string, error) {
 }
 
 // TemplateData is the variable set every todo prompt template renders against.
-// It is exported because todos/spec renders the same templates' frontmatter with
+// It is exported because todos/headless renders the same templates' frontmatter with
 // the same variables, and a template that computes its frontmatter would resolve
 // differently against a divergent set.
 func TemplateData(todoList []*types.TODO, opts Options) map[string]any {
@@ -100,13 +104,17 @@ func TemplateData(todoList []*types.TODO, opts Options) map[string]any {
 		}
 		body.WriteString(buildTODOSection(todo, opts.WorkDir, true, number, opts.Envelope == EnvelopeTriage))
 	}
-	return map[string]any{
+	data := map[string]any{
 		"multiple":     multiple,
 		"count":        len(todoList),
 		"body":         body.String(),
 		"existingPlan": opts.ExistingPlan,
 		"backlog":      opts.Backlog,
 	}
+	for name, value := range opts.Inputs {
+		data[name] = value
+	}
+	return data
 }
 
 // promptName is the name Render reports in errors and stamps on the request.

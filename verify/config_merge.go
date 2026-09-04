@@ -26,15 +26,11 @@ func MergeGavelConfig(base, override GavelConfig) GavelConfig {
 
 // configPolicy is the merge policy for every .gavel.yaml type. It is the spec
 // policy — pointers to scalars mean "explicitly set", so `enabled: false` in a
-// repo config turns something off — plus the two config types whose layering is a
-// domain rule the structure cannot express: PromptSpec, and NamedPromptSpec.
-//
-// NamedPromptSpec must be listed for todos.prompts to merge per key. Without it a
-// repo config re-pointing one named prompt's model would replace the whole map
-// and drop every prompt the home config declared.
+// repo config turns something off — plus PromptSpec, the one config type whose
+// layering is a domain rule the structure cannot express.
 //
 // The lists that accumulate across layers instead of being replaced say so on the
 // field, with a `merge:"append"` tag.
 func configPolicy() merge.Policy {
-	return api.MergePolicy().With(merge.Policy{Merger: []any{PromptSpec{}, NamedPromptSpec{}}})
+	return api.MergePolicy().With(merge.Policy{Merger: []any{PromptSpec{}}})
 }

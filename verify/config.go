@@ -4,47 +4,40 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/commons/collections"
 	"github.com/flanksource/gavel/models"
 	"github.com/flanksource/gavel/todos/types"
-	"github.com/flanksource/repomap"
-	"github.com/ghodss/yaml"
 	yamlv3 "gopkg.in/yaml.v3"
 )
 
-// DefaultAIModel is the built-in global default model used when neither the
-// base ai: spec nor an operation spec pins one. It mirrors the value returned
-// by ai.DefaultConfig().Model; it is duplicated here as a const so the
-// low-level verify package need not import the heavier gavel/ai package.
-const DefaultAIModel = "claude-haiku-4-5"
-
-// DefaultVerifyModel is the built-in model for the grader that marks a
-// definition of done. It seeds todos.verify rather than being applied where the
-// grader is built, so a repo can override it and the settings trace can say
-// where the value came from.
-const DefaultVerifyModel = "claude-sonnet-5"
-
-// DefaultVerifyMode is pinned rather than left to the model's provider default:
-// the grader is told to inspect the change with its own tools, so it must run on
-// an agentic mechanism. DefaultAIModel is an API model with none, and a grader
-// that cannot read the diff still returns confident verdicts.
+// DefaultVerifyMode is a CONSTRAINT, not a preference, which is why it is the
+// one runtime value still pinned in code: the grader that marks a definition of
+// done is told to inspect the change with its own tools, so it must run on an
+// agentic mechanism. A grader that cannot read the diff still returns confident
+// verdicts, so letting configuration select an API mode here would silently
+// produce authoritative-looking nonsense. It pins the mechanism only — the model
+// itself comes from configuration like every other operation's.
 const DefaultVerifyMode = api.ModeAgent
 
-// DefaultAIConfig is the built-in global default base spec (precedence floor).
+// DefaultAIConfig is the built-in base spec. It deliberately names NO model.
+//
+// It used to seed "claude-haiku-4-5", which meant every repo looked configured
+// whether or not anyone had chosen a model, and made the per-operation defaults
+// downstream unreachable. The model now comes from .gavel.yaml, then
+// ~/.captain.yaml, and a run that finds neither fails loudly telling the user to
+// run `gavel configure` or `captain configure`.
 func DefaultAIConfig() api.Spec {
-	return api.Spec{Model: api.Model{Name: DefaultAIModel}}
+	return api.Spec{}
 }
 
 // DefaultGavelConfig seeds the built-in defaults every loaded config layers on.
 func DefaultGavelConfig() GavelConfig {
 	return GavelConfig{
 		AI:    DefaultAIConfig(),
-		Todos: TodosConfig{Verify: api.Spec{Model: api.Model{Name: DefaultVerifyModel, Mode: DefaultVerifyMode}}},
+		Todos: TodosConfig{Verify: api.Spec{Model: api.Model{Mode: DefaultVerifyMode}}},
 	}
 }
 
@@ -314,8 +307,10 @@ type GavelConfig struct {
 	Post     []HookStep     `yaml:"post,omitempty" json:"post,omitempty" merge:"append"`
 	Secrets  SecretsConfig  `yaml:"secrets,omitempty" json:"secrets,omitempty"`
 	Procfile ProcfileConfig `yaml:"procfile,omitempty" json:"procfile,omitempty"`
-	// Checks is the project default for the post-completion agent check loop
-	// (`gavel todos run --check`). A TODO's frontmatter `checks:` overrides it.
+	// Checks is the project default for the `yaml test`/`yaml lint` fences the
+	// lifecycle host appends to a todo's definition of done; the run step's
+	// verify loop re-runs them until they pass. A TODO's frontmatter `checks:`
+	// overrides it.
 	Checks types.AgentChecksConfig `yaml:"checks,omitempty" json:"checks,omitempty"`
 	Todos  TodosConfig             `yaml:"todos,omitempty" json:"todos,omitempty"`
 	Status StatusConfig            `yaml:"status,omitempty" json:"status,omitempty"`
@@ -351,59 +346,18 @@ type TestConfig struct {
 	// `gavel test outline --ai-summary`. Empty uses the built-in default. See
 	// prompts.TestOutlineSummary.
 	OutlineSummary PromptSpec `yaml:"outlineSummary,omitempty" json:"outlineSummary,omitempty"`
-}
-
-// TodosConfig configures `gavel todos run`.
-type TodosConfig struct {
-	// Run is the AI spec for the todo run prompt; Plan is the plan-mode spec.
-	// Each overrides the base ai: spec field-wise. See prompts.TodosRun/TodosPlan.
-	Run  PromptSpec `yaml:"run,omitempty" json:"run,omitempty"`
-	Plan PromptSpec `yaml:"plan,omitempty" json:"plan,omitempty"`
-	// Triage is the AI spec for the triage prompt: a read-only pass that compacts
-	// a TODO's description and reviews its verification fixture, reporting the
-	// edits for gavel to apply. See prompts.TodosTriage.
-	Triage PromptSpec `yaml:"triage,omitempty" json:"triage,omitempty"`
-	// Prompts declares additional named prompts, keyed by name. Each entry names
-	// the behaviour class it runs as, so a project can add a security or docs pass
-	// without gavel gaining a run mode. Built-in names (run, plan, triage) may be
-	// re-declared here to override their template wholesale; the typed fields
-	// above remain the ergonomic way to override just one built-in.
-	Prompts map[string]NamedPromptSpec `yaml:"prompts,omitempty" json:"prompts,omitempty"`
-	// CheckConcurrency bounds how many definition-of-done checks run at once
-	// (`gavel todos check`, and the verification phase after a bulk triage).
-	// Zero uses the built-in default; running one test suite per TODO unbounded
-	// thrashes the machine.
-	CheckConcurrency int `yaml:"checkConcurrency,omitempty" json:"checkConcurrency,omitempty"`
-	// Verify is the spec a verification run executes as: `gavel todos check`, the
-	// dashboard's verify action, and the acceptance-criteria grader inside a run's
-	// definition-of-done loop. It overrides the base ai: spec field-wise and is
-	// itself overridden by the request.
+	// Timeout, TestTimeout and LintTimeout are Go duration strings ("20m")
+	// carrying the deadlines `gavel test` otherwise takes from its flag
+	// defaults. They live in config because the deadline a repo needs is a
+	// property of that repo's suites, not of the invocation: CI, a local run and
+	// the SSH git-push backend all have to agree on it, and the backend runs
+	// `gavel test` with no timeout flags of its own.
 	//
-	// It is a plain spec rather than a PromptSpec because verification has no
-	// prompt template — the checklist is generated from the todo's acceptance
-	// criteria — so offering a `file:` override here would be a silent no-op.
-	//
-	// The implementer's own run spec is deliberately NOT a layer in this chain: a
-	// grader built from it inherited the session it was grading, along with the
-	// coding agent's model, backend and budget.
-	Verify api.Spec `yaml:"verify,omitempty" json:"verify,omitempty"`
-	// Driver is the execution mechanism: api | agent | cli | cmux.
-	Driver string `yaml:"driver,omitempty" json:"driver,omitempty"`
-	// Timeout caps a run's wall-clock duration (e.g. "30m"); empty = default.
-	Timeout string `yaml:"timeout,omitempty" json:"timeout,omitempty"`
-	// GroupBy selects how todos are grouped into runs.
-	GroupBy string `yaml:"groupBy,omitempty" json:"groupBy,omitempty"`
-	// Approvals gates Bash behind a human approval prompt. It is a pointer so an
-	// explicit `false` turns off an inherited `true`. Only an entrypoint that can
-	// answer an approval request may enable it — the CLI has no approver and would
-	// block forever, so enabling it there is a loud error rather than a hang.
-	// Unset defaults to the entrypoint's own capability (dashboard on, CLI off).
-	Approvals *bool `yaml:"approvals,omitempty" json:"approvals,omitempty"`
-	// BaseURL is the absolute origin this gavel dashboard is reachable at, e.g.
-	// https://gavel.example.com. Todo bodies store attachments as server-relative
-	// links, so pushing a todo to an external tracker rewrites them against this
-	// origin. A loopback origin only renders for viewers on the same machine.
-	BaseURL string `yaml:"baseUrl,omitempty" json:"baseUrl,omitempty"`
+	// An explicitly passed flag still wins, so a one-off run can shorten or
+	// lengthen a deadline without editing the file.
+	Timeout     string `yaml:"timeout,omitempty" json:"timeout,omitempty"`
+	TestTimeout string `yaml:"testTimeout,omitempty" json:"testTimeout,omitempty"`
+	LintTimeout string `yaml:"lintTimeout,omitempty" json:"lintTimeout,omitempty"`
 }
 
 // ProcfileConfig configures `gavel proc` — global defaults for the processes
@@ -440,181 +394,4 @@ type SecretsConfig struct {
 	// .gitleaks.toml paths to merge in (relative paths resolve against the
 	// .gavel.yaml's directory). Layers accumulate and repeats collapse.
 	Configs []string `yaml:"configs,omitempty" json:"configs,omitempty" merge:"append,unique"`
-}
-
-type GavelConfigSource struct {
-	Origin string      `json:"origin" yaml:"origin"`
-	Path   string      `json:"path" yaml:"path"`
-	Raw    string      `json:"-" yaml:"-"`
-	Config GavelConfig `json:"config" yaml:"config"`
-}
-
-type GavelConfigTrace struct {
-	TargetPath string              `json:"targetPath" yaml:"targetPath"`
-	TargetDir  string              `json:"targetDir" yaml:"targetDir"`
-	GitRoot    string              `json:"gitRoot,omitempty" yaml:"gitRoot,omitempty"`
-	Sources    []GavelConfigSource `json:"sources,omitempty" yaml:"sources,omitempty"`
-	Merged     GavelConfig         `json:"merged" yaml:"merged"`
-}
-
-func LoadGavelConfig(cwd string) (GavelConfig, error) {
-	cfg := DefaultGavelConfig()
-
-	home, err := os.UserHomeDir()
-	if err == nil {
-		if cfg, err = mergeFromFile(cfg, filepath.Join(home, ".gavel.yaml")); err != nil {
-			return GavelConfig{}, err
-		}
-	}
-
-	gitRoot := repomap.FindGitRoot(cwd)
-	if gitRoot != "" {
-		if cfg, err = mergeFromFile(cfg, filepath.Join(gitRoot, ".gavel.yaml")); err != nil {
-			return GavelConfig{}, err
-		}
-	}
-
-	absCwd, _ := filepath.Abs(cwd)
-	if absCwd != gitRoot {
-		if cfg, err = mergeFromFile(cfg, filepath.Join(absCwd, ".gavel.yaml")); err != nil {
-			return GavelConfig{}, err
-		}
-	}
-
-	return cfg, nil
-}
-
-// LoadGavelConfigTrace resolves the effective config for the provided file or
-// directory path and records which .gavel.yaml files contributed to the merged
-// result. Resolution order matches normal loading: built-in defaults, then the
-// user's home config, then the git-root config, then the target directory (or
-// the parent directory when the target path is a file).
-func LoadGavelConfigTrace(path string) (GavelConfigTrace, error) {
-	targetPath, targetDir, err := resolveGavelConfigTarget(path)
-	if err != nil {
-		return GavelConfigTrace{}, err
-	}
-
-	trace := GavelConfigTrace{
-		TargetPath: targetPath,
-		TargetDir:  targetDir,
-		Merged:     DefaultGavelConfig(),
-	}
-
-	var candidates []GavelConfigSource
-	seen := make(map[string]struct{})
-	addCandidate := func(origin, candidatePath string) {
-		if candidatePath == "" {
-			return
-		}
-		if _, ok := seen[candidatePath]; ok {
-			return
-		}
-		seen[candidatePath] = struct{}{}
-		candidates = append(candidates, GavelConfigSource{
-			Origin: origin,
-			Path:   candidatePath,
-		})
-	}
-
-	if home, err := os.UserHomeDir(); err == nil {
-		addCandidate("user-home", filepath.Join(home, ".gavel.yaml"))
-	}
-
-	trace.GitRoot = repomap.FindGitRoot(targetDir)
-	if trace.GitRoot != "" {
-		addCandidate("git-root", filepath.Join(trace.GitRoot, ".gavel.yaml"))
-	}
-
-	origin := "target-directory"
-	if targetPath != targetDir {
-		origin = "parent-directory"
-	}
-	addCandidate(origin, filepath.Join(targetDir, ".gavel.yaml"))
-
-	for _, candidate := range candidates {
-		cfg, raw, err := loadSingleGavelConfig(candidate.Path)
-		if err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
-			return GavelConfigTrace{}, err
-		}
-
-		candidate.Raw = raw
-		candidate.Config = cfg
-		trace.Sources = append(trace.Sources, candidate)
-		trace.Merged = MergeGavelConfig(trace.Merged, cfg)
-	}
-
-	return trace, nil
-}
-
-// LoadSingleGavelConfig reads one .gavel.yaml file from the given absolute
-// path without layering with home/gitRoot/cwd siblings. Returns a zero-value
-// config with os.ErrNotExist when the file is missing so callers can detect
-// "need to create" vs. a real read/parse error.
-func LoadSingleGavelConfig(path string) (GavelConfig, error) {
-	cfg, _, err := loadSingleGavelConfig(path)
-	return cfg, err
-}
-
-func loadSingleGavelConfig(path string) (GavelConfig, string, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return GavelConfig{}, "", err
-	}
-	var gc GavelConfig
-	if err := yaml.Unmarshal(data, &gc); err != nil {
-		return GavelConfig{}, "", fmt.Errorf("parse %s: %w", path, err)
-	}
-	setPromptSpecBaseDirs(&gc, filepath.Dir(path))
-	return gc, string(data), nil
-}
-
-func SaveGavelConfig(dir string, cfg GavelConfig) error {
-	path := filepath.Join(dir, ".gavel.yaml")
-	data, err := yaml.Marshal(cfg)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, data, 0o644)
-}
-
-// mergeFromFile layers one .gavel.yaml onto base. A missing file is the ordinary
-// case — that layer simply does not exist — but every other error is fatal: an
-// unreadable or unparseable config, or one carrying an invalid enum, used to be
-// discarded here, so a typo anywhere in .gavel.yaml silently ran the whole
-// project on built-in defaults instead of the settings it declared.
-func mergeFromFile(base GavelConfig, path string) (GavelConfig, error) {
-	cfg, err := LoadSingleGavelConfig(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return base, nil
-		}
-		return base, err
-	}
-	return MergeGavelConfig(base, cfg), nil
-}
-
-func resolveGavelConfigTarget(path string) (string, string, error) {
-	if path == "" {
-		path = "."
-	}
-
-	absPath, err := filepath.Abs(path)
-	if err != nil {
-		return "", "", fmt.Errorf("resolve absolute path: %w", err)
-	}
-
-	info, err := os.Stat(absPath)
-	if err != nil {
-		return "", "", fmt.Errorf("stat %s: %w", absPath, err)
-	}
-
-	if info.IsDir() {
-		return absPath, absPath, nil
-	}
-
-	return absPath, filepath.Dir(absPath), nil
 }

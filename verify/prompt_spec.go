@@ -258,10 +258,10 @@ func setPromptSpecBaseDirs(cfg *GavelConfig, dir string) {
 			v.Addr().Interface().(*PromptSpec).baseDir = dir
 			return
 		}
-		// Map values are not addressable, so a PromptSpec inside todos.prompts
+		// Map values are not addressable, so a PromptSpec reached through a map
 		// cannot be stamped in place: copy the element, walk the copy, and write it
-		// back. Without this a relative `file:` in a named prompt would resolve
-		// against the process working directory instead of its declaring config.
+		// back. Without this a relative `file:` inside one would resolve against
+		// the process working directory instead of its declaring config.
 		if v.Kind() == reflect.Map {
 			if v.IsNil() {
 				return
@@ -294,8 +294,8 @@ type PromptSpecOptions struct {
 	// A configuration layer must carry what it declares. Resolution fills the mode
 	// from the model's provider default, and once folded that mode is
 	// indistinguishable from one the prompt asked for: a built-in template naming
-	// `model: claude` would silently outrank todos.driver and every mode layered
-	// above it. The folded spec is resolved once, at the end.
+	// `model: claude` would silently outrank the mode a higher layer's compact
+	// model named. The folded spec is resolved once, at the end.
 	Declared bool
 }
 

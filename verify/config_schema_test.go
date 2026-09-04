@@ -126,8 +126,11 @@ func indexByte(s string, b byte) int {
 func TestConfigJSONSchema_DefaultsAndEnums(t *testing.T) {
 	schema := parsedConfigSchema(t)
 
-	assert.Equal(t, DefaultAIModel, nodeAt(t, schema, "ai", "model")["default"],
-		"ai.model default should be the built-in global default model")
+	// No built-in default model: the key must be absent rather than advertising
+	// "" as a value, so the settings UI shows an unset field instead of a model
+	// nobody chose.
+	_, hasDefault := nodeAt(t, schema, "ai", "model")["default"]
+	assert.False(t, hasDefault, "ai.model must advertise no built-in default model")
 	assert.Equal(t, "gavel test --lint", nodeAt(t, schema, "ssh", "cmd")["default"],
 		"ssh.cmd default should be the fallback command")
 

@@ -248,8 +248,9 @@ func TestRenderMergesCanonicalSpecWithoutDroppingRuntimeFields(t *testing.T) {
 	}
 
 	// want is the caller's spec plus the fields the template itself contributes.
-	// Those are not drift: a .prompt declaring schemaStrictness is the template
-	// doing its job, and the caller's spec never modelled it.
+	// Those are not drift: a .prompt declaring schemaStrictness or its permission
+	// posture is the template doing its job, and the caller's spec never modelled
+	// them.
 	//
 	// The model is resolved too — rendering hands back a driver-ready one — so
 	// the expectation resolves the caller's model rather than restating the
@@ -264,6 +265,7 @@ func TestRenderMergesCanonicalSpecWithoutDroppingRuntimeFields(t *testing.T) {
 	want.Prompt.Source = "todos.run"
 	want.Prompt.SchemaJSON = req.Prompt.SchemaJSON
 	want.Prompt.SchemaStrictness = "retry"
+	want.Permissions.Presets = []api.Preset{api.PresetEdit}
 	if !reflect.DeepEqual(req, want) {
 		t.Fatalf("rendered request dropped or changed Spec fields:\n got: %#v\nwant: %#v", req, want)
 	}
@@ -414,6 +416,31 @@ func TestRenderRunKeepsFixtureCommandProjection(t *testing.T) {
 	user := renderUser(t, []*types.TODO{todo}, Options{Mode: types.ModeRun})
 	if strings.Contains(user, "scope: diff") {
 		t.Errorf("run prompt leaked raw fixture source:\n%s", user)
+	}
+}
+
+// The projection is the COMMAND a node runs, never the node's name: a bare
+// ```exec fence is named `exec-block` by the parser, and "run exec-block" is not
+// an instruction anyone can follow. Runner steps project to their gavel command
+// and an AI checklist step, which is graded rather than run, is left out.
+func TestRenderRunProjectsFixtureCommands(t *testing.T) {
+	todo := newTestTODO("solo", "task")
+	todo.Verification = []*fixtures.FixtureNode{
+		{Test: &fixtures.FixtureTest{Name: "exec-block", ExecFixtureBase: fixtures.ExecFixtureBase{Exec: "echo lifecycle-smoke"}}},
+		{Test: &fixtures.FixtureTest{Name: "yaml test-block", RunnerStep: &fixtures.RunnerStepSpec{Kind: fixtures.RunnerKindTest, Config: "packages: [./todos]"}}},
+		{Test: &fixtures.FixtureTest{Name: "acceptance", AIStep: &fixtures.AIStepSpec{}}},
+	}
+
+	user := renderUser(t, []*types.TODO{todo}, Options{Mode: types.ModeRun})
+	for _, want := range []string{"```bash\necho lifecycle-smoke\n```", "```yaml test\npackages: [./todos]\n```"} {
+		if !strings.Contains(user, want) {
+			t.Errorf("run prompt omitted the executable projection %q:\n%s", want, user)
+		}
+	}
+	for _, leak := range []string{"exec-block", "yaml test-block", "acceptance"} {
+		if strings.Contains(user, leak) {
+			t.Errorf("run prompt rendered the node name %q instead of a command:\n%s", leak, user)
+		}
 	}
 }
 

@@ -73,90 +73,54 @@ func TestCatalogEmptyNameIsTheRunPrompt(t *testing.T) {
 	}
 }
 
-// The available prompt set is project-specific, so an unknown name must say what
-// IS available rather than failing bare.
+// The catalog is exactly the three built-ins, so an unknown name must say what IS
+// available rather than failing bare.
 func TestCatalogUnknownNameEnumeratesAvailable(t *testing.T) {
-	cfg := verify.TodosConfig{Prompts: map[string]verify.NamedPromptSpec{
-		"security": {PromptSpec: verify.PromptSpec{Spec: api.Spec{Prompt: api.Prompt{User: "audit it"}}}},
-	}}
-	_, err := mustCatalog(t, cfg).Lookup("nope")
+	_, err := mustCatalog(t, verify.TodosConfig{}).Lookup("nope")
 	if err == nil {
 		t.Fatal("unknown prompt must error")
 	}
-	for _, want := range []string{"nope", "run", "plan", "triage", "security"} {
+	for _, want := range []string{"nope", "run", "plan", "triage"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q does not mention %q", err, want)
 		}
 	}
 }
 
-func TestCatalogCustomPromptDefaultsToPlanClass(t *testing.T) {
-	cfg := verify.TodosConfig{Prompts: map[string]verify.NamedPromptSpec{
-		"security": {PromptSpec: verify.PromptSpec{Spec: api.Spec{Prompt: api.Prompt{User: "audit it"}}}},
-	}}
-	def, err := mustCatalog(t, cfg).Lookup("security")
+// The prompt set is a code contract — each name pairs a behaviour class with the
+// envelope the run loop parses against — so configuration re-points the built-ins
+// and cannot add a fourth prompt.
+func TestCatalogIsExactlyTheBuiltins(t *testing.T) {
+	names := mustCatalog(t, verify.TodosConfig{
+		Run:    verify.PromptSpec{Spec: api.Spec{Prompt: api.Prompt{User: "implement it"}}},
+		Triage: verify.PromptSpec{Spec: api.Spec{Prompt: api.Prompt{User: "triage it"}}},
+	}).Names()
+	if strings.Join(names, ",") != "run,plan,triage" {
+		t.Fatalf("Names() = %v, want run,plan,triage", names)
+	}
+}
+
+// The typed todos.<name> field re-points a built-in's body without touching the
+// envelope the loop parses its result against.
+func TestCatalogTypedInlineOverrideReplacesTheBody(t *testing.T) {
+	def, err := mustCatalog(t, verify.TodosConfig{
+		Triage: verify.PromptSpec{Spec: api.Spec{Prompt: api.Prompt{User: "triage it"}}},
+	}).Lookup("triage")
 	if err != nil {
-		t.Fatalf("Lookup(security): %v", err)
-	}
-	// A prompt that was never told it may commit must not inherit the right to.
-	if def.Class != types.ModePlan {
-		t.Errorf("class = %q, want plan by default", def.Class)
-	}
-	if def.Envelope != EnvelopePlan {
-		t.Errorf("envelope = %q, want plan", def.Envelope)
+		t.Fatalf("Lookup(triage): %v", err)
 	}
 	template, err := def.Template(t.TempDir())
 	if err != nil {
 		t.Fatalf("Template: %v", err)
 	}
-	if template != "audit it" {
+	if template != "triage it" {
 		t.Errorf("template = %q, want the configured body", template)
 	}
-}
-
-func TestCatalogCustomPromptHonoursDeclaredClassAndMetadata(t *testing.T) {
-	cfg := verify.TodosConfig{Prompts: map[string]verify.NamedPromptSpec{
-		"docs": {
-			PromptSpec:  verify.PromptSpec{Spec: api.Spec{Prompt: api.Prompt{User: "write docs"}}},
-			Class:       "run",
-			Title:       "Docs pass",
-			Description: "Updates documentation",
-		},
-	}}
-	def, err := mustCatalog(t, cfg).Lookup("docs")
-	if err != nil {
-		t.Fatalf("Lookup(docs): %v", err)
+	if def.Origin != ".gavel.yaml todos.triage" {
+		t.Errorf("origin = %q, want .gavel.yaml todos.triage", def.Origin)
 	}
-	if def.Class != types.ModeRun || def.Envelope != EnvelopeResult {
-		t.Errorf("class/envelope = %q/%q, want run/result", def.Class, def.Envelope)
-	}
-	if def.Title != "Docs pass" || def.Description != "Updates documentation" {
-		t.Errorf("metadata not carried: %+v", def)
-	}
-}
-
-// A built-in's envelope is a code contract the run loop parses against, so
-// redeclaring its class would make the loop expect a shape the prompt cannot
-// produce. That must fail loudly rather than be quietly ignored.
-func TestCatalogRejectsRedeclaringABuiltinClass(t *testing.T) {
-	cfg := verify.TodosConfig{Prompts: map[string]verify.NamedPromptSpec{
-		"triage": {Class: "run", PromptSpec: verify.PromptSpec{Spec: api.Spec{Prompt: api.Prompt{User: "x"}}}},
-	}}
-	if _, err := NewCatalog(cfg); err == nil {
-		t.Fatal("redeclaring a built-in prompt's class must error")
-	}
-}
-
-func TestCatalogRejectsAPromptWithNoTemplate(t *testing.T) {
-	cfg := verify.TodosConfig{Prompts: map[string]verify.NamedPromptSpec{
-		"empty": {Title: "Nothing"},
-	}}
-	def, err := mustCatalog(t, cfg).Lookup("empty")
-	if err != nil {
-		t.Fatalf("Lookup(empty): %v", err)
-	}
-	if _, err := def.Template(t.TempDir()); err == nil {
-		t.Fatal("a prompt with no file and no body must error rather than render an empty prompt")
+	if def.Envelope != EnvelopeTriage || def.Class != types.ModePlan {
+		t.Errorf("class/envelope = %q/%q, want plan/triage", def.Class, def.Envelope)
 	}
 }
 
@@ -189,16 +153,12 @@ func TestCatalogTypedOverrideReplacesBuiltinTemplate(t *testing.T) {
 	}
 }
 
-func TestCatalogListPutsBuiltinsFirst(t *testing.T) {
-	cfg := verify.TodosConfig{Prompts: map[string]verify.NamedPromptSpec{
-		"alpha": {PromptSpec: verify.PromptSpec{Spec: api.Spec{Prompt: api.Prompt{User: "a"}}}},
-		"zeta":  {PromptSpec: verify.PromptSpec{Spec: api.Spec{Prompt: api.Prompt{User: "z"}}}},
-	}}
+func TestCatalogListIsLifecycleOrderedNotAlphabetical(t *testing.T) {
 	var names []string
-	for _, def := range mustCatalog(t, cfg).List() {
+	for _, def := range mustCatalog(t, verify.TodosConfig{}).List() {
 		names = append(names, def.Name)
 	}
-	want := []string{"run", "plan", "triage", "alpha", "zeta"}
+	want := []string{"run", "plan", "triage"}
 	if strings.Join(names, ",") != strings.Join(want, ",") {
 		t.Errorf("List order = %v, want %v", names, want)
 	}

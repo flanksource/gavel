@@ -2,6 +2,15 @@
 model: claude
 prompt:
   schemaStrictness: retry
+permissions:
+  # A run implements: it edits files and runs commands. Stated here rather than
+  # filled in by Go, so the posture travels with the prompt the way every other
+  # prompt's does. Deliberately no per-tool policy: `presets: [edit]` is carried
+  # by every runtime, while a tool allow/deny map is REJECTED outright on the
+  # ones that cannot enforce it (api.RequireToolPolicySupport), which is every
+  # runtime but the claude transports.
+  mode: acceptEdits
+  presets: [edit]
 ---
 {{#if multiple}}You are implementing the {{count}} todo items listed below. Each is a separate task — implement ALL of them.{{else}}You are implementing the todo item below in a codebase.{{/if}}
 

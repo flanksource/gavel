@@ -1451,8 +1451,7 @@
           "type": "string"
         },
         "model": {
-          "default": "claude-haiku-4-5",
-          "description": "Default catalog model slug for all AI operations (e.g. claude-sonnet-4-5).",
+          "description": "Default catalog model slug for all AI operations (e.g. claude-sonnet-4-5). There is no built-in default: set it here, or globally as ai.defaultModel in ~/.captain.yaml. A run that finds neither stops and tells you to run `gavel configure`.",
           "type": "string"
         },
         "noCache": {
@@ -1506,10 +1505,10 @@
     },
     "checks": {
       "additionalProperties": false,
-      "description": "Post-completion check loop for `gavel todos run --check`: after an agent reports done, run these tests/lint and feed failures back to the agent until they pass. Opt-in — runs only when enabled here, by a TODO's frontmatter `checks`, or by the --check flag. Frontmatter overrides these project defaults.",
+      "description": "Tests and lint appended to every todo's definition of done as `yaml test`/`yaml lint` fixture steps: after an agent reports done, the run step's verify loop runs them and feeds failures back to the agent until they pass or `todos.run.workflow.verify.maxIterations` is reached. Opt-in — runs only when enabled here or by a TODO's frontmatter `checks`. Frontmatter overrides these project defaults.",
       "properties": {
         "enabled": {
-          "description": "Turn the loop on. Omitted leaves it off unless --check or a TODO's frontmatter enables it.",
+          "description": "Append the check steps. Omitted leaves them off unless a TODO's frontmatter enables them.",
           "type": "boolean"
         },
         "lint": {
@@ -1534,13 +1533,8 @@
           },
           "type": "object"
         },
-        "maxIterations": {
-          "default": 3,
-          "description": "Maximum agent re-runs before giving up.",
-          "type": "integer"
-        },
         "retry": {
-          "description": "CEL definition-of-done predicate: while it is true the agent re-runs with the failing nodes as feedback; when false the run is verified. Reads {results, test_results, changed_files, iteration} where results carries checklist ([]{item, passed, message}). Default: results.failed \u003e 0 || results.warned \u003e 0 || !results.checklist.all(i, i.passed)",
+          "description": "CEL definition-of-done predicate: while it is true the agent re-runs with the failing nodes as feedback. It reads the verification report under the variable `verify` (verify.state, verify.summary.{total,passed,failed,warned,skipped,timedout}, verify.tests, verify.checklist[].{item,passed,message}) and can only add reasons to re-run — a failing run is never talked into passing. Default: verify.summary.failed \u003e 0 || verify.summary.warned \u003e 0 || verify.summary.timedout \u003e 0 || verify.checklist.exists(i, !i.passed)",
           "type": "string"
         },
         "test": {
@@ -2447,6 +2441,11 @@
       "additionalProperties": false,
       "description": "Settings for `gavel test`.",
       "properties": {
+        "lintTimeout": {
+          "default": "5m",
+          "description": "Deadline for each linter subprocess when --lint is set, as a Go duration. Overridden by --lint-timeout.",
+          "type": "string"
+        },
         "outlineSummary": {
           "additionalProperties": false,
           "description": "AI spec for the per-test summary prompt (`gavel test outline --ai-summary`). Variables: {{ids}} (the test ids), {{file}}, {{source}}. The output schema (tests[]) is fixed.",
@@ -2523,6 +2522,16 @@
             "object"
           ],
           "x-prompt-id": "test.outlineSummary"
+        },
+        "testTimeout": {
+          "default": "5m",
+          "description": "Deadline for each test-package subprocess (one go test / ginkgo / vitest invocation), as a Go duration. A suite that exceeds it is killed and reported as a timeout. Overridden by --test-timeout.",
+          "type": "string"
+        },
+        "timeout": {
+          "default": "10m",
+          "description": "Wall-clock deadline for the whole test+lint run, as a Go duration. On timeout diagnostics are captured and every subprocess is killed. Overridden by --timeout.",
+          "type": "string"
         }
       },
       "type": "object"
@@ -2531,10 +2540,6 @@
       "additionalProperties": false,
       "description": "Settings for `gavel todos run`.",
       "properties": {
-        "approvals": {
-          "description": "Gate Bash behind a human approval prompt. Unset means the entrypoint decides: the dashboard can answer approvals, `gavel todos run` cannot. Enabling it where nothing can answer is an error rather than a run that blocks forever.",
-          "type": "boolean"
-        },
         "baseUrl": {
           "description": "Absolute origin this gavel dashboard is reachable at (e.g. https://gavel.example.com). Todo bodies store attachments as server-relative links, so pushing a todo to an external tracker rewrites them against this origin. A loopback origin only renders for viewers on the same machine.",
           "type": "string"
@@ -2543,13 +2548,34 @@
           "description": "How many definition-of-done checks run at once (`gavel todos check`, and the verification phase after a bulk triage). Each check runs the TODO's fixture, so an unbounded fan-out over a large selection thrashes the machine. Defaults to 4.",
           "type": "integer"
         },
-        "driver": {
-          "description": "Execution mechanism for a run: api, agent, cli, or cmux. The coding agent is derived from the model. Last-write-wins across layers.",
-          "type": "string"
-        },
-        "groupBy": {
-          "description": "How todos are grouped into runs. Last-write-wins across layers.",
-          "type": "string"
+        "lifecycle": {
+          "additionalProperties": false,
+          "description": "Overrides the built-in todo lifecycle: the ordered steps (a captain prompt reference, a CEL `when` over subject/runs/last, and ordered `outcomes` mapping the finished run onto a status). Either `file` (a lifecycle YAML relative to the project) or an inline `name`/`subject`/`steps`. A step named like a built-in step replaces it wholesale; a new name is appended. A `verify` step must remain.",
+          "properties": {
+            "file": {
+              "description": "Path to a lifecycle YAML document, relative to the project root. Mutually exclusive with the inline form.",
+              "type": "string"
+            },
+            "name": {
+              "description": "Name of the lifecycle; defaults to the built-in `todos`.",
+              "type": "string"
+            },
+            "steps": {
+              "description": "Steps to replace or add: {name, prompt, envelope, when, inputs, spec, outcomes, auxiliary}. Outcomes are `{status, when}` pairs evaluated in order; the first true wins and none true is an error.",
+              "items": {
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "subject": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "Extra subject declarations a custom step's predicates may read, field → CEL type (string, bool, int, double, dyn, list\u003cstring\u003e, list\u003cdyn\u003e, map\u003cstring,dyn\u003e).",
+              "type": "object"
+            }
+          },
+          "type": "object"
         },
         "plan": {
           "additionalProperties": false,
@@ -2628,101 +2654,6 @@
           ],
           "x-prompt-id": "todos.plan"
         },
-        "prompts": {
-          "additionalProperties": {
-            "additionalProperties": false,
-            "description": "One named prompt, runnable with `gavel todos run --prompt \u003cname\u003e`.",
-            "properties": {
-              "budget": {
-                "additionalProperties": false,
-                "description": "Resource ceilings for the run. Zero/unset means unbounded.",
-                "properties": {
-                  "cost": {
-                    "description": "Maximum spend in USD; 0 = no ceiling.",
-                    "type": "number"
-                  },
-                  "maxTokens": {
-                    "description": "Cap on output tokens per model call; 0 = backend default.",
-                    "type": "integer"
-                  },
-                  "maxTurns": {
-                    "description": "Cap on agent turns; 0 = backend default.",
-                    "type": "integer"
-                  }
-                },
-                "type": "object"
-              },
-              "class": {
-                "description": "Behaviour class this prompt runs as: run commits and verifies its work, plan does neither. Defaults to plan — a prompt that was never told it may commit must not inherit the right to.",
-                "enum": [
-                  "run",
-                  "plan"
-                ]
-              },
-              "description": {
-                "description": "What this prompt does and when to run it.",
-                "type": "string"
-              },
-              "effort": {
-                "description": "Reasoning effort for thinking-capable models.",
-                "enum": [
-                  "",
-                  "low",
-                  "medium",
-                  "high",
-                  "xhigh",
-                  "max",
-                  "ultra"
-                ],
-                "type": "string"
-              },
-              "fallbacks": {
-                "description": "Alternative model slugs tried in order when the primary is unavailable or its provider cannot be constructed.",
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              "file": {
-                "description": "Path to a .prompt file whose frontmatter/body supply this operation's spec. Relative paths resolve against the .gavel.yaml directory.",
-                "type": "string"
-              },
-              "model": {
-                "description": "Catalog model slug for this operation (e.g. claude-haiku-4-5). Overrides the base ai.model.",
-                "type": "string"
-              },
-              "prompt": {
-                "additionalProperties": false,
-                "description": "The prompt body. A bare string in place of the whole spec is shorthand for prompt.user.",
-                "properties": {
-                  "system": {
-                    "description": "Optional system-prompt framing.",
-                    "type": "string"
-                  },
-                  "user": {
-                    "description": "The user prompt / template body (Handlebars).",
-                    "type": "string"
-                  }
-                },
-                "type": "object"
-              },
-              "title": {
-                "description": "Short label shown by `gavel todos prompts` and the dashboard.",
-                "type": "string"
-              },
-              "workflow": {
-                "$ref": "#/$defs/Workflow",
-                "description": "Loop shape for operations that run one: verify commands (the definition of done, whose exit code gates a re-run and whose output tail becomes the feedback) and the commit policy. Overriding it replaces the operation's declared workflow field-wise."
-              }
-            },
-            "type": [
-              "string",
-              "object"
-            ]
-          },
-          "description": "Additional named prompts, keyed by name. A named prompt supplies the template and model; class says which behaviour it runs as, so a project can add a security or docs pass without gavel gaining a run mode. Built-in names (run, plan, triage) may be redeclared here to replace their template wholesale.",
-          "type": "object"
-        },
         "run": {
           "additionalProperties": false,
           "description": "AI spec for the todo run prompt: the framing, the TODO items injected as {{{body}}}, and the instructions.",
@@ -2799,6 +2730,120 @@
             "object"
           ],
           "x-prompt-id": "todos.run"
+        },
+        "steps": {
+          "additionalProperties": {
+            "additionalProperties": false,
+            "description": "Spec one custom lifecycle step runs as. It overrides the step's prompt frontmatter and its lifecycle declaration, and is overridden by the todo's llm: and the request.",
+            "properties": {
+              "budget": {
+                "$ref": "#/$defs/Budget"
+              },
+              "callerTools": {
+                "type": "boolean"
+              },
+              "cliArgs": {
+                "type": "object"
+              },
+              "effort": {
+                "enum": [
+                  "",
+                  "low",
+                  "medium",
+                  "high",
+                  "xhigh",
+                  "max",
+                  "ultra"
+                ],
+                "type": "string"
+              },
+              "fallbacks": {
+                "$ref": "#/$defs/ModelList"
+              },
+              "id": {
+                "type": "string"
+              },
+              "interrupt": {
+                "type": "boolean"
+              },
+              "mediaTypes": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "memory": {
+                "$ref": "#/$defs/Memory"
+              },
+              "messages": {
+                "items": {
+                  "$ref": "#/$defs/Message"
+                },
+                "type": "array"
+              },
+              "mode": {
+                "enum": [
+                  "api",
+                  "agent",
+                  "cli",
+                  "cmux"
+                ],
+                "type": "string"
+              },
+              "model": {
+                "description": "Catalog model slug this step runs as (e.g. agent:sonnet). Overrides the base ai.model.",
+                "type": "string"
+              },
+              "noCache": {
+                "type": "boolean"
+              },
+              "permissions": {
+                "$ref": "#/$defs/Permissions"
+              },
+              "prompt": {
+                "$ref": "#/$defs/Prompt"
+              },
+              "resume": {
+                "type": "boolean"
+              },
+              "sandbox": {
+                "$ref": "#/$defs/SandboxRef"
+              },
+              "sessionId": {
+                "type": "string"
+              },
+              "setup": {
+                "$ref": "#/$defs/Setup"
+              },
+              "steer": {
+                "type": "boolean"
+              },
+              "streaming": {
+                "type": "boolean"
+              },
+              "temperature": {
+                "type": "number"
+              },
+              "toolApproval": {
+                "$ref": "#/$defs/ToolApprovalResume"
+              },
+              "toolPolicy": {
+                "$ref": "#/$defs/PermissionPolicy"
+              },
+              "toolPreferences": {
+                "$ref": "#/$defs/ToolPreferences"
+              },
+              "workflow": {
+                "$ref": "#/$defs/Workflow"
+              }
+            },
+            "required": [
+              "model"
+            ],
+            "type": "object"
+          },
+          "description": "Spec layer for lifecycle steps that are not built in, keyed by step name: a `handoff` step added under todos.lifecycle reads its project configuration from todos.steps.handoff, exactly where todos.run sits for the built-in run step. The built-in steps (run, plan, triage, verify) keep their own blocks and are rejected here.",
+          "type": "object"
         },
         "timeout": {
           "description": "Wall-clock timeout for a run (e.g. 30m). Last-write-wins across layers.",
@@ -2940,7 +2985,6 @@
               "type": "string"
             },
             "model": {
-              "default": "claude-sonnet-5",
               "description": "Catalog model slug the grader runs as. It must run on an agentic mechanism (mode agent, cli or cmux — e.g. `agent:sonnet`): the grader is told to inspect the change with its own tools, and an API model returns confident verdicts without reading the diff.",
               "type": "string"
             },
