@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/flanksource/captain/pkg/api"
+	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/fixtures"
 
 	// Registers the fixture engine's `yaml test` / `yaml lint` step runners
@@ -49,6 +50,11 @@ type DefinitionOfDone struct {
 	// Empty when the todo declares no definition of done at all — such a run
 	// ends `completed` rather than verified.
 	Fixture string
+	// Warnings names what was dropped while building the document: front-matter
+	// keys the todo set that the generated document has no field for. The
+	// document is still usable, which is why these are warnings — see
+	// adoptVerificationFrontMatter.
+	Warnings []string
 }
 
 // Declared reports whether there is anything to verify.
@@ -115,13 +121,20 @@ func BuildDefinitionOfDone(in DefinitionOfDoneOptions) (DefinitionOfDone, error)
 	// steps want to run.
 	front := dodFrontMatter{CWD: gitRoot}
 	var criteria []string
+	var warnings []string
 	for _, todo := range in.Todos {
 		if todo == nil {
 			continue
 		}
-		body, err := adoptVerificationFrontMatter(&front, todo.VerificationMarkdown)
+		body, dropped, err := adoptVerificationFrontMatter(&front, todo.VerificationMarkdown)
 		if err != nil {
 			return DefinitionOfDone{}, err
+		}
+		for _, warning := range dropped {
+			// Named, because several todos can contribute to one document and a
+			// warning nobody can trace back to a record is one nobody will fix.
+			warnings = append(warnings, fmt.Sprintf("todo %s: %s", todo.DisplayID(), warning))
+			logger.Warnf("definition of done: todo %s: %s", todo.DisplayID(), warning)
 		}
 		if body != "" {
 			sections = append(sections, body)
@@ -139,8 +152,11 @@ func BuildDefinitionOfDone(in DefinitionOfDoneOptions) (DefinitionOfDone, error)
 		sections = append(sections, criteriaSection(criteria))
 		front.AI = graderAIConfig(in.Grader)
 	}
+	// The warnings ride along even on the paths that produce no document: a todo
+	// whose front matter was ignored should hear about it whether or not the rest
+	// of it amounted to something executable.
 	if len(sections) == 0 {
-		return DefinitionOfDone{}, nil
+		return DefinitionOfDone{Warnings: warnings}, nil
 	}
 	front.Verify = &fixtures.FixtureVerifyConfig{Retry: cfg.Retry}
 
@@ -157,9 +173,9 @@ func BuildDefinitionOfDone(in DefinitionOfDoneOptions) (DefinitionOfDone, error)
 		return DefinitionOfDone{}, fmt.Errorf("definition of done: %w", err)
 	}
 	if types.CountTests(steps.Children) == 0 {
-		return DefinitionOfDone{}, nil
+		return DefinitionOfDone{Warnings: warnings}, nil
 	}
-	return DefinitionOfDone{Fixture: document}, nil
+	return DefinitionOfDone{Fixture: document, Warnings: warnings}, nil
 }
 
 func renderDefinitionOfDone(front dodFrontMatter, sections []string) (string, error) {
@@ -177,31 +193,43 @@ func renderDefinitionOfDone(front dodFrontMatter, sections []string) (string, er
 }
 
 // adoptVerificationFrontMatter splits a todo's verification markdown, folds its
-// front matter into the generated document's, and returns the body.
+// front matter into the generated document's, and returns the body plus the keys
+// it had to drop.
 //
-// A key the generated document cannot honour is an error, not a silent drop:
-// `setup:`, `record:`, `build:`, `daemon:` and `files:` are prepared by the
-// whole-file fixture runner and never by the node runner this document executes
-// under, so a todo that set one would believe its steps ran in an environment
-// they never had. `ai:` and `verify:` belong to the generated document itself
-// (the criteria grader and the retry predicate) — a todo's own would otherwise
-// take over the whole run's definition of done.
-func adoptVerificationFrontMatter(front *dodFrontMatter, markdown string) (string, error) {
+// A key the generated document cannot honour is dropped with a warning rather
+// than refused. `setup:`, `record:`, `build:`, `daemon:` and `files:` are
+// prepared by the whole-file fixture runner and never by the node runner this
+// document executes under, so a todo that set one has steps running in an
+// environment it did not describe; `ai:` and `verify:` belong to the generated
+// document itself (the criteria grader and the retry predicate), so a todo's own
+// would take over the whole run's definition of done. Neither is what the author
+// meant, and both are worth saying out loud.
+//
+// Refusing outright was worse. This runs inside lifecycle evaluation, so the
+// error did not surface as "your verification front matter has a bad key" — it
+// surfaced as "Failed to load todo <uuid>", and the todo could not be opened,
+// listed or edited. The one action that fixes the front matter was the one
+// action the error prevented. A warning keeps the record reachable and still
+// says exactly what was ignored and why.
+func adoptVerificationFrontMatter(front *dodFrontMatter, markdown string) (string, []string, error) {
 	markdown = strings.TrimSpace(markdown)
 	if markdown == "" {
-		return "", nil
+		return "", nil, nil
 	}
 	parsed, body, err := fixtures.SplitFrontMatter(markdown)
 	if err != nil {
-		return "", fmt.Errorf("definition of done: verification front matter: %w", err)
+		return "", nil, fmt.Errorf("definition of done: verification front matter: %w", err)
 	}
 	if parsed == nil {
-		return strings.TrimSpace(body), nil
+		return strings.TrimSpace(body), nil, nil
 	}
+	var warnings []string
 	if unhonoured := unhonouredVerificationKeys(parsed); len(unhonoured) > 0 {
-		return "", fmt.Errorf("definition of done: the todo's verification front matter sets %s, which the run loop cannot honour; "+
-			"it accepts codeBlocks, cwd, exec, args, env, terminal, os, arch and skip (acceptance criteria and the retry predicate are the todo's own, not an ai:/verify: block)",
-			strings.Join(unhonoured, ", "))
+		warnings = append(warnings, fmt.Sprintf(
+			"ignoring %s in the todo's verification front matter: the run loop cannot honour %s; "+
+				"it accepts codeBlocks, cwd, exec, args, env, terminal, os, arch and skip "+
+				"(acceptance criteria and the retry predicate are the generated document's own, not an ai:/verify: block)",
+			strings.Join(unhonoured, ", "), pluralKeys(len(unhonoured))))
 	}
 	if len(parsed.CodeBlocks) > 0 {
 		front.CodeBlocks = parsed.CodeBlocks
@@ -211,7 +239,14 @@ func adoptVerificationFrontMatter(front *dodFrontMatter, markdown string) (strin
 	}
 	front.Exec, front.Args, front.Env, front.Terminal = parsed.Exec, parsed.Args, parsed.Env, parsed.Terminal
 	front.OS, front.Arch, front.Skip = parsed.OS, parsed.Arch, parsed.Skip
-	return strings.TrimSpace(body), nil
+	return strings.TrimSpace(body), warnings, nil
+}
+
+func pluralKeys(n int) string {
+	if n == 1 {
+		return "it"
+	}
+	return "them"
 }
 
 // unhonouredVerificationKeys names the front-matter keys a todo's verification

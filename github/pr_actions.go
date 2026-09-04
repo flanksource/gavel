@@ -120,3 +120,64 @@ func UpdatePullRequestBranch(opts Options, prNumber int) error {
 	}
 	return fmt.Errorf("update branch for PR #%d on %s: HTTP %d: %s", prNumber, repo, resp.StatusCode, string(body))
 }
+
+const closePullRequestMutation = `mutation($prId: ID!) {
+  closePullRequest(input: {pullRequestId: $prId}) {
+    pullRequest { number state }
+  }
+}`
+
+// ClosePullRequest closes the pull request identified by its GraphQL node ID
+// without merging it — the equivalent of gh pr close. GitHub rejects closing a
+// PR that is already merged or closed with a GraphQL error, which postGraphQL
+// surfaces as a Go error rather than swallowing it. Closing is reversible: the
+// PR can be reopened on github.com.
+func ClosePullRequest(opts Options, prNodeID string) error {
+	if strings.TrimSpace(prNodeID) == "" {
+		return fmt.Errorf("ClosePullRequest: PR node ID is required")
+	}
+	token, err := opts.token()
+	if err != nil {
+		return err
+	}
+
+	_, _, err = postGraphQL(token, graphqlEndpoint(), activity.KindGraphQL, closePullRequestMutation, map[string]any{
+		"prId": prNodeID,
+	})
+	if err != nil {
+		return fmt.Errorf("close pull request: %w", err)
+	}
+	return nil
+}
+
+const addCommentMutation = `mutation($subjectId: ID!, $body: String!) {
+  addComment(input: {subjectId: $subjectId, body: $body}) {
+    commentEdge { node { url } }
+  }
+}`
+
+// CommentOnPullRequest posts an issue comment on the pull request identified by
+// its GraphQL node ID. GitHub's addComment takes any commentable subject, so
+// the PR node ID is the subject here. An empty body is rejected locally rather
+// than posting a blank comment.
+func CommentOnPullRequest(opts Options, prNodeID, body string) error {
+	if strings.TrimSpace(prNodeID) == "" {
+		return fmt.Errorf("CommentOnPullRequest: PR node ID is required")
+	}
+	if strings.TrimSpace(body) == "" {
+		return fmt.Errorf("CommentOnPullRequest: comment body is required")
+	}
+	token, err := opts.token()
+	if err != nil {
+		return err
+	}
+
+	_, _, err = postGraphQL(token, graphqlEndpoint(), activity.KindGraphQL, addCommentMutation, map[string]any{
+		"subjectId": prNodeID,
+		"body":      body,
+	})
+	if err != nil {
+		return fmt.Errorf("comment on pull request: %w", err)
+	}
+	return nil
+}

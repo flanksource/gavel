@@ -71,18 +71,27 @@ var _ = Describe("TODO verification runtime spec", func() {
 		Expect(front.Skip).To(Equal("false"))
 	})
 
-	// A key the node runner would ignore is refused, not dropped: a todo whose
-	// verification declared a `setup:` would otherwise believe its steps ran in
-	// a worktree they never had.
-	DescribeTable("refuses verification front matter the run loop cannot honour",
+	// A key the node runner would ignore is dropped with a warning rather than
+	// refused. It still has to be said — a todo whose verification declared a
+	// `setup:` has steps running in a worktree it did not describe — but saying it
+	// by refusing meant the todo could not be loaded at all, and loading it is the
+	// only way to fix the front matter.
+	//
+	// The document itself must still be built: the rest of the verification is
+	// valid and is what the run is graded against.
+	DescribeTable("warns about verification front matter the run loop cannot honour",
 		func(frontMatter, key string) {
-			_, err := BuildDefinitionOfDone(DefinitionOfDoneOptions{
+			dod, err := BuildDefinitionOfDone(DefinitionOfDoneOptions{
 				WorkDir: GinkgoT().TempDir(),
 				Todos:   verificationTodo("---\n" + frontMatter + "\n---" + verificationBody),
 			})
 
-			Expect(err).To(MatchError(ContainSubstring("front matter sets " + key)))
-			Expect(err).To(MatchError(ContainSubstring("cannot honour")))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(dod.Warnings).To(ContainElement(SatisfyAll(
+				ContainSubstring("ignoring "+key),
+				ContainSubstring("cannot honour"),
+			)))
+			Expect(dod.Declared()).To(BeTrue(), "the rest of the verification still defines the run's done")
 		},
 		Entry("setup", "setup:\n  checkout:\n    worktree:\n      mode: new", "setup"),
 		Entry("record", "record:\n  http:\n    mode: mitm", "record"),
@@ -91,8 +100,27 @@ var _ = Describe("TODO verification runtime spec", func() {
 		Entry("files", "files: '**/*.fixture.md'", "files"),
 		Entry("the grader, which is the generated document's own", "ai:\n  model: sonnet", "ai"),
 		Entry("the retry predicate, which is the generated document's own", "verify:\n  retry: 'true'", "verify"),
+		Entry("timeout", "timeout: 10m", "timeout"),
 		Entry("an unknown key", "codeBlocks: [bash]\nparallel: true", "parallel"),
 	)
+
+	// The combination from the report this change came out of: a todo whose
+	// verification set all three could not be loaded at all — the lifecycle
+	// evaluation refused, and the failure surfaced as "Failed to load todo
+	// <uuid>", so the record could not be opened to fix the very front matter
+	// that was wrong.
+	It("loads a todo whose verification sets timeout, ai and verify together", func() {
+		dod, err := BuildDefinitionOfDone(DefinitionOfDoneOptions{
+			WorkDir: GinkgoT().TempDir(),
+			Todos: verificationTodo("---\ntimeout: 10m\nai:\n  model: sonnet\nverify:\n  retry: 'true'\n---" +
+				verificationBody),
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(dod.Declared()).To(BeTrue())
+		Expect(dod.Warnings).To(HaveLen(1), "one warning per todo, naming every key it dropped")
+		Expect(dod.Warnings[0]).To(ContainSubstring("ignoring timeout, ai, verify"))
+	})
 
 	// A check dispatches the lifecycle's verify step, so a check with nowhere to
 	// dispatch it has judged nothing. Reporting that as a pass is the one
