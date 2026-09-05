@@ -37,10 +37,11 @@ func isolatedTodosRun(t *testing.T, cfg string) string {
 // resetTodosRunFlags restores every `todos run` flag to its registered default
 // for the duration of the test. The flags are the request layer, so one left
 // behind by another test outranks the configuration under test.
-func resetTodosRunFlags(t *testing.T) {
+func resetTodosRunFlags(t testing.TB) {
 	t.Helper()
 	saved := struct {
 		step, model, effort, status string
+		profile                     string
 		budget                      float64
 		turns                       int
 		commit                      bool
@@ -48,6 +49,7 @@ func resetTodosRunFlags(t *testing.T) {
 		force, pick                 bool
 	}{
 		todosStep, todoModel, todoEffort, filterStatus,
+		todosRuntimeProfile,
 		maxBudget, maxTurns,
 		commitAfter,
 		dirty, dryRun, resumeSession,
@@ -55,12 +57,14 @@ func resetTodosRunFlags(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		todosStep, todoModel, todoEffort, filterStatus = saved.step, saved.model, saved.effort, saved.status
+		todosRuntimeProfile = saved.profile
 		maxBudget, maxTurns = saved.budget, saved.turns
 		commitAfter = saved.commit
 		dirty, dryRun, resumeSession = saved.dirtyRun, saved.dry, saved.resume
 		forceRun, interactive = saved.force, saved.pick
 	})
 	todosStep, todoModel, todoEffort, filterStatus = "", "", "", ""
+	todosRuntimeProfile = ""
 	maxBudget, maxTurns = 0, 0
 	commitAfter = true
 	dirty, dryRun, resumeSession = false, false, false
@@ -80,7 +84,7 @@ func (p *stubRunTodoProvider) List(context.Context, todos.DiscoveryFilters) (typ
 
 // stubTodoRunSeams replaces run.Resolve and run.Start with recorders returning
 // resolution, so a dispatch can be asserted without standing up an agent.
-func stubTodoRunSeams(t *testing.T, resolution *lifecycle.Resolution, step, reason string) *[]run.Request {
+func stubTodoRunSeams(t testing.TB, resolution *lifecycle.Resolution, step, reason string) *[]run.Request {
 	t.Helper()
 	var started []run.Request
 	oldResolve, oldStart := run.Resolve, run.Start

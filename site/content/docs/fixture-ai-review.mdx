@@ -57,6 +57,25 @@ ai:
 
 `model` selects the backend/model alias. `temperature: 0` makes review output more stable. `maxTokens` bounds the response. `maxConcurrent`, `cacheTTL`, and `noCache` control throughput and repeatability for larger fixture suites.
 
+Use `ai.spec` to carry a complete Captain grader runtime, including the mode, reasoning effort, fallback models, budget, permissions, memory, tools, setup, and sandbox settings:
+
+```yaml
+ai:
+  spec:
+    model: claude-sonnet-4-6
+    mode: cli
+    effort: high
+    budget:
+      cost: 2
+      maxTokens: 10000
+      timeout: 5m
+    permissions:
+      mode: dontAsk
+  criteriaSection: Acceptance Criteria
+```
+
+`ai.spec` replaces the runner's default verification spec. Flat `ai.model`, `temperature`, `maxTokens`, and `noCache` values override the fields they set. Generated TODO definitions of done use this snapshot so an external fixture runner receives the same resolved grader as an in-process run. Grading clears session and approval-resume state, message history, and nested verification/commit workflows; the fixture supplies a fresh prompt body and checklist response schema.
+
 `verify:` controls review behavior:
 
 ```yaml

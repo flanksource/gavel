@@ -75,7 +75,9 @@ func (p *Provider) RecordRunStart(ctx context.Context, todo *types.TODO, metadat
 		// see it (the session-id report, the verify executor) leave it nil rather
 		// than overwriting the transformed spec with the request it started as.
 		if metadata.Spec != nil {
-			rendered, err := renderedSpec(*metadata.Spec, active.issue.Verification)
+			rendered, err := renderedSpec(renderedSpecOptions{
+				Spec: *metadata.Spec, Fixture: active.issue.Verification, Previous: active.run.RenderedSpec,
+			})
 			if err != nil {
 				return err
 			}

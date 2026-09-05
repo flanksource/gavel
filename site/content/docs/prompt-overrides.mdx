@@ -24,6 +24,8 @@ todos:
 An override is a [dotprompt](https://google.github.io/dotprompt/) template. A configured-but-missing file is a hard error — Gavel never silently falls back to the built-in default.
 In a structured inline object, `prompt.user` is converted to the template body and the remaining Captain fields become `.prompt` frontmatter. Run `gavel config --resolve` to inspect the resulting source, declared spec, and effective runtime model/backend.
 
+TODO prompt specs also accept `runtimeProfile` beside their flat Captain fields. A `.prompt` frontmatter pin overrides the project's default profile; an explicit run selection overrides the pin. See [Todo runtime profiles](/docs/todo-runtime-profiles) for examples and the full precedence rules.
+
 ## The contract
 
 An override must honor two halves of the contract:

@@ -6,13 +6,8 @@ import (
 
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
-	clickytask "github.com/flanksource/clicky/task"
-	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/fixtures"
-	"github.com/flanksource/gavel/fixtures/record"
 	_ "github.com/flanksource/gavel/fixtures/types"
-	"github.com/flanksource/gavel/verify"
-	"github.com/samber/lo"
 	"github.com/spf13/cobra"
 )
 
@@ -431,76 +426,6 @@ func fixturesHelp(cmd *cobra.Command) api.Text {
 		Add(renderHelpFlags("GLOBAL FLAGS", cmd.InheritedFlags()))
 
 	return t
-}
-
-func runFixtures(cmd *cobra.Command, args []string) error {
-	if fixturesSchema {
-		return writeFixturesSchema(os.Stdout)
-	}
-
-	wd, err := getWorkingDir()
-	if err != nil {
-		return fmt.Errorf("failed to get working directory: %w", err)
-	}
-
-	executablePath, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("failed to get executable path: %w", err)
-	}
-
-	// A fixture's embedded AI step needs a model, and it comes from the same
-	// chain a todo's definition of done uses: .gavel.yaml todos.verify over the
-	// ai: base. A fixture's own `ai:` front matter still overrides it.
-	cfg, err := verify.LoadGavelConfig(wd)
-	if err != nil {
-		return fmt.Errorf("load .gavel.yaml: %w", err)
-	}
-	graderSpec := cfg.AI.Merge(cfg.Todos.Verify)
-
-	recordSpec, err := record.Parse(fixturesRecord)
-	if err != nil {
-		return fmt.Errorf("--record: %w", err)
-	}
-
-	runnerOpts := fixtures.RunnerOptions{
-		Paths:          args,
-		Spec:           &graderSpec,
-		Format:         clicky.Flags.ResolveFormat(),
-		NoColor:        clicky.Flags.NoColor,
-		WorkDir:        wd,
-		MaxWorkers:     clicky.Flags.MaxConcurrent,
-		Logger:         logger.StandardLogger(),
-		ExecutablePath: executablePath,
-		UpdateGolden:   fixturesUpdateGolden,
-		Record:         recordSpec,
-		Display: lo.ToPtr(fixtures.DisplayOptionsForVerbosity(clicky.Flags.LevelCount, fixtures.DisplayOptions{
-			ShowPassed: fixturesShowPassed,
-			ShowStdout: fixtures.ParseOutputMode(fixturesShowStdout),
-			ShowStderr: fixtures.ParseOutputMode(fixturesShowStderr),
-		}, cmd.Flags().Changed("show-stdout"), cmd.Flags().Changed("show-stderr"))),
-	}
-	if fixturesUI.UI {
-		opts, detach := fixtureUIRunOptions(fixtureUIRunRequest{Runner: &runnerOpts, UI: fixturesUI})
-		_, err := runTests(opts, detach)
-		return err
-	}
-
-	runner, err := fixtures.NewRunner(runnerOpts)
-	if err != nil {
-		return fmt.Errorf("failed to create fixture runner: %w", err)
-	}
-
-	clickytask.SetLiveRenderer(fixtureLiveRenderer{})
-	defer clickytask.SetLiveRenderer(nil)
-	tree, runErr := runner.Run()
-	if tree != nil {
-		if len(tree.Children) == 1 {
-			fmt.Println(clicky.MustFormat(*tree.Children[0]))
-		} else {
-			fmt.Println(clicky.MustFormat(*tree))
-		}
-	}
-	return runErr
 }
 
 func init() {

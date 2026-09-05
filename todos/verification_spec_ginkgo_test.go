@@ -39,7 +39,8 @@ var _ = Describe("TODO verification runtime spec", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(front).NotTo(BeNil())
 		Expect(front.AI).NotTo(BeNil())
-		Expect(front.AI.Model).To(Equal("claude-code-sonnet"))
+		Expect(front.AI.Spec).NotTo(BeNil())
+		Expect(front.AI.Spec.Model).To(Equal(grader.Model))
 	})
 
 	verificationTodo := func(markdown string) []*types.TODO {

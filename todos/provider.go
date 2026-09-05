@@ -8,6 +8,7 @@ import (
 
 	"github.com/flanksource/captain/pkg/api"
 	captaindb "github.com/flanksource/captain/pkg/database"
+	"github.com/flanksource/captain/pkg/runtimeprofiles"
 	"github.com/flanksource/gavel/todos/labels"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/google/uuid"
@@ -87,7 +88,9 @@ type RunPreparation struct {
 	// persists it on Captain's prompt run before external execution, so a later
 	// continuation replays what actually ran instead of reconstructing it from
 	// the run's resolved model/backend labels.
-	Spec api.Spec
+	Spec           api.Spec
+	RuntimeProfile *runtimeprofiles.Resolution
+	SpecTrace      []api.SpecLayer
 }
 
 // RunPreparationResult is the durable Captain identity allocated before an

@@ -76,22 +76,20 @@ func RunAIStep(fixture fixtures.FixtureTest, opts fixtures.RunOptions) fixtures.
 	return scoreChecklist(fixture, result, items, schema.Items, now)
 }
 
-// resolveAIStepSpec layers the fixture's own `ai:` front matter over the caller's
-// spec and returns both the spec to execute and the provider config built from
-// it. The fixture wins because it is the most specific statement about how it
-// wants to be graded; a todo run's generated fixture declares none, so the
-// caller's resolved verification spec stands.
-//
-// WithoutSession is the invariant: a grader inherits how to run, never what was
-// already said. Resuming the session it is judging would be the candidate
-// marking its own exam.
+// resolveAIStepSpec uses the fixture's full runtime snapshot when present, then
+// applies its explicit flat AI options. Fixtures without a snapshot inherit the
+// caller's verification spec. Conversation and workflow state never reach a grader.
 func resolveAIStepSpec(fixture fixtures.FixtureTest, opts fixtures.RunOptions, schema *checklistResponse) (api.Spec, ai.AgentConfig) {
 	var spec api.Spec
-	if opts.Spec != nil {
-		spec = opts.Spec.WithoutSession()
+	if fixture.AI != nil && fixture.AI.Spec != nil {
+		spec = *fixture.AI.Spec
+	} else if opts.Spec != nil {
+		spec = *opts.Spec
 	}
 	config := fixture.AI.ToAgentConfig()
-	spec = spec.Merge(api.Spec{Model: config.Model, Budget: config.Budget})
+	spec = spec.Merge(api.Spec{Budget: config.Budget})
+	spec.Model = spec.Model.Merge(config.Model)
+	spec = fixtures.GraderSpec(spec)
 
 	spec.Prompt.User = buildChecklistPrompt(fixture, fixtureRepoPath(fixture, opts), checklistItems(fixture), opts.Changed)
 	spec.Prompt.Source = "fixtures.ai-step"
@@ -100,6 +98,7 @@ func resolveAIStepSpec(fixture fixtures.FixtureTest, opts fixtures.RunOptions, s
 
 	config.Model = spec.Model
 	config.Budget = spec.Budget
+	config.NoCache = spec.NoCache
 	return spec, config
 }
 

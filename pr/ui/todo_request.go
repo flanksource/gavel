@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -8,21 +9,22 @@ import (
 	"net/http"
 
 	"github.com/flanksource/gavel/todos"
+	"github.com/flanksource/gavel/verify"
 )
 
-// decodeTodoRequest decodes a todo write endpoint's body strictly: exactly one
-// JSON object, with no key the payload does not declare. An unknown key is a
-// client that believes it configured something this server never read, and
-// the decoder's own message says what was wrong with the input — a bare
-// "invalid json" sent the caller back to guess.
+// decodeTodoRequest requires exactly one JSON object and applies the shared
+// unknown-field transition policy to every todo write endpoint.
 func decodeTodoRequest(r *http.Request, payload any) error {
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(payload); err != nil {
+	data, err := io.ReadAll(r.Body)
+	if err != nil {
 		return fmt.Errorf("invalid request body: %w", err)
 	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+	data = bytes.TrimSpace(data)
+	if len(data) == 0 || data[0] != '{' {
 		return fmt.Errorf("invalid request body: expected one JSON object")
+	}
+	if err := verify.DecodeJSON(data, payload, verify.DecodeOptions{Source: r.Method + " " + r.URL.Path + " request body"}); err != nil {
+		return fmt.Errorf("invalid request body: %w", err)
 	}
 	return nil
 }

@@ -1,6 +1,6 @@
 import { useEffect, useState, type ComponentType } from 'react';
 import { SpecRuntimeEditor, promptRuntimeValueToPayload, type AISpecRuntimeValue } from '@flanksource/clicky-ui/ai';
-import { Button, DropdownMenu, Modal } from '@flanksource/clicky-ui/components';
+import { Button, Combobox, DropdownMenu, Field, Modal } from '@flanksource/clicky-ui/components';
 import { UiChevronDown, UiCog, UiHistory, UiPlay, type IconProps } from '@flanksource/clicky-ui/icons';
 import type { TodoRunOptions } from '../../types';
 import { Spinner } from '../../icons/Spinner';
@@ -15,7 +15,8 @@ import {
   runSpec,
   useTodoRunContext,
 } from './run';
-import { agentForRuntime, buildRunFamilies, driverForSelection, type RunContext } from './providers';
+import { buildRunFamilies, type RunContext } from './providers';
+import { effectiveTodoRuntime, selectTodoRuntimeProfile } from './runtimeProfiles';
 
 export type PromptRunScope = 'approval' | 'verification';
 
@@ -74,11 +75,9 @@ export function verificationSpec(spec: AISpecRuntimeValue): AISpecRuntimeValue {
 }
 
 function normalizePromptRunOptions(scope: PromptRunScope, options: TodoRunOptions, context: RunContext): TodoRunOptions {
-  const reconciled = reconcileTodoRunOptions('run', options, context);
-  // A verification run has no driver or run mode of its own — it posts a bare
-  // spec to /api/todos/run naming the verify step — so only the spec half
-  // survives.
-  return scope === 'verification' ? { spec: verificationSpec(runSpec(reconciled)) } : reconciled;
+  const step = scope === 'verification' ? 'verify' : 'run';
+  const reconciled = reconcileTodoRunOptions(step, options, context);
+  return scope === 'verification' ? { step, runtimeProfile: reconciled.runtimeProfile, spec: verificationSpec(runSpec(reconciled)) } : reconciled;
 }
 
 function optionsKey(options: TodoRunOptions): string {
@@ -101,7 +100,7 @@ export function loadPromptRunOptions(scope: PromptRunScope, context: RunContext)
   const state = scope === 'approval'
     ? migrateApprovalHistory(readPromptRunHistory(), context)
     : readPromptRunHistory();
-  const fallback = defaultRunOptionsForAction('run', context);
+  const fallback = defaultRunOptionsForAction(scope === 'verification' ? 'verify' : 'run', context);
   return normalizePromptRunOptions(scope, state[scope]?.last ?? fallback, context);
 }
 
@@ -135,6 +134,7 @@ export function rememberPromptRunOptions(scope: PromptRunScope, options: TodoRun
 }
 
 export function PromptRunButton({
+  dir,
   scope,
   label,
   title,
@@ -144,6 +144,7 @@ export function PromptRunButton({
   onRun,
   onAdvanced,
 }: {
+  dir: string;
   scope: PromptRunScope;
   label: string;
   title: string;
@@ -153,9 +154,9 @@ export function PromptRunButton({
   onRun: (options: TodoRunOptions) => void;
   onAdvanced: (options: TodoRunOptions) => void;
 }) {
-  const { context, loading: contextLoading, error: contextError } = useTodoRunContext(!disabled);
+  const { context, loading: contextLoading, error: contextError } = useTodoRunContext({ dir, enabled: !disabled });
   const [revision, setRevision] = useState(0);
-  const options = context ? loadPromptRunOptions(scope, context) : defaultRunOptionsForAction('run');
+  const options = context ? loadPromptRunOptions(scope, context) : defaultRunOptionsForAction(scope === 'verification' ? 'verify' : 'run');
   const recent = context ? loadRecentPromptRunOptions(scope, context) : [];
   const unavailable = contextLoading || !context || !!contextError;
   const PrimaryIcon = loading ? Spinner : icon;
@@ -276,6 +277,7 @@ const APPROVAL_SPEC_SECTIONS = ['model', 'prompt', 'permissions', 'workspace', '
 const VERIFICATION_SPEC_SECTIONS = ['model', 'permissions', 'verify'] as const;
 
 export function PromptRunAdvancedDialog({
+  dir,
   scope,
   open,
   initial,
@@ -283,6 +285,7 @@ export function PromptRunAdvancedDialog({
   onClose,
   onRun,
 }: {
+  dir: string;
   scope: PromptRunScope;
   open: boolean;
   initial: TodoRunOptions;
@@ -290,20 +293,24 @@ export function PromptRunAdvancedDialog({
   onClose: () => void;
   onRun: (options: TodoRunOptions) => void;
 }) {
-  const { context, loading: contextLoading, error: contextError } = useTodoRunContext(open);
-  // The editor edits the spec half only; the driver/runMode siblings are decided
-  // on save from the spec's mode.
+  const { context, loading: contextLoading, error: contextError } = useTodoRunContext({ dir, enabled: open });
   const initialSpec = (options: TodoRunOptions) =>
     scope === 'verification' ? verificationSpec(runSpec(options)) : cloneSpec(runSpec(options));
   const [value, setValue] = useState<AISpecRuntimeValue>(() => initialSpec(initial));
+  const [runtimeProfile, setRuntimeProfile] = useState(initial.runtimeProfile);
 
   useEffect(() => {
-    if (open) setValue(initialSpec(initial));
+    if (open) {
+      setValue(initialSpec(initial));
+      setRuntimeProfile(initial.runtimeProfile);
+    }
   }, [open, initial, scope]);
 
   if (!open) return null;
   const models = context?.models ?? [];
   const verification = scope === 'verification';
+  const step = verification ? 'verify' : 'run';
+  const inherited = context ? effectiveTodoRuntime({ step, runtimeProfile, spec: value }, context) : undefined;
 
   return (
     <Modal open onClose={onClose} title={verification ? 'Verification run options' : 'Approve and run options'} size="2xl">
@@ -312,26 +319,37 @@ export function PromptRunAdvancedDialog({
       {context && !contextError && <SpecRuntimeEditor
         value={value}
         onChange={setValue}
+        effectiveModel={inherited?.model}
+        effectiveMode={inherited?.mode}
         models={models}
         families={buildRunFamilies(context)}
         tools={context.tools}
         sections={verification ? VERIFICATION_SPEC_SECTIONS : APPROVAL_SPEC_SECTIONS}
+        beforeSections={
+          <Field label="Runtime profile">
+            <Combobox
+              ariaLabel="Runtime profile"
+              value={runtimeProfile ?? ''}
+              options={[{ value: '', label: 'Step default' }, ...(context.runtimeProfiles ?? []).map(profile => ({ value: profile.id, label: profile.name, description: profile.description }))]}
+              onChange={selected => {
+                const next = selectTodoRuntimeProfile({ options: { step, runtimeProfile, spec: value }, defaults: defaultRunOptionsForAction(step, context), runtimeProfile: selected || undefined });
+                setRuntimeProfile(next.runtimeProfile);
+                setValue(runSpec(next));
+              }}
+              allowCustomValue={false}
+            />
+          </Field>
+        }
         title={verification ? 'Verification runtime' : 'Implementation runtime'}
         eyebrow={verification ? 'Embedded AI prompt configuration' : 'Approved plan execution'}
         onCancel={onClose}
         onSave={() => {
           const { spec } = promptRuntimeValueToPayload(value);
           const runtimeSpec = spec ?? {};
-          if (verification) {
-            onRun(rememberPromptRunOptions(scope, { spec: verificationSpec(runtimeSpec) }, context));
-            return;
-          }
-          const agent = agentForRuntime(context, runtimeSpec.mode, runtimeSpec.model);
-          const selection = driverForSelection(context, agent, runtimeSpec.mode);
           onRun(rememberPromptRunOptions(scope, {
-            driver: selection.driver,
-            runMode: 'run',
-            spec: { ...runtimeSpec, mode: selection.runMode },
+            step: verification ? 'verify' : 'run',
+            runtimeProfile,
+            spec: verification ? verificationSpec(runtimeSpec) : runtimeSpec,
           }, context));
         }}
         saveLabel={loading ? 'Running…' : verification ? 'Run verification' : 'Approve & run'}

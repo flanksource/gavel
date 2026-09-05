@@ -13,6 +13,16 @@ afterEach(() => {
 });
 
 describe('settings queries', () => {
+  it('loads each workspace run context with an isolated cache key and directory', async () => {
+    const fetchMock = vi.fn(async (url: string) => ({ ok: true, json: async () => ({ workspace: new URL(url, 'http://localhost').searchParams.get('dir') }) }));
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const workspaces = ['/workspace/alpha', '/workspace/beta'];
+    const contexts = await Promise.all(workspaces.map(dir => client.fetchQuery(settingsRunContextQuery(dir))));
+    expect(contexts).toEqual(workspaces.map(workspace => ({ workspace })));
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual(workspaces.map(dir => `/api/todos/run/context?dir=${encodeURIComponent(dir)}`));
+  });
+
   it('isolates settings layers and trace scopes in their keys', () => {
     expect(settingsConfigQuery('scope=global').queryKey)
       .not.toEqual(settingsConfigQuery('project=widget').queryKey);

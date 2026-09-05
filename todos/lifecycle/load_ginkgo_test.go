@@ -1,9 +1,11 @@
 package lifecycle_test
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 
+	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/todos/lifecycle"
 	"github.com/flanksource/gavel/verify"
 	. "github.com/onsi/ginkgo/v2"
@@ -97,12 +99,39 @@ var _ = Describe("Load", func() {
 		Expect(err).To(MatchError(ContainSubstring(".gavel/lifecycle.yaml")))
 	})
 
-	It("fails on an unknown key in an override", func() {
+	It("still rejects missing outcomes when an unknown key was ignored", func() {
 		override := verify.LifecycleConfig{Steps: []map[string]any{{
 			"name": "run", "prompt": "todos.run", "outcome": []map[string]any{{"status": "pending", "when": "true"}},
 		}}}
 		_, err := lifecycle.LoadWith(override, workDir)
-		Expect(err).To(MatchError(ContainSubstring("field outcome not found")))
+		Expect(err).To(MatchError(ContainSubstring("step run: at least one outcome is required")))
+	})
+
+	It("warns about unknown inline fields and retains valid transitions", func() {
+		var warnings bytes.Buffer
+		logger.SetOutput(&warnings)
+		DeferCleanup(func() { logger.SetOutput(nil) })
+		override := verify.LifecycleConfig{Steps: []map[string]any{{
+			"name": "run", "prompt": "todos.run", "futureSetting": true,
+			"outcomes": []map[string]any{{"status": "pending", "when": "true"}},
+		}}}
+		def, err := lifecycle.LoadWith(override, workDir)
+		Expect(err).NotTo(HaveOccurred())
+		run, ok := def.Step("run")
+		Expect(ok).To(BeTrue())
+		Expect(run.Outcomes).To(Equal([]lifecycle.Outcome{{Status: "pending", When: "true"}}))
+		Expect(warnings.String()).To(ContainSubstring("todos.lifecycle: unknown field steps[0].futureSetting"))
+	})
+
+	It("names the lifecycle file and field in transition warnings", func() {
+		var warnings bytes.Buffer
+		logger.SetOutput(&warnings)
+		DeferCleanup(func() { logger.SetOutput(nil) })
+		path := filepath.Join(workDir, "lifecycle.yaml")
+		Expect(os.WriteFile(path, []byte("futureSetting: true\n"), 0o600)).To(Succeed())
+		_, err := lifecycle.LoadWith(verify.LifecycleConfig{File: path}, workDir)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(warnings.String()).To(ContainSubstring(path + ": unknown field futureSetting"))
 	})
 
 	It("fails on an override step with no outcomes", func() {

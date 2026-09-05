@@ -3,12 +3,13 @@ package verify
 import (
 	"fmt"
 	"strings"
-
-	"github.com/flanksource/captain/pkg/api"
 )
 
 // TodosConfig configures `gavel todos run`.
 type TodosConfig struct {
+	// RuntimeProfile is the catalog profile used when neither the step nor the
+	// request selects one.
+	RuntimeProfile string `yaml:"runtimeProfile,omitempty" json:"runtimeProfile,omitempty"`
 	// Run is the AI spec for the todo run prompt; Plan is the plan-mode spec.
 	// Each overrides the base ai: spec field-wise. See prompts.TodosRun/TodosPlan.
 	Run  PromptSpec `yaml:"run,omitempty" json:"run,omitempty"`
@@ -27,21 +28,20 @@ type TodosConfig struct {
 	// definition-of-done loop. It overrides the base ai: spec field-wise and is
 	// itself overridden by the request.
 	//
-	// It is a plain spec rather than a PromptSpec because verification has no
-	// prompt template — the checklist is generated from the todo's acceptance
-	// criteria — so offering a `file:` override here would be a silent no-op.
+	// File overrides are unsupported because the lifecycle owns the verification
+	// prompt; the checklist is generated from the todo's acceptance criteria.
 	//
 	// The implementer's own run spec is deliberately NOT a layer in this chain: a
 	// grader built from it inherited the session it was grading, along with the
 	// coding agent's model, backend and budget.
-	Verify api.Spec `yaml:"verify,omitempty" json:"verify,omitempty"`
+	Verify PromptSpec `yaml:"verify,omitempty" json:"verify,omitempty"`
 	// Steps is the spec layer for lifecycle steps that are not built in, keyed by
 	// step name: a `handoff` step a project's todos.lifecycle adds reads its
 	// project configuration from `todos.steps.handoff`, exactly where `todos.run`
 	// sits for the built-in run step. The four built-in steps keep their own
 	// blocks above; naming one here is an error rather than a second place to
 	// configure it.
-	Steps map[string]api.Spec `yaml:"steps,omitempty" json:"steps,omitempty"`
+	Steps map[string]PromptSpec `yaml:"steps,omitempty" json:"steps,omitempty"`
 	// Timeout caps a run's wall-clock duration (e.g. "30m"); empty = default.
 	Timeout string `yaml:"timeout,omitempty" json:"timeout,omitempty"`
 	// Lifecycle overrides the built-in todo lifecycle (todos/lifecycle/todos.yaml):
@@ -63,12 +63,18 @@ var builtinStepBlocks = map[string]bool{"run": true, "plan": true, "triage": tru
 // and its map entry disagree with no rule saying which wins; a lifecycle that
 // points at a file and also declares steps inline has the same problem.
 func (c TodosConfig) Validate() error {
-	for name := range c.Steps {
+	if c.Verify.File != "" {
+		return fmt.Errorf("todos.verify.file: prompt file overrides are unsupported; configure the step prompt under todos.lifecycle")
+	}
+	for name, spec := range c.Steps {
 		if builtinStepBlocks[name] {
 			return fmt.Errorf("todos.steps.%s: the built-in %s step is configured under todos.%s, not todos.steps", name, name, name)
 		}
 		if strings.TrimSpace(name) == "" || name != strings.ToLower(strings.TrimSpace(name)) {
 			return fmt.Errorf("todos.steps: %q is not a step name; names are lower-case identifiers", name)
+		}
+		if spec.File != "" {
+			return fmt.Errorf("todos.steps.%s.file: prompt file overrides are unsupported; configure the step prompt under todos.lifecycle", name)
 		}
 	}
 	return c.Lifecycle.Validate()

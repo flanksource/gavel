@@ -113,7 +113,7 @@ func runConfigure(opts ConfigureOptions) (any, error) {
 		return nil, err
 	}
 	if err := assign("todos.verify.model", opts.VerifyModel, func(m api.Model) {
-		cfg.Todos.Verify.Model = m
+		cfg.Todos.Verify.Spec.Model = m
 	}); err != nil {
 		return nil, err
 	}

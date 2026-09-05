@@ -70,20 +70,16 @@ func runFixturesVerifyReport(cmd *cobra.Command, _ []string) error {
 // returning the verdict's report. A verifier that could not produce a verdict at
 // all returns an error, which the caller turns into a non-zero exit.
 func runVerifyReport(cmd *cobra.Command, out *ndjsonWriter, document, cwd string, changed []string) (api.VerifyReport, error) {
-	// An `ai` step in the document grades on the same chain a todo's definition
-	// of done resolves: .gavel.yaml todos.verify over the ai: base. The
-	// document's own `ai:` front matter still overrides it.
 	cfg, err := verify.LoadGavelConfig(cwd)
 	if err != nil {
 		return api.VerifyReport{}, fmt.Errorf("load .gavel.yaml: %w", err)
 	}
-	graderSpec := cfg.AI.Merge(cfg.Todos.Verify)
 
 	fixtureVerifier, err := verifier.NewVerifier(document)
 	if err != nil {
 		return api.VerifyReport{}, err
 	}
-	fixtureVerifier.Spec = &graderSpec
+	fixtureVerifier.ResolveSpec = fixtureSpecResolver(cwd, cfg)
 
 	fixtureVerifier.SetProgress(func(progress api.VerifyReport) {
 		// A progress line that cannot be written is not worth failing a run over:

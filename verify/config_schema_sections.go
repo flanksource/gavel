@@ -143,20 +143,22 @@ func todosSchema(specSchema map[string]any) map[string]any {
 	return object(
 		"Settings for `gavel todos run`.",
 		map[string]any{
-			"run": promptSpecSchema(prompts.TodosRun,
+			"runtimeProfile": stringProp(
+				"Default runtime profile catalog ID or name for TODO lifecycle steps. A step or request profile overrides it."),
+			"run": withRuntimeProfileSchema(promptSpecSchema(prompts.TodosRun,
 				"AI spec for the todo run prompt: the framing, the TODO items injected as {{{body}}}, "+
-					"and the instructions."),
-			"plan": promptSpecSchema(prompts.TodosPlan,
+					"and the instructions.")),
+			"plan": withRuntimeProfileSchema(promptSpecSchema(prompts.TodosPlan,
 				"AI spec for the plan-mode prompt: the read-only investigation framing that produces a "+
-					"reviewable implementation plan."),
-			"triage": promptSpecSchema(prompts.TodosTriage,
+					"reviewable implementation plan.")),
+			"triage": withRuntimeProfileSchema(promptSpecSchema(prompts.TodosTriage,
 				"AI spec for the triage prompt: a read-only pass that compacts the TODO's description and "+
-					"reviews its verification fixture, reporting the edits for gavel to apply."),
+					"reviews its verification fixture, reporting the edits for gavel to apply.")),
 			"checkConcurrency": intProp(
 				"How many definition-of-done checks run at once (`gavel todos check`, and the verification " +
 					"phase after a bulk triage). Each check runs the TODO's fixture, so an unbounded fan-out " +
 					"over a large selection thrashes the machine. Defaults to 4."),
-			"verify": specNodeSchema(specSchema,
+			"verify": withRuntimeProfileSchema(specNodeSchema(specSchema,
 				"Spec a verification run executes as: `gavel todos check`, the dashboard's verify action, "+
 					"and the acceptance-criteria grader inside a run's definition-of-done loop. It overrides "+
 					"ai: and is overridden by the request. There is no prompt to override — the checklist is "+
@@ -164,17 +166,17 @@ func todosSchema(specSchema map[string]any) map[string]any {
 				"",
 				"Catalog model slug the grader runs as. It must run on an agentic mechanism (mode agent, "+
 					"cli or cmux — e.g. `agent:sonnet`): the grader is told to inspect the change with its "+
-					"own tools, and an API model returns confident verdicts without reading the diff."),
+					"own tools, and an API model returns confident verdicts without reading the diff.")),
 			"steps": mapObject(
 				"Spec layer for lifecycle steps that are not built in, keyed by step name: a `handoff` step "+
 					"added under todos.lifecycle reads its project configuration from todos.steps.handoff, "+
 					"exactly where todos.run sits for the built-in run step. The built-in steps (run, plan, "+
 					"triage, verify) keep their own blocks and are rejected here.",
-				specNodeSchema(specSchema,
+				withRuntimeProfileSchema(specNodeSchema(specSchema,
 					"Spec one custom lifecycle step runs as. It overrides the step's prompt frontmatter and "+
 						"its lifecycle declaration, and is overridden by the todo's llm: and the request.",
 					"",
-					"Catalog model slug this step runs as (e.g. agent:sonnet). Overrides the base ai.model.")),
+					"Catalog model slug this step runs as (e.g. agent:sonnet). Overrides the base ai.model."))),
 			"timeout": stringProp(
 				"Wall-clock timeout for a run (e.g. 30m). Last-write-wins across layers."),
 			"lifecycle": lifecycleSchema(),
@@ -277,6 +279,16 @@ func promptSpecSchema(promptID, desc string) map[string]any {
 					"paths resolve against the .gavel.yaml directory."),
 		},
 	}
+}
+
+func withRuntimeProfileSchema(node map[string]any) map[string]any {
+	properties, ok := node["properties"].(map[string]any)
+	if !ok {
+		panic("runtime profile schema requires object properties")
+	}
+	properties["runtimeProfile"] = stringProp(
+		"Runtime profile catalog ID or name for this operation. Omitted inherits the configured default.")
+	return node
 }
 
 // modelFallbacksSchema documents Model.Fallbacks: alternative model slugs tried

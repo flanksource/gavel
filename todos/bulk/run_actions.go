@@ -3,6 +3,7 @@ package bulk
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/flanksource/captain/pkg/api"
@@ -16,9 +17,10 @@ import (
 // the knobs a caller can vary per batch; everything else is resolved from
 // .gavel.yaml and each TODO's own frontmatter, exactly as a single run is.
 type RunFlags struct {
-	Model  string `flag:"model" help:"Override the model for this batch, as the compact mode:model:effort form"`
-	Effort string `flag:"effort" help:"Reasoning effort" enum:"low,medium,high"`
-	Resume bool   `flag:"resume" help:"Resume each TODO's prior session instead of starting fresh"`
+	RuntimeProfile string `flag:"runtime-profile" help:"Runtime profile name or ID for this batch"`
+	Model          string `flag:"model" help:"Override the model for this batch, as the compact mode:model:effort form"`
+	Effort         string `flag:"effort" help:"Reasoning effort" enum:"low,medium,high"`
+	Resume         bool   `flag:"resume" help:"Resume each TODO's prior session instead of starting fresh"`
 }
 
 func (RunFlags) ClickyActionFlags() {}
@@ -60,10 +62,11 @@ type RunResolver func(ctx context.Context, req RunRequest) (run.Options, error)
 // the host when the run resolves.
 func DefaultRunResolver(_ context.Context, req RunRequest) (run.Options, error) {
 	return run.Options{
-		Step:    req.Step,
-		Request: req.Flags.Spec(),
-		Resume:  req.Flags.Resume,
-		Host:    lifecycle.HostCLI,
+		RuntimeProfile: req.Flags.RuntimeProfile,
+		Step:           req.Step,
+		Request:        req.Flags.Spec(),
+		Resume:         req.Flags.Resume,
+		Host:           lifecycle.HostCLI,
 	}, nil
 }
 
@@ -86,7 +89,14 @@ func StartRun(step string, flags RunFlags, registry *run.Registry, dir string, r
 	}
 
 	return func(ctx context.Context, provider todos.Provider, todo *types.TODO) (ItemResult, error) {
-		opts, err := resolve(ctx, RunRequest{Dir: dir, Step: step, Todo: todo, Flags: flags})
+		if todo == nil {
+			return ItemResult{}, fmt.Errorf("bulk run: no todo")
+		}
+		workDir := dir
+		if cwd := strings.TrimSpace(todo.CWD); filepath.IsAbs(cwd) {
+			workDir = filepath.Clean(cwd)
+		}
+		opts, err := resolve(ctx, RunRequest{Dir: workDir, Step: step, Todo: todo, Flags: flags})
 		if err != nil {
 			return ItemResult{}, err
 		}
@@ -94,16 +104,18 @@ func StartRun(step string, flags RunFlags, registry *run.Registry, dir string, r
 			Provider: provider,
 			Registry: registry,
 			Todo:     todo,
-			Dir:      dir,
+			Dir:      workDir,
 			Options:  opts,
 			Broker:   broker,
 		}
 		// Resolving first turns a misconfigured run into a per-item error before
 		// any agent session is admitted, so one bad TODO does not leave a
 		// half-started batch behind it.
-		if _, err := run.Resolve(ctx, req); err != nil {
+		prepared, err := run.Resolve(ctx, req)
+		if err != nil {
 			return ItemResult{}, err
 		}
+		req.Prepared = prepared
 		started, err := run.Start(req)
 		if err != nil {
 			return ItemResult{}, err

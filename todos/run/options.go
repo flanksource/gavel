@@ -67,6 +67,8 @@ type Options struct {
 	// Step names the lifecycle step to run. Empty runs the step the lifecycle
 	// picks next for this todo.
 	Step string
+	// RuntimeProfile selects a catalog profile by name or ID before spec layers fold.
+	RuntimeProfile string
 	// Request is the caller's explicit spec — parsed CLI flags or the dashboard
 	// payload — folded as the TOP layer. A knob the caller did not set must
 	// arrive zero, or it beats the configuration it claims to defer to.

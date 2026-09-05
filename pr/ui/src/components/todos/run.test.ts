@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildRunFamilies, type RunContext } from './providers';
 import {
   buildTodoRunPayload,
@@ -73,8 +73,13 @@ const context: RunContext = {
 
 describe('todo run runtime adapter', () => {
   beforeEach(() => {
-    localStorage.clear();
+    const values = new Map<string, string>();
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value),
+    });
   });
+  afterEach(() => vi.unstubAllGlobals());
 
   // POST /api/todos/run decodes strictly and rejects runMode/driver/prompt at
   // the top level, so the payload builder must not leak them — only `step`
@@ -243,8 +248,7 @@ describe('todo run runtime adapter', () => {
     });
 
     expect(options).toMatchObject({
-      driver: 'agent',
-      runMode: 'run',
+      step: 'run',
       spec: {
         mode: 'agent',
         model: 'claude-opus-4-8',
@@ -311,9 +315,7 @@ describe('todo run runtime adapter', () => {
         effort: 'high',
       },
     })).toMatchObject({
-      driver: 'agent',
-      runMode: 'plan',
-      plan: true,
+      step: 'plan',
       spec: { mode: 'agent', model: 'claude-opus-4-8', effort: 'high' },
     });
   });
@@ -372,8 +374,7 @@ describe('todo run runtime adapter', () => {
 				budget: { timeout: '45m', maxTurns: 12 },
 			},
 		}, context)).toMatchObject({
-			driver: 'cmux',
-			runMode: 'run',
+			step: 'run',
 			spec: {
 				mode: 'cmux',
 				model: 'gpt-5.5',
@@ -387,7 +388,7 @@ describe('todo run runtime adapter', () => {
 			runMode: 'plan',
 			spec: { mode: 'agent', model: 'claude-opus-4-8', effort: 'xhigh', temperature: 0.7 },
 		}, context)).toEqual(expect.objectContaining({
-			runMode: 'plan',
+			step: 'plan',
 			spec: expect.objectContaining({
 				mode: 'agent',
 				model: 'claude-opus-4-8',

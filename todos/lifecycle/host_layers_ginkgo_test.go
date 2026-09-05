@@ -330,7 +330,7 @@ var _ = Describe("todo spec layers", func() {
 
 		It("is stripped from todos.verify like every other layer", func() {
 			cfg := verify.GavelConfig{Todos: verify.TodosConfig{
-				Verify: api.Spec{Prompt: api.Prompt{User: "grade it", System: "be strict"}, Budget: api.Budget{MaxTurns: 6}},
+				Verify: verify.PromptSpec{Spec: api.Spec{Prompt: api.Prompt{User: "grade it", System: "be strict"}, Budget: api.Budget{MaxTurns: 6}}},
 			}}
 
 			resolved, err := lifecycle.ResolveLayers(lifecycle.LayerInput{Config: cfg, Step: lifecycle.StepVerify})
@@ -345,7 +345,7 @@ var _ = Describe("todo spec layers", func() {
 	Describe("a custom step", func() {
 		It("takes its project layer from todos.steps.<name>", func() {
 			cfg := verify.GavelConfig{Todos: verify.TodosConfig{
-				Steps: map[string]api.Spec{"handoff": {Budget: api.Budget{MaxTurns: 9}, Prompt: api.Prompt{User: "raw"}}},
+				Steps: map[string]verify.PromptSpec{"handoff": {Spec: api.Spec{Budget: api.Budget{MaxTurns: 9}, Prompt: api.Prompt{User: "raw"}}}},
 			}}
 			in := lifecycle.LayerInput{Config: cfg, Step: "handoff", StepSpec: api.Spec{Budget: api.Budget{MaxTurns: 2}}}
 

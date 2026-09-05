@@ -16,6 +16,7 @@ import {
   useTodoRunContext,
 } from "./run";
 import { buildRunFamilies, type RunContext } from "./providers";
+import { effectiveTodoRuntime, unresolvedTodoRuntimeProfile } from './runtimeProfiles';
 
 export function TodoRunRuntimeBar({
   action,
@@ -31,10 +32,15 @@ export function TodoRunRuntimeBar({
   onChange: (options: TodoRunOptions) => void;
 }) {
   const spec = runSpec(options);
+  const inherited = effectiveTodoRuntime(options, context);
+  const profile = unresolvedTodoRuntimeProfile(options, context);
+  if (profile) return <span className="inline-flex items-center rounded-md border border-border px-2 text-xs text-muted-foreground">Profile: {profile}</span>;
   return (
     <fieldset disabled={disabled} className="min-w-0 border-0 p-0 disabled:opacity-50">
       <RuntimeBar<AISpecRuntimeValue>
         value={spec}
+        effectiveModel={inherited.model}
+        effectiveMode={inherited.mode}
         variant="combo"
         families={buildRunFamilies(context)}
         models={context.models ?? []}
@@ -48,6 +54,7 @@ export function TodoRunRuntimeBar({
 }
 
 export function TodoRunActionButton({
+  dir,
   action,
   disabled,
   loading,
@@ -60,6 +67,7 @@ export function TodoRunActionButton({
   onRun,
   onAdvanced,
 }: {
+  dir: string;
   action: TodoRunAction;
   disabled?: boolean;
   loading?: boolean;
@@ -73,7 +81,7 @@ export function TodoRunActionButton({
   onAdvanced: (action: TodoRunAction) => void;
 }) {
   const config = runActionConfig[action];
-  const { context, loading: contextLoading, error: contextError } = useTodoRunContext();
+  const { context, loading: contextLoading, error: contextError } = useTodoRunContext({ dir });
   const [selectedOptions, setSelectedOptions] = useState<TodoRunOptions | null>(null);
   useEffect(() => setSelectedOptions(null), [action, context]);
   const unavailable = contextLoading || !context || !!contextError;

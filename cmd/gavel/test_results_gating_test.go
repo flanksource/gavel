@@ -23,7 +23,7 @@ func withFormat(format string, fn func()) {
 
 // captureStdout runs fn with os.Stdout redirected to a pipe and returns what it
 // wrote, so the gating test can assert on whether the section breakdown printed.
-func captureStdout(t *testing.T, fn func()) string {
+func captureStdout(t testing.TB, fn func()) string {
 	t.Helper()
 	r, w, err := os.Pipe()
 	if err != nil {

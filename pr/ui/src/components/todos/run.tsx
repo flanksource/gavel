@@ -15,7 +15,6 @@ import {
   requestStepFor,
   runOptionsKey,
   writeRunChoiceState,
-  TODO_RUN_ACTIONS,
   type TodoRunAction,
 } from "./runChoiceStorage";
 export { normalizeRunOptions, runOptionsKey, requestStepFor, TODO_RUN_ACTIONS, type TodoRunAction } from "./runChoiceStorage";
@@ -25,6 +24,7 @@ import {
   type RunModeCatalog,
   type RunContext,
 } from "./providers";
+import { effectiveTodoRuntime, unresolvedTodoRuntimeProfile } from './runtimeProfiles';
 
 // RunMode is the behaviour class a run executes as: run (implement and commit)
 // or plan (neither). Verification is a fixture-backed issue lifecycle action in
@@ -40,7 +40,7 @@ export type TodoRunRuntimeMode = "cmux" | "agent" | "cli" | "api";
 // a plan-only run never commits because the plan action omits this workflow.
 const AUTO_COMMIT: Pick<AISpecRuntimeValue, "workflow"> = { workflow: { commits: [{ on: "run", gates: "full" }] } };
 
-export const defaultRunOptions: TodoRunOptions = { driver: "cli", spec: { effort: "medium", ...AUTO_COMMIT } };
+export const defaultRunOptions: TodoRunOptions = { step: "run", spec: { effort: "medium", ...AUTO_COMMIT } };
 
 export const runActionConfig: Record<TodoRunAction, { label: string; detail: string; icon: ComponentType<IconProps>; title: string }> = {
   run: { label: "Run", detail: "implement", icon: UiPlay, title: "Run todo" },
@@ -80,8 +80,8 @@ function unavailableRunContextError(context: RunContext): string {
   return details[0] || "Captain returned no run models";
 }
 
-export function useTodoRunContext(enabled = true): TodoRunContextState {
-  const query = useQuery({ ...settingsRunContextQuery(), enabled });
+export function useTodoRunContext({ dir, enabled = true }: { dir: string; enabled?: boolean }): TodoRunContextState {
+  const query = useQuery({ ...settingsRunContextQuery(dir), enabled });
   if (!enabled) return { context: null, loading: false, error: "" };
   if (query.error) {
     return { context: null, loading: query.isFetching, error: query.error instanceof Error ? query.error.message : "Failed to load run context" };
@@ -110,7 +110,7 @@ export function TodoRunContextError({ error }: { error: string }) {
 // frontmatter — todos-triage.prompt and todos-plan.prompt pin `model: claude`
 // and declare a per-tool policy only the Claude transports carry, so seeding
 // them from a codex account default produced a run Captain refuses.
-function promptDefaultFor(context: RunContext, action: TodoRunAction): { mode?: string; model?: string } {
+function promptDefaultFor(context: RunContext, action: string): { mode?: string; model?: string } {
   return context.promptDefaults?.[action] ?? {};
 }
 
@@ -120,7 +120,7 @@ function modeById(context: RunContext, id: string | undefined, model?: string): 
   return context.modes.find(runtime => runtime.id === id && runtime.agent === agent && runtime.models.length > 0);
 }
 
-function primaryModeForAction(context: RunContext, action: TodoRunAction): RunModeCatalog {
+function primaryModeForAction(context: RunContext, action: string): RunModeCatalog {
   const promptDefault = promptDefaultFor(context, action);
   return modeById(context, promptDefault.mode, promptDefault.model)
     ?? modeById(context, context.defaultMode)
@@ -129,8 +129,8 @@ function primaryModeForAction(context: RunContext, action: TodoRunAction): RunMo
 }
 
 function modeForOptions(context: RunContext, options: TodoRunOptions): RunModeCatalog {
-  const spec = runSpec(options);
-  const requested = spec.mode || options.driver || "";
+  const spec = effectiveTodoRuntime(options, context);
+  const requested = spec.mode || "";
   const actionDefault = promptDefaultFor(context, actionFromRunOptions(options));
   return (
     modeById(context, requested, spec.model) ??
@@ -208,19 +208,21 @@ function labelForRunModel(runtime: RunModeCatalog, modelID: string): string {
   return model?.label || modelID;
 }
 
-function runOptionsForModeModel(action: TodoRunAction, runtime: RunModeCatalog, modelID: string, effort: TodoRunEffort = "medium"): TodoRunOptions {
+function runOptionsForModeModel(action: string, runtime: RunModeCatalog, modelID: string, effort: TodoRunEffort = "medium"): TodoRunOptions {
   const spec = reconcileModelCapabilities({
     mode: runtime.id,
     model: modelID || runtime.defaultModel,
     effort,
     ...(action === "run" ? AUTO_COMMIT : {}),
   } satisfies AISpecRuntimeValue, modelForRunMode(runtime, modelID), ALL_EFFORTS);
-  return normalizeRunOptions(action, { driver: runtime.driver, spec });
+  return normalizeRunOptions(action, { spec });
 }
 
 export function runButtonQualifierForOptions(options: TodoRunOptions, context: RunContext): string {
+  const profile = unresolvedTodoRuntimeProfile(options, context);
+  if (profile) return `(Profile: ${profile})`;
   const runtime = modeForOptions(context, options);
-  const model = runSpec(options).model || runtime.defaultModel;
+  const model = effectiveTodoRuntime(options, context).model || runtime.defaultModel;
   return `(${runtimeModeLabel(runtimeModeForCatalog(runtime))}:${shortTodoRunModelName(labelForRunModel(runtime, model))})`;
 }
 
@@ -228,6 +230,8 @@ export function runButtonQualifierForOptions(options: TodoRunOptions, context: R
 // resolved from the run options against the runtime catalog — the same derivation
 // the run buttons use, exposed for the start-of-session hero's "Runtime" chip.
 export function todoRunModeLabel(options: TodoRunOptions, context: RunContext): string {
+  const profile = unresolvedTodoRuntimeProfile(options, context);
+  if (profile) return `Profile: ${profile}`;
   return runtimeModeLabel(runtimeModeForCatalog(modeForOptions(context, options)));
 }
 
@@ -236,9 +240,10 @@ export function runButtonLabelForOptions(action: TodoRunAction, options: TodoRun
 }
 
 export function todoRunButtonPresentation(options: TodoRunOptions, context: RunContext) {
+  if (unresolvedTodoRuntimeProfile(options, context)) return { provider: undefined, model: 'Profile default', effort: undefined };
   const runtime = modeForOptions(context, options);
   const spec = runSpec(options);
-  const modelID = spec.model || runtime.defaultModel;
+  const modelID = effectiveTodoRuntime(options, context).model || runtime.defaultModel;
   const model = modelForRunMode(runtime, modelID);
   const provider = PROVIDERS.find(item => item.id === runtime.agent);
   const supportedEfforts = effortOptionsForModel(model, contextEfforts(context));
@@ -253,34 +258,36 @@ export function todoRunButtonPresentation(options: TodoRunOptions, context: RunC
   };
 }
 
-export function defaultRunOptionsForAction(action: TodoRunAction, context?: RunContext | null): TodoRunOptions {
+export function defaultRunOptionsForAction(action: string, context?: RunContext | null): TodoRunOptions {
   if (context) {
+    const runtimeProfile = context.promptDefaults?.[action]?.runtimeProfile;
+    if (runtimeProfile) return { step: action, runtimeProfile, spec: {} };
     const runtime = primaryModeForAction(context, action);
     return runOptionsForModeModel(action, runtime, promptDefaultFor(context, action).model || runtime.defaultModel);
   }
   return normalizeRunOptions(action, defaultRunOptions);
 }
 
-export function reconcileTodoRunOptions(action: TodoRunAction, options: TodoRunOptions, context: RunContext): TodoRunOptions {
+export function reconcileTodoRunOptions(action: string, options: TodoRunOptions, context: RunContext): TodoRunOptions {
   const normalized = normalizeRunOptions(action, options);
+  if (normalized.runtimeProfile || context.promptDefaults?.[action]?.runtimeProfile || !normalized.spec?.model) return normalized;
   const runtime = modeForOptions(context, normalized);
   const spec = runSpec(normalized);
   const modelIsCurrent = !!spec.model && runtime.models.some(model => model.id === spec.model);
   const model = modelIsCurrent ? spec.model! : runtime.defaultModel;
   return normalizeRunOptions(action, {
     ...normalized,
-    driver: runtime.driver,
     spec: reconcileModelCapabilities({ ...spec, mode: runtime.id, model }, modelForRunMode(runtime, model), contextEfforts(context)),
   });
 }
 
-export function loadLastTodoRunOptions(action: TodoRunAction, context?: RunContext | null): TodoRunOptions {
+export function loadLastTodoRunOptions(action: string, context?: RunContext | null): TodoRunOptions {
 	const state = readRunChoiceState();
 	const options = normalizeRunOptions(action, state.last[action] ?? defaultRunOptionsForAction(action, context));
 	return context ? reconcileTodoRunOptions(action, options, context) : options;
 }
 
-export function loadRecentAdvancedTodoRunOptions(action: TodoRunAction, context?: RunContext | null): TodoRunOptions[] {
+export function loadRecentAdvancedTodoRunOptions(action: string, context?: RunContext | null): TodoRunOptions[] {
 	const state = readRunChoiceState();
 	const seen = new Set<string>();
 	return (state.recentAdvanced[action] ?? [])
@@ -293,7 +300,7 @@ export function loadRecentAdvancedTodoRunOptions(action: TodoRunAction, context?
 		});
 }
 
-export function rememberTodoRunOptions(action: TodoRunAction, options: TodoRunOptions, advanced = false): TodoRunOptions {
+export function rememberTodoRunOptions(action: string, options: TodoRunOptions, advanced = false): TodoRunOptions {
   const nextOptions = normalizeRunOptions(action, options);
   const state = readRunChoiceState();
   state.last[action] = nextOptions;
@@ -328,6 +335,7 @@ export function useTodoRun(dir: string) {
         body: JSON.stringify({
           ref,
           step: requestStepFor(options),
+          runtimeProfile: options.runtimeProfile,
           spec: options.spec,
           resume: options.resume,
           force: options.force,
@@ -398,14 +406,14 @@ export function todoRunOptionsForRuntimeChange({
   options: TodoRunOptions;
   runtime: RuntimeBarValue;
 }): TodoRunOptions {
-  return reconcileTodoRunOptions(action, {
-    ...options,
-    spec: { ...runSpec(options), ...runtime },
-  }, context);
+  const next = { ...options, spec: runtime };
+  return runtime.model ? reconcileTodoRunOptions(action, next, context) : normalizeRunOptions(action, next);
 }
 
 export function runChoiceDetail(options: TodoRunOptions, fallback: string, context?: RunContext | null): string {
   if (!context) return fallback;
+  const profile = unresolvedTodoRuntimeProfile(options, context);
+  if (profile) return `Profile: ${profile}`;
   const runtime = modeForOptions(context, options);
   const spec = runSpec(options);
   const mode = runtimeModeLabel(runtimeModeForCatalog(runtime));
@@ -422,6 +430,7 @@ export function runChoiceDetail(options: TodoRunOptions, fallback: string, conte
 export interface TodoRunRequestPayload {
   ref: string;
   step: string;
+  runtimeProfile?: string;
   spec: AISpecRuntimeValue;
   resume?: boolean;
   force?: boolean;
@@ -433,6 +442,7 @@ export function buildTodoRunPayload({
   runMode,
   runtime,
   mode,
+  runtimeProfile,
   resume,
   promptDraft,
   promptDirty,
@@ -442,6 +452,7 @@ export function buildTodoRunPayload({
   runMode?: string;
   runtime: AISpecRuntimeValue;
   mode: TodoRunAction;
+  runtimeProfile?: string;
   resume: boolean;
   promptDraft: string;
   promptDirty: boolean;
@@ -456,12 +467,14 @@ export function buildTodoRunPayload({
   // phase buttons' call sites and otherwise unused here.
   const normalized = normalizeRunOptions(mode, {
     driver,
+    runtimeProfile,
     resume: resume || undefined,
-    spec: { ...spec, mode: runMode, prompt },
+    spec: { ...spec, mode: runMode ?? spec.mode, prompt },
   });
   return {
     ref,
     step: requestStepFor(normalized),
+    runtimeProfile: normalized.runtimeProfile,
     spec: normalized.spec ?? {},
     resume: normalized.resume,
   };

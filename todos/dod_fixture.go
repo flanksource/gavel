@@ -285,16 +285,11 @@ func unhonouredVerificationKeys(parsed *fixtures.FrontMatter) []string {
 // bullets would otherwise be adopted as the checklist's own expectation.
 const criteriaHeading = "Acceptance Criteria"
 
-// graderAIConfig carries the resolved verification model into the document. It
-// is the only part of the grading runtime the document can hold, and therefore
-// the only part an external fixture runner ever sees; a document with its own
-// `ai:` front matter still outranks it inside the fixture engine.
+// graderAIConfig carries the independent grader runtime into the document so
+// in-process and external fixture runners execute the same verification spec.
 func graderAIConfig(grader api.Spec) *fixtures.FixtureAIConfig {
-	cfg := &fixtures.FixtureAIConfig{CriteriaSection: criteriaHeading}
-	if name := strings.TrimSpace(grader.Name); name != "" {
-		cfg.Model = name
-	}
-	return cfg
+	grader = fixtures.GraderSpec(grader)
+	return &fixtures.FixtureAIConfig{CriteriaSection: criteriaHeading, Spec: &grader}
 }
 
 // criteriaSection renders the acceptance criteria as a task list under

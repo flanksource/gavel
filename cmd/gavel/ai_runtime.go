@@ -28,10 +28,8 @@ func defaultAIRuntimeOptions() captaincli.AIRuntimeOptions {
 //
 //   - Cwd: Captain launches the provider from the target repository even when
 //     Gavel was invoked elsewhere with --cwd.
-//   - Edit: ai-fix must edit files in place. Without it the openai cli runs
-//     read-only ("workspace is mounted read-only") and the claude CLI refuses
-//     the apply_patch tool. Captain's ToRequest converts opts.Edit into the
-//     PresetEdit permission preset, so it is set before building the request.
+//   - Edit: ai-fix must edit files in place. Set Captain's edit option before
+//     ToRequest so Captain owns its permission translation and validation.
 func buildAIFixRequest(opts captaincli.AIRuntimeOptions, operation api.Spec, workDir string) (captainai.Config, captainai.Request, error) {
 	if opts.Model == "" {
 		opts.Model = operation.Name

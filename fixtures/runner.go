@@ -28,11 +28,12 @@ type RunnerOptions struct {
 	WorkDir        string   // Working directory
 	MaxWorkers     int      // Maximum number of parallel workers
 	Logger         logger.Logger
-	ExecutablePath string          // Path to the current executable (for fixtures to use)
-	ProgressSink   ProgressSink    // Receives immutable execution-tree snapshots
-	UpdateGolden   bool            // When true, mismatched @file expectations are rewritten with actual output instead of failing
-	Display        *DisplayOptions // Optional result visibility controls for CLI rendering
-	Spec           *api.Spec       // Runtime options for embedded AI prompts
+	ExecutablePath string                                  // Path to the current executable (for fixtures to use)
+	ProgressSink   ProgressSink                            // Receives immutable execution-tree snapshots
+	UpdateGolden   bool                                    // When true, mismatched @file expectations are rewritten with actual output instead of failing
+	Display        *DisplayOptions                         // Optional result visibility controls for CLI rendering
+	Spec           *api.Spec                               // Runtime options for embedded AI prompts
+	ResolveSpec    func(context.Context) (api.Spec, error) `json:"-" yaml:"-"` // Lazy runtime for executed AI steps; exclusive with Spec
 	// Record is the run-wide `--record` default, applied only to fixtures that
 	// declared no `record:` of their own. An explicit `record: none` parses to an
 	// empty (non-nil) Spec precisely so it outranks this.
@@ -447,6 +448,7 @@ func (r *Runner) executeFixture(ctx flanksourceContext.Context, fixture FixtureT
 		WorkDir:        r.options.WorkDir,
 		Verbose:        ctx.Logger.IsLevelEnabled(logger.Debug),
 		Spec:           r.options.Spec,
+		ResolveSpec:    r.options.ResolveSpec,
 		Evaluator:      r.evaluator,
 		ExecutablePath: r.options.ExecutablePath,
 		UpdateGolden:   r.options.UpdateGolden,

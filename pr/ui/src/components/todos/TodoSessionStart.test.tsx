@@ -77,6 +77,15 @@ function stubPreviewFetch(prompt: string) {
 }
 
 describe('TodoSessionStart', () => {
+  it('shows the resolved profile runtime while keeping the request override empty', async () => {
+    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({ prompt: 'Profile prompt', model: 'example-profile-model', runtimeMode: 'cmux' }) }));
+    vi.stubGlobal('fetch', fetchMock);
+    render(<TodoSessionStart dir="/repo" todo={todo} runOptions={{ step: 'run', runtimeProfile: 'review-profile', spec: {} }} onRun={vi.fn()} />);
+    expect(await screen.findByText('example-profile-model')).toBeTruthy();
+    expect(screen.getByText('cmux')).toBeTruthy();
+    expect(JSON.parse(String((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body))).toEqual({ ref: todo.ref, step: 'run', runtimeProfile: 'review-profile', spec: {} });
+  });
+
   it('renders the model, runtime, and effort a run would use', async () => {
     stubPreviewFetch('## Implement thing');
     render(<TodoSessionStart dir="/repo" todo={todo} onRun={vi.fn()} />);

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ComponentType } from 'react';
 import { Markdown } from '@flanksource/clicky-ui/data';
 import { UiHubot, UiRobotAi, type IconProps } from '@flanksource/clicky-ui/icons';
-import type { TodoItem, TodoRunOptions } from '../../types';
+import type { TodoItem, TodoRunOptions, TodoRunPreviewResponse } from '../../types';
 import { Spinner } from '../../icons/Spinner';
 import { TodoRunActionButton } from './TodoRunActionButton';
 import {
@@ -24,6 +24,8 @@ import {
 function useRunPromptPreview(dir: string, ref: string, options: TodoRunOptions | null) {
   const [prompt, setPrompt] = useState('');
   const [error, setError] = useState('');
+  const [resolution, setResolution] = useState<{ key: string; data: TodoRunPreviewResponse }>();
+  const requestKey = JSON.stringify({ dir, ref, options });
   const previewMutation = useTodoRunPreview(dir);
 
   useEffect(() => {
@@ -35,12 +37,16 @@ function useRunPromptPreview(dir: string, ref: string, options: TodoRunOptions |
       body: {
         ref,
         step: requestStepFor(options),
-        spec: { mode: options.spec?.mode, model: options.spec?.model, effort: options.spec?.effort },
+        runtimeProfile: options.runtimeProfile,
+        spec: options.spec ?? {},
       },
       signal: controller.signal,
     }, {
       onSuccess: data => {
-        if (!cancelled) setPrompt(data.prompt ?? '');
+        if (!cancelled) {
+          setPrompt(data.prompt ?? '');
+          setResolution({ key: requestKey, data });
+        }
       },
       onError: err => {
         if (!cancelled && !(err instanceof DOMException && err.name === 'AbortError')) setError(err.message);
@@ -50,9 +56,9 @@ function useRunPromptPreview(dir: string, ref: string, options: TodoRunOptions |
       cancelled = true;
       controller.abort();
     };
-  }, [dir, ref, options?.driver, options?.spec?.mode, options?.spec?.model, options?.spec?.effort, previewMutation.mutate]);
+  }, [requestKey, previewMutation.mutate]);
 
-  return { prompt, loading: previewMutation.isPending, error };
+  return { prompt, loading: previewMutation.isPending, error, resolution: resolution?.key === requestKey ? resolution.data : undefined };
 }
 
 function DetailChip({
@@ -102,16 +108,17 @@ export function TodoSessionStart({
   onRunOptionsChange?: (options: TodoRunOptions) => void;
   onPlanOptionsChange?: (options: TodoRunOptions) => void;
 }) {
-  const { context, loading: contextLoading, error: contextError } = useTodoRunContext();
+  const { context, loading: contextLoading, error: contextError } = useTodoRunContext({ dir });
   const options = useMemo(() => context
     ? reconcileTodoRunOptions('run', runOptions ?? loadLastTodoRunOptions('run', context), context)
     : null, [context, runOptions]);
   const selectedPlanOptions = useMemo(() => context
     ? reconcileTodoRunOptions('plan', planOptions ?? loadLastTodoRunOptions('plan', context), context)
     : planOptions, [context, planOptions]);
-  const presentation = context && options ? todoRunButtonPresentation(options, context) : null;
-  const runtime = context && options ? todoRunModeLabel(options, context) : '';
-  const { prompt, loading, error } = useRunPromptPreview(dir, todo.ref, options);
+  const { prompt, loading, error, resolution } = useRunPromptPreview(dir, todo.ref, options);
+  const displayOptions = options && resolution ? { ...options, spec: { ...options.spec, model: resolution.model ?? options.spec?.model, mode: resolution.runtimeMode ?? options.spec?.mode } } : options;
+  const presentation = context && displayOptions ? todoRunButtonPresentation(displayOptions, context) : null;
+  const runtime = context && displayOptions ? todoRunModeLabel(displayOptions, context) : '';
   // provider.icon may be a runtime icon name rather than a component, so use the
   // generic agent icon unless it can be rendered directly.
   const providerIcon = presentation?.provider?.icon;
@@ -152,8 +159,8 @@ export function TodoSessionStart({
 
       {onRun && (
         <div className="mt-5 flex items-center justify-center gap-2">
-          <TodoRunActionButton action="run" disabled={runDisabled || !context || !!contextError} loading={runBusy} options={options ?? undefined} onOptionsChange={onRunOptionsChange} onRun={onRun} onAdvanced={onAdvanced ?? (() => {})} />
-          <TodoRunActionButton action="plan" disabled={runDisabled || !context || !!contextError} loading={runBusy} options={selectedPlanOptions} onOptionsChange={onPlanOptionsChange} onRun={onRun} onAdvanced={onAdvanced ?? (() => {})} />
+          <TodoRunActionButton dir={dir} action="run" disabled={runDisabled || !context || !!contextError} loading={runBusy} options={options ?? undefined} onOptionsChange={onRunOptionsChange} onRun={onRun} onAdvanced={onAdvanced ?? (() => {})} />
+          <TodoRunActionButton dir={dir} action="plan" disabled={runDisabled || !context || !!contextError} loading={runBusy} options={selectedPlanOptions} onOptionsChange={onPlanOptionsChange} onRun={onRun} onAdvanced={onAdvanced ?? (() => {})} />
         </div>
       )}
     </div>

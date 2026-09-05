@@ -37,6 +37,7 @@ const DefaultTimeout = 30 * time.Minute
 // already loaded and rendered: this type describes the STACK, not how to find
 // its pieces, which is what makes the precedence assertable on its own.
 type LayerInput struct {
+	RuntimeProfile ProfileSelection
 	// Config is the merged .gavel.yaml: its `ai:` base and the `todos.*` section.
 	Config verify.GavelConfig
 	// Step names the lifecycle step being run and therefore which project block
@@ -90,7 +91,7 @@ func Layers(in LayerInput) []api.SpecLayer {
 	if timeout := strings.TrimSpace(in.Config.Todos.Timeout); timeout != "" {
 		layers = append(layers, api.SpecLayer{
 			Name:        ".gavel.yaml todos.timeout",
-			Source:      api.SpecLayerSourceProfile,
+			Source:      api.SpecLayerSourcePreset,
 			Scope:       api.SpecLayerContext,
 			Constraints: api.RuntimeConstraints{Limits: api.RunLimits{Budget: api.Budget{Timeout: timeout}}},
 		})
@@ -102,7 +103,7 @@ func Layers(in LayerInput) []api.SpecLayer {
 	if !api.IsEmpty(in.StepSpec) {
 		layers = append(layers, api.SpecLayer{
 			Name:   "lifecycle step " + in.Step,
-			Source: api.SpecLayerSourceProfile,
+			Source: api.SpecLayerSourcePrompt,
 			Scope:  api.SpecLayerSurface,
 			Spec:   withoutPromptBody(in.StepSpec),
 		})
@@ -134,7 +135,11 @@ func Layers(in LayerInput) []api.SpecLayer {
 // keeps no private fold: two implementations of "which layer wins" is one more
 // than the number of answers that can be right.
 func ResolveLayers(in LayerInput) (api.ResolvedSpec, error) {
-	return api.ResolveSpecLayers(Layers(in)...)
+	layers := RestrictHostPermissions(Layers(in))
+	if err := ValidateRequestPermissions(layers); err != nil {
+		return api.ResolvedSpec{}, err
+	}
+	return api.ResolveSpecLayers(layers...)
 }
 
 // PromptLayers renders the frontmatter of each .prompt document that contributes
@@ -144,7 +149,13 @@ func ResolveLayers(in LayerInput) (api.ResolvedSpec, error) {
 // Frontmatter is rendered with the same variables Render uses so a template that
 // computes its frontmatter resolves; the todo body is empty here because only
 // the spec half is being extracted.
-func PromptLayers(workDir string, todoList []*types.TODO, definition todoprompt.Definition) ([]api.SpecLayer, string, error) {
+type PromptLayerResult struct {
+	Layers         []api.SpecLayer
+	Template       string
+	RuntimeProfile string
+}
+
+func PromptLayers(workDir string, todoList []*types.TODO, definition todoprompt.Definition) (PromptLayerResult, error) {
 	data := todoprompt.TemplateData(todoList, todoprompt.Options{
 		WorkDir:  workDir,
 		Prompt:   definition.Name,
@@ -153,26 +164,31 @@ func PromptLayers(workDir string, todoList []*types.TODO, definition todoprompt.
 	})
 	data["body"] = ""
 
-	var layers []api.SpecLayer
+	var result PromptLayerResult
 	if strings.TrimSpace(definition.Builtin) != "" {
 		spec, err := verify.RenderPromptSpec(definition.Builtin, data, verify.PromptSpecOptions{Declared: true})
 		if err != nil {
-			return nil, "", fmt.Errorf("render built-in %s prompt frontmatter: %w", definition.Name, err)
+			return result, fmt.Errorf("render built-in %s prompt frontmatter: %w", definition.Name, err)
 		}
-		layers = append(layers, api.PromptSpecLayer("todos-"+definition.Name+".prompt", spec))
+		result.Layers = append(result.Layers, api.PromptSpecLayer("todos-"+definition.Name+".prompt", spec.Spec))
+		result.RuntimeProfile = spec.RuntimeProfile
 	}
 	template, err := definition.Template(workDir)
 	if err != nil {
-		return nil, "", err
+		return result, err
 	}
 	if definition.Override.File != "" {
 		spec, err := verify.RenderPromptSpec(template, data, verify.PromptSpecOptions{Declared: true})
 		if err != nil {
-			return nil, "", fmt.Errorf("render todos.%s file frontmatter: %w", definition.Name, err)
+			return result, fmt.Errorf("render todos.%s file frontmatter: %w", definition.Name, err)
 		}
-		layers = append(layers, api.PromptSpecLayer("todos."+definition.Name+" file", spec))
+		result.Layers = append(result.Layers, api.PromptSpecLayer("todos."+definition.Name+" file", spec.Spec))
+		if spec.RuntimeProfile != "" {
+			result.RuntimeProfile = spec.RuntimeProfile
+		}
 	}
-	return layers, template, nil
+	result.Template = template
+	return result, nil
 }
 
 // ApplyModel resolves the canonical compact model grammar once in Captain.
@@ -265,17 +281,7 @@ func RequireModel(s api.Spec) error {
 // configuration decision like any other, so it contributes a spec too; a prompt
 // body written there is stripped like every other layer's.
 func stepSpec(cfg verify.TodosConfig, step string) api.Spec {
-	switch step {
-	case "run":
-		return withoutPromptBody(cfg.Run.Spec)
-	case "plan":
-		return withoutPromptBody(cfg.Plan.Spec)
-	case "triage":
-		return withoutPromptBody(cfg.Triage.Spec)
-	case StepVerify:
-		return withoutPromptBody(cfg.Verify)
-	}
-	return withoutPromptBody(cfg.Steps[step])
+	return withoutPromptBody(stepPromptSpec(cfg, step).Spec)
 }
 
 // hostLayer is the entrypoint's own contribution. Only the dashboard has one:
@@ -317,8 +323,8 @@ func todoLayer(todo *types.TODO) (api.SpecLayer, bool) {
 	}
 	return api.SpecLayer{
 		Name:   "todo " + todoName(todo),
-		Source: api.SpecLayerSourceProfile,
-		Scope:  api.SpecLayerSurface,
+		Source: api.SpecLayerSourcePrompt,
+		Scope:  api.SpecLayerUser,
 		Spec:   spec,
 	}, true
 }

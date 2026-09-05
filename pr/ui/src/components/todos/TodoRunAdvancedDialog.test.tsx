@@ -1,10 +1,14 @@
 import type { ComponentProps, ReactNode } from 'react';
+import { Button } from '@flanksource/clicky-ui/components';
+import type { AIPromptRunValue } from '@flanksource/clicky-ui/ai';
 import { fireEvent, render, screen, within } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TodoRunOptions } from '../../types';
 import { TodoRunAdvancedDialog } from './TodoRunAdvancedDialog';
 import { requestStepFor } from './runChoiceStorage';
 import type { RunContext } from './providers';
+const preview = vi.hoisted(() => vi.fn());
+const recentOptions = vi.hoisted(() => vi.fn((): TodoRunOptions[] => []));
 
 // The run dialog's step picker now lists whatever the project's lifecycle
 // declares — including a custom, non-built-in step — rather than a hardcoded
@@ -45,15 +49,16 @@ const FIXTURE_CONTEXT: RunContext = {
     },
   ],
   promptDefaults: { 'security-review': { mode: 'agent', model: 'claude-opus-4-8' } },
+  runtimeProfiles: [{ id: 'review-profile', name: 'Review profile', model: 'profile-model', presets: [] }],
   lifecycle: { steps: STEPS },
 };
 
 vi.mock('./run', async importOriginal => ({
   ...(await importOriginal<typeof import('./run')>()),
   useTodoRunContext: () => ({ context: FIXTURE_CONTEXT, loading: false, error: '' }),
-  useTodoRunPreview: () => ({ isPending: false, mutate: () => {} }),
+  useTodoRunPreview: () => ({ isPending: false, mutate: preview }),
   loadLastTodoRunOptions: () => ({ spec: { mode: 'agent', model: 'claude-opus-4-8', effort: 'medium' } }),
-  loadRecentAdvancedTodoRunOptions: () => [],
+  loadRecentAdvancedTodoRunOptions: recentOptions,
   reconcileTodoRunOptions: (_action: string, options: TodoRunOptions) => options,
 }));
 
@@ -63,6 +68,9 @@ vi.mock('@flanksource/clicky-ui/components', () => ({
     <button type="button" {...props}>{children}</button>
   ),
   Field: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
+  Combobox: ({ options, onChange }: { options: Array<{ value: string; label: string }>; onChange: (value: string) => void }) => (
+    <div>{options.map(option => <Button key={option.value} onClick={() => onChange(option.value)}>{option.label}</Button>)}</div>
+  ),
   Modal: ({ children, footer, open }: { children?: ReactNode; footer?: ReactNode; open?: boolean }) => (
     open === false ? null : <div><div>{children}</div><div data-testid="dialog-footer">{footer}</div></div>
   ),
@@ -108,9 +116,16 @@ vi.mock('@flanksource/clicky-ui/data', () => ({
 
 vi.mock('@flanksource/clicky-ui/ai', async importOriginal => ({
   ...(await importOriginal<typeof import('@flanksource/clicky-ui/ai')>()),
-  PromptRunEditor: () => null,
+  PromptRunEditor: ({ value, onChange, children }: { value: AIPromptRunValue; onChange: (value: AIPromptRunValue) => void; children?: ReactNode }) => (
+    <div><Button onClick={() => onChange({ ...value, spec: { ...value.spec, model: 'operator-model' } })}>Change model</Button>{children}</div>
+  ),
   promptRuntimeValueToPayload: (value: Record<string, unknown>) => ({ spec: value }),
 }));
+
+beforeEach(() => {
+  preview.mockReset();
+  recentOptions.mockReturnValue([]);
+});
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -183,7 +198,7 @@ describe('TodoRunAdvancedDialog step picker', () => {
     expect(options).not.toHaveProperty('runMode');
   });
 
-  it('dispatches a built-in step (plan) with its bookkeeping fields for storage, but no driver', () => {
+  it('dispatches a built-in step by name without legacy bookkeeping', () => {
     const { onRun } = setup({ initialMode: 'run' });
 
     fireEvent.click(picker().getByRole('button', { name: 'Plan' }));
@@ -193,5 +208,46 @@ describe('TodoRunAdvancedDialog step picker', () => {
     const options = onRun.mock.calls[0]![0] as TodoRunOptions;
     expect(requestStepFor(options)).toBe('plan');
     expect(options).not.toHaveProperty('driver');
+    expect(options).not.toHaveProperty('runMode');
+  });
+});
+
+describe('TodoRunAdvancedDialog runtime profile', () => {
+  it('restores the saved profile and resume choice from recent advanced options', () => {
+    recentOptions.mockReturnValue([{ step: 'plan', runtimeProfile: 'saved-profile', spec: { mode: 'cmux' }, resume: true }]);
+    const { onRun } = setup({ initialMode: 'plan' });
+    fireEvent.click(screen.getByRole('button', { name: 'Review profile' }));
+    fireEvent.click(screen.getByRole('button', { name: /^1\./ }));
+    fireEvent.click(footer().getByRole('button', { name: 'Plan' }));
+    expect(JSON.parse(JSON.stringify(onRun.mock.lastCall?.[0]))).toEqual({ step: 'plan', runtimeProfile: 'saved-profile', spec: { mode: 'cmux' }, resume: true });
+  });
+
+  it('offers resume for a cmux profile resolved by preview without sending inherited mode', () => {
+    preview.mockImplementation(({ body }, callbacks) => callbacks.onSuccess({
+      prompt: '', specYaml: '', model: 'resolved-model', runtimeMode: body.runtimeProfile === 'review-profile' ? 'cmux' : 'agent', count: 1,
+    }));
+    const { onRun } = setup({ initialMode: 'plan' });
+    fireEvent.click(screen.getByRole('button', { name: 'Review profile' }));
+    expect(screen.getByText('resolved-model · cmux')).toBeTruthy();
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Resume session' }));
+    fireEvent.click(footer().getByRole('button', { name: 'Plan' }));
+    expect(JSON.parse(JSON.stringify(onRun.mock.lastCall?.[0]))).toEqual({ step: 'plan', runtimeProfile: 'review-profile', spec: {}, resume: true });
+  });
+
+  it.each(['plan', 'verify', 'security-review'])('previews and submits %s with a profile and no seeded model override', step => {
+    const { onRun } = setup({ initialMode: step });
+    fireEvent.click(screen.getByRole('button', { name: 'Review profile' }));
+    fireEvent.click(footer().getByRole('button', { name: STEPS.find(entry => entry.name === step)!.label }));
+    expect(JSON.parse(JSON.stringify(preview.mock.lastCall?.[0].body))).toEqual({ ref: 'todo-1', step, runtimeProfile: 'review-profile', spec: {} });
+    expect(JSON.parse(JSON.stringify(onRun.mock.lastCall?.[0]))).toEqual({ step, runtimeProfile: 'review-profile', spec: {} });
+  });
+
+  it.each(['before', 'after'])('retains a model edited %s selecting the profile', when => {
+    const { onRun } = setup({ initialMode: 'plan' });
+    if (when === 'before') fireEvent.click(screen.getByRole('button', { name: 'Change model' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Review profile' }));
+    if (when === 'after') fireEvent.click(screen.getByRole('button', { name: 'Change model' }));
+    fireEvent.click(footer().getByRole('button', { name: 'Plan' }));
+    expect(JSON.parse(JSON.stringify(onRun.mock.lastCall?.[0]))).toEqual({ step: 'plan', runtimeProfile: 'review-profile', spec: { model: 'operator-model' } });
   });
 });

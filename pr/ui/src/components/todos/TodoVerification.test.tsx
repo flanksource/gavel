@@ -1,4 +1,5 @@
 import type React from 'react';
+import { Button } from '@flanksource/clicky-ui/components';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -21,6 +22,7 @@ vi.mock('@flanksource/clicky-ui/data', () => ({
 }));
 
 vi.mock('@flanksource/clicky-ui/components', () => ({
+  Combobox: () => null,
   Button: ({
     children,
     loading: _loading,
@@ -63,7 +65,7 @@ vi.mock('@flanksource/clicky-ui/ai', () => ({
   }],
   promptRuntimeValueToPayload: (value: unknown) => ({ spec: value }),
   reconcileModelCapabilities: (value: unknown) => value,
-  RuntimeBar: ({ ariaLabel }: { ariaLabel?: string }) => <button type="button" aria-label={ariaLabel}>Runtime</button>,
+  RuntimeBar: ({ ariaLabel }: { ariaLabel?: string }) => <Button type="button" aria-label={ariaLabel}>Runtime</Button>,
   SpecRuntimeEditor: () => <div>Verification runtime editor</div>,
 }));
 
@@ -128,7 +130,7 @@ const verificationRunContext = {
 
 function mockSchemaFetch() {
   const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-    if (String(input) === '/api/todos/run/context') {
+    if (String(input) === '/api/todos/run/context?dir=%2Fworkspace') {
       return {
         ok: true,
         json: async () => verificationRunContext,
@@ -245,7 +247,7 @@ describe('TodoVerification', () => {
       if (url === '/api/todos/verification/schema') {
         return { ok: true, json: async () => ({ fences: {} }), text: async (): Promise<string> => '' };
       }
-      if (url === '/api/todos/run/context') {
+      if (url === '/api/todos/run/context?dir=%2Fworkspace') {
         return { ok: true, json: async () => verificationRunContext, text: async (): Promise<string> => '' };
       }
       if (url.startsWith('/api/todos/verification/fixture')) {
@@ -348,7 +350,7 @@ describe('TodoVerification', () => {
       if (url === '/api/todos/verification/schema') {
         return { ok: true, json: async () => ({ fences: {} }), text: async (): Promise<string> => '' };
       }
-      if (url === '/api/todos/run/context') {
+      if (url === '/api/todos/run/context?dir=%2Fworkspace') {
         return { ok: true, json: async () => verificationRunContext, text: async (): Promise<string> => '' };
       }
       if (url.startsWith('/api/todos/run?')) {
@@ -378,7 +380,7 @@ describe('TodoVerification', () => {
       if (url === '/api/todos/verification/schema') {
         return { ok: true, json: async () => ({ fences: {} }), text: async (): Promise<string> => '' };
       }
-      if (url === '/api/todos/run/context') {
+      if (url === '/api/todos/run/context?dir=%2Fworkspace') {
         return { ok: true, json: async () => verificationRunContext, text: async (): Promise<string> => '' };
       }
       if (url.startsWith('/api/todos/run?')) {

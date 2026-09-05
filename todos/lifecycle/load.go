@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/flanksource/gavel/verify"
 	"gopkg.in/yaml.v3"
@@ -19,13 +18,10 @@ func Default() (Lifecycle, error) {
 	return Parse([]byte(defaultYAML))
 }
 
-// Parse decodes a lifecycle document. Unknown keys are errors: a misspelt
-// `outcome:` that decoded to nothing would be a step with no transitions.
+// Parse decodes a lifecycle document and validates its transitions.
 func Parse(data []byte) (Lifecycle, error) {
 	var def Lifecycle
-	decoder := yaml.NewDecoder(strings.NewReader(string(data)))
-	decoder.KnownFields(true)
-	if err := decoder.Decode(&def); err != nil {
+	if err := verify.DecodeYAML(data, &def, verify.DecodeOptions{Source: "lifecycle"}); err != nil {
 		return Lifecycle{}, fmt.Errorf("parse lifecycle: %w", err)
 	}
 	if err := def.Validate(); err != nil {
@@ -84,15 +80,13 @@ func overlayFrom(override verify.LifecycleConfig, workDir string) (Lifecycle, er
 			return Lifecycle{}, fmt.Errorf("todos.lifecycle file: %w", err)
 		}
 		var overlay Lifecycle
-		decoder := yaml.NewDecoder(strings.NewReader(string(data)))
-		decoder.KnownFields(true)
-		if err := decoder.Decode(&overlay); err != nil {
+		if err := verify.DecodeYAML(data, &overlay, verify.DecodeOptions{Source: path}); err != nil {
 			return Lifecycle{}, fmt.Errorf("todos.lifecycle file %s: %w", override.File, err)
 		}
 		return overlay, nil
 	}
 	// The inline form arrived as generic YAML through the config; round-trip it
-	// so it is decoded by the same strict decoder as a file.
+	// so it is decoded by the same decoder as a file.
 	data, err := yaml.Marshal(map[string]any{
 		"name": override.Name, "subject": override.Subject, "steps": override.Steps,
 	})
@@ -100,9 +94,7 @@ func overlayFrom(override verify.LifecycleConfig, workDir string) (Lifecycle, er
 		return Lifecycle{}, fmt.Errorf("todos.lifecycle: %w", err)
 	}
 	var overlay Lifecycle
-	decoder := yaml.NewDecoder(strings.NewReader(string(data)))
-	decoder.KnownFields(true)
-	if err := decoder.Decode(&overlay); err != nil {
+	if err := verify.DecodeYAML(data, &overlay, verify.DecodeOptions{Source: "todos.lifecycle"}); err != nil {
 		return Lifecycle{}, fmt.Errorf("todos.lifecycle: %w", err)
 	}
 	return overlay, nil

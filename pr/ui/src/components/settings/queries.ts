@@ -57,11 +57,11 @@ export function settingsPromptsQuery() {
   });
 }
 
-export function settingsRunContextQuery() {
+export function settingsRunContextQuery(dir?: string) {
   return queryOptions({
-    queryKey: ['todos', 'run-context'] as const,
+    queryKey: dir ? ['todos', 'run-context', dir] as const : ['todos', 'run-context'] as const,
     queryFn: ({ signal }) => fetchSettingsJSON<RunContext>(
-      '/api/todos/run/context',
+      `/api/todos/run/context${dir ? `?dir=${encodeURIComponent(dir)}` : ''}`,
       signal,
       'Failed to load Captain run providers',
     ),

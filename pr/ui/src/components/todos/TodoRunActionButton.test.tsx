@@ -46,6 +46,7 @@ const FIXTURE_CONTEXT: RunContext = {
     },
   ],
   lifecycle: { steps: [{ name: 'run', label: 'Run', prompt: 'run', readOnly: false }] },
+  runtimeProfiles: [{ id: 'review-profile', name: 'Review profile', presets: ['cmux-preset'] }],
 };
 
 vi.mock('./run', async importOriginal => ({
@@ -83,22 +84,31 @@ afterEach(() => {
 });
 
 describe('TodoRunActionButton', () => {
+  it('shows a sparse profile by identity without claiming the step default runtime', () => {
+    const onRun = vi.fn();
+    const options = { step: 'run', runtimeProfile: 'review-profile', spec: {} };
+    render(<TodoRunActionButton dir="/repo" action="run" options={options} onRun={onRun} onAdvanced={vi.fn()} />);
+    expect(screen.getByText('Profile: Review profile')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Run runtime' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Run' }));
+    expect(onRun).toHaveBeenCalledWith(options);
+  });
+
   it('dispatches the current options when the primary button is pressed', () => {
     const onRun = vi.fn();
-    render(<TodoRunActionButton action="run" onRun={onRun} onAdvanced={vi.fn()} />);
+    render(<TodoRunActionButton dir="/repo" action="run" onRun={onRun} onAdvanced={vi.fn()} />);
 
     fireEvent.click(screen.getByRole('button', { name: 'Run' }));
 
     expect(onRun).toHaveBeenCalledWith(expect.objectContaining({
-      driver: 'agent',
-      runMode: 'run',
+      step: 'run',
       spec: expect.objectContaining({ mode: 'agent', model: 'claude-opus-4-8' }),
     }) as TodoRunOptions);
   });
 
   it('opens the advanced dialog for the same action', () => {
     const onAdvanced = vi.fn();
-    render(<TodoRunActionButton action="plan" onRun={vi.fn()} onAdvanced={onAdvanced} />);
+    render(<TodoRunActionButton dir="/repo" action="plan" onRun={vi.fn()} onAdvanced={onAdvanced} />);
 
     fireEvent.click(screen.getByRole('button', { name: 'Advanced plan options' }));
 
@@ -108,7 +118,7 @@ describe('TodoRunActionButton', () => {
   it('surfaces a runtime change through onOptionsChange without running', () => {
     const onRun = vi.fn();
     const onOptionsChange = vi.fn();
-    render(<TodoRunActionButton action="run" onRun={onRun} onAdvanced={vi.fn()} onOptionsChange={onOptionsChange} />);
+    render(<TodoRunActionButton dir="/repo" action="run" onRun={onRun} onAdvanced={vi.fn()} onOptionsChange={onOptionsChange} />);
 
     fireEvent.click(screen.getByRole('button', { name: 'Run runtime' }));
 

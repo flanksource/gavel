@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/flanksource/captain/pkg/api"
 	captaindb "github.com/flanksource/captain/pkg/database"
+	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/run"
@@ -174,16 +176,32 @@ var _ = Describe("todo plan review", func() {
 		Expect(resp.Todo.Lifecycle.Steps).NotTo(BeEmpty())
 	})
 
-	It("rejects a body carrying a key the endpoint does not read", func() {
+	It("warns about an unknown field and approves without starting an unrequested run", func() {
 		created := specTodo(workDir, types.StatusReview)
+		called := stubSpecRunStart(nil)
+		var warnings bytes.Buffer
+		logger.SetOutput(&warnings)
+		DeferCleanup(func() { logger.SetOutput(nil) })
 
 		rec := postJSON(server.handleTodoPlanApprove, "/api/todos/plan/approve",
 			map[string]any{"ref": todos.TODOReference(created), "runMode": "plan"})
 
-		Expect(rec.Code).To(Equal(http.StatusBadRequest), rec.Body.String())
-		Expect(rec.Body.String()).To(SatisfyAll(ContainSubstring("invalid request body"), ContainSubstring("runMode")))
-		Expect(created.Status).To(Equal(types.StatusReview))
+		Expect(rec.Code).To(Equal(http.StatusOK), rec.Body.String())
+		Expect(warnings.String()).To(ContainSubstring("POST /api/todos/plan/approve request body: unknown field runMode"))
+		Expect(created.Status).To(Equal(types.StatusPending))
+		Expect(*called).To(BeFalse())
 	})
+
+	DescribeTable("rejects malformed approval input before changing the plan", func(body string) {
+		created := specTodo(workDir, types.StatusReview)
+		called := stubSpecRunStart(nil)
+		rec := httptest.NewRecorder()
+		server.handleTodoPlanApprove(rec, httptest.NewRequest(http.MethodPost, "/api/todos/plan/approve", strings.NewReader(body)))
+		Expect(rec.Code).To(Equal(http.StatusBadRequest), rec.Body.String())
+		Expect(rec.Body.String()).To(ContainSubstring("invalid request body"))
+		Expect(created.Status).To(Equal(types.StatusReview))
+		Expect(*called).To(BeFalse())
+	}, Entry("incomplete JSON", `{"run":`), Entry("known field type", `{"run":"yes"}`))
 })
 
 var _ = Describe("todo answer", func() {

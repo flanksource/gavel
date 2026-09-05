@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -58,7 +59,7 @@ var _ = Describe("todo run context catalog", func() {
 			}, nil
 		}
 
-		context, err := todoRunContext("")
+		context, err := todoRunContext(context.Background(), "")
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(context.DefaultMode).To(Equal("agent"))
@@ -92,7 +93,7 @@ var _ = Describe("todo run context catalog", func() {
 			}, nil
 		}
 
-		context, err := todoRunContext("")
+		context, err := todoRunContext(context.Background(), "")
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(context.DefaultMode).To(Equal("agent"))
@@ -111,7 +112,7 @@ var _ = Describe("todo run context catalog", func() {
 			}, nil
 		}
 
-		context, err := todoRunContext("")
+		context, err := todoRunContext(context.Background(), "")
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(context.Modes).To(HaveLen(1))
@@ -156,7 +157,7 @@ var _ = Describe("todo run context catalog", func() {
 			0o600,
 		)).To(Succeed())
 
-		context, err := todoRunContext(dir)
+		context, err := todoRunContext(context.Background(), dir)
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(context.DefaultMode).To(Equal("agent"), "the account default mechanism is unchanged")

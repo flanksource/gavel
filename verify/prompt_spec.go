@@ -41,7 +41,8 @@ type PromptSpec struct {
 	Spec api.Spec `json:",inline" yaml:",inline"`
 	// File is a path to a .prompt file. Relative paths resolve against the
 	// directory of the .gavel.yaml that declared this override.
-	File string `json:"file,omitempty" yaml:"file,omitempty"`
+	File           string `json:"file,omitempty" yaml:"file,omitempty"`
+	RuntimeProfile string `json:"runtimeProfile,omitempty" yaml:"runtimeProfile,omitempty"`
 
 	// baseDir is populated by the config loader and survives layered merges. It is
 	// intentionally not serialized; programmatic values fall back to Resolve's dir.
@@ -52,7 +53,12 @@ type PromptSpec struct {
 // file and no spec field of any kind. The spec half is answered reflectively by
 // captain, so a field added to api.Spec counts immediately.
 func (s PromptSpec) IsEmpty() bool {
-	return s.File == "" && api.IsEmpty(s.Spec)
+	return s.File == "" && s.RuntimeProfile == "" && api.IsEmpty(s.Spec)
+}
+
+func (PromptSpec) DecodeFields() any {
+	type fields PromptSpec
+	return fields{}
 }
 
 // Merge layers override onto this spec field-wise, so a repo .gavel.yaml naming
@@ -63,9 +69,12 @@ func (s PromptSpec) IsEmpty() bool {
 // on every PromptSpec it decodes — set or not — so the two must move together or
 // an inherited file would be resolved against the overriding layer's directory.
 func (s PromptSpec) Merge(override PromptSpec) PromptSpec {
-	merged := PromptSpec{Spec: s.Spec.Merge(override.Spec), File: s.File, baseDir: s.baseDir}
+	merged := PromptSpec{Spec: s.Spec.Merge(override.Spec), File: s.File, RuntimeProfile: s.RuntimeProfile, baseDir: s.baseDir}
 	if override.File != "" {
 		merged.File, merged.baseDir = override.File, override.baseDir
+	}
+	if override.RuntimeProfile != "" {
+		merged.RuntimeProfile = override.RuntimeProfile
 	}
 	return merged
 }
@@ -100,12 +109,13 @@ func (s *PromptSpec) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	var file struct {
-		File string `json:"file"`
+		File           string `json:"file"`
+		RuntimeProfile string `json:"runtimeProfile"`
 	}
 	if err := json.Unmarshal(trimmed, &file); err != nil {
 		return err
 	}
-	*s = PromptSpec{Spec: spec, File: file.File}
+	*s = PromptSpec{Spec: spec, File: file.File, RuntimeProfile: file.RuntimeProfile}
 	return nil
 }
 
@@ -127,12 +137,15 @@ func (s PromptSpec) MarshalJSON() ([]byte, error) {
 	if err := json.Unmarshal(raw, &flat); err != nil {
 		return nil, fmt.Errorf("flatten prompt spec: %w", err)
 	}
-	if s.File != "" {
-		file, err := json.Marshal(s.File)
-		if err != nil {
-			return nil, fmt.Errorf("marshal prompt file: %w", err)
+	for key, value := range map[string]string{"file": s.File, "runtimeProfile": s.RuntimeProfile} {
+		if value == "" {
+			continue
 		}
-		flat["file"] = file
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			return nil, fmt.Errorf("marshal prompt %s: %w", key, err)
+		}
+		flat[key] = encoded
 	}
 	return json.Marshal(flat)
 }
@@ -142,11 +155,9 @@ func (s *PromptSpec) adoptString(str string) error {
 	content := strings.TrimSpace(str)
 	switch {
 	case strings.HasPrefix(content, "{"):
-		var spec api.Spec
-		if err := json.Unmarshal([]byte(content), &spec); err != nil {
+		if err := DecodeJSON([]byte(content), s, DecodeOptions{Source: "inline prompt spec"}); err != nil {
 			return fmt.Errorf("decode inline prompt spec: %w", err)
 		}
-		*s = PromptSpec{Spec: spec}
 	case strings.HasPrefix(content, "---"):
 		doc, err := dotprompt.Parse(str)
 		if err != nil {
@@ -156,7 +167,7 @@ func (s *PromptSpec) adoptString(str string) error {
 		if spec.Prompt.User == "" {
 			spec.Prompt.User = doc.Body
 		}
-		*s = PromptSpec{Spec: spec}
+		*s = PromptSpec{Spec: spec, RuntimeProfile: doc.RuntimeProfile}
 	default:
 		*s = PromptSpec{Spec: api.Spec{Prompt: api.Prompt{User: str}}}
 	}
@@ -169,9 +180,15 @@ func (s *PromptSpec) adoptString(str string) error {
 // or default) is rendered with data — so a default that templates its frontmatter
 // (e.g. a maxItems constraint) resolves too. The result is validated.
 func (s PromptSpec) Resolve(base api.Spec, defaultPrompt string, data map[string]any, dir string) (api.Spec, error) {
+	if s.RuntimeProfile != "" {
+		return api.Spec{}, fmt.Errorf("runtime profiles require TODO lifecycle resolution")
+	}
 	defaultSpec, err := RenderPromptSpec(defaultPrompt, data, PromptSpecOptions{})
 	if err != nil {
 		return api.Spec{}, fmt.Errorf("render default prompt: %w", err)
+	}
+	if defaultSpec.RuntimeProfile != "" {
+		return api.Spec{}, fmt.Errorf("runtime profiles require TODO lifecycle resolution")
 	}
 
 	opSpec := s.Spec
@@ -185,16 +202,22 @@ func (s PromptSpec) Resolve(base api.Spec, defaultPrompt string, data map[string
 		if err != nil {
 			return api.Spec{}, fmt.Errorf("render prompt override file: %w", err)
 		}
-		opSpec = fileSpec.Merge(s.Spec) // inline spec fields win over the file
+		if fileSpec.RuntimeProfile != "" {
+			return api.Spec{}, fmt.Errorf("runtime profiles require TODO lifecycle resolution")
+		}
+		opSpec = fileSpec.Spec.Merge(s.Spec) // inline spec fields win over the file
 	case strings.TrimSpace(s.Spec.Prompt.User) != "":
 		rendered, err := RenderPromptSpec(s.Spec.Prompt.User, data, PromptSpecOptions{})
 		if err != nil {
 			return api.Spec{}, fmt.Errorf("render inline prompt: %w", err)
 		}
-		opSpec.Prompt.User = rendered.Prompt.User
+		if rendered.RuntimeProfile != "" {
+			return api.Spec{}, fmt.Errorf("runtime profiles require TODO lifecycle resolution")
+		}
+		opSpec.Prompt.User = rendered.Spec.Prompt.User
 	}
 
-	resolved := base.Merge(defaultSpec).Merge(opSpec)
+	resolved := base.Merge(defaultSpec.Spec).Merge(opSpec)
 	if err := resolved.Validate(); err != nil {
 		return api.Spec{}, fmt.Errorf("resolved prompt spec: %w", err)
 	}
@@ -304,25 +327,25 @@ type PromptSpecOptions struct {
 // Exported for call sites that layer frontmatter one source at a time — Resolve
 // merges all three internally, which loses the per-layer contribution a
 // provenance trace needs.
-func RenderPromptSpec(source string, data map[string]any, opts PromptSpecOptions) (api.Spec, error) {
+func RenderPromptSpec(source string, data map[string]any, opts PromptSpecOptions) (PromptSpec, error) {
 	if strings.TrimSpace(source) == "" {
-		return api.Spec{}, nil
+		return PromptSpec{}, nil
 	}
-	req, cfg, err := dotprompt.Load(source).Render(data, nil)
+	template := dotprompt.Load(source)
+	doc, err := template.Document(data)
 	if err != nil {
-		return api.Spec{}, err
+		return PromptSpec{}, err
+	}
+	req, cfg, err := template.Render(data, nil)
+	if err != nil {
+		return PromptSpec{}, err
 	}
 	spec := api.Spec(req)
 	if spec.Name == "" {
 		spec.Model = cfg.Model
 	}
-	// Frontmatter that templates itself, or that mixes in the dotprompt dialect,
-	// cannot be read before rendering — it keeps the resolved model, and is the
-	// one layer that still contributes a mode nobody wrote.
 	if opts.Declared {
-		if doc, perr := dotprompt.Parse(source); perr == nil {
-			spec.Model = doc.Spec.Model
-		}
+		spec.Model = doc.Spec.Model
 	}
-	return spec, nil
+	return PromptSpec{Spec: spec, RuntimeProfile: doc.RuntimeProfile}, nil
 }

@@ -15,8 +15,8 @@ export type TodoRunAction = "run" | "plan" | "triage";
 export const TODO_RUN_ACTIONS: readonly TodoRunAction[] = ["run", "plan", "triage"] as const;
 
 type RunChoiceState = {
-  last: Partial<Record<TodoRunAction, TodoRunOptions>>;
-  recentAdvanced: Partial<Record<TodoRunAction, TodoRunOptions[]>>;
+  last: Partial<Record<string, TodoRunOptions>>;
+  recentAdvanced: Partial<Record<string, TodoRunOptions[]>>;
 };
 
 // v3: POST /api/todos/run now decodes strictly and rejects runMode/driver/
@@ -33,24 +33,14 @@ function cloneRunOptions(options: TodoRunOptions): TodoRunOptions {
   return JSON.parse(JSON.stringify(options)) as TodoRunOptions;
 }
 
-export function normalizeRunOptions(action: TodoRunAction, options: TodoRunOptions): TodoRunOptions {
+export function normalizeRunOptions(action: string, options: TodoRunOptions): TodoRunOptions {
+  if (!action.trim()) throw new Error('A lifecycle step is required');
   const next = cloneRunOptions(options);
-  if (action === "triage") {
-    // The prompt name is the whole request: triage declares its own behaviour
-    // class, so asserting a mode alongside it would be rejected as contradictory.
-    next.prompt = "triage";
-    delete next.runMode;
-    delete next.plan;
-    return next;
-  }
+  next.step = action;
+  delete next.driver;
   delete next.prompt;
-  if (action === "plan") {
-    next.runMode = "plan";
-    next.plan = true;
-  } else {
-    next.runMode = "run";
-    delete next.plan;
-  }
+  delete next.runMode;
+  delete next.plan;
   return next;
 }
 
@@ -68,10 +58,11 @@ export function readRunChoiceState(): RunChoiceState {
     const state = emptyRunChoiceState();
     const last = parsed.last ?? {};
     const recent = parsed.recentAdvanced ?? {};
-    for (const action of TODO_RUN_ACTIONS) {
+    for (const action of new Set([...Object.keys(last), ...Object.keys(recent)])) {
       const lastOptions = coerceRunOptions(last[action]);
       if (lastOptions) state.last[action] = normalizeRunOptions(action, lastOptions);
-      const recentOptions = Array.isArray(recent[action]) ? recent[action] : [];
+      const recentOptions = recent[action];
+      if (!Array.isArray(recentOptions)) continue;
       state.recentAdvanced[action] = recentOptions
         .map(coerceRunOptions)
         .filter((item): item is TodoRunOptions => !!item)
@@ -108,7 +99,8 @@ export function runOptionsKey(options: TodoRunOptions): string {
   return JSON.stringify(sortForKey(options));
 }
 
-export function actionFromRunOptions(options: TodoRunOptions): TodoRunAction {
+export function actionFromRunOptions(options: TodoRunOptions): string {
+  if (options.step) return options.step;
   if (options.prompt === "triage") return "triage";
   return options.plan || options.runMode === "plan" ? "plan" : "run";
 }

@@ -38,6 +38,7 @@ type RunOptions struct {
 	Verbose        bool
 	NoCache        bool
 	Spec           *api.Spec
+	ResolveSpec    func(context.Context) (api.Spec, error) `json:"-" yaml:"-"`
 	Evaluator      *CELEvaluator
 	ExtraArgs      map[string]interface{}
 	ExecutablePath string // Path to the current executable

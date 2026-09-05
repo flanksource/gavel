@@ -7,7 +7,6 @@ import (
 
 	"github.com/flanksource/repomap"
 	"github.com/ghodss/yaml"
-	yamlv3 "gopkg.in/yaml.v3"
 )
 
 type GavelConfigSource struct {
@@ -132,16 +131,21 @@ func loadSingleGavelConfig(path string) (GavelConfig, string, error) {
 	if err != nil {
 		return GavelConfig{}, "", err
 	}
-	var doc yamlv3.Node
-	if err := yamlv3.Unmarshal(data, &doc); err != nil {
+	document, err := decodeYAMLDocument(data)
+	if err != nil {
 		return GavelConfig{}, "", fmt.Errorf("parse %s: %w", path, err)
 	}
-	if err := checkRemovedKeys(path, &doc); err != nil {
-		return GavelConfig{}, "", err
+	var value any
+	if err := document.Decode(&value); err != nil {
+		return GavelConfig{}, "", fmt.Errorf("parse %s: %w", path, err)
+	}
+	encoded, err := yaml.YAMLToJSON(data)
+	if err != nil {
+		return GavelConfig{}, "", fmt.Errorf("parse %s: %w", path, err)
 	}
 	var gc GavelConfig
-	if err := yaml.Unmarshal(data, &gc); err != nil {
-		return GavelConfig{}, "", fmt.Errorf("parse %s: %w", path, err)
+	if err := DecodeJSON(encoded, &gc, DecodeOptions{Source: path}); err != nil {
+		return GavelConfig{}, "", err
 	}
 	if err := gc.Todos.Validate(); err != nil {
 		return GavelConfig{}, "", fmt.Errorf("%s: %w", path, err)

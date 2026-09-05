@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 
+	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/githubpush"
@@ -189,19 +190,44 @@ var _ = Describe("todo GitHub push API", func() {
 	})
 
 	It("rejects a malformed base URL before touching GitHub", func() {
+		api := &stubGitHubAPI{}
+		api.start(http.StatusCreated, `{"number":11,"html_url":"https://github.com/acme/api/issues/11"}`)
 		recorder := postTodoGitHubPush(todoGitHubPushPayload{Ref: todo.ID, Dir: dir, BaseURL: "gavel.example.com"})
 
 		Expect(recorder.Code).To(Equal(http.StatusBadRequest))
 		Expect(recorder.Body.String()).To(ContainSubstring("absolute http(s) origin"))
+		Expect(api.method).To(BeEmpty())
 	})
 
-	It("rejects a body with an unrecognized field", func() {
+	It("warns about an unknown field and publishes through the declared workspace", func() {
+		initGitRepoWithOrigin(dir, "acme/api")
+		api := &stubGitHubAPI{}
+		api.start(http.StatusCreated, `{"number":11,"html_url":"https://github.com/acme/api/issues/11"}`)
+		var warnings bytes.Buffer
+		logger.SetOutput(&warnings)
+		DeferCleanup(func() { logger.SetOutput(nil) })
 		body := []byte(`{"ref":` + strconv.Quote(todo.ID) + `,"dir":` + strconv.Quote(dir) + `,"bogus":true}`)
 		request := httptest.NewRequest(http.MethodPost, "/api/todos/github", bytes.NewReader(body))
 		recorder := httptest.NewRecorder()
 		(&Server{ghOpts: github.Options{Repo: "dashboard/prs"}}).Handler().ServeHTTP(recorder, request)
 
-		Expect(recorder.Code).To(Equal(http.StatusBadRequest))
-		Expect(recorder.Body.String()).To(ContainSubstring("bogus"))
+		Expect(recorder.Code).To(Equal(http.StatusOK), recorder.Body.String())
+		Expect(warnings.String()).To(ContainSubstring("POST /api/todos/github request body: unknown field bogus"))
+		Expect(api.method).To(Equal(http.MethodPost))
+		Expect(api.path).To(Equal("/repos/acme/api/issues"))
+		Expect(provider.aliases).To(ConsistOf(todos.TodoAlias{Alias: "acme/api#11", Kind: githubpush.AliasKind}))
 	})
+
+	DescribeTable("rejects malformed publish input before touching GitHub", func(suffix string) {
+		api := &stubGitHubAPI{}
+		api.start(http.StatusCreated, `{"number":11,"html_url":"https://github.com/acme/api/issues/11"}`)
+		body := []byte(`{"ref":` + strconv.Quote(todo.ID) + `,"dir":` + strconv.Quote(dir) + suffix)
+		request := httptest.NewRequest(http.MethodPost, "/api/todos/github", bytes.NewReader(body))
+		recorder := httptest.NewRecorder()
+		(&Server{}).Handler().ServeHTTP(recorder, request)
+		Expect(recorder.Code).To(Equal(http.StatusBadRequest), recorder.Body.String())
+		Expect(recorder.Body.String()).To(ContainSubstring("invalid request body"))
+		Expect(api.method).To(BeEmpty())
+		Expect(provider.aliases).To(BeEmpty())
+	}, Entry("incomplete JSON", `,"force":`), Entry("known field type", `,"force":"yes"}`))
 })

@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 )
 
 type todoRunContextResponse struct {
+	RuntimeProfiles []todoRunRuntimeProfileOption `json:"runtimeProfiles"`
 	// Modes is one row per (provider, mode) Captain can actually run, decorated
 	// with that runtime's models, auth state and binary. Runtimes below is
 	// Captain's own family catalog, which the display projection consumes.
@@ -71,8 +73,9 @@ type todoRunStepOption struct {
 
 // todoRunPromptDefault is one step's resolved runtime.
 type todoRunPromptDefault struct {
-	Mode  string `json:"mode,omitempty"`
-	Model string `json:"model,omitempty"`
+	Mode           string `json:"mode,omitempty"`
+	Model          string `json:"model,omitempty"`
+	RuntimeProfile string `json:"runtimeProfile,omitempty"`
 }
 
 type todoRunModeOption struct {
@@ -113,7 +116,7 @@ func (s *Server) handleTodoRunContext(w http.ResponseWriter, r *http.Request) {
 	// .gavel.yaml layers, so the dialog reflects the project the operator is
 	// looking at rather than the process's own directory. An unknown dir resolves
 	// against the cwd, matching how the CLI reads configuration.
-	context, err := todoRunContext(strings.TrimSpace(r.URL.Query().Get("dir")))
+	context, err := todoRunContext(r.Context(), strings.TrimSpace(r.URL.Query().Get("dir")))
 	if err != nil {
 		writeTodoError(w, http.StatusServiceUnavailable, fmt.Errorf("load run providers from Captain: %w", err))
 		return
@@ -121,7 +124,7 @@ func (s *Server) handleTodoRunContext(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(context) //nolint:errcheck
 }
 
-func todoRunContext(workDir string) (todoRunContextResponse, error) {
+func todoRunContext(ctx context.Context, workDir string) (todoRunContextResponse, error) {
 	who, err := todoRunWhoami()
 	if err != nil {
 		return todoRunContextResponse{}, err
@@ -142,12 +145,20 @@ func todoRunContext(workDir string) (todoRunContextResponse, error) {
 	if len(modes) == 0 {
 		return todoRunContextResponse{}, fmt.Errorf("captain returned no supported TODO run providers")
 	}
-	host, err := lifecycle.NewHost(nil, workDir, lifecycle.HostDashboard)
+	provider, err := openTodoProvider(ctx, workDir)
+	if err != nil {
+		return todoRunContextResponse{}, fmt.Errorf("open runtime profile provider: %w", err)
+	}
+	host, err := lifecycle.NewHost(provider, workDir, lifecycle.HostDashboard)
 	if err != nil {
 		return todoRunContextResponse{}, err
 	}
 	definition := host.Def.Definition()
-	promptDefaults, err := todoRunPromptDefaults(host, definition.Steps)
+	profiles, err := todoRunProfileOptions(ctx, host)
+	if err != nil {
+		return todoRunContextResponse{}, err
+	}
+	promptDefaults, err := todoRunPromptDefaults(ctx, host)
 	if err != nil {
 		return todoRunContextResponse{}, err
 	}
@@ -156,6 +167,7 @@ func todoRunContext(workDir string) (todoRunContextResponse, error) {
 		return todoRunContextResponse{}, err
 	}
 	return todoRunContextResponse{
+		RuntimeProfiles: profiles,
 		Modes:           modes,
 		Runtimes:        who.Runtimes,
 		Models:          models,
@@ -201,18 +213,19 @@ func stepLabel(name string) string {
 // A step that fails to resolve is reported rather than skipped: it would fail
 // the same way when run, and a silently absent default sends the operator back
 // to the account default — the exact substitution this exists to prevent.
-func todoRunPromptDefaults(host *lifecycle.Host, steps []lifecycle.Step) (map[string]todoRunPromptDefault, error) {
+func todoRunPromptDefaults(ctx context.Context, host *lifecycle.Host) (map[string]todoRunPromptDefault, error) {
+	steps := host.Def.Definition().Steps
 	defaults := make(map[string]todoRunPromptDefault, len(steps))
 	for _, step := range steps {
-		spec, err := host.StepDefaults(step)
+		spec, err := host.StepDefaults(ctx, step)
 		if err != nil {
 			return nil, fmt.Errorf("resolve the %s step's runtime: %w", step.Name, err)
 		}
-		mode, model, err := resolveTodoRunRuntime(string(spec.Mode), spec.Name)
+		mode, model, err := resolveTodoRunRuntime(string(spec.Spec.Mode), spec.Spec.Name)
 		if err != nil {
 			return nil, fmt.Errorf("resolve the %s step's runtime mode: %w", step.Name, err)
 		}
-		defaults[step.Name] = todoRunPromptDefault{Mode: mode, Model: model}
+		defaults[step.Name] = todoRunPromptDefault{Mode: mode, Model: model, RuntimeProfile: spec.RuntimeProfile}
 	}
 	return defaults, nil
 }

@@ -4,6 +4,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/gavel/ai"
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
@@ -30,10 +31,10 @@ var (
 	LintStepRunner func(fixture FixtureTest, opts RunOptions) FixtureResult
 )
 
-// FixtureAIConfig is the `ai:` front-matter block. Its presence marks a fixture
-// file as an AI verification step; the fields map onto ai.AgentConfig (resolved
-// in aistep.go to avoid coupling this package to the ai package).
+// FixtureAIConfig is the `ai:` front-matter block. Spec carries a complete grader
+// runtime; the flat model options remain explicit overrides for authored fixtures.
 type FixtureAIConfig struct {
+	Spec          *api.Spec     `yaml:"spec,omitempty" json:"spec,omitempty" description:"Complete Captain grader runtime; replaces runner defaults before flat AI overrides"`
 	Model         string        `yaml:"model,omitempty" json:"model,omitempty"`
 	Temperature   float64       `yaml:"temperature,omitempty" json:"temperature,omitempty"`
 	MaxTokens     int           `yaml:"maxTokens,omitempty" json:"maxTokens,omitempty"`
@@ -58,17 +59,18 @@ type FixtureAIConfig struct {
 // directly) — but no model and no budget: which model grades and how much it may
 // spend is resolved by the caller's chain, not defaulted here where an override
 // would have nothing to say it came from.
-// The model stays a string on the wire — that is the fixture file's format — but
-// it lands in a structured api.Model, so `model: agent:sol:high` now carries its
-// backend and effort through instead of being flattened to a name and re-guessed.
-// The selector is resolved by ai.NewProvider.
+// The flat model selector is resolved by ai.NewProvider.
 func (c *FixtureAIConfig) ToAgentConfig() ai.AgentConfig {
 	cfg := ai.AgentConfig{MaxConcurrent: 4}
 	if c == nil {
 		return cfg
 	}
+	if c.Spec != nil {
+		cfg.Model = c.Spec.Model
+		cfg.Budget = c.Spec.Budget
+	}
 	if c.Model != "" {
-		cfg.Model.Name = c.Model
+		cfg.Model = cfg.Model.Merge(api.Model{Name: c.Model})
 	}
 	if c.Temperature != 0 {
 		t := c.Temperature
@@ -83,8 +85,22 @@ func (c *FixtureAIConfig) ToAgentConfig() ai.AgentConfig {
 	if c.CacheTTL > 0 {
 		cfg.CacheTTL = c.CacheTTL
 	}
-	cfg.NoCache = c.NoCache
+	cfg.Model.NoCache = cfg.Model.NoCache || c.NoCache
+	cfg.NoCache = cfg.Model.NoCache
 	return cfg
+}
+
+// GraderSpec preserves runtime configuration while removing the conversation and
+// workflow being judged. The fixture supplies the new prompt and result schema.
+func GraderSpec(spec api.Spec) api.Spec {
+	spec = spec.WithoutSession()
+	spec.Workflow = nil
+	spec.Prompt.User = ""
+	spec.Prompt.Source = ""
+	spec.Prompt.Schema = nil
+	spec.Prompt.SchemaJSON = nil
+	spec.Prompt.Attachments = nil
+	return api.Spec{}.Merge(spec)
 }
 
 // FixtureVerifyConfig is the `verify:` front-matter block: the review scope

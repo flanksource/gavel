@@ -37,7 +37,7 @@ func DefaultAIConfig() api.Spec {
 func DefaultGavelConfig() GavelConfig {
 	return GavelConfig{
 		AI:    DefaultAIConfig(),
-		Todos: TodosConfig{Verify: api.Spec{Model: api.Model{Mode: DefaultVerifyMode}}},
+		Todos: TodosConfig{Verify: PromptSpec{Spec: api.Spec{Model: api.Model{Mode: DefaultVerifyMode}}}},
 	}
 }
 

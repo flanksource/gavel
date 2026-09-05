@@ -102,7 +102,7 @@ describe('TodoRunActionButton RuntimeBar', () => {
   it('selects and remembers family, mode, model, and effort before the primary action executes', async () => {
     const onRun = vi.fn();
     render(
-      <TodoRunActionButton action="run" onRun={onRun} onAdvanced={vi.fn()} />,
+      <TodoRunActionButton dir="/repo" action="run" onRun={onRun} onAdvanced={vi.fn()} />,
       { wrapper: queryTestWrapper() },
     );
 
@@ -122,11 +122,10 @@ describe('TodoRunActionButton RuntimeBar', () => {
     expect(within(menu).getByRole('slider', { name: 'Reasoning effort' }).getAttribute('aria-valuetext')).toBe('High');
 
     expect(onRun).not.toHaveBeenCalled();
-    await waitFor(() => expect(JSON.parse(localStorage.getItem('gavel.pr-ui.todoRunChoices.v2') ?? '{}')).toMatchObject({
+    await waitFor(() => expect(JSON.parse(localStorage.getItem('gavel.pr-ui.todoRunChoices.v3') ?? '{}')).toMatchObject({
       last: {
         run: {
-          driver: 'cli',
-          runMode: 'run',
+          step: 'run',
           spec: {
             mode: 'cli',
             model: 'claude-opus-4-8',
@@ -139,8 +138,7 @@ describe('TodoRunActionButton RuntimeBar', () => {
 
     fireEvent.click(primary);
     expect(onRun).toHaveBeenCalledWith(expect.objectContaining({
-      driver: 'cli',
-      runMode: 'run',
+      step: 'run',
       spec: expect.objectContaining({ mode: 'cli', model: 'claude-opus-4-8', effort: 'high' }),
     }));
   });
@@ -148,7 +146,7 @@ describe('TodoRunActionButton RuntimeBar', () => {
   it('disables runtime selection and preserves the Advanced entry point', async () => {
     const onAdvanced = vi.fn();
     const { rerender } = render(
-      <TodoRunActionButton action="plan" onRun={vi.fn()} onAdvanced={onAdvanced} />,
+      <TodoRunActionButton dir="/repo" action="plan" onRun={vi.fn()} onAdvanced={onAdvanced} />,
       { wrapper: queryTestWrapper() },
     );
     const advanced = await screen.findByRole('button', { name: 'Advanced plan options' });
@@ -156,7 +154,7 @@ describe('TodoRunActionButton RuntimeBar', () => {
     fireEvent.click(advanced);
     expect(onAdvanced).toHaveBeenCalledWith('plan');
 
-    rerender(<TodoRunActionButton action="plan" disabled onRun={vi.fn()} onAdvanced={onAdvanced} />);
+    rerender(<TodoRunActionButton dir="/repo" action="plan" disabled onRun={vi.fn()} onAdvanced={onAdvanced} />);
     const runtime = screen.getByRole('button', { name: /^Plan runtime:/ });
     expect((runtime.closest('fieldset') as HTMLFieldSetElement).disabled).toBe(true);
     expect((screen.getByRole('button', { name: 'Advanced plan options' }) as HTMLButtonElement).disabled).toBe(true);

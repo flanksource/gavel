@@ -67,6 +67,7 @@ function runRequestOptions(options: TodoRunOptions, action?: TodoRunAction): Tod
   const normalized = action ? normalizeRunOptions(action, options) : options;
   return {
     step: action ? requestStepFor(normalized) : undefined,
+    runtimeProfile: normalized.runtimeProfile,
     spec: normalized.spec,
     resume: normalized.resume,
     force: normalized.force,
@@ -176,12 +177,14 @@ export function usePlanActions(dir: string) {
 }
 
 export function PlanApproveButtons({
+  dir,
   busy,
   onApprove,
   onReject,
   onRequestChanges,
   size = 'sm',
 }: {
+  dir: string;
   busy?: boolean;
   onApprove: (run: boolean, options?: TodoRunOptions) => void;
   onReject?: () => void;
@@ -194,6 +197,7 @@ export function PlanApproveButtons({
   return (
     <div className="inline-flex flex-wrap items-center gap-1.5">
       <PromptRunButton
+        dir={dir}
         scope="approval"
         label="Approve & Run"
         title="Approve the plan and start the implementing run"
@@ -206,6 +210,7 @@ export function PlanApproveButtons({
         }}
       />
       <PromptRunAdvancedDialog
+        dir={dir}
         scope="approval"
         open={advancedOpen}
         initial={advancedOptions}
@@ -368,6 +373,7 @@ export function TodoReviewBanner({
             Plan ready for review
           </span>
           <PlanApproveButtons
+            dir={dir}
             busy={busy}
             onApprove={(run, options) => void onApprove(run, options)}
             onReject={() => void onReject()}

@@ -50,6 +50,8 @@ Line 1 names a step explicitly and pins the model (compact `mode:model:effort` f
 
 Gavel records session IDs on the todo so later runs can resume or focus the same work. A todo in `ask` stores the agent's blocking questions; answering resumes the prior session and applies the same outcome mapping.
 
+Use `--runtime-profile <name-or-id>` to select reusable Captain defaults for a step. See [Todo runtime profiles](/docs/todo-runtime-profiles) for repository profile files, selection and layer precedence, and retired settings.
+
 ## Result envelopes
 
 A step's prompt returns a structured envelope — `result`, `plan`, or `triage` — matching the step's declared `envelope`. A plain `result` envelope:

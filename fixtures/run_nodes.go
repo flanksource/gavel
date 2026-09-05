@@ -110,6 +110,16 @@ func dispatchNode(ctx context.Context, test FixtureTest, opts RunOptions) Fixtur
 		if AIStepRunner == nil {
 			return nodeError(test, "AI step runner not registered; import _ \"github.com/flanksource/gavel/fixtures/types\"")
 		}
+		if opts.ResolveSpec != nil && (test.AI == nil || test.AI.Spec == nil) {
+			if opts.Spec != nil {
+				return nodeError(test, "AI fixture cannot set both Spec and ResolveSpec")
+			}
+			spec, err := opts.ResolveSpec(ctx)
+			if err != nil {
+				return nodeError(test, fmt.Sprintf("resolve AI fixture runtime: %v", err))
+			}
+			opts.Spec = &spec
+		}
 		return AIStepRunner(test, opts)
 	}
 	if test.IsRunnerStep() {

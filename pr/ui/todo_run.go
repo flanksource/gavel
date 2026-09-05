@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -55,7 +54,8 @@ type todoRunPayload struct {
 	// Step names the lifecycle step to run — `run`, `plan`, `verify`, `triage`,
 	// or any step the project declares. Empty runs the step the lifecycle picks
 	// next for this todo.
-	Step string `json:"step,omitempty"`
+	Step           string `json:"step,omitempty"`
+	RuntimeProfile string `json:"runtimeProfile,omitempty"`
 	// Spec carries the model/mode/effort/prompt/budget/permissions/session knobs.
 	//
 	// It is a named field under its own `spec` key, not embedded. api.Spec
@@ -75,38 +75,6 @@ type todoRunPayload struct {
 	Force bool `json:"force,omitempty"`
 }
 
-// removedTodoRunFields are payload keys that named a run configuration which no
-// longer exists. They are rejected by name rather than by the decoder's generic
-// "unknown field" so the client is told what replaced them; dropping one
-// silently would run on the lifecycle's own choice while the dialog believed it
-// had chosen something.
-var removedTodoRunFields = []string{"runMode", "driver", "prompt", "mode", "agent", "plan"}
-
-// UnmarshalJSON is strict on purpose: an unknown key is a client that believes
-// it configured something this server never read.
-func (p *todoRunPayload) UnmarshalJSON(data []byte) error {
-	var keys map[string]json.RawMessage
-	if err := json.Unmarshal(data, &keys); err != nil {
-		return err
-	}
-	for _, field := range removedTodoRunFields {
-		if _, ok := keys[field]; ok {
-			return fmt.Errorf(
-				"invalid run configuration: %q is not supported; name the lifecycle step with \"step\" and send every run knob in \"spec\"",
-				field)
-		}
-	}
-	type wire todoRunPayload
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	var decoded wire
-	if err := decoder.Decode(&decoded); err != nil {
-		return err
-	}
-	*p = todoRunPayload(decoded)
-	return nil
-}
-
 type todoRunResponse struct {
 	Status string   `json:"status"`
 	Ref    string   `json:"ref"`
@@ -115,13 +83,12 @@ type todoRunResponse struct {
 	Dir    string   `json:"dir"`
 	// Step is the lifecycle step that ran and Reason why it was chosen — named by
 	// the client, or picked by the lifecycle's own predicates.
-	Step     string `json:"step"`
-	Reason   string `json:"reason,omitempty"`
-	Provider string `json:"provider,omitempty"`
-	Model    string `json:"model,omitempty"`
-	// RuntimeMode is the resolved mechanism (cmux, agent, cli, api). It is not
-	// keyed `mode`: that is a run-payload key this endpoint rejects on input,
-	// and a response must not hand a client a key it cannot send back.
+	Step           string `json:"step"`
+	Reason         string `json:"reason,omitempty"`
+	Provider       string `json:"provider,omitempty"`
+	Model          string `json:"model,omitempty"`
+	RuntimeProfile string `json:"runtimeProfile,omitempty"`
+	// RuntimeMode is the resolved mechanism (cmux, agent, cli, api).
 	RuntimeMode string  `json:"runtimeMode,omitempty"`
 	Effort      string  `json:"effort,omitempty"`
 	Resume      bool    `json:"resume,omitempty"`
@@ -134,14 +101,17 @@ type todoRunResponse struct {
 }
 
 type todoRunPreviewResponse struct {
-	Prompt      string `json:"prompt"`
-	SpecYAML    string `json:"specYaml"`
-	Step        string `json:"step"`
-	Reason      string `json:"reason,omitempty"`
-	Provider    string `json:"provider,omitempty"`
-	RuntimeMode string `json:"runtimeMode,omitempty"`
-	Effort      string `json:"effort,omitempty"`
-	Count       int    `json:"count"`
+	RuntimeProfile *todoRunProfilePreview `json:"runtimeProfile,omitempty"`
+	Trace          []api.SpecLayer        `json:"trace"`
+	Prompt         string                 `json:"prompt"`
+	SpecYAML       string                 `json:"specYaml"`
+	Step           string                 `json:"step"`
+	Reason         string                 `json:"reason,omitempty"`
+	Provider       string                 `json:"provider,omitempty"`
+	RuntimeMode    string                 `json:"runtimeMode,omitempty"`
+	Model          string                 `json:"model,omitempty"`
+	Effort         string                 `json:"effort,omitempty"`
+	Count          int                    `json:"count"`
 }
 
 // resolveTodoRunRequest decodes a run/preview payload and resolves its options,
@@ -150,8 +120,8 @@ type todoRunPreviewResponse struct {
 // to report when err is non-nil.
 func (s *Server) resolveTodoRunRequest(r *http.Request) (todos.Provider, todoSource, []*types.TODO, todoRunOptions, int, error) {
 	var payload todoRunPayload
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		return nil, todoSource{}, nil, todoRunOptions{}, http.StatusBadRequest, fmt.Errorf("invalid request body: %w", err)
+	if err := decodeTodoRequest(r, &payload); err != nil {
+		return nil, todoSource{}, nil, todoRunOptions{}, http.StatusBadRequest, err
 	}
 	refs := normalizeTodoRunRefs(payload, r)
 	return s.resolveTodoRunPayload(r.Context(), payload, refs, todoSourceFromRequest(r), requestOrigin(r))
@@ -304,7 +274,7 @@ func (s *Server) handleTodoRun(w http.ResponseWriter, r *http.Request) {
 // supplied by the lifecycle, and the dialog has to show what will actually run.
 func todoRunResponseFor(source todoSource, todoList []*types.TODO, opts todoRunOptions, prepared *run.Prepared) todoRunResponse {
 	spec := prepared.Resolution.Spec
-	return todoRunResponse{
+	response := todoRunResponse{
 		Ref:         todos.TODOReference(todoList[0]),
 		Refs:        todoRunRefs(todoList),
 		Count:       len(todoList),
@@ -321,6 +291,10 @@ func todoRunResponseFor(source todoSource, todoList []*types.TODO, opts todoRunO
 		MaxTurns:    spec.Budget.MaxTurns,
 		Commit:      specCommit(spec) && !specDryRun(spec),
 	}
+	if profile := prepared.Resolution.RuntimeProfile; profile != nil {
+		response.RuntimeProfile = profile.Profile.ID
+	}
+	return response
 }
 
 // handleTodoRunPreview renders the exact request a run would dispatch, without
@@ -346,14 +320,17 @@ func (s *Server) handleTodoRunPreview(w http.ResponseWriter, r *http.Request) {
 	}
 	spec := prepared.Resolution.Spec
 	json.NewEncoder(w).Encode(todoRunPreviewResponse{ //nolint:errcheck
-		Prompt:      prepared.Resolution.Prompt,
-		SpecYAML:    specYAML,
-		Step:        prepared.Step.Name,
-		Reason:      prepared.Reason,
-		Provider:    providerKey(spec.Model),
-		RuntimeMode: string(spec.Mode),
-		Effort:      string(spec.Effort),
-		Count:       len(todoList),
+		RuntimeProfile: todoRunProfilePreviewFor(prepared.Resolution.RuntimeProfile),
+		Trace:          prepared.Resolution.Trace,
+		Prompt:         prepared.Resolution.Prompt,
+		SpecYAML:       specYAML,
+		Step:           prepared.Step.Name,
+		Reason:         prepared.Reason,
+		Provider:       providerKey(spec.Model),
+		RuntimeMode:    string(spec.Mode),
+		Model:          spec.Name,
+		Effort:         string(spec.Effort),
+		Count:          len(todoList),
 	})
 }
 
@@ -420,12 +397,13 @@ func buildTodoRunOptions(payload todoRunPayload, prior []api.SpecLayer) (todoRun
 		return todoRunOptions{}, err
 	}
 	return todoRunOptions{
-		Step:       strings.TrimSpace(payload.Step),
-		Request:    spec,
-		Prior:      prior,
-		Resume:     payload.Resume,
-		Concurrent: payload.Force,
-		Host:       lifecycle.HostDashboard,
+		RuntimeProfile: strings.TrimSpace(payload.RuntimeProfile),
+		Step:           strings.TrimSpace(payload.Step),
+		Request:        spec,
+		Prior:          prior,
+		Resume:         payload.Resume,
+		Concurrent:     payload.Force,
+		Host:           lifecycle.HostDashboard,
 	}, nil
 }
 

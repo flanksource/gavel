@@ -156,13 +156,14 @@ var _ = Describe("Host", func() {
 			Expect(subject["labels"]).To(Equal([]string{}), "a declared list is never nil")
 		})
 
-		It("requires a grader model once the todo has acceptance criteria to grade", func() {
+		It("projects acceptance criteria without requiring a grader model", func() {
 			todo := hostTodo()
 			todo.AcceptanceCriteria = []types.AcceptanceCriterion{{Text: "the chart renders"}}
 
-			_, err := host.Subject(ctx, todo)
+			subject, err := host.Subject(ctx, todo)
 
-			Expect(err).To(MatchError(ContainSubstring("acceptance-criteria grader: model: model name is required")))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(subject["verification"]).To(HaveKeyWithValue("exists", true))
 		})
 
 		It("refuses a provider that cannot report plan state", func() {
@@ -207,7 +208,7 @@ var _ = Describe("Host", func() {
 			})
 			Expect(err).NotTo(HaveOccurred())
 
-			got, err := host.VerifyDocument(todo)
+			got, err := host.VerifyDocument(ctx, todo)
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(got).To(Equal(want))

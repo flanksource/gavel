@@ -12,7 +12,7 @@ import (
 
 func TestTodosConfigValidateRejectsBuiltinStepUnderSteps(t *testing.T) {
 	for _, name := range []string{"run", "plan", "triage", "verify"} {
-		cfg := TodosConfig{Steps: map[string]api.Spec{name: {Budget: api.Budget{MaxTurns: 1}}}}
+		cfg := TodosConfig{Steps: map[string]PromptSpec{name: {Spec: api.Spec{Budget: api.Budget{MaxTurns: 1}}}}}
 		err := cfg.Validate()
 		require.Errorf(t, err, "todos.steps.%s must be rejected", name)
 		assert.Contains(t, err.Error(), "todos.steps."+name)
@@ -21,12 +21,12 @@ func TestTodosConfigValidateRejectsBuiltinStepUnderSteps(t *testing.T) {
 }
 
 func TestTodosConfigValidateAcceptsACustomStep(t *testing.T) {
-	cfg := TodosConfig{Steps: map[string]api.Spec{"handoff": {Budget: api.Budget{MaxTurns: 1}}}}
+	cfg := TodosConfig{Steps: map[string]PromptSpec{"handoff": {Spec: api.Spec{Budget: api.Budget{MaxTurns: 1}}}}}
 	require.NoError(t, cfg.Validate())
 }
 
 func TestTodosConfigValidateRejectsAStepNameThatIsNotAnIdentifier(t *testing.T) {
-	err := TodosConfig{Steps: map[string]api.Spec{"Hand Off": {}}}.Validate()
+	err := TodosConfig{Steps: map[string]PromptSpec{"Hand Off": {}}}.Validate()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `"Hand Off"`)
 }
@@ -72,6 +72,6 @@ func TestLoadGavelConfigReadsACustomStepSpec(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Contains(t, cfg.Todos.Steps, "handoff")
-	assert.Equal(t, "sonnet", cfg.Todos.Steps["handoff"].Model.Name)
-	assert.Equal(t, 3, cfg.Todos.Steps["handoff"].Budget.MaxTurns)
+	assert.Equal(t, "sonnet", cfg.Todos.Steps["handoff"].Spec.Model.Name)
+	assert.Equal(t, 3, cfg.Todos.Steps["handoff"].Spec.Budget.MaxTurns)
 }

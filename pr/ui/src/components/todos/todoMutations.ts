@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query';
-import type { TodoItem, TodoListResponse, TodoPriority, TodoRunResponse, TodoStatus } from '../../types';
+import type { TodoItem, TodoListResponse, TodoRunResponse } from '../../types';
 import { todoQuery } from './format';
 import { setTodoQueryData, todoQueryKeys } from './todoQueries';
 import { workspaceTodoBatchKeys } from './workspaceTodoQueries';
@@ -195,12 +195,12 @@ export function useTodoVerificationRun(dir: string, ref: string) {
   const client = useQueryClient();
   return useMutation({
     mutationKey: ['todos', 'verification', 'run', { dir: dir.trim(), ref }],
-    mutationFn: ({ ref: target, spec, resume, force }: { ref: string; spec: unknown; resume?: boolean; force?: boolean }) => todoMutationJSON<TodoRunResponse>(
+    mutationFn: ({ ref: target, spec, runtimeProfile, resume, force }: { ref: string; spec: unknown; runtimeProfile?: string; resume?: boolean; force?: boolean }) => todoMutationJSON<TodoRunResponse>(
       `/api/todos/run?${todoQuery(dir)}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ref: target, step: 'verify', spec, resume, force }),
+        body: JSON.stringify({ ref: target, step: 'verify', runtimeProfile, spec, resume, force }),
       },
       'Verification run failed',
     ),

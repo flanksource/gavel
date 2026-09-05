@@ -71,11 +71,12 @@ func registerTodoEntity() error {
 // approvals exactly like the single run started from the same page.
 func resolveBulkRunOptions(_ context.Context, req bulk.RunRequest) (run.Options, error) {
 	return buildTodoRunOptions(todoRunPayload{
-		Dir:    req.Dir,
-		Ref:    todos.TODOReference(req.Todo),
-		Step:   req.Step,
-		Spec:   req.Flags.Spec(),
-		Resume: req.Flags.Resume,
+		RuntimeProfile: req.Flags.RuntimeProfile,
+		Dir:            req.Dir,
+		Ref:            todos.TODOReference(req.Todo),
+		Step:           req.Step,
+		Spec:           req.Flags.Spec(),
+		Resume:         req.Flags.Resume,
 	}, nil)
 }
 

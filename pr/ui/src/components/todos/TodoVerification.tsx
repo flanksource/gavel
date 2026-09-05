@@ -110,6 +110,7 @@ export function TodoVerification({
       if (!current) return;
       await runMutation.mutateAsync({
         ref: current.ref,
+        runtimeProfile: options.runtimeProfile,
         spec: verificationSpec(runSpec(options)),
         resume: options.resume,
         force: options.force,
@@ -158,6 +159,7 @@ export function TodoVerification({
             Save
           </Button>
           <PromptRunButton
+            dir={dir}
             scope="verification"
             label="Run verification"
             title="Run the persisted verification fixture"
@@ -171,6 +173,7 @@ export function TodoVerification({
           />
         </div>
         <PromptRunAdvancedDialog
+          dir={dir}
           scope="verification"
           open={advancedOpen}
           initial={advancedOptions}

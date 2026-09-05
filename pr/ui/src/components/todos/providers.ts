@@ -75,7 +75,15 @@ export interface RunContext {
   // resolution the run performs. Seeding a step's dialog from defaultMode
   // instead sends an account-wide default as if the operator had chosen it,
   // which outranks the frontmatter that step's prompt pins.
-  promptDefaults?: Record<string, { mode?: string; model?: string }>;
+  promptDefaults?: Record<string, { mode?: string; model?: string; runtimeProfile?: string }>;
+  runtimeProfiles?: Array<{
+    id: string;
+    name: string;
+    description?: string;
+    model?: string;
+    presets?: string[];
+    source?: { kind: string; id: string; label: string; root?: string; writable: boolean; implicit?: boolean; records: string[] };
+  }>;
   // lifecycle is the run dialog's step catalog — every step the operator can
   // pick from, in the order the pipeline runs them.
   lifecycle: { steps: RunContextLifecycleStep[] };

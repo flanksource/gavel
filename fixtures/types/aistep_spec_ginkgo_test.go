@@ -1,6 +1,8 @@
 package types
 
 import (
+	"time"
+
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/gavel/fixtures"
 	. "github.com/onsi/ginkgo/v2"
@@ -19,9 +21,39 @@ func checklistFixture(ai *fixtures.FixtureAIConfig) fixtures.FixtureTest {
 }
 
 var _ = Describe("AI fixture runtime spec", func() {
-	// The caller's spec says how to run; the fixture — the most specific
-	// statement about how it wants to be graded — overrides what it names. A todo
-	// run's generated fixture names nothing, so the resolved verify spec stands.
+	It("applies flat fixture options over a canonical runtime snapshot", func() {
+		canonical := api.Spec{
+			Model: api.Model{Name: "claude-sonnet-4-6", Mode: api.ModeCLI, Effort: api.EffortHigh,
+				Provider: api.Anthropic, Fallbacks: []api.Model{{Name: "gpt-5", Mode: api.ModeAPI}}},
+			Budget:      api.Budget{Cost: 3, MaxTokens: 1000, Timeout: "2m"},
+			Permissions: api.Permissions{Mode: api.PermissionDontAsk},
+			Workflow:    &api.Workflow{Verify: &api.Verify{Fixture: "nested"}, Commits: []api.Commit{{On: "run"}}},
+			SessionID:   "prior", ToolApproval: &api.ToolApprovalResume{}, Messages: []api.Message{{Role: api.RoleUser}},
+		}
+		fixture := checklistFixture(&fixtures.FixtureAIConfig{
+			Spec: &canonical, Model: "api:gpt-5:low", Temperature: 0.4, MaxTokens: 500,
+			MaxConcurrent: 2, CacheTTL: time.Minute, NoCache: true,
+		})
+		var schema checklistResponse
+		resolved, config := resolveAIStepSpec(fixture, fixtures.RunOptions{}, &schema)
+		model, err := resolved.Model.Expand()
+		Expect(err).NotTo(HaveOccurred())
+		temperature := 0.4
+		Expect(model).To(Equal(api.Model{Name: "gpt-5", Mode: api.ModeAPI, Effort: api.EffortLow,
+			Temperature: &temperature, NoCache: true, Fallbacks: canonical.Fallbacks}))
+		Expect(resolved.Budget).To(Equal(api.Budget{Cost: 3, MaxTokens: 500, Timeout: "2m"}))
+		Expect(resolved.Permissions).To(Equal(canonical.Permissions))
+		Expect(resolved.SessionID).To(BeEmpty())
+		Expect(resolved.ToolApproval).To(BeNil())
+		Expect(resolved.Messages).To(BeEmpty())
+		Expect(resolved.Workflow).To(BeNil())
+		Expect(config.NoCache).To(BeTrue())
+		Expect(config.MaxConcurrent).To(Equal(2))
+		Expect(config.CacheTTL).To(Equal(time.Minute))
+		Expect(canonical.Model.Provider).To(BeIdenticalTo(api.Anthropic))
+		Expect(canonical.Workflow.Verify).NotTo(BeNil())
+	})
+
 	It("lets the fixture's ai: front matter override the caller's spec", func() {
 		override := api.Spec{
 			Model:  api.Model{Name: "caller-model"},

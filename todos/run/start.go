@@ -58,13 +58,14 @@ func defaultResolve(ctx context.Context, req Request) (*Prepared, error) {
 // for a resolution, and the run's context for a dispatch.
 func runOptions(req Request, exec *todos.ExecutorContext) lifecycle.RunOptions {
 	return lifecycle.RunOptions{
-		Exec:       exec,
-		Request:    req.Options.Request,
-		Prior:      req.Options.Prior,
-		Resume:     req.Options.Resume,
-		Message:    req.Options.Message,
-		Concurrent: req.Options.Concurrent,
-		Broker:     req.Broker,
+		RuntimeProfile: req.Options.RuntimeProfile,
+		Exec:           exec,
+		Request:        req.Options.Request,
+		Prior:          req.Options.Prior,
+		Resume:         req.Options.Resume,
+		Message:        req.Options.Message,
+		Concurrent:     req.Options.Concurrent,
+		Broker:         req.Broker,
 	}
 }
 

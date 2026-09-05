@@ -62,7 +62,8 @@ type Verifier struct {
 	// that survives the external-runner contract. Callers that drive the verifier
 	// directly (`gavel todos check`, `gavel fixtures run`) set it from the
 	// resolved verification chain.
-	Spec *api.Spec
+	Spec        *api.Spec
+	ResolveSpec func(context.Context) (api.Spec, error) `json:"-" yaml:"-"`
 	// Timeout is the confinement bound the caller applies to the whole document.
 	// Zero means the caller's context is the only bound.
 	Timeout time.Duration
@@ -114,7 +115,7 @@ func (v *Verifier) Verify(ctx context.Context, cwd string, changed []string) (ca
 	}
 
 	results, snapshot, runErr := fixtures.RunNodes(v.progressContext(ctx), tree.Children,
-		fixtures.RunOptions{WorkDir: cwd, Spec: v.Spec, Changed: changed})
+		fixtures.RunOptions{WorkDir: cwd, Spec: v.Spec, ResolveSpec: v.ResolveSpec, Changed: changed})
 	if runErr != nil {
 		// The walk itself could not finish, so some declared step never ran. That
 		// is a scheduling failure, and Report says so from the snapshot — the

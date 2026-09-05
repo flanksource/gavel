@@ -269,8 +269,9 @@ export function PlanReviewBar({ review, todos }: { review: ReviewMode; todos: Wo
         <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground" title={current?.title}>
           {current?.title}
         </span>
-        {status === 'review' && (
+        {status === 'review' && sel && (
           <PlanApproveButtons
+            dir={sel.dir}
             busy={busy}
             onApprove={(run, options) => void onApprove(run, options)}
             onReject={() => void onReject()}

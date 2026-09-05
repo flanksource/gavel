@@ -19,7 +19,7 @@ func TestRenderedSpecPersistsTheExecutedRuntime(t *testing.T) {
 		Permissions: api.Permissions{Mode: api.PermissionPlan},
 	}
 
-	rendered, err := renderedSpec(spec, fixture)
+	rendered, err := renderedSpec(renderedSpecOptions{Spec: spec, Fixture: fixture})
 	require.NoError(t, err)
 
 	assert.Equal(t, "claude-sonnet-5", rendered["model"])
@@ -37,14 +37,14 @@ func TestRenderedSpecPersistsTheExecutedRuntime(t *testing.T) {
 func TestRenderedSpecStampsTheIssueFixtureOntoTheWorkflow(t *testing.T) {
 	const fixture = "```bash\necho ok\n```"
 
-	rendered, err := renderedSpec(api.Spec{Workflow: &api.Workflow{Verify: &api.Verify{MaxIterations: 3}}}, fixture)
+	rendered, err := renderedSpec(renderedSpecOptions{Spec: api.Spec{Workflow: &api.Workflow{Verify: &api.Verify{MaxIterations: 3}}}, Fixture: fixture})
 	require.NoError(t, err)
 
 	verify := rendered["workflow"].(map[string]any)["verify"].(map[string]any)
 	assert.Equal(t, fixture, verify["fixture"])
 	assert.Equal(t, float64(3), verify["maxIterations"], "stamping the fixture must not erase the run's verify settings")
 
-	bare, err := renderedSpec(api.Spec{}, "   ")
+	bare, err := renderedSpec(renderedSpecOptions{Fixture: "   "})
 	require.NoError(t, err)
 	assert.NotContains(t, bare, "workflow", "an issue with no fixture declares no workflow verification")
 }
@@ -57,7 +57,7 @@ func TestRenderedSpecKeepsAFixtureTheDispatchedSpecDeclares(t *testing.T) {
 	const dispatched = "```bash\necho dispatched\n```"
 	spec := api.Spec{Workflow: &api.Workflow{Verify: &api.Verify{Fixture: dispatched, MaxIterations: 2}}}
 
-	rendered, err := renderedSpec(spec, "```bash\necho issue\n```")
+	rendered, err := renderedSpec(renderedSpecOptions{Spec: spec, Fixture: "```bash\necho issue\n```"})
 	require.NoError(t, err)
 
 	verify := rendered["workflow"].(map[string]any)["verify"].(map[string]any)
@@ -71,7 +71,7 @@ func TestRenderedSpecDoesNotMutateTheDispatchedSpec(t *testing.T) {
 	workflow := &api.Workflow{Verify: &api.Verify{MaxIterations: 2}}
 	spec := api.Spec{Workflow: workflow}
 
-	_, err := renderedSpec(spec, "```bash\ntrue\n```")
+	_, err := renderedSpec(renderedSpecOptions{Spec: spec, Fixture: "```bash\ntrue\n```"})
 	require.NoError(t, err)
 
 	assert.Empty(t, workflow.Verify.Fixture)
@@ -83,7 +83,7 @@ func TestRenderedSpecDoesNotMutateTheDispatchedSpec(t *testing.T) {
 func TestRenderedSpecCarriesThePreparedTreeNotTheCheckoutRequest(t *testing.T) {
 	prepared := api.Spec{Setup: &shell.Setup{Cwd: "/work/.worktrees/todo-1"}}
 
-	rendered, err := renderedSpec(prepared, "")
+	rendered, err := renderedSpec(renderedSpecOptions{Spec: prepared})
 	require.NoError(t, err)
 
 	setup := rendered["setup"].(map[string]any)

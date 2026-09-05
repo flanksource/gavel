@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/flanksource/captain/pkg/api"
+	"github.com/flanksource/captain/pkg/runtimeprofiles"
 	"github.com/flanksource/gavel/todos/types"
 )
 
@@ -16,7 +17,8 @@ import (
 // read one answer. A preview that resolved separately from the run it previews
 // is a preview of a different run.
 type Resolution struct {
-	Step Step
+	RuntimeProfile *runtimeprofiles.Resolution
+	Step           Step
 	// Class is the behaviour class the step runs as: what the commit and verify
 	// invariants key on.
 	Class types.RunMode
@@ -63,14 +65,15 @@ func (h *Host) Resolve(ctx context.Context, todo *types.TODO, step Step, opts Ru
 		return nil, err
 	}
 	return &Resolution{
-		Step:     step,
-		Class:    prepared.class,
-		Prompt:   prepared.request.Prompt.User,
-		Spec:     prepared.request,
-		Timeout:  prepared.timeout,
-		WorkDir:  prepared.workDir,
-		Trace:    prepared.trace,
-		lc:       lc,
-		prepared: prepared,
+		RuntimeProfile: prepared.runtimeProfile,
+		Step:           step,
+		Class:          prepared.class,
+		Prompt:         prepared.request.Prompt.User,
+		Spec:           prepared.request,
+		Timeout:        prepared.timeout,
+		WorkDir:        prepared.workDir,
+		Trace:          prepared.trace,
+		lc:             lc,
+		prepared:       prepared,
 	}, nil
 }

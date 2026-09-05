@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/flanksource/captain/pkg/api"
+	"github.com/flanksource/captain/pkg/runtimeprofiles"
 	"github.com/flanksource/gavel/todos"
 	todoprompt "github.com/flanksource/gavel/todos/prompt"
 	"github.com/flanksource/gavel/todos/types"
@@ -23,6 +24,7 @@ type Host struct {
 	Config   verify.GavelConfig
 	WorkDir  string
 	Kind     HostKind
+	Catalog  runtimeprofiles.CatalogFactory
 }
 
 // NewHost loads the project's configuration and lifecycle for a work dir.
@@ -53,7 +55,9 @@ func (h *Host) Subject(ctx context.Context, todo *types.TODO) (map[string]any, e
 	if err != nil {
 		return nil, err
 	}
-	dod, err := h.VerifyDocument(todo)
+	dod, err := todos.BuildDefinitionOfDone(todos.DefinitionOfDoneOptions{
+		WorkDir: h.WorkDir, Todos: []*types.TODO{todo},
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -160,8 +164,8 @@ func (h *Host) Next(ctx context.Context, todo *types.TODO) (Step, bool, error) {
 // runs it is the lifecycle's decision. Forcing the configured checks on for one
 // run is therefore not a request-level toggle here; `.gavel.yaml checks.enabled`
 // or the todo's own `checks:` front matter is what enables them.
-func (h *Host) VerifyDocument(todo *types.TODO) (todos.DefinitionOfDone, error) {
-	grader, err := h.graderSpec(todo)
+func (h *Host) VerifyDocument(ctx context.Context, todo *types.TODO) (todos.DefinitionOfDone, error) {
+	grader, err := h.graderSpec(ctx, todo)
 	if err != nil {
 		return todos.DefinitionOfDone{}, err
 	}
@@ -180,20 +184,21 @@ func (h *Host) VerifyDocument(todo *types.TODO) (todos.DefinitionOfDone, error) 
 // grade: the document declares its `ai:` block for acceptance criteria alone, so
 // a project that configures no model still verifies todos whose definition of
 // done is fixture steps.
-func (h *Host) graderSpec(todo *types.TODO) (api.Spec, error) {
-	resolved, err := ResolveLayers(LayerInput{
-		Config: h.Config,
-		Step:   StepVerify,
-		Todos:  []*types.TODO{todo},
-		Host:   h.Kind,
+func (h *Host) graderSpec(ctx context.Context, todo *types.TODO) (api.Spec, error) {
+	if len(todo.AcceptanceCriteria) == 0 {
+		return api.Spec{}, nil
+	}
+	resolved, err := h.resolveProfileLayers(ctx, LayerInput{
+		RuntimeProfile: h.profileSelection(StepVerify, "", ""),
+		Config:         h.Config,
+		Step:           StepVerify,
+		Todos:          []*types.TODO{todo},
+		Host:           h.Kind,
 	})
 	if err != nil {
 		return api.Spec{}, fmt.Errorf("resolve verification spec: %w", err)
 	}
-	spec := resolved.Spec
-	if len(todo.AcceptanceCriteria) == 0 {
-		return spec, nil
-	}
+	spec := resolved.Resolved.Spec
 	if err := ApplyModel(&spec, ""); err != nil {
 		return api.Spec{}, err
 	}

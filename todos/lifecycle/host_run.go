@@ -13,6 +13,7 @@ import (
 	"github.com/flanksource/captain/pkg/api"
 	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/captain/pkg/promptrun"
+	"github.com/flanksource/captain/pkg/runtimeprofiles"
 	"github.com/flanksource/commons-db/shell"
 	"github.com/flanksource/commons/logger"
 	gavelai "github.com/flanksource/gavel/ai"
@@ -27,6 +28,7 @@ import (
 // RunOptions is what the caller decides about one step run; everything else
 // comes from the lifecycle, the project's configuration and the todo.
 type RunOptions struct {
+	RuntimeProfile string
 	// Exec carries the run's logger, transcript and notification sink. Nil gets
 	// a plain context with the standard logger.
 	Exec *todos.ExecutorContext
@@ -69,14 +71,15 @@ type StepOutcome struct {
 
 // preparedStep is a step resolved down to one dispatchable request.
 type preparedStep struct {
-	definition   todoprompt.Definition
-	class        types.RunMode
-	request      captainai.Request
-	timeout      time.Duration
-	workDir      string
-	template     string
-	existingPlan string
-	agent        string
+	runtimeProfile *runtimeprofiles.Resolution
+	definition     todoprompt.Definition
+	class          types.RunMode
+	request        captainai.Request
+	timeout        time.Duration
+	workDir        string
+	template       string
+	existingPlan   string
+	agent          string
 	// trace is captain's provenance for the spec fold, lowest precedence first.
 	trace []api.SpecLayer
 }
@@ -163,21 +166,21 @@ func (h *Host) prepare(ctx context.Context, todo *types.TODO, step Step, lc Cont
 	if err != nil {
 		return nil, fmt.Errorf("step %s: %w", step.Name, err)
 	}
-	var frontmatter []api.SpecLayer
-	var template string
+	var prompt PromptLayerResult
 	if class != types.ModeVerify {
-		if frontmatter, template, err = PromptLayers(workDir, []*types.TODO{todo}, definition); err != nil {
+		if prompt, err = PromptLayers(workDir, []*types.TODO{todo}, definition); err != nil {
 			return nil, err
 		}
 	}
-	resolved, err := ResolveLayers(LayerInput{
-		Config: h.Config, Step: step.Name, Frontmatter: frontmatter, StepSpec: stepSpec,
+	resolved, err := h.resolveProfileLayers(ctx, LayerInput{
+		RuntimeProfile: h.profileSelection(step.Name, opts.RuntimeProfile, prompt.RuntimeProfile),
+		Config:         h.Config, Step: step.Name, Frontmatter: prompt.Layers, StepSpec: stepSpec,
 		Todos: []*types.TODO{todo}, Prior: opts.Prior, Host: h.Kind, Request: opts.Request,
 	})
 	if err != nil {
 		return nil, err
 	}
-	spec := resolved.Spec
+	spec := resolved.Resolved.Spec
 	// A verify step runs no agent turn: it executes the definition of done. The
 	// only thing there that needs a model is the acceptance-criteria grader, so a
 	// project that configures no model still verifies todos whose definition of
@@ -198,6 +201,9 @@ func (h *Host) prepare(ctx context.Context, todo *types.TODO, step Step, lc Cont
 	if err := ValidateSpec(spec); err != nil {
 		return nil, fmt.Errorf("step %s: %w", step.Name, err)
 	}
+	if err := h.finalizeVerification(ctx, todo, lc, class, &spec, resolved.Resolved.Trace); err != nil {
+		return nil, fmt.Errorf("step %s: %w", step.Name, err)
+	}
 	// A verify step IS its verifiers: it runs no agent turn, so a workflow that
 	// declares none has nothing to judge with. Refuse before anything is
 	// dispatched — a run admitted here would write an attempt and a status for a
@@ -210,7 +216,8 @@ func (h *Host) prepare(ctx context.Context, todo *types.TODO, step Step, lc Cont
 	}
 	prepared := &preparedStep{
 		definition: definition, class: class, request: spec, timeout: timeout,
-		workDir: workDir, template: template, trace: resolved.Trace,
+		workDir: workDir, template: prompt.Template, trace: resolved.Resolved.Trace,
+		runtimeProfile: resolved.Profile,
 	}
 	prepared.agent, _ = claude.ResolveAgent(spec.Name)
 	if class != types.ModeVerify {
@@ -300,7 +307,7 @@ func (h *Host) admit(exec *todos.ExecutorContext, todo *types.TODO, step Step, p
 		Requested: captaindb.PromptRunRuntimeSelection{
 			Provider: runtime.Provider, Mode: string(spec.Mode), Model: spec.Name, Effort: string(spec.Effort),
 		},
-		Spec: spec,
+		Spec: spec, RuntimeProfile: prepared.runtimeProfile, SpecTrace: prepared.trace,
 	})
 	if err != nil {
 		return todos.RunPreparationResult{}, fmt.Errorf("prepare native TODO run: %w", err)

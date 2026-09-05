@@ -21,6 +21,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var todosRuntimeProfile string
+
 // retiredTodoRunFlags maps each flag `todos run` no longer accepts to what
 // replaced it, so a stale invocation is answered with the replacement rather
 // than cobra's bare "unknown flag". The MANUAL's retired-flags table is the
@@ -53,6 +55,7 @@ func init() {
 	todosRunCmd.Flags().StringVar(&todosStep, "step", "",
 		"Lifecycle step to run: run, plan, verify, triage, or any step the project's lifecycle declares "+
 			"(empty: the step the lifecycle picks next for each todo); 'gavel todos steps' lists them")
+	todosRunCmd.Flags().StringVar(&todosRuntimeProfile, "runtime-profile", "", "Runtime profile name or ID (empty: the step or project default)")
 	todosRunCmd.Flags().Float64Var(&maxBudget, "max-budget", 0, "Maximum budget in USD")
 	todosRunCmd.Flags().IntVar(&maxTurns, "max-turns", 0, "Maximum conversation turns")
 	todosRunCmd.Flags().BoolVarP(&interactive, "interactive", "i", false, "Interactively select TODOs to run")
@@ -146,10 +149,11 @@ func runTodosRun(_ *cobra.Command, args []string) error {
 // todosRunOptions is what the run flags decide; the lifecycle decides the rest.
 func todosRunOptions() run.Options {
 	return run.Options{
-		Step:       todosStep,
-		Request:    todosRequestSpec(),
-		Resume:     resumeSession,
-		Concurrent: forceRun,
+		RuntimeProfile: todosRuntimeProfile,
+		Step:           todosStep,
+		Request:        todosRequestSpec(),
+		Resume:         resumeSession,
+		Concurrent:     forceRun,
 		// The CLI drains no approval queue: a run that asked for one would block
 		// until its timeout, so it contributes no approval-brokering posture.
 		Host: lifecycle.HostCLI,
@@ -278,6 +282,9 @@ func awaitRun(started run.StartResult) error {
 // resolved spec itself.
 func printDryRun(prepared *run.Prepared) error {
 	resolution := prepared.Resolution
+	if resolution.RuntimeProfile != nil {
+		fmt.Printf("Runtime profile: %s (%s)\n", resolution.RuntimeProfile.Profile.Name, resolution.RuntimeProfile.Profile.ID)
+	}
 	fmt.Println("### Prompt")
 	fmt.Println(resolution.Prompt)
 	fmt.Println("### Layers (lowest precedence first)")
