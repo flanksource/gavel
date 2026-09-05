@@ -19,6 +19,7 @@ import (
 
 func TestTodoAPIRunStartsSelectedTodo(t *testing.T) {
 	workDir := t.TempDir()
+	configureAutomaticPlanToolPolicies(t, workDir)
 	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
 	created, err := uiTestProviderFor(workDir).Create(t.Context(), todos.CreateRequest{
 		Title:    "Run me",

@@ -4,6 +4,7 @@ import { UiHubot, UiRobotAi, type IconProps } from '@flanksource/clicky-ui/icons
 import type { TodoItem, TodoRunOptions, TodoRunPreviewResponse } from '../../types';
 import { Spinner } from '../../icons/Spinner';
 import { TodoRunActionButton } from './TodoRunActionButton';
+import { TodoRunWarnings } from './TodoRunWarnings';
 import {
   TodoRunContextError,
   TodoRunEffortBadge,
@@ -144,6 +145,7 @@ export function TodoSessionStart({
       )}
 
       {options && <div className="mt-5 w-full max-w-2xl text-left">
+        <TodoRunWarnings warnings={error ? undefined : resolution?.warnings} />
         <div className="mb-1 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
           Prompt
           {loading && <Spinner className="text-xs" />}

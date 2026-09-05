@@ -27,6 +27,7 @@ import {
 } from "./providers";
 import { loadPromptRunOptions, verificationSpec } from "./PromptRunButton";
 import { selectTodoRuntimeProfile } from './runtimeProfiles';
+import { TodoRunWarnings } from './TodoRunWarnings';
 
 const RUN_SPEC_SECTIONS = ["model", "prompt", "permissions", "workspace", "verify", "commit"] as const;
 const VERIFY_SPEC_SECTIONS = ["model", "permissions", "verify"] as const;
@@ -79,6 +80,7 @@ export function TodoRunAdvancedDialog({
   const [promptDraft, setPromptDraft] = useState("");
   const [promptDirty, setPromptDirty] = useState(false);
   const [previewError, setPreviewError] = useState("");
+  const [previewWarnings, setPreviewWarnings] = useState<string[]>([]);
   const [specYAML, setSpecYAML] = useState("");
   const [previewRuntime, setPreviewRuntime] = useState<{ key: string; mode?: string; model?: string }>();
   const [view, setView] = useState<"form" | "yaml">("form");
@@ -148,6 +150,7 @@ export function TodoRunAdvancedDialog({
   }
 
   useEffect(() => {
+    setPreviewWarnings([]);
     if (!open) {
       setPreviewError("");
       return;
@@ -163,6 +166,7 @@ export function TodoRunAdvancedDialog({
     previewMutation.mutate({ body, signal: controller.signal }, {
       onSuccess: data => {
         if (cancelled) return;
+        setPreviewWarnings(data.warnings ?? []);
         setPreviewRuntime({ key: runtimeKey, mode: data.runtimeMode, model: data.model });
         setSpecYAML(data.specYaml ?? "");
         if (!promptDirtyRef.current) setPromptDraft(data.prompt ?? "");
@@ -192,7 +196,6 @@ export function TodoRunAdvancedDialog({
         {previewMutation.isPending && <Spinner className="text-xs text-muted-foreground" />}
         <Button variant="ghost" type="button" onClick={regeneratePrompt} disabled={previewMutation.isPending} title="Discard edits and regenerate from the options above" className="h-auto rounded px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground">Regenerate</Button>
       </div>
-      {previewError && <div className="text-xs text-red-600">{previewError}</div>}
       <Suspense fallback={<textarea className={`${inputClass} h-auto min-h-[16rem] resize-y font-mono`} value={promptDraft} onChange={(event) => editPrompt(event.currentTarget.value)} placeholder={previewMutation.isPending ? "Loading prompt…" : "Prompt"} />}>
         <MdxEditorField value={promptDraft} onChange={editPrompt} placeholder={previewMutation.isPending ? "Loading prompt…" : "Prompt"} className="min-h-[16rem]" />
       </Suspense>
@@ -209,6 +212,8 @@ export function TodoRunAdvancedDialog({
           <>
             <Tabs tabs={[{ id: "form", label: "Form" }, { id: "yaml", label: "YAML" }]} value={view} onChange={value => setView(value as "form" | "yaml")} />
             {resolvedRuntime && <Field label="Resolution"><span className="text-xs text-muted-foreground">{[resolvedRuntime.model, resolvedRuntime.mode].filter(Boolean).join(' · ')}</span></Field>}
+            {previewError && <div role="alert" className="text-xs text-red-600">{previewError}</div>}
+            <TodoRunWarnings warnings={previewWarnings} />
             {view === "form" ? (
               <div role="tabpanel" aria-label="Form" className="space-y-3">
                 <Field label="Prompt">
@@ -263,7 +268,6 @@ export function TodoRunAdvancedDialog({
               <div role="tabpanel" aria-label="YAML" className="space-y-2">
                 <div className="text-xs text-muted-foreground">Rendered Captain prompt spec sent when this {submitLabel.toLowerCase()} starts.</div>
                 {previewMutation.isPending && !specYAML ? <Spinner className="text-sm text-muted-foreground" /> : null}
-                {previewError ? <div className="text-xs text-red-600">{previewError}</div> : null}
                 <CodeBlock language="yaml" source={specYAML} copyable className="max-h-[60vh] overflow-auto" />
               </div>
             )}

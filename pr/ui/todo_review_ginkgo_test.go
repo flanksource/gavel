@@ -246,6 +246,7 @@ var _ = Describe("todo answer", func() {
 	})
 
 	It("resumes the one phase the index marks, whatever class the last run reported", func() {
+		configureAutomaticPlanToolPolicies(GinkgoTB(), workDir)
 		created := specAskTodo(workDir, "sess-phase", types.TriagePhase)
 		var got todoRunRequest
 		previous := run.Start

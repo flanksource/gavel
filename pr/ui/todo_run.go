@@ -103,6 +103,7 @@ type todoRunResponse struct {
 type todoRunPreviewResponse struct {
 	RuntimeProfile *todoRunProfilePreview `json:"runtimeProfile,omitempty"`
 	Trace          []api.SpecLayer        `json:"trace"`
+	Warnings       []string               `json:"warnings,omitempty"`
 	Prompt         string                 `json:"prompt"`
 	SpecYAML       string                 `json:"specYaml"`
 	Step           string                 `json:"step"`
@@ -322,6 +323,7 @@ func (s *Server) handleTodoRunPreview(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(todoRunPreviewResponse{ //nolint:errcheck
 		RuntimeProfile: todoRunProfilePreviewFor(prepared.Resolution.RuntimeProfile),
 		Trace:          prepared.Resolution.Trace,
+		Warnings:       prepared.Resolution.Warnings,
 		Prompt:         prepared.Resolution.Prompt,
 		SpecYAML:       specYAML,
 		Step:           prepared.Step.Name,
@@ -349,6 +351,7 @@ func buildTodoRunSpecPreview(
 		Todo:     todo,
 		Dir:      source.Dir,
 		Options:  opts,
+		Broker:   todoApprovalBroker(source.Dir),
 	})
 	if err != nil {
 		return nil, "", err

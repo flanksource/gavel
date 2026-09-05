@@ -213,6 +213,27 @@ describe('TodoRunAdvancedDialog step picker', () => {
 });
 
 describe('TodoRunAdvancedDialog runtime profile', () => {
+  it('shows preflight warnings, replaces them on preview changes and clears them on success or error', () => {
+    const consoleError = vi.spyOn(console, 'error');
+    preview.mockImplementation(({ body }, callbacks) => callbacks.onSuccess({
+      prompt: '', specYaml: '', count: 1,
+      warnings: body.runtimeProfile ? [] : ['permissions.plugins is unsupported', 'permissions.plugins is unsupported'],
+    }));
+    setup({ initialMode: 'plan' });
+    expect(screen.getAllByText('permissions.plugins is unsupported')).toHaveLength(2);
+    expect(consoleError).not.toHaveBeenCalled();
+    expect((footer().getByRole('button', { name: 'Plan' }) as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Review profile' }));
+    expect(screen.queryByText('permissions.plugins is unsupported')).toBeNull();
+    preview.mockImplementation((_request, callbacks) => callbacks.onSuccess({ prompt: '', specYaml: '', count: 1, warnings: ['permissions.skills is unsupported'] }));
+    fireEvent.click(screen.getByRole('button', { name: 'Change model' }));
+    expect(screen.getByText('permissions.skills is unsupported')).toBeTruthy();
+    preview.mockImplementation((_request, callbacks) => callbacks.onError(new Error('judge prompt is missing')));
+    fireEvent.click(picker().getByRole('button', { name: 'Run' }));
+    expect(screen.queryByText('permissions.skills is unsupported')).toBeNull();
+    expect(screen.getByText('judge prompt is missing')).toBeTruthy();
+  });
+
   it('restores the saved profile and resume choice from recent advanced options', () => {
     recentOptions.mockReturnValue([{ step: 'plan', runtimeProfile: 'saved-profile', spec: { mode: 'cmux' }, resume: true }]);
     const { onRun } = setup({ initialMode: 'plan' });

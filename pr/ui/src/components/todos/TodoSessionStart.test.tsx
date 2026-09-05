@@ -77,6 +77,18 @@ function stubPreviewFetch(prompt: string) {
 }
 
 describe('TodoSessionStart', () => {
+  it('shows warnings for the current preview and clears them when the runtime changes', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { spec?: { mode?: string } };
+      return { ok: true, json: async () => ({ prompt: 'Review the change', warnings: body.spec?.mode === 'agent' ? ['permissions.plugins is unsupported'] : [] }) };
+    }));
+    const { rerender } = render(<TodoSessionStart dir="/repo" todo={todo} runOptions={RESOLVED_OPTIONS} onRun={vi.fn()} />);
+    expect(await screen.findByText('permissions.plugins is unsupported')).toBeTruthy();
+    rerender(<TodoSessionStart dir="/repo" todo={todo} runOptions={UPDATED_OPTIONS} onRun={vi.fn()} />);
+    await waitFor(() => expect(screen.queryByText('permissions.plugins is unsupported')).toBeNull());
+    expect(await screen.findByText('Review the change')).toBeTruthy();
+  });
+
   it('shows the resolved profile runtime while keeping the request override empty', async () => {
     const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({ prompt: 'Profile prompt', model: 'example-profile-model', runtimeMode: 'cmux' }) }));
     vi.stubGlobal('fetch', fetchMock);

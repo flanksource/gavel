@@ -80,6 +80,8 @@ export interface TodoRunResponse {
 // Preview of the exact prompt a run would dispatch, shown in the advanced run
 // dialog before the user starts the run.
 export interface TodoRunPreviewResponse {
+  // Capability warnings from the same full-input preflight used before admission.
+  warnings?: string[];
   prompt: string;
   specYaml: string;
   model?: string;

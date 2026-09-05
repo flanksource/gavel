@@ -8,21 +8,16 @@ import (
 	"time"
 
 	captainai "github.com/flanksource/captain/pkg/ai"
-	capsetup "github.com/flanksource/captain/pkg/ai/agent/setup"
-	capverify "github.com/flanksource/captain/pkg/ai/agent/verify"
 	"github.com/flanksource/captain/pkg/api"
 	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/captain/pkg/promptrun"
 	"github.com/flanksource/captain/pkg/runtimeprofiles"
 	"github.com/flanksource/commons-db/shell"
 	"github.com/flanksource/commons/logger"
-	gavelai "github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/claude"
 	todoprompt "github.com/flanksource/gavel/todos/prompt"
 	"github.com/flanksource/gavel/todos/types"
-	"github.com/flanksource/gavel/utils"
-	"github.com/google/uuid"
 )
 
 // RunOptions is what the caller decides about one step run; everything else
@@ -81,7 +76,8 @@ type preparedStep struct {
 	existingPlan   string
 	agent          string
 	// trace is captain's provenance for the spec fold, lowest precedence first.
-	trace []api.SpecLayer
+	trace       []api.SpecLayer
+	constraints api.RuntimeConstraints
 }
 
 // RunStep runs one step of the lifecycle for a todo: the prompt rendered, the
@@ -114,11 +110,17 @@ func (h *Host) Dispatch(ctx context.Context, todo *types.TODO, resolution *Resol
 		exec = todos.NewExecutorContext(ctx, logger.StandardLogger(), nil)
 	}
 	step, prepared := resolution.Step, resolution.prepared
+	input := h.runInput(exec, todo, prepared, opts)
+	warnings, err := promptrun.Preflight(input.input)
+	if err != nil {
+		return nil, fmt.Errorf("step %s preflight: %w", step.Name, err)
+	}
+	resolution.Warnings = warnings
 	admission, err := h.admit(exec, todo, step, prepared, opts)
 	if err != nil {
 		return nil, err
 	}
-	d := h.dispatch(exec, todo, prepared, opts)
+	d := h.dispatch(exec, todo, prepared, input)
 	h.recordIterations(exec, admission.PromptRunID, &d)
 	outcome := h.collect(exec, todo, step, prepared, d, start)
 	outcome.Admission = admission
@@ -217,7 +219,7 @@ func (h *Host) prepare(ctx context.Context, todo *types.TODO, step Step, lc Cont
 	prepared := &preparedStep{
 		definition: definition, class: class, request: spec, timeout: timeout,
 		workDir: workDir, template: prompt.Template, trace: resolved.Resolved.Trace,
-		runtimeProfile: resolved.Profile,
+		runtimeProfile: resolved.Profile, constraints: resolved.Resolved.Constraints,
 	}
 	prepared.agent, _ = claude.ResolveAgent(spec.Name)
 	if class != types.ModeVerify {
@@ -397,77 +399,20 @@ type dispatched struct {
 // and the generate→verify loop. What stays here is what is gavel's: the todo's
 // identity on the run, the commit pipeline, the transcript, and the progress
 // sink.
-func (h *Host) dispatch(exec *todos.ExecutorContext, todo *types.TODO, prepared *preparedStep, opts RunOptions) dispatched {
-	req := prepared.request
-	requested := req.SessionID
-	req.SessionID = ""
-	providerSessionID := ""
-	if opts.Resume {
-		req.SessionID = firstNonEmpty(priorSessionID(todo), requested)
-	}
-	// The cmux runtime is handed a fresh claude session id up front so it launches
-	// `--session-id <id>` and the host can follow the session log live.
-	if req.Mode == api.ModeCmux && !opts.Resume && prepared.agent == "claude" {
-		providerSessionID = firstNonEmpty(requested, uuid.NewString())
-		setSessionID(todo, providerSessionID)
-		exec.RecordSessionID(providerSessionID)
-	}
-	meta := h.runMetadata(req, providerSessionID, todo, prepared)
-	exec.RecordRunStart(meta)
-	exec.Logger.Infof("Resolved TODO runtime: step=%s mode=%s agent=%s provider=%s model=%s effort=%s cwd=%s",
-		prepared.definition.Name, meta.Driver, meta.Agent, firstNonEmpty(meta.Provider, "unknown"),
-		firstNonEmpty(meta.ResolvedModel, "default"), firstNonEmpty(meta.Effort, "default"), prepared.workDir)
-	gavelai.NormalizeEnv()
-
-	execution := &todos.ExecutionResult{ExecutorName: h.executorName(prepared), Runtime: meta, Transcript: exec.GetTranscript()}
-	var canUseTool api.PermissionFunc
-	if opts.Broker != nil {
-		broker, err := opts.Broker(exec)
-		if err != nil {
-			return dispatched{err: err, execution: execution}
-		}
-		canUseTool = broker
-	}
-	progress := h.progressSink(exec, todo)
-	exec.SetVerifyProgressHook(progress.record)
-
-	hooks := h.Hooks(todo, req, meta, exec.RecordRunStart)
-	if opts.Provider != nil {
-		// promptrun adds no setup plugin for a caller-supplied provider, which it
-		// takes to own its own workspace. The test seam does not, so the host adds
-		// the plugin itself — before the recorder, so the recorder still trails it.
-		recorder := hooks[len(hooks)-1]
-		hooks = append(hooks[:len(hooks)-1], &capsetup.Plugin{BaseDir: prepared.workDir}, recorder)
+func (h *Host) dispatch(exec *todos.ExecutorContext, todo *types.TODO, prepared *preparedStep, input *stepInput) dispatched {
+	if err := input.start(exec, todo, prepared); err != nil {
+		return dispatched{err: err, execution: input.execution}
 	}
 	runCtx, cancel := context.WithTimeout(exec, prepared.timeout)
 	defer cancel()
-	sawResult := false
-	out, err := promptrun.Run(runCtx, promptrun.Input{
-		Request: req,
-		Config: captainai.Config{
-			Model: req.Model, Budget: req.Budget, NoCache: req.NoCache,
-			SessionID: providerSessionID, CanUseTool: canUseTool,
-		},
-		Provider:          opts.Provider,
-		Hooks:             hooks,
-		CallerOwnsCommits: req.Workflow != nil && len(req.Workflow.Commits) > 0,
-		Verify:            capverify.Options{Timeout: prepared.timeout, Progress: exec.RecordVerifyProgress},
-		OnEvent: func(_ int, ev captainai.Event) {
-			h.handleEvent(exec, ev, execution, todo, &sawResult, meta)
-		},
-		Timeout: prepared.timeout,
-		// Repo is the root of the tree workDir sits in, not workDir itself: a todo
-		// carrying a subdirectory CWD still has its edits recorded relative to the
-		// root, which is the namespace the commit hooks compare against.
-		Repo: utils.GitRoot(prepared.workDir),
-	})
-	if progress.err != nil {
-		err = errors.Join(err, progress.err)
+	out, err := promptrun.Run(runCtx, input.input)
+	if input.progress.err != nil {
+		err = errors.Join(err, input.progress.err)
 	}
 	return dispatched{
-		out: out, err: err, execution: execution,
+		out: out, err: err, execution: input.execution,
 		cancelled: errors.Is(context.Cause(runCtx), todos.ErrExecutionCancelled),
-		timedOut:  errors.Is(runCtx.Err(), context.DeadlineExceeded) && !sawResult,
+		timedOut:  errors.Is(runCtx.Err(), context.DeadlineExceeded) && !input.sawResult,
 	}
 }
 

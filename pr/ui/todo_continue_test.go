@@ -56,7 +56,7 @@ func codexPlanRun(t *testing.T, sessionID string) *captaindb.PromptRun {
 			Setup:  &shell.Setup{Cwd: "/previous/worktree"},
 			Permissions: api.Permissions{
 				Mode:  api.PermissionPlan,
-				Tools: api.ToolsFromLists([]string{"Read", "Glob", "Grep"}, nil),
+				Tools: api.Tools{"Read": api.ToolPolicyAuto, "Glob": api.ToolPolicyAuto, "Grep": api.ToolPolicyAuto},
 			},
 		}),
 	}
@@ -79,6 +79,7 @@ func resolvedRun(t *testing.T, req todoRunRequest) *lifecycle.Resolution {
 // alongside the folded spec.
 func continuationSpec(t *testing.T, dir string, c run.Continuation) (run.Options, api.Spec) {
 	t.Helper()
+	configureAutomaticPlanToolPolicies(t, dir)
 	c.Dir, c.Provider = dir, uiTestProviderFor(dir)
 	if c.Override.Host == "" {
 		c.Override.Host = lifecycle.HostDashboard
@@ -177,6 +178,7 @@ func TestContinueRunRejectsOptionsNamingAnotherStep(t *testing.T) {
 // session belongs to. The revise dialog sends no run options.
 func TestTodoAPIPlanReviseInheritsPlanRunRuntime(t *testing.T) {
 	workDir := t.TempDir()
+	configureAutomaticPlanToolPolicies(t, workDir)
 	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
 	created := seedReviewTodo(t, workDir, types.StatusReview)
 	const sid = "019fa17d-622a-7ef3-b8ad-d8b1d7cd3836"

@@ -57,6 +57,7 @@ var _ = Describe("todo run admission contract", func() {
 
 	It("returns the admitted Captain session id before reporting started", func(ctx SpecContext) {
 		workDir := GinkgoT().TempDir()
+		configureAutomaticPlanToolPolicies(GinkgoTB(), workDir)
 		server := &Server{ghOpts: github.Options{WorkDir: workDir}}
 		created, err := uiTestProviderFor(workDir).Create(ctx, todos.CreateRequest{
 			Title:  "Tail immediately",

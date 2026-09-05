@@ -30,7 +30,8 @@ var _ = Describe("TODO runtime profile CLI", func() {
 	It("prints the resolved profile identity in dry-run without dispatching", func() {
 		resetTodosRunFlags(GinkgoTB())
 		resolution := &lifecycle.Resolution{
-			Prompt: "Preview the selected profile",
+			Prompt:   "Preview the selected profile",
+			Warnings: []string{"permissions.plugins is unsupported by this runtime"},
 			RuntimeProfile: &runtimeprofiles.Resolution{Profile: runtimeprofiles.Profile{
 				ID: "profile-review-id", Name: "Review profile",
 			}},
@@ -45,6 +46,7 @@ var _ = Describe("TODO runtime profile CLI", func() {
 		})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(out).To(ContainSubstring("Runtime profile: Review profile (profile-review-id)"))
+		Expect(out).To(ContainSubstring("Warning: permissions.plugins is unsupported by this runtime"))
 		Expect(*started).To(BeEmpty())
 	})
 })

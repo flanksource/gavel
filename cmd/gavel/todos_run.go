@@ -282,6 +282,9 @@ func awaitRun(started run.StartResult) error {
 // resolved spec itself.
 func printDryRun(prepared *run.Prepared) error {
 	resolution := prepared.Resolution
+	for _, warning := range resolution.Warnings {
+		fmt.Printf("Warning: %s\n", warning)
+	}
 	if resolution.RuntimeProfile != nil {
 		fmt.Printf("Runtime profile: %s (%s)\n", resolution.RuntimeProfile.Profile.Name, resolution.RuntimeProfile.Profile.ID)
 	}

@@ -2,10 +2,14 @@ package lifecycle
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/flanksource/captain/pkg/api"
+	"github.com/flanksource/captain/pkg/promptrun"
 	"github.com/flanksource/captain/pkg/runtimeprofiles"
+	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/types"
 )
 
@@ -33,7 +37,8 @@ type Resolution struct {
 	// one, resolved against the host's.
 	WorkDir string
 	// Trace is captain's provenance for the fold, lowest precedence first.
-	Trace []api.SpecLayer
+	Trace    []api.SpecLayer
+	Warnings []string
 
 	// lc and prepared are the fold itself, carried so Dispatch runs exactly what
 	// Resolve reported. Re-folding at dispatch time would let the run and the
@@ -64,6 +69,15 @@ func (h *Host) Resolve(ctx context.Context, todo *types.TODO, step Step, opts Ru
 	if err != nil {
 		return nil, err
 	}
+	exec := opts.Exec
+	if exec == nil {
+		exec = todos.NewExecutorContext(ctx, logger.StandardLogger(), nil)
+	}
+	input := h.runInput(exec, todo, prepared, opts)
+	warnings, err := promptrun.Preflight(input.input)
+	if err != nil {
+		return nil, fmt.Errorf("step %s preflight: %w", step.Name, err)
+	}
 	return &Resolution{
 		RuntimeProfile: prepared.runtimeProfile,
 		Step:           step,
@@ -73,6 +87,7 @@ func (h *Host) Resolve(ctx context.Context, todo *types.TODO, step Step, opts Ru
 		Timeout:        prepared.timeout,
 		WorkDir:        prepared.workDir,
 		Trace:          prepared.trace,
+		Warnings:       warnings,
 		lc:             lc,
 		prepared:       prepared,
 	}, nil
