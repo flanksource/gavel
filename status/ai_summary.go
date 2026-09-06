@@ -3,6 +3,7 @@ package status
 import (
 	"context"
 	_ "embed"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -10,7 +11,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/flanksource/captain/pkg/ai/prompt"
+	"github.com/flanksource/commons/logger"
 	clickyai "github.com/flanksource/gavel/ai"
 )
 
@@ -27,25 +28,38 @@ var summarizeFileChangeWithAIFunc = summarizeFileChangeWithAI
 var diffForStatusFileFunc = diffForStatusFile
 var readUntrackedStatusFileFunc = readUntrackedStatusFile
 
-func summarizeFileChangeWithAI(ctx context.Context, workDir string, agent clickyai.Agent, file FileStatus, template string) (string, error) {
-	details, err := buildFileSummaryDetails(workDir, file)
+func summarizeFileChangeWithAI(ctx context.Context, options SummaryOptions, file FileStatus) (summary string, err error) {
+	if options.Prompt == nil {
+		return "", fmt.Errorf("status summary prompt is required")
+	}
+	details, err := buildFileSummaryDetails(options.WorkDir, file)
 	if err != nil {
 		return "", err
 	}
 
-	if strings.TrimSpace(template) == "" {
-		template = fileSummaryPromptTemplate
-	}
-	req, _, err := prompt.Load(template).Render(map[string]any{"details": details}, nil)
+	runtime, err := options.Prompt.resolve(details)
 	if err != nil {
 		return "", fmt.Errorf("render AI file-summary prompt: %w", err)
 	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	for _, warning := range runtime.Resolution.Warnings {
+		logger.Warnf("status summary %s preflight: %s", file.Path, warning)
+	}
+	agent, err := options.NewAgent(runtime)
+	if err != nil {
+		return "", fmt.Errorf("create AI file-summary agent: %w", err)
+	}
+	defer func() {
+		if closeErr := agent.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close AI file-summary agent: %w", closeErr))
+		}
+	}()
 
 	resp, err := agent.ExecutePrompt(ctx, clickyai.PromptRequest{
-		Name:       fmt.Sprintf("status summary: %s", file.Path),
-		Prompt:     req.Prompt.User,
-		SchemaJSON: req.Prompt.SchemaJSON,
-		Source:     "ai-file-summary.prompt",
+		Name: fmt.Sprintf("status summary: %s", file.Path),
+		Spec: runtime.Request,
 	})
 	if err != nil {
 		return "", fmt.Errorf("execute AI file-summary prompt: %w", err)
@@ -58,7 +72,7 @@ func summarizeFileChangeWithAI(ctx context.Context, workDir string, agent clicky
 	if err := clickyai.DecodeStructured(resp, &schema); err != nil {
 		return "", fmt.Errorf("decode AI file-summary response: %w", err)
 	}
-	summary := normalizeAISummary(schema.Summary)
+	summary = normalizeAISummary(schema.Summary)
 	if summary == "" {
 		return "", fmt.Errorf("AI file-summary prompt returned empty summary")
 	}

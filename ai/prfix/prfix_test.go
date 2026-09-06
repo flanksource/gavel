@@ -21,11 +21,15 @@ func prContext() PRContext {
 
 func resolve(t *testing.T, override verify.PromptSpec, pr PRContext) api.Spec {
 	t.Helper()
-	spec, err := ResolveSpec(api.Spec{Model: api.Model{Name: "agent:sonnet"}}, override, "/repo", pr)
+	layers, err := Layers(ResolveOptions{Base: api.Spec{Model: api.Model{Name: "agent:sonnet"}}, Prompt: override, Dir: "/repo", PR: pr})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := api.ResolveSpecLayers(api.ResolveSpecOptions{Layers: layers, RequireModel: true})
 	if err != nil {
 		t.Fatalf("ResolveSpec err: %v", err)
 	}
-	return spec
+	return resolved.Spec
 }
 
 func TestResolveSpecRendersPRIdentityIntoSystemPrompt(t *testing.T) {

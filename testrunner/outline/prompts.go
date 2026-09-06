@@ -2,8 +2,11 @@ package outline
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/flanksource/captain/pkg/api"
+	"github.com/flanksource/captain/pkg/captainconfig"
+	captaincli "github.com/flanksource/captain/pkg/cli"
 	"github.com/flanksource/gavel/prompts"
 	"github.com/flanksource/gavel/verify"
 )
@@ -23,27 +26,48 @@ func Prompts() []prompts.Prompt {
 	}}
 }
 
-// resolveSummaryPrompt returns the resolved test.outlineSummaryPrompt override
-// for workDir, or the embedded default when unset. A configured-but-missing file
-// is a hard error.
-func resolveSummaryPrompt(workDir string) (string, error) {
-	cfg, err := verify.LoadGavelConfig(workDir)
-	if err != nil {
-		return "", fmt.Errorf("load .gavel.yaml for test outline summary prompt: %w", err)
-	}
-	return cfg.Test.OutlineSummary.TemplateSource(workDir, testSummaryPromptTemplate)
+type summaryPrompt struct {
+	dir        string
+	base       api.Spec
+	override   verify.PromptSpec
+	saved      captainconfig.Config
+	fileSource *string
 }
 
-// resolveSummaryModel returns the model `gavel test outline --ai-summary` runs
-// on: the test.outlineSummary spec over the ai: base.
-//
-// The config slot always carried a model — test.outlineSummary is a PromptSpec —
-// but only its prompt half was read, so the model was pinned to a hardcoded
-// ai.DefaultConfig() and the command had no way to select one at all.
-func resolveSummaryModel(workDir string) (api.Model, error) {
+func resolveSummaryPrompt(workDir string) (*summaryPrompt, error) {
 	cfg, err := verify.LoadGavelConfig(workDir)
 	if err != nil {
-		return api.Model{}, fmt.Errorf("load .gavel.yaml for test outline summary model: %w", err)
+		return nil, fmt.Errorf("load .gavel.yaml for test outline summary prompt: %w", err)
 	}
-	return cfg.ModelFor(cfg.Test.OutlineSummary, api.Model{}), nil
+	saved, _, err := captainconfig.Load()
+	if err != nil {
+		return nil, fmt.Errorf("load saved AI defaults: %w", err)
+	}
+	prepared := &summaryPrompt{dir: workDir, base: cfg.AI, override: cfg.Test.OutlineSummary, saved: saved}
+	if err := api.ValidateSpecLayers(api.PromptSpecLayer("ai", cfg.AI), api.PromptSpecLayer("test.outlineSummary", cfg.Test.OutlineSummary.Spec)); err != nil {
+		return nil, err
+	}
+	if cfg.Test.OutlineSummary.File != "" {
+		raw, err := os.ReadFile(cfg.Test.OutlineSummary.ResolvedFilePath(workDir))
+		if err != nil {
+			return nil, fmt.Errorf("read test outline summary prompt: %w", err)
+		}
+		source := string(raw)
+		prepared.fileSource = &source
+	}
+	return prepared, nil
+}
+
+func (p *summaryPrompt) resolve(data map[string]any) (captaincli.AIRuntimeResolved, error) {
+	resolved, err := p.override.Resolve(verify.PromptResolveOptions{
+		Base: p.base, DefaultPrompt: testSummaryPromptTemplate, Data: data, Dir: p.dir, FileSource: p.fileSource,
+		Saved: &p.saved.AI, Name: "test.outlineSummary", RequireModel: true,
+		Normalize: func(spec api.Spec) (api.SpecNormalization, error) {
+			return (captaincli.AIRuntimeOptions{}).Normalize(captaincli.AIRuntimeNormalizeOptions{Spec: spec, Saved: p.saved, Cwd: p.dir})
+		},
+	})
+	if err != nil {
+		return captaincli.AIRuntimeResolved{}, err
+	}
+	return (captaincli.AIRuntimeOptions{}).Project(captaincli.AIRuntimeProjectOptions{Resolved: resolved, Saved: p.saved})
 }

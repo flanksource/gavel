@@ -2,8 +2,11 @@ package status
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/flanksource/captain/pkg/api"
+	"github.com/flanksource/captain/pkg/captainconfig"
+	captaincli "github.com/flanksource/captain/pkg/cli"
 	"github.com/flanksource/gavel/prompts"
 	"github.com/flanksource/gavel/verify"
 )
@@ -22,27 +25,49 @@ func Prompts() []prompts.Prompt {
 	}}
 }
 
-// ResolveSummaryPrompt returns the resolved status.summary override for workDir,
-// or the embedded default when unset. A configured-but-missing file is a hard
-// error.
-func ResolveSummaryPrompt(workDir string) (string, error) {
-	cfg, err := verify.LoadGavelConfig(workDir)
-	if err != nil {
-		return "", fmt.Errorf("load .gavel.yaml for status summary prompt: %w", err)
-	}
-	return cfg.Status.Summary.TemplateSource(workDir, fileSummaryPromptTemplate)
+type SummaryPromptOptions struct {
+	Dir      string
+	Base     api.Spec
+	Override verify.PromptSpec
+	Request  api.Spec
+	Saved    captainconfig.Config
+	Runtime  captaincli.AIRuntimeOptions
 }
 
-// ResolveSummaryModel returns the model `gavel status --ai` runs on: the
-// status.summary spec over the ai: base, with override (--ai-model) on top.
-//
-// status.summary is a PromptSpec, which carries a model as well as a prompt.
-// Only the prompt half was ever read, so the model came from a hardcoded
-// ai.DefaultConfig() and neither .gavel.yaml nor --ai-model could move it.
-func ResolveSummaryModel(workDir string, override api.Model) (api.Model, error) {
-	cfg, err := verify.LoadGavelConfig(workDir)
-	if err != nil {
-		return api.Model{}, fmt.Errorf("load .gavel.yaml for status summary model: %w", err)
+type SummaryPrompt struct {
+	options    SummaryPromptOptions
+	fileSource *string
+}
+
+func ResolveSummaryPrompt(options SummaryPromptOptions) (*SummaryPrompt, error) {
+	layers := []api.SpecLayer{api.PromptSpecLayer("ai", options.Base),
+		api.PromptSpecLayer("status.summary", options.Override.Spec), api.RequestSpecLayer("request", options.Request)}
+	if err := api.ValidateSpecLayers(layers...); err != nil {
+		return nil, err
 	}
-	return cfg.ModelFor(cfg.Status.Summary, override), nil
+	prepared := &SummaryPrompt{options: options}
+	if options.Override.File != "" {
+		raw, err := os.ReadFile(options.Override.ResolvedFilePath(options.Dir))
+		if err != nil {
+			return nil, fmt.Errorf("read status summary prompt: %w", err)
+		}
+		source := string(raw)
+		prepared.fileSource = &source
+	}
+	return prepared, nil
+}
+
+func (p *SummaryPrompt) resolve(details string) (captaincli.AIRuntimeResolved, error) {
+	resolved, err := p.options.Override.Resolve(verify.PromptResolveOptions{
+		Base: p.options.Base, DefaultPrompt: fileSummaryPromptTemplate,
+		Data: map[string]any{"details": details}, Dir: p.options.Dir, FileSource: p.fileSource,
+		Request: p.options.Request, Saved: &p.options.Saved.AI, Name: "status.summary", RequireModel: true,
+		Normalize: func(spec api.Spec) (api.SpecNormalization, error) {
+			return p.options.Runtime.Normalize(captaincli.AIRuntimeNormalizeOptions{Spec: spec, Saved: p.options.Saved, Cwd: p.options.Dir})
+		},
+	})
+	if err != nil {
+		return captaincli.AIRuntimeResolved{}, err
+	}
+	return p.options.Runtime.Project(captaincli.AIRuntimeProjectOptions{Resolved: resolved, Saved: p.options.Saved})
 }

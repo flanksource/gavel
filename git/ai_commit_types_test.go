@@ -41,10 +41,9 @@ func schemaEnum(t *testing.T, prop map[string]any) []string {
 // verbatim. The choices must reach the model as a schema enum it cannot invent
 // around, never as prose.
 func TestCommitMessageSchema_TypeIsEnumerated(t *testing.T) {
-	_, schemaJSON, err := renderCommitPrompt(sampleCommit(), commitMessagePrompt, 0, defaultTypes())
+	prepared, err := preparedCommitPrompt(0, defaultTypes())
 	require.NoError(t, err)
-
-	prop := schemaTypeProperty(t, schemaJSON)
+	prop := schemaTypeProperty(t, prepared.SchemaJSON)
 	require.Equal(t, defaultTypes(), schemaEnum(t, prop))
 
 	description, _ := prop["description"].(string)
@@ -60,8 +59,9 @@ func TestCommitMessageSchema_EnumFollowsConfiguredTypes(t *testing.T) {
 	allowed, err := allowedCommitTypes(configured)
 	require.NoError(t, err)
 
-	promptText, schemaJSON, err := renderCommitPrompt(sampleCommit(), commitMessagePrompt, 0, allowed)
+	prepared, err := preparedCommitPrompt(0, allowed)
 	require.NoError(t, err)
+	promptText, schemaJSON := prepared.User, prepared.SchemaJSON
 
 	require.Equal(t, configured, schemaEnum(t, schemaTypeProperty(t, schemaJSON)))
 	require.Contains(t, promptText, "exactly one of feat|fix",
@@ -107,13 +107,13 @@ func TestEnumerateCommitType_LeavesSchemasWithoutATypeProperty(t *testing.T) {
 // TestCommitMessageSchema_BoundsFreeTextFields guards the other half of the bad
 // message, where the body's prose landed in scope and subject.
 func TestCommitMessageSchema_BoundsFreeTextFields(t *testing.T) {
-	_, schemaJSON, err := renderCommitPrompt(sampleCommit(), commitMessagePrompt, 0, defaultTypes())
+	prepared, err := preparedCommitPrompt(0, defaultTypes())
 	require.NoError(t, err)
 
 	var schema struct {
 		Properties map[string]map[string]any `json:"properties"`
 	}
-	require.NoError(t, json.Unmarshal(schemaJSON, &schema))
+	require.NoError(t, json.Unmarshal(prepared.SchemaJSON, &schema))
 
 	for field, want := range map[string]float64{"scope": 20, "subject": 100} {
 		require.Contains(t, schema.Properties, field)

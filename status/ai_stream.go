@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	captaincli "github.com/flanksource/captain/pkg/cli"
 	clickytask "github.com/flanksource/clicky/task"
 	"github.com/flanksource/commons/logger"
 	clickyai "github.com/flanksource/gavel/ai"
@@ -70,9 +71,18 @@ func (r *Result) ApplyAISummaryUpdate(update AISummaryUpdate) {
 	}
 }
 
-func StreamAISummaries(ctx context.Context, workDir string, agent clickyai.Agent, files []FileStatus, maxWorkers int, template string) <-chan AISummaryUpdate {
+type SummaryOptions struct {
+	WorkDir    string
+	Files      []FileStatus
+	MaxWorkers int
+	Prompt     *SummaryPrompt
+	NewAgent   func(captaincli.AIRuntimeResolved) (clickyai.Agent, error)
+}
+
+func StreamAISummaries(ctx context.Context, options SummaryOptions) <-chan AISummaryUpdate {
+	files, maxWorkers := options.Files, options.MaxWorkers
 	updates := make(chan AISummaryUpdate, len(files)*2+1)
-	if agent == nil || len(files) == 0 {
+	if len(files) == 0 {
 		close(updates)
 		return updates
 	}
@@ -81,6 +91,11 @@ func StreamAISummaries(ctx context.Context, workDir string, agent clickyai.Agent
 	}
 	if maxWorkers <= 0 {
 		maxWorkers = defaultAISummaryWorkers
+	}
+	if options.NewAgent == nil {
+		options.NewAgent = func(runtime captaincli.AIRuntimeResolved) (clickyai.Agent, error) {
+			return clickyai.NewAgent(runtime.Config)
+		}
 	}
 
 	items := make([]func(logger.Logger) (aiSummaryResult, error), 0, len(files))
@@ -94,7 +109,7 @@ func StreamAISummaries(ctx context.Context, workDir string, agent clickyai.Agent
 				return aiSummaryResult{Index: index, HasIndex: true}, ctx.Err()
 			}
 
-			summary, err := summarizeFileChangeWithAIFunc(ctx, workDir, agent, file, template)
+			summary, err := summarizeFileChangeWithAIFunc(ctx, options, file)
 			if err != nil {
 				return aiSummaryResult{Index: index, HasIndex: true}, err
 			}

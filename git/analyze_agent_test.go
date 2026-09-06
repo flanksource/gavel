@@ -6,8 +6,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/models"
+	"github.com/flanksource/gavel/verify"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -79,9 +81,10 @@ func TestAnalyzeCommitHistoryUsesTheCallerSuppliedAgent(t *testing.T) {
 	}
 
 	_, err = AnalyzeCommitHistory(ctx, []models.Commit{commit}, AnalyzeOptions{
-		AI:        true,
-		Agent:     agent,
-		AITimeout: 10 * time.Second,
+		AI:            true,
+		Agent:         agent,
+		AITimeout:     10 * time.Second,
+		PromptOptions: verify.PromptResolveOptions{Base: api.Spec{Model: api.Model{Name: "api:gpt-4o"}}},
 	})
 
 	require.NoError(t, err)

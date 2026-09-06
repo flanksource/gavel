@@ -26,7 +26,7 @@ type AgentConfig = captainai.Config
 // the bug class possible twice over: an agent could be built without anyone
 // choosing a model, and because BindFlags merges --ai-model onto this struct, the
 // hardcoded name always outranked whatever .gavel.yaml configured. The model is
-// now the caller's to resolve — see verify.GavelConfig.ModelFor.
+// now the owning operation's to resolve through its full spec layers.
 func DefaultConfig() AgentConfig {
 	return AgentConfig{
 		Budget:        api.Budget{MaxTokens: 10000},
@@ -71,4 +71,20 @@ func BindFlags(flags *pflag.FlagSet, cfg *AgentConfig) {
 	flags.BoolVar(&cfg.NoCache, "ai-no-cache", cfg.NoCache, "Disable AI response caching")
 	flags.StringVar(&cfg.CacheDBPath, "ai-cache-db", cfg.CacheDBPath, "Path to AI cache database (default: ~/.cache/clicky-ai.db)")
 	flags.StringVar(&cfg.ProjectName, "ai-project", cfg.ProjectName, "Project name for cache grouping")
+}
+
+func FlagSpec(cfg AgentConfig, flags *pflag.FlagSet) api.Spec {
+	var request api.Spec
+	if flags.Changed("ai-model") {
+		request.Model = cfg.Model
+	}
+	if flags.Changed("ai-max-tokens") {
+		request.Budget.MaxTokens = cfg.Budget.MaxTokens
+		request = request.WithExplicit("/budget/maxTokens")
+	}
+	if flags.Changed("ai-no-cache") {
+		request.NoCache = cfg.NoCache
+		request = request.WithExplicit("/noCache")
+	}
+	return request
 }

@@ -6,35 +6,38 @@ import (
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/models"
+	"github.com/flanksource/gavel/verify"
 )
 
 // Example usage of Summarize with AI integration
-func ExampleSummarize() {
+func ExampleSummarize() error {
 	// Get commits from analyzer
 	commits := models.CommitAnalyses{} // populated from git analyzer
 
 	// Option 1: Use fallback descriptions (no AI)
-	summariesBasic, _ := Summarize(commits, SummaryOptions{
+	summariesBasic, err := Summarize(commits, SummaryOptions{
 		Window:        GroupByMonth,
 		MaxCategories: 6,
 	})
+	if err != nil {
+		return err
+	}
 
-	// Option 2: Use AI-powered descriptions. The model is resolved from
-	// .gavel.yaml by the caller (see verify.GavelConfig.ModelFor); there is no
-	// default agent, because nothing may choose a model on the user's behalf.
-	cfg := ai.DefaultConfig()
-	cfg.Model = api.Model{Name: "api:haiku"}
-	agent, _ := ai.NewAgent(cfg)
-	defer agent.Close() //nolint:errcheck // process-backed backends only release their child on Close
-	summariesWithAI, _ := Summarize(commits, SummaryOptions{
+	// Option 2: Resolve each summary before constructing its provider.
+	summariesWithAI, err := Summarize(commits, SummaryOptions{
 		Window:        GroupByMonth,
 		MaxCategories: 6,
-		Agent:         agent,
+		AgentFactory:  ai.NewAgent,
+		Prompt:        verify.PromptSpec{Spec: api.Spec{Model: api.Model{Name: "api:haiku"}}},
 		Context:       context.Background(),
 	})
+	if err != nil {
+		return err
+	}
 
 	_ = summariesBasic
 	_ = summariesWithAI
+	return nil
 }
 
 // ExampleSummarizeWithScope shows how to use repomap for scoping

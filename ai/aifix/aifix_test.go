@@ -11,7 +11,6 @@ import (
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/models"
-	"github.com/flanksource/gavel/verify"
 )
 
 func ptr(s string) *string { return &s }
@@ -26,6 +25,19 @@ func violation(file, message, rule string, line int) models.Violation {
 
 func resultsWith(linter string, vs ...models.Violation) []*linters.LinterResult {
 	return []*linters.LinterResult{{Linter: linter, Violations: vs}}
+}
+
+func renderLintPrompt(options ResolveOptions) (api.Spec, error) {
+	layers, err := Layers(options)
+	if err != nil {
+		return api.Spec{}, err
+	}
+	resolved, err := api.ResolveSpecLayers(api.ResolveSpecOptions{Layers: layers, RequireModel: true})
+	return resolved.Spec, err
+}
+
+func unexpectedRequestBuild([]*linters.LinterResult) (captainai.Request, error) {
+	return captainai.Request{}, errors.New("unexpected request rebuild")
 }
 
 func TestHasViolations_TrueWhenAtLeastOneNonSkippedHasViolations(t *testing.T) {
@@ -55,7 +67,7 @@ func TestResolveSpecFormatsViolationsWithRuleAndLocation(t *testing.T) {
 		violation(".env", "AWS access key", "AWS_KEY", 3),
 		violation("config.yaml", "GCP key", "", 0),
 	)
-	spec, err := ResolveSpec(api.Spec{Model: api.Model{Name: "agent:sonnet"}}, verify.PromptSpec{}, "/repo", []string{"betterleaks"}, res)
+	spec, err := renderLintPrompt(ResolveOptions{Base: api.Spec{Model: api.Model{Name: "agent:sonnet"}}, Dir: "/repo", Linters: []string{"betterleaks"}, Results: res})
 	if err != nil {
 		t.Fatalf("ResolveSpec err: %v", err)
 	}
@@ -74,7 +86,7 @@ func TestResolveSpecSkipsSkippedAndEmptyResults(t *testing.T) {
 		{Linter: "empty"},
 		{Linter: "real", Violations: []models.Violation{violation("a.go", "msg", "R", 5)}},
 	}
-	spec, err := ResolveSpec(api.Spec{Model: api.Model{Name: "agent:sonnet"}}, verify.PromptSpec{}, "/repo", nil, res)
+	spec, err := renderLintPrompt(ResolveOptions{Base: api.Spec{Model: api.Model{Name: "agent:sonnet"}}, Dir: "/repo", Results: res})
 	if err != nil {
 		t.Fatalf("ResolveSpec err: %v", err)
 	}
@@ -88,7 +100,7 @@ func TestResolveSpecSkipsSkippedAndEmptyResults(t *testing.T) {
 }
 
 func TestResolveSpecSystemPromptMentionsLintersWhenProvided(t *testing.T) {
-	spec, err := ResolveSpec(api.Spec{Model: api.Model{Name: "agent:sonnet"}}, verify.PromptSpec{}, "/repo", []string{"betterleaks", "ruff"}, resultsWith("ruff", violation("x.py", "bad", "R", 1)))
+	spec, err := renderLintPrompt(ResolveOptions{Base: api.Spec{Model: api.Model{Name: "agent:sonnet"}}, Dir: "/repo", Linters: []string{"betterleaks", "ruff"}, Results: resultsWith("ruff", violation("x.py", "bad", "R", 1))})
 	if err != nil {
 		t.Fatalf("ResolveSpec err: %v", err)
 	}
@@ -102,7 +114,7 @@ func TestResolveSpecSystemPromptMentionsLintersWhenProvided(t *testing.T) {
 }
 
 func TestResolveSpecSystemPromptOmitsLinterClauseWhenEmpty(t *testing.T) {
-	spec, err := ResolveSpec(api.Spec{Model: api.Model{Name: "agent:sonnet"}}, verify.PromptSpec{}, "/repo", nil, resultsWith("ruff", violation("x.py", "bad", "R", 1)))
+	spec, err := renderLintPrompt(ResolveOptions{Base: api.Spec{Model: api.Model{Name: "agent:sonnet"}}, Dir: "/repo", Results: resultsWith("ruff", violation("x.py", "bad", "R", 1))})
 	if err != nil {
 		t.Fatalf("ResolveSpec err: %v", err)
 	}
@@ -114,7 +126,6 @@ func TestResolveSpecSystemPromptOmitsLinterClauseWhenEmpty(t *testing.T) {
 
 func TestRun_ShortCircuitsOnCleanInitial(t *testing.T) {
 	res, err := Run(context.Background(), Request{
-		WorkDir: "/repo",
 		Initial: []*linters.LinterResult{{Linter: "x"}}, // no violations
 		ReLint: func(ctx context.Context) ([]*linters.LinterResult, error) {
 			t.Fatal("ReLint should not be called when initial is clean")
@@ -131,7 +142,6 @@ func TestRun_ShortCircuitsOnCleanInitial(t *testing.T) {
 
 func TestRun_ErrorsWhenReLintMissingAndViolationsPresent(t *testing.T) {
 	_, err := Run(context.Background(), Request{
-		WorkDir: "/repo",
 		Initial: resultsWith("betterleaks", violation("a", "x", "R", 1)),
 	})
 	if err == nil || !strings.Contains(err.Error(), "ReLint is required") {
@@ -167,7 +177,7 @@ func (f *fakeStreaming) ExecuteStream(ctx context.Context, req captainai.Request
 // aifix.Run should refuse to drive it through the loop.
 type fakeBuffered struct{}
 
-func (f *fakeBuffered) GetModel() string              { return "buf" }
+func (f *fakeBuffered) GetModel() string { return "buf" }
 func (f *fakeBuffered) GetRuntime() captainai.Runtime {
 	return captainai.Runtime{Provider: "anthropic", Mode: captainai.ModeAPI}
 }
@@ -186,19 +196,19 @@ func TestRun_UsesAIConfigFromCaller(t *testing.T) {
 	})
 
 	res, err := Run(context.Background(), Request{
-		WorkDir:       "/repo",
-		Linters:       []string{"fakelint"},
 		Initial:       resultsWith("fakelint", violation("x.go", "missing comma", "RULE", 7)),
 		MaxIterations: 1,
 		AIConfig: captainai.Config{
 			Model: api.Model{Name: "gpt-5.5", Mode: captainai.ModeAgent},
 		},
 		AIRequestProto: captainai.Request{
+			Prompt:      api.Prompt{System: "Repair lint failures", User: "x.go:7 missing comma"},
 			Model:       api.Model{Effort: api.EffortHigh},
 			Budget:      api.Budget{MaxTokens: 16000},
 			Memory:      api.Memory{SkipHooks: true, SkipSkills: true, SkipUser: true, SkipProject: true, SkipMemory: true},
 			Permissions: api.Permissions{MCP: api.MCP{Disabled: true}},
 		},
+		BuildRequest: unexpectedRequestBuild,
 		ReLint: func(ctx context.Context) ([]*linters.LinterResult, error) {
 			return nil, nil
 		},
@@ -241,9 +251,10 @@ func TestRun_UsesAIConfigFromCaller(t *testing.T) {
 // when captain configure has never been run and no --model flag is passed.
 func TestRun_NoModelErrors(t *testing.T) {
 	_, err := Run(context.Background(), Request{
-		Initial:  resultsWith("fakelint", violation("a", "x", "R", 1)),
-		ReLint:   func(ctx context.Context) ([]*linters.LinterResult, error) { return nil, nil },
-		AIConfig: captainai.Config{},
+		Initial:      resultsWith("fakelint", violation("a", "x", "R", 1)),
+		ReLint:       func(ctx context.Context) ([]*linters.LinterResult, error) { return nil, nil },
+		AIConfig:     captainai.Config{},
+		BuildRequest: unexpectedRequestBuild,
 	})
 	if err == nil {
 		t.Fatal("expected error for empty model, got nil")
@@ -263,8 +274,10 @@ func TestRun_SurfacesReLintError(t *testing.T) {
 	})
 	boom := errors.New("re-lint command failed: exit status 1")
 	res, err := Run(context.Background(), Request{
-		Initial:       resultsWith("fakelint", violation("a", "x", "R", 1)),
-		MaxIterations: 3,
+		Initial:        resultsWith("fakelint", violation("a", "x", "R", 1)),
+		MaxIterations:  3,
+		AIRequestProto: captainai.Request{Prompt: api.Prompt{User: "Repair the lint failure"}},
+		BuildRequest:   unexpectedRequestBuild,
 		AIConfig: captainai.Config{
 			Model: api.Model{Name: "gpt-5.6-sol", Mode: captainai.ModeAgent},
 		},
@@ -291,8 +304,9 @@ func TestRun_NonStreamingRuntimeErrors(t *testing.T) {
 		return &fakeBuffered{}, nil
 	})
 	_, err := Run(context.Background(), Request{
-		Initial: resultsWith("fakelint", violation("a", "x", "R", 1)),
-		ReLint:  func(ctx context.Context) ([]*linters.LinterResult, error) { return nil, nil },
+		Initial:      resultsWith("fakelint", violation("a", "x", "R", 1)),
+		ReLint:       func(ctx context.Context) ([]*linters.LinterResult, error) { return nil, nil },
+		BuildRequest: unexpectedRequestBuild,
 		AIConfig: captainai.Config{
 			Model: api.Model{Name: "claude-sonnet-5", Mode: captainai.ModeAPI},
 		},

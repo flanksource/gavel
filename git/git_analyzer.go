@@ -106,7 +106,7 @@ func AnalyzeCommit(ctx *AnalyzerContext, commit models.Commit, options AnalyzeOp
 		out.TotalResourceCount += len(change.KubernetesChanges)
 	}
 
-	if options.Agent != nil {
+	if options.Agent != nil || options.AgentFactory != nil {
 		out, err = AnalyzeWithAI(ctx, out, options.Agent, options)
 	}
 
@@ -131,7 +131,7 @@ func AnalyzeCommitHistory(ctx *AnalyzerContext, commits []models.Commit, options
 		MaxWorkers:  options.MaxConcurrent,
 	}
 
-	if options.AI && options.Agent == nil {
+	if options.AI && options.Agent == nil && options.AgentFactory == nil {
 		return nil, fmt.Errorf("AI analysis requested but no agent was supplied: the caller must resolve a model and build the agent")
 	}
 

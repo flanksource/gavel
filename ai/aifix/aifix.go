@@ -37,29 +37,16 @@ func Prompts() []prompts.Prompt {
 
 // Request is the public input to aifix.Run.
 type Request struct {
-	WorkDir       string
-	Linters       []string
 	Initial       []*linters.LinterResult
 	MaxIterations int
 
-	// AIConfig describes which provider + model + budget aifix should use.
-	// Callers build it from captain's CLI flags + ~/.captain.yaml overlay
-	// via captaincli.AIRuntimeOptions.ToConfig() so `gavel lint --ai-fix`
-	// honours the same defaults as `captain ai prompt`. An empty Model
-	// surfaces captain's "run captain configure" error.
+	// AIConfig and AIRequestProto are projections of the same resolved operation.
 	AIConfig captainai.Config
 
-	// AIRequestProto is the per-iteration request template. aifix sets
-	// Prompt.System and Prompt.User on a clone of this struct each turn; all
-	// other fields (Permissions, Memory, Budget, Model knobs, presets, …)
-	// flow through unchanged so saved captain defaults reach the provider.
+	// AIRequestProto is the initial request. BuildRequest renders subsequent
+	// violation sets using the invocation's captured configuration.
 	AIRequestProto captainai.Request
-
-	// BaseAI and PromptSpec resolve lint.fix independently from commit.message.
-	// The prompt is rendered again after every re-lint so each turn receives only
-	// the violations that remain.
-	BaseAI     api.Spec
-	PromptSpec verify.PromptSpec
+	BuildRequest   func([]*linters.LinterResult) (captainai.Request, error)
 
 	// ReLint is invoked after each AI iteration to check whether
 	// violations remain. It must run with the same scope (linters, files)
@@ -86,6 +73,9 @@ func Run(ctx context.Context, req Request) (*Result, error) {
 	}
 	if req.ReLint == nil {
 		return nil, fmt.Errorf("aifix.Run: ReLint is required")
+	}
+	if req.BuildRequest == nil {
+		return nil, fmt.Errorf("aifix.Run: BuildRequest is required")
 	}
 
 	gavelai.NormalizeEnv()
@@ -117,27 +107,26 @@ func Run(ctx context.Context, req Request) (*Result, error) {
 		MaxIterations: req.MaxIterations,
 		MaxCostUSD:    req.AIConfig.Budget.Cost,
 		SessionReuse:  true,
-		BuildRequest: func(iter int, prev *captainai.LoopIteration) (captainai.Request, bool) {
-			if iter > 0 {
-				next, e := req.ReLint(ctx)
-				if e != nil {
-					loopErr = fmt.Errorf("re-lint between iterations failed: %w", e)
-					loopStopReason = "relint-error"
-					return captainai.Request{}, false
-				}
-				current = next
-				if !hasViolations(current) {
-					return captainai.Request{}, false
-				}
+		BuildRequest: func(iter int, _ *captainai.LoopIteration) (captainai.Request, bool) {
+			if iter == 0 {
+				return req.AIRequestProto, true
 			}
-			resolved, e := ResolveSpec(req.BaseAI, req.PromptSpec, req.WorkDir, req.Linters, current)
+			next, e := req.ReLint(ctx)
+			if e != nil {
+				loopErr = fmt.Errorf("re-lint between iterations failed: %w", e)
+				loopStopReason = "relint-error"
+				return captainai.Request{}, false
+			}
+			current = next
+			if !hasViolations(current) {
+				return captainai.Request{}, false
+			}
+			turn, e := req.BuildRequest(current)
 			if e != nil {
 				loopErr = fmt.Errorf("resolve lint.fix prompt: %w", e)
 				loopStopReason = "prompt-error"
 				return captainai.Request{}, false
 			}
-			turn := req.AIRequestProto
-			turn.Prompt = resolved.Prompt
 			return turn, true
 		},
 		OnEvent: req.OnEvent,
@@ -200,13 +189,20 @@ func hasViolations(results []*linters.LinterResult) bool {
 	return false
 }
 
-// ResolveSpec renders the configurable lint.fix operation for one iteration.
-func ResolveSpec(base api.Spec, override verify.PromptSpec, workDir string, linterNames []string, results []*linters.LinterResult) (api.Spec, error) {
-	return override.Resolve(base, lintAIFixPrompt, map[string]any{
-		"workDir":    workDir,
-		"linters":    strings.Join(linterNames, ", "),
-		"violations": formatViolations(results),
-	}, workDir)
+type ResolveOptions struct {
+	Base    api.Spec
+	Prompt  verify.PromptSpec
+	Dir     string
+	Linters []string
+	Results []*linters.LinterResult
+}
+
+func Layers(options ResolveOptions) ([]api.SpecLayer, error) {
+	return options.Prompt.Layers(verify.PromptResolveOptions{Base: options.Base, DefaultPrompt: lintAIFixPrompt, Data: map[string]any{
+		"workDir":    options.Dir,
+		"linters":    strings.Join(options.Linters, ", "),
+		"violations": formatViolations(options.Results),
+	}, Dir: options.Dir, Name: prompts.LintFix})
 }
 
 func formatViolations(results []*linters.LinterResult) string {

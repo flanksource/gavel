@@ -8,7 +8,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/flanksource/captain/pkg/ai/prompt"
 	"github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/models"
 )
@@ -16,7 +15,7 @@ import (
 //go:embed ai-commit-message.prompt
 var commitMessagePrompt string
 
-// commitMessagePromptFile is reported as PromptRequest.Source so the AI logging
+// commitMessagePromptFile is reported as PromptRequest.Spec.Prompt.Source so the AI logging
 // middleware identifies which template produced each request under -v.
 const commitMessagePromptFile = "ai-commit-message.prompt"
 
@@ -36,7 +35,7 @@ func AnalyzeWithAI(ctx context.Context, commit models.CommitAnalysis, agent ai.A
 		return commit, nil
 	}
 
-	analyzed, err := analyzeCommitMessageWithAI(ctx, commit, agent, opts.MaxBodyLines, opts.MessagePrompt, opts.AllowedCommitTypes)
+	analyzed, err := analyzeCommitMessageWithAI(ctx, commit, agent, opts)
 	if err != nil {
 		return commit, err
 	}
@@ -47,32 +46,27 @@ func AnalyzeWithAI(ctx context.Context, commit models.CommitAnalysis, agent ai.A
 	return analyzed, nil
 }
 
-func analyzeCommitMessageWithAI(ctx context.Context, commit models.CommitAnalysis, agent ai.Agent, maxBodyLines int, override string, configuredTypes []string) (models.CommitAnalysis, error) {
-	template := promptOrDefault(override, commitMessagePrompt)
-	if template == "" {
-		return commit, fmt.Errorf("AI commit message prompt template is empty")
-	}
-
-	allowedTypes, err := allowedCommitTypes(configuredTypes)
+func analyzeCommitMessageWithAI(ctx context.Context, commit models.CommitAnalysis, agent ai.Agent, opts AnalyzeOptions) (models.CommitAnalysis, error) {
+	allowedTypes, err := allowedCommitTypes(opts.AllowedCommitTypes)
 	if err != nil {
 		return commit, err
 	}
 
-	promptText, schemaJSON, err := renderCommitPrompt(commit, template, maxBodyLines, allowedTypes)
-	if err != nil {
-		return commit, err
+	prepared := opts.Prepared
+	if prepared == nil {
+		resolved, err := PrepareCommitMessage(commit, opts)
+		if err != nil {
+			return commit, err
+		}
+		prepared = &resolved
 	}
-
 	// No prompting.Prepare() here. It waits for the global clicky task manager to
 	// drain, which is correct when a caller owns the terminal (gavel commit) but a
 	// deadlock on the git analyze path: AnalyzeCommitHistory calls this from inside
 	// a clicky batch item, so the item would be waiting for a task set that
 	// includes itself. Callers that own the terminal Prepare before calling in.
-	resp, err := agent.ExecutePrompt(ctx, ai.PromptRequest{
-		Name:       promptName(commit, "commit message"),
-		Source:     commitMessagePromptFile,
-		Prompt:     promptText,
-		SchemaJSON: schemaJSON,
+	resp, err := executePreparedPrompt(ctx, preparedPromptOptions{
+		Name: promptName(commit, "commit message"), Runtime: *prepared, Agent: agent, AgentFactory: opts.AgentFactory,
 	})
 	if err != nil {
 		return commit, fmt.Errorf("execute AI commit message prompt: %w", err)
@@ -154,34 +148,6 @@ func commitTypeNames(types []models.CommitType) []string {
 		out[i] = string(t)
 	}
 	return out
-}
-
-// promptOrDefault returns the .gavel.yaml override when set, otherwise the
-// embedded default template.
-func promptOrDefault(override, embedded string) string {
-	if strings.TrimSpace(override) != "" {
-		return override
-	}
-	return embedded
-}
-
-// renderCommitPrompt renders the template body and returns the user prompt plus
-// the JSON output schema declared in the .prompt frontmatter (empty when none),
-// with the allowed commit types enumerated on the schema's `type` property.
-func renderCommitPrompt(commit models.CommitAnalysis, template string, maxBodyLines int, allowedTypes []string) (string, json.RawMessage, error) {
-	data := commit.AsMap()
-	for k, v := range commitPromptData(maxBodyLines, allowedTypes) {
-		data[k] = v
-	}
-	req, _, err := prompt.Load(template).Render(data, nil)
-	if err != nil {
-		return "", nil, fmt.Errorf("render AI prompt template: %w", err)
-	}
-	schema, err := enumerateCommitType(req.Prompt.SchemaJSON, allowedTypes)
-	if err != nil {
-		return "", nil, err
-	}
-	return req.Prompt.User, schema, nil
 }
 
 // enumerateCommitType constrains the output schema's `type` property to the

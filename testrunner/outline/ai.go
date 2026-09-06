@@ -3,14 +3,14 @@ package outline
 import (
 	"context"
 	_ "embed"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 
-	"github.com/flanksource/captain/pkg/ai/prompt"
-	"github.com/flanksource/captain/pkg/api"
+	captaincli "github.com/flanksource/captain/pkg/cli"
 	"github.com/flanksource/commons/logger"
 	clickyai "github.com/flanksource/gavel/ai"
 )
@@ -39,12 +39,8 @@ type SummaryAgent interface {
 	Close() error
 }
 
-// newSummaryAgent is swapped in tests. It takes a resolved model rather than
-// reaching for a default: nothing may choose a model on the user's behalf.
-var newSummaryAgent = func(model api.Model) (SummaryAgent, error) {
-	cfg := clickyai.DefaultConfig()
-	cfg.Model = model
-	return clickyai.NewAgent(cfg)
+var newSummaryAgent = func(runtime captaincli.AIRuntimeResolved) (SummaryAgent, error) {
+	return clickyai.NewAgent(runtime.Config)
 }
 
 // applyAISummaries generates one-line AI summaries for every leaf, batched
@@ -59,21 +55,7 @@ func applyAISummaries(ctx context.Context, report *Report, workDir string) error
 		return nil
 	}
 
-	model, err := resolveSummaryModel(workDir)
-	if err != nil {
-		return err
-	}
-	agent, err := newSummaryAgent(model)
-	if err != nil {
-		return fmt.Errorf("create AI agent for --ai-summary: %w", err)
-	}
-	defer func() {
-		if err := agent.Close(); err != nil {
-			logger.Warnf("ai-summary: failed to close AI agent: %v", err)
-		}
-	}()
-
-	template, err := resolveSummaryPrompt(workDir)
+	prompt, err := resolveSummaryPrompt(workDir)
 	if err != nil {
 		return err
 	}
@@ -86,7 +68,7 @@ func applyAISummaries(ctx context.Context, report *Report, workDir string) error
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			if err := summarizeFileTests(ctx, agent, workDir, file, leaves, template); err != nil {
+			if err := summarizeFileTests(ctx, prompt, file, leaves); err != nil {
 				logger.Warnf("ai-summary for %s failed (keeping static descriptions): %v", file, err)
 			}
 		}(file, leaves)
@@ -95,15 +77,11 @@ func applyAISummaries(ctx context.Context, report *Report, workDir string) error
 	return nil
 }
 
-func summarizeFileTests(ctx context.Context, agent SummaryAgent, workDir, file string, leaves []*Entry, template string) error {
-	source, err := os.ReadFile(filepath.Join(workDir, file))
+func summarizeFileTests(ctx context.Context, prompt *summaryPrompt, file string, leaves []*Entry) (err error) {
+	source, err := os.ReadFile(filepath.Join(prompt.dir, file))
 	if err != nil {
 		return fmt.Errorf("read test source: %w", err)
 	}
-	if strings.TrimSpace(template) == "" {
-		template = testSummaryPromptTemplate
-	}
-
 	byID := map[string]*Entry{}
 	ids := make([]string, 0, len(leaves))
 	for _, leaf := range leaves {
@@ -112,20 +90,33 @@ func summarizeFileTests(ctx context.Context, agent SummaryAgent, workDir, file s
 		ids = append(ids, id)
 	}
 
-	req, _, err := prompt.Load(template).Render(map[string]any{
+	runtime, err := prompt.resolve(map[string]any{
 		"ids":    strings.Join(ids, "\n"),
 		"file":   file,
 		"source": truncateSource(string(source)),
-	}, nil)
+	})
 	if err != nil {
 		return fmt.Errorf("render summary prompt: %w", err)
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	for _, warning := range runtime.Resolution.Warnings {
+		logger.Warnf("test outline summary %s preflight: %s", file, warning)
+	}
+	agent, err := newSummaryAgent(runtime)
+	if err != nil {
+		return fmt.Errorf("create AI agent for --ai-summary: %w", err)
+	}
+	defer func() {
+		if closeErr := agent.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close AI summary agent: %w", closeErr))
+		}
+	}()
 
 	resp, err := agent.ExecutePrompt(ctx, clickyai.PromptRequest{
-		Name:       fmt.Sprintf("test outline summary: %s", file),
-		Prompt:     req.Prompt.User,
-		SchemaJSON: req.Prompt.SchemaJSON,
-		Source:     "test-summary.prompt",
+		Name: fmt.Sprintf("test outline summary: %s", file),
+		Spec: runtime.Request,
 	})
 	if err != nil {
 		return fmt.Errorf("execute summary prompt: %w", err)

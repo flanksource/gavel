@@ -7,11 +7,11 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/flanksource/captain/pkg/ai/prompt"
+	"github.com/flanksource/captain/pkg/api"
+	captaincli "github.com/flanksource/captain/pkg/cli"
 	"github.com/flanksource/commons/logger"
-	"github.com/flanksource/gavel/ai"
-	"github.com/flanksource/gavel/internal/prompting"
 	"github.com/flanksource/gavel/models"
+	"github.com/flanksource/gavel/prompts"
 	"github.com/ghodss/yaml"
 )
 
@@ -23,11 +23,7 @@ type AISummaryOutput struct {
 	Description string `yaml:"description,omitempty" json:"description,omitempty"`
 }
 
-func renderSummaryPrompt(scope models.ScopeType, window string, commits models.CommitAnalyses, template string) (string, error) {
-	if template == "" {
-		return "", fmt.Errorf("AI summary group prompt template is empty")
-	}
-
+func summaryPromptData(scope models.ScopeType, window string, commits models.CommitAnalyses) map[string]any {
 	filesSet := make(map[string]struct{})
 	for _, commit := range commits {
 		for _, change := range commit.Changes {
@@ -46,29 +42,42 @@ func renderSummaryPrompt(scope models.ScopeType, window string, commits models.C
 		commitMaps = append(commitMaps, commit.AsMap())
 	}
 
-	req, _, err := prompt.Load(template).Render(map[string]any{
+	return map[string]any{
 		"window":  window,
 		"scope":   scope,
 		"commits": commitMaps,
 		"files":   files,
-	}, nil)
-	if err != nil {
-		return "", fmt.Errorf("failed to render AI prompt template: %w", err)
 	}
-	return req.Prompt.User, nil
 }
 
-func GenerateGroupSummary(ctx context.Context, scope models.ScopeType, window string, commits models.CommitAnalyses, agent ai.Agent, promptOverride string) (string, string, error) {
-	promptText, err := renderSummaryPrompt(scope, window, commits, promptOrDefault(promptOverride, summaryGroupPrompt))
+func prepareGroupSummary(scope models.ScopeType, window string, commits models.CommitAnalyses, opts SummaryOptions) (captaincli.AIRuntimeResolved, error) {
+	options := opts.PromptOptions
+	options.DefaultPrompt = summaryGroupPrompt
+	options.Name = prompts.CommitSummary
+	options.RequireModel = true
+	options.Saved = &opts.Saved.AI
+	options.Normalize = func(spec api.Spec) (api.SpecNormalization, error) {
+		return (captaincli.AIRuntimeOptions{}).Normalize(captaincli.AIRuntimeNormalizeOptions{Spec: spec, Saved: opts.Saved, Cwd: options.Dir})
+	}
+	options.Data = summaryPromptData(scope, window, commits)
+	resolved, err := opts.Prompt.Resolve(options)
+	if err != nil {
+		return captaincli.AIRuntimeResolved{}, err
+	}
+	if resolved.Spec.Prompt.Source == "" {
+		resolved.Spec.Prompt.Source = "ai-summary-group.prompt"
+	}
+	return (captaincli.AIRuntimeOptions{}).Project(captaincli.AIRuntimeProjectOptions{Resolved: resolved, Saved: opts.Saved})
+}
+
+func GenerateGroupSummary(ctx context.Context, scope models.ScopeType, window string, commits models.CommitAnalyses, options SummaryOptions) (string, string, error) {
+	prepared, err := prepareGroupSummary(scope, window, commits, options)
 	if err != nil {
 		return "", "", err
 	}
 
-	prompting.Prepare()
-	resp, err := agent.ExecutePrompt(ctx, ai.PromptRequest{
-		Name:   fmt.Sprintf("Summary: %s - %s", scope, window),
-		Source: "ai-summary-group.prompt",
-		Prompt: promptText,
+	resp, err := executePreparedPrompt(ctx, preparedPromptOptions{
+		Name: fmt.Sprintf("Summary: %s - %s", scope, window), Runtime: prepared, Agent: options.Agent, AgentFactory: options.AgentFactory,
 	})
 	if err != nil {
 		logger.Warnf("AI prompt execution failed: %v", err)

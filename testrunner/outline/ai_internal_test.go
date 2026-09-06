@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 
-	"github.com/flanksource/captain/pkg/api"
+	captaincli "github.com/flanksource/captain/pkg/cli"
 	clickyai "github.com/flanksource/gavel/ai"
 	. "github.com/onsi/gomega"
 
@@ -41,6 +43,11 @@ var _ = Describe("applyAISummaries", func() {
 	var report *Report
 
 	BeforeEach(func() {
+		home := GinkgoT().TempDir()
+		GinkgoT().Setenv("HOME", home)
+		Expect(os.WriteFile(filepath.Join(home, ".captain.yaml"), []byte("ai:\n  defaultModel: agent:claude-sonnet-5\n  timeout: 17m\n  maxTokens: 3000\n  noSkills: true\n"), 0o600)).To(Succeed())
+		previous := newSummaryAgent
+		GinkgoT().Cleanup(func() { newSummaryAgent = previous })
 		report = &Report{Entries: []*Entry{
 			{Framework: parsers.GoTest, File: "gotest/sample_test.go", Name: "TestAdd", Line: 8, Description: "add"},
 			{Framework: parsers.GoTest, File: "gotest/sample_test.go", Name: "TestTable", Line: 14, Description: "table"},
@@ -49,9 +56,18 @@ var _ = Describe("applyAISummaries", func() {
 
 	It("attaches matched summaries and keeps static descriptions elsewhere", func() {
 		stub := &stubSummaryAgent{}
-		newSummaryAgent = func(api.Model) (SummaryAgent, error) { return stub, nil }
+		var projected captaincli.AIRuntimeResolved
+		newSummaryAgent = func(runtime captaincli.AIRuntimeResolved) (SummaryAgent, error) {
+			projected = runtime
+			return stub, nil
+		}
 		Expect(applyAISummaries(context.Background(), report, "testdata")).To(Succeed())
 		Expect(stub.requests).To(HaveLen(1))
+		Expect(stub.requests[0].Spec.Budget.Timeout).To(Equal("17m"))
+		Expect(stub.requests[0].Spec.Budget.MaxTokens).To(Equal(3000))
+		Expect(stub.requests[0].Spec.Memory.SkipSkills).To(BeTrue())
+		Expect(projected.Request).To(Equal(stub.requests[0].Spec))
+		Expect(projected.Config.Budget).To(Equal(stub.requests[0].Spec.Budget))
 		Expect(report.Entries[0].AISummary).To(Equal("verifies add returns the arithmetic sum"))
 		Expect(report.Entries[1].AISummary).To(BeEmpty())
 		Expect(report.Entries[1].Description).To(Equal("table"))
@@ -59,7 +75,7 @@ var _ = Describe("applyAISummaries", func() {
 	})
 
 	It("keeps the outline alive when the agent fails for a file", func() {
-		newSummaryAgent = func(api.Model) (SummaryAgent, error) { return &stubSummaryAgent{fail: true}, nil }
+		newSummaryAgent = func(captaincli.AIRuntimeResolved) (SummaryAgent, error) { return &stubSummaryAgent{fail: true}, nil }
 		Expect(applyAISummaries(context.Background(), report, "testdata")).To(Succeed())
 		Expect(report.Entries[0].AISummary).To(BeEmpty())
 	})

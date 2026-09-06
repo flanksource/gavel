@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flanksource/captain/pkg/captainconfig"
+	captaincli "github.com/flanksource/captain/pkg/cli"
 	"github.com/flanksource/repomap"
 
 	"github.com/flanksource/clicky"
@@ -14,6 +16,7 @@ import (
 	"github.com/flanksource/commons/collections"
 	"github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/models"
+	"github.com/flanksource/gavel/verify"
 )
 
 type HistoryOptions struct {
@@ -88,19 +91,19 @@ type AnalyzeOptions struct {
 	// MaxBodyLines caps the commit message body length the LLM is asked to
 	// produce. Scaled to the diff size by the commit package; 0 means
 	// subject-only (no body).
-	MaxBodyLines  int           `json:"max_body_lines,omitempty"`
-	AI            bool          `json:"ai" flag:"ai" help:"Enable AI-powered analysis"`
-	AITimeout     time.Duration `json:"ai_timeout" flag:"ai-timeout" help:"Timeout for AI analysis per commit" default:"60s"`
-	Summary       bool          `json:"summary" flag:"summary" help:"Generate a tree based summary of the analysis results"`
-	SummaryWindow GroupByWindow `json:"summary_window,omitempty" flag:"summary-window" help:"Time window for summary grouping (day, week, month, year), dynamically groups based on total time range if not set"`
-	Short         bool          `json:"show_files" flag:"short"  help:"Show short summary with files changed instead of full analysis"`
-	Include       []string      `json:"include,omitempty" flag:"include" help:"Include these filter sets from .gitanalyze.yaml"`
-	Exclude       []string      `json:"exclude,omitempty" flag:"exclude" help:"Exclude these filter sets from .gitanalyze.yaml"`
-	Verbose       bool          `json:"verbose,omitempty" flag:"verbose" help:"Show what was skipped and why"`
-	// MessagePrompt overrides the embedded AI commit-message prompt template.
-	// Resolved from .gavel.yaml by the commit package; empty falls back to the
-	// built-in template. Not a CLI flag.
-	MessagePrompt string `json:"-"`
+	MaxBodyLines  int                           `json:"max_body_lines,omitempty"`
+	AI            bool                          `json:"ai" flag:"ai" help:"Enable AI-powered analysis"`
+	AITimeout     time.Duration                 `json:"ai_timeout" flag:"ai-timeout" help:"Timeout for AI analysis per commit" default:"60s"`
+	Summary       bool                          `json:"summary" flag:"summary" help:"Generate a tree based summary of the analysis results"`
+	SummaryWindow GroupByWindow                 `json:"summary_window,omitempty" flag:"summary-window" help:"Time window for summary grouping (day, week, month, year), dynamically groups based on total time range if not set"`
+	Short         bool                          `json:"show_files" flag:"short"  help:"Show short summary with files changed instead of full analysis"`
+	Include       []string                      `json:"include,omitempty" flag:"include" help:"Include these filter sets from .gitanalyze.yaml"`
+	Exclude       []string                      `json:"exclude,omitempty" flag:"exclude" help:"Exclude these filter sets from .gitanalyze.yaml"`
+	Verbose       bool                          `json:"verbose,omitempty" flag:"verbose" help:"Show what was skipped and why"`
+	Prompt        verify.PromptSpec             `json:"-"`
+	PromptOptions verify.PromptResolveOptions   `json:"-"`
+	Saved         captainconfig.Config          `json:"-"`
+	Prepared      *captaincli.AIRuntimeResolved `json:"-"`
 	// AllowedCommitTypes restricts the types AI message generation may choose
 	// from (.gavel.yaml commit.types); empty uses gavel's defaults. Distinct
 	// from CommitTypes above, which filters which existing commits to analyze.
@@ -112,8 +115,9 @@ type AnalyzeOptions struct {
 	// CLI or .gavel.yaml selected. The caller now resolves the model and owns the
 	// agent's lifetime, matching SummaryOptions.Agent in this same package.
 	// Nil disables AI analysis.
-	Agent ai.Agent         `json:"-"`
-	arch  repomap.ArchConf `json:"-"`
+	Agent        ai.Agent                               `json:"-"`
+	AgentFactory func(ai.AgentConfig) (ai.Agent, error) `json:"-"`
+	arch         repomap.ArchConf                       `json:"-"`
 }
 
 func techToStrings(techs []models.ScopeTechnology) []string {

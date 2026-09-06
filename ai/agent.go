@@ -16,7 +16,6 @@ import (
 	captainai "github.com/flanksource/captain/pkg/ai"
 	"github.com/flanksource/captain/pkg/ai/middleware"
 	_ "github.com/flanksource/captain/pkg/ai/provider"
-	"github.com/flanksource/captain/pkg/aiflags"
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/captain/pkg/collections"
 )
@@ -51,27 +50,11 @@ var normalizeOnce sync.Once
 // default middleware applied: request/response logging always, plus response
 // caching when cfg configures it (CacheTTL/CacheDBPath with NoCache unset). This
 // is the batteries-included middleware.NewProvider, which also makes the
-// --ai-cache-* flags actually take effect. Callers that need the full request
-// surface — a working directory, agentic tool/permission knobs — drive
-// provider.Execute with a captainai.Request, which the named-prompt PromptRequest
-// wrapper cannot express. NewAgent is the higher-level surface built on top.
+// --ai-cache-* flags actually take effect. Callers supply a resolved configuration;
+// saved defaults are captured and resolved by the owning operation.
 func NewProvider(cfg AgentConfig) (captainai.Provider, error) {
 	NormalizeEnv()
-	// Resolve once, here, so the provider is built from a driver-ready model
-	// rather than one re-derived from a bare name at dispatch.
-	//
-	// ResolveForRun rather than bare Resolve: this is the execution boundary, so
-	// it applies ~/.captain.yaml on top of whatever .gavel.yaml selected and then
-	// REFUSES an incomplete selection instead of borrowing captain's compiled-in
-	// provider default. Being the single place gavel builds a provider, this one
-	// call makes every gavel AI command config-driven.
-	resolved, err := aiflags.ResolveForRun(cfg.Model)
-	if err != nil {
-		return nil, err
-	}
-	runCfg := cfg
-	runCfg.Model = resolved
-	provider, err := middleware.NewProvider(runCfg)
+	provider, err := middleware.NewProvider(cfg)
 	if err != nil {
 		// The hint quotes the ORIGINAL cfg: an error should echo the model the
 		// user actually typed ("api:terra"), not the id it resolved to.
@@ -114,7 +97,7 @@ func NewAgent(cfg AgentConfig) (Agent, error) {
 // It prefers the provider's validated StructuredData (raw JSON) and falls back
 // to the Result text, failing loudly when neither yields the target shape. Use
 // it with prompts whose output schema is declared in the .prompt frontmatter
-// (PromptRequest.SchemaJSON) rather than bound to a Go struct.
+// (PromptRequest.Spec.Prompt.SchemaJSON) rather than bound to a Go struct.
 func DecodeStructured(resp *PromptResponse, target any) error {
 	if raw, ok := resp.StructuredData.(json.RawMessage); ok && len(raw) > 0 {
 		return json.Unmarshal(raw, target)

@@ -7,7 +7,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/gavel/models"
+	"github.com/flanksource/gavel/verify"
 	"github.com/stretchr/testify/require"
 )
 
@@ -47,9 +49,18 @@ func sampleCommit() models.CommitAnalysis {
 // a project with no commit.types override actually sees it.
 func defaultTypes() []string { return commitTypeNames(models.SelectableCommitTypes()) }
 
+func preparedCommitPrompt(maxBodyLines int, allowed []string) (api.Prompt, error) {
+	prepared, err := PrepareCommitMessage(sampleCommit(), AnalyzeOptions{
+		MaxBodyLines: maxBodyLines, AllowedCommitTypes: allowed,
+		PromptOptions: verify.PromptResolveOptions{Base: api.Spec{Model: api.Model{Name: "api:gpt-4o"}}},
+	})
+	return prepared.Request.Prompt, err
+}
+
 func TestPromptCommitMessage_WithMaxBodyLines(t *testing.T) {
-	got, _, err := renderCommitPrompt(sampleCommit(), commitMessagePrompt, 3, defaultTypes())
+	prepared, err := preparedCommitPrompt(3, defaultTypes())
 	require.NoError(t, err)
+	got := prepared.User
 	require.Contains(t, got, "- body: at most 3 line(s)", "maxBodyLines must select the if-branch")
 	require.NotContains(t, got, "&lt;", "diff must not be HTML-escaped")
 	require.Contains(t, got, "a < b && c > d", "raw diff content must be preserved")
@@ -57,8 +68,9 @@ func TestPromptCommitMessage_WithMaxBodyLines(t *testing.T) {
 }
 
 func TestPromptCommitMessage_WithoutMaxBodyLines(t *testing.T) {
-	got, _, err := renderCommitPrompt(sampleCommit(), commitMessagePrompt, 0, defaultTypes())
+	prepared, err := preparedCommitPrompt(0, defaultTypes())
 	require.NoError(t, err)
+	got := prepared.User
 	require.Contains(t, got, "- body: omit unless the change is non-trivial", "zero maxBodyLines must select the else-branch")
 	require.NotContains(t, got, "at most", "else-branch must not mention a line cap")
 	assertGolden(t, "commit-message-without-maxbody.golden", got)
@@ -87,8 +99,9 @@ func TestPromptSummaryGroup(t *testing.T) {
 		},
 	}
 
-	got, err := renderSummaryPrompt(models.ScopeType("api"), "last 7 days", commits, summaryGroupPrompt)
+	prepared, err := prepareGroupSummary(models.ScopeType("api"), "last 7 days", commits, SummaryOptions{PromptOptions: verify.PromptResolveOptions{Base: api.Spec{Model: api.Model{Name: "api:gpt-4o"}}}})
 	require.NoError(t, err)
+	got := prepared.Request.Prompt.User
 
 	require.Contains(t, got, "abc1234: feat(api): add login endpoint", "scoped commit line must render scope in parens")
 	require.Contains(t, got, "def5678: fix: fix nil panic on logout", "unscoped commit must omit the parens")

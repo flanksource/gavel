@@ -43,12 +43,18 @@ type PRContext struct {
 	UnresolvedComments int
 }
 
-// ResolveSpec renders the pr.fix operation: the base `ai:` spec, the embedded
-// default prompt, and any .gavel.yaml `pr.fix` override, layered in that
-// precedence by verify.PromptSpec.Resolve.
-func ResolveSpec(base api.Spec, override verify.PromptSpec, workDir string, pr PRContext) (api.Spec, error) {
+type ResolveOptions struct {
+	Base   api.Spec
+	Prompt verify.PromptSpec
+	Dir    string
+	PR     PRContext
+}
+
+// Layers renders the operation before CLI flags and saved defaults are resolved.
+func Layers(options ResolveOptions) ([]api.SpecLayer, error) {
+	pr := options.PR
 	data := map[string]any{
-		"workDir":    workDir,
+		"workDir":    options.Dir,
 		"number":     pr.Number,
 		"title":      pr.Title,
 		"url":        pr.URL,
@@ -59,5 +65,5 @@ func ResolveSpec(base api.Spec, override verify.PromptSpec, workDir string, pr P
 	if pr.UnresolvedComments > 0 {
 		data["unresolvedComments"] = strconv.Itoa(pr.UnresolvedComments)
 	}
-	return override.Resolve(base, prStatusFixPrompt, data, workDir)
+	return options.Prompt.Layers(verify.PromptResolveOptions{Base: options.Base, DefaultPrompt: prStatusFixPrompt, Data: data, Dir: options.Dir, Name: prompts.PRFix})
 }
