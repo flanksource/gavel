@@ -150,6 +150,9 @@ func loadSingleGavelConfig(path string) (GavelConfig, string, error) {
 	if err := gc.Todos.Validate(); err != nil {
 		return GavelConfig{}, "", fmt.Errorf("%s: %w", path, err)
 	}
+	if err := validateConfigSpecLayers(gc, path); err != nil {
+		return GavelConfig{}, "", err
+	}
 	setPromptSpecBaseDirs(&gc, filepath.Dir(path))
 	return gc, string(data), nil
 }

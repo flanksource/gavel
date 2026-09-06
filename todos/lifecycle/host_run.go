@@ -161,12 +161,12 @@ func (h *Host) prepare(ctx context.Context, todo *types.TODO, step Step, lc Cont
 	workDir := h.stepWorkDir(todo)
 	definition, err := h.promptFor(step)
 	if err != nil {
-		return nil, err
+		return nil, &ConfigurationError{Err: err}
 	}
 	class := definition.Class
 	stepSpec, err := expandSpec(step.Spec, map[string]any{VarSubject: lc.Subject})
 	if err != nil {
-		return nil, fmt.Errorf("step %s: %w", step.Name, err)
+		return nil, &ConfigurationError{Err: fmt.Errorf("step %s: %w", step.Name, err)}
 	}
 	var prompt PromptLayerResult
 	if class != types.ModeVerify {

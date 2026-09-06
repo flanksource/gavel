@@ -11,6 +11,7 @@ import (
 	gavelgit "github.com/flanksource/gavel/git"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/todos"
+	"github.com/flanksource/gavel/todos/lifecycle"
 	"github.com/flanksource/gavel/todos/native"
 	"github.com/flanksource/gavel/todos/types"
 )
@@ -233,7 +234,10 @@ func countProjectTodos(ctx context.Context, project Project) (todoCounts, error)
 }
 
 func writeTodoError(w http.ResponseWriter, status int, err error) {
+	var configuration *lifecycle.ConfigurationError
 	switch {
+	case errors.As(err, &configuration):
+		status = http.StatusInternalServerError
 	case errors.Is(err, ErrProjectNotFound):
 		status = http.StatusNotFound
 	case errors.Is(err, database.ErrUnavailable):

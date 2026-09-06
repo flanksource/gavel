@@ -31,15 +31,15 @@ type Host struct {
 func NewHost(provider todos.Provider, workDir string, kind HostKind) (*Host, error) {
 	cfg, err := verify.LoadGavelConfig(workDir)
 	if err != nil {
-		return nil, fmt.Errorf("load .gavel.yaml: %w", err)
+		return nil, &ConfigurationError{Err: fmt.Errorf("load .gavel.yaml: %w", err)}
 	}
 	def, err := LoadWith(cfg.Todos.Lifecycle, workDir)
 	if err != nil {
-		return nil, err
+		return nil, &ConfigurationError{Err: err}
 	}
 	engine, err := New(def)
 	if err != nil {
-		return nil, err
+		return nil, &ConfigurationError{Err: err}
 	}
 	return &Host{Provider: provider, Def: engine, Config: cfg, WorkDir: workDir, Kind: kind}, nil
 }

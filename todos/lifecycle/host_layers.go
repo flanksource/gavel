@@ -82,6 +82,27 @@ type LayerInput struct {
 // A layer that configures nothing is omitted rather than appended empty, so the
 // trace a caller reports names only the sources that actually spoke.
 func Layers(in LayerInput) []api.SpecLayer {
+	layers := projectLayers(in)
+	for _, todo := range in.Todos {
+		if layer, ok := todoLayer(todo); ok {
+			layers = append(layers, layer)
+		}
+	}
+	for _, prior := range in.Prior {
+		if !api.IsEmpty(prior.Spec) {
+			layers = append(layers, prior)
+		}
+	}
+	if host, ok := hostLayer(in.Host); ok {
+		layers = append(layers, host)
+	}
+	if !api.IsEmpty(in.Request) {
+		layers = append(layers, api.RequestSpecLayer("request", in.Request))
+	}
+	return layers
+}
+
+func projectLayers(in LayerInput) []api.SpecLayer {
 	layers := []api.SpecLayer{{
 		Name:   ".gavel.yaml ai",
 		Source: api.SpecLayerSourcePreset,
@@ -111,22 +132,6 @@ func Layers(in LayerInput) []api.SpecLayer {
 	if step := stepSpec(in.Config.Todos, in.Step); !api.IsEmpty(step) {
 		layers = append(layers, api.PromptSpecLayer(".gavel.yaml todos."+in.Step, step))
 	}
-	for _, todo := range in.Todos {
-		if layer, ok := todoLayer(todo); ok {
-			layers = append(layers, layer)
-		}
-	}
-	for _, prior := range in.Prior {
-		if !api.IsEmpty(prior.Spec) {
-			layers = append(layers, prior)
-		}
-	}
-	if host, ok := hostLayer(in.Host); ok {
-		layers = append(layers, host)
-	}
-	if !api.IsEmpty(in.Request) {
-		layers = append(layers, api.RequestSpecLayer("request", in.Request))
-	}
 	return layers
 }
 
@@ -135,6 +140,9 @@ func Layers(in LayerInput) []api.SpecLayer {
 // keeps no private fold: two implementations of "which layer wins" is one more
 // than the number of answers that can be right.
 func ResolveLayers(in LayerInput) (api.ResolvedSpec, error) {
+	if err := api.ValidateSpecLayers(projectLayers(in)...); err != nil {
+		return api.ResolvedSpec{}, &ConfigurationError{Err: err}
+	}
 	layers := RestrictHostPermissions(Layers(in))
 	if err := ValidateRequestPermissions(layers); err != nil {
 		return api.ResolvedSpec{}, err
@@ -168,19 +176,19 @@ func PromptLayers(workDir string, todoList []*types.TODO, definition todoprompt.
 	if strings.TrimSpace(definition.Builtin) != "" {
 		spec, err := verify.RenderPromptSpec(definition.Builtin, data, verify.PromptSpecOptions{Declared: true})
 		if err != nil {
-			return result, fmt.Errorf("render built-in %s prompt frontmatter: %w", definition.Name, err)
+			return result, &ConfigurationError{Err: fmt.Errorf("render built-in %s prompt frontmatter: %w", definition.Name, err)}
 		}
 		result.Layers = append(result.Layers, api.PromptSpecLayer("todos-"+definition.Name+".prompt", spec.Spec))
 		result.RuntimeProfile = spec.RuntimeProfile
 	}
 	template, err := definition.Template(workDir)
 	if err != nil {
-		return result, err
+		return result, &ConfigurationError{Err: err}
 	}
 	if definition.Override.File != "" {
 		spec, err := verify.RenderPromptSpec(template, data, verify.PromptSpecOptions{Declared: true})
 		if err != nil {
-			return result, fmt.Errorf("render todos.%s file frontmatter: %w", definition.Name, err)
+			return result, &ConfigurationError{Err: fmt.Errorf("render todos.%s file frontmatter: %w", definition.Name, err)}
 		}
 		result.Layers = append(result.Layers, api.PromptSpecLayer("todos."+definition.Name+" file", spec.Spec))
 		if spec.RuntimeProfile != "" {

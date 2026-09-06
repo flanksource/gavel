@@ -2,6 +2,7 @@ package lifecycle
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -18,6 +19,18 @@ type ProfileSelection struct {
 }
 
 func (h *Host) resolveProfileLayers(ctx context.Context, in LayerInput) (runtimeprofiles.ResolveResult, error) {
+	assembled, err := h.profileLayers(ctx, in)
+	if err != nil {
+		return runtimeprofiles.ResolveResult{}, err
+	}
+	resolved, err := api.ResolveSpecLayers(assembled.Layers...)
+	return runtimeprofiles.ResolveResult{Profile: assembled.Profile, Resolved: resolved}, err
+}
+
+func (h *Host) profileLayers(ctx context.Context, in LayerInput) (runtimeprofiles.LayerResult, error) {
+	if err := api.ValidateSpecLayers(projectLayers(in)...); err != nil {
+		return runtimeprofiles.LayerResult{}, &ConfigurationError{Err: err}
+	}
 	options := runtimeprofiles.ResolveOptions{
 		RequestedProfile: in.RuntimeProfile.Requested,
 		PinnedProfile:    in.RuntimeProfile.Pinned,
@@ -33,19 +46,27 @@ func (h *Host) resolveProfileLayers(ctx context.Context, in LayerInput) (runtime
 	}
 	assembled, err := runtimeprofiles.NewResolver(h.RuntimeCatalog).Layers(ctx, options)
 	if err != nil {
-		return runtimeprofiles.ResolveResult{}, err
+		var selection *runtimeprofiles.SelectionError
+		var ownedLayers *runtimeprofiles.OwnedLayersError
+		if errors.As(err, &selection) && (selection.Origin != runtimeprofiles.SelectionRequested || errors.As(err, &ownedLayers) || errors.Is(err, runtimeprofiles.ErrCatalogUnavailable)) {
+			err = &ConfigurationError{Err: err}
+		}
+		return runtimeprofiles.LayerResult{}, err
 	}
-	layers := RestrictHostPermissions(assembled.Layers)
-	if err := ValidateRequestPermissions(layers); err != nil {
-		return runtimeprofiles.ResolveResult{}, err
+	assembled.Layers = RestrictHostPermissions(assembled.Layers)
+	if err := ValidateRequestPermissions(assembled.Layers); err != nil {
+		return runtimeprofiles.LayerResult{}, err
 	}
-	resolved, err := api.ResolveSpecLayers(layers...)
-	return runtimeprofiles.ResolveResult{Profile: assembled.Profile, Resolved: resolved}, err
+	return assembled, nil
 }
 
 func (h *Host) RuntimeCatalog(ctx context.Context) (*runtimeprofiles.Catalog, error) {
 	if h.Catalog != nil {
-		return h.Catalog(ctx)
+		catalog, err := h.Catalog(ctx)
+		if err != nil {
+			return nil, &ConfigurationError{Err: err}
+		}
+		return catalog, nil
 	}
 	options := runtimeprofiles.DefaultCatalogOptions{Cwd: h.WorkDir}
 	if provider, ok := h.Provider.(interface{ Captain() *captaindb.DB }); ok {
@@ -56,7 +77,11 @@ func (h *Host) RuntimeCatalog(ctx context.Context) (*runtimeprofiles.Catalog, er
 			return nil, fmt.Errorf("lifecycle runtime catalog: provider has no Captain database")
 		}
 	}
-	return runtimeprofiles.NewDefaultCatalog(ctx, options)
+	catalog, err := runtimeprofiles.NewDefaultCatalog(ctx, options)
+	if err != nil {
+		return nil, &ConfigurationError{Err: err}
+	}
+	return catalog, nil
 }
 
 func (h *Host) profileSelection(step string, requested, pinned string) ProfileSelection {

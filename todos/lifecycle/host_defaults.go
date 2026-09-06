@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/flanksource/gavel/verify"
 )
@@ -26,7 +27,7 @@ func Class(step Step) types.RunMode {
 func (h *Host) StepDefaults(ctx context.Context, step Step) (verify.PromptSpec, error) {
 	definition, err := h.promptFor(step)
 	if err != nil {
-		return verify.PromptSpec{}, err
+		return verify.PromptSpec{}, &ConfigurationError{Err: err}
 	}
 	var prompt PromptLayerResult
 	if definition.Class != types.ModeVerify {
@@ -34,16 +35,20 @@ func (h *Host) StepDefaults(ctx context.Context, step Step) (verify.PromptSpec, 
 			return verify.PromptSpec{}, err
 		}
 	}
-	resolved, err := h.resolveProfileLayers(ctx, LayerInput{
+	layers, err := h.profileLayers(ctx, LayerInput{
 		RuntimeProfile: h.profileSelection(step.Name, "", prompt.RuntimeProfile),
 		Config:         h.Config, Step: step.Name, Frontmatter: prompt.Layers, Host: h.Kind,
 	})
 	if err != nil {
 		return verify.PromptSpec{}, fmt.Errorf("resolve defaults for step %s: %w", step.Name, err)
 	}
-	defaults := verify.PromptSpec{Spec: resolved.Resolved.Spec}
-	if resolved.Profile != nil {
-		defaults.RuntimeProfile = resolved.Profile.Profile.ID
+	composed, err := api.ComposeSpecLayers(layers.Layers...)
+	if err != nil {
+		return verify.PromptSpec{}, fmt.Errorf("compose defaults for step %s: %w", step.Name, err)
+	}
+	defaults := verify.PromptSpec{Spec: composed.Spec}
+	if layers.Profile != nil {
+		defaults.RuntimeProfile = layers.Profile.Profile.ID
 	}
 	return defaults, nil
 }
