@@ -54,7 +54,16 @@ func RunAIStep(fixture fixtures.FixtureTest, opts fixtures.RunOptions) fixtures.
 	}
 
 	var schema checklistResponse
-	spec, config := resolveAIStepSpec(fixture, opts, &schema)
+	runtime, config, err := resolveAIStepSpec(fixture, opts, &schema)
+	if err != nil {
+		return result.Errorf(err, "resolve AI fixture runtime")
+	}
+	if len(runtime.Warnings) > 0 {
+		result.Metadata["warnings"] = runtime.Warnings
+	}
+	if len(runtime.Provenance) > 0 {
+		result.Metadata["provenance"] = runtime.Provenance
+	}
 	provider, err := ai.NewProvider(config)
 	if err != nil {
 		return result.Errorf(err, "build ai provider")
@@ -65,7 +74,7 @@ func RunAIStep(fixture fixtures.FixtureTest, opts fixtures.RunOptions) fixtures.
 	if runContext == nil {
 		runContext = context.Background()
 	}
-	resp, err := provider.Execute(runContext, spec)
+	resp, err := provider.Execute(runContext, runtime.Spec)
 	if err != nil {
 		return result.Errorf(err, "checklist prompt")
 	}
@@ -74,32 +83,6 @@ func RunAIStep(fixture fixtures.FixtureTest, opts fixtures.RunOptions) fixtures.
 	}
 
 	return scoreChecklist(fixture, result, items, schema.Items, now)
-}
-
-// resolveAIStepSpec uses the fixture's full runtime snapshot when present, then
-// applies its explicit flat AI options. Fixtures without a snapshot inherit the
-// caller's verification spec. Conversation and workflow state never reach a grader.
-func resolveAIStepSpec(fixture fixtures.FixtureTest, opts fixtures.RunOptions, schema *checklistResponse) (api.Spec, ai.AgentConfig) {
-	var spec api.Spec
-	if fixture.AI != nil && fixture.AI.Spec != nil {
-		spec = *fixture.AI.Spec
-	} else if opts.Spec != nil {
-		spec = *opts.Spec
-	}
-	config := fixture.AI.ToAgentConfig()
-	spec = spec.Merge(api.Spec{Budget: config.Budget})
-	spec.Model = spec.Model.Merge(config.Model)
-	spec = fixtures.GraderSpec(spec)
-
-	spec.Prompt.User = buildChecklistPrompt(fixture, fixtureRepoPath(fixture, opts), checklistItems(fixture), opts.Changed)
-	spec.Prompt.Source = "fixtures.ai-step"
-	spec.Prompt.Schema = schema
-	spec.Prompt.SchemaJSON = nil
-
-	config.Model = spec.Model
-	config.Budget = spec.Budget
-	config.NoCache = spec.NoCache
-	return spec, config
 }
 
 func decodeChecklistResponse(resp *api.Response, target *checklistResponse) error {

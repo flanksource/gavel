@@ -20,7 +20,7 @@ var _ = g.Describe("serialized TODO grader runtime", func() {
 		temperature := 0.0
 		grader := api.Spec{
 			Model: api.Model{Name: "claude-sonnet-4-6", Mode: api.ModeCLI, Effort: api.EffortHigh, Temperature: &temperature,
-				Fallbacks: []api.Model{{Name: "gpt-5", Mode: api.ModeAPI, Effort: api.EffortLow}}, NoCache: true},
+				Fallbacks: []api.Model{{Name: "claude-opus-4-6", Mode: api.ModeCLI, Effort: api.EffortLow, Temperature: &temperature, NoCache: true}}, NoCache: true},
 			Budget:          api.Budget{Cost: 2, MaxTokens: 900, MaxTurns: 4, Timeout: "5m"},
 			Permissions:     api.Permissions{Mode: api.PermissionDontAsk},
 			Memory:          api.Memory{SkipUser: true, SkipHooks: true},
@@ -50,18 +50,21 @@ var _ = g.Describe("serialized TODO grader runtime", func() {
 		want := grader
 		want.SessionID, want.ToolApproval, want.Messages, want.Workflow = "", nil, nil, nil
 		want.Prompt.User, want.Prompt.Source, want.Prompt.SchemaJSON = "", "", nil
+		want = want.WithExplicit("/temperature", "/fallbacks/0/temperature")
+		want.Fallbacks = []api.Model{want.Fallbacks[0].WithExplicit("/model", "/mode", "/effort", "/temperature", "/noCache")}
 		o.Expect(*parsed.AI.Spec).To(o.Equal(want))
 		o.Expect(parsed.AI.Model).To(o.BeEmpty())
 
 		caller := api.Spec{Model: api.Model{Name: "implementer-model"}, Memory: api.Memory{SkipSkills: true}, CLIArgs: map[string]any{"implementation-only": true}}
-		resolved, config := fixturetypes.ResolveAIStepSpecForTest(*parsed, fixtures.RunOptions{Spec: &caller})
+		resolved, config, err := fixturetypes.ResolveAIStepSpecForTest(*parsed, fixtures.RunOptions{Spec: &caller})
+		o.Expect(err).NotTo(o.HaveOccurred())
 		want.Prompt.User = resolved.Prompt.User
 		want.Prompt.Source = "fixtures.ai-step"
 		want.Prompt.Schema = resolved.Prompt.Schema
 		o.Expect(resolved).To(o.Equal(want))
 		o.Expect(resolved.Prompt.User).To(o.ContainSubstring("The parser preserves the grader."))
 		o.Expect(resolved.Prompt.Schema).NotTo(o.BeNil())
-		o.Expect(config.Model).To(o.Equal(grader.Model))
+		o.Expect(config.Model).To(o.Equal(want.Model))
 		o.Expect(config.Budget).To(o.Equal(grader.Budget))
 		o.Expect(grader.SessionID).To(o.Equal("previous-session"))
 		o.Expect(grader.Workflow.Verify).NotTo(o.BeNil())

@@ -36,11 +36,11 @@ var (
 type FixtureAIConfig struct {
 	Spec          *api.Spec     `yaml:"spec,omitempty" json:"spec,omitempty" description:"Complete Captain grader runtime; replaces runner defaults before flat AI overrides"`
 	Model         string        `yaml:"model,omitempty" json:"model,omitempty"`
-	Temperature   float64       `yaml:"temperature,omitempty" json:"temperature,omitempty"`
+	Temperature   *float64      `yaml:"temperature,omitempty" json:"temperature,omitempty"`
 	MaxTokens     int           `yaml:"maxTokens,omitempty" json:"maxTokens,omitempty"`
 	MaxConcurrent int           `yaml:"maxConcurrent,omitempty" json:"maxConcurrent,omitempty"`
 	CacheTTL      time.Duration `yaml:"cacheTTL,omitempty" json:"cacheTTL,omitempty"`
-	NoCache       bool          `yaml:"noCache,omitempty" json:"noCache,omitempty"`
+	NoCache       *bool         `yaml:"noCache,omitempty" json:"noCache,omitempty"`
 	// CriteriaSection names the heading whose task list is the step's checklist.
 	// Empty means the whole document, which is right for a file that is only an
 	// AI review.
@@ -54,30 +54,24 @@ type FixtureAIConfig struct {
 	CriteriaSection string `yaml:"criteriaSection,omitempty" json:"criteriaSection,omitempty"`
 }
 
-// ToAgentConfig maps the `ai:` front matter onto an ai.AgentConfig. A nil
-// receiver yields the engine's own defaults (so callers can pass an absent block
-// directly) — but no model and no budget: which model grades and how much it may
-// spend is resolved by the caller's chain, not defaulted here where an override
-// would have nothing to say it came from.
-// The flat model selector is resolved by ai.NewProvider.
-func (c *FixtureAIConfig) ToAgentConfig() ai.AgentConfig {
-	cfg := ai.AgentConfig{MaxConcurrent: 4}
+// SpecOverride contains only the flat options authored on this fixture.
+func (c *FixtureAIConfig) SpecOverride() api.Spec {
+	if c == nil {
+		return api.Spec{}
+	}
+	spec := api.Spec{Model: api.Model{Name: c.Model, Temperature: c.Temperature}, Budget: api.Budget{MaxTokens: c.MaxTokens}}
+	if c.NoCache != nil {
+		spec.NoCache = *c.NoCache
+		spec = spec.WithExplicit("/noCache")
+	}
+	return spec
+}
+
+// ToAgentConfig projects an already resolved runtime and fixture engine options.
+func (c *FixtureAIConfig) ToAgentConfig(spec api.Spec) ai.AgentConfig {
+	cfg := ai.AgentConfig{Model: spec.Model, Budget: spec.Budget, NoCache: spec.NoCache, MaxConcurrent: 4}
 	if c == nil {
 		return cfg
-	}
-	if c.Spec != nil {
-		cfg.Model = c.Spec.Model
-		cfg.Budget = c.Spec.Budget
-	}
-	if c.Model != "" {
-		cfg.Model = cfg.Model.Merge(api.Model{Name: c.Model})
-	}
-	if c.Temperature != 0 {
-		t := c.Temperature
-		cfg.Model.Temperature = &t
-	}
-	if c.MaxTokens > 0 {
-		cfg.Budget.MaxTokens = c.MaxTokens
 	}
 	if c.MaxConcurrent > 0 {
 		cfg.MaxConcurrent = c.MaxConcurrent
@@ -85,8 +79,6 @@ func (c *FixtureAIConfig) ToAgentConfig() ai.AgentConfig {
 	if c.CacheTTL > 0 {
 		cfg.CacheTTL = c.CacheTTL
 	}
-	cfg.Model.NoCache = cfg.Model.NoCache || c.NoCache
-	cfg.NoCache = cfg.Model.NoCache
 	return cfg
 }
 

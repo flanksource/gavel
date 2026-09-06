@@ -30,17 +30,25 @@ var _ = Describe("AI fixture runtime spec", func() {
 			Workflow:    &api.Workflow{Verify: &api.Verify{Fixture: "nested"}, Commits: []api.Commit{{On: "run"}}},
 			SessionID:   "prior", ToolApproval: &api.ToolApprovalResume{}, Messages: []api.Message{{Role: api.RoleUser}},
 		}
+		temperature, noCache := 0.4, true
 		fixture := checklistFixture(&fixtures.FixtureAIConfig{
-			Spec: &canonical, Model: "api:gpt-5:low", Temperature: 0.4, MaxTokens: 500,
-			MaxConcurrent: 2, CacheTTL: time.Minute, NoCache: true,
+			Spec: &canonical, Model: "api:gpt-5:low", Temperature: &temperature, MaxTokens: 500,
+			MaxConcurrent: 2, CacheTTL: time.Minute, NoCache: &noCache,
 		})
 		var schema checklistResponse
-		resolved, config := resolveAIStepSpec(fixture, fixtures.RunOptions{}, &schema)
+		runtime, config, err := resolveAIStepSpec(fixture, fixtures.RunOptions{}, &schema)
+		Expect(err).NotTo(HaveOccurred())
+		resolved := runtime.Spec
 		model, err := resolved.Model.Expand()
 		Expect(err).NotTo(HaveOccurred())
-		temperature := 0.4
-		Expect(model).To(Equal(api.Model{Name: "gpt-5", Mode: api.ModeAPI, Effort: api.EffortLow,
-			Temperature: &temperature, NoCache: true, Fallbacks: canonical.Fallbacks}))
+		Expect(model.Name).To(Equal("gpt-5"))
+		Expect(model.Mode).To(Equal(api.ModeAPI))
+		Expect(model.Effort).To(Equal(api.EffortLow))
+		Expect(resolved.Temperature).To(Equal(&temperature))
+		Expect(resolved.NoCache).To(BeTrue())
+		Expect(resolved.Fallbacks).To(HaveLen(1))
+		Expect(resolved.Fallbacks[0].Name).To(Equal("gpt-5"))
+		Expect(resolved.Fallbacks[0].Mode).To(Equal(api.ModeAPI))
 		Expect(resolved.Budget).To(Equal(api.Budget{Cost: 3, MaxTokens: 500, Timeout: "2m"}))
 		Expect(resolved.Permissions).To(Equal(canonical.Permissions))
 		Expect(resolved.SessionID).To(BeEmpty())
@@ -56,17 +64,18 @@ var _ = Describe("AI fixture runtime spec", func() {
 
 	It("lets the fixture's ai: front matter override the caller's spec", func() {
 		override := api.Spec{
-			Model:  api.Model{Name: "caller-model"},
+			Model:  api.Model{Name: "claude-sonnet-4-6", Mode: api.ModeAPI},
 			Prompt: api.Prompt{User: "must not replace the fixture prompt", System: "verification system"},
 			Budget: api.Budget{MaxTokens: 200, Cost: 3},
 		}
 		var schema checklistResponse
 
-		resolved, _ := resolveAIStepSpec(
-			checklistFixture(&fixtures.FixtureAIConfig{Model: "fixture-model", MaxTokens: 100}),
+		runtime, _, err := resolveAIStepSpec(
+			checklistFixture(&fixtures.FixtureAIConfig{Model: "gpt-5", MaxTokens: 100}),
 			fixtures.RunOptions{Spec: &override}, &schema)
-
-		Expect(resolved.Model.Name).To(Equal("fixture-model"))
+		Expect(err).NotTo(HaveOccurred())
+		resolved := runtime.Spec
+		Expect(resolved.Model.Name).To(Equal("gpt-5"))
 		Expect(resolved.Budget.MaxTokens).To(Equal(100))
 		Expect(resolved.Budget.Cost).To(Equal(3.0), "and overrides only what it names")
 		Expect(resolved.Prompt.System).To(Equal("verification system"))
@@ -81,14 +90,14 @@ var _ = Describe("AI fixture runtime spec", func() {
 	// exam. It inherits how to run, never what was already said.
 	It("never resumes the session it is grading", func() {
 		override := api.Spec{
-			Model:     api.Model{Name: "caller-model"},
+			Model:     api.Model{Name: "gpt-5", Mode: api.ModeAPI},
 			SessionID: "the-implementer-session",
 		}
 		var schema checklistResponse
 
-		resolved, config := resolveAIStepSpec(checklistFixture(nil), fixtures.RunOptions{Spec: &override}, &schema)
-
-		Expect(resolved.SessionID).To(BeEmpty())
+		resolved, config, err := resolveAIStepSpec(checklistFixture(nil), fixtures.RunOptions{Spec: &override}, &schema)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(resolved.Spec.SessionID).To(BeEmpty())
 		Expect(config.SessionID).To(BeEmpty())
 	})
 
@@ -98,9 +107,9 @@ var _ = Describe("AI fixture runtime spec", func() {
 	It("invents no model when neither the caller nor the fixture names one", func() {
 		var schema checklistResponse
 
-		resolved, config := resolveAIStepSpec(checklistFixture(nil), fixtures.RunOptions{}, &schema)
-
-		Expect(resolved.Model.Name).To(BeEmpty())
+		resolved, config, err := resolveAIStepSpec(checklistFixture(nil), fixtures.RunOptions{}, &schema)
+		Expect(err).To(MatchError(ContainSubstring("configure")))
+		Expect(resolved.Spec.Model.Name).To(BeEmpty())
 		Expect(config.Model.Name).To(BeEmpty())
 	})
 })

@@ -63,7 +63,7 @@ type Verifier struct {
 	// directly (`gavel todos check`, `gavel fixtures run`) set it from the
 	// resolved verification chain.
 	Spec        *api.Spec
-	ResolveSpec func(context.Context) (api.Spec, error) `json:"-" yaml:"-"`
+	ResolveSpec func(context.Context) (api.ResolveSpecOptions, error) `json:"-" yaml:"-"`
 	// Timeout is the confinement bound the caller applies to the whole document.
 	// Zero means the caller's context is the only bound.
 	Timeout time.Duration

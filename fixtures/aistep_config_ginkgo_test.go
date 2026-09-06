@@ -27,14 +27,19 @@ var _ = g.Describe("AI fixture config codecs", func() {
 		front, _, err := SplitFrontMatter("---\nai:\n  cacheTTL: 10m\n  spec:\n    model: sonnet\n    mode: cli\n    sandbox: native\n    fallbacks: [api:gpt-5]\n---\n")
 		o.Expect(err).NotTo(o.HaveOccurred())
 		o.Expect(front.AI).To(o.Equal(&FixtureAIConfig{CacheTTL: 10 * time.Minute, Spec: &api.Spec{
-			Model:   api.Model{Name: "sonnet", Mode: api.ModeCLI, Fallbacks: []api.Model{{Name: "gpt-5", Mode: api.ModeAPI}}},
+			Model:   api.Model{Name: "sonnet", Mode: api.ModeCLI, Fallbacks: []api.Model{{Name: "api:gpt-5"}}},
 			Sandbox: &api.SandboxRef{Mode: api.SandboxNative},
 		}}))
 		encoded, err := yaml.Marshal(front)
 		o.Expect(err).NotTo(o.HaveOccurred())
 		decoded, _, err := SplitFrontMatter("---\n" + string(encoded) + "---\n")
+		o.Expect(err).NotTo(o.HaveOccurred(), string(encoded))
+		before, err := json.Marshal(front.AI)
 		o.Expect(err).NotTo(o.HaveOccurred())
-		o.Expect(decoded.AI).To(o.Equal(front.AI))
+		after, err := json.Marshal(decoded.AI)
+		o.Expect(err).NotTo(o.HaveOccurred())
+		o.Expect(after).To(o.MatchJSON(before))
+		o.Expect(decoded.AI.Spec.Fields()).To(o.Equal(front.AI.Spec.Fields()))
 	})
 
 	g.It("surfaces an invalid native spec instead of ignoring it", func() {
