@@ -1,18 +1,12 @@
-# Link the sibling @flanksource/clicky-ui checkout as a workspace package so
-# local clicky-ui edits are picked up without publishing. The package.json keeps
-# a published range ("^0.2.x"), and linkWorkspacePackages tells pnpm to symlink
-# the local package when its version satisfies that range. When the sibling is
-# absent (CI), the path below matches nothing and pnpm resolves clicky-ui from
-# the npm registry instead. See xero-cli/webapp/pnpm-workspace.yaml.
-#
-# The catalog mirrors clicky-ui/pnpm-workspace.yaml so the `catalog:` specifiers
-# declared by the linked clicky-ui package resolve. Keep in sync with clicky-ui.
+# Keep the sibling package discoverable for local development while the catalog
+# pins builds to the immutable Clicky UI PR head used by CI.
 packages:
   - "."
   - "../../testrunner/ui"
   - "../../../clicky-ui/packages/ui"
 allowBuilds:
   "@parcel/watcher": true
+  '@flanksource/clicky-ui@https://codeload.github.com/flanksource/clicky-ui/tar.gz/e045560b6af4d717250ae66ad48b08c07772d0cd#path:packages/ui': true
   esbuild: true
 catalog:
   "@ai-sdk/react": ^3.0.201
@@ -22,6 +16,7 @@ catalog:
   "@codemirror/lang-sql": ^6.10.0
   "@codemirror/state": ^6.7.0
   "@codemirror/view": ^6.43.4
+  '@flanksource/clicky-ui': github:flanksource/clicky-ui#e045560b6af4d717250ae66ad48b08c07772d0cd&path:packages/ui
   "@floating-ui/react": ^0.27.19
   '@iconify-icons/codicon': ^1.2.30
   '@iconify-icons/vscode-icons': ^1.2.29
@@ -103,7 +98,6 @@ linkWorkspacePackages: true
 overrides:
   "@types/react": ^19.2.17
   "@types/react-dom": ^19.2.3
-# Prefer the linked local clicky-ui even when the registry has a newer matching
-# version, so local edits always win. When the sibling is absent (CI) there is
-# no workspace package and clicky-ui resolves from the registry.
+# Prefer workspace packages for the other local packages in this workspace. The
+# Clicky UI Git catalog entry remains authoritative for its exact dependency.
 preferWorkspacePackages: true

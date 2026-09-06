@@ -3,7 +3,7 @@ module github.com/flanksource/gavel
 go 1.26.1
 
 require (
-	github.com/flanksource/captain v0.0.55
+	github.com/flanksource/captain v0.0.56-0.20260906163611-8c7b2e8353f0
 	github.com/flanksource/clicky v1.21.59
 	github.com/flanksource/commons v1.57.0
 	github.com/flanksource/commons-db v0.1.31
