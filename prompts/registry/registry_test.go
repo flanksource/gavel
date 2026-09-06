@@ -36,59 +36,54 @@ func TestResolveOperationModelWins(t *testing.T) {
 		AI:     api.Spec{Model: api.Model{Name: "ai-base-model"}},
 		Commit: verify.CommitConfig{Grouping: verify.PromptSpec{Spec: api.Spec{Model: api.Model{Name: "op-group-model"}}}},
 	}
-	items, err := Resolve(verify.GavelConfigTrace{TargetDir: t.TempDir(), Merged: cfg})
+	items, err := Resolve(ResolveOptions{Preview: true, Trace: verify.GavelConfigTrace{TargetDir: t.TempDir(), Merged: cfg}})
 	require.NoError(t, err)
 	require.Len(t, items, registeredPromptCount)
 
 	grouping := resolvedByID(t, items, prompts.CommitGrouping)
-	assert.Equal(t, "op-group-model", grouping.EffectiveModel.Name)
-	assert.Equal(t, "operation", grouping.ModelSource)
+	assert.Equal(t, "op-group-model", grouping.Effective.Name)
 }
 
 // A built-in default that pins a model (todos.run → "claude") wins over the base
 // ai: spec when the operation has no override.
 func TestResolvePromptDefaultModelWins(t *testing.T) {
 	cfg := verify.GavelConfig{AI: api.Spec{Model: api.Model{Name: "ai-base-model"}}}
-	items, err := Resolve(verify.GavelConfigTrace{TargetDir: t.TempDir(), Merged: cfg})
+	items, err := Resolve(ResolveOptions{Preview: true, Trace: verify.GavelConfigTrace{TargetDir: t.TempDir(), Merged: cfg}})
 	require.NoError(t, err)
 
 	run := resolvedByID(t, items, prompts.TodosRun)
 	assert.Equal(t, "claude", run.Declared.Model.Name)
-	assert.Equal(t, "claude", run.EffectiveModel.Name)
-	assert.Equal(t, "prompt default", run.ModelSource)
+	assert.Equal(t, "claude", run.Effective.Name)
 }
 
 // A prompt whose default pins no model inherits the base ai: spec model.
 func TestResolveAIBaseModelInherited(t *testing.T) {
 	cfg := verify.GavelConfig{AI: api.Spec{Model: api.Model{Name: "ai-base-model"}}}
-	items, err := Resolve(verify.GavelConfigTrace{TargetDir: t.TempDir(), Merged: cfg})
+	items, err := Resolve(ResolveOptions{Preview: true, Trace: verify.GavelConfigTrace{TargetDir: t.TempDir(), Merged: cfg}})
 	require.NoError(t, err)
 
 	message := resolvedByID(t, items, prompts.CommitMessage)
-	assert.Equal(t, "ai-base-model", message.EffectiveModel.Name)
-	assert.Equal(t, "ai base", message.ModelSource)
+	assert.Equal(t, "ai-base-model", message.Effective.Name)
 }
 
 func TestResolveLintFixUsesDedicatedDefaultModel(t *testing.T) {
 	cfg := verify.GavelConfig{AI: api.Spec{Model: api.Model{Name: "commit-message-model"}}}
-	items, err := Resolve(verify.GavelConfigTrace{TargetDir: t.TempDir(), Merged: cfg})
+	items, err := Resolve(ResolveOptions{Preview: true, Trace: verify.GavelConfigTrace{TargetDir: t.TempDir(), Merged: cfg}})
 	require.NoError(t, err)
 
 	fix := resolvedByID(t, items, prompts.LintFix)
-	assert.Equal(t, "agent:gpt-5.6-sol:medium,agent:opus:medium", fix.EffectiveModel.Name)
-	assert.Equal(t, "prompt default", fix.ModelSource)
-	assert.NotEqual(t, cfg.AI.Model.Name, fix.EffectiveModel.Name)
+	assert.Equal(t, "agent:gpt-5.6-sol:medium,agent:opus:medium", fix.Effective.Name)
+	assert.NotEqual(t, cfg.AI.Model.Name, fix.Effective.Name)
 }
 
 // With no ai: base, no default model, and no override the model is chosen at
 // runtime (empty).
 func TestResolveRuntimeModel(t *testing.T) {
-	items, err := Resolve(verify.GavelConfigTrace{TargetDir: t.TempDir(), Merged: verify.GavelConfig{}})
+	items, err := Resolve(ResolveOptions{Preview: true, Trace: verify.GavelConfigTrace{TargetDir: t.TempDir(), Merged: verify.GavelConfig{}}})
 	require.NoError(t, err)
 
 	message := resolvedByID(t, items, prompts.CommitMessage)
-	assert.Empty(t, message.EffectiveModel.Name)
-	assert.Equal(t, "runtime", message.ModelSource)
+	assert.Empty(t, message.Effective.Name)
 }
 
 // A structured inline override carries model/effort/system on the PromptSpec's
@@ -100,17 +95,16 @@ func TestResolveStructuredInlinePrompt(t *testing.T) {
 			Prompt: api.Prompt{User: "Plan {{body}}", System: "Be exact"},
 		}}},
 	}
-	items, err := Resolve(verify.GavelConfigTrace{TargetDir: t.TempDir(), Merged: cfg})
+	items, err := Resolve(ResolveOptions{Preview: true, Trace: verify.GavelConfigTrace{TargetDir: t.TempDir(), Merged: cfg}})
 	require.NoError(t, err)
 
 	plan := resolvedByID(t, items, prompts.TodosPlan)
 	assert.Equal(t, "inline", plan.Source)
 	assert.Equal(t, "Plan {{body}}", plan.Body)
 	assert.Equal(t, "Be exact", plan.Declared.Prompt.System)
-	assert.Equal(t, "claude-sonnet-5", plan.EffectiveModel.Name)
-	assert.Equal(t, api.EffortHigh, plan.EffectiveModel.Effort)
-	assert.Equal(t, api.ModeAPI, plan.EffectiveModel.Mode)
-	assert.Equal(t, "operation", plan.ModelSource)
+	assert.Equal(t, "claude-sonnet-5", plan.Effective.Name)
+	assert.Equal(t, api.EffortHigh, plan.Effective.Effort)
+	assert.Equal(t, api.ModeAPI, plan.Effective.Mode)
 }
 
 func TestResolveFileUsesDeclaringLayer(t *testing.T) {
@@ -123,7 +117,7 @@ func TestResolveFileUsesDeclaringLayer(t *testing.T) {
 
 	cfg, err := verify.LoadSingleGavelConfig(filepath.Join(configDir, ".gavel.yaml"))
 	require.NoError(t, err)
-	items, err := Resolve(verify.GavelConfigTrace{TargetDir: targetDir, Merged: cfg})
+	items, err := Resolve(ResolveOptions{Preview: true, Trace: verify.GavelConfigTrace{TargetDir: targetDir, Merged: cfg}})
 	require.NoError(t, err)
 
 	statusPrompt := resolvedByID(t, items, prompts.StatusSummary)
@@ -136,7 +130,7 @@ func TestResolveMissingPromptFileFails(t *testing.T) {
 	cfg := verify.GavelConfig{
 		Status: verify.StatusConfig{Summary: verify.PromptSpec{File: "missing.prompt"}},
 	}
-	_, err := Resolve(verify.GavelConfigTrace{TargetDir: t.TempDir(), Merged: cfg})
+	_, err := Resolve(ResolveOptions{Preview: true, Trace: verify.GavelConfigTrace{TargetDir: t.TempDir(), Merged: cfg}})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "status.summary")
 }

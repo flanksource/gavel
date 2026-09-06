@@ -9,35 +9,15 @@ import (
 
 	"github.com/flanksource/captain/pkg/ai/prompt"
 	"github.com/flanksource/captain/pkg/api"
-	"github.com/flanksource/captain/pkg/api/registry"
+	"github.com/flanksource/captain/pkg/captainconfig"
 	"github.com/flanksource/clicky"
 	clickyapi "github.com/flanksource/clicky/api"
-	"github.com/flanksource/gavel/ai/aifix"
-	"github.com/flanksource/gavel/ai/prfix"
-	"github.com/flanksource/gavel/commit"
-	gavelgit "github.com/flanksource/gavel/git"
 	"github.com/flanksource/gavel/prompts"
-	"github.com/flanksource/gavel/status"
-	"github.com/flanksource/gavel/testrunner/outline"
-	todoprompt "github.com/flanksource/gavel/todos/prompt"
 	"github.com/flanksource/gavel/verify"
 )
 
 var promptSourcePattern = regexp.MustCompile(
 	`^(?:(?:#[^\n]*|[ \t]*)\n)*---\s*(?:\r\n|\r|\n)([\s\S]*?)(?:\r\n|\r|\n)---\s*(?:\r\n|\r|\n)([\s\S]*)$`)
-
-// All returns every overridable prompt in stable command-family order.
-func All() []prompts.Prompt {
-	var all []prompts.Prompt
-	all = append(all, aifix.Prompts()...)
-	all = append(all, prfix.Prompts()...)
-	all = append(all, gavelgit.Prompts()...)
-	all = append(all, commit.Prompts()...)
-	all = append(all, todoprompt.Prompts()...)
-	all = append(all, status.Prompts()...)
-	all = append(all, outline.Prompts()...)
-	return all
-}
 
 // ResolvedPrompt is the config-time view of one registered prompt.
 type ResolvedPrompt struct {
@@ -52,33 +32,30 @@ type ResolvedPrompt struct {
 	Frontmatter map[string]any `json:"frontmatter,omitempty" yaml:"frontmatter,omitempty"`
 	// Declared is the operation's own spec at config time (the built-in default's
 	// spec when unset, otherwise the inline/file override spec).
-	Declared api.Spec `json:"declared" yaml:"declared"`
-	// EffectiveModel is the model chosen by layering the base ai: spec, the
-	// built-in default prompt, and the operation override (in that precedence).
-	EffectiveModel api.Model `json:"effectiveModel" yaml:"effectiveModel"`
-	// ModelSource labels which layer supplied EffectiveModel's name: "operation",
-	// "prompt default", "ai base", or "runtime" (none set — chosen at run time).
-	ModelSource string `json:"modelSource" yaml:"modelSource"`
+	Declared   api.Spec                       `json:"declared" yaml:"declared"`
+	Effective  api.Spec                       `json:"effective" yaml:"effective"`
+	Provenance map[string]api.FieldProvenance `json:"provenance" yaml:"provenance"`
+	Trace      []api.SpecLayer                `json:"trace" yaml:"trace"`
+	Warnings   []string                       `json:"warnings,omitempty" yaml:"warnings,omitempty"`
 }
 
-// Resolve expands every registered prompt against a merged config trace.
-func Resolve(trace verify.GavelConfigTrace) ([]ResolvedPrompt, error) {
-	all := All()
-	resolved := make([]ResolvedPrompt, 0, len(all))
-	for _, desc := range all {
-		item, err := ResolveOne(trace, desc)
-		if err != nil {
-			return nil, fmt.Errorf("resolve %s (%s): %w", desc.ID, desc.ConfigPath, err)
-		}
-		resolved = append(resolved, item)
-	}
-	return resolved, nil
+type ResolveOptions struct {
+	Trace     verify.GavelConfigTrace
+	Saved     *captainconfig.AIDefaults
+	Preview   bool
+	Data      map[string]any
+	Draft     string
+	Normalize func(api.Spec) (api.SpecNormalization, error)
 }
 
-func ResolveOne(trace verify.GavelConfigTrace, desc prompts.Prompt) (ResolvedPrompt, error) {
+func ResolveOne(opts ResolveOptions, desc prompts.Prompt) (ResolvedPrompt, error) {
+	trace := opts.Trace
 	override, err := promptSpecAt(trace.Merged, desc.ConfigPath)
 	if err != nil {
 		return ResolvedPrompt{}, err
+	}
+	if opts.Draft != "" {
+		override = verify.PromptSpec{Spec: api.Spec{Prompt: api.Prompt{User: opts.Draft}}}
 	}
 
 	var source string
@@ -115,52 +92,23 @@ func ResolveOne(trace verify.GavelConfigTrace, desc prompts.Prompt) (ResolvedPro
 
 	// Only a real override contributes an operation layer; a built-in inherits the
 	// base ai: spec and the default prompt alone.
-	opOverride := api.Spec{}
 	declared := defaultSpec
 	if source != "builtin" {
-		opOverride = opSpec
 		declared = opSpec
 	}
 
-	effective, modelSource := effectiveModelFor(trace.Merged.AI, defaultSpec, opOverride)
+	resolution, err := resolvePromptSpec(opts, desc, override)
+	if err != nil {
+		return ResolvedPrompt{}, err
+	}
 
 	return ResolvedPrompt{
 		ID: desc.ID, Title: desc.Title, Description: desc.Description,
 		ConfigPath: desc.ConfigPath, Source: source, Path: path,
 		Raw: raw, Body: body, Frontmatter: frontmatter,
-		Declared: declared, EffectiveModel: effective, ModelSource: modelSource,
+		Declared: declared, Effective: resolution.Spec, Provenance: resolution.Provenance,
+		Trace: resolution.Trace, Warnings: resolution.Warnings,
 	}, nil
-}
-
-// effectiveModelFor layers the base ai: spec, the built-in default prompt's
-// spec, and the operation override (lowest to highest precedence) and returns
-// the resulting model plus a label for which layer supplied its name. It mirrors
-// the runtime PromptSpec.Resolve precedence without rendering or validating.
-func effectiveModelFor(base, defaultSpec, opOverride api.Spec) (api.Model, string) {
-	model := base.Merge(defaultSpec).Merge(opOverride).Model
-
-	source := "runtime"
-	switch {
-	case opOverride.Name != "":
-		source = "operation"
-	case defaultSpec.Name != "":
-		source = "prompt default"
-	case base.Name != "":
-		source = "ai base"
-	}
-
-	// Fill only the mode, from the family the name claims. This is a reporting
-	// path: EffectiveModel is the selector after layering, not the driver-ready
-	// id, so it deliberately stops short of a full Resolve — which would collapse
-	// a fallback chain to its primary and rewrite an alias the operator wrote.
-	// A name that claims no family (a compact multi-model selector) simply keeps
-	// an empty mode; execution resolves it properly and fails loudly there.
-	if model.Name != "" && model.Mode == "" {
-		if provider, err := registry.ProviderFor(model.Name); err == nil {
-			model.Mode = provider.DefaultMode
-		}
-	}
-	return model, source
 }
 
 // ParsePromptSource returns a prompt's config-time spec, original unrendered
@@ -182,7 +130,7 @@ func ParsePromptSource(raw string) (api.Spec, string, map[string]any, error) {
 	// maxItems constraint). Parse cannot decode that source before templating, so
 	// render once with empty config-time data to fold the declared spec while
 	// retaining the original, unrendered body for inspection.
-	req, cfg, renderErr := prompt.Load(raw).Render(map[string]any{}, nil)
+	req, cfg, renderErr := prompt.Load(raw).Render(prompt.RenderOptions{Data: map[string]any{}, Declared: true})
 	if renderErr != nil {
 		return api.Spec{}, "", nil, err
 	}
@@ -239,18 +187,20 @@ func (p ResolvedPrompt) Pretty() clickyapi.Text {
 		t = t.Append("  ").Append(p.Path, "font-mono text-muted")
 	}
 	t = t.NewLine().Append("  effective model: ", "text-muted")
-	if p.EffectiveModel.Name == "" {
+	if p.Effective.Name == "" {
 		t = t.Append("inherited", "font-medium")
 	} else {
-		t = t.Append(p.EffectiveModel.Name, "font-medium")
-		if p.EffectiveModel.Mode != "" {
-			t = t.Append("  mode=").Append(string(p.EffectiveModel.Mode), "font-mono")
+		t = t.Append(p.Effective.Name, "font-medium")
+		if p.Effective.Mode != "" {
+			t = t.Append("  mode=").Append(string(p.Effective.Mode), "font-mono")
 		}
 	}
-	t = t.Append("  from=").Append(p.ModelSource, "font-mono")
-	if p.Declared.Name != "" || p.Declared.Mode != "" || p.Declared.Effort != "" || p.Declared.Temperature != nil {
-		data, _ := json.Marshal(p.Declared.Model)
-		t = t.NewLine().Append("  declared model: ", "text-muted").Append(string(data), "font-mono")
+	data, err := json.MarshalIndent(struct {
+		Spec       api.Spec                       `json:"spec"`
+		Provenance map[string]api.FieldProvenance `json:"provenance"`
+	}{p.Effective, p.Provenance}, "", "  ")
+	if err != nil {
+		return t.NewLine().Append("render effective spec: "+err.Error(), "text-red-600")
 	}
-	return t.NewLine().Add(clicky.CodeBlock("markdown", p.Raw)).NewLine()
+	return t.NewLine().Add(clicky.CodeBlock("json", string(data))).NewLine().Add(clicky.CodeBlock("markdown", p.Raw)).NewLine()
 }
