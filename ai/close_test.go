@@ -15,8 +15,10 @@ type plainProvider struct{}
 func (p *plainProvider) Execute(context.Context, api.Spec) (*api.Response, error) {
 	return nil, errors.New("not implemented")
 }
-func (p *plainProvider) GetModel() string        { return "test-model" }
-func (p *plainProvider) GetRuntime() api.Runtime { return api.Runtime{Provider: "anthropic", Mode: api.ModeAgent} }
+func (p *plainProvider) GetModel() string { return "test-model" }
+func (p *plainProvider) GetRuntime() api.Runtime {
+	return api.Runtime{Provider: "anthropic", Mode: api.ModeAgent}
+}
 
 // closableProvider stands in for the process-backed backends (claude-agent,
 // cmux, codex-appserver) whose supervised child only stops on Close.
