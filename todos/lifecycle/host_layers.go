@@ -110,6 +110,9 @@ func projectLayers(in LayerInput) []api.SpecLayer {
 		Source: api.SpecLayerSourcePreset,
 		Scope:  api.SpecLayerGlobal,
 		Spec:   in.Config.AI,
+		Constraints: api.RuntimeConstraints{
+			Permissions: api.PermissionConstraintsForSpec(in.Config.AI),
+		},
 	}}
 	if timeout := strings.TrimSpace(in.Config.Todos.Timeout); timeout != "" {
 		layers = append(layers, api.SpecLayer{
@@ -132,7 +135,9 @@ func projectLayers(in LayerInput) []api.SpecLayer {
 		})
 	}
 	if step := stepSpec(in.Config.Todos, in.Step); !api.IsEmpty(step) {
-		layers = append(layers, api.PromptSpecLayer(".gavel.yaml todos."+in.Step, step))
+		layer := api.PromptSpecLayer(".gavel.yaml todos."+in.Step, step)
+		layer.Constraints.Permissions = api.PermissionConstraintsForSpec(step)
+		layers = append(layers, layer)
 	}
 	return layers
 }
@@ -145,9 +150,9 @@ func ResolveLayers(in LayerInput) (api.ResolvedSpec, error) {
 	if err := api.ValidateSpecLayers(projectLayers(in)...); err != nil {
 		return api.ResolvedSpec{}, &ConfigurationError{Err: err}
 	}
-	layers := RestrictHostPermissions(Layers(in))
-	if err := ValidateRequestPermissions(layers); err != nil {
-		return api.ResolvedSpec{}, err
+	layers, err := constrainPermissionLayers(RestrictHostPermissions(Layers(in)))
+	if err != nil {
+		return api.ResolvedSpec{}, &ConfigurationError{Err: err}
 	}
 	resolved, err := api.ResolveSpecLayers(api.ResolveSpecOptions{Layers: layers, Saved: in.Saved, RequireModel: in.RequireModel})
 	return resolved, runtimeConfigurationError(err)

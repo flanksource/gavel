@@ -53,9 +53,9 @@ func (h *Host) profileLayers(ctx context.Context, in LayerInput) (runtimeprofile
 		}
 		return runtimeprofiles.LayerResult{}, err
 	}
-	assembled.Layers = RestrictHostPermissions(assembled.Layers)
-	if err := ValidateRequestPermissions(assembled.Layers); err != nil {
-		return runtimeprofiles.LayerResult{}, err
+	assembled.Layers, err = constrainPermissionLayers(RestrictHostPermissions(assembled.Layers))
+	if err != nil {
+		return runtimeprofiles.LayerResult{}, &ConfigurationError{Err: err}
 	}
 	return assembled, nil
 }

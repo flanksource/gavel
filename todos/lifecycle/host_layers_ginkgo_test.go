@@ -1,6 +1,8 @@
 package lifecycle_test
 
 import (
+	"encoding/json"
+
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/gavel/todos/lifecycle"
 	"github.com/flanksource/gavel/todos/types"
@@ -162,6 +164,84 @@ var _ = Describe("todo spec layers", func() {
 	})
 
 	Describe("permissions", func() {
+		It("keeps prompt frontmatter restrictions as request ceilings", func() {
+			in := runLayerInput(verify.GavelConfig{}, api.Spec{}, api.Spec{
+				Permissions: api.Permissions{Tools: api.Tools{"Bash": api.ToolPolicyAllow}},
+			})
+			in.Frontmatter = []api.SpecLayer{api.PromptSpecLayer("todos-run.prompt", api.Spec{
+				Permissions: api.Permissions{Tools: api.Tools{"Bash": api.ToolPolicyDeny}},
+			})}
+
+			_, err := lifecycle.ResolveLayers(in)
+
+			Expect(err).To(MatchError(And(ContainSubstring("permissions.tools.Bash"), ContainSubstring("todos-run.prompt"), ContainSubstring("request"))))
+		})
+
+		DescribeTable("projects project permission ceilings into Captain constraints",
+			func(configured, requested api.Spec, field string) {
+				cfg := verify.GavelConfig{AI: configured}
+				_, err := lifecycle.ResolveLayers(runLayerInput(cfg, api.Spec{}, requested))
+				Expect(err).To(MatchError(And(ContainSubstring(field), ContainSubstring(".gavel.yaml ai"), ContainSubstring("request"))))
+			},
+			Entry("tool denial",
+				api.Spec{Permissions: api.Permissions{Tools: api.Tools{"Bash": api.ToolPolicyDeny}}},
+				api.Spec{Permissions: api.Permissions{Tools: api.Tools{"Bash": api.ToolPolicyAllow}}}, "permissions.tools.Bash"),
+			Entry("permission posture",
+				api.Spec{Permissions: api.Permissions{Mode: api.PermissionPlan}},
+				api.Spec{Permissions: api.Permissions{Mode: api.PermissionAcceptEdits}}, "permissions.mode"),
+			Entry("disabled skill",
+				api.Spec{Permissions: api.Permissions{Skills: api.ResourcePolicies{"review": api.ResourceDisabled}}},
+				api.Spec{Permissions: api.Permissions{Skills: api.ResourcePolicies{"review": api.ResourceEnabled}}}, "permissions.skills.review"),
+			Entry("sandbox allowlist",
+				api.Spec{Sandbox: &api.SandboxRef{Mode: api.SandboxNative}},
+				api.Spec{Sandbox: &api.SandboxRef{Mode: api.SandboxOff}}, "sandbox.mode"),
+		)
+
+		DescribeTable("rejects a request that clears a project tool denial",
+			func(encoded string) {
+				var request api.Spec
+				Expect(json.Unmarshal([]byte(encoded), &request)).To(Succeed())
+				cfg := verify.GavelConfig{AI: api.Spec{Permissions: api.Permissions{Tools: api.Tools{"Bash": api.ToolPolicyDeny}}}}
+
+				_, err := lifecycle.ResolveLayers(runLayerInput(cfg, api.Spec{}, request))
+
+				Expect(err).To(MatchError(And(ContainSubstring("permissions.tools.Bash"), ContainSubstring(".gavel.yaml ai"), ContainSubstring("request"))))
+			},
+			Entry("empty map", `{"permissions":{"tools":{}}}`),
+			Entry("null map", `{"permissions":{"tools":null}}`),
+			Entry("empty permissions", `{"permissions":{}}`),
+		)
+
+		It("keeps a global project ceiling when a step config tries to widen it", func() {
+			cfg := verify.GavelConfig{
+				AI: api.Spec{Permissions: api.Permissions{Tools: api.Tools{"Bash": api.ToolPolicyDeny}}},
+				Todos: verify.TodosConfig{Run: verify.PromptSpec{Spec: api.Spec{
+					Permissions: api.Permissions{Tools: api.Tools{"Bash": api.ToolPolicyAllow}},
+				}}},
+			}
+
+			_, err := lifecycle.ResolveLayers(runLayerInput(cfg, api.Spec{}, api.Spec{}))
+
+			Expect(err).To(MatchError(And(ContainSubstring("permissions.tools.Bash"), ContainSubstring(".gavel.yaml ai"), ContainSubstring(".gavel.yaml todos.run"))))
+		})
+
+		It("allows a request to narrow tool and sandbox authority", func() {
+			cfg := verify.GavelConfig{AI: api.Spec{
+				Permissions: api.Permissions{Tools: api.Tools{"Bash": api.ToolPolicyAllow}},
+				Sandbox:     &api.SandboxRef{Mode: api.SandboxOff},
+			}}
+			request := api.Spec{
+				Permissions: api.Permissions{Tools: api.Tools{"Bash": api.ToolPolicyDeny}},
+				Sandbox:     &api.SandboxRef{Mode: api.SandboxNative},
+			}
+
+			resolved, err := lifecycle.ResolveLayers(runLayerInput(cfg, api.Spec{}, request))
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resolved.Spec.Permissions.Tools).To(Equal(api.Tools{"Bash": api.ToolPolicyDeny}))
+			Expect(resolved.Spec.Sandbox.Mode).To(Equal(api.SandboxNative))
+		})
+
 		It("carries a frontmatter dontAsk mode through to captain", func() {
 			spec := resolveRun(verify.GavelConfig{},
 				api.Spec{Permissions: api.Permissions{Mode: api.PermissionDontAsk}}, api.Spec{})

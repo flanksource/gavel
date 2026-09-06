@@ -41,4 +41,15 @@ var _ = Describe("raw configuration spec layers", func() {
 		Expect(config.AI.Name).To(Equal("gpt-5.6-sol"))
 		Expect(string(config.AI.Permissions.Tools["Read"])).To(Equal("allow"))
 	})
+
+	It("rejects a step that widens the project permission ceiling", func() {
+		home, repository := GinkgoT().TempDir(), GinkgoT().TempDir()
+		GinkgoT().Setenv("HOME", home)
+		config := "ai: {permissions: {tools: {Bash: deny}}}\ntodos: {run: {permissions: {tools: {Bash: allow}}}}\n"
+		Expect(os.WriteFile(filepath.Join(repository, ".gavel.yaml"), []byte(config), 0600)).To(Succeed())
+
+		_, err := LoadGavelConfig(repository)
+
+		Expect(err).To(MatchError(And(ContainSubstring("permissions.tools.Bash"), ContainSubstring(".gavel.yaml ai"), ContainSubstring(".gavel.yaml todos.run"))))
+	})
 })

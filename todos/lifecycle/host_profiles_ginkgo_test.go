@@ -17,7 +17,7 @@ var _ = g.Describe("lifecycle runtime profile layers", func() {
 	g.BeforeEach(func() {
 		dir := g.GinkgoT().TempDir()
 		for name, value := range map[string]string{
-			"requested": "name: requested\nspec:\n  budget: {maxTurns: 13}\n",
+			"requested": "name: requested\nspec:\n  budget: {maxTurns: 13}\n  permissions: {mode: plan}\n",
 			"pinned":    "name: pinned\nspec:\n  budget: {maxTurns: 9}\n",
 			"default":   "name: default\nspec:\n  budget: {maxTurns: 5}\n",
 		} {
@@ -53,6 +53,15 @@ var _ = g.Describe("lifecycle runtime profile layers", func() {
 		o.Expect(result.Resolved.Spec.Budget).To(o.Equal(api.Budget{MaxTurns: 19, Cost: 2}))
 		o.Expect(result.Resolved.Trace).To(o.HaveLen(4))
 		o.Expect(result.Resolved.Trace[1].Source).To(o.Equal(api.SpecLayerSourceProfile))
+	})
+
+	g.It("keeps selected profile restrictions as request ceilings", func() {
+		_, err := host.resolveProfileLayers(context.Background(), LayerInput{
+			RuntimeProfile: ProfileSelection{Requested: "requested"},
+			Request:        api.Spec{Permissions: api.Permissions{Mode: api.PermissionAcceptEdits}},
+		})
+
+		o.Expect(err).To(o.MatchError(o.And(o.ContainSubstring("permissions.mode"), o.ContainSubstring("requested run spec"), o.ContainSubstring("request"))))
 	})
 
 	g.It("never opens a catalog when no profile is selected", func() {
