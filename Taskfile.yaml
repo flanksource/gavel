@@ -28,7 +28,7 @@ tasks:
       - cmd: |
           if [ -d ../clicky-ui/packages/ui ]; then
             echo "Rebuilding local @flanksource/clicky-ui sibling..."
-            (cd ../clicky-ui && corepack pnpm --filter @flanksource/clicky-ui run build)
+            (cd ../clicky-ui && pnpm --filter @flanksource/clicky-ui run build)
           else
             echo "No local clicky-ui sibling; using published @flanksource/clicky-ui from npm"
           fi
