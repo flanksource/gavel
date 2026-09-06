@@ -7,7 +7,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/flanksource/captain/pkg/ai/prompt"
+	"github.com/flanksource/captain/pkg/api"
+	captaincli "github.com/flanksource/captain/pkg/cli"
 	clickyai "github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/internal/prompting"
 )
@@ -22,15 +23,8 @@ type PRCommitInput struct {
 
 type PRContentInput struct {
 	Commits []PRCommitInput
-	// PromptOverride is the resolved .gavel.yaml pr.content prompt template
-	// (inline text or file contents); empty uses the embedded default template.
-	PromptOverride string
-	// WorkDir is the tree the .gavel.yaml was resolved from, so the caller can
-	// load the same config for the model as it did for the prompt. `gavel pr
-	// create` used to resolve only the prompt from config and build its Options
-	// with neither the ai: base nor pr.content, so the model silently skipped
-	// both layers of the ladder.
-	WorkDir string
+	// Options carries the source directory, full prompt configuration and saved snapshot.
+	Options Options
 }
 
 type PRContent struct {
@@ -58,18 +52,23 @@ type prContentSchema struct {
 //go:embed pr-content.prompt
 var prContentPromptTemplate string
 
-func GeneratePRContent(ctx context.Context, agent clickyai.Agent, in PRContentInput) (PRContent, error) {
+func GeneratePRContent(ctx context.Context, in PRContentInput) (content PRContent, err error) {
 	if len(in.Commits) == 0 {
 		return PRContent{}, fmt.Errorf("no commits to summarise")
 	}
 
-	req, err := renderPRContentPrompt(in)
+	prepared, err := renderPRContentPrompt(in)
 	if err != nil {
 		return PRContent{}, err
 	}
+	agent, err := BuildAgent(prepared.Config)
+	if err != nil {
+		return PRContent{}, err
+	}
+	defer closeAgent(agent, &err)
 
 	prompting.Prepare()
-	resp, err := agent.ExecutePrompt(ctx, req)
+	resp, err := agent.ExecutePrompt(ctx, clickyai.PromptRequest{Name: "PR title and body", Spec: prepared.Request})
 	if err != nil {
 		return PRContent{}, fmt.Errorf("execute PR-content prompt: %w", err)
 	}
@@ -99,23 +98,11 @@ func GeneratePRContent(ctx context.Context, agent clickyai.Agent, in PRContentIn
 	}, nil
 }
 
-func renderPRContentPrompt(in PRContentInput) (clickyai.PromptRequest, error) {
-	template := prContentPromptTemplate
-	if strings.TrimSpace(in.PromptOverride) != "" {
-		template = in.PromptOverride
-	}
-	req, _, err := prompt.Load(template).Render(prContentPromptData(in), nil)
-	if err != nil {
-		return clickyai.PromptRequest{}, fmt.Errorf("render PR-content prompt: %w", err)
-	}
-	return clickyai.PromptRequest{
-		Name:             "PR title and body",
-		Prompt:           req.Prompt.User,
-		SystemPrompt:     req.Prompt.System,
-		SchemaJSON:       req.Prompt.SchemaJSON,
-		SchemaStrictness: req.Prompt.SchemaStrictness,
-		Source:           "pr-content.prompt",
-	}, nil
+func renderPRContentPrompt(in PRContentInput) (captaincli.AIRuntimeResolved, error) {
+	return in.Options.resolvePrompt(commitPromptOptions{
+		Prompt: in.Options.PR.Content, Name: "pr.content", Default: prContentPromptTemplate,
+		Data: prContentPromptData(in), Request: api.Spec{Prompt: api.Prompt{Source: "pr-content.prompt"}},
+	})
 }
 
 func prContentPromptData(in PRContentInput) map[string]any {

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/flanksource/captain/pkg/aiflags"
+	"github.com/flanksource/captain/pkg/captainconfig"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
@@ -145,52 +146,54 @@ var _ = Describe("verify.Merge of CommitConfig", func() {
 	})
 })
 
-// modelName resolves a ladder and returns just the name, for the precedence
-// tables below. Mode/effort fidelity is asserted separately, in
-// "carries a compact model's backend and effort through to the agent".
-func modelName(m api.Model, err error) string {
-	Expect(err).ToNot(HaveOccurred())
-	return m.Name
-}
-
 // modelFlags builds the flag surface with just a model set.
 func modelFlags(model string) aiflags.ModelFlags { return aiflags.ModelFlags{Model: model} }
 
+func promptTestOptions() Options {
+	return Options{AI: aiBaseSpec("api:sonnet"), Saved: &captainconfig.Config{}}
+}
+
 var _ = Describe("Options model resolution", func() {
-	DescribeTable("messageModel prefers --model, then commit.message.model, then ai.model",
+	DescribeTable("message runtime prefers --model, then commit.message.model, then ai.model",
 		func(opts Options, expected string) {
-			Expect(modelName(opts.messageModel())).To(Equal(expected))
+			opts.Saved = &captainconfig.Config{}
+			resolved, err := opts.resolvePrompt(commitPromptOptions{Prompt: opts.Config.Message, Name: "commit.message", Default: "Review"})
+			if expected == "" {
+				Expect(err).To(HaveOccurred())
+				return
+			}
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resolved.Request.Name).To(Equal(expected))
 		},
-		Entry("flag wins", Options{Flags: modelFlags("haiku-flag"), Config: msgSpecCfg("haiku-cfg"), AI: aiBaseSpec("base")}, "haiku-flag"),
-		Entry("message spec used when no flag", Options{Config: msgSpecCfg("haiku-cfg"), AI: aiBaseSpec("base")}, "haiku-cfg"),
-		Entry("ai base used when no flag or op spec", Options{AI: aiBaseSpec("base")}, "base"),
-		// No built-in default: the ladder is configuration only. In a real run the
-		// ai: base is always seeded by LoadGavelConfig, and an empty name here
-		// fails loudly at resolve rather than silently picking a model.
+		Entry("flag wins", Options{Flags: modelFlags("api:gpt-5"), Config: msgSpecCfg("api:sonnet"), AI: aiBaseSpec("api:haiku")}, "gpt-5"),
+		Entry("message spec used when no flag", Options{Config: msgSpecCfg("api:sonnet"), AI: aiBaseSpec("api:haiku")}, "claude-sonnet-5"),
+		Entry("ai base used when no flag or op spec", Options{AI: aiBaseSpec("api:haiku")}, "claude-haiku-4-5"),
 		Entry("empty when nothing configures a model", Options{}, ""),
 	)
 
-	DescribeTable("groupModel cascades --group-model -> --model -> commit.grouping.model -> ai.model",
+	DescribeTable("group runtime cascades --group-model -> --model -> commit.grouping.model -> ai.model",
 		func(opts Options, expected string) {
-			Expect(modelName(opts.groupModel())).To(Equal(expected))
+			opts.Saved = &captainconfig.Config{}
+			resolved, err := renderGroupingPrompt(opts, groupingTable)
+			if expected == "" {
+				Expect(err).To(HaveOccurred())
+				return
+			}
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resolved.Request.Name).To(Equal(expected))
 		},
 		Entry("--group-model wins over everything",
-			Options{GroupModel: "opus-flag", Flags: modelFlags("haiku-flag"), Config: msgGroupSpecCfg("haiku-cfg", "sonnet-cfg"), AI: aiBaseSpec("base")}, "opus-flag"),
-		// The inversion this refactor removes: --model used to be read LAST for
-		// grouping, so any `ai: model:` in ~/.gavel.yaml silently disabled it.
+			Options{GroupModel: api.Model{Name: "api:gpt-5"}, Flags: modelFlags("api:haiku"), Config: msgGroupSpecCfg("api:haiku", "api:sonnet"), AI: aiBaseSpec("api:sonnet")}, "gpt-5"),
 		Entry("--model beats the ai base spec",
-			Options{Flags: modelFlags("haiku-flag"), AI: aiBaseSpec("base")}, "haiku-flag"),
+			Options{Flags: modelFlags("api:gpt-5"), AI: aiBaseSpec("api:sonnet")}, "gpt-5"),
 		Entry("--model beats commit.grouping.model",
-			Options{Flags: modelFlags("haiku-flag"), Config: msgGroupSpecCfg("haiku-cfg", "sonnet-cfg")}, "haiku-flag"),
+			Options{Flags: modelFlags("api:gpt-5"), Config: msgGroupSpecCfg("api:haiku", "api:sonnet")}, "gpt-5"),
 		Entry("commit.grouping.model used when no flag",
-			Options{Config: msgGroupSpecCfg("haiku-cfg", "sonnet-cfg")}, "sonnet-cfg"),
+			Options{Config: msgGroupSpecCfg("api:haiku", "api:sonnet")}, "claude-sonnet-5"),
 		Entry("ai base used when no flag or grouping spec",
-			Options{Config: msgSpecCfg("haiku-cfg"), AI: aiBaseSpec("base")}, "base"),
-		// Grouping deliberately no longer reads commit.message.model: that is the
-		// message operation's model, and borrowing it across operations meant
-		// configuring one silently redirected the other.
+			Options{Config: msgSpecCfg("api:haiku"), AI: aiBaseSpec("api:gpt-5")}, "gpt-5"),
 		Entry("ignores commit.message.model and resolves to nothing",
-			Options{Config: msgSpecCfg("haiku-cfg")}, ""),
+			Options{Config: msgSpecCfg("api:haiku")}, ""),
 		Entry("empty when nothing configures a model", Options{}, ""),
 	)
 
@@ -209,12 +212,13 @@ var _ = Describe("Options model resolution", func() {
 
 		opts := Options{
 			Flags: modelFlags("agent:gpt-5.6-luna:medium"),
+			Saved: &captainconfig.Config{},
 			// The ~/.gavel.yaml `ai:` block that used to win over --model.
 			AI: api.Spec{Model: api.Model{Name: "sonnet", Mode: api.ModeAPI}},
 		}
-		model, err := opts.groupModel()
+		prepared, err := renderGroupingPrompt(opts, groupingTable)
 		Expect(err).ToNot(HaveOccurred())
-		_, _ = BuildAgent(opts, model)
+		_, _ = BuildAgent(prepared.Config)
 
 		Expect(got.Model.Name).To(Equal("gpt-5.6-luna"))
 		Expect(got.Model.Mode).To(Equal(api.ModeAgent), "the agent: mode must survive; it used to become the api mode")
@@ -230,8 +234,11 @@ var _ = Describe("Options model resolution", func() {
 		}
 		DeferCleanup(func() { newAgentFunc = previousAgent })
 
-		opts := Options{AI: api.Spec{Budget: api.Budget{Cost: 5, MaxTokens: 2000}}}
-		_, _ = BuildAgent(opts, api.Model{Name: "claude-sonnet-5"})
+		opts := promptTestOptions()
+		opts.AI.Budget = api.Budget{Cost: 5, MaxTokens: 2000}
+		prepared, err := renderGroupingPrompt(opts, groupingTable)
+		Expect(err).NotTo(HaveOccurred())
+		_, _ = BuildAgent(prepared.Config)
 		Expect(got.Budget.Cost).To(Equal(5.0))
 		Expect(got.Budget.MaxTokens).To(Equal(2000))
 	})
@@ -245,7 +252,7 @@ var _ = Describe("BuildAgent errors", func() {
 		}
 		DeferCleanup(func() { newAgentFunc = previousAgent })
 
-		_, err := BuildAgent(Options{}, api.Model{Name: "gpt-5.6-terra", Mode: api.ModeAPI})
+		_, err := BuildAgent(clickyai.AgentConfig{Model: api.Model{Name: "gpt-5.6-terra", Mode: api.ModeAPI}})
 		Expect(err).To(MatchError("LLM agent unavailable: API key not found for backend openai; similar environment variable found: OPEN_AI_API_KEY (did you mean OPENAI_API_KEY?)"))
 		Expect(err.Error()).ToNot(ContainSubstring("ANTHROPIC_API_KEY"))
 		Expect(errors.Is(err, ErrLLMUnavailable)).To(BeTrue())

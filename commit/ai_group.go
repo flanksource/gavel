@@ -3,13 +3,12 @@ package commit
 import (
 	"context"
 	_ "embed"
-	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
 
-	dotprompt "github.com/flanksource/captain/pkg/ai/prompt"
 	"github.com/flanksource/captain/pkg/api"
+	captaincli "github.com/flanksource/captain/pkg/cli"
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/commons/logger"
 	clickyai "github.com/flanksource/gavel/ai"
@@ -19,8 +18,7 @@ import (
 //go:embed commit-grouping.prompt
 var groupingPromptTemplate string
 
-// groupingPromptFile is reported as PromptRequest.Source so the AI logging
-// middleware identifies the template under -v.
+// groupingPromptFile identifies the template in AI logs.
 const groupingPromptFile = "commit-grouping.prompt"
 
 // groupChangesByAIFunc is the seam tests stub to exercise the -A grouping flow
@@ -62,21 +60,12 @@ type groupingRow struct {
 	Dels   int    `json:"dels" pretty:"label=-Dels"`
 }
 
-// renderGroupingPrompt renders the grouping template around the status table and
-// returns the user prompt, the JSON output schema (with the runtime MaxCommits cap
-// baked in as maxItems on the groups array), and the SchemaStrictness policy — all
-// declared in the .prompt frontmatter. maxCommits drives the Handlebars
-// conditionals in both the body and the frontmatter schema.
-func renderGroupingPrompt(template, table string, maxCommits int) (string, json.RawMessage, api.SchemaStrictness, error) {
-	data := map[string]any{
-		"table":      table,
-		"maxCommits": maxCommits,
-	}
-	req, _, err := dotprompt.Load(template).Render(data, nil)
-	if err != nil {
-		return "", nil, "", fmt.Errorf("render grouping prompt: %w", err)
-	}
-	return req.Prompt.User, req.Prompt.SchemaJSON, req.Prompt.SchemaStrictness, nil
+func renderGroupingPrompt(opts Options, table string) (captaincli.AIRuntimeResolved, error) {
+	return opts.resolvePrompt(commitPromptOptions{
+		Prompt: opts.Config.Grouping, Name: "commit.grouping", Default: groupingPromptTemplate,
+		Data:    map[string]any{"table": table, "maxCommits": opts.MaxCommits},
+		Request: api.Spec{Model: opts.GroupModel, Prompt: api.Prompt{Source: groupingPromptFile}},
+	})
 }
 
 // buildStatusTable renders the staged changes as a markdown table (gavel status'
@@ -146,33 +135,19 @@ func groupChangesByAI(ctx context.Context, opts Options, source stagedSource) (g
 		return nil, err
 	}
 
-	model, err := opts.groupModel()
+	prepared, err := renderGroupingPrompt(opts, table)
 	if err != nil {
 		return nil, err
 	}
-	agent, err := BuildAgent(opts, model)
+	agent, err := BuildAgent(prepared.Config)
 	if err != nil {
 		return nil, err
 	}
 	defer closeAgent(agent, &err)
 
-	template, err := opts.Config.Grouping.TemplateSource(opts.WorkDir, groupingPromptTemplate)
-	if err != nil {
-		return nil, fmt.Errorf("resolve commit.grouping prompt override: %w", err)
-	}
-
 	prompting.Prepare()
-
-	promptText, schemaJSON, strictness, err := renderGroupingPrompt(template, table, opts.MaxCommits)
-	if err != nil {
-		return nil, err
-	}
 	resp, err := agent.ExecutePrompt(ctx, clickyai.PromptRequest{
-		Name:             "commit grouping",
-		Source:           groupingPromptFile,
-		Prompt:           promptText,
-		SchemaJSON:       schemaJSON,
-		SchemaStrictness: strictness,
+		Name: "commit grouping", Spec: prepared.Request,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("execute AI grouping prompt: %w", err)

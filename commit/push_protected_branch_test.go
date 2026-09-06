@@ -84,7 +84,7 @@ var _ = Describe("executeNewPRPush on a protected current branch", func() {
 			},
 			defaultBranch: func(github.Options) (string, error) { return "main", nil },
 			isAncestor:    func(_, _, _ string) bool { return false },
-			generatePRPrompt: func(context.Context, clickyai.Agent, PRContentInput) (PRContent, error) {
+			generatePRPrompt: func(context.Context, PRContentInput) (PRContent, error) {
 				return PRContent{
 					Title:  "feat: on main",
 					Body:   "body",
@@ -120,7 +120,7 @@ var _ = Describe("executeNewPRPush on a protected current branch", func() {
 			},
 			defaultBranch: func(github.Options) (string, error) { return "main", nil },
 			isAncestor:    func(_, _, _ string) bool { return false },
-			generatePRPrompt: func(context.Context, clickyai.Agent, PRContentInput) (PRContent, error) {
+			generatePRPrompt: func(context.Context, PRContentInput) (PRContent, error) {
 				return PRContent{Title: "feat: x", Branch: ""}, nil
 			},
 		})

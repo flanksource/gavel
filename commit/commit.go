@@ -9,6 +9,7 @@ import (
 
 	"github.com/flanksource/captain/pkg/aiflags"
 	captainapi "github.com/flanksource/captain/pkg/api"
+	"github.com/flanksource/captain/pkg/captainconfig"
 	"github.com/flanksource/commons/logger"
 	clickyai "github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/git"
@@ -77,7 +78,6 @@ type Options struct {
 	MaxCommits int
 	DryRun     bool
 	Force      bool
-	NoCache    bool
 	Push       bool
 	// AutoMerge, with Push, enables GitHub auto-merge on a newly opened PR so
 	// it merges once required checks pass. Only applies to PRs this run opens.
@@ -91,7 +91,7 @@ type Options struct {
 	Flags aiflags.ModelFlags
 	// GroupModel overrides the LLM for AI grouping alone (CLI --group-model),
 	// on top of Flags.
-	GroupModel    string
+	GroupModel    captainapi.Model
 	Message       string
 	PrecommitMode string
 	// AssumeYes auto-answers precommit triage prompts with their default
@@ -132,13 +132,14 @@ type Options struct {
 	IssueID   string
 	SessionID string
 	Config    verify.CommitConfig
-	// AI is the base spec (model/budget/effort defaults) every commit AI op
-	// inherits. messageModel/groupModel fall back to AI.Model.Name when the
-	// operation spec pins no model. Populated from GavelConfig.AI.
+	// AI is the base specification inherited by every commit AI operation.
 	AI captainapi.Spec
+	// Saved is the Captain configuration snapshot shared by this invocation.
+	Saved *captainconfig.Config
 	// PR carries the pr: config (content spec, base branch, draft) for the
 	// push/PR-open flow. Populated from GavelConfig.PR.
-	PR verify.PRConfig
+	PR     verify.PRConfig
+	Status verify.StatusConfig
 
 	// lintGates is the resolved on/off state. Populated by Run() before
 	// dispatching into runSingleCommit / runCommitAll so the gate runs with
@@ -222,6 +223,9 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		return nil, err
 	}
 	opts.lintGates = gates
+	if err := opts.LoadAIConfig(); err != nil {
+		return nil, err
+	}
 
 	// Explicit file arguments (`gavel commit <files>`) define the commit set:
 	// reset the index and stage exactly those paths, then treat the pre-staged

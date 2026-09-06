@@ -69,7 +69,7 @@ var _ = Describe("commit AI agent lifecycle", func() {
 	It("rejects a nil agent returned without a factory error", func() {
 		newAgentFunc = func(clickyai.AgentConfig) (clickyai.Agent, error) { return nil, nil }
 
-		agent, err := BuildAgent(Options{}, captainapi.Model{Name: "test-model", Mode: captainapi.ModeAgent})
+		agent, err := BuildAgent(clickyai.AgentConfig{Model: captainapi.Model{Name: "test-model", Mode: captainapi.ModeAgent}})
 
 		Expect(agent).To(BeNil())
 		Expect(err).To(MatchError(ContainSubstring("agent factory returned nil")))
@@ -86,7 +86,7 @@ var _ = Describe("commit AI agent lifecycle", func() {
 			}}, nil
 		}
 
-		analysis, err := generateCommitAnalysis(context.Background(), Options{}, "diff")
+		analysis, err := generateCommitAnalysis(context.Background(), promptTestOptions(), "diff")
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(analysis.Message).To(Equal("fix(reliability): close commit agent"))
@@ -102,7 +102,7 @@ var _ = Describe("commit AI agent lifecycle", func() {
 			return models.CommitAnalysis{}, promptErr
 		}
 
-		_, err := generateCommitAnalysis(context.Background(), Options{}, "diff")
+		_, err := generateCommitAnalysis(context.Background(), promptTestOptions(), "diff")
 
 		Expect(errors.Is(err, promptErr)).To(BeTrue())
 		Expect(errors.Is(err, closeErr)).To(BeTrue())
@@ -119,7 +119,9 @@ var _ = Describe("commit AI agent lifecycle", func() {
 			return &status.Result{Files: []status.FileStatus{{Path: "commit.go"}}}, nil
 		}
 
-		groups, err := groupChangesByAI(context.Background(), Options{MaxCommits: 2}, stagedSource{
+		opts := promptTestOptions()
+		opts.MaxCommits = 2
+		groups, err := groupChangesByAI(context.Background(), opts, stagedSource{
 			Changes: []stagedChange{{Path: "commit.go", Status: "modified", Adds: 3, Dels: 1}},
 		})
 
@@ -136,7 +138,9 @@ var _ = Describe("commit AI agent lifecycle", func() {
 			return &status.Result{Files: []status.FileStatus{{Path: "commit.go"}}}, nil
 		}
 
-		_, err := groupChangesByAI(context.Background(), Options{MaxCommits: 2}, stagedSource{
+		opts := promptTestOptions()
+		opts.MaxCommits = 2
+		_, err := groupChangesByAI(context.Background(), opts, stagedSource{
 			Changes: []stagedChange{{Path: "commit.go", Status: "modified"}},
 		})
 
@@ -148,7 +152,7 @@ var _ = Describe("commit AI agent lifecycle", func() {
 		agent := &agentLifecycleProbe{response: &clickyai.PromptResponse{Result: "fix: merge issue commits"}}
 		newAgentFunc = func(clickyai.AgentConfig) (clickyai.Agent, error) { return agent, nil }
 
-		message, err := simplifyGroupMessage(context.Background(), Options{}, []string{"fix: first", "fix: second"})
+		message, err := simplifyGroupMessage(context.Background(), promptTestOptions(), []string{"fix: first", "fix: second"})
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(message).To(Equal("fix: merge issue commits"))
@@ -160,22 +164,20 @@ var _ = Describe("commit AI agent lifecycle", func() {
 		agent := &agentLifecycleProbe{executeErr: promptErr}
 		newAgentFunc = func(clickyai.AgentConfig) (clickyai.Agent, error) { return agent, nil }
 
-		_, err := simplifyGroupMessage(context.Background(), Options{}, []string{"fix: first", "fix: second"})
+		_, err := simplifyGroupMessage(context.Background(), promptTestOptions(), []string{"fix: first", "fix: second"})
 
 		Expect(errors.Is(err, promptErr)).To(BeTrue())
 		Expect(agent.closeCalls).To(Equal(1))
 	})
 
 	It("closes PR content generation before a dry-run returns", func() {
-		agent := &agentLifecycleProbe{}
+		agent := &agentLifecycleProbe{response: &clickyai.PromptResponse{StructuredData: json.RawMessage(`{"title":"fix: close agent","branch":"fix/close-agent"}`)}}
 		newAgentFunc = func(clickyai.AgentConfig) (clickyai.Agent, error) { return agent, nil }
 		deps := defaultPushDeps()
 		deps.defaultBranch = func(github.Options) (string, error) { return "main", nil }
-		deps.generatePRPrompt = func(context.Context, clickyai.Agent, PRContentInput) (PRContent, error) {
-			return PRContent{Title: "fix: close agent", Branch: "fix/close-agent"}, nil
-		}
-
-		err := executeNewPRPush(context.Background(), Options{DryRun: true}, github.Options{}, deps, "fix/close-agent", &Result{
+		opts := promptTestOptions()
+		opts.DryRun = true
+		err := executeNewPRPush(context.Background(), opts, github.Options{}, deps, "fix/close-agent", &Result{
 			Commits: []CommitResult{{Message: "fix: close agent"}},
 		})
 
@@ -185,15 +187,13 @@ var _ = Describe("commit AI agent lifecycle", func() {
 
 	It("closes PR content generation when the prompt fails", func() {
 		promptErr := errors.New("generate PR content")
-		agent := &agentLifecycleProbe{}
+		agent := &agentLifecycleProbe{executeErr: promptErr}
 		newAgentFunc = func(clickyai.AgentConfig) (clickyai.Agent, error) { return agent, nil }
 		deps := defaultPushDeps()
 		deps.defaultBranch = func(github.Options) (string, error) { return "main", nil }
-		deps.generatePRPrompt = func(context.Context, clickyai.Agent, PRContentInput) (PRContent, error) {
-			return PRContent{}, promptErr
-		}
-
-		err := executeNewPRPush(context.Background(), Options{DryRun: true}, github.Options{}, deps, "fix/close-agent", &Result{
+		opts := promptTestOptions()
+		opts.DryRun = true
+		err := executeNewPRPush(context.Background(), opts, github.Options{}, deps, "fix/close-agent", &Result{
 			Commits: []CommitResult{{Message: "fix: close agent"}},
 		})
 

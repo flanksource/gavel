@@ -40,7 +40,7 @@ var _ = Describe("commit -p --auto-merge", func() {
 			},
 			defaultBranch: func(github.Options) (string, error) { return "main", nil },
 			isAncestor:    func(_, _, _ string) bool { return false },
-			generatePRPrompt: func(context.Context, clickyai.Agent, PRContentInput) (PRContent, error) {
+			generatePRPrompt: func(context.Context, PRContentInput) (PRContent, error) {
 				return PRContent{Title: "feat: work", Body: "body", Branch: "feat/topic"}, nil
 			},
 			rebaseOnto: func(_, _ string) error { return nil },

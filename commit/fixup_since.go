@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/commons/logger"
 	clickyai "github.com/flanksource/gavel/ai"
 	gavelgit "github.com/flanksource/gavel/git"
@@ -206,24 +207,26 @@ func simplifyGroupMessage(ctx context.Context, opts Options, msgs []string) (mes
 		logger.V(1).Infof("%s=1, returning stub squash message", testEnvVar)
 		return stubMessage, nil
 	}
-	model, err := opts.messageModel()
-	if err != nil {
-		return "", err
-	}
-	agent, err := BuildAgent(opts, model)
-	if err != nil {
-		return "", err
-	}
-	defer closeAgent(agent, &err)
 	prompt := "The following git commit messages all belong to the same logical change " +
 		"and will be merged into a single commit. Write ONE clean Conventional Commits " +
 		"message (a `type(scope): subject` line, optionally followed by a blank line and a " +
 		"concise body) that summarizes them. Do not invent a Gavel-Issue-Id or other " +
 		"trailers. Return only the commit message.\n\n---\n" +
 		strings.Join(msgs, "\n\n---\n")
+	prepared, err := opts.resolvePrompt(commitPromptOptions{
+		Prompt: opts.Config.Message, Name: "commit.message", Default: prompt,
+		Data: map[string]any{"messages": msgs}, Request: api.Spec{Prompt: api.Prompt{User: prompt}},
+	})
+	if err != nil {
+		return "", err
+	}
+	agent, err := BuildAgent(prepared.Config)
+	if err != nil {
+		return "", err
+	}
+	defer closeAgent(agent, &err)
 	resp, err := agent.ExecutePrompt(ctx, clickyai.PromptRequest{
-		Name:   "fixup-squash-message",
-		Prompt: prompt,
+		Name: "fixup-squash-message", Spec: prepared.Request,
 	})
 	if err != nil {
 		return "", fmt.Errorf("simplify squash message: %w", err)

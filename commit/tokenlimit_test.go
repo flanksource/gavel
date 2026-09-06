@@ -62,7 +62,9 @@ func TestRunSingleCommitChunksOnTokenLimit(t *testing.T) {
 	}
 	defer func() { analyzeCommitMessageWithAIFunc = prevMsg }()
 
-	result, err := Run(context.Background(), Options{WorkDir: repo, PrecommitMode: CheckModeSkip})
+	opts := promptTestOptions()
+	opts.WorkDir, opts.PrecommitMode = repo, CheckModeSkip
+	result, err := Run(context.Background(), opts)
 	require.NoError(t, err)
 	require.Len(t, result.Commits, 2)
 	assert.Equal(t, []string{"alpha/a.txt"}, result.Commits[0].Files)

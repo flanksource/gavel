@@ -22,7 +22,7 @@ type prContentPromptAgent struct {
 
 func (a *prContentPromptAgent) ExecutePrompt(_ context.Context, req clickyai.PromptRequest) (*clickyai.PromptResponse, error) {
 	a.req = req
-	require.NotEmpty(a.t, req.SchemaJSON, "PR-content schema should come from the .prompt frontmatter")
+	require.NotEmpty(a.t, req.Spec.Prompt.SchemaJSON, "PR-content schema should come from the .prompt frontmatter")
 	raw, err := json.Marshal(a.fill)
 	require.NoError(a.t, err)
 	return &clickyai.PromptResponse{StructuredData: json.RawMessage(raw)}, nil
@@ -45,7 +45,10 @@ func TestGeneratePRContentRendersCaptainPromptAndSchema(t *testing.T) {
 		},
 	}
 
-	got, err := GeneratePRContent(context.Background(), agent, PRContentInput{Commits: []PRCommitInput{
+	previous := newAgentFunc
+	t.Cleanup(func() { newAgentFunc = previous })
+	newAgentFunc = func(clickyai.AgentConfig) (clickyai.Agent, error) { return agent, nil }
+	got, err := GeneratePRContent(context.Background(), PRContentInput{Options: promptTestOptions(), Commits: []PRCommitInput{
 		{
 			Message: "fix: use Captain prompt for PRs",
 			Files:   []string{"commit/push_prompt.go", "commit/pr-content.prompt"},
@@ -60,14 +63,14 @@ func TestGeneratePRContentRendersCaptainPromptAndSchema(t *testing.T) {
 	}, got)
 
 	assert.Equal(t, "PR title and body", agent.req.Name)
-	assert.Contains(t, agent.req.Prompt, "Return structured output matching the provided output schema.")
-	assert.Contains(t, agent.req.Prompt, "Title: imperative mood, <= 40 characters")
-	assert.Contains(t, agent.req.Prompt, "--- commit 1 ---")
-	assert.Contains(t, agent.req.Prompt, "fix: use Captain prompt for PRs")
-	assert.Contains(t, agent.req.Prompt, "files: commit/push_prompt.go, commit/pr-content.prompt")
-	assert.NotContains(t, agent.req.Prompt, "%s")
-	assert.NotEmpty(t, agent.req.SchemaJSON, "schema should be carried as SchemaJSON from the frontmatter")
-	assert.Equal(t, api.SchemaStrictnessRetry, agent.req.SchemaStrictness,
+	assert.Contains(t, agent.req.Spec.Prompt.User, "Return structured output matching the provided output schema.")
+	assert.Contains(t, agent.req.Spec.Prompt.User, "Title: imperative mood, <= 40 characters")
+	assert.Contains(t, agent.req.Spec.Prompt.User, "--- commit 1 ---")
+	assert.Contains(t, agent.req.Spec.Prompt.User, "fix: use Captain prompt for PRs")
+	assert.Contains(t, agent.req.Spec.Prompt.User, "files: commit/push_prompt.go, commit/pr-content.prompt")
+	assert.NotContains(t, agent.req.Spec.Prompt.User, "%s")
+	assert.NotEmpty(t, agent.req.Spec.Prompt.SchemaJSON, "schema should be carried as SchemaJSON from the frontmatter")
+	assert.Equal(t, api.SchemaStrictnessRetry, agent.req.Spec.Prompt.SchemaStrictness,
 		"schemaStrictness: retry from the frontmatter must be forwarded so a schema violation is fixed by re-asking the model")
 }
 
@@ -81,7 +84,10 @@ func TestGeneratePRContentRejectsLongTitle(t *testing.T) {
 		},
 	}
 
-	_, err := GeneratePRContent(context.Background(), agent, PRContentInput{Commits: []PRCommitInput{
+	previous := newAgentFunc
+	t.Cleanup(func() { newAgentFunc = previous })
+	newAgentFunc = func(clickyai.AgentConfig) (clickyai.Agent, error) { return agent, nil }
+	_, err := GeneratePRContent(context.Background(), PRContentInput{Options: promptTestOptions(), Commits: []PRCommitInput{
 		{Message: "fix: test title limit"},
 	}})
 	require.Error(t, err)

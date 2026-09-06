@@ -3,6 +3,7 @@ package commit
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 
 	"github.com/flanksource/clicky/prompt"
@@ -71,7 +72,7 @@ func RunAfterAgent(ctx context.Context, run AgentRun) (*Result, error) {
 
 	cfg, err := verify.LoadGavelConfig(commitDir)
 	if err != nil {
-		logger.Warnf("Failed to load .gavel.yaml: %v", err)
+		return nil, fmt.Errorf("load after-agent commit configuration: %w", err)
 	}
 
 	// Scope any prompt this commit raises (gitignore / linked-deps / file-size /
@@ -108,6 +109,7 @@ func RunAfterAgent(ctx context.Context, run AgentRun) (*Result, error) {
 		Config:      cfg.Commit,
 		AI:          cfg.AI,
 		PR:          cfg.PR,
+		Status:      cfg.Status,
 		Files:       run.Files,
 		Fixup:       run.Fixup,
 		Message:     run.Message,

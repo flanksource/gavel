@@ -258,7 +258,7 @@ var _ = Describe("dry-run new-PR push generates title/body and reports without p
 			defaultBranch: func(github.Options) (string, error) { return "main", nil },
 			isAncestor:    func(_, _, _ string) bool { return false },
 			aheadCommits:  loadAheadCommits,
-			generatePRPrompt: func(context.Context, clickyai.Agent, PRContentInput) (PRContent, error) {
+			generatePRPrompt: func(context.Context, PRContentInput) (PRContent, error) {
 				llmCalls++
 				return PRContent{
 					Title:  "feat: add the thing",

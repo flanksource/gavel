@@ -258,6 +258,8 @@ var _ = Describe("runInteractiveBatch", func() {
 		DeferCleanup(func() { groupChangesByAIFunc = previousGroup })
 
 		_, err := runSingleCommit(context.Background(), Options{
+			AI:              promptTestOptions().AI,
+			Saved:           promptTestOptions().Saved,
 			WorkDir:         repo,
 			Stage:           StageStaged,
 			Batch:           true,

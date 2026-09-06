@@ -10,7 +10,6 @@ import (
 
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/commons/logger"
-	clickyai "github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/github"
 )
 
@@ -39,7 +38,7 @@ type pushDeps struct {
 	gitPush             func(workDir, refspec string) error
 	rebaseOnto          func(workDir, upstreamBranch string) error
 	pickPR              func(header string, prs []github.PRListItem) (*github.PRListItem, error)
-	generatePRPrompt    func(ctx context.Context, agent clickyai.Agent, in PRContentInput) (PRContent, error)
+	generatePRPrompt    func(ctx context.Context, in PRContentInput) (PRContent, error)
 	aheadCommits        func(workDir, branch, defaultBase string) ([]CommitResult, error)
 	confirmProtectedRef func(branch string) bool
 	enableAutoMerge     func(github.Options, string, string) error
@@ -243,26 +242,10 @@ func executeExistingPRPush(opts Options, deps pushDeps, pr *github.PRListItem, r
 func executeNewPRPush(ctx context.Context, opts Options, ghOpts github.Options, deps pushDeps, branch string, result *Result) (err error) {
 	base, _ := deps.defaultBranch(ghOpts)
 
-	model, err := opts.PRContentModel()
-	if err != nil {
-		return fmt.Errorf("build AI agent for PR content: %w", err)
-	}
-	agent, err := BuildAgent(opts, model)
-	if err != nil {
-		return fmt.Errorf("build AI agent for PR content: %w", err)
-	}
-	defer closeAgent(agent, &err)
-
-	prContentPrompt, err := opts.PR.Content.TemplateSource(opts.WorkDir, prContentPromptTemplate)
-	if err != nil {
-		return fmt.Errorf("resolve pr.content prompt override: %w", err)
-	}
 	prIn := PRContentInput{
-		Commits:        commitInputsFromResults(result.Commits),
-		PromptOverride: prContentPrompt,
-		WorkDir:        opts.WorkDir,
+		Commits: commitInputsFromResults(result.Commits), Options: opts,
 	}
-	content, err := deps.generatePRPrompt(ctx, agent, prIn)
+	content, err := deps.generatePRPrompt(ctx, prIn)
 	if err != nil {
 		return fmt.Errorf("generate PR title/body: %w", err)
 	}

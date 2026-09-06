@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	captaincli "github.com/flanksource/captain/pkg/cli"
 	clickytask "github.com/flanksource/clicky/task"
 	"github.com/flanksource/commons/logger"
 	clickyai "github.com/flanksource/gavel/ai"
@@ -30,8 +31,8 @@ var (
 
 // candidateSummarySession owns the per-file AI summary stream used by one
 // picker invocation. Files contains the candidate slice after its AI states
-// have been initialized. Stop cancels in-flight requests, closes the agent,
-// waits for the stream to settle, and restores Clicky's task renderer.
+// have been initialized. Stop cancels in-flight requests, waits for their
+// agents to close, and restores Clicky's task renderer.
 type candidateSummarySession struct {
 	Files   []status.FileStatus
 	Updates <-chan status.AISummaryUpdate
@@ -166,18 +167,15 @@ func startCandidateSummaries(ctx context.Context, opts Options, candidates []sta
 		ctx = context.Background()
 	}
 
-	model, err := opts.messageModel()
+	promptOptions, saved, err := opts.promptOptions()
 	if err != nil {
 		return nil, err
 	}
-	agent, err := BuildAgent(opts, model)
+	summaryPrompt, err := status.ResolveSummaryPrompt(status.SummaryPromptOptions{
+		Dir: opts.WorkDir, Base: promptOptions.Base, Request: promptOptions.Request,
+		Override: opts.Status.Summary, Saved: saved,
+	})
 	if err != nil {
-		return nil, err
-	}
-
-	summaryPrompt, err := status.ResolveSummaryPrompt(opts.WorkDir)
-	if err != nil {
-		_ = agent.Close()
 		return nil, err
 	}
 
@@ -188,14 +186,13 @@ func startCandidateSummaries(ctx context.Context, opts Options, candidates []sta
 	streamCtx, cancel := context.WithCancel(ctx)
 	previousNoRender := clickytask.IsNoRender()
 	clickytask.SetNoRender(true)
-	rawUpdates := status.StreamAISummaries(
-		streamCtx,
-		opts.WorkDir,
-		agent,
-		result.Files,
-		clickyai.DefaultConfig().MaxConcurrent,
-		summaryPrompt,
-	)
+	rawUpdates := status.StreamAISummaries(streamCtx, status.SummaryOptions{
+		WorkDir: opts.WorkDir, Files: result.Files,
+		MaxWorkers: clickyai.DefaultConfig().MaxConcurrent, Prompt: summaryPrompt,
+		NewAgent: func(runtime captaincli.AIRuntimeResolved) (clickyai.Agent, error) {
+			return BuildAgent(runtime.Config)
+		},
+	})
 
 	updates := make(chan status.AISummaryUpdate, len(result.Files)*2+1)
 	done := make(chan struct{})
@@ -211,7 +208,6 @@ func startCandidateSummaries(ctx context.Context, opts Options, candidates []sta
 	stop := func() {
 		stopOnce.Do(func() {
 			cancel()
-			_ = agent.Close()
 			<-done
 			clickytask.SetNoRender(previousNoRender)
 		})
