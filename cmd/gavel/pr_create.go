@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/flanksource/captain/pkg/aiflags"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,11 +12,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flanksource/captain/pkg/aiflags"
+	"github.com/flanksource/captain/pkg/captainconfig"
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/commons/logger"
 	commitpkg "github.com/flanksource/gavel/commit"
 	"github.com/flanksource/gavel/github"
-	"github.com/flanksource/gavel/verify"
 	"github.com/spf13/cobra"
 )
 
@@ -81,62 +81,13 @@ type prCreateDeps struct {
 	generateContent func(ctx context.Context, in commitpkg.PRContentInput) (commitpkg.PRContent, error)
 }
 
-func defaultPRCreateDeps() prCreateDeps {
-	return prCreateDeps{
-		createPR:    github.CreatePR,
-		openBrowser: openBrowser,
-		generateContent: func(ctx context.Context, in commitpkg.PRContentInput) (commitpkg.PRContent, error) {
-			opts := commitpkg.Options{
-				Flags: aiflags.ModelFlags{Model: prCreateModel, NoCache: prCreateNoCache},
-			}
-			// The model comes from the same .gavel.yaml the prompt did.
-			if in.WorkDir != "" {
-				cfg, err := verify.LoadGavelConfig(in.WorkDir)
-				if err != nil {
-					return commitpkg.PRContent{}, fmt.Errorf("load .gavel.yaml for PR content model: %w", err)
-				}
-				opts.AI, opts.PR = cfg.AI, cfg.PR
-			}
-			model, err := opts.PRContentModel()
-			if err != nil {
-				return commitpkg.PRContent{}, err
-			}
-			agent, err := commitpkg.BuildAgent(opts, model)
-			if err != nil {
-				return commitpkg.PRContent{}, err
-			}
-			defer func() {
-				if err := agent.Close(); err != nil {
-					logger.Warnf("pr create: failed to close AI agent: %v", err)
-				}
-			}()
-			return commitpkg.GeneratePRContent(ctx, agent, in)
-		},
-	}
-}
-
-func runPRCreate(cmd *cobra.Command, args []string) error {
-	// When --base is not explicitly passed, fall back to pr.base from .gavel.yaml;
-	// the flag default (origin/main) applies only when config leaves it empty.
-	base := prCreateBase
-	if !cmd.Flags().Changed("base") {
-		if cfg, err := verify.LoadGavelConfig("."); err == nil && cfg.PR.Base != "" {
-			base = cfg.PR.Base
-		}
-	}
-	return runPRCreateWithDeps(cmd.Context(), args[0], prCreateOptions{
-		Base:     base,
-		Draft:    prCreateDraft,
-		Mainline: prCreateMainline,
-		Repo:     prCreateRepo,
-	}, defaultPRCreateDeps())
-}
-
 type prCreateOptions struct {
 	Base     string
 	Draft    bool
 	Mainline int
 	Repo     string
+	Flags    aiflags.ModelFlags
+	Saved    *captainconfig.Config
 }
 
 func runPRCreateWithDeps(ctx context.Context, sha string, opts prCreateOptions, deps prCreateDeps) error {
@@ -147,6 +98,13 @@ func runPRCreateWithDeps(ctx context.Context, sha string, opts prCreateOptions, 
 	repoRoot, err := gitRepoRoot(workDir)
 	if err != nil {
 		return err
+	}
+	if opts.Saved == nil {
+		saved, _, err := captainconfig.Load()
+		if err != nil {
+			return fmt.Errorf("load Captain configuration: %w", err)
+		}
+		opts.Saved = &saved
 	}
 
 	pf, err := preflightPRCreate(repoRoot, sha, opts)
@@ -189,7 +147,7 @@ func runPRCreateWithDeps(ctx context.Context, sha string, opts prCreateOptions, 
 		return fmt.Errorf("git cherry-pick %s: %w", pf.shortSHA, err)
 	}
 
-	prIn, err := prContentInputForSHA(wtPath)
+	prIn, err := prContentInputForSHA(wtPath, opts)
 	if err != nil {
 		return err
 	}
@@ -298,30 +256,6 @@ func splitBaseRef(base string) (string, string) {
 		branch = strings.TrimPrefix(branch, "origin/")
 	}
 	return branch, base
-}
-
-func prContentInputForSHA(wtPath string) (commitpkg.PRContentInput, error) {
-	msg, _ := captureGit(wtPath, "show", "-s", "--format=%B", "HEAD")
-	rawFiles, _ := captureGit(wtPath, "show", "--name-only", "--format=", "HEAD")
-	var files []string
-	for _, line := range strings.Split(strings.TrimSpace(rawFiles), "\n") {
-		if s := strings.TrimSpace(line); s != "" {
-			files = append(files, s)
-		}
-	}
-	cfg, err := verify.LoadGavelConfig(wtPath)
-	if err != nil {
-		return commitpkg.PRContentInput{}, fmt.Errorf("load .gavel.yaml for PR content prompt: %w", err)
-	}
-	prContentPrompt, err := cfg.PR.Content.TemplateSource(wtPath, "")
-	if err != nil {
-		return commitpkg.PRContentInput{}, fmt.Errorf("resolve pr.content prompt override: %w", err)
-	}
-	return commitpkg.PRContentInput{
-		Commits:        []commitpkg.PRCommitInput{{Message: strings.TrimSpace(msg), Files: files}},
-		PromptOverride: prContentPrompt,
-		WorkDir:        wtPath,
-	}, nil
 }
 
 // --- worktree creation, push, cleanup ---------------------------------------

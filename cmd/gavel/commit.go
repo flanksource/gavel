@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/flanksource/captain/pkg/aiflags"
+	captainapi "github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/commons/logger"
@@ -16,26 +17,26 @@ import (
 	"github.com/flanksource/gavel/models"
 	"github.com/flanksource/gavel/verify"
 	"github.com/flanksource/repomap"
-	"github.com/spf13/cobra"
 )
 
 type CommitOptions struct {
-	Args        []string `json:"-" args:"true"`
-	Stage       string   `flag:"stage" help:"Which changes to commit: session (default; resolves GAVEL_SESSION_ID/CLAUDE_CODE_SESSION_ID/CLAUDE_SESSION_ID/CODEX_SESSION_ID and commits only that session's edited files, falling back to staged when none is set), staged|unstaged|all, or an explicit Claude/Codex session id or prefix" default:"session"`
-	CommitAll   bool     `flag:"commit-all" short:"A" help:"Split the change set into logical commits via the LLM (a separate chore commit collects lock/generated files). Implied by --max-commits."`
-	Interactive bool     `flag:"interactive" short:"i" help:"Open an interactive tree picker over all changed files (staged, unstaged, untracked); selecting confirms which files to commit"`
-	Batch       bool     `flag:"batch" short:"b" help:"With -i, queue multiple selected file batches before generating messages and committing them"`
-	Tree        bool     `flag:"tree" short:"t" help:"Alias for --interactive"`
-	Summary     bool     `flag:"summary" short:"s" help:"With -i, stream a one-line AI summary into each candidate file row in the picker"`
-	MaxCommits  int      `flag:"max-commits" help:"Max number of logical commits to produce (excluding the chore commit for lock/generated files). Setting this implies -A. Defaults to 7 when grouping." default:"0"`
-	Message     string   `flag:"message" short:"m" help:"Explicit commit message (skips only the message-generation LLM call)"`
+	groupModelFields captainapi.FieldPresence
+	Args             []string `json:"-" args:"true"`
+	Stage            string   `flag:"stage" help:"Which changes to commit: session (default; resolves GAVEL_SESSION_ID/CLAUDE_CODE_SESSION_ID/CLAUDE_SESSION_ID/CODEX_SESSION_ID and commits only that session's edited files, falling back to staged when none is set), staged|unstaged|all, or an explicit Claude/Codex session id or prefix" default:"session"`
+	CommitAll        bool     `flag:"commit-all" short:"A" help:"Split the change set into logical commits via the LLM (a separate chore commit collects lock/generated files). Implied by --max-commits."`
+	Interactive      bool     `flag:"interactive" short:"i" help:"Open an interactive tree picker over all changed files (staged, unstaged, untracked); selecting confirms which files to commit"`
+	Batch            bool     `flag:"batch" short:"b" help:"With -i, queue multiple selected file batches before generating messages and committing them"`
+	Tree             bool     `flag:"tree" short:"t" help:"Alias for --interactive"`
+	Summary          bool     `flag:"summary" short:"s" help:"With -i, stream a one-line AI summary into each candidate file row in the picker"`
+	MaxCommits       int      `flag:"max-commits" help:"Max number of logical commits to produce (excluding the chore commit for lock/generated files). Setting this implies -A. Defaults to 7 when grouping." default:"0"`
+	Message          string   `flag:"message" short:"m" help:"Explicit commit message (skips only the message-generation LLM call)"`
 	// Embedded: contributes --model, --mode, --backend, --effort,
 	// --fallback, --temperature and --no-cache, parsed by captain so a compact
 	// selector ("agent:opus:high") keeps its backend and effort all the way to the
 	// provider. It replaces a bare --model string, which could not.
 	aiflags.ModelFlags
 
-	GroupModel   string `flag:"group-model" help:"Override LLM model for AI commit grouping (-A) from .gavel.yaml commit.groupModel (capable/sonnet-class); falls back to --model"`
+	GroupModel   string `flag:"group-model" help:"Override LLM model for AI commit grouping (-A) from .gavel.yaml commit.grouping.model; falls back to --model"`
 	DryRun       bool   `flag:"dry-run" help:"Print the generated message without committing"`
 	Force        bool   `flag:"force" help:"Skip pre-commit hooks"`
 	Push         bool   `flag:"push" short:"p" help:"Push to a matching open PR or open a new PR. Skips the commit step when nothing is staged so existing local commits can be pushed."`
@@ -159,15 +160,7 @@ Examples:
 }
 
 func init() {
-	cmd := clicky.AddNamedCommand("commit", rootCmd, CommitOptions{}, runCommit)
-	cmd.Use = "commit [files...]"
-	cmd.Args = cobra.ArbitraryArgs
-	// Allow `gavel commit --fixup` (no value) to mean "auto-route per file";
-	// `--fixup=<hash>` keeps explicit semantics. NoOptDefVal is the cobra
-	// hook for this; clicky's struct-tag binding doesn't surface it.
-	if f := cmd.Flags().Lookup("fixup"); f != nil {
-		f.NoOptDefVal = commitpkg.FixupAuto
-	}
+	registerCommitCommand(rootCmd, runCommit)
 }
 
 func buildCommitOptions(opts CommitOptions, workDir string, cfg verify.GavelConfig, files []string) commitpkg.Options {
@@ -190,9 +183,8 @@ func buildCommitOptions(opts CommitOptions, workDir string, cfg verify.GavelConf
 		MaxCommits:      maxCommits,
 		DryRun:          opts.DryRun,
 		Force:           opts.Force,
-		NoCache:         opts.NoCache,
 		Flags:           opts.ModelFlags,
-		GroupModel:      opts.GroupModel,
+		GroupModel:      captainapi.Model{Name: opts.GroupModel, Explicit: opts.groupModelFields.Clone()},
 		Message:         opts.Message,
 		Push:            opts.Push,
 		AutoMerge:       opts.AutoMerge,
@@ -209,6 +201,7 @@ func buildCommitOptions(opts CommitOptions, workDir string, cfg verify.GavelConf
 		Config:          cfg.Commit,
 		AI:              cfg.AI,
 		PR:              cfg.PR,
+		Status:          cfg.Status,
 	}
 }
 
@@ -244,10 +237,13 @@ func runCommit(opts CommitOptions) (any, error) {
 
 	cfg, err := verify.LoadGavelConfig(workDir)
 	if err != nil {
-		logger.Warnf("Failed to load .gavel.yaml: %v", err)
+		return nil, fmt.Errorf("load commit configuration: %w", err)
 	}
-
-	result, err := commitpkg.Run(context.Background(), buildCommitOptions(opts, workDir, cfg, files))
+	runOptions := buildCommitOptions(opts, workDir, cfg, files)
+	if err := runOptions.LoadAIConfig(); err != nil {
+		return nil, err
+	}
+	result, err := commitpkg.Run(context.Background(), runOptions)
 
 	if err != nil {
 		if errors.Is(err, commitpkg.ErrNothingStaged) {
@@ -320,7 +316,7 @@ func runCommit(opts CommitOptions) (any, error) {
 			outcome := handleCommitLintFindings(workDir, result, opts.Yes)
 			switch outcome {
 			case lintFindingsContinueOnce:
-				retry := buildCommitOptions(opts, workDir, cfg, files)
+				retry := runOptions
 				retry.LintFlag = "false"
 				retry.LintSecretsFlag = "false"
 				logger.Infof("lint: continuing this commit with lint gate disabled (one-time bypass)")
@@ -330,7 +326,7 @@ func runCommit(opts CommitOptions) (any, error) {
 				}
 				return retryResult, nil
 			case lintFindingsAIFixed:
-				retry := buildCommitOptions(opts, workDir, cfg, files)
+				retry := runOptions
 				logger.Infof("lint: ai-fix applied edits; re-running commit with lint gate enabled")
 				retryResult, retryErr := commitpkg.Run(context.Background(), retry)
 				if retryErr != nil {

@@ -18,10 +18,10 @@ var _ = Describe("AI fix request", func() {
 		workDir := GinkgoT().TempDir()
 		operation := api.Spec{Model: api.Model{Name: "agent:sonnet"}}
 
-		_, req, err := buildAIFixRequest(captaincli.AIRuntimeOptions{}, operation, workDir)
+		resolved, err := buildAIFixRequest(aiFixRequestOptions{Layers: []api.SpecLayer{api.PromptSpecLayer("operation", operation)}, Dir: workDir})
 
 		Expect(err).NotTo(HaveOccurred())
-		Expect(req.Cwd()).To(Equal(workDir))
+		Expect(resolved.Request.Cwd()).To(Equal(workDir))
 	})
 })
 
@@ -32,8 +32,9 @@ func TestBuildAIFixRequestUsesOperationModelIndependently(t *testing.T) {
 		Budget: api.Budget{Cost: 2, MaxTokens: 8192, MaxTurns: 20},
 	}
 
-	cfg, req, err := buildAIFixRequest(captaincli.AIRuntimeOptions{}, operation, t.TempDir())
+	resolved, err := buildAIFixRequest(aiFixRequestOptions{Layers: []api.SpecLayer{api.PromptSpecLayer("operation", operation)}, Dir: t.TempDir()})
 	require.NoError(t, err)
+	cfg, req := resolved.Config, resolved.Request
 	assert.Equal(t, "claude-sonnet-5", cfg.Model.Name)
 	assert.Equal(t, api.ModeAgent, cfg.Model.Mode)
 	assert.Equal(t, api.EffortHigh, req.Model.Effort)
@@ -56,8 +57,9 @@ func TestBuildAIFixRequestCarriesOperationPromptWorkflowAndTimeout(t *testing.T)
 		},
 	}
 
-	_, req, err := buildAIFixRequest(captaincli.AIRuntimeOptions{}, operation, t.TempDir())
+	resolved, err := buildAIFixRequest(aiFixRequestOptions{Layers: []api.SpecLayer{api.PromptSpecLayer("operation", operation)}, Dir: t.TempDir()})
 	require.NoError(t, err)
+	req := resolved.Request
 	assert.Equal(t, "you fix PRs", req.Prompt.System)
 	assert.Equal(t, "status snapshot", req.Prompt.User)
 	assert.Equal(t, "45m", req.Budget.Timeout)
@@ -77,8 +79,9 @@ func TestBuildAIFixRequestCLIModelOverridesOperation(t *testing.T) {
 		},
 	}
 
-	cfg, req, err := buildAIFixRequest(opts, operation, t.TempDir())
+	resolved, err := buildAIFixRequest(aiFixRequestOptions{Runtime: opts, Layers: []api.SpecLayer{api.PromptSpecLayer("operation", operation)}, Dir: t.TempDir()})
 	require.NoError(t, err)
+	cfg, req := resolved.Config, resolved.Request
 	assert.Equal(t, "claude-opus-5", cfg.Model.Name)
 	assert.Equal(t, api.EffortMedium, req.Model.Effort)
 }

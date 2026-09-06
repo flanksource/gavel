@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -72,7 +74,11 @@ func TestConfigHelpIncludesExample(t *testing.T) {
 }
 
 func TestRunConfigResolveReturnsResolvedResult(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.WriteFile(filepath.Join(home, ".captain.yaml"), []byte("ai:\n  defaultModel: agent:claude-sonnet-5\n  timeout: 17m\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	target := t.TempDir()
 	result, err := runConfig(ConfigOptions{Args: []string{target}, Resolve: true})
 	if err != nil {
@@ -84,5 +90,17 @@ func TestRunConfigResolveReturnsResolvedResult(t *testing.T) {
 	}
 	if want := len(registry.All()); len(resolved.Prompts) != want {
 		t.Fatalf("resolved prompts = %d, want every registered prompt (%d)", len(resolved.Prompts), want)
+	}
+	for _, item := range resolved.Prompts {
+		switch item.ID {
+		case "commit.message":
+			if item.Effective.Budget.Timeout != "17m" || item.Provenance["/budget/timeout"].Source.Key != "ai.timeout" {
+				t.Fatalf("%s timeout = %q, origin = %#v; want saved timeout 17m", item.ID, item.Effective.Budget.Timeout, item.Provenance["/budget/timeout"])
+			}
+		case "pr.fix":
+			if item.Effective.Budget.Timeout != "45m" || item.Provenance["/budget/timeout"].Source.LayerID != "default" {
+				t.Fatalf("%s timeout = %q, origin = %#v; want authored timeout 45m", item.ID, item.Effective.Budget.Timeout, item.Provenance["/budget/timeout"])
+			}
+		}
 	}
 }

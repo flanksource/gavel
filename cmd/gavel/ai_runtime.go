@@ -2,10 +2,9 @@ package main
 
 import (
 	"os"
-	"strconv"
 
-	captainai "github.com/flanksource/captain/pkg/ai"
 	"github.com/flanksource/captain/pkg/api"
+	"github.com/flanksource/captain/pkg/captainconfig"
 	captaincli "github.com/flanksource/captain/pkg/cli"
 )
 
@@ -21,76 +20,19 @@ func defaultAIRuntimeOptions() captaincli.AIRuntimeOptions {
 	return captaincli.AIRuntimeOptions{}
 }
 
-// buildAIFixRequest produces the (Config, Request) pair every aifix caller
-// in gavel uses. Precedence is explicit CLI flags, the Gavel operation spec,
-// then ~/.captain.yaml defaults. It also forces the per-feature toggles aifix
-// requires regardless of caller preferences:
-//
-//   - Cwd: Captain launches the provider from the target repository even when
-//     Gavel was invoked elsewhere with --cwd.
-//   - Edit: ai-fix must edit files in place. Set Captain's edit option before
-//     ToRequest so Captain owns its permission translation and validation.
-func buildAIFixRequest(opts captaincli.AIRuntimeOptions, operation api.Spec, workDir string) (captainai.Config, captainai.Request, error) {
-	if opts.Model == "" {
-		opts.Model = operation.Name
-	}
-	if opts.Mode == "" {
-		opts.Mode = string(operation.Mode)
-	}
-	if opts.Effort == "" {
-		opts.Effort = string(operation.Effort)
-	}
-	if opts.MaxTokens == 0 {
-		opts.MaxTokens = operation.Budget.MaxTokens
-	}
-	if opts.MaxTurns == 0 {
-		opts.MaxTurns = operation.Budget.MaxTurns
-	}
-	if operation.Budget.Cost > 0 && (opts.Budget == "" || opts.Budget == "0") {
-		opts.Budget = strconv.FormatFloat(operation.Budget.Cost, 'f', -1, 64)
-	}
-	opts.Edit = true
-	cfg, err := opts.ToConfig()
-	if err != nil {
-		return captainai.Config{}, captainai.Request{}, err
-	}
-	req, err := opts.ToRequest("", "", "")
-	if err != nil {
-		return captainai.Config{}, captainai.Request{}, err
-	}
-	req.SetCwd(workDir)
-	if len(opts.Fallback) == 0 && len(operation.Fallbacks) > 0 {
-		cfg.Model.Fallbacks = operation.Fallbacks
-		cfg.Model, err = captainai.Resolve(cfg.Model)
-		if err != nil {
-			return captainai.Config{}, captainai.Request{}, err
-		}
-	}
-	req.Name = cfg.Model.Name
-	req.Mode = cfg.Model.Mode
-	req.Fallbacks = cfg.Model.Fallbacks
-	if operation.NoCache {
-		req.NoCache = true
-	}
-	if operation.Budget.Timeout != "" {
-		req.Budget.Timeout = operation.Budget.Timeout
-	}
-	// The rendered prompt and the loop the operation declares (verify commands,
-	// commit policy). Callers that re-render per iteration (aifix) overwrite
-	// Prompt on their own turn clones; nothing overwrites Workflow.
-	if operation.Prompt.User != "" {
-		req.Prompt.User = operation.Prompt.User
-	}
-	if operation.Prompt.System != "" {
-		req.Prompt.System = operation.Prompt.System
-	}
-	if operation.Workflow != nil {
-		req.Workflow = operation.Workflow
-	}
-	req.Budget.Cost = cfg.Budget.Cost
-	cfg.Model = req.Model
-	cfg.Budget = req.Budget
-	return cfg, req, nil
+type aiFixRequestOptions struct {
+	Runtime captaincli.AIRuntimeOptions
+	Layers  []api.SpecLayer
+	Saved   captainconfig.Config
+	Dir     string
+}
+
+func buildAIFixRequest(options aiFixRequestOptions) (captaincli.AIRuntimeResolved, error) {
+	layers := []api.SpecLayer{api.PromptSpecLayer("repair host", api.Spec{Permissions: api.Permissions{Mode: api.PermissionAcceptEdits}})}
+	layers = append(layers, options.Layers...)
+	return options.Runtime.Resolve(captaincli.AIRuntimeResolveOptions{
+		Layers: layers, Saved: options.Saved, Cwd: options.Dir, RequireModel: true,
+	})
 }
 
 func newAIFixRenderer() *captaincli.EventRenderer {

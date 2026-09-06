@@ -3,23 +3,22 @@ package main
 import (
 	"testing"
 
-	captainai "github.com/flanksource/captain/pkg/ai"
 	"github.com/flanksource/captain/pkg/api"
 	clickyai "github.com/flanksource/gavel/ai"
+	"github.com/flanksource/gavel/git"
+	"github.com/flanksource/gavel/models"
 	"github.com/flanksource/gavel/verify"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// resolveAnalyzeModel mirrors what newAnalyzeAgent does, against a config whose
-// ai: base is the built-in one, so these assertions are about precedence rather
-// than about whatever .gavel.yaml the test happens to run under.
 func resolveAnalyzeModel(t *testing.T, override api.Model) api.Model {
 	t.Helper()
-	cfg := verify.DefaultGavelConfig()
-	resolved, err := captainai.Resolve(cfg.ModelFor(cfg.Commit.Message, override))
+	resolved, err := git.PrepareCommitMessage(models.CommitAnalysis{}, git.AnalyzeOptions{PromptOptions: verify.PromptResolveOptions{
+		Base: api.Spec{Model: api.Model{Mode: api.ModeAgent}}, Request: api.Spec{Model: override},
+	}})
 	require.NoError(t, err)
-	return resolved
+	return resolved.Request.Model
 }
 
 // `git analyze --ai --ai-model api:haiku` ran on agent mode no matter what was

@@ -51,28 +51,22 @@ func init() {
 		return commits, nil
 	})
 
-	analyze := clicky.AddCommand(gitCmd, git.AnalyzeOptions{}, func(options git.AnalyzeOptions) (any, error) {
+	var analyze *cobra.Command
+	analyze = clicky.AddCommand(gitCmd, git.AnalyzeOptions{}, func(options git.AnalyzeOptions) (any, error) {
 		logger.Tracef("git-analyzer options: %+v", options)
 
 		if options.Path == "" {
 			options.Path = "."
 		}
 
-		// One agent for the whole command, resolved from .gavel.yaml with
-		// --ai-model layered on top. The per-commit analysis used to build its own
-		// from ai.DefaultConfig() deep inside AnalyzeCommitHistory, so it ran on
-		// the hardcoded model while only the summary pass honoured the flag.
 		cfg, err := verify.LoadGavelConfig(options.Path)
 		if err != nil {
 			return nil, fmt.Errorf("load .gavel.yaml for git analyze: %w", err)
 		}
 		if options.AI {
-			agent, err := newAnalyzeAgent(cfg, analyzeAI)
-			if err != nil {
+			if err := configureGitAI(&options, gitAIOptions{Config: cfg, Flags: analyzeAI, FlagSet: analyze.Flags()}); err != nil {
 				return nil, err
 			}
-			defer closeAgent(agent)
-			options.Agent = agent
 		}
 
 		var analyses models.CommitAnalyses
@@ -134,16 +128,12 @@ func init() {
 				Window:        options.SummaryWindow,
 				MaxCategories: 7,
 				MaxWorkers:    options.MaxConcurrent,
+				Prompt:        cfg.Commit.Summary,
+				PromptOptions: options.PromptOptions,
+				Saved:         options.Saved,
+				AgentFactory:  options.AgentFactory,
 			}
-			summaryPrompt, err := cfg.Commit.Summary.TemplateSource(options.Path, "")
-			if err != nil {
-				return nil, fmt.Errorf("resolve commit.summary prompt override: %w", err)
-			}
-			opts.SummaryPrompt = summaryPrompt
-
-			if options.Agent != nil {
-				clicky.Infof("Summarizing using AI %s", options.Agent)
-				opts.Agent = options.Agent
+			if options.AI {
 				opts.Context = context.Background()
 			}
 			return git.Summarize(analyses, opts)
@@ -154,7 +144,8 @@ func init() {
 
 	ai.BindFlags(analyze.Flags(), &analyzeAI)
 
-	amendCommits := clicky.AddCommand(gitCmd, git.AmendCommitsOptions{}, func(options git.AmendCommitsOptions) (any, error) {
+	var amendCommits *cobra.Command
+	amendCommits = clicky.AddCommand(gitCmd, git.AmendCommitsOptions{}, func(options git.AmendCommitsOptions) (any, error) {
 		logger.Tracef("git-amend-commits options: %+v", options)
 
 		if options.Path == "" {
@@ -166,20 +157,14 @@ func init() {
 			return nil, fmt.Errorf("path '%s' does not exist", options.Path)
 		}
 
-		// Amend is unconditionally an AI command, so it always needs an agent.
-		// It used to get one from ai.DefaultConfig() inside AnalyzeCommitHistory,
-		// which is why its --ai-* flags and .gavel.yaml were both ignored.
 		cfg, err := verify.LoadGavelConfig(options.Path)
 		if err != nil {
 			return nil, fmt.Errorf("load .gavel.yaml for git amend-commits: %w", err)
 		}
-		agent, err := newAnalyzeAgent(cfg, amendAI)
-		if err != nil {
+		options.Analysis.HistoryOptions = options.HistoryOptions
+		if err := configureGitAI(&options.Analysis, gitAIOptions{Config: cfg, Flags: amendAI, FlagSet: amendCommits.Flags()}); err != nil {
 			return nil, err
 		}
-		defer closeAgent(agent)
-		options.Agent = agent
-		options.AllowedCommitTypes = cfg.Commit.Types
 
 		if err := git.AmendCommits(context.Background(), options); err != nil {
 			logger.Errorf("git-amend-commits failed: %v", err)
@@ -217,27 +202,4 @@ func init() {
 		}
 		return configPath, nil
 	})
-}
-
-// newAnalyzeAgent builds the agent for `git analyze`/`git amend-commits` from the
-// commit.message model ladder with the command's --ai-* flags layered on top.
-//
-// Both commands rewrite commit messages with the same prompt as `gavel commit`,
-// so they resolve the same operation spec rather than inventing their own.
-func newAnalyzeAgent(cfg verify.GavelConfig, flags ai.AgentConfig) (ai.Agent, error) {
-	runCfg := flags
-	runCfg.Model = cfg.ModelFor(cfg.Commit.Message, flags.Model)
-	agent, err := ai.NewAgent(runCfg)
-	if err != nil {
-		return nil, fmt.Errorf("build AI agent for git analysis: %w", err)
-	}
-	return agent, nil
-}
-
-// closeAgent releases a process-backed agent, warning rather than failing: the
-// analysis itself has already succeeded by the time this runs.
-func closeAgent(agent ai.Agent) {
-	if err := agent.Close(); err != nil {
-		logger.Warnf("failed to close AI agent: %v", err)
-	}
 }

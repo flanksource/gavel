@@ -6,6 +6,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	captainapi "github.com/flanksource/captain/pkg/api"
+	"github.com/flanksource/captain/pkg/captainconfig"
+	captaincli "github.com/flanksource/captain/pkg/cli"
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
 	gaveldocs "github.com/flanksource/gavel"
@@ -17,7 +20,7 @@ import (
 
 type ConfigOptions struct {
 	Args    []string `json:"-" args:"true"`
-	Resolve bool     `json:"resolve,omitempty" flag:"resolve" short:"r" help:"Resolve registered AI prompts, files, specs, and effective models"`
+	Resolve bool     `json:"resolve,omitempty" flag:"resolve" short:"r" help:"Resolve registered AI prompts with saved defaults and field provenance"`
 }
 
 type ConfigResult struct {
@@ -63,7 +66,15 @@ func runConfig(opts ConfigOptions) (any, error) {
 		return nil, fmt.Errorf("failed to load config trace: %w", err)
 	}
 	if opts.Resolve {
-		resolved, err := promptregistry.Resolve(trace)
+		saved, _, err := captainconfig.Load()
+		if err != nil {
+			return nil, fmt.Errorf("load saved AI defaults: %w", err)
+		}
+		resolved, err := promptregistry.Resolve(promptregistry.ResolveOptions{Trace: trace, Saved: &saved.AI,
+			Normalize: func(spec captainapi.Spec) (captainapi.SpecNormalization, error) {
+				return (captaincli.AIRuntimeOptions{}).Normalize(captaincli.AIRuntimeNormalizeOptions{Spec: spec, Saved: saved, Cwd: trace.TargetDir})
+			},
+		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to resolve AI config: %w", err)
 		}
@@ -102,7 +113,7 @@ func configHelp(cmd *cobra.Command) api.Text {
 		Append("  use ", muted).Append("--json", flag).Append(" or ", muted).Append("--yaml", flag).Append(" for machine-readable merged config", muted).NewLine().NewLine().
 		Append("RESOLVED AI CONFIG", heading).NewLine().
 		Append("  ").Append("--resolve", flag).Append(" / ").Append("-r", flag).Append(" expands every registered prompt", muted).NewLine().
-		Append("  shows built-in, inline, or file provenance plus declared and effective model details", muted).NewLine().
+		Append("  shows the full effective spec and field origins, including saved Captain defaults", muted).NewLine().
 		Append("  ").Append("lint.fix.model", code).Append(" controls source repair for lint --ai-fix and commit --fix", muted).NewLine().
 		Append("  ").Append("commit.message.model", code).Append(" controls commit-message generation independently", muted).NewLine().
 		Append("  with ", muted).Append("--json", flag).Append(" or ", muted).Append("--yaml", flag).Append(" returns {config, prompts}", muted).NewLine().NewLine().
@@ -111,7 +122,7 @@ func configHelp(cmd *cobra.Command) api.Text {
 		Append("  ").Append("gavel config ./pkg/api", code).Append("               inspect config for a nested directory", muted).NewLine().
 		Append("  ").Append("gavel config ./cmd/gavel/main.go", code).Append("   inspect config for a specific file path", muted).NewLine().
 		Append("  ").Append("gavel config --yaml", code).Append("                 emit merged config as YAML", muted).NewLine().
-		Append("  ").Append("gavel config --resolve", code).Append("              inspect resolved prompts and models", muted).NewLine().
+		Append("  ").Append("gavel config --resolve", code).Append("              inspect resolved prompts, specs, and origins", muted).NewLine().
 		Append("  ").Append("gavel config > merged.gavel.yaml", code).Append("      write merged YAML without source comments", muted).NewLine().
 		Append("  ").Append("gavel --cwd ../repo config src/app.ts", code).Append("  resolve a relative path from another working tree", muted).NewLine().NewLine().
 		Append("UBER EXAMPLE", heading).NewLine().

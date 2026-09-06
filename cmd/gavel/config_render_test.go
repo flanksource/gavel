@@ -57,8 +57,8 @@ func TestResolvedConfigResultStructuredAndPrettyOutput(t *testing.T) {
 		Prompts: []promptregistry.ResolvedPrompt{{
 			ID: "commit.message", Title: "Commit message", ConfigPath: "commit.message",
 			Source: "inline", Raw: "Review {{patch}}", Body: "Review {{patch}}",
-			EffectiveModel: api.Model{Name: "claude-sonnet-5", Mode: api.ModeCLI},
-			ModelSource:    "operation",
+			Effective:  api.Spec{Model: api.Model{Name: "claude-sonnet-5", Mode: api.ModeCLI}, Budget: api.Budget{Timeout: "17m"}},
+			Provenance: map[string]api.FieldProvenance{"/budget/timeout": {Source: api.FieldSource{Kind: "saved", Key: "ai.timeout"}}},
 		}},
 	}
 
@@ -68,6 +68,9 @@ func TestResolvedConfigResultStructuredAndPrettyOutput(t *testing.T) {
 	}
 	if !strings.Contains(string(data), `"config"`) || !strings.Contains(string(data), `"prompts"`) {
 		t.Fatalf("expected config + prompts wrapper, got: %s", data)
+	}
+	if !strings.Contains(string(data), `"timeout":"17m"`) || !strings.Contains(string(data), `"key":"ai.timeout"`) {
+		t.Fatalf("expected complete effective spec and field provenance, got: %s", data)
 	}
 	yamlData, err := goccyyaml.Marshal(result)
 	if err != nil {
@@ -82,7 +85,7 @@ func TestResolvedConfigResultStructuredAndPrettyOutput(t *testing.T) {
 
 	pretty := result.Pretty()
 	for format, output := range map[string]string{"ansi": pretty.ANSI(), "markdown": pretty.Markdown()} {
-		for _, want := range []string{"Resolved Gavel config", "AI prompts", "Commit message", "claude-code-sonnet", "Review {{patch}}"} {
+		for _, want := range []string{"Resolved Gavel config", "AI prompts", "Commit message", "claude-code-sonnet", "Review {{patch}}", "17m", "ai.timeout"} {
 			if !strings.Contains(output, want) {
 				t.Fatalf("resolved %s output missing %q:\n%s", format, want, output)
 			}

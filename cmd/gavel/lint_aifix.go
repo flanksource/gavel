@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/flanksource/captain/pkg/captainconfig"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/ai/aifix"
 	"github.com/flanksource/gavel/lint"
@@ -32,25 +33,26 @@ func runAIFix(opts LintOptions, initial []*linters.LinterResult) ([]*linters.Lin
 	if err != nil {
 		return initial, err
 	}
-	operation, err := aifix.ResolveSpec(gavelCfg.AI, gavelCfg.Lint.Fix, opts.WorkDir, opts.Linters, initial)
+	saved, _, err := captainconfig.Load()
 	if err != nil {
 		return initial, err
 	}
-	aiCfg, aiProto, err := buildAIFixRequest(opts.AIRuntimeOptions, operation, opts.WorkDir)
+	runtime := lintFixRuntime{Prompt: aifix.ResolveOptions{Base: gavelCfg.AI, Prompt: gavelCfg.Lint.Fix, Dir: opts.WorkDir, Linters: opts.Linters}, Runtime: opts.AIRuntimeOptions, Saved: saved}
+	resolved, err := runtime.Resolve(initial)
 	if err != nil {
 		return initial, err
+	}
+	for _, warning := range resolved.Resolution.Warnings {
+		logger.Warnf("lint ai-fix: %s", warning)
 	}
 
 	renderer := newAIFixRenderer()
 	res, err := aifix.Run(ctx, aifix.Request{
-		WorkDir:        opts.WorkDir,
-		Linters:        opts.Linters,
 		Initial:        initial,
 		MaxIterations:  opts.AIFixMaxIters,
-		AIConfig:       aiCfg,
-		AIRequestProto: aiProto,
-		BaseAI:         gavelCfg.AI,
-		PromptSpec:     gavelCfg.Lint.Fix,
+		AIConfig:       resolved.Config,
+		AIRequestProto: resolved.Request,
+		BuildRequest:   runtime.BuildRequest,
 		ReLint: func(rctx context.Context) ([]*linters.LinterResult, error) {
 			rerunOpts := opts
 			rerunOpts.Context = rctx

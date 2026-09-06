@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/flanksource/captain/pkg/captainconfig"
+	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/ai/aifix"
 	commitpkg "github.com/flanksource/gavel/commit"
 	"github.com/flanksource/gavel/linters"
@@ -38,26 +40,27 @@ func runCommitAIFix(workDir string, result *commitpkg.Result, assumeYes bool) li
 		fmt.Fprintf(os.Stderr, "ai-fix: %v\n", err)
 		return lintFindingsBlocked
 	}
-	operation, err := aifix.ResolveSpec(gavelCfg.AI, gavelCfg.Lint.Fix, workDir, requested, result.Lint.Results)
+	saved, _, err := captainconfig.Load()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ai-fix: %v\n", err)
 		return lintFindingsBlocked
 	}
-	aiCfg, aiProto, err := buildAIFixRequest(defaultAIRuntimeOptions(), operation, workDir)
+	runtime := lintFixRuntime{Prompt: aifix.ResolveOptions{Base: gavelCfg.AI, Prompt: gavelCfg.Lint.Fix, Dir: workDir, Linters: requested}, Runtime: defaultAIRuntimeOptions(), Saved: saved}
+	resolved, err := runtime.Resolve(result.Lint.Results)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ai-fix: %v\n", err)
 		return lintFindingsBlocked
+	}
+	for _, warning := range resolved.Resolution.Warnings {
+		logger.Warnf("commit lint ai-fix: %s", warning)
 	}
 
 	renderer := newAIFixRenderer()
 	fixRes, err := aifix.Run(ctx, aifix.Request{
-		WorkDir:        workDir,
-		Linters:        requested,
 		Initial:        result.Lint.Results,
-		AIConfig:       aiCfg,
-		AIRequestProto: aiProto,
-		BaseAI:         gavelCfg.AI,
-		PromptSpec:     gavelCfg.Lint.Fix,
+		AIConfig:       resolved.Config,
+		AIRequestProto: resolved.Request,
+		BuildRequest:   runtime.BuildRequest,
 		ReLint: func(rctx context.Context) ([]*linters.LinterResult, error) {
 			return runCommitLint(rctx, workDir, requested, files)
 		},

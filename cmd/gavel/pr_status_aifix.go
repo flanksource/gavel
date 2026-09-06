@@ -11,6 +11,7 @@ import (
 	"github.com/flanksource/captain/pkg/ai/agent"
 	capverify "github.com/flanksource/captain/pkg/ai/agent/verify"
 	"github.com/flanksource/captain/pkg/api"
+	"github.com/flanksource/captain/pkg/captainconfig"
 	captaincli "github.com/flanksource/captain/pkg/cli"
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/commons/logger"
@@ -57,21 +58,22 @@ func runPRStatusAIFix(ctx context.Context, opts PRStatusOptions, result *prwatch
 	if err != nil {
 		return fmt.Errorf("load .gavel.yaml: %w", err)
 	}
-	spec, err := prfix.ResolveSpec(gavelCfg.AI, gavelCfg.PR.Fix, workDir, prContextOf(result, statusText))
+	layers, err := prFixLayers(prfix.ResolveOptions{Base: gavelCfg.AI, Prompt: gavelCfg.PR.Fix, Dir: workDir, PR: prContextOf(result, statusText)}, opts.AIFixMaxIters)
 	if err != nil {
 		return fmt.Errorf("resolve pr.fix prompt: %w", err)
 	}
-	if err := applyMaxIterations(&spec, opts.AIFixMaxIters); err != nil {
-		return err
-	}
-
-	aiCfg, req, err := buildAIFixRequest(opts.AIRuntimeOptions, spec, workDir)
+	saved, _, err := captainconfig.Load()
 	if err != nil {
 		return err
 	}
-	if aiCfg.Model.Name == "" {
-		return fmt.Errorf("no model configured: pass --model or run `captain configure`")
+	resolved, err := buildAIFixRequest(aiFixRequestOptions{Runtime: opts.AIRuntimeOptions, Layers: layers, Saved: saved, Dir: workDir})
+	if err != nil {
+		return err
 	}
+	for _, warning := range resolved.Resolution.Warnings {
+		logger.Warnf("pr ai-fix: %s", warning)
+	}
+	aiCfg, req := resolved.Config, resolved.Request
 	if req.Workflow == nil || req.Workflow.Verify == nil || len(req.Workflow.Verify.Commands) == 0 {
 		return fmt.Errorf("resolved pr.fix prompt declares no workflow.verify.commands: --ai-fix has no definition of done")
 	}
@@ -132,6 +134,21 @@ func runPRStatusAIFix(ctx context.Context, opts PRStatusOptions, result *prwatch
 		logger.Warnf("pr ai-fix: failed to render captain history: %v", err)
 	}
 	return errors.Join(runErr, renderErr)
+}
+
+func prFixLayers(options prfix.ResolveOptions, iterations int) ([]api.SpecLayer, error) {
+	layers, err := prfix.Layers(options)
+	if err != nil || iterations <= 0 {
+		return layers, err
+	}
+	composed, err := api.ComposeSpecLayers(api.ResolveSpecOptions{Layers: layers})
+	if err != nil {
+		return nil, err
+	}
+	if err := applyMaxIterations(&composed.Spec, iterations); err != nil {
+		return nil, err
+	}
+	return append(layers, api.RequestSpecLayer("--ai-fix-max-iterations", api.Spec{Workflow: &api.Workflow{Verify: &api.Verify{MaxIterations: iterations}}})), nil
 }
 
 // applyMaxIterations lets --ai-fix-max-iterations have the last word on the

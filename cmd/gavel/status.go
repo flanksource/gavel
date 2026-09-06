@@ -5,15 +5,20 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
+	"github.com/flanksource/captain/pkg/captainconfig"
+	captaincli "github.com/flanksource/captain/pkg/cli"
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
 	clickytask "github.com/flanksource/clicky/task"
 	clickyai "github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/internal/prompting"
 	"github.com/flanksource/gavel/status"
+	"github.com/flanksource/gavel/verify"
 	"github.com/flanksource/repomap"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
 
 type StatusOptions struct {
@@ -93,20 +98,16 @@ func (o StatusOptions) Help() api.Textable {
 	return t
 }
 
-// statusAI holds the --ai-* flag values for `gavel status`. It is package
-// scoped because runStatus is a top-level function handed to AddNamedCommand and
-// so cannot close over an init-local config the way `git analyze`/`git amend` do.
-// While it was init-local, every --ai-* flag parsed into a struct nothing read
-// and status ran on DefaultConfig() regardless. It is still one config per
-// command — not the shared package default BindFlags used to write into, where
-// whichever FlagSet parsed last decided the model for all of them.
-var statusAI = clickyai.DefaultConfig()
+// Runtime fields remain sparse; only flags the operator changed enter the spec.
+var statusAI = clickyai.AgentConfig{MaxConcurrent: 4, CacheTTL: 24 * time.Hour}
+var statusAIFlags *pflag.FlagSet
 
 func init() {
 	statusCmd := clicky.AddNamedCommand("status", rootCmd, StatusOptions{}, runStatus)
 	statusCmd.Use = "status [folder]"
 	statusCmd.Args = cobra.MaximumNArgs(1)
 	clickyai.BindFlags(statusCmd.Flags(), &statusAI)
+	statusAIFlags = statusCmd.Flags()
 }
 
 func runStatus(opts StatusOptions) (any, error) {
@@ -125,25 +126,28 @@ func runStatus(opts StatusOptions) (any, error) {
 		})
 	}
 
-	runCfg := statusAI
-	runCfg.Model, err = status.ResolveSummaryModel(workDir, statusAI.Model)
+	cfg, err := verify.LoadGavelConfig(workDir)
 	if err != nil {
 		return nil, err
 	}
-	agent, err := clickyai.NewAgent(runCfg)
+	saved, _, err := captainconfig.Load()
 	if err != nil {
-		return nil, fmt.Errorf("create AI agent for status: %w", err)
+		return nil, fmt.Errorf("load saved AI defaults: %w", err)
 	}
-	defer agent.Close()
+	summaryPrompt, err := status.ResolveSummaryPrompt(status.SummaryPromptOptions{
+		Dir: workDir, Base: cfg.AI, Override: cfg.Status.Summary, Saved: saved,
+		Request: clickyai.FlagSpec(statusAI, statusAIFlags),
+	})
+	if err != nil {
+		return nil, err
+	}
 
 	ctx := context.Background()
 	gatherOpts := status.Options{
 		NoRepomap:    opts.NoRepomap,
 		FolderFilter: folderFilter,
 		Verbose:      verbose,
-		Agent:        agent,
 		Context:      ctx,
-		AIMaxWorkers: statusAI.MaxConcurrent,
 	}
 
 	result, err := status.GatherBase(workDir, gatherOpts)
@@ -163,11 +167,14 @@ func runStatus(opts StatusOptions) (any, error) {
 	clickytask.SetLiveRenderer(renderer)
 	defer clickytask.SetLiveRenderer(nil)
 
-	summaryPrompt, err := status.ResolveSummaryPrompt(workDir)
-	if err != nil {
-		return nil, err
-	}
-	updates := status.StreamAISummaries(ctx, workDir, agent, result.Files, gatherOpts.AIMaxWorkers, summaryPrompt)
+	updates := status.StreamAISummaries(ctx, status.SummaryOptions{
+		WorkDir: workDir, Files: result.Files, MaxWorkers: statusAI.MaxConcurrent, Prompt: summaryPrompt,
+		NewAgent: func(runtime captaincli.AIRuntimeResolved) (clickyai.Agent, error) {
+			runtime.Config.CacheTTL, runtime.Config.CacheDBPath = statusAI.CacheTTL, statusAI.CacheDBPath
+			runtime.Config.ProjectName = statusAI.ProjectName
+			return clickyai.NewAgent(runtime.Config)
+		},
+	})
 	for update := range updates {
 		renderer.Apply(update)
 	}
