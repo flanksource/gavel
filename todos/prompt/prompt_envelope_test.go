@@ -104,7 +104,7 @@ func TestTriageEnvelopeSchemaUsesFlatScalarFields(t *testing.T) {
 // retry, and feedback turns in a claude-agent session.
 func TestEnvelopeSchemaBytesStable(t *testing.T) {
 	for _, name := range []string{"run", "plan", "triage"} {
-		req, _, err := Render([]*types.TODO{newTestTODO("solo", "task")}, Options{Prompt: name, Envelope: envelopeForPrompt(t, name)})
+		req, _, err := renderResolvedForTest([]*types.TODO{newTestTODO("solo", "task")}, Options{Prompt: name, Envelope: envelopeForPrompt(t, name)})
 		if err != nil {
 			t.Fatalf("Render(%s): %v", name, err)
 		}

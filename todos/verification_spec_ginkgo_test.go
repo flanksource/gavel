@@ -134,7 +134,8 @@ var _ = Describe("TODO verification runtime spec", func() {
 	})
 
 	It("reports a verify step that could not run as a failed check", func() {
-		result := CheckTODO(context.Background(), &types.TODO{ID: "todo-1"}, CheckOptions{
+		todo := &types.TODO{ID: "todo-1", TODOFrontmatter: types.TODOFrontmatter{Title: "Blocked verification"}}
+		result := CheckTODO(context.Background(), todo, CheckOptions{
 			Runner: verifyRunnerFunc(func(context.Context, *types.TODO, api.Spec) (*types.CheckResult, error) {
 				return nil, errors.New("no verification fixture, acceptance criteria, or configured checks")
 			}),
@@ -142,6 +143,8 @@ var _ = Describe("TODO verification runtime spec", func() {
 
 		Expect(result.AllPassed).To(BeFalse())
 		Expect(result.Error).To(MatchError(ContainSubstring("no verification fixture")))
+		Expect(result.TODO).To(BeIdenticalTo(todo))
+		Expect(func() { result.Pretty() }).NotTo(Panic())
 	})
 
 	It("refuses a verify step that returned neither a result nor an error", func() {

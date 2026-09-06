@@ -10,7 +10,7 @@ import (
 	"github.com/flanksource/gavel/todos/types"
 )
 
-func (h *Host) finalizeVerification(ctx context.Context, todo *types.TODO, lc Context, class types.RunMode, spec *api.Spec, trace []api.SpecLayer) error {
+func (h *Host) finalizeVerification(ctx context.Context, todo *types.TODO, lc Context, class types.RunMode, spec *api.Spec) error {
 	verification, ok := lc.Subject["verification"].(map[string]any)
 	if !ok {
 		return fmt.Errorf("lifecycle subject: verification must be an object")
@@ -39,9 +39,6 @@ func (h *Host) finalizeVerification(ctx context.Context, todo *types.TODO, lc Co
 	}
 	verification["document"] = dod.Fixture
 	replaceVerificationDocument(spec, original, dod.Fixture)
-	for i := range trace {
-		replaceVerificationDocument(&trace[i].Spec, original, dod.Fixture)
-	}
 	return nil
 }
 

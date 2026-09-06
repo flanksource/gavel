@@ -16,14 +16,14 @@ func TestPromptPermissions(t *testing.T) {
 
 var _ = Describe("the run prompt permission posture", func() {
 	It("declares native edit approval without a preset or an explicit tool policy", func() {
-		req, _, err := Render([]*types.TODO{newTestTODO("edit-parser", "Update the parser")}, Options{Mode: types.ModeRun})
+		req, _, err := renderResolvedForTest([]*types.TODO{newTestTODO("edit-parser", "Update the parser")}, Options{Mode: types.ModeRun})
 		gomega.Expect(err).NotTo(gomega.HaveOccurred())
 		gomega.Expect(req.Permissions).To(gomega.Equal(api.Permissions{Mode: api.PermissionAcceptEdits}))
 	})
 
 	for _, runtime := range api.AllRuntimes() {
 		It("passes the tool-policy guard for "+runtime.String(), func() {
-			req, _, err := Render([]*types.TODO{newTestTODO("edit-parser", "Update the parser")}, Options{Mode: types.ModeRun})
+			req, _, err := renderResolvedForTest([]*types.TODO{newTestTODO("edit-parser", "Update the parser")}, Options{Mode: types.ModeRun})
 			gomega.Expect(err).NotTo(gomega.HaveOccurred())
 			provider, ok := runtime.ModelProvider()
 			gomega.Expect(ok).To(gomega.BeTrue())

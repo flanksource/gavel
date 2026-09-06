@@ -9,9 +9,7 @@
 // class, so any number of prompts can share one — triage is plan-class, like the
 // plan prompt, and neither commits nor verifies.
 //
-// Rendering goes through captain's engine end-to-end: a template's frontmatter
-// (model, permissions.mode, budget, effort) is folded into the returned
-// ai.Request, so the .prompt file — not Go code — declares how a prompt executes.
+// The lifecycle resolves runtime frontmatter before Render fills the conversation.
 // The per-todo sections are assembled in Go and injected as {{{body}}}; the
 // prompt's structured-output envelope schema rides on the request as a native
 // SchemaJSON field (never in the prompt text) so .gavel.yaml overrides and the
@@ -53,8 +51,7 @@ type Options struct {
 	Envelope EnvelopeKind
 	Mode     types.RunMode // ModeRun or ModePlan
 	// Spec is the canonical Captain run configuration. Render consumes
-	// Prompt.User as the TODO body override and merges every other field over the
-	// template request without projecting it through a Gavel-specific adapter.
+	// Prompt.User as the TODO body override and preserves the resolved runtime.
 	Spec api.Spec
 	// Template is the resolved .gavel.yaml override source (spec.Resolved.Template);
 	// empty renders the embedded default for Mode.
@@ -134,9 +131,8 @@ func (o Options) promptName() string {
 }
 
 // Render renders the named prompt for a group of todos and returns the full
-// captain request: frontmatter-declared request options folded in by the
-// engine, the effort directive leading the body, and the prompt's envelope
-// schema riding as a native field. A single todo keeps plain framing; several
+// captain request: the resolved runtime, the effort directive leading the body,
+// and the prompt's envelope schema as a native field. A single todo keeps plain framing; several
 // are numbered so the agent can address each in turn.
 func Render(todoList []*types.TODO, opts Options) (captainai.Request, captainai.Config, error) {
 	if len(todoList) == 0 {
@@ -147,38 +143,20 @@ func Render(todoList []*types.TODO, opts Options) (captainai.Request, captainai.
 		return captainai.Request{}, captainai.Config{}, err
 	}
 
-	req, cfg, err := dotprompt.Load(template).Render(TemplateData(todoList, opts), nil)
+	rendered, _, err := dotprompt.Load(template).Render(dotprompt.RenderOptions{Data: TemplateData(todoList, opts), Declared: true})
 	if err != nil {
 		return captainai.Request{}, captainai.Config{}, fmt.Errorf("render todos %s prompt: %w", opts.promptName(), err)
 	}
 
-	user := req.Prompt.User
-	if opts.Spec.Prompt.User != "" {
+	user := rendered.Prompt.User
+	if opts.Spec.Fields().Has("/prompt") || opts.Spec.Fields().Has("/prompt/user") {
 		user = opts.Spec.Prompt.User
 	}
-	renderedPrompt := req.Prompt
-	override := opts.Spec
-	override.Prompt.User = ""
-	override.Prompt.Source = ""
-	override.Prompt.Schema = nil
-	override.Prompt.SchemaJSON = nil
-	req = req.Merge(override)
-	// Resolve last, after the merge: the template's model is resolved when it is
-	// rendered, and an override that names a different one leaves the request
-	// carrying a name from the caller with nothing else filled in. Callers are
-	// handed a driver-ready model, which is the contract the executor relies on.
-	if strings.TrimSpace(req.Name) != "" {
-		resolved, err := captainai.Resolve(req.Model)
-		if err != nil {
-			return captainai.Request{}, captainai.Config{}, fmt.Errorf("resolve todos %s runtime: %w", opts.promptName(), err)
-		}
-		req.Model = resolved
+	if strings.TrimSpace(user) == "" {
+		return captainai.Request{}, captainai.Config{}, fmt.Errorf("todos %s generation requires a prompt body", opts.promptName())
 	}
+	req := opts.Spec
 
-	effort := string(req.Effort)
-	if directive := EffortDirective(effort); directive != "" {
-		user = directive + "\n\n" + user
-	}
 	schema, err := EnvelopeSchemaJSON(opts.envelope())
 	if err != nil {
 		return captainai.Request{}, captainai.Config{}, err
@@ -189,13 +167,15 @@ func Render(todoList []*types.TODO, opts Options) (captainai.Request, captainai.
 	// on every turn of the run session (see the executor), which is what the
 	// claude-agent per-turn byte-equality guard requires.
 	req.Prompt.User = user
-	req.Prompt.Schema = renderedPrompt.Schema
 	req.Prompt.SchemaJSON = schema
 	req.Prompt.Source = "todos." + opts.promptName()
 	if err := req.Validate(); err != nil {
 		return captainai.Request{}, captainai.Config{}, fmt.Errorf("validate todos %s spec: %w", opts.promptName(), err)
 	}
-	return req, cfg, nil
+	if directive := EffortDirective(string(req.Effort)); directive != "" {
+		req.Prompt.User = directive + "\n\n" + user
+	}
+	return req, captainai.Config{Model: req.Model, Budget: req.Budget}, nil
 }
 
 func templateSource(opts Options) (string, error) {

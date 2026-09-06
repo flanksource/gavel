@@ -77,6 +77,8 @@ type preparedStep struct {
 	agent          string
 	// trace is captain's provenance for the spec fold, lowest precedence first.
 	trace       []api.SpecLayer
+	provenance  map[string]api.FieldProvenance
+	warnings    []string
 	constraints api.RuntimeConstraints
 }
 
@@ -115,7 +117,7 @@ func (h *Host) Dispatch(ctx context.Context, todo *types.TODO, resolution *Resol
 	if err != nil {
 		return nil, fmt.Errorf("step %s preflight: %w", step.Name, err)
 	}
-	resolution.Warnings = warnings
+	resolution.Warnings = mergeRuntimeWarnings(prepared.warnings, warnings)
 	admission, err := h.admit(exec, todo, step, prepared, opts)
 	if err != nil {
 		return nil, err
@@ -158,6 +160,9 @@ func (h *Host) resolveStep(ctx context.Context, todo *types.TODO, step Step, opt
 // reference, the step's spec with its placeholders expanded, every spec layer
 // folded, and the template rendered with the step's inputs.
 func (h *Host) prepare(ctx context.Context, todo *types.TODO, step Step, lc Context, opts RunOptions) (*preparedStep, error) {
+	if err := validateRequestEffort(opts.Request.Model); err != nil {
+		return nil, err
+	}
 	workDir := h.stepWorkDir(todo)
 	definition, err := h.promptFor(step)
 	if err != nil {
@@ -175,6 +180,7 @@ func (h *Host) prepare(ctx context.Context, todo *types.TODO, step Step, lc Cont
 		}
 	}
 	resolved, err := h.resolveProfileLayers(ctx, LayerInput{
+		RequireModel:   class != types.ModeVerify || len(todo.AcceptanceCriteria) > 0,
 		RuntimeProfile: h.profileSelection(step.Name, opts.RuntimeProfile, prompt.RuntimeProfile),
 		Config:         h.Config, Step: step.Name, Frontmatter: prompt.Layers, StepSpec: stepSpec,
 		Todos: []*types.TODO{todo}, Prior: opts.Prior, Host: h.Kind, Request: opts.Request,
@@ -182,29 +188,25 @@ func (h *Host) prepare(ctx context.Context, todo *types.TODO, step Step, lc Cont
 	if err != nil {
 		return nil, err
 	}
-	spec := resolved.Resolved.Spec
-	// A verify step runs no agent turn: it executes the definition of done. The
-	// only thing there that needs a model is the acceptance-criteria grader, so a
-	// project that configures no model still verifies todos whose definition of
-	// done is fixture steps — the same rule graderSpec applies to the document.
-	if class != types.ModeVerify || len(todo.AcceptanceCriteria) > 0 {
-		if err := ApplyModel(&spec, opts.Request.Effort); err != nil {
-			return nil, err
-		}
-		if err := RequireModel(spec); err != nil {
-			return nil, fmt.Errorf("step %s: %w", step.Name, err)
-		}
-	}
-	timeout, err := ApplyTimeout(&spec)
+	timeout, err := prepareRuntimeSpec(&resolved.Resolved, class)
 	if err != nil {
 		return nil, err
 	}
-	ApplyClassInvariants(&spec, class)
+	spec := resolved.Resolved.Spec
 	if err := ValidateSpec(spec); err != nil {
 		return nil, fmt.Errorf("step %s: %w", step.Name, err)
 	}
-	if err := h.finalizeVerification(ctx, todo, lc, class, &spec, resolved.Resolved.Trace); err != nil {
+	fixture := ""
+	if spec.Workflow != nil && spec.Workflow.Verify != nil {
+		fixture = spec.Workflow.Verify.Fixture
+	}
+	if err := h.finalizeVerification(ctx, todo, lc, class, &spec); err != nil {
 		return nil, fmt.Errorf("step %s: %w", step.Name, err)
+	}
+	if spec.Workflow != nil && spec.Workflow.Verify != nil && spec.Workflow.Verify.Fixture != fixture {
+		resolved.Resolved.Provenance = recordRuntimeFields(resolved.Resolved.Provenance, runtimeFields{
+			Name: "lifecycle verification", Paths: []string{"/workflow/verify/fixture"},
+		})
 	}
 	// A verify step IS its verifiers: it runs no agent turn, so a workflow that
 	// declares none has nothing to judge with. Refuse before anything is
@@ -220,6 +222,7 @@ func (h *Host) prepare(ctx context.Context, todo *types.TODO, step Step, lc Cont
 		definition: definition, class: class, request: spec, timeout: timeout,
 		workDir: workDir, template: prompt.Template, trace: resolved.Resolved.Trace,
 		runtimeProfile: resolved.Profile, constraints: resolved.Resolved.Constraints,
+		provenance: resolved.Resolved.Provenance, warnings: resolved.Resolved.Warnings,
 	}
 	prepared.agent, _ = claude.ResolveAgent(spec.Name)
 	if class != types.ModeVerify {
@@ -232,12 +235,20 @@ func (h *Host) prepare(ctx context.Context, todo *types.TODO, step Step, lc Cont
 			return nil, fmt.Errorf("step %s: a message continues a resumed session; this run resumes nothing", step.Name)
 		}
 		prepared.request.Prompt.User = message
+		prepared.provenance = recordRuntimeFields(prepared.provenance, runtimeFields{
+			Name: "lifecycle continuation", Paths: []string{"/prompt/user"}, Replace: true,
+		})
 	}
 	if prepared.request.Setup == nil {
 		prepared.request.Setup = &shell.Setup{}
 	}
 	if prepared.request.Setup.Cwd == "" {
+		setup := *prepared.request.Setup
+		prepared.request.Setup = &setup
 		prepared.request.Setup.Cwd = workDir
+		prepared.provenance = recordRuntimeFields(prepared.provenance, runtimeFields{
+			Name: "lifecycle runtime", Paths: []string{"/setup/cwd"},
+		})
 	}
 	return prepared, nil
 }
@@ -270,6 +281,14 @@ func (h *Host) render(ctx context.Context, todo *types.TODO, step Step, lc Conte
 	if err != nil {
 		return fmt.Errorf("step %s: render prompt %s: %w", step.Name, prepared.definition.Name, err)
 	}
+	if req.Prompt.User != prepared.request.Prompt.User {
+		prepared.provenance = recordRuntimeFields(prepared.provenance, runtimeFields{
+			Name: "lifecycle prompt " + prepared.definition.Name, Paths: []string{"/prompt/user"},
+		})
+	}
+	prepared.provenance = recordRuntimeFields(prepared.provenance, runtimeFields{
+		Name: "lifecycle prompt " + prepared.definition.Name, Paths: []string{"/prompt/source", "/prompt/schemaJSON"}, Replace: true,
+	})
 	prepared.request = req
 	return nil
 }

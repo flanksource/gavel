@@ -107,17 +107,17 @@ func runBounded(ctx context.Context, count, concurrency int, work func(context.C
 func CheckTODO(ctx context.Context, todo *types.TODO, opts CheckOptions) *types.CheckResult {
 	start := time.Now()
 	if todo == nil {
-		return failedCheck(start, fmt.Errorf("todo is required"))
+		return failedCheck(nil, start, fmt.Errorf("todo is required"))
 	}
 	if opts.Runner == nil {
-		return failedCheck(start, fmt.Errorf("check %s: no lifecycle runner", TODOReference(todo)))
+		return failedCheck(todo, start, fmt.Errorf("check %s: no lifecycle runner", TODOReference(todo)))
 	}
 	result, err := opts.Runner.VerifyStep(ctx, todo, opts.Request)
 	if err != nil {
-		return failedCheck(start, err)
+		return failedCheck(todo, start, err)
 	}
 	if result == nil {
-		return failedCheck(start, fmt.Errorf("check %s: verify step produced no result", TODOReference(todo)))
+		return failedCheck(todo, start, fmt.Errorf("check %s: verify step produced no result", TODOReference(todo)))
 	}
 	if result.Duration == 0 {
 		result.Duration = time.Since(start)
@@ -130,9 +130,9 @@ func CheckTODO(ctx context.Context, todo *types.TODO, opts CheckOptions) *types.
 // dispatched. It reports the failure rather than moving the todo: a check that
 // never ran has judged nothing, and writing "unverified" from here would be a
 // verdict the definition of done did not reach.
-func failedCheck(start time.Time, err error) *types.CheckResult {
+func failedCheck(todo *types.TODO, start time.Time, err error) *types.CheckResult {
 	return &types.CheckResult{
-		AllPassed: false, Duration: time.Since(start), Error: err, ErrorText: err.Error(),
+		TODO: todo, AllPassed: false, Duration: time.Since(start), Error: err, ErrorText: err.Error(),
 	}
 }
 

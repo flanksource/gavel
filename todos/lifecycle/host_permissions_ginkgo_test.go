@@ -1,12 +1,28 @@
 package lifecycle
 
 import (
+	"encoding/json"
+
 	"github.com/flanksource/captain/pkg/api"
 	g "github.com/onsi/ginkgo/v2"
 	o "github.com/onsi/gomega"
 )
 
 var _ = g.Describe("Request permission guard", func() {
+	g.DescribeTable("rejects clearing a configured tool denial", func(encoded string) {
+		var request api.Spec
+		o.Expect(json.Unmarshal([]byte(encoded), &request)).To(o.Succeed())
+		err := ValidateRequestPermissions([]api.SpecLayer{
+			api.PromptSpecLayer(".gavel.yaml todos.run", api.Spec{Permissions: api.Permissions{Tools: api.Tools{"Bash": api.ToolPolicyDeny}}}),
+			api.RequestSpecLayer("request", request),
+		})
+		o.Expect(err).To(o.MatchError(o.ContainSubstring("permissions.tools.Bash")))
+	},
+		g.Entry("empty map", `{"permissions":{"tools":{}}}`),
+		g.Entry("null map", `{"permissions":{"tools":null}}`),
+		g.Entry("empty permissions", `{"permissions":{}}`),
+	)
+
 	g.DescribeTable("rejects requests that widen configured permissions",
 		func(configured, requested api.Permissions, field string) {
 			layers := []api.SpecLayer{

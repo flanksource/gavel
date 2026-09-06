@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/flanksource/captain/pkg/api"
+	"github.com/flanksource/captain/pkg/captainconfig"
 	"github.com/flanksource/captain/pkg/runtimeprofiles"
 	"github.com/flanksource/gavel/todos"
 	todoprompt "github.com/flanksource/gavel/todos/prompt"
@@ -25,6 +26,7 @@ type Host struct {
 	WorkDir  string
 	Kind     HostKind
 	Catalog  runtimeprofiles.CatalogFactory
+	Saved    *captainconfig.Config
 }
 
 // NewHost loads the project's configuration and lifecycle for a work dir.
@@ -41,7 +43,11 @@ func NewHost(provider todos.Provider, workDir string, kind HostKind) (*Host, err
 	if err != nil {
 		return nil, &ConfigurationError{Err: err}
 	}
-	return &Host{Provider: provider, Def: engine, Config: cfg, WorkDir: workDir, Kind: kind}, nil
+	saved, _, err := captainconfig.Load()
+	if err != nil {
+		return nil, &ConfigurationError{Err: fmt.Errorf("load Captain defaults: %w", err)}
+	}
+	return &Host{Provider: provider, Def: engine, Config: cfg, WorkDir: workDir, Kind: kind, Saved: &saved}, nil
 }
 
 // Subject projects the todo onto the variables the lifecycle declares. Every
@@ -189,6 +195,7 @@ func (h *Host) graderSpec(ctx context.Context, todo *types.TODO) (api.Spec, erro
 		return api.Spec{}, nil
 	}
 	resolved, err := h.resolveProfileLayers(ctx, LayerInput{
+		RequireModel:   true,
 		RuntimeProfile: h.profileSelection(StepVerify, "", ""),
 		Config:         h.Config,
 		Step:           StepVerify,
@@ -199,16 +206,10 @@ func (h *Host) graderSpec(ctx context.Context, todo *types.TODO) (api.Spec, erro
 		return api.Spec{}, fmt.Errorf("resolve verification spec: %w", err)
 	}
 	spec := resolved.Resolved.Spec
-	if err := ApplyModel(&spec, ""); err != nil {
-		return api.Spec{}, err
-	}
 	if _, err := ApplyTimeout(&spec); err != nil {
 		return api.Spec{}, err
 	}
 	ApplyClassInvariants(&spec, types.ModeVerify)
-	if err := RequireModel(spec); err != nil {
-		return api.Spec{}, fmt.Errorf("verification spec for the acceptance-criteria grader: %w", err)
-	}
 	if err := ValidateSpec(spec); err != nil {
 		return api.Spec{}, fmt.Errorf("verification spec for the acceptance-criteria grader: %w", err)
 	}

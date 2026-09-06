@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/flanksource/captain/pkg/api"
-	"github.com/flanksource/captain/pkg/api/registry"
+	"github.com/flanksource/captain/pkg/captainconfig"
 	todoprompt "github.com/flanksource/gavel/todos/prompt"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/flanksource/gavel/verify"
@@ -37,6 +37,8 @@ const DefaultTimeout = 30 * time.Minute
 // already loaded and rendered: this type describes the STACK, not how to find
 // its pieces, which is what makes the precedence assertable on its own.
 type LayerInput struct {
+	Saved          *captainconfig.AIDefaults
+	RequireModel   bool
 	RuntimeProfile ProfileSelection
 	// Config is the merged .gavel.yaml: its `ai:` base and the `todos.*` section.
 	Config verify.GavelConfig
@@ -147,7 +149,8 @@ func ResolveLayers(in LayerInput) (api.ResolvedSpec, error) {
 	if err := ValidateRequestPermissions(layers); err != nil {
 		return api.ResolvedSpec{}, err
 	}
-	return api.ResolveSpecLayers(layers...)
+	resolved, err := api.ResolveSpecLayers(api.ResolveSpecOptions{Layers: layers, Saved: in.Saved, RequireModel: in.RequireModel})
+	return resolved, runtimeConfigurationError(err)
 }
 
 // PromptLayers renders the frontmatter of each .prompt document that contributes
@@ -199,27 +202,6 @@ func PromptLayers(workDir string, todoList []*types.TODO, definition todoprompt.
 	return result, nil
 }
 
-// ApplyModel resolves the canonical compact model grammar once in Captain.
-//
-// An explicit effort that the expanded model overrides is an error, not a
-// silent drop: `--effort high` against a model pinned to `:low` means the user
-// asked for two different things and only one can happen.
-func ApplyModel(s *api.Spec, requestedEffort api.Effort) error {
-	expanded, err := registry.ResolveModel(s.Model)
-	if err != nil {
-		return fmt.Errorf("invalid todos model %q: %w", s.Name, err)
-	}
-	if requestedEffort != "" && expanded.Effort != requestedEffort {
-		return fmt.Errorf("effort %q conflicts with model %q, which pins effort %q; drop one",
-			requestedEffort, s.Name, expanded.Effort)
-	}
-	if expanded.Effort == "" {
-		expanded.Effort = api.EffortMedium
-	}
-	s.Model = expanded
-	return nil
-}
-
 // ApplyTimeout stamps the run's deadline onto the spec. captain's promptrun has
 // no compiled-in ceiling and refuses a run that declares none, so the default
 // belongs here, where it is one value the preview and the run both read.
@@ -249,6 +231,12 @@ func ApplyClassInvariants(s *api.Spec, class types.RunMode) {
 		return
 	}
 	s.Workflow.Commits = nil
+	s.Explicit = s.Explicit.Clone()
+	for path := range s.Explicit {
+		if path == "/workflow/commits" || strings.HasPrefix(path, "/workflow/commits/") {
+			delete(s.Explicit, path)
+		}
+	}
 }
 
 // ValidateSpec checks every section the resolved spec owns EXCEPT the model.
@@ -256,7 +244,7 @@ func ApplyClassInvariants(s *api.Spec, class types.RunMode) {
 // todos/prompt.Render supplies after this point — it validates the complete
 // request there.
 //
-// The model is RequireModel's, separately, because whether a run needs one is a
+// The resolver checks the model separately, because whether a run needs one is a
 // property of the step rather than of the spec: a verify step runs the
 // definition of done, and a fixture-only definition of done never calls a model.
 func ValidateSpec(s api.Spec) error {
@@ -268,16 +256,6 @@ func ValidateSpec(s api.Spec) error {
 	}
 	if err := s.Workflow.Validate(); err != nil {
 		return fmt.Errorf("workflow: %w", err)
-	}
-	return nil
-}
-
-// RequireModel asserts the spec names a runnable model. Callers that dispatch
-// an agent turn call it; a verify-only step calls it only when the todo has
-// acceptance criteria for a grader to judge.
-func RequireModel(s api.Spec) error {
-	if err := s.Model.Validate(); err != nil {
-		return fmt.Errorf("model: %w", err)
 	}
 	return nil
 }
@@ -355,5 +333,13 @@ func withoutPromptBody(spec api.Spec) api.Spec {
 	spec.Prompt.Source = ""
 	spec.Prompt.Schema = nil
 	spec.Prompt.SchemaJSON = nil
+	spec.Explicit = spec.Explicit.Clone()
+	for path := range spec.Explicit {
+		for _, field := range []string{"/prompt/user", "/prompt/source", "/prompt/schema", "/prompt/schemaJSON"} {
+			if path == field || strings.HasPrefix(path, field+"/") {
+				delete(spec.Explicit, path)
+			}
+		}
+	}
 	return spec
 }

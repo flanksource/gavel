@@ -23,8 +23,8 @@ func (h *Host) resolveProfileLayers(ctx context.Context, in LayerInput) (runtime
 	if err != nil {
 		return runtimeprofiles.ResolveResult{}, err
 	}
-	resolved, err := api.ResolveSpecLayers(assembled.Layers...)
-	return runtimeprofiles.ResolveResult{Profile: assembled.Profile, Resolved: resolved}, err
+	resolved, err := api.ResolveSpecLayers(api.ResolveSpecOptions{Layers: assembled.Layers, Saved: h.savedDefaults(), RequireModel: in.RequireModel})
+	return runtimeprofiles.ResolveResult{Profile: assembled.Profile, Resolved: resolved}, runtimeConfigurationError(err)
 }
 
 func (h *Host) profileLayers(ctx context.Context, in LayerInput) (runtimeprofiles.LayerResult, error) {
@@ -68,7 +68,7 @@ func (h *Host) RuntimeCatalog(ctx context.Context) (*runtimeprofiles.Catalog, er
 		}
 		return catalog, nil
 	}
-	options := runtimeprofiles.DefaultCatalogOptions{Cwd: h.WorkDir}
+	options := runtimeprofiles.DefaultCatalogOptions{Cwd: h.WorkDir, Config: h.Saved}
 	if provider, ok := h.Provider.(interface{ Captain() *captaindb.DB }); ok {
 		options.Read = func(context.Context) (*captaindb.DB, error) {
 			if db := provider.Captain(); db != nil {

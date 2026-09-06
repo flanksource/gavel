@@ -3,6 +3,7 @@ package lifecycle
 import (
 	"context"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/flanksource/captain/pkg/api"
@@ -37,8 +38,9 @@ type Resolution struct {
 	// one, resolved against the host's.
 	WorkDir string
 	// Trace is captain's provenance for the fold, lowest precedence first.
-	Trace    []api.SpecLayer
-	Warnings []string
+	Trace      []api.SpecLayer
+	Provenance map[string]api.FieldProvenance
+	Warnings   []string
 
 	// lc and prepared are the fold itself, carried so Dispatch runs exactly what
 	// Resolve reported. Re-folding at dispatch time would let the run and the
@@ -57,8 +59,11 @@ func (r *Resolution) UseSession(sessionID string) {
 		return
 	}
 	r.Spec.SessionID = sessionID
+	fields := runtimeFields{Name: "lifecycle session", Paths: []string{"/sessionId"}, Replace: true}
+	r.Provenance = recordRuntimeFields(r.Provenance, fields)
 	if r.prepared != nil {
 		r.prepared.request.SessionID = sessionID
+		r.prepared.provenance = recordRuntimeFields(r.prepared.provenance, fields)
 	}
 }
 
@@ -87,8 +92,21 @@ func (h *Host) Resolve(ctx context.Context, todo *types.TODO, step Step, opts Ru
 		Timeout:        prepared.timeout,
 		WorkDir:        prepared.workDir,
 		Trace:          prepared.trace,
-		Warnings:       warnings,
+		Provenance:     prepared.provenance,
+		Warnings:       mergeRuntimeWarnings(prepared.warnings, warnings),
 		lc:             lc,
 		prepared:       prepared,
 	}, nil
+}
+
+func mergeRuntimeWarnings(groups ...[]string) []string {
+	var warnings []string
+	for _, group := range groups {
+		for _, warning := range group {
+			if !slices.Contains(warnings, warning) {
+				warnings = append(warnings, warning)
+			}
+		}
+	}
+	return warnings
 }

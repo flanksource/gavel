@@ -5,7 +5,6 @@ import (
 	"strings"
 	"testing"
 
-	captainai "github.com/flanksource/captain/pkg/ai"
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/commons-db/shell"
 	"github.com/flanksource/gavel/fixtures"
@@ -33,7 +32,7 @@ func renderUser(t *testing.T, todoList []*types.TODO, opts Options) string {
 	if opts.Mode == "" {
 		opts.Mode = types.ModeRun
 	}
-	req, _, err := Render(todoList, opts)
+	req, _, err := renderResolvedForTest(todoList, opts)
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
@@ -46,7 +45,7 @@ func TestRenderRunGroup(t *testing.T) {
 		newTestTODO("fix-db", "Fix the database query"),
 		newTestTODO("fix-cache", "Fix the cache invalidation"),
 	}
-	req, _, err := Render(todoList, Options{Mode: types.ModeRun})
+	req, _, err := renderResolvedForTest(todoList, Options{Mode: types.ModeRun})
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
@@ -97,7 +96,7 @@ func TestRenderSingleTODO(t *testing.T) {
 // template's frontmatter declares the request options, so the rendered request
 // itself carries plan permissions and the default model — no Go code sets them.
 func TestRenderFoldsFrontmatter(t *testing.T) {
-	req, _, err := Render([]*types.TODO{newTestTODO("solo", "task")}, Options{Mode: types.ModePlan})
+	req, _, err := renderResolvedForTest([]*types.TODO{newTestTODO("solo", "task")}, Options{Mode: types.ModePlan})
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
@@ -163,7 +162,7 @@ func TestRenderRunApprovedPlan(t *testing.T) {
 func TestRenderOverridesKeepSchema(t *testing.T) {
 	todoList := []*types.TODO{newTestTODO("solo", "Single task")}
 
-	tmplReq, _, err := Render(todoList, Options{
+	tmplReq, _, err := renderResolvedForTest(todoList, Options{
 		Mode:     types.ModeRun,
 		Template: "CUSTOM FRAMING for {{count}} item(s)\n\n{{{body}}}END",
 		Spec:     api.Spec{Model: api.Model{Name: "claude-sonnet-5"}},
@@ -185,7 +184,7 @@ func TestRenderOverridesKeepSchema(t *testing.T) {
 		t.Error("template override must not affect the native envelope schema")
 	}
 
-	bodyReq, _, err := Render(todoList, Options{Mode: types.ModeRun, Spec: api.Spec{Prompt: api.Prompt{User: "Just do the thing."}}})
+	bodyReq, _, err := renderResolvedForTest(todoList, Options{Mode: types.ModeRun, Spec: api.Spec{Prompt: api.Prompt{User: "Just do the thing."}}})
 	if err != nil {
 		t.Fatalf("Render(body override): %v", err)
 	}
@@ -208,7 +207,7 @@ func TestRenderEffortDirective(t *testing.T) {
 	}
 }
 
-func TestRenderMergesCanonicalSpecWithoutDroppingRuntimeFields(t *testing.T) {
+func TestRenderPreservesCanonicalSpecWithoutDroppingRuntimeFields(t *testing.T) {
 	spec := api.Spec{
 		Model:  api.Model{Name: "gpt-5.6-sol", Mode: api.ModeAgent, Effort: api.EffortHigh},
 		Prompt: api.Prompt{User: "Use the reviewed implementation instructions.", System: "Keep changes surgical."},
@@ -245,31 +244,17 @@ func TestRenderMergesCanonicalSpecWithoutDroppingRuntimeFields(t *testing.T) {
 		t.Fatalf("rendered request lost the TODO envelope schema: %s", req.Prompt.SchemaJSON)
 	}
 
-	// want is the caller's spec plus the fields the template itself contributes.
-	// Those are not drift: a .prompt declaring schemaStrictness or its permission
-	// posture is the template doing its job, and the caller's spec never modelled
-	// them.
-	//
-	// The model is resolved too — rendering hands back a driver-ready one — so
-	// the expectation resolves the caller's model rather than restating the
-	// capability flags resolution fills in.
 	want := spec
-	resolvedModel, err := captainai.Resolve(spec.Model)
-	if err != nil {
-		t.Fatalf("resolve the caller's model: %v", err)
-	}
-	want.Model = resolvedModel
 	want.Prompt.User = req.Prompt.User
 	want.Prompt.Source = "todos.run"
 	want.Prompt.SchemaJSON = req.Prompt.SchemaJSON
-	want.Prompt.SchemaStrictness = "retry"
 	if !reflect.DeepEqual(req, want) {
 		t.Fatalf("rendered request dropped or changed Spec fields:\n got: %#v\nwant: %#v", req, want)
 	}
 }
 
 func TestRenderRejectsVerifyMode(t *testing.T) {
-	if _, _, err := Render([]*types.TODO{newTestTODO("solo", "task")}, Options{Mode: types.ModeVerify}); err == nil {
+	if _, _, err := renderResolvedForTest([]*types.TODO{newTestTODO("solo", "task")}, Options{Mode: types.ModeVerify}); err == nil {
 		t.Fatal("verify mode has no agent prompt and must error")
 	}
 }

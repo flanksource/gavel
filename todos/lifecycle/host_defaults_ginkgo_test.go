@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/flanksource/captain/pkg/api"
+	"github.com/flanksource/captain/pkg/captainconfig"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/lifecycle"
 	. "github.com/onsi/ginkgo/v2"
@@ -11,6 +12,16 @@ import (
 )
 
 var _ = Describe("Host defaults structural composition", func() {
+	It("uses one saved snapshot for preview while retaining explicit project settings", func() {
+		host := newHost(&fakeProvider{})
+		host.Saved = &captainconfig.Config{AI: captainconfig.AIDefaults{DefaultModel: "api:claude-haiku-4-5", BudgetUSD: 1}}
+		host.Config.AI = api.Spec{Budget: api.Budget{Cost: 2}}
+		defaults, err := host.StepDefaults(context.Background(), stepNamed(host.Def, "verify"))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(defaults.Spec.Name).To(Equal("claude-haiku-4-5"))
+		Expect(defaults.Spec.Budget.Cost).To(Equal(float64(2)))
+	})
+
 	It("keeps a partial runtime visible until the request selects a supported model", func() {
 		GinkgoT().Setenv("HOME", GinkgoT().TempDir())
 		host := newHost(&fakeProvider{plan: todos.PlanState{Exists: true, Approved: true, Content: "# Plan"}})

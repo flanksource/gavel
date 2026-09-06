@@ -34,13 +34,13 @@ func ValidateRequestPermissions(layers []api.SpecLayer) error {
 				toolLayers[tool] = layer
 			}
 		}
-		baseline = baseline.Merge(api.Spec{Permissions: permissions})
+		baseline = baseline.Merge(layer.Spec)
 	}
 	if request.Name == "" {
 		return nil
 	}
-	effective := baseline.Merge(api.Spec{Permissions: request.Spec.Permissions})
-	for _, tool := range slices.Sorted(maps.Keys(request.Spec.Permissions.Tools)) {
+	effective := baseline.Merge(request.Spec)
+	for _, tool := range slices.Sorted(maps.Keys(baseline.Permissions.Tools)) {
 		if baseline.Permissions.Tools[tool] == api.ToolPolicyDeny && effective.Permissions.Tools[tool] != api.ToolPolicyDeny {
 			return fmt.Errorf("request layer %q cannot widen permissions.tools.%s from deny in %s layer %q to %q",
 				request.Name, tool, toolLayers[tool].Source, toolLayers[tool].Name, effective.Permissions.Tools[tool])
@@ -75,7 +75,7 @@ func RestrictHostPermissions(layers []api.SpecLayer) []api.SpecLayer {
 				layer.Spec.Permissions.Mode = baseline.Permissions.Mode
 			}
 		}
-		baseline = baseline.Merge(api.Spec{Permissions: layer.Spec.Permissions})
+		baseline = baseline.Merge(layer.Spec)
 	}
 	return ordered
 }
