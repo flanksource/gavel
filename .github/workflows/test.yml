@@ -60,7 +60,7 @@ jobs:
       # the timed per-package run, so a cold build cache no longer eats into the
       # per-package deadline. Disable with --pre-build=false.
       - name: Run tests
-        run: ./gavel test
+        run: ./.bin/gavel test
         env:
           CGO_ENABLED: 0
           GAVEL_DB_EMBEDDED_TEST: "1"
@@ -111,7 +111,7 @@ jobs:
         working-directory: site
 
       - name: Run linters
-        run: ./gavel lint
+        run: ./.bin/gavel lint
         env:
           CGO_ENABLED: 0
 
@@ -172,8 +172,8 @@ jobs:
 
       - name: Test binary
         run: |
-          ./gavel --help
-          ./gavel version
+          ./.bin/gavel --help
+          ./.bin/gavel version
 
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4
