@@ -759,6 +759,18 @@
         },
         {
           "additionalProperties": false,
+          "anyOf": [
+            {
+              "required": [
+                "mode"
+              ]
+            },
+            {
+              "required": [
+                "backend"
+              ]
+            }
+          ],
           "properties": {
             "agent": {
               "description": "Pin one enrolled Git Agent worker",
@@ -985,9 +997,6 @@
               "type": "object"
             }
           },
-          "required": [
-            "mode"
-          ],
           "type": "object"
         }
       ]

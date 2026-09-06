@@ -102,10 +102,19 @@ func (s *PromptSpec) UnmarshalJSON(data []byte) error {
 		return s.adoptString(str)
 	}
 	// The object form is flat: the spec's own keys sit beside `file`, so each
-	// half decodes from the same object. api.Spec declares no UnmarshalJSON, so
-	// this is ordinary struct decoding and unknown keys (`file`) are ignored.
+	// half decodes from the same object; Captain owns the spec's decoding.
 	var spec api.Spec
-	if err := json.Unmarshal(trimmed, &spec); err != nil {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &fields); err != nil {
+		return err
+	}
+	delete(fields, "file")
+	delete(fields, "runtimeProfile")
+	specData, err := json.Marshal(fields)
+	if err != nil {
+		return err
+	}
+	if err := json.Unmarshal(specData, &spec); err != nil {
 		return err
 	}
 	var file struct {
@@ -172,56 +181,6 @@ func (s *PromptSpec) adoptString(str string) error {
 		*s = PromptSpec{Spec: api.Spec{Prompt: api.Prompt{User: str}}}
 	}
 	return nil
-}
-
-// Resolve produces the executable spec for this operation by layering, lowest to
-// highest precedence: the base spec (ai:) < the built-in default .prompt <
-// this operation's own spec. The chosen prompt body (operation override, File,
-// or default) is rendered with data — so a default that templates its frontmatter
-// (e.g. a maxItems constraint) resolves too. The result is validated.
-func (s PromptSpec) Resolve(base api.Spec, defaultPrompt string, data map[string]any, dir string) (api.Spec, error) {
-	if s.RuntimeProfile != "" {
-		return api.Spec{}, fmt.Errorf("runtime profiles require TODO lifecycle resolution")
-	}
-	defaultSpec, err := RenderPromptSpec(defaultPrompt, data, PromptSpecOptions{})
-	if err != nil {
-		return api.Spec{}, fmt.Errorf("render default prompt: %w", err)
-	}
-	if defaultSpec.RuntimeProfile != "" {
-		return api.Spec{}, fmt.Errorf("runtime profiles require TODO lifecycle resolution")
-	}
-
-	opSpec := s.Spec
-	switch {
-	case s.File != "":
-		raw, err := os.ReadFile(s.resolvedFilePath(dir))
-		if err != nil {
-			return api.Spec{}, fmt.Errorf("read prompt override file: %w", err)
-		}
-		fileSpec, err := RenderPromptSpec(string(raw), data, PromptSpecOptions{})
-		if err != nil {
-			return api.Spec{}, fmt.Errorf("render prompt override file: %w", err)
-		}
-		if fileSpec.RuntimeProfile != "" {
-			return api.Spec{}, fmt.Errorf("runtime profiles require TODO lifecycle resolution")
-		}
-		opSpec = fileSpec.Spec.Merge(s.Spec) // inline spec fields win over the file
-	case strings.TrimSpace(s.Spec.Prompt.User) != "":
-		rendered, err := RenderPromptSpec(s.Spec.Prompt.User, data, PromptSpecOptions{})
-		if err != nil {
-			return api.Spec{}, fmt.Errorf("render inline prompt: %w", err)
-		}
-		if rendered.RuntimeProfile != "" {
-			return api.Spec{}, fmt.Errorf("runtime profiles require TODO lifecycle resolution")
-		}
-		opSpec.Prompt.User = rendered.Spec.Prompt.User
-	}
-
-	resolved := base.Merge(defaultSpec.Spec).Merge(opSpec)
-	if err := resolved.Validate(); err != nil {
-		return api.Spec{}, fmt.Errorf("resolved prompt spec: %w", err)
-	}
-	return resolved, nil
 }
 
 // TemplateSource returns the raw .prompt template source this override supplies —
@@ -336,16 +295,9 @@ func RenderPromptSpec(source string, data map[string]any, opts PromptSpecOptions
 	if err != nil {
 		return PromptSpec{}, err
 	}
-	req, cfg, err := template.Render(data, nil)
+	req, _, err := template.Render(dotprompt.RenderOptions{Data: data, Declared: opts.Declared})
 	if err != nil {
 		return PromptSpec{}, err
 	}
-	spec := api.Spec(req)
-	if spec.Name == "" {
-		spec.Model = cfg.Model
-	}
-	if opts.Declared {
-		spec.Model = doc.Spec.Model
-	}
-	return PromptSpec{Spec: spec, RuntimeProfile: doc.RuntimeProfile}, nil
+	return PromptSpec{Spec: api.Spec(req), RuntimeProfile: doc.RuntimeProfile}, nil
 }

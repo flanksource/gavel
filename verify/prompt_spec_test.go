@@ -74,17 +74,18 @@ func TestPromptSpec_Unmarshal(t *testing.T) {
 }
 
 func TestPromptSpec_Resolve(t *testing.T) {
-	base := api.Spec{Model: api.Model{Name: "base-model", Effort: api.EffortMedium}, Budget: api.Budget{Cost: 5}}
+	base := api.Spec{Model: api.Model{Name: "claude-sonnet-5", Effort: api.EffortMedium}, Budget: api.Budget{Cost: 5}}
 	data := map[string]any{"name": "World"}
 
 	t.Run("base model + default body, no override", func(t *testing.T) {
 		var op PromptSpec
-		got, err := op.Resolve(base, "Summarize {{name}}", data, "")
+		resolved, err := op.Resolve(PromptResolveOptions{Base: base, DefaultPrompt: "Summarize {{name}}", Data: data, RequireModel: true})
+		got := resolved.Spec
 		if err != nil {
 			t.Fatalf("Resolve: %v", err)
 		}
-		if got.Model.Name != "base-model" {
-			t.Errorf("Model = %q, want base-model", got.Model.Name)
+		if got.Model.Name != "claude-sonnet-5" {
+			t.Errorf("Model = %q, want claude-sonnet-5", got.Model.Name)
 		}
 		if got.Model.Effort != api.EffortMedium || got.Budget.Cost != 5 {
 			t.Errorf("base defaults lost: effort=%q cost=%v", got.Model.Effort, got.Budget.Cost)
@@ -95,13 +96,14 @@ func TestPromptSpec_Resolve(t *testing.T) {
 	})
 
 	t.Run("operation model overrides base, base budget kept", func(t *testing.T) {
-		op := PromptSpec{Spec: api.Spec{Model: api.Model{Name: "op-model"}}}
-		got, err := op.Resolve(base, "Summarize {{name}}", data, "")
+		op := PromptSpec{Spec: api.Spec{Model: api.Model{Name: "claude-opus-4-8"}}}
+		resolved, err := op.Resolve(PromptResolveOptions{Base: base, DefaultPrompt: "Summarize {{name}}", Data: data, RequireModel: true})
+		got := resolved.Spec
 		if err != nil {
 			t.Fatalf("Resolve: %v", err)
 		}
-		if got.Model.Name != "op-model" {
-			t.Errorf("Model = %q, want op-model", got.Model.Name)
+		if got.Model.Name != "claude-opus-4-8" {
+			t.Errorf("Model = %q, want claude-opus-4-8", got.Model.Name)
 		}
 		if got.Budget.Cost != 5 {
 			t.Errorf("Budget.Cost = %v, want 5 from base", got.Budget.Cost)
@@ -110,7 +112,8 @@ func TestPromptSpec_Resolve(t *testing.T) {
 
 	t.Run("operation body overrides default body and is rendered", func(t *testing.T) {
 		op := PromptSpec{Spec: api.Spec{Prompt: api.Prompt{User: "Custom {{name}}"}}}
-		got, err := op.Resolve(base, "Default {{name}}", data, "")
+		resolved, err := op.Resolve(PromptResolveOptions{Base: base, DefaultPrompt: "Default {{name}}", Data: data, RequireModel: true})
+		got := resolved.Spec
 		if err != nil {
 			t.Fatalf("Resolve: %v", err)
 		}
@@ -121,31 +124,33 @@ func TestPromptSpec_Resolve(t *testing.T) {
 
 	t.Run("built-in default frontmatter model beats base", func(t *testing.T) {
 		var op PromptSpec
-		def := "---\nmodel: pinned-cheap-model\n---\nSummarize {{name}}"
-		got, err := op.Resolve(base, def, data, "")
+		def := "---\nmodel: claude-haiku-4-5\n---\nSummarize {{name}}"
+		resolved, err := op.Resolve(PromptResolveOptions{Base: base, DefaultPrompt: def, Data: data, RequireModel: true})
+		got := resolved.Spec
 		if err != nil {
 			t.Fatalf("Resolve: %v", err)
 		}
-		if got.Model.Name != "pinned-cheap-model" {
-			t.Errorf("Model = %q, want pinned-cheap-model (default beats base)", got.Model.Name)
+		if got.Model.Name != "claude-haiku-4-5" {
+			t.Errorf("Model = %q, want claude-haiku-4-5 (default beats base)", got.Model.Name)
 		}
 	})
 
 	t.Run("operation model beats default frontmatter model", func(t *testing.T) {
-		op := PromptSpec{Spec: api.Spec{Model: api.Model{Name: "op-model"}}}
-		def := "---\nmodel: pinned-cheap-model\n---\nSummarize {{name}}"
-		got, err := op.Resolve(base, def, data, "")
+		op := PromptSpec{Spec: api.Spec{Model: api.Model{Name: "claude-opus-4-8"}}}
+		def := "---\nmodel: claude-haiku-4-5\n---\nSummarize {{name}}"
+		resolved, err := op.Resolve(PromptResolveOptions{Base: base, DefaultPrompt: def, Data: data, RequireModel: true})
+		got := resolved.Spec
 		if err != nil {
 			t.Fatalf("Resolve: %v", err)
 		}
-		if got.Model.Name != "op-model" {
-			t.Errorf("Model = %q, want op-model (op beats default)", got.Model.Name)
+		if got.Model.Name != "claude-opus-4-8" {
+			t.Errorf("Model = %q, want claude-opus-4-8 (op beats default)", got.Model.Name)
 		}
 	})
 
 	t.Run("no resolvable model fails loud", func(t *testing.T) {
 		var op PromptSpec
-		_, err := op.Resolve(api.Spec{}, "Summarize {{name}}", data, "")
+		_, err := op.Resolve(PromptResolveOptions{DefaultPrompt: "Summarize {{name}}", Data: data, RequireModel: true})
 		if err == nil {
 			t.Fatal("expected error for missing model, got nil")
 		}

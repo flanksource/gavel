@@ -35,7 +35,7 @@ var _ = Describe("prompt runtime profile configuration", func() {
 	})
 
 	DescribeTable("rejects profile selection outside lifecycle resolution", func(config PromptSpec, source string) {
-		_, err := config.Resolve(api.Spec{}, source, nil, "")
+		_, err := config.Resolve(PromptResolveOptions{DefaultPrompt: source})
 		Expect(err).To(MatchError(ContainSubstring("runtime profiles require TODO lifecycle resolution")))
 	},
 		Entry("configuration", PromptSpec{RuntimeProfile: "reviewer"}, "Review the change"),
