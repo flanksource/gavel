@@ -44,11 +44,17 @@ jobs:
 
       # Node + TypeScript for the jest/vitest/playwright test frameworks and
       # the tsc lint check live in these UI projects' devDependencies.
-      - name: Install JS deps
-        run: |
-          pnpm -C testrunner/ui install --no-frozen-lockfile
-          pnpm -C pr/ui install --no-frozen-lockfile
-          npm ci --prefix site
+      - name: Install test runner dependencies
+        run: pnpm install --no-frozen-lockfile
+        working-directory: testrunner/ui
+
+      - name: Install PR UI dependencies
+        run: pnpm install --no-frozen-lockfile
+        working-directory: pr/ui
+
+      - name: Install site dependencies
+        run: npm ci
+        working-directory: site
 
       # `gavel test` compiles all Go test binaries in a pre-build phase before
       # the timed per-package run, so a cold build cache no longer eats into the
@@ -92,11 +98,17 @@ jobs:
 
       # Node + TypeScript for the tsc / eslint linters live in these UI
       # projects' devDependencies; install them so gavel lint can run them.
-      - name: Install JS deps
-        run: |
-          pnpm -C testrunner/ui install --no-frozen-lockfile
-          pnpm -C pr/ui install --no-frozen-lockfile
-          npm ci --prefix site
+      - name: Install test runner dependencies
+        run: pnpm install --no-frozen-lockfile
+        working-directory: testrunner/ui
+
+      - name: Install PR UI dependencies
+        run: pnpm install --no-frozen-lockfile
+        working-directory: pr/ui
+
+      - name: Install site dependencies
+        run: npm ci
+        working-directory: site
 
       - name: Run linters
         run: ./gavel lint
