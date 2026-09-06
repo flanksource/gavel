@@ -3,10 +3,7 @@ package ui
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
 
-	"github.com/flanksource/captain/pkg/api/registry"
-	captaincli "github.com/flanksource/captain/pkg/cli"
 	"github.com/flanksource/gavel/todos/lifecycle"
 	todoprompt "github.com/flanksource/gavel/todos/prompt"
 )
@@ -65,39 +62,4 @@ func todoRunInputSchemas(steps []lifecycle.Step) (map[string]json.RawMessage, er
 		return nil, nil
 	}
 	return out, nil
-}
-
-// defaultTodoRunMode picks the run dialog's preselected runtime from the
-// user's saved default. The provider and the mode are read as the two fields
-// they are; the composite adapter id this used to parse carried both in one
-// token and had to be split apart again here.
-func defaultTodoRunMode(who captaincli.WhoamiResult, modes []todoRunModeOption) string {
-	defaults, ok := who.ProviderDefaults[who.DefaultProvider]
-	if !ok {
-		return ""
-	}
-	provider, known := registry.ProviderByName(strings.TrimSpace(who.DefaultProvider))
-	if !known {
-		return ""
-	}
-	mode := registry.RuntimeMode(strings.TrimSpace(defaults.Mode))
-	// A cli default prefers the agent runtime when that one has models: the
-	// dashboard drives agents headlessly, where the SDK is the richer surface.
-	if mode == registry.ModeCLI &&
-		todoRunModeHasModels(modes, provider.Name, string(registry.ModeAgent)) {
-		return string(registry.ModeAgent)
-	}
-	if todoRunModeHasModels(modes, provider.Name, string(mode)) {
-		return string(mode)
-	}
-	return ""
-}
-
-func todoRunModeHasModels(modes []todoRunModeOption, provider, id string) bool {
-	for _, option := range modes {
-		if option.Provider == provider && option.ID == id {
-			return len(option.Models) > 0
-		}
-	}
-	return false
 }

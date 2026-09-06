@@ -50,7 +50,7 @@ var _ = Describe("todo run admission contract", func() {
 		Expect(yaml.Unmarshal([]byte(response.SpecYAML), &rendered)).To(Succeed())
 		Expect(rendered.Prompt.User).To(Equal(response.Prompt))
 		Expect(rendered.Prompt.AppendSystem).To(Equal("Keep the contract visible."))
-		Expect(rendered.Budget).To(Equal(api.Budget{Timeout: "45m0s", MaxTurns: 12}))
+		Expect(rendered.Budget).To(Equal(api.Budget{Timeout: "45m0s", MaxTurns: 12, MaxTokens: 4096}))
 		Expect(rendered.Mode).To(Equal(api.ModeAgent))
 		Expect(rendered.Name).To(Equal("gpt-5.5"))
 	})

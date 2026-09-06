@@ -5,10 +5,11 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"strings"
 
-	dotprompt "github.com/flanksource/captain/pkg/ai/prompt"
 	"github.com/flanksource/captain/pkg/api"
+	"github.com/flanksource/captain/pkg/captainconfig"
+	captaincli "github.com/flanksource/captain/pkg/cli"
+	promptregistry "github.com/flanksource/gavel/prompts/registry"
 	"github.com/flanksource/gavel/verify"
 )
 
@@ -60,10 +61,11 @@ type promptRenderRequest struct {
 }
 
 type promptRenderResponse struct {
-	User   string `json:"user"`
-	System string `json:"system,omitempty"`
-	Model  string `json:"model,omitempty"`
-	Mode   string `json:"mode,omitempty"`
+	User       string           `json:"user"`
+	System     string           `json:"system,omitempty"`
+	Model      string           `json:"model,omitempty"`
+	Mode       string           `json:"mode,omitempty"`
+	Resolution api.ResolvedSpec `json:"resolution"`
 }
 
 func (s *Server) handleSettingsPromptRender(w http.ResponseWriter, r *http.Request) {
@@ -77,48 +79,34 @@ func (s *Server) handleSettingsPromptRender(w http.ResponseWriter, r *http.Reque
 		respondError(w, http.StatusBadRequest, "invalid request: "+err.Error())
 		return
 	}
-	raw := req.Raw
-	if strings.TrimSpace(raw) == "" {
-		if raw, err = effectivePromptSource(r.PathValue("id"), dir); err != nil {
-			respondError(w, http.StatusNotFound, err.Error())
-			return
-		}
+	desc, ok := findRegisteredPrompt(r.PathValue("id"))
+	if !ok {
+		respondError(w, http.StatusNotFound, "unknown prompt "+r.PathValue("id"))
+		return
 	}
-	if req.Variables == nil {
-		req.Variables = map[string]any{}
+	trace, err := verify.LoadGavelConfigTrace(dir)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "load prompt config: "+err.Error())
+		return
 	}
-	rendered, cfg, err := dotprompt.Load(raw).Render(req.Variables, nil)
+	saved, _, err := captainconfig.Load()
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "load saved AI defaults: "+err.Error())
+		return
+	}
+	item, err := promptregistry.ResolveOne(promptregistry.ResolveOptions{
+		Trace: trace, Saved: &saved.AI, Data: req.Variables, Draft: req.Raw,
+		Normalize: func(spec api.Spec) (api.SpecNormalization, error) {
+			return (captaincli.AIRuntimeOptions{}).Normalize(captaincli.AIRuntimeNormalizeOptions{Spec: spec, Saved: saved, Cwd: trace.TargetDir})
+		},
+	}, desc)
 	if err != nil {
 		respondError(w, http.StatusBadRequest, "render prompt: "+err.Error())
 		return
 	}
-	spec := api.Spec(rendered)
 	respondJSON(w, http.StatusOK, promptRenderResponse{
-		User: spec.Prompt.User, System: spec.Prompt.System,
-		Model: cfg.Model.Name, Mode: string(cfg.Model.Mode),
+		User: item.Effective.Prompt.User, System: item.Effective.Prompt.System,
+		Model: item.Effective.Name, Mode: string(item.Effective.Mode),
+		Resolution: api.ResolvedSpec{Spec: item.Effective, Trace: item.Trace, Provenance: item.Provenance, Warnings: item.Warnings},
 	})
 }
-
-// effectivePromptSource returns the .prompt text gavel would run for a prompt
-// id in dir's config chain. Every prompt is a registered one: `todos.prompts`
-// declared a second, unregistered source, and a project prompt is a lifecycle
-// step now.
-func effectivePromptSource(id, dir string) (string, error) {
-	trace, err := verify.LoadGavelConfigTrace(dir)
-	if err != nil {
-		return "", err
-	}
-	desc, ok := findRegisteredPrompt(id)
-	if !ok {
-		return "", &unknownPromptError{id: id}
-	}
-	ov, err := promptOverridePtr(&trace.Merged, desc.ConfigPath)
-	if err != nil {
-		return "", err
-	}
-	return promptSpecRaw(ov, trace.TargetDir, desc.Default)
-}
-
-type unknownPromptError struct{ id string }
-
-func (e *unknownPromptError) Error() string { return "unknown prompt " + e.id }

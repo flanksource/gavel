@@ -139,6 +139,7 @@ func TestTodoAPIRunStepField(t *testing.T) {
 
 func TestDashboardRunRuntimeFromSpec(t *testing.T) {
 	dir := isolatedTodoWorkspace(t)
+	configureAutomaticPlanToolPolicies(t, dir)
 	spec, err := dashboardRunSpec(t, dir, todoRunPayload{Spec: api.Spec{Model: api.Model{Mode: api.ModeAgent, Effort: "medium"}}})
 	if err != nil {
 		t.Fatalf("agent runtime: %v", err)
@@ -157,6 +158,7 @@ func TestDashboardRunRuntimeFromSpec(t *testing.T) {
 }
 
 func TestTodoRunContextListsCaptainRuntimeModes(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	prev := runCaptainWhoami
 	calls := 0
 	runCaptainWhoami = func(opts captaincli.WhoamiOptions) (any, error) {
@@ -210,7 +212,7 @@ func TestTodoRunContextListsCaptainRuntimeModes(t *testing.T) {
 	}
 	t.Cleanup(func() { runCaptainWhoami = prev })
 
-	resp, err := todoRunContext(context.Background(), "")
+	resp, err := todoRunContext(context.Background(), t.TempDir())
 	if err != nil {
 		t.Fatalf("todo run context: %v", err)
 	}
@@ -220,8 +222,8 @@ func TestTodoRunContextListsCaptainRuntimeModes(t *testing.T) {
 	if !stringSliceContains(resp.Efforts, "xhigh") {
 		t.Fatalf("efforts = %v, want captain xhigh effort", resp.Efforts)
 	}
-	if resp.DefaultMode != "agent" {
-		t.Fatalf("default mode = %q, want agent", resp.DefaultMode)
+	if resp.DefaultMode != "" {
+		t.Fatalf("default mode = %q, want an unconfigured mode", resp.DefaultMode)
 	}
 	modeFor := func(provider, id string) todoRunModeOption {
 		t.Helper()
@@ -280,6 +282,7 @@ func TestTodoRunContextListsCaptainRuntimeModes(t *testing.T) {
 // asserted through providerKey rather than read off the spec.
 func TestDashboardRunCaptainRuntime(t *testing.T) {
 	dir := isolatedTodoWorkspace(t)
+	configureAutomaticPlanToolPolicies(t, dir)
 	spec, err := dashboardRunSpec(t, dir, todoRunPayload{Spec: api.Spec{Model: api.Model{Mode: api.ModeCLI, Effort: "xhigh"}}})
 	if err != nil {
 		t.Fatalf("claude cli runtime: %v", err)

@@ -9,8 +9,8 @@ export function effectiveTodoRuntime(options: TodoRunOptions, context: RunContex
   const profile = context.runtimeProfiles?.find(entry => entry.id === reference || entry.name.toLowerCase() === ref);
   const stepProfile = !options.runtimeProfile || reference === defaults?.runtimeProfile || profile?.id === defaults?.runtimeProfile;
   return {
-    model: options.spec?.model ?? (stepProfile ? defaults?.model : undefined),
-    mode: options.spec?.mode ?? (stepProfile ? defaults?.mode ?? context.defaultMode : undefined),
+    model: options.spec?.model ?? (stepProfile ? defaults?.spec?.model ?? defaults?.model : undefined),
+    mode: options.spec?.mode ?? (stepProfile ? defaults?.spec?.mode ?? defaults?.mode : undefined),
   };
 }
 

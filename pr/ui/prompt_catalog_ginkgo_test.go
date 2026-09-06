@@ -174,12 +174,15 @@ var _ = Describe("settings prompt catalog", func() {
 	})
 
 	It("renders the effective template and an unsaved draft with caller variables", func() {
+		Expect(os.WriteFile(filepath.Join(home, ".captain.yaml"), []byte("ai:\n  timeout: 17m\n  providers:\n    anthropic:\n      mode: agent\n    openai:\n      mode: agent\n"), 0o600)).To(Succeed())
 		rec := renderCall(prompts.TodosRun, scope, `{"variables":{"body":"fix the build"}}`)
 		Expect(rec.Code).To(Equal(http.StatusOK), rec.Body.String())
 		var got promptRenderResponse
 		Expect(json.Unmarshal(rec.Body.Bytes(), &got)).To(Succeed())
 		Expect(got.User).To(Equal("Run fix the build now, then ."))
 		Expect(got.Model).To(Equal("claude-opus-4-6"))
+		Expect(got.Resolution.Spec.Budget.Timeout).To(Equal("17m"))
+		Expect(got.Resolution.Provenance["/budget/timeout"].Source.Kind).To(Equal(api.FieldSourceSaved))
 
 		rec = renderCall(prompts.TodosRun, scope, `{"variables":{"body":"x"},"raw":"---\nmodel: gpt-5\n---\nDraft {{{body}}}\n"}`)
 		Expect(rec.Code).To(Equal(http.StatusOK), rec.Body.String())
@@ -189,22 +192,23 @@ var _ = Describe("settings prompt catalog", func() {
 
 		Expect(renderCall("nope", scope, `{}`).Code).To(Equal(http.StatusNotFound))
 	})
+
+	It("keeps catalog access independent of malformed saved runtime defaults", func() {
+		Expect(os.WriteFile(filepath.Join(home, ".captain.yaml"), []byte("ai: [broken"), 0o600)).To(Succeed())
+		Expect(catalogEntry(catalogCall(scope), prompts.CommitMessage).ParseError).To(BeEmpty())
+		rec := renderCall(prompts.CommitMessage, scope, `{}`)
+		Expect(rec.Code).To(Equal(http.StatusInternalServerError), rec.Body.String())
+		Expect(rec.Body.String()).To(ContainSubstring("saved AI defaults"))
+	})
 })
 
-var _ = Describe("prompt catalog runtime validation", func() {
-	It("reports a mode that names a provider without translating it", func() {
-		runtime := catalogRuntime(api.Model{Name: "haiku", Mode: "anthropic"}, "operation")
-
-		Expect(runtime.Mode).To(Equal("anthropic"))
-		Expect(runtime.Error).To(ContainSubstring("invalid model configuration"))
-	})
-
-	It("lets the compact model prefix override the sibling mode field", func() {
+var _ = Describe("prompt catalog runtime projection", func() {
+	It("preserves structural selectors without independently normalizing them", func() {
 		runtime := catalogRuntime(api.Model{Name: "agent:opus", Mode: api.ModeAPI}, "operation")
 
 		Expect(runtime.Error).To(BeEmpty())
-		Expect(runtime.Mode).To(Equal("agent"))
-		Expect(runtime.Model).To(Equal("claude-opus-5"))
+		Expect(runtime.Mode).To(Equal("api"))
+		Expect(runtime.Model).To(Equal("agent:opus"))
 	})
 })
 

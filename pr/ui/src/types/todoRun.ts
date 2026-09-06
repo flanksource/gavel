@@ -5,6 +5,15 @@ export type TodoRunEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra
 // TodoRunDriver is the canonical runtime mode. Provider identity comes from model.
 export type TodoRunDriver = 'api' | 'agent' | 'cli' | 'cmux';
 
+export interface TodoRunFieldSource {
+  kind: 'layer' | 'saved' | 'catalog';
+  name: string;
+  key: string;
+  layerId?: string;
+}
+
+export type TodoRunProvenance = Record<string, { source: TodoRunFieldSource; normalizedBy?: TodoRunFieldSource }>;
+
 // TodoRunOptions is the run POST body's options: the api.Spec under its own
 // `spec` key plus the run-orchestration extras below. Dirty worktree,
 // auto-commit, dry-run, and checks all live in the spec now
@@ -80,6 +89,8 @@ export interface TodoRunResponse {
 // Preview of the exact prompt a run would dispatch, shown in the advanced run
 // dialog before the user starts the run.
 export interface TodoRunPreviewResponse {
+  spec?: AISpecRuntimeValue;
+  provenance?: TodoRunProvenance;
   // Capability warnings from the same full-input preflight used before admission.
   warnings?: string[];
   prompt: string;

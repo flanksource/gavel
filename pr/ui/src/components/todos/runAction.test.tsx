@@ -109,7 +109,7 @@ describe('TodoRunActionButton RuntimeBar', () => {
     const primary = screen.getByRole('button', { name: 'Run' });
     await waitFor(() => expect((primary as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(await screen.findByRole('button', {
-      name: 'Run runtime: Codex, Agent, GPT-5.5, effort Medium',
+      name: 'Run runtime: Codex, Agent, Prompt default, effort None',
     }));
 
     let menu = screen.getByRole('menu');
@@ -130,7 +130,6 @@ describe('TodoRunActionButton RuntimeBar', () => {
             mode: 'cli',
             model: 'claude-opus-4-8',
             effort: 'high',
-            workflow: { commits: [{ on: 'run', gates: 'full' }] },
           },
         },
       },

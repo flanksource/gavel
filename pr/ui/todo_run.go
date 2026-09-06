@@ -101,18 +101,20 @@ type todoRunResponse struct {
 }
 
 type todoRunPreviewResponse struct {
-	RuntimeProfile *todoRunProfilePreview `json:"runtimeProfile,omitempty"`
-	Trace          []api.SpecLayer        `json:"trace"`
-	Warnings       []string               `json:"warnings,omitempty"`
-	Prompt         string                 `json:"prompt"`
-	SpecYAML       string                 `json:"specYaml"`
-	Step           string                 `json:"step"`
-	Reason         string                 `json:"reason,omitempty"`
-	Provider       string                 `json:"provider,omitempty"`
-	RuntimeMode    string                 `json:"runtimeMode,omitempty"`
-	Model          string                 `json:"model,omitempty"`
-	Effort         string                 `json:"effort,omitempty"`
-	Count          int                    `json:"count"`
+	Spec           api.Spec                       `json:"spec"`
+	Provenance     map[string]api.FieldProvenance `json:"provenance,omitempty"`
+	RuntimeProfile *todoRunProfilePreview         `json:"runtimeProfile,omitempty"`
+	Trace          []api.SpecLayer                `json:"trace"`
+	Warnings       []string                       `json:"warnings,omitempty"`
+	Prompt         string                         `json:"prompt"`
+	SpecYAML       string                         `json:"specYaml"`
+	Step           string                         `json:"step"`
+	Reason         string                         `json:"reason,omitempty"`
+	Provider       string                         `json:"provider,omitempty"`
+	RuntimeMode    string                         `json:"runtimeMode,omitempty"`
+	Model          string                         `json:"model,omitempty"`
+	Effort         string                         `json:"effort,omitempty"`
+	Count          int                            `json:"count"`
 }
 
 // resolveTodoRunRequest decodes a run/preview payload and resolves its options,
@@ -321,6 +323,8 @@ func (s *Server) handleTodoRunPreview(w http.ResponseWriter, r *http.Request) {
 	}
 	spec := prepared.Resolution.Spec
 	json.NewEncoder(w).Encode(todoRunPreviewResponse{ //nolint:errcheck
+		Spec:           spec,
+		Provenance:     prepared.Resolution.Provenance,
 		RuntimeProfile: todoRunProfilePreviewFor(prepared.Resolution.RuntimeProfile),
 		Trace:          prepared.Resolution.Trace,
 		Warnings:       prepared.Resolution.Warnings,

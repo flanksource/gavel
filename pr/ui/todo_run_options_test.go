@@ -77,21 +77,21 @@ func TestDashboardRunToolPreferences(t *testing.T) {
 	t.Run("valid prefs and permission mode are threaded", func(t *testing.T) {
 		payload := base
 		payload.Spec.Permissions = api.Permissions{
-			Mode: api.PermissionAcceptEdits,
+			Mode: api.PermissionDefault,
 			Tools: api.Tools{
-				"Bash": api.ToolPolicyAsk, "Write": api.ToolPolicyDeny, "Read": api.ToolPolicyAuto, "Glob": api.ToolPolicyAuto,
+				"Bash": api.ToolPolicyAllow, "Write": api.ToolPolicyDeny, "Read": api.ToolPolicyAuto, "Glob": api.ToolPolicyAuto,
 			},
 		}
 		spec, err := dashboardRunSpec(t, dir, payload)
 		if err != nil {
 			t.Fatalf("resolve: %v", err)
 		}
-		if spec.Permissions.Mode != api.PermissionAcceptEdits {
-			t.Fatalf("PermissionMode = %q, want acceptEdits", spec.Permissions.Mode)
+		if spec.Permissions.Mode != api.PermissionDefault {
+			t.Fatalf("PermissionMode = %q, want default", spec.Permissions.Mode)
 		}
 		policies := spec.Permissions.Tools.Policies()
-		if policies["Bash"] != api.ToolPolicyAsk || policies["Write"] != api.ToolPolicyDeny || policies["Read"] != api.ToolPolicyAuto {
-			t.Fatalf("tool policies = %v, want Bash=ask Write=deny Read=auto", policies)
+		if policies["Bash"] != api.ToolPolicyAllow || policies["Write"] != api.ToolPolicyDeny || policies["Read"] != api.ToolPolicyAuto {
+			t.Fatalf("tool policies = %v, want Bash=allow Write=deny Read=auto", policies)
 		}
 		// auto is carried rather than dropped now that Tools is the policy map.
 		// It means the same thing either way — an absent tool inherits the posture
@@ -148,7 +148,7 @@ func TestTodoRunPayloadRoundTripsSpecAndSiblings(t *testing.T) {
 		Resume: true,
 		Force:  true,
 		Spec: api.Spec{
-			Model:  api.Model{Name: "claude", Mode: api.ModeCmux, Effort: "medium", Fallbacks: api.ModelList{{Name: "claude-sonnet-5"}}},
+			Model:  api.Model{Name: "claude", Mode: api.ModeCmux, Effort: "medium", Fallbacks: api.ModelList{api.Model{Name: "claude-sonnet-5"}.WithExplicit("/model")}},
 			Prompt: api.Prompt{User: "Implement the reviewed plan.", System: "Keep the patch narrow."},
 			Budget: api.Budget{Cost: 2.5, MaxTurns: 8, Timeout: "20m"},
 			Memory: api.Memory{Skills: []string{"gavel-todos"}},

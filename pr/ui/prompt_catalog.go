@@ -4,14 +4,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
 
 	"github.com/flanksource/captain/pkg/api"
-	"github.com/flanksource/captain/pkg/api/registry"
 	"github.com/flanksource/gavel/prompts"
 	promptregistry "github.com/flanksource/gavel/prompts/registry"
 	"github.com/flanksource/gavel/verify"
@@ -21,22 +19,24 @@ import (
 // document gavel would actually run for the requested scope, the runtime it
 // resolves to, and which config layer supplies each part of it.
 type promptCatalogEntry struct {
-	ID          string               `json:"id"`
-	Title       string               `json:"title"`
-	Description string               `json:"description,omitempty"`
-	ConfigPath  string               `json:"configPath"`
-	Owner       string               `json:"owner"`
-	UsedBy      []string             `json:"usedBy,omitempty"`
-	Source      string               `json:"source"` // builtin | inline | file
-	Path        string               `json:"path,omitempty"`
-	Raw         string               `json:"raw,omitempty"`
-	Version     string               `json:"version,omitempty"`
-	Body        string               `json:"body,omitempty"`
-	Variables   []string             `json:"variables,omitempty"`
-	ParseError  string               `json:"parseError,omitempty"`
-	Effective   promptCatalogRuntime `json:"effective"`
-	Provenance  map[string]string    `json:"provenance,omitempty"`
-	Layers      []promptCatalogLayer `json:"layers"`
+	ID              string                         `json:"id"`
+	Title           string                         `json:"title"`
+	Description     string                         `json:"description,omitempty"`
+	ConfigPath      string                         `json:"configPath"`
+	Owner           string                         `json:"owner"`
+	UsedBy          []string                       `json:"usedBy,omitempty"`
+	Source          string                         `json:"source"` // builtin | inline | file
+	Path            string                         `json:"path,omitempty"`
+	Raw             string                         `json:"raw,omitempty"`
+	Version         string                         `json:"version,omitempty"`
+	Body            string                         `json:"body,omitempty"`
+	Variables       []string                       `json:"variables,omitempty"`
+	ParseError      string                         `json:"parseError,omitempty"`
+	Effective       promptCatalogRuntime           `json:"effective"`
+	Provenance      map[string]string              `json:"provenance,omitempty"`
+	Layers          []promptCatalogLayer           `json:"layers"`
+	Spec            api.Spec                       `json:"spec"`
+	FieldProvenance map[string]api.FieldProvenance `json:"fieldProvenance,omitempty"`
 }
 
 // promptCatalogLayer is one .gavel.yaml in the scope's chain and what it says
@@ -98,18 +98,9 @@ func registeredPromptEntry(scope promptCatalogScope, desc prompts.Prompt) prompt
 			return *ov, true
 		}),
 	}
-	item, err := promptregistry.ResolveOne(scope.Trace, desc)
+	item, err := promptregistry.ResolveOne(promptregistry.ResolveOptions{Trace: scope.Trace, Preview: true}, desc)
 	if err != nil {
 		entry.ParseError = err.Error()
-		return entry
-	}
-	// The default document is what provenance attributes "prompt default" to. One
-	// that does not parse is a broken built-in, reported on the row like any
-	// other parse failure — a zero-valued spec here would misattribute every
-	// field to the base layer while the settings editor refuses the same text.
-	defaultSpec, _, _, err := promptregistry.ParsePromptSource(desc.Default)
-	if err != nil {
-		entry.ParseError = fmt.Sprintf("default prompt: %v", err)
 		return entry
 	}
 	entry.Source, entry.Path, entry.Raw, entry.Body = item.Source, item.Path, item.Raw, item.Body
@@ -124,8 +115,9 @@ func registeredPromptEntry(scope promptCatalogScope, desc prompts.Prompt) prompt
 	}
 	entry.Version = promptSourceVersion(entry.Raw)
 	entry.Variables = templateVariables(item.Body)
-	entry.Effective = catalogRuntime(item.EffectiveModel, item.ModelSource)
-	entry.Provenance = promptProvenance(entry.Layers, item.Source, item.Declared, defaultSpec, scope.Trace.Merged.AI, item.ModelSource)
+	entry.Spec, entry.FieldProvenance = item.Effective, item.Provenance
+	entry.Provenance = catalogProvenance(entry.Layers, item)
+	entry.Effective = catalogRuntime(item.Effective.Model, catalogModelSource(item.Provenance["/model"].Source))
 	return entry
 }
 
@@ -180,82 +172,47 @@ func promptSpecFields(ov verify.PromptSpec) []string {
 	return fields
 }
 
-// promptProvenance names where each part of the effective prompt comes from:
-// the highest layer that sets it, else the built-in default's frontmatter, else
-// the base ai: spec, else the runtime. A file override attributes the fields its
-// frontmatter declares to the layer that points at the file.
-func promptProvenance(
-	layers []promptCatalogLayer, source string, declared, defaultSpec, base api.Spec, modelSource string,
-) map[string]string {
-	fileLayer := lastLayerSetting(layers, "file")
-	fromLayers := func(fields ...string) (string, bool) {
-		if origin := lastLayerSetting(layers, fields...); origin != "" {
-			return origin, true
-		}
-		return "", false
-	}
-	prov := map[string]string{}
-	if origin, ok := fromLayers("file", "prompt.user"); ok {
-		prov["body"] = origin
-	} else {
-		prov["body"] = "prompt default"
-	}
-	attribute := func(key, field string, declaredSet, defaultSet, baseSet bool) {
-		switch origin, ok := fromLayers(field); {
-		case ok:
-			prov[key] = origin
-		case source == "file" && fileLayer != "" && declaredSet:
-			prov[key] = fileLayer
-		case defaultSet:
-			prov[key] = "prompt default"
-		case baseSet:
-			prov[key] = "ai base"
-		default:
-			prov[key] = "runtime"
-		}
-	}
-	attribute("model", "model", declared.Name != "", defaultSpec.Name != "", base.Name != "")
-	attribute("mode", "mode", declared.Mode != "", defaultSpec.Mode != "", base.Mode != "")
-	attribute("effort", "effort", declared.Effort != "", defaultSpec.Effort != "", base.Effort != "")
-	if modelSource == "runtime" && prov["model"] == "runtime" {
-		prov["model"] = modelSource
-	}
-	return prov
-}
-
-func lastLayerSetting(layers []promptCatalogLayer, fields ...string) string {
-	for i := len(layers) - 1; i >= 0; i-- {
-		for _, field := range fields {
-			for _, set := range layers[i].Fields {
-				if set == field {
-					return layers[i].Origin
-				}
-			}
-		}
-	}
-	return ""
-}
-
-// catalogRuntime expands a compact model selector (`agent:opus:medium`,
-// `claude`, a fallback list) into the plain name, mode, effort and fallback
-// chain the drivers see, so the table shows what will run — not the shorthand.
+// catalogRuntime projects the shared composition without resolving it again.
 func catalogRuntime(model api.Model, modelSource string) promptCatalogRuntime {
 	runtime := promptCatalogRuntime{
 		Model: model.Name, Mode: string(model.Mode), Effort: string(model.Effort), ModelSource: modelSource,
 	}
-	if model.Name == "" {
-		return runtime
-	}
-	expanded, err := registry.ResolveModel(model)
-	if err != nil {
-		runtime.Error = err.Error()
-		return runtime
-	}
-	runtime.Model, runtime.Mode, runtime.Effort = expanded.Name, string(expanded.Mode), string(expanded.Effort)
-	for _, fallback := range expanded.Fallbacks {
+	for _, fallback := range model.Fallbacks {
 		runtime.Fallbacks = append(runtime.Fallbacks, fallback.Name)
 	}
 	return runtime
+}
+
+func catalogProvenance(layers []promptCatalogLayer, item promptregistry.ResolvedPrompt) map[string]string {
+	provenance := map[string]string{}
+	for key, path := range map[string]string{"body": "/prompt/user", "model": "/model", "mode": "/mode", "effort": "/effort"} {
+		source := item.Provenance[path].Source
+		origin := catalogModelSource(source)
+		for _, layer := range layers {
+			if source.Name == layer.Path || source.LayerID == "file" && source.Name == layer.FilePath {
+				origin = layer.Origin
+			}
+		}
+		provenance[key] = origin
+	}
+	return provenance
+}
+
+func catalogModelSource(source api.FieldSource) string {
+	switch {
+	case source.Kind == "saved":
+		return "saved defaults"
+	case source.Kind == "catalog":
+		return "model catalog"
+	case strings.HasPrefix(source.Name, "built-in "):
+		return "prompt default"
+	case strings.HasPrefix(source.Key, "ai") || source.LayerID == "ai":
+		return "ai base"
+	case source.Kind == "layer":
+		return "operation"
+	default:
+		return "runtime"
+	}
 }
 
 var (

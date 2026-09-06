@@ -1,6 +1,5 @@
 import { useCallback, type ComponentType } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { ChatModel } from "@flanksource/clicky-ui/chat";
 import { effortOptionsForModel, promptRuntimeValueToPayload, reconcileModelCapabilities, type AISpecRuntimeValue, type RuntimeBarValue } from "@flanksource/clicky-ui/ai";
 import { UiListChecks, UiListDashes, UiPlay, type IconProps } from "@flanksource/clicky-ui/icons";
 import type { TodoRunDriver, TodoRunEffort, TodoRunOptions, TodoRunPreviewResponse, TodoRunResponse } from "../../types";
@@ -32,15 +31,7 @@ import { effectiveTodoRuntime, unresolvedTodoRuntimeProfile } from './runtimePro
 export type RunMode = "run" | "plan";
 export type TodoRunRuntimeMode = "cmux" | "agent" | "cli" | "api";
 
-// Runs auto-commit by default — the old commit=true default, now expressed as a
-// single commit policy on the spec's Workflow.Commits. `on: "run"` keeps the
-// dashboard's existing shape (one commit once the run finishes) rather than the
-// per-turn fixup chain, which stays opt-in while a todo run executes in the
-// user's live working tree. The advanced dialog's Commit section can turn it off;
-// a plan-only run never commits because the plan action omits this workflow.
-const AUTO_COMMIT: Pick<AISpecRuntimeValue, "workflow"> = { workflow: { commits: [{ on: "run", gates: "full" }] } };
-
-export const defaultRunOptions: TodoRunOptions = { step: "run", spec: { effort: "medium", ...AUTO_COMMIT } };
+export const defaultRunOptions: TodoRunOptions = { step: "run", spec: {} };
 
 export const runActionConfig: Record<TodoRunAction, { label: string; detail: string; icon: ComponentType<IconProps>; title: string }> = {
   run: { label: "Run", detail: "implement", icon: UiPlay, title: "Run todo" },
@@ -120,14 +111,6 @@ function modeById(context: RunContext, id: string | undefined, model?: string): 
   return context.modes.find(runtime => runtime.id === id && runtime.agent === agent && runtime.models.length > 0);
 }
 
-function primaryModeForAction(context: RunContext, action: string): RunModeCatalog {
-  const promptDefault = promptDefaultFor(context, action);
-  return modeById(context, promptDefault.mode, promptDefault.model)
-    ?? modeById(context, context.defaultMode)
-    ?? context.modes.find(runtime => runtime.models.length > 0)
-    ?? (() => { throw new Error("Captain returned no run models"); })();
-}
-
 function modeForOptions(context: RunContext, options: TodoRunOptions): RunModeCatalog {
   const spec = effectiveTodoRuntime(options, context);
   const requested = spec.mode || "";
@@ -155,14 +138,6 @@ function modelsForRunMode(runtime: RunModeCatalog): RunModeCatalog["models"] {
 }
 
 const ALL_EFFORTS: TodoRunEffort[] = ["low", "medium", "high", "xhigh", "max", "ultra"];
-
-function modelForRunMode(runtime: RunModeCatalog, modelID: string | undefined): ChatModel {
-  const model = modelsForRunMode(runtime).find(item => item.id === modelID)
-    ?? modelsForRunMode(runtime).find(item => item.id === runtime.defaultModel)
-    ?? modelsForRunMode(runtime)[0];
-  if (!model) throw new Error(runtime.modelError || `Captain returned no models for ${runtime.label}`);
-  return model;
-}
 
 function contextEfforts(context: RunContext): TodoRunEffort[] {
   return context.efforts.length > 0 ? context.efforts : ALL_EFFORTS;
@@ -208,21 +183,12 @@ function labelForRunModel(runtime: RunModeCatalog, modelID: string): string {
   return model?.label || modelID;
 }
 
-function runOptionsForModeModel(action: string, runtime: RunModeCatalog, modelID: string, effort: TodoRunEffort = "medium"): TodoRunOptions {
-  const spec = reconcileModelCapabilities({
-    mode: runtime.id,
-    model: modelID || runtime.defaultModel,
-    effort,
-    ...(action === "run" ? AUTO_COMMIT : {}),
-  } satisfies AISpecRuntimeValue, modelForRunMode(runtime, modelID), ALL_EFFORTS);
-  return normalizeRunOptions(action, { spec });
-}
-
 export function runButtonQualifierForOptions(options: TodoRunOptions, context: RunContext): string {
   const profile = unresolvedTodoRuntimeProfile(options, context);
   if (profile) return `(Profile: ${profile})`;
+  const model = effectiveTodoRuntime(options, context).model;
+  if (!model) return options.step === 'verify' ? '(Fixture)' : '(Choose model)';
   const runtime = modeForOptions(context, options);
-  const model = effectiveTodoRuntime(options, context).model || runtime.defaultModel;
   return `(${runtimeModeLabel(runtimeModeForCatalog(runtime))}:${shortTodoRunModelName(labelForRunModel(runtime, model))})`;
 }
 
@@ -232,6 +198,7 @@ export function runButtonQualifierForOptions(options: TodoRunOptions, context: R
 export function todoRunModeLabel(options: TodoRunOptions, context: RunContext): string {
   const profile = unresolvedTodoRuntimeProfile(options, context);
   if (profile) return `Profile: ${profile}`;
+  if (!effectiveTodoRuntime(options, context).model) return 'Not configured';
   return runtimeModeLabel(runtimeModeForCatalog(modeForOptions(context, options)));
 }
 
@@ -241,12 +208,13 @@ export function runButtonLabelForOptions(action: TodoRunAction, options: TodoRun
 
 export function todoRunButtonPresentation(options: TodoRunOptions, context: RunContext) {
   if (unresolvedTodoRuntimeProfile(options, context)) return { provider: undefined, model: 'Profile default', effort: undefined };
+  const modelID = effectiveTodoRuntime(options, context).model;
+  if (!modelID) return { provider: undefined, model: options.step === 'verify' ? 'Fixture' : 'Choose model', effort: undefined };
   const runtime = modeForOptions(context, options);
   const spec = runSpec(options);
-  const modelID = effectiveTodoRuntime(options, context).model || runtime.defaultModel;
-  const model = modelForRunMode(runtime, modelID);
+  const model = runtime.models.find(item => item.id === modelID);
   const provider = PROVIDERS.find(item => item.id === runtime.agent);
-  const supportedEfforts = effortOptionsForModel(model, contextEfforts(context));
+  const supportedEfforts = model ? effortOptionsForModel(model, contextEfforts(context)) : [];
   const effort = spec.effort && supportedEfforts.includes(spec.effort)
     ? spec.effort as TodoRunEffort
     : undefined;
@@ -259,12 +227,8 @@ export function todoRunButtonPresentation(options: TodoRunOptions, context: RunC
 }
 
 export function defaultRunOptionsForAction(action: string, context?: RunContext | null): TodoRunOptions {
-  if (context) {
-    const runtimeProfile = context.promptDefaults?.[action]?.runtimeProfile;
-    if (runtimeProfile) return { step: action, runtimeProfile, spec: {} };
-    const runtime = primaryModeForAction(context, action);
-    return runOptionsForModeModel(action, runtime, promptDefaultFor(context, action).model || runtime.defaultModel);
-  }
+  const runtimeProfile = context?.promptDefaults?.[action]?.runtimeProfile;
+  if (runtimeProfile) return { step: action, runtimeProfile, spec: {} };
   return normalizeRunOptions(action, defaultRunOptions);
 }
 
@@ -273,11 +237,11 @@ export function reconcileTodoRunOptions(action: string, options: TodoRunOptions,
   if (normalized.runtimeProfile || context.promptDefaults?.[action]?.runtimeProfile || !normalized.spec?.model) return normalized;
   const runtime = modeForOptions(context, normalized);
   const spec = runSpec(normalized);
-  const modelIsCurrent = !!spec.model && runtime.models.some(model => model.id === spec.model);
-  const model = modelIsCurrent ? spec.model! : runtime.defaultModel;
+  const model = runtime.models.find(model => model.id === spec.model);
+  if (!model) return normalized;
   return normalizeRunOptions(action, {
     ...normalized,
-    spec: reconcileModelCapabilities({ ...spec, mode: runtime.id, model }, modelForRunMode(runtime, model), contextEfforts(context)),
+    spec: reconcileModelCapabilities(spec, model, contextEfforts(context)),
   });
 }
 
@@ -414,10 +378,11 @@ export function runChoiceDetail(options: TodoRunOptions, fallback: string, conte
   if (!context) return fallback;
   const profile = unresolvedTodoRuntimeProfile(options, context);
   if (profile) return `Profile: ${profile}`;
+  const modelID = effectiveTodoRuntime(options, context).model;
+  if (!modelID) return options.step === 'verify' ? 'Fixture' : 'Choose model';
   const runtime = modeForOptions(context, options);
   const spec = runSpec(options);
   const mode = runtimeModeLabel(runtimeModeForCatalog(runtime));
-  const modelID = spec.model || runtime.defaultModel;
   const model = shortTodoRunModelName(labelForRunModel(runtime, modelID));
   const effort = spec.effort ? ` · ${spec.effort}` : "";
   return `${mode} · ${model}${effort}`;

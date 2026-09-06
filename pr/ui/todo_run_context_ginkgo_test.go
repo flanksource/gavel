@@ -19,6 +19,7 @@ var _ = Describe("todo run context catalog", func() {
 	var previous func(captaincli.WhoamiOptions) (any, error)
 
 	BeforeEach(func() {
+		GinkgoT().Setenv("HOME", GinkgoT().TempDir())
 		previous = runCaptainWhoami
 	})
 
@@ -38,7 +39,7 @@ var _ = Describe("todo run context catalog", func() {
 		Expect(recorder.Body.String()).To(ContainSubstring("load run providers from Captain: captain catalog unavailable"))
 	})
 
-	It("projects only Captain adapters and uses Captain provider defaults", func() {
+	It("projects Captain adapters without making their display defaults executable", func() {
 		runCaptainWhoami = func(captaincli.WhoamiOptions) (any, error) {
 			return captaincli.WhoamiResult{
 				Adapters: []captaincli.AdapterStatus{{
@@ -59,15 +60,15 @@ var _ = Describe("todo run context catalog", func() {
 			}, nil
 		}
 
-		context, err := todoRunContext(context.Background(), "")
+		context, err := todoRunContext(context.Background(), GinkgoT().TempDir())
 
 		Expect(err).NotTo(HaveOccurred())
-		Expect(context.DefaultMode).To(Equal("agent"))
-		Expect(context.DefaultProvider).To(Equal("openai"))
+		Expect(context.DefaultMode).To(BeEmpty())
+		Expect(context.DefaultProvider).To(Equal("anthropic"))
 		Expect(context.Modes).To(HaveLen(1))
 		Expect(context.Modes[0].ID).To(Equal("agent"))
 		Expect(context.Modes[0].Driver).To(Equal("agent"))
-		Expect(context.Modes[0].DefaultModel).To(Equal("gpt-captain-default"))
+		Expect(context.Modes[0].DefaultModel).To(BeEmpty())
 		Expect(context.Modes[0].Models).To(HaveExactElements(
 			HaveField("ID", "gpt-captain-default"),
 			HaveField("ID", "gpt-captain-other"),
@@ -79,7 +80,7 @@ var _ = Describe("todo run context catalog", func() {
 		))
 	})
 
-	It("prefers the agent mode when Captain defaults the provider to CLI", func() {
+	It("uses the shared step mode instead of Captain's CLI display default", func() {
 		runCaptainWhoami = func(captaincli.WhoamiOptions) (any, error) {
 			return captaincli.WhoamiResult{
 				Adapters: []captaincli.AdapterStatus{
@@ -93,10 +94,10 @@ var _ = Describe("todo run context catalog", func() {
 			}, nil
 		}
 
-		context, err := todoRunContext(context.Background(), "")
+		context, err := todoRunContext(context.Background(), GinkgoT().TempDir())
 
 		Expect(err).NotTo(HaveOccurred())
-		Expect(context.DefaultMode).To(Equal("agent"))
+		Expect(context.DefaultMode).To(BeEmpty())
 		Expect(context.DefaultProvider).To(Equal("anthropic"))
 	})
 
@@ -112,7 +113,7 @@ var _ = Describe("todo run context catalog", func() {
 			}, nil
 		}
 
-		context, err := todoRunContext(context.Background(), "")
+		context, err := todoRunContext(context.Background(), GinkgoT().TempDir())
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(context.Modes).To(HaveLen(1))

@@ -1,8 +1,8 @@
 import { providerIcon, type ChatModel, type ToolMeta } from '@flanksource/clicky-ui/chat';
 import type { StaticIconComponent } from '@flanksource/clicky-ui/data';
-import { familiesFromRuntimeCatalog, type RuntimeCatalogFamily, type SpecRuntimeFamily } from '@flanksource/clicky-ui/ai';
+import { familiesFromRuntimeCatalog, type AISpecRuntimeValue, type RuntimeCatalogFamily, type SpecRuntimeFamily } from '@flanksource/clicky-ui/ai';
 import { UiRobotAi, UiSparkles } from '@flanksource/clicky-ui/icons';
-import type { TodoRunAgent, TodoRunDriver, TodoRunEffort } from '../../types';
+import type { TodoRunAgent, TodoRunDriver, TodoRunEffort, TodoRunProvenance } from '../../types';
 
 // Captain's run context owns every selectable runtime and model. This module
 // only supplies presentation metadata and projects the returned catalog into
@@ -70,12 +70,15 @@ export interface RunContext {
   efforts: TodoRunEffort[];
   defaultMode?: string;
   defaultProvider?: string;
-  // promptDefaults is the (mode, model) each lifecycle step resolves to,
-  // keyed by step name — the server running todos/spec.Resolve, the same
-  // resolution the run performs. Seeding a step's dialog from defaultMode
-  // instead sends an account-wide default as if the operator had chosen it,
-  // which outranks the frontmatter that step's prompt pins.
-  promptDefaults?: Record<string, { mode?: string; model?: string; runtimeProfile?: string }>;
+  // Display defaults from the shared lifecycle snapshot. Requests stay sparse.
+  promptDefaults?: Record<string, {
+    mode?: string;
+    model?: string;
+    runtimeProfile?: string;
+    spec?: AISpecRuntimeValue;
+    provenance?: TodoRunProvenance;
+    warnings?: string[];
+  }>;
   runtimeProfiles?: Array<{
     id: string;
     name: string;
@@ -158,14 +161,9 @@ export function agentForRuntime(context: RunContext, mode: string | undefined, m
     ?? (() => { throw new Error('Captain returned no run providers'); })();
 }
 
-// modelsForSelection/defaultModelForSelection return the model list and
-// sentinel default model for whichever runtime `mode` currently selects.
+// modelsForSelection returns the model catalog for the selected runtime.
 export function modelsForSelection(context: RunContext, agent: RunProvider, mode: string | undefined): ChatModel[] {
   return modeCatalog(context, mode ?? '', agent).models;
-}
-
-export function defaultModelForSelection(context: RunContext, agent: RunProvider, mode: string | undefined): string {
-  return modeCatalog(context, mode ?? '', agent).defaultModel;
 }
 
 // driverForSelection returns the canonical mechanism unchanged on both fields.

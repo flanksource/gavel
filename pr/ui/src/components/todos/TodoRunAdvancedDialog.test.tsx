@@ -9,6 +9,7 @@ import { requestStepFor } from './runChoiceStorage';
 import type { RunContext } from './providers';
 const preview = vi.hoisted(() => vi.fn());
 const recentOptions = vi.hoisted(() => vi.fn((): TodoRunOptions[] => []));
+const initialOptions = vi.hoisted(() => vi.fn((): TodoRunOptions => ({ spec: {} })));
 
 // The run dialog's step picker now lists whatever the project's lifecycle
 // declares — including a custom, non-built-in step — rather than a hardcoded
@@ -57,7 +58,7 @@ vi.mock('./run', async importOriginal => ({
   ...(await importOriginal<typeof import('./run')>()),
   useTodoRunContext: () => ({ context: FIXTURE_CONTEXT, loading: false, error: '' }),
   useTodoRunPreview: () => ({ isPending: false, mutate: preview }),
-  loadLastTodoRunOptions: () => ({ spec: { mode: 'agent', model: 'claude-opus-4-8', effort: 'medium' } }),
+  loadLastTodoRunOptions: initialOptions,
   loadRecentAdvancedTodoRunOptions: recentOptions,
   reconcileTodoRunOptions: (_action: string, options: TodoRunOptions) => options,
 }));
@@ -125,6 +126,7 @@ vi.mock('@flanksource/clicky-ui/ai', async importOriginal => ({
 beforeEach(() => {
   preview.mockReset();
   recentOptions.mockReturnValue([]);
+  initialOptions.mockReturnValue({ spec: {} });
 });
 
 afterEach(() => {
@@ -213,6 +215,13 @@ describe('TodoRunAdvancedDialog step picker', () => {
 });
 
 describe('TodoRunAdvancedDialog runtime profile', () => {
+  it('previews and submits a sparse step without promoting catalog metadata into a model override', () => {
+    const { onRun } = setup({ initialMode: 'plan' });
+    fireEvent.click(footer().getByRole('button', { name: 'Plan' }));
+    expect(JSON.parse(JSON.stringify(preview.mock.lastCall?.[0].body))).toEqual({ ref: 'todo-1', step: 'plan', spec: {} });
+    expect(JSON.parse(JSON.stringify(onRun.mock.lastCall?.[0]))).toEqual({ step: 'plan', spec: {} });
+  });
+
   it('shows preflight warnings, replaces them on preview changes and clears them on success or error', () => {
     const consoleError = vi.spyOn(console, 'error');
     preview.mockImplementation(({ body }, callbacks) => callbacks.onSuccess({

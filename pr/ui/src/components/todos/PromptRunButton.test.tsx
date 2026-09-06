@@ -43,9 +43,9 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('prompt lifecycle options', () => {
-  it('seeds verification from the verify prompt default', () => {
+  it('leaves verification sparse so the shared resolver applies its prompt default', () => {
     expect(loadPromptRunOptions('verification', context)).toMatchObject({
-      step: 'verify', spec: { mode: 'agent', model: 'example-verify-model' },
+      step: 'verify', spec: {},
     });
   });
 
@@ -73,11 +73,11 @@ describe('prompt lifecycle options', () => {
   it.each([
     { scope: 'approval' as const, step: 'run', model: 'example-run-model' },
     { scope: 'verification' as const, step: 'verify', model: 'example-verify-model' },
-  ])('selects a profile for $scope without sending seeded runtime overrides', ({ scope, step, model }) => {
+  ])('preserves explicit runtime overrides when selecting a profile for $scope', ({ scope, step, model }) => {
     const onRun = vi.fn();
     render(<PromptRunAdvancedDialog dir="/repo" scope={scope} open initial={{ step, spec: { mode: 'agent', model, effort: 'medium' } }} onClose={() => {}} onRun={onRun} />);
     fireEvent.click(screen.getByRole('button', { name: 'Review profile' }));
     fireEvent.click(screen.getByRole('button', { name: 'Save runtime' }));
-    expect(JSON.parse(JSON.stringify(onRun.mock.lastCall?.[0]))).toEqual({ step, runtimeProfile: 'review-profile', spec: {} });
+    expect(JSON.parse(JSON.stringify(onRun.mock.lastCall?.[0]))).toEqual({ step, runtimeProfile: 'review-profile', spec: { mode: 'agent', model, effort: 'medium' } });
   });
 });

@@ -230,6 +230,7 @@ describe('todo run runtime adapter', () => {
         budget: { timeout: '45m', maxTurns: 12 },
         setup: { cwd: '/workspace' },
         permissions: { mode: 'dontAsk' as const },
+        workflow: { commits: [{ on: 'run' as const, gates: 'full' as const }] },
         prompt: { appendSystem: 'Keep the adapter seam.' },
         temperature: 0.7,
       },
@@ -271,7 +272,7 @@ describe('todo run runtime adapter', () => {
   // promptDefaults is keyed by lifecycle step name (run/plan/triage/...), the
   // same identifier a request's `step` field carries — not by a separate
   // "prompt name" axis.
-  it('seeds a prompt from its own resolved runtime, not the account default', () => {
+  it('displays a prompt runtime while leaving the request sparse', () => {
     const withPromptDefaults: RunContext = {
       ...context,
       promptDefaults: {
@@ -279,14 +280,10 @@ describe('todo run runtime adapter', () => {
       },
     };
 
-    expect(runSpec(defaultRunOptionsForAction('triage', withPromptDefaults))).toMatchObject({
-      mode: 'agent',
-      model: 'claude-opus-4-8',
-    });
-    // An action the server reported no default for still falls back to it.
-    expect(runSpec(defaultRunOptionsForAction('run', withPromptDefaults))).toMatchObject({
-      mode: 'cmux',
-    });
+    const options = defaultRunOptionsForAction('triage', withPromptDefaults);
+    expect(runSpec(options)).toEqual({});
+    expect(runButtonLabelForOptions('triage', options, withPromptDefaults)).toBe('Triage (Agent:opus-4.8)');
+    expect(runSpec(defaultRunOptionsForAction('run', withPromptDefaults))).toEqual({});
   });
 
   it("keeps a remembered mode that disagrees with the prompt default", () => {
@@ -363,7 +360,7 @@ describe('todo run runtime adapter', () => {
     expect(openAI.provider?.iconColor).toBe('#10A37F');
   });
 
-	it("reconciles stale remembered runtime models while preserving advanced options", () => {
+	it("preserves stale model identity while reconciling capabilities of known models", () => {
 		expect(reconcileTodoRunOptions('run', {
 			driver: 'cmux',
 			runMode: 'run',
@@ -377,7 +374,7 @@ describe('todo run runtime adapter', () => {
 			step: 'run',
 			spec: {
 				mode: 'cmux',
-				model: 'gpt-5.5',
+				model: 'gpt-5.3-removed',
 				effort: 'high',
 				budget: { timeout: '45m', maxTurns: 12 },
 			},

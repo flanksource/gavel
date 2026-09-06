@@ -94,7 +94,7 @@ describe('TodoRunActionButton', () => {
     expect(onRun).toHaveBeenCalledWith(options);
   });
 
-  it('dispatches the current options when the primary button is pressed', () => {
+  it('dispatches a sparse request when the operator has not changed the runtime', () => {
     const onRun = vi.fn();
     render(<TodoRunActionButton dir="/repo" action="run" onRun={onRun} onAdvanced={vi.fn()} />);
 
@@ -102,7 +102,7 @@ describe('TodoRunActionButton', () => {
 
     expect(onRun).toHaveBeenCalledWith(expect.objectContaining({
       step: 'run',
-      spec: expect.objectContaining({ mode: 'agent', model: 'claude-opus-4-8' }),
+      spec: {},
     }) as TodoRunOptions);
   });
 

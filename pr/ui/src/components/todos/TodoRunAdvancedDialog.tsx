@@ -19,9 +19,7 @@ import {
   useTodoRunPreview,
 } from "./run";
 import {
-  agentForRuntime,
   buildRunFamilies,
-  defaultModelForSelection,
   isCmuxMode,
   type RunContext,
 } from "./providers";
@@ -31,7 +29,7 @@ import { TodoRunWarnings } from './TodoRunWarnings';
 
 const RUN_SPEC_SECTIONS = ["model", "prompt", "permissions", "workspace", "verify", "commit"] as const;
 const VERIFY_SPEC_SECTIONS = ["model", "permissions", "verify"] as const;
-const INITIAL_RUNTIME_VALUE: AISpecRuntimeValue = { effort: "medium" };
+const INITIAL_RUNTIME_VALUE: AISpecRuntimeValue = {};
 const MdxEditorField = lazy(() => import("@flanksource/clicky-ui/mdx-editor").then((module) => ({ default: module.MdxEditorField })));
 
 function seedRequestForStep(step: string, context: RunContext): AIPromptRunValue {
@@ -93,12 +91,10 @@ export function TodoRunAdvancedDialog({
   const selectedStep = steps.find((item) => item.name === step);
   const submitLabel = selectedStep?.label ?? step;
   const families = context ? buildRunFamilies(context) : [];
-  const agent = context ? agentForRuntime(context, runtimeValue.mode, runtimeValue.model) : undefined;
   const runtimeKey = JSON.stringify({ dir, refID, step, runtimeProfile: runRequest.runtimeProfile, spec: runtimeValue });
   const resolvedRuntime = previewRuntime?.key === runtimeKey ? previewRuntime : undefined;
   const isCmux = isCmuxMode(resolvedRuntime?.mode ?? runtimeValue.mode);
   const activeModels = context?.models ?? [];
-  const modelFallback = context && agent ? defaultModelForSelection(context, agent, runtimeValue.mode) : "";
   const recentAdvanced = context && step !== "verify" ? loadRecentAdvancedTodoRunOptions(step, context) : [];
 
   function changeStep(next: string) {
@@ -138,12 +134,9 @@ export function TodoRunAdvancedDialog({
     setRunRequest(seedRequestForStep(resolved, context));
   }, [open, initialMode, nextStep, context]);
 
-  const previewModel = runtimeValue.model?.trim() || modelFallback;
-
   function buildRequestPayload(): TodoRunRequestPayload {
     const runtimeProfile = runRequest.runtimeProfile;
-    const inheritedProfile = runtimeProfile ?? context?.promptDefaults?.[step]?.runtimeProfile;
-    const { spec } = promptRuntimeValueToPayload(inheritedProfile ? runtimeValue : { ...runtimeValue, model: previewModel });
+    const { spec } = promptRuntimeValueToPayload(runtimeValue);
     if (step === "verify") return { ref: refID, step, runtimeProfile, spec: verificationSpec(spec) };
     const prompt = promptDirty ? { ...spec.prompt, user: promptDraft } : spec.prompt;
     return { ref: refID, step, runtimeProfile, spec: { ...spec, prompt }, resume: (isCmux && resume) || undefined };
@@ -180,7 +173,7 @@ export function TodoRunAdvancedDialog({
       controller.abort();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, context, contextError, refID, step, previewModel, runtimeValue, runRequest.runtimeProfile, resume, isCmux, promptDraft, promptDirty, regenNonce, previewMutation.mutate]);
+  }, [open, context, contextError, refID, step, runtimeValue, runRequest.runtimeProfile, resume, isCmux, promptDraft, promptDirty, regenNonce, previewMutation.mutate]);
 
   if (!open) return null;
 
