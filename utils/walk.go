@@ -17,14 +17,34 @@ import (
 
 type walkStopFn func(root, path string, d fs.DirEntry) (bool, error)
 
+// gitDirName is the only component FindGitRoot ever appends to the directory it
+// was handed. The walk is upward-only and the appended element is this
+// constant, so the caller's directory bounds the search: there is no base
+// directory a probe could escape, and nothing the caller supplies selects a
+// file name.
+const gitDirName = ".git"
+
+// FindGitRoot walks up from dir and returns the first ancestor (dir included)
+// that holds a `.git` entry, or "" when dir is not inside a working tree.
+//
+// dir is resolved to a cleaned absolute path first, so any `..` segment is
+// normalised away before the first probe and every directory examined is an
+// ancestor of that resolved path.
 func FindGitRoot(dir string) string {
-	dir, _ = filepath.Abs(dir)
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		// Abs only fails when the process working directory is unreadable, in
+		// which case a relative dir names nothing. Probing the unresolved value
+		// would walk an unrelated tree, so report "no working tree" instead.
+		return ""
+	}
+	dir = filepath.Clean(abs)
 	for {
 		// A worktree root has `.git` as a directory (normal clone) OR as a file
 		// (linked worktree / submodule — the file holds a `gitdir:` pointer).
 		// Requiring a directory silently disabled gitignore filtering in
 		// worktrees, so accept either.
-		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+		if _, err := os.Stat(filepath.Join(dir, gitDirName)); err == nil {
 			return dir
 		}
 		parent := filepath.Dir(dir)

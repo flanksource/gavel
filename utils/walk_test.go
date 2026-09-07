@@ -318,6 +318,20 @@ var _ = Describe("FindGitRoot", func() {
 	It("returns empty when no .git is present", func() {
 		Expect(FindGitRoot(root)).To(BeEmpty())
 	})
+
+	It("resolves a `..` segment before probing, so the result stays an ancestor of the cleaned input", func() {
+		// The walk only ever appends the literal ".git" and only ever moves
+		// upward, so a traversal segment cannot make it probe a sibling tree: it
+		// is normalised away first and the answer is the same root the cleaned
+		// path resolves to.
+		Expect(os.MkdirAll(filepath.Join(root, ".git"), 0o755)).To(Succeed())
+		Expect(os.MkdirAll(filepath.Join(root, "pkg", "api"), 0o755)).To(Succeed())
+
+		traversing := filepath.Join(root, "pkg", "api", "..", "..", "pkg")
+
+		Expect(FindGitRoot(traversing)).To(Equal(root))
+		Expect(IsWithin(filepath.Clean(traversing), FindGitRoot(traversing))).To(BeTrue())
+	})
 })
 
 var _ = Describe("GitRoot", func() {
