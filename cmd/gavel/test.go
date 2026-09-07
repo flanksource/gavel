@@ -879,11 +879,11 @@ func bindTestCommandFlags(cmd *cobra.Command, flags *testCommandFlags) {
 		"With --ui --detach, hard wall-clock deadline for the detached UI server (default 30m when --detach is set).")
 	cmd.Flags().DurationVar(&flags.IdleTimeout, "idle-timeout", 0,
 		"With --ui --detach, exit the detached UI server after this long with no HTTP requests (default 5m when --detach is set).")
-	cmd.Flags().DurationVar(&flags.Timeout, "timeout", 10*time.Minute,
+	cmd.Flags().DurationVar(&flags.Timeout, "timeout", 20*time.Minute,
 		"Global wall-clock deadline for the entire test+lint run. On timeout, diagnostics are captured and every subprocess is killed.")
-	cmd.Flags().DurationVar(&flags.LintTimeout, "lint-timeout", 5*time.Minute,
+	cmd.Flags().DurationVar(&flags.LintTimeout, "lint-timeout", 10*time.Minute,
 		"Per-linter subprocess deadline when --lint is set. Applies to each linter invocation.")
-	cmd.Flags().DurationVar(&flags.TestTimeout, "test-timeout", 5*time.Minute,
+	cmd.Flags().DurationVar(&flags.TestTimeout, "test-timeout", 10*time.Minute,
 		"Per-test-package subprocess deadline. Applies to each go test / ginkgo / vitest invocation.")
 	if failed := cmd.Flags().Lookup("failed"); failed != nil {
 		failed.NoOptDefVal = failedAutoSentinel
