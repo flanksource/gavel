@@ -5,9 +5,7 @@ import type { ReactNode } from 'react';
 // of it behind a back arrow. It layers the two rather than swapping them,
 // because the list's scroll offset lives in the DOM node and dies with it —
 // unmounting the list to show a detail meant Back landed at the top of the list
-// however far down the reader had been. The table pays that twice: DataTable's
-// clientReveal window is component state, so a remount also threw away every
-// row past the first batch.
+// however far down the reader had been.
 //
 // `invisible` rather than `hidden`: display:none destroys the layout box, and
 // the scroll offset goes with it when the box is rebuilt — the very thing this

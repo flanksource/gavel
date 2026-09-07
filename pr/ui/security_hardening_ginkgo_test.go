@@ -101,6 +101,15 @@ var _ = Describe("pr/ui security hardening", func() {
 	})
 
 	Describe("prompt override file writes", func() {
+		// The config layer sits one level below the spec's temp root so a `..`
+		// escape lands somewhere the spec fully owns and can assert on.
+		newConfigDir := func() (base, dir string) {
+			base = GinkgoT().TempDir()
+			dir = filepath.Join(base, "workspace")
+			Expect(os.MkdirAll(dir, 0o755)).To(Succeed())
+			return base, dir
+		}
+
 		escapes := []string{
 			"../escaped.prompt",
 			"nested/../../escaped.prompt",
@@ -109,8 +118,8 @@ var _ = Describe("pr/ui security hardening", func() {
 
 		for _, path := range escapes {
 			It("rejects the traversing path "+path, func() {
-				dir := GinkgoT().TempDir()
-				outside := filepath.Join(filepath.Dir(dir), "escaped.prompt")
+				base, dir := newConfigDir()
+				outside := filepath.Join(base, "escaped.prompt")
 
 				cfg := verify.GavelConfig{}
 				err := persistPromptOverride(&cfg, &verify.PromptSpec{}, promptWrite{
@@ -125,8 +134,8 @@ var _ = Describe("pr/ui security hardening", func() {
 		}
 
 		It("rejects an absolute path", func() {
-			dir := GinkgoT().TempDir()
-			target := filepath.Join(GinkgoT().TempDir(), "abs.prompt")
+			base, dir := newConfigDir()
+			target := filepath.Join(base, "abs.prompt")
 
 			cfg := verify.GavelConfig{}
 			err := persistPromptOverride(&cfg, &verify.PromptSpec{}, promptWrite{
@@ -140,7 +149,7 @@ var _ = Describe("pr/ui security hardening", func() {
 		})
 
 		It("writes a contained relative path", func() {
-			dir := GinkgoT().TempDir()
+			_, dir := newConfigDir()
 			Expect(os.MkdirAll(filepath.Join(dir, "prompts"), 0o755)).To(Succeed())
 
 			cfg := verify.GavelConfig{}

@@ -1,8 +1,11 @@
 package ui
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"html"
+	"html/template"
 	"io/fs"
 	"net/http"
 	"sort"
@@ -684,43 +687,6 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request, req routeR
 	writeExportResponse(w, r, report, req.Format)
 }
 
-func pageHTML() string {
-	return `<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>gavel · PR Dashboard</title>
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-    <link rel="apple-touch-icon" href="/brand/apple-touch-icon.png">
-    <link rel="manifest" href="/manifest.webmanifest">
-    <meta name="theme-color" content="#3578e5">
-    <meta name="mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="default">
-    <meta name="apple-mobile-web-app-title" content="gavel">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;500;600;700&family=Fira+Code:wght@400;500;600&display=swap" rel="stylesheet">
-    <style>` + bundleCSS + `</style>
-    <style>
-        @keyframes gavel-progress-slide {
-            0%   { left: -35%; }
-            100% { left: 100%; }
-        }
-        .gavel-progress-bar {
-            animation: gavel-progress-slide 1.1s ease-in-out infinite;
-        }
-    </style>
-</head>
-<body class="bg-background text-foreground">
-    <div id="root"></div>
-    <script>` + buildGlobalJS() + `</script>
-    <script type="module" src="/_assets/prui.js"></script>
-</body>
-</html>`
-}
-
 // snapshotLocked builds a snapshot using the already-held RLock. It does
 // NOT compute the unread map — that requires a database round-trip and is
 // populated by withUnread() outside the lock.
@@ -884,6 +850,16 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 
+	// last is the most recently pushed payload. The 2s ticker below is a
+	// liveness cadence, not a change signal: the PR snapshot only moves when the
+	// poller refetches (every interval, minutes apart), so re-marshalling and
+	// re-sending it every tick would push the full snapshot — tens to hundreds of
+	// KB — forever at 0.5Hz. Every one of those frames mints a fresh object on
+	// the client, re-rendering the whole app even on routes that show no PR data.
+	// Compare against the previous payload and send a comment frame instead when
+	// nothing changed, matching handleProcStatusStream.
+	var last []byte
+
 	s.mu.RLock()
 	initial := s.snapshotLocked()
 	s.mu.RUnlock()
@@ -891,6 +867,7 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 	initial = s.withSyncStatus(initial)
 	if b, err := json.Marshal(initial); err == nil {
 		fmt.Fprintf(w, "data: %s\n\n", b)
+		last = b
 		flusher.Flush()
 	}
 
@@ -911,8 +888,13 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 		data = s.withUnread(data)
 		data = s.withSyncStatus(data)
 
-		b, _ := json.Marshal(data)
-		fmt.Fprintf(w, "data: %s\n\n", b)
+		if b, err := json.Marshal(data); err == nil && !bytes.Equal(b, last) {
+			fmt.Fprintf(w, "data: %s\n\n", b)
+			last = b
+		} else {
+			// Comment frame: keeps the socket warm without firing a client re-render.
+			fmt.Fprint(w, ": ping\n\n")
+		}
 		flusher.Flush()
 	}
 }

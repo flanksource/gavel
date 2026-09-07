@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -135,17 +136,21 @@ func (s *Server) handleTestRun(w http.ResponseWriter, r *http.Request) {
 
 	path, err := resolveRunPath(workDir, runID)
 	if err != nil {
-		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if path == "" {
-		http.Error(w, `{"error":"run not found"}`, http.StatusNotFound)
+		respondError(w, http.StatusNotFound, "run not found")
 		return
 	}
-	data, err := os.ReadFile(path)
+	data, err := readRunSnapshot(workDir, path)
 	if err != nil {
+		if errors.Is(err, errRunPathEscapes) {
+			respondError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		logger.Warnf("read test run %s: %v", path, err)
-		http.Error(w, `{"error":"failed to read run"}`, http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "failed to read run")
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -323,6 +328,41 @@ func resolveRunPath(dir, runID string) (string, error) {
 		return "", nil
 	}
 	return path, nil
+}
+
+// errRunPathEscapes marks a snapshot path that does not resolve inside the
+// workspace's .gavel directory, so the handler can answer 400 (the request named
+// a path it may not read) rather than 500.
+var errRunPathEscapes = errors.New("run snapshot escapes the workspace")
+
+// readRunSnapshot reads a resolved snapshot, re-checking containment at the point
+// of use. Both halves of the path are request-supplied — `dir`/`project` picks the
+// workspace and `runId` the file — so the read is confined to <dir>/.gavel: the
+// path must resolve to a local path under that directory, and os.Root performs
+// the open so a symlink planted inside .gavel cannot redirect it either.
+func readRunSnapshot(dir, path string) ([]byte, error) {
+	gavelDir, err := filepath.Abs(filepath.Join(dir, snapshots.Dir))
+	if err != nil {
+		return nil, fmt.Errorf("resolve snapshot directory for %q: %w", dir, err)
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("resolve snapshot path %q: %w", path, err)
+	}
+	rel, err := filepath.Rel(gavelDir, abs)
+	if err != nil || !filepath.IsLocal(rel) {
+		return nil, fmt.Errorf("%w: %q is not inside %s", errRunPathEscapes, path, gavelDir)
+	}
+	root, err := os.OpenRoot(gavelDir)
+	if err != nil {
+		return nil, fmt.Errorf("open snapshot directory %s: %w", gavelDir, err)
+	}
+	defer func() { _ = root.Close() }()
+	data, err := root.ReadFile(rel)
+	if err != nil {
+		return nil, fmt.Errorf("read run snapshot %q under %s: %w", rel, gavelDir, err)
+	}
+	return data, nil
 }
 
 func viewFromInfo(run snapshots.RunInfo) testRunView {

@@ -1,16 +1,16 @@
-import { useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { Button, ListMenuHeader, ListMenuSection } from '@flanksource/clicky-ui/components';
 import type { TodoDensity } from '../../types';
 import { UiChevronDown, UiChevronRight } from '@flanksource/clicky-ui/icons';
 import { MetaDueDate, SeverityHigh, SeverityLow, SeverityMedium } from '../../icons/issues';
-import { countsFromItems, TodoCountsBar, TodoRow } from './format';
+import { countsFromItems, TodoCountsBar, TodoRow, type TodoRowTarget } from './format';
 import type { TagIndex } from './tagResolve';
 import { defaultTodoFilters, isEntryVisible, type TodoFilters } from './todoFilter';
 import { GroupSelectAll } from './TodoGroupSelectAll';
 import type { TodoSelection } from './todoSelection';
 import type { ResolvedRange } from './todoTimeRange';
 import type { SelectedTodo } from './useWorkspaceTodos';
-import type { TodoBucket, TodoEntry } from './todoGroup';
+import type { TodoBucket } from './todoGroup';
 
 function BucketIcon({ bucket }: { bucket: TodoBucket }) {
   const Icon = bucket.key === 'high'
@@ -31,7 +31,10 @@ function BucketIcon({ bucket }: { bucket: TodoBucket }) {
 export function TodoBucketGroup({ bucket, selected, onSelect, filters, range, density = 'comfortable', selection, tagsByDir }: {
   bucket: TodoBucket;
   selected: SelectedTodo | null;
-  onSelect: (entry: TodoEntry) => void;
+  // The row's identity, not the entry: a bucket row already carries its own
+  // workspace dir, so callers pass their stable `select` straight through
+  // instead of minting a closure per row.
+  onSelect: (target: TodoRowTarget) => void;
   filters?: TodoFilters;
   range?: ResolvedRange | null;
   density?: TodoDensity;
@@ -40,13 +43,28 @@ export function TodoBucketGroup({ bucket, selected, onSelect, filters, range, de
 }) {
   const [open, setOpen] = useState(true);
   const active = filters ?? defaultTodoFilters();
-  const visible = bucket.entries.filter(e => isEntryVisible(e, active, range));
+  // Memoised for the same reason as WorkspaceTodoGroup: filtering allocates a
+  // new array, and doing it on every render changed `visible` identity and
+  // re-rendered every row underneath.
+  const visible = useMemo(
+    () => bucket.entries.filter(e => isEntryVisible(e, active, range)),
+    [bucket.entries, active, range],
+  );
   const hiddenCount = bucket.entries.length - visible.length;
-  const counts = countsFromItems(bucket.entries.map(e => e.todo));
+  const counts = useMemo(() => countsFromItems(bucket.entries.map(e => e.todo)), [bucket.entries]);
   const ChevronIcon = open ? UiChevronDown : UiChevronRight;
 
   // A bucket spans workspaces, so each target carries its own row's dir.
-  const bulkTargets = visible.map(entry => ({ dir: entry.workspace.dir, ref: entry.todo.ref }));
+  const bulkTargets = useMemo(
+    () => visible.map(entry => ({ dir: entry.workspace.dir, ref: entry.todo.ref })),
+    [visible],
+  );
+
+  const toggleSelected = selection?.toggleSelected;
+  const handleToggleSelect = useCallback(
+    (target: TodoRowTarget) => toggleSelected?.(target),
+    [toggleSelected],
+  );
 
   return (
     <ListMenuSection>
@@ -66,27 +84,28 @@ export function TodoBucketGroup({ bucket, selected, onSelect, filters, range, de
         </Button>
         <TodoCountsBar counts={counts} />
       </ListMenuHeader>
-      {open && (visible.length > 0 ? (
-        visible.map(entry => (
-          <TodoRow
-            key={`${entry.workspace.dir}\t${entry.todo.ref}`}
-            todo={entry.todo}
-            active={selected?.dir === entry.workspace.dir && selected?.ref === entry.todo.ref}
-            onClick={() => onSelect(entry)}
-            density={density}
-            workspace={entry.workspace.name}
-            dir={entry.workspace.dir}
-            selectable={Boolean(selection)}
-            selected={selection?.isSelected({ dir: entry.workspace.dir, ref: entry.todo.ref })}
-            onToggleSelect={() => selection?.toggleSelected({ dir: entry.workspace.dir, ref: entry.todo.ref })}
-            tags={tagsByDir?.get(entry.workspace.dir)}
-          />
-        ))
-      ) : (
+      {/* Siblings, not ternary branches — see WorkspaceTodoGroup: swapping the
+          subtree when the first rows arrive remounts the whole group. */}
+      {open && visible.map(entry => (
+        <TodoRow
+          key={`${entry.workspace.dir}\t${entry.todo.ref}`}
+          todo={entry.todo}
+          active={selected?.dir === entry.workspace.dir && selected?.ref === entry.todo.ref}
+          onSelect={onSelect}
+          density={density}
+          workspace={entry.workspace.name}
+          dir={entry.workspace.dir}
+          selectable={Boolean(selection)}
+          selected={selection?.isSelected({ dir: entry.workspace.dir, ref: entry.todo.ref })}
+          onToggleSelect={handleToggleSelect}
+          tags={tagsByDir?.get(entry.workspace.dir)}
+        />
+      ))}
+      {open && visible.length === 0 && (
         <div className="px-3 py-2 text-xs text-muted-foreground">
           {hiddenCount > 0 ? `${hiddenCount} todo${hiddenCount === 1 ? '' : 's'} hidden by filter` : 'No todos'}
         </div>
-      ))}
+      )}
     </ListMenuSection>
   );
 }

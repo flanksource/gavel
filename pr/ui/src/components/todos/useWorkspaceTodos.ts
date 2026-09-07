@@ -40,6 +40,10 @@ interface WorkspaceTodoBatchState {
   error: string;
 }
 
+// The shared "no workspace failed" value. Frozen so a caller cannot turn the
+// shared instance into a per-render surprise by writing into it.
+const noErrors: Record<string, WorkspaceTodoError> = Object.freeze({});
+
 function normalizeWorkspaceDir(dir: string): string {
   const trimmed = dir.trim();
   if (!trimmed) return '';
@@ -156,7 +160,10 @@ export function useWorkspaceTodos(
     [workspaceDirs],
   );
   const byDir = listQuery.data?.byDir ?? emptyByDir;
-  const errorsByDir = listQuery.data?.errorsByDir ?? {};
+  // noErrors is a module constant, not a fresh `{}`: this value is a prop on the
+  // list, and a new empty object each render would re-render the whole tree for
+  // the common case of no errors at all.
+  const errorsByDir = listQuery.data?.errorsByDir ?? noErrors;
   const error = listQuery.error?.message ?? listQuery.data?.error ?? '';
   const loadingList = listQuery.isFetching;
   const [selected, setSelected] = useState<SelectedTodo | null>(null);
@@ -328,7 +335,14 @@ export function useWorkspaceTodos(
     refresh();
   }, [queryClient, refresh, select]);
 
-  return {
+  // This object is the todos data layer: App threads it as a prop into the
+  // toolbar, the sidebar list, the detail pane and every navbar control. A
+  // fresh literal per render meant any App render — one every SSE tick — cost a
+  // full reconcile of the whole todos subtree, hundreds of rows included.
+  // Every field below is already stable on its own (useState setters, useCallback
+  // handlers, useMemo values), so memoising here is what makes that stability
+  // reach the consumers.
+  return useMemo(() => ({
     workspaces,
     byDir,
     errorsByDir,
@@ -363,7 +377,13 @@ export function useWorkspaceTodos(
     setTimeRange,
     selection,
     tagsByDir,
-  };
+  }), [
+    workspaces, byDir, errorsByDir, loadingList, error, detailError, aggregate,
+    selected, setSelection, select, detail, loadingDetail, refresh, showCreate,
+    created, updateItem, deleted, transferred, filters, setFilters, toggleStatus,
+    density, setDensity, groupBy, setGroupBy, layout, setLayout, sortBy, setSortBy,
+    timeRange, setTimeRange, selection, tagsByDir,
+  ]);
 }
 
 // WorkspaceTodos is the shared todos data layer the dashboard's AppShell body

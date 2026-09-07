@@ -115,8 +115,8 @@ describe('TodoFullPane', () => {
   });
 
   // Opening a todo used to swap the table out for the detail, which destroyed
-  // the table's scroll offset and its clientReveal window: Back put the reader
-  // back at the top of the first batch however far down the list they had been.
+  // the table's scroll offset: Back put the reader back at the top of the list
+  // however far down it they had been.
   it('keeps the table mounted behind an open todo so Back returns to the same row', () => {
     render(<TodoFullPane todos={paneProps({ dir: gavel.dir, ref: 'g1' })} projectsLoaded />);
     expect(screen.getByTestId('todo-detail')).toBeTruthy();

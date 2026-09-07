@@ -89,7 +89,7 @@ export function MenubarTodos({ projects, projectsLoaded, projectError }: {
                   key={bucket.key}
                   bucket={bucket}
                   selected={selected}
-                  onSelect={entry => select({ dir: entry.workspace.dir, ref: entry.todo.ref })}
+                  onSelect={select}
                   filters={filters}
                   selection={selection}
             tagsByDir={tagsByDir}
@@ -109,7 +109,7 @@ export function MenubarTodos({ projects, projectsLoaded, projectError }: {
                 filters={filters}
                 onToggleStatus={toggleStatus}
                 selectedRef=""
-                onSelect={ref => select({ dir: ws.dir, ref })}
+                onSelect={select}
                 selection={selection}
             tags={tagsByDir?.get(ws.dir)}
               />

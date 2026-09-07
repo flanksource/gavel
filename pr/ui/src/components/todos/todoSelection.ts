@@ -72,7 +72,13 @@ export function useTodoSelection() {
 
   const targets = useMemo(() => selectionTargets(selection), [selection]);
 
-  return { selection, isSelected, toggleSelected, setGroupSelected, clearSelection, replaceSelection, targets };
+  // Memoised because this object is threaded as a prop through every group and
+  // row in the list. A fresh literal here re-renders all of them on any parent
+  // render, which is exactly what the profiler attributed to `props.selection`.
+  return useMemo(
+    () => ({ selection, isSelected, toggleSelected, setGroupSelected, clearSelection, replaceSelection, targets }),
+    [selection, isSelected, toggleSelected, setGroupSelected, clearSelection, replaceSelection, targets],
+  );
 }
 
 export type TodoSelection = ReturnType<typeof useTodoSelection>;

@@ -9,6 +9,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/flanksource/commons/logger"
@@ -111,15 +112,20 @@ func streamProcStatusByKey() (map[string]procStatus, error) {
 	return leanProcStatus(procStatusByKey(projects)), nil
 }
 
-// leanProcStatus clears the continuously-fluctuating resource fields from every
-// process: CPUPercent, MemoryRSS and the per-process Tree. Those churn on every
-// supervisor sample, so streaming them defeats handleProcStatusStream's
-// change-detection — the dashboard would receive a re-render-firing data frame
-// every cadence instead of a cheap keep-alive ping. The per-process gauges
-// already own live cpu/mem via /api/proc/metrics and the expanded row fetches
-// its tree on demand, so the stream only needs the stable supervision state.
-// OpenFiles is kept: it changes slowly and feeds the always-visible Files
-// column, so it rarely defeats the diff. Mutates and returns byKey.
+// leanProcStatus clears every continuously-fluctuating resource field from each
+// process: the live sample (CPUPercent, MemoryRSS, MemoryVMS), the timestamp
+// that dates it (SampledAt), the running peaks it feeds (PeakCPU, PeakRSS,
+// PeakVMS, PeakFiles) and the per-process Tree. All of them move on every
+// supervisor sample, so streaming any one of them defeats
+// handleProcStatusStream's change-detection — the dashboard would receive a
+// re-render-firing data frame every cadence instead of a cheap keep-alive ping.
+// SampledAt is the field that bites hardest: the supervisor re-stamps it even
+// when nothing else moved, so leaking it makes the diff fail 100% of the time.
+// The per-process gauges already own live cpu/mem via /api/proc/metrics and the
+// expanded row fetches its tree on demand, so the stream only needs the stable
+// supervision state. OpenFiles is kept: it changes slowly and feeds the
+// always-visible Files column, so it rarely defeats the diff. Mutates and
+// returns byKey.
 func leanProcStatus(byKey map[string]procStatus) map[string]procStatus {
 	for key, st := range byKey {
 		if len(st.Processes) == 0 {
@@ -129,6 +135,12 @@ func leanProcStatus(byKey map[string]procStatus) map[string]procStatus {
 		for i, p := range st.Processes {
 			p.CPUPercent = 0
 			p.MemoryRSS = 0
+			p.MemoryVMS = 0
+			p.SampledAt = nil
+			p.PeakCPU = 0
+			p.PeakRSS = 0
+			p.PeakVMS = 0
+			p.PeakFiles = 0
 			p.Tree = nil
 			lean[i] = p
 		}
@@ -144,7 +156,58 @@ const (
 	// idle cadence. They mirror the adaptive interval the client poll used to run.
 	procStreamFast   = 1 * time.Second
 	procStreamSteady = 3 * time.Second
+	// procSampleTTL sits just under procStreamFast so the fastest cadence still
+	// gets a fresh scan every tick, while every other stream connected at that
+	// moment reuses it instead of running its own.
+	procSampleTTL = 900 * time.Millisecond
 )
+
+// procSampler collapses the proc-status scan shared by every open dashboard
+// stream onto one computation per TTL window. The scan behind it (LoadProjects
+// + projectStatus over every project) is filesystem- and supervisor-bound and
+// measured at ~1.7s; running it once per connection per tick meant a second
+// dashboard tab doubled that cost, a third tripled it, and the work overlapped
+// itself whenever a scan outran the cadence. Concurrent callers block on the
+// same mutex, so they collapse onto the in-flight scan rather than starting
+// their own.
+type procSampler struct {
+	ttl    time.Duration
+	sample func() (map[string]procStatus, error)
+
+	mu         sync.Mutex
+	cached     map[string]procStatus
+	computedAt time.Time
+}
+
+// get returns the current proc-status map, rescanning only when the cached one
+// has aged past the TTL. The returned map is a shallow copy: callers marshal
+// and hand it around independently, so they must not share one map. A scan
+// error is returned as-is and nothing is cached — a failed scan must surface,
+// never degrade into a stale or empty map presented as live state.
+func (p *procSampler) get() (map[string]procStatus, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.cached == nil || time.Since(p.computedAt) >= p.ttl {
+		fresh, err := p.sample()
+		if err != nil {
+			return nil, err
+		}
+		p.cached = fresh
+		p.computedAt = time.Now()
+	}
+
+	out := make(map[string]procStatus, len(p.cached))
+	for k, v := range p.cached {
+		out[k] = v
+	}
+	return out, nil
+}
+
+// sharedProcSampler is the process-wide sampler behind every proc-status
+// stream. One instance is the point: the sharing only happens because all
+// connections consult the same cache.
+var sharedProcSampler = &procSampler{ttl: procSampleTTL, sample: streamProcStatusByKey}
 
 // handleProcStatusStream pushes the proc-status map to the dashboard over SSE,
 // replacing the client's /api/proc/status poll. A per-connection adaptive ticker
@@ -167,7 +230,7 @@ func (s *Server) handleProcStatusStream(w http.ResponseWriter, r *http.Request) 
 		s.lastProcPoll = time.Now()
 		s.mu.Unlock()
 
-		byKey, err := streamProcStatusByKey()
+		byKey, err := sharedProcSampler.get()
 		if err != nil {
 			payload, _ := json.Marshal(map[string]string{"error": err.Error()})
 			fmt.Fprintf(w, "event: error\ndata: %s\n\n", payload)

@@ -389,16 +389,14 @@ export function TodoTable({ todos, projectsLoaded, rows, columns, query, onQuery
         rowSelection={{
           selectedRowIds: [...selection.selection],
           onSelectionChange: ids => selection.replaceSelection(ids),
-          // The header checkbox reaches only the revealed window (see
-          // clientReveal below), so on a workspace of hundreds "select all"
-          // silently stops at the batch size. This offers the rest explicitly
-          // rather than letting the user believe they have the whole match.
+          // The header checkbox now reaches every filtered row on its own —
+          // virtualization windows the DOM, not the data. This scope stays for
+          // the count it puts on screen ("N of M selected"), which is worth
+          // having when a filter matches far more rows than fit.
           selectAllPages: {
             noun: 'todos',
             scopes: [{
               total: rows.length,
-              // Every filtered row is already in memory — the reveal window
-              // limits rendering, not the data — so widening is local.
               onSelectAll: () => selection.replaceSelection(rows.map(todoTableRowId)),
             }],
           },
@@ -416,9 +414,11 @@ export function TodoTable({ todos, projectsLoaded, rows, columns, query, onQuery
         getRowClassName={row => (
           selected?.dir === row.workspace.dir && selected?.ref === row.todo.ref ? 'bg-primary/5' : undefined
         )}
-        // clicky has no virtualized table, and a single workspace already carries
-        // hundreds of todos — reveal them in batches instead of paginating.
-        clientReveal={{ batchSize: 100 }}
+        // A dashboard spanning every workspace carries well over a thousand
+        // todos, which is tens of thousands of DOM nodes unwindowed. Virtualize
+        // the rows rather than paginate: the data stays whole, so grouping,
+        // counts and select-all still see every filtered todo.
+        virtualize
         loading={loadingList && rows.length === 0}
         loadingMessage="Loading todos"
         error={error || undefined}

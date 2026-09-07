@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,16 +30,32 @@ func persistPromptOverride(cfg *verify.GavelConfig, ov *verify.PromptSpec, write
 		}
 		*ov = verify.PromptSpec{Spec: spec}
 	case "file":
-		target := write.Path
-		if !filepath.IsAbs(target) {
-			target = filepath.Join(write.Dir, target)
-		}
-		if err := os.WriteFile(target, []byte(write.Text), 0o644); err != nil {
+		if err := writePromptFile(write.Dir, write.Path, write.Text); err != nil {
 			return err
 		}
 		*ov = verify.PromptSpec{File: write.Path}
 	}
 	return verify.SaveGavelConfig(write.Dir, *cfg)
+}
+
+// writePromptFile writes a file-source override inside the config layer's
+// directory. path arrives verbatim in the settings editor's PUT body, so it must
+// stay under dir: an absolute path or any `..` escape is rejected instead of
+// written, and the write goes through os.Root so a symlink planted under dir
+// cannot redirect it either.
+func writePromptFile(dir, path, text string) error {
+	if !filepath.IsLocal(path) {
+		return fmt.Errorf("prompt file path %q must be a relative path inside %s", path, dir)
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return fmt.Errorf("open config directory %s: %w", dir, err)
+	}
+	defer func() { _ = root.Close() }()
+	if err := root.WriteFile(path, []byte(text), 0o644); err != nil {
+		return fmt.Errorf("write prompt file %q under %s: %w", path, dir, err)
+	}
+	return nil
 }
 
 // bodyMatchesDefault reports whether body is the built-in default's body, in
@@ -106,8 +123,11 @@ func inlinePromptText(spec api.Spec, def string) (string, error) {
 
 // overlayFrontmatter lays an override's keys over a base frontmatter, merging
 // the prompt block one level deep so prompt.system does not erase prompt.schema.
+// The capacity hints size on one operand only: both lengths come from parsed
+// request frontmatter, and summing two caller-supplied sizes into an allocation
+// is an overflow pattern. The map grows for the rest.
 func overlayFrontmatter(base, over map[string]any) map[string]any {
-	merged := make(map[string]any, len(base)+len(over))
+	merged := make(map[string]any, len(base))
 	for key, value := range base {
 		merged[key] = value
 	}
@@ -115,7 +135,7 @@ func overlayFrontmatter(base, over map[string]any) map[string]any {
 		basePrompt, baseOK := merged[key].(map[string]any)
 		overPrompt, overOK := value.(map[string]any)
 		if key == "prompt" && baseOK && overOK {
-			prompt := make(map[string]any, len(basePrompt)+len(overPrompt))
+			prompt := make(map[string]any, len(basePrompt))
 			for k, v := range basePrompt {
 				prompt[k] = v
 			}

@@ -75,21 +75,21 @@ describe('todoQuery', () => {
 
 describe('TodoRow', () => {
   it('shows a plan indicator when hasPlan is true', () => {
-    render(<TodoRow todo={{ ...baseTodo, hasPlan: true, hasVerification: false }} active={false} onClick={() => {}} />);
+    render(<TodoRow todo={{ ...baseTodo, hasPlan: true, hasVerification: false }} active={false} onSelect={() => {}} />);
 
     expect(screen.getByTitle('Plan available')).toBeTruthy();
     expect(screen.queryByTitle('Verification fixture defined')).toBeNull();
   });
 
   it('shows a verification indicator when hasVerification is true', () => {
-    render(<TodoRow todo={{ ...baseTodo, hasPlan: false, hasVerification: true }} active={false} onClick={() => {}} />);
+    render(<TodoRow todo={{ ...baseTodo, hasPlan: false, hasVerification: true }} active={false} onSelect={() => {}} />);
 
     expect(screen.queryByTitle('Plan available')).toBeNull();
     expect(screen.getByTitle('Verification fixture defined')).toBeTruthy();
   });
 
   it('shows neither indicator when the todo has no plan or verification fixture', () => {
-    render(<TodoRow todo={{ ...baseTodo, hasPlan: false, hasVerification: false }} active={false} onClick={() => {}} />);
+    render(<TodoRow todo={{ ...baseTodo, hasPlan: false, hasVerification: false }} active={false} onSelect={() => {}} />);
 
     expect(screen.queryByTitle('Plan available')).toBeNull();
     expect(screen.queryByTitle('Verification fixture defined')).toBeNull();
@@ -100,7 +100,7 @@ describe('TodoRow', () => {
       <TodoRow
         todo={{ ...baseTodo, hasPlan: true, hasVerification: true, diff: { commits: 1, files: 2, adds: 3, dels: 1 } }}
         active={false}
-        onClick={() => {}}
+        onSelect={() => {}}
       />,
     );
 
@@ -122,7 +122,7 @@ describe('TodoRow session badge', () => {
       <TodoRow
         todo={{ ...baseTodo, status: 'draft', executionState: 'failed', sessionId: SESSION_ID }}
         active={false}
-        onClick={() => {}}
+        onSelect={() => {}}
         dir="/work/repo"
       />,
     );
@@ -138,7 +138,7 @@ describe('TodoRow session badge', () => {
       <TodoRow
         todo={{ ...baseTodo, status: 'draft', executionState: 'failed', sessionId: SESSION_ID }}
         active={false}
-        onClick={() => {}}
+        onSelect={() => {}}
         dir="/work/repo"
       />,
     );
@@ -151,7 +151,7 @@ describe('TodoRow session badge', () => {
       <TodoRow
         todo={{ ...baseTodo, status: 'draft', sessionId: SESSION_ID }}
         active={false}
-        onClick={() => {}}
+        onSelect={() => {}}
         dir="/work/repo"
       />,
     );
@@ -165,7 +165,7 @@ describe('TodoRow session badge', () => {
       <TodoRow
         todo={{ ...baseTodo, status: 'in_progress', executionState: 'running', sessionId: SESSION_ID }}
         active={false}
-        onClick={() => {}}
+        onSelect={() => {}}
         dir="/work/repo"
       />,
     );
@@ -176,7 +176,7 @@ describe('TodoRow session badge', () => {
 
   it('never reads session stats for a todo that has no session', () => {
     render(
-      <TodoRow todo={{ ...baseTodo, status: 'draft' }} active={false} onClick={() => {}} dir="/work/repo" />,
+      <TodoRow todo={{ ...baseTodo, status: 'draft' }} active={false} onSelect={() => {}} dir="/work/repo" />,
     );
 
     expect(useSessionStats).not.toHaveBeenCalled();

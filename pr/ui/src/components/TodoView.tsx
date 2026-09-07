@@ -82,9 +82,23 @@ export function TodoWorkspaceList({ todos, projectsLoaded, projectError }: {
   projectError?: string;
 }) {
   const { workspaces, byDir, filters, toggleStatus, density, groupBy, sortBy, timeRange, selected, select, loadingList, error, selection, tagsByDir } = todos;
-  // Resolve the activity range to absolute bounds once per render so every group
-  // filters against the same instant.
-  const range = resolveRange(timeRange, Date.now());
+  // Resolve the activity range to absolute bounds so every group filters against
+  // the same instant. Keyed on a minute-granularity clock rather than a raw
+  // Date.now(): a relative range ("last 7 days") only needs minute accuracy, and
+  // reading the raw clock in the render body produced a new bounds object every
+  // render, which was passed to every group and re-filtered and re-sorted every
+  // workspace underneath.
+  const minute = Math.floor(Date.now() / 60_000);
+  const range = useMemo(() => resolveRange(timeRange, minute * 60_000), [timeRange, minute]);
+  // Bucketing is only used by the non-workspace groupings, but it is computed
+  // here because hooks cannot live inside the branch below. Same
+  // minute-granularity clock as `range`: age buckets do not need sub-minute
+  // precision, and re-bucketing every todo on every render rebuilt every
+  // bucket's entry array and re-rendered every row in the list.
+  const buckets = useMemo(
+    () => (groupBy === 'workspace' ? [] : bucketTodos(flattenTodos(workspaces, byDir), groupBy, minute * 60_000, sortBy)),
+    [groupBy, workspaces, byDir, minute, sortBy],
+  );
   // Waiting on either fetch is "loading": the workspaces come from
   // /api/projects and the todos from the per-workspace lists.
   const pending = loadingList || !projectsLoaded;
@@ -122,7 +136,7 @@ export function TodoWorkspaceList({ todos, projectsLoaded, projectError }: {
             density={density}
             sortBy={sortBy}
             selectedRef={selected?.dir === ws.dir ? selected.ref : ''}
-            onSelect={ref => select({ dir: ws.dir, ref })}
+            onSelect={select}
             selection={selection}
             tags={tagsByDir?.get(ws.dir)}
           />
@@ -130,7 +144,6 @@ export function TodoWorkspaceList({ todos, projectsLoaded, projectError }: {
       </ListMenu>
     );
   } else {
-    const buckets = bucketTodos(flattenTodos(workspaces, byDir), groupBy, Date.now(), sortBy);
     content = buckets.length === 0 ? (
       <div className="p-6 text-center text-sm text-muted-foreground">
         <EmptyIcon className="mb-2 text-3xl" />
@@ -143,7 +156,7 @@ export function TodoWorkspaceList({ todos, projectsLoaded, projectError }: {
             key={bucket.key}
             bucket={bucket}
             selected={selected}
-            onSelect={entry => select({ dir: entry.workspace.dir, ref: entry.todo.ref })}
+            onSelect={select}
             filters={filters}
             range={range}
             density={density}
@@ -205,7 +218,13 @@ function useTodoNavigator(todos: WorkspaceTodos, query: string, enabled: boolean
     onPrevious: () => state.previous && select(state.previous),
     onNext: () => state.next && select(state.next),
   } : undefined;
-  return { columns, rows: matched.map(entry => entry as TodoTableRow), navigation };
+  // `matched` is handed to DataTable as its `data`. Pass the memoised array
+  // through by reference — the previous `matched.map(e => e as TodoTableRow)`
+  // allocated a fresh array on every render for a cast that changes nothing at
+  // runtime, and DataTable keys its row window on `data` identity, so every
+  // keystroke in the search box and every todos state change threw away every
+  // row past the first batch and re-revealed them.
+  return { columns, rows: matched as TodoTableRow[], navigation };
 }
 
 export function TodoFullPane({ todos, projectsLoaded, navigationEnabled = true }: {

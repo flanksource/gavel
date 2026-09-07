@@ -1,4 +1,5 @@
 import type { ComponentType } from 'react';
+import { memo, useCallback, useMemo } from 'react';
 import { Button, ListMenuItem } from '@flanksource/clicky-ui/components';
 import type { IconProps } from '@flanksource/clicky-ui/icons';
 import { UiAdd, UiBeaker, UiCancel, UiCheck, UiCheckFilled, UiChevronDown, UiChevronUp, UiCircleOutline, UiCircleXFilled, UiClock, UiComment, UiError, UiEye, UiFolder, UiGitGraph, UiHistory, UiLightbulb, UiListDashes, UiPass, UiPlay, UiQuestion, UiWarningTriangle } from '@flanksource/clicky-ui/icons';
@@ -450,14 +451,27 @@ export function TodoAges({ todo, short = false }: { todo: TodoItem; short?: bool
 // `dir` locates the row's workspace so a todo with an agent session can swap its
 // status icon for that run's state + elapsed time; they are omitted by callers
 // (e.g. the menubar) that don't surface it.
-export function TodoRow({ todo, active, onClick, density = 'comfortable', selectable = false, selected = false, onToggleSelect, workspace, dir, tags }: {
+// TodoRowTarget addresses one row: its workspace directory and ref. It is what
+// a row hands back to its list, so the list needs no per-row closure.
+export interface TodoRowTarget {
+  dir: string;
+  ref: string;
+}
+
+// `onSelect`/`onToggleSelect` take the row's identity rather than being
+// pre-bound closures. A list builds one handler for all its rows and each row
+// binds its own ref here, so the props stay reference-stable across renders and
+// the memo below can actually hold — a per-row `() => onSelect(ref)` in the
+// parent would hand every row a new function on every parent render and defeat
+// it entirely.
+function TodoRowImpl({ todo, active, onSelect, density = 'comfortable', selectable = false, selected = false, onToggleSelect, workspace, dir, tags }: {
   todo: TodoItem;
   active: boolean;
-  onClick: () => void;
+  onSelect: (target: TodoRowTarget) => void;
   density?: TodoDensity;
   selectable?: boolean;
   selected?: boolean;
-  onToggleSelect?: () => void;
+  onToggleSelect?: (target: TodoRowTarget) => void;
   workspace?: string;
   dir?: string;
   // Resolved from the row's own workspace by the list. Optional so a caller that
@@ -466,6 +480,12 @@ export function TodoRow({ todo, active, onClick, density = 'comfortable', select
 }) {
   const compact = density === 'compact';
   const tagLabels = tags ? todoVisibleLabels(todo) : [];
+  const target = useMemo(() => ({ dir: dir ?? '', ref: todo.ref }), [dir, todo.ref]);
+  const onClick = useCallback(() => onSelect(target), [onSelect, target]);
+  const handleToggleSelect = useCallback(() => onToggleSelect?.(target), [onToggleSelect, target]);
+  // Memoised so the row's style prop keeps one identity: a fresh object literal
+  // here re-renders ListMenuItem (and commits DOM) on every parent render.
+  const style = useMemo(() => ({ borderLeftColor: severityColor(todo.priority) }), [todo.priority]);
   // Any todo carrying a session shows that run's duration and cost, whatever
   // lifecycle status it settled into. Only a live run keeps polling (see
   // sessionStatsQueryOptions), so a long list of finished todos reads its totals
@@ -476,14 +496,14 @@ export function TodoRow({ todo, active, onClick, density = 'comfortable', select
       active={active}
       selected={selected}
       className="flex items-stretch"
-      style={{ borderLeftColor: severityColor(todo.priority) }}
+      style={style}
     >
       {selectable && (
         <label className="flex shrink-0 cursor-pointer items-center pl-3" title="Select for batch run">
           <input
             type="checkbox"
             checked={selected}
-            onChange={onToggleSelect}
+            onChange={handleToggleSelect}
             aria-label={`Select ${todo.title}`}
             className="h-3.5 w-3.5 cursor-pointer accent-primary"
           />
@@ -545,6 +565,15 @@ export function TodoRow({ todo, active, onClick, density = 'comfortable', select
     </ListMenuItem>
   );
 }
+
+// A list renders one TodoRow per todo — over a thousand of them in a
+// multi-workspace dashboard — and every ambient update (an SSE frame, a filter
+// change, a selection) re-renders their parent. Without this memo each of those
+// re-rendered all the rows and committed DOM for every one, which profiling
+// measured as the single largest source of main-thread work on the page. The
+// default shallow prop comparison is enough because the handlers and the style
+// object above are reference-stable.
+export const TodoRow = memo(TodoRowImpl);
 
 // TodoDensityPicker is the segmented toggle that switches the todo lists between
 // comfortable (two-line) and compact (single-line) rows. It lives in the Todos

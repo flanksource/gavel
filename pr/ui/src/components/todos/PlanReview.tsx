@@ -37,12 +37,16 @@ export function useReviewMode(todos: WorkspaceTodos) {
   const count = reviewableCount(todos.aggregate);
   const index = selectedIndex(queue, todos.selected);
 
+  // Depends on `select` alone, not the whole todos object: keying on `todos`
+  // rebuilt this callback — and every callback below that closes over it —
+  // whenever any unrelated field of the data layer changed.
+  const select = todos.select;
   const goToEntry = useCallback(
     (entry: TodoEntry | undefined) => {
       if (!entry) return;
-      todos.select({ dir: entry.workspace.dir, ref: entry.todo.ref });
+      select({ dir: entry.workspace.dir, ref: entry.todo.ref });
     },
-    [todos],
+    [select],
   );
 
   const enter = useCallback(() => {
@@ -73,7 +77,13 @@ export function useReviewMode(todos: WorkspaceTodos) {
     if (active && queue.length === 0) setActive(false);
   }, [active, queue.length]);
 
-  return { active, count, queue, index, enter, exit, goNext, goPrev, advanceAfterAction };
+  // Memoised for the same reason as the todos data layer itself: this object is
+  // a prop on the review bar and the detail pane, so a fresh literal per render
+  // re-rendered them on every ambient update.
+  return useMemo(
+    () => ({ active, count, queue, index, enter, exit, goNext, goPrev, advanceAfterAction }),
+    [active, count, queue, index, enter, exit, goNext, goPrev, advanceAfterAction],
+  );
 }
 
 export type ReviewMode = ReturnType<typeof useReviewMode>;

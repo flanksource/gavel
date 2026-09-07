@@ -134,12 +134,39 @@ function emptySnapshot(config: SearchConfig): Snapshot {
   };
 }
 
-function mergeSnapshot(current: Snapshot, incoming: Snapshot): Snapshot {
+// mergeSnapshot folds a streamed snapshot into the cached one, preserving the
+// cached object's identity when the merge changes nothing.
+//
+// That identity guard is the point. The stream's liveness cadence can deliver a
+// frame carrying the same state we already hold, and the fetchedAt check below
+// cannot catch it — a resend repeats the same fetchedAt, so `>` is false and
+// the merge falls through to a fresh spread. A new object here re-renders the
+// entire app through every consumer of the snapshot, including routes that
+// display no PR data at all, so an unchanged frame must return `current`
+// untouched rather than an equal-but-new object.
+//
+// The server now dedupes these frames too (handleSSE sends a `: ping` comment
+// instead), so this path should rarely run; it stays as the client-side
+// guarantee that an inert frame can never cost a render.
+export function mergeSnapshot(current: Snapshot, incoming: Snapshot): Snapshot {
   const currentFetchedAt = Date.parse(current.fetchedAt);
   const incomingFetchedAt = Date.parse(incoming.fetchedAt);
   if (Number.isFinite(currentFetchedAt) && Number.isFinite(incomingFetchedAt) && currentFetchedAt > incomingFetchedAt) {
     return current;
   }
+  const merged = buildMergedSnapshot(current, incoming);
+  return sameSnapshot(current, merged) ? current : merged;
+}
+
+// sameSnapshot compares two snapshots by value. Both sides are JSON-derived and
+// built by the same code path, so their key order matches and a serialised
+// comparison is sound; a false negative would only cost the re-render we have
+// always paid.
+function sameSnapshot(a: Snapshot, b: Snapshot): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+function buildMergedSnapshot(current: Snapshot, incoming: Snapshot): Snapshot {
   return {
     ...current,
     ...incoming,
