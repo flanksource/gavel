@@ -79,6 +79,25 @@ var _ = Describe("Load", func() {
 		Expect(plan.Prompt).To(Equal("file:plan.prompt"))
 	})
 
+	It("refuses an override file that walks out of the work dir", func() {
+		const escaping = "../../../etc/passwd"
+
+		_, err := lifecycle.LoadWith(verify.LifecycleConfig{File: escaping}, workDir)
+
+		Expect(err).To(MatchError(ContainSubstring("todos.lifecycle file")))
+		Expect(err).To(MatchError(ContainSubstring(escaping)))
+		Expect(err).To(MatchError(ContainSubstring(workDir)))
+	})
+
+	It("refuses an absolute override file outside the work dir", func() {
+		outside := filepath.Join(GinkgoT().TempDir(), "lifecycle.yaml")
+		Expect(os.WriteFile(outside, []byte("name: acme\n"), 0o600)).To(Succeed())
+
+		_, err := lifecycle.LoadWith(verify.LifecycleConfig{File: outside}, workDir)
+
+		Expect(err).To(MatchError(ContainSubstring(outside)))
+	})
+
 	It("fails on an override file that does not exist", func() {
 		_, err := lifecycle.LoadWith(verify.LifecycleConfig{File: "missing.yaml"}, workDir)
 		Expect(err).To(MatchError(ContainSubstring("todos.lifecycle file")))

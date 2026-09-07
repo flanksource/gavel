@@ -4,8 +4,8 @@ import (
 	_ "embed"
 	"fmt"
 	"os"
-	"path/filepath"
 
+	"github.com/flanksource/gavel/utils"
 	"github.com/flanksource/gavel/verify"
 	"gopkg.in/yaml.v3"
 )
@@ -32,7 +32,8 @@ func Parse(data []byte) (Lifecycle, error) {
 
 // Load resolves the lifecycle a project runs: the embedded default with the
 // project's `todos.lifecycle` override merged over it. The override is a file
-// path (relative to workDir) or an inline definition; a step it names replaces
+// path inside workDir (relative to it, or absolute but still under it) or an
+// inline definition; a step it names replaces
 // the default step of that name wholesale, a step it adds is appended, and its
 // subject declarations are added to the default's. A `verify` step must survive
 // the merge.
@@ -71,9 +72,13 @@ func LoadWith(override verify.LifecycleConfig, workDir string) (Lifecycle, error
 // definition, so it is decoded without Validate.
 func overlayFrom(override verify.LifecycleConfig, workDir string) (Lifecycle, error) {
 	if override.File != "" {
-		path := override.File
-		if !filepath.IsAbs(path) {
-			path = filepath.Join(workDir, path)
+		// The override is part of the project it configures, so it has to live
+		// inside workDir. A path that walks out — from a checked-in .gavel.yaml
+		// or from the settings API that writes one — would make gavel parse an
+		// arbitrary file, so it is refused instead of read.
+		path, err := utils.ResolveWithin(workDir, override.File)
+		if err != nil {
+			return Lifecycle{}, fmt.Errorf("todos.lifecycle file: %w", err)
 		}
 		data, err := os.ReadFile(path)
 		if err != nil {

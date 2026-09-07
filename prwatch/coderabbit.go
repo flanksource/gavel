@@ -43,14 +43,20 @@ func parseNitpickComments(comment github.PRComment) []github.PRComment {
 			continue
 		}
 		results = append(results, github.PRComment{
-			ID:       comment.ID,
-			Author:   comment.Author,
-			URL:      comment.URL,
-			Path:     fb.Path,
-			Line:     fb.Line,
-			Body:     fb.Body,
-			Severity: "nitpick",
-			BotType:  "coderabbit",
+			ID:     comment.ID,
+			Author: comment.Author,
+			URL:    comment.URL,
+			Path:   fb.Path,
+			Line:   fb.Line,
+			Body:   fb.Body,
+			// Inherit the parent's state so a nitpick under a resolved thread
+			// renders struck through instead of as live work. IsReviewThread
+			// stays false: a nitpick is a fragment parsed out of a <details>
+			// block, with no resolve button of its own.
+			IsResolved: comment.IsResolved,
+			IsOutdated: comment.IsOutdated,
+			Severity:   "nitpick",
+			BotType:    "coderabbit",
 		})
 	}
 	return results

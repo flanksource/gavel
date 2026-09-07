@@ -12,6 +12,7 @@ import (
 
 	"github.com/flanksource/gavel/testrunner/parsers"
 	testui "github.com/flanksource/gavel/testrunner/ui"
+	"github.com/flanksource/gavel/utils"
 )
 
 // Run kinds reported by ListRuns, derived from a snapshot's tests/lint content.
@@ -55,13 +56,16 @@ func LastRun(workDir string) (*RunInfo, error) {
 	if err != nil || pointer == nil {
 		return nil, err
 	}
+	// Save records a workDir-relative `.gavel/<name>.json`. A pointer naming
+	// anything else is corrupt or hand-edited, so it is rejected before the
+	// snapshot behind it is stat'd or decoded.
+	path, err := utils.ResolveWithin(workDir, pointer.Path)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", filepath.Join(Dir, PointerLast+".json"), err)
+	}
 	snap, err := LoadByPointer(workDir, pointer)
 	if err != nil {
 		return nil, err
-	}
-	path := pointer.Path
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(workDir, path)
 	}
 	info := runInfo(*snap, PointerLast+".json", path, runStartTime(*snap, PointerLast+".json", path, nil))
 	return &info, nil

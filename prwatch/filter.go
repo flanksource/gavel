@@ -46,20 +46,44 @@ func (f resultFilters) hasActionFilters() bool {
 	return len(f.actions) > 0
 }
 
-func (f resultFilters) actionFilteredNoChecks(result *PRWatchResult) bool {
-	return f.hasActionFilters() && result != nil && result.PR != nil && len(result.PR.StatusCheckRollup) == 0
+func (f resultFilters) hasCommentFilters() bool {
+	return len(f.comments) > 0
 }
 
 func (f resultFilters) apply(result *PRWatchResult) {
 	if result == nil {
 		return
 	}
-	if len(f.comments) > 0 {
+	if f.hasCommentFilters() {
 		result.Comments = f.filterComments(result.Comments)
 	}
-	if len(f.actions) > 0 {
+	if f.hasActionFilters() {
 		f.filterActions(result)
 	}
+}
+
+// isComplete reports whether every dimension the user filtered on has settled.
+// Each active filter contributes one condition and they are ANDed: --actions
+// waits for the checks it selected to reach COMPLETED, --comments waits for the
+// review threads it selected to be resolved. With neither, the gate is the whole
+// rollup, exactly as before.
+//
+// Called after apply, so both conditions read the already-scoped result. An
+// empty filtered rollup is deliberately not complete — AllComplete is
+// false-on-empty, which is what keeps --follow polling while GitHub is still
+// registering check runs. A selector that matched nothing at all is caught by
+// noActionMatch/noCommentMatch and is an error, not a completion.
+func (f resultFilters) isComplete(result *PRWatchResult) bool {
+	if result == nil || result.PR == nil {
+		return false
+	}
+	if !f.hasActionFilters() && !f.hasCommentFilters() {
+		return result.PR.StatusCheckRollup.AllComplete()
+	}
+	if f.hasActionFilters() && !result.PR.StatusCheckRollup.AllComplete() {
+		return false
+	}
+	return !f.hasCommentFilters() || result.UnresolvedComments() == 0
 }
 
 func (f resultFilters) filterComments(comments []github.PRComment) []github.PRComment {
@@ -233,6 +257,20 @@ func (f resultFilters) noActionMatch(preChecks, preRuns int, result *PRWatchResu
 	}
 	checksLeft := result.PR != nil && len(result.PR.StatusCheckRollup) > 0
 	return len(result.Runs) == 0 && !checksLeft
+}
+
+// noCommentMatch is noActionMatch's counterpart: comment filters pruned a
+// non-empty set of comments down to nothing.
+//
+// Under --follow this is what stops a selector nobody matched from reading as
+// "everything I was waiting for is resolved". A review bot posts a minute or
+// two after a push, so the empty-before case has to keep polling — it is a PR
+// whose comments have not arrived yet, not a typo.
+func (f resultFilters) noCommentMatch(preComments int, result *PRWatchResult) bool {
+	if !f.hasCommentFilters() || preComments == 0 {
+		return false
+	}
+	return result == nil || len(result.Comments) == 0
 }
 
 // actionSelectorOptions lists the selectors the user could have passed to

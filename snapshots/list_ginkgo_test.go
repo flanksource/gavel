@@ -51,4 +51,20 @@ var _ = Describe("LastRun", func() {
 			"Total":  Equal(1),
 		})))
 	})
+
+	It("refuses a pointer whose path escapes the work dir", func() {
+		// Save always records a workDir-relative `.gavel/<file>.json`. A pointer
+		// naming anything else is a corrupt or hand-edited last.json, and
+		// following it would stat and decode a file outside the project.
+		workDir := GinkgoT().TempDir()
+		const escaping = "../../../etc/passwd"
+		Expect(os.Mkdir(filepath.Join(workDir, Dir), 0o755)).To(Succeed())
+		Expect(writePointer(workDir, PointerLast, &Pointer{Path: escaping, SHA: "current"})).To(Succeed())
+
+		run, err := LastRun(workDir)
+
+		Expect(err).To(MatchError(ContainSubstring(escaping)))
+		Expect(err).To(MatchError(ContainSubstring(workDir)))
+		Expect(run).To(BeNil())
+	})
 })

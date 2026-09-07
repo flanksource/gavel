@@ -16,6 +16,10 @@ type WatchOptions struct {
 	PRNumber int
 	Interval time.Duration
 	Follow   bool
+	// FailFast stops --follow at the first definitive failure instead of waiting
+	// for every remaining check. Off by default: the default contract of --follow
+	// is a complete picture of the run.
+	FailFast bool
 	Logs     bool // fetch failing job log tails (extra API quota)
 	TailLogs int
 	Comments []string
@@ -61,6 +65,7 @@ func Run(opts WatchOptions) (*PRWatchResult, int) {
 
 		preChecks := len(pr.StatusCheckRollup)
 		preRuns := len(runs)
+		preComments := len(result.Comments)
 		var selectorOptions []string
 		if filters.hasActionFilters() {
 			selectorOptions = actionSelectorOptions(pr, runs)
@@ -68,21 +73,31 @@ func Run(opts WatchOptions) (*PRWatchResult, int) {
 
 		filters.apply(result)
 
+		// Fail loudly when a selector was given but matched nothing, rather than
+		// printing "No checks found" and exiting 0 — a silent empty masks a
+		// mistyped selector (and would false-green a verification fixture built
+		// from it). Under --follow it was worse than silent: an empty filtered
+		// set satisfied the completion gate on the very first poll, so a typo —
+		// or simply a push whose checks GitHub had not registered yet — returned
+		// 0 before CI had run a single step. Both no-match predicates are scoped
+		// to a selector that pruned a non-empty set down to nothing, so a PR
+		// whose checks or comments have not appeared yet still keeps polling.
+		if filters.noActionMatch(preChecks, preRuns, result) {
+			fmt.Fprintf(os.Stderr, "Error: --actions %s matched no checks or workflows on PR #%d.\nAvailable selectors: %s\n",
+				strings.Join(opts.Actions, ","), opts.PRNumber, strings.Join(selectorOptions, ", "))
+			return nil, 1
+		}
+		if filters.noCommentMatch(preComments, result) {
+			fmt.Fprintf(os.Stderr, "Error: --comments %s matched no comments on PR #%d.\n",
+				strings.Join(opts.Comments, ","), opts.PRNumber)
+			return nil, 1
+		}
+
 		if !opts.Follow {
-			// Fail loudly when --actions was given but matched nothing, rather
-			// than printing "No checks found" and exiting 0 — a silent empty
-			// masks a mistyped selector (and would false-green a verification
-			// fixture built from it).
-			if filters.noActionMatch(preChecks, preRuns, result) {
-				fmt.Fprintf(os.Stderr, "Error: --actions %s matched no checks or workflows on PR #%d.\nAvailable selectors: %s\n",
-					strings.Join(opts.Actions, ","), opts.PRNumber, strings.Join(selectorOptions, ", "))
-				return nil, 1
-			}
 			return result, statusExitCode(result)
 		}
 
-		done := filters.actionFilteredNoChecks(result) || result.PR.StatusCheckRollup.AllComplete()
-		if done {
+		if followDone(filters, result, opts.FailFast) {
 			// The caller prints the completed report to stdout. Painting the
 			// final frame to stderr as well would show it twice to anyone
 			// merging the two streams; on a TTY it also has to be erased so
@@ -95,22 +110,34 @@ func Run(opts WatchOptions) (*PRWatchResult, int) {
 			return result, statusExitCode(result)
 		}
 
-		frame := result.Pretty().ANSI()
-		if !strings.HasSuffix(frame, "\n") {
-			frame += "\n"
-		}
-		frame += fmt.Sprintf("Polling in %s...\n\n", opts.Interval)
-
 		if isTTY {
+			frame := result.Pretty().ANSI()
+			if !strings.HasSuffix(frame, "\n") {
+				frame += "\n"
+			}
+			frame += fmt.Sprintf("Polling in %s...\n\n", opts.Interval)
 			if err := render.Write(os.Stderr, frame); err != nil {
 				logger.Warnf("render: %v", err)
 			}
 		} else {
-			fmt.Fprint(os.Stderr, frame)
+			// A reader that cannot redraw gets a heartbeat, not the frame again.
+			// The frame is printed once at the end by the caller.
+			fmt.Fprintln(os.Stderr, followProgressLine(result, opts.Interval))
 		}
 
 		time.Sleep(opts.Interval)
 	}
+}
+
+// followDone reports whether --follow has seen everything it was asked to wait
+// for. failFast short-circuits the completion gate once a failure can no longer
+// change, so a test job that goes red at two minutes is not held behind a scan
+// that runs for seven.
+func followDone(filters resultFilters, result *PRWatchResult, failFast bool) bool {
+	if failFast && result.HasTerminalFailure() {
+		return true
+	}
+	return filters.isComplete(result)
 }
 
 // statusExitCode weighs every failure signal the status view renders, not just

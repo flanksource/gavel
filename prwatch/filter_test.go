@@ -72,16 +72,191 @@ func TestResultFiltersActionsPruneHiddenFailureFromExitCode(t *testing.T) {
 	assert.Equal(t, 0, statusExitCode(result))
 }
 
-func TestResultFiltersActionNoMatchIsDoneForFollow(t *testing.T) {
+// This replaces TestResultFiltersActionNoMatchIsDoneForFollow, which asserted
+// that an --actions selector matching nothing made --follow "done". That was a
+// false green twice over: a typo returned exit 0, and so did every poll issued
+// before GitHub had registered the freshly-pushed commit's check runs. An empty
+// filtered set is now never complete, and the reason the watch stops is the hard
+// error, not completion.
+func TestResultFiltersActionNoMatchIsNotCompleteForFollow(t *testing.T) {
 	result := sampleActionFilterResult()
+	preChecks, preRuns := len(result.PR.StatusCheckRollup), len(result.Runs)
 
 	filters := newResultFilters(nil, []string{"missing-action"})
 	filters.apply(result)
 
 	assert.Empty(t, result.Runs)
 	assert.Empty(t, result.PR.StatusCheckRollup)
-	assert.True(t, filters.actionFilteredNoChecks(result))
-	assert.Equal(t, 0, statusExitCode(result))
+	assert.False(t, filters.isComplete(result), "an empty filtered rollup must never satisfy the gate")
+	assert.True(t, filters.noActionMatch(preChecks, preRuns, result))
+}
+
+func TestResultFiltersIsCompleteWithoutFilters(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(*PRWatchResult)
+		want   bool
+	}{
+		{"all completed", func(*PRWatchResult) {}, true},
+		{"one in progress", func(r *PRWatchResult) {
+			r.PR.StatusCheckRollup[1].Status = "IN_PROGRESS"
+		}, false},
+		{"no checks registered yet keeps polling", func(r *PRWatchResult) {
+			r.PR.StatusCheckRollup = github.StatusChecks{}
+		}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := sampleActionFilterResult()
+			tc.mutate(result)
+			filters := newResultFilters(nil, nil)
+			filters.apply(result)
+			assert.Equal(t, tc.want, filters.isComplete(result))
+		})
+	}
+}
+
+func TestResultFiltersIsCompleteWithActionFilterIgnoresUnselectedChecks(t *testing.T) {
+	t.Run("an in-flight check outside the selector does not hold the gate", func(t *testing.T) {
+		result := sampleActionFilterResult()
+		result.PR.StatusCheckRollup[1].Status = "IN_PROGRESS"
+
+		filters := newResultFilters(nil, []string{"ci.yml"})
+		filters.apply(result)
+
+		assert.True(t, filters.isComplete(result))
+	})
+
+	t.Run("an in-flight check inside the selector does", func(t *testing.T) {
+		result := sampleActionFilterResult()
+		result.PR.StatusCheckRollup[1].Status = "IN_PROGRESS"
+
+		filters := newResultFilters(nil, []string{"deploy"})
+		filters.apply(result)
+
+		assert.False(t, filters.isComplete(result))
+	})
+}
+
+func TestResultFiltersIsCompleteWithCommentFilterWaitsForResolution(t *testing.T) {
+	cases := []struct {
+		name       string
+		isResolved bool
+		isOutdated bool
+		want       bool
+	}{
+		{"unresolved thread holds the gate", false, false, false},
+		{"resolved releases it", true, false, true},
+		{"outdated releases it", false, true, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := sampleCommentGateResult()
+			result.Comments[0].IsResolved = tc.isResolved
+			result.Comments[0].IsOutdated = tc.isOutdated
+
+			filters := newResultFilters([]string{"@coderabbit"}, nil)
+			filters.apply(result)
+
+			assert.Equal(t, tc.want, filters.isComplete(result))
+		})
+	}
+}
+
+// Neither a review body nor a nitpick parsed out of one can ever be resolved on
+// GitHub — their IsResolved is false by construction. Counting them would pin
+// the gate open forever, and a Path != "" qualifier would not catch the nitpick
+// because parseNitpickComments synthesizes a Path.
+func TestResultFiltersIsCompleteIgnoresCommentsThatCannotBeResolved(t *testing.T) {
+	result := sampleCommentGateResult()
+	result.Comments = result.Comments[1:] // drop the real thread, keep the unresolvable pair
+
+	filters := newResultFilters([]string{"@coderabbit"}, nil)
+	filters.apply(result)
+
+	require.Len(t, result.Comments, 2)
+	assert.Equal(t, 0, result.UnresolvedComments())
+	assert.True(t, filters.isComplete(result))
+}
+
+func TestResultFiltersIsCompleteAndsBothDimensions(t *testing.T) {
+	cases := []struct {
+		name          string
+		checkStatus   string
+		threadResolve bool
+		want          bool
+	}{
+		{"checks complete, comment unresolved", "COMPLETED", false, false},
+		{"comment resolved, check in flight", "IN_PROGRESS", true, false},
+		{"both settled", "COMPLETED", true, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := sampleCommentGateResult()
+			result.PR.StatusCheckRollup[0].Status = tc.checkStatus
+			result.Comments[0].IsResolved = tc.threadResolve
+
+			filters := newResultFilters([]string{"@coderabbit"}, []string{"CI"})
+			filters.apply(result)
+
+			assert.Equal(t, tc.want, filters.isComplete(result))
+		})
+	}
+}
+
+// The surprising half of "AND of the ACTIVE dimensions": with only --comments,
+// the check rollup is not one of them.
+func TestResultFiltersIsCompleteIgnoresChecksWhenOnlyCommentsFiltered(t *testing.T) {
+	result := sampleCommentGateResult()
+	result.PR.StatusCheckRollup[0].Status = "IN_PROGRESS"
+	result.Comments[0].IsResolved = true
+
+	filters := newResultFilters([]string{"@coderabbit"}, nil)
+	filters.apply(result)
+
+	assert.True(t, filters.isComplete(result))
+}
+
+func TestResultFiltersNoCommentMatch(t *testing.T) {
+	t.Run("a selector that pruned real comments to nothing is an error", func(t *testing.T) {
+		result := sampleCommentGateResult()
+		preComments := len(result.Comments)
+
+		filters := newResultFilters([]string{"@nobody"}, nil)
+		filters.apply(result)
+
+		assert.True(t, filters.noCommentMatch(preComments, result))
+	})
+
+	t.Run("a PR whose comments have not arrived yet keeps polling", func(t *testing.T) {
+		result := sampleCommentGateResult()
+		result.Comments = nil
+
+		filters := newResultFilters([]string{"@coderabbit"}, nil)
+		filters.apply(result)
+
+		assert.False(t, filters.noCommentMatch(0, result),
+			"a review bot posts a minute after a push; an empty-before set is not a typo")
+	})
+}
+
+// sampleCommentGateResult mirrors what MergeAndFilter produces: a real review
+// thread, the review body its nitpicks were parsed out of, and one of those
+// nitpicks. Only the first can ever be resolved on GitHub.
+func sampleCommentGateResult() *PRWatchResult {
+	return &PRWatchResult{
+		PR: &github.PRInfo{
+			Number: 1,
+			StatusCheckRollup: github.StatusChecks{
+				{Name: "unit", Status: "COMPLETED", Conclusion: "SUCCESS", WorkflowName: "CI", DetailsURL: "https://github.com/org/repo/actions/runs/101/job/1"},
+			},
+		},
+		Comments: []github.PRComment{
+			{ID: 300, Author: "coderabbitai[bot]", BotType: "coderabbit", Path: "foo.go", Line: 42, IsReviewThread: true},
+			{ID: 200, Author: "coderabbitai[bot]", BotType: "coderabbit", Body: "**Actionable comments posted: 2**"},
+			{ID: 200, Author: "coderabbitai[bot]", BotType: "coderabbit", Path: "bar.go", Line: 7, Severity: "nitpick"},
+		},
+	}
 }
 
 func TestResultFiltersActionsMatchJobName(t *testing.T) {

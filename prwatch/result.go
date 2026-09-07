@@ -33,6 +33,41 @@ func (r PRWatchResult) HasFailedRun() bool {
 	return false
 }
 
+// UnresolvedComments counts the review threads that still need a reply.
+//
+// Only a review-thread comment can be resolved on GitHub, so an issue comment, a
+// review body, or a nitpick parsed out of one never counts — counting them would
+// make the --comments completion gate permanently unreachable, because their
+// IsResolved is false by construction and nothing can ever flip it.
+//
+// Called after filters.apply, so --comments scopes the count the same way it
+// scopes the rendered comment list.
+func (r PRWatchResult) UnresolvedComments() int {
+	count := 0
+	for _, c := range r.Comments {
+		if c.IsReviewThread && c.IsUnresolved() {
+			count++
+		}
+	}
+	return count
+}
+
+// HasTerminalFailure reports whether the result already holds a failure that
+// cannot un-fail: a rollup check or a job whose conclusion is definitive
+// (FAILURE / TIMED_OUT / STARTUP_FAILURE). This is what --fail-fast stops on, so
+// it deliberately excludes the artifact-read errors statusExitCode also weighs —
+// a download that failed this poll is retried on the next one, and aborting the
+// watch on it would report a red PR that is merely unreadable.
+//
+// Called after filters.apply, so --actions scopes it to the checks and runs the
+// user asked to wait for.
+func (r PRWatchResult) HasTerminalFailure() bool {
+	if r.PR != nil && r.PR.StatusCheckRollup.HasFailure() {
+		return true
+	}
+	return r.HasFailedRun()
+}
+
 func (r PRWatchResult) Pretty() api.Text {
 	text := r.PR.Pretty()
 	text = text.NewLine().NewLine().Add(r.prettyWorkflows())
@@ -227,7 +262,7 @@ func prettyCommentLine(c github.PRComment, indent string) api.Text {
 		lines = []string{c.Title()}
 	}
 	style := ""
-	if c.IsResolved || c.IsOutdated {
+	if !c.IsUnresolved() {
 		style = "text-gray-500 line-through"
 		tag := "resolved"
 		if c.IsOutdated {
