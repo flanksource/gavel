@@ -1,4 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
+
+import { Button } from '@flanksource/clicky-ui/components';
 
 import { TodoTag } from './TodoTag';
 import { normalizeTag, tagHash } from './tagPalette';
@@ -43,6 +45,7 @@ export function TagPicker({
 }) {
   const [query, setQuery] = useState('');
   const panel = useRef<HTMLDivElement>(null);
+  const listboxId = useId();
 
   useEffect(() => {
     function onPointerDown(event: MouseEvent) {
@@ -78,12 +81,14 @@ export function TagPicker({
   return (
     <div
       ref={panel}
-      role="dialog"
-      aria-label="Choose a tag"
       className="absolute left-0 top-full z-30 mt-1 w-64 rounded-md border border-border bg-background p-1.5 shadow-lg"
     >
       <input
         autoFocus
+        role="combobox"
+        aria-expanded
+        aria-controls={listboxId}
+        aria-autocomplete="list"
         value={query}
         onChange={event => setQuery(event.target.value)}
         onKeyDown={event => {
@@ -98,16 +103,18 @@ export function TagPicker({
         className="mb-1 h-7 w-full rounded border border-border bg-background px-2 text-xs text-foreground"
       />
 
-      <div role="listbox" aria-label="Tags" className="max-h-56 overflow-y-auto">
+      <div id={listboxId} role="listbox" aria-label="Tags" className="max-h-56 overflow-y-auto">
+        {/* An option carries role="option", not a nested <button>: a button inside a
+            listbox is an ARIA anti-pattern, and keyboard selection already runs
+            through the combobox input above (Enter commits the top match). */}
         {matches.map(def => (
-          <button
+          <div
             key={def.name}
-            type="button"
             role="option"
             aria-selected={false}
             onClick={() => commit(def.name)}
             title={def.description}
-            className="flex w-full items-center gap-2 rounded px-1.5 py-1 text-left hover:bg-muted"
+            className="flex w-full cursor-pointer items-center gap-2 rounded px-1.5 py-1 text-left hover:bg-muted"
           >
             <TodoTag tag={index.resolve(def.name)} />
             {(counts[def.name] ?? 0) > 0 && (
@@ -115,7 +122,7 @@ export function TagPicker({
                 {counts[def.name]}
               </span>
             )}
-          </button>
+          </div>
         ))}
 
         {matches.length === 0 && !canCreate && (
@@ -124,14 +131,14 @@ export function TagPicker({
       </div>
 
       {canCreate && (
-        <button
-          type="button"
+        <Button
+          variant="ghost"
           onClick={() => commit(typed)}
-          className="mt-1 flex w-full items-center gap-2 rounded border-t border-border px-1.5 py-1 pt-1.5 text-left hover:bg-muted"
+          className="mt-1 flex w-full items-center justify-start gap-2 rounded border-t border-border px-1.5 py-1 pt-1.5 text-left hover:bg-muted"
         >
           <span className="shrink-0 text-[11px] text-muted-foreground">Create</span>
           <TodoTag tag={draft} />
-        </button>
+        </Button>
       )}
     </div>
   );

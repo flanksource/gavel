@@ -5,6 +5,11 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ProjectStatusView } from './ProjectStatusView';
 
+/* oxlint-disable clicky-ui/prefer-clicky-components --
+   These raw <button>s ARE the test doubles for clicky-ui's Button/SplitButton, not a
+   rebuild of them: this factory replaces the '@flanksource/clicky-ui/components'
+   module, so rendering clicky-ui's own Button here would be circular. The mock exists
+   because the real SplitButton mounts floating-ui, which crashes under vitest. */
 vi.mock('@flanksource/clicky-ui/components', () => ({
   Button: ({ children, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement>) => <button {...props}>{children}</button>,
   SplitButton: ({ label, onClick, items, disabled }: {
@@ -20,6 +25,7 @@ vi.mock('@flanksource/clicky-ui/components', () => ({
   ),
   SplitPane: ({ left, right }: { left: ReactNode; right: ReactNode }) => <div>{left}{right}</div>,
 }));
+/* oxlint-enable clicky-ui/prefer-clicky-components */
 
 vi.mock('./ProjectActionDialog', () => ({ ProjectActionDialog: () => null }));
 vi.mock('./ProjectActionRunDialog', () => ({ ProjectActionRunDialog: () => null }));

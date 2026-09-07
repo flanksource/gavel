@@ -580,18 +580,32 @@ func requestOrigin(r *http.Request) string {
 // handleReactGrabPlugin serves the React Grab plugin script with __GAVEL_ORIGIN__
 // substituted for this server's origin. It is intentionally uncached so the
 // origin always matches the host that served it.
+//
+// The origin is reconstructed from the client-controlled Host / X-Forwarded-Proto
+// headers and lands inside a JS string literal, so it is escaped for that context
+// and can never terminate the literal.
 func handleReactGrabPlugin(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
-	fmt.Fprint(w, strings.ReplaceAll(reactGrabPluginJS, "__GAVEL_ORIGIN__", requestOrigin(r)))
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	origin := template.JSEscapeString(requestOrigin(r))
+	fmt.Fprint(w, strings.ReplaceAll(reactGrabPluginJS, "__GAVEL_ORIGIN__", origin))
 }
 
 // handleReactGrabInstall serves the install page (bookmarklet + console snippet)
 // for loading the React Grab plugin into any running dev app.
+//
+// The origin comes from the client-controlled Host / X-Forwarded-Proto headers
+// and is reflected into HTML, once inside a `javascript:` href. A browser HTML-
+// decodes that attribute before evaluating it as JS, so the value is escaped in
+// that order too: JS first, then HTML. Escaping only the HTML layer would let
+// `&#39;` decode back into a quote that breaks out of the bookmarklet's string.
 func handleReactGrabInstall(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
-	fmt.Fprint(w, strings.ReplaceAll(reactGrabInstallHTML, "__GAVEL_ORIGIN__", requestOrigin(r)))
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	origin := html.EscapeString(template.JSEscapeString(requestOrigin(r)))
+	fmt.Fprint(w, strings.ReplaceAll(reactGrabInstallHTML, "__GAVEL_ORIGIN__", origin))
 }
 
 func handleLogo(w http.ResponseWriter, r *http.Request) {

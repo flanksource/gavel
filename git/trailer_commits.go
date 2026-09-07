@@ -79,7 +79,9 @@ func isNoCommitsError(output []byte) bool {
 // dashboard can render it through an ANSI viewer. With an empty file it shows
 // the whole commit (diffstat + patch); with a file it narrows to that one path's
 // patch (the per-file hover card), dropping the diffstat and commit header.
-// `--` keeps an untrusted file path from being read as a flag. Output is capped
+// Both untrusted inputs are validated before git runs — the hash against
+// IsValidCommitHash and the path against validateDiffPath — and `--` terminates
+// option parsing so neither can be read as a flag. Output is capped
 // at maxCommitDiffBytes; the bool reports whether it was truncated.
 func CommitDiff(path, hash, file string) (string, bool, error) {
 	hash = strings.TrimSpace(hash)
@@ -88,9 +90,12 @@ func CommitDiff(path, hash, file string) (string, bool, error) {
 	}
 	args := []string{"show", "--color=always"}
 	if file = strings.TrimSpace(file); file != "" {
+		if err := validateDiffPath(file); err != nil {
+			return "", false, err
+		}
 		args = append(args, "--format=", "--patch", hash, "--", file)
 	} else {
-		args = append(args, "--stat", "--patch", hash)
+		args = append(args, "--stat", "--patch", hash, "--")
 	}
 	cmd := exec.Command("git", args...)
 	cmd.Dir = path
@@ -104,6 +109,34 @@ func CommitDiff(path, hash, file string) (string, bool, error) {
 			"\n\n… diff truncated (showing first 256 KB) …\n", true, nil
 	}
 	return diff, false, nil
+}
+
+// validateDiffPath rejects an untrusted path that git would reinterpret as
+// something other than a literal file inside the repository. `--` already stops
+// option parsing, but git still reads pathspec magic (`:(exclude)`, `:/`) after
+// it, and a control character would corrupt the argument for any consumer that
+// re-splits the command line, so the shape is checked before the value is ever
+// handed to git.
+func validateDiffPath(file string) error {
+	switch {
+	case strings.HasPrefix(file, "-"):
+		return fmt.Errorf("invalid diff path %q: must not begin with %q, git parses that as an option", file, "-")
+	case strings.HasPrefix(file, ":"):
+		return fmt.Errorf("invalid diff path %q: must not begin with %q, git parses that as pathspec magic", file, ":")
+	case strings.HasPrefix(file, "/"):
+		return fmt.Errorf("invalid diff path %q: must be relative to the repository root, not absolute", file)
+	}
+	for i, r := range file {
+		if r < 0x20 || r == 0x7f {
+			return fmt.Errorf("invalid diff path %q: control character %q at byte %d", file, r, i)
+		}
+	}
+	for _, segment := range strings.Split(file, "/") {
+		if segment == ".." {
+			return fmt.Errorf("invalid diff path %q: %q segments escape the repository", file, "..")
+		}
+	}
+	return nil
 }
 
 // RemoteWebURL returns the https web base for the repository's origin remote
