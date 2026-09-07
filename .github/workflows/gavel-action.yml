@@ -65,6 +65,7 @@ jobs:
         uses: ./
         with:
           args: test --lint
+          timeout-minutes: "20"
           version: source
           comment-header: gavel-self-test
           fail-on-error: "true"

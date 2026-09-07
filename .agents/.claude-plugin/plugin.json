@@ -1,13 +1,13 @@
 {
   "name": "gavel-skills",
-  "version": "0.1.0",
-  "description": "Claude Code skills for the Gavel CLI testing framework — fixture-based testing with markdown, CEL assertions, and template variables",
+  "version": "0.2.0",
+  "description": "Claude Code skills for the Gavel CLI — fixture-based testing, the test/lint runner, PR & commit workflows (use gavel instead of gh/git), and the TODO backlog triage and definition-of-done loop",
   "author": {
     "name": "Flanksource",
     "url": "https://github.com/flanksource/gavel"
   },
   "repository": "https://github.com/flanksource/gavel",
   "license": "Apache-2.0",
-  "keywords": ["gavel", "testing", "fixtures", "cli", "cel", "markdown"],
+  "keywords": ["gavel", "testing", "fixtures", "cli", "cel", "markdown", "pr", "commit", "todos", "triage", "backlog", "gh", "lint"],
   "skills": "./skills/"
 }

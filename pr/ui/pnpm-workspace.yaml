@@ -1,12 +1,11 @@
 # Keep the sibling package discoverable for local development while the catalog
-# pins builds to the immutable Clicky UI PR head used by CI.
+# pins builds to an exact published Clicky UI version for CI.
 packages:
   - "."
   - "../../testrunner/ui"
   - "../../../clicky-ui/packages/ui"
 allowBuilds:
   "@parcel/watcher": true
-  '@flanksource/clicky-ui@https://codeload.github.com/flanksource/clicky-ui/tar.gz/e045560b6af4d717250ae66ad48b08c07772d0cd#path:packages/ui': true
   esbuild: true
 catalog:
   "@ai-sdk/react": ^3.0.201
@@ -16,7 +15,11 @@ catalog:
   "@codemirror/lang-sql": ^6.10.0
   "@codemirror/state": ^6.7.0
   "@codemirror/view": ^6.43.4
-  '@flanksource/clicky-ui': github:flanksource/clicky-ui#e045560b6af4d717250ae66ad48b08c07772d0cd&path:packages/ui
+  # Published tarball, never a git ref: a git-hosted install runs clicky-ui's
+  # `prepare` (a full source build whose icon generator fetches
+  # api.iconify.design), which CI rate-limits to HTTP 429 and then fails the
+  # bundle on the icons that never downloaded. The npm tarball ships dist/.
+  '@flanksource/clicky-ui': 0.3.34
   "@floating-ui/react": ^0.27.19
   '@iconify-icons/codicon': ^1.2.30
   '@iconify-icons/vscode-icons': ^1.2.29
@@ -98,6 +101,7 @@ linkWorkspacePackages: true
 overrides:
   "@types/react": ^19.2.17
   "@types/react-dom": ^19.2.3
-# Prefer workspace packages for the other local packages in this workspace. The
-# Clicky UI Git catalog entry remains authoritative for its exact dependency.
+# Prefer the linked local clicky-ui even when the registry has a newer matching
+# version, so local edits always win. When the sibling is absent (CI) there is
+# no workspace package and clicky-ui resolves from the npm registry.
 preferWorkspacePackages: true
