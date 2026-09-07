@@ -9,6 +9,10 @@ import (
 	"github.com/ghodss/yaml"
 )
 
+// GavelConfigFileName is the only file name the config loaders read. Every
+// layer — home, git root, target directory — is this name inside a directory.
+const GavelConfigFileName = ".gavel.yaml"
+
 type GavelConfigSource struct {
 	Origin string      `json:"origin" yaml:"origin"`
 	Path   string      `json:"path" yaml:"path"`
@@ -127,6 +131,14 @@ func LoadSingleGavelConfig(path string) (GavelConfig, error) {
 }
 
 func loadSingleGavelConfig(path string) (GavelConfig, string, error) {
+	// Callers name a directory and this loader reads that directory's config.
+	// Pinning the file name keeps a caller-supplied path from selecting some
+	// other file to parse and echo back (the settings API resolves its
+	// directory from a request parameter), and a path that names anything else
+	// is a caller bug worth reporting rather than a missing config.
+	if filepath.Base(path) != GavelConfigFileName {
+		return GavelConfig{}, "", fmt.Errorf("load gavel config: %q is not a %s file", path, GavelConfigFileName)
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return GavelConfig{}, "", err

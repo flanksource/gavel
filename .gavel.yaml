@@ -6,6 +6,8 @@ commit:
   - .agents/skills/gavel-runner/SKILL.md
   - testrunner/ui/dist/testui.js
   - .agents/skills/gavel-fixture-tester/**
+  - .agents/.claude-plugin/**
+  - .claude/skills/**
   grouping: {}
   lint: {}
   message: {}
@@ -20,10 +22,10 @@ lint:
   - file: linters/betterleaks/testdata/betterleaks-output.json
     source: betterleaks
   - file: testrunner/ui/dist/testui.js
-    rule: "*-*-mention"
+    rule: '*-*-mention'
     source: betterleaks
   - file: testrunner/ui/pnpm-lock.yaml
-    rule: "*-country-short-codes"
+    rule: '*-country-short-codes'
     source: betterleaks
 pr:
   content: {}
@@ -40,6 +42,8 @@ status:
 test:
   outlineSummary: {}
 todos:
+  lifecycle: {}
   plan: {}
   run: {}
+  triage: {}
   verify: {}

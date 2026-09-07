@@ -432,16 +432,26 @@ gavel pr status
 gavel pr status 42
 gavel pr status https://github.com/owner/repo/pull/123
 gavel pr status --follow --interval 30s
+gavel pr status --follow --actions 'CI / Test' --fail-fast
+gavel pr status --follow --comments '@coderabbit'
 gavel pr status --logs --tail-logs 50
 ```
 
 | Flag | Description |
 |------|-------------|
 | `-R` / `--repo` | GitHub repository (`owner/repo`) |
-| `--follow` | Keep watching until all checks complete |
+| `--follow` | Keep watching until the dimensions you filtered on settle (see below) |
+| `--fail-fast` | With `--follow`, return at the first definitive failure instead of waiting for the rest |
 | `--interval` | Poll interval (default: `30s`) |
 | `--logs` | Fetch and include failed job logs (uses extra API quota) |
 | `--tail-logs` | Number of failed log lines to show per step (default: `100`) |
+| `--comments` | Filter review comments by MatchItem patterns over comment ID and `@author`/`@bot` tokens |
+| `--actions` | Filter workflow actions by MatchItem patterns over run/workflow ID, YAML path, workflow name, or job/check name |
+
+`--follow` gates on the dimensions you actually filtered on, ANDed together: with
+`--actions` it waits for the selected checks to complete, with `--comments` it waits for
+the selected review threads to be resolved, and with neither it waits for the whole
+rollup. A selector that matches nothing is an error, not a completion.
 
 #### `gavel pr list`
 

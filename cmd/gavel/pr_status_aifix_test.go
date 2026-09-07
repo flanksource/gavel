@@ -1,11 +1,15 @@
 package main
 
 import (
+	"bytes"
+	"context"
+	"io"
 	"strings"
 	"testing"
 	"time"
 
 	captainai "github.com/flanksource/captain/pkg/ai"
+	capverify "github.com/flanksource/captain/pkg/ai/agent/verify"
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/prwatch"
@@ -81,7 +85,7 @@ func TestHistoryOptionsForRun_PrefersTheRunsOwnSession(t *testing.T) {
 	}
 }
 
-func TestPRContextOf_CountsOnlyUnresolvedLiveComments(t *testing.T) {
+func TestPRContextOf_CountsOnlyUnresolvedReviewThreads(t *testing.T) {
 	result := &prwatch.PRWatchResult{
 		PR: &github.PRInfo{
 			Number:      42,
@@ -90,10 +94,14 @@ func TestPRContextOf_CountsOnlyUnresolvedLiveComments(t *testing.T) {
 			HeadRefName: "feat/thing",
 		},
 		Comments: []github.PRComment{
-			{IsResolved: false, IsOutdated: false},
-			{IsResolved: true, IsOutdated: false},
-			{IsResolved: false, IsOutdated: true},
-			{IsResolved: false, IsOutdated: false},
+			{IsReviewThread: true, IsResolved: false, IsOutdated: false},
+			{IsReviewThread: true, IsResolved: true, IsOutdated: false},
+			{IsReviewThread: true, IsResolved: false, IsOutdated: true},
+			{IsReviewThread: true, IsResolved: false, IsOutdated: false},
+			// An issue comment or review body has IsResolved false structurally
+			// — nothing can ever flip it — so counting it would tell the agent
+			// there is work outstanding that it can never discharge.
+			{IsReviewThread: false, IsResolved: false, IsOutdated: false},
 		},
 	}
 
@@ -106,6 +114,38 @@ func TestPRContextOf_CountsOnlyUnresolvedLiveComments(t *testing.T) {
 	}
 	if !strings.Contains(got.StatusText, "✗ Lint") {
 		t.Errorf("StatusText = %q, want the rendered snapshot", got.StatusText)
+	}
+}
+
+// The original defect was a wiring one: captain's CmdVerifier swallowed a
+// ten-minute check's output because nothing handed it a live sink. This asserts
+// the sink actually reaches the verifier, which is where that would have shown.
+func TestPRFixHooks_TeeVerifyOutput(t *testing.T) {
+	var sink bytes.Buffer
+
+	wf := &api.Workflow{Verify: &api.Verify{Commands: []string{"echo wired"}}}
+	hooks, err := prFixHooks(context.Background(), wf, nil, &sink)
+	if err != nil {
+		t.Fatalf("prFixHooks: %v", err)
+	}
+
+	var teed int
+	for _, hook := range hooks {
+		plugin, ok := hook.(*capverify.Plugin)
+		if !ok {
+			continue
+		}
+		cmd, ok := plugin.Verifier().(*capverify.CmdVerifier)
+		if !ok {
+			continue
+		}
+		if cmd.Output != io.Writer(&sink) {
+			t.Errorf("verify hook %q did not get the tee", plugin.Name())
+		}
+		teed++
+	}
+	if teed != 1 {
+		t.Fatalf("expected exactly one command verifier to be teed, got %d", teed)
 	}
 }
 

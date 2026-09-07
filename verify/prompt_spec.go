@@ -11,6 +11,7 @@ import (
 
 	dotprompt "github.com/flanksource/captain/pkg/ai/prompt"
 	"github.com/flanksource/captain/pkg/api"
+	"github.com/flanksource/gavel/utils"
 )
 
 // PromptSpec is one AI operation's configuration: a captain api.Spec (model,
@@ -191,9 +192,13 @@ func (s *PromptSpec) adoptString(str string) error {
 // A configured-but-unreadable File is a hard error.
 func (s PromptSpec) TemplateSource(dir, fallback string) (string, error) {
 	if s.File != "" {
-		data, err := os.ReadFile(s.resolvedFilePath(dir))
+		path, err := s.readableFilePath(dir)
 		if err != nil {
-			return "", fmt.Errorf("read prompt override file %q: %w", s.resolvedFilePath(dir), err)
+			return "", err
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return "", fmt.Errorf("read prompt override file %q: %w", path, err)
 		}
 		return string(data), nil
 	}
@@ -210,8 +215,33 @@ func (s PromptSpec) ResolvedFilePath(fallbackDir string) string {
 	return s.resolvedFilePath(fallbackDir)
 }
 
+// readableFilePath is resolvedFilePath plus the containment reading requires: a
+// relative File must stay inside the directory of the .gavel.yaml that declared
+// it, so a config layer cannot make gavel read — and hand back — an arbitrary
+// file by walking out with `../`. The declaring directory itself is
+// caller-supplied (the settings API resolves it from a request parameter), so
+// the relative half is the part that has to be pinned. An absolute File is the
+// documented escape hatch for a prompt kept outside the project and is used
+// verbatim.
+func (s PromptSpec) readableFilePath(fallbackDir string) (string, error) {
+	if filepath.IsAbs(s.File) {
+		return s.File, nil
+	}
+	base := s.baseDir
+	if base == "" {
+		base = fallbackDir
+	}
+	if base == "" {
+		// Matches resolvedFilePath's behaviour for an unstamped spec: the path
+		// is relative to wherever gavel is running.
+		base = "."
+	}
+	return utils.ResolveWithin(base, s.File)
+}
+
 // resolvedFilePath returns File as an absolute path relative to the config layer
-// that declared it (baseDir), falling back to fallbackDir.
+// that declared it (baseDir), falling back to fallbackDir. It is the display
+// form; reading goes through readableFilePath, which also enforces containment.
 func (s PromptSpec) resolvedFilePath(fallbackDir string) string {
 	if s.File == "" || filepath.IsAbs(s.File) {
 		return s.File

@@ -131,12 +131,22 @@ func TestGraphQLPRWithMergedComments(t *testing.T) {
 	assert.False(t, thread2.IsResolved)
 	assert.True(t, thread2.IsOutdated)
 
+	// Only a thread comment is resolvable. An issue comment and a review body
+	// have IsResolved false structurally, so anything that gates on resolution
+	// has to be able to tell them apart from a live thread.
+	assert.False(t, issueComment.IsReviewThread)
+	assert.False(t, reviewBody.IsReviewThread)
+	assert.True(t, thread1.IsReviewThread)
+	assert.True(t, thread2.IsReviewThread)
+
 	// ReviewThreads should be populated with just the thread-sourced comments.
 	require.Len(t, pr.ReviewThreads, 2)
 	assert.Equal(t, int64(300), pr.ReviewThreads[0].ID)
 	assert.True(t, pr.ReviewThreads[0].IsResolved)
+	assert.True(t, pr.ReviewThreads[0].IsReviewThread)
 	assert.Equal(t, int64(301), pr.ReviewThreads[1].ID)
 	assert.True(t, pr.ReviewThreads[1].IsOutdated)
+	assert.True(t, pr.ReviewThreads[1].IsReviewThread)
 }
 
 func TestGraphQLPREmptyCommentSections(t *testing.T) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -96,18 +97,17 @@ func runPRStatusAIFix(ctx context.Context, opts PRStatusOptions, result *prwatch
 	logger.Infof("pr ai-fix: invoking %s (%s), max-iter=%d, budget=$%.2f",
 		aiCfg.Model.Name, p.GetRuntime(), maxIters, aiCfg.Budget.Cost)
 
-	// Commit hooks lead the list so that at PhaseRun they cut their commits
-	// before any later hook acts on the result. Pushing per turn is what makes the
-	// verify command meaningful: CI only re-runs on what the remote can see.
-	hooks := commitpkg.AgentHooks(commitpkg.AgentHooksOptions{
-		Commits: req.Workflow.Commits,
-		Push:    true,
-	})
-	verifyHooks, err := capverify.HooksFor(ctx, req.Workflow, capverify.Options{Provider: p})
+	tee := newAIFixVerifyTee()
+	defer func() {
+		if err := tee.Close(); err != nil {
+			logger.Warnf("pr ai-fix: verify output tee: %v", err)
+		}
+	}()
+
+	hooks, err := prFixHooks(ctx, req.Workflow, p, tee)
 	if err != nil {
 		return err
 	}
-	hooks = append(hooks, verifyHooks...)
 
 	runStart := time.Now()
 	renderer := newAIFixRenderer()
@@ -134,6 +134,23 @@ func runPRStatusAIFix(ctx context.Context, opts PRStatusOptions, result *prwatch
 		logger.Warnf("pr ai-fix: failed to render captain history: %v", err)
 	}
 	return errors.Join(runErr, renderErr)
+}
+
+// prFixHooks assembles the run's hooks: the commit pipeline first so that at
+// PhaseRun it cuts and pushes before any later hook acts on the result — pushing
+// per turn is what makes the verify command meaningful, since CI only re-runs on
+// what the remote can see — then the workflow's checks, with their output teed
+// to the caller's terminal so a multi-minute check is visibly moving.
+func prFixHooks(ctx context.Context, wf *api.Workflow, p captainai.Provider, tee io.Writer) ([]any, error) {
+	hooks := commitpkg.AgentHooks(commitpkg.AgentHooksOptions{
+		Commits: wf.Commits,
+		Push:    true,
+	})
+	verifyHooks, err := capverify.HooksFor(ctx, wf, capverify.Options{Provider: p, Output: tee})
+	if err != nil {
+		return nil, err
+	}
+	return append(hooks, verifyHooks...), nil
 }
 
 func prFixLayers(options prfix.ResolveOptions, iterations int) ([]api.SpecLayer, error) {
@@ -168,19 +185,13 @@ func applyMaxIterations(spec *api.Spec, iterations int) error {
 
 // prContextOf projects the watch result onto the prompt's template data.
 func prContextOf(result *prwatch.PRWatchResult, statusText string) prfix.PRContext {
-	unresolved := 0
-	for _, c := range result.Comments {
-		if !c.IsResolved && !c.IsOutdated {
-			unresolved++
-		}
-	}
 	return prfix.PRContext{
 		Number:             result.PR.Number,
 		Title:              result.PR.Title,
 		URL:                result.PR.URL,
 		Branch:             result.PR.HeadRefName,
 		StatusText:         statusText,
-		UnresolvedComments: unresolved,
+		UnresolvedComments: result.UnresolvedComments(),
 	}
 }
 

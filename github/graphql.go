@@ -376,6 +376,11 @@ func (pr graphQLPR) toPRInfo() *PRInfo {
 				Line:       c.Line,
 				IsResolved: thread.IsResolved,
 				IsOutdated: thread.IsOutdated,
+				// Set here and nowhere else: this is the only code that knows a
+				// comment came from a resolvable thread. mergeThreadState joins
+				// on ID across two independent GitHub ID spaces, so inferring it
+				// there would be a guess.
+				IsReviewThread: true,
 			}
 			info.Comments = append(info.Comments, comment)
 			info.ReviewThreads = append(info.ReviewThreads, comment)

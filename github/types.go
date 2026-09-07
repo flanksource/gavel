@@ -125,7 +125,16 @@ type PRComment struct {
 	IsOutdated bool      `json:"isOutdated,omitempty"`
 	Severity   string    `json:"severity,omitempty"` // "critical", "major", "minor", "nitpick"
 	BotType    string    `json:"botType,omitempty"`  // "coderabbit", "vercel", "copilot", "gavel"
+	// IsReviewThread marks a comment that came from a GitHub review thread — the
+	// only kind GitHub can resolve. IsResolved/IsOutdated are meaningful only
+	// when this is true; on an issue comment, a review body, or a nitpick parsed
+	// out of one they are inapplicable zero values, not observations.
+	IsReviewThread bool `json:"isReviewThread,omitempty"`
 }
+
+// IsUnresolved reports whether a comment still needs a reply. Outdated counts as
+// needing none: the code it was written against is gone.
+func (c PRComment) IsUnresolved() bool { return !c.IsResolved && !c.IsOutdated }
 
 func SeverityIcon(severity string) api.Text {
 	switch severity {
@@ -156,7 +165,7 @@ func (c PRComment) Pretty() api.Text {
 		title = title[:117] + "..."
 	}
 	style := ""
-	if c.IsResolved || c.IsOutdated {
+	if !c.IsUnresolved() {
 		style = "text-gray-500 line-through"
 	}
 	text = text.Append(" "+title, style)

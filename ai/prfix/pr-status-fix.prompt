@@ -20,9 +20,17 @@ workflow:
     scope: changed
     # --follow is required: the status rollup exits 0 while checks are still
     # in progress, so polling without it green-lights the run before CI has
-    # re-run the freshly pushed commit.
+    # re-run the freshly pushed commit. --fail-fast keeps the loop honest but
+    # cheap: it returns at the first definitive failure instead of holding the
+    # turn open for every slow scan. That matters because this command declares
+    # no timeout of its own, so it is bounded by captain's 10-minute
+    # DefaultCmdTimeout — and a CodeQL analysis alone can run for seven.
+    #
+    # No --actions here on purpose: the agent needs the full red picture, and
+    # scoping the gate would let a check outside the selector stay broken while
+    # the loop reports green.
     commands:
-      - gavel pr status --follow --logs --tail-logs 40
+      - gavel pr status --follow --fail-fast --logs --tail-logs 40
   commits:
     # A real commit per turn, not the `on: turn` default of fixup: the chain is
     # squashed only at end of run, and these commits are pushed as they are cut.

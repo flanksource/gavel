@@ -7,6 +7,26 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestPRCommentIsUnresolved(t *testing.T) {
+	cases := []struct {
+		name       string
+		isResolved bool
+		isOutdated bool
+		want       bool
+	}{
+		{"live thread needs a reply", false, false, true},
+		{"resolved needs none", true, false, false},
+		{"outdated needs none — the code it was written against is gone", false, true, false},
+		{"both", true, true, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := PRComment{IsResolved: tc.isResolved, IsOutdated: tc.isOutdated}
+			assert.Equal(t, tc.want, c.IsUnresolved())
+		})
+	}
+}
+
 func TestIsFailureConclusion(t *testing.T) {
 	cases := []struct {
 		conclusion string

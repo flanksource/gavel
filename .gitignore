@@ -92,3 +92,6 @@ go.work.sum
 /node_modules
 .facet/
 !.agents/skills/gavel-fixture-tester/
+!.agents/.claude-plugin/
+!.claude/skills/
+*.har

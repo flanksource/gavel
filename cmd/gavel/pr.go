@@ -34,7 +34,7 @@ Subcommands:
 Examples:
   gavel pr status                 # current branch's PR + checks
   gavel pr status 123 --logs      # PR #123 with failing-job logs
-  gavel pr status --follow        # block until checks complete
+  gavel pr status --follow        # block until what you filtered on settles
   gavel pr create <SHA>           # open a PR from one commit
   gavel pr list --ui              # live PR dashboard
   gavel pr close 123              # close PR #123 without merging`,
@@ -42,7 +42,8 @@ Examples:
 
 type PRStatusOptions struct {
 	Repo     string          `flag:"repo" short:"R" help:"GitHub repository (owner/repo)"`
-	Follow   bool            `flag:"follow" help:"Keep watching until all checks complete"`
+	Follow   bool            `flag:"follow" help:"Keep watching until the checks and comments you filtered on are settled"`
+	FailFast bool            `flag:"fail-fast" help:"With --follow, stop as soon as any check or job fails definitively instead of waiting for the rest"`
 	Interval string          `flag:"interval" help:"Poll interval (e.g. 30s, 1m)" default:"30s"`
 	Logs     bool            `flag:"logs" help:"Fetch and include failed job logs (uses extra GitHub API quota)"`
 	TailLogs int             `flag:"tail-logs" help:"Number of failed log lines to show per step (only applies with --logs)" default:"100"`
@@ -75,7 +76,12 @@ lint violations, plus a "Reproduce locally" block with the exact gavel commands 
 re-run them here: gavel test --pr <n> / gavel lint --pr <n>.
 
 Key flags:
-  --follow          Poll until all checks finish (--interval sets the cadence, default 30s)
+  --follow          Poll until done, where done means the dimensions you filtered on have
+                    settled: with --actions, the selected checks completed; with --comments,
+                    the selected review threads resolved; with both, both; with neither, the
+                    whole rollup (--interval sets the cadence, default 30s)
+  --fail-fast       With --follow, return at the first definitive failure (FAILURE,
+                    TIMED_OUT, STARTUP_FAILURE) instead of waiting for the rest
   --logs            Also fetch failing-job logs (--tail-logs lines per step; extra API quota)
   --comments LIST   Filter comments by MatchItem patterns over IDs and @author/@bot tokens
   --actions LIST    Filter actions by MatchItem patterns over run/workflow IDs, YAML path, workflow name, or job/check name
@@ -88,7 +94,9 @@ Examples:
   gavel pr status 123                          # PR #123 in this repo
   gavel pr status owner/repo 123               # PR #123 in another repo
   gavel pr status https://github.com/o/r/pull/1
-  gavel pr status --follow                     # block until checks complete
+  gavel pr status --follow                     # block until every check settles
+  gavel pr status --follow --actions 'CI / Test' --fail-fast   # stop the moment Test goes red
+  gavel pr status --follow --comments '@coderabbit'            # wait until those threads resolve
   gavel pr status 123 --logs                   # include failing-job logs
   gavel pr status --comments '1,2,!3,*,!@coderabbit'
   gavel pr status --actions '.github/workflows/ci.yml,!deploy'
@@ -96,7 +104,19 @@ Examples:
   gavel pr status --ai-fix                     # fix, push, and re-poll until checks pass`)
 }
 
+// validate rejects flag combinations that would silently do nothing.
+func (o PRStatusOptions) validate() error {
+	if o.FailFast && !o.Follow {
+		return fmt.Errorf("--fail-fast requires --follow: without it `pr status` already returns after a single poll")
+	}
+	return nil
+}
+
 func runPRStatus(opts PRStatusOptions) (any, error) {
+	if err := opts.validate(); err != nil {
+		return nil, err
+	}
+
 	repo, prNumber, err := parseStatusArgs(opts.Args)
 	if err != nil {
 		return nil, err
@@ -120,6 +140,7 @@ func runPRStatus(opts PRStatusOptions) (any, error) {
 		PRNumber: prNumber,
 		Interval: interval,
 		Follow:   opts.Follow,
+		FailFast: opts.FailFast,
 		Logs:     opts.Logs,
 		TailLogs: opts.TailLogs,
 		Comments: opts.Comments,

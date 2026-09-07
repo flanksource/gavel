@@ -31,7 +31,7 @@ commit:
 	})
 
 	t.Run("missing file returns os.ErrNotExist", func(t *testing.T) {
-		_, err := LoadSingleGavelConfig(filepath.Join(t.TempDir(), "missing.yaml"))
+		_, err := LoadSingleGavelConfig(filepath.Join(t.TempDir(), GavelConfigFileName))
 		require.Error(t, err)
 		assert.True(t, os.IsNotExist(err))
 	})

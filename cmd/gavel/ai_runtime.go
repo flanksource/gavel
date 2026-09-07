@@ -6,6 +6,9 @@ import (
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/captain/pkg/captainconfig"
 	captaincli "github.com/flanksource/captain/pkg/cli"
+	"github.com/flanksource/clicky"
+	"github.com/flanksource/gavel/internal/streamtee"
+	"github.com/flanksource/gavel/internal/ttyrender"
 )
 
 // defaultAIRuntimeOptions mirrors the boolean defaults clicky sets on
@@ -37,4 +40,23 @@ func buildAIFixRequest(options aiFixRequestOptions) (captaincli.AIRuntimeResolve
 
 func newAIFixRenderer() *captaincli.EventRenderer {
 	return captaincli.NewEventRenderer(os.Stderr)
+}
+
+// newAIFixVerifyTee streams a verify command's output onto the same stderr the
+// event renderer draws on, so a check that polls CI for minutes is visibly
+// moving instead of looking hung.
+//
+// The tee never calls into the renderer: EventRenderer.write has no mutex and
+// mutates its own error state, so routing bytes through it from the exec copy
+// goroutine would race. streamtee writes whole lines straight to the file and
+// commits any in-place line first — see its package doc.
+//
+// The gutter is plain when stderr is not a terminal, so a redirected run stays
+// greppable.
+func newAIFixVerifyTee() *streamtee.Writer {
+	prefix := "│ "
+	if ttyrender.IsTerminal(os.Stderr) {
+		prefix = clicky.Text("│ ", "text-gray-500").ANSI()
+	}
+	return streamtee.New(streamtee.Options{Out: os.Stderr, Prefix: prefix, MaxLineBytes: 4096})
 }

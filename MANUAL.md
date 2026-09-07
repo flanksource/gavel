@@ -724,10 +724,26 @@ gavel pr status
 gavel pr status 42
 gavel pr status https://github.com/owner/repo/pull/123
 gavel pr status --follow --interval 30s
+gavel pr status --follow --actions 'CI / Test' --fail-fast   # stop the moment Test goes red
+gavel pr status --follow --comments '@coderabbit'            # wait until those threads resolve
 gavel pr status --logs --tail-logs 50
 gavel test --pr 42        # re-run just the tests that failed on PR #42
 gavel lint --pr 42        # re-run just the linters that flagged PR #42
 ```
+
+`--follow` gates on the dimensions you filtered on, ANDed together: `--actions` waits for
+the selected checks to reach `COMPLETED`, `--comments` waits for the selected review threads
+to be resolved, and with neither the gate is the whole status rollup. `--fail-fast` returns
+at the first definitive failure (`FAILURE`, `TIMED_OUT`, `STARTUP_FAILURE`) rather than
+holding the watch open for slower checks — useful when a later scan takes minutes longer
+than the check you care about.
+
+A selector that matches nothing is an error under `--follow` too, not a silent success: an
+empty filtered set used to satisfy the gate, so a typo — or a poll issued before GitHub had
+registered a freshly pushed commit's checks — returned exit 0 immediately.
+
+When stderr is not a terminal, each poll prints a one-line heartbeat rather than repainting
+the whole status table; the full report is still printed once, at the end.
 
 ### `gavel pr list`
 
