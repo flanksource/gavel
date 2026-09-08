@@ -8,10 +8,10 @@ Every AI prompt Gavel ships is overridable from `.gavel.yaml`. Each override is 
 
 ```yaml
 commit:
-  groupingPrompt: "You are grouping changes. {{table}} ..."   # inline
-verify:
-  promptTemplate:
-    file: .gavel/prompts/review.prompt                        # file reference
+  grouping: "You are grouping changes. {{table}} ..."         # inline
+lint:
+  fix:
+    file: .gavel/prompts/lint-fix.prompt                      # file reference
 todos:
   plan:                                                        # structured api.Spec, flat fields
     model: claude-sonnet-5
@@ -39,22 +39,21 @@ Gavel validates the parsed output and fails loudly on a shape mismatch (no zero-
 
 | Config path | Prompt | Input variables | Output schema |
 | --- | --- | --- | --- |
-| `verify.promptTemplate` | AI fixture reviewer | `{{scopeInstruction}}`, `{{extraPrompt}}`, `{{issue}}`, `{{sessionId}}`, `{{changedFiles}}`, `{{worktree}}` | Built from checks/criteria (schema.cel) |
-| `commit.messagePrompt` | Commit message | `{{patch}}`, `{{maxBodyLines}}` | frontmatter |
-| `commit.functionalityRemovedPrompt` | Removed functionality | commit fields | frontmatter |
-| `commit.compatibilityPrompt` | Compatibility issues | commit fields | frontmatter |
-| `commit.summaryPrompt` | Commit-group summary (`git analyze --summary`) | scope/commit fields | frontmatter |
-| `commit.groupingPrompt` | AI commit grouping (`commit -G`) | `{{table}}`, `{{groupByScope}}`, `{{maxCommits}}`, `{{consolidation}}`, `{{prevCount}}`, `{{prevGroups}}` | frontmatter (`groups[]`+`ignore[]`) |
-| `commit.prContentPrompt` | PR title/body/branch | PR input fields | frontmatter |
+| `commit.message` | Commit message | `{{patch}}`, `{{maxBodyLines}}` | frontmatter |
+| `commit.summary` | Commit-group summary (`git analyze --summary`) | scope/commit fields | frontmatter |
+| `commit.grouping` | AI commit grouping (`commit -G`) | `{{table}}`, `{{groupByScope}}`, `{{maxCommits}}`, `{{consolidation}}`, `{{prevCount}}`, `{{prevGroups}}` | frontmatter (`groups[]`+`ignore[]`) |
+| `lint.fix` | Lint source repair (`lint --ai-fix`, `commit --fix`) | violation fields | frontmatter |
+| `pr.content` | PR title/body/branch | PR input fields | frontmatter |
+| `pr.fix` | PR check repair (`pr status --ai-fix`) | PR/check fields | frontmatter |
 | `todos.run` | Todo run | `{{body}}`, `{{count}}`, `{{multiple}}`, `{{existingPlan}}` | **fixed** (run envelope) |
 | `todos.plan` | Todo plan | `{{body}}`, `{{count}}`, `{{existingPlan}}` | **fixed** (plan envelope) |
 | `todos.triage` | Todo triage | `{{body}}`, `{{count}}`, `{{multiple}}`, `{{backlog}}` | **fixed** (triage envelope) |
-| `status.summaryPrompt` | Per-file summary (`status --ai`) | `{{details}}` | frontmatter (`{summary}`) |
-| `test.outlineSummaryPrompt` | Per-test summary (`test outline --ai-summary`) | `{{ids}}`, `{{file}}`, `{{source}}` | frontmatter (`tests[]`) |
+| `status.summary` | Per-file summary (`status --ai`) | `{{details}}` | frontmatter (`{summary}`) |
+| `test.outlineSummary` | Per-test summary (`test outline --ai-summary`) | `{{ids}}`, `{{file}}`, `{{source}}` | frontmatter (`tests[]`) |
 
 ### White-box vs black-box verify
 
-The verify prompt is white-box or black-box by **which variables it references**, not by a mode flag:
+The verification prompt (`todos.verify`) is owned by the lifecycle rather than overridable as a file — its checklist is generated from the todo's acceptance criteria. It is white-box or black-box by **which variables it references**, not by a mode flag:
 
 - **White-box** — reference `{{sessionId}}` to have the reviewer inspect the implementation session's transcript.
 - **Black-box** — reference `{{changedFiles}}` / `{{worktree}}` (the final worktree state) to review purely from the result, which lets a cheap non-agentic model verify without agent tools. These are computed lazily, only when the template references them.

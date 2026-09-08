@@ -411,15 +411,14 @@ gavel commit --force                  # skip hooks
 | `-A` / `--commit-all` | Stage all changes and ask the LLM to split them into logical commit groups (plus a separate chore commit for lock files / build artifacts / generated bundles). Each group is committed as soon as its message is ready |
 | `--max-commits` | Cap the number of logical commits, excluding the chore commit (default 7). Setting it implies `-A`. Rendered into the grouping prompt's output schema as `maxItems` and enforced by captain's `schemaStrictness=retry` policy |
 | `-m` / `--message` | Explicit commit message; skips only the message-generation LLM call |
-| `--model` | Override LLM model for commit-message/PR generation from `.gavel.yaml` `commit.model` (fast/haiku-class) |
-| `--group-model` | Override LLM model for AI grouping (`-A`) from `.gavel.yaml` `commit.groupModel` (capable/sonnet-class); falls back to `--model` |
+| `--model` | Override LLM model for commit-message/PR generation from `.gavel.yaml` `commit.message.model` (falling back to `ai.model`); accepts a compact `mode:model:effort` selector |
+| `--group-model` | Override LLM model for AI grouping (`-A`) from `.gavel.yaml` `commit.grouping.model` (capable/sonnet-class); falls back to `--model` |
 | `--dry-run` | Print the generated message without committing |
 | `--force` | Skip pre-commit hooks |
 | `--no-cache` | Bypass the LLM response cache |
 | `--precommit` | How to handle gitignore + linked-dependency precommit checks: `prompt`, `fail`, `skip`, or `false` |
-| `--compat` | How to handle AI compatibility analysis + findings: `prompt`, `fail`, `skip`, or `false` |
 
-Pre-commit hooks are configured in `.gavel.yaml` under `commit.hooks` — see [Configuration](#gavelyaml). Combined precommit behavior is controlled by `.gavel.yaml` `commit.precommit.mode`, and compatibility warnings by `commit.compatibility.mode`.
+Pre-commit hooks are configured in `.gavel.yaml` under `commit.hooks` — see [Configuration](#gavelyaml). Combined precommit behavior is controlled by `.gavel.yaml` `commit.precommit.mode`.
 
 ### Pull Requests
 
@@ -765,8 +764,10 @@ lint:
       enabled: true                   # opt in without React detection or doctor.config.*
 
 commit:
-  model: claude-haiku-4-5            # fast model for commit-message/PR generation
-  groupModel: claude-sonnet-4-5      # capable model for AI commit grouping (-A)
+  message:
+    model: claude-haiku-4-5          # fast model for commit-message generation
+  grouping:
+    model: claude-sonnet-4-5         # capable model for AI commit grouping (-A)
   hooks:                             # pre-commit hooks
     - name: lint-staged
       run: "golangci-lint run --new-from-rev=HEAD~1"

@@ -29,6 +29,13 @@ type DecodeOptions struct {
 	Policy UnknownFieldPolicy
 	// Warn defaults to the application logger.
 	Warn func(string)
+	// Renames annotates known-legacy paths with what replaced them, keyed by the
+	// same dotted path the warning reports. A field that was renamed rather than
+	// dropped is otherwise indistinguishable from a typo: the value is silently
+	// discarded and the bare "unknown field" tells the reader nothing about where
+	// the setting moved to. Callers that have no legacy vocabulary — the request
+	// bodies in pr/ui — leave it nil.
+	Renames map[string]string
 }
 
 // DecodeFields lets custom decoders expose their object wire shape for field
@@ -108,6 +115,10 @@ func (o DecodeOptions) check(document *yaml.Node, target reflect.Type, format st
 	fields.walk(document, target, "")
 	var warnings []string
 	for path := range fields.unknown {
+		if hint := o.Renames[path]; hint != "" {
+			warnings = append(warnings, fmt.Sprintf("%s: unknown field %s (%s)", o.source(), path, hint))
+			continue
+		}
 		warnings = append(warnings, fmt.Sprintf("%s: unknown field %s", o.source(), path))
 	}
 	sort.Strings(warnings)

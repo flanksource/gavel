@@ -57,19 +57,21 @@ field is left undocumented.
 
 ---
 
-## `verify`
+## `ai`
 
-Settings for AI verification fixture steps.
+The base Captain spec every AI operation inherits and overrides field-wise:
+model, prompt, workspace, permissions, environment, and runtime defaults. There
+is no built-in default model — set `ai.model` here, or `ai.defaultModel` in
+`~/.captain.yaml`. A run that finds neither stops and tells you to run
+`gavel configure`.
 
-| Key | Type | Default | Merge | Description |
-| --- | --- | --- | --- | --- |
-| `verify.model` | string | `claude` | last non-empty wins | AI CLI / model used by AI fixture steps. Common values: `claude`, `gemini`, `codex`, or a fully qualified model name. |
-| `verify.prompt` | string | `""` | last non-empty wins | Repo-specific review policy appended to Gavel's built-in AI fixture prompt. |
-| `verify.promptTemplate` | prompt override | built-in | last configured override wins | Complete reviewer prompt supplied inline or from a file. |
-| `verify.checks.disabled` | string[] | `[]` | appended | Individual check IDs to disable (e.g. `SEC-1`, `PERF-2`). |
-| `verify.checks.disabledCategories` | string[] | `[]` | appended | Whole categories to disable: `completeness`, `code-quality`, `testing`, `consistency`, `security`, `performance`. |
+```yaml
+ai:
+  model: claude-sonnet-5
+  effort: high
+```
 
-### Prompt overrides
+## Prompt overrides
 
 Every registered AI prompt accepts a bare string, an `inline` value, or a `file`
 reference. A string is complete dotprompt `.prompt` source. `inline` may also be
@@ -88,14 +90,14 @@ todos:
     effort: high
 
 commit:
-  messagePrompt:
+  message:
     file: .gavel/prompts/commit-message.prompt
 ```
 
-Prompt override paths are `verify.promptTemplate`,
-`commit.{messagePrompt,functionalityRemovedPrompt,compatibilityPrompt,summaryPrompt,groupingPrompt,prContentPrompt}`,
-`todos.{run,plan,triage}`, `status.summaryPrompt`, and
-`test.outlineSummaryPrompt`. Use `gavel config --resolve` (`-r`) to see each
+The prompt override paths are `commit.message`, `commit.summary`,
+`commit.grouping`, `lint.fix`, `pr.content`, `pr.fix`, `todos.run`,
+`todos.plan`, `todos.triage`, `status.summary`, and `test.outlineSummary`.
+Use `gavel config --resolve` (`-r`) to see each
 prompt's built-in/inline/file source, complete body, declared Captain spec, and
 effective model/backend. Structured `--json`/`--yaml` output has the shape
 `{config, prompts}`.
@@ -121,29 +123,31 @@ Settings for `gavel commit`.
 
 | Key | Type | Default | Merge | Description |
 | --- | --- | --- | --- | --- |
-| `commit.model` | string | inherits `verify.model` | last non-empty wins | AI CLI / model for commit-message generation and compatibility analysis. |
+| `commit.message` | prompt override | built-in | field-wise over `ai` | AI spec for commit-message generation. |
+| `commit.grouping` | prompt override | built-in | field-wise over `ai` | AI spec for AI commit grouping (`gavel commit -G`). |
+| `commit.summary` | prompt override | built-in | field-wise over `ai` | AI spec for naming and summarising a group of commits. |
+| `commit.maxCommits` | int | `0` | last non-zero wins | Cap on how many commits AI grouping may produce. `0` uses the built-in default. |
+| `commit.types` | string[] | `[]` | replaces | Conventional-commit types AI message generation may choose from. Empty allows every type. |
 | `commit.hooks` | object[] | `[]` | appended | Hooks run before the commit is written (see below). |
 | `commit.hooks[].name` | string | — | — | Display name for the hook. |
 | `commit.hooks[].run` | string | — | — | Shell command to execute. |
 | `commit.hooks[].files` | string[] | — | — | Glob filter; the hook runs only if a staged file matches. Runs unconditionally when omitted. |
 | `commit.gitignore` | string[] | `[]` | appended + deduped | Extra ignore globs applied when selecting files to commit. |
 | `commit.allow` | string[] | `[]` | appended + deduped | Paths allowed through even when a broader `commit.gitignore` glob matches (e.g. generated artifacts you intentionally commit). |
-| `commit.precommit.mode` | mode | `prompt` | last non-empty wins | Gate for `commit.gitignore` prompts and linked-dependency checks. |
-| `commit.linkedDeps.mode` | mode | `prompt` | last non-empty wins | **Deprecated** — superseded by `commit.precommit`. Retained for backward-compatible loading; prefer `commit.precommit.mode`. |
-| `commit.compatibility.mode` | mode | `skip` | last non-empty wins | Gate for the AI warning that surfaces removed functionality and backward-compatibility issues. |
+| `commit.precommit.mode` | mode | `prompt` | last non-empty wins | Gate for `commit.gitignore` prompts and linked-dependency checks (`package.json` `file:`/`link:` refs and `go.mod` replace directives pointing outside the repo). |
 | `commit.lint.enabled` | bool | `false` | later layer wins | Run every non-secrets linter over the staged file set before committing. Overridden per run by `--lint`. |
 | `commit.lint.secrets` | bool | `true` | later layer wins | Run the betterleaks/secrets linter before committing. Overridden per run by `--lint-secrets`. |
 | `commit.tidy.enabled` | bool | `true` | later layer wins | Run `go mod tidy` in every Go module and stage the resulting `go.mod`/`go.sum` changes. Overridden per run by `--tidy`. |
 
 ### `mode` values
 
-The `precommit`, `linkedDeps`, and `compatibility` gates share a `mode` type:
+`commit.precommit` takes a `mode`:
 
 | Value | Behavior |
 | --- | --- |
-| `prompt` | Ask before committing (default for `precommit`/`linkedDeps`). |
+| `prompt` | Ask before committing (the default). |
 | `fail` | Hard-fail the commit when the check triggers. |
-| `skip` | Bypass the check (default for `compatibility`). |
+| `skip` | Bypass the check. |
 | `false` | Alias for `skip`. |
 
 ## `fixtures`
@@ -260,15 +264,34 @@ project picks the model, budget or permissions its custom steps run with.
 See [`gavel.yaml.example`](./gavel.yaml.example) for a worked `todos.lifecycle`
 example with a custom step.
 
-### Retired `todos.*` keys
+### Retired keys
 
-These keys were removed when the ad-hoc run-mode/driver model was replaced by
-the lifecycle. A `.gavel.yaml` still declaring one fails to load with the exact
-message shown (`<path>: <key> is no longer supported; use <replacement>`)
-rather than silently running on built-in defaults.
+A `.gavel.yaml` still declaring one of these loads, warns, and ignores the
+value — the setting is silently inert, so the warning names where it went:
 
-| Removed key | Replacement |
+```
+.gavel.yaml: unknown field commit.summaryPrompt (renamed to commit.summary)
+```
+
+The table lives in `verify.LegacyConfigFields`, and every replacement in it is
+checked against the live config structs by
+`TestGavelConfigDecoding`, so it cannot drift from the code.
+
+| Retired key | Replacement |
 | --- | --- |
+| `verify` | the top-level `ai:` spec and `todos.verify` |
+| `commit.messagePrompt` | `commit.message` |
+| `commit.groupingPrompt` | `commit.grouping` |
+| `commit.summaryPrompt` | `commit.summary` |
+| `commit.prContentPrompt` | `pr.content` |
+| `commit.linkedDeps` | `commit.precommit` |
+| `commit.model` | `ai.model` |
+| `commit.groupModel` | `commit.grouping.model` |
+| `commit.compatibility`, `commit.compatibilityPrompt`, `commit.functionalityRemovedPrompt` | nothing — compatibility analysis no longer runs |
+| `status.summaryPrompt` | `status.summary` |
+| `test.outlineSummaryPrompt` | `test.outlineSummary` |
+| `todos.runPrompt` | `todos.run` |
+| `todos.planPrompt` | `todos.plan` |
 | `todos.driver` | `ai.model` with the compact `mode:model:effort` form, e.g. `ai.model: "cli:opus:high"` |
 | `todos.prompts` | a lifecycle step under `todos.<step>` |
 | `todos.groupBy` | nothing — grouping was removed; runs dispatch per todo |
@@ -311,8 +334,8 @@ the TOML files themselves; Gavel only discovers and merges them.
 
 ```yaml
 # yaml-language-server: $schema=https://raw.githubusercontent.com/flanksource/gavel/main/gavel.schema.json
-verify:
-  model: claude
+ai:
+  model: claude-sonnet-5
 
 commit:
   hooks:

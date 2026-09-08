@@ -1,6 +1,7 @@
 package verify
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -156,7 +157,7 @@ func loadSingleGavelConfig(path string) (GavelConfig, string, error) {
 		return GavelConfig{}, "", fmt.Errorf("parse %s: %w", path, err)
 	}
 	var gc GavelConfig
-	if err := DecodeJSON(encoded, &gc, DecodeOptions{Source: path}); err != nil {
+	if err := DecodeJSON(encoded, &gc, DecodeOptions{Source: path, Renames: legacyFieldHints}); err != nil {
 		return GavelConfig{}, "", err
 	}
 	if err := gc.Todos.Validate(); err != nil {
@@ -171,7 +172,18 @@ func loadSingleGavelConfig(path string) (GavelConfig, string, error) {
 
 func SaveGavelConfig(dir string, cfg GavelConfig) error {
 	path := filepath.Join(dir, ".gavel.yaml")
-	data, err := yaml.Marshal(cfg)
+	// Marshal through JSON rather than yaml.Marshal so the document can be pruned
+	// before it is written: ghodss/yaml encodes via JSON anyway, and writing every
+	// zero-valued struct as `{}` is what fills these files with dead keys.
+	encoded, err := json.Marshal(cfg)
+	if err != nil {
+		return err
+	}
+	pruned, err := pruneEmptyConfigNodes(encoded)
+	if err != nil {
+		return err
+	}
+	data, err := yaml.JSONToYAML(pruned)
 	if err != nil {
 		return err
 	}
