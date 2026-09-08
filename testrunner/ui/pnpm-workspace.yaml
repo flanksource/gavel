@@ -27,6 +27,10 @@ catalog:
   "@codemirror/view": ^6.43.4
   "@ai-sdk/react": ^3.0.201
   "@floating-ui/react": ^0.27.19
+  # Build-time only, mirrored from clicky-ui: its icon codegen renders
+  # icon-data API responses to SVG.
+  "@iconify/types": ^2.0.0
+  "@iconify/utils": ^3.1.3
   "@mdxeditor/editor": ^4.0.4
   "@monaco-editor/react": ^4.7.0
   "@oxlint/plugins": ^1.60.0
