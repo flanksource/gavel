@@ -85,6 +85,25 @@ var _ = Describe("Gavel artifact results", func() {
 		Expect(plain).To(ContainSubstring("View full results"))
 	})
 
+	It("renders a crash envelope log tail in PR status", func() {
+		exitCode := 1
+		result := PRWatchResult{
+			PR: &github.PRInfo{Number: 83},
+			GavelResults: []*GavelResultsSummary{{
+				StickyID:    "gavel",
+				Error:       "gavel exited 1 before writing results",
+				ExitCode:    &exitCode,
+				LogTail:     "pre-build failed\n\tgo mod tidy",
+				ArtifactURL: "https://github.com/acme/widgets/actions/runs/123/artifacts/456",
+			}},
+		}
+
+		plain := result.Pretty().String()
+		Expect(plain).To(ContainSubstring("Log tail"))
+		Expect(plain).To(ContainSubstring("pre-build failed"))
+		Expect(plain).To(ContainSubstring("go mod tidy"))
+	})
+
 	It("prints the gavel commands that re-run a failing shard", func() {
 		results := []*GavelResultsSummary{
 			{StickyID: "gavel-test", TestsFailed: 2, TestsTotal: 11},

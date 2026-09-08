@@ -2,6 +2,7 @@ package prwatch
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
@@ -52,6 +53,12 @@ func (s GavelResultsSummary) Pretty() api.Text {
 		text = text.NewLine().Append(s.Error, "text-yellow-600")
 		if s.ExitCode != nil {
 			text = text.Append(fmt.Sprintf(" (exit %d)", *s.ExitCode), "text-gray-500")
+		}
+	}
+	if strings.TrimSpace(s.LogTail) != "" {
+		text = text.NewLine().Append("── Log tail ──────────", "text-red-600")
+		for _, line := range strings.Split(strings.TrimSpace(s.LogTail), "\n") {
+			text = text.NewLine().Append(line, "text-gray-500")
 		}
 	}
 	return text
