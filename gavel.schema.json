@@ -653,6 +653,9 @@
     "Permissions": {
       "additionalProperties": false,
       "properties": {
+        "approvalTimeout": {
+          "type": "string"
+        },
         "mcp": {
           "$ref": "#/$defs/MCP"
         },

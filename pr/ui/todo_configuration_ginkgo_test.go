@@ -40,7 +40,7 @@ var _ = Describe("todo configuration error boundaries", func() {
 			Expect(*called).To(BeFalse())
 		},
 		Entry("AI temperature", "ai:\n  temperature: 3\n", "temperature"),
-		Entry("AI permission mode", "ai:\n  permissions:\n    mode: invalid-policy\n", "permissions"),
+		Entry("AI permission mode", "ai:\n  permissions:\n    mode: invalid-policy\n", "permission"),
 		Entry("loaded step permission mode", "todos:\n  plan:\n    permissions:\n      mode: invalid-policy\n", "permission"),
 	)
 
@@ -76,7 +76,7 @@ var _ = Describe("todo configuration error boundaries", func() {
 			}},
 		})
 		Expect(recorder.Code).To(Equal(http.StatusInternalServerError), recorder.Body.String())
-		Expect(recorder.Body.String()).To(And(ContainSubstring(".gavel.yaml"), ContainSubstring("permissions")))
+		Expect(recorder.Body.String()).To(And(ContainSubstring(".gavel.yaml"), ContainSubstring("permission")))
 		Expect(uiTestProviderFor(dir).comments).To(BeEmpty())
 		Expect(created.Status).To(Equal(types.StatusAsk))
 		Expect(*called).To(BeFalse())
