@@ -8,7 +8,10 @@ import (
 	"time"
 
 	clickytask "github.com/flanksource/clicky/task"
+	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
+
+	"github.com/flanksource/gavel/internal/jsonb"
 )
 
 type Store struct {
@@ -36,33 +39,103 @@ func NewStore(db *gorm.DB) (*Store, error) {
 	return &Store{db: db}, nil
 }
 
-func (s *Store) Import(ctx context.Context, records []Record) error {
-	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		for _, record := range records {
-			if err := importRecord(tx, record); err != nil {
-				return err
-			}
+// ImportResult reports what one Import pass achieved.
+type ImportResult struct {
+	Imported int
+	// Rejected lists records the database will never accept, because the fault
+	// is in the record rather than in the connection. The caller records
+	// progress past them instead of re-offering them on the next sweep.
+	Rejected []RejectedRecord
+}
+
+// RejectedRecord names one record that was skipped, and why.
+type RejectedRecord struct {
+	RunID string
+	Err   error
+}
+
+// Import folds spool records into the database mirror.
+//
+// Each record is its own transaction. Sharing one transaction meant a single
+// unimportable record aborted the batch, which the sweep reads as "made no
+// progress": it never advances its high-water mark, so every spool file is
+// re-parsed and re-fails on the next tick, forever, and expired rows are never
+// pruned. One malformed snapshot took the whole archive down with it.
+//
+// A record the database refuses on its own merits is reported in the result and
+// skipped. Anything else — a closed connection, a missing table — is returned
+// as an error, so a broken database still stops the sweep instead of quietly
+// discarding the spool.
+func (s *Store) Import(ctx context.Context, records []Record) (ImportResult, error) {
+	var result ImportResult
+	for _, record := range records {
+		err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			return importRecord(tx, record)
+		})
+		switch {
+		case err == nil:
+			result.Imported++
+		case isRecordFault(err):
+			result.Rejected = append(result.Rejected, RejectedRecord{RunID: record.Run.ID, Err: err})
+		default:
+			return result, err
 		}
-		return nil
-	})
+	}
+	return result, nil
+}
+
+// recordFault marks an error caused by the record's own content, so retrying it
+// unchanged can only fail the same way.
+type recordFault struct{ err error }
+
+func (f recordFault) Error() string { return f.err.Error() }
+func (f recordFault) Unwrap() error { return f.err }
+
+func isRecordFault(err error) bool {
+	var fault recordFault
+	return errors.As(err, &fault)
+}
+
+// asRecordFault classifies a database error. SQLSTATE class 22 (data exception,
+// where 22P05 "unsupported Unicode escape sequence" lives) and class 23
+// (integrity constraint violation) describe the value being written; every
+// other class describes the session or the schema.
+func asRecordFault(err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && len(pgErr.Code) >= 2 {
+		switch pgErr.Code[:2] {
+		case "22", "23":
+			return recordFault{err}
+		}
+	}
+	return err
 }
 
 func importRecord(db *gorm.DB, record Record) error {
 	if err := validateRecord(record); err != nil {
-		return err
+		// A record that fails validation is malformed on disk and will fail
+		// identically every pass.
+		return recordFault{err}
 	}
 	startedAt, err := time.Parse(time.RFC3339Nano, record.Run.StartedAt)
 	if err != nil {
-		return fmt.Errorf("parse task run %q startedAt: %w", record.Run.ID, err)
+		return recordFault{fmt.Errorf("parse task run %q startedAt: %w", record.Run.ID, err)}
 	}
+	// Snapshots carry raw subprocess stdout/stderr, so a NUL byte in a supervised
+	// process's output reaches this point as a U+0000 escape that jsonb cannot
+	// store; see jsonb.StripNullEscapes.
 	run, err := json.Marshal(record.Run)
 	if err != nil {
-		return fmt.Errorf("marshal task run %q: %w", record.Run.ID, err)
+		// TaskSnapshot.Details is an `any`, so an unencodable value is a property
+		// of this record, not of the batch.
+		return recordFault{fmt.Errorf("marshal task run %q: %w", record.Run.ID, err)}
 	}
+	run = jsonb.StripNullEscapes(run)
 	snapshots, err := json.Marshal(record.Snapshots)
 	if err != nil {
-		return fmt.Errorf("marshal task snapshots %q: %w", record.Run.ID, err)
+		return recordFault{fmt.Errorf("marshal task snapshots %q: %w", record.Run.ID, err)}
 	}
+	snapshots = jsonb.StripNullEscapes(snapshots)
 	// The DO UPDATE is guarded because archived runs are immutable and the spool
 	// sweep re-offers every retained record on each pass. Without the guard an
 	// unchanged re-import still writes a new tuple, so a 40-row table accumulates
@@ -83,7 +156,7 @@ func importRecord(db *gorm.DB, record Record) error {
 			OR task_run_history.snapshots IS DISTINCT FROM EXCLUDED.snapshots`,
 		record.Run.ID, startedAt, string(run), string(snapshots), record.ArchivedAt, record.ArchivedAt.Add(Retention))
 	if result.Error != nil {
-		return fmt.Errorf("import task history %q: %w", record.Run.ID, result.Error)
+		return asRecordFault(fmt.Errorf("import task history %q: %w", record.Run.ID, result.Error))
 	}
 	return nil
 }

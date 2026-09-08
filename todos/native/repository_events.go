@@ -11,6 +11,8 @@ import (
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+
+	"github.com/flanksource/gavel/internal/jsonb"
 )
 
 func (r *Repository) SetAliases(ctx context.Context, issueID uuid.UUID, expectedVersion int64, aliases []AliasInput, actor string) (*Issue, error) {
@@ -239,27 +241,30 @@ func insertEvent(tx *gorm.DB, issueID uuid.UUID, sequence int64, input EventInpu
 }
 
 func marshalPayload(value any) ([]byte, error) {
-	if value == nil {
-		return []byte(`{}`), nil
-	}
+	var encoded []byte
 	switch payload := value.(type) {
+	case nil:
+		encoded = []byte(`{}`)
 	case json.RawMessage:
 		if !json.Valid(payload) {
 			return nil, fmt.Errorf("%w: event payload is not valid JSON", ErrInvalidInput)
 		}
-		return payload, nil
+		encoded = payload
 	case []byte:
 		if !json.Valid(payload) {
 			return nil, fmt.Errorf("%w: event payload is not valid JSON", ErrInvalidInput)
 		}
-		return payload, nil
+		encoded = payload
 	default:
-		encoded, err := json.Marshal(value)
+		marshalled, err := json.Marshal(value)
 		if err != nil {
 			return nil, fmt.Errorf("encode native todo event payload: %w", err)
 		}
-		return encoded, nil
+		encoded = marshalled
 	}
+	// Every branch ends up in a jsonb column, which cannot hold U+0000 — an
+	// event payload quoting captured command output can carry one.
+	return jsonb.StripNullEscapes(encoded), nil
 }
 
 func normalizeAliases(inputs []AliasInput) ([]AliasInput, error) {

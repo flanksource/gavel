@@ -292,8 +292,16 @@ func (s *spoolSweep) run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := store.Import(ctx, spooled); err != nil {
+	result, err := store.Import(ctx, spooled)
+	if err != nil {
 		return err
+	}
+	// Rejected records are reported and then left behind. Holding the high-water
+	// mark back for them would re-offer every spool file on the next tick and
+	// fail the same way, which is how one bad snapshot used to stall the archive
+	// and its pruning indefinitely.
+	for _, rejected := range result.Rejected {
+		logger.Errorf("task history: skipping run %s: %v", rejected.RunID, rejected.Err)
 	}
 	s.imported = offered
 	return store.Prune(ctx, now)

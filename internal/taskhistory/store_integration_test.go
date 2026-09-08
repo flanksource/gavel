@@ -50,9 +50,17 @@ var _ = Describe("Task history database store", func() {
 			ArchivedAt: now.Add(-31 * 24 * time.Hour),
 		}
 
-		Expect(store.Import(GinkgoT().Context(), []taskhistory.Record{fresh, expired})).To(Succeed())
+		mustImport := func(records ...taskhistory.Record) taskhistory.ImportResult {
+			GinkgoHelper()
+			result, err := store.Import(GinkgoT().Context(), records)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.Rejected).To(BeEmpty())
+			return result
+		}
+
+		mustImport(fresh, expired)
 		fresh.Run.Name = "Updated"
-		Expect(store.Import(GinkgoT().Context(), []taskhistory.Record{fresh})).To(Succeed())
+		mustImport(fresh)
 		Expect(store.Prune(GinkgoT().Context(), now)).To(Succeed())
 		runs, err := store.ListRuns(GinkgoT().Context(), now)
 
@@ -77,11 +85,46 @@ var _ = Describe("Task history database store", func() {
 			return xmin
 		}
 		before := rowVersion()
-		Expect(store.Import(GinkgoT().Context(), []taskhistory.Record{fresh})).To(Succeed())
+		mustImport(fresh)
 		Expect(rowVersion()).To(Equal(before), "re-importing an unchanged record must not rewrite the row")
 
 		fresh.ArchivedAt = now.Add(-30 * time.Minute)
-		Expect(store.Import(GinkgoT().Context(), []taskhistory.Record{fresh})).To(Succeed())
+		mustImport(fresh)
 		Expect(rowVersion()).NotTo(Equal(before), "a genuinely changed record must still be written")
+
+		// Snapshots carry raw subprocess stdout. A NUL byte in it is legal JSON
+		// but unrepresentable in jsonb, and used to fail the whole batch with
+		// SQLSTATE 22P05.
+		record := func(id, stdout string) taskhistory.Record {
+			return taskhistory.Record{
+				Run: clickytask.RunMeta{ID: id, Name: id, StartedAt: now.Add(-time.Hour).Format(time.RFC3339Nano)},
+				Snapshots: []clickytask.TaskSnapshot{{
+					ID: id, GroupID: id, Type: "group",
+					Status: string(clickytask.StatusSuccess), Stdout: stdout,
+				}},
+				ArchivedAt: now.Add(-time.Hour),
+			}
+		}
+		noisy := record("noisy-db-run", "before\x00after")
+		Expect(mustImport(noisy, record("sibling-db-run", "clean")).Imported).To(Equal(2))
+
+		stored, err := store.Snapshot(GinkgoT().Context(), noisy.Run.ID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(stored).To(HaveLen(1))
+		Expect(stored[0].Stdout).To(Equal("beforeafter"), "the NUL is dropped and the rest of the output kept")
+
+		// A record the database will never accept is skipped, not allowed to
+		// abort the batch — that is what used to stall every later sweep.
+		malformed := record("malformed-db-run", "")
+		malformed.Snapshots = nil
+		result, err := store.Import(GinkgoT().Context(), []taskhistory.Record{malformed, record("after-reject-db-run", "kept")})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.Imported).To(Equal(1))
+		Expect(result.Rejected).To(HaveLen(1))
+		Expect(result.Rejected[0].RunID).To(Equal("malformed-db-run"))
+		survivor, err := store.Snapshot(GinkgoT().Context(), "after-reject-db-run")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(survivor).NotTo(BeEmpty(), "a record queued behind a rejected one must still land")
 	})
 })
