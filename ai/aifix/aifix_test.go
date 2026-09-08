@@ -40,6 +40,15 @@ func unexpectedRequestBuild([]*linters.LinterResult) (captainai.Request, error) 
 	return captainai.Request{}, errors.New("unexpected request rebuild")
 }
 
+// fakeRuntime is the runtime the loop tests register their scripted provider
+// under. It has to be an api-mode cell: captain refuses a local mode whose
+// executable is missing (`codex`, `tsx`) before it ever reaches the registry, so
+// an agent-mode runtime would make these tests assert nothing more than whether
+// the machine happens to have an agent CLI installed. The api cell requires no
+// binary, and every request pairs it with an explicit APIKey so no environment
+// credential is consulted either.
+var fakeRuntime = captainai.Runtime{Provider: "openai", Mode: captainai.ModeAPI}
+
 func TestHasViolations_TrueWhenAtLeastOneNonSkippedHasViolations(t *testing.T) {
 	res := resultsWith("betterleaks", violation("a.go", "leaked secret", "AWS", 12))
 	if !hasViolations(res) {
@@ -189,8 +198,8 @@ func (f *fakeBuffered) Execute(ctx context.Context, req captainai.Request) (*cap
 // fields callers set on AIConfig + AIRequestProto — the saved captain
 // configure defaults that gavel just learned to honour.
 func TestRun_UsesAIConfigFromCaller(t *testing.T) {
-	p := &fakeStreaming{model: "gpt-5.5", runtime: captainai.Runtime{Provider: "openai", Mode: captainai.ModeAgent}}
-	captainai.RegisterProvider(captainai.Runtime{Provider: "openai", Mode: captainai.ModeAgent}, func(cfg captainai.Config) (captainai.Provider, error) {
+	p := &fakeStreaming{model: "gpt-5.5", runtime: fakeRuntime}
+	captainai.RegisterProvider(fakeRuntime, func(cfg captainai.Config) (captainai.Provider, error) {
 		p.model = cfg.Model.Name
 		return p, nil
 	})
@@ -199,7 +208,8 @@ func TestRun_UsesAIConfigFromCaller(t *testing.T) {
 		Initial:       resultsWith("fakelint", violation("x.go", "missing comma", "RULE", 7)),
 		MaxIterations: 1,
 		AIConfig: captainai.Config{
-			Model: api.Model{Name: "gpt-5.5", Mode: captainai.ModeAgent},
+			Model:  api.Model{Name: "gpt-5.5", Mode: fakeRuntime.Mode},
+			APIKey: "example-key",
 		},
 		AIRequestProto: captainai.Request{
 			Prompt:      api.Prompt{System: "Repair lint failures", User: "x.go:7 missing comma"},
@@ -268,8 +278,8 @@ func TestRun_NoModelErrors(t *testing.T) {
 // is reported back to the caller instead of being silently swallowed. The
 // loop must stop fast so the model isn't asked to fix stale violations.
 func TestRun_SurfacesReLintError(t *testing.T) {
-	p := &fakeStreaming{model: "gpt-5.6-sol", runtime: captainai.Runtime{Provider: "openai", Mode: captainai.ModeAgent}}
-	captainai.RegisterProvider(captainai.Runtime{Provider: "openai", Mode: captainai.ModeAgent}, func(cfg captainai.Config) (captainai.Provider, error) {
+	p := &fakeStreaming{model: "gpt-5.6-sol", runtime: fakeRuntime}
+	captainai.RegisterProvider(fakeRuntime, func(cfg captainai.Config) (captainai.Provider, error) {
 		return p, nil
 	})
 	boom := errors.New("re-lint command failed: exit status 1")
@@ -279,7 +289,8 @@ func TestRun_SurfacesReLintError(t *testing.T) {
 		AIRequestProto: captainai.Request{Prompt: api.Prompt{User: "Repair the lint failure"}},
 		BuildRequest:   unexpectedRequestBuild,
 		AIConfig: captainai.Config{
-			Model: api.Model{Name: "gpt-5.6-sol", Mode: captainai.ModeAgent},
+			Model:  api.Model{Name: "gpt-5.6-sol", Mode: fakeRuntime.Mode},
+			APIKey: "example-key",
 		},
 		ReLint: func(ctx context.Context) ([]*linters.LinterResult, error) {
 			return nil, boom
