@@ -43,6 +43,9 @@ const prFragment = `fragment prFields on PullRequest {
   isDraft
   reviewDecision
   mergeable
+  mergeStateStatus
+  headRefOid
+  baseRef { target { oid } }
   url
   additions
   deletions
@@ -168,6 +171,9 @@ type graphQLPR struct {
 	IsDraft        bool                 `json:"isDraft"`
 	ReviewDecision string               `json:"reviewDecision"`
 	Mergeable      string               `json:"mergeable"`
+	MergeState     string               `json:"mergeStateStatus"`
+	HeadRefOid     string               `json:"headRefOid"`
+	BaseRef        *graphQLRef          `json:"baseRef"`
 	URL            string               `json:"url"`
 	Additions      int                  `json:"additions"`
 	Deletions      int                  `json:"deletions"`
@@ -177,6 +183,16 @@ type graphQLPR struct {
 	Comments       graphQLCommentList   `json:"comments"`
 	Reviews        graphQLCommentList   `json:"reviews"`
 	ReviewThreads  graphQLReviewThreads `json:"reviewThreads"`
+}
+
+// graphQLRef carries a branch's current tip. The PR's own `baseRefOid` is the
+// base recorded when the PR last synchronized, not where the branch is now — so
+// merging against it reports a clean merge for a PR GitHub calls CONFLICTING.
+// `baseRef.target.oid` is the live tip and the commit GitHub actually merges into.
+type graphQLRef struct {
+	Target struct {
+		OID string `json:"oid"`
+	} `json:"target"`
 }
 
 type graphQLCommentList struct {
@@ -303,10 +319,19 @@ func (pr graphQLPR) toPRInfo() *PRInfo {
 		IsDraft:        pr.IsDraft,
 		ReviewDecision: pr.ReviewDecision,
 		Mergeable:      pr.Mergeable,
+		MergeState:     pr.MergeState,
+		HeadRefOID:     pr.HeadRefOid,
 		URL:            pr.URL,
 		Additions:      pr.Additions,
 		Deletions:      pr.Deletions,
 		ChangedFiles:   pr.ChangedFiles,
+	}
+
+	// baseRef is null once the base branch is deleted, which leaves the merge
+	// undefined rather than clean — an empty OID is what conflict detection
+	// reports as unavailable.
+	if pr.BaseRef != nil {
+		info.BaseRefOID = pr.BaseRef.Target.OID
 	}
 
 	// Use the last commit's statusCheckRollup for status checks (most recent).

@@ -69,7 +69,7 @@ func (s GavelResultsSummary) GetChildren() []api.TreeNode {
 		children = append(children, s.lintSection())
 	}
 	if len(s.Commands) > 0 {
-		children = append(children, &reproduceNode{commands: s.Commands})
+		children = append(children, &commandsNode{label: "Reproduce locally", commands: s.Commands})
 	}
 	if s.ArtifactURL != "" {
 		children = append(children, &artifactLinkNode{url: s.ArtifactURL})
@@ -157,17 +157,19 @@ func (n *moreNode) Pretty() api.Text {
 
 func (n *moreNode) GetChildren() []api.TreeNode { return nil }
 
-// reproduceNode renders the commands that re-run the shard's failures locally,
-// in the `$ cmd` shape `gavel lint` already uses for a linter's own argv.
-type reproduceNode struct {
+// commandsNode renders a labelled block of copy-pasteable commands in the
+// `$ cmd` shape `gavel lint` already uses for a linter's own argv — the shard's
+// reproduce commands here, the merge-conflict resolution steps elsewhere.
+type commandsNode struct {
+	label    string
 	commands []string
 }
 
-func (n *reproduceNode) Pretty() api.Text {
-	return clicky.Text("Reproduce locally", "font-bold")
+func (n *commandsNode) Pretty() api.Text {
+	return clicky.Text(n.label, "font-bold")
 }
 
-func (n *reproduceNode) GetChildren() []api.TreeNode {
+func (n *commandsNode) GetChildren() []api.TreeNode {
 	children := make([]api.TreeNode, 0, len(n.commands))
 	for _, command := range n.commands {
 		children = append(children, &commandNode{command: command})

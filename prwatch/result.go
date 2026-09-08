@@ -15,10 +15,22 @@ import (
 )
 
 type PRWatchResult struct {
-	PR           *github.PRInfo                `json:"pr"`
-	Runs         map[int64]*github.WorkflowRun `json:"runs,omitempty"`
-	GavelResults []*GavelResultsSummary        `json:"gavelResults,omitempty"`
-	Comments     []github.PRComment            `json:"comments,omitempty"`
+	PR   *github.PRInfo                `json:"pr"`
+	Runs map[int64]*github.WorkflowRun `json:"runs,omitempty"`
+	// Conflicts is populated only while the PR is CONFLICTING, and carries the
+	// conflicting paths reconstructed locally — GitHub reports the verdict but
+	// never the files.
+	Conflicts    *github.MergeConflictReport `json:"conflicts,omitempty"`
+	GavelResults []*GavelResultsSummary      `json:"gavelResults,omitempty"`
+	Comments     []github.PRComment          `json:"comments,omitempty"`
+}
+
+// HasMergeConflict reports whether GitHub currently refuses to merge the PR
+// because it conflicts with its base. Independent of every check signal: a PR
+// with an all-green rollup still cannot land while this is true, which is why
+// it carries the exit code in its own right.
+func (r PRWatchResult) HasMergeConflict() bool {
+	return r.PR != nil && r.PR.IsConflicting()
 }
 
 // HasFailedRun reports whether any workflow run has a failed job. A run can
@@ -70,6 +82,11 @@ func (r PRWatchResult) HasTerminalFailure() bool {
 
 func (r PRWatchResult) Pretty() api.Text {
 	text := r.PR.Pretty()
+	// Conflicts come first: a blocked merge outranks every check below it, and
+	// --ai-fix reads this same rendering as its input.
+	if ct := r.prettyConflicts(); ct.String() != "" {
+		text = text.NewLine().NewLine().Add(ct)
+	}
 	text = text.NewLine().NewLine().Add(r.prettyWorkflows())
 	if gt := r.prettyGavelResults(); gt.String() != "" {
 		text = text.NewLine().NewLine().Add(gt)

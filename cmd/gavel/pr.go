@@ -75,6 +75,12 @@ When the PR published gavel results, each failing shard shows the failing tests 
 lint violations, plus a "Reproduce locally" block with the exact gavel commands that
 re-run them here: gavel test --pr <n> / gavel lint --pr <n>.
 
+A PR that conflicts with its base gets a "Merge conflicts" section listing every
+conflicting path and how it conflicts, plus the git commands that resolve it.
+The exit code is 1 whenever the PR cannot merge — a failing check, a failing job,
+a failing gavel shard, or a merge conflict — and 0 only when it is clear on all
+four.
+
 Key flags:
   --follow          Poll until done, where done means the dimensions you filtered on have
                     settled: with --actions, the selected checks completed; with --comments,

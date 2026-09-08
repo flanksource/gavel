@@ -16,16 +16,25 @@ type PRInfo struct {
 	// NodeID is the GraphQL global node ID, required to merge/approve/enable
 	// auto-merge on this PR. Empty when the PR was loaded from a source that
 	// doesn't request it (e.g. the REST search path).
-	NodeID            string       `json:"nodeId,omitempty"`
-	Title             string       `json:"title"`
-	Body              string       `json:"body,omitempty"`
-	Author            PRAuthor     `json:"author"`
-	HeadRefName       string       `json:"headRefName"`
-	BaseRefName       string       `json:"baseRefName"`
-	State             string       `json:"state"`
-	IsDraft           bool         `json:"isDraft"`
-	ReviewDecision    string       `json:"reviewDecision"`
-	Mergeable         string       `json:"mergeable"`
+	NodeID         string   `json:"nodeId,omitempty"`
+	Title          string   `json:"title"`
+	Body           string   `json:"body,omitempty"`
+	Author         PRAuthor `json:"author"`
+	HeadRefName    string   `json:"headRefName"`
+	BaseRefName    string   `json:"baseRefName"`
+	State          string   `json:"state"`
+	IsDraft        bool     `json:"isDraft"`
+	ReviewDecision string   `json:"reviewDecision"`
+	Mergeable      string   `json:"mergeable"`
+	// MergeState is GitHub's mergeStateStatus: it says *why* a PR cannot merge
+	// (DIRTY conflicts, BEHIND out of date, BLOCKED on reviews/required checks,
+	// UNSTABLE failing optional checks) where Mergeable only says whether it can.
+	MergeState string `json:"mergeStateStatus,omitempty"`
+	// BaseRefOID is the base branch's *current* tip, not the PR's recorded
+	// baseRefOid — the latter lags the branch and merges cleanly long after
+	// GitHub has marked the PR CONFLICTING.
+	BaseRefOID        string       `json:"baseRefOid,omitempty"`
+	HeadRefOID        string       `json:"headRefOid,omitempty"`
 	URL               string       `json:"url"`
 	Additions         int          `json:"additions"`
 	Deletions         int          `json:"deletions"`
@@ -359,9 +368,49 @@ func (pr PRInfo) Pretty() api.Text {
 	if pr.Mergeable != "" && pr.Mergeable != "UNKNOWN" && pr.State == "OPEN" {
 		meta = meta.Append(" | Mergeable: ", "text-gray-500").
 			Append(pr.Mergeable, MergeableStyle(pr.Mergeable))
+		if reason := MergeStateReason(pr.MergeState); reason != "" {
+			meta = meta.Append(" ("+reason+")", MergeStateStyle(pr.MergeState))
+		}
 	}
 
 	return title.NewLine().Add(meta)
+}
+
+// IsConflicting reports whether GitHub currently refuses to merge the PR
+// because it conflicts with its base. Only meaningful while the PR is open:
+// GitHub leaves Mergeable at UNKNOWN once it is merged or closed.
+func (pr PRInfo) IsConflicting() bool {
+	return pr.State == "OPEN" && pr.Mergeable == "CONFLICTING"
+}
+
+// MergeStateReason turns GitHub's mergeStateStatus into the blocker it names.
+// CLEAN, DRAFT and UNKNOWN only restate what the state and Mergeable fields
+// already show, so they render nothing rather than a redundant second label.
+func MergeStateReason(mergeState string) string {
+	switch mergeState {
+	case "DIRTY":
+		return "conflicts with base"
+	case "BEHIND":
+		return "out of date with base"
+	case "BLOCKED":
+		return "blocked on required reviews or checks"
+	case "UNSTABLE":
+		return "non-required checks failing"
+	case "HAS_HOOKS":
+		return "blocked by a pre-receive hook"
+	default:
+		return ""
+	}
+}
+
+// MergeStateStyle colours the blocker, not the verdict it sits beside. A
+// BLOCKED PR is still MERGEABLE — painting its reason green with the verdict
+// would read as "green, and also blocked".
+func MergeStateStyle(mergeState string) string {
+	if mergeState == "DIRTY" {
+		return "text-red-600"
+	}
+	return "text-yellow-600"
 }
 
 func FormatDuration(job Job) string {

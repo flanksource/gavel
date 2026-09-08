@@ -60,7 +60,13 @@ func Run(opts WatchOptions) (*PRWatchResult, int) {
 		comments := MergeAndFilter(pr.Comments, pr.ReviewThreads)
 		comments = removeRenderedArtifactComments(comments, gavelResults)
 
-		result := &PRWatchResult{PR: pr, Runs: runs, GavelResults: gavelResults, Comments: comments}
+		result := &PRWatchResult{
+			PR:           pr,
+			Runs:         runs,
+			Conflicts:    github.DetectMergeConflicts(opts.Options, pr),
+			GavelResults: gavelResults,
+			Comments:     comments,
+		}
 		filters := newResultFilters(opts.Comments, opts.Actions)
 
 		preChecks := len(pr.StatusCheckRollup)
@@ -146,10 +152,15 @@ func followDone(filters resultFilters, result *PRWatchResult, failFast bool) boo
 // so a rollup-only exit code false-greens the whole run.
 //
 // Called after filters.apply, so --actions scopes the exit code to the checks,
-// runs, and gavel artifacts the user asked to see.
+// runs, and gavel artifacts the user asked to see. A merge conflict is the one
+// signal filters never scope away: it blocks the merge no matter which checks
+// the caller asked about.
 func statusExitCode(result *PRWatchResult) int {
 	if result == nil {
 		return 0
+	}
+	if result.HasMergeConflict() {
+		return 1
 	}
 	if result.PR != nil && result.PR.StatusCheckRollup.HasFailure() {
 		return 1
