@@ -119,7 +119,11 @@ func (s *Server) handleTodoSessionDetail(w http.ResponseWriter, r *http.Request)
 		writeTodoError(w, http.StatusBadRequest, err)
 		return
 	}
-	dir := s.resolveTodoDir(strings.TrimSpace(r.URL.Query().Get("dir")))
+	dir, err := s.resolveTodoDir(r.URL.Query().Get("dir"))
+	if err != nil {
+		writeTodoError(w, http.StatusBadRequest, err)
+		return
+	}
 	provider, err := openTodoProvider(r.Context(), dir)
 	if err != nil {
 		writeTodoError(w, http.StatusInternalServerError, err)

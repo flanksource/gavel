@@ -124,7 +124,11 @@ func (s *Server) handleTestRun(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"exactly one of project or dir is required"}`, http.StatusBadRequest)
 		return
 	}
-	workDir := s.resolveTodoDir(strings.TrimSpace(query.Get("dir")))
+	workDir, err := s.resolveTodoDir(query.Get("dir"))
+	if err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if query.Has("project") {
 		p, err := GetProject(project)
 		if err != nil {

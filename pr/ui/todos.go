@@ -15,6 +15,7 @@ import (
 	"github.com/flanksource/gavel/todos/run"
 	todoruntime "github.com/flanksource/gavel/todos/runtime"
 	"github.com/flanksource/gavel/todos/types"
+	"github.com/flanksource/gavel/utils"
 	"github.com/google/uuid"
 )
 
@@ -197,20 +198,53 @@ func (s *Server) resolveTodoReference(ctx context.Context, requested todoSource,
 }
 
 // resolveTodoDir turns a request's dir param into an absolute workspace path,
-// defaulting to the server's work dir and joining relative dirs onto it.
-func (s *Server) resolveTodoDir(dir string) string {
+// defaulting to the server's work dir when it is empty.
+//
+// The value arrives from a query parameter and every todo handler feeds it to
+// something that reads the filesystem under it — .gavel.yaml, lifecycle
+// overrides, prompt templates, run snapshots, `git show` — so it is not taken
+// on trust. The dir has to resolve inside the server's work dir or inside a
+// configured project root, which is exactly the set the dashboard can name;
+// ResolveWithin re-expresses it relative to that root and rejects anything that
+// escapes. A dir outside both is refused here rather than reaching the disk.
+func (s *Server) resolveTodoDir(dir string) (string, error) {
 	workDir := s.todoWorkDir()
-	if dir == "" {
-		return workDir
+	if dir = strings.TrimSpace(dir); dir == "" {
+		return workDir, nil
+	}
+	resolved, workDirErr := utils.ResolveWithin(workDir, dir)
+	if workDirErr == nil {
+		return resolved, nil
 	}
 	if !filepath.IsAbs(dir) {
-		return filepath.Join(workDir, dir)
+		return "", fmt.Errorf("todo dir %q: %w", dir, workDirErr)
 	}
-	return dir
+	resolved, err := authorizeTodoDir(dir)
+	if err != nil {
+		return "", fmt.Errorf("todo dir %q is not inside %s or a configured project: %w", dir, workDir, err)
+	}
+	return resolved, nil
+}
+
+// authorizeTodoDir resolves an absolute workspace dir against the configured
+// project catalog — the workspaces the dashboard is able to name — and returns
+// it re-expressed under that project's root. It is a package-level seam for the
+// same reason openTodoProvider is: package tests drive the handlers against
+// temp workspaces that no projects.json knows about.
+var authorizeTodoDir = func(dir string) (string, error) {
+	project, err := ProjectForDir(dir)
+	if err != nil {
+		return "", err
+	}
+	return utils.ResolveWithin(project.ResolvedDir(), dir)
 }
 
 func (s *Server) todoProviderContext(ctx context.Context, source todoSource) (todos.Provider, todoSource, error) {
-	source.Dir = s.resolveTodoDir(source.Dir)
+	resolved, err := s.resolveTodoDir(source.Dir)
+	if err != nil {
+		return nil, source, err
+	}
+	source.Dir = resolved
 	provider, err := openTodoProvider(ctx, source.Dir)
 	if err != nil {
 		return nil, source, err

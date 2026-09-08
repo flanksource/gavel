@@ -135,7 +135,11 @@ func (s *Server) handleTodoCommitDiff(w http.ResponseWriter, r *http.Request) {
 		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("invalid commit hash %q", hash))
 		return
 	}
-	dir := s.resolveTodoDir(strings.TrimSpace(r.URL.Query().Get("dir")))
+	dir, err := s.resolveTodoDir(r.URL.Query().Get("dir"))
+	if err != nil {
+		writeTodoError(w, http.StatusBadRequest, err)
+		return
+	}
 	// An optional file narrows the diff to a single path (the per-file hover
 	// card); empty shows the whole commit.
 	file := strings.TrimSpace(r.URL.Query().Get("file"))
@@ -170,7 +174,11 @@ func (s *Server) handleTodoCommitFiles(w http.ResponseWriter, r *http.Request) {
 		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("invalid commit hash %q", hash))
 		return
 	}
-	dir := s.resolveTodoDir(strings.TrimSpace(r.URL.Query().Get("dir")))
+	dir, err := s.resolveTodoDir(r.URL.Query().Get("dir"))
+	if err != nil {
+		writeTodoError(w, http.StatusBadRequest, err)
+		return
+	}
 	files, err := gavelgit.CommitFiles(dir, hash)
 	if err != nil {
 		writeTodoError(w, http.StatusInternalServerError, err)

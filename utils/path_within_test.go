@@ -26,6 +26,13 @@ var _ = Describe("ResolveWithin", func() {
 		Expect(ResolveWithin(base, filepath.Join(base, nested))).To(Equal(filepath.Join(base, nested)))
 	})
 
+	// A workspace naming its own root — the dashboard's commonest dir param —
+	// resolves to the root, not to an escape.
+	It("accepts the base itself", func() {
+		Expect(ResolveWithin(base, base)).To(Equal(filepath.Clean(base)))
+		Expect(ResolveWithin(base, ".")).To(Equal(filepath.Clean(base)))
+	})
+
 	It("rejects a relative name that walks out of the base", func() {
 		_, err := ResolveWithin(base, escapingName)
 

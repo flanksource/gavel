@@ -24,9 +24,9 @@ var ErrPathEscapesBase = errors.New("path escapes its base directory")
 // whatever the traversal happens to land on.
 //
 // A relative name is joined onto base; an absolute name is accepted only when
-// it already lives under base. Containment is lexical — symlinks inside base
-// are not followed — so it constrains what a configured path may name, not what
-// the filesystem underneath base may point at.
+// it already lives under base, base itself included. Containment is lexical —
+// symlinks inside base are not followed — so it constrains what a configured
+// path may name, not what the filesystem underneath base may point at.
 func ResolveWithin(base, name string) (string, error) {
 	if strings.TrimSpace(base) == "" {
 		return "", fmt.Errorf("resolve %q: a base directory is required", name)
@@ -47,7 +47,9 @@ func ResolveWithin(base, name string) (string, error) {
 			return "", fmt.Errorf("%w: %q cannot be expressed relative to %s", ErrPathEscapesBase, name, root)
 		}
 	}
-	if !filepath.IsLocal(rel) {
+	// filepath.IsLocal rejects ".", but base is trivially within base — a
+	// workspace naming its own root is resolving to itself, not escaping.
+	if rel != "." && !filepath.IsLocal(rel) {
 		return "", fmt.Errorf("%w: %q resolves outside %s", ErrPathEscapesBase, name, root)
 	}
 	return filepath.Join(root, rel), nil

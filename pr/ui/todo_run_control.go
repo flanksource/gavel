@@ -27,7 +27,11 @@ func (s *Server) handleTodoRunStop(w http.ResponseWriter, r *http.Request) {
 		writeTodoError(w, http.StatusBadRequest, errors.New("ref and promptRunId are required"))
 		return
 	}
-	dir := s.resolveTodoDir(r.URL.Query().Get("dir"))
+	dir, err := s.resolveTodoDir(r.URL.Query().Get("dir"))
+	if err != nil {
+		writeTodoError(w, http.StatusBadRequest, err)
+		return
+	}
 	provider, err := openTodoProvider(r.Context(), dir)
 	if err != nil {
 		writeTodoError(w, http.StatusInternalServerError, err)

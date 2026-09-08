@@ -43,7 +43,12 @@ func (s *Server) handleTodoSessionStream(w http.ResponseWriter, r *http.Request)
 		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("sessionId is required"))
 		return
 	}
-	dir := s.resolveTodoDir(strings.TrimSpace(r.URL.Query().Get("dir")))
+	dir, err := s.resolveTodoDir(r.URL.Query().Get("dir"))
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		writeTodoError(w, http.StatusBadRequest, err)
+		return
+	}
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming not supported", http.StatusInternalServerError)

@@ -99,7 +99,11 @@ func (s *Server) handleTodoSessionStats(w http.ResponseWriter, r *http.Request) 
 		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("sessionId is required"))
 		return
 	}
-	dir := s.resolveTodoDir(strings.TrimSpace(r.URL.Query().Get("dir")))
+	dir, err := s.resolveTodoDir(r.URL.Query().Get("dir"))
+	if err != nil {
+		writeTodoError(w, http.StatusBadRequest, err)
+		return
+	}
 	if store, ok := todoCaptainSessionStore(r.Context(), dir); ok {
 		resolved, err := resolveCaptainSession(r.Context(), store, sessionID)
 		if err != nil {
@@ -295,7 +299,11 @@ func (s *Server) handleTodoSessionApprove(w http.ResponseWriter, r *http.Request
 		writeTodoError(w, http.StatusBadRequest, err)
 		return
 	}
-	dir := s.resolveTodoDir(strings.TrimSpace(r.URL.Query().Get("dir")))
+	dir, err := s.resolveTodoDir(r.URL.Query().Get("dir"))
+	if err != nil {
+		writeTodoError(w, http.StatusBadRequest, err)
+		return
+	}
 	store, err := todoApprovalStore(r.Context(), dir)
 	if err != nil {
 		writeTodoError(w, http.StatusServiceUnavailable, err)
@@ -352,7 +360,12 @@ func (s *Server) handleTodoSessionApprovals(w http.ResponseWriter, r *http.Reque
 		}
 		promptRunID = &parsed
 	}
-	store, err := todoApprovalStore(r.Context(), s.resolveTodoDir(strings.TrimSpace(r.URL.Query().Get("dir"))))
+	dir, err := s.resolveTodoDir(r.URL.Query().Get("dir"))
+	if err != nil {
+		writeTodoError(w, http.StatusBadRequest, err)
+		return
+	}
+	store, err := todoApprovalStore(r.Context(), dir)
 	if err != nil {
 		writeTodoError(w, http.StatusServiceUnavailable, err)
 		return
@@ -375,7 +388,11 @@ func (s *Server) handleTodoSessionApprovals(w http.ResponseWriter, r *http.Reque
 // a stopped cmux yields a 4xx with the reason rather than a silent no-op.
 func (s *Server) handleTodoSessionFocus(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	dir := s.resolveTodoDir(strings.TrimSpace(r.URL.Query().Get("dir")))
+	dir, err := s.resolveTodoDir(r.URL.Query().Get("dir"))
+	if err != nil {
+		writeTodoError(w, http.StatusBadRequest, err)
+		return
+	}
 	agent := strings.TrimSpace(r.URL.Query().Get("agent"))
 	if agent == "" {
 		agent = "claude"
@@ -405,7 +422,11 @@ type todoSessionCmuxResponse struct {
 // reference has to be tracked on the issue.
 func (s *Server) handleTodoSessionCmux(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	dir := s.resolveTodoDir(strings.TrimSpace(r.URL.Query().Get("dir")))
+	dir, err := s.resolveTodoDir(r.URL.Query().Get("dir"))
+	if err != nil {
+		writeTodoError(w, http.StatusBadRequest, err)
+		return
+	}
 	agent := strings.TrimSpace(r.URL.Query().Get("agent"))
 	if agent == "" {
 		agent = "claude"

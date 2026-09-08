@@ -26,6 +26,12 @@ func init() {
 	openTodoProvider = func(_ context.Context, dir string) (todos.Provider, error) {
 		return uiTestProviderFor(dir), nil
 	}
+	// The handlers are driven against t.TempDir() workspaces, so the project
+	// catalog is faked in lockstep with the provider registry: each requested
+	// dir is its own workspace root. Containment still runs, so a dir that
+	// escapes the root it names is rejected here exactly as in production;
+	// todo_dir_test.go exercises the real catalog-backed gate.
+	authorizeTodoDir = func(dir string) (string, error) { return utils.ResolveWithin(dir, dir) }
 	openGlobalTodoProvider = func(context.Context) (todos.GlobalReferenceProvider, error) {
 		return uiTestGlobalProvider{}, nil
 	}
