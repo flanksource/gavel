@@ -12,6 +12,19 @@ import (
 	"github.com/flanksource/commons/logger"
 )
 
+// isGoIgnoredDir reports whether the go tool ignores a directory and, with it,
+// everything below it. `go help packages`: directory names beginning with "."
+// or "_" are ignored, as are directories named "testdata".
+//
+// Discovery has to honour the same rule. A `_test.go` file under `testdata/` is
+// a fixture for some other test to read, not a package: it is excluded from
+// `./...`, is usually not even compilable on its own, and handing its directory
+// to `go test` or `ginkgo` fails the run ("Found no test suites, did you forget
+// to run `ginkgo bootstrap`?").
+func isGoIgnoredDir(name string) bool {
+	return name == "testdata" || strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_")
+}
+
 func matchesBuildConstraints(dir, name string, tags []string) (bool, error) {
 	context := build.Default
 	context.BuildTags = append([]string(nil), tags...)

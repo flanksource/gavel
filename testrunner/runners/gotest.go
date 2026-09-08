@@ -63,11 +63,15 @@ func (r *GoTest) SetBuildTags(tags []string) {
 // the nearest .git boundary, still has runnable test files and should be
 // surfaced. `go test` emits a useful error at run time if no module exists.
 func (r *GoTest) Detect(workDir string) (bool, error) {
+	root, _ := filepath.Abs(workDir)
 	err := utils.WalkGitIgnoredBounded(workDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if d.IsDir() {
+			if path != root && isGoIgnoredDir(d.Name()) {
+				return fs.SkipDir
+			}
 			return nil
 		}
 		if strings.HasSuffix(d.Name(), "_test.go") {
@@ -217,13 +221,21 @@ func (r *GoTest) DiscoverPackages(workDir string, recursive bool) ([]string, err
 
 	var packages []string
 	seen := make(map[string]bool)
+	root, _ := filepath.Abs(workDir)
 
 	err := utils.WalkGitIgnoredBounded(workDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 
-		if !d.IsDir() && strings.HasSuffix(d.Name(), "_test.go") {
+		if d.IsDir() {
+			if path != root && isGoIgnoredDir(d.Name()) {
+				return fs.SkipDir
+			}
+			return nil
+		}
+
+		if strings.HasSuffix(d.Name(), "_test.go") {
 			pkgDir := filepath.Dir(path)
 			if !seen[pkgDir] {
 				seen[pkgDir] = true

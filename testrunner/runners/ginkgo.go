@@ -58,11 +58,18 @@ func (r *Ginkgo) SetBuildTags(tags []string) {
 // Like GoTest.Detect we do not gate on go.mod; we bail out early via a
 // sentinel error on the first hit so we don't keep walking.
 func (r *Ginkgo) Detect(workDir string) (bool, error) {
+	root, _ := filepath.Abs(workDir)
 	err := utils.WalkGitIgnoredBounded(workDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if !d.IsDir() && strings.HasSuffix(d.Name(), "_test.go") && hasGinkgoImports(path) {
+		if d.IsDir() {
+			if path != root && isGoIgnoredDir(d.Name()) {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if strings.HasSuffix(d.Name(), "_test.go") && hasGinkgoImports(path) {
 			return errGinkgoDetected
 		}
 		return nil
@@ -93,13 +100,21 @@ func (r *Ginkgo) DiscoverPackages(workDir string, recursive bool) ([]string, err
 
 	var packages []string
 	seen := make(map[string]bool)
+	root, _ := filepath.Abs(workDir)
 
 	err := utils.WalkGitIgnoredBounded(workDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 
-		if !d.IsDir() && strings.HasSuffix(d.Name(), "_test.go") {
+		if d.IsDir() {
+			if path != root && isGoIgnoredDir(d.Name()) {
+				return fs.SkipDir
+			}
+			return nil
+		}
+
+		if strings.HasSuffix(d.Name(), "_test.go") {
 			matched, err := matchesBuildConstraints(filepath.Dir(path), d.Name(), r.buildTags)
 			if err != nil {
 				return err

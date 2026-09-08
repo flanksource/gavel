@@ -68,19 +68,36 @@ func TestCloseProvider_NoCloserIsNoOp(t *testing.T) {
 // hang: NewProvider hands back captain's middleware wrapper, so Close is only
 // reachable by unwrapping. A wrapper that stops forwarding Unwrap would leave
 // the claude-agent tsx child running and block process exit.
+//
+// The adapter under the middleware is a scripted closer rather than the real
+// claude-agent, because captain refuses a local mode whose executable is absent
+// (claude-agent needs "tsx") before the registry is ever consulted — so pinning
+// this to a local mode would assert nothing except whether the machine happens
+// to have an agent CLI installed. deepseek's api cell needs no binary and no
+// other test in this package registers against it, and the property being
+// guarded — that gavel's middleware stack keeps a closer reachable — is the
+// same whichever adapter sits underneath.
 func TestCloseProvider_ReachesRealMiddlewareStack(t *testing.T) {
+	inner := &closableProvider{}
+	api.RegisterProvider(api.Runtime{Provider: "deepseek", Mode: api.ModeAPI},
+		func(api.Config) (api.Provider, error) { return inner, nil })
+
 	cfg := DefaultConfig()
-	cfg.Model = api.Model{Name: "claude-sonnet-5", Mode: api.ModeAgent}
+	cfg.Model = api.Model{Name: "deepseek-chat", Mode: api.ModeAPI}
+	cfg.APIKey = "example-key"
 
 	provider, err := NewProvider(cfg)
 	if err != nil {
-		t.Fatalf("NewProvider(claude-agent) failed: %v", err)
+		t.Fatalf("NewProvider(deepseek api) failed: %v", err)
 	}
 	if _, ok := api.ProviderAs[api.CloseableProvider](provider); !ok {
-		t.Fatal("claude-agent provider is not closeable through the middleware stack; its supervised tsx child would outlive the command")
+		t.Fatal("provider is not closeable through the middleware stack; a supervised agent child would outlive the command")
 	}
 	if err := CloseProvider(provider); err != nil {
 		t.Errorf("CloseProvider returned %v, want nil", err)
+	}
+	if inner.closed != 1 {
+		t.Errorf("adapter closed %d times through the middleware stack, want 1", inner.closed)
 	}
 }
 

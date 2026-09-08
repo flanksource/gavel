@@ -246,6 +246,33 @@ func TestGoTestDiscoverPackagesNonRecursive(t *testing.T) {
 	}
 }
 
+// `go test ./...` never compiles anything under testdata, so neither should
+// discovery: those files are fixtures for other tests to read, not packages.
+func TestGoTestDiscoverPackagesSkipsTestdata(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	fixtureDir := filepath.Join(tmpDir, "outline", "testdata", "gotest")
+	if err := os.MkdirAll(fixtureDir, 0o755); err != nil {
+		t.Fatalf("failed to create fixture directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(fixtureDir, "sample_test.go"), []byte(`package sample
+
+import "testing"
+
+func TestSample(t *testing.T) {}
+`), 0o644); err != nil {
+		t.Fatalf("failed to create fixture test file: %v", err)
+	}
+
+	packages, err := NewGoTest(tmpDir).DiscoverPackages(tmpDir, true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(packages) != 0 {
+		t.Errorf("discovered %v under testdata; the go tool excludes testdata from ./...", packages)
+	}
+}
+
 func TestGoTestDiscoverPackagesSkipsNestedProjectRoots(t *testing.T) {
 	tmpDir := t.TempDir()
 	writeGoMod(t, tmpDir)

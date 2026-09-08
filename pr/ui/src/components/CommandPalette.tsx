@@ -52,18 +52,19 @@ export function uuidQuery(value: string): string | null {
 // every tab so global search is always one key away.
 export function SearchTrigger({ onOpen }: { onOpen: () => void }) {
   return (
-    <button
+    <Button
+      variant="ghost"
       type="button"
       onClick={onOpen}
       aria-label="Search pull requests, todos, and sessions"
-      className="flex w-full items-center gap-2 rounded-md border border-border bg-muted px-3 py-1.5 text-sm text-muted-foreground hover:bg-muted/70"
+      className="flex h-auto w-full items-center justify-start gap-2 rounded-md border border-border bg-muted px-3 py-1.5 text-sm font-normal text-muted-foreground hover:bg-muted/70"
     >
       <UiSearch className="shrink-0 text-sm" />
       <span className="flex-1 truncate text-left">Search PRs, todos, or UUID…</span>
       <kbd className="shrink-0 rounded border border-border bg-background px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-muted-foreground">
         {paletteShortcutLabel}
       </kbd>
-    </button>
+    </Button>
   );
 }
 
@@ -259,17 +260,18 @@ function PaletteRow({ row, index, active, onHover }: {
   const isActive = index === active;
   const Icon = row.icon;
   return (
-    <button
+    <Button
+      variant="ghost"
       type="button"
       data-row={index}
       onMouseMove={() => onHover(index)}
       onClick={row.onSelect}
-      className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left ${isActive ? 'bg-primary/10' : 'hover:bg-muted'}`}
+      className={`flex h-auto w-full items-center justify-start gap-2 rounded-md px-2 py-1.5 text-left font-normal ${isActive ? 'bg-primary/10' : 'hover:bg-muted'}`}
     >
       <Icon className="shrink-0 text-sm text-muted-foreground" />
       <span className="min-w-0 flex-1 truncate text-sm text-foreground">{row.title}</span>
       {row.meta && <span className="shrink-0 truncate text-[11px] capitalize text-muted-foreground">{row.meta}</span>}
       <span className="shrink-0 max-w-[12rem] truncate text-[11px] tabular-nums text-muted-foreground">{row.subtitle}</span>
-    </button>
+    </Button>
   );
 }

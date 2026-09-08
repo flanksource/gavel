@@ -18,6 +18,7 @@ interface Selection {
 const SelectionContext = createContext<Selection | null>(null);
 
 vi.mock('@flanksource/clicky-ui/components', () => ({
+  // oxlint-disable-next-line clicky-ui/prefer-clicky-components -- test mock for the Clicky Button itself.
   Button: ({ children, loading: _loading, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement> & { loading?: boolean }) => <button {...props}>{children}</button>,
   Combobox: ({
     options,
@@ -28,6 +29,7 @@ vi.mock('@flanksource/clicky-ui/components', () => ({
     value: string[];
     onChange: (value: string[]) => void;
   }) => (
+    // oxlint-disable-next-line clicky-ui/prefer-clicky-components -- test mock for the Clicky Combobox itself.
     <select
       multiple
       value={value}
@@ -52,11 +54,13 @@ vi.mock('@flanksource/clicky-ui/components', () => ({
           checked={selection.isSelected(itemKey)}
           onChange={() => selection.toggle(itemKey)}
         />
+        {/* oxlint-disable-next-line clicky-ui/prefer-clicky-components -- test mock for the Clicky ListMenuItem itself. */}
         <button type="button" onClick={onClick}>{children}</button>
       </label>
     );
   },
   Modal: ({ open, title, children, footer }: { open: boolean; title: string; children: React.ReactNode; footer?: React.ReactNode }) => open ? <section aria-label={title}>{children}{footer}</section> : null,
+  // oxlint-disable-next-line clicky-ui/prefer-clicky-components -- test mock for the Clicky Select itself.
   Select: (props: React.SelectHTMLAttributes<HTMLSelectElement>) => <select {...props} />,
   SplitPane: ({ left, right }: { left: React.ReactNode; right: React.ReactNode }) => <div>{left}{right}</div>,
   useListMenuSelection: ({

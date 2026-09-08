@@ -98,9 +98,14 @@ describe('TodoDetail named step dispatch', () => {
     expect(readRunChoiceState().last.run).toBeUndefined();
   });
 
-  it('runs a custom lifecycle step by name from the phase control', async () => {
+  // A step the operator has never configured dispatches by name with an empty
+  // spec: the catalog's default mode/model are display defaults, and copying
+  // them into the request would outrank the runtime the step's own prompt
+  // frontmatter pins (see run.test.ts, "displays a prompt runtime while leaving
+  // the request sparse").
+  it('runs a custom lifecycle step by name without seeding a runtime it was never given', async () => {
     await openDetail();
     fireEvent.click(screen.getByRole('button', { name: 'Start review-security' }));
-    await waitFor(() => expect(execution.run).toHaveBeenCalledWith(todo.ref, { step: 'review-security', spec }));
+    await waitFor(() => expect(execution.run).toHaveBeenCalledWith(todo.ref, { step: 'review-security', spec: {} }));
   });
 });
