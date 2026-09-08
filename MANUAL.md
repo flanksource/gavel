@@ -702,6 +702,23 @@ This is the fastest command for:
 - Following checks until completion
 - Pulling failed log tails into the CLI
 - Getting the exact command that re-runs the PR's failures locally
+- Seeing exactly which files a conflicting PR conflicts on
+
+A PR that GitHub reports as `CONFLICTING` renders a **Merge conflicts** section naming every conflicting path, how it conflicts, and the commands that clear it:
+
+```
+✖ Merge conflicts main ← feat/widget (2 files)
+├── go.mod (content)
+├── docs/api.md (modify/delete)
+╰── Resolve locally
+    ├── $ git fetch origin main
+    ├── $ git switch feat/widget
+    ╰── $ git merge origin/main
+```
+
+No GitHub API returns the conflicting paths, so gavel replays the merge locally with `git merge-tree` against the same two commits GitHub merges — the PR head and the base branch's *current* tip. It needs a checkout whose remote points at the PR's repository; without one the section says so rather than showing an empty list. Nothing is written to your working tree, index, or refs.
+
+The exit code is `1` whenever the PR cannot merge — a failing check, a failing job, a failing gavel shard, or a merge conflict — and `0` only when it is clear on all four. A merge conflict is the one signal `--actions` and `--comments` never scope away: it blocks the merge whichever checks you asked about. `--fail-fast` is unaffected; it still stops only on a definitive check or job failure, because a conflict is cleared by pushing a merge rather than by waiting.
 
 When the PR published gavel results, each failing shard renders its failing tests and lint violations plus a **Reproduce locally** block:
 

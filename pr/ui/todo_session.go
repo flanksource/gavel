@@ -20,6 +20,11 @@ import (
 // legacy on-disk Claude stream below.
 type captainSessionStore interface {
 	GetSessionByIdentity(context.Context, string, string, string, string) (*captaindb.Session, error)
+	// GetTranscriptSessionByIdentity is Captain's own sibling hop: one provider
+	// session id names both the admission root and the row the transcript was
+	// ingested into, and only Captain can say which. Gavel used to pick between
+	// them here; that selection now has one implementation, in the store.
+	GetTranscriptSessionByIdentity(context.Context, string) (*captaindb.Session, error)
 	GetSessionOverviewByIdentity(context.Context, string) (*captaindb.SessionOverview, error)
 	ListTranscriptMessages(context.Context, captaindb.TranscriptPage) ([]captaindb.TranscriptMessage, error)
 }
@@ -35,10 +40,9 @@ type captainSessionProvider interface {
 }
 
 type captainSessionResolution struct {
-	run         *captaindb.Session
-	transcript  *captaindb.Session
-	known       bool
-	diagnostics []sessionDiagnostic
+	run        *captaindb.Session
+	transcript *captaindb.Session
+	known      bool
 }
 
 func todoCaptainSessionStore(ctx context.Context, dir string) (captainSessionStore, bool) {
@@ -56,6 +60,10 @@ func todoCaptainSessionStore(ctx context.Context, dir string) (captainSessionSto
 // resolveCaptainSession finds the admission root and the monitored agent row.
 // The root is only a provider-identity bridge; live state, timing, messages and
 // accounting all come from the Claude/Codex session.
+//
+// Picking the transcript-bearing sibling out of the rows one provider id names
+// is Captain's job, not the dashboard's: the same hop is needed by every reader
+// of a Gavel run, so it lives in the session store and this delegates to it.
 func resolveCaptainSession(ctx context.Context, store captainSessionStore, sessionID string) (captainSessionResolution, error) {
 	var resolved captainSessionResolution
 	run, err := store.GetSessionByIdentity(ctx, sessionID, "gavel", "", "")
@@ -66,42 +74,15 @@ func resolveCaptainSession(ctx context.Context, store captainSessionStore, sessi
 		return resolved, err
 	}
 
-	sources := []string{"codex", "claude"}
-	if run != nil && strings.Contains(strings.ToLower(run.Provider), "claude") {
-		sources[0], sources[1] = sources[1], sources[0]
-	}
-	if threadStore, ok := store.(captainThreadSessionStore); ok {
-		candidates, candidateErr := threadStore.ListSessionOverviewsByIdentity(ctx, sessionID)
-		if candidateErr == nil {
-			selected, diagnostics, conflict := selectLegacyThreadCandidate(sessionID, candidates)
-			resolved.diagnostics = diagnostics
-			if conflict {
-				return resolved, fmt.Errorf("%w: provider session ID %q has multiple transcript-bearing sessions", captaindb.ErrSessionConflict, sessionID)
-			}
-			if selected != nil {
-				transcript, getErr := store.GetSessionByIdentity(ctx, selected.ID.String(), "", "", "")
-				if getErr != nil {
-					return resolved, getErr
-				}
-				resolved.transcript = transcript
-				resolved.known = true
-				return resolved, nil
-			}
-		} else if !errors.Is(candidateErr, captaindb.ErrSessionNotFound) {
-			return resolved, candidateErr
-		}
-	}
-	for _, source := range sources {
-		transcript, transcriptErr := store.GetSessionByIdentity(ctx, sessionID, source, "", "")
-		if transcriptErr == nil {
-			resolved.transcript = transcript
-			resolved.known = true
+	transcript, err := store.GetTranscriptSessionByIdentity(ctx, sessionID)
+	if err != nil {
+		if errors.Is(err, captaindb.ErrSessionNotFound) {
 			return resolved, nil
 		}
-		if !errors.Is(transcriptErr, captaindb.ErrSessionNotFound) {
-			return resolved, transcriptErr
-		}
+		return resolved, err
 	}
+	resolved.transcript = transcript
+	resolved.known = true
 	return resolved, nil
 }
 

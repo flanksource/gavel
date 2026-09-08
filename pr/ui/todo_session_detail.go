@@ -226,16 +226,39 @@ func buildTodoSessionDetail(ctx context.Context, provider sessionDetailProvider,
 	}
 	conflict := false
 	if rootID == nil && providerID != "" {
+		// The transcript-bearing row is chosen by Captain, which owns that
+		// decision for every surface. This endpoint used to repeat the predicate
+		// itself, so the detail view and the session view could disagree about
+		// which row holds a run's transcript — the same class of split this
+		// hop was introduced to close. The candidate listing is kept only to
+		// carry the rows into the diagnostic a reader needs to see.
 		candidates, listErr := provider.Captain().ListSessionOverviewsByIdentity(ctx, providerID)
 		if listErr != nil && !errors.Is(listErr, captaindb.ErrSessionNotFound) {
 			return response, false, listErr
 		}
-		candidate, diagnostics, ambiguous := selectLegacyThreadCandidate(providerID, candidates)
-		response.Diagnostics = append(response.Diagnostics, diagnostics...)
-		conflict = ambiguous
-		if candidate != nil {
-			rootID = &candidate.ID
+		bearing, hopErr := provider.Captain().GetTranscriptSessionByIdentity(ctx, providerID)
+		switch {
+		case hopErr == nil:
+			rootID = &bearing.ID
 			response.SelectedExecutionSession = rootID
+			if len(candidates) > 1 {
+				response.Diagnostics = append(response.Diagnostics, sessionDiagnostic{
+					Severity: "warning", Code: "legacy_session_identity_resolved",
+					Message: "A legacy provider session had multiple Captain rows; the only transcript-bearing row was selected without modifying history.",
+					Details: candidates,
+				})
+			}
+		case errors.Is(hopErr, captaindb.ErrSessionConflict):
+			conflict = true
+			response.Diagnostics = append(response.Diagnostics, sessionDiagnostic{
+				Severity: "error", Code: "ambiguous_transcript_sessions",
+				Message: fmt.Sprintf("Provider session %q has more than one transcript-bearing Captain session.", providerID),
+				Details: candidates,
+			})
+		case errors.Is(hopErr, captaindb.ErrSessionNotFound):
+			// No provider row yet: the run has not been admitted a transcript.
+		default:
+			return response, false, hopErr
 		}
 	}
 	if rootID != nil {
@@ -270,37 +293,6 @@ func selectAttempt(attempts []todoAttemptDetail, sessionID string) *todoAttemptD
 		}
 	}
 	return nil
-}
-
-func selectLegacyThreadCandidate(providerID string, candidates []captaindb.SessionOverview) (*captaindb.SessionOverview, []sessionDiagnostic, bool) {
-	exact := make([]captaindb.SessionOverview, 0, len(candidates))
-	transcripts := make([]captaindb.SessionOverview, 0, len(candidates))
-	for _, candidate := range candidates {
-		if candidate.ProviderSessionID == nil || *candidate.ProviderSessionID != providerID {
-			continue
-		}
-		exact = append(exact, candidate)
-		if (candidate.Source == "claude" || candidate.Source == "codex") &&
-			(candidate.MessageCount > 0 || candidate.TurnCount > 0 || candidate.Path != nil || candidate.HistoryFile != nil) {
-			transcripts = append(transcripts, candidate)
-		}
-	}
-	if len(transcripts) == 1 {
-		selected := transcripts[0]
-		return &selected, []sessionDiagnostic{{
-			Severity: "warning", Code: "legacy_session_identity_resolved",
-			Message: "A legacy provider session had multiple Captain rows; the only transcript-bearing row was selected without modifying history.",
-			Details: exact,
-		}}, false
-	}
-	if len(transcripts) > 1 {
-		return nil, []sessionDiagnostic{{
-			Severity: "error", Code: "ambiguous_transcript_sessions",
-			Message: fmt.Sprintf("Provider session %q has %d transcript-bearing Captain sessions.", providerID, len(transcripts)),
-			Details: exact,
-		}}, true
-	}
-	return nil, nil, false
 }
 
 func loadProviderThread(ctx context.Context, db providerThreadStore, rootID uuid.UUID) (*todoProviderThread, error) {

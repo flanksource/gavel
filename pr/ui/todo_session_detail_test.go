@@ -94,33 +94,11 @@ func TestLoadProviderThreadIncludesTranscriptSnapshot(t *testing.T) {
 	assert.Equal(t, providerSessionID, thread.Messages[0].Provenance.SessionID)
 }
 
-func TestSelectLegacyThreadCandidateUsesTheOnlyTranscriptBearingSession(t *testing.T) {
-	providerID := "30fd5794-b1b3-4007-8de3-741d7d53ae4f"
-	selected, diagnostics, conflict := selectLegacyThreadCandidate(providerID, []captaindb.SessionOverview{
-		{ID: uuid.New(), ProviderSessionID: &providerID, Source: "gavel", HostID: "local"},
-		{ID: uuid.New(), ProviderSessionID: &providerID, Source: "claude", HostID: "local"},
-		{ID: uuid.New(), ProviderSessionID: &providerID, Source: "claude", HostID: "MacBook-Pro.local", MessageCount: 79, TurnCount: 8},
-	})
-
-	require.NotNil(t, selected)
-	assert.EqualValues(t, 79, selected.MessageCount)
-	assert.False(t, conflict)
-	require.Len(t, diagnostics, 1)
-	assert.Equal(t, "legacy_session_identity_resolved", diagnostics[0].Code)
-}
-
-func TestSelectLegacyThreadCandidateRejectsMultipleTranscripts(t *testing.T) {
-	providerID := "provider-session"
-	selected, diagnostics, conflict := selectLegacyThreadCandidate(providerID, []captaindb.SessionOverview{
-		{ID: uuid.New(), ProviderSessionID: &providerID, Source: "claude", MessageCount: 1},
-		{ID: uuid.New(), ProviderSessionID: &providerID, Source: "claude", TurnCount: 1},
-	})
-
-	assert.Nil(t, selected)
-	assert.True(t, conflict)
-	require.Len(t, diagnostics, 1)
-	assert.Equal(t, "ambiguous_transcript_sessions", diagnostics[0].Code)
-}
+// The transcript-bearing selection these two specs covered now lives in
+// Captain's GetTranscriptSessionByIdentity, which owns the decision for every
+// surface and is specced against a real store in
+// captain/pkg/database/session_read_store. Re-asserting the predicate here would
+// recreate the second opinion this endpoint was changed to remove.
 
 func TestProjectThreadStatusKeepsAttemptFailureIndependent(t *testing.T) {
 	status := projectThreadStatus([]captaindb.SessionOverview{{

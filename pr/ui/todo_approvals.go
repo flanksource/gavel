@@ -2,9 +2,11 @@ package ui
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/flanksource/captain/pkg/ai/approval"
 	"github.com/flanksource/captain/pkg/api"
@@ -74,15 +76,22 @@ func todoApprovalBroker(dir string) todos.ApprovalBroker {
 		if sessionID == uuid.Nil || promptRunID == uuid.Nil {
 			return nil, fmt.Errorf("tool approvals need Captain's admitted session and prompt run; got session %s run %s", sessionID, promptRunID)
 		}
+		window, err := approvalWindow(ctx, store, promptRunID)
+		if err != nil {
+			return nil, err
+		}
 		broker := &approval.Broker{
 			DB:          store,
 			SessionID:   sessionID,
 			PromptRunID: promptRunID,
 			RequestedBy: "gavel-dashboard",
-			// A provider approval suspends the run and may be answered long after
-			// the turn that raised it; captain's own provider timeout is the one
-			// the dashboard inherits rather than a second number to keep in step.
-			Timeout:   approval.ProviderTimeout,
+			Timeout:     window,
+			// The run's own deadline, which the broker uses as the upper bound on the
+			// window. It is not redundant with the deadline on the context the tool
+			// call arrives under: a dispatch that was handed no executor context
+			// carries no deadline at all, and the window would then be the ceiling
+			// again — the exact shape this bound exists to prevent.
+			Deadline:  runDeadline(ctx),
 			Notify:    notifyApproval(ctx),
 			OnWaiting: setPromptRunState(store, promptRunID, captaindb.PromptRunStateWaiting),
 			OnRunning: setPromptRunState(store, promptRunID, captaindb.PromptRunStateRunning),
@@ -94,18 +103,79 @@ func todoApprovalBroker(dir string) todos.ApprovalBroker {
 	}
 }
 
+// approvalWindow is how long this run's unanswered approvals stay open.
+//
+// It reads permissions.approvalTimeout off the spec Captain admitted the run
+// with, so the window resolves through the same layering as permissions.mode:
+// .gavel.yaml, then the prompt's frontmatter, then the request. A run that
+// declares none falls back to Captain's provider ceiling — but only as a
+// ceiling: the broker still pulls the expiry in ahead of the run's deadline, so
+// an unattended run gives up on the question before its budget gives up on it.
+//
+// The rendered spec is the durable record of what was dispatched, and it is
+// written at admission, which precedes every tool call. A spec that is present
+// but unreadable is an error rather than a fallback to the ceiling: silently
+// widening a window somebody narrowed is the failure this whole field exists to
+// stop.
+func approvalWindow(ctx context.Context, store approvalStore, promptRunID uuid.UUID) (time.Duration, error) {
+	run, err := store.GetPromptRun(ctx, promptRunID)
+	if err != nil {
+		return 0, err
+	}
+	if len(run.RenderedSpec) == 0 {
+		return approval.ProviderTimeout, nil
+	}
+	encoded, err := json.Marshal(run.RenderedSpec)
+	if err != nil {
+		return 0, fmt.Errorf("read the spec prompt run %s was admitted with: %w", promptRunID, err)
+	}
+	var spec api.Spec
+	if err := json.Unmarshal(encoded, &spec); err != nil {
+		return 0, fmt.Errorf("read the spec prompt run %s was admitted with: %w", promptRunID, err)
+	}
+	window, err := spec.Permissions.ParseApprovalTimeout()
+	if err != nil {
+		return 0, err
+	}
+	if window == 0 {
+		return approval.ProviderTimeout, nil
+	}
+	return window, nil
+}
+
+// runDeadline is when the run ends whatever anyone answers. The executor context
+// carries the resolved budget timeout as an absolute deadline; a context without
+// one leaves the zero time, which the broker reads as "unbounded".
+func runDeadline(ctx *todos.ExecutorContext) time.Time {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return time.Time{}
+	}
+	return deadline
+}
+
 // notifyApproval surfaces a pending request on the run's own narration, which is
 // what the TODO session view already renders — the same frame the provider's
 // EventPermission produces, so an approval reads identically wherever it came
 // from. The durable row is what the dashboard acts on; this is how it learns
 // there is one without waiting for its next poll.
+// It narrates the outcome as well as the question. The broker sends the same
+// frame back, same approval ID, carrying a Reason, once the wait ends without an
+// answer — expired, or cancelled by the monitor's sweep. Narrating only the ask
+// left a run that nobody answered for reading exactly like a run somebody is
+// about to answer, and the difference is the whole point.
 func notifyApproval(ctx *todos.ExecutorContext) func(context.Context, api.Event) error {
 	return func(_ context.Context, event api.Event) error {
 		detail := map[string]any{"tool": event.Tool, "approvalId": event.ApprovalID, "input": event.Input}
-		ctx.GetTranscript().AddExecutorMessage("awaiting approval: "+event.Tool, todos.EntryAction, detail)
+		message := "awaiting approval: " + event.Tool
+		if event.Reason != "" {
+			detail["reason"] = event.Reason
+			message = "approval " + event.Reason + ": " + event.Tool
+		}
+		ctx.GetTranscript().AddExecutorMessage(message, todos.EntryAction, detail)
 		ctx.Notify(todos.Notification{
 			Type:    todos.NotifyApproval,
-			Message: event.Tool,
+			Message: message,
 			Data:    detail,
 		})
 		return nil

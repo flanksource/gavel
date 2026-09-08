@@ -453,6 +453,11 @@ gavel pr status --logs --tail-logs 50
 the selected review threads to be resolved, and with neither it waits for the whole
 rollup. A selector that matches nothing is an error, not a completion.
 
+A PR GitHub reports as `CONFLICTING` renders a **Merge conflicts** section listing every
+conflicting path, how it conflicts, and the commands that clear it — replayed locally with
+`git merge-tree`, since no GitHub API returns the paths. The exit code is `1` whenever the
+PR cannot merge: a failing check, a failing job, a failing gavel shard, or a merge conflict.
+
 #### `gavel pr list`
 
 List pull requests with filtering, a live browser dashboard, and macOS menu bar indicator.

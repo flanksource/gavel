@@ -42,6 +42,16 @@ export default defineConfig(({ command }) => {
   if (localClicky) {
     console.log(`[pr/ui] dev: resolving @flanksource/clicky-ui from local source (${clickySrc})`);
   }
+  // Every module Vite resolves outside `root` is handed to chokidar individually,
+  // and its FSEvents backend opens a stream per parent directory (consolidating
+  // only once 10 pile up under one ancestor) — the clicky-ui source spans ~50 of
+  // them, all charged to fseventsd. Set GAVEL_UI_WATCH_CLICKY=0 to keep resolving
+  // sibling source while dropping those streams; the cost is losing HMR on
+  // clicky-ui edits, so only do it when this session isn't touching clicky-ui.
+  const watchClicky = process.env.GAVEL_UI_WATCH_CLICKY !== '0';
+  if (localClicky && !watchClicky) {
+    console.log('[pr/ui] dev: GAVEL_UI_WATCH_CLICKY=0 — clicky-ui source is not watched (no HMR on sibling edits)');
+  }
   const clickyAliases = localClicky
     ? clickySubpaths.map(sub => ({
         find: `@flanksource/clicky-ui/${sub}`,
@@ -84,6 +94,9 @@ export default defineConfig(({ command }) => {
       // The local clicky-ui source lives outside this project root; allow Vite to
       // serve it (and its hoisted deps) when the dev alias above is active.
       ...(localClicky ? { fs: { allow: [resolve(here, '../../..')] } } : {}),
+      // Additive — Vite keeps its own defaults (.git, node_modules, test-results,
+      // cacheDir, outDir) and appends this.
+      ...(localClicky && !watchClicky ? { watch: { ignored: [`${clickySrc}/**`] } } : {}),
     },
     build: {
       // ES-module library build: the stable `prui.js` entry is loaded as

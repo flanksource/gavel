@@ -104,9 +104,6 @@ func streamCaptainSession(w http.ResponseWriter, r *http.Request, store captainS
 		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, b)
 		flusher.Flush()
 	}
-	for _, diagnostic := range resolved.diagnostics {
-		emit("warning", diagnostic)
-	}
 	deadline := time.Now().Add(sessionLogAppearTimeout)
 	seen := map[uuid.UUID]string{}
 	owners := map[uuid.UUID]*captaindb.Session{}

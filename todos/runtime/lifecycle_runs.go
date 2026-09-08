@@ -8,6 +8,8 @@ import (
 
 	"github.com/flanksource/captain/pkg/api"
 	captaindb "github.com/flanksource/captain/pkg/database"
+	"github.com/flanksource/captain/pkg/monitor"
+	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/native"
 	"github.com/flanksource/gavel/todos/types"
@@ -36,7 +38,15 @@ func (p *Provider) RecordRunStart(ctx context.Context, todo *types.TODO, metadat
 	if sessionID := strings.TrimSpace(metadata.SessionID); sessionID != "" {
 		sessionUpdate.ProviderSessionID = &sessionID
 	}
-	if sessionUpdate.ProviderSessionID != nil {
+	// The tree the agent actually works in is the setup-transformed spec's cwd: a
+	// per-run git worktree, not the repository root the TODO was filed against.
+	// Nothing else records it — a run that blocks before its first turn boundary
+	// never reports one, and transcript ingest only learns a cwd once there is a
+	// transcript to read it from.
+	if cwd := runStartCWD(metadata); cwd != "" && cwd != active.session.CWD {
+		sessionUpdate.CWD = &cwd
+	}
+	if sessionUpdate.ProviderSessionID != nil || sessionUpdate.CWD != nil {
 		root, err := p.captain.UpdateSessionState(ctx, sessionUpdate)
 		if err != nil {
 			return fmt.Errorf("bind Captain admission session: %w", err)
@@ -55,6 +65,13 @@ func (p *Provider) RecordRunStart(ctx context.Context, todo *types.TODO, metadat
 		if err != nil {
 			return err
 		}
+	} else if execution, err := p.captain.GetSession(ctx, *active.run.ExecutionSessionID); err == nil {
+		// A resumed turn re-arms the monitor on the same transcript: the process
+		// that first registered it may be gone, and the one tailing it may have
+		// restarted since.
+		p.registerTranscript(ctx, execution)
+	} else {
+		return fmt.Errorf("load Captain execution session: %w", err)
 	}
 
 	state := captaindb.PromptRunStateRunning
@@ -215,6 +232,11 @@ func firstNonBlank(values ...string) string {
 // Captain's transcript ingestor uses the same (source, host, provider ID)
 // identity, so later ingest enriches this row rather than creating another
 // agent record. The admission root remains a separate bookkeeping row.
+//
+// The relation is `transcript`, not `agent`: this row is where the provider's
+// on-disk log lands, which is exactly what Captain's GetTranscriptSession looks
+// for under an admission root. Recorded as `agent` it was a sub-agent as far as
+// every reader was concerned, and Captain's own recovery path could not find it.
 func (p *Provider) ensureAgentSession(ctx context.Context, admission *captaindb.Session, metadata todos.RunStartMetadata) (*captaindb.Session, error) {
 	if admission == nil || strings.TrimSpace(admission.ProviderSessionID) == "" {
 		return nil, nil
@@ -229,6 +251,7 @@ func (p *Provider) ensureAgentSession(ctx context.Context, admission *captaindb.
 		Provider:          strings.TrimSpace(metadata.Provider),
 		HostID:            captaindb.LocalHostID(),
 		ParentSessionID:   &admission.ID,
+		ParentRelation:    captaindb.SessionParentRelationTranscript,
 		Project:           admission.Project,
 		CWD:               admission.CWD,
 		Title:             admission.Title,
@@ -239,7 +262,42 @@ func (p *Provider) ensureAgentSession(ctx context.Context, admission *captaindb.
 	if err != nil {
 		return nil, fmt.Errorf("resolve monitored Captain session: %w", err)
 	}
+	p.registerTranscript(ctx, session)
 	return session, nil
+}
+
+// registerTranscript binds the session to its on-disk transcript by id and arms
+// the monitor on it. Captain's discovery is otherwise shaped by the working
+// directory, so a run in a fresh git worktree writes into a project directory
+// nothing is watching and its transcript waits for the daily recon.
+//
+// A log that has not appeared yet is the expected state at run start, not a
+// failure: the id is bound before the agent flushes its first line, and the
+// recon still finds the file. Anything else is a real fault and says so.
+func (p *Provider) registerTranscript(ctx context.Context, session *captaindb.Session) {
+	if session == nil || strings.TrimSpace(session.ProviderSessionID) == "" {
+		return
+	}
+	path, err := monitor.RegisterTranscriptSource(ctx, p.captain, session.ID, session.ProviderSessionID, session.Source)
+	switch {
+	case errors.Is(err, monitor.ErrTranscriptNotFound):
+		logger.Debugf("session %s has no %s transcript yet: %v", session.ID, session.Source, err)
+	case err != nil:
+		logger.Warnf("register transcript for Captain session %s: %v", session.ID, err)
+	default:
+		logger.Debugf("registered transcript %s for Captain session %s", path, session.ID)
+	}
+}
+
+// runStartCWD is the directory the agent runs in, as the transformed spec
+// reports it. Only the report that trails setup carries a spec, so a turn that
+// cannot see one leaves the recorded directory alone rather than replacing a
+// worktree with the repository root it was cloned from.
+func runStartCWD(metadata todos.RunStartMetadata) string {
+	if metadata.Spec == nil {
+		return ""
+	}
+	return strings.TrimRight(strings.TrimSpace(metadata.Spec.Cwd()), "/")
 }
 
 // ActivePromptRun returns the Captain prompt run backing the todo's current

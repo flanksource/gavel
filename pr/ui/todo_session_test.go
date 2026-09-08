@@ -38,6 +38,15 @@ func (f fakeCaptainSessionStore) GetSessionByIdentity(_ context.Context, _ strin
 	return nil, captaindb.ErrSessionNotFound
 }
 
+// GetTranscriptSessionByIdentity stands in for Captain's sibling hop: the
+// dashboard no longer chooses between the rows one provider id names.
+func (f fakeCaptainSessionStore) GetTranscriptSessionByIdentity(context.Context, string) (*captaindb.Session, error) {
+	if f.transcript == nil {
+		return nil, captaindb.ErrSessionNotFound
+	}
+	return f.transcript, nil
+}
+
 func (f fakeCaptainSessionStore) GetSessionOverviewByIdentity(context.Context, string) (*captaindb.SessionOverview, error) {
 	if f.overview == nil {
 		return nil, captaindb.ErrSessionNotFound
