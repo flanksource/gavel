@@ -275,10 +275,10 @@ var _ = Describe("Test UI E2E", func() {
 		// New tab per test, sharing the suite-wide browser process. The tab
 		// context is a backstop against a spec wedging until the go test panic
 		// deadline; surfacing a selector that never matches is clickTimeout's
-		// job, and it does that in 15s regardless of what this bound is. So the
-		// bound is sized for the slowest legitimate action instead — a full-page
-		// screenshot on a loaded CI runner, which shares the machine with the
-		// rest of the suite and has timed out at exactly 45s more than once.
+		// job, and it does that in 15s regardless of what this bound is. Two
+		// minutes leaves room for a slow action on a loaded CI runner without
+		// being the thing that reports a wedge — a spec that reaches this bound
+		// is stuck, not slow, and should be read that way.
 		var tabCancel context.CancelFunc
 		ctx, tabCancel = chromedp.NewContext(suiteBrowserCtx)
 		var timeoutCancel context.CancelFunc
@@ -496,7 +496,14 @@ var _ = Describe("Test UI E2E", func() {
 			chromedp.Sleep(2*time.Second),
 			clickWithTimeout(`//span[contains(text(), "CEL eval fails")]`),
 			chromedp.Sleep(500*time.Millisecond),
-			chromedp.FullScreenshot(&buf, 90),
+			// Viewport capture, not FullScreenshot: the beyond-viewport path
+			// resizes to the full scroll height first, and against this page's
+			// overflow-y-auto panels it never returns on headless Linux — the
+			// spec burned its whole budget there, at 45s and again at 2m, while
+			// finishing in seconds locally. What the assertions below actually
+			// need is proof the page rendered with the detail panel open, and a
+			// viewport shot carries that.
+			chromedp.CaptureScreenshot(&buf),
 		)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(len(buf)).To(BeNumerically(">", 10000))
