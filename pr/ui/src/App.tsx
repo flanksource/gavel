@@ -18,6 +18,7 @@ import { AddProjectDialog } from './components/AddProjectDialog';
 import { SettingsPage, type SettingsScope } from './components/settings/SettingsPage';
 import { ProjectDetailPane, ProjectsSidebar } from './components/ProjectsView';
 import { ProcessManager } from './components/ProcessManager';
+import { agentTranscriptTabs } from './components/TaskAgentTranscript';
 import { ProjectsPlaceholder } from './components/ProjectsPlaceholder';
 import { ThemeToggle } from './components/ThemeToggle';
 import { ReactGrabHelp } from './components/ReactGrabHelp';
@@ -685,7 +686,12 @@ export function App() {
           </div>
         ) : activeTab === 'tasks' ? (
           <div className="h-full overflow-y-auto p-4">
-            <TaskManager basePath="/api/v1" selectedId={selectedPath || undefined} onSelectRun={navigateTask} />
+            <TaskManager
+              basePath="/api/v1"
+              selectedId={selectedPath || undefined}
+              onSelectRun={navigateTask}
+              extraTabs={agentTranscriptTabs}
+            />
           </div>
         ) : activeTab === 'prompts' ? (
           <PromptsView
