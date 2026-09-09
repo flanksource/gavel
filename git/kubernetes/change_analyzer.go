@@ -254,7 +254,7 @@ func AnalyzeKubernetesChanges(ctx AnalyzerContext, commit models.Commit, change 
 	if change.Type != models.SourceChangeTypeAdded {
 		beforeContent, err = ctx.ReadFile(change.File, beforeCommit)
 		if err != nil {
-			logger.Errorf("Error reading before %s:%s %w", change.File, beforeCommit, err)
+			logger.Errorf("Error reading before %s:%s %v", change.File, beforeCommit, err)
 			return nil
 		}
 	}
@@ -262,7 +262,7 @@ func AnalyzeKubernetesChanges(ctx AnalyzerContext, commit models.Commit, change 
 	if change.Type != models.SourceChangeTypeDeleted {
 		afterContent, err = ctx.ReadFile(change.File, afterCommit)
 		if err != nil {
-			logger.Errorf("Error reading after %s:%s %w", change.File, afterCommit, err)
+			logger.Errorf("Error reading after %s:%s %v", change.File, afterCommit, err)
 			return nil
 		}
 	}

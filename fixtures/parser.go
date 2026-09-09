@@ -8,8 +8,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/bmatcuk/doublestar/v4"
 	"github.com/goccy/go-yaml"
+
+	"github.com/flanksource/gavel/fixtures/record"
 )
 
 // ParseMarkdownFixtures parses markdown files containing test fixtures
@@ -70,10 +71,12 @@ func ParseMarkdownFixtures(fixtureFilePath string) ([]FixtureNode, error) {
 	return nodes, nil
 }
 
-// parseTableRow converts a table row into a FixtureTest
-func parseTableRow(headers, values []string) *FixtureNode {
+// parseTableRow converts a table row into a FixtureTest. It returns a nil node
+// for a row that declares no test, and an error for a row that declares one
+// badly — a mistyped recorder is a red parse, not a silently absent recording.
+func parseTableRow(headers, values []string) (*FixtureNode, error) {
 	if len(headers) != len(values) {
-		return nil
+		return nil, nil
 	}
 
 	fixture := FixtureTest{
@@ -95,6 +98,12 @@ func parseTableRow(headers, values []string) *FixtureNode {
 			fixture.Exec = value
 		case "terminal", "term":
 			fixture.Terminal = value
+		case "record", "recording":
+			spec, err := record.Parse(value)
+			if err != nil {
+				return nil, err
+			}
+			fixture.Record = spec
 		case "os":
 			fixture.TestOS = value
 		case "arch":
@@ -147,13 +156,13 @@ func parseTableRow(headers, values []string) *FixtureNode {
 
 	// Don't return fixtures without names
 	if fixture.Name == "" {
-		return nil
+		return nil, nil
 	}
 
 	return &FixtureNode{
 		Type: TestNode,
 		Test: &fixture,
-	}
+	}, nil
 }
 
 // parseFrontMatter extracts YAML front-matter from a markdown file
@@ -265,18 +274,60 @@ func ParseFixtureForTest(filePath string) (*FixtureNode, error) {
 	return ParseMarkdownFixturesWithTree(filePath)
 }
 
-// ParseMarkdownFixturesWithTree parses markdown files into a hierarchical tree structure
-func ParseMarkdownFixturesWithTree(filePath string) (*FixtureNode, error) {
+// ParseMarkdownContentWithTree parses markdown content into a fixture tree.
+// It is used by callers whose fixture source is not a local file, such as
+// issue bodies fetched from external task providers.
+func ParseMarkdownContentWithTree(name, content, sourceDir string, frontMatter *FrontMatter) (*FixtureNode, error) {
+	if sourceDir == "" {
+		sourceDir = "."
+	}
 	fileTree := &FixtureNode{
-		Name:     filepath.Base(filePath),
+		Name:     name,
 		Type:     FileNode,
 		Children: make([]*FixtureNode, 0),
 		Origin: &FixtureOrigin{
-			File: filePath,
-			Kind: "file",
+			File: name,
+			Kind: "content",
 		},
 	}
 
+	var contentTree *FixtureNode
+	var err error
+	if frontMatter != nil && frontMatter.AI != nil {
+		// `ai:` front matter adds an AI verification step, but the same
+		// markdown file may also contain ordinary fixture steps below it.
+		contentTree, err = parseAIFixtureTree(content, frontMatter, sourceDir)
+		if err == nil {
+			regularTree, regularErr := parseMarkdownWithGoldmarkTree(content, frontMatter, sourceDir)
+			if regularErr != nil {
+				err = regularErr
+			} else {
+				for _, child := range regularTree.Children {
+					contentTree.AddChild(child)
+				}
+			}
+		}
+	} else {
+		contentTree, err = parseMarkdownWithGoldmarkTree(content, frontMatter, sourceDir)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse markdown content: %w", err)
+	}
+
+	for _, child := range contentTree.Children {
+		fileTree.AddChild(child)
+	}
+	setOriginFile(fileTree, name)
+
+	if err := expandGlobInRows(fileTree, sourceDir); err != nil {
+		return nil, fmt.Errorf("expand row globs: %w", err)
+	}
+
+	return fileTree, nil
+}
+
+// ParseMarkdownFixturesWithTree parses markdown files into a hierarchical tree structure
+func ParseMarkdownFixturesWithTree(filePath string) (*FixtureNode, error) {
 	// Get the directory containing the fixture file
 	sourceDir := filepath.Dir(filePath)
 
@@ -307,25 +358,18 @@ func ParseMarkdownFixturesWithTree(filePath string) (*FixtureNode, error) {
 		content = strings.Join(lines, "\n")
 	}
 
-	// Use the new AST-based parser to build the tree directly
-	contentTree, err := parseMarkdownWithGoldmarkTree(content, frontMatter, sourceDir)
+	fileTree, err := ParseMarkdownContentWithTree(filepath.Base(filePath), content, sourceDir, frontMatter)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse markdown content: %w", err)
+		return nil, err
 	}
-
-	// Move children from content tree to file tree
-	for _, child := range contentTree.Children {
-		fileTree.AddChild(child)
+	if err := expandFixtureTreeForFiles(fileTree, frontMatter, sourceDir); err != nil {
+		return nil, fmt.Errorf("failed to expand fixtures for files: %w", err)
 	}
 	setOriginFile(fileTree, filePath)
-
-	// Expand any @-glob references in row cells (stdout/stderr) into
-	// one row per matched file. Runs after frontmatter `files:`
-	// expansion so the two mechanisms compose.
-	if err := expandGlobInRows(fileTree, sourceDir); err != nil {
-		return nil, fmt.Errorf("expand row globs: %w", err)
+	if fileTree.Origin != nil {
+		fileTree.Origin.File = filePath
+		fileTree.Origin.Kind = "file"
 	}
-
 	return fileTree, nil
 }
 
@@ -382,92 +426,24 @@ func expandFixturesForFiles(fixtures []FixtureNode, frontMatter *FrontMatter, so
 		return fixtures, nil
 	}
 
-	var expandedFixtures []FixtureNode
-
-	// Find files matching the glob pattern
-	// Start search from the source directory (where the fixture file is located)
-	pattern := frontMatter.Files
-
-	// If pattern is absolute, use it directly
-	if !filepath.IsAbs(pattern) {
-		// Make pattern relative to search path
-		pattern = filepath.Join(sourceDir, pattern)
-	}
-
-	// Use doublestar to find matching files
-	matches, err := doublestar.FilepathGlob(pattern)
+	matches, err := matchFixtureFiles(frontMatter.Files, sourceDir)
 	if err != nil {
-		return nil, fmt.Errorf("invalid glob pattern '%s': %w", frontMatter.Files, err)
+		return nil, err
 	}
-
-	// If no matches found, return original fixtures
 	if len(matches) == 0 {
 		return fixtures, nil
 	}
+	expandedFixtures := make([]FixtureNode, 0, len(fixtures)*len(matches))
 
 	// For each matched file, create a copy of each fixture with template variables
 	for _, matchedFile := range matches {
-		// Get file info
-		absFile, err := filepath.Abs(matchedFile)
-		if err != nil {
-			continue
-		}
-
-		fileInfo, err := os.Stat(absFile)
-		if err != nil || fileInfo.IsDir() {
-			continue // Skip directories
-		}
-
-		// Calculate template variables
-		fileDir := filepath.Dir(absFile)
-		fileName := filepath.Base(absFile)
-		fileNameNoExt := strings.TrimSuffix(fileName, filepath.Ext(fileName))
-
-		// Make paths relative to source directory if possible
-		relFile, _ := filepath.Rel(sourceDir, absFile)
-		relDir, _ := filepath.Rel(sourceDir, fileDir)
-
-		// Create template variables map
-		templateVars := map[string]string{
-			"file":     relFile,                // Relative path to file
-			"filename": fileNameNoExt,          // Filename without extension
-			"dir":      relDir,                 // Directory containing the file
-			"absfile":  absFile,                // Absolute path to file
-			"absdir":   fileDir,                // Absolute directory
-			"basename": fileName,               // Full filename with extension
-			"ext":      filepath.Ext(fileName), // File extension
-		}
-
-		// Create a copy of each fixture with the template variables
 		for _, fixture := range fixtures {
-			// Deep copy the fixture
 			expandedFixture := fixture
 			if expandedFixture.Test != nil {
-				// Create a new test copy
-				testCopy := *expandedFixture.Test
-
-				// Update the test name to include the file
-				if testCopy.Name != "" {
-					testCopy.Name = fmt.Sprintf("%s [%s]", testCopy.Name, relFile)
-				}
-
-				// Set template variables
-				testCopy.TemplateVars = make(map[string]any)
-				for k, v := range templateVars {
-					testCopy.TemplateVars[k] = v
-				}
-
-				expandedFixture.Test = &testCopy
+				expandedFixture.Test = expandFixtureTestForFile(expandedFixture.Test, matchedFile, sourceDir)
 			}
-
 			expandedFixtures = append(expandedFixtures, expandedFixture)
 		}
 	}
-
-	// If we expanded fixtures, return the expanded list; otherwise return original
-	if len(expandedFixtures) > 0 {
-		return expandedFixtures, nil
-	}
-
-	return fixtures, nil
+	return expandedFixtures, nil
 }

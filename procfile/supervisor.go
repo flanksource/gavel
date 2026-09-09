@@ -1,0 +1,515 @@
+package procfile
+
+import (
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"sync"
+	"syscall"
+	"time"
+
+	"github.com/flanksource/clicky"
+	cexec "github.com/flanksource/clicky/exec"
+	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/internal/taskhistory"
+	"github.com/flanksource/gavel/verify"
+	"github.com/google/uuid"
+)
+
+// Options configures a Supervisor.
+type Options struct {
+	// Root is the project root; the Procfile, .env and .gavel/proc live here.
+	// Defaults to the current working directory.
+	Root string
+	// Procfile overrides discovery (see Find).
+	Procfile string
+	// Names selects a subset of processes to register and auto-start; empty
+	// registers every process.
+	Names []string
+	// StartNames selects the processes to start while registering every process.
+	// When Names and StartNames are both empty, the profile's default set starts.
+	StartNames []string
+	// Profile is the active profile; entries with `profiles` auto-start only when
+	// it matches. Empty means the default profile.
+	Profile string
+	// Foreground multiplexes process output to stdout (the `proc run` form).
+	Foreground bool
+	// Config carries global defaults from .gavel.yaml.
+	Config verify.ProcfileConfig
+}
+
+// managed is the supervisor's per-process bookkeeping. The supervised lifecycle
+// (run/restart, ports, status, resources) is owned by the clicky
+// SupervisedProcess; this struct only holds gavel-side wiring.
+type managed struct {
+	entry     Entry
+	logPath   string
+	colorIdx  int
+	overlay   map[string]string
+	opts      cexec.SuperviseOptions
+	autostart bool
+
+	mu      sync.Mutex
+	proc    *cexec.SupervisedProcess
+	logFD   *os.File
+	running bool
+}
+
+// Supervisor runs and watches the processes from a Procfile. It is the sole
+// writer of .gavel/proc/state.json; CLI commands read that file or talk to the
+// control socket for live operations. Per-process supervision is delegated to
+// clicky's SupervisedProcess.
+type Supervisor struct {
+	root       string
+	dir        string
+	procfile   string
+	instanceID string
+	socket     string
+	profile    string
+	foreground bool
+	width      int
+	started    *time.Time
+
+	procs  []*managed
+	byName map[string]*managed
+
+	mu           sync.Mutex // guards active, stopping, fullyStarted, listener
+	active       int
+	stopping     bool
+	fullyStarted bool
+	listener     net.Listener
+	lockFD       *os.File
+
+	done         chan struct{} // closed when shutting down (signal or all-exited)
+	persistMu    sync.Mutex    // serialises state.json writes
+	stdoutMu     sync.Mutex    // serialises foreground multiplexed output
+	shutdownOnce sync.Once
+}
+
+// NewSupervisor resolves the environment and per-process options from opts into
+// a ready-to-Run supervisor. opts.Root and opts.Procfile must already be
+// resolved (the manager owns discovery via resolveTarget).
+func NewSupervisor(opts Options) (*Supervisor, error) {
+	if opts.Root == "" || opts.Procfile == "" {
+		return nil, fmt.Errorf("supervisor requires a resolved Root and Procfile")
+	}
+	root, _ := filepath.Abs(opts.Root)
+
+	entries, err := Load(opts.Procfile)
+	if err != nil {
+		return nil, err
+	}
+	entries, startNames, err := resolveProcessSelection(entries, opts)
+	if err != nil {
+		return nil, err
+	}
+	dotenv, err := LoadDotEnv(filepath.Join(root, ".env"))
+	if err != nil {
+		return nil, err
+	}
+	// Capture the developer's login-shell environment (real PATH, etc.) once and
+	// layer it under .env/config below, so supervised processes resolve commands
+	// like npm/node even when the supervisor was started by a launchd/systemd
+	// service that stripped the interactive shell env. Best-effort: a shell that
+	// errors or times out must not wedge startup, so log loudly and fall back to
+	// inheriting only the supervisor's own environment.
+	userEnv, err := LoadUserEnv(root)
+	if err != nil {
+		logger.Warnf("load login-shell env for %s: %v", root, err)
+	}
+	dir, err := StateDir(root)
+	if err != nil {
+		return nil, err
+	}
+
+	profile := resolveProfile(opts)
+	s := &Supervisor{root: root, dir: dir, procfile: opts.Procfile, instanceID: uuid.NewString(), profile: profile, foreground: opts.Foreground, byName: map[string]*managed{}, done: make(chan struct{})}
+	for i, e := range entries {
+		policy, maxR := resolvePolicy(opts.Config, e)
+		limits, err := resolveLimits(opts.Config, e)
+		if err != nil {
+			return nil, err
+		}
+		autostart := startNames[e.Name]
+		if startNames == nil {
+			inProfile := len(e.Profiles) == 0 || contains(e.Profiles, profile)
+			autostart = inProfile && (e.Default == nil || *e.Default)
+		}
+		m := &managed{
+			entry:    e,
+			logPath:  LogPath(dir, e.Name),
+			colorIdx: i,
+			overlay:  MergeEnv(userEnv, dotenv, opts.Config.Env, e.Env),
+			opts: cexec.SuperviseOptions{
+				Limits: limits, RestartPolicy: policy, MaxRestarts: maxR,
+				Task: cexec.SupervisedTaskOptions{
+					Name: filepath.Base(root) + ": " + e.Name,
+					Kind: "supervised-process",
+					Labels: map[string]string{
+						"process":   e.Name,
+						"workspace": filepath.Base(root),
+						"root":      root,
+					},
+					Href: "/tasks/{id}",
+					OnFinish: func(runID string) error {
+						return taskhistory.Archive(root, runID)
+					},
+				},
+			},
+			autostart: autostart,
+		}
+		if len(e.Name) > s.width {
+			s.width = len(e.Name)
+		}
+		s.procs = append(s.procs, m)
+		s.byName[e.Name] = m
+	}
+	return s, nil
+}
+
+// Run starts the auto-start processes and blocks until the supervisor is stopped
+// — either by a shutdown signal or because every running process exited with
+// nothing left to restart — then tears everything down and returns.
+func (s *Supervisor) Run() error {
+	if err := s.Start(); err != nil {
+		return err
+	}
+	s.Wait()
+	return nil
+}
+
+// Start writes the supervisor pidfile, opens the control socket, builds every
+// process's supervised unit, and launches the auto-start ones. Non-autostart
+// units stay registered (stopped) so they can be started on demand. Returns once
+// everything is launched (non-blocking).
+func (s *Supervisor) Start() (err error) {
+	lockFD, err := acquireFileLock(supervisorLockPath(s.dir), true)
+	if err != nil {
+		if errors.Is(err, errLockHeld) {
+			return fmt.Errorf("gavel proc is already running for %s", s.root)
+		}
+		return fmt.Errorf("acquire supervisor lock: %w", err)
+	}
+	s.mu.Lock()
+	s.lockFD = lockFD
+	s.mu.Unlock()
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, s.releaseSupervisorLock())
+		}
+	}()
+	if err := WritePid(SupervisorPidPath(s.dir), os.Getpid()); err != nil {
+		return err
+	}
+	now := time.Now()
+	s.started = &now
+	for _, m := range s.procs {
+		if err := truncateFile(m.logPath); err != nil {
+			return err
+		}
+		if err := s.build(m); err != nil {
+			return err
+		}
+	}
+	if err := s.serveControl(); err != nil {
+		return err
+	}
+
+	for _, m := range s.procs {
+		if m.autostart {
+			s.startProc(m)
+		}
+	}
+	s.persist()
+	go s.publishLoop()
+
+	s.mu.Lock()
+	s.fullyStarted = true
+	allDone := s.active <= 0 && !s.stopping
+	s.mu.Unlock()
+	if allDone {
+		s.beginShutdown()
+	}
+	return nil
+}
+
+// Wait blocks until a shutdown signal arrives or every process has exited, then
+// tears the daemon down. A signal is an explicit stop and clears the state; every
+// process exiting on its own keeps a terminal state.json so `proc status` and
+// `proc start`'s readiness can see whether a process crashed.
+func (s *Supervisor) Wait() {
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	defer signal.Stop(sig)
+	select {
+	case <-sig:
+		s.teardown(false)
+	case <-s.done:
+		s.teardown(true)
+	}
+}
+
+// build opens the per-process log and constructs its clicky SupervisedProcess.
+func (s *Supervisor) build(m *managed) error {
+	logFD, err := os.OpenFile(m.logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return fmt.Errorf("open log %s: %w", m.logPath, err)
+	}
+	m.logFD = logFD
+
+	var out io.Writer = logFD
+	if s.foreground {
+		out = io.MultiWriter(logFD, newPrefixWriter(os.Stdout, &s.stdoutMu, m.entry.Name, s.width, m.colorIdx))
+	}
+
+	name := m.entry.Name
+	opts := m.opts
+	opts.DetectPorts = true
+	opts.OnStart = func() {
+		fmt.Fprintf(logFD, "--- %s start %s ---\n", name, time.Now().Format(time.RFC3339))
+	}
+	opts.OnExit = func() { s.onUnitExit(m) }
+
+	// The command is run as-is; env vars are injected via WithEnv and expanded by
+	// the shell at runtime. Pre-expanding here would clobber shell-internal
+	// variables like $i or arithmetic like $((i+1)).
+	m.proc = clicky.Exec(m.entry.Command).
+		WithCwd(s.root).
+		WithEnv(m.overlay).
+		WithProcessGroup().
+		Stream(out, out).
+		Supervise(opts)
+	return nil
+}
+
+func (s *Supervisor) startProc(m *managed) {
+	if s.isStopping() {
+		return
+	}
+	m.mu.Lock()
+	if m.running || m.proc == nil {
+		m.mu.Unlock()
+		return
+	}
+	m.running = true
+	p := m.proc
+	m.mu.Unlock()
+
+	s.mu.Lock()
+	s.active++
+	s.mu.Unlock()
+	p.Start()
+}
+
+func (s *Supervisor) stopProc(m *managed) {
+	m.mu.Lock()
+	p := m.proc
+	m.mu.Unlock()
+	if p != nil {
+		p.Stop() // blocks until the loop ends → onUnitExit decrements active
+	}
+}
+
+func (s *Supervisor) restartProc(m *managed) {
+	m.mu.Lock()
+	p := m.proc
+	running := m.running
+	m.mu.Unlock()
+	if p == nil {
+		return
+	}
+	if !running {
+		s.startProc(m)
+		return
+	}
+	p.Restart()
+}
+
+// onUnitExit is the OnExit callback for a unit: its supervise loop ended
+// permanently (exited/crashed/stopped). Refresh state and decrement the live
+// count, shutting the daemon down once nothing is left running.
+func (s *Supervisor) onUnitExit(m *managed) {
+	m.mu.Lock()
+	m.running = false
+	m.mu.Unlock()
+	s.persist()
+	s.decActive()
+}
+
+// Shutdown stops every process (graceful then forceful), closes the control
+// socket, and removes the state/pid files. It is idempotent and does not exit
+// the process, so it is safe to call from tests. It is the explicit-stop path:
+// the state is cleared.
+func (s *Supervisor) Shutdown() {
+	s.teardown(false)
+}
+
+// teardown stops every process (graceful then forceful), closes the control
+// socket, and releases the live-supervisor artifacts. With persistTerminal it
+// writes a final state.json capturing each process's terminal status/exit code
+// (a post-mortem for a daemon that exited on its own) and keeps it; otherwise it
+// clears the state entirely (an explicit stop). It is idempotent.
+func (s *Supervisor) teardown(persistTerminal bool) {
+	s.mu.Lock()
+	if s.stopping {
+		s.mu.Unlock()
+		return
+	}
+	s.stopping = true
+	l := s.listener
+	socket := s.socket
+	s.mu.Unlock()
+
+	s.beginShutdown() // wake any process in restart backoff
+	ownsSocket := controlSocketOwnedBy(socket, s.instanceID)
+	if l != nil {
+		_ = l.Close()
+	}
+	if ownsSocket {
+		if err := os.Remove(socket); err != nil && !os.IsNotExist(err) {
+			logger.Warnf("remove control socket: %v", err)
+		}
+	}
+
+	var wg sync.WaitGroup
+	for _, m := range s.procs {
+		m.mu.Lock()
+		p := m.proc
+		m.mu.Unlock()
+		if p == nil {
+			continue
+		}
+		wg.Add(1)
+		go func(p *cexec.SupervisedProcess) {
+			defer wg.Done()
+			p.Stop()
+		}(p)
+	}
+	wg.Wait()
+
+	// Snapshot before the FDs close: status/exit codes are read off the live
+	// supervised units. SupervisorPID is zeroed so the persisted state never
+	// reports a (dead) supervisor as running.
+	var terminal State
+	if persistTerminal {
+		terminal = s.State()
+		terminal.SupervisorPID = 0
+	}
+
+	for _, m := range s.procs {
+		m.mu.Lock()
+		fd := m.logFD
+		m.mu.Unlock()
+		if fd != nil {
+			_ = fd.Close()
+		}
+	}
+
+	if !s.ownsPersistedState() {
+		if err := s.releaseSupervisorLock(); err != nil {
+			logger.Warnf("release supervisor lock: %v", err)
+		}
+		return
+	}
+	if persistTerminal {
+		if err := WriteState(s.dir, terminal); err != nil {
+			logger.Warnf("persist terminal proc state: %v", err)
+		}
+		_ = CleanPidfiles(s.dir)
+	} else {
+		_ = Clean(s.dir)
+	}
+	if err := s.releaseSupervisorLock(); err != nil {
+		logger.Warnf("release supervisor lock: %v", err)
+	}
+}
+
+func (s *Supervisor) ownsPersistedState() bool {
+	state, err := ReadState(s.dir)
+	if err != nil {
+		return false
+	}
+	return state.InstanceID == s.instanceID
+}
+
+func (s *Supervisor) releaseSupervisorLock() error {
+	s.mu.Lock()
+	fd := s.lockFD
+	s.lockFD = nil
+	s.mu.Unlock()
+	return releaseFileLock(fd)
+}
+
+func (s *Supervisor) decActive() {
+	s.mu.Lock()
+	s.active--
+	trigger := s.active <= 0 && s.fullyStarted && !s.stopping
+	s.mu.Unlock()
+	if trigger {
+		s.beginShutdown()
+	}
+}
+
+func (s *Supervisor) beginShutdown() {
+	s.shutdownOnce.Do(func() {
+		close(s.done)
+	})
+}
+
+func (s *Supervisor) isStopping() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.stopping
+}
+
+// persist writes the current state of every process to state.json. Writes are
+// serialised and skipped once shutdown has begun so a late write can't recreate
+// the file Clean just removed. Live status/ports/metrics are read directly off
+// the supervised units via the control socket; state.json is the fallback for
+// when the daemon isn't reachable.
+func (s *Supervisor) persist() {
+	if s.isStopping() {
+		return
+	}
+	s.persistMu.Lock()
+	defer s.persistMu.Unlock()
+	state := s.State()
+	now := time.Now()
+	state.PublishedAt = &now
+	if err := WriteState(s.dir, state); err != nil {
+		logger.Warnf("write proc state: %v", err)
+	}
+}
+
+// publishInterval is how often the supervisor republishes state.json while it
+// runs. It matches clicky's own resource sample cadence, so each publish carries
+// a sample the reader could not otherwise have seen without dialing the control
+// socket.
+const publishInterval = 2 * time.Second
+
+// publishLoop republishes state.json on a timer for as long as the daemon runs.
+//
+// Before it existed, persist() ran only on lifecycle transitions, so the
+// resource fields on disk were frozen at the last start/stop and every reader
+// had to dial the control socket to get a live sample — per project, per poll.
+// Publishing on the same cadence the samples are taken makes the file the
+// readable copy of what the supervisor already knows.
+func (s *Supervisor) publishLoop() {
+	ticker := time.NewTicker(publishInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.done:
+			return
+		case <-ticker.C:
+			if s.isStopping() {
+				return
+			}
+			s.persist()
+		}
+	}
+}

@@ -1,0 +1,25 @@
+---
+output:
+  schema:
+    type: object
+    additionalProperties: false
+    required: [summary]
+    properties:
+      summary:
+        type: string
+        description: "One-line plain-English summary of the file change, ideally under 12 words"
+---
+You are summarizing changes to a single file from git diff context.
+
+Return a JSON object with:
+- summary: a single-line plain-English summary of what changed in this file
+
+Rules:
+- Keep it to one short sentence fragment, ideally under 12 words.
+- Describe the substance of the change, not git mechanics.
+- Mention the file path only when it adds necessary context.
+- Do not mention line counts unless they are the point of the change.
+- The input will be git diff text for tracked files, or file contents for new untracked files.
+
+Change context:
+{{{details}}}

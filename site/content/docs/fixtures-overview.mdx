@@ -1,0 +1,75 @@
+---
+title: Fixture overview
+description: Write executable markdown checks for CLIs, services, test runners, linters, and AI review.
+order: 2
+---
+
+Fixtures are markdown files that Gavel can execute. They let you keep test intent, setup, commands, and assertions in one document that a developer can read and a CI job can run.
+
+Use fixtures when you want to test command output, HTTP smoke checks, generated files, policy checks, or a repeatable workflow around `gavel test`, `gavel lint`, and AI review.
+
+```bash
+gavel fixtures examples/precommit.fixture.md # [!code focus] [!code note:one file]
+gavel fixtures "fixtures/**/*.fixture.md" # [!code highlight] [!code note:quoted glob]
+gavel test --fixtures # [!code highlight] [!code note:test report]
+```
+
+The first command runs one known fixture file. The second quotes the glob so Gavel expands it consistently instead of relying on shell-specific glob behavior. The third command folds fixture discovery into the normal `gavel test` report, which is what you want when fixtures are part of the project test suite.
+
+`gavel fixtures` runs the files you name directly. `gavel test --fixtures` folds discovered fixture files into the normal test report. Discovery is enabled with `.gavel.yaml`:
+
+```yaml
+fixtures:
+  enabled: true # [!code focus] [!code note:opt in]
+  files: # [!code highlight]
+    - "tests/**/*.fixture.md" # [!code word:**/*.fixture.md] [!code note:explicit discovery]
+    - "fixtures/**/*.md"
+```
+
+Line 2 opts the project into fixture discovery. Lines 3-5 replace the default `**/*.fixture.md` glob with project-specific locations. Use explicit globs when you want CI and local runs to discover the same set of markdown files.
+
+<Callout variant="tip" title="Start with examples">
+  The repository ships copyable fixtures in `examples/precommit.fixture.md`,
+  `examples/pre-release.fixture.md`, `examples/smoke-test.fixture.md`, and
+  `examples/ai-review.fixture.md`.
+</Callout>
+
+## What a fixture can run
+
+A fixture file can mix several kinds of runnable nodes:
+
+- shell commands, Python, JavaScript, TypeScript, PowerShell, and Go snippets
+- markdown table rows where each row is a test case
+- `yaml test` steps that run the Gavel test engine
+- `yaml lint` steps that run the Gavel lint engine
+- AI verification steps that score a diff against a prompt and checklist
+
+Every runnable node becomes part of the same fixture result tree. When fixtures are called from Go, `RunTesting(t)` mirrors markdown files, sections, tables, and table rows as nested `t.Run` nodes. Ginkgo suites can use `RegisterGinkgoSpecs()` so fixture rows become individual specs.
+
+## Minimal fixture
+
+````markdown
+# Smoke checks
+
+<!-- [!code focus:3] -->
+```bash
+echo "ok"
+```
+
+- contains: ok # [!code highlight] [!code note:stdout check]
+- cel: exitCode == 0
+````
+
+Run it:
+
+```bash
+gavel fixtures smoke.fixture.md
+```
+
+Line 3 is the executable block. By default, `bash` code blocks run as shell commands. Lines 7-8 are assertion bullets. `contains: ok` becomes a stdout assertion, and explicit `cel:` lines can inspect `stdout`, `stderr`, `exitCode`, `json`, ANSI metadata, and fixture properties.
+
+## Choosing a format
+
+Use [Fixture formats](/docs/fixture-formats) for command-output checks. Use [Runner steps](/docs/fixture-runner-steps) when the fixture should orchestrate `gavel test` or `gavel lint`. Use [AI review fixtures](/docs/fixture-ai-review) when a prompt and acceptance checklist are the test.
+
+For todo work, fixtures also act as the definition of done. A todo's `## Verification` section is parsed as fixture nodes and reused by the [todo run loop](/docs/todo-run-loop).

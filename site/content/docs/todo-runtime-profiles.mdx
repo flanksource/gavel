@@ -1,0 +1,204 @@
+---
+title: Todo runtime profiles
+description: Select reusable Captain profiles for lifecycle steps, inspect their resolved layers, and migrate retired run settings.
+order: 10
+---
+
+Runtime profiles give TODO lifecycle steps a reusable Captain configuration. A profile can reference presets and supply its own model, budget, permissions, setup, and workflow settings. Gavel combines those settings with the selected step, project configuration, TODO, and explicit run options.
+
+## Preview a profile
+
+Use a profile's name or catalog ID with `--runtime-profile`. Replace `90ec80f0` with an existing TODO reference:
+
+```bash
+gavel todos run 90ec80f0 --step plan --runtime-profile project-work --dry-run
+gavel todos run 90ec80f0 --step plan --runtime-profile project-work
+```
+
+The first command prints the selected profile, rendered prompt, ordered layer trace, and resolved spec without dispatching the agent. The second starts the same named step. An unknown or ambiguous profile is an error; Gavel does not silently choose another profile.
+
+Selecting a profile and overriding its model are separate actions. An explicit `--model cli:opus:high` is a request override and takes precedence over the profile's model. Prompt and project settings can also override profile fields; inspect the trace to see which source supplied the effective value.
+
+## Repository profiles and presets
+
+Gavel uses Captain's shared catalog discovery for the selected working directory:
+
+| Source | Location |
+| --- | --- |
+| Native records | The Captain database attached to the TODO workspace |
+| User files | `~/.config/captain/presets/*.yaml` and `~/.config/captain/profiles/*.yaml` |
+| Configured directories | `runtime.presetDirs` and `runtime.profileDirs` in Captain configuration |
+| Repository files | `.captain/presets/*.yaml` and `.captain/profiles/*.yaml` beneath the selected working directory |
+
+When `XDG_CONFIG_HOME` is set, user files are discovered beneath `$XDG_CONFIG_HOME/captain`. Configured relative directories resolve against the directory containing Captain's configuration file. Configured directories must exist; absent user and repository directories are allowed. Discovery reads immediate `.yaml` children, not nested directories or `.yml` files.
+
+Names must resolve to one catalog record. A repository file does not silently shadow a database or user profile with the same name; use a unique name or the catalog ID when names collide. File records derive their IDs from their source and filename, so omit `id` from their YAML.
+
+For example, create `.captain/presets/bounded-work.yaml`:
+
+```yaml
+name: bounded-work
+description: Shared limits for project work
+scope: global
+spec:
+  budget:
+    maxTurns: 30
+    timeout: 20m
+```
+
+Then create `.captain/profiles/project-work.yaml`:
+
+```yaml
+name: project-work
+description: Project implementation and planning defaults
+presets:
+  - bounded-work
+spec:
+  model: cli:opus:high
+```
+
+A second profile can reuse that preset. For example, `.captain/profiles/project-review.yaml`:
+
+```yaml
+name: project-review
+description: Shorter project reviews
+presets:
+  - bounded-work
+spec:
+  model: cli:opus:high
+  budget:
+    maxTurns: 12
+```
+
+Captain record files use a `spec` wrapper. Gavel's prompt configuration uses flat fields, as shown below.
+
+## Configure step defaults
+
+Set the project default and any step-specific choices in `.gavel.yaml`:
+
+```yaml
+todos:
+  runtimeProfile: project-work
+  timeout: 25m
+  plan:
+    runtimeProfile: project-review
+  triage:
+    runtimeProfile: project-review
+  verify:
+    runtimeProfile: project-review
+  run:
+    budget:
+      maxTurns: 40
+    workflow:
+      verify:
+        maxIterations: 3
+```
+
+Here `run` inherits `project-work`, while `plan`, `triage`, and `verify` select `project-review`. The explicit `todos.run.budget.maxTurns` overrides that field from the profile. `todos.timeout` is a ceiling: it can shorten a resolved timeout but cannot increase a shorter timeout supplied by another layer.
+
+Standalone `gavel fixtures` and `gavel fixtures run --format captain-verify-report` resolve their AI grader through the same verification defaults. They load the selected profile only when an AI step executes; command-only documents and skipped AI steps do not require a profile catalog. A fixture's own `ai` frontmatter still overrides the resolved grader defaults. A document carrying a complete `ai.spec` snapshot uses that snapshot and skips profile lookup, preserving the runtime resolved by its caller.
+
+| Configuration field | Meaning |
+| --- | --- |
+| `todos.runtimeProfile` | Default profile name or ID for every lifecycle step |
+| `todos.run.runtimeProfile` | Default for the built-in implementation step |
+| `todos.plan.runtimeProfile` | Default for the built-in planning step |
+| `todos.triage.runtimeProfile` | Default for the built-in triage step |
+| `todos.verify.runtimeProfile` | Default for verification, including its acceptance-criteria grader |
+| `todos.steps.<name>.runtimeProfile` | Default for a custom step declared in `todos.lifecycle.steps` |
+
+Built-in steps keep their dedicated blocks; `todos.steps.run`, for example, is invalid. A custom step's prompt file belongs in its lifecycle declaration as `prompt: file:<path>`. `todos.verify.file` and `todos.steps.<name>.file` are rejected. See [Prompt overrides](/docs/prompt-overrides) for complete custom-step examples.
+
+A `.prompt` file can pin a profile with a top-level frontmatter field:
+
+```yaml
+---
+runtimeProfile: project-review
+permissions:
+  mode: plan
+---
+```
+
+Add this metadata to a complete prompt that honors the step's existing input and output contract. A profile-only configuration does not require replacing the prompt body.
+
+## Selection and layer precedence
+
+The profile reference is selected in this order, first nonempty value wins:
+
+1. Explicit CLI `--runtime-profile` or HTTP `runtimeProfile`.
+2. The selected prompt's frontmatter `runtimeProfile` pin.
+3. The step's `.gavel.yaml` `runtimeProfile` setting.
+4. The global `.gavel.yaml` `todos.runtimeProfile` setting.
+5. No profile.
+
+This chooses one profile. It does not place all that profile's fields above the rest of the run configuration.
+
+For presets with `scope: global`, the ordinary value precedence is lowest to highest:
+
+1. `.gavel.yaml` `ai`.
+2. Selected presets, then the profile's `spec`.
+3. Prompt frontmatter, including the configured prompt-file override.
+4. The lifecycle step's `spec` declaration.
+5. `.gavel.yaml` `todos.<step>` or `todos.steps.<name>`.
+6. The TODO's `llm` configuration.
+7. Inherited continuation layers.
+8. The host's permission settings.
+9. Explicit request fields.
+
+Captain orders scopes as `global`, `context`, `surface`, then `user`; sources within a scope retain their insertion order. Presets honor their declared scope, so a `user` preset can outrank a prompt's `surface` layer. Prefer `global` for reusable defaults that steps should be able to override. Constraints such as `todos.timeout` remain restrictive regardless of later values.
+
+When no profile is selected, Gavel preserves its existing non-profile layer order. The trace identifies actual selected presets and profiles separately from Gavel's project, prompt, step, and request layers.
+
+The dashboard run context exposes available `runtimeProfiles` and `promptDefaults[step].runtimeProfile`. HTTP callers select a profile beside `spec`, not inside it:
+
+```json
+{
+  "ref": "90ec80f0",
+  "step": "plan",
+  "runtimeProfile": "project-review",
+  "spec": {
+    "budget": { "maxTurns": 8 }
+  }
+}
+```
+
+Send only fields the caller explicitly overrides in `spec`. Copying an already resolved default model into the request would override the newly selected profile's model.
+
+## Retired flags and settings
+
+Retired CLI flags are rejected. Update commands and configuration using these replacements:
+
+| Retired setting | Replacement |
+| --- | --- |
+| `todos run --mode` | `--step plan`, `--step run`, or another declared lifecycle step |
+| `todos run --prompt` | Declare a lifecycle step with its `prompt`, then select it with `--step` |
+| `todos run --driver` and `.gavel.yaml` `todos.driver` | A Captain model selection such as `--model cli:opus:high` or `ai.model: cli:opus:high` |
+| `todos run --group-by` and `.gavel.yaml` `todos.groupBy` | Remove the setting; runs dispatch per TODO |
+| `.gavel.yaml` `todos.prompts` | Declare named steps under `todos.lifecycle.steps`; configure custom step defaults under `todos.steps.<name>` |
+| `.gavel.yaml` `todos.approvals` | Set the step's `permissions.mode: default` and use the dashboard's durable approval flow |
+| `.gavel.yaml` `checks.maxIterations` | `todos.run.workflow.verify.maxIterations` |
+| `gavel todos prompts` | `gavel todos steps [todo]` |
+| HTTP run fields `runMode`, `driver`, and `prompt` | Send `step` and explicit Captain overrides in `spec` |
+
+During the compatibility window, Gavel-owned JSON/YAML decoders warn about unknown fields and ignore them. Warnings name the source and dotted field path, for example `.gavel.yaml: unknown field checks.maxIterations`. The same policy covers lifecycle documents and TODO HTTP request bodies. This does not translate retired fields into their replacements: a request carrying only `driver` no longer selects that runtime.
+
+Malformed documents, incorrect field types, and invalid known configuration still fail. Captain-owned `.prompt` and catalog parsers retain their own validation policy; Gavel's warning window does not make those formats permissive. Migrate warnings before the eventual strict-policy release, when unknown fields will become errors. There is no project setting to disable this policy.
+
+## Implementation permissions
+
+The built-in run prompt now declares only its native editing posture:
+
+```yaml
+permissions:
+  mode: acceptEdits
+```
+
+Its obsolete `permissions.presets: [edit]` entry has been removed. Update copied run prompts to this form. Captain's current tool-policy guard rejects explicit `permissions.tools` policies on non-Claude transports, so copying unconditional `Read`, `Edit`, `Write`, `Glob`, and `Grep` allows would prevent those runtimes from starting. Removing that preset also removes its automatic file-tool approvals outside the workspace for Claude agent runs.
+
+Profile catalog `presets` remain supported and are unrelated to the retired `permissions.presets` field. Other tools' `presets` configuration, such as linter or container configuration, is unchanged.
+
+## Migration availability
+
+This page describes the lifecycle migration in development. Distributable builds require a released Captain version containing the shared default catalog and raw profile-layer APIs; a successful build through a local Go workspace alone does not establish that compatibility.
+
+Saved Captain model-default enforcement is deferred until Captain can resolve those defaults against the complete layer stack without changing explicit model selections. Captain's broader effective-runtime validation and full-input preflight remain a separate integration gate. Until that gate lands, a successful Gavel `--dry-run` is a resolution preview, not a guarantee that every permission, skill, or sandbox setting is supported by the selected runtime. The final warning-to-error policy change also remains gated on compatible releases and migrated consumers.

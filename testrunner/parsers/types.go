@@ -23,6 +23,7 @@ const (
 	Jest       Framework = "jest"
 	Vitest     Framework = "vitest"
 	Playwright Framework = "playwright"
+	Fixture    Framework = "fixture"
 )
 
 // String returns the string representation of the framework.
@@ -199,6 +200,7 @@ type FixtureContext struct {
 	ExitCode      int            `json:"exit_code,omitempty"`
 	CWD           string         `json:"cwd,omitempty"`
 	CELExpression string         `json:"cel_expression,omitempty"`
+	CELTrace      string         `json:"cel_trace,omitempty"`
 	CELVars       map[string]any `json:"cel_vars,omitempty"`
 	Expected      any            `json:"expected,omitempty"`
 	Actual        any            `json:"actual,omitempty"`
@@ -247,6 +249,12 @@ func (t Test) Pretty() api.Text {
 	case t.Failed:
 		s = s.Append(icons.Fail, "text-red-500")
 		textStyle = "text-red-500"
+	// A warned node completed with a non-blocking problem. Without this branch it
+	// falls through to the pass icon and renders a green check next to its warning
+	// message — the summary line counts it amber, so the tree must agree.
+	case t.Warned:
+		s = s.Append(icons.Warning, "text-amber-500")
+		textStyle = "text-amber-500"
 	default:
 		s = s.Add(icons.Pass)
 	}
@@ -294,6 +302,16 @@ func (t Test) Pretty() api.Text {
 			Label:   "stderr",
 			Content: clicky.Text(t.Stderr, "text-red-500 font-mono text-xs whitespace-pre-wrap"),
 		})
+	}
+
+	// Surface the provider-owned Detail inline beneath the summary line. On a
+	// failure always (so the rich body — e.g. an activity trace's Input Fields /
+	// Errors block — reaches the terminal, not just the JSON report); on a
+	// passing node only at -vv (logger.V(2)) so green runs stay scannable.
+	if t.Detail != nil && (t.Failed || logger.V(2).Enabled()) {
+		if body := RenderDetail(t.Detail); !body.IsEmpty() {
+			s = s.NewLine().Add(api.Collapsed{Label: "detail", Content: body})
+		}
 	}
 
 	return s

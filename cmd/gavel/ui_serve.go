@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/flanksource/clicky"
+	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/commons/logger"
 	testui "github.com/flanksource/gavel/testrunner/ui"
 )
@@ -31,7 +32,7 @@ import (
 // time.Duration as a field type.
 type UIServeOptions struct {
 	Port         int           `flag:"port" help:"Bind this port (0 = pick ephemeral). Ignored when --listener-fd is set." default:"0"`
-	Addr         string        `flag:"addr" help:"Interface to bind. Use 0.0.0.0 to expose on the LAN." default:"localhost"`
+	Addr         string        `flag:"addr" help:"Interface to bind. Defaults to 0.0.0.0 (all interfaces); set localhost to restrict to this machine." default:"0.0.0.0"`
 	ListenerFD   int           `flag:"listener-fd" help:"Adopt an inherited socket FD from the parent (internal: set by gavel test --ui --detach)."`
 	ResultsFiles []string      `json:"-" args:"true"`
 	AutoStop     time.Duration `json:"-"`
@@ -47,8 +48,8 @@ var uiServeDurations struct {
 	IdleTimeout time.Duration
 }
 
-func (o UIServeOptions) Help() string {
-	return `Run a detached gavel UI server that replays a captured test run.
+func (o UIServeOptions) Help() api.Textable {
+	return clicky.Text(`Run a detached gavel UI server that replays a captured test run.
 
 Standalone replay of a JSON snapshot:
 
@@ -58,7 +59,7 @@ Standalone replay of a JSON snapshot:
 The server prints its URL on the first line of stdout so a wrapping script can
 ` + "`head -n1`" + ` it, and exits when either --auto-stop (hard wall clock from
 start) or --idle-timeout (reset on every HTTP request) fires — whichever comes
-first. A zero duration disables the corresponding timer.`
+first. A zero duration disables the corresponding timer.`)
 }
 
 func init() {
@@ -98,7 +99,7 @@ func runUIServe(opts UIServeOptions) (any, error) {
 	}
 
 	addr := listener.Addr().(*net.TCPAddr)
-	url := fmt.Sprintf("http://%s", net.JoinHostPort(announceHost(opts.Addr), strconv.Itoa(addr.Port)))
+	url := fmt.Sprintf("http://%s", net.JoinHostPort(boundHost(addr, opts.Addr), strconv.Itoa(addr.Port)))
 
 	if opts.URLFile != "" {
 		if err := writeURLFile(opts.URLFile, url); err != nil {
@@ -275,6 +276,25 @@ func mergeSnapshotGit(dst, src *testui.SnapshotGit) *testui.SnapshotGit {
 	return dst
 }
 
+// boundHost picks the hostname to announce for a listener that is already open.
+// The socket is authoritative: whenever it is bound to a concrete address, that
+// address is the only one it answers on, so --addr cannot override it.
+//
+// This matters for the inherited-socket path (`gavel test --ui --detach` passes
+// an already-bound listener on fd 3): the parent chose the bind address, --addr
+// keeps its 0.0.0.0 default, and announceHost would advertise a LAN IP for a
+// socket listening only on loopback — a URL that is refused. Only a wildcard
+// bind leaves the interface an open question, and that is where --addr decides.
+func boundHost(addr *net.TCPAddr, requested string) string {
+	if addr == nil || addr.IP == nil || addr.IP.IsUnspecified() {
+		return announceHost(requested)
+	}
+	if addr.IP.IsLoopback() {
+		return "localhost"
+	}
+	return addr.IP.String()
+}
+
 // announceHost picks the hostname to print in the "UI at ..." banner given
 // the user's --addr choice. When the user bound to a wildcard (0.0.0.0 or ::)
 // it walks net.InterfaceAddrs() and returns the first non-loopback IPv4 so
@@ -289,6 +309,23 @@ func announceHost(requested string) string {
 			return ip
 		}
 		logger.Warnf("--addr=%s but no non-loopback IPv4 interface found; printing localhost", requested)
+		return "localhost"
+	default:
+		return requested
+	}
+}
+
+// menubarHost picks the hostname the native macOS menu-bar webview should load
+// from. The webview always runs on the same machine, so it must reach gavel over
+// loopback: WKWebView blocks cleartext HTTP to non-loopback hosts under App
+// Transport Security (which would render a blank popover), and a LAN IP is
+// fragile across VPN/offline state. So unlike announceHost — which prints an
+// externally-reachable LAN IP for the wildcard binds — every loopback/wildcard
+// bind resolves to "localhost". An explicit interface (the user pinned --addr to
+// one NIC) is kept as-is since that is the only address the server listens on.
+func menubarHost(requested string) string {
+	switch requested {
+	case "", "0.0.0.0", "::", "localhost", "127.0.0.1", "::1":
 		return "localhost"
 	default:
 		return requested

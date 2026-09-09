@@ -16,8 +16,14 @@ type WatchOptions struct {
 	PRNumber int
 	Interval time.Duration
 	Follow   bool
+	// FailFast stops --follow at the first definitive failure instead of waiting
+	// for every remaining check. Off by default: the default contract of --follow
+	// is a complete picture of the run.
+	FailFast bool
 	Logs     bool // fetch failing job log tails (extra API quota)
 	TailLogs int
+	Comments []string
+	Actions  []string
 }
 
 func Run(opts WatchOptions) (*PRWatchResult, int) {
@@ -40,48 +46,134 @@ func Run(opts WatchOptions) (*PRWatchResult, int) {
 			continue
 		}
 
-		// The persistent github cache short-circuits already-completed runs,
-		// so a per-iteration in-memory map is no longer needed.
+		allComments := append(append([]github.PRComment{}, pr.Comments...), pr.ReviewThreads...)
+		artifacts := github.FindGavelArtifacts(allComments)
+		gavelResultsCh := make(chan []*GavelResultsSummary, 1)
+		go func() {
+			gavelResultsCh <- FetchGavelArtifacts(opts.Options, artifacts)
+		}()
+
+		// The persistent github cache short-circuits already-completed runs.
 		runs := fetchRuns(opts, pr)
-
-		// Comments and review threads arrive with the PR in a single GraphQL request.
+		gavelResults := <-gavelResultsCh
+		annotateReproduceCommands(gavelResults, opts.Repo, pr.Number)
 		comments := MergeAndFilter(pr.Comments, pr.ReviewThreads)
+		comments = removeRenderedArtifactComments(comments, gavelResults)
 
-		result := &PRWatchResult{PR: pr, Runs: runs, Comments: comments}
+		result := &PRWatchResult{
+			PR:           pr,
+			Runs:         runs,
+			Conflicts:    github.DetectMergeConflicts(opts.Options, pr),
+			GavelResults: gavelResults,
+			Comments:     comments,
+		}
+		filters := newResultFilters(opts.Comments, opts.Actions)
+
+		preChecks := len(pr.StatusCheckRollup)
+		preRuns := len(runs)
+		preComments := len(result.Comments)
+		var selectorOptions []string
+		if filters.hasActionFilters() {
+			selectorOptions = actionSelectorOptions(pr, runs)
+		}
+
+		filters.apply(result)
+
+		// Fail loudly when a selector was given but matched nothing, rather than
+		// printing "No checks found" and exiting 0 — a silent empty masks a
+		// mistyped selector (and would false-green a verification fixture built
+		// from it). Under --follow it was worse than silent: an empty filtered
+		// set satisfied the completion gate on the very first poll, so a typo —
+		// or simply a push whose checks GitHub had not registered yet — returned
+		// 0 before CI had run a single step. Both no-match predicates are scoped
+		// to a selector that pruned a non-empty set down to nothing, so a PR
+		// whose checks or comments have not appeared yet still keeps polling.
+		if filters.noActionMatch(preChecks, preRuns, result) {
+			fmt.Fprintf(os.Stderr, "Error: --actions %s matched no checks or workflows on PR #%d.\nAvailable selectors: %s\n",
+				strings.Join(opts.Actions, ","), opts.PRNumber, strings.Join(selectorOptions, ", "))
+			return nil, 1
+		}
+		if filters.noCommentMatch(preComments, result) {
+			fmt.Fprintf(os.Stderr, "Error: --comments %s matched no comments on PR #%d.\n",
+				strings.Join(opts.Comments, ","), opts.PRNumber)
+			return nil, 1
+		}
 
 		if !opts.Follow {
-			if pr.StatusCheckRollup.HasFailure() {
-				return result, 1
-			}
-			return result, 0
+			return result, statusExitCode(result)
 		}
 
-		done := pr.StatusCheckRollup.AllComplete()
-		frame := result.Pretty().ANSI()
-		if !strings.HasSuffix(frame, "\n") {
-			frame += "\n"
-		}
-		if !done {
-			frame += fmt.Sprintf("Polling in %s...\n\n", opts.Interval)
+		if followDone(filters, result, opts.FailFast) {
+			// The caller prints the completed report to stdout. Painting the
+			// final frame to stderr as well would show it twice to anyone
+			// merging the two streams; on a TTY it also has to be erased so
+			// the stdout copy does not stack under the last live frame.
+			if isTTY {
+				if err := render.Clear(os.Stderr); err != nil {
+					logger.Warnf("render: %v", err)
+				}
+			}
+			return result, statusExitCode(result)
 		}
 
 		if isTTY {
+			frame := result.Pretty().ANSI()
+			if !strings.HasSuffix(frame, "\n") {
+				frame += "\n"
+			}
+			frame += fmt.Sprintf("Polling in %s...\n\n", opts.Interval)
 			if err := render.Write(os.Stderr, frame); err != nil {
 				logger.Warnf("render: %v", err)
 			}
 		} else {
-			fmt.Fprint(os.Stderr, frame)
-		}
-
-		if done {
-			if pr.StatusCheckRollup.HasFailure() {
-				return result, 1
-			}
-			return result, 0
+			// A reader that cannot redraw gets a heartbeat, not the frame again.
+			// The frame is printed once at the end by the caller.
+			fmt.Fprintln(os.Stderr, followProgressLine(result, opts.Interval))
 		}
 
 		time.Sleep(opts.Interval)
 	}
+}
+
+// followDone reports whether --follow has seen everything it was asked to wait
+// for. failFast short-circuits the completion gate once a failure can no longer
+// change, so a test job that goes red at two minutes is not held behind a scan
+// that runs for seven.
+func followDone(filters resultFilters, result *PRWatchResult, failFast bool) bool {
+	if failFast && result.HasTerminalFailure() {
+		return true
+	}
+	return filters.isComplete(result)
+}
+
+// statusExitCode weighs every failure signal the status view renders, not just
+// the head commit's rollup. A repo that reports gavel results through artifact
+// comments rather than a required check has no failing rollup context at all,
+// so a rollup-only exit code false-greens the whole run.
+//
+// Called after filters.apply, so --actions scopes the exit code to the checks,
+// runs, and gavel artifacts the user asked to see. A merge conflict is the one
+// signal filters never scope away: it blocks the merge no matter which checks
+// the caller asked about.
+func statusExitCode(result *PRWatchResult) int {
+	if result == nil {
+		return 0
+	}
+	if result.HasMergeConflict() {
+		return 1
+	}
+	if result.PR != nil && result.PR.StatusCheckRollup.HasFailure() {
+		return 1
+	}
+	for _, summary := range result.GavelResults {
+		if summary != nil && summary.HasFailure() {
+			return 1
+		}
+	}
+	if result.HasFailedRun() {
+		return 1
+	}
+	return 0
 }
 
 func fetchRuns(opts WatchOptions, pr *github.PRInfo) map[int64]*github.WorkflowRun {
@@ -108,7 +200,7 @@ func fetchRuns(opts WatchOptions, pr *github.PRInfo) map[int64]*github.WorkflowR
 			continue
 		}
 
-		if github.RunHasFailedJob(run) {
+		if github.RunHasFailedJob(run) || newResultFilters(nil, opts.Actions).hasActionFilters() {
 			if _, err := github.FetchWorkflowDefinition(opts.Options, run); err != nil {
 				logger.Warnf("failed to fetch workflow definition for run %d: %v", runID, err)
 			}
@@ -186,5 +278,20 @@ func isNoiseComment(body string) bool {
 	if strings.HasPrefix(body, "Actionable comments posted:") {
 		return true
 	}
-	return false
+	return reportsPullRequestClosed(body)
+}
+
+// reportsPullRequestClosed matches bot comments whose entire content is "this
+// PR is closed, so I did nothing". They carry no action, but they arrive as
+// ordinary top-level comments and would otherwise dominate the comment count
+// on any merged PR.
+func reportsPullRequestClosed(body string) bool {
+	// CodeRabbit posts its closed-PR skip behind a failure marker; a review
+	// that failed for any other reason stays visible.
+	if strings.Contains(body, "auto-generated comment: failure by coderabbit.ai") &&
+		strings.Contains(body, "The pull request is closed.") {
+		return true
+	}
+	// rossjrw/pr-preview-action tear-down notice.
+	return strings.Contains(body, "Preview removed because the pull request was closed.")
 }

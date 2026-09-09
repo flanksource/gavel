@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -167,10 +168,16 @@ func writeRunningJSON(workDir string, snap *testui.Snapshot) error {
 // the run's start time (UTC) so reruns triggered in the same git state still
 // land in distinct files. Returns the absolute path written.
 //
+// label distinguishes runs that start within the same second — several fixture
+// verification steps in one document, for instance — and is appended to the
+// stem as run-<ts>-<label>.json. Pass "" for a whole-command run. ListRuns
+// reads the start time from the snapshot metadata, so a labelled stem sorts
+// identically to a bare one.
+//
 // Unlike Save(), this does not write or update last.json / <branch>.json
 // pointers — those are owned by Save() and reflect the latest sha-keyed
 // snapshot, not the per-run history.
-func SavePerRun(workDir string, snap *testui.Snapshot, started time.Time) (string, error) {
+func SavePerRun(workDir string, snap *testui.Snapshot, started time.Time, label string) (string, error) {
 	if snap == nil {
 		return "", errors.New("snapshots.SavePerRun: snapshot is nil")
 	}
@@ -184,10 +191,54 @@ func SavePerRun(workDir string, snap *testui.Snapshot, started time.Time) (strin
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", fmt.Errorf("create %s: %w", dir, err)
 	}
-	name := PerRunPrefix + started.UTC().Format(PerRunTimestampLayout) + ".json"
-	path := filepath.Join(dir, name)
+	stem := PerRunPrefix + started.UTC().Format(PerRunTimestampLayout)
+	if label = slugifyLabel(label); label != "" {
+		stem += "-" + label
+	}
+	path, err := uniqueRunPath(dir, stem)
+	if err != nil {
+		return "", err
+	}
 	if err := writeJSON(path, snap); err != nil {
 		return "", err
 	}
 	return path, nil
+}
+
+// uniqueRunPath returns <dir>/<stem>.json, suffixing -2, -3, … when that name
+// is taken. The per-run history is append-only: a second run in the same second
+// must not silently overwrite the first.
+func uniqueRunPath(dir, stem string) (string, error) {
+	for i := 1; i < 1000; i++ {
+		name := stem
+		if i > 1 {
+			name = fmt.Sprintf("%s-%d", stem, i)
+		}
+		path := filepath.Join(dir, name+".json")
+		if _, err := os.Stat(path); err != nil {
+			if os.IsNotExist(err) {
+				return path, nil
+			}
+			return "", fmt.Errorf("stat %s: %w", path, err)
+		}
+	}
+	return "", fmt.Errorf("snapshots.SavePerRun: no free filename for %s in %s", stem, dir)
+}
+
+// slugifyLabel reduces a label to lowercase alphanumerics and dashes so it is
+// safe in a filename and still readable in a directory listing.
+func slugifyLabel(label string) string {
+	var b strings.Builder
+	lastDash := true // suppresses a leading dash
+	for _, r := range strings.ToLower(strings.TrimSpace(label)) {
+		switch {
+		case (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9'):
+			b.WriteRune(r)
+			lastDash = false
+		case !lastDash:
+			b.WriteByte('-')
+			lastDash = true
+		}
+	}
+	return strings.Trim(b.String(), "-")
 }

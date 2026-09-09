@@ -34,6 +34,7 @@ import {
 } from './utils';
 import { annotateRoutePaths, buildExportRoute, buildRoute, defaultStatusFilter, findNodeByRoutePath, parseRoute, type RouteState, type TabKey } from './routes';
 import { apiUrl } from './config';
+import { useCopyFeedback } from './hooks/use-copy-feedback';
 
 function applySnapshot(
   snap: Snapshot,
@@ -151,15 +152,13 @@ export function App() {
   const [ignoreBusy, setIgnoreBusy] = useState(false);
   const [testEditBusy, setTestEditBusy] = useState(false);
   const [stackBusyPID, setStackBusyPID] = useState<number | null>(null);
-  const [copyState, setCopyState] = useState<'idle' | 'copying' | 'copied' | 'error'>('idle');
-  const [copyError, setCopyError] = useState('');
+  const { copyState, copyError, beginCopy, resetCopyFeedback } = useCopyFeedback();
   const [streamToken, setStreamToken] = useState(0);
   const [stopBusyKey, setStopBusyKey] = useState<string | null>(null);
   const startTime = useRef<number | null>(null);
   const endTime = useRef<number | null>(null);
   const [, tick] = useState(0);
   const doneRef = useRef(false);
-  const copyResetTimer = useRef<number | null>(null);
 
   const routeState = useMemo(
     () => currentRouteState(activeTab, selectedPath, filters, lintGrouping, lintFilters),
@@ -200,12 +199,6 @@ export function App() {
     window.addEventListener('popstate', onPopState);
     return () => {
       window.removeEventListener('popstate', onPopState);
-    };
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      if (copyResetTimer.current) window.clearTimeout(copyResetTimer.current);
     };
   }, []);
 
@@ -717,32 +710,16 @@ export function App() {
   );
   const wholeResultMarkdownURL = useMemo(() => buildExportRoute(wholeResultRouteState, 'md'), [wholeResultRouteState]);
 
-  const resetCopyFeedback = useCallback((nextState: 'copied' | 'error', error: string = '') => {
-    setCopyState(nextState);
-    setCopyError(error);
-    if (copyResetTimer.current) window.clearTimeout(copyResetTimer.current);
-    copyResetTimer.current = window.setTimeout(() => {
-      setCopyState('idle');
-      setCopyError('');
-      copyResetTimer.current = null;
-    }, nextState === 'copied' ? 2000 : 3000);
-  }, []);
-
   const onCopyForAgent = useCallback(async () => {
     if (copyState === 'copying') return;
-    setCopyState('copying');
-    setCopyError('');
-    if (copyResetTimer.current) {
-      window.clearTimeout(copyResetTimer.current);
-      copyResetTimer.current = null;
-    }
+    beginCopy();
     try {
       await copyCurrentViewForAgent(wholeResultRouteState);
       resetCopyFeedback('copied');
     } catch (e: any) {
       resetCopyFeedback('error', e?.message || 'Copy failed');
     }
-  }, [copyState, wholeResultRouteState, resetCopyFeedback]);
+  }, [copyState, wholeResultRouteState, beginCopy, resetCopyFeedback]);
 
   const backTo = typeof window !== 'undefined' ? (window as any).__gavelBackTo as string | undefined : undefined;
 

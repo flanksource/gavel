@@ -2,10 +2,14 @@ package commit
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
-	clickyai "github.com/flanksource/clicky/ai"
+	"github.com/flanksource/captain/pkg/api"
+	captaincli "github.com/flanksource/captain/pkg/cli"
+	clickyai "github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/internal/prompting"
 )
 
@@ -19,6 +23,8 @@ type PRCommitInput struct {
 
 type PRContentInput struct {
 	Commits []PRCommitInput
+	// Options carries the source directory, full prompt configuration and saved snapshot.
+	Options Options
 }
 
 type PRContent struct {
@@ -26,6 +32,8 @@ type PRContent struct {
 	Body   string
 	Branch string
 }
+
+const maxPRTitleRunes = 40
 
 func commitInputsFromResults(commits []CommitResult) []PRCommitInput {
 	out := make([]PRCommitInput, len(commits))
@@ -36,55 +44,46 @@ func commitInputsFromResults(commits []CommitResult) []PRCommitInput {
 }
 
 type prContentSchema struct {
-	Title  string `json:"title" description:"PR title: imperative, <=70 chars, conventional-commit style when applicable"`
+	Title  string `json:"title" description:"PR title: imperative, <=40 characters, conventional-commit style when applicable"`
 	Body   string `json:"body,omitempty" description:"Markdown body summarising what changed and why; may be empty for trivial PRs"`
 	Branch string `json:"branch" description:"Suggested branch name: kebab-case, <=40 chars, conventional-commit type prefix (feat/, fix/, chore/, refactor/, docs/) when the commits share a type. Use only [a-z0-9/-]"`
 }
 
-const prContentPromptTemplate = `You are opening a GitHub pull request for the following local commits.
-Generate a concise PR title, a short markdown body, and a branch name.
+//go:embed pr-content.prompt
+var prContentPromptTemplate string
 
-Guidelines:
-- Title: imperative mood, <= 70 characters, prefer conventional-commit style when the commits share a type.
-- Body: 1-4 short sections (What / Why / Notes). Bullet lists over prose. Omit sections that add no value.
-- Branch: kebab-case, <= 40 characters, conventional-commit type prefix (feat/, fix/, chore/, refactor/, docs/) when the commits share a type. Use only [a-z0-9/-]. Example: "feat/user-auth-rate-limit".
-- Do NOT invent context that isn't supported by the commit messages.
-
-Commits (in order):
-%s
-`
-
-func GeneratePRContent(ctx context.Context, agent clickyai.Agent, in PRContentInput) (PRContent, error) {
+func GeneratePRContent(ctx context.Context, in PRContentInput) (content PRContent, err error) {
 	if len(in.Commits) == 0 {
 		return PRContent{}, fmt.Errorf("no commits to summarise")
 	}
 
-	var b strings.Builder
-	for i, c := range in.Commits {
-		fmt.Fprintf(&b, "--- commit %d ---\n%s\n", i+1, strings.TrimSpace(c.Message))
-		if len(c.Files) > 0 {
-			fmt.Fprintf(&b, "files: %s\n", strings.Join(c.Files, ", "))
-		}
-		b.WriteString("\n")
+	prepared, err := renderPRContentPrompt(in)
+	if err != nil {
+		return PRContent{}, err
 	}
+	agent, err := BuildAgent(prepared.Config)
+	if err != nil {
+		return PRContent{}, err
+	}
+	defer closeAgent(agent, &err)
 
-	prompt := fmt.Sprintf(prContentPromptTemplate, b.String())
-
-	schema := &prContentSchema{}
 	prompting.Prepare()
-	resp, err := agent.ExecutePrompt(ctx, clickyai.PromptRequest{
-		Name:             "PR title and body",
-		Prompt:           prompt,
-		StructuredOutput: schema,
-	})
+	resp, err := agent.ExecutePrompt(ctx, clickyai.PromptRequest{Name: "PR title and body", Spec: prepared.Request})
 	if err != nil {
 		return PRContent{}, fmt.Errorf("execute PR-content prompt: %w", err)
 	}
 	if resp.Error != "" {
 		return PRContent{}, fmt.Errorf("PR-content prompt returned error: %s", resp.Error)
 	}
-	if strings.TrimSpace(schema.Title) == "" {
-		return PRContent{}, fmt.Errorf("PR-content prompt returned empty title (raw: %q)", resp.Result)
+
+	var schema prContentSchema
+	if err := clickyai.DecodeStructured(resp, &schema); err != nil {
+		return PRContent{}, fmt.Errorf("decode PR-content response: %w", err)
+	}
+
+	title := strings.TrimSpace(schema.Title)
+	if err := validatePRTitle(title, resp.Result); err != nil {
+		return PRContent{}, err
 	}
 
 	branch := sanitizeBranchName(strings.TrimSpace(schema.Branch))
@@ -93,10 +92,39 @@ func GeneratePRContent(ctx context.Context, agent clickyai.Agent, in PRContentIn
 	}
 
 	return PRContent{
-		Title:  strings.TrimSpace(schema.Title),
+		Title:  title,
 		Body:   strings.TrimSpace(schema.Body),
 		Branch: branch,
 	}, nil
+}
+
+func renderPRContentPrompt(in PRContentInput) (captaincli.AIRuntimeResolved, error) {
+	return in.Options.resolvePrompt(commitPromptOptions{
+		Prompt: in.Options.PR.Content, Name: "pr.content", Default: prContentPromptTemplate,
+		Data: prContentPromptData(in), Request: api.Spec{Prompt: api.Prompt{Source: "pr-content.prompt"}},
+	})
+}
+
+func prContentPromptData(in PRContentInput) map[string]any {
+	commits := make([]map[string]any, 0, len(in.Commits))
+	for i, c := range in.Commits {
+		commits = append(commits, map[string]any{
+			"index":   i + 1,
+			"message": strings.TrimSpace(c.Message),
+			"files":   strings.Join(c.Files, ", "),
+		})
+	}
+	return map[string]any{"commits": commits}
+}
+
+func validatePRTitle(title, raw string) error {
+	if title == "" {
+		return fmt.Errorf("PR-content prompt returned empty title (raw: %q)", raw)
+	}
+	if got := utf8.RuneCountInString(title); got > maxPRTitleRunes {
+		return fmt.Errorf("PR-content prompt returned title longer than %d characters (%d): %q", maxPRTitleRunes, got, title)
+	}
+	return nil
 }
 
 // sanitizeBranchName trims the AI-suggested branch to a safe git ref:

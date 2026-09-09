@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, type ReactNode } from 'react';
+import { useCallback, type ReactNode } from 'react';
 import type { Test, FixtureContext, GinkgoContext, GoTestContext, Violation, LinterResult, RunMeta, FailureDetail, TestEditAction, TestEditScope } from '../types';
 import {
   statusIcon,
@@ -13,6 +13,7 @@ import {
   timeoutArgValue,
 } from '../utils';
 import { Clicky } from '@flanksource/clicky-ui/clicky';
+import { useCopyFeedback } from '../hooks/use-copy-feedback';
 import { JsonView } from './JsonView';
 import { AnsiHtml } from './AnsiHtml';
 import { ProgressBar } from './ProgressBar';
@@ -75,36 +76,18 @@ function taskMeta(t: Test): { duration?: string; status?: string; type?: string 
 }
 
 export function DetailPanel({ test: t, lint, onRerun, rerunBusy, onStop, stopBusy, onIgnore, ignoreBusy, onTestEdit, testEditBusy, testEditSupported, runMeta, nodeRouteState, failingOnlyRouteState }: Props) {
-  const [copyState, setCopyState] = useState<'idle' | 'copying' | 'copied' | 'error'>('idle');
-  const [copyError, setCopyError] = useState('');
-  const copyResetTimer = useRef<number | null>(null);
-
-  const resetCopyFeedback = useCallback((nextState: 'copied' | 'error', error: string = '') => {
-    setCopyState(nextState);
-    setCopyError(error);
-    if (copyResetTimer.current) window.clearTimeout(copyResetTimer.current);
-    copyResetTimer.current = window.setTimeout(() => {
-      setCopyState('idle');
-      setCopyError('');
-      copyResetTimer.current = null;
-    }, nextState === 'copied' ? 2000 : 3000);
-  }, []);
+  const { copyState, copyError, beginCopy, resetCopyFeedback } = useCopyFeedback();
 
   const onCopyAIPrompt = useCallback(async () => {
     if (copyState === 'copying' || !failingOnlyRouteState) return;
-    setCopyState('copying');
-    setCopyError('');
-    if (copyResetTimer.current) {
-      window.clearTimeout(copyResetTimer.current);
-      copyResetTimer.current = null;
-    }
+    beginCopy();
     try {
       await copyCurrentViewForAgent(failingOnlyRouteState);
       resetCopyFeedback('copied');
     } catch (e: any) {
       resetCopyFeedback('error', e?.message || 'Copy failed');
     }
-  }, [copyState, failingOnlyRouteState, resetCopyFeedback]);
+  }, [copyState, failingOnlyRouteState, beginCopy, resetCopyFeedback]);
 
   if (!t) {
     return (
@@ -537,6 +520,7 @@ function FailureDetailView({ detail: d, rawMessage }: { detail: FailureDetail; r
 
 function FixtureDetail({ ctx }: { ctx: FixtureContext }) {
   const hasComparison = ctx.expected !== undefined && ctx.actual !== undefined;
+  const celExpression = ctx.cel_trace || ctx.cel_expression;
 
   return (
     <>
@@ -554,10 +538,10 @@ function FixtureDetail({ ctx }: { ctx: FixtureContext }) {
         </Section>
       )}
 
-      {ctx.cel_expression && (
+      {celExpression && (
         <Section title="CEL Expression">
-          <pre className="text-sm whitespace-pre-wrap font-mono bg-purple-50 text-purple-800 rounded p-3">
-            {ctx.cel_expression}
+          <pre className="text-sm whitespace-pre font-mono bg-purple-50 text-purple-800 rounded p-3 overflow-x-auto">
+            {celExpression}
           </pre>
         </Section>
       )}

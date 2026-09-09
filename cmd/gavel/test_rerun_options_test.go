@@ -9,8 +9,9 @@ import (
 
 func TestPrepareRerunOptionsDisablesRecursiveDiscovery(t *testing.T) {
 	base := testrunner.RunOptions{
-		Lint:      true,
-		Recursive: true,
+		Lint:            true,
+		Recursive:       true,
+		PassThroughArgs: []string{"--label-filter", "smoke"},
 	}
 
 	got := prepareRerunOptions(base, testui.RerunRequest{
@@ -30,5 +31,8 @@ func TestPrepareRerunOptionsDisablesRecursiveDiscovery(t *testing.T) {
 	}
 	if got.WorkDir != "/tmp/submodule" {
 		t.Fatalf("unexpected rerun workdir: %q", got.WorkDir)
+	}
+	if len(got.PassThroughArgs) != 0 {
+		t.Fatalf("rerun should clear original pass-through args: %#v", got.PassThroughArgs)
 	}
 }

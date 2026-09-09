@@ -29,14 +29,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-          cache-dependency-path: |
-            testrunner/ui/package-lock.json
-            pr/ui/package-lock.json
 
-      - uses: arduino/setup-task@v2
-        with:
-          version: 3.x
+      - name: Enable corepack (pnpm)
+        run: corepack enable
+
+      - uses: ./.github/actions/setup-task
 
       # Build and force-commit the embedded UI bundles (testui.js / prui.js)
       # so the release tag carries them. They are gitignored, so without this
@@ -103,17 +100,14 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-          cache-dependency-path: |
-            testrunner/ui/package-lock.json
-            pr/ui/package-lock.json
 
-      - uses: arduino/setup-task@v2
-        with:
-          version: 3.x
+      - name: Enable corepack (pnpm)
+        run: corepack enable
+
+      - uses: ./.github/actions/setup-task
 
       - name: Build binary
-        run: task build:cross GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }}
+        run: task build:cross GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} GO_TAGS=gavel_menubar
 
       - name: Archive binary
         id: archive

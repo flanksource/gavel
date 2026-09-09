@@ -1,0 +1,62 @@
+---
+model: claude
+prompt:
+  schemaStrictness: retry
+permissions:
+  # Triage proposes; gavel writes. The agent never edits a file, never runs a
+  # command, and never touches the database — every change it wants is reported
+  # in the structured result and applied by gavel under an optimistic lock. So
+  # the posture is stated in full here rather than left to Go, which would fill
+  # an unstated posture in with the edit preset and the whole edit toolset.
+  mode: plan
+  tools:
+    Read: allow
+    Glob: allow
+    Grep: allow
+---
+{{#if multiple}}You are triaging the {{count}} TODO items listed below. Judge each one separately and report a verdict for each.{{else}}You are triaging the TODO item below against this codebase.{{/if}}
+
+{{{body}}}{{#if backlog}}---
+## Backlog
+
+Every other open TODO in this workspace. Use it to spot duplicates — do not triage these, they are context only.
+
+{{{backlog}}}
+{{/if}}---
+## Instructions
+
+You are running read-only. You cannot edit files, run commands, or change the TODO — you propose changes and gavel applies them. Investigate the code the TODO touches, then decide its fate.
+
+### 1. Pick a verdict
+
+- **ready** — someone who has never seen this could implement it, and the fixture could prove it done. Leave the body alone; correct `priority` if it is wrong.
+- **shape** — real work, but under-specified. Rewrite it (step 2).
+- **investigate** — the work matters but the solution is genuinely unknown. Leave the body; say what needs investigating in `comment`.
+- **done** — the code already does this. Report the verdict and say why in `comment`. Do NOT set `status` — gavel runs the definition of done and lets the result decide.
+- **retire** — obsolete, a duplicate, or won't be done. `comment` is REQUIRED and must say why. Set `duplicateOf` to the surviving TODO's short id when it is a duplicate.
+
+### 2. Compact the description (`body`)
+
+Required for **shape**. Rewrite the whole body — it replaces what is there, so carry forward everything still true. Cut restated history, dead speculation, and anything the code now answers. Structure it as:
+
+1. A problem statement: what is wrong or missing, and why it matters. A few sentences.
+2. `## Acceptance Criteria` — checkboxes, one observable behaviour each, each scoreable against a diff.
+3. `## Scope` — a fenced block naming what must NOT change.
+
+Keep lines under 160 columns. Never rewrite a body to describe what the code already does — that is the **done** verdict, not a rewrite.
+
+### 3. Review the verification fixture (`verification`)
+
+The TODO's current fixture is shown above verbatim. It is the executable definition of done, and it is the only thing that can prove the work finished. Check it actually tests the acceptance criteria, that the packages and commands it names exist, and that its scope is tight — prefer `verify.scope: diff`.
+
+Report a replacement in `verification` when it is wrong, missing, or untargeted. Omit the outer `## Verification` heading; send the fixture body only. Send `verification` ONLY when you are changing it — an unchanged fixture must be omitted, not echoed back.
+
+A fixture that does not parse is rejected and the whole triage fails, so keep it well-formed.
+
+### 4. Report
+
+Send `verdict`, `summary`, `endStatus`, and any of `title`, `body`, `verification`, `priority`, `status`, `duplicateOf`, `related`, `comment` as separate top-level fields in the final StructuredOutput call. Never JSON-encode an object or another field value into a string. Omit a field rather than sending it unchanged.
+
+`status` accepts only `draft`, `pending`, `verified`, `completed`, `skipped`. Statuses such as `review`, `ask`, `in_progress`, and `unverified` are projected from run history and are rejected.
+
+If a verdict depends on a decision only a human can make — retiring work someone may still want, or choosing between two survivors of a duplicate pair — stop and report endStatus "ask" with your questions instead of guessing.

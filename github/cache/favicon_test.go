@@ -82,7 +82,7 @@ func TestValidateFaviconURL(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := validateFaviconURL(tc.url)
+			_, err := validateFaviconURL(tc.url, FaviconOptions{})
 			if tc.wantErr {
 				assert.Error(t, err)
 			} else {
@@ -103,7 +103,7 @@ func TestNewFaviconHTTPClient_BlocksRestrictedAddress(t *testing.T) {
 	target, err := url.Parse(srv.URL)
 	require.NoError(t, err)
 	for _, targetURL := range []string{srv.URL, "http://localhost:" + target.Port()} {
-		_, err := newFaviconHTTPClient().Get(targetURL)
+		_, err := newFaviconHTTPClient(FaviconOptions{}).Get(targetURL)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "restricted address")
 	}
@@ -111,7 +111,7 @@ func TestNewFaviconHTTPClient_BlocksRestrictedAddress(t *testing.T) {
 }
 
 func TestNewFaviconHTTPClient_BlocksRestrictedRedirect(t *testing.T) {
-	client := newFaviconHTTPClient()
+	client := newFaviconHTTPClient(FaviconOptions{})
 	target, err := url.Parse("http://127.0.0.1/favicon.ico")
 	require.NoError(t, err)
 
@@ -135,7 +135,40 @@ func TestIsRestrictedFaviconIP(t *testing.T) {
 	}
 	for raw, want := range tests {
 		t.Run(raw, func(t *testing.T) {
-			assert.Equal(t, want, isRestrictedFaviconIP(net.ParseIP(raw)))
+			assert.Equal(t, want, isRestrictedFaviconIP(net.ParseIP(raw), FaviconOptions{}))
+		})
+	}
+}
+
+// AllowLocal is what makes the process-port favicon proxy work at all: it
+// fetches http://localhost:<port>, which the default guard rejects because
+// loopback is not global unicast. Addresses that are restricted for reasons
+// other than being local must stay restricted either way.
+func TestIsRestrictedFaviconIP_AllowLocal(t *testing.T) {
+	local := FaviconOptions{AllowLocal: true}
+	tests := map[string]bool{
+		"127.0.0.1":   false,
+		"::1":         false,
+		"10.0.0.1":    false,
+		"fd00::1":     false,
+		"8.8.8.8":     false,
+		"0.0.0.0":     true,
+		"224.0.0.1":   true,
+		"100.64.0.1":  true,
+		"169.254.1.1": true,
+	}
+	for raw, want := range tests {
+		t.Run(raw, func(t *testing.T) {
+			assert.Equal(t, want, isRestrictedFaviconIP(net.ParseIP(raw), local))
+			if want {
+				return
+			}
+			// Everything AllowLocal permits beyond a public address must still be
+			// refused without it, or the option would be doing nothing.
+			if ip := net.ParseIP(raw); ip.IsLoopback() || ip.IsPrivate() {
+				assert.True(t, isRestrictedFaviconIP(ip, FaviconOptions{}),
+					"default options must still reject %s", raw)
+			}
 		})
 	}
 }
@@ -182,7 +215,7 @@ func TestParseLinkCandidates_PicksLargestFirst(t *testing.T) {
 	defer srv.Close()
 
 	client, homepage := publicTestClient(t, srv)
-	got, err := parseLinkCandidates(context.Background(), client, homepage)
+	got, err := parseLinkCandidates(context.Background(), client, homepage, FaviconOptions{})
 	require.NoError(t, err)
 
 	// Expect ordering: 180x180, 32x32, 16x16. Stylesheet must be absent.
@@ -212,7 +245,7 @@ func TestDiscoverFavicon_FallsBackToFaviconIco(t *testing.T) {
 	defer srv.Close()
 
 	client, homepage := publicTestClient(t, srv)
-	iconURL, data, mime, err := discoverFaviconWithClient(context.Background(), client, homepage)
+	iconURL, data, mime, err := discoverFaviconWithClient(context.Background(), client, homepage, FaviconOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, 1, iconHits, "/favicon.ico should be fetched as fallback")
 	assert.Contains(t, iconURL, "/favicon.ico")
@@ -242,7 +275,7 @@ func TestDiscoverFavicon_PrefersLinkTagOverFallback(t *testing.T) {
 	defer srv.Close()
 
 	client, homepage := publicTestClient(t, srv)
-	iconURL, data, mime, err := discoverFaviconWithClient(context.Background(), client, homepage)
+	iconURL, data, mime, err := discoverFaviconWithClient(context.Background(), client, homepage, FaviconOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, 1, explicitHits)
 	assert.Equal(t, 0, fallbackHits, "explicit link must win; fallback never hit")
@@ -259,6 +292,6 @@ func TestFetchIcon_RejectsHTMLResponse(t *testing.T) {
 	defer srv.Close()
 
 	client, homepage := publicTestClient(t, srv)
-	_, _, err := fetchIcon(context.Background(), client, homepage+"/favicon.ico")
+	_, _, err := fetchIcon(context.Background(), client, homepage+"/favicon.ico", FaviconOptions{})
 	assert.Error(t, err, "html content-type must be rejected")
 }

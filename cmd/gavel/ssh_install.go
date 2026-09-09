@@ -2,6 +2,7 @@ package main
 
 import (
 	"github.com/flanksource/clicky"
+	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/gavel/serve"
 )
 
@@ -16,13 +17,13 @@ type SSHInstallOptions struct {
 	Force      bool   `flag:"force" help:"Overwrite an existing unit file"`
 }
 
-func (o SSHInstallOptions) Help() string {
-	return `Install and enable a systemd unit that runs the gavel SSH git-push backend.
+func (o SSHInstallOptions) Help() api.Textable {
+	return clicky.Text(`Install and enable a systemd unit that runs the gavel SSH git-push backend.
 
 Creates a dedicated system user, writes /etc/systemd/system/gavel-ssh.service,
 runs systemctl daemon-reload, and enables the service. Requires root.
 
-Linux only. Use --dry-run to preview without making changes.`
+Linux only. Use --dry-run to preview without making changes.`)
 }
 
 func init() {

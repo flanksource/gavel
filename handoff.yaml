@@ -1,0 +1,20 @@
+schemaVersion: 2
+repoRoot: /Users/moshe/go/src/github.com/flanksource/gavel
+targets:
+  - id: local-app
+    label: Local app
+    repoRoot: /Users/moshe/go/src/github.com/flanksource/gavel
+    authState: target
+    diff: on-demand
+    networkSettleMs: 250
+    discovery:
+      entryUrl: /
+      waitForSelector: main
+      linkSelector: a
+      mode: static
+      urls:
+        - /prs/flanksource/flanksource-ui/3039
+        - /prs/flanksource/clicky/118
+    baseUrl: http://localhost:9092/prs
+    sample: false
+loginSnippets: []

@@ -1,0 +1,149 @@
+---
+title: Todo engine
+description: Store, list, create, run, and check PostgreSQL-backed work items, with explicit Markdown import and export.
+order: 6
+---
+
+The todo engine is Gavel's task execution layer. It turns work items into structured agent runs, records status, persists session metadata, and connects acceptance criteria to verification.
+
+```bash
+gavel todos list
+gavel todos create "Fix flaky parser" # [!code highlight] [!code note:create issue]
+gavel todos get 90ec80f0 # [!code word:90ec80f0]
+gavel todos run 90ec80f0 # [!code focus] [!code note:agent loop]
+gavel todos check 90ec80f0 # [!code info] [!code note:definition of done]
+```
+
+Line 1 lists active work. Line 2 creates a native PostgreSQL issue. Line 3 prints the full todo body, status, event history, and parsed sections. Line 4 starts the agent loop. Line 5 re-runs the issue's fixture/CEL definition of done.
+
+`gavel todo` is an alias for `gavel todos`.
+
+## Storage and portable files
+
+PostgreSQL is the only runtime TODO store. List, create, run, check, and UI/API
+operations always resolve the native database workspace; they do not inspect
+`.todos`, provider flags, or project settings to choose a backend.
+
+`.todos` Markdown remains available as an explicit portable interchange format:
+
+```bash
+gavel todos import                         # read .todos into PostgreSQL
+gavel todos import --dir ./archive/todos # [!code focus]
+gavel todos export                        # write PostgreSQL TODOs to .todos
+gavel todos export 3f2a1b --dir ./backup # [!code highlight]
+```
+
+Import accepts explicit file arguments, or discovers Markdown below `--dir` when
+none are supplied. Export accepts native IDs, short IDs, or imported aliases, or
+exports the current workspace when none are supplied. Relative directories are
+resolved beneath the selected working directory. Neither command enables a file
+runtime provider.
+
+The portable contract round-trips native ID, title, Markdown body (including
+acceptance criteria and verification fixtures), labels, `low`/`medium`/`high`
+priority, and `draft`/`pending`/`verified`/`completed` status. Captain execution
+state, event history, plan and prompt-run links, arbitrary front matter,
+`critical` priority, and `cancelled` status are database-owned. Arbitrary
+front-matter keys are outside the portable contract and ignored on import;
+non-representable priority/status values fail instead of being flattened.
+
+## Creating todos
+
+```bash
+gavel todos create "Fix parser error messages"
+gavel todos new --title "Add fixture docs" --body @todo.md # [!code focus] [!code note:full body]
+gavel todos create --priority high --status pending "Stop leaking stderr"
+gavel todos create "Fix parser" --plan @plan.md --verification @verification.md
+gavel todos create "Fix parser" --plan @plan.md --status approved # [!code highlight] [!code note:ready to run]
+```
+
+Line 1 is the shortest path: the title comes from positional arguments. Line 2
+uses the `new` alias and reads a full markdown body from a file. Line 3 sets
+priority and initial status explicitly. Line 4 creates a durable Captain plan
+awaiting review plus a persisted definition-of-done fixture. Line 5 records the
+supplied plan as reviewed and approved, leaving the todo pending and ready for
+`todos run`.
+
+`--body`, `--plan`, and `--verification` accept inline text or an `@path` file
+reference. Relative paths resolve from `--cwd`; prefix a literal leading `@`
+with a backslash. `todos edit --body` and `todos comment --body` use the same
+file-reference syntax.
+
+Verification input is fixture markdown without an outer `## Verification`
+heading. It can contain command blocks, Markdown tables, CEL assertions, or
+`yaml test` / `yaml lint` fences. Run `gavel fixtures --help` for the complete
+fixture format and available runner keys.
+
+A top-level `# Verification` or `## Verification` section in `--body` is moved
+out of the issue body and stored as dedicated verification markdown. When
+`--verification` is also supplied, its content comes first and the fixture
+extracted from the body is appended.
+
+Create defaults:
+
+- priority: `medium`
+- status: `pending`
+- storage: native PostgreSQL
+- supplied plan approval: pending review
+- verification: omitted unless `--verification` or a top-level H1/H2 body section supplies it
+
+## Statuses
+
+Todos use these statuses:
+
+| Status | Meaning |
+|--------|---------|
+| `draft` | not ready to run |
+| `pending` | ready, not started |
+| `in_progress` | currently running |
+| `review` | a plan is waiting for human approval |
+| `ask` | the agent is blocked on questions |
+| `verified` | the run met its definition of done |
+| `unverified` | implementation finished but checks still failed |
+| `completed` | finished without a definition-of-done gate |
+| `failed` | execution failed |
+| `skipped` | reproduction steps already pass |
+
+`gavel todos list` hides completed todos by default. Pass `--all` to include them.
+
+## Portable todo front matter
+
+Files used by the explicit import/export commands use YAML front matter. Runtime
+commands do not read these fields directly.
+
+```yaml
+---
+title: Fix parser error messages
+priority: high
+status: pending
+id: 90ec80f0-1111-4222-8333-444444444444 # [!code focus]
+labels: [parser, bug]
+---
+```
+
+`id` lets a later import update the same native issue. Older files without an ID
+receive a stable workspace-and-relative-path-derived native ID. Fields outside
+the portable contract are not runtime configuration.
+
+## Sections
+
+A todo body can include normal markdown plus structured sections:
+
+- `## Steps To Reproduce` as fixture nodes used for the pre-check.
+- `## Acceptance Criteria` as editable done-ness criteria.
+- `## Verification` as fixture nodes used by the run loop.
+- comments, native issue events, latest failure, attempts, and verification results.
+
+The todo engine deliberately reuses fixture parsing for verification sections. That keeps command checks, test/lint runner steps, and AI review in one format.
+
+## Verification results
+
+Every definition-of-done evaluation is persisted with the prompt run that produced it — both an explicit `gavel todos check` and the in-loop check a `gavel todos run` performs. The dashboard's **Verification** tab lists those attempts newest-first, so a failed check survives a reload, and its tab badge turns red while the latest attempt is failing.
+
+Each attempt exposes its evidence through four sub-tabs:
+
+- **Test** and **Lint** — the results of a `yaml test` / `yaml lint` runner step. The recorded counts and top failures render immediately; the full tree is read from the run's `.gavel/run-*.json` artifact.
+- **Session** — the agent transcript, when the attempt ran one.
+- **Output** — every other step (`exec`, `bash`, `ai`) with its command, exit code, ANSI-rendered streams and, for a failing step, the CEL expression and the values it saw — plus the acceptance-criteria checklist.
+
+A failure that happens *before* execution starts — no verification fixture, no acceptance criteria, no configured checks — creates no prompt run, so it is reported inline on the tab instead of being listed as an attempt.

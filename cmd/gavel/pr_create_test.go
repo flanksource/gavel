@@ -44,6 +44,9 @@ func runCmd(t *testing.T, dir, name string, args ...string) string {
 
 func newPRCreateFixture(t *testing.T) *prCreateFixture {
 	t.Helper()
+	// The PR content prompt loads .gavel.yaml, which layers ~/.gavel.yaml under
+	// the repo's; without an isolated HOME these assert against the developer's.
+	t.Setenv("HOME", t.TempDir())
 	root := t.TempDir()
 	bare := filepath.Join(root, "origin.git")
 	repo := filepath.Join(root, "work")

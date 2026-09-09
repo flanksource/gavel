@@ -1,0 +1,446 @@
+import { useCallback, type ComponentType } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { effortOptionsForModel, promptRuntimeValueToPayload, reconcileModelCapabilities, type AISpecRuntimeValue, type RuntimeBarValue } from "@flanksource/clicky-ui/ai";
+import { UiListChecks, UiListDashes, UiPlay, type IconProps } from "@flanksource/clicky-ui/icons";
+import type { TodoRunDriver, TodoRunEffort, TodoRunOptions, TodoRunPreviewResponse, TodoRunResponse } from "../../types";
+import { todoQuery } from "./format";
+import { settingsRunContextQuery } from "../settings/queries";
+import { invalidateTodoCaches, todoMutationJSON, TodoMutationError } from "./todoMutations";
+export { TodoRunEffortBadge, todoRunEffortPresentation } from "./TodoRunEffortBadge";
+import {
+  actionFromRunOptions,
+  normalizeRunOptions,
+  readRunChoiceState,
+  requestStepFor,
+  runOptionsKey,
+  writeRunChoiceState,
+  type TodoRunAction,
+} from "./runChoiceStorage";
+export { normalizeRunOptions, runOptionsKey, requestStepFor, TODO_RUN_ACTIONS, type TodoRunAction } from "./runChoiceStorage";
+import {
+  agentForRuntime,
+  PROVIDERS,
+  type RunModeCatalog,
+  type RunContext,
+} from "./providers";
+import { effectiveTodoRuntime, unresolvedTodoRuntimeProfile } from './runtimeProfiles';
+
+// RunMode is the behaviour class a run executes as: run (implement and commit)
+// or plan (neither). Verification is a fixture-backed issue lifecycle action in
+// the Verification tab, not an agent run mode.
+export type RunMode = "run" | "plan";
+export type TodoRunRuntimeMode = "cmux" | "agent" | "cli" | "api";
+
+export const defaultRunOptions: TodoRunOptions = { step: "run", spec: {} };
+
+export const runActionConfig: Record<TodoRunAction, { label: string; detail: string; icon: ComponentType<IconProps>; title: string }> = {
+  run: { label: "Run", detail: "implement", icon: UiPlay, title: "Run todo" },
+  plan: { label: "Plan", detail: "plan only", icon: UiListDashes, title: "Plan todo" },
+  triage: {
+    label: "Triage",
+    detail: "compact + review fixture",
+    icon: UiListChecks,
+    title: "Compact the description and review the verification fixture",
+  },
+};
+
+const RUNTIME_MODE_CONFIG: Record<TodoRunRuntimeMode, { label: string }> = {
+  cmux: { label: "cmux" },
+  agent: { label: "Agent" },
+  cli: { label: "cli" },
+  api: { label: "API" },
+};
+
+// runSpec is the api.Spec half of a run's options. The spec is nested under its
+// own key rather than inlined (see TodoRunOptions), so the many helpers that only
+// care about model/mode/effort read it through here.
+export function runSpec(options: TodoRunOptions): AISpecRuntimeValue {
+  return options.spec ?? {};
+}
+
+export interface TodoRunContextState {
+  context: RunContext | null;
+  loading: boolean;
+  error: string;
+}
+
+function unavailableRunContextError(context: RunContext): string {
+  if (context.runtimes.length === 0) return "Captain returned no runtime catalog";
+  if (context.modes.some(runtime => runtime.models.length > 0)) return "";
+  const details = context.modes.map(runtime => runtime.modelError?.trim()).filter(Boolean);
+  return details[0] || "Captain returned no run models";
+}
+
+export function useTodoRunContext({ dir, enabled = true }: { dir: string; enabled?: boolean }): TodoRunContextState {
+  const query = useQuery({ ...settingsRunContextQuery(dir), enabled });
+  if (!enabled) return { context: null, loading: false, error: "" };
+  if (query.error) {
+    return { context: null, loading: query.isFetching, error: query.error instanceof Error ? query.error.message : "Failed to load run context" };
+  }
+  const context = query.data ?? null;
+  if (context && (
+    !Array.isArray(context.modes) ||
+    !Array.isArray(context.runtimes) ||
+    !Array.isArray(context.models) ||
+    !Array.isArray(context.efforts) ||
+    !Array.isArray(context.tools) ||
+    !Array.isArray(context.lifecycle?.steps)
+  )) {
+    return { context: null, loading: false, error: "Captain returned an invalid run context" };
+  }
+  return { context, loading: query.isFetching, error: context ? unavailableRunContextError(context) : "" };
+}
+
+export function TodoRunContextError({ error }: { error: string }) {
+  if (!error) return null;
+  return <div role="alert" className="max-w-sm text-xs text-red-600">{error}</div>;
+}
+
+// promptDefaultFor is the runtime the server resolved for one action's prompt.
+// It outranks defaultMode because it already accounts for the prompt's own
+// frontmatter — todos-triage.prompt and todos-plan.prompt pin `model: claude`
+// and declare a per-tool policy only the Claude transports carry, so seeding
+// them from a codex account default produced a run Captain refuses.
+function promptDefaultFor(context: RunContext, action: string): { mode?: string; model?: string } {
+  return context.promptDefaults?.[action] ?? {};
+}
+
+function modeById(context: RunContext, id: string | undefined, model?: string): RunModeCatalog | undefined {
+  if (!id) return undefined;
+  const agent = agentForRuntime(context, id, model);
+  return context.modes.find(runtime => runtime.id === id && runtime.agent === agent && runtime.models.length > 0);
+}
+
+function modeForOptions(context: RunContext, options: TodoRunOptions): RunModeCatalog {
+  const spec = effectiveTodoRuntime(options, context);
+  const requested = spec.mode || "";
+  const actionDefault = promptDefaultFor(context, actionFromRunOptions(options));
+  return (
+    modeById(context, requested, spec.model) ??
+    modeById(context, actionDefault.mode, actionDefault.model) ??
+    modeById(context, context.defaultMode) ??
+    context.modes.find(runtime => runtime.models.length > 0) ??
+    (() => { throw new Error("Captain returned no run models"); })()
+  );
+}
+
+function runtimeModeForCatalog(runtime: RunModeCatalog): TodoRunRuntimeMode {
+  if (runtime.id in RUNTIME_MODE_CONFIG) return runtime.id as TodoRunRuntimeMode;
+  throw new Error(`Invalid run mode ${JSON.stringify(runtime.id)}`);
+}
+
+function runtimeModeLabel(mode: TodoRunRuntimeMode): string {
+  return RUNTIME_MODE_CONFIG[mode].label;
+}
+
+function modelsForRunMode(runtime: RunModeCatalog): RunModeCatalog["models"] {
+  return runtime.models;
+}
+
+const ALL_EFFORTS: TodoRunEffort[] = ["low", "medium", "high", "xhigh", "max", "ultra"];
+
+function contextEfforts(context: RunContext): TodoRunEffort[] {
+  return context.efforts.length > 0 ? context.efforts : ALL_EFFORTS;
+}
+
+export function shortTodoRunModelName(id: string | undefined): string {
+  let label = (id || "").trim();
+  if (!label) return "default";
+  const slash = label.lastIndexOf("/");
+  if (slash >= 0) label = label.slice(slash + 1);
+  for (const prefix of ["claude-agent-", "claude-code-", "claude-", "codex-"]) {
+    if (label.startsWith(prefix)) {
+      label = label.slice(prefix.length);
+      break;
+    }
+  }
+  const humanClaude = label.toLowerCase().trim().match(/^(?:claude\s+)?(fable|opus|sonnet|haiku)(?:\s+(\d+(?:\.\d+)*))?(?:\s+(.+))?$/);
+  if (humanClaude) {
+    const [, tier, version, rest] = humanClaude;
+    const head = version ? `${tier}-${version}` : tier;
+    const tail = (rest ?? "").trim().replace(/\s+/g, "-");
+    return tail ? `${head}-${tail}` : head;
+  }
+  if (label.toLowerCase().startsWith("gpt-")) return label.toLowerCase();
+
+  const parts = label.toLowerCase().split("-").filter(Boolean);
+  if (["fable", "opus", "sonnet", "haiku"].includes(parts[0] ?? "")) {
+    const version: string[] = [];
+    let index = 1;
+    while (index < parts.length && /^\d+$/.test(parts[index]!)) {
+      version.push(parts[index]!);
+      index += 1;
+    }
+    const head = version.length > 0 ? `${parts[0]}-${version.join(".")}` : parts[0];
+    const rest = parts.slice(index).join("-");
+    return rest ? `${head}-${rest}` : head;
+  }
+  return label;
+}
+
+function labelForRunModel(runtime: RunModeCatalog, modelID: string): string {
+  const model = modelsForRunMode(runtime).find(item => item.id === modelID);
+  return model?.label || modelID;
+}
+
+export function runButtonQualifierForOptions(options: TodoRunOptions, context: RunContext): string {
+  const profile = unresolvedTodoRuntimeProfile(options, context);
+  if (profile) return `(Profile: ${profile})`;
+  const model = effectiveTodoRuntime(options, context).model;
+  if (!model) return options.step === 'verify' ? '(Fixture)' : '(Choose model)';
+  const runtime = modeForOptions(context, options);
+  return `(${runtimeModeLabel(runtimeModeForCatalog(runtime))}:${shortTodoRunModelName(labelForRunModel(runtime, model))})`;
+}
+
+// todoRunModeLabel is the runtime mechanism a run would use (Agent/cmux/cli/API),
+// resolved from the run options against the runtime catalog — the same derivation
+// the run buttons use, exposed for the start-of-session hero's "Runtime" chip.
+export function todoRunModeLabel(options: TodoRunOptions, context: RunContext): string {
+  const profile = unresolvedTodoRuntimeProfile(options, context);
+  if (profile) return `Profile: ${profile}`;
+  if (!effectiveTodoRuntime(options, context).model) return 'Not configured';
+  return runtimeModeLabel(runtimeModeForCatalog(modeForOptions(context, options)));
+}
+
+export function runButtonLabelForOptions(action: TodoRunAction, options: TodoRunOptions, context: RunContext): string {
+  return `${runActionConfig[action].label} ${runButtonQualifierForOptions(options, context)}`;
+}
+
+export function todoRunButtonPresentation(options: TodoRunOptions, context: RunContext) {
+  if (unresolvedTodoRuntimeProfile(options, context)) return { provider: undefined, model: 'Profile default', effort: undefined };
+  const modelID = effectiveTodoRuntime(options, context).model;
+  if (!modelID) return { provider: undefined, model: options.step === 'verify' ? 'Fixture' : 'Choose model', effort: undefined };
+  const runtime = modeForOptions(context, options);
+  const spec = runSpec(options);
+  const model = runtime.models.find(item => item.id === modelID);
+  const provider = PROVIDERS.find(item => item.id === runtime.agent);
+  const supportedEfforts = model ? effortOptionsForModel(model, contextEfforts(context)) : [];
+  const effort = spec.effort && supportedEfforts.includes(spec.effort)
+    ? spec.effort as TodoRunEffort
+    : undefined;
+
+  return {
+    provider,
+    model: shortTodoRunModelName(labelForRunModel(runtime, modelID)),
+    effort,
+  };
+}
+
+export function defaultRunOptionsForAction(action: string, context?: RunContext | null): TodoRunOptions {
+  const runtimeProfile = context?.promptDefaults?.[action]?.runtimeProfile;
+  if (runtimeProfile) return { step: action, runtimeProfile, spec: {} };
+  return normalizeRunOptions(action, defaultRunOptions);
+}
+
+export function reconcileTodoRunOptions(action: string, options: TodoRunOptions, context: RunContext): TodoRunOptions {
+  const normalized = normalizeRunOptions(action, options);
+  if (normalized.runtimeProfile || context.promptDefaults?.[action]?.runtimeProfile || !normalized.spec?.model) return normalized;
+  const runtime = modeForOptions(context, normalized);
+  const spec = runSpec(normalized);
+  const model = runtime.models.find(model => model.id === spec.model);
+  if (!model) return normalized;
+  return normalizeRunOptions(action, {
+    ...normalized,
+    spec: reconcileModelCapabilities(spec, model, contextEfforts(context)),
+  });
+}
+
+export function loadLastTodoRunOptions(action: string, context?: RunContext | null): TodoRunOptions {
+	const state = readRunChoiceState();
+	const options = normalizeRunOptions(action, state.last[action] ?? defaultRunOptionsForAction(action, context));
+	return context ? reconcileTodoRunOptions(action, options, context) : options;
+}
+
+export function loadRecentAdvancedTodoRunOptions(action: string, context?: RunContext | null): TodoRunOptions[] {
+	const state = readRunChoiceState();
+	const seen = new Set<string>();
+	return (state.recentAdvanced[action] ?? [])
+		.map(item => context ? reconcileTodoRunOptions(action, item, context) : normalizeRunOptions(action, item))
+		.filter(item => {
+			const key = runOptionsKey(item);
+			if (seen.has(key)) return false;
+			seen.add(key);
+			return true;
+		});
+}
+
+export function rememberTodoRunOptions(action: string, options: TodoRunOptions, advanced = false): TodoRunOptions {
+  const nextOptions = normalizeRunOptions(action, options);
+  const state = readRunChoiceState();
+  state.last[action] = nextOptions;
+  if (advanced) {
+    const nextKey = runOptionsKey(nextOptions);
+    const recent = (state.recentAdvanced[action] ?? []).filter(item => runOptionsKey(item) !== nextKey);
+    state.recentAdvanced[action] = [nextOptions, ...recent].slice(0, 3);
+  }
+  writeRunChoiceState(state);
+  return nextOptions;
+}
+
+export function rememberTodoRunOptionsForMode(options: TodoRunOptions, advanced = false): TodoRunOptions {
+  return rememberTodoRunOptions(actionFromRunOptions(options), options, advanced);
+}
+
+// useTodoRun POSTs a run for one native TODO in a workspace.
+export function useTodoRun(dir: string) {
+  const client = useQueryClient();
+  const mutation = useMutation({
+    mutationKey: ["todos", "run", { dir: dir.trim() }],
+    // The endpoint decodes strictly: only dir/ref/step/spec/resume/force are
+    // accepted, so the body is built fresh from `options` rather than
+    // spreading it — a spread would leak driver/runMode/plan/prompt, which
+    // `options` still carries for the dialog's own bookkeeping (storage,
+    // labels), onto the wire and get rejected with a 400.
+    mutationFn: ({ ref, options }: { ref: string; options: TodoRunOptions }) => todoMutationJSON<TodoRunResponse>(
+      `/api/todos/run?${todoQuery(dir)}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ref,
+          step: requestStepFor(options),
+          runtimeProfile: options.runtimeProfile,
+          spec: options.spec,
+          resume: options.resume,
+          force: options.force,
+        }),
+      },
+      `Failed to run todo ${ref}`,
+    ),
+    onSuccess: (_result, { ref }) => invalidateTodoCaches(client, dir, ref),
+  });
+
+  const run = useCallback(
+    async (ref: string, options: TodoRunOptions = defaultRunOptions): Promise<TodoRunResponse | null> => {
+      const cleaned = ref.trim();
+      if (!cleaned || mutation.isPending) return null;
+      try {
+        return await mutation.mutateAsync({ ref: cleaned, options });
+      } catch (err) {
+        // The todo already has a live run on a process that is still going. That
+        // is a decision, not a failure: running both is allowed once confirmed.
+        if (!options.force && err instanceof TodoMutationError && err.status === 409) {
+          if (!window.confirm(`${err.message}\n\nStart a second run in parallel?`)) return null;
+          try {
+            return await mutation.mutateAsync({ ref: cleaned, options: { ...options, force: true } });
+          } catch {
+            return null;
+          }
+        }
+        return null;
+      }
+    },
+    [mutation],
+  );
+
+  const result = mutation.data;
+  return {
+    runBusy: mutation.isPending,
+    runMessage: result?.message || (result?.status === "dry_run" ? "Todo run validated" : result ? "Todo run started" : ""),
+    runError: mutation.error instanceof Error ? mutation.error.message : "",
+    reset: mutation.reset,
+    run,
+  };
+}
+
+export function useTodoRunPreview(dir: string) {
+  return useMutation({
+    mutationKey: ["todos", "run", "preview", { dir: dir.trim() }],
+    mutationFn: ({ body, signal }: { body: TodoRunRequestPayload; signal?: AbortSignal }) => todoMutationJSON<TodoRunPreviewResponse>(
+      `/api/todos/run/preview?${todoQuery(dir)}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal,
+      },
+      "Failed to preview todo run",
+    ),
+  });
+}
+
+export function todoRunOptionsForRuntimeChange({
+  action,
+  context,
+  options,
+  runtime,
+}: {
+  action: TodoRunAction;
+  context: RunContext;
+  options: TodoRunOptions;
+  runtime: RuntimeBarValue;
+}): TodoRunOptions {
+  const next = { ...options, spec: runtime };
+  return runtime.model ? reconcileTodoRunOptions(action, next, context) : normalizeRunOptions(action, next);
+}
+
+export function runChoiceDetail(options: TodoRunOptions, fallback: string, context?: RunContext | null): string {
+  if (!context) return fallback;
+  const profile = unresolvedTodoRuntimeProfile(options, context);
+  if (profile) return `Profile: ${profile}`;
+  const modelID = effectiveTodoRuntime(options, context).model;
+  if (!modelID) return options.step === 'verify' ? 'Fixture' : 'Choose model';
+  const runtime = modeForOptions(context, options);
+  const spec = runSpec(options);
+  const mode = runtimeModeLabel(runtimeModeForCatalog(runtime));
+  const model = shortTodoRunModelName(labelForRunModel(runtime, modelID));
+  const effort = spec.effort ? ` · ${spec.effort}` : "";
+  return `${mode} · ${model}${effort}`;
+}
+
+// TodoRunRequestPayload is the exact wire shape POST /api/todos/run (and its
+// /preview sibling) accept: dir travels in the query string alongside it (see
+// todoQuery), so the body is just ref/step/spec/resume/force. The endpoint
+// decodes strictly and rejects runMode/driver/prompt at the top level.
+export interface TodoRunRequestPayload {
+  ref: string;
+  step: string;
+  runtimeProfile?: string;
+  spec: AISpecRuntimeValue;
+  resume?: boolean;
+  force?: boolean;
+}
+
+export function buildTodoRunPayload({
+  ref,
+  driver,
+  runMode,
+  runtime,
+  mode,
+  runtimeProfile,
+  resume,
+  promptDraft,
+  promptDirty,
+}: {
+  ref: string;
+  driver: TodoRunDriver;
+  runMode?: string;
+  runtime: AISpecRuntimeValue;
+  mode: TodoRunAction;
+  runtimeProfile?: string;
+  resume: boolean;
+  promptDraft: string;
+  promptDirty: boolean;
+}): TodoRunRequestPayload {
+  const { spec } = promptRuntimeValueToPayload(runtime);
+  const prompt = promptDirty ? { ...spec.prompt, user: promptDraft } : spec.prompt;
+  // normalizeRunOptions owns which of runMode/plan/prompt a given action
+  // implies, so the dialog cannot drift from what the phase buttons send —
+  // only its outcome (the step name) reaches the wire, not those fields
+  // themselves; `driver` never did select anything on the wire (the runtime
+  // mechanism lives in spec.mode) so it is accepted for symmetry with the
+  // phase buttons' call sites and otherwise unused here.
+  const normalized = normalizeRunOptions(mode, {
+    driver,
+    runtimeProfile,
+    resume: resume || undefined,
+    spec: { ...spec, mode: runMode ?? spec.mode, prompt },
+  });
+  return {
+    ref,
+    step: requestStepFor(normalized),
+    runtimeProfile: normalized.runtimeProfile,
+    spec: normalized.spec ?? {},
+    resume: normalized.resume,
+  };
+}

@@ -1,0 +1,163 @@
+---
+title: Fixture formats
+description: Tables, command blocks, standalone code blocks, templates, CEL, variables, and cwd rules.
+order: 3
+---
+
+Fixture files are ordinary markdown with optional YAML front matter. File-level front matter sets defaults; table columns and command-block config override those defaults for individual tests.
+
+```yaml
+---
+build: go build -o myapp # [!code focus] [!code note:build once]
+daemon: go run ./server --port {{.port}} # [!code focus] [!code word:{{.port}}]
+exec: ./myapp # [!code highlight]
+args: [--verbose] # [!code highlight]
+env:
+  LOG_LEVEL: debug
+cwd: ./testdir
+terminal: pty
+timeout: 30s
+os: linux
+arch: amd64
+skip: "! command -v docker" # [!code warning] [!code note:conditional skip]
+---
+```
+
+Lines 2-3 run once for the file: `build` prepares the executable and `daemon` starts a background process that is stopped after the fixture run. Lines 4-7 define the default command shape for every test. Line 13 skips the file when its shell command exits successfully.
+
+## Markdown tables
+
+Tables are the most compact format when tests share the same command and vary by inputs.
+
+````markdown
+---
+exec: bash
+args: ["-c", "curl {{.flags}} {{.baseUrl}}{{.path}}"] # [!code word:{{.path}}] [!code note:row variable]
+baseUrl: https://api.example.com
+flags: "-s"
+---
+
+| Name       | path    | CEL                      |
+|------------|---------|--------------------------|
+| get users  | /users  | json.size() > 0          |
+| get health | /health | json.status == "ok"      |
+````
+
+Lines 2-5 define the command template once. `{{.flags}}`, `{{.baseUrl}}`, and `{{.path}}` are template variables. Lines 8-11 provide per-row values and assertions; each row becomes a separate test.
+
+Recognized input columns include `name`, `cli`, `command`, `exec`, `args`, `cwd`, `terminal`, `os`, `arch`, `skip`, and `query`.
+
+Recognized expectation columns include `exit code`, `stdout`, `stderr`, `expected error`, `format`, `count`, `matches`, `files`, and `cel`.
+
+Unrecognized columns become template variables and CEL properties. In the example above, `path` is available as `{{.path}}` in `args` and as `expectations.Properties["path"]` in CEL.
+
+<Callout variant="tip" title="Prefer tables first">
+  If the executable is the same for several cases, use a table. It keeps inputs
+  and expected behavior close together and gives each row its own result.
+</Callout>
+
+## Command blocks
+
+Command blocks are better for multi-line scripts, setup, teardown, or per-test YAML.
+
+````markdown
+### command: multi-line setup
+
+<!-- [!code highlight:4] -->
+```yaml
+exitCode: 0
+env:
+  KEY: value
+```
+
+```bash
+tmp="$(mktemp)"
+echo "hello" > "$tmp" # [!code focus] [!code note:produce stdout]
+cat "$tmp"
+rm -f "$tmp"
+```
+
+- contains: hello
+- not: contains: error
+````
+
+Lines 4-6 configure this one command. Lines 10-13 are the script. Lines 16-17 validate the output and guard against unexpected error text. This shape is better than a table when setup and cleanup are part of the test itself.
+
+Validation bullets after a command are joined with `&&`:
+
+- `cel: <expr>` uses the expression directly.
+- `contains: <text>` checks stdout.
+- `regex: <pattern>` checks stdout with a regular expression.
+- `not: contains: <text>` negates a stdout contains check.
+- `not: <expr>` negates a CEL expression.
+
+## Standalone code blocks
+
+Executable code blocks outside `command:` headings are auto-detected. The nearest heading becomes the test name.
+
+````markdown
+## Version output
+
+```bash
+gavel --version # [!code focus] [!code note:test command]
+```
+
+- regex: gavel version # [!code highlight]
+````
+
+Line 1 names the test. Lines 3-5 run the command. Line 7 checks stdout with a regex. Use this compact form for one-off checks that do not need per-test YAML.
+
+Inline fence attributes override YAML block values:
+
+````markdown
+```bash exitCode=1 timeout=30
+exit 1
+```
+````
+
+Here `exitCode=1` says the non-zero exit is expected, and `timeout=30` bounds this specific command without changing the rest of the file.
+
+## Variables and templates
+
+`exec`, `daemon`, `build`, `args`, and `cwd` support shell-style variables and Go templates:
+
+```yaml
+exec: $executablePath
+daemon: go run ./server --port {{.port}} # [!code word:{{.port}}]
+args: ["--file", "$file"] # [!code word:$file]
+build: go build -o $workDir/myapp # [!code word:$workDir]
+cwd: $GIT_ROOT_DIR/testdata # [!code word:$GIT_ROOT_DIR] [!code note:resolved before run]
+```
+
+`$executablePath` and `$workDir` come from the runner. `{{.port}}` is a free TCP port created for daemon fixtures. `$file` is available when `files:` expands a test across matched files. `cwd` is templated before Gavel resolves the final working directory.
+
+Auto-injected variables are available in shell syntax, template syntax, CEL, and the command environment:
+
+| Variable | Meaning |
+|----------|---------|
+| `GIT_ROOT_DIR` | nearest parent with `.git` |
+| `GO_ROOT_DIR` | nearest parent with `go.mod` |
+| `ROOT_DIR` | `GIT_ROOT_DIR`, then `GO_ROOT_DIR`, then workdir |
+| `CWD` | resolved working directory for the test |
+| `GOOS` / `GOARCH` | current Go runtime target |
+| `GOPATH` | Go workspace path |
+
+When `files:` is set, each matching file gets its own test expansion with `file`, `filename`, `dir`, `absfile`, `absdir`, `basename`, and `ext`.
+
+## CEL context
+
+CEL expressions can inspect:
+
+- `stdout` or `output`
+- `stderr`
+- `exitCode`
+- `json` when stdout starts with JSON
+- `name`
+- `sourceDir`
+- `query`
+- `expectations`
+- `workDir`
+- `executablePath`
+- `ansi.has_color`, `ansi.has_any`, `ansi.has_updates`, and related terminal-state fields
+
+Working directory resolution is deterministic: test-level `cwd`, then file-level `cwd`, then the fixture file's directory, then the runner workdir or current directory. Relative paths are resolved from the fixture file's directory.

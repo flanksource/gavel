@@ -5,11 +5,14 @@
     "module": "ESNext",
     "moduleResolution": "bundler",
     "jsx": "react-jsx",
-    "jsxImportSource": "preact",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "outDir": "dist"
+    "outDir": "dist",
+    "baseUrl": ".",
+    "paths": {
+      "@flanksource/gavel/testrunner/hooks": ["../../testrunner/ui/src/hooks.ts"]
+    }
   },
   "include": ["src"]
 }

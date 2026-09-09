@@ -233,7 +233,7 @@ func TestScanFreePort_FindsAvailablePort(t *testing.T) {
 	t.Cleanup(func() { _ = blocker.Close() })
 	start := blocker.Addr().(*net.TCPAddr).Port
 
-	port, listener, err := ScanFreePort(start, 10)
+	port, listener, err := ScanFreePort("127.0.0.1", start, 10)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = listener.Close() })
 	assert.Greater(t, port, start, "scanner should skip past the occupied port")
@@ -264,7 +264,7 @@ func TestScanFreePort_ExhaustedReturnsError(t *testing.T) {
 	}
 	// tries=1 guarantees exhaustion — start is occupied, we don't try any
 	// neighbors.
-	_, _, err := ScanFreePort(minPort, 1)
+	_, _, err := ScanFreePort("127.0.0.1", minPort, 1)
 	assert.Error(t, err)
 }
 

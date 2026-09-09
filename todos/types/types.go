@@ -2,18 +2,14 @@ package types
 
 import (
 	"encoding/json"
-	"fmt"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
-	"github.com/flanksource/clicky"
-	"github.com/flanksource/clicky/api"
-	"github.com/flanksource/clicky/api/icons"
+	captainapi "github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/gavel/fixtures"
-	"github.com/ghodss/yaml"
-	"github.com/samber/lo"
+	"github.com/flanksource/gavel/todos/labels"
 )
 
 type TODOS []*TODO
@@ -29,12 +25,22 @@ func (todos TODOS) Sort() {
 			return pi < pj
 		}
 
-		// Same priority, sort alphabetically by filename
-		nameI := filepath.Base(todos[i].FilePath)
-		nameJ := filepath.Base(todos[j].FilePath)
+		// Same priority, sort alphabetically by provider display name
+		nameI := todos[i].sortName()
+		nameJ := todos[j].sortName()
 		return nameI < nameJ
 	})
 
+}
+
+func (t TODO) sortName() string {
+	if t.Title != "" {
+		return strings.ToLower(t.Title)
+	}
+	if t.FilePath != "" {
+		return strings.ToLower(filepath.Base(t.FilePath))
+	}
+	return strings.ToLower(t.ID)
 }
 
 func priorityOrder(p Priority) int {
@@ -61,12 +67,50 @@ type Attempt struct {
 	Transcript string // relative path to transcript .md
 }
 
+type ProviderEvent struct {
+	ID        string    `json:"id,omitempty"`
+	ShortID   string    `json:"short_id,omitempty"`
+	Kind      string    `json:"kind,omitempty"`
+	Actor     string    `json:"actor,omitempty"`
+	Timestamp time.Time `json:"timestamp,omitempty"`
+	Title     string    `json:"title,omitempty"`
+	Body      string    `json:"body,omitempty"`
+	Label     string    `json:"label,omitempty"`
+	// OldLabel/NewLabel are set for a "LabelChanged" event, which collapses an
+	// adjacent LabelRemoved/LabelAdded pair within the same label namespace.
+	OldLabel string `json:"old_label,omitempty"`
+	NewLabel string `json:"new_label,omitempty"`
+}
+
 // TODO represents a structured TODO item parsed from a markdown file.
 // It combines fixture test nodes with TODO-specific metadata for tracking
 // implementation tasks including reproduction steps, verification tests, and execution status.
 type TODO struct {
-	FilePath string                `json:"file_path,omitempty"`
-	FileNode *fixtures.FixtureNode `json:"file_node,omitempty"` // Root file node from fixtures parser
+	FilePath       string                `json:"file_path,omitempty"`
+	FileNode       *fixtures.FixtureNode `json:"file_node,omitempty"` // Root file node from fixtures parser
+	ID             string                `json:"id,omitempty"`
+	ShortID        string                `json:"short_id,omitempty"`
+	Version        int64                 `json:"version,omitempty"`
+	WorkspaceID    string                `json:"workspace_id,omitempty"`
+	ExecutionState string                `json:"execution_state,omitempty"`
+	Provider       string                `json:"provider,omitempty"`
+	Workspace      string                `json:"workspace,omitempty"`
+	ProviderState  string                `json:"provider_state,omitempty"`
+	Labels         []string              `json:"labels,omitempty"`
+	// LabelDefinitions are the resolved presentations of Labels, in the same
+	// order. The runtime provider populates them from one definition read per
+	// request; a TODO from a source with no definition store leaves them empty
+	// and the renderers fall back to the hashed palette colour.
+	LabelDefinitions labels.Definitions `json:"label_definitions,omitempty"`
+	// PhaseRuns is the latest run per lifecycle phase (plan/triage/run/verify).
+	// The runtime provider populates it from one workspace-wide read per
+	// request; a TODO from a source without run history leaves it empty and the
+	// renderers show every phase as never run.
+	PhaseRuns      PhaseRuns       `json:"phase_runs,omitempty"`
+	ProviderEvents []ProviderEvent `json:"provider_events,omitempty"`
+	// ExternalIssue is the external tracker issue this TODO is linked to, or
+	// nil when it has never been pushed to one.
+	ExternalIssue *ExternalIssue `json:"external_issue,omitempty"`
 
 	TODOFrontmatter `json:",inline"`
 
@@ -76,149 +120,33 @@ type TODO struct {
 	Implementation    string                  `json:"implementation,omitempty"`
 	Verification      []*fixtures.FixtureNode `json:"verification,omitempty"`       // Section containing verification tests
 	CustomValidations []*fixtures.FixtureNode `json:"custom_validations,omitempty"` // Section containing custom validation tests
+	MarkdownBody      string                  `json:"markdown_body,omitempty"`
+	// VerificationMarkdown is the raw fixture source stored separately from MarkdownBody.
+	VerificationMarkdown string `json:"verification_markdown,omitempty"`
+	// AcceptanceCriteria are the editable done-ness criteria parsed from the
+	// "## Acceptance Criteria" section, scored by issue-aware verification.
+	AcceptanceCriteria []AcceptanceCriterion `json:"acceptance_criteria,omitempty"`
 }
 
-func (todo TODO) AsYaml() (string, error) {
-	// Serialize frontmatter
-	frontmatterYAML, err := yaml.Marshal(&todo.TODOFrontmatter)
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal frontmatter: %w", err)
-	}
-
-	// Create file content
-	var content strings.Builder
-	content.WriteString("---\n")
-	content.WriteString(string(frontmatterYAML))
-	content.WriteString("---\n")
-
-	// Add markdown content if available
-	if todo.Implementation != "" {
-		content.WriteString("\n")
-		content.WriteString(todo.Implementation)
-	}
-	return content.String(), nil
+// ExternalIssue is the tracker issue a TODO has been pushed to. State carries
+// the upstream issue's own status once something fetches it; it is empty until
+// then and must be read as "unknown", never as open.
+type ExternalIssue struct {
+	Kind   string `json:"kind"`
+	Repo   string `json:"repo"`
+	Number int    `json:"number"`
+	URL    string `json:"url"`
+	State  string `json:"state,omitempty"`
 }
 
-func (t TODO) PrettyRow(opts interface{}) map[string]api.Text {
-	title := t.Title
-	if title == "" {
-		title = t.Filename()
-	}
-	row := map[string]api.Text{
-		"Title":    clicky.Text(title, "order-1"),
-		"Status":   t.Status.Pretty().Styles("order-2"),
-		"Priority": t.Priority.Pretty().Styles("order-3"),
-	}
-	if t.LastRun != nil {
-		row["Updated"] = clicky.Text("", "order-4").Append(time.Since(*t.LastRun), "text-muted")
-	}
-	return row
-}
-
-func (t TODO) Filename() string {
-	file := filepath.Base(t.FilePath)
-	return lo.PascalCase(file)
-}
-
-// Pretty returns a formatted text representation of the TODO item
-func (t TODO) Pretty() api.Text {
-	result := api.Text{}
-
-	// Add title/file path
-	if t.FilePath != "" {
-		result = result.Add(icons.File).Append(" ", "").Append(t.Filename(), "text-blue-600 font-medium")
-	}
-
-	// Add priority if set
-	if t.Priority != "" {
-		result = result.Add(t.Priority.Pretty())
-	}
-
-	// Add status if set
-	if t.Status != "" {
-		result = result.Append(" ", "").Add(t.Status.Pretty())
-	}
-
-	return result
-}
-
-// PrettyDetailed returns a comprehensive formatted representation of the TODO with all sections and metadata.
-func (t TODO) PrettyDetailed() api.Text {
-	result := api.Text{}
-
-	// Header line with filename, priority, status
-	header := t.Pretty()
-	result = result.Add(header).NewLine().NewLine()
-
-	// File path
-	result = result.Append("File: ", "text-gray-500").Append(t.FilePath, "").NewLine()
-
-	// Language
-	if t.Language != "" {
-		result = result.Append("Language: ", "text-gray-500").Add(t.Language.Pretty()).NewLine()
-	}
-
-	// Attempts
-	if t.Attempts > 0 {
-		result = result.Append("Attempts: ", "text-gray-500").Append(fmt.Sprintf("%d", t.Attempts), "").NewLine()
-	}
-
-	// Last run
-	if t.LastRun != nil {
-		result = result.Append("Last Run: ", "text-gray-500").Append(t.LastRun.Format(time.RFC3339), "").NewLine()
-	}
-
-	result = result.NewLine()
-
-	// Show fixture tests from the FileNode tree
-	if t.FileNode != nil {
-		result = result.Add(formatFixtureTree(t.FileNode, 0))
-	}
-
-	// LLM Configuration section
-	if t.LLM != nil {
-		result = result.Add(icons.Lambda).Append(" LLM Configuration", "text-blue-600 font-bold").NewLine()
-		if t.LLM.Model != "" {
-			result = result.Append("  Model: ", "text-gray-500").Append(t.LLM.Model, "").NewLine()
-		}
-		if t.LLM.MaxTokens > 0 {
-			result = result.Append("  Max Tokens: ", "text-gray-500").Append(fmt.Sprintf("%d", t.LLM.MaxTokens), "").NewLine()
-		}
-		if t.LLM.SessionId != "" {
-			result = result.Append("  Session ID: ", "text-gray-500").Append(t.LLM.SessionId, "").NewLine()
-		}
-	}
-
-	return result
-}
-
-// formatFixtureTree recursively formats a fixture node tree
-func formatFixtureTree(node *fixtures.FixtureNode, depth int) api.Text {
-	result := clicky.Text("", "")
-
-	// Skip the root file node itself
-	if depth > 0 {
-		indent := strings.Repeat("  ", depth-1)
-
-		// Show section header
-		if node.Name != "" && node.Type == fixtures.SectionNode {
-			result = result.Append(indent, "").Add(icons.Folder).Append(" ", "").
-				Append(node.Name, "text-blue-600 font-bold").NewLine()
-		}
-
-		// Show test
-		if node.Test != nil {
-			result = result.Append(indent, "").Append("  \u2514\u2500 ", "text-gray-500").
-				Append(node.Test.Name, "").NewLine()
-		}
-	}
-
-	// Recursively format children
-	for _, child := range node.Children {
-		result = result.Add(formatFixtureTree(child, depth+1))
-	}
-
-	return result
+// AcceptanceCriterion is one editable done-ness criterion for a TODO. CheckID is
+// set when the line maps to a static verify.AllChecks id (rendered as
+// "<id>: <text>"); empty CheckID marks a custom, functionality-specific
+// criterion. Done reflects the checklist box (`- [x]`).
+type AcceptanceCriterion struct {
+	Text    string `json:"text"`
+	CheckID string `json:"check_id,omitempty"`
+	Done    bool   `json:"done,omitempty"`
 }
 
 // StringOrSlice handles YAML fields that can be either a single string or a list of strings.
@@ -283,19 +211,33 @@ type TODOFrontmatter struct {
 	fixtures.FrontMatter `yaml:",inline" json:",inline"` // Embed standard fixture frontmatter
 
 	// TODO-specific fields
-	Title         string            `yaml:"title,omitempty" json:"title,omitempty"`
-	Priority      Priority          `yaml:"priority,omitempty" json:"priority,omitempty"`
-	Status        Status            `yaml:"status,omitempty" json:"status,omitempty"`
-	LastRun       *time.Time        `yaml:"last_run,omitempty" json:"last_run,omitempty"`
-	Attempts      int               `yaml:"attempts,omitempty" json:"attempts,omitempty"`
-	Language      Language          `yaml:"language,omitempty" json:"language,omitempty"`
-	WorkingCommit string            `yaml:"working_commit,omitempty" json:"working_commit,omitempty"`
-	Branch        string            `yaml:"branch,omitempty" json:"branch,omitempty"`
-	Path          StringOrSlice     `yaml:"path,omitempty" json:"path,omitempty"`
-	LLM           *LLM              `yaml:"llm,omitempty" json:"llm,omitempty"`
-	Verify        *TODOVerifyConfig `yaml:"verify,omitempty" json:"verify,omitempty"`
-	PR            *PR               `yaml:"pr,omitempty" json:"pr,omitempty"`
-	Prompt        string            `yaml:"prompt,omitempty" json:"prompt,omitempty"`
+	Title         string             `yaml:"title,omitempty" json:"title,omitempty"`
+	Priority      Priority           `yaml:"priority,omitempty" json:"priority,omitempty"`
+	Status        Status             `yaml:"status,omitempty" json:"status,omitempty"`
+	Created       *time.Time         `yaml:"created,omitempty" json:"created,omitempty"`
+	LastRun       *time.Time         `yaml:"last_run,omitempty" json:"last_run,omitempty"`
+	Attempts      int                `yaml:"attempts,omitempty" json:"attempts,omitempty"`
+	Language      Language           `yaml:"language,omitempty" json:"language,omitempty"`
+	WorkingCommit string             `yaml:"working_commit,omitempty" json:"working_commit,omitempty"`
+	Branch        string             `yaml:"branch,omitempty" json:"branch,omitempty"`
+	CWD           string             `yaml:"cwd,omitempty" json:"cwd,omitempty"`
+	Path          StringOrSlice      `yaml:"path,omitempty" json:"path,omitempty"`
+	LLM           *LLM               `yaml:"llm,omitempty" json:"llm,omitempty"`
+	Verify        *TODOVerifyConfig  `yaml:"verify,omitempty" json:"verify,omitempty"`
+	Checks        *AgentChecksConfig `yaml:"checks,omitempty" json:"checks,omitempty"`
+	PR            *PR                `yaml:"pr,omitempty" json:"pr,omitempty"`
+	Prompt        string             `yaml:"prompt,omitempty" json:"prompt,omitempty"`
+	// PlanPath is the agent's native plan-mode file from the last plan run
+	// (reported in the run envelope); the plan is read from there, never copied.
+	PlanPath   string     `yaml:"plan_path,omitempty" json:"plan_path,omitempty"`
+	PlanStatus PlanStatus `yaml:"plan_status,omitempty" json:"plan_status,omitempty"`
+	// RunMode records the mode of the last agent run so an answer-resume
+	// continues in the same mode.
+	RunMode RunMode `yaml:"run_mode,omitempty" json:"run_mode,omitempty"`
+	// LastRunSummary is the final summary from the most recent run's envelope.
+	LastRunSummary string `yaml:"last_run_summary,omitempty" json:"last_run_summary,omitempty"`
+	// Questions are the agent's blocking questions while Status is ask.
+	Questions []AgentQuestion `yaml:"questions,omitempty" json:"questions,omitempty"`
 }
 
 // CleanMetadata removes keys from Metadata that match struct field yaml tags.
@@ -307,6 +249,21 @@ func (f *TODOFrontmatter) CleanMetadata() {
 	if f.Metadata == nil {
 		return
 	}
+	if nested, ok := f.Metadata["metadata"]; ok {
+		switch values := nested.(type) {
+		case map[string]any:
+			for k, v := range values {
+				f.Metadata[k] = v
+			}
+		case map[interface{}]interface{}:
+			for k, v := range values {
+				if key, ok := k.(string); ok {
+					f.Metadata[key] = v
+				}
+			}
+		}
+		delete(f.Metadata, "metadata")
+	}
 	// Keys from TODOFrontmatter
 	delete(f.Metadata, "title")
 	delete(f.Metadata, "priority")
@@ -317,121 +274,18 @@ func (f *TODOFrontmatter) CleanMetadata() {
 	delete(f.Metadata, "path")
 	delete(f.Metadata, "llm")
 	delete(f.Metadata, "verify")
+	delete(f.Metadata, "checks")
 	delete(f.Metadata, "working_commit")
 	delete(f.Metadata, "branch")
+	delete(f.Metadata, "cwd")
 	delete(f.Metadata, "max_turns")
 	delete(f.Metadata, "pr")
 	delete(f.Metadata, "prompt")
-}
-
-// Pretty returns a formatted text representation of the TODOFrontmatter
-func (f TODOFrontmatter) Pretty() api.Text {
-	result := api.Text{}
-
-	// Start with a simple metadata display
-	result = result.Append("📋 TODO Metadata", "text-blue-600 font-bold")
-
-	// Add metadata line
-	var metadata []api.Text
-	if f.Priority != "" {
-		metadata = append(metadata, clicky.Text("Priority: ", "text-gray-500").Add(f.Priority.Pretty()))
-	}
-	if f.Status != "" {
-		metadata = append(metadata, clicky.Text("Status: ", "text-gray-500").Add(f.Status.Pretty()))
-	}
-	if f.Language != "" {
-		metadata = append(metadata, clicky.Text("Language: ", "text-gray-500").Add(f.Language.Pretty()))
-	}
-	if f.Attempts > 0 {
-		metadata = append(metadata, clicky.Text("Attempts: ", "text-gray-500").Append(fmt.Sprintf("%d", f.Attempts), "text-orange-600"))
-	}
-	if f.LastRun != nil {
-		metadata = append(metadata, clicky.Text("Last Run: ", "text-gray-500").Append(f.LastRun.Format("2006-01-02 15:04"), "text-purple-600"))
-	}
-
-	if len(metadata) > 0 {
-		result = result.Append("\n", "")
-		for i, meta := range metadata {
-			if i > 0 {
-				result = result.Append(" | ", "text-gray-400")
-			}
-			result = result.Add(meta)
-		}
-	}
-
-	return result
-}
-
-// TODOVerifyConfig specifies gavel verify gate settings for a TODO.
-type TODOVerifyConfig struct {
-	Categories     []string `yaml:"categories,omitempty" json:"categories,omitempty"`
-	ScoreThreshold int      `yaml:"score_threshold,omitempty" json:"score_threshold,omitempty"`
-}
-
-// LLM contains configuration and tracking for LLM usage when executing a TODO.
-// It specifies model selection, cost/token limits, and records actual usage.
-type LLM struct {
-	// Model specifies which LLM model to use for running the todo (e.g. sonnet, haiku, gpt-4)
-	Model string `yaml:"model" json:"model,omitempty"`
-	// MaxTokens is the maximum number of tokens that can be used to complete this todo
-	MaxTokens int `yaml:"max_tokens" json:"max_tokens,omitempty"`
-	// MaxCost is the maximum cost in USD cents that can be incurred when running this todo
-	MaxCost float64 `yaml:"max_cost" json:"max_cost,omitempty"`
-	// TokensUsed records the actual tokens consumed, populated after running the todo
-	TokensUsed int `yaml:"tokens_used,omitempty" json:"tokens_used,omitempty"`
-	// CostIncurred records the actual cost in USD cents, populated after running the todo
-	CostIncurred float64 `yaml:"cost_incurred,omitempty" json:"cost_incurred,omitempty"`
-	// MaxTurns is the maximum number of conversation turns allowed
-	MaxTurns int `yaml:"max_turns,omitempty" json:"max_turns,omitempty"`
-	// Existing session ID for continuing conversations with the LLM
-	SessionId string `yaml:"session_id,omitempty" json:"session_id,omitempty"`
-}
-
-// Pretty returns a formatted text representation of the LLM configuration
-func (l LLM) Pretty() api.Text {
-	result := clicky.Text("").Add(icons.Lambda).Append(" ", "").Append(l.Model, "text-blue-600 font-bold")
-
-	var details []api.Text
-
-	// Add token information
-	if l.MaxTokens > 0 {
-		tokenInfo := clicky.Text("Tokens: ", "text-gray-500")
-		if l.TokensUsed > 0 {
-			tokenInfo = tokenInfo.Append(fmt.Sprintf("%d/%d", l.TokensUsed, l.MaxTokens), "text-orange-600")
-		} else {
-			tokenInfo = tokenInfo.Append(fmt.Sprintf("max %d", l.MaxTokens), "text-blue-500")
-		}
-		details = append(details, tokenInfo)
-	}
-
-	// Add cost information
-	if l.MaxCost > 0 {
-		costInfo := clicky.Text("Cost: ", "text-gray-500")
-		if l.CostIncurred > 0 {
-			costInfo = costInfo.Append(fmt.Sprintf("$%.4f/$%.4f", l.CostIncurred, l.MaxCost), "text-red-600")
-		} else {
-			costInfo = costInfo.Append(fmt.Sprintf("max $%.4f", l.MaxCost), "text-green-600")
-		}
-		details = append(details, costInfo)
-	}
-
-	// Add session ID if present
-	if l.SessionId != "" {
-		details = append(details, clicky.Text("Session: ", "text-gray-500").Append(l.SessionId[:8]+"...", "text-purple-600"))
-	}
-
-	if len(details) > 0 {
-		result = result.Append(" (", "text-gray-400")
-		for i, detail := range details {
-			if i > 0 {
-				result = result.Append(", ", "text-gray-400")
-			}
-			result = result.Add(detail)
-		}
-		result = result.Append(")", "text-gray-400")
-	}
-
-	return result
+	delete(f.Metadata, "plan_path")
+	delete(f.Metadata, "plan_status")
+	delete(f.Metadata, "run_mode")
+	delete(f.Metadata, "last_run_summary")
+	delete(f.Metadata, "questions")
 }
 
 // Priority indicates the urgency level of a TODO item.
@@ -446,28 +300,27 @@ const (
 	PriorityLow Priority = "low"
 )
 
-// Pretty returns a formatted text representation of the Priority with appropriate styling
-func (p Priority) Pretty() api.Text {
-	switch p {
-	case PriorityHigh:
-		return clicky.Text("").Add(icons.Error).Append(" HIGH", "text-red-600 font-bold")
-	case PriorityMedium:
-		return clicky.Text("").Add(icons.Warning).Append(" MEDIUM", "text-yellow-600 font-medium")
-	case PriorityLow:
-		return clicky.Text("").Add(icons.Pass).Append(" LOW", "text-green-600")
-	default:
-		return clicky.Text(string(p), "text-gray-500")
-	}
-}
-
 // Status represents the current execution state of a TODO item.
 type Status string
 
 const (
+	// StatusDraft indicates the TODO is being drafted and is not ready to run.
+	StatusDraft Status = "draft"
 	// StatusPending indicates the TODO has not been started.
 	StatusPending Status = "pending"
 	// StatusInProgress indicates the TODO is currently being worked on.
 	StatusInProgress Status = "in_progress"
+	// StatusReview indicates a proposed plan awaits human approval.
+	StatusReview Status = "review"
+	// StatusAsk indicates the agent is blocked on questions a human must answer.
+	StatusAsk Status = "ask"
+	// StatusVerified indicates the TODO's implementation met its definition of
+	// done (the run's fixture verifiers passed).
+	StatusVerified Status = "verified"
+	// StatusUnverified indicates the TODO was implemented but its definition of
+	// done was still failing when the run's iteration budget ran out — it needs
+	// another look or another iteration, distinct from an outright failed run.
+	StatusUnverified Status = "unverified"
 	// StatusCompleted indicates the TODO has been successfully completed.
 	StatusCompleted Status = "completed"
 	// StatusFailed indicates the TODO execution failed.
@@ -476,22 +329,29 @@ const (
 	StatusSkipped Status = "skipped"
 )
 
-// Pretty returns a formatted text representation of the Status with color coding
-func (s Status) Pretty() api.Text {
-	switch s {
-	case StatusPending:
-		return clicky.Text("").Add(icons.Info).Append(" PENDING", "text-gray-600")
-	case StatusInProgress:
-		return clicky.Text("").Add(icons.ArrowRight).Append(" IN PROGRESS", "text-blue-600 font-medium")
-	case StatusCompleted:
-		return clicky.Text("").Add(icons.Pass).Append(" COMPLETED", "text-green-600 font-bold")
-	case StatusFailed:
-		return clicky.Text("").Add(icons.Fail).Append(" FAILED", "text-red-600 font-bold")
-	case StatusSkipped:
-		return clicky.Text("").Add(icons.Skip).Append(" SKIPPED", "text-yellow-600")
-	default:
-		return clicky.Text(string(s), "text-gray-500")
+// KnownStatuses returns the TODO statuses accepted by parsers and APIs.
+func KnownStatuses() []Status {
+	return []Status{
+		StatusDraft,
+		StatusPending,
+		StatusInProgress,
+		StatusReview,
+		StatusAsk,
+		StatusFailed,
+		StatusUnverified,
+		StatusVerified,
+		StatusCompleted,
+		StatusSkipped,
 	}
+}
+
+func IsKnownStatus(status Status) bool {
+	for _, known := range KnownStatuses() {
+		if status == known {
+			return true
+		}
+	}
+	return false
 }
 
 // Language specifies the programming language for a TODO implementation.
@@ -506,20 +366,6 @@ const (
 	LanguagePython Language = "python"
 )
 
-// Pretty returns a formatted text representation of the Language with styling
-func (l Language) Pretty() api.Text {
-	switch l {
-	case LanguageGo:
-		return clicky.Text("").Add(icons.Package).Append(" Go", "text-blue-600 font-medium")
-	case LanguageTypeScript:
-		return clicky.Text("").Add(icons.File).Append(" TypeScript", "text-blue-500 font-medium")
-	case LanguagePython:
-		return clicky.Text("").Add(icons.Lambda).Append(" Python", "text-yellow-600 font-medium")
-	default:
-		return clicky.Text(string(l), "text-gray-500")
-	}
-}
-
 // TestResultInfo captures comprehensive test execution context for appending to todo files.
 type TestResultInfo struct {
 	Command   string        // Full command that was run
@@ -533,46 +379,6 @@ type TestResultInfo struct {
 	Duration  time.Duration // How long the test took
 }
 
-// Pretty returns a formatted text representation of the TestResultInfo for markdown output.
-func (r TestResultInfo) Pretty() api.Text {
-	t := api.Text{Content: "## Latest Failure"}.NewLine().NewLine()
-
-	t = t.Add(api.KeyValuePair{Key: "Run", Value: r.Timestamp.Format(time.RFC3339)}).NewLine()
-
-	if r.Command != "" {
-		t = t.Add(api.KeyValuePair{Key: "Command", Value: "`" + r.Command + "`"}).NewLine()
-	}
-
-	t = t.Add(api.KeyValuePair{Key: "CWD", Value: "`" + r.CWD + "`"}).NewLine()
-
-	if r.GitBranch != "" {
-		t = t.Add(api.KeyValuePair{Key: "Branch", Value: "`" + r.GitBranch + "`"}).NewLine()
-	}
-
-	if r.GitCommit != "" {
-		commitVal := "`" + r.GitCommit + "`"
-		if r.GitDirty {
-			commitVal += " (dirty)"
-		}
-		t = t.Add(api.KeyValuePair{Key: "Commit", Value: commitVal}).NewLine()
-	}
-
-	resultStr := "PASSED"
-	if !r.Passed {
-		resultStr = "FAILED"
-	}
-	t = t.Add(api.KeyValuePair{
-		Key:   "Result",
-		Value: fmt.Sprintf("%s (%s)", resultStr, r.Duration.Round(time.Millisecond)),
-	}).NewLine()
-
-	if r.Output != "" {
-		t = t.NewLine().Add(api.Code{Content: r.Output})
-	}
-
-	return t
-}
-
 // BuildTestResultInfoOptions contains options for building TestResultInfo.
 type BuildTestResultInfoOptions struct {
 	CWD       string
@@ -584,49 +390,17 @@ type BuildTestResultInfoOptions struct {
 	Duration  time.Duration
 }
 
-// CheckResult contains the result of checking a single TODO by running its verification tests.
+// CheckResult contains the result of checking a single TODO by running its
+// definition of done. Report is captain's typed verification report — the same
+// document an in-loop check produces — so every surface renders one shape.
 type CheckResult struct {
-	TODO       *TODO
-	Results    []fixtures.FixtureResult
-	AllPassed  bool
-	Duration   time.Duration
-	Error      error
-	TestResult *TestResultInfo // Comprehensive test result info for updating todo file
-}
-
-// Pretty returns a formatted text representation of the CheckResult
-func (c CheckResult) Pretty() api.Text {
-	result := c.TODO.Pretty()
-
-	if c.Error != nil {
-		return result.Append(" ", "").Add(icons.Fail).Append(fmt.Sprintf(" Error: %v", c.Error), "text-red-600")
-	}
-
-	testsRun := len(c.Results)
-	passed := 0
-	for _, r := range c.Results {
-		if r.IsOK() {
-			passed++
-		}
-	}
-
-	if c.AllPassed {
-		result = result.Append(" ", "").Add(icons.Pass).Append(fmt.Sprintf(" %d/%d tests passed", passed, testsRun), "text-green-600")
-	} else {
-		result = result.Append(" ", "").Add(icons.Fail).Append(fmt.Sprintf(" %d/%d tests passed", passed, testsRun), "text-red-600")
-	}
-
-	if c.Duration > 0 {
-		result = result.Append(fmt.Sprintf(" (%s)", c.Duration.Round(time.Millisecond)), "text-gray-500")
-	}
-
-	// Add detailed test results
-	result = result.NewLine()
-	for _, testResult := range c.Results {
-		result = result.Append("  ", "").Add(testResult.Pretty()).NewLine()
-	}
-
-	return result
+	TODO       *TODO                    `json:"todo,omitempty"`
+	AllPassed  bool                     `json:"allPassed"`
+	Duration   time.Duration            `json:"duration"`
+	Error      error                    `json:"-"`
+	ErrorText  string                   `json:"error,omitempty"`
+	Report     *captainapi.VerifyReport `json:"report,omitempty"`
+	TestResult *TestResultInfo          `json:"testResult,omitempty"` // Comprehensive test result info for updating todo file
 }
 
 // CountTests returns the total number of test nodes in a fixture node tree.

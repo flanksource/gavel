@@ -453,17 +453,18 @@ func FetchWorkflowDefinition(opts Options, run *WorkflowRun) (string, error) {
 
 func cleanRawLog(s string) string {
 	var sb strings.Builder
-	for i, line := range strings.Split(s, "\n") {
-		cleaned := logTimestampPrefix.ReplaceAllString(line, "")
-		cleaned = ansiEscape.ReplaceAllString(cleaned, "")
-		if strings.HasPrefix(cleaned, "##[group]") || strings.HasPrefix(cleaned, "##[endgroup]") {
+	wroteLine := false
+	for _, line := range strings.Split(s, "\n") {
+		display, control := prepareLogLine(line)
+		if strings.HasPrefix(control, "##[group]") || strings.HasPrefix(control, "##[endgroup]") {
 			continue
 		}
-		cleaned = actionsAnnotation.ReplaceAllString(cleaned, "")
-		if i > 0 {
+		display = actionsAnnotation.ReplaceAllString(display, "")
+		if wroteLine {
 			sb.WriteByte('\n')
 		}
-		sb.WriteString(cleaned)
+		sb.WriteString(display)
+		wroteLine = true
 	}
 	return sb.String()
 }
@@ -490,6 +491,17 @@ func stripANSI(s string) string {
 	return ansiEscape.ReplaceAllString(s, "")
 }
 
+func prepareLogLine(line string) (display string, control string) {
+	display = logTimestampPrefix.ReplaceAllString(line, "")
+	display = ansiEscape.ReplaceAllStringFunc(display, func(sequence string) string {
+		if strings.HasSuffix(sequence, "m") {
+			return sequence
+		}
+		return ""
+	})
+	return display, stripANSI(display)
+}
+
 func parseLogSections(raw string) map[string]string {
 	sections := make(map[string]string)
 	var currentStep string
@@ -497,37 +509,36 @@ func parseLogSections(raw string) map[string]string {
 	afterEndGroup := false
 
 	for _, line := range strings.Split(raw, "\n") {
-		cleaned := logTimestampPrefix.ReplaceAllString(line, "")
-		cleaned = stripANSI(cleaned)
-		if strings.HasPrefix(cleaned, "##[group]") {
+		display, control := prepareLogLine(line)
+		if strings.HasPrefix(control, "##[group]") {
 			if currentStep != "" {
 				sections[currentStep] = buf.String()
 			}
-			currentStep = strings.TrimPrefix(cleaned, "##[group]")
+			currentStep = strings.TrimPrefix(control, "##[group]")
 			buf.Reset()
 			afterEndGroup = false
 			continue
 		}
-		if strings.HasPrefix(cleaned, "##[endgroup]") {
+		if strings.HasPrefix(control, "##[endgroup]") {
 			// GitHub emits run-step command output after ##[endgroup],
 			// so keep accumulating until we hit the terminal error line.
 			afterEndGroup = true
 			continue
 		}
 		if currentStep != "" {
-			if afterEndGroup && strings.HasPrefix(cleaned, "##[error]Process completed") {
+			if afterEndGroup && strings.HasPrefix(control, "##[error]Process completed") {
 				buf.WriteString("\n")
-				buf.WriteString(actionsAnnotation.ReplaceAllString(cleaned, ""))
+				buf.WriteString(actionsAnnotation.ReplaceAllString(display, ""))
 				sections[currentStep] = buf.String()
 				currentStep = ""
 				buf.Reset()
 				continue
 			}
-			cleaned = actionsAnnotation.ReplaceAllString(cleaned, "")
+			display = actionsAnnotation.ReplaceAllString(display, "")
 			if buf.Len() > 0 {
 				buf.WriteByte('\n')
 			}
-			buf.WriteString(cleaned)
+			buf.WriteString(display)
 		}
 	}
 	if currentStep != "" {

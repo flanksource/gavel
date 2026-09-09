@@ -69,7 +69,7 @@ func (r *Playwright) BuildCommand(packagePath string, extraArgs ...string) (*Tes
 		return nil, fmt.Errorf("create playwright report dir: %w", err)
 	}
 
-	cmd, pre := detectPackageManager(cwd)
+	cmd, pre := DetectPackageManager(cwd)
 	args := append([]string{}, pre...)
 	args = append(args, "playwright", "test", "--reporter=json")
 	args = append(args, extraArgs...)

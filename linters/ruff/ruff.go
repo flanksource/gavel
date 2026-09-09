@@ -223,7 +223,7 @@ func (r *Ruff) parseViolations(output []byte) ([]models.Violation, error) {
 	for _, issue := range issues {
 		violation := issue.ToViolation(r.WorkDir)
 		logger.Debugf("Ruff violation: %s, fixable: %v, applicability: %s",
-			violation.Message, violation.Fixable, violation.FixApplicability)
+			issue.Message, violation.Fixable, violation.FixApplicability)
 		violations = append(violations, violation)
 	}
 

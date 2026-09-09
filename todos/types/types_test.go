@@ -2,11 +2,29 @@ package types
 
 import (
 	"testing"
+	"time"
 
 	"github.com/ghodss/yaml"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestTODOPrettyRowIncludesWorkspaceAndSummaryAge(t *testing.T) {
+	lastRun := time.Now().Add(-49*time.Hour - 37*time.Minute)
+	todo := TODO{
+		Workspace: "Clicky UI",
+		TODOFrontmatter: TODOFrontmatter{
+			Title:    "Fix list output",
+			Status:   StatusPending,
+			Priority: PriorityMedium,
+			LastRun:  &lastRun,
+		},
+	}
+
+	row := todo.PrettyRow(nil)
+	assert.Equal(t, "Clicky UI", row["Workspace"].String())
+	assert.Equal(t, "2d", row["Updated"].String())
+}
 
 func TestTODOVerifyConfig_Serialization(t *testing.T) {
 	input := `title: test

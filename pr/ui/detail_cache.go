@@ -100,6 +100,16 @@ func (c *DetailCache) AllStatuses() map[string]PRSyncStatus {
 	return out
 }
 
+// Invalidate drops the cached detail and status for a single PR so the next
+// request re-fetches it from GitHub. Used after a mutating action (merge,
+// approve, auto-merge) where the cached state is now stale.
+func (c *DetailCache) Invalidate(key string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.entries, key)
+	delete(c.status, key)
+}
+
 // EvictStale removes entries and statuses for PRs not in the given set of keys.
 func (c *DetailCache) EvictStale(activeKeys map[string]bool) {
 	c.mu.Lock()

@@ -21,6 +21,7 @@ type CreatePRResult struct {
 	URL    string `json:"html_url"`
 	Title  string `json:"title"`
 	State  string `json:"state"`
+	NodeID string `json:"node_id"` // GraphQL global node ID, required to enable auto-merge
 	Base   string `json:"-"`
 }
 
@@ -90,7 +91,7 @@ func CreatePR(opts Options, in CreatePRInput) (*CreatePRResult, error) {
 
 	client := newClient(token).Header("Content-Type", "application/json")
 	resp, err := client.R(context.Background()).Post(
-		fmt.Sprintf("%s/repos/%s/pulls", apiBaseURL, repo), payload,
+		fmt.Sprintf("%s/repos/%s/pulls", githubAPIBase(), repo), payload,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create PR on %s: %w", repo, err)

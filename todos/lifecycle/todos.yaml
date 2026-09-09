@@ -1,0 +1,91 @@
+# The built-in todo lifecycle. Each step is a captain prompt reference plus the
+# CEL predicates that decide when it applies (`when`, over subject/runs/last)
+# and which status its result lands the todo in (`outcomes`, ordered, first
+# true wins, none → error).
+#
+# Steps are listed in the order Next considers them. Verification comes before
+# implementation so a todo whose last run landed without being checked is
+# verified rather than re-implemented.
+name: todos
+subject:
+  id: string
+  status: string
+  priority: string
+  labels: list<string>
+  body: string
+  attempts: int
+  execution: map<string,dyn>   # { state }
+  plan: map<string,dyn>        # { exists, approved, content, path, revision }
+  verification: map<string,dyn> # { exists, document } — acceptance criteria are part of the document; their verdicts arrive in verify.checklist
+steps:
+  - name: triage
+    prompt: todos.triage
+    envelope: triage
+    auxiliary: true
+    spec:
+      permissions:
+        mode: plan
+    outcomes:
+      - { status: ask, when: "envelope.endStatus == 'ask'" }
+      - { status: failed, when: "run.state == 'failed' || envelope.endStatus == 'failed'" }
+      - { status: keep, when: "true" } # the host applies the verdict; status is untouched unless the verdict set one
+
+  - name: plan
+    prompt: todos.plan
+    envelope: plan
+    when: "subject.status in ['draft', 'pending', 'failed', 'unverified'] && !subject.plan.exists"
+    inputs:
+      existingPlan: subject.plan.content
+    outcomes:
+      - { status: ask, when: "envelope.endStatus == 'ask' || size(questions) > 0" }
+      - { status: failed, when: "run.state != 'succeeded' || envelope.endStatus == 'failed'" }
+      - { status: review, when: "plan.status in ['new', 'updated']" }
+      - { status: pending, when: "plan.status == 'unchanged'" }
+
+  - name: verify
+    prompt: todos.verify # verify-only: the step runs the definition of done, not an agent turn
+    # Applies when the last implementation landed and no verification has judged it since.
+    when: >-
+      subject.verification.exists && subject.status in ['pending', 'unverified']
+      && has(last.run) && last.run.state == 'succeeded'
+      && (!has(last.verify) || (has(last.verify.finished_at) && has(last.run.finished_at) && last.verify.finished_at < last.run.finished_at))
+    spec:
+      workflow:
+        verify:
+          fixture: "{{subject.verification.document}}"
+          scope: all
+    outcomes:
+      - { status: verified, when: "verify.ran && verify.passed" }
+      - { status: unverified, when: "verify.ran && !verify.passed" }
+      - { status: failed, when: "true" } # the verifier never ran: a scheduling failure, not a verdict
+
+  - name: run
+    prompt: todos.run
+    envelope: result
+    # A verified or completed todo is finished: it is reopened by a person, not
+    # re-implemented because a backlog pass reached it.
+    when: "subject.status in ['pending', 'failed', 'unverified'] && (!subject.plan.exists || subject.plan.approved)"
+    inputs:
+      existingPlan: subject.plan.content
+    spec:
+      setup:
+        checkout:
+          mode: local
+          worktree:
+            mode: new
+      workflow:
+        verify:
+          fixture: "{{subject.verification.document}}"
+          scope: changed
+          maxIterations: 3
+        commits:
+          - on: run
+            stage: worktree
+            gates: full
+    outcomes:
+      - { status: ask, when: "envelope.endStatus == 'ask'" }
+      - { status: pending, when: "run.state == 'cancelled'" }
+      - { status: failed, when: "run.state == 'failed' || envelope.endStatus == 'failed'" }
+      - { status: verified, when: "verify.ran && verify.passed" }
+      - { status: unverified, when: "verify.ran && !verify.passed" }
+      - { status: pending, when: "true" }

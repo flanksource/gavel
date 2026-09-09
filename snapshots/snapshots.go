@@ -1,6 +1,7 @@
 package snapshots
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -11,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	rpchttp "github.com/flanksource/clicky/rpc/http"
 	testui "github.com/flanksource/gavel/testrunner/ui"
 )
 
@@ -37,7 +39,7 @@ func Save(workDir string, snap *testui.Snapshot) (string, error) {
 		return "", errors.New("snapshots.Save: workDir is required")
 	}
 
-	sha, uncommitted, err := SnapshotID(workDir)
+	sha, uncommitted, err := SnapshotID(context.Background(), workDir)
 	if err != nil {
 		return "", err
 	}
@@ -142,8 +144,11 @@ func ResolveLast(workDir string) (string, error) {
 // output of `git diff --cached`, `git diff`, and the contents of every
 // untracked file (NUL-separated). This is stable across identical dirty
 // states but changes whenever the uncommitted content changes.
-func SnapshotID(workDir string) (string, string, error) {
-	sha, err := gitHead(workDir)
+func SnapshotID(ctx context.Context, workDir string) (string, string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	sha, err := gitHead(ctx, workDir)
 	if err != nil {
 		return "", "", err
 	}
@@ -151,15 +156,15 @@ func SnapshotID(workDir string) (string, string, error) {
 	h := sha256.New()
 	written := false
 
-	if out, err := gitOutput(workDir, "diff", "--cached"); err == nil && len(out) > 0 {
+	if out, err := gitOutput(ctx, workDir, "diff", "--cached"); err == nil && len(out) > 0 {
 		h.Write(out)
 		written = true
 	}
-	if out, err := gitOutput(workDir, "diff"); err == nil && len(out) > 0 {
+	if out, err := gitOutput(ctx, workDir, "diff"); err == nil && len(out) > 0 {
 		h.Write(out)
 		written = true
 	}
-	if out, err := gitOutput(workDir, "ls-files", "--others", "--exclude-standard", "-z"); err == nil && len(out) > 0 {
+	if out, err := gitOutput(ctx, workDir, "ls-files", "--others", "--exclude-standard", "-z"); err == nil && len(out) > 0 {
 		for _, name := range splitNUL(out) {
 			// Skip the snapshot cache itself — its files are created as a
 			// side-effect of Save and would otherwise poison the checksum on
@@ -168,7 +173,10 @@ func SnapshotID(workDir string) (string, string, error) {
 				continue
 			}
 			full := filepath.Join(workDir, name)
-			if data, rerr := os.ReadFile(full); rerr == nil {
+			stopFile := rpchttp.Track(ctx, "file")
+			data, rerr := os.ReadFile(full)
+			stopFile()
+			if rerr == nil {
 				h.Write([]byte(name))
 				h.Write([]byte{0})
 				h.Write(data)
@@ -183,16 +191,18 @@ func SnapshotID(workDir string) (string, string, error) {
 	return sha, hex.EncodeToString(h.Sum(nil))[:8], nil
 }
 
-func gitHead(workDir string) (string, error) {
-	out, err := gitOutput(workDir, "rev-parse", "HEAD")
+func gitHead(ctx context.Context, workDir string) (string, error) {
+	out, err := gitOutput(ctx, workDir, "rev-parse", "HEAD")
 	if err != nil {
 		return "", nil
 	}
 	return strings.TrimSpace(string(out)), nil
 }
 
-func gitOutput(workDir string, args ...string) ([]byte, error) {
-	cmd := exec.Command("git", args...)
+func gitOutput(ctx context.Context, workDir string, args ...string) ([]byte, error) {
+	stopGit := rpchttp.Track(ctx, "git")
+	defer stopGit()
+	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = workDir
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
@@ -219,7 +229,7 @@ func snapshotFileName(sha, uncommitted string) string {
 }
 
 func branchPointerName(workDir string) string {
-	out, err := gitOutput(workDir, "rev-parse", "--abbrev-ref", "HEAD")
+	out, err := gitOutput(context.Background(), workDir, "rev-parse", "--abbrev-ref", "HEAD")
 	if err != nil {
 		return ""
 	}
@@ -246,6 +256,16 @@ func SanitiseBranch(name string) string {
 func writePointer(workDir, name string, p *Pointer) error {
 	path := filepath.Join(workDir, Dir, name+".json")
 	return writeJSON(path, p)
+}
+
+// WriteSnapshot writes snap to an explicit path, without the git-sha naming
+// and pointer bookkeeping Save performs. Used for snapshots that are not a
+// local run — e.g. the merged CI results `--pr` caches at .gavel/pr-<n>.json.
+func WriteSnapshot(path string, snap *testui.Snapshot) error {
+	if snap == nil {
+		return errors.New("snapshots.WriteSnapshot: snapshot is nil")
+	}
+	return writeJSON(path, snap)
 }
 
 func writeJSON(path string, v any) error {

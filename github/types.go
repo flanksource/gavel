@@ -12,21 +12,64 @@ import (
 )
 
 type PRInfo struct {
-	Number            int          `json:"number"`
-	Title             string       `json:"title"`
-	Author            PRAuthor     `json:"author"`
-	HeadRefName       string       `json:"headRefName"`
-	BaseRefName       string       `json:"baseRefName"`
-	State             string       `json:"state"`
-	IsDraft           bool         `json:"isDraft"`
-	ReviewDecision    string       `json:"reviewDecision"`
-	Mergeable         string       `json:"mergeable"`
+	Number int `json:"number"`
+	// NodeID is the GraphQL global node ID, required to merge/approve/enable
+	// auto-merge on this PR. Empty when the PR was loaded from a source that
+	// doesn't request it (e.g. the REST search path).
+	NodeID         string   `json:"nodeId,omitempty"`
+	Title          string   `json:"title"`
+	Body           string   `json:"body,omitempty"`
+	Author         PRAuthor `json:"author"`
+	HeadRefName    string   `json:"headRefName"`
+	BaseRefName    string   `json:"baseRefName"`
+	State          string   `json:"state"`
+	IsDraft        bool     `json:"isDraft"`
+	ReviewDecision string   `json:"reviewDecision"`
+	Mergeable      string   `json:"mergeable"`
+	// MergeState is GitHub's mergeStateStatus: it says *why* a PR cannot merge
+	// (DIRTY conflicts, BEHIND out of date, BLOCKED on reviews/required checks,
+	// UNSTABLE failing optional checks) where Mergeable only says whether it can.
+	MergeState string `json:"mergeStateStatus,omitempty"`
+	// BaseRefOID is the base branch's *current* tip, not the PR's recorded
+	// baseRefOid — the latter lags the branch and merges cleanly long after
+	// GitHub has marked the PR CONFLICTING.
+	BaseRefOID        string       `json:"baseRefOid,omitempty"`
+	HeadRefOID        string       `json:"headRefOid,omitempty"`
 	URL               string       `json:"url"`
+	Additions         int          `json:"additions"`
+	Deletions         int          `json:"deletions"`
+	ChangedFiles      int          `json:"changedFiles"`
 	StatusCheckRollup StatusChecks `json:"statusCheckRollup"`
+	// PRCommits are the commits in the PR, populated from the GraphQL detail query.
+	PRCommits []PRCommitInfo `json:"prCommits,omitempty"`
+	// PRFiles are the changed files in the PR, populated from the GraphQL detail query.
+	PRFiles []PRFileInfo `json:"prFiles,omitempty"`
 	// Comments and ReviewThreads are populated by FetchPR in a single GraphQL request.
 	// Callers typically pass them through prwatch.MergeAndFilter to produce the actionable set.
 	Comments      []PRComment `json:"comments,omitempty"`
 	ReviewThreads []PRComment `json:"reviewThreads,omitempty"`
+}
+
+// PRCommitInfo is a commit in the PR.
+type PRCommitInfo struct {
+	OID             string `json:"oid"`
+	MessageHeadline string `json:"messageHeadline"`
+	MessageBody     string `json:"messageBody,omitempty"`
+	CommittedDate   string `json:"committedDate"`
+	AuthorName      string `json:"authorName,omitempty"`
+	AuthorLogin     string `json:"authorLogin,omitempty"`
+	AuthorAvatarURL string `json:"authorAvatarUrl,omitempty"`
+	Additions       int    `json:"additions"`
+	Deletions       int    `json:"deletions"`
+	ChangedFiles    int    `json:"changedFiles"`
+}
+
+// PRFileInfo is a changed file in the PR.
+type PRFileInfo struct {
+	Path       string `json:"path"`
+	Additions  int    `json:"additions"`
+	Deletions  int    `json:"deletions"`
+	ChangeType string `json:"changeType"`
 }
 
 type PRAuthor struct {
@@ -91,7 +134,16 @@ type PRComment struct {
 	IsOutdated bool      `json:"isOutdated,omitempty"`
 	Severity   string    `json:"severity,omitempty"` // "critical", "major", "minor", "nitpick"
 	BotType    string    `json:"botType,omitempty"`  // "coderabbit", "vercel", "copilot", "gavel"
+	// IsReviewThread marks a comment that came from a GitHub review thread — the
+	// only kind GitHub can resolve. IsResolved/IsOutdated are meaningful only
+	// when this is true; on an issue comment, a review body, or a nitpick parsed
+	// out of one they are inapplicable zero values, not observations.
+	IsReviewThread bool `json:"isReviewThread,omitempty"`
 }
+
+// IsUnresolved reports whether a comment still needs a reply. Outdated counts as
+// needing none: the code it was written against is gone.
+func (c PRComment) IsUnresolved() bool { return !c.IsResolved && !c.IsOutdated }
 
 func SeverityIcon(severity string) api.Text {
 	switch severity {
@@ -122,7 +174,7 @@ func (c PRComment) Pretty() api.Text {
 		title = title[:117] + "..."
 	}
 	style := ""
-	if c.IsResolved || c.IsOutdated {
+	if !c.IsUnresolved() {
 		style = "text-gray-500 line-through"
 	}
 	text = text.Append(" "+title, style)
@@ -242,8 +294,10 @@ func (s Step) Pretty() api.Text {
 func (j Job) Pretty() api.Text {
 	text := clicky.Text("    ", "").
 		Add(StatusIcon(strings.ToUpper(j.Status), strings.ToUpper(j.Conclusion))).
-		Append(" "+j.Name, "").
-		Append(" "+FormatDuration(j), "text-gray-500")
+		Append(" "+j.Name, "")
+	if duration := FormatDuration(j); duration != "" {
+		text = text.Append(" "+duration, "text-gray-500")
+	}
 
 	if !IsFailureConclusion(j.Conclusion) {
 		return text
@@ -272,9 +326,15 @@ func prettyLogTail(logTail string) api.Text {
 }
 
 func (r WorkflowRun) Pretty() api.Text {
+	return r.PrettyAs(r.Name)
+}
+
+// PrettyAs renders the run under a caller-supplied heading, so a workflow that
+// ran more than once on the same PR can be disambiguated at the call site.
+func (r WorkflowRun) PrettyAs(label string) api.Text {
 	text := clicky.Text("  ", "").
 		Add(StatusIcon(strings.ToUpper(r.Status), strings.ToUpper(r.Conclusion))).
-		Append(" "+r.Name, "font-bold")
+		Append(" "+label, "")
 	for _, job := range r.Jobs {
 		text = text.NewLine().Add(job.Pretty())
 	}
@@ -282,8 +342,8 @@ func (r WorkflowRun) Pretty() api.Text {
 }
 
 func (pr PRInfo) Pretty() api.Text {
-	title := clicky.Text(fmt.Sprintf("PR #%d: ", pr.Number), "font-bold").
-		Append(pr.Title, "font-bold")
+	title := clicky.Text(fmt.Sprintf("PR #%d: ", pr.Number), "").
+		Append(pr.Title, "")
 
 	meta := clicky.Text("  ", "").
 		Append(pr.BaseRefName, "text-cyan-600").
@@ -302,12 +362,55 @@ func (pr PRInfo) Pretty() api.Text {
 		meta = meta.Append(" | Review: ", "text-gray-500").
 			Append(pr.ReviewDecision, ReviewStyle(pr.ReviewDecision))
 	}
-	if pr.Mergeable != "" {
-		meta = meta.Append(" | ", "text-gray-500").
+	// Mergeability only means something while the PR is open, and GitHub
+	// reports UNKNOWN once it is merged or closed — an unlabelled "UNKNOWN"
+	// beside the state reads as an error rather than an absent answer.
+	if pr.Mergeable != "" && pr.Mergeable != "UNKNOWN" && pr.State == "OPEN" {
+		meta = meta.Append(" | Mergeable: ", "text-gray-500").
 			Append(pr.Mergeable, MergeableStyle(pr.Mergeable))
+		if reason := MergeStateReason(pr.MergeState); reason != "" {
+			meta = meta.Append(" ("+reason+")", MergeStateStyle(pr.MergeState))
+		}
 	}
 
 	return title.NewLine().Add(meta)
+}
+
+// IsConflicting reports whether GitHub currently refuses to merge the PR
+// because it conflicts with its base. Only meaningful while the PR is open:
+// GitHub leaves Mergeable at UNKNOWN once it is merged or closed.
+func (pr PRInfo) IsConflicting() bool {
+	return pr.State == "OPEN" && pr.Mergeable == "CONFLICTING"
+}
+
+// MergeStateReason turns GitHub's mergeStateStatus into the blocker it names.
+// CLEAN, DRAFT and UNKNOWN only restate what the state and Mergeable fields
+// already show, so they render nothing rather than a redundant second label.
+func MergeStateReason(mergeState string) string {
+	switch mergeState {
+	case "DIRTY":
+		return "conflicts with base"
+	case "BEHIND":
+		return "out of date with base"
+	case "BLOCKED":
+		return "blocked on required reviews or checks"
+	case "UNSTABLE":
+		return "non-required checks failing"
+	case "HAS_HOOKS":
+		return "blocked by a pre-receive hook"
+	default:
+		return ""
+	}
+}
+
+// MergeStateStyle colours the blocker, not the verdict it sits beside. A
+// BLOCKED PR is still MERGEABLE — painting its reason green with the verdict
+// would read as "green, and also blocked".
+func MergeStateStyle(mergeState string) string {
+	if mergeState == "DIRTY" {
+		return "text-red-600"
+	}
+	return "text-yellow-600"
 }
 
 func FormatDuration(job Job) string {
@@ -321,6 +424,11 @@ func FormatDuration(job Job) string {
 	if end.IsZero() {
 		end = time.Now()
 		return fmt.Sprintf("(running %s...)", end.Sub(job.StartedAt).Truncate(time.Second))
+	}
+	// A job that never ran (skipped, or cancelled before it started) reports
+	// equal start and end times; "(0s)" reads as a real measurement.
+	if !end.After(job.StartedAt) {
+		return ""
 	}
 	d := end.Sub(job.StartedAt).Truncate(time.Second)
 	if d < time.Minute {

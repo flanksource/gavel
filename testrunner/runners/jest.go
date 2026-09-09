@@ -77,7 +77,7 @@ func (r *Jest) BuildCommand(packagePath string, extraArgs ...string) (*TestRun, 
 		return nil, fmt.Errorf("create jest report dir: %w", err)
 	}
 
-	cmd, pre := detectPackageManager(cwd)
+	cmd, pre := DetectPackageManager(cwd)
 	args := append([]string{}, pre...)
 	args = append(args, "jest", "--json", "--outputFile="+reportPath)
 	args = append(args, extraArgs...)

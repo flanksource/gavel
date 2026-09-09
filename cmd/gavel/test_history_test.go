@@ -31,7 +31,7 @@ func TestRunTestHistoryUsesGlobalCWD(t *testing.T) {
 			Passed:      true,
 			Duration:    time.Millisecond,
 		}},
-	}, started)
+	}, started, "")
 	require.NoError(t, err)
 
 	got, err := runTestHistory(testHistoryOptions{Paths: []string{"pkg/foo"}})

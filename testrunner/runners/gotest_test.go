@@ -3,6 +3,7 @@ package runners
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -242,6 +243,33 @@ func TestGoTestDiscoverPackagesNonRecursive(t *testing.T) {
 	}
 	if len(packages) != 2 {
 		t.Fatalf("expected 2 packages, got %d: %v", len(packages), packages)
+	}
+}
+
+// `go test ./...` never compiles anything under testdata, so neither should
+// discovery: those files are fixtures for other tests to read, not packages.
+func TestGoTestDiscoverPackagesSkipsTestdata(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	fixtureDir := filepath.Join(tmpDir, "outline", "testdata", "gotest")
+	if err := os.MkdirAll(fixtureDir, 0o755); err != nil {
+		t.Fatalf("failed to create fixture directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(fixtureDir, "sample_test.go"), []byte(`package sample
+
+import "testing"
+
+func TestSample(t *testing.T) {}
+`), 0o644); err != nil {
+		t.Fatalf("failed to create fixture test file: %v", err)
+	}
+
+	packages, err := NewGoTest(tmpDir).DiscoverPackages(tmpDir, true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(packages) != 0 {
+		t.Errorf("discovered %v under testdata; the go tool excludes testdata from ./...", packages)
 	}
 }
 
@@ -579,5 +607,12 @@ func TestGoTestBuildCommandHonoursTimeoutFlag(t *testing.T) {
 	}
 	if args[0] != "test" || args[1] != "-json" {
 		t.Errorf("expected `test -json` prefix, got: %v", args[:2])
+	}
+}
+
+func TestGoTestFocusArgs(t *testing.T) {
+	runner := NewGoTest(t.TempDir())
+	if got, want := runner.FocusArgs("TestFoo"), []string{"-run", "TestFoo"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("FocusArgs = %v, want %v", got, want)
 	}
 }

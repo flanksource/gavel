@@ -7,7 +7,7 @@
   "plugins": [
     {
       "name": "gavel-skills",
-      "description": "Skills for the Gavel CLI testing framework — fixture-based testing with markdown, CEL assertions, and template variables",
+      "description": "Skills for the Gavel CLI — fixture testing, the test/lint runner, PR & commit workflows (gavel instead of gh/git), and the TODO backlog triage and definition-of-done loop",
       "source": "./.agents"
     }
   ]

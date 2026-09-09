@@ -67,7 +67,7 @@ func (r *Vitest) BuildCommand(packagePath string, extraArgs ...string) (*TestRun
 		return nil, fmt.Errorf("create vitest report dir: %w", err)
 	}
 
-	cmd, pre := detectPackageManager(cwd)
+	cmd, pre := DetectPackageManager(cwd)
 	args := append([]string{}, pre...)
 	args = append(args, "vitest", "run", "--reporter=json", "--outputFile="+reportPath)
 	args = append(args, extraArgs...)

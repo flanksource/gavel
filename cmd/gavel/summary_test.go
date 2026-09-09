@@ -10,13 +10,14 @@ import (
 
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/models"
+	"github.com/flanksource/gavel/report"
 	"github.com/flanksource/gavel/testrunner/parsers"
 )
 
 func TestBuildCompactSummary(t *testing.T) {
 	// Mirrors the shape cmd/gavel/test.go emits when --lint is set:
 	// { "tests": [...], "lint": [...] }
-	input := gavelResultJSON{
+	input := report.ResultFile{
 		Tests: []parsers.Test{
 			{
 				Package: "github.com/flanksource/gavel/serve",
@@ -162,7 +163,7 @@ func TestBuildCompactSummarySkipsGroupNodes(t *testing.T) {
 	// child is. The walker must count only the leaf failure, not the parent
 	// rollup — otherwise the summary shows noisy "./" / "linters/" entries
 	// from folder rollups that mirror leaf state.
-	input := gavelResultJSON{
+	input := report.ResultFile{
 		Tests: []parsers.Test{
 			{
 				Package: "pkg/a",
@@ -214,7 +215,7 @@ func TestBuildCompactSummaryRespectsFailureCap(t *testing.T) {
 		})
 	}
 	// Wrap in a group parent so we also exercise the "skip group, count leaves" path.
-	input := gavelResultJSON{
+	input := report.ResultFile{
 		Tests: []parsers.Test{{Package: "pkg/a", Children: leaves}},
 	}
 	out := buildCompactSummary(input, compactSummaryBudget{maxFailures: 3, maxLinesPerFailure: 5, maxCharsPerLine: 200})
@@ -238,7 +239,7 @@ func TestBuildCompactSummaryRespectsFailureCap(t *testing.T) {
 
 func TestBuildCompactSummaryRendersCrashStub(t *testing.T) {
 	exitCode := 139
-	input := gavelResultJSON{
+	input := report.ResultFile{
 		Error:    "gavel exited 139 before writing results",
 		ExitCode: &exitCode,
 		LogTail:  "panic: runtime error: invalid memory address\ngoroutine 1 [running]:\nmain.main()\n\t/src/cmd/gavel/main.go:72 +0x1a",
@@ -271,7 +272,7 @@ func TestBuildCompactSummaryRendersCrashStub(t *testing.T) {
 func TestBuildCompactSummaryPrefersRealResultsOverCrashField(t *testing.T) {
 	// If gavel produced real results AND the JSON happens to also carry
 	// an error field (e.g. partial-run reporting), the real results win.
-	input := gavelResultJSON{
+	input := report.ResultFile{
 		Tests: []parsers.Test{
 			{Package: "pkg/x", Children: parsers.Tests{
 				{Package: "pkg/x", Name: "TestOne", Passed: true},
@@ -293,7 +294,7 @@ func TestRunSummaryReadsJSONFile(t *testing.T) {
 	inputPath := filepath.Join(tmp, "gavel-results.json")
 	outputPath := filepath.Join(tmp, "summary.md")
 
-	data := gavelResultJSON{
+	data := report.ResultFile{
 		Tests: []parsers.Test{
 			{Package: "pkg/x", Children: parsers.Tests{
 				{Package: "pkg/x", Name: "TestOne", Passed: true},

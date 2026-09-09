@@ -245,6 +245,7 @@ export interface FixtureContext {
   exit_code?: number;
   cwd?: string;
   cel_expression?: string;
+  cel_trace?: string;
   cel_vars?: Record<string, any>;
   expected?: any;
   actual?: any;

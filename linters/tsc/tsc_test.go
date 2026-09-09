@@ -1,14 +1,54 @@
 package tsc
 
 import (
+	"encoding/json"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
+	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/models"
 	"github.com/stretchr/testify/require"
 )
+
+func TestWrapperChecksReferencedProjectsWithoutWritingBuildArtifacts(t *testing.T) {
+	workDir := t.TempDir()
+	referencedDir := filepath.Join(workDir, "packages", "app")
+	typescriptDir := filepath.Join(workDir, "node_modules", "typescript")
+	require.NoError(t, os.MkdirAll(referencedDir, 0o755))
+	require.NoError(t, os.MkdirAll(typescriptDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(workDir, "tsconfig.json"), []byte(`{"files":[],"references":[{"path":"./packages/app"}]}`), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(referencedDir, "tsconfig.json"), []byte(`{"compilerOptions":{"composite":true},"include":["src"]}`), 0o644))
+
+	fakeTypeScript, err := os.ReadFile("testdata/typescript/index.js")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(typescriptDir, "index.js"), fakeTypeScript, 0o644))
+
+	wrapper := &TSC{RunOptions: linters.RunOptions{WorkDir: workDir}}
+	scriptPath, err := wrapper.resolveScript()
+	require.NoError(t, err)
+	nodePath, err := exec.LookPath("node")
+	require.NoError(t, err)
+
+	cmd := exec.Command(nodePath, scriptPath)
+	cmd.Dir = workDir
+	output, err := cmd.Output()
+	require.NoError(t, err)
+
+	var diagnostics []TSCDiagnostic
+	require.NoError(t, json.Unmarshal(output, &diagnostics))
+	require.Equal(t, []TSCDiagnostic{{
+		File:     "packages/app/src/index.ts",
+		Line:     1,
+		Column:   1,
+		Code:     2322,
+		Category: "Error",
+		Message:  "Type 'string' is not assignable to type 'number'.",
+	}}, diagnostics)
+	require.NoFileExists(t, filepath.Join(workDir, "packages", "app", "dist", "index.js"))
+}
 
 func TestParseViolations(t *testing.T) {
 	data, err := os.ReadFile("testdata/tsc-diagnostics.json")

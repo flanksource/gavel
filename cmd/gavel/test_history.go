@@ -2,6 +2,7 @@ package main
 
 import (
 	"github.com/flanksource/clicky"
+	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/gavel/testrunner/history"
 )
 
@@ -9,8 +10,8 @@ type testHistoryOptions struct {
 	Paths []string `json:"paths,omitempty" args:"true"`
 }
 
-func (o testHistoryOptions) Help() string {
-	return `Show local test execution history from .gavel/run-*.json snapshots.
+func (o testHistoryOptions) Help() api.Textable {
+	return clicky.Text(`Show local test execution history from .gavel/run-*.json snapshots.
 
 The history report aggregates completed gavel test runs and shows executable
 test leaves grouped by package, file, and suite. Each test row includes
@@ -18,7 +19,7 @@ execution count, pass rate, min/avg/max duration, added date, last passed, and
 last failed.
 
 Optionally pass package or file paths to limit the report. Paths are matched
-relative to --cwd.`
+relative to --cwd.`)
 }
 
 func runTestHistory(opts testHistoryOptions) (any, error) {

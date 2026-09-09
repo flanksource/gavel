@@ -6,11 +6,11 @@ import (
 	"os"
 
 	"github.com/flanksource/clicky"
-	"github.com/flanksource/clicky/ai"
 	"github.com/flanksource/commons/logger"
-	gavelai "github.com/flanksource/gavel/ai"
+	"github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/git"
 	"github.com/flanksource/gavel/models"
+	"github.com/flanksource/gavel/verify"
 	"github.com/spf13/cobra"
 )
 
@@ -18,6 +18,20 @@ type AnalysisResults struct {
 	Summary  git.PathSummary         `json:"summary,omitempty"`
 	Analyses []models.CommitAnalysis `json:"analyses,omitempty"`
 }
+
+// analyzeAI and amendAI hold the --ai-* flag values for `git analyze` and
+// `git amend-commits`. One config per command, not the shared package default
+// BindFlags used to write into, where whichever FlagSet parsed last decided the
+// model for all of them.
+//
+// They are package scoped for the same reason statusAI is: so a test can reach
+// what the flags actually parsed into. amendAI in particular used to be declared
+// *after* the closure that would have read it, so every --ai-* flag on
+// `git amend-commits` parsed into a struct no code ever read.
+var (
+	analyzeAI = ai.DefaultConfig()
+	amendAI   = ai.DefaultConfig()
+)
 
 func init() {
 	gitCmd := &cobra.Command{
@@ -37,11 +51,25 @@ func init() {
 		return commits, nil
 	})
 
-	analyze := clicky.AddCommand(gitCmd, git.AnalyzeOptions{}, func(options git.AnalyzeOptions) (any, error) {
+	var analyze *cobra.Command
+	analyze = clicky.AddCommand(gitCmd, git.AnalyzeOptions{}, func(options git.AnalyzeOptions) (any, error) {
 		logger.Tracef("git-analyzer options: %+v", options)
 
+		if options.Path == "" {
+			options.Path = "."
+		}
+
+		cfg, err := verify.LoadGavelConfig(options.Path)
+		if err != nil {
+			return nil, fmt.Errorf("load .gavel.yaml for git analyze: %w", err)
+		}
+		if options.AI {
+			if err := configureGitAI(&options, gitAIOptions{Config: cfg, Flags: analyzeAI, FlagSet: analyze.Flags()}); err != nil {
+				return nil, err
+			}
+		}
+
 		var analyses models.CommitAnalyses
-		var err error
 
 		if len(options.Input) > 0 {
 			logger.Infof("Loading analyses from %d input files", len(options.Input))
@@ -55,10 +83,6 @@ func init() {
 			analyses = git.ApplyFilters(analyses, options.HistoryOptions)
 			logger.Debugf("Applied filters, %d commits remaining", len(analyses))
 		} else {
-			if options.Path == "" {
-				options.Path = "."
-			}
-
 			if _, err := os.Stat(options.Path); os.IsNotExist(err) {
 				logger.Errorf("git-analyzer: path '%s' does not exist", options.Path)
 				return nil, fmt.Errorf("path '%s' does not exist", options.Path)
@@ -77,6 +101,10 @@ func init() {
 				logger.Errorf("git-analyzer: failed to create analyzer context: %v", err)
 				return nil, err
 			}
+
+			// Rewritten messages come from the same prompt as `gavel commit`, so
+			// they answer to the same .gavel.yaml commit.types vocabulary.
+			options.AllowedCommitTypes = cfg.Commit.Types
 
 			logger.Debugf("git-analyzer: retrieved %d commits, starting analysis", len(commits))
 			analyses, err = git.AnalyzeCommitHistory(analyzerCtx, commits, options)
@@ -99,15 +127,13 @@ func init() {
 			opts := git.SummaryOptions{
 				Window:        options.SummaryWindow,
 				MaxCategories: 7,
+				MaxWorkers:    options.MaxConcurrent,
+				Prompt:        cfg.Commit.Summary,
+				PromptOptions: options.PromptOptions,
+				Saved:         options.Saved,
+				AgentFactory:  options.AgentFactory,
 			}
-
 			if options.AI {
-				agent, err := gavelai.NewAgent(ai.DefaultConfig())
-				if err != nil {
-					return nil, fmt.Errorf("failed to get default AI agent for summary: %w", err)
-				}
-				clicky.Infof("Summarizing using AI %s", agent)
-				opts.Agent = agent
 				opts.Context = context.Background()
 			}
 			return git.Summarize(analyses, opts)
@@ -116,9 +142,10 @@ func init() {
 		return analyses, nil
 	})
 
-	ai.BindFlags(analyze.Flags())
+	ai.BindFlags(analyze.Flags(), &analyzeAI)
 
-	amendCommits := clicky.AddCommand(gitCmd, git.AmendCommitsOptions{}, func(options git.AmendCommitsOptions) (any, error) {
+	var amendCommits *cobra.Command
+	amendCommits = clicky.AddCommand(gitCmd, git.AmendCommitsOptions{}, func(options git.AmendCommitsOptions) (any, error) {
 		logger.Tracef("git-amend-commits options: %+v", options)
 
 		if options.Path == "" {
@@ -130,8 +157,16 @@ func init() {
 			return nil, fmt.Errorf("path '%s' does not exist", options.Path)
 		}
 
-		err := git.AmendCommits(context.Background(), options)
+		cfg, err := verify.LoadGavelConfig(options.Path)
 		if err != nil {
+			return nil, fmt.Errorf("load .gavel.yaml for git amend-commits: %w", err)
+		}
+		options.Analysis.HistoryOptions = options.HistoryOptions
+		if err := configureGitAI(&options.Analysis, gitAIOptions{Config: cfg, Flags: amendAI, FlagSet: amendCommits.Flags()}); err != nil {
+			return nil, err
+		}
+
+		if err := git.AmendCommits(context.Background(), options); err != nil {
 			logger.Errorf("git-amend-commits failed: %v", err)
 			return nil, err
 		}
@@ -140,7 +175,7 @@ func init() {
 		return nil, nil
 	})
 
-	ai.BindFlags(amendCommits.Flags())
+	ai.BindFlags(amendCommits.Flags(), &amendAI)
 
 	clicky.AddNamedCommand("summary", gitCmd, git.SummaryByTypeOptions{}, func(opts git.SummaryByTypeOptions) (any, error) {
 		repoArgs, otherArgs, err := git.SplitRepoPathArgs(opts.Args)

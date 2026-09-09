@@ -42,6 +42,11 @@ type EvaluateOptions struct {
 	// UpdateGolden, when true, causes mismatched @file expectations to
 	// be overwritten with the actual output instead of failing the test.
 	UpdateGolden bool
+	// CELVars are extra roots contributed by whatever ran the fixture — today
+	// the recorders' `http`. They are absent, not empty, when nothing recorded,
+	// so a fixture asserting on a recording that never happened fails on the
+	// missing variable instead of on a zero that looks like an answer.
+	CELVars map[string]any
 }
 
 func (e Expectations) Evaluate(fixture FixtureResult, p exec.ExecResult, opts EvaluateOptions) FixtureResult {
@@ -88,7 +93,10 @@ func (e Expectations) Evaluate(fixture FixtureResult, p exec.ExecResult, opts Ev
 		t["stderr"] = p.Stderr
 		t["exitCode"] = p.ExitCode
 		combined := p.Stdout + p.Stderr
-		dups := duplicateLines(combined)
+		// width 0: settle unbounded. Fixture stdout/stderr are captured without a
+		// known terminal width here, so wrapping is left to the dedicated
+		// `gavel test ansi` capture which records the PTY width it used.
+		dups := duplicateLines(combined, 0)
 		dupList := make([]map[string]any, 0, len(dups))
 		for _, d := range dups {
 			dupList = append(dupList, map[string]any{"text": d.Text, "count": d.Count})
@@ -100,8 +108,9 @@ func (e Expectations) Evaluate(fixture FixtureResult, p exec.ExecResult, opts Ev
 			"has_cursor_hide": hasCursorHide(combined),
 			"has_cursor_show": hasCursorShow(combined),
 			"has_reset":       hasSGRReset(combined),
+			"alt_screen":      hasAltScreen(combined),
 			"stray_controls":  hasStrayControls(combined),
-			"final_text":      finalText(combined),
+			"final_text":      finalText(combined, 0),
 			"duplicate_lines": dupList,
 			"has_duplicates":  len(dups) > 0,
 		}
@@ -118,11 +127,21 @@ func (e Expectations) Evaluate(fixture FixtureResult, p exec.ExecResult, opts Ev
 		for name, tempFile := range fixture.Test.TempFiles {
 			t[name] = tempFile.GetCELData()
 		}
-		output, err := gomplate.RunExpression(t, gomplate.Template{
+		// Recorder roots are applied last and win: `http` is a reserved name, and
+		// a fixture that happens to declare a temp file by that name should still
+		// find the recording where the docs say it is.
+		for name, value := range opts.CELVars {
+			t[name] = value
+		}
+		template := gomplate.Template{
 			Expression: e.CEL,
 			CelEnvs:    ANSICelFunctions(),
-		})
+		}
+		output, err := gomplate.RunExpression(t, template)
 		if err != nil {
+			fixture.CELExpression = e.CEL
+			fixture.CELVars = t
+			fixture.CELTrace = traceCELFailure(e.CEL, t, template, celFailureError)
 			return fixture.Errorf(err, "failed to evaluate CEL expression with gomplate")
 		}
 
@@ -131,14 +150,15 @@ func (e Expectations) Evaluate(fixture FixtureResult, p exec.ExecResult, opts Ev
 			if !v {
 				fixture.CELExpression = e.CEL
 				fixture.CELVars = t
-				return fixture.Failf("CEL expression evaluated to false")
+				fixture.CELTrace = traceCELFailure(e.CEL, t, template, celFailureFalse)
+				return fixture.Failf("%s is false", fixture.CELExpression)
 			}
 		case string:
 			if strings.ToLower(strings.TrimSpace(v)) != "true" {
-				return fixture.Failf("%s != true", v)
+				return fixture.Failf("%s => %s != true", fixture.CELExpression, v)
 			}
 		default:
-			return fixture.Failf("CEL expression did not return a boolean: got %T(%v)", output, output)
+			return fixture.Failf("%s did not return a boolean: got %T(%v)", fixture.CELExpression, output, output)
 		}
 	}
 	fixture.Status = task.StatusPASS

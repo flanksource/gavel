@@ -14,6 +14,7 @@ var (
 	cursorUpdateCode = regexp.MustCompile(`\x1b\[([0-9]*[ABCDHJ]|[0-9]*K|2J|\?25[hl])`)
 	anyANSIEscape    = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
 	sgrResetCode     = regexp.MustCompile(`\x1b\[0?m`)
+	altScreenCode    = regexp.MustCompile(`\x1b\[\?1049[hl]`)
 	cursorHideCode   = "\x1b[?25l"
 	cursorShowCode   = "\x1b[?25h"
 )
@@ -40,6 +41,12 @@ func hasCursorHide(s string) bool { return strings.Contains(s, cursorHideCode) }
 func hasCursorShow(s string) bool { return strings.Contains(s, cursorShowCode) }
 func hasSGRReset(s string) bool   { return sgrResetCode.MatchString(s) }
 
+// hasAltScreen reports whether s enters or leaves the alternate screen buffer.
+// A command that never entered it must not emit the exit sequence either: those
+// bytes are junk in a redirected capture, and on a terminal they discard
+// whatever the user was looking at.
+func hasAltScreen(s string) bool { return altScreenCode.MatchString(s) }
+
 // hasStrayControls reports whether s contains C0 control bytes that clicky's
 // renderer never emits intentionally: BS (0x08), VT (0x0b), FF (0x0c). BEL
 // (0x07) is allowed because it legitimately terminates OSC sequences.
@@ -62,5 +69,6 @@ func ANSICelFunctions() []cel.EnvOption {
 		cel.Function("has_color", cel.Overload("has_color_string", []*cel.Type{cel.StringType}, cel.BoolType, celStringToBool(hasColorCodes))),
 		cel.Function("has_ansi", cel.Overload("has_ansi_string", []*cel.Type{cel.StringType}, cel.BoolType, celStringToBool(hasAnyANSI))),
 		cel.Function("has_cursor_updates", cel.Overload("has_cursor_updates_string", []*cel.Type{cel.StringType}, cel.BoolType, celStringToBool(hasCursorUpdates))),
+		cel.Function("has_alt_screen", cel.Overload("has_alt_screen_string", []*cel.Type{cel.StringType}, cel.BoolType, celStringToBool(hasAltScreen))),
 	}
 }

@@ -1,4 +1,4 @@
-import type { PRItem, CheckSummary } from './types';
+import type { PRItem, PRComment, CheckSummary, GavelResultsSummary, Project, ProcStatus, ProcProcess } from './types';
 
 // prKey mirrors the Go-side poller.prKey() so the unread map keys match.
 export function prKey(pr: { repo: string; number: number }): string {
@@ -47,6 +47,33 @@ export function timeAgo(iso: string): string {
   const d = new Date(iso);
   const s = Math.floor((Date.now() - d.getTime()) / 1000);
   if (s < 60) return 'just now';
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+}
+
+// ageShort is the most compact age form for dense list rows: a single token with
+// no "ago" suffix ('now', '5m', '2h', '3d', '4w'). Used by the todo sidebar's
+// compact density where space for a full 'X ago' phrase doesn't exist.
+export function ageShort(iso: string): string {
+  const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+  if (!Number.isFinite(s)) return '';
+  if (s < 60) return 'now';
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h`;
+  if (s < 604800) return `${Math.floor(s / 86400)}d`;
+  return `${Math.floor(s / 604800)}w`;
+}
+
+// timeAgoShort is timeAgo with second-level granularity for fresh timestamps
+// ('Xs ago'), used by the header status/sync readouts where the most recent
+// poll is only seconds old.
+export function timeAgoShort(iso: string): string {
+  const d = new Date(iso);
+  const s = Math.floor((Date.now() - d.getTime()) / 1000);
+  if (!Number.isFinite(s)) return 'unknown';
+  if (s < 5) return 'just now';
+  if (s < 60) return `${s}s ago`;
   if (s < 3600) return `${Math.floor(s / 60)}m ago`;
   if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
   return `${Math.floor(s / 86400)}d ago`;
@@ -192,42 +219,161 @@ export function collectRepos(prs: PRItem[]): string[] {
   return [...seen].sort();
 }
 
-export function collectAuthors(prs: PRItem[]): string[] {
-  const seen = new Set<string>();
-  for (const pr of prs) {
-    if (pr.author) seen.add(pr.author);
+// Synthetic author-filter keys. @me collapses the viewer's own PRs and @bots
+// collapses every bot account into a single chip so they're controlled as one,
+// rather than listing each bot login individually.
+export const ME_KEY = '@me';
+export const AUTOMATED_AUTHOR_KEY = '@bots';
+
+// isBotAuthor mirrors cmd/gavel.isBot — GitHub bot accounts end in "[bot]" and
+// some legacy integrations just suffix "bot".
+export function isBotAuthor(author: string): boolean {
+  return author.endsWith('[bot]') || author.endsWith('bot');
+}
+
+// MAX_GAVEL_DETAIL mirrors prwatch.maxDetailItems — the server caps each shard's
+// failure/lint detail, so the aggregate keeps the same bound.
+const MAX_GAVEL_DETAIL = 5;
+
+// aggregateGavelShards rolls per-shard artifact summaries into one. Used by the
+// sidebar badge and by the detail card header; artifactId/artifactUrl are left
+// empty because an aggregate has no single artifact to deep-link to — that
+// happens through the per-shard rows. Returns null for an empty list.
+export function aggregateGavelShards(shards: GavelResultsSummary[]): GavelResultsSummary | null {
+  if (!shards || shards.length === 0) return null;
+  if (shards.length === 1) return shards[0]!;
+  const agg: GavelResultsSummary = {
+    artifactId: 0,
+    artifactUrl: '',
+    testsPassed: 0,
+    testsFailed: 0,
+    testsSkipped: 0,
+    testsTotal: 0,
+    lintViolations: 0,
+    lintLinters: 0,
+    hasBench: false,
+    benchRegressions: 0,
+    duration: 0,
+    failures: [],
+    lint: [],
+    commands: [],
+  };
+  for (const s of shards) {
+    agg.testsPassed += s.testsPassed;
+    agg.testsFailed += s.testsFailed;
+    agg.testsSkipped += s.testsSkipped;
+    agg.testsTotal += s.testsTotal;
+    agg.lintViolations += s.lintViolations;
+    agg.lintLinters += s.lintLinters;
+    agg.benchRegressions = (agg.benchRegressions ?? 0) + (s.benchRegressions ?? 0);
+    agg.duration = (agg.duration ?? 0) + (s.duration ?? 0);
+    if (s.hasBench) agg.hasBench = true;
+    for (const f of s.failures ?? []) {
+      if (agg.failures!.length >= MAX_GAVEL_DETAIL) break;
+      agg.failures!.push(f);
+    }
+    for (const l of s.lint ?? []) {
+      if (agg.lint!.length >= MAX_GAVEL_DETAIL) break;
+      agg.lint!.push(l);
+    }
+    // Commands are PR-scoped, so shards repeat them — union rather than sum.
+    for (const c of s.commands ?? []) {
+      if (!agg.commands!.includes(c)) agg.commands!.push(c);
+    }
   }
-  return [...seen].sort();
+  return agg;
+}
+
+// isBotPR reports whether a PR is bot-authored, trusting the server's App flag
+// (covers App bots like renovate whose login lacks a bot suffix) and falling
+// back to the login heuristic for user-account bots.
+export function isBotPR(pr: PRItem): boolean {
+  return !!pr.authorIsApp || isBotAuthor(pr.author);
+}
+
+// authorCategories returns the author-filter keys a PR belongs to: bots map to
+// @bots, the viewer's own PRs to @me, everyone else to their login.
+export function authorCategories(pr: PRItem, viewer: string): string[] {
+  if (isBotPR(pr)) return [AUTOMATED_AUTHOR_KEY];
+  if (viewer && pr.author === viewer) return [ME_KEY];
+  return pr.author ? [pr.author] : [];
+}
+
+// collectAuthors builds the author-filter option keys: @me and @bots come first,
+// then the remaining human authors sorted. @bots stays available when the server
+// reports known bots (botsAvailable) even though they're excluded from the fetch.
+export function collectAuthors(prs: PRItem[], viewer: string, botsAvailable: boolean): string[] {
+  const humans = new Set<string>();
+  let hasMe = false;
+  let hasBots = botsAvailable;
+  for (const pr of prs) {
+    if (!pr.author) continue;
+    if (isBotPR(pr)) { hasBots = true; continue; }
+    if (viewer && pr.author === viewer) { hasMe = true; continue; }
+    humans.add(pr.author);
+  }
+  const out: string[] = [];
+  if (hasMe) out.push(ME_KEY);
+  if (hasBots) out.push(AUTOMATED_AUTHOR_KEY);
+  out.push(...[...humans].sort());
+  return out;
+}
+
+// FacetModes maps an option key to whether it is included or excluded. Keys
+// absent from the map are neutral. Mirrors clicky-ui's FilterBar `kind:"multi"`
+// value shape so the tri-state chips bind directly to it.
+export type FacetModes = Record<string, 'include' | 'exclude'>;
+
+// passFacet applies tri-state include/exclude semantics to the category set a PR
+// belongs to for one facet: any matching exclude rejects; if any include is set,
+// at least one must match.
+export function passFacet(modes: FacetModes, cats: string[]): boolean {
+  let hasInclude = false;
+  let included = false;
+  for (const key in modes) {
+    if (modes[key] === 'exclude') {
+      if (cats.includes(key)) return false;
+    } else {
+      hasInclude = true;
+      if (cats.includes(key)) included = true;
+    }
+  }
+  return !hasInclude || included;
+}
+
+function stateCategories(pr: PRItem): string[] {
+  const c: string[] = [];
+  if (pr.state === 'OPEN' && !pr.isDraft) c.push('open');
+  if (pr.state === 'MERGED') c.push('merged');
+  if (pr.state === 'CLOSED') c.push('closed');
+  if (pr.isDraft) c.push('draft');
+  return c;
+}
+
+function checkCategories(pr: PRItem): string[] {
+  const cs = pr.checkStatus;
+  if (!cs) return [];
+  const c: string[] = [];
+  if (cs.failed > 0) c.push('failing');
+  if (cs.failed === 0 && cs.running === 0) c.push('passing');
+  if (cs.running > 0) c.push('running');
+  return c;
 }
 
 export function filterPRs(
   prs: PRItem[],
-  stateFilter: Set<string>,
-  checksFilter: Set<string>,
-  repoFilter: Set<string>,
-  authorFilter: Set<string>,
+  stateFilter: FacetModes,
+  checksFilter: FacetModes,
+  repoFilter: FacetModes,
+  authorFilter: FacetModes,
+  viewer: string,
 ): PRItem[] {
-  return prs.filter(pr => {
-    if (stateFilter.size > 0) {
-      const matches =
-        (stateFilter.has('open') && pr.state === 'OPEN' && !pr.isDraft) ||
-        (stateFilter.has('merged') && pr.state === 'MERGED') ||
-        (stateFilter.has('closed') && pr.state === 'CLOSED') ||
-        (stateFilter.has('draft') && pr.isDraft);
-      if (!matches) return false;
-    }
-    if (checksFilter.size > 0) {
-      const cs = pr.checkStatus;
-      const matches =
-        (checksFilter.has('failing') && cs && cs.failed > 0) ||
-        (checksFilter.has('passing') && cs && cs.failed === 0 && cs.running === 0) ||
-        (checksFilter.has('running') && cs && cs.running > 0);
-      if (!matches) return false;
-    }
-    if (repoFilter.size > 0 && !repoFilter.has(pr.repo)) return false;
-    if (authorFilter.size > 0 && !authorFilter.has(pr.author)) return false;
-    return true;
-  });
+  return prs.filter(pr =>
+    passFacet(stateFilter, stateCategories(pr)) &&
+    passFacet(checksFilter, checkCategories(pr)) &&
+    passFacet(repoFilter, [pr.repo]) &&
+    passFacet(authorFilter, authorCategories(pr, viewer)),
+  );
 }
 
 export function statusIcon(status: string, conclusion: string): string {
@@ -256,6 +402,91 @@ export function statusColor(status: string, conclusion: string): string {
   return 'text-gray-400';
 }
 
+// FlatProc is one supervised process tagged with its owning project, the row
+// shape the process-manager table renders.
+export interface FlatProc {
+  project: Project;
+  proc: ProcProcess;
+}
+
+// emptyProcStatus is the placeholder status for a configured project that has no
+// live entry in the proc-status map yet (or no Procfile at all). It lets the
+// workspace surfaces list every project from config without a type guard.
+export const emptyProcStatus: ProcStatus = { hasProcfile: false, running: false };
+
+// flattenProcesses gathers every supervised process across projects that have a
+// Procfile, tagged with its project. It iterates projects (not the procStatus
+// map, which is keyed by both project name and repo) so each process appears
+// once.
+export function flattenProcesses(projects: Project[], procStatus: Record<string, ProcStatus>): FlatProc[] {
+  const out: FlatProc[] = [];
+  for (const project of projects) {
+    const st = procStatus[project.name];
+    if (!st?.hasProcfile || !st.processes) continue;
+    for (const proc of st.processes) {
+      out.push({ project, proc });
+    }
+  }
+  return out;
+}
+
+// statusDotClass maps a single process status to its dot color, shared by the
+// table, the inline control, and the manager badge.
+export function statusDotClass(status: string): string {
+  switch (status) {
+    case 'running': return 'bg-green-500';
+    case 'starting':
+    case 'restarting': return 'bg-yellow-400';
+    case 'crashed': return 'bg-red-500';
+    default: return 'bg-gray-300';
+  }
+}
+
+// aggregateDotClass summarises a group of processes into one dot color: any
+// crash is red, an all-running group is green, any (re)starting or partly
+// running group is yellow, otherwise gray.
+export function aggregateDotClass(procs: ProcProcess[]): string {
+  if (procs.some(p => p.status === 'crashed')) return 'bg-red-500';
+  const running = procs.filter(p => p.status === 'running').length;
+  if (procs.length > 0 && running === procs.length) return 'bg-green-500';
+  if (procs.some(p => p.status === 'starting' || p.status === 'restarting') || running > 0) return 'bg-yellow-400';
+  return 'bg-gray-300';
+}
+
+// statusLabel is the human status, annotating a crash with its exit code so a
+// crashed process reads "crashed (exit 3)" rather than looking like a stop.
+export function statusLabel(proc: ProcProcess): string {
+  if (proc.status === 'crashed' && proc.exitCode !== undefined) {
+    return `${proc.status} (exit ${proc.exitCode})`;
+  }
+  return proc.status;
+}
+
+// crashedSummary describes the crashed processes in a group for a tooltip, e.g.
+// "1 crashed (exit 3)" or "2 crashed (exit 1, exit 137)". Empty when none.
+export function crashedSummary(procs: ProcProcess[]): string {
+  const crashed = procs.filter(p => p.status === 'crashed');
+  if (crashed.length === 0) return '';
+  const codes = crashed
+    .filter(p => p.exitCode !== undefined)
+    .map(p => `exit ${p.exitCode}`);
+  return `${crashed.length} crashed${codes.length ? ` (${codes.join(', ')})` : ''}`;
+}
+
+// humanizeBytes renders a byte count compactly (e.g. "1.5 GB"). Non-positive
+// input renders as an em dash.
+export function humanizeBytes(n?: number): string {
+  if (!n || n <= 0) return '—';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let v = n;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  return `${i > 0 && v < 10 ? v.toFixed(1) : Math.round(v)} ${units[i]}`;
+}
+
 export function severityIcon(severity?: string): string {
   switch (severity) {
     case 'critical': return '🔴';
@@ -264,4 +495,28 @@ export function severityIcon(severity?: string): string {
     case 'nitpick': return '🧹';
     default: return '💬';
   }
+}
+
+// extractCommentTitle pulls a one-line title out of a (possibly markdown) comment
+// body: the first bold span, heading, or non-decorative line in the first 15
+// lines. Used to label a comment compactly in the detail list and when turning a
+// comment into a todo acceptance criterion.
+export function extractCommentTitle(body: string): string {
+  const clean = body.replace(/[<>]/g, '').trim();
+  for (const line of clean.split('\n').slice(0, 15)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('_') || trimmed.startsWith('> [!')) continue;
+    const bold = trimmed.match(/\*\*(.+?)\*\*/);
+    if (bold) return bold[1];
+    if (trimmed.startsWith('# ')) return trimmed.slice(2).trim();
+    return trimmed;
+  }
+  return clean.split('\n')[0] || '';
+}
+
+// isDeploymentComment reports whether a comment is a Vercel deployment-status
+// blob ("[vc]: …") rather than human/bot review feedback, so those are surfaced
+// as deployments and excluded from the comment list and todo criteria sources.
+export function isDeploymentComment(c: PRComment): boolean {
+  return c.botType === 'vercel' && c.body.startsWith('[vc]:');
 }

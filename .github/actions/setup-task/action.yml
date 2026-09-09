@@ -1,0 +1,51 @@
+name: Setup Task
+description: >
+  Install a pinned go-task release onto PATH. Vendored rather than using
+  arduino/setup-task so the build does not depend on a third-party action, and
+  so resolving the release is a plain download with retries instead of an API
+  call that shares this runner's rate limit — that call is what has failed the
+  Test and Lint jobs, before a single test ran.
+
+inputs:
+  version:
+    description: go-task release tag to install.
+    required: false
+    default: v3.50.0
+
+runs:
+  using: composite
+  steps:
+    - name: Install Task
+      shell: bash
+      env:
+        TASK_VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+
+        case "$(uname -m)" in
+          x86_64) arch=amd64 ;;
+          arm64|aarch64) arch=arm64 ;;
+          *) echo "setup-task: unsupported architecture $(uname -m)" >&2; exit 1 ;;
+        esac
+        case "$(uname -s)" in
+          Linux) os=linux ;;
+          Darwin) os=darwin ;;
+          *) echo "setup-task: unsupported OS $(uname -s)" >&2; exit 1 ;;
+        esac
+
+        tmp="$(mktemp -d)"
+        trap 'rm -rf "$tmp"' EXIT
+        url="https://github.com/go-task/task/releases/download/${TASK_VERSION}/task_${os}_${arch}.tar.gz"
+
+        # A transient 5xx or reset on the release CDN is the failure this action
+        # exists to absorb, so retry rather than fail the job on the first one.
+        curl --fail --silent --show-error --location \
+          --retry 5 --retry-delay 2 --retry-all-errors \
+          "$url" -o "$tmp/task.tar.gz"
+        tar -xzf "$tmp/task.tar.gz" -C "$tmp" task
+
+        install_dir="$HOME/.local/bin"
+        mkdir -p "$install_dir"
+        install -m 0755 "$tmp/task" "$install_dir/task"
+        echo "$install_dir" >> "$GITHUB_PATH"
+        "$install_dir/task" --version

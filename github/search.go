@@ -1,7 +1,6 @@
 package github
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"os/exec"
@@ -22,7 +21,7 @@ const prSearchQuery = `query($query: String!, $first: Int!) {
       ... on PullRequest {
         number
         title
-        author { login avatarUrl }
+        author { login avatarUrl __typename }
         headRefName
         baseRefName
         state
@@ -48,7 +47,7 @@ const prSearchQueryWithStatus = `query($query: String!, $first: Int!) {
       ... on PullRequest {
         number
         title
-        author { login avatarUrl }
+        author { login avatarUrl __typename }
         headRefName
         baseRefName
         state
@@ -166,6 +165,31 @@ type PRSearchOptions struct {
 	ShowURL     bool     // show PR URL instead of #number
 	ShowAuthor  bool     // show author name (when not filtered to @me)
 	IgnoredOrgs []string // orgs to skip when ResolveDefaultOrg picks a default for --all
+	// ExcludeAuthors emits a `-author:<login>` qualifier per entry so the
+	// search drops those authors at the source (used to keep bot-authored PRs
+	// out of the default fetch).
+	ExcludeAuthors []string
+}
+
+// IsBotAuthor reports whether a PR author login belongs to a bot — GitHub App
+// bots end in "[bot]"; some integration accounts just use a "bot" suffix.
+func IsBotAuthor(login string) bool {
+	return strings.HasSuffix(login, "[bot]") || strings.HasSuffix(login, "bot")
+}
+
+// BotExcludeQualifier returns the `author:` value that excludes a bot from a
+// search. App bots are matched by their "<login>[bot]" identity (their GraphQL
+// login drops that suffix); user-account bots by their plain login. Returns ""
+// for non-bots so callers can skip them.
+func BotExcludeQualifier(login string, isApp bool) string {
+	switch {
+	case isApp:
+		return login + "[bot]"
+	case IsBotAuthor(login):
+		return login
+	default:
+		return ""
+	}
 }
 
 type searchResponse struct {
@@ -205,27 +229,31 @@ type searchPRNode struct {
 }
 
 type PRListItem struct {
-	Number          int           `json:"number"`
-	Title           string        `json:"title"`
-	Author          string        `json:"author"`
-	AuthorAvatarURL string        `json:"authorAvatarUrl,omitempty"`
-	Repo            string        `json:"repo"`
-	RepoAvatarURL   string        `json:"repoAvatarUrl,omitempty"`
-	RepoHomepageURL string        `json:"repoHomepageUrl,omitempty"`
-	Source          string        `json:"source"`
-	Target          string        `json:"target"`
-	State           string        `json:"state"`
-	IsDraft         bool          `json:"isDraft"`
-	ReviewDecision  string        `json:"reviewDecision,omitempty"`
-	Mergeable       string        `json:"mergeable,omitempty"`
-	URL             string        `json:"url"`
-	UpdatedAt       time.Time     `json:"updatedAt"`
-	IsCurrent       bool          `json:"isCurrent,omitempty"`
-	Ahead           int           `json:"ahead,omitempty"`
-	Behind          int           `json:"behind,omitempty"`
-	CheckStatus     *CheckSummary `json:"checkStatus,omitempty"`
-	ShowURL         bool          `json:"-"`
-	ShowAuthor      bool          `json:"-"`
+	Number          int       `json:"number"`
+	Title           string    `json:"title"`
+	Author          string    `json:"author"`
+	AuthorAvatarURL string    `json:"authorAvatarUrl,omitempty"`
+	Repo            string    `json:"repo"`
+	RepoAvatarURL   string    `json:"repoAvatarUrl,omitempty"`
+	RepoHomepageURL string    `json:"repoHomepageUrl,omitempty"`
+	Source          string    `json:"source"`
+	Target          string    `json:"target"`
+	State           string    `json:"state"`
+	IsDraft         bool      `json:"isDraft"`
+	ReviewDecision  string    `json:"reviewDecision,omitempty"`
+	Mergeable       string    `json:"mergeable,omitempty"`
+	URL             string    `json:"url"`
+	UpdatedAt       time.Time `json:"updatedAt"`
+	// AuthorIsApp is true when the author is a GitHub App bot (GraphQL
+	// __typename "Bot"), whose login lacks the "[bot]" suffix that the search
+	// API needs to match it. Lets callers build a correct `-author:` exclusion.
+	AuthorIsApp bool          `json:"authorIsApp,omitempty"`
+	IsCurrent   bool          `json:"isCurrent,omitempty"`
+	Ahead       int           `json:"ahead,omitempty"`
+	Behind      int           `json:"behind,omitempty"`
+	CheckStatus *CheckSummary `json:"checkStatus,omitempty"`
+	ShowURL     bool          `json:"-"`
+	ShowAuthor  bool          `json:"-"`
 }
 
 type PRSearchResults []PRListItem
@@ -235,6 +263,10 @@ func buildSearchQueryBase(searchOpts PRSearchOptions) []string {
 
 	if searchOpts.Author != "" {
 		parts = append(parts, "author:"+searchOpts.Author)
+	}
+
+	for _, login := range searchOpts.ExcludeAuthors {
+		parts = append(parts, "-author:"+login)
 	}
 
 	switch searchOpts.State {
@@ -383,58 +415,18 @@ func executeSearch(token, queryString string, searchOpts PRSearchOptions) (PRSea
 		query = prSearchQueryWithStatus
 	}
 
-	body := map[string]any{
-		"query": query,
-		"variables": map[string]any{
-			"query": queryString,
-			"first": limit,
-		},
-	}
-
-	ctx := context.Background()
-	client := newClient(token)
-
 	logger.Tracef("searching PRs via GraphQL: %s", queryString)
-	start := time.Now()
-	resp, err := client.R(ctx).
-		Header("Content-Type", "application/json").
-		Post("https://api.github.com/graphql", body)
-	if err != nil {
-		activity.Shared().Record(activity.Entry{
-			Method: "POST", URL: "/graphql", Kind: activity.KindSearch,
-			Duration: time.Since(start), Error: err.Error(),
-		})
-		return nil, nil, fmt.Errorf("GraphQL request: %w", err)
-	}
-	rl := ParseRateLimit(resp.Header)
-	if !resp.IsOK() {
-		respBody, _ := resp.AsString()
-		activity.Shared().Record(activity.Entry{
-			Method: "POST", URL: "/graphql", Kind: activity.KindSearch,
-			StatusCode: resp.StatusCode, Duration: time.Since(start),
-			SizeBytes: len(respBody),
-			Error:     fmt.Sprintf("status %d", resp.StatusCode),
-		})
-		return nil, rl, fmt.Errorf("GraphQL request: status %d: %s", resp.StatusCode, respBody)
-	}
-
-	respBody, _ := resp.AsString()
-	activity.Shared().Record(activity.Entry{
-		Method: "POST", URL: "/graphql", Kind: activity.KindSearch,
-		StatusCode: resp.StatusCode, Duration: time.Since(start),
-		SizeBytes: len(respBody),
+	respBody, rl, err := postGraphQL(token, graphqlEndpoint(), activity.KindSearch, query, map[string]any{
+		"query": queryString,
+		"first": limit,
 	})
+	if err != nil {
+		return nil, rl, err
+	}
 
 	var result searchResponse
-	if err := json.Unmarshal([]byte(respBody), &result); err != nil {
+	if err := json.Unmarshal(respBody, &result); err != nil {
 		return nil, rl, fmt.Errorf("parse search response: %w", err)
-	}
-	if len(result.Errors) > 0 {
-		msgs := make([]string, len(result.Errors))
-		for i, e := range result.Errors {
-			msgs[i] = e.Message
-		}
-		return nil, rl, fmt.Errorf("GraphQL errors: %s", strings.Join(msgs, "; "))
 	}
 
 	var items PRSearchResults
@@ -444,6 +436,7 @@ func executeSearch(token, queryString string, searchOpts PRSearchOptions) (PRSea
 			Title:           node.Title,
 			Author:          node.Author.Login,
 			AuthorAvatarURL: node.Author.AvatarURL,
+			AuthorIsApp:     node.Author.TypeName == "Bot",
 			Repo:            node.Repository.NameWithOwner,
 			RepoAvatarURL:   node.Repository.Owner.AvatarURL,
 			RepoHomepageURL: node.Repository.HomepageURL,
@@ -472,30 +465,7 @@ func computeCheckSummary(node searchPRNode) *CheckSummary {
 	if len(node.Commits.Nodes) == 0 {
 		return nil
 	}
-	rollup := node.Commits.Nodes[0].Commit.StatusCheckRollup
-	if rollup == nil {
-		return nil
-	}
-
-	var cs CheckSummary
-	for _, check := range rollup.Contexts.Nodes {
-		sc := check.toStatusCheck()
-		switch {
-		case sc.Status == "COMPLETED" && (sc.Conclusion == "SUCCESS" || sc.Conclusion == "NEUTRAL" || sc.Conclusion == "SKIPPED"):
-			cs.Passed++
-		case sc.Status == "COMPLETED" && (sc.Conclusion == "FAILURE" || sc.Conclusion == "TIMED_OUT" || sc.Conclusion == "STARTUP_FAILURE"):
-			cs.Failed++
-			cs.Failures = append(cs.Failures, FailedCheck{
-				Name:       sc.Name,
-				DetailsURL: sc.DetailsURL,
-			})
-		case sc.Status == "IN_PROGRESS":
-			cs.Running++
-		default:
-			cs.Pending++
-		}
-	}
-	return &cs
+	return summarizeRollup(node.Commits.Nodes[0].Commit.StatusCheckRollup)
 }
 
 func enrichFailedChecks(opts Options, items PRSearchResults, fetchLogs bool) {
@@ -617,7 +587,7 @@ func (item PRListItem) prettyWithIndent(indent string, showRepo bool) api.Text {
 		if len(parts) == 2 {
 			repoName = parts[1]
 		}
-		text = text.Append(" "+repoName, "text-cyan-600")
+		text = text.Append(" "+repoName, "font-bold text-cyan-600")
 	}
 
 	if item.ShowURL {
@@ -655,6 +625,10 @@ func (item PRListItem) prettyWithIndent(indent string, showRepo bool) api.Text {
 	return text
 }
 
+// prListDivider is the horizontal rule drawn between PR entries so each PR reads
+// as a distinct block rather than a run-on list.
+const prListDivider = "  ────────────────"
+
 func (r PRSearchResults) Pretty() api.Text {
 	if len(r) == 0 {
 		return clicky.Text("No pull requests found", "text-gray-500")
@@ -662,7 +636,10 @@ func (r PRSearchResults) Pretty() api.Text {
 
 	if !r.hasMultipleRepos() {
 		text := clicky.Text(fmt.Sprintf("Pull Requests (%d)", len(r)), "font-bold")
-		for _, item := range r {
+		for i, item := range r {
+			if i > 0 {
+				text = text.NewLine().Append(prListDivider, "text-gray-500")
+			}
 			text = text.NewLine().Add(item.Pretty())
 		}
 		return text
@@ -676,7 +653,10 @@ func (r PRSearchResults) Pretty() api.Text {
 			repoName = parts[1]
 		}
 		text = text.NewLine().Append(fmt.Sprintf("\n  %s (%d)", repoName, len(g.items)), "font-bold text-cyan-600")
-		for _, item := range g.items {
+		for i, item := range g.items {
+			if i > 0 {
+				text = text.NewLine().Append(prListDivider, "text-gray-500")
+			}
 			text = text.NewLine().Add(item.prettyWithIndent("      ", false))
 		}
 	}

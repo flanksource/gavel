@@ -102,6 +102,12 @@ func TestBuildSearchQuery(t *testing.T) {
 			expect:     "is:pr is:open updated:>2026-03-31 repo:flanksource/gavel",
 		},
 		{
+			name:       "exclude bot authors",
+			opts:       Options{Repo: "flanksource/gavel"},
+			searchOpts: PRSearchOptions{State: "open", ExcludeAuthors: []string{"dependabot[bot]", "flankbot"}},
+			expect:     "is:pr -author:dependabot[bot] -author:flankbot is:open repo:flanksource/gavel",
+		},
+		{
 			name:       "all without repo or org fails",
 			opts:       Options{Token: "tok", WorkDir: "/tmp"},
 			searchOpts: PRSearchOptions{All: true},
@@ -122,6 +128,25 @@ func TestBuildSearchQuery(t *testing.T) {
 			}
 			require.NoError(t, err)
 			assert.Equal(t, tc.expect, result)
+		})
+	}
+}
+
+func TestBotExcludeQualifier(t *testing.T) {
+	tests := []struct {
+		name  string
+		login string
+		isApp bool
+		want  string
+	}{
+		{"app bot gets [bot] suffix", "dependabot", true, "dependabot[bot]"},
+		{"app bot without bot-suffixed login", "renovate", true, "renovate[bot]"},
+		{"user-account bot uses plain login", "flankbot", false, "flankbot"},
+		{"human author yields empty (not excluded)", "octocat", false, ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, BotExcludeQualifier(tc.login, tc.isApp))
 		})
 	}
 }

@@ -71,7 +71,7 @@ var _ = Describe("Graph.AffectedPackages", func() {
 		runGoModTidy(root)
 
 		var err error
-		graph, err = changegraph.Load(root)
+		graph, err = changegraph.Load(root, nil)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(graph.Packages).To(HaveKey("example.com/fix/a"))
 		Expect(graph.Packages).To(HaveKey("example.com/fix/b"))

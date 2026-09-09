@@ -19,9 +19,10 @@ import (
 
 type AmendCommitsOptions struct {
 	HistoryOptions `json:",inline"`
-	Threshold      float64 `flag:"threshold" help:"Quality score threshold - commits below this will be reviewed" default:"7.0"`
-	Ref            string  `flag:"ref" help:"Base ref for commit range (e.g., origin/main, main)" default:""`
-	DryRun         bool    `flag:"dry-run" help:"Show what would be changed without rebasing"`
+	Threshold      float64        `flag:"threshold" help:"Quality score threshold - commits below this will be reviewed" default:"7.0"`
+	Ref            string         `flag:"ref" help:"Base ref for commit range (e.g., origin/main, main)" default:""`
+	DryRun         bool           `flag:"dry-run" help:"Show what would be changed without rebasing"`
+	Analysis       AnalyzeOptions `json:"-"`
 }
 
 type CommitReview struct {
@@ -83,10 +84,9 @@ func AmendCommits(ctx context.Context, options AmendCommitsOptions) error {
 	}
 
 	// Analyze commits
-	analyzeOpts := AnalyzeOptions{
-		HistoryOptions: options.HistoryOptions,
-		AI:             true,
-	}
+	analyzeOpts := options.Analysis
+	analyzeOpts.HistoryOptions = options.HistoryOptions
+	analyzeOpts.AI = true
 	analyses, err := AnalyzeCommitHistory(analyzerCtx, commits, analyzeOpts)
 	if err != nil {
 		return fmt.Errorf("failed to analyze commits: %w", err)

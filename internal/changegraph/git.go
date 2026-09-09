@@ -70,6 +70,11 @@ type DiffOptions struct {
 
 	// IncludeUntracked adds files from `git ls-files --others --exclude-standard`.
 	IncludeUntracked bool
+
+	// Files are workdir-relative paths added to the set as given, with no git
+	// query behind them — for a caller that already knows what changed, such as
+	// an agent run reporting the files it touched this turn.
+	Files []string
 }
 
 // ComputeFileSet runs git in workDir to produce the FileSet described by opts.
@@ -77,6 +82,9 @@ type DiffOptions struct {
 // binary or non-repo workdir yields an error.
 func ComputeFileSet(workDir string, opts DiffOptions) (FileSet, error) {
 	fs := NewFileSet()
+	for _, f := range opts.Files {
+		fs.Add(f)
+	}
 
 	if opts.Since != "" {
 		base, err := mergeBase(workDir, "HEAD", opts.Since)

@@ -13,6 +13,8 @@
 //   - ruff: Fast Python linter and formatter
 //   - pyright: Python type checker
 //   - eslint: JavaScript/TypeScript linter
+//   - oxlint: Fast JavaScript/TypeScript linter
+//   - react-doctor: React diagnostics
 //   - markdownlint: Markdown style checker
 //   - vale: Prose and documentation linter
 //

@@ -66,13 +66,18 @@ type Graph struct {
 }
 
 // Load runs `go list -json -deps ./...` in workDir and decodes the result.
-func Load(workDir string) (*Graph, error) {
+func Load(workDir string, tags []string) (*Graph, error) {
 	absWork, err := filepath.Abs(workDir)
 	if err != nil {
 		return nil, fmt.Errorf("abs workDir: %w", err)
 	}
 
-	cmd := exec.Command("go", "list", "-json", "-deps", "./...")
+	args := []string{"list", "-json", "-deps"}
+	if len(tags) > 0 {
+		args = append(args, "-tags="+strings.Join(tags, ","))
+	}
+	args = append(args, "./...")
+	cmd := exec.Command("go", args...)
 	cmd.Dir = absWork
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

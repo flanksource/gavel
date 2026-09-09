@@ -26,7 +26,7 @@ func TestGoPackagesToWarm_UnionsGoFrameworksAndDedupes(t *testing.T) {
 }
 
 func TestGoPreBuildArgs_CompilesWithoutRunning(t *testing.T) {
-	got := goPreBuildArgs([]string{"./a", "./b"})
+	got := goPreBuildArgs([]string{"./a", "./b"}, nil)
 	want := []string{"test", "-count=0", "./a", "./b"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("goPreBuildArgs = %v, want %v", got, want)

@@ -46,3 +46,21 @@ describe('DetailPanel test edit actions', () => {
     expect(onTestEdit).toHaveBeenCalledWith(editableTest, 'delete', 'file');
   });
 });
+
+describe('DetailPanel fixture CEL trace', () => {
+  it('renders the native trace instead of the plain expression', () => {
+    const trace = 'cel: actual == expected\n     │         │\n     │         └─ int(2)\n     └─ int(1)';
+    render(<DetailPanel test={{
+      name: 'CEL assertion',
+      framework: 'fixture',
+      failed: true,
+      context: {
+        cel_expression: 'actual == expected',
+        cel_trace: trace,
+      },
+    }} />);
+
+    expect(screen.getByText((_, element) => element?.textContent === trace)).toBeTruthy();
+    expect(screen.queryByText('actual == expected')).toBeNull();
+  });
+});

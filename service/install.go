@@ -1,5 +1,13 @@
 package service
 
+import (
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+)
+
 // InstallOptions configures the user-level service-file installer.
 type InstallOptions struct {
 	// BinaryPath overrides os.Executable() when writing the service file.
@@ -8,6 +16,36 @@ type InstallOptions struct {
 	DryRun bool
 	// Force overwrites an existing service file.
 	Force bool
+}
+
+var daemonArguments = []string{
+	"pr",
+	"list",
+	"--all",
+	"--ui",
+	"--menu-bar",
+	"--port=0",
+	"--persist-port",
+}
+
+func userShellInvocation(shell, binary string) []string {
+	return append([]string{shell, "-l", "-i", "-c", `exec "$@"`, "gavel-system", binary}, daemonArguments...)
+}
+
+func userShellPath() (string, error) {
+	shell := strings.TrimSpace(os.Getenv("SHELL"))
+	if shell == "" {
+		return "", fmt.Errorf("resolve user shell: SHELL is not set")
+	}
+	resolved, err := exec.LookPath(shell)
+	if err != nil {
+		return "", fmt.Errorf("resolve user shell %q: %w", shell, err)
+	}
+	absolute, err := filepath.Abs(resolved)
+	if err != nil {
+		return "", fmt.Errorf("resolve absolute path of user shell %s: %w", resolved, err)
+	}
+	return absolute, nil
 }
 
 // Install writes the platform-specific user-level service file (launchd plist

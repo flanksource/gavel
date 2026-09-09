@@ -223,7 +223,7 @@ func init() {
 	benchRunCmd.Flags().BoolVar(&benchRunMem, "benchmem", true, "Include memory allocation stats (-benchmem)")
 	benchRunCmd.Flags().StringSliceVar(&benchRunExtra, "extra", nil, "Extra flags passed through to go test")
 	benchRunCmd.Flags().BoolVar(&benchRunUI, "ui", false, "Launch browser UI streaming benchmark progress as packages complete")
-	benchRunCmd.Flags().StringVar(&benchRunUIAddr, "addr", "localhost", "Interface to bind --ui HTTP server. Use 0.0.0.0 to expose on the LAN.")
+	benchRunCmd.Flags().StringVar(&benchRunUIAddr, "addr", "0.0.0.0", "Interface to bind --ui HTTP server. Defaults to 0.0.0.0 (all interfaces); set localhost to restrict to this machine.")
 	benchRunCmd.Flags().DurationVar(&benchRunGlobalTimeout, "global-timeout", 30*time.Minute, "Global wall-clock deadline for the entire bench run. Cancels every in-flight subprocess when it fires.")
 	benchRunCmd.Flags().DurationVar(&benchRunTestTimeout, "test-timeout", 20*time.Minute, "Per-package subprocess deadline. Applies to each go test invocation running benchmarks.")
 
@@ -233,7 +233,7 @@ func init() {
 	benchCompareCmd.Flags().StringVar(&benchCompareHeadLabel, "head-label", "head", "Display label for the head run")
 	benchCompareCmd.Flags().Float64Var(&benchCompareThreshold, "threshold", bench.DefaultThreshold, "Regression threshold in percent")
 	benchCompareCmd.Flags().BoolVar(&benchCompareUI, "ui", false, "Launch browser UI with the comparison preloaded")
-	benchCompareCmd.Flags().StringVar(&benchCompareUIAddr, "addr", "localhost", "Interface to bind --ui HTTP server. Use 0.0.0.0 to expose on the LAN.")
+	benchCompareCmd.Flags().StringVar(&benchCompareUIAddr, "addr", "0.0.0.0", "Interface to bind --ui HTTP server. Defaults to 0.0.0.0 (all interfaces); set localhost to restrict to this machine.")
 	formatters.BindPFlags(benchCompareCmd.Flags(), &benchCompareOpts)
 
 	benchCmd.AddCommand(benchRunCmd, benchCompareCmd)

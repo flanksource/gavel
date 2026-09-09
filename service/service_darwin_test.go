@@ -11,13 +11,18 @@ import (
 )
 
 func TestRenderPlist_ContainsExpectedDirectives(t *testing.T) {
-	out, err := renderPlist("/usr/local/bin/gavel", "/tmp/pr-ui.log")
+	out, err := renderPlist("/bin/zsh", "/usr/local/bin/gavel", "/Users/example", "/tmp/pr-ui.log")
 	require.NoError(t, err)
 
 	// All three are load-bearing for a background agent that auto-starts,
 	// survives logout of its controlling terminal, and restarts on crash.
 	for _, want := range []string{
 		"<string>" + launchdLabel + "</string>",
+		"<string>/bin/zsh</string>",
+		"<string>-l</string>",
+		"<string>-i</string>",
+		`<string>exec "$@"</string>`,
+		"<string>gavel-system</string>",
 		"<string>/usr/local/bin/gavel</string>",
 		"<string>pr</string>",
 		"<string>--all</string>",
@@ -25,6 +30,7 @@ func TestRenderPlist_ContainsExpectedDirectives(t *testing.T) {
 		"<string>--menu-bar</string>",
 		"<string>--port=0</string>",
 		"<string>--persist-port</string>",
+		"<key>WorkingDirectory</key><string>/Users/example</string>",
 		"<key>RunAtLoad</key><true/>",
 		"<key>KeepAlive</key>",
 		"<key>SuccessfulExit</key><false/>",

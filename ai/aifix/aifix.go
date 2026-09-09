@@ -1,41 +1,52 @@
-// Package aifix drives an AI provider (via captain's streaming providers —
-// claude_cli, codex_cli, gemini_cli) to fix linter violations and re-lint
+// Package aifix drives an AI provider (via Captain's streaming agent providers)
+// to fix linter violations and re-lint
 // until the result is clean, max-iterations is reached, or the cumulative
 // cost cap is hit. Provider selection is determined by AIConfig.Backend.
 package aifix
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 	"strings"
 
 	captainai "github.com/flanksource/captain/pkg/ai"
+	"github.com/flanksource/captain/pkg/api"
+	"github.com/flanksource/commons/logger"
 	gavelai "github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/models"
+	"github.com/flanksource/gavel/prompts"
+	"github.com/flanksource/gavel/verify"
 )
+
+//go:embed lint-ai-fix.prompt
+var lintAIFixPrompt string
+
+// Prompts returns the configurable lint.fix prompt descriptor.
+func Prompts() []prompts.Prompt {
+	return []prompts.Prompt{{
+		ID:          prompts.LintFix,
+		Title:       "Lint AI fix",
+		Description: "Repairs violations for `gavel lint --ai-fix` and the `gavel commit` lint gate.",
+		ConfigPath:  prompts.LintFix,
+		Default:     lintAIFixPrompt,
+		UsedBy:      []string{"gavel lint --ai-fix", "gavel commit (lint gate)"},
+	}}
+}
 
 // Request is the public input to aifix.Run.
 type Request struct {
-	WorkDir       string
-	Linters       []string
 	Initial       []*linters.LinterResult
 	MaxIterations int
 
-	// AIConfig describes which provider + model + budget aifix should use.
-	// Callers build it from captain's CLI flags + ~/.captain.yaml overlay
-	// via captaincli.AIRuntimeOptions.ToConfig() so `gavel lint --ai-fix`
-	// honours the same defaults as `captain ai prompt`. An empty Model
-	// surfaces captain's "run captain configure" error.
+	// AIConfig and AIRequestProto are projections of the same resolved operation.
 	AIConfig captainai.Config
 
-	// AIRequestProto is the per-iteration request template. aifix sets
-	// SystemPrompt and Prompt on a clone of this struct each turn; all
-	// other fields (PermissionMode, NoMCP, NoHooks, NoSkills, NoUser,
-	// NoProject, NoMemory, MaxTokens, Temperature, ReasoningEffort, Edit,
-	// AllowedTools, DisallowedTools, SkillDirs, Bare, StrictMCP, Verbose)
-	// flow through unchanged so saved captain defaults reach the provider.
+	// AIRequestProto is the initial request. BuildRequest renders subsequent
+	// violation sets using the invocation's captured configuration.
 	AIRequestProto captainai.Request
+	BuildRequest   func([]*linters.LinterResult) (captainai.Request, error)
 
 	// ReLint is invoked after each AI iteration to check whether
 	// violations remain. It must run with the same scope (linters, files)
@@ -63,6 +74,9 @@ func Run(ctx context.Context, req Request) (*Result, error) {
 	if req.ReLint == nil {
 		return nil, fmt.Errorf("aifix.Run: ReLint is required")
 	}
+	if req.BuildRequest == nil {
+		return nil, fmt.Errorf("aifix.Run: BuildRequest is required")
+	}
 
 	gavelai.NormalizeEnv()
 
@@ -70,39 +84,49 @@ func Run(ctx context.Context, req Request) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer func() {
+		if err := gavelai.CloseProvider(p); err != nil {
+			logger.Warnf("aifix: failed to close AI provider: %v", err)
+		}
+	}()
 	streamer, ok := p.(captainai.StreamingProvider)
 	if !ok {
-		return nil, fmt.Errorf("aifix: backend %q is not streaming; choose a streaming backend (claude-cli, codex-cli, gemini-cli)", req.AIConfig.Backend)
+		return nil, fmt.Errorf("aifix: runtime %q is not streaming; choose a streaming runtime", p.GetRuntime())
 	}
 
 	current := req.Initial
-	systemPrompt := buildSystemPrompt(req.WorkDir, req.Linters)
 
 	// captainai.LoopOptions.BuildRequest cannot return an error, so park
 	// any ReLint failure in this closure variable and surface it once the
 	// loop unwinds. Returning continue=false ensures we stop fast instead
 	// of asking the model to "fix" stale violations.
-	var relintErr error
+	var loopErr error
+	loopStopReason := "loop-error"
 	loopRes, err := captainai.RunUntil(ctx, captainai.LoopOptions{
 		Provider:      streamer,
 		MaxIterations: req.MaxIterations,
-		MaxCostUSD:    req.AIConfig.BudgetUSD,
+		MaxCostUSD:    req.AIConfig.Budget.Cost,
 		SessionReuse:  true,
-		BuildRequest: func(iter int, prev *captainai.LoopIteration) (captainai.Request, bool) {
-			if iter > 0 {
-				next, e := req.ReLint(ctx)
-				if e != nil {
-					relintErr = e
-					return captainai.Request{}, false
-				}
-				current = next
-				if !hasViolations(current) {
-					return captainai.Request{}, false
-				}
+		BuildRequest: func(iter int, _ *captainai.LoopIteration) (captainai.Request, bool) {
+			if iter == 0 {
+				return req.AIRequestProto, true
 			}
-			turn := req.AIRequestProto
-			turn.SystemPrompt = systemPrompt
-			turn.Prompt = buildPrompt(req.WorkDir, current)
+			next, e := req.ReLint(ctx)
+			if e != nil {
+				loopErr = fmt.Errorf("re-lint between iterations failed: %w", e)
+				loopStopReason = "relint-error"
+				return captainai.Request{}, false
+			}
+			current = next
+			if !hasViolations(current) {
+				return captainai.Request{}, false
+			}
+			turn, e := req.BuildRequest(current)
+			if e != nil {
+				loopErr = fmt.Errorf("resolve lint.fix prompt: %w", e)
+				loopStopReason = "prompt-error"
+				return captainai.Request{}, false
+			}
 			return turn, true
 		},
 		OnEvent: req.OnEvent,
@@ -115,13 +139,13 @@ func Run(ctx context.Context, req Request) (*Result, error) {
 			Iterations:   loopIters(loopRes),
 		}, err
 	}
-	if relintErr != nil {
+	if loopErr != nil {
 		return &Result{
 			FinalResults: current,
-			StopReason:   "relint-error",
+			StopReason:   loopStopReason,
 			TotalCostUSD: loopTotal(loopRes),
 			Iterations:   loopIters(loopRes),
-		}, fmt.Errorf("aifix: re-lint between iterations failed: %w", relintErr)
+		}, fmt.Errorf("aifix: %w", loopErr)
 	}
 
 	return &Result{
@@ -165,28 +189,24 @@ func hasViolations(results []*linters.LinterResult) bool {
 	return false
 }
 
-// buildSystemPrompt sets the framing for every iteration. We keep it short
-// because the per-turn prompt already contains the violation list — the
-// system prompt only carries durable context.
-func buildSystemPrompt(workDir string, linterNames []string) string {
-	var s strings.Builder
-	s.WriteString("You are running inside a developer's git working tree at ")
-	s.WriteString(workDir)
-	s.WriteString(". Fix the linter violations the user lists, then stop. ")
-	s.WriteString("Edit files in place. Do not run any commit-related commands. ")
-	s.WriteString("Prefer minimal, targeted edits over rewrites. ")
-	if len(linterNames) > 0 {
-		s.WriteString("The active linters are: ")
-		s.WriteString(strings.Join(linterNames, ", "))
-		s.WriteString(". ")
-	}
-	s.WriteString("After your edits, the user will re-run the linters to verify.")
-	return s.String()
+type ResolveOptions struct {
+	Base    api.Spec
+	Prompt  verify.PromptSpec
+	Dir     string
+	Linters []string
+	Results []*linters.LinterResult
 }
 
-func buildPrompt(workDir string, results []*linters.LinterResult) string {
+func Layers(options ResolveOptions) ([]api.SpecLayer, error) {
+	return options.Prompt.Layers(verify.PromptResolveOptions{Base: options.Base, DefaultPrompt: lintAIFixPrompt, Data: map[string]any{
+		"workDir":    options.Dir,
+		"linters":    strings.Join(options.Linters, ", "),
+		"violations": formatViolations(options.Results),
+	}, Dir: options.Dir, Name: prompts.LintFix})
+}
+
+func formatViolations(results []*linters.LinterResult) string {
 	var s strings.Builder
-	s.WriteString("Fix the following linter violations:\n\n")
 	for _, r := range results {
 		if r == nil || r.Skipped || len(r.Violations) == 0 {
 			continue
@@ -196,7 +216,7 @@ func buildPrompt(workDir string, results []*linters.LinterResult) string {
 			s.WriteString("\n")
 		}
 	}
-	return s.String()
+	return strings.TrimSuffix(s.String(), "\n")
 }
 
 func formatViolationLine(linter string, v models.Violation) string {

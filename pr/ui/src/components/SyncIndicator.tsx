@@ -1,6 +1,11 @@
-import { useState } from 'preact/hooks';
+import type { ComponentType } from 'react';
+import { useState } from 'react';
 import type { PRSyncStatus } from '../types';
 import { timeAgo } from '../utils';
+import type { IconProps } from '@flanksource/clicky-ui/icons';
+import { UiSync, UiRefresh, UiWarningTriangle } from '@flanksource/clicky-ui/icons';
+import { Spinner } from '../icons/Spinner';
+import { RelativeTime } from './RelativeTime';
 
 interface Props {
   status: PRSyncStatus;
@@ -15,34 +20,35 @@ function phaseLabel(phase?: string): string {
   }
 }
 
-function stateConfig(status: PRSyncStatus): { icon: string; color: string; title: string } {
+function stateConfig(status: PRSyncStatus): { icon: ComponentType<IconProps>; color: string; title: string } {
   switch (status.state) {
     case 'queued':
-      return { icon: 'codicon:sync-ignored', color: 'text-gray-400', title: 'Queued for sync' };
+      return { icon: UiSync, color: 'text-gray-400', title: 'Queued for sync' };
     case 'syncing':
-      return { icon: 'svg-spinners:ring-resize', color: 'text-blue-500', title: `Syncing: ${phaseLabel(status.phase)}...` };
+      return { icon: Spinner, color: 'text-blue-500', title: `Syncing: ${phaseLabel(status.phase)}...` };
     case 'up-to-date':
-      return { icon: 'codicon:sync', color: 'text-green-500', title: status.lastSynced ? `Synced ${timeAgo(status.lastSynced)}` : 'Synced' };
+      return { icon: UiSync, color: 'text-green-500', title: status.lastSynced ? `Synced ${timeAgo(status.lastSynced)}` : 'Synced' };
     case 'out-of-date':
-      return { icon: 'codicon:refresh', color: 'text-yellow-500', title: 'Updated since last sync' };
+      return { icon: UiRefresh, color: 'text-yellow-500', title: 'Updated since last sync' };
     case 'error':
-      return { icon: 'codicon:warning', color: 'text-red-500', title: status.error || 'Sync error' };
+      return { icon: UiWarningTriangle, color: 'text-red-500', title: status.error || 'Sync error' };
     default:
-      return { icon: 'codicon:sync-ignored', color: 'text-gray-400', title: '' };
+      return { icon: UiSync, color: 'text-gray-400', title: '' };
   }
 }
 
 export function SyncIndicator({ status }: Props) {
   const [hover, setHover] = useState(false);
   const cfg = stateConfig(status);
+  const CfgIcon = cfg.icon;
 
   return (
     <span
-      class="relative inline-flex items-center"
+      className="relative inline-flex items-center"
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
     >
-      <iconify-icon icon={cfg.icon} class={`${cfg.color} text-[11px]`} title={cfg.title} />
+      <CfgIcon className={`${cfg.color} text-[11px]`} title={cfg.title} />
       {hover && <HoverCard status={status} />}
     </span>
   );
@@ -66,21 +72,21 @@ function HoverCard({ status }: { status: PRSyncStatus }) {
   };
 
   return (
-    <div class="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 z-20 bg-white border border-gray-200 rounded-md shadow-lg px-2.5 py-1.5 whitespace-nowrap text-[11px]">
-      <div class={`font-medium ${stateColors[status.state] || 'text-gray-600'}`}>
+    <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 z-20 bg-white border border-gray-200 rounded-md shadow-lg px-2.5 py-1.5 whitespace-nowrap text-[11px]">
+      <div className={`font-medium ${stateColors[status.state] || 'text-gray-600'}`}>
         {stateLabels[status.state] || status.state}
       </div>
       {status.state === 'syncing' && status.phase && (
-        <div class="text-gray-500 mt-0.5">Fetching {phaseLabel(status.phase)}...</div>
+        <div className="text-gray-500 mt-0.5">Fetching {phaseLabel(status.phase)}...</div>
       )}
       {status.lastSynced && (
-        <div class="text-gray-400 mt-0.5">Last synced: {timeAgo(status.lastSynced)}</div>
+        <div className="text-gray-400 mt-0.5">Last synced: <RelativeTime iso={status.lastSynced} /></div>
       )}
       {status.error && (
-        <div class="text-red-500 mt-0.5 max-w-48 truncate">{status.error}</div>
+        <div className="text-red-500 mt-0.5 max-w-48 truncate">{status.error}</div>
       )}
-      <div class="absolute top-full left-1/2 -translate-x-1/2 -mt-px">
-        <div class="w-1.5 h-1.5 bg-white border-b border-r border-gray-200 rotate-45 -translate-y-1" />
+      <div className="absolute top-full left-1/2 -translate-x-1/2 -mt-px">
+        <div className="w-1.5 h-1.5 bg-white border-b border-r border-gray-200 rotate-45 -translate-y-1" />
       </div>
     </div>
   );

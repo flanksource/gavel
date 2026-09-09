@@ -8,6 +8,7 @@ import (
 	"syscall"
 
 	"github.com/flanksource/clicky"
+	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/serve"
 )
@@ -27,8 +28,8 @@ type ServeOptions struct {
 	RepoDir     string `flag:"repo-dir" help:"Directory for cached bare repos (default: ~/.gavel/repos)"`
 }
 
-func (o ServeOptions) Help() string {
-	return `Start an SSH server that accepts git push and runs gavel test --lint.
+func (o ServeOptions) Help() api.Textable {
+	return clicky.Text(`Start an SSH server that accepts git push and runs gavel test --lint.
 
 Developers add this as a git remote and push to trigger linting and tests:
 
@@ -40,7 +41,7 @@ Then from any project:
   git push gavel HEAD:main
 
 Results stream back in real-time. Push is rejected on failure.
-Repos are cached for fast incremental pushes.`
+Repos are cached for fast incremental pushes.`)
 }
 
 func init() {

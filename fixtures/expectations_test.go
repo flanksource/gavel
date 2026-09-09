@@ -211,8 +211,9 @@ func TestCELFailureMessageIncludesContext(t *testing.T) {
 	}, EvaluateOptions{})
 
 	assert.Equal(t, task.StatusFAIL, result.Status)
-	assert.Contains(t, result.Error, "CEL expression evaluated to false")
+	assert.Equal(t, "stdout.contains('hello') is false", result.Error)
 	assert.Equal(t, "stdout.contains('hello')", result.CELExpression)
+	assert.Contains(t, result.CELTrace, "string(\"goodbye world\")")
 	assert.Equal(t, "goodbye world", result.CELVars["stdout"])
 }
 

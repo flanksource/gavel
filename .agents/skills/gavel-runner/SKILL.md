@@ -8,7 +8,9 @@ allowed-tools: [Bash, Read, Glob, Grep, WebFetch]
 
 Drive `gavel` for the everyday test + lint loop: run a subset, iterate on failures, suppress known noise with baselines, pull JSON/markdown out of a finished run, and attach to a live run via the UI server's HTTP/SSE API.
 
-For *writing* fixture-style markdown tests, defer to the [`gavel-fixture-tester`](../gavel-fixture-tester/SKILL.md) skill instead — that skill is about authoring; this one is about running.
+Prefer `gavel test` / `gavel lint` over raw `go test` / `ginkgo` / `vitest` / `golangci-lint` / `make test`: gavel auto-detects every framework and linter present, captures structured JSON, and layers on re-run-failures, baselines, and caching. `gavel test --help` and `gavel lint --help` are the source of truth for flags — this skill is the *when/why* and the recipes.
+
+For *writing* fixture-style markdown tests, defer to the [`gavel-fixture-tester`](../gavel-fixture-tester/SKILL.md) skill; for PRs, CI status, and commits, see [`gavel-git`](../gavel-git/SKILL.md); for the TODO/agent loop, see [`gavel-todos`](../gavel-todos/SKILL.md).
 
 ## When to use
 
@@ -24,7 +26,6 @@ For *writing* fixture-style markdown tests, defer to the [`gavel-fixture-tester`
 | Only previously-failed | `gavel test --failed`  *(uses `.gavel/last.json`)* |
 | Suppress baseline noise | `gavel test --baseline baseline.json` |
 | Save JSON + markdown | `gavel test --format "json=.tmp/g.json,markdown=.tmp/g.md"` |
-| Browser UI + live SSE | `gavel test --ui` |
 | PR-comment summary | `gavel summary --input results.json --output summary.md` |
 | Lint only | `gavel lint` |
 
@@ -53,10 +54,17 @@ gavel test --cache
 gavel test --framework go,ginkgo
 ```
 
-**By name** — pass through to the underlying runner with `--`:
+**By name** — use either native Go focus spelling after `--`; gavel maps the
+pattern to every focus-capable framework and skips unsupported frameworks:
 ```bash
-gavel test ./pkg/foo -- --focus "MyTest"             # Ginkgo focus
-gavel test ./pkg/web -- --testNamePattern "MyTest"   # Vitest pattern
+gavel test ./pkg/foo -- -run "MyTest"                 # maps to go test -run / ginkgo --focus
+gavel test ./pkg/foo -- --focus "MyTest"              # equivalent spelling
+```
+
+**Raw runner args** — select exactly one framework first:
+```bash
+gavel test ginkgo ./pkg/foo -- --label-filter "smoke"
+gavel test --framework vitest ./pkg/web -- --testNamePattern "MyTest"
 ```
 
 ## Re-running only failures

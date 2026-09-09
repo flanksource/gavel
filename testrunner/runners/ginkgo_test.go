@@ -3,6 +3,7 @@ package runners
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -208,6 +209,34 @@ import . "github.com/onsi/ginkgo/v2"
 
 	if !strings.HasPrefix(packages[0], "./") {
 		t.Errorf("expected relative path, got %s", packages[0])
+	}
+}
+
+// testdata holds specs that exist to be *parsed* by other tests (the outline
+// extractor), never bootstrapped or run. The go tool excludes testdata from
+// ./..., so ginkgo has no suite to run there and the whole run fails with
+// "Found no test suites, did you forget to run `ginkgo bootstrap`?".
+func TestGinkgoDiscoverPackagesSkipsTestdata(t *testing.T) {
+	tmpDir := t.TempDir()
+	writeGinkgoGoMod(t, tmpDir)
+
+	fixtureDir := filepath.Join(tmpDir, "outline", "testdata", "ginkgo")
+	if err := os.MkdirAll(fixtureDir, 0o755); err != nil {
+		t.Fatalf("failed to create fixture directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(fixtureDir, "sample_ginkgo_test.go"), []byte(`package sample
+
+import . "github.com/onsi/ginkgo/v2"
+`), 0o644); err != nil {
+		t.Fatalf("failed to create fixture test file: %v", err)
+	}
+
+	packages, err := NewGinkgo(tmpDir).DiscoverPackages(tmpDir, true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(packages) != 0 {
+		t.Errorf("discovered %v under testdata; ginkgo cannot run an unbootstrapped fixture package", packages)
 	}
 }
 
@@ -472,5 +501,12 @@ func TestGinkgoBuildCommandArgs(t *testing.T) {
 	}
 	if strings.Index(args, "--timeout=4m30s") > strings.Index(args, "./pkg") {
 		t.Errorf("timeout flag should precede package path, got: %s", args)
+	}
+}
+
+func TestGinkgoFocusArgs(t *testing.T) {
+	runner := NewGinkgo(t.TempDir())
+	if got, want := runner.FocusArgs("does work"), []string{"--focus", "does work"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("FocusArgs = %v, want %v", got, want)
 	}
 }

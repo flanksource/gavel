@@ -28,9 +28,9 @@ The answer, almost always, was no. That was the gap we set out to close.
 Gavel is one binary that bundles four pieces we kept reaching for:
 
 - **Test runner** — Go and Ginkgo native, with fixtures in markdown and a live browser UI.
-- **Unified lint** — nine linters in parallel, auto-activated by discovering their native config.
+- **Unified lint** — linters in parallel, auto-activated by discovering native configs and project signals.
 - **AI verify** — structured policy/correctness checks that run an LLM against each diff, with pass/fail verdicts and rationale.
-- **PR workflow** — AI-generated conventional commits, pre-commit hooks, and a `gavel pr fix` that applies review suggestions.
+- **TODO workflow** — a native PostgreSQL work queue for agent runs, with explicit `.todos` Markdown import and export when portability is needed.
 
 All of it emits a single `tests.json` + `tests.html` you can read, drop into a PR comment, or pipe into any downstream tool. The same command runs locally and in CI — there's a GitHub Action wrapper, but it's the same binary.
 
@@ -38,4 +38,4 @@ All of it emits a single `tests.json` + `tests.html` you can read, drop into a P
 
 The hosted tier is coming, but the CLI will always be free and MIT-licensed. If you've ever written a `ci.sh` that started as ten lines and grew to a hundred, gavel is our attempt to give you those hundred lines back.
 
-The waitlist is [on the landing page](/). If you're curious what this actually looks like, `go install github.com/flanksource/gavel/cmd/gavel@latest` and run `gavel test --lint --verify` in your favorite repo.
+The waitlist is [on the landing page](/). If you're curious what this actually looks like, `go install github.com/flanksource/gavel/cmd/gavel@latest` and run `gavel test --lint` in your favorite repo, then try `gavel fixtures examples/ai-review.fixture.md` for an optional AI review step.

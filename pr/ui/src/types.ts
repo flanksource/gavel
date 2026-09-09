@@ -1,3 +1,19 @@
+import type { TodoCounts } from './types/todos';
+export * from './types/todos';
+export * from './types/sessions';
+export * from './types/todoRun';
+
+import type { Test } from '@flanksource/clicky-ui/data';
+import type { LinterResult } from '@flanksource/gavel/testrunner';
+
+// Gavel artifact details ride the wire in gavel's own shapes so the dashboard
+// renders them with the testrunner's TestNode / LintView rather than a parallel
+// set of row components. Test/TestSummary come from clicky-ui/data (the shared
+// test-runner model the Verification tab's VerificationResults also renders),
+// not gavel's own testrunner package, so both surfaces read one shape.
+export type { Test, TestSummary } from '@flanksource/clicky-ui/data';
+export type { LinterResult, Violation } from '@flanksource/gavel/testrunner';
+
 export interface FailedCheck {
   name: string;
   detailsUrl?: string;
@@ -18,6 +34,9 @@ export interface PRItem {
   title: string;
   author: string;
   authorAvatarUrl?: string;
+  // True when the author is a GitHub App bot whose login lacks a "bot" suffix
+  // (e.g. renovate); lets the @bots chip group it without the suffix heuristic.
+  authorIsApp?: boolean;
   repo: string;
   repoAvatarUrl?: string;
   repoHomepageUrl?: string;
@@ -40,12 +59,79 @@ export interface SearchConfig {
   repos: string[];
   all?: boolean;
   org?: string;
-  author?: string;
-  any?: boolean;
-  bots?: boolean;
   // GitHub org logins the user has chosen to hide from the chooser and
   // exclude from default-org resolution. Persists across daemon restarts.
   ignoredOrgs?: string[];
+}
+
+// Project associates one or more repos with a local workspace directory where
+// Gavel discovers a Procfile. Mirrors pr/ui.Project / projectInfo.
+export interface Project {
+  name: string;
+  dir: string;
+  repos: string[];
+  hasProcfile?: boolean;
+  // Absent when this workspace's todo store could not be reached — see error.
+  // A project is still listed (and its processes still managed) in that case, so
+  // never read a missing todoCounts as "zero todos".
+  todoCounts?: TodoCounts;
+  error?: string;
+}
+
+// ProcProcess mirrors procfile.ProcState — one supervised process.
+export interface ProcProcess {
+  name: string;
+  command: string;
+  pid?: number;
+  status: string;
+  started?: string;
+  restarts: number;
+  exitCode?: number;
+  logFile: string;
+  taskRunId?: string;
+  ports?: number[];
+  // Live resource sample of the process group. openFiles is -1 where the
+  // platform cannot report it. All omitted/zero for a stopped process.
+  cpuPercent?: number;
+  memoryRss?: number;
+  memoryVms?: number;
+  openFiles?: number;
+  peakCpuPercent?: number;
+  peakMemoryRss?: number;
+  peakMemoryVms?: number;
+  peakOpenFiles?: number;
+  // Per-process breakdown of the process group (leader + descendants).
+  tree?: ProcNode[];
+}
+
+// ProcNode mirrors procfile.ProcNode — one process in a supervised group's tree.
+export interface ProcNode {
+  pid: number;
+  ppid: number;
+  command: string;
+  status?: string;
+  root?: boolean;
+  cpuPercent?: number;
+  memoryRss?: number;
+  memoryVms?: number;
+  openFiles?: number;
+}
+
+// ProcStatus mirrors pr/ui.procStatus — a project's Procfile supervision state.
+// hasProcfile=false is the normal "no Procfile here" state, not an error.
+export interface ProcStatus {
+  hasProcfile: boolean;
+  running: boolean;
+  supervisorPid?: number;
+  processes?: ProcProcess[];
+  // profiles declared in the Procfile; profile is the active one (running
+  // supervisor's, else the .gavel.yaml default).
+  profiles?: string[];
+  profile?: string;
+  // Uncommitted changes (staged, unstaged, and untracked) in the project's
+  // directory. Absent when the directory is not a git work tree.
+  gitChanges?: number;
+  error?: string;
 }
 
 export interface RateLimit {
@@ -64,6 +150,18 @@ export interface Snapshot {
   paused: boolean;
   error?: string;
   config: SearchConfig;
+  // Login of the authenticated GitHub user, used to resolve the @me author
+  // filter client-side. Empty until the auth probe completes.
+  viewer?: string;
+  // True once the server has learned of any bot author, so the @bots chip stays
+  // available even while bots are excluded from the fetch.
+  botsAvailable?: boolean;
+  // The server's current bot-fetch state; the UI only posts a change when the
+  // @bots chip disagrees with this.
+  includeBots?: boolean;
+  // The server's current closed-PR fetch state; the UI only posts a change when
+  // the Closed/Merged State chips disagree with this.
+  showClosed?: boolean;
   rateLimit?: RateLimit;
   // Sparse map keyed by `${repo}#${number}`. A PR is unread iff its key
   // appears here. Absent key = read. Server omits the field entirely when
@@ -88,7 +186,11 @@ export interface PRSyncStatus {
 
 export interface PRInfo {
   number: number;
+  // nodeId is the GraphQL global node ID, required by the merge / approve /
+  // auto-merge actions. Present once PR detail has loaded.
+  nodeId?: string;
   title: string;
+  body?: string;
   author: { login: string; name?: string; avatarUrl?: string };
   headRefName: string;
   baseRefName: string;
@@ -97,7 +199,34 @@ export interface PRInfo {
   reviewDecision: string;
   mergeable: string;
   url: string;
+  additions?: number;
+  deletions?: number;
+  changedFiles?: number;
   statusCheckRollup?: StatusCheck[];
+  prCommits?: PRCommitInfo[];
+  prFiles?: PRFileInfo[];
+}
+
+// PRCommitInfo is a commit in the PR.
+export interface PRCommitInfo {
+  oid: string;
+  messageHeadline: string;
+  messageBody?: string;
+  committedDate: string;
+  authorName?: string;
+  authorLogin?: string;
+  authorAvatarUrl?: string;
+  additions: number;
+  deletions: number;
+  changedFiles: number;
+}
+
+// PRFileInfo is a changed file in the PR.
+export interface PRFileInfo {
+  path: string;
+  additions: number;
+  deletions: number;
+  changeType: string;
 }
 
 export interface StatusCheck {
@@ -166,26 +295,21 @@ export interface GavelResultsSummary {
   lintLinters: number;
   hasBench: boolean;
   benchRegressions?: number;
+  // error is either a crash reported by gavel itself (the run died before it
+  // could produce results) or a failure to read the artifact at all.
   error?: string;
-  topFailures?: TestFailure[];
-  topLintViolations?: LintViolation[];
-}
-
-export interface TestFailure {
-  name: string;
-  suite?: string;
-  file?: string;
-  line?: number;
-  message?: string;
-  details?: string;
-}
-
-export interface LintViolation {
-  linter: string;
-  file?: string;
-  line?: number;
-  rule?: string;
-  message?: string;
+  exitCode?: number;
+  logTail?: string;
+  // duration is the summed leaf-test duration in nanoseconds.
+  duration?: number;
+  // failures / lint carry a bounded slice of the run itself (up to 5 failing
+  // tests and 5 violations); the counts above stay exact.
+  failures?: Test[];
+  lint?: LinterResult[];
+  // commands are the local `gavel test --pr` / `gavel lint --pr` invocations
+  // that re-run this shard's failures. PR-scoped, not shard-scoped. Absent on
+  // a shard with nothing to reproduce.
+  commands?: string[];
 }
 
 export interface PRDetail {

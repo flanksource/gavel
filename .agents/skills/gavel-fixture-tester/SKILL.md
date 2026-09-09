@@ -1,17 +1,37 @@
 ---
 name: gavel-fixture-tester
-description: Create and run gavel fixture-based tests using markdown files with command blocks, tables, and CEL assertions
+description: >-
+  Create and run Gavel fixture-based tests and TODO executable definitions of done using Markdown command blocks, tables, test/lint steps, acceptance
+  checklists, and CEL assertions. Use when authoring standalone fixtures or persisted TODO Verification content.
 allowed-tools: [Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion]
-codeBlocks: [bash]
 ---
 
 # Gavel Fixture Testing
 
-Create fixture-based tests for CLI commands using gavel's markdown fixture format. Fixtures define test cases as markdown files with YAML front-matter, command blocks, tables, and CEL validation expressions.
+Create fixture-based tests for CLI commands using Gavel's Markdown fixture format. Fixtures define test cases with YAML frontmatter, command blocks, tables,
+test/lint steps, and CEL validation expressions.
+
+`gavel fixtures --help` is the complete, authoritative spec for every frontmatter key, special table column, CEL variable/function, and code-fence format.
+Use this skill as the practical authoring guide and reach for `--help` when the exact field list matters.
 
 This file is itself a valid fixture. Run it to verify all examples parse and execute:
 
-    gavel fixtures .claude/skills/gavel-fixtures.md
+    gavel fixtures .agents/skills/gavel-fixture-tester/SKILL.md
+
+For running tests and linters outside fixtures, see [`gavel-runner`](../gavel-runner/SKILL.md). For TODO storage, review, and checking, see
+[`gavel-todos`](../gavel-todos/SKILL.md).
+
+## TODO executable definition of done
+
+When authoring persisted TODO Verification content, treat it as the TODO's **executable definition of done**:
+
+- Put the fixture under `## Verification` when embedding it in a TODO body or portable `.todos` Markdown.
+- Omit the outer `## Verification` heading in a standalone file passed to `gavel todos create --verification @verification.md`.
+- Combine deterministic command, table, test, or lint steps with CEL assertions and acceptance checklists as the task requires.
+- Require observable executable evidence; prose-only claims are not a definition of done.
+- Do not hard-wrap Markdown at 80 columns. Use 160 characters as the line-length limit.
+- Run `gavel fixtures outline .tmp/verification.md` to inspect parsing, then `gavel fixtures .tmp/verification.md` to execute it before attaching it.
+- Use `gavel todos check <todo>` after implementation to execute the persisted definition of done and record its lifecycle result.
 
 ## When to Use
 
@@ -52,7 +72,8 @@ skip: "test -z $CI"               # Bash command; exit 0 = skip fixture
 
 ### Format 1: Markdown Tables (Preferred)
 
-Each row is a test. Column headers map to fixture fields. This is the preferred format — use it whenever tests share the same executable and differ only in arguments or expected output.
+Each row is a test. Column headers map to fixture fields. Prefer this format when tests share the same executable and differ only in arguments or expected
+output.
 
 **Supported column headers** (case-insensitive):
 
@@ -60,9 +81,11 @@ Input: `name`, `cli`/`command`/`exec`, `args`, `cwd`, `query`, `terminal`/`term`
 
 Expectations: `exit code`, `expected output`/`output`, `expected error`/`error`, `format`, `count`, `cel`/`validation`/`expr`
 
-Unrecognized columns become **custom template variables**, usable in `exec`, `args`, and `build` fields via Go template syntax (`{{.colName}}`). They are also accessible in CEL via `expectations.Properties["col"]`.
+Unrecognized columns become **custom template variables**, usable in `exec`, `args`, and `build` through Go template syntax (`{{.colName}}`). They are also
+accessible in CEL through `expectations.Properties["col"]`.
 
-Custom keys in YAML frontmatter provide **global defaults** for template variables. Per-row column values override frontmatter defaults. Empty cells fall through to the frontmatter default.
+Custom keys in YAML frontmatter provide **global defaults** for template variables. Per-row column values override frontmatter defaults. Empty cells use
+the frontmatter default.
 
 Priority (highest to lowest): file expansion vars > table column values > frontmatter metadata
 
@@ -361,8 +384,10 @@ Fix failures and iterate until all tests pass.
 
 ## Rules
 
-- ALWAYS prefer markdown tables over command blocks — tables with custom columns and frontmatter templates can handle most test patterns. Put the command template in frontmatter `args` with `{{.col}}` placeholders, and vary inputs per row via columns
-- Only use command blocks (`### command: <name>`) when tests need multi-line scripts, setup/teardown, or per-test YAML config that cannot be expressed as a single templated command
+- ALWAYS prefer Markdown tables over command blocks. Put the command template in frontmatter `args` with `{{.col}}` placeholders and vary inputs through
+  per-row columns.
+- Only use command blocks (`### command: <name>`) when tests need multi-line scripts, setup/teardown, or per-test YAML config that cannot be expressed as
+  one templated command.
 - Use sections (`## Section Name`) to group related tables within a file
 - Place YAML config blocks BEFORE the executable code block within a command section
 - Use `codeBlocks: [bash]` in front-matter when mixing executable and non-executable code blocks

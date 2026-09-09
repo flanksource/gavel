@@ -1,6 +1,13 @@
-import { useState, useEffect, useMemo } from 'preact/hooks';
+import { useState, useEffect, useMemo } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Button } from '@flanksource/clicky-ui/components';
+import { fetchJSON, mutationJSON, queryKeys } from '../query';
 import type { ActivitySnapshot, ActivityEntry, ActivityKindStats, CacheStatus } from '../types';
-import { timeAgo } from '../utils';
+import { useDocumentVisible } from '../useDocumentVisible';
+import { UiActivity, UiCheck, UiCloudDownload, UiDatabase, UiGlobe, UiTrash, UiWarningTriangle, UiWatch } from '@flanksource/clicky-ui/icons';
+import type { IconProps } from '@flanksource/clicky-ui/icons';
+import type { ComponentType } from 'react';
+import { RelativeTime } from './RelativeTime';
 
 const KIND_LABELS: Record<string, string> = {
   rest: 'REST',
@@ -14,112 +21,144 @@ const KIND_COLORS: Record<string, string> = {
   search: 'bg-amber-100 text-amber-700',
 };
 
-export function ActivityView() {
-  const [snap, setSnap] = useState<ActivitySnapshot>({
-    entries: [],
-    stats: { total: 0, cacheHits: 0, errors: 0, totalBytes: 0, totalNs: 0, byKind: {} },
-  });
-  const [cache, setCache] = useState<CacheStatus | null>(null);
-  const [kindFilter, setKindFilter] = useState<string>('');
-  const [, tick] = useState(0);
+const emptyActivity: ActivitySnapshot = {
+  entries: [],
+  stats: { total: 0, cacheHits: 0, errors: 0, totalBytes: 0, totalNs: 0, byKind: {} },
+};
 
-  const refreshCache = () => {
-    fetch('/api/activity/cache')
-      .then(r => r.json())
-      .then((c: CacheStatus) => setCache(c))
-      .catch(() => {});
-  };
+export function ActivityView() {
+  const [streamError, setStreamError] = useState('');
+  const [kindFilter, setKindFilter] = useState<string>('');
+  const visible = useDocumentVisible();
+  const queryClient = useQueryClient();
+  const activityQuery = useQuery({
+    queryKey: queryKeys.activity(),
+    queryFn: async ({ signal }) => parseActivitySnapshot(
+      await fetchJSON<unknown>({ url: '/api/activity', signal, context: 'Load HTTP activity' }),
+    ),
+    enabled: visible,
+    staleTime: 30_000,
+  });
+  const cacheQuery = useQuery({
+    queryKey: queryKeys.activityCache(),
+    queryFn: async ({ signal }) => parseCacheStatus(
+      await fetchJSON<unknown>({ url: '/api/activity/cache', signal, context: 'Load activity cache status' }),
+    ),
+    enabled: visible,
+    staleTime: 10_000,
+    refetchInterval: visible ? 10_000 : false,
+    refetchIntervalInBackground: false,
+  });
+  const snap = activityQuery.data ?? emptyActivity;
+  const cache = cacheQuery.data ?? null;
+  const resetMutation = useMutation({
+    mutationFn: () => mutationJSON({
+      url: '/api/activity/reset',
+      method: 'POST',
+      context: 'Reset HTTP activity',
+    }),
+    onSuccess: () => queryClient.setQueryData(queryKeys.activity(), emptyActivity),
+  });
 
   useEffect(() => {
-    fetch('/api/activity')
-      .then(r => r.json())
-      .then((s: ActivitySnapshot) => setSnap(s))
-      .catch(() => {});
-    refreshCache();
+    if (visible) return;
+    void queryClient.cancelQueries({ queryKey: queryKeys.activity(), exact: true });
+    void queryClient.cancelQueries({ queryKey: queryKeys.activityCache(), exact: true });
+  }, [queryClient, visible]);
 
+  // Stream the activity feed only while visible: a hidden window has no reason to
+  // hold the SSE open. The per-row 'Xs ago' timestamps refresh themselves via the
+  // shared useNow() clock inside <RelativeTime/>, so no app-level tick is needed.
+  useEffect(() => {
+    if (!visible) return;
     const es = new EventSource('/api/activity/stream');
     es.addEventListener('message', (e: MessageEvent) => {
       try {
-        setSnap(JSON.parse(e.data));
-      } catch { /* ignore */ }
+        queryClient.setQueryData<ActivitySnapshot>(queryKeys.activity(), parseActivitySnapshot(JSON.parse(e.data)));
+        setStreamError('');
+      } catch {
+        setStreamError('HTTP activity stream received an invalid update.');
+      }
     });
-    es.onerror = () => { /* auto-reconnect */ };
+    es.onerror = () => setStreamError(current => current || 'HTTP activity stream disconnected; reconnecting…');
 
-    // Cache status changes rarely — refresh every 10s.
-    const cacheTimer = setInterval(refreshCache, 10000);
-    const timer = setInterval(() => tick(n => n + 1), 1000);
-    return () => { es.close(); clearInterval(timer); clearInterval(cacheTimer); };
-  }, []);
+    return () => es.close();
+  }, [queryClient, visible]);
 
   const filtered = useMemo(
     () => kindFilter ? snap.entries.filter(e => e.kind === kindFilter) : snap.entries,
     [snap.entries, kindFilter],
   );
 
-  const handleReset = () => {
-    fetch('/api/activity/reset', { method: 'POST' })
-      .then(() => setSnap({ entries: [], stats: { total: 0, cacheHits: 0, errors: 0, totalBytes: 0, totalNs: 0, byKind: {} } }))
-      .catch(() => {});
-  };
+  const requestError = resetMutation.error ?? activityQuery.error ?? cacheQuery.error;
+  const error = streamError || (requestError instanceof Error ? requestError.message : '');
 
   const { stats } = snap;
   const hitRate = stats.total > 0 ? (stats.cacheHits / stats.total) * 100 : 0;
   const avgMs = stats.total > 0 ? stats.totalNs / stats.total / 1e6 : 0;
 
   return (
-    <div class="bg-gray-50 h-full overflow-y-auto p-6">
-      <div class="max-w-6xl mx-auto">
-        <div class="flex items-center justify-between mb-4">
-          <h2 class="text-lg font-semibold text-gray-900">
-            <iconify-icon icon="codicon:pulse" class="mr-1.5 text-blue-600" />
+    <div className="bg-muted h-full overflow-y-auto p-6">
+      <div className="max-w-6xl mx-auto">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-semibold text-foreground">
+            <UiActivity className="mr-1.5 text-blue-600" />
             HTTP Activity
           </h2>
-          <button
-            onClick={handleReset}
-            class="text-xs px-3 py-1.5 bg-white border border-gray-200 rounded hover:bg-gray-50 text-gray-700"
+          <Button
+            variant="ghost"
+            onClick={() => resetMutation.mutate()}
+            disabled={resetMutation.isPending}
+            className="text-xs px-3 py-1.5 bg-card border border-border rounded hover:bg-muted text-foreground h-auto"
             title="Clear all recorded activity"
           >
-            <iconify-icon icon="codicon:trash" class="mr-1" />
+            <UiTrash className="mr-1" />
             Reset
-          </button>
+          </Button>
         </div>
 
-        <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+        {error && (
+          <div role="alert" className="mb-4 rounded border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300">
+            {error}
+          </div>
+        )}
+
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
           <KPI
             label="Total requests"
             value={stats.total.toLocaleString()}
             sub={stats.errors > 0 ? `${stats.errors} errors` : 'no errors'}
             subClass={stats.errors > 0 ? 'text-red-600' : 'text-green-600'}
-            icon="codicon:globe"
+            icon={UiGlobe}
           />
           <KPI
             label="Cache hit rate"
             value={`${hitRate.toFixed(1)}%`}
             sub={`${stats.cacheHits.toLocaleString()} / ${stats.total.toLocaleString()}`}
-            subClass="text-gray-500"
-            icon="codicon:database"
+            subClass="text-muted-foreground"
+            icon={UiDatabase}
           />
           <KPI
             label="Bandwidth"
             value={formatBytes(stats.totalBytes)}
             sub={stats.total > 0 ? `${formatBytes(stats.totalBytes / stats.total)} avg` : '—'}
-            subClass="text-gray-500"
-            icon="codicon:cloud-download"
+            subClass="text-muted-foreground"
+            icon={UiCloudDownload}
           />
           <KPI
             label="Avg latency"
             value={`${avgMs.toFixed(0)} ms`}
             sub={`${(stats.totalNs / 1e9).toFixed(1)}s total`}
-            subClass="text-gray-500"
-            icon="codicon:watch"
+            subClass="text-muted-foreground"
+            icon={UiWatch}
           />
         </div>
 
         {cache && <CachePanel cache={cache} />}
 
-        <div class="bg-white border border-gray-200 rounded-md mb-4 p-3">
-          <div class="text-xs font-semibold text-gray-500 uppercase mb-2">By kind</div>
-          <div class="flex gap-2 flex-wrap">
+        <div className="bg-card border border-border rounded-md mb-4 p-3">
+          <div className="text-xs font-semibold text-muted-foreground uppercase mb-2">By kind</div>
+          <div className="flex gap-2 flex-wrap">
             <KindChip kind="" label="All" active={kindFilter === ''} onClick={() => setKindFilter('')} count={stats.total} />
             {Object.entries(stats.byKind).map(([kind, ks]) => (
               <KindChip
@@ -135,24 +174,24 @@ export function ActivityView() {
           </div>
         </div>
 
-        <div class="bg-white border border-gray-200 rounded-md overflow-hidden">
-          <table class="w-full text-xs">
-            <thead class="bg-gray-50 text-gray-500 uppercase">
+        <div className="bg-card border border-border rounded-md overflow-hidden">
+          <table className="w-full text-xs">
+            <thead className="bg-muted text-muted-foreground uppercase">
               <tr>
-                <th class="px-3 py-2 text-left font-medium">Time</th>
-                <th class="px-3 py-2 text-left font-medium">Kind</th>
-                <th class="px-3 py-2 text-left font-medium">Method</th>
-                <th class="px-3 py-2 text-left font-medium">URL</th>
-                <th class="px-3 py-2 text-right font-medium">Status</th>
-                <th class="px-3 py-2 text-right font-medium">Duration</th>
-                <th class="px-3 py-2 text-right font-medium">Size</th>
-                <th class="px-3 py-2 text-center font-medium">Cache</th>
+                <th className="px-3 py-2 text-left font-medium">Time</th>
+                <th className="px-3 py-2 text-left font-medium">Kind</th>
+                <th className="px-3 py-2 text-left font-medium">Method</th>
+                <th className="px-3 py-2 text-left font-medium">URL</th>
+                <th className="px-3 py-2 text-right font-medium">Status</th>
+                <th className="px-3 py-2 text-right font-medium">Duration</th>
+                <th className="px-3 py-2 text-right font-medium">Size</th>
+                <th className="px-3 py-2 text-center font-medium">Cache</th>
               </tr>
             </thead>
             <tbody>
               {filtered.length === 0 && (
                 <tr>
-                  <td colSpan={8} class="px-3 py-6 text-center text-gray-400">
+                  <td colSpan={8} className="px-3 py-6 text-center text-muted-foreground">
                     No requests recorded yet. Interact with the PR dashboard to generate activity.
                   </td>
                 </tr>
@@ -168,15 +207,15 @@ export function ActivityView() {
   );
 }
 
-function KPI({ label, value, sub, subClass, icon }: { label: string; value: string; sub: string; subClass: string; icon: string }) {
+function KPI({ label, value, sub, subClass, icon: Icon }: { label: string; value: string; sub: string; subClass: string; icon: ComponentType<IconProps> }) {
   return (
-    <div class="bg-white border border-gray-200 rounded-md p-3">
-      <div class="flex items-center gap-1.5 text-xs text-gray-500">
-        <iconify-icon icon={icon} />
+    <div className="bg-card border border-border rounded-md p-3">
+      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        <Icon />
         {label}
       </div>
-      <div class="text-2xl font-semibold text-gray-900 mt-1">{value}</div>
-      <div class={`text-xs mt-0.5 ${subClass}`}>{sub}</div>
+      <div className="text-2xl font-semibold text-foreground mt-1">{value}</div>
+      <div className={`text-xs mt-0.5 ${subClass}`}>{sub}</div>
     </div>
   );
 }
@@ -184,22 +223,23 @@ function KPI({ label, value, sub, subClass, icon }: { label: string; value: stri
 function KindChip({ kind, label, active, onClick, count, stats }: {
   kind: string; label: string; active: boolean; onClick: () => void; count: number; stats?: ActivityKindStats;
 }) {
-  const colorClass = kind ? KIND_COLORS[kind] || 'bg-gray-100 text-gray-700' : 'bg-gray-100 text-gray-700';
+  const colorClass = kind ? KIND_COLORS[kind] || 'bg-muted text-foreground' : 'bg-muted text-foreground';
   const avgMs = stats && stats.total > 0 ? stats.totalNs / stats.total / 1e6 : 0;
   const hitRate = stats && stats.total > 0 ? (stats.cacheHits / stats.total) * 100 : 0;
   return (
-    <button
+    <Button
+      variant="ghost"
       onClick={onClick}
-      class={`text-xs px-2.5 py-1 rounded border ${active ? 'border-blue-500 ring-1 ring-blue-200' : 'border-gray-200'} ${colorClass} hover:opacity-90`}
+      className={`text-xs px-2.5 py-1 rounded border h-auto justify-start ${active ? 'border-blue-500 ring-1 ring-blue-200' : 'border-border'} ${colorClass} hover:opacity-90`}
     >
-      <span class="font-semibold">{label}</span>
-      <span class="ml-1 opacity-70">{count}</span>
+      <span className="font-semibold">{label}</span>
+      <span className="ml-1 opacity-70">{count}</span>
       {stats && (
-        <span class="ml-1.5 opacity-60">
+        <span className="ml-1.5 opacity-60">
           · {avgMs.toFixed(0)}ms · {hitRate.toFixed(0)}% hit
         </span>
       )}
-    </button>
+    </Button>
   );
 }
 
@@ -209,30 +249,30 @@ function ActivityRow({ entry }: { entry: ActivityEntry }) {
     ? 'text-red-600'
     : entry.statusCode === 304
       ? 'text-blue-600'
-      : 'text-gray-700';
+      : 'text-foreground';
   return (
-    <tr class={`border-t border-gray-100 ${entry.error ? 'bg-red-50' : ''}`}>
-      <td class="px-3 py-1.5 text-gray-500 whitespace-nowrap">{timeAgo(entry.timestamp)}</td>
-      <td class="px-3 py-1.5">
-        <span class={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${KIND_COLORS[entry.kind] || 'bg-gray-100 text-gray-700'}`}>
+    <tr className={`border-t border-border ${entry.error ? 'bg-red-50' : ''}`}>
+      <td className="px-3 py-1.5 text-muted-foreground whitespace-nowrap"><RelativeTime iso={entry.timestamp} /></td>
+      <td className="px-3 py-1.5">
+        <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${KIND_COLORS[entry.kind] || 'bg-muted text-foreground'}`}>
           {KIND_LABELS[entry.kind] || entry.kind}
         </span>
       </td>
-      <td class="px-3 py-1.5 font-mono text-gray-600">{entry.method}</td>
-      <td class="px-3 py-1.5 font-mono text-gray-700 truncate max-w-md" title={entry.url}>
+      <td className="px-3 py-1.5 font-mono text-muted-foreground">{entry.method}</td>
+      <td className="px-3 py-1.5 font-mono text-foreground truncate max-w-md" title={entry.url}>
         {entry.url}
-        {entry.error && <div class="text-red-600 text-[10px]">{entry.error}</div>}
+        {entry.error && <div className="text-red-600 text-[10px]">{entry.error}</div>}
       </td>
-      <td class={`px-3 py-1.5 text-right ${statusClass}`}>{entry.statusCode || '—'}</td>
-      <td class="px-3 py-1.5 text-right text-gray-600 tabular-nums">{ms.toFixed(0)} ms</td>
-      <td class="px-3 py-1.5 text-right text-gray-600 tabular-nums">{formatBytes(entry.sizeBytes)}</td>
-      <td class="px-3 py-1.5 text-center">
+      <td className={`px-3 py-1.5 text-right ${statusClass}`}>{entry.statusCode || '—'}</td>
+      <td className="px-3 py-1.5 text-right text-muted-foreground tabular-nums">{ms.toFixed(0)} ms</td>
+      <td className="px-3 py-1.5 text-right text-muted-foreground tabular-nums">{formatBytes(entry.sizeBytes)}</td>
+      <td className="px-3 py-1.5 text-center">
         {entry.fromCache ? (
-          <span class="text-green-600" title="Served from cache (304)">
-            <iconify-icon icon="codicon:check" />
+          <span className="text-green-600" title="Served from cache (304)">
+            <UiCheck />
           </span>
         ) : (
-          <span class="text-gray-300">—</span>
+          <span className="text-muted-foreground/50">—</span>
         )}
       </td>
     </tr>
@@ -242,56 +282,56 @@ function ActivityRow({ entry }: { entry: ActivityEntry }) {
 function CachePanel({ cache }: { cache: CacheStatus }) {
   const totalRows = Object.values(cache.counts || {}).reduce((a, b) => a + b, 0);
   return (
-    <div class={`bg-white border rounded-md mb-4 p-3 ${cache.enabled ? 'border-gray-200' : 'border-amber-300 bg-amber-50'}`}>
-      <div class="flex items-center justify-between mb-2">
-        <div class="flex items-center gap-2">
-          <iconify-icon icon="codicon:database" class={cache.enabled ? 'text-green-600' : 'text-amber-600'} />
-          <span class="text-xs font-semibold text-gray-500 uppercase">Cache</span>
-          <span class={`text-xs px-2 py-0.5 rounded ${cache.enabled ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
+    <div className={`bg-card border rounded-md mb-4 p-3 ${cache.enabled ? 'border-border' : 'border-amber-300 bg-amber-50'}`}>
+      <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center gap-2">
+          <UiDatabase className={cache.enabled ? 'text-green-600' : 'text-amber-600'} />
+          <span className="text-xs font-semibold text-muted-foreground uppercase">Cache</span>
+          <span className={`text-xs px-2 py-0.5 rounded ${cache.enabled ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
             {cache.enabled ? 'ENABLED' : 'DISABLED'}
           </span>
         </div>
         {cache.error && (
-          <span class="text-xs text-amber-700" title={cache.error}>
-            <iconify-icon icon="codicon:warning" class="mr-1" />
+          <span className="text-xs text-amber-700" title={cache.error}>
+            <UiWarningTriangle className="mr-1" />
             {cache.error}
           </span>
         )}
       </div>
 
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
         <div>
-          <div class="text-gray-500">Driver</div>
-          <div class="font-mono text-gray-800">{cache.driver}</div>
+          <div className="text-muted-foreground">Driver</div>
+          <div className="font-mono text-foreground">{cache.driver}</div>
         </div>
         <div>
-          <div class="text-gray-500">DSN source</div>
-          <div class="font-mono text-gray-800">
-            {cache.dsnSource || <span class="text-gray-400">—</span>}
+          <div className="text-muted-foreground">DSN source</div>
+          <div className="font-mono text-foreground">
+            {cache.dsnSource || <span className="text-muted-foreground">—</span>}
           </div>
           {cache.dsnMasked && (
-            <div class="font-mono text-gray-500 text-[10px] truncate" title={cache.dsnMasked}>
+            <div className="font-mono text-muted-foreground text-[10px] truncate" title={cache.dsnMasked}>
               {cache.dsnMasked}
             </div>
           )}
         </div>
         <div>
-          <div class="text-gray-500">Retention</div>
-          <div class="font-mono text-gray-800">{formatDuration(cache.retentionSec)}</div>
+          <div className="text-muted-foreground">Retention</div>
+          <div className="font-mono text-foreground">{formatDuration(cache.retentionSec)}</div>
         </div>
       </div>
 
       {cache.enabled && Object.keys(cache.counts || {}).length > 0 && (
-        <div class="mt-3 pt-3 border-t border-gray-100">
-          <div class="flex items-center justify-between mb-1.5">
-            <div class="text-xs text-gray-500">Rows</div>
-            <div class="text-xs text-gray-500">{totalRows.toLocaleString()} total</div>
+        <div className="mt-3 pt-3 border-t border-border">
+          <div className="flex items-center justify-between mb-1.5">
+            <div className="text-xs text-muted-foreground">Rows</div>
+            <div className="text-xs text-muted-foreground">{totalRows.toLocaleString()} total</div>
           </div>
-          <div class="grid grid-cols-2 md:grid-cols-4 gap-2">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
             {Object.entries(cache.counts).map(([table, n]) => (
-              <div key={table} class="bg-gray-50 rounded px-2 py-1.5">
-                <div class="text-[10px] text-gray-500 font-mono truncate" title={table}>{table}</div>
-                <div class="text-sm font-semibold text-gray-800 tabular-nums">{n.toLocaleString()}</div>
+              <div key={table} className="bg-muted rounded px-2 py-1.5">
+                <div className="text-[10px] text-muted-foreground font-mono truncate" title={table}>{table}</div>
+                <div className="text-sm font-semibold text-foreground tabular-nums">{n.toLocaleString()}</div>
               </div>
             ))}
           </div>
@@ -318,4 +358,18 @@ function formatBytes(n: number): string {
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
   return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
+}
+
+function parseActivitySnapshot(payload: unknown): ActivitySnapshot {
+  if (!payload || typeof payload !== 'object' || !('entries' in payload) || !Array.isArray(payload.entries) || !('stats' in payload) || !payload.stats || typeof payload.stats !== 'object') {
+    throw new Error('Load HTTP activity: invalid response');
+  }
+  return payload as ActivitySnapshot;
+}
+
+function parseCacheStatus(payload: unknown): CacheStatus {
+  if (!payload || typeof payload !== 'object' || !('enabled' in payload) || typeof payload.enabled !== 'boolean' || !('counts' in payload) || !payload.counts || typeof payload.counts !== 'object') {
+    throw new Error('Load activity cache status: invalid response');
+  }
+  return payload as CacheStatus;
 }

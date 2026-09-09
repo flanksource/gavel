@@ -19,16 +19,16 @@ type Validator interface {
 // ValidationPipeline orchestrates sequential validation steps
 type ValidationPipeline struct {
 	validator Validator
-	executor  *TODOExecutor // For custom validations
 	language  types.Language
 	workDir   string
 }
 
-// NewValidationPipeline creates a new validation pipeline
-func NewValidationPipeline(language types.Language, workDir string, executor *TODOExecutor) *ValidationPipeline {
+// NewValidationPipeline creates a new validation pipeline. Custom validations
+// run through the fixture engine directly: they are fixture nodes, and nothing
+// about running them needs an agent.
+func NewValidationPipeline(language types.Language, workDir string) *ValidationPipeline {
 	return &ValidationPipeline{
 		validator: &defaultValidator{workDir: workDir},
-		executor:  executor,
 		language:  language,
 		workDir:   workDir,
 	}
@@ -61,8 +61,8 @@ func (vp *ValidationPipeline) Validate(ctx context.Context, todo *types.TODO, ch
 	stats.Passed++
 
 	// 4. Custom validations (using fixtures executor)
-	if len(todo.CustomValidations) > 0 && vp.executor != nil {
-		results := vp.executor.ExecuteSection(ctx, todo.CustomValidations)
+	if len(todo.CustomValidations) > 0 {
+		results := RunNodes(ctx, vp.workDir, todo.CustomValidations)
 		if !AllPassed(results) {
 			stats.Failed++
 			return stats, fmt.Errorf("custom validations failed")

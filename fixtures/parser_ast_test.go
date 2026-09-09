@@ -210,7 +210,8 @@ Validations:
 	Context("when building fixture from command", func() {
 		DescribeTable("should build correct fixture structure",
 			func(cmd *commandBlockBuilder, expectedTest FixtureTest) {
-				fixtureNode := buildFixtureFromCommand(cmd, nil, "/tmp/test")
+				fixtureNode, err := buildFixtureFromCommand(cmd, nil, "/tmp/test")
+				Expect(err).NotTo(HaveOccurred())
 				Expect(fixtureNode).NotTo(BeNil())
 
 				fixture := *fixtureNode.Test

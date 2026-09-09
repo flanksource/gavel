@@ -107,7 +107,15 @@ func (b *Betterleaks) DryRunCommand() (string, []string) {
 
 func (b *Betterleaks) Run(ctx commonsContext.Context, _ *clicky.Task) ([]models.Violation, error) {
 	configs := DiscoverConfigs(b.WorkDir)
-	tomlPath, err := ResolveConfig(b.WorkDir, configs)
+	ignoredPaths, err := gitIgnoredScanPaths(b.WorkDir)
+	if err != nil {
+		return nil, fmt.Errorf("resolve gitignored scan paths: %w", err)
+	}
+	tomlPath, err := ResolveConfig(ResolveConfigOptions{
+		WorkDir:      b.WorkDir,
+		Configs:      configs,
+		IgnoredPaths: ignoredPaths,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("resolve betterleaks config: %w", err)
 	}

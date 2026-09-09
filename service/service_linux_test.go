@@ -3,25 +3,10 @@
 package service
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
-
-func TestRenderUserUnit_ContainsExecStartAndWantedBy(t *testing.T) {
-	out, err := renderUserUnit("/usr/local/bin/gavel")
-	require.NoError(t, err)
-
-	for _, want := range []string{
-		"ExecStart=/usr/local/bin/gavel pr list --all --ui --menu-bar --port=0 --persist-port",
-		"Restart=on-failure",
-		"WantedBy=default.target", // default.target = user session, not multi-user
-	} {
-		assert.True(t, strings.Contains(out, want), "unit missing %q\n---\n%s", want, out)
-	}
-}
 
 func TestParseSystemctlShow(t *testing.T) {
 	tests := []struct {

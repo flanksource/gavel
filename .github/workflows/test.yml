@@ -31,32 +31,37 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Install pnpm
-        run: npm install -g pnpm@9
+      - name: Enable corepack (pnpm)
+        run: corepack enable
 
       - name: Install Task
-        uses: arduino/setup-task@v2
-        with:
-          version: 3.x
+        uses: ./.github/actions/setup-task
 
       - name: Build gavel
-        run: make build
+        run: task build:prod
 
       # Node + TypeScript for the jest/vitest/playwright test frameworks and
       # the tsc lint check live in these UI projects' devDependencies.
-      - name: Install JS deps
-        run: |
-          npm install --prefix testrunner/ui
-          npm install --prefix pr/ui
-          npm ci --prefix site
+      - name: Install test runner dependencies
+        run: pnpm install --no-frozen-lockfile
+        working-directory: testrunner/ui
+
+      - name: Install PR UI dependencies
+        run: pnpm install --no-frozen-lockfile
+        working-directory: pr/ui
+
+      - name: Install site dependencies
+        run: npm ci
+        working-directory: site
 
       # `gavel test` compiles all Go test binaries in a pre-build phase before
       # the timed per-package run, so a cold build cache no longer eats into the
       # per-package deadline. Disable with --pre-build=false.
       - name: Run tests
-        run: ./gavel test
+        run: ./.bin/gavel test
         env:
           CGO_ENABLED: 0
+          GAVEL_DB_EMBEDDED_TEST: "1"
 
   lint:
     name: Lint
@@ -78,27 +83,31 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Install pnpm
-        run: npm install -g pnpm@9
+      - name: Enable corepack (pnpm)
+        run: corepack enable
 
       - name: Install Task
-        uses: arduino/setup-task@v2
-        with:
-          version: 3.x
+        uses: ./.github/actions/setup-task
 
       - name: Build gavel
-        run: make build
+        run: task build:prod
 
       # Node + TypeScript for the tsc / eslint linters live in these UI
       # projects' devDependencies; install them so gavel lint can run them.
-      - name: Install JS deps
-        run: |
-          npm install --prefix testrunner/ui
-          npm install --prefix pr/ui
-          npm ci --prefix site
+      - name: Install test runner dependencies
+        run: pnpm install --no-frozen-lockfile
+        working-directory: testrunner/ui
+
+      - name: Install PR UI dependencies
+        run: pnpm install --no-frozen-lockfile
+        working-directory: pr/ui
+
+      - name: Install site dependencies
+        run: npm ci
+        working-directory: site
 
       - name: Run linters
-        run: ./gavel lint
+        run: ./.bin/gavel lint
         env:
           CGO_ENABLED: 0
 
@@ -116,13 +125,14 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: npm
-          cache-dependency-path: testrunner/ui/package-lock.json
 
-      - run: npm ci
-      - run: npm run check
-      - run: npm test
-      - run: npm run build:lib
+      - name: Enable corepack (pnpm)
+        run: corepack enable
+
+      - run: pnpm install --no-frozen-lockfile
+      - run: pnpm run check
+      - run: pnpm test
+      - run: pnpm run build:lib
 
   build:
     name: Build
@@ -145,18 +155,19 @@ jobs:
         with:
           node-version: '22'
 
+      - name: Enable corepack (pnpm)
+        run: corepack enable
+
       - name: Install Task
-        uses: arduino/setup-task@v2
-        with:
-          version: 3.x
+        uses: ./.github/actions/setup-task
 
       - name: Build binary
-        run: make build
+        run: task build:prod
 
       - name: Test binary
         run: |
-          ./gavel --help
-          ./gavel version
+          ./.bin/gavel --help
+          ./.bin/gavel version
 
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4

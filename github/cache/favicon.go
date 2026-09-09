@@ -41,14 +41,30 @@ const (
 
 var faviconHTTPURLPattern = regexp.MustCompile(`^https?://`)
 
+// FaviconOptions tunes one favicon fetch.
+type FaviconOptions struct {
+	// AllowLocal permits loopback and private addresses.
+	//
+	// The default guard exists because a repo homepage is attacker-influenced
+	// data, so following it into the private network would be an SSRF. It must
+	// be lifted for the process-port proxy: that endpoint's whole purpose is to
+	// fetch the icon of a service running on this machine, and its safety comes
+	// from a different place — the caller has already matched the port against a
+	// port the supervisor discovered on one of its own processes, so the target
+	// is not caller-chosen at all.
+	AllowLocal bool
+}
+
 // newFaviconHTTPClient owns the network boundary for favicon discovery. It
 // bypasses proxies and pins each connection to addresses checked after DNS
 // resolution, preventing redirects and DNS rebinding from reaching internal
-// services.
-func newFaviconHTTPClient() *http.Client {
+// services — subject to opts, which the process-port proxy relaxes.
+func newFaviconHTTPClient(opts FaviconOptions) *http.Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil
-	transport.DialContext = dialPublicAddress
+	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		return dialFaviconAddress(ctx, network, address, opts)
+	}
 
 	return &http.Client{
 		Timeout:   faviconHTTPTimeout,
@@ -57,13 +73,13 @@ func newFaviconHTTPClient() *http.Client {
 			if len(via) >= 10 {
 				return errors.New("stopped after 10 redirects")
 			}
-			_, err := validateFaviconURL(req.URL.String())
+			_, err := validateFaviconURL(req.URL.String(), opts)
 			return err
 		},
 	}
 }
 
-func validateFaviconURL(raw string) (string, error) {
+func validateFaviconURL(raw string, opts FaviconOptions) (string, error) {
 	if !faviconHTTPURLPattern.MatchString(raw) {
 		return "", errors.New("favicon URL must be absolute HTTP or HTTPS")
 	}
@@ -80,13 +96,13 @@ func validateFaviconURL(raw string) (string, error) {
 	if u.User != nil {
 		return "", errors.New("favicon URL must not contain user information")
 	}
-	if ip := net.ParseIP(u.Hostname()); ip != nil && isRestrictedFaviconIP(ip) {
+	if ip := net.ParseIP(u.Hostname()); ip != nil && isRestrictedFaviconIP(ip, opts) {
 		return "", fmt.Errorf("favicon URL resolves to restricted address %s", ip)
 	}
 	return u.String(), nil
 }
 
-func dialPublicAddress(ctx context.Context, network, address string) (net.Conn, error) {
+func dialFaviconAddress(ctx context.Context, network, address string, opts FaviconOptions) (net.Conn, error) {
 	host, port, err := net.SplitHostPort(address)
 	if err != nil {
 		return nil, fmt.Errorf("parse favicon address %q: %w", address, err)
@@ -99,7 +115,7 @@ func dialPublicAddress(ctx context.Context, network, address string) (net.Conn, 
 		return nil, fmt.Errorf("resolve favicon host %q: no addresses", host)
 	}
 	for _, ip := range ips {
-		if isRestrictedFaviconIP(ip) {
+		if isRestrictedFaviconIP(ip, opts) {
 			return nil, fmt.Errorf("favicon host %q resolves to restricted address %s", host, ip)
 		}
 	}
@@ -116,7 +132,10 @@ func dialPublicAddress(ctx context.Context, network, address string) (net.Conn, 
 	return nil, fmt.Errorf("dial favicon host %q: %w", host, errors.Join(dialErrs...))
 }
 
-func isRestrictedFaviconIP(ip net.IP) bool {
+func isRestrictedFaviconIP(ip net.IP, opts FaviconOptions) bool {
+	if opts.AllowLocal && (ip.IsLoopback() || ip.IsPrivate()) {
+		return false
+	}
 	if v4 := ip.To4(); v4 != nil {
 		ip = v4
 		if v4[0] == 100 && v4[1]&0xc0 == 64 {
@@ -176,14 +195,14 @@ func (s *Store) GetFavicon(homepage string) (data []byte, mime string, hit bool,
 // result (positive or negative) with faviconTTL, and returns the bytes. A nil
 // error with empty data means "site has no usable favicon" — callers should
 // treat that as a 404, not a 500.
-func (s *Store) FetchFavicon(ctx context.Context, homepage string) (data []byte, mime string, err error) {
+func (s *Store) FetchFavicon(ctx context.Context, homepage string, opts FaviconOptions) (data []byte, mime string, err error) {
 	norm, err := normalizeHomepage(homepage)
 	if err != nil {
 		return nil, "", err
 	}
 
 	start := time.Now()
-	iconURL, iconData, iconMime, fetchErr := discoverFavicon(ctx, norm)
+	iconURL, iconData, iconMime, fetchErr := discoverFavicon(ctx, norm, opts)
 	// Size cap: if upstream returned oversized bytes, demote to negative entry.
 	if len(iconData) > faviconMaxBytes {
 		logger.Debugf("favicon for %s exceeds %d bytes, caching as negative", norm, faviconMaxBytes)
@@ -254,12 +273,12 @@ func (s *Store) saveFavicon(homepage, iconURL string, data []byte, mime string) 
 // the best candidate, and falls back to /favicon.ico. Returns the resolved
 // icon URL alongside its bytes so the cache can record where the icon came
 // from (useful for debugging).
-func discoverFavicon(ctx context.Context, homepage string) (iconURL string, data []byte, mime string, err error) {
-	return discoverFaviconWithClient(ctx, newFaviconHTTPClient(), homepage)
+func discoverFavicon(ctx context.Context, homepage string, opts FaviconOptions) (iconURL string, data []byte, mime string, err error) {
+	return discoverFaviconWithClient(ctx, newFaviconHTTPClient(opts), homepage, opts)
 }
 
-func discoverFaviconWithClient(ctx context.Context, client *http.Client, homepage string) (iconURL string, data []byte, mime string, err error) {
-	candidates, htmlErr := parseLinkCandidates(ctx, client, homepage)
+func discoverFaviconWithClient(ctx context.Context, client *http.Client, homepage string, opts FaviconOptions) (iconURL string, data []byte, mime string, err error) {
+	candidates, htmlErr := parseLinkCandidates(ctx, client, homepage, opts)
 	if htmlErr != nil {
 		logger.Debugf("favicon html fetch %s: %v", homepage, htmlErr)
 	}
@@ -269,7 +288,7 @@ func discoverFaviconWithClient(ctx context.Context, client *http.Client, homepag
 
 	var lastErr error
 	for _, u := range candidates {
-		body, contentType, fetchErr := fetchIcon(ctx, client, u)
+		body, contentType, fetchErr := fetchIcon(ctx, client, u, opts)
 		if fetchErr != nil {
 			lastErr = fetchErr
 			continue
@@ -294,8 +313,8 @@ type iconCandidate struct {
 // parseLinkCandidates downloads homepage, parses the HTML and returns icon
 // candidate URLs ordered by declared size (largest first). Missing size hints
 // sort last so "any" / default icons are tried after explicit high-res ones.
-func parseLinkCandidates(ctx context.Context, client *http.Client, homepage string) ([]string, error) {
-	safeURL, err := validateFaviconURL(homepage)
+func parseLinkCandidates(ctx context.Context, client *http.Client, homepage string, opts FaviconOptions) ([]string, error) {
+	safeURL, err := validateFaviconURL(homepage, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -412,8 +431,8 @@ func sortBySize(cands []iconCandidate) {
 	}
 }
 
-func fetchIcon(ctx context.Context, client *http.Client, iconURL string) ([]byte, string, error) {
-	safeURL, err := validateFaviconURL(iconURL)
+func fetchIcon(ctx context.Context, client *http.Client, iconURL string, opts FaviconOptions) ([]byte, string, error) {
+	safeURL, err := validateFaviconURL(iconURL, opts)
 	if err != nil {
 		return nil, "", err
 	}

@@ -80,8 +80,8 @@ const features: Feature[] = [
       "A queue your agent can work",
     ],
     description:
-      "`--sync-todos` on test, lint, and PR commands writes each failure to a Markdown TODO file that `gavel todos run` executes interactively or in batch.",
-    body: "Gavel closes the loop between finding problems and fixing them. Every failure-producing command (`test`, `lint`, `pr status`, `pr fix`) can materialize its findings as individual Markdown TODO files, grouped by file, package, or message. `gavel todos list` is your inbox; `gavel todos get` drills into one; `gavel todos run` dispatches them through the Claude Code integration, interactive or batch.",
+      "Native PostgreSQL TODOs form a durable work queue that `gavel todos run` executes interactively or in batch.",
+    body: "Gavel closes the loop between identifying work and fixing it. `gavel todos create` adds an issue, `gavel todos sync` captures source TODO/FIXME comments, `gavel todos list` is your inbox, and `gavel todos run` dispatches work through the configured Claude or Codex driver. PostgreSQL is the only runtime store; when you need repository-local portability, `gavel todos import` and `gavel todos export` move the supported fields explicitly to and from `.todos` Markdown.",
     icon: ListChecks,
   },
   {

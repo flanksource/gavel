@@ -1,8 +1,14 @@
 package main
 
 import (
-	captainai "github.com/flanksource/captain/pkg/ai"
+	"os"
+
+	"github.com/flanksource/captain/pkg/api"
+	"github.com/flanksource/captain/pkg/captainconfig"
 	captaincli "github.com/flanksource/captain/pkg/cli"
+	"github.com/flanksource/clicky"
+	"github.com/flanksource/gavel/internal/streamtee"
+	"github.com/flanksource/gavel/internal/ttyrender"
 )
 
 // defaultAIRuntimeOptions mirrors the boolean defaults clicky sets on
@@ -12,31 +18,45 @@ import (
 // `gavel lint --ai-fix`. Captain owns the canonical defaults; if it changes
 // any of them this helper must be revisited.
 func defaultAIRuntimeOptions() captaincli.AIRuntimeOptions {
-	return captaincli.AIRuntimeOptions{
-		MCP:     true,
-		Hooks:   true,
-		Skills:  true,
-		User:    true,
-		Project: true,
-		Memory:  true,
-	}
+	// The zero value enables everything: the ambient-context toggles are now
+	// negative flags (No*), all defaulting to false.
+	return captaincli.AIRuntimeOptions{}
 }
 
-// buildAIFixRequest produces the (Config, Request) pair every aifix caller
-// in gavel uses. It honours ~/.captain.yaml + CLI overlays via opts and
-// then forces the per-feature toggles aifix requires regardless of caller
-// preferences:
+type aiFixRequestOptions struct {
+	Runtime captaincli.AIRuntimeOptions
+	Layers  []api.SpecLayer
+	Saved   captainconfig.Config
+	Dir     string
+}
+
+func buildAIFixRequest(options aiFixRequestOptions) (captaincli.AIRuntimeResolved, error) {
+	layers := []api.SpecLayer{api.PromptSpecLayer("repair host", api.Spec{Permissions: api.Permissions{Mode: api.PermissionAcceptEdits}})}
+	layers = append(layers, options.Layers...)
+	return options.Runtime.Resolve(captaincli.AIRuntimeResolveOptions{
+		Layers: layers, Saved: options.Saved, Cwd: options.Dir, RequireModel: true,
+	})
+}
+
+func newAIFixRenderer() *captaincli.EventRenderer {
+	return captaincli.NewEventRenderer(os.Stderr)
+}
+
+// newAIFixVerifyTee streams a verify command's output onto the same stderr the
+// event renderer draws on, so a check that polls CI for minutes is visibly
+// moving instead of looking hung.
 //
-//   - Edit: ai-fix must edit files in place. Without it codex-cli runs
-//     read-only ("workspace is mounted read-only") and claude-cli refuses
-//     the apply_patch tool.
-//   - Verbose + StrictMCP: needed by claude-cli streaming, ignored by
-//     codex-cli / gemini-cli.
-func buildAIFixRequest(opts captaincli.AIRuntimeOptions) (captainai.Config, captainai.Request) {
-	cfg := opts.ToConfig()
-	req := opts.ToRequest("", "", "")
-	req.Edit = true
-	req.Verbose = true
-	req.StrictMCP = true
-	return cfg, req
+// The tee never calls into the renderer: EventRenderer.write has no mutex and
+// mutates its own error state, so routing bytes through it from the exec copy
+// goroutine would race. streamtee writes whole lines straight to the file and
+// commits any in-place line first — see its package doc.
+//
+// The gutter is plain when stderr is not a terminal, so a redirected run stays
+// greppable.
+func newAIFixVerifyTee() *streamtee.Writer {
+	prefix := "│ "
+	if ttyrender.IsTerminal(os.Stderr) {
+		prefix = clicky.Text("│ ", "text-gray-500").ANSI()
+	}
+	return streamtee.New(streamtee.Options{Out: os.Stderr, Prefix: prefix, MaxLineBytes: 4096})
 }

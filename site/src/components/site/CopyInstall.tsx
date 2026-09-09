@@ -1,17 +1,16 @@
-import { useState } from "react";
 import { Check, Copy } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useTimeoutFlash } from "@/lib/useTimeoutFlash";
 
 const INSTALL_COMMAND = "go install github.com/flanksource/gavel/cmd/gavel@latest";
 
 export default function CopyInstall({ className }: { className?: string }) {
-  const [copied, setCopied] = useState(false);
+  const [copied, flashCopied] = useTimeoutFlash(false, 2000);
 
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(INSTALL_COMMAND);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 2000);
+      flashCopied(true);
     } catch {
       // clipboard API unavailable (http context, permissions) — leave state unchanged
     }

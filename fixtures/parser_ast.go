@@ -3,6 +3,7 @@ package fixtures
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/flanksource/commons/logger"
 	"github.com/goccy/go-yaml"
@@ -12,6 +13,8 @@ import (
 	extast "github.com/yuin/goldmark/extension/ast"
 	"github.com/yuin/goldmark/parser"
 	"github.com/yuin/goldmark/text"
+
+	"github.com/flanksource/gavel/fixtures/record"
 )
 
 // commandBlockBuilder helps build a command fixture from markdown AST
@@ -23,6 +26,28 @@ type commandBlockBuilder struct {
 	validations []string
 	isComplete  bool
 	origin      *FixtureOrigin
+	config      *executableFenceConfig
+}
+
+type executableFenceConfig struct {
+	Content    string                 `yaml:"content"`
+	CWD        string                 `yaml:"cwd"`
+	Env        map[string]any         `yaml:"env"`
+	Terminal   string                 `yaml:"terminal"`
+	Record     *record.Spec           `yaml:"record"`
+	OS         string                 `yaml:"os"`
+	Arch       string                 `yaml:"arch"`
+	Skip       string                 `yaml:"skip"`
+	ExitCode   *int                   `yaml:"exitCode"`
+	Stdout     string                 `yaml:"stdout"`
+	Stderr     string                 `yaml:"stderr"`
+	Error      string                 `yaml:"error"`
+	Format     string                 `yaml:"format"`
+	Count      *int                   `yaml:"count"`
+	Output     string                 `yaml:"output"`
+	Timeout    string                 `yaml:"timeout"`
+	CEL        string                 `yaml:"cel"`
+	Properties map[string]interface{} `yaml:"properties"`
 }
 
 // parseMarkdownWithGoldmarkTree parses markdown content using goldmark AST parser and returns a tree structure
@@ -68,14 +93,8 @@ func parseMarkdownWithGoldmarkTree(content string, frontMatter *FrontMatter, sou
 
 			// Complete any pending standalone code block
 			if standaloneCodeBlock != nil && !standaloneCodeBlock.isComplete {
-				if fixture := buildFixtureFromCommand(standaloneCodeBlock, frontMatter, sourceDir); fixture != nil {
-					currentSection.AddChild(&FixtureNode{
-						Name:     fixture.Test.Name,
-						Type:     TestNode,
-						Test:     fixture.Test,
-						Origin:   fixture.Origin,
-						Children: make([]*FixtureNode, 0),
-					})
+				if err := appendCommandFixture(currentSection, standaloneCodeBlock, frontMatter, sourceDir); err != nil {
+					return ast.WalkStop, err
 				}
 				standaloneCodeBlock = nil
 			}
@@ -85,15 +104,8 @@ func parseMarkdownWithGoldmarkTree(content string, frontMatter *FrontMatter, sou
 
 			// Complete previous command block if exists
 			if currentCommand != nil && !currentCommand.isComplete {
-				if fixture := buildFixtureFromCommand(currentCommand, frontMatter, sourceDir); fixture != nil {
-					// Add test to the current section
-					currentSection.AddChild(&FixtureNode{
-						Name:     fixture.Test.Name,
-						Type:     TestNode,
-						Test:     fixture.Test,
-						Origin:   fixture.Origin,
-						Children: make([]*FixtureNode, 0),
-					})
+				if err := appendCommandFixture(currentSection, currentCommand, frontMatter, sourceDir); err != nil {
+					return ast.WalkStop, err
 				}
 				currentCommand = nil
 			}
@@ -162,7 +174,33 @@ func parseMarkdownWithGoldmarkTree(content string, frontMatter *FrontMatter, sou
 			lang := strings.ToLower(extractLanguage(infoString))
 			codeContent := extractCodeBlockContent(&node.BaseBlock, source)
 
-			if inCommandBlock && currentCommand != nil {
+			if kind := runnerStepKind(infoString); kind != "" {
+				// `yaml test` / `yaml lint` (or bare `test`/`lint`): the body is
+				// engine options, run by the TestStepRunner/LintStepRunner hook.
+				name := parentHeading
+				if name == "" {
+					name = kind + "-step"
+				}
+				test := &FixtureTest{
+					Name:       name,
+					SourceDir:  sourceDir,
+					RunnerStep: &RunnerStepSpec{Kind: kind, Config: codeContent},
+				}
+				if frontMatter != nil {
+					test.FrontMatter = *frontMatter
+				}
+				currentSection.AddChild(&FixtureNode{
+					Name: name,
+					Type: TestNode,
+					Test: test,
+					Origin: &FixtureOrigin{
+						Kind:        "runner-step",
+						SectionPath: currentSection.GetSectionPath(),
+						Line:        nodeStartLine(node, source),
+					},
+					Children: make([]*FixtureNode, 0),
+				})
+			} else if inCommandBlock && currentCommand != nil {
 				// Handle code blocks within command blocks (existing behavior)
 				// Get allowed code blocks from frontmatter
 				allowedBlocks := getCodeBlocksOrDefault(frontMatter)
@@ -171,6 +209,10 @@ func parseMarkdownWithGoldmarkTree(content string, frontMatter *FrontMatter, sou
 				if shouldExecuteCodeBlock(lang, allowedBlocks) {
 					currentCommand.language = lang
 					currentCommand.content = codeContent
+					if cfg, ok := parseExecutableFenceConfig(codeContent); ok {
+						currentCommand.content = cfg.Content
+						currentCommand.config = &cfg
+					}
 				} else if strings.ToLower(lang) == "frontmatter" || strings.ToLower(lang) == "yaml" {
 					// Always parse frontmatter/yaml blocks regardless of codeBlocks filter
 					currentCommand.frontmatter = codeContent
@@ -181,14 +223,8 @@ func parseMarkdownWithGoldmarkTree(content string, frontMatter *FrontMatter, sou
 				// Handle standalone code blocks (new behavior)
 				// Complete any pending standalone code block first
 				if standaloneCodeBlock != nil && !standaloneCodeBlock.isComplete {
-					if fixture := buildFixtureFromCommand(standaloneCodeBlock, frontMatter, sourceDir); fixture != nil {
-						currentSection.AddChild(&FixtureNode{
-							Name:     fixture.Test.Name,
-							Type:     TestNode,
-							Test:     fixture.Test,
-							Origin:   fixture.Origin,
-							Children: make([]*FixtureNode, 0),
-						})
+					if err := appendCommandFixture(currentSection, standaloneCodeBlock, frontMatter, sourceDir); err != nil {
+						return ast.WalkStop, err
 					}
 					standaloneCodeBlock = nil
 				}
@@ -210,6 +246,10 @@ func parseMarkdownWithGoldmarkTree(content string, frontMatter *FrontMatter, sou
 						SectionPath: currentSection.GetSectionPath(),
 						Line:        nodeStartLine(node, source),
 					},
+				}
+				if cfg, ok := parseExecutableFenceConfig(codeContent); ok {
+					standaloneCodeBlock.content = cfg.Content
+					standaloneCodeBlock.config = &cfg
 				}
 
 			} else if !inCommandBlock && standaloneCodeBlock != nil {
@@ -237,14 +277,8 @@ func parseMarkdownWithGoldmarkTree(content string, frontMatter *FrontMatter, sou
 				standaloneCodeBlock.validations = append(standaloneCodeBlock.validations, validations...)
 
 				// Complete the standalone code block now that we have validations
-				if fixture := buildFixtureFromCommand(standaloneCodeBlock, frontMatter, sourceDir); fixture != nil {
-					currentSection.AddChild(&FixtureNode{
-						Name:     fixture.Test.Name,
-						Type:     TestNode,
-						Test:     fixture.Test,
-						Origin:   fixture.Origin,
-						Children: make([]*FixtureNode, 0),
-					})
+				if err := appendCommandFixture(currentSection, standaloneCodeBlock, frontMatter, sourceDir); err != nil {
+					return ast.WalkStop, err
 				}
 				standaloneCodeBlock = nil
 			}
@@ -272,28 +306,15 @@ func parseMarkdownWithGoldmarkTree(content string, frontMatter *FrontMatter, sou
 
 	// Complete final standalone code block if exists
 	if standaloneCodeBlock != nil && !standaloneCodeBlock.isComplete {
-		if fixture := buildFixtureFromCommand(standaloneCodeBlock, frontMatter, sourceDir); fixture != nil {
-			currentSection.AddChild(&FixtureNode{
-				Name:     fixture.Test.Name,
-				Type:     TestNode,
-				Test:     fixture.Test,
-				Origin:   fixture.Origin,
-				Children: make([]*FixtureNode, 0),
-			})
+		if err := appendCommandFixture(currentSection, standaloneCodeBlock, frontMatter, sourceDir); err != nil {
+			return nil, err
 		}
 	}
 
 	// Complete final command block if exists
 	if currentCommand != nil && !currentCommand.isComplete {
-		if fixture := buildFixtureFromCommand(currentCommand, frontMatter, sourceDir); fixture != nil {
-			// Add test to the current command section
-			currentSection.AddChild(&FixtureNode{
-				Name:     fixture.Test.Name,
-				Type:     TestNode,
-				Test:     fixture.Test,
-				Origin:   fixture.Origin,
-				Children: make([]*FixtureNode, 0),
-			})
+		if err := appendCommandFixture(currentSection, currentCommand, frontMatter, sourceDir); err != nil {
+			return nil, err
 		}
 	}
 
@@ -398,10 +419,28 @@ func extractValidationsFromList(listNode *ast.List, source []byte) []string {
 	return validations
 }
 
+// appendCommandFixture builds a fixture from a completed command block and
+// attaches it to section. Every completion site funnels through here so a
+// rejected per-test frontmatter key fails the parse in one place.
+func appendCommandFixture(section *FixtureNode, cmd *commandBlockBuilder, frontMatter *FrontMatter, sourceDir string) error {
+	fixture, err := buildFixtureFromCommand(cmd, frontMatter, sourceDir)
+	if err != nil || fixture == nil {
+		return err
+	}
+	section.AddChild(&FixtureNode{
+		Name:     fixture.Test.Name,
+		Type:     TestNode,
+		Test:     fixture.Test,
+		Origin:   fixture.Origin,
+		Children: make([]*FixtureNode, 0),
+	})
+	return nil
+}
+
 // buildFixtureFromCommand converts a commandBlockBuilder to a FixtureTest
-func buildFixtureFromCommand(cmd *commandBlockBuilder, frontMatter *FrontMatter, sourceDir string) *FixtureNode {
+func buildFixtureFromCommand(cmd *commandBlockBuilder, frontMatter *FrontMatter, sourceDir string) (*FixtureNode, error) {
 	if cmd.name == "" || cmd.content == "" {
-		return nil
+		return nil, nil
 	}
 	exec := ExecFixtureBase{
 		Exec: cmd.language,
@@ -409,6 +448,9 @@ func buildFixtureFromCommand(cmd *commandBlockBuilder, frontMatter *FrontMatter,
 	}
 
 	switch cmd.language {
+	case "exec":
+		exec.Exec = "bash"
+		exec.Args = []string{"-c", cmd.content}
 	case "bash", "sh":
 		exec.Args = []string{"-c", cmd.content}
 	case "shell":
@@ -453,9 +495,29 @@ func buildFixtureFromCommand(cmd *commandBlockBuilder, frontMatter *FrontMatter,
 			OS       string         `yaml:"os"`
 			Arch     string         `yaml:"arch"`
 			Skip     string         `yaml:"skip"`
+			// Setup is bound only so it can be rejected. A setup is prepared once
+			// per file and shared by every test in it, so a per-test block cannot be
+			// honoured — and unknown keys here are otherwise dropped silently.
+			Setup map[string]any `yaml:"setup"`
+		}
+
+		// `record:` is decoded on its own, ahead of the tolerant decode below that
+		// drops every key when any one of them fails: a mistyped recorder must be a
+		// red parse, not a fixture that silently records nothing.
+		var recordOnly struct {
+			Record *record.Spec `yaml:"record"`
+		}
+		if err := yaml.Unmarshal([]byte(cmd.frontmatter), &recordOnly); err != nil {
+			return nil, fmt.Errorf("%s: %w", cmd.name, err)
+		}
+		if recordOnly.Record != nil {
+			fixture.Record = recordOnly.Record
 		}
 
 		if err := yaml.Unmarshal([]byte(cmd.frontmatter), &cmdFrontMatter); err == nil {
+			if cmdFrontMatter.Setup != nil {
+				return nil, fmt.Errorf("%s: setup: is file-level frontmatter only, it cannot be set per-test", cmd.name)
+			}
 			if cmdFrontMatter.CWD != "" {
 				fixture.CWD = cmdFrontMatter.CWD
 			}
@@ -480,6 +542,10 @@ func buildFixtureFromCommand(cmd *commandBlockBuilder, frontMatter *FrontMatter,
 		}
 	}
 
+	if cmd.config != nil {
+		applyExecutableFenceConfig(&fixture, *cmd.config)
+	}
+
 	// Apply file-level frontmatter if present
 	if frontMatter != nil {
 		// Assign the entire frontmatter to preserve metadata
@@ -498,10 +564,17 @@ func buildFixtureFromCommand(cmd *commandBlockBuilder, frontMatter *FrontMatter,
 
 	// Combine validations into CEL expression
 	if len(cmd.validations) > 0 {
+		existingCEL := fixture.Expected.CEL
+		nextCEL := ""
 		if len(cmd.validations) == 1 {
-			fixture.Expected.CEL = cmd.validations[0]
+			nextCEL = cmd.validations[0]
 		} else {
-			fixture.Expected.CEL = strings.Join(cmd.validations, " && ")
+			nextCEL = strings.Join(cmd.validations, " && ")
+		}
+		if existingCEL != "" {
+			fixture.Expected.CEL = existingCEL + " && " + nextCEL
+		} else {
+			fixture.Expected.CEL = nextCEL
 		}
 	}
 
@@ -511,6 +584,73 @@ func buildFixtureFromCommand(cmd *commandBlockBuilder, frontMatter *FrontMatter,
 		Type:   TestNode,
 		Test:   &fixture,
 		Origin: cmd.origin,
+	}, nil
+}
+
+func parseExecutableFenceConfig(content string) (executableFenceConfig, bool) {
+	var cfg executableFenceConfig
+	if err := yaml.Unmarshal([]byte(content), &cfg); err != nil {
+		return executableFenceConfig{}, false
+	}
+	if strings.TrimSpace(cfg.Content) == "" {
+		return executableFenceConfig{}, false
+	}
+	return cfg, true
+}
+
+func applyExecutableFenceConfig(fixture *FixtureTest, cfg executableFenceConfig) {
+	if cfg.CWD != "" {
+		fixture.CWD = cfg.CWD
+	}
+	if cfg.Env != nil {
+		fixture.Env = cfg.Env
+	}
+	if cfg.Terminal != "" {
+		fixture.Terminal = cfg.Terminal
+	}
+	if cfg.Record != nil {
+		fixture.Record = cfg.Record
+	}
+	if cfg.OS != "" {
+		fixture.TestOS = cfg.OS
+	}
+	if cfg.Arch != "" {
+		fixture.TestArch = cfg.Arch
+	}
+	if cfg.Skip != "" {
+		fixture.TestSkip = cfg.Skip
+	}
+	if cfg.ExitCode != nil {
+		fixture.Expected.ExitCode = cfg.ExitCode
+	}
+	if cfg.Stdout != "" {
+		fixture.Expected.Stdout = cfg.Stdout
+	}
+	if cfg.Stderr != "" {
+		fixture.Expected.Stderr = cfg.Stderr
+	}
+	if cfg.Error != "" {
+		fixture.Expected.Error = cfg.Error
+	}
+	if cfg.Format != "" {
+		fixture.Expected.Format = cfg.Format
+	}
+	if cfg.Count != nil {
+		fixture.Expected.Count = cfg.Count
+	}
+	if cfg.Output != "" {
+		fixture.Expected.Output = cfg.Output
+	}
+	if cfg.CEL != "" {
+		fixture.Expected.CEL = cfg.CEL
+	}
+	if cfg.Timeout != "" {
+		if timeout, err := time.ParseDuration(cfg.Timeout); err == nil {
+			fixture.Expected.Timeout = &timeout
+		}
+	}
+	if cfg.Properties != nil {
+		fixture.Expected.Properties = cfg.Properties
 	}
 }
 
@@ -553,7 +693,11 @@ func parseTableFromAST(tableAST *extast.Table, source []byte, frontMatter *Front
 
 			// Create fixture from row
 			if len(headers) > 0 && len(values) == len(headers) {
-				if fixtureNode := parseTableRow(headers, values); fixtureNode != nil {
+				fixtureNode, err := parseTableRow(headers, values)
+				if err != nil {
+					return nil, err
+				}
+				if fixtureNode != nil {
 					// Apply frontmatter and source directory
 					if fixtureNode.Test != nil {
 						applyFrontMatterToFixture(fixtureNode.Test, frontMatter)

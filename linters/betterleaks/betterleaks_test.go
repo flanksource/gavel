@@ -85,7 +85,7 @@ func TestBuildArgs(t *testing.T) {
 }
 
 func TestResolveConfigEmpty(t *testing.T) {
-	path, err := ResolveConfig(t.TempDir(), nil)
+	path, err := ResolveConfig(ResolveConfigOptions{WorkDir: t.TempDir()})
 	require.NoError(t, err)
 	require.Empty(t, path, "empty input means skip the linter")
 }
@@ -95,7 +95,7 @@ func TestResolveConfigSinglePassthrough(t *testing.T) {
 	cfg := filepath.Join(tmp, "only.toml")
 	require.NoError(t, os.WriteFile(cfg, []byte(`title = "solo"`+"\n"), 0o644))
 
-	path, err := ResolveConfig(tmp, []string{cfg})
+	path, err := ResolveConfig(ResolveConfigOptions{WorkDir: tmp, Configs: []string{cfg}})
 	require.NoError(t, err)
 	require.Equal(t, cfg, path, "single config passed through unchanged")
 	_, statErr := os.Stat(filepath.Join(tmp, ".tmp", "betterleaks.toml"))
@@ -139,7 +139,7 @@ fi
 printf '[]' >"$report"
 `
 	require.NoError(t, os.WriteFile(fakeBetterleaks, []byte(script), 0o755))
-	t.Setenv("PATH", binDir)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	b := NewBetterleaks(workDir)
 	violations, err := b.Run(commonsContext.NewContext(context.Background()), nil)
@@ -197,7 +197,7 @@ paths = ["testdata/.*"]
 	require.NoError(t, os.WriteFile(homeCfg, []byte(homeTOML), 0o644))
 	require.NoError(t, os.WriteFile(repoCfg, []byte(repoTOML), 0o644))
 
-	out, err := ResolveConfig(tmp, []string{homeCfg, repoCfg})
+	out, err := ResolveConfig(ResolveConfigOptions{WorkDir: tmp, Configs: []string{homeCfg, repoCfg}})
 	require.NoError(t, err)
 	require.Equal(t, filepath.Join(tmp, ".tmp", "betterleaks.toml"), out)
 

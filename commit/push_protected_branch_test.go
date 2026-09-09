@@ -7,7 +7,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	clickyai "github.com/flanksource/clicky/ai"
+	clickyai "github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/github"
 )
 
@@ -65,7 +65,7 @@ var _ = Describe("executeNewPRPush on a protected current branch", func() {
 		// Stub the LLM constructor so generatePRContent isn't actually called.
 		previousAgent := newAgentFunc
 		newAgentFunc = func(clickyai.AgentConfig) (clickyai.Agent, error) {
-			return nil, nil
+			return &agentLifecycleProbe{}, nil
 		}
 		DeferCleanup(func() { newAgentFunc = previousAgent })
 	})
@@ -84,7 +84,7 @@ var _ = Describe("executeNewPRPush on a protected current branch", func() {
 			},
 			defaultBranch: func(github.Options) (string, error) { return "main", nil },
 			isAncestor:    func(_, _, _ string) bool { return false },
-			generatePRPrompt: func(context.Context, clickyai.Agent, PRContentInput) (PRContent, error) {
+			generatePRPrompt: func(context.Context, PRContentInput) (PRContent, error) {
 				return PRContent{
 					Title:  "feat: on main",
 					Body:   "body",
@@ -120,7 +120,7 @@ var _ = Describe("executeNewPRPush on a protected current branch", func() {
 			},
 			defaultBranch: func(github.Options) (string, error) { return "main", nil },
 			isAncestor:    func(_, _, _ string) bool { return false },
-			generatePRPrompt: func(context.Context, clickyai.Agent, PRContentInput) (PRContent, error) {
+			generatePRPrompt: func(context.Context, PRContentInput) (PRContent, error) {
 				return PRContent{Title: "feat: x", Branch: ""}, nil
 			},
 		})

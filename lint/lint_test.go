@@ -1,0 +1,694 @@
+package lint
+
+import (
+	"os"
+	"path/filepath"
+	"sort"
+	"testing"
+
+	"github.com/flanksource/clicky"
+	"github.com/flanksource/gavel/linters"
+	"github.com/flanksource/gavel/linters/betterleaks"
+	"github.com/flanksource/gavel/linters/eslint"
+	"github.com/flanksource/gavel/linters/golangci"
+	"github.com/flanksource/gavel/linters/markdownlint"
+	"github.com/flanksource/gavel/linters/oxlint"
+	"github.com/flanksource/gavel/linters/reactdoctor"
+	"github.com/flanksource/gavel/models"
+	"github.com/flanksource/gavel/verify"
+)
+
+func TestShouldRunLinterSkipsGolangciWithoutGoMod(t *testing.T) {
+	workDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workDir, ".git"), 0o755); err != nil {
+		t.Fatalf("create .git: %v", err)
+	}
+
+	ok, reason := shouldRunLinter(workDir, verify.GavelConfig{}, "golangci-lint", false, false, false)
+	if ok {
+		t.Fatal("expected golangci-lint to be skipped without a go.mod")
+	}
+	if reason != "no go.mod found" {
+		t.Fatalf("unexpected skip reason: %q", reason)
+	}
+}
+
+func TestExecuteJSCPDOptIn(t *testing.T) {
+	t.Run("jscpd disabled by default", func(t *testing.T) {
+		workDir := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(workDir, ".git"), 0o755); err != nil {
+			t.Fatalf("create .git: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(workDir, "example.go"), []byte("package example\n"), 0o644); err != nil {
+			t.Fatalf("write example.go: %v", err)
+		}
+
+		results, err := Execute(Options{
+			WorkDir: workDir,
+			Timeout: "1s",
+		})
+		if err != nil {
+			t.Fatalf("Execute: %v", err)
+		}
+		for _, result := range results {
+			if result != nil && result.Linter == "jscpd" {
+				t.Fatalf("expected jscpd to be absent when not enabled, got %+v", result)
+			}
+		}
+	})
+
+	t.Run("jscpd enabled via config participates in selection", func(t *testing.T) {
+		workDir := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(workDir, ".git"), 0o755); err != nil {
+			t.Fatalf("create .git: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(workDir, ".gavel.yaml"), []byte("lint:\n  linters:\n    jscpd:\n      enabled: true\n"), 0o644); err != nil {
+			t.Fatalf("write .gavel.yaml: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(workDir, "example.go"), []byte("package example\n"), 0o644); err != nil {
+			t.Fatalf("write example.go: %v", err)
+		}
+
+		results, err := Execute(Options{
+			WorkDir: workDir,
+			Timeout: "1s",
+		})
+		if err != nil {
+			t.Fatalf("Execute: %v", err)
+		}
+		found := false
+		for _, result := range results {
+			if result != nil && result.Linter == "jscpd" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected jscpd result when enabled via config")
+		}
+	})
+}
+
+func TestExecuteSelectsESLintForESLintConfigFiles(t *testing.T) {
+	clicky.ClearGlobalTasks()
+	t.Cleanup(clicky.ClearGlobalTasks)
+
+	workDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workDir, ".git"), 0o755); err != nil {
+		t.Fatalf("create .git: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "eslint.config.mjs"), []byte("export default [];\n"), 0o644); err != nil {
+		t.Fatalf("write eslint config: %v", err)
+	}
+
+	results, err := Execute(Options{
+		WorkDir: workDir,
+		Timeout: "1s",
+	})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	found := false
+	for _, result := range results {
+		if result != nil && result.Linter == "eslint" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected eslint to be selected when eslint.config.mjs is present")
+	}
+}
+
+func TestGroupFilesByGitRootUsesWorkDirForImplicitRun(t *testing.T) {
+	repo := t.TempDir()
+	subdir := filepath.Join(repo, "subdir")
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatalf("create .git: %v", err)
+	}
+	if err := os.MkdirAll(subdir, 0o755); err != nil {
+		t.Fatalf("create subdir: %v", err)
+	}
+
+	groups := GroupFilesByGitRoot(Options{WorkDir: subdir})
+	if len(groups) != 1 {
+		t.Fatalf("expected 1 group, got %d", len(groups))
+	}
+	if groups[0].GitRoot != subdir {
+		t.Fatalf("expected implicit group root %q, got %q", subdir, groups[0].GitRoot)
+	}
+}
+
+func TestShouldSelectLinterIgnoresRepoRootConfigFromSubdir(t *testing.T) {
+	repo := t.TempDir()
+	subdir := filepath.Join(repo, "subdir")
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatalf("create .git: %v", err)
+	}
+	if err := os.MkdirAll(subdir, 0o755); err != nil {
+		t.Fatalf("create subdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "eslint.config.mjs"), []byte("export default [];\n"), 0o644); err != nil {
+		t.Fatalf("write repo eslint config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(subdir, "foo.ts"), []byte("const x = 1;\n"), 0o644); err != nil {
+		t.Fatalf("write ts file: %v", err)
+	}
+
+	ok, _ := shouldSelectLinter(subdir, verify.GavelConfig{}, eslint.NewESLint(subdir), false)
+	if ok {
+		t.Fatal("expected eslint to be skipped when config exists only at repo root")
+	}
+}
+
+func TestShouldSelectLinterUsesDirectCWDConfig(t *testing.T) {
+	workDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workDir, "eslint.config.mjs"), []byte("export default [];\n"), 0o644); err != nil {
+		t.Fatalf("write eslint config: %v", err)
+	}
+
+	ok, reason := shouldSelectLinter(workDir, verify.GavelConfig{}, eslint.NewESLint(workDir), false)
+	if !ok {
+		t.Fatalf("expected eslint to be selected, got skip reason %q", reason)
+	}
+}
+
+func TestShouldSelectReactDoctorUsesDirectConfig(t *testing.T) {
+	workDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workDir, "doctor.config.ts"), []byte("export default {};\n"), 0o644); err != nil {
+		t.Fatalf("write react-doctor config: %v", err)
+	}
+
+	ok, reason := shouldSelectLinter(workDir, verify.GavelConfig{}, reactdoctor.NewReactDoctor(workDir), false)
+	if !ok {
+		t.Fatalf("expected react-doctor to be selected, got skip reason %q", reason)
+	}
+}
+
+func TestShouldSelectReactDoctorUsesPackageJSONConfig(t *testing.T) {
+	workDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workDir, "package.json"), []byte(`{"reactDoctor":{}}`), 0o644); err != nil {
+		t.Fatalf("write package.json: %v", err)
+	}
+
+	ok, reason := shouldSelectLinter(workDir, verify.GavelConfig{}, reactdoctor.NewReactDoctor(workDir), false)
+	if !ok {
+		t.Fatalf("expected react-doctor to be selected from package.json#reactDoctor, got %q", reason)
+	}
+}
+
+func TestShouldSelectReactDoctorUsesReactDependency(t *testing.T) {
+	workDir := t.TempDir()
+	src := filepath.Join(workDir, "src")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatalf("create src: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "package.json"), []byte(`{"dependencies":{"react":"^19.0.0"}}`), 0o644); err != nil {
+		t.Fatalf("write package.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "App.tsx"), []byte("export function App() { return null }\n"), 0o644); err != nil {
+		t.Fatalf("write App.tsx: %v", err)
+	}
+
+	ok, reason := shouldSelectLinter(workDir, verify.GavelConfig{}, reactdoctor.NewReactDoctor(workDir), false)
+	if !ok {
+		t.Fatalf("expected react-doctor to be selected from React dependency, got %q", reason)
+	}
+}
+
+func TestShouldSelectReactDoctorRequiresReactOrConfigForImplicitRun(t *testing.T) {
+	workDir := t.TempDir()
+	src := filepath.Join(workDir, "src")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatalf("create src: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "package.json"), []byte(`{"scripts":{}}`), 0o644); err != nil {
+		t.Fatalf("write package.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "App.tsx"), []byte("export function App() { return null }\n"), 0o644); err != nil {
+		t.Fatalf("write App.tsx: %v", err)
+	}
+
+	ok, reason := shouldSelectLinter(workDir, verify.GavelConfig{}, reactdoctor.NewReactDoctor(workDir), false)
+	if ok {
+		t.Fatal("expected react-doctor to be skipped without React dependency or config on implicit run")
+	}
+	if reason != "no React dependency or react-doctor config found in work dir" {
+		t.Fatalf("unexpected skip reason: %q", reason)
+	}
+}
+
+func TestShouldSelectReactDoctorExplicitRunAllowsSourceWithoutConfig(t *testing.T) {
+	workDir := t.TempDir()
+	src := filepath.Join(workDir, "src")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatalf("create src: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "App.tsx"), []byte("export function App() { return null }\n"), 0o644); err != nil {
+		t.Fatalf("write App.tsx: %v", err)
+	}
+
+	ok, reason := shouldSelectLinter(workDir, verify.GavelConfig{}, reactdoctor.NewReactDoctor(workDir), true)
+	if !ok {
+		t.Fatalf("expected explicit react-doctor run to be selected, got %q", reason)
+	}
+}
+
+func TestShouldSelectLinterIgnoresNestedConfig(t *testing.T) {
+	workDir := t.TempDir()
+	nested := filepath.Join(workDir, "nested")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatalf("create nested dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(nested, "eslint.config.mjs"), []byte("export default [];\n"), 0o644); err != nil {
+		t.Fatalf("write nested eslint config: %v", err)
+	}
+
+	ok, _ := shouldSelectLinter(workDir, verify.GavelConfig{}, eslint.NewESLint(workDir), false)
+	if ok {
+		t.Fatal("expected nested eslint config to be ignored")
+	}
+}
+
+func TestShouldSelectLinterAllowsExplicitGavelEnablementWithoutToolConfig(t *testing.T) {
+	repo := t.TempDir()
+	subdir := filepath.Join(repo, "subdir")
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatalf("create .git: %v", err)
+	}
+	if err := os.MkdirAll(subdir, 0o755); err != nil {
+		t.Fatalf("create subdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".gavel.yaml"), []byte("lint:\n  linters:\n    eslint:\n      enabled: true\n"), 0o644); err != nil {
+		t.Fatalf("write .gavel.yaml: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(subdir, "foo.ts"), []byte("const x = 1;\n"), 0o644); err != nil {
+		t.Fatalf("write ts file: %v", err)
+	}
+
+	cfg, err := verify.LoadGavelConfig(subdir)
+	if err != nil {
+		t.Fatalf("load gavel config: %v", err)
+	}
+	ok, reason := shouldSelectLinter(subdir, cfg, eslint.NewESLint(subdir), false)
+	if !ok {
+		t.Fatalf("expected eslint to be selected via inherited .gavel enablement, got %q", reason)
+	}
+}
+
+func TestShouldSelectBetterleaksFromHomeConfigExtras(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	repo := t.TempDir()
+	workDir := filepath.Join(repo, "service")
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatalf("create .git: %v", err)
+	}
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatalf("create work dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".gavel.yaml"), []byte("secrets:\n  configs:\n    - .betterleaks.toml\n"), 0o644); err != nil {
+		t.Fatalf("write home .gavel.yaml: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".betterleaks.toml"), []byte("title = \"home\"\n"), 0o644); err != nil {
+		t.Fatalf("write home betterleaks config: %v", err)
+	}
+
+	cfg, err := verify.LoadGavelConfig(workDir)
+	if err != nil {
+		t.Fatalf("load gavel config: %v", err)
+	}
+	ok, reason := shouldSelectLinter(workDir, cfg, betterleaks.NewBetterleaks(workDir), false)
+	if !ok {
+		t.Fatalf("expected betterleaks to be selected via home secrets.configs, got %q", reason)
+	}
+}
+
+func TestShouldSelectBetterleaksSkipsWhenExtraConfigMissing(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	repo := t.TempDir()
+	workDir := filepath.Join(repo, "service")
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatalf("create .git: %v", err)
+	}
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatalf("create work dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".gavel.yaml"), []byte("secrets:\n  configs:\n    - .betterleaks.toml\n"), 0o644); err != nil {
+		t.Fatalf("write home .gavel.yaml: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "README.md"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatalf("write README: %v", err)
+	}
+
+	cfg, err := verify.LoadGavelConfig(workDir)
+	if err != nil {
+		t.Fatalf("load gavel config: %v", err)
+	}
+	ok, reason := shouldSelectLinter(workDir, cfg, betterleaks.NewBetterleaks(workDir), false)
+	if ok {
+		t.Fatal("expected betterleaks to be skipped when configured extra file is missing")
+	}
+	if reason != "no betterleaks/gitleaks config found" {
+		t.Fatalf("unexpected skip reason: %q", reason)
+	}
+}
+
+func TestShouldSelectLinterExplicitFilesDoNotBypassConfigRequirement(t *testing.T) {
+	workDir := t.TempDir()
+	nested := filepath.Join(workDir, "nested")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatalf("create nested dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(nested, "foo.ts"), []byte("const x = 1;\n"), 0o644); err != nil {
+		t.Fatalf("write nested ts file: %v", err)
+	}
+
+	ok, _ := shouldSelectLinter(workDir, verify.GavelConfig{}, eslint.NewESLint(workDir), false)
+	if ok {
+		t.Fatal("expected nested file to be insufficient without direct cwd config or enablement")
+	}
+}
+
+func TestShouldSelectLinterSkipsMatchInsideGitignoredDir(t *testing.T) {
+	workDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workDir, ".git"), 0o755); err != nil {
+		t.Fatalf("create .git: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, ".gitignore"), []byte("node_modules/\n"), 0o644); err != nil {
+		t.Fatalf("write .gitignore: %v", err)
+	}
+	dep := filepath.Join(workDir, "node_modules", "dep")
+	if err := os.MkdirAll(dep, 0o755); err != nil {
+		t.Fatalf("create node_modules: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dep, "index.js"), []byte("module.exports = {};\n"), 0o644); err != nil {
+		t.Fatalf("write vendored js: %v", err)
+	}
+
+	ok, reason := shouldSelectLinter(workDir, verify.GavelConfig{}, eslint.NewESLint(workDir), true)
+	if ok {
+		t.Fatal("expected eslint to be skipped when its only match is inside a gitignored directory")
+	}
+	if reason != "no matching files" {
+		t.Fatalf("unexpected skip reason: %q", reason)
+	}
+}
+
+func TestShouldSelectLinterSkipsMatchInGavelGitignoredDir(t *testing.T) {
+	workDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workDir, ".git"), 0o755); err != nil {
+		t.Fatalf("create .git: %v", err)
+	}
+	dist := filepath.Join(workDir, "dist")
+	if err := os.MkdirAll(dist, 0o755); err != nil {
+		t.Fatalf("create dist: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dist, "bundle.js"), []byte("module.exports = {};\n"), 0o644); err != nil {
+		t.Fatalf("write bundle: %v", err)
+	}
+
+	cfg := verify.GavelConfig{Commit: verify.CommitConfig{GitIgnore: []string{"dist/"}}}
+	ok, reason := shouldSelectLinter(workDir, cfg, eslint.NewESLint(workDir), true)
+	if ok {
+		t.Fatal("expected eslint to be skipped when its only match is under a .gavel gitignore path")
+	}
+	if reason != "no matching files" {
+		t.Fatalf("unexpected skip reason: %q", reason)
+	}
+}
+
+func TestShouldSelectLinterExplicitSelectsWhenMatchNotIgnored(t *testing.T) {
+	workDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workDir, ".git"), 0o755); err != nil {
+		t.Fatalf("create .git: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, ".gitignore"), []byte("node_modules/\n"), 0o644); err != nil {
+		t.Fatalf("write .gitignore: %v", err)
+	}
+	src := filepath.Join(workDir, "src")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatalf("create src: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "index.js"), []byte("module.exports = {};\n"), 0o644); err != nil {
+		t.Fatalf("write src js: %v", err)
+	}
+
+	ok, reason := shouldSelectLinter(workDir, verify.GavelConfig{}, eslint.NewESLint(workDir), true)
+	if !ok {
+		t.Fatalf("expected eslint to be selected for src/index.js, got skip reason %q", reason)
+	}
+}
+
+func TestResolveLinterInvocationsBucketsByProjectRoot(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatalf("create .git: %v", err)
+	}
+
+	backend := filepath.Join(root, "backend")
+	backendPkg := filepath.Join(backend, "pkg")
+	frontend := filepath.Join(root, "frontend")
+	frontendSrc := filepath.Join(frontend, "src")
+	if err := os.MkdirAll(backendPkg, 0o755); err != nil {
+		t.Fatalf("mkdir backend: %v", err)
+	}
+	if err := os.MkdirAll(frontendSrc, 0o755); err != nil {
+		t.Fatalf("mkdir frontend: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(backend, "go.mod"), []byte("module example.com/backend\n"), 0o644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(frontend, "package.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatalf("write package.json: %v", err)
+	}
+	backendFile := filepath.Join(backendPkg, "foo.go")
+	frontendFile := filepath.Join(frontendSrc, "index.ts")
+	if err := os.WriteFile(backendFile, []byte("package pkg\n"), 0o644); err != nil {
+		t.Fatalf("write foo.go: %v", err)
+	}
+	if err := os.WriteFile(frontendFile, []byte("export const x = 1;\n"), 0o644); err != nil {
+		t.Fatalf("write index.ts: %v", err)
+	}
+
+	opts := Options{
+		WorkDir: root,
+		Files:   []string{backendFile, frontendFile},
+	}
+
+	t.Run("go files route to go.mod root", func(t *testing.T) {
+		invs := resolveLinterInvocations(golangci.NewGolangciLint(root), opts)
+		if len(invs) != 1 {
+			t.Fatalf("expected 1 golangci invocation, got %d", len(invs))
+		}
+		if invs[0].projectRoot != backend {
+			t.Fatalf("expected projectRoot=%q, got %q", backend, invs[0].projectRoot)
+		}
+		if len(invs[0].files) != 1 || invs[0].files[0] != filepath.Join("pkg", "foo.go") {
+			t.Fatalf("expected files=[pkg/foo.go] relative to backend, got %v", invs[0].files)
+		}
+	})
+
+	t.Run("ts files route to package.json root", func(t *testing.T) {
+		invs := resolveLinterInvocations(eslint.NewESLint(root), opts)
+		if len(invs) != 1 {
+			t.Fatalf("expected 1 eslint invocation, got %d", len(invs))
+		}
+		if invs[0].projectRoot != frontend {
+			t.Fatalf("expected projectRoot=%q, got %q", frontend, invs[0].projectRoot)
+		}
+		if len(invs[0].files) != 1 || invs[0].files[0] != filepath.Join("src", "index.ts") {
+			t.Fatalf("expected files=[src/index.ts] relative to frontend, got %v", invs[0].files)
+		}
+	})
+
+	t.Run("non-rooted linter keeps workdir and files", func(t *testing.T) {
+		invs := resolveLinterInvocations(markdownlint.NewMarkdownlint(root), opts)
+		if len(invs) != 1 {
+			t.Fatalf("expected 1 markdownlint invocation, got %d", len(invs))
+		}
+		if invs[0].projectRoot != root {
+			t.Fatalf("expected projectRoot=%q, got %q", root, invs[0].projectRoot)
+		}
+		if len(invs[0].files) != 2 {
+			t.Fatalf("expected 2 files passed through unchanged, got %d", len(invs[0].files))
+		}
+	})
+
+	t.Run("no files: fans out across every discovered project root", func(t *testing.T) {
+		// Add a second go.mod under tools/ so golangci has two roots to find.
+		tools := filepath.Join(root, "tools")
+		if err := os.MkdirAll(tools, 0o755); err != nil {
+			t.Fatalf("mkdir tools: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(tools, "go.mod"), []byte("module example.com/tools\n"), 0o644); err != nil {
+			t.Fatalf("write tools/go.mod: %v", err)
+		}
+
+		invs := resolveLinterInvocations(golangci.NewGolangciLint(root), Options{WorkDir: root})
+		if len(invs) != 2 {
+			t.Fatalf("expected 2 golangci invocations (backend, tools), got %d", len(invs))
+		}
+		got := []string{invs[0].projectRoot, invs[1].projectRoot}
+		sort.Strings(got)
+		want := []string{backend, tools}
+		sort.Strings(want)
+		if got[0] != want[0] || got[1] != want[1] {
+			t.Fatalf("expected roots=%v, got %v", want, got)
+		}
+		for _, inv := range invs {
+			if len(inv.files) != 0 {
+				t.Fatalf("expected empty files for whole-root invocation, got %v", inv.files)
+			}
+		}
+	})
+
+	t.Run("files with no project root are dropped", func(t *testing.T) {
+		orphan := filepath.Join(root, "orphan.go")
+		if err := os.WriteFile(orphan, []byte("package orphan\n"), 0o644); err != nil {
+			t.Fatalf("write orphan: %v", err)
+		}
+		invs := resolveLinterInvocations(golangci.NewGolangciLint(root), Options{
+			WorkDir: root,
+			Files:   []string{orphan},
+		})
+		if len(invs) != 0 {
+			t.Fatalf("expected 0 invocations for file without go.mod, got %+v", invs)
+		}
+	})
+}
+
+func TestResolveLinterInvocationsIncludesNestedProjectRoots(t *testing.T) {
+	repo := t.TempDir()
+	nested := filepath.Join(repo, "packages", "ui")
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatalf("create .git: %v", err)
+	}
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatalf("create nested project: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "package.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatalf("write root package.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(nested, "package.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatalf("write nested package.json: %v", err)
+	}
+
+	invs := resolveLinterInvocations(oxlint.NewOxlint(repo), Options{WorkDir: repo})
+	if len(invs) != 2 {
+		t.Fatalf("invocations = %d, want root and nested: %+v", len(invs), invs)
+	}
+	if invs[0].projectRoot != repo || invs[1].projectRoot != nested {
+		t.Fatalf("project roots = [%s, %s], want [%s, %s]", invs[0].projectRoot, invs[1].projectRoot, repo, nested)
+	}
+}
+
+func TestProjectRootCoveredOnlyByScheduledAncestor(t *testing.T) {
+	repo := t.TempDir()
+	nested := filepath.Join(repo, "packages", "ui")
+
+	if isProjectRootCovered(repo, nil) {
+		t.Fatal("root without scheduled ancestors must not be covered")
+	}
+	if !isProjectRootCovered(nested, []string{repo}) {
+		t.Fatal("nested project must be covered by a scheduled ancestor")
+	}
+	if isProjectRootCovered(nested, []string{filepath.Join(repo, "sibling")}) {
+		t.Fatal("sibling project must not cover nested project")
+	}
+}
+
+func TestExecuteRunsNestedOxlintWithWorkspaceLocalBinary(t *testing.T) {
+	clicky.ClearGlobalTasks()
+	t.Cleanup(clicky.ClearGlobalTasks)
+
+	repo := t.TempDir()
+	nested := filepath.Join(repo, "packages", "ui")
+	localBinary := filepath.Join(repo, "node_modules", ".bin", "oxlint")
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatalf("create .git: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(nested, "src"), 0o755); err != nil {
+		t.Fatalf("create nested source: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(localBinary), 0o755); err != nil {
+		t.Fatalf("create workspace bin: %v", err)
+	}
+	files := map[string]string{
+		filepath.Join(repo, ".gitignore"):        "node_modules/\n",
+		filepath.Join(repo, "package.json"):      "{}\n",
+		filepath.Join(nested, "package.json"):    "{}\n",
+		filepath.Join(nested, ".oxlintrc.json"):  "{}\n",
+		filepath.Join(nested, "src", "index.ts"): "export const value = 1;\n",
+		localBinary:                              "#!/bin/sh\nprintf '%s\\n' '{\"diagnostics\":[],\"number_of_files\":1,\"number_of_rules\":1}'\n",
+	}
+	for path, contents := range files {
+		mode := os.FileMode(0o644)
+		if path == localBinary {
+			mode = 0o755
+		}
+		if err := os.WriteFile(path, []byte(contents), mode); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+	t.Setenv("PATH", t.TempDir())
+
+	results, err := Execute(Options{WorkDir: repo, Timeout: "5s"})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	var oxlintResults []*linters.LinterResult
+	for _, result := range results {
+		if result != nil && result.Linter == "oxlint" {
+			oxlintResults = append(oxlintResults, result)
+		}
+	}
+	if len(oxlintResults) != 1 {
+		t.Fatalf("oxlint results = %d, want 1: %+v", len(oxlintResults), oxlintResults)
+	}
+	if oxlintResults[0].WorkDir != nested {
+		t.Fatalf("oxlint work dir = %q, want %q", oxlintResults[0].WorkDir, nested)
+	}
+}
+
+// TestApplyPostLintFiltersHonorsGavelIgnore is a regression for the commit
+// pre-commit lint gate: before the cascade was pushed into Execute,
+// runCommitLint returned raw results so a finding under a path covered by
+// .gavel.yaml lint.ignore would still block the commit.
+func TestApplyPostLintFiltersHonorsGavelIgnore(t *testing.T) {
+	workDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workDir, ".git"), 0o755); err != nil {
+		t.Fatalf("create .git: %v", err)
+	}
+	cfg := "lint:\n  ignore:\n  - source: betterleaks\n    file: pkg/**/*.go\n"
+	if err := os.WriteFile(filepath.Join(workDir, ".gavel.yaml"), []byte(cfg), 0o644); err != nil {
+		t.Fatalf("write .gavel.yaml: %v", err)
+	}
+	target := filepath.Join(workDir, "pkg", "leak.go")
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatalf("mkdir pkg: %v", err)
+	}
+	if err := os.WriteFile(target, nil, 0o644); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+
+	results := []*linters.LinterResult{{
+		Linter:  "betterleaks",
+		WorkDir: workDir,
+		Violations: []models.Violation{{
+			Source: "betterleaks",
+			File:   target,
+			Rule:   &models.Rule{Package: "betterleaks", Method: "aws-access-token"},
+		}},
+	}}
+
+	applyPostLintFilters(results, workDir, nil)
+
+	if got := len(results[0].Violations); got != 0 {
+		t.Fatalf("expected lint.ignore to suppress betterleaks finding under pkg/, got %d violations", got)
+	}
+}

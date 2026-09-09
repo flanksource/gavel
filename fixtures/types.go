@@ -15,6 +15,7 @@ import (
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/clicky/task"
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/fixtures/record"
 	"github.com/flanksource/gomplate/v3"
 )
 
@@ -31,6 +32,17 @@ type FixtureTest struct {
 	SourceDir string       `json:"source_dir,omitempty"`
 	Query     string       `json:"query,omitempty"`
 	Expected  Expectations `json:"expected,omitempty"`
+
+	// AIStep, when set, makes this an AI-prompt verification step: the agent
+	// reviews the scope diff against the document's acceptance-criteria checklist
+	// and returns a structured verify result. See fixtures/aistep.go.
+	AIStep *AIStepSpec `json:"ai_step,omitempty"`
+
+	// RunnerStep, when set, makes this a `yaml test` / `yaml lint` fence: the raw
+	// YAML body is unmarshalled onto testrunner.RunOptions / lint.Options and the
+	// engine is run. Dispatched by the runner via the TestStepRunner /
+	// LintStepRunner hooks (implemented in fixtures/types to avoid an import cycle).
+	RunnerStep *RunnerStepSpec `json:"runner_step,omitempty"`
 
 	// Per-test overrides for skip conditions (override file-level FrontMatter values)
 	TestOS   string `json:"test_os,omitempty"`
@@ -105,6 +117,43 @@ func (fixture FixtureTest) ExecBase() ExecFixtureBase {
 	return fixture.FrontMatter.MergeInto(fixture.ExecFixtureBase)
 }
 
+// IsAIStep reports whether this fixture runs an AI verification prompt instead of
+// a shell/query step. AI steps are dispatched by the runner before the type
+// registry (they are not a registered FixtureType).
+func (fixture FixtureTest) IsAIStep() bool {
+	return fixture.AIStep != nil
+}
+
+// RunnerStepKind identifies which engine a RunnerStep drives.
+const (
+	RunnerKindTest = "test"
+	RunnerKindLint = "lint"
+)
+
+// RunnerStepSpec carries a parsed `yaml test` / `yaml lint` fixture step. Kind
+// selects the engine; Config is the raw YAML body of the fence, unmarshalled by
+// the runner hook onto the engine's own options struct (testrunner.RunOptions or
+// lint.Options) so every CLI option is available as a YAML key.
+type RunnerStepSpec struct {
+	Kind   string `json:"kind"`   // "test" | "lint"
+	Config string `json:"config"` // raw YAML body of the fence
+}
+
+// IsRunnerStep reports whether this fixture runs the test/lint engine.
+func (fixture FixtureTest) IsRunnerStep() bool {
+	return fixture.RunnerStep != nil
+}
+
+// IsTestStep reports whether this fixture runs the test engine (`yaml test`).
+func (fixture FixtureTest) IsTestStep() bool {
+	return fixture.RunnerStep != nil && fixture.RunnerStep.Kind == RunnerKindTest
+}
+
+// IsLintStep reports whether this fixture runs the lint engine (`yaml lint`).
+func (fixture FixtureTest) IsLintStep() bool {
+	return fixture.RunnerStep != nil && fixture.RunnerStep.Kind == RunnerKindLint
+}
+
 func (fixture FixtureTest) Pretty() api.Text {
 	return clicky.Text(fixture.Name, "italic text-orange-500")
 }
@@ -144,6 +193,11 @@ type ExecFixtureBase struct {
 	CWD string `yaml:"cwd,omitempty" json:"cwd,omitempty"`
 	// Terminal mode: "pty" to allocate a pseudo-terminal, "" for piped (default)
 	Terminal string `yaml:"terminal,omitempty" json:"terminal,omitempty"`
+	// Record declares which diagnostic recorders run for this fixture — the
+	// terminal's ANSI stream, the child's HTTP calls, its SQL. Nil means none
+	// start: every fixture in a run shares one parallel task group, so an
+	// always-on recorder would multiply listeners across the whole run.
+	Record *record.Spec `yaml:"record,omitempty" json:"record,omitempty"`
 }
 
 func relativePath(path string) string {
@@ -311,6 +365,14 @@ func (e ExecFixtureBase) MergeInto(other ExecFixtureBase) ExecFixtureBase {
 		merged.Terminal = other.Terminal
 	}
 
+	// A per-test `record:` replaces the file's wholesale rather than unioning
+	// with it, matching args/exec above — otherwise a test that names one
+	// recorder would silently inherit the file's other three, and `record: none`
+	// would have no way to opt out.
+	if other.Record != nil {
+		merged.Record = other.Record
+	}
+
 	if merged.Exec == "" {
 		merged.Exec = "bash"
 	}
@@ -342,6 +404,23 @@ type FrontMatter struct {
 	// Skip is a bash command; if it exits 0 (true), the fixture is skipped.
 	Skip string `yaml:"skip,omitempty" json:"skip,omitempty"`
 
+	// AI configures the captain agent for an AI verification step (its presence
+	// marks the file as an AI fixture). Verify carries scope/threshold/check
+	// overrides for that step. Both are nil for ordinary exec/query fixtures.
+	AI     *FixtureAIConfig     `yaml:"ai,omitempty" json:"ai,omitempty"`
+	Verify *FixtureVerifyConfig `yaml:"verify,omitempty" json:"verify,omitempty"`
+
+	// Setup declares the environment every test in this file runs against —
+	// dotenv files, env vars, cloud/k8s connections, and a git checkout that can
+	// relocate the run into an isolated worktree. It is prepared once per file
+	// before `build:` and torn down after the file's last test, so the tests in a
+	// file share one prepared tree rather than getting one each.
+	//
+	// File-level only: there is deliberately no per-test override (Setup is not on
+	// ExecFixtureBase), and the per-test frontmatter parser rejects it rather than
+	// dropping it silently.
+	Setup *SetupSpec `yaml:"setup,omitempty" json:"setup,omitempty"`
+
 	Metadata map[string]interface{} `yaml:",inline" json:"metadata,omitempty"`
 }
 
@@ -359,6 +438,7 @@ func (f *FrontMatter) CleanMetadata() {
 	delete(f.Metadata, "env")
 	delete(f.Metadata, "cwd")
 	delete(f.Metadata, "terminal")
+	delete(f.Metadata, "record")
 	// Keys from FrontMatter itself
 	delete(f.Metadata, "files")
 	delete(f.Metadata, "codeBlocks")
@@ -366,6 +446,9 @@ func (f *FrontMatter) CleanMetadata() {
 	delete(f.Metadata, "os")
 	delete(f.Metadata, "arch")
 	delete(f.Metadata, "skip")
+	delete(f.Metadata, "ai")
+	delete(f.Metadata, "verify")
+	delete(f.Metadata, "setup")
 }
 
 // ShouldSkip returns a non-empty reason string if the fixture should be skipped
@@ -439,6 +522,7 @@ type FixtureResult struct {
 
 	// CEL failure details
 	CELExpression string         `json:"cel_expression,omitempty"`
+	CELTrace      string         `json:"cel_trace,omitempty"`
 	CELVars       map[string]any `json:"cel_vars,omitempty"`
 
 	// Execution metadata
@@ -450,6 +534,73 @@ type FixtureResult struct {
 	Metadata map[string]interface{} `json:"metadata,omitempty" pretty:"label=Metadata,omitempty"`
 	Start    *time.Time             `json:"start,omitempty" pretty:"label=Start Time,omitempty"`
 	Display  *DisplayOptions        `json:"-"`
+
+	// Children are per-item nodes produced by a runner step (one per test or
+	// lint violation). The runner appends them under the step's tree node so the
+	// existing stats/display pipeline rolls them up. Nil for ordinary steps.
+	Children []*FixtureNode `json:"children,omitempty"`
+
+	// Run references the engine output a runner step produced. Nil for ordinary
+	// steps, which carry their evidence in Command/Stdout/Stderr.
+	Run *RunArtifact `json:"run,omitempty" pretty:"hide"`
+
+	// Recordings reference the diagnostic artifacts the fixture's `record:`
+	// produced — one fixture can emit a cast, a HAR and a SQL log at once. Like
+	// Run, they carry counts inline and leave the payload on disk.
+	Recordings []Recording `json:"recordings,omitempty" pretty:"hide"`
+}
+
+// Recording is one diagnostic artifact produced for a fixture. Aliased rather
+// than mirrored because package record is a leaf that imports nothing from
+// gavel, so embedding it here costs no dependency.
+type Recording = record.Result
+
+// RunArtifact is a runner step's engine output recorded by reference: the counts
+// and top failures needed to render a verdict inline, plus the .gavel snapshot
+// holding the full test tree and lint violations.
+//
+// The tree is deliberately not inlined. A FixtureResult is embedded in a TODO's
+// verification output, which is persisted into a Captain prompt run's result_json
+// and re-served on every dashboard poll — a full test tree per attempt would make
+// that quadratically expensive.
+//
+// This struct uses only primitives on purpose: package fixtures cannot import
+// testrunner/parsers, linters or snapshots, because report → linters → verify →
+// todos/types → fixtures already makes those packages depend on this one.
+type RunArtifact struct {
+	// RunID is the .gavel/<run_id>.json file stem, the same id
+	// GET /api/tests/run?runId= resolves. Path is the absolute location on the
+	// host that ran the step, which is not necessarily the host rendering it.
+	RunID string `json:"run_id"`
+	Path  string `json:"path,omitempty"`
+	Kind  string `json:"kind"` // test | lint | test+lint
+
+	Total   int `json:"total"`
+	Passed  int `json:"passed"`
+	Failed  int `json:"failed"`
+	Warned  int `json:"warned"`
+	Skipped int `json:"skipped"`
+
+	LintViolations int      `json:"lint_violations,omitempty"`
+	Linters        []string `json:"linters,omitempty"`
+
+	// Failures is a bounded sample of what went wrong, so a reader gets the gist
+	// without fetching the snapshot. Truncated is set when it does not hold all
+	// of them.
+	Failures  []RunFailure `json:"failures,omitempty"`
+	Truncated int          `json:"truncated,omitempty"`
+
+	// Error explains why the run produced no results at all — the engine crashed
+	// or never started. An empty artifact without Error is a genuinely empty run.
+	Error string `json:"error,omitempty"`
+}
+
+// RunFailure is one failing test or lint violation from a RunArtifact.
+type RunFailure struct {
+	Name    string `json:"name"`
+	Suite   string `json:"suite,omitempty"`
+	Status  string `json:"status,omitempty"`
+	Message string `json:"message,omitempty"`
 }
 
 func (f FixtureResult) Failf(format string, args ...interface{}) FixtureResult {
@@ -489,7 +640,7 @@ func (f FixtureResult) String() string {
 	return fmt.Sprintf("%s - %s", f.Test.Name, f.Status.String())
 }
 
-func (f FixtureResult) Pretty() api.Text {
+func (f FixtureResult) PrettyFull() api.Textable {
 	if f.Display != nil && !f.Display.ShowPassed && isPassingStatus(f.Status) {
 		return clicky.Text("")
 	}
@@ -508,7 +659,9 @@ func (f FixtureResult) Pretty() api.Text {
 		t = t.Space().Append(fmt.Sprintf("(%s)", f.Duration), "text-muted")
 	}
 
-	if f.CELExpression != "" {
+	if f.CELTrace != "" {
+		t = t.NewLine().Append(f.CELTrace, "font-mono text-red-500")
+	} else if f.CELExpression != "" {
 		t = t.Space().Append(f.CELExpression, "font-mono text-red-500")
 	} else if f.Error != "" {
 		t = t.Space().Append(f.Error, "text-red-600")
@@ -538,7 +691,7 @@ func (f FixtureResult) Pretty() api.Text {
 		}
 		t = t.NewLine().Add(api.Collapsed{
 			Label:   label,
-			Content: clicky.Text(f.Stdout, "font-mono text-xs whitespace-pre-wrap"),
+			Content: prettyFixtureStdout(f.Stdout),
 		})
 	}
 	if f.Stderr != "" && f.showStderr(isFailed) {
@@ -614,9 +767,9 @@ func (f FixtureResult) compactLine() api.Text {
 
 // fixtureFailureSnippet returns the first non-blank, ANSI-free line of
 // the best available failure source: explicit Error, then Stderr,
-// Stdout, CELExpression.
+// Stdout, CELTrace, CELExpression.
 func fixtureFailureSnippet(f FixtureResult) string {
-	for _, body := range []string{f.Error, f.Stderr, f.Stdout, f.CELExpression} {
+	for _, body := range []string{f.Error, f.Stderr, f.Stdout, f.CELTrace, f.CELExpression} {
 		line := firstNonBlankFixtureLine(body)
 		if line != "" {
 			return line
@@ -751,6 +904,9 @@ func (s Stats) Pretty() api.Text {
 		t = t.Append(fmt.Sprintf(" %d skipped", s.Skipped), "text-yellow-500")
 	}
 	if s.Error > 0 {
+		if !t.IsEmpty() {
+			t = t.Append("/", "text-gray-500")
+		}
 		t = t.Append(fmt.Sprintf("%d errors", s.Error), "text-red-500")
 	}
 	return t

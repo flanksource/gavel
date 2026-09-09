@@ -2,6 +2,7 @@ package linters
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -10,7 +11,11 @@ import (
 )
 
 func setupGitRepo(root string) {
-	os.MkdirAll(filepath.Join(root, ".git", "info"), 0755)
+	cmd := exec.Command("git", "init", "-q")
+	cmd.Dir = root
+	if err := cmd.Run(); err != nil {
+		panic(err)
+	}
 }
 
 func TestFilterViolationsByGitIgnore(t *testing.T) {
@@ -29,7 +34,8 @@ func TestFilterViolationsByGitIgnore(t *testing.T) {
 			mkViolation(filepath.Join(root, "debug.log")),
 		}
 
-		result := FilterViolationsByGitIgnore(violations, root)
+		result, err := FilterViolationsByGitIgnore(violations, root)
+		assert.NoError(t, err)
 		assert.Len(t, result, 1)
 		assert.Equal(t, filepath.Join(root, "main.go"), result[0].File)
 	})
@@ -41,7 +47,8 @@ func TestFilterViolationsByGitIgnore(t *testing.T) {
 			mkViolation(filepath.Join(root, "b.go")),
 		}
 
-		result := FilterViolationsByGitIgnore(violations, root)
+		result, err := FilterViolationsByGitIgnore(violations, root)
+		assert.NoError(t, err)
 		assert.Len(t, result, 2)
 	})
 
@@ -55,12 +62,14 @@ func TestFilterViolationsByGitIgnore(t *testing.T) {
 			mkViolation(filepath.Join(root, "main.go")),
 		}
 
-		result := FilterViolationsByGitIgnore(violations, root)
+		result, err := FilterViolationsByGitIgnore(violations, root)
+		assert.NoError(t, err)
 		assert.Len(t, result, 2)
 	})
 
 	t.Run("returns empty input unchanged", func(t *testing.T) {
-		result := FilterViolationsByGitIgnore(nil, "/tmp")
+		result, err := FilterViolationsByGitIgnore(nil, t.TempDir())
+		assert.NoError(t, err)
 		assert.Nil(t, result)
 	})
 
@@ -76,7 +85,8 @@ func TestFilterViolationsByGitIgnore(t *testing.T) {
 			mkViolation(filepath.Join(root, "debug.log")),
 		}
 
-		result := FilterViolationsByGitIgnore(violations, root)
+		result, err := FilterViolationsByGitIgnore(violations, root)
+		assert.NoError(t, err)
 		assert.Len(t, result, 2)
 		assert.Equal(t, file, result[0].File)
 		assert.Equal(t, file, result[1].File)
@@ -117,7 +127,8 @@ func TestFilterViolationsByGitIgnoreInResults(t *testing.T) {
 			},
 		}
 
-		filtered := FilterViolationsByGitIgnoreInResults(results)
+		filtered, err := FilterViolationsByGitIgnoreInResults(results)
+		assert.NoError(t, err)
 		assert.Equal(t, 3, filtered)
 		assert.Len(t, results[0].Violations, 1)
 		assert.Equal(t, filepath.Join(rootA, "main.go"), results[0].Violations[0].File)
@@ -126,9 +137,15 @@ func TestFilterViolationsByGitIgnoreInResults(t *testing.T) {
 	})
 
 	t.Run("returns 0 for nil and empty results", func(t *testing.T) {
-		assert.Equal(t, 0, FilterViolationsByGitIgnoreInResults(nil))
-		assert.Equal(t, 0, FilterViolationsByGitIgnoreInResults([]*LinterResult{}))
-		assert.Equal(t, 0, FilterViolationsByGitIgnoreInResults([]*LinterResult{nil}))
+		filtered, err := FilterViolationsByGitIgnoreInResults(nil)
+		assert.NoError(t, err)
+		assert.Equal(t, 0, filtered)
+		filtered, err = FilterViolationsByGitIgnoreInResults([]*LinterResult{})
+		assert.NoError(t, err)
+		assert.Equal(t, 0, filtered)
+		filtered, err = FilterViolationsByGitIgnoreInResults([]*LinterResult{nil})
+		assert.NoError(t, err)
+		assert.Equal(t, 0, filtered)
 	})
 
 	t.Run("skips results with no violations", func(t *testing.T) {
@@ -139,6 +156,8 @@ func TestFilterViolationsByGitIgnoreInResults(t *testing.T) {
 		results := []*LinterResult{
 			{Linter: "empty", WorkDir: root, Violations: nil},
 		}
-		assert.Equal(t, 0, FilterViolationsByGitIgnoreInResults(results))
+		filtered, err := FilterViolationsByGitIgnoreInResults(results)
+		assert.NoError(t, err)
+		assert.Equal(t, 0, filtered)
 	})
 }

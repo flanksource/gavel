@@ -78,6 +78,31 @@ Shutdown() already calls restoreTerminal().
 		assert.NotContains(t, results[1].Body, "Suggested fix", "nested details should be stripped")
 	})
 
+	t.Run("inherits the parent's resolution state but is not itself a thread", func(t *testing.T) {
+		body := `<details>
+<summary>🧹 Nitpick comments (1)</summary><blockquote>
+
+<details>
+<summary>a.go (1)</summary><blockquote>
+
+` + "`12-14`" + `: **tidy this up.**
+
+</blockquote></details>
+
+</blockquote></details>`
+		parent := github.PRComment{
+			ID: 400, Author: "coderabbitai[bot]", Body: body,
+			IsReviewThread: true, IsResolved: true,
+		}
+
+		results := parseNitpickComments(parent)
+
+		assert.Len(t, results, 1)
+		assert.True(t, results[0].IsResolved, "a nitpick under a resolved thread is not live work")
+		assert.False(t, results[0].IsUnresolved())
+		assert.False(t, results[0].IsReviewThread, "a parsed fragment has no resolve button of its own")
+	})
+
 	t.Run("no nitpick section returns nil", func(t *testing.T) {
 		comment := github.PRComment{
 			ID: 200, Body: "LGTM! No nitpicks.", Author: "reviewer",

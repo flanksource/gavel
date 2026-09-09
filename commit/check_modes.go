@@ -30,8 +30,11 @@ func normalizeCheckMode(raw, name string) (string, error) {
 	}
 }
 
+// resolvePrecommitMode resolves the pre-commit gate mode (gitignore, file-size,
+// and linked-dependency checks) from the --precommit flag, else the
+// commit.precommit.mode config, defaulting to prompt.
 func resolvePrecommitMode(raw string, cfg verify.CommitConfig) (string, error) {
-	for _, candidate := range []string{raw, cfg.Precommit.Mode.String(), cfg.LinkedDeps.Mode.String()} {
+	for _, candidate := range []string{raw, cfg.Precommit.Mode.String()} {
 		if strings.TrimSpace(candidate) == "" {
 			continue
 		}
@@ -40,20 +43,6 @@ func resolvePrecommitMode(raw string, cfg verify.CommitConfig) (string, error) {
 	return CheckModePrompt, nil
 }
 
-func resolveCompatMode(raw string, cfg verify.CommitConfig) (string, error) {
-	for _, candidate := range []string{raw, cfg.Compatibility.Mode.String()} {
-		if strings.TrimSpace(candidate) == "" {
-			continue
-		}
-		return normalizeCheckMode(candidate, "--compat")
-	}
-	return CheckModeSkip, nil
-}
-
 func shouldRunPrecommitChecks(mode string) bool {
-	return mode != CheckModeSkip
-}
-
-func shouldRunCompatibilityAnalysis(mode string) bool {
 	return mode != CheckModeSkip
 }

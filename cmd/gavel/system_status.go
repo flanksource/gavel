@@ -14,6 +14,7 @@ import (
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/clicky/api/icons"
+	"github.com/flanksource/gavel/internal/httpx"
 	"github.com/flanksource/gavel/service"
 )
 
@@ -58,8 +59,8 @@ type SystemStatusOptions struct {
 	LogLines int `flag:"log-lines" help:"Number of trailing log lines to show (0 hides the log section)" default:"25"`
 }
 
-func (SystemStatusOptions) Help() string {
-	return `Report health of the background gavel pr UI daemon.
+func (SystemStatusOptions) Help() api.Textable {
+	return clicky.Text(`Report health of the background gavel pr UI daemon.
 
 Shows:
   - Service source (launchd / systemd --user / pidfile fallback)
@@ -68,7 +69,7 @@ Shows:
   - Live health — fetched from the daemon's /api/status endpoint so the
     CLI and the PR UI's header status dot share a single source of truth.
     Breaks out database and GitHub components separately.
-  - Last --log-lines lines of the daemon log (default 25, pass 0 to hide)`
+  - Last --log-lines lines of the daemon log (default 25, pass 0 to hide)`)
 }
 
 func init() {
@@ -154,7 +155,7 @@ func runSystemStatus(opts SystemStatusOptions) (any, error) {
 // instance.
 func fetchHealth() (*healthStatus, error) {
 	url := healthURL()
-	client := &nethttp.Client{Timeout: 2 * time.Second}
+	client := httpx.Client(2 * time.Second)
 	resp, err := client.Get(url)
 	if err != nil {
 		return nil, fmt.Errorf("fetch %s: %w", url, err)

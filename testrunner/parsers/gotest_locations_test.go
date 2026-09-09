@@ -64,7 +64,7 @@ func TestEmpty(t *testing.T) {}`,
 				t.Fatal("no function found")
 			}
 
-			result := containsRunSpecs(fn)
+			result := ContainsRunSpecs(fn)
 			if result != tc.expected {
 				t.Errorf("expected %v, got %v", tc.expected, result)
 			}

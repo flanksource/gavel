@@ -1,6 +1,7 @@
 package prwatch
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -104,6 +105,43 @@ func TestPRWatchResultPrettyWithJobLevelLogs(t *testing.T) {
 	text := result.Pretty().String()
 	assert.Contains(t, text, "FAIL: TestBaz", "job-level logs render when no step logs")
 	assert.Contains(t, text, "Log tail")
+}
+
+func TestPRWatchResultPrettyCommentsPreviewAndShowMore(t *testing.T) {
+	result := PRWatchResult{
+		PR: &github.PRInfo{
+			Number: 7, Title: "review", Author: github.PRAuthor{Login: "alice"},
+			HeadRefName: "feature", BaseRefName: "main",
+		},
+		Comments: []github.PRComment{{
+			ID:       101,
+			Path:     "pkg/review/file.go",
+			Line:     42,
+			Severity: "minor",
+			Body: strings.Join([]string{
+				"**Line one**",
+				"Line two",
+				"Line three",
+				"Line four",
+				"Line five",
+				"Line six hidden",
+			}, "\n"),
+		}},
+	}
+
+	ansi := result.Pretty().ANSI()
+	assert.Contains(t, ansi, "Line one")
+	assert.NotContains(t, ansi, "**Line one**")
+	assert.Contains(t, ansi, "Line two")
+	assert.Contains(t, ansi, "Line three")
+	assert.Contains(t, ansi, "Line four")
+	assert.Contains(t, ansi, "Line five")
+	assert.Contains(t, ansi, "show more")
+	assert.NotContains(t, ansi, "Line six hidden")
+
+	markdown := result.Pretty().Markdown()
+	assert.Contains(t, markdown, "<summary>show more</summary>")
+	assert.Contains(t, markdown, "Line six hidden")
 }
 
 func TestPRWatchResultNoChecks(t *testing.T) {

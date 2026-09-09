@@ -4,8 +4,11 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -16,6 +19,12 @@ import (
 var artifactURLPattern = regexp.MustCompile(
 	`github\.com/([^/]+/[^/]+)/actions/runs/(\d+)/artifacts/(\d+)`,
 )
+
+// ErrArtifactResultsNotFound means the artifact downloaded successfully but
+// does not contain a JSON results payload. Some workflows publish an empty or
+// non-results gavel artifact; callers may ignore it without reporting a
+// download failure.
+var ErrArtifactResultsNotFound = errors.New("no .json file found in artifact zip")
 
 // ParseArtifactURL extracts the repo, run ID, and artifact ID from a GitHub
 // Actions artifact URL like:
@@ -35,13 +44,18 @@ var artifactLinkPattern = regexp.MustCompile(
 	`\[View full results\]\((https://[^)]+/actions/runs/\d+/artifacts/\d+)\)`,
 )
 
-var stickyIDPattern = regexp.MustCompile(`<!-- sticky-comment:(gavel[^\s>]*) -->`)
+var stickyIDPattern = regexp.MustCompile(`<!-- sticky-comment:(gavel[^\s>]*|[^\s>]+-gavel(?:-[^\s>]*)?) -->`)
+
+var legacyCrashEnvelopePattern = regexp.MustCompile(
+	`^\{"error":"gavel exited ([0-9]+) before writing results","exit_code":([0-9]+),"log_tail":"`,
+)
 
 // GavelArtifact identifies one gavel sticky comment on a PR — typically
 // one per matrix shard (e.g. gavel-test-pg15, gavel-e2e). A single PR can
 // have many of these.
 type GavelArtifact struct {
 	StickyID    string
+	RunID       int64
 	ArtifactID  int64
 	ArtifactURL string
 	CommentID   int64
@@ -71,12 +85,13 @@ func FindGavelArtifacts(comments []PRComment) []GavelArtifact {
 			continue
 		}
 		url := am[1]
-		_, _, id, err := ParseArtifactURL(url)
+		_, runID, id, err := ParseArtifactURL(url)
 		if err != nil {
 			continue
 		}
 		art := GavelArtifact{
 			StickyID:    stickyID,
+			RunID:       runID,
 			ArtifactID:  id,
 			ArtifactURL: url,
 			CommentID:   c.ID,
@@ -122,8 +137,12 @@ func extractJSONFromZip(data []byte) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open artifact zip: %w", err)
 	}
+	var resultJSON, log []byte
+	logFound := false
 	for _, f := range r.File {
-		if !strings.HasSuffix(f.Name, ".json") {
+		isResult := resultJSON == nil && strings.HasSuffix(f.Name, ".json")
+		isLog := path.Base(f.Name) == "gavel.log"
+		if !isResult && !isLog {
 			continue
 		}
 		rc, err := f.Open()
@@ -136,7 +155,43 @@ func extractJSONFromZip(data []byte) ([]byte, error) {
 		if err != nil {
 			return nil, fmt.Errorf("read zip entry %s: %w", f.Name, err)
 		}
-		return content, nil
+		if isResult {
+			resultJSON = content
+		}
+		if isLog {
+			log = content
+			logFound = true
+		}
 	}
-	return nil, fmt.Errorf("no .json file found in artifact zip")
+	if resultJSON == nil {
+		return nil, ErrArtifactResultsNotFound
+	}
+	return repairLegacyCrashEnvelope(resultJSON, log, logFound)
+}
+
+func repairLegacyCrashEnvelope(resultJSON, log []byte, logFound bool) ([]byte, error) {
+	if json.Valid(resultJSON) || !logFound || !bytes.HasSuffix(bytes.TrimSpace(resultJSON), []byte(`"}`)) {
+		return resultJSON, nil
+	}
+	match := legacyCrashEnvelopePattern.FindSubmatch(resultJSON)
+	if len(match) != 3 || !bytes.Equal(match[1], match[2]) {
+		return resultJSON, nil
+	}
+	exitCode, err := strconv.Atoi(string(match[1]))
+	if err != nil {
+		return resultJSON, nil
+	}
+	repaired, err := json.Marshal(struct {
+		Error    string `json:"error"`
+		ExitCode int    `json:"exit_code"`
+		LogTail  string `json:"log_tail"`
+	}{
+		Error:    fmt.Sprintf("gavel exited %d before writing results", exitCode),
+		ExitCode: exitCode,
+		LogTail:  tailString(string(log), 200),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("rebuild legacy crash envelope: %w", err)
+	}
+	return repaired, nil
 }

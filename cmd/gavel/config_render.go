@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -28,12 +29,44 @@ func (r ConfigResult) Pretty() api.Text {
 	return clicky.Text(body, "font-mono")
 }
 
+func (r ResolvedConfigResult) Pretty() api.Text {
+	t := clicky.Text("Resolved Gavel config", "font-bold text-purple-600").NewLine().
+		Add(clicky.CodeBlock("yaml", renderMergedConfigYAML(r.Trace, stdoutIsTerminal()))).
+		NewLine().Append("AI prompts", "font-bold text-purple-600").NewLine()
+	for _, resolved := range r.Prompts {
+		t = t.Add(resolved.Pretty()).NewLine()
+	}
+	return t
+}
+
 func (r ConfigResult) MarshalJSON() ([]byte, error) {
 	return json.Marshal(prunedConfigValue(r.Merged))
 }
 
+func (r ResolvedConfigResult) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Config  any `json:"config"`
+		Prompts any `json:"prompts"`
+	}{
+		Config:  prunedConfigValue(r.Config),
+		Prompts: r.Prompts,
+	})
+}
+
 func (r ConfigResult) MarshalYAML() ([]byte, error) {
 	return []byte(renderMergedConfigYAML(r.configTrace(), false)), nil
+}
+
+func (r ResolvedConfigResult) MarshalYAML() ([]byte, error) {
+	data, err := json.Marshal(r)
+	if err != nil {
+		return nil, err
+	}
+	var normalized any
+	if err := json.Unmarshal(data, &normalized); err != nil {
+		return nil, err
+	}
+	return yamlv3.Marshal(normalized)
 }
 
 func (r ConfigResult) configTrace() verify.GavelConfigTrace {
@@ -98,7 +131,7 @@ func buildConfigProvenance(trace verify.GavelConfigTrace) *configProvenanceNode 
 		Comment: "from built-in defaults",
 	}
 
-	current := verify.GavelConfig{Verify: verify.DefaultVerifyConfig()}
+	current := verify.DefaultGavelConfig()
 	currentTree := normalizedConfigValue(current)
 	provenance := buildProvenanceTree(currentTree, builtIn)
 
@@ -304,6 +337,16 @@ func buildYAMLNode(v reflect.Value, meta *configProvenanceNode, parent *configSo
 		}
 		v = v.Elem()
 	}
+	if v.IsValid() && v.Type() == reflect.TypeOf(json.RawMessage{}) {
+		if v.Len() == 0 {
+			return nil, false
+		}
+		var decoded any
+		if err := json.Unmarshal(v.Interface().(json.RawMessage), &decoded); err != nil {
+			return nil, false
+		}
+		return buildYAMLNode(reflect.ValueOf(decoded), meta, parent)
+	}
 
 	switch v.Kind() {
 	case reflect.Struct:
@@ -312,6 +355,17 @@ func buildYAMLNode(v reflect.Value, meta *configProvenanceNode, parent *configSo
 		for i := 0; i < v.NumField(); i++ {
 			field := t.Field(i)
 			if field.PkgPath != "" {
+				continue
+			}
+
+			// Inline fields are promoted into the parent mapping, matching how
+			// encoding/json and ghodss serialize them — otherwise api.Spec/api.Model
+			// surface as capitalized Go field names ("Spec", "Model") instead of
+			// their inline keys ("model", "prompt", …).
+			if isInlineField(field) {
+				if childNode, ok := buildYAMLNode(v.Field(i), meta, parent); ok && childNode.Kind == yamlv3.MappingNode {
+					node.Content = append(node.Content, childNode.Content...)
+				}
 				continue
 			}
 
@@ -421,6 +475,23 @@ func buildYAMLNode(v reflect.Value, meta *configProvenanceNode, parent *configSo
 // yamlFieldName returns the YAML key for a struct field. Emptiness is handled
 // uniformly by buildYAMLNode/isEmptyConfigValue, so the omitempty tag option is
 // not consulted here.
+// isInlineField reports whether a field's contents are promoted into the parent
+// mapping instead of nesting under a key. Two forms qualify: an anonymous embed
+// with no explicit tag name, and any field — named or embedded — whose yaml/json
+// tag carries the `inline` option. verify.PromptSpec.Spec is the named case: it
+// holds an api.Spec whose keys sit flat beside `file` on disk.
+func isInlineField(field reflect.StructField) bool {
+	tag := field.Tag.Get("yaml")
+	if tag == "" {
+		tag = field.Tag.Get("json")
+	}
+	name, opts, _ := strings.Cut(tag, ",")
+	if slices.Contains(strings.Split(opts, ","), "inline") {
+		return true
+	}
+	return field.Anonymous && name == ""
+}
+
 func yamlFieldName(field reflect.StructField) string {
 	tag := field.Tag.Get("yaml")
 	if tag == "" {

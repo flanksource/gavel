@@ -2,18 +2,22 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 
+	"github.com/flanksource/captain/pkg/captainconfig"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/ai/aifix"
+	"github.com/flanksource/gavel/lint"
 	"github.com/flanksource/gavel/linters"
+	"github.com/flanksource/gavel/verify"
 )
 
-// runAIFix invokes the AI configured by `captain configure` (overlaid by any
-// `gavel lint --model=… --budget=…` flags) to repair the violations in
-// allResults, then re-lints with the same scope. It loops until clean,
-// MaxIterations is reached, or the configured BudgetUSD is hit.
+// runAIFix resolves lint.fix from Gavel config (overlaid by any `gavel lint
+// --model=… --budget=…` flags) to repair the violations in allResults, then
+// re-lints with the same scope. It loops until clean, MaxIterations is reached,
+// or the configured budget is hit.
 //
 // On stop reasons "max-iterations" / "max-cost" with residual violations,
 // runAIFix prints a summary to stderr but does NOT itself set exitCode —
@@ -25,25 +29,40 @@ func runAIFix(opts LintOptions, initial []*linters.LinterResult) ([]*linters.Lin
 		ctx = context.Background()
 	}
 
-	aiCfg, aiProto := buildAIFixRequest(opts.AIRuntimeOptions)
+	gavelCfg, err := verify.LoadGavelConfig(opts.WorkDir)
+	if err != nil {
+		return initial, err
+	}
+	saved, _, err := captainconfig.Load()
+	if err != nil {
+		return initial, err
+	}
+	runtime := lintFixRuntime{Prompt: aifix.ResolveOptions{Base: gavelCfg.AI, Prompt: gavelCfg.Lint.Fix, Dir: opts.WorkDir, Linters: opts.Linters}, Runtime: opts.AIRuntimeOptions, Saved: saved}
+	resolved, err := runtime.Resolve(initial)
+	if err != nil {
+		return initial, err
+	}
+	for _, warning := range resolved.Resolution.Warnings {
+		logger.Warnf("lint ai-fix: %s", warning)
+	}
 
+	renderer := newAIFixRenderer()
 	res, err := aifix.Run(ctx, aifix.Request{
-		WorkDir:        opts.WorkDir,
-		Linters:        opts.Linters,
 		Initial:        initial,
 		MaxIterations:  opts.AIFixMaxIters,
-		AIConfig:       aiCfg,
-		AIRequestProto: aiProto,
+		AIConfig:       resolved.Config,
+		AIRequestProto: resolved.Request,
+		BuildRequest:   runtime.BuildRequest,
 		ReLint: func(rctx context.Context) ([]*linters.LinterResult, error) {
 			rerunOpts := opts
 			rerunOpts.Context = rctx
 			rerunOpts.AIFix = false
-			return executeLinters(rerunOpts)
+			return lint.Execute(rerunOpts)
 		},
-		OnEvent: aifix.NewStderrRenderer(os.Stderr),
+		OnEvent: renderer.Handle,
 	})
-	if err != nil {
-		return initial, err
+	if runErr := errors.Join(err, renderer.Flush()); runErr != nil {
+		return initial, runErr
 	}
 
 	logger.Infof("ai-fix: stop=%s iterations=%d cost=$%.4f",

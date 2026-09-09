@@ -6,6 +6,8 @@ import (
 	"fmt"
 	nethttp "net/http"
 	"time"
+
+	"github.com/flanksource/gavel/internal/httpx"
 )
 
 // Org is a lightweight view of a GitHub organization the authenticated user
@@ -94,7 +96,7 @@ func fetchUserLogin(opts Options, baseURL string) (string, error) {
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/vnd.github+json")
-	resp, err := nethttp.DefaultClient.Do(req)
+	resp, err := httpx.Shared.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("GET /user: %w", err)
 	}
@@ -125,7 +127,7 @@ func fetchUserOrgs(opts Options, baseURL string) ([]Org, error) {
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/vnd.github+json")
 
-	resp, err := nethttp.DefaultClient.Do(req)
+	resp, err := httpx.Shared.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("GET /user/orgs: %w", err)
 	}

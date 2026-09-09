@@ -1,0 +1,49 @@
+// Package prompts is the registry of Gavel's overridable AI prompt templates.
+//
+// Each entry pairs a stable ID with the embedded default .prompt (dotprompt)
+// source and the dotted .gavel.yaml path of its typed override field. Owning
+// packages keep the //go:embed of their default and expose it through a
+// Prompts() function returning these descriptors; the settings UI composes them
+// to render one editor per prompt (showing the default and whether it is
+// overridden). Resolution of an override stays at each call site — the typed
+// verify.PromptSpec.Resolve layers the operation's spec over the base ai: spec
+// and the embedded default — so this package is a leaf with no dependencies and
+// never participates in rendering.
+package prompts
+
+// Stable prompt IDs. They are the JSON-Schema x-prompt-id that links an override
+// field's schema node to its registry descriptor, so they MUST match the
+// x-prompt-id stamped by the config schema generator. Each ID is also the dotted
+// .gavel.yaml path of the operation's PromptSpec field (e.g. commit.message).
+const (
+	CommitMessage      = "commit.message"
+	CommitSummary      = "commit.summary"
+	CommitGrouping     = "commit.grouping"
+	LintFix            = "lint.fix"
+	PRContent          = "pr.content"
+	PRFix              = "pr.fix"
+	TodosRun           = "todos.run"
+	TodosPlan          = "todos.plan"
+	TodosTriage        = "todos.triage"
+	StatusSummary      = "status.summary"
+	TestOutlineSummary = "test.outlineSummary"
+)
+
+// Prompt describes one overridable AI prompt template for the settings UI.
+type Prompt struct {
+	// ID is stable and matches the schema node's x-prompt-id.
+	ID string `json:"id"`
+	// Title is a short human label (e.g. "Commit message").
+	Title string `json:"title"`
+	// Description explains what the prompt drives and when it runs.
+	Description string `json:"description"`
+	// ConfigPath is the dotted .gavel.yaml location of the typed PromptSpec field;
+	// it equals ID (e.g. "commit.message").
+	ConfigPath string `json:"configPath"`
+	// Default is the embedded .prompt source used when the override is unset; the
+	// UI shows it as the built-in default.
+	Default string `json:"default"`
+	// UsedBy lists the gavel commands that run this prompt, so a catalog can say
+	// what a tweak affects.
+	UsedBy []string `json:"usedBy,omitempty"`
+}

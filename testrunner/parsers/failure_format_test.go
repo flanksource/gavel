@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/flanksource/clicky"
+	"github.com/flanksource/clicky/api/icons"
 )
 
 func TestParseFailureDetail_GomegaToHavePrefix(t *testing.T) {
@@ -227,6 +228,43 @@ func TestPrettyUsesFailureDetailSummary(t *testing.T) {
 	}
 	if !strings.Contains(rendered, "expected \"1\" to equal \"2\"") {
 		t.Errorf("expected structured summary line, got %q", rendered)
+	}
+}
+
+// TestPrettyRendersWarnedNodeAmber guards the case a warned node used to fall
+// through to the default (pass) branch: a green check rendered right next to the
+// node's warning message, contradicting both the amber summary counter and the
+// Warned doc contract.
+func TestPrettyRendersWarnedNodeAmber(t *testing.T) {
+	test := Test{
+		Name:    "trace[watch]",
+		Warned:  true,
+		Message: "start watch trace: deployment not found",
+	}
+
+	rendered := clicky.MustFormat(test.Pretty())
+	if strings.Contains(rendered, icons.Pass.Unicode) {
+		t.Errorf("a warned node must not render the pass icon, got %q", rendered)
+	}
+	if !strings.Contains(rendered, icons.Warning.Unicode) {
+		t.Errorf("expected the warning icon, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "deployment not found") {
+		t.Errorf("expected the warning message, got %q", rendered)
+	}
+}
+
+// TestPrettyFailedWinsOverWarned pins the precedence Sum() uses: a node that is
+// both failed and warned is a failure, and must render red.
+func TestPrettyFailedWinsOverWarned(t *testing.T) {
+	test := Test{Name: "step", Failed: true, Warned: true, Message: "boom"}
+
+	rendered := clicky.MustFormat(test.Pretty())
+	if !strings.Contains(rendered, icons.Fail.Unicode) {
+		t.Errorf("a failed node stays red even when warned, got %q", rendered)
+	}
+	if strings.Contains(rendered, icons.Warning.Unicode) {
+		t.Errorf("a failure must not be downgraded to a warning, got %q", rendered)
 	}
 }
 

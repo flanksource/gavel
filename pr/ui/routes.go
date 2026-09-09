@@ -14,7 +14,14 @@ import (
 	"github.com/flanksource/gavel/github"
 )
 
-const viewTabPRs = "prs"
+const (
+	viewTabPRs      = "prs"
+	viewTabProjects = "projects"
+	viewTabTodos    = "todos"
+	viewTabActivity = "activity"
+	viewTabTasks    = "tasks"
+	viewTabPrompts  = "prompts"
+)
 
 type routeRequest struct {
 	Tab       string
@@ -60,18 +67,20 @@ type PRViewNode struct {
 	RoutePath string `json:"route_path,omitempty"`
 
 	// Populated only when Selected (single-PR export).
-	PR       *github.PRInfo                `json:"pr,omitempty"`
-	Runs     map[int64]*github.WorkflowRun `json:"runs,omitempty"`
-	Comments []github.PRComment            `json:"comments,omitempty"`
-	Detail   string                        `json:"detailError,omitempty"`
+	PR           *github.PRInfo                `json:"pr,omitempty"`
+	Runs         map[int64]*github.WorkflowRun `json:"runs,omitempty"`
+	Comments     []github.PRComment            `json:"comments,omitempty"`
+	GavelResults []*GavelResultsSummary        `json:"gavelResults,omitempty"`
+	Detail       string                        `json:"detailError,omitempty"`
 }
 
 func (n *PRViewNode) Pretty() api.Text {
 	text := clicky.Text("")
 	icon, style := prStateIconStyle(n.State, n.IsDraft)
 	text = text.Append(icon, style)
-	text = text.Space().Append(fmt.Sprintf("%s#%d", n.Repo, n.Number), "text-muted")
-	text = text.Space().Append(n.Title, "bold")
+	text = text.Space().Append(n.Repo, "bold").
+		Append(fmt.Sprintf("#%d", n.Number), "text-muted")
+	text = text.Space().Append(n.Title, "")
 	if n.Author != "" {
 		text = text.Space().Append("@"+n.Author, "text-muted")
 	}
@@ -219,6 +228,13 @@ func parseRouteRequest(r *http.Request) (routeRequest, bool) {
 		pathFormat = format
 	}
 
+	// projects/todos/activity/tasks/prompts are client-rendered SPA tabs with no
+	// server-side node path or export; accept them and any deeper selected-node
+	// segments so a hard load such as /projects/{project}/runs/{runId} serves the app.
+	if tabSeg == viewTabProjects || tabSeg == viewTabTodos || tabSeg == viewTabActivity || tabSeg == viewTabTasks || tabSeg == viewTabPrompts {
+		req.Tab = tabSeg
+		return req, true
+	}
 	if tabSeg != viewTabPRs {
 		return routeRequest{}, false
 	}

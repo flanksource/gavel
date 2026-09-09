@@ -21,8 +21,9 @@ var (
 
 // GoTest implements the test runner for go test.
 type GoTest struct {
-	workDir string
-	parser  parsers.ResultParser
+	workDir   string
+	parser    parsers.ResultParser
+	buildTags []string
 }
 
 // NewGoTest creates a new Go test runner.
@@ -43,17 +44,34 @@ func (r *GoTest) Parser() parsers.ResultParser {
 	return r.parser
 }
 
+// FocusArgs maps a common focus pattern to go test's native name filter.
+func (r *GoTest) FocusArgs(pattern string) []string {
+	return []string{"-run", pattern}
+}
+
+func (r *GoTest) BuildTagsArgs(tags []string) []string {
+	return []string{"-tags=" + strings.Join(tags, ",")}
+}
+
+func (r *GoTest) SetBuildTags(tags []string) {
+	r.buildTags = append([]string(nil), tags...)
+}
+
 // Detect checks if go test is used (looks for *_test.go files). We
 // deliberately do NOT gate on go.mod presence — a nested repo without its
 // own module, or a workDir inside a module whose go.mod sits above
 // the nearest .git boundary, still has runnable test files and should be
 // surfaced. `go test` emits a useful error at run time if no module exists.
 func (r *GoTest) Detect(workDir string) (bool, error) {
+	root, _ := filepath.Abs(workDir)
 	err := utils.WalkGitIgnoredBounded(workDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if d.IsDir() {
+			if path != root && isGoIgnoredDir(d.Name()) {
+				return fs.SkipDir
+			}
 			return nil
 		}
 		if strings.HasSuffix(d.Name(), "_test.go") {
@@ -72,21 +90,28 @@ func (r *GoTest) Detect(workDir string) (bool, error) {
 
 // packageHasNonGinkgoTests checks if a package has at least one test file
 // that is not a Ginkgo test (using the shared AST-based import check).
-func (r *GoTest) packageHasNonGinkgoTests(pkgDir string) bool {
+func (r *GoTest) packageHasNonGinkgoTests(pkgDir string) (bool, error) {
 	entries, err := os.ReadDir(pkgDir)
 	if err != nil {
-		return false
+		return false, err
 	}
 
 	for _, entry := range entries {
 		if !entry.IsDir() && strings.HasSuffix(entry.Name(), "_test.go") {
+			matched, err := matchesBuildConstraints(pkgDir, entry.Name(), r.buildTags)
+			if err != nil {
+				return false, err
+			}
+			if !matched {
+				continue
+			}
 			path := filepath.Join(pkgDir, entry.Name())
 			if !hasGinkgoImports(path) {
-				return true
+				return true, nil
 			}
 		}
 	}
-	return false
+	return false, nil
 }
 
 // inspectPackage scans a package directory and reports whether it contains
@@ -184,7 +209,11 @@ func (r *GoTest) hasTestsBeyondTestMain(pkgDir string) bool {
 // the package is not inside a module.
 func (r *GoTest) DiscoverPackages(workDir string, recursive bool) ([]string, error) {
 	if !recursive {
-		if r.packageHasNonGinkgoTests(workDir) {
+		hasTests, err := r.packageHasNonGinkgoTests(workDir)
+		if err != nil {
+			return nil, err
+		}
+		if hasTests {
 			return []string{r.getRelativePath(workDir)}, nil
 		}
 		return nil, nil
@@ -192,17 +221,29 @@ func (r *GoTest) DiscoverPackages(workDir string, recursive bool) ([]string, err
 
 	var packages []string
 	seen := make(map[string]bool)
+	root, _ := filepath.Abs(workDir)
 
 	err := utils.WalkGitIgnoredBounded(workDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 
-		if !d.IsDir() && strings.HasSuffix(d.Name(), "_test.go") {
+		if d.IsDir() {
+			if path != root && isGoIgnoredDir(d.Name()) {
+				return fs.SkipDir
+			}
+			return nil
+		}
+
+		if strings.HasSuffix(d.Name(), "_test.go") {
 			pkgDir := filepath.Dir(path)
 			if !seen[pkgDir] {
 				seen[pkgDir] = true
-				if r.packageHasNonGinkgoTests(pkgDir) {
+				hasTests, err := r.packageHasNonGinkgoTests(pkgDir)
+				if err != nil {
+					return err
+				}
+				if hasTests {
 					relPath := r.getRelativePath(pkgDir)
 					packages = append(packages, relPath)
 				}
@@ -218,22 +259,7 @@ func (r *GoTest) DiscoverPackages(workDir string, recursive bool) ([]string, err
 // PackageHasTests checks if a package has non-Ginkgo go test files.
 func (r *GoTest) PackageHasTests(packagePath string) (bool, error) {
 	dir := filepath.Join(r.workDir, packagePath)
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return false, err
-	}
-
-	for _, entry := range entries {
-		if !entry.IsDir() && strings.HasSuffix(entry.Name(), "_test.go") {
-			path := filepath.Join(dir, entry.Name())
-			// Return true if this file doesn't import Ginkgo
-			if !hasGinkgoImports(path) {
-				return true, nil
-			}
-		}
-	}
-
-	return false, nil
+	return r.packageHasNonGinkgoTests(dir)
 }
 
 // BuildCommand builds the go test command for a package.
