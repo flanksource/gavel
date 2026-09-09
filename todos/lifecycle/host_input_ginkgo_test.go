@@ -49,7 +49,7 @@ var _ = g.Describe("lifecycle actual run input", func() {
 		for _, hook := range input.input.Hooks {
 			hookNames = append(hookNames, hook.(interface{ Name() string }).Name())
 		}
-		o.Expect(hookNames).To(o.Equal([]string{"commit:run", "gavel-run-env", "gavel-spec-recorder"}))
+		o.Expect(hookNames).To(o.Equal([]string{"commit:run", "gavel-run-env", "gavel-run-labels", "gavel-spec-recorder"}))
 		o.Expect(prepared.request.Setup.Env).To(o.BeEmpty())
 		o.Expect([]int{factoryCalls, approvalCalls}).To(o.Equal([]int{0, 0}))
 		o.Expect(input.start(exec, todo, prepared)).To(o.Succeed())
