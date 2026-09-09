@@ -13,6 +13,17 @@ permissions:
     Read: allow
     Glob: allow
     Grep: allow
+# The tool list above is named in Claude's vocabulary, and captain treats an
+# allow naming another agent's built-in as inert — so on codex every entry is
+# dropped and the allow-list stops restricting anything. The sandbox is the same
+# guarantee stated in terms every runtime honours (claude settings, codex
+# --sandbox read-only), so "planning does not write" holds whichever backend the
+# step resolves to rather than only the one the tool names came from.
+sandbox:
+  mode: native
+  policy:
+    filesystem:
+      access: read-only
 ---
 {{#if multiple}}You are planning the implementation of the {{count}} todo items listed below. Produce ONE plan that covers all of them.{{else}}You are planning the implementation of the todo item below in this codebase.{{/if}}
 
