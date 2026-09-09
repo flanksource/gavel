@@ -41,6 +41,8 @@ vi.mock('@flanksource/clicky-ui/icons', () => ({
   UiChevronRight: () => null,
   UiClose: () => null,
   UiGitBranch: () => null,
+  // Reached through TodoTag -> icons/tags, which needs a glyph for "no icon".
+  UiProhibit: () => null,
 }));
 
 vi.mock('../../icons/Spinner', () => ({ Spinner: () => null }));
