@@ -9,7 +9,7 @@ on:
 
 jobs:
   self-test:
-    name: gavel test -lint via composite action
+    name: gavel test + lint via composite action
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -61,19 +61,29 @@ jobs:
           cp .bin/gavel "$install_dir/gavel"
           echo "$install_dir" >> "$GITHUB_PATH"
 
-      - name: Run gavel action
+      # Tests and linters are separate phases on purpose. Run as `test --lint`
+      # they share one exit code and one results file, so a lint violation fails
+      # the job with a red X that says nothing about whether the tests passed —
+      # and the reverse hides every lint finding behind the first failing test.
+      # Split, each phase reports its own artifact and sticky comment, and the
+      # job's failure names which one broke.
+      - name: Run gavel tests
         uses: ./
         with:
-          args: test --lint --timeout 20m --test-timeout 10m --lint-timeout 10m
+          args: test --timeout 20m --test-timeout 10m
           timeout-minutes: "30"
           version: source
           comment-header: gavel-self-test
           fail-on-error: "true"
 
-      - name: Run lint-only gavel action
+      # always(): the lint phase is not downstream of the tests, so a failing
+      # test must not cost this run its lint results. Both signals land on every
+      # run, which is what makes one push enough to see all the work left.
+      - name: Run gavel linters
+        if: always()
         uses: ./
         with:
-          args: lint golangci-lint --timeout 10m
+          args: lint --timeout 10m
           timeout-minutes: "15"
           version: source
           json-file: gavel-lint-results.json

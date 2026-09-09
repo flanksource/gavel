@@ -143,7 +143,21 @@ var _ = Describe("TODO Captain session hierarchy", Ordered, func() {
 
 		thread, err := provider.Captain().ListThreadSessionOverviews(ctx, issue.ID)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(thread).To(HaveLen(3))
-		Expect(thread[0].ID).To(Equal(issue.ID))
+		// Named rather than counted, so a failure says which session is missing
+		// or which one arrived uninvited.
+		//
+		// The transcript child is deliberately absent: it is registered under
+		// parent_relation 'transcript' (see the run-start transcript binding
+		// spec) precisely so captain's thread scope can skip it — that branch
+		// mirrors provider history, and counting it here would report every
+		// message twice. Its placement is what the assertions above check; this
+		// one pins that placing it does not put it in the thread.
+		ids := make([]uuid.UUID, 0, len(thread))
+		for _, session := range thread {
+			ids = append(ids, session.ID)
+		}
+		Expect(ids).To(ConsistOf(issue.ID, run.SessionID))
+		Expect(ids).NotTo(ContainElement(*run.ExecutionSessionID))
+		Expect(thread[0].ID).To(Equal(issue.ID), "the todo itself roots the thread")
 	})
 })

@@ -180,9 +180,9 @@ func normalizeWorkspaceOptions(options WorkspaceOptions) (WorkspaceOptions, erro
 }
 
 func initializeWorkspace(ctx context.Context, repository *native.Repository, options WorkspaceOptions) (*native.Workspace, error) {
-	workspace, err := resolveWorkspace(ctx, repository, options)
+	workspace, registeredPath, err := resolveWorkspace(ctx, repository, options)
 	if err == nil {
-		return reconcileWorkspace(ctx, repository, workspace, options)
+		return reconcileWorkspace(ctx, repository, workspace, options, registeredPath)
 	}
 	if !errors.Is(err, native.ErrNotFound) {
 		return nil, err
@@ -199,46 +199,66 @@ func initializeWorkspace(ctx context.Context, repository *native.Repository, opt
 	if !errors.Is(err, native.ErrWorkspaceConflict) {
 		return nil, fmt.Errorf("initialize native TODO workspace for project %q: %w", options.Name, err)
 	}
-	workspace, resolveErr := resolveWorkspace(ctx, repository, options)
+	workspace, registeredPath, resolveErr := resolveWorkspace(ctx, repository, options)
 	if resolveErr != nil {
 		return nil, fmt.Errorf("resolve concurrently initialized native TODO workspace for project %q after %v: %w", options.Name, err, resolveErr)
 	}
-	return reconcileWorkspace(ctx, repository, workspace, options)
+	return reconcileWorkspace(ctx, repository, workspace, options, registeredPath)
 }
 
-func resolveWorkspace(ctx context.Context, repository *native.Repository, options WorkspaceOptions) (*native.Workspace, error) {
+// resolveWorkspace finds the workspace a project's options name, and reports
+// whether options.RootPath is already one of that workspace's registered paths.
+//
+// The second answer is what keeps a move distinguishable from a revisit.
+// GetWorkspaceByPath matches retained locations too, so opening a provider at a
+// path the workspace has merely kept looks, to a caller comparing RootPath,
+// exactly like opening one at a place the workspace has moved to.
+func resolveWorkspace(ctx context.Context, repository *native.Repository, options WorkspaceOptions) (*native.Workspace, bool, error) {
 	var matched *native.Workspace
+	registeredPath := false
 	byPath, err := repository.GetWorkspaceByPath(ctx, options.RootPath)
 	switch {
 	case err == nil:
 		matched = byPath
+		registeredPath = true
 	case !errors.Is(err, native.ErrNotFound):
-		return nil, fmt.Errorf("resolve native TODO workspace by project %q path %q: %w", options.Name, options.RootPath, err)
+		return nil, false, fmt.Errorf("resolve native TODO workspace by project %q path %q: %w", options.Name, options.RootPath, err)
 	}
 	for _, repoKey := range options.Repositories {
 		byRepo, err := repository.GetWorkspaceByRepoKey(ctx, repoKey)
 		switch {
 		case err == nil:
 			if matched != nil && matched.ID != byRepo.ID {
-				return nil, fmt.Errorf(
+				return nil, false, fmt.Errorf(
 					"%w: project %q path %q resolves to workspace %s while repository %q resolves to workspace %s",
 					native.ErrWorkspaceConflict, options.Name, options.RootPath, matched.ID, repoKey, byRepo.ID,
 				)
 			}
 			matched = byRepo
 		case !errors.Is(err, native.ErrNotFound):
-			return nil, fmt.Errorf("resolve native TODO workspace by project %q repository %q: %w", options.Name, repoKey, err)
+			return nil, false, fmt.Errorf("resolve native TODO workspace by project %q repository %q: %w", options.Name, repoKey, err)
 		}
 	}
 	if matched == nil {
-		return nil, fmt.Errorf("%w: native TODO workspace for configured project %q", native.ErrNotFound, options.Name)
+		return nil, false, fmt.Errorf("%w: native TODO workspace for configured project %q", native.ErrNotFound, options.Name)
 	}
-	return matched, nil
+	return matched, registeredPath, nil
 }
 
-func reconcileWorkspace(ctx context.Context, repository *native.Repository, workspace *native.Workspace, options WorkspaceOptions) (*native.Workspace, error) {
+// reconcileWorkspace brings a resolved workspace in line with the project
+// options, and repoints its primary root only when registeredPath is false —
+// that is, only when the caller is somewhere the workspace does not already
+// know about, which is what a move looks like.
+//
+// Opening a provider at a retained path must not repoint anything: the
+// workspace has not moved, the caller is simply at an older location it still
+// answers to. Promoting it there would make a deep link that has no workspace
+// of its own — GlobalGet, which reports the owning primary CWD — start naming
+// the stale checkout, and every later open at the retained path would keep it
+// there.
+func reconcileWorkspace(ctx context.Context, repository *native.Repository, workspace *native.Workspace, options WorkspaceOptions, registeredPath bool) (*native.Workspace, error) {
 	update := native.UpdateWorkspaceInput{}
-	if workspace.RootPath != options.RootPath {
+	if !registeredPath && workspace.RootPath != options.RootPath {
 		update.RootPath = &options.RootPath
 	}
 	if workspace.DisplayName != options.Name {
