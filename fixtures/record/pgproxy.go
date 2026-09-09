@@ -191,7 +191,14 @@ func (r *SQLRecorder) handle(client net.Conn) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		_, _ = io.Copy(io.MultiWriter(server, &pgSniffer{onMessage: session.frontend}), client)
+		// The sniffer comes before the server: io.MultiWriter runs its writers in
+		// order, so forwarding first lets the server answer a statement this
+		// session has not recorded yet. complete() would then find nothing
+		// pending and drop the answer, and the statement would surface from
+		// flush() with no row count and no error — the server's reply lost even
+		// though the client saw it. Recording first makes the pending entry
+		// exist before the query can be asked.
+		_, _ = io.Copy(io.MultiWriter(&pgSniffer{onMessage: session.frontend}, server), client)
 		// Half-close so the server sees the client's EOF and answers it,
 		// instead of both sides waiting on the other.
 		if half, ok := server.(*net.TCPConn); ok {
