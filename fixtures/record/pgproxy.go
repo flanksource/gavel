@@ -206,7 +206,14 @@ func (r *SQLRecorder) handle(client net.Conn) {
 		}
 	}()
 
-	_, _ = io.Copy(io.MultiWriter(client, &pgSniffer{onMessage: session.backend}), server)
+	// Same order, same reason, mirrored: decode the server's answer before the
+	// client is allowed to see it. Forwarding first lets the client observe the
+	// reply, finish its query and drop the connection while this side is still
+	// mid-decode, and the close runs flush() — which emits the statement with no
+	// row count and no error, discarding an answer the recorder had in hand.
+	// Recording first makes "the client has its answer" imply the capture is
+	// already complete.
+	_, _ = io.Copy(io.MultiWriter(&pgSniffer{onMessage: session.backend}, client), server)
 	<-done
 	session.flush()
 }

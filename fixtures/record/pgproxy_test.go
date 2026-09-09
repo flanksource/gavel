@@ -158,8 +158,10 @@ func startSQLRecorder(t *testing.T, opts SQLOptions) *SQLRecorder {
 	return recorder
 }
 
-// eventually polls because the sniffer sees a copy of the stream: the client can
-// observe the server's answer before the recorder has finished decoding it.
+// eventually polls because recording and forwarding are still separate writes:
+// the proxy decodes each direction before passing it on, so a statement the
+// client has an answer for is complete by then, but the write that appends it
+// races this goroutine's read of Statements().
 func eventually(t *testing.T, recorder *SQLRecorder, want int) []Statement {
 	t.Helper()
 
