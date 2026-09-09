@@ -160,7 +160,7 @@ describe('TagDefinitionsPanel', () => {
     await screen.findByLabelText('Remove flaky');
 
     fireEvent.click(screen.getByText('Add common tag'));
-    const picker = within(await screen.findByRole('dialog', { name: 'Choose a tag' }));
+    const picker = within(await screen.findByRole('listbox', { name: 'Tags' }));
     fireEvent.click(picker.getByRole('option', { name: /bug/ }));
 
     await waitFor(() => expect(requests.some(request => request.method === 'POST')).toBe(true));
@@ -187,7 +187,7 @@ describe('TagDefinitionsPanel', () => {
 
     fireEvent.click(screen.getByText('Add common tag'));
 
-    const picker = within(await screen.findByRole('dialog', { name: 'Choose a tag' }));
+    const picker = within(await screen.findByRole('listbox', { name: 'Tags' }));
     const offered = picker.getAllByRole('option')
       .map(option => option.querySelector('[data-tag]')?.getAttribute('data-tag'));
     expect(offered).toContain('typed-by-hand');
@@ -199,7 +199,7 @@ describe('TagDefinitionsPanel', () => {
 
     fireEvent.click(screen.getByText('Add common tag'));
 
-    const picker = within(await screen.findByRole('dialog', { name: 'Choose a tag' }));
+    const picker = within(await screen.findByRole('listbox', { name: 'Tags' }));
     const offered = picker.getAllByRole('option')
       .map(option => option.querySelector('[data-tag]')?.getAttribute('data-tag'));
     expect(offered).toContain('bug');

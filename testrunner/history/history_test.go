@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/flanksource/clicky"
+	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/gavel/snapshots"
 	"github.com/flanksource/gavel/testrunner/parsers"
 	testui "github.com/flanksource/gavel/testrunner/ui"
@@ -138,6 +139,13 @@ func TestLoadCorruptSnapshotReportsPath(t *testing.T) {
 }
 
 func TestReportPrettyRendersHistoryRows(t *testing.T) {
+	// The assertion is about what the row reports, not how wide the viewport is:
+	// at the default width the leaf row is elided mid-word and "last fail" never
+	// reaches the output. Pin a width that fits it, and clear it again so the
+	// measurement is not cached for the rest of the package.
+	api.SetTerminalWidth(300)
+	t.Cleanup(func() { api.SetTerminalWidth(0) })
+
 	workDir := t.TempDir()
 	ts1 := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
 	ts2 := time.Date(2026, 1, 2, 10, 0, 0, 0, time.UTC)
