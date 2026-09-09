@@ -21,6 +21,7 @@ vi.mock('@flanksource/clicky-ui/components', () => ({
   ),
   DropdownMenu: ({ trigger }: { trigger: ReactNode }) => <div>{trigger}</div>,
   Modal: ({ children, footer, title }: { children: ReactNode; footer: ReactNode; title: string }) => (
+    // oxlint-disable-next-line clicky-ui/no-adhoc-overlay -- this IS the stub standing in for clicky's Modal.
     <div role="dialog" aria-label={title}>{children}{footer}</div>
   ),
 }));
