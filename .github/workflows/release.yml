@@ -33,9 +33,7 @@ jobs:
       - name: Enable corepack (pnpm)
         run: corepack enable
 
-      - uses: arduino/setup-task@v2
-        with:
-          version: 3.x
+      - uses: ./.github/actions/setup-task
 
       # Build and force-commit the embedded UI bundles (testui.js / prui.js)
       # so the release tag carries them. They are gitignored, so without this
@@ -106,9 +104,7 @@ jobs:
       - name: Enable corepack (pnpm)
         run: corepack enable
 
-      - uses: arduino/setup-task@v2
-        with:
-          version: 3.x
+      - uses: ./.github/actions/setup-task
 
       - name: Build binary
         run: task build:cross GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} GO_TAGS=gavel_menubar
