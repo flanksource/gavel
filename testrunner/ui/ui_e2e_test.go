@@ -272,14 +272,17 @@ var _ = Describe("Test UI E2E", func() {
 		srv.SetResults(sampleTests())
 		srv.SetDiagnosticsManager(nil)
 
-		// New tab per test, sharing the suite-wide browser process. Bound the
-		// tab context so a selector that never matches (e.g. a node hidden by
-		// the default failures filter) fails the spec in seconds rather than
-		// wedging the whole suite until the go test panic deadline.
+		// New tab per test, sharing the suite-wide browser process. The tab
+		// context is a backstop against a spec wedging until the go test panic
+		// deadline; surfacing a selector that never matches is clickTimeout's
+		// job, and it does that in 15s regardless of what this bound is. So the
+		// bound is sized for the slowest legitimate action instead — a full-page
+		// screenshot on a loaded CI runner, which shares the machine with the
+		// rest of the suite and has timed out at exactly 45s more than once.
 		var tabCancel context.CancelFunc
 		ctx, tabCancel = chromedp.NewContext(suiteBrowserCtx)
 		var timeoutCancel context.CancelFunc
-		ctx, timeoutCancel = context.WithTimeout(ctx, 45*time.Second)
+		ctx, timeoutCancel = context.WithTimeout(ctx, 2*time.Minute)
 		cancel = func() { timeoutCancel(); tabCancel() }
 	})
 
