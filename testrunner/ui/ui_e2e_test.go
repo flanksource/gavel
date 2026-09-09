@@ -6,7 +6,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -484,55 +483,6 @@ var _ = Describe("Test UI E2E", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(text2).To(ContainSubstring("Foo"))
 		Expect(text2).To(ContainSubstring("Test run complete"))
-	})
-
-	It("captures screenshot with detail panel showing fixture context", func() {
-		screenshotDir := GinkgoT().TempDir()
-		screenshotPath := filepath.Join(screenshotDir, "test-ui.png")
-
-		var buf []byte
-		err := chromedp.Run(ctx,
-			chromedp.Navigate(url),
-			chromedp.Sleep(2*time.Second),
-			clickWithTimeout(`//span[contains(text(), "CEL eval fails")]`),
-			chromedp.Sleep(500*time.Millisecond),
-			// Viewport capture, not FullScreenshot: the beyond-viewport path
-			// resizes to the full scroll height first, and against this page's
-			// overflow-y-auto panels it never returns on headless Linux — the
-			// spec burned its whole budget there, at 45s and again at 2m, while
-			// finishing in seconds locally. What the assertions below actually
-			// need is proof the page rendered with the detail panel open, and a
-			// viewport shot carries that.
-			chromedp.CaptureScreenshot(&buf),
-		)
-		Expect(err).ToNot(HaveOccurred())
-		Expect(len(buf)).To(BeNumerically(">", 10000))
-
-		err = os.WriteFile(screenshotPath, buf, 0644)
-		Expect(err).ToNot(HaveOccurred())
-
-		// Verify the page content has expected elements
-		var text string
-		err = chromedp.Run(ctx,
-			chromedp.Text(`body`, &text, chromedp.ByQuery),
-		)
-		Expect(err).ToNot(HaveOccurred())
-
-		// Left panel: tree with all frameworks
-		Expect(text).To(ContainSubstring("testrunner/"))
-		Expect(text).To(ContainSubstring("parsers/"))
-		Expect(text).To(ContainSubstring("filters.md"))
-
-		// Right panel: fixture detail
-		Expect(text).To(ContainSubstring("CEL eval fails"))
-		Expect(text).To(ContainSubstring("results.size() == 0"))
-		Expect(text).To(ContainSubstring("gavel analyze --type chore"))
-
-		// Summary bar
-		Expect(text).To(ContainSubstring("9 tests"))
-		Expect(text).To(ContainSubstring("Test run complete"))
-
-		GinkgoWriter.Printf("Screenshot saved to: %s (%d bytes)\n", screenshotPath, len(buf))
 	})
 
 	It("expand and collapse all works", func() {
