@@ -12,7 +12,6 @@ import { todoVisibleLabels } from './tagResolve';
 import {
   SessionBadge,
   StatusIcon,
-  TodoAges,
   TodoCountsBar,
   TodoDiffBadge,
   TodoPlanIndicator,
