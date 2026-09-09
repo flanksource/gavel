@@ -69,7 +69,7 @@ var _ = Describe("AI fix full spec resolution", func() {
 
 	It("resolves CLI runtime repairs after authored capability policy", func() {
 		layers := []api.SpecLayer{api.PromptSpecLayer("operation", api.Spec{
-			Model:       api.Model{Name: "gpt-5.6-sol", Mode: api.ModeAgent},
+			Model: api.Model{Name: "gpt-5.6-sol", Mode: api.ModeAgent},
 			// A deny, not an allow: captain treats an allow naming another agent's
 			// built-in as inert, so only a deny still makes the openai agent runtime
 			// refuse the policy — which is the refusal this spec turns on.
