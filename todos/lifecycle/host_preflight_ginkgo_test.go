@@ -53,18 +53,15 @@ var _ = Describe("Host full-input preflight", func() {
 		Entry("missing judge file", api.Spec{Workflow: &api.Workflow{Verify: &api.Verify{Prompts: []string{"missing-review.prompt"}}}}, "missing-review.prompt"),
 	)
 
-	DescribeTable("retains restrictive constraints through prompt rendering",
-		func(constraints api.RuntimeConstraints, message string) {
-			_, err := host.Resolve(context.Background(), hostTodo(), stepNamed(host.Def, "plan"), lifecycle.RunOptions{
-				Prior: []api.SpecLayer{{Name: "account limits", Scope: api.SpecLayerUser, Source: api.SpecLayerSourcePreset,
-					Spec: api.Spec{Budget: api.Budget{MaxTurns: 7}}, Constraints: constraints}},
-			})
-			Expect(err).To(MatchError(ContainSubstring(message)))
-			Expect(provider.admissions).To(BeZero())
-		},
-		Entry("rendered input exceeds its limit", api.RuntimeConstraints{Limits: api.RunLimits{MaxInputTokens: 1}}, "exceeding the configured limit"),
-		Entry("usage quota is exhausted", api.RuntimeConstraints{Quotas: []api.UsageQuota{{Name: "daily", Scope: api.SpecLayerUser, TokenLimit: 100, TokensUsed: 100}}}, "quota"),
-	)
+	It("carries a prior layer's budget through prompt rendering", func() {
+		resolution, err := host.Resolve(context.Background(), hostTodo(), stepNamed(host.Def, "plan"), lifecycle.RunOptions{
+			Prior: []api.SpecLayer{{Name: "account limits", Scope: api.SpecLayerUser, Source: api.SpecLayerSourcePreset,
+				Spec: api.Spec{Budget: api.Budget{MaxTurns: 7}}}},
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(resolution.Spec.Budget.MaxTurns).To(Equal(7))
+	})
 
 	It("returns permission warnings and provenance without invoking a broker, provider, setup or persistence", func() {
 		agent := &scriptedProvider{}

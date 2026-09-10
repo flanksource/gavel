@@ -1,29 +1,19 @@
 package lifecycle
 
 import (
-	"fmt"
-
 	"github.com/flanksource/captain/pkg/api"
 )
 
-func constrainPermissionLayers(layers []api.SpecLayer) ([]api.SpecLayer, error) {
-	constrained := append([]api.SpecLayer(nil), layers...)
-	for i := range constrained {
-		layer := constrained[i]
-		if layer.Source == api.SpecLayerSourceRequest && layer.Name == "request" {
-			continue
-		}
-		var err error
-		constrained[i], err = api.ConstrainSpecLayerPermissions(layer)
-		if err != nil {
-			return nil, fmt.Errorf("project permission constraints: %w", err)
-		}
-	}
-	return constrained, nil
-}
-
-// RestrictHostPermissions keeps the dashboard's approval default from widening
-// authored plan/dontAsk modes, while broader modes still require host approval.
+// RestrictHostPermissions decides what the dashboard's own layer says before it
+// is folded with the rest. The dashboard contributes `default` because it can
+// broker an approval, but a stack that had already settled on a read-only or
+// approval-free posture does not need brokering — so the host adopts that
+// posture instead of overwriting it.
+//
+// This is not a constraint on the layers below: it is the host choosing its own
+// value from what it can see, which is what any layer that must not widen an
+// authored posture does. Every layer here still only defaults, and any layer
+// after this one is free to name a different posture.
 func RestrictHostPermissions(layers []api.SpecLayer) []api.SpecLayer {
 	ordered := api.OrderSpecLayers(layers...)
 	var baseline api.Spec

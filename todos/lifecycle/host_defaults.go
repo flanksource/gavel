@@ -41,6 +41,10 @@ func (h *Host) StepDefaults(ctx context.Context, step Step) (StepDefaultResult, 
 	if err != nil {
 		return StepDefaultResult{}, fmt.Errorf("compose defaults for step %s: %w", step.Name, runtimeConfigurationError(err))
 	}
+	// The dialog displays what the run would do, so it must show the posture the
+	// run will actually resolve to — the class invariant is applied to a preview
+	// for the same reason it is applied last to a run.
+	ApplyClassInvariants(&composed.Spec, Class(step))
 	defaults := StepDefaultResult{Spec: composed.Spec, Trace: composed.Trace, Provenance: composed.Provenance, Warnings: composed.Warnings}
 	if layers.Profile != nil {
 		defaults.RuntimeProfile = layers.Profile.Profile.ID

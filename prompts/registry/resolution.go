@@ -31,7 +31,7 @@ func resolvePromptSpec(opts ResolveOptions, desc prompts.Prompt, override verify
 		if err != nil {
 			return api.ResolvedSpec{}, err
 		}
-		resolved = api.ResolvedSpec{Spec: composed.Spec, Constraints: composed.Constraints, Trace: composed.Trace,
+		resolved = api.ResolvedSpec{Spec: composed.Spec, Trace: composed.Trace,
 			Provenance: composed.Provenance, Warnings: composed.Warnings}
 	} else {
 		resolved, err = api.ResolveSpecLayers(options)

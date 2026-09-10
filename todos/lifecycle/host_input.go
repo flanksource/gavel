@@ -62,7 +62,7 @@ func (h *Host) runInput(exec *todos.ExecutorContext, todo *types.TODO, prepared 
 		OnEvent: func(_ int, ev captainai.Event) {
 			h.handleEvent(exec, ev, state.execution, todo, &state.sawResult, state.meta)
 		},
-		Timeout: prepared.timeout, Constraints: prepared.constraints,
+		Timeout: prepared.timeout,
 		// Changes are relative to the repository, even when a TODO runs in a subdirectory.
 		Repo: utils.GitRoot(prepared.workDir),
 	}

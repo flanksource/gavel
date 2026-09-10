@@ -32,7 +32,7 @@ func recordRuntimeFields(provenance map[string]api.FieldProvenance, fields runti
 	return provenance
 }
 
-// Runtime deadlines are applied after saved defaults and restrictive limits.
+// Runtime deadlines are applied after every layer and the saved defaults.
 func prepareRuntimeSpec(resolved *api.ResolvedSpec, class types.RunMode) (time.Duration, error) {
 	before := resolved.Spec.Budget.Timeout
 	timeout, err := ApplyTimeout(&resolved.Spec)
