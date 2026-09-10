@@ -76,10 +76,10 @@ type LayerInput struct {
 //	.gavel.yaml ai:  <  todos.timeout  <  prompt frontmatter  <  lifecycle step
 //	<  .gavel.yaml todos.<step>  <  the todo's llm:  <  the host  <  the request
 //
-// todos.timeout is the odd one: it is a context CONSTRAINT rather than a value,
-// so it can only ever lower a budget. A project cap that a prompt's own longer
-// budget silently overrode was a cap in name only, and one that overrode a
-// deliberately short prompt budget was worse.
+// Every layer supplies defaults and only defaults, todos.timeout included: it
+// is the deadline nothing above it names, not a cap on the ones that do. A
+// posture or budget that must survive the whole stack is not expressible as a
+// layer at all — see ApplyClassInvariants, which runs after the fold.
 //
 // A layer that configures nothing is omitted rather than appended empty, so the
 // trace a caller reports names only the sources that actually spoke.
@@ -110,16 +110,13 @@ func projectLayers(in LayerInput) []api.SpecLayer {
 		Source: api.SpecLayerSourcePreset,
 		Scope:  api.SpecLayerGlobal,
 		Spec:   in.Config.AI,
-		Constraints: api.RuntimeConstraints{
-			Permissions: api.PermissionConstraintsForSpec(in.Config.AI),
-		},
 	}}
 	if timeout := strings.TrimSpace(in.Config.Todos.Timeout); timeout != "" {
 		layers = append(layers, api.SpecLayer{
-			Name:        ".gavel.yaml todos.timeout",
-			Source:      api.SpecLayerSourcePreset,
-			Scope:       api.SpecLayerContext,
-			Constraints: api.RuntimeConstraints{Limits: api.RunLimits{Budget: api.Budget{Timeout: timeout}}},
+			Name:   ".gavel.yaml todos.timeout",
+			Source: api.SpecLayerSourcePreset,
+			Scope:  api.SpecLayerContext,
+			Spec:   api.Spec{Budget: api.Budget{Timeout: timeout}},
 		})
 	}
 	for _, layer := range in.Frontmatter {
@@ -135,26 +132,26 @@ func projectLayers(in LayerInput) []api.SpecLayer {
 		})
 	}
 	if step := stepSpec(in.Config.Todos, in.Step); !api.IsEmpty(step) {
-		layer := api.PromptSpecLayer(".gavel.yaml todos."+in.Step, step)
-		layer.Constraints.Permissions = api.PermissionConstraintsForSpec(step)
-		layers = append(layers, layer)
+		layers = append(layers, api.PromptSpecLayer(".gavel.yaml todos."+in.Step, step))
 	}
 	return layers
 }
 
 // ResolveLayers folds Layers through captain's resolver, which is where the
-// precedence, the constraint intersection and the trace all come from. Gavel
-// keeps no private fold: two implementations of "which layer wins" is one more
-// than the number of answers that can be right.
+// precedence and the trace both come from. Gavel keeps no private fold: two
+// implementations of "which layer wins" is one more than the number of answers
+// that can be right.
+//
+// Every layer only ever supplies defaults, so the last one naming a field owns
+// it. What a step must run under regardless of configuration is not expressed
+// here but by ApplyClassInvariants, after the fold.
 func ResolveLayers(in LayerInput) (api.ResolvedSpec, error) {
 	if err := api.ValidateSpecLayers(projectLayers(in)...); err != nil {
 		return api.ResolvedSpec{}, &ConfigurationError{Err: err}
 	}
-	layers, err := constrainPermissionLayers(RestrictHostPermissions(Layers(in)))
-	if err != nil {
-		return api.ResolvedSpec{}, &ConfigurationError{Err: err}
-	}
-	resolved, err := api.ResolveSpecLayers(api.ResolveSpecOptions{Layers: layers, Saved: in.Saved, RequireModel: in.RequireModel})
+	resolved, err := api.ResolveSpecLayers(api.ResolveSpecOptions{
+		Layers: RestrictHostPermissions(Layers(in)), Saved: in.Saved, RequireModel: in.RequireModel,
+	})
 	return resolved, runtimeConfigurationError(err)
 }
 
@@ -227,12 +224,22 @@ func ApplyTimeout(s *api.Spec) (time.Duration, error) {
 }
 
 // ApplyClassInvariants enforces what a behaviour class means regardless of
-// configuration. Only run-class steps produce work to commit: a plan writes a
-// document for review and a verify run grades what already exists, so a
-// `commits:` block inherited from the ai: base or todos config must not turn
-// either into a committing run.
+// configuration, and it is the LAST thing applied to a resolved spec. Layers
+// only ever default, so this — not a ceiling hung off some earlier layer — is
+// where a non-negotiable posture belongs: whatever the stack, the host or the
+// caller asked for, a step that is read-only by class runs read-only.
+//
+// The two invariants are the same statement about the same classes. Only
+// run-class steps produce work to commit: a plan or triage envelope investigates
+// and proposes, and a verify run grades what already exists, so neither may edit
+// the tree and a `commits:` block inherited from the ai: base or todos config
+// must not turn either into a committing run.
 func ApplyClassInvariants(s *api.Spec, class types.RunMode) {
-	if class == types.ModeRun || s.Workflow == nil {
+	if class == types.ModeRun {
+		return
+	}
+	s.Permissions.Mode = api.PermissionPlan
+	if s.Workflow == nil {
 		return
 	}
 	s.Workflow.Commits = nil

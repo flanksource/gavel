@@ -55,13 +55,23 @@ var _ = g.Describe("lifecycle runtime profile layers", func() {
 		o.Expect(result.Resolved.Trace[1].Source).To(o.Equal(api.SpecLayerSourceProfile))
 	})
 
-	g.It("keeps selected profile restrictions as request ceilings", func() {
-		_, err := host.resolveProfileLayers(context.Background(), LayerInput{
+	g.It("treats the selected profile's posture as a default the request replaces", func() {
+		result, err := host.resolveProfileLayers(context.Background(), LayerInput{
 			RuntimeProfile: ProfileSelection{Requested: "requested"},
 			Request:        api.Spec{Permissions: api.Permissions{Mode: api.PermissionAcceptEdits}},
 		})
 
-		o.Expect(err).To(o.MatchError(o.And(o.ContainSubstring("permissions.mode"), o.ContainSubstring("requested run spec"), o.ContainSubstring("request"))))
+		o.Expect(err).NotTo(o.HaveOccurred())
+		o.Expect(result.Resolved.Spec.Permissions.Mode).To(o.Equal(api.PermissionAcceptEdits))
+	})
+
+	g.It("supplies the profile's posture when the request names none", func() {
+		result, err := host.resolveProfileLayers(context.Background(), LayerInput{
+			RuntimeProfile: ProfileSelection{Requested: "requested"},
+		})
+
+		o.Expect(err).NotTo(o.HaveOccurred())
+		o.Expect(result.Resolved.Spec.Permissions.Mode).To(o.Equal(api.PermissionPlan))
 	})
 
 	g.It("never opens a catalog when no profile is selected", func() {

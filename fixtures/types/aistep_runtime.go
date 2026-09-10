@@ -65,6 +65,6 @@ func composeAIStepSnapshot(options api.ResolveSpecOptions) (api.ResolvedSpec, er
 	if err != nil {
 		return api.ResolvedSpec{}, err
 	}
-	return api.ResolvedSpec{Spec: composed.Spec, Trace: composed.Trace, Constraints: composed.Constraints,
+	return api.ResolvedSpec{Spec: composed.Spec, Trace: composed.Trace,
 		Provenance: composed.Provenance, Warnings: warnings}, nil
 }

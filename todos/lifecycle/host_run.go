@@ -76,10 +76,9 @@ type preparedStep struct {
 	existingPlan   string
 	agent          string
 	// trace is captain's provenance for the spec fold, lowest precedence first.
-	trace       []api.SpecLayer
-	provenance  map[string]api.FieldProvenance
-	warnings    []string
-	constraints api.RuntimeConstraints
+	trace      []api.SpecLayer
+	provenance map[string]api.FieldProvenance
+	warnings   []string
 }
 
 // RunStep runs one step of the lifecycle for a todo: the prompt rendered, the
@@ -221,8 +220,8 @@ func (h *Host) prepare(ctx context.Context, todo *types.TODO, step Step, lc Cont
 	prepared := &preparedStep{
 		definition: definition, class: class, request: spec, timeout: timeout,
 		workDir: workDir, template: prompt.Template, trace: resolved.Resolved.Trace,
-		runtimeProfile: resolved.Profile, constraints: resolved.Resolved.Constraints,
-		provenance: resolved.Resolved.Provenance, warnings: resolved.Resolved.Warnings,
+		runtimeProfile: resolved.Profile,
+		provenance:     resolved.Resolved.Provenance, warnings: resolved.Resolved.Warnings,
 	}
 	prepared.agent, _ = claude.ResolveAgent(spec.Name)
 	if class != types.ModeVerify {
