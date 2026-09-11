@@ -489,20 +489,29 @@ var _ = Describe("Test UI E2E", func() {
 	It("captures screenshot with detail panel showing fixture context", func() {
 		screenshotDir := GinkgoT().TempDir()
 		screenshotPath := filepath.Join(screenshotDir, "test-ui.png")
+		// Surface capture can wedge after earlier specs have churned renderers in
+		// the shared headless browser, so keep this visual check process-isolated.
+		screenshotAllocCtx, screenshotAllocCancel := chromedp.NewExecAllocator(context.Background(),
+			append(chromedp.DefaultExecAllocatorOptions[:],
+				chromedp.Flag("headless", true),
+				chromedp.Flag("disable-gpu", true),
+				chromedp.Flag("no-sandbox", true),
+				chromedp.Flag("disable-dev-shm-usage", true),
+				chromedp.WindowSize(1440, 900),
+			)...,
+		)
+		defer screenshotAllocCancel()
+		screenshotCtx, screenshotBrowserCancel := chromedp.NewContext(screenshotAllocCtx)
+		defer screenshotBrowserCancel()
+		screenshotCtx, screenshotTimeoutCancel := context.WithTimeout(screenshotCtx, 2*time.Minute)
+		defer screenshotTimeoutCancel()
 
 		var buf []byte
-		err := chromedp.Run(ctx,
+		err := chromedp.Run(screenshotCtx,
 			chromedp.Navigate(url),
 			chromedp.Sleep(2*time.Second),
 			clickWithTimeout(`//span[contains(text(), "CEL eval fails")]`),
 			chromedp.Sleep(500*time.Millisecond),
-			// Viewport capture, not FullScreenshot: the beyond-viewport path
-			// resizes to the full scroll height first, and against this page's
-			// overflow-y-auto panels it never returns on headless Linux — the
-			// spec burned its whole budget there, at 45s and again at 2m, while
-			// finishing in seconds locally. What the assertions below actually
-			// need is proof the page rendered with the detail panel open, and a
-			// viewport shot carries that.
 			chromedp.CaptureScreenshot(&buf),
 		)
 		Expect(err).ToNot(HaveOccurred())
@@ -513,7 +522,7 @@ var _ = Describe("Test UI E2E", func() {
 
 		// Verify the page content has expected elements
 		var text string
-		err = chromedp.Run(ctx,
+		err = chromedp.Run(screenshotCtx,
 			chromedp.Text(`body`, &text, chromedp.ByQuery),
 		)
 		Expect(err).ToNot(HaveOccurred())
