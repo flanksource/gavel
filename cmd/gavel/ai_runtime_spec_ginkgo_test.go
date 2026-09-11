@@ -70,7 +70,7 @@ var _ = Describe("AI fix full spec resolution", func() {
 	It("resolves CLI runtime repairs after authored capability policy", func() {
 		layers := []api.SpecLayer{api.PromptSpecLayer("operation", api.Spec{
 			Model:       api.Model{Name: "gpt-5.6-sol", Mode: api.ModeAgent},
-			Permissions: api.Permissions{Tools: api.Tools{"Read": api.ToolPolicyAllow}},
+			Permissions: api.Permissions{Tools: api.Tools{"shell": api.ToolPolicyAllow}},
 			Prompt:      api.Prompt{User: "Repair the lint failures"},
 		})}
 		options := aiFixRequestOptions{Layers: layers}
@@ -80,7 +80,7 @@ var _ = Describe("AI fix full spec resolution", func() {
 		resolved, err := buildAIFixRequest(options)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(resolved.Request.Name).To(Equal("claude-sonnet-5"))
-		Expect(resolved.Request.Permissions.Tools).To(Equal(api.Tools{"Read": api.ToolPolicyAllow}))
+		Expect(resolved.Request.Permissions.Tools).To(Equal(api.Tools{"shell": api.ToolPolicyAllow}))
 	})
 
 	It("refuses a tool policy the selected runtime cannot enforce", func() {

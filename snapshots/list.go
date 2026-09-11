@@ -106,14 +106,13 @@ func ListRuns(workDir string, since time.Time) ([]RunInfo, error) {
 		// parsing every run only to discard it by start time made an incremental
 		// sweep cost the same as a full one.
 		//
-		// Only the mtime can gate this. A run file is written once, after the run
-		// starts, so its mtime is an upper bound on the recorded start: an mtime
-		// at or before the watermark guarantees the start is too. The filename
-		// timestamp is NOT usable here even though runStartTime prefers it —
-		// PerRunTimestampLayout is second-precision, so it floors a sub-second
-		// start and would skip a run that belongs just after the watermark.
+		// Only the mtime can gate this. Filesystems may round mtimes down to the
+		// nearest second, so files from the watermark's second still need their
+		// recorded start time checked below. Older files can be skipped safely.
+		// The filename timestamp is NOT usable here even though runStartTime
+		// prefers it: PerRunTimestampLayout has the same second precision.
 		if !since.IsZero() {
-			if modTime := runFileModTime(path, entry); !modTime.IsZero() && !modTime.After(since) {
+			if modTime := runFileModTime(path, entry); !modTime.IsZero() && !modTime.Add(time.Second).After(since) {
 				continue
 			}
 		}
