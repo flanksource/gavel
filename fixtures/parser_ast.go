@@ -513,6 +513,17 @@ func buildFixtureFromCommand(cmd *commandBlockBuilder, frontMatter *FrontMatter,
 		if recordOnly.Record != nil {
 			fixture.Record = recordOnly.Record
 		}
+		// Repeat and metrics are execution policy, so malformed values must not
+		// disappear when the legacy tolerant decode below rejects another field.
+		var samplePolicy struct {
+			Repeat  *int         `yaml:"repeat"`
+			Metrics []MetricSpec `yaml:"metrics"`
+		}
+		if err := yaml.Unmarshal([]byte(cmd.frontmatter), &samplePolicy); err != nil {
+			return nil, fmt.Errorf("%s: invalid repeat or metrics configuration: %w", cmd.name, err)
+		}
+		fixture.Repeat = samplePolicy.Repeat
+		fixture.Metrics = samplePolicy.Metrics
 
 		if err := yaml.Unmarshal([]byte(cmd.frontmatter), &cmdFrontMatter); err == nil {
 			if cmdFrontMatter.Setup != nil {
@@ -526,6 +537,13 @@ func buildFixtureFromCommand(cmd *commandBlockBuilder, frontMatter *FrontMatter,
 			}
 			if cmdFrontMatter.Env != nil {
 				fixture.Env = cmdFrontMatter.Env
+			}
+			if cmdFrontMatter.Timeout != "" {
+				timeout, err := parseFixtureDuration(cmdFrontMatter.Timeout)
+				if err != nil {
+					return nil, fmt.Errorf("command %q: invalid timeout %q: %w", cmd.name, cmdFrontMatter.Timeout, err)
+				}
+				fixture.Expected.Timeout = &timeout
 			}
 			if cmdFrontMatter.Terminal != "" {
 				fixture.Terminal = cmdFrontMatter.Terminal

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/goccy/go-yaml"
 
@@ -90,6 +91,14 @@ func parseTableRow(headers, values []string) (*FixtureNode, error) {
 		switch header {
 		case "test name", "name":
 			fixture.Name = value
+		case "repeat":
+			if value != "" && value != "-" {
+				repeat, err := strconv.Atoi(value)
+				if err != nil {
+					return nil, fmt.Errorf("fixture %q: invalid Repeat value %q: %w", fixture.Name, value, err)
+				}
+				fixture.Repeat = &repeat
+			}
 		case "cwd", "working directory", "dir":
 			fixture.CWD = value
 		case "query":
@@ -144,6 +153,14 @@ func parseTableRow(headers, values []string) (*FixtureNode, error) {
 			fixture.Expected.Output = value
 		case "cel validation", "cel", "validation", "expr":
 			fixture.Expected.CEL = value
+		case "timeout":
+			if value != "" && value != "-" {
+				timeout, err := parseFixtureDuration(value)
+				if err != nil {
+					return nil, fmt.Errorf("fixture %q: invalid timeout %q: %w", fixture.Name, value, err)
+				}
+				fixture.Expected.Timeout = &timeout
+			}
 		default:
 			if value != "" {
 				if fixture.Expected.Properties == nil {
@@ -163,6 +180,13 @@ func parseTableRow(headers, values []string) (*FixtureNode, error) {
 		Type: TestNode,
 		Test: &fixture,
 	}, nil
+}
+
+func parseFixtureDuration(value string) (time.Duration, error) {
+	if seconds, err := strconv.Atoi(value); err == nil {
+		return time.Duration(seconds) * time.Second, nil
+	}
+	return time.ParseDuration(value)
 }
 
 // parseFrontMatter extracts YAML front-matter from a markdown file
