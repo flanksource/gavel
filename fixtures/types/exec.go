@@ -8,7 +8,6 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/flanksource/clicky"
 	clickyExec "github.com/flanksource/clicky/exec"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/fixtures"
@@ -156,17 +155,9 @@ func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opt
 	var p *clickyExec.ExecResult
 	var capture *fixtures.Capture
 	if exec.Terminal == "pty" || ansi != nil {
-		p, capture = runWithPTY(exec, workDir, ansi)
+		p, capture = runWithPTY(ctx, exec, workDir, ansi)
 	} else {
-		cmd := clicky.Exec(exec.Exec, exec.Args...).WithCwd(workDir)
-		if len(exec.Env) > 0 {
-			envMap := make(map[string]string, len(exec.Env))
-			for k, v := range exec.Env {
-				envMap[k] = fmt.Sprintf("%v", v)
-			}
-			cmd = cmd.WithEnv(envMap)
-		}
-		p = cmd.Run().Result()
+		p = runPiped(ctx, exec, workDir)
 	}
 
 	result.Actual = p
@@ -197,6 +188,7 @@ func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opt
 		}
 		evaluate.CELVars["changed_files"] = opts.Changed
 	}
+	result.EvaluationVars = evaluate.CELVars
 
 	// Deliberately fixture.SourceDir, not execBase: `@golden` files belong next
 	// to the markdown that asserts them. A worktree is disposable, so writing
@@ -221,17 +213,58 @@ const (
 	ptyHeight = 40
 )
 
+func runPiped(ctx context.Context, execBase fixtures.ExecFixtureBase, workDir string) *clickyExec.ExecResult {
+	process := clickyExec.NewExec(execBase.Exec, execBase.Args...).WithCwd(workDir).WithProcessGroup()
+	if len(execBase.Env) > 0 {
+		env := make(map[string]string, len(execBase.Env))
+		for key, value := range execBase.Env {
+			env[key] = fmt.Sprintf("%v", value)
+		}
+		process.WithEnv(env)
+	}
+
+	done := make(chan *clickyExec.Process, 1)
+	go func() {
+		done <- process.Run()
+	}()
+
+	select {
+	case completed := <-done:
+		return completed.Result()
+	case <-ctx.Done():
+	}
+
+	// Cancellation can race command startup. Wait until clicky publishes the
+	// PID or the command exits, then kill the whole process group so the row's
+	// timeout remains a hard budget even when the command forks children.
+	for process.Pid() == 0 {
+		select {
+		case completed := <-done:
+			result := completed.Result()
+			result.Error = ctx.Err()
+			return result
+		default:
+			runtime.Gosched()
+		}
+	}
+	_ = process.KillTree()
+	result := (<-done).Result()
+	result.Error = ctx.Err()
+	return result
+}
+
 // runWithPTY runs the command under a pseudo-terminal. ansi is non-nil when the
 // run is being recorded, which adds settled-screen tracking on top; without it
 // the capture is only the output stream, which costs no more than the plain
 // io.Copy this replaced.
-func runWithPTY(execBase fixtures.ExecFixtureBase, workDir string, ansi *record.ANSIOptions) (*clickyExec.ExecResult, *fixtures.Capture) {
+func runWithPTY(ctx context.Context, execBase fixtures.ExecFixtureBase, workDir string, ansi *record.ANSIOptions) (*clickyExec.ExecResult, *fixtures.Capture) {
 	// Invoke the configured executable directly so shells like bash/sh don't
 	// get double-wrapped (`bash -c "bash -c '<script>'"` mis-parses: the
 	// outer shell treats the inner `bash` as the script and the rest as
 	// positional args — the command never runs and we get the target
 	// program's help banner instead).
 	opts := fixtures.CaptureOptions{
+		Context: ctx,
 		Command: append([]string{execBase.Exec}, execBase.Args...),
 		Dir:     workDir,
 		Width:   ptyWidth,
@@ -256,8 +289,13 @@ func runWithPTY(execBase fixtures.ExecFixtureBase, workDir string, ansi *record.
 	capture, err := fixtures.CaptureANSI(opts)
 	if err != nil {
 		return &clickyExec.ExecResult{
-			Error:   fmt.Errorf("failed to start PTY: %w", err),
-			Started: &now,
+			Stdout:   "",
+			Stderr:   "",
+			ExitCode: -1,
+			Error:    fmt.Errorf("failed to start PTY: %w", err),
+			Started:  &now,
+			Command:  execBase.Exec,
+			Args:     execBase.Args,
 		}, nil
 	}
 
@@ -267,12 +305,18 @@ func runWithPTY(execBase fixtures.ExecFixtureBase, workDir string, ansi *record.
 	// `combined := stdout + stderr`) see the stream once, not twice. The
 	// doubled form was flagging every non-empty line as a duplicate in
 	// ansi.has_duplicates.
-	return &clickyExec.ExecResult{
+	result := &clickyExec.ExecResult{
 		Stdout:   capture.Raw(),
 		ExitCode: capture.ExitCode,
 		Started:  &now,
 		Duration: time.Duration(capture.DurationMs) * time.Millisecond,
-	}, capture
+		Command:  execBase.Exec,
+		Args:     execBase.Args,
+	}
+	if ctx.Err() != nil {
+		result.Error = ctx.Err()
+	}
+	return result, capture
 }
 
 // ResolveWorkDir determines the working directory for fixture execution.

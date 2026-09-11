@@ -174,6 +174,7 @@ func EvaluateCEL(fixture FixtureResult, expression string, variables map[string]
 
 	switch v := output.(type) {
 	case bool:
+		fixture.celResult = &v
 		if !v {
 			fixture.CELExpression = expression
 			fixture.CELVars = variables

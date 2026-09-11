@@ -612,6 +612,10 @@ type FixtureResult struct {
 	CELExpression string         `json:"cel_expression,omitempty"`
 	CELTrace      string         `json:"cel_trace,omitempty"`
 	CELVars       map[string]any `json:"cel_vars,omitempty"`
+	// EvaluationVars carries recorder-provided CEL roots between fixture execution
+	// and repeated-sample evaluation without exposing runtime data in reports.
+	EvaluationVars map[string]any `json:"-" yaml:"-" pretty:"hide"`
+	celResult      *bool
 
 	// Additive logical-row evidence. These fields remain nil for legacy fixtures.
 	Samples  []FixtureSample          `json:"samples,omitempty"`
