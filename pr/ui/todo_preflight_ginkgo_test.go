@@ -52,7 +52,10 @@ var _ = Describe("todo preview preflight", func() {
 
 	DescribeTable("refuses unsupported built-in planning policy before preview or run",
 		func(mode api.RuntimeMode) {
-			body, err := json.Marshal(todoRunPayload{Ref: todo.ID, Step: "plan", Spec: api.Spec{Model: api.Model{Name: "gpt-5.6-sol", Mode: mode}}})
+			body, err := json.Marshal(todoRunPayload{Ref: todo.ID, Step: "plan", Spec: api.Spec{
+				Model:       api.Model{Name: "gpt-5.6-sol", Mode: mode},
+				Permissions: api.Permissions{Tools: api.Tools{"shell": api.ToolPolicyAllow}},
+			}})
 			Expect(err).NotTo(HaveOccurred())
 			for _, handler := range []http.HandlerFunc{server.handleTodoRunPreview, server.handleTodoRun} {
 				recorder := httptest.NewRecorder()

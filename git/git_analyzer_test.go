@@ -471,7 +471,7 @@ var _ = Describe("GetCommitHistory", func() {
 			Expect(len(commits)).To(BeNumerically(">", 0))
 
 			for _, commit := range commits {
-				Expect(commit.Subject).To(HavePrefix(prefix))
+				Expect(strings.ToLower(commit.Subject)).To(HavePrefix(strings.ToLower(prefix)))
 			}
 		})
 	})

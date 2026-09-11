@@ -99,16 +99,6 @@ func GetCommitHistory(filter HistoryOptions) (models.Commits, error) {
 			args = append(args, fmt.Sprintf("--until=%s", filter.Until.Format(time.RFC3339)))
 		}
 
-		// Apply author filters
-		for _, author := range filter.Author {
-			args = append(args, fmt.Sprintf("--author=%s", author))
-		}
-
-		// Apply message filter
-		if filter.Message != "" {
-			args = append(args, fmt.Sprintf("--grep=%s", filter.Message))
-		}
-
 		// Only include patch data when ShowPatch is true
 		if filter.ShowPatch {
 			args = append(args, "-p")

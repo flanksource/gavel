@@ -656,6 +656,12 @@
         "approvalTimeout": {
           "type": "string"
         },
+        "directories": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "mcp": {
           "$ref": "#/$defs/MCP"
         },
@@ -1079,6 +1085,12 @@
         "interrupt": {
           "type": "boolean"
         },
+        "labels": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
         "mediaTypes": {
           "items": {
             "type": "string"
@@ -1437,6 +1449,12 @@
         },
         "interrupt": {
           "type": "boolean"
+        },
+        "labels": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
         },
         "mediaTypes": {
           "items": {
@@ -2790,6 +2808,12 @@
               "interrupt": {
                 "type": "boolean"
               },
+              "labels": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
               "mediaTypes": {
                 "items": {
                   "type": "string"
@@ -2991,6 +3015,12 @@
             },
             "interrupt": {
               "type": "boolean"
+            },
+            "labels": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
             },
             "mediaTypes": {
               "items": {
