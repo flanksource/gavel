@@ -490,7 +490,6 @@ func buildFixtureFromCommand(cmd *commandBlockBuilder, frontMatter *FrontMatter,
 			CWD      string         `yaml:"cwd"`
 			ExitCode *int           `yaml:"exitCode"`
 			Env      map[string]any `yaml:"env"`
-			Timeout  string         `yaml:"timeout"`
 			Terminal string         `yaml:"terminal"`
 			OS       string         `yaml:"os"`
 			Arch     string         `yaml:"arch"`
@@ -512,6 +511,25 @@ func buildFixtureFromCommand(cmd *commandBlockBuilder, frontMatter *FrontMatter,
 		}
 		if recordOnly.Record != nil {
 			fixture.Record = recordOnly.Record
+		}
+		// Execution policy must not disappear when the legacy tolerant decode
+		// below rejects another field.
+		var samplePolicy struct {
+			Repeat  *int         `yaml:"repeat"`
+			Metrics []MetricSpec `yaml:"metrics"`
+			Timeout string       `yaml:"timeout"`
+		}
+		if err := yaml.Unmarshal([]byte(cmd.frontmatter), &samplePolicy); err != nil {
+			return nil, fmt.Errorf("%s: invalid repeat, metrics, or timeout configuration: %w", cmd.name, err)
+		}
+		fixture.Repeat = samplePolicy.Repeat
+		fixture.Metrics = samplePolicy.Metrics
+		if samplePolicy.Timeout != "" {
+			timeout, err := parseFixtureDuration(samplePolicy.Timeout)
+			if err != nil {
+				return nil, fmt.Errorf("command %q: invalid timeout %q: %w", cmd.name, samplePolicy.Timeout, err)
+			}
+			fixture.Expected.Timeout = &timeout
 		}
 
 		if err := yaml.Unmarshal([]byte(cmd.frontmatter), &cmdFrontMatter); err == nil {

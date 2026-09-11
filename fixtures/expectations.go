@@ -50,6 +50,17 @@ type EvaluateOptions struct {
 }
 
 func (e Expectations) Evaluate(fixture FixtureResult, p exec.ExecResult, opts EvaluateOptions) FixtureResult {
+	fixture = e.EvaluateCommand(fixture, p, opts)
+	if fixture.Status != task.StatusPASS || e.CEL == "" {
+		return fixture
+	}
+
+	return EvaluateCEL(fixture, e.CEL, EvaluationContext(&fixture, opts))
+}
+
+// EvaluateCommand captures process evidence and evaluates only exit and stream
+// expectations, leaving CEL and metrics available as independent outcomes.
+func (e Expectations) EvaluateCommand(fixture FixtureResult, p exec.ExecResult, opts EvaluateOptions) FixtureResult {
 
 	fixture.Stdout = p.Stdout
 	fixture.Stderr = p.Stderr
@@ -61,6 +72,9 @@ func (e Expectations) Evaluate(fixture FixtureResult, p exec.ExecResult, opts Ev
 		} else {
 			fixture.Command = p.Command
 		}
+	}
+	if p.Error != nil && p.ExitCode < 0 {
+		return fixture.Errorf(p.Error, "command execution failed")
 	}
 	// Default exit code expectation to 0 if not specified
 	expectedExitCode := 0
@@ -85,81 +99,94 @@ func (e Expectations) Evaluate(fixture FixtureResult, p exec.ExecResult, opts Ev
 	} else if updated {
 		fixture.Metadata["golden_updated_stderr"] = true
 	}
-	if e.CEL != "" {
-		// Use RunExpression for CEL expressions, not RunTemplate
-		t := fixture.Test.AsMap()
-		t["output"] = p.Stdout
-		t["stdout"] = p.Stdout
-		t["stderr"] = p.Stderr
-		t["exitCode"] = p.ExitCode
-		combined := p.Stdout + p.Stderr
-		// width 0: settle unbounded. Fixture stdout/stderr are captured without a
-		// known terminal width here, so wrapping is left to the dedicated
-		// `gavel test ansi` capture which records the PTY width it used.
-		dups := duplicateLines(combined, 0)
-		dupList := make([]map[string]any, 0, len(dups))
-		for _, d := range dups {
-			dupList = append(dupList, map[string]any{"text": d.Text, "count": d.Count})
-		}
-		t["ansi"] = map[string]any{
-			"has_any":         hasAnyANSI(combined),
-			"has_color":       hasColorCodes(combined),
-			"has_updates":     hasCursorUpdates(combined),
-			"has_cursor_hide": hasCursorHide(combined),
-			"has_cursor_show": hasCursorShow(combined),
-			"has_reset":       hasSGRReset(combined),
-			"alt_screen":      hasAltScreen(combined),
-			"stray_controls":  hasStrayControls(combined),
-			"final_text":      finalText(combined, 0),
-			"duplicate_lines": dupList,
-			"has_duplicates":  len(dups) > 0,
-		}
-		// Try to parse JSON output if it looks like JSON
-		if strings.HasPrefix(strings.TrimSpace(p.Stdout), "{") || strings.HasPrefix(strings.TrimSpace(p.Stdout), "[") {
-			var jsonData interface{}
-			if err := json.Unmarshal([]byte(p.Stdout), &jsonData); err == nil {
-				t["json"] = jsonData
-				fixture.Metadata["json"] = jsonData
-			}
-		}
+	fixture.Status = task.StatusPASS
+	return fixture
+}
 
-		// Add temp file data to CEL context
-		for name, tempFile := range fixture.Test.TempFiles {
-			t[name] = tempFile.GetCELData()
-		}
-		// Recorder roots are applied last and win: `http` is a reserved name, and
-		// a fixture that happens to declare a temp file by that name should still
-		// find the recording where the docs say it is.
-		for name, value := range opts.CELVars {
-			t[name] = value
-		}
-		template := gomplate.Template{
-			Expression: e.CEL,
-			CelEnvs:    ANSICelFunctions(),
-		}
-		output, err := gomplate.RunExpression(t, template)
-		if err != nil {
-			fixture.CELExpression = e.CEL
-			fixture.CELVars = t
-			fixture.CELTrace = traceCELFailure(e.CEL, t, template, celFailureError)
-			return fixture.Errorf(err, "failed to evaluate CEL expression with gomplate")
-		}
+// EvaluationContext builds the shared CEL environment for assertions and
+// metric extraction, parsing JSON regardless of whether an assertion exists.
+func EvaluationContext(fixture *FixtureResult, opts EvaluateOptions) map[string]any {
+	t := fixture.Test.AsMap()
+	t["output"] = fixture.Stdout
+	t["stdout"] = fixture.Stdout
+	t["stderr"] = fixture.Stderr
+	t["exitCode"] = fixture.ExitCode
+	combined := fixture.Stdout + fixture.Stderr
+	// width 0: settle unbounded. Fixture stdout/stderr are captured without a
+	// known terminal width here, so wrapping is left to the dedicated
+	// `gavel test ansi` capture which records the PTY width it used.
+	dups := duplicateLines(combined, 0)
+	dupList := make([]map[string]any, 0, len(dups))
+	for _, d := range dups {
+		dupList = append(dupList, map[string]any{"text": d.Text, "count": d.Count})
+	}
+	t["ansi"] = map[string]any{
+		"has_any":         hasAnyANSI(combined),
+		"has_color":       hasColorCodes(combined),
+		"has_updates":     hasCursorUpdates(combined),
+		"has_cursor_hide": hasCursorHide(combined),
+		"has_cursor_show": hasCursorShow(combined),
+		"has_reset":       hasSGRReset(combined),
+		"alt_screen":      hasAltScreen(combined),
+		"stray_controls":  hasStrayControls(combined),
+		"final_text":      finalText(combined, 0),
+		"duplicate_lines": dupList,
+		"has_duplicates":  len(dups) > 0,
+	}
 
-		switch v := output.(type) {
-		case bool:
-			if !v {
-				fixture.CELExpression = e.CEL
-				fixture.CELVars = t
-				fixture.CELTrace = traceCELFailure(e.CEL, t, template, celFailureFalse)
-				return fixture.Failf("%s is false", fixture.CELExpression)
+	trimmed := strings.TrimSpace(fixture.Stdout)
+	if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
+		var jsonData interface{}
+		if err := json.Unmarshal([]byte(fixture.Stdout), &jsonData); err == nil {
+			t["json"] = jsonData
+			if fixture.Metadata == nil {
+				fixture.Metadata = map[string]interface{}{}
 			}
-		case string:
-			if strings.ToLower(strings.TrimSpace(v)) != "true" {
-				return fixture.Failf("%s => %s != true", fixture.CELExpression, v)
-			}
-		default:
-			return fixture.Failf("%s did not return a boolean: got %T(%v)", fixture.CELExpression, output, output)
+			fixture.Metadata["json"] = jsonData
 		}
+	}
+
+	for name, tempFile := range fixture.Test.TempFiles {
+		t[name] = tempFile.GetCELData()
+	}
+	// Recorder roots are applied last and win: `http` is a reserved name, and
+	// a fixture that happens to declare a temp file by that name should still
+	// find the recording where the docs say it is.
+	for name, value := range opts.CELVars {
+		t[name] = value
+	}
+	return t
+}
+
+// EvaluateCEL evaluates one assertion against a prepared sample context.
+func EvaluateCEL(fixture FixtureResult, expression string, variables map[string]any) FixtureResult {
+	template := gomplate.Template{
+		Expression: expression,
+		CelEnvs:    ANSICelFunctions(),
+	}
+	output, err := gomplate.RunExpression(variables, template)
+	if err != nil {
+		fixture.CELExpression = expression
+		fixture.CELVars = variables
+		fixture.CELTrace = traceCELFailure(expression, variables, template, celFailureError)
+		return fixture.Errorf(err, "failed to evaluate CEL expression with gomplate")
+	}
+
+	switch v := output.(type) {
+	case bool:
+		fixture.celResult = &v
+		if !v {
+			fixture.CELExpression = expression
+			fixture.CELVars = variables
+			fixture.CELTrace = traceCELFailure(expression, variables, template, celFailureFalse)
+			return fixture.Failf("%s is false", fixture.CELExpression)
+		}
+	case string:
+		if strings.ToLower(strings.TrimSpace(v)) != "true" {
+			return fixture.Failf("%s => %s != true", fixture.CELExpression, v)
+		}
+	default:
+		return fixture.Failf("%s did not return a boolean: got %T(%v)", fixture.CELExpression, output, output)
 	}
 	fixture.Status = task.StatusPASS
 	return fixture

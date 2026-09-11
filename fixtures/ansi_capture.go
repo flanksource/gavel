@@ -1,7 +1,9 @@
 package fixtures
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	osExec "os/exec"
@@ -10,6 +12,7 @@ import (
 	"time"
 
 	"github.com/creack/pty"
+	"github.com/shirou/gopsutil/v3/process"
 
 	"github.com/flanksource/gavel/fixtures/record"
 )
@@ -28,6 +31,7 @@ const (
 // by settled snapshots. SnapshotInterval controls how often the live viewport
 // is appended to the snapshot timeline.
 type CaptureOptions struct {
+	Context          context.Context
 	Width, Height    int
 	SnapshotInterval time.Duration
 	Command          []string
@@ -141,6 +145,13 @@ func CaptureANSI(opts CaptureOptions) (*Capture, error) {
 		interval = 100 * time.Millisecond
 	}
 
+	ctx := opts.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("ansi capture: %w", err)
+	}
 	cmd := osExec.Command(opts.Command[0], opts.Command[1:]...)
 	cmd.Dir = opts.Dir
 	cmd.Env = append(os.Environ(), opts.Env...)
@@ -152,6 +163,17 @@ func CaptureANSI(opts CaptureOptions) (*Capture, error) {
 		return nil, fmt.Errorf("ansi capture: start pty: %w", err)
 	}
 	defer ptmx.Close()
+	readDone := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			// Kill before closing the PTY so descendants that created their own
+			// process groups remain attached long enough to be discovered.
+			_ = cancelCaptureProcess(cmd.Process)
+			_ = ptmx.Close()
+		case <-readDone:
+		}
+	}()
 
 	var (
 		mu        sync.Mutex
@@ -219,6 +241,7 @@ func CaptureANSI(opts CaptureOptions) (*Capture, error) {
 			break
 		}
 	}
+	close(readDone)
 	close(done)
 	wg.Wait()
 
@@ -250,6 +273,50 @@ func CaptureANSI(opts CaptureOptions) (*Capture, error) {
 		capture.Final = FinalState{Screen: final, Duplicates: duplicateSettledLines(final)}
 	}
 	return capture, nil
+}
+
+func captureProcessDescendants(root int32) ([]*process.Process, error) {
+	all, err := process.Processes()
+	if err != nil {
+		return nil, err
+	}
+	children := make(map[int32][]*process.Process)
+	for _, candidate := range all {
+		parent, err := candidate.Ppid()
+		if err == nil {
+			children[parent] = append(children[parent], candidate)
+		}
+	}
+
+	var descendants []*process.Process
+	parents := []int32{root}
+	seen := map[int32]bool{root: true}
+	for len(parents) > 0 {
+		parent := parents[0]
+		parents = parents[1:]
+		for _, child := range children[parent] {
+			if seen[child.Pid] {
+				continue
+			}
+			seen[child.Pid] = true
+			descendants = append(descendants, child)
+			parents = append(parents, child.Pid)
+		}
+	}
+	return descendants, nil
+}
+
+func killCaptureDescendants(root int) error {
+	descendants, err := captureProcessDescendants(int32(root))
+	failures := []error{err}
+	// Leaves first prevents a killed parent from orphaning children before they
+	// receive the cancellation signal.
+	for i := len(descendants) - 1; i >= 0; i-- {
+		if err := descendants[i].Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+			failures = append(failures, err)
+		}
+	}
+	return errors.Join(failures...)
 }
 
 func ensureEnv(env []string, key, val string) []string {
