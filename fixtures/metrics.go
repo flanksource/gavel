@@ -52,7 +52,7 @@ func (f FixtureTest) repeatCount() int {
 }
 
 func (f FixtureTest) metricSpecs() []MetricSpec {
-	if len(f.Metrics) > 0 {
+	if f.Metrics != nil {
 		return f.Metrics
 	}
 	return f.FrontMatter.Metrics
