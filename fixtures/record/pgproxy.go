@@ -206,7 +206,9 @@ func (r *SQLRecorder) handle(client net.Conn) {
 		}
 	}()
 
-	_, _ = io.Copy(io.MultiWriter(client, &pgSniffer{onMessage: session.backend}), server)
+	// Sniff before forwarding so the client cannot observe ReadyForQuery and
+	// issue its next statement before the recorder has processed that boundary.
+	_, _ = io.Copy(io.MultiWriter(&pgSniffer{onMessage: session.backend}, client), server)
 	<-done
 	session.flush()
 }
