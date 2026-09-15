@@ -3,8 +3,11 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/flanksource/captain/pkg/captainconfig"
@@ -103,14 +106,17 @@ var statusAI = clickyai.AgentConfig{MaxConcurrent: 4, CacheTTL: 24 * time.Hour}
 var statusAIFlags *pflag.FlagSet
 
 func init() {
-	statusCmd := clicky.AddNamedCommand("status", rootCmd, StatusOptions{}, runStatus)
+	statusCmd := clicky.AddNamedCommandWithContext("status", rootCmd, StatusOptions{}, runStatus)
 	statusCmd.Use = "status [folder]"
 	statusCmd.Args = cobra.MaximumNArgs(1)
 	clickyai.BindFlags(statusCmd.Flags(), &statusAI)
 	statusAIFlags = statusCmd.Flags()
 }
 
-func runStatus(opts StatusOptions) (any, error) {
+func runStatus(parent context.Context, opts StatusOptions) (any, error) {
+	ctx, stop := statusCommandContext(parent)
+	defer stop()
+
 	workDir, folderFilter, err := resolveStatusWorkDir(opts.WorkDir, opts.Args)
 	if err != nil {
 		return nil, err
@@ -119,11 +125,19 @@ func runStatus(opts StatusOptions) (any, error) {
 	verbose := clicky.Flags.LevelCount > 0
 
 	if !opts.AI {
-		return status.Gather(workDir, status.Options{
+		result, err := status.Gather(workDir, status.Options{
 			NoRepomap:    opts.NoRepomap,
 			FolderFilter: folderFilter,
 			Verbose:      verbose,
+			Context:      ctx,
 		})
+		if err != nil {
+			return nil, err
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		return result, nil
 	}
 
 	cfg, err := verify.LoadGavelConfig(workDir)
@@ -142,7 +156,6 @@ func runStatus(opts StatusOptions) (any, error) {
 		return nil, err
 	}
 
-	ctx := context.Background()
 	gatherOpts := status.Options{
 		NoRepomap:    opts.NoRepomap,
 		FolderFilter: folderFilter,
@@ -162,7 +175,7 @@ func runStatus(opts StatusOptions) (any, error) {
 	// terminal, ClearLines accounting, and the logger serializer — the AI
 	// agent's per-call log lines then interleave cleanly instead of corrupting
 	// an in-place redraw. The renderer paints result.Pretty() each tick; the
-	// batch's updates are folded into result via renderer.Apply.
+	// group's updates are folded into result via renderer.Apply.
 	renderer := status.NewStatusRenderer(result)
 	clickytask.SetLiveRenderer(renderer)
 	defer clickytask.SetLiveRenderer(nil)
@@ -179,8 +192,27 @@ func runStatus(opts StatusOptions) (any, error) {
 		renderer.Apply(update)
 	}
 	clicky.WaitForGlobalCompletion()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	return nil, nil
+}
+
+func statusCommandContext(parent context.Context) (context.Context, func()) {
+	ctx, stopSignals := signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM)
+	stopTasks := context.AfterFunc(ctx, func() {
+		stopSignals()
+		clicky.CancelAllGlobalTasks()
+	})
+	return ctx, func() {
+		cancelled := ctx.Err() != nil
+		stopTasks()
+		stopSignals()
+		if cancelled {
+			clicky.CancelAllGlobalTasks()
+		}
+	}
 }
 
 // resolveStatusWorkDir resolves the git root to scan and the optional
