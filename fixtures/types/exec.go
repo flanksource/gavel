@@ -2,13 +2,15 @@ package types
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	osExec "os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
-	"github.com/flanksource/clicky"
 	clickyExec "github.com/flanksource/clicky/exec"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/fixtures"
@@ -158,15 +160,7 @@ func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opt
 	if exec.Terminal == "pty" || ansi != nil {
 		p, capture = runWithPTY(exec, workDir, ansi)
 	} else {
-		cmd := clicky.Exec(exec.Exec, exec.Args...).WithCwd(workDir)
-		if len(exec.Env) > 0 {
-			envMap := make(map[string]string, len(exec.Env))
-			for k, v := range exec.Env {
-				envMap[k] = fmt.Sprintf("%v", v)
-			}
-			cmd = cmd.WithEnv(envMap)
-		}
-		p = cmd.Run().Result()
+		p = runPiped(ctx, exec, workDir)
 	}
 
 	result.Actual = p
@@ -202,6 +196,19 @@ func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opt
 	// to the markdown that asserts them. A worktree is disposable, so writing
 	// an updated golden into one would discard it on cleanup. The command moves;
 	// its expectations do not.
+	if err := processLaunchError(p); err != nil {
+		result.Stdout = p.Stdout
+		result.Stderr = p.Stderr
+		result.ExitCode = p.ExitCode
+		if p.Command != "" {
+			if len(p.Args) > 0 {
+				result.Command = p.Command + " " + strings.Join(p.Args, " ")
+			} else {
+				result.Command = p.Command
+			}
+		}
+		return result.Errorf(err, "command execution failed")
+	}
 	evaluated := fixture.Expected.Evaluate(result, *p, evaluate)
 
 	// A `requireEntries` shortfall only decides a fixture the assertions left
@@ -220,6 +227,81 @@ const (
 	ptyWidth  = 120
 	ptyHeight = 40
 )
+
+// runPiped runs the command on pipes. WithProcessGroup lets a cancelled ctx
+// KillTree children; clicky also force-closes stdio 2s after the direct child
+// exits, which can return ErrWaitDelay while descendants still hold those
+// pipes. KillTree that leftover group so the timeout stays a hard stop.
+func runPiped(ctx context.Context, execBase fixtures.ExecFixtureBase, workDir string) *clickyExec.ExecResult {
+	if err := ctx.Err(); err != nil {
+		return &clickyExec.ExecResult{
+			ExitCode: -1,
+			Error:    err,
+			Command:  execBase.Exec,
+			Args:     execBase.Args,
+		}
+	}
+
+	process := clickyExec.NewExec(execBase.Exec, execBase.Args...).WithCwd(workDir).WithProcessGroup()
+	if len(execBase.Env) > 0 {
+		env := make(map[string]string, len(execBase.Env))
+		for key, value := range execBase.Env {
+			env[key] = fmt.Sprintf("%v", value)
+		}
+		process.WithEnv(env)
+	}
+
+	done := make(chan *clickyExec.Process, 1)
+	go func() {
+		done <- process.Run()
+	}()
+
+	select {
+	case completed := <-done:
+		result := completed.Result()
+		if errors.Is(result.Error, osExec.ErrWaitDelay) {
+			_ = process.KillTree()
+		}
+		return result
+	case <-ctx.Done():
+	}
+
+	// Cancellation can race command startup. Wait until clicky publishes the
+	// PID or the command exits, then kill the whole process group so the row's
+	// timeout remains a hard budget even when the command forks children.
+	for process.Pid() == 0 {
+		select {
+		case completed := <-done:
+			result := completed.Result()
+			if errors.Is(result.Error, osExec.ErrWaitDelay) {
+				_ = process.KillTree()
+			}
+			result.Error = ctx.Err()
+			return result
+		default:
+			runtime.Gosched()
+		}
+	}
+	_ = process.KillTree()
+	result := (<-done).Result()
+	result.Error = ctx.Err()
+	return result
+}
+
+// processLaunchError reports cancellation, deadline, and pipe-drain failures.
+// Ordinary non-zero exits stay with Evaluate so fixtures can still assert them.
+func processLaunchError(p *clickyExec.ExecResult) error {
+	if p == nil {
+		return fmt.Errorf("command produced no result")
+	}
+	if p.Error == nil {
+		return nil
+	}
+	if errors.Is(p.Error, context.Canceled) || errors.Is(p.Error, context.DeadlineExceeded) || errors.Is(p.Error, osExec.ErrWaitDelay) {
+		return p.Error
+	}
+	return nil
+}
 
 // runWithPTY runs the command under a pseudo-terminal. ansi is non-nil when the
 // run is being recorded, which adds settled-screen tracking on top; without it
