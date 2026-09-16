@@ -3,13 +3,13 @@ exec: bash
 args:
   - -c
   - |
-    state="/tmp/gavel-repeated-metrics-$PPID-{{ .key }}"
+    state="/tmp/gavel-repeated-measurements-$PPID-{{ .key }}"
     sample=$(( $(cat "$state" 2>/dev/null || echo 0) + 1 ))
     printf '{"schemaVersion":"captain.observation/v1","execution":{"state":"completed"},"metrics":{"durationMs":{"state":"known","value":%s,"unit":"ms"}}}\n' "$sample"
     if [ "$sample" -ge "{{ .samplecount }}" ]; then rm -f "$state"; else printf '%s\n' "$sample" > "$state"; fi
 repeat: 3
 timeout: 30s
-metrics:
+measurements:
   - name: mean_value
     extract: json.metrics.durationMs.value
     unit: ms
@@ -56,7 +56,7 @@ metrics:
       regressionPercent: 60
 ---
 
-# Generic repeated metrics
+# Generic repeated measurements
 
 | Name | key | sampleCount | Repeat | CEL Validation |
 |---|---|---:|---:|---|
@@ -67,7 +67,7 @@ metrics:
 
 ```yaml
 repeat: 2
-metrics:
+measurements:
   - name: command_value
     extract: json.metrics.durationMs.value
     unit: ms

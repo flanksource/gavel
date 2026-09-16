@@ -75,7 +75,7 @@ func fixturesHelp(cmd *cobra.Command) api.Text {
 		Add(code("  codeBlocks: [bash, python]")).Add(dim("         # Languages to execute (default: [bash])")).NewLine().
 		Add(code("  timeout: 30s")).Add(dim("                       # Total timeout for test execution")).NewLine().
 		Add(code("  repeat: 3")).Add(dim("                          # Serial samples per logical row (default: 1)")).NewLine().
-		Add(code("  metrics: []")).Add(dim("                        # Numeric CEL extraction and threshold policy")).NewLine().
+		Add(code("  measurements: []")).Add(dim("                  # Numeric CEL extraction and threshold policy")).NewLine().
 		Add(code("  os: linux")).Add(dim("                          # Skip on other OSes (prefix ! to negate: !darwin)")).NewLine().
 		Add(code("  arch: amd64")).Add(dim("                        # Skip on other architectures")).NewLine().
 		Add(code("  skip: \"! command -v docker\"")).Add(dim("        # Skip if command exits 0")).NewLine().
@@ -129,7 +129,7 @@ func fixturesHelp(cmd *cobra.Command) api.Text {
 	t = t.Add(h("FORMAT 2: COMMAND BLOCKS")).
 		Append("  Use heading ").Add(code("### command: <test name>")).Append(" followed by code blocks:").NewLine().NewLine().
 		Add(code("  ### command: my test\n  ```yaml\n  cwd: ./testdir\n  exitCode: 0\n  terminal: pty\n  os: linux\n  env:\n    KEY: value\n  ```\n  ```bash\n  echo \"hello world\"\n  ```")).NewLine().NewLine().
-		Append("  YAML fields: ", "text-muted").Add(code("cwd, exitCode, env, timeout, repeat, metrics, terminal, os, arch, skip, record")).NewLine().NewLine().
+		Append("  YAML fields: ", "text-muted").Add(code("cwd, exitCode, env, timeout, repeat, measurements, terminal, os, arch, skip, record")).NewLine().NewLine().
 		Add(sh("Validations")).
 		Append("    ").Add(code("* cel: stdout.contains(\"hello\")")).NewLine().
 		Append("    ").Add(code("* contains: hello")).NewLine().
@@ -209,13 +209,13 @@ func fixturesHelp(cmd *cobra.Command) api.Text {
 		Add(kv("not: contains: <text>", "!stdout.contains(\"<text>\")")).
 		Add(kv("not: <expr>", "!(<expr>)")).NewLine()
 
-	// Repeated samples and metrics
-	t = t.Add(h("REPEATED SAMPLES AND METRICS")).
+	// Repeated samples and measurements
+	t = t.Add(h("REPEATED SAMPLES AND MEASUREMENTS")).
 		Append("  Set ").Add(code("repeat")).Append(" in file/command YAML or use a table ").Add(code("Repeat")).Append(" override.").NewLine().
 		Append("  Repeats run serially inside one logical-row timeout and retain per-sample evidence.").NewLine().NewLine().
-		Add(code("  metrics:\n    - name: duration_ms\n      extract: json.metrics.durationMs.value\n      unit: ms\n      aggregate: median\n      direction: lower\n      baseline: API baseline\n      threshold:\n        max: 120000\n        regressionPercent: 25")).NewLine().NewLine().
+		Add(code("  measurements:\n    - name: duration_ms\n      extract: json.metrics.durationMs.value\n      unit: ms\n      aggregate: median\n      direction: lower\n      baseline: API baseline\n      threshold:\n        max: 120000\n        regressionPercent: 25")).NewLine().NewLine().
 		Append("  Aggregates: ").Add(code("mean, median, min, max, p95")).Append(". Directions: ").Add(code("lower, higher, none")).Append(".").NewLine().
-		Append("  Baselines must uniquely name another row with a matching metric specification.").NewLine()
+		Append("  Baselines must uniquely name another row with a matching measurement specification.").NewLine()
 
 	// CEL Validation
 	t = t.Add(h("CEL VALIDATION")).

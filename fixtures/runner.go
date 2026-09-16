@@ -342,7 +342,7 @@ func (r *Runner) executeFixtures() (*FixtureGroup, error) {
 		finalized[typedTask] = &result
 		allResults = append(allResults, &result)
 	}
-	finalizeMetricComparisons(allResults)
+	finalizeMeasurementComparisons(allResults)
 
 	for typedTask, result := range finalized {
 		// The task initially completes before cross-row comparisons are possible.
@@ -458,13 +458,13 @@ func (r *Runner) executeLogicalFixture(ctx flanksourceContext.Context, fixture F
 		result.Actual = sampleResult.Actual
 		result.Recordings = append(result.Recordings, sampleResult.Recordings...)
 
-		metrics := fixture.metricSpecs()
-		if len(metrics) > 0 {
-			sample.Metrics = make(map[string]MetricSample, len(metrics))
+		measurements := fixture.measurementSpecs()
+		if len(measurements) > 0 {
+			sample.Measurements = make(map[string]MeasurementSample, len(measurements))
 		}
 		if sample.Outcome.Status == OutcomePASS {
 			variables := EvaluationContext(&sampleResult, EvaluateOptions{CELVars: sampleResult.EvaluationVars})
-			if fixture.Expected.CEL != "" || len(metrics) > 0 {
+			if fixture.Expected.CEL != "" || len(measurements) > 0 {
 				result.Metadata = sampleResult.Metadata
 			}
 			if fixture.Expected.CEL != "" {
@@ -479,12 +479,12 @@ func (r *Runner) executeLogicalFixture(ctx flanksourceContext.Context, fixture F
 					result.CELVars = variables
 				}
 			}
-			for _, metric := range metrics {
-				value, err := extractMetric(metric, variables)
+			for _, measurement := range measurements {
+				value, err := extractMeasurement(measurement, variables)
 				if err != nil {
-					sample.Metrics[metric.Name] = MetricSample{Status: OutcomeERR, Error: err.Error()}
+					sample.Measurements[measurement.Name] = MeasurementSample{Status: OutcomeERR, Error: err.Error()}
 				} else {
-					sample.Metrics[metric.Name] = MetricSample{Status: OutcomePASS, Value: value}
+					sample.Measurements[measurement.Name] = MeasurementSample{Status: OutcomePASS, Value: value}
 				}
 			}
 		} else {
@@ -494,8 +494,8 @@ func (r *Runner) executeLogicalFixture(ctx flanksourceContext.Context, fixture F
 					Expression:     fixture.Expected.CEL,
 				}
 			}
-			for _, metric := range metrics {
-				sample.Metrics[metric.Name] = MetricSample{Status: OutcomeNotEvaluated}
+			for _, measurement := range measurements {
+				sample.Measurements[measurement.Name] = MeasurementSample{Status: OutcomeNotEvaluated}
 			}
 		}
 
@@ -514,7 +514,7 @@ func (r *Runner) executeLogicalFixture(ctx flanksourceContext.Context, fixture F
 	if fixture.Expected.CEL != "" {
 		result.Outcomes.Assertions = aggregateAssertionOutcome(result.Samples)
 	}
-	summarizeMetrics(&result)
+	summarizeMeasurements(&result)
 	finalizeLogicalResult(&result)
 	return result
 }
@@ -536,8 +536,8 @@ func sampleHasError(sample FixtureSample) bool {
 	if sample.Outcome.Status == OutcomeERR || (sample.CEL != nil && sample.CEL.Status == OutcomeERR) {
 		return true
 	}
-	for _, metric := range sample.Metrics {
-		if metric.Status == OutcomeERR {
+	for _, measurement := range sample.Measurements {
+		if measurement.Status == OutcomeERR {
 			return true
 		}
 	}

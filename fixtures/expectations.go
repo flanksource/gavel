@@ -59,7 +59,7 @@ func (e Expectations) Evaluate(fixture FixtureResult, p exec.ExecResult, opts Ev
 }
 
 // EvaluateCommand captures process evidence and evaluates only exit and stream
-// expectations, leaving CEL and metrics available as independent outcomes.
+// expectations, leaving CEL and measurements available as independent outcomes.
 func (e Expectations) EvaluateCommand(fixture FixtureResult, p exec.ExecResult, opts EvaluateOptions) FixtureResult {
 
 	fixture.Stdout = p.Stdout
@@ -104,7 +104,7 @@ func (e Expectations) EvaluateCommand(fixture FixtureResult, p exec.ExecResult, 
 }
 
 // EvaluationContext builds the shared CEL environment for assertions and
-// metric extraction, parsing JSON regardless of whether an assertion exists.
+// measurement extraction, parsing JSON regardless of whether an assertion exists.
 func EvaluationContext(fixture *FixtureResult, opts EvaluateOptions) map[string]any {
 	t := fixture.Test.AsMap()
 	t["output"] = fixture.Stdout
