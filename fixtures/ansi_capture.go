@@ -163,7 +163,10 @@ func CaptureANSI(opts CaptureOptions) (*Capture, error) {
 		return nil, fmt.Errorf("ansi capture: start pty: %w", err)
 	}
 	defer ptmx.Close()
-	readDone := make(chan struct{})
+	// Keep the watcher alive through cmd.Wait(), not just PTY EOF. A child can
+	// close its terminal then sleep; read returns while the process is still
+	// running, and the fixture timeout must still be able to kill it.
+	waitDone := make(chan struct{})
 	go func() {
 		select {
 		case <-ctx.Done():
@@ -171,7 +174,7 @@ func CaptureANSI(opts CaptureOptions) (*Capture, error) {
 			// process groups remain attached long enough to be discovered.
 			_ = cancelCaptureProcess(cmd.Process)
 			_ = ptmx.Close()
-		case <-readDone:
+		case <-waitDone:
 		}
 	}()
 
@@ -241,12 +244,13 @@ func CaptureANSI(opts CaptureOptions) (*Capture, error) {
 			break
 		}
 	}
-	close(readDone)
 	close(done)
 	wg.Wait()
 
 	exitCode := 0
-	if werr := cmd.Wait(); werr != nil {
+	werr := cmd.Wait()
+	close(waitDone)
+	if werr != nil {
 		ee, ok := werr.(*osExec.ExitError)
 		if !ok {
 			return nil, fmt.Errorf("ansi capture: wait for %q: %w", opts.Command[0], werr)

@@ -2,10 +2,13 @@ package types
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	osExec "os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	clickyExec "github.com/flanksource/clicky/exec"
@@ -193,6 +196,19 @@ func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opt
 	// to the markdown that asserts them. A worktree is disposable, so writing
 	// an updated golden into one would discard it on cleanup. The command moves;
 	// its expectations do not.
+	if err := processLaunchError(p); err != nil {
+		result.Stdout = p.Stdout
+		result.Stderr = p.Stderr
+		result.ExitCode = p.ExitCode
+		if p.Command != "" {
+			if len(p.Args) > 0 {
+				result.Command = p.Command + " " + strings.Join(p.Args, " ")
+			} else {
+				result.Command = p.Command
+			}
+		}
+		return result.Errorf(err, "command execution failed")
+	}
 	evaluated := fixture.Expected.Evaluate(result, *p, evaluate)
 
 	// A `requireEntries` shortfall only decides a fixture the assertions left
@@ -212,11 +228,20 @@ const (
 	ptyHeight = 40
 )
 
-// runWithPTY runs the command under a pseudo-terminal. ansi is non-nil when the
-// run is being recorded, which adds settled-screen tracking on top; without it
-// the capture is only the output stream, which costs no more than the plain
-// io.Copy this replaced.
+// runPiped runs the command on pipes. WithProcessGroup lets a cancelled ctx
+// KillTree children; clicky also force-closes stdio 2s after the direct child
+// exits, which can return ErrWaitDelay while descendants still hold those
+// pipes. KillTree that leftover group so the timeout stays a hard stop.
 func runPiped(ctx context.Context, execBase fixtures.ExecFixtureBase, workDir string) *clickyExec.ExecResult {
+	if err := ctx.Err(); err != nil {
+		return &clickyExec.ExecResult{
+			ExitCode: -1,
+			Error:    err,
+			Command:  execBase.Exec,
+			Args:     execBase.Args,
+		}
+	}
+
 	process := clickyExec.NewExec(execBase.Exec, execBase.Args...).WithCwd(workDir).WithProcessGroup()
 	if len(execBase.Env) > 0 {
 		env := make(map[string]string, len(execBase.Env))
@@ -233,7 +258,11 @@ func runPiped(ctx context.Context, execBase fixtures.ExecFixtureBase, workDir st
 
 	select {
 	case completed := <-done:
-		return completed.Result()
+		result := completed.Result()
+		if errors.Is(result.Error, osExec.ErrWaitDelay) {
+			_ = process.KillTree()
+		}
+		return result
 	case <-ctx.Done():
 	}
 
@@ -244,6 +273,9 @@ func runPiped(ctx context.Context, execBase fixtures.ExecFixtureBase, workDir st
 		select {
 		case completed := <-done:
 			result := completed.Result()
+			if errors.Is(result.Error, osExec.ErrWaitDelay) {
+				_ = process.KillTree()
+			}
 			result.Error = ctx.Err()
 			return result
 		default:
@@ -256,6 +288,25 @@ func runPiped(ctx context.Context, execBase fixtures.ExecFixtureBase, workDir st
 	return result
 }
 
+// processLaunchError reports cancellation, deadline, and pipe-drain failures.
+// Ordinary non-zero exits stay with Evaluate so fixtures can still assert them.
+func processLaunchError(p *clickyExec.ExecResult) error {
+	if p == nil {
+		return fmt.Errorf("command produced no result")
+	}
+	if p.Error == nil {
+		return nil
+	}
+	if errors.Is(p.Error, context.Canceled) || errors.Is(p.Error, context.DeadlineExceeded) || errors.Is(p.Error, osExec.ErrWaitDelay) {
+		return p.Error
+	}
+	return nil
+}
+
+// runWithPTY runs the command under a pseudo-terminal. ansi is non-nil when the
+// run is being recorded, which adds settled-screen tracking on top; without it
+// the capture is only the output stream, which costs no more than the plain
+// io.Copy this replaced.
 func runWithPTY(ctx context.Context, execBase fixtures.ExecFixtureBase, workDir string, ansi *record.ANSIOptions) (*clickyExec.ExecResult, *fixtures.Capture) {
 	// Invoke the configured executable directly so shells like bash/sh don't
 	// get double-wrapped (`bash -c "bash -c '<script>'"` mis-parses: the
