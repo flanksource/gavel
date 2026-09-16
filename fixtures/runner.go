@@ -318,7 +318,7 @@ func (r *Runner) executeFixtures() (*FixtureGroup, error) {
 					return result, progressErr
 				}
 				return result, err
-			}, clicky.WithTaskTimeout(2*time.Minute))
+			}, clicky.WithTaskTimeout(fixtureTimeout(*node.Test)))
 		}
 	})
 
@@ -356,6 +356,16 @@ func (r *Runner) executeFixtures() (*FixtureGroup, error) {
 	r.tree.PruneEmptySections()
 
 	return results, nil
+}
+
+func fixtureTimeout(fixture FixtureTest) time.Duration {
+	if fixture.Expected.Timeout != nil {
+		return *fixture.Expected.Timeout
+	}
+	if fixture.Timeout != nil {
+		return *fixture.Timeout
+	}
+	return 2 * time.Minute
 }
 
 func (r *Runner) executionSteps() []ExecutionStep {
