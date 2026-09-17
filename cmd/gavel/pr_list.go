@@ -278,6 +278,7 @@ func runPRUI(opts PRListOptions, databaseMode serveDatabaseMode) error {
 		Repos:       searchOpts.Repos,
 		All:         searchOpts.All,
 		Org:         searchOpts.Org,
+		Project:     saved.Project,
 		IgnoredOrgs: saved.IgnoredOrgs,
 	})
 	srv.SetFixtureSchemaProvider(func() (any, error) {

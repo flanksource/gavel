@@ -16,6 +16,16 @@ import (
 	"github.com/flanksource/gomplate/v3"
 )
 
+// maxWorkers is RunnerOptions.MaxWorkers with its zero value resolved to serial
+// execution. A negative value is a caller bug rather than a request for
+// unlimited concurrency, so it collapses to 1 as well.
+func (r *Runner) maxWorkers() int {
+	if r.options.MaxWorkers < 1 {
+		return 1
+	}
+	return r.options.MaxWorkers
+}
+
 // getBuildCommand extracts build command from first fixture that has one
 func (r *Runner) getBuildCommand() (string, *PreparedSetup) {
 	return r.firstDeclared("build", func(f FixtureTest) string { return f.Build })

@@ -17,9 +17,8 @@ import (
 const (
 	// viteDevHost/viteDevURL is where the pr/ui Vite dev server listens (pinned
 	// by server.strictPort in pr/ui/vite.config.ts). The Go server
-	// reverse-proxies the UI here; Vite's HMR websocket runs on its own port
-	// (24778). The port is deliberately not Vite's default 5173 to avoid
-	// colliding with sibling UIs.
+	// reverse-proxies the UI here. The port is deliberately not Vite's default
+	// 5173 to avoid colliding with sibling UIs.
 	viteDevHost = "localhost:5273"
 	viteDevURL  = "http://" + viteDevHost
 	// viteEntryMarker is the entry script Vite injects into our index.html;

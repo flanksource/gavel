@@ -7,8 +7,11 @@ import (
 
 // TodosConfig configures `gavel todos run`.
 type TodosConfig struct {
+	// Presets are the ordered runtime layers used when neither the step nor the
+	// request selects them.
+	Presets []string `yaml:"presets,omitempty" json:"presets,omitempty"`
 	// RuntimeProfile is the catalog profile used when neither the step nor the
-	// request selects one.
+	// request selects one. Deprecated: runtime resolution warns and ignores it.
 	RuntimeProfile string `yaml:"runtimeProfile,omitempty" json:"runtimeProfile,omitempty"`
 	// Run is the AI spec for the todo run prompt; Plan is the plan-mode spec.
 	// Each overrides the base ai: spec field-wise. See prompts.TodosRun/TodosPlan.
