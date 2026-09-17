@@ -16,26 +16,40 @@ import (
 	"github.com/google/uuid"
 )
 
-const projectActionOpenPR projectAction = "open-pr"
+const (
+	projectActionOpenPR projectAction = "open-pr"
+	commitQueueKind                   = "gavel-" + string(projectActionCommit)
+)
 
 type projectCommitRun struct {
 	RunID string `json:"runId"`
 }
 
+// projectCommitTaskDetails records what one queued commit was asked to do, so a
+// finished run — live or archived — can be replayed by retryCommitRun.
 type projectCommitTaskDetails struct {
-	TaskID string        `json:"taskId"`
-	Action projectAction `json:"action"`
-	Files  []string      `json:"files"`
+	TaskID  string         `json:"taskId"`
+	Action  projectAction  `json:"action"`
+	Files   []string       `json:"files"`
+	Options map[string]any `json:"options,omitempty"`
 }
 
 type projectCommitGroupDetails struct {
 	Entries []projectCommitTaskDetails `json:"entries"`
 }
 
+// commitQueueRequest is a validated commit ready to enqueue: the gavel args to
+// run plus the request inputs (files, options) needed to replay it.
+type commitQueueRequest struct {
+	action  projectAction
+	files   []string
+	args    []string
+	options map[string]any
+}
+
 type commitQueueEntry struct {
-	action projectAction
-	files  []string
-	task   clickytask.TypedTask[cexec.ExecResult]
+	commitQueueRequest
+	task clickytask.TypedTask[cexec.ExecResult]
 }
 
 type commitQueueGeneration struct {
@@ -78,31 +92,31 @@ func (s *Server) projectCommitQueue(project string) *commitQueue {
 }
 
 func (s *Server) enqueueCommitGroup(project Project, request projectActionRequest) (projectCommitRun, error) {
-	action, files, args, err := s.commitQueueActionArgs(project, request)
+	queued, err := s.commitQueueActionArgs(project, request)
 	if err != nil {
 		return projectCommitRun{}, err
 	}
-	return s.projectCommitQueue(project.Name).enqueue(s, project, action, files, args)
+	return s.projectCommitQueue(project.Name).enqueue(s, project, []commitQueueRequest{queued})
 }
 
-func (s *Server) commitQueueActionArgs(project Project, request projectActionRequest) (projectAction, []string, []string, error) {
+func (s *Server) commitQueueActionArgs(project Project, request projectActionRequest) (commitQueueRequest, error) {
 	action := request.Action
 	if action != projectActionCommit && action != projectActionOpenPR {
-		return "", nil, nil, fmt.Errorf("unknown commit queue action %q", action)
+		return commitQueueRequest{}, fmt.Errorf("unknown commit queue action %q", action)
 	}
 	if action == projectActionOpenPR {
 		if request.Options != nil {
-			return "", nil, nil, errors.New("advanced options are not supported for open-pr")
+			return commitQueueRequest{}, errors.New("advanced options are not supported for open-pr")
 		}
 		request.Action = projectActionCommit
 	}
 	args, err := s.projectActionArgs(project, request)
 	if err != nil {
-		return "", nil, nil, err
+		return commitQueueRequest{}, err
 	}
 	files, err := commitGroupFiles(request)
 	if err != nil {
-		return "", nil, nil, err
+		return commitQueueRequest{}, err
 	}
 	if action == projectActionOpenPR {
 		position := len(args) - len(files)
@@ -111,7 +125,7 @@ func (s *Server) commitQueueActionArgs(project Project, request projectActionReq
 		withPush = append(withPush, "--push")
 		args = append(withPush, args[position:]...)
 	}
-	return action, files, args, nil
+	return commitQueueRequest{action: action, files: files, args: args, options: request.Options}, nil
 }
 
 func commitGroupFiles(request projectActionRequest) ([]string, error) {
@@ -125,52 +139,67 @@ func commitGroupFiles(request projectActionRequest) ([]string, error) {
 	return request.Files, nil
 }
 
-func (q *commitQueue) enqueue(s *Server, project Project, action projectAction, files, args []string) (projectCommitRun, error) {
+// enqueue appends requests, in order, to the project's current generation as
+// one atomic batch: every file is checked for conflicts before any commit
+// starts, and all of them land in the same run.
+func (q *commitQueue) enqueue(s *Server, project Project, requests []commitQueueRequest) (projectCommitRun, error) {
+	if len(requests) == 0 {
+		return projectCommitRun{}, fmt.Errorf("no commits to queue for project %s", project.Name)
+	}
 	q.mu.Lock()
-	if duplicates := q.duplicateFilesLocked(files); len(duplicates) > 0 {
+	if duplicates := q.duplicateFilesLocked(requests); len(duplicates) > 0 {
 		q.mu.Unlock()
 		return projectCommitRun{}, &commitQueueConflictError{files: duplicates}
 	}
-	generation := q.ensureGenerationLocked(project)
-	entry := &commitQueueEntry{action: action, files: append([]string(nil), files...)}
-	var opts []clickytask.Option
-	if predecessors := predecessorsLocked(generation); len(predecessors) > 0 {
-		opts = append(opts, clickytask.WithDependencies(predecessors...))
+	generation := q.ensureGenerationLocked(s, project)
+	entries := make([]*commitQueueEntry, 0, len(requests))
+	for _, request := range requests {
+		entry := &commitQueueEntry{commitQueueRequest: request}
+		entry.files = append([]string(nil), request.files...)
+		var opts []clickytask.Option
+		if predecessors := predecessorsLocked(generation); len(predecessors) > 0 {
+			opts = append(opts, clickytask.WithDependencies(predecessors...))
+		}
+		entry.task = executeProjectAction(generation.group.Context(), project.ResolvedDir(), request.args, io.Discard, generation.group.Group, opts...)
+		entry.task.SetName(projectCommitTaskName(request.action, request.files))
+		entry.task.SetDescription(strings.Join(request.files, ", "))
+		generation.entries = append(generation.entries, entry)
+		entries = append(entries, entry)
 	}
-	entry.task = executeProjectAction(generation.group.Context(), project.ResolvedDir(), args, io.Discard, generation.group.Group, opts...)
-	entry.task.SetName(projectCommitTaskName(action, files))
-	entry.task.SetDescription(strings.Join(files, ", "))
-	generation.entries = append(generation.entries, entry)
 	q.mu.Unlock()
 
-	go q.watch(s, project, generation, entry)
+	for _, entry := range entries {
+		go q.watch(s, project, generation, entry)
+	}
 	return projectCommitRun{RunID: generation.runID}, nil
 }
 
-func (q *commitQueue) duplicateFilesLocked(files []string) []string {
-	if q.current == nil || commitQueueTerminal(q.current.group.Status()) {
-		return nil
-	}
+// duplicateFilesLocked lists files claimed by an unfinished commit in the
+// current generation or by an earlier request in the same batch.
+func (q *commitQueue) duplicateFilesLocked(requests []commitQueueRequest) []string {
 	claimed := map[string]struct{}{}
-	for _, entry := range q.current.entries {
-		if commitQueueTerminal(entry.task.Status()) {
-			continue
-		}
-		for _, file := range entry.files {
-			claimed[file] = struct{}{}
+	if q.current != nil && !commitQueueTerminal(q.current.group.Status()) {
+		for _, entry := range q.current.entries {
+			if commitQueueTerminal(entry.task.Status()) {
+				continue
+			}
+			for _, file := range entry.files {
+				claimed[file] = struct{}{}
+			}
 		}
 	}
-	seen := map[string]struct{}{}
+	reported := map[string]struct{}{}
 	var duplicates []string
-	for _, file := range files {
-		if _, exists := claimed[file]; !exists {
-			continue
+	for _, request := range requests {
+		for _, file := range request.files {
+			_, conflict := claimed[file]
+			claimed[file] = struct{}{}
+			if _, seen := reported[file]; !conflict || seen {
+				continue
+			}
+			reported[file] = struct{}{}
+			duplicates = append(duplicates, file)
 		}
-		if _, exists := seen[file]; exists {
-			continue
-		}
-		seen[file] = struct{}{}
-		duplicates = append(duplicates, file)
 	}
 	return duplicates
 }
@@ -183,16 +212,16 @@ func predecessorsLocked(generation *commitQueueGeneration) []*clickytask.Task {
 	return predecessors
 }
 
-func (q *commitQueue) ensureGenerationLocked(project Project) *commitQueueGeneration {
+func (q *commitQueue) ensureGenerationLocked(s *Server, project Project) *commitQueueGeneration {
 	if q.current != nil && !commitQueueTerminal(q.current.group.Status()) {
 		return q.current
 	}
 	generation := &commitQueueGeneration{runID: uuid.NewString()}
-	controller := &projectActionController{}
+	controller := &commitQueueController{server: s, runID: generation.runID}
 	group := clickytask.StartGroup[cexec.ExecResult](
 		"Commit "+project.Name,
 		clickytask.WithGroupID(generation.runID),
-		clickytask.WithKind("gavel-"+string(projectActionCommit)),
+		clickytask.WithKind(commitQueueKind),
 		clickytask.WithLabels(map[string]string{"project": project.Name, "action": string(projectActionCommit)}),
 		clickytask.WithHref("/tasks/"+generation.runID),
 		clickytask.WithConcurrency(1),
@@ -211,9 +240,10 @@ func (q *commitQueue) details(generation *commitQueueGeneration) projectCommitGr
 	details := projectCommitGroupDetails{Entries: make([]projectCommitTaskDetails, 0, len(generation.entries))}
 	for _, entry := range generation.entries {
 		details.Entries = append(details.Entries, projectCommitTaskDetails{
-			TaskID: entry.task.ID(),
-			Action: entry.action,
-			Files:  append([]string(nil), entry.files...),
+			TaskID:  entry.task.ID(),
+			Action:  entry.action,
+			Files:   append([]string(nil), entry.files...),
+			Options: entry.options,
 		})
 	}
 	return details
