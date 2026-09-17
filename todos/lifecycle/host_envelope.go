@@ -75,16 +75,23 @@ func (h *Host) collect(exec *todos.ExecutorContext, todo *types.TODO, step Step,
 	default:
 		h.collectEnvelope(execution, &facts, prepared, out)
 	}
-	// The runtime records a prompt run as failed whenever the run reported an
-	// error — a provider result that was not a success, an error event, an
-	// envelope that says failed — even when an envelope was still decoded. The
-	// facts the outcomes read must say the same, or a run captain stores as
-	// failed could land the todo in pending.
+	settleRunFacts(execution, &facts)
+	return &StepOutcome{Step: step, Result: facts, Execution: execution}
+}
+
+// settleRunFacts reconciles the run's fate with its execution record once both
+// are collected.
+//
+// The runtime records a prompt run as failed whenever the run reported an
+// error — a provider result that was not a success, an error event, an
+// envelope that says failed — even when an envelope was still decoded. The
+// facts the outcomes read must say the same, or a run captain stores as
+// failed could land the todo in pending.
+func settleRunFacts(execution *todos.ExecutionResult, facts *StepResult) {
 	if facts.Run.State == RunSucceeded && execution.ErrorMessage != "" {
 		facts.Run.State, facts.Run.Error = RunFailed, execution.ErrorMessage
 	}
 	execution.Success = facts.Run.State == RunSucceeded && execution.EndStatus != types.EndFailed
-	return &StepOutcome{Step: step, Result: facts, Execution: execution}
 }
 
 // stopReason is why captain's generate loop ended — condition-met,

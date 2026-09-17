@@ -22,6 +22,7 @@ import (
 // read one answer. A preview that resolved separately from the run it previews
 // is a preview of a different run.
 type Resolution struct {
+	RuntimePresets *runtimeprofiles.PresetResolution
 	RuntimeProfile *runtimeprofiles.Resolution
 	Step           Step
 	// Class is the behaviour class the step runs as: what the commit and verify
@@ -84,6 +85,7 @@ func (h *Host) Resolve(ctx context.Context, todo *types.TODO, step Step, opts Ru
 		return nil, fmt.Errorf("step %s preflight: %w", step.Name, err)
 	}
 	return &Resolution{
+		RuntimePresets: prepared.runtimePresets,
 		RuntimeProfile: prepared.runtimeProfile,
 		Step:           step,
 		Class:          prepared.class,

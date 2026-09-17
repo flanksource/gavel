@@ -196,11 +196,11 @@ func (h *Host) graderSpec(ctx context.Context, todo *types.TODO) (api.Spec, erro
 	}
 	resolved, err := h.resolveProfileLayers(ctx, LayerInput{
 		RequireModel:   true,
+		RuntimePresets: h.presetSelection(StepVerify, nil, false, nil, false),
 		RuntimeProfile: h.profileSelection(StepVerify, "", ""),
 		Config:         h.Config,
 		Step:           StepVerify,
 		Todos:          []*types.TODO{todo},
-		Host:           h.Kind,
 	})
 	if err != nil {
 		return api.Spec{}, fmt.Errorf("resolve verification spec: %w", err)

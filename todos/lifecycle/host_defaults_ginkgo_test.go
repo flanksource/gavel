@@ -26,14 +26,14 @@ var _ = Describe("Host defaults structural composition", func() {
 		GinkgoT().Setenv("HOME", GinkgoT().TempDir())
 		host := newHost(&fakeProvider{plan: todos.PlanState{Exists: true, Approved: true, Content: "# Plan"}})
 		host.Config.Todos.Run.Spec = api.Spec{
-			Model:       api.Model{Name: "gpt-5.6-sol", Mode: api.ModeAgent},
-			Permissions: api.Permissions{Tools: api.ToolsFromLists([]string{"Read"}, nil)},
+			Model:       api.Model{Name: "gpt-5.6-sol", Mode: api.ModeAPI},
+			Permissions: api.Permissions{Tools: api.ToolsFromLists([]string{"lookup_invoice"}, nil)},
 		}
 		step := stepNamed(host.Def, "run")
 		defaults, err := host.StepDefaults(context.Background(), step)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(defaults.Spec.Name).To(Equal("gpt-5.6-sol"))
-		Expect(defaults.Spec.Permissions.Tools).To(Equal(api.ToolsFromLists([]string{"Read"}, nil)))
+		Expect(defaults.Spec.Permissions.Tools).To(Equal(api.ToolsFromLists([]string{"lookup_invoice"}, nil)))
 
 		_, err = host.Resolve(context.Background(), hostTodo(), step, lifecycle.RunOptions{})
 		Expect(err).To(HaveOccurred())

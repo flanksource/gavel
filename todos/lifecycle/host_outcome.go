@@ -138,6 +138,9 @@ func outcomeEvent(step Step, outcome *StepOutcome, status string) todos.Event {
 	if outcome.Admission.PromptRunID.String() != "00000000-0000-0000-0000-000000000000" {
 		payload["promptRunId"] = outcome.Admission.PromptRunID.String()
 	}
+	if outcome.Source != "" {
+		payload["source"] = outcome.Source
+	}
 	if execution.Plan != nil {
 		payload["plan"] = map[string]any{"status": string(execution.Plan.Status), "path": execution.Plan.Path}
 	}

@@ -73,7 +73,7 @@ var _ = g.Describe("lifecycle layer validation ownership", func() {
 		host := Host{Catalog: func(context.Context) (*runtimeprofiles.Catalog, error) {
 			return nil, errors.New("catalog database unavailable")
 		}}
-		_, err := host.resolveProfileLayers(context.Background(), LayerInput{RuntimeProfile: ProfileSelection{Requested: "requested"}})
+		_, err := host.resolveProfileLayers(context.Background(), LayerInput{RuntimePresets: PresetSelection{Requested: []string{"requested"}, RequestedSet: true}})
 		var configErr *ConfigurationError
 		o.Expect(errors.As(err, &configErr)).To(o.BeTrue(), "%v", err)
 		o.Expect(err.Error()).To(o.ContainSubstring("catalog database unavailable"))
