@@ -167,6 +167,13 @@ var _ = Describe("project status lifecycle", func() {
 		Expect(ok).To(BeTrue())
 		Expect(commitPath).To(HaveKey("post"))
 		Expect(paths).NotTo(HaveKey("/api/projects/{name}/commit-queue/{id}"))
+
+		retryPath, ok := paths["/api/projects/{name}/commit-queue/{runId}/retry"].(map[string]any)
+		Expect(ok).To(BeTrue())
+		retryJSON, err := json.Marshal(retryPath["post"])
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(retryJSON)).To(ContainSubstring(`"name":"runId"`))
+		Expect(string(retryJSON)).To(ContainSubstring(`"202"`))
 	})
 
 	It("serves project action schemas from the injected command provider", func() {

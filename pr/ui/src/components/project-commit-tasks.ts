@@ -14,6 +14,7 @@ export const projectCommitTaskKeys = {
 };
 
 export interface ProjectCommitTaskControl {
+  projectName: string;
   runId: string;
   taskId?: string;
   action: TaskControlAction;
@@ -23,21 +24,41 @@ export function projectCommitTaskControlKey({ runId, taskId, action }: ProjectCo
   return `${runId}:${taskId ?? 'group'}:${action}`;
 }
 
-export async function requestProjectCommitTaskControl({ runId, taskId, action }: ProjectCommitTaskControl) {
+// Resolves to the run the panel should show afterwards. Retrying a whole run
+// goes through the commit queue, which starts the failed commits as a new run;
+// every other control acts on the run in place.
+export async function requestProjectCommitTaskControl({ projectName, runId, taskId, action }: ProjectCommitTaskControl): Promise<string> {
+  if (action === 'retry' && !taskId) {
+    const response = await postCommitTaskRequest(
+      action,
+      `/api/projects/${encodeURIComponent(projectName)}/commit-queue/${encodeURIComponent(runId)}/retry`,
+    );
+    const result = await response.json() as { runId?: unknown };
+    if (typeof result.runId !== 'string' || result.runId === '') {
+      throw new Error('Failed to retry commit task: response did not include a run id');
+    }
+    return result.runId;
+  }
   const runPath = `/api/v1/tasks/${encodeURIComponent(runId)}`;
-  const response = await fetch(
+  await postCommitTaskRequest(
+    action,
     taskId ? `${runPath}/tasks/${encodeURIComponent(taskId)}/control` : `${runPath}/control`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action }),
-    },
-  ).catch(cause => {
+    { action },
+  );
+  return runId;
+}
+
+async function postCommitTaskRequest(action: TaskControlAction, url: string, body?: unknown) {
+  const response = await fetch(url, {
+    method: 'POST',
+    ...(body === undefined ? {} : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
+  }).catch(cause => {
     throw new Error(`Failed to ${action} commit task: ${cause instanceof Error ? cause.message : 'request failed'}`, { cause });
   });
   if (!response.ok) {
     throw new Error(`Failed to ${action} commit task: ${(await response.text()).trim() || `HTTP ${response.status}`}`);
   }
+  return response;
 }
 
 export function projectCommitLockedFiles(snapshots: TaskSnapshot[]) {

@@ -50,15 +50,17 @@ vi.mock('@flanksource/clicky-ui/components', () => ({
 }));
 
 vi.mock('./ProjectCommitTasks', () => ({
-  ProjectCommitTasks: ({ preferredRunId, onLockedFilesChange, onComplete }: {
+  ProjectCommitTasks: ({ preferredRunId, onLockedFilesChange, onComplete, onRunChange }: {
     preferredRunId?: string;
     onLockedFilesChange: (files: Map<string, number>) => void;
     onComplete: () => void;
+    onRunChange: (runId: string) => void;
   }) => preferredRunId ? (
     <section aria-label="Commit tasks">
       <span>{preferredRunId}</span>
       <button type="button" onClick={() => onLockedFilesChange(new Map([['one.go', 1]]))}>Report one.go locked</button>
       <button type="button" onClick={onComplete}>Complete commit tasks</button>
+      <button type="button" onClick={() => onRunChange('commit-run-2')}>Retry commit tasks</button>
     </section>
   ) : null,
 }));
@@ -139,6 +141,10 @@ describe('ProjectStatusView', () => {
     });
     const tasks = await screen.findByRole('region', { name: 'Commit tasks' });
     expect(within(tasks).getByText('commit-run-1')).toBeTruthy();
+
+    fireEvent.click(within(tasks).getByRole('button', { name: 'Retry commit tasks' }));
+
+    expect(within(await screen.findByRole('region', { name: 'Commit tasks' })).getByText('commit-run-2')).toBeTruthy();
   });
 
   it('keeps queueing enabled while a commit runs and locks its files out of the next group', async () => {

@@ -182,9 +182,9 @@ func NewServer(interval time.Duration, ghOpts github.Options, config SearchConfi
 		gavelCache:        make(map[string]*GavelResultsSummary),
 		knownBots:         make(map[string]struct{}),
 		procMetrics:       metrics.NewMemory(metrics.MemoryConfig{Retention: 15 * time.Minute, MaxPoints: 512}),
-		taskSource:        newSupervisorTaskSource(),
 		taskHistoryImport: make(chan struct{}, 1),
 	}
+	s.taskSource = newSupervisorTaskSource(s.retryCommitRunControl)
 	// Probe runs in the background so NewServer stays fast. First /api/status
 	// hit before the probe completes returns State="" which handleStatus
 	// treats as "probing" (degraded, "checking token...").
@@ -520,6 +520,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/projects/{name}/actions", s.handleProjectAction)
 	mux.HandleFunc("GET /api/projects/{name}/actions/schema", s.handleProjectActionSchema)
 	mux.HandleFunc("POST /api/projects/{name}/commit-queue", s.handleCommitQueue)
+	mux.HandleFunc("POST /api/projects/{name}/commit-queue/{runId}/retry", s.handleCommitQueueRetry)
 	mux.Handle("/api/project-runs/", http.StripPrefix("/api/project-runs", s.projectRunServer().Handler()))
 	mux.HandleFunc("GET /api/projects/{name}/diff", s.handleProjectDiff)
 	mux.HandleFunc("POST /api/projects/{name}/ignore", s.handleProjectIgnore)
@@ -536,7 +537,7 @@ func (s *Server) Handler() http.Handler {
 	metrics.RegisterRoutes(mux, s.procMetrics, "/api/proc")
 	taskSource := s.taskSource
 	if taskSource == nil {
-		taskSource = newSupervisorTaskSource()
+		taskSource = newSupervisorTaskSource(s.retryCommitRunControl)
 	}
 	clickytask.RegisterHandlersWithSource(mux, "/api/v1", taskSource)
 	s.registerTodoEntityRoutes(mux)

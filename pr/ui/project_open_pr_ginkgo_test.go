@@ -38,22 +38,24 @@ var _ = Describe("project Open PR queue", func() {
 	})
 
 	It("builds a queued Open PR as a validated gavel commit --push command", func() {
-		action, files, args, err := server.commitQueueActionArgs(project, projectActionRequest{
+		queued, err := server.commitQueueActionArgs(project, projectActionRequest{
 			Action: projectActionOpenPR,
 			Files:  []string{"one.go"},
 		})
 
 		Expect(err).NotTo(HaveOccurred())
-		Expect(action).To(Equal(projectActionOpenPR))
-		Expect(files).To(Equal([]string{"one.go"}))
-		Expect(args).To(Equal([]string{"commit", "--work-dir", project.ResolvedDir(), "--precommit=fail", "--push", "one.go"}))
+		Expect(queued).To(Equal(commitQueueRequest{
+			action: projectActionOpenPR,
+			files:  []string{"one.go"},
+			args:   []string{"commit", "--work-dir", project.ResolvedDir(), "--precommit=fail", "--push", "one.go"},
+		}))
 	})
 
 	It("rejects missing actions and advanced Open PR options", func() {
-		_, _, _, err := server.commitQueueActionArgs(project, projectActionRequest{Files: []string{"one.go"}})
+		_, err := server.commitQueueActionArgs(project, projectActionRequest{Files: []string{"one.go"}})
 		Expect(err).To(MatchError("unknown commit queue action \"\""))
 
-		_, _, _, err = server.commitQueueActionArgs(project, projectActionRequest{
+		_, err = server.commitQueueActionArgs(project, projectActionRequest{
 			Action:  projectActionOpenPR,
 			Options: map[string]any{"files": []any{"one.go"}},
 		})

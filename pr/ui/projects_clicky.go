@@ -330,6 +330,15 @@ func projectsOpenAPI() map[string]any {
 					},
 				}),
 			},
+			"/api/projects/{name}/commit-queue/{runId}/retry": map[string]any{
+				"post": projectLifecycleOp("projects_commit_queue_retry", "Re-queue the failed and canceled commits of a finished commit run as a new run", "202", "ProjectCommitRun", map[string]any{
+					"parameters": append(nameParam()["parameters"].([]any), map[string]any{
+						"name": "runId", "in": "path", "required": true,
+						"description": "Id of the finished commit queue run to retry",
+						"schema":      map[string]any{"type": "string"},
+					}),
+				}),
+			},
 			"/api/projects/{name}/actions": map[string]any{
 				"post": projectLifecycleOp("projects_action", "Run a project lint or test action (commits are queued instead)", "202", "ProjectActionStatus", map[string]any{
 					"requestBody": map[string]any{

@@ -25,6 +25,8 @@ import (
 type supervisorTaskSource struct {
 	runs     func(context.Context) ([]taskhistory.RunSummary, error)
 	snapshot func(context.Context, string) ([]clickytask.TaskSnapshot, error)
+	// retry re-queues the failed work of an archived run no live owner holds.
+	retry func(context.Context, string) error
 
 	mu     sync.Mutex
 	cached []taskhistory.RunSummary
@@ -47,8 +49,8 @@ type supervisorTaskSource struct {
 // each poll asks this source for the live roots first.
 const supervisorRootsTTL = 2 * time.Second
 
-func newSupervisorTaskSource() *supervisorTaskSource {
-	return &supervisorTaskSource{runs: loadArchivedRuns, snapshot: loadArchivedSnapshot}
+func newSupervisorTaskSource(retry func(context.Context, string) error) *supervisorTaskSource {
+	return &supervisorTaskSource{runs: loadArchivedRuns, snapshot: loadArchivedSnapshot, retry: retry}
 }
 
 // invalidate drops the cached listing so the next read reloads it.
@@ -307,7 +309,7 @@ func (s *spoolSweep) run(ctx context.Context) error {
 	return store.Prune(ctx, now)
 }
 
-func (s *supervisorTaskSource) Control(_ context.Context, id string, action clickytask.ControlAction) error {
+func (s *supervisorTaskSource) Control(ctx context.Context, id string, action clickytask.ControlAction) error {
 	roots, err := s.supervisorRoots()
 	if err != nil {
 		return err
@@ -322,7 +324,13 @@ func (s *supervisorTaskSource) Control(_ context.Context, id string, action clic
 		}
 		return procfile.TaskControl(root, id, action)
 	}
-	return fmt.Errorf("run %q not found", id)
+	if action != clickytask.ControlRetry {
+		return fmt.Errorf("run %q not found", id)
+	}
+	if s.retry == nil {
+		return fmt.Errorf("run %q cannot be retried: no retry handler is configured", id)
+	}
+	return s.retry(ctx, id)
 }
 
 func (s *supervisorTaskSource) ControlTask(_ context.Context, runID, taskID string, action clickytask.ControlAction) error {

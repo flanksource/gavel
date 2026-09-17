@@ -337,6 +337,7 @@ export function ProjectStatusView({ project, diffPath = '', showResults = false,
         onLockedFilesChange={setLockedFiles}
         onErrorChange={setCommitTaskError}
         onComplete={refreshAfterCommit}
+        onRunChange={setCommitRunId}
       />
 
       <SplitPane
