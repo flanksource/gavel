@@ -10,8 +10,11 @@ import (
 
 	cmuxprov "github.com/flanksource/captain/pkg/ai/provider/cmux"
 	captaindb "github.com/flanksource/captain/pkg/database"
+	"github.com/flanksource/gavel/todos/lifecycle"
+	"github.com/flanksource/gavel/todos/native"
 	"github.com/flanksource/gavel/todos/run"
 	"github.com/flanksource/gavel/todos/types"
+	"github.com/google/uuid"
 )
 
 // todoAnswerPayload answers the questions blocking an ask todo; the agent's
@@ -31,10 +34,11 @@ type todoAnswerPayload struct {
 // "resumed"/"revising" when the continuation started and "failed" when the
 // transition committed but the run did not, with Error saying why.
 type todoAnswerResponse struct {
-	Todo      todoSummary `json:"todo"`
-	SessionID string      `json:"sessionId,omitempty"`
-	Status    string      `json:"status"`
-	Error     string      `json:"error,omitempty"`
+	Todo        todoSummary `json:"todo"`
+	SessionID   string      `json:"sessionId,omitempty"`
+	PromptRunID string      `json:"promptRunId,omitempty"`
+	Status      string      `json:"status"`
+	Error       string      `json:"error,omitempty"`
 }
 
 func (s *Server) handleTodoAnswer(w http.ResponseWriter, r *http.Request) {
@@ -52,6 +56,11 @@ func (s *Server) handleTodoAnswer(w http.ResponseWriter, r *http.Request) {
 	provider, source, todo, status, err := s.loadTodoForWrite(r, payload.Dir, payload.Ref)
 	if err != nil {
 		writeTodoError(w, status, err)
+		return
+	}
+	if answeredFromCaptain(todo) {
+		writeTodoError(w, http.StatusConflict, fmt.Errorf(
+			"todo was already answered from Captain (status: %s); its resumed turn continues there", todo.Status))
 		return
 	}
 	if todo.Status != types.StatusAsk && !zombieAskSession(source.Dir, todo) {
@@ -121,6 +130,11 @@ func (s *Server) handleTodoAnswer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.Prepared = prepared
+	stream := newTodoLaunchStream(w, r)
+	if err := stream.resolved(prepared); err != nil {
+		writeTodoLaunchError(w, stream, http.StatusInternalServerError, err)
+		return
+	}
 
 	// Record the answer on the todo so the resumed prompt and the timeline see it.
 	commentLabel := "**Answer:** "
@@ -128,16 +142,28 @@ func (s *Server) handleTodoAnswer(w http.ResponseWriter, r *http.Request) {
 		commentLabel = "**Rejected question:** "
 	}
 	if err := provider.Comment(r.Context(), todo, commentLabel+answer); err != nil {
-		writeTodoError(w, http.StatusInternalServerError, err)
+		writeTodoLaunchError(w, stream, http.StatusInternalServerError, err)
+		return
+	}
+	answered := *todo
+	answered.Status = types.StatusInProgress
+	sum, err := todoDetail(r.Context(), provider, source.Dir, &answered)
+	if err != nil {
+		writeTodoLaunchError(w, stream, http.StatusInternalServerError, err)
 		return
 	}
 
-	if _, err := run.Start(req); err != nil {
+	started, err := run.Start(req)
+	if err != nil {
 		// The answer is recorded and the todo still asks: report both, so the
 		// client can show the failure without re-recording the answer.
 		sum, derr := todoDetail(r.Context(), provider, source.Dir, todo)
 		if derr != nil {
-			writeTodoError(w, http.StatusInternalServerError, derr)
+			writeTodoLaunchError(w, stream, http.StatusInternalServerError, derr)
+			return
+		}
+		if stream != nil {
+			stream.failed(continuationFailureStatus(err), err)
 			return
 		}
 		writeTodoJSON(w, continuationFailureStatus(err), todoAnswerResponse{
@@ -146,18 +172,34 @@ func (s *Server) handleTodoAnswer(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	// Snapshot after dispatch: the run goroutine owns the todo from here, and
-	// the answered todo is leaving ask whatever the agent reports next.
-	answered := *todo
-	answered.Status = types.StatusInProgress
-	sum, err := todoDetail(r.Context(), provider, source.Dir, &answered)
-	if err != nil {
-		writeTodoError(w, http.StatusInternalServerError, err)
+	response := todoAnswerResponse{
+		Todo: sum, SessionID: run.PriorSessionID(todo), Status: "resumed",
+	}
+	if started.PromptRunID != uuid.Nil {
+		response.PromptRunID = started.PromptRunID.String()
+	}
+	if stream != nil {
+		_ = stream.send("admitted", response)
 		return
 	}
-	writeTodoJSON(w, http.StatusOK, todoAnswerResponse{
-		Todo: sum, SessionID: run.PriorSessionID(todo), Status: "resumed",
-	})
+	writeTodoJSON(w, http.StatusOK, response)
+}
+
+// answeredFromCaptain reports whether the todo's latest ask was answered from
+// Captain's session page: an ask_answered event a read reconciled from Captain,
+// with no lifecycle outcome since. A second answer from here would resume the
+// session a Captain turn already continued.
+func answeredFromCaptain(todo *types.TODO) bool {
+	answered := false
+	for _, event := range todo.ProviderEvents {
+		switch event.Kind {
+		case lifecycle.EventLifecycleOutcome:
+			answered = false
+		case native.EventAskAnswered:
+			answered = event.Actor == native.AskAnswerSourceCaptain
+		}
+	}
+	return answered
 }
 
 // answerText is the answer as the next user turn: the free-text answer, else

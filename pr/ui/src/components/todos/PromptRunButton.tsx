@@ -1,6 +1,6 @@
 import { useEffect, useState, type ComponentType } from 'react';
-import { SpecRuntimeEditor, promptRuntimeValueToPayload, type AISpecRuntimeValue } from '@flanksource/clicky-ui/ai';
-import { Button, Combobox, DropdownMenu, Field, Modal } from '@flanksource/clicky-ui/components';
+import { OrderedPresetSelect, SpecRuntimeEditor, promptRuntimeValueToPayload, type AISpecRuntimeValue } from '@flanksource/clicky-ui/ai';
+import { Button, DropdownMenu, Modal } from '@flanksource/clicky-ui/components';
 import { UiChevronDown, UiCog, UiHistory, UiPlay, type IconProps } from '@flanksource/clicky-ui/icons';
 import type { TodoRunOptions } from '../../types';
 import { Spinner } from '../../icons/Spinner';
@@ -10,13 +10,15 @@ import {
   defaultRunOptionsForAction,
   loadLastTodoRunOptions,
   loadRecentAdvancedTodoRunOptions,
+  normalizeRunOptions,
   reconcileTodoRunOptions,
   runButtonQualifierForOptions,
   runSpec,
   useTodoRunContext,
+  withoutPromptContent,
 } from './run';
 import { buildRunFamilies, type RunContext } from './providers';
-import { effectiveTodoRuntime, selectTodoRuntimeProfile } from './runtimeProfiles';
+import { effectiveTodoRuntime } from './runtimePresets';
 
 export type PromptRunScope = 'approval' | 'verification';
 
@@ -74,10 +76,14 @@ export function verificationSpec(spec: AISpecRuntimeValue): AISpecRuntimeValue {
   };
 }
 
-function normalizePromptRunOptions(scope: PromptRunScope, options: TodoRunOptions, context: RunContext): TodoRunOptions {
+// normalizePromptRunOptions scopes options to their step. With a run context it
+// also reconciles them against the model catalog, which the quick-run button
+// wants; without one it keeps the stored runtime exactly, which is what an
+// explicit restore in the advanced dialog must send.
+function normalizePromptRunOptions(scope: PromptRunScope, options: TodoRunOptions, context?: RunContext): TodoRunOptions {
   const step = scope === 'verification' ? 'verify' : 'run';
-  const reconciled = reconcileTodoRunOptions(step, options, context);
-  return scope === 'verification' ? { step, runtimeProfile: reconciled.runtimeProfile, spec: verificationSpec(runSpec(reconciled)) } : reconciled;
+  const scoped = withoutPromptContent(context ? reconcileTodoRunOptions(step, options, context) : normalizeRunOptions(step, options));
+  return scope === 'verification' ? { step, presets: scoped.presets, spec: verificationSpec(runSpec(scoped)) } : scoped;
 }
 
 function optionsKey(options: TodoRunOptions): string {
@@ -104,8 +110,20 @@ export function loadPromptRunOptions(scope: PromptRunScope, context: RunContext)
   return normalizePromptRunOptions(scope, state[scope]?.last ?? fallback, context);
 }
 
-export function loadRecentPromptRunOptions(scope: PromptRunScope, context: RunContext): TodoRunOptions[] {
-  const state = scope === 'approval'
+// lastPromptRunOptions is the stored "last used" entry exactly as it was run:
+// no synthesized fallback (undefined means nothing has run in this scope yet),
+// no catalog reconciliation and no legacy-history migration write. It backs
+// the advanced dialog's "Last used" restore, which must send what was chosen.
+export function lastPromptRunOptions(scope: PromptRunScope): TodoRunOptions | undefined {
+  const last = readPromptRunHistory()[scope]?.last;
+  return last ? normalizePromptRunOptions(scope, last) : undefined;
+}
+
+// loadRecentPromptRunOptions reconciles and migrates when given a run context
+// (the quick-run history menu); without one it returns the stored entries
+// exactly, for the advanced dialog's explicit restores.
+export function loadRecentPromptRunOptions(scope: PromptRunScope, context?: RunContext): TodoRunOptions[] {
+  const state = scope === 'approval' && context
     ? migrateApprovalHistory(readPromptRunHistory(), context)
     : readPromptRunHistory();
   const seen = new Set<string>();
@@ -152,7 +170,7 @@ export function PromptRunButton({
   loading?: boolean;
   icon?: ComponentType<IconProps>;
   onRun: (options: TodoRunOptions) => void;
-  onAdvanced: (options: TodoRunOptions) => void;
+  onAdvanced: () => void;
 }) {
   const { context, loading: contextLoading, error: contextError } = useTodoRunContext({ dir, enabled: !disabled });
   const [revision, setRevision] = useState(0);
@@ -248,7 +266,7 @@ export function PromptRunButton({
                     aria-label="Advanced"
                     onClick={() => {
                       close();
-                      onAdvanced(options);
+                      onAdvanced();
                     }}
                     className="flex h-auto w-full items-center justify-start gap-2 rounded px-2 py-1.5 text-left hover:bg-muted"
                   >
@@ -280,7 +298,6 @@ export function PromptRunAdvancedDialog({
   dir,
   scope,
   open,
-  initial,
   loading,
   onClose,
   onRun,
@@ -288,29 +305,37 @@ export function PromptRunAdvancedDialog({
   dir: string;
   scope: PromptRunScope;
   open: boolean;
-  initial: TodoRunOptions;
   loading?: boolean;
   onClose: () => void;
   onRun: (options: TodoRunOptions) => void;
 }) {
   const { context, loading: contextLoading, error: contextError } = useTodoRunContext({ dir, enabled: open });
-  const initialSpec = (options: TodoRunOptions) =>
-    scope === 'verification' ? verificationSpec(runSpec(options)) : cloneSpec(runSpec(options));
-  const [value, setValue] = useState<AISpecRuntimeValue>(() => initialSpec(initial));
-  const [runtimeProfile, setRuntimeProfile] = useState(initial.runtimeProfile);
+  const [value, setValue] = useState<AISpecRuntimeValue>({});
+  const [presets, setPresets] = useState<string[] | undefined>(undefined);
 
+  // The dialog always opens empty: nothing the operator hasn't explicitly
+  // chosen for *this* run should ride along. "Last used" and "Recent
+  // configs" below are offered as restore buttons instead of a silent seed.
   useEffect(() => {
     if (open) {
-      setValue(initialSpec(initial));
-      setRuntimeProfile(initial.runtimeProfile);
+      setValue({});
+      setPresets(undefined);
     }
-  }, [open, initial, scope]);
+  }, [open]);
 
   if (!open) return null;
   const models = context?.models ?? [];
   const verification = scope === 'verification';
   const step = verification ? 'verify' : 'run';
-  const inherited = context ? effectiveTodoRuntime({ step, runtimeProfile, spec: value }, context) : undefined;
+  const inherited = context ? effectiveTodoRuntime({ step, presets, spec: value }, context) : undefined;
+  const lastUsed = lastPromptRunOptions(scope);
+  const lastUsedKey = lastUsed ? optionsKey(lastUsed) : undefined;
+  const recent = loadRecentPromptRunOptions(scope).filter(item => optionsKey(item) !== lastUsedKey);
+
+  function restore(options: TodoRunOptions) {
+    setValue(verification ? verificationSpec(runSpec(options)) : cloneSpec(runSpec(options)));
+    setPresets(options.presets);
+  }
 
   return (
     <Modal open onClose={onClose} title={verification ? 'Verification run options' : 'Approve and run options'} size="2xl">
@@ -326,19 +351,39 @@ export function PromptRunAdvancedDialog({
         tools={context.tools}
         sections={verification ? VERIFICATION_SPEC_SECTIONS : APPROVAL_SPEC_SECTIONS}
         beforeSections={
-          <Field label="Runtime profile">
-            <Combobox
-              ariaLabel="Runtime profile"
-              value={runtimeProfile ?? ''}
-              options={[{ value: '', label: 'Step default' }, ...(context.runtimeProfiles ?? []).map(profile => ({ value: profile.id, label: profile.name, description: profile.description }))]}
-              onChange={selected => {
-                const next = selectTodoRuntimeProfile({ options: { step, runtimeProfile, spec: value }, defaults: defaultRunOptionsForAction(step, context), runtimeProfile: selected || undefined });
-                setRuntimeProfile(next.runtimeProfile);
-                setValue(runSpec(next));
-              }}
-              allowCustomValue={false}
+          <div className="space-y-2">
+            {(lastUsed || recent.length > 0) && (
+              <div className="space-y-1">
+                {lastUsed && (
+                  <div className="flex flex-wrap gap-1.5">
+                    <Button variant="outline" size="sm" type="button" onClick={() => restore(lastUsed)}>
+                      Last used · {runButtonQualifierForOptions(lastUsed, context)}
+                    </Button>
+                  </div>
+                )}
+                {recent.length > 0 && (
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                      <UiHistory className="text-xs" />
+                      Recent configs
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {recent.map((item, index) => (
+                        <Button key={optionsKey(item)} variant="outline" size="sm" type="button" onClick={() => restore(item)}>
+                          {index + 1}. {runButtonQualifierForOptions(item, context)}
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+            <OrderedPresetSelect
+              presets={context.runtimePresets ?? []}
+              value={presets ?? []}
+              onChange={setPresets}
             />
-          </Field>
+          </div>
         }
         title={verification ? 'Verification runtime' : 'Implementation runtime'}
         eyebrow={verification ? 'Embedded AI prompt configuration' : 'Approved plan execution'}
@@ -346,11 +391,13 @@ export function PromptRunAdvancedDialog({
         onSave={() => {
           const { spec } = promptRuntimeValueToPayload(value);
           const runtimeSpec = spec ?? {};
-          onRun(rememberPromptRunOptions(scope, {
+          const options: TodoRunOptions = {
             step: verification ? 'verify' : 'run',
-            runtimeProfile,
+            presets,
             spec: verification ? verificationSpec(runtimeSpec) : runtimeSpec,
-          }, context));
+          };
+          rememberPromptRunOptions(scope, options, context);
+          onRun(options);
         }}
         saveLabel={loading ? 'Running…' : verification ? 'Run verification' : 'Approve & run'}
         footerStatus={verification ? 'The persisted fixture supplies the prompt.' : 'Ready to implement the approved plan.'}

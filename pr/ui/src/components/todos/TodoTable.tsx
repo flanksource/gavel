@@ -6,6 +6,7 @@ import { UiClose, UiFolder, UiRefresh } from '@flanksource/clicky-ui/icons';
 import { Spinner } from '../../icons/Spinner';
 import type { Project, TodoGroupBy, TodoItem, TodoPhase } from '../../types';
 import { TODO_PHASES } from '../../types';
+import { buildRoute, emptyRouteState } from '../../routes';
 import { TodoPhaseCell, phase as phaseMeta } from './TodoPhaseCell';
 import type { TagIndex } from './tagResolve';
 import { todoVisibleLabels } from './tagResolve';
@@ -45,6 +46,14 @@ export type TodoTableRow = TodoEntry & Record<string, unknown>;
 // is the same todo the bulk bar acts on.
 export const todoTableRowId = (row: TodoTableRow): string =>
   selectionKey({ dir: row.workspace.dir, ref: row.todo.ref });
+
+const todoTableRowHref = (row: TodoTableRow, scopeProject: string): string =>
+  buildRoute({
+    ...emptyRouteState(),
+    tab: 'todos',
+    selectedPath: row.todo.ref,
+    scopeProject,
+  });
 
 // The phase's own label, so a column header reads the same word the detail
 // pane's phase strip and the session viewer use.
@@ -278,17 +287,18 @@ function TodoSignalsCell({ todo }: { todo: TodoItem }) {
 // sortable, groupable table under a filter bar wide enough to show its facets
 // inline. It reuses the split layout's filter/sort/group preferences and its
 // data pipeline, so switching layouts changes the arrangement, not the contents.
-export function TodoTable({ todos, projectsLoaded, rows, columns, query, onQueryChange }: {
+export function TodoTable({ todos, projectsLoaded, rows, columns, query, onQueryChange, scopeProject }: {
   todos: WorkspaceTodos;
   projectsLoaded: boolean;
   rows: TodoTableRow[];
   columns: DataTableColumn<TodoTableRow>[];
   query: string;
   onQueryChange: (query: string) => void;
+  scopeProject: string;
 }) {
   const {
     workspaces, timeRange, setTimeRange, density, groupBy, setGroupBy,
-    sortBy, setSortBy, select, selected, loadingList, refresh, error, selection,
+    sortBy, setSortBy, selected, loadingList, refresh, error, selection,
   } = todos;
   const { facets, range } = useTodoFilterBar(todos);
   // The same descriptors the split layout renders, so a bulk action added on
@@ -404,12 +414,10 @@ export function TodoTable({ todos, projectsLoaded, rows, columns, query, onQuery
         // Selecting a todo swaps the filter row for the bulk bar in place, so
         // the rows being acted on never move under the cursor.
         selectionBar="takeover"
-        // onRowClick only, no getRowHref: DataTable's row link routes
-        // client-side through clicky-ui's RouterAdapter, and pr/ui mounts no
-        // RouterProvider — the link would fall back to a plain <a> and hard
-        // reload the app on every row click. Selection still reaches the URL
-        // through select() -> navigateTodo.
-        onRowClick={row => select({ dir: row.workspace.dir, ref: row.todo.ref })}
+        // DataTable renders one real stretched anchor per row. Its default
+        // browser adapter intercepts only plain left clicks for SPA navigation;
+        // modifier, middle and context-menu actions retain native link behavior.
+        getRowHref={row => todoTableRowHref(row, scopeProject)}
         getRowClassName={row => (
           selected?.dir === row.workspace.dir && selected?.ref === row.todo.ref ? 'bg-primary/5' : undefined
         )}

@@ -101,18 +101,17 @@ func TestDashboardRunToolPreferences(t *testing.T) {
 		}
 	})
 
-	t.Run("empty prefs resolve to the dashboard posture", func(t *testing.T) {
+	t.Run("empty prefs keep the prompt's declared posture", func(t *testing.T) {
 		spec, err := dashboardRunSpec(t, dir, base)
 		if err != nil {
 			t.Fatalf("resolve: %v", err)
 		}
-		// The dashboard resolves as the approval-serving host, so a payload that
-		// states no posture still leaves with permissions.mode: default — the mode
-		// that makes the broker the thing a tool call is checked against. The
-		// prompt's own preset may allow the read-only tools; nothing here polices
-		// Bash, which is what the broker exists to ask about.
-		if policy := spec.Permissions.Tools.Policies()["Bash"]; policy != "" || spec.Permissions.Mode != api.PermissionDefault {
-			t.Fatalf("want an unpoliced Bash and the dashboard posture, got %v / %q", spec.Permissions.Tools, spec.Permissions.Mode)
+		// The dashboard contributes no posture of its own: a payload that states no
+		// permissions.mode runs what todos-run.prompt declares. Only a mode picked in
+		// the run dialog overrides it (see "valid prefs and permission mode are
+		// threaded"). Whatever that mode still asks about goes to the broker.
+		if policy := spec.Permissions.Tools.Policies()["Bash"]; policy != "" || spec.Permissions.Mode != api.PermissionAcceptEdits {
+			t.Fatalf("want an unpoliced Bash and the prompt's acceptEdits posture, got %v / %q", spec.Permissions.Tools, spec.Permissions.Mode)
 		}
 	})
 

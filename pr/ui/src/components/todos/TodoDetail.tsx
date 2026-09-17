@@ -295,7 +295,7 @@ export function TodoDetail(props: TodoDetailProps) {
         dir={dir}
         refID={todo.ref}
       />
-      <TodoReviewBanner todo={todo} dir={dir} onChanged={onChanged} />
+      <TodoReviewBanner todo={todo} dir={dir} onChanged={onChanged} onLaunch={() => setTab('session')} />
       <TodoDetailTabs tab={tab} onSelect={setTab} verification={verification} />
       <div className="flex min-h-0 flex-1 flex-col bg-muted/30">
         {tab === 'session' ? (

@@ -6,6 +6,7 @@ import type { TodoRunDriver, TodoRunEffort, TodoRunOptions, TodoRunPreviewRespon
 import { todoQuery } from "./format";
 import { settingsRunContextQuery } from "../settings/queries";
 import { invalidateTodoCaches, todoMutationJSON, TodoMutationError } from "./todoMutations";
+import { setTodoLaunchProgress, todoMutationStream, updateTodoLaunchProgress } from './todoLaunch';
 export { TodoRunEffortBadge, todoRunEffortPresentation } from "./TodoRunEffortBadge";
 import {
   actionFromRunOptions,
@@ -13,17 +14,18 @@ import {
   readRunChoiceState,
   requestStepFor,
   runOptionsKey,
+  withoutPromptContent,
   writeRunChoiceState,
   type TodoRunAction,
 } from "./runChoiceStorage";
-export { normalizeRunOptions, runOptionsKey, requestStepFor, TODO_RUN_ACTIONS, type TodoRunAction } from "./runChoiceStorage";
+export { lastTodoRunOptions, normalizeRunOptions, runOptionsKey, requestStepFor, TODO_RUN_ACTIONS, withoutPromptContent, type TodoRunAction } from "./runChoiceStorage";
 import {
   agentForRuntime,
   PROVIDERS,
   type RunModeCatalog,
   type RunContext,
 } from "./providers";
-import { effectiveTodoRuntime, unresolvedTodoRuntimeProfile } from './runtimeProfiles';
+import { effectiveTodoRuntime, unresolvedTodoRuntimePreset } from './runtimePresets';
 
 // RunMode is the behaviour class a run executes as: run (implement and commit)
 // or plan (neither). Verification is a fixture-backed issue lifecycle action in
@@ -184,8 +186,8 @@ function labelForRunModel(runtime: RunModeCatalog, modelID: string): string {
 }
 
 export function runButtonQualifierForOptions(options: TodoRunOptions, context: RunContext): string {
-  const profile = unresolvedTodoRuntimeProfile(options, context);
-  if (profile) return `(Profile: ${profile})`;
+  const preset = unresolvedTodoRuntimePreset(options, context);
+  if (preset) return `(Preset: ${preset})`;
   const model = effectiveTodoRuntime(options, context).model;
   if (!model) return options.step === 'verify' ? '(Fixture)' : '(Choose model)';
   const runtime = modeForOptions(context, options);
@@ -196,8 +198,8 @@ export function runButtonQualifierForOptions(options: TodoRunOptions, context: R
 // resolved from the run options against the runtime catalog — the same derivation
 // the run buttons use, exposed for the start-of-session hero's "Runtime" chip.
 export function todoRunModeLabel(options: TodoRunOptions, context: RunContext): string {
-  const profile = unresolvedTodoRuntimeProfile(options, context);
-  if (profile) return `Profile: ${profile}`;
+  const preset = unresolvedTodoRuntimePreset(options, context);
+  if (preset) return `Preset: ${preset}`;
   if (!effectiveTodoRuntime(options, context).model) return 'Not configured';
   return runtimeModeLabel(runtimeModeForCatalog(modeForOptions(context, options)));
 }
@@ -207,7 +209,7 @@ export function runButtonLabelForOptions(action: TodoRunAction, options: TodoRun
 }
 
 export function todoRunButtonPresentation(options: TodoRunOptions, context: RunContext) {
-  if (unresolvedTodoRuntimeProfile(options, context)) return { provider: undefined, model: 'Profile default', effort: undefined };
+  if (unresolvedTodoRuntimePreset(options, context)) return { provider: undefined, model: 'Preset default', effort: undefined };
   const modelID = effectiveTodoRuntime(options, context).model;
   if (!modelID) return { provider: undefined, model: options.step === 'verify' ? 'Fixture' : 'Choose model', effort: undefined };
   const runtime = modeForOptions(context, options);
@@ -227,14 +229,14 @@ export function todoRunButtonPresentation(options: TodoRunOptions, context: RunC
 }
 
 export function defaultRunOptionsForAction(action: string, context?: RunContext | null): TodoRunOptions {
-  const runtimeProfile = context?.promptDefaults?.[action]?.runtimeProfile;
-  if (runtimeProfile) return { step: action, runtimeProfile, spec: {} };
+  const presets = context?.promptDefaults?.[action]?.presets;
+  if (presets) return { step: action, presets, spec: {} };
   return normalizeRunOptions(action, defaultRunOptions);
 }
 
 export function reconcileTodoRunOptions(action: string, options: TodoRunOptions, context: RunContext): TodoRunOptions {
   const normalized = normalizeRunOptions(action, options);
-  if (normalized.runtimeProfile || context.promptDefaults?.[action]?.runtimeProfile || !normalized.spec?.model) return normalized;
+  if (normalized.presets !== undefined || context.promptDefaults?.[action]?.presets || !normalized.spec?.model) return normalized;
   const runtime = modeForOptions(context, normalized);
   const spec = runSpec(normalized);
   const model = runtime.models.find(model => model.id === spec.model);
@@ -265,7 +267,7 @@ export function loadRecentAdvancedTodoRunOptions(action: string, context?: RunCo
 }
 
 export function rememberTodoRunOptions(action: string, options: TodoRunOptions, advanced = false): TodoRunOptions {
-  const nextOptions = normalizeRunOptions(action, options);
+  const nextOptions = withoutPromptContent(normalizeRunOptions(action, options));
   const state = readRunChoiceState();
   state.last[action] = nextOptions;
   if (advanced) {
@@ -291,23 +293,38 @@ export function useTodoRun(dir: string) {
     // spreading it — a spread would leak driver/runMode/plan/prompt, which
     // `options` still carries for the dialog's own bookkeeping (storage,
     // labels), onto the wire and get rejected with a 400.
-    mutationFn: ({ ref, options }: { ref: string; options: TodoRunOptions }) => todoMutationJSON<TodoRunResponse>(
-      `/api/todos/run?${todoQuery(dir)}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ref,
-          step: requestStepFor(options),
-          runtimeProfile: options.runtimeProfile,
-          spec: options.spec,
-          resume: options.resume,
-          force: options.force,
-        }),
-      },
-      `Failed to run todo ${ref}`,
-    ),
-    onSuccess: (_result, { ref }) => invalidateTodoCaches(client, dir, ref),
+    mutationFn: async ({ ref, options }: { ref: string; options: TodoRunOptions }) => {
+      const result = await todoMutationStream<TodoRunResponse>(
+        `/api/todos/run?${todoQuery(dir)}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ref,
+            step: requestStepFor(options),
+            presets: options.presets,
+            runtimeProfile: options.runtimeProfile,
+            spec: options.spec,
+            resume: options.resume,
+            force: options.force,
+          }),
+        },
+        `Failed to run todo ${ref}`,
+        resolved => updateTodoLaunchProgress(client, dir, ref, previous => ({ ...previous, status: 'resolved', step: resolved.step, spec: resolved.spec, specYaml: resolved.specYaml })),
+      );
+      if (result.status === 'started' && !result.promptRunId) throw new Error(`Failed to run todo ${ref}: response omitted the prompt run ID`);
+      return result;
+    },
+    onMutate: ({ ref, options }) => setTodoLaunchProgress(client, dir, ref, { status: 'preparing', step: requestStepFor(options), requestedSpec: options.spec }),
+    onSuccess: (result, { ref }) => {
+      if (result.status === 'started') {
+        updateTodoLaunchProgress(client, dir, ref, previous => ({ ...previous, status: 'admitted', promptRunId: result.promptRunId, sessionId: result.sessionId }));
+      } else {
+        setTodoLaunchProgress(client, dir, ref, null);
+      }
+      return invalidateTodoCaches(client, dir, ref);
+    },
+    onError: (error, { ref }) => updateTodoLaunchProgress(client, dir, ref, previous => ({ ...previous, status: 'failed', error: error.message })),
   });
 
   const run = useCallback(
@@ -376,8 +393,8 @@ export function todoRunOptionsForRuntimeChange({
 
 export function runChoiceDetail(options: TodoRunOptions, fallback: string, context?: RunContext | null): string {
   if (!context) return fallback;
-  const profile = unresolvedTodoRuntimeProfile(options, context);
-  if (profile) return `Profile: ${profile}`;
+  const preset = unresolvedTodoRuntimePreset(options, context);
+  if (preset) return `Preset: ${preset}`;
   const modelID = effectiveTodoRuntime(options, context).model;
   if (!modelID) return options.step === 'verify' ? 'Fixture' : 'Choose model';
   const runtime = modeForOptions(context, options);
@@ -395,6 +412,8 @@ export function runChoiceDetail(options: TodoRunOptions, fallback: string, conte
 export interface TodoRunRequestPayload {
   ref: string;
   step: string;
+  presets?: string[];
+  /** @deprecated Runtime profiles are ignored by the server. */
   runtimeProfile?: string;
   spec: AISpecRuntimeValue;
   resume?: boolean;
@@ -407,6 +426,7 @@ export function buildTodoRunPayload({
   runMode,
   runtime,
   mode,
+  presets,
   runtimeProfile,
   resume,
   promptDraft,
@@ -417,6 +437,7 @@ export function buildTodoRunPayload({
   runMode?: string;
   runtime: AISpecRuntimeValue;
   mode: TodoRunAction;
+  presets?: string[];
   runtimeProfile?: string;
   resume: boolean;
   promptDraft: string;
@@ -432,6 +453,7 @@ export function buildTodoRunPayload({
   // phase buttons' call sites and otherwise unused here.
   const normalized = normalizeRunOptions(mode, {
     driver,
+    presets,
     runtimeProfile,
     resume: resume || undefined,
     spec: { ...spec, mode: runMode ?? spec.mode, prompt },
@@ -439,6 +461,7 @@ export function buildTodoRunPayload({
   return {
     ref,
     step: requestStepFor(normalized),
+    presets: normalized.presets,
     runtimeProfile: normalized.runtimeProfile,
     spec: normalized.spec ?? {},
     resume: normalized.resume,

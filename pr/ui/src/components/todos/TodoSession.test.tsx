@@ -2,7 +2,7 @@ import type React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { SessionToolDecision } from '@flanksource/clicky-ui/ai';
+import type { SessionMetadataSummary, SessionToolDecision } from '@flanksource/clicky-ui/ai';
 import type { TodoItem, TodoSessionAttempt } from '../../types';
 import { TodoSession, useSessionStatus } from './TodoSession';
 import { SessionErrorDetails } from './SessionErrorDetails';
@@ -25,6 +25,10 @@ const sessionDetailMock = vi.hoisted(() => ({
     createdAt: '2026-08-02T10:00:00Z',
     updatedAt: '2026-08-02T10:01:00Z',
     verification: null,
+    provider: 'anthropic',
+    runtimeMode: 'agent',
+    model: 'claude-opus-5',
+    effort: 'high',
   } satisfies TodoSessionAttempt,
 }));
 
@@ -34,16 +38,26 @@ vi.mock('@flanksource/clicky-ui/ai', () => ({
 }));
 
 vi.mock('./TodoSessionDetail', () => ({
-  CopyAllDetailsButton: () => null,
+  CopyAllDetailsButton: ({ compact }: { compact?: boolean }) => (
+    // oxlint-disable-next-line clicky-ui/prefer-clicky-components -- test double for the Clicky button rendered by the real component.
+    <button type="button" aria-label="Copy all session details" data-compact={compact} />
+  ),
   SessionDiagnostics: () => null,
   ThreadInspector: ({
     onPendingToolDecision,
     onStop,
+    layout,
+    metadata,
+    toolbarActions,
   }: {
     onPendingToolDecision: (decision: SessionToolDecision) => Promise<void>;
     onStop: (attempt: TodoSessionAttempt) => Promise<void>;
+    layout?: string;
+    metadata?: SessionMetadataSummary;
+    toolbarActions?: React.ReactNode;
   }) => (
-    <div>
+    <div data-testid="thread-inspector" data-layout={layout} data-provider={metadata?.provider} data-mode={metadata?.executionMode} data-model={metadata?.model} data-effort={metadata?.reasoningEffort} data-context={metadata?.context?.freePercent}>
+      {toolbarActions}
       {/* oxlint-disable-next-line clicky-ui/prefer-clicky-components -- test control for the mocked ThreadInspector callback. */}
       <button type="button" onClick={() => void onPendingToolDecision({
         event: { id: 'question-1', kind: 'tool', tool: 'AskUserQuestion' },
@@ -67,6 +81,7 @@ vi.mock('./TodoSessionDetail', () => ({
   useTodoSessionDetail: () => ({
     detail: {
       attempts: [sessionDetailMock.attempt],
+      selectedPromptRunId: 'run-1',
       diagnostics: [],
       thread: { providerSessionId: 'session-1', status: 'ask' },
     },
@@ -276,12 +291,68 @@ describe('TodoSession mutations', () => {
     costUsd: 0,
   };
 
+  it('uses the compact inspector with the live runtime identity and context instead of a second session header', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/session/stats')) return {
+        ok: true,
+        json: async () => ({ ...sessionStats, agent: 'claude', model: 'claude-opus-5', effort: 'high', contextTokens: 14_000, contextWindow: 100_000 }),
+      };
+      throw new Error(`unexpected fetch ${url}`);
+    });
+    renderSession(fetchMock);
+
+    const inspector = screen.getByTestId('thread-inspector');
+    await waitFor(() => expect(inspector.getAttribute('data-context')).toBe('86'));
+    expect(inspector.getAttribute('data-layout')).toBe('compact');
+    expect(inspector.getAttribute('data-provider')).toBe('anthropic');
+    expect(inspector.getAttribute('data-mode')).toBe('agent');
+    expect(inspector.getAttribute('data-model')).toBe('claude-opus-5');
+    expect(inspector.getAttribute('data-effort')).toBe('high');
+    expect(screen.queryByText('Following session')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Copy all session details' }).getAttribute('data-compact')).toBe('true');
+  });
+
+  it('shows requested then exact resolved spec while a new session is admitted', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes('/session/stats')) return { ok: true, json: async () => sessionStats };
+      throw new Error(`unexpected fetch ${String(input)}`);
+    });
+    const { client } = renderSession(fetchMock);
+    act(() => client.setQueryData(todoQueryKeys.launch('/repo', 'todo-1'), {
+      status: 'preparing', step: 'plan', requestedSpec: { model: 'gpt-5.5' },
+    }));
+    await waitFor(() => expect(screen.getByText('Preparing session · plan')).toBeTruthy());
+    expect(screen.getByText('Requested spec')).toBeTruthy();
+    expect(screen.getByText(/"model": "gpt-5.5"/)).toBeTruthy();
+    act(() => client.setQueryData(todoQueryKeys.launch('/repo', 'todo-1'), {
+      status: 'resolved', step: 'plan', requestedSpec: { model: 'gpt-5.5' },
+      spec: { model: 'gpt-5.5', effort: 'high' }, specYaml: 'model: gpt-5.5\neffort: high\n',
+    }));
+    await waitFor(() => expect(screen.getByText('Starting session · plan')).toBeTruthy());
+    expect(screen.getByText('Resolved spec')).toBeTruthy();
+    expect(screen.getByText(/effort: high/)).toBeTruthy();
+  });
+
+  it('shows a launch session before a never-run todo has a session ID', () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    client.setQueryData(todoQueryKeys.launch('/repo', 'todo-1'), { status: 'preparing', step: 'run', requestedSpec: { model: 'gpt-5.5' } });
+    render(<TodoSession dir="/repo" active todo={{ ...todo, sessionId: undefined }} />, {
+      wrapper: ({ children }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>,
+    });
+    expect(screen.getByText('Preparing session · run')).toBeTruthy();
+    expect(screen.getByTestId('thread-inspector')).toBeTruthy();
+  });
+
   it('projects an answered todo into caches and invalidates only its current session reads', async () => {
     const answered = { ...todo, status: 'in_progress' as const, questions: [] };
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes('/session/stats')) return { ok: true, json: async () => sessionStats };
-      if (url === '/api/todos/answer') return { ok: true, json: async () => ({ todo: answered, status: 'resumed' }) };
+      if (url === '/api/todos/answer') return new Response(
+        `event: resolved\ndata: ${JSON.stringify({ spec: {}, specYaml: '{}\n', step: 'run' })}\n\nevent: admitted\ndata: ${JSON.stringify({ todo: answered, status: 'resumed', promptRunId: 'prompt-new', sessionId: 'session-1' })}\n\n`,
+        { headers: { 'Content-Type': 'text/event-stream' } },
+      );
       throw new Error(`unexpected fetch ${url}`);
     });
     const { invalidateQueries, onChanged } = renderSession(fetchMock);

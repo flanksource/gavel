@@ -51,7 +51,7 @@ export class TodoMutationError extends Error {
   }
 }
 
-async function todoMutationResponseError(response: Response, context: string) {
+export async function todoMutationResponseError(response: Response, context: string) {
   const jsonResponse = typeof response.clone === 'function' ? response.clone() : response;
   // Two envelopes: the hand-written todo handlers answer `{error}`, while the
   // generated entity routes answer clicky's `{code, message, trace}`. Reading
@@ -195,12 +195,12 @@ export function useTodoVerificationRun(dir: string, ref: string) {
   const client = useQueryClient();
   return useMutation({
     mutationKey: ['todos', 'verification', 'run', { dir: dir.trim(), ref }],
-    mutationFn: ({ ref: target, spec, runtimeProfile, resume, force }: { ref: string; spec: unknown; runtimeProfile?: string; resume?: boolean; force?: boolean }) => todoMutationJSON<TodoRunResponse>(
+    mutationFn: ({ ref: target, spec, presets, runtimeProfile, resume, force }: { ref: string; spec: unknown; presets?: string[]; runtimeProfile?: string; resume?: boolean; force?: boolean }) => todoMutationJSON<TodoRunResponse>(
       `/api/todos/run?${todoQuery(dir)}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ref: target, step: 'verify', runtimeProfile, spec, resume, force }),
+        body: JSON.stringify({ ref: target, step: 'verify', presets, runtimeProfile, spec, resume, force }),
       },
       'Verification run failed',
     ),

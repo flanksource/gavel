@@ -1,15 +1,13 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
-import { Button, Combobox, Field, Modal, SegmentedControl, Tabs } from "@flanksource/clicky-ui/components";
+import { Button, Field, Modal, SegmentedControl, Tabs } from "@flanksource/clicky-ui/components";
 import { CodeBlock } from "@flanksource/clicky-ui/data";
-import { PromptRunEditor, promptRuntimeValueToPayload, type AIPromptRunValue, type AISpecRuntimeValue } from "@flanksource/clicky-ui/ai";
+import { PromptRunEditor, promptRuntimeValueToPayload, type AIPromptRunValue, type AISpecRuntimeValue, type ResolvedRuntimeSpec } from "@flanksource/clicky-ui/ai";
 import type { TodoRunOptions } from "../../types";
 import { Spinner } from "../../icons/Spinner";
 import { inputClass } from "./format";
 import {
-  loadLastTodoRunOptions,
-  defaultRunOptionsForAction,
+  lastTodoRunOptions,
   loadRecentAdvancedTodoRunOptions,
-  reconcileTodoRunOptions,
   runChoiceDetail,
   runOptionsKey,
   runSpec,
@@ -23,8 +21,7 @@ import {
   isCmuxMode,
   type RunContext,
 } from "./providers";
-import { loadPromptRunOptions, verificationSpec } from "./PromptRunButton";
-import { selectTodoRuntimeProfile } from './runtimeProfiles';
+import { lastPromptRunOptions, verificationSpec } from "./PromptRunButton";
 import { TodoRunWarnings } from './TodoRunWarnings';
 
 const RUN_SPEC_SECTIONS = ["model", "prompt", "permissions", "workspace", "verify", "commit"] as const;
@@ -32,9 +29,14 @@ const VERIFY_SPEC_SECTIONS = ["model", "permissions", "verify"] as const;
 const INITIAL_RUNTIME_VALUE: AISpecRuntimeValue = {};
 const MdxEditorField = lazy(() => import("@flanksource/clicky-ui/mdx-editor").then((module) => ({ default: module.MdxEditorField })));
 
-function seedRequestForStep(step: string, context: RunContext): AIPromptRunValue {
-  const options = step === "verify" ? loadPromptRunOptions("verification", context) : loadLastTodoRunOptions(step, context);
-  return { runtimeProfile: options.runtimeProfile, spec: runSpec(options) };
+// seedRequestForStep never carries a remembered choice into a freshly opened
+// (or freshly switched) step: model/effort/prompt from a prior run must not
+// silently outrank `.gavel.yaml` / prompt-frontmatter defaults just because
+// the operator opened Advanced. Presets stay undefined too, so the server's
+// own step defaults resolve. "Last used" below offers the remembered choice
+// back as an explicit, clickable restore instead.
+function seedRequestForStep(): AIPromptRunValue {
+  return { spec: {} };
 }
 
 // initialStepFor picks the step the picker opens on: a step the caller forced
@@ -80,26 +82,41 @@ export function TodoRunAdvancedDialog({
   const [previewError, setPreviewError] = useState("");
   const [previewWarnings, setPreviewWarnings] = useState<string[]>([]);
   const [specYAML, setSpecYAML] = useState("");
-  const [previewRuntime, setPreviewRuntime] = useState<{ key: string; mode?: string; model?: string }>();
+  const [previewRuntime, setPreviewRuntime] = useState<{ key: string; mode?: string; model?: string; spec?: AISpecRuntimeValue }>();
   const [view, setView] = useState<"form" | "yaml">("form");
   const [regenNonce, setRegenNonce] = useState(0);
   const { context, loading: contextLoading, error: contextError } = useTodoRunContext({ dir, enabled: open });
   const previewMutation = useTodoRunPreview(dir);
   const promptDirtyRef = useRef(false);
+  const seededRef = useRef(false);
 
   const steps = context?.lifecycle.steps ?? [];
   const selectedStep = steps.find((item) => item.name === step);
   const submitLabel = selectedStep?.label ?? step;
   const families = context ? buildRunFamilies(context) : [];
-  const runtimeKey = JSON.stringify({ dir, refID, step, runtimeProfile: runRequest.runtimeProfile, spec: runtimeValue });
+  const runtimeKey = JSON.stringify({ dir, refID, step, presets: runRequest.presets, spec: runtimeValue });
   const resolvedRuntime = previewRuntime?.key === runtimeKey ? previewRuntime : undefined;
   const isCmux = isCmuxMode(resolvedRuntime?.mode ?? runtimeValue.mode);
   const activeModels = context?.models ?? [];
-  const recentAdvanced = context && step !== "verify" ? loadRecentAdvancedTodoRunOptions(step, context) : [];
+  const resolution: ResolvedRuntimeSpec | undefined = resolvedRuntime?.spec
+    ? { spec: resolvedRuntime.spec, constraints: {}, trace: [] }
+    : undefined;
+  // Restores send exactly what was stored: reconciling against the catalog here
+  // would quietly swap an effort (xhigh → high) the user never re-chose.
+  const lastUsed = step === "verify" ? lastPromptRunOptions("verification") : lastTodoRunOptions(step);
+  const lastUsedKey = lastUsed ? runOptionsKey(lastUsed) : undefined;
+  const recentAdvanced = step !== "verify"
+    ? loadRecentAdvancedTodoRunOptions(step).filter(item => runOptionsKey(item) !== lastUsedKey)
+    : [];
+
+  function restore(options: TodoRunOptions) {
+    setRunRequest({ presets: options.presets, spec: runSpec(options) });
+    setResume(options.resume ?? false);
+  }
 
   function changeStep(next: string) {
     setStep(next);
-    if (context) setRunRequest(seedRequestForStep(next, context));
+    setRunRequest(seedRequestForStep());
     setResume(false);
     setPromptDirty(false);
     promptDirtyRef.current = false;
@@ -127,19 +144,29 @@ export function TodoRunAdvancedDialog({
     promptDirtyRef.current = false;
   }, [open, initialMode]);
 
+  // Seeds the starting step exactly once per open — not on every context
+  // identity change (a background refetch of the run-context query returns a
+  // new object with the same data and must not wipe an explicit edit made
+  // while the dialog was already open). The ref resets when the dialog
+  // closes, so the next open recomputes from initialMode/nextStep again.
   useEffect(() => {
-    if (!open || !context) return;
+    if (!open) {
+      seededRef.current = false;
+      return;
+    }
+    if (!context || seededRef.current) return;
     const resolved = initialStepFor(initialMode, nextStep, context);
     setStep(resolved);
-    setRunRequest(seedRequestForStep(resolved, context));
+    setRunRequest(seedRequestForStep());
+    seededRef.current = true;
   }, [open, initialMode, nextStep, context]);
 
   function buildRequestPayload(): TodoRunRequestPayload {
-    const runtimeProfile = runRequest.runtimeProfile;
+    const presets = runRequest.presets;
     const { spec } = promptRuntimeValueToPayload(runtimeValue);
-    if (step === "verify") return { ref: refID, step, runtimeProfile, spec: verificationSpec(spec) };
+    if (step === "verify") return { ref: refID, step, presets, spec: verificationSpec(spec) };
     const prompt = promptDirty ? { ...spec.prompt, user: promptDraft } : spec.prompt;
-    return { ref: refID, step, runtimeProfile, spec: { ...spec, prompt }, resume: (isCmux && resume) || undefined };
+    return { ref: refID, step, presets, spec: { ...spec, prompt }, resume: (isCmux && resume) || undefined };
   }
 
   useEffect(() => {
@@ -160,7 +187,7 @@ export function TodoRunAdvancedDialog({
       onSuccess: data => {
         if (cancelled) return;
         setPreviewWarnings(data.warnings ?? []);
-        setPreviewRuntime({ key: runtimeKey, mode: data.runtimeMode, model: data.model });
+        setPreviewRuntime({ key: runtimeKey, mode: data.runtimeMode, model: data.model, spec: data.spec });
         setSpecYAML(data.specYaml ?? "");
         if (!promptDirtyRef.current) setPromptDraft(data.prompt ?? "");
       },
@@ -173,7 +200,7 @@ export function TodoRunAdvancedDialog({
       controller.abort();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, context, contextError, refID, step, runtimeValue, runRequest.runtimeProfile, resume, isCmux, promptDraft, promptDirty, regenNonce, previewMutation.mutate]);
+  }, [open, context, contextError, refID, step, runtimeValue, runRequest.presets, resume, isCmux, promptDraft, promptDirty, regenNonce, previewMutation.mutate]);
 
   if (!open) return null;
 
@@ -217,41 +244,30 @@ export function TodoRunAdvancedDialog({
                     options={steps.map((item) => ({ id: item.name, label: item.label, disabled: item.readOnly }))}
                   />
                 </Field>
-                <Field label="Runtime profile">
-                  <Combobox
-                    ariaLabel="Runtime profile"
-                    value={runRequest.runtimeProfile ?? ''}
-                    options={[{ value: '', label: 'Step default' }, ...(context.runtimeProfiles ?? []).map(profile => ({ value: profile.id, label: profile.name, description: profile.description }))]}
-                    onChange={runtimeProfile => {
-                      const next = selectTodoRuntimeProfile({ options: { ...runRequest, step }, defaults: defaultRunOptionsForAction(step, context), runtimeProfile: runtimeProfile || undefined });
-                      setRunRequest({ ...runRequest, runtimeProfile: next.runtimeProfile, spec: next.spec });
-                    }}
-                    allowCustomValue={false}
-                  />
-                </Field>
-                <PromptRunEditor value={runRequest} onChange={setRunRequest} models={activeModels} families={families} tools={context.tools} specSections={step === "verify" ? VERIFY_SPEC_SECTIONS : RUN_SPEC_SECTIONS} promptEditor={step === "verify" ? undefined : promptEditorNode} promptLabel="Prompt">
+                <PromptRunEditor value={runRequest} onChange={setRunRequest} presets={context.runtimePresets ?? []} models={activeModels} families={families} tools={context.tools} specSections={step === "verify" ? VERIFY_SPEC_SECTIONS : RUN_SPEC_SECTIONS} promptEditor={step === "verify" ? undefined : promptEditorNode} promptLabel="Prompt" resolution={resolution}>
                   <>
                     {isCmux && step !== "verify" && <label className="inline-flex items-center gap-2 text-xs"><input type="checkbox" checked={resume} onChange={(event) => setResume(event.currentTarget.checked)} /><span>Resume session</span></label>}
-                    {recentAdvanced.length > 0 && (
+                    {(lastUsed || recentAdvanced.length > 0) && (
                       <div className="space-y-1 border-t border-border pt-3">
-                        <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Recent advanced</div>
-                        <div className="flex flex-wrap gap-1.5">
-                          {recentAdvanced.map((options, index) => (
-                            <Button
-                              key={runOptionsKey(options)}
-                              variant="outline"
-                              size="sm"
-                              type="button"
-                              onClick={() => {
-                                const restored = reconcileTodoRunOptions(step, options, context);
-                                setRunRequest({ runtimeProfile: restored.runtimeProfile, spec: runSpec(restored) });
-                                setResume(restored.resume ?? false);
-                              }}
-                            >
-                              {index + 1}. {runChoiceDetail(options, "advanced", context)}
+                        {lastUsed && (
+                          <div className="flex flex-wrap gap-1.5">
+                            <Button variant="outline" size="sm" type="button" onClick={() => restore(lastUsed)}>
+                              Last used · {runChoiceDetail(lastUsed, "last used", context)}
                             </Button>
-                          ))}
-                        </div>
+                          </div>
+                        )}
+                        {recentAdvanced.length > 0 && (
+                          <>
+                            <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Recent advanced</div>
+                            <div className="flex flex-wrap gap-1.5">
+                              {recentAdvanced.map((options, index) => (
+                                <Button key={runOptionsKey(options)} variant="outline" size="sm" type="button" onClick={() => restore(options)}>
+                                  {index + 1}. {runChoiceDetail(options, "advanced", context)}
+                                </Button>
+                              ))}
+                            </div>
+                          </>
+                        )}
                       </div>
                     )}
                   </>

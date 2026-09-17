@@ -46,7 +46,7 @@ const FIXTURE_CONTEXT: RunContext = {
     },
   ],
   lifecycle: { steps: [{ name: 'run', label: 'Run', prompt: 'run', readOnly: false }] },
-  runtimeProfiles: [{ id: 'review-profile', name: 'Review profile', presets: ['cmux-preset'] }],
+  runtimePresets: [{ id: 'review-preset', name: 'Review preset', scope: 'context', spec: {} }],
 };
 
 vi.mock('./run', async importOriginal => ({
@@ -84,11 +84,11 @@ afterEach(() => {
 });
 
 describe('TodoRunActionButton', () => {
-  it('shows a sparse profile by identity without claiming the step default runtime', () => {
+  it('shows a missing preset by identity without claiming the step default runtime', () => {
     const onRun = vi.fn();
-    const options = { step: 'run', runtimeProfile: 'review-profile', spec: {} };
+    const options = { step: 'run', presets: ['missing-preset'], spec: {} };
     render(<TodoRunActionButton dir="/repo" action="run" options={options} onRun={onRun} onAdvanced={vi.fn()} />);
-    expect(screen.getByText('Profile: Review profile')).toBeTruthy();
+    expect(screen.getByText('Preset: missing-preset')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Run runtime' })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Run' }));
     expect(onRun).toHaveBeenCalledWith(options);

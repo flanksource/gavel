@@ -99,15 +99,15 @@ var _ = Describe("todo configuration error boundaries", func() {
 		Entry("temperature validated by Captain", api.Spec{Model: api.Model{Name: "claude-sonnet-5", Mode: api.ModeAgent, Temperature: &invalidTemperature}}, "temperature"),
 	)
 
-	DescribeTable("attributes selected catalog failures to server configuration",
-		func(profile, detail string) {
+	DescribeTable("rejects invalid selected preset definitions",
+		func(preset, detail string) {
 			created := specTodo(dir, types.StatusPending)
 			called := stubSpecRunStart(nil)
-			profiles := filepath.Join(dir, ".captain", "profiles")
-			Expect(os.MkdirAll(profiles, 0o700)).To(Succeed())
-			Expect(os.WriteFile(filepath.Join(profiles, "reviewer.yaml"), []byte(profile), 0o600)).To(Succeed())
+			presets := filepath.Join(dir, ".captain", "presets")
+			Expect(os.MkdirAll(presets, 0o700)).To(Succeed())
+			Expect(os.WriteFile(filepath.Join(presets, "reviewer.yaml"), []byte(preset), 0o600)).To(Succeed())
 			temperature := 0.5
-			payload := todoRunPayload{Ref: created.ID, Step: "plan", RuntimeProfile: "reviewer", Spec: api.Spec{
+			payload := todoRunPayload{Ref: created.ID, Step: "plan", Presets: []string{"reviewer"}, Spec: api.Spec{
 				Model: api.Model{Name: "claude-sonnet-5", Mode: api.ModeAgent, Temperature: &temperature},
 			}}
 			for _, handler := range []http.HandlerFunc{server.handleTodoRunPreview, server.handleTodoRun} {
@@ -117,26 +117,27 @@ var _ = Describe("todo configuration error boundaries", func() {
 			}
 			Expect(*called).To(BeFalse())
 		},
-		Entry("invalid profile field", "name: reviewer\nspec:\n  temperature: 3\n", "temperature"),
-		Entry("missing referenced preset", "name: reviewer\npresets: [missing-preset]\n", "missing-preset"),
+		Entry("invalid preset field", "name: reviewer\nscope: context\nspec:\n  temperature: 3\n", "temperature"),
+		Entry("nested preset", "name: reviewer\nscope: context\npresets: [base]\n", "nested runtime presets are not supported"),
 	)
 
-	It("keeps an unknown requested profile as a client error", func() {
+	It("keeps an unknown requested preset as a client error", func() {
 		created := specTodo(dir, types.StatusPending)
 		called := stubSpecRunStart(nil)
 		for _, handler := range []http.HandlerFunc{server.handleTodoRunPreview, server.handleTodoRun} {
-			recorder := postJSON(handler, "/api/todos/run", todoRunPayload{Ref: created.ID, Step: "plan", RuntimeProfile: "missing-profile"})
+			recorder := postJSON(handler, "/api/todos/run", todoRunPayload{Ref: created.ID, Step: "plan", Presets: []string{"missing-preset"}})
 			Expect(recorder.Code).To(Equal(http.StatusBadRequest), recorder.Body.String())
-			Expect(recorder.Body.String()).To(ContainSubstring("missing-profile"))
+			Expect(recorder.Body.String()).To(ContainSubstring("missing-preset"))
 		}
 		Expect(*called).To(BeFalse())
 	})
 
-	It("evaluates a profile's runtime policy after the explicit request and reports each warning once", func() {
+	It("evaluates preset runtime policy before the explicit request and reports each warning once", func() {
 		created := specTodo(dir, types.StatusPending)
-		profiles := filepath.Join(dir, ".captain", "profiles")
-		Expect(os.MkdirAll(profiles, 0o700)).To(Succeed())
-		Expect(os.WriteFile(filepath.Join(profiles, "reviewer.yaml"), []byte(`name: reviewer
+		presets := filepath.Join(dir, ".captain", "presets")
+		Expect(os.MkdirAll(presets, 0o700)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(presets, "reviewer.yaml"), []byte(`name: reviewer
+scope: context
 spec:
   model: gpt-5.6-sol
   mode: agent
@@ -147,7 +148,7 @@ spec:
       review-tools: enabled
 `), 0o600)).To(Succeed())
 		recorder := postJSON(server.handleTodoRunPreview, "/api/todos/run/preview", todoRunPayload{
-			Ref: created.ID, Step: "plan", RuntimeProfile: "reviewer",
+			Ref: created.ID, Step: "plan", Presets: []string{"reviewer"},
 			Spec: api.Spec{Model: api.Model{Name: "claude-sonnet-5", Mode: api.ModeAgent}},
 		})
 		Expect(recorder.Code).To(Equal(http.StatusOK), recorder.Body.String())
@@ -155,9 +156,9 @@ spec:
 		Expect(json.Unmarshal(recorder.Body.Bytes(), &preview)).To(Succeed())
 		Expect(preview.Model).To(Equal("claude-sonnet-5"))
 		Expect(preview.RuntimeMode).To(Equal("agent"))
-		Expect(preview.RuntimeProfile).NotTo(BeNil())
-		Expect(preview.RuntimeProfile.Profile.Name).To(Equal("reviewer"))
-		Expect(preview.Trace).To(ContainElement(HaveField("Source", api.SpecLayerSourceProfile)))
+		Expect(preview.RuntimePresets).To(HaveExactElements(HaveField("Name", "reviewer")))
+		Expect(preview.RuntimeProfile).To(BeNil())
+		Expect(preview.Trace).To(ContainElement(HaveField("Source", api.SpecLayerSourcePreset)))
 		Expect(preview.Warnings).To(HaveExactElements(ContainSubstring("plugins")))
 	})
 })

@@ -30,6 +30,7 @@ type SearchConfig struct {
 	Repos       []string `json:"repos"`
 	All         bool     `json:"all,omitempty"`
 	Org         string   `json:"org,omitempty"`
+	Project     string   `json:"project,omitempty"`
 	IgnoredOrgs []string `json:"ignoredOrgs,omitempty"`
 }
 
@@ -506,6 +507,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/settings/prompts/catalog", s.handleSettingsPromptCatalog)
 	mux.HandleFunc("/api/settings/prompts/{id}", s.handleSettingsPromptDetail)
 	mux.HandleFunc("POST /api/settings/prompts/{id}/render", s.handleSettingsPromptRender)
+	mux.HandleFunc("GET /api/settings/runtime-presets", s.handleSettingsRuntimePresets)
+	mux.HandleFunc("POST /api/settings/runtime-presets", s.handleSettingsRuntimePresets)
+	mux.HandleFunc("PUT /api/settings/runtime-presets/{id}", s.handleSettingsRuntimePresets)
+	mux.HandleFunc("DELETE /api/settings/runtime-presets/{id}", s.handleSettingsRuntimePresets)
+	mux.HandleFunc("POST /api/settings/runtime-presets/resolve", s.handleSettingsRuntimePresetResolve)
 	mux.HandleFunc("/api/settings/gavel", s.handleSettingsGavel)
 	mux.HandleFunc("/api/settings/gavel/trace", s.handleSettingsGavelTrace)
 	mux.HandleFunc("/api/projects", s.handleProjects)
@@ -1018,6 +1024,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		s.SetConfig(cfg)
 		go SaveSettings(UISettings{
 			Repos:       cfg.Repos,
+			Project:     cfg.Project,
 			IgnoredOrgs: cfg.IgnoredOrgs,
 		})
 		select {

@@ -1,6 +1,6 @@
 import { providerIcon, type ChatModel, type ToolMeta } from '@flanksource/clicky-ui/chat';
 import type { StaticIconComponent } from '@flanksource/clicky-ui/data';
-import { familiesFromRuntimeCatalog, type AISpecRuntimeValue, type RuntimeCatalogFamily, type SpecRuntimeFamily } from '@flanksource/clicky-ui/ai';
+import { familiesFromRuntimeCatalog, type AISpecRuntimeValue, type RuntimeCatalogFamily, type RuntimePreset, type SpecRuntimeFamily } from '@flanksource/clicky-ui/ai';
 import { UiRobotAi, UiSparkles } from '@flanksource/clicky-ui/icons';
 import type { TodoRunAgent, TodoRunDriver, TodoRunEffort, TodoRunProvenance } from '../../types';
 
@@ -74,11 +74,14 @@ export interface RunContext {
   promptDefaults?: Record<string, {
     mode?: string;
     model?: string;
+    presets?: string[];
     runtimeProfile?: string;
     spec?: AISpecRuntimeValue;
     provenance?: TodoRunProvenance;
     warnings?: string[];
   }>;
+  runtimePresets?: RuntimePreset[];
+  /** @deprecated Runtime profiles are no longer selectable. */
   runtimeProfiles?: Array<{
     id: string;
     name: string;
