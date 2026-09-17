@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 	"sync"
 
@@ -224,9 +223,7 @@ func startCandidateSummaries(ctx context.Context, opts Options, candidates []sta
 // state before re-staging just the user's selection. We use `git reset HEAD --`
 // (no paths after `--`) which does NOT touch the working tree.
 func resetAllStaged(workDir string) error {
-	cmd := exec.Command("git", "reset", "--mixed")
-	cmd.Dir = workDir
-	if out, err := cmd.CombinedOutput(); err != nil {
+	if out, err := runGitRetryingLocks(workDir, "reset", "--mixed"); err != nil {
 		// `git reset --mixed` with an empty index can fail benignly when there
 		// are no commits yet; tolerate that one case so the first commit on a
 		// fresh repo still works.
