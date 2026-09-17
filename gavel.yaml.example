@@ -148,6 +148,7 @@ commit:
 
   tidy:
     # Run `go mod tidy` in every Go module and stage go.mod/go.sum changes.
+    # Omit to run it only when pushing (`gavel commit -p`).
     enabled: true
 
 fixtures:
