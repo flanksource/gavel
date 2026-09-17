@@ -45,6 +45,32 @@ type Options struct {
 // managed is the supervisor's per-process bookkeeping. The supervised lifecycle
 // (run/restart, ports, status, resources) is owned by the clicky
 // SupervisedProcess; this struct only holds gavel-side wiring.
+// processMetadata is the Procfile's own account of a supervised process, shown
+// beside the readings clicky already reports. It deliberately adds only what
+// the Procfile knows and ProcessDetails does not: where the process's output is
+// tee'd, and the profile gating that decided whether it runs here at all.
+type processMetadata struct {
+	LogPath string `json:"logPath,omitempty"`
+	// Profile is the workspace profile in effect, and Profiles the ones this
+	// entry restricts itself to (empty means every profile).
+	Profile  string   `json:"profile,omitempty"`
+	Profiles []string `json:"profiles,omitempty"`
+	Command  string   `json:"command,omitempty"`
+}
+
+// processMetadataFunc closes over one entry's fixed context. Metadata is
+// re-evaluated on every snapshot, but a Procfile entry does not change while the
+// supervisor is running, so there is nothing here to re-read.
+func processMetadataFunc(logPath, profile string, entry Entry) func() any {
+	metadata := processMetadata{
+		LogPath:  logPath,
+		Profile:  profile,
+		Profiles: entry.Profiles,
+		Command:  entry.Command,
+	}
+	return func() any { return metadata }
+}
+
 type managed struct {
 	entry     Entry
 	logPath   string
@@ -154,7 +180,8 @@ func NewSupervisor(opts Options) (*Supervisor, error) {
 						"workspace": filepath.Base(root),
 						"root":      root,
 					},
-					Href: "/tasks/{id}",
+					Href:     "/tasks/{id}",
+					Metadata: processMetadataFunc(LogPath(dir, e.Name), profile, e),
 					OnFinish: func(runID string) error {
 						return taskhistory.Archive(root, runID)
 					},
