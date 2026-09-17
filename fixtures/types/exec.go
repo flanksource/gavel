@@ -2,13 +2,14 @@ package types
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
-	"github.com/flanksource/clicky"
 	clickyExec "github.com/flanksource/clicky/exec"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/fixtures"
@@ -158,15 +159,15 @@ func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opt
 	if exec.Terminal == "pty" || ansi != nil {
 		p, capture = runWithPTY(exec, workDir, ansi)
 	} else {
-		cmd := clicky.Exec(exec.Exec, exec.Args...).WithCwd(workDir)
+		process := clickyExec.NewExec(exec.Exec, exec.Args...).WithCwd(workDir)
 		if len(exec.Env) > 0 {
-			envMap := make(map[string]string, len(exec.Env))
-			for k, v := range exec.Env {
-				envMap[k] = fmt.Sprintf("%v", v)
+			env := make(map[string]string, len(exec.Env))
+			for key, value := range exec.Env {
+				env[key] = fmt.Sprintf("%v", value)
 			}
-			cmd = cmd.WithEnv(envMap)
+			process.WithEnv(env)
 		}
-		p = cmd.Run().Result()
+		p = process.WithContext(ctx).Run().Result()
 	}
 
 	result.Actual = p
@@ -202,6 +203,19 @@ func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opt
 	// to the markdown that asserts them. A worktree is disposable, so writing
 	// an updated golden into one would discard it on cleanup. The command moves;
 	// its expectations do not.
+	if err := processLaunchError(p); err != nil {
+		result.Stdout = p.Stdout
+		result.Stderr = p.Stderr
+		result.ExitCode = p.ExitCode
+		if p.Command != "" {
+			if len(p.Args) > 0 {
+				result.Command = p.Command + " " + strings.Join(p.Args, " ")
+			} else {
+				result.Command = p.Command
+			}
+		}
+		return result.Errorf(err, "command execution failed")
+	}
 	evaluated := fixture.Expected.Evaluate(result, *p, evaluate)
 
 	// A `requireEntries` shortfall only decides a fixture the assertions left
@@ -220,6 +234,21 @@ const (
 	ptyWidth  = 120
 	ptyHeight = 40
 )
+
+// processLaunchError reports context and command start failures.
+// Ordinary non-zero exits stay with Evaluate so fixtures can still assert them.
+func processLaunchError(p *clickyExec.ExecResult) error {
+	if p == nil {
+		return fmt.Errorf("command produced no result")
+	}
+	if p.Error == nil {
+		return nil
+	}
+	if errors.Is(p.Error, context.Canceled) || errors.Is(p.Error, context.DeadlineExceeded) || p.PID == 0 {
+		return p.Error
+	}
+	return nil
+}
 
 // runWithPTY runs the command under a pseudo-terminal. ansi is non-nil when the
 // run is being recorded, which adds settled-screen tracking on top; without it
