@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	osExec "os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -160,7 +159,15 @@ func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opt
 	if exec.Terminal == "pty" || ansi != nil {
 		p, capture = runWithPTY(exec, workDir, ansi)
 	} else {
-		p = runPiped(ctx, exec, workDir)
+		process := clickyExec.NewExec(exec.Exec, exec.Args...).WithCwd(workDir)
+		if len(exec.Env) > 0 {
+			env := make(map[string]string, len(exec.Env))
+			for key, value := range exec.Env {
+				env[key] = fmt.Sprintf("%v", value)
+			}
+			process.WithEnv(env)
+		}
+		p = process.WithContext(ctx).Run().Result()
 	}
 
 	result.Actual = p
@@ -228,67 +235,7 @@ const (
 	ptyHeight = 40
 )
 
-// runPiped runs the command on pipes. WithProcessGroup lets a cancelled ctx
-// KillTree children; clicky also force-closes stdio 2s after the direct child
-// exits, which can return ErrWaitDelay while descendants still hold those
-// pipes. KillTree that leftover group so the timeout stays a hard stop.
-func runPiped(ctx context.Context, execBase fixtures.ExecFixtureBase, workDir string) *clickyExec.ExecResult {
-	if err := ctx.Err(); err != nil {
-		return &clickyExec.ExecResult{
-			ExitCode: -1,
-			Error:    err,
-			Command:  execBase.Exec,
-			Args:     execBase.Args,
-		}
-	}
-
-	process := clickyExec.NewExec(execBase.Exec, execBase.Args...).WithCwd(workDir).WithProcessGroup()
-	if len(execBase.Env) > 0 {
-		env := make(map[string]string, len(execBase.Env))
-		for key, value := range execBase.Env {
-			env[key] = fmt.Sprintf("%v", value)
-		}
-		process.WithEnv(env)
-	}
-
-	done := make(chan *clickyExec.Process, 1)
-	go func() {
-		done <- process.Run()
-	}()
-
-	select {
-	case completed := <-done:
-		result := completed.Result()
-		if errors.Is(result.Error, osExec.ErrWaitDelay) {
-			_ = process.KillTree()
-		}
-		return result
-	case <-ctx.Done():
-	}
-
-	// Cancellation can race command startup. Wait until clicky publishes the
-	// PID or the command exits, then kill the whole process group so the row's
-	// timeout remains a hard budget even when the command forks children.
-	for process.Pid() == 0 {
-		select {
-		case completed := <-done:
-			result := completed.Result()
-			if errors.Is(result.Error, osExec.ErrWaitDelay) {
-				_ = process.KillTree()
-			}
-			result.Error = ctx.Err()
-			return result
-		default:
-			runtime.Gosched()
-		}
-	}
-	_ = process.KillTree()
-	result := (<-done).Result()
-	result.Error = ctx.Err()
-	return result
-}
-
-// processLaunchError reports cancellation, deadline, and pipe-drain failures.
+// processLaunchError reports context and command start failures.
 // Ordinary non-zero exits stay with Evaluate so fixtures can still assert them.
 func processLaunchError(p *clickyExec.ExecResult) error {
 	if p == nil {
@@ -297,7 +244,7 @@ func processLaunchError(p *clickyExec.ExecResult) error {
 	if p.Error == nil {
 		return nil
 	}
-	if errors.Is(p.Error, context.Canceled) || errors.Is(p.Error, context.DeadlineExceeded) || errors.Is(p.Error, osExec.ErrWaitDelay) {
+	if errors.Is(p.Error, context.Canceled) || errors.Is(p.Error, context.DeadlineExceeded) || p.PID == 0 {
 		return p.Error
 	}
 	return nil
