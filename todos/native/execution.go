@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
@@ -255,17 +256,75 @@ func planSelectionExact(tx *gorm.DB, issue *executionIssue, planID uuid.UUID, or
 	if issue.SelectedPlanID == nil || *issue.SelectedPlanID != planID {
 		return false, nil
 	}
+	return planLinkExact(tx, issue.ID, planID, ordinal)
+}
+
+func planReviewSelectionExact(
+	tx *gorm.DB,
+	issue *executionIssue,
+	planID uuid.UUID,
+	ordinal int,
+	state captaindb.PlanApprovalState,
+) (bool, error) {
+	linked, err := planLinkExact(tx, issue.ID, planID, ordinal)
+	if err != nil || !linked {
+		return linked, err
+	}
+	if state == captaindb.PlanApprovalRejected {
+		return issue.SelectedPlanID == nil && issue.Status == StatusOpen, nil
+	}
+	return sameUUIDPointer(issue.SelectedPlanID, &planID), nil
+}
+
+func planLinkExact(tx *gorm.DB, issueID, planID uuid.UUID, ordinal int) (bool, error) {
 	var count int64
 	err := tx.Raw(`
 		SELECT COUNT(*) FROM todo_issue_plans
-		WHERE issue_id = ? AND plan_id = ? AND ordinal = ?`, issue.ID, planID, ordinal,
+		WHERE issue_id = ? AND plan_id = ? AND ordinal = ?`, issueID, planID, ordinal,
 	).Scan(&count).Error
 	return count == 1, err
+}
+
+func deselectPlanLocked(tx *gorm.DB, issue *executionIssue, input PlanAttachment, mutation *EventInput) error {
+	if err := validatePlanAttachment(input); err != nil {
+		return err
+	}
+	linked, err := planLinkExact(tx, issue.ID, input.PlanID, input.Ordinal)
+	if err != nil {
+		return err
+	}
+	if !linked {
+		return fmt.Errorf("%w: plan %s is not linked to issue %s at ordinal %d", ErrLinkConflict, input.PlanID, issue.ID, input.Ordinal)
+	}
+	if issue.SelectedPlanID != nil && *issue.SelectedPlanID != input.PlanID {
+		return fmt.Errorf("%w: issue %s selects plan %s, not %s", ErrLinkConflict, issue.ID, *issue.SelectedPlanID, input.PlanID)
+	}
+	exactDeselection := issue.SelectedPlanID == nil && issue.Status == StatusOpen
+	if exactDeselection && mutation == nil {
+		return nil
+	}
+	if issue.Version != input.ExpectedIssueVersion {
+		return versionConflict(input.IssueID, input.ExpectedIssueVersion, issue.Version)
+	}
+	if !exactDeselection {
+		if err := tx.Exec(`UPDATE todo_issues SET selected_plan_id = NULL, status = ? WHERE id = ?`, StatusOpen, input.IssueID).Error; err != nil {
+			return err
+		}
+	}
+	if mutation == nil {
+		mutation = &EventInput{
+			Kind: "plan_deselected", Actor: input.Actor,
+			Payload: map[string]any{"planId": input.PlanID, "ordinal": input.Ordinal},
+		}
+	}
+	_, err = recordMutation(tx, issue.lockedIssue(), *mutation)
+	return err
 }
 
 type executionIssue struct {
 	ID                uuid.UUID
 	WorkspaceID       uuid.UUID
+	Status            IssueStatus
 	Version           int64
 	ActivePromptRunID *uuid.UUID
 	SelectedPlanID    *uuid.UUID
@@ -274,7 +333,7 @@ type executionIssue struct {
 func lockExecutionIssue(tx *gorm.DB, id uuid.UUID) (*executionIssue, error) {
 	var issue executionIssue
 	result := tx.Raw(`
-		SELECT id, workspace_id, version, active_prompt_run_id, selected_plan_id
+		SELECT id, workspace_id, status, version, active_prompt_run_id, selected_plan_id
 		FROM todo_issues WHERE id = ? FOR UPDATE`, id,
 	).Scan(&issue)
 	if result.Error != nil {

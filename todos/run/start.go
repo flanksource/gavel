@@ -58,6 +58,8 @@ func defaultResolve(ctx context.Context, req Request) (*Prepared, error) {
 // for a resolution, and the run's context for a dispatch.
 func runOptions(req Request, exec *todos.ExecutorContext) lifecycle.RunOptions {
 	return lifecycle.RunOptions{
+		Presets:        append([]string(nil), req.Options.Presets...),
+		PresetsSet:     req.Options.PresetsSet,
 		RuntimeProfile: req.Options.RuntimeProfile,
 		Exec:           exec,
 		Request:        req.Options.Request,
@@ -127,7 +129,7 @@ func defaultStart(req Request) (StartResult, error) {
 			// The run is stoppable by the identity Captain admitted for it, which
 			// only exists from here on.
 			handle.BindPromptRun(preparation.PromptRunID)
-			notify(StartResult{Status: "started", SessionID: preparation.SessionID}, nil)
+			notify(StartResult{Status: "started", SessionID: preparation.SessionID, PromptRunID: preparation.PromptRunID}, nil)
 		})
 		err := runStep(execCtx, req, prepared)
 		// A run that ended before Captain admitted it never notified: whatever

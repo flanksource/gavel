@@ -9,6 +9,7 @@ import (
 	commonsdb "github.com/flanksource/commons-db/db"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/todos"
+	"github.com/flanksource/gavel/todos/lifecycle"
 	"github.com/flanksource/gavel/todos/native"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/google/uuid"
@@ -20,6 +21,7 @@ var _ = Describe("setting a TODO plan from human-authored markdown", Ordered, fu
 	var (
 		ctx      context.Context
 		provider *Provider
+		workDir  string
 	)
 
 	issueOf := func(todo *types.TODO) *native.Issue {
@@ -55,7 +57,7 @@ var _ = Describe("setting a TODO plan from human-authored markdown", Ordered, fu
 		Expect(err).NotTo(HaveOccurred())
 		DeferCleanup(func() { Expect(opened.Close()).To(Succeed()) })
 
-		workDir := GinkgoT().TempDir()
+		workDir = GinkgoT().TempDir()
 		repository, err := native.NewRepository(opened.Gorm())
 		Expect(err).NotTo(HaveOccurred())
 		_, err = repository.CreateWorkspace(ctx, native.CreateWorkspaceInput{
@@ -179,6 +181,53 @@ var _ = Describe("setting a TODO plan from human-authored markdown", Ordered, fu
 		content, err := provider.PlanMarkdown(ctx, saved, types.ModePlan)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(content).To(Equal("# Replacement\n\n1. Start over."))
+	})
+
+	It("keeps a rejected plan as history while making a new plan eligible", func() {
+		const original = "# Rejected\n\n1. Do the wrong thing."
+		const replacement = "# Replacement\n\n1. Do the right thing."
+		created, err := provider.Create(ctx, todos.CreateRequest{
+			Title: "Replace a rejected plan", Status: types.StatusDraft,
+		})
+		Expect(err).NotTo(HaveOccurred())
+		saved, err := provider.SavePlanRevision(ctx, created, original, "moshe")
+		Expect(err).NotTo(HaveOccurred())
+		originalPlanID := *issueOf(saved).SelectedPlanID
+
+		rejected, err := provider.RejectPlan(ctx, saved, "moshe", "superseded")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(rejected.Status).To(Equal(types.StatusPending))
+		Expect(issueOf(rejected).SelectedPlanID).To(BeNil())
+		state, err := provider.PlanState(ctx, rejected)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(state.Exists).To(BeFalse())
+
+		host, err := lifecycle.NewHost(provider, workDir, lifecycle.HostCLI)
+		Expect(err).NotTo(HaveOccurred())
+		next, ok, err := host.Next(ctx, rejected)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(ok).To(BeTrue())
+		Expect(next.Name).To(Equal("plan"))
+
+		rejectedPlan, err := provider.captain.GetPlan(ctx, originalPlanID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(rejectedPlan.ApprovalState).To(Equal(captaindb.PlanApprovalRejected))
+		Expect(rejectedPlan.LatestRevision.PlanMarkdown).To(Equal(original))
+
+		saved, err = provider.SavePlanRevision(ctx, rejected, replacement, "moshe")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(saved.Status).To(Equal(types.StatusReview))
+		issue := issueOf(saved)
+		Expect(issue.SelectedPlanID).NotTo(BeNil())
+		Expect(*issue.SelectedPlanID).NotTo(Equal(originalPlanID))
+		links, err := provider.repository.ListPlans(ctx, issue.ID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(links).To(HaveLen(2))
+		Expect(links[0].Ordinal).To(Equal(0))
+		Expect(links[1].Ordinal).To(Equal(1))
+		content, err := provider.PlanMarkdown(ctx, saved, types.ModePlan)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(content).To(Equal(replacement))
 	})
 
 	It("still refuses to approve a TODO that has no plan, and names the remedy", func() {

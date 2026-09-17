@@ -149,6 +149,9 @@ func (p *Provider) PrepareRun(ctx context.Context, todo *types.TODO, preparation
 					todos.ErrRunResumeModeMismatch, previousRun.ID, activeStep, step,
 				)
 			}
+			if issue, err = p.recordResumedAnswer(ctx, issue, previousRun, preparation.Spec.Prompt.User); err != nil {
+				return todos.RunPreparationResult{}, err
+			}
 			// A waiting/running prompt run is one interactive operation. Resume it
 			// in place rather than manufacturing a second active root operation.
 			p.markPrepared(issue.ID, previousRun.ID)
@@ -180,6 +183,7 @@ func (p *Provider) PrepareRun(ctx context.Context, todo *types.TODO, preparation
 
 	rendered, err := renderedSpec(renderedSpecOptions{
 		Spec: preparation.Spec, Fixture: issue.Verification,
+		RuntimePresets: preparation.RuntimePresets,
 		RuntimeProfile: preparation.RuntimeProfile, SpecTrace: preparation.SpecTrace,
 	})
 	if err != nil {

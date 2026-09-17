@@ -21,6 +21,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 
 	captainai "github.com/flanksource/captain/pkg/ai"
@@ -173,7 +174,7 @@ func Render(todoList []*types.TODO, opts Options) (captainai.Request, captainai.
 		return captainai.Request{}, captainai.Config{}, fmt.Errorf("validate todos %s spec: %w", opts.promptName(), err)
 	}
 	if directive := EffortDirective(string(req.Effort)); directive != "" {
-		req.Prompt.User = directive + "\n\n" + user
+		req.Prompt.User = directive + "\n\n" + withoutEffortDirectives(user)
 	}
 	return req, captainai.Config{Model: req.Model, Budget: req.Budget}, nil
 }
@@ -231,6 +232,23 @@ func EffortDirective(effort string) string {
 		return "Think very hard, reason exhaustively, and validate edge cases before implementing."
 	default:
 		return ""
+	}
+}
+
+var effortDirectiveTiers = []string{"low", "medium", "high", "xhigh"}
+
+// withoutEffortDirectives removes the directive lines leading a prompt so Render
+// can lead it with exactly one. An override edited from a preview already starts
+// with the directive the preview rendered, possibly for a different effort.
+func withoutEffortDirectives(user string) string {
+	for {
+		line, rest, _ := strings.Cut(strings.TrimLeft(user, "\r\n"), "\n")
+		if !slices.ContainsFunc(effortDirectiveTiers, func(tier string) bool {
+			return strings.TrimRight(line, "\r ") == EffortDirective(tier)
+		}) {
+			return user
+		}
+		user = strings.TrimLeft(rest, "\r\n")
 	}
 }
 

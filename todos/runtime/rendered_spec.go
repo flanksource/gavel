@@ -13,6 +13,7 @@ import (
 type renderedSpecOptions struct {
 	Spec           api.Spec
 	Fixture        string
+	RuntimePresets *runtimeprofiles.PresetResolution
 	RuntimeProfile *runtimeprofiles.Resolution
 	SpecTrace      []api.SpecLayer
 	Previous       map[string]any
@@ -54,10 +55,13 @@ func renderedSpec(options renderedSpecOptions) (map[string]any, error) {
 
 func renderedSpecProvenance(options renderedSpecOptions) (map[string]any, error) {
 	values := map[string]any{}
-	for _, key := range []string{"runtimeProfile", "specTrace"} {
+	for _, key := range []string{"runtimePresets", "runtimeProfile", "specTrace"} {
 		if value, ok := options.Previous[key]; ok {
 			values[key] = value
 		}
+	}
+	if presets := options.RuntimePresets; presets != nil {
+		values["runtimePresets"] = presets.Presets
 	}
 	if profile := options.RuntimeProfile; profile != nil {
 		values["runtimeProfile"] = struct {

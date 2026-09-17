@@ -93,7 +93,7 @@ to the agent until they pass. Use --dry-run to print the rendered prompt, the
 layer stack that produced the run's spec, and the spec itself, without
 dispatching.
 
-Use --runtime-profile to select a reusable Captain runtime profile by name or ID. The preview reports its canonical identity alongside the resolved layer stack.
+Repeat --preset to select reusable Captain runtime layers in order. Use --no-presets to clear prompt and project defaults. The preview reports each preset's canonical identity alongside the resolved layer stack.
 
 Examples:
   gavel todos run                          # the next step of every pending todo
@@ -103,7 +103,7 @@ Examples:
   gavel todos run --step verify            # run the definition of done
   gavel todos run 3f2a1b --step triage     # a read-only triage pass
   gavel todos run --model cli:opus:high    # headless CLI on opus, high effort
-  gavel todos run --runtime-profile review --dry-run # preview a named runtime profile
+  gavel todos run --preset organization --preset review --dry-run # preview ordered runtime presets
   gavel todos run --dry-run                # preview the run, no changes`,
 	RunE: runTodosRun,
 }

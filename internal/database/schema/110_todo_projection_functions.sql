@@ -80,6 +80,30 @@ WITH active AS (
        OR request.session_id IN (SELECT id FROM session_tree)
      )
   ) AS waiting
+), answered AS (
+  -- A parked ask is answered once a Captain ask_answered event for the active
+  -- run is newer than the latest ask outcome. Captain can resume a parked run's
+  -- session without gavel; the read that notices records the answer, and the run
+  -- stays `waiting` until that turn settles — but it is no longer asking.
+  -- Gavel's own answers are not read here: a resume gavel drives moves the run
+  -- itself, and one whose dispatcher died after admission is still asking.
+  SELECT EXISTS (
+    SELECT 1
+    FROM active
+    JOIN public.todo_issue_events answer
+      ON answer.issue_id = p_issue_id
+     AND answer.kind = 'ask_answered'
+     AND answer.source = 'captain'
+     AND answer.payload ->> 'promptRunId' = active.active_prompt_run_id::text
+    WHERE active.prompt_state = 'waiting'
+      AND answer.sequence > COALESCE((
+      SELECT max(outcome.sequence)
+      FROM public.todo_issue_events outcome
+      WHERE outcome.issue_id = p_issue_id
+        AND outcome.kind = 'lifecycle_outcome'
+        AND outcome.payload ->> 'status' = 'ask'
+    ), 0)
+  ) AS after_ask
 )
 SELECT CASE
   WHEN active.active_prompt_run_id IS NULL THEN 'idle'
@@ -89,6 +113,7 @@ SELECT CASE
          THEN 'verification_failed' ELSE 'failed' END
   WHEN signals.failed THEN 'failed'
   WHEN signals.stalled THEN 'stalled'
+  WHEN active.prompt_state = 'waiting' AND answered.after_ask AND NOT pending.waiting THEN 'running'
   WHEN active.prompt_state = 'waiting' OR signals.waiting OR pending.waiting THEN 'waiting'
   WHEN signals.terminal THEN 'idle'
   WHEN active.prompt_state = 'succeeded' AND active.prompt_phase = 'finished' THEN 'idle'
@@ -100,6 +125,7 @@ FROM active
 CROSS JOIN signals
 CROSS JOIN latest_iteration
 CROSS JOIN pending
+CROSS JOIN answered
 $$;
 
 -- Timestamp propagation is intentionally not an issue mutation: it neither
