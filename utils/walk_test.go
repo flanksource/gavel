@@ -3,6 +3,7 @@ package utils
 import (
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -16,7 +17,9 @@ func TestUtils(t *testing.T) {
 }
 
 func setupGitRepo(root string) {
-	os.MkdirAll(filepath.Join(root, ".git", "info"), 0755)
+	cmd := exec.Command("git", "init", "-q")
+	cmd.Dir = root
+	Expect(cmd.Run()).To(Succeed())
 }
 
 func collectPaths(root string, allowList ...string) ([]string, error) {
@@ -421,6 +424,9 @@ var _ = Describe("FilterGitIgnored", func() {
 
 	BeforeEach(func() {
 		root = GinkgoT().TempDir()
+		GinkgoT().Setenv("HOME", GinkgoT().TempDir())
+		GinkgoT().Setenv("XDG_CONFIG_HOME", GinkgoT().TempDir())
+		GinkgoT().Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
 	})
 
 	It("filters paths matching gitignore patterns", func() {
@@ -432,7 +438,8 @@ var _ = Describe("FilterGitIgnored", func() {
 			filepath.Join(root, "vendor", "dep.go"),
 			filepath.Join(root, "debug.log"),
 		}
-		result := FilterGitIgnored(paths, root)
+		result, err := FilterGitIgnored(paths, root)
+		Expect(err).NotTo(HaveOccurred())
 		Expect(result).To(ConsistOf(filepath.Join(root, "main.go")))
 	})
 
@@ -441,7 +448,8 @@ var _ = Describe("FilterGitIgnored", func() {
 			filepath.Join(root, "a.go"),
 			filepath.Join(root, "b.go"),
 		}
-		result := FilterGitIgnored(paths, root)
+		result, err := FilterGitIgnored(paths, root)
+		Expect(err).NotTo(HaveOccurred())
 		Expect(result).To(Equal(paths))
 	})
 
@@ -457,7 +465,8 @@ var _ = Describe("FilterGitIgnored", func() {
 			filepath.Join(root, "sub", "code.go"),
 			filepath.Join(root, "sub", "build", "out.bin"),
 		}
-		result := FilterGitIgnored(paths, root)
+		result, err := FilterGitIgnored(paths, root)
+		Expect(err).NotTo(HaveOccurred())
 		Expect(result).To(ConsistOf(
 			filepath.Join(root, "main.go"),
 			filepath.Join(root, "sub", "code.go"),
@@ -472,7 +481,8 @@ var _ = Describe("FilterGitIgnored", func() {
 			filepath.Join(root, "main.go"),
 			filepath.Join(root, "secret", "key.pem"),
 		}
-		result := FilterGitIgnored(paths, root)
+		result, err := FilterGitIgnored(paths, root)
+		Expect(err).NotTo(HaveOccurred())
 		Expect(result).To(ConsistOf(filepath.Join(root, "main.go")))
 	})
 
@@ -484,7 +494,8 @@ var _ = Describe("FilterGitIgnored", func() {
 			filepath.Join(root, "debug.log"),
 			filepath.Join(root, "error.log"),
 		}
-		result := FilterGitIgnored(paths, root)
+		result, err := FilterGitIgnored(paths, root)
+		Expect(err).NotTo(HaveOccurred())
 		Expect(result).To(BeEmpty())
 	})
 })
@@ -494,6 +505,9 @@ var _ = Describe("PartitionGitIgnored", func() {
 
 	BeforeEach(func() {
 		root = GinkgoT().TempDir()
+		GinkgoT().Setenv("HOME", GinkgoT().TempDir())
+		GinkgoT().Setenv("XDG_CONFIG_HOME", GinkgoT().TempDir())
+		GinkgoT().Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
 	})
 
 	It("splits kept and ignored, honoring !-negation", func() {
@@ -505,7 +519,8 @@ var _ = Describe("PartitionGitIgnored", func() {
 			filepath.Join(root, "dist", "bundle.js"),
 			filepath.Join(root, "dist", "keep.js"),
 		}
-		kept, ignored := PartitionGitIgnored(paths, root)
+		kept, ignored, err := PartitionGitIgnored(paths, root)
+		Expect(err).NotTo(HaveOccurred())
 		Expect(kept).To(ConsistOf(
 			filepath.Join(root, "src", "main.go"),
 			filepath.Join(root, "dist", "keep.js"),
@@ -513,11 +528,37 @@ var _ = Describe("PartitionGitIgnored", func() {
 		Expect(ignored).To(ConsistOf(filepath.Join(root, "dist", "bundle.js")))
 	})
 
+	It("uses native Git's global excludes for supplied paths", func() {
+		home := GinkgoT().TempDir()
+		xdg := filepath.Join(home, "xdg")
+		GinkgoT().Setenv("HOME", home)
+		GinkgoT().Setenv("XDG_CONFIG_HOME", xdg)
+		Expect(os.MkdirAll(filepath.Join(xdg, "git"), 0o755)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(xdg, "git", "ignore"), []byte("*.scratch\n"), 0o644)).To(Succeed())
+		setupGitRepo(root)
+
+		paths := []string{
+			filepath.Join(root, "main.go"),
+			filepath.Join(root, "notes.scratch"),
+		}
+		kept, ignored, err := PartitionGitIgnored(paths, root)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(kept).To(Equal(paths[:1]))
+		Expect(ignored).To(Equal(paths[1:]))
+	})
+
 	It("keeps everything and reports nothing ignored without a git root", func() {
 		paths := []string{filepath.Join(root, "a.go"), filepath.Join(root, "b.go")}
-		kept, ignored := PartitionGitIgnored(paths, root)
+		kept, ignored, err := PartitionGitIgnored(paths, root)
+		Expect(err).NotTo(HaveOccurred())
 		Expect(kept).To(Equal(paths))
 		Expect(ignored).To(BeEmpty())
+	})
+
+	It("returns native Git errors for an invalid work directory", func() {
+		missing := filepath.Join(root, "missing")
+		_, _, err := PartitionGitIgnored([]string{filepath.Join(missing, "file.go")}, missing)
+		Expect(err).To(HaveOccurred())
 	})
 })
 
