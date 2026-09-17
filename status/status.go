@@ -8,6 +8,7 @@ import (
 
 	rpchttp "github.com/flanksource/clicky/rpc/http"
 	"github.com/flanksource/gavel/internal/prompting"
+	"github.com/flanksource/gavel/verify"
 	"github.com/flanksource/repomap"
 )
 
@@ -144,6 +145,10 @@ func GatherBase(workDir string, opts Options) (*Result, error) {
 	if workDir == "" {
 		return nil, errors.New("status.GatherBase: workDir is required")
 	}
+	cfg, err := verify.LoadGavelConfig(workDir)
+	if err != nil {
+		return nil, fmt.Errorf("load Gavel config for project status: %w", err)
+	}
 	ctx := opts.Context
 	if ctx == nil {
 		ctx = context.Background()
@@ -154,7 +159,7 @@ func GatherBase(workDir string, opts Options) (*Result, error) {
 		return nil, err
 	}
 
-	raw, err := runGitStatus(ctx, workDir)
+	raw, err := runGitStatus(ctx, workDir, len(cfg.Commit.GitIgnore) > 0)
 	if err != nil {
 		return nil, err
 	}
@@ -166,8 +171,15 @@ func GatherBase(workDir string, opts Options) (*Result, error) {
 	files = filterGavelCache(files)
 	files = filterByFolder(files, opts.FolderFilter)
 	stopFile := rpchttp.Track(ctx, "file")
-	files = filterGitIgnored(files, workDir)
+	files, err = filterGitIgnored(files, workDir)
 	stopFile()
+	if err != nil {
+		return nil, err
+	}
+	files, err = filterCommitIgnored(files, cfg.Commit)
+	if err != nil {
+		return nil, err
+	}
 
 	if err := enrichWithLineCounts(ctx, workDir, files); err != nil {
 		return nil, err

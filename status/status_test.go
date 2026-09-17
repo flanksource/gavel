@@ -302,6 +302,7 @@ func pathsOf(files []FileStatus) []string {
 
 func initStatusRepo(t *testing.T) string {
 	t.Helper()
+	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	gitRun(t, dir, "init")
 	gitRun(t, dir, "config", "user.email", "test@example.com")

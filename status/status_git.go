@@ -5,20 +5,26 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	rpchttp "github.com/flanksource/clicky/rpc/http"
-	"github.com/flanksource/gavel/utils"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
+
+	rpchttp "github.com/flanksource/clicky/rpc/http"
+	"github.com/flanksource/gavel/utils"
+	"github.com/flanksource/gavel/verify"
 )
 
-func runGitStatus(ctx context.Context, workDir string) ([]byte, error) {
+func runGitStatus(ctx context.Context, workDir string, expandUntracked bool) ([]byte, error) {
 	stopGit := rpchttp.Track(ctx, "git")
 	defer stopGit()
-	cmd := exec.CommandContext(ctx, "git", "status", "--porcelain=v1", "-z")
+	args := []string{"status", "--porcelain=v1", "-z"}
+	if expandUntracked {
+		args = append(args, "--untracked-files=all")
+	}
+	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = workDir
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
@@ -118,28 +124,50 @@ func filterByFolder(files []FileStatus, prefix string) []FileStatus {
 // but ignored bundles (e.g. testrunner/ui/dist/testui.js) don't surface as
 // modifications. Staged files are kept regardless: what status shows then
 // matches what `gavel commit` will commit, and a manually `git add`-ed ignored
-// file stays visible. A !-negation in .gitignore re-includes a path.
-func filterGitIgnored(files []FileStatus, workDir string) []FileStatus {
+// file stays visible. A !-negation in Git's ignore rules re-includes a path.
+func filterGitIgnored(files []FileStatus, workDir string) ([]FileStatus, error) {
 	paths := make([]string, len(files))
 	for i, f := range files {
 		paths[i] = filepath.Join(workDir, f.Path)
 	}
-	_, ignored := utils.PartitionGitIgnored(paths, workDir)
-	if len(ignored) == 0 {
-		return files
+	ignored, err := utils.GitIgnoredPaths(paths, workDir)
+	if err != nil {
+		return nil, fmt.Errorf("check ignored project files: %w", err)
 	}
-	ignoredSet := make(map[string]struct{}, len(ignored))
-	for _, p := range ignored {
-		ignoredSet[p] = struct{}{}
+	if len(ignored) == 0 {
+		return files, nil
 	}
 	out := files[:0]
 	for i, f := range files {
-		_, isIgnored := ignoredSet[paths[i]]
+		_, isIgnored := ignored[paths[i]]
 		if !isIgnored || f.State == StateStaged || f.State == StateBoth || f.State == StateConflict {
 			out = append(out, f)
 		}
 	}
-	return out
+	return out, nil
+}
+
+func filterCommitIgnored(files []FileStatus, cfg verify.CommitConfig) ([]FileStatus, error) {
+	paths := make([]string, len(files))
+	for i, file := range files {
+		paths[i] = file.Path
+	}
+	matches, err := verify.MatchCommitIgnoreFiles(paths, cfg.GitIgnore, cfg.Allow)
+	if err != nil {
+		return nil, fmt.Errorf("evaluate .gavel.yaml commit.gitignore: %w", err)
+	}
+	ignored := make(map[string]struct{}, len(matches))
+	for _, match := range matches {
+		ignored[match.File] = struct{}{}
+	}
+	out := files[:0]
+	for _, file := range files {
+		_, blocked := ignored[file.Path]
+		if !blocked || file.State == StateStaged || file.State == StateBoth || file.State == StateConflict {
+			out = append(out, file)
+		}
+	}
+	return out, nil
 }
 
 func splitNullDelimited(raw []byte) []string {
