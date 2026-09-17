@@ -95,57 +95,15 @@ var (
 // Returns an error when any pattern or allow entry is whitespace-only, so the
 // caller sees a loud failure instead of a silently-discarded rule.
 func EvaluateGitIgnoreMatches(stagedFiles, patterns, allow []string) ([]Violation, error) {
-	if len(stagedFiles) == 0 || len(patterns) == 0 {
-		return nil, nil
-	}
-
-	blockers, err := parsePatterns(patterns, "commit.gitignore")
+	matches, err := verify.MatchCommitIgnoreFiles(stagedFiles, patterns, allow)
 	if err != nil {
 		return nil, err
 	}
-	allowMatchers, err := parsePatterns(allow, "commit.allow")
-	if err != nil {
-		return nil, err
-	}
-	allowMatcher := gitignore.NewMatcher(allowMatchers)
-	// Evaluate commit.gitignore as one matcher so `!` negation lines interact
-	// with earlier patterns the way real .gitignore does (a lone per-pattern
-	// matcher can never let a `!` line rescue a file, silently dropping the
-	// rule). The commit.allow list stays a separate, additional exemption.
-	blockMatcher := gitignore.NewMatcher(blockers)
-
-	var violations []Violation
-	for _, file := range stagedFiles {
-		parts := splitGitPath(file)
-		if allowMatcher.Match(parts, false) {
-			continue
-		}
-		if !blockMatcher.Match(parts, false) {
-			continue
-		}
-		violations = append(violations, Violation{
-			File:    file,
-			Pattern: firstBlockingPattern(blockers, patterns, parts),
-		})
+	violations := make([]Violation, 0, len(matches))
+	for _, match := range matches {
+		violations = append(violations, Violation{File: match.File, Pattern: match.Pattern})
 	}
 	return violations, nil
-}
-
-// firstBlockingPattern returns the raw text of the first positive pattern that
-// matches parts, for display in the prompt/label. Negation (`!`) patterns never
-// match in isolation, so they are naturally skipped; a file only reaches here
-// after the whole-list matcher already ruled it ignored, so a positive match
-// exists.
-func firstBlockingPattern(blockers []gitignore.Pattern, raw []string, parts []string) string {
-	for i, p := range blockers {
-		if p == nil {
-			continue
-		}
-		if gitignore.NewMatcher([]gitignore.Pattern{p}).Match(parts, false) {
-			return raw[i]
-		}
-	}
-	return ""
 }
 
 func parsePatterns(raw []string, field string) ([]gitignore.Pattern, error) {

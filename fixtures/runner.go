@@ -26,7 +26,10 @@ type RunnerOptions struct {
 	Filter         string   // Filter tests by name pattern (glob)
 	NoColor        bool     // Disable colored output
 	WorkDir        string   // Working directory
-	MaxWorkers     int      // Maximum number of parallel workers
+	// MaxWorkers caps how many fixture rows run at once. Zero means 1: rows
+	// shell out to real binaries against shared databases, files and ports, so
+	// parallelism is opt-in rather than the default.
+	MaxWorkers int
 	Logger         logger.Logger
 	ExecutablePath string                                                // Path to the current executable (for fixtures to use)
 	ProgressSink   ProgressSink                                          // Receives immutable execution-tree snapshots
@@ -299,8 +302,11 @@ func (r *Runner) executeFixtures() (*FixtureGroup, error) {
 	}
 	defer r.closeRecorders()
 
-	// Create typed task group for fixture execution
-	fixtureGroup := task.StartGroup[FixtureResult]("Fixture Tests")
+	// Create typed task group for fixture execution. The group's own semaphore
+	// is the only thing that bounds a row's concurrency — the manager's worker
+	// pool is process-wide and already sized — so MaxWorkers has to arrive here
+	// as WithConcurrency or it bounds nothing at all.
+	fixtureGroup := task.StartGroup[FixtureResult]("Fixture Tests", task.WithConcurrency(r.maxWorkers()))
 
 	r.tree.Walk(func(node *FixtureNode) {
 		if node.Test != nil {

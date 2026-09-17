@@ -45,7 +45,7 @@ func runFixtures(cmd *cobra.Command, args []string) error {
 		Format:         clicky.Flags.ResolveFormat(),
 		NoColor:        clicky.Flags.NoColor,
 		WorkDir:        wd,
-		MaxWorkers:     clicky.Flags.MaxConcurrent,
+		MaxWorkers:     fixtureMaxWorkers(cmd),
 		Logger:         logger.StandardLogger(),
 		ExecutablePath: executablePath,
 		UpdateGolden:   fixturesUpdateGolden,
@@ -78,4 +78,16 @@ func runFixtures(cmd *cobra.Command, args []string) error {
 		}
 	}
 	return runErr
+}
+
+// fixtureMaxWorkers resolves fixture parallelism from --max-concurrent, but only
+// when it was actually typed. That flag is clicky's process-wide task default
+// (4); inheriting it silently would make `gavel fixtures run` parallel while
+// `gavel test` runs the same files serially, which is how a suite pinned to one
+// worker ends up racing depending on which entry point invoked it.
+func fixtureMaxWorkers(cmd *cobra.Command) int {
+	if cmd.Flags().Changed("max-concurrent") {
+		return clicky.Flags.MaxConcurrent
+	}
+	return 0
 }

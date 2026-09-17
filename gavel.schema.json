@@ -656,6 +656,12 @@
         "approvalTimeout": {
           "type": "string"
         },
+        "directories": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "mcp": {
           "$ref": "#/$defs/MCP"
         },
@@ -1079,6 +1085,12 @@
         "interrupt": {
           "type": "boolean"
         },
+        "labels": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
         "mediaTypes": {
           "items": {
             "type": "string"
@@ -1437,6 +1449,12 @@
         },
         "interrupt": {
           "type": "boolean"
+        },
+        "labels": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
         },
         "mediaTypes": {
           "items": {
@@ -1902,8 +1920,7 @@
           "description": "Controls whether `gavel commit` runs `go mod tidy` in every Go module and stages the resulting go.mod/go.sum changes. CLI flag --tidy overrides per invocation.",
           "properties": {
             "enabled": {
-              "default": true,
-              "description": "Toggle the tidy step. Omit to keep on.",
+              "description": "Toggle the tidy step. Omit to run it only when pushing (`gavel commit -p`).",
               "type": "boolean"
             }
           },
@@ -2640,6 +2657,13 @@
               "description": "Catalog model slug for this operation (e.g. claude-haiku-4-5). Overrides the base ai.model.",
               "type": "string"
             },
+            "presets": {
+              "description": "Ordered runtime preset catalog IDs or names pinned by this operation. Omitted inherits the configured default.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
             "prompt": {
               "additionalProperties": false,
               "description": "The prompt body. A bare string in place of the whole spec is shorthand for prompt.user.",
@@ -2656,7 +2680,8 @@
               "type": "object"
             },
             "runtimeProfile": {
-              "description": "Runtime profile catalog ID or name for this operation. Omitted inherits the configured default.",
+              "deprecated": true,
+              "description": "Deprecated and ignored. Use presets.",
               "type": "string"
             },
             "workflow": {
@@ -2669,6 +2694,13 @@
             "object"
           ],
           "x-prompt-id": "todos.plan"
+        },
+        "presets": {
+          "description": "Ordered runtime preset catalog IDs or names used by default for TODO lifecycle steps. A prompt pin or request selection overrides them.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "run": {
           "additionalProperties": false,
@@ -2721,6 +2753,13 @@
               "description": "Catalog model slug for this operation (e.g. claude-haiku-4-5). Overrides the base ai.model.",
               "type": "string"
             },
+            "presets": {
+              "description": "Ordered runtime preset catalog IDs or names pinned by this operation. Omitted inherits the configured default.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
             "prompt": {
               "additionalProperties": false,
               "description": "The prompt body. A bare string in place of the whole spec is shorthand for prompt.user.",
@@ -2737,7 +2776,8 @@
               "type": "object"
             },
             "runtimeProfile": {
-              "description": "Runtime profile catalog ID or name for this operation. Omitted inherits the configured default.",
+              "deprecated": true,
+              "description": "Deprecated and ignored. Use presets.",
               "type": "string"
             },
             "workflow": {
@@ -2752,7 +2792,8 @@
           "x-prompt-id": "todos.run"
         },
         "runtimeProfile": {
-          "description": "Default runtime profile catalog ID or name for TODO lifecycle steps. A step or request profile overrides it.",
+          "deprecated": true,
+          "description": "Deprecated and ignored. Use presets.",
           "type": "string"
         },
         "steps": {
@@ -2790,6 +2831,12 @@
               "interrupt": {
                 "type": "boolean"
               },
+              "labels": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
               "mediaTypes": {
                 "items": {
                   "type": "string"
@@ -2824,6 +2871,13 @@
               "permissions": {
                 "$ref": "#/$defs/Permissions"
               },
+              "presets": {
+                "description": "Ordered runtime preset catalog IDs or names pinned by this operation. Omitted inherits the configured default.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
               "prompt": {
                 "$ref": "#/$defs/Prompt"
               },
@@ -2831,7 +2885,8 @@
                 "type": "boolean"
               },
               "runtimeProfile": {
-                "description": "Runtime profile catalog ID or name for this operation. Omitted inherits the configured default.",
+                "deprecated": true,
+                "description": "Deprecated and ignored. Use presets.",
                 "type": "string"
               },
               "sandbox": {
@@ -2928,6 +2983,13 @@
               "description": "Catalog model slug for this operation (e.g. claude-haiku-4-5). Overrides the base ai.model.",
               "type": "string"
             },
+            "presets": {
+              "description": "Ordered runtime preset catalog IDs or names pinned by this operation. Omitted inherits the configured default.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
             "prompt": {
               "additionalProperties": false,
               "description": "The prompt body. A bare string in place of the whole spec is shorthand for prompt.user.",
@@ -2944,7 +3006,8 @@
               "type": "object"
             },
             "runtimeProfile": {
-              "description": "Runtime profile catalog ID or name for this operation. Omitted inherits the configured default.",
+              "deprecated": true,
+              "description": "Deprecated and ignored. Use presets.",
               "type": "string"
             },
             "workflow": {
@@ -2992,6 +3055,12 @@
             "interrupt": {
               "type": "boolean"
             },
+            "labels": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
             "mediaTypes": {
               "items": {
                 "type": "string"
@@ -3026,6 +3095,13 @@
             "permissions": {
               "$ref": "#/$defs/Permissions"
             },
+            "presets": {
+              "description": "Ordered runtime preset catalog IDs or names pinned by this operation. Omitted inherits the configured default.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
             "prompt": {
               "$ref": "#/$defs/Prompt"
             },
@@ -3033,7 +3109,8 @@
               "type": "boolean"
             },
             "runtimeProfile": {
-              "description": "Runtime profile catalog ID or name for this operation. Omitted inherits the configured default.",
+              "deprecated": true,
+              "description": "Deprecated and ignored. Use presets.",
               "type": "string"
             },
             "sandbox": {

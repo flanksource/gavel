@@ -42,7 +42,12 @@ type PromptSpec struct {
 	Spec api.Spec `json:",inline" yaml:",inline"`
 	// File is a path to a .prompt file. Relative paths resolve against the
 	// directory of the .gavel.yaml that declared this override.
-	File           string `json:"file,omitempty" yaml:"file,omitempty"`
+	File string `json:"file,omitempty" yaml:"file,omitempty"`
+	// Presets are ordered runtime layers pinned by this prompt configuration.
+	Presets    []string `json:"presets,omitempty" yaml:"presets,omitempty"`
+	PresetsSet bool     `json:"-" yaml:"-"`
+	// RuntimeProfile is retained during the deprecation window. Runtime
+	// resolution warns and ignores it.
 	RuntimeProfile string `json:"runtimeProfile,omitempty" yaml:"runtimeProfile,omitempty"`
 
 	// baseDir is populated by the config loader and survives layered merges. It is
@@ -54,7 +59,7 @@ type PromptSpec struct {
 // file and no spec field of any kind. The spec half is answered reflectively by
 // captain, so a field added to api.Spec counts immediately.
 func (s PromptSpec) IsEmpty() bool {
-	return s.File == "" && s.RuntimeProfile == "" && api.IsEmpty(s.Spec)
+	return s.File == "" && !s.PresetsSet && s.Presets == nil && s.RuntimeProfile == "" && api.IsEmpty(s.Spec)
 }
 
 func (PromptSpec) DecodeFields() any {
@@ -70,12 +75,19 @@ func (PromptSpec) DecodeFields() any {
 // on every PromptSpec it decodes — set or not — so the two must move together or
 // an inherited file would be resolved against the overriding layer's directory.
 func (s PromptSpec) Merge(override PromptSpec) PromptSpec {
-	merged := PromptSpec{Spec: s.Spec.Merge(override.Spec), File: s.File, RuntimeProfile: s.RuntimeProfile, baseDir: s.baseDir}
+	merged := PromptSpec{
+		Spec: s.Spec.Merge(override.Spec), File: s.File, Presets: append([]string(nil), s.Presets...),
+		PresetsSet: s.PresetsSet, RuntimeProfile: s.RuntimeProfile, baseDir: s.baseDir,
+	}
 	if override.File != "" {
 		merged.File, merged.baseDir = override.File, override.baseDir
 	}
 	if override.RuntimeProfile != "" {
 		merged.RuntimeProfile = override.RuntimeProfile
+	}
+	if override.PresetsSet || override.Presets != nil {
+		merged.Presets = append([]string(nil), override.Presets...)
+		merged.PresetsSet = true
 	}
 	return merged
 }
@@ -109,7 +121,9 @@ func (s *PromptSpec) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(trimmed, &fields); err != nil {
 		return err
 	}
+	_, presetsSet := fields["presets"]
 	delete(fields, "file")
+	delete(fields, "presets")
 	delete(fields, "runtimeProfile")
 	specData, err := json.Marshal(fields)
 	if err != nil {
@@ -119,13 +133,14 @@ func (s *PromptSpec) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	var file struct {
-		File           string `json:"file"`
-		RuntimeProfile string `json:"runtimeProfile"`
+		File           string   `json:"file"`
+		Presets        []string `json:"presets"`
+		RuntimeProfile string   `json:"runtimeProfile"`
 	}
 	if err := json.Unmarshal(trimmed, &file); err != nil {
 		return err
 	}
-	*s = PromptSpec{Spec: spec, File: file.File, RuntimeProfile: file.RuntimeProfile}
+	*s = PromptSpec{Spec: spec, File: file.File, Presets: file.Presets, PresetsSet: presetsSet, RuntimeProfile: file.RuntimeProfile}
 	return nil
 }
 
@@ -157,6 +172,13 @@ func (s PromptSpec) MarshalJSON() ([]byte, error) {
 		}
 		flat[key] = encoded
 	}
+	if s.PresetsSet || s.Presets != nil {
+		encoded, err := json.Marshal(s.Presets)
+		if err != nil {
+			return nil, fmt.Errorf("marshal prompt presets: %w", err)
+		}
+		flat["presets"] = encoded
+	}
 	return json.Marshal(flat)
 }
 
@@ -177,7 +199,10 @@ func (s *PromptSpec) adoptString(str string) error {
 		if spec.Prompt.User == "" {
 			spec.Prompt.User = doc.Body
 		}
-		*s = PromptSpec{Spec: spec, RuntimeProfile: doc.RuntimeProfile}
+		*s = PromptSpec{
+			Spec: spec, Presets: append([]string(nil), doc.Presets...), PresetsSet: doc.PresetsSet,
+			RuntimeProfile: doc.RuntimeProfile,
+		}
 	default:
 		*s = PromptSpec{Spec: api.Spec{Prompt: api.Prompt{User: str}}}
 	}
@@ -329,5 +354,8 @@ func RenderPromptSpec(source string, data map[string]any, opts PromptSpecOptions
 	if err != nil {
 		return PromptSpec{}, err
 	}
-	return PromptSpec{Spec: api.Spec(req), RuntimeProfile: doc.RuntimeProfile}, nil
+	return PromptSpec{
+		Spec: api.Spec(req), Presets: append([]string(nil), doc.Presets...), PresetsSet: doc.PresetsSet,
+		RuntimeProfile: doc.RuntimeProfile,
+	}, nil
 }
