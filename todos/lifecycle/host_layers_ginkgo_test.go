@@ -278,10 +278,9 @@ var _ = Describe("todo spec layers", func() {
 			Expect(spec.Permissions.Mode).To(Equal(api.PermissionDontAsk))
 		})
 
-		It("keeps the CLI host out of the prompt's declared posture", func() {
+		It("runs the prompt's declared posture when the request names none", func() {
 			in := runLayerInput(verify.GavelConfig{},
 				api.Spec{Permissions: api.Permissions{Mode: api.PermissionAcceptEdits}}, api.Spec{})
-			in.Host = lifecycle.HostCLI
 
 			resolved, err := lifecycle.ResolveLayers(in)
 
@@ -289,26 +288,17 @@ var _ = Describe("todo spec layers", func() {
 			Expect(resolved.Spec.Permissions.Mode).To(Equal(api.PermissionAcceptEdits))
 		})
 
-		It("puts the dashboard host on permissions.mode default so the broker is consulted", func() {
+		It("lets the run dialog's permissions.mode override the declared posture", func() {
 			in := runLayerInput(verify.GavelConfig{},
-				api.Spec{Permissions: api.Permissions{Mode: api.PermissionAcceptEdits}}, api.Spec{})
-			in.Host = lifecycle.HostDashboard
+				api.Spec{Permissions: api.Permissions{Mode: api.PermissionAcceptEdits}},
+				api.Spec{Permissions: api.Permissions{Mode: api.PermissionDefault}})
 
 			resolved, err := lifecycle.ResolveLayers(in)
 
 			Expect(err).ToNot(HaveOccurred())
 			Expect(resolved.Spec.Permissions.Mode).To(Equal(api.PermissionDefault))
-		})
-
-		It("still lets the request override the dashboard's posture", func() {
-			in := runLayerInput(verify.GavelConfig{}, api.Spec{},
-				api.Spec{Permissions: api.Permissions{Mode: api.PermissionPlan}})
-			in.Host = lifecycle.HostDashboard
-
-			resolved, err := lifecycle.ResolveLayers(in)
-
-			Expect(err).ToNot(HaveOccurred())
-			Expect(resolved.Spec.Permissions.Mode).To(Equal(api.PermissionPlan))
+			Expect(resolved.Provenance).To(HaveKeyWithValue("/permissions/mode",
+				HaveField("Source.Name", "request")))
 		})
 
 		// The regression: an approval-capable host used to rewrite the tool map to
@@ -316,9 +306,9 @@ var _ = Describe("todo spec layers", func() {
 		// the policy gate instead of prompting. Approval is a permission MODE plus a
 		// broker now, never a per-tool policy.
 		DescribeTable("never emits a per-tool ask on any layer",
-			func(host lifecycle.HostKind, step string, cfg verify.GavelConfig, front api.Spec, request api.Spec) {
+			func(step string, cfg verify.GavelConfig, front api.Spec, request api.Spec) {
 				in := lifecycle.LayerInput{
-					Config: cfg, Step: step, Host: host, Request: request,
+					Config: cfg, Step: step, Request: request,
 					Frontmatter: []api.SpecLayer{api.PromptSpecLayer("todos-"+step+".prompt", front)},
 					Todos:       []*types.TODO{{TODOFrontmatter: types.TODOFrontmatter{Title: "t", LLM: &types.LLM{Model: "opus"}}}},
 				}
@@ -331,12 +321,11 @@ var _ = Describe("todo spec layers", func() {
 				Expect(err).ToNot(HaveOccurred())
 				Expect(askPolicies(resolved.Spec.Permissions)).To(BeEmpty())
 			},
-			Entry("cli run", lifecycle.HostCLI, "run", verify.GavelConfig{}, api.Spec{}, api.Spec{}),
-			Entry("dashboard run", lifecycle.HostDashboard, "run", verify.GavelConfig{}, api.Spec{}, api.Spec{}),
-			Entry("dashboard plan", lifecycle.HostDashboard, "plan", verify.GavelConfig{}, api.Spec{}, api.Spec{}),
-			Entry("dashboard verify", lifecycle.HostDashboard, "verify", verify.GavelConfig{}, api.Spec{}, api.Spec{}),
-			Entry("dashboard run with an allowlist",
-				lifecycle.HostDashboard, "run", verify.GavelConfig{},
+			Entry("run", "run", verify.GavelConfig{}, api.Spec{}, api.Spec{}),
+			Entry("plan", "plan", verify.GavelConfig{}, api.Spec{}, api.Spec{}),
+			Entry("verify", "verify", verify.GavelConfig{}, api.Spec{}, api.Spec{}),
+			Entry("run with an allowlist",
+				"run", verify.GavelConfig{},
 				api.Spec{Permissions: api.Permissions{Tools: api.ToolsFromLists([]string{"Read", "Edit"}, nil)}},
 				api.Spec{}),
 		)
@@ -356,21 +345,28 @@ var _ = Describe("todo spec layers", func() {
 			Expect(resolved.Spec.Budget.MaxTurns).To(Equal(5))
 		})
 
-		It("yields to the host's posture and to the caller's own request", func() {
-			in := runLayerInput(verify.GavelConfig{}, api.Spec{},
-				api.Spec{Budget: api.Budget{MaxTurns: 2}})
-			in.Host = lifecycle.HostDashboard
-			in.Prior = []api.SpecLayer{api.RequestSpecLayer("prior run", api.Spec{
+		It("inherits the prior run's posture unless the caller's request names one", func() {
+			prior := []api.SpecLayer{api.RequestSpecLayer("prior run", api.Spec{
 				Budget:      api.Budget{MaxTurns: 5},
 				Permissions: api.Permissions{Mode: api.PermissionBypass},
 			})}
+			inherited := runLayerInput(verify.GavelConfig{},
+				api.Spec{Permissions: api.Permissions{Mode: api.PermissionAcceptEdits}},
+				api.Spec{Budget: api.Budget{MaxTurns: 2}})
+			inherited.Prior = prior
+			overridden := runLayerInput(verify.GavelConfig{},
+				api.Spec{Permissions: api.Permissions{Mode: api.PermissionAcceptEdits}},
+				api.Spec{Permissions: api.Permissions{Mode: api.PermissionDefault}})
+			overridden.Prior = prior
 
-			resolved, err := lifecycle.ResolveLayers(in)
-
+			fromPrior, err := lifecycle.ResolveLayers(inherited)
 			Expect(err).ToNot(HaveOccurred())
-			Expect(resolved.Spec.Budget.MaxTurns).To(Equal(2))
-			Expect(resolved.Spec.Permissions.Mode).To(Equal(api.PermissionDefault),
-				"a continuation runs where it is continued from, not where it started")
+			fromRequest, err := lifecycle.ResolveLayers(overridden)
+			Expect(err).ToNot(HaveOccurred())
+
+			Expect(fromPrior.Spec.Budget.MaxTurns).To(Equal(2))
+			Expect(fromPrior.Spec.Permissions.Mode).To(Equal(api.PermissionBypass))
+			Expect(fromRequest.Spec.Permissions.Mode).To(Equal(api.PermissionDefault))
 		})
 
 		It("contributes no layer when the prior run configured nothing", func() {
@@ -390,7 +386,6 @@ var _ = Describe("todo spec layers", func() {
 			in := runLayerInput(cfg, api.Spec{Budget: api.Budget{MaxTokens: 10}},
 				api.Spec{Model: api.Model{Effort: api.EffortHigh}})
 			in.StepSpec = api.Spec{Permissions: api.Permissions{Mode: api.PermissionAcceptEdits}}
-			in.Host = lifecycle.HostDashboard
 			in.Todos = []*types.TODO{{TODOFrontmatter: types.TODOFrontmatter{Title: "widen", LLM: &types.LLM{MaxCost: 2}}}}
 
 			Expect(layerNames(in)).To(Equal([]string{
@@ -400,7 +395,6 @@ var _ = Describe("todo spec layers", func() {
 				"lifecycle step run",
 				".gavel.yaml todos.run",
 				"todo widen",
-				"host dashboard",
 				"request",
 			}))
 		})
@@ -408,7 +402,7 @@ var _ = Describe("todo spec layers", func() {
 		It("omits a layer that configures nothing", func() {
 			Expect(layerNames(runLayerInput(verify.GavelConfig{}, api.Spec{}, api.Spec{}))).To(
 				Equal([]string{".gavel.yaml ai", "todos-run.prompt"}),
-				"an empty todos.timeout, lifecycle step, todos.<step>, todo llm:, host and request contribute no layer")
+				"an empty todos.timeout, lifecycle step, todos.<step>, todo llm: and request contribute no layer")
 		})
 
 		It("records the resolved order as captain's trace", func() {

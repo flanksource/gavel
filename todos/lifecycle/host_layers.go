@@ -12,19 +12,17 @@ import (
 	"github.com/flanksource/gavel/verify"
 )
 
-// HostKind is the entrypoint a run was started from. It decides one thing —
-// the permission posture the host itself contributes — and it is a layer like
-// any other rather than a flag threaded through the executor, so a host cannot
-// quietly rewrite a posture the prompt already declared.
+// HostKind is the entrypoint a run was started from. It contributes no spec
+// layer: every host runs the posture the layers declare, and only the caller's
+// own request — CLI flags or the run dialog's spec — may name a different one.
 type HostKind string
 
 const (
 	// HostCLI runs the prompt exactly as its frontmatter declares. The terminal
 	// answers nothing: an approval it raised would block until the timeout.
 	HostCLI HostKind = "cli"
-	// HostDashboard serves the approval endpoints, so it lowers the posture to
-	// `default` and attaches the durable broker. Every tool call it cannot
-	// pre-approve becomes a question a person can answer.
+	// HostDashboard serves the approval endpoints, so whatever the resolved
+	// posture still asks about becomes a question a person can answer.
 	HostDashboard HostKind = "dashboard"
 )
 
@@ -39,6 +37,7 @@ const DefaultTimeout = 30 * time.Minute
 type LayerInput struct {
 	Saved          *captainconfig.AIDefaults
 	RequireModel   bool
+	RuntimePresets PresetSelection
 	RuntimeProfile ProfileSelection
 	// Config is the merged .gavel.yaml: its `ai:` base and the `todos.*` section.
 	Config verify.GavelConfig
@@ -59,12 +58,9 @@ type LayerInput struct {
 	Todos []*types.TODO
 	// Prior are user-scope layers a continuation inherits from the run it
 	// continues: the spec that run was dispatched with, and the runtime it
-	// actually resolved. They sit below the host and the request, so continuing a
-	// run inherits how it ran without outranking where it is being continued from
-	// or what the caller now asks for.
+	// actually resolved. They sit below the request, so continuing a run inherits
+	// how it ran without outranking what the caller now asks for.
 	Prior []api.SpecLayer
-	// Host is the entrypoint; see HostKind.
-	Host HostKind
 	// Request is what the caller explicitly asked for: parsed CLI flags or the
 	// dashboard payload's spec. A knob the caller did not set must arrive zero or
 	// it beats the frontmatter it claims to defer to.
@@ -74,7 +70,7 @@ type LayerInput struct {
 // Layers returns the ordered spec layers, lowest precedence first:
 //
 //	.gavel.yaml ai:  <  todos.timeout  <  prompt frontmatter  <  lifecycle step
-//	<  .gavel.yaml todos.<step>  <  the todo's llm:  <  the host  <  the request
+//	<  .gavel.yaml todos.<step>  <  the todo's llm:  <  a prior run  <  the request
 //
 // Every layer supplies defaults and only defaults, todos.timeout included: it
 // is the deadline nothing above it names, not a cap on the ones that do. A
@@ -94,9 +90,6 @@ func Layers(in LayerInput) []api.SpecLayer {
 		if !api.IsEmpty(prior.Spec) {
 			layers = append(layers, prior)
 		}
-	}
-	if host, ok := hostLayer(in.Host); ok {
-		layers = append(layers, host)
 	}
 	if !api.IsEmpty(in.Request) {
 		layers = append(layers, api.RequestSpecLayer("request", in.Request))
@@ -150,7 +143,7 @@ func ResolveLayers(in LayerInput) (api.ResolvedSpec, error) {
 		return api.ResolvedSpec{}, &ConfigurationError{Err: err}
 	}
 	resolved, err := api.ResolveSpecLayers(api.ResolveSpecOptions{
-		Layers: RestrictHostPermissions(Layers(in)), Saved: in.Saved, RequireModel: in.RequireModel,
+		Layers: Layers(in), Saved: in.Saved, RequireModel: in.RequireModel,
 	})
 	return resolved, runtimeConfigurationError(err)
 }
@@ -165,6 +158,8 @@ func ResolveLayers(in LayerInput) (api.ResolvedSpec, error) {
 type PromptLayerResult struct {
 	Layers         []api.SpecLayer
 	Template       string
+	Presets        []string
+	PresetsSet     bool
 	RuntimeProfile string
 }
 
@@ -184,6 +179,8 @@ func PromptLayers(workDir string, todoList []*types.TODO, definition todoprompt.
 			return result, &ConfigurationError{Err: fmt.Errorf("render built-in %s prompt frontmatter: %w", definition.Name, err)}
 		}
 		result.Layers = append(result.Layers, api.PromptSpecLayer("todos-"+definition.Name+".prompt", spec.Spec))
+		result.Presets = append([]string(nil), spec.Presets...)
+		result.PresetsSet = spec.PresetsSet
 		result.RuntimeProfile = spec.RuntimeProfile
 	}
 	template, err := definition.Template(workDir)
@@ -196,6 +193,10 @@ func PromptLayers(workDir string, todoList []*types.TODO, definition todoprompt.
 			return result, &ConfigurationError{Err: fmt.Errorf("render todos.%s file frontmatter: %w", definition.Name, err)}
 		}
 		result.Layers = append(result.Layers, api.PromptSpecLayer("todos."+definition.Name+" file", spec.Spec))
+		if spec.PresetsSet {
+			result.Presets = append([]string(nil), spec.Presets...)
+			result.PresetsSet = true
+		}
 		if spec.RuntimeProfile != "" {
 			result.RuntimeProfile = spec.RuntimeProfile
 		}
@@ -280,26 +281,6 @@ func ValidateSpec(s api.Spec) error {
 // body written there is stripped like every other layer's.
 func stepSpec(cfg verify.TodosConfig, step string) api.Spec {
 	return withoutPromptBody(stepPromptSpec(cfg, step).Spec)
-}
-
-// hostLayer is the entrypoint's own contribution. Only the dashboard has one:
-// it can answer a tool approval, so it lowers the posture to `default` and
-// brokers what the mode then asks about.
-//
-// It is emphatically NOT a per-tool policy. `permissions.tools: {Bash: ask}` is
-// unenforceable on every runtime captain speaks — RequireToolPolicySupport
-// rejects it before the first model call — so a host that wrote one turned an
-// approval-gated run into a boundary error.
-func hostLayer(host HostKind) (api.SpecLayer, bool) {
-	if host != HostDashboard {
-		return api.SpecLayer{}, false
-	}
-	return api.SpecLayer{
-		Name:   "host " + string(host),
-		Source: api.SpecLayerSourceRequest,
-		Scope:  api.SpecLayerUser,
-		Spec:   api.Spec{Permissions: api.Permissions{Mode: api.PermissionDefault}},
-	}, true
 }
 
 // todoLayer projects a todo's `llm:` frontmatter onto a layer. Zero values

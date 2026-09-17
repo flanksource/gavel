@@ -103,7 +103,7 @@ func newHost(provider *fakeProvider) *lifecycle.Host {
 // done's acceptance-criteria grader: `.gavel.yaml todos.verify` over `ai:`.
 func graderFor(host *lifecycle.Host) api.Spec {
 	GinkgoHelper()
-	resolved, err := lifecycle.ResolveLayers(lifecycle.LayerInput{Config: host.Config, Step: lifecycle.StepVerify, Host: host.Kind})
+	resolved, err := lifecycle.ResolveLayers(lifecycle.LayerInput{Config: host.Config, Step: lifecycle.StepVerify})
 	Expect(err).NotTo(HaveOccurred())
 	return resolved.Spec
 }

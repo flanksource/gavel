@@ -18,13 +18,24 @@ type ProfileSelection struct {
 	Default   string
 }
 
+type PresetSelection struct {
+	Requested    []string
+	RequestedSet bool
+	Pinned       []string
+	PinnedSet    bool
+	Default      []string
+}
+
 func (h *Host) resolveProfileLayers(ctx context.Context, in LayerInput) (runtimeprofiles.ResolveResult, error) {
 	assembled, err := h.profileLayers(ctx, in)
 	if err != nil {
 		return runtimeprofiles.ResolveResult{}, err
 	}
 	resolved, err := api.ResolveSpecLayers(api.ResolveSpecOptions{Layers: assembled.Layers, Saved: h.savedDefaults(), RequireModel: in.RequireModel})
-	return runtimeprofiles.ResolveResult{Profile: assembled.Profile, Resolved: resolved}, runtimeConfigurationError(err)
+	resolved.Warnings = mergeRuntimeWarnings(resolved.Warnings, assembled.Warnings)
+	return runtimeprofiles.ResolveResult{
+		Presets: assembled.Presets, Profile: assembled.Profile, Warnings: assembled.Warnings, Resolved: resolved,
+	}, runtimeConfigurationError(err)
 }
 
 func (h *Host) profileLayers(ctx context.Context, in LayerInput) (runtimeprofiles.LayerResult, error) {
@@ -32,9 +43,14 @@ func (h *Host) profileLayers(ctx context.Context, in LayerInput) (runtimeprofile
 		return runtimeprofiles.LayerResult{}, &ConfigurationError{Err: err}
 	}
 	options := runtimeprofiles.ResolveOptions{
-		RequestedProfile: in.RuntimeProfile.Requested,
-		PinnedProfile:    in.RuntimeProfile.Pinned,
-		DefaultProfile:   in.RuntimeProfile.Default,
+		RequestedPresets:    in.RuntimePresets.Requested,
+		RequestedPresetsSet: in.RuntimePresets.RequestedSet,
+		PinnedPresets:       in.RuntimePresets.Pinned,
+		PinnedPresetsSet:    in.RuntimePresets.PinnedSet,
+		DefaultPresets:      in.RuntimePresets.Default,
+		RequestedProfile:    in.RuntimeProfile.Requested,
+		PinnedProfile:       in.RuntimeProfile.Pinned,
+		DefaultProfile:      in.RuntimeProfile.Default,
 	}
 	for _, layer := range Layers(in) {
 		switch layer.Scope {
@@ -53,7 +69,6 @@ func (h *Host) profileLayers(ctx context.Context, in LayerInput) (runtimeprofile
 		}
 		return runtimeprofiles.LayerResult{}, err
 	}
-	assembled.Layers = RestrictHostPermissions(assembled.Layers)
 	return assembled, nil
 }
 
@@ -87,6 +102,19 @@ func (h *Host) profileSelection(step string, requested, pinned string) ProfileSe
 		profile = h.Config.Todos.RuntimeProfile
 	}
 	return ProfileSelection{Requested: requested, Pinned: pinned, Default: profile}
+}
+
+func (h *Host) presetSelection(step string, requested []string, requestedSet bool, pinned []string, pinnedSet bool) PresetSelection {
+	configured := stepPromptSpec(h.Config.Todos, step)
+	defaults := configured.Presets
+	if !configured.PresetsSet && configured.Presets == nil {
+		defaults = h.Config.Todos.Presets
+	}
+	return PresetSelection{
+		Requested: append([]string(nil), requested...), RequestedSet: requestedSet,
+		Pinned: append([]string(nil), pinned...), PinnedSet: pinnedSet,
+		Default: append([]string(nil), defaults...),
+	}
 }
 
 func stepPromptSpec(cfg verify.TodosConfig, step string) verify.PromptSpec {

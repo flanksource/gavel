@@ -82,8 +82,10 @@ var _ = Describe("Host full-input preflight", func() {
 	})
 
 	It("rechecks the actual provider before admitting a previously resolved run", func() {
+		// The API mode ignores agent built-ins such as Bash, so the policy names a
+		// caller tool, which that runtime keeps and cannot filter.
 		resolution, err := host.Resolve(context.Background(), hostTodo(), stepNamed(host.Def, "plan"), lifecycle.RunOptions{
-			Request: api.Spec{Permissions: api.Permissions{Tools: api.Tools{"Bash": api.ToolPolicyDeny}}},
+			Request: api.Spec{Permissions: api.Permissions{Tools: api.Tools{"invoice_delete": api.ToolPolicyDeny}}},
 		})
 		Expect(err).NotTo(HaveOccurred())
 		agent := &apiPreflightProvider{scriptedProvider: &scriptedProvider{}}

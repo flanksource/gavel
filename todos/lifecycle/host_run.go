@@ -23,6 +23,8 @@ import (
 // RunOptions is what the caller decides about one step run; everything else
 // comes from the lifecycle, the project's configuration and the todo.
 type RunOptions struct {
+	Presets        []string
+	PresetsSet     bool
 	RuntimeProfile string
 	// Exec carries the run's logger, transcript and notification sink. Nil gets
 	// a plain context with the standard logger.
@@ -62,10 +64,14 @@ type StepOutcome struct {
 	Admission todos.RunPreparationResult
 	// Request is the spec the run was dispatched with.
 	Request api.Spec
+	// Source names who ran a turn gavel did not dispatch — "captain" for a turn
+	// resumed from Captain's session page. Empty for gavel's own runs.
+	Source string
 }
 
 // preparedStep is a step resolved down to one dispatchable request.
 type preparedStep struct {
+	runtimePresets *runtimeprofiles.PresetResolution
 	runtimeProfile *runtimeprofiles.Resolution
 	definition     todoprompt.Definition
 	class          types.RunMode
@@ -180,9 +186,10 @@ func (h *Host) prepare(ctx context.Context, todo *types.TODO, step Step, lc Cont
 	}
 	resolved, err := h.resolveProfileLayers(ctx, LayerInput{
 		RequireModel:   class != types.ModeVerify || len(todo.AcceptanceCriteria) > 0,
+		RuntimePresets: h.presetSelection(step.Name, opts.Presets, opts.PresetsSet, prompt.Presets, prompt.PresetsSet),
 		RuntimeProfile: h.profileSelection(step.Name, opts.RuntimeProfile, prompt.RuntimeProfile),
 		Config:         h.Config, Step: step.Name, Frontmatter: prompt.Layers, StepSpec: stepSpec,
-		Todos: []*types.TODO{todo}, Prior: opts.Prior, Host: h.Kind, Request: opts.Request,
+		Todos: []*types.TODO{todo}, Prior: opts.Prior, Request: opts.Request,
 	})
 	if err != nil {
 		return nil, err
@@ -220,6 +227,7 @@ func (h *Host) prepare(ctx context.Context, todo *types.TODO, step Step, lc Cont
 	prepared := &preparedStep{
 		definition: definition, class: class, request: spec, timeout: timeout,
 		workDir: workDir, template: prompt.Template, trace: resolved.Resolved.Trace,
+		runtimePresets: resolved.Presets,
 		runtimeProfile: resolved.Profile,
 		provenance:     resolved.Resolved.Provenance, warnings: resolved.Resolved.Warnings,
 	}
@@ -327,7 +335,7 @@ func (h *Host) admit(exec *todos.ExecutorContext, todo *types.TODO, step Step, p
 		Requested: captaindb.PromptRunRuntimeSelection{
 			Provider: runtime.Provider, Mode: string(spec.Mode), Model: spec.Name, Effort: string(spec.Effort),
 		},
-		Spec: spec, RuntimeProfile: prepared.runtimeProfile, SpecTrace: prepared.trace,
+		Spec: spec, RuntimePresets: prepared.runtimePresets, RuntimeProfile: prepared.runtimeProfile, SpecTrace: prepared.trace,
 	})
 	if err != nil {
 		return todos.RunPreparationResult{}, fmt.Errorf("prepare native TODO run: %w", err)
