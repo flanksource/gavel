@@ -58,7 +58,7 @@ type Continuation struct {
 // The inherited spec is a LAYER, not a merge performed here. Folding it in by
 // hand meant a second definition of precedence that could — and did — disagree
 // with the one every other entrypoint resolves through; as layers, the prior run
-// sits below the host and the caller exactly like any other authored default.
+// sits below the caller's request exactly like any other authored default.
 func Continue(c Continuation) (Options, error) {
 	step := strings.TrimSpace(c.Step)
 	if step == "" {

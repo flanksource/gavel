@@ -42,6 +42,10 @@ func resetTodosRunFlags(t testing.TB) {
 	saved := struct {
 		step, model, effort, status string
 		profile                     string
+		presets                     []string
+		noPresets                   bool
+		presetChanged               bool
+		noPresetsChanged            bool
 		budget                      float64
 		turns                       int
 		commit                      bool
@@ -50,6 +54,10 @@ func resetTodosRunFlags(t testing.TB) {
 	}{
 		todosStep, todoModel, todoEffort, filterStatus,
 		todosRuntimeProfile,
+		append([]string(nil), todosPresets...),
+		todosNoPresets,
+		todosRunCmd.Flags().Changed("preset"),
+		todosRunCmd.Flags().Changed("no-presets"),
 		maxBudget, maxTurns,
 		commitAfter,
 		dirty, dryRun, resumeSession,
@@ -58,6 +66,9 @@ func resetTodosRunFlags(t testing.TB) {
 	t.Cleanup(func() {
 		todosStep, todoModel, todoEffort, filterStatus = saved.step, saved.model, saved.effort, saved.status
 		todosRuntimeProfile = saved.profile
+		todosPresets, todosNoPresets = saved.presets, saved.noPresets
+		todosRunCmd.Flags().Lookup("preset").Changed = saved.presetChanged
+		todosRunCmd.Flags().Lookup("no-presets").Changed = saved.noPresetsChanged
 		maxBudget, maxTurns = saved.budget, saved.turns
 		commitAfter = saved.commit
 		dirty, dryRun, resumeSession = saved.dirtyRun, saved.dry, saved.resume
@@ -65,6 +76,9 @@ func resetTodosRunFlags(t testing.TB) {
 	})
 	todosStep, todoModel, todoEffort, filterStatus = "", "", "", ""
 	todosRuntimeProfile = ""
+	todosPresets, todosNoPresets = nil, false
+	todosRunCmd.Flags().Lookup("preset").Changed = false
+	todosRunCmd.Flags().Lookup("no-presets").Changed = false
 	maxBudget, maxTurns = 0, 0
 	commitAfter = true
 	dirty, dryRun, resumeSession = false, false, false
@@ -317,6 +331,14 @@ func TestValidateTodosRunOptions(t *testing.T) {
 	todoEffort = "too-much"
 	if err := validateTodosRunOptions(); err == nil || !strings.Contains(err.Error(), "--effort") {
 		t.Fatalf("expected effort validation error, got %v", err)
+	}
+	todoEffort = ""
+	todosNoPresets = true
+	if err := todosRunCmd.Flags().Set("preset", "review"); err != nil {
+		t.Fatalf("set preset flag: %v", err)
+	}
+	if err := validateTodosRunOptions(); err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("expected mutually exclusive preset flags error, got %v", err)
 	}
 }
 

@@ -6,12 +6,9 @@ import (
 )
 
 var _ = ginkgo.Describe("run lifecycle options", func() {
-	ginkgo.DescribeTable("forwards the runtime profile selector to resolution and dispatch",
-		func(profile string) {
-			opts := runOptions(Request{Options: Options{RuntimeProfile: profile}}, nil)
-			Expect(opts.RuntimeProfile).To(Equal(profile))
-		},
-		ginkgo.Entry("explicit selection", "Review profile"),
-		ginkgo.Entry("unset selection", ""),
-	)
+	ginkgo.It("forwards ordered preset selectors and explicit-empty state to resolution and dispatch", func() {
+		opts := runOptions(Request{Options: Options{Presets: []string{"organization", "review"}, PresetsSet: true}}, nil)
+		Expect(opts.Presets).To(Equal([]string{"organization", "review"}))
+		Expect(opts.PresetsSet).To(BeTrue())
+	})
 })

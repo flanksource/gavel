@@ -96,6 +96,12 @@ func OpenGlobal(ctx context.Context) (*Provider, error) {
 	if err := requireVerificationColumn(db); err != nil {
 		return nil, err
 	}
+	return NewGlobal(db)
+}
+
+// NewGlobal constructs the workspace-less provider OpenGlobal returns over an
+// already migrated GORM pool.
+func NewGlobal(db *gorm.DB) (*Provider, error) {
 	repository, err := native.NewRepository(db)
 	if err != nil {
 		return nil, err
@@ -297,6 +303,9 @@ func (p *Provider) Workspace() *native.Workspace {
 }
 
 func (p *Provider) List(ctx context.Context, filters todos.DiscoveryFilters) (types.TODOS, error) {
+	if _, err := p.reconcileExternalAnswers(ctx, reconcileScope{WorkspaceID: p.workspace.ID, WorkDir: p.workDir}); err != nil {
+		return nil, err
+	}
 	issues, err := p.repository.ListIssues(ctx, p.workspace.ID)
 	if err != nil {
 		return nil, err
@@ -330,6 +339,9 @@ func (p *Provider) Get(ctx context.Context, ref string) (*types.TODO, error) {
 	if err != nil {
 		return nil, err
 	}
+	if issue, err = p.reconcileIssue(ctx, issue, p.workDir); err != nil {
+		return nil, err
+	}
 	todo, err := p.todoFromIssue(ctx, issue, p.workDir, true)
 	if err != nil {
 		return nil, err
@@ -345,6 +357,10 @@ func (p *Provider) Get(ctx context.Context, ref string) (*types.TODO, error) {
 // GlobalGet resolves a UUID, short UUID, or legacy alias without a caller
 // workspace and returns both the issue and its owning workspace CWD. It is used
 // for compatibility deep links before a workspace-specific provider exists.
+//
+// It never reconciles answers given outside gavel: a global provider has no
+// workspace to settle a run in, and every caller re-reads the issue through its
+// owning workspace's Get, which does.
 func (p *Provider) GlobalGet(ctx context.Context, ref string) (*types.TODO, string, error) {
 	issue, err := p.repository.GetIssueByGlobalRef(ctx, ref)
 	if err != nil {

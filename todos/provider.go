@@ -89,6 +89,7 @@ type RunPreparation struct {
 	// continuation replays what actually ran instead of reconstructing it from
 	// the run's resolved model/backend labels.
 	Spec           api.Spec
+	RuntimePresets *runtimeprofiles.PresetResolution
 	RuntimeProfile *runtimeprofiles.Resolution
 	SpecTrace      []api.SpecLayer
 }

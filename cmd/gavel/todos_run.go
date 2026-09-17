@@ -21,7 +21,11 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var todosRuntimeProfile string
+var (
+	todosPresets        []string
+	todosNoPresets      bool
+	todosRuntimeProfile string
+)
 
 // retiredTodoRunFlags maps each flag `todos run` no longer accepts to what
 // replaced it, so a stale invocation is answered with the replacement rather
@@ -56,6 +60,9 @@ func init() {
 		"Lifecycle step to run: run, plan, verify, triage, or any step the project's lifecycle declares "+
 			"(empty: the step the lifecycle picks next for each todo); 'gavel todos steps' lists them")
 	todosRunCmd.Flags().StringVar(&todosRuntimeProfile, "runtime-profile", "", "Runtime profile name or ID (empty: the step or project default)")
+	todosRunCmd.Flags().StringArrayVar(&todosPresets, "preset", nil, "Runtime preset name or ID; repeat to layer presets in order")
+	todosRunCmd.Flags().BoolVar(&todosNoPresets, "no-presets", false, "Clear prompt and project runtime preset defaults")
+	_ = todosRunCmd.Flags().MarkDeprecated("runtime-profile", "runtime profiles are ignored; use --preset")
 	todosRunCmd.Flags().Float64Var(&maxBudget, "max-budget", 0, "Maximum budget in USD")
 	todosRunCmd.Flags().IntVar(&maxTurns, "max-turns", 0, "Maximum conversation turns")
 	todosRunCmd.Flags().BoolVarP(&interactive, "interactive", "i", false, "Interactively select TODOs to run")
@@ -148,7 +155,13 @@ func runTodosRun(_ *cobra.Command, args []string) error {
 
 // todosRunOptions is what the run flags decide; the lifecycle decides the rest.
 func todosRunOptions() run.Options {
+	presets := append([]string(nil), todosPresets...)
+	if todosNoPresets {
+		presets = []string{}
+	}
 	return run.Options{
+		Presets:        presets,
+		PresetsSet:     todosNoPresets || todosPresets != nil,
 		RuntimeProfile: todosRuntimeProfile,
 		Step:           todosStep,
 		Request:        todosRequestSpec(),
@@ -188,6 +201,9 @@ func todosRequestSpec() api.Spec {
 }
 
 func validateTodosRunOptions() error {
+	if todosNoPresets && len(todosPresets) > 0 {
+		return fmt.Errorf("--preset and --no-presets are mutually exclusive")
+	}
 	switch todoEffort {
 	case "", "low", "medium", "high", "xhigh":
 	default:
@@ -285,8 +301,11 @@ func printDryRun(prepared *run.Prepared) error {
 	for _, warning := range resolution.Warnings {
 		fmt.Printf("Warning: %s\n", warning)
 	}
-	if resolution.RuntimeProfile != nil {
-		fmt.Printf("Runtime profile: %s (%s)\n", resolution.RuntimeProfile.Profile.Name, resolution.RuntimeProfile.Profile.ID)
+	if resolution.RuntimePresets != nil {
+		fmt.Println("Runtime presets:")
+		for _, preset := range resolution.RuntimePresets.Presets {
+			fmt.Printf("  %s (%s)\n", preset.Name, preset.ID)
+		}
 	}
 	fmt.Println("### Prompt")
 	fmt.Println(resolution.Prompt)

@@ -81,10 +81,9 @@ type ApprovedPlanSelection struct {
 	Issue *Issue
 }
 
-// ReviewedPlanSelection is the atomic result of a non-approval plan decision
-// (pending, rejected, or revision requested) and the corresponding Gavel plan
-// selection/event update.
-type ReviewedPlanSelection struct {
+// ReviewedPlan is the atomic result of a non-approval plan decision and its
+// corresponding Gavel selection/event update.
+type ReviewedPlan struct {
 	Plan  *captaindb.Plan
 	Issue *Issue
 }
@@ -459,18 +458,19 @@ func (c *LaunchCoordinator) ApproveAndSelectPlan(
 	return result, nil
 }
 
-// ReviewAndSelectPlan records a non-approval Captain review decision and keeps
-// the exact plan selected on the Gavel issue in the same shared transaction.
-// Exact retries are mutation-free in both owners.
-func (c *LaunchCoordinator) ReviewAndSelectPlan(
+// ReviewPlan records a non-approval Captain review decision and applies its
+// selection state in the same shared transaction. Rejected plans remain linked
+// as history but are deselected; pending and revision-requested plans remain
+// selected. Exact retries are mutation-free in both owners.
+func (c *LaunchCoordinator) ReviewPlan(
 	ctx context.Context,
 	review captaindb.SetPlanReviewStateInput,
 	attachment PlanSelectionAttachment,
-) (*ReviewedPlanSelection, error) {
+) (*ReviewedPlan, error) {
 	if attachment.IssueID == uuid.Nil {
 		return nil, fmt.Errorf("%w: issue ID is required", ErrInvalidInput)
 	}
-	result := &ReviewedPlanSelection{}
+	result := &ReviewedPlan{}
 	err := c.captain.Transaction(ctx, func(captainTx *captaindb.DB) error {
 		tx := captainTx.Gorm()
 		issue, err := lockExecutionIssue(tx, attachment.IssueID)
@@ -485,7 +485,7 @@ func (c *LaunchCoordinator) ReviewAndSelectPlan(
 			return err
 		}
 		reviewWasExact := planReviewExact(priorPlan, review)
-		selectionWasExact, err := planSelectionExact(tx, issue, priorPlan.ID, attachment.Ordinal)
+		selectionWasExact, err := planReviewSelectionExact(tx, issue, priorPlan.ID, attachment.Ordinal, review.State)
 		if err != nil {
 			return err
 		}
@@ -507,7 +507,7 @@ func (c *LaunchCoordinator) ReviewAndSelectPlan(
 			return err
 		}
 		var mutation *EventInput
-		if !reviewWasExact {
+		if !reviewWasExact || !selectionWasExact {
 			kind := "plan_review_changed"
 			switch review.State {
 			case captaindb.PlanApprovalRejected:
@@ -529,13 +529,19 @@ func (c *LaunchCoordinator) ReviewAndSelectPlan(
 				},
 			}
 		}
-		if err := selectPlanLocked(tx, issue, PlanAttachment{
+		planAttachment := PlanAttachment{
 			IssueID:              attachment.IssueID,
 			PlanID:               plan.ID,
 			Ordinal:              attachment.Ordinal,
 			ExpectedIssueVersion: attachment.ExpectedIssueVersion,
 			Actor:                attachment.Actor,
-		}, mutation); err != nil {
+		}
+		if review.State == captaindb.PlanApprovalRejected {
+			err = deselectPlanLocked(tx, issue, planAttachment, mutation)
+		} else {
+			err = selectPlanLocked(tx, issue, planAttachment, mutation)
+		}
+		if err != nil {
 			return err
 		}
 		currentIssue, err := getIssue(tx, "id = ?", attachment.IssueID)

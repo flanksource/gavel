@@ -389,6 +389,60 @@ func TestCaptainProjectionLifecycleAndMigrationIdempotence(t *testing.T) {
 		assertProjection(t, db, fixture.issueID, "open", "running")
 	})
 
+	t.Run("an answered ask reads as running until the run settles", func(t *testing.T) {
+		fixture := newProjectionFixture(t, db, workspaceID, "run", "", `{}`)
+		require.NoError(t, db.Exec(`
+			UPDATE captain_prompt_runs
+			SET state = 'waiting', version = 1, result_json = '{"endStatus":"ask"}'::jsonb, updated_at = now()
+			WHERE id = ?`, fixture.runID).Error)
+		executionState := func() string {
+			t.Helper()
+			var state string
+			require.NoError(t, db.Raw(`
+				SELECT execution_state FROM todo_issue_runtime WHERE issue_id = ?`, fixture.issueID,
+			).Scan(&state).Error)
+			return state
+		}
+		appendEvent := func(sequence int, kind, source, payload string) {
+			t.Helper()
+			require.NoError(t, db.Exec(`
+				INSERT INTO todo_issue_events (issue_id, sequence, kind, source, payload)
+				VALUES (?, ?, ?, ?, CAST(? AS jsonb))`, fixture.issueID, sequence, kind, source, payload).Error)
+		}
+		runPayload := `{"promptRunId":"` + fixture.runID.String() + `"}`
+		askOutcome := `{"status":"ask","promptRunId":"` + fixture.runID.String() + `"}`
+
+		appendEvent(1, "lifecycle_outcome", "gavel", askOutcome)
+		assert.Equal(t, "waiting", executionState())
+
+		appendEvent(2, "ask_answered", "captain", `{"promptRunId":"`+uuid.NewString()+`"}`)
+		assert.Equal(t, "waiting", executionState(), "an answer to another run answers nothing here")
+
+		appendEvent(3, "ask_answered", "gavel", runPayload)
+		assert.Equal(t, "waiting", executionState(), "gavel's own answer is carried by the run it resumes, not by the event")
+
+		appendEvent(4, "ask_answered", "captain", runPayload)
+		assert.Equal(t, "running", executionState())
+
+		approvalID := uuid.New()
+		require.NoError(t, db.Exec(`
+			INSERT INTO captain_turn_requests
+				(id, session_id, prompt_run_id, tool_call_id, kind, state, request, version)
+			VALUES (?, ?, ?, 'toolu_answered_bash', 'tool_approval', 'pending', '{}'::jsonb, 0)`,
+			approvalID, fixture.sessionID, fixture.runID).Error)
+		assert.Equal(t, "waiting", executionState(), "a pending approval still parks an answered run")
+		require.NoError(t, db.Exec(`DELETE FROM captain_turn_requests WHERE id = ?`, approvalID).Error)
+
+		appendEvent(5, "lifecycle_outcome", "gavel", askOutcome)
+		assert.Equal(t, "waiting", executionState(), "the answered turn asked again")
+
+		appendEvent(6, "ask_answered", "captain", runPayload)
+		require.NoError(t, db.Exec(`
+			UPDATE captain_prompt_runs SET state = 'succeeded', phase = 'finished', version = 2, updated_at = now()
+			WHERE id = ?`, fixture.runID).Error)
+		assert.Equal(t, "idle", executionState(), "an answer only reads on a run still parked")
+	})
+
 	t.Run("clearing the active pointer reads as idle without a projection call", func(t *testing.T) {
 		fixture := newProjectionFixture(t, db, workspaceID, "run", "", `{}`)
 		assertProjection(t, db, fixture.issueID, "open", "running")

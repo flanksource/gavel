@@ -17,7 +17,10 @@ import (
 // the knobs a caller can vary per batch; everything else is resolved from
 // .gavel.yaml and each TODO's own frontmatter, exactly as a single run is.
 type RunFlags struct {
-	RuntimeProfile string `flag:"runtime-profile" help:"Runtime profile name or ID for this batch"`
+	Presets   []string `flag:"preset" help:"Runtime preset name or ID for this batch; repeat to layer presets in order"`
+	NoPresets bool     `flag:"no-presets" help:"Clear configured runtime presets for this batch"`
+	// Deprecated: accepted by programmatic callers only so resolution can warn.
+	RuntimeProfile string `json:"runtimeProfile,omitempty"`
 	Model          string `flag:"model" help:"Override the model for this batch, as the compact mode:model:effort form"`
 	Effort         string `flag:"effort" help:"Reasoning effort" enum:"low,medium,high"`
 	Resume         bool   `flag:"resume" help:"Resume each TODO's prior session instead of starting fresh"`
@@ -61,7 +64,14 @@ type RunResolver func(ctx context.Context, req RunRequest) (run.Options, error)
 // — the prompt, the spec layers, the timeout — is the lifecycle's, folded by
 // the host when the run resolves.
 func DefaultRunResolver(_ context.Context, req RunRequest) (run.Options, error) {
+	presetsSet := req.Flags.NoPresets || req.Flags.Presets != nil
+	presets := append([]string(nil), req.Flags.Presets...)
+	if req.Flags.NoPresets {
+		presets = []string{}
+	}
 	return run.Options{
+		Presets:        presets,
+		PresetsSet:     presetsSet,
 		RuntimeProfile: req.Flags.RuntimeProfile,
 		Step:           req.Step,
 		Request:        req.Flags.Spec(),

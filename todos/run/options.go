@@ -16,9 +16,10 @@ import (
 // started, the session it started under, and the message to show. The run
 // itself continues in the background.
 type StartResult struct {
-	Status    string
-	SessionID string
-	Message   string
+	Status      string
+	SessionID   string
+	Message     string
+	PromptRunID uuid.UUID
 	// Done receives the run's final error (nil on success) once the background
 	// run has applied its outcome, then closes. A caller that must block on the
 	// run — the CLI — reads it; an HTTP handler ignores it. Nil means there is
@@ -67,7 +68,11 @@ type Options struct {
 	// Step names the lifecycle step to run. Empty runs the step the lifecycle
 	// picks next for this todo.
 	Step string
-	// RuntimeProfile selects a catalog profile by name or ID before spec layers fold.
+	// Presets select ordered catalog runtime layers before spec layers fold.
+	Presets    []string
+	PresetsSet bool
+	// RuntimeProfile is deprecated. It is accepted only to emit a warning and is
+	// ignored by runtime resolution.
 	RuntimeProfile string
 	// Request is the caller's explicit spec — parsed CLI flags or the dashboard
 	// payload — folded as the TOP layer. A knob the caller did not set must
@@ -87,8 +92,8 @@ type Options struct {
 	// owned by a running process, instead of refusing. It is never a default:
 	// the caller sets it after confirming (--force, or the dashboard dialog).
 	Concurrent bool
-	// Host is the entrypoint; it decides the permission posture the host itself
-	// contributes. See lifecycle.HostKind.
+	// Host is the entrypoint the run was started from. It contributes no spec
+	// layer; see lifecycle.HostKind.
 	Host lifecycle.HostKind
 }
 

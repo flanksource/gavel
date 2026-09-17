@@ -19,17 +19,17 @@ func TestBulkRun(t *testing.T) {
 	RunSpecs(t, "Bulk Run Suite")
 }
 
-var _ = Describe("Bulk runtime profile transport", func() {
-	It("forwards the generated runtime-profile flag without making it a spec field", func() {
-		flags, err := clicky.BuildOpts[RunFlags](map[string]string{"runtime-profile": "Review profile"})
+var _ = Describe("Bulk runtime preset transport", func() {
+	It("forwards generated preset flags without making them spec fields", func() {
+		flags, err := clicky.BuildOpts[RunFlags](map[string]string{"preset": "organization,review"})
 		Expect(err).NotTo(HaveOccurred())
 		opts, err := DefaultRunResolver(context.Background(), RunRequest{Step: "plan", Flags: flags})
 		Expect(err).NotTo(HaveOccurred())
-		Expect(opts).To(Equal(run.Options{Step: "plan", RuntimeProfile: "Review profile", Host: lifecycle.HostCLI}))
+		Expect(opts).To(Equal(run.Options{Step: "plan", Presets: []string{"organization", "review"}, PresetsSet: true, Host: lifecycle.HostCLI}))
 		Expect(api.IsEmpty(flags.Spec())).To(BeTrue())
 	})
 
-	DescribeTable("keeps each TODO's workspace and exact prepared profile through dispatch", func(location string) {
+	DescribeTable("keeps each TODO's workspace and exact prepared presets through dispatch", func(location string) {
 		batchDir, ownedDir := GinkgoT().TempDir(), GinkgoT().TempDir()
 		todo, expectedDir := &types.TODO{}, batchDir
 		switch location {
@@ -55,13 +55,14 @@ var _ = Describe("Bulk runtime profile transport", func() {
 			optionsDir = req.Dir
 			return DefaultRunResolver(ctx, req)
 		}
-		fn, err := StartRun("run", RunFlags{RuntimeProfile: "review"}, run.NewRegistry(), batchDir, resolve, nil)
+		fn, err := StartRun("run", RunFlags{Presets: []string{"review"}}, run.NewRegistry(), batchDir, resolve, nil)
 		Expect(err).NotTo(HaveOccurred())
 		_, err = fn(context.Background(), nil, todo)
 		Expect(err).NotTo(HaveOccurred())
 		Expect([]string{optionsDir, previewDir, dispatched.Dir}).To(Equal([]string{expectedDir, expectedDir, expectedDir}))
 		Expect(dispatched.Prepared).To(BeIdenticalTo(prepared))
-		Expect(dispatched.Options.RuntimeProfile).To(Equal("review"))
+		Expect(dispatched.Options.Presets).To(Equal([]string{"review"}))
+		Expect(dispatched.Options.PresetsSet).To(BeTrue())
 		Expect(dispatched.Todo).To(BeIdenticalTo(todo))
 	}, Entry("absolute owning workspace", "absolute"), Entry("relative execution subdirectory", "relative"), Entry("selected batch workspace", "unset"))
 })

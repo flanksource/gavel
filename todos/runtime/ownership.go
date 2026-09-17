@@ -136,6 +136,11 @@ func (p *Provider) resolveActiveRunConflict(
 	}
 	owner := link.Owner()
 	alive, reason := owner.Alive(time.Now())
+	if !alive && preparation.Resume && run.State == captaindb.PromptRunStateWaiting {
+		// A parked run waits on its answer, not on the process that parked it:
+		// PrepareRun's resume branch claims it in place.
+		return false, nil
+	}
 	if !alive {
 		// Nothing is driving this run to completion, so it will never reach a
 		// terminal state on its own. Reclaim it rather than leaving the TODO

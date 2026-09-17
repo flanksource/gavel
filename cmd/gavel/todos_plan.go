@@ -23,9 +23,9 @@ var todosPlanCmd = &cobra.Command{
 	Short: "Act on or recover a todo plan",
 	Long: `Act on a plan produced by 'gavel todos run --step plan' that is awaiting review.
 Subcommands: approve (the plan becomes the one a run implements, optionally
-chaining that run with --run), reject (todo returns to pending, plan marked
-rejected) and revise (agent folds your --feedback into the plan and returns it to
-review). Recover backfills the plan file from the todo's latest terminal
+chaining that run with --run), reject (the plan remains in history but is no
+longer active, so the pending todo can be planned again) and revise (agent folds
+your --feedback into the plan and returns it to review). Recover backfills the plan file from the todo's latest terminal
 plan-step run; to write one yourself use 'gavel todos edit --plan'.`,
 	Example: `  gavel todos plan approve 3f2a1b --run
   gavel todos plan reject 3f2a1b
@@ -42,7 +42,7 @@ var todosPlanApproveCmd = &cobra.Command{
 
 var todosPlanRejectCmd = &cobra.Command{
 	Use:   "reject <todo>",
-	Short: "Reject a reviewed plan: the todo returns to pending and the plan is marked rejected",
+	Short: "Reject and archive the active plan so the pending todo can be planned again",
 	Args:  cobra.ExactArgs(1),
 	RunE:  runTodosPlanReject,
 }

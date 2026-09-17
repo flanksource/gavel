@@ -16,6 +16,9 @@ import (
 // group through todoStatusWithPlan — the same derivation List uses — so the two
 // can never disagree. Only statuses with at least one issue appear in the map.
 func (p *Provider) CountByStatus(ctx context.Context) (map[types.Status]int, error) {
+	if _, err := p.reconcileExternalAnswers(ctx, reconcileScope{WorkspaceID: p.workspace.ID, WorkDir: p.workDir}); err != nil {
+		return nil, err
+	}
 	groups, err := p.repository.CountIssuesByStatus(ctx, p.workspace.ID)
 	if err != nil {
 		return nil, err
