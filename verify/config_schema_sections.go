@@ -114,8 +114,8 @@ func commitSchema() map[string]any {
 				"Controls whether `gavel commit` runs `go mod tidy` in every Go module and stages the "+
 					"resulting go.mod/go.sum changes. CLI flag --tidy overrides per invocation.",
 				map[string]any{
-					"enabled": boolWithDefault(
-						"Toggle the tidy step. Omit to keep on.", true),
+					"enabled": boolProp(
+						"Toggle the tidy step. Omit to run it only when pushing (`gavel commit -p`)."),
 				},
 			),
 		},
@@ -143,22 +143,24 @@ func todosSchema(specSchema map[string]any) map[string]any {
 	return object(
 		"Settings for `gavel todos run`.",
 		map[string]any{
-			"runtimeProfile": stringProp(
-				"Default runtime profile catalog ID or name for TODO lifecycle steps. A step or request profile overrides it."),
-			"run": withRuntimeProfileSchema(promptSpecSchema(prompts.TodosRun,
+			"presets": stringArray(
+				"Ordered runtime preset catalog IDs or names used by default for TODO lifecycle steps. A prompt pin or request selection overrides them."),
+			"runtimeProfile": deprecatedRuntimeProfileSchema(
+				"Deprecated and ignored. Use presets."),
+			"run": withRuntimePresetSchema(promptSpecSchema(prompts.TodosRun,
 				"AI spec for the todo run prompt: the framing, the TODO items injected as {{{body}}}, "+
 					"and the instructions.")),
-			"plan": withRuntimeProfileSchema(promptSpecSchema(prompts.TodosPlan,
+			"plan": withRuntimePresetSchema(promptSpecSchema(prompts.TodosPlan,
 				"AI spec for the plan-mode prompt: the read-only investigation framing that produces a "+
 					"reviewable implementation plan.")),
-			"triage": withRuntimeProfileSchema(promptSpecSchema(prompts.TodosTriage,
+			"triage": withRuntimePresetSchema(promptSpecSchema(prompts.TodosTriage,
 				"AI spec for the triage prompt: a read-only pass that compacts the TODO's description and "+
 					"reviews its verification fixture, reporting the edits for gavel to apply.")),
 			"checkConcurrency": intProp(
 				"How many definition-of-done checks run at once (`gavel todos check`, and the verification " +
 					"phase after a bulk triage). Each check runs the TODO's fixture, so an unbounded fan-out " +
 					"over a large selection thrashes the machine. Defaults to 4."),
-			"verify": withRuntimeProfileSchema(specNodeSchema(specSchema,
+			"verify": withRuntimePresetSchema(specNodeSchema(specSchema,
 				"Spec a verification run executes as: `gavel todos check`, the dashboard's verify action, "+
 					"and the acceptance-criteria grader inside a run's definition-of-done loop. It overrides "+
 					"ai: and is overridden by the request. There is no prompt to override — the checklist is "+
@@ -172,7 +174,7 @@ func todosSchema(specSchema map[string]any) map[string]any {
 					"added under todos.lifecycle reads its project configuration from todos.steps.handoff, "+
 					"exactly where todos.run sits for the built-in run step. The built-in steps (run, plan, "+
 					"triage, verify) keep their own blocks and are rejected here.",
-				withRuntimeProfileSchema(specNodeSchema(specSchema,
+				withRuntimePresetSchema(specNodeSchema(specSchema,
 					"Spec one custom lifecycle step runs as. It overrides the step's prompt frontmatter and "+
 						"its lifecycle declaration, and is overridden by the todo's llm: and the request.",
 					"",
@@ -281,14 +283,21 @@ func promptSpecSchema(promptID, desc string) map[string]any {
 	}
 }
 
-func withRuntimeProfileSchema(node map[string]any) map[string]any {
+func withRuntimePresetSchema(node map[string]any) map[string]any {
 	properties, ok := node["properties"].(map[string]any)
 	if !ok {
-		panic("runtime profile schema requires object properties")
+		panic("runtime preset schema requires object properties")
 	}
-	properties["runtimeProfile"] = stringProp(
-		"Runtime profile catalog ID or name for this operation. Omitted inherits the configured default.")
+	properties["presets"] = stringArray(
+		"Ordered runtime preset catalog IDs or names pinned by this operation. Omitted inherits the configured default.")
+	properties["runtimeProfile"] = deprecatedRuntimeProfileSchema("Deprecated and ignored. Use presets.")
 	return node
+}
+
+func deprecatedRuntimeProfileSchema(description string) map[string]any {
+	property := stringProp(description)
+	property["deprecated"] = true
+	return property
 }
 
 // modelFallbacksSchema documents Model.Fallbacks: alternative model slugs tried

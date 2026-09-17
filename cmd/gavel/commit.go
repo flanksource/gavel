@@ -48,7 +48,7 @@ type CommitOptions struct {
 	Precommit    string `flag:"precommit" help:"Behavior for pre-commit gitignore and linked dependency checks: prompt|fail|skip|false"`
 	Lint         string `flag:"lint" help:"Run all detected linters over staged files before committing: true|false (default: false; overrides .gavel.yaml commit.lint.enabled)"`
 	LintSecrets  string `flag:"lint-secrets" help:"Run the betterleaks/secrets linter over staged files before committing: true|false (default: true; overrides .gavel.yaml commit.lint.secrets)"`
-	Tidy         string `flag:"tidy" help:"Run 'go mod tidy' in every Go module before committing and stage any go.mod/go.sum updates: true|false (default: true; overrides .gavel.yaml commit.tidy.enabled). May stage previously-unstaged go.mod/go.sum edits."`
+	Tidy         string `flag:"tidy" help:"Run 'go mod tidy' in every Go module before committing and stage any go.mod/go.sum updates: true|false (default: false, or true with -p; overrides .gavel.yaml commit.tidy.enabled). May stage previously-unstaged go.mod/go.sum edits."`
 	WorkDir      string `flag:"work-dir" help:"Working directory"`
 	Yes          bool   `flag:"yes" short:"y" help:"Assume yes: auto-unstage linked-dep replacements and auto-AI-fix lint findings instead of prompting."`
 	AddMetadata  bool   `flag:"add-metadata" default:"true" help:"Append Gavel-Issue-Id / Claude-Session-Id trailers to commit messages, sourced from GAVEL_ISSUE_ID / GAVEL_SESSION_ID (set by 'gavel todos run')."`

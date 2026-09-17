@@ -20,8 +20,8 @@ var findGoModRoots = func(root string) []string {
 }
 
 // applyGoModTidy runs `go mod tidy` in every Go module in the repo and stages
-// any go.mod / go.sum updates into the in-flight commit. On by default; opt
-// out via opts.TidyFlag ("true"/"false") or opts.Config.Tidy.Enabled. Hard
+// any go.mod / go.sum updates into the in-flight commit. Off by default unless
+// pushing; override via opts.TidyFlag ("true"/"false") or opts.Config.Tidy.Enabled. Hard
 // failure aborts the commit so a broken go.sum can't slip through. ctx is
 // kept for signature parity with the other apply* helpers.
 func applyGoModTidy(ctx context.Context, opts Options, source stagedSource) (stagedSource, error) {
@@ -96,8 +96,8 @@ func applyGoModTidy(ctx context.Context, opts Options, source stagedSource) (sta
 	return refreshed, nil
 }
 
-// tidyEnabled resolves the on/off state. CLI flag wins over config; config
-// nil = on (default).
+// tidyEnabled resolves the on/off state. CLI flag wins over config; with
+// neither set, tidy runs only when the commit is being pushed (-p).
 func tidyEnabled(opts Options) bool {
 	switch strings.ToLower(strings.TrimSpace(opts.TidyFlag)) {
 	case "true":
@@ -108,7 +108,7 @@ func tidyEnabled(opts Options) bool {
 	if opts.Config.Tidy.Enabled != nil {
 		return *opts.Config.Tidy.Enabled
 	}
-	return true
+	return opts.Push
 }
 
 // hashFile returns the sha256 of the file at path. The second return is false

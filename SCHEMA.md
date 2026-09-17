@@ -137,7 +137,7 @@ Settings for `gavel commit`.
 | `commit.precommit.mode` | mode | `prompt` | last non-empty wins | Gate for `commit.gitignore` prompts and linked-dependency checks (`package.json` `file:`/`link:` refs and `go.mod` replace directives pointing outside the repo). |
 | `commit.lint.enabled` | bool | `false` | later layer wins | Run every non-secrets linter over the staged file set before committing. Overridden per run by `--lint`. |
 | `commit.lint.secrets` | bool | `true` | later layer wins | Run the betterleaks/secrets linter before committing. Overridden per run by `--lint-secrets`. |
-| `commit.tidy.enabled` | bool | `true` | later layer wins | Run `go mod tidy` in every Go module and stage the resulting `go.mod`/`go.sum` changes. Overridden per run by `--tidy`. |
+| `commit.tidy.enabled` | bool | unset (on only with `-p`) | later layer wins | Run `go mod tidy` in every Go module and stage the resulting `go.mod`/`go.sum` changes. When unset, tidy runs only for `gavel commit -p`. Overridden per run by `--tidy`. |
 
 ### `mode` values
 

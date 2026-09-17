@@ -105,7 +105,8 @@ type Options struct {
 	LintFlag        string
 	LintSecretsFlag string
 	// TidyFlag is the raw string form of --tidy. Empty = flag not provided;
-	// "true"/"false" override .gavel.yaml commit.tidy.enabled. String (not
+	// "true"/"false" override .gavel.yaml commit.tidy.enabled. With neither
+	// set, tidy follows Push. String (not
 	// *bool) so the clicky flag binding stays a plain string flag the user
 	// can set to "true" or "false".
 	TidyFlag string

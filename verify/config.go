@@ -238,8 +238,9 @@ type CommitConfig struct {
 
 // CommitTidyConfig controls whether `gavel commit` runs `go mod tidy` in every
 // Go module in the repo before committing and stages any go.mod / go.sum
-// updates into the in-flight commit. Enabled is on by default (nil = on);
-// set to false to disable. CLI flag --tidy overrides per-invocation.
+// updates into the in-flight commit. Enabled nil = run only when pushing
+// (`gavel commit -p`); true/false forces it on/off. CLI flag --tidy overrides
+// per-invocation.
 type CommitTidyConfig struct {
 	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
 }
