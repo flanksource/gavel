@@ -3,7 +3,6 @@ package fixtures
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	osExec "os/exec"
@@ -12,7 +11,6 @@ import (
 	"time"
 
 	"github.com/creack/pty"
-	"github.com/shirou/gopsutil/v3/process"
 
 	"github.com/flanksource/gavel/fixtures/record"
 )
@@ -25,6 +23,8 @@ const (
 	defaultCastBytes = 4 << 20
 	maxCastEvents    = 20000
 )
+
+const captureCancelGrace = 5 * time.Second
 
 // CaptureOptions configures an ANSI/PTY capture. Width and Height are both the
 // pseudo-terminal dimensions the command sees and the viewport dimensions used
@@ -170,11 +170,21 @@ func CaptureANSI(opts CaptureOptions) (*Capture, error) {
 	go func() {
 		select {
 		case <-ctx.Done():
-			// Kill before closing the PTY so descendants that created their own
-			// process groups remain attached long enough to be discovered.
-			_ = cancelCaptureProcess(cmd.Process)
+			_ = cmd.Process.Signal(os.Interrupt)
+			// Closing the PTY releases the read loop so its sole cmd.Wait call can
+			// observe graceful exit or the force-kill below.
 			_ = ptmx.Close()
 		case <-waitDone:
+			return
+		}
+
+		timer := time.NewTimer(captureCancelGrace)
+		defer timer.Stop()
+		select {
+		case <-waitDone:
+		case <-timer.C:
+			_ = cmd.Process.Kill()
+			<-waitDone
 		}
 	}()
 
@@ -277,50 +287,6 @@ func CaptureANSI(opts CaptureOptions) (*Capture, error) {
 		capture.Final = FinalState{Screen: final, Duplicates: duplicateSettledLines(final)}
 	}
 	return capture, nil
-}
-
-func captureProcessDescendants(root int32) ([]*process.Process, error) {
-	all, err := process.Processes()
-	if err != nil {
-		return nil, err
-	}
-	children := make(map[int32][]*process.Process)
-	for _, candidate := range all {
-		parent, err := candidate.Ppid()
-		if err == nil {
-			children[parent] = append(children[parent], candidate)
-		}
-	}
-
-	var descendants []*process.Process
-	parents := []int32{root}
-	seen := map[int32]bool{root: true}
-	for len(parents) > 0 {
-		parent := parents[0]
-		parents = parents[1:]
-		for _, child := range children[parent] {
-			if seen[child.Pid] {
-				continue
-			}
-			seen[child.Pid] = true
-			descendants = append(descendants, child)
-			parents = append(parents, child.Pid)
-		}
-	}
-	return descendants, nil
-}
-
-func killCaptureDescendants(root int) error {
-	descendants, err := captureProcessDescendants(int32(root))
-	failures := []error{err}
-	// Leaves first prevents a killed parent from orphaning children before they
-	// receive the cancellation signal.
-	for i := len(descendants) - 1; i >= 0; i-- {
-		if err := descendants[i].Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
-			failures = append(failures, err)
-		}
-	}
-	return errors.Join(failures...)
 }
 
 func ensureEnv(env []string, key, val string) []string {
