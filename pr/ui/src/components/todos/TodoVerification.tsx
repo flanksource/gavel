@@ -15,7 +15,7 @@ import {
   PromptRunButton,
   verificationSpec,
 } from './PromptRunButton';
-import { defaultRunOptions, runSpec } from './run';
+import { runSpec } from './run';
 import { setTodoCaches, todoMutationJSON, useTodoVerificationRun } from './todoMutations';
 import { todoQueryKeys } from './todoQueries';
 
@@ -51,7 +51,6 @@ export function TodoVerification({
   const saved = todo.verificationMarkdown ?? '';
   const [fixture, setFixture] = useState(saved);
   const [advancedOpen, setAdvancedOpen] = useState(false);
-  const [advancedOptions, setAdvancedOptions] = useState<TodoRunOptions>(defaultRunOptions);
   const { data: schemas = {} } = useQuery<unknown, Error, FixtureFenceSchemas>({
     queryKey: todoQueryKeys.verificationSchema(),
     queryFn: ({ signal }) => fetchJSON<unknown>({
@@ -110,6 +109,7 @@ export function TodoVerification({
       if (!current) return;
       await runMutation.mutateAsync({
         ref: current.ref,
+        presets: options.presets,
         runtimeProfile: options.runtimeProfile,
         spec: verificationSpec(runSpec(options)),
         resume: options.resume,
@@ -166,17 +166,13 @@ export function TodoVerification({
             disabled={busy || runBusy}
             loading={runBusy}
             onRun={options => void runVerification(options)}
-            onAdvanced={options => {
-              setAdvancedOptions(options);
-              setAdvancedOpen(true);
-            }}
+            onAdvanced={() => setAdvancedOpen(true)}
           />
         </div>
         <PromptRunAdvancedDialog
           dir={dir}
           scope="verification"
           open={advancedOpen}
-          initial={advancedOptions}
           loading={runBusy}
           onClose={() => setAdvancedOpen(false)}
           onRun={options => {

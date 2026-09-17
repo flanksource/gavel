@@ -28,6 +28,7 @@ export const todoQueryKeys = {
   list: (dir: string) => ['todos', 'list', { dir: queryDir(dir) }] as const,
   item: (dir: string, ref: string) => ['todos', 'item', { dir: queryDir(dir), ref }] as const,
   globalItem: (ref: string) => ['todos', 'item', 'global', { ref }] as const,
+  launch: (dir: string, ref: string) => ['todos', 'launch', { dir: queryDir(dir), ref }] as const,
   sessionStats: (dir: string, sessionId: string) =>
     ['todos', 'session', 'stats', { dir: queryDir(dir), sessionId }] as const,
   sessionDetail: (dir: string, ref: string, sessionId: string | undefined, attemptsOnly: boolean) =>

@@ -1,6 +1,22 @@
 import { describe, expect, it } from 'vitest';
 import { buildRoute, emptyRouteState, parseRoute } from './routes';
 
+describe('dashboard project scope routes', () => {
+  it('round-trips the selected project on the todos route', () => {
+    const parsed = parseRoute(new URL('http://localhost:9092/todos?project=Clicky%20UI') as unknown as Location);
+
+    expect(parsed.scopeProject).toBe('Clicky UI');
+    expect(buildRoute(parsed)).toBe('/todos?project=Clicky+UI');
+  });
+
+  it('keeps the selected project alongside pull request filters', () => {
+    const parsed = parseRoute(new URL('http://localhost:9092/prs?project=gavel&state=open') as unknown as Location);
+
+    expect(parsed.scopeProject).toBe('gavel');
+    expect(buildRoute(parsed)).toBe('/prs?project=gavel&state=open');
+  });
+});
+
 describe('project routes', () => {
   it('round-trips a selected project as a dedicated top-level tab', () => {
     const location = new URL('http://localhost:9092/projects/Clicky%20UI');
@@ -61,7 +77,7 @@ describe('prompt routes', () => {
       ...emptyRouteState(),
       tab: 'prompts',
       selectedPath: 'commit.message',
-      promptScope: 'Clicky UI',
+      scopeProject: 'Clicky UI',
     });
     expect(buildRoute(parsed)).toBe('/prompts/commit.message?project=Clicky+UI');
   });
@@ -73,10 +89,10 @@ describe('prompt routes', () => {
     expect(buildRoute(parsed)).toBe('/prompts');
   });
 
-  it('ignores a prompt scope on other tabs', () => {
+  it('treats the project query as dashboard scope on every tab', () => {
     const parsed = parseRoute(new URL('http://localhost:9092/todos?project=x') as unknown as Location);
 
-    expect(parsed.promptScope).toBe('');
+    expect(parsed.scopeProject).toBe('x');
   });
 });
 

@@ -11,11 +11,13 @@ import (
 
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/captain/pkg/api/registry"
+	"github.com/flanksource/captain/pkg/runtimeprofiles"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/lifecycle"
 	"github.com/flanksource/gavel/todos/run"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/ghodss/yaml"
+	"github.com/google/uuid"
 )
 
 // The dashboard's run surface. Execution itself lives in todos/run and the
@@ -54,8 +56,9 @@ type todoRunPayload struct {
 	// Step names the lifecycle step to run — `run`, `plan`, `verify`, `triage`,
 	// or any step the project declares. Empty runs the step the lifecycle picks
 	// next for this todo.
-	Step           string `json:"step,omitempty"`
-	RuntimeProfile string `json:"runtimeProfile,omitempty"`
+	Step           string   `json:"step,omitempty"`
+	Presets        []string `json:"presets,omitempty"`
+	RuntimeProfile string   `json:"runtimeProfile,omitempty"`
 	// Spec carries the model/mode/effort/prompt/budget/permissions/session knobs.
 	//
 	// It is a named field under its own `spec` key, not embedded. api.Spec
@@ -83,16 +86,18 @@ type todoRunResponse struct {
 	Dir    string   `json:"dir"`
 	// Step is the lifecycle step that ran and Reason why it was chosen — named by
 	// the client, or picked by the lifecycle's own predicates.
-	Step           string `json:"step"`
-	Reason         string `json:"reason,omitempty"`
-	Provider       string `json:"provider,omitempty"`
-	Model          string `json:"model,omitempty"`
-	RuntimeProfile string `json:"runtimeProfile,omitempty"`
+	Step           string   `json:"step"`
+	Reason         string   `json:"reason,omitempty"`
+	Provider       string   `json:"provider,omitempty"`
+	Model          string   `json:"model,omitempty"`
+	Presets        []string `json:"presets,omitempty"`
+	RuntimeProfile string   `json:"runtimeProfile,omitempty"`
 	// RuntimeMode is the resolved mechanism (cmux, agent, cli, api).
 	RuntimeMode string  `json:"runtimeMode,omitempty"`
 	Effort      string  `json:"effort,omitempty"`
 	Resume      bool    `json:"resume,omitempty"`
 	SessionID   string  `json:"sessionId,omitempty"`
+	PromptRunID string  `json:"promptRunId,omitempty"`
 	Timeout     string  `json:"timeout"`
 	MaxBudget   float64 `json:"maxBudget,omitempty"`
 	MaxTurns    int     `json:"maxTurns,omitempty"`
@@ -103,6 +108,7 @@ type todoRunResponse struct {
 type todoRunPreviewResponse struct {
 	Spec           api.Spec                       `json:"spec"`
 	Provenance     map[string]api.FieldProvenance `json:"provenance,omitempty"`
+	RuntimePresets []runtimeprofiles.Preset       `json:"runtimePresets,omitempty"`
 	RuntimeProfile *todoRunProfilePreview         `json:"runtimeProfile,omitempty"`
 	Trace          []api.SpecLayer                `json:"trace"`
 	Warnings       []string                       `json:"warnings,omitempty"`
@@ -244,6 +250,11 @@ func (s *Server) handleTodoRun(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Prepared = prepared
 	resp := todoRunResponseFor(source, todoList, opts, prepared)
+	stream := newTodoLaunchStream(w, r)
+	if err := stream.resolved(prepared); err != nil {
+		writeTodoError(w, http.StatusInternalServerError, err)
+		return
+	}
 	// A dry run still executes the agent; Captain's commit hook reports rather
 	// than cuts the declared commit. Prompt-only inspection uses the preview API.
 	started, err := run.Start(req)
@@ -253,21 +264,41 @@ func (s *Server) handleTodoRun(w http.ResponseWriter, r *http.Request) {
 		// parallel. The dialog needs the incumbent's identity to say so.
 		var owned *todos.ErrRunOwnedElsewhere
 		if errors.As(err, &owned) {
+			if stream != nil {
+				stream.failed(http.StatusConflict, err)
+				return
+			}
 			writeTodoRunConflict(w, owned)
+			return
+		}
+		if stream != nil {
+			stream.failed(http.StatusBadRequest, err)
 			return
 		}
 		writeTodoError(w, http.StatusBadRequest, err)
 		return
 	}
 	if started.Status == "started" && strings.TrimSpace(started.SessionID) == "" {
-		writeTodoError(w, http.StatusInternalServerError, errors.New("todo run was admitted without a Captain session id"))
+		err := errors.New("todo run was admitted without a Captain session id")
+		if stream != nil {
+			stream.failed(http.StatusInternalServerError, err)
+			return
+		}
+		writeTodoError(w, http.StatusInternalServerError, err)
 		return
 	}
 	resp.Status = started.Status
 	resp.SessionID = started.SessionID
+	if started.PromptRunID != uuid.Nil {
+		resp.PromptRunID = started.PromptRunID.String()
+	}
 	resp.Message = started.Message
 	if resp.Message == "" && started.Status == "started" {
 		resp.Message = todoRunStartedMessage(len(todoList))
+	}
+	if stream != nil {
+		_ = stream.send("admitted", resp)
+		return
 	}
 	json.NewEncoder(w).Encode(resp) //nolint:errcheck
 }
@@ -294,8 +325,10 @@ func todoRunResponseFor(source todoSource, todoList []*types.TODO, opts todoRunO
 		MaxTurns:    spec.Budget.MaxTurns,
 		Commit:      specCommit(spec) && !specDryRun(spec),
 	}
-	if profile := prepared.Resolution.RuntimeProfile; profile != nil {
-		response.RuntimeProfile = profile.Profile.ID
+	if presets := prepared.Resolution.RuntimePresets; presets != nil {
+		for _, preset := range presets.Presets {
+			response.Presets = append(response.Presets, preset.ID)
+		}
 	}
 	return response
 }
@@ -325,6 +358,7 @@ func (s *Server) handleTodoRunPreview(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(todoRunPreviewResponse{ //nolint:errcheck
 		Spec:           spec,
 		Provenance:     prepared.Resolution.Provenance,
+		RuntimePresets: todoRunPresetPreviewFor(prepared.Resolution.RuntimePresets),
 		RuntimeProfile: todoRunProfilePreviewFor(prepared.Resolution.RuntimeProfile),
 		Trace:          prepared.Resolution.Trace,
 		Warnings:       prepared.Resolution.Warnings,
@@ -404,6 +438,8 @@ func buildTodoRunOptions(payload todoRunPayload, prior []api.SpecLayer) (todoRun
 		return todoRunOptions{}, err
 	}
 	return todoRunOptions{
+		Presets:        append([]string(nil), payload.Presets...),
+		PresetsSet:     payload.Presets != nil,
 		RuntimeProfile: strings.TrimSpace(payload.RuntimeProfile),
 		Step:           strings.TrimSpace(payload.Step),
 		Request:        spec,

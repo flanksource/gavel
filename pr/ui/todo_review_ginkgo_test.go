@@ -17,6 +17,7 @@ import (
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/run"
 	"github.com/flanksource/gavel/todos/types"
+	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -307,5 +308,64 @@ var _ = Describe("todo answer", func() {
 		Expect(uiTestProviderFor(workDir).comments).To(HaveLen(1))
 		Expect(resp.Todo.Lifecycle).NotTo(BeNil(), "the failed-answer response must carry the lifecycle")
 		Expect(resp.Todo.Lifecycle.Steps).NotTo(BeEmpty())
+	})
+
+	It("refuses a todo whose ask was already answered from Captain", func() {
+		created := specAskTodo(workDir, "sess-captain-answered", types.RunPhase)
+		created.Status = types.StatusInProgress
+		created.ProviderEvents = []types.ProviderEvent{
+			{Kind: "lifecycle_outcome", Actor: "gavel"},
+			{Kind: "ask_answered", Actor: "captain", Body: "**Answer (Captain):** use mysql"},
+		}
+		called := stubSpecRunStart(nil)
+
+		rec := answer(created)
+
+		Expect(rec.Code).To(Equal(http.StatusConflict), rec.Body.String())
+		Expect(rec.Body.String()).To(ContainSubstring("already answered from Captain"))
+		Expect(*called).To(BeFalse())
+		Expect(uiTestProviderFor(workDir).comments).To(BeEmpty())
+	})
+
+	It("answers again once the Captain answer's turn asked anew", func() {
+		created := specAskTodo(workDir, "sess-captain-asked-again", types.RunPhase)
+		created.ProviderEvents = []types.ProviderEvent{
+			{Kind: "ask_answered", Actor: "captain"},
+			{Kind: "lifecycle_outcome", Actor: "gavel"},
+		}
+		called := stubSpecRunStart(nil)
+
+		rec := answer(created)
+
+		Expect(rec.Code).To(Equal(http.StatusOK), rec.Body.String())
+		Expect(*called).To(BeTrue())
+	})
+})
+
+// fakeLivenessStore is the Captain store as the answer liveness check reads
+// it. Only the read that check makes is implemented; any other call panics
+// through the nil embedded interface.
+type fakeLivenessStore struct {
+	approvalStore
+	requests []captaindb.TurnRequest
+}
+
+func (s fakeLivenessStore) ListTurnRequests(context.Context, captaindb.TurnRequestFilter) ([]captaindb.TurnRequest, error) {
+	return s.requests, nil
+}
+
+var _ = Describe("answer liveness", func() {
+	waiting := &captaindb.PromptRun{
+		ID: uuid.MustParse("0199f0aa-0000-7000-8000-0000000a5c01"), SessionID: uuid.MustParse("0199f0aa-0000-7000-8000-0000000a5c02"),
+		State: captaindb.PromptRunStateWaiting,
+	}
+
+	// A cmux run leaves its TUI alive while parked, so the session keeps a live
+	// process for the whole ask: that process must not refuse the answer.
+	It("lets a parked ask through whatever process its session still has", func() {
+		status, err := answerLivenessError(context.Background(), fakeLivenessStore{}, waiting)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(status).To(Equal(http.StatusOK))
 	})
 })

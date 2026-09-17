@@ -6,8 +6,8 @@ import { loadPromptRunOptions, rememberPromptRunOptions } from './PromptRunButto
 const context: RunContext = {
   defaultMode: 'agent', defaultProvider: 'openai', models: [], runtimes: [], tools: [], efforts: ['medium'], lifecycle: { steps: [] },
   modes: [{ id: 'agent', label: 'Agent', provider: 'openai', agent: 'codex', defaultModel: 'example-default', driver: 'agent', mechanisms: [], models: [{ id: 'example-default', label: 'Default', provider: 'openai', reasoning: true }] }],
-  runtimeProfiles: [{ id: 'review-profile', name: 'Review', model: 'example-profile', presets: [] }],
-  promptDefaults: { plan: { mode: 'agent', model: 'example-default', runtimeProfile: 'review-profile' }, verify: { runtimeProfile: 'review-profile' } },
+  runtimePresets: [{ id: 'review-preset', name: 'Review', scope: 'context', spec: { model: 'example-preset' } }],
+  promptDefaults: { plan: { mode: 'agent', model: 'example-default', presets: ['review-preset'] }, verify: { presets: ['review-preset'] } },
 };
 
 beforeEach(() => {
@@ -16,25 +16,25 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
-describe('profile-aware run history', () => {
-  it('seeds a named profile without promoting the resolved model to a request override', () => {
-    expect(defaultRunOptionsForAction('plan', context)).toEqual({ step: 'plan', runtimeProfile: 'review-profile', spec: {} });
+describe('preset-aware run history', () => {
+  it('seeds ordered presets without promoting the resolved model to a request override', () => {
+    expect(defaultRunOptionsForAction('plan', context)).toEqual({ step: 'plan', presets: ['review-preset'], spec: {} });
   });
 
-  it('does not add mode, model, or effort when reconciling a profile reference', () => {
-    const options = { step: 'plan', runtimeProfile: 'review-profile', spec: { budget: { maxTurns: 8 } } };
+  it('does not add mode, model, or effort when reconciling preset references', () => {
+    const options = { step: 'plan', presets: ['review-preset'], spec: { budget: { maxTurns: 8 } } };
     expect(reconcileTodoRunOptions('plan', options, context)).toEqual(options);
   });
 
-  it('round-trips a profile and an explicit model override without replacing either', () => {
-    const options = { step: 'plan', runtimeProfile: 'review-profile', spec: { model: 'example-override' } };
+  it('round-trips presets and an explicit model override without replacing either', () => {
+    const options = { step: 'plan', presets: ['review-preset'], spec: { model: 'example-override' } };
     rememberTodoRunOptions('plan', options, true);
     expect(loadLastTodoRunOptions('plan', context)).toEqual(options);
   });
 
-  it('preserves a verification profile through its separate history', () => {
-    expect(loadPromptRunOptions('verification', context)).toEqual({ step: 'verify', runtimeProfile: 'review-profile', spec: {} });
-    rememberPromptRunOptions('verification', { runtimeProfile: 'review-profile', spec: { budget: { maxTurns: 8 } } }, context);
-    expect(loadPromptRunOptions('verification', context)).toEqual({ step: 'verify', runtimeProfile: 'review-profile', spec: expect.objectContaining({ budget: { maxTurns: 8 } }) });
+  it('preserves verification presets through its separate history', () => {
+    expect(loadPromptRunOptions('verification', context)).toEqual({ step: 'verify', presets: ['review-preset'], spec: {} });
+    rememberPromptRunOptions('verification', { presets: ['review-preset'], spec: { budget: { maxTurns: 8 } } }, context);
+    expect(loadPromptRunOptions('verification', context)).toEqual({ step: 'verify', presets: ['review-preset'], spec: expect.objectContaining({ budget: { maxTurns: 8 } }) });
   });
 });

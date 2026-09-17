@@ -287,6 +287,18 @@ describe('TODO session details', () => {
     expect(collection.sessions[1]?.session).toBeUndefined();
     await collection.loadSession?.(collection.sessions[1]!);
     expect(loadAttempt).toHaveBeenCalledWith(attempts[1]);
+
+    const waiting = attemptSessionCollection({ attempts, selectedPromptRunId: 'run-current', diagnostics: [] }, [], loadAttempt, {
+      status: 'admitted', step: 'run', promptRunId: 'run-new',
+    });
+    expect(waiting.currentSessionId).toBe('run-new');
+    expect(waiting.sessions.map(item => item.id)).toEqual(['run-new', 'run-current', 'run-parallel']);
+    expect(waiting.sessions[0]?.session).toMatchObject({ id: 'run-new', messages: [] });
+
+    const hydrated = attemptSessionCollection({ attempts: [{ ...attempts[0]!, promptRunId: 'run-new', ordinal: 3 }, ...attempts], selectedPromptRunId: 'run-new', diagnostics: [] }, [], loadAttempt, {
+      status: 'admitted', step: 'run', promptRunId: 'run-new',
+    });
+    expect(hydrated.sessions.map(item => item.id)).toEqual(['run-new', 'run-current', 'run-parallel']);
   });
 
   it('copies the complete warning details including candidate metadata', async () => {

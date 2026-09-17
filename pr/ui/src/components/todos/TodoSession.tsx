@@ -1,112 +1,35 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { SessionViewer, type SessionEntry, type SessionPendingTool, type SessionToolDecision, type SessionUIMessage } from '@flanksource/clicky-ui/ai';
-import { UiCancel, UiCircleFilled, UiComment, UiError, UiLightbulb, UiPass, UiShield, type IconProps } from '@flanksource/clicky-ui/icons';
-import type { SessionStats, TodoItem, TodoRunOptions, TodoSessionAttempt } from '../../types';
-import { Spinner } from '../../icons/Spinner';
+import { SessionInspector, type SessionCollectionInput, type SessionEntry, type SessionMetadataSummary, type SessionPendingTool, type SessionToolDecision, type SessionUIMessage } from '@flanksource/clicky-ui/ai';
+import type { SessionStats, TodoItem, TodoRunOptions, TodoSessionAttempt, TodoSessionDetailResponse } from '../../types';
 import { todoQuery } from './format';
-import { TodoSessionTimer } from './TodoSessionTimer';
+import { CmuxSessionButton } from './TodoSessionTimer';
 import { TodoSessionStart } from './TodoSessionStart';
 import { SessionErrorDetails, type SessionError } from './SessionErrorDetails';
 import { CopyAllDetailsButton, SessionDiagnostics, ThreadInspector, useTodoSessionDetail } from './TodoSessionDetail';
 import type { TodoRunAction } from './run';
-import { setTodoCaches, todoMutationJSON, useTodoSessionStop } from './todoMutations';
+import { invalidateTodoCaches, setTodoCaches, todoMutationJSON, useTodoSessionStop } from './todoMutations';
 import { sessionStatsQueryOptions, todoQueryKeys } from './todoQueries';
-
-interface SessionStateView {
-  label: string;
-  icon: ComponentType<IconProps>;
-  className: string;
-}
-
-// STATE_VIEWS maps the server-derived session state (cmux.SessionStats.State) to
-// the header badge's label, icon and colour. Tints are semi-transparent so they
-// read on both the light and dark dashboard themes. The empty key is the initial
-// "no event yet" state.
-const STATE_VIEWS: Record<string, SessionStateView> = {
-  '': {
-    label: 'Waiting',
-    icon: Spinner,
-    className: 'text-muted-foreground bg-muted/50 border-border',
-  },
-  thinking: {
-    label: 'Thinking',
-    icon: UiLightbulb,
-    className: 'text-amber-600 bg-amber-500/15 border-amber-500/30',
-  },
-  working: {
-    label: 'Working',
-    icon: Spinner,
-    className: 'text-cyan-600 bg-cyan-500/15 border-cyan-500/30',
-  },
-  ask: {
-    label: 'Awaiting input',
-    icon: UiComment,
-    className: 'text-purple-600 bg-purple-500/15 border-purple-500/30',
-  },
-  approval: {
-    label: 'Needs approval',
-    icon: UiShield,
-    className: 'text-amber-600 bg-amber-500/15 border-amber-500/30',
-  },
-  completed: {
-    label: 'Completed',
-    icon: UiPass,
-    className: 'text-emerald-600 bg-emerald-500/15 border-emerald-500/30',
-  },
-  idle: {
-    label: 'Idle',
-    icon: UiCircleFilled,
-    className: 'text-muted-foreground bg-muted/50 border-border',
-  },
-  failed: {
-    label: 'Failed',
-    icon: UiError,
-    className: 'text-red-600 bg-red-500/15 border-red-500/30',
-  },
-  cancelled: {
-    label: 'Cancelled',
-    icon: UiCancel,
-    className: 'text-muted-foreground bg-muted/50 border-border',
-  },
-  interrupted: {
-    label: 'Interrupted',
-    icon: UiError,
-    className: 'text-amber-600 bg-amber-500/15 border-amber-500/30',
-  },
-  error: {
-    label: 'Error',
-    icon: UiError,
-    className: 'text-red-600 bg-red-500/15 border-red-500/30',
-  },
-};
-
-function stateView(state: string, error: string): SessionStateView {
-  if (error) return STATE_VIEWS.error;
-  return STATE_VIEWS[state] ?? STATE_VIEWS[''];
-}
+import { setTodoLaunchProgress, todoMutationStream, updateTodoLaunchProgress, useTodoLaunchProgress, type TodoLaunchProgress } from './todoLaunch';
 
 // useTodoSession follows a TODO's agent session log over SSE. The server tails
 // the on-disk Claude session log and emits each conversational line as a raw
 // captain SessionEntry, which we accumulate and hand to clicky-ui's
-// SessionViewer to render. The stream replays existing history on connect, then
+// SessionInspector to render. The stream replays existing history on connect, then
 // follows new entries until unmounted.
 export function useTodoSession(dir: string, sessionId: string | undefined, active: boolean) {
   const [entries, setEntries] = useState<Array<SessionEntry | SessionUIMessage>>([]);
-  const [connected, setConnected] = useState(false);
   const [error, setError] = useState('');
 
   useEffect(() => {
     setEntries([]);
     setError('');
-    setConnected(false);
     if (!active || !sessionId) return;
 
     const params = new URLSearchParams(todoQuery(dir));
     params.set('sessionId', sessionId);
     const es = new EventSource(`/api/todos/session/stream?${params.toString()}`);
 
-    es.onopen = () => setConnected(true);
     es.addEventListener('entry', (e: MessageEvent) => {
       try {
         const entry = JSON.parse(e.data) as SessionEntry | SessionUIMessage;
@@ -126,13 +49,12 @@ export function useTodoSession(dir: string, sessionId: string | undefined, activ
       } else {
         setError((previous) => previous || 'Session stream connection failed without returning error details');
       }
-      setConnected(false);
     });
 
     return () => es.close();
   }, [dir, sessionId, active]);
 
-  return { entries, connected, error };
+  return { entries, error };
 }
 
 // TodoSessionApprovalAction is the decision the server's approval endpoint
@@ -184,6 +106,7 @@ export function useSessionStatus(dir: string, sessionId: string | undefined, act
   );
 
   return {
+    stats,
     state: stats?.state ?? '',
     error: approveMutation.error?.message || query.error?.message || stats?.error || '',
     inProgress: stats?.inProgress ?? false,
@@ -215,7 +138,7 @@ export function TodoSession({
   active: boolean;
   todo: TodoItem;
   onChanged?: (todo: TodoItem) => void;
-  // onResume/resumeDisabled back the session timer's "Resume in cmux" action,
+  // onResume/resumeDisabled back the session toolbar's "Resume in cmux" action,
   // wired from the todo detail's run flow.
   onResume?: () => void;
   resumeDisabled?: boolean;
@@ -231,22 +154,18 @@ export function TodoSession({
   runDisabled?: boolean;
 }) {
   const queryClient = useQueryClient();
+  const launch = useTodoLaunchProgress(dir, todo.ref);
   const { detail, error: detailError } = useTodoSessionDetail(dir, todo.ref, sessionId, active);
-  const followedSessionId = detail?.thread?.providerSessionId || sessionId;
-  const { entries, connected, error } = useTodoSession(dir, followedSessionId, active);
-  const { state, error: statusError, inProgress, approvals, approve } = useSessionStatus(dir, followedSessionId, active);
-  const scrollRef = useRef<HTMLDivElement | null>(null);
-  // Host element for the SessionViewer's 3-dot menu: the viewer portals its menu
-  // into this header slot so the filter/density controls sit in the same fixed
-  // header as the status badge and session timer instead of scrolling with the log.
-  const [menuHost, setMenuHost] = useState<HTMLElement | null>(null);
-  // Follow the tail like a terminal, but stop following once the user scrolls up
-  // to read earlier history (re-engages when they scroll back to the bottom).
-  const followRef = useRef(true);
+  const launchAttempt = detail?.attempts.find(attempt => attempt.promptRunId === launch?.promptRunId);
+  const followedSessionId = launch && launch.status !== 'failed'
+    ? launchAttempt?.providerSessionId || (detail?.selectedPromptRunId === launch.promptRunId ? detail?.thread?.providerSessionId : undefined)
+    : detail?.thread?.providerSessionId || sessionId;
+  const { entries, error } = useTodoSession(dir, followedSessionId, active);
+  const { stats, state, error: statusError, inProgress, approvals, approve } = useSessionStatus(dir, followedSessionId, active);
   const answerMutation = useMutation({
     mutationKey: ['todos', 'session', 'answer', { dir: dir.trim(), ref: todo.ref }],
     mutationFn: async (decision: SessionToolDecision) => {
-      const data = await todoMutationJSON<{ todo?: TodoItem; status?: string }>(
+      const data = await todoMutationStream<{ todo?: TodoItem; status?: string; promptRunId?: string; sessionId?: string }>(
         '/api/todos/answer',
         {
           method: 'POST',
@@ -260,11 +179,16 @@ export function TodoSession({
           }),
         },
         'Could not resume the agent session',
+        resolved => updateTodoLaunchProgress(queryClient, dir, todo.ref, previous => ({ ...previous, status: 'resolved', step: resolved.step, spec: resolved.spec, specYaml: resolved.specYaml })),
       );
       if (!data.todo?.ref) throw new Error('Could not resume the agent session: response did not include the updated todo');
-      return data.todo;
+      if (!data.promptRunId) throw new Error('Could not resume the agent session: response did not include the prompt run ID');
+      return data;
     },
-    onSuccess: async (updated) => {
+    onMutate: () => setTodoLaunchProgress(queryClient, dir, todo.ref, { status: 'preparing', step: 'resume' }),
+    onSuccess: async ({ todo: updated, promptRunId, sessionId }) => {
+      if (!updated) throw new Error('Could not resume the agent session: response did not include the updated todo');
+      updateTodoLaunchProgress(queryClient, dir, todo.ref, previous => ({ ...previous, status: 'admitted', promptRunId, sessionId }));
       await setTodoCaches(queryClient, dir, updated);
       onChanged?.(updated);
       await Promise.all([
@@ -272,19 +196,12 @@ export function TodoSession({
         queryClient.invalidateQueries({ queryKey: todoQueryKeys.sessionDetail(dir, todo.ref, sessionId, false) }),
       ]);
     },
+    onError: async error => {
+      updateTodoLaunchProgress(queryClient, dir, todo.ref, previous => ({ ...previous, status: 'failed', error: error.message }));
+      await invalidateTodoCaches(queryClient, dir, todo.ref);
+    },
   });
   const stopMutation = useTodoSessionStop(dir, todo.ref, followedSessionId ?? sessionId);
-
-  function onScroll() {
-    const el = scrollRef.current;
-    if (!el) return;
-    followRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
-  }
-
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (el && followRef.current) el.scrollTop = el.scrollHeight;
-  }, [entries.length]);
 
   const pendingTools = useMemo<SessionPendingTool[]>(() => {
     if (approvals.length > 0)
@@ -360,12 +277,11 @@ export function TodoSession({
     [stopMutation.mutateAsync]
   );
 
-  if (!sessionId) {
-    return <TodoSessionStart dir={dir} todo={todo} onRun={onRun} onAdvanced={onAdvanced} runOptions={runOptions} planOptions={planOptions} onRunOptionsChange={onRunOptionsChange} onPlanOptionsChange={onPlanOptionsChange} runBusy={runBusy} runDisabled={runDisabled} />;
+  if (!sessionId && (!launch || launch.status === 'failed')) {
+    return <>{launch && <LaunchProgress launch={launch} />}<TodoSessionStart dir={dir} todo={todo} onRun={onRun} onAdvanced={onAdvanced} runOptions={runOptions} planOptions={planOptions} onRunOptionsChange={onRunOptionsChange} onPlanOptionsChange={onPlanOptionsChange} runBusy={runBusy} runDisabled={runDisabled} /></>;
   }
 
-  const threadState = detail?.thread?.status || state;
-  const view = stateView(threadState, error || statusError || detailError);
+  const metadata = todoSessionMetadata({ detail, stats, sessionId: followedSessionId });
   const sessionErrors: SessionError[] = [
     ...(error ? [{ source: 'Session stream', message: error }] : []),
     ...(statusError ? [{ source: 'Session status', message: statusError }] : []),
@@ -375,30 +291,103 @@ export function TodoSession({
   ];
 
   return (
-    <div className="m-3 flex min-h-0 flex-1 flex-col overflow-hidden rounded-md border border-border bg-card">
-      <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-border bg-muted/40 px-3 py-1.5 text-[11px] text-muted-foreground">
-        <SessionStateBadge view={view} />
-        <span className="inline-flex items-center gap-1">
-          <UiCircleFilled className={`text-[7px] ${connected ? 'text-emerald-500' : 'text-muted-foreground'}`} />
-          {connected ? 'Following session' : 'Session idle'}
-        </span>
-        <span className="font-mono">{(detail?.thread?.providerSessionId || sessionId).slice(0, 8)}</span>
-        <TodoSessionTimer dir={dir} sessionId={followedSessionId} active={active} onResume={onResume} resumeDisabled={resumeDisabled} />
-        {detail && <CopyAllDetailsButton detail={detail} entries={entries} />}
-        <span ref={setMenuHost} className="ml-auto inline-flex items-center" />
-      </div>
+    <div className="@container flex min-h-0 flex-1 flex-col overflow-hidden bg-muted/20">
+      {launch && <LaunchProgress launch={launch} />}
       {detail && <SessionDiagnostics diagnostics={detail.diagnostics} />}
       <SessionErrorDetails errors={sessionErrors} />
-      <div ref={scrollRef} onScroll={onScroll} className={`min-h-0 flex-1 ${detail?.thread ? 'overflow-hidden' : 'overflow-y-auto px-3 py-2'}`}>
-        {entries.length === 0 && sessionErrors.length === 0 && <div className="text-xs text-muted-foreground">Waiting for session activity…</div>}
-        {detail?.thread ? (
-          <ThreadInspector detail={detail} entries={entries} dir={dir} todoRef={todo.ref} onStop={stopAttempt} pendingTools={pendingTools} onPendingToolDecision={decide} />
-        ) : (
-          entries.length > 0 && <SessionViewer session={entries as SessionEntry[] | SessionUIMessage[]} pendingTools={pendingTools} onPendingToolDecision={decide} showHeader={false} menuContainer={menuHost} className="text-xs" />
-        )}
-        {!detail?.thread && entries.length === 0 && pendingTools.length > 0 && <SessionViewer session={[]} pendingTools={pendingTools} onPendingToolDecision={decide} showHeader={false} menuContainer={menuHost} className="text-xs" />}
-      </div>
+      {detail && (detail.thread || (launch && launch.status !== 'failed')) ? (
+        <ThreadInspector
+          detail={detail}
+          entries={entries}
+          dir={dir}
+          todoRef={todo.ref}
+          onStop={stopAttempt}
+          pendingTools={pendingTools}
+          onPendingToolDecision={decide}
+          layout={launch && launch.status !== 'failed' && (!detail.thread || detail.selectedPromptRunId !== launch.promptRunId) ? 'default' : 'compact'}
+          metadata={metadata}
+          launch={launch}
+          toolbarActions={<SessionToolbarActions dir={dir} sessionId={followedSessionId} agent={stats?.agent} detail={detail} entries={entries} onResume={onResume} resumeDisabled={resumeDisabled} />}
+        />
+      ) : launch && launch.status !== 'failed' ? (
+        <SessionInspector
+          session={launchCollection(todo.ref, launch)}
+          className="min-h-0 flex-1 text-xs"
+        />
+      ) : (
+        <SessionInspector
+          session={entries as SessionEntry[] | SessionUIMessage[]}
+          className="min-h-0 flex-1 text-xs"
+          layout="compact"
+          metadata={metadata}
+          toolbarActions={<SessionToolbarActions dir={dir} sessionId={followedSessionId} agent={stats?.agent} detail={detail} entries={entries} onResume={onResume} resumeDisabled={resumeDisabled} />}
+          transcriptProps={{ pendingTools, onPendingToolDecision: decide, showHeader: false, className: 'text-xs' }}
+        />
+      )}
     </div>
+  );
+}
+
+function launchCollection(ref: string, launch: TodoLaunchProgress): SessionCollectionInput {
+  const id = launch.promptRunId || 'pending-launch';
+  return {
+    kind: 'session-collection',
+    id: `todo-attempts:${ref}`,
+    currentSessionId: id,
+    sessions: [{
+      id,
+      label: 'Attempt #1',
+      mode: launch.step,
+      status: launch.status === 'admitted' ? 'running' : 'starting',
+      session: { id, messages: [] },
+    }],
+  };
+}
+
+function LaunchProgress({ launch }: { launch: TodoLaunchProgress }) {
+  const title = launch.status === 'preparing' ? 'Preparing session'
+    : launch.status === 'resolved' ? 'Starting session'
+      : launch.status === 'failed' ? 'Session could not start' : 'Session started';
+  return (
+    <section aria-label="Launch progress" className="shrink-0 border-b bg-background px-3 py-2 text-xs">
+      <div className="font-medium">{title} · {launch.step}</div>
+      {launch.error && <div role="alert" className="mt-1 text-red-600">{launch.error}</div>}
+      {(launch.specYaml || launch.requestedSpec) && (
+        <details className="mt-1" open={launch.status === 'preparing' || launch.status === 'resolved'}>
+          <summary>{launch.specYaml ? 'Resolved spec' : 'Requested spec'}</summary>
+          <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-words">{launch.specYaml || JSON.stringify(launch.requestedSpec, null, 2)}</pre>
+        </details>
+      )}
+    </section>
+  );
+}
+
+function todoSessionMetadata({ detail, stats, sessionId }: { detail: TodoSessionDetailResponse | null; stats: SessionStats | undefined; sessionId: string | undefined }): SessionMetadataSummary {
+  const attempt = detail?.attempts.find(candidate => candidate.promptRunId === detail.selectedPromptRunId || candidate.executionSessionId === detail.selectedExecutionSessionId);
+  const root = detail?.thread?.root;
+  const provider = root?.modelProvider || attempt?.provider || root?.provider;
+  const executionMode = root?.modelMode || attempt?.runtimeMode;
+  const model = stats?.model || root?.model || attempt?.model;
+  const reasoningEffort = stats?.effort || root?.effort || attempt?.effort;
+  const contextPercent = stats?.contextWindow ? Math.min(100, Math.max(0, stats.contextTokens / stats.contextWindow * 100)) : undefined;
+  return {
+    ...(sessionId ? { sessionId } : {}),
+    ...(provider ? { provider } : {}),
+    ...(executionMode ? { executionMode } : {}),
+    ...(model ? { model } : {}),
+    ...(reasoningEffort ? { reasoningEffort } : {}),
+    ...(contextPercent !== undefined ? { context: { usedTokens: stats?.contextTokens, windowTokens: stats?.contextWindow, freePercent: 100 - contextPercent } } : {}),
+    ...(stats ? { usage: { inputTokens: stats.inputTokens, outputTokens: stats.outputTokens, cacheReadTokens: stats.cacheReadTokens, cacheWriteTokens: stats.cacheCreationTokens, totalTokens: stats.totalTokens } } : {}),
+    ...(stats?.costUsd ? { cost: { inputCost: stats.costUsd } } : {}),
+  };
+}
+
+function SessionToolbarActions({ dir, sessionId, agent, detail, entries, onResume, resumeDisabled }: { dir: string; sessionId: string | undefined; agent: string | undefined; detail: TodoSessionDetailResponse | null; entries: Array<SessionEntry | SessionUIMessage>; onResume: (() => void) | undefined; resumeDisabled: boolean | undefined }) {
+  return (
+    <>
+      {sessionId ? <CmuxSessionButton dir={dir} sessionId={sessionId} {...(agent ? { agent } : {})} {...(onResume ? { onResume } : {})} {...(resumeDisabled !== undefined ? { resumeDisabled } : {})} /> : null}
+      {detail ? <CopyAllDetailsButton detail={detail} entries={entries} compact /> : null}
+    </>
   );
 }
 
@@ -443,14 +432,4 @@ function formatDecisionAnswers(answers?: Record<string, string | string[]>): str
   return Object.entries(answers)
     .map(([question, answer]) => `${question}: ${Array.isArray(answer) ? answer.join(', ') : answer}`)
     .join('\n');
-}
-
-function SessionStateBadge({ view }: { view: SessionStateView }) {
-  const Icon = view.icon;
-  return (
-    <span className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-medium uppercase ${view.className}`}>
-      <Icon className="text-[11px]" />
-      {view.label}
-    </span>
-  );
 }

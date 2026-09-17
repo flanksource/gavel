@@ -44,6 +44,19 @@ export function normalizeRunOptions(action: string, options: TodoRunOptions): To
   return next;
 }
 
+// withoutPromptContent drops the prompt body and attachments a run was
+// dispatched with. Both were rendered from one todo, so a remembered run choice
+// carrying them replays that todo's prompt on every later run of the step. An
+// emptied prompt section is removed rather than kept as `prompt: {}`, which the
+// server reads as an explicit, empty prompt override.
+export function withoutPromptContent(options: TodoRunOptions): TodoRunOptions {
+  if (!options.spec?.prompt) return options;
+  const { prompt, ...spec } = options.spec;
+  const { user: _user, attachments: _attachments, ...kept } = prompt;
+  const hasKept = Object.values(kept).some(value => value !== undefined);
+  return { ...options, spec: hasKept ? { ...spec, prompt: kept } : spec };
+}
+
 function coerceRunOptions(value: unknown): TodoRunOptions | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   return value as TodoRunOptions;
@@ -60,19 +73,30 @@ export function readRunChoiceState(): RunChoiceState {
     const recent = parsed.recentAdvanced ?? {};
     for (const action of new Set([...Object.keys(last), ...Object.keys(recent)])) {
       const lastOptions = coerceRunOptions(last[action]);
-      if (lastOptions) state.last[action] = normalizeRunOptions(action, lastOptions);
+      if (lastOptions) state.last[action] = withoutPromptContent(normalizeRunOptions(action, lastOptions));
       const recentOptions = recent[action];
       if (!Array.isArray(recentOptions)) continue;
       state.recentAdvanced[action] = recentOptions
         .map(coerceRunOptions)
         .filter((item): item is TodoRunOptions => !!item)
-        .map(item => normalizeRunOptions(action, item))
+        .map(item => withoutPromptContent(normalizeRunOptions(action, item)))
         .slice(0, 3);
     }
     return state;
   } catch {
     return emptyRunChoiceState();
   }
+}
+
+// lastTodoRunOptions returns the raw "last used" entry for a lifecycle step,
+// with no synthesized fallback — undefined means nothing has actually been
+// run for this step yet. Contrast with run.tsx's loadLastTodoRunOptions,
+// which falls back to defaultRunOptionsForAction so the quick-run buttons
+// always have something to dispatch; this reader backs the advanced dialogs'
+// "Last used" restore option, which must only appear when there is a real
+// remembered choice to offer.
+export function lastTodoRunOptions(action: string): TodoRunOptions | undefined {
+  return readRunChoiceState().last[action];
 }
 
 export function writeRunChoiceState(state: RunChoiceState): void {

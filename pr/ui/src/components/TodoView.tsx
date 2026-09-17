@@ -227,9 +227,10 @@ function useTodoNavigator(todos: WorkspaceTodos, query: string, enabled: boolean
   return { columns, rows: matched as TodoTableRow[], navigation };
 }
 
-export function TodoFullPane({ todos, projectsLoaded, navigationEnabled = true }: {
+export function TodoFullPane({ todos, projectsLoaded, scopeProject = '', navigationEnabled = true }: {
   todos: WorkspaceTodos;
   projectsLoaded: boolean;
+  scopeProject?: string;
   navigationEnabled?: boolean;
 }) {
   const [query, setQuery] = useState('');
@@ -245,6 +246,7 @@ export function TodoFullPane({ todos, projectsLoaded, navigationEnabled = true }
           columns={navigator.columns}
           query={query}
           onQueryChange={setQuery}
+          scopeProject={scopeProject}
         />
       )}
       detail={selected && (

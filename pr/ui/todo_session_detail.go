@@ -224,7 +224,7 @@ func buildTodoSessionDetail(ctx context.Context, provider sessionDetailProvider,
 			rootID = selected.ExecutionSessionID
 			response.SelectedExecutionSession = selected.ExecutionSessionID
 		}
-		if providerID == "" {
+		if providerID == "" || providerID == selected.PromptRunID.String() || providerID == selected.AdmissionSession.String() {
 			providerID = selected.ProviderSessionID
 		}
 	}
@@ -292,7 +292,7 @@ func attemptDetail(ordinal int, link native.PromptRunLink, overview captaindb.Pr
 func selectAttempt(attempts []todoAttemptDetail, sessionID string) *todoAttemptDetail {
 	for index := range attempts {
 		attempt := &attempts[index]
-		if sessionID == "" || attempt.ProviderSessionID == sessionID || (attempt.ExecutionSessionID != nil && attempt.ExecutionSessionID.String() == sessionID) {
+		if sessionID == "" || attempt.ProviderSessionID == sessionID || attempt.PromptRunID.String() == sessionID || attempt.AdmissionSession.String() == sessionID || (attempt.ExecutionSessionID != nil && attempt.ExecutionSessionID.String() == sessionID) {
 			return attempt
 		}
 	}

@@ -30,6 +30,8 @@ export interface TodoRunOptions {
   // prompt/budget/permissions/setup/workflow/sessionId nested, mirroring
   // clicky's AISpecRuntimeValue.
   spec?: AISpecRuntimeValue;
+  presets?: string[];
+  /** @deprecated Runtime profiles are ignored by the server. Use presets. */
   runtimeProfile?: string;
   // step is the lifecycle step name the request dispatches — the sole
   // behaviour-selecting field POST /api/todos/run accepts now (the endpoint
@@ -71,6 +73,8 @@ export interface TodoRunResponse {
   driver?: TodoRunDriver;
   // runtimeMode is the mechanism the run dispatched on (api | agent | cli | cmux).
   runtimeMode?: string;
+  presets?: string[];
+  /** @deprecated Runtime profiles are ignored by the server. Use presets. */
   runtimeProfile?: string;
   model?: string;
   effort?: TodoRunEffort;
@@ -78,6 +82,7 @@ export interface TodoRunResponse {
   resume?: boolean;
   // Session id the run uses; lets the UI follow the session log immediately.
   sessionId?: string;
+  promptRunId?: string;
   timeout: string;
   maxBudget?: number;
   maxTurns?: number;
@@ -91,6 +96,7 @@ export interface TodoRunResponse {
 export interface TodoRunPreviewResponse {
   spec?: AISpecRuntimeValue;
   provenance?: TodoRunProvenance;
+  runtimePresets?: Array<{ id: string; name: string }>;
   // Capability warnings from the same full-input preflight used before admission.
   warnings?: string[];
   prompt: string;

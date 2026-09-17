@@ -16,7 +16,7 @@ import {
   useTodoRunContext,
 } from "./run";
 import { buildRunFamilies, type RunContext } from "./providers";
-import { effectiveTodoRuntime, unresolvedTodoRuntimeProfile } from './runtimeProfiles';
+import { effectiveTodoRuntime, unresolvedTodoRuntimePreset } from './runtimePresets';
 
 export function TodoRunRuntimeBar({
   action,
@@ -33,8 +33,8 @@ export function TodoRunRuntimeBar({
 }) {
   const spec = runSpec(options);
   const inherited = effectiveTodoRuntime(options, context);
-  const profile = unresolvedTodoRuntimeProfile(options, context);
-  if (profile) return <span className="inline-flex items-center rounded-md border border-border px-2 text-xs text-muted-foreground">Profile: {profile}</span>;
+  const preset = unresolvedTodoRuntimePreset(options, context);
+  if (preset) return <span className="inline-flex items-center rounded-md border border-border px-2 text-xs text-muted-foreground">Preset: {preset}</span>;
   return (
     <fieldset disabled={disabled} className="min-w-0 border-0 p-0 disabled:opacity-50">
       <RuntimeBar<AISpecRuntimeValue>

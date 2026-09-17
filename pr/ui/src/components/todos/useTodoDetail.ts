@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import type { TodoItem, TodoPriority, TodoRunOptions, TodoStatus } from '../../types';
 import type { TodoDetailProps } from './TodoDetail';
 import { useSessionStats } from './TodoSessionTimer';
-import { loadLastTodoRunOptions, rememberTodoRunOptions, requestStepFor, runSpec, useTodoRun, useTodoRunContext } from './run';
+import { loadLastTodoRunOptions, normalizeRunOptions, rememberTodoRunOptions, requestStepFor, runSpec, useTodoRun, useTodoRunContext } from './run';
 import { loadPromptRunOptions, rememberPromptRunOptions, verificationSpec } from './PromptRunButton';
 import type { PhaseRunOptions } from './TodoPhaseButton';
 import type { TodoDetailTabKey } from './TodoDetailTabs';
@@ -10,6 +10,7 @@ import { useTodoSessionDetail } from './TodoSessionDetail';
 import { verificationAttempts, verificationBadge } from './verificationReport';
 import { TodoMutationError, useDeleteTodoMutation, useGithubPushTodoMutation, useTodoSessionStop, useTodoVerificationRun, useTransferTodoMutation, useUpdateTodoMutation } from './todoMutations';
 import { useTodoTagCounts, useTodoTagIndex } from './tagQueries';
+import { useTodoLaunchProgress } from './todoLaunch';
 import { todoVisibleLabels } from './tagResolve';
 
 export function useTodoDetail({ todo, dir, onChanged, onDeleted, workspaces = [], onTransferred }: TodoDetailProps) {
@@ -24,6 +25,7 @@ export function useTodoDetail({ todo, dir, onChanged, onDeleted, workspaces = []
   const [draftBody, setDraftBody] = useState('');
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'error'>('idle');
   const { runBusy, runMessage, runError, reset: resetRun, run } = useTodoRun(dir);
+  const launch = useTodoLaunchProgress(dir, todo?.ref ?? '');
   const { context: runContext } = useTodoRunContext({ dir });
   const updateTodo = useUpdateTodoMutation(dir, `Failed to update todo ${todo?.ref || ''}`.trim());
   const deleteTodo = useDeleteTodoMutation(dir);
@@ -58,7 +60,9 @@ export function useTodoDetail({ todo, dir, onChanged, onDeleted, workspaces = []
   // Same cached query as the index, so the picker can lead with the tags this
   // project actually uses without a second request.
   const tagCounts = useTodoTagCounts(dir);
-  const viewSessionId = todo?.lookupSessionId || todo?.sessionId;
+  const viewSessionId = launch?.status === 'admitted' && launch.promptRunId
+    ? launch.promptRunId
+    : todo?.lookupSessionId || todo?.sessionId;
   const viewingHistoricalSession = !!todo?.lookupSessionId && todo.lookupSessionId !== todo.sessionId;
   const { stats: headerSessionStats } = useSessionStats({ dir, sessionId: todo?.sessionId, active: !!todo?.sessionId });
   const sessionInProgress = !!todo && !!todo.sessionId && (headerSessionStats?.inProgress || (!headerSessionStats?.found && todo.status === 'in_progress'));
@@ -242,6 +246,7 @@ export function useTodoDetail({ todo, dir, onChanged, onDeleted, workspaces = []
       try {
         await verificationRun.mutateAsync({
           ref: todo.ref,
+          presets: options.presets,
           runtimeProfile: options.runtimeProfile,
           spec: verificationSpec(runSpec(options)),
         });
@@ -254,16 +259,19 @@ export function useTodoDetail({ todo, dir, onChanged, onDeleted, workspaces = []
     await runTodo({ ...options, step: name });
   }
 
+  // The advanced dialog dispatches exactly what the operator set. Remembering
+  // reconciles its copy against the catalog for the quick-run buttons, but that
+  // copy must not replace the request (it would swap an effort nobody chose).
   function submitAdvanced(options: TodoRunOptions) {
     if (!runContext) return;
     const step = requestStepFor(options);
-    const remembered = step === 'verify'
-      ? rememberPromptRunOptions('verification', options, runContext)
-      : rememberTodoRunOptions(step, options, true);
-    if (step === 'verify') setVerifySelection(remembered);
-    else setRunSelections(previous => ({ ...previous, [step]: remembered }));
+    const dispatched = step === 'verify'
+      ? { step, presets: options.presets, spec: verificationSpec(runSpec(options)) }
+      : normalizeRunOptions(step, options);
+    if (step === 'verify') setVerifySelection(rememberPromptRunOptions('verification', dispatched, runContext));
+    else setRunSelections(previous => ({ ...previous, [step]: rememberTodoRunOptions(step, dispatched, true) }));
     setAdvancedMode(null);
-    void runPhase(step, remembered);
+    void runPhase(step, dispatched);
   }
 
   async function stopRun() {
@@ -278,6 +286,7 @@ export function useTodoDetail({ todo, dir, onChanged, onDeleted, workspaces = []
 
   async function runTodo(options?: TodoRunOptions) {
     if (!todo) return;
+    setTab('session');
     const result = await run(todo.ref, options);
     if (result?.status === 'started') {
       onChanged({
@@ -287,8 +296,6 @@ export function useTodoDetail({ todo, dir, onChanged, onDeleted, workspaces = []
         // Adopt the run's session id so the Session tab follows the new run.
         sessionId: result.sessionId || todo.sessionId,
       });
-      // Surface the live session as soon as a run starts.
-      setTab('session');
     }
   }
 

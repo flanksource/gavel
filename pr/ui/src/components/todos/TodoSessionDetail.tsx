@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   SessionInspector,
@@ -7,6 +7,7 @@ import {
   type SessionCollectionItem,
   type SessionEntry,
   type SessionInput,
+  type SessionMetadataSummary,
   type SessionPendingTool,
   type SessionToolDecision,
   type SessionUIMessage,
@@ -18,6 +19,7 @@ import type { TodoSessionAttempt, TodoSessionDetailResponse, TodoSessionDiagnost
 import { Spinner } from '../../icons/Spinner';
 import { copyText } from '../../clipboard';
 import { sessionDetailQueryOptions } from './todoQueries';
+import type { TodoLaunchProgress } from './todoLaunch';
 
 export { fetchTodoSessionDetail } from './todoQueries';
 
@@ -94,6 +96,10 @@ export function ThreadInspector({
   onStop,
   pendingTools,
   onPendingToolDecision,
+  layout,
+  metadata,
+  toolbarActions,
+  launch,
 }: {
   detail: TodoSessionDetailResponse;
   entries: Array<SessionEntry | SessionUIMessage>;
@@ -102,6 +108,10 @@ export function ThreadInspector({
   onStop: (attempt: TodoSessionAttempt) => Promise<void>;
   pendingTools: SessionPendingTool[];
   onPendingToolDecision: (decision: SessionToolDecision) => Promise<void> | void;
+  layout?: 'default' | 'compact';
+  metadata?: SessionMetadataSummary;
+  toolbarActions?: ReactNode;
+  launch?: TodoLaunchProgress | null;
 }) {
   const queryClient = useQueryClient();
   const loadAttempt = useCallback(
@@ -114,7 +124,7 @@ export function ThreadInspector({
     },
     [dir, queryClient, todoRef]
   );
-  const collection = useMemo(() => attemptSessionCollection(detail, entries, loadAttempt), [detail, entries, loadAttempt]);
+  const collection = useMemo(() => attemptSessionCollection(detail, entries, loadAttempt, launch), [detail, entries, loadAttempt, launch]);
   return (
     <SessionInspector
       session={collection}
@@ -125,6 +135,9 @@ export function ThreadInspector({
         showHeader: false,
         className: 'text-xs',
       }}
+      {...(layout ? { layout } : {})}
+      {...(metadata ? { metadata } : {})}
+      {...(toolbarActions ? { toolbarActions } : {})}
       renderSessionActions={(item) => {
         const attempt = detail.attempts.find((candidate) => candidate.promptRunId === item.id);
         return attempt ? <AttemptStopAction attempt={attempt} onStop={onStop} /> : null;
@@ -133,17 +146,27 @@ export function ThreadInspector({
   );
 }
 
-export function attemptSessionCollection(detail: TodoSessionDetailResponse, entries: Array<SessionEntry | SessionUIMessage>, loadAttempt: (attempt: TodoSessionAttempt) => Promise<UnifiedSessionInput>): SessionCollectionInput {
-  if (!detail.thread || !detail.selectedPromptRunId) {
-    throw new Error('A selected provider thread is required for session hierarchy');
-  }
-  const currentMessages = mergeTranscriptMessages(detail.thread.messages, entries);
-  const current = requireUnifiedSession(inspectorSession(detail, currentMessages));
+export function attemptSessionCollection(detail: TodoSessionDetailResponse, entries: Array<SessionEntry | SessionUIMessage>, loadAttempt: (attempt: TodoSessionAttempt) => Promise<UnifiedSessionInput>, launch?: TodoLaunchProgress | null): SessionCollectionInput {
+  const activeLaunch = launch?.status !== 'failed' ? launch : null;
+  const selectedId = activeLaunch?.promptRunId || (activeLaunch ? 'pending-launch' : detail.selectedPromptRunId);
+  if (!selectedId) throw new Error('A selected attempt is required for session hierarchy');
+  const current = detail.thread && detail.selectedPromptRunId === selectedId
+    ? requireUnifiedSession(inspectorSession(detail, mergeTranscriptMessages(detail.thread.messages, entries)))
+    : { id: selectedId, messages: [] };
+  const hasLaunchAttempt = detail.attempts.some(attempt => attempt.promptRunId === selectedId);
   return {
     kind: 'session-collection',
-    id: `todo-attempts:${detail.thread.id}`,
-    currentSessionId: detail.selectedPromptRunId,
-    sessions: detail.attempts.map((attempt) => {
+    id: `todo-attempts:${detail.thread?.id || selectedId}`,
+    currentSessionId: selectedId,
+    sessions: [
+      ...(!hasLaunchAttempt && activeLaunch ? [{
+        id: selectedId,
+        label: `Attempt #${detail.attempts.length + 1}`,
+        mode: activeLaunch.step,
+        status: activeLaunch.status === 'admitted' ? 'running' : 'starting',
+        session: current,
+      }] : []),
+      ...detail.attempts.map((attempt) => {
       const status = attempt.stopping ? 'stopping' : attempt.status;
       const item: SessionCollectionItem = {
         id: attempt.promptRunId,
@@ -162,9 +185,10 @@ export function attemptSessionCollection(detail: TodoSessionDetailResponse, entr
           updatedAt: attempt.updatedAt,
         },
       };
-      if (attempt.promptRunId === detail.selectedPromptRunId) item.session = current;
+      if (attempt.promptRunId === selectedId) item.session = current;
       return item;
-    }),
+      }),
+    ],
     loadSession: (item) => {
       const attempt = detail.attempts.find((candidate) => candidate.promptRunId === item.id);
       if (!attempt) throw new Error(`Unknown attempt ${item.id}`);
@@ -210,21 +234,24 @@ function AttemptStopAction({ attempt, onStop }: { attempt: TodoSessionAttempt; o
   );
 }
 
-export function CopyAllDetailsButton({ detail, entries }: { detail: TodoSessionDetailResponse; entries: Array<SessionEntry | SessionUIMessage> }) {
+export function CopyAllDetailsButton({ detail, entries, compact = false }: { detail: TodoSessionDetailResponse; entries: Array<SessionEntry | SessionUIMessage>; compact?: boolean }) {
   const [copied, setCopied] = useState(false);
   return (
     <Button
       variant="ghost"
+      {...(compact ? { size: 'icon' as const } : {})}
       type="button"
       aria-label="Copy all session details"
-      className="h-8 gap-1 px-2 text-[11px]"
+      title="Copy all session details"
+      className={compact ? 'hidden size-7 shrink-0 text-muted-foreground hover:bg-muted hover:text-foreground @min-[48rem]:inline-flex' : 'h-8 gap-1 px-2 text-[11px]'}
       onClick={async () => {
         await copyText(JSON.stringify({ ...detail, transcript: entries }, null, 2));
         setCopied(true);
         window.setTimeout(() => setCopied(false), 1800);
       }}
     >
-      {copied ? <UiCheck className="text-emerald-600" /> : <UiCopy />} {copied ? 'Copied' : 'Copy all'}
+      {copied ? <UiCheck className="text-emerald-600" /> : <UiCopy />}
+      {!compact ? (copied ? 'Copied' : 'Copy all') : null}
     </Button>
   );
 }

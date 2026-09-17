@@ -70,13 +70,17 @@ func registerTodoEntity() error {
 // request layer, dispatched as the dashboard host so a bulk run brokers
 // approvals exactly like the single run started from the same page.
 func resolveBulkRunOptions(_ context.Context, req bulk.RunRequest) (run.Options, error) {
+	presets := append([]string(nil), req.Flags.Presets...)
+	if req.Flags.NoPresets {
+		presets = []string{}
+	}
 	return buildTodoRunOptions(todoRunPayload{
-		RuntimeProfile: req.Flags.RuntimeProfile,
-		Dir:            req.Dir,
-		Ref:            todos.TODOReference(req.Todo),
-		Step:           req.Step,
-		Spec:           req.Flags.Spec(),
-		Resume:         req.Flags.Resume,
+		Presets: presets,
+		Dir:     req.Dir,
+		Ref:     todos.TODOReference(req.Todo),
+		Step:    req.Step,
+		Spec:    req.Flags.Spec(),
+		Resume:  req.Flags.Resume,
 	}, nil)
 }
 

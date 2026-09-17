@@ -9,6 +9,7 @@ import (
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/run"
 	"github.com/flanksource/gavel/todos/types"
+	"github.com/google/uuid"
 )
 
 const todoReviewActor = "gavel-ui"
@@ -107,14 +108,23 @@ func (s *Server) handleTodoPlanApprove(w http.ResponseWriter, r *http.Request) {
 	resp := todoApproveResponse{Todo: sum}
 	if chained != nil {
 		chained.Todo = todo
-		started, err := s.startContinuation(r.Context(), *chained)
+		stream := newTodoLaunchStream(w, r)
+		started, err := s.startContinuation(r.Context(), *chained, stream)
 		if err != nil {
 			resp.Error = err.Error()
+			if stream != nil && stream.started {
+				stream.failed(continuationFailureStatus(err), err)
+				return
+			}
 			writeTodoJSON(w, continuationFailureStatus(err), resp)
 			return
 		}
 		started.Message = "Approved plan — implementing"
 		resp.Run = &started
+		if stream != nil {
+			_ = stream.send("admitted", resp)
+			return
+		}
 	}
 	writeTodoJSON(w, http.StatusOK, resp)
 }
@@ -243,13 +253,23 @@ func (s *Server) handleTodoPlanRevise(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp := todoAnswerResponse{Todo: sum, Status: "revising"}
-	started, err := s.startContinuation(r.Context(), req)
+	stream := newTodoLaunchStream(w, r)
+	started, err := s.startContinuation(r.Context(), req, stream)
 	if err != nil {
 		resp.Status, resp.Error = "failed", err.Error()
+		if stream != nil && stream.started {
+			stream.failed(continuationFailureStatus(err), err)
+			return
+		}
 		writeTodoJSON(w, continuationFailureStatus(err), resp)
 		return
 	}
 	resp.SessionID = started.SessionID
+	resp.PromptRunID = started.PromptRunID
+	if stream != nil {
+		_ = stream.send("admitted", resp)
+		return
+	}
 	writeTodoJSON(w, http.StatusOK, resp)
 }
 
@@ -287,17 +307,23 @@ func (s *Server) continuationRequest(c run.Continuation) (run.Request, error) {
 // startContinuation resolves and starts a continuation, answering with the same
 // description of the run /api/todos/run gives. The fold it reports is the fold
 // it dispatches.
-func (s *Server) startContinuation(ctx context.Context, req run.Request) (todoRunResponse, error) {
+func (s *Server) startContinuation(ctx context.Context, req run.Request, stream *todoLaunchStream) (todoRunResponse, error) {
 	prepared, err := run.Resolve(ctx, req)
 	if err != nil {
 		return todoRunResponse{}, err
 	}
 	req.Prepared = prepared
+	if err := stream.resolved(prepared); err != nil {
+		return todoRunResponse{}, err
+	}
 	started, err := run.Start(req)
 	if err != nil {
 		return todoRunResponse{}, err
 	}
 	resp := todoRunResponseFor(todoSource{Dir: req.Dir}, []*types.TODO{req.Todo}, req.Options, prepared)
 	resp.Status, resp.SessionID, resp.Message = started.Status, started.SessionID, started.Message
+	if started.PromptRunID != uuid.Nil {
+		resp.PromptRunID = started.PromptRunID.String()
+	}
 	return resp, nil
 }

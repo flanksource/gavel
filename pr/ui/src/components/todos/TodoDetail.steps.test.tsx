@@ -6,7 +6,7 @@ import type { RunContext } from './providers';
 import { TodoDetail } from './TodoDetail';
 import { readRunChoiceState } from './runChoiceStorage';
 
-const execution = vi.hoisted(() => ({ run: vi.fn(), verify: vi.fn(), reset: vi.fn(), step: 'verify' }));
+const execution = vi.hoisted(() => ({ run: vi.fn(), verify: vi.fn(), reset: vi.fn(), step: 'verify', spec: undefined as Record<string, unknown> | undefined }));
 const spec = { mode: 'agent', model: 'example-model', effort: 'medium' as const };
 const context: RunContext = {
   modes: [{ id: 'agent', label: 'Agent', provider: 'openai', agent: 'codex', defaultModel: spec.model, driver: 'agent', mechanisms: [], models: [{ id: spec.model, label: 'Example', provider: 'openai', reasoning: true }] }],
@@ -50,7 +50,7 @@ vi.mock('./TodoPhaseButton', () => ({
 }));
 vi.mock('./TodoRunAdvancedDialog', () => ({
   TodoRunAdvancedDialog: ({ open, initialMode, onRun }: { open: boolean; initialMode: string; onRun: (options: TodoRunOptions) => void }) => open && (
-    <div data-testid="advanced-step">{initialMode}<Button onClick={() => onRun({ step: execution.step, spec })}>Dispatch selected step</Button></div>
+    <div data-testid="advanced-step">{initialMode}<Button onClick={() => onRun({ step: execution.step, spec: execution.spec ?? spec })}>Dispatch selected step</Button></div>
   ),
 }));
 
@@ -63,6 +63,7 @@ beforeEach(() => {
   execution.run.mockReset();
   execution.verify.mockReset();
   execution.step = 'verify';
+  execution.spec = undefined;
   const values = new Map<string, string>();
   vi.stubGlobal('localStorage', { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => values.set(key, value) });
 });
@@ -88,6 +89,17 @@ describe('TodoDetail named step dispatch', () => {
     expect(execution.run).not.toHaveBeenCalled();
   });
 
+  // The catalog only offers `medium` for this model, so reconciling the request
+  // would rewrite `high`; the advanced dialog's choice must reach the server as set.
+  it('dispatches an advanced verification runtime exactly as set, without reconciling its effort', async () => {
+    const chosen = { mode: 'agent', model: 'example-model', effort: 'high' };
+    execution.spec = chosen;
+    await openDetail();
+    fireEvent.click(screen.getByRole('button', { name: 'Advanced verify' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Dispatch selected step' }));
+    await waitFor(() => expect(execution.verify).toHaveBeenCalledWith({ ref: todo.ref, spec: chosen }));
+  });
+
   it('remembers and dispatches the selected step after changing the dialog from run to plan', async () => {
     execution.step = 'plan';
     await openDetail();
@@ -96,6 +108,22 @@ describe('TodoDetail named step dispatch', () => {
     await waitFor(() => expect(execution.run).toHaveBeenCalledWith(todo.ref, { step: 'plan', spec }));
     expect(readRunChoiceState().last.plan).toEqual({ step: 'plan', spec });
     expect(readRunChoiceState().last.run).toBeUndefined();
+  });
+
+  // The edited prompt was rendered for this todo. The advanced dispatch sends it
+  // once; a later quick run of the same step, on this or any other todo, must
+  // render its own prompt instead of replaying the remembered one.
+  it('dispatches an edited prompt once without replaying it on the next quick run', async () => {
+    const editedPrompt = { user: '## Review lifecycle routing\n\nEdited prompt body' };
+    execution.step = 'plan';
+    execution.spec = { ...spec, prompt: editedPrompt };
+    await openDetail();
+    fireEvent.click(screen.getByRole('button', { name: 'Advanced plan' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Dispatch selected step' }));
+    await waitFor(() => expect(execution.run).toHaveBeenCalledWith(todo.ref, { step: 'plan', spec: { ...spec, prompt: editedPrompt } }));
+    expect(readRunChoiceState().last.plan).toEqual({ step: 'plan', spec });
+    fireEvent.click(screen.getByRole('button', { name: 'Start plan' }));
+    await waitFor(() => expect(execution.run).toHaveBeenLastCalledWith(todo.ref, { step: 'plan', spec }));
   });
 
   // A step the operator has never configured dispatches by name with an empty
