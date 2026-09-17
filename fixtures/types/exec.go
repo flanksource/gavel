@@ -286,8 +286,6 @@ func runWithPTY(ctx context.Context, execBase fixtures.ExecFixtureBase, workDir 
 	capture, err := fixtures.CaptureANSI(opts)
 	if err != nil {
 		return &clickyExec.ExecResult{
-			Stdout:   "",
-			Stderr:   "",
 			ExitCode: -1,
 			Error:    fmt.Errorf("failed to start PTY: %w", err),
 			Started:  &now,
