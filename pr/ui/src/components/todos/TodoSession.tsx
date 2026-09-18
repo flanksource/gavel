@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { SessionInspector, type SessionCollectionInput, type SessionEntry, type SessionMetadataSummary, type SessionPendingTool, type SessionToolDecision, type SessionUIMessage } from '@flanksource/clicky-ui/ai';
+import { SessionInspector, questionsFromToolInput, type SessionCollectionInput, type SessionEntry, type SessionMetadataSummary, type SessionPendingTool, type SessionToolDecision, type SessionUIMessage } from '@flanksource/clicky-ui/ai';
 import type { SessionStats, TodoItem, TodoRunOptions, TodoSessionAttempt, TodoSessionDetailResponse } from '../../types';
 import { todoQuery } from './format';
 import { CmuxSessionButton } from './TodoSessionTimer';
@@ -173,8 +173,8 @@ export function TodoSession({
           body: JSON.stringify({
             dir,
             ref: todo.ref,
-            answer: decision.message || formatDecisionAnswers(decision.answers),
-            answers: decision.answers,
+            answer: decision.message || (decision.allow ? formatDecisionAnswers(decision.answers, decision.event.toolInput) : ''),
+            ...(decision.allow ? { answers: decision.answers } : {}),
             rejected: !decision.allow,
           }),
         },
@@ -259,12 +259,16 @@ export function TodoSession({
       if (!followedSessionId) throw new Error('Session is unavailable');
       const approvalId = decision.event.approvalId;
       if (approvalId) {
+        if (!decision.allow) {
+          await approve(approvalId, 'deny', decision.message);
+          return;
+        }
         if (decision.answers) {
           const match = approvals.find(item => item.approvalId === approvalId);
           await approve(approvalId, 'respond', undefined, { ...match?.input, answers: decision.answers });
           return;
         }
-        await approve(approvalId, decision.allow ? 'approve' : 'deny', decision.message);
+        await approve(approvalId, 'approve', decision.message);
         return;
       }
       await answerMutation.mutateAsync(decision);
@@ -427,9 +431,10 @@ function latestQuestionTool(entries: Array<SessionEntry | SessionUIMessage>): { 
   return undefined;
 }
 
-function formatDecisionAnswers(answers?: Record<string, string | string[]>): string {
+function formatDecisionAnswers(answers?: Record<string, string | string[]>, input?: Record<string, unknown>): string {
   if (!answers) return '';
+  const questions = new Map(questionsFromToolInput(input).map(question => [question.id, question.text]));
   return Object.entries(answers)
-    .map(([question, answer]) => `${question}: ${Array.isArray(answer) ? answer.join(', ') : answer}`)
+    .map(([id, answer]) => `${questions.get(id) ?? id}: ${Array.isArray(answer) ? answer.join(', ') : answer}`)
     .join('\n');
 }

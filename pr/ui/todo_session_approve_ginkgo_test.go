@@ -152,6 +152,33 @@ var _ = Describe("todo session approvals", Ordered, func() {
 		Expect(stateOf(ctx, db, id)).To(Equal(captaindb.TurnRequestStatePending))
 	})
 
+	It("keeps a question pending until every question id has a nonblank answer", func() {
+		questions := []any{
+			map[string]any{"id": "location", "question": "Where should the plan go?"},
+			map[string]any{"id": "format", "question": "Which format?"},
+		}
+		id := pending("AskUserQuestion", map[string]any{"questions": questions})
+		for _, input := range []map[string]any{
+			{"answers": map[string]any{"location": "Inline"}},
+			{"answers": map[string]any{"location": "Inline", "format": " "}},
+			{"answers": map[string]any{"location": "Inline", "format": "Markdown", "unknown": "extra"}},
+		} {
+			rec := approve(map[string]any{"approvalId": id.String(), "action": "respond", "input": input})
+			Expect(rec.Code).To(Equal(http.StatusConflict), rec.Body.String())
+			Expect(stateOf(ctx, db, id)).To(Equal(captaindb.TurnRequestStatePending))
+		}
+		rec := approve(map[string]any{"approvalId": id.String(), "action": "respond", "input": map[string]any{"answers": map[string]any{"location": "Inline", "format": "Markdown"}}})
+		Expect(rec.Code).To(Equal(http.StatusOK), rec.Body.String())
+		Expect(stateOf(ctx, db, id)).To(Equal(captaindb.TurnRequestStateApproved))
+	})
+
+	It("does not approve a question without an answer", func() {
+		id := pending("AskUserQuestion", map[string]any{"questions": []any{map[string]any{"id": "location", "question": "Where?"}}})
+		rec := approve(map[string]any{"approvalId": id.String(), "action": "approve"})
+		Expect(rec.Code).To(Equal(http.StatusConflict), rec.Body.String())
+		Expect(stateOf(ctx, db, id)).To(Equal(captaindb.TurnRequestStatePending))
+	})
+
 	It("rejects an unknown action rather than guessing", func() {
 		id := pending("Bash", nil)
 

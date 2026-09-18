@@ -65,3 +65,24 @@ var _ = Describe("plan review status projection", func() {
 		Entry("closed issue", native.StatusClosed, native.ExecutionIdle, native.StepPlan, captaindb.PlanApprovalPending, types.StatusCompleted),
 	)
 })
+
+var _ = Describe("waiting plan attempt", func() {
+	It("makes a draft answerable and records the attempt as waiting", func() {
+		result := &todos.ExecutionResult{EndStatus: types.EndAsk, Success: false}
+		Expect(todoStatus(native.StatusDraft, native.ExecutionWaiting)).To(Equal(types.StatusAsk))
+		Expect(attemptStatus(result)).To(Equal("waiting"))
+	})
+
+	It("keeps a draft running state as draft", func() {
+		Expect(todoStatus(native.StatusDraft, native.ExecutionRunning)).To(Equal(types.StatusDraft))
+	})
+})
+
+var _ = Describe("plan artifact resolution", func() {
+	It("rejects a reported plan path that has no readable file", func() {
+		_, _, err := planResultContent(&todos.ExecutionResult{Plan: &types.PlanResult{
+			Path: "/missing/plan.md", Content: "# Inline plan",
+		}}, "session-1")
+		Expect(err).To(MatchError(ContainSubstring("/missing/plan.md")))
+	})
+})

@@ -75,6 +75,12 @@ vi.mock('./TodoSessionDetail', () => ({
         message: 'Looks risky',
       })}>Deny with reason</button>
       {/* oxlint-disable-next-line clicky-ui/prefer-clicky-components -- test control for the mocked ThreadInspector callback. */}
+      <button type="button" onClick={() => void onPendingToolDecision({
+        event: { id: 'tool-3', kind: 'tool', tool: 'AskUserQuestion', approvalId: 'approval-9' },
+        allow: false,
+        answers: { location: 'Inline' },
+      })}>Reject answered question</button>
+      {/* oxlint-disable-next-line clicky-ui/prefer-clicky-components -- test control for the mocked ThreadInspector callback. */}
       <button type="button" onClick={() => void onStop(sessionDetailMock.attempt)}>Stop attempt</button>
     </div>
   ),
@@ -381,6 +387,25 @@ describe('TodoSession mutations', () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining('/session/approve'),
       expect.objectContaining({ method: 'POST' }),
+    ));
+  });
+
+  it('routes a rejected question to denial even when a stale answer map is present', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/session/stats')) return { ok: true, json: async () => ({ ...sessionStats, state: 'approval' }) };
+      if (url.includes('/session/approve')) {
+        expect(JSON.parse(init?.body as string)).toEqual({ approvalId: 'approval-9', action: 'deny' });
+        return { ok: true, json: async () => ({ resolved: true }) };
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    });
+    renderSession(fetchMock);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reject answered question' }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/session/approve'), expect.objectContaining({ method: 'POST' }),
     ));
   });
 

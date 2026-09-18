@@ -45,6 +45,10 @@ func (s *recordingSessionStore) ListTranscriptMessages(context.Context, captaind
 	return nil, nil
 }
 
+func (s *recordingSessionStore) ListPromptRuns(context.Context, captaindb.PromptRunFilter) ([]captaindb.PromptRun, error) {
+	return nil, nil
+}
+
 var _ = Describe("resolveCaptainSession", func() {
 	const providerSessionID = "0199e1aa-0000-7000-8000-000000000001"
 

@@ -161,12 +161,23 @@ func toNativePriority(priority types.Priority) (native.Priority, error) {
 
 func todoStatus(status native.IssueStatus, execution native.ExecutionState) types.Status {
 	switch status {
-	case native.StatusDraft:
-		return types.StatusDraft
 	case native.StatusVerified:
 		return types.StatusVerified
 	case native.StatusClosed, native.StatusCancelled:
 		return types.StatusCompleted
+	}
+	if execution == native.ExecutionWaiting {
+		return types.StatusAsk
+	}
+	if status == native.StatusDraft {
+		switch execution {
+		case native.ExecutionFailed, native.ExecutionStalled:
+			return types.StatusFailed
+		case native.ExecutionVerificationFailed:
+			return types.StatusUnverified
+		default:
+			return types.StatusDraft
+		}
 	}
 	switch execution {
 	case native.ExecutionPlanning, native.ExecutionRunning, native.ExecutionVerifying:
