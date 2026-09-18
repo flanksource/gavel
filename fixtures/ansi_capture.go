@@ -1,6 +1,7 @@
 package fixtures
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -23,11 +24,14 @@ const (
 	maxCastEvents    = 20000
 )
 
+const captureCancelGrace = 5 * time.Second
+
 // CaptureOptions configures an ANSI/PTY capture. Width and Height are both the
 // pseudo-terminal dimensions the command sees and the viewport dimensions used
 // by settled snapshots. SnapshotInterval controls how often the live viewport
 // is appended to the snapshot timeline.
 type CaptureOptions struct {
+	Context          context.Context
 	Width, Height    int
 	SnapshotInterval time.Duration
 	Command          []string
@@ -141,6 +145,13 @@ func CaptureANSI(opts CaptureOptions) (*Capture, error) {
 		interval = 100 * time.Millisecond
 	}
 
+	ctx := opts.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("ansi capture: %w", err)
+	}
 	cmd := osExec.Command(opts.Command[0], opts.Command[1:]...)
 	cmd.Dir = opts.Dir
 	cmd.Env = append(os.Environ(), opts.Env...)
@@ -152,6 +163,30 @@ func CaptureANSI(opts CaptureOptions) (*Capture, error) {
 		return nil, fmt.Errorf("ansi capture: start pty: %w", err)
 	}
 	defer ptmx.Close()
+	// Keep the watcher alive through cmd.Wait(), not just PTY EOF. A child can
+	// close its terminal then sleep; read returns while the process is still
+	// running, and the fixture timeout must still be able to kill it.
+	waitDone := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = cmd.Process.Signal(os.Interrupt)
+			// Closing the PTY releases the read loop so its sole cmd.Wait call can
+			// observe graceful exit or the force-kill below.
+			_ = ptmx.Close()
+		case <-waitDone:
+			return
+		}
+
+		timer := time.NewTimer(captureCancelGrace)
+		defer timer.Stop()
+		select {
+		case <-waitDone:
+		case <-timer.C:
+			_ = cmd.Process.Kill()
+			<-waitDone
+		}
+	}()
 
 	var (
 		mu        sync.Mutex
@@ -223,7 +258,9 @@ func CaptureANSI(opts CaptureOptions) (*Capture, error) {
 	wg.Wait()
 
 	exitCode := 0
-	if werr := cmd.Wait(); werr != nil {
+	werr := cmd.Wait()
+	close(waitDone)
+	if werr != nil {
 		ee, ok := werr.(*osExec.ExitError)
 		if !ok {
 			return nil, fmt.Errorf("ansi capture: wait for %q: %w", opts.Command[0], werr)

@@ -157,7 +157,7 @@ func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opt
 	var p *clickyExec.ExecResult
 	var capture *fixtures.Capture
 	if exec.Terminal == "pty" || ansi != nil {
-		p, capture = runWithPTY(exec, workDir, ansi)
+		p, capture = runWithPTY(ctx, exec, workDir, ansi)
 	} else {
 		process := clickyExec.NewExec(exec.Exec, exec.Args...).WithCwd(workDir)
 		if len(exec.Env) > 0 {
@@ -254,13 +254,14 @@ func processLaunchError(p *clickyExec.ExecResult) error {
 // run is being recorded, which adds settled-screen tracking on top; without it
 // the capture is only the output stream, which costs no more than the plain
 // io.Copy this replaced.
-func runWithPTY(execBase fixtures.ExecFixtureBase, workDir string, ansi *record.ANSIOptions) (*clickyExec.ExecResult, *fixtures.Capture) {
+func runWithPTY(ctx context.Context, execBase fixtures.ExecFixtureBase, workDir string, ansi *record.ANSIOptions) (*clickyExec.ExecResult, *fixtures.Capture) {
 	// Invoke the configured executable directly so shells like bash/sh don't
 	// get double-wrapped (`bash -c "bash -c '<script>'"` mis-parses: the
 	// outer shell treats the inner `bash` as the script and the rest as
 	// positional args — the command never runs and we get the target
 	// program's help banner instead).
 	opts := fixtures.CaptureOptions{
+		Context: ctx,
 		Command: append([]string{execBase.Exec}, execBase.Args...),
 		Dir:     workDir,
 		Width:   ptyWidth,
@@ -285,8 +286,11 @@ func runWithPTY(execBase fixtures.ExecFixtureBase, workDir string, ansi *record.
 	capture, err := fixtures.CaptureANSI(opts)
 	if err != nil {
 		return &clickyExec.ExecResult{
-			Error:   fmt.Errorf("failed to start PTY: %w", err),
-			Started: &now,
+			ExitCode: -1,
+			Error:    fmt.Errorf("failed to start PTY: %w", err),
+			Started:  &now,
+			Command:  execBase.Exec,
+			Args:     execBase.Args,
 		}, nil
 	}
 
@@ -296,12 +300,18 @@ func runWithPTY(execBase fixtures.ExecFixtureBase, workDir string, ansi *record.
 	// `combined := stdout + stderr`) see the stream once, not twice. The
 	// doubled form was flagging every non-empty line as a duplicate in
 	// ansi.has_duplicates.
-	return &clickyExec.ExecResult{
+	result := &clickyExec.ExecResult{
 		Stdout:   capture.Raw(),
 		ExitCode: capture.ExitCode,
 		Started:  &now,
 		Duration: time.Duration(capture.DurationMs) * time.Millisecond,
-	}, capture
+		Command:  execBase.Exec,
+		Args:     execBase.Args,
+	}
+	if ctx.Err() != nil {
+		result.Error = ctx.Err()
+	}
+	return result, capture
 }
 
 // ResolveWorkDir determines the working directory for fixture execution.
