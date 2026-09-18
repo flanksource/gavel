@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import type { Project, SessionStats, TodoItem, TodoListResponse } from '../types';
 import { emptyCounts } from './todos/format';
@@ -27,8 +27,10 @@ vi.mock('./todos/TodoTable', () => ({
   todoTableColumns: () => [],
 }));
 vi.mock('./todos/TodoDetail', () => ({
-  TodoDetail: ({ navigation }: { navigation?: { position: number; total: number } }) => (
-    <div data-testid="todo-detail" data-navigation={navigation ? `${navigation.position}/${navigation.total}` : ''} />
+  TodoDetail: ({ navigation }: { navigation?: { position: number; total: number; onNext: () => void } }) => (
+    <div data-testid="todo-detail" data-navigation={navigation ? `${navigation.position}/${navigation.total}` : ''}>
+      {navigation && <button type="button" onClick={navigation.onNext}>Next todo</button>}
+    </div>
   ),
 }));
 
@@ -145,5 +147,29 @@ describe('TodoFullPane', () => {
       />,
     );
     expect(screen.getByTestId('todo-detail').getAttribute('data-navigation')).toBe('');
+  });
+
+  // Editing the open todo refetches the list. Navigation used to re-sort and
+  // re-filter it by the edited values, so J jumped to the neighbour of the
+  // todo's new slot, or lost the todo entirely once a filter hid it.
+  it.each([
+    ['raising its priority re-sorts it to the top', { priority: 'high' }],
+    ['completing it hides it from the default filter', { status: 'completed' }],
+  ] as const)('keeps browsing from the open todo\'s slot when %s', (_, edit) => {
+    const base = listProps(defaultTodoFilters());
+    const [g1, g2, g3] = [todo('g1'), todo('g2'), todo('g3')];
+    const withItems = (items: TodoItem[]): WorkspaceTodos => ({
+      ...base,
+      workspaces: [gavel],
+      byDir: { [gavel.dir]: { dir: gavel.dir, counts: emptyCounts, items } },
+      selected: { dir: gavel.dir, ref: g2.ref },
+    });
+    const { rerender } = render(<TodoFullPane todos={withItems([g1, g2, g3])} projectsLoaded />);
+    expect(screen.getByTestId('todo-detail').getAttribute('data-navigation')).toBe('2/3');
+
+    rerender(<TodoFullPane todos={withItems([g1, { ...g2, ...edit }, g3])} projectsLoaded />);
+    expect(screen.getByTestId('todo-detail').getAttribute('data-navigation')).toBe('2/3');
+    fireEvent.click(screen.getByRole('button', { name: 'Next todo' }));
+    expect(base.select).toHaveBeenCalledWith({ dir: gavel.dir, ref: g3.ref });
   });
 });

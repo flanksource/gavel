@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useMemo, useState, type ReactNode } from 'react';
 import { Button, ListMenu } from '@flanksource/clicky-ui/components';
 import { UiAdd, UiCheck } from '@flanksource/clicky-ui/icons';
 import { Spinner } from '../icons/Spinner';
@@ -13,7 +13,15 @@ import { TodoDetail } from './todos/TodoDetail';
 import { TodoDetailStack } from './todos/TodoDetailStack';
 import { TodoTable, todoTableColumns, type TodoTableRow } from './todos/TodoTable';
 import type { TodoNavigationControlsProps } from './todos/TodoNavigationControls';
-import { filterTodoNavigationEntries, orderedTodoNavigationEntries, todoNavigationState } from './todos/todoNavigation';
+import {
+  filterTodoNavigationEntries,
+  nextTodoNavigationPin,
+  orderedTodoNavigationEntries,
+  todoNavigationState,
+  withPinnedTodo,
+  type TodoNavigationPin,
+} from './todos/todoNavigation';
+import type { TodoListResponse } from '../types';
 import { TodoToolbar } from './todos/TodoToolbar';
 
 // The Todos tab renders its chrome into the shared AppShell's body slots: top-bar
@@ -196,20 +204,32 @@ export function TodoWorkspaceList({ todos, projectsLoaded, projectError }: {
 function useTodoNavigator(todos: WorkspaceTodos, query: string, enabled: boolean) {
   const { workspaces, byDir, filters, groupBy, sortBy, timeRange, selected, select, tagsByDir } = todos;
   const columns = useMemo(() => todoTableColumns({ groupBy, tagsByDir }), [groupBy, tagsByDir]);
-  const entries = useMemo(() => orderedTodoNavigationEntries({
+  const order = useCallback((source: Record<string, TodoListResponse>) => orderedTodoNavigationEntries({
     workspaces,
-    byDir,
+    byDir: source,
     filters,
     groupBy,
     sortBy,
     timeRange,
     now: Date.now(),
-  }), [workspaces, byDir, filters, groupBy, sortBy, timeRange]);
+  }), [workspaces, filters, groupBy, sortBy, timeRange]);
+  const entries = useMemo(() => order(byDir), [order, byDir]);
   const matched = useMemo(
     () => filterTodoNavigationEntries(entries, columns, query),
     [entries, columns, query],
   );
-  const state = enabled ? todoNavigationState(matched, selected) : null;
+  // Editing the open todo refetches the list, and ordering by the edited values
+  // moved it to another slot (or filtered it out), so J/K lost their place.
+  // Navigation instead orders the open todo as it was when it was opened.
+  const [storedPin, setPin] = useState<TodoNavigationPin | null>(null);
+  const pin = nextTodoNavigationPin(storedPin, { byDir, selected, view: { filters, groupBy, sortBy, timeRange, query } });
+  if (pin !== storedPin) setPin(pin);
+  const pinnedByDir = useMemo(() => withPinnedTodo(byDir, pin), [byDir, pin]);
+  const queue = useMemo(
+    () => (pinnedByDir === byDir ? matched : filterTodoNavigationEntries(order(pinnedByDir), columns, query)),
+    [pinnedByDir, byDir, matched, order, columns, query],
+  );
+  const state = enabled ? todoNavigationState(queue, selected) : null;
   const navigation: TodoNavigationControlsProps | undefined = state ? {
     position: state.position,
     total: state.total,
