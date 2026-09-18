@@ -5,8 +5,11 @@ import { defaultTodoFilters } from './todoFilter';
 import type { TodoTableRow } from './TodoTable';
 import {
   filterTodoNavigationEntries,
+  nextTodoNavigationPin,
   orderedTodoNavigationEntries,
   todoNavigationState,
+  withPinnedTodo,
+  type TodoNavigationView,
 } from './todoNavigation';
 
 const alpha: Project = { name: 'Alpha', dir: '/repos/alpha', repos: [] } as Project;
@@ -99,5 +102,83 @@ describe('todoNavigationState', () => {
 
   it('hides navigation when a deep link is outside the current queue', () => {
     expect(todoNavigationState(entries, { dir: '/repos/elsewhere', ref: 'missing' })).toBeNull();
+  });
+});
+
+describe('navigation pinned to the open todo as it was when selected', () => {
+  const first = todo('first', 'First', 'medium', '2026-09-03T09:00:00Z');
+  const middle = todo('middle', 'Middle', 'medium', '2026-09-03T08:00:00Z');
+  const last = todo('last', 'Last', 'medium', '2026-09-03T07:00:00Z');
+  const selected = { dir: alpha.dir, ref: middle.ref };
+  const view: TodoNavigationView = {
+    filters: defaultTodoFilters(),
+    groupBy: 'workspace',
+    sortBy: { column: 'priority', dir: 'desc' },
+    timeRange: null,
+    query: '',
+  };
+  const byDirWith = (edited: TodoItem) => ({ [alpha.dir]: response(alpha.dir, [first, edited, last]) });
+  const original = byDirWith(middle);
+  const queue = (byDir: Record<string, TodoListResponse>) => orderedTodoNavigationEntries({
+    workspaces: [alpha],
+    byDir,
+    filters: view.filters,
+    groupBy: view.groupBy,
+    sortBy: view.sortBy,
+    timeRange: view.timeRange,
+    now: Date.parse('2026-09-03T10:00:00Z'),
+  });
+  const pin = nextTodoNavigationPin(null, { byDir: original, selected, view });
+
+  it('captures the selected todo from the list it was opened from', () => {
+    expect(pin).toEqual({ dir: alpha.dir, ref: middle.ref, todo: middle, view });
+  });
+
+  it('keeps the same pin while the same todo stays open under the same view', () => {
+    const edited = byDirWith({ ...middle, priority: 'high' });
+    expect(nextTodoNavigationPin(pin, { byDir: edited, selected: { ...selected }, view: { ...view } })).toBe(pin);
+  });
+
+  it('re-captures when another todo is selected or the view changes', () => {
+    expect(nextTodoNavigationPin(pin, { byDir: original, selected: { dir: alpha.dir, ref: last.ref }, view })?.todo).toBe(last);
+    const resorted = { ...view, sortBy: { column: 'title', dir: 'asc' } as const };
+    expect(nextTodoNavigationPin(pin, { byDir: original, selected, view: resorted })).toEqual({ ...pin, view: resorted });
+    const refiltered = { ...view, filters: defaultTodoFilters() };
+    expect(nextTodoNavigationPin(pin, { byDir: original, selected, view: refiltered })).not.toBe(pin);
+  });
+
+  it('pins nothing until the selected todo is in the list', () => {
+    expect(nextTodoNavigationPin(null, { byDir: original, selected: { dir: beta.dir, ref: middle.ref }, view })).toBeNull();
+    expect(nextTodoNavigationPin(pin, { byDir: original, selected: null, view })).toBeNull();
+  });
+
+  it('leaves the list untouched while the open todo is unchanged or gone', () => {
+    expect(withPinnedTodo(original, pin)).toBe(original);
+    expect(withPinnedTodo(original, null)).toBe(original);
+    const deleted = { [alpha.dir]: response(alpha.dir, [first, last]) };
+    expect(withPinnedTodo(deleted, pin)).toBe(deleted);
+  });
+
+  it('keeps the list slot and neighbours of a todo whose priority was raised', () => {
+    const edited = byDirWith({ ...middle, priority: 'high' });
+    expect(queue(edited)[0].todo.ref).toBe(middle.ref);
+    expect(withPinnedTodo(edited, pin)[alpha.dir].items).toEqual([first, middle, last]);
+    expect(todoNavigationState(queue(withPinnedTodo(edited, pin)), selected)).toEqual({
+      position: 2,
+      total: 3,
+      previous: { dir: alpha.dir, ref: first.ref },
+      next: { dir: alpha.dir, ref: last.ref },
+    });
+  });
+
+  it('keeps a todo in the queue after an edit the active filter hides', () => {
+    const edited = byDirWith({ ...middle, status: 'completed' });
+    expect(todoNavigationState(queue(edited), selected)).toBeNull();
+    expect(todoNavigationState(queue(withPinnedTodo(edited, pin)), selected)).toEqual({
+      position: 2,
+      total: 3,
+      previous: { dir: alpha.dir, ref: first.ref },
+      next: { dir: alpha.dir, ref: last.ref },
+    });
   });
 });
