@@ -4,10 +4,10 @@ go 1.26.1
 
 require (
 	github.com/flanksource/captain v0.0.60
-	github.com/flanksource/clicky v1.21.66
-	github.com/flanksource/commons v1.59.0
-	github.com/flanksource/commons-db v0.1.36
-	github.com/flanksource/gomplate/v3 v3.24.89
+	github.com/flanksource/clicky v1.21.67
+	github.com/flanksource/commons v1.59.1
+	github.com/flanksource/commons-db v0.1.37
+	github.com/flanksource/gomplate/v3 v3.24.90
 	github.com/flanksource/is-healthy v1.0.92 // indirect
 	github.com/flanksource/kubectl-neat v1.0.4 // indirect
 	github.com/flanksource/repomap v0.4.1
@@ -170,7 +170,7 @@ require (
 	github.com/felixge/httpsnoop v1.1.0 // indirect
 	github.com/fergusstrange/embedded-postgres v1.34.0 // indirect
 	github.com/firebase/genkit/go v1.11.0 // indirect
-	github.com/flanksource/clicky/aichat v1.21.63 // indirect
+	github.com/flanksource/clicky/aichat v1.21.67 // indirect
 	github.com/flanksource/sandbox-runtime v1.0.2 // indirect
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.0 // indirect
