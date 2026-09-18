@@ -387,6 +387,9 @@ func renderAttempt(todo *types.TODO, result *todos.ExecutionResult) string {
 }
 
 func attemptStatus(result *todos.ExecutionResult) string {
+	if result.EndStatus == types.EndAsk {
+		return "waiting"
+	}
 	if result.Success {
 		return "completed"
 	}

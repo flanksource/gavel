@@ -22,6 +22,11 @@ type fakeCaptainSessionStore struct {
 	transcript *captaindb.Session
 	overview   *captaindb.SessionOverview
 	messages   []captaindb.TranscriptMessage
+	runs       []captaindb.PromptRun
+}
+
+func (f fakeCaptainSessionStore) ListPromptRuns(context.Context, captaindb.PromptRunFilter) ([]captaindb.PromptRun, error) {
+	return f.runs, nil
 }
 
 func (f fakeCaptainSessionStore) GetSessionByIdentity(_ context.Context, _ string, source, _, _ string) (*captaindb.Session, error) {

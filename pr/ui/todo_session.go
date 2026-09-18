@@ -20,6 +20,7 @@ import (
 // legacy on-disk Claude stream below.
 type captainSessionStore interface {
 	GetSessionByIdentity(context.Context, string, string, string, string) (*captaindb.Session, error)
+	ListPromptRuns(context.Context, captaindb.PromptRunFilter) ([]captaindb.PromptRun, error)
 	// GetTranscriptSessionByIdentity is Captain's own sibling hop: one provider
 	// session id names both the admission root and the row the transcript was
 	// ingested into, and only Captain can say which. Gavel used to pick between
@@ -179,7 +180,18 @@ type todoSessionStatsResponse struct {
 
 func captainSessionStats(ctx context.Context, store captainSessionStore, sessionID string, resolved captainSessionResolution) (todoSessionStatsResponse, error) {
 	stats := cmuxprov.SessionStats{SessionID: sessionID, Found: resolved.transcript != nil}
+	awaitingAnswer := false
+	if resolved.run != nil {
+		runs, err := store.ListPromptRuns(ctx, captaindb.PromptRunFilter{SessionID: &resolved.run.ID})
+		if err != nil {
+			return todoSessionStatsResponse{}, err
+		}
+		awaitingAnswer = len(runs) > 0 && runs[0].State == captaindb.PromptRunStateWaiting && runs[0].ResultJSON["endStatus"] == "ask"
+	}
 	if resolved.transcript == nil {
+		if awaitingAnswer {
+			stats.State = "ask"
+		}
 		return todoSessionStatsResponse{SessionStats: stats}, nil
 	}
 	overview, err := store.GetSessionOverviewByIdentity(ctx, resolved.transcript.ID.String())
@@ -234,6 +246,10 @@ func captainSessionStats(ctx context.Context, store captainSessionStore, session
 		stats.State = "working"
 	default:
 		stats.State = projectThreadStatus(overviews)
+	}
+	if awaitingAnswer {
+		stats.State = "ask"
+		stats.InProgress = false
 	}
 	if overview.Model != nil {
 		stats.Model = *overview.Model

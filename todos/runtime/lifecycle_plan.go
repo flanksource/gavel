@@ -224,18 +224,15 @@ func planResultContent(result *todos.ExecutionResult, sessionID string) (content
 	if result != nil && result.Plan != nil {
 		path = strings.TrimSpace(result.Plan.Path)
 	}
-	// The native plan file is authoritative when the agent supplies one.
-	// Codex commonly puts the detailed plan there while plan.content is only a
-	// short completion summary, so preferring inline content truncates the
-	// immutable Captain revision and the dashboard's Plan tab.
 	if path != "" {
 		read, _, exists, readErr := todos.ReadPlanFile(path)
 		if readErr != nil {
 			return "", path, readErr
 		}
-		if exists && strings.TrimSpace(read) != "" {
-			return strings.TrimSpace(read), path, nil
+		if !exists || strings.TrimSpace(read) == "" {
+			return "", path, fmt.Errorf("reported plan path %q is missing or empty", path)
 		}
+		return strings.TrimSpace(read), path, nil
 	}
 	if result != nil && result.Plan != nil {
 		if content = strings.TrimSpace(result.Plan.Content); content != "" {
