@@ -190,6 +190,7 @@ func (s *Server) handleTodoNew(w http.ResponseWriter, r *http.Request) {
 		Body:     bodyWithCreateSections(todoBodyWithAttachments(payload.Body, attachments), payload.Criteria, payload.PRVerification),
 		Priority: payload.Priority,
 		Status:   payload.Status,
+		Labels:   payload.Labels,
 	})
 	if err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)

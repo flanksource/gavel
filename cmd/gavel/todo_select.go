@@ -10,40 +10,6 @@ import (
 	"github.com/flanksource/gavel/todos/types"
 )
 
-// selectTODOs presents an interactive multi-select for the given TODO list.
-// Returns the selected TODOs, or nil if the user cancels.
-func selectTODOs(todoList []*types.TODO, header string) ([]*types.TODO, error) {
-	items := make([]string, len(todoList))
-	for i, todo := range todoList {
-		items[i] = formatTODOItem(todo)
-	}
-
-	detailFunc := func(i int) string {
-		if i < 0 || i >= len(todoList) {
-			return ""
-		}
-		return buildDetailOptions(todoList[i])
-	}
-
-	selected, err := choose.Run(items,
-		choose.WithHeader(header),
-		choose.WithLimit(0),
-		choose.WithDetailFunc(detailFunc),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("interactive selection failed: %w", err)
-	}
-	if len(selected) == 0 {
-		return nil, nil
-	}
-
-	result := make([]*types.TODO, len(selected))
-	for i, idx := range selected {
-		result[i] = todoList[idx]
-	}
-	return result, nil
-}
-
 func formatTODOItem(todo *types.TODO) string {
 	title := todo.Title
 	if title == "" {

@@ -69,22 +69,13 @@ func TestRunTodosSyncRuntimeProviderDryRun(t *testing.T) {
 	}
 
 	oldWorkingDir := workingDir
-	oldMarkers := todosSyncMarkers
-	oldIgnore := todosSyncIgnore
-	oldDryRun := todosSyncDryRun
 	t.Cleanup(func() {
 		workingDir = oldWorkingDir
-		todosSyncMarkers = oldMarkers
-		todosSyncIgnore = oldIgnore
-		todosSyncDryRun = oldDryRun
 	})
 
 	workingDir = workDir
-	todosSyncMarkers = []string{"TODO", "FIXME"}
-	todosSyncIgnore = nil
-	todosSyncDryRun = true
 
-	if err := runTodosSync(todosSyncCmd, nil); err != nil {
+	if err := runTodosSync(TodosSyncOptions{Markers: []string{"TODO", "FIXME"}, DryRun: true}); err != nil {
 		t.Fatalf("runTodosSync: %v", err)
 	}
 	if items, err := testProviderFor(workDir).List(t.Context(), todos.DiscoveryFilters{}); err != nil || len(items) != 0 {
@@ -97,31 +88,12 @@ func TestRunTodosCreateRuntimeProvider(t *testing.T) {
 	stubRuntimeWithTestProvider(t)
 
 	oldWorkingDir := workingDir
-	oldTitle := todoCreateTitle
-	oldBody := todoCreateBody
-	oldPlan := todoCreatePlan
-	oldVerification := todoCreateVerification
-	oldPriority := todoCreatePriority
-	oldStatus := todoCreateStatus
 	t.Cleanup(func() {
 		workingDir = oldWorkingDir
-		todoCreateTitle = oldTitle
-		todoCreateBody = oldBody
-		todoCreatePlan = oldPlan
-		todoCreateVerification = oldVerification
-		todoCreatePriority = oldPriority
-		todoCreateStatus = oldStatus
 	})
 
 	workingDir = workDir
-	todoCreateTitle = ""
-	todoCreateBody = "Created from the CLI."
-	todoCreatePlan = ""
-	todoCreateVerification = ""
-	todoCreatePriority = string(types.PriorityHigh)
-	todoCreateStatus = string(types.StatusDraft)
-
-	if err := runTodosCreate(todosCreateCmd, []string{"CLI", "todo"}); err != nil {
+	if err := runTodosCreate(TodosCreateOptions{Titles: []string{"CLI", "todo"}, Body: "Created from the CLI.", Priority: string(types.PriorityHigh), Status: string(types.StatusDraft)}); err != nil {
 		t.Fatalf("runTodosCreate: %v", err)
 	}
 
@@ -174,7 +146,7 @@ func TestTodosPlanRejectReturnsToPending(t *testing.T) {
 	workingDir = workDir
 	t.Cleanup(func() { workingDir = oldWorkingDir })
 
-	if err := runTodosPlanReject(todosPlanRejectCmd, []string{"Reviewable plan"}); err != nil {
+	if err := runTodosPlanReject(TodosGetOptions{TodoTargetOptions: TodoTargetOptions{IDs: []string{"Reviewable plan"}}}); err != nil {
 		t.Fatalf("reject: %v", err)
 	}
 	reloaded, err := provider.Get(context.Background(), created.FilePath)

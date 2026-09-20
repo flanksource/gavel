@@ -13,18 +13,14 @@ import (
 
 var _ = Describe("TODO runtime preset CLI", func() {
 	It("passes ordered presets as selectors without altering the request spec", func() {
-		resetTodosRunFlags(GinkgoTB())
-		flag := todosRunCmd.Flags().Lookup("preset")
-		Expect(flag).NotTo(BeNil())
-		Expect(todosRunCmd.Flags().Set("preset", "organization")).To(Succeed())
-		Expect(todosRunCmd.Flags().Set("preset", "review")).To(Succeed())
-		Expect(todosRunOptions().Presets).To(Equal([]string{"organization", "review"}))
-		Expect(todosRunOptions().PresetsSet).To(BeTrue())
-		Expect(api.IsEmpty(todosRequestSpec())).To(BeTrue())
+		Expect(todosRunCmd.Flags().Lookup("preset")).NotTo(BeNil())
+		options := TodosRunOptions{Presets: []string{"organization", "review"}}
+		Expect(todosRunOptions(options).Presets).To(Equal([]string{"organization", "review"}))
+		Expect(todosRunOptions(options).PresetsSet).To(BeTrue())
+		Expect(api.IsEmpty(todosRequestSpec(options))).To(BeTrue())
 	})
 
 	It("prints resolved preset identities in dry-run without dispatching", func() {
-		resetTodosRunFlags(GinkgoTB())
 		resolution := &lifecycle.Resolution{
 			Prompt:   "Preview the selected presets",
 			Warnings: []string{"permissions.plugins is unsupported by this runtime"},
@@ -33,12 +29,11 @@ var _ = Describe("TODO runtime preset CLI", func() {
 			}}},
 		}
 		started := stubTodoRunSeams(GinkgoTB(), resolution, "run", "requested")
-		dryRun = true
 		var err error
 		out := captureStdout(GinkgoTB(), func() {
 			err = runTodoStep(context.Background(), GinkgoT().TempDir(), nil,
 				runTodo("aaaaaaaa-0000-4000-8000-000000000005", "Preview profile"),
-				run.Options{Presets: []string{"review"}, PresetsSet: true})
+				run.Options{Presets: []string{"review"}, PresetsSet: true}, runStepPolicy{DryRun: true, AllowCommit: true})
 		})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(out).To(ContainSubstring("Runtime presets:"))

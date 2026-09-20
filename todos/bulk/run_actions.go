@@ -22,7 +22,7 @@ type RunFlags struct {
 	// Deprecated: accepted by programmatic callers only so resolution can warn.
 	RuntimeProfile string `json:"runtimeProfile,omitempty"`
 	Model          string `flag:"model" help:"Override the model for this batch, as the compact mode:model:effort form"`
-	Effort         string `flag:"effort" help:"Reasoning effort" enum:"low,medium,high"`
+	Effort         string `flag:"effort" help:"Reasoning effort" enum:"low,medium,high,xhigh"`
 	Resume         bool   `flag:"resume" help:"Resume each TODO's prior session instead of starting fresh"`
 }
 

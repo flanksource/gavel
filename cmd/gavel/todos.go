@@ -1,30 +1,11 @@
 package main
 
 import (
-	"time"
+	"fmt"
+	"strings"
 
+	"github.com/flanksource/commons/duration"
 	"github.com/spf13/cobra"
-)
-
-var (
-	filterStatus     string
-	checkTimeout     time.Duration
-	checkConcurrency int
-	maxBudget        float64
-	maxTurns         int
-	interactive      bool
-	dirty            bool
-	dryRun           bool
-	commitAfter      bool
-	// todosStep names the lifecycle step `todos run` dispatches. Empty lets the
-	// lifecycle pick the step each todo needs next.
-	todosStep     string
-	todoModel     string
-	todoEffort    string
-	resumeSession bool
-	// forceRun answers the "this todo is already running" question up front, so
-	// an unattended run can dispatch alongside the live one without a prompt.
-	forceRun bool
 )
 
 var todosCmd = &cobra.Command{
@@ -64,49 +45,13 @@ Examples:
   gavel todos list --all            # list every registered project
   gavel todos list --all --done     # include verified/completed items
   gavel todos get <id>
-  gavel todos run                   # run the next step of every pending todo
-  gavel todos run --step plan       # propose a reviewable plan first
+  gavel todos run <id>              # run the next step for one TODO
+  gavel todos run <id> --step plan  # propose a reviewable plan first
   gavel todos steps <id>            # which steps apply to this todo now
   gavel todos check <id>            # run the issue's definition of done`,
 }
 
-var todosRunCmd = &cobra.Command{
-	Use:          "run [todo-titles...]",
-	SilenceUsage: true,
-	Short:        "Run a lifecycle step for TODOs with a coding agent",
-	Long: `Drive an AI coding agent (Claude or Codex, via cmux or headless) through the
-project's todo lifecycle.
-
-With no arguments it runs every pending TODO; pass titles, ids, or aliases to select
-a subset, or -i to pick interactively. Each TODO runs ONE lifecycle step: the step
-the lifecycle picks next for it — plan a todo that has no plan, verify one whose
-implementation has not been checked, implement one that is ready — or the step
-named with --step. 'gavel todos steps' lists the steps and, given a todo, which
-apply to it now.
-
-A step's outcome is what moves the todo: the lifecycle definition declares which
-status each result lands, so the run itself never writes one. Implementation
-steps commit their work through gavel commit (--commit, on by default). The
-configured checks suite (.gavel.yaml checks.enabled, or a todo's own checks:
-front matter) is part of the todo's definition of done: its failures feed back
-to the agent until they pass. Use --dry-run to print the rendered prompt, the
-layer stack that produced the run's spec, and the spec itself, without
-dispatching.
-
-Repeat --preset to select reusable Captain runtime layers in order. Use --no-presets to clear prompt and project defaults. The preview reports each preset's canonical identity alongside the resolved layer stack.
-
-Examples:
-  gavel todos run                          # the next step of every pending todo
-  gavel todos run "Fix flaky parser test"  # one todo by title
-  gavel todos run -i                       # interactively select
-  gavel todos run --step plan              # propose plans for review
-  gavel todos run --step verify            # run the definition of done
-  gavel todos run 3f2a1b --step triage     # a read-only triage pass
-  gavel todos run --model cli:opus:high    # headless CLI on opus, high effort
-  gavel todos run --preset organization --preset review --dry-run # preview ordered runtime presets
-  gavel todos run --dry-run                # preview the run, no changes`,
-	RunE: runTodosRun,
-}
+var todosRunCmd *cobra.Command
 
 type TodosListOptions struct {
 	Status  string `json:"status" flag:"status" help:"Filter TODOs by status"`
@@ -118,38 +63,45 @@ type TodosListOptions struct {
 
 func (opts TodosListOptions) GetName() string { return "list" }
 
-var todosGetCmd = &cobra.Command{
-	Use:          "get <id-or-alias>",
-	SilenceUsage: true,
-	Short:        "Display detailed information about a PostgreSQL-backed TODO",
-	Long: `Show one TODO in full — metadata, body, acceptance criteria, and run history.
+var todosGetCmd *cobra.Command
+var todosCheckCmd *cobra.Command
 
-The argument matches a short id, a full id, the title, or an imported alias.
-
-Examples:
-  gavel todos get 3f2a1b
-
-  gavel todos get "Fix flaky parser test"`,
-	Args: cobra.ExactArgs(1),
-	RunE: runTodosGet,
+type TodoTargetOptions struct {
+	IDs []string `args:"true" required:"true"`
 }
 
-var todosCheckCmd = &cobra.Command{
-	Use:          "check [ids-or-aliases...]",
-	SilenceUsage: true,
-	Short:        "Run TODOs' fixture-backed definitions of done",
-	Long: `Run each TODO's complete definition of done and report pass/fail.
+func (o TodoTargetOptions) One() (string, error) {
+	if len(o.IDs) != 1 || strings.TrimSpace(o.IDs[0]) == "" {
+		return "", fmt.Errorf("exactly one TODO ID or alias is required")
+	}
+	return strings.TrimSpace(o.IDs[0]), nil
+}
 
-The check is the lifecycle's verify step, dispatched by name: configured
-test/lint steps, the persisted Verification fixture, and the acceptance-criteria
-AI checklist all run through the same gavel fixture/CEL pipeline as the
-verification an implementation run performs, and the step's outcome is what
-moves the todo to verified or unverified. Exits non-zero if any TODO fails.
-With no arguments it checks every discovered TODO; pass ids or aliases to select some.
+func (o TodoTargetOptions) Many() ([]string, error) {
+	if len(o.IDs) == 0 {
+		return nil, fmt.Errorf("at least one TODO ID or alias is required")
+	}
+	ids := make([]string, len(o.IDs))
+	seen := make(map[string]bool, len(o.IDs))
+	for i, id := range o.IDs {
+		ids[i] = strings.TrimSpace(id)
+		if ids[i] == "" {
+			return nil, fmt.Errorf("TODO ID %d is blank", i+1)
+		}
+		if seen[ids[i]] {
+			return nil, fmt.Errorf("TODO ID %q was specified more than once", ids[i])
+		}
+		seen[ids[i]] = true
+	}
+	return ids, nil
+}
 
-Examples:
-  gavel todos check
-  gavel todos check 3f2a1b
-  gavel todos check --status in_progress`,
-	RunE: runTodosCheck,
+type TodosGetOptions struct {
+	TodoTargetOptions
+}
+
+type TodosCheckOptions struct {
+	TodoTargetOptions
+	Timeout     duration.Duration `flag:"timeout" help:"Test execution timeout"`
+	Concurrency int               `flag:"concurrency" help:"How many TODOs to check at once (0 uses project configuration)"`
 }

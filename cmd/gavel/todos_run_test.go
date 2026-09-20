@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,7 +24,6 @@ import (
 func isolatedTodosRun(t *testing.T, cfg string) string {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
-	resetTodosRunFlags(t)
 
 	dir := t.TempDir()
 	if strings.TrimSpace(cfg) != "" {
@@ -32,57 +32,6 @@ func isolatedTodosRun(t *testing.T, cfg string) string {
 		}
 	}
 	return dir
-}
-
-// resetTodosRunFlags restores every `todos run` flag to its registered default
-// for the duration of the test. The flags are the request layer, so one left
-// behind by another test outranks the configuration under test.
-func resetTodosRunFlags(t testing.TB) {
-	t.Helper()
-	saved := struct {
-		step, model, effort, status string
-		profile                     string
-		presets                     []string
-		noPresets                   bool
-		presetChanged               bool
-		noPresetsChanged            bool
-		budget                      float64
-		turns                       int
-		commit                      bool
-		dirtyRun, dry, resume       bool
-		force, pick                 bool
-	}{
-		todosStep, todoModel, todoEffort, filterStatus,
-		todosRuntimeProfile,
-		append([]string(nil), todosPresets...),
-		todosNoPresets,
-		todosRunCmd.Flags().Changed("preset"),
-		todosRunCmd.Flags().Changed("no-presets"),
-		maxBudget, maxTurns,
-		commitAfter,
-		dirty, dryRun, resumeSession,
-		forceRun, interactive,
-	}
-	t.Cleanup(func() {
-		todosStep, todoModel, todoEffort, filterStatus = saved.step, saved.model, saved.effort, saved.status
-		todosRuntimeProfile = saved.profile
-		todosPresets, todosNoPresets = saved.presets, saved.noPresets
-		todosRunCmd.Flags().Lookup("preset").Changed = saved.presetChanged
-		todosRunCmd.Flags().Lookup("no-presets").Changed = saved.noPresetsChanged
-		maxBudget, maxTurns = saved.budget, saved.turns
-		commitAfter = saved.commit
-		dirty, dryRun, resumeSession = saved.dirtyRun, saved.dry, saved.resume
-		forceRun, interactive = saved.force, saved.pick
-	})
-	todosStep, todoModel, todoEffort, filterStatus = "", "", "", ""
-	todosRuntimeProfile = ""
-	todosPresets, todosNoPresets = nil, false
-	todosRunCmd.Flags().Lookup("preset").Changed = false
-	todosRunCmd.Flags().Lookup("no-presets").Changed = false
-	maxBudget, maxTurns = 0, 0
-	commitAfter = true
-	dirty, dryRun, resumeSession = false, false, false
-	forceRun, interactive = false, false
 }
 
 // stubRunTodoProvider serves a fixed backlog; the run seams are stubbed above
@@ -94,6 +43,15 @@ type stubRunTodoProvider struct {
 
 func (p *stubRunTodoProvider) List(context.Context, todos.DiscoveryFilters) (types.TODOS, error) {
 	return p.items, nil
+}
+
+func (p *stubRunTodoProvider) Get(_ context.Context, ref string) (*types.TODO, error) {
+	for _, item := range p.items {
+		if item.ID == ref {
+			return item, nil
+		}
+	}
+	return nil, fmt.Errorf("TODO %q not found", ref)
 }
 
 // stubTodoRunSeams replaces run.Resolve and run.Start with recorders returning
@@ -147,9 +105,14 @@ func TestTodosRunStepFlagDocumentsTheLifecycleVocabulary(t *testing.T) {
 			t.Errorf("--step usage %q does not mention %q", step.Usage, want)
 		}
 	}
-	for _, keep := range []string{"model", "effort", "max-budget", "max-turns", "resume", "force", "dirty", "dry-run", "commit", "interactive", "status"} {
+	for _, keep := range []string{"model", "effort", "max-budget", "max-turns", "resume", "force", "dirty", "dry-run", "commit"} {
 		if todosRunCmd.Flags().Lookup(keep) == nil {
 			t.Errorf("expected todos run --%s flag to survive the step cutover", keep)
+		}
+	}
+	for _, removed := range []string{"interactive", "status"} {
+		if todosRunCmd.Flags().Lookup(removed) != nil {
+			t.Errorf("todos run unexpectedly accepts --%s", removed)
 		}
 	}
 }
@@ -158,15 +121,11 @@ func TestTodosRunStepFlagDocumentsTheLifecycleVocabulary(t *testing.T) {
 // nothing: a non-zero default here silently beats the configuration it claims
 // to defer to.
 func TestTodosRequestSpecCarriesOnlyFlagsThatWereSet(t *testing.T) {
-	resetTodosRunFlags(t)
-	if spec := todosRequestSpec(); !api.IsEmpty(spec) {
+	if spec := todosRequestSpec(TodosRunOptions{}); !api.IsEmpty(spec) {
 		t.Fatalf("default run flags contributed %+v, want an empty request layer", spec)
 	}
 
-	todoModel, todoEffort = "cli:opus:high", "high"
-	maxBudget, maxTurns = 2.5, 7
-	dirty = true
-	spec := todosRequestSpec()
+	spec := todosRequestSpec(TodosRunOptions{Model: "cli:opus:high", Effort: "high", MaxBudget: 2.5, MaxTurns: 7, Dirty: true})
 	if spec.Name != "cli:opus:high" || spec.Effort != api.Effort("high") {
 		t.Errorf("model/effort = %q/%q", spec.Name, spec.Effort)
 	}
@@ -191,11 +150,8 @@ func TestRunTodosRunStartsOneRunPerTodoNamingTheStep(t *testing.T) {
 	first, second := runTodo("aaaaaaaa-0000-4000-8000-000000000001", "First"), runTodo("aaaaaaaa-0000-4000-8000-000000000002", "Second")
 	stubTodoBacklog(t, first, second)
 	started := stubTodoRunSeams(t, &lifecycle.Resolution{Prompt: "prompt body"}, "plan", "applies: subject.status == 'pending'")
-	todosStep = "plan"
-	resumeSession = true
-
 	out := captureStdout(t, func() {
-		if err := runTodosRun(todosRunCmd, nil); err != nil {
+		if err := runTodosRun(TodosRunOptions{TodoTargetOptions: TodoTargetOptions{IDs: []string{first.ID, second.ID}}, Step: "plan", Resume: true, Commit: true}); err != nil {
 			t.Fatalf("runTodosRun: %v", err)
 		}
 	})
@@ -245,10 +201,8 @@ func TestRunTodosRunDryRunPrintsPromptAndTraceWithoutDispatching(t *testing.T) {
 		},
 	}
 	started := stubTodoRunSeams(t, resolution, "run", "always applies (no `when` predicate)")
-	dryRun = true
-
 	out := captureStdout(t, func() {
-		if err := runTodosRun(todosRunCmd, nil); err != nil {
+		if err := runTodosRun(TodosRunOptions{TodoTargetOptions: TodoTargetOptions{IDs: []string{"aaaaaaaa-0000-4000-8000-000000000003"}}, DryRun: true, Commit: true}); err != nil {
 			t.Fatalf("runTodosRun --dry-run: %v", err)
 		}
 	})
@@ -276,10 +230,8 @@ func TestRunTodosRunForceDispatchesConcurrently(t *testing.T) {
 	workingDirFor(t, isolatedTodosRun(t, ""))
 	stubTodoBacklog(t, runTodo("aaaaaaaa-0000-4000-8000-000000000004", "Forced"))
 	started := stubTodoRunSeams(t, &lifecycle.Resolution{}, "run", "always applies (no `when` predicate)")
-	forceRun = true
-
 	captureStdout(t, func() {
-		if err := runTodosRun(todosRunCmd, nil); err != nil {
+		if err := runTodosRun(TodosRunOptions{TodoTargetOptions: TodoTargetOptions{IDs: []string{"aaaaaaaa-0000-4000-8000-000000000004"}}, Force: true, Commit: true}); err != nil {
 			t.Fatalf("runTodosRun --force: %v", err)
 		}
 	})
@@ -293,7 +245,6 @@ func TestRunTodosRunForceDispatchesConcurrently(t *testing.T) {
 // lifecycle step's `commits:` — a dispatch that committed anyway would ignore
 // an explicit instruction, so the resolution is refused instead.
 func TestAssertRunCommitPolicyRefusesASilentlyCommittingRun(t *testing.T) {
-	resetTodosRunFlags(t)
 	committing := &run.Prepared{
 		Step: lifecycle.Step{Name: "run"},
 		Resolution: &lifecycle.Resolution{Spec: api.Spec{Workflow: &api.Workflow{
@@ -301,13 +252,11 @@ func TestAssertRunCommitPolicyRefusesASilentlyCommittingRun(t *testing.T) {
 		}}},
 	}
 
-	commitAfter = true
-	if err := assertRunCommitPolicy(committing); err != nil {
+	if err := assertRunCommitPolicy(committing, true); err != nil {
 		t.Fatalf("--commit=true rejected the lifecycle's own commit policy: %v", err)
 	}
 
-	commitAfter = false
-	err := assertRunCommitPolicy(committing)
+	err := assertRunCommitPolicy(committing, false)
 	if err == nil || !strings.Contains(err.Error(), "--commit=false") {
 		t.Fatalf("--commit=false accepted a committing run: %v", err)
 	}
@@ -315,29 +264,21 @@ func TestAssertRunCommitPolicyRefusesASilentlyCommittingRun(t *testing.T) {
 	if err := assertRunCommitPolicy(&run.Prepared{
 		Step:       lifecycle.Step{Name: "plan"},
 		Resolution: &lifecycle.Resolution{},
-	}); err != nil {
+	}, false); err != nil {
 		t.Fatalf("--commit=false rejected a run that commits nothing: %v", err)
 	}
 }
 
 func TestValidateTodosRunOptions(t *testing.T) {
-	resetTodosRunFlags(t)
 	for _, effort := range []string{"", "low", "medium", "high", "xhigh"} {
-		todoEffort = effort
-		if err := validateTodosRunOptions(); err != nil {
+		if err := validateTodosRunOptions(TodosRunOptions{Effort: effort}); err != nil {
 			t.Fatalf("expected effort %q to validate: %v", effort, err)
 		}
 	}
-	todoEffort = "too-much"
-	if err := validateTodosRunOptions(); err == nil || !strings.Contains(err.Error(), "--effort") {
+	if err := validateTodosRunOptions(TodosRunOptions{Effort: "too-much"}); err == nil || !strings.Contains(err.Error(), "--effort") {
 		t.Fatalf("expected effort validation error, got %v", err)
 	}
-	todoEffort = ""
-	todosNoPresets = true
-	if err := todosRunCmd.Flags().Set("preset", "review"); err != nil {
-		t.Fatalf("set preset flag: %v", err)
-	}
-	if err := validateTodosRunOptions(); err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+	if err := validateTodosRunOptions(TodosRunOptions{NoPresets: true, Presets: []string{"review"}}); err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
 		t.Fatalf("expected mutually exclusive preset flags error, got %v", err)
 	}
 }

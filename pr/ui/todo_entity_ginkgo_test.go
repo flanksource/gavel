@@ -382,7 +382,7 @@ var _ = Describe("todo entity catalog", func() {
 		for i, action := range actions {
 			byName[action.Name] = i
 			Expect(action.Short).NotTo(BeEmpty(), action.Name)
-			Expect(action.SupportsFilterMode).To(BeTrue(), action.Name+" must be reachable by filter")
+			Expect(action.SupportsFilterMode).To(BeFalse(), action.Name+" must require explicit TODO IDs")
 			Expect(action.ToolHints).NotTo(BeNil(), action.Name)
 			Expect(action.ToolHints.Icon).NotTo(BeEmpty(), action.Name)
 			Expect(action.ToolHints.Group).NotTo(BeEmpty(), action.Name)
@@ -406,6 +406,6 @@ var _ = Describe("todo entity catalog", func() {
 		deleteAction := actions[byName["delete"]]
 		Expect(deleteAction.ToolHints.DestructiveHint).NotTo(BeNil())
 		Expect(*deleteAction.ToolHints.DestructiveHint).To(BeTrue(),
-			"a UI has to know to confirm before deleting a filter-matched selection")
+			"a UI has to know to confirm before deleting selected TODOs")
 	})
 })

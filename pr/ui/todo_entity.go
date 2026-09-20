@@ -7,9 +7,11 @@ import (
 	"os"
 	"sync"
 
+	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/route"
 	"github.com/flanksource/clicky/rpc"
+	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/bulk"
 	todoentity "github.com/flanksource/gavel/todos/entity"
@@ -58,9 +60,12 @@ func registerTodoEntity() error {
 				return openGlobalTodoProvider(ctx)
 			},
 			Registry:   run.Shared(),
-			DefaultDir: func() string { return workDir },
+			DefaultDir: func(context.Context) (string, error) { return workDir, nil },
 			ResolveRun: resolveBulkRunOptions,
 			Broker:     todoApprovalBroker,
+			PushBaseURL: func(dir, requested string) (string, error) {
+				return resolveTodoPushBaseURL(requested, dir, "")
+			},
 		})
 	})
 	return todoEntityErr

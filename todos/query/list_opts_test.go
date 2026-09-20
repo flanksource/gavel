@@ -111,18 +111,6 @@ func TestMatchRejectsAnUnparseableWindow(t *testing.T) {
 	}
 }
 
-func TestFilterModeIsDrivenByTheFilterField(t *testing.T) {
-	if (ListOpts{}).FilterMode() {
-		t.Fatal("no filter means explicit ids")
-	}
-	if (ListOpts{Filter: "   "}).FilterMode() {
-		t.Fatal("whitespace is not a filter")
-	}
-	if !(ListOpts{Filter: "status == pending"}).FilterMode() {
-		t.Fatal("a filter summary switches to filter mode")
-	}
-}
-
 type stubLister struct {
 	got  todos.DiscoveryFilters
 	rows types.TODOS

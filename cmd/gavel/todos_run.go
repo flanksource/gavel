@@ -21,11 +21,22 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var (
-	todosPresets        []string
-	todosNoPresets      bool
-	todosRuntimeProfile string
-)
+type TodosRunOptions struct {
+	TodoTargetOptions
+	Step           string   `flag:"step" help:"The lifecycle step to run; gavel todos steps lists available steps"`
+	RuntimeProfile string   `flag:"runtime-profile" help:"Retired; use --preset"`
+	Presets        []string `flag:"preset" help:"Runtime preset name or ID; repeat to layer presets"`
+	NoPresets      bool     `flag:"no-presets" help:"Clear prompt and project runtime preset defaults"`
+	MaxBudget      float64  `flag:"max-budget" help:"Maximum budget in USD"`
+	MaxTurns       int      `flag:"max-turns" help:"Maximum conversation turns"`
+	Model          string   `flag:"model" help:"LLM model override as mode:model:effort"`
+	Effort         string   `flag:"effort" help:"Reasoning effort: low, medium, high, or xhigh"`
+	Resume         bool     `flag:"resume" help:"Resume the TODO's prior agent session"`
+	Force          bool     `flag:"force" help:"Dispatch despite another live run"`
+	Dirty          bool     `flag:"dirty" help:"Carry uncommitted and ignored files into a new worktree"`
+	DryRun         bool     `flag:"dry-run" help:"Print the prompt and resolved spec without dispatching"`
+	Commit         bool     `flag:"commit" default:"true" help:"Allow committing lifecycle steps"`
+}
 
 // retiredTodoRunFlags maps each flag `todos run` no longer accepts to what
 // replaced it, so a stale invocation is answered with the replacement rather
@@ -54,30 +65,11 @@ func retiredFlagError(cmd *cobra.Command, err error) error {
 }
 
 func init() {
+	todosRunCmd = clicky.AddNamedCommand("run", todosCmd, TodosRunOptions{}, func(opts TodosRunOptions) (any, error) { return nil, runTodosRun(opts) })
+	todosRunCmd.Use = "run <id>..."
+	todosRunCmd.Short = "Run a lifecycle step for explicit TODO IDs"
 	todosRunCmd.SetFlagErrorFunc(retiredFlagError)
-	todosRunCmd.Flags().StringVar(&filterStatus, "status", "", "Filter TODOs by status (pending, in_progress, failed)")
-	todosRunCmd.Flags().StringVar(&todosStep, "step", "",
-		"Lifecycle step to run: run, plan, verify, triage, or any step the project's lifecycle declares "+
-			"(empty: the step the lifecycle picks next for each todo); 'gavel todos steps' lists them")
-	todosRunCmd.Flags().StringVar(&todosRuntimeProfile, "runtime-profile", "", "Runtime profile name or ID (empty: the step or project default)")
-	todosRunCmd.Flags().StringArrayVar(&todosPresets, "preset", nil, "Runtime preset name or ID; repeat to layer presets in order")
-	todosRunCmd.Flags().BoolVar(&todosNoPresets, "no-presets", false, "Clear prompt and project runtime preset defaults")
 	_ = todosRunCmd.Flags().MarkDeprecated("runtime-profile", "runtime profiles are ignored; use --preset")
-	todosRunCmd.Flags().Float64Var(&maxBudget, "max-budget", 0, "Maximum budget in USD")
-	todosRunCmd.Flags().IntVar(&maxTurns, "max-turns", 0, "Maximum conversation turns")
-	todosRunCmd.Flags().BoolVarP(&interactive, "interactive", "i", false, "Interactively select TODOs to run")
-	todosRunCmd.Flags().StringVar(&todoModel, "model", "",
-		"LLM model override for TODO execution, as the compact mode:model:effort form (e.g. cli:opus:high); "+
-			"empty uses the step's .prompt frontmatter default")
-	// Empty, not "medium": the flag is the highest resolution layer, so a non-zero
-	// default would beat the .prompt frontmatter it claims to defer to. The
-	// lifecycle host applies medium once nothing else has spoken.
-	todosRunCmd.Flags().StringVar(&todoEffort, "effort", "", "Reasoning effort directive: low, medium, high, or xhigh (empty: the step's .prompt frontmatter, else medium)")
-	todosRunCmd.Flags().BoolVar(&resumeSession, "resume", false, "Resume the TODO's prior agent session instead of starting a fresh one")
-	todosRunCmd.Flags().BoolVar(&forceRun, "force", false, "Dispatch even when the TODO already has a live run on another process: the two runs proceed in parallel (without it you are asked)")
-	todosRunCmd.Flags().BoolVar(&dirty, "dirty", false, "Run in a new worktree that carries the working tree's uncommitted and gitignored content across, declaring one when the project configures no checkout")
-	todosRunCmd.Flags().BoolVar(&dryRun, "dry-run", false, "Print the rendered prompt, the spec layer stack and the resolved spec without dispatching")
-	todosRunCmd.Flags().BoolVar(&commitAfter, "commit", true, "Let the run commit its work as the lifecycle step declares (use --commit=false to refuse a committing run)")
 }
 
 // errRunInterrupted is a run the operator interrupted; the loop stops there.
@@ -94,8 +86,12 @@ type todoRunFailure struct {
 func (f *todoRunFailure) Error() string { return fmt.Sprintf("todo %s: %v", run.Label(f.todo), f.err) }
 func (f *todoRunFailure) Unwrap() error { return f.err }
 
-func runTodosRun(_ *cobra.Command, args []string) error {
-	if err := validateTodosRunOptions(); err != nil {
+func runTodosRun(opts TodosRunOptions) error {
+	args, err := opts.Many()
+	if err != nil {
+		return err
+	}
+	if err := validateTodosRunOptions(opts); err != nil {
 		return err
 	}
 	workDir, err := getWorkingDir()
@@ -108,24 +104,9 @@ func runTodosRun(_ *cobra.Command, args []string) error {
 	}
 	ctx := context.Background()
 	logger.Infof("Discovering TODOs from PostgreSQL")
-	filters := todos.DiscoveryFilters{ExcludeStatuses: []types.Status{types.StatusCompleted}}
-	if filterStatus != "" {
-		filters.IncludeStatuses = []types.Status{types.Status(filterStatus)}
-	}
-	todoList, err := resolveRequestedTODOs(ctx, provider, args, filters)
+	todoList, err := resolveRequestedTODOs(ctx, provider, args, todos.DiscoveryFilters{})
 	if err != nil {
 		return fmt.Errorf("failed to discover TODOs: %w", err)
-	}
-	if interactive && len(args) == 0 && len(todoList) > 0 {
-		selected, err := selectTODOs(todoList, "Select TODOs to run:")
-		if err != nil {
-			return err
-		}
-		if selected == nil {
-			logger.Infof("No TODOs selected")
-			return nil
-		}
-		todoList = selected
 	}
 	if len(todoList) == 0 {
 		logger.Infof("No TODOs found")
@@ -135,7 +116,7 @@ func runTodosRun(_ *cobra.Command, args []string) error {
 
 	for i, todo := range todoList {
 		fmt.Println(clicky.Text(fmt.Sprintf("=== TODO %d/%d: %s ===", i+1, len(todoList), todo.Filename()), "text-blue-600 font-bold").ANSI())
-		err := runTodoStep(ctx, workDir, provider, todo, todosRunOptions())
+		err := runTodoStep(ctx, workDir, provider, todo, todosRunOptions(opts), runStepPolicy{DryRun: opts.DryRun, AllowCommit: opts.Commit})
 		var failure *todoRunFailure
 		switch {
 		case err == nil:
@@ -154,19 +135,19 @@ func runTodosRun(_ *cobra.Command, args []string) error {
 }
 
 // todosRunOptions is what the run flags decide; the lifecycle decides the rest.
-func todosRunOptions() run.Options {
-	presets := append([]string(nil), todosPresets...)
-	if todosNoPresets {
+func todosRunOptions(opts TodosRunOptions) run.Options {
+	presets := append([]string(nil), opts.Presets...)
+	if opts.NoPresets {
 		presets = []string{}
 	}
 	return run.Options{
 		Presets:        presets,
-		PresetsSet:     todosNoPresets || todosPresets != nil,
-		RuntimeProfile: todosRuntimeProfile,
-		Step:           todosStep,
-		Request:        todosRequestSpec(),
-		Resume:         resumeSession,
-		Concurrent:     forceRun,
+		PresetsSet:     opts.NoPresets || opts.Presets != nil,
+		RuntimeProfile: opts.RuntimeProfile,
+		Step:           opts.Step,
+		Request:        todosRequestSpec(opts),
+		Resume:         opts.Resume,
+		Concurrent:     opts.Force,
 		// The CLI drains no approval queue: a run that asked for one would block
 		// until its timeout, so it contributes no approval-brokering posture.
 		Host: lifecycle.HostCLI,
@@ -181,16 +162,16 @@ func todosRunOptions() run.Options {
 // The configured `checks` suite is not a request-layer toggle: the definition
 // of done is rendered from the todo and `.gavel.yaml checks.enabled` (or the
 // todo's `checks:` front matter), and no run spec is consulted for it.
-func todosRequestSpec() api.Spec {
+func todosRequestSpec(opts TodosRunOptions) api.Spec {
 	var request api.Spec
-	request.Name = todoModel
-	request.Effort = api.Effort(todoEffort)
-	request.Budget.Cost = maxBudget
-	request.Budget.MaxTurns = maxTurns
+	request.Name = opts.Model
+	request.Effort = api.Effort(opts.Effort)
+	request.Budget.Cost = opts.MaxBudget
+	request.Budget.MaxTurns = opts.MaxTurns
 	// --dirty is a request-layer shorthand for the worktree posture, not a patch
 	// applied to an already-resolved checkout: a project that declares no
 	// checkout block still gets one, so the flag can never be a silent no-op.
-	if dirty {
+	if opts.Dirty {
 		request.Setup = &shell.Setup{Checkout: &shell.Checkout{Worktree: &shell.Worktree{
 			Mode:        shell.WorktreeNew,
 			Uncommitted: shell.CloneClone,
@@ -200,14 +181,14 @@ func todosRequestSpec() api.Spec {
 	return request
 }
 
-func validateTodosRunOptions() error {
-	if todosNoPresets && len(todosPresets) > 0 {
+func validateTodosRunOptions(opts TodosRunOptions) error {
+	if opts.NoPresets && len(opts.Presets) > 0 {
 		return fmt.Errorf("--preset and --no-presets are mutually exclusive")
 	}
-	switch todoEffort {
+	switch opts.Effort {
 	case "", "low", "medium", "high", "xhigh":
 	default:
-		return fmt.Errorf("invalid --effort %q: expected low, medium, high, or xhigh", todoEffort)
+		return fmt.Errorf("invalid --effort %q: expected low, medium, high, or xhigh", opts.Effort)
 	}
 	return nil
 }
@@ -216,8 +197,8 @@ func validateTodosRunOptions() error {
 // declares commits. Captain's spec merge reads an empty slice as "not stated",
 // so a request layer cannot clear a lifecycle step's `commits:` — dispatching
 // anyway would commit against an explicit instruction not to.
-func assertRunCommitPolicy(prepared *run.Prepared) error {
-	if commitAfter || !run.Commit(prepared.Resolution.Spec) {
+func assertRunCommitPolicy(prepared *run.Prepared, allowCommit bool) error {
+	if allowCommit || !run.Commit(prepared.Resolution.Spec) {
 		return nil
 	}
 	return fmt.Errorf(
@@ -229,7 +210,12 @@ func assertRunCommitPolicy(prepared *run.Prepared) error {
 // chosen and reported, the run admitted, and — unless previewing — awaited to
 // its outcome. It is the one path `todos run` and the plan actions dispatch
 // through, so the two cannot disagree about what a run is.
-func runTodoStep(ctx context.Context, workDir string, provider todos.Provider, todo *types.TODO, opts run.Options) error {
+type runStepPolicy struct {
+	DryRun      bool
+	AllowCommit bool
+}
+
+func runTodoStep(ctx context.Context, workDir string, provider todos.Provider, todo *types.TODO, opts run.Options, policy runStepPolicy) error {
 	req := run.Request{Provider: provider, Registry: run.Shared(), Todo: todo, Dir: workDir, Options: opts}
 	prepared, err := run.Resolve(ctx, req)
 	if err != nil {
@@ -238,10 +224,10 @@ func runTodoStep(ctx context.Context, workDir string, provider todos.Provider, t
 	req.Prepared = prepared
 	fmt.Println(clicky.Text("step: "+prepared.Step.Name, "text-green-600 font-bold").
 		Append("  "+prepared.Reason, "text-gray-500").ANSI())
-	if dryRun {
+	if policy.DryRun {
 		return printDryRun(prepared)
 	}
-	if err := assertRunCommitPolicy(prepared); err != nil {
+	if err := assertRunCommitPolicy(prepared, policy.AllowCommit); err != nil {
 		return err
 	}
 	started, err := run.Start(req)

@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -178,6 +179,11 @@ func applyTodoNewValues(payload *todoNewPayload, values map[string][]string, ove
 	assignString(&payload.Body, "body", "description", "text")
 	assignPriority(&payload.Priority, "priority", "severity")
 	assignStatus(&payload.Status, "status")
+	if overwrite || len(payload.Labels) == 0 {
+		if labels := todoNewLabels(values, "labels", "label"); len(labels) > 0 {
+			payload.Labels = labels
+		}
+	}
 	if !overwrite && payload.AutoSave != nil {
 		return nil
 	}
@@ -189,6 +195,22 @@ func applyTodoNewValues(payload *todoNewPayload, values map[string][]string, ove
 		payload.AutoSave = &parsed
 	}
 	return nil
+}
+
+// todoNewLabels collects labels from every value of every key, splitting each on
+// commas, so both `labels=a&labels=b` and `labels=a,b` work.
+func todoNewLabels(values map[string][]string, keys ...string) []string {
+	var labels []string
+	for _, key := range keys {
+		for _, value := range values[key] {
+			for _, label := range strings.Split(value, ",") {
+				if trimmed := strings.TrimSpace(label); trimmed != "" && !slices.Contains(labels, trimmed) {
+					labels = append(labels, trimmed)
+				}
+			}
+		}
+	}
+	return labels
 }
 
 func firstTodoNewValue(values map[string][]string, keys ...string) string {
