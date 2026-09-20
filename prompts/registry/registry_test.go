@@ -14,8 +14,8 @@ import (
 
 // registeredPromptCount is the number of surviving prompt-driven operations
 // (lint.fix, pr.fix, commit.message/summary/grouping, pr.content,
-// todos.run/plan/triage, status.summary, test.outlineSummary).
-const registeredPromptCount = 11
+// todos.run/plan/triage, todos.merge, status.summary, test.outlineSummary).
+const registeredPromptCount = 12
 
 func TestAllRegisteredPromptsAreUnique(t *testing.T) {
 	all := All()

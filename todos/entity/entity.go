@@ -23,6 +23,7 @@ import (
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/bulk"
 	"github.com/flanksource/gavel/todos/githubpush"
+	"github.com/flanksource/gavel/todos/merge"
 	"github.com/flanksource/gavel/todos/query"
 	"github.com/flanksource/gavel/todos/run"
 	"github.com/flanksource/gavel/todos/types"
@@ -186,7 +187,9 @@ func (d Deps) bulkActions() []clicky.EntityBulkAction {
 
 		action(d, "priority", "Set the severity of many TODOs",
 			entity.MCPToolHints{Icon: "flag", Group: "Status"},
-			bulk.PriorityFlags{}, func(_ context.Context, flags bulk.PriorityFlags) (bulk.ItemFunc, error) { return bulk.SetPriority(flags) }),
+			bulk.PriorityFlags{}, func(_ context.Context, flags bulk.PriorityFlags) (bulk.ItemFunc, error) {
+				return bulk.SetPriority(flags)
+			}),
 
 		action(d, "labels", "Add or remove labels across many TODOs",
 			entity.MCPToolHints{Icon: "tag", Group: "Labels"},
@@ -203,6 +206,16 @@ func (d Deps) bulkActions() []clicky.EntityBulkAction {
 				DefaultPermission: entity.ToolPermissionAsk,
 			},
 			bulk.DeleteFlags{}, func(_ context.Context, flags bulk.DeleteFlags) (bulk.ItemFunc, error) { return bulk.Delete(flags) }),
+
+		// N TODOs become one, so it is an aggregate rather than a per-item
+		// operation, and it retires the ones it folds in — an agent asks first.
+		aggregate(d, "merge", "Combine many TODOs into one with AI",
+			entity.MCPToolHints{
+				Icon: "merge", Group: "Danger",
+				DestructiveHint:   &destructive,
+				DefaultPermission: entity.ToolPermissionAsk,
+			},
+			bulk.MergeFlags{}, d.runMerge),
 
 		// It publishes outside gavel, so an agent asks before running it.
 		action(d, "push", "Push many TODOs to GitHub issues",
@@ -231,6 +244,71 @@ func (d Deps) bulkActions() []clicky.EntityBulkAction {
 			}))
 	}
 	return actions
+}
+
+// aggregate binds an operation that acts on the selection as a whole.
+//
+// Every other bulk action is a loop: one function applied to each resolved
+// TODO. Merge is not — N TODOs become one, and which one survives depends on
+// the whole set — so it resolves the same references and then runs once. The
+// error convention is identical: a rejection before the first write returns an
+// error, and anything after it lives in the Result.
+func aggregate[F entity.ActionFlags](
+	d Deps,
+	name, short string,
+	hints entity.MCPToolHints,
+	flags F,
+	run func(ctx context.Context, targets []bulk.Target, flags F) (bulk.Result, error),
+) clicky.EntityBulkAction {
+	return clicky.BulkActionWithContext(name, func(ctx context.Context, ids []string, raw map[string]string) (bulk.Result, error) {
+		decoded, err := clicky.BuildOpts[F](raw)
+		if err != nil {
+			return bulk.Result{}, rejected(err)
+		}
+		targets, unresolved, err := bulk.Resolve(ctx, d.lookup, ids)
+		if err != nil {
+			return bulk.Result{}, rejected(err)
+		}
+		// An aggregate cannot proceed around a ref that named nothing: the
+		// selection it merges would not be the selection the caller chose.
+		if len(unresolved) > 0 {
+			refs := make([]string, 0, len(unresolved))
+			for _, missing := range unresolved {
+				refs = append(refs, fmt.Sprintf("%s (%s)", missing.Ref, missing.Error))
+			}
+			return bulk.Result{}, rejected(fmt.Errorf("%s: could not resolve %s", name, strings.Join(refs, ", ")))
+		}
+		result, err := run(ctx, targets, decoded)
+		if err != nil {
+			return bulk.Result{}, rejected(err)
+		}
+		return result, nil
+	}).
+		WithShort(short).
+		WithFlags(flags).
+		WithToolHints(hints)
+}
+
+// runMerge folds the selection into one TODO. The prompt configuration is the
+// workspace's: every merged TODO shares one (merge.Targets refuses otherwise),
+// so it is read from the survivor's directory.
+func (d Deps) runMerge(ctx context.Context, targets []bulk.Target, flags bulk.MergeFlags) (bulk.Result, error) {
+	if len(targets) == 0 {
+		return bulk.Result{}, fmt.Errorf("merge needs at least two TODOs; got none")
+	}
+	dir := strings.TrimSpace(targets[0].Todo.CWD)
+	if dir == "" {
+		var err error
+		if dir, err = d.dir(ctx, query.ListOpts{}); err != nil {
+			return bulk.Result{}, err
+		}
+	}
+	opts, err := merge.NewOptions(dir, flags)
+	if err != nil {
+		return bulk.Result{}, err
+	}
+	result, _, err := merge.Run(ctx, targets, opts)
+	return result, err
 }
 
 // rejected marks an error as the caller's mistake rather than a server fault,

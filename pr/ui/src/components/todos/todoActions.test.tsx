@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
-import { UiLinkExternal } from '@flanksource/clicky-ui/icons';
+import { UiGitMerge, UiLinkExternal } from '@flanksource/clicky-ui/icons';
 import { todoBulkResultVerb, useTodoSelectionActions } from './todoActions';
 import { todoBulkActionURL, todoBulkResultMessage, type TodoBulkAction } from './todoEntity';
 import { selectionKey } from './todoSelection';
@@ -70,6 +70,25 @@ const pushAction: TodoBulkAction = {
   param_schema: {
     type: 'object',
     properties: { update: { type: 'boolean' }, 'base-url': { type: 'string' } },
+  },
+};
+
+// Destructive, but it keeps the work rather than deleting it — and every
+// parameter is optional, because the toolbar dispatches it without any.
+const mergeAction: TodoBulkAction = {
+  name: 'merge',
+  short: 'Combine many TODOs into one with AI',
+  method: 'POST',
+  path: '/api/v1/todo/{id}/merge',
+  tool_hints: { icon: 'merge', group: 'Danger', destructiveHint: true },
+  param_schema: {
+    type: 'object',
+    properties: {
+      into: { type: 'string' },
+      'dry-run': { type: 'boolean' },
+      model: { type: 'string' },
+      effort: { type: 'string', enum: ['low', 'medium', 'high', 'xhigh'] },
+    },
   },
 };
 
@@ -286,6 +305,29 @@ describe('useTodoSelectionActions', () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
       '/api/v1/todo/todo-1?confirm=true',
       expect.objectContaining({ method: 'DELETE' }),
+    ));
+  });
+
+  // Merge retires the rows it folds in rather than deleting them, so the
+  // confirmation must not promise a deletion — and it dispatches with no
+  // parameters, which is the only way the toolbar can run it.
+  it('confirms a merge in its own words and dispatches it bare', async () => {
+    const result = await actions(new Set([ALPHA, BETA]), [mergeAction]);
+    const merge = result.current.find(action => action.id === 'merge');
+    expect(merge).toMatchObject({ display: 'overflow', section: 'Danger', icon: UiGitMerge });
+
+    const confirm = merge?.confirm;
+    expect(typeof confirm === 'object' && typeof confirm.message === 'function').toBe(true);
+    if (typeof confirm !== 'object' || typeof confirm.message !== 'function') return;
+    const message = confirm.message({ selectedRowIds: [ALPHA, BETA], selectedRows: [], clearSelection: () => {} });
+    expect(message).toContain('2 todos');
+    expect(message).not.toContain('permanently deletes');
+    expect(confirm.confirmLabel).toBe('Merge');
+
+    await merge!.onSelect({ selectedRowIds: [], selectedRows: [], clearSelection: () => {} });
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/todo/todo-1,todo-2/merge',
+      expect.objectContaining({ method: 'POST' }),
     ));
   });
 

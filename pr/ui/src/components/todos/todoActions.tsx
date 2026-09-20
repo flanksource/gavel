@@ -8,6 +8,7 @@ import {
   UiCheck,
   UiClose,
   UiComment,
+  UiGitMerge,
   UiLinkExternal,
   UiListChecks,
   UiPlay,
@@ -56,12 +57,28 @@ const ACTION_ICONS: Record<string, ComponentType<IconProps>> = {
   message: UiComment,
   trash: UiTrash,
   play: UiPlay,
+  merge: UiGitMerge,
   github: UiLinkExternal,
 };
 
 function actionIcon(action: TodoBulkAction): ComponentType<IconProps> {
   return ACTION_ICONS[action.tool_hints?.icon ?? ''] ?? UiListChecks;
 }
+
+/** What each destructive action actually does to the checked rows. The catalog
+ *  publishes that an action is destructive, not what it destroys, so the copy
+ *  lives here — keyed by action name, falling back to the delete wording. */
+const DESTRUCTIVE_CONFIRMATIONS: Record<string, { message: (count: number) => string; confirmLabel: string }> = {
+  delete: {
+    message: count => `This permanently deletes ${count} todo${count === 1 ? '' : 's'}.`,
+    confirmLabel: 'Delete',
+  },
+  merge: {
+    message: count =>
+      `This combines ${count} todos into the first one selected and retires the rest, using AI to write the merged description, verification and plan.`,
+    confirmLabel: 'Merge',
+  },
+};
 
 /**
  * Which actions get a named dropdown on the bar is derived from the catalog,
@@ -239,16 +256,21 @@ export function useTodoSelectionActions({
 
       // A destructive action can act on a selection the caller never
       // enumerated, so it asks first — and it asks with the count, which is the
-      // one number that makes the prompt worth stopping for.
+      // one number that makes the prompt worth stopping for. What it says
+      // happens to those rows is the action's own: merge keeps the work and
+      // retires the rows it folds in, and "permanently deletes" would be a lie
+      // about it.
       if (destructive) {
+        const confirmation = DESTRUCTIVE_CONFIRMATIONS[action.name] ?? DESTRUCTIVE_CONFIRMATIONS.delete;
         base.confirm = {
-          message: context =>
-            `This permanently deletes ${context.selectedRowIds.length} todo${context.selectedRowIds.length === 1 ? '' : 's'}.`,
-          confirmLabel: 'Delete',
+          message: context => confirmation.message(context.selectedRowIds.length),
+          confirmLabel: confirmation.confirmLabel,
         };
-        // The server refuses without it; a UI confirmation is the caller saying
-        // it out loud.
-        base.onSelect = () => dispatch(action, { confirm: 'true' });
+        // Delete refuses without it, so the UI confirmation says it out loud —
+        // but only for an action that declares the parameter. Sending it to one
+        // that does not is a parameter the server never published.
+        const gated = 'confirm' in (action.param_schema?.properties ?? {});
+        base.onSelect = () => dispatch(action, gated ? { confirm: 'true' } : undefined);
       }
 
       const choices = enumParam(action);

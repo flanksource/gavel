@@ -21,6 +21,11 @@ type TodosConfig struct {
 	// a TODO's description and reviews its verification fixture, reporting the
 	// edits for gavel to apply. See prompts.TodosTriage.
 	Triage PromptSpec `yaml:"triage,omitempty" json:"triage,omitempty"`
+	// Merge is the AI spec for the merge prompt: the one-shot pass behind
+	// `gavel todos merge` that folds several TODOs into one body, one fixture and
+	// one plan. It is not a lifecycle step — no run is recorded — so it is
+	// configured here rather than under todos.steps. See prompts.TodosMerge.
+	Merge PromptSpec `yaml:"merge,omitempty" json:"merge,omitempty"`
 	// CheckConcurrency bounds how many definition-of-done checks run at once
 	// (`gavel todos check`, and the verification phase after a bulk triage).
 	// Zero uses the built-in default; running one test suite per TODO unbounded

@@ -11,6 +11,7 @@ import (
 	"github.com/flanksource/gavel/todos/run"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
 
 func testDeps() Deps {
@@ -65,6 +66,7 @@ func TestEveryBulkActionIsDeclaredAndRenderable(t *testing.T) {
 	want := map[string]bool{
 		"status": false, "priority": false, "labels": false, "comment": false,
 		"delete": false, "run": false, "plan": false, "triage": false, "push": false,
+		"merge": false,
 	}
 	for _, info := range registered(t).BulkActions {
 		if _, expected := want[info.Name]; !expected {
@@ -154,7 +156,7 @@ func TestRegistrationGeneratesCLICommands(t *testing.T) {
 	root := &cobra.Command{Use: "gavel"}
 	clicky.GenerateCLI(root)
 
-	for _, name := range []string{"status", "priority", "labels", "run", "plan", "triage", "delete", "push"} {
+	for _, name := range []string{"status", "priority", "labels", "run", "plan", "triage", "delete", "push", "merge"} {
 		cmd, _, err := root.Find([]string{"todo", name})
 		if err != nil || cmd == nil || cmd.Name() != name {
 			t.Fatalf("expected `gavel todo %s` to be generated, got err=%v", name, err)
@@ -183,6 +185,51 @@ func TestRegistrationGeneratesCLICommands(t *testing.T) {
 			t.Fatalf("`gavel todo push` must expose --%s", flag)
 		}
 	}
+}
+
+// merge is the one aggregate action: it folds the selection into a single TODO
+// and retires the rest, so it publishes its parameters, announces itself as
+// destructive, and asks before running.
+func TestMergeIsAnAggregateDestructiveAction(t *testing.T) {
+	for _, info := range registered(t).BulkActions {
+		if info.Name != "merge" {
+			continue
+		}
+		if info.ToolHints.DestructiveHint == nil || !*info.ToolHints.DestructiveHint {
+			t.Fatal("merge retires the TODOs it folds in and must carry a destructive hint")
+		}
+		if info.ToolHints.DefaultPermission != entity.ToolPermissionAsk {
+			t.Fatalf("merge must default to asking, got %q", info.ToolHints.DefaultPermission)
+		}
+		if info.FlagsType == nil || info.FlagsType.Name() != "MergeFlags" {
+			t.Fatalf("merge flags type = %v", info.FlagsType)
+		}
+		return
+	}
+	t.Fatal("merge action was not declared")
+}
+
+// Every merge parameter must be optional: the dashboard's toolbar dispatches an
+// action with no parameters unless they are a closed set of values, so a
+// required one would make merge unreachable from the UI it was built for.
+func TestMergeParametersAreAllOptional(t *testing.T) {
+	root := &cobra.Command{Use: "gavel"}
+	clicky.GenerateCLI(root)
+
+	cmd, _, err := root.Find([]string{"todo", "merge"})
+	if err != nil {
+		t.Fatalf("find merge: %v", err)
+	}
+	for _, flag := range []string{"into", "dry-run", "model", "effort"} {
+		if cmd.Flags().Lookup(flag) == nil {
+			t.Fatalf("`gavel todo merge` must expose --%s", flag)
+		}
+	}
+	cmd.Flags().VisitAll(func(flag *pflag.Flag) {
+		if annotations := flag.Annotations[cobra.BashCompOneRequiredFlag]; len(annotations) > 0 && annotations[0] == "true" {
+			t.Fatalf("--%s is required, but the dashboard cannot supply merge parameters", flag.Name)
+		}
+	})
 }
 
 // push publishes outside gavel, so an agent must ask before running it.

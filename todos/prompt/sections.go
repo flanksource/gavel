@@ -10,6 +10,26 @@ import (
 	"github.com/flanksource/gavel/todos/types"
 )
 
+// Sections renders the per-TODO prompt sections for a group of todos: the same
+// numbered body every todo prompt embeds as {{{body}}}.
+//
+// It is exported because the one-shot prompts outside the lifecycle — merge —
+// render the same todos and must not grow a second renderer that drifts from
+// this one. rawFixture shows each TODO's verification fixture verbatim instead
+// of as the commands it projects to, which a prompt that must REVIEW or REWRITE
+// the fixture requires.
+func Sections(todoList []*types.TODO, workDir string, rawFixture bool) string {
+	var body strings.Builder
+	for i, todo := range todoList {
+		number := 0
+		if len(todoList) > 1 {
+			number = i + 1
+		}
+		body.WriteString(buildTODOSection(todo, workDir, true, number, rawFixture))
+	}
+	return body.String()
+}
+
 // buildTODOSection renders one TODO. grouped omits the per-todo PR context (the
 // group framing carries it instead); number, when > 0, prefixes the heading with
 // its position in the list so multi-todo runs read as a numbered checklist.

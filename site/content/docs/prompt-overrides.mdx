@@ -48,6 +48,7 @@ Gavel validates the parsed output and fails loudly on a shape mismatch (no zero-
 | `todos.run` | Todo run | `{{body}}`, `{{count}}`, `{{multiple}}`, `{{existingPlan}}` | **fixed** (run envelope) |
 | `todos.plan` | Todo plan | `{{body}}`, `{{count}}`, `{{existingPlan}}` | **fixed** (plan envelope) |
 | `todos.triage` | Todo triage | `{{body}}`, `{{count}}`, `{{multiple}}`, `{{backlog}}` | **fixed** (triage envelope) |
+| `todos.merge` | Todo merge (`todos merge`) | `{{body}}` (fixtures verbatim), `{{count}}`, `{{plans}}` | frontmatter (`{title, body, verification, plan, …}`) |
 | `status.summary` | Per-file summary (`status --ai`) | `{{details}}` | frontmatter (`{summary}`) |
 | `test.outlineSummary` | Per-test summary (`test outline --ai-summary`) | `{{ids}}`, `{{file}}`, `{{source}}` | frontmatter (`tests[]`) |
 
@@ -61,6 +62,10 @@ The verification prompt (`todos.verify`) is owned by the lifecycle rather than o
 ### Fixed-schema prompts
 
 `todos.run`, `todos.plan`, and `todos.triage` each carry a structured result **envelope** whose schema is generated in Go and applied to the request natively. Overriding these prompts changes the framing and instructions, but the output shape is enforced by the driver and cannot be altered from `.gavel.yaml` — this is what keeps a hand-edited prompt from breaking the run loop.
+
+### One-shot todo prompts
+
+`todos.merge` is a todo prompt that is **not** a lifecycle step: `gavel todos merge <id> <id>...` asks once for the combined title, body, verification fixture and plan of several TODOs, and gavel writes the result — the survivor is rewritten, the rest are commented, linked and soft-deleted. It records no run and starts no session, so it has no `when` predicate and no outcomes, and its output schema lives in the prompt's own frontmatter rather than in a Go envelope. The same action is on the dashboard's todo selection toolbar.
 
 ### Custom lifecycle steps
 
