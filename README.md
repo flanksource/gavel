@@ -699,7 +699,7 @@ gavel todos list
 gavel todos list --status pending
 gavel todos run 3f2a1b
 gavel todos steps 3f2a1b                 # which lifecycle steps apply to this todo now
-gavel todos run --step plan              # propose a reviewable plan first (read-only)
+gavel todos run 3f2a1b --step plan      # propose a reviewable plan first (read-only)
 gavel todos check 3f2a1b                 # run the TODO's complete definition of done
 ```
 

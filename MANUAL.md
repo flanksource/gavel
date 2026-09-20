@@ -490,9 +490,8 @@ checks, the persisted `## Verification` fixture, and any acceptance-criteria
 checklist step through the same CEL verdict used inside `todos run`.
 
 ```bash
-gavel todos check                       # check selected runnable TODOs
 gavel todos check 3f2a1b                 # check one TODO
-gavel todos check --timeout 10m          # bound each verification run
+gavel todos check 3f2a1b --timeout 10m   # bound this verification run
 ```
 
 ### `gavel commit`
@@ -546,10 +545,9 @@ gavel todos get 3f2a1b
 gavel todos create "Fix the parser race"
 gavel todos sync ./pkg/parser
 gavel todos steps 3f2a1b                   # which lifecycle steps apply to this todo now
-gavel todos check
-gavel todos run
-gavel todos run --interactive
-gavel todos run --step plan                # propose a plan; the TODO parks in `review`
+gavel todos check 3f2a1b
+gavel todos run 3f2a1b
+gavel todos run 3f2a1b --step plan         # propose a plan; the TODO parks in `review`
 gavel todos plan approve 3f2a1b --run      # accept the plan and implement it
 gavel todos plan revise 3f2a1b --feedback "split the migration in two"
 gavel todos plan reject 3f2a1b             # discard the plan; the TODO returns to pending
@@ -659,8 +657,8 @@ closes the loop: the agent doesn't just claim it's finished, it has to leave the
 suite green.
 
 ```bash
-gavel todos run
-gavel todos run --model cmux:opus   # primary path: resumes the live agent REPL
+gavel todos run 3f2a1b
+gavel todos run 3f2a1b --model cmux:opus   # primary path: resumes the live agent REPL
 ```
 
 The loop is **opt-in**: it is part of the todo's definition of done only when
@@ -961,7 +959,7 @@ gavel ui serve gavel-results.json
 gavel pr status --logs
 gavel todos create "Fix the failing PR check" --body "Paste the relevant failure details"
 gavel todos list
-gavel todos run
+gavel todos run 3f2a1b
 ```
 
 ### Stand up a persistent PR dashboard

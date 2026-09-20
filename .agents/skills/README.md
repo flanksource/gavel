@@ -147,7 +147,7 @@ Manage the TODO lifecycle without starting implementation:
 - **Feed** — `gavel todos sync` for source comments, `gavel todos create` for explicit work
 
 ```bash
-gavel todos check
+gavel todos check 3f2a1b
 gavel todos list
 ```
 
@@ -165,7 +165,7 @@ Turn a pile of titles into a queue that is ready for the external executor:
 
 ```bash
 gavel todos list --format json > .tmp/todos.json
-gavel todos check --status unverified
+gavel todos check 3f2a1b
 gavel todos edit <id> --body @.tmp/body.md
 gavel todos edit <id> --status completed --priority low
 gavel todos link <duplicate> <survivor>
