@@ -50,7 +50,6 @@ function ProjectsTab({ configured, selectedName, selectedRunId, enabled = true, 
     <div>
       <ProjectsSidebar
         catalog={catalog}
-        procStatus={{}}
         selectedName={selectedName}
         selectedRunId={selectedRunId}
         historyEnabled={historyEnabled}

@@ -20,7 +20,9 @@ import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ThemeProvider } from "@flanksource/clicky-ui/hooks";
 import { ToastProvider } from "@flanksource/clicky-ui/components";
+import { ChatWindowManagerProvider } from "@flanksource/clicky-ui/ai";
 import { App } from "./App";
+import { ChatLayer, chatLayerEnabled } from "./components/ChatLayer";
 import { registerIconifyFallback } from "./icons/iconifyFallback";
 
 // Resolves user-authored Iconify names on tag definitions. Every glyph the app
@@ -45,7 +47,10 @@ createRoot(document.getElementById("root")!).render(
           have nowhere to live inside DataTable's flex toolbar, and a partial
           failure needs more room than a toolbar row. */}
       <ToastProvider>
-        <App />
+        <ChatWindowManagerProvider storageId="gavel-chat">
+          <App />
+          {chatLayerEnabled(window.location.pathname) && <ChatLayer />}
+        </ChatWindowManagerProvider>
       </ToastProvider>
     </ThemeProvider>
   </QueryClientProvider>,

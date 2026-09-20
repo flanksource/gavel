@@ -24,7 +24,6 @@ vi.mock('./useAppQueries', () => ({
     projects,
     projectsLoaded: true,
     projectError: '',
-    procStatus: {},
     processError: '',
     updateSnapshot: vi.fn(),
     refreshProjects: vi.fn(),

@@ -120,27 +120,47 @@ export function TodoTagField({ todo, index, counts = {}, disabled = false, onCha
   /** Receives the complete label set to persist, reserved labels included. */
   onChange: (labels: string[]) => void;
 }) {
-  const [adding, setAdding] = useState(false);
-  const visible = todoVisibleLabels(todo);
   const reserved = todoReservedLabels(todo);
+  return (
+    <TagListField
+      labels={todoVisibleLabels(todo)}
+      index={index}
+      counts={counts}
+      disabled={disabled}
+      onChange={next => onChange([...reserved, ...next])}
+      emptyLabel="This todo already has every defined tag."
+    />
+  );
+}
 
-  const commit = (next: string[]) => onChange([...reserved, ...next]);
+// TagListField edits a plain list of labels: the chips plus add/remove through
+// the shared TagPicker. TodoTagField wraps it for a stored todo; the new-todo
+// form uses it directly for the labels a todo is created with.
+export function TagListField({ labels, index, counts = {}, disabled = false, onChange, emptyLabel = 'Every defined tag is already added.' }: {
+  labels: string[];
+  index: TagIndex;
+  counts?: Record<string, number>;
+  disabled?: boolean;
+  onChange: (labels: string[]) => void;
+  emptyLabel?: string;
+}) {
+  const [adding, setAdding] = useState(false);
 
   function add(name: string) {
     setAdding(false);
     const value = normalizeTag(name);
-    if (!value || visible.some(label => normalizeTag(label) === value)) return;
-    commit([...visible, value]);
+    if (!value || labels.some(label => normalizeTag(label) === value)) return;
+    onChange([...labels, value]);
   }
 
   // Everything offerable — definitions plus labels already in use here — minus
-  // what this todo already carries.
+  // what is already on the list.
   const candidates = tagCandidates(index, counts)
-    .filter(def => !visible.some(label => normalizeTag(label) === def.name));
+    .filter(def => !labels.some(label => normalizeTag(label) === def.name));
 
   return (
     <span className="relative inline-flex flex-wrap items-center gap-1">
-      {visible.map(label => (
+      {labels.map(label => (
         <span key={label} className="group inline-flex items-center">
           <TodoTag tag={index.resolve(label)} />
           {!disabled && (
@@ -150,7 +170,7 @@ export function TodoTagField({ todo, index, counts = {}, disabled = false, onCha
               variant="ghost"
               title={`Remove ${label}`}
               aria-label={`Remove ${label}`}
-              onClick={() => commit(visible.filter(other => other !== label))}
+              onClick={() => onChange(labels.filter(other => other !== label))}
               className="ml-0.5 h-4 w-4 text-muted-foreground opacity-0 transition-opacity hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100"
             >
               <UiClose className="text-[9px]" />
@@ -181,7 +201,7 @@ export function TodoTagField({ todo, index, counts = {}, disabled = false, onCha
               onPick={add}
               onClose={() => setAdding(false)}
               placeholder="Filter or create…"
-              emptyLabel="This todo already has every defined tag."
+              emptyLabel={emptyLabel}
             />
           )}
         </span>

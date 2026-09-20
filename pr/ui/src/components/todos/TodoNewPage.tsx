@@ -2,122 +2,29 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Field, Button, Select } from '@flanksource/clicky-ui/components';
 import { UiClose } from '@flanksource/clicky-ui/icons';
-import type { ProcStatus, Project, TodoItem, TodoPriority, TodoStatus } from '../../types';
+import { useProcStatus } from '../../procStatusQuery';
+import type { Project, TodoItem, TodoPriority, TodoStatus } from '../../types';
 import { ScreenshotPicker, todoCommentFormData, todoFormData, useAttachments } from './attachments';
 import { inputClass, priorities, statuses, statusLabel } from './format';
+import { RecentTodoChips } from './RecentTodoChips';
+import { loadRecentTodos, recentTodoHost, rememberRecentTodo, type RecentTodo } from './recentTodos';
+import { useTodoTagCounts, useTodoTagIndex } from './tagQueries';
+import { TagListField } from './TodoTag';
 import { TodoBodyField } from './TodoBodyField';
 import { useCreateTodoMutation, useUpdateTodoMutation } from './todoMutations';
+import {
+  closedStatuses, compareRecentTodos, detectProjectDir, firstParam, listParam, modeFromParams,
+  oneOf, parseBool, returnTarget, todoMatchesSearch, type TodoNewMode,
+} from './todoNewParams';
 import { todoListQueryOptions } from './todoQueries';
-
-// firstParam reads the first present query value across a set of aliases so
-// external callers can use the field name they have (e.g. ?body= or ?text=).
-function firstParam(params: URLSearchParams, ...keys: string[]): string {
-  for (const key of keys) {
-    const value = params.get(key);
-    if (value !== null && value.trim() !== '') return value.trim();
-  }
-  return '';
-}
-
-function parseBool(value: string): boolean {
-  return /^(1|true|yes|on)$/i.test(value.trim());
-}
-
-// returnTarget resolves where the form returns to after a create or cancel: an
-// explicit ?return= path wins, otherwise the (same-origin) referer that opened
-// the page. Cross-origin referers and the new-todo page itself are ignored so a
-// hard-load or external link falls through to the caller's default.
-function returnTarget(params: URLSearchParams): string | null {
-  const candidate = firstParam(params, 'return', 'returnTo') || (typeof document !== 'undefined' ? document.referrer : '');
-  if (!candidate) return null;
-  try {
-    const url = new URL(candidate, window.location.origin);
-    if (url.origin !== window.location.origin) return null;
-    if (url.pathname.startsWith('/todos/new')) return null;
-    return `${url.pathname}${url.search}${url.hash}`;
-  } catch {
-    return null;
-  }
-}
-
-function oneOf<T extends string>(value: string, allowed: readonly T[], fallback: T): T {
-  return (allowed as readonly string[]).includes(value) ? (value as T) : fallback;
-}
-
-type TodoNewMode = 'new' | 'existing';
-
-const closedStatuses = new Set<TodoStatus>(['completed', 'skipped']);
-
-function modeFromParams(params: URLSearchParams): TodoNewMode {
-  const mode = firstParam(params, 'mode', 'target');
-  if (mode === 'existing' || firstParam(params, 'ref', 'todo', 'issue')) return 'existing';
-  return 'new';
-}
-
-function sourcePort(raw: string): number | null {
-  if (!raw) return null;
-  try {
-    const url = new URL(raw);
-    if (url.port) return Number(url.port);
-    if (url.protocol === 'http:') return 80;
-    if (url.protocol === 'https:') return 443;
-  } catch {
-    return null;
-  }
-  return null;
-}
-
-function statusForProject(project: Project, procStatus: Record<string, ProcStatus>): ProcStatus | undefined {
-  if (procStatus[project.name]) return procStatus[project.name];
-  for (const repo of project.repos || []) {
-    if (procStatus[repo]) return procStatus[repo];
-  }
-  return undefined;
-}
-
-function detectProjectDir(sourceUrl: string, workspaces: Project[], procStatus: Record<string, ProcStatus>): string {
-  const port = sourcePort(sourceUrl);
-  if (!port) return '';
-  for (const workspace of workspaces) {
-    const status = statusForProject(workspace, procStatus);
-    if (status?.processes?.some(proc => proc.ports?.includes(port))) return workspace.dir;
-  }
-  return '';
-}
-
-function todoMatchesSearch(todo: TodoItem, query: string): boolean {
-  const q = query.trim().toLowerCase();
-  if (!q) return true;
-  return todo.title.toLowerCase().includes(q) ||
-    todo.ref.toLowerCase().includes(q) ||
-    (todo.shortId || '').toLowerCase().includes(q) ||
-    (todo.id || '').toLowerCase().includes(q);
-}
-
-function todoActivityMs(todo: TodoItem): number | null {
-  const raw = todo.lastRun || todo.created;
-  if (!raw) return null;
-  const ms = Date.parse(raw);
-  return Number.isNaN(ms) ? null : ms;
-}
-
-function compareRecentTodos(a: TodoItem, b: TodoItem): number {
-  const am = todoActivityMs(a);
-  const bm = todoActivityMs(b);
-  if (am !== bm) {
-    if (am === null) return 1;
-    if (bm === null) return -1;
-    return bm - am;
-  }
-  return (a.title || '').localeCompare(b.title || '');
-}
 
 // TodoNewPage is the focused, full-page todo form served at /todos/new. Unlike
 // the in-dashboard CreateTodoDialog modal it is meant to be linked to (from the
 // menubar, a bookmarklet, or another app): every field can be pre-filled from
 // query params and, on submit or cancel, it navigates back to the referer (or an
 // explicit ?return= path), falling back to the newly-created todo otherwise.
-export function TodoNewPage({ projects, procStatus = {}, projectError = '' }: { projects: Project[]; procStatus?: Record<string, ProcStatus>; projectError?: string }) {
+export function TodoNewPage({ projects, projectError = '' }: { projects: Project[]; projectError?: string }) {
+  const procStatus = useProcStatus();
   const workspaces = useMemo(() => projects.filter(p => !!p.dir), [projects]);
   const params = useMemo(() => new URLSearchParams(window.location.search), []);
   const back = useMemo(() => returnTarget(params), [params]);
@@ -134,21 +41,32 @@ export function TodoNewPage({ projects, procStatus = {}, projectError = '' }: { 
     return workspaces.find(w => w.name === queryProject)?.dir || '';
   }, [queryProject, workspaces]);
   const detectedDir = useMemo(() => detectProjectDir(sourceUrl, workspaces, procStatus), [sourceUrl, workspaces, procStatus]);
-  const preferredDir = queryDir || queryProjectDir || detectedDir || workspaces[0]?.dir || '';
+  const recentHost = useMemo(() => recentTodoHost(sourceUrl), [sourceUrl]);
+  const [recent, setRecent] = useState(() => loadRecentTodos(recentHost));
+  // The workspace last used from this host:port. Port detection needs
+  // /api/proc/status; until it answers this is known synchronously (and shows
+  // its chips). With neither, nothing is guessed: the user picks.
+  const recentDir = useMemo(
+    () => recent.find(entry => workspaces.some(w => w.dir === entry.dir))?.dir || '',
+    [recent, workspaces],
+  );
+  const preferredDir = queryDir || queryProjectDir || detectedDir || recentDir;
 
   // The workspace options are every configured workspace plus an explicit ?dir=
   // that isn't one of them (so external links can target any directory). An
   // empty value means the server's own work dir — but only when the catalog
   // actually loaded: a failed projects request looks exactly like "nothing is
   // configured", so it says so instead of quietly filing the todo elsewhere.
+  // With workspaces to choose from, empty is instead the unpicked placeholder.
   const dirOptions = useMemo(() => {
-    const opts = workspaces.map(w => ({ value: w.dir, label: w.name }));
+    const opts = workspaces.map(w => ({ value: w.dir, label: w.name, disabled: false }));
     if (queryDir && !workspaces.some(w => w.dir === queryDir)) {
-      opts.unshift({ value: queryDir, label: queryDir });
+      opts.unshift({ value: queryDir, label: queryDir, disabled: false });
     }
-    if (opts.length === 0) opts.push({ value: '', label: projectError ? 'Workspaces unavailable' : 'Default workspace' });
-    return opts;
+    if (opts.length === 0) return [{ value: '', label: projectError ? 'Workspaces unavailable' : 'Default workspace', disabled: false }];
+    return [{ value: '', label: 'Select workspace', disabled: true }, ...opts];
   }, [workspaces, queryDir, projectError]);
+  const workspaceRequired = dirOptions.some(o => o.value !== '');
 
   const [mode, setMode] = useState<TodoNewMode>(initialMode);
   const [dir, setDirState] = useState(() => preferredDir);
@@ -157,14 +75,21 @@ export function TodoNewPage({ projects, procStatus = {}, projectError = '' }: { 
   const [body, setBody] = useState(() => firstParam(params, 'body', 'description', 'text'));
   const [priority, setPriority] = useState<TodoPriority>(() => oneOf(firstParam(params, 'priority', 'severity'), priorities, 'medium'));
   const [status, setStatus] = useState<TodoStatus>(() => oneOf(firstParam(params, 'status'), statuses, autoSave ? 'pending' : 'draft'));
+  const [labels, setLabels] = useState(() => listParam(params, 'labels', 'label'));
   const [todoSearch, setTodoSearch] = useState('');
   const [selectedRef, setSelectedRef] = useState(queryRef);
   const [error, setError] = useState('');
   const [completeMessage, setCompleteMessage] = useState('');
+  const recentForDir = useMemo(() => recent.filter(entry => entry.dir === dir), [recent, dir]);
   const { attachments, previews, add, remove } = useAttachments({ pasteAnywhere: true });
+  const workspaceMissing = workspaceRequired && !dir;
+  const tagIndex = useTodoTagIndex(dir, mode === 'new' && !workspaceMissing);
+  const tagCounts = useTodoTagCounts(dir, mode === 'new' && !workspaceMissing);
+  // The list also backs the recent chips, so it loads whenever there are chips
+  // to refresh — their titles stay current and closed or deleted todos drop out.
   const existingTodosQuery = useQuery({
     ...todoListQueryOptions(dir),
-    enabled: mode === 'existing' && !!dir,
+    enabled: (mode === 'existing' || recentForDir.length > 0) && !!dir,
   });
   const createTodo = useCreateTodoMutation(dir);
   const commentTodo = useUpdateTodoMutation(dir, `Failed to add comment to todo ${selectedRef}`);
@@ -208,6 +133,27 @@ export function TodoNewPage({ projects, procStatus = {}, projectError = '' }: { 
     [existingTodos, todoSearch],
   );
 
+  // Until the list loads the chips show what was stored; once it has, only
+  // todos that are still open remain, under their current title.
+  const recentChips = useMemo((): RecentTodo[] => {
+    if (!existingTodosQuery.data) return recentForDir;
+    const open = new Map(existingTodos.filter(todo => !closedStatuses.has(todo.status)).map(todo => [todo.ref, todo]));
+    return recentForDir.flatMap(entry => {
+      const todo = open.get(entry.ref);
+      return todo ? [{ ...entry, title: todo.title, shortId: todo.shortId || entry.shortId }] : [];
+    });
+  }, [existingTodosQuery.data, existingTodos, recentForDir]);
+
+  function pickRecent(ref: string) {
+    setMode('existing');
+    setTodoSearch('');
+    setSelectedRef(ref);
+  }
+
+  function remember(todo: Pick<TodoItem, 'ref' | 'title'> & { shortId?: string }) {
+    setRecent(rememberRecentTodo(recentHost, { ref: todo.ref, shortId: todo.shortId, title: todo.title, dir, at: Date.now() }));
+  }
+
   useEffect(() => {
     if (mode !== 'existing' || !selectedRef || loadingTodos) return;
     if (existingTodos.length === 0) return;
@@ -231,6 +177,7 @@ export function TodoNewPage({ projects, procStatus = {}, projectError = '' }: { 
   }
 
   async function submit() {
+    if (workspaceMissing) return;
     if (mode === 'existing') {
       await submitExisting();
       return;
@@ -245,12 +192,13 @@ export function TodoNewPage({ projects, procStatus = {}, projectError = '' }: { 
       // With attachments, post multipart so the image bytes ride along and the
       // server persists them; otherwise keep the lighter JSON path.
       const data = await createTodo.mutateAsync(attachments.length
-        ? { body: todoFormData({ title, body, priority, status }, attachments) }
+        ? { body: todoFormData({ title, body, priority, status, labels }, attachments) }
         : {
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ title, body, priority, status }),
+            body: JSON.stringify({ title, body, priority, status, labels }),
           });
       const todo = data.todo as TodoItem | undefined;
+      if (todo?.ref) remember(todo);
       if (embed) {
         setCompleteMessage('Todo created');
         finish('todo-created', todo?.ref);
@@ -278,6 +226,8 @@ export function TodoNewPage({ projects, procStatus = {}, projectError = '' }: { 
           });
       const todo = data as TodoItem | undefined;
       const ref = todo?.ref || selectedRef;
+      const known = todo?.title ? todo : existingTodos.find(t => t.ref === ref);
+      if (known) remember({ ...known, ref });
       if (embed) {
         setCompleteMessage('Comment added');
         finish('todo-commented', ref);
@@ -289,9 +239,9 @@ export function TodoNewPage({ projects, procStatus = {}, projectError = '' }: { 
     }
   }
 
-  const submitDisabled = mode === 'existing'
+  const submitDisabled = workspaceMissing || (mode === 'existing'
     ? !selectedRef || busy || (!body.trim() && attachments.length === 0)
-    : !title.trim() || busy;
+    : !title.trim() || busy);
 
   if (completeMessage) {
     return (
@@ -351,13 +301,14 @@ export function TodoNewPage({ projects, procStatus = {}, projectError = '' }: { 
           )}
           <Field label="Workspace">
             <Select value={dir} onChange={e => setDir(e.currentTarget.value)} className={inputClass} aria-label="Workspace" disabled={!!projectError}>
-              {dirOptions.map(o => <option key={o.value || '(default)'} value={o.value}>{o.label}</option>)}
+              {dirOptions.map(o => <option key={o.value || '(default)'} value={o.value} disabled={o.disabled}>{o.label}</option>)}
             </Select>
           </Field>
           {mode === 'existing' ? (
             <>
               <Field label="Issue">
                 <div className="space-y-2">
+                  <RecentTodoChips label="Recent" entries={recentChips} selectedRef={selectedRef} disabled={busy} onPick={pickRecent} />
                   <input
                     className={inputClass}
                     value={todoSearch}
@@ -391,6 +342,9 @@ export function TodoNewPage({ projects, procStatus = {}, projectError = '' }: { 
             </>
           ) : (
             <>
+              {showModeSwitch && (
+                <RecentTodoChips label="Add to recent" entries={recentChips} disabled={busy} onPick={pickRecent} />
+              )}
               <Field label="Title" required>
                 <input
                   className={inputClass}
@@ -416,6 +370,9 @@ export function TodoNewPage({ projects, procStatus = {}, projectError = '' }: { 
                   </Field>
                 </div>
               </div>
+              <Field label="Labels">
+                <TagListField labels={labels} index={tagIndex} counts={tagCounts} disabled={busy} onChange={setLabels} />
+              </Field>
               <TodoBodyField
                 label="Body"
                 value={body}

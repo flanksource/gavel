@@ -1,10 +1,11 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import type { PRItem, PRDetail, PRInfo, SearchConfig, PRSyncStatus, GavelResultsSummary, Project, ProcStatus } from './types';
+import type { PRItem, PRDetail, PRInfo, SearchConfig, PRSyncStatus, GavelResultsSummary, Project } from './types';
 import { PRList } from './components/PRList';
 import { PRDetailPanel } from './components/PRDetail';
 import { FilterBar, emptyFilters, type Filters } from './components/FilterBar';
 import { AppShell, Button } from '@flanksource/clicky-ui/components';
 import { TaskManager, TaskManagerButton } from '@flanksource/clicky-ui/data';
+import { ChatButton } from '@flanksource/clicky-ui/ai';
 import { ActivityView } from './components/ActivityView';
 import { TodoNewButton, TodoNavbarDensityPicker, TodoNavbarLayoutPicker, TodoWorkspaceList, TodoDetailPane, TodoFullPane } from './components/TodoView';
 import { useWorkspaceTodos } from './components/todos/useWorkspaceTodos';
@@ -40,6 +41,7 @@ import { loadUIState, saveUIState, filtersFromStored } from './storage';
 import { useDocumentVisible } from './useDocumentVisible';
 import { useProjectCatalog } from './useProjectCatalog';
 import { useAppQueries } from './useAppQueries';
+import { useProcStatus } from './procStatusQuery';
 import { useAppMutations } from './useAppMutations';
 import { usePRDetailStream } from './usePRDetailStream';
 import { useIsMobile } from './useIsMobile';
@@ -198,7 +200,6 @@ export function App() {
     projects,
     projectsLoaded,
     projectError,
-    procStatus,
     processError,
     updateSnapshot,
     refreshProjects,
@@ -577,7 +578,6 @@ export function App() {
         projectsLoaded={projectsLoaded}
         projectError={projectError}
         projectsByRepo={projectsByRepo}
-        procStatus={procStatus}
         syncStatus={syncStatus}
         gavelResults={gavelResultsMap}
         onSelect={loadPR}
@@ -596,14 +596,13 @@ export function App() {
         projects={scopedProjects}
         projectsLoaded={projectsLoaded}
         projectError={projectError}
-        procStatus={procStatus}
         onProcChanged={onProcChanged}
       />
     );
   }
 
   if (isTodoNewPage) {
-    return <TodoNewPage projects={projects} procStatus={procStatus} projectError={projectError} />;
+    return <TodoNewPage projects={projects} projectError={projectError} />;
   }
 
   return (
@@ -619,8 +618,9 @@ export function App() {
             {activeTab === 'todos' && <TodoNavbarDensityPicker todos={todos} />}
             {activeTab === 'todos' && <ReactGrabHelp />}
             {activeTab === 'todos' && <TodoNewButton todos={todos} />}
+            <ChatButton label="Open Gavel assistant" />
             <TaskManagerButton basePath="/api/v1" />
-            <ProcessManager projects={scopedProjects} procStatus={procStatus} onProcChanged={onProcChanged} />
+            <ProcessManager projects={scopedProjects} onProcChanged={onProcChanged} />
             <OrgChooser config={{ ...config, project: scopeProject }} projects={projects} onChange={updateScopeConfig} />
             <StatusIndicator
               fetchedAt={fetchedAt}
@@ -671,11 +671,10 @@ export function App() {
         }
         bodySidebar={
           activeTab === 'prs' ? (
-            <PRList prs={filtered} selected={selected} onSelect={handleSelect} unread={unread} syncStatus={syncStatus} gavelResults={gavelResultsMap} projectsByRepo={projectsByRepo} procStatus={procStatus} onProcChanged={onProcChanged} />
+            <PRList prs={filtered} selected={selected} onSelect={handleSelect} unread={unread} syncStatus={syncStatus} gavelResults={gavelResultsMap} projectsByRepo={projectsByRepo} onProcChanged={onProcChanged} />
           ) : activeTab === 'projects' ? (
             <ProjectsSidebar
               catalog={projectCatalog}
-              procStatus={procStatus}
               selectedName={selectedPath}
               selectedRunId={projectRunId}
               historyEnabled={projectHistory}
@@ -780,15 +779,14 @@ function ProcessesPage({
   projects,
   projectsLoaded,
   projectError,
-  procStatus,
   onProcChanged,
 }: {
   projects: Project[];
   projectsLoaded: boolean;
   projectError?: string;
-  procStatus: Record<string, ProcStatus>;
   onProcChanged: () => void;
 }) {
+  const procStatus = useProcStatus();
   const workspaces = useMemo(
     () => projects.map(p => ({ project: p, status: procStatus[p.name] ?? emptyProcStatus })),
     [projects, procStatus],
@@ -885,7 +883,6 @@ function MenubarView({
   projectsLoaded,
   projectError,
   projectsByRepo,
-  procStatus,
   syncStatus,
   gavelResults,
   onSelect,
@@ -906,7 +903,6 @@ function MenubarView({
   projectsLoaded: boolean;
   projectError?: string;
   projectsByRepo: Record<string, Project>;
-  procStatus: Record<string, ProcStatus>;
   syncStatus: Record<string, PRSyncStatus>;
   gavelResults: Record<string, GavelResultsSummary>;
   onSelect: (pr: PRItem) => void;
@@ -918,6 +914,7 @@ function MenubarView({
 }) {
   useMenubarExternalLinks();
   const [menubarTab, setMenubarTab] = useState<'processes' | 'prs' | 'todos'>('prs');
+  const procStatus = useProcStatus();
 
   const workspaces = useMemo(
     () => projects.map(p => ({ project: p, status: procStatus[p.name] ?? emptyProcStatus })),
@@ -1056,7 +1053,6 @@ function MenubarView({
             syncStatus={syncStatus}
             gavelResults={gavelResults}
             projectsByRepo={projectsByRepo}
-            procStatus={procStatus}
             onProcChanged={onProcChanged}
           />
         )}

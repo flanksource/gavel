@@ -1,13 +1,13 @@
 import { useMemo } from 'react';
 import { Button, DropdownMenu } from '@flanksource/clicky-ui/components';
-import type { Project, ProcStatus } from '../types';
+import { useProcStatus } from '../procStatusQuery';
+import type { Project } from '../types';
 import { flattenProcesses, aggregateDotClass, emptyProcStatus } from '../utils';
 import { WorkspaceGroup } from './ProcessTable';
 import { UiServerProcess, UiWarningTriangle, UiLinkExternal } from '@flanksource/clicky-ui/icons';
 
 interface Props {
   projects: Project[];
-  procStatus: Record<string, ProcStatus>;
   onProcChanged: () => void;
 }
 
@@ -16,7 +16,8 @@ interface Props {
 // (with live CPU / memory / open-file metrics and a per-process log preview) plus
 // a profile selector and start/restart/stop-all controls; one without a Procfile
 // shows as a compact "No Procfile" row.
-export function ProcessManager({ projects, procStatus, onProcChanged }: Props) {
+export function ProcessManager({ projects, onProcChanged }: Props) {
+  const procStatus = useProcStatus();
   // Every configured project is a workspace, listed straight from projects.json;
   // those without a Procfile render as a compact "No Procfile" row.
   const workspaces = useMemo(
