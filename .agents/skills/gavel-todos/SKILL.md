@@ -130,6 +130,7 @@ agent is trusted to self-report against.
 | `gavel todos comment <todo> --body @comment.md` | Add a comment |
 | `gavel todos reopen <todo>` | Reopen completed work |
 | `gavel todos transfer <todo> --to <project>` | Move work to another project |
+| `gavel todos merge <id> <id>... [--into <id>] [--dry-run]` | Fold overlapping TODOs into one: AI writes the merged body, fixture and plan onto the survivor; the rest are commented, linked and soft-deleted. `--dry-run` previews it |
 | `gavel todos import [files...]` | Import portable `.todos` Markdown |
 | `gavel todos export [ids...]` | Export native TODOs as portable Markdown |
 

@@ -156,6 +156,10 @@ func todosSchema(specSchema map[string]any) map[string]any {
 			"triage": withRuntimePresetSchema(promptSpecSchema(prompts.TodosTriage,
 				"AI spec for the triage prompt: a read-only pass that compacts the TODO's description and "+
 					"reviews its verification fixture, reporting the edits for gavel to apply.")),
+			"merge": promptSpecSchema(prompts.TodosMerge,
+				"AI spec for the merge prompt: the one-shot pass behind `gavel todos merge` that folds "+
+					"several TODOs into one title, body, verification fixture and plan. It records no run, "+
+					"so it is not a lifecycle step."),
 			"checkConcurrency": intProp(
 				"How many definition-of-done checks run at once (`gavel todos check`, and the verification " +
 					"phase after a bulk triage). Each check runs the TODO's fixture, so an unbounded fan-out " +

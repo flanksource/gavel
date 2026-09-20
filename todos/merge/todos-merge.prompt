@@ -1,0 +1,86 @@
+---
+prompt:
+  schemaStrictness: retry
+output:
+  schema:
+    type: object
+    additionalProperties: false
+    required: [title, body, summary]
+    properties:
+      title:
+        type: string
+        maxLength: 120
+        description: "one title covering every merged TODO"
+      body:
+        type: string
+        description: "the merged description: problem statement, then ## Acceptance Criteria, then ## Scope"
+      verification:
+        type: string
+        description: "one combined verification fixture, body only, WITHOUT the outer '## Verification' heading. Required when any source TODO has a fixture"
+      plan:
+        type: string
+        description: "one merged implementation plan in markdown. Required when any source TODO has a plan"
+      priority:
+        type: string
+        enum: [high, medium, low]
+        description: "severity of the merged work; omit to keep the highest severity among the sources"
+      labels:
+        type: array
+        items: {type: string}
+        description: "labels the merged TODO should carry; omit to keep the union of the sources' labels"
+      summary:
+        type: string
+        maxLength: 1000
+        description: "what was combined and what was dropped, 2-4 sentences, recorded as a comment on the surviving TODO"
+      rationale:
+        type: string
+        maxLength: 500
+        description: "one line recorded on each retired TODO saying why it belongs to the merged one"
+      excluded:
+        type: array
+        items: {type: string}
+        description: "short ids of listed TODOs that are NOT the same work and must be left alone"
+---
+You are merging the {{count}} TODO items below into ONE. TODO 1 is the survivor: it keeps its id and its history, and everything you write replaces its content. The others are retired and linked to it.
+{{#if plans}}
+Each TODO's existing implementation plan is listed after the items.
+{{/if}}
+
+{{{body}}}{{#if plans}}---
+## Existing plans
+
+{{{plans}}}
+{{/if}}---
+## Instructions
+
+You are writing content only. You cannot edit files or run commands — gavel performs every write from your structured result.
+
+### 1. `title` and `body`
+
+One title and one body that cover every TODO listed, structured as:
+
+1. A problem statement: what is wrong or missing across all of them, and why it matters. A few sentences.
+2. `## Acceptance Criteria` — checkboxes, one observable behaviour each, each scoreable against a diff. Take the union of the sources' criteria, dropping exact duplicates and folding near-duplicates into the sharper wording.
+3. `## Scope` — a fenced block naming what must NOT change.
+
+Carry forward everything still true. Cut restated history, dead speculation, and criteria another TODO already states better. Never invent a criterion no source TODO asked for. Keep lines under 160 columns.
+
+### 2. `verification`
+
+The fixtures above are shown verbatim — frontmatter, CEL predicate and yaml steps — because you are rewriting them into one. Required whenever any source TODO has a fixture: a merge that dropped one would leave the surviving TODO unable to prove most of its own scope.
+
+Keep every source step that still tests something the merged acceptance criteria assert. Drop exact duplicates. Never weaken a predicate to make two fixtures agree — if two fixtures genuinely disagree about what correct means, the TODOs are not the same work, so list one in `excluded` instead.
+
+Send the fixture body only, without the outer `## Verification` heading. A fixture that does not parse fails the whole merge, so keep it well-formed.
+
+### 3. `plan`
+
+Required whenever any source TODO has a plan. Fold them into a single ordered implementation sequence, dropping steps another plan already covers and keeping the file paths and seams the sources named. It is saved unapproved and goes back through review, because merging changed the scope the old approval was given for.
+
+### 4. `excluded`
+
+A TODO that is not the same work does not belong in this merge. List its short id in `excluded` and it is left completely untouched — not retired, not edited. Prefer this over stretching the body to cover something unrelated. At least two of the listed TODOs must remain unexcluded, otherwise there is nothing to merge.
+
+### 5. `summary` and `rationale`
+
+`summary` is recorded on the surviving TODO: say what was combined and what you dropped. `rationale` is recorded on each retired TODO: one line saying why it is part of the merged work.

@@ -534,6 +534,7 @@ Use it when you want to:
 - Inspect one issue in detail
 - Re-run verification checks
 - Drive an AI coding agent through the project's todo lifecycle
+- Combine several overlapping issues into one
 - Explicitly import or export portable `.todos` Markdown
 
 Common workflows:
@@ -551,9 +552,36 @@ gavel todos run 3f2a1b --step plan         # propose a plan; the TODO parks in `
 gavel todos plan approve 3f2a1b --run      # accept the plan and implement it
 gavel todos plan revise 3f2a1b --feedback "split the migration in two"
 gavel todos plan reject 3f2a1b             # discard the plan; the TODO returns to pending
+gavel todos merge 3f2a1b 9c4d2e --dry-run  # preview folding two TODOs into one
+gavel todos merge 3f2a1b 9c4d2e            # write the merge
 gavel todos import --dir ./archive/todos   # explicit Markdown → PostgreSQL
 gavel todos export 3f2a1b --dir ./backup   # explicit PostgreSQL → Markdown
 ```
+
+#### `gavel todos merge <id> <id>...`
+
+Folds several TODOs into one. A single AI pass (the `todos.merge` prompt, see
+[SCHEMA.md](SCHEMA.md#prompt-overrides)) reads every selected TODO — body,
+acceptance criteria, verification fixture verbatim, and existing plan — and
+returns one of each. Gavel performs the writes:
+
+- the **survivor** (the first id given, or `--into <id>`) has its title, body,
+  verification fixture, labels and severity replaced by the merged versions, and
+  the merged plan saved as a new *unapproved* revision — merging changed the
+  scope the previous approval was given for, so the plan goes back through
+  `gavel todos plan approve|revise`;
+- every other TODO gets a comment saying why it is part of the merged work, a
+  `related_to` link to the survivor, and is then **soft-deleted** (cancelled):
+  its history, comments and runs stay intact;
+- a TODO the model judges is *not* the same work is reported as `excluded` and
+  left completely untouched.
+
+It is not a lifecycle step and records no run. Every selected TODO must belong
+to the same workspace, and the merge is refused before any write when the model
+drops a fixture or a plan a source TODO had, or returns a fixture that does not
+parse. `--dry-run` prints the proposed title, body, fixture and plan and writes
+nothing. The same action is on the dashboard's selection toolbar (Merge), where
+the survivor is the first row selected.
 
 #### The todo lifecycle
 

@@ -96,7 +96,8 @@ commit:
 
 The prompt override paths are `commit.message`, `commit.summary`,
 `commit.grouping`, `lint.fix`, `pr.content`, `pr.fix`, `todos.run`,
-`todos.plan`, `todos.triage`, `status.summary`, and `test.outlineSummary`.
+`todos.plan`, `todos.triage`, `todos.merge`, `status.summary`, and
+`test.outlineSummary`.
 Use `gavel config --resolve` (`-r`) to see each
 prompt's built-in/inline/file source, complete body, declared Captain spec, and
 effective model/backend. Structured `--json`/`--yaml` output has the shape
@@ -225,6 +226,7 @@ See [MANUAL.md](MANUAL.md#gavel-todos) for the lifecycle model itself (steps,
 | `todos.run` | prompt spec | see below | field-wise override | AI spec for the `run` (implement) step. Overrides the `ai:` base field-wise. |
 | `todos.plan` | prompt spec | see below | field-wise override | AI spec for the `plan` step (read-only investigation that produces a reviewable plan). |
 | `todos.triage` | prompt spec | see below | field-wise override | AI spec for the `triage` step: a read-only pass that compacts a TODO's description and reviews its verification fixture. Auxiliary — never picked automatically, only run with `--step triage`. |
+| `todos.merge` | prompt spec | see below | field-wise override | AI spec for the merge prompt behind `gavel todos merge`: a one-shot pass that folds several TODOs into one title, body, verification fixture and plan. It records no run, so it is not a lifecycle step. |
 | `todos.verify` | Captain `api.Spec` | `{model: {mode: agent}}`, no model name | field-wise override | Spec the `verify` step (and `gavel todos check`) grades the definition of done as. No `prompt:` field — the checklist is generated from the TODO's acceptance criteria, not a template. |
 | `todos.checkConcurrency` | int | `4` | last non-zero wins | How many TODOs `gavel todos check` (and the verification phase after a bulk triage) checks at once. |
 | `todos.timeout` | string (Go duration) | unset | last non-empty wins | Wall-clock deadline for a lifecycle step run. A context constraint, not an ordinary spec field — it can only ever lower a budget a step or prompt asked for, never raise one. When nothing in the resolved spec sets a budget timeout at all (this key included), the host stamps its own `30m` ceiling as a last resort. |
@@ -232,7 +234,7 @@ See [MANUAL.md](MANUAL.md#gavel-todos) for the lifecycle model itself (steps,
 | `todos.lifecycle` | object | the embedded lifecycle | merged by step name over the built-in lifecycle | Overrides the built-in todo lifecycle. See below. |
 | `todos.steps.<name>` | Captain `api.Spec` | unset | field-wise override | Project-level spec layer for a custom lifecycle step (one declared under `todos.lifecycle.steps`), sitting exactly where `todos.run` sits for the built-in run step: above the step's own `spec:` declaration, below the todo's `llm:` block. Naming a built-in step here (`run`, `plan`, `triage`, `verify`) is an error — those keep their typed blocks above. |
 
-`todos.run`, `todos.plan`, and `todos.triage` are prompt specs (bare string,
+`todos.run`, `todos.plan`, `todos.triage`, and `todos.merge` are prompt specs (bare string,
 `inline`, or `file`, same as the other prompt-override fields — see [Prompt
 overrides](#prompt-overrides) above). `todos.verify` is a plain Captain spec: it
 has no prompt template to override, so a `file:` form here would be a silent

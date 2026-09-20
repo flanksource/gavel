@@ -93,19 +93,10 @@ func Default(name string) (string, error) {
 // the same variables, and a template that computes its frontmatter would resolve
 // differently against a divergent set.
 func TemplateData(todoList []*types.TODO, opts Options) map[string]any {
-	multiple := len(todoList) > 1
-	var body strings.Builder
-	for i, todo := range todoList {
-		number := 0
-		if multiple {
-			number = i + 1
-		}
-		body.WriteString(buildTODOSection(todo, opts.WorkDir, true, number, opts.Envelope == EnvelopeTriage))
-	}
 	data := map[string]any{
-		"multiple":     multiple,
+		"multiple":     len(todoList) > 1,
 		"count":        len(todoList),
-		"body":         body.String(),
+		"body":         Sections(todoList, opts.WorkDir, opts.Envelope == EnvelopeTriage),
 		"existingPlan": opts.ExistingPlan,
 		"backlog":      opts.Backlog,
 	}

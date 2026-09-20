@@ -25,6 +25,7 @@ const (
 	TodosRun           = "todos.run"
 	TodosPlan          = "todos.plan"
 	TodosTriage        = "todos.triage"
+	TodosMerge         = "todos.merge"
 	StatusSummary      = "status.summary"
 	TestOutlineSummary = "test.outlineSummary"
 )
