@@ -95,3 +95,5 @@ go.work.sum
 !.agents/.claude-plugin/
 !.claude/skills/
 *.har
+.agents/plans
+.agents/memory
