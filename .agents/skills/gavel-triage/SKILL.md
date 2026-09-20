@@ -131,7 +131,7 @@ Every TODO leaves triage with exactly one of these:
 
 ```bash
 gavel todos check 1b495fb9
-gavel todos check --status unverified      # re-test everything that failed its gate
+gavel todos check 1b495fb9               # re-test a TODO that failed its gate
 ```
 
 ## 4. Shape a TODO for external execution
@@ -331,7 +331,7 @@ gavel todos list --format json > .tmp/todos.json
 jq 'length' .tmp/todos.json
 
 # 2. Anything claiming to be done? Let the fixtures decide before humans read them.
-gavel todos check --status unverified
+gavel todos check 1b495fb9
 
 # 3. Title-only items — shape or retire, one batch.
 jq -r '.[] | select(has("markdown_body") | not) | "\(.short_id)  \(.title)"' .tmp/todos.json

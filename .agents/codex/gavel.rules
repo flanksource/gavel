@@ -1,0 +1,96 @@
+# Ordinary Gavel commands are trusted. More privileged commands below override
+# this rule because Codex applies the strictest matching decision.
+prefix_rule(
+    pattern = ["gavel"],
+    decision = "allow",
+    justification = "Allow ordinary Gavel user commands without approval",
+    match = [
+        "gavel lint",
+        "gavel test",
+        "gavel todos list",
+        "gavel proc logs api",
+    ],
+    not_match = [
+        "go run ./cmd/gavel test",
+    ],
+)
+
+# Portable TODO import/export and cross-project transfer write files or mutate
+# persistent TODO data.
+prefix_rule(
+    pattern = ["gavel", "todos", ["import", "export", "transfer"]],
+    decision = "prompt",
+    justification = "Confirm TODO import, export, and cross-project transfer operations",
+    match = [
+        "gavel todos import",
+        "gavel todos export --dir ./backup/todos",
+        "gavel todos transfer abc123 --to platform",
+    ],
+    not_match = [
+        "gavel todos list",
+        "gavel todos get abc123",
+    ],
+)
+
+# Project registry writes affect the shared dashboard configuration. Include
+# Cobra's singular group alias and create/rm action aliases.
+prefix_rule(
+    pattern = ["gavel", ["projects", "project"], ["add", "create", "update", "delete", "rm"]],
+    decision = "prompt",
+    justification = "Confirm changes to the shared Gavel project registry",
+    match = [
+        "gavel projects add platform /workspace/platform",
+        "gavel project create platform /workspace/platform",
+        "gavel projects update platform /workspace/platform-v2",
+        "gavel projects delete platform",
+        "gavel project rm platform",
+    ],
+    not_match = [
+        "gavel projects list",
+        "gavel project get platform",
+    ],
+)
+
+# Service installation changes persistent operating-system integration.
+prefix_rule(
+    pattern = ["gavel", "system", ["install", "uninstall"]],
+    decision = "prompt",
+    justification = "Confirm installation or removal of the user-level Gavel service",
+    match = [
+        "gavel system install",
+        "gavel system uninstall",
+    ],
+    not_match = [
+        "gavel system status",
+        "gavel system start",
+        "gavel system stop",
+    ],
+)
+
+# SSH installation creates a dedicated system user and a system service.
+prefix_rule(
+    pattern = ["gavel", "ssh", "install"],
+    decision = "prompt",
+    justification = "Confirm system-level SSH service installation",
+    match = [
+        "gavel ssh install",
+        "gavel ssh install --user gavel",
+    ],
+    not_match = [
+        "gavel ssh serve",
+    ],
+)
+
+# Amending commits rewrites Git history.
+prefix_rule(
+    pattern = ["gavel", "git", "amend-commits"],
+    decision = "prompt",
+    justification = "Confirm Git history rewriting",
+    match = [
+        "gavel git amend-commits",
+    ],
+    not_match = [
+        "gavel git history",
+        "gavel git summary",
+    ],
+)

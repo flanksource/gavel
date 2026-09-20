@@ -107,9 +107,8 @@ acceptance-checklist guidance. Do not duplicate its fixture specification here.
 Use `check` when implementation exists or the gate must be rerun:
 
 ```bash
-gavel todos check
 gavel todos check 3f2a1b
-gavel todos check --timeout 10m
+gavel todos check 3f2a1b --timeout 10m
 ```
 
 `check` executes configured test/lint steps, the persisted executable definition of done, and the acceptance-criteria checklist through one fixture/CEL
