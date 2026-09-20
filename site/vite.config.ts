@@ -301,6 +301,9 @@ const prettyCodeOptions = {
 };
 
 export default defineConfig({
+  server: {
+    hmr: false,
+  },
   plugins: [
     {
       enforce: "pre",

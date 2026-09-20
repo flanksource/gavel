@@ -8,6 +8,7 @@ import {
   UiCheck,
   UiClose,
   UiComment,
+  UiLinkExternal,
   UiListChecks,
   UiPlay,
   UiSeverityMedium,
@@ -55,6 +56,7 @@ const ACTION_ICONS: Record<string, ComponentType<IconProps>> = {
   message: UiComment,
   trash: UiTrash,
   play: UiPlay,
+  github: UiLinkExternal,
 };
 
 function actionIcon(action: TodoBulkAction): ComponentType<IconProps> {
@@ -338,11 +340,8 @@ export function useTodoBulkToolbar({
     ...(labelCounts ? { labelCounts } : {}),
     ...(tags ? { tags } : {}),
     onResult: (result, action) => {
-      // "Started", not "ran": a run-shaped action dispatches agent sessions that
-      // land their edits later, so claiming the work is done would be a lie.
-      const verb = RUN_SHAPED_ACTIONS.has(action.name) ? 'Started' : 'Updated';
       toast({
-        message: todoBulkResultMessage(result, verb),
+        message: todoBulkResultMessage(result, todoBulkResultVerb(action.name)),
         tone: result.failed > 0 ? 'warning' : 'success',
         // A partial failure names each todo and why; that needs reading time.
         durationMs: result.failed > 0 ? 0 : undefined,
@@ -356,6 +355,15 @@ export function useTodoBulkToolbar({
 }
 
 const RUN_SHAPED_ACTIONS = new Set(['run', 'plan', 'triage']);
+
+/** The toast's verb. "Started", not "ran": a run-shaped action dispatches agent
+ *  sessions that land their edits later, so claiming the work is done would be
+ *  a lie. */
+export function todoBulkResultVerb(action: string): string {
+  if (RUN_SHAPED_ACTIONS.has(action)) return 'Started';
+  if (action === 'push') return 'Pushed';
+  return 'Updated';
+}
 
 /** Re-exported so a host can report a batch without importing the data layer. */
 export { todoBulkResultMessage };

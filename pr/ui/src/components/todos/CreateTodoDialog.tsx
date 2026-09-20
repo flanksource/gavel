@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Modal, Field, Button, Select } from '@flanksource/clicky-ui/components';
 import type { Project, TodoItem, TodoPriority, TodoStatus } from '../../types';
 import { ScreenshotPicker, todoFormData, useAttachments } from './attachments';
@@ -13,47 +13,34 @@ function initialDir(defaultDir: string | undefined, workspaces: Project[]): stri
   return workspaces[0]?.dir ?? '';
 }
 
-// CreateTodoDialog is a modal form for adding a todo to a chosen workspace.
-export function CreateTodoDialog({
-  open,
-  onClose,
-  workspaces,
-  onCreated,
-  defaultDir,
-}: {
-  open: boolean;
+interface CreateTodoFormProps {
   onClose: () => void;
   workspaces: Project[];
   onCreated: (dir: string, todo: TodoItem) => void;
   // defaultDir preselects the workspace (the current todo's) when the dialog opens.
   defaultDir?: string;
-}) {
+}
+
+// CreateTodoDialog is a modal form for adding a todo to a chosen workspace. The
+// form mounts on open, so each opening starts from a fresh draft while prop
+// changes during editing (a re-filtered workspaces list, a new selection) leave
+// the draft alone.
+export function CreateTodoDialog({ open, ...props }: CreateTodoFormProps & { open: boolean }) {
+  if (!open) return null;
+  return <CreateTodoForm {...props} />;
+}
+
+function CreateTodoForm({ onClose, workspaces, onCreated, defaultDir }: CreateTodoFormProps) {
   const [dir, setDir] = useState(() => initialDir(defaultDir, workspaces));
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
   const [priority, setPriority] = useState<TodoPriority>('medium');
   const [status, setStatus] = useState<TodoStatus>('pending');
   const [error, setError] = useState('');
-  // Capture a pasted screenshot only while the dialog is open — it stays mounted
-  // (closed) in the dashboard, so an always-on listener would hijack paste.
-  const { attachments, previews, add, remove, clear } = useAttachments({ pasteAnywhere: open });
+  // The paste listener lives only while the form is mounted, i.e. while open.
+  const { attachments, previews, add, remove } = useAttachments({ pasteAnywhere: true });
   const createTodo = useCreateTodoMutation(dir);
   const busy = createTodo.isPending;
-
-  useEffect(() => {
-    if (open) {
-      setDir(initialDir(defaultDir, workspaces));
-      setTitle('');
-      setBody('');
-      setPriority('medium');
-      setStatus('pending');
-      setError('');
-      createTodo.reset();
-      clear();
-    }
-  }, [open, workspaces, defaultDir, clear, createTodo.reset]);
-
-  if (!open) return null;
 
   async function submit() {
     if (!title.trim() || !dir || busy) return;

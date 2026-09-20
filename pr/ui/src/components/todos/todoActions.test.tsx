@@ -2,7 +2,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
-import { useTodoSelectionActions } from './todoActions';
+import { UiLinkExternal } from '@flanksource/clicky-ui/icons';
+import { todoBulkResultVerb, useTodoSelectionActions } from './todoActions';
 import { todoBulkActionURL, todoBulkResultMessage, type TodoBulkAction } from './todoEntity';
 import { selectionKey } from './todoSelection';
 import { buildTagIndex } from './tagResolve';
@@ -57,6 +58,19 @@ const triageAction: TodoBulkAction = {
   method: 'POST',
   path: '/api/v1/todo/{id}/triage',
   tool_hints: { icon: 'play', group: 'Run' },
+};
+
+// Only optional, open-ended parameters: a command, not a field to edit.
+const pushAction: TodoBulkAction = {
+  name: 'push',
+  short: 'Push many TODOs to GitHub issues',
+  method: 'POST',
+  path: '/api/v1/todo/{id}/push',
+  tool_hints: { icon: 'github', group: 'GitHub' },
+  param_schema: {
+    type: 'object',
+    properties: { update: { type: 'boolean' }, 'base-url': { type: 'string' } },
+  },
 };
 
 function catalogResponse(actions: TodoBulkAction[]) {
@@ -120,6 +134,16 @@ describe('todoBulkResultMessage', () => {
   it('says runs were started rather than finished', () => {
     expect(todoBulkResultMessage({ action: 'triage', applied: 2, failed: 0, results: [] }, 'Started'))
       .toBe('Started 2 todos');
+  });
+});
+
+describe('todoBulkResultVerb', () => {
+  it.each([
+    ['triage', 'Started'],
+    ['push', 'Pushed'],
+    ['status', 'Updated'],
+  ])('reports a %s batch as %s', (action, verb) => {
+    expect(todoBulkResultVerb(action)).toBe(verb);
   });
 });
 
@@ -262,6 +286,18 @@ describe('useTodoSelectionActions', () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
       '/api/v1/todo/todo-1?confirm=true',
       expect.objectContaining({ method: 'DELETE' }),
+    ));
+  });
+
+  it('offers push as a GitHub command in the overflow, dispatched without parameters', async () => {
+    const result = await actions(new Set([ALPHA, BETA]), [pushAction]);
+    const push = result.current.find(action => action.id === 'push');
+    expect(push).toMatchObject({ display: 'overflow', section: 'GitHub', icon: UiLinkExternal });
+    await push!.onSelect({ selectedRowIds: [], selectedRows: [], clearSelection: () => {} });
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/todo/todo-1,todo-2/push',
+      expect.objectContaining({ method: 'POST' }),
     ));
   });
 

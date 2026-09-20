@@ -4,7 +4,8 @@ import type { PropsWithChildren } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { PRItem, ProcStatus, Snapshot } from './types';
 import { queryKeys } from './query';
-import { useAppQueries } from './useAppQueries';
+import { useProcStatus } from './procStatusQuery';
+import { PROJECTS_CACHE_KEY, useAppQueries } from './useAppQueries';
 
 const pullRequest: PRItem = {
   number: 7,
@@ -51,13 +52,19 @@ class FakeEventSource {
   }
 }
 
-function Probe({ name, enabled }: { name: string; enabled: boolean }) {
+function Probe({ name, enabled, onRender }: { name: string; enabled: boolean; onRender?: () => void }) {
   const state = useAppQueries({ enabled, initialConfig: { repos: [] } });
+  onRender?.();
   return (
     <div data-testid={name} data-error={state.processError} data-project-error={state.projectError}>
-      {state.snapshot.prs.length}/{state.projects.length}/{Object.keys(state.procStatus).length}
+      {state.snapshot.prs.length}/{state.projects.length}
     </div>
   );
+}
+
+function ProcProbe({ name }: { name: string }) {
+  const procStatus = useProcStatus();
+  return <div data-testid={name}>{Object.keys(procStatus).sort().join(',')}</div>;
 }
 
 function createClient() {
@@ -71,6 +78,7 @@ function Provider({ client, children }: PropsWithChildren<{ client: QueryClient 
 }
 
 afterEach(() => {
+  localStorage.clear();
   FakeEventSource.instances = [];
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -96,10 +104,12 @@ describe('useAppQueries', () => {
       <Provider client={client}>
         <Probe name="first" enabled />
         <Probe name="second" enabled />
+        <ProcProbe name="procs" />
       </Provider>,
     );
 
-    await waitFor(() => expect(screen.getByTestId('first').textContent).toBe('1/1/1'));
+    await waitFor(() => expect(screen.getByTestId('first').textContent).toBe('1/1'));
+    await waitFor(() => expect(screen.getByTestId('procs').textContent).toBe('gavel'));
     expect(calls.filter(url => url === '/api/prs')).toHaveLength(1);
     expect(calls.filter(url => url === '/api/projects')).toHaveLength(1);
     expect(calls.filter(url => url === '/api/proc/status')).toHaveLength(1);
@@ -115,12 +125,44 @@ describe('useAppQueries', () => {
     render(
       <Provider client={client}>
         <Probe name="remounted" enabled />
+        <ProcProbe name="remounted-procs" />
       </Provider>,
     );
-    await waitFor(() => expect(screen.getByTestId('remounted').textContent).toBe('1/1/1'));
+    await waitFor(() => expect(screen.getByTestId('remounted').textContent).toBe('1/1'));
+    expect(screen.getByTestId('remounted-procs').textContent).toBe('gavel');
     expect(calls.filter(url => url === '/api/prs')).toHaveLength(1);
     expect(calls.filter(url => url === '/api/projects')).toHaveLength(1);
     expect(calls.filter(url => url === '/api/proc/status')).toHaveLength(1);
+  });
+
+  // The new-todo window and sidebar render from the last known catalog while
+  // /api/projects is in flight, and a successful load refreshes that cache.
+  it('renders cached projects before the request resolves and caches the fresh list', async () => {
+    const cached = [{ name: 'cached', dir: '/work/cached', repos: [] }];
+    const fresh = [{ name: 'alpha', dir: '/work/alpha', repos: [] }, { name: 'beta', dir: '/work/beta', repos: [] }];
+    localStorage.setItem(PROJECTS_CACHE_KEY, JSON.stringify(cached));
+    let releaseProjects!: () => void;
+    const projectsGate = new Promise<void>(resolve => { releaseProjects = resolve; });
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/projects') {
+        await projectsGate;
+        return { ok: true, json: async () => fresh } as Response;
+      }
+      return { ok: true, json: async () => (url === '/api/prs' ? snapshot : procStatus) } as Response;
+    }));
+    vi.stubGlobal('EventSource', FakeEventSource);
+
+    render(
+      <Provider client={createClient()}>
+        <Probe name="cached" enabled />
+      </Provider>,
+    );
+
+    await waitFor(() => expect(screen.getByTestId('cached').textContent).toBe('1/1'));
+    releaseProjects();
+    await waitFor(() => expect(screen.getByTestId('cached').textContent).toBe('1/2'));
+    expect(JSON.parse(localStorage.getItem(PROJECTS_CACHE_KEY) ?? 'null')).toEqual(fresh);
   });
 
   // The dashboard's Project type declares repos as a plain array and the projects
@@ -145,7 +187,44 @@ describe('useAppQueries', () => {
     );
 
     await waitFor(() => expect(screen.getByTestId('probe').dataset.projectError).toContain('invalid project'));
-    expect(screen.getByTestId('probe').textContent).toBe('1/0/1');
+    expect(screen.getByTestId('probe').textContent).toBe('1/0');
+  });
+
+  // Process-status frames carry live CPU/memory samples, so a changed frame
+  // lands every few seconds. They must re-render only the components showing
+  // process state, never the app root that owns the streams.
+  it('delivers process-status frames to useProcStatus without re-rendering the app root', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const payload = url === '/api/prs'
+        ? snapshot
+        : url === '/api/projects'
+          ? [{ name: 'gavel', dir: '/work/gavel', repos: ['acme/gavel'] }]
+          : procStatus;
+      return { ok: true, json: async () => payload } as Response;
+    }));
+    vi.stubGlobal('EventSource', FakeEventSource);
+    const rootRender = vi.fn();
+
+    render(
+      <Provider client={createClient()}>
+        <Probe name="root" enabled onRender={rootRender} />
+        <ProcProbe name="procs" />
+      </Provider>,
+    );
+    await waitFor(() => expect(screen.getByTestId('root').textContent).toBe('1/1'));
+    await waitFor(() => expect(screen.getByTestId('procs').textContent).toBe('gavel'));
+    const settledRenders = rootRender.mock.calls.length;
+
+    const frames = [
+      { gavel: { hasProcfile: true, running: true }, widgets: { hasProcfile: true, running: false } },
+      { gavel: { hasProcfile: true, running: false }, widgets: { hasProcfile: true, running: true } },
+    ];
+    const stream = FakeEventSource.instances.find(s => s.url === '/api/proc/status/stream');
+    for (const frame of frames) act(() => stream?.emit('message', frame));
+
+    await waitFor(() => expect(screen.getByTestId('procs').textContent).toBe('gavel,widgets'));
+    expect(rootRender).toHaveBeenCalledTimes(settledRenders);
   });
 
   it('aborts in-flight bootstrap reads and closes streams when disabled', async () => {
