@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 
@@ -148,6 +149,76 @@ func TestTodoNewEndpointAddsPRVerificationFixture(t *testing.T) {
 	}
 	if strings.Contains(resp.Todo.Body, "CI check") || strings.Contains(resp.Todo.Body, "Address @") {
 		t.Fatalf("PR gates should not be duplicated as criteria: %q", resp.Todo.Body)
+	}
+}
+
+// The focused /todos/new form posts JSON, or multipart when a screenshot rides
+// along; external links pass labels on the query. Every shape must tag the todo.
+func TestTodoNewEndpointAppliesLabels(t *testing.T) {
+	wantLabels := []string{"ui", "bug"}
+	multipartBody := func(t *testing.T) (*bytes.Buffer, string) {
+		var body bytes.Buffer
+		writer := multipart.NewWriter(&body)
+		for key, value := range map[string]string{"title": "Labelled screenshot", "labels": "ui, bug"} {
+			if err := writer.WriteField(key, value); err != nil {
+				t.Fatalf("write field %s: %v", key, err)
+			}
+		}
+		part, err := writer.CreateFormFile("attachment", "screen.png")
+		if err != nil {
+			t.Fatalf("create file part: %v", err)
+		}
+		if _, err := part.Write([]byte("png bytes")); err != nil {
+			t.Fatalf("write file part: %v", err)
+		}
+		if err := writer.Close(); err != nil {
+			t.Fatalf("close multipart: %v", err)
+		}
+		return &body, writer.FormDataContentType()
+	}
+
+	cases := []struct {
+		name    string
+		request func(t *testing.T, workDir string) *http.Request
+	}{
+		{"json body", func(_ *testing.T, workDir string) *http.Request {
+			req := httptest.NewRequest(http.MethodPost, "/api/todos/new?dir="+url.QueryEscape(workDir),
+				strings.NewReader(`{"title":"Labelled json","labels":["ui","bug"]}`))
+			req.Header.Set("Content-Type", "application/json")
+			return req
+		}},
+		{"multipart comma list", func(t *testing.T, workDir string) *http.Request {
+			body, contentType := multipartBody(t)
+			req := httptest.NewRequest(http.MethodPost, "/api/todos/new?dir="+url.QueryEscape(workDir), body)
+			req.Header.Set("Content-Type", contentType)
+			return req
+		}},
+		{"repeated query values", func(_ *testing.T, workDir string) *http.Request {
+			return httptest.NewRequest(http.MethodPost,
+				"/todos/new?dir="+url.QueryEscape(workDir)+"&title=Labelled+query&labels=ui&label=bug", nil)
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			attachmentsDir = t.TempDir()
+			workDir := t.TempDir()
+			s := &Server{ghOpts: github.Options{WorkDir: workDir}}
+
+			rec := httptest.NewRecorder()
+			s.Handler().ServeHTTP(rec, tc.request(t, workDir))
+			if rec.Code != http.StatusCreated {
+				t.Fatalf("new status = %d, want %d; body = %q", rec.Code, http.StatusCreated, rec.Body.String())
+			}
+			var resp todoNewResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+				t.Fatalf("unmarshal new response: %v", err)
+			}
+			for _, label := range wantLabels {
+				if !slices.Contains(resp.Todo.Labels, label) {
+					t.Fatalf("created todo labels = %v, want to include %q", resp.Todo.Labels, label)
+				}
+			}
+		})
 	}
 }
 

@@ -82,11 +82,11 @@ func TestHandleProjectsCountsConcurrently(t *testing.T) {
 	}
 }
 
-// TestHandleProjectsPreservesConfiguredOrder guards the indexed writes: parallel
-// counting must not reorder projects.json.
-func TestHandleProjectsPreservesConfiguredOrder(t *testing.T) {
-	want := []string{"alpha", "bravo", "charlie", "delta", "echo", "foxtrot"}
-	withProjects(t, want...)
+// TestHandleProjectsReturnsStoreOrder guards both the store's case-insensitive
+// sort and the indexed writes: parallel counting must not reorder the catalog.
+func TestHandleProjectsReturnsStoreOrder(t *testing.T) {
+	withProjects(t, "echo", "Alpha", "foxtrot", "charlie", "Delta", "bravo")
+	want := []string{"Alpha", "bravo", "charlie", "Delta", "echo", "foxtrot"}
 
 	original := projectTodoCounts
 	// Reverse-ordered delays: the last project finishes first, so an
@@ -107,7 +107,7 @@ func TestHandleProjectsPreservesConfiguredOrder(t *testing.T) {
 	for _, info := range got {
 		names = append(names, info.Name)
 	}
-	assert.Equal(t, want, names, "projects must be returned in projects.json order")
+	assert.Equal(t, want, names, "projects must be returned in the store's sorted order")
 }
 
 // TestHandleProjectsIsolatesPerProjectCountFailures is the regression that

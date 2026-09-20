@@ -1,11 +1,4 @@
-// Package query owns the TODO selector: the one type that says which TODOs a
-// caller means, whether that caller is a CLI invocation, an HTTP query string,
-// or a bulk action asked to run against "everything matching these filters".
-//
-// It is deliberately one type and not three. The CLI had `DiscoveryFilters`,
-// the dashboard had its own facet set, and a bulk endpoint had a list of
-// explicit targets — so "the pending, high-severity TODOs" meant a different
-// thing in each, and none of them could express what the other two could.
+// Package query owns the TODO list selector used by the Clicky entity's read operations.
 package query
 
 import (
@@ -17,9 +10,8 @@ import (
 	"github.com/flanksource/gavel/todos/types"
 )
 
-// ListOpts selects TODOs. It is the entity's list options, the CLI's flags and
-// the bulk-action filter all at once — clicky binds the `flag:` tags as cobra
-// flags and as OpenAPI query parameters, so the three surfaces cannot drift.
+// ListOpts selects TODOs for reading. Clicky binds the `flag:` tags as Cobra
+// flags and OpenAPI query parameters for the entity's list operation.
 //
 // Every facet is include/exclude rather than a single value, because that is
 // what the dashboard's filter bar already offers and a selector that cannot say
@@ -42,16 +34,7 @@ type ListOpts struct {
 	// Search is a case-insensitive substring match on the title.
 	Search string `flag:"search" help:"Match TODO titles containing this text"`
 
-	// Filter switches a bulk action from its explicit ids to this selector.
-	// clicky triggers filter mode on this field being non-empty, so it carries a
-	// human-readable summary of what is being matched rather than a bare "true"
-	// — it ends up in the run's audit trail.
-	Filter string `flag:"filter" help:"Run a bulk action against every matching TODO instead of named ids"`
 }
-
-// FilterMode reports whether a bulk action carrying these options was asked to
-// resolve its own selection rather than act on named ids.
-func (o ListOpts) FilterMode() bool { return strings.TrimSpace(o.Filter) != "" }
 
 // Discovery projects the options onto the filter the provider can push down.
 // Status and labels are the only facets the store understands; severity, recency

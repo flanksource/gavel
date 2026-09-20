@@ -5,27 +5,25 @@ import (
 	"fmt"
 	"path/filepath"
 
+	"github.com/flanksource/clicky"
 	"github.com/flanksource/gavel/pr/ui"
 	"github.com/flanksource/gavel/todos"
 	"github.com/spf13/cobra"
 )
 
-var transferToProject string
-
-var todosTransferCmd = &cobra.Command{
-	Use:          "transfer <ref> --to <project>",
-	SilenceUsage: true,
-	Short:        "Move a TODO from the current workspace to another project",
-	Long: `Move a TODO out of the current workspace into another registered gavel project
-(from ~/.config/gavel/projects.json). The target is named by --to.`,
-	Example: `  gavel todos transfer 3f2a1b --to backend
-  gavel todos transfer "Fix parser" --to acme/api`,
-	Args: cobra.ExactArgs(1),
-	RunE: runTodosTransfer,
+type TodosTransferOptions struct {
+	TodoTargetOptions
+	To string `flag:"to" required:"true" help:"Target project name (from gavel projects)"`
 }
 
-func runTodosTransfer(_ *cobra.Command, args []string) error {
-	if transferToProject == "" {
+var todosTransferCmd *cobra.Command
+
+func runTodosTransfer(opts TodosTransferOptions) error {
+	ref, err := opts.One()
+	if err != nil {
+		return err
+	}
+	if opts.To == "" {
 		return fmt.Errorf("--to <project> is required")
 	}
 	workDir, err := getWorkingDir()
@@ -33,7 +31,7 @@ func runTodosTransfer(_ *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to get working directory: %w", err)
 	}
 
-	target, err := ui.GetProject(transferToProject)
+	target, err := ui.GetProject(opts.To)
 	if err != nil {
 		return err
 	}
@@ -42,7 +40,7 @@ func runTodosTransfer(_ *cobra.Command, args []string) error {
 		return fmt.Errorf("resolve target project dir: %w", err)
 	}
 	if targetDir == filepath.Clean(workDir) {
-		return fmt.Errorf("project %q points at the current workspace; nothing to transfer", transferToProject)
+		return fmt.Errorf("project %q points at the current workspace; nothing to transfer", opts.To)
 	}
 	source, err := newTodosProvider(workDir)
 	if err != nil {
@@ -53,7 +51,7 @@ func runTodosTransfer(_ *cobra.Command, args []string) error {
 		return fmt.Errorf("open target native TODO workspace %q: %w", target.Name, err)
 	}
 
-	created, err := todos.Transfer(context.Background(), source, targetProvider, args[0])
+	created, err := todos.Transfer(context.Background(), source, targetProvider, ref)
 	if err != nil {
 		return err
 	}
@@ -64,6 +62,8 @@ func runTodosTransfer(_ *cobra.Command, args []string) error {
 }
 
 func init() {
-	todosCmd.AddCommand(todosTransferCmd)
-	todosTransferCmd.Flags().StringVar(&transferToProject, "to", "", "Target project name (from `gavel projects`)")
+	todosTransferCmd = clicky.AddNamedCommand("transfer", todosCmd, TodosTransferOptions{}, func(opts TodosTransferOptions) (any, error) {
+		return nil, runTodosTransfer(opts)
+	})
+	todosTransferCmd.Short = "Move a TODO from the current workspace to another project"
 }

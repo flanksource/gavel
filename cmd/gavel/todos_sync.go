@@ -9,26 +9,16 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var (
-	todosSyncMarkers []string
-	todosSyncIgnore  []string
-	todosSyncDryRun  bool
-)
-
-var todosSyncCmd = &cobra.Command{
-	Use:          "sync [paths...]",
-	SilenceUsage: true,
-	Short:        "Sync source TODO/FIXME comments into TODO issues",
-	Long: `Scan the source tree for TODO/FIXME comments and create or update a TODO issue
-for each. Restrict to specific paths with positional args; change which markers
-are picked up with --markers. Use --dry-run to preview the changes.`,
-	Example: `  gavel todos sync
-  gavel todos sync ./pkg/parser
-  gavel todos sync --markers TODO,FIXME,HACK --dry-run`,
-	RunE: runTodosSync,
+type TodosSyncOptions struct {
+	Paths   []string `args:"true"`
+	Markers []string `flag:"markers" default:"TODO,FIXME" help:"Source comment markers to sync"`
+	Ignore  []string `flag:"ignore" help:"Additional path glob to ignore during source scan"`
+	DryRun  bool     `flag:"dry-run" help:"Report planned sync changes without updating TODOs"`
 }
 
-func runTodosSync(cmd *cobra.Command, args []string) error {
+var todosSyncCmd *cobra.Command
+
+func runTodosSync(opts TodosSyncOptions) error {
 	workDir, err := getWorkingDir()
 	if err != nil {
 		return fmt.Errorf("failed to get working directory: %w", err)
@@ -39,10 +29,10 @@ func runTodosSync(cmd *cobra.Command, args []string) error {
 	}
 	result, err := todosync.SyncSourceComments(context.Background(), provider, todosync.SourceCommentSyncOptions{
 		WorkDir: workDir,
-		Paths:   args,
-		Markers: todosSyncMarkers,
-		Ignore:  todosSyncIgnore,
-		DryRun:  todosSyncDryRun,
+		Paths:   opts.Paths,
+		Markers: opts.Markers,
+		Ignore:  opts.Ignore,
+		DryRun:  opts.DryRun,
 	})
 	if err != nil {
 		return err
@@ -52,8 +42,8 @@ func runTodosSync(cmd *cobra.Command, args []string) error {
 }
 
 func init() {
-	todosCmd.AddCommand(todosSyncCmd)
-	todosSyncCmd.Flags().StringSliceVar(&todosSyncMarkers, "markers", []string{"TODO", "FIXME"}, "Source comment markers to sync")
-	todosSyncCmd.Flags().StringArrayVar(&todosSyncIgnore, "ignore", nil, "Additional path glob to ignore during source scan")
-	todosSyncCmd.Flags().BoolVar(&todosSyncDryRun, "dry-run", false, "Report planned sync changes without creating or updating TODOs")
+	todosSyncCmd = clicky.AddNamedCommand("sync", todosCmd, TodosSyncOptions{}, func(opts TodosSyncOptions) (any, error) {
+		return nil, runTodosSync(opts)
+	})
+	todosSyncCmd.Short = "Sync source TODO/FIXME comments into TODO issues"
 }

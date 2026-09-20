@@ -18,7 +18,7 @@ func testDeps() Deps {
 		OpenProvider: func(context.Context, string) (todos.Provider, error) { return nil, nil },
 		OpenGlobal:   func(context.Context) (todos.GlobalReferenceProvider, error) { return nil, nil },
 		Registry:     run.NewRegistry(),
-		DefaultDir:   func() string { return "/tmp/workspace" },
+		DefaultDir:   func(context.Context) (string, error) { return "/tmp/workspace", nil },
 	}
 }
 
@@ -64,7 +64,7 @@ func TestRegisterRequiresItsDependencies(t *testing.T) {
 func TestEveryBulkActionIsDeclaredAndRenderable(t *testing.T) {
 	want := map[string]bool{
 		"status": false, "priority": false, "labels": false, "comment": false,
-		"delete": false, "run": false, "plan": false, "triage": false,
+		"delete": false, "run": false, "plan": false, "triage": false, "push": false,
 	}
 	for _, info := range registered(t).BulkActions {
 		if _, expected := want[info.Name]; !expected {
@@ -72,12 +72,11 @@ func TestEveryBulkActionIsDeclaredAndRenderable(t *testing.T) {
 		}
 		want[info.Name] = true
 
-		// Both selector modes, or the action can only be reached one way.
-		if info.DataFunc == nil {
+		if info.ContextDataFunc == nil {
 			t.Fatalf("%s: no id-mode handler", info.Name)
 		}
-		if info.FilterFunc == nil {
-			t.Fatalf("%s: no filter-mode handler", info.Name)
+		if info.FilterFunc != nil || info.ContextFilterFunc != nil {
+			t.Fatalf("%s: mutation must not accept filtered selections", info.Name)
 		}
 		// A front end renders from this; a name alone gives it nothing to draw.
 		if info.Short == "" {
@@ -155,7 +154,7 @@ func TestRegistrationGeneratesCLICommands(t *testing.T) {
 	root := &cobra.Command{Use: "gavel"}
 	clicky.GenerateCLI(root)
 
-	for _, name := range []string{"status", "priority", "labels", "run", "plan", "triage", "delete"} {
+	for _, name := range []string{"status", "priority", "labels", "run", "plan", "triage", "delete", "push"} {
 		cmd, _, err := root.Find([]string{"todo", name})
 		if err != nil || cmd == nil || cmd.Name() != name {
 			t.Fatalf("expected `gavel todo %s` to be generated, got err=%v", name, err)
@@ -169,12 +168,32 @@ func TestRegistrationGeneratesCLICommands(t *testing.T) {
 	if status.Flags().Lookup("to") == nil {
 		t.Fatal("`gavel todo status` must expose --to")
 	}
-	// The selector's own flags ride alongside, which is what makes
-	// `--status pending --filter ...` a filter-mode invocation.
-	if status.Flags().Lookup("filter") == nil {
-		t.Fatal("a bulk action must expose --filter to reach filter mode")
+	for _, flag := range []string{"filter", "search", "priority", "status"} {
+		if status.Flags().Lookup(flag) != nil {
+			t.Fatalf("bulk status must not expose list selector --%s", flag)
+		}
 	}
-	if status.Flags().Lookup("priority") == nil {
-		t.Fatal("the selector's facets must be bound alongside the action's parameters")
+
+	push, _, err := root.Find([]string{"todo", "push"})
+	if err != nil {
+		t.Fatalf("find push: %v", err)
 	}
+	for _, flag := range []string{"update", "base-url"} {
+		if push.Flags().Lookup(flag) == nil {
+			t.Fatalf("`gavel todo push` must expose --%s", flag)
+		}
+	}
+}
+
+// push publishes outside gavel, so an agent must ask before running it.
+func TestPushAsksBeforePublishing(t *testing.T) {
+	for _, info := range registered(t).BulkActions {
+		if info.Name == "push" {
+			if info.ToolHints.DefaultPermission != entity.ToolPermissionAsk {
+				t.Fatalf("push must default to asking, got %q", info.ToolHints.DefaultPermission)
+			}
+			return
+		}
+	}
+	t.Fatal("push action was not declared")
 }

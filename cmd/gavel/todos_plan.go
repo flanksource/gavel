@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/flanksource/clicky"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/lifecycle"
@@ -13,10 +14,15 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var (
-	planReviseFeedback string
-	planApproveRun     bool
-)
+type TodosPlanApproveOptions struct {
+	TodoTargetOptions
+	Run bool `flag:"run" help:"Implement the approved plan immediately"`
+}
+
+type TodosPlanReviseOptions struct {
+	TodoTargetOptions
+	Feedback string `flag:"feedback" required:"true" help:"Change request for the agent to fold into the plan"`
+}
 
 var todosPlanCmd = &cobra.Command{
 	Use:   "plan",
@@ -33,42 +39,16 @@ plan-step run; to write one yourself use 'gavel todos edit --plan'.`,
   gavel todos plan recover 3f2a1b`,
 }
 
-var todosPlanApproveCmd = &cobra.Command{
-	Use:   "approve <todo>",
-	Short: "Approve a reviewed plan so a run can implement it; --run starts that run immediately",
-	Args:  cobra.ExactArgs(1),
-	RunE:  runTodosPlanApprove,
-}
-
-var todosPlanRejectCmd = &cobra.Command{
-	Use:   "reject <todo>",
-	Short: "Reject and archive the active plan so the pending todo can be planned again",
-	Args:  cobra.ExactArgs(1),
-	RunE:  runTodosPlanReject,
-}
-
-var todosPlanReviseCmd = &cobra.Command{
-	Use:   "revise <todo>",
-	Short: "Ask the agent to revise a reviewed plan with feedback; the plan session resumes and the todo returns to review",
-	Args:  cobra.ExactArgs(1),
-	RunE:  runTodosPlanRevise,
-}
-
-var todosPlanRecoverCmd = &cobra.Command{
-	Use:   "recover <todo>",
-	Short: "Recover and select the plan from the todo's latest terminal plan-step run",
-	Args:  cobra.ExactArgs(1),
-	RunE:  runTodosPlanRecover,
-}
+var todosPlanApproveCmd *cobra.Command
+var todosPlanRejectCmd *cobra.Command
+var todosPlanReviseCmd *cobra.Command
 
 func init() {
 	todosCmd.AddCommand(todosPlanCmd)
-	todosPlanCmd.AddCommand(todosPlanApproveCmd)
-	todosPlanCmd.AddCommand(todosPlanRejectCmd)
-	todosPlanCmd.AddCommand(todosPlanReviseCmd)
-	todosPlanCmd.AddCommand(todosPlanRecoverCmd)
-	todosPlanApproveCmd.Flags().BoolVar(&planApproveRun, "run", false, "Implement the approved plan immediately, as 'gavel todos run' would")
-	todosPlanReviseCmd.Flags().StringVar(&planReviseFeedback, "feedback", "", "The change request for the agent to fold into the plan (required)")
+	todosPlanApproveCmd = clicky.AddNamedCommand("approve", todosPlanCmd, TodosPlanApproveOptions{}, func(opts TodosPlanApproveOptions) (any, error) { return nil, runTodosPlanApprove(opts) })
+	todosPlanRejectCmd = clicky.AddNamedCommand("reject", todosPlanCmd, TodosGetOptions{}, func(opts TodosGetOptions) (any, error) { return nil, runTodosPlanReject(opts) })
+	todosPlanReviseCmd = clicky.AddNamedCommand("revise", todosPlanCmd, TodosPlanReviseOptions{}, func(opts TodosPlanReviseOptions) (any, error) { return nil, runTodosPlanRevise(opts) })
+	clicky.AddNamedCommand("recover", todosPlanCmd, TodosGetOptions{}, func(opts TodosGetOptions) (any, error) { return nil, runTodosPlanRecover(opts) })
 }
 
 func resolvePlanTODO(ctx context.Context, args []string) (string, todos.Provider, *types.TODO, error) {
@@ -103,9 +83,13 @@ func resolveReviewTODO(ctx context.Context, args []string) (string, todos.Provid
 	return workDir, provider, todo, nil
 }
 
-func runTodosPlanRecover(_ *cobra.Command, args []string) error {
+func runTodosPlanRecover(target TodosGetOptions) error {
+	ref, err := target.One()
+	if err != nil {
+		return err
+	}
 	ctx := context.Background()
-	_, provider, todo, err := resolvePlanTODO(ctx, args)
+	_, provider, todo, err := resolvePlanTODO(ctx, []string{ref})
 	if err != nil {
 		return err
 	}
@@ -124,12 +108,16 @@ func runTodosPlanRecover(_ *cobra.Command, args []string) error {
 // runApprovedTODO dispatches the implement run that --run chains; a var so the
 // approval transition can be tested without spawning an agent.
 var runApprovedTODO = func(workDir string, todo *types.TODO, provider todos.Provider, opts run.Options) error {
-	return runTodoStep(context.Background(), workDir, provider, todo, opts)
+	return runTodoStep(context.Background(), workDir, provider, todo, opts, runStepPolicy{AllowCommit: true})
 }
 
-func runTodosPlanApprove(_ *cobra.Command, args []string) error {
+func runTodosPlanApprove(target TodosPlanApproveOptions) error {
+	ref, err := target.One()
+	if err != nil {
+		return err
+	}
 	ctx := context.Background()
-	workDir, provider, todo, err := resolveReviewTODO(ctx, args)
+	workDir, provider, todo, err := resolveReviewTODO(ctx, []string{ref})
 	if err != nil {
 		return err
 	}
@@ -152,7 +140,7 @@ func runTodosPlanApprove(_ *cobra.Command, args []string) error {
 	// codex. Everything else resolves from .gavel.yaml exactly as 'gavel todos
 	// run' would.
 	var opts run.Options
-	if planApproveRun {
+	if target.Run {
 		opts, err = run.Continue(run.Continuation{
 			Dir: workDir, Provider: provider, Todo: todo, Prior: planRun,
 			Override: run.Options{Host: lifecycle.HostCLI}, Step: string(types.RunPhase),
@@ -166,16 +154,20 @@ func runTodosPlanApprove(_ *cobra.Command, args []string) error {
 		return err
 	}
 	logger.Infof("Approved plan for %s", todo.Filename())
-	if !planApproveRun {
+	if !target.Run {
 		logger.Infof("Run it with: gavel todos run %s", todo.Filename())
 		return nil
 	}
 	return runApprovedTODO(workDir, todo, provider, opts)
 }
 
-func runTodosPlanReject(_ *cobra.Command, args []string) error {
+func runTodosPlanReject(target TodosGetOptions) error {
+	ref, err := target.One()
+	if err != nil {
+		return err
+	}
 	ctx := context.Background()
-	_, provider, todo, err := resolveReviewTODO(ctx, args)
+	_, provider, todo, err := resolveReviewTODO(ctx, []string{ref})
 	if err != nil {
 		return err
 	}
@@ -191,13 +183,17 @@ func runTodosPlanReject(_ *cobra.Command, args []string) error {
 	return nil
 }
 
-func runTodosPlanRevise(_ *cobra.Command, args []string) error {
-	feedback := strings.TrimSpace(planReviseFeedback)
+func runTodosPlanRevise(target TodosPlanReviseOptions) error {
+	ref, err := target.One()
+	if err != nil {
+		return err
+	}
+	feedback := strings.TrimSpace(target.Feedback)
 	if feedback == "" {
 		return fmt.Errorf("--feedback is required")
 	}
 	ctx := context.Background()
-	workDir, provider, todo, err := resolveReviewTODO(ctx, args)
+	workDir, provider, todo, err := resolveReviewTODO(ctx, []string{ref})
 	if err != nil {
 		return err
 	}
@@ -234,7 +230,7 @@ func runTodosPlanRevise(_ *cobra.Command, args []string) error {
 	if !resume {
 		todo.Prompt = "Revise the existing plan using this reviewer feedback:\n\n" + feedback
 	}
-	if err := runTodoStep(ctx, workDir, provider, todo, opts); err != nil {
+	if err := runTodoStep(ctx, workDir, provider, todo, opts, runStepPolicy{AllowCommit: true}); err != nil {
 		return fmt.Errorf("revise plan: %w", err)
 	}
 	logger.Infof("Revised plan for %s — %s", todo.Filename(), todo.Status.Pretty().ANSI())

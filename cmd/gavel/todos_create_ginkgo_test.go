@@ -9,7 +9,6 @@ import (
 	"github.com/flanksource/gavel/todos/types"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	"github.com/spf13/cobra"
 )
 
 // The package's one ginkgo bootstrap is TestGavelCLI, in
@@ -98,20 +97,15 @@ var _ = Describe("TODO text inputs", func() {
 		Expect(os.WriteFile(verificationPath, []byte("verification fixture\n"), 0o600)).To(Succeed())
 
 		oldWorkingDir := workingDir
-		oldBody, oldPlan, oldVerification := todoEditBody, todoEditPlan, todoEditVerification
 		workingDir = workDir
-		todoEditBody, todoEditPlan, todoEditVerification = bodyPath, planPath, verificationPath
 		DeferCleanup(func() {
 			workingDir = oldWorkingDir
-			todoEditBody, todoEditPlan, todoEditVerification = oldBody, oldPlan, oldVerification
 		})
 
-		cmd := &cobra.Command{}
-		for _, name := range []string{"body", "plan", "verification"} {
-			cmd.Flags().String(name, "", "")
-			Expect(cmd.Flags().Set(name, "changed")).To(Succeed())
-		}
-		Expect(runTodosEdit(cmd, []string{created.ID})).To(Succeed())
+		Expect(runTodosEdit(TodosEditOptions{
+			TodoTargetOptions: TodoTargetOptions{IDs: []string{created.ID}},
+			Body: bodyPath, Plan: planPath, Verification: verificationPath,
+		}, nil)).To(Succeed())
 
 		updated, err := provider.Get(context.Background(), created.ID)
 		Expect(err).NotTo(HaveOccurred())

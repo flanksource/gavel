@@ -14,12 +14,18 @@ import (
 	"github.com/flanksource/gavel/todos/labels"
 )
 
-var (
-	todoLabelColor       string
-	todoLabelIcon        string
-	todoLabelDescription string
-	todoLabelGlobal      bool
-)
+type TodosLabelsSetOptions struct {
+	Names       []string `args:"true" required:"true"`
+	Color       string   `flag:"color" help:"Palette hue"`
+	Icon        string   `flag:"icon" help:"Icon name from the Clicky registry"`
+	Description string   `flag:"description" help:"What the label means"`
+	Global      bool     `flag:"global" help:"Apply to every workspace"`
+}
+
+type TodosLabelsRemoveOptions struct {
+	Names  []string `args:"true" required:"true"`
+	Global bool     `flag:"global" help:"Remove the global definition"`
+}
 
 var todosLabelsCmd = &cobra.Command{
 	Use:          "labels",
@@ -36,31 +42,9 @@ never colourless, and defining one is always an override rather than a repaint.`
 	RunE: func(cmd *cobra.Command, _ []string) error { return cmd.Help() },
 }
 
-var todosLabelsSetCmd = &cobra.Command{
-	Use:          "set <name>",
-	SilenceUsage: true,
-	Short:        "Define or update a label's colour, icon, and description",
-	Example: `  gavel todos labels set flaky --color amber --icon warning
-  gavel todos labels set security --color rose --icon lock --global
-  gavel todos labels set area --color teal --description "Which subsystem"`,
-	Args: cobra.ExactArgs(1),
-	RunE: runTodosLabelsSet,
-}
+var todosLabelsSetCmd *cobra.Command
 
-var todosLabelsRemoveCmd = &cobra.Command{
-	Use:          "rm <name>",
-	Aliases:      []string{"remove", "delete"},
-	SilenceUsage: true,
-	Short:        "Retire a label from this project, stripping it from every TODO",
-	Long: `Removing a label from this project deletes its definition AND strips it from every
-TODO in the workspace, so a retired label stops reappearing in filters and facets.
-
---global removes the definition shared by every workspace instead. That scope spans
-every project on this machine, so it is presentation only: TODOs keep the label and
-it falls back to its built-in or derived colour.`,
-	Args: cobra.ExactArgs(1),
-	RunE: runTodosLabelsRemove,
-}
+var todosLabelsRemoveCmd *cobra.Command
 
 // TodosLabelsListOptions is the clicky-registered option surface for
 // `todos labels list`, so the command gains -o json/yaml alongside the table.
@@ -70,17 +54,11 @@ type TodosLabelsListOptions struct {
 
 func init() {
 	todosCmd.AddCommand(todosLabelsCmd)
-	todosLabelsCmd.AddCommand(todosLabelsSetCmd, todosLabelsRemoveCmd)
-
-	todosLabelsSetCmd.Flags().StringVar(&todoLabelColor, "color", "",
-		"Palette hue: "+strings.Join(labels.PaletteStrings(), ", ")+" (default: derived from the name)")
-	todoLabelsIconUsage := "Icon name from the clicky registry, e.g. debug, lock, performance"
-	todosLabelsSetCmd.Flags().StringVar(&todoLabelIcon, "icon", "", todoLabelsIconUsage)
-	todosLabelsSetCmd.Flags().StringVar(&todoLabelDescription, "description", "", "What the label means")
-	todosLabelsSetCmd.Flags().BoolVar(&todoLabelGlobal, "global", false,
-		"Apply to every workspace instead of just this one")
-	todosLabelsRemoveCmd.Flags().BoolVar(&todoLabelGlobal, "global", false,
-		"Remove the global definition instead of this workspace's override")
+	todosLabelsSetCmd = clicky.AddNamedCommand("set", todosLabelsCmd, TodosLabelsSetOptions{}, func(opts TodosLabelsSetOptions) (any, error) { return nil, runTodosLabelsSet(opts) })
+	todosLabelsSetCmd.Short = "Define or update a label's colour, icon, and description"
+	todosLabelsRemoveCmd = clicky.AddNamedCommand("rm", todosLabelsCmd, TodosLabelsRemoveOptions{}, func(opts TodosLabelsRemoveOptions) (any, error) { return nil, runTodosLabelsRemove(opts) })
+	todosLabelsRemoveCmd.Aliases = []string{"remove", "delete"}
+	todosLabelsRemoveCmd.Short = "Retire a label from this project, stripping it from every TODO"
 
 	// AddNamedCommand, not AddCommand: the latter derives the subcommand name
 	// from the handler ("todos-labels-list"), which reads wrong under `labels`.
@@ -138,13 +116,16 @@ func runTodosLabelsList(opts TodosLabelsListOptions) (any, error) {
 	return rows, nil
 }
 
-func runTodosLabelsSet(_ *cobra.Command, args []string) error {
+func runTodosLabelsSet(opts TodosLabelsSetOptions) error {
+	if len(opts.Names) != 1 {
+		return fmt.Errorf("exactly one label name is required")
+	}
 	store, err := todoLabelStore()
 	if err != nil {
 		return err
 	}
 
-	name := labels.Normalize(args[0])
+	name := labels.Normalize(opts.Names[0])
 	if name == "" {
 		return fmt.Errorf("label name is required")
 	}
@@ -152,23 +133,23 @@ func runTodosLabelsSet(_ *cobra.Command, args []string) error {
 	// An omitted colour keeps the hue the label already rendered with, so
 	// "describe this label" never doubles as "repaint it".
 	color := labels.Hash(name)
-	if raw := strings.TrimSpace(todoLabelColor); raw != "" {
+	if raw := strings.TrimSpace(opts.Color); raw != "" {
 		if color, err = labels.ParseColor(raw); err != nil {
 			return err
 		}
 	}
 
-	icon := labels.Normalize(todoLabelIcon)
+	icon := labels.Normalize(opts.Icon)
 	if icon != "" && !labels.IsIcon(icon) {
-		return fmt.Errorf("unknown icon %q; %s", todoLabelIcon, suggestIcons(icon))
+		return fmt.Errorf("unknown icon %q; %s", opts.Icon, suggestIcons(icon))
 	}
 
 	saved, err := store.SetLabelDefinition(context.Background(), labels.Definition{
 		Name:        name,
 		Color:       color,
 		Icon:        icon,
-		Description: strings.TrimSpace(todoLabelDescription),
-	}, todoLabelGlobal)
+		Description: strings.TrimSpace(opts.Description),
+	}, opts.Global)
 	if err != nil {
 		return err
 	}
@@ -181,17 +162,20 @@ func runTodosLabelsSet(_ *cobra.Command, args []string) error {
 	return nil
 }
 
-func runTodosLabelsRemove(_ *cobra.Command, args []string) error {
+func runTodosLabelsRemove(opts TodosLabelsRemoveOptions) error {
+	if len(opts.Names) != 1 {
+		return fmt.Errorf("exactly one label name is required")
+	}
 	store, err := todoLabelStore()
 	if err != nil {
 		return err
 	}
-	removal, err := store.DeleteLabelDefinition(context.Background(), labels.Normalize(args[0]), todoLabelGlobal)
+	removal, err := store.DeleteLabelDefinition(context.Background(), labels.Normalize(opts.Names[0]), opts.Global)
 	if err != nil {
 		return err
 	}
 
-	if todoLabelGlobal {
+	if opts.Global {
 		fmt.Printf("%s. TODOs keep the label — a global definition is presentation only,\n"+
 			"so it now renders with the built-in or derived colour.\n", removal)
 		return nil

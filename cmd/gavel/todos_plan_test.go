@@ -86,7 +86,7 @@ func TestTodosPlanRecoverCallsProviderOutsideReviewState(t *testing.T) {
 		t.Fatalf("seed failed state: %v", err)
 	}
 
-	if err := runTodosPlanRecover(todosPlanRecoverCmd, []string{"Recoverable plan"}); err != nil {
+	if err := runTodosPlanRecover(TodosGetOptions{TodoTargetOptions: TodoTargetOptions{IDs: []string{"Recoverable plan"}}}); err != nil {
 		t.Fatalf("recover: %v", err)
 	}
 	if provider.recoveredID != created.ID {
@@ -100,11 +100,7 @@ func TestTodosPlanApproveDoesNotRunByDefault(t *testing.T) {
 	provider, created := seedCLIReviewTodo(t, t.TempDir(), "Approvable plan")
 	dispatched := stubApprovedRun(t)
 
-	oldRun := planApproveRun
-	planApproveRun = false
-	t.Cleanup(func() { planApproveRun = oldRun })
-
-	if err := runTodosPlanApprove(todosPlanApproveCmd, []string{"Approvable plan"}); err != nil {
+	if err := runTodosPlanApprove(TodosPlanApproveOptions{TodoTargetOptions: TodoTargetOptions{IDs: []string{"Approvable plan"}}}); err != nil {
 		t.Fatalf("approve: %v", err)
 	}
 	reloaded, err := provider.Get(t.Context(), created.FilePath)
@@ -126,15 +122,8 @@ func TestTodosPlanApproveWithRunChainsAnImplementRun(t *testing.T) {
 	_, created := seedCLIReviewTodo(t, t.TempDir(), "Runnable plan")
 	dispatched := stubApprovedRun(t)
 
-	oldRun, oldStep, oldResume := planApproveRun, todosStep, resumeSession
-	planApproveRun = true
-	todosStep = "plan" // the step a plan run left behind
-	resumeSession = true
-	t.Cleanup(func() {
-		planApproveRun, todosStep, resumeSession = oldRun, oldStep, oldResume
-	})
 
-	if err := runTodosPlanApprove(todosPlanApproveCmd, []string{"Runnable plan"}); err != nil {
+	if err := runTodosPlanApprove(TodosPlanApproveOptions{TodoTargetOptions: TodoTargetOptions{IDs: []string{"Runnable plan"}}, Run: true}); err != nil {
 		t.Fatalf("approve --run: %v", err)
 	}
 	if len(*dispatched) != 1 || (*dispatched)[0].todo.ID != created.ID {
@@ -184,11 +173,7 @@ func TestTodosPlanApproveWithRunInheritsThePlanRunRuntime(t *testing.T) {
 	provider.activeRun = codexPlanRun()
 	dispatched := stubApprovedRun(t)
 
-	oldRun := planApproveRun
-	planApproveRun = true
-	t.Cleanup(func() { planApproveRun = oldRun })
-
-	if err := runTodosPlanApprove(todosPlanApproveCmd, []string{"Codex plan"}); err != nil {
+	if err := runTodosPlanApprove(TodosPlanApproveOptions{TodoTargetOptions: TodoTargetOptions{IDs: []string{"Codex plan"}}, Run: true}); err != nil {
 		t.Fatalf("approve --run: %v", err)
 	}
 	if len(*dispatched) != 1 {
@@ -219,11 +204,7 @@ func TestTodosPlanReviseResumesOnThePlanRunRuntime(t *testing.T) {
 	}
 	run.Start = func(run.Request) (run.StartResult, error) { return run.StartResult{Status: "started"}, nil }
 	t.Cleanup(func() { run.Resolve, run.Start = oldResolve, oldStart })
-	oldFeedback := planReviseFeedback
-	planReviseFeedback = "bound the queue"
-	t.Cleanup(func() { planReviseFeedback = oldFeedback })
-
-	if err := runTodosPlanRevise(todosPlanReviseCmd, []string{"Codex revision"}); err != nil {
+	if err := runTodosPlanRevise(TodosPlanReviseOptions{TodoTargetOptions: TodoTargetOptions{IDs: []string{"Codex revision"}}, Feedback: "bound the queue"}); err != nil {
 		t.Fatalf("revise: %v", err)
 	}
 	if got.Options.Step != "plan" || !got.Options.Resume || got.Options.Message != "bound the queue" {
@@ -244,7 +225,7 @@ func TestTodosPlanApproveRejectsNonReviewTodo(t *testing.T) {
 		t.Fatalf("seed status: %v", err)
 	}
 
-	err := runTodosPlanApprove(todosPlanApproveCmd, []string{"Not in review"})
+	err := runTodosPlanApprove(TodosPlanApproveOptions{TodoTargetOptions: TodoTargetOptions{IDs: []string{"Not in review"}}})
 	if err == nil {
 		t.Fatal("expected approve to reject a todo that is not awaiting review")
 	}

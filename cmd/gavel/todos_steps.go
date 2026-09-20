@@ -9,32 +9,22 @@ import (
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/lifecycle"
-	"github.com/spf13/cobra"
 )
 
-var todosStepsCmd = &cobra.Command{
-	Use:          "steps [todo]",
-	SilenceUsage: true,
-	Short:        "List the lifecycle steps `gavel todos run --step` accepts",
-	Long: `Describe the project's todo lifecycle: each step, the prompt it renders, and
-the predicate that decides when it applies. An auxiliary step is never chosen
-for you — name it with --step.
-
-Given a todo, report where that todo stands instead: whether each step applies
-to it now, which one 'gavel todos run' would pick next and why, and how the
-step's last run ended.`,
-	Example: `  gavel todos steps
-  gavel todos steps 3f2a1b
-  gavel todos run 3f2a1b --step triage`,
-	Args: cobra.MaximumNArgs(1),
-	RunE: runTodosSteps,
+type TodosStepsOptions struct {
+	Refs []string `args:"true"`
 }
 
 func init() {
-	todosCmd.AddCommand(todosStepsCmd)
+	clicky.AddNamedCommand("steps", todosCmd, TodosStepsOptions{}, func(opts TodosStepsOptions) (any, error) {
+		return nil, runTodosSteps(opts.Refs)
+	})
 }
 
-func runTodosSteps(_ *cobra.Command, args []string) error {
+func runTodosSteps(args []string) error {
+	if len(args) > 1 {
+		return fmt.Errorf("steps accepts at most one TODO ID or alias")
+	}
 	workDir, err := getWorkingDir()
 	if err != nil {
 		return fmt.Errorf("failed to get working directory: %w", err)

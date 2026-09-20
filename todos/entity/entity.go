@@ -22,6 +22,7 @@ import (
 	"github.com/flanksource/clicky/entity"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/bulk"
+	"github.com/flanksource/gavel/todos/githubpush"
 	"github.com/flanksource/gavel/todos/query"
 	"github.com/flanksource/gavel/todos/run"
 	"github.com/flanksource/gavel/todos/types"
@@ -43,7 +44,7 @@ type Deps struct {
 	OpenGlobal func(ctx context.Context) (todos.GlobalReferenceProvider, error)
 	Registry   *run.Registry
 	// DefaultDir supplies the workspace when a request names none.
-	DefaultDir func() string
+	DefaultDir func(context.Context) (string, error)
 	// ResolveRun turns a TODO plus the batch's overrides into run options.
 	// Optional: bulk.DefaultRunResolver is used when unset. The dashboard
 	// supplies its own because it applies a runtime catalog the CLI has no
@@ -53,6 +54,16 @@ type Deps struct {
 	// nil is the CLI's answer: a terminal batch has no one to ask, so a run it
 	// starts must never be configured to.
 	Broker func(dir string) todos.ApprovalBroker
+	// PushBaseURL resolves the attachment origin for a pushed TODO's workspace.
+	// Optional: without it only an explicit --base-url is honoured.
+	PushBaseURL bulk.PushBaseURL
+}
+
+func (d Deps) pushBaseURL() bulk.PushBaseURL {
+	if d.PushBaseURL != nil {
+		return d.PushBaseURL
+	}
+	return func(_, requested string) (string, error) { return githubpush.ResolveBaseURL(requested) }
 }
 
 func (d Deps) validate() error {
@@ -70,21 +81,21 @@ func (d Deps) validate() error {
 
 // broker is the approval callback factory for the batch's workspace, or nil
 // when the host answers no approvals.
-func (d Deps) broker() todos.ApprovalBroker {
+func (d Deps) broker(dir string) todos.ApprovalBroker {
 	if d.Broker == nil {
 		return nil
 	}
-	return d.Broker(d.dir(query.ListOpts{}))
+	return d.Broker(dir)
 }
 
-func (d Deps) dir(opts query.ListOpts) string {
+func (d Deps) dir(ctx context.Context, opts query.ListOpts) (string, error) {
 	if dir := strings.TrimSpace(opts.Dir); dir != "" {
-		return dir
+		return dir, nil
 	}
 	if d.DefaultDir != nil {
-		return d.DefaultDir()
+		return d.DefaultDir(ctx)
 	}
-	return ""
+	return "", fmt.Errorf("entity deps: no workspace directory")
 }
 
 // Register declares the todos entity. Call it once at startup, before
@@ -106,7 +117,11 @@ func Register(deps Deps) error {
 }
 
 func (d Deps) list(ctx context.Context, opts query.ListOpts) ([]*types.TODO, error) {
-	provider, err := d.OpenProvider(ctx, d.dir(opts))
+	dir, err := d.dir(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+	provider, err := d.OpenProvider(ctx, dir)
 	if err != nil {
 		return nil, err
 	}
@@ -167,19 +182,19 @@ func (d Deps) bulkActions() []clicky.EntityBulkAction {
 	actions := []clicky.EntityBulkAction{
 		action(d, "status", "Set the status of many TODOs",
 			entity.MCPToolHints{Icon: "check-circle", Group: "Status"},
-			bulk.StatusFlags{}, bulk.SetStatus),
+			bulk.StatusFlags{}, func(_ context.Context, flags bulk.StatusFlags) (bulk.ItemFunc, error) { return bulk.SetStatus(flags) }),
 
 		action(d, "priority", "Set the severity of many TODOs",
 			entity.MCPToolHints{Icon: "flag", Group: "Status"},
-			bulk.PriorityFlags{}, bulk.SetPriority),
+			bulk.PriorityFlags{}, func(_ context.Context, flags bulk.PriorityFlags) (bulk.ItemFunc, error) { return bulk.SetPriority(flags) }),
 
 		action(d, "labels", "Add or remove labels across many TODOs",
 			entity.MCPToolHints{Icon: "tag", Group: "Labels"},
-			bulk.LabelFlags{}, bulk.EditLabels),
+			bulk.LabelFlags{}, func(_ context.Context, flags bulk.LabelFlags) (bulk.ItemFunc, error) { return bulk.EditLabels(flags) }),
 
 		action(d, "comment", "Append a comment to many TODOs",
 			entity.MCPToolHints{Icon: "message", Group: "Status"},
-			bulk.CommentFlags{}, bulk.AddComment),
+			bulk.CommentFlags{}, func(_ context.Context, flags bulk.CommentFlags) (bulk.ItemFunc, error) { return bulk.AddComment(flags) }),
 
 		action(d, "delete", "Delete many TODOs",
 			entity.MCPToolHints{
@@ -187,7 +202,14 @@ func (d Deps) bulkActions() []clicky.EntityBulkAction {
 				DestructiveHint:   &destructive,
 				DefaultPermission: entity.ToolPermissionAsk,
 			},
-			bulk.DeleteFlags{}, bulk.Delete),
+			bulk.DeleteFlags{}, func(_ context.Context, flags bulk.DeleteFlags) (bulk.ItemFunc, error) { return bulk.Delete(flags) }),
+
+		// It publishes outside gavel, so an agent asks before running it.
+		action(d, "push", "Push many TODOs to GitHub issues",
+			entity.MCPToolHints{Icon: "github", Group: "GitHub", DefaultPermission: entity.ToolPermissionAsk},
+			bulk.PushFlags{}, func(_ context.Context, flags bulk.PushFlags) (bulk.ItemFunc, error) {
+				return bulk.Push(flags, d.pushBaseURL())
+			}),
 	}
 
 	// run, plan and triage are the same action with a different prompt name: a
@@ -200,15 +222,16 @@ func (d Deps) bulkActions() []clicky.EntityBulkAction {
 	} {
 		name := prompt.name
 		actions = append(actions, action(d, name, prompt.short, runHints, bulk.RunFlags{},
-			func(flags bulk.RunFlags) (bulk.ItemFunc, error) {
-				return bulk.StartRun(name, flags, d.Registry, d.dir(query.ListOpts{}), d.ResolveRun, d.broker())
+			func(ctx context.Context, flags bulk.RunFlags) (bulk.ItemFunc, error) {
+				dir, err := d.dir(ctx, query.ListOpts{})
+				if err != nil {
+					return nil, err
+				}
+				return bulk.StartRun(name, flags, d.Registry, dir, d.ResolveRun, d.broker(dir))
 			}))
 	}
 	return actions
 }
-
-// selector resolves which TODOs an invocation meant, in whichever mode it ran.
-type selector func(ctx context.Context) ([]bulk.Target, []bulk.ItemResult, error)
 
 // rejected marks an error as the caller's mistake rather than a server fault,
 // so a malformed request answers 400 instead of 500. It is applied only where
@@ -226,53 +249,23 @@ func rejected(err error) error {
 	return entity.NewStatusError(http.StatusBadRequest, "invalid_request", err.Error())
 }
 
-// action wires one bulk action's two selector modes onto the same item
-// function, so ids and filters cannot diverge in behaviour — only in how the
-// TODOs were chosen.
-//
-// It is a free function rather than a method because Go has no generic methods
-// and each action's flags are a different type.
+// action binds a typed operation to explicit TODO references.
 func action[F entity.ActionFlags](
 	d Deps,
 	name, short string,
 	hints entity.MCPToolHints,
 	flags F,
-	build func(F) (bulk.ItemFunc, error),
+	build func(context.Context, F) (bulk.ItemFunc, error),
 ) clicky.EntityBulkAction {
-	byIDs := func(ids []string, raw map[string]string) (bulk.Result, error) {
-		return apply(d, name, query.ListOpts{}, raw, build,
-			func(ctx context.Context) ([]bulk.Target, []bulk.ItemResult, error) {
-				targets, unresolved, err := bulk.Resolve(ctx, d.lookup, ids)
-				// Everything Resolve rejects is malformed input — a blank ref, a
-				// duplicate that would apply twice. A ref that merely failed to
-				// resolve comes back in unresolved, not as an error.
-				return targets, unresolved, rejected(err)
-			})
-	}
-	byFilter := func(opts query.ListOpts, raw map[string]string) (bulk.Result, error) {
-		return apply(d, name, opts, raw, build,
-			func(ctx context.Context) ([]bulk.Target, []bulk.ItemResult, error) {
-				// A filter is answered by one workspace's provider, so every
-				// TODO it matched is owned by that provider by construction.
-				provider, err := d.OpenProvider(ctx, d.dir(opts))
-				if err != nil {
-					return nil, nil, err
-				}
-				selected, err := opts.Select(providerLister{ctx: ctx, provider: provider}, time.Now())
-				if err != nil {
-					return nil, nil, err
-				}
-				return bulk.TargetsFrom(provider, selected), nil, nil
-			})
-	}
-	return clicky.BulkActionWithFilter(name, byIDs, byFilter).
+	return clicky.BulkActionWithContext(name, func(ctx context.Context, ids []string, raw map[string]string) (bulk.Result, error) {
+		return apply(ctx, d, name, ids, raw, build)
+	}).
 		WithShort(short).
 		WithFlags(flags).
 		WithToolHints(hints)
 }
 
-// apply is the one path both selector modes run through: decode the action's
-// own flags, build the per-item operation, resolve the selection, then apply.
+// apply decodes action flags, resolves explicit refs, and applies the operation.
 //
 // Note the error convention. Everything that can be decided before the first
 // write — bad flags, a malformed selection — returns an error and the whole
@@ -280,28 +273,26 @@ func action[F entity.ActionFlags](
 // and the error stays nil, because clicky discards the result value whenever
 // the error is non-nil and that would throw away every item that succeeded.
 func apply[F entity.ActionFlags](
+	ctx context.Context,
 	d Deps,
 	name string,
-	opts query.ListOpts,
+	ids []string,
 	raw map[string]string,
-	build func(F) (bulk.ItemFunc, error),
-	resolve selector,
+	build func(context.Context, F) (bulk.ItemFunc, error),
 ) (bulk.Result, error) {
 	flags, err := clicky.BuildOpts[F](raw)
 	if err != nil {
 		return bulk.Result{}, rejected(err)
 	}
-	fn, err := build(flags)
+	fn, err := build(ctx, flags)
 	if err != nil {
 		return bulk.Result{}, rejected(err)
 	}
-	ctx := context.Background()
-	targets, unresolved, err := resolve(ctx)
+	targets, unresolved, err := bulk.Resolve(ctx, d.lookup, ids)
 	if err != nil {
-		return bulk.Result{}, err
+		return bulk.Result{}, rejected(err)
 	}
 	result := bulk.Apply(ctx, name, targets, fn)
-	result.MatchedBy = strings.TrimSpace(opts.Filter)
 	// A ref that named nothing is a per-item failure, not a rejection: one stale
 	// id in a selection of forty is ordinary when a tab has been open a while.
 	for _, missing := range unresolved {

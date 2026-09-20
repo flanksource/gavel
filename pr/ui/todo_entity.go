@@ -7,8 +7,10 @@ import (
 	"os"
 	"sync"
 
+	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/rpc"
+	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/bulk"
 	todoentity "github.com/flanksource/gavel/todos/entity"
@@ -57,9 +59,12 @@ func registerTodoEntity() error {
 				return openGlobalTodoProvider(ctx)
 			},
 			Registry:   run.Shared(),
-			DefaultDir: func() string { return workDir },
+			DefaultDir: func(context.Context) (string, error) { return workDir, nil },
 			ResolveRun: resolveBulkRunOptions,
 			Broker:     todoApprovalBroker,
+			PushBaseURL: func(dir, requested string) (string, error) {
+				return resolveTodoPushBaseURL(requested, dir, "")
+			},
 		})
 	})
 	return todoEntityErr
@@ -106,4 +111,23 @@ func (s *Server) registerTodoEntityRoutes(mux *http.ServeMux) {
 	}, root, nil)
 	server.RegisterExecutionRoutes(mux)
 	mux.HandleFunc("GET /api/entities", server.HandleEntities)
+	pool, err := database.Require(context.Background(), "Gavel chat")
+	if err != nil {
+		unavailable := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, fmt.Sprintf("Gavel chat requires the TODO database: %v", err), http.StatusServiceUnavailable)
+		})
+		mux.Handle("/api/chat", unavailable)
+		mux.Handle("/api/chat/", unavailable)
+		return
+	}
+	db, err := captaindb.Use(pool)
+	if err != nil {
+		panic("ui: opening the chat database: " + err.Error())
+	}
+	chat, err := newGavelChatServer(root, s.todoWorkDir(), db)
+	if err != nil {
+		panic("ui: registering the chat service: " + err.Error())
+	}
+	mux.Handle("/api/chat", chat.Handler())
+	mux.Handle("/api/chat/", chat.Handler())
 }

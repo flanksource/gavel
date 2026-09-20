@@ -5,58 +5,39 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/flanksource/clicky"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/pr/ui"
 	"github.com/flanksource/gavel/todos/portable"
 	"github.com/spf13/cobra"
 )
 
-var (
-	todosImportDirectory string
-	todosExportDirectory string
-	todosExportForce     bool
-)
-
-var todosImportCmd = &cobra.Command{
-	Use:          "import [todo-files...]",
-	Short:        "Import .todos Markdown into native PostgreSQL TODOs",
-	SilenceUsage: true,
-	Args:         cobra.ArbitraryArgs,
-	Long: `Explicitly import portable .todos Markdown into the current native PostgreSQL
-workspace. With no file arguments, every valid Markdown TODO under --dir is
-imported. This command does not select or enable a runtime file provider.`,
-	Example: `  gavel todos import
-  gavel todos import --dir ./archive/todos
-  gavel todos import .todos/fix-parser.md .todos/add-retry.md`,
-	RunE: runTodosImport,
+type TodosImportOptions struct {
+	Files []string `args:"true"`
+	Dir   string   `flag:"dir" default:".todos" help:"Directory to read when no files are supplied"`
 }
 
-var todosExportCmd = &cobra.Command{
-	Use:          "export [todo-refs...]",
-	Short:        "Export native PostgreSQL TODOs as .todos Markdown",
-	SilenceUsage: true,
-	Args:         cobra.ArbitraryArgs,
-	Long: `Explicitly export portable fields from the current native PostgreSQL workspace
-as .todos Markdown. With no references, every issue in the workspace is
-exported. This command never changes runtime TODO storage.`,
-	Example: `  gavel todos export
-  gavel todos export --dir ./backup/todos
-  gavel todos export 3f2a1b "Fix parser"`,
-	RunE: runTodosExport,
+type TodosExportOptions struct {
+	Refs  []string `args:"true"`
+	Dir   string   `flag:"dir" default:".todos" help:"Directory to write exported Markdown files"`
+	Force bool     `flag:"force" help:"Replace an unrelated file at an export path"`
 }
+
+var todosImportCmd *cobra.Command
+var todosExportCmd *cobra.Command
 
 func init() {
-	todosCmd.AddCommand(todosImportCmd, todosExportCmd)
-	todosImportCmd.Flags().StringVar(&todosImportDirectory, "dir", portable.DefaultDirectory, "Directory to read when no files are supplied")
-	todosExportCmd.Flags().StringVar(&todosExportDirectory, "dir", portable.DefaultDirectory, "Directory to write exported Markdown files")
-	todosExportCmd.Flags().BoolVar(&todosExportForce, "force", false, "Replace an unrelated file at an export path")
+	todosImportCmd = clicky.AddNamedCommandWithContext("import", todosCmd, TodosImportOptions{}, func(ctx context.Context, opts TodosImportOptions) (any, error) {
+		return nil, runTodosImport(ctx, opts)
+	})
+	todosImportCmd.Short = "Import .todos Markdown into native PostgreSQL TODOs"
+	todosExportCmd = clicky.AddNamedCommandWithContext("export", todosCmd, TodosExportOptions{}, func(ctx context.Context, opts TodosExportOptions) (any, error) {
+		return nil, runTodosExport(ctx, opts)
+	})
+	todosExportCmd.Short = "Export native PostgreSQL TODOs as .todos Markdown"
 }
 
-func runTodosImport(command *cobra.Command, files []string) error {
-	ctx := command.Context()
-	if ctx == nil {
-		ctx = context.Background()
-	}
+func runTodosImport(ctx context.Context, opts TodosImportOptions) error {
 	workDir, err := getWorkingDir()
 	if err != nil {
 		return fmt.Errorf("resolve portable TODO import workspace: %w", err)
@@ -69,20 +50,16 @@ func runTodosImport(command *cobra.Command, files []string) error {
 	if err != nil {
 		return err
 	}
-	result, err := portable.Import(ctx, db, project.WorkspaceOptions(), todosImportDirectory, files)
+	result, err := portable.Import(ctx, db, project.WorkspaceOptions(), opts.Dir, opts.Files)
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(command.OutOrStdout(), "Imported %d created, %d updated, %d unchanged TODOs from %s\n",
+	fmt.Printf("Imported %d created, %d updated, %d unchanged TODOs from %s\n",
 		result.Created, result.Updated, result.Unchanged, result.Directory)
 	return nil
 }
 
-func runTodosExport(command *cobra.Command, refs []string) error {
-	ctx := command.Context()
-	if ctx == nil {
-		ctx = context.Background()
-	}
+func runTodosExport(ctx context.Context, opts TodosExportOptions) error {
 	workDir, err := getWorkingDir()
 	if err != nil {
 		return fmt.Errorf("resolve portable TODO export workspace: %w", err)
@@ -95,7 +72,7 @@ func runTodosExport(command *cobra.Command, refs []string) error {
 	if err != nil {
 		return err
 	}
-	result, err := portable.Export(ctx, db, project.WorkspaceOptions(), todosExportDirectory, refs, todosExportForce)
+	result, err := portable.Export(ctx, db, project.WorkspaceOptions(), opts.Dir, opts.Refs, opts.Force)
 	if err != nil {
 		return err
 	}
@@ -103,6 +80,6 @@ func runTodosExport(command *cobra.Command, refs []string) error {
 	if result.Exported == 1 {
 		noun = "TODO"
 	}
-	fmt.Fprintf(command.OutOrStdout(), "Exported %d %s to %s\n", result.Exported, noun, strings.TrimSpace(result.Directory))
+	fmt.Printf("Exported %d %s to %s\n", result.Exported, noun, strings.TrimSpace(result.Directory))
 	return nil
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	todoruntime "github.com/flanksource/gavel/todos/runtime"
@@ -52,9 +53,23 @@ func normalizeRepos(ps []Project) []Project {
 	return ps
 }
 
-// LoadProjects reads ~/.config/gavel/projects.json. A missing file is the
-// normal "no projects configured yet" state. Read and parse failures name the
-// exact catalog file instead of being mistaken for an empty configuration.
+// sortProjects orders the catalog case-insensitively by name, so every surface
+// that reads the store lists projects the same way. Names that differ only by
+// case fall back to a byte comparison to keep the order deterministic.
+func sortProjects(ps []Project) []Project {
+	slices.SortStableFunc(ps, func(a, b Project) int {
+		if c := strings.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name)); c != 0 {
+			return c
+		}
+		return strings.Compare(a.Name, b.Name)
+	})
+	return ps
+}
+
+// LoadProjects reads ~/.config/gavel/projects.json, sorted by name. A missing
+// file is the normal "no projects configured yet" state. Read and parse
+// failures name the exact catalog file instead of being mistaken for an empty
+// configuration.
 func LoadProjects() ([]Project, error) {
 	data, err := os.ReadFile(projectsPath)
 	if errors.Is(err, os.ErrNotExist) {
@@ -67,15 +82,16 @@ func LoadProjects() ([]Project, error) {
 	if err := json.Unmarshal(data, &ps); err != nil {
 		return nil, fmt.Errorf("parse gavel projects file %s: %w", projectsPath, err)
 	}
-	return normalizeRepos(ps), nil
+	return sortProjects(normalizeRepos(ps)), nil
 }
 
-// SaveProjects writes the project list back to ~/.config/gavel/projects.json.
+// SaveProjects writes the project list back to ~/.config/gavel/projects.json,
+// sorted by name.
 func SaveProjects(ps []Project) error {
 	if err := os.MkdirAll(filepath.Dir(projectsPath), 0o755); err != nil {
 		return fmt.Errorf("create gavel projects directory for %s: %w", projectsPath, err)
 	}
-	data, err := json.MarshalIndent(normalizeRepos(ps), "", "  ")
+	data, err := json.MarshalIndent(sortProjects(normalizeRepos(slices.Clone(ps))), "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal gavel projects file %s: %w", projectsPath, err)
 	}

@@ -17,7 +17,6 @@ import (
 	todoruntime "github.com/flanksource/gavel/todos/runtime"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/flanksource/gavel/verify"
-	"github.com/spf13/cobra"
 )
 
 var loadTodoProjects = ui.LoadProjects
@@ -149,7 +148,11 @@ func listAllProjectTodos(ctx context.Context, projects []ui.Project, filters tod
 	return todoList, errors.Join(failures...)
 }
 
-func runTodosGet(cmd *cobra.Command, args []string) error {
+func runTodosGet(opts TodosGetOptions) error {
+	ref, err := opts.One()
+	if err != nil {
+		return err
+	}
 	workDir, err := getWorkingDir()
 	if err != nil {
 		return fmt.Errorf("failed to get working directory: %w", err)
@@ -159,7 +162,7 @@ func runTodosGet(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	todo, err := provider.Get(context.Background(), args[0])
+	todo, err := provider.Get(context.Background(), ref)
 	if err != nil {
 		return err
 	}
@@ -168,7 +171,11 @@ func runTodosGet(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func runTodosCheck(cmd *cobra.Command, args []string) error {
+func runTodosCheck(opts TodosCheckOptions) error {
+	ids, err := opts.Many()
+	if err != nil {
+		return err
+	}
 	workDir, err := getWorkingDir()
 	if err != nil {
 		return fmt.Errorf("failed to get working directory: %w", err)
@@ -180,11 +187,7 @@ func runTodosCheck(cmd *cobra.Command, args []string) error {
 	}
 
 	logger.Infof("Discovering TODOs from PostgreSQL")
-	filters := todos.DiscoveryFilters{}
-	if filterStatus != "" {
-		filters.IncludeStatuses = []types.Status{types.Status(filterStatus)}
-	}
-	todoList, err := resolveRequestedTODOs(context.Background(), provider, args, filters)
+	todoList, err := resolveRequestedTODOs(context.Background(), provider, ids, todos.DiscoveryFilters{})
 	if err != nil {
 		return fmt.Errorf("failed to discover TODOs: %w", err)
 	}
@@ -205,10 +208,10 @@ func runTodosCheck(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	var request api.Spec
-	if checkTimeout > 0 {
-		request.Budget.Timeout = checkTimeout.String()
+	if opts.Timeout > 0 {
+		request.Budget.Timeout = opts.Timeout.String()
 	}
-	concurrency, err := resolveCheckConcurrency(workDir)
+	concurrency, err := resolveCheckConcurrency(workDir, opts.Concurrency)
 	if err != nil {
 		return err
 	}
@@ -257,15 +260,17 @@ func runTodosCheck(cmd *cobra.Command, args []string) error {
 
 func init() {
 	rootCmd.AddCommand(todosCmd)
-	todosCmd.AddCommand(todosRunCmd)
 	clicky.AddCommand(todosCmd, TodosListOptions{}, runTodosList)
-	todosCmd.AddCommand(todosGetCmd)
-	todosCmd.AddCommand(todosCheckCmd)
-
-	todosCheckCmd.Flags().StringVar(&filterStatus, "status", "", "Filter TODOs by status")
-	todosCheckCmd.Flags().DurationVar(&checkTimeout, "timeout", 0, "Test execution timeout (empty: .gavel.yaml todos.timeout, else 30m)")
-	todosCheckCmd.Flags().IntVar(&checkConcurrency, "concurrency", 0,
-		"How many TODOs to check at once (0: .gavel.yaml todos.checkConcurrency, else 4). Each check runs that TODO's fixture")
+	todosGetCmd = clicky.AddNamedCommand("get", todosCmd, TodosGetOptions{}, func(opts TodosGetOptions) (any, error) {
+		return nil, runTodosGet(opts)
+	})
+	todosGetCmd.Short = "Display detailed information about a PostgreSQL-backed TODO"
+	todosGetCmd.Use = "get <id>"
+	todosCheckCmd = clicky.AddNamedCommand("check", todosCmd, TodosCheckOptions{}, func(opts TodosCheckOptions) (any, error) {
+		return nil, runTodosCheck(opts)
+	})
+	todosCheckCmd.Short = "Run TODOs' fixture-backed definitions of done"
+	todosCheckCmd.Use = "check <id>..."
 }
 
 func newTodosProvider(workDir string) (todos.Provider, error) {
@@ -276,9 +281,9 @@ func newTodosProvider(workDir string) (todos.Provider, error) {
 // with the --concurrency flag on top. An unreadable .gavel.yaml is the check's
 // own error: every check resolves its verify chain from the same file, so
 // running on a default here would only defer the same failure to each todo.
-func resolveCheckConcurrency(workDir string) (int, error) {
-	if checkConcurrency > 0 {
-		return checkConcurrency, nil
+func resolveCheckConcurrency(workDir string, override int) (int, error) {
+	if override > 0 {
+		return override, nil
 	}
 	cfg, err := verify.LoadGavelConfig(workDir)
 	if err != nil {
