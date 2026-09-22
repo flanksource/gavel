@@ -152,28 +152,28 @@ var _ = Describe("todo session approvals", Ordered, func() {
 		Expect(stateOf(ctx, db, id)).To(Equal(captaindb.TurnRequestStatePending))
 	})
 
-	It("keeps a question pending until every question id has a nonblank answer", func() {
+	// Claude's AskUserQuestion gives its questions no ids, so the dashboard keys
+	// its answers by position. The shaping is the asking provider's job — gavel
+	// stores the answers as sent and never second-guesses their shape.
+	It("stores the answers to an id-less question verbatim", func() {
 		questions := []any{
-			map[string]any{"id": "location", "question": "Where should the plan go?"},
-			map[string]any{"id": "format", "question": "Which format?"},
+			map[string]any{"header": "Scope", "question": "How far should this land?", "multiSelect": false},
+			map[string]any{"header": "Surface", "question": "Which surface?", "multiSelect": false},
 		}
 		id := pending("AskUserQuestion", map[string]any{"questions": questions})
-		for _, input := range []map[string]any{
-			{"answers": map[string]any{"location": "Inline"}},
-			{"answers": map[string]any{"location": "Inline", "format": " "}},
-			{"answers": map[string]any{"location": "Inline", "format": "Markdown", "unknown": "extra"}},
-		} {
-			rec := approve(map[string]any{"approvalId": id.String(), "action": "respond", "input": input})
-			Expect(rec.Code).To(Equal(http.StatusConflict), rec.Body.String())
-			Expect(stateOf(ctx, db, id)).To(Equal(captaindb.TurnRequestStatePending))
-		}
-		rec := approve(map[string]any{"approvalId": id.String(), "action": "respond", "input": map[string]any{"answers": map[string]any{"location": "Inline", "format": "Markdown"}}})
+		answers := map[string]any{"1": "Phases 0+1 only", "2": "Not applicable / defer"}
+
+		rec := approve(map[string]any{"approvalId": id.String(), "action": "respond", "input": map[string]any{"questions": questions, "answers": answers}})
+
 		Expect(rec.Code).To(Equal(http.StatusOK), rec.Body.String())
 		Expect(stateOf(ctx, db, id)).To(Equal(captaindb.TurnRequestStateApproved))
+		request, err := db.GetTurnRequest(ctx, id)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(request.Response["updatedInput"]).To(HaveKeyWithValue("answers", answers))
 	})
 
 	It("does not approve a question without an answer", func() {
-		id := pending("AskUserQuestion", map[string]any{"questions": []any{map[string]any{"id": "location", "question": "Where?"}}})
+		id := pending("AskUserQuestion", map[string]any{"questions": []any{map[string]any{"question": "Where?"}}})
 		rec := approve(map[string]any{"approvalId": id.String(), "action": "approve"})
 		Expect(rec.Code).To(Equal(http.StatusConflict), rec.Body.String())
 		Expect(stateOf(ctx, db, id)).To(Equal(captaindb.TurnRequestStatePending))
