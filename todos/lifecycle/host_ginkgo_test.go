@@ -323,7 +323,7 @@ var _ = Describe("Host", func() {
 		It("records the status a triage verdict assigned when the step kept it", func() {
 			outcome.Execution.Triage = &types.TriageEnvelope{
 				ResultEnvelope: types.ResultEnvelope{Summary: "Shelve it.", EndStatus: types.EndCompleted},
-				Verdict:        types.VerdictRetire, Status: string(types.StatusDraft), Comment: "obsolete",
+				Verdict:        types.VerdictReady, Status: string(types.StatusDraft), Comment: "not ready to queue",
 			}
 
 			Expect(host.OnOutcome(ctx, todo, stepNamed(host.Def, "triage"), outcome, lifecycle.OutcomeKeep)).To(Succeed())

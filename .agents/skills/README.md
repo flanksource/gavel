@@ -158,10 +158,10 @@ See [gavel-todos/SKILL.md](gavel-todos/SKILL.md) for the TODO model, external-ex
 Turn a pile of titles into a queue that is ready for the external executor:
 
 - **Sweep** — `gavel todos list --format json` carries `markdown_body`, `acceptance_criteria`, and `verification` per item, so `jq` finds title-only, unprovable, and repeatedly-failing work directly
-- **Verdict** — every TODO leaves triage as ready, shape, investigate, already-done, or retire
+- **Verdict** — every TODO leaves triage as ready, shape, investigate, already-done, retire, merge-into, or duplicate-of
 - **Prove, don't guess** — `gavel todos check` decides "already done" from the fixture, never from reading the code
 - **Shape** — rewrite the body with problem statement, scope, acceptance criteria, and an executable `## Verification` definition of done
-- **Retire** — comment the rationale, link the survivor, then close; there is no merge command, but `todos link` records the pairing
+- **Retire** — comment the rationale, link the survivor, then close; a duplicate is linked and closed, and overlapping work is folded with `gavel todos merge` or a triage `merge-into` verdict
 
 ```bash
 gavel todos list --format json > .tmp/todos.json

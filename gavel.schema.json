@@ -2606,6 +2606,83 @@
           },
           "type": "object"
         },
+        "merge": {
+          "additionalProperties": false,
+          "description": "AI spec for the merge prompt: the one-shot pass behind `gavel todos merge` that folds several TODOs into one title, body, verification fixture and plan. It records no run, so it is not a lifecycle step.",
+          "properties": {
+            "budget": {
+              "additionalProperties": false,
+              "description": "Resource ceilings for the run. Zero/unset means unbounded.",
+              "properties": {
+                "cost": {
+                  "description": "Maximum spend in USD; 0 = no ceiling.",
+                  "type": "number"
+                },
+                "maxTokens": {
+                  "description": "Cap on output tokens per model call; 0 = backend default.",
+                  "type": "integer"
+                },
+                "maxTurns": {
+                  "description": "Cap on agent turns; 0 = backend default.",
+                  "type": "integer"
+                }
+              },
+              "type": "object"
+            },
+            "effort": {
+              "description": "Reasoning effort for thinking-capable models.",
+              "enum": [
+                "",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max",
+                "ultra"
+              ],
+              "type": "string"
+            },
+            "fallbacks": {
+              "description": "Alternative model slugs tried in order when the primary is unavailable or its provider cannot be constructed.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "file": {
+              "description": "Path to a .prompt file whose frontmatter/body supply this operation's spec. Relative paths resolve against the .gavel.yaml directory.",
+              "type": "string"
+            },
+            "model": {
+              "description": "Catalog model slug for this operation (e.g. claude-haiku-4-5). Overrides the base ai.model.",
+              "type": "string"
+            },
+            "prompt": {
+              "additionalProperties": false,
+              "description": "The prompt body. A bare string in place of the whole spec is shorthand for prompt.user.",
+              "properties": {
+                "system": {
+                  "description": "Optional system-prompt framing.",
+                  "type": "string"
+                },
+                "user": {
+                  "description": "The user prompt / template body (Handlebars).",
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "workflow": {
+              "$ref": "#/$defs/Workflow",
+              "description": "Loop shape for operations that run one: verify commands (the definition of done, whose exit code gates a re-run and whose output tail becomes the feedback) and the commit policy. Overriding it replaces the operation's declared workflow field-wise."
+            }
+          },
+          "type": [
+            "string",
+            "object"
+          ],
+          "x-prompt-id": "todos.merge"
+        },
         "plan": {
           "additionalProperties": false,
           "description": "AI spec for the plan-mode prompt: the read-only investigation framing that produces a reviewable implementation plan.",

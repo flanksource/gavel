@@ -183,21 +183,27 @@ func (d Deps) bulkActions() []clicky.EntityBulkAction {
 	actions := []clicky.EntityBulkAction{
 		action(d, "status", "Set the status of many TODOs",
 			entity.MCPToolHints{Icon: "check-circle", Group: "Status"},
-			bulk.StatusFlags{}, func(_ context.Context, flags bulk.StatusFlags) (bulk.ItemFunc, error) { return bulk.SetStatus(flags) }),
+			bulk.StatusFlags{}, func(_ context.Context, flags bulk.StatusFlags, _ []string) (bulk.ItemFunc, error) {
+				return bulk.SetStatus(flags)
+			}),
 
 		action(d, "priority", "Set the severity of many TODOs",
 			entity.MCPToolHints{Icon: "flag", Group: "Status"},
-			bulk.PriorityFlags{}, func(_ context.Context, flags bulk.PriorityFlags) (bulk.ItemFunc, error) {
+			bulk.PriorityFlags{}, func(_ context.Context, flags bulk.PriorityFlags, _ []string) (bulk.ItemFunc, error) {
 				return bulk.SetPriority(flags)
 			}),
 
 		action(d, "labels", "Add or remove labels across many TODOs",
 			entity.MCPToolHints{Icon: "tag", Group: "Labels"},
-			bulk.LabelFlags{}, func(_ context.Context, flags bulk.LabelFlags) (bulk.ItemFunc, error) { return bulk.EditLabels(flags) }),
+			bulk.LabelFlags{}, func(_ context.Context, flags bulk.LabelFlags, _ []string) (bulk.ItemFunc, error) {
+				return bulk.EditLabels(flags)
+			}),
 
 		action(d, "comment", "Append a comment to many TODOs",
 			entity.MCPToolHints{Icon: "message", Group: "Status"},
-			bulk.CommentFlags{}, func(_ context.Context, flags bulk.CommentFlags) (bulk.ItemFunc, error) { return bulk.AddComment(flags) }),
+			bulk.CommentFlags{}, func(_ context.Context, flags bulk.CommentFlags, _ []string) (bulk.ItemFunc, error) {
+				return bulk.AddComment(flags)
+			}),
 
 		action(d, "delete", "Delete many TODOs",
 			entity.MCPToolHints{
@@ -205,7 +211,9 @@ func (d Deps) bulkActions() []clicky.EntityBulkAction {
 				DestructiveHint:   &destructive,
 				DefaultPermission: entity.ToolPermissionAsk,
 			},
-			bulk.DeleteFlags{}, func(_ context.Context, flags bulk.DeleteFlags) (bulk.ItemFunc, error) { return bulk.Delete(flags) }),
+			bulk.DeleteFlags{}, func(_ context.Context, flags bulk.DeleteFlags, _ []string) (bulk.ItemFunc, error) {
+				return bulk.Delete(flags)
+			}),
 
 		// N TODOs become one, so it is an aggregate rather than a per-item
 		// operation, and it retires the ones it folds in — an agent asks first.
@@ -220,7 +228,7 @@ func (d Deps) bulkActions() []clicky.EntityBulkAction {
 		// It publishes outside gavel, so an agent asks before running it.
 		action(d, "push", "Push many TODOs to GitHub issues",
 			entity.MCPToolHints{Icon: "github", Group: "GitHub", DefaultPermission: entity.ToolPermissionAsk},
-			bulk.PushFlags{}, func(_ context.Context, flags bulk.PushFlags) (bulk.ItemFunc, error) {
+			bulk.PushFlags{}, func(_ context.Context, flags bulk.PushFlags, _ []string) (bulk.ItemFunc, error) {
 				return bulk.Push(flags, d.pushBaseURL())
 			}),
 	}
@@ -235,12 +243,15 @@ func (d Deps) bulkActions() []clicky.EntityBulkAction {
 	} {
 		name := prompt.name
 		actions = append(actions, action(d, name, prompt.short, runHints, bulk.RunFlags{},
-			func(ctx context.Context, flags bulk.RunFlags) (bulk.ItemFunc, error) {
+			func(ctx context.Context, flags bulk.RunFlags, batch []string) (bulk.ItemFunc, error) {
 				dir, err := d.dir(ctx, query.ListOpts{})
 				if err != nil {
 					return nil, err
 				}
-				return bulk.StartRun(name, flags, d.Registry, dir, d.ResolveRun, d.broker(dir))
+				return bulk.StartRun(bulk.RunSpec{
+					Step: name, Flags: flags, Batch: batch, Registry: d.Registry,
+					Dir: dir, Resolve: d.ResolveRun, Broker: d.broker(dir),
+				})
 			}))
 	}
 	return actions
@@ -333,7 +344,7 @@ func action[F entity.ActionFlags](
 	name, short string,
 	hints entity.MCPToolHints,
 	flags F,
-	build func(context.Context, F) (bulk.ItemFunc, error),
+	build func(ctx context.Context, flags F, batch []string) (bulk.ItemFunc, error),
 ) clicky.EntityBulkAction {
 	return clicky.BulkActionWithContext(name, func(ctx context.Context, ids []string, raw map[string]string) (bulk.Result, error) {
 		return apply(ctx, d, name, ids, raw, build)
@@ -356,13 +367,15 @@ func apply[F entity.ActionFlags](
 	name string,
 	ids []string,
 	raw map[string]string,
-	build func(context.Context, F) (bulk.ItemFunc, error),
+	build func(ctx context.Context, flags F, batch []string) (bulk.ItemFunc, error),
 ) (bulk.Result, error) {
 	flags, err := clicky.BuildOpts[F](raw)
 	if err != nil {
 		return bulk.Result{}, rejected(err)
 	}
-	fn, err := build(ctx, flags)
+	// ids is the selection as the caller spelled it, which is exactly what a
+	// run-shaped action passes on as the batch: every other action ignores it.
+	fn, err := build(ctx, flags, ids)
 	if err != nil {
 		return bulk.Result{}, rejected(err)
 	}

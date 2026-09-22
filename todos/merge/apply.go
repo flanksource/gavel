@@ -178,14 +178,11 @@ func mergedPriority(selection *Selection, proposal *Proposal) types.Priority {
 	if raw := strings.TrimSpace(proposal.Priority); raw != "" {
 		return types.Priority(raw)
 	}
-	rank := map[types.Priority]int{types.PriorityLow: 1, types.PriorityMedium: 2, types.PriorityHigh: 3}
-	highest := selection.Survivor.Priority
+	priorities := []types.Priority{selection.Survivor.Priority}
 	for _, todo := range selection.Retired {
-		if rank[todo.Priority] > rank[highest] {
-			highest = todo.Priority
-		}
+		priorities = append(priorities, todo.Priority)
 	}
-	return highest
+	return types.HighestPriority(priorities...)
 }
 
 func dryRunResult(targets []bulk.Target, selection *Selection) bulk.Result {

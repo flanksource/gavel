@@ -63,6 +63,12 @@ type Options struct {
 	// Backlog is a compact index of the other open TODOs in the workspace, so a
 	// triage run can spot duplicates. Empty omits the section.
 	Backlog string
+	// Labels is the workspace's label taxonomy, rendered by
+	// todos.LabelTaxonomySection. It is the closed vocabulary a triage run may
+	// propose from — the same list the write side holds it to. Empty omits the
+	// section, which is also what stops an agent proposing labels it would then be
+	// rejected for.
+	Labels string
 	// Inputs are the lifecycle step's declared template variables, evaluated
 	// from the todo. They are folded over the built-in variables above, so a
 	// step that declares `existingPlan` decides what the template sees.
@@ -99,6 +105,7 @@ func TemplateData(todoList []*types.TODO, opts Options) map[string]any {
 		"body":         Sections(todoList, opts.WorkDir, opts.Envelope == EnvelopeTriage),
 		"existingPlan": opts.ExistingPlan,
 		"backlog":      opts.Backlog,
+		"labels":       opts.Labels,
 	}
 	for name, value := range opts.Inputs {
 		data[name] = value

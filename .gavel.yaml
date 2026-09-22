@@ -1,5 +1,3 @@
-ai: {}
-checks: {}
 commit:
   allow:
   - .agents/skills/README.md
@@ -8,15 +6,7 @@ commit:
   - .agents/skills/gavel-fixture-tester/**
   - .agents/.claude-plugin/**
   - .claude/skills/**
-  grouping: {}
-  lint: {}
-  message: {}
-  precommit: {}
-  summary: {}
-  tidy: {}
-fixtures: {}
 lint:
-  fix: {}
   ignore:
   - file: .shell/checkout/8d512cac74b933d1f8d97629ab79966828d2e0789c66a463d8a78e7d40ccc42f/**
   - file: linters/betterleaks/testdata/betterleaks-output.json
@@ -27,23 +17,22 @@ lint:
   - file: testrunner/ui/pnpm-lock.yaml
     rule: '*-country-short-codes'
     source: betterleaks
-pr:
-  content: {}
-  fix: {}
 pre:
 - name: deps
   run: make tidy
-procfile: {}
-secrets: {}
 ssh:
   cmd: make all
-status:
-  summary: {}
-test:
-  outlineSummary: {}
 todos:
-  lifecycle: {}
-  plan: {}
-  run: {}
-  triage: {}
-  verify: {}
+  triage:
+    mode: api
+    model: deepseek-flash
+    permissions:
+      mode: plan
+      tools:
+        Bash(gavel todos get:*): allow
+        Bash(gavel todos list:*): allow
+        Glob: allow
+        Grep: allow
+        Read: allow
+    prompt:
+      schemaStrictness: retry

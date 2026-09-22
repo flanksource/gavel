@@ -700,6 +700,7 @@ gavel todos list --status pending
 gavel todos run 3f2a1b
 gavel todos steps 3f2a1b                 # which lifecycle steps apply to this todo now
 gavel todos run 3f2a1b --step plan      # propose a reviewable plan first (read-only)
+gavel todos run 3f2a1b --step triage --preview   # report a merge or duplicate, close nothing
 gavel todos check 3f2a1b                 # run the TODO's complete definition of done
 ```
 
@@ -707,6 +708,14 @@ gavel todos check 3f2a1b                 # run the TODO's complete definition of
 any step the project's lifecycle declares); empty lets the lifecycle pick the
 next applicable step. `--model` selects the model, in the compact
 `mode:model:effort` form (`cli:opus:high`, `api:sonnet`).
+
+Two flags withhold different things, and the difference matters for `triage`:
+`--dry-run` prints the rendered prompt and the resolved spec and stops before the
+agent runs, so it never shows a verdict. `--preview` runs the agent
+and applies everything except the two verdicts that close a TODO — `merge-into`
+and `duplicate-of` — reporting what they would have closed instead. It validates
+the same way the real apply does, so a fold naming a missing or already-closed
+TODO fails in the preview too.
 
 The configured `checks:` test/lint suite is part of every todo's definition of done: when `.gavel.yaml` `checks.enabled` (or a todo's own `checks:` front matter) turns it on, the run step executes it after the agent reports done and feeds any failures back into the same session until they pass (bounded by `todos.run.workflow.verify.maxIterations`).
 

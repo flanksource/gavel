@@ -122,6 +122,10 @@ func (h *Host) collectVerify(execution *todos.ExecutionResult, facts *StepResult
 // collectEnvelope decodes the agent's structured result into the envelope its
 // prompt promised and lifts it onto both records.
 func (h *Host) collectEnvelope(execution *todos.ExecutionResult, facts *StepResult, prepared *preparedStep, out promptrun.Result) {
+	// Captured before the decode, because the decode is what loses it: an agent
+	// that answered well in the wrong shape would otherwise leave nothing but
+	// "failed" for a reader to go on.
+	execution.ResponseText = responseText(out.Response)
 	env, err := decodeEnvelope(prepared, out.Response)
 	if err != nil {
 		execution.ErrorMessage = err.Error()
@@ -153,6 +157,22 @@ type envelope struct {
 	types.ResultEnvelope
 	Plan   *types.PlanResult
 	Triage *types.TriageEnvelope
+}
+
+// responseText is whatever the agent actually returned, in the same precedence
+// order decodeEnvelope reads it: the structured payload when there is one, else
+// the plain text. It is best-effort — a payload that cannot even be re-encoded
+// contributes nothing rather than failing a run that already produced a result.
+func responseText(response *api.Response) string {
+	if response == nil {
+		return ""
+	}
+	if response.StructuredData != nil {
+		if text, err := structuredDataText(response.StructuredData); err == nil {
+			return text
+		}
+	}
+	return strings.TrimSpace(response.Text)
 }
 
 // decodeEnvelope resolves the response contract in precedence order: native

@@ -56,6 +56,26 @@ func priorityOrder(p Priority) int {
 	}
 }
 
+// HighestPriority returns the most urgent of the priorities given, ignoring
+// unset and unknown values.
+//
+// It exists because folding TODOs together must never lower how urgent the work
+// was: absorbing a high-priority TODO into a medium one leaves a high-priority
+// survivor. Both `gavel todos merge` and a triage merge-into verdict need that
+// rule, and a second ranking table is how the two would drift apart.
+func HighestPriority(priorities ...Priority) Priority {
+	highest := Priority("")
+	for _, priority := range priorities {
+		if !IsKnownPriority(priority) {
+			continue
+		}
+		if highest == "" || priorityOrder(priority) < priorityOrder(highest) {
+			highest = priority
+		}
+	}
+	return highest
+}
+
 type Attempt struct {
 	Status     Status
 	Timestamp  time.Time
