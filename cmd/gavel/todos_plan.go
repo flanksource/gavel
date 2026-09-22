@@ -60,7 +60,7 @@ func resolvePlanTODO(ctx context.Context, args []string) (string, todos.Provider
 	if err != nil {
 		return "", nil, nil, err
 	}
-	todoList, err := resolveRequestedTODOs(ctx, provider, args, todos.DiscoveryFilters{})
+	todoList, err := resolveRequestedTODOs(ctx, provider, workDir, args, todos.DiscoveryFilters{})
 	if err != nil {
 		return "", nil, nil, fmt.Errorf("failed to discover TODOs: %w", err)
 	}
