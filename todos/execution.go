@@ -47,6 +47,13 @@ type ExecutionResult struct {
 	CommitSHA        string
 	Runtime          RunStartMetadata
 	Transcript       *ExecutionTranscript
+	// ResponseText is the agent's final response verbatim, captured before the
+	// envelope is decoded and kept even when that decode fails — which is exactly
+	// when it is the only account of what the agent said. A reply that was sound
+	// but shaped wrong would otherwise be discarded, leaving a bare "failed".
+	//
+	// It is display state, not part of the persisted attempt.
+	ResponseText string
 	// Envelope fields — the agent's structured final result. EndStatus is empty
 	// when no envelope was captured.
 	Summary   string

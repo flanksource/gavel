@@ -24,6 +24,9 @@ type RunFlags struct {
 	Model          string `flag:"model" help:"Override the model for this batch, as the compact mode:model:effort form"`
 	Effort         string `flag:"effort" help:"Reasoning effort" enum:"low,medium,high,xhigh"`
 	Resume         bool   `flag:"resume" help:"Resume each TODO's prior session instead of starting fresh"`
+	// A batch is where a wrong duplicate call costs most: forty verdicts land
+	// unattended, and the two that close TODOs cannot be undone by a later run.
+	Preview bool `flag:"preview" help:"Run the agent, but report a triage verdict that would close a TODO instead of applying it"`
 }
 
 func (RunFlags) ClickyActionFlags() {}
@@ -46,8 +49,12 @@ func (f RunFlags) Spec() api.Spec {
 type RunRequest struct {
 	Dir string
 	// Step is the lifecycle step this batch runs on every selected TODO.
-	Step  string
-	Todo  *types.TODO
+	Step string
+	Todo *types.TODO
+	// Batch are the refs of every TODO in the selection, this one included. A
+	// triage render marks them so the agent knows which backlog entries are having
+	// their verdicts decided alongside the one it is looking at.
+	Batch []string
 	Flags RunFlags
 }
 
@@ -76,8 +83,25 @@ func DefaultRunResolver(_ context.Context, req RunRequest) (run.Options, error) 
 		Step:           req.Step,
 		Request:        req.Flags.Spec(),
 		Resume:         req.Flags.Resume,
+		Batch:          append([]string(nil), req.Batch...),
+		Preview:        req.Flags.Preview,
 		Host:           lifecycle.HostCLI,
 	}, nil
+}
+
+// RunSpec is what StartRun needs to build a named-step item function.
+type RunSpec struct {
+	// Step is the lifecycle step to run on every selected TODO.
+	Step  string
+	Flags RunFlags
+	// Batch are the refs of the whole selection, passed to each run so a triage
+	// render can mark the backlog entries being decided alongside it.
+	Batch    []string
+	Registry *run.Registry
+	// Dir is the fallback workspace for a TODO whose own CWD is not absolute.
+	Dir     string
+	Resolve RunResolver
+	Broker  todos.ApprovalBroker
 }
 
 // StartRun returns the item function for a named-step bulk action.
@@ -86,14 +110,15 @@ func DefaultRunResolver(_ context.Context, req RunRequest) (run.Options, error) 
 // prompt, spec and outcomes — so no behaviour is asserted here and the
 // lifecycle decides. That is what makes "triage these forty" and "plan these
 // forty" one code path rather than three.
-func StartRun(step string, flags RunFlags, registry *run.Registry, dir string, resolve RunResolver, broker todos.ApprovalBroker) (ItemFunc, error) {
-	step = strings.TrimSpace(step)
+func StartRun(spec RunSpec) (ItemFunc, error) {
+	step := strings.TrimSpace(spec.Step)
 	if step == "" {
 		return nil, fmt.Errorf("lifecycle step name is required")
 	}
-	if registry == nil {
+	if spec.Registry == nil {
 		return nil, fmt.Errorf("run registry is required")
 	}
+	resolve := spec.Resolve
 	if resolve == nil {
 		resolve = DefaultRunResolver
 	}
@@ -102,21 +127,23 @@ func StartRun(step string, flags RunFlags, registry *run.Registry, dir string, r
 		if todo == nil {
 			return ItemResult{}, fmt.Errorf("bulk run: no todo")
 		}
-		workDir := dir
+		workDir := spec.Dir
 		if cwd := strings.TrimSpace(todo.CWD); filepath.IsAbs(cwd) {
 			workDir = filepath.Clean(cwd)
 		}
-		opts, err := resolve(ctx, RunRequest{Dir: workDir, Step: step, Todo: todo, Flags: flags})
+		opts, err := resolve(ctx, RunRequest{
+			Dir: workDir, Step: step, Todo: todo, Batch: spec.Batch, Flags: spec.Flags,
+		})
 		if err != nil {
 			return ItemResult{}, err
 		}
 		req := run.Request{
 			Provider: provider,
-			Registry: registry,
+			Registry: spec.Registry,
 			Todo:     todo,
 			Dir:      workDir,
 			Options:  opts,
-			Broker:   broker,
+			Broker:   spec.Broker,
 		}
 		// Resolving first turns a misconfigured run into a per-item error before
 		// any agent session is admitted, so one bad TODO does not leave a

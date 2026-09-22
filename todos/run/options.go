@@ -47,6 +47,12 @@ type Request struct {
 	// serves an approval surface supplies one — the CLI leaves it nil, because a
 	// run that asked it for a decision would block until its timeout.
 	Broker todos.ApprovalBroker
+	// OnComplete reports the finished run to the caller before its outcome is
+	// persisted, so a terminal can print what the agent said even when the write
+	// that follows fails. The status is the one the lifecycle decided, not the
+	// one on the TODO, for the same reason: reading it back would depend on the
+	// write having succeeded. Nil for a caller that only needs Done's error.
+	OnComplete func(outcome *lifecycle.StepOutcome, status string, err error)
 	// Prepared is the resolution a caller already performed as its pre-flight.
 	// Start dispatches exactly that fold instead of folding again, so the step
 	// and session it reported cannot differ from the ones that run: a todo that
@@ -92,6 +98,18 @@ type Options struct {
 	// owned by a running process, instead of refusing. It is never a default:
 	// the caller sets it after confirming (--force, or the dashboard dialog).
 	Concurrent bool
+	// Batch are the refs of every todo in the request this run belongs to. A
+	// triage render marks those backlog entries, because their verdicts are being
+	// decided alongside this one and a fold naming an already-closed TODO is
+	// refused. Empty for a single-todo run.
+	Batch []string
+	// Preview holds back a triage verdict that would close a TODO and reports what
+	// it would have done. Every other verdict, and every other step, is unaffected.
+	//
+	// It is not DryRun's sibling despite the name: DryRun stops before the agent
+	// runs at all, so it can never show a verdict. This runs the agent and stops
+	// before the one write a later run cannot undo.
+	Preview bool
 	// Host is the entrypoint the run was started from. It contributes no spec
 	// layer; see lifecycle.HostKind.
 	Host lifecycle.HostKind

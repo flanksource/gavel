@@ -78,6 +78,10 @@ func buildTODOSection(todo *types.TODO, workDir string, grouped bool, number int
 		}
 	}
 
+	if rawFixture {
+		section += buildCurrentStateSection(todo)
+	}
+
 	if refs := todo.PathRefs(); len(refs) > 0 && workDir != "" {
 		for _, ref := range refs {
 			src, err := ReadSourceLines(workDir, ref)
@@ -111,6 +115,34 @@ func buildTODOSection(todo *types.TODO, workDir string, grouped bool, number int
 	section += buildVerificationSection(todo, rawFixture)
 
 	return section
+}
+
+// buildCurrentStateSection renders the state a triage or merge run is asked to
+// correct: status, priority and labels.
+//
+// It is rendered only on the rawFixture path, for the same reason the fixture is
+// shown verbatim there — a prompt that must JUDGE these values cannot judge what
+// it cannot see. Asking an agent to "correct the priority if it is wrong" without
+// showing it the priority is asking it to guess.
+//
+// An unset value is spelled out rather than omitted: a TODO with no labels and no
+// priority is exactly the one triage exists to fix, and a missing line reads as
+// "not your concern".
+func buildCurrentStateSection(todo *types.TODO) string {
+	status := strings.TrimSpace(string(todo.Status))
+	if status == "" {
+		status = "unknown"
+	}
+	priority := strings.TrimSpace(string(todo.Priority))
+	if priority == "" {
+		priority = "unset"
+	}
+	labelList := "none"
+	if applied := strings.Join(todo.Labels, ", "); strings.TrimSpace(applied) != "" {
+		labelList = applied
+	}
+	return fmt.Sprintf("## Current State\n\n- **Status:** %s\n- **Priority:** %s\n- **Labels:** %s\n\n",
+		status, priority, labelList)
 }
 
 // buildVerificationSection renders the TODO's definition of done: its literal

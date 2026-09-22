@@ -42,6 +42,10 @@ type RunOptions struct {
 	Message string
 	// Concurrent admits the run alongside a live one the caller has confirmed.
 	Concurrent bool
+	// Batch are the refs of every todo in the request this run belongs to, so a
+	// triage render can mark the backlog entries whose verdicts are being decided
+	// alongside this one. Empty for a single-todo run.
+	Batch []string
 	// Broker builds the tool-approval callback; nil for a host that cannot answer.
 	Broker todos.ApprovalBroker
 	// Provider, when set, replaces the one promptrun would build: the seam a test
@@ -81,6 +85,9 @@ type preparedStep struct {
 	template       string
 	existingPlan   string
 	agent          string
+	// batch are the refs of every todo in the same request, so a triage render can
+	// mark which backlog entries are being decided alongside this one.
+	batch []string
 	// trace is captain's provenance for the spec fold, lowest precedence first.
 	trace      []api.SpecLayer
 	provenance map[string]api.FieldProvenance
@@ -230,6 +237,7 @@ func (h *Host) prepare(ctx context.Context, todo *types.TODO, step Step, lc Cont
 		runtimePresets: resolved.Presets,
 		runtimeProfile: resolved.Profile,
 		provenance:     resolved.Resolved.Provenance, warnings: resolved.Resolved.Warnings,
+		batch: opts.Batch,
 	}
 	prepared.agent, _ = claude.ResolveAgent(spec.Name)
 	if class != types.ModeVerify {
@@ -270,9 +278,10 @@ func (h *Host) render(ctx context.Context, todo *types.TODO, step Step, lc Conte
 	if existing, ok := inputs["existingPlan"].(string); ok {
 		prepared.existingPlan = existing
 	}
-	backlog := ""
+	backlog, labelTaxonomy := "", ""
 	if prepared.definition.Envelope == todoprompt.EnvelopeTriage {
-		backlog = h.backlog(ctx, todo)
+		backlog = h.backlog(ctx, todo, prepared.batch)
+		labelTaxonomy = h.labelTaxonomy(ctx)
 	}
 	req, _, err := todoprompt.Render([]*types.TODO{todo}, todoprompt.Options{
 		WorkDir:      prepared.workDir,
@@ -283,6 +292,7 @@ func (h *Host) render(ctx context.Context, todo *types.TODO, step Step, lc Conte
 		Template:     prepared.template,
 		ExistingPlan: prepared.existingPlan,
 		Backlog:      backlog,
+		Labels:       labelTaxonomy,
 		Inputs:       inputs,
 	})
 	if err != nil {
@@ -301,9 +311,9 @@ func (h *Host) render(ctx context.Context, todo *types.TODO, step Step, lc Conte
 }
 
 // backlog is the duplicate-detection index a triage run compares against. A
-// backlog that cannot be listed degrades duplicate detection but not the other
-// four verdicts, so it is logged rather than fatal.
-func (h *Host) backlog(ctx context.Context, todo *types.TODO) string {
+// backlog that cannot be listed degrades the duplicate and merge verdicts but not
+// the rest, so it is logged rather than fatal.
+func (h *Host) backlog(ctx context.Context, todo *types.TODO, batch []string) string {
 	if h.Provider == nil {
 		return ""
 	}
@@ -314,7 +324,18 @@ func (h *Host) backlog(ctx context.Context, todo *types.TODO) string {
 		logger.Warnf("triage duplicate detection is degraded: could not list the backlog: %v", err)
 		return ""
 	}
-	return todos.BuildBacklogIndex(candidates, []*types.TODO{todo})
+	return todos.BuildBacklogIndex(candidates, []*types.TODO{todo}, batch)
+}
+
+// labelTaxonomy is the closed vocabulary a triage run may propose labels from.
+// It comes from the same resolver todos.ApplyTriage validates against, so the list
+// the agent is shown is exactly the list it is held to — a second source here is
+// how an agent gets rejected for a label the prompt offered it.
+func (h *Host) labelTaxonomy(ctx context.Context) string {
+	if h.Provider == nil {
+		return ""
+	}
+	return todos.LabelTaxonomySection(ctx, h.Provider)
 }
 
 // admit allocates the run's durable Captain identity before anything is

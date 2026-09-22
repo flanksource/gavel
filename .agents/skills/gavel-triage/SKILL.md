@@ -1,7 +1,7 @@
 ---
 name: gavel-triage
 description: >-
-  Triage a Gavel TODO backlog by sorting work into keep, shape, investigate, or retire; detecting completed or duplicate work; setting priority and status;
+  Triage a Gavel TODO backlog by sorting work into keep, shape, investigate, retire, merge, or duplicate; detecting completed or duplicate work; setting priority, labels and status;
   and preparing survivors for external execution with scope, acceptance criteria, and an executable definition of done. Use for backlog cleanup, choosing
   the next task, shaping raw TODOs, or investigating stuck work.
 allowed-tools: [Bash, Read, Write, Edit, Glob, Grep, AskUserQuestion]
@@ -124,7 +124,9 @@ Every TODO leaves triage with exactly one of these:
 | **Shape** | Real work, under-specified (title-only, no criteria, no fixture) | Rewrite the body — [§4](#4-shape-a-todo-for-external-execution) |
 | **Investigate** | Real problem, solution genuinely unknown | Leave pending and hand it to the external planner |
 | **Already done** | Suspect the code has moved on | `gavel todos check <ref>` — let the fixture decide |
-| **Retire** | Obsolete, duplicate, or won't-fix | Comment the reason, then close — [§6](#6-retire-and-dedupe) |
+| **Retire** | Obsolete or won't-fix, and NOT a duplicate | Comment the reason, then close — [§6](#6-retire-and-dedupe) |
+| **Merge into** | Several TODOs are one piece of work and this one should survive | Write the combined body, then close the others into it — [§6](#6-retire-and-dedupe) |
+| **Duplicate of** | Another TODO covers this entirely, with nothing here worth keeping | Link to the survivor and close this one — [§6](#6-retire-and-dedupe) |
 
 **Never guess "already done".** `gavel todos check <ref>` executes the persisted definition of done through the fixture/CEL pipeline. Passing work becomes
 `verified`; failing work becomes `unverified` with evidence on the issue. A check needs a fixture, so shape a TODO with no `verification` before checking it.
@@ -227,7 +229,7 @@ projected from Captain execution and any attempt to set it is declined.
 
 So "mark it failed" is not a triage move — `failed` and `unverified` are reports from the last run.
 Both the CLI and the API reject them loudly rather than accepting a write that would change nothing.
-To retire failing work, close it (`completed`) with a comment explaining why. To retry it, fix the specification and return it to the external executor.
+To retire failing work, comment why and then `gavel todos delete` it. To retry it, fix the specification and return it to the external executor.
 
 ### Applying the change
 
@@ -279,14 +281,43 @@ gavel todos comment 1b495fb9 "Obsolete: the /todos/new route was deleted in 1060
 gavel todos comment 1b495fb9 --body @.tmp/rationale.md
 ```
 
-There is **no merge command** — the survivor absorbs the duplicate's content by hand, and a link
-records the pairing:
+### Duplicates
 
-1. Pick the survivor — the one with the better body, criteria, or fixture, not the older id.
-2. Fold anything unique from the duplicate into the survivor's body with `todos edit`.
-3. Link the two so the pairing survives the close: `gavel todos link <duplicate> <survivor>`.
-4. Comment on both, naming the other's short id in each direction.
-5. Close the duplicate: `gavel todos edit <duplicate> --status completed`.
+Pick the survivor first — the one with the better body, criteria, or fixture, not the older id — then choose
+by what would be lost:
+
+- **Nothing to carry over.** Link and close the duplicate. Both writes are needed: a close with no link
+  loses the pointer to where the work went.
+
+  ```bash
+  gavel todos comment <duplicate> "Duplicate of <survivor> — <title>."
+  gavel todos link <duplicate> <survivor>
+  gavel todos delete <duplicate>   # soft: cancelled, history kept
+  ```
+
+- **The others hold criteria, a fixture or context worth keeping.** Use `gavel todos merge`, which runs an
+  AI pass to write one title, body, fixture and plan onto the survivor and retires the rest into it:
+
+  ```bash
+  gavel todos merge <survivor> <other> <other> --into <survivor> --dry-run
+  gavel todos merge <survivor> <other> <other> --into <survivor>
+  ```
+
+A triage run does both by itself. Its `duplicate-of` verdict performs the first sequence, and `merge-into`
+performs the fold from the survivor's side — it names the TODOs to absorb in `merges` and writes the combined
+body, so no second AI pass is needed. Either way the priority never drops: a survivor that absorbs
+higher-priority work inherits it.
+
+Both close TODOs, which no later run undoes, so check the call before trusting it on a batch:
+
+```bash
+gavel todos run <ref> --step triage --preview
+```
+
+The agent runs and every other verdict applies as usual, but a `merge-into` or `duplicate-of` is reported
+instead of performed — including the combined body, which is held back with the fold rather than written to a
+survivor whose duplicates are still open. `--dry-run` cannot do this: it stops before the agent runs, so there
+is no verdict to show.
 
 ### Links
 
@@ -356,8 +387,10 @@ Report the pass as counts per verdict plus the ids retired, not as a per-item na
   CLI and the API reject them — but they filter fine (`todos list --status failed`).
 - **`blocks` cannot be written.** It is the reverse view of `depends_on`; add the dependency from the
   blocked TODO instead.
-- **There is no `wontfix` or `cancelled` status** reachable from the CLI or API. Retirement is
-  `completed` plus a comment carrying the reason.
+- **`cancelled` cannot be assigned**, and there is no `wontfix` status at all. Retirement is a comment
+  carrying the reason, then `gavel todos delete <ref>` — a soft delete to `cancelled` that keeps the
+  history and reads as completed in listings. `gavel todos reopen <ref>` undoes it. Reserve
+  `edit --status completed` for work that genuinely finished.
 - **There is no `gavel todos criteria` subcommand.** Acceptance criteria live in the body under
   `## Acceptance Criteria` and are edited with `todos edit --body`.
 - **`todos edit --body` replaces the whole body.** Read the current body first and re-emit it with

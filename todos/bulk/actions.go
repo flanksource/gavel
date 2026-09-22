@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/flanksource/gavel/todos"
+	"github.com/flanksource/gavel/todos/labels"
 	"github.com/flanksource/gavel/todos/types"
 )
 
@@ -70,32 +71,21 @@ func (LabelFlags) ClickyActionFlags() {}
 // EditLabels adds and removes labels per TODO.
 //
 // It is a read-modify-write per item rather than one write, because the
-// provider's Labels edit replaces the whole set. "Add area:ui to these forty"
-// has to be computed against each TODO's own labels, or it would flatten forty
-// different label sets into one.
+// provider's Labels edit replaces the whole set — see labels.Apply, which is the
+// same merge triage performs on a single TODO.
 func EditLabels(flags LabelFlags) (ItemFunc, error) {
-	add := normalizeLabels(flags.Add)
-	remove := normalizeLabels(flags.Remove)
+	add := labels.Split(flags.Add)
+	remove := labels.Split(flags.Remove)
 	if len(add) == 0 && len(remove) == 0 {
 		return nil, fmt.Errorf("at least one of --add or --remove is required")
 	}
 	for _, label := range add {
-		if containsFold(remove, label) {
+		if labels.Contains(remove, label) {
 			return nil, fmt.Errorf("label %q is both added and removed", label)
 		}
 	}
 	return func(ctx context.Context, provider todos.Provider, todo *types.TODO) (ItemResult, error) {
-		next := make([]string, 0, len(todo.Labels)+len(add))
-		for _, existing := range todo.Labels {
-			if !containsFold(remove, existing) {
-				next = append(next, existing)
-			}
-		}
-		for _, label := range add {
-			if !containsFold(next, label) {
-				next = append(next, label)
-			}
-		}
+		next := labels.Apply(todo.Labels, add, remove)
 		if err := provider.Edit(ctx, todo, todos.EditRequest{Labels: &next}); err != nil {
 			return ItemResult{}, err
 		}
@@ -143,25 +133,4 @@ func Delete(flags DeleteFlags) (ItemFunc, error) {
 		}
 		return ItemResult{Status: "deleted"}, nil
 	}, nil
-}
-
-func normalizeLabels(values []string) []string {
-	out := make([]string, 0, len(values))
-	for _, value := range values {
-		for _, part := range strings.Split(value, ",") {
-			if trimmed := strings.TrimSpace(part); trimmed != "" && !containsFold(out, trimmed) {
-				out = append(out, trimmed)
-			}
-		}
-	}
-	return out
-}
-
-func containsFold(haystack []string, needle string) bool {
-	for _, value := range haystack {
-		if strings.EqualFold(strings.TrimSpace(value), strings.TrimSpace(needle)) {
-			return true
-		}
-	}
-	return false
 }

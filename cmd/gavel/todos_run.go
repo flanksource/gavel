@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -35,6 +36,7 @@ type TodosRunOptions struct {
 	Force          bool     `flag:"force" help:"Dispatch despite another live run"`
 	Dirty          bool     `flag:"dirty" help:"Carry uncommitted and ignored files into a new worktree"`
 	DryRun         bool     `flag:"dry-run" help:"Print the prompt and resolved spec without dispatching"`
+	Preview        bool     `flag:"preview" help:"Run the agent, but report a triage verdict that would close a TODO instead of applying it (unlike --dry-run, which never runs the agent)"`
 	Commit         bool     `flag:"commit" default:"true" help:"Allow committing lifecycle steps"`
 }
 
@@ -72,6 +74,58 @@ func init() {
 	_ = todosRunCmd.Flags().MarkDeprecated("runtime-profile", "runtime profiles are ignored; use --preset")
 }
 
+// lifecycleStepNames is the project's declared step vocabulary, loaded without a
+// provider because naming a step needs the lifecycle, not the database.
+func lifecycleStepNames(workDir string) ([]string, error) {
+	host, err := lifecycle.NewHost(nil, workDir, lifecycle.HostCLI)
+	if err != nil {
+		return nil, err
+	}
+	return host.Def.Definition().StepNames(), nil
+}
+
+// splitLeadingStep accepts `todos run <step> <id>...` alongside
+// `todos run <id>... --step <step>`.
+//
+// `todos run triage <id>` is what the command's own help invites — it documents
+// the lifecycle by step name — and without this the step name is resolved as a
+// TODO reference, failing with "short issue reference must contain at least 8
+// characters", which names neither the argument nor the real problem.
+//
+// The two forms cannot collide: a leading word is taken as the step only when it
+// matches a declared step exactly, --step was not given, and at least one
+// argument remains to be a TODO. A short id is 8 hex characters, so it never
+// matches a step name, and an explicit --step always wins.
+func splitLeadingStep(step string, args, steps []string) (string, []string) {
+	if strings.TrimSpace(step) != "" || len(args) < 2 {
+		return step, args
+	}
+	for _, name := range steps {
+		if args[0] == name {
+			return name, args[1:]
+		}
+	}
+	return step, args
+}
+
+// misplacedStepHint explains a resolution failure caused by a step name sitting
+// where a TODO reference belongs — `todos run <id> triage`, or a leading step
+// that --step already claimed.
+//
+// It is conditional because the common failure is an id that simply does not
+// exist, and a lecture about step vocabulary on every one of those trains readers
+// to skip the line that matters.
+func misplacedStepHint(args, steps []string) string {
+	for _, arg := range args {
+		for _, step := range steps {
+			if arg == step {
+				return fmt.Sprintf("\n(%q is a lifecycle step, not a TODO: gavel todos run %s <id>)", arg, arg)
+			}
+		}
+	}
+	return ""
+}
+
 // errRunInterrupted is a run the operator interrupted; the loop stops there.
 var errRunInterrupted = errors.New("todo run interrupted")
 
@@ -98,25 +152,43 @@ func runTodosRun(opts TodosRunOptions) error {
 	if err != nil {
 		return fmt.Errorf("failed to get working directory: %w", err)
 	}
+	steps, err := lifecycleStepNames(workDir)
+	if err != nil {
+		return err
+	}
+	step, args := splitLeadingStep(opts.Step, args, steps)
+	opts.Step = step
 	provider, err := newTodosProvider(workDir)
 	if err != nil {
 		return err
 	}
 	ctx := context.Background()
 	logger.Infof("Discovering TODOs from PostgreSQL")
-	todoList, err := resolveRequestedTODOs(ctx, provider, args, todos.DiscoveryFilters{})
+	// Targets rather than bare TODOs: a UUID resolves across workspaces, and a run
+	// must dispatch through the provider and working directory that own it.
+	targets, err := resolveRequestedTargets(ctx, provider, workDir, args, todos.DiscoveryFilters{})
 	if err != nil {
-		return fmt.Errorf("failed to discover TODOs: %w", err)
+		return fmt.Errorf("failed to discover TODOs: %w%s", err, misplacedStepHint(args, steps))
 	}
-	if len(todoList) == 0 {
+	if len(targets) == 0 {
 		logger.Infof("No TODOs found")
 		return nil
 	}
-	logger.Infof("Found %d TODOs", len(todoList))
+	logger.Infof("Found %d TODOs", len(targets))
 
-	for i, todo := range todoList {
-		fmt.Println(clicky.Text(fmt.Sprintf("=== TODO %d/%d: %s ===", i+1, len(todoList), todo.Filename()), "text-blue-600 font-bold").ANSI())
-		err := runTodoStep(ctx, workDir, provider, todo, todosRunOptions(opts), runStepPolicy{DryRun: opts.DryRun, AllowCommit: opts.Commit})
+	// Every run in this invocation is told the whole selection, so a triage pass
+	// can see which backlog entries are having their verdicts decided alongside it.
+	batch := make([]string, 0, len(targets))
+	for _, target := range targets {
+		batch = append(batch, todos.TODOReference(target.Todo))
+	}
+
+	for i, target := range targets {
+		todo := target.Todo
+		fmt.Println(clicky.Text(fmt.Sprintf("=== TODO %d/%d: %s ===", i+1, len(targets), todo.Filename()), "text-blue-600 font-bold").ANSI())
+		runOpts := todosRunOptions(opts)
+		runOpts.Batch = batch
+		err := runTodoStep(ctx, target.WorkDir, target.Provider, todo, runOpts, runStepPolicy{DryRun: opts.DryRun, AllowCommit: opts.Commit})
 		var failure *todoRunFailure
 		switch {
 		case err == nil:
@@ -148,6 +220,7 @@ func todosRunOptions(opts TodosRunOptions) run.Options {
 		Request:        todosRequestSpec(opts),
 		Resume:         opts.Resume,
 		Concurrent:     opts.Force,
+		Preview:        opts.Preview,
 		// The CLI drains no approval queue: a run that asked for one would block
 		// until its timeout, so it contributes no approval-brokering posture.
 		Host: lifecycle.HostCLI,
@@ -222,6 +295,13 @@ func runTodoStep(ctx context.Context, workDir string, provider todos.Provider, t
 		return err
 	}
 	req.Prepared = prepared
+	// The report is rendered from the run's own result, before its outcome is
+	// persisted: a failed SaveAttempt must not be able to swallow what the agent
+	// said, and the status printed is the one the lifecycle decided rather than one
+	// read back off a TODO the write may never have reached.
+	req.OnComplete = func(outcome *lifecycle.StepOutcome, status string, runErr error) {
+		printRunResult(prepared.Step.Name, outcome, status, runErr)
+	}
 	fmt.Println(clicky.Text("step: "+prepared.Step.Name, "text-green-600 font-bold").
 		Append("  "+prepared.Reason, "text-gray-500").ANSI())
 	if policy.DryRun {
@@ -247,7 +327,9 @@ func runTodoStep(ctx context.Context, workDir string, provider todos.Provider, t
 		}
 		return &todoRunFailure{todo: todo, err: err}
 	}
-	fmt.Println(clicky.Text(fmt.Sprintf("%s finished — %s", prepared.Step.Name, todo.Status), "text-green-600").ANSI())
+	// No closing line here: OnComplete already reported the step, its status and
+	// what the agent said, and a second line reading off todo.Status would only
+	// repeat it — differently, whenever the two disagree.
 	return nil
 }
 

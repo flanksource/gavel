@@ -117,6 +117,64 @@ func TestTodosRunStepFlagDocumentsTheLifecycleVocabulary(t *testing.T) {
 	}
 }
 
+// `gavel todos run triage <id>` is what the command's own help invites, and
+// before the leading step was accepted the step name was resolved as a TODO
+// reference — failing with "short issue reference must contain at least 8
+// characters", which names neither the argument nor the real problem.
+func TestSplitLeadingStep(t *testing.T) {
+	steps := []string{"triage", "plan", "verify", "run"}
+	const id = "b603acc4-105f-42e0-8862-ceee713a2d7b"
+
+	for _, tc := range []struct {
+		name     string
+		step     string
+		args     []string
+		wantStep string
+		wantArgs []string
+	}{
+		{
+			name: "a leading step name is consumed", args: []string{"triage", id},
+			wantStep: "triage", wantArgs: []string{id},
+		},
+		{
+			name: "it applies to every declared step", args: []string{"verify", id, "ab12cd"},
+			wantStep: "verify", wantArgs: []string{id, "ab12cd"},
+		},
+		{
+			// An explicit --step is the caller's decision; a positional must not
+			// silently override it.
+			name: "an explicit step wins", step: "plan", args: []string{"triage", id},
+			wantStep: "plan", wantArgs: []string{"triage", id},
+		},
+		{
+			// Otherwise `todos run triage` would run every TODO rather than the one
+			// whose short id happened to be missing.
+			name: "a step with no TODO left is a reference", args: []string{"triage"},
+			wantStep: "", wantArgs: []string{"triage"},
+		},
+		{
+			name: "a word that is not a step is untouched", args: []string{"triag", id},
+			wantStep: "", wantArgs: []string{"triag", id},
+		},
+		{
+			// A short id is 8 hex characters, so it can never collide with a step name.
+			name: "ids pass through", args: []string{"ab12cd", id},
+			wantStep: "", wantArgs: []string{"ab12cd", id},
+		},
+		{name: "no arguments at all", wantStep: "", wantArgs: nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			step, args := splitLeadingStep(tc.step, tc.args, steps)
+			if step != tc.wantStep {
+				t.Errorf("step = %q, want %q", step, tc.wantStep)
+			}
+			if strings.Join(args, ",") != strings.Join(tc.wantArgs, ",") {
+				t.Errorf("args = %v, want %v", args, tc.wantArgs)
+			}
+		})
+	}
+}
+
 // The request is the TOP spec layer, so an untouched flag must contribute
 // nothing: a non-zero default here silently beats the configuration it claims
 // to defer to.

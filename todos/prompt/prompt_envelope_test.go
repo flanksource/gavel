@@ -91,12 +91,21 @@ func TestTriageEnvelopeSchemaUsesFlatScalarFields(t *testing.T) {
 			t.Fatalf("TriageEnvelope.%s = %#v, want a top-level scalar", field, property)
 		}
 	}
-	related, ok := properties["related"].(map[string]any)
-	if !ok {
-		t.Fatalf("TriageEnvelope.related is %T, want schema object", properties["related"])
-	}
-	if related["type"] != "array" {
-		t.Fatalf("TriageEnvelope.related = %#v, want an array of scalars", related)
+	for _, field := range []string{"related", "addLabels", "removeLabels"} {
+		array, ok := properties[field].(map[string]any)
+		if !ok {
+			t.Fatalf("TriageEnvelope.%s is %T, want schema object", field, properties[field])
+		}
+		if array["type"] != "array" {
+			t.Fatalf("TriageEnvelope.%s = %#v, want an array of scalars", field, array)
+		}
+		items, ok := array["items"].(map[string]any)
+		if !ok {
+			t.Fatalf("TriageEnvelope.%s has no items schema: %#v", field, array)
+		}
+		if items["type"] != "string" || items["$ref"] != nil {
+			t.Fatalf("TriageEnvelope.%s items = %#v, want plain strings", field, items)
+		}
 	}
 }
 

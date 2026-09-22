@@ -299,6 +299,100 @@ func TestRenderTriageIncludesBacklogForDedupe(t *testing.T) {
 	}
 }
 
+// Both closing verdicts need the other TODO's full body, which the excerpt does
+// not carry — so the prompt has to say where to get it and must be allowed to.
+func TestRenderTriageDirectsTheAgentToReadCandidatesInFull(t *testing.T) {
+	user := renderUser(t, []*types.TODO{newTestTODO("solo", "task")}, Options{
+		Prompt: "triage", Envelope: EnvelopeTriage, Backlog: "- ab12cd  Other  (pending, high)",
+	})
+	for _, want := range []string{"gavel todos get", "[in this batch]", "merges", "duplicateOf"} {
+		if !strings.Contains(user, want) {
+			t.Errorf("triage prompt omitted %q:\n%s", want, user)
+		}
+	}
+}
+
+// Triage is asked to correct the priority and the labels, so it has to be shown
+// them. Before this block existed it was judging a priority it could not see.
+func TestRenderTriageShowsCurrentStatusPriorityAndLabels(t *testing.T) {
+	todo := newTestTODO("solo", "task")
+	todo.Status = types.StatusPending
+	todo.Priority = types.PriorityLow
+	todo.Labels = []string{"docs", "source:todo"}
+
+	user := renderUser(t, []*types.TODO{todo}, Options{Prompt: "triage", Envelope: EnvelopeTriage})
+	for _, want := range []string{"## Current State", "**Status:** pending", "**Priority:** low", "**Labels:** docs, source:todo"} {
+		if !strings.Contains(user, want) {
+			t.Errorf("triage prompt omitted %q:\n%s", want, user)
+		}
+	}
+}
+
+// A TODO with no priority and no labels is the one triage most needs to fix, so
+// the absence is spelled out rather than rendered as a missing line.
+func TestRenderTriageStatesUnsetPriorityAndLabels(t *testing.T) {
+	user := renderUser(t, []*types.TODO{newTestTODO("solo", "task")}, Options{Prompt: "triage", Envelope: EnvelopeTriage})
+	for _, want := range []string{"**Priority:** unset", "**Labels:** none"} {
+		if !strings.Contains(user, want) {
+			t.Errorf("triage prompt omitted %q:\n%s", want, user)
+		}
+	}
+}
+
+// `title` was always applied by ApplyTriage and never asked for: it appeared only
+// in the schema description and the field list, so an inaccurate title survived
+// every rewrite of the body under it.
+func TestRenderTriageAsksForATitleOnlyWhenItIsWrong(t *testing.T) {
+	user := renderUser(t, []*types.TODO{newTestTODO("solo", "task")}, Options{Prompt: "triage", Envelope: EnvelopeTriage})
+	body, _, found := strings.Cut(user, "### 3.")
+	if !found {
+		t.Fatalf("triage prompt has no step 3 to bound the body step:\n%s", user)
+	}
+	_, bodyStep, found := strings.Cut(body, "### 2.")
+	if !found {
+		t.Fatalf("triage prompt has no step 2:\n%s", user)
+	}
+	for _, want := range []string{"Send `title` only when", "Never reword a title that is already accurate"} {
+		if !strings.Contains(bodyStep, want) {
+			t.Errorf("the body step omitted %q:\n%s", want, bodyStep)
+		}
+	}
+}
+
+// An implementation run is not judging the TODO's state, and the block would be
+// context it cannot act on.
+func TestRenderRunOmitsTheCurrentStateBlock(t *testing.T) {
+	todo := newTestTODO("solo", "task")
+	todo.Priority = types.PriorityHigh
+
+	user := renderUser(t, []*types.TODO{todo}, Options{Prompt: "run", Mode: types.ModeRun})
+	if strings.Contains(user, "## Current State") {
+		t.Errorf("run prompt should not carry the triage state block:\n%s", user)
+	}
+}
+
+// The label vocabulary is closed on the write side, so the prompt must carry it —
+// and must omit the section entirely when there is none, rather than inviting a
+// proposal that would then be rejected.
+func TestRenderTriageIncludesTheLabelTaxonomy(t *testing.T) {
+	taxonomy := "- `bug` — Something is broken.\n- `api` — API surface."
+	user := renderUser(t, []*types.TODO{newTestTODO("solo", "task")}, Options{
+		Prompt: "triage", Envelope: EnvelopeTriage, Labels: taxonomy,
+	})
+	if !strings.Contains(user, taxonomy) {
+		t.Errorf("triage prompt omitted the label taxonomy:\n%s", user)
+	}
+	// The heading on its own line, not the `## Labels` the instructions quote.
+	if !strings.Contains(user, "\n## Labels\n") {
+		t.Errorf("triage prompt omitted the Labels heading:\n%s", user)
+	}
+
+	without := renderUser(t, []*types.TODO{newTestTODO("solo", "task")}, Options{Prompt: "triage", Envelope: EnvelopeTriage})
+	if strings.Contains(without, "\n## Labels\n") {
+		t.Errorf("an empty taxonomy should omit the section entirely:\n%s", without)
+	}
+}
+
 // Run and plan must keep the executable command projection: an implementation
 // run needs to know what to execute, not what the fixture source looks like.
 func TestRenderRunKeepsFixtureCommandProjection(t *testing.T) {

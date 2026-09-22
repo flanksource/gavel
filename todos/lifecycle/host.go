@@ -27,6 +27,13 @@ type Host struct {
 	Kind     HostKind
 	Catalog  runtimeprofiles.CatalogFactory
 	Saved    *captainconfig.Config
+	// Preview holds back a triage verdict that would close a TODO — merge-into or
+	// duplicate-of — and reports what it would have done instead.
+	//
+	// It is narrower than its name: every other verdict applies as usual, and no
+	// other step is affected. What it buys is the tier between trusting an agent's
+	// duplicate call and finding out after two TODOs have closed.
+	Preview bool
 }
 
 // NewHost loads the project's configuration and lifecycle for a work dir.

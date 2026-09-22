@@ -55,7 +55,10 @@ var _ = Describe("Bulk runtime preset transport", func() {
 			optionsDir = req.Dir
 			return DefaultRunResolver(ctx, req)
 		}
-		fn, err := StartRun("run", RunFlags{Presets: []string{"review"}}, run.NewRegistry(), batchDir, resolve, nil)
+		fn, err := StartRun(RunSpec{
+			Step: "run", Flags: RunFlags{Presets: []string{"review"}}, Batch: []string{"ab12cd", "ff0011"},
+			Registry: run.NewRegistry(), Dir: batchDir, Resolve: resolve,
+		})
 		Expect(err).NotTo(HaveOccurred())
 		_, err = fn(context.Background(), nil, todo)
 		Expect(err).NotTo(HaveOccurred())
@@ -64,5 +67,7 @@ var _ = Describe("Bulk runtime preset transport", func() {
 		Expect(dispatched.Options.Presets).To(Equal([]string{"review"}))
 		Expect(dispatched.Options.PresetsSet).To(BeTrue())
 		Expect(dispatched.Todo).To(BeIdenticalTo(todo))
+		Expect(dispatched.Options.Batch).To(Equal([]string{"ab12cd", "ff0011"}),
+			"every run is told the whole selection, so a triage render can mark the batch")
 	}, Entry("absolute owning workspace", "absolute"), Entry("relative execution subdirectory", "relative"), Entry("selected batch workspace", "unset"))
 })

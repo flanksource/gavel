@@ -94,6 +94,30 @@ var _ = ginkgo.Describe("collecting a finished run", func() {
 		gomega.Expect(out.Execution.Success).To(gomega.BeFalse())
 	})
 
+	// A reply that answered the question in the wrong shape used to leave nothing
+	// behind but the word "failed": the decode error replaced the only account of
+	// what the agent said.
+	ginkgo.It("keeps an undecodable response verbatim, alongside the decode error", func() {
+		const prose = "I read the code and this TODO is already done."
+		out := collect(promptrun.Result{Response: &api.Response{Text: prose}})
+
+		gomega.Expect(out.Execution.ResponseText).To(gomega.Equal(prose))
+		gomega.Expect(out.Execution.EndStatus).To(gomega.BeEmpty(), "no envelope was captured")
+		gomega.Expect(out.Execution.ErrorMessage).NotTo(gomega.BeEmpty())
+		gomega.Expect(out.Result.Run.State).To(gomega.Equal(RunFailed))
+		gomega.Expect(out.Result.Run.Error).To(gomega.Equal(out.Execution.ErrorMessage))
+	})
+
+	ginkgo.It("keeps the response of a run that did decode, from the structured payload", func() {
+		out := collect(promptrun.Result{Response: &api.Response{
+			Text:           completed,
+			StructuredData: map[string]any{"summary": "Built it.", "endStatus": "completed"},
+		}})
+
+		gomega.Expect(out.Execution.ResponseText).To(gomega.ContainSubstring("Built it."))
+		gomega.Expect(out.Execution.EndStatus).To(gomega.Equal(types.EndCompleted))
+	})
+
 	ginkgo.Describe("the definition-of-done record", func() {
 		ginkgo.BeforeEach(func() {
 			prepared.request.Workflow = &api.Workflow{Verify: &api.Verify{Fixture: "# dod"}}

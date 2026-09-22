@@ -31,3 +31,41 @@ var _ = Describe("the run prompt permission posture", func() {
 		})
 	}
 })
+
+// Triage proposes and gavel writes, so the agent stays read-only — but deciding
+// two TODOs are the same work needs the other one's body, and the backlog index
+// carries only an excerpt. The two lookups are scoped to their subcommands: an
+// allow on `gavel todos:*` would also cover edit, delete and run.
+var _ = Describe("the triage prompt permission posture", func() {
+	var permissions api.Permissions
+
+	BeforeEach(func() {
+		req, _, err := renderResolvedForTest(
+			[]*types.TODO{newTestTODO("triage-parser", "Triage the parser")},
+			Options{Prompt: "triage", Envelope: EnvelopeTriage},
+		)
+		gomega.Expect(err).NotTo(gomega.HaveOccurred())
+		permissions = req.Permissions
+	})
+
+	It("stays in plan mode", func() {
+		gomega.Expect(permissions.Mode).To(gomega.Equal(api.PermissionPlan))
+	})
+
+	It("allows reading a backlog candidate in full", func() {
+		gomega.Expect(permissions.Tools.AllowList()).To(gomega.ContainElements(
+			"Bash(gavel todos get:*)", "Bash(gavel todos list:*)"))
+	})
+
+	It("never allows a TODO-mutating command", func() {
+		for _, allowed := range permissions.Tools.AllowList() {
+			gomega.Expect(allowed).NotTo(gomega.SatisfyAny(
+				gomega.ContainSubstring("todos edit"),
+				gomega.ContainSubstring("todos delete"),
+				gomega.ContainSubstring("todos run"),
+				gomega.Equal("Bash(gavel todos:*)"),
+				gomega.Equal("Bash"),
+			), "triage writes nothing itself: %s", allowed)
+		}
+	})
+})
