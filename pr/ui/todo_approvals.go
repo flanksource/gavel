@@ -315,13 +315,12 @@ func resolveApproval(
 	if err != nil {
 		return nil, err
 	}
-	if request.Request["tool"] == "AskUserQuestion" && action != approvalDeny {
-		if action != approvalRespond {
-			return nil, fmt.Errorf("a question needs answers; send respond or deny")
-		}
-		if err := validateQuestionAnswers(request.Request["input"], input["answers"]); err != nil {
-			return nil, err
-		}
+	// A question with nothing substituted leaves the agent waiting on a prompt no
+	// one can answer. The answers themselves are shaped and validated by the
+	// provider that asked (captain's api.AnswersForQuestions), which is the only
+	// side that knows how its host keys them.
+	if request.Request["tool"] == "AskUserQuestion" && action == approvalApprove {
+		return nil, fmt.Errorf("a question needs answers; send respond or deny")
 	}
 	return store.ResolveToolApprovalRequest(ctx, captaindb.ResolveToolApprovalRequestInput{
 		SessionID:  sessionID,
@@ -333,57 +332,4 @@ func resolveApproval(
 		// never to an aichat turn, so there is no turn to match it against.
 		UpdatedInput: input,
 	})
-}
-
-func validateQuestionAnswers(requestInput, submitted any) error {
-	original, ok := requestInput.(map[string]any)
-	if !ok {
-		return fmt.Errorf("question request has no input")
-	}
-	questions, ok := original["questions"].([]any)
-	if !ok || len(questions) == 0 {
-		return fmt.Errorf("question request has no questions")
-	}
-	answers, ok := submitted.(map[string]any)
-	if !ok || len(answers) != len(questions) {
-		return fmt.Errorf("question response needs one answer per question id")
-	}
-	seen := map[string]struct{}{}
-	for _, value := range questions {
-		question, ok := value.(map[string]any)
-		if !ok {
-			return fmt.Errorf("question request contains an invalid question")
-		}
-		id, ok := question["id"].(string)
-		if !ok || id == "" {
-			return fmt.Errorf("question request contains an empty id")
-		}
-		if _, duplicate := seen[id]; duplicate {
-			return fmt.Errorf("question request repeats id %q", id)
-		}
-		seen[id] = struct{}{}
-		answer, exists := answers[id]
-		if !exists {
-			return fmt.Errorf("question response is missing id %q", id)
-		}
-		switch value := answer.(type) {
-		case string:
-			if strings.TrimSpace(value) == "" {
-				return fmt.Errorf("question %q needs a nonblank answer", id)
-			}
-		case []any:
-			if len(value) == 0 {
-				return fmt.Errorf("question %q needs a nonblank answer", id)
-			}
-			for _, item := range value {
-				text, ok := item.(string)
-				if !ok || strings.TrimSpace(text) == "" {
-					return fmt.Errorf("question %q needs text answers", id)
-				}
-			}
-		default:
-			return fmt.Errorf("question %q needs a text answer", id)
-		}
-	}
-	return nil
 }
