@@ -78,7 +78,7 @@ func Open(ctx context.Context, options WorkspaceOptions) (*Provider, error) {
 	// applies migrations — so this is where a binary newer than its database is
 	// caught, once, rather than as an obscure failure at whichever read first
 	// touches a column that is not there yet.
-	if err := requireVerificationColumn(db); err != nil {
+	if err := requireVerificationColumn(ctx, db); err != nil {
 		return nil, err
 	}
 	return New(ctx, db, options)
@@ -93,7 +93,7 @@ func OpenGlobal(ctx context.Context) (*Provider, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := requireVerificationColumn(db); err != nil {
+	if err := requireVerificationColumn(ctx, db); err != nil {
 		return nil, err
 	}
 	return NewGlobal(db)
@@ -130,27 +130,25 @@ func New(ctx context.Context, db *gorm.DB, options WorkspaceOptions) (*Provider,
 	if err != nil {
 		return nil, err
 	}
-	repository, err := native.NewRepository(db)
+	global, err := NewGlobal(db)
 	if err != nil {
 		return nil, err
 	}
-	workspace, err := initializeWorkspace(ctx, repository, options)
+	workspace, err := initializeWorkspace(ctx, global.repository, options)
 	if err != nil {
 		return nil, err
 	}
-	captain, err := captaindb.Use(db)
-	if err != nil {
-		return nil, err
-	}
-	coordinator, err := native.NewLaunchCoordinator(captain, repository)
-	if err != nil {
-		return nil, err
-	}
+	return global.withWorkspace(workspace, options.RootPath), nil
+}
+
+// withWorkspace returns a provider scoped to an already resolved workspace,
+// sharing p's pool, repository and coordinator. It issues no queries.
+func (p *Provider) withWorkspace(workspace *native.Workspace, workDir string) *Provider {
 	return &Provider{
-		workDir: options.RootPath, db: db, repository: repository,
-		captain: captain, coordinator: coordinator, workspace: workspace,
+		workDir: workDir, db: p.db, repository: p.repository,
+		captain: p.captain, coordinator: p.coordinator, workspace: workspace,
 		prepared: map[uuid.UUID]map[uuid.UUID]struct{}{},
-	}, nil
+	}
 }
 
 func normalizeWorkspaceOptions(options WorkspaceOptions) (WorkspaceOptions, error) {
@@ -219,10 +217,14 @@ func initializeWorkspace(ctx context.Context, repository *native.Repository, opt
 // GetWorkspaceByPath matches retained locations too, so opening a provider at a
 // path the workspace has merely kept looks, to a caller comparing RootPath,
 // exactly like opening one at a place the workspace has moved to.
-func resolveWorkspace(ctx context.Context, repository *native.Repository, options WorkspaceOptions) (*native.Workspace, bool, error) {
+//
+// It resolves through a workspaceFinder so the same rules serve one project
+// against the repository and many projects against a native.WorkspaceLookup
+// snapshot.
+func resolveWorkspace(ctx context.Context, finder workspaceFinder, options WorkspaceOptions) (*native.Workspace, bool, error) {
 	var matched *native.Workspace
 	registeredPath := false
-	byPath, err := repository.GetWorkspaceByPath(ctx, options.RootPath)
+	byPath, err := finder.GetWorkspaceByPath(ctx, options.RootPath)
 	switch {
 	case err == nil:
 		matched = byPath
@@ -231,7 +233,7 @@ func resolveWorkspace(ctx context.Context, repository *native.Repository, option
 		return nil, false, fmt.Errorf("resolve native TODO workspace by project %q path %q: %w", options.Name, options.RootPath, err)
 	}
 	for _, repoKey := range options.Repositories {
-		byRepo, err := repository.GetWorkspaceByRepoKey(ctx, repoKey)
+		byRepo, err := finder.GetWorkspaceByRepoKey(ctx, repoKey)
 		switch {
 		case err == nil:
 			if matched != nil && matched.ID != byRepo.ID {
@@ -303,7 +305,7 @@ func (p *Provider) Workspace() *native.Workspace {
 }
 
 func (p *Provider) List(ctx context.Context, filters todos.DiscoveryFilters) (types.TODOS, error) {
-	if _, err := p.reconcileExternalAnswers(ctx, reconcileScope{WorkspaceID: p.workspace.ID, WorkDir: p.workDir}); err != nil {
+	if err := reconcileWorkspaceAnswers(ctx, map[uuid.UUID]*Provider{p.workspace.ID: p}); err != nil {
 		return nil, err
 	}
 	issues, err := p.repository.ListIssues(ctx, p.workspace.ID)

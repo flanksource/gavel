@@ -3,6 +3,8 @@ package runtime
 import (
 	"context"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"time"
 
@@ -18,13 +20,11 @@ import (
 // next user turn, and records the turn on that transcript.
 const externalAnswerSource = native.AskAnswerSourceCaptain
 
-// reconcileScope narrows reconciliation to one workspace (List, CountByStatus)
-// or one issue (Get). WorkDir is the directory the lifecycle host that settles
-// a finished turn loads its configuration from.
+// reconcileScope narrows reconciliation to a set of workspaces (List,
+// CountByStatus, the projects list) or to one issue (Get).
 type reconcileScope struct {
-	WorkspaceID uuid.UUID
-	IssueID     uuid.UUID
-	WorkDir     string
+	WorkspaceIDs []uuid.UUID
+	IssueID      uuid.UUID
 }
 
 // askCandidate is an issue whose active run is parked on an ask outcome gavel
@@ -39,57 +39,82 @@ type askCandidate struct {
 	ParkedAt           time.Time
 }
 
-// reconcileExternalAnswers notices answers given outside gavel and records them
-// on the issues they answer. Gavel is not involved when Captain resumes a parked
-// run's session, so its reads are where the TODO learns of it: a live answer
-// records one ask_answered event (the projection then reads the run as running),
-// and a finished Captain turn settles the run through the lifecycle's outcomes.
+// reconcileExternalAnswer notices an answer given outside gavel to one parked
+// run and records it on the issue it answers. Gavel is not involved when
+// Captain resumes a parked run's session, so its reads are where the TODO learns
+// of it: a live answer records one ask_answered event (the projection then
+// reads the run as running), and a finished Captain turn settles the run
+// through the lifecycle's outcomes.
 //
-// A single issue's read fails when its reconciliation does. A workspace read
-// does not fail every TODO for one that could not be reconciled: that failure
-// is logged against the TODO, whose own read then reports it.
+// A single issue's read fails when its reconciliation does (reconcileIssue). A
+// workspace read does not fail every TODO for one that could not be reconciled
+// (reconcileWorkspaceAnswers): that failure is logged against the TODO, whose
+// own read then reports it.
 //
-// It reports whether any parked run was examined, so a caller holding an issue
-// it read before re-reads it. A workspace with nothing parked costs the one
-// candidate query.
-func (p *Provider) reconcileExternalAnswers(ctx context.Context, scope reconcileScope) (bool, error) {
-	candidates, err := p.askCandidates(ctx, scope)
+// It reports whether the parked run was examined, so a caller holding an issue
+// it read before re-reads it. workDir is the directory the lifecycle host that
+// settles a finished turn loads its configuration from.
+func (p *Provider) reconcileExternalAnswer(ctx context.Context, candidate askCandidate, workDir string) (bool, error) {
+	if p.isPrepared(candidate.IssueID, candidate.PromptRunID) {
+		// This provider dispatched or resumed the run and still drives it; an
+		// answer it sent must not be read back as someone else's.
+		return false, nil
+	}
+	if err := p.reconcileAskCandidate(ctx, candidate, workDir); err != nil {
+		return true, fmt.Errorf("reconcile external answer for TODO %s: %w", candidate.IssueID, err)
+	}
+	return true, nil
+}
+
+// reconcileWorkspaceAnswers reconciles every parked run in the providers'
+// workspaces, each through the provider of its own workspace and from that
+// provider's work directory. Finding the parked runs is one query however many
+// workspaces there are, so a set of workspaces with nothing parked costs just
+// that query.
+func reconcileWorkspaceAnswers(ctx context.Context, providers map[uuid.UUID]*Provider) error {
+	ids := slices.Collect(maps.Keys(providers))
+	if len(ids) == 0 {
+		return fmt.Errorf("reconcile external answers: no workspace to reconcile")
+	}
+	candidates, err := providers[ids[0]].askCandidates(ctx, reconcileScope{WorkspaceIDs: ids})
 	if err != nil {
-		return false, fmt.Errorf("list TODOs awaiting an answer: %w", err)
+		return fmt.Errorf("list TODOs awaiting an answer: %w", err)
 	}
-	reconciled := false
 	for _, candidate := range candidates {
-		if p.isPrepared(candidate.IssueID, candidate.PromptRunID) {
-			// This provider dispatched or resumed the run and still drives it; an
-			// answer it sent must not be read back as someone else's.
-			continue
+		provider, ok := providers[candidate.WorkspaceID]
+		if !ok {
+			return fmt.Errorf("list TODOs awaiting an answer: TODO %s is in workspace %s, which was not asked for", candidate.IssueID, candidate.WorkspaceID)
 		}
-		reconciled = true
-		err := p.reconcileAskCandidate(ctx, candidate, scope.WorkDir)
-		if err == nil {
-			continue
+		if _, err := provider.reconcileExternalAnswer(ctx, candidate, provider.workDir); err != nil {
+			logger.Errorf("%v", err)
 		}
-		err = fmt.Errorf("reconcile external answer for TODO %s: %w", candidate.IssueID, err)
-		if scope.IssueID != uuid.Nil {
-			return reconciled, err
-		}
-		logger.Errorf("%v", err)
 	}
-	return reconciled, nil
+	return nil
 }
 
 // reconcileIssue reconciles the one issue a Get resolved, and re-reads it when
 // the issue was parked on an ask.
 func (p *Provider) reconcileIssue(ctx context.Context, issue *native.Issue, workDir string) (*native.Issue, error) {
-	reconciled, err := p.reconcileExternalAnswers(ctx, reconcileScope{IssueID: issue.ID, WorkDir: workDir})
-	if err != nil || !reconciled {
-		return issue, err
+	candidates, err := p.askCandidates(ctx, reconcileScope{IssueID: issue.ID})
+	if err != nil {
+		return issue, fmt.Errorf("list TODOs awaiting an answer: %w", err)
+	}
+	reconciled := false
+	for _, candidate := range candidates {
+		examined, err := p.reconcileExternalAnswer(ctx, candidate, workDir)
+		if err != nil {
+			return issue, err
+		}
+		reconciled = reconciled || examined
+	}
+	if !reconciled {
+		return issue, nil
 	}
 	return p.repository.GetIssue(ctx, issue.ID)
 }
 
 func (p *Provider) askCandidates(ctx context.Context, scope reconcileScope) ([]askCandidate, error) {
-	filter, arg := "issue.workspace_id = ?", scope.WorkspaceID
+	filter, arg := "issue.workspace_id IN ?", any(scope.WorkspaceIDs)
 	if scope.IssueID != uuid.Nil {
 		filter, arg = "issue.id = ?", scope.IssueID
 	}

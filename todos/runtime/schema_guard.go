@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"fmt"
 
 	"gorm.io/gorm"
@@ -21,12 +22,12 @@ const ErrSchemaBehind = "database schema is behind this binary; run `gavel serve
 // newest column the todo runtime depends on, so a database that has it has
 // everything before it, and a database that does not needs the same one fix
 // whatever else it is missing.
-func requireVerificationColumn(db *gorm.DB) error {
+func requireVerificationColumn(ctx context.Context, db *gorm.DB) error {
 	if db == nil {
 		return fmt.Errorf("native TODO storage: database is nil")
 	}
 	var present bool
-	err := db.Raw(`
+	err := db.WithContext(ctx).Raw(`
 		SELECT EXISTS (
 			SELECT 1 FROM information_schema.columns
 			WHERE table_schema = 'public'

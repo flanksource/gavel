@@ -8,6 +8,7 @@ import (
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/entity"
 	"github.com/flanksource/gavel/todos"
+	"github.com/flanksource/gavel/todos/query"
 	"github.com/flanksource/gavel/todos/run"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/spf13/cobra"
@@ -19,6 +20,7 @@ func testDeps() Deps {
 		OpenProvider: func(context.Context, string) (todos.Provider, error) { return nil, nil },
 		OpenGlobal:   func(context.Context) (todos.GlobalReferenceProvider, error) { return nil, nil },
 		Registry:     run.NewRegistry(),
+		Workspaces:   func(context.Context) ([]query.Workspace, error) { return nil, nil },
 		DefaultDir:   func(context.Context) (string, error) { return "/tmp/workspace", nil },
 	}
 }
@@ -46,12 +48,14 @@ func registered(t *testing.T) entity.EntityInfo {
 func TestRegisterRequiresItsDependencies(t *testing.T) {
 	full := testDeps()
 	missing := map[string]Deps{
-		"OpenProvider": {OpenGlobal: full.OpenGlobal, Registry: full.Registry},
+		"OpenProvider": {OpenGlobal: full.OpenGlobal, Registry: full.Registry, Workspaces: full.Workspaces},
 		// Without it a cross-workspace selection cannot be resolved at all.
-		"OpenGlobal": {OpenProvider: full.OpenProvider, Registry: full.Registry},
+		"OpenGlobal": {OpenProvider: full.OpenProvider, Registry: full.Registry, Workspaces: full.Workspaces},
 		// Two entrypoints sharing a process must share one in-flight run map, or
 		// the same TODO could be started twice.
-		"Registry": {OpenProvider: full.OpenProvider, OpenGlobal: full.OpenGlobal},
+		"Registry": {OpenProvider: full.OpenProvider, OpenGlobal: full.OpenGlobal, Workspaces: full.Workspaces},
+		// Without it an unscoped list has no projects to read.
+		"Workspaces": {OpenProvider: full.OpenProvider, OpenGlobal: full.OpenGlobal, Registry: full.Registry},
 	}
 	for name, deps := range missing {
 		if err := Register(deps); err == nil {
@@ -66,7 +70,7 @@ func TestEveryBulkActionIsDeclaredAndRenderable(t *testing.T) {
 	want := map[string]bool{
 		"status": false, "priority": false, "labels": false, "comment": false,
 		"delete": false, "run": false, "plan": false, "triage": false, "push": false,
-		"merge": false,
+		"merge": false, "check": false, "reopen": false,
 	}
 	for _, info := range registered(t).BulkActions {
 		if _, expected := want[info.Name]; !expected {
@@ -122,6 +126,31 @@ func TestDeleteIsMarkedDestructiveAndGated(t *testing.T) {
 	t.Fatal("delete action was not declared")
 }
 
+// run edits the repository and triage can close a TODO it rules a duplicate, so
+// both announce themselves as destructive. plan investigates read-only and only
+// adds a plan, and says so explicitly — MCP reads an unset hint on a writing tool
+// as destructive, and the dashboard once confirmed a bulk plan as a deletion.
+// All three still ask before running.
+func TestRunShapedActionsDeclareWhetherTheyDestroy(t *testing.T) {
+	want := map[string]bool{"run": true, "triage": true, "plan": false}
+	for _, info := range registered(t).BulkActions {
+		destructive, ok := want[info.Name]
+		if !ok {
+			continue
+		}
+		delete(want, info.Name)
+		if hint := info.ToolHints.DestructiveHint; hint == nil || *hint != destructive {
+			t.Errorf("%s destructiveHint = %v, want %v", info.Name, hint, destructive)
+		}
+		if info.ToolHints.DefaultPermission != entity.ToolPermissionAsk {
+			t.Errorf("%s must default to asking, got %q", info.Name, info.ToolHints.DefaultPermission)
+		}
+	}
+	if len(want) > 0 {
+		t.Fatalf("run-shaped actions not declared: %v", want)
+	}
+}
+
 func TestStatusActionPublishesItsTypedFlags(t *testing.T) {
 	for _, info := range registered(t).BulkActions {
 		if info.Name == "status" {
@@ -156,10 +185,26 @@ func TestRegistrationGeneratesCLICommands(t *testing.T) {
 	root := &cobra.Command{Use: "gavel"}
 	clicky.GenerateCLI(root)
 
-	for _, name := range []string{"status", "priority", "labels", "run", "plan", "triage", "delete", "push", "merge"} {
+	for _, name := range []string{
+		"status", "priority", "labels", "run", "plan", "triage", "delete", "push", "merge",
+		"check", "reopen",
+		// The item actions an agent could not reach at all before, because they
+		// existed only as Cobra commands in package main.
+		"create", "edit", "link", "unlink", "links", "steps", "sync",
+	} {
 		cmd, _, err := root.Find([]string{"todo", name})
 		if err != nil || cmd == nil || cmd.Name() != name {
 			t.Fatalf("expected `gavel todo %s` to be generated, got err=%v", name, err)
+		}
+	}
+
+	create, _, err := root.Find([]string{"todo", "create"})
+	if err != nil {
+		t.Fatalf("find create: %v", err)
+	}
+	for _, flag := range []string{"title", "body", "plan", "verification", "label", "priority", "status"} {
+		if create.Flags().Lookup(flag) == nil {
+			t.Fatalf("`gavel todo create` must expose --%s", flag)
 		}
 	}
 

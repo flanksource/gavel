@@ -115,11 +115,13 @@ type Issue struct {
 	UpdatedAt         time.Time      `json:"updatedAt"`
 }
 
-// IssueStatusCount is one group of CountIssuesByStatus: the durable status, the
-// projected execution state, active step and selected plan's approval state —
-// the inputs the derived TODO status is computed from — plus how many issues
-// share them. ApprovalState is empty when the issue has no selected plan.
+// IssueStatusCount is one group of CountIssuesByStatus: the workspace, the
+// durable status, the projected execution state, active step and selected
+// plan's approval state — the inputs the derived TODO status is computed from —
+// plus how many of the workspace's issues share them. ApprovalState is empty
+// when the issue has no selected plan.
 type IssueStatusCount struct {
+	WorkspaceID    uuid.UUID      `json:"workspaceId"`
 	Status         IssueStatus    `json:"status"`
 	ExecutionState ExecutionState `json:"executionState"`
 	StepKind       StepKind       `json:"stepKind"`

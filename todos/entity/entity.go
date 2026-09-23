@@ -26,7 +26,9 @@ import (
 	"github.com/flanksource/gavel/todos/merge"
 	"github.com/flanksource/gavel/todos/query"
 	"github.com/flanksource/gavel/todos/run"
+	todoruntime "github.com/flanksource/gavel/todos/runtime"
 	"github.com/flanksource/gavel/todos/types"
+	"gorm.io/gorm"
 )
 
 // Deps are the things the entity cannot resolve for itself.
@@ -44,20 +46,43 @@ type Deps struct {
 	// single one.
 	OpenGlobal func(ctx context.Context) (todos.GlobalReferenceProvider, error)
 	Registry   *run.Registry
-	// DefaultDir supplies the workspace when a request names none.
+	// Workspaces lists the registered projects. A list that names neither a
+	// directory nor a project reads all of them, and a project named by a list
+	// is looked up here.
+	Workspaces func(ctx context.Context) ([]query.Workspace, error)
+	// DefaultDir supplies the workspace when an action names none. The list does
+	// not use it: an unscoped list reads every registered project.
 	DefaultDir func(context.Context) (string, error)
 	// ResolveRun turns a TODO plus the batch's overrides into run options.
 	// Optional: bulk.DefaultRunResolver is used when unset. The dashboard
 	// supplies its own because it applies a runtime catalog the CLI has no
 	// equivalent of, and because it resolves as the approval-serving host.
+	//
+	// It is consulted only on an attended surface — see runtime. A registration
+	// is process-global and shared by every surface, so a dep that is right for
+	// one of them cannot be frozen in as the answer for all of them.
 	ResolveRun bulk.RunResolver
 	// Broker answers a batched run's tool-permission requests. Optional, and
-	// nil is the CLI's answer: a terminal batch has no one to ask, so a run it
-	// starts must never be configured to.
-	Broker func(dir string) todos.ApprovalBroker
+	// nil is the unattended answer: a terminal batch has no one to ask, so a run
+	// it starts must never be configured to. Like ResolveRun it is consulted
+	// only on an attended surface.
+	Broker func(ctx context.Context, dir string) todos.ApprovalBroker
 	// PushBaseURL resolves the attachment origin for a pushed TODO's workspace.
 	// Optional: without it only an explicit --base-url is honoured.
 	PushBaseURL bulk.PushBaseURL
+
+	// Workspace resolves a directory to the registered project's workspace
+	// options. Required by import and export, which address rows by workspace
+	// rather than by provider. Optional: those two actions are registered only
+	// when it and DB are both supplied.
+	Workspace func(ctx context.Context, dir string) (todoruntime.WorkspaceOptions, error)
+	// DB opens the shared TODO database. Required by import and export, which
+	// read and write whole rows rather than going through a provider.
+	DB func(ctx context.Context) (*gorm.DB, error)
+	// ProjectDir resolves a registered project name to its absolute directory.
+	// Required by transfer, which names its destination the way the projects
+	// list displays it. Optional: transfer is registered only when it is set.
+	ProjectDir func(ctx context.Context, name string) (string, error)
 }
 
 func (d Deps) pushBaseURL() bulk.PushBaseURL {
@@ -77,16 +102,45 @@ func (d Deps) validate() error {
 	if d.Registry == nil {
 		return fmt.Errorf("entity deps: Registry is required")
 	}
+	if d.Workspaces == nil {
+		return fmt.Errorf("entity deps: Workspaces is required")
+	}
 	return nil
 }
 
-// broker is the approval callback factory for the batch's workspace, or nil
-// when the host answers no approvals.
-func (d Deps) broker(dir string) todos.ApprovalBroker {
-	if d.Broker == nil {
-		return nil
+// attended reports whether the caller can answer a tool-permission prompt.
+//
+// The entity is registered once per process and then reached from every
+// surface, so "can this run ask for approval?" cannot be decided at
+// registration. HTTP and MCP callers sit behind a dashboard or an agent loop
+// that serves an approval endpoint; a CLI invocation and a scheduled operation
+// do not, and a run of theirs that blocks on a prompt hangs a terminal or a
+// cron slot with nobody watching. A direct in-process call (no surface set) is
+// treated as unattended for the same reason.
+func attended(ctx context.Context) bool {
+	switch entity.OperationSurfaceFromContext(ctx) {
+	case "http", "mcp":
+		return true
+	default:
+		return false
 	}
-	return d.Broker(dir)
+}
+
+// runtime picks the run resolution and the approval broker for this
+// invocation's surface. Unattended callers always get the plain resolution and
+// no broker, whatever the deps were registered with.
+func (d Deps) runtime(ctx context.Context, dir string) (bulk.RunResolver, todos.ApprovalBroker) {
+	if !attended(ctx) {
+		return bulk.DefaultRunResolver, nil
+	}
+	resolve := d.ResolveRun
+	if resolve == nil {
+		resolve = bulk.DefaultRunResolver
+	}
+	if d.Broker == nil {
+		return resolve, nil
+	}
+	return resolve, d.Broker(ctx, dir)
 }
 
 func (d Deps) dir(ctx context.Context, opts query.ListOpts) (string, error) {
@@ -105,28 +159,71 @@ func Register(deps Deps) error {
 	if err := deps.validate(); err != nil {
 		return err
 	}
-	builder := clicky.NewEntity[*types.TODO, query.ListOpts, *types.TODO]("todo").
+	builder := clicky.NewEntity[Summary, query.ListOpts, *types.TODO]("todo").
 		Aliases("todos").
-		ListWithContext(deps.list).
+		ListPagedWithContext(deps.list).
 		GetWithContext(deps.get)
 
 	for _, action := range deps.bulkActions() {
 		builder = builder.WithBulkAction(action)
 	}
+	for _, action := range deps.itemActions() {
+		builder = builder.WithAction(action)
+	}
 	builder.Register()
 	return nil
 }
 
-func (d Deps) list(ctx context.Context, opts query.ListOpts) ([]*types.TODO, error) {
-	dir, err := d.dir(ctx, opts)
+// list reads the workspaces the request scopes to and returns the requested
+// window of the TODOs that match, as summaries, with the total that matched.
+func (d Deps) list(ctx context.Context, opts query.ListOpts) (clicky.PagedResult[Summary], error) {
+	workspaces, err := d.listWorkspaces(ctx, opts)
+	if err != nil {
+		return clicky.PagedResult[Summary]{}, err
+	}
+	matched, err := opts.Select(workspacesLister{ctx: ctx, workspaces: workspaces, open: d.OpenProvider}, time.Now())
+	if err != nil {
+		return clicky.PagedResult[Summary]{}, err
+	}
+	page, err := opts.Page(matched)
+	if err != nil {
+		return clicky.PagedResult[Summary]{}, rejected(err)
+	}
+	return clicky.NewPagedResult(summarizeAll(page), opts.Limit, opts.Offset, int64(len(matched))), nil
+}
+
+// listWorkspaces resolves the workspaces a list reads: the one named by dir or
+// by project short name, or every registered project when the request names
+// neither.
+func (d Deps) listWorkspaces(ctx context.Context, opts query.ListOpts) ([]query.Workspace, error) {
+	dir, project := strings.TrimSpace(opts.Dir), strings.TrimSpace(opts.Project)
+	if dir != "" && project != "" {
+		return nil, rejected(fmt.Errorf("name either dir or project, not both (got dir %q and project %q)", dir, project))
+	}
+	if dir != "" {
+		return []query.Workspace{{Dir: dir}}, nil
+	}
+	registered, err := d.Workspaces(ctx)
 	if err != nil {
 		return nil, err
 	}
-	provider, err := d.OpenProvider(ctx, dir)
+	// Indexed even when no project is named: rows carry the short name, and two
+	// projects sharing one would make those rows ambiguous.
+	byShort, err := query.IndexByShortName(registered)
 	if err != nil {
 		return nil, err
 	}
-	return opts.Select(providerLister{ctx: ctx, provider: provider}, time.Now())
+	if project == "" {
+		return registered, nil
+	}
+	if ws, ok := byShort[project]; ok {
+		return []query.Workspace{ws}, nil
+	}
+	shorts := make([]string, 0, len(registered))
+	for _, ws := range registered {
+		shorts = append(shorts, ws.Short())
+	}
+	return nil, rejected(fmt.Errorf("unknown project %q; registered projects: %s", project, strings.Join(shorts, ", ")))
 }
 
 func (d Deps) get(ctx context.Context, ref string) (*types.TODO, error) {
@@ -162,23 +259,28 @@ func (d Deps) lookup(ctx context.Context, ref string) (todos.Provider, *types.TO
 	return provider, todo, nil
 }
 
-// providerLister adapts a Provider to the sliver query.Select needs, so the
-// selector stays unit-testable without a database.
-type providerLister struct {
-	ctx      context.Context
-	provider todos.Provider
+// workspacesLister adapts a set of workspaces to the sliver query.Select needs,
+// so the selector stays unit-testable without a database.
+type workspacesLister struct {
+	ctx        context.Context
+	workspaces []query.Workspace
+	open       query.OpenProvider
 }
 
-func (p providerLister) List(filters todos.DiscoveryFilters) (types.TODOS, error) {
-	return p.provider.List(p.ctx, filters)
+func (w workspacesLister) List(filters todos.DiscoveryFilters) (types.TODOS, error) {
+	return query.ListWorkspaces(w.ctx, w.workspaces, w.open, filters)
 }
 
 // bulkActions is the registry. Adding an action here is the only step needed to
 // make it executable from the CLI, the API and any front end reading the
 // catalog — which is the property the whole change exists to get.
 func (d Deps) bulkActions() []clicky.EntityBulkAction {
-	destructive := true
-	runHints := entity.MCPToolHints{Icon: "play", Group: "Run", DefaultPermission: entity.ToolPermissionAsk}
+	destructive, additive := true, false
+	runHints := entity.MCPToolHints{Icon: "play", Group: "Run", DefaultPermission: entity.ToolPermissionAsk, DestructiveHint: &destructive}
+	// plan investigates read-only and only adds a plan to the TODO. MCP reads an
+	// unset hint on a writing tool as destructive, so it says so explicitly.
+	planHints := runHints
+	planHints.DestructiveHint = &additive
 
 	actions := []clicky.EntityBulkAction{
 		action(d, "status", "Set the status of many TODOs",
@@ -231,26 +333,55 @@ func (d Deps) bulkActions() []clicky.EntityBulkAction {
 			bulk.PushFlags{}, func(_ context.Context, flags bulk.PushFlags, _ []string) (bulk.ItemFunc, error) {
 				return bulk.Push(flags, d.pushBaseURL())
 			}),
+
+		// The verify step, which is the only thing that decides whether a TODO
+		// is done. A TODO that fails is a per-item failure, never a rejection of
+		// the batch — see bulk.Check.
+		action(d, "check", "Run many TODOs' definition of done",
+			entity.MCPToolHints{Icon: "shield-check", Group: "Run", DefaultPermission: entity.ToolPermissionAsk},
+			bulk.CheckFlags{}, func(ctx context.Context, flags bulk.CheckFlags, _ []string) (bulk.ItemFunc, error) {
+				return bulk.Check(flags, d.hostKind(ctx))
+			}),
+
+		action(d, "reopen", "Return many finished TODOs to pending",
+			entity.MCPToolHints{Icon: "rotate-ccw", Group: "Status"},
+			bulk.ReopenFlags{}, func(_ context.Context, flags bulk.ReopenFlags, _ []string) (bulk.ItemFunc, error) {
+				return bulk.Reopen(flags)
+			}),
+	}
+
+	// Export addresses rows by workspace rather than through a provider, so it
+	// is registered only when the deps that reach the database directly are
+	// wired — the same gate the portable import is behind.
+	if d.portableReady() {
+		actions = append(actions,
+			aggregate(d, "export", "Export many TODOs as portable .todos Markdown",
+				entity.MCPToolHints{Icon: "upload", Group: "Portable"},
+				ExportFlags{}, d.runExport))
 	}
 
 	// run, plan and triage are the same action with a different prompt name: a
 	// prompt declares its own behaviour class, so nothing here distinguishes
-	// them beyond the name the catalog resolves.
-	for _, prompt := range []struct{ name, short string }{
-		{"run", "Implement many TODOs"},
-		{"plan", "Plan many TODOs"},
-		{"triage", "Triage many TODOs"},
+	// them beyond the name the catalog resolves and whether it can destroy.
+	for _, prompt := range []struct {
+		name, short string
+		hints       entity.MCPToolHints
+	}{
+		{"run", "Implement many TODOs", runHints},
+		{"plan", "Plan many TODOs", planHints},
+		{"triage", "Triage many TODOs", runHints},
 	} {
 		name := prompt.name
-		actions = append(actions, action(d, name, prompt.short, runHints, bulk.RunFlags{},
+		actions = append(actions, action(d, name, prompt.short, prompt.hints, bulk.RunFlags{},
 			func(ctx context.Context, flags bulk.RunFlags, batch []string) (bulk.ItemFunc, error) {
 				dir, err := d.dir(ctx, query.ListOpts{})
 				if err != nil {
 					return nil, err
 				}
+				resolve, broker := d.runtime(ctx, dir)
 				return bulk.StartRun(bulk.RunSpec{
 					Step: name, Flags: flags, Batch: batch, Registry: d.Registry,
-					Dir: dir, Resolve: d.ResolveRun, Broker: d.broker(dir),
+					Dir: dir, Resolve: resolve, Broker: broker,
 				})
 			}))
 	}
