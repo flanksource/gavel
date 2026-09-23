@@ -547,7 +547,13 @@ func (s *Server) Handler() http.Handler {
 	registerPprof(mux)
 	registerIngestStats(mux, s.readIngestStats)
 	mux.HandleFunc("/results/", s.handleGavelResults)
-	return rpchttp.TimingMiddleware(mux)
+	// A browser's direct EventSource on a stream route is refused (a stale page
+	// would starve the tab's connections); hub subs pass through by context.
+	root := refuseDirectBrowserStreams(rpchttp.TimingMiddleware(mux))
+	// One multiplexed SSE connection per tab: subs are served through root, so
+	// every stream route above is reachable exactly as a direct request sees it.
+	registerEventRoutes(mux, root, s.uiBuild())
+	return root
 }
 
 func handleFavicon(w http.ResponseWriter, r *http.Request) {
