@@ -147,7 +147,7 @@ func TestResolveRequestedTargetsReportsAnUnknownUUID(t *testing.T) {
 func TestResolveRequestedTODOsRefusesAnotherWorkspace(t *testing.T) {
 	here, _, _ := crossWorkspaceSetup(t)
 
-	_, err := resolveRequestedTODOs(context.Background(), here, hereDir, []string{otherID}, todos.DiscoveryFilters{})
+	_, err := ResolveRequested(context.Background(), here, hereDir, []string{otherID}, todos.DiscoveryFilters{})
 	if err == nil {
 		t.Fatal("acting on another workspace's TODO through this provider must be refused")
 	}

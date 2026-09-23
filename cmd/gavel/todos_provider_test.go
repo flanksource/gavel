@@ -240,7 +240,7 @@ func TestResolveRequestedTODOsUsesDirectGetForImportedAlias(t *testing.T) {
 		},
 	}
 	provider := &referenceSpyProvider{todo: want}
-	got, err := resolveRequestedTODOs(context.Background(), provider, "/repo", []string{"imported-alias"}, todos.DiscoveryFilters{})
+	got, err := ResolveRequested(context.Background(), provider, "/repo", []string{"imported-alias"}, todos.DiscoveryFilters{})
 	if err != nil {
 		t.Fatalf("resolveRequestedTODOs: %v", err)
 	}

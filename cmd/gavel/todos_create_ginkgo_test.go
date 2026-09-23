@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 
 	"github.com/flanksource/gavel/todos"
+	"github.com/flanksource/gavel/todos/content"
+	"github.com/flanksource/gavel/todos/ops"
 	"github.com/flanksource/gavel/todos/types"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -34,7 +36,7 @@ var _ = Describe("TODO text inputs", func() {
 			if prepare != nil {
 				value = prepare(workDir)
 			}
-			resolved, err := resolveTodoText(todoTextOptions{WorkDir: workDir, Flag: "--body", Value: value})
+			resolved, err := content.Resolve(content.Options{WorkDir: workDir, Flag: "--body", Value: value})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(resolved).To(Equal(expected))
 		},
@@ -68,7 +70,7 @@ var _ = Describe("TODO text inputs", func() {
 	)
 
 	It("reports the flag when a referenced file cannot be read", func() {
-		_, err := resolveTodoText(todoTextOptions{
+		_, err := content.Resolve(content.Options{
 			WorkDir: GinkgoT().TempDir(),
 			Flag:    "--verification",
 			Value:   "@missing.md",
@@ -104,7 +106,7 @@ var _ = Describe("TODO text inputs", func() {
 
 		Expect(runTodosEdit(TodosEditOptions{
 			TodoTargetOptions: TodoTargetOptions{IDs: []string{created.ID}},
-			Body: bodyPath, Plan: planPath, Verification: verificationPath,
+			Body:              bodyPath, Plan: planPath, Verification: verificationPath,
 		}, nil)).To(Succeed())
 
 		updated, err := provider.Get(context.Background(), created.ID)
@@ -119,7 +121,7 @@ var _ = Describe("TODO text inputs", func() {
 var _ = Describe("TODO create lifecycle", func() {
 	DescribeTable("parses create statuses",
 		func(value string, status types.Status, approved bool) {
-			lifecycle, err := parseTodoCreateLifecycle(value)
+			lifecycle, err := ops.ParseLifecycle(value)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(lifecycle.Status).To(Equal(status))
 			Expect(lifecycle.PlanApproved).To(Equal(approved))
@@ -129,23 +131,23 @@ var _ = Describe("TODO create lifecycle", func() {
 	)
 
 	It("rejects the approved status without plan content", func() {
-		lifecycle, err := parseTodoCreateLifecycle("approved")
+		lifecycle, err := ops.ParseLifecycle("approved")
 		Expect(err).NotTo(HaveOccurred())
-		Expect(validateTodoCreatePlan("", lifecycle)).To(MatchError("--status approved requires --plan"))
+		Expect(ops.ValidateCreatePlan("", lifecycle)).To(MatchError("--status approved requires --plan"))
 	})
 
 	It("rejects empty plan and verification values when explicitly supplied", func() {
-		_, err := resolveTodoCreateContent(GinkgoT().TempDir(), todoCreateContentOptions{PlanSet: true})
+		_, err := content.ResolveCreate(GinkgoT().TempDir(), content.CreateOptions{PlanSet: true})
 		Expect(err).To(MatchError("--plan cannot be empty"))
 
-		_, err = resolveTodoCreateContent(GinkgoT().TempDir(), todoCreateContentOptions{VerificationSet: true})
+		_, err = content.ResolveCreate(GinkgoT().TempDir(), content.CreateOptions{VerificationSet: true})
 		Expect(err).To(MatchError("--verification cannot be empty"))
 	})
 
 	DescribeTable("moves body verification after explicit verification",
 		func(body func(string) string) {
 			workDir := GinkgoT().TempDir()
-			content, err := resolveTodoCreateContent(workDir, todoCreateContentOptions{
+			resolved, err := content.ResolveCreate(workDir, content.CreateOptions{
 				BodySet:         true,
 				Body:            body(workDir),
 				VerificationSet: true,
@@ -153,8 +155,8 @@ var _ = Describe("TODO create lifecycle", func() {
 			})
 
 			Expect(err).NotTo(HaveOccurred())
-			Expect(content.Body).To(Equal("Parser failures lose context."))
-			Expect(content.Verification).To(Equal("explicit fixture\n\nbody fixture"))
+			Expect(resolved.Body).To(Equal("Parser failures lose context."))
+			Expect(resolved.Verification).To(Equal("explicit fixture\n\nbody fixture"))
 		},
 		Entry("from inline body markdown", func(string) string {
 			return `Parser failures lose context.

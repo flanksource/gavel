@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -15,6 +14,7 @@ import (
 	"github.com/flanksource/gavel/pr/ui"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/lifecycle"
+	"github.com/flanksource/gavel/todos/query"
 	todoruntime "github.com/flanksource/gavel/todos/runtime"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/flanksource/gavel/verify"
@@ -61,7 +61,7 @@ func runTodosList(opts TodosListOptions) (any, error) {
 		if loadErr != nil {
 			return nil, loadErr
 		}
-		todoList, err = listAllProjectTodos(ctx, projects, filters)
+		todoList, err = query.ListWorkspaces(ctx, ui.TodoWorkspaces(projects), openRuntimeTodosProvider, filters)
 		if err != nil {
 			return nil, err
 		}
@@ -104,52 +104,6 @@ func filterTODOsSince(todoList types.TODOS, since time.Time) types.TODOS {
 	return filtered
 }
 
-// listAllProjectTodos aggregates TODOs from every registered workspace using
-// the native PostgreSQL runtime. Duplicate project entries that resolve to the
-// same directory are queried once; stored legacy provider preferences are
-// intentionally ignored because they can no longer select runtime storage.
-// Every database open/list failure is returned: treating an unavailable
-// database as an empty workspace would be a false successful result.
-func listAllProjectTodos(ctx context.Context, projects []ui.Project, filters todos.DiscoveryFilters) (types.TODOS, error) {
-	seen := map[string]struct{}{}
-	var todoList types.TODOS
-	var failures []error
-	for _, project := range projects {
-		dir := project.ResolvedDir()
-		if strings.TrimSpace(dir) == "" {
-			logger.Warnf("list todos for project %q: workspace directory is empty", project.Name)
-			continue
-		}
-		key := filepath.Clean(dir)
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-
-		provider, err := openRuntimeTodosProvider(ctx, dir)
-		if err != nil {
-			failures = append(failures, fmt.Errorf("open native TODO workspace for project %q (%s): %w", project.Name, dir, err))
-			continue
-		}
-		items, err := provider.List(ctx, filters)
-		if err != nil {
-			failures = append(failures, fmt.Errorf("list native TODOs for project %q (%s): %w", project.Name, dir, err))
-			continue
-		}
-		for _, todo := range items {
-			if todo != nil {
-				todo.Workspace = project.Name
-				if todo.CWD == "" {
-					todo.CWD = dir
-				}
-			}
-		}
-		todoList = append(todoList, items...)
-	}
-	todoList.Sort()
-	return todoList, errors.Join(failures...)
-}
-
 func runTodosGet(opts TodosGetOptions) error {
 	ref, err := opts.One()
 	if err != nil {
@@ -189,7 +143,7 @@ func runTodosCheck(opts TodosCheckOptions) error {
 	}
 
 	logger.Infof("Discovering TODOs from PostgreSQL")
-	todoList, err := resolveRequestedTODOs(context.Background(), provider, workDir, ids, todos.DiscoveryFilters{})
+	todoList, err := ResolveRequested(context.Background(), provider, workDir, ids, todos.DiscoveryFilters{})
 	if err != nil {
 		return fmt.Errorf("failed to discover TODOs: %w", err)
 	}
@@ -464,7 +418,7 @@ func todoSortKey(todo *types.TODO) string {
 // write against this directory's .gavel.yaml and working tree. Commands that
 // support running elsewhere use resolveRequestedTargets and honour each target's
 // own workspace.
-func resolveRequestedTODOs(ctx context.Context, provider todos.Provider, workDir string, args []string, filters todos.DiscoveryFilters) (types.TODOS, error) {
+func ResolveRequested(ctx context.Context, provider todos.Provider, workDir string, args []string, filters todos.DiscoveryFilters) (types.TODOS, error) {
 	targets, err := resolveRequestedTargets(ctx, provider, workDir, args, filters)
 	if err != nil {
 		return nil, err

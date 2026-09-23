@@ -8,8 +8,9 @@ import (
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/todos"
+	"github.com/flanksource/gavel/todos/content"
 	"github.com/flanksource/gavel/todos/githubpush"
-	"github.com/flanksource/gavel/todos/types"
+	"github.com/flanksource/gavel/todos/ops"
 	"github.com/spf13/cobra"
 )
 
@@ -52,7 +53,7 @@ func runTodosCreate(opts TodosCreateOptions) error {
 		return fmt.Errorf("title is required")
 	}
 
-	content, err := resolveTodoCreateContent(workDir, todoCreateContentOptions{
+	resolved, err := content.ResolveCreate(workDir, content.CreateOptions{
 		Body: opts.Body, BodySet: todosCreateCmd.Flags().Changed("body") || opts.Body != "",
 		Plan: opts.Plan, PlanSet: todosCreateCmd.Flags().Changed("plan") || opts.Plan != "",
 		Verification:    opts.Verification,
@@ -61,15 +62,15 @@ func runTodosCreate(opts TodosCreateOptions) error {
 	if err != nil {
 		return err
 	}
-	priority, err := parseTodoCreatePriority(opts.Priority)
+	priority, err := ops.ParsePriority(opts.Priority)
 	if err != nil {
 		return err
 	}
-	lifecycle, err := parseTodoCreateLifecycle(opts.Status)
+	lifecycle, err := ops.ParseLifecycle(opts.Status)
 	if err != nil {
 		return err
 	}
-	if err := validateTodoCreatePlan(content.Plan, lifecycle); err != nil {
+	if err := ops.ValidateCreatePlan(resolved.Plan, lifecycle); err != nil {
 		return err
 	}
 
@@ -79,11 +80,11 @@ func runTodosCreate(opts TodosCreateOptions) error {
 	}
 
 	request := todos.CreateRequest{
-		Title: title, Body: content.Body, Verification: content.Verification,
+		Title: title, Body: resolved.Body, Verification: resolved.Verification,
 		Priority: priority, Status: lifecycle.Status, Labels: opts.Labels,
 	}
-	if content.Plan != "" {
-		request.Plan = &todos.CreatePlanRequest{Markdown: content.Plan, Approved: lifecycle.PlanApproved}
+	if resolved.Plan != "" {
+		request.Plan = &todos.CreatePlanRequest{Markdown: resolved.Plan, Approved: lifecycle.PlanApproved}
 	}
 	todo, err := provider.Create(context.Background(), request)
 	if err != nil {
@@ -109,49 +110,5 @@ func runTodosCreate(opts TodosCreateOptions) error {
 		return err
 	}
 	fmt.Printf("%s → %s\n", todo.DisplayID(), result.URL)
-	return nil
-}
-
-func parseTodoCreatePriority(raw string) (types.Priority, error) {
-	priority := types.Priority(strings.TrimSpace(raw))
-	if priority == "" {
-		return types.PriorityMedium, nil
-	}
-	switch priority {
-	case types.PriorityHigh, types.PriorityMedium, types.PriorityLow:
-		return priority, nil
-	default:
-		return "", fmt.Errorf("invalid --priority %q: expected high, medium, or low", raw)
-	}
-}
-
-type todoCreateLifecycle struct {
-	Status       types.Status
-	PlanApproved bool
-}
-
-func parseTodoCreateLifecycle(raw string) (todoCreateLifecycle, error) {
-	if strings.EqualFold(strings.TrimSpace(raw), "approved") {
-		return todoCreateLifecycle{Status: types.StatusPending, PlanApproved: true}, nil
-	}
-	status := types.Status(strings.TrimSpace(raw))
-	if status == "" {
-		return todoCreateLifecycle{Status: types.StatusPending}, nil
-	}
-	if !types.IsKnownStatus(status) {
-		known := make([]string, 0, len(types.KnownStatuses())+1)
-		for _, candidate := range types.KnownStatuses() {
-			known = append(known, string(candidate))
-		}
-		known = append(known, "approved")
-		return todoCreateLifecycle{}, fmt.Errorf("invalid --status %q: expected %s", raw, strings.Join(known, ", "))
-	}
-	return todoCreateLifecycle{Status: status}, nil
-}
-
-func validateTodoCreatePlan(plan string, lifecycle todoCreateLifecycle) error {
-	if lifecycle.PlanApproved && strings.TrimSpace(plan) == "" {
-		return fmt.Errorf("--status approved requires --plan")
-	}
 	return nil
 }
