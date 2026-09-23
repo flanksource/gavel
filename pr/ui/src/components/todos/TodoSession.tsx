@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { SessionInspector, questionsFromToolInput, type SessionCollectionInput, type SessionEntry, type SessionMetadataSummary, type SessionPendingTool, type SessionToolDecision, type SessionUIMessage } from '@flanksource/clicky-ui/ai';
 import type { SessionStats, TodoItem, TodoRunOptions, TodoSessionAttempt, TodoSessionDetailResponse } from '../../types';
+import { openEventStream } from '../../eventHub';
 import { todoQuery } from './format';
 import { CmuxSessionButton } from './TodoSessionTimer';
 import { TodoSessionStart } from './TodoSessionStart';
@@ -28,23 +29,25 @@ export function useTodoSession(dir: string, sessionId: string | undefined, activ
 
     const params = new URLSearchParams(todoQuery(dir));
     params.set('sessionId', sessionId);
-    const es = new EventSource(`/api/todos/session/stream?${params.toString()}`);
+    const es = openEventStream(`/api/todos/session/stream?${params.toString()}`);
 
-    es.addEventListener('entry', (e: MessageEvent) => {
+    es.addEventListener('entry', (e) => {
+      const data = (e as MessageEvent).data;
       try {
-        const entry = JSON.parse(e.data) as SessionEntry | SessionUIMessage;
+        const entry = JSON.parse(data) as SessionEntry | SessionUIMessage;
         setEntries((prev) => mergeSessionEntry(prev, entry));
       } catch {
         // Ignore malformed frames; the next well-formed entry recovers.
       }
     });
-    es.addEventListener('error', (e: MessageEvent) => {
+    es.addEventListener('error', (e) => {
       // A named error frame carries data; a bare connection drop does not.
-      if (e.data) {
+      const data = (e as MessageEvent).data;
+      if (data) {
         try {
-          setError(JSON.parse(e.data).error || 'Session stream error');
+          setError(JSON.parse(data).error || 'Session stream error');
         } catch {
-          setError(`Session stream error\n${String(e.data)}`);
+          setError(`Session stream error\n${String(data)}`);
         }
       } else {
         setError((previous) => previous || 'Session stream connection failed without returning error details');

@@ -1,4 +1,5 @@
 import { ChatWindowLayer } from '@flanksource/clicky-ui/ai';
+import { chatContextTypeConfig, GavelContextPicker } from './chatContext';
 
 // Pages that never get the assistant FAB: the native menubar webview and the
 // focused new-todo window (standalone, or embedded in the React Grab dialog).
@@ -16,12 +17,15 @@ export function ChatLayer() {
       toolsApi="/api/chat/tools"
       runtimesApi="/api/chat/runtimes"
       defaultToolPolicy="auto"
+      contextTypeConfig={chatContextTypeConfig}
+      renderContextPicker={props => <GavelContextPicker {...props} />}
       chat={{
         api: '/api/chat',
         modelsApi: '/api/chat/models',
         placeholder: 'Ask about tracked work…',
         suggestions: [
           'List open TODOs',
+          'List my projects',
           'Show high priority work',
           'Find TODOs ready to run',
         ],

@@ -8,6 +8,14 @@ import { useProjectCatalog } from '../useProjectCatalog';
 
 const streamListeners = new Map<string, EventListener>();
 
+// useProjectCatalog's own stream-handling logic is exercised against a
+// stubbed global EventSource, not the connection-multiplexing hub (covered
+// separately by eventHub.test.ts) — so openEventStream is mocked straight
+// through to `new EventSource(url)`.
+vi.mock('../eventHub', () => ({
+  openEventStream: (url: string) => new EventSource(url),
+}));
+
 vi.mock('./ProcControl', () => ({ ProcControl: () => null }));
 vi.mock('./TodoBadge', () => ({ TodoBadge: () => null }));
 vi.mock('./GitChangesBadge', () => ({ GitChangesBadge: () => null }));

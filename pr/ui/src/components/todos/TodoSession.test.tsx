@@ -9,6 +9,14 @@ import { SessionErrorDetails } from './SessionErrorDetails';
 import { queryTestWrapper } from './queryTestWrapper';
 import { todoQueryKeys } from './todoQueries';
 
+// TodoSession's own stream-handling logic is exercised against a stubbed
+// global EventSource, not the connection-multiplexing hub (covered separately
+// by eventHub.test.ts) — so openEventStream is mocked straight through to
+// `new EventSource(url)`.
+vi.mock('../../eventHub', () => ({
+  openEventStream: (url: string) => new EventSource(url),
+}));
+
 const sessionDetailMock = vi.hoisted(() => ({
   attempt: {
     promptRunId: 'run-1',
