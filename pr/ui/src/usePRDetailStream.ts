@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import type { EventSourceLike } from '@flanksource/clicky-ui/hooks';
+import { openEventStream } from './eventHub';
 import { queryKeys } from './query';
 import type { GavelResultsSummary, PRDetail, PRInfo, PRItem, PRComment, WorkflowRun } from './types';
 
@@ -11,7 +13,7 @@ export interface PRDetailStreamState {
 
 export function usePRDetailStream(pr: PRItem | null): PRDetailStreamState {
   const queryClient = useQueryClient();
-  const streamRef = useRef<EventSource | null>(null);
+  const streamRef = useRef<EventSourceLike | null>(null);
   const [loading, setLoading] = useState(false);
   const [revision, setRevision] = useState(0);
   const refresh = useCallback(() => setRevision(current => current + 1), []);
@@ -29,7 +31,7 @@ export function usePRDetailStream(pr: PRItem | null): PRDetailStreamState {
       return;
     }
     const key = queryKeys.prDetail(pr.repo, pr.number);
-    const stream = new EventSource(`/api/prs/detail?repo=${encodeURIComponent(pr.repo)}&number=${pr.number}`);
+    const stream = openEventStream(`/api/prs/detail?repo=${encodeURIComponent(pr.repo)}&number=${pr.number}`);
     streamRef.current = stream;
     setLoading(true);
 
