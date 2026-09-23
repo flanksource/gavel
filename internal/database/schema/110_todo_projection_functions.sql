@@ -48,12 +48,20 @@ WITH active AS (
    AND session.provider_session_id = active.provider_session_id
    AND session.source IN ('claude', 'codex')
 ), session_tree AS (
+  -- Two indexed lookups joined by UNION, not one OR: the OR form cannot use
+  -- captain_sessions_pkey / captain_sessions_root_session_id_idx and seq-scanned
+  -- every session once per issue with an active run.
   SELECT session.id, session.lifecycle_status::text AS lifecycle_status,
          session.activity_state::text AS activity_state,
          session.health_state::text AS health_state
   FROM public.captain_sessions session
   WHERE session.id IN (SELECT id FROM agent_roots)
-     OR session.root_session_id IN (SELECT id FROM agent_roots)
+  UNION
+  SELECT session.id, session.lifecycle_status::text,
+         session.activity_state::text,
+         session.health_state::text
+  FROM public.captain_sessions session
+  WHERE session.root_session_id IN (SELECT id FROM agent_roots)
 ), signals AS (
   SELECT
     EXISTS (SELECT 1 FROM session_tree WHERE health_state = 'zombie' OR lifecycle_status = 'failed') AS failed,
