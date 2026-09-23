@@ -27,6 +27,7 @@ func wantsClicky(r *http.Request) bool {
 func (p projectInfo) Columns() []api.ColumnDef {
 	return []api.ColumnDef{
 		{Name: "name", Label: "Name"},
+		{Name: "short", Label: "Short name"},
 		{Name: "dir", Label: "Directory"},
 		{Name: "repos", Label: "Repos"},
 		{Name: "procfile", Label: "Procfile"},
@@ -44,6 +45,7 @@ func (p projectInfo) Row() map[string]any {
 	}
 	return map[string]any{
 		"name":     p.Name,
+		"short":    p.Short,
 		"dir":      p.Dir,
 		"repos":    strings.Join(p.Repos, ", "),
 		"procfile": yesNo(p.HasProcfile),

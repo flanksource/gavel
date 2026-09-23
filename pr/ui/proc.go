@@ -24,7 +24,10 @@ import (
 // pointer so an unreachable TODO store is reported as absent counts plus Error,
 // never as a zero-filled "0 todos" that reads like an empty workspace.
 type projectInfo struct {
-	Name        string      `json:"name"`
+	Name string `json:"name"`
+	// Short is the slug a TODO list is filtered by and names its project with,
+	// and the id the generated project entity addresses the project by.
+	Short       string      `json:"short"`
 	Dir         string      `json:"dir"`
 	Repos       []string    `json:"repos"`
 	HasProcfile bool        `json:"hasProcfile"`

@@ -11,11 +11,9 @@ import (
 
 func stubProjectTodoCounts(t *testing.T) {
 	t.Helper()
-	original := projectTodoCounts
-	projectTodoCounts = func(context.Context, Project) (todoCounts, error) {
-		return todoCounts{}, nil
-	}
-	t.Cleanup(func() { projectTodoCounts = original })
+	stubTodoCounts(t, func(_ context.Context, projects []Project) []todoCountsResult {
+		return make([]todoCountsResult, len(projects))
+	})
 }
 
 // projectByNameReq builds a request for the per-entity handler with the {name}

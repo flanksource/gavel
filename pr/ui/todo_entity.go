@@ -3,19 +3,18 @@ package ui
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"os"
+	"path/filepath"
 	"sync"
 
-	captaindb "github.com/flanksource/captain/pkg/database"
-	"github.com/flanksource/clicky"
-	"github.com/flanksource/clicky/rpc"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/bulk"
 	todoentity "github.com/flanksource/gavel/todos/entity"
+	"github.com/flanksource/gavel/todos/query"
 	"github.com/flanksource/gavel/todos/run"
-	"github.com/spf13/cobra"
+	todoruntime "github.com/flanksource/gavel/todos/runtime"
+	"gorm.io/gorm"
 )
 
 // The todos entity is what replaced the hand-written bulk and triage handlers.
@@ -37,20 +36,17 @@ var (
 // registerTodoEntity declares the entity exactly once. Registering twice would
 // duplicate every generated command and route.
 //
-// The default workspace — the one a request naming none acts on — is the
-// working directory, resolved here rather than per request. The dashboard's own
-// Server-scoped override (ghOpts.WorkDir) cannot be consulted, because the
-// registration is process-global, and it falls back to the working directory
-// anyway, which is what a CLI invocation means by "here". A working directory
-// that cannot be read fails the registration: a toolbar whose actions act on
-// "." would be acting on a workspace nobody chose.
+// The default workspace — the one an action naming none acts on — and the
+// registered projects an unscoped list reads are resolved per invocation rather
+// than captured here. The registration is process-global
+// and sync.Once'd, so anything read at registration time is frozen for the life
+// of the process and for every surface at once: a CLI invocation that later
+// `cd`s elsewhere, or a dashboard started before the directory existed, would
+// act on a workspace nobody chose. The dashboard's own Server-scoped override
+// (ghOpts.WorkDir) still cannot be consulted for the same reason, and it falls
+// back to the working directory anyway.
 func registerTodoEntity() error {
 	todoEntityOnce.Do(func() {
-		workDir, err := os.Getwd()
-		if err != nil {
-			todoEntityErr = fmt.Errorf("resolve the working directory for the todos entity: %w", err)
-			return
-		}
 		todoEntityErr = todoentity.Register(todoentity.Deps{
 			OpenProvider: func(ctx context.Context, dir string) (todos.Provider, error) {
 				return openTodoProvider(ctx, dir)
@@ -59,15 +55,65 @@ func registerTodoEntity() error {
 				return openGlobalTodoProvider(ctx)
 			},
 			Registry:   run.Shared(),
-			DefaultDir: func(context.Context) (string, error) { return workDir, nil },
+			Workspaces: todoEntityWorkspaces,
+			DefaultDir: todoEntityDefaultDir,
 			ResolveRun: resolveBulkRunOptions,
-			Broker:     todoApprovalBroker,
+			Broker: func(_ context.Context, dir string) todos.ApprovalBroker {
+				return todoApprovalBroker(dir)
+			},
 			PushBaseURL: func(dir, requested string) (string, error) {
 				return resolveTodoPushBaseURL(requested, dir, "")
 			},
+			Workspace:  todoEntityWorkspace,
+			ProjectDir: todoEntityProjectDir,
+			DB:         func(ctx context.Context) (*gorm.DB, error) { return database.Require(ctx, "gavel todos") },
 		})
 	})
 	return todoEntityErr
+}
+
+// todoEntityWorkspaces lists the registered projects an unscoped TODO list
+// reads, read per call so a project registered after startup is listed.
+func todoEntityWorkspaces(context.Context) ([]query.Workspace, error) {
+	projects, err := LoadProjects()
+	if err != nil {
+		return nil, err
+	}
+	return TodoWorkspaces(projects), nil
+}
+
+// todoEntityDefaultDir is the workspace an action naming none acts on.
+func todoEntityDefaultDir(context.Context) (string, error) {
+	dir, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("resolve the working directory for the todos entity: %w", err)
+	}
+	return dir, nil
+}
+
+// todoEntityWorkspace resolves a directory to the registered project's
+// workspace options, which is what the portable import/export address rows by.
+func todoEntityWorkspace(_ context.Context, dir string) (todoruntime.WorkspaceOptions, error) {
+	project, err := ProjectForDir(dir)
+	if err != nil {
+		return todoruntime.WorkspaceOptions{}, err
+	}
+	return project.WorkspaceOptions(), nil
+}
+
+// todoEntityProjectDir resolves a registered project name to its absolute
+// directory, so `transfer` can name a destination the way the projects list
+// displays it rather than by path.
+func todoEntityProjectDir(_ context.Context, name string) (string, error) {
+	project, err := GetProject(name)
+	if err != nil {
+		return "", err
+	}
+	dir, err := filepath.Abs(project.ResolvedDir())
+	if err != nil {
+		return "", fmt.Errorf("resolve project %q directory: %w", name, err)
+	}
+	return dir, nil
 }
 
 // resolveBulkRunOptions resolves a bulk run the way the dashboard's own single
@@ -87,47 +133,4 @@ func resolveBulkRunOptions(_ context.Context, req bulk.RunRequest) (run.Options,
 		Spec:    req.Flags.Spec(),
 		Resume:  req.Flags.Resume,
 	}, nil)
-}
-
-// todoEntityRoutes builds the generated REST surface: POST
-// /api/v1/todo/{id}/{action} for each bulk action, plus GET /api/entities,
-// which is the catalog the dashboard's selection toolbar is derived from.
-//
-// The OpenAPI handlers are deliberately not mounted here — pr/ui already serves
-// /api/openapi.json from its own merged document.
-func (s *Server) registerTodoEntityRoutes(mux *http.ServeMux) {
-	if err := registerTodoEntity(); err != nil {
-		// A failed registration means the dashboard would silently serve a
-		// toolbar with no actions behind it.
-		panic("ui: registering the todos entity: " + err.Error())
-	}
-	root := &cobra.Command{Use: "gavel"}
-	clicky.GenerateCLI(root)
-
-	server := rpc.NewSwaggerServer(&rpc.ServeConfig{
-		Title:      "gavel",
-		SkipHealth: true,
-		Executor:   &rpc.ExecutorConfig{Enabled: true, PathPrefix: "/api/v1"},
-	}, root, nil)
-	server.RegisterExecutionRoutes(mux)
-	mux.HandleFunc("GET /api/entities", server.HandleEntities)
-	pool, err := database.Require(context.Background(), "Gavel chat")
-	if err != nil {
-		unavailable := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			http.Error(w, fmt.Sprintf("Gavel chat requires the TODO database: %v", err), http.StatusServiceUnavailable)
-		})
-		mux.Handle("/api/chat", unavailable)
-		mux.Handle("/api/chat/", unavailable)
-		return
-	}
-	db, err := captaindb.Use(pool)
-	if err != nil {
-		panic("ui: opening the chat database: " + err.Error())
-	}
-	chat, err := newGavelChatServer(root, s.todoWorkDir(), db)
-	if err != nil {
-		panic("ui: registering the chat service: " + err.Error())
-	}
-	mux.Handle("/api/chat", chat.Handler())
-	mux.Handle("/api/chat/", chat.Handler())
 }

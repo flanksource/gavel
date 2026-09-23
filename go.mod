@@ -4,7 +4,7 @@ go 1.26.1
 
 require (
 	github.com/flanksource/captain v0.0.55-0.20260908095304-8677898fe310
-	github.com/flanksource/clicky v1.21.60
+	github.com/flanksource/clicky v1.21.69
 	github.com/flanksource/commons v1.59.0
 	github.com/flanksource/commons-db v0.1.31
 	github.com/flanksource/gomplate/v3 v3.24.89

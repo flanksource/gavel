@@ -32,7 +32,7 @@ const uiDate = new Date().toISOString();
 // are redirected; `styles.css` keeps resolving to the package's generated CSS.
 const clickySrc = resolve(here, '../../../clicky-ui/packages/ui/src');
 const gavelTestRunnerHooks = resolve(here, '../../testrunner/ui/src/hooks.ts');
-const clickySubpaths = ['components', 'data', 'icons', 'hooks', 'ai', 'chat'];
+const clickySubpaths = ['components', 'data', 'icons', 'hooks', 'ai', 'chat', 'rpc'];
 
 export default defineConfig(({ command }) => {
   // Gated to `serve` + sibling-present so `vite build` and CI (no sibling) keep

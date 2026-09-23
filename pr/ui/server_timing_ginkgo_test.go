@@ -15,17 +15,17 @@ import (
 
 var _ = Describe("project server timing", func() {
 	var originalProjectsPath string
-	var originalProjectTodoCounts func(ctx context.Context, project Project) (todoCounts, error)
+	var originalProjectsTodoCounts func(ctx context.Context, projects []Project) []todoCountsResult
 
 	BeforeEach(func() {
 		originalProjectsPath = projectsPath
-		originalProjectTodoCounts = projectTodoCounts
+		originalProjectsTodoCounts = projectsTodoCounts
 		projectsPath = filepath.Join(GinkgoT().TempDir(), "projects.json")
 	})
 
 	AfterEach(func() {
 		projectsPath = originalProjectsPath
-		projectTodoCounts = originalProjectTodoCounts
+		projectsTodoCounts = originalProjectsTodoCounts
 	})
 
 	It("reports total, file, and database time while browsing projects", func() {
@@ -36,9 +36,9 @@ var _ = Describe("project server timing", func() {
 			projects[i] = Project{Name: fmt.Sprintf("project-%d", i), Dir: projectDir}
 		}
 		Expect(SaveProjects(projects)).To(Succeed())
-		projectTodoCounts = func(_ context.Context, _ Project) (todoCounts, error) {
+		projectsTodoCounts = perProjectTodoCounts(func(Project) (todoCounts, error) {
 			return todoCounts{Total: 3, Open: 2, Completed: 1}, nil
-		}
+		})
 
 		response := requestProjectEndpoint("/api/projects")
 

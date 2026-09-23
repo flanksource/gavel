@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"sync"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -16,7 +16,7 @@ import (
 
 // withProjects points projectsPath at a temp file holding the named projects,
 // in order. Unlike withProject it does not create Procfiles — these tests are
-// about how the list endpoint fans out, not what is in each directory.
+// about how the list endpoint reads counts, not what is in each directory.
 func withProjects(t *testing.T, names ...string) {
 	t.Helper()
 	original := projectsPath
@@ -29,6 +29,27 @@ func withProjects(t *testing.T, names ...string) {
 	require.NoError(t, SaveProjects(projects))
 }
 
+// perProjectTodoCounts adapts a per-project stub to the batched count seam, so
+// a test states what each project's counts are and the seam keeps its one
+// result per project, in order.
+func perProjectTodoCounts(fn func(Project) (todoCounts, error)) func(context.Context, []Project) []todoCountsResult {
+	return func(_ context.Context, projects []Project) []todoCountsResult {
+		results := make([]todoCountsResult, len(projects))
+		for i, project := range projects {
+			results[i].Counts, results[i].Err = fn(project)
+		}
+		return results
+	}
+}
+
+// stubTodoCounts swaps the batched count seam for the duration of a test.
+func stubTodoCounts(t *testing.T, stub func(context.Context, []Project) []todoCountsResult) {
+	t.Helper()
+	original := projectsTodoCounts
+	projectsTodoCounts = stub
+	t.Cleanup(func() { projectsTodoCounts = original })
+}
+
 func getProjects(t *testing.T) (*httptest.ResponseRecorder, []projectInfo) {
 	t.Helper()
 	rec := httptest.NewRecorder()
@@ -38,74 +59,55 @@ func getProjects(t *testing.T) (*httptest.ResponseRecorder, []projectInfo) {
 	return rec, got
 }
 
-// TestHandleProjectsCountsConcurrently pins the fan-out: with as many projects
-// as the concurrency limit allows, every count lookup must be in flight at once.
-// A serial loop never reaches the barrier and the test fails on the deadline
-// rather than hanging.
-func TestHandleProjectsCountsConcurrently(t *testing.T) {
-	names := make([]string, projectInfoConcurrency)
-	for i := range names {
-		names[i] = fmt.Sprintf("project-%d", i)
-	}
-	withProjects(t, names...)
-
-	entered := make(chan struct{}, projectInfoConcurrency)
-	release := make(chan struct{})
-	original := projectTodoCounts
-	projectTodoCounts = func(context.Context, Project) (todoCounts, error) {
-		entered <- struct{}{}
-		<-release
-		return todoCounts{}, nil
-	}
-	t.Cleanup(func() { projectTodoCounts = original })
-
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		rec := httptest.NewRecorder()
-		(&Server{}).handleProjects(rec, httptest.NewRequest(http.MethodGet, "/api/projects", nil))
-	}()
-
-	deadline := time.After(10 * time.Second)
-	for i := 0; i < projectInfoConcurrency; i++ {
-		select {
-		case <-entered:
-		case <-deadline:
-			t.Fatalf("only %d of %d count lookups started concurrently", i, projectInfoConcurrency)
+// TestHandleProjectsCountsInOneBatch pins the batching: however many projects
+// are configured, the list reads their counts through one call to the seam,
+// handed every project in the store's order — the call CountProjects turns into
+// a fixed number of queries.
+func TestHandleProjectsCountsInOneBatch(t *testing.T) {
+	withProjects(t, "echo", "Alpha", "foxtrot", "charlie", "Delta", "bravo")
+	var (
+		mu      sync.Mutex
+		batches [][]string
+	)
+	stubTodoCounts(t, func(ctx context.Context, projects []Project) []todoCountsResult {
+		names := make([]string, 0, len(projects))
+		for _, project := range projects {
+			names = append(names, project.Name)
 		}
-	}
-	close(release)
-	select {
-	case <-done:
-	case <-time.After(10 * time.Second):
-		t.Fatal("handleProjects did not return after releasing the count lookups")
-	}
+		mu.Lock()
+		batches = append(batches, names)
+		mu.Unlock()
+		return make([]todoCountsResult, len(projects))
+	})
+
+	rec, got := getProjects(t)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Len(t, got, 6)
+	assert.Equal(t, [][]string{{"Alpha", "bravo", "charlie", "Delta", "echo", "foxtrot"}}, batches)
 }
 
 // TestHandleProjectsReturnsStoreOrder guards both the store's case-insensitive
-// sort and the indexed writes: parallel counting must not reorder the catalog.
+// sort and the indexed hand-off: every project must carry its own counts, not
+// a neighbour's.
 func TestHandleProjectsReturnsStoreOrder(t *testing.T) {
 	withProjects(t, "echo", "Alpha", "foxtrot", "charlie", "Delta", "bravo")
 	want := []string{"Alpha", "bravo", "charlie", "Delta", "echo", "foxtrot"}
-
-	original := projectTodoCounts
-	// Reverse-ordered delays: the last project finishes first, so an
-	// append-as-you-finish implementation would emit the reverse order.
-	delays := map[string]time.Duration{}
+	totals := map[string]int{}
 	for i, name := range want {
-		delays[name] = time.Duration(len(want)-i) * 5 * time.Millisecond
+		totals[name] = (i + 1) * 10
 	}
-	projectTodoCounts = func(_ context.Context, project Project) (todoCounts, error) {
-		time.Sleep(delays[project.Name])
-		return todoCounts{Total: 1, Open: 1}, nil
-	}
-	t.Cleanup(func() { projectTodoCounts = original })
+	stubTodoCounts(t, perProjectTodoCounts(func(project Project) (todoCounts, error) {
+		return todoCounts{Total: totals[project.Name], Open: totals[project.Name]}, nil
+	}))
 
 	rec, got := getProjects(t)
 	assert.Equal(t, http.StatusOK, rec.Code)
 	names := make([]string, 0, len(got))
 	for _, info := range got {
 		names = append(names, info.Name)
+		require.NotNil(t, info.TodoCounts, info.Name)
+		assert.Equal(t, totals[info.Name], info.TodoCounts.Total, "%s must carry its own counts", info.Name)
 	}
 	assert.Equal(t, want, names, "projects must be returned in the store's sorted order")
 }
@@ -115,15 +117,12 @@ func TestHandleProjectsReturnsStoreOrder(t *testing.T) {
 // so one workspace whose TODO store is unreachable must not 500 the whole list.
 func TestHandleProjectsIsolatesPerProjectCountFailures(t *testing.T) {
 	withProjects(t, "healthy", "broken", "also-healthy")
-
-	original := projectTodoCounts
-	projectTodoCounts = func(_ context.Context, project Project) (todoCounts, error) {
+	stubTodoCounts(t, perProjectTodoCounts(func(project Project) (todoCounts, error) {
 		if project.Name == "broken" {
 			return todoCounts{}, fmt.Errorf("connect to postgres: connection refused")
 		}
 		return todoCounts{Total: 5, Open: 3}, nil
-	}
-	t.Cleanup(func() { projectTodoCounts = original })
+	}))
 
 	rec, got := getProjects(t)
 	assert.Equal(t, http.StatusOK, rec.Code, "one failing project must not fail the list")
@@ -141,21 +140,47 @@ func TestHandleProjectsIsolatesPerProjectCountFailures(t *testing.T) {
 	assert.Contains(t, broken.Error, "connection refused", "the failure must stay visible in the payload")
 }
 
+// TestHandleProjectsReportsAMisalignedCountBatch keeps the hand-off loud: a
+// count batch that does not answer every project cannot be matched to the
+// projects it belongs to, so every entry reports it rather than showing counts
+// that may be someone else's.
+func TestHandleProjectsReportsAMisalignedCountBatch(t *testing.T) {
+	withProjects(t, "first", "second")
+	stubTodoCounts(t, func(context.Context, []Project) []todoCountsResult {
+		return []todoCountsResult{{Counts: todoCounts{Total: 1}}}
+	})
+
+	rec, got := getProjects(t)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	require.Len(t, got, 2)
+	for _, info := range got {
+		assert.Nil(t, info.TodoCounts, info.Name)
+		assert.Contains(t, info.Error, "1 results for 2 projects", info.Name)
+	}
+}
+
 // TestHandleProjectByNameStillFailsOnCountError keeps the single-entity endpoint
 // strict: there is no other project to serve, so the error is the response.
 func TestHandleProjectByNameStillFailsOnCountError(t *testing.T) {
 	withProjects(t, "broken")
-
-	original := projectTodoCounts
-	projectTodoCounts = func(context.Context, Project) (todoCounts, error) {
+	stubTodoCounts(t, perProjectTodoCounts(func(Project) (todoCounts, error) {
 		return todoCounts{}, fmt.Errorf("connect to postgres: connection refused")
-	}
-	t.Cleanup(func() { projectTodoCounts = original })
+	}))
 
 	rec := httptest.NewRecorder()
 	(&Server{}).handleProjectByName(rec, projectByNameReq("GET", "broken", ""))
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
 	assert.Contains(t, rec.Body.String(), "connection refused")
+}
+
+// TestCountProjectsTodosSkipsProjectsWithoutADirectory pins the one case the
+// batch answers without the database: a project with no directory has no
+// workspace, and reports zero counts rather than an error.
+func TestCountProjectsTodosSkipsProjectsWithoutADirectory(t *testing.T) {
+	got := countProjectsTodos(t.Context(), []Project{{Name: "no-dir"}, {Name: "blank-dir", Dir: "  "}})
+
+	assert.Equal(t, []todoCountsResult{{}, {}}, got)
 }
 
 func projectNamed(t *testing.T, infos []projectInfo, name string) projectInfo {

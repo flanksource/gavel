@@ -15,7 +15,12 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const gavelChatSystemPrompt = "You are Gavel's development workflow assistant. Use the available TODO tools to inspect tracked work. " +
+const gavelChatSystemPrompt = "You are Gavel's development workflow assistant. Use the available tools to inspect tracked work. " +
+	"The project tool lists the registered projects (local checkouts) and their TODO counts; each project is addressed by its short name (its id, e.g. clicky-ui). " +
+	"The todo tool lists TODOs across every registered project unless you pass project (a short name) or dir. " +
+	"Its rows are summaries (short id, title, status, priority, labels, project short name); use todo_get with the id for a TODO's body, plan and verification. " +
+	"It returns one page at a time (limit/offset, with the total), so narrow it with status, priority, label or search rather than paging through everything. " +
+	"Items the user attached arrive as the current UI context: a todo item's id is the TODO's short id, and a project item's id is the project's short name. " +
 	"Prefer tool results over guesses, and ask before making changes."
 
 func newGavelChatServer(root *cobra.Command, cwd string, db *captaindb.DB) (*aichat.Service, error) {
@@ -27,14 +32,9 @@ func newGavelChatServer(root *cobra.Command, cwd string, db *captaindb.DB) (*aic
 	if err != nil {
 		return nil, fmt.Errorf("create Gavel chat execution authority: %w", err)
 	}
-	provider, err := clickyaichat.NewCobraToolProvider(clickyaichat.CobraToolProviderOptions{
-		Root: root,
-		Strategies: []api.PermissionStrategy{
-			api.HTTPVerbStrategy{}, api.MCPHintStrategy{},
-		},
-	})
+	provider, err := newGavelChatTools(root)
 	if err != nil {
-		return nil, fmt.Errorf("create Gavel chat tools: %w", err)
+		return nil, err
 	}
 	return aichat.NewService(aichat.ServiceOptions{
 		Profile:        gavelChatRuntimeProfile(cwd),
@@ -44,6 +44,21 @@ func newGavelChatServer(root *cobra.Command, cwd string, db *captaindb.DB) (*aic
 		Threads:        aichat.FixedThreadStore(threads),
 		Authority:      authority,
 	}), nil
+}
+
+// newGavelChatTools derives the assistant's tools from the entity command tree:
+// every generated operation is a tool, and a read (GET) runs without asking.
+func newGavelChatTools(root *cobra.Command) (*clickyaichat.CobraToolProvider, error) {
+	provider, err := clickyaichat.NewCobraToolProvider(clickyaichat.CobraToolProviderOptions{
+		Root: root,
+		Strategies: []api.PermissionStrategy{
+			api.HTTPVerbStrategy{}, api.MCPHintStrategy{},
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create Gavel chat tools: %w", err)
+	}
+	return provider, nil
 }
 
 func gavelChatRuntimeProfile(cwd string) aichat.RuntimeProfileProvider {
