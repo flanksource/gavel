@@ -18,11 +18,12 @@ if (import.meta.env.DEV) {
 import "./index.css";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { ThemeProvider } from "@flanksource/clicky-ui/hooks";
+import { EventSourceProvider, ThemeProvider } from "@flanksource/clicky-ui/hooks";
 import { ToastProvider } from "@flanksource/clicky-ui/components";
 import { ChatWindowManagerProvider } from "@flanksource/clicky-ui/ai";
 import { App } from "./App";
 import { ChatLayer, chatLayerEnabled } from "./components/ChatLayer";
+import { openEventStream } from "./eventHub";
 import { registerIconifyFallback } from "./icons/iconifyFallback";
 
 // Resolves user-authored Iconify names on tag definitions. Every glyph the app
@@ -42,16 +43,23 @@ const queryClient = new QueryClient({
 
 createRoot(document.getElementById("root")!).render(
   <QueryClientProvider client={queryClient}>
-    <ThemeProvider defaultTheme="system">
-      {/* Bulk actions report their outcome as a toast: the results of a batch
-          have nowhere to live inside DataTable's flex toolbar, and a partial
-          failure needs more room than a toolbar row. */}
-      <ToastProvider>
-        <ChatWindowManagerProvider storageId="gavel-chat">
-          <App />
-          {chatLayerEnabled(window.location.pathname) && <ChatLayer />}
-        </ChatWindowManagerProvider>
-      </ToastProvider>
-    </ThemeProvider>
+    {/* Routes every clicky-ui SSE-opening hook (useTaskRun, usePrompts,
+        useLogTail, useDebugStream) through the same connection-multiplexing
+        hub the app's own streams use, so they share the one real
+        /api/events connection instead of opening native EventSources that
+        would compete for Chrome's six-per-host HTTP/1.1 connection cap. */}
+    <EventSourceProvider value={openEventStream}>
+      <ThemeProvider defaultTheme="system">
+        {/* Bulk actions report their outcome as a toast: the results of a batch
+            have nowhere to live inside DataTable's flex toolbar, and a partial
+            failure needs more room than a toolbar row. */}
+        <ToastProvider>
+          <ChatWindowManagerProvider storageId="gavel-chat">
+            <App />
+            {chatLayerEnabled(window.location.pathname) && <ChatLayer />}
+          </ChatWindowManagerProvider>
+        </ToastProvider>
+      </ThemeProvider>
+    </EventSourceProvider>
   </QueryClientProvider>,
 );

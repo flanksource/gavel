@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { ProjectRuns, TestRunsResponse } from './components/tests/types';
+import { openEventStream } from './eventHub';
 import { fetchJSON, queryKeys } from './query';
 import type { Project } from './types';
 import { useDocumentVisible } from './useDocumentVisible';
@@ -70,7 +71,7 @@ export function useProjectCatalog({ configured, selectedName, enabled }: {
       setStreamError('');
     };
 
-    const stream = new EventSource('/api/tests/stream');
+    const stream = openEventStream('/api/tests/stream');
     stream.addEventListener('message', event => {
       try {
         apply(JSON.parse((event as MessageEvent<string>).data));

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { openEventStream } from './eventHub';
 import { readLocalCache, writeLocalCache } from './localQueryCache';
 import { parseProcStatuses, procStatusQueryOptions } from './procStatusQuery';
 import { fetchJSON, queryKeys } from './query';
@@ -70,7 +71,7 @@ export function useAppQueries({ enabled, initialConfig }: { enabled: boolean; in
 
   useEffect(() => {
     if (!enabled) return;
-    const stream = new EventSource('/api/prs/stream');
+    const stream = openEventStream('/api/prs/stream');
     stream.addEventListener('message', event => {
       try {
         const incoming = parseSnapshot(JSON.parse((event as MessageEvent<string>).data));
@@ -93,7 +94,7 @@ export function useAppQueries({ enabled, initialConfig }: { enabled: boolean; in
 
   useEffect(() => {
     if (!enabled) return;
-    const stream = new EventSource('/api/proc/status/stream');
+    const stream = openEventStream('/api/proc/status/stream');
     stream.addEventListener('message', event => {
       try {
         queryClient.setQueryData(queryKeys.processStatuses(), parseProcStatuses(JSON.parse((event as MessageEvent<string>).data)));

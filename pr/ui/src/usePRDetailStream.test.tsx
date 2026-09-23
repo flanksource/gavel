@@ -6,6 +6,14 @@ import { queryKeys } from './query';
 import type { PRItem } from './types';
 import { usePRDetailStream } from './usePRDetailStream';
 
+// usePRDetailStream's own stream-handling logic is exercised against a
+// stubbed global EventSource, not the connection-multiplexing hub (covered
+// separately by eventHub.test.ts) — so openEventStream is mocked straight
+// through to `new EventSource(url)`.
+vi.mock('./eventHub', () => ({
+  openEventStream: (url: string) => new EventSource(url),
+}));
+
 const firstPR: PRItem = {
   number: 7,
   title: 'Cache detail frames',

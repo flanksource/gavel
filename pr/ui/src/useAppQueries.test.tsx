@@ -7,6 +7,14 @@ import { queryKeys } from './query';
 import { useProcStatus } from './procStatusQuery';
 import { PROJECTS_CACHE_KEY, useAppQueries } from './useAppQueries';
 
+// These tests exercise useAppQueries' own stream-handling logic against a
+// stubbed global EventSource, not the connection-multiplexing hub (covered
+// separately by eventHub.test.ts) — so openEventStream is mocked straight
+// through to `new EventSource(url)`.
+vi.mock('./eventHub', () => ({
+  openEventStream: (url: string) => new EventSource(url),
+}));
+
 const pullRequest: PRItem = {
   number: 7,
   title: 'Cache bootstrap reads',
