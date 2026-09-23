@@ -1,6 +1,7 @@
 import { Button, Modal } from '@flanksource/clicky-ui/components';
 import { UiCheck, UiStop, UiWarningTriangle } from '@flanksource/clicky-ui/icons';
 import { useTestRun } from '@flanksource/gavel/testrunner/hooks';
+import { openEventStream } from '../eventHub';
 import { Spinner } from '../icons/Spinner';
 import { TestRunResults } from './tests/TestRunResults';
 import type { RunSnapshot } from './tests/types';
@@ -22,7 +23,7 @@ export function ProjectActionRunDialog({
   onClose: () => void;
   onTodoCreated?: () => void;
 }) {
-  const run = useTestRun({ baseUrl: '/api/project-runs', enabled: true, runId });
+  const run = useTestRun({ baseUrl: '/api/project-runs', enabled: true, runId, createEventSource: openEventStream });
   const label = action === 'test' ? 'Test' : 'Lint';
 
   return (

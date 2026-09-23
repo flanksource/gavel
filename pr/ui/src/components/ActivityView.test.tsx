@@ -5,6 +5,14 @@ import { queryKeys } from '../query';
 import type { ActivitySnapshot, CacheStatus } from '../types';
 import { ActivityView } from './ActivityView';
 
+// ActivityView's own stream-handling logic is exercised against a stubbed
+// global EventSource, not the connection-multiplexing hub (covered separately
+// by eventHub.test.ts) — so openEventStream is mocked straight through to
+// `new EventSource(url)`.
+vi.mock('../eventHub', () => ({
+  openEventStream: (url: string) => new EventSource(url),
+}));
+
 const firstSnapshot: ActivitySnapshot = {
   entries: [],
   stats: { total: 13, cacheHits: 5, errors: 0, totalBytes: 2048, totalNs: 13_000_000, byKind: {} },

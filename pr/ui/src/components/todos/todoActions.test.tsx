@@ -92,6 +92,26 @@ const mergeAction: TodoBulkAction = {
   },
 };
 
+// Destructive in the MCP sense — a run edits the repository — yet it deletes no
+// todo, so it must never borrow the delete confirmation.
+const runAction: TodoBulkAction = {
+  name: 'run',
+  short: 'Implement many TODOs',
+  method: 'POST',
+  path: '/api/v1/todo/{id}/run',
+  tool_hints: { icon: 'play', group: 'Run', destructiveHint: true },
+};
+
+// A destructive action the UI has no copy for: whatever the catalog adds next,
+// its confirmation has to come from what the catalog says it does.
+const archiveAction: TodoBulkAction = {
+  name: 'archive',
+  short: 'Archive many TODOs',
+  method: 'POST',
+  path: '/api/v1/todo/{id}/archive',
+  tool_hints: { icon: 'box', group: 'Status', destructiveHint: true },
+};
+
 function catalogResponse(actions: TodoBulkAction[]) {
   return {
     ok: true,
@@ -329,6 +349,24 @@ describe('useTodoSelectionActions', () => {
       '/api/v1/todo/todo-1,todo-2/merge',
       expect.objectContaining({ method: 'POST' }),
     ));
+  });
+
+  // `destructiveHint` means "may change things irreversibly", not "deletes
+  // todos". A run and an action the UI has never heard of each confirm in their
+  // own words — the bulk Plan once asked to "permanently delete 4 todos".
+  it.each([
+    { action: runAction, says: 'implementation runs', label: 'Run' },
+    { action: archiveAction, says: 'Archive many TODOs', label: 'Archive' },
+  ])('confirms $action.name in its own words, never as a deletion', async ({ action, says, label }) => {
+    const result = await actions(new Set([ALPHA, BETA]), [action]);
+    const confirm = result.current.find(descriptor => descriptor.id === action.name)?.confirm;
+    expect(typeof confirm === 'object' && typeof confirm.message === 'function').toBe(true);
+    if (typeof confirm !== 'object' || typeof confirm.message !== 'function') return;
+    const message = confirm.message({ selectedRowIds: [ALPHA, BETA], selectedRows: [], clearSelection: () => {} });
+    expect(message).toContain(says);
+    expect(message).toContain('2 todos');
+    expect(message).not.toMatch(/delete/i);
+    expect(confirm.confirmLabel).toBe(label);
   });
 
   it('offers push as a GitHub command in the overflow, dispatched without parameters', async () => {

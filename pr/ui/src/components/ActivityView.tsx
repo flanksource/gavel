@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@flanksource/clicky-ui/components';
+import { openEventStream } from '../eventHub';
 import { fetchJSON, mutationJSON, queryKeys } from '../query';
 import type { ActivitySnapshot, ActivityEntry, ActivityKindStats, CacheStatus } from '../types';
 import { useDocumentVisible } from '../useDocumentVisible';
@@ -71,10 +72,10 @@ export function ActivityView() {
   // shared useNow() clock inside <RelativeTime/>, so no app-level tick is needed.
   useEffect(() => {
     if (!visible) return;
-    const es = new EventSource('/api/activity/stream');
-    es.addEventListener('message', (e: MessageEvent) => {
+    const es = openEventStream('/api/activity/stream');
+    es.addEventListener('message', (event) => {
       try {
-        queryClient.setQueryData<ActivitySnapshot>(queryKeys.activity(), parseActivitySnapshot(JSON.parse(e.data)));
+        queryClient.setQueryData<ActivitySnapshot>(queryKeys.activity(), parseActivitySnapshot(JSON.parse((event as MessageEvent).data)));
         setStreamError('');
       } catch {
         setStreamError('HTTP activity stream received an invalid update.');

@@ -65,18 +65,34 @@ function actionIcon(action: TodoBulkAction): ComponentType<IconProps> {
   return ACTION_ICONS[action.tool_hints?.icon ?? ''] ?? UiListChecks;
 }
 
+function todoCount(count: number): string {
+  return `${count} todo${count === 1 ? '' : 's'}`;
+}
+
 /** What each destructive action actually does to the checked rows. The catalog
- *  publishes that an action is destructive, not what it destroys, so the copy
- *  lives here — keyed by action name, falling back to the delete wording. */
+ *  publishes `destructiveHint` — an MCP hint that an action may change things
+ *  irreversibly, not that it deletes todos — so the copy lives here, keyed by
+ *  action name. An action with no entry confirms with its own catalog
+ *  description, never with another action's words: borrowing delete's once
+ *  asked to "permanently delete" a batch that was only being planned. */
 const DESTRUCTIVE_CONFIRMATIONS: Record<string, { message: (count: number) => string; confirmLabel: string }> = {
   delete: {
-    message: count => `This permanently deletes ${count} todo${count === 1 ? '' : 's'}.`,
+    message: count => `This permanently deletes ${todoCount(count)}.`,
     confirmLabel: 'Delete',
   },
   merge: {
     message: count =>
       `This combines ${count} todos into the first one selected and retires the rest, using AI to write the merged description, verification and plan.`,
     confirmLabel: 'Merge',
+  },
+  run: {
+    message: count => `This starts implementation runs on ${todoCount(count)}. Runs edit the repository.`,
+    confirmLabel: 'Run',
+  },
+  triage: {
+    message: count =>
+      `This triages ${todoCount(count)}. A duplicate or merge-into verdict closes the todo it folds away.`,
+    confirmLabel: 'Triage',
   },
 };
 
@@ -261,7 +277,10 @@ export function useTodoSelectionActions({
       // retires the rows it folds in, and "permanently deletes" would be a lie
       // about it.
       if (destructive) {
-        const confirmation = DESTRUCTIVE_CONFIRMATIONS[action.name] ?? DESTRUCTIVE_CONFIRMATIONS.delete;
+        const confirmation = DESTRUCTIVE_CONFIRMATIONS[action.name] ?? {
+          message: (count: number) => `${label} — ${todoCount(count)} selected.`,
+          confirmLabel: todoBulkActionShortLabel(action),
+        };
         base.confirm = {
           message: context => confirmation.message(context.selectedRowIds.length),
           confirmLabel: confirmation.confirmLabel,
