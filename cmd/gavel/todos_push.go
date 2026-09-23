@@ -45,7 +45,7 @@ func runTodosPush(opts TodosPushOptions) error {
 	if err != nil {
 		return err
 	}
-	todoList, err := resolveRequestedTODOs(ctx, provider, workDir, args, todos.DiscoveryFilters{})
+	todoList, err := ResolveRequested(ctx, provider, workDir, args, todos.DiscoveryFilters{})
 	if err != nil {
 		return err
 	}

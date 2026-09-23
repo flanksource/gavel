@@ -8,7 +8,8 @@ import (
 
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/gavel/todos"
-	"github.com/flanksource/gavel/todos/labels"
+	"github.com/flanksource/gavel/todos/content"
+	"github.com/flanksource/gavel/todos/ops"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/spf13/cobra"
 )
@@ -82,26 +83,26 @@ func runTodosEdit(opts TodosEditOptions, changed map[string]bool) error {
 		return err
 	}
 
-	flags := todoEditFlags{Status: opts.Status, Priority: opts.Priority}
+	flags := ops.EditFlags{Status: opts.Status, Priority: opts.Priority, ClearLabels: opts.ClearLabels}
 	if changed["title"] || opts.Title != "" {
 		flags.Title = &opts.Title
 	}
 	if changed["body"] || opts.Body != "" {
-		body, err := resolveTodoText(todoTextOptions{WorkDir: workDir, Flag: "--body", Value: opts.Body})
+		body, err := content.Resolve(content.Options{WorkDir: workDir, Flag: "--body", Value: opts.Body})
 		if err != nil {
 			return err
 		}
 		flags.Body = &body
 	}
 	if changed["plan"] || opts.Plan != "" {
-		plan, err := resolveTodoText(todoTextOptions{WorkDir: workDir, Flag: "--plan", Value: opts.Plan})
+		plan, err := content.Resolve(content.Options{WorkDir: workDir, Flag: "--plan", Value: opts.Plan})
 		if err != nil {
 			return err
 		}
 		flags.Plan = &plan
 	}
 	if changed["verification"] || opts.Verification != "" {
-		verification, err := resolveTodoText(todoTextOptions{WorkDir: workDir, Flag: "--verification", Value: opts.Verification})
+		verification, err := content.Resolve(content.Options{WorkDir: workDir, Flag: "--verification", Value: opts.Verification})
 		if err != nil {
 			return err
 		}
@@ -110,125 +111,14 @@ func runTodosEdit(opts TodosEditOptions, changed map[string]bool) error {
 	if changed["label"] || opts.Labels != nil {
 		flags.Labels = &opts.Labels
 	}
-	flags.ClearLabels = opts.ClearLabels
-	changes, err := buildTodoEdit(flags)
+	changes, err := ops.BuildEdit(flags)
 	if err != nil {
 		return err
 	}
-	var planRevisions todos.PlanRevisionProvider
-	if changes.Plan != nil {
-		var ok bool
-		planRevisions, ok = provider.(todos.PlanRevisionProvider)
-		if !ok {
-			return fmt.Errorf("TODO provider does not support plan revisions")
-		}
-	}
-
-	// Content first: Edit refreshes the TODO's optimistic-lock version, which
-	// subsequent plan and state updates then reuse.
-	if !changes.Content.IsEmpty() {
-		if err := provider.Edit(ctx, todo, changes.Content); err != nil {
-			return err
-		}
-	}
-	if changes.Plan != nil {
-		todo, err = planRevisions.SavePlanRevision(ctx, todo, *changes.Plan, "")
-		if err != nil {
-			return err
-		}
-		if todo == nil {
-			return fmt.Errorf("plan revision provider returned no TODO")
-		}
-	}
-	if changes.State.Status != nil || changes.State.Priority != nil {
-		if err := provider.UpdateState(ctx, todo, changes.State); err != nil {
-			return err
-		}
+	if todo, err = ops.ApplyEdit(ctx, provider, todo, changes); err != nil {
+		return err
 	}
 	return printTodo(ctx, provider, ref, todo)
-}
-
-// todoEditFlags is the already-resolved (file references expanded) flag input to
-// `todos edit`. Content pointers are nil when their flag was not set.
-type todoEditFlags struct {
-	Title        *string
-	Body         *string
-	Plan         *string
-	Verification *string
-	Status       string
-	Priority     string
-	// Labels is nil when --label was not passed. ClearLabels is --clear-labels;
-	// the two are mutually exclusive because "replace with nothing" and "replace
-	// with this list" cannot both be meant.
-	Labels      *[]string
-	ClearLabels bool
-}
-
-type todoEditChanges struct {
-	Content todos.EditRequest
-	Plan    *string
-	State   todos.StateUpdate
-}
-
-// buildTodoEdit splits edit flags into content, plan, and state updates. It
-// rejects statuses storage will not persist so callers see a failure rather
-// than a silently declined write.
-func buildTodoEdit(flags todoEditFlags) (todoEditChanges, error) {
-	var changes todoEditChanges
-
-	if flags.Title != nil {
-		title := strings.TrimSpace(*flags.Title)
-		if title == "" {
-			return changes, fmt.Errorf("--title cannot be empty")
-		}
-		changes.Content.Title = &title
-	}
-	if flags.Body != nil {
-		changes.Content.Body = flags.Body
-	}
-	if flags.Plan != nil {
-		plan := strings.TrimSpace(*flags.Plan)
-		if plan == "" {
-			return changes, fmt.Errorf("--plan cannot be empty")
-		}
-		changes.Plan = &plan
-	}
-	if flags.Verification != nil {
-		changes.Content.Verification = flags.Verification
-	}
-	if flags.ClearLabels && flags.Labels != nil {
-		return changes, fmt.Errorf("--clear-labels cannot be combined with --label")
-	}
-	if flags.ClearLabels {
-		changes.Content.Labels = &[]string{}
-	} else if flags.Labels != nil {
-		labelSet := make([]string, 0, len(*flags.Labels))
-		for _, label := range *flags.Labels {
-			if label = labels.Normalize(label); label != "" {
-				labelSet = append(labelSet, label)
-			}
-		}
-		changes.Content.Labels = &labelSet
-	}
-	if raw := strings.TrimSpace(flags.Status); raw != "" {
-		status := types.Status(raw)
-		if err := types.ValidateAssignableStatus(status); err != nil {
-			return changes, err
-		}
-		changes.State.Status = &status
-	}
-	if raw := strings.TrimSpace(flags.Priority); raw != "" {
-		priority := types.Priority(raw)
-		if err := types.ValidatePriority(priority); err != nil {
-			return changes, err
-		}
-		changes.State.Priority = &priority
-	}
-
-	if changes.Content.IsEmpty() && changes.Plan == nil && changes.State.Status == nil && changes.State.Priority == nil {
-		return changes, fmt.Errorf("nothing to edit: provide --title, --body, --plan, --verification, --status, --priority, --label, and/or --clear-labels")
-	}
-	return changes, nil
 }
 
 func runTodosComment(opts TodosCommentOptions, bodyChanged bool) error {
@@ -255,7 +145,7 @@ func runTodosComment(opts TodosCommentOptions, bodyChanged bool) error {
 
 	body := strings.TrimSpace(strings.Join(opts.Parts[1:], " "))
 	if bodyChanged || opts.Body != "" {
-		flagBody, err := resolveTodoText(todoTextOptions{WorkDir: workDir, Flag: "--body", Value: opts.Body})
+		flagBody, err := content.Resolve(content.Options{WorkDir: workDir, Flag: "--body", Value: opts.Body})
 		if err != nil {
 			return err
 		}
