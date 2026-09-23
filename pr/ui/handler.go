@@ -16,6 +16,7 @@ import (
 
 	"github.com/flanksource/captain/pkg/monitor"
 	"github.com/flanksource/clicky/metrics"
+	"github.com/flanksource/clicky/route"
 	rpchttp "github.com/flanksource/clicky/rpc/http"
 	clickytask "github.com/flanksource/clicky/task"
 	"github.com/flanksource/commons/logger"
@@ -534,18 +535,25 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/proc/logs", s.handleProcLogs)
 	// Serves GET /api/proc/metrics/{id}?since= as a timeseries the process
 	// dashboard gauges poll; {id} is one URL-encoded segment (see procRunKey).
-	metrics.RegisterRoutes(mux, s.procMetrics, "/api/proc")
+	router := route.NewRouter(mux)
+	metrics.RegisterRoutes(router, s.procMetrics, "/api/proc")
 	taskSource := s.taskSource
 	if taskSource == nil {
 		taskSource = newSupervisorTaskSource(s.retryCommitRunControl)
 	}
-	clickytask.RegisterHandlersWithSource(mux, "/api/v1", taskSource)
-	s.registerTodoEntityRoutes(mux)
+	clickytask.RegisterHandlersWithSource(router, "/api/v1", taskSource)
+	s.registerEntityRoutes(mux)
 	registerPromptRoutes(mux)
 	registerPprof(mux)
 	registerIngestStats(mux, s.readIngestStats)
 	mux.HandleFunc("/results/", s.handleGavelResults)
-	return rpchttp.TimingMiddleware(mux)
+	// A browser's direct EventSource on a stream route is refused (a stale page
+	// would starve the tab's connections); hub subs pass through by context.
+	root := refuseDirectBrowserStreams(rpchttp.TimingMiddleware(mux))
+	// One multiplexed SSE connection per tab: subs are served through root, so
+	// every stream route above is reachable exactly as a direct request sees it.
+	registerEventRoutes(mux, root, s.uiBuild())
+	return root
 }
 
 func handleFavicon(w http.ResponseWriter, r *http.Request) {
