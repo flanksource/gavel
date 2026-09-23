@@ -252,14 +252,6 @@ func (s *Server) todoProviderContext(ctx context.Context, source todoSource) (to
 	return provider, source, nil
 }
 
-// ProviderForProject resolves a stored project to the PostgreSQL runtime.
-func ProviderForProject(ctx context.Context, p Project) (todos.Provider, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	return todoruntime.Open(ctx, p.WorkspaceOptions())
-}
-
 // todoRuns is the in-flight run registry the dashboard starts and stops runs
 // through. It is the process-wide one rather than Server state because the CLI
 // and the todos entity start runs through the same registry, and a run the

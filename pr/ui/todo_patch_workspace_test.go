@@ -2,7 +2,6 @@ package ui
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"mime/multipart"
 	"net/http"
@@ -214,11 +213,9 @@ func TestTodoAPINativeProviderListsWorkspace(t *testing.T) {
 
 func TestHandleProjectsIncludesTodoCounts(t *testing.T) {
 	withProject(t, "gavel", "flanksource/gavel", "")
-	original := projectTodoCounts
-	projectTodoCounts = func(context.Context, Project) (todoCounts, error) {
+	stubTodoCounts(t, perProjectTodoCounts(func(Project) (todoCounts, error) {
 		return todoCounts{Total: 1, Open: 1, InProgress: 1}, nil
-	}
-	t.Cleanup(func() { projectTodoCounts = original })
+	}))
 
 	rec := httptest.NewRecorder()
 	(&Server{}).handleProjects(rec, httptest.NewRequest(http.MethodGet, "/api/projects", nil))

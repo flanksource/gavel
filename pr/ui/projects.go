@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/flanksource/gavel/todos/query"
 	todoruntime "github.com/flanksource/gavel/todos/runtime"
 )
 
@@ -121,6 +122,21 @@ func (p Project) WorkspaceOptions() todoruntime.WorkspaceOptions {
 		RootPath:     p.ResolvedDir(),
 		Repositories: append([]string(nil), p.Repos...),
 	}
+}
+
+// TodoWorkspace projects the catalog record into the directory a TODO list
+// reads, named the way the projects list displays it.
+func (p Project) TodoWorkspace() query.Workspace {
+	return query.Workspace{Name: p.Name, Dir: p.ResolvedDir()}
+}
+
+// TodoWorkspaces projects a whole catalog, in catalog order.
+func TodoWorkspaces(ps []Project) []query.Workspace {
+	workspaces := make([]query.Workspace, len(ps))
+	for i, p := range ps {
+		workspaces[i] = p.TodoWorkspace()
+	}
+	return workspaces
 }
 
 // ProjectForRepo returns the first project whose Repos list contains repo.

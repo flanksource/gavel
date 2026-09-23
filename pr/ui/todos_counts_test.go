@@ -8,7 +8,7 @@ import (
 )
 
 // TestAddTodoStatusBuckets pins the status→bucket mapping shared by
-// summarizeTodos and countProjectTodos. Every known status must land in exactly
+// summarizeTodos and countProjectsTodos. Every known status must land in exactly
 // one detail bucket, and Open must cover everything that is not terminal.
 func TestAddTodoStatusBuckets(t *testing.T) {
 	tests := []struct {

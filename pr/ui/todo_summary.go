@@ -13,6 +13,7 @@ import (
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/lifecycle"
 	"github.com/flanksource/gavel/todos/native"
+	todoruntime "github.com/flanksource/gavel/todos/runtime"
 	"github.com/flanksource/gavel/todos/types"
 )
 
@@ -180,7 +181,7 @@ func summarizeTodos(items types.TODOS) todoCounts {
 
 // addTodoStatus folds n todos of one status into counts. It is the single
 // status→bucket mapping: summarizeTodos walks materialized todos one at a time,
-// countProjectTodos folds the provider's SQL aggregate, and neither owns a
+// countProjectsTodos folds the runtime's SQL aggregate, and neither owns a
 // private copy of the switch.
 func addTodoStatus(counts *todoCounts, status types.Status, n int) {
 	counts.Total += n
@@ -214,23 +215,46 @@ func addTodoStatus(counts *todoCounts, status types.Status, n int) {
 	}
 }
 
-func countProjectTodos(ctx context.Context, project Project) (todoCounts, error) {
-	if project.ResolvedDir() == "" {
-		return todoCounts{}, nil
+// todoCountsResult is one project's TODO counts, or why they could not be
+// loaded.
+type todoCountsResult struct {
+	Counts todoCounts
+	Err    error
+}
+
+// countProjectsTodos reads every project's TODO counts through
+// todoruntime.CountProjects: a fixed number of queries however many projects
+// are configured, and no workspace is created by reading it. A project with no
+// directory has no workspace and counts zero without touching the database. A
+// failure that prevents counting at all is reported on every project that
+// needed counting, so the list still renders.
+func countProjectsTodos(ctx context.Context, projects []Project) []todoCountsResult {
+	out := make([]todoCountsResult, len(projects))
+	var options []todoruntime.WorkspaceOptions
+	var indexes []int
+	for i, project := range projects {
+		if project.ResolvedDir() != "" {
+			options = append(options, project.WorkspaceOptions())
+			indexes = append(indexes, i)
+		}
 	}
-	nativeProvider, err := ProviderForProject(ctx, project)
-	if err != nil {
-		return todoCounts{}, err
+	if len(options) == 0 {
+		return out
 	}
-	byStatus, err := nativeProvider.CountByStatus(ctx)
-	if err != nil {
-		return todoCounts{}, err
+	counted, err := todoruntime.CountProjects(ctx, options)
+	for j, i := range indexes {
+		switch {
+		case err != nil:
+			out[i].Err = err
+		case counted[j].Err != nil:
+			out[i].Err = counted[j].Err
+		default:
+			for status, n := range counted[j].Counts {
+				addTodoStatus(&out[i].Counts, status, n)
+			}
+		}
 	}
-	var counts todoCounts
-	for status, n := range byStatus {
-		addTodoStatus(&counts, status, n)
-	}
-	return counts, nil
+	return out
 }
 
 func writeTodoError(w http.ResponseWriter, status int, err error) {
