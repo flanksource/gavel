@@ -17,9 +17,12 @@ import (
 // what the dashboard's filter bar already offers and a selector that cannot say
 // "everything except completed" cannot express the default view.
 type ListOpts struct {
-	// Dir is the workspace. Empty means the caller's working directory, resolved
-	// by whoever opens the provider — the selector does not know about projects.
-	Dir string `flag:"dir" help:"Workspace directory; defaults to the current one"`
+	// Dir and Project scope the list to one workspace, named by path or by its
+	// project's short name. Naming neither lists every registered project;
+	// resolving either is the caller's job — the selector does not know about
+	// projects.
+	Dir     string `flag:"dir" help:"Only this workspace directory; by default every registered project is listed"`
+	Project string `flag:"project" help:"Only this registered project, by its short name (a project list id, e.g. clicky-ui); by default every registered project is listed"`
 
 	Status        []string `flag:"status" help:"Only TODOs in these statuses"`
 	ExcludeStatus []string `flag:"exclude-status" help:"Skip TODOs in these statuses"`
@@ -34,6 +37,23 @@ type ListOpts struct {
 	// Search is a case-insensitive substring match on the title.
 	Search string `flag:"search" help:"Match TODO titles containing this text"`
 
+	// Limit and Offset window the matched TODOs. A list spanning every project
+	// is otherwise unbounded, and an agent reading it receives every body.
+	Limit  int `flag:"limit" help:"Return at most this many TODOs" default:"50"`
+	Offset int `flag:"offset" help:"Skip this many matching TODOs"`
+}
+
+// Page returns the window of matched TODOs the options select.
+func (o ListOpts) Page(matched types.TODOS) (types.TODOS, error) {
+	if o.Limit < 1 {
+		return nil, fmt.Errorf("limit must be at least 1, got %d", o.Limit)
+	}
+	if o.Offset < 0 {
+		return nil, fmt.Errorf("offset must not be negative, got %d", o.Offset)
+	}
+	start := min(o.Offset, len(matched))
+	end := min(start+o.Limit, len(matched))
+	return matched[start:end], nil
 }
 
 // Discovery projects the options onto the filter the provider can push down.
