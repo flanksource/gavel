@@ -440,9 +440,14 @@ var _ = Describe("GetCommitHistory", func() {
 
 			// Verify all commits match at least one of the authors
 			for _, commit := range commits {
-				matchesAny := strings.Contains(commit.Author.Name, author1) || strings.Contains(commit.Author.Name, author2)
-				Expect(matchesAny).To(BeTrue(), "Commit %s author '%s' should match one of: %s, %s",
-					commit.Hash[:8], commit.Author.Name, author1, author2)
+				matchesAny := false
+				for _, identity := range []Author{commit.Author, commit.Committer} {
+					for _, author := range []string{author1, author2} {
+						matchesAny = matchesAny || strings.Contains(identity.Name, author) || strings.Contains(identity.Email, author)
+					}
+				}
+				Expect(matchesAny).To(BeTrue(), "Commit %s author '%s' and committer '%s' should match one of: %s, %s",
+					commit.Hash[:8], commit.Author.Name, commit.Committer.Name, author1, author2)
 			}
 		})
 	})
