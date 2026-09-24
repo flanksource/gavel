@@ -281,6 +281,8 @@ export function TodoFullPane({ todos, projectsLoaded, scopeProject = '', navigat
           workspaces={workspaces}
           onTransferred={transferred}
           navigation={navigator.navigation}
+          view={todos.detailView}
+          onViewChange={todos.setDetailView}
         />
       )}
     />
@@ -303,6 +305,8 @@ export function TodoDetailPane({ todos, navigationEnabled = true }: { todos: Wor
       workspaces={workspaces}
       onTransferred={transferred}
       navigation={navigation}
+      view={todos.detailView}
+      onViewChange={todos.setDetailView}
     />
   );
 }

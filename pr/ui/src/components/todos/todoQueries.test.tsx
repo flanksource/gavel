@@ -48,9 +48,9 @@ describe('todo query keys', () => {
   it.each([
     ['stats workspace', todoQueryKeys.sessionStats('/repo-a', 'session-1'), todoQueryKeys.sessionStats('/repo-b', 'session-1')],
     ['stats session', todoQueryKeys.sessionStats('/repo', 'session-1'), todoQueryKeys.sessionStats('/repo', 'session-2')],
-    ['detail todo', todoQueryKeys.sessionDetail('/repo', 'todo-1', 'session-1', false), todoQueryKeys.sessionDetail('/repo', 'todo-2', 'session-1', false)],
-    ['detail session', todoQueryKeys.sessionDetail('/repo', 'todo-1', 'session-1', false), todoQueryKeys.sessionDetail('/repo', 'todo-1', 'session-2', false)],
-    ['detail projection', todoQueryKeys.sessionDetail('/repo', 'todo-1', 'session-1', false), todoQueryKeys.sessionDetail('/repo', 'todo-1', 'session-1', true)],
+    ['detail workspace', todoQueryKeys.sessionDetail('/repo-a', 'todo-1'), todoQueryKeys.sessionDetail('/repo-b', 'todo-1')],
+    ['detail todo', todoQueryKeys.sessionDetail('/repo', 'todo-1'), todoQueryKeys.sessionDetail('/repo', 'todo-2')],
+    ['captain session', todoQueryKeys.captainSession('/api/captain/sessions/a'), todoQueryKeys.captainSession('/api/captain/sessions/b')],
     ['todo workspace', todoQueryKeys.list('/repo-a'), todoQueryKeys.list('/repo-b')],
     ['todo item', todoQueryKeys.item('/repo', 'todo-1'), todoQueryKeys.item('/repo', 'todo-2')],
     ['global todo item', todoQueryKeys.globalItem('todo-1'), todoQueryKeys.globalItem('todo-2')],

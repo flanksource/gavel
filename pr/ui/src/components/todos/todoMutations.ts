@@ -206,7 +206,7 @@ export function useTodoVerificationRun(dir: string, ref: string) {
     ),
     onSuccess: async () => {
       await invalidateTodoCaches(client, dir, ref);
-      await client.invalidateQueries({ queryKey: todoQueryKeys.sessionDetail(dir, ref, undefined, true) });
+      await client.invalidateQueries({ queryKey: todoQueryKeys.sessionDetail(dir, ref) });
     },
   });
 }
@@ -234,8 +234,7 @@ export function useTodoSessionStop(dir: string, ref: string, sessionId?: string)
       await Promise.all([
         invalidateTodoCollections(client, dir),
         client.invalidateQueries({ queryKey: todoQueryKeys.sessionStats(dir, sessionId ?? '') }),
-        client.invalidateQueries({ queryKey: todoQueryKeys.sessionDetail(dir, ref, sessionId, false) }),
-        client.invalidateQueries({ queryKey: todoQueryKeys.sessionDetail(dir, ref, undefined, true) }),
+        client.invalidateQueries({ queryKey: todoQueryKeys.sessionDetail(dir, ref) }),
       ]);
     },
   });

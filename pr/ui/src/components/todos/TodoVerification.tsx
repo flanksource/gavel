@@ -197,7 +197,7 @@ export function TodoVerification({
         )}
       </section>
 
-      <TodoVerificationAttempts dir={dir} todoRef={todo.ref} detail={attempts} error={attemptsError} />
+      <TodoVerificationAttempts detail={attempts} error={attemptsError} />
 
       <AcceptanceCriteria dir={dir} todo={todo} onChanged={onChanged} />
     </div>

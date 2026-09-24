@@ -25,7 +25,7 @@ function attempt(ordinal: number, overrides: Partial<TodoSessionAttempt> = {}): 
 }
 
 function detail(attempts: TodoSessionAttempt[]): TodoSessionDetailResponse {
-  return { attempts, diagnostics: [] };
+  return { attempts };
 }
 
 function report(overrides: Partial<VerifyReport> = {}): VerifyReport {

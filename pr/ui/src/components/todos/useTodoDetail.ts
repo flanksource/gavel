@@ -13,12 +13,15 @@ import { useTodoTagCounts, useTodoTagIndex } from './tagQueries';
 import { useTodoLaunchProgress } from './todoLaunch';
 import { todoVisibleLabels } from './tagResolve';
 
-export function useTodoDetail({ todo, dir, onChanged, onDeleted, workspaces = [], onTransferred }: TodoDetailProps) {
+export function useTodoDetail({ todo, dir, onChanged, onDeleted, workspaces = [], onTransferred, view, onViewChange }: TodoDetailProps) {
   const [advancedMode, setAdvancedMode] = useState<string | null>(null);
   const [runSelections, setRunSelections] = useState<PhaseRunOptions>({});
   const [verifySelection, setVerifySelection] = useState<TodoRunOptions | null>(null);
   const [error, setError] = useState('');
-  const [tab, setTab] = useState<TodoDetailTabKey>('overview');
+  // A todo opened by one of its session ids (/todos/{sessionId}) lands on that
+  // session unless the view names a tab.
+  const tab: TodoDetailTabKey = view.tab ?? (todo?.lookupSessionId ? 'session' : 'overview');
+  const setTab = (next: TodoDetailTabKey) => onViewChange({ ...view, tab: next });
   const [editingTitle, setEditingTitle] = useState(false);
   const [editingBody, setEditingBody] = useState(false);
   const [draftTitle, setDraftTitle] = useState('');
@@ -37,16 +40,16 @@ export function useTodoDetail({ todo, dir, onChanged, onDeleted, workspaces = []
   const closed = todo?.status === 'completed';
   const body = todo?.body?.trim() ?? '';
   const events = todo?.events ?? [];
-  // One attempts-only poll feeds both the tab badge and the Verification tab, so
-  // a failed check is visible before the tab is ever opened. It keeps polling
+  // One attempts poll feeds both tab badges and the Verification tab, so a
+  // failed check is visible before the tab is ever opened. It keeps polling
   // while the tab is closed, just more slowly.
   const { detail: verificationDetail, error: verificationError } = useTodoSessionDetail(
     dir,
     todo?.ref ?? '',
-    undefined,
     !!todo?.ref,
-    { attemptsOnly: true, intervalMs: tab === 'verification' ? 1500 : 15000 }
+    { intervalMs: tab === 'verification' ? 1500 : 15000 }
   );
+  const sessionAttemptCount = verificationDetail?.attempts.length ?? 0;
   const verification = verificationBadge(verificationAttempts(verificationDetail));
   const verificationRun = useTodoVerificationRun(dir, todo?.ref ?? '');
   const sessionStop = useTodoSessionStop(dir, todo?.ref ?? '', todo?.sessionId);
@@ -94,7 +97,6 @@ export function useTodoDetail({ todo, dir, onChanged, onDeleted, workspaces = []
     setError('');
     resetRun();
     setAdvancedMode(null);
-    setTab(todo?.lookupSessionId ? 'session' : 'overview');
     setEditingTitle(false);
     setEditingBody(false);
     setCopyState('idle');
@@ -286,7 +288,9 @@ export function useTodoDetail({ todo, dir, onChanged, onDeleted, workspaces = []
 
   async function runTodo(options?: TodoRunOptions) {
     if (!todo) return;
-    setTab('session');
+    // A fresh run's attempt becomes the inspector's selection, so drop any
+    // attempts picked earlier.
+    onViewChange({ tab: 'session', ...(view.sessionTab ? { sessionTab: view.sessionTab } : {}) });
     const result = await run(todo.ref, options);
     if (result?.status === 'started') {
       onChanged({
@@ -304,7 +308,7 @@ export function useTodoDetail({ todo, dir, onChanged, onDeleted, workspaces = []
     editingTitle, setEditingTitle, editingBody, setEditingBody, draftTitle, setDraftTitle,
     draftBody, setDraftBody, copyState, runBusy, runMessage, runError, runContext,
     busy, transferTargets, closed, body, events, verificationDetail, verificationError,
-    verification, verificationRun, sessionStop, stoppableAttempt, fullTodoId, visibleLabels,
+    verification, sessionAttemptCount, verificationRun, sessionStop, stoppableAttempt, fullTodoId, visibleLabels,
     tagIndex, tagCounts, viewSessionId, viewingHistoricalSession, sessionInProgress,
     awaitingHumanAction, phaseOptions, runningPhaseLabel, changePhaseOptions, patch,
     startEditTitle, startEditBody, saveTitle, saveBody, transferTo, pushToGithub,

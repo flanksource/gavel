@@ -13,6 +13,7 @@ import { setTodoQueryData, todoGlobalItemQueryOptions, todoItemQueryOptions, tod
 import { useTodoSelection, type SelectedTodo } from './todoSelection';
 import { workspaceTodoBatchKeys } from './workspaceTodoQueries';
 import { useTodoTagIndexes } from './tagQueries';
+import type { TodoDetailView } from '../../routes';
 
 export type { SelectedTodo };
 
@@ -116,18 +117,26 @@ async function fetchWorkspaceTodoBatch(dirs: string[], signal: AbortSignal): Pro
 // they hit the same /api/todos endpoints and stay in sync.
 //
 // selectedId/onNavigate wire the selection to the URL (/todos/{guid}, where the
-// guid is the todo ref): the dashboard passes them so a todo is deep-linkable
-// and back/forward works; the menubar omits them and keeps purely-local state.
+// guid is the todo ref), and view/onViewChange do the same for what the detail
+// pane shows (?tab=&sessionTab=&sessions=): the dashboard passes them so a todo
+// view is deep-linkable and back/forward works; the menubar omits them and
+// keeps purely-local state.
 //
 // `enabled` gates the list fetch: the dashboard mounts this hook permanently (so
 // the Todos chrome can live in the AppShell's body slots) but passes false while
 // another tab is active, so the workspaces aren't listed until the Todos tab is
 // opened. Cached results survive a tab switch, so reopening is instant.
+export interface WorkspaceTodosOptions {
+  selectedId?: string;
+  onNavigate?: (id: string) => void;
+  view?: TodoDetailView;
+  onViewChange?: (view: TodoDetailView, mode?: 'push' | 'replace') => void;
+  enabled?: boolean;
+}
+
 export function useWorkspaceTodos(
   projects: Project[],
-  selectedId = '',
-  onNavigate?: (id: string) => void,
-  enabled = true,
+  { selectedId = '', onNavigate, view, onViewChange, enabled = true }: WorkspaceTodosOptions = {},
 ) {
   // Normalize and de-duplicate configured directories before they reach the
   // strict batch API. Rendering retains projects.json order while the query key
@@ -236,9 +245,19 @@ export function useWorkspaceTodos(
     selectedRef.current = next;
     setSelected(next);
   }, []);
+  // Without a routed view (the menubar) the detail view is local and a newly
+  // selected todo opens on its defaults, as a routed selection does.
+  const [localView, setLocalView] = useState<TodoDetailView>({});
+  const detailView = view ?? localView;
+  const setDetailView = useCallback((next: TodoDetailView, mode: 'push' | 'replace' = 'push') => {
+    if (onViewChange) onViewChange(next, mode);
+    else setLocalView(next);
+  }, [onViewChange]);
+
   const select = useCallback((next: SelectedTodo | null) => {
     appliedId.current = next?.ref ?? '';
     setSelection(next);
+    setLocalView({});
     onNavigate?.(next?.ref ?? '');
   }, [onNavigate, setSelection]);
 
@@ -377,12 +396,14 @@ export function useWorkspaceTodos(
     setTimeRange,
     selection,
     tagsByDir,
+    detailView,
+    setDetailView,
   }), [
     workspaces, byDir, errorsByDir, loadingList, error, detailError, aggregate,
     selected, setSelection, select, detail, loadingDetail, refresh, showCreate,
     created, updateItem, deleted, transferred, filters, setFilters, toggleStatus,
     density, setDensity, groupBy, setGroupBy, layout, setLayout, sortBy, setSortBy,
-    timeRange, setTimeRange, selection, tagsByDir,
+    timeRange, setTimeRange, selection, tagsByDir, detailView, setDetailView,
   ]);
 }
 

@@ -30,7 +30,7 @@ vi.mock('@flanksource/clicky-ui/components', () => ({
     <div>
       <button type="button" onClick={onClick} disabled={disabled}>{label}</button>
       {items.map((item, index) => (
-        <button key={index} type="button" aria-label={`${title}: ${items.length > 1 && index === 0 ? 'open PR' : 'advanced'}`} onClick={item.onSelect} disabled={disabled}>
+        <button key={index} type="button" aria-label={`${title}: advanced`} onClick={item.onSelect} disabled={disabled}>
           {item.label}
         </button>
       ))}

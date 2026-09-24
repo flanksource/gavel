@@ -2,105 +2,69 @@ import type React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { SessionMetadataSummary, SessionToolDecision } from '@flanksource/clicky-ui/ai';
+import type { SessionCollectionInput, SessionCollectionItem, SessionMetadataSummary, SessionPendingTool, SessionToolDecision } from '@flanksource/clicky-ui/ai';
 import type { TodoItem, TodoSessionAttempt } from '../../types';
 import { TodoSession, useSessionStatus } from './TodoSession';
 import { SessionErrorDetails } from './SessionErrorDetails';
 import { queryTestWrapper } from './queryTestWrapper';
 import { todoQueryKeys } from './todoQueries';
 
-// TodoSession's own stream-handling logic is exercised against a stubbed
-// global EventSource, not the connection-multiplexing hub (covered separately
-// by eventHub.test.ts) — so openEventStream is mocked straight through to
-// `new EventSource(url)`.
-vi.mock('../../eventHub', () => ({
-  openEventStream: (url: string) => new EventSource(url),
-}));
+interface InspectorDouble {
+  session?: SessionCollectionInput;
+  src?: string;
+  layout?: string;
+  metadata?: SessionMetadataSummary;
+  toolbarActions?: React.ReactNode;
+  transcriptProps?: { pendingTools?: SessionPendingTool[]; onPendingToolDecision?: (decision: SessionToolDecision) => Promise<void> };
+  renderSessionActions?: (item: SessionCollectionItem) => React.ReactNode;
+  selectedSessionIds?: readonly string[];
+  onSelectedSessionIdsChange?: (ids: string[]) => void;
+}
 
-const sessionDetailMock = vi.hoisted(() => ({
-  attempt: {
-    promptRunId: 'run-1',
-    ordinal: 1,
-    step: 'implement',
-    requested: {},
-    resolved: {},
-    status: 'running',
-    processActive: true,
-    state: 'running',
-    phase: 'working',
-    queuedAt: '2026-08-02T10:00:00Z',
-    admissionSessionId: 'admission-1',
-    createdAt: '2026-08-02T10:00:00Z',
-    updatedAt: '2026-08-02T10:01:00Z',
-    verification: null,
-    provider: 'anthropic',
-    runtimeMode: 'agent',
-    model: 'claude-opus-5',
-    effort: 'high',
-  } satisfies TodoSessionAttempt,
-}));
-
-vi.mock('@flanksource/clicky-ui/ai', () => ({
-  SessionInspector: () => <div data-testid="session-inspector" />,
-  SessionViewer: () => <div data-testid="session-viewer" />,
-}));
-
-vi.mock('./TodoSessionDetail', () => ({
-  CopyAllDetailsButton: ({ compact }: { compact?: boolean }) => (
-    // oxlint-disable-next-line clicky-ui/prefer-clicky-components -- test double for the Clicky button rendered by the real component.
-    <button type="button" aria-label="Copy all session details" data-compact={compact} />
-  ),
-  SessionDiagnostics: () => null,
-  ThreadInspector: ({
-    onPendingToolDecision,
-    onStop,
-    layout,
-    metadata,
-    toolbarActions,
-  }: {
-    onPendingToolDecision: (decision: SessionToolDecision) => Promise<void>;
-    onStop: (attempt: TodoSessionAttempt) => Promise<void>;
-    layout?: string;
-    metadata?: SessionMetadataSummary;
-    toolbarActions?: React.ReactNode;
-  }) => (
-    <div data-testid="thread-inspector" data-layout={layout} data-provider={metadata?.provider} data-mode={metadata?.executionMode} data-model={metadata?.model} data-effort={metadata?.reasoningEffort} data-context={metadata?.context?.freePercent}>
-      {toolbarActions}
-      {/* oxlint-disable-next-line clicky-ui/prefer-clicky-components -- test control for the mocked ThreadInspector callback. */}
-      <button type="button" onClick={() => void onPendingToolDecision({
-        event: { id: 'question-1', kind: 'tool', tool: 'AskUserQuestion' },
-        allow: true,
-        message: 'Proceed',
-      })}>Answer question</button>
-      {/* A decision whose event carries an approvalId is a live tool-approval
-          (clicky-ui's SessionViewer stamps this on from the matched pending
-          tool) — "Reject with comment" wires the reason textarea's value
-          straight into decision.message. */}
-      {/* oxlint-disable-next-line clicky-ui/prefer-clicky-components -- test control for the mocked ThreadInspector callback. */}
-      <button type="button" onClick={() => void onPendingToolDecision({
-        event: { id: 'tool-2', kind: 'tool', tool: 'Bash', approvalId: 'approval-9' },
-        allow: false,
-        message: 'Looks risky',
-      })}>Deny with reason</button>
-      {/* oxlint-disable-next-line clicky-ui/prefer-clicky-components -- test control for the mocked ThreadInspector callback. */}
-      <button type="button" onClick={() => void onPendingToolDecision({
-        event: { id: 'tool-3', kind: 'tool', tool: 'AskUserQuestion', approvalId: 'approval-9' },
-        allow: false,
-        answers: { location: 'Inline' },
-      })}>Reject answered question</button>
-      {/* oxlint-disable-next-line clicky-ui/prefer-clicky-components -- test control for the mocked ThreadInspector callback. */}
-      <button type="button" onClick={() => void onStop(sessionDetailMock.attempt)}>Stop attempt</button>
-    </div>
-  ),
-  useTodoSessionDetail: () => ({
-    detail: {
-      attempts: [sessionDetailMock.attempt],
-      selectedPromptRunId: 'run-1',
-      diagnostics: [],
-      thread: { providerSessionId: 'session-1', status: 'ask' },
-    },
-    error: '',
-  }),
+// The inspector itself is clicky-ui's (it fetches each item's `src`); the
+// double exposes what TodoSession hands it and drives its callbacks the way the
+// real attempt picker and transcript do.
+vi.mock('@flanksource/clicky-ui/ai', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  SessionInspector: (props: InspectorDouble) => {
+    const decide = (decision: SessionToolDecision) => void props.transcriptProps?.onPendingToolDecision?.(decision);
+    const items = props.session?.sessions ?? [];
+    return (
+      <div
+        data-testid="session-inspector"
+        data-src={props.src}
+        data-current={props.session?.currentSessionId}
+        data-items={JSON.stringify(items.map(({ id, label, status, src }) => ({ id, label, status, src })))}
+        data-selected={(props.selectedSessionIds ?? []).join(',')}
+        data-pending={JSON.stringify(props.transcriptProps?.pendingTools ?? [])}
+        data-layout={props.layout}
+        data-provider={props.metadata?.provider}
+        data-mode={props.metadata?.executionMode}
+        data-model={props.metadata?.model}
+        data-effort={props.metadata?.reasoningEffort}
+        data-context={props.metadata?.context?.freePercent}
+      >
+        {props.toolbarActions}
+        {items.map(item => (
+          <span key={item.id}>
+            {/* oxlint-disable-next-line clicky-ui/prefer-clicky-components -- test control standing in for the attempt picker. */}
+            <button type="button" onClick={() => props.onSelectedSessionIdsChange?.([item.id])}>{`Pick ${item.label}`}</button>
+            {props.renderSessionActions?.(item)}
+          </span>
+        ))}
+        {/* oxlint-disable-next-line clicky-ui/prefer-clicky-components -- test control for the transcript decision callback. */}
+        <button type="button" onClick={() => decide({ event: { id: 'question-1', kind: 'tool', tool: 'AskUserQuestion' }, allow: true, message: 'Proceed' })}>Answer question</button>
+        {/* A decision whose event carries an approvalId is a live tool-approval
+            (clicky-ui's SessionViewer stamps this on from the matched pending
+            tool) — "Reject with comment" wires the reason textarea's value
+            straight into decision.message. */}
+        {/* oxlint-disable-next-line clicky-ui/prefer-clicky-components -- test control for the transcript decision callback. */}
+        <button type="button" onClick={() => decide({ event: { id: 'tool-2', kind: 'tool', tool: 'Bash', approvalId: 'approval-9' }, allow: false, message: 'Looks risky' })}>Deny with reason</button>
+        {/* oxlint-disable-next-line clicky-ui/prefer-clicky-components -- test control for the transcript decision callback. */}
+        <button type="button" onClick={() => decide({ event: { id: 'tool-3', kind: 'tool', tool: 'AskUserQuestion', approvalId: 'approval-9' }, allow: false, answers: { location: 'Inline' } })}>Reject answered question</button>
+      </div>
+    );
+  },
 }));
 
 vi.mock('@flanksource/clicky-ui/components', () => ({
@@ -136,6 +100,7 @@ vi.mock('@flanksource/clicky-ui/icons', async (importOriginal) => {
     UiLightbulb: Icon,
     UiPass: Icon,
     UiShield: Icon,
+    UiStop: Icon,
     UiWarningTriangle: Icon,
   };
 });
@@ -263,7 +228,7 @@ describe('session errors', () => {
   });
 });
 
-describe('TodoSession mutations', () => {
+describe('TodoSession', () => {
   const todo: TodoItem = {
     ref: 'todo-1',
     title: 'Answer the agent',
@@ -273,20 +238,34 @@ describe('TodoSession mutations', () => {
     questions: [{ text: 'Proceed?' }],
   };
 
-  function renderSession(fetchMock: ReturnType<typeof vi.fn>) {
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    const invalidateQueries = vi.spyOn(client, 'invalidateQueries');
-    vi.stubGlobal('EventSource', class {
-      addEventListener() {}
-      close() {}
-    });
-    vi.stubGlobal('fetch', fetchMock);
-    const onChanged = vi.fn();
-    render(<TodoSession dir="/repo" sessionId="session-1" active todo={todo} onChanged={onChanged} />, {
-      wrapper: ({ children }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>,
-    });
-    return { client, invalidateQueries, onChanged };
+  function attempt(ordinal: number, overrides: Partial<TodoSessionAttempt> = {}): TodoSessionAttempt {
+    return {
+      promptRunId: `run-${ordinal}`,
+      ordinal,
+      step: 'implement',
+      requested: {},
+      resolved: {},
+      status: 'completed',
+      processActive: false,
+      state: 'succeeded',
+      phase: 'finished',
+      queuedAt: '2026-08-02T10:00:00Z',
+      admissionSessionId: `admission-${ordinal}`,
+      createdAt: '2026-08-02T10:00:00Z',
+      updatedAt: '2026-08-02T10:01:00Z',
+      verification: null,
+      ...overrides,
+    };
   }
+
+  // The attempt the todo's session id names: live, stoppable, and followed
+  // through its provider session.
+  const current = attempt(2, {
+    status: 'running', processActive: true, state: 'running', phase: 'generate',
+    executionSessionId: 'exec-2', providerSessionId: 'session-1', canStop: true,
+    provider: 'anthropic', runtimeMode: 'agent', model: 'claude-opus-5', effort: 'high',
+  });
+  const older = attempt(1, { providerSessionId: 'provider-older' });
 
   const sessionStats = {
     found: true,
@@ -305,34 +284,95 @@ describe('TodoSession mutations', () => {
     costUsd: 0,
   };
 
-  it('uses the compact inspector with the live runtime identity and context instead of a second session header', async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+  type Route = (url: string, init?: RequestInit) => Response | undefined;
+
+  function stubServer(route: Route, attempts: TodoSessionAttempt[] = [current, older]) {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.includes('/session/stats')) return {
-        ok: true,
-        json: async () => ({ ...sessionStats, agent: 'claude', model: 'claude-opus-5', effort: 'high', contextTokens: 14_000, contextWindow: 100_000 }),
-      };
+      const routed = route(url, init);
+      if (routed) return routed;
+      if (url.startsWith('/api/todos/session/detail')) return Response.json({ attempts });
       throw new Error(`unexpected fetch ${url}`);
     });
-    renderSession(fetchMock);
+    vi.stubGlobal('fetch', fetchMock);
+    return fetchMock;
+  }
 
-    const inspector = screen.getByTestId('thread-inspector');
+  // A working session: nothing is asked, so the transcript is never read here.
+  const statsRoute = (stats: Record<string, unknown>): Route => url => url.includes('/session/stats') ? Response.json({ ...sessionStats, state: 'working', inProgress: true, ...stats }) : undefined;
+
+  function renderSession(props: Partial<React.ComponentProps<typeof TodoSession>> = {}, client = new QueryClient({ defaultOptions: { queries: { retry: false } } })) {
+    const invalidateQueries = vi.spyOn(client, 'invalidateQueries');
+    const onChanged = vi.fn();
+    render(<TodoSession dir="/repo" sessionId="session-1" active todo={todo} onChanged={onChanged} {...props} />, {
+      wrapper: ({ children }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>,
+    });
+    return { client, invalidateQueries, onChanged };
+  }
+
+  const items = (inspector: HTMLElement) => JSON.parse(inspector.getAttribute('data-items') ?? '[]');
+
+  it('hands the inspector one attempt per prompt run, each loaded from its Captain session', async () => {
+    stubServer(statsRoute({}));
+    renderSession();
+
+    const inspector = await screen.findByTestId('session-inspector');
+    await waitFor(() => expect(items(inspector)).toEqual([
+      { id: 'run-2', label: 'Attempt #2', status: 'running', src: '/api/captain/sessions/exec-2' },
+      { id: 'run-1', label: 'Attempt #1', status: 'completed', src: '/api/captain/sessions/provider-older' },
+    ]));
+    expect(inspector.getAttribute('data-current')).toBe('run-2');
+  });
+
+  it('reports a picked attempt so the view can route it to ?sessions=', async () => {
+    stubServer(statsRoute({}));
+    const onSessionIdsChange = vi.fn();
+    renderSession({ sessionIds: ['run-2'], onSessionIdsChange });
+
+    const inspector = await screen.findByTestId('session-inspector');
+    await waitFor(() => expect(items(inspector)).toHaveLength(2));
+    expect(inspector.getAttribute('data-selected')).toBe('run-2');
+    fireEvent.click(screen.getByRole('button', { name: 'Pick Attempt #1' }));
+
+    expect(onSessionIdsChange).toHaveBeenCalledWith(['run-1']);
+  });
+
+  it('uses the compact inspector with the attempt runtime identity and live context', async () => {
+    stubServer(statsRoute({ agent: 'claude', model: 'claude-opus-5', effort: 'high', contextTokens: 14_000, contextWindow: 100_000 }));
+    renderSession();
+
+    const inspector = await screen.findByTestId('session-inspector');
     await waitFor(() => expect(inspector.getAttribute('data-context')).toBe('86'));
     expect(inspector.getAttribute('data-layout')).toBe('compact');
     expect(inspector.getAttribute('data-provider')).toBe('anthropic');
     expect(inspector.getAttribute('data-mode')).toBe('agent');
     expect(inspector.getAttribute('data-model')).toBe('claude-opus-5');
     expect(inspector.getAttribute('data-effort')).toBe('high');
-    expect(screen.queryByText('Following session')).toBeNull();
-    expect(screen.getByRole('button', { name: 'Copy all session details' }).getAttribute('data-compact')).toBe('true');
+    expect(screen.getByRole('button', { name: 'Copy all session details' })).toBeTruthy();
+  });
+
+  it('offers the blocking question read from the Captain transcript while the session asks', async () => {
+    const question = { questions: [{ id: 'q1', question: 'Which location?', options: [{ label: 'Inline' }] }] };
+    const fetchMock = stubServer(url => {
+      if (url.includes('/session/stats')) return Response.json(sessionStats);
+      if (url === '/api/captain/sessions/exec-2') return Response.json({
+        id: 'exec-2',
+        messages: [{ id: 'm1', role: 'assistant', parts: [{ type: 'tool', toolName: 'AskUserQuestion', toolCallId: 'call-7', input: question }] }],
+      });
+      return undefined;
+    });
+    renderSession();
+
+    const inspector = await screen.findByTestId('session-inspector');
+    await waitFor(() => expect(JSON.parse(inspector.getAttribute('data-pending') ?? '[]')).toEqual([
+      { tool: 'AskUserQuestion', input: question, toolCallId: 'call-7', sessionId: 'session-1' },
+    ]));
+    expect(fetchMock.mock.calls.map(call => String(call[0]))).toContain('/api/captain/sessions/exec-2');
   });
 
   it('shows requested then exact resolved spec while a new session is admitted', async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      if (String(input).includes('/session/stats')) return { ok: true, json: async () => sessionStats };
-      throw new Error(`unexpected fetch ${String(input)}`);
-    });
-    const { client } = renderSession(fetchMock);
+    stubServer(statsRoute({}));
+    const { client } = renderSession();
     act(() => client.setQueryData(todoQueryKeys.launch('/repo', 'todo-1'), {
       status: 'preparing', step: 'plan', requestedSpec: { model: 'gpt-5.5' },
     }));
@@ -348,49 +388,59 @@ describe('TodoSession mutations', () => {
     expect(screen.getByText(/effort: high/)).toBeTruthy();
   });
 
-  it('shows a launch session before a never-run todo has a session ID', () => {
+  it('shows a launch session before a never-run todo has a session ID', async () => {
+    stubServer(() => undefined, []);
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     client.setQueryData(todoQueryKeys.launch('/repo', 'todo-1'), { status: 'preparing', step: 'run', requestedSpec: { model: 'gpt-5.5' } });
-    render(<TodoSession dir="/repo" active todo={{ ...todo, sessionId: undefined }} />, {
-      wrapper: ({ children }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>,
-    });
+    renderSession({ sessionId: undefined, todo: { ...todo, sessionId: undefined } }, client);
+
     expect(screen.getByText('Preparing session · run')).toBeTruthy();
-    expect(screen.getByTestId('thread-inspector')).toBeTruthy();
+    const inspector = screen.getByTestId('session-inspector');
+    expect(inspector.getAttribute('data-current')).toBe('pending-launch');
+    expect(inspector.getAttribute('data-layout')).toBe('default');
+    expect(items(inspector)).toEqual([{ id: 'pending-launch', label: 'Attempt #1', status: 'starting' }]);
   });
 
-  it('projects an answered todo into caches and invalidates only its current session reads', async () => {
+  it('reads a session no attempt owns straight from Captain by its provider id', async () => {
+    stubServer(statsRoute({}), []);
+    renderSession();
+
+    const inspector = await screen.findByTestId('session-inspector');
+    expect(inspector.getAttribute('data-src')).toBe('/api/captain/sessions/session-1');
+  });
+
+  it('answers the followed session, projects the answered todo into caches and invalidates its session reads', async () => {
     const answered = { ...todo, status: 'in_progress' as const, questions: [] };
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.includes('/session/stats')) return { ok: true, json: async () => sessionStats };
-      if (url === '/api/todos/answer') return new Response(
+    let answerBody: Record<string, unknown> | undefined;
+    stubServer((url, init) => {
+      if (url.includes('/session/stats')) return Response.json({ ...sessionStats, state: 'working', inProgress: true });
+      if (url !== '/api/todos/answer') return undefined;
+      answerBody = JSON.parse(init?.body as string);
+      return new Response(
         `event: resolved\ndata: ${JSON.stringify({ spec: {}, specYaml: '{}\n', step: 'run' })}\n\nevent: admitted\ndata: ${JSON.stringify({ todo: answered, status: 'resumed', promptRunId: 'prompt-new', sessionId: 'session-1' })}\n\n`,
         { headers: { 'Content-Type': 'text/event-stream' } },
       );
-      throw new Error(`unexpected fetch ${url}`);
     });
-    const { invalidateQueries, onChanged } = renderSession(fetchMock);
+    const { invalidateQueries, onChanged } = renderSession();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Answer question' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Answer question' }));
 
     await waitFor(() => expect(onChanged).toHaveBeenCalledWith(answered));
+    expect(answerBody).toMatchObject({ dir: '/repo', ref: 'todo-1', sessionId: 'session-1' });
     expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: todoQueryKeys.sessionStats('/repo', 'session-1') });
-    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: todoQueryKeys.sessionDetail('/repo', 'todo-1', 'session-1', false) });
+    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: todoQueryKeys.sessionDetail('/repo', 'todo-1') });
   });
 
   it('denies a pending approval with a reason, posting the new approve/deny/respond body', async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.includes('/session/stats')) return { ok: true, json: async () => ({ ...sessionStats, state: 'approval' }) };
-      if (url.includes('/session/approve')) {
-        expect(JSON.parse(init?.body as string)).toEqual({ approvalId: 'approval-9', action: 'deny', message: 'Looks risky' });
-        return { ok: true, json: async () => ({ resolved: true }) };
-      }
-      throw new Error(`unexpected fetch ${url}`);
+    const fetchMock = stubServer((url, init) => {
+      if (url.includes('/session/stats')) return Response.json({ ...sessionStats, state: 'approval' });
+      if (!url.includes('/session/approve')) return undefined;
+      expect(JSON.parse(init?.body as string)).toEqual({ approvalId: 'approval-9', action: 'deny', message: 'Looks risky' });
+      return Response.json({ resolved: true });
     });
-    renderSession(fetchMock);
+    renderSession();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Deny with reason' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Deny with reason' }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining('/session/approve'),
@@ -399,39 +449,33 @@ describe('TodoSession mutations', () => {
   });
 
   it('routes a rejected question to denial even when a stale answer map is present', async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.includes('/session/stats')) return { ok: true, json: async () => ({ ...sessionStats, state: 'approval' }) };
-      if (url.includes('/session/approve')) {
-        expect(JSON.parse(init?.body as string)).toEqual({ approvalId: 'approval-9', action: 'deny' });
-        return { ok: true, json: async () => ({ resolved: true }) };
-      }
-      throw new Error(`unexpected fetch ${url}`);
+    const fetchMock = stubServer((url, init) => {
+      if (url.includes('/session/stats')) return Response.json({ ...sessionStats, state: 'approval' });
+      if (!url.includes('/session/approve')) return undefined;
+      expect(JSON.parse(init?.body as string)).toEqual({ approvalId: 'approval-9', action: 'deny' });
+      return Response.json({ resolved: true });
     });
-    renderSession(fetchMock);
+    renderSession();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Reject answered question' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Reject answered question' }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining('/session/approve'), expect.objectContaining({ method: 'POST' }),
     ));
   });
 
-  it('invalidates the stopped attempt and session caches after the server accepts cancellation', async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.includes('/session/stats')) return { ok: true, json: async () => ({ ...sessionStats, state: 'working', inProgress: true }) };
-      if (url.includes('/session/stop')) return { ok: true, json: async () => ({ status: 'stopping', promptRunId: 'run-1' }) };
-      throw new Error(`unexpected fetch ${url}`);
+  it('stops the attempt from its picker row and invalidates the attempt and session caches', async () => {
+    stubServer(url => {
+      if (url.includes('/session/stats')) return Response.json({ ...sessionStats, state: 'working', inProgress: true });
+      if (url.includes('/session/stop')) return Response.json({ status: 'stopping', promptRunId: 'run-2' });
+      return undefined;
     });
-    const { invalidateQueries } = renderSession(fetchMock);
+    const { invalidateQueries } = renderSession();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Stop attempt' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Stop attempt #2' }));
 
-    await waitFor(() => expect(invalidateQueries).toHaveBeenCalledWith({
-      queryKey: todoQueryKeys.sessionDetail('/repo', 'todo-1', 'session-1', false),
-    }));
-    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: todoQueryKeys.sessionDetail('/repo', 'todo-1', undefined, true) });
+    await waitFor(() => expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: todoQueryKeys.sessionDetail('/repo', 'todo-1') }));
     expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: todoQueryKeys.sessionStats('/repo', 'session-1') });
+    expect(screen.queryByRole('button', { name: 'Stop attempt #1' })).toBeNull();
   });
 });
