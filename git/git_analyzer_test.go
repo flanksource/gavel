@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -282,11 +283,65 @@ var _ = Describe("ParseGitLogOutput", func() {
 	})
 })
 
+// newHistoryFixtureRepo builds a throwaway repository whose history the
+// GetCommitHistory specs can assert on exactly. Running them against the
+// checkout instead made them depend on how CI fetched it: a push to main left
+// origin/main..HEAD empty, and fetch-depth 0 pulled in every remote branch, so
+// the author filter matched commits whose committer (not author) was the
+// target.
+func newHistoryFixtureRepo() string {
+	dir := GinkgoT().TempDir()
+	git := func(env []string, args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(), env...)
+		out, err := cmd.CombinedOutput()
+		Expect(err).ToNot(HaveOccurred(), "git %v: %s", args, out)
+	}
+	git(nil, "init", "-q", "-b", "main")
+	git(nil, "config", "commit.gpgsign", "false")
+
+	type identity struct{ name, email string }
+	alice := identity{"Alice Author", "alice@example.com"}
+	bob := identity{"Bob Builder", "bob@example.com"}
+	carol := identity{"Carol Coder", "carol@example.com"}
+	commit := func(daysAgo int, author, committer identity, subject string) {
+		date := time.Now().AddDate(0, 0, -daysAgo).Format(time.RFC3339)
+		file := filepath.Join(dir, "history.txt")
+		f, err := os.OpenFile(file, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		Expect(err).ToNot(HaveOccurred())
+		_, err = fmt.Fprintln(f, subject)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(f.Close()).To(Succeed())
+		git(nil, "add", "history.txt")
+		git([]string{
+			"GIT_AUTHOR_NAME=" + author.name, "GIT_AUTHOR_EMAIL=" + author.email, "GIT_AUTHOR_DATE=" + date,
+			"GIT_COMMITTER_NAME=" + committer.name, "GIT_COMMITTER_EMAIL=" + committer.email, "GIT_COMMITTER_DATE=" + date,
+		}, "commit", "-q", "-m", subject)
+	}
+
+	commit(10, alice, alice, "chore: initial import")
+	// Everything after this is the "branch" GetCommitHistory reads by default.
+	git(nil, "update-ref", "refs/remotes/origin/main", "HEAD")
+	commit(8, alice, alice, "feat: add widget")
+	commit(5, bob, bob, "fix: widget overflow")
+	// Authored by Carol, committed by Alice (a rebase): an author filter for
+	// Alice matches it through the committer.
+	commit(3, carol, alice, "fix: widget alignment")
+	commit(1, alice, alice, "feat: widget themes")
+	return dir
+}
+
 var _ = Describe("GetCommitHistory", func() {
+	var repo string
+	BeforeEach(func() {
+		repo = newHistoryFixtureRepo()
+	})
+
 	Context("basic usage", func() {
 		It("should retrieve commits from current repo", func() {
 			filter := HistoryOptions{
-				Path: ".",
+				Path: repo,
 			}
 
 			commits, err := GetCommitHistory(filter)
@@ -298,32 +353,23 @@ var _ = Describe("GetCommitHistory", func() {
 	Context("with ShowPatch option", func() {
 		It("should include patch data when enabled", func() {
 			filter := HistoryOptions{
-				Path:      ".",
+				Path:      repo,
 				ShowPatch: true,
 			}
 
 			commits, err := GetCommitHistory(filter)
 			Expect(err).ToNot(HaveOccurred())
 
-			// At least some commits should have patches
-			if len(commits) > 0 {
-				hasPatches := false
-				for _, commit := range commits {
-					if commit.Patch != "" {
-						hasPatches = true
-						break
-					}
-				}
-				// This may not always be true for merge commits, but should be true for most
-				if len(commits) > 5 {
-					Expect(hasPatches).To(BeTrue())
-				}
+			// Every fixture commit edits a file, so every one carries a patch.
+			Expect(commits).ToNot(BeEmpty())
+			for _, commit := range commits {
+				Expect(commit.Patch).ToNot(BeEmpty(), "Commit %s has no patch data when ShowPatch is true", commit.Hash[:8])
 			}
 		})
 
 		It("should not include patch data when disabled", func() {
 			filter := HistoryOptions{
-				Path:      ".",
+				Path:      repo,
 				ShowPatch: false,
 			}
 
@@ -342,7 +388,7 @@ var _ = Describe("GetCommitHistory", func() {
 		It("should filter by Since date", func() {
 			since := time.Now().AddDate(0, 0, -7) // Last 7 days
 			filter := HistoryOptions{
-				Path:  ".",
+				Path:  repo,
 				Since: since,
 			}
 
@@ -355,7 +401,7 @@ var _ = Describe("GetCommitHistory", func() {
 		})
 
 		It("should filter by Until date", func() {
-			allCommits, err := GetCommitHistory(HistoryOptions{Path: "."})
+			allCommits, err := GetCommitHistory(HistoryOptions{Path: repo})
 			Expect(err).ToNot(HaveOccurred())
 
 			if len(allCommits) == 0 {
@@ -367,7 +413,7 @@ var _ = Describe("GetCommitHistory", func() {
 			until := oldest.Add(time.Second)
 
 			filter := HistoryOptions{
-				Path:  ".",
+				Path:  repo,
 				Until: until,
 			}
 
@@ -383,7 +429,7 @@ var _ = Describe("GetCommitHistory", func() {
 	Context("with author filtering", func() {
 		It("should filter by author name or email", func() {
 			// First get all commits to find an author
-			allCommits, err := GetCommitHistory(HistoryOptions{Path: "."})
+			allCommits, err := GetCommitHistory(HistoryOptions{Path: repo})
 			Expect(err).ToNot(HaveOccurred())
 
 			if len(allCommits) == 0 {
@@ -392,7 +438,7 @@ var _ = Describe("GetCommitHistory", func() {
 
 			targetAuthor := allCommits[0].Author.Name
 			filter := HistoryOptions{
-				Path:   ".",
+				Path:   repo,
 				Author: []string{targetAuthor},
 			}
 
@@ -400,14 +446,22 @@ var _ = Describe("GetCommitHistory", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(commits).ToNot(BeEmpty())
 
+			// The filter matches the author or the committer, so the rebased
+			// commit (authored by Carol, committed by Alice) belongs here too.
+			var authors []string
 			for _, commit := range commits {
-				Expect(commit.Author.Name).To(ContainSubstring(targetAuthor))
+				authors = append(authors, commit.Author.Name)
+				Expect(commit.Author.Name+" "+commit.Committer.Name).To(ContainSubstring(targetAuthor),
+					"Commit %s author '%s' and committer '%s' should match %s",
+					commit.Hash[:8], commit.Author.Name, commit.Committer.Name, targetAuthor)
 			}
+			Expect(authors).To(ContainElement("Carol Coder"))
+			Expect(authors).ToNot(ContainElement("Bob Builder"))
 		})
 
 		It("should filter by multiple authors with OR logic", func() {
 			// First get all commits to find authors
-			allCommits, err := GetCommitHistory(HistoryOptions{Path: "."})
+			allCommits, err := GetCommitHistory(HistoryOptions{Path: repo})
 			Expect(err).ToNot(HaveOccurred())
 
 			if len(allCommits) < 2 {
@@ -430,7 +484,7 @@ var _ = Describe("GetCommitHistory", func() {
 
 			// Test with multiple authors
 			filter := HistoryOptions{
-				Path:   ".",
+				Path:   repo,
 				Author: []string{author1, author2},
 			}
 
@@ -455,7 +509,7 @@ var _ = Describe("GetCommitHistory", func() {
 	Context("with message filtering", func() {
 		It("should filter by commit message", func() {
 			// First get all commits to find a subject prefix to filter on
-			allCommits, err := GetCommitHistory(HistoryOptions{Path: "."})
+			allCommits, err := GetCommitHistory(HistoryOptions{Path: repo})
 			Expect(err).ToNot(HaveOccurred())
 
 			if len(allCommits) == 0 {
@@ -467,7 +521,7 @@ var _ = Describe("GetCommitHistory", func() {
 			prefix := strings.SplitN(subject, " ", 2)[0]
 
 			filter := HistoryOptions{
-				Path:    ".",
+				Path:    repo,
 				Message: prefix + "*",
 			}
 
