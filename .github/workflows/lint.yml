@@ -64,7 +64,7 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
 
       - name: Check formatting
         run: |
@@ -86,7 +86,7 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
 
       - name: Check go mod tidy
         run: |
