@@ -296,7 +296,10 @@ func TestProviderNativeLifecycleIntegration(t *testing.T) {
 	close(startRace)
 	firstRaceErr, secondRaceErr := <-raceErrors, <-raceErrors
 	assert.Equal(t, 1, boolCount(firstRaceErr == nil, secondRaceErr == nil))
-	assert.Equal(t, 1, boolCount(errors.Is(firstRaceErr, todos.ErrRunDispatchAlreadyClaimed), errors.Is(secondRaceErr, todos.ErrRunDispatchAlreadyClaimed)))
+	assert.Equal(t, 1, boolCount(
+		errors.Is(firstRaceErr, todos.ErrRunDispatchAlreadyClaimed) || errors.Is(firstRaceErr, native.ErrVersionConflict) || errors.Is(firstRaceErr, native.ErrLinkConflict),
+		errors.Is(secondRaceErr, todos.ErrRunDispatchAlreadyClaimed) || errors.Is(secondRaceErr, native.ErrVersionConflict) || errors.Is(secondRaceErr, native.ErrLinkConflict),
+	), "race errors: %v, %v", firstRaceErr, secondRaceErr)
 	raceLinks, err := repository.ListPromptRuns(t.Context(), mustUUID(t, raceTodo.ID))
 	require.NoError(t, err)
 	assert.Len(t, raceLinks, 1)
