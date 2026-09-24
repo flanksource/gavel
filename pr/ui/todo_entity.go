@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/flanksource/clicky"
+	"github.com/flanksource/clicky/route"
 	"github.com/flanksource/clicky/rpc"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/bulk"
@@ -86,7 +87,7 @@ func resolveBulkRunOptions(_ context.Context, req bulk.RunRequest) (run.Options,
 //
 // The OpenAPI handlers are deliberately not mounted here — pr/ui already serves
 // /api/openapi.json from its own merged document.
-func (s *Server) registerTodoEntityRoutes(mux *http.ServeMux) {
+func (s *Server) registerTodoEntityRoutes(router *route.Router) {
 	if err := registerTodoEntity(); err != nil {
 		// A failed registration means the dashboard would silently serve a
 		// toolbar with no actions behind it.
@@ -100,6 +101,6 @@ func (s *Server) registerTodoEntityRoutes(mux *http.ServeMux) {
 		SkipHealth: true,
 		Executor:   &rpc.ExecutorConfig{Enabled: true, PathPrefix: "/api/v1"},
 	}, root, nil)
-	server.RegisterExecutionRoutes(mux)
-	mux.HandleFunc("GET /api/entities", server.HandleEntities)
+	server.RegisterExecutionRoutes(router)
+	router.MountGenerated("GET /api/entities", http.HandlerFunc(server.HandleEntities))
 }
