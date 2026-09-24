@@ -54,6 +54,7 @@ type ExecutionResult struct {
 	//
 	// It is display state, not part of the persisted attempt.
 	ResponseText string
+	OutputJSON   map[string]any
 	// Envelope fields — the agent's structured final result. EndStatus is empty
 	// when no envelope was captured.
 	Summary   string

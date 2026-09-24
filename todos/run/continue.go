@@ -11,6 +11,7 @@ import (
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/lifecycle"
 	"github.com/flanksource/gavel/todos/types"
+	"github.com/google/uuid"
 )
 
 // A Continuation is a run derived from one that already happened: approving a
@@ -140,11 +141,6 @@ func priorRunSpec(prior *captaindb.PromptRun, class types.RunMode) (api.Spec, er
 	}
 	spec.Prompt = api.Prompt{}
 	spec.Setup = nil
-	// Verify.Fixture is a persistence stamp, not run configuration: nothing in
-	// the run path reads it, and the next run re-stamps it from the issue.
-	if spec.Workflow != nil && spec.Workflow.Verify != nil {
-		spec.Workflow.Verify.Fixture = ""
-	}
 	return spec, nil
 }
 
@@ -180,4 +176,30 @@ func PriorRun(ctx context.Context, provider todos.Provider, todo *types.TODO) (*
 		return nil, nil
 	}
 	return runs.ActivePromptRun(ctx, todo)
+}
+
+// SessionAttempt is the linked prompt run a session belongs to, and the
+// lifecycle step that link was dispatched for — the step a turn in that session
+// continues.
+type SessionAttempt struct {
+	PromptRunID uuid.UUID
+	Step        string
+}
+
+// SessionAttemptProvider resolves a session to the todo attempt it belongs to.
+// The native PostgreSQL runtime implements it; it returns an error wrapping
+// native.ErrNotFound when no attempt of the todo owns the session.
+type SessionAttemptProvider interface {
+	SessionAttempt(ctx context.Context, todo *types.TODO, sessionID string) (SessionAttempt, error)
+}
+
+// RunMatchesSession reports whether a session ID names this prompt run: its
+// provider session, the run itself, its admission session or its execution
+// session. The Session tab and the answer handler both resolve a session with
+// it, so they can never disagree about which attempt a session is.
+func RunMatchesSession(run captaindb.PromptRunOverview, sessionID string) bool {
+	return run.ProviderSessionID == sessionID ||
+		run.ID.String() == sessionID ||
+		run.SessionID.String() == sessionID ||
+		(run.ExecutionSessionID != nil && run.ExecutionSessionID.String() == sessionID)
 }

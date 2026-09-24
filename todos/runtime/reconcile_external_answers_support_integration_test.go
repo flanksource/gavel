@@ -139,6 +139,7 @@ func (f *answerFixture) parkAsk(ctx SpecContext, title, stepName string, mode ty
 	execution := &todos.ExecutionResult{
 		Success: true, ExecutorName: "claude", EndStatus: types.EndAsk,
 		Summary: "The agent is waiting for answers.", Questions: []types.AgentQuestion{{Text: askedQuestion}},
+		OutputJSON: askEnvelope(askedQuestion),
 	}
 	facts := lifecycle.StepResult{
 		Run:       lifecycle.RunFacts{State: lifecycle.RunWaiting},

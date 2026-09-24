@@ -51,10 +51,11 @@ func (p *Provider) finishAttempt(ctx context.Context, todo *types.TODO, result *
 
 	state, phase, _, _, reason := terminalState(result, active.link.StepKind)
 	resultText := ""
-	resultJSON := executionResultJSON(result)
+	var resultJSON map[string]any
 	errorText := ""
 	if result != nil {
 		resultText = strings.TrimSpace(result.Summary)
+		resultJSON = result.OutputJSON
 		errorText = strings.TrimSpace(result.ErrorMessage)
 	}
 	if state == captaindb.PromptRunStateFailed && errorText == "" {
@@ -272,26 +273,6 @@ func terminalState(result *todos.ExecutionResult, step native.StepKind) (
 	}
 	return captaindb.PromptRunStateSucceeded, phase,
 		captaindb.SessionLifecycleSucceeded, captaindb.SessionActivityIdle, strings.TrimSpace(result.Summary)
-}
-
-func executionResultJSON(result *todos.ExecutionResult) map[string]any {
-	if result == nil {
-		return map[string]any{}
-	}
-	out := map[string]any{
-		"success": result.Success, "skipped": result.Skipped, "cancelled": result.Cancelled,
-		"executor": result.ExecutorName, "tokens": result.TokensUsed,
-		"costUsd": result.CostUSD, "turns": result.NumTurns,
-		"summary": result.Summary, "endStatus": result.EndStatus,
-		"commit": result.CommitSHA, "questions": result.Questions,
-	}
-	if result.Plan != nil {
-		out["plan"] = map[string]any{"status": result.Plan.Status, "path": result.Plan.Path}
-	}
-	if result.DoD != nil {
-		out["definitionOfDone"] = result.DoD
-	}
-	return out
 }
 
 func decodeQuestions(value any) []types.AgentQuestion {

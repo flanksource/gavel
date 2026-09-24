@@ -12,14 +12,13 @@ import (
 // The column used to hold a two-key map built from the issue's fixture string,
 // so nothing could answer "what actually ran". It now holds the dispatched spec.
 func TestRenderedSpecPersistsTheExecutedRuntime(t *testing.T) {
-	const fixture = "```bash\necho ok\n```"
 	spec := api.Spec{
 		Model:       api.Model{Name: "claude-sonnet-5", Mode: api.ModeAgent, Effort: api.EffortHigh},
 		Budget:      api.Budget{Timeout: "45m", MaxTurns: 12},
 		Permissions: api.Permissions{Mode: api.PermissionPlan},
 	}
 
-	rendered, err := renderedSpec(renderedSpecOptions{Spec: spec, Fixture: fixture})
+	rendered, err := renderedSpec(spec)
 	require.NoError(t, err)
 
 	assert.Equal(t, "claude-sonnet-5", rendered["model"])
@@ -30,51 +29,29 @@ func TestRenderedSpecPersistsTheExecutedRuntime(t *testing.T) {
 	assert.Equal(t, string(api.PermissionPlan), rendered["permissions"].(map[string]any)["mode"])
 }
 
-// 110_todo_projection_functions.sql reads {workflow,verify,fixture}'s sibling
-// {workflow,autoVerifyWithoutFixture}; the fixture itself is what a later
-// verification replays, so the durable record must name the definition of done
-// the run was dispatched against.
-func TestRenderedSpecStampsTheIssueFixtureOntoTheWorkflow(t *testing.T) {
-	const fixture = "```bash\necho ok\n```"
-
-	rendered, err := renderedSpec(renderedSpecOptions{Spec: api.Spec{Workflow: &api.Workflow{Verify: &api.Verify{MaxIterations: 3}}}, Fixture: fixture})
+func TestRenderedSpecKeepsOnlyDeclaredVerification(t *testing.T) {
+	rendered, err := renderedSpec(api.Spec{Workflow: &api.Workflow{Verify: &api.Verify{MaxIterations: 3}}})
 	require.NoError(t, err)
 
 	verify := rendered["workflow"].(map[string]any)["verify"].(map[string]any)
-	assert.Equal(t, fixture, verify["fixture"])
-	assert.Equal(t, float64(3), verify["maxIterations"], "stamping the fixture must not erase the run's verify settings")
+	assert.NotContains(t, verify, "fixture")
+	assert.Equal(t, float64(3), verify["maxIterations"])
 
-	bare, err := renderedSpec(renderedSpecOptions{Fixture: "   "})
+	bare, err := renderedSpec(api.Spec{})
 	require.NoError(t, err)
-	assert.NotContains(t, bare, "workflow", "an issue with no fixture declares no workflow verification")
+	assert.NotContains(t, bare, "workflow")
 }
 
-// A spec that already declares a fixture — the lifecycle step expanded the
-// todo's document into it, or the caller supplied one — is recorded as
-// dispatched: the issue's fixture must not overwrite the document the run
-// actually executed.
 func TestRenderedSpecKeepsAFixtureTheDispatchedSpecDeclares(t *testing.T) {
 	const dispatched = "```bash\necho dispatched\n```"
 	spec := api.Spec{Workflow: &api.Workflow{Verify: &api.Verify{Fixture: dispatched, MaxIterations: 2}}}
 
-	rendered, err := renderedSpec(renderedSpecOptions{Spec: spec, Fixture: "```bash\necho issue\n```"})
+	rendered, err := renderedSpec(spec)
 	require.NoError(t, err)
 
 	verify := rendered["workflow"].(map[string]any)["verify"].(map[string]any)
 	assert.Equal(t, dispatched, verify["fixture"])
 	assert.Equal(t, float64(2), verify["maxIterations"])
-}
-
-// Stamping happens on a copy: the dispatched spec is live on the runner while
-// this projection is built, and a shared Workflow pointer would mutate it.
-func TestRenderedSpecDoesNotMutateTheDispatchedSpec(t *testing.T) {
-	workflow := &api.Workflow{Verify: &api.Verify{MaxIterations: 2}}
-	spec := api.Spec{Workflow: workflow}
-
-	_, err := renderedSpec(renderedSpecOptions{Spec: spec, Fixture: "```bash\ntrue\n```"})
-	require.NoError(t, err)
-
-	assert.Empty(t, workflow.Verify.Fixture)
 }
 
 // H9: only a spec whose checkout has already been consumed is safe to replay.
@@ -83,7 +60,7 @@ func TestRenderedSpecDoesNotMutateTheDispatchedSpec(t *testing.T) {
 func TestRenderedSpecCarriesThePreparedTreeNotTheCheckoutRequest(t *testing.T) {
 	prepared := api.Spec{Setup: &shell.Setup{Cwd: "/work/.worktrees/todo-1"}}
 
-	rendered, err := renderedSpec(renderedSpecOptions{Spec: prepared})
+	rendered, err := renderedSpec(prepared)
 	require.NoError(t, err)
 
 	setup := rendered["setup"].(map[string]any)

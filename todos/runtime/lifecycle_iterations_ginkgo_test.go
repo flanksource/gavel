@@ -82,6 +82,15 @@ var _ = Describe("run iterations on the native runtime", Ordered, func() {
 			Mode: string(types.ModeVerify), Driver: "agent", Agent: "claude",
 			Provider: "anthropic", RuntimeMode: "agent", ResolvedModel: "claude-sonnet", Effort: "medium",
 		})).To(Succeed())
+		progress := api.VerifyReport{Kind: api.VerifyKindFixture, Name: "fixture", Iteration: 1, State: api.VerifyStateRunning}
+		Expect(provider.RecordRunProgress(ctx, todo, progress)).To(Succeed())
+		live, err := provider.captain.ListPromptRunIterations(ctx, admission.PromptRunID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(live).To(HaveLen(1))
+		Expect(live[0].VerificationResult).To(Equal(&progress))
+		run, err := provider.captain.GetPromptRun(ctx, admission.PromptRunID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(run.ResultJSON).To(BeNil(), "verification progress must not replace emitted model output")
 
 		records := promptrun.IterationRecords(verifyOnlyResult(true), false)
 		Expect(records).To(HaveLen(1), "a verify-only run is one iteration")

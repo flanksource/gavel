@@ -51,6 +51,7 @@ var _ = ginkgo.Describe("collecting a finished run", func() {
 		gomega.Expect(out.Result.Run.State).To(gomega.Equal(RunSucceeded))
 		gomega.Expect(out.Result.Run.StopReason).To(gomega.Equal("condition-met"))
 		gomega.Expect(out.Result.Envelope.EndStatus).To(gomega.Equal("completed"))
+		gomega.Expect(out.Execution.OutputJSON).To(gomega.Equal(map[string]any{"summary": "Built it.", "endStatus": "completed"}))
 		gomega.Expect(out.Execution.Success).To(gomega.BeTrue())
 	})
 
@@ -116,6 +117,7 @@ var _ = ginkgo.Describe("collecting a finished run", func() {
 
 		gomega.Expect(out.Execution.ResponseText).To(gomega.ContainSubstring("Built it."))
 		gomega.Expect(out.Execution.EndStatus).To(gomega.Equal(types.EndCompleted))
+		gomega.Expect(out.Execution.OutputJSON).To(gomega.Equal(map[string]any{"summary": "Built it.", "endStatus": "completed"}))
 	})
 
 	ginkgo.Describe("the definition-of-done record", func() {

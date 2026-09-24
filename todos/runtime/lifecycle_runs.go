@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/flanksource/captain/pkg/api"
@@ -12,6 +13,7 @@ import (
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/native"
+	"github.com/flanksource/gavel/todos/run"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/google/uuid"
 )
@@ -24,7 +26,8 @@ type activeRun struct {
 }
 
 // RecordRunStart binds the external provider identity and execution thread to
-// the prompt run. Provider-thread lifecycle remains monitor-owned.
+// the prompt run. Session lifecycle is projected from the prompt run's state by
+// Captain's captain_prompt_runs trigger, so it is never written here.
 func (p *Provider) RecordRunStart(ctx context.Context, todo *types.TODO, metadata todos.RunStartMetadata) error {
 	active, err := p.loadActiveRun(ctx, todo)
 	if err != nil {
@@ -92,9 +95,7 @@ func (p *Provider) RecordRunStart(ctx context.Context, todo *types.TODO, metadat
 		// see it (the session-id report, the verify executor) leave it nil rather
 		// than overwriting the transformed spec with the request it started as.
 		if metadata.Spec != nil {
-			rendered, err := renderedSpec(renderedSpecOptions{
-				Spec: *metadata.Spec, Fixture: active.issue.Verification, Previous: active.run.RenderedSpec,
-			})
+			rendered, err := renderedSpec(*metadata.Spec)
 			if err != nil {
 				return err
 			}
@@ -115,15 +116,21 @@ func (p *Provider) RecordRunProgress(ctx context.Context, todo *types.TODO, repo
 	if terminalPromptRun(active.run.State) {
 		return fmt.Errorf("record verification progress: Captain prompt run %s is already %s", active.run.ID, active.run.State)
 	}
-	resultJSON := progressResultJSON(active.run.ResultJSON, report)
+	if report.Iteration < 1 {
+		return fmt.Errorf("record verification progress: report iteration is required")
+	}
 	phase := captaindb.PromptRunPhaseVerify
 	if _, err := p.captain.UpdatePromptRun(ctx, captaindb.UpdatePromptRunInput{
 		ID: active.run.ID, ExpectedVersion: active.run.Version,
-		Phase: &phase, ResultJSON: &resultJSON,
+		Phase: &phase,
 	}); err != nil {
 		return fmt.Errorf("record Captain verification progress: %w", err)
 	}
-	return nil
+	_, err = p.captain.UpsertPromptRunIteration(ctx, captaindb.UpsertPromptRunIterationInput{
+		PromptRunID: active.run.ID, Iteration: report.Iteration,
+		State: captaindb.PromptRunIterationStateRunning, VerificationResult: &report,
+	})
+	return err
 }
 
 // RecordRunNotices writes the run's lifecycle notices into the transcript of the
@@ -153,27 +160,6 @@ func (p *Provider) RecordRunNotices(ctx context.Context, sessionID string, notic
 		}
 	}
 	return fmt.Errorf("record run notices: no ingested transcript for session %s", sessionID)
-}
-
-func cloneResultJSON(source map[string]any) map[string]any {
-	clone := make(map[string]any, len(source)+1)
-	for key, value := range source {
-		clone[key] = value
-	}
-	return clone
-}
-
-func progressResultJSON(source map[string]any, report api.VerifyReport) map[string]any {
-	resultJSON := cloneResultJSON(source)
-	definitionOfDone := map[string]any{}
-	if existing, ok := resultJSON["definitionOfDone"].(map[string]any); ok {
-		for key, value := range existing {
-			definitionOfDone[key] = value
-		}
-	}
-	definitionOfDone["progress"] = report
-	resultJSON["definitionOfDone"] = definitionOfDone
-	return resultJSON
 }
 
 func agentSessionSource(executor string) string {
@@ -313,6 +299,46 @@ func (p *Provider) ActivePromptRun(ctx context.Context, todo *types.TODO) (*capt
 		return nil, err
 	}
 	return active.run, nil
+}
+
+// SessionAttempt resolves the attempt a session belongs to. A resumed turn
+// keeps its provider session, so several attempts can share one; the newest
+// link wins, as it does in the Session tab.
+func (p *Provider) SessionAttempt(ctx context.Context, todo *types.TODO, sessionID string) (run.SessionAttempt, error) {
+	if strings.TrimSpace(sessionID) == "" {
+		return run.SessionAttempt{}, fmt.Errorf("%w: a session ID is required to resolve an attempt", native.ErrInvalidInput)
+	}
+	issueID, err := p.todoID(todo)
+	if err != nil {
+		return run.SessionAttempt{}, err
+	}
+	links, err := p.repository.ListPromptRuns(ctx, issueID)
+	if err != nil {
+		return run.SessionAttempt{}, err
+	}
+	ids := make([]uuid.UUID, len(links))
+	for index := range links {
+		ids[index] = links[index].PromptRunID
+	}
+	overviews, err := p.captain.ListPromptRunOverviews(ctx, captaindb.PromptRunOverviewFilter{IDs: ids})
+	if err != nil {
+		return run.SessionAttempt{}, err
+	}
+	byID := make(map[uuid.UUID]captaindb.PromptRunOverview, len(overviews))
+	for _, overview := range overviews {
+		byID[overview.ID] = overview
+	}
+	sort.SliceStable(links, func(i, j int) bool { return links[i].CreatedAt.After(links[j].CreatedAt) })
+	for _, link := range links {
+		overview, ok := byID[link.PromptRunID]
+		if !ok {
+			return run.SessionAttempt{}, fmt.Errorf("%w: linked prompt run %s", captaindb.ErrPromptRunNotFound, link.PromptRunID)
+		}
+		if run.RunMatchesSession(overview, sessionID) {
+			return run.SessionAttempt{PromptRunID: link.PromptRunID, Step: string(link.StepKind)}, nil
+		}
+	}
+	return run.SessionAttempt{}, fmt.Errorf("%w: session %s belongs to no attempt of issue %s", native.ErrNotFound, sessionID, issueID)
 }
 
 // loadActiveRun resolves the run a caller is acting on. Inside an execution

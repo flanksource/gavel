@@ -12,7 +12,7 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-var _ = Describe("durable run provenance", func() {
+var _ = Describe("durable resolved spec", func() {
 	var provider *Provider
 	BeforeEach(func(ctx SpecContext) {
 		db := dbtest.ForGinkgo(dbtest.Options{Name: "gavel_run_provenance"})
@@ -28,8 +28,9 @@ var _ = Describe("durable run provenance", func() {
 		Expect(err).NotTo(HaveOccurred())
 	})
 
-	It("keeps the admitted profile and trace after recording the prepared execution spec", func(ctx SpecContext) {
-		todo, err := provider.Create(ctx, todos.CreateRequest{Title: "Keep resolution provenance", Status: types.StatusPending})
+	It("stores only the admitted and prepared execution specs", func(ctx SpecContext) {
+		const fixture = "```bash\ntrue\n```"
+		todo, err := provider.Create(ctx, todos.CreateRequest{Title: "Persist resolved spec", Status: types.StatusPending, Verification: fixture})
 		Expect(err).NotTo(HaveOccurred())
 		profile, trace := renderedProfileFixture()
 		admission, err := provider.PrepareRun(ctx, todo, todos.RunPreparation{
@@ -40,14 +41,12 @@ var _ = Describe("durable run provenance", func() {
 		DeferCleanup(func() { provider.clearPrepared(uuid.MustParse(todo.ID), admission.PromptRunID) })
 		admitted, err := provider.Captain().GetPromptRun(ctx, admission.PromptRunID)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(admitted.RenderedSpec).To(HaveKey("runtimeProfile"))
-		Expect(admitted.RenderedSpec).To(HaveKey("specTrace"))
+		Expect(admitted.RenderedSpec).To(Equal(map[string]any{"setup": map[string]any{"cwd": "/work/request"}}))
+		Expect(admitted.VerificationMarkdown).To(Equal(fixture))
 		prepared := api.Spec{Setup: &shell.Setup{Cwd: "/work/prepared"}}
 		Expect(provider.RecordRunStart(ctx, todo, todos.RunStartMetadata{Mode: "run", Spec: &prepared})).To(Succeed())
 		started, err := provider.Captain().GetPromptRun(ctx, admission.PromptRunID)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(started.RenderedSpec).To(HaveKeyWithValue("runtimeProfile", admitted.RenderedSpec["runtimeProfile"]))
-		Expect(started.RenderedSpec).To(HaveKeyWithValue("specTrace", admitted.RenderedSpec["specTrace"]))
-		Expect(started.RenderedSpec["setup"]).To(HaveKeyWithValue("cwd", "/work/prepared"))
+		Expect(started.RenderedSpec).To(Equal(map[string]any{"setup": map[string]any{"cwd": "/work/prepared"}}))
 	})
 })
