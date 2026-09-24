@@ -25,7 +25,6 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-          cache-dependency-path: go.sum
 
       - name: Set up Node.js and TypeScript
         uses: actions/setup-node@v4
@@ -77,7 +76,6 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-          cache-dependency-path: go.sum
 
       - name: Set up Node.js and TypeScript
         uses: actions/setup-node@v4
@@ -150,7 +148,6 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-          cache-dependency-path: go.sum
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
