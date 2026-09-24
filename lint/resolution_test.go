@@ -4,9 +4,11 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	deps "github.com/flanksource/deps"
+	depsconfig "github.com/flanksource/deps/pkg/config"
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/linters/golangci"
 	"github.com/flanksource/gavel/linters/reactdoctor"
@@ -219,6 +221,9 @@ func TestResolveLinterExecutableReinstallsInvalidGolangciBinary(t *testing.T) {
 
 	oldInstall := installGolangciLint
 	installGolangciLint = func(ctx context.Context, packageName, version string, opts ...deps.InstallOption) (*deps.InstallResult, error) {
+		if packageName != golangciPackageName {
+			t.Fatalf("install package = %q, want %q", packageName, golangciPackageName)
+		}
 		if err := os.WriteFile(installed, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 			return nil, err
 		}
@@ -235,6 +240,44 @@ func TestResolveLinterExecutableReinstallsInvalidGolangciBinary(t *testing.T) {
 	}
 	if got != installed {
 		t.Fatalf("command = %q, want %q", got, installed)
+	}
+}
+
+func TestResolveLinterExecutableRejectsNonExecutableGolangciInstall(t *testing.T) {
+	repo := t.TempDir()
+	t.Setenv("PATH", t.TempDir())
+
+	installed := filepath.Join(repo, ".gavel", executableFileName("golangci-lint"))
+	oldInstall := installGolangciLint
+	installGolangciLint = func(ctx context.Context, packageName, version string, opts ...deps.InstallOption) (*deps.InstallResult, error) {
+		// A .deb archive saved as the binary: the shape of the CI failure.
+		if err := os.WriteFile(installed, []byte("!<arch>\ndebian-binary   "), 0o755); err != nil {
+			return nil, err
+		}
+		return &deps.InstallResult{BinDir: filepath.Dir(installed)}, nil
+	}
+	t.Cleanup(func() { installGolangciLint = oldInstall })
+
+	_, _, err := resolveLinterExecutable(context.Background(), golangci.NewGolangciLint(repo), repo, repo, true, false)
+	if err == nil {
+		t.Fatal("expected an error for a non-executable golangci-lint install")
+	}
+	if _, statErr := os.Stat(installed); !os.IsNotExist(statErr) {
+		t.Fatalf("non-executable install should be removed, stat err = %v", statErr)
+	}
+}
+
+func TestGolangciPackageSelectsReleaseArchive(t *testing.T) {
+	registerGolangciPackage()
+	pkg, ok := depsconfig.GetPackage(golangciPackageName)
+	if !ok {
+		t.Fatalf("%s is not registered with deps", golangciPackageName)
+	}
+	if pkg.Repo != "golangci/golangci-lint" {
+		t.Fatalf("repo = %q", pkg.Repo)
+	}
+	if got := pkg.AssetPatterns["*"]; !strings.HasSuffix(got, ".tar.gz") {
+		t.Fatalf("default asset pattern %q must select the .tar.gz archive, not the .deb/.rpm packages", got)
 	}
 }
 

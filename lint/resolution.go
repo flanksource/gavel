@@ -8,10 +8,13 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/flanksource/commons/logger"
 	deps "github.com/flanksource/deps"
+	depsconfig "github.com/flanksource/deps/pkg/config"
+	depstypes "github.com/flanksource/deps/pkg/types"
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/utils"
 )
@@ -99,6 +102,38 @@ func golangciInstalledPath(gitRoot string) string {
 
 var installGolangciLint = deps.InstallWithContext
 
+// golangciPackageName is the deps registry key gavel installs golangci-lint
+// under. deps ships no entry for golangci-lint, and its owner/repo fallback
+// matches any "*{os}*{arch}*" asset — which on linux picks the .deb package
+// and writes it to .gavel/golangci-lint, failing with "exec format error".
+const golangciPackageName = "golangci-lint"
+
+var golangciPackage = depstypes.Package{
+	Name:    golangciPackageName,
+	Manager: "github_release",
+	Repo:    "golangci/golangci-lint",
+	AssetPatterns: map[string]string{
+		"*":             "golangci-lint-{{.version}}-{{.os}}-{{.arch}}.tar.gz",
+		"windows-amd64": "golangci-lint-{{.version}}-windows-amd64.zip",
+		"windows-arm64": "golangci-lint-{{.version}}-windows-arm64.zip",
+	},
+	ChecksumFile:   "golangci-lint-{{.version}}-checksums.txt",
+	BinaryName:     "golangci-lint",
+	VersionCommand: "--version",
+	VersionRegex:   `version v?(\d+\.\d+\.\d+)`,
+}
+
+var registerGolangciPackage = sync.OnceFunc(func() {
+	registry := depsconfig.GetGlobalRegistry()
+	if registry.Registry == nil {
+		registry.Registry = map[string]depstypes.Package{}
+	}
+	// A user's deps.yaml entry wins over gavel's built-in one.
+	if _, ok := registry.Registry[golangciPackageName]; !ok {
+		registry.Registry[golangciPackageName] = golangciPackage
+	}
+})
+
 func resolveLinterExecutable(ctx context.Context, linter linters.Linter, gitRoot, projectRoot string, hasDirectConfig bool, dryRun bool) (string, string, error) {
 	candidates := []string{linter.Name()}
 	if provider, ok := linter.(linters.ExecutableCandidateProvider); ok {
@@ -137,18 +172,25 @@ func resolveLinterExecutable(ctx context.Context, linter linters.Linter, gitRoot
 			if ctx == nil {
 				ctx = context.Background()
 			}
-			result, err := installGolangciLint(ctx, "golangci/golangci-lint", "stable", deps.WithBinDir(binDir))
+			registerGolangciPackage()
+			result, err := installGolangciLint(ctx, golangciPackageName, "stable", deps.WithBinDir(binDir))
 			if err != nil {
 				return "", "", fmt.Errorf("install golangci-lint in %s: %w", binDir, err)
 			}
 			if result != nil && result.BinDir != "" {
 				installed = filepath.Join(result.BinDir, executableFileName("golangci-lint"))
 			}
-			if info, err := os.Stat(installed); err == nil && !info.IsDir() {
-				logger.V(1).Infof("Resolved golangci-lint to %s", installed)
-				return installed, "", nil
+			if info, err := os.Stat(installed); err != nil || info.IsDir() {
+				return "", "", fmt.Errorf("golangci-lint install completed but %s was not found", installed)
 			}
-			return "", "", fmt.Errorf("golangci-lint install completed but %s was not found", installed)
+			// Fail here, naming the install, rather than later with an opaque
+			// exec error that reads like a lint failure.
+			if err := validateExecutable(ctx, installed); err != nil {
+				_ = os.Remove(installed)
+				return "", "", fmt.Errorf("installed golangci-lint at %s is not executable: %w", installed, err)
+			}
+			logger.V(1).Infof("Resolved golangci-lint to %s", installed)
+			return installed, "", nil
 		}
 	}
 
