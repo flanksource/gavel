@@ -59,8 +59,7 @@ var _ = Describe("todo preview preflight", func() {
 	DescribeTable("keeps planning read-only on a runtime that cannot carry the built-in tool policy",
 		func(mode api.RuntimeMode) {
 			body, err := json.Marshal(todoRunPayload{Ref: todo.ID, Step: "plan", Spec: api.Spec{
-				Model:       api.Model{Name: "gpt-5.6-sol", Mode: mode},
-				Permissions: api.Permissions{Tools: api.Tools{"shell": api.ToolPolicyAllow}},
+				Model: api.Model{Name: "gpt-5.6-sol", Mode: mode},
 			}})
 			Expect(err).NotTo(HaveOccurred())
 			recorder := httptest.NewRecorder()
