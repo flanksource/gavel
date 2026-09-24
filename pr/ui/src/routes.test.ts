@@ -110,3 +110,44 @@ describe('task routes', () => {
     expect(buildRoute(parsed)).toBe('/tasks/run-123');
   });
 });
+
+describe('todo detail view routes', () => {
+  const parse = (url: string) => parseRoute(new URL(`http://localhost:9092${url}`) as unknown as Location);
+
+  it('round-trips the detail tab, inspector tab, and selected attempts of a todo', () => {
+    const url = '/todos/todo-7?tab=session&sessionTab=costs&sessions=run-a%2Crun-b';
+
+    const parsed = parse(url);
+
+    expect(parsed).toEqual({
+      ...emptyRouteState(),
+      tab: 'todos',
+      selectedPath: 'todo-7',
+      todoView: { tab: 'session', sessionTab: 'costs', sessionIds: ['run-a', 'run-b'] },
+    });
+    expect(buildRoute(parsed)).toBe(url);
+  });
+
+  it('keeps a slash-containing ref in the path and the view in the query', () => {
+    const parsed = parse('/todos/pkg/file.go/todo-3?tab=plan');
+
+    expect(parsed.selectedPath).toBe('pkg/file.go/todo-3');
+    expect(parsed.todoView).toEqual({ tab: 'plan' });
+    expect(buildRoute(parsed)).toBe('/todos/pkg/file.go/todo-3?tab=plan');
+  });
+
+  it('leaves the default view out of the URL', () => {
+    expect(buildRoute({ ...emptyRouteState(), tab: 'todos', selectedPath: 'todo-7' })).toBe('/todos/todo-7');
+  });
+
+  it('ignores unknown tab names', () => {
+    expect(parse('/todos/todo-7?tab=bogus&sessionTab=nope').todoView).toEqual({});
+  });
+
+  it('drops the view when no todo is selected', () => {
+    const parsed = parse('/todos?tab=session');
+
+    expect(parsed.todoView).toEqual({});
+    expect(buildRoute({ ...parsed, todoView: { tab: 'session' } })).toBe('/todos');
+  });
+});

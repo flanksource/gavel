@@ -1,5 +1,7 @@
+import { isSessionInspectorTab, type SessionInspectorTab } from '@flanksource/clicky-ui/ai';
 import type { PRItem } from './types';
 import { emptyFilters, type Filters, type FilterMode } from './components/FilterBar';
+import { isTodoDetailTab, type TodoDetailTabKey } from './components/todos/TodoDetailTabs';
 
 export type ExportFormat = 'json' | 'md';
 
@@ -20,7 +22,36 @@ export interface RouteState {
   projectRunId: string;
   projectHistory: boolean;
   projectResults: boolean;
+  // todoView is what the selected todo's detail pane shows, encoded as
+  // ?tab=&sessionTab=&sessions= on /todos/{ref}. Query params, not path
+  // segments, because a todo ref may itself contain "/". Unset fields mean the
+  // pane's defaults (and are left out of the URL).
+  todoView: TodoDetailView;
   filters: Filters;
+}
+
+export interface TodoDetailView {
+  tab?: TodoDetailTabKey;
+  sessionTab?: SessionInspectorTab;
+  // Attempt (prompt run) ids selected in the Session tab's inspector.
+  sessionIds?: string[];
+}
+
+function parseTodoView(params: URLSearchParams): TodoDetailView {
+  const tab = params.get('tab') ?? '';
+  const sessionTab = params.get('sessionTab') ?? '';
+  const sessionIds = splitCSV(params.get('sessions'));
+  return {
+    ...(isTodoDetailTab(tab) ? { tab } : {}),
+    ...(isSessionInspectorTab(sessionTab) ? { sessionTab } : {}),
+    ...(sessionIds.length ? { sessionIds } : {}),
+  };
+}
+
+function setTodoViewParams(params: URLSearchParams, view: TodoDetailView) {
+  if (view.tab) params.set('tab', view.tab);
+  if (view.sessionTab) params.set('sessionTab', view.sessionTab);
+  if (view.sessionIds?.length) params.set('sessions', view.sessionIds.join(','));
 }
 
 function splitCSV(value: string | null): string[] {
@@ -69,6 +100,7 @@ export function parseRoute(location: Location): RouteState {
     projectRunId,
     projectHistory: tab === 'projects' && (projectRunId !== '' || params.get('history') === 'true'),
     projectResults: tab === 'projects' && params.get('results') === 'true',
+    todoView: tab === 'todos' && selectedPath ? parseTodoView(params) : {},
     filters: {
       state: parseFacet(params.get('state')),
       checks: parseFacet(params.get('checks')),
@@ -101,6 +133,8 @@ export function buildRoute(state: RouteState): string {
     if (!state.projectRunId && state.projectDiffPath) params.set('diff', state.projectDiffPath);
     if (!state.projectRunId && state.projectHistory) params.set('history', 'true');
     if (state.projectResults) params.set('results', 'true');
+  } else if (state.tab === 'todos' && state.selectedPath) {
+    setTodoViewParams(params, state.todoView);
   }
 
   const query = params.toString();
@@ -134,6 +168,7 @@ export function emptyRouteState(): RouteState {
     projectRunId: '',
     projectHistory: false,
     projectResults: false,
+    todoView: {},
     filters: emptyFilters(),
   };
 }
