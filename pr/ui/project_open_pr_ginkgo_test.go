@@ -51,6 +51,59 @@ var _ = Describe("project Open PR queue", func() {
 		}))
 	})
 
+	It("builds an Open PR without files as a push-only gavel commit that ignores the server's session", func() {
+		queued, err := server.commitQueueActionArgs(project, projectActionRequest{Action: projectActionOpenPR})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(queued).To(Equal(commitQueueRequest{
+			action: projectActionOpenPR,
+			files:  []string{},
+			args:   []string{"commit", "--work-dir", project.ResolvedDir(), "--precommit=fail", "--stage=staged", "--push"},
+		}))
+	})
+
+	It("still requires files for a plain commit", func() {
+		_, err := server.commitQueueActionArgs(project, projectActionRequest{Action: projectActionCommit})
+		Expect(err).To(MatchError("commit requires at least one selected file"))
+	})
+
+	It("queues a push-only Open PR with an empty file list in its task details", func() {
+		pushOnly := "--push"
+		runs := newFakeCommitRuns(pushOnly)
+		payload, err := json.Marshal(map[string]any{"action": "open-pr", "files": []string{}})
+		Expect(err).NotTo(HaveOccurred())
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/api/projects/gavel/commit-queue", bytes.NewReader(payload))
+		request.SetPathValue("name", "gavel")
+
+		server.handleCommitQueue(recorder, request)
+
+		Expect(recorder.Code).To(Equal(http.StatusAccepted), recorder.Body.String())
+		Eventually(runs.commands).Should(Equal([]string{pushOnly}))
+		var run projectCommitRun
+		Expect(json.Unmarshal(recorder.Body.Bytes(), &run)).To(Succeed())
+		snapshots := clickytask.SnapshotByID(run.RunID)
+		Expect(snapshots).To(HaveLen(2))
+		Expect(snapshots[1].Name).To(Equal("Open PR"))
+		details, err := json.Marshal(snapshots[0].Details)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(details)).To(ContainSubstring(`"action":"open-pr","files":[]`))
+		runs.release(pushOnly)
+		Eventually(func() string { return clickytask.SnapshotByID(run.RunID)[1].Status }).Should(Equal("success"))
+	})
+
+	It("replays a failed push-only Open PR as another push-only request", func() {
+		requests, err := retryCommitRequests("run-1", projectCommitGroupDetails{Entries: []projectCommitTaskDetails{
+			{TaskID: "task-1", Action: projectActionOpenPR, Files: []string{}},
+		}}, map[string]clickytask.Status{"task-1": clickytask.StatusFailed})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(requests).To(HaveLen(1))
+
+		queued, err := server.commitQueueActionArgs(project, requests[0])
+		Expect(err).NotTo(HaveOccurred())
+		Expect(queued.args).To(Equal([]string{"commit", "--work-dir", project.ResolvedDir(), "--precommit=fail", "--stage=staged", "--push"}))
+	})
+
 	It("rejects missing actions and advanced Open PR options", func() {
 		_, err := server.commitQueueActionArgs(project, projectActionRequest{Files: []string{"one.go"}})
 		Expect(err).To(MatchError("unknown commit queue action \"\""))

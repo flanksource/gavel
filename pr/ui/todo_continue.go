@@ -1,37 +1,41 @@
 package ui
 
 import (
+	"context"
+	"errors"
 	"fmt"
-	"strings"
+	"net/http"
 
 	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/gavel/todos"
+	"github.com/flanksource/gavel/todos/native"
+	"github.com/flanksource/gavel/todos/run"
 	"github.com/flanksource/gavel/todos/types"
 )
 
-// activeStepFor is the lifecycle step a todo's current attempt runs — the step
-// an answer resumes. The provider's phase index marks it: the phase whose latest
-// run is the todo's active pointer, or one parked at waiting, which is where an
-// ask outcome leaves its run. Exactly one phase must match. None means there is
-// no turn to resume; two means the pointer and the index disagree, and picking
-// one — as iterating the map used to, in a different order per request — would
-// resume a step by chance. Neither is a choice this handler may make on its
-// own, so both are errors rather than a fallback to the class the last run
-// reported, which is not a step name a project's lifecycle need declare.
-func activeStepFor(todo *types.TODO) (string, error) {
-	var candidates []string
-	for _, phase := range todo.PhaseRuns.Ordered() {
-		if phase.Active || phase.State == string(captaindb.PromptRunStateWaiting) {
-			candidates = append(candidates, string(phase.Phase))
-		}
+// answeredAttempt is the attempt an answer resumes: the one the answered
+// session belongs to, whose link names the step it was dispatched for. The
+// phase index cannot answer this — it lists a run step that reached
+// verification under both run and verify, one run under two phases.
+//
+// The attempt must be the todo's active one. A session of an older attempt is
+// a question that is no longer the todo's to answer; resuming it would continue
+// a turn the todo has already moved past.
+func answeredAttempt(ctx context.Context, provider todos.Provider, todo *types.TODO, sessionID string, active *captaindb.PromptRun) (run.SessionAttempt, int, error) {
+	attempts, ok := provider.(run.SessionAttemptProvider)
+	if !ok {
+		return run.SessionAttempt{}, http.StatusNotImplemented, errors.New("answering a session requires native TODO storage")
 	}
-	switch len(candidates) {
-	case 1:
-		return candidates[0], nil
-	case 0:
-		return "", fmt.Errorf("todo %s has no active or waiting step run to resume", todos.TODOReference(todo))
-	default:
-		return "", fmt.Errorf("todo %s has %d step runs that could be resumed (%s); stop the ones that should not continue",
-			todos.TODOReference(todo), len(candidates), strings.Join(candidates, ", "))
+	attempt, err := attempts.SessionAttempt(ctx, todo, sessionID)
+	switch {
+	case errors.Is(err, native.ErrNotFound):
+		return run.SessionAttempt{}, http.StatusNotFound, err
+	case err != nil:
+		return run.SessionAttempt{}, http.StatusInternalServerError, err
 	}
+	if active == nil || active.ID != attempt.PromptRunID {
+		return run.SessionAttempt{}, http.StatusConflict, fmt.Errorf(
+			"session %s is not the active attempt of todo %s; its question is no longer answerable", sessionID, todos.TODOReference(todo))
+	}
+	return attempt, http.StatusOK, nil
 }

@@ -12,8 +12,10 @@ import (
 	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/native"
+	"github.com/flanksource/gavel/todos/run"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/flanksource/gavel/utils"
+	"github.com/google/uuid"
 )
 
 var uiTestProviders = struct {
@@ -89,8 +91,11 @@ type uiTestTODOProvider struct {
 	// activeRun is the Captain prompt run backing the current attempt, as the
 	// native PostgreSQL runtime would report it. nil means no run history.
 	activeRun *captaindb.PromptRun
-	comments  []string
-	links     []uiTestLink
+	// attempts maps a session to the linked attempt it belongs to, as the
+	// native runtime resolves it from the todo's prompt run links.
+	attempts map[string]run.SessionAttempt
+	comments []string
+	links    []uiTestLink
 	// rereadErr fails every Get that follows an Edit, standing in for a store
 	// that committed the edit and then could not be read back.
 	rereadErr error
@@ -105,6 +110,28 @@ type uiTestLink struct {
 
 func (p *uiTestTODOProvider) ActivePromptRun(context.Context, *types.TODO) (*captaindb.PromptRun, error) {
 	return p.activeRun, nil
+}
+
+func (p *uiTestTODOProvider) SessionAttempt(_ context.Context, _ *types.TODO, sessionID string) (run.SessionAttempt, error) {
+	attempt, ok := p.attempts[sessionID]
+	if !ok {
+		return run.SessionAttempt{}, fmt.Errorf("%w: session %s belongs to no attempt", native.ErrNotFound, sessionID)
+	}
+	return attempt, nil
+}
+
+// seedAskingAttempt links the session to the todo's active attempt, dispatched
+// for step: the attempt an answer given in that session resumes. A todo with no
+// run history gets a waiting run, which is where an ask turn parks its run.
+func seedAskingAttempt(provider *uiTestTODOProvider, sessionID string, step types.Phase) {
+	if provider.activeRun == nil {
+		provider.activeRun = &captaindb.PromptRun{State: captaindb.PromptRunStateWaiting}
+	}
+	provider.activeRun.ID = uuid.New()
+	if provider.attempts == nil {
+		provider.attempts = map[string]run.SessionAttempt{}
+	}
+	provider.attempts[sessionID] = run.SessionAttempt{PromptRunID: provider.activeRun.ID, Step: string(step)}
 }
 
 func (p *uiTestTODOProvider) List(_ context.Context, filters todos.DiscoveryFilters) (types.TODOS, error) {

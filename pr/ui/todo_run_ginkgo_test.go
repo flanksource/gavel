@@ -135,14 +135,6 @@ var _ = Describe("todo run admission contract", func() {
 		Expect(admitted.SessionID).To(Equal("11111111-1111-4111-8111-111111111111"))
 	})
 
-	It("selects a newly admitted attempt by its prompt run identity", func() {
-		promptRunID := uuid.MustParse("22222222-2222-4222-8222-222222222222")
-		admissionID := uuid.MustParse("11111111-1111-4111-8111-111111111111")
-		attempts := []todoAttemptDetail{{PromptRunID: promptRunID, AdmissionSession: admissionID}}
-		Expect(selectAttempt(attempts, promptRunID.String())).To(Equal(&attempts[0]))
-		Expect(selectAttempt(attempts, admissionID.String())).To(Equal(&attempts[0]))
-	})
-
 	It("streams a conflict after resolution so the client can offer force", func(ctx SpecContext) {
 		workDir := GinkgoT().TempDir()
 		configureAutomaticPlanToolPolicies(GinkgoTB(), workDir)
@@ -231,7 +223,7 @@ var _ = Describe("todo run admission contract", func() {
 		Expect(provider.UpdateState(ctx, created, todos.StateUpdate{Status: &ask})).To(Succeed())
 		sessionID := "sess-answer-1"
 		Expect(provider.UpdateState(ctx, created, todos.StateUpdate{SessionID: &sessionID})).To(Succeed())
-		seedActivePhase(created, types.PlanPhase)
+		seedAskingAttempt(provider, sessionID, types.PlanPhase)
 		previousStart := run.Start
 		DeferCleanup(func() { run.Start = previousStart })
 		promptRunID := uuid.MustParse("22222222-2222-4222-8222-222222222222")
@@ -239,7 +231,7 @@ var _ = Describe("todo run admission contract", func() {
 			Expect(req.Prepared).NotTo(BeNil())
 			return todoRunStartResult{Status: "started", SessionID: sessionID, PromptRunID: promptRunID}, nil
 		}
-		body, err := json.Marshal(todoAnswerPayload{Ref: todos.TODOReference(created), Answer: "Use PostgreSQL", Options: &todoRunPayload{Spec: api.Spec{Model: api.Model{Name: "claude", Mode: api.ModeAgent, Effort: "medium"}}}})
+		body, err := json.Marshal(todoAnswerPayload{Ref: todos.TODOReference(created), SessionID: sessionID, Answer: "Use PostgreSQL", Options: &todoRunPayload{Spec: api.Spec{Model: api.Model{Name: "claude", Mode: api.ModeAgent, Effort: "medium"}}}})
 		Expect(err).NotTo(HaveOccurred())
 		request := httptest.NewRequest(http.MethodPost, "/api/todos/answer", strings.NewReader(string(body)))
 		request.Header.Set("Accept", "text/event-stream")

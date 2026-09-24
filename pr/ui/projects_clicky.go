@@ -155,7 +155,7 @@ func projectCommitQueueRequestSchema() map[string]any {
 		"required": []string{"action"},
 		"properties": map[string]any{
 			"action":  map[string]any{"type": "string", "enum": []string{"commit", "open-pr"}},
-			"files":   map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+			"files":   map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Files to commit; optional for open-pr, which pushes existing local commits when empty"},
 			"options": map[string]any{"type": "object", "additionalProperties": true, "description": "Advanced commit options; not supported for open-pr"},
 		},
 	}

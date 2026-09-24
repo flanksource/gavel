@@ -108,6 +108,16 @@ func (s *Server) commitQueueActionArgs(project Project, request projectActionReq
 		if request.Options != nil {
 			return commitQueueRequest{}, errors.New("advanced options are not supported for open-pr")
 		}
+		if len(request.Files) == 0 {
+			// Push-only: gavel commit --push skips the commit when nothing is
+			// staged. --stage=staged stops the default session staging from
+			// picking up a session id inherited by the server process.
+			return commitQueueRequest{
+				action: action,
+				files:  []string{},
+				args:   []string{"commit", "--work-dir", project.ResolvedDir(), "--precommit=fail", "--stage=staged", "--push"},
+			}, nil
+		}
 		request.Action = projectActionCommit
 	}
 	args, err := s.projectActionArgs(project, request)
@@ -155,7 +165,7 @@ func (q *commitQueue) enqueue(s *Server, project Project, requests []commitQueue
 	entries := make([]*commitQueueEntry, 0, len(requests))
 	for _, request := range requests {
 		entry := &commitQueueEntry{commitQueueRequest: request}
-		entry.files = append([]string(nil), request.files...)
+		entry.files = append([]string{}, request.files...)
 		var opts []clickytask.Option
 		if predecessors := predecessorsLocked(generation); len(predecessors) > 0 {
 			opts = append(opts, clickytask.WithDependencies(predecessors...))
@@ -242,7 +252,7 @@ func (q *commitQueue) details(generation *commitQueueGeneration) projectCommitGr
 		details.Entries = append(details.Entries, projectCommitTaskDetails{
 			TaskID:  entry.task.ID(),
 			Action:  entry.action,
-			Files:   append([]string(nil), entry.files...),
+			Files:   append([]string{}, entry.files...),
 			Options: entry.options,
 		})
 	}
@@ -253,6 +263,9 @@ func projectCommitTaskName(action projectAction, files []string) string {
 	verb := "Commit"
 	if action == projectActionOpenPR {
 		verb = "Open PR"
+	}
+	if len(files) == 0 {
+		return verb
 	}
 	if len(files) == 1 {
 		return verb + " " + files[0]

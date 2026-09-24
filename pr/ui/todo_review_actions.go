@@ -20,11 +20,14 @@ import (
 // todoAnswerPayload answers the questions blocking an ask todo; the agent's
 // prior session is resumed with the answer as the next user turn.
 type todoAnswerPayload struct {
-	Dir      string         `json:"dir,omitempty"`
-	Ref      string         `json:"ref"`
-	Answer   string         `json:"answer"`
-	Answers  map[string]any `json:"answers,omitempty"`
-	Rejected bool           `json:"rejected,omitempty"`
+	Dir string `json:"dir,omitempty"`
+	Ref string `json:"ref"`
+	// SessionID is the session whose question this answers. It names the
+	// attempt to resume, and through that attempt's link, the step.
+	SessionID string         `json:"sessionId"`
+	Answer    string         `json:"answer"`
+	Answers   map[string]any `json:"answers,omitempty"`
+	Rejected  bool           `json:"rejected,omitempty"`
 	// Optional run knobs for the resumed turn (model/mode/effort/timeout);
 	// omitted fields keep the defaults derived from the todo.
 	Options *todoRunPayload `json:"options,omitempty"`
@@ -51,6 +54,10 @@ func (s *Server) handleTodoAnswer(w http.ResponseWriter, r *http.Request) {
 	answer, err := answerText(payload)
 	if err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)
+		return
+	}
+	if strings.TrimSpace(payload.SessionID) == "" {
+		writeTodoError(w, http.StatusBadRequest, errors.New("sessionId is required: an answer resumes the session that asked"))
 		return
 	}
 	provider, source, todo, status, err := s.loadTodoForWrite(r, payload.Dir, payload.Ref)
@@ -97,9 +104,9 @@ func (s *Server) handleTodoAnswer(w http.ResponseWriter, r *http.Request) {
 		writeTodoError(w, status, err)
 		return
 	}
-	step, err := activeStepFor(todo)
+	attempt, status, err := answeredAttempt(r.Context(), provider, todo, payload.SessionID, activeRun)
 	if err != nil {
-		writeTodoError(w, http.StatusConflict, err)
+		writeTodoError(w, status, err)
 		return
 	}
 	override, err := continuationOverride(payload.Options)
@@ -114,7 +121,7 @@ func (s *Server) handleTodoAnswer(w http.ResponseWriter, r *http.Request) {
 	// claude --resume.
 	req, err := s.continuationRequest(run.Continuation{
 		Dir: source.Dir, Provider: provider, Todo: todo, Prior: activeRun,
-		Override: override, Step: step, Resume: true, Message: answer,
+		Override: override, Step: attempt.Step, Resume: true, Message: answer,
 	})
 	if err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)

@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	captaincli "github.com/flanksource/captain/pkg/cli"
 	"github.com/flanksource/captain/pkg/monitor"
 	"github.com/flanksource/clicky/metrics"
 	"github.com/flanksource/clicky/route"
@@ -473,7 +474,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/todos/commits", s.handleTodoCommits)
 	mux.HandleFunc("GET /api/todos/commits/diff", s.handleTodoCommitDiff)
 	mux.HandleFunc("GET /api/todos/commits/files", s.handleTodoCommitFiles)
-	mux.HandleFunc("/api/todos/session/stream", s.handleTodoSessionStream)
+	// A run's transcript is Captain's to read and follow: its handler resolves
+	// the session through the pool Gavel shares with Captain's CLI registry.
+	mux.Handle("/api/captain/sessions/", http.StripPrefix("/api/captain/sessions", captaincli.SessionHandler()))
 	mux.HandleFunc("/api/todos/session/stats", s.handleTodoSessionStats)
 	mux.HandleFunc("GET /api/todos/session/detail", s.handleTodoSessionDetail)
 	mux.HandleFunc("POST /api/todos/session/stop", s.handleTodoRunStop)

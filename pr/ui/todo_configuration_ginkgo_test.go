@@ -69,7 +69,7 @@ var _ = Describe("todo configuration error boundaries", func() {
 		called := stubSpecRunStart(nil)
 		Expect(os.WriteFile(filepath.Join(dir, ".gavel.yaml"), []byte("ai:\n  permissions:\n    mode: invalid-policy\n"), 0o600)).To(Succeed())
 		recorder := postJSON(server.handleTodoAnswer, "/api/todos/answer", todoAnswerPayload{
-			Ref: created.ID, Answer: "Continue with the smaller change.",
+			Ref: created.ID, SessionID: "example-asking-session", Answer: "Continue with the smaller change.",
 			Options: &todoRunPayload{Spec: api.Spec{
 				Model:       api.Model{Name: "claude-sonnet-5", Mode: api.ModeAgent},
 				Permissions: api.Permissions{Mode: api.PermissionPlan},

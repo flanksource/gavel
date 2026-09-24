@@ -13,7 +13,6 @@ import (
 
 	cmuxprov "github.com/flanksource/captain/pkg/ai/provider/cmux"
 	captaindb "github.com/flanksource/captain/pkg/database"
-	"github.com/flanksource/captain/pkg/session"
 	"github.com/google/uuid"
 )
 
@@ -21,8 +20,22 @@ type fakeCaptainSessionStore struct {
 	run        *captaindb.Session
 	transcript *captaindb.Session
 	overview   *captaindb.SessionOverview
-	messages   []captaindb.TranscriptMessage
 	runs       []captaindb.PromptRun
+}
+
+func TestProjectThreadStatusKeepsAttemptFailureIndependent(t *testing.T) {
+	status := projectThreadStatus([]captaindb.SessionOverview{{
+		ID: uuid.New(), Source: "claude", LifecycleStatus: string(captaindb.SessionLifecycleCreated), MessageCount: 4,
+	}})
+	if status != "idle" {
+		t.Fatalf("status = %q, want idle for a settled thread with messages", status)
+	}
+	status = projectThreadStatus([]captaindb.SessionOverview{{
+		ID: uuid.New(), Source: "claude", LifecycleStatus: string(captaindb.SessionLifecycleCreated), ProcessActive: true,
+	}})
+	if status != "working" {
+		t.Fatalf("status = %q, want working for a live process", status)
+	}
 }
 
 func (f fakeCaptainSessionStore) ListPromptRuns(context.Context, captaindb.PromptRunFilter) ([]captaindb.PromptRun, error) {
@@ -57,63 +70,6 @@ func (f fakeCaptainSessionStore) GetSessionOverviewByIdentity(context.Context, s
 		return nil, captaindb.ErrSessionNotFound
 	}
 	return f.overview, nil
-}
-
-func (f fakeCaptainSessionStore) ListTranscriptMessages(context.Context, captaindb.TranscriptPage) ([]captaindb.TranscriptMessage, error) {
-	return f.messages, nil
-}
-
-func TestStreamCaptainSessionEmitsUnifiedMessages(t *testing.T) {
-	sessionID := "019f5b08-dfee-7b80-aef3-15a58eb6371b"
-	transcriptID := uuid.New()
-	messageID := uuid.New()
-	now := time.Now().UTC()
-	parts, err := json.Marshal([]session.Part{{
-		Type: session.PartTool, ToolName: "Bash", ToolCallID: "call-1",
-		State:  session.ToolStateOutputAvailable,
-		Input:  json.RawMessage(`{"command":"go test ./..."}`),
-		Output: json.RawMessage(`"ok"`),
-	}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	store := fakeCaptainSessionStore{
-		run: &captaindb.Session{
-			ID: uuid.New(), Source: "gavel", Provider: "headless-codex",
-			ProviderSessionID: sessionID, LifecycleStatus: captaindb.SessionLifecycleRunning,
-		},
-		transcript: &captaindb.Session{
-			ID: transcriptID, Source: "codex", CWD: "/work/captain", ProviderSessionID: sessionID,
-		},
-		messages: []captaindb.TranscriptMessage{{
-			ID: messageID, SessionID: transcriptID, Sequence: 1, Role: "assistant",
-			Parts: parts, OccurredAt: &now,
-		}},
-	}
-	resolved, err := resolveCaptainSession(t.Context(), store, sessionID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !resolved.known || resolved.run == nil || resolved.transcript == nil {
-		t.Fatalf("resolution = %#v, want run and transcript", resolved)
-	}
-
-	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
-	defer cancel()
-	req := httptest.NewRequest("GET", "/api/todos/session/stream", nil).WithContext(ctx)
-	rec := httptest.NewRecorder()
-	streamCaptainSession(rec, req, store, sessionID, resolved)
-
-	body := rec.Body.String()
-	for _, want := range []string{
-		`event: entry`, `"id":"` + messageID.String() + `"`, `"role":"assistant"`,
-		`"toolName":"Bash"`, `go test ./...`, `"source":"codex"`, `"cwd":"/work/captain"`,
-		`"agentId":"` + transcriptID.String() + `"`,
-	} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("Captain session stream missing %q in:\n%s", want, body)
-		}
-	}
 }
 
 func TestCaptainSessionStatsUsesMonitoredSessionClock(t *testing.T) {
@@ -176,131 +132,6 @@ func TestCaptainSessionStatsHidesAdmissionWithoutMonitoredSession(t *testing.T) 
 	}
 	if got.Found {
 		t.Fatalf("found = true, admission-only sessions must not supply agent stats")
-	}
-}
-
-func TestHandleTodoSessionStreamEmitsEvents(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-
-	dir := t.TempDir()
-	sessionID := "sess-test"
-	path, err := cmuxprov.SessionLogPath(dir, sessionID)
-	if err != nil {
-		t.Fatalf("SessionLogPath: %v", err)
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	log := strings.Join([]string{
-		`{"type":"assistant","sessionId":"sess-test","message":{"stop_reason":"tool_use","content":[{"type":"tool_use","name":"Bash","input":{"command":"ls -la"}}]}}`,
-		`{"type":"assistant","sessionId":"sess-test","message":{"stop_reason":"end_turn","content":[{"type":"text","text":"done"}]}}`,
-	}, "\n") + "\n"
-	if err := os.WriteFile(path, []byte(log), 0o644); err != nil {
-		t.Fatalf("write log: %v", err)
-	}
-
-	s := &Server{}
-	target := "/api/todos/session/stream?sessionId=" + sessionID + "&dir=" + url.QueryEscape(dir)
-	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
-	defer cancel()
-	req := httptest.NewRequest("GET", target, nil).WithContext(ctx)
-	rec := httptest.NewRecorder()
-
-	s.handleTodoSessionStream(rec, req)
-
-	// The stream now emits raw captain SessionEntry records (the schema the
-	// clicky-ui SessionViewer consumes), so assert on the entry/block fields.
-	body := rec.Body.String()
-	for _, want := range []string{`"type":"assistant"`, `"name":"Bash"`, `ls -la`, `"text":"done"`, `"stop_reason":"end_turn"`} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("session stream missing %q in:\n%s", want, body)
-		}
-	}
-}
-
-func TestHandleTodoSessionStreamSurfacesSubagent(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-
-	dir := t.TempDir()
-	sessionID := "sess-sub"
-	path, err := cmuxprov.SessionLogPath(dir, sessionID)
-	if err != nil {
-		t.Fatalf("SessionLogPath: %v", err)
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	// A Task tool call dispatching an Explore subagent must carry the
-	// subagent_type through to the streamed entry so the viewer can filter it.
-	log := `{"type":"assistant","sessionId":"sess-sub","message":{"stop_reason":"tool_use","content":[{"type":"tool_use","name":"Task","input":{"description":"find the runner","subagent_type":"Explore"}}]}}` + "\n"
-	if err := os.WriteFile(path, []byte(log), 0o644); err != nil {
-		t.Fatalf("write log: %v", err)
-	}
-
-	s := &Server{}
-	target := "/api/todos/session/stream?sessionId=" + sessionID + "&dir=" + url.QueryEscape(dir)
-	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
-	defer cancel()
-	req := httptest.NewRequest("GET", target, nil).WithContext(ctx)
-	rec := httptest.NewRecorder()
-
-	s.handleTodoSessionStream(rec, req)
-
-	body := rec.Body.String()
-	for _, want := range []string{`"name":"Task"`, `"subagent_type":"Explore"`} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("session stream missing %q in:\n%s", want, body)
-		}
-	}
-}
-
-func TestHandleTodoSessionStreamEmitsErrorEvent(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-
-	dir := t.TempDir()
-	sessionID := "sess-err"
-	path, err := cmuxprov.SessionLogPath(dir, sessionID)
-	if err != nil {
-		t.Fatalf("SessionLogPath: %v", err)
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	// A synthetic API error (stop_sequence) must stream as an entry flagged
-	// isApiErrorMessage with the HTTP status, so the viewer renders it as an
-	// error rather than a normal completion.
-	log := `{"type":"assistant","sessionId":"sess-err","message":{"model":"<synthetic>","stop_reason":"stop_sequence","content":[{"type":"text","text":"API Error: 529 Overloaded"}]},"error":"server_error","isApiErrorMessage":true,"apiErrorStatus":529}` + "\n"
-	if err := os.WriteFile(path, []byte(log), 0o644); err != nil {
-		t.Fatalf("write log: %v", err)
-	}
-
-	s := &Server{}
-	target := "/api/todos/session/stream?sessionId=" + sessionID + "&dir=" + url.QueryEscape(dir)
-	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
-	defer cancel()
-	req := httptest.NewRequest("GET", target, nil).WithContext(ctx)
-	rec := httptest.NewRecorder()
-
-	s.handleTodoSessionStream(rec, req)
-
-	body := rec.Body.String()
-	for _, want := range []string{`"isApiErrorMessage":true`, `"error":"server_error"`, `"apiErrorStatus":529`, `529 Overloaded`} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("session stream missing %q in:\n%s", want, body)
-		}
-	}
-}
-
-func TestHandleTodoSessionStreamRequiresSessionID(t *testing.T) {
-	s := &Server{}
-	req := httptest.NewRequest("GET", "/api/todos/session/stream", nil)
-	rec := httptest.NewRecorder()
-	s.handleTodoSessionStream(rec, req)
-	if rec.Code != 400 {
-		t.Fatalf("status = %d, want 400", rec.Code)
 	}
 }
 

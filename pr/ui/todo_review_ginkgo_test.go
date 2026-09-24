@@ -40,13 +40,13 @@ func specAskTodo(workDir, sessionID string, phase types.Phase) *types.TODO {
 	created := specTodo(workDir, types.StatusAsk)
 	provider := uiTestProviderFor(workDir)
 	Expect(provider.UpdateState(GinkgoT().Context(), created, todos.StateUpdate{SessionID: &sessionID})).To(Succeed())
-	seedActivePhase(created, phase)
 	provider.activeRun = &captaindb.PromptRun{
 		State: captaindb.PromptRunStateWaiting,
 		Runtime: captaindb.PromptRunRuntime{Resolved: captaindb.PromptRunRuntimeSelection{
 			Provider: "openai", Mode: "agent", Model: "gpt-5.6-sol", Effort: "high",
 		}},
 	}
+	seedAskingAttempt(provider, sessionID, phase)
 	provider.comments = nil
 	return created
 }
@@ -219,7 +219,7 @@ var _ = Describe("todo answer", func() {
 	answer := func(todo *types.TODO) *httptest.ResponseRecorder {
 		GinkgoHelper()
 		return postJSON(server.handleTodoAnswer, "/api/todos/answer",
-			todoAnswerPayload{Ref: todos.TODOReference(todo), Answer: "use postgres"})
+			todoAnswerPayload{Ref: todos.TODOReference(todo), SessionID: run.PriorSessionID(todo), Answer: "use postgres"})
 	}
 
 	It("fails instead of dispatching when the approval store cannot be read", func() {
@@ -268,29 +268,18 @@ var _ = Describe("todo answer", func() {
 		Expect(resp.Todo.Lifecycle.Steps).NotTo(BeEmpty())
 	})
 
-	It("refuses to guess between two resumable phases", func() {
-		created := specAskTodo(workDir, "sess-two-phases", types.PlanPhase)
-		created.PhaseRuns[types.RunPhase] = types.PhaseRun{Phase: types.RunPhase, State: "failed", Active: true}
+	It("resumes from the answered session's attempt, not from the phase index", func() {
+		created := specAskTodo(workDir, "sess-phase-index", types.PlanPhase)
+		created.PhaseRuns = types.PhaseRuns{
+			types.PlanPhase: {Phase: types.PlanPhase, State: "waiting", Active: true},
+			types.RunPhase:  {Phase: types.RunPhase, State: "failed", Active: true},
+		}
 		called := stubSpecRunStart(nil)
 
 		rec := answer(created)
 
-		Expect(rec.Code).To(Equal(http.StatusConflict), rec.Body.String())
-		Expect(rec.Body.String()).To(ContainSubstring("plan, run"))
-		Expect(*called).To(BeFalse())
-		Expect(uiTestProviderFor(workDir).comments).To(BeEmpty())
-	})
-
-	It("refuses a todo whose index marks no phase to resume", func() {
-		created := specAskTodo(workDir, "sess-no-phase", types.PlanPhase)
-		created.PhaseRuns = nil
-		called := stubSpecRunStart(nil)
-
-		rec := answer(created)
-
-		Expect(rec.Code).To(Equal(http.StatusConflict), rec.Body.String())
-		Expect(rec.Body.String()).To(ContainSubstring("no active or waiting step run"))
-		Expect(*called).To(BeFalse())
+		Expect(rec.Code).To(Equal(http.StatusOK), rec.Body.String())
+		Expect(*called).To(BeTrue())
 	})
 
 	It("reports the recorded answer together with a resume that could not start", func() {
