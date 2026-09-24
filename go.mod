@@ -3,11 +3,11 @@ module github.com/flanksource/gavel
 go 1.26.1
 
 require (
-	github.com/flanksource/captain v0.0.60
-	github.com/flanksource/clicky v1.21.66
-	github.com/flanksource/commons v1.59.0
-	github.com/flanksource/commons-db v0.1.36
-	github.com/flanksource/gomplate/v3 v3.24.89
+	github.com/flanksource/captain v0.0.63
+	github.com/flanksource/clicky v1.21.70
+	github.com/flanksource/commons v1.59.1
+	github.com/flanksource/commons-db v0.1.39
+	github.com/flanksource/gomplate/v3 v3.24.90
 	github.com/flanksource/is-healthy v1.0.92 // indirect
 	github.com/flanksource/kubectl-neat v1.0.4 // indirect
 	github.com/flanksource/repomap v0.4.1
@@ -170,12 +170,12 @@ require (
 	github.com/felixge/httpsnoop v1.1.0 // indirect
 	github.com/fergusstrange/embedded-postgres v1.34.0 // indirect
 	github.com/firebase/genkit/go v1.11.0 // indirect
-	github.com/flanksource/clicky/aichat v1.21.63 // indirect
+	github.com/flanksource/clicky/aichat v1.21.70 // indirect
 	github.com/flanksource/sandbox-runtime v1.0.2 // indirect
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.0 // indirect
 	github.com/geoffgarside/ber v1.2.0 // indirect
-	github.com/glebarez/go-sqlite v1.23.0 // indirect
+	github.com/glebarez/sqlite v1.11.0 // indirect
 	github.com/go-faster/city v1.0.1 // indirect
 	github.com/go-faster/errors v0.7.1 // indirect
 	github.com/go-git/gcfg v1.5.1-0.20230307220236-3a3c6141e376 // indirect
@@ -417,3 +417,5 @@ require (
 	sigs.k8s.io/structured-merge-diff/v6 v6.3.2 // indirect
 	sigs.k8s.io/yaml v1.6.0 // indirect
 )
+
+replace github.com/glebarez/sqlite => github.com/clarkmcc/gorm-sqlite v0.0.0-20240426202654-00ed082c0311
