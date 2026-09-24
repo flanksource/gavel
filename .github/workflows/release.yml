@@ -96,6 +96,9 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
+          cache-dependency-path: |
+            go.sum
+            .github/go-cache-version
 
       - uses: actions/setup-node@v4
         with:

@@ -23,6 +23,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+          cache-dependency-path: |
+            go.sum
+            .github/go-cache-version
 
       - uses: actions/setup-node@v4
         with:
