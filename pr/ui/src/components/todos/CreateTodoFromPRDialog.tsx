@@ -141,7 +141,8 @@ function DetailPane({ detail }: { detail?: PRTodoCandidateDetail }) {
 
 // CreateTodoFromPRDialog turns a PR's failing tests, lint violations, failed CI
 // checks, and review comments into a new todo. Tests/lint contribute body
-// details and acceptance criteria; PR checks/comments are verification gates.
+// details and acceptance criteria; selected comments add body context, while
+// checks/comments remain verification gates.
 export function CreateTodoFromPRDialog({
   open,
   onClose,

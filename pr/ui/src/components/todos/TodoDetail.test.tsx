@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RunContext } from './providers';
 import type { TodoItem } from '../../types';
 import { LIFECYCLE_MOCK_DRAFT } from './lifecycleMock';
-import { TodoDetail } from './TodoDetail';
+import { StatefulTodoDetail } from './todoDetailTestHarness';
 import { useSessionStats } from './TodoSessionTimer';
 import { queryTestWrapper } from './queryTestWrapper';
 
@@ -180,7 +180,7 @@ const baseTodo: TodoItem = {
 
 async function renderDetail(todo: TodoItem) {
   render(
-    <TodoDetail
+    <StatefulTodoDetail
       todo={todo}
       loading={false}
       dir="/repo"
@@ -247,7 +247,7 @@ describe('TodoDetail Resume/Run/Plan guard', () => {
     // never derive without a plan) — the primary control has to take that at
     // face value rather than recomputing it from status/hasPlan itself.
     render(
-      <TodoDetail
+      <StatefulTodoDetail
         todo={{
           ...baseTodo,
           sessionId: undefined,
@@ -319,7 +319,7 @@ describe('TodoDetail Resume/Run/Plan guard', () => {
 
   it('renders a deep-link database error with a menubar back action', () => {
     render(
-      <TodoDetail
+      <StatefulTodoDetail
         todo={null}
         loading={false}
         loadError="todo reference abc123 is ambiguous"
@@ -483,14 +483,24 @@ describe('TodoDetail verification badge', () => {
     expect(tab.getAttribute('title')).toBe('Latest verification passed — 1 of 2 attempts failed');
   });
 
-  it('polls attempts only, so the badge never pays for a provider thread', async () => {
+  it('polls the attempt list alone, with no session selector', async () => {
     stubAttempts([]);
     await renderDetail(baseTodo);
 
     const detailCalls = vi.mocked(fetch).mock.calls.map((call) => String(call[0])).filter((url) => url.startsWith('/api/todos/session/detail'));
     expect(detailCalls.length).toBeGreaterThan(0);
-    expect(detailCalls.every((url) => url.includes('attempts=only'))).toBe(true);
+    expect(detailCalls.every((url) => new URLSearchParams(url.split('?')[1]).get('ref') === baseTodo.ref && !url.includes('sessionId='))).toBe(true);
     // A todo that has never been verified carries no badge at all.
     expect(verificationTab().querySelector('span:last-of-type')).toBeNull();
+  });
+
+  it('counts every attempt on the Session tab, runs and checks alike', async () => {
+    stubAttempts([attempt(1, true), { ...attempt(2, false), step: 'run', verification: null }, attempt(3, true)]);
+
+    await renderDetail(baseTodo);
+
+    const sessionTab = () => screen.getByText('Session').closest('button')!;
+    await waitFor(() => expect(sessionTab().querySelector('span:last-of-type')?.textContent).toBe('3'));
+    expect(sessionTab().getAttribute('title')).toBe('3 attempts');
   });
 });

@@ -114,7 +114,7 @@ const detail: PRDetail = {
   ],
   comments: [{
     id: 901,
-    body: 'review comment body must stay out of the failure details',
+    body: '# Review summary\n\nPlease keep the **public API** stable.\n\n## Verification\n\n### More detail\n\n```markdown\n## Acceptance Criteria\n```',
     author: 'reviewer',
     url: 'https://github.com/acme/widget/pull/17#discussion_r901',
     createdAt: '2026-07-26T12:30:00Z',
@@ -169,19 +169,42 @@ describe('PRTodoContent', () => {
     expect(body).not.toContain('deselected lint violation');
   });
 
-  it('keeps checks and comments out of failure details while preserving verification selectors', () => {
+  it('copies selected comment markdown beneath its source heading and retains verification selectors', () => {
     const candidates = buildPRTodoCandidates(pr, detail);
     const selected = candidates.filter(candidate => candidate.group === 'checks' || candidate.group === 'comments');
 
-    expect(buildPRTodoBody(pr, '', selected)).toBe(
-      '_From [acme/widget#17](https://github.com/acme/widget/pull/17)._',
-    );
+    const body = buildPRTodoBody(pr, '', selected);
+    expect(body).toContain('## Review comments\n\n### Review summary');
+    expect(body).toContain('**Author:** @reviewer');
+    expect(body).toContain('**Location:** ` pkg/store/save.go:23 `');
+    expect(body).toContain('#### Review summary');
+    expect(body).toContain('Please keep the **public API** stable.');
+    expect(body).toContain('##### Verification');
+    expect(body).toContain('###### More detail');
+    expect(body).toContain('```markdown\n## Acceptance Criteria\n```');
+    expect(body).toContain('[View comment on GitHub](https://github.com/acme/widget/pull/17#discussion_r901)');
+    expect(body).not.toContain('check log must stay out of the body');
     expect(buildPRTodoVerification(pr, candidates, selected)).toEqual({
       prNumber: 17,
       repo: 'acme/widget',
       commentIds: [901],
       actions: ['*'],
     });
+  });
+
+  it('copies only selected comments and converts setext headings below the comment heading', () => {
+    const comments: PRDetail = {
+      comments: [
+        { id: 11, body: 'Title\n=====\n\nDetail', author: 'one', url: 'https://example.test/11', createdAt: '2026-07-26T12:30:00Z' },
+        { id: 12, body: 'Leave this out', author: 'two', url: 'https://example.test/12', createdAt: '2026-07-26T12:30:00Z' },
+      ],
+    };
+    const selected = buildPRTodoCandidates(pr, comments).filter(candidate => candidate.commentId === 11);
+
+    const body = buildPRTodoBody(pr, '', selected);
+    expect(body).toContain('#### Title\n\nDetail');
+    expect(body).not.toContain('Leave this out');
+    expect(body).not.toContain('## Failure details');
   });
 
   it('omits failure details without selected tests or lint violations', () => {

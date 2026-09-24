@@ -1,64 +1,17 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { SessionInspector, questionsFromToolInput, type SessionCollectionInput, type SessionEntry, type SessionMetadataSummary, type SessionPendingTool, type SessionToolDecision, type SessionUIMessage } from '@flanksource/clicky-ui/ai';
+import { SessionInspector, fetchRemoteSession, questionsFromToolInput, type SessionInspectorTab, type SessionMetadataSummary, type SessionPendingTool, type SessionToolDecision, type SessionUIMessage } from '@flanksource/clicky-ui/ai';
 import type { SessionStats, TodoItem, TodoRunOptions, TodoSessionAttempt, TodoSessionDetailResponse } from '../../types';
-import { openEventStream } from '../../eventHub';
+import { Spinner } from '../../icons/Spinner';
 import { todoQuery } from './format';
 import { CmuxSessionButton } from './TodoSessionTimer';
 import { TodoSessionStart } from './TodoSessionStart';
 import { SessionErrorDetails, type SessionError } from './SessionErrorDetails';
-import { CopyAllDetailsButton, SessionDiagnostics, ThreadInspector, useTodoSessionDetail } from './TodoSessionDetail';
+import { AttemptStopAction, CopyAllDetailsButton, PENDING_LAUNCH_ID, attemptCollection, attemptSessionId, captainSessionUrl, selectAttempt, useTodoSessionDetail } from './TodoSessionDetail';
 import type { TodoRunAction } from './run';
 import { invalidateTodoCaches, setTodoCaches, todoMutationJSON, useTodoSessionStop } from './todoMutations';
 import { sessionStatsQueryOptions, todoQueryKeys } from './todoQueries';
 import { setTodoLaunchProgress, todoMutationStream, updateTodoLaunchProgress, useTodoLaunchProgress, type TodoLaunchProgress } from './todoLaunch';
-
-// useTodoSession follows a TODO's agent session log over SSE. The server tails
-// the on-disk Claude session log and emits each conversational line as a raw
-// captain SessionEntry, which we accumulate and hand to clicky-ui's
-// SessionInspector to render. The stream replays existing history on connect, then
-// follows new entries until unmounted.
-export function useTodoSession(dir: string, sessionId: string | undefined, active: boolean) {
-  const [entries, setEntries] = useState<Array<SessionEntry | SessionUIMessage>>([]);
-  const [error, setError] = useState('');
-
-  useEffect(() => {
-    setEntries([]);
-    setError('');
-    if (!active || !sessionId) return;
-
-    const params = new URLSearchParams(todoQuery(dir));
-    params.set('sessionId', sessionId);
-    const es = openEventStream(`/api/todos/session/stream?${params.toString()}`);
-
-    es.addEventListener('entry', (e) => {
-      const data = (e as MessageEvent).data;
-      try {
-        const entry = JSON.parse(data) as SessionEntry | SessionUIMessage;
-        setEntries((prev) => mergeSessionEntry(prev, entry));
-      } catch {
-        // Ignore malformed frames; the next well-formed entry recovers.
-      }
-    });
-    es.addEventListener('error', (e) => {
-      // A named error frame carries data; a bare connection drop does not.
-      const data = (e as MessageEvent).data;
-      if (data) {
-        try {
-          setError(JSON.parse(data).error || 'Session stream error');
-        } catch {
-          setError(`Session stream error\n${String(data)}`);
-        }
-      } else {
-        setError((previous) => previous || 'Session stream connection failed without returning error details');
-      }
-    });
-
-    return () => es.close();
-  }, [dir, sessionId, active]);
-
-  return { entries, error };
-}
 
 // TodoSessionApprovalAction is the decision the server's approval endpoint
 // accepts for one pending approval: approve/deny answer a tool-permission
@@ -135,6 +88,10 @@ export function TodoSession({
   onPlanOptionsChange,
   runBusy,
   runDisabled,
+  sessionTab,
+  onSessionTabChange,
+  sessionIds,
+  onSessionIdsChange,
 }: {
   dir: string;
   sessionId?: string;
@@ -155,19 +112,50 @@ export function TodoSession({
   onPlanOptionsChange?: (options: TodoRunOptions) => void;
   runBusy?: boolean;
   runDisabled?: boolean;
+  // The inspector's tab and selected attempts, owned by the todo detail view
+  // (routed through the URL on the dashboard).
+  sessionTab?: SessionInspectorTab;
+  onSessionTabChange?: (tab: SessionInspectorTab) => void;
+  sessionIds?: string[];
+  onSessionIdsChange?: (ids: string[]) => void;
 }) {
   const queryClient = useQueryClient();
+  const inspectorTabProps = {
+    ...(sessionTab ? { tab: sessionTab } : {}),
+    ...(onSessionTabChange ? { onTabChange: onSessionTabChange } : {}),
+  };
+  const inspectorSelectionProps = {
+    ...(sessionIds ? { selectedSessionIds: sessionIds } : {}),
+    ...(onSessionIdsChange ? { onSelectedSessionIdsChange: onSessionIdsChange } : {}),
+  };
   const launch = useTodoLaunchProgress(dir, todo.ref);
-  const { detail, error: detailError } = useTodoSessionDetail(dir, todo.ref, sessionId, active);
-  const launchAttempt = detail?.attempts.find(attempt => attempt.promptRunId === launch?.promptRunId);
-  const followedSessionId = launch && launch.status !== 'failed'
-    ? launchAttempt?.providerSessionId || (detail?.selectedPromptRunId === launch.promptRunId ? detail?.thread?.providerSessionId : undefined)
-    : detail?.thread?.providerSessionId || sessionId;
-  const { entries, error } = useTodoSession(dir, followedSessionId, active);
+  const activeLaunch = launch && launch.status !== 'failed' ? launch : null;
+  const { detail, error: detailError } = useTodoSessionDetail(dir, todo.ref, active);
+  const attempts = useMemo(() => detail?.attempts ?? [], [detail]);
+  const launchAttempt = activeLaunch?.promptRunId ? attempts.find(attempt => attempt.promptRunId === activeLaunch.promptRunId) : undefined;
+  // A launch in flight owns the view; otherwise the attempt the todo's session
+  // id names, else the newest.
+  const attempt = activeLaunch ? launchAttempt : selectAttempt(attempts, sessionId);
+  const currentId = activeLaunch ? activeLaunch.promptRunId || PENDING_LAUNCH_ID : attempt?.promptRunId;
+  const followedSessionId = activeLaunch ? launchAttempt?.providerSessionId : attempt?.providerSessionId || sessionId;
   const { stats, state, error: statusError, inProgress, approvals, approve } = useSessionStatus(dir, followedSessionId, active);
+  const collection = useMemo(
+    () => currentId ? attemptCollection({ todoRef: todo.ref, attempts, currentId, launch: activeLaunch }) : undefined,
+    [activeLaunch, attempts, currentId, todo.ref],
+  );
+  const attemptSession = attempt ? attemptSessionId(attempt) : undefined;
+  // The blocking-question fallback needs the question's own input, which lives
+  // in the transcript: read it from Captain only while the session asks.
+  const askSrc = state === 'ask' && !inProgress && approvals.length === 0 && attemptSession ? captainSessionUrl(attemptSession) : undefined;
+  const askQuery = useQuery({
+    queryKey: todoQueryKeys.captainSession(askSrc ?? ''),
+    queryFn: ({ signal }) => fetchRemoteSession(askSrc!, signal),
+    enabled: active && !!askSrc,
+  });
   const answerMutation = useMutation({
     mutationKey: ['todos', 'session', 'answer', { dir: dir.trim(), ref: todo.ref }],
     mutationFn: async (decision: SessionToolDecision) => {
+      if (!followedSessionId) throw new Error('Could not resume the agent session: there is no session to answer');
       const data = await todoMutationStream<{ todo?: TodoItem; status?: string; promptRunId?: string; sessionId?: string }>(
         '/api/todos/answer',
         {
@@ -176,6 +164,7 @@ export function TodoSession({
           body: JSON.stringify({
             dir,
             ref: todo.ref,
+            sessionId: followedSessionId,
             answer: decision.message || (decision.allow ? formatDecisionAnswers(decision.answers, decision.event.toolInput) : ''),
             ...(decision.allow ? { answers: decision.answers } : {}),
             rejected: !decision.allow,
@@ -196,7 +185,7 @@ export function TodoSession({
       onChanged?.(updated);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: todoQueryKeys.sessionStats(dir, followedSessionId ?? '') }),
-        queryClient.invalidateQueries({ queryKey: todoQueryKeys.sessionDetail(dir, todo.ref, sessionId, false) }),
+        queryClient.invalidateQueries({ queryKey: todoQueryKeys.sessionDetail(dir, todo.ref) }),
       ]);
     },
     onError: async error => {
@@ -216,16 +205,9 @@ export function TodoSession({
         sessionId: item.sessionId,
       }));
     if (state !== 'ask' || inProgress) return [];
-    const latest = latestQuestionTool(entries);
+    const latest = latestQuestionTool(askQuery.data?.messages ?? []);
     if (latest)
-      return [
-        {
-          tool: 'AskUserQuestion',
-          input: latest.input,
-          toolCallId: latest.toolCallId,
-          sessionId: followedSessionId,
-        },
-      ];
+      return [{ tool: 'AskUserQuestion', input: latest.input, toolCallId: latest.toolCallId, sessionId: followedSessionId }];
     if (todo.questions?.length) {
       return [
         {
@@ -246,7 +228,7 @@ export function TodoSession({
       ];
     }
     return [];
-  }, [approvals, entries, followedSessionId, inProgress, state, todo.questions]);
+  }, [approvals, askQuery.data, followedSessionId, inProgress, state, todo.questions]);
 
   // decide routes a clicky-ui SessionViewer decision to whichever endpoint
   // owns it. A decision on a live approval (SessionViewer stamps the matched
@@ -255,8 +237,8 @@ export function TodoSession({
   // textarea on "Reject with comment" already flows through as decision.message,
   // so denying with a reason is just this wire threading it through. A decision
   // with no approvalId is the ask-status blocking-question fallback (parsed
-  // from the log or from todo.questions, neither of which is a live approval)
-  // and still resumes the session via /api/todos/answer.
+  // from the transcript or from todo.questions, neither of which is a live
+  // approval) and still resumes the session via /api/todos/answer.
   const decide = useCallback(
     async (decision: SessionToolDecision) => {
       if (!followedSessionId) throw new Error('Session is unavailable');
@@ -280,75 +262,63 @@ export function TodoSession({
   );
 
   const stopAttempt = useCallback(
-    (attempt: TodoSessionAttempt) => stopMutation.mutateAsync(attempt.promptRunId).then(() => undefined),
+    (target: TodoSessionAttempt) => stopMutation.mutateAsync(target.promptRunId).then(() => undefined),
     [stopMutation.mutateAsync]
   );
 
-  if (!sessionId && (!launch || launch.status === 'failed')) {
+  if (!sessionId && !activeLaunch) {
     return <>{launch && <LaunchProgress launch={launch} />}<TodoSessionStart dir={dir} todo={todo} onRun={onRun} onAdvanced={onAdvanced} runOptions={runOptions} planOptions={planOptions} onRunOptionsChange={onRunOptionsChange} onPlanOptionsChange={onPlanOptionsChange} runBusy={runBusy} runDisabled={runDisabled} /></>;
   }
 
-  const metadata = todoSessionMetadata({ detail, stats, sessionId: followedSessionId });
+  const metadata = todoSessionMetadata({ attempt, stats, sessionId: followedSessionId });
   const sessionErrors: SessionError[] = [
-    ...(error ? [{ source: 'Session stream', message: error }] : []),
+    ...(askQuery.error ? [{ source: 'Session transcript', message: askQuery.error.message }] : []),
     ...(statusError ? [{ source: 'Session status', message: statusError }] : []),
     ...(detailError ? [{ source: 'Session detail', message: detailError }] : []),
     ...(answerMutation.error ? [{ source: 'Session answer', message: answerMutation.error.message }] : []),
     ...(stopMutation.error ? [{ source: 'Session stop', message: stopMutation.error.message }] : []),
   ];
+  const toolbarActions = <SessionToolbarActions dir={dir} sessionId={followedSessionId} agent={stats?.agent} detail={detail} attempt={attempt} onResume={onResume} resumeDisabled={resumeDisabled} />;
+  const transcriptProps = { pendingTools, onPendingToolDecision: decide, showHeader: false, className: 'text-xs' };
 
   return (
     <div className="@container flex min-h-0 flex-1 flex-col overflow-hidden bg-muted/20">
       {launch && <LaunchProgress launch={launch} />}
-      {detail && <SessionDiagnostics diagnostics={detail.diagnostics} />}
       <SessionErrorDetails errors={sessionErrors} />
-      {detail && (detail.thread || (launch && launch.status !== 'failed')) ? (
-        <ThreadInspector
-          detail={detail}
-          entries={entries}
-          dir={dir}
-          todoRef={todo.ref}
-          onStop={stopAttempt}
-          pendingTools={pendingTools}
-          onPendingToolDecision={decide}
-          layout={launch && launch.status !== 'failed' && (!detail.thread || detail.selectedPromptRunId !== launch.promptRunId) ? 'default' : 'compact'}
+      {collection ? (
+        <SessionInspector
+          session={collection}
+          className="h-full"
+          layout={activeLaunch && !(launchAttempt && attemptSessionId(launchAttempt)) ? 'default' : 'compact'}
           metadata={metadata}
-          launch={launch}
-          toolbarActions={<SessionToolbarActions dir={dir} sessionId={followedSessionId} agent={stats?.agent} detail={detail} entries={entries} onResume={onResume} resumeDisabled={resumeDisabled} />}
+          toolbarActions={toolbarActions}
+          transcriptProps={transcriptProps}
+          renderSessionActions={item => {
+            const target = attempts.find(candidate => candidate.promptRunId === item.id);
+            return target ? <AttemptStopAction attempt={target} onStop={stopAttempt} /> : null;
+          }}
+          {...inspectorTabProps}
+          {...inspectorSelectionProps}
         />
-      ) : launch && launch.status !== 'failed' ? (
+      ) : detail && sessionId ? (
+        // A session no attempt owns (recorded before attempts were linked) is
+        // still Captain's to read by its provider id.
         <SessionInspector
-          session={launchCollection(todo.ref, launch)}
-          className="min-h-0 flex-1 text-xs"
-        />
-      ) : (
-        <SessionInspector
-          session={entries as SessionEntry[] | SessionUIMessage[]}
+          src={captainSessionUrl(sessionId)}
           className="min-h-0 flex-1 text-xs"
           layout="compact"
           metadata={metadata}
-          toolbarActions={<SessionToolbarActions dir={dir} sessionId={followedSessionId} agent={stats?.agent} detail={detail} entries={entries} onResume={onResume} resumeDisabled={resumeDisabled} />}
-          transcriptProps={{ pendingTools, onPendingToolDecision: decide, showHeader: false, className: 'text-xs' }}
+          toolbarActions={toolbarActions}
+          transcriptProps={transcriptProps}
+          {...inspectorTabProps}
         />
-      )}
+      ) : !detailError ? (
+        <p className="flex items-center gap-2 px-3 py-4 text-xs text-muted-foreground">
+          <Spinner /> Loading attempts…
+        </p>
+      ) : null}
     </div>
   );
-}
-
-function launchCollection(ref: string, launch: TodoLaunchProgress): SessionCollectionInput {
-  const id = launch.promptRunId || 'pending-launch';
-  return {
-    kind: 'session-collection',
-    id: `todo-attempts:${ref}`,
-    currentSessionId: id,
-    sessions: [{
-      id,
-      label: 'Attempt #1',
-      mode: launch.step,
-      status: launch.status === 'admitted' ? 'running' : 'starting',
-      session: { id, messages: [] },
-    }],
-  };
 }
 
 function LaunchProgress({ launch }: { launch: TodoLaunchProgress }) {
@@ -369,13 +339,11 @@ function LaunchProgress({ launch }: { launch: TodoLaunchProgress }) {
   );
 }
 
-function todoSessionMetadata({ detail, stats, sessionId }: { detail: TodoSessionDetailResponse | null; stats: SessionStats | undefined; sessionId: string | undefined }): SessionMetadataSummary {
-  const attempt = detail?.attempts.find(candidate => candidate.promptRunId === detail.selectedPromptRunId || candidate.executionSessionId === detail.selectedExecutionSessionId);
-  const root = detail?.thread?.root;
-  const provider = root?.modelProvider || attempt?.provider || root?.provider;
-  const executionMode = root?.modelMode || attempt?.runtimeMode;
-  const model = stats?.model || root?.model || attempt?.model;
-  const reasoningEffort = stats?.effort || root?.effort || attempt?.effort;
+function todoSessionMetadata({ attempt, stats, sessionId }: { attempt: TodoSessionAttempt | undefined; stats: SessionStats | undefined; sessionId: string | undefined }): SessionMetadataSummary {
+  const provider = attempt?.provider;
+  const executionMode = attempt?.runtimeMode;
+  const model = stats?.model || attempt?.model;
+  const reasoningEffort = stats?.effort || attempt?.effort;
   const contextPercent = stats?.contextWindow ? Math.min(100, Math.max(0, stats.contextTokens / stats.contextWindow * 100)) : undefined;
   return {
     ...(sessionId ? { sessionId } : {}),
@@ -389,46 +357,23 @@ function todoSessionMetadata({ detail, stats, sessionId }: { detail: TodoSession
   };
 }
 
-function SessionToolbarActions({ dir, sessionId, agent, detail, entries, onResume, resumeDisabled }: { dir: string; sessionId: string | undefined; agent: string | undefined; detail: TodoSessionDetailResponse | null; entries: Array<SessionEntry | SessionUIMessage>; onResume: (() => void) | undefined; resumeDisabled: boolean | undefined }) {
+function SessionToolbarActions({ dir, sessionId, agent, detail, attempt, onResume, resumeDisabled }: { dir: string; sessionId: string | undefined; agent: string | undefined; detail: TodoSessionDetailResponse | null; attempt: TodoSessionAttempt | undefined; onResume: (() => void) | undefined; resumeDisabled: boolean | undefined }) {
   return (
     <>
       {sessionId ? <CmuxSessionButton dir={dir} sessionId={sessionId} {...(agent ? { agent } : {})} {...(onResume ? { onResume } : {})} {...(resumeDisabled !== undefined ? { resumeDisabled } : {})} /> : null}
-      {detail ? <CopyAllDetailsButton detail={detail} entries={entries} compact /> : null}
+      {detail ? <CopyAllDetailsButton detail={detail} attempt={attempt} compact /> : null}
     </>
   );
 }
 
-function mergeSessionEntry(entries: Array<SessionEntry | SessionUIMessage>, entry: SessionEntry | SessionUIMessage): Array<SessionEntry | SessionUIMessage> {
-  if (!('parts' in entry) || !entry.id) return [...entries, entry];
-  const index = entries.findIndex((existing) => 'parts' in existing && existing.id === entry.id);
-  if (index < 0) return [...entries, entry];
-  const next = [...entries];
-  next[index] = entry;
-  return next;
-}
-
-function latestQuestionTool(entries: Array<SessionEntry | SessionUIMessage>): { input?: Record<string, unknown>; toolCallId?: string } | undefined {
-  for (let index = entries.length - 1; index >= 0; index--) {
-    const entry = entries[index];
-    if ('parts' in entry) {
-      for (let partIndex = entry.parts.length - 1; partIndex >= 0; partIndex--) {
-        const part = entry.parts[partIndex];
-        if (part.toolName === 'AskUserQuestion') {
-          const input = typeof part.input === 'object' && part.input !== null && !Array.isArray(part.input) ? (part.input as Record<string, unknown>) : undefined;
-          return { input, toolCallId: part.toolCallId };
-        }
-      }
-      continue;
-    }
-    if (entry.tool_use?.tool === 'AskUserQuestion')
-      return {
-        input: entry.tool_use.input,
-        toolCallId: entry.tool_use.tool_use_id,
-      };
-    const blocks = entry.message?.content ?? [];
-    for (let blockIndex = blocks.length - 1; blockIndex >= 0; blockIndex--) {
-      const block = blocks[blockIndex];
-      if (block.name === 'AskUserQuestion') return { input: block.input, toolCallId: block.id };
+function latestQuestionTool(messages: SessionUIMessage[]): { input?: Record<string, unknown>; toolCallId?: string } | undefined {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const parts = messages[index]!.parts;
+    for (let partIndex = parts.length - 1; partIndex >= 0; partIndex--) {
+      const part = parts[partIndex]!;
+      if (part.toolName !== 'AskUserQuestion') continue;
+      const input = typeof part.input === 'object' && part.input !== null && !Array.isArray(part.input) ? (part.input as Record<string, unknown>) : undefined;
+      return { input, toolCallId: part.toolCallId };
     }
   }
   return undefined;

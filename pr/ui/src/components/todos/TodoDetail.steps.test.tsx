@@ -3,7 +3,10 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TodoItem, TodoRunOptions } from '../../types';
 import type { RunContext } from './providers';
-import { TodoDetail } from './TodoDetail';
+import { StatefulTodoDetail } from './todoDetailTestHarness';
+import type { TodoDetailProps } from './TodoDetail';
+import { queryTestWrapper } from './queryTestWrapper';
+import type { TodoDetailView } from '../../routes';
 import { readRunChoiceState } from './runChoiceStorage';
 
 const execution = vi.hoisted(() => ({ run: vi.fn(), verify: vi.fn(), reset: vi.fn(), step: 'verify', spec: undefined as Record<string, unknown> | undefined }));
@@ -34,7 +37,20 @@ vi.mock('./tagQueries', () => ({ useTodoTagIndex: () => ({}), useTodoTagCounts: 
 vi.mock('./TodoTag', () => ({ TodoTagField: () => null, TodoTagRow: () => null }));
 vi.mock('./TodoTimeline', () => ({ TodoTimeline: () => null }));
 vi.mock('./TodoCommits', () => ({ TodoCommits: () => null }));
-vi.mock('./TodoSession', () => ({ TodoSession: () => null }));
+vi.mock('./TodoSession', () => ({
+  TodoSession: ({ sessionTab, sessionIds, onSessionTabChange, onSessionIdsChange }: {
+    sessionTab?: string;
+    sessionIds?: string[];
+    onSessionTabChange: (tab: string) => void;
+    onSessionIdsChange: (ids: string[]) => void;
+  }) => (
+    <div>
+      <div data-testid="session-view">{`${sessionTab ?? 'default'}|${(sessionIds ?? []).join(',')}`}</div>
+      <Button onClick={() => onSessionTabChange('metadata')}>Inspector metadata</Button>
+      <Button onClick={() => onSessionIdsChange(['run-b'])}>Select run-b</Button>
+    </div>
+  ),
+}));
 vi.mock('./TodoPlan', () => ({ TodoPlan: () => null }));
 vi.mock('./TodoVerification', () => ({ TodoVerification: () => null }));
 vi.mock('./TodoCompose', () => ({ TodoTitleEditor: () => null, TodoBodyEditor: () => null, TodoCommentBox: () => null }));
@@ -69,10 +85,54 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
-async function openDetail() {
-  render(<TodoDetail todo={todo} loading={false} dir="/repo" onChanged={() => {}} onDeleted={() => {}} />);
+async function openDetail(initialView: TodoDetailView = {}, onViewChange?: TodoDetailProps['onViewChange']) {
+  render(<StatefulTodoDetail todo={todo} loading={false} dir="/repo" onChanged={() => {}} onDeleted={() => {}} initialView={initialView} onViewChange={onViewChange} />, { wrapper: queryTestWrapper() });
   await act(async () => {});
 }
+
+describe('TodoDetail routed view', () => {
+  it('reports a detail tab click as a pushed view change', async () => {
+    const onViewChange = vi.fn();
+    await openDetail({}, onViewChange);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Session' }));
+
+    expect(onViewChange).toHaveBeenCalledWith({ tab: 'session' }, undefined);
+    expect(screen.getByTestId('session-view').textContent).toBe('default|');
+  });
+
+  it('hands the routed inspector tab and attempts to the session, pushing tab changes and replacing selections', async () => {
+    const onViewChange = vi.fn();
+    const view: TodoDetailView = { tab: 'session', sessionTab: 'costs', sessionIds: ['run-a'] };
+    await openDetail(view, onViewChange);
+    expect(screen.getByTestId('session-view').textContent).toBe('costs|run-a');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Inspector metadata' }));
+    expect(onViewChange).toHaveBeenLastCalledWith({ ...view, sessionTab: 'metadata' }, undefined);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Select run-b' }));
+    expect(onViewChange).toHaveBeenLastCalledWith({ ...view, sessionTab: 'metadata', sessionIds: ['run-b'] }, 'replace');
+  });
+
+  it('opens the Session tab for a new run and drops earlier attempt picks', async () => {
+    const onViewChange = vi.fn();
+    await openDetail({ tab: 'plan', sessionTab: 'raw', sessionIds: ['run-a'] }, onViewChange);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start plan' }));
+
+    await waitFor(() => expect(onViewChange).toHaveBeenCalledWith({ tab: 'session', sessionTab: 'raw' }, undefined));
+  });
+
+  it('lands on the Verification tab after dispatching a verification', async () => {
+    const onViewChange = vi.fn();
+    execution.verify.mockResolvedValue({});
+    await openDetail({ tab: 'plan' }, onViewChange);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start verify' }));
+
+    await waitFor(() => expect(onViewChange).toHaveBeenCalledWith({ tab: 'verification' }, undefined));
+  });
+});
 
 describe('TodoDetail named step dispatch', () => {
   it.each(['plan', 'verify', 'review-security'])('opens Advanced %s on that exact step', async step => {

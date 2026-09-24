@@ -310,17 +310,21 @@ export function ProjectStatusView({ project, diffPath = '', showResults = false,
               label={<span className="flex items-center gap-1"><UiGitCommit />Commit selected ({selected.size})</span>}
               title="Commit options"
               onClick={() => void run('commit')}
-              items={[
-                {
-                  label: <span className="flex items-center gap-2"><UiGitPr />Open PR</span>,
-                  onSelect: () => void queueSelected('open-pr'),
-                },
-                {
-                  label: <span className="flex items-center gap-2"><UiCog />Advanced…</span>,
-                  onSelect: () => setAdvancedAction('commit'),
-                },
-              ]}
+              items={[{
+                label: <span className="flex items-center gap-2"><UiCog />Advanced…</span>,
+                onSelect: () => setAdvancedAction('commit'),
+              }]}
             />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={queueCommitMutation.isPending || commitTaskError !== ''}
+              title={selected.size > 0 ? 'Commit the selected files, push, and open a PR' : 'Push local commits and open or update the branch PR'}
+              onClick={() => void queueSelected('open-pr')}
+            >
+              <span className="flex items-center gap-1"><UiGitPr />{selected.size > 0 ? `Commit & open PR (${selected.size})` : 'Open PR'}</span>
+            </Button>
             <Button type="button" variant="ghost" size="icon" disabled={busy} onClick={refreshAfterCommit} aria-label="Refresh project status">
               <UiRefresh />
             </Button>

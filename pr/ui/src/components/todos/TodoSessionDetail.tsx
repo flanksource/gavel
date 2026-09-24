@@ -1,42 +1,23 @@
-import { useCallback, useMemo, useState, type ReactNode } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import {
-  SessionInspector,
-  type SessionAgent,
-  type SessionCollectionInput,
-  type SessionCollectionItem,
-  type SessionEntry,
-  type SessionInput,
-  type SessionMetadataSummary,
-  type SessionPendingTool,
-  type SessionToolDecision,
-  type SessionUIMessage,
-  type UnifiedSessionInput,
-} from '@flanksource/clicky-ui/ai';
+import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { fetchRemoteSession, type SessionCollectionInput, type SessionCollectionItem } from '@flanksource/clicky-ui/ai';
 import { Button } from '@flanksource/clicky-ui/components';
-import { UiCheck, UiChevronDown, UiChevronRight, UiCopy, UiError, UiStop, UiWarningTriangle } from '@flanksource/clicky-ui/icons';
-import type { TodoSessionAttempt, TodoSessionDetailResponse, TodoSessionDiagnostic } from '../../types';
+import { UiCheck, UiCopy, UiStop } from '@flanksource/clicky-ui/icons';
+import type { TodoSessionAttempt, TodoSessionDetailResponse } from '../../types';
 import { Spinner } from '../../icons/Spinner';
 import { copyText } from '../../clipboard';
 import { sessionDetailQueryOptions } from './todoQueries';
 import type { TodoLaunchProgress } from './todoLaunch';
 
-export { fetchTodoSessionDetail } from './todoQueries';
-
 export interface TodoSessionDetailOptions {
-  /** Skip the provider thread — the attempt list and its DoD payloads only. */
-  attemptsOnly?: boolean;
-  /** Poll period; raise it for a badge that keeps polling while its tab is closed. */
+  /** Poll period while an attempt is live; settled attempts are re-read slowly. */
   intervalMs?: number;
 }
 
-export function useTodoSessionDetail(dir: string, ref: string, sessionId: string | undefined, active: boolean, opts: TodoSessionDetailOptions = {}) {
-  const { attemptsOnly = false, intervalMs = 1500 } = opts;
+/** The todo's attempts, newest first — one shared poll per todo. */
+export function useTodoSessionDetail(dir: string, ref: string, active: boolean, { intervalMs = 1500 }: TodoSessionDetailOptions = {}) {
   const enabled = active && !!ref;
-  const query = useQuery({
-    ...sessionDetailQueryOptions(dir, ref, sessionId, attemptsOnly, intervalMs),
-    enabled,
-  });
+  const query = useQuery({ ...sessionDetailQueryOptions(dir, ref, intervalMs), enabled });
   return {
     detail: enabled ? query.data ?? null : null,
     error: enabled && query.error
@@ -45,159 +26,83 @@ export function useTodoSessionDetail(dir: string, ref: string, sessionId: string
   };
 }
 
-export function SessionDiagnostics({ diagnostics }: { diagnostics: TodoSessionDiagnostic[] }) {
-  const hasError = diagnostics.some((diagnostic) => diagnostic.severity === 'error');
-  const [expanded, setExpanded] = useState(hasError);
-  const [copied, setCopied] = useState(false);
-  if (diagnostics.length === 0) return null;
-  const Chevron = expanded ? UiChevronDown : UiChevronRight;
-  const Icon = hasError ? UiError : UiWarningTriangle;
-  const text = JSON.stringify(diagnostics, null, 2);
-  const tone = hasError ? 'border-red-500/25 bg-red-500/10 text-red-700 dark:text-red-300' : 'border-amber-500/25 bg-amber-500/10 text-amber-800 dark:text-amber-300';
-
-  return (
-    <section className={`shrink-0 border-b px-3 py-2 text-xs ${tone}`}>
-      <div className="flex items-center gap-2">
-        <Icon className="shrink-0" />
-        <span className="min-w-0 flex-1 font-medium">{diagnostics.map((item) => item.message).join(' ')}</span>
-        <Button variant="ghost" type="button" onClick={() => setExpanded((value) => !value)} aria-expanded={expanded} className="h-8 gap-1 px-2 text-[11px]">
-          <Chevron /> {expanded ? 'Hide details' : 'Show details'}
-        </Button>
-      </div>
-      {expanded && (
-        <div className="mt-2 rounded border border-current/15 bg-background/80 p-2 text-foreground">
-          <div className="mb-1 flex justify-end">
-            <Button
-              variant="ghost"
-              type="button"
-              aria-label="Copy diagnostic details"
-              className="h-8 gap-1 px-2 text-[11px]"
-              onClick={async () => {
-                await copyText(text);
-                setCopied(true);
-                window.setTimeout(() => setCopied(false), 1800);
-              }}
-            >
-              {copied ? <UiCheck className="text-emerald-600" /> : <UiCopy />} {copied ? 'Copied' : 'Copy details'}
-            </Button>
-          </div>
-          <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words font-mono text-[10px]">{text}</pre>
-        </div>
-      )}
-    </section>
-  );
+/** Captain's session handler, mounted on the dashboard (pr/ui/handler.go). */
+export function captainSessionUrl(sessionId: string) {
+  return `/api/captain/sessions/${encodeURIComponent(sessionId)}`;
 }
 
-export function ThreadInspector({
-  detail,
-  entries,
-  dir,
-  todoRef,
-  onStop,
-  pendingTools,
-  onPendingToolDecision,
-  layout,
-  metadata,
-  toolbarActions,
-  launch,
-}: {
-  detail: TodoSessionDetailResponse;
-  entries: Array<SessionEntry | SessionUIMessage>;
-  dir: string;
+/** The Captain session holding an attempt's transcript, once the run has one. */
+export function attemptSessionId(attempt: TodoSessionAttempt) {
+  return attempt.executionSessionId || attempt.providerSessionId || undefined;
+}
+
+/**
+ * The attempt a session id names — its prompt run, admission, execution or
+ * provider session (the same four ids the server's RunMatchesSession accepts)
+ * — else the newest attempt.
+ */
+export function selectAttempt(attempts: TodoSessionAttempt[], sessionId: string | undefined) {
+  const named = sessionId
+    ? attempts.find(attempt => [attempt.promptRunId, attempt.admissionSessionId, attempt.executionSessionId, attempt.providerSessionId].includes(sessionId))
+    : undefined;
+  return named ?? attempts[0];
+}
+
+export const PENDING_LAUNCH_ID = 'pending-launch';
+
+/**
+ * One collection item per attempt. An attempt with a Captain session loads it
+ * from `src` (SessionInspector fetches, and follows while live); one that has
+ * none yet — or a launch still being admitted — shows as an empty session.
+ */
+export function attemptCollection({ todoRef, attempts, currentId, launch }: {
   todoRef: string;
-  onStop: (attempt: TodoSessionAttempt) => Promise<void>;
-  pendingTools: SessionPendingTool[];
-  onPendingToolDecision: (decision: SessionToolDecision) => Promise<void> | void;
-  layout?: 'default' | 'compact';
-  metadata?: SessionMetadataSummary;
-  toolbarActions?: ReactNode;
-  launch?: TodoLaunchProgress | null;
-}) {
-  const queryClient = useQueryClient();
-  const loadAttempt = useCallback(
-    async (attempt: TodoSessionAttempt) => {
-      const sessionId = attempt.executionSessionId || attempt.providerSessionId;
-      if (!sessionId) throw new Error(`Attempt #${attempt.ordinal} has no execution session`);
-      const loaded = await queryClient.fetchQuery(sessionDetailQueryOptions(dir, todoRef, sessionId, false, 1_500));
-      if (!loaded.thread) throw new Error(`Attempt #${attempt.ordinal} has no provider thread`);
-      return attemptThreadSession(loaded);
-    },
-    [dir, queryClient, todoRef]
-  );
-  const collection = useMemo(() => attemptSessionCollection(detail, entries, loadAttempt, launch), [detail, entries, loadAttempt, launch]);
-  return (
-    <SessionInspector
-      session={collection}
-      className="h-full"
-      transcriptProps={{
-        pendingTools,
-        onPendingToolDecision,
-        showHeader: false,
-        className: 'text-xs',
-      }}
-      {...(layout ? { layout } : {})}
-      {...(metadata ? { metadata } : {})}
-      {...(toolbarActions ? { toolbarActions } : {})}
-      renderSessionActions={(item) => {
-        const attempt = detail.attempts.find((candidate) => candidate.promptRunId === item.id);
-        return attempt ? <AttemptStopAction attempt={attempt} onStop={onStop} /> : null;
-      }}
-    />
-  );
-}
-
-export function attemptSessionCollection(detail: TodoSessionDetailResponse, entries: Array<SessionEntry | SessionUIMessage>, loadAttempt: (attempt: TodoSessionAttempt) => Promise<UnifiedSessionInput>, launch?: TodoLaunchProgress | null): SessionCollectionInput {
-  const activeLaunch = launch?.status !== 'failed' ? launch : null;
-  const selectedId = activeLaunch?.promptRunId || (activeLaunch ? 'pending-launch' : detail.selectedPromptRunId);
-  if (!selectedId) throw new Error('A selected attempt is required for session hierarchy');
-  const current = detail.thread && detail.selectedPromptRunId === selectedId
-    ? requireUnifiedSession(inspectorSession(detail, mergeTranscriptMessages(detail.thread.messages, entries)))
-    : { id: selectedId, messages: [] };
-  const hasLaunchAttempt = detail.attempts.some(attempt => attempt.promptRunId === selectedId);
+  attempts: TodoSessionAttempt[];
+  currentId: string;
+  launch: TodoLaunchProgress | null;
+}): SessionCollectionInput {
+  const launchItem: SessionCollectionItem[] = launch && !attempts.some(attempt => attempt.promptRunId === currentId)
+    ? [{
+      id: currentId,
+      label: `Attempt #${attempts.length + 1}`,
+      mode: launch.step,
+      status: launch.status === 'admitted' ? 'running' : 'starting',
+      session: { id: currentId, messages: [] },
+    }]
+    : [];
   return {
     kind: 'session-collection',
-    id: `todo-attempts:${detail.thread?.id || selectedId}`,
-    currentSessionId: selectedId,
-    sessions: [
-      ...(!hasLaunchAttempt && activeLaunch ? [{
-        id: selectedId,
-        label: `Attempt #${detail.attempts.length + 1}`,
-        mode: activeLaunch.step,
-        status: activeLaunch.status === 'admitted' ? 'running' : 'starting',
-        session: current,
-      }] : []),
-      ...detail.attempts.map((attempt) => {
-      const status = attempt.stopping ? 'stopping' : attempt.status;
-      const item: SessionCollectionItem = {
-        id: attempt.promptRunId,
-        label: `Attempt #${attempt.ordinal}`,
-        mode: attempt.mode || attempt.step,
-        status,
-        summary: {
-          provider: attempt.provider,
-          modelMode: attempt.runtimeMode,
-          model: attempt.model,
-          effort: attempt.effort,
-          mode: attempt.mode || attempt.step,
-          status,
-          pid: attempt.pid,
-          durationMs: attempt.durationMs,
-          updatedAt: attempt.updatedAt,
-        },
-      };
-      if (attempt.promptRunId === selectedId) item.session = current;
-      return item;
-      }),
-    ],
-    loadSession: (item) => {
-      const attempt = detail.attempts.find((candidate) => candidate.promptRunId === item.id);
-      if (!attempt) throw new Error(`Unknown attempt ${item.id}`);
-      return loadAttempt(attempt);
-    },
+    id: `todo-attempts:${todoRef}`,
+    currentSessionId: currentId,
+    sessions: [...launchItem, ...attempts.map(attemptItem)],
   };
 }
 
-function AttemptStopAction({ attempt, onStop }: { attempt: TodoSessionAttempt; onStop: (attempt: TodoSessionAttempt) => Promise<void> }) {
+function attemptItem(attempt: TodoSessionAttempt): SessionCollectionItem {
+  const status = attempt.stopping ? 'stopping' : attempt.status;
+  const mode = attempt.mode || attempt.step;
+  const sessionId = attemptSessionId(attempt);
+  return {
+    id: attempt.promptRunId,
+    label: `Attempt #${attempt.ordinal}`,
+    mode,
+    status,
+    summary: {
+      provider: attempt.provider,
+      modelMode: attempt.runtimeMode,
+      model: attempt.model,
+      effort: attempt.effort,
+      mode,
+      status,
+      pid: attempt.pid,
+      durationMs: attempt.durationMs,
+      updatedAt: attempt.updatedAt,
+    },
+    ...(sessionId ? { src: captainSessionUrl(sessionId) } : { session: { id: attempt.promptRunId, messages: [] } }),
+  };
+}
+
+export function AttemptStopAction({ attempt, onStop }: { attempt: TodoSessionAttempt; onStop: (attempt: TodoSessionAttempt) => Promise<void> }) {
   const [stopping, setStopping] = useState(attempt.stopping);
   const [error, setError] = useState('');
   if (!attempt.canStop) return null;
@@ -234,153 +139,39 @@ function AttemptStopAction({ attempt, onStop }: { attempt: TodoSessionAttempt; o
   );
 }
 
-export function CopyAllDetailsButton({ detail, entries, compact = false }: { detail: TodoSessionDetailResponse; entries: Array<SessionEntry | SessionUIMessage>; compact?: boolean }) {
-  const [copied, setCopied] = useState(false);
+/**
+ * Copies the attempt list plus the selected attempt's Captain session, read
+ * fresh from the session URL at click time.
+ */
+export function CopyAllDetailsButton({ detail, attempt, compact = false }: { detail: TodoSessionDetailResponse; attempt: TodoSessionAttempt | undefined; compact?: boolean }) {
+  const [state, setState] = useState<'idle' | 'copied' | 'error'>('idle');
+  const [error, setError] = useState('');
+  const sessionId = attempt ? attemptSessionId(attempt) : undefined;
+  const copy = async () => {
+    setError('');
+    try {
+      const session = sessionId ? await fetchRemoteSession(captainSessionUrl(sessionId)) : null;
+      await copyText(JSON.stringify({ ...detail, session }, null, 2));
+      setState('copied');
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+      setState('error');
+    }
+    window.setTimeout(() => setState('idle'), 1800);
+  };
+  const label = state === 'error' ? `Copy failed: ${error}` : 'Copy all session details';
   return (
     <Button
       variant="ghost"
       {...(compact ? { size: 'icon' as const } : {})}
       type="button"
       aria-label="Copy all session details"
-      title="Copy all session details"
+      title={label}
       className={compact ? 'hidden size-7 shrink-0 text-muted-foreground hover:bg-muted hover:text-foreground @min-[48rem]:inline-flex' : 'h-8 gap-1 px-2 text-[11px]'}
-      onClick={async () => {
-        await copyText(JSON.stringify({ ...detail, transcript: entries }, null, 2));
-        setCopied(true);
-        window.setTimeout(() => setCopied(false), 1800);
-      }}
+      onClick={() => void copy()}
     >
-      {copied ? <UiCheck className="text-emerald-600" /> : <UiCopy />}
-      {!compact ? (copied ? 'Copied' : 'Copy all') : null}
+      {state === 'copied' ? <UiCheck className="text-emerald-600" /> : <UiCopy className={state === 'error' ? 'text-red-600' : undefined} />}
+      {!compact ? (state === 'copied' ? 'Copied' : state === 'error' ? 'Copy failed' : 'Copy all') : null}
     </Button>
   );
-}
-
-export function inspectorSession(detail: TodoSessionDetailResponse, entries: Array<SessionEntry | SessionUIMessage>): SessionInput {
-  const thread = detail.thread;
-  if (!thread) {
-    const unified = entries.filter((entry): entry is SessionUIMessage => 'parts' in entry);
-    if (unified.length > 0) return unified;
-    return entries.filter((entry): entry is SessionEntry => !('parts' in entry));
-  }
-  const messages = entries.filter((entry): entry is SessionUIMessage => 'parts' in entry);
-  const agents: SessionAgent[] = thread.agents.map((agent) => ({
-    id: agent.id,
-    parentId: agent.parentSessionId,
-    type: agent.agentType,
-    desc: agent.description,
-    isRoot: agent.isRoot,
-    historyFile: agent.historyFile,
-    usage: {
-      inputTokens: agent.inputTokens,
-      outputTokens: agent.outputTokens,
-      reasoningTokens: agent.reasoningTokens,
-      cacheReadTokens: agent.cacheReadTokens,
-      cacheWriteTokens: agent.cacheWriteTokens,
-      totalTokens: agent.totalTokens,
-    },
-    cost: { inputCost: agent.costUsd },
-  }));
-  const agentsById = new Map(agents.flatMap((agent) => (agent.id ? [[agent.id, agent] as const] : [])));
-  for (const agent of agents) {
-    if (!agent.parentId) continue;
-    const parent = agentsById.get(agent.parentId);
-    if (parent) (parent.children ??= []).push(agent);
-  }
-  const root = agents.find((agent) => agent.isRoot) ?? agents.find((agent) => !agent.parentId);
-  return {
-    id: thread.id,
-    source: thread.root.source,
-    provider: thread.root.modelProvider ?? thread.root.provider,
-    modelMode: thread.root.modelMode,
-    model: thread.root.model,
-    reasoningEffort: thread.root.effort,
-    project: thread.root.project,
-    cwd: thread.root.cwd,
-    historyFile: thread.root.historyFile || thread.root.path,
-    startedAt: thread.startedAt,
-    endedAt: thread.lastActivityAt,
-    messages,
-    turns: thread.turns.map((turn) => ({
-      id: turn.id,
-      index: turn.turnIndex,
-      startedAt: turn.startedAt,
-      endedAt: turn.endedAt,
-      stopReason: turn.stopReason,
-      model: turn.model,
-      modelProvider: turn.modelProvider,
-      mode: turn.modelMode,
-      reasoningEffort: turn.effort,
-      status: turn.status,
-      error: turn.error,
-      usage: {
-        inputTokens: turn.inputTokens,
-        outputTokens: turn.outputTokens,
-        reasoningTokens: turn.reasoningTokens,
-        cacheReadTokens: turn.cacheReadTokens,
-        cacheWriteTokens: turn.cacheWriteTokens,
-        totalTokens: turn.totalTokens,
-      },
-      cost: { inputCost: turn.costUsd },
-      messageIds: Array.from({ length: turn.messageCount }, (_, index) => `${turn.id}:${index}`),
-    })),
-    root,
-    agents,
-    usage: {
-      inputTokens: thread.inputTokens,
-      outputTokens: thread.outputTokens,
-      totalTokens: thread.totalTokens,
-    },
-    cost: { inputCost: thread.costUsd },
-    toolCosts: thread.costs.map((cost) => ({
-      model: cost.model,
-      inputTokens: cost.inputTokens,
-      outputTokens: cost.outputTokens,
-      reasoningTokens: cost.reasoningTokens,
-      cacheReadTokens: cost.cacheReadTokens,
-      cacheWriteTokens: cost.cacheWriteTokens,
-      totalTokens: cost.totalTokens,
-      inputCost: cost.totalCost,
-    })),
-    health: detail.diagnostics.map((diagnostic) => ({
-      kind: diagnostic.code,
-      severity: diagnostic.severity,
-      message: diagnostic.message,
-    })),
-    live: {
-      active: thread.status === 'working',
-      pid: thread.root.pid,
-      status: thread.root.processStatus,
-    },
-    prompt: {
-      attempts: detail.attempts,
-      diagnostics: detail.diagnostics,
-      thread,
-    },
-  };
-}
-
-function mergeTranscriptMessages(snapshot: SessionUIMessage[], entries: Array<SessionEntry | SessionUIMessage>) {
-  const messages = new Map(snapshot.map((message) => [message.id, message]));
-  for (const entry of entries) {
-    if ('parts' in entry) messages.set(entry.id, entry);
-  }
-  return [...messages.values()];
-}
-
-/**
- * Projects a loaded attempt's provider thread onto the shape SessionInspector
- * and SessionViewer consume. Both the attempt list and the transcript go through
- * here so there is a single seam.
- */
-export function attemptThreadSession(detail: TodoSessionDetailResponse): UnifiedSessionInput {
-  if (!detail.thread) throw new Error('Attempt has no provider thread');
-  return requireUnifiedSession(inspectorSession(detail, detail.thread.messages));
-}
-
-function requireUnifiedSession(session: SessionInput): UnifiedSessionInput {
-  if (typeof session === 'string' || Array.isArray(session)) {
-    throw new Error('Provider thread did not produce a unified session');
-  }
-  return session;
 }

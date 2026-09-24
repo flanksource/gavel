@@ -137,6 +137,8 @@ export function MenubarTodos({ projects, projectsLoaded, projectError }: {
             onChanged={updateItem}
             onDeleted={deleted}
             onBack={() => select(null)}
+            view={todos.detailView}
+            onViewChange={todos.setDetailView}
           />
         </div>
       )}

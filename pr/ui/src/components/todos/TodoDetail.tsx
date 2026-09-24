@@ -21,6 +21,7 @@ import { TodoTagField } from './TodoTag';
 import { useTodoDetail } from './useTodoDetail';
 import { EditPencil, ExternalIssueLink, PriorityMenu, StatusMenu, TodoSection } from './TodoDetailFields';
 import { HeaderActionsMenu } from './TodoDetailActions';
+import type { TodoDetailView } from '../../routes';
 
 export interface TodoDetailProps {
   todo: TodoItem | null;
@@ -33,16 +34,20 @@ export interface TodoDetailProps {
   workspaces?: Project[];
   onTransferred?: (toDir: string, todo: TodoItem) => void;
   navigation?: TodoNavigationControlsProps;
+  // What the pane shows (detail tab, session inspector tab, selected attempts).
+  // The dashboard routes it through the URL; the menubar keeps it local.
+  view: TodoDetailView;
+  onViewChange: (view: TodoDetailView, mode?: 'push' | 'replace') => void;
 }
 
 export function TodoDetail(props: TodoDetailProps) {
-  const { todo, loading, loadError, dir, onChanged, onBack, onTransferred, navigation } = props;
+  const { todo, loading, loadError, dir, onChanged, onBack, onTransferred, navigation, view, onViewChange } = props;
   const {
     advancedMode, setAdvancedMode, runSelections, setRunSelections, error, tab, setTab,
     editingTitle, setEditingTitle, editingBody, setEditingBody, draftTitle, setDraftTitle,
     draftBody, setDraftBody, copyState, runBusy, runMessage, runError, runContext,
     busy, transferTargets, closed, body, events, verificationDetail, verificationError,
-    verification, verificationRun, sessionStop, stoppableAttempt, fullTodoId, visibleLabels,
+    verification, sessionAttemptCount, verificationRun, sessionStop, stoppableAttempt, fullTodoId, visibleLabels,
     tagIndex, tagCounts, viewSessionId, viewingHistoricalSession, sessionInProgress,
     awaitingHumanAction, phaseOptions, runningPhaseLabel, changePhaseOptions, patch,
     startEditTitle, startEditBody, saveTitle, saveBody, transferTo, pushToGithub,
@@ -296,7 +301,7 @@ export function TodoDetail(props: TodoDetailProps) {
         refID={todo.ref}
       />
       <TodoReviewBanner todo={todo} dir={dir} onChanged={onChanged} onLaunch={() => setTab('session')} />
-      <TodoDetailTabs tab={tab} onSelect={setTab} verification={verification} />
+      <TodoDetailTabs tab={tab} onSelect={setTab} verification={verification} sessionAttempts={sessionAttemptCount} />
       <div className="flex min-h-0 flex-1 flex-col bg-muted/30">
         {tab === 'session' ? (
           <TodoSession
@@ -315,6 +320,10 @@ export function TodoDetail(props: TodoDetailProps) {
             onPlanOptionsChange={options => setRunSelections(previous => ({ ...previous, plan: options }))}
             runBusy={runBusy}
             runDisabled={busy || runBusy || awaitingHumanAction}
+            sessionTab={view.sessionTab}
+            onSessionTabChange={sessionTab => onViewChange({ ...view, sessionTab })}
+            sessionIds={view.sessionIds}
+            onSessionIdsChange={sessionIds => onViewChange({ ...view, sessionIds }, 'replace')}
           />
         ) : tab === 'plan' ? (
           <TodoPlan dir={dir} todo={todo} active={tab === 'plan'} onChanged={onChanged} />

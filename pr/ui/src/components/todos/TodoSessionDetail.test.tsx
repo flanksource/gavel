@@ -1,20 +1,12 @@
 import type React from 'react';
 import { fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { TodoSessionAttempt, TodoSessionDetailResponse, TodoSessionOverview } from '../../types';
-import { attemptSessionCollection, inspectorSession, SessionDiagnostics, useTodoSessionDetail } from './TodoSessionDetail';
+import type { TodoSessionAttempt } from '../../types';
+import { attemptCollection, captainSessionUrl, CopyAllDetailsButton, selectAttempt, useTodoSessionDetail } from './TodoSessionDetail';
 import { queryTestWrapper } from './queryTestWrapper';
 
-vi.mock('@flanksource/clicky-ui/ai', () => ({
-  SessionInspector: () => <div data-testid="session-inspector" />,
-}));
-
-vi.mock('@flanksource/clicky-ui/chat', () => ({
-  providerIcon: () => (props: React.SVGProps<SVGSVGElement>) => <svg data-testid="provider-icon" {...props} />,
-}));
-
 vi.mock('@flanksource/clicky-ui/components', () => ({
-  Button: ({ children, variant: _variant, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement> & { variant?: string }) => (
+  Button: ({ children, variant: _variant, size: _size, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement> & { variant?: string; size?: string }) => (
     // oxlint-disable-next-line clicky-ui/prefer-clicky-components -- test mock for the Clicky Button itself.
     <button type="button" {...props}>
       {children}
@@ -22,125 +14,63 @@ vi.mock('@flanksource/clicky-ui/components', () => ({
   ),
 }));
 
-// Partial, like TodoSession.test.tsx: an exhaustive icon mock breaks whenever
-// the module graph grows an icon this suite never renders.
-vi.mock('@flanksource/clicky-ui/icons', async (importOriginal) => {
-  const Icon = (props: React.SVGProps<SVGSVGElement>) => <svg {...props} />;
-  return {
-    ...(await importOriginal<object>()),
-    UiCheck: Icon,
-    UiChevronDown: Icon,
-    UiChevronRight: Icon,
-    UiCopy: Icon,
-    UiError: Icon,
-    UiLoader: Icon,
-    UiListFlat: Icon,
-    UiRobotAi: Icon,
-    UiRows: Icon,
-    UiStop: Icon,
-    UiBatteryChargingVertical: Icon,
-    UiBatteryVerticalEmpty: Icon,
-    UiBatteryVerticalFull: Icon,
-    UiBatteryVerticalHigh: Icon,
-    UiBatteryVerticalLow: Icon,
-    UiBatteryVerticalMedium: Icon,
-    UiWarningTriangle: Icon,
-  };
-});
-
 afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe('TODO session details', () => {
-  it('keeps a structured conflict response so attempts and candidates still render', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue(
-        new Response(
-          JSON.stringify({
-            attempts: [
-              {
-                promptRunId: 'run-4',
-                ordinal: 4,
-                step: 'plan',
-                requested: {},
-                resolved: {},
-                state: 'failed',
-                phase: 'finished',
-                queuedAt: '2026-07-14T12:00:00Z',
-                admissionSessionId: 'admission',
-                createdAt: '2026-07-14T12:00:00Z',
-              },
-            ],
-            diagnostics: [
-              {
-                severity: 'error',
-                code: 'ambiguous_transcript_sessions',
-                message: 'Two transcripts remain',
-              },
-            ],
-          }),
-          { status: 409, headers: { 'Content-Type': 'application/json' } }
-        )
-      )
-    );
+function attempt(ordinal: number, overrides: Partial<TodoSessionAttempt> = {}): TodoSessionAttempt {
+  return {
+    promptRunId: `run-${ordinal}`,
+    ordinal,
+    step: 'run',
+    requested: {},
+    resolved: {},
+    status: 'completed',
+    processActive: false,
+    state: 'succeeded',
+    phase: 'finished',
+    queuedAt: `2026-07-14T1${ordinal}:00:00Z`,
+    admissionSessionId: `admission-${ordinal}`,
+    createdAt: `2026-07-14T1${ordinal}:00:00Z`,
+    updatedAt: `2026-07-14T1${ordinal}:01:00Z`,
+    verification: null,
+    ...overrides,
+  };
+}
 
-    const { result, unmount } = renderHook(() => useTodoSessionDetail('/repo', 'todo-1', 'provider-1', true), {
-      wrapper: queryTestWrapper(),
-    });
+function jsonResponse(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+}
+
+describe('useTodoSessionDetail', () => {
+  it('asks for the todo attempt list and nothing else', async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL) => jsonResponse({ attempts: [attempt(1)] }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { result, unmount } = renderHook(() => useTodoSessionDetail('/repo', 'todo-1', true), { wrapper: queryTestWrapper() });
+
     await waitFor(() => expect(result.current.detail?.attempts).toHaveLength(1));
-    expect(result.current.error).toBe('');
-    expect(result.current.detail?.diagnostics[0]?.code).toBe('ambiguous_transcript_sessions');
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe('/api/todos/session/detail?dir=%2Frepo&ref=todo-1');
     unmount();
   });
 
-  it('asks for attempts only when the caller does not render a transcript', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ attempts: [], diagnostics: [], attemptsOnly: true }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      })
-    );
-    vi.stubGlobal('fetch', fetchMock);
+  it('surfaces the server error instead of an empty attempt list', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ error: 'native TODO storage is unavailable' }, 501)));
 
-    const { result, unmount } = renderHook(
-      () => useTodoSessionDetail('/repo', 'todo-1', undefined, true, { attemptsOnly: true, intervalMs: 15000 }),
-      { wrapper: queryTestWrapper() },
-    );
-    await waitFor(() => expect(result.current.detail?.attemptsOnly).toBe(true));
-    expect(String(fetchMock.mock.calls[0]?.[0])).toContain('attempts=only');
+    const { result, unmount } = renderHook(() => useTodoSessionDetail('/repo', 'todo-1', true), { wrapper: queryTestWrapper() });
+
+    await waitFor(() => expect(result.current.error).toContain('native TODO storage is unavailable'));
+    expect(result.current.detail).toBeNull();
     unmount();
   });
 
   it('keeps the loaded attempts when only the poll period changes', async () => {
-    const body = {
-      attempts: [
-        {
-          promptRunId: 'run-1',
-          ordinal: 1,
-          step: 'verify',
-          requested: {},
-          resolved: {},
-          state: 'succeeded',
-          phase: 'finished',
-          queuedAt: '2026-07-14T12:00:00Z',
-          admissionSessionId: 'admission',
-          createdAt: '2026-07-14T12:00:00Z',
-        },
-      ],
-      diagnostics: [],
-    };
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () => new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } }))
-    );
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ attempts: [attempt(1, { step: 'verify' })] })));
 
     // Opening the Verification tab drops the badge's slow poll to a fast one; the
     // already-listed attempts must survive that switch.
     const { result, rerender, unmount } = renderHook(
-      ({ intervalMs }: { intervalMs: number }) =>
-        useTodoSessionDetail('/repo', 'todo-1', undefined, true, { attemptsOnly: true, intervalMs }),
+      ({ intervalMs }: { intervalMs: number }) => useTodoSessionDetail('/repo', 'todo-1', true, { intervalMs }),
       { initialProps: { intervalMs: 15000 }, wrapper: queryTestWrapper() }
     );
     await waitFor(() => expect(result.current.detail?.attempts).toHaveLength(1));
@@ -149,306 +79,119 @@ describe('TODO session details', () => {
     expect(result.current.detail?.attempts).toHaveLength(1);
     unmount();
   });
+});
 
-  it('maps attempts to generic session collection rows and lazy loaders', async () => {
-    const root: TodoSessionOverview = {
-      id: 'root',
-      source: 'claude',
-      hostId: 'local',
-      lifecycleStatus: 'succeeded',
-      activityState: 'idle',
-      healthState: 'healthy',
-      modelProvider: 'anthropic',
-      modelMode: 'agent',
-      model: 'claude-opus-4-8',
-      effort: 'high',
-      processActive: false,
-      messageCount: 1,
-      turnCount: 0,
-      inputTokens: 10,
-      outputTokens: 5,
-      totalTokens: 15,
-      costUsd: 0.01,
-    };
-    const attempts: TodoSessionAttempt[] = [
-      {
-        promptRunId: 'run-current',
-        ordinal: 2,
-        step: 'run',
-        mode: 'run',
-        requested: {},
-        resolved: {
-          provider: 'anthropic',
-          mode: 'agent',
-          model: 'claude-opus-4-8',
-          effort: 'high',
-        },
-        provider: 'anthropic',
-        runtimeMode: 'agent',
-        model: 'claude-opus-4-8',
-        effort: 'high',
-        status: 'completed',
-        processActive: false,
-        state: 'succeeded',
-        phase: 'finished',
-        queuedAt: '2026-07-14T12:00:00Z',
-        admissionSessionId: 'admission-current',
-        executionSessionId: 'root',
-        createdAt: '2026-07-14T12:00:00Z',
-        updatedAt: '2026-07-14T12:01:00Z',
-        verification: null,
-      },
-      {
-        promptRunId: 'run-parallel',
-        ordinal: 1,
-        step: 'run',
-        mode: 'api',
-        requested: {
-          provider: 'openai',
-          mode: 'api',
-          model: 'gpt-5',
-          effort: 'medium',
-        },
-        resolved: {},
-        provider: 'openai',
-        runtimeMode: 'api',
-        model: 'gpt-5',
-        effort: 'medium',
-        status: 'completed',
-        pid: 4242,
-        processActive: true,
-        state: 'succeeded',
-        phase: 'finished',
-        queuedAt: '2026-07-14T11:00:00Z',
-        admissionSessionId: 'admission-parallel',
-        executionSessionId: 'parallel',
-        createdAt: '2026-07-14T11:00:00Z',
-        updatedAt: '2026-07-14T11:02:00Z',
-        verification: null,
-      },
-    ];
-    const detail: TodoSessionDetailResponse = {
-      attempts,
-      selectedPromptRunId: 'run-current',
-      diagnostics: [],
-      thread: {
-        id: 'root',
-        status: 'completed',
-        root,
-        sessions: [root],
-        turns: [],
-        agents: [],
-        costs: [],
-        messages: [],
-        durationMs: 10,
-        inputTokens: 10,
-        outputTokens: 5,
-        totalTokens: 15,
-        costUsd: 0.01,
-      },
-    };
-    const loaded = inspectorSession(detail, []);
-    if (Array.isArray(loaded) || typeof loaded === 'string') throw new Error('expected unified session');
-    const loadAttempt = vi.fn().mockResolvedValue(loaded);
-
-    const collection = attemptSessionCollection(detail, [], loadAttempt);
-
-    expect(collection.currentSessionId).toBe('run-current');
-    expect(collection.sessions).toMatchObject([
-      {
-        id: 'run-current',
-        label: 'Attempt #2',
-        mode: 'run',
-        summary: {
-          provider: 'anthropic',
-          modelMode: 'agent',
-          model: 'claude-opus-4-8',
-          effort: 'high',
-          status: 'completed',
-          updatedAt: '2026-07-14T12:01:00Z',
-        },
-      },
-      {
-        id: 'run-parallel',
-        label: 'Attempt #1',
-        mode: 'api',
-        summary: {
-          provider: 'openai',
-          modelMode: 'api',
-          model: 'gpt-5',
-          effort: 'medium',
-          status: 'completed',
-          pid: 4242,
-          updatedAt: '2026-07-14T11:02:00Z',
-        },
-      },
-    ]);
-    expect(collection.sessions[0]?.session).toBeDefined();
-    expect(collection.sessions[1]?.session).toBeUndefined();
-    await collection.loadSession?.(collection.sessions[1]!);
-    expect(loadAttempt).toHaveBeenCalledWith(attempts[1]);
-
-    const waiting = attemptSessionCollection({ attempts, selectedPromptRunId: 'run-current', diagnostics: [] }, [], loadAttempt, {
-      status: 'admitted', step: 'run', promptRunId: 'run-new',
-    });
-    expect(waiting.currentSessionId).toBe('run-new');
-    expect(waiting.sessions.map(item => item.id)).toEqual(['run-new', 'run-current', 'run-parallel']);
-    expect(waiting.sessions[0]?.session).toMatchObject({ id: 'run-new', messages: [] });
-
-    const hydrated = attemptSessionCollection({ attempts: [{ ...attempts[0]!, promptRunId: 'run-new', ordinal: 3 }, ...attempts], selectedPromptRunId: 'run-new', diagnostics: [] }, [], loadAttempt, {
-      status: 'admitted', step: 'run', promptRunId: 'run-new',
-    });
-    expect(hydrated.sessions.map(item => item.id)).toEqual(['run-new', 'run-current', 'run-parallel']);
+describe('attemptCollection', () => {
+  const current = attempt(2, {
+    mode: 'plan',
+    provider: 'anthropic',
+    runtimeMode: 'agent',
+    model: 'claude-opus-4-8',
+    effort: 'high',
+    executionSessionId: 'execution/2',
+    providerSessionId: 'provider-2',
+    durationMs: 60_000,
   });
+  const providerOnly = attempt(1, { providerSessionId: 'provider-1', pid: 4242, stopping: true });
+  const unstarted = attempt(3, { status: 'queued', phase: 'queued' });
 
-  it('copies the complete warning details including candidate metadata', async () => {
-    const writeText = vi.fn().mockResolvedValue(undefined);
-    Object.defineProperty(navigator, 'clipboard', {
-      configurable: true,
-      value: { writeText },
-    });
-    render(
-      <SessionDiagnostics
-        diagnostics={[
-          {
-            severity: 'warning',
-            code: 'legacy_session_identity_resolved',
-            message: 'Selected the transcript-bearing row',
-            details: [
-              { id: 'captain-1', hostId: 'local' },
-              { id: 'captain-2', hostId: 'MacBook-Pro.local' },
-            ],
-          },
-        ]}
-      />
-    );
+  it('loads each attempt from its Captain session, preferring the execution session', () => {
+    const collection = attemptCollection({ todoRef: 'todo-1', attempts: [unstarted, current, providerOnly], currentId: 'run-2', launch: null });
 
-    fireEvent.click(screen.getByRole('button', { name: /Show details/ }));
-    fireEvent.click(screen.getByRole('button', { name: 'Copy diagnostic details' }));
-    await waitFor(() => expect(writeText).toHaveBeenCalledWith(expect.stringContaining('MacBook-Pro.local')));
-  });
-
-  it('nests provider sub-agents under the root for the shared inspector', () => {
-    const root: TodoSessionOverview = {
-      id: 'root',
-      source: 'claude',
-      hostId: 'local',
-      lifecycleStatus: 'succeeded',
-      activityState: 'idle',
-      healthState: 'healthy',
-      modelProvider: 'anthropic',
-      modelMode: 'cmux',
-      model: 'claude-opus-4-8',
-      effort: 'high',
-      pid: 8342,
-      processActive: false,
-      messageCount: 2,
-      turnCount: 1,
-      inputTokens: 10,
-      outputTokens: 5,
-      totalTokens: 15,
-      costUsd: 1,
-    };
-    const detail: TodoSessionDetailResponse = {
-      attempts: [],
-      diagnostics: [],
-      thread: {
-        id: 'root',
-        status: 'working',
-        root,
-        sessions: [root],
-        costs: [],
-        messages: [],
-        durationMs: 10,
-        turns: [
-          {
-            id: 'turn-db-1',
-            sessionId: 'root',
-            providerTurnId: 'turn-1',
-            turnIndex: 1,
-            status: 'running',
-            model: 'claude-opus-4-8',
-            modelMode: 'cmux',
-            effort: 'high',
-            inputTokens: 10,
-            outputTokens: 5,
-            reasoningTokens: 0,
-            cacheReadTokens: 0,
-            cacheWriteTokens: 0,
-            totalTokens: 15,
-            costUsd: 1,
-            messageCount: 2,
-          },
-        ],
-        inputTokens: 10,
-        outputTokens: 5,
-        totalTokens: 15,
-        costUsd: 1,
-        agents: [
-          {
-            id: 'root',
-            sessionId: 'root',
-            isRoot: true,
-            source: 'claude',
-            lifecycleStatus: 'succeeded',
-            activityState: 'idle',
-            healthState: 'healthy',
-            inputTokens: 10,
-            outputTokens: 5,
-            reasoningTokens: 0,
-            cacheReadTokens: 0,
-            cacheWriteTokens: 0,
-            totalTokens: 15,
-            costUsd: 1,
-          },
-          {
-            id: 'child',
-            sessionId: 'child',
-            parentSessionId: 'root',
-            isRoot: false,
-            agentType: 'Explore',
-            description: 'Inspect turn parsing',
-            source: 'claude',
-            lifecycleStatus: 'succeeded',
-            activityState: 'idle',
-            healthState: 'healthy',
-            inputTokens: 3,
-            outputTokens: 2,
-            reasoningTokens: 0,
-            cacheReadTokens: 0,
-            cacheWriteTokens: 0,
-            totalTokens: 5,
-            costUsd: 0.2,
-          },
-        ],
-      },
-    };
-
-    expect(inspectorSession(detail, [])).toMatchObject({
-      provider: 'anthropic',
-      modelMode: 'cmux',
-      model: 'claude-opus-4-8',
-      reasoningEffort: 'high',
-      live: { active: true, pid: 8342 },
-      turns: [
+    expect(collection).toEqual({
+      kind: 'session-collection',
+      id: 'todo-attempts:todo-1',
+      currentSessionId: 'run-2',
+      sessions: [
         {
-          id: 'turn-db-1',
-          mode: 'cmux',
-          reasoningEffort: 'high',
-          status: 'running',
+          id: 'run-3', label: 'Attempt #3', mode: 'run', status: 'queued',
+          summary: { mode: 'run', status: 'queued', updatedAt: unstarted.updatedAt },
+          session: { id: 'run-3', messages: [] },
+        },
+        {
+          id: 'run-2', label: 'Attempt #2', mode: 'plan', status: 'completed',
+          summary: {
+            provider: 'anthropic', modelMode: 'agent', model: 'claude-opus-4-8', effort: 'high',
+            mode: 'plan', status: 'completed', durationMs: 60_000, updatedAt: current.updatedAt,
+          },
+          src: '/api/captain/sessions/execution%2F2',
+        },
+        {
+          id: 'run-1', label: 'Attempt #1', mode: 'run', status: 'stopping',
+          summary: { mode: 'run', status: 'stopping', pid: 4242, updatedAt: providerOnly.updatedAt },
+          src: '/api/captain/sessions/provider-1',
         },
       ],
-      root: {
-        id: 'root',
-        children: [
-          {
-            id: 'child',
-            parentId: 'root',
-            type: 'Explore',
-            desc: 'Inspect turn parsing',
-          },
-        ],
-      },
     });
+  });
+
+  it('leads with the launching attempt until the server lists it', () => {
+    const launching = attemptCollection({
+      todoRef: 'todo-1', attempts: [current], currentId: 'run-new',
+      launch: { status: 'admitted', step: 'run', promptRunId: 'run-new' },
+    });
+    expect(launching.currentSessionId).toBe('run-new');
+    expect(launching.sessions.map(item => [item.id, item.label, item.status])).toEqual([
+      ['run-new', 'Attempt #2', 'running'],
+      ['run-2', 'Attempt #2', 'completed'],
+    ]);
+    expect(launching.sessions[0]?.session).toEqual({ id: 'run-new', messages: [] });
+
+    const listed = attemptCollection({
+      todoRef: 'todo-1', attempts: [attempt(3, { promptRunId: 'run-new' }), current], currentId: 'run-new',
+      launch: { status: 'admitted', step: 'run', promptRunId: 'run-new' },
+    });
+    expect(listed.sessions.map(item => item.id)).toEqual(['run-new', 'run-2']);
+  });
+});
+
+describe('selectAttempt', () => {
+  const newest = attempt(2, { executionSessionId: 'execution-2', providerSessionId: 'provider-2' });
+  const older = attempt(1, { executionSessionId: 'execution-1', providerSessionId: 'provider-1' });
+
+  it.each([
+    ['prompt run', 'run-1'],
+    ['admission session', 'admission-1'],
+    ['execution session', 'execution-1'],
+    ['provider session', 'provider-1'],
+  ])('picks the attempt its %s names', (_label, sessionId) => {
+    expect(selectAttempt([newest, older], sessionId)).toBe(older);
+  });
+
+  it('falls back to the newest attempt for an unknown or missing session id', () => {
+    expect(selectAttempt([newest, older], 'someone-else')).toBe(newest);
+    expect(selectAttempt([newest, older], undefined)).toBe(newest);
+    expect(selectAttempt([], undefined)).toBeUndefined();
+  });
+});
+
+describe('CopyAllDetailsButton', () => {
+  it('copies the attempts with the selected attempt session read from Captain', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+    const session = { id: 'execution-2', messages: [{ id: 'm1', role: 'assistant', parts: [{ type: 'text', text: 'plan ready' }] }] };
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL) => jsonResponse(session));
+    vi.stubGlobal('fetch', fetchMock);
+    const selected = attempt(2, { executionSessionId: 'execution-2' });
+
+    render(<CopyAllDetailsButton detail={{ attempts: [selected] }} attempt={selected} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Copy all session details' }));
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(captainSessionUrl('execution-2'));
+    expect(JSON.parse(writeText.mock.calls[0]?.[0] as string)).toEqual({ attempts: [selected], session });
+  });
+
+  it('reports a failed session read instead of copying a partial payload', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ error: 'session execution-2 not found' }, 404)));
+    const selected = attempt(2, { executionSessionId: 'execution-2' });
+
+    render(<CopyAllDetailsButton detail={{ attempts: [selected] }} attempt={selected} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Copy all session details' }));
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Copy all session details' }).getAttribute('title')).toContain('session execution-2 not found'));
+    expect(writeText).not.toHaveBeenCalled();
   });
 });
