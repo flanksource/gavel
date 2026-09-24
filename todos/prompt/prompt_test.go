@@ -302,12 +302,15 @@ func TestRenderTriageIncludesBacklogForDedupe(t *testing.T) {
 // Both closing verdicts need the other TODO's full body, which the excerpt does
 // not carry — so the prompt has to say where to get it and must be allowed to.
 func TestRenderTriageDirectsTheAgentToReadCandidatesInFull(t *testing.T) {
-	user := renderUser(t, []*types.TODO{newTestTODO("solo", "task")}, Options{
+	req, _, err := renderResolvedForTest([]*types.TODO{newTestTODO("solo", "task")}, Options{
 		Prompt: "triage", Envelope: EnvelopeTriage, Backlog: "- ab12cd  Other  (pending, high)",
 	})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
 	for _, want := range []string{"gavel todos get", "[in this batch]", "merges", "duplicateOf"} {
-		if !strings.Contains(user, want) {
-			t.Errorf("triage prompt omitted %q:\n%s", want, user)
+		if !strings.Contains(req.Prompt.System, want) {
+			t.Errorf("triage system prompt omitted %q:\n%s", want, req.Prompt.System)
 		}
 	}
 }
@@ -343,19 +346,38 @@ func TestRenderTriageStatesUnsetPriorityAndLabels(t *testing.T) {
 // in the schema description and the field list, so an inaccurate title survived
 // every rewrite of the body under it.
 func TestRenderTriageAsksForATitleOnlyWhenItIsWrong(t *testing.T) {
-	user := renderUser(t, []*types.TODO{newTestTODO("solo", "task")}, Options{Prompt: "triage", Envelope: EnvelopeTriage})
-	body, _, found := strings.Cut(user, "### 3.")
+	req, _, err := renderResolvedForTest([]*types.TODO{newTestTODO("solo", "task")}, Options{Prompt: "triage", Envelope: EnvelopeTriage})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	body, _, found := strings.Cut(req.Prompt.System, "### 3.")
 	if !found {
-		t.Fatalf("triage prompt has no step 3 to bound the body step:\n%s", user)
+		t.Fatalf("triage system prompt has no step 3 to bound the body step:\n%s", req.Prompt.System)
 	}
 	_, bodyStep, found := strings.Cut(body, "### 2.")
 	if !found {
-		t.Fatalf("triage prompt has no step 2:\n%s", user)
+		t.Fatalf("triage system prompt has no step 2:\n%s", req.Prompt.System)
 	}
 	for _, want := range []string{"Send `title` only when", "Never reword a title that is already accurate"} {
 		if !strings.Contains(bodyStep, want) {
 			t.Errorf("the body step omitted %q:\n%s", want, bodyStep)
 		}
+	}
+}
+
+func TestRenderTriageSeparatesInstructionsFromInput(t *testing.T) {
+	req, _, err := renderResolvedForTest([]*types.TODO{newTestTODO("solo", "task")}, Options{Prompt: "triage", Envelope: EnvelopeTriage})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if !strings.Contains(req.Prompt.System, "### 1. Pick a verdict") || !strings.Contains(req.Prompt.System, "final JSON object") {
+		t.Fatalf("triage instructions missing from system prompt: %q", req.Prompt.System)
+	}
+	if strings.Contains(req.Prompt.User, "### 1. Pick a verdict") || !strings.Contains(req.Prompt.User, "## solo") {
+		t.Fatalf("triage user prompt must contain task data without static instructions: %q", req.Prompt.User)
+	}
+	if !strings.Contains(string(req.Prompt.SchemaJSON), `"verdict"`) {
+		t.Fatalf("triage output schema missing verdict: %s", req.Prompt.SchemaJSON)
 	}
 }
 

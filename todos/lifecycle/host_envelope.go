@@ -132,6 +132,20 @@ func (h *Host) collectEnvelope(execution *todos.ExecutionResult, facts *StepResu
 		facts.Run.State, facts.Run.Error = RunFailed, execution.ErrorMessage
 		return
 	}
+	if out.Response != nil && out.Response.TerminalOutcome == nil {
+		output, parseErr := captainai.ParseStructured(execution.ResponseText, func(value *map[string]any) error {
+			if (*value)["endStatus"] != string(env.EndStatus) {
+				return fmt.Errorf("output endStatus does not match the validated envelope")
+			}
+			return nil
+		})
+		if parseErr != nil {
+			execution.ErrorMessage = fmt.Sprintf("decode emitted structured output: %v", parseErr)
+			facts.Run.State, facts.Run.Error = RunFailed, execution.ErrorMessage
+			return
+		}
+		execution.OutputJSON = *output
+	}
 	execution.Summary = env.Summary
 	execution.EndStatus = env.EndStatus
 	execution.Questions = env.Questions

@@ -181,11 +181,7 @@ func (p *Provider) PrepareRun(ctx context.Context, todo *types.TODO, preparation
 		}
 	}
 
-	rendered, err := renderedSpec(renderedSpecOptions{
-		Spec: preparation.Spec, Fixture: issue.Verification,
-		RuntimePresets: preparation.RuntimePresets,
-		RuntimeProfile: preparation.RuntimeProfile, SpecTrace: preparation.SpecTrace,
-	})
+	rendered, err := renderedSpec(preparation.Spec)
 	if err != nil {
 		return todos.RunPreparationResult{}, err
 	}
