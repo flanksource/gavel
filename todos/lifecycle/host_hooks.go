@@ -2,6 +2,7 @@ package lifecycle
 
 import (
 	"sort"
+	"strings"
 
 	captainai "github.com/flanksource/captain/pkg/ai"
 	"github.com/flanksource/captain/pkg/ai/agent"
@@ -34,6 +35,9 @@ func (h *Host) Hooks(todo *types.TODO, req captainai.Request, meta todos.RunStar
 	}
 	if env := runEnvFor(todo, firstNonEmpty(req.SessionID, meta.SessionID)); len(env) > 0 {
 		hooks = append(hooks, &runEnv{env: env})
+	}
+	if labels := runLabelsFor(todo, meta, h.WorkDir); len(labels) > 0 {
+		hooks = append(hooks, &runLabels{labels: labels})
 	}
 	return append(hooks, &specRecorder{meta: meta, workflow: req.Workflow, report: report})
 }
@@ -84,6 +88,58 @@ func runEnvFor(todo *types.TODO, sessionID string) map[string]string {
 		return nil
 	}
 	return env
+}
+
+// runLabels tells the provider which todo this run is working, so the agent
+// process it supervises names itself in the task list. Without it every
+// concurrent agent renders as the same anonymous binary path and an operator
+// watching /tasks cannot tell one run from another.
+//
+// A PreRun hook for the same reason runEnv is: the labels have to be on the
+// request the provider is later built from.
+type runLabels struct {
+	labels map[string]string
+}
+
+func (h *runLabels) Name() string { return "gavel-run-labels" }
+
+func (h *runLabels) PreRun(hc *agent.HookContext) error {
+	if len(h.labels) == 0 || hc.Request == nil {
+		return nil
+	}
+	if hc.Request.Labels == nil {
+		hc.Request.Labels = map[string]string{}
+	}
+	for key, value := range h.labels {
+		hc.Request.Labels[key] = value
+	}
+	return nil
+}
+
+// runLabelsFor is the identity captain cannot derive on its own: what the work
+// is called, which todo it belongs to, where to read more, and which phase of
+// the todo is running. Everything else on the task row — model, provider, mode,
+// session — the provider fills in from what it already knows.
+func runLabelsFor(todo *types.TODO, meta todos.RunStartMetadata, workDir string) map[string]string {
+	if todo == nil || todo.ID == "" {
+		return nil
+	}
+	labels := map[string]string{
+		"todo": todo.ID,
+		"href": "/todos/" + todo.ID,
+	}
+	if title := strings.TrimSpace(todo.Title); title != "" {
+		labels["title"] = title
+	}
+	if meta.Mode != "" {
+		labels["phase"] = meta.Mode
+	}
+	// The workspace the run belongs to, so a dashboard watching several can ask
+	// the right one for this run's transcript.
+	if workDir != "" {
+		labels["dir"] = workDir
+	}
+	return labels
 }
 
 // specRecorder reports the run's request once setup has transformed it — the
