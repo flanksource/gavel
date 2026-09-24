@@ -24,7 +24,11 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
+
+      - name: Restore Go cache
+        id: go-cache
+        uses: ./.github/actions/go-cache
 
       - name: Set up Node.js and TypeScript
         uses: actions/setup-node@v4
@@ -61,6 +65,23 @@ jobs:
         run: ./.bin/gavel test
         env:
           GAVEL_DB_EMBEDDED_TEST: "1"
+
+      # The Test job is the only writer of the Go cache: it compiles every
+      # test binary on top of the gavel build, so its copy is a superset of
+      # what Lint or the action self-test would save. always() keeps a failing
+      # test run from throwing that compile work away, and saving only from
+      # the default branch keeps one copy per go.sum instead of one per PR
+      # (PR-branch caches are invisible to other branches anyway). An exact
+      # hit means the key already exists and cannot be replaced, so skip it.
+      - name: Save Go cache
+        if: >-
+          always()
+          && github.ref_name == github.event.repository.default_branch
+          && steps.go-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ steps.go-cache.outputs.paths }}
+          key: ${{ steps.go-cache.outputs.key }}
 
   gavel-npm:
     name: "@flanksource/gavel library"
