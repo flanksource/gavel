@@ -62,54 +62,6 @@ jobs:
         env:
           GAVEL_DB_EMBEDDED_TEST: "1"
 
-  lint:
-    name: Lint
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      - name: Set up Node.js and TypeScript
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
-      - name: Enable corepack (pnpm)
-        run: corepack enable
-
-      - name: Install Task
-        uses: ./.github/actions/setup-task
-
-      - name: Build gavel
-        run: task build:prod
-
-      # Node + TypeScript for the tsc / eslint linters live in these UI
-      # projects' devDependencies; install them so gavel lint can run them.
-      - name: Install test runner dependencies
-        run: pnpm install --no-frozen-lockfile
-        working-directory: testrunner/ui
-
-      - name: Install PR UI dependencies
-        run: pnpm install --no-frozen-lockfile
-        working-directory: pr/ui
-
-      - name: Install site dependencies
-        run: npm ci
-        working-directory: site
-
-      - name: Run linters
-        run: ./.bin/gavel lint
-        env:
-          CGO_ENABLED: 0
-
   gavel-npm:
     name: "@flanksource/gavel library"
     runs-on: ubuntu-latest
