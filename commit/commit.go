@@ -79,6 +79,10 @@ type Options struct {
 	DryRun     bool
 	Force      bool
 	Push       bool
+	// PushBranch, with Push, pushes HEAD to this remote branch instead of
+	// searching for the PR to push to: the caller already knows which PR it is
+	// working on, and may be committing on a scratch branch no PR is open for.
+	PushBranch string
 	// AutoMerge, with Push, enables GitHub auto-merge on a newly opened PR so
 	// it merges once required checks pass. Only applies to PRs this run opens.
 	AutoMerge bool

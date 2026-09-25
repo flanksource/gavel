@@ -12,7 +12,13 @@ vi.mock('./run', async importOriginal => ({
 }));
 vi.mock('@flanksource/clicky-ui/ai', async importOriginal => ({
   ...(await importOriginal<object>()),
-  SpecRuntimeEditor: ({ onSave, beforeSections }: { onSave: () => void; beforeSections: ReactNode }) => <div>{beforeSections}<Button onClick={onSave}>Save runtime</Button></div>,
+  SpecRuntimeEditor: ({ onSave, beforeSections, inheritedCommits }: { onSave: () => void; beforeSections: ReactNode; inheritedCommits?: unknown[] }) => (
+    <div>
+      {beforeSections}
+      <output aria-label="inherited commits">{JSON.stringify(inheritedCommits ?? null)}</output>
+      <Button onClick={onSave}>Save runtime</Button>
+    </div>
+  ),
   OrderedPresetSelect: ({ presets, onChange }: { presets: Array<{ id: string; name: string }>; onChange: (value: string[]) => void }) => (
     <div>{presets.map(preset => <Button key={preset.id} onClick={() => onChange([preset.id])}>{preset.name}</Button>)}</div>
   ),
@@ -30,7 +36,10 @@ const context: RunContext = {
   }],
   defaultMode: 'agent', defaultProvider: 'openai', efforts: ['medium'], tools: [], models: [],
   runtimes: [{ family: 'codex', provider: 'openai', catalogPrefix: 'openai', modes: [{ mode: 'agent', schema: { type: 'object' } }] }],
-  promptDefaults: { verify: { mode: 'agent', model: 'example-verify-model' } },
+  promptDefaults: {
+    verify: { mode: 'agent', model: 'example-verify-model' },
+    run: { spec: { workflow: { commits: [{ on: 'run', stage: 'worktree', gates: 'full' }] } } },
+  },
   runtimePresets: [{ id: 'review-preset', name: 'Review preset', scope: 'context', spec: { model: 'example-preset-model' } }],
   lifecycle: { steps: [{ name: 'verify', label: 'Verify', prompt: 'verify', readOnly: false }] },
 };
@@ -88,6 +97,19 @@ describe('prompt lifecycle options', () => {
     render(<PromptRunAdvancedDialog dir="/repo" scope={scope} open onClose={() => {}} onRun={onRun} />);
     fireEvent.click(screen.getByRole('button', { name: 'Save runtime' }));
     expect(JSON.parse(JSON.stringify(onRun.mock.calls[0]?.[0]))).toEqual({ step, spec: {} });
+  });
+
+  // The dialog opens empty, so without the step's resolved commit policy the
+  // editor showed "Never" for a run the lifecycle commits with stage worktree.
+  it.each([
+    { scope: 'approval' as const, inherited: [{ on: 'run', stage: 'worktree', gates: 'full' }] },
+    { scope: 'verification' as const, inherited: null },
+  ])('shows the $scope step commit policy as inherited without sending it', ({ scope, inherited }) => {
+    const onRun = vi.fn();
+    render(<PromptRunAdvancedDialog dir="/repo" scope={scope} open onClose={() => {}} onRun={onRun} />);
+    expect(JSON.parse(screen.getByLabelText('inherited commits').textContent ?? '')).toEqual(inherited);
+    fireEvent.click(screen.getByRole('button', { name: 'Save runtime' }));
+    expect(JSON.parse(JSON.stringify(onRun.mock.calls[0]?.[0])).spec).toEqual({});
   });
 
   it.each([

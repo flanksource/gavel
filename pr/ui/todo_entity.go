@@ -3,11 +3,11 @@ package ui
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
 
-	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/route"
 	"github.com/flanksource/clicky/rpc"
@@ -18,6 +18,7 @@ import (
 	"github.com/flanksource/gavel/todos/query"
 	"github.com/flanksource/gavel/todos/run"
 	todoruntime "github.com/flanksource/gavel/todos/runtime"
+	"github.com/spf13/cobra"
 	"gorm.io/gorm"
 )
 

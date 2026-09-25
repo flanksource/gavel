@@ -346,6 +346,7 @@ export function PromptRunAdvancedDialog({
         onChange={setValue}
         effectiveModel={inherited?.model}
         effectiveMode={inherited?.mode}
+        inheritedCommits={verification ? undefined : context.promptDefaults?.[step]?.spec?.workflow?.commits}
         models={models}
         families={buildRunFamilies(context)}
         tools={context.tools}

@@ -41,6 +41,18 @@ type PRContext struct {
 	StatusText string
 	// UnresolvedComments is the count of review comments still awaiting a reply.
 	UnresolvedComments int
+	// BaseBranch is the branch the PR merges into.
+	BaseBranch string
+	// Conflicts are the paths left conflicted by the merge of BaseBranch gavel
+	// started in the agent's tree before the first turn. Non-empty means that
+	// merge is in progress, and resolving it comes before any CI fix.
+	Conflicts []Conflict
+}
+
+// Conflict is one conflicted path and the kind git reported for it.
+type Conflict struct {
+	Path string `json:"path"`
+	Kind string `json:"kind,omitempty"`
 }
 
 type ResolveOptions struct {
@@ -59,7 +71,15 @@ func Layers(options ResolveOptions) ([]api.SpecLayer, error) {
 		"title":      pr.Title,
 		"url":        pr.URL,
 		"branch":     pr.Branch,
+		"baseBranch": pr.BaseBranch,
 		"statusText": strings.TrimRight(pr.StatusText, "\n"),
+	}
+	if len(pr.Conflicts) > 0 {
+		conflicts := make([]map[string]any, 0, len(pr.Conflicts))
+		for _, c := range pr.Conflicts {
+			conflicts = append(conflicts, map[string]any{"path": c.Path, "kind": c.Kind})
+		}
+		data["conflicts"] = conflicts
 	}
 	// Handlebars treats 0 as falsy, so an empty count simply drops its section.
 	if pr.UnresolvedComments > 0 {

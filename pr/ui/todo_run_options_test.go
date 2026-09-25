@@ -36,10 +36,13 @@ func isolatedTodoWorkspace(t *testing.T) string {
 }
 
 // Auto-commit is sourced from Workflow.Commits. The lifecycle's run step
-// declares one, so a default dashboard run commits; a payload stanza replaces
-// it; and an empty list cannot clear it — captain's merge reads an empty slice
-// as "not stated", which is why the CLI refuses `--commit=false` outright
-// rather than pretending the request layer removed anything.
+// declares one, so a default dashboard run commits; a payload stanza merges into
+// it by phase (captain merges Workflow.Commits as a strategic merge patch keyed
+// on `on`), so naming the phase keeps the step's staging and gates and only the
+// fields the stanza sets change; and an empty list cannot clear it — captain's
+// merge reads an empty slice as "not stated", which is why the CLI refuses
+// `--commit=false` outright rather than pretending the request layer removed
+// anything.
 func TestDashboardRunCommitFromWorkflow(t *testing.T) {
 	dir := isolatedTodoWorkspace(t)
 	// The run step is named: a pending todo with no plan would otherwise be
@@ -52,7 +55,8 @@ func TestDashboardRunCommitFromWorkflow(t *testing.T) {
 		want     []api.Commit
 	}{
 		{"no workflow inherits the lifecycle step's commit", nil, []api.Commit{{On: api.CommitOnRun, Stage: "worktree", Gates: api.CommitGatesFull}}},
-		{"a commit policy replaces it", &api.Workflow{Commits: []api.Commit{{On: api.CommitOnRun, Gates: api.CommitGatesCheap}}}, []api.Commit{{On: api.CommitOnRun, Gates: api.CommitGatesCheap}}},
+		{"a bare run stanza keeps the step's staging and gates", &api.Workflow{Commits: []api.Commit{{On: api.CommitOnRun}}}, []api.Commit{{On: api.CommitOnRun, Stage: "worktree", Gates: api.CommitGatesFull}}},
+		{"a run stanza changes only the fields it sets", &api.Workflow{Commits: []api.Commit{{On: api.CommitOnRun, Gates: api.CommitGatesCheap}}}, []api.Commit{{On: api.CommitOnRun, Stage: "worktree", Gates: api.CommitGatesCheap}}},
 		{"an empty commit list leaves the step's commit", &api.Workflow{Commits: []api.Commit{}}, []api.Commit{{On: api.CommitOnRun, Stage: "worktree", Gates: api.CommitGatesFull}}},
 	}
 	for _, tc := range cases {

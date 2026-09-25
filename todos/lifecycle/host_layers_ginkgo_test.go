@@ -467,6 +467,21 @@ var _ = Describe("todo spec layers", func() {
 		})
 	})
 
+	Describe("commit policies", func() {
+		It("merges a request's run stanza into the lifecycle step's by phase", func() {
+			stepCommit := api.Commit{On: api.CommitOnRun, Stage: api.CommitStageWorktree, Gates: api.CommitGatesFull}
+			in := runLayerInput(verify.GavelConfig{}, api.Spec{},
+				api.Spec{Workflow: &api.Workflow{Commits: []api.Commit{{On: api.CommitOnRun}}}})
+			in.StepSpec = api.Spec{Workflow: &api.Workflow{Commits: []api.Commit{stepCommit}}}
+
+			resolved, err := lifecycle.ResolveLayers(in)
+
+			Expect(err).ToNot(HaveOccurred())
+			Expect(resolved.Spec.Workflow.Commits).To(Equal([]api.Commit{stepCommit}),
+				"a request naming only the phase must keep the step's staging and gates")
+		})
+	})
+
 	Describe("class invariants", func() {
 		It("strips inherited commit policies from a plan-class spec", func() {
 			spec := api.Spec{Workflow: &api.Workflow{Commits: []api.Commit{{On: "run"}}}}

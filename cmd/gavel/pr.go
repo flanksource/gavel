@@ -54,6 +54,7 @@ type PRStatusOptions struct {
 
 	AIFix         bool `flag:"ai-fix" help:"Fix failing checks/comments with AI: each turn is committed and pushed, then the PR status is re-polled until it is green"`
 	AIFixMaxIters int  `flag:"ai-fix-max-iterations" help:"Max fix→push→re-poll rounds; 0 uses the pr.fix prompt's workflow.verify.maxIterations"`
+	Worktree      bool `flag:"worktree" help:"With --ai-fix, work in a fresh git worktree checked out at the PR head instead of the current checkout"`
 
 	// Embedded: contributes --model, --backend, --api-key, --no-cache,
 	// --budget, --debug, --max-tokens, --temperature, --permission-mode,
@@ -94,6 +95,10 @@ Key flags:
   --ai-fix          Fix failures/comments with AI, committing and pushing each turn, then
                     re-polling this same status until it is green (--ai-fix-max-iterations
                     caps the rounds). Configure it under pr.fix in .gavel.yaml.
+                    A conflicting PR has its base merged in first, and the agent resolves
+                    the conflict markers before fixing CI; the merge is pushed for it.
+  --worktree        With --ai-fix, work in a fresh git worktree at the PR head, so the
+                    current checkout (its branch and uncommitted work) is never touched
 
 Examples:
   gavel pr status                              # current branch's PR
@@ -107,13 +112,17 @@ Examples:
   gavel pr status --comments '1,2,!3,*,!@coderabbit'
   gavel pr status --actions '.github/workflows/ci.yml,!deploy'
   gavel pr status --actions 'lint,Install Tests - windows-amd64'   # by job/check name
-  gavel pr status --ai-fix                     # fix, push, and re-poll until checks pass`)
+  gavel pr status --ai-fix                     # fix, push, and re-poll until checks pass
+  gavel pr status 123 --ai-fix --worktree      # same, isolated from the current checkout`)
 }
 
 // validate rejects flag combinations that would silently do nothing.
 func (o PRStatusOptions) validate() error {
 	if o.FailFast && !o.Follow {
 		return fmt.Errorf("--fail-fast requires --follow: without it `pr status` already returns after a single poll")
+	}
+	if o.Worktree && !o.AIFix {
+		return fmt.Errorf("--worktree requires --ai-fix: it isolates the fix run, and a plain status poll edits nothing")
 	}
 	return nil
 }
@@ -173,7 +182,7 @@ func runPRStatus(opts PRStatusOptions) (any, error) {
 		if ctx == nil {
 			ctx = commonsContext.NewContext(context.Background())
 		}
-		if aiErr := runPRStatusAIFix(ctx, opts, result); aiErr != nil {
+		if aiErr := runPRStatusAIFix(ctx, opts, ghOpts, result); aiErr != nil {
 			return nil, fmt.Errorf("ai-fix: %w", aiErr)
 		}
 		// The exit code captured above describes the pre-fix PR, which the fix
