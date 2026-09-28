@@ -49,6 +49,25 @@ codeBlocks: [bash]
 - cel: exitCode == 0
 `
 
+const checklistEvidenceDocument = `---
+codeBlocks: [bash]
+ai:
+  criteriaSection: Acceptance Criteria
+---
+
+# Definition of done
+
+### command: formula reference test
+
+` + "```bash\necho 11 tests passed\n```" + `
+
+- cel: exitCode == 0
+
+## Acceptance Criteria
+
+- [ ] The formula reference test passes.
+`
+
 func parseDocument(markdown string) []*fixtures.FixtureNode {
 	GinkgoHelper()
 	tree, err := fixtures.ParseMarkdownDocument("verification", markdown, GinkgoT().TempDir())
@@ -81,6 +100,27 @@ func namesOf(results []fixtures.FixtureResult) []string {
 }
 
 var _ = Describe("fixtures.RunNodes", func() {
+	It("passes completed command evidence to the later acceptance checker", func() {
+		original := fixtures.AIStepRunner
+		DeferCleanup(func() { fixtures.AIStepRunner = original })
+		var previous []fixtures.FixtureResult
+		fixtures.AIStepRunner = func(test fixtures.FixtureTest, opts fixtures.RunOptions) fixtures.FixtureResult {
+			previous = append([]fixtures.FixtureResult(nil), opts.PreviousResults...)
+			return fixtures.FixtureResult{Name: test.Name, Status: task.StatusPASS}
+		}
+
+		results, _, err := fixtures.RunNodes(context.Background(), parseDocument(checklistEvidenceDocument),
+			fixtures.RunOptions{WorkDir: GinkgoT().TempDir()})
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(namesOf(results)).To(Equal([]string{"formula reference test", "Definition of done"}))
+		Expect(previous).To(HaveLen(1))
+		Expect(previous[0].Name).To(Equal("formula reference test"))
+		Expect(previous[0].Status).To(Equal(task.StatusPASS))
+		Expect(previous[0].ExitCode).To(Equal(0))
+		Expect(previous[0].Command).To(ContainSubstring("echo 11 tests passed"))
+	})
+
 	It("runs every test node in tree order and reports a passing snapshot", func() {
 		results, snapshot, err := fixtures.RunNodes(context.Background(), parseDocument(passingDocument),
 			fixtures.RunOptions{WorkDir: GinkgoT().TempDir()})

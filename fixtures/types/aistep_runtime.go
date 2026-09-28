@@ -30,7 +30,7 @@ func resolveAIStepSpec(fixture fixtures.FixtureTest, opts fixtures.RunOptions, s
 	options.Layers = append(options.Layers,
 		api.RequestSpecLayer("fixture.ai", fixture.AI.SpecOverride()),
 		api.RequestSpecLayer("fixture.checklist", api.Spec{Prompt: api.Prompt{
-			User:   buildChecklistPrompt(fixture, fixtureRepoPath(fixture, opts), checklistItems(fixture), opts.Changed),
+			User:   buildChecklistPrompt(fixture, fixtureRepoPath(fixture, opts), checklistItems(fixture), opts.Changed, opts.PreviousResults),
 			Source: "fixtures.ai-step", Schema: schema,
 		}}),
 	)
