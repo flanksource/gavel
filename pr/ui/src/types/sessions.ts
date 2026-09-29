@@ -1,3 +1,4 @@
+import type { ApprovalKind, ApprovalRequest } from '@flanksource/clicky-ui/ai';
 import type { VerifyReport } from '@flanksource/clicky-ui/data';
 
 // Rolled-up stats for a TODO's agent session (see /api/todos/session/stats):
@@ -96,11 +97,17 @@ export interface TodoSessionDetailResponse {
 
 // TodoSessionApproval is a tool-permission request a driver surfaced for human
 // review; the dashboard answers it via POST /api/todos/session/approve with
-// `{approvalId, action: "approve" | "deny" | "respond", message?, input?}`.
+// `{approvalId, action: "approve" | "deny" | "respond" | "cancel", message?,
+// input?, scope?, grants?}`. Form content and question answers travel as
+// `input` on a respond; cancel is a deny that also interrupts the turn.
 export interface TodoSessionApproval {
   approvalId: string;
   sessionId: string;
   toolUseId?: string;
   tool: string;
   input?: Record<string, unknown>;
+  // What kind of approval this is, and the stored request document behind it
+  // (Captain's ApprovalRequest). Both absent on an untyped tool approval.
+  kind?: ApprovalKind;
+  request?: ApprovalRequest;
 }

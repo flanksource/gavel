@@ -62,6 +62,16 @@ vi.mock('@flanksource/clicky-ui/ai', async (importOriginal) => ({
         <button type="button" onClick={() => decide({ event: { id: 'tool-2', kind: 'tool', tool: 'Bash', approvalId: 'approval-9' }, allow: false, message: 'Looks risky' })}>Deny with reason</button>
         {/* oxlint-disable-next-line clicky-ui/prefer-clicky-components -- test control for the transcript decision callback. */}
         <button type="button" onClick={() => decide({ event: { id: 'tool-3', kind: 'tool', tool: 'AskUserQuestion', approvalId: 'approval-9' }, allow: false, answers: { location: 'Inline' } })}>Reject answered question</button>
+        {/* Typed approvals (clicky-ui's per-kind controls): each button emits the
+            decision fields that control sends. */}
+        {/* oxlint-disable-next-line clicky-ui/prefer-clicky-components -- test control for the transcript decision callback. */}
+        <button type="button" onClick={() => decide({ event: { id: 'tool-4', kind: 'tool', tool: 'exec_command', approvalId: 'approval-9' }, allow: false, interrupt: true, message: 'stop the turn' })}>Cancel approval</button>
+        {/* oxlint-disable-next-line clicky-ui/prefer-clicky-components -- test control for the transcript decision callback. */}
+        <button type="button" onClick={() => decide({ event: { id: 'tool-5', kind: 'tool', tool: 'request_permissions', approvalId: 'approval-9' }, allow: true, scope: 'turn', grants: { filesystem: { writableRoots: ['/repo/.git'] } } })}>Grant for turn</button>
+        {/* oxlint-disable-next-line clicky-ui/prefer-clicky-components -- test control for the transcript decision callback. */}
+        <button type="button" onClick={() => decide({ event: { id: 'tool-6', kind: 'tool', tool: 'Elicitation', approvalId: 'approval-9' }, allow: true, content: { repo: 'flanksource/gavel' } })}>Submit form</button>
+        {/* oxlint-disable-next-line clicky-ui/prefer-clicky-components -- test control for the transcript decision callback. */}
+        <button type="button" onClick={() => decide({ event: { id: 'tool-7', kind: 'tool', tool: 'exec_command', approvalId: 'approval-9' }, allow: true, scope: 'session' })}>Approve for session</button>
       </div>
     );
   },
@@ -462,6 +472,73 @@ describe('TodoSession', () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining('/session/approve'), expect.objectContaining({ method: 'POST' }),
     ));
+  });
+
+  describe('typed approvals', () => {
+    const request = {
+      tool: 'exec_command', toolUseId: 'appr_1', kind: 'command' as const, escalates: true, interruptible: true,
+      supportedScopes: ['request' as const, 'session' as const],
+      command: { command: 'git rebase --continue', cwd: '/repo' },
+    };
+
+    function stubApprovals(approvals: unknown[], onApprove: (body: unknown) => void = () => {}) {
+      return stubServer((url, init) => {
+        if (url.includes('/session/stats')) return Response.json({ ...sessionStats, state: 'approval', approvals });
+        if (!url.includes('/session/approve')) return undefined;
+        onApprove(JSON.parse(init?.body as string));
+        return Response.json({ resolved: true });
+      });
+    }
+
+    async function posted(click: string, approvals: unknown[] = [{ approvalId: 'approval-9', sessionId: 'session-1', tool: 'exec_command', kind: 'command', request }]) {
+      let body: unknown;
+      stubApprovals(approvals, sent => { body = sent; });
+      renderSession();
+      fireEvent.click(await screen.findByRole('button', { name: click }));
+      await waitFor(() => expect(body).toBeDefined());
+      return body;
+    }
+
+    it('hands the approval kind and request to the transcript as a typed pending tool', async () => {
+      stubApprovals([{ approvalId: 'approval-9', sessionId: 'session-1', toolUseId: 'appr_1', tool: 'exec_command', kind: 'command', request }]);
+      renderSession();
+
+      const inspector = await screen.findByTestId('session-inspector');
+      await waitFor(() => expect(JSON.parse(inspector.getAttribute('data-pending') ?? '[]')).toEqual([{
+        tool: 'exec_command', toolCallId: 'appr_1', approvalId: 'approval-9', sessionId: 'session-1', kind: 'command', request,
+      }]));
+    });
+
+    it('hands an approval with no kind or request over as the old pending tool shape', async () => {
+      stubApprovals([{ approvalId: 'approval-9', sessionId: 'session-1', toolUseId: 'toolu_1', tool: 'Bash', input: { command: 'ls' } }]);
+      renderSession();
+
+      const inspector = await screen.findByTestId('session-inspector');
+      await waitFor(() => expect(JSON.parse(inspector.getAttribute('data-pending') ?? '[]')).toEqual([{
+        tool: 'Bash', input: { command: 'ls' }, toolCallId: 'toolu_1', approvalId: 'approval-9', sessionId: 'session-1',
+      }]));
+    });
+
+    it('posts Cancel as the cancel action, keeping the message', async () => {
+      expect(await posted('Cancel approval')).toEqual({ approvalId: 'approval-9', action: 'cancel', message: 'stop the turn' });
+    });
+
+    it('posts a granted subset with its scope as an approve', async () => {
+      expect(await posted('Grant for turn')).toEqual({
+        approvalId: 'approval-9', action: 'approve', scope: 'turn',
+        grants: { filesystem: { writableRoots: ['/repo/.git'] } },
+      });
+    });
+
+    it('posts an approval scope', async () => {
+      expect(await posted('Approve for session')).toEqual({ approvalId: 'approval-9', action: 'approve', scope: 'session' });
+    });
+
+    it('posts form content as the input of a respond', async () => {
+      expect(await posted('Submit form')).toEqual({
+        approvalId: 'approval-9', action: 'respond', input: { repo: 'flanksource/gavel' },
+      });
+    });
   });
 
   it('stops the attempt from its picker row and invalidates the attempt and session caches', async () => {

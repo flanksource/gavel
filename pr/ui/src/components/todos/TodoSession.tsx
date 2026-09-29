@@ -1,6 +1,6 @@
 import { useCallback, useMemo } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { SessionInspector, fetchRemoteSession, questionsFromToolInput, type SessionInspectorTab, type SessionMetadataSummary, type SessionPendingTool, type SessionToolDecision, type SessionUIMessage } from '@flanksource/clicky-ui/ai';
+import { SessionInspector, fetchRemoteSession, questionsFromToolInput, type ApprovalScope, type NativeSandboxPolicy, type SessionInspectorTab, type SessionMetadataSummary, type SessionPendingTool, type SessionToolDecision, type SessionUIMessage } from '@flanksource/clicky-ui/ai';
 import type { SessionStats, TodoItem, TodoRunOptions, TodoSessionAttempt, TodoSessionDetailResponse } from '../../types';
 import { Spinner } from '../../icons/Spinner';
 import { todoQuery } from './format';
@@ -16,8 +16,19 @@ import { setTodoLaunchProgress, todoMutationStream, updateTodoLaunchProgress, us
 // TodoSessionApprovalAction is the decision the server's approval endpoint
 // accepts for one pending approval: approve/deny answer a tool-permission
 // request (deny optionally carrying a rejection reason), respond answers a
-// question-shaped approval with the user's structured input.
-export type TodoSessionApprovalAction = 'approve' | 'deny' | 'respond';
+// question-shaped approval with the user's structured input (answers, or form
+// content), cancel denies and also interrupts the turn.
+export type TodoSessionApprovalAction = 'approve' | 'deny' | 'respond' | 'cancel';
+
+// TodoSessionApprovalOptions is everything a decision carries beyond the
+// action: a rejection reason, respond input, an approval scope, and the granted
+// subset of a permissions request.
+export interface TodoSessionApprovalOptions {
+  message?: string;
+  input?: Record<string, unknown>;
+  scope?: Exclude<ApprovalScope, 'request'>;
+  grants?: NativeSandboxPolicy;
+}
 
 // useSessionStatus polls the session stats endpoint for the high-level agent
 // state and any pending tool-permission requests, and exposes a resolver that
@@ -32,17 +43,15 @@ export function useSessionStatus(dir: string, sessionId: string | undefined, act
   const stats = enabled ? query.data : undefined;
   const approveMutation = useMutation({
     mutationKey: ['todos', 'session', 'approve', { sessionId: sessionId ?? '' }],
-    mutationFn: ({ approvalId, action, message, input }: {
+    mutationFn: ({ approvalId, action, message, input, scope, grants }: TodoSessionApprovalOptions & {
       approvalId: string;
       action: TodoSessionApprovalAction;
-      message?: string;
-      input?: Record<string, unknown>;
     }) => todoMutationJSON<{ resolved: boolean }>(
       `/api/todos/session/approve?${todoQuery(dir)}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ approvalId, action, message, input }),
+        body: JSON.stringify({ approvalId, action, message, input, scope, grants }),
       },
       'Session approval update failed',
     ),
@@ -54,9 +63,9 @@ export function useSessionStatus(dir: string, sessionId: string | undefined, act
   });
 
   const approve = useCallback(
-    async (approvalId: string, action: TodoSessionApprovalAction, message?: string, input?: Record<string, unknown>) => {
+    async (approvalId: string, action: TodoSessionApprovalAction, options: TodoSessionApprovalOptions = {}) => {
       if (!sessionId) throw new Error('Session is unavailable');
-      await approveMutation.mutateAsync({ approvalId, action, message, input });
+      await approveMutation.mutateAsync({ approvalId, action, ...options });
     },
     [approveMutation.mutateAsync, sessionId]
   );
@@ -203,6 +212,8 @@ export function TodoSession({
         toolCallId: item.toolUseId,
         approvalId: item.approvalId,
         sessionId: item.sessionId,
+        ...(item.kind || item.request ? { kind: item.kind ?? item.request?.kind } : {}),
+        ...(item.request ? { request: item.request } : {}),
       }));
     if (state !== 'ask' || inProgress) return [];
     const latest = latestQuestionTool(askQuery.data?.messages ?? []);
@@ -245,15 +256,19 @@ export function TodoSession({
       const approvalId = decision.event.approvalId;
       if (approvalId) {
         if (!decision.allow) {
-          await approve(approvalId, 'deny', decision.message);
+          await approve(approvalId, decision.interrupt ? 'cancel' : 'deny', { message: decision.message });
           return;
         }
         if (decision.answers) {
           const match = approvals.find(item => item.approvalId === approvalId);
-          await approve(approvalId, 'respond', undefined, { ...match?.input, answers: decision.answers });
+          await approve(approvalId, 'respond', { input: { ...match?.input, answers: decision.answers } });
           return;
         }
-        await approve(approvalId, 'approve', decision.message);
+        if (decision.content) {
+          await approve(approvalId, 'respond', { input: decision.content });
+          return;
+        }
+        await approve(approvalId, 'approve', { message: decision.message, scope: decision.scope, grants: decision.grants });
         return;
       }
       await answerMutation.mutateAsync(decision);

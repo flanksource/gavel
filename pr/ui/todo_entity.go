@@ -63,9 +63,7 @@ func registerTodoEntity() error {
 			Workspaces: todoEntityWorkspaces,
 			DefaultDir: todoEntityDefaultDir,
 			ResolveRun: resolveBulkRunOptions,
-			Broker: func(_ context.Context, dir string) todos.ApprovalBroker {
-				return todoApprovalBroker(dir)
-			},
+			Approvals:  true,
 			PushBaseURL: func(dir, requested string) (string, error) {
 				return resolveTodoPushBaseURL(requested, dir, "")
 			},

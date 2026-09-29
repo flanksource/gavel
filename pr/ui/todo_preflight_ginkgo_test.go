@@ -46,7 +46,7 @@ var _ = Describe("todo preview preflight", func() {
 		var response map[string]json.RawMessage
 		Expect(json.Unmarshal(recorder.Body.Bytes(), &response)).To(Succeed())
 		Expect(string(response["warnings"])).To(ContainSubstring("plugins"))
-		Expect(string(response["warnings"])).NotTo(ContainSubstring("requires Config.CanUseTool"), "preview carries the dashboard's actual deferred broker")
+		Expect(string(response["warnings"])).NotTo(ContainSubstring("requires Config.OnApproval"), "preview carries the dashboard's actual deferred broker")
 		Expect(string(response["trace"])).To(ContainSubstring(`"source":"request"`))
 	})
 

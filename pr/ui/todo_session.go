@@ -8,7 +8,9 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/flanksource/captain/pkg/ai/approval"
 	cmuxprov "github.com/flanksource/captain/pkg/ai/provider/cmux"
+	"github.com/flanksource/captain/pkg/api"
 	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/google/uuid"
 )
@@ -170,11 +172,19 @@ func attachPendingApproval(
 // can have more than one outstanding and a session id cannot tell them apart.
 type todoSessionApprovePayload struct {
 	ApprovalID string `json:"approvalId"`
-	// Action is approve, deny or respond. `respond` runs the call with Input
-	// substituted; `deny` refuses it and feeds Message back as the reason.
+	// Action is approve, deny, respond or cancel. `respond` answers with Input
+	// (replacement tool input, question answers or form content) or, for a
+	// permissions request, Grants; `deny` refuses and feeds Message back as the
+	// reason; `cancel` refuses the same way and also interrupts the turn.
 	Action  string         `json:"action"`
 	Message string         `json:"message,omitempty"`
 	Input   map[string]any `json:"input,omitempty"`
+	// Scope widens an approval to the turn or session where the request offers
+	// it; empty means this request only.
+	Scope api.ApprovalScope `json:"scope,omitempty"`
+	// Grants is the approved subset of a permissions request; nil with an
+	// approval grants everything requested.
+	Grants *api.NativeSandboxPolicy `json:"grants,omitempty"`
 }
 
 // handleTodoSessionApprove answers one pending tool-permission request — the
@@ -211,12 +221,23 @@ func (s *Server) handleTodoSessionApprove(w http.ResponseWriter, r *http.Request
 		writeTodoError(w, http.StatusServiceUnavailable, err)
 		return
 	}
-	sessionID, err := approvalSessionID(r.Context(), store, strings.TrimSpace(r.URL.Query().Get("sessionId")), requestID)
+	sessionID, err := approvalSessionID(strings.TrimSpace(r.URL.Query().Get("sessionId")))
 	if err != nil {
+		writeTodoError(w, http.StatusBadRequest, err)
+		return
+	}
+	resolvedRequest, err := resolveApproval(r.Context(), store, approvalAnswer{
+		SessionID: sessionID, RequestID: requestID, Action: action, Message: payload.Message,
+		Input: payload.Input, Scope: payload.Scope, Grants: payload.Grants,
+	})
+	if errors.Is(err, captaindb.ErrTurnRequestNotFound) {
 		writeTodoError(w, http.StatusNotFound, err)
 		return
 	}
-	resolvedRequest, err := resolveApproval(r.Context(), store, sessionID, requestID, action, payload.Message, payload.Input)
+	if errors.Is(err, approval.ErrInvalidResolution) {
+		writeTodoError(w, http.StatusBadRequest, err)
+		return
+	}
 	if err != nil {
 		writeTodoError(w, http.StatusConflict, err)
 		return
@@ -228,20 +249,19 @@ func (s *Server) handleTodoSessionApprove(w http.ResponseWriter, r *http.Request
 	})
 }
 
-// approvalSessionID is the session the approval belongs to. A client that knows
-// the session sends it; one that only has the approval id from a notification
-// does not, and the row itself carries the answer.
-func approvalSessionID(ctx context.Context, store approvalStore, requested string, requestID uuid.UUID) (uuid.UUID, error) {
-	if requested != "" {
-		if sessionID, err := uuid.Parse(requested); err == nil {
-			return sessionID, nil
-		}
+// approvalSessionID is the session a client says the approval belongs to. A
+// client that only has the approval id from a notification sends none, and
+// uuid.Nil lets captain take the session off the row; one that sends a session
+// that is not a UUID is refused rather than silently answered without it.
+func approvalSessionID(requested string) (uuid.UUID, error) {
+	if requested == "" {
+		return uuid.Nil, nil
 	}
-	request, err := store.GetTurnRequest(ctx, requestID)
+	sessionID, err := uuid.Parse(requested)
 	if err != nil {
-		return uuid.Nil, err
+		return uuid.Nil, fmt.Errorf("sessionId %q must be Captain's admitted session id: %w", requested, err)
 	}
-	return request.SessionID, nil
+	return sessionID, nil
 }
 
 // handleTodoSessionApprovals lists a run's unanswered tool requests, so a

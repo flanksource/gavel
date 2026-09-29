@@ -15,6 +15,7 @@ import (
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/todos"
 	todoruntime "github.com/flanksource/gavel/todos/runtime"
+	"github.com/flanksource/gavel/todos/runtime/runtimetest"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
@@ -64,10 +65,14 @@ var _ = Describe("todo sessions served through Captain", Ordered, func() {
 
 		todo, err = provider.Create(ctx, todos.CreateRequest{Title: "Plan the shadow report", Status: types.StatusPending})
 		Expect(err).NotTo(HaveOccurred())
-		admission, err := provider.PrepareRun(ctx, todo, todos.RunPreparation{Mode: types.ModePlan, Prompt: "plan", ExecutorName: "claude"})
+		// Transcript binding looks the provider's log up under the agent's home;
+		// an empty one keeps this spec off the developer's real session logs.
+		GinkgoT().Setenv("HOME", GinkgoT().TempDir())
+		admission, err := runtimetest.Admit(ctx, provider, todo,
+			todos.RunPreparation{Mode: types.ModePlan, Prompt: "plan", ExecutorName: "claude"},
+			runtimetest.Started(providerSessionID))
 		Expect(err).NotTo(HaveOccurred())
 		promptR = admission.PromptRunID
-		Expect(provider.RecordRunStart(ctx, todo, todos.RunStartMetadata{SessionID: providerSessionID, Provider: "claude", Mode: "plan"})).To(Succeed())
 		run, err := provider.Captain().GetPromptRun(ctx, promptR)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(run.ExecutionSessionID).NotTo(BeNil())

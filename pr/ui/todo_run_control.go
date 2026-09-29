@@ -70,15 +70,11 @@ func (s *Server) handleTodoRunStop(w http.ResponseWriter, r *http.Request) {
 		writeTodoError(w, http.StatusConflict, fmt.Errorf("attempt is already %s", promptRun.State))
 		return
 	}
-	// Cancel the run's outstanding tool approvals before cancelling the run. They
-	// outlive the process that raised them, so a stopped run would otherwise leave
-	// rows a dashboard still offers to answer — and answering one would unblock a
-	// broker that is no longer there to hear it.
-	if err := detailProvider.Captain().CancelPendingTurnRequests(
-		r.Context(), promptRun.SessionID, payload.PromptRunID, "run stopped"); err != nil {
-		writeTodoError(w, http.StatusInternalServerError, err)
-		return
-	}
+	// Neither path writes a captain row from here. A run this process drives is
+	// cancelled through its context: the broker parked on an approval abandons its
+	// own request and the run settles itself. A run nobody drives is reclaimed,
+	// which settles it through captain's promptrun.Cancel — terminal state first,
+	// then its pending approvals, so the waits it wakes leave the run finished.
 	status := "stopping"
 	if err := todoRuns().Stop(payload.PromptRunID); err != nil {
 		// A run this process does not own is either driven by another live

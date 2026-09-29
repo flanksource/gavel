@@ -226,14 +226,12 @@ func (s *Server) handleTodoRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req := todoRunRequest{
-		Provider: provider,
-		Registry: todoRuns(),
-		Todo:     todoList[0],
-		Dir:      source.Dir,
-		Options:  opts,
-		// The dashboard serves the approval endpoints, so a tool call the run cannot
-		// pre-approve becomes a durable request a person can answer.
-		Broker: todoApprovalBroker(source.Dir),
+		Provider:  provider,
+		Registry:  todoRuns(),
+		Todo:      todoList[0],
+		Dir:       source.Dir,
+		Options:   opts,
+		Approvals: true,
 	}
 	// Pre-flight: the one fold the run performs, so a request that cannot
 	// resolve is a 400 the dialog renders instead of a background failure. It is
@@ -384,12 +382,12 @@ func buildTodoRunSpecPreview(
 	opts todoRunOptions,
 ) (*run.Prepared, string, error) {
 	prepared, err := run.Resolve(ctx, todoRunRequest{
-		Provider: provider,
-		Registry: todoRuns(),
-		Todo:     todo,
-		Dir:      source.Dir,
-		Options:  opts,
-		Broker:   todoApprovalBroker(source.Dir),
+		Provider:  provider,
+		Registry:  todoRuns(),
+		Todo:      todo,
+		Dir:       source.Dir,
+		Options:   opts,
+		Approvals: true,
 	})
 	if err != nil {
 		return nil, "", err

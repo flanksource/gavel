@@ -300,7 +300,7 @@ func (s *Server) continuationRequest(c run.Continuation) (run.Request, error) {
 	}
 	return run.Request{
 		Provider: c.Provider, Registry: todoRuns(), Todo: c.Todo, Dir: c.Dir,
-		Options: opts, Broker: todoApprovalBroker(c.Dir),
+		Options: opts, Approvals: true,
 	}, nil
 }
 
