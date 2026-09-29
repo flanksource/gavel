@@ -99,9 +99,9 @@ type RunSpec struct {
 	Batch    []string
 	Registry *run.Registry
 	// Dir is the fallback workspace for a TODO whose own CWD is not absolute.
-	Dir     string
-	Resolve RunResolver
-	Broker  todos.ApprovalBroker
+	Dir       string
+	Resolve   RunResolver
+	Approvals bool
 }
 
 // StartRun returns the item function for a named-step bulk action.
@@ -138,12 +138,12 @@ func StartRun(spec RunSpec) (ItemFunc, error) {
 			return ItemResult{}, err
 		}
 		req := run.Request{
-			Provider: provider,
-			Registry: spec.Registry,
-			Todo:     todo,
-			Dir:      workDir,
-			Options:  opts,
-			Broker:   spec.Broker,
+			Provider:  provider,
+			Registry:  spec.Registry,
+			Todo:      todo,
+			Dir:       workDir,
+			Options:   opts,
+			Approvals: spec.Approvals,
 		}
 		// Resolving first turns a misconfigured run into a per-item error before
 		// any agent session is admitted, so one bad TODO does not leave a

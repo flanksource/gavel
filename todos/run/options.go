@@ -43,10 +43,8 @@ type Request struct {
 	// Options is what the caller decided; everything else comes from the
 	// lifecycle definition.
 	Options Options
-	// Broker answers the run's tool-permission requests. Only a caller that
-	// serves an approval surface supplies one — the CLI leaves it nil, because a
-	// run that asked it for a decision would block until its timeout.
-	Broker todos.ApprovalBroker
+	// Approvals enables Captain's broker for an attended run.
+	Approvals bool
 	// OnComplete reports the finished run to the caller before its outcome is
 	// persisted, so a terminal can print what the agent said even when the write
 	// that follows fails. The status is the one the lifecycle decided, not the

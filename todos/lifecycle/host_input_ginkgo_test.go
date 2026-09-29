@@ -15,7 +15,7 @@ import (
 )
 
 var _ = g.Describe("lifecycle actual run input", func() {
-	g.It("preflights real commit hooks and defers the actual approval factory until admission is available", func() {
+	g.It("preflights real commit hooks and carries approval opt-in without constructing a broker", func() {
 		dir := g.GinkgoT().TempDir()
 		host := &Host{}
 		todo := &types.TODO{ID: "review-example"}
@@ -25,39 +25,28 @@ var _ = g.Describe("lifecycle actual run input", func() {
 				Prompt: api.Prompt{User: "review the changes"}, Setup: &shell.Setup{Cwd: dir},
 				ToolPreferences: api.ToolPreferences{"review": api.ToolPolicyAsk},
 				Workflow:        &api.Workflow{Commits: []api.Commit{{On: api.CommitOnRun, DryRun: true}}}},
+			trace:      []api.SpecLayer{{Name: "request", Scope: api.SpecLayerUser, Source: api.SpecLayerSourceRequest}},
+			provenance: map[string]api.FieldProvenance{"/prompt/user": {Source: api.FieldSource{Kind: api.FieldSourceLayer, Name: "request"}}},
+			warnings:   []string{"example warning"},
 		}
-		factoryCalls, approvalCalls := 0, 0
-		var seen api.PermissionRequest
-		input := host.runInput(exec, todo, prepared, RunOptions{Broker: func(actual *todos.ExecutorContext) (api.PermissionFunc, error) {
-			factoryCalls++
-			o.Expect(actual).To(o.BeIdenticalTo(exec))
-			return func(_ context.Context, request api.PermissionRequest) (api.PermissionDecision, error) {
-				approvalCalls++
-				seen = request
-				return api.PermissionDecision{Allow: true, Message: "approved"}, nil
-			}, nil
-		}})
+		input := host.runInput(exec, todo, prepared, RunOptions{Approvals: true})
 		warnings, err := promptrun.Preflight(input.input)
 		o.Expect(err).NotTo(o.HaveOccurred())
 		o.Expect(warnings).To(o.BeEmpty())
 		o.Expect(input.input.CallerOwnsCommits).To(o.BeTrue())
+		o.Expect(input.input.Resolved).To(o.Equal(api.ResolvedSpec{
+			Spec: prepared.request, Trace: prepared.trace, Provenance: prepared.provenance, Warnings: prepared.warnings,
+		}))
 		o.Expect(input.input.Config.Model).To(o.Equal(prepared.request.Model))
 		o.Expect(input.input.Config.NoCache).To(o.BeTrue())
 		o.Expect(input.input.Verify.Timeout).To(o.Equal(time.Minute))
-		o.Expect(input.input.Verify.Progress).NotTo(o.BeNil())
-		var hookNames []string
-		for _, hook := range input.input.Hooks {
-			hookNames = append(hookNames, hook.(interface{ Name() string }).Name())
-		}
-		o.Expect(hookNames).To(o.Equal([]string{"commit:run", "gavel-run-env", "gavel-spec-recorder"}))
+		o.Expect(input.input.Verify.Progress).To(o.BeNil(), "Captain records verification progress on a recorded run")
+		o.Expect(input.input.Record).To(o.BeNil(), "nothing is recorded before the runtime admits the run")
+		o.Expect(hookNames(input.input.Hooks)).To(o.Equal([]string{"commit:run", "gavel-run-env"}))
 		o.Expect(prepared.request.Setup.Env).To(o.BeEmpty())
-		o.Expect([]int{factoryCalls, approvalCalls}).To(o.Equal([]int{0, 0}))
-		o.Expect(input.start(exec, todo, prepared)).To(o.Succeed())
-		request := api.PermissionRequest{Tool: "review", SessionID: "admitted-session"}
-		decision, err := input.input.Config.CanUseTool(exec, request)
-		o.Expect(err).NotTo(o.HaveOccurred())
-		o.Expect(decision).To(o.Equal(api.PermissionDecision{Allow: true, Message: "approved"}))
-		o.Expect(seen).To(o.Equal(request))
-		o.Expect([]int{factoryCalls, approvalCalls}).To(o.Equal([]int{1, 1}))
+		o.Expect(input.input.Approvals).To(o.Equal(&promptrun.ApprovalOptions{RequestedBy: "gavel-dashboard"}))
+		o.Expect(input.input.Config.OnApproval).To(o.BeNil())
+		input.start(exec, todo, prepared)
+		o.Expect(input.input.Config.OnApproval).To(o.BeNil(), "Captain binds the callback after admitting the run")
 	})
 })

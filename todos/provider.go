@@ -6,9 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/flanksource/captain/pkg/api"
 	captaindb "github.com/flanksource/captain/pkg/database"
-	"github.com/flanksource/captain/pkg/runtimeprofiles"
+	"github.com/flanksource/captain/pkg/promptrun"
 	"github.com/flanksource/gavel/todos/labels"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/google/uuid"
@@ -66,9 +65,9 @@ type Provider interface {
 	SaveAttempt(ctx context.Context, todo *types.TODO, result *ExecutionResult) error
 }
 
-// RunPreparation is the durable identity needed before an external agent is
-// dispatched. PostgreSQL-backed providers use it to create and attach the
-// authoritative Captain prompt run before any provider session starts.
+// RunPreparation is what a dispatch asks of the durable runtime before an
+// external agent is started: which step it runs, who runs it, and whether it
+// continues or runs alongside a live run.
 type RunPreparation struct {
 	Mode types.RunMode
 	// Prompt is the name of the prompt being dispatched. Several prompts share a
@@ -83,20 +82,14 @@ type RunPreparation struct {
 	// distinct Captain identities and each reports its own outcome.
 	Concurrent bool
 	Requested  captaindb.PromptRunRuntimeSelection
-	// Spec is the exact request the executor will dispatch — model, budget,
-	// permissions, setup, workflow and the rendered user prompt. Native storage
-	// persists it on Captain's prompt run before external execution, so a later
-	// continuation replays what actually ran instead of reconstructing it from
-	// the run's resolved model/backend labels.
-	Spec           api.Spec
-	RuntimePresets *runtimeprofiles.PresetResolution
-	RuntimeProfile *runtimeprofiles.Resolution
-	SpecTrace      []api.SpecLayer
+	// PromptMarkdown is the rendered user prompt the run is given: the prompt
+	// Captain files on the run, and the answer a resumed ask records.
+	PromptMarkdown string
 }
 
-// RunPreparationResult is the durable Captain identity allocated before an
-// external agent is dispatched. SessionID is Captain's admission session UUID,
-// not the provider-specific session identity reported after launch.
+// RunPreparationResult is the durable Captain identity a dispatch runs under.
+// SessionID is Captain's admission session UUID, not the provider-specific
+// session identity reported after launch.
 type RunPreparationResult struct {
 	SessionID string
 	// PromptRunID is the run this execution owns. With concurrent runs allowed
@@ -105,37 +98,25 @@ type RunPreparationResult struct {
 	PromptRunID uuid.UUID
 }
 
+// RunAdmission is a dispatch the runtime has cleared: the identity it runs
+// under, and the Recording Captain admits it with. Captain writes every
+// captain_* row — the sessions, the run and its lifecycle — while Record.Link
+// writes only the runtime's own rows, inside the admission transaction.
+type RunAdmission struct {
+	RunPreparationResult
+	Record *promptrun.Recording
+}
+
 // RunLifecycleProvider is implemented by the native PostgreSQL runtime. Native
 // execution state is owned by Captain and projected into issues.
 type RunLifecycleProvider interface {
-	PrepareRun(ctx context.Context, todo *types.TODO, preparation RunPreparation) (RunPreparationResult, error)
-	RecordRunStart(ctx context.Context, todo *types.TODO, metadata RunStartMetadata) error
-}
-
-// RunProgressProvider persists the in-flight verification report a definition of
-// done publishes while it runs, so the dashboard can watch the tree fill in
-// rather than waiting for the verdict.
-type RunProgressProvider interface {
-	RecordRunProgress(ctx context.Context, todo *types.TODO, report api.VerifyReport) error
-}
-
-// RunNoticeProvider persists what a run's lifecycle hooks did — the commits they
-// cut between turns — into the session transcript. Flushed once the run is over,
-// because a hook firing mid-turn cannot yet know the transcript session's id:
-// that row only exists after the provider's log has been ingested.
-type RunNoticeProvider interface {
-	RecordRunNotices(ctx context.Context, sessionID string, notices []api.Notice) error
-}
-
-// RunIterationProvider files the per-turn account of a run under the prompt
-// run captain admitted: what each turn was asked, how it ended, and the
-// verification report that judged it. Captain derives the rows
-// (promptrun.IterationRecords); the host that dispatched the run writes them,
-// because captain's own CLI is the only host captain persists for. A run whose
-// rows are never written has no verification report anywhere the dashboard or
-// the lifecycle's run history reads from.
-type RunIterationProvider interface {
-	RecordRunIterations(ctx context.Context, promptRunID uuid.UUID, records []captaindb.UpsertPromptRunIterationInput) error
+	// PrepareRun decides whether and how a run may be dispatched — live-run
+	// ownership, resume, concurrency — and returns the Recording Captain admits
+	// it with. It writes no captain_* row.
+	PrepareRun(ctx context.Context, todo *types.TODO, preparation RunPreparation) (RunAdmission, error)
+	// RunAdmitted is told once Captain committed the admission: this process
+	// now drives the run, and the todo is re-read as the admission left it.
+	RunAdmitted(ctx context.Context, todo *types.TODO, admission RunPreparationResult) error
 }
 
 // GlobalReferenceProvider resolves a native UUID or imported alias without a

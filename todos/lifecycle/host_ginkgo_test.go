@@ -5,12 +5,10 @@ import (
 	"time"
 
 	"github.com/flanksource/captain/pkg/api"
-	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/lifecycle"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/flanksource/gavel/verify"
-	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -20,24 +18,13 @@ import (
 // silent success.
 type fakeProvider struct {
 	todos.Provider
-	plan       todos.PlanState
-	runs       []todos.StepRunRecord
-	backlog    types.TODOS
-	states     []todos.StateUpdate
-	attempts   []*todos.ExecutionResult
-	comments   []string
-	events     []todos.Event
-	iterations []captaindb.UpsertPromptRunIterationInput
-}
-
-// RecordRunIterations captures the rows the host files for a finished run,
-// stamped with the run they belong to as the native runtime stamps them.
-func (f *fakeProvider) RecordRunIterations(_ context.Context, promptRunID uuid.UUID, records []captaindb.UpsertPromptRunIterationInput) error {
-	for _, record := range records {
-		record.PromptRunID = promptRunID
-		f.iterations = append(f.iterations, record)
-	}
-	return nil
+	plan     todos.PlanState
+	runs     []todos.StepRunRecord
+	backlog  types.TODOS
+	states   []todos.StateUpdate
+	attempts []*todos.ExecutionResult
+	comments []string
+	events   []todos.Event
 }
 
 func (f *fakeProvider) PlanState(context.Context, *types.TODO) (todos.PlanState, error) {
@@ -249,27 +236,27 @@ var _ = Describe("Host", func() {
 	})
 
 	Describe("Hooks", func() {
-		It("orders the commit pipeline, the run environment and the spec recorder", func() {
+		It("orders the commit pipeline before the run environment", func() {
 			req := api.Spec{Workflow: &api.Workflow{Commits: []api.Commit{{On: "run"}, {On: "turn"}}}}
 			meta := todos.RunStartMetadata{SessionID: "session-1"}
 
-			hooks := host.Hooks(hostTodo(), req, meta, func(todos.RunStartMetadata) {})
+			hooks := host.Hooks(hostTodo(), req, meta)
 
 			var names []string
 			for _, hook := range hooks {
 				names = append(names, hook.(interface{ Name() string }).Name())
 			}
-			Expect(names).To(Equal([]string{"commit:run", "commit:turn", "gavel-run-env", "gavel-spec-recorder"}))
+			Expect(names).To(Equal([]string{"commit:run", "commit:turn", "gavel-run-env"}))
 		})
 
 		It("declares no commit hook for a spec without commit policies", func() {
-			hooks := host.Hooks(hostTodo(), api.Spec{}, todos.RunStartMetadata{}, func(todos.RunStartMetadata) {})
+			hooks := host.Hooks(hostTodo(), api.Spec{}, todos.RunStartMetadata{})
 
 			var names []string
 			for _, hook := range hooks {
 				names = append(names, hook.(interface{ Name() string }).Name())
 			}
-			Expect(names).To(Equal([]string{"gavel-run-env", "gavel-spec-recorder"}))
+			Expect(names).To(Equal([]string{"gavel-run-env"}))
 		})
 	})
 

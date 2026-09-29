@@ -25,25 +25,17 @@ const (
 // collect folds what came back from captain into the two records a finished
 // step needs: the facts the outcome predicates read, and the execution result
 // the provider persists as the attempt.
-func (h *Host) collect(exec *todos.ExecutorContext, todo *types.TODO, step Step, prepared *preparedStep, d dispatched, start time.Time) *StepOutcome {
+func (h *Host) collect(step Step, prepared *preparedStep, d dispatched, start time.Time) *StepOutcome {
 	execution := d.execution
 	execution.Duration = time.Since(start)
 	out := d.out
 	if out.Response != nil && out.Response.Workspace != nil {
-		// Flushed here rather than from the hooks that produced them: a hook firing
-		// mid-turn cannot know the transcript session's id, because that row only
-		// exists once the monitor has ingested the provider's log.
-		exec.RecordNotices(execution.Runtime.SessionID, out.Response.Workspace.Notices)
 		if commits := out.Response.Workspace.Commits; len(commits) > 0 {
 			execution.CommitSHA = commits[len(commits)-1].SHA
 		}
 	}
-	if out.CostUSD > 0 {
-		execution.CostUSD = out.CostUSD
-	}
-	if tokens := out.Usage.TotalTokens(); tokens > 0 {
-		execution.TokensUsed = tokens
-	}
+	execution.CostUSD = out.CostUSD
+	execution.TokensUsed = out.Usage.TotalTokens()
 	if out.Loop != nil {
 		execution.NumTurns = len(out.Loop.Iterations)
 	}
@@ -384,9 +376,21 @@ func (h *Host) handleEvent(exec *todos.ExecutorContext, ev captainai.Event, exec
 		transcript.AddExecutorMessage(action, todos.EntryAction, map[string]any{"tool": ev.Tool})
 		exec.Notify(todos.Notification{Type: todos.NotifyAction, Message: action})
 	case captainai.EventPermission:
-		action := toolSummary(ev)
-		transcript.AddExecutorMessage("awaiting approval: "+action, todos.EntryAction, map[string]any{"tool": ev.Tool})
-		exec.Notify(todos.Notification{Type: todos.NotifyApproval, Message: action})
+		message := "awaiting approval: " + toolSummary(ev)
+		detail := map[string]any{"tool": ev.Tool}
+		if ev.ApprovalID != "" {
+			detail["approvalId"] = ev.ApprovalID
+			detail["input"] = ev.Input
+		}
+		if ev.Request != nil {
+			detail["kind"] = ev.Request.Kind
+		}
+		if ev.Reason != "" {
+			message = "approval " + ev.Reason + ": " + ev.Tool
+			detail["reason"] = ev.Reason
+		}
+		transcript.AddExecutorMessage(message, todos.EntryAction, detail)
+		exec.Notify(todos.Notification{Type: todos.NotifyApproval, Message: message, Data: detail})
 	case captainai.EventSystem:
 		if ev.SessionID != "" {
 			setSessionID(todo, ev.SessionID)
@@ -401,10 +405,6 @@ func (h *Host) handleEvent(exec *todos.ExecutorContext, ev captainai.Event, exec
 		}
 	case captainai.EventResult:
 		*sawResult = true
-		if ev.Usage != nil {
-			execution.TokensUsed += ev.Usage.TotalTokens()
-		}
-		execution.CostUSD += ev.CostUSD
 		if !ev.Success {
 			// A result that is not a success is an error even when the provider
 			// attached no text: collect turns the message into a failed run, and a

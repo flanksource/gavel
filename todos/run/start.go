@@ -69,7 +69,7 @@ func runOptions(req Request, exec *todos.ExecutorContext) lifecycle.RunOptions {
 		Message:        req.Options.Message,
 		Concurrent:     req.Options.Concurrent,
 		Batch:          append([]string(nil), req.Options.Batch...),
-		Broker:         req.Broker,
+		Approvals:      req.Approvals,
 	}
 }
 

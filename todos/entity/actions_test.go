@@ -4,10 +4,8 @@ import (
 	"context"
 	"testing"
 
-	captainapi "github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/clicky"
 	clickyentity "github.com/flanksource/clicky/entity"
-	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/bulk"
 	"github.com/flanksource/gavel/todos/query"
 	"github.com/flanksource/gavel/todos/run"
@@ -146,16 +144,14 @@ func TestOptionalActionsAreGatedOnTheirDependencies(t *testing.T) {
 // tool-permission prompt, so it must never be configured to ask — whatever the
 // process-global registration was given. Registration cannot decide this,
 // because one registration serves every surface.
-func TestApprovalBrokerIsOnlyWiredOnAnAttendedSurface(t *testing.T) {
+func TestApprovalsAreOnlyEnabledOnAnAttendedSurface(t *testing.T) {
 	deps := testDeps()
-	deps.Broker = func(context.Context, string) todos.ApprovalBroker {
-		return func(*todos.ExecutorContext) (captainapi.PermissionFunc, error) { return nil, nil }
-	}
+	deps.Approvals = true
 
 	for _, surface := range []string{"http", "mcp"} {
 		ctx := clickyentity.ContextWithOperationSurface(context.Background(), surface)
-		if _, broker := deps.runtime(ctx, "/tmp/workspace"); broker == nil {
-			t.Fatalf("%s serves an approval endpoint and must get a broker", surface)
+		if _, approvals := deps.runtime(ctx); !approvals {
+			t.Fatalf("%s serves an approval endpoint and must enable approvals", surface)
 		}
 	}
 	// "" is a direct in-process call, which has no one watching either.
@@ -164,8 +160,8 @@ func TestApprovalBrokerIsOnlyWiredOnAnAttendedSurface(t *testing.T) {
 		if surface != "" {
 			ctx = clickyentity.ContextWithOperationSurface(ctx, surface)
 		}
-		if _, broker := deps.runtime(ctx, "/tmp/workspace"); broker != nil {
-			t.Fatalf("%q has nobody to answer a prompt and must get no broker", surface)
+		if _, approvals := deps.runtime(ctx); approvals {
+			t.Fatalf("%q has nobody to answer a prompt and must not enable approvals", surface)
 		}
 	}
 }
@@ -178,7 +174,7 @@ func TestUnattendedCallersGetThePlainRunResolution(t *testing.T) {
 		t.Fatal("the dashboard resolver must not be consulted from an unattended surface")
 		return run.Options{}, nil
 	}
-	resolve, _ := deps.runtime(clickyentity.ContextWithOperationSurface(context.Background(), "cli"), "/tmp/workspace")
+	resolve, _ := deps.runtime(clickyentity.ContextWithOperationSurface(context.Background(), "cli"))
 	if resolve == nil {
 		t.Fatal("an unattended caller still needs a resolver")
 	}

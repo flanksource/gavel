@@ -62,11 +62,8 @@ type Deps struct {
 	// is process-global and shared by every surface, so a dep that is right for
 	// one of them cannot be frozen in as the answer for all of them.
 	ResolveRun bulk.RunResolver
-	// Broker answers a batched run's tool-permission requests. Optional, and
-	// nil is the unattended answer: a terminal batch has no one to ask, so a run
-	// it starts must never be configured to. Like ResolveRun it is consulted
-	// only on an attended surface.
-	Broker func(ctx context.Context, dir string) todos.ApprovalBroker
+	// Approvals enables Captain's broker only for attended bulk runs.
+	Approvals bool
 	// PushBaseURL resolves the attachment origin for a pushed TODO's workspace.
 	// Optional: without it only an explicit --base-url is honoured.
 	PushBaseURL bulk.PushBaseURL
@@ -126,21 +123,16 @@ func attended(ctx context.Context) bool {
 	}
 }
 
-// runtime picks the run resolution and the approval broker for this
-// invocation's surface. Unattended callers always get the plain resolution and
-// no broker, whatever the deps were registered with.
-func (d Deps) runtime(ctx context.Context, dir string) (bulk.RunResolver, todos.ApprovalBroker) {
+// runtime picks run resolution and approval opt-in for this invocation's surface.
+func (d Deps) runtime(ctx context.Context) (bulk.RunResolver, bool) {
 	if !attended(ctx) {
-		return bulk.DefaultRunResolver, nil
+		return bulk.DefaultRunResolver, false
 	}
 	resolve := d.ResolveRun
 	if resolve == nil {
 		resolve = bulk.DefaultRunResolver
 	}
-	if d.Broker == nil {
-		return resolve, nil
-	}
-	return resolve, d.Broker(ctx, dir)
+	return resolve, d.Approvals
 }
 
 func (d Deps) dir(ctx context.Context, opts query.ListOpts) (string, error) {
@@ -378,10 +370,10 @@ func (d Deps) bulkActions() []clicky.EntityBulkAction {
 				if err != nil {
 					return nil, err
 				}
-				resolve, broker := d.runtime(ctx, dir)
+				resolve, approvals := d.runtime(ctx)
 				return bulk.StartRun(bulk.RunSpec{
 					Step: name, Flags: flags, Batch: batch, Registry: d.Registry,
-					Dir: dir, Resolve: resolve, Broker: broker,
+					Dir: dir, Resolve: resolve, Approvals: approvals,
 				})
 			}))
 	}

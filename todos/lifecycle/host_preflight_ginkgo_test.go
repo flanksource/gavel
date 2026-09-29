@@ -2,6 +2,7 @@ package lifecycle_test
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -16,22 +17,23 @@ import (
 	. "github.com/onsi/gomega"
 )
 
+// preflightLifecycleProvider counts admissions. It clears no run: every spec
+// here asserts that preflight refuses before admission is ever asked.
 type preflightLifecycleProvider struct {
 	*fakeProvider
-	todos.RunLifecycleProvider
 	admissions int
-	starts     int
 }
 
-func (p *preflightLifecycleProvider) PrepareRun(context.Context, *types.TODO, todos.RunPreparation) (todos.RunPreparationResult, error) {
+func (p *preflightLifecycleProvider) PrepareRun(context.Context, *types.TODO, todos.RunPreparation) (todos.RunAdmission, error) {
 	p.admissions++
-	return todos.RunPreparationResult{}, nil
+	return todos.RunAdmission{}, fmt.Errorf("preflight specs admit no run")
 }
 
-func (p *preflightLifecycleProvider) RecordRunStart(context.Context, *types.TODO, todos.RunStartMetadata) error {
-	p.starts++
-	return nil
+func (p *preflightLifecycleProvider) RunAdmitted(context.Context, *types.TODO, todos.RunPreparationResult) error {
+	return fmt.Errorf("preflight specs admit no run")
 }
+
+var _ todos.RunLifecycleProvider = (*preflightLifecycleProvider)(nil)
 
 var _ = Describe("Host full-input preflight", func() {
 	var host *lifecycle.Host
@@ -63,20 +65,18 @@ var _ = Describe("Host full-input preflight", func() {
 		Expect(resolution.Spec.Budget.MaxTurns).To(Equal(7))
 	})
 
-	It("returns permission warnings and provenance without invoking a broker, provider, setup or persistence", func() {
+	It("returns permission warnings and provenance without invoking a provider, setup or persistence", func() {
 		agent := &scriptedProvider{}
-		brokerCalls := 0
 		marker := filepath.Join(host.WorkDir, "setup-ran")
 		request := api.Spec{Permissions: api.Permissions{Plugins: api.ResourcePolicies{"review-tools": api.ResourceEnabled}}}
 		request.Setup = &shell.Setup{Cwd: marker}
 		resolution, err := host.Resolve(context.Background(), hostTodo(), stepNamed(host.Def, "plan"), lifecycle.RunOptions{
 			Request: request, Provider: agent,
-			Broker: func(*todos.ExecutorContext) (api.PermissionFunc, error) { brokerCalls++; return nil, nil },
 		})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(resolution.Warnings).To(ContainElement(ContainSubstring("plugins")))
 		Expect(resolution.Trace).To(ContainElement(HaveField("Source", api.SpecLayerSourceRequest)))
-		Expect([]int{brokerCalls, len(agent.requests), provider.admissions, len(provider.states)}).To(Equal([]int{0, 0, 0, 0}))
+		Expect([]int{len(agent.requests), provider.admissions, len(provider.states)}).To(Equal([]int{0, 0, 0}))
 		_, err = os.Stat(marker)
 		Expect(os.IsNotExist(err)).To(BeTrue())
 	})
@@ -92,11 +92,13 @@ var _ = Describe("Host full-input preflight", func() {
 		_, err = host.Dispatch(context.Background(), hostTodo(), resolution, lifecycle.RunOptions{Provider: agent})
 		Expect(err).To(MatchError(ContainSubstring("cannot enforce a per-tool policy")))
 		Expect(provider.admissions).To(BeZero())
-		Expect(provider.starts).To(BeZero())
 		Expect(agent.requests).To(BeEmpty())
 	})
 
-	It("previews a model-free fixture without invoking its factory and executes it only after admission", func() {
+	It("previews a model-free fixture without invoking its factory and executes it only on dispatch", func() {
+		// A host whose provider records nothing dispatches unrecorded; admission
+		// itself is the native runtime's, covered by its integration suites.
+		host.Provider = provider.fakeProvider
 		factoryCalls := 0
 		capverify.Unregister(capverify.KindFixture)
 		capverify.Register(capverify.KindFixture, func(ctx context.Context, spec api.Verify, options capverify.Options) ([]*capverify.Plugin, error) {
@@ -113,12 +115,11 @@ var _ = Describe("Host full-input preflight", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(resolution.Spec.Name).To(BeEmpty())
 		Expect(resolution.Warnings).To(BeEmpty())
-		Expect([]int{factoryCalls, provider.admissions, provider.starts}).To(Equal([]int{0, 0, 0}))
+		Expect(factoryCalls).To(BeZero())
 		outcome, err := host.Dispatch(context.Background(), todo, resolution, lifecycle.RunOptions{})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(outcome.Execution.DoD.Passed).To(BeTrue())
 		Expect(factoryCalls).To(Equal(1))
-		Expect(provider.admissions).To(Equal(1))
 	})
 })
 

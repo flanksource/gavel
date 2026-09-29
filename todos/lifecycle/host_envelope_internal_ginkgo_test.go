@@ -7,6 +7,7 @@ import (
 	captainai "github.com/flanksource/captain/pkg/ai"
 	"github.com/flanksource/captain/pkg/ai/agent"
 	"github.com/flanksource/captain/pkg/api"
+	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/captain/pkg/promptrun"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/todos"
@@ -39,7 +40,7 @@ var _ = ginkgo.Describe("collecting a finished run", func() {
 	})
 
 	collect := func(out promptrun.Result) *StepOutcome {
-		return host.collect(exec, &types.TODO{}, Step{Name: "run"}, prepared, dispatched{out: out, execution: execution}, time.Now())
+		return host.collect(Step{Name: "run"}, prepared, dispatched{out: out, execution: execution}, time.Now())
 	}
 
 	ginkgo.It("reports a decoded envelope as a succeeded run with the loop's stop reason", func() {
@@ -53,6 +54,73 @@ var _ = ginkgo.Describe("collecting a finished run", func() {
 		gomega.Expect(out.Result.Envelope.EndStatus).To(gomega.Equal("completed"))
 		gomega.Expect(out.Execution.OutputJSON).To(gomega.Equal(map[string]any{"summary": "Built it.", "endStatus": "completed"}))
 		gomega.Expect(out.Execution.Success).To(gomega.BeTrue())
+	})
+
+	ginkgo.It("uses Captain's final usage and cost even after result events", func() {
+		saw := false
+		host.handleEvent(exec, captainai.Event{Kind: captainai.EventResult, Success: true,
+			Usage: &captainai.Usage{InputTokens: 20}, CostUSD: 2}, execution, &types.TODO{}, &saw, todos.RunStartMetadata{})
+		out := collect(promptrun.Result{Response: &api.Response{Text: completed},
+			Usage: captainai.Usage{InputTokens: 3, OutputTokens: 2}, CostUSD: 0.5})
+		gomega.Expect(out.Execution.TokensUsed).To(gomega.Equal(5))
+		gomega.Expect(out.Execution.CostUSD).To(gomega.Equal(0.5))
+	})
+
+	ginkgo.It("renders Captain approval IDs and terminal reasons in the session transcript", func() {
+		saw := false
+		event := captainai.Event{Kind: captainai.EventPermission, Tool: "Bash",
+			ApprovalID: "approval-1", Input: map[string]any{"command": "pwd"}}
+		host.handleEvent(exec, event, execution, &types.TODO{}, &saw, todos.RunStartMetadata{})
+		gomega.Expect(exec.GetTranscript().Entries).To(gomega.HaveLen(2))
+		gomega.Expect(exec.GetTranscript().Entries[0].Metadata).To(gomega.HaveKeyWithValue("approvalId", "approval-1"))
+		gomega.Expect(exec.GetTranscript().Entries[0].Metadata).To(gomega.HaveKeyWithValue("input", event.Input))
+
+		event.Reason = "expired"
+		host.handleEvent(exec, event, execution, &types.TODO{}, &saw, todos.RunStartMetadata{})
+		gomega.Expect(exec.GetTranscript().Entries).To(gomega.HaveLen(4))
+		gomega.Expect(exec.GetTranscript().Entries[2].Content).To(gomega.Equal("approval expired: Bash"))
+		gomega.Expect(exec.GetTranscript().Entries[2].Metadata).To(gomega.HaveKeyWithValue("reason", "expired"))
+	})
+
+	// The dashboard labels a request by its kind; the tool, input and approval id
+	// every reader already uses stay beside it.
+	ginkgo.It("carries the approval kind in the notification beside the existing detail", func() {
+		saw := false
+		var notified []todos.Notification
+		exec = todos.NewExecutorContext(context.Background(), logger.StandardLogger(), &todos.UserInteraction{
+			NotifyFunc: func(n todos.Notification) { notified = append(notified, n) },
+		})
+		input := map[string]any{"command": "make build"}
+		event := captainai.Event{Kind: captainai.EventPermission, Tool: "exec_command", ApprovalID: "approval-2", Input: input,
+			Request: &api.ApprovalRequest{Tool: "exec_command", Input: input, Kind: api.ApprovalKindCommand,
+				Command: &api.CommandApproval{Command: "make build"}}}
+
+		host.handleEvent(exec, event, execution, &types.TODO{}, &saw, todos.RunStartMetadata{})
+
+		expected := map[string]any{"tool": "exec_command", "approvalId": "approval-2", "input": input, "kind": api.ApprovalKindCommand}
+		gomega.Expect(exec.GetTranscript().Entries[0].Metadata).To(gomega.Equal(expected))
+		gomega.Expect(notified).To(gomega.HaveLen(1))
+		gomega.Expect(notified[0].Data).To(gomega.Equal(expected))
+	})
+
+	ginkgo.It("preserves Captain's cancellation classification in the recording callback", func() {
+		classify := host.recordedOutcome(context.Background(), Step{Name: "run"}, prepared,
+			&stepInput{execution: execution}, time.Now())
+		outcome, err := classify(promptrun.Result{Response: &api.Response{Text: completed}}, context.Canceled, true)
+		gomega.Expect(err).NotTo(gomega.HaveOccurred())
+		gomega.Expect(outcome.State).To(gomega.Equal(captaindb.PromptRunStateCancelled))
+		gomega.Expect(outcome.Phase).To(gomega.Equal(captaindb.PromptRunPhaseFinished))
+	})
+
+	ginkgo.It("maps a completed ask envelope after Captain's generic outcome", func() {
+		classify := host.recordedOutcome(context.Background(), Step{Name: "run"}, prepared,
+			&stepInput{execution: execution}, time.Now())
+		outcome, err := classify(promptrun.Result{Passed: true, Response: &api.Response{
+			Text: `{"summary":"Which database?","endStatus":"ask","questions":[{"text":"Which database?"}]}`,
+		}}, nil, false)
+		gomega.Expect(err).NotTo(gomega.HaveOccurred())
+		gomega.Expect(outcome.State).To(gomega.Equal(captaindb.PromptRunStateWaiting))
+		gomega.Expect(outcome.Phase).To(gomega.Equal(captaindb.PromptRunPhaseGenerate))
 	})
 
 	ginkgo.It("fails a run whose provider result was not a success, even with an envelope", func() {

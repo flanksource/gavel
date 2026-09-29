@@ -7,7 +7,6 @@ import (
 
 	captainai "github.com/flanksource/captain/pkg/ai"
 	"github.com/flanksource/captain/pkg/api"
-	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/lifecycle"
 	"github.com/flanksource/gavel/todos/types"
@@ -107,14 +106,6 @@ var _ = Describe("RunStep through a scripted provider", func() {
 		Expect(outcome.Execution.CostUSD).To(Equal(0.25))
 		Expect(agent.requests).To(HaveLen(1), "one generate turn, then the fixture verified it")
 		Expect(agent.requests[0].Prompt.User).To(ContainSubstring("Implement the thing"))
-		// The turn's row is what the attempt listing reads its verification from;
-		// it is filed before the outcome so the report exists by the time the
-		// status that depends on it does.
-		Expect(provider.iterations).To(HaveLen(1))
-		Expect(provider.iterations[0].Iteration).To(Equal(1))
-		Expect(provider.iterations[0].State).To(Equal(captaindb.PromptRunIterationStateSucceeded))
-		Expect(provider.iterations[0].VerificationResult).NotTo(BeNil())
-		Expect(provider.iterations[0].VerificationResult.Passed).To(BeTrue())
 
 		Expect(host.OnOutcome(ctx, todo, run, outcome, outcome.Status)).To(Succeed())
 
@@ -146,10 +137,9 @@ var _ = Describe("RunStep through a scripted provider", func() {
 	})
 
 	// A verify-only step runs no agent turn — captain's loop never starts — so
-	// the only record of its verdict is the iteration row the host files. This
-	// is the `gavel todos check` path: without that row the dashboard showed a
-	// passed check as an errored attempt with no report.
-	It("files a verify-only step's verdict as iteration 1", func() {
+	// its verdict is the report alone. This is the `gavel todos check` path;
+	// Captain files that report as the run's first iteration.
+	It("reaches a verify-only step's verdict without a generate turn", func() {
 		agent := &scriptedProvider{}
 		todo := hostTodo()
 		verifyStep := stepNamed(host.Def, "verify")
@@ -162,11 +152,7 @@ var _ = Describe("RunStep through a scripted provider", func() {
 		Expect(outcome.Execution.DoD).NotTo(BeNil())
 		Expect(outcome.Execution.DoD.Passed).To(BeTrue())
 		Expect(agent.requests).To(BeEmpty(), "a verify-only step generates nothing")
-		Expect(provider.iterations).To(HaveLen(1))
-		Expect(provider.iterations[0].Iteration).To(Equal(1))
-		Expect(provider.iterations[0].State).To(Equal(captaindb.PromptRunIterationStateSucceeded))
-		Expect(provider.iterations[0].VerificationResult).NotTo(BeNil())
-		Expect(provider.iterations[0].VerificationResult.Passed).To(BeTrue())
-		Expect(provider.iterations[0].VerificationResult.Ran).To(BeTrue())
+		Expect(outcome.Result.Verify).NotTo(BeNil())
+		Expect([]bool{outcome.Result.Verify.Ran, outcome.Result.Verify.Passed}).To(Equal([]bool{true, true}))
 	})
 })

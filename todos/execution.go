@@ -20,16 +20,6 @@ const providerPersistenceTimeout = 30 * time.Second
 
 var ErrExecutionCancelled = errors.New("todo run stopped by user")
 
-// ApprovalBroker builds the callback a run answers tool-permission requests
-// with. Only a host that serves an approval surface supplies one — the CLI
-// leaves it nil, because a run that asked a terminal for a decision would block
-// until its timeout.
-//
-// It is a factory rather than a callback because the durable approval rows are
-// keyed on the session and prompt run Captain admits, neither of which exists
-// until the run is under way.
-type ApprovalBroker func(ctx *ExecutorContext) (captainapi.PermissionFunc, error)
-
 // ExecutionResult is the record one lifecycle step run leaves behind: what it
 // cost, what it said, and what it decided. The lifecycle host produces it and
 // the provider persists it as the todo's attempt.

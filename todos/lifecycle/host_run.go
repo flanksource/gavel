@@ -2,14 +2,12 @@ package lifecycle
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	captainai "github.com/flanksource/captain/pkg/ai"
 	"github.com/flanksource/captain/pkg/api"
-	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/captain/pkg/promptrun"
 	"github.com/flanksource/captain/pkg/runtimeprofiles"
 	"github.com/flanksource/commons-db/shell"
@@ -18,6 +16,7 @@ import (
 	"github.com/flanksource/gavel/todos/claude"
 	todoprompt "github.com/flanksource/gavel/todos/prompt"
 	"github.com/flanksource/gavel/todos/types"
+	"github.com/google/uuid"
 )
 
 // RunOptions is what the caller decides about one step run; everything else
@@ -46,8 +45,8 @@ type RunOptions struct {
 	// triage render can mark the backlog entries whose verdicts are being decided
 	// alongside this one. Empty for a single-todo run.
 	Batch []string
-	// Broker builds the tool-approval callback; nil for a host that cannot answer.
-	Broker todos.ApprovalBroker
+	// Approvals enables Captain's broker when an attended host can answer requests.
+	Approvals bool
 	// Provider, when set, replaces the one promptrun would build: the seam a test
 	// drives a scripted event stream through. promptrun then adds no setup plugin,
 	// so the host adds one itself.
@@ -130,13 +129,19 @@ func (h *Host) Dispatch(ctx context.Context, todo *types.TODO, resolution *Resol
 		return nil, fmt.Errorf("step %s preflight: %w", step.Name, err)
 	}
 	resolution.Warnings = mergeRuntimeWarnings(prepared.warnings, warnings)
-	admission, err := h.admit(exec, todo, step, prepared, opts)
+	admission, err := h.admit(exec, todo, step, prepared, input, opts)
 	if err != nil {
 		return nil, err
 	}
-	d := h.dispatch(exec, todo, prepared, input)
-	h.recordIterations(exec, admission.PromptRunID, &d)
-	outcome := h.collect(exec, todo, step, prepared, d, start)
+	d := h.dispatch(exec, todo, step, prepared, input, start)
+	if input.input.Record != nil && d.out.PromptRunID == uuid.Nil {
+		// Captain names every run it admitted on the result. A recorded run
+		// without one was never admitted: nothing ran, and there is no attempt
+		// to record — the refusal is the dispatch's error, as a refused
+		// preparation is.
+		return nil, fmt.Errorf("step %s: run %s was not admitted: %w", step.Name, admission.PromptRunID, d.err)
+	}
+	outcome := h.collect(step, prepared, d, start)
 	outcome.Admission = admission
 	outcome.Request = prepared.request
 	status, err := h.Def.Outcome(step, resolution.lc, outcome.Result)
@@ -338,77 +343,23 @@ func (h *Host) labelTaxonomy(ctx context.Context) string {
 	return todos.LabelTaxonomySection(ctx, h.Provider)
 }
 
-// admit allocates the run's durable Captain identity before anything is
-// dispatched, and wires the provider's persistence to the execution context so
-// the run's session id, runtime, progress and notices land as they happen.
-func (h *Host) admit(exec *todos.ExecutorContext, todo *types.TODO, step Step, prepared *preparedStep, opts RunOptions) (todos.RunPreparationResult, error) {
-	lifecycleProvider, ok := h.Provider.(todos.RunLifecycleProvider)
-	if !ok {
-		return todos.RunPreparationResult{}, nil
-	}
-	spec := prepared.request
-	runtime := api.RuntimeOf(spec.Provider, spec.Mode)
-	persistCtx, cancel := todos.PersistenceContext(exec)
-	defer cancel()
-	admission, err := lifecycleProvider.PrepareRun(persistCtx, todo, todos.RunPreparation{
-		Mode: prepared.class, Prompt: step.Name, ExecutorName: h.executorName(prepared),
-		Resume: opts.Resume, Concurrent: opts.Concurrent,
-		Requested: captaindb.PromptRunRuntimeSelection{
-			Provider: runtime.Provider, Mode: string(spec.Mode), Model: spec.Name, Effort: string(spec.Effort),
-		},
-		Spec: spec, RuntimePresets: prepared.runtimePresets, RuntimeProfile: prepared.runtimeProfile, SpecTrace: prepared.trace,
-	})
-	if err != nil {
-		return todos.RunPreparationResult{}, fmt.Errorf("prepare native TODO run: %w", err)
-	}
-	exec.RecordRunPrepared(admission)
-	exec.SetSessionIDHook(func(sessionID string) {
-		setSessionID(todo, sessionID)
-		h.updateState(exec, todo, todos.StateUpdate{SessionID: &sessionID})
-	})
-	exec.SetRunStartHook(h.runStartRecorder(exec, todo, prepared.class))
-	exec.SetNoticesHook(func(sessionID string, notices []api.Notice) {
-		provider, ok := h.Provider.(todos.RunNoticeProvider)
-		if !ok {
-			return
-		}
-		// A verify-only step never opens an agent session, so there is no
-		// transcript for its notices to ride on; its verdict reaches the
-		// dashboard as the iteration's VerifyReport instead.
-		if strings.TrimSpace(sessionID) == "" {
-			return
-		}
-		persistCtx, cancel := todos.PersistenceContext(exec)
-		defer cancel()
-		if err := provider.RecordRunNotices(persistCtx, sessionID, notices); err != nil {
-			exec.Logger.Errorf("failed to record run notices: %v", err)
-		}
-	})
-	return admission, nil
-}
-
 func (h *Host) executorName(prepared *preparedStep) string {
 	return string(prepared.request.Mode) + "-" + prepared.agent
 }
 
-// runStartRecorder persists the resolved runtime when the run starts, and
-// comments it on the todo once the session is known.
-func (h *Host) runStartRecorder(exec *todos.ExecutorContext, todo *types.TODO, class types.RunMode) func(todos.RunStartMetadata) {
+// runStartCommenter comments the resolved runtime on the todo once the run's
+// session is known. Captain records the run's start itself.
+func (h *Host) runStartCommenter(exec *todos.ExecutorContext, todo *types.TODO, class types.RunMode) func(todos.RunStartMetadata) {
 	commented := false
 	return func(meta todos.RunStartMetadata) {
 		if meta.Mode == "" {
 			meta.Mode = string(class)
 		}
-		persistCtx, cancel := todos.PersistenceContext(exec)
-		defer cancel()
-		if lifecycleProvider, ok := h.Provider.(todos.RunLifecycleProvider); ok {
-			if err := lifecycleProvider.RecordRunStart(persistCtx, todo, meta); err != nil {
-				exec.Logger.Errorf("failed to record native TODO run start: %v", err)
-			}
-		}
 		if commented || meta.SessionID == "" || h.Provider == nil {
 			return
 		}
+		persistCtx, cancel := todos.PersistenceContext(exec)
+		defer cancel()
 		if err := h.Provider.Comment(persistCtx, todo, todos.RenderRunStartComment(meta)); err != nil {
 			exec.Logger.Errorf("failed to comment TODO run metadata: %v", err)
 		}
@@ -430,37 +381,20 @@ func (h *Host) updateState(exec *todos.ExecutorContext, todo *types.TODO, update
 	}
 }
 
-// dispatched is what came back from captain, with the two facts only the
-// dispatching context can tell: whether the run was cancelled by its caller,
-// and whether it hit its deadline before reporting a result.
-type dispatched struct {
-	out       promptrun.Result
-	err       error
-	cancelled bool
-	timedOut  bool
-	execution *todos.ExecutionResult
-}
-
-// dispatch drives the request through captain's promptrun seam — provider
-// construction, tool-policy enforcement, the workflow's checks, the setup plugin
-// and the generate→verify loop. What stays here is what is gavel's: the todo's
-// identity on the run, the commit pipeline, the transcript, and the progress
-// sink.
-func (h *Host) dispatch(exec *todos.ExecutorContext, todo *types.TODO, prepared *preparedStep, input *stepInput) dispatched {
-	if err := input.start(exec, todo, prepared); err != nil {
-		return dispatched{err: err, execution: input.execution}
-	}
+// dispatch drives the request through captain's promptrun seam — admission and
+// recording, provider construction, tool-policy enforcement, the workflow's
+// checks, the setup plugin and the generate→verify loop. What stays here is
+// what is gavel's: the todo's identity on the run, the commit pipeline, the
+// transcript, and the classification of its envelope.
+func (h *Host) dispatch(exec *todos.ExecutorContext, todo *types.TODO, step Step, prepared *preparedStep, input *stepInput, start time.Time) dispatched {
+	input.start(exec, todo, prepared)
 	runCtx, cancel := context.WithTimeout(exec, prepared.timeout)
 	defer cancel()
+	if input.input.Record != nil {
+		input.input.Record.Outcome = h.recordedOutcome(runCtx, step, prepared, input, start)
+	}
 	out, err := promptrun.Run(runCtx, input.input)
-	if input.progress.err != nil {
-		err = errors.Join(err, input.progress.err)
-	}
-	return dispatched{
-		out: out, err: err, execution: input.execution,
-		cancelled: errors.Is(context.Cause(runCtx), todos.ErrExecutionCancelled),
-		timedOut:  errors.Is(runCtx.Err(), context.DeadlineExceeded) && !input.sawResult,
-	}
+	return input.dispatched(runCtx, out, err)
 }
 
 func (h *Host) runMetadata(req captainai.Request, providerSessionID string, todo *types.TODO, prepared *preparedStep) todos.RunStartMetadata {
