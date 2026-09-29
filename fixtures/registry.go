@@ -44,6 +44,8 @@ type RunOptions struct {
 	ExtraArgs      map[string]interface{}
 	ExecutablePath string // Path to the current executable
 	UpdateGolden   bool   // When true, mismatched @file expectations are rewritten with actual output instead of failing
+	Profile        bool
+	SQLProfile     bool
 	Progress       func(done, total int) error
 
 	// Setup is the environment prepared for the markdown file this fixture came

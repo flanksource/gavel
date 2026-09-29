@@ -177,9 +177,6 @@ importers:
       '@shikijs/transformers':
         specifier: ^1.24.0
         version: 1.29.2
-      '@tanstack/react-query':
-        specifier: ^5.66.8
-        version: 5.101.0(react@18.3.1)
       '@tanstack/react-virtual':
         specifier: ^3.13.12
         version: 3.14.10(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
@@ -235,6 +232,9 @@ importers:
       '@tailwindcss/cli':
         specifier: ^4.3.3
         version: 4.3.3
+      '@tanstack/react-query':
+        specifier: ^5.66.8
+        version: 5.101.0(react@18.3.1)
       '@testing-library/jest-dom':
         specifier: ^6.6.3
         version: 6.9.1

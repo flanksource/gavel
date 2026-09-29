@@ -310,15 +310,13 @@ func ParseMarkdownContentWithTree(name, content, sourceDir string, frontMatter *
 	var contentTree *FixtureNode
 	var err error
 	if frontMatter != nil && frontMatter.AI != nil {
-		// `ai:` front matter adds an AI verification step, but the same
-		// markdown file may also contain ordinary fixture steps below it.
-		contentTree, err = parseAIFixtureTree(content, frontMatter, sourceDir)
+		contentTree, err = parseMarkdownWithGoldmarkTree(content, frontMatter, sourceDir)
 		if err == nil {
-			regularTree, regularErr := parseMarkdownWithGoldmarkTree(content, frontMatter, sourceDir)
-			if regularErr != nil {
-				err = regularErr
+			aiTree, aiErr := parseAIFixtureTree(content, frontMatter, sourceDir)
+			if aiErr != nil {
+				err = aiErr
 			} else {
-				for _, child := range regularTree.Children {
+				for _, child := range aiTree.Children {
 					contentTree.AddChild(child)
 				}
 			}

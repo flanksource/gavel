@@ -122,7 +122,6 @@ func TestTodosPlanApproveWithRunChainsAnImplementRun(t *testing.T) {
 	_, created := seedCLIReviewTodo(t, t.TempDir(), "Runnable plan")
 	dispatched := stubApprovedRun(t)
 
-
 	if err := runTodosPlanApprove(TodosPlanApproveOptions{TodoTargetOptions: TodoTargetOptions{IDs: []string{"Runnable plan"}}, Run: true}); err != nil {
 		t.Fatalf("approve --run: %v", err)
 	}

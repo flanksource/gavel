@@ -21,7 +21,7 @@ func fixtureFrontmatterSchema() fixtureJSONSchema {
 			"fixtures --help",
 		),
 		"x-order": []string{
-			"build", "daemon", "exec", "args", "env", "cwd", "terminal", "setup", "record", "files", "codeBlocks",
+			"build", "daemon", "exec", "args", "env", "cwd", "terminal", "setup", "record", "goProfiles", "files", "codeBlocks",
 			"timeout", "os", "arch", "skip", "ai", "verify",
 		},
 		"properties": map[string]any{
@@ -34,6 +34,7 @@ func fixtureFrontmatterSchema() fixtureJSONSchema {
 			"terminal":   withHelp(enumProp("Terminal", "Terminal mode. `pty` uses a pseudo-terminal and merges stdout/stderr.", []string{"pty"}), "File structure", "`pty` mode uses a pseudo-terminal, which is useful for terminal UI output and ANSI assertions.", "fixtures --help", "pty"),
 			"setup":      fixtureSetupSchema(),
 			"record":     fixtureRecordSchema(),
+			"goProfiles": fixtureGoProfilesSchema(),
 			"files":      withHelp(stringProp("Files", "Glob pattern: replicate tests per matching file."), "File expansion", "Set `files` to replicate each test per matched file. File variables such as `file`, `filename`, `dir`, and `ext` become available.", "fixtures --help", "**/*.go"),
 			"codeBlocks": withHelp(stringArrayProp("Code blocks", "Executable code fence languages."), "Supported languages", "Languages to execute from standalone code fences. Non-executable labels such as yaml/frontmatter/json are parsed as config.", "fixtures --help", []string{"bash", "python"}),
 			"timeout":    withHelp(stringProp("Timeout", "Total timeout for fixture execution."), "Execution", "Total timeout for test execution. Individual command blocks can override this with YAML config or `timeout=N` fence attributes.", "fixtures --help", "30s"),
@@ -291,6 +292,23 @@ func fixturePromptFenceSchema(description string) fixtureJSONSchema {
 	}
 }
 
+func fixtureGoProfilesSchema() fixtureJSONSchema {
+	return fixtureJSONSchema{
+		"type":        "object",
+		"description": "Named Go pprof outputs checked after each exec when --profile is enabled. Missing outputs are valid.",
+		"additionalProperties": fixtureJSONSchema{
+			"type":                 "object",
+			"additionalProperties": false,
+			"properties": map[string]any{
+				"file":      stringProp("File", "Relative pprof filename under this fixture's isolated artifact directory."),
+				"directory": stringProp("Directory", "Relative directory whose emitted files are Go pprof profiles."),
+				"args":      stringArrayProp("Arguments", "Arguments appended to the exec only with --profile; use {{.path}} for the absolute destination."),
+				"env":       stringProp("Environment variable", "Variable set to the absolute destination only with --profile."),
+			},
+		},
+	}
+}
+
 func fixtureExecFenceSchema() fixtureJSONSchema {
 	return fixtureJSONSchema{
 		"type":                 "object",
@@ -302,9 +320,10 @@ func fixtureExecFenceSchema() fixtureJSONSchema {
 			"fixtures --help",
 		),
 		"x-order": []string{
-			"content", "exitCode", "cel", "stdout", "stderr", "output", "error", "format", "count", "timeout", "properties",
+			"content", "exitCode", "cel", "stdout", "stderr", "output", "error", "format", "count", "timeout", "goProfiles", "properties",
 		},
 		"properties": map[string]any{
+			"goProfiles": fixtureGoProfilesSchema(),
 			"content": fixtureSchemaProperty{
 				"type":        "string",
 				"title":       "Content",

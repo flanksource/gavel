@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -11,19 +13,24 @@ import (
 
 	"github.com/flanksource/clicky/api"
 	clickytask "github.com/flanksource/clicky/task"
+	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/testrunner/bench"
 	"github.com/flanksource/gavel/testrunner/parsers"
-	gopsutilProcess "github.com/shirou/gopsutil/v3/process"
+	gopsutilProcess "github.com/shirou/gopsutil/v4/process"
 )
 
 type Server struct {
-	mu       sync.RWMutex
-	tests    []parsers.Test
-	lint     []*linters.LinterResult
-	lintRun  bool
-	benchCmp *bench.BenchComparison
-	done     bool
+	mu               sync.RWMutex
+	tests            []parsers.Test
+	lint             []*linters.LinterResult
+	lintRun          bool
+	benchCmp         *bench.BenchComparison
+	fixtureBenchmark *FixtureBenchmarkState
+	performance      *fixtures.BenchmarkPerformance
+	runError         string
+	logTail          string
+	done             bool
 	// replayed marks a server hydrated from a static JSON snapshot
 	// (LoadSnapshot). Its results are fixed, so snapshot() must not consult
 	// the process-global clicky task registry — there is no live run behind it.
@@ -33,6 +40,7 @@ type Server struct {
 	embeddedDiagnostics *DiagnosticsSnapshot
 	updated             chan struct{}
 	gitRoot             string
+	profileRoot         string
 	diag                *DiagnosticsManager
 
 	rerunMu       sync.Mutex
@@ -49,6 +57,12 @@ func NewServer() *Server {
 	}
 }
 
+func (s *Server) SetProfileRoot(root string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.profileRoot = filepath.Clean(root)
+}
+
 func (s *Server) BeginRun(kind string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -62,6 +76,10 @@ func (s *Server) BeginRun(kind string) {
 	meta.Started = time.Now().UTC()
 	meta.Ended = time.Time{}
 	s.done = false
+	s.fixtureBenchmark = nil
+	s.performance = nil
+	s.runError = ""
+	s.logTail = ""
 	s.stopRequested = false
 	s.stopMessage = ""
 	s.notify()
@@ -148,6 +166,10 @@ func (s *Server) LoadSnapshot(snapshot Snapshot) {
 	s.lint = snapshot.Lint
 	s.lintRun = snapshot.Status.LintRun
 	s.benchCmp = snapshot.Bench
+	s.fixtureBenchmark = snapshot.FixtureBenchmark
+	s.performance = snapshot.Performance
+	s.runError = snapshot.Error
+	s.logTail = snapshot.LogTail
 	s.metadata = cloneSnapshotMetadata(snapshot.Metadata)
 	s.git = cloneSnapshotGit(snapshot.Git)
 	s.embeddedDiagnostics = cloneDiagnosticsSnapshot(snapshot.Diagnostics)
@@ -187,6 +209,48 @@ func (s *Server) SetBenchComparison(cmp *bench.BenchComparison) {
 	s.finishRunLocked()
 	s.mu.Unlock()
 	s.notify()
+}
+
+func (s *Server) SetFixtureBenchmarkMode(mode string) {
+	s.mu.Lock()
+	s.performance = &fixtures.BenchmarkPerformance{Mode: mode, Status: fixtures.ExecutionRunning}
+	s.mu.Unlock()
+	s.notify()
+}
+
+func (s *Server) SetFixtureBenchmarkProgress(progress fixtures.ExecutionSnapshot) {
+	s.mu.Lock()
+	if s.performance == nil {
+		s.mu.Unlock()
+		panic("fixture benchmark mode must be set before progress")
+	}
+	s.performance.Status = progress.State
+	s.mu.Unlock()
+	s.notify()
+}
+
+func (s *Server) SetFixtureBenchmarkReport(report *fixtures.BenchmarkReport, artifactPath string) {
+	s.mu.Lock()
+	if s.performance == nil {
+		s.mu.Unlock()
+		panic("fixture benchmark mode must be set before report")
+	}
+	s.performance = fixtures.BenchmarkPerformanceFromReport(report, artifactPath)
+	s.mu.Unlock()
+	s.notify()
+}
+
+func (s *Server) SetRunError(err error) {
+	s.mu.Lock()
+	s.runError = err.Error()
+	s.mu.Unlock()
+	s.notify()
+}
+
+func (s *Server) Snapshot() Snapshot {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.snapshot()
 }
 
 // SetGitRoot records the git root used for resolving relative paths and
@@ -266,6 +330,7 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleRoute)
 	mux.HandleFunc("/api/tests", s.handleJSON)
+	mux.HandleFunc("/api/tests/fixture-profile", s.handleFixtureProfile)
 	mux.HandleFunc("/api/tests/stream", s.handleSSE)
 	mux.HandleFunc("/api/diagnostics", s.handleDiagnosticsJSON)
 	mux.HandleFunc("/api/diagnostics/collect", s.handleDiagnosticsCollect)
@@ -277,6 +342,66 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/tests/edit", s.handleTestEdit)
 	mux.HandleFunc("/api/benchmarks", s.handleBenchJSON)
 	return mux
+}
+
+func (s *Server) handleFixtureProfile(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "GET required", http.StatusMethodNotAllowed)
+		return
+	}
+	id := r.URL.Query().Get("id")
+	if !filepath.IsLocal(filepath.FromSlash(id)) || id == "." {
+		http.Error(w, "invalid profile ID", http.StatusBadRequest)
+		return
+	}
+	s.mu.RLock()
+	root := s.profileRoot
+	path := filepath.Join(root, ".gavel", "profiles", "fixtures", filepath.FromSlash(id))
+	known := false
+	var visit func([]parsers.Test)
+	visit = func(tests []parsers.Test) {
+		for _, test := range tests {
+			for _, artifact := range test.GoProfiles {
+				known = known || artifact.Status == "captured" && artifact.ID == id && filepath.Clean(artifact.Path) == path
+			}
+			visit(test.Children)
+		}
+	}
+	visit(s.tests)
+	if s.fixtureBenchmark != nil && s.fixtureBenchmark.Report != nil {
+		for _, entry := range s.fixtureBenchmark.Report.Fixtures {
+			for _, artifact := range entry.GoProfiles {
+				known = known || artifact.Status == "captured" && artifact.ID == id && filepath.Clean(artifact.Path) == path
+			}
+		}
+	}
+	s.mu.RUnlock()
+	if root == "" || !known {
+		http.NotFound(w, r)
+		return
+	}
+	base, err := filepath.EvalSymlinks(filepath.Join(root, ".gavel", "profiles", "fixtures"))
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	if rel, err := filepath.Rel(base, resolved); err != nil || !filepath.IsLocal(rel) || rel == "." {
+		http.Error(w, "profile path escapes artifact store", http.StatusBadRequest)
+		return
+	}
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filepath.Base(path)))
+	w.Header().Set("Content-Type", "application/octet-stream")
+	http.ServeFile(w, r, path)
 }
 
 func (s *Server) handleBenchJSON(w http.ResponseWriter, _ *http.Request) {
@@ -405,10 +530,14 @@ func (s *Server) snapshot() Snapshot {
 			Stopped:              stopped,
 			StopMessage:          stopMessage,
 		},
-		Tests:       tests,
-		Lint:        s.lint,
-		Bench:       s.benchCmp,
-		Diagnostics: cloneDiagnosticsSnapshot(s.embeddedDiagnostics),
+		Tests:            tests,
+		Lint:             s.lint,
+		Bench:            s.benchCmp,
+		FixtureBenchmark: s.fixtureBenchmark,
+		Performance:      s.performance,
+		Error:            s.runError,
+		LogTail:          s.logTail,
+		Diagnostics:      cloneDiagnosticsSnapshot(s.embeddedDiagnostics),
 	}
 }
 

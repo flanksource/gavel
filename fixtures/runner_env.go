@@ -2,6 +2,7 @@ package fixtures
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -166,37 +167,53 @@ func (r *Runner) startDaemon(ctx flanksourceContext.Context, daemonCmd string, s
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
-	r.stopDaemon()
-	return fmt.Errorf("daemon did not start listening on port %d within 30s", port)
+	stopErr := r.stopDaemon()
+	return errors.Join(fmt.Errorf("daemon did not start listening on port %d within 30s", port), stopErr)
 }
 
 // stopDaemon sends SIGTERM, waits up to 5s, then SIGKILL.
-func (r *Runner) stopDaemon() {
+func (r *Runner) stopDaemon() error {
 	if r.daemonCmd == nil || r.daemonCmd.Process == nil {
-		return
+		return nil
 	}
 
 	logger.Infof("Stopping daemon (PID %d)", r.daemonCmd.Process.Pid)
 
 	// Kill the process group to include child processes
 	pgid := -r.daemonCmd.Process.Pid
-	_ = syscall.Kill(pgid, syscall.SIGTERM)
+	signalErr := syscall.Kill(pgid, syscall.SIGTERM)
+	if errors.Is(signalErr, syscall.ESRCH) {
+		signalErr = nil
+	}
 
-	done := make(chan struct{})
+	done := make(chan error, 1)
 	go func() {
-		_ = r.daemonCmd.Wait()
-		close(done)
+		done <- r.daemonCmd.Wait()
 	}()
 
+	var waitErr, killErr error
+	forced := false
 	select {
-	case <-done:
+	case waitErr = <-done:
 	case <-time.After(5 * time.Second):
 		logger.Warnf("Daemon did not exit after SIGTERM, sending SIGKILL")
-		_ = syscall.Kill(pgid, syscall.SIGKILL)
-		<-done
+		forced = true
+		killErr = syscall.Kill(pgid, syscall.SIGKILL)
+		waitErr = <-done
 	}
 
 	r.daemonCmd = nil
+	var exit *exec.ExitError
+	if errors.As(waitErr, &exit) {
+		if status, ok := exit.Sys().(syscall.WaitStatus); ok && status.Signaled() &&
+			(status.Signal() == syscall.SIGTERM || status.Signal() == syscall.SIGKILL) {
+			waitErr = nil
+		}
+	}
+	if forced {
+		waitErr = errors.Join(waitErr, fmt.Errorf("daemon required SIGKILL after SIGTERM timeout"))
+	}
+	return errors.Join(signalErr, killErr, waitErr)
 }
 
 func freePort() (int, error) {

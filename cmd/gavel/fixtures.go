@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
@@ -12,12 +13,24 @@ import (
 )
 
 var (
-	fixturesUpdateGolden bool
-	fixturesShowPassed   bool
-	fixturesShowStdout   string
-	fixturesShowStderr   string
-	fixturesSchema       bool
-	fixturesRecord       string
+	fixturesUpdateGolden    bool
+	fixturesShowPassed      bool
+	fixturesShowStdout      string
+	fixturesShowStderr      string
+	fixturesSchema          bool
+	fixturesRecord          string
+	fixturesBenchmark       bool
+	fixturesBaseline        string
+	fixturesProfile         bool
+	fixturesMaxDeviationPct float64
+	fixturesMaxTime         time.Duration
+	fixturesMaxMemory       string
+	fixturesMaxIORead       string
+	fixturesMaxIOWrite      string
+	fixturesMaxSQLTime      time.Duration
+	fixturesMaxSQLQuery     time.Duration
+	fixturesMaxSQLQueries   int
+	fixturesMaxSlowSQL      int
 )
 
 var fixturesCmd = &cobra.Command{
@@ -419,6 +432,11 @@ func fixturesHelp(cmd *cobra.Command) api.Text {
 		Add(code("  gavel fixtures -v tests.md")).Add(dim("               # Show passed fixtures")).NewLine().
 		Add(code("  gavel fixtures -vv tests.md")).Add(dim("              # Also show commands")).NewLine().
 		Add(code("  gavel fixtures -vvv tests.md")).Add(dim("             # Also show stdout/stderr")).NewLine().
+		Add(code("  gavel fixtures --benchmark tests.md")).Add(dim("  # Save and show stage durations")).NewLine().
+		Add(code("  gavel fixtures --benchmark --baseline .gavel/benchmarks/fixtures/run-...json tests.md")).NewLine().
+		Add(code("  gavel fixtures --benchmark --max-time 2s --max-memory 512MiB tests.md")).NewLine().
+		Add(code("  gavel fixtures --benchmark --baseline base.json --max-deviation-pct 15 tests.md")).NewLine().
+		Add(code("  gavel fixtures --profile tests.md")).Add(dim("    # Save process metrics and declared Go pprof files")).NewLine().
 		Add(code("  gavel fixtures --no-progress tests.md")).Add(dim("    # Disable progress display")).NewLine().
 		Add(code("  gavel fixtures outline tests.md")).Add(dim("          # Parse and outline without running fixtures")).NewLine().
 		Add(code("  gavel fixtures --schema")).Add(dim("                  # Print the fixture/test JSON schemas and exit")).NewLine().
@@ -450,5 +468,17 @@ func init() {
 	fixturesCmd.Flags().BoolVar(&fixturesSchema, "schema", false, "Print fixture editor JSON schemas and exit")
 	fixturesCmd.Flags().StringVar(&fixturesRecord, "record", "",
 		"Record diagnostics for fixtures that declare no `record:` of their own: ansi, http, sql, clients, all (comma-separated)")
+	fixturesCmd.Flags().BoolVar(&fixturesBenchmark, "benchmark", false, "Record and show fixture and prerequisite durations in a JSON report")
+	fixturesCmd.Flags().StringVar(&fixturesBaseline, "baseline", "", "Compare benchmark durations with a saved fixture benchmark JSON report")
+	fixturesCmd.Flags().BoolVar(&fixturesProfile, "profile", false, "Record process CPU, memory, disk I/O, and declared Go pprof files")
+	fixturesCmd.Flags().Float64Var(&fixturesMaxDeviationPct, "max-deviation-pct", 0, "Fail fixtures whose measured metrics regress beyond this percentage from --baseline")
+	fixturesCmd.Flags().DurationVar(&fixturesMaxTime, "max-time", 0, "Fail fixtures taking longer than this duration")
+	fixturesCmd.Flags().StringVar(&fixturesMaxMemory, "max-memory", "", "Fail fixtures exceeding this peak RSS byte size (for example 512MiB)")
+	fixturesCmd.Flags().StringVar(&fixturesMaxIORead, "max-io-read", "", "Fail fixtures exceeding this observed disk read byte size")
+	fixturesCmd.Flags().StringVar(&fixturesMaxIOWrite, "max-io-write", "", "Fail fixtures exceeding this observed disk write byte size")
+	fixturesCmd.Flags().DurationVar(&fixturesMaxSQLTime, "max-sql-time", 0, "Fail fixtures exceeding this total SQL duration")
+	fixturesCmd.Flags().DurationVar(&fixturesMaxSQLQuery, "max-sql-query", 0, "Fail fixtures exceeding this longest SQL query duration")
+	fixturesCmd.Flags().IntVar(&fixturesMaxSQLQueries, "max-sql-queries", 0, "Fail fixtures exceeding this SQL statement count")
+	fixturesCmd.Flags().IntVar(&fixturesMaxSlowSQL, "max-slow-sql", 0, "Fail fixtures exceeding this slow SQL statement count")
 	rootCmd.AddCommand(fixturesCmd)
 }

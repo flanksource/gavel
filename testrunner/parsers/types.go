@@ -104,8 +104,12 @@ type Test struct {
 	// Detail is provider-owned structured detail for a test. Providers should
 	// assign a JSON-marshallable value here; values may also implement api.Pretty
 	// for rich terminal/clicky rendering.
-	Detail    any              `json:"detail,omitempty"`
-	Benchmark *BenchmarkResult `json:"benchmark,omitempty"`
+	Detail         any                 `json:"detail,omitempty"`
+	Benchmark      *BenchmarkResult    `json:"benchmark,omitempty"`
+	FixtureProfile *FixtureProfile     `json:"fixture_profile,omitempty"`
+	GoProfiles     []GoProfileArtifact `json:"go_profiles,omitempty"`
+	SQLProfile     *SQLProfile         `json:"sql_profile,omitempty"`
+	Fixture        *FixtureExecution   `json:"fixture,omitempty"`
 	// Attempts is the per-run execution history for this test. A fresh run
 	// appends a TestAttempt to the tail; reruns (via the UI) append further
 	// attempts without discarding earlier ones. The Test's top-level
@@ -121,6 +125,59 @@ type Test struct {
 	// intake step being consumed). Providers set it on each progress tick and
 	// clear it (nil) on completion. Renderers show it inline on the running row.
 	Progress *TestProgress `json:"progress,omitempty"`
+}
+
+type FixtureExecution struct {
+	Key        string   `json:"key"`
+	Kind       string   `json:"kind"`
+	State      string   `json:"state"`
+	CommandMS  *float64 `json:"command_ms,omitempty"`
+	Violations []string `json:"violations,omitempty"`
+}
+
+type FixtureProfile struct {
+	Scope             string         `json:"scope"`
+	PID               int            `json:"pid,omitempty"`
+	SampleCount       int            `json:"sample_count"`
+	PeakCPUPercent    float64        `json:"peak_cpu_percent"`
+	PeakMemoryPercent float64        `json:"peak_memory_percent"`
+	PeakRSSBytes      uint64         `json:"peak_rss_bytes"`
+	DiskIO            *ProfileDiskIO `json:"disk_io,omitempty"`
+}
+
+type ProfileDiskIO struct {
+	DiskReadBytes    uint64 `json:"disk_read_bytes"`
+	DiskWriteBytes   uint64 `json:"disk_write_bytes"`
+	SampleCount      int    `json:"sample_count"`
+	MissingProcesses int    `json:"missing_processes,omitempty"`
+}
+
+type GoProfileArtifact struct {
+	Name        string   `json:"name"`
+	ID          string   `json:"id,omitempty"`
+	Path        string   `json:"path,omitempty"`
+	Status      string   `json:"status"`
+	Bytes       int64    `json:"bytes,omitempty"`
+	SampleTypes []string `json:"sample_types,omitempty"`
+	Error       string   `json:"error,omitempty"`
+}
+
+type SQLProfile struct {
+	Path            string                `json:"path"`
+	QueryCount      int                   `json:"query_count"`
+	SlowQueryCount  int                   `json:"slow_query_count"`
+	TotalDurationMS float64               `json:"total_duration_ms"`
+	MaxQueryMS      float64               `json:"max_query_ms"`
+	Statements      []SQLProfileStatement `json:"statements,omitempty"`
+}
+
+type SQLProfileStatement struct {
+	SQL        string   `json:"sql"`
+	Params     []string `json:"params"`
+	DurationMS float64  `json:"duration_ms"`
+	Rows       int64    `json:"rows"`
+	Slow       bool     `json:"slow"`
+	Error      bool     `json:"error"`
 }
 
 // TestProgress is the live phase + count of a still-running test node. Phase is
