@@ -8,6 +8,7 @@ import (
 	commonsdb "github.com/flanksource/commons-db/db"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/todos"
+	"github.com/flanksource/gavel/todos/runtime/runtimetest"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
@@ -69,10 +70,11 @@ var _ = Describe("TODO Captain session hierarchy", Ordered, func() {
 				Title: "Track the " + tag + " operation", Status: types.StatusPending,
 			})
 			Expect(err).NotTo(HaveOccurred())
-			preparation, err := provider.PrepareRun(ctx, created, todos.RunPreparation{
+			preparation, err := runtimetest.Admit(ctx, provider, created, todos.RunPreparation{
 				Mode: mode, ExecutorName: "codex",
-			})
+			}, runtimetest.Started(""))
 			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(func() { provider.ownership.stop(preparation.PromptRunID) })
 			Expect(preparation.SessionID).NotTo(BeEmpty())
 
 			issue, err := provider.Repository().GetIssue(ctx, uuid.MustParse(created.ID))
@@ -121,15 +123,12 @@ var _ = Describe("TODO Captain session hierarchy", Ordered, func() {
 			Title: "Nest the provider transcript", Status: types.StatusPending,
 		})
 		Expect(err).NotTo(HaveOccurred())
-		preparation, err := provider.PrepareRun(ctx, created, todos.RunPreparation{
+		preparation, err := runtimetest.Admit(ctx, provider, created, todos.RunPreparation{
 			Mode: types.ModeRun, ExecutorName: "codex",
-		})
+		}, runtimetest.Started("todo-hierarchy-provider"))
 		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func() { provider.ownership.stop(preparation.PromptRunID) })
 		Expect(preparation.SessionID).NotTo(BeEmpty())
-		Expect(provider.RecordRunStart(ctx, created, todos.RunStartMetadata{
-			SessionID: "todo-hierarchy-provider", Provider: "openai",
-			RuntimeMode: "agent", Mode: "run",
-		})).To(Succeed())
 
 		issue, err := provider.Repository().GetIssue(ctx, uuid.MustParse(created.ID))
 		Expect(err).NotTo(HaveOccurred())

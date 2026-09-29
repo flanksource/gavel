@@ -5,10 +5,13 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/flanksource/captain/pkg/promptrun"
 	commonsdb "github.com/flanksource/commons-db/db"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/todos"
+	"github.com/flanksource/gavel/todos/lifecycle"
 	"github.com/flanksource/gavel/todos/native"
+	"github.com/flanksource/gavel/todos/runtime/runtimetest"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
@@ -112,15 +115,16 @@ body fixture`,
 		})
 		Expect(err).NotTo(HaveOccurred())
 
-		preparation, err := provider.PrepareRun(ctx, created, todos.RunPreparation{
-			Mode: types.ModePlan, ExecutorName: "claude",
-		})
-		Expect(err).NotTo(HaveOccurred())
-		Expect(preparation.SessionID).NotTo(BeEmpty())
-		Expect(provider.SaveAttempt(ctx, created, &todos.ExecutionResult{
+		result := &todos.ExecutionResult{
 			Success: true, ExecutorName: "claude", EndStatus: types.EndCompleted,
 			Plan: &types.PlanResult{Status: types.PlanNew, Content: planMarkdown},
-		})).To(Succeed())
+		}
+		preparation, err := runtimetest.Admit(ctx, provider, created, todos.RunPreparation{
+			Mode: types.ModePlan, ExecutorName: "claude",
+		}, promptrun.Completed{Runtime: runtimetest.ClaudeCLI, Outcome: lifecycle.RunOutcome(result, false)})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(preparation.SessionID).NotTo(BeEmpty())
+		Expect(provider.SaveAttempt(ctx, created, result)).To(Succeed())
 		Expect(created.Status).To(Equal(types.StatusReview))
 
 		_, err = provider.PlanMarkdown(ctx, created, types.ModeRun)

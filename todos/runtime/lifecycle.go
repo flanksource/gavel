@@ -8,15 +8,15 @@ import (
 	"strings"
 
 	captaindb "github.com/flanksource/captain/pkg/database"
+	"github.com/flanksource/captain/pkg/promptrun"
 	"github.com/flanksource/gavel/todos"
+	"github.com/flanksource/gavel/todos/lifecycle"
 	"github.com/flanksource/gavel/todos/native"
 	"github.com/flanksource/gavel/todos/types"
 )
 
 var (
 	_ todos.RunLifecycleProvider = (*Provider)(nil)
-	_ todos.RunProgressProvider  = (*Provider)(nil)
-	_ todos.RunNoticeProvider    = (*Provider)(nil)
 	_ todos.PlanContentProvider  = (*Provider)(nil)
 	_ todos.PlanStateProvider    = (*Provider)(nil)
 	_ todos.EventProvider        = (*Provider)(nil)
@@ -32,8 +32,13 @@ func (p *Provider) AppendEvent(ctx context.Context, todo *types.TODO, event todo
 	})
 }
 
-// finishAttempt projects one executor result into Captain. It returns false
-// only for compatibility calls that have no active Captain run.
+// finishAttempt applies one executor result to the issue once its run is over.
+// It returns false only for compatibility calls that have no active Captain
+// run.
+//
+// Captain filed the run's terminal state as promptrun.Run finished it. A turn
+// gavel did not dispatch — an answer given from Captain's session page —
+// leaves the run it continued parked, and is settled here through Captain.
 func (p *Provider) finishAttempt(ctx context.Context, todo *types.TODO, result *todos.ExecutionResult) (bool, error) {
 	active, err := p.loadActiveRun(ctx, todo)
 	if err != nil {
@@ -49,33 +54,66 @@ func (p *Provider) finishAttempt(ctx context.Context, todo *types.TODO, result *
 		}
 	}
 
-	state, phase, _, _, reason := terminalState(result, active.link.StepKind)
-	resultText := ""
-	var resultJSON map[string]any
-	errorText := ""
-	if result != nil {
-		resultText = strings.TrimSpace(result.Summary)
-		resultJSON = result.OutputJSON
-		errorText = strings.TrimSpace(result.ErrorMessage)
+	outcome := lifecycle.RunOutcome(result, active.link.StepKind == native.StepVerify)
+	filed, err := filedAs(active.run, outcome)
+	if err != nil {
+		return true, err
 	}
-	if state == captaindb.PromptRunStateFailed && errorText == "" {
-		errorText = reason
-	}
-	if !terminalPromptRun(active.run.State) || active.run.State == captaindb.PromptRunStateWaiting {
-		updatedRun, updateErr := p.captain.UpdatePromptRun(ctx, captaindb.UpdatePromptRunInput{
-			ID: active.run.ID, ExpectedVersion: active.run.Version,
-			State: &state, Phase: &phase, ResultText: &resultText,
-			ResultJSON: &resultJSON, Error: &errorText,
-		})
-		if updateErr != nil {
-			return true, fmt.Errorf("finish Captain prompt run: %w", updateErr)
+	if !terminalPromptRun(active.run.State) && !filed {
+		if err := p.settleParkedRun(ctx, active.run, outcome); err != nil {
+			return true, err
 		}
-		active.run = updatedRun
 	}
-	if state != captaindb.PromptRunStateWaiting {
+	if outcome.State != captaindb.PromptRunStateWaiting {
 		p.clearPrepared(active.issue.ID, active.run.ID)
 	}
 	return true, p.reloadTODO(ctx, todo, todo.CWD)
+}
+
+// filedAs reports whether Captain already filed the run the way outcome reads
+// it: a dispatched run's own outcome, which promptrun.Run wrote. A parked run a
+// later turn answered still carries the envelope that parked it.
+func filedAs(run *captaindb.PromptRun, outcome promptrun.Outcome) (bool, error) {
+	if run.State != outcome.State {
+		return false, nil
+	}
+	stored, err := json.Marshal(run.ResultJSON)
+	if err != nil {
+		return false, fmt.Errorf("encode result of Captain prompt run %s: %w", run.ID, err)
+	}
+	reported, err := json.Marshal(outcome.JSON)
+	if err != nil {
+		return false, fmt.Errorf("encode outcome of Captain prompt run %s: %w", run.ID, err)
+	}
+	return string(stored) == string(reported), nil
+}
+
+// settleParkedRun files the outcome of a run no promptrun.Run is left to
+// finish through Captain's Settle: succeeded, failed, cancelled, or parked
+// again on the turn's new envelope.
+func (p *Provider) settleParkedRun(ctx context.Context, run *captaindb.PromptRun, outcome promptrun.Outcome) error {
+	switch outcome.State {
+	case captaindb.PromptRunStateFailed:
+		outcome.Error = firstNonBlank(outcome.Error, outcome.Text)
+	case captaindb.PromptRunStateCancelled:
+		outcome.Error = firstNonBlank(outcome.Error, outcome.Text, todos.ErrExecutionCancelled.Error())
+	}
+	if _, err := promptrun.Settle(ctx, p.captain, run.ID, outcome); err != nil {
+		return fmt.Errorf("settle Captain prompt run %s as %s: %w", run.ID, outcome.State, err)
+	}
+	return nil
+}
+
+// failRun fails a run that has not reached a terminal state yet. A run Captain
+// already finished keeps the state it was filed with.
+func (p *Provider) failRun(ctx context.Context, run *captaindb.PromptRun, reason string) error {
+	if terminalPromptRun(run.State) {
+		return nil
+	}
+	if _, err := promptrun.Fail(ctx, p.captain, run.ID, reason); err != nil {
+		return fmt.Errorf("fail Captain prompt run %s: %w", run.ID, err)
+	}
+	return nil
 }
 
 func (p *Provider) failPreparedRun(ctx context.Context, todo *types.TODO, reason string) error {
@@ -96,28 +134,11 @@ func (p *Provider) failPreparedRun(ctx context.Context, todo *types.TODO, reason
 	if !p.isPrepared(issueID, active.run.ID) {
 		return nil
 	}
-	if err := p.failPromptRun(ctx, active, reason); err != nil {
+	if err := p.failRun(ctx, active.run, reason); err != nil {
 		return err
 	}
 	p.clearPrepared(issueID, active.run.ID)
 	return p.reloadTODO(ctx, todo, todo.CWD)
-}
-
-func (p *Provider) failPromptRun(ctx context.Context, active *activeRun, reason string) error {
-	state := captaindb.PromptRunStateFailed
-	phase := active.run.Phase
-	if phase == captaindb.PromptRunPhaseQueued || phase == captaindb.PromptRunPhasePreRun {
-		phase = captaindb.PromptRunPhaseGenerate
-	}
-	if !terminalPromptRun(active.run.State) {
-		if _, err := p.captain.UpdatePromptRun(ctx, captaindb.UpdatePromptRunInput{
-			ID: active.run.ID, ExpectedVersion: active.run.Version,
-			State: &state, Phase: &phase, Error: &reason,
-		}); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // decorateExecution projects Captain-owned details into the temporary legacy
@@ -225,54 +246,6 @@ func todoStatusWithPlan(
 	default:
 		return projected
 	}
-}
-
-func terminalState(result *todos.ExecutionResult, step native.StepKind) (
-	captaindb.PromptRunState,
-	captaindb.PromptRunPhase,
-	captaindb.SessionLifecycleStatus,
-	captaindb.SessionActivityState,
-	string,
-) {
-	phase := captaindb.PromptRunPhaseFinished
-	if result == nil {
-		return captaindb.PromptRunStateFailed, captaindb.PromptRunPhaseGenerate,
-			captaindb.SessionLifecycleFailed, captaindb.SessionActivityIdle, "agent run returned no result"
-	}
-	if result.Cancelled {
-		reason := strings.TrimSpace(result.Summary)
-		if reason == "" {
-			reason = strings.TrimSpace(result.ErrorMessage)
-		}
-		if reason == "" {
-			reason = todos.ErrExecutionCancelled.Error()
-		}
-		return captaindb.PromptRunStateCancelled, phase,
-			captaindb.SessionLifecycleCancelled, captaindb.SessionActivityIdle, reason
-	}
-	if result.EndStatus == types.EndAsk {
-		return captaindb.PromptRunStateWaiting, captaindb.PromptRunPhaseGenerate,
-			captaindb.SessionLifecycleRunning, captaindb.SessionActivityAsk, strings.TrimSpace(result.Summary)
-	}
-	failedVerification := result.DoD != nil && result.DoD.Ran && !result.DoD.Passed
-	if failedVerification || !result.Success || result.EndStatus == types.EndFailed || strings.TrimSpace(result.ErrorMessage) != "" {
-		if failedVerification || step == native.StepVerify {
-			phase = captaindb.PromptRunPhaseVerify
-		} else {
-			phase = captaindb.PromptRunPhaseGenerate
-		}
-		reason := strings.TrimSpace(result.ErrorMessage)
-		if reason == "" {
-			reason = strings.TrimSpace(result.Summary)
-		}
-		if reason == "" {
-			reason = "agent run failed"
-		}
-		return captaindb.PromptRunStateFailed, phase,
-			captaindb.SessionLifecycleFailed, captaindb.SessionActivityIdle, reason
-	}
-	return captaindb.PromptRunStateSucceeded, phase,
-		captaindb.SessionLifecycleSucceeded, captaindb.SessionActivityIdle, strings.TrimSpace(result.Summary)
 }
 
 func decodeQuestions(value any) []types.AgentQuestion {

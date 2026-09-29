@@ -7,10 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/flanksource/captain/pkg/api"
 	captaindb "github.com/flanksource/captain/pkg/database"
-	"github.com/flanksource/captain/pkg/monitor"
-	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/native"
 	"github.com/flanksource/gavel/todos/run"
@@ -19,190 +16,9 @@ import (
 )
 
 type activeRun struct {
-	issue   *native.Issue
-	link    *native.PromptRunLink
-	run     *captaindb.PromptRun
-	session *captaindb.Session
-}
-
-// RecordRunStart binds the external provider identity and execution thread to
-// the prompt run. Session lifecycle is projected from the prompt run's state by
-// Captain's captain_prompt_runs trigger, so it is never written here.
-func (p *Provider) RecordRunStart(ctx context.Context, todo *types.TODO, metadata todos.RunStartMetadata) error {
-	active, err := p.loadActiveRun(ctx, todo)
-	if err != nil {
-		return err
-	}
-	p.markPrepared(active.issue.ID, active.run.ID)
-
-	sessionUpdate := captaindb.UpdateSessionStateInput{
-		ID: active.session.ID, ExpectedVersion: active.session.StateVersion,
-	}
-	if sessionID := strings.TrimSpace(metadata.SessionID); sessionID != "" {
-		sessionUpdate.ProviderSessionID = &sessionID
-	}
-	// The tree the agent actually works in is the setup-transformed spec's cwd: a
-	// per-run git worktree, not the repository root the TODO was filed against.
-	// Nothing else records it — a run that blocks before its first turn boundary
-	// never reports one, and transcript ingest only learns a cwd once there is a
-	// transcript to read it from.
-	if cwd := runStartCWD(metadata); cwd != "" && cwd != active.session.CWD {
-		sessionUpdate.CWD = &cwd
-	}
-	if sessionUpdate.ProviderSessionID != nil || sessionUpdate.CWD != nil {
-		root, err := p.captain.UpdateSessionState(ctx, sessionUpdate)
-		if err != nil {
-			return fmt.Errorf("bind Captain admission session: %w", err)
-		}
-		active.session = root
-	}
-	metadata.Provider = runStartProvider(active.run.Runtime, metadata)
-
-	// A prompt run binds its execution thread once. Re-resolving the agent
-	// identity on a resumed turn would fork a second session — provider is part
-	// of Captain's session identity key — and the new id then loses the update
-	// to the execution-session guard.
-	var agentSession *captaindb.Session
-	if active.run.ExecutionSessionID == nil {
-		agentSession, err = p.ensureAgentSession(ctx, active.session, metadata)
-		if err != nil {
-			return err
-		}
-	} else if execution, err := p.captain.GetSession(ctx, *active.run.ExecutionSessionID); err == nil {
-		// A resumed turn re-arms the monitor on the same transcript: the process
-		// that first registered it may be gone, and the one tailing it may have
-		// restarted since.
-		p.registerTranscript(ctx, execution)
-	} else {
-		return fmt.Errorf("load Captain execution session: %w", err)
-	}
-
-	state := captaindb.PromptRunStateRunning
-	phase := captaindb.PromptRunPhaseGenerate
-	if active.link.StepKind == native.StepVerify {
-		phase = captaindb.PromptRunPhaseVerify
-	}
-	if !terminalPromptRun(active.run.State) {
-		runtime := mergeRunStartRuntime(active.run.Runtime, metadata)
-		update := captaindb.UpdatePromptRunInput{
-			ID: active.run.ID, ExpectedVersion: active.run.Version,
-			State: &state, Phase: &phase, Runtime: &runtime,
-		}
-		if agentSession != nil {
-			update.ExecutionSessionID = &agentSession.ID
-		}
-		// Only the report that trails setup carries a spec. Reports that cannot
-		// see it (the session-id report, the verify executor) leave it nil rather
-		// than overwriting the transformed spec with the request it started as.
-		if metadata.Spec != nil {
-			rendered, err := renderedSpec(*metadata.Spec)
-			if err != nil {
-				return err
-			}
-			update.RenderedSpec = &rendered
-		}
-		if _, err := p.captain.UpdatePromptRun(ctx, update); err != nil {
-			return fmt.Errorf("record Captain prompt-run start: %w", err)
-		}
-	}
-	return p.reloadTODO(ctx, todo, todo.CWD)
-}
-
-func (p *Provider) RecordRunProgress(ctx context.Context, todo *types.TODO, report api.VerifyReport) error {
-	active, err := p.loadActiveRun(ctx, todo)
-	if err != nil {
-		return err
-	}
-	if terminalPromptRun(active.run.State) {
-		return fmt.Errorf("record verification progress: Captain prompt run %s is already %s", active.run.ID, active.run.State)
-	}
-	if report.Iteration < 1 {
-		return fmt.Errorf("record verification progress: report iteration is required")
-	}
-	phase := captaindb.PromptRunPhaseVerify
-	if _, err := p.captain.UpdatePromptRun(ctx, captaindb.UpdatePromptRunInput{
-		ID: active.run.ID, ExpectedVersion: active.run.Version,
-		Phase: &phase,
-	}); err != nil {
-		return fmt.Errorf("record Captain verification progress: %w", err)
-	}
-	_, err = p.captain.UpsertPromptRunIteration(ctx, captaindb.UpsertPromptRunIterationInput{
-		PromptRunID: active.run.ID, Iteration: report.Iteration,
-		State: captaindb.PromptRunIterationStateRunning, VerificationResult: &report,
-	})
-	return err
-}
-
-// RecordRunNotices writes the run's lifecycle notices into the transcript of the
-// session the agent actually ran in.
-//
-// sessionID is the provider's own id, which names several rows here: the gavel
-// admission root, and the claude/codex transcript the monitor ingested from the
-// on-disk log. The notices belong on the transcript — that is the row the
-// dashboard streams messages from — so a run whose log has not been ingested yet
-// has nowhere to put them, and says so rather than writing them somewhere they
-// would never be read.
-func (p *Provider) RecordRunNotices(ctx context.Context, sessionID string, notices []api.Notice) error {
-	if len(notices) == 0 {
-		return nil
-	}
-	sessionID = strings.TrimSpace(sessionID)
-	if sessionID == "" {
-		return fmt.Errorf("record run notices: session ID is required")
-	}
-	for _, source := range []string{"claude", "codex"} {
-		transcript, err := p.captain.GetSessionByIdentity(ctx, sessionID, source, "", "")
-		if err == nil {
-			return p.captain.PutSessionNotices(ctx, transcript.ID, notices)
-		}
-		if !errors.Is(err, captaindb.ErrSessionNotFound) {
-			return fmt.Errorf("resolve transcript session %s: %w", sessionID, err)
-		}
-	}
-	return fmt.Errorf("record run notices: no ingested transcript for session %s", sessionID)
-}
-
-func agentSessionSource(executor string) string {
-	executor = strings.ToLower(strings.TrimSpace(executor))
-	switch {
-	case strings.Contains(executor, "codex"):
-		return "codex"
-	case strings.Contains(executor, "claude"):
-		return "claude"
-	default:
-		return ""
-	}
-}
-
-// runStartProvider recovers the LLM provider a turn does not report. A resumed
-// turn knows only its session and mode, and a blank provider resolves to a
-// different Captain session because provider is part of the session identity
-// key — so fall back to what the run already resolved.
-//
-// The two composite fallbacks this used to end with are gone: a mode never
-// carried a provider, so deriving one from it was always a guess.
-func runStartProvider(runtime captaindb.PromptRunRuntime, metadata todos.RunStartMetadata) string {
-	return firstNonBlank(
-		metadata.Provider,
-		runtime.Resolved.Provider,
-		runtime.Requested.Provider,
-	)
-}
-
-// mergeRunStartRuntime layers a turn's reported runtime over what the prompt run
-// already recorded, so a resumed turn that cannot name its driver or model keeps
-// the original run's provenance instead of erasing it.
-func mergeRunStartRuntime(current captaindb.PromptRunRuntime, metadata todos.RunStartMetadata) captaindb.PromptRunRuntime {
-	merged := current
-	merged.Mode = firstNonBlank(metadata.Mode, current.Mode)
-	merged.Driver = firstNonBlank(metadata.Driver, current.Driver)
-	merged.Resolved = captaindb.PromptRunRuntimeSelection{
-		Provider: firstNonBlank(metadata.Provider, current.Resolved.Provider),
-		Mode:     firstNonBlank(metadata.RuntimeMode, current.Resolved.Mode),
-		Model:    firstNonBlank(metadata.ResolvedModel, current.Resolved.Model),
-		Effort:   firstNonBlank(metadata.Effort, current.Resolved.Effort),
-	}
-	return merged
+	issue *native.Issue
+	link  *native.PromptRunLink
+	run   *captaindb.PromptRun
 }
 
 func firstNonBlank(values ...string) string {
@@ -212,78 +28,6 @@ func firstNonBlank(values ...string) string {
 		}
 	}
 	return ""
-}
-
-// ensureAgentSession resolves or creates the monitor-owned session identity.
-// Captain's transcript ingestor uses the same (source, host, provider ID)
-// identity, so later ingest enriches this row rather than creating another
-// agent record. The admission root remains a separate bookkeeping row.
-//
-// The relation is `transcript`, not `agent`: this row is where the provider's
-// on-disk log lands, which is exactly what Captain's GetTranscriptSession looks
-// for under an admission root. Recorded as `agent` it was a sub-agent as far as
-// every reader was concerned, and Captain's own recovery path could not find it.
-func (p *Provider) ensureAgentSession(ctx context.Context, admission *captaindb.Session, metadata todos.RunStartMetadata) (*captaindb.Session, error) {
-	if admission == nil || strings.TrimSpace(admission.ProviderSessionID) == "" {
-		return nil, nil
-	}
-	source := agentSessionSource(admission.Provider)
-	if source == "" {
-		return nil, nil
-	}
-	session, err := p.captain.CreateOrGetSession(ctx, captaindb.CreateSessionInput{
-		ProviderSessionID: admission.ProviderSessionID,
-		Source:            source,
-		Provider:          strings.TrimSpace(metadata.Provider),
-		HostID:            captaindb.LocalHostID(),
-		ParentSessionID:   &admission.ID,
-		ParentRelation:    captaindb.SessionParentRelationTranscript,
-		Project:           admission.Project,
-		CWD:               admission.CWD,
-		Title:             admission.Title,
-		InitialPrompt:     admission.InitialPrompt,
-		AgentType:         admission.Provider,
-		Description:       "Agent session for " + admission.Description,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("resolve monitored Captain session: %w", err)
-	}
-	p.registerTranscript(ctx, session)
-	return session, nil
-}
-
-// registerTranscript binds the session to its on-disk transcript by id and arms
-// the monitor on it. Captain's discovery is otherwise shaped by the working
-// directory, so a run in a fresh git worktree writes into a project directory
-// nothing is watching and its transcript waits for the daily recon.
-//
-// A log that has not appeared yet is the expected state at run start, not a
-// failure: the id is bound before the agent flushes its first line, and the
-// recon still finds the file. Anything else is a real fault and says so.
-func (p *Provider) registerTranscript(ctx context.Context, session *captaindb.Session) {
-	if session == nil || strings.TrimSpace(session.ProviderSessionID) == "" {
-		return
-	}
-	path, err := monitor.RegisterTranscriptSource(ctx, p.captain, session.ID, session.ProviderSessionID, session.Source)
-	switch {
-	case errors.Is(err, monitor.ErrTranscriptNotFound):
-		logger.Debugf("session %s has no %s transcript yet: %v", session.ID, session.Source, err)
-	case err != nil:
-		logger.Warnf("register transcript for Captain session %s: %v", session.ID, err)
-	default:
-		logger.Debugf("registered transcript %s for Captain session %s", path, session.ID)
-	}
-}
-
-// runStartCWD is the directory the agent runs in, as the transformed spec
-// reports it. Only the report that trails setup carries a spec, so a turn that
-// cannot see one leaves the recorded directory alone rather than replacing a
-// worktree with the repository root it was cloned from.
-func runStartCWD(metadata todos.RunStartMetadata) string {
-	if metadata.Spec == nil {
-		return ""
-	}
-	return strings.TrimRight(strings.TrimSpace(metadata.Spec.Cwd()), "/")
 }
 
 // ActivePromptRun returns the Captain prompt run backing the todo's current
@@ -365,10 +109,6 @@ func (p *Provider) loadActiveRun(ctx context.Context, todo *types.TODO) (*active
 	if err != nil {
 		return nil, err
 	}
-	session, err := p.captain.GetSession(ctx, run.SessionID)
-	if err != nil {
-		return nil, err
-	}
 	links, err := p.repository.ListPromptRuns(ctx, issue.ID)
 	if err != nil {
 		return nil, err
@@ -376,7 +116,7 @@ func (p *Provider) loadActiveRun(ctx context.Context, todo *types.TODO) (*active
 	for i := range links {
 		if links[i].PromptRunID == run.ID {
 			link := links[i]
-			return &activeRun{issue: issue, link: &link, run: run, session: session}, nil
+			return &activeRun{issue: issue, link: &link, run: run}, nil
 		}
 	}
 	return nil, fmt.Errorf("%w: prompt run %s is not linked to issue %s", native.ErrLinkConflict, run.ID, issue.ID)

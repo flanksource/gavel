@@ -5,13 +5,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/flanksource/captain/pkg/api"
 	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/commons-db/dbtest"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/lifecycle"
 	"github.com/flanksource/gavel/todos/native"
+	"github.com/flanksource/gavel/todos/runtime/runtimetest"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/flanksource/gavel/verify"
 	"github.com/google/uuid"
@@ -123,12 +123,10 @@ func (f *answerFixture) parkAsk(ctx SpecContext, title, stepName string, mode ty
 	GinkgoHelper()
 	todo, err := f.dispatcher.Create(ctx, todos.CreateRequest{Title: title, Body: "Migrate it", Status: types.StatusPending})
 	Expect(err).NotTo(HaveOccurred())
-	admission, err := f.dispatcher.PrepareRun(ctx, todo, todos.RunPreparation{Mode: mode, Prompt: stepName, ExecutorName: "claude"})
+	admission, err := runtimetest.Admit(ctx, f.dispatcher, todo, todos.RunPreparation{Mode: mode, Prompt: stepName, ExecutorName: "claude"},
+		runtimetest.Parked(uuid.NewString(), askEnvelope(askedQuestion)))
 	Expect(err).NotTo(HaveOccurred())
 	DeferCleanup(func() { f.dispatcher.ownership.stop(admission.PromptRunID) })
-	Expect(f.dispatcher.RecordRunStart(ctx, todo, todos.RunStartMetadata{
-		SessionID: uuid.NewString(), Provider: "claude", Mode: string(mode),
-	})).To(Succeed())
 	run, err := f.dispatcher.Captain().GetPromptRun(ctx, admission.PromptRunID)
 	Expect(err).NotTo(HaveOccurred())
 	Expect(run.ExecutionSessionID).NotTo(BeNil())
@@ -214,11 +212,11 @@ func (f *answerFixture) resumeWith(ctx SpecContext, provider *Provider, parked p
 	todo, err := provider.Get(ctx, parked.todo.ID)
 	Expect(err).NotTo(HaveOccurred())
 	admission, err := provider.PrepareRun(ctx, todo, todos.RunPreparation{
-		Mode: types.ModeRun, Prompt: "run", ExecutorName: "claude", Resume: true,
-		Spec: api.Spec{Prompt: api.Prompt{User: answer}},
+		Mode: types.ModeRun, Prompt: "run", ExecutorName: "claude", Resume: true, PromptMarkdown: answer,
 	})
 	Expect(err).NotTo(HaveOccurred())
 	Expect(admission.PromptRunID).To(Equal(parked.runID))
+	Expect(admission.Record.PromptRunID).To(Equal(parked.runID), "a resume replays the parked run's own admission")
 	DeferCleanup(func() { provider.clearPrepared(uuid.MustParse(todo.ID), parked.runID) })
 }
 

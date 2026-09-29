@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"testing"
 
 	captaindb "github.com/flanksource/captain/pkg/database"
@@ -15,21 +16,6 @@ func TestRuntimeCancellation(t *testing.T) {
 	RegisterFailHandler(Fail)
 	RunSpecs(t, "TODO runtime cancellation")
 }
-
-var _ = Describe("cancelled attempt projection", func() {
-	It("records a cancelled prompt run instead of a failure", func() {
-		state, phase, lifecycle, activity, reason := terminalState(&todos.ExecutionResult{
-			Cancelled: true,
-			Summary:   "run stopped by user",
-		}, native.StepRun)
-
-		Expect(state).To(Equal(captaindb.PromptRunStateCancelled))
-		Expect(phase).To(Equal(captaindb.PromptRunPhaseFinished))
-		Expect(lifecycle).To(Equal(captaindb.SessionLifecycleCancelled))
-		Expect(activity).To(Equal(captaindb.SessionActivityIdle))
-		Expect(reason).To(Equal("run stopped by user"))
-	})
-})
 
 var _ = Describe("plan review status projection", func() {
 	DescribeTable("projects plan approval without hiding terminal or active states",
@@ -63,7 +49,7 @@ var _ = Describe("waiting plan attempt", func() {
 
 var _ = Describe("plan artifact resolution", func() {
 	It("rejects a reported plan path that has no readable file", func() {
-		_, _, err := planResultContent(&todos.ExecutionResult{Plan: &types.PlanResult{
+		_, _, err := (&Provider{}).planResultContent(context.Background(), &todos.ExecutionResult{Plan: &types.PlanResult{
 			Path: "/missing/plan.md", Content: "# Inline plan",
 		}}, "session-1")
 		Expect(err).To(MatchError(ContainSubstring("/missing/plan.md")))

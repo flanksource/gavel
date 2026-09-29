@@ -9,10 +9,13 @@ import (
 
 	"github.com/flanksource/captain/pkg/api"
 	captaindb "github.com/flanksource/captain/pkg/database"
+	"github.com/flanksource/captain/pkg/promptrun"
 	commonsdb "github.com/flanksource/commons-db/db"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/todos"
+	"github.com/flanksource/gavel/todos/lifecycle"
 	"github.com/flanksource/gavel/todos/native"
+	"github.com/flanksource/gavel/todos/runtime/runtimetest"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -165,18 +168,21 @@ func TestProviderNativeLifecycleIntegration(t *testing.T) {
 		Title: "Runtime no-fixture run", Body: "Implement the runtime cutover", Status: types.StatusPending,
 	})
 	require.NoError(t, err)
-	preparation, err := provider.PrepareRun(t.Context(), runTodo, todos.RunPreparation{
+	// The run as promptrun.Run leaves it: admitted, started on the provider's
+	// session, and filed succeeded before the attempt is applied.
+	runResult := &todos.ExecutionResult{
+		Success: true, ExecutorName: "codex", EndStatus: types.EndCompleted,
+		Summary: "implementation finished without explicit verification",
+	}
+	preparation, err := runtimetest.Admit(t.Context(), provider, runTodo, todos.RunPreparation{
 		Mode: types.ModeRun, ExecutorName: "codex",
 		Requested: captaindb.PromptRunRuntimeSelection{Provider: "openai", Mode: "agent", Model: "gpt-requested", Effort: "high"},
+	}, promptrun.Completed{
+		Runtime: codexAgent, Model: "gpt-runtime", ProviderSessionID: "runtime-run-1",
+		Outcome: lifecycle.RunOutcome(runResult, false),
 	})
 	require.NoError(t, err)
 	require.NotEmpty(t, preparation.SessionID)
-	assert.Equal(t, types.StatusInProgress, runTodo.Status)
-	assert.Equal(t, string(native.ExecutionRunning), runTodo.ExecutionState)
-	require.NoError(t, provider.RecordRunStart(t.Context(), runTodo, todos.RunStartMetadata{
-		SessionID: "runtime-run-1", Mode: "run", Driver: "codex", Provider: "openai",
-		RuntimeMode: "agent", ResolvedModel: "gpt-runtime", Effort: "high",
-	}))
 	require.NotNil(t, runTodo.LLM)
 	assert.Equal(t, "runtime-run-1", runTodo.LLM.SessionId)
 	runningIssue, err := repository.GetIssue(t.Context(), mustUUID(t, runTodo.ID))
@@ -191,16 +197,12 @@ func TestProviderNativeLifecycleIntegration(t *testing.T) {
 	agentSession, err := provider.Captain().GetSessionByIdentity(t.Context(), "runtime-run-1", "codex", "", captaindb.LocalHostID())
 	require.NoError(t, err)
 	assert.NotEqual(t, admissionSession.ID, agentSession.ID)
-	assert.Equal(t, captaindb.SessionLifecycleCreated, agentSession.LifecycleStatus, "Gavel must not project an attempt state onto the provider thread")
 	require.NotNil(t, runningPromptRun.ExecutionSessionID)
 	assert.Equal(t, agentSession.ID, *runningPromptRun.ExecutionSessionID)
 	assert.Equal(t, "run", runningPromptRun.Runtime.Mode)
 	assert.Equal(t, "gpt-requested", runningPromptRun.Runtime.Requested.Model)
 	assert.Equal(t, "gpt-runtime", runningPromptRun.Runtime.Resolved.Model)
-	require.NoError(t, provider.SaveAttempt(t.Context(), runTodo, &todos.ExecutionResult{
-		Success: true, ExecutorName: "codex", EndStatus: types.EndCompleted,
-		Summary: "implementation finished without explicit verification",
-	}))
+	require.NoError(t, provider.SaveAttempt(t.Context(), runTodo, runResult))
 	storedRun, err := repository.GetIssue(t.Context(), mustUUID(t, runTodo.ID))
 	require.NoError(t, err)
 	assert.Equal(t, native.StatusOpen, storedRun.Status, "no-fixture success must stay open")
@@ -211,9 +213,6 @@ func TestProviderNativeLifecycleIntegration(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "succeeded", string(captainRun.State))
 	assert.Equal(t, "finished", string(captainRun.Phase))
-	agentSession, err = provider.Captain().GetSession(t.Context(), agentSession.ID)
-	require.NoError(t, err)
-	assert.Equal(t, captaindb.SessionLifecycleCreated, agentSession.LifecycleStatus, "attempt completion must not complete the provider thread")
 	admissionSession, err = provider.Captain().GetSession(t.Context(), admissionSession.ID)
 	require.NoError(t, err)
 	assert.Equal(t, captaindb.SessionLifecycleCreated, admissionSession.LifecycleStatus)
@@ -222,15 +221,15 @@ func TestProviderNativeLifecycleIntegration(t *testing.T) {
 		Title: "Runtime cancelled run", Body: "Stop without recording a failure", Status: types.StatusPending,
 	})
 	require.NoError(t, err)
-	preparation, err = provider.PrepareRun(t.Context(), cancelledTodo, todos.RunPreparation{
+	// A run still in flight when its attempt is applied cancelled — a stop no
+	// promptrun.Run is left to file — is cancelled through Captain.
+	preparation, err = runtimetest.Admit(t.Context(), provider, cancelledTodo, todos.RunPreparation{
 		Mode: types.ModeRun, ExecutorName: "headless-codex",
-	})
+	}, runtimetest.Started("runtime-cancelled-1"))
 	require.NoError(t, err)
 	require.NotEmpty(t, preparation.SessionID)
-	require.NoError(t, provider.RecordRunStart(t.Context(), cancelledTodo, todos.RunStartMetadata{
-		SessionID: "runtime-cancelled-1", Mode: "run", Driver: "headless-codex", Provider: "openai",
-		RuntimeMode: "agent", ResolvedModel: "gpt-runtime", Effort: "high",
-	}))
+	assert.Equal(t, types.StatusInProgress, cancelledTodo.Status)
+	assert.Equal(t, string(native.ExecutionRunning), cancelledTodo.ExecutionState)
 	cancelledIssue, err := repository.GetIssue(t.Context(), mustUUID(t, cancelledTodo.ID))
 	require.NoError(t, err)
 	require.NotNil(t, cancelledIssue.ActivePromptRunID)
@@ -246,22 +245,22 @@ func TestProviderNativeLifecycleIntegration(t *testing.T) {
 	cancelledRun, err := provider.Captain().GetPromptRun(t.Context(), cancelledRunID)
 	require.NoError(t, err)
 	assert.Equal(t, captaindb.PromptRunStateCancelled, cancelledRun.State)
-	assert.Equal(t, captaindb.PromptRunPhaseFinished, cancelledRun.Phase)
+	assert.Equal(t, todos.ErrExecutionCancelled.Error(), cancelledRun.Error)
 
 	tracingTodo, err := provider.Create(t.Context(), todos.CreateRequest{
 		Title: "Runtime exact prompt", Body: "The issue body is not the rendered agent prompt", Status: types.StatusPending,
 	})
 	require.NoError(t, err)
 	// The admitted prompt run must carry the RENDERED prompt, not the issue body:
-	// PrepareRun is what stores it, and it runs before anything is dispatched, so
-	// a reader of the run row never sees a lossy reconstruction of what the agent
-	// was actually asked.
+	// PrepareRun hands it to Captain's admission, which runs before anything is
+	// dispatched, so a reader of the run row never sees a lossy reconstruction
+	// of what the agent was actually asked.
 	exactPrompt := "Rendered prompt with runtime instructions and the full issue envelope"
-	tracingPreparation, err := provider.PrepareRun(t.Context(), tracingTodo, todos.RunPreparation{
-		Mode: types.ModeRun, Prompt: "run", ExecutorName: "prompt-observer",
-		Spec: api.Spec{Prompt: api.Prompt{User: exactPrompt}},
-	})
+	tracingPreparation, err := runtimetest.Admit(t.Context(), provider, tracingTodo, todos.RunPreparation{
+		Mode: types.ModeRun, Prompt: "run", ExecutorName: "prompt-observer", PromptMarkdown: exactPrompt,
+	}, runtimetest.Started(""))
 	require.NoError(t, err)
+	t.Cleanup(func() { provider.ownership.stop(tracingPreparation.PromptRunID) })
 	tracingRun, err := provider.Captain().GetPromptRun(t.Context(), tracingPreparation.PromptRunID)
 	require.NoError(t, err)
 	tracingSession, err := provider.Captain().GetSession(t.Context(), tracingRun.SessionID)
@@ -283,15 +282,21 @@ func TestProviderNativeLifecycleIntegration(t *testing.T) {
 	require.NoError(t, err)
 	startRace := make(chan struct{})
 	raceErrors := make(chan error, 2)
+	// Both contenders clear the same deterministic identity; only one admission
+	// may attach it, and the other must not dispatch a second agent.
 	go func() {
 		<-startRace
-		_, prepareErr := provider.PrepareRun(t.Context(), raceA, todos.RunPreparation{Mode: types.ModeRun, ExecutorName: "codex"})
-		raceErrors <- prepareErr
+		admitted, admitErr := runtimetest.Admit(t.Context(), provider, raceA,
+			todos.RunPreparation{Mode: types.ModeRun, ExecutorName: "codex"}, runtimetest.Started(""))
+		t.Cleanup(func() { provider.ownership.stop(admitted.PromptRunID) })
+		raceErrors <- admitErr
 	}()
 	go func() {
 		<-startRace
-		_, prepareErr := contenderProvider.PrepareRun(t.Context(), raceB, todos.RunPreparation{Mode: types.ModeRun, ExecutorName: "codex"})
-		raceErrors <- prepareErr
+		admitted, admitErr := runtimetest.Admit(t.Context(), contenderProvider, raceB,
+			todos.RunPreparation{Mode: types.ModeRun, ExecutorName: "codex"}, runtimetest.Started(""))
+		t.Cleanup(func() { contenderProvider.ownership.stop(admitted.PromptRunID) })
+		raceErrors <- admitErr
 	}()
 	close(startRace)
 	firstRaceErr, secondRaceErr := <-raceErrors, <-raceErrors
@@ -308,7 +313,8 @@ func TestProviderNativeLifecycleIntegration(t *testing.T) {
 		Title: "Runtime resume mode", Body: "Do not cross step kinds", Status: types.StatusPending,
 	})
 	require.NoError(t, err)
-	preparation, err = provider.PrepareRun(t.Context(), resumeTodo, todos.RunPreparation{Mode: types.ModePlan, ExecutorName: "claude"})
+	preparation, err = runtimetest.Admit(t.Context(), provider, resumeTodo,
+		todos.RunPreparation{Mode: types.ModePlan, ExecutorName: "claude"}, runtimetest.Started(""))
 	require.NoError(t, err)
 	require.NotEmpty(t, preparation.SessionID)
 	resumeBefore, err := repository.GetIssue(t.Context(), mustUUID(t, resumeTodo.ID))
@@ -323,13 +329,16 @@ func TestProviderNativeLifecycleIntegration(t *testing.T) {
 		Title: "Runtime failed plan", Body: "A failed result must not become executable", Status: types.StatusPending,
 	})
 	require.NoError(t, err)
-	preparation, err = provider.PrepareRun(t.Context(), failedPlanTodo, todos.RunPreparation{Mode: types.ModePlan, ExecutorName: "claude"})
-	require.NoError(t, err)
-	require.NotEmpty(t, preparation.SessionID)
-	require.NoError(t, provider.SaveAttempt(t.Context(), failedPlanTodo, &todos.ExecutionResult{
+	failedPlanResult := &todos.ExecutionResult{
 		Success: false, ExecutorName: "claude", EndStatus: types.EndFailed, ErrorMessage: "planning failed",
 		Plan: &types.PlanResult{Status: types.PlanNew, Content: "# Partial and invalid plan"},
-	}))
+	}
+	preparation, err = runtimetest.Admit(t.Context(), provider, failedPlanTodo,
+		todos.RunPreparation{Mode: types.ModePlan, ExecutorName: "claude"},
+		promptrun.Completed{Outcome: lifecycle.RunOutcome(failedPlanResult, false)})
+	require.NoError(t, err)
+	require.NotEmpty(t, preparation.SessionID)
+	require.NoError(t, provider.SaveAttempt(t.Context(), failedPlanTodo, failedPlanResult))
 	failedPlanIssue, err := repository.GetIssue(t.Context(), mustUUID(t, failedPlanTodo.ID))
 	require.NoError(t, err)
 	assert.Nil(t, failedPlanIssue.SelectedPlanID)
@@ -341,20 +350,18 @@ func TestProviderNativeLifecycleIntegration(t *testing.T) {
 		Title: "Runtime plan review", Body: "Design and implement the database plan flow", Status: types.StatusPending,
 	})
 	require.NoError(t, err)
-	preparation, err = provider.PrepareRun(t.Context(), planTodo, todos.RunPreparation{
-		Mode: types.ModePlan, ExecutorName: "claude",
-	})
-	require.NoError(t, err)
-	require.NotEmpty(t, preparation.SessionID)
-	require.NoError(t, provider.RecordRunStart(t.Context(), planTodo, todos.RunStartMetadata{
-		SessionID: "runtime-plan-1", Mode: "plan", ResolvedModel: "sonnet-runtime",
-	}))
 	planMarkdown := "# Native plan\n\n1. Persist Captain revisions.\n2. Project Gavel state."
-	require.NoError(t, provider.SaveAttempt(t.Context(), planTodo, &todos.ExecutionResult{
+	planResult := &todos.ExecutionResult{
 		Success: true, ExecutorName: "claude", EndStatus: types.EndCompleted,
 		Summary: "plan ready for review",
 		Plan:    &types.PlanResult{Status: types.PlanNew, Content: planMarkdown},
-	}))
+	}
+	preparation, err = runtimetest.Admit(t.Context(), provider, planTodo, todos.RunPreparation{
+		Mode: types.ModePlan, ExecutorName: "claude",
+	}, finishedRun("runtime-plan-1", planResult))
+	require.NoError(t, err)
+	require.NotEmpty(t, preparation.SessionID)
+	require.NoError(t, provider.SaveAttempt(t.Context(), planTodo, planResult))
 	assert.Equal(t, types.StatusReview, planTodo.Status)
 	assert.Empty(t, planTodo.PlanPath)
 	assert.True(t, todos.HasPlan(planTodo))
@@ -372,9 +379,15 @@ func TestProviderNativeLifecycleIntegration(t *testing.T) {
 	planTodo, err = provider.RequestPlanRevision(t.Context(), planTodo, "reviewer", "add rollback steps")
 	require.NoError(t, err)
 	assert.Equal(t, types.StatusReview, planTodo.Status)
-	preparation, err = provider.PrepareRun(t.Context(), planTodo, todos.RunPreparation{
+	revisedMarkdown := planMarkdown + "\n3. Add rollback steps."
+	revisedResult := &todos.ExecutionResult{
+		Success: true, ExecutorName: "claude", EndStatus: types.EndCompleted,
+		Summary: "plan revised",
+		Plan:    &types.PlanResult{Status: types.PlanUpdated, Content: revisedMarkdown},
+	}
+	preparation, err = runtimetest.Admit(t.Context(), provider, planTodo, todos.RunPreparation{
 		Mode: types.ModePlan, ExecutorName: "claude", Resume: true,
-	})
+	}, finishedRun("runtime-plan-1", revisedResult))
 	require.NoError(t, err)
 	require.NotEmpty(t, preparation.SessionID)
 	revisedPlanIssue, err := repository.GetIssue(t.Context(), mustUUID(t, planTodo.ID))
@@ -384,15 +397,7 @@ func TestProviderNativeLifecycleIntegration(t *testing.T) {
 	revisedPlanRun, err := provider.Captain().GetPromptRun(t.Context(), *revisedPlanIssue.ActivePromptRunID)
 	require.NoError(t, err)
 	assert.Equal(t, initialPlanRun.SessionID, revisedPlanRun.SessionID, "resume reuses the Captain session but creates a new prompt run")
-	require.NoError(t, provider.RecordRunStart(t.Context(), planTodo, todos.RunStartMetadata{
-		SessionID: "runtime-plan-1", Mode: "plan", ResolvedModel: "sonnet-runtime",
-	}))
-	revisedMarkdown := planMarkdown + "\n3. Add rollback steps."
-	require.NoError(t, provider.SaveAttempt(t.Context(), planTodo, &todos.ExecutionResult{
-		Success: true, ExecutorName: "claude", EndStatus: types.EndCompleted,
-		Summary: "plan revised",
-		Plan:    &types.PlanResult{Status: types.PlanUpdated, Content: revisedMarkdown},
-	}))
+	require.NoError(t, provider.SaveAttempt(t.Context(), planTodo, revisedResult))
 	assert.Equal(t, types.StatusReview, planTodo.Status)
 
 	planTodo, err = provider.ApprovePlan(t.Context(), planTodo, "reviewer", "looks good")
@@ -412,9 +417,13 @@ func TestProviderNativeLifecycleIntegration(t *testing.T) {
 	approvedPlan, err = provider.PlanMarkdown(t.Context(), planTodo, types.ModeRun)
 	require.NoError(t, err)
 	assert.Equal(t, humanEditedMarkdown, approvedPlan)
-	preparation, err = provider.PrepareRun(t.Context(), planTodo, todos.RunPreparation{
+	implementResult := &todos.ExecutionResult{
+		Success: true, ExecutorName: "claude", EndStatus: types.EndCompleted,
+		Summary: "implemented approved plan",
+	}
+	preparation, err = runtimetest.Admit(t.Context(), provider, planTodo, todos.RunPreparation{
 		Mode: types.ModeRun, ExecutorName: "claude",
-	})
+	}, finishedRun("runtime-implement-1", implementResult))
 	require.NoError(t, err)
 	require.NotEmpty(t, preparation.SessionID)
 	currentPlanIssue, err := repository.GetIssue(t.Context(), mustUUID(t, planTodo.ID))
@@ -424,13 +433,7 @@ func TestProviderNativeLifecycleIntegration(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, implementationRun.InputPlanID)
 	require.NotNil(t, implementationRun.InputPlanRevisionID)
-	require.NoError(t, provider.RecordRunStart(t.Context(), planTodo, todos.RunStartMetadata{
-		SessionID: "runtime-implement-1", Mode: "run", ResolvedModel: "sonnet-runtime",
-	}))
-	require.NoError(t, provider.SaveAttempt(t.Context(), planTodo, &todos.ExecutionResult{
-		Success: true, ExecutorName: "claude", EndStatus: types.EndCompleted,
-		Summary: "implemented approved plan",
-	}))
+	require.NoError(t, provider.SaveAttempt(t.Context(), planTodo, implementResult))
 	assert.Equal(t, types.StatusPending, planTodo.Status, "successful no-fixture implementation remains open")
 
 	planTodo, err = provider.RejectPlan(t.Context(), planTodo, "reviewer", "superseded")
@@ -456,6 +459,18 @@ func TestProviderNativeLifecycleIntegration(t *testing.T) {
 	stored, err = repository.GetIssue(t.Context(), mustUUID(t, byAlias.ID))
 	require.NoError(t, err)
 	assert.Equal(t, native.StatusCancelled, stored.Status, "delete must preserve the issue and history")
+}
+
+// codexAgent is the runtime the integration's runs are filed under.
+var codexAgent = api.RuntimeOf(api.OpenAI, api.ModeAgent)
+
+// finishedRun is a run promptrun.Run filed in the state its result maps to,
+// on the provider session the agent reported.
+func finishedRun(providerSessionID string, result *todos.ExecutionResult) promptrun.Completed {
+	return promptrun.Completed{
+		Runtime: runtimetest.ClaudeCLI, Model: "sonnet-runtime", ProviderSessionID: providerSessionID,
+		Outcome: lifecycle.RunOutcome(result, false),
+	}
 }
 
 func boolCount(values ...bool) int {

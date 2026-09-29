@@ -10,6 +10,7 @@ import (
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/native"
+	"github.com/flanksource/gavel/todos/runtime/runtimetest"
 	"github.com/flanksource/gavel/todos/types"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -91,7 +92,8 @@ var _ = Describe("counting TODOs across configured projects", func() {
 		Expect(err).NotTo(HaveOccurred())
 		running, err = mixedProvider.Get(ctx, running.ID)
 		Expect(err).NotTo(HaveOccurred())
-		admission, err := mixedProvider.PrepareRun(ctx, running, todos.RunPreparation{Mode: types.ModeRun, ExecutorName: "codex"})
+		admission, err := runtimetest.Admit(ctx, mixedProvider, running, todos.RunPreparation{Mode: types.ModeRun, ExecutorName: "codex"},
+			runtimetest.Started(""))
 		Expect(err).NotTo(HaveOccurred())
 		DeferCleanup(func() { mixedProvider.ownership.stop(admission.PromptRunID) })
 		Expect(withPlan(ctx, mixedProvider, "Plan awaiting review").Status).To(Equal(types.StatusReview))

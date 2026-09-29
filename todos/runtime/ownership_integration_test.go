@@ -6,6 +6,7 @@ import (
 
 	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/gavel/todos"
+	"github.com/flanksource/gavel/todos/runtime/runtimetest"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -31,16 +32,16 @@ func TestOrphanedRunIsReclaimedOnDispatch(t *testing.T) {
 	if os.Getenv("GAVEL_DB_EMBEDDED_TEST") == "" {
 		t.Skip("set GAVEL_DB_EMBEDDED_TEST=1 to run embedded-postgres native runtime tests")
 	}
-	provider := newResumeTestProvider(t, "gavel_todo_ownership")
+	provider := newEmbeddedProvider(t, "gavel_todo_ownership")
 
 	todo, err := provider.Create(t.Context(), todos.CreateRequest{
 		Title: "Reclaim an abandoned run", Body: "The dispatcher died mid-run", Status: types.StatusPending,
 	})
 	require.NoError(t, err)
 
-	first, err := provider.PrepareRun(t.Context(), todo, todos.RunPreparation{
+	first, err := runtimetest.Admit(t.Context(), provider, todo, todos.RunPreparation{
 		Mode: types.ModeRun, ExecutorName: "headless-codex",
-	})
+	}, runtimetest.Started(""))
 	require.NoError(t, err)
 	require.NotEqual(t, "", first.PromptRunID.String())
 
@@ -69,17 +70,18 @@ func TestLiveRunRefusesDispatchUntilConfirmed(t *testing.T) {
 	if os.Getenv("GAVEL_DB_EMBEDDED_TEST") == "" {
 		t.Skip("set GAVEL_DB_EMBEDDED_TEST=1 to run embedded-postgres native runtime tests")
 	}
-	provider := newResumeTestProvider(t, "gavel_todo_ownership_live")
+	provider := newEmbeddedProvider(t, "gavel_todo_ownership_live")
 
 	todo, err := provider.Create(t.Context(), todos.CreateRequest{
 		Title: "Refuse a silent second run", Body: "The first run is still going", Status: types.StatusPending,
 	})
 	require.NoError(t, err)
 
-	first, err := provider.PrepareRun(t.Context(), todo, todos.RunPreparation{
+	first, err := runtimetest.Admit(t.Context(), provider, todo, todos.RunPreparation{
 		Mode: types.ModeRun, ExecutorName: "headless-codex",
-	})
+	}, runtimetest.Started(""))
 	require.NoError(t, err)
+	t.Cleanup(func() { provider.ownership.stop(first.PromptRunID) })
 
 	_, err = provider.PrepareRun(t.Context(), todo, todos.RunPreparation{
 		Mode: types.ModeRun, ExecutorName: "headless-codex",
@@ -91,5 +93,5 @@ func TestLiveRunRefusesDispatchUntilConfirmed(t *testing.T) {
 
 	stillRunning, err := provider.Captain().GetPromptRun(t.Context(), first.PromptRunID)
 	require.NoError(t, err)
-	assert.Equal(t, captaindb.PromptRunStatePending, stillRunning.State, "the incumbent must be untouched")
+	assert.Equal(t, captaindb.PromptRunStateRunning, stillRunning.State, "the incumbent must be untouched")
 }

@@ -8,6 +8,7 @@ import (
 	commonsdb "github.com/flanksource/commons-db/db"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/todos"
+	"github.com/flanksource/gavel/todos/runtime/runtimetest"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -86,11 +87,12 @@ func TestCountByStatusMatchesListIntegration(t *testing.T) {
 		Title: "Has an admitted prompt run", Body: "Body", Status: types.StatusPending,
 	})
 	require.NoError(t, err)
-	preparation, err := provider.PrepareRun(t.Context(), running, todos.RunPreparation{
+	preparation, err := runtimetest.Admit(t.Context(), provider, running, todos.RunPreparation{
 		Mode: types.ModeRun, ExecutorName: "codex",
-	})
+	}, runtimetest.Started(""))
 	require.NoError(t, err)
 	require.NotEmpty(t, preparation.SessionID)
+	t.Cleanup(func() { provider.ownership.stop(preparation.PromptRunID) })
 
 	awaitingReview, err := provider.Create(t.Context(), todos.CreateRequest{
 		Title: "Has a plan awaiting review", Body: "Body", Status: types.StatusPending,
