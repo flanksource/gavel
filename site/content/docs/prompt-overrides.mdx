@@ -44,7 +44,7 @@ Gavel validates the parsed output and fails loudly on a shape mismatch (no zero-
 | `commit.grouping` | AI commit grouping (`commit -G`) | `{{table}}`, `{{groupByScope}}`, `{{maxCommits}}`, `{{consolidation}}`, `{{prevCount}}`, `{{prevGroups}}` | frontmatter (`groups[]`+`ignore[]`) |
 | `lint.fix` | Lint source repair (`lint --ai-fix`, `commit --fix`) | violation fields | frontmatter |
 | `pr.content` | PR title/body/branch | PR input fields | frontmatter |
-| `pr.fix` | PR check repair (`pr status --ai-fix`) | PR/check fields | frontmatter |
+| `pr.fix` | PR check repair (`pr status --ai-fix`) | `{{workDir}}`, `{{number}}`, `{{title}}`, `{{url}}`, `{{branch}}`, `{{baseBranch}}`, `{{statusText}}`, `{{unresolvedComments}}`, `{{conflicts}}` (`path`/`kind` per file, set only for a conflicting PR) | frontmatter |
 | `todos.run` | Todo run | `{{body}}`, `{{count}}`, `{{multiple}}`, `{{existingPlan}}` | **fixed** (run envelope) |
 | `todos.plan` | Todo plan | `{{body}}`, `{{count}}`, `{{existingPlan}}` | **fixed** (plan envelope) |
 | `todos.triage` | Todo triage | `{{body}}`, `{{count}}`, `{{multiple}}`, `{{backlog}}` | **fixed** (triage envelope) |

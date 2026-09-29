@@ -16,7 +16,7 @@ Defaults and raw presets remain partial until the request is composed. The run d
 
 The built-in plan and triage prompts declare per-tool permissions. Selecting a runtime that cannot enforce those declarations now fails during preview; previously Captain rejected it only when execution began. Choose a runtime that supports the declared policy, or author a compatible policy explicitly for the intended runtime. Preflight never removes a policy to make a run succeed.
 
-Preview constructs the real run configuration and hooks, but does not construct a provider, prepare a workspace, invoke hooks, run fixture factories, create an approval broker, or admit/persist a run. Dispatch validates its actual input again before admission, including a caller-supplied provider. The dashboard approval callback is present during validation; its factory is bound only after Captain supplies the admitted session and run identities.
+Preview constructs the real run configuration and hooks, but does not construct a provider, prepare a workspace, invoke hooks, run fixture factories, create an approval broker, or admit/persist a run. Dispatch validates its actual input again before admission, including a caller-supplied provider. An attended dashboard run carries an approval opt-in through preview; Captain binds the broker only after it admits the session and prompt run.
 
 Command and registered fixture verification can run without a generating model. A judge prompt still needs its required runtime. Preview checks fixture registration without executing the fixture or its setup, so a successful preview does not claim that commands, credentials, provider calls, or the definition of done will succeed.
 
