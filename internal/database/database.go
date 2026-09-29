@@ -141,13 +141,17 @@ func open(ctx context.Context, deps openDependencies, optionFns ...Option) (*DB,
 
 func migrateDatabase(ctx context.Context, dsn string) error {
 	return withMigrationAdvisoryLock(ctx, dsn, func() error {
-		// Captain owns its schema and must migrate before Gavel installs any
-		// cross-owner constraints or projections. Both are covered by the same
-		// cross-process lifecycle lock.
+		// Captain owns its schema and must migrate before Gavel's projection
+		// functions (which read Captain tables) exist and before Gavel registers
+		// its delete guards through Captain's API. Gavel installs no DDL on
+		// Captain's tables. All of it runs under one cross-process lifecycle lock.
 		if err := captaindb.Migrate(ctx, dsn); err != nil {
 			return err
 		}
-		return applyGavelSchema(ctx, dsn)
+		if err := applyGavelSchema(ctx, dsn); err != nil {
+			return err
+		}
+		return registerCaptainDeleteGuards(ctx, dsn)
 	})
 }
 
@@ -157,13 +161,40 @@ func applyGavelSchema(ctx context.Context, dsn string) error {
 		migrate.WithName("gavel"),
 		migrate.WithExclude(
 			"captain_*",
-			"todo_issue_prompt_runs.todo_issue_prompt_runs_captain_prompt_run_fkey",
-			"todo_issue_plans.todo_issue_plans_captain_plan_fkey",
 			"todo_issue_plan_revision_details",
 			"todo_issue_runtime",
 		),
 	); err != nil {
 		return fmt.Errorf("migrate gavel database: %w", err)
+	}
+	return nil
+}
+
+// captainDeleteGuards are the Gavel link columns that hold Captain row ids.
+// Captain rejects deleting a referenced run or plan (SQLSTATE 23503,
+// constraint captain_delete_guard) until Gavel unlinks it, as the foreign keys
+// Gavel used to add onto Captain's tables did.
+var captainDeleteGuards = []captaindb.DeleteGuard{
+	{Table: captaindb.DeleteGuardPromptRuns, HostTable: "public.todo_issue_prompt_runs", HostColumn: "prompt_run_id", Owner: "gavel"},
+	{Table: captaindb.DeleteGuardPlans, HostTable: "public.todo_issue_plans", HostColumn: "plan_id", Owner: "gavel"},
+}
+
+// registerCaptainDeleteGuards runs after Gavel's schema exists, because
+// Captain refuses a guard whose host column it cannot resolve.
+func registerCaptainDeleteGuards(ctx context.Context, dsn string) (returnErr error) {
+	captain, err := captaindb.Open(ctx, captaindb.WithDSN(dsn))
+	if err != nil {
+		return fmt.Errorf("open Captain database to register Gavel delete guards: %w", err)
+	}
+	defer func() {
+		if err := captain.Close(); err != nil {
+			returnErr = errors.Join(returnErr, err)
+		}
+	}()
+	for _, guard := range captainDeleteGuards {
+		if err := captain.RegisterDeleteGuard(ctx, guard); err != nil {
+			return err
+		}
 	}
 	return nil
 }

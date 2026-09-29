@@ -1,5 +1,9 @@
 -- phase: post
+-- dependsOn: 090_prepare_runtime_state.sql
 
+-- 090 drops the execution-state and touch functions below whenever it re-runs,
+-- so this file must re-run with it.
+--
 -- The projection used to expose gavel_project_todo_issue, a second writer of
 -- durable status that was later stubbed to `RETURN false`. Its callers all
 -- discarded the result, so it is dropped rather than kept as a contract nobody
@@ -275,63 +279,133 @@ BEGIN
 END
 $$;
 
-CREATE OR REPLACE FUNCTION public.gavel_todo_prompt_run_projection_trigger()
-RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog, public AS $$
-BEGIN
-  IF TG_OP = 'UPDATE' AND ROW(NEW.session_id, NEW.root_session_id)
-    IS DISTINCT FROM ROW(OLD.session_id, OLD.root_session_id) THEN
-    PERFORM public.gavel_project_todo_prompt_run(OLD.id);
-  END IF;
-  PERFORM public.gavel_project_todo_prompt_run(NEW.id);
-  RETURN NEW;
-END $$;
+-- The functions above and below are called by Gavel's row-change projection
+-- (internal/database/todoprojection), which LISTENs on Captain's
+-- captain_row_change channel. Gavel installs no trigger on a Captain table: it
+-- is told which row changed after Captain commits and re-reads it here.
 
-CREATE OR REPLACE FUNCTION public.gavel_todo_session_projection_trigger()
-RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog, public AS $$
+-- A turn request dates its run's activity by when it was raised or resolved.
+CREATE OR REPLACE FUNCTION public.gavel_project_todo_turn_request(p_request_id uuid)
+RETURNS integer
+LANGUAGE plpgsql
+SET search_path = pg_catalog, public
+AS $$
+DECLARE
+  request record;
 BEGIN
-  IF TG_OP = 'DELETE' THEN
-    PERFORM public.gavel_project_todo_session(OLD.id);
-    RETURN OLD;
+  SELECT turn.prompt_run_id,
+         GREATEST(turn.created_at, COALESCE(turn.resolved_at, turn.created_at)) AS activity_at
+    INTO request
+    FROM public.captain_turn_requests turn
+   WHERE turn.id = p_request_id;
+  IF NOT FOUND OR request.prompt_run_id IS NULL THEN
+    RETURN 0;
   END IF;
-  IF TG_OP = 'UPDATE' AND ROW(NEW.provider_session_id, NEW.parent_session_id, NEW.root_session_id)
-    IS DISTINCT FROM ROW(OLD.provider_session_id, OLD.parent_session_id, OLD.root_session_id) THEN
-    PERFORM public.gavel_project_todo_session(OLD.id);
-  END IF;
-  PERFORM public.gavel_project_todo_session(NEW.id);
-  RETURN NEW;
-END $$;
+  RETURN public.gavel_touch_todo_prompt_run(request.prompt_run_id, request.activity_at);
+END
+$$;
 
-CREATE OR REPLACE FUNCTION public.gavel_todo_request_projection_trigger()
-RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog, public AS $$
+-- A TODO's root session shares the TODO's id, so any session in that tree —
+-- the root, its operation and plan-source sessions — is activity on the TODO.
+CREATE OR REPLACE FUNCTION public.gavel_project_todo_root_session(p_session_id uuid)
+RETURNS integer
+LANGUAGE plpgsql
+SET search_path = pg_catalog, public
+AS $$
+DECLARE
+  target record;
 BEGIN
-  IF TG_OP = 'DELETE' THEN
-    IF OLD.prompt_run_id IS NOT NULL THEN
-      PERFORM public.gavel_touch_todo_prompt_run(
-        OLD.prompt_run_id, GREATEST(OLD.created_at, COALESCE(OLD.resolved_at, OLD.created_at)));
-      PERFORM public.gavel_project_todo_prompt_run(OLD.prompt_run_id);
-    END IF;
-    PERFORM public.gavel_project_todo_session(OLD.session_id);
-    RETURN OLD;
+  SELECT COALESCE(session.root_session_id, session.id) AS root_id,
+         GREATEST(
+           COALESCE(session.last_activity_at, '-infinity'::timestamptz),
+           COALESCE(session.state_observed_at, '-infinity'::timestamptz),
+           COALESCE(session.started_at, '-infinity'::timestamptz),
+           COALESCE(session.ended_at, '-infinity'::timestamptz),
+           session.updated_at
+         ) AS activity_at
+    INTO target
+    FROM public.captain_sessions session
+   WHERE session.id = p_session_id;
+  IF NOT FOUND THEN
+    RETURN 0;
   END IF;
-  IF NEW.prompt_run_id IS NOT NULL THEN
-    PERFORM public.gavel_touch_todo_prompt_run(
-      NEW.prompt_run_id, GREATEST(NEW.created_at, COALESCE(NEW.resolved_at, NEW.created_at)));
-    PERFORM public.gavel_project_todo_prompt_run(NEW.prompt_run_id);
+  IF public.gavel_touch_todo_issue(target.root_id, target.activity_at) THEN
+    RETURN 1;
   END IF;
-  PERFORM public.gavel_project_todo_session(NEW.session_id);
-  RETURN NEW;
-END $$;
+  RETURN 0;
+END
+$$;
 
-CREATE OR REPLACE FUNCTION public.gavel_todo_iteration_projection_trigger()
-RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog, public AS $$
-BEGIN
-  IF TG_OP = 'DELETE' THEN
-    PERFORM public.gavel_project_todo_prompt_run(OLD.prompt_run_id);
-    RETURN OLD;
-  END IF;
-  IF TG_OP = 'UPDATE' AND OLD.prompt_run_id IS DISTINCT FROM NEW.prompt_run_id THEN
-    PERFORM public.gavel_project_todo_prompt_run(OLD.prompt_run_id);
-  END IF;
-  PERFORM public.gavel_project_todo_prompt_run(NEW.prompt_run_id);
-  RETURN NEW;
-END $$;
+-- Nothing is delivered while the projection is not LISTENing, so on every
+-- (re)established LISTEN it re-derives every watermark the live mapping could
+-- have advanced: the active run, its turn requests, its agent session family
+-- (the sessions sharing the admission root's provider identity, and their
+-- descendants), and the TODO's own root session tree. Monotonic like every
+-- touch: a watermark never moves backwards. Returns the issues advanced.
+CREATE OR REPLACE FUNCTION public.gavel_resync_todo_activity()
+RETURNS integer
+LANGUAGE sql
+SET search_path = pg_catalog, public
+AS $$
+WITH active AS (
+  SELECT issue.id AS issue_id, run.id AS run_id, run.updated_at AS run_at,
+         admission.provider_session_id
+  FROM public.todo_issues issue
+  JOIN public.todo_issue_prompt_runs link
+    ON link.issue_id = issue.id AND link.prompt_run_id = issue.active_prompt_run_id
+  JOIN public.captain_prompt_runs run ON run.id = link.prompt_run_id
+  LEFT JOIN public.captain_sessions admission
+    ON admission.id = run.root_session_id AND admission.source = 'gavel'
+), agent_roots AS (
+  SELECT active.issue_id, agent.id AS root_id
+  FROM active
+  JOIN public.captain_sessions agent
+    ON active.provider_session_id IS NOT NULL
+   AND agent.provider_session_id = active.provider_session_id
+), tree_roots AS (
+  SELECT issue.id AS issue_id, issue.id AS root_id FROM public.todo_issues issue
+), roots AS (
+  SELECT issue_id, root_id FROM agent_roots
+  UNION ALL
+  SELECT issue_id, root_id FROM tree_roots
+), sessions AS (
+  -- Two indexed lookups per root, joined by UNION ALL rather than one OR, for
+  -- the same reason gavel_todo_issue_execution_state avoids the OR form.
+  SELECT roots.issue_id, session.last_activity_at, session.state_observed_at,
+         session.started_at, session.ended_at, session.updated_at
+  FROM roots
+  JOIN public.captain_sessions session ON session.id = roots.root_id
+  UNION ALL
+  SELECT roots.issue_id, session.last_activity_at, session.state_observed_at,
+         session.started_at, session.ended_at, session.updated_at
+  FROM roots
+  JOIN public.captain_sessions session ON session.root_session_id = roots.root_id
+), activity AS (
+  SELECT active.issue_id, active.run_at AS activity_at FROM active
+  UNION ALL
+  SELECT active.issue_id,
+         GREATEST(request.created_at, COALESCE(request.resolved_at, request.created_at))
+  FROM active
+  JOIN public.captain_turn_requests request ON request.prompt_run_id = active.run_id
+  UNION ALL
+  SELECT sessions.issue_id,
+         GREATEST(
+           COALESCE(sessions.last_activity_at, '-infinity'::timestamptz),
+           COALESCE(sessions.state_observed_at, '-infinity'::timestamptz),
+           COALESCE(sessions.started_at, '-infinity'::timestamptz),
+           COALESCE(sessions.ended_at, '-infinity'::timestamptz),
+           sessions.updated_at
+         )
+  FROM sessions
+), latest AS (
+  SELECT issue_id, max(activity_at) AS activity_at FROM activity GROUP BY issue_id
+), advanced AS (
+  UPDATE public.todo_issues issue
+     SET updated_at = latest.activity_at
+    FROM latest
+   WHERE issue.id = latest.issue_id
+     AND issue.updated_at < latest.activity_at
+  RETURNING issue.id
+)
+SELECT count(*)::integer FROM advanced
+$$;

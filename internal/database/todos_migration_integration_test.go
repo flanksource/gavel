@@ -399,8 +399,9 @@ func TestTodoProjectionDefersStatusToLifecycleHost(t *testing.T) {
 		before := todoStatusSnapshot(t, db, fixture.issueID)
 		require.Equal(t, "open", before.Status)
 
-		// The prompt-run trigger fires gavel_project_todo_prompt_run, which is
-		// the path the projection used to write status through.
+		// The row-change projection answers this update with
+		// gavel_project_todo_prompt_run, the path the projection used to write
+		// status through.
 		require.NoError(t, db.Exec(`
 			UPDATE captain_prompt_runs
 			SET state = 'succeeded', phase = 'finished', version = 1,
@@ -408,6 +409,9 @@ func TestTodoProjectionDefersStatusToLifecycleHost(t *testing.T) {
 			WHERE id = ?`, fixture.runID).Error)
 
 		var changed int
+		require.NoError(t, db.Raw(`SELECT public.gavel_project_todo_prompt_run(?)`,
+			fixture.runID).Scan(&changed).Error)
+		assert.Equal(t, 1, changed, "the projection carries the finished run's activity onto its issue")
 		require.NoError(t, db.Raw(`SELECT public.gavel_project_todo_prompt_run(?)`,
 			fixture.runID).Scan(&changed).Error)
 		assert.Zero(t, changed, "replaying the projection advances no activity watermark and mutates nothing")

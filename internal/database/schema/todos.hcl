@@ -613,6 +613,11 @@ table "todo_issue_plans" {
     unique  = true
     columns = [column.issue_id, column.ordinal]
   }
+  # Captain's delete guard (registered in database.go) probes this column on
+  # every captain_plans delete; the primary key leads with issue_id.
+  index "todo_issue_plans_plan_id_idx" {
+    columns = [column.plan_id]
+  }
 
   check "todo_issue_plans_ordinal_nonnegative" {
     expr = "ordinal >= 0"

@@ -38,14 +38,13 @@ func TestCaptainProjectionLifecycleAndMigrationIdempotence(t *testing.T) {
 		SELECT count(*) FROM schema_migration_scripts
 		WHERE scope = 'gavel'
 		  AND path IN (
-		    '100_todo_captain_constraints.sql',
+		    '089_drop_captain_table_hooks.sql',
 		    '105_view_todo_plan_revisions.sql',
 		    '110_todo_projection_functions.sql',
-		    '111_todo_projection_triggers.sql',
 		    '112_view_todo_issue_runtime.sql'
 		  )
 	`).Scan(&scriptRows).Error)
-	assert.EqualValues(t, 5, scriptRows)
+	assert.EqualValues(t, 4, scriptRows)
 
 	workspaceID := uuid.New()
 	require.NoError(t, db.Exec(`
@@ -192,12 +191,21 @@ func TestCaptainProjectionLifecycleAndMigrationIdempotence(t *testing.T) {
 			       (SELECT count(*) FROM todo_issue_events event WHERE event.issue_id = issue.id) AS event_count
 			FROM todo_issues issue WHERE issue.id = ?`, fixture.issueID).Scan(&before).Error)
 
+		// The row-change projection (todoprojection) calls gavel_project_todo_session
+		// for every notified session change; it is invoked directly here because
+		// this test pins the SQL function, not the LISTEN wiring.
+		projectSession := func() {
+			t.Helper()
+			var changed int
+			require.NoError(t, db.Raw(`SELECT public.gavel_project_todo_session(?)`, fixture.sessionID).Scan(&changed).Error)
+		}
 		activityAt := before.UpdatedAt.Add(2 * time.Minute)
 		require.NoError(t, db.Exec(`
 			UPDATE captain_sessions
 			SET activity_state = 'ask', state_version = state_version + 1,
 			    state_observed_at = ?, last_activity_at = ?, updated_at = ?
 			WHERE id = ?`, activityAt, activityAt, activityAt, fixture.sessionID).Error)
+		projectSession()
 		assertProjection(t, db, fixture.issueID, "open", "waiting")
 
 		var after struct {
@@ -217,6 +225,7 @@ func TestCaptainProjectionLifecycleAndMigrationIdempotence(t *testing.T) {
 		require.NoError(t, db.Exec(`
 			UPDATE captain_sessions SET last_activity_at = ?, updated_at = ? WHERE id = ?`,
 			older, older, fixture.sessionID).Error)
+		projectSession()
 		var watermark time.Time
 		require.NoError(t, db.Raw(`SELECT updated_at FROM todo_issues WHERE id = ?`, fixture.issueID).Scan(&watermark).Error)
 		assert.Equal(t, activityAt.UTC(), watermark.UTC(), "older Captain observations must not regress issue activity")
@@ -457,7 +466,7 @@ func TestCaptainProjectionLifecycleAndMigrationIdempotence(t *testing.T) {
 		assert.Nil(t, stub, "gavel_project_todo_issue must be dropped from the database")
 	})
 
-	t.Run("foreign keys and durable plan revision view", func(t *testing.T) {
+	t.Run("delete guards and durable plan revision view", func(t *testing.T) {
 		fixture := newProjectionFixture(t, db, workspaceID, "plan", "", `{}`)
 		planID := uuid.New()
 		require.NoError(t, db.Exec(`
@@ -524,15 +533,11 @@ func TestCaptainProjectionLifecycleAndMigrationIdempotence(t *testing.T) {
 		assert.False(t, pendingDetail.Approved)
 		assert.False(t, pendingDetail.Selected)
 
+		// Captain's delete guards, registered by Gavel's migration, stand in for
+		// the foreign keys Gavel no longer adds onto Captain's tables.
 		assert.Error(t, db.Exec(`DELETE FROM captain_plans WHERE id = ?`, planID).Error,
 			"a linked Captain plan must be explicitly unlinked before deletion")
 		assert.Error(t, db.Exec(`DELETE FROM captain_prompt_runs WHERE id = ?`, fixture.runID).Error,
 			"a linked Captain prompt run must be explicitly unlinked before deletion")
-		assert.Error(t, db.Exec(`
-			INSERT INTO todo_issue_prompt_runs (issue_id, prompt_run_id, step_kind, ordinal)
-			VALUES (?, ?, 'run', 99)`, fixture.issueID, uuid.New()).Error)
-		assert.Error(t, db.Exec(`
-			INSERT INTO todo_issue_plans (issue_id, plan_id, ordinal)
-			VALUES (?, ?, 99)`, fixture.issueID, uuid.New()).Error)
 	})
 }
