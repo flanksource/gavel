@@ -3,6 +3,8 @@ package merge
 import (
 	"context"
 	"fmt"
+	"slices"
+	"sort"
 	"strings"
 
 	"github.com/flanksource/gavel/todos"
@@ -58,7 +60,12 @@ func Apply(ctx context.Context, targets []bulk.Target, selection *Selection, pro
 	result := bulk.Result{Action: "merge", Results: make([]bulk.ItemResult, 0, len(targets))}
 	survivorRef := Ref(selection.Survivor)
 
-	for _, todo := range selection.Retired {
+	// A child merged along with its parent is retired first. Closed, it is not an
+	// open child the parent's retirement would move, which would leave the copy in
+	// this selection holding a stale version for its own retirement.
+	retired := slices.Clone(selection.Retired)
+	sort.SliceStable(retired, func(i, j int) bool { return retired[i].ParentID != "" && retired[j].ParentID == "" })
+	for _, todo := range retired {
 		item := itemFor(targets, todo)
 		if err := retire(ctx, providerOf(targets, todo), todo, selection.Survivor, proposal); err != nil {
 			item.Error = err.Error()
@@ -89,10 +96,25 @@ func Apply(ctx context.Context, targets []bulk.Target, selection *Selection, pro
 // survivor, and soft-deletes it. Provider.Delete transitions the issue to
 // cancelled and keeps its history — the TODO is recoverable, its comments and
 // runs intact.
+//
+// A merge cannot ask what to do with the TODO's open children, so they follow
+// the work to the survivor, or become top-level TODOs when there is no open one
+// to take them. That happens first, so a failure leaves the TODO open rather
+// than closed over children nobody can see, and the comment says where they
+// went.
 func retire(ctx context.Context, provider todos.Provider, todo, survivor *types.TODO, proposal *Proposal) error {
+	children, err := todos.SettleChildren(ctx, provider, todo, todos.ArchiveOptions{
+		Survivor: survivor, Children: todos.ChildrenDetach,
+	})
+	if err != nil {
+		return fmt.Errorf("retire %s: %w", Ref(todo), err)
+	}
 	comment := fmt.Sprintf("Merged into %s — %s.", Ref(survivor), proposal.Title)
 	if rationale := strings.TrimSpace(proposal.Rationale); rationale != "" {
 		comment += " " + rationale
+	}
+	if sentence := children.Sentence(); sentence != "" {
+		comment += "\n\n" + sentence
 	}
 	if err := provider.Comment(ctx, todo, comment); err != nil {
 		return fmt.Errorf("record the merge rationale on %s: %w", Ref(todo), err)

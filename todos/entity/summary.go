@@ -20,6 +20,9 @@ type Summary struct {
 	Status   types.Status   `json:"status"`
 	Priority types.Priority `json:"priority"`
 	Labels   []string       `json:"labels,omitempty"`
+	// Parent is the short id of the TODO this one is a child of; empty for a
+	// top-level TODO. It is the value a list's parent filter takes.
+	Parent string `json:"parent,omitempty"`
 	// Project is the short name of the project the TODO belongs to — the name a
 	// list is filtered by.
 	Project string `json:"project,omitempty"`
@@ -36,6 +39,7 @@ func summarize(todo *types.TODO) Summary {
 		Status:           todo.Status,
 		Priority:         todo.Priority,
 		Labels:           todo.Labels,
+		Parent:           types.ShortID(todo.ParentID),
 		Project:          query.ShortProjectName(todo.Workspace),
 		labelDefinitions: todo.LabelDefinitions,
 	}

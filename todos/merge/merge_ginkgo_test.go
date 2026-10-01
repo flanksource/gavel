@@ -33,9 +33,37 @@ type recorder struct {
 	plans    []string
 	comments map[string][]string
 	planErr  error
+	// backlog is what List and Get answer from: the TODOs outside the selection
+	// that a merge has to find, such as a retired TODO's children.
+	backlog types.TODOS
 }
 
 func newRecorder() *recorder { return &recorder{comments: map[string][]string{}} }
+
+func (p *recorder) List(_ context.Context, filters todos.DiscoveryFilters) (types.TODOS, error) {
+	var listed types.TODOS
+	for _, todo := range p.backlog {
+		if filters.Matches(todo) {
+			listed = append(listed, todo)
+		}
+	}
+	return listed, nil
+}
+
+func (p *recorder) Get(_ context.Context, ref string) (*types.TODO, error) {
+	for _, todo := range p.backlog {
+		if todo.ID == ref {
+			return todo, nil
+		}
+	}
+	return nil, fmt.Errorf("no TODO matched %q", ref)
+}
+
+func (p *recorder) SetParent(_ context.Context, todo *types.TODO, parentRef string) error {
+	p.writes = append(p.writes, "parent:"+Ref(todo)+"->"+parentRef)
+	todo.ParentID = parentRef
+	return nil
+}
 
 func (p *recorder) Comment(_ context.Context, todo *types.TODO, body string) error {
 	p.writes = append(p.writes, "comment:"+Ref(todo))
@@ -52,8 +80,11 @@ func (p *recorder) Unlink(context.Context, *types.TODO, string, types.RelationKi
 
 func (p *recorder) Links(context.Context, *types.TODO) ([]todos.Link, error) { return nil, nil }
 
+// Delete closes the TODO, as the soft delete does, so a later retirement no
+// longer counts it among its parent's open children.
 func (p *recorder) Delete(_ context.Context, todo *types.TODO) error {
 	p.writes = append(p.writes, "delete:"+Ref(todo))
+	todo.Status = types.StatusCompleted
 	return nil
 }
 
@@ -218,6 +249,57 @@ var _ = Describe("Run", func() {
 		Expect(result.Applied).To(Equal(2))
 		Expect(result.Failed).To(BeZero())
 		Expect(agent.closed).To(BeTrue())
+	})
+
+	Describe("a retired TODO with open children", func() {
+		var kid *types.TODO
+
+		BeforeEach(func() {
+			kid = todoAt("kid001", "Child of the second", func(t *types.TODO) { t.ParentID = second.ID })
+			done := todoAt("kid000", "Finished child of the second", func(t *types.TODO) {
+				t.ParentID, t.Status = second.ID, types.StatusCompleted
+			})
+			provider.backlog = types.TODOS{done, kid}
+		})
+
+		It("moves them under a top-level survivor before the retirement, and the comment says so", func() {
+			agent := &stubAgent{response: proposalJSON(map[string]any{"rationale": "same parser bug"})}
+
+			_, _, err := Run(context.Background(), targetsFor(provider, first, second), options(agent))
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(provider.writes[:4]).To(Equal([]string{
+				"parent:kid001->" + first.ID,
+				"comment:bbb222",
+				"link:bbb222->aaa111:related_to",
+				"delete:bbb222",
+			}))
+			Expect(provider.comments["bbb222"]).To(Equal([]string{
+				"Merged into aaa111 — One merged TODO. same parser bug\n\nIts open children moved to aaa111: kid001.",
+			}))
+		})
+
+		It("moves them under the survivor's parent when the survivor is a child", func() {
+			top := todoAt("top001", "Parent of the survivor")
+			first.ParentID = top.ID
+			provider.backlog = append(provider.backlog, top)
+
+			_, _, err := Run(context.Background(), targetsFor(provider, first, second), options(&stubAgent{response: proposalJSON(nil)}))
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(provider.writes[0]).To(Equal("parent:kid001->" + top.ID))
+			Expect(provider.comments["bbb222"]).To(ConsistOf(HaveSuffix("Its open children moved to top001: kid001.")))
+		})
+
+		It("retires a child merged along with its parent first, so it is never moved", func() {
+			_, _, err := Run(context.Background(), targetsFor(provider, first, second, kid), options(&stubAgent{response: proposalJSON(nil)}))
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(provider.writes[:6]).To(Equal([]string{
+				"comment:kid001", "link:kid001->aaa111:related_to", "delete:kid001",
+				"comment:bbb222", "link:bbb222->aaa111:related_to", "delete:bbb222",
+			}))
+		})
 	})
 
 	It("writes the merged title, body and label union onto the survivor", func() {

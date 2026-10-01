@@ -173,6 +173,14 @@ func (d Deps) list(ctx context.Context, opts query.ListOpts) (clicky.PagedResult
 	if err != nil {
 		return clicky.PagedResult[Summary]{}, err
 	}
+	if ref := strings.TrimSpace(opts.Parent); ref != "" {
+		parent, err := d.resolveParent(ctx, workspaces, ref)
+		if err != nil {
+			return clicky.PagedResult[Summary]{}, err
+		}
+		// A parent's children all live in its workspace.
+		opts.Parent, workspaces = parent.todo.ID, []query.Workspace{parent.workspace}
+	}
 	matched, err := opts.Select(workspacesLister{ctx: ctx, workspaces: workspaces, open: d.OpenProvider}, time.Now())
 	if err != nil {
 		return clicky.PagedResult[Summary]{}, err

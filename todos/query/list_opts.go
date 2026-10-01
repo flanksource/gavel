@@ -37,6 +37,15 @@ type ListOpts struct {
 	// Search is a case-insensitive substring match on the title.
 	Search string `flag:"search" help:"Match TODO titles containing this text"`
 
+	// A child TODO is listed under its parent rather than beside it, so a list
+	// leaves children out unless it searches, names a Parent, or sets Children.
+	//
+	// Match compares Parent as a full TODO id. A caller taking a short id, alias
+	// or title from a user resolves it to that id first, because only a provider
+	// can say which TODO a reference names; the entity list does.
+	Parent   string `flag:"parent" help:"Only the children of this TODO (ID, alias, or title)"`
+	Children bool   `flag:"children" help:"Include child TODOs, which are otherwise listed only under their parent"`
+
 	// Limit and Offset window the matched TODOs. A list spanning every project
 	// is otherwise unbounded, and an agent reading it receives every body.
 	Limit  int `flag:"limit" help:"Return at most this many TODOs" default:"50"`
@@ -92,10 +101,16 @@ func (o ListOpts) Match(todo *types.TODO, now time.Time) (bool, error) {
 			return false, nil
 		}
 	}
-	if search := strings.TrimSpace(o.Search); search != "" {
-		if !strings.Contains(strings.ToLower(todo.Title), strings.ToLower(search)) {
+	search := strings.TrimSpace(o.Search)
+	if search != "" && !strings.Contains(strings.ToLower(todo.Title), strings.ToLower(search)) {
+		return false, nil
+	}
+	if parent := strings.TrimSpace(o.Parent); parent != "" {
+		if !strings.EqualFold(todo.ParentID, parent) {
 			return false, nil
 		}
+	} else if todo.ParentID != "" && search == "" && !o.Children {
+		return false, nil
 	}
 	if window := strings.TrimSpace(o.Since); window != "" {
 		cutoff, err := ParseWindow(window, now)
@@ -171,6 +186,21 @@ func ParseWindow(window string, now time.Time) (time.Time, error) {
 		return time.Time{}, fmt.Errorf("invalid window %q", window)
 	}
 	return now.Add(-parsed), nil
+}
+
+// TitleMatches returns the listed TODOs whose title is exactly title, ignoring
+// case and surrounding space. A title is the last thing a reference is tried
+// as, after the ids and aliases a provider resolves itself, and it is the
+// caller's to decide what more than one match means.
+func TitleMatches(listed types.TODOS, title string) types.TODOS {
+	title = strings.TrimSpace(title)
+	var matches types.TODOS
+	for _, candidate := range listed {
+		if candidate != nil && strings.EqualFold(strings.TrimSpace(candidate.Title), title) {
+			matches = append(matches, candidate)
+		}
+	}
+	return matches
 }
 
 func lastActivity(todo *types.TODO) time.Time {

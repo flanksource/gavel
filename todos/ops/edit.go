@@ -33,12 +33,18 @@ type EditFlags struct {
 	// with this list" cannot both be meant.
 	Labels      *[]string
 	ClearLabels bool
+	// Parent is the ref of the TODO to attach to, empty when none was named.
+	// NoParent is --no-parent, which detaches; the two are mutually exclusive.
+	Parent   string
+	NoParent bool
 }
 
 // EditChanges is an edit split by the provider call that applies it. They are
-// separate writes — content, plan revision, state — and the order matters,
-// because the first one refreshes the optimistic-lock version the rest reuse.
+// separate writes — parent, content, plan revision, state — and the order
+// matters, because each one refreshes the optimistic-lock version the rest reuse.
 type EditChanges struct {
+	// Parent is nil when the parent is left alone; an empty ref detaches.
+	Parent  *string
 	Content todos.EditRequest
 	Plan    *string
 	State   todos.StateUpdate
@@ -99,14 +105,22 @@ func BuildEdit(flags EditFlags) (EditChanges, error) {
 		changes.State.Priority = &priority
 	}
 
-	if changes.Content.IsEmpty() && changes.Plan == nil && changes.State.Status == nil && changes.State.Priority == nil {
-		return changes, fmt.Errorf("nothing to edit: provide --title, --body, --plan, --verification, --status, --priority, --label, and/or --clear-labels")
+	parent := strings.TrimSpace(flags.Parent)
+	if err := ValidateParentFlags(parent, flags.NoParent); err != nil {
+		return changes, err
+	}
+	if flags.NoParent || parent != "" {
+		changes.Parent = &parent
+	}
+
+	if changes.Content.IsEmpty() && changes.Plan == nil && changes.Parent == nil && changes.State.Status == nil && changes.State.Priority == nil {
+		return changes, fmt.Errorf("nothing to edit: provide --title, --body, --plan, --verification, --status, --priority, --label, --clear-labels, --parent, and/or --no-parent")
 	}
 	return changes, nil
 }
 
-// ApplyEdit performs the three writes in the order the optimistic lock
-// requires and returns the TODO the last of them left behind.
+// ApplyEdit performs the writes in the order the optimistic lock requires and
+// returns the TODO the last of them left behind.
 func ApplyEdit(ctx context.Context, provider todos.Provider, todo *types.TODO, changes EditChanges) (*types.TODO, error) {
 	var planRevisions todos.PlanRevisionProvider
 	if changes.Plan != nil {
@@ -116,7 +130,18 @@ func ApplyEdit(ctx context.Context, provider todos.Provider, todo *types.TODO, c
 			return nil, fmt.Errorf("TODO provider does not support plan revisions")
 		}
 	}
-	// Content first: Edit refreshes the TODO's optimistic-lock version, which
+	// The parent goes first: it is the one write the hierarchy rules can refuse,
+	// and refusing it after the content changed would leave half an edit behind.
+	if changes.Parent != nil {
+		parents, ok := provider.(todos.ParentProvider)
+		if !ok {
+			return nil, fmt.Errorf("TODO provider does not support parents; native PostgreSQL storage is required")
+		}
+		if err := parents.SetParent(ctx, todo, *changes.Parent); err != nil {
+			return nil, err
+		}
+	}
+	// Content next: Edit refreshes the TODO's optimistic-lock version, which
 	// the subsequent plan and state updates then reuse.
 	if !changes.Content.IsEmpty() {
 		if err := provider.Edit(ctx, todo, changes.Content); err != nil {
@@ -139,6 +164,15 @@ func ApplyEdit(ctx context.Context, provider todos.Provider, todo *types.TODO, c
 		}
 	}
 	return todo, nil
+}
+
+// ValidateParentFlags refuses naming a parent and asking for none in one
+// request, for a create and an edit alike.
+func ValidateParentFlags(parent string, noParent bool) error {
+	if noParent && strings.TrimSpace(parent) != "" {
+		return fmt.Errorf("--no-parent cannot be combined with --parent")
+	}
+	return nil
 }
 
 // ParsePriority validates a severity, defaulting to medium when unset.

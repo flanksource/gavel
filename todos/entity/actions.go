@@ -51,7 +51,7 @@ func (d Deps) itemActions() []clicky.EntityAction {
 			WithOptionalID(),
 
 		clicky.TypedActionWithContext("edit", EditFlags{}, d.edit).
-			WithShort("Edit a TODO's content, plan, status, and/or priority").
+			WithShort("Edit a TODO's content, plan, status, priority, and/or parent").
 			WithToolHints(writes),
 
 		clicky.TypedActionWithContext("link", LinkFlags{}, d.link).
@@ -123,6 +123,8 @@ type CreateFlags struct {
 	Labels       []string `flag:"label" help:"Attach a label"`
 	Priority     string   `flag:"priority" default:"medium" help:"TODO priority" enum:"high,medium,low"`
 	Status       string   `flag:"status" default:"pending" help:"Initial status, or 'approved' to bless the supplied plan"`
+	Parent       string   `flag:"parent" help:"Make the new TODO a child of this TODO (ID or alias)"`
+	NoParent     bool     `flag:"no-parent" help:"Keep the new TODO top-level when it is created inside a TODO run"`
 	Dir          string   `flag:"dir" help:"Workspace directory; defaults to the current one"`
 	GitHub       bool     `flag:"github" help:"Push the new TODO to a GitHub issue"`
 	BaseURL      string   `flag:"base-url" help:"Absolute origin attachment links resolve against"`
@@ -159,6 +161,9 @@ func (d Deps) create(ctx context.Context, _ string, flags CreateFlags) (*types.T
 	if err := ops.ValidateCreatePlan(resolved.Plan, start); err != nil {
 		return nil, rejected(err)
 	}
+	if err := ops.ValidateParentFlags(flags.Parent, flags.NoParent); err != nil {
+		return nil, rejected(err)
+	}
 	provider, err := d.OpenProvider(ctx, dir)
 	if err != nil {
 		return nil, err
@@ -166,6 +171,13 @@ func (d Deps) create(ctx context.Context, _ string, flags CreateFlags) (*types.T
 	request := todos.CreateRequest{
 		Title: title, Body: resolved.Body, Verification: resolved.Verification,
 		Priority: priority, Status: start.Status, Labels: flags.Labels,
+		Parent: flags.Parent, NoParent: flags.NoParent,
+	}
+	// A terminal create runs inside whatever started it, so its environment
+	// names the run. A server's environment names whoever started the server,
+	// which says nothing about the request it is serving.
+	if !attended(ctx) {
+		request.Origin = ops.OriginFromEnv()
 	}
 	if resolved.Plan != "" {
 		request.Plan = &todos.CreatePlanRequest{Markdown: resolved.Plan, Approved: start.PlanApproved}
@@ -204,6 +216,8 @@ type EditFlags struct {
 	Priority     string   `flag:"priority" help:"New priority" enum:"high,medium,low"`
 	Labels       []string `flag:"label" help:"Replace the TODO labels"`
 	ClearLabels  bool     `flag:"clear-labels" help:"Remove every label from the TODO"`
+	Parent       string   `flag:"parent" help:"Make the TODO a child of this TODO (ID or alias)"`
+	NoParent     bool     `flag:"no-parent" help:"Detach the TODO from its parent"`
 }
 
 func (EditFlags) ClickyActionFlags() {}
@@ -217,7 +231,10 @@ func (d Deps) edit(ctx context.Context, ref string, flags EditFlags) (*types.TOD
 	if err != nil {
 		return nil, rejected(err)
 	}
-	edits := ops.EditFlags{Status: flags.Status, Priority: flags.Priority, ClearLabels: flags.ClearLabels}
+	edits := ops.EditFlags{
+		Status: flags.Status, Priority: flags.Priority, ClearLabels: flags.ClearLabels,
+		Parent: flags.Parent, NoParent: flags.NoParent,
+	}
 	if flags.Title != "" {
 		edits.Title = &flags.Title
 	}
