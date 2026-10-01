@@ -226,6 +226,12 @@ table "todo_issues" {
     null = true
     type = uuid
   }
+  # The one todo this issue was split out of. The hierarchy is a single level:
+  # native.SetIssueParent refuses a parent that is itself a child.
+  column "parent_issue_id" {
+    null = true
+    type = uuid
+  }
   column "version" {
     null    = false
     type    = bigint
@@ -264,10 +270,24 @@ table "todo_issues" {
     on_update   = NO_ACTION
     on_delete   = NO_ACTION
   }
+  # workspace_id is part of the key so a parent can only be in the same workspace.
+  foreign_key "todo_issues_parent_fkey" {
+    columns     = [column.parent_issue_id, column.workspace_id]
+    ref_columns = [column.id, column.workspace_id]
+    on_update   = NO_ACTION
+    on_delete   = NO_ACTION
+  }
 
-  index "todo_issues_id_workspace_id_key" {
-    unique  = true
+  # A unique constraint, not a unique index: Atlas writes a self-referencing
+  # foreign key inside CREATE TABLE and creates indexes after it, so
+  # todo_issues_parent_fkey can only name a key that CREATE TABLE itself
+  # declares. A database that already has this as a unique index keeps it.
+  unique "todo_issues_id_workspace_id_key" {
     columns = [column.id, column.workspace_id]
+  }
+  index "todo_issues_parent_idx" {
+    columns = [column.parent_issue_id]
+    where   = "parent_issue_id IS NOT NULL"
   }
   index "todo_issues_workspace_id_idx" {
     columns = [column.workspace_id]
@@ -291,6 +311,9 @@ table "todo_issues" {
   }
   check "todo_issues_version_nonnegative" {
     expr = "version >= 0"
+  }
+  check "todo_issues_parent_not_self" {
+    expr = "parent_issue_id IS NULL OR parent_issue_id <> id"
   }
 }
 
@@ -621,5 +644,84 @@ table "todo_issue_plans" {
 
   check "todo_issue_plans_ordinal_nonnegative" {
     expr = "ordinal >= 0"
+  }
+}
+
+# How a run step's worktree commits reached a branch: cherry-picked onto the
+# checkout's branch (merge) or opened as a pull request (pr). One row per run,
+# written by `gavel todos land` together with a run_landed event.
+table "todo_run_landings" {
+  schema = schema.public
+
+  column "prompt_run_id" {
+    null = false
+    type = uuid
+  }
+  column "issue_id" {
+    null = false
+    type = uuid
+  }
+  column "via" {
+    null = false
+    type = text
+  }
+  column "target_branch" {
+    null = false
+    type = text
+  }
+  column "landed_sha" {
+    null = false
+    type = text
+  }
+  column "pr_number" {
+    null = true
+    type = integer
+  }
+  column "pr_url" {
+    null = true
+    type = text
+  }
+  column "commit_count" {
+    null = false
+    type = integer
+  }
+  column "branch_deleted_at" {
+    null = true
+    type = timestamptz
+  }
+  column "created_at" {
+    null    = false
+    type    = timestamptz
+    default = sql("now()")
+  }
+
+  primary_key {
+    columns = [column.prompt_run_id]
+  }
+
+  # A landing is only ever of a run linked to its issue; unlinking the run or
+  # deleting the issue takes the landing with it.
+  foreign_key "todo_run_landings_prompt_run_fkey" {
+    columns     = [column.issue_id, column.prompt_run_id]
+    ref_columns = [table.todo_issue_prompt_runs.column.issue_id, table.todo_issue_prompt_runs.column.prompt_run_id]
+    on_update   = NO_ACTION
+    on_delete   = CASCADE
+  }
+
+  index "todo_run_landings_issue_id_idx" {
+    columns = [column.issue_id]
+  }
+
+  check "todo_run_landings_via_check" {
+    expr = "via IN ('merge', 'pr')"
+  }
+  check "todo_run_landings_pr_complete" {
+    expr = "(via = 'pr') = (pr_number IS NOT NULL AND pr_url IS NOT NULL)"
+  }
+  check "todo_run_landings_landed_not_empty" {
+    expr = "btrim(target_branch) <> '' AND btrim(landed_sha) <> ''"
+  }
+  check "todo_run_landings_commit_count_positive" {
+    expr = "commit_count > 0"
   }
 }

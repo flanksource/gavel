@@ -2,11 +2,9 @@ package todoprojection
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 	"time"
 
-	commonsdb "github.com/flanksource/commons-db/db"
+	"github.com/flanksource/commons-db/dbtest"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
@@ -167,15 +165,8 @@ func newActiveRunFixture(db *gorm.DB, base time.Time) activeRunFixture {
 
 func openMigratedDatabase() *gorm.DB {
 	GinkgoHelper()
-	if os.Getenv("GAVEL_DB_EMBEDDED_TEST") == "" {
-		Skip("set GAVEL_DB_EMBEDDED_TEST=1 to run embedded-postgres projection tests")
-	}
-	dsn, stop, err := commonsdb.StartEmbedded(commonsdb.EmbeddedConfig{
-		DataDir:  filepath.Join(GinkgoT().TempDir(), "postgres"),
-		Database: "gavel_todo_projection",
-	})
-	Expect(err).NotTo(HaveOccurred())
-	DeferCleanup(func() { Expect(stop()).To(Succeed()) })
+	dsn := dbtest.ForGinkgo(dbtest.Options{Name: "gavel_todo_projection"}).DSN()
+
 	GinkgoT().Setenv(database.EnvDSN, dsn)
 	GinkgoT().Setenv(database.EnvDisable, "")
 	GinkgoT().Setenv(database.LegacyEnvDSN, "")

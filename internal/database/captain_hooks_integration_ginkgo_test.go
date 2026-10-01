@@ -2,10 +2,8 @@ package database_test
 
 import (
 	"errors"
-	"os"
-	"path/filepath"
 
-	commonsdb "github.com/flanksource/commons-db/db"
+	"github.com/flanksource/commons-db/dbtest"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -40,15 +38,8 @@ var _ = Describe("Gavel's hold on Captain's tables", Ordered, func() {
 	var db *gorm.DB
 
 	BeforeAll(func() {
-		if os.Getenv("GAVEL_DB_EMBEDDED_TEST") == "" {
-			Skip("set GAVEL_DB_EMBEDDED_TEST=1 to run embedded-postgres migration tests")
-		}
-		dsn, stop, err := commonsdb.StartEmbedded(commonsdb.EmbeddedConfig{
-			DataDir:  filepath.Join(GinkgoT().TempDir(), "postgres"),
-			Database: "gavel_captain_hooks",
-		})
-		Expect(err).NotTo(HaveOccurred())
-		DeferCleanup(func() { Expect(stop()).To(Succeed()) })
+		dsn := dbtest.ForGinkgo(dbtest.Options{Name: "gavel_captain_hooks"}).DSN()
+
 		GinkgoT().Setenv(database.EnvDSN, dsn)
 		GinkgoT().Setenv(database.EnvDisable, "")
 		GinkgoT().Setenv(database.LegacyEnvDSN, "")

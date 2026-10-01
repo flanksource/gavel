@@ -7,6 +7,7 @@ import (
 	"time"
 
 	commonsdb "github.com/flanksource/commons-db/db"
+	"github.com/flanksource/commons-db/dbtest"
 	githubcache "github.com/flanksource/gavel/github/cache"
 	analysiscache "github.com/flanksource/gavel/internal/cache"
 	"github.com/flanksource/gavel/internal/database"
@@ -16,15 +17,7 @@ import (
 )
 
 func TestHCLMigrationFromExistingGitHubSchema(t *testing.T) {
-	if os.Getenv("GAVEL_DB_EMBEDDED_TEST") == "" {
-		t.Skip("set GAVEL_DB_EMBEDDED_TEST=1 to run embedded-postgres migration tests")
-	}
-	dsn, stop, err := commonsdb.StartEmbedded(commonsdb.EmbeddedConfig{
-		DataDir:  filepath.Join(t.TempDir(), "postgres"),
-		Database: "gavel_migrate",
-	})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, stop()) })
+	dsn := dbtest.ForT(t, dbtest.Options{Name: "gavel_migrate"}).DSN()
 
 	legacy, err := commonsdb.NewGorm(dsn, commonsdb.DefaultGormConfig())
 	require.NoError(t, err)
@@ -134,15 +127,7 @@ func TestHCLMigrationFromExistingGitHubSchema(t *testing.T) {
 }
 
 func TestHCLMigrationFreshDatabaseCreatesCurrentSchema(t *testing.T) {
-	if os.Getenv("GAVEL_DB_EMBEDDED_TEST") == "" {
-		t.Skip("set GAVEL_DB_EMBEDDED_TEST=1 to run embedded-postgres migration tests")
-	}
-	dsn, stop, err := commonsdb.StartEmbedded(commonsdb.EmbeddedConfig{
-		DataDir:  filepath.Join(t.TempDir(), "postgres"),
-		Database: "gavel_migrate_fresh",
-	})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, stop()) })
+	dsn := dbtest.ForT(t, dbtest.Options{Name: "gavel_migrate_fresh"}).DSN()
 
 	t.Setenv(database.EnvDSN, dsn)
 	t.Setenv(database.EnvDisable, "")

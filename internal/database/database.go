@@ -131,6 +131,10 @@ func open(ctx context.Context, deps openDependencies, optionFns ...Option) (*DB,
 	// query until a fixture actually starts a recording.
 	config := commonsdb.DefaultGormConfig()
 	config.Logger = record.WrapGorm(config.Logger)
+	// Name columns instead of SELECT *: Captain and Gavel migrate this shared
+	// database while other pools stay open, and an added column would otherwise
+	// change the result type of statements those pools already prepared.
+	config.QueryFields = true
 
 	gormDB, err := deps.open(dsn, config)
 	if err != nil {

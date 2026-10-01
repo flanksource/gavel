@@ -3,27 +3,18 @@ package database
 import (
 	"context"
 	"errors"
-	"os"
-	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
 	commonsdb "github.com/flanksource/commons-db/db"
+	"github.com/flanksource/commons-db/dbtest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestConcurrentOpenSerializesMigrationLifecycle(t *testing.T) {
-	if os.Getenv("GAVEL_DB_EMBEDDED_TEST") == "" {
-		t.Skip("set GAVEL_DB_EMBEDDED_TEST=1 to run embedded-postgres migration-lock tests")
-	}
-	dsn, stop, err := commonsdb.StartEmbedded(commonsdb.EmbeddedConfig{
-		DataDir:  filepath.Join(t.TempDir(), "postgres"),
-		Database: "gavel_migration_lock",
-	})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, stop()) })
+	dsn := dbtest.ForT(t, dbtest.Options{Name: "gavel_migration_lock"}).DSN()
 
 	clearDatabaseEnvironment(t)
 	t.Setenv(EnvDSN, dsn)
@@ -81,7 +72,10 @@ func TestConcurrentOpenSerializesMigrationLifecycle(t *testing.T) {
 		require.NoError(t, lockConn.QueryRowContext(t.Context(), `
 			SELECT count(*)
 			FROM pg_locks
-			WHERE locktype = 'advisory' AND NOT granted`).Scan(&waiting))
+			WHERE locktype = 'advisory' AND NOT granted
+			  AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
+			  AND objsubid = 1
+			  AND (classid::bigint << 32) | objid::bigint = $1`, migrationAdvisoryLockID).Scan(&waiting))
 		if waiting >= callers {
 			break
 		}

@@ -3,11 +3,9 @@ package database
 import (
 	"context"
 	"io/fs"
-	"os"
-	"path/filepath"
 
 	captaindb "github.com/flanksource/captain/pkg/database"
-	commonsdb "github.com/flanksource/commons-db/db"
+	"github.com/flanksource/commons-db/dbtest"
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -27,17 +25,8 @@ var _ = Describe("rejected plan selection migration", func() {
 	})
 
 	It("deselects only rejected plans without rewriting issue history", func() {
-		if os.Getenv("GAVEL_DB_EMBEDDED_TEST") == "" {
-			Skip("set GAVEL_DB_EMBEDDED_TEST=1 to run embedded-postgres migration tests")
-		}
-
 		ctx := context.Background()
-		dsn, stop, err := commonsdb.StartEmbedded(commonsdb.EmbeddedConfig{
-			DataDir:  filepath.Join(GinkgoT().TempDir(), "postgres"),
-			Database: "gavel_rejected_plan_migration",
-		})
-		Expect(err).NotTo(HaveOccurred())
-		DeferCleanup(func() { Expect(stop()).To(Succeed()) })
+		dsn := dbtest.ForGinkgo(dbtest.Options{Name: "gavel_rejected_plan_migration"}).DSN()
 
 		GinkgoT().Setenv(EnvDSN, dsn)
 		GinkgoT().Setenv(EnvDisable, "")

@@ -2,12 +2,10 @@ package database_test
 
 import (
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"testing"
 
 	captaindb "github.com/flanksource/captain/pkg/database"
-	commonsdb "github.com/flanksource/commons-db/db"
+	"github.com/flanksource/commons-db/dbtest"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -16,15 +14,7 @@ import (
 )
 
 func TestCaptainDatabaseOperatesWithoutGavelSchema(t *testing.T) {
-	if os.Getenv("GAVEL_DB_EMBEDDED_TEST") == "" {
-		t.Skip("set GAVEL_DB_EMBEDDED_TEST=1 to run embedded-postgres projection tests")
-	}
-	dsn, stop, err := commonsdb.StartEmbedded(commonsdb.EmbeddedConfig{
-		DataDir:  filepath.Join(t.TempDir(), "postgres"),
-		Database: "captain_without_gavel",
-	})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, stop()) })
+	dsn := dbtest.ForT(t, dbtest.Options{Name: "captain_without_gavel"}).DSN()
 
 	captain, err := captaindb.Open(t.Context(), captaindb.WithDSN(dsn), captaindb.WithMigrations())
 	require.NoError(t, err)
@@ -128,15 +118,8 @@ func newProjectionFixture(
 
 func openProjectionDatabase(t *testing.T) *gorm.DB {
 	t.Helper()
-	if os.Getenv("GAVEL_DB_EMBEDDED_TEST") == "" {
-		t.Skip("set GAVEL_DB_EMBEDDED_TEST=1 to run embedded-postgres projection tests")
-	}
-	dsn, stop, err := commonsdb.StartEmbedded(commonsdb.EmbeddedConfig{
-		DataDir:  filepath.Join(t.TempDir(), "postgres"),
-		Database: "gavel_captain_projection",
-	})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, stop()) })
+	dsn := dbtest.ForT(t, dbtest.Options{Name: "gavel_captain_projection"}).DSN()
+
 	t.Setenv(database.EnvDSN, dsn)
 	t.Setenv(database.EnvDisable, "")
 	t.Setenv(database.LegacyEnvDSN, "")
