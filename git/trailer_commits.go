@@ -5,8 +5,6 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
-
-	"github.com/flanksource/gavel/models"
 )
 
 const (
@@ -25,54 +23,6 @@ var commitHashPattern = regexp.MustCompile(`^[0-9a-fA-F]{4,64}$`)
 // out to git.
 func IsValidCommitHash(s string) bool {
 	return commitHashPattern.MatchString(strings.TrimSpace(s))
-}
-
-// CommitsWithTrailer returns the commits reachable from any ref whose git
-// trailer `key` equals `value`, newest-first. It pre-filters the log with a
-// fixed-string `--grep` on the "Key: value" trailer line, then confirms each
-// candidate against the parsed trailers so a coincidental body line that merely
-// mentions the phrase never counts. An empty key/value yields no commits.
-func CommitsWithTrailer(path, key, value string) (models.Commits, error) {
-	key = strings.TrimSpace(key)
-	value = strings.TrimSpace(value)
-	if key == "" || value == "" {
-		return nil, nil
-	}
-
-	grep := key + ": " + value
-	cmd := exec.Command("git", "log", "--all", "--date=iso-strict",
-		"--fixed-strings", "--grep="+grep, commitLogPrettyFormat)
-	cmd.Dir = path
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		// A repository with no commits yet has no trailers to match; that is a
-		// valid empty result, not a failure.
-		if isNoCommitsError(output) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("git log --grep %q: %w\nOutput: %s", grep, err, string(output))
-	}
-
-	commits, err := ParseGitLogOutput(output)
-	if err != nil {
-		return nil, err
-	}
-	matched := make(models.Commits, 0, len(commits))
-	for _, c := range commits {
-		if strings.TrimSpace(c.Trailers[key]) == value {
-			matched = append(matched, c)
-		}
-	}
-	return matched, nil
-}
-
-// isNoCommitsError reports whether git log failed only because the repository
-// has no commits / refs yet (as opposed to a real error).
-func isNoCommitsError(output []byte) bool {
-	s := string(output)
-	return strings.Contains(s, "does not have any commits yet") ||
-		strings.Contains(s, "bad default revision") ||
-		strings.Contains(s, "unknown revision")
 }
 
 // CommitDiff returns the colored `git show` output for a single commit so the

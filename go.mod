@@ -3,7 +3,7 @@ module github.com/flanksource/gavel
 go 1.26.1
 
 require (
-	github.com/flanksource/captain v0.0.63
+	github.com/flanksource/captain v0.0.64-0.20261001052307-ba475d4fc9f9
 	github.com/flanksource/clicky v1.21.70
 	github.com/flanksource/commons v1.59.1
 	github.com/flanksource/commons-db v0.1.39
@@ -25,14 +25,15 @@ require (
 	github.com/creack/pty v1.1.24
 	github.com/dustin/go-humanize v1.0.1
 	github.com/elazarl/goproxy v1.7.2
+	github.com/flanksource/clicky/aichat v1.21.70
 	github.com/flanksource/deps v1.0.42
 	github.com/ghodss/yaml v1.0.0
 	github.com/gliderlabs/ssh v0.3.8
 	github.com/go-git/go-git/v5 v5.19.2
 	github.com/goccy/go-yaml v1.19.2
 	github.com/google/cel-go v0.31.0
-	github.com/google/uuid v1.6.1-0.20241114170450-2d3c2a9cc518
 	github.com/google/pprof v0.0.0-20260402051712-545e8a4df936
+	github.com/google/uuid v1.6.1-0.20241114170450-2d3c2a9cc518
 	github.com/hairyhenderson/toml v0.4.2-0.20210923231440-40456b8e66cf
 	github.com/invopop/jsonschema v0.13.0
 	github.com/jackc/pgx/v5 v5.10.0
@@ -56,6 +57,7 @@ require (
 	golang.org/x/sync v0.22.0
 	golang.org/x/sys v0.46.0
 	golang.org/x/term v0.44.0
+	golang.org/x/tools v0.47.0
 	gopkg.in/yaml.v3 v3.0.1
 	gorm.io/gorm v1.31.2
 )
@@ -157,6 +159,7 @@ require (
 	github.com/deckarep/golang-set/v2 v2.8.0 // indirect
 	github.com/distribution/reference v0.6.0 // indirect
 	github.com/dlclark/regexp2 v1.11.5 // indirect
+	github.com/ebitengine/purego v0.10.2 // indirect
 	github.com/eko/gocache/lib/v4 v4.2.3 // indirect
 	github.com/eko/gocache/store/go_cache/v4 v4.2.5 // indirect
 	github.com/emicklei/go-restful/v3 v3.13.0 // indirect
@@ -170,7 +173,6 @@ require (
 	github.com/felixge/httpsnoop v1.1.0 // indirect
 	github.com/fergusstrange/embedded-postgres v1.34.0 // indirect
 	github.com/firebase/genkit/go v1.11.0 // indirect
-	github.com/flanksource/clicky/aichat v1.21.70 // indirect
 	github.com/flanksource/sandbox-runtime v1.0.2 // indirect
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.0 // indirect
@@ -233,6 +235,7 @@ require (
 	github.com/hairyhenderson/yaml v0.0.0-20220618171115-2d35fca545ce // indirect
 	github.com/hashicorp/hcl/v2 v2.24.0 // indirect
 	github.com/henvic/httpretty v0.1.4 // indirect
+	github.com/hexops/gotextdiff v1.0.3 // indirect
 	github.com/hirochachacha/go-smb2 v1.1.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/itchyny/gojq v0.12.19 // indirect
@@ -323,6 +326,7 @@ require (
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3 // indirect
 	github.com/segmentio/asm v1.2.1 // indirect
 	github.com/segmentio/encoding v0.5.4 // indirect
+	github.com/shirou/gopsutil/v3 v3.24.5 // indirect
 	github.com/shoenig/go-m1cpu v0.1.7 // indirect
 	github.com/shopspring/decimal v1.4.0 // indirect
 	github.com/sirupsen/logrus v1.9.4 // indirect
@@ -382,7 +386,6 @@ require (
 	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/text v0.40.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
-	golang.org/x/tools v0.47.0 // indirect
 	golang.org/x/xerrors v0.0.0-20240903120638-7835f813f4da // indirect
 	google.golang.org/api v0.286.0 // indirect
 	google.golang.org/genai v1.57.0 // indirect
