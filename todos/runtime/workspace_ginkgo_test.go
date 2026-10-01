@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"sync"
 
-	commonsdb "github.com/flanksource/commons-db/db"
+	"github.com/flanksource/commons-db/dbtest"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/todos/native"
 	. "github.com/onsi/ginkgo/v2"
@@ -21,17 +21,8 @@ var _ = Describe("configured project workspace initialization", Ordered, func() 
 	)
 
 	BeforeAll(func() {
-		if os.Getenv("GAVEL_DB_EMBEDDED_TEST") == "" {
-			Skip("set GAVEL_DB_EMBEDDED_TEST=1 to run embedded-postgres native runtime tests")
-		}
-
 		ctx = context.Background()
-		dsn, stop, err := commonsdb.StartEmbedded(commonsdb.EmbeddedConfig{
-			DataDir:  filepath.Join(GinkgoT().TempDir(), "postgres"),
-			Database: "gavel_todo_workspace_init",
-		})
-		Expect(err).NotTo(HaveOccurred())
-		DeferCleanup(func() { Expect(stop()).To(Succeed()) })
+		dsn := dbtest.ForGinkgo(dbtest.Options{Name: "gavel_todo_workspace_init"}).DSN()
 
 		GinkgoT().Setenv(database.EnvDSN, dsn)
 		GinkgoT().Setenv(database.EnvDisable, "")

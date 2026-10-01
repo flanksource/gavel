@@ -2,11 +2,9 @@ package runtime
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 
 	"github.com/flanksource/captain/pkg/promptrun"
-	commonsdb "github.com/flanksource/commons-db/db"
+	"github.com/flanksource/commons-db/dbtest"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/lifecycle"
@@ -25,18 +23,8 @@ var _ = Describe("creating TODOs with durable plans", Ordered, func() {
 	)
 
 	BeforeAll(func() {
-		if os.Getenv("GAVEL_DB_EMBEDDED_TEST") == "" {
-			Skip("set GAVEL_DB_EMBEDDED_TEST=1 to run embedded-postgres native runtime tests")
-		}
-
 		ctx = context.Background()
-		dataDir := filepath.Join(GinkgoT().TempDir(), "postgres")
-		dsn, stop, err := commonsdb.StartEmbedded(commonsdb.EmbeddedConfig{
-			DataDir:  dataDir,
-			Database: "gavel_todo_create_plan",
-		})
-		Expect(err).NotTo(HaveOccurred())
-		DeferCleanup(func() { Expect(stop()).To(Succeed()) })
+		dsn := dbtest.ForGinkgo(dbtest.Options{Name: "gavel_todo_create_plan"}).DSN()
 
 		GinkgoT().Setenv(database.EnvDSN, dsn)
 		GinkgoT().Setenv(database.EnvDisable, "")

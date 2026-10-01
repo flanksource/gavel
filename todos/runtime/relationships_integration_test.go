@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	commonsdb "github.com/flanksource/commons-db/db"
+	"github.com/flanksource/commons-db/dbtest"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/native"
@@ -15,14 +15,7 @@ import (
 )
 
 func TestProviderRelationshipsIntegration(t *testing.T) {
-	if os.Getenv("GAVEL_DB_EMBEDDED_TEST") == "" {
-		t.Skip("set GAVEL_DB_EMBEDDED_TEST=1 to run embedded-postgres native runtime tests")
-	}
-	dsn, stop, err := commonsdb.StartEmbedded(commonsdb.EmbeddedConfig{
-		DataDir: filepath.Join(t.TempDir(), "postgres"), Database: "gavel_todo_links",
-	})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, stop()) })
+	dsn := dbtest.ForT(t, dbtest.Options{Name: "gavel_todo_links"}).DSN()
 
 	t.Setenv(database.EnvDSN, dsn)
 	t.Setenv(database.EnvDisable, "")

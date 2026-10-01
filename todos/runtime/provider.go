@@ -74,13 +74,6 @@ func Open(ctx context.Context, options WorkspaceOptions) (*Provider, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Todo commands open the database without migrating it — only `gavel serve`
-	// applies migrations — so this is where a binary newer than its database is
-	// caught, once, rather than as an obscure failure at whichever read first
-	// touches a column that is not there yet.
-	if err := requireVerificationColumn(ctx, db); err != nil {
-		return nil, err
-	}
 	return New(ctx, db, options)
 }
 
@@ -93,7 +86,7 @@ func OpenGlobal(ctx context.Context) (*Provider, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := requireVerificationColumn(ctx, db); err != nil {
+	if err := requireCurrentSchema(ctx, db); err != nil {
 		return nil, err
 	}
 	return NewGlobal(db)
@@ -120,8 +113,8 @@ func NewGlobal(db *gorm.DB) (*Provider, error) {
 	}, nil
 }
 
-// New constructs a provider over an already migrated GORM pool. It is useful
-// to hosts and tests that own the database lifecycle.
+// New constructs a workspace provider over a GORM pool the caller owns. It is
+// what Open, the portable import/export and tests all construct through.
 func New(ctx context.Context, db *gorm.DB, options WorkspaceOptions) (*Provider, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -132,6 +125,15 @@ func New(ctx context.Context, db *gorm.DB, options WorkspaceOptions) (*Provider,
 	}
 	global, err := NewGlobal(db)
 	if err != nil {
+		return nil, err
+	}
+	// Todo commands open the database without migrating it — only `gavel serve`
+	// applies migrations — so this is where a binary newer than its database is
+	// caught, once and before anything is written, rather than as an obscure
+	// failure at whichever read first touches a column that is not there yet.
+	// It lives here rather than in Open so a caller holding its own pool cannot
+	// construct a provider around it.
+	if err := requireCurrentSchema(ctx, db); err != nil {
 		return nil, err
 	}
 	workspace, err := initializeWorkspace(ctx, global.repository, options)
@@ -433,6 +435,9 @@ func (p *Provider) Create(ctx context.Context, request todos.CreateRequest) (*ty
 		Priority:     priority,
 		Status:       status,
 		Actor:        mutationActor,
+	}
+	if err := p.applyLineage(ctx, request, &issueInput); err != nil {
+		return nil, err
 	}
 	var issue *native.Issue
 	if request.Plan == nil {

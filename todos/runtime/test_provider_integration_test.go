@@ -5,20 +5,16 @@ import (
 	"path/filepath"
 	"testing"
 
-	commonsdb "github.com/flanksource/commons-db/db"
+	"github.com/flanksource/commons-db/dbtest"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/stretchr/testify/require"
 )
 
-// newEmbeddedProvider opens a workspace provider over a freshly migrated
-// embedded PostgreSQL database of its own.
-func newEmbeddedProvider(t *testing.T, databaseName string) *Provider {
+// newTestProvider opens a workspace provider over a freshly migrated,
+// isolated database on the shared test server.
+func newTestProvider(t *testing.T, databaseName string) *Provider {
 	t.Helper()
-	dsn, stop, err := commonsdb.StartEmbedded(commonsdb.EmbeddedConfig{
-		DataDir: filepath.Join(t.TempDir(), "postgres"), Database: databaseName,
-	})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, stop()) })
+	dsn := dbtest.ForT(t, dbtest.Options{Name: databaseName}).DSN()
 
 	t.Setenv(database.EnvDSN, dsn)
 	t.Setenv(database.EnvDisable, "")
@@ -32,7 +28,7 @@ func newEmbeddedProvider(t *testing.T, databaseName string) *Provider {
 	root := filepath.Join(t.TempDir(), "workspace")
 	require.NoError(t, os.MkdirAll(root, 0o755))
 	provider, err := New(t.Context(), opened.Gorm(), WorkspaceOptions{
-		Name: "Embedded", RootPath: root, Repositories: []string{"example/embedded"},
+		Name: "Test", RootPath: root, Repositories: []string{"example/test"},
 	})
 	require.NoError(t, err)
 	return provider

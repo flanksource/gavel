@@ -67,6 +67,9 @@ func (p *Provider) todoFromIssue(
 	todo.ShortID = issue.ID.String()[:8]
 	todo.Version = issue.Version
 	todo.WorkspaceID = issue.WorkspaceID.String()
+	if issue.ParentID != nil {
+		todo.ParentID = issue.ParentID.String()
+	}
 	todo.ExecutionState = string(issue.ExecutionState)
 	todo.Provider = todos.ProviderDB
 	todo.ProviderState = string(issue.Status)
@@ -126,7 +129,7 @@ func providerEvents(events []native.Event) []types.ProviderEvent {
 		id := event.ID.String()
 		result = append(result, types.ProviderEvent{
 			ID: id, ShortID: id[:8], Kind: event.Kind, Actor: event.Actor,
-			Timestamp: event.CreatedAt, Title: event.Kind, Body: event.Body,
+			Timestamp: event.CreatedAt, Title: event.Kind, Body: event.Body, Payload: event.Payload,
 		})
 	}
 	return result

@@ -1,7 +1,6 @@
 package runtime
 
 import (
-	"os"
 	"testing"
 
 	"github.com/flanksource/captain/pkg/ai/agent"
@@ -23,10 +22,7 @@ import (
 // asking session must name the run step that link was dispatched for, which is
 // the step an answer in that session resumes.
 func TestSessionAttemptResolvesRunStepThatReachedVerification(t *testing.T) {
-	if os.Getenv("GAVEL_DB_EMBEDDED_TEST") == "" {
-		t.Skip("set GAVEL_DB_EMBEDDED_TEST=1 to run embedded-postgres native runtime tests")
-	}
-	provider := newEmbeddedProvider(t, "gavel_todo_session_attempt")
+	provider := newTestProvider(t, "gavel_todo_session_attempt")
 
 	const providerSessionID = "019fa17d-622a-7ef3-b8ad-d8b1d7cd3837"
 	todo, err := provider.Create(t.Context(), todos.CreateRequest{

@@ -3,13 +3,11 @@ package runtime
 import (
 	"context"
 	"encoding/json"
-	"os"
-	"path/filepath"
 
 	"github.com/flanksource/captain/pkg/api"
 	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/captain/pkg/promptrun"
-	commonsdb "github.com/flanksource/commons-db/db"
+	"github.com/flanksource/commons-db/dbtest"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/lifecycle"
@@ -112,15 +110,8 @@ var _ = Describe("lifecycle outcomes on the native runtime", Ordered, func() {
 	}
 
 	BeforeAll(func() {
-		if os.Getenv("GAVEL_DB_EMBEDDED_TEST") == "" {
-			Skip("set GAVEL_DB_EMBEDDED_TEST=1 to run embedded-postgres native runtime tests")
-		}
 		ctx = context.Background()
-		dsn, stop, err := commonsdb.StartEmbedded(commonsdb.EmbeddedConfig{
-			DataDir: filepath.Join(GinkgoT().TempDir(), "postgres"), Database: "gavel_todo_lifecycle_outcome",
-		})
-		Expect(err).NotTo(HaveOccurred())
-		DeferCleanup(func() { Expect(stop()).To(Succeed()) })
+		dsn := dbtest.ForGinkgo(dbtest.Options{Name: "gavel_todo_lifecycle_outcome"}).DSN()
 
 		GinkgoT().Setenv(database.EnvDSN, dsn)
 		GinkgoT().Setenv(database.EnvDisable, "")

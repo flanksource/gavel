@@ -45,7 +45,7 @@ func CountProjects(ctx context.Context, projects []WorkspaceOptions) ([]ProjectS
 	if err != nil {
 		return nil, err
 	}
-	if err := requireVerificationColumn(ctx, db); err != nil {
+	if err := requireCurrentSchema(ctx, db); err != nil {
 		return nil, err
 	}
 	return countProjects(ctx, db, projects)

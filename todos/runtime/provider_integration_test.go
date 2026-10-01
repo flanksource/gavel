@@ -10,7 +10,7 @@ import (
 	"github.com/flanksource/captain/pkg/api"
 	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/captain/pkg/promptrun"
-	commonsdb "github.com/flanksource/commons-db/db"
+	"github.com/flanksource/commons-db/dbtest"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/lifecycle"
@@ -23,14 +23,7 @@ import (
 )
 
 func TestProviderNativeLifecycleIntegration(t *testing.T) {
-	if os.Getenv("GAVEL_DB_EMBEDDED_TEST") == "" {
-		t.Skip("set GAVEL_DB_EMBEDDED_TEST=1 to run embedded-postgres native runtime tests")
-	}
-	dsn, stop, err := commonsdb.StartEmbedded(commonsdb.EmbeddedConfig{
-		DataDir: filepath.Join(t.TempDir(), "postgres"), Database: "gavel_todo_runtime",
-	})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, stop()) })
+	dsn := dbtest.ForT(t, dbtest.Options{Name: "gavel_todo_runtime"}).DSN()
 
 	t.Setenv(database.EnvDSN, dsn)
 	t.Setenv(database.EnvDisable, "")
@@ -153,7 +146,8 @@ func TestProviderNativeLifecycleIntegration(t *testing.T) {
 	created.Attempts = 2
 	require.NoError(t, provider.SaveAttempt(t.Context(), created, &todos.ExecutionResult{
 		Success: true, ExecutorName: "codex", Duration: 2 * time.Second,
-		TokensUsed: 42, CostUSD: 0.25, CommitSHA: "abc123",
+		TokensUsed: 42, CostUSD: 0.25,
+		Workspace: &api.WorkspaceRecord{Commits: []api.CommitRecord{{SHA: "abc123", Message: "feat: native"}}},
 	}))
 	require.NoError(t, provider.UpdateLatestFailure(t.Context(), created, &types.TestResultInfo{
 		Command: "go test ./...", CWD: oldRoot, Output: "failed", Duration: time.Second,

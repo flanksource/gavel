@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -14,6 +15,9 @@ import (
 )
 
 // Delete preserves the issue and its history by transitioning it to cancelled.
+//
+// A TODO with open children is refused: closing it would hide them. The caller
+// decides what happens to them first, through todos.Archive.
 func (p *Provider) Delete(ctx context.Context, todo *types.TODO) error {
 	id, version, err := p.mutationIdentity(todo)
 	if err != nil {
@@ -24,6 +28,9 @@ func (p *Provider) Delete(ctx context.Context, todo *types.TODO) error {
 		Status: &status,
 		Actor:  mutationActor,
 	})
+	if errors.Is(err, native.ErrOpenChildren) {
+		return fmt.Errorf("%w; %s", err, todos.ChildrenChoice)
+	}
 	if err != nil {
 		return err
 	}
@@ -206,7 +213,7 @@ func (p *Provider) SaveAttempt(ctx context.Context, todo *types.TODO, result *to
 			"costUsd":        result.CostUSD,
 			"tokens":         result.TokensUsed,
 			"turns":          result.NumTurns,
-			"commit":         result.CommitSHA,
+			"workspace":      result.Workspace,
 			"error":          result.ErrorMessage,
 		},
 	})
@@ -374,9 +381,7 @@ func renderAttempt(todo *types.TODO, result *todos.ExecutionResult) string {
 	if result.TokensUsed > 0 {
 		fmt.Fprintf(&body, "- **Tokens:** %d\n", result.TokensUsed)
 	}
-	if result.CommitSHA != "" {
-		fmt.Fprintf(&body, "- **Commit:** `%s`\n", result.CommitSHA)
-	}
+	body.WriteString(todos.WorkspaceMarkdown(result.Workspace))
 	if result.ErrorMessage != "" {
 		fmt.Fprintf(&body, "- **Error:**\n\n```text\n%s\n```\n", strings.TrimSpace(result.ErrorMessage))
 	}

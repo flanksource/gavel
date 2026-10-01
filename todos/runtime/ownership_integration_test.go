@@ -1,7 +1,6 @@
 package runtime
 
 import (
-	"os"
 	"testing"
 
 	captaindb "github.com/flanksource/captain/pkg/database"
@@ -29,10 +28,7 @@ func abandonRun(t *testing.T, provider *Provider, promptRunID string) {
 // the run stayed non-terminal and Captain's active-run index rejected every
 // later dispatch with a bare "another active run exists" conflict.
 func TestOrphanedRunIsReclaimedOnDispatch(t *testing.T) {
-	if os.Getenv("GAVEL_DB_EMBEDDED_TEST") == "" {
-		t.Skip("set GAVEL_DB_EMBEDDED_TEST=1 to run embedded-postgres native runtime tests")
-	}
-	provider := newEmbeddedProvider(t, "gavel_todo_ownership")
+	provider := newTestProvider(t, "gavel_todo_ownership")
 
 	todo, err := provider.Create(t.Context(), todos.CreateRequest{
 		Title: "Reclaim an abandoned run", Body: "The dispatcher died mid-run", Status: types.StatusPending,
@@ -67,10 +63,7 @@ func TestOrphanedRunIsReclaimedOnDispatch(t *testing.T) {
 // dispatcher is still running is not reclaimable, and the second dispatch is a
 // decision for the caller rather than something to do silently.
 func TestLiveRunRefusesDispatchUntilConfirmed(t *testing.T) {
-	if os.Getenv("GAVEL_DB_EMBEDDED_TEST") == "" {
-		t.Skip("set GAVEL_DB_EMBEDDED_TEST=1 to run embedded-postgres native runtime tests")
-	}
-	provider := newEmbeddedProvider(t, "gavel_todo_ownership_live")
+	provider := newTestProvider(t, "gavel_todo_ownership_live")
 
 	todo, err := provider.Create(t.Context(), todos.CreateRequest{
 		Title: "Refuse a silent second run", Body: "The first run is still going", Status: types.StatusPending,
