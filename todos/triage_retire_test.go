@@ -2,6 +2,8 @@ package todos
 
 import (
 	"context"
+	"maps"
+	"slices"
 	"strings"
 	"testing"
 
@@ -164,6 +166,128 @@ func TestApplyTriageRetireClosesThisTODO(t *testing.T) {
 	}
 	if strings.Join(provider.comments, "|") != env.Comment {
 		t.Errorf("comments = %v, want only the verdict's rationale", provider.comments)
+	}
+}
+
+// List answers from the backlog in short-id order, so a retirement settles a
+// TODO's children in an order a test can name.
+func (p *triageRecorder) List(_ context.Context, filters DiscoveryFilters) (types.TODOS, error) {
+	var listed types.TODOS
+	for _, short := range slices.Sorted(maps.Keys(p.known)) {
+		if filters.Matches(p.known[short]) {
+			listed = append(listed, p.known[short])
+		}
+	}
+	return listed, nil
+}
+
+// SetParent records the move as "parent:<todo>-><parent id>", with nothing
+// after the arrow for a TODO made top-level.
+func (p *triageRecorder) SetParent(_ context.Context, todo *types.TODO, parentRef string) error {
+	p.writes = append(p.writes, "parent:"+triageRef(todo)+"->"+parentRef)
+	todo.ParentID = parentRef
+	return nil
+}
+
+// childOf is an open child of parent in the backlog.
+func childOf(shortID string, parent *types.TODO) *types.TODO {
+	return backlogTODO(shortID, "Child "+shortID, func(todo *types.TODO) { todo.ParentID = parent.ID })
+}
+
+// Triage cannot ask anyone what to do with a retired TODO's open children, so
+// they follow the work: under the survivor, or under the survivor's parent when
+// the survivor is itself a child. They move before the comment that records it.
+func TestApplyTriageMergeIntoMovesOpenChildrenToTheSurvivor(t *testing.T) {
+	top := backlogTODO("aa0000", "Parser epic", nil)
+
+	for _, tc := range []struct {
+		name         string
+		survivorOf   *types.TODO
+		wantParent   string
+		wantAdopter  string
+		extraBacklog map[string]*types.TODO
+	}{
+		{name: "a top-level survivor takes them", wantParent: triageTODO().ID, wantAdopter: "ab12cd"},
+		{
+			name: "a child survivor hands them to its own parent", survivorOf: top,
+			wantParent: top.ID, wantAdopter: "aa0000", extraBacklog: map[string]*types.TODO{"aa0000": top},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			folded := backlogTODO("ff0011", "Parser crash on bad input", nil)
+			closed := childOf("kid000", folded)
+			closed.Status = types.StatusCompleted
+			known := map[string]*types.TODO{"ff0011": folded, "kid000": closed, "kid001": childOf("kid001", folded)}
+			for short, todo := range tc.extraBacklog {
+				known[short] = todo
+			}
+			provider := &triageRecorder{known: known}
+			todo := triageTODO()
+			if tc.survivorOf != nil {
+				todo.ParentID = tc.survivorOf.ID
+			}
+
+			if err := ApplyTriage(context.Background(), provider, todo, mergeIntoTriage([]string{"ff0011"}, nil), TriageOptions{}); err != nil {
+				t.Fatalf("ApplyTriage: %v", err)
+			}
+
+			want := []string{
+				"edit:ab12cd", "state:ab12cd",
+				"parent:kid001->" + tc.wantParent, "comment:ff0011", "link:ff0011", "delete:ff0011",
+			}
+			if strings.Join(provider.writes, " ") != strings.Join(want, " ") {
+				t.Errorf("write order =\n  %v\nwant\n  %v", provider.writes, want)
+			}
+			wantNote := "Its open children moved to " + tc.wantAdopter + ": kid001."
+			if !strings.HasSuffix(provider.comments[0], wantNote) {
+				t.Errorf("retirement comment = %q, should end with %q", provider.comments[0], wantNote)
+			}
+		})
+	}
+}
+
+// A retire hands the work to nobody, so its open children become TODOs in their
+// own right, and the retired TODO says so.
+func TestApplyTriageRetirePromotesOpenChildren(t *testing.T) {
+	todo := triageTODO()
+	provider := &triageRecorder{known: map[string]*types.TODO{"kid001": childOf("kid001", todo)}}
+	env := completedTriage(func(e *types.TriageEnvelope) {
+		e.Verdict, e.Body, e.Comment = types.VerdictRetire, "", "The route this fixes was deleted."
+	})
+
+	if err := ApplyTriage(context.Background(), provider, todo, env, TriageOptions{}); err != nil {
+		t.Fatalf("ApplyTriage: %v", err)
+	}
+
+	want := []string{"comment:ab12cd", "parent:kid001->", "comment:ab12cd", "delete:ab12cd"}
+	if strings.Join(provider.writes, " ") != strings.Join(want, " ") {
+		t.Errorf("write order =\n  %v\nwant\n  %v", provider.writes, want)
+	}
+	wantComments := env.Comment + "|Its open children made top-level TODOs: kid001."
+	if strings.Join(provider.comments, "|") != wantComments {
+		t.Errorf("comments = %q, want %q", strings.Join(provider.comments, "|"), wantComments)
+	}
+}
+
+// Folding a TODO together with its own child closes the child first. Closed, it
+// is no longer an open child to move, so it is never written through the stale
+// copy the verdict resolved before the parent was settled.
+func TestApplyTriageMergeIntoRetiresAChildBeforeItsParent(t *testing.T) {
+	folded := backlogTODO("ff0011", "Parser crash on bad input", nil)
+	provider := &triageRecorder{known: map[string]*types.TODO{"ff0011": folded, "kid001": childOf("kid001", folded)}}
+
+	err := ApplyTriage(context.Background(), provider, triageTODO(), mergeIntoTriage([]string{"ff0011", "kid001"}, nil), TriageOptions{})
+	if err != nil {
+		t.Fatalf("ApplyTriage: %v", err)
+	}
+
+	want := []string{
+		"edit:ab12cd", "state:ab12cd",
+		"comment:kid001", "link:kid001", "delete:kid001",
+		"comment:ff0011", "link:ff0011", "delete:ff0011",
+	}
+	if strings.Join(provider.writes, " ") != strings.Join(want, " ") {
+		t.Errorf("write order =\n  %v\nwant\n  %v", provider.writes, want)
 	}
 }
 

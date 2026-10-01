@@ -34,9 +34,12 @@ type ExecutionResult struct {
 	NumTurns         int           // Number of interaction rounds
 	ActionsPerformed []string      // List of actions taken (tool uses, etc.)
 	ErrorMessage     string
-	CommitSHA        string
-	Runtime          RunStartMetadata
-	Transcript       *ExecutionTranscript
+	// Workspace is where the run worked and what it left behind: the worktree
+	// it was isolated in (branch, Setup..Head, kept or removed) and the commits
+	// it made. nil when the run reported no workspace.
+	Workspace  *captainapi.WorkspaceRecord
+	Runtime    RunStartMetadata
+	Transcript *ExecutionTranscript
 	// ResponseText is the agent's final response verbatim, captured before the
 	// envelope is decoded and kept even when that decode fails — which is exactly
 	// when it is the only account of what the agent said. A reply that was sound

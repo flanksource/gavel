@@ -57,15 +57,23 @@ func (p *triageRecorder) Link(_ context.Context, todo *types.TODO, target string
 	return &Link{Relation: relation, TargetShortID: target}, nil
 }
 
+// Delete closes the TODO, as the soft delete does, so a later retirement no
+// longer counts it among its parent's open children.
 func (p *triageRecorder) Delete(_ context.Context, todo *types.TODO) error {
 	p.deletes = append(p.deletes, triageRef(todo))
 	p.record("delete", todo)
+	todo.Status = types.StatusCompleted
 	return nil
 }
 
 func (p *triageRecorder) Get(_ context.Context, ref string) (*types.TODO, error) {
 	if todo, ok := p.known[ref]; ok {
 		return todo, nil
+	}
+	for _, todo := range p.known {
+		if todo.ID == ref {
+			return todo, nil
+		}
 	}
 	return nil, fmt.Errorf("no TODO matched %q", ref)
 }

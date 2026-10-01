@@ -3,6 +3,7 @@ package todos
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/flanksource/gavel/todos/types"
@@ -99,7 +100,14 @@ func resolveTriageTarget(ctx context.Context, provider Provider, todo *types.TOD
 }
 
 // applyTriageRetirements closes what the verdict decided.
+//
+// A child is closed before its parent. Closed, it is not an open child the
+// parent's retirement would move, which would leave the copy resolved here
+// holding a stale version for its own retirement.
 func applyTriageRetirements(ctx context.Context, provider Provider, retiring []triageRetirement, rationale string) error {
+	sort.SliceStable(retiring, func(i, j int) bool {
+		return retiring[i].Retired.ParentID != "" && retiring[j].Retired.ParentID == ""
+	})
 	for _, retirement := range retiring {
 		if err := retireInto(ctx, provider, retirement, rationale); err != nil {
 			return err
@@ -119,39 +127,58 @@ func applyTriageRetirements(ctx context.Context, provider Provider, retiring []t
 //
 // A retirement with no survivor is just the delete: there is nowhere to point at,
 // and ApplyTriage has already recorded the rationale that verdict requires.
+//
+// Triage cannot ask what to do with the retired TODO's open children, so they
+// follow the work to the survivor, or become top-level TODOs when there is no
+// open one to take them. That happens first, so a failure leaves the TODO open
+// rather than closed over children nobody can see, and the comment says where
+// they went.
 func retireInto(ctx context.Context, provider Provider, retirement triageRetirement, rationale string) error {
 	retired, survivor := retirement.Retired, retirement.Survivor
-	if survivor == nil {
-		if err := provider.Delete(ctx, retired); err != nil {
-			return fmt.Errorf("retire %s: %w", triageRef(retired), err)
+	children, err := SettleChildren(ctx, provider, retired, ArchiveOptions{Survivor: survivor, Children: ChildrenDetach})
+	if err != nil {
+		return fmt.Errorf("retire %s: %w", triageRef(retired), err)
+	}
+	if note := retirementNote(retirement, rationale, children); note != "" {
+		if err := provider.Comment(ctx, retired, note); err != nil {
+			return fmt.Errorf("record why %s was retired: %w", triageRef(retired), err)
 		}
-		return nil
 	}
-	note := fmt.Sprintf("%s %s", retirement.Reason, triageRef(survivor))
-	if title := strings.TrimSpace(survivor.Title); title != "" {
-		note += " — " + title
+	if survivor != nil {
+		relationships, ok := provider.(RelationshipProvider)
+		if !ok {
+			return fmt.Errorf("triage retired %s into %s but the TODO provider does not support links",
+				triageRef(retired), triageRef(survivor))
+		}
+		if _, err := relationships.Link(ctx, retired, triageRef(survivor), types.RelationRelatedTo); err != nil {
+			return fmt.Errorf("link %s to %s: %w", triageRef(retired), triageRef(survivor), err)
+		}
 	}
-	note += "."
-	if rationale = strings.TrimSpace(rationale); rationale != "" {
-		note += "\n\n" + rationale
-	}
-	if err := provider.Comment(ctx, retired, note); err != nil {
-		return fmt.Errorf("record why %s was retired: %w", triageRef(retired), err)
-	}
-
-	relationships, ok := provider.(RelationshipProvider)
-	if !ok {
-		return fmt.Errorf("triage retired %s into %s but the TODO provider does not support links",
-			triageRef(retired), triageRef(survivor))
-	}
-	if _, err := relationships.Link(ctx, retired, triageRef(survivor), types.RelationRelatedTo); err != nil {
-		return fmt.Errorf("link %s to %s: %w", triageRef(retired), triageRef(survivor), err)
-	}
-
 	if err := provider.Delete(ctx, retired); err != nil {
 		return fmt.Errorf("retire %s: %w", triageRef(retired), err)
 	}
 	return nil
+}
+
+// retirementNote is the comment left on a retired TODO: where its work went and
+// why, then where its open children went. A retirement with no survivor and no
+// open children has nothing to add to the rationale ApplyTriage already wrote.
+func retirementNote(retirement triageRetirement, rationale string, children ChildrenOutcome) string {
+	var parts []string
+	if survivor := retirement.Survivor; survivor != nil {
+		note := fmt.Sprintf("%s %s", retirement.Reason, triageRef(survivor))
+		if title := strings.TrimSpace(survivor.Title); title != "" {
+			note += " — " + title
+		}
+		parts = append(parts, note+".")
+		if rationale = strings.TrimSpace(rationale); rationale != "" {
+			parts = append(parts, rationale)
+		}
+	}
+	if sentence := children.Sentence(); sentence != "" {
+		parts = append(parts, sentence)
+	}
+	return strings.Join(parts, "\n\n")
 }
 
 // retirementPriority is the priority a survivor keeps after absorbing others:

@@ -278,6 +278,13 @@ type LabelDefinitionProvider interface {
 	LabelCounts(ctx context.Context) (map[string]int, error)
 }
 
+// ParentProvider attaches a TODO to a parent, or detaches it when parentRef is
+// empty. The hierarchy is a single level: the parent must be a top-level TODO in
+// the same workspace, and a TODO that has children cannot become a child.
+type ParentProvider interface {
+	SetParent(ctx context.Context, todo *types.TODO, parentRef string) error
+}
+
 type CreateRequest struct {
 	Title        string
 	Body         string
@@ -288,6 +295,23 @@ type CreateRequest struct {
 	Path         types.StringOrSlice
 	Labels       []string
 	Metadata     map[string]any
+	// Parent is the ref of the top-level TODO the new one is a child of.
+	Parent string
+	// NoParent keeps the new TODO top-level even when Origin names a TODO in
+	// this workspace. The origin is still recorded.
+	NoParent bool
+	// Origin is the run the TODO is being created inside. With neither Parent
+	// nor NoParent set, an origin TODO in this workspace makes the new TODO a
+	// child of that TODO's top-level TODO.
+	Origin *CreateOrigin
+}
+
+// CreateOrigin is the run a TODO was created inside: the TODO that run was
+// working on and the agent session doing the work. The provider never reads the
+// environment; callers build this from it (see ops.OriginFromEnv).
+type CreateOrigin struct {
+	IssueID   string
+	SessionID string
 }
 
 type CreatePlanRequest struct {
