@@ -71,7 +71,11 @@ func (s *Server) handleTodosList(w http.ResponseWriter, r *http.Request) {
 		Counts: summarizeTodos(items),
 		Items:  make([]todoSummary, 0, len(items)),
 	}
-	stats := commitDiffStats(r.Context(), source.Dir)
+	stats, err := runDiffStats(r.Context(), provider, source.Dir)
+	if err != nil {
+		writeTodoError(w, http.StatusInternalServerError, err)
+		return
+	}
 	for _, item := range items {
 		sum := summarizeTodo(item, false)
 		sum.Diff = diffStatFor(stats, item.ID)
@@ -101,7 +105,12 @@ func (s *Server) handleTodoGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sum.LookupSessionID = lookupSessionID
-	sum.Diff = diffStatFor(commitDiffStats(r.Context(), source.Dir), todo.ID)
+	stats, err := runDiffStats(r.Context(), provider, source.Dir)
+	if err != nil {
+		writeTodoError(w, http.StatusInternalServerError, err)
+		return
+	}
+	sum.Diff = diffStatFor(stats, todo.ID)
 	json.NewEncoder(w).Encode(sum) //nolint:errcheck
 }
 

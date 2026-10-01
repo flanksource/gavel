@@ -472,7 +472,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/todos/criteria", s.handleTodoCriteria)
 	mux.HandleFunc("POST /api/todos/verification/fixture", s.handleTodoVerificationFixture)
 	mux.HandleFunc("GET /api/todos/verification/schema", s.handleTodoVerificationSchema)
-	mux.HandleFunc("GET /api/todos/commits", s.handleTodoCommits)
 	mux.HandleFunc("GET /api/todos/commits/diff", s.handleTodoCommitDiff)
 	mux.HandleFunc("GET /api/todos/commits/files", s.handleTodoCommitFiles)
 	// A run's transcript is Captain's to read and follow: its handler resolves
@@ -493,6 +492,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/todos/answer", s.handleTodoAnswer)
 	mux.HandleFunc("/api/todos/transfer", s.handleTodoTransfer)
 	mux.HandleFunc("POST /api/todos/github", s.handleTodoGitHubPush)
+	mux.HandleFunc("POST /api/todos/land", s.handleTodoLand)
 	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/favicon.svg", handleFavicon)
 	mux.HandleFunc("/react-grab-plugin.js", handleReactGrabPlugin)
@@ -545,7 +545,7 @@ func (s *Server) Handler() http.Handler {
 		taskSource = newSupervisorTaskSource(s.retryCommitRunControl)
 	}
 	clickytask.RegisterHandlersWithSource(router, "/api/v1", taskSource)
-	s.registerTodoEntityRoutes(router)
+	s.registerEntityRoutes(router)
 	registerPromptRoutes(mux)
 	registerPprof(mux)
 	registerIngestStats(mux, s.readIngestStats)

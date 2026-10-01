@@ -43,6 +43,7 @@ type todoSummary struct {
 	ShortID        string         `json:"shortId,omitempty"`
 	Version        int64          `json:"version,omitempty"`
 	WorkspaceID    string         `json:"workspaceId,omitempty"`
+	ParentID       string         `json:"parentId,omitempty"`
 	ExecutionState string         `json:"executionState,omitempty"`
 	Title          string         `json:"title"`
 	Status         types.Status   `json:"status"`
@@ -67,8 +68,8 @@ type todoSummary struct {
 	// VerificationMarkdown is the raw fixture source stored separately from the
 	// issue body; populated on detail responses for the Verification editor.
 	VerificationMarkdown string `json:"verificationMarkdown,omitempty"`
-	// Diff is the aggregated git diff footprint of the todo's commits (those
-	// carrying its Gavel-Issue-Id trailer); nil when no commits reference it.
+	// Diff is the git diff footprint of the todo's latest recorded run
+	// (Setup..Head on its worktree branch); nil when no run recorded commits.
 	Diff *todoDiffStat `json:"diff,omitempty"`
 	// ExternalIssue is the tracker issue this todo was pushed to; nil when it
 	// has never been pushed. Populated on list responses too, so the dashboard
@@ -134,6 +135,7 @@ func summarizeTodo(todo *types.TODO, detail bool) todoSummary {
 		ShortID:        todo.DisplayID(),
 		Version:        todo.Version,
 		WorkspaceID:    todo.WorkspaceID,
+		ParentID:       todo.ParentID,
 		ExecutionState: todo.ExecutionState,
 		Title:          title,
 		Status:         todo.Status,
@@ -171,10 +173,14 @@ func summarizeTodo(todo *types.TODO, detail bool) todoSummary {
 	return out
 }
 
+// summarizeTodos counts top-level todos only: a child is listed on its parent,
+// not in the listing the counts describe, matching the runtime's SQL aggregate.
 func summarizeTodos(items types.TODOS) todoCounts {
 	var counts todoCounts
 	for _, item := range items {
-		addTodoStatus(&counts, item.Status, 1)
+		if item.ParentID == "" {
+			addTodoStatus(&counts, item.Status, 1)
+		}
 	}
 	return counts
 }
@@ -258,21 +264,32 @@ func countProjectsTodos(ctx context.Context, projects []Project) []todoCountsRes
 }
 
 func writeTodoError(w http.ResponseWriter, status int, err error) {
+	writeTodoErrorStatus(w, todoErrorStatus(status, err), err)
+}
+
+// todoErrorStatus is the status an error answers with, whatever fallback the
+// handler passed for an error it cannot classify.
+func todoErrorStatus(fallback int, err error) int {
 	var configuration *lifecycle.ConfigurationError
 	switch {
 	case errors.As(err, &configuration):
-		status = http.StatusInternalServerError
+		return http.StatusInternalServerError
 	case errors.Is(err, ErrProjectNotFound):
-		status = http.StatusNotFound
+		return http.StatusNotFound
 	case errors.Is(err, database.ErrUnavailable):
-		status = http.StatusServiceUnavailable
-	case errors.Is(err, native.ErrAmbiguousReference), errors.Is(err, native.ErrVersionConflict), errors.Is(err, native.ErrAliasConflict):
-		status = http.StatusConflict
+		return http.StatusServiceUnavailable
+	case errors.Is(err, native.ErrAmbiguousReference), errors.Is(err, native.ErrVersionConflict), errors.Is(err, native.ErrAliasConflict),
+		errors.Is(err, native.ErrIssueInHierarchy), errors.Is(err, native.ErrOpenChildren):
+		return http.StatusConflict
 	case errors.Is(err, native.ErrNotFound):
-		status = http.StatusNotFound
-	case errors.Is(err, native.ErrInvalidInput):
-		status = http.StatusBadRequest
+		return http.StatusNotFound
+	case errors.Is(err, native.ErrInvalidInput), errors.Is(err, native.ErrInvalidParent):
+		return http.StatusBadRequest
 	}
+	return fallback
+}
+
+func writeTodoErrorStatus(w http.ResponseWriter, status int, err error) {
 	w.WriteHeader(status)
 	msg := ""
 	if err != nil {

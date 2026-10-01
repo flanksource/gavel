@@ -3,14 +3,10 @@ package ui
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
 
-	"github.com/flanksource/clicky"
-	"github.com/flanksource/clicky/route"
-	"github.com/flanksource/clicky/rpc"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/bulk"
@@ -18,7 +14,6 @@ import (
 	"github.com/flanksource/gavel/todos/query"
 	"github.com/flanksource/gavel/todos/run"
 	todoruntime "github.com/flanksource/gavel/todos/runtime"
-	"github.com/spf13/cobra"
 	"gorm.io/gorm"
 )
 
@@ -136,28 +131,4 @@ func resolveBulkRunOptions(_ context.Context, req bulk.RunRequest) (run.Options,
 		Spec:    req.Flags.Spec(),
 		Resume:  req.Flags.Resume,
 	}, nil)
-}
-
-// todoEntityRoutes builds the generated REST surface: POST
-// /api/v1/todo/{id}/{action} for each bulk action, plus GET /api/entities,
-// which is the catalog the dashboard's selection toolbar is derived from.
-//
-// The OpenAPI handlers are deliberately not mounted here — pr/ui already serves
-// /api/openapi.json from its own merged document.
-func (s *Server) registerTodoEntityRoutes(router *route.Router) {
-	if err := registerTodoEntity(); err != nil {
-		// A failed registration means the dashboard would silently serve a
-		// toolbar with no actions behind it.
-		panic("ui: registering the todos entity: " + err.Error())
-	}
-	root := &cobra.Command{Use: "gavel"}
-	clicky.GenerateCLI(root)
-
-	server := rpc.NewSwaggerServer(&rpc.ServeConfig{
-		Title:      "gavel",
-		SkipHealth: true,
-		Executor:   &rpc.ExecutorConfig{Enabled: true, PathPrefix: "/api/v1"},
-	}, root, nil)
-	server.RegisterExecutionRoutes(router)
-	router.MountGenerated("GET /api/entities", http.HandlerFunc(server.HandleEntities))
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -100,6 +101,42 @@ type uiTestTODOProvider struct {
 	// that committed the edit and then could not be read back.
 	rereadErr error
 	edited    bool
+	// createRequests is every Create the handlers issued, as they issued it.
+	createRequests []todos.CreateRequest
+}
+
+var _ todos.ParentProvider = (*uiTestTODOProvider)(nil)
+
+// SetParent enforces the native single-level rule, so a handler test sees the
+// same refusals PostgreSQL storage gives.
+func (p *uiTestTODOProvider) SetParent(_ context.Context, todo *types.TODO, parentRef string) error {
+	parentID, err := p.parentFor(todo.ID, parentRef)
+	if err != nil {
+		return err
+	}
+	todo.ParentID = parentID
+	return nil
+}
+
+func (p *uiTestTODOProvider) parentFor(childID, parentRef string) (string, error) {
+	ref := strings.TrimSpace(parentRef)
+	if ref == "" {
+		return "", nil
+	}
+	index := slices.IndexFunc(p.items, func(todo *types.TODO) bool { return todo.ID == ref || todo.FilePath == ref })
+	if index < 0 {
+		return "", fmt.Errorf("resolve parent TODO %q: %w", ref, native.ErrNotFound)
+	}
+	parent := p.items[index]
+	switch {
+	case parent.ID == childID:
+		return "", fmt.Errorf("%w: %s cannot be its own parent", native.ErrInvalidParent, childID)
+	case parent.ParentID != "":
+		return "", fmt.Errorf("%w: %s is a child of %s", native.ErrInvalidParent, parent.ID, parent.ParentID)
+	case slices.ContainsFunc(p.items, func(todo *types.TODO) bool { return todo.ParentID == childID }):
+		return "", fmt.Errorf("%w: %s has children", native.ErrInvalidParent, childID)
+	}
+	return parent.ID, nil
 }
 
 type uiTestLink struct {
@@ -166,6 +203,7 @@ func (p *uiTestTODOProvider) Get(_ context.Context, ref string) (*types.TODO, er
 }
 
 func (p *uiTestTODOProvider) Create(_ context.Context, request todos.CreateRequest) (*types.TODO, error) {
+	p.createRequests = append(p.createRequests, request)
 	priority := request.Priority
 	if priority == "" {
 		priority = types.PriorityMedium
@@ -194,13 +232,28 @@ func (p *uiTestTODOProvider) Create(_ context.Context, request todos.CreateReque
 	}
 	parsed.ID = id
 	parsed.FilePath = id
+	if parsed.ParentID, err = p.parentFor(id, request.Parent); err != nil {
+		return nil, err
+	}
 	parsed.Provider = todos.ProviderDB
 	parsed.Labels = append([]string(nil), request.Labels...)
 	p.items = append(p.items, parsed)
 	return parsed, nil
 }
 
+// Delete refuses a todo that still has open children with the refusal native
+// storage gives, so a handler test sees the 409 and the message the dashboard
+// does.
 func (p *uiTestTODOProvider) Delete(_ context.Context, todo *types.TODO) error {
+	open := 0
+	for _, candidate := range p.items {
+		if todo.ID != "" && candidate.ParentID == todo.ID && candidate.Status != types.StatusCompleted {
+			open++
+		}
+	}
+	if open > 0 {
+		return fmt.Errorf("%w: %d under issue %s; %s", native.ErrOpenChildren, open, todo.ID, todos.ChildrenChoice)
+	}
 	for i, candidate := range p.items {
 		if candidate == todo {
 			p.items = append(p.items[:i], p.items[i+1:]...)
@@ -240,9 +293,9 @@ func (p *uiTestTODOProvider) Edit(_ context.Context, todo *types.TODO, edit todo
 		if err != nil {
 			return err
 		}
-		id, path, provider := todo.ID, todo.FilePath, todo.Provider
+		id, path, provider, parentID := todo.ID, todo.FilePath, todo.Provider, todo.ParentID
 		*todo = *parsed
-		todo.ID, todo.FilePath, todo.Provider = id, path, provider
+		todo.ID, todo.FilePath, todo.Provider, todo.ParentID = id, path, provider, parentID
 	}
 	p.edited = true
 	return nil
@@ -293,6 +346,9 @@ func (p *uiTestTODOProvider) UpdateLatestFailure(context.Context, *types.TODO, *
 }
 func (p *uiTestTODOProvider) SaveAttempt(context.Context, *types.TODO, *todos.ExecutionResult) error {
 	return nil
+}
+func (p *uiTestTODOProvider) LatestRunWorktree(context.Context, *types.TODO) (*native.RunWorktree, error) {
+	return nil, native.ErrNoRunWorkspace
 }
 func (p *uiTestTODOProvider) SupportsGroupedExecution() bool { return false }
 

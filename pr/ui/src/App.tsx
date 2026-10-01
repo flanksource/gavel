@@ -88,7 +88,7 @@ function useMenubarExternalLinks() {
       const target = event.target;
       if (!(target instanceof Element)) return;
       const anchor = target.closest('a[href]');
-      if (!(anchor instanceof HTMLAnchorElement) || !anchor.href) return;
+      if (!(anchor instanceof HTMLAnchorElement) || !anchor.href || anchor.hasAttribute('data-app-link')) return;
 
       if (!postMenubarMessage(menubarOpenExternalMessage, { url: anchor.href })) return;
 

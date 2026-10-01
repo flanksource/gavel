@@ -61,6 +61,9 @@ function listProps(filters: TodoFilters): WorkspaceTodos {
     selected: null,
     select: vi.fn(),
     loadingList: false,
+    listReady: true,
+    errorsByDir: {},
+    detail: null,
     error: '',
     selection: undefined as unknown as TodoSelection,
     tagsByDir: undefined,
@@ -171,5 +174,42 @@ describe('TodoFullPane', () => {
     expect(screen.getByTestId('todo-detail').getAttribute('data-navigation')).toBe('2/3');
     fireEvent.click(screen.getByRole('button', { name: 'Next todo' }));
     expect(base.select).toHaveBeenCalledWith({ dir: gavel.dir, ref: g3.ref });
+  });
+
+  // The ordinary queue leaves children out, so a child opened from its parent
+  // used to have no position at all and lost its previous/next controls.
+  describe('a child todo', () => {
+    const parentId = '5e7a9c1b-2d4f-4680-a3b5-7c9e1f3a5b70';
+    const parent = { ...todo('p1'), id: parentId };
+    const [c1, c2, c3] = ['c1', 'c2', 'c3'].map(ref => ({ ...todo(ref), parentId }));
+    const other = { ...todo('g9'), priority: 'high' as const };
+    const base = listProps(defaultTodoFilters());
+    const withItems = (items: TodoItem[], ref: string): WorkspaceTodos => ({
+      ...base,
+      workspaces: [gavel],
+      byDir: { [gavel.dir]: { dir: gavel.dir, counts: emptyCounts, items } },
+      selected: { dir: gavel.dir, ref },
+    });
+    const position = () => screen.getByTestId('todo-detail').getAttribute('data-navigation');
+
+    it('walks its siblings with previous and next', () => {
+      render(<TodoFullPane todos={withItems([parent, c1, c2, other, c3], 'c2')} projectsLoaded />);
+
+      expect(position()).toBe('2/3');
+      fireEvent.click(screen.getByRole('button', { name: 'Next todo' }));
+      expect(base.select).toHaveBeenLastCalledWith({ dir: gavel.dir, ref: 'c3' });
+    });
+
+    // The navigation pin holds the pre-edit copy of the open todo; once it has no
+    // parent it belongs to the ordinary queue and must be navigable there.
+    it('is navigable in the ordinary queue once it is detached from its parent', () => {
+      const { rerender } = render(<TodoFullPane todos={withItems([parent, c1, c2, other, c3], 'c2')} projectsLoaded />);
+      expect(position()).toBe('2/3');
+
+      // Detached and demoted, so the ordinary queue (g9, p1, c2) places it last.
+      const detached = { ...c2, parentId: undefined, priority: 'low' as const };
+      rerender(<TodoFullPane todos={withItems([parent, c1, detached, other, c3], 'c2')} projectsLoaded />);
+      expect(position()).toBe('3/3');
+    });
   });
 });

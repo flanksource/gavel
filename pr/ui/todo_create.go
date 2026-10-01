@@ -35,6 +35,10 @@ type todoCreatePayload struct {
 	// Labels tags the new todo. Presentation for each label is resolved from the
 	// label definitions, not stored here.
 	Labels []string `json:"labels,omitempty"`
+	// Parent is the ref of the top-level todo the new one is a child of. It is
+	// the only lineage a request carries: the server's own environment describes
+	// whoever started `gavel serve`, never the caller, so no origin is derived.
+	Parent string `json:"parent,omitempty"`
 }
 
 type todoNewPayload struct {
@@ -103,6 +107,7 @@ func (s *Server) handleTodoCreate(w http.ResponseWriter, r *http.Request) {
 		Priority: payload.Priority,
 		Status:   payload.Status,
 		Labels:   payload.Labels,
+		Parent:   payload.Parent,
 	})
 	if err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)
@@ -191,6 +196,7 @@ func (s *Server) handleTodoNew(w http.ResponseWriter, r *http.Request) {
 		Priority: payload.Priority,
 		Status:   payload.Status,
 		Labels:   payload.Labels,
+		Parent:   payload.Parent,
 	})
 	if err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)

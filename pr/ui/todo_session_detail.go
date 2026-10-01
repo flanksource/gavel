@@ -34,8 +34,11 @@ type todoAttemptDetail struct {
 	// always present — null for an attempt that was never verified — so a
 	// reader can tell "the server knows there is none" from "not sent".
 	Verification *api.VerifyReport `json:"verification"`
-	CanStop      bool              `json:"canStop,omitempty"`
-	Stopping     bool              `json:"stopping,omitempty"`
+	// Landing is how the attempt's worktree commits reached a branch; absent
+	// until `todos land` records one.
+	Landing  *native.RunLanding `json:"landing,omitempty"`
+	CanStop  bool               `json:"canStop,omitempty"`
+	Stopping bool               `json:"stopping,omitempty"`
 }
 
 type todoSessionDetailResponse struct {
@@ -106,7 +109,6 @@ func listTodoAttempts(ctx context.Context, provider sessionDetailProvider, issue
 	if err != nil {
 		return nil, err
 	}
-	sort.SliceStable(links, func(i, j int) bool { return links[i].CreatedAt.Before(links[j].CreatedAt) })
 	ids := make([]uuid.UUID, len(links))
 	for index := range links {
 		ids[index] = links[index].PromptRunID
@@ -115,13 +117,36 @@ func listTodoAttempts(ctx context.Context, provider sessionDetailProvider, issue
 	if err != nil {
 		return nil, err
 	}
+	verifications, err := provider.Captain().LatestPromptRunVerifications(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	landings, err := provider.Repository().ListLandings(ctx, issueID)
+	if err != nil {
+		return nil, fmt.Errorf("list landings of TODO %s: %w", issueID, err)
+	}
+	return assembleTodoAttempts(links, overviews, verifications, landings)
+}
+
+// assembleTodoAttempts joins a TODO's prompt-run links with captain's overview
+// of each run — which carries the run's recorded workspace — its latest
+// verification and its landing, newest first. A link whose run captain does
+// not know, or a landing of a run that is not linked, is an error, never a
+// silently shorter history.
+func assembleTodoAttempts(
+	links []native.PromptRunLink,
+	overviews []captaindb.PromptRunOverview,
+	verifications map[uuid.UUID]captaindb.PromptRunVerification,
+	landings []native.RunLanding,
+) ([]todoAttemptDetail, error) {
+	sort.SliceStable(links, func(i, j int) bool { return links[i].CreatedAt.Before(links[j].CreatedAt) })
 	byID := make(map[uuid.UUID]captaindb.PromptRunOverview, len(overviews))
 	for index := range overviews {
 		byID[overviews[index].ID] = overviews[index]
 	}
-	verifications, err := provider.Captain().LatestPromptRunVerifications(ctx, ids)
-	if err != nil {
-		return nil, err
+	landingByRun := make(map[uuid.UUID]*native.RunLanding, len(landings))
+	for index := range landings {
+		landingByRun[landings[index].PromptRunID] = &landings[index]
 	}
 	attempts := make([]todoAttemptDetail, len(links))
 	for index, link := range links {
@@ -136,7 +161,12 @@ func listTodoAttempts(ctx context.Context, provider sessionDetailProvider, issue
 		if verification, ok := verifications[link.PromptRunID]; ok {
 			attempt.Verification = verification.Report
 		}
+		attempt.Landing = landingByRun[link.PromptRunID]
+		delete(landingByRun, link.PromptRunID)
 		attempts[len(links)-1-index] = attempt
+	}
+	for runID := range landingByRun {
+		return nil, fmt.Errorf("%w: landing of prompt run %s, which is not linked to the TODO", native.ErrLinkConflict, runID)
 	}
 	return attempts, nil
 }

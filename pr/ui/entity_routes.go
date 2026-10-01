@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sync"
 
 	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/clicky"
@@ -39,7 +40,7 @@ func entityCommandRoot() (*cobra.Command, error) {
 // into it: that hand-built document describes the /api/projects CRUD routes, and
 // one document carrying two project surfaces would leave every client to guess
 // which one it meant.
-func (s *Server) registerEntityRoutes(mux *http.ServeMux) {
+func (s *Server) registerEntityRoutes(router *route.Router) {
 	root, err := entityCommandRoot()
 	if err != nil {
 		// A failed registration means the dashboard would silently serve a
@@ -51,26 +52,52 @@ func (s *Server) registerEntityRoutes(mux *http.ServeMux) {
 		SkipHealth: true,
 		Executor:   &rpc.ExecutorConfig{Enabled: true, PathPrefix: "/api/v1"},
 	}, root, nil)
-	server.RegisterExecutionRoutes(route.NewRouter(mux))
-	mux.HandleFunc("GET /api/entities", server.HandleEntities)
-	mux.HandleFunc("GET /api/v1/openapi.json", server.HandleOpenAPIJSON)
-	pool, err := database.Require(context.Background(), "Gavel chat")
+	server.RegisterExecutionRoutes(router)
+	router.MountGenerated("GET /api/entities", http.HandlerFunc(server.HandleEntities))
+	router.MountGenerated("GET /api/v1/openapi.json", http.HandlerFunc(server.HandleOpenAPIJSON))
+	chat := &lazyChatHandler{root: root, workDir: s.todoWorkDir()}
+	router.MountGenerated("/api/chat", chat)
+	router.MountGenerated("/api/chat/", chat)
+}
+
+// lazyChatHandler opens the chat service on its first request rather than when
+// the mux is built: `gavel serve` opens the process database (with migrations)
+// after the handler exists, and opening it here first would pin it unmigrated.
+// A failed open is not cached, so chat recovers once the database is reachable.
+type lazyChatHandler struct {
+	root    *cobra.Command
+	workDir string
+	mu      sync.Mutex
+	handler http.Handler
+}
+
+func (h *lazyChatHandler) ServeHTTP(w http.ResponseWriter, request *http.Request) {
+	handler, err := h.resolve(request.Context())
 	if err != nil {
-		unavailable := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			http.Error(w, fmt.Sprintf("Gavel chat requires the TODO database: %v", err), http.StatusServiceUnavailable)
-		})
-		mux.Handle("/api/chat", unavailable)
-		mux.Handle("/api/chat/", unavailable)
+		http.Error(w, fmt.Sprintf("Gavel chat requires the TODO database: %v", err), http.StatusServiceUnavailable)
 		return
+	}
+	handler.ServeHTTP(w, request)
+}
+
+func (h *lazyChatHandler) resolve(ctx context.Context) (http.Handler, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.handler != nil {
+		return h.handler, nil
+	}
+	pool, err := database.Require(ctx, "Gavel chat")
+	if err != nil {
+		return nil, err
 	}
 	db, err := captaindb.Use(pool)
 	if err != nil {
-		panic("ui: opening the chat database: " + err.Error())
+		return nil, fmt.Errorf("open the chat database: %w", err)
 	}
-	chat, err := newGavelChatServer(root, s.todoWorkDir(), db)
+	chat, err := newGavelChatServer(h.root, h.workDir, db)
 	if err != nil {
-		panic("ui: registering the chat service: " + err.Error())
+		return nil, err
 	}
-	mux.Handle("/api/chat", chat.Handler())
-	mux.Handle("/api/chat/", chat.Handler())
+	h.handler = chat.Handler()
+	return h.handler, nil
 }

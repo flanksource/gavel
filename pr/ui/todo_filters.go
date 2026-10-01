@@ -133,6 +133,7 @@ func applyTodoUpdateValues(payload *todoUpdatePayload, values map[string][]strin
 	}
 	assignPointer(&payload.Title, true, "title", "name")
 	assignPointer(&payload.Body, false, "body", "description", "text")
+	assignPointer(&payload.Parent, true, "parent")
 	assignString(&payload.Comment, "comment")
 }
 
@@ -179,6 +180,7 @@ func applyTodoNewValues(payload *todoNewPayload, values map[string][]string, ove
 	assignString(&payload.Body, "body", "description", "text")
 	assignPriority(&payload.Priority, "priority", "severity")
 	assignStatus(&payload.Status, "status")
+	assignString(&payload.Parent, "parent")
 	if overwrite || len(payload.Labels) == 0 {
 		if labels := todoNewLabels(values, "labels", "label"); len(labels) > 0 {
 			payload.Labels = labels

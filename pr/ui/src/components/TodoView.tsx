@@ -7,7 +7,8 @@ import type { WorkspaceTodos } from './todos/useWorkspaceTodos';
 import { WorkspaceTodoGroup } from './todos/WorkspaceTodoGroup';
 import { TodoBucketGroup } from './todos/TodoBucketGroup';
 import { bucketTodos, flattenTodos } from './todos/todoGroup';
-import { isWorkspaceShown } from './todos/todoFilter';
+import { isChildTodo, isWorkspaceShown } from './todos/todoFilter';
+import { useChildCounts, useParentTitles, useTodoFamily } from './todos/useTodoFamily';
 import { resolveRange } from './todos/todoTimeRange';
 import { TodoDetail } from './todos/TodoDetail';
 import { TodoDetailStack } from './todos/TodoDetailStack';
@@ -17,6 +18,7 @@ import {
   filterTodoNavigationEntries,
   nextTodoNavigationPin,
   orderedTodoNavigationEntries,
+  siblingNavigationEntries,
   todoNavigationState,
   withPinnedTodo,
   type TodoNavigationPin,
@@ -104,7 +106,9 @@ export function TodoWorkspaceList({ todos, projectsLoaded, projectError }: {
   // precision, and re-bucketing every todo on every render rebuilt every
   // bucket's entry array and re-rendered every row in the list.
   const buckets = useMemo(
-    () => (groupBy === 'workspace' ? [] : bucketTodos(flattenTodos(workspaces, byDir), groupBy, minute * 60_000, sortBy)),
+    () => (groupBy === 'workspace'
+      ? []
+      : bucketTodos(flattenTodos(workspaces, byDir).filter(entry => !isChildTodo(entry.todo)), groupBy, minute * 60_000, sortBy)),
     [groupBy, workspaces, byDir, minute, sortBy],
   );
   // Waiting on either fetch is "loading": the workspaces come from
@@ -203,7 +207,13 @@ export function TodoWorkspaceList({ todos, projectsLoaded, projectError }: {
 // project" does not silently vanish when the layout changes.
 function useTodoNavigator(todos: WorkspaceTodos, query: string, enabled: boolean) {
   const { workspaces, byDir, filters, groupBy, sortBy, timeRange, selected, select, tagsByDir } = todos;
-  const columns = useMemo(() => todoTableColumns({ groupBy, tagsByDir }), [groupBy, tagsByDir]);
+  const parentTitles = useParentTitles(byDir);
+  const childCounts = useChildCounts(byDir);
+  const columns = useMemo(
+    () => todoTableColumns({ groupBy, tagsByDir, parentTitles, childCounts }),
+    [groupBy, tagsByDir, parentTitles, childCounts],
+  );
+  const includeChildren = query.trim() !== '';
   const order = useCallback((source: Record<string, TodoListResponse>) => orderedTodoNavigationEntries({
     workspaces,
     byDir: source,
@@ -212,7 +222,8 @@ function useTodoNavigator(todos: WorkspaceTodos, query: string, enabled: boolean
     sortBy,
     timeRange,
     now: Date.now(),
-  }), [workspaces, filters, groupBy, sortBy, timeRange]);
+    includeChildren,
+  }), [workspaces, filters, groupBy, sortBy, timeRange, includeChildren]);
   const entries = useMemo(() => order(byDir), [order, byDir]);
   const matched = useMemo(
     () => filterTodoNavigationEntries(entries, columns, query),
@@ -229,7 +240,13 @@ function useTodoNavigator(todos: WorkspaceTodos, query: string, enabled: boolean
     () => (pinnedByDir === byDir ? matched : filterTodoNavigationEntries(order(pinnedByDir), columns, query)),
     [pinnedByDir, byDir, matched, order, columns, query],
   );
-  const state = enabled ? todoNavigationState(queue, selected) : null;
+  // A child is outside the ordinary queue unless the search box has text; it
+  // browses its siblings instead, so its previous/next controls stay.
+  const siblings = useMemo(
+    () => (includeChildren ? null : siblingNavigationEntries({ workspaces, byDir, selected })),
+    [includeChildren, workspaces, byDir, selected],
+  );
+  const state = enabled ? todoNavigationState(siblings ?? queue, selected) : null;
   const navigation: TodoNavigationControlsProps | undefined = state ? {
     position: state.position,
     total: state.total,
@@ -256,6 +273,7 @@ export function TodoFullPane({ todos, projectsLoaded, scopeProject = '', navigat
   const [query, setQuery] = useState('');
   const { detail, loadingDetail, detailError, selected, select, updateItem, deleted, workspaces, transferred } = todos;
   const navigator = useTodoNavigator(todos, query, navigationEnabled);
+  const family = useTodoFamily(todos);
   return (
     <TodoDetailStack
       list={(
@@ -283,6 +301,7 @@ export function TodoFullPane({ todos, projectsLoaded, scopeProject = '', navigat
           navigation={navigator.navigation}
           view={todos.detailView}
           onViewChange={todos.setDetailView}
+          {...family}
         />
       )}
     />
@@ -294,6 +313,7 @@ export function TodoFullPane({ todos, projectsLoaded, scopeProject = '', navigat
 export function TodoDetailPane({ todos, navigationEnabled = true }: { todos: WorkspaceTodos; navigationEnabled?: boolean }) {
   const { detail, loadingDetail, detailError, selected, updateItem, deleted, workspaces, transferred } = todos;
   const { navigation } = useTodoNavigator(todos, '', navigationEnabled);
+  const family = useTodoFamily(todos);
   return (
     <TodoDetail
       todo={detail}
@@ -307,6 +327,7 @@ export function TodoDetailPane({ todos, navigationEnabled = true }: { todos: Wor
       navigation={navigation}
       view={todos.detailView}
       onViewChange={todos.setDetailView}
+      {...family}
     />
   );
 }

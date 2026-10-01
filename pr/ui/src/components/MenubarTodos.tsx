@@ -10,7 +10,8 @@ import { TodoDetailStack } from './todos/TodoDetailStack';
 import { TodoToolbar } from './todos/TodoToolbar';
 import { CreateTodoDialog } from './todos/CreateTodoDialog';
 import { bucketTodos, flattenTodos } from './todos/todoGroup';
-import { isWorkspaceShown } from './todos/todoFilter';
+import { isChildTodo, isWorkspaceShown } from './todos/todoFilter';
+import { useTodoFamily } from './todos/useTodoFamily';
 
 // MenubarTodos is the compact, single-column todos view for the menubar popover.
 // It mirrors the PRs tab's master-detail idiom: a workspace-grouped list, and
@@ -40,7 +41,10 @@ export function MenubarTodos({ projects, projectsLoaded, projectError }: {
   // Severity/age grouping flattens todos across workspaces into buckets; the
   // default 'workspace' grouping keeps the per-workspace sections (the only mode
   // that supports batch runs on the dashboard).
-  const buckets = groupBy === 'workspace' ? null : bucketTodos(flattenTodos(workspaces, byDir), groupBy, Date.now());
+  const buckets = groupBy === 'workspace'
+    ? null
+    : bucketTodos(flattenTodos(workspaces, byDir).filter(entry => !isChildTodo(entry.todo)), groupBy, Date.now());
+  const family = useTodoFamily(todos);
   // Waiting on either fetch is "loading": the workspaces come from /api/projects
   // and the todos from the per-workspace lists.
   const pending = loadingList || !projectsLoaded;
@@ -139,6 +143,7 @@ export function MenubarTodos({ projects, projectsLoaded, projectError }: {
             onBack={() => select(null)}
             view={todos.detailView}
             onViewChange={todos.setDetailView}
+            {...family}
           />
         </div>
       )}

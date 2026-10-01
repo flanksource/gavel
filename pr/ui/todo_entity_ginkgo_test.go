@@ -242,7 +242,61 @@ var _ = Describe("todo entity bulk actions", func() {
 			"labels", []string{"a"}, nil, "--add or --remove"),
 		Entry("with an unconfirmed delete",
 			"delete", []string{"a"}, nil, "--confirm"),
+		Entry("with a children choice that is neither archive nor detach",
+			"delete", []string{"a"}, map[string]string{"confirm": "true", "children": "purge"}, "purge"),
 	)
+
+	// The dashboard sends `confirm=true&children=<choice>` for the whole batch,
+	// plain todos included, so the choice has to be harmless where it is not needed.
+	Describe("delete with a children choice", func() {
+		var parent, child, plain *types.TODO
+
+		stored := func() map[string]string {
+			parents := map[string]string{}
+			for _, todo := range provider.items {
+				parents[todo.Title] = todo.ParentID
+			}
+			return parents
+		}
+
+		BeforeEach(func() {
+			parent = newTodo("Bulk parent", types.StatusPending, types.PriorityLow)
+			var err error
+			child, err = provider.Create(GinkgoT().Context(), todos.CreateRequest{
+				Title: "Bulk open child", Status: types.StatusPending, Parent: parent.ID,
+			})
+			Expect(err).NotTo(HaveOccurred())
+			plain = newTodo("Bulk plain", types.StatusPending, types.PriorityLow)
+		})
+
+		DescribeTable("deletes the batch and settles only the open children",
+			func(children string, remaining map[string]string, parentStatus string) {
+				recorder, result := postTodoAction("delete", []string{parent.ID, plain.ID},
+					map[string]string{"confirm": "true", "children": children})
+
+				Expect(recorder.Code).To(Equal(http.StatusOK), recorder.Body.String())
+				Expect(result.Failed).To(BeZero(), recorder.Body.String())
+				Expect(result.Results).To(HaveLen(2))
+				Expect(result.Results[0].Status).To(Equal(strings.ReplaceAll(parentStatus, "{child}", todos.TODOReference(child))))
+				Expect(result.Results[1].Status).To(Equal("deleted"))
+				Expect(stored()).To(Equal(remaining))
+			},
+			Entry("archive takes the open child with its parent", "archive",
+				map[string]string{}, "deleted; open children archived too: {child}"),
+			Entry("detach leaves the open child as a top-level todo", "detach",
+				map[string]string{"Bulk open child": ""}, "deleted; open children made top-level TODOs: {child}"),
+		)
+
+		It("fails only the parent when the batch carries no choice, and says what the choices are", func() {
+			recorder, result := postTodoAction("delete", []string{parent.ID, plain.ID}, map[string]string{"confirm": "true"})
+
+			Expect(recorder.Code).To(Equal(http.StatusOK), recorder.Body.String())
+			Expect(result.Applied).To(Equal(1))
+			Expect(result.Failed).To(Equal(1))
+			Expect(result.Results[0].Error).To(HaveSuffix("1 under issue " + parent.ID + "; " + todos.ChildrenChoice))
+			Expect(stored()).To(Equal(map[string]string{"Bulk parent": "", "Bulk open child": parent.ID}))
+		})
+	})
 
 	// A rejected request must not have written anything: validation happens
 	// before the first item is touched, not partway through the loop.
@@ -407,5 +461,21 @@ var _ = Describe("todo entity catalog", func() {
 		Expect(deleteAction.ToolHints.DestructiveHint).NotTo(BeNil())
 		Expect(*deleteAction.ToolHints.DestructiveHint).To(BeTrue(),
 			"a UI has to know to confirm before deleting selected TODOs")
+	})
+
+	// The dashboard offers the archive-or-detach choice only when delete publishes
+	// the parameter, and falls back to a plain delete otherwise.
+	It("publishes the children choice on delete as an optional enum", func() {
+		for _, action := range todoEntityCatalog() {
+			if action.Name != "delete" {
+				continue
+			}
+			Expect(action.ParamSchema).NotTo(BeNil())
+			Expect(action.ParamSchema.Properties).To(HaveKey("children"))
+			Expect(action.ParamSchema.Properties["children"].Enum).To(ConsistOf("archive", "detach"))
+			Expect(action.ParamSchema.Required).To(ConsistOf("confirm"))
+			return
+		}
+		Fail("the delete action is not published")
 	})
 })
