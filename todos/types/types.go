@@ -77,13 +77,15 @@ func HighestPriority(priorities ...Priority) Priority {
 }
 
 type Attempt struct {
-	Status     Status
-	Timestamp  time.Time
-	Duration   time.Duration
-	Cost       float64
-	Tokens     int
-	Model      string
-	Commit     string
+	Status    Status
+	Timestamp time.Time
+	Duration  time.Duration
+	Cost      float64
+	Tokens    int
+	Model     string
+	// Workspace is the run's worktree and the commits it made; nil when the run
+	// reported none.
+	Workspace  *captainapi.WorkspaceRecord
 	Transcript string // relative path to transcript .md
 }
 
@@ -100,6 +102,9 @@ type ProviderEvent struct {
 	// adjacent LabelRemoved/LabelAdded pair within the same label namespace.
 	OldLabel string `json:"old_label,omitempty"`
 	NewLabel string `json:"new_label,omitempty"`
+	// Payload is the event's structured detail (e.g. a run_landed event's
+	// via, target branch and landed sha), as the provider recorded it.
+	Payload json.RawMessage `json:"payload,omitempty"`
 }
 
 // TODO represents a structured TODO item parsed from a markdown file.
@@ -112,6 +117,7 @@ type TODO struct {
 	ShortID        string                `json:"short_id,omitempty"`
 	Version        int64                 `json:"version,omitempty"`
 	WorkspaceID    string                `json:"workspace_id,omitempty"`
+	ParentID       string                `json:"parent_id,omitempty"`
 	ExecutionState string                `json:"execution_state,omitempty"`
 	Provider       string                `json:"provider,omitempty"`
 	Workspace      string                `json:"workspace,omitempty"`
@@ -231,22 +237,21 @@ type TODOFrontmatter struct {
 	fixtures.FrontMatter `yaml:",inline" json:",inline"` // Embed standard fixture frontmatter
 
 	// TODO-specific fields
-	Title         string             `yaml:"title,omitempty" json:"title,omitempty"`
-	Priority      Priority           `yaml:"priority,omitempty" json:"priority,omitempty"`
-	Status        Status             `yaml:"status,omitempty" json:"status,omitempty"`
-	Created       *time.Time         `yaml:"created,omitempty" json:"created,omitempty"`
-	LastRun       *time.Time         `yaml:"last_run,omitempty" json:"last_run,omitempty"`
-	Attempts      int                `yaml:"attempts,omitempty" json:"attempts,omitempty"`
-	Language      Language           `yaml:"language,omitempty" json:"language,omitempty"`
-	WorkingCommit string             `yaml:"working_commit,omitempty" json:"working_commit,omitempty"`
-	Branch        string             `yaml:"branch,omitempty" json:"branch,omitempty"`
-	CWD           string             `yaml:"cwd,omitempty" json:"cwd,omitempty"`
-	Path          StringOrSlice      `yaml:"path,omitempty" json:"path,omitempty"`
-	LLM           *LLM               `yaml:"llm,omitempty" json:"llm,omitempty"`
-	Verify        *TODOVerifyConfig  `yaml:"verify,omitempty" json:"verify,omitempty"`
-	Checks        *AgentChecksConfig `yaml:"checks,omitempty" json:"checks,omitempty"`
-	PR            *PR                `yaml:"pr,omitempty" json:"pr,omitempty"`
-	Prompt        string             `yaml:"prompt,omitempty" json:"prompt,omitempty"`
+	Title    string             `yaml:"title,omitempty" json:"title,omitempty"`
+	Priority Priority           `yaml:"priority,omitempty" json:"priority,omitempty"`
+	Status   Status             `yaml:"status,omitempty" json:"status,omitempty"`
+	Created  *time.Time         `yaml:"created,omitempty" json:"created,omitempty"`
+	LastRun  *time.Time         `yaml:"last_run,omitempty" json:"last_run,omitempty"`
+	Attempts int                `yaml:"attempts,omitempty" json:"attempts,omitempty"`
+	Language Language           `yaml:"language,omitempty" json:"language,omitempty"`
+	Branch   string             `yaml:"branch,omitempty" json:"branch,omitempty"`
+	CWD      string             `yaml:"cwd,omitempty" json:"cwd,omitempty"`
+	Path     StringOrSlice      `yaml:"path,omitempty" json:"path,omitempty"`
+	LLM      *LLM               `yaml:"llm,omitempty" json:"llm,omitempty"`
+	Verify   *TODOVerifyConfig  `yaml:"verify,omitempty" json:"verify,omitempty"`
+	Checks   *AgentChecksConfig `yaml:"checks,omitempty" json:"checks,omitempty"`
+	PR       *PR                `yaml:"pr,omitempty" json:"pr,omitempty"`
+	Prompt   string             `yaml:"prompt,omitempty" json:"prompt,omitempty"`
 	// PlanPath is the agent's native plan-mode file from the last plan run
 	// (reported in the run envelope); the plan is read from there, never copied.
 	PlanPath   string     `yaml:"plan_path,omitempty" json:"plan_path,omitempty"`
@@ -295,7 +300,6 @@ func (f *TODOFrontmatter) CleanMetadata() {
 	delete(f.Metadata, "llm")
 	delete(f.Metadata, "verify")
 	delete(f.Metadata, "checks")
-	delete(f.Metadata, "working_commit")
 	delete(f.Metadata, "branch")
 	delete(f.Metadata, "cwd")
 	delete(f.Metadata, "max_turns")
@@ -421,6 +425,8 @@ type CheckResult struct {
 	ErrorText  string                   `json:"error,omitempty"`
 	Report     *captainapi.VerifyReport `json:"report,omitempty"`
 	TestResult *TestResultInfo          `json:"testResult,omitempty"` // Comprehensive test result info for updating todo file
+	// Target is the commit the check verified.
+	Target *VerifyTarget `json:"target,omitempty"`
 }
 
 // CountTests returns the total number of test nodes in a fixture node tree.

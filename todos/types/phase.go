@@ -55,6 +55,10 @@ type PhaseRun struct {
 	// Active marks the phase the TODO is executing right now, as opposed to the
 	// one it ran most recently.
 	Active bool `json:"active,omitempty"`
+	// PromptRunID is the prompt run behind this phase. A run that verified its
+	// own work is listed under both run and verify with the same id, duration
+	// and cost, so a total across phases must count each id once.
+	PromptRunID string `json:"prompt_run_id,omitempty"`
 }
 
 // Running reports whether this phase is the one currently executing.
