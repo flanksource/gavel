@@ -36,6 +36,9 @@ func (s PromptSpec) Resolve(opts PromptResolveOptions) (api.ResolvedSpec, error)
 			return api.ResolvedSpec{}, fmt.Errorf("resolved prompt spec: %w", err)
 		}
 	}
+	if strings.TrimSpace(s.RuntimeProfile) != "" {
+		resolved.Warnings = append(resolved.Warnings, api.RuntimeProfileDeprecationWarning)
+	}
 	return resolved, nil
 }
 
@@ -44,8 +47,8 @@ func (s PromptSpec) Layers(opts PromptResolveOptions) ([]api.SpecLayer, error) {
 	if opts.FileSource != nil && s.File == "" {
 		return nil, fmt.Errorf("captured prompt file content requires a file reference")
 	}
-	if s.RuntimeProfile != "" {
-		return nil, fmt.Errorf("runtime profiles require TODO lifecycle resolution")
+	if s.PresetsSet || s.Presets != nil {
+		return nil, fmt.Errorf("runtime presets require TODO lifecycle resolution")
 	}
 	var layers []api.SpecLayer
 	if strings.TrimSpace(opts.Dir) != "" {
@@ -59,8 +62,8 @@ func (s PromptSpec) Layers(opts PromptResolveOptions) ([]api.SpecLayer, error) {
 		if err != nil {
 			return fmt.Errorf("render %s: %w", name, err)
 		}
-		if rendered.RuntimeProfile != "" {
-			return fmt.Errorf("runtime profiles require TODO lifecycle resolution")
+		if rendered.PresetsSet || rendered.Presets != nil {
+			return fmt.Errorf("runtime presets require TODO lifecycle resolution")
 		}
 		layers = append(layers, api.PromptSpecLayer(name, rendered.Spec))
 		return nil

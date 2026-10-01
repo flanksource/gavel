@@ -38,6 +38,7 @@ function useRunPromptPreview(dir: string, ref: string, options: TodoRunOptions |
       body: {
         ref,
         step: requestStepFor(options),
+        presets: options.presets,
         runtimeProfile: options.runtimeProfile,
         spec: options.spec ?? {},
       },

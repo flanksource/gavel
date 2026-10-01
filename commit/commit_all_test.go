@@ -206,7 +206,15 @@ func TestRunCommitAllExcludesGitIgnoredAndGavelIgnored(t *testing.T) {
 	assert.FileExists(t, filepath.Join(repo, "secrets/keys.env"))
 }
 
-func initCommitRepo(t *testing.T) string {
+// testingT is the subset of *testing.T the repo helpers need, so ginkgo specs
+// can pass GinkgoT() too.
+type testingT interface {
+	require.TestingT
+	Helper()
+	TempDir() string
+}
+
+func initCommitRepo(t testingT) string {
 	t.Helper()
 	dir := t.TempDir()
 	gitRun(t, dir, "init")
@@ -223,7 +231,7 @@ func initCommitRepo(t *testing.T) string {
 	return dir
 }
 
-func gitRun(t *testing.T, dir string, args ...string) {
+func gitRun(t testingT, dir string, args ...string) {
 	t.Helper()
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
@@ -231,7 +239,7 @@ func gitRun(t *testing.T, dir string, args ...string) {
 	require.NoError(t, err, "git %v failed: %s", args, out)
 }
 
-func gitOutput(t *testing.T, dir string, args ...string) string {
+func gitOutput(t testingT, dir string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
@@ -240,7 +248,7 @@ func gitOutput(t *testing.T, dir string, args ...string) string {
 	return string(out)
 }
 
-func writeFile(t *testing.T, dir, name, content string) {
+func writeFile(t testingT, dir, name, content string) {
 	t.Helper()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644))
 }

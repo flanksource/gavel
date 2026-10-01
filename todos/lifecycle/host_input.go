@@ -1,8 +1,7 @@
 package lifecycle
 
 import (
-	"context"
-	"fmt"
+	"sync"
 
 	captainai "github.com/flanksource/captain/pkg/ai"
 	capsetup "github.com/flanksource/captain/pkg/ai/agent/setup"
@@ -19,17 +18,19 @@ import (
 )
 
 type stepInput struct {
-	input         promptrun.Input
-	meta          todos.RunStartMetadata
-	execution     *todos.ExecutionResult
-	progress      *progressSink
-	sawResult     bool
-	brokerFactory todos.ApprovalBroker
-	broker        api.PermissionFunc
+	input     promptrun.Input
+	meta      todos.RunStartMetadata
+	execution *todos.ExecutionResult
+	sawResult bool
+	eventMu   sync.Mutex
+	// hooks are gavel's own hooks; setup is the plugin gavel adds itself when a
+	// supplied provider skips Captain's, which must trail every other hook.
+	hooks []any
+	setup *capsetup.Plugin
 }
 
 // runInput constructs the same real hooks and callbacks for preview and dispatch.
-// Only start invokes the broker factory or publishes execution metadata.
+// Only start publishes execution metadata.
 func (h *Host) runInput(exec *todos.ExecutorContext, todo *types.TODO, prepared *preparedStep, opts RunOptions) *stepInput {
 	req := prepared.request
 	requested := req.SessionID
@@ -41,64 +42,66 @@ func (h *Host) runInput(exec *todos.ExecutorContext, todo *types.TODO, prepared 
 	if req.Mode == api.ModeCmux && !opts.Resume && prepared.agent == "claude" {
 		providerSessionID = firstNonEmpty(requested, uuid.NewString())
 	}
-	state := &stepInput{
-		meta:     h.runMetadata(req, providerSessionID, todo, prepared),
-		progress: h.progressSink(exec, todo), brokerFactory: opts.Broker,
-	}
+	state := &stepInput{meta: h.runMetadata(req, providerSessionID, todo, prepared)}
 	state.execution = &todos.ExecutionResult{ExecutorName: h.executorName(prepared), Runtime: state.meta, Transcript: exec.GetTranscript()}
-	hooks := h.Hooks(todo, req, state.meta, exec.RecordRunStart)
+	state.hooks = h.Hooks(todo, req, state.meta)
 	if opts.Provider != nil {
-		// A supplied provider skips Captain's setup hook. Gavel's supplied-provider
-		// seam still needs local setup, before its final spec recorder.
-		recorder := hooks[len(hooks)-1]
-		hooks = append(hooks[:len(hooks)-1], &capsetup.Plugin{BaseDir: prepared.workDir}, recorder)
+		// A supplied provider skips Captain's setup hook, and gavel's
+		// supplied-provider seam still needs local setup.
+		state.setup = &capsetup.Plugin{BaseDir: prepared.workDir}
 	}
 	state.input = promptrun.Input{
-		Request:  req,
-		Config:   captainai.Config{Model: req.Model, Budget: req.Budget, NoCache: req.NoCache, SessionID: providerSessionID},
-		Provider: opts.Provider, Hooks: hooks,
+		Resolved: api.ResolvedSpec{
+			Spec: req, Trace: prepared.trace, Provenance: prepared.provenance, Warnings: prepared.warnings,
+		},
+		RuntimePresets: prepared.runtimePresets,
+		RuntimeProfile: prepared.runtimeProfile,
+		Config:         captainai.Config{Model: req.Model, Budget: req.Budget, NoCache: req.NoCache, SessionID: providerSessionID},
+		Provider:       opts.Provider, Hooks: state.hookList(nil),
 		CallerOwnsCommits: req.Workflow != nil && len(req.Workflow.Commits) > 0,
-		Verify:            capverify.Options{Timeout: prepared.timeout, Progress: exec.RecordVerifyProgress},
+		Verify:            capverify.Options{Timeout: prepared.timeout},
 		OnEvent: func(_ int, ev captainai.Event) {
+			state.eventMu.Lock()
+			defer state.eventMu.Unlock()
 			h.handleEvent(exec, ev, state.execution, todo, &state.sawResult, state.meta)
 		},
-		Timeout: prepared.timeout, Constraints: prepared.constraints,
+		Timeout: prepared.timeout,
 		// Changes are relative to the repository, even when a TODO runs in a subdirectory.
 		Repo: utils.GitRoot(prepared.workDir),
 	}
-	if opts.Broker != nil {
-		state.input.Config.CanUseTool = state.canUseTool
+	if opts.Approvals {
+		state.input.Approvals = &promptrun.ApprovalOptions{RequestedBy: "gavel-dashboard"}
 	}
 	return state
 }
 
-func (in *stepInput) canUseTool(ctx context.Context, req api.PermissionRequest) (api.PermissionDecision, error) {
-	if in.broker == nil {
-		return api.PermissionDecision{}, fmt.Errorf("tool approval broker is not initialized for this run")
+// hookList is the hook order promptrun is handed: gavel's hooks, the admission
+// hook of a recorded run, then the setup plugin gavel supplies itself.
+func (in *stepInput) hookList(admitted *admittedHook) []any {
+	hooks := append([]any(nil), in.hooks...)
+	if admitted != nil {
+		hooks = append(hooks, admitted)
 	}
-	return in.broker(ctx, req)
+	if in.setup != nil {
+		hooks = append(hooks, in.setup)
+	}
+	return hooks
 }
 
-func (in *stepInput) start(exec *todos.ExecutorContext, todo *types.TODO, prepared *preparedStep) error {
+// record files the run in Captain's store under the admission the runtime
+// cleared, and runs admitted once that admission is committed.
+func (in *stepInput) record(recording *promptrun.Recording, admitted func() error) {
+	in.input.Record = recording
+	in.input.Hooks = in.hookList(&admittedHook{admitted: admitted})
+}
+
+func (in *stepInput) start(exec *todos.ExecutorContext, todo *types.TODO, prepared *preparedStep) {
 	if sessionID := in.input.Config.SessionID; sessionID != "" {
 		setSessionID(todo, sessionID)
 		exec.RecordSessionID(sessionID)
 	}
-	exec.RecordRunStart(in.meta)
 	exec.Logger.Infof("Resolved TODO runtime: step=%s mode=%s agent=%s provider=%s model=%s effort=%s cwd=%s",
 		prepared.definition.Name, in.meta.Driver, in.meta.Agent, firstNonEmpty(in.meta.Provider, "unknown"),
 		firstNonEmpty(in.meta.ResolvedModel, "default"), firstNonEmpty(in.meta.Effort, "default"), prepared.workDir)
 	gavelai.NormalizeEnv()
-	if in.brokerFactory != nil {
-		broker, err := in.brokerFactory(exec)
-		if err != nil {
-			return err
-		}
-		if broker == nil {
-			return fmt.Errorf("tool approval broker factory returned no callback")
-		}
-		in.broker = broker
-	}
-	exec.SetVerifyProgressHook(in.progress.record)
-	return nil
 }

@@ -2,14 +2,12 @@ package lifecycle
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	captainai "github.com/flanksource/captain/pkg/ai"
 	"github.com/flanksource/captain/pkg/api"
-	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/captain/pkg/promptrun"
 	"github.com/flanksource/captain/pkg/runtimeprofiles"
 	"github.com/flanksource/commons-db/shell"
@@ -18,11 +16,14 @@ import (
 	"github.com/flanksource/gavel/todos/claude"
 	todoprompt "github.com/flanksource/gavel/todos/prompt"
 	"github.com/flanksource/gavel/todos/types"
+	"github.com/google/uuid"
 )
 
 // RunOptions is what the caller decides about one step run; everything else
 // comes from the lifecycle, the project's configuration and the todo.
 type RunOptions struct {
+	Presets        []string
+	PresetsSet     bool
 	RuntimeProfile string
 	// Exec carries the run's logger, transcript and notification sink. Nil gets
 	// a plain context with the standard logger.
@@ -40,8 +41,12 @@ type RunOptions struct {
 	Message string
 	// Concurrent admits the run alongside a live one the caller has confirmed.
 	Concurrent bool
-	// Broker builds the tool-approval callback; nil for a host that cannot answer.
-	Broker todos.ApprovalBroker
+	// Batch are the refs of every todo in the request this run belongs to, so a
+	// triage render can mark the backlog entries whose verdicts are being decided
+	// alongside this one. Empty for a single-todo run.
+	Batch []string
+	// Approvals enables Captain's broker when an attended host can answer requests.
+	Approvals bool
 	// Provider, when set, replaces the one promptrun would build: the seam a test
 	// drives a scripted event stream through. promptrun then adds no setup plugin,
 	// so the host adds one itself.
@@ -62,10 +67,16 @@ type StepOutcome struct {
 	Admission todos.RunPreparationResult
 	// Request is the spec the run was dispatched with.
 	Request api.Spec
+	// Source names who ran a turn gavel did not dispatch — "captain" for a turn
+	// resumed from Captain's session page. Empty for gavel's own runs.
+	Source string
+	// VerifyTarget is the commit a verify step checked; nil for any other step.
+	VerifyTarget *types.VerifyTarget
 }
 
 // preparedStep is a step resolved down to one dispatchable request.
 type preparedStep struct {
+	runtimePresets *runtimeprofiles.PresetResolution
 	runtimeProfile *runtimeprofiles.Resolution
 	definition     todoprompt.Definition
 	class          types.RunMode
@@ -75,11 +86,15 @@ type preparedStep struct {
 	template       string
 	existingPlan   string
 	agent          string
+	// batch are the refs of every todo in the same request, so a triage render can
+	// mark which backlog entries are being decided alongside this one.
+	batch []string
 	// trace is captain's provenance for the spec fold, lowest precedence first.
-	trace       []api.SpecLayer
-	provenance  map[string]api.FieldProvenance
-	warnings    []string
-	constraints api.RuntimeConstraints
+	trace      []api.SpecLayer
+	provenance map[string]api.FieldProvenance
+	warnings   []string
+	// verifyTarget is the commit a verify step checks; nil for any other step.
+	verifyTarget *types.VerifyTarget
 }
 
 // RunStep runs one step of the lifecycle for a todo: the prompt rendered, the
@@ -118,15 +133,22 @@ func (h *Host) Dispatch(ctx context.Context, todo *types.TODO, resolution *Resol
 		return nil, fmt.Errorf("step %s preflight: %w", step.Name, err)
 	}
 	resolution.Warnings = mergeRuntimeWarnings(prepared.warnings, warnings)
-	admission, err := h.admit(exec, todo, step, prepared, opts)
+	admission, err := h.admit(exec, todo, step, prepared, input, opts)
 	if err != nil {
 		return nil, err
 	}
-	d := h.dispatch(exec, todo, prepared, input)
-	h.recordIterations(exec, admission.PromptRunID, &d)
-	outcome := h.collect(exec, todo, step, prepared, d, start)
+	d := h.dispatch(exec, todo, step, prepared, input, start)
+	if input.input.Record != nil && d.out.PromptRunID == uuid.Nil {
+		// Captain names every run it admitted on the result. A recorded run
+		// without one was never admitted: nothing ran, and there is no attempt
+		// to record — the refusal is the dispatch's error, as a refused
+		// preparation is.
+		return nil, fmt.Errorf("step %s: run %s was not admitted: %w", step.Name, admission.PromptRunID, d.err)
+	}
+	outcome := h.collect(step, prepared, d, start)
 	outcome.Admission = admission
 	outcome.Request = prepared.request
+	outcome.VerifyTarget = prepared.verifyTarget
 	status, err := h.Def.Outcome(step, resolution.lc, outcome.Result)
 	if err != nil {
 		return outcome, err
@@ -181,9 +203,10 @@ func (h *Host) prepare(ctx context.Context, todo *types.TODO, step Step, lc Cont
 	}
 	resolved, err := h.resolveProfileLayers(ctx, LayerInput{
 		RequireModel:   class != types.ModeVerify || len(todo.AcceptanceCriteria) > 0,
+		RuntimePresets: h.presetSelection(step.Name, opts.Presets, opts.PresetsSet, prompt.Presets, prompt.PresetsSet),
 		RuntimeProfile: h.profileSelection(step.Name, opts.RuntimeProfile, prompt.RuntimeProfile),
 		Config:         h.Config, Step: step.Name, Frontmatter: prompt.Layers, StepSpec: stepSpec,
-		Todos: []*types.TODO{todo}, Prior: opts.Prior, Host: h.Kind, Request: opts.Request,
+		Todos: []*types.TODO{todo}, Prior: opts.Prior, Request: opts.Request,
 	})
 	if err != nil {
 		return nil, err
@@ -193,7 +216,7 @@ func (h *Host) prepare(ctx context.Context, todo *types.TODO, step Step, lc Cont
 		return nil, err
 	}
 	spec := resolved.Resolved.Spec
-	if err := ValidateSpec(spec); err != nil {
+	if err := ValidateSpec(spec, class); err != nil {
 		return nil, fmt.Errorf("step %s: %w", step.Name, err)
 	}
 	fixture := ""
@@ -221,8 +244,10 @@ func (h *Host) prepare(ctx context.Context, todo *types.TODO, step Step, lc Cont
 	prepared := &preparedStep{
 		definition: definition, class: class, request: spec, timeout: timeout,
 		workDir: workDir, template: prompt.Template, trace: resolved.Resolved.Trace,
-		runtimeProfile: resolved.Profile, constraints: resolved.Resolved.Constraints,
-		provenance: resolved.Resolved.Provenance, warnings: resolved.Resolved.Warnings,
+		runtimePresets: resolved.Presets,
+		runtimeProfile: resolved.Profile,
+		provenance:     resolved.Resolved.Provenance, warnings: resolved.Resolved.Warnings,
+		batch: opts.Batch,
 	}
 	prepared.agent, _ = claude.ResolveAgent(spec.Name)
 	if class != types.ModeVerify {
@@ -250,6 +275,11 @@ func (h *Host) prepare(ctx context.Context, todo *types.TODO, step Step, lc Cont
 			Name: "lifecycle runtime", Paths: []string{"/setup/cwd"},
 		})
 	}
+	if class == types.ModeVerify {
+		if err := h.applyVerifyTarget(ctx, todo, prepared); err != nil {
+			return nil, fmt.Errorf("step %s: %w", step.Name, err)
+		}
+	}
 	return prepared, nil
 }
 
@@ -263,9 +293,10 @@ func (h *Host) render(ctx context.Context, todo *types.TODO, step Step, lc Conte
 	if existing, ok := inputs["existingPlan"].(string); ok {
 		prepared.existingPlan = existing
 	}
-	backlog := ""
+	backlog, labelTaxonomy := "", ""
 	if prepared.definition.Envelope == todoprompt.EnvelopeTriage {
-		backlog = h.backlog(ctx, todo)
+		backlog = h.backlog(ctx, todo, prepared.batch)
+		labelTaxonomy = h.labelTaxonomy(ctx)
 	}
 	req, _, err := todoprompt.Render([]*types.TODO{todo}, todoprompt.Options{
 		WorkDir:      prepared.workDir,
@@ -276,6 +307,7 @@ func (h *Host) render(ctx context.Context, todo *types.TODO, step Step, lc Conte
 		Template:     prepared.template,
 		ExistingPlan: prepared.existingPlan,
 		Backlog:      backlog,
+		Labels:       labelTaxonomy,
 		Inputs:       inputs,
 	})
 	if err != nil {
@@ -294,9 +326,9 @@ func (h *Host) render(ctx context.Context, todo *types.TODO, step Step, lc Conte
 }
 
 // backlog is the duplicate-detection index a triage run compares against. A
-// backlog that cannot be listed degrades duplicate detection but not the other
-// four verdicts, so it is logged rather than fatal.
-func (h *Host) backlog(ctx context.Context, todo *types.TODO) string {
+// backlog that cannot be listed degrades the duplicate and merge verdicts but not
+// the rest, so it is logged rather than fatal.
+func (h *Host) backlog(ctx context.Context, todo *types.TODO, batch []string) string {
 	if h.Provider == nil {
 		return ""
 	}
@@ -307,80 +339,37 @@ func (h *Host) backlog(ctx context.Context, todo *types.TODO) string {
 		logger.Warnf("triage duplicate detection is degraded: could not list the backlog: %v", err)
 		return ""
 	}
-	return todos.BuildBacklogIndex(candidates, []*types.TODO{todo})
+	return todos.BuildBacklogIndex(candidates, []*types.TODO{todo}, batch)
 }
 
-// admit allocates the run's durable Captain identity before anything is
-// dispatched, and wires the provider's persistence to the execution context so
-// the run's session id, runtime, progress and notices land as they happen.
-func (h *Host) admit(exec *todos.ExecutorContext, todo *types.TODO, step Step, prepared *preparedStep, opts RunOptions) (todos.RunPreparationResult, error) {
-	lifecycleProvider, ok := h.Provider.(todos.RunLifecycleProvider)
-	if !ok {
-		return todos.RunPreparationResult{}, nil
+// labelTaxonomy is the closed vocabulary a triage run may propose labels from.
+// It comes from the same resolver todos.ApplyTriage validates against, so the list
+// the agent is shown is exactly the list it is held to — a second source here is
+// how an agent gets rejected for a label the prompt offered it.
+func (h *Host) labelTaxonomy(ctx context.Context) string {
+	if h.Provider == nil {
+		return ""
 	}
-	spec := prepared.request
-	runtime := api.RuntimeOf(spec.Provider, spec.Mode)
-	persistCtx, cancel := todos.PersistenceContext(exec)
-	defer cancel()
-	admission, err := lifecycleProvider.PrepareRun(persistCtx, todo, todos.RunPreparation{
-		Mode: prepared.class, Prompt: step.Name, ExecutorName: h.executorName(prepared),
-		Resume: opts.Resume, Concurrent: opts.Concurrent,
-		Requested: captaindb.PromptRunRuntimeSelection{
-			Provider: runtime.Provider, Mode: string(spec.Mode), Model: spec.Name, Effort: string(spec.Effort),
-		},
-		Spec: spec, RuntimeProfile: prepared.runtimeProfile, SpecTrace: prepared.trace,
-	})
-	if err != nil {
-		return todos.RunPreparationResult{}, fmt.Errorf("prepare native TODO run: %w", err)
-	}
-	exec.RecordRunPrepared(admission)
-	exec.SetSessionIDHook(func(sessionID string) {
-		setSessionID(todo, sessionID)
-		h.updateState(exec, todo, todos.StateUpdate{SessionID: &sessionID})
-	})
-	exec.SetRunStartHook(h.runStartRecorder(exec, todo, prepared.class))
-	exec.SetNoticesHook(func(sessionID string, notices []api.Notice) {
-		provider, ok := h.Provider.(todos.RunNoticeProvider)
-		if !ok {
-			return
-		}
-		// A verify-only step never opens an agent session, so there is no
-		// transcript for its notices to ride on; its verdict reaches the
-		// dashboard as the iteration's VerifyReport instead.
-		if strings.TrimSpace(sessionID) == "" {
-			return
-		}
-		persistCtx, cancel := todos.PersistenceContext(exec)
-		defer cancel()
-		if err := provider.RecordRunNotices(persistCtx, sessionID, notices); err != nil {
-			exec.Logger.Errorf("failed to record run notices: %v", err)
-		}
-	})
-	return admission, nil
+	return todos.LabelTaxonomySection(ctx, h.Provider)
 }
 
 func (h *Host) executorName(prepared *preparedStep) string {
 	return string(prepared.request.Mode) + "-" + prepared.agent
 }
 
-// runStartRecorder persists the resolved runtime when the run starts, and
-// comments it on the todo once the session is known.
-func (h *Host) runStartRecorder(exec *todos.ExecutorContext, todo *types.TODO, class types.RunMode) func(todos.RunStartMetadata) {
+// runStartCommenter comments the resolved runtime on the todo once the run's
+// session is known. Captain records the run's start itself.
+func (h *Host) runStartCommenter(exec *todos.ExecutorContext, todo *types.TODO, class types.RunMode) func(todos.RunStartMetadata) {
 	commented := false
 	return func(meta todos.RunStartMetadata) {
 		if meta.Mode == "" {
 			meta.Mode = string(class)
 		}
-		persistCtx, cancel := todos.PersistenceContext(exec)
-		defer cancel()
-		if lifecycleProvider, ok := h.Provider.(todos.RunLifecycleProvider); ok {
-			if err := lifecycleProvider.RecordRunStart(persistCtx, todo, meta); err != nil {
-				exec.Logger.Errorf("failed to record native TODO run start: %v", err)
-			}
-		}
 		if commented || meta.SessionID == "" || h.Provider == nil {
 			return
 		}
+		persistCtx, cancel := todos.PersistenceContext(exec)
+		defer cancel()
 		if err := h.Provider.Comment(persistCtx, todo, todos.RenderRunStartComment(meta)); err != nil {
 			exec.Logger.Errorf("failed to comment TODO run metadata: %v", err)
 		}
@@ -402,37 +391,20 @@ func (h *Host) updateState(exec *todos.ExecutorContext, todo *types.TODO, update
 	}
 }
 
-// dispatched is what came back from captain, with the two facts only the
-// dispatching context can tell: whether the run was cancelled by its caller,
-// and whether it hit its deadline before reporting a result.
-type dispatched struct {
-	out       promptrun.Result
-	err       error
-	cancelled bool
-	timedOut  bool
-	execution *todos.ExecutionResult
-}
-
-// dispatch drives the request through captain's promptrun seam — provider
-// construction, tool-policy enforcement, the workflow's checks, the setup plugin
-// and the generate→verify loop. What stays here is what is gavel's: the todo's
-// identity on the run, the commit pipeline, the transcript, and the progress
-// sink.
-func (h *Host) dispatch(exec *todos.ExecutorContext, todo *types.TODO, prepared *preparedStep, input *stepInput) dispatched {
-	if err := input.start(exec, todo, prepared); err != nil {
-		return dispatched{err: err, execution: input.execution}
-	}
+// dispatch drives the request through captain's promptrun seam — admission and
+// recording, provider construction, tool-policy enforcement, the workflow's
+// checks, the setup plugin and the generate→verify loop. What stays here is
+// what is gavel's: the todo's identity on the run, the commit pipeline, the
+// transcript, and the classification of its envelope.
+func (h *Host) dispatch(exec *todos.ExecutorContext, todo *types.TODO, step Step, prepared *preparedStep, input *stepInput, start time.Time) dispatched {
+	input.start(exec, todo, prepared)
 	runCtx, cancel := context.WithTimeout(exec, prepared.timeout)
 	defer cancel()
+	if input.input.Record != nil {
+		input.input.Record.Outcome = h.recordedOutcome(runCtx, step, prepared, input, start)
+	}
 	out, err := promptrun.Run(runCtx, input.input)
-	if input.progress.err != nil {
-		err = errors.Join(err, input.progress.err)
-	}
-	return dispatched{
-		out: out, err: err, execution: input.execution,
-		cancelled: errors.Is(context.Cause(runCtx), todos.ErrExecutionCancelled),
-		timedOut:  errors.Is(runCtx.Err(), context.DeadlineExceeded) && !input.sawResult,
-	}
+	return input.dispatched(runCtx, out, err)
 }
 
 func (h *Host) runMetadata(req captainai.Request, providerSessionID string, todo *types.TODO, prepared *preparedStep) todos.RunStartMetadata {

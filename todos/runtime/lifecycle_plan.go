@@ -6,16 +6,16 @@ import (
 	"fmt"
 	"strings"
 
+	captaincli "github.com/flanksource/captain/pkg/cli"
 	captaindb "github.com/flanksource/captain/pkg/database"
+	"github.com/flanksource/captain/pkg/promptrun"
+	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/native"
 	"github.com/flanksource/gavel/todos/types"
 )
 
-var (
-	errPlanContentMissing = errors.New("plan run produced no durable markdown content")
-	resolveSessionPlan    = todos.ResolveSessionPlan
-)
+var resolveSessionPlan = todos.ResolveSessionPlan
 
 // PlanMarkdown returns Captain-owned immutable plan content. Runtime callers
 // never read a portable-file plan pointer or silently execute an unapproved
@@ -104,9 +104,7 @@ func (p *Provider) persistPlanAttempt(ctx context.Context, todo *types.TODO, act
 		switch result.Plan.Status {
 		case types.PlanNew, types.PlanUpdated:
 			if err := p.persistPlanResult(ctx, todo, active, result); err != nil {
-				_ = p.failPromptRun(ctx, active, err.Error())
-				p.clearPrepared(active.issue.ID, active.run.ID)
-				return active, err
+				return active, p.abandonPlanAttempt(ctx, active, err)
 			}
 			return p.loadActiveRun(ctx, todo)
 		case types.PlanUnchanged:
@@ -136,9 +134,7 @@ func (p *Provider) persistPlanAttempt(ctx context.Context, todo *types.TODO, act
 				return active, nil
 			}
 			if err := p.persistPlanResult(ctx, todo, active, result); err != nil {
-				_ = p.failPromptRun(ctx, active, err.Error())
-				p.clearPrepared(active.issue.ID, active.run.ID)
-				return active, err
+				return active, p.abandonPlanAttempt(ctx, active, err)
 			}
 			return p.loadActiveRun(ctx, todo)
 		}
@@ -156,17 +152,29 @@ func (p *Provider) persistPlanAttempt(ctx context.Context, todo *types.TODO, act
 			recovered.ExecutorName = result.ExecutorName
 		}
 		if err := p.persistPlanResult(ctx, todo, active, recovered); err != nil {
-			if !errors.Is(err, errPlanContentMissing) {
+			if !errors.Is(err, captaincli.ErrNoPlan) {
 				return active, err
 			}
+			// A failed plan run need not have left a plan; the attempt records the
+			// failure, and why nothing was recovered is kept where it is visible.
+			logger.Warnf("plan run %s of issue %s left no plan to recover: %v", active.run.ID, active.issue.ID, err)
 			return active, nil
 		}
 		return p.loadActiveRun(ctx, todo)
 	}
 }
 
+// abandonPlanAttempt ends a plan run whose plan could not be persisted. A run
+// still parked is failed with the reason; one Captain already finished keeps
+// its state, and the persistence error is the attempt's to report.
+func (p *Provider) abandonPlanAttempt(ctx context.Context, active *activeRun, persistErr error) error {
+	failErr := p.failRun(ctx, active.run, persistErr.Error())
+	p.clearPrepared(active.issue.ID, active.run.ID)
+	return errors.Join(persistErr, failErr)
+}
+
 func (p *Provider) persistPlanResult(ctx context.Context, todo *types.TODO, active *activeRun, result *todos.ExecutionResult) error {
-	markdown, path, err := planResultContent(result, planResolutionSessionID(todo, active.run))
+	markdown, path, err := p.planResultContent(ctx, result, planResolutionSessionID(todo, active.run))
 	if err != nil {
 		return err
 	}
@@ -220,36 +228,34 @@ func (p *Provider) persistPlanResult(ctx context.Context, todo *types.TODO, acti
 	return p.replaceTODO(ctx, todo, persisted.Issue, todo.CWD)
 }
 
-func planResultContent(result *todos.ExecutionResult, sessionID string) (content, path string, err error) {
+// planResultContent is the plan a run produced: the file it reported, the
+// content it returned, or — when it reported neither — the plan Captain
+// resolves from its session. A session with no plan is captaincli.ErrNoPlan;
+// any other resolver error is returned as the resolver's own.
+func (p *Provider) planResultContent(ctx context.Context, result *todos.ExecutionResult, sessionID string) (content, path string, err error) {
 	if result != nil && result.Plan != nil {
 		path = strings.TrimSpace(result.Plan.Path)
 	}
-	// The native plan file is authoritative when the agent supplies one.
-	// Codex commonly puts the detailed plan there while plan.content is only a
-	// short completion summary, so preferring inline content truncates the
-	// immutable Captain revision and the dashboard's Plan tab.
 	if path != "" {
 		read, _, exists, readErr := todos.ReadPlanFile(path)
 		if readErr != nil {
 			return "", path, readErr
 		}
-		if exists && strings.TrimSpace(read) != "" {
-			return strings.TrimSpace(read), path, nil
+		if !exists || strings.TrimSpace(read) == "" {
+			return "", path, fmt.Errorf("reported plan path %q is missing or empty", path)
 		}
+		return strings.TrimSpace(read), path, nil
 	}
 	if result != nil && result.Plan != nil {
 		if content = strings.TrimSpace(result.Plan.Content); content != "" {
 			return content, path, nil
 		}
 	}
-	resolvedPath, resolved := resolveSessionPlan(sessionID)
-	if strings.TrimSpace(resolved) != "" {
-		if path == "" {
-			path = resolvedPath
-		}
-		return strings.TrimSpace(resolved), path, nil
+	resolvedPath, resolved, err := resolveSessionPlan(ctx, p.captain, sessionID)
+	if err != nil {
+		return "", path, fmt.Errorf("recover the plan of session %q: %w", strings.TrimSpace(sessionID), err)
 	}
-	return "", path, fmt.Errorf("%w for session %q", errPlanContentMissing, strings.TrimSpace(sessionID))
+	return strings.TrimSpace(resolved), resolvedPath, nil
 }
 
 func planResolutionSessionID(todo *types.TODO, run *captaindb.PromptRun) string {
@@ -271,7 +277,9 @@ func normalizePlanResultMarkdown(markdown string) string {
 	return strings.TrimSpace(markdown)
 }
 
-func (p *Provider) attachInputPlan(ctx context.Context, issue *native.Issue, mode types.RunMode, input *captaindb.CreatePromptRunInput) error {
+// attachInputPlan names the plan revision a run executes: the approved one for
+// an implementation run, the latest for a planning run that revises it.
+func (p *Provider) attachInputPlan(ctx context.Context, issue *native.Issue, mode types.RunMode, input *promptrun.Recording) error {
 	if issue.SelectedPlanID == nil || mode == types.ModeVerify {
 		return nil
 	}

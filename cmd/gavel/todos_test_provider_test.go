@@ -9,6 +9,7 @@ import (
 
 	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/gavel/todos"
+	"github.com/flanksource/gavel/todos/native"
 	"github.com/flanksource/gavel/todos/types"
 )
 
@@ -191,6 +192,12 @@ func (p *testTODOProvider) SaveAttempt(context.Context, *types.TODO, *todos.Exec
 // lifecycle sees no runs and suggests the first step that applies.
 func (p *testTODOProvider) RunHistory(context.Context, *types.TODO) ([]todos.StepRunRecord, error) {
 	return nil, nil
+}
+
+// LatestRunWorktree reports no run worktree for the same reason: a verify step
+// checks the main checkout.
+func (p *testTODOProvider) LatestRunWorktree(context.Context, *types.TODO) (*native.RunWorktree, error) {
+	return nil, native.ErrNoRunWorkspace
 }
 
 func (p *testTODOProvider) SupportsGroupedExecution() bool { return false }

@@ -1,5 +1,7 @@
+import { isSessionInspectorTab, type SessionInspectorTab } from '@flanksource/clicky-ui/ai';
 import type { PRItem } from './types';
 import { emptyFilters, type Filters, type FilterMode } from './components/FilterBar';
+import { isTodoDetailTab, type TodoDetailTabKey } from './components/todos/TodoDetailTabs';
 
 export type ExportFormat = 'json' | 'md';
 
@@ -13,14 +15,43 @@ const SPA_TABS: readonly Tab[] = ['projects', 'todos', 'activity', 'tasks', 'pro
 export interface RouteState {
   tab: Tab;
   selectedPath: string;
+  // scopeProject is the dashboard-wide project filter encoded as
+  // ?project=<name> on every top-level route.
+  scopeProject: string;
   projectDiffPath: string;
   projectRunId: string;
   projectHistory: boolean;
   projectResults: boolean;
-  // promptScope is the project whose config chain the prompts tab resolves
-  // against (?project=<name>); empty means the global scope.
-  promptScope: string;
+  // todoView is what the selected todo's detail pane shows, encoded as
+  // ?tab=&sessionTab=&sessions= on /todos/{ref}. Query params, not path
+  // segments, because a todo ref may itself contain "/". Unset fields mean the
+  // pane's defaults (and are left out of the URL).
+  todoView: TodoDetailView;
   filters: Filters;
+}
+
+export interface TodoDetailView {
+  tab?: TodoDetailTabKey;
+  sessionTab?: SessionInspectorTab;
+  // Attempt (prompt run) ids selected in the Session tab's inspector.
+  sessionIds?: string[];
+}
+
+function parseTodoView(params: URLSearchParams): TodoDetailView {
+  const tab = params.get('tab') ?? '';
+  const sessionTab = params.get('sessionTab') ?? '';
+  const sessionIds = splitCSV(params.get('sessions'));
+  return {
+    ...(isTodoDetailTab(tab) ? { tab } : {}),
+    ...(isSessionInspectorTab(sessionTab) ? { sessionTab } : {}),
+    ...(sessionIds.length ? { sessionIds } : {}),
+  };
+}
+
+function setTodoViewParams(params: URLSearchParams, view: TodoDetailView) {
+  if (view.tab) params.set('tab', view.tab);
+  if (view.sessionTab) params.set('sessionTab', view.sessionTab);
+  if (view.sessionIds?.length) params.set('sessions', view.sessionIds.join(','));
 }
 
 function splitCSV(value: string | null): string[] {
@@ -60,14 +91,16 @@ export function parseRoute(location: Location): RouteState {
   }
 
   const params = new URLSearchParams(location.search);
+  const scopeProject = params.get('project') ?? '';
   return {
     tab,
     selectedPath,
+    scopeProject,
     projectDiffPath: tab === 'projects' && !projectRunId ? params.get('diff') ?? '' : '',
     projectRunId,
     projectHistory: tab === 'projects' && (projectRunId !== '' || params.get('history') === 'true'),
     projectResults: tab === 'projects' && params.get('results') === 'true',
-    promptScope: tab === 'prompts' ? params.get('project') ?? '' : '',
+    todoView: tab === 'todos' && selectedPath ? parseTodoView(params) : {},
     filters: {
       state: parseFacet(params.get('state')),
       checks: parseFacet(params.get('checks')),
@@ -86,12 +119,11 @@ export function buildRoute(state: RouteState): string {
     segments.push(...state.selectedPath.split('/').map(encodeURIComponent));
   }
 
-  // PR selection and filters only apply to the prs tab; todos/activity are
-  // plain /todos and /activity routes; prompts carry their scope project.
+  // The project scope applies dashboard-wide. PR facets and project detail
+  // options remain specific to their owning tabs.
   const params = new URLSearchParams();
-  if (state.tab === 'prompts') {
-    if (state.promptScope) params.set('project', state.promptScope);
-  } else if (state.tab === 'prs') {
+  if (state.scopeProject) params.set('project', state.scopeProject);
+  if (state.tab === 'prs') {
     const { state: st, checks, repos, authors } = state.filters;
     if (Object.keys(st).length) params.set('state', buildFacet(st));
     if (Object.keys(checks).length) params.set('checks', buildFacet(checks));
@@ -101,6 +133,8 @@ export function buildRoute(state: RouteState): string {
     if (!state.projectRunId && state.projectDiffPath) params.set('diff', state.projectDiffPath);
     if (!state.projectRunId && state.projectHistory) params.set('history', 'true');
     if (state.projectResults) params.set('results', 'true');
+  } else if (state.tab === 'todos' && state.selectedPath) {
+    setTodoViewParams(params, state.todoView);
   }
 
   const query = params.toString();
@@ -129,11 +163,12 @@ export function emptyRouteState(): RouteState {
   return {
     tab: 'prs',
     selectedPath: '',
+    scopeProject: '',
     projectDiffPath: '',
     projectRunId: '',
     projectHistory: false,
     projectResults: false,
-    promptScope: '',
+    todoView: {},
     filters: emptyFilters(),
   };
 }

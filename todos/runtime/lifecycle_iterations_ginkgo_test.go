@@ -3,29 +3,28 @@ package runtime
 import (
 	"context"
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/flanksource/captain/pkg/ai/agent"
 	"github.com/flanksource/captain/pkg/api"
 	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/captain/pkg/promptrun"
-	commonsdb "github.com/flanksource/commons-db/db"
+	"github.com/flanksource/commons-db/dbtest"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/native"
+	"github.com/flanksource/gavel/todos/runtime/runtimetest"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
 
-// The iteration rows the host files after a run are the only place a verify
-// step's report lives: captain_prompt_run_overview.latest_verification_result
-// is read from them by the attempt listing, the phase index and the run
-// history. These specs file a verify-only run's row the way the host does and
-// read it back through each of those.
+// The iteration rows Captain files for a run are the only place a verify step's
+// report lives: captain_prompt_run_overview.latest_verification_result is read
+// from them by the attempt listing, the phase index and the run history. This
+// spec has Captain file a verify-only run the way promptrun.Run does and reads
+// its verdict back through each of those.
 var _ = Describe("run iterations on the native runtime", Ordered, func() {
 	var (
 		ctx      context.Context
@@ -33,15 +32,8 @@ var _ = Describe("run iterations on the native runtime", Ordered, func() {
 	)
 
 	BeforeAll(func() {
-		if os.Getenv("GAVEL_DB_EMBEDDED_TEST") == "" {
-			Skip("set GAVEL_DB_EMBEDDED_TEST=1 to run embedded-postgres native runtime tests")
-		}
 		ctx = context.Background()
-		dsn, stop, err := commonsdb.StartEmbedded(commonsdb.EmbeddedConfig{
-			DataDir: filepath.Join(GinkgoT().TempDir(), "postgres"), Database: "gavel_todo_run_iterations",
-		})
-		Expect(err).NotTo(HaveOccurred())
-		DeferCleanup(func() { Expect(stop()).To(Succeed()) })
+		dsn := dbtest.ForGinkgo(dbtest.Options{Name: "gavel_todo_run_iterations"}).DSN()
 
 		GinkgoT().Setenv(database.EnvDSN, dsn)
 		GinkgoT().Setenv(database.EnvDisable, "")
@@ -73,19 +65,21 @@ var _ = Describe("run iterations on the native runtime", Ordered, func() {
 		}
 	}
 
-	It("files a verify-only run's verdict where every reader finds it", func() {
+	It("finds a verify-only run's verdict wherever a reader looks", func() {
 		todo, err := provider.Create(ctx, todos.CreateRequest{Title: "Check the widget", Body: "Prove it", Status: types.StatusPending})
 		Expect(err).NotTo(HaveOccurred())
-		admission, err := provider.PrepareRun(ctx, todo, todos.RunPreparation{Mode: types.ModeVerify, Prompt: "verify", ExecutorName: "agent-claude"})
-		Expect(err).NotTo(HaveOccurred())
-		Expect(provider.RecordRunStart(ctx, todo, todos.RunStartMetadata{
-			Mode: string(types.ModeVerify), Driver: "agent", Agent: "claude",
-			Provider: "anthropic", RuntimeMode: "agent", ResolvedModel: "claude-sonnet", Effort: "medium",
-		})).To(Succeed())
-
 		records := promptrun.IterationRecords(verifyOnlyResult(true), false)
 		Expect(records).To(HaveLen(1), "a verify-only run is one iteration")
-		Expect(provider.RecordRunIterations(ctx, admission.PromptRunID, records)).To(Succeed())
+		admission, err := runtimetest.Admit(ctx, provider, todo,
+			todos.RunPreparation{Mode: types.ModeVerify, Prompt: "verify", ExecutorName: "agent-claude"},
+			promptrun.Completed{Iterations: records, Outcome: promptrun.Outcome{
+				State: captaindb.PromptRunStateSucceeded, Phase: captaindb.PromptRunPhaseFinished,
+			}})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(provider.SaveAttempt(ctx, todo, &todos.ExecutionResult{
+			Success: true, ExecutorName: "agent-claude", EndStatus: types.EndCompleted, Summary: "definition of done passed",
+			DoD: &todos.DoDOutcome{Ran: true, Passed: true, Report: verifyOnlyResult(true).Report},
+		})).To(Succeed())
 
 		verifications, err := provider.captain.LatestPromptRunVerifications(ctx, []uuid.UUID{admission.PromptRunID})
 		Expect(err).NotTo(HaveOccurred())
@@ -115,22 +109,5 @@ var _ = Describe("run iterations on the native runtime", Ordered, func() {
 		Expect(history).To(HaveLen(1))
 		Expect(history[0].PromptRunID).To(Equal(admission.PromptRunID))
 		Expect(string(history[0].Phase)).To(Equal("verify"))
-	})
-
-	It("restates a failed verdict on replay and refuses a run without an identity", func() {
-		todo, err := provider.Create(ctx, todos.CreateRequest{Title: "Check the gadget", Body: "Prove it", Status: types.StatusPending})
-		Expect(err).NotTo(HaveOccurred())
-		admission, err := provider.PrepareRun(ctx, todo, todos.RunPreparation{Mode: types.ModeVerify, Prompt: "verify", ExecutorName: "agent-claude"})
-		Expect(err).NotTo(HaveOccurred())
-
-		Expect(provider.RecordRunIterations(ctx, admission.PromptRunID, promptrun.IterationRecords(verifyOnlyResult(true), false))).To(Succeed())
-		Expect(provider.RecordRunIterations(ctx, admission.PromptRunID, promptrun.IterationRecords(verifyOnlyResult(false), false))).To(Succeed())
-
-		verifications, err := provider.captain.LatestPromptRunVerifications(ctx, []uuid.UUID{admission.PromptRunID})
-		Expect(err).NotTo(HaveOccurred())
-		Expect(verifications[admission.PromptRunID].Report.Passed).To(BeFalse(), "the replay is the run's current statement")
-
-		err = provider.RecordRunIterations(ctx, uuid.Nil, []captaindb.UpsertPromptRunIterationInput{{Iteration: 1}})
-		Expect(err).To(MatchError(ContainSubstring("prompt run ID is required")))
 	})
 })

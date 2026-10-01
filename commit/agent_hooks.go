@@ -19,6 +19,9 @@ type AgentHooksOptions struct {
 	// it makes every commit a fixup chain must not be, so pair it with
 	// `mode: commit`.
 	Push bool
+	// PushBranch, with Push, is the remote branch every commit is pushed to (see
+	// Options.PushBranch).
+	PushBranch string
 }
 
 // AgentHooks builds captain commit hooks from a run's spec, one per declared
@@ -33,7 +36,7 @@ func AgentHooks(opts AgentHooksOptions) []any {
 	hooks := make([]any, 0, len(opts.Commits))
 	for _, spec := range opts.Commits {
 		hook := capcommit.New(spec)
-		hook.Do = agentCommitter(opts.Meta, spec.Message != "", opts.Push)
+		hook.Do = agentCommitter(opts, spec.Message != "")
 		hooks = append(hooks, hook)
 	}
 	return hooks
@@ -43,19 +46,21 @@ func AgentHooks(opts AgentHooksOptions) []any {
 // keepSubject forwards captain's subject only when the spec named one: left
 // empty the pipeline generates the message, which is the reason to route
 // through it rather than committing with plain git.
-func agentCommitter(meta AgentRunMetadata, keepSubject, push bool) func(*agent.HookContext, capcommit.Plan) (string, error) {
+func agentCommitter(opts AgentHooksOptions, keepSubject bool) func(*agent.HookContext, capcommit.Plan) (string, error) {
 	return func(hc *agent.HookContext, plan capcommit.Plan) (string, error) {
+		meta := opts.Meta
 		if meta.SessionID == "" && hc.Turn != nil {
 			// A provider that generates its own session id only reports it once the
 			// first turn is underway; the trailer needs whatever it settled on.
 			meta.SessionID = hc.Turn.SessionID
 		}
 		run := AgentRun{
-			WorkDir: plan.Dir,
-			Meta:    meta,
-			Fixup:   plan.Anchor,
-			DryRun:  plan.DryRun,
-			Push:    push,
+			WorkDir:    plan.Dir,
+			Meta:       meta,
+			Fixup:      plan.Anchor,
+			DryRun:     plan.DryRun,
+			Push:       opts.Push,
+			PushBranch: opts.PushBranch,
 			// Captain selected the path set for this boundary; staging exactly it
 			// keeps unrelated working-tree changes out of the commit. A fixup
 			// resolves its own paths from the anchor, and the two are mutually
@@ -71,7 +76,13 @@ func agentCommitter(meta AgentRunMetadata, keepSubject, push bool) func(*agent.H
 		}
 		result, err := RunAfterAgent(hc.Context, run)
 		// A turn that edited nothing stageable is a normal outcome, not a
-		// failure: the hook records no commit and the run continues.
+		// failure: the hook records no commit and the run continues. So is a turn
+		// that left a merge half-resolved — the merge stays for the next turn,
+		// and the run's verify commands feed back which paths remain.
+		if errors.Is(err, ErrMergeUnresolved) {
+			hc.Notify("[post-%s] %v — not committing", plan.Phase, err)
+			return "", nil
+		}
 		if errors.Is(err, ErrNothingStaged) || errors.Is(err, ErrSessionNoFiles) {
 			return "", nil
 		}

@@ -29,31 +29,57 @@ type GavelConfigTrace struct {
 	Merged     GavelConfig         `json:"merged" yaml:"merged"`
 }
 
+// LoadGavelConfig merges the built-in defaults with the user's home config, the
+// git root's, then cwd's. A missing file is an absent layer; any other read,
+// parse or validation error fails the load — discarding one used to run a
+// project with a typo in its .gavel.yaml on built-in defaults. Results are cached per directory
+// against the exact bytes of every consulted file (see gavelConfigCache), and
+// each call returns its own deep copy, so callers may mutate what they get.
 func LoadGavelConfig(cwd string) (GavelConfig, error) {
+	absCwd, err := filepath.Abs(cwd)
+	if err != nil {
+		return GavelConfig{}, fmt.Errorf("resolve config directory %q: %w", cwd, err)
+	}
+	layers, err := readGavelConfigLayers(gavelConfigChain(absCwd))
+	if err != nil {
+		return GavelConfig{}, err
+	}
+	if cached, ok := cachedGavelConfig(absCwd, layers); ok {
+		return cloneGavelConfig(cached)
+	}
+
 	cfg := DefaultGavelConfig()
-
-	home, err := os.UserHomeDir()
-	if err == nil {
-		if cfg, err = mergeFromFile(cfg, filepath.Join(home, ".gavel.yaml")); err != nil {
+	for _, layer := range layers {
+		if !layer.exists {
+			continue
+		}
+		parsed, err := parseGavelConfig(layer.path, layer.data)
+		if err != nil {
 			return GavelConfig{}, err
 		}
+		cfg = MergeGavelConfig(cfg, parsed)
 	}
+	storeGavelConfig(absCwd, layers, cfg)
+	return cloneGavelConfig(cfg)
+}
 
-	gitRoot := repomap.FindGitRoot(cwd)
+// gavelConfigChain lists the .gavel.yaml paths LoadGavelConfig consults for
+// absCwd, lowest precedence first. $HOME and the git root are resolved on every
+// call, so a changed $HOME or a newly created .git moves the chain — and with it
+// the cache fingerprint.
+func gavelConfigChain(absCwd string) []string {
+	var paths []string
+	if home, err := os.UserHomeDir(); err == nil {
+		paths = append(paths, filepath.Join(home, GavelConfigFileName))
+	}
+	gitRoot := repomap.FindGitRoot(absCwd)
 	if gitRoot != "" {
-		if cfg, err = mergeFromFile(cfg, filepath.Join(gitRoot, ".gavel.yaml")); err != nil {
-			return GavelConfig{}, err
-		}
+		paths = append(paths, filepath.Join(gitRoot, GavelConfigFileName))
 	}
-
-	absCwd, _ := filepath.Abs(cwd)
 	if absCwd != gitRoot {
-		if cfg, err = mergeFromFile(cfg, filepath.Join(absCwd, ".gavel.yaml")); err != nil {
-			return GavelConfig{}, err
-		}
+		paths = append(paths, filepath.Join(absCwd, GavelConfigFileName))
 	}
-
-	return cfg, nil
+	return paths
 }
 
 // LoadGavelConfigTrace resolves the effective config for the provided file or
@@ -144,30 +170,41 @@ func loadSingleGavelConfig(path string) (GavelConfig, string, error) {
 	if err != nil {
 		return GavelConfig{}, "", err
 	}
+	gc, err := parseGavelConfig(path, data)
+	if err != nil {
+		return GavelConfig{}, "", err
+	}
+	return gc, string(data), nil
+}
+
+// parseGavelConfig decodes and validates the bytes of the .gavel.yaml at path,
+// stamping prompt base directories with path's directory.
+func parseGavelConfig(path string, data []byte) (GavelConfig, error) {
+	gavelConfigParses.Add(1)
 	document, err := decodeYAMLDocument(data)
 	if err != nil {
-		return GavelConfig{}, "", fmt.Errorf("parse %s: %w", path, err)
+		return GavelConfig{}, fmt.Errorf("parse %s: %w", path, err)
 	}
 	var value any
 	if err := document.Decode(&value); err != nil {
-		return GavelConfig{}, "", fmt.Errorf("parse %s: %w", path, err)
+		return GavelConfig{}, fmt.Errorf("parse %s: %w", path, err)
 	}
 	encoded, err := yaml.YAMLToJSON(data)
 	if err != nil {
-		return GavelConfig{}, "", fmt.Errorf("parse %s: %w", path, err)
+		return GavelConfig{}, fmt.Errorf("parse %s: %w", path, err)
 	}
 	var gc GavelConfig
 	if err := DecodeJSON(encoded, &gc, DecodeOptions{Source: path, Renames: legacyFieldHints}); err != nil {
-		return GavelConfig{}, "", err
+		return GavelConfig{}, err
 	}
 	if err := gc.Todos.Validate(); err != nil {
-		return GavelConfig{}, "", fmt.Errorf("%s: %w", path, err)
+		return GavelConfig{}, fmt.Errorf("%s: %w", path, err)
 	}
 	if err := validateConfigSpecLayers(gc, path); err != nil {
-		return GavelConfig{}, "", err
+		return GavelConfig{}, err
 	}
 	setPromptSpecBaseDirs(&gc, filepath.Dir(path))
-	return gc, string(data), nil
+	return gc, nil
 }
 
 func SaveGavelConfig(dir string, cfg GavelConfig) error {
@@ -188,22 +225,6 @@ func SaveGavelConfig(dir string, cfg GavelConfig) error {
 		return err
 	}
 	return os.WriteFile(path, data, 0o644)
-}
-
-// mergeFromFile layers one .gavel.yaml onto base. A missing file is the ordinary
-// case — that layer simply does not exist — but every other error is fatal: an
-// unreadable or unparseable config, or one carrying an invalid enum, used to be
-// discarded here, so a typo anywhere in .gavel.yaml silently ran the whole
-// project on built-in defaults instead of the settings it declared.
-func mergeFromFile(base GavelConfig, path string) (GavelConfig, error) {
-	cfg, err := LoadSingleGavelConfig(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return base, nil
-		}
-		return base, err
-	}
-	return MergeGavelConfig(base, cfg), nil
 }
 
 func resolveGavelConfigTarget(path string) (string, string, error) {

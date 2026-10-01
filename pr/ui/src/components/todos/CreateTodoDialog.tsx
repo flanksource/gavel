@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Modal, Field, Button, Select } from '@flanksource/clicky-ui/components';
 import type { Project, TodoItem, TodoPriority, TodoStatus } from '../../types';
 import { ScreenshotPicker, todoFormData, useAttachments } from './attachments';
@@ -13,47 +13,45 @@ function initialDir(defaultDir: string | undefined, workspaces: Project[]): stri
   return workspaces[0]?.dir ?? '';
 }
 
-// CreateTodoDialog is a modal form for adding a todo to a chosen workspace.
-export function CreateTodoDialog({
-  open,
-  onClose,
-  workspaces,
-  onCreated,
-  defaultDir,
-}: {
-  open: boolean;
+// The todo a new child hangs under. Its workspace is the child's workspace, so
+// a child form has no workspace to choose.
+export interface CreateTodoParent {
+  ref: string;
+  title: string;
+  dir: string;
+}
+
+type CreateTodoFormProps = {
   onClose: () => void;
-  workspaces: Project[];
   onCreated: (dir: string, todo: TodoItem) => void;
   // defaultDir preselects the workspace (the current todo's) when the dialog opens.
   defaultDir?: string;
-}) {
-  const [dir, setDir] = useState(() => initialDir(defaultDir, workspaces));
+} & (
+  | { workspaces: Project[]; parent?: undefined }
+  | { parent: CreateTodoParent; workspaces?: undefined }
+);
+
+// CreateTodoDialog is a modal form for adding a todo to a chosen workspace, or
+// as a child of `parent`. The form mounts on open, so each opening starts from a
+// fresh draft while prop changes during editing (a re-filtered workspaces list,
+// a new selection) leave the draft alone.
+export function CreateTodoDialog({ open, ...props }: CreateTodoFormProps & { open: boolean }) {
+  if (!open) return null;
+  return <CreateTodoForm {...props} />;
+}
+
+function CreateTodoForm({ onClose, workspaces, parent, onCreated, defaultDir }: CreateTodoFormProps) {
+  const [chosenDir, setDir] = useState(() => initialDir(defaultDir, workspaces ?? []));
+  const dir = parent ? parent.dir : chosenDir;
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
   const [priority, setPriority] = useState<TodoPriority>('medium');
   const [status, setStatus] = useState<TodoStatus>('pending');
   const [error, setError] = useState('');
-  // Capture a pasted screenshot only while the dialog is open — it stays mounted
-  // (closed) in the dashboard, so an always-on listener would hijack paste.
-  const { attachments, previews, add, remove, clear } = useAttachments({ pasteAnywhere: open });
+  // The paste listener lives only while the form is mounted, i.e. while open.
+  const { attachments, previews, add, remove } = useAttachments({ pasteAnywhere: true });
   const createTodo = useCreateTodoMutation(dir);
   const busy = createTodo.isPending;
-
-  useEffect(() => {
-    if (open) {
-      setDir(initialDir(defaultDir, workspaces));
-      setTitle('');
-      setBody('');
-      setPriority('medium');
-      setStatus('pending');
-      setError('');
-      createTodo.reset();
-      clear();
-    }
-  }, [open, workspaces, defaultDir, clear, createTodo.reset]);
-
-  if (!open) return null;
 
   async function submit() {
     if (!title.trim() || !dir || busy) return;
@@ -61,11 +59,12 @@ export function CreateTodoDialog({
     try {
       // /api/todos/new accepts both JSON and multipart; post the image bytes as
       // multipart when screenshots are attached, otherwise the lighter JSON path.
+      const fields = { title, body, priority, status, ...(parent ? { parent: parent.ref } : {}) };
       const result = await createTodo.mutateAsync(attachments.length
-        ? { body: todoFormData({ title, body, priority, status }, attachments) }
+        ? { body: todoFormData(fields, attachments) }
         : {
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ title, body, priority, status }),
+            body: JSON.stringify(fields),
           });
       onCreated(dir, result.todo);
     } catch (err) {
@@ -77,7 +76,7 @@ export function CreateTodoDialog({
     <Modal
       open
       onClose={onClose}
-      title="New todo"
+      title={parent ? 'New child todo' : 'New todo'}
       size="xl"
       footer={
         <div className="flex justify-end gap-2">
@@ -88,11 +87,17 @@ export function CreateTodoDialog({
     >
       <div className="space-y-3">
         {error && <div className="text-sm text-destructive">{error}</div>}
-        <Field label="Workspace">
-          <Select value={dir} onChange={e => setDir(e.currentTarget.value)} className={inputClass} aria-label="Workspace">
-            {workspaces.map(w => <option key={w.dir} value={w.dir}>{w.name}</option>)}
-          </Select>
-        </Field>
+        {parent ? (
+          <Field label="Child of">
+            <div className={`${inputClass} truncate`} title={parent.title}>{parent.title}</div>
+          </Field>
+        ) : (
+          <Field label="Workspace">
+            <Select value={dir} onChange={e => setDir(e.currentTarget.value)} className={inputClass} aria-label="Workspace">
+              {workspaces.map(w => <option key={w.dir} value={w.dir}>{w.name}</option>)}
+            </Select>
+          </Field>
+        )}
         <Field label="Title">
           <input
             className={inputClass}

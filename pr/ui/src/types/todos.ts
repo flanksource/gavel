@@ -39,7 +39,14 @@ export interface TodoEvent {
   label?: string;
   old_label?: string;
   new_label?: string;
+  // The event's structured detail as the provider recorded it, e.g. a
+  // run_landed event's via / targetBranch / landedSha / prNumber / prUrl.
+  payload?: Record<string, unknown>;
 }
+
+// What archiving a parent does to its open children: archive them too, or make
+// them full (top-level) todos. The server refuses to choose for the person.
+export type TodoChildDisposition = 'archive' | 'detach';
 
 export interface TodoItem {
   ref: string;
@@ -47,6 +54,9 @@ export interface TodoItem {
   shortId?: string;
   version?: number;
   workspaceId?: string;
+  // Full id of the parent todo. Present only on a child; a child cannot have
+  // children of its own, so a todo with this set is never itself a parent.
+  parentId?: string;
   executionState?: string;
   title: string;
   status: TodoStatus;
@@ -144,6 +154,10 @@ export interface TodoPhaseRun {
   // render it by ticking from started_at rather than re-reading this.
   duration_ms?: number;
   cost_usd?: number;
+  // The prompt run behind this phase. A run that verified in-run is reported
+  // under both run and verify with the same id and the run's whole duration and
+  // cost, so anything summing phases counts each id once.
+  prompt_run_id?: string;
   // The phase executing right now, as opposed to the one that ran most recently.
   active?: boolean;
 }
@@ -277,24 +291,6 @@ export interface TodoTagRemoval {
   definition: boolean;
   /** How many todos the tag was stripped from. */
   todos: number;
-}
-
-// One git commit linked to a todo via its Gavel-Issue-Id trailer. url is the
-// commit's page on the origin remote, absent for a local-only repo.
-export interface TodoCommit {
-  hash: string;
-  shortHash: string;
-  subject: string;
-  author?: string;
-  date?: string;
-  url?: string;
-}
-
-export interface TodoCommitsResponse {
-  // issueId is the todo's id that commits were matched against; absent for
-  // malformed or incomplete responses that carry no id.
-  issueId?: string;
-  commits: TodoCommit[];
 }
 
 // One commit's rendered diff (ANSI-colored `git show` output). truncated is set

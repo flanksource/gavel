@@ -7,16 +7,18 @@ import { Spinner } from '../../icons/Spinner';
 import { inputClass, todoQuery } from './format';
 import { defaultRunOptions, loadLastTodoRunOptions, normalizeRunOptions, requestStepFor, type TodoRunAction } from './run';
 import { PromptRunAdvancedDialog, PromptRunButton } from './PromptRunButton';
-import { invalidateTodoWorkflowCaches, todoMutationJSON } from './todoMutations';
+import { invalidateTodoCaches, invalidateTodoWorkflowCaches, todoMutationJSON } from './todoMutations';
+import { setTodoLaunchProgress, todoMutationStream, updateTodoLaunchProgress } from './todoLaunch';
 
 export interface PlanApproveResult {
   todo: TodoItem;
-  run?: { status: string; message?: string; sessionId?: string };
+  run?: { status: string; message?: string; sessionId?: string; promptRunId?: string };
 }
 
 export interface PlanAnswerResult {
   todo: TodoItem;
   sessionId?: string;
+  promptRunId?: string;
   status: string;
 }
 
@@ -67,6 +69,7 @@ function runRequestOptions(options: TodoRunOptions, action?: TodoRunAction): Tod
   const normalized = action ? normalizeRunOptions(action, options) : options;
   return {
     step: action ? requestStepFor(normalized) : undefined,
+    presets: normalized.presets,
     runtimeProfile: normalized.runtimeProfile,
     spec: normalized.spec,
     resume: normalized.resume,
@@ -74,23 +77,49 @@ function runRequestOptions(options: TodoRunOptions, action?: TodoRunAction): Tod
   };
 }
 
-function usePlanActionMutation<TResult extends { todo: TodoItem }, TVariables>(
+function usePlanActionMutation<TResult extends { todo: TodoItem; run?: { promptRunId?: string; sessionId?: string }; promptRunId?: string; sessionId?: string }, TVariables>(
   dir: string,
   action: string,
-  request: (variables: TVariables) => { path: string; body: Record<string, unknown>; context: string },
+  request: (variables: TVariables) => { path: string; body: Record<string, unknown>; context: string; launch?: { ref: string; step: string; spec?: TodoRunOptions['spec'] } },
 ) {
   const client = useQueryClient();
   return useMutation({
     mutationKey: ['todos', 'plan-action', action, { dir: dir.trim() }],
-    mutationFn: (variables: TVariables) => {
-      const { path, body, context } = request(variables);
+    mutationFn: async (variables: TVariables) => {
+      const { path, body, context, launch } = request(variables);
+      const init = { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) };
+      if (launch) {
+        const result = await todoMutationStream<TResult>(
+          `${path}?${todoQuery(dir)}`,
+          init,
+          context,
+          resolved => updateTodoLaunchProgress(client, dir, launch.ref, previous => ({ ...previous, status: 'resolved', step: resolved.step, spec: resolved.spec, specYaml: resolved.specYaml })),
+        );
+        if (!(result.run?.promptRunId || result.promptRunId)) throw new Error(`${context}: response omitted the prompt run ID`);
+        return result;
+      }
       return todoMutationJSON<TResult>(
         `${path}?${todoQuery(dir)}`,
-        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) },
+        init,
         context,
       );
     },
-    onSuccess: result => invalidateTodoWorkflowCaches(client, dir, result.todo),
+    onMutate: variables => {
+      const launch = request(variables).launch;
+      if (launch) setTodoLaunchProgress(client, dir, launch.ref, { status: 'preparing', step: launch.step, requestedSpec: launch.spec });
+    },
+    onSuccess: (result, variables) => {
+      const launch = request(variables).launch;
+      if (launch) updateTodoLaunchProgress(client, dir, launch.ref, previous => ({ ...previous, status: 'admitted', promptRunId: result.run?.promptRunId || result.promptRunId, sessionId: result.run?.sessionId || result.sessionId }));
+      return invalidateTodoWorkflowCaches(client, dir, result.todo);
+    },
+    onError: async (error, variables) => {
+      const launch = request(variables).launch;
+      if (launch) {
+        updateTodoLaunchProgress(client, dir, launch.ref, previous => ({ ...previous, status: 'failed', error: error.message }));
+        await invalidateTodoCaches(client, dir, launch.ref);
+      }
+    },
   });
 }
 
@@ -101,14 +130,15 @@ export function usePlanActions(dir: string) {
     'approve',
     ({ ref, opts }) => {
       const body: Record<string, unknown> = { ref, run: !!opts.run };
-      if (opts.run) body.options = runRequestOptions(opts.options ?? defaultRunOptions, 'run');
-      return { path: '/api/todos/plan/approve', body, context: `Failed to approve plan for todo ${ref}` };
+      const options = opts.run ? runRequestOptions(opts.options ?? defaultRunOptions, 'run') : undefined;
+      if (options) body.options = options;
+      return { path: '/api/todos/plan/approve', body, context: `Failed to approve plan for todo ${ref}`, launch: options ? { ref, step: 'run', spec: options.spec } : undefined };
     },
   );
   const answerMutation = usePlanActionMutation<PlanAnswerResult, { ref: string; body: Record<string, unknown> }>(
     dir,
     'answer',
-    ({ ref, body }) => ({ path: '/api/todos/answer', body, context: `Failed to answer todo ${ref}` }),
+    ({ ref, body }) => ({ path: '/api/todos/answer', body, context: `Failed to answer todo ${ref}`, launch: { ref, step: 'resume', spec: (body.options as TodoRunOptions | undefined)?.spec } }),
   );
   const rejectMutation = usePlanActionMutation<PlanApproveResult, string>(
     dir,
@@ -122,6 +152,7 @@ export function usePlanActions(dir: string) {
       path: '/api/todos/plan/revise',
       body: { ref, feedback, options: runRequestOptions(loadLastTodoRunOptions('plan'), 'plan') },
       context: `Failed to request plan changes for todo ${ref}`,
+      launch: { ref, step: 'plan', spec: loadLastTodoRunOptions('plan').spec },
     }),
   );
   const mutations = [approveMutation, answerMutation, rejectMutation, reviseMutation];
@@ -192,7 +223,6 @@ export function PlanApproveButtons({
   size?: 'sm' | 'default';
 }) {
   const [advancedOpen, setAdvancedOpen] = useState(false);
-  const [advancedOptions, setAdvancedOptions] = useState<TodoRunOptions>(defaultRunOptions);
 
   return (
     <div className="inline-flex flex-wrap items-center gap-1.5">
@@ -204,16 +234,12 @@ export function PlanApproveButtons({
         disabled={busy}
         loading={busy}
         onRun={options => onApprove(true, options)}
-        onAdvanced={options => {
-          setAdvancedOptions(options);
-          setAdvancedOpen(true);
-        }}
+        onAdvanced={() => setAdvancedOpen(true)}
       />
       <PromptRunAdvancedDialog
         dir={dir}
         scope="approval"
         open={advancedOpen}
-        initial={advancedOptions}
         onClose={() => setAdvancedOpen(false)}
         onRun={options => {
           onApprove(true, options);
@@ -314,10 +340,12 @@ export function TodoReviewBanner({
   todo,
   dir,
   onChanged,
+  onLaunch,
 }: {
   todo: TodoItem;
   dir: string;
   onChanged: (todo: TodoItem) => void;
+  onLaunch?: () => void;
 }) {
   const { busy, error, reset, approve, answer, reject, revise } = usePlanActions(dir);
   const [answerText, setAnswerText] = useState('');
@@ -335,10 +363,11 @@ export function TodoReviewBanner({
 
   const onApprove = useCallback(
     async (run: boolean, options?: TodoRunOptions) => {
+      if (run) onLaunch?.();
       const result = await approve(todo.ref, { run, options: run ? options ?? loadLastTodoRunOptions('run') : undefined });
       if (result) onChanged(result.todo);
     },
-    [approve, todo.ref, onChanged],
+    [approve, todo.ref, onChanged, onLaunch],
   );
 
   const onReject = useCallback(async () => {
@@ -347,22 +376,24 @@ export function TodoReviewBanner({
   }, [reject, todo.ref, onChanged]);
 
   const onRevise = useCallback(async () => {
+    if (changesText.trim()) onLaunch?.();
     const result = await revise(todo.ref, changesText);
     if (result) {
       setChangesText('');
       setShowChanges(false);
       onChanged(result.todo);
     }
-  }, [revise, todo.ref, changesText, onChanged]);
+  }, [revise, todo.ref, changesText, onChanged, onLaunch]);
 
   const onAnswer = useCallback(async () => {
+    if (answerText.trim() || Object.values(questionSelections).some(Boolean)) onLaunch?.();
     const result = await answer(todo.ref, buildTodoAnswerInput(todo.questions ?? [], questionSelections, answerText));
     if (result) {
       setAnswerText('');
       setQuestionSelections({});
       onChanged(result.todo);
     }
-  }, [answer, todo.ref, todo.questions, questionSelections, answerText, onChanged]);
+  }, [answer, todo.ref, todo.questions, questionSelections, answerText, onChanged, onLaunch]);
 
   if (todo.status === 'review') {
     return (

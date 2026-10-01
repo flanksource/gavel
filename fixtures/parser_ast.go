@@ -30,24 +30,25 @@ type commandBlockBuilder struct {
 }
 
 type executableFenceConfig struct {
-	Content    string                 `yaml:"content"`
-	CWD        string                 `yaml:"cwd"`
-	Env        map[string]any         `yaml:"env"`
-	Terminal   string                 `yaml:"terminal"`
-	Record     *record.Spec           `yaml:"record"`
-	OS         string                 `yaml:"os"`
-	Arch       string                 `yaml:"arch"`
-	Skip       string                 `yaml:"skip"`
-	ExitCode   *int                   `yaml:"exitCode"`
-	Stdout     string                 `yaml:"stdout"`
-	Stderr     string                 `yaml:"stderr"`
-	Error      string                 `yaml:"error"`
-	Format     string                 `yaml:"format"`
-	Count      *int                   `yaml:"count"`
-	Output     string                 `yaml:"output"`
-	Timeout    string                 `yaml:"timeout"`
-	CEL        string                 `yaml:"cel"`
-	Properties map[string]interface{} `yaml:"properties"`
+	Content    string                     `yaml:"content"`
+	CWD        string                     `yaml:"cwd"`
+	Env        map[string]any             `yaml:"env"`
+	Terminal   string                     `yaml:"terminal"`
+	Record     *record.Spec               `yaml:"record"`
+	GoProfiles map[string]GoProfileOutput `yaml:"goProfiles"`
+	OS         string                     `yaml:"os"`
+	Arch       string                     `yaml:"arch"`
+	Skip       string                     `yaml:"skip"`
+	ExitCode   *int                       `yaml:"exitCode"`
+	Stdout     string                     `yaml:"stdout"`
+	Stderr     string                     `yaml:"stderr"`
+	Error      string                     `yaml:"error"`
+	Format     string                     `yaml:"format"`
+	Count      *int                       `yaml:"count"`
+	Output     string                     `yaml:"output"`
+	Timeout    string                     `yaml:"timeout"`
+	CEL        string                     `yaml:"cel"`
+	Properties map[string]interface{}     `yaml:"properties"`
 }
 
 // parseMarkdownWithGoldmarkTree parses markdown content using goldmark AST parser and returns a tree structure
@@ -512,6 +513,15 @@ func buildFixtureFromCommand(cmd *commandBlockBuilder, frontMatter *FrontMatter,
 		if recordOnly.Record != nil {
 			fixture.Record = recordOnly.Record
 		}
+		var profilesOnly struct {
+			GoProfiles map[string]GoProfileOutput `yaml:"goProfiles"`
+		}
+		if err := yaml.Unmarshal([]byte(cmd.frontmatter), &profilesOnly); err != nil {
+			return nil, fmt.Errorf("%s: goProfiles: %w", cmd.name, err)
+		}
+		if profilesOnly.GoProfiles != nil {
+			fixture.GoProfiles = profilesOnly.GoProfiles
+		}
 		// Timeout must not disappear when the legacy tolerant decode below
 		// rejects another field.
 		var timeoutOnly struct {
@@ -624,6 +634,9 @@ func applyExecutableFenceConfig(fixture *FixtureTest, cfg executableFenceConfig)
 	}
 	if cfg.Record != nil {
 		fixture.Record = cfg.Record
+	}
+	if cfg.GoProfiles != nil {
+		fixture.GoProfiles = cfg.GoProfiles
 	}
 	if cfg.OS != "" {
 		fixture.TestOS = cfg.OS

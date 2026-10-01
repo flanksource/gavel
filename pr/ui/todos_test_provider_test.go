@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -12,8 +13,10 @@ import (
 	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/native"
+	"github.com/flanksource/gavel/todos/run"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/flanksource/gavel/utils"
+	"github.com/google/uuid"
 )
 
 var uiTestProviders = struct {
@@ -89,12 +92,51 @@ type uiTestTODOProvider struct {
 	// activeRun is the Captain prompt run backing the current attempt, as the
 	// native PostgreSQL runtime would report it. nil means no run history.
 	activeRun *captaindb.PromptRun
-	comments  []string
-	links     []uiTestLink
+	// attempts maps a session to the linked attempt it belongs to, as the
+	// native runtime resolves it from the todo's prompt run links.
+	attempts map[string]run.SessionAttempt
+	comments []string
+	links    []uiTestLink
 	// rereadErr fails every Get that follows an Edit, standing in for a store
 	// that committed the edit and then could not be read back.
 	rereadErr error
 	edited    bool
+	// createRequests is every Create the handlers issued, as they issued it.
+	createRequests []todos.CreateRequest
+}
+
+var _ todos.ParentProvider = (*uiTestTODOProvider)(nil)
+
+// SetParent enforces the native single-level rule, so a handler test sees the
+// same refusals PostgreSQL storage gives.
+func (p *uiTestTODOProvider) SetParent(_ context.Context, todo *types.TODO, parentRef string) error {
+	parentID, err := p.parentFor(todo.ID, parentRef)
+	if err != nil {
+		return err
+	}
+	todo.ParentID = parentID
+	return nil
+}
+
+func (p *uiTestTODOProvider) parentFor(childID, parentRef string) (string, error) {
+	ref := strings.TrimSpace(parentRef)
+	if ref == "" {
+		return "", nil
+	}
+	index := slices.IndexFunc(p.items, func(todo *types.TODO) bool { return todo.ID == ref || todo.FilePath == ref })
+	if index < 0 {
+		return "", fmt.Errorf("resolve parent TODO %q: %w", ref, native.ErrNotFound)
+	}
+	parent := p.items[index]
+	switch {
+	case parent.ID == childID:
+		return "", fmt.Errorf("%w: %s cannot be its own parent", native.ErrInvalidParent, childID)
+	case parent.ParentID != "":
+		return "", fmt.Errorf("%w: %s is a child of %s", native.ErrInvalidParent, parent.ID, parent.ParentID)
+	case slices.ContainsFunc(p.items, func(todo *types.TODO) bool { return todo.ParentID == childID }):
+		return "", fmt.Errorf("%w: %s has children", native.ErrInvalidParent, childID)
+	}
+	return parent.ID, nil
 }
 
 type uiTestLink struct {
@@ -105,6 +147,28 @@ type uiTestLink struct {
 
 func (p *uiTestTODOProvider) ActivePromptRun(context.Context, *types.TODO) (*captaindb.PromptRun, error) {
 	return p.activeRun, nil
+}
+
+func (p *uiTestTODOProvider) SessionAttempt(_ context.Context, _ *types.TODO, sessionID string) (run.SessionAttempt, error) {
+	attempt, ok := p.attempts[sessionID]
+	if !ok {
+		return run.SessionAttempt{}, fmt.Errorf("%w: session %s belongs to no attempt", native.ErrNotFound, sessionID)
+	}
+	return attempt, nil
+}
+
+// seedAskingAttempt links the session to the todo's active attempt, dispatched
+// for step: the attempt an answer given in that session resumes. A todo with no
+// run history gets a waiting run, which is where an ask turn parks its run.
+func seedAskingAttempt(provider *uiTestTODOProvider, sessionID string, step types.Phase) {
+	if provider.activeRun == nil {
+		provider.activeRun = &captaindb.PromptRun{State: captaindb.PromptRunStateWaiting}
+	}
+	provider.activeRun.ID = uuid.New()
+	if provider.attempts == nil {
+		provider.attempts = map[string]run.SessionAttempt{}
+	}
+	provider.attempts[sessionID] = run.SessionAttempt{PromptRunID: provider.activeRun.ID, Step: string(step)}
 }
 
 func (p *uiTestTODOProvider) List(_ context.Context, filters todos.DiscoveryFilters) (types.TODOS, error) {
@@ -139,6 +203,7 @@ func (p *uiTestTODOProvider) Get(_ context.Context, ref string) (*types.TODO, er
 }
 
 func (p *uiTestTODOProvider) Create(_ context.Context, request todos.CreateRequest) (*types.TODO, error) {
+	p.createRequests = append(p.createRequests, request)
 	priority := request.Priority
 	if priority == "" {
 		priority = types.PriorityMedium
@@ -167,13 +232,28 @@ func (p *uiTestTODOProvider) Create(_ context.Context, request todos.CreateReque
 	}
 	parsed.ID = id
 	parsed.FilePath = id
+	if parsed.ParentID, err = p.parentFor(id, request.Parent); err != nil {
+		return nil, err
+	}
 	parsed.Provider = todos.ProviderDB
 	parsed.Labels = append([]string(nil), request.Labels...)
 	p.items = append(p.items, parsed)
 	return parsed, nil
 }
 
+// Delete refuses a todo that still has open children with the refusal native
+// storage gives, so a handler test sees the 409 and the message the dashboard
+// does.
 func (p *uiTestTODOProvider) Delete(_ context.Context, todo *types.TODO) error {
+	open := 0
+	for _, candidate := range p.items {
+		if todo.ID != "" && candidate.ParentID == todo.ID && candidate.Status != types.StatusCompleted {
+			open++
+		}
+	}
+	if open > 0 {
+		return fmt.Errorf("%w: %d under issue %s; %s", native.ErrOpenChildren, open, todo.ID, todos.ChildrenChoice)
+	}
 	for i, candidate := range p.items {
 		if candidate == todo {
 			p.items = append(p.items[:i], p.items[i+1:]...)
@@ -213,9 +293,9 @@ func (p *uiTestTODOProvider) Edit(_ context.Context, todo *types.TODO, edit todo
 		if err != nil {
 			return err
 		}
-		id, path, provider := todo.ID, todo.FilePath, todo.Provider
+		id, path, provider, parentID := todo.ID, todo.FilePath, todo.Provider, todo.ParentID
 		*todo = *parsed
-		todo.ID, todo.FilePath, todo.Provider = id, path, provider
+		todo.ID, todo.FilePath, todo.Provider, todo.ParentID = id, path, provider, parentID
 	}
 	p.edited = true
 	return nil
@@ -266,6 +346,9 @@ func (p *uiTestTODOProvider) UpdateLatestFailure(context.Context, *types.TODO, *
 }
 func (p *uiTestTODOProvider) SaveAttempt(context.Context, *types.TODO, *todos.ExecutionResult) error {
 	return nil
+}
+func (p *uiTestTODOProvider) LatestRunWorktree(context.Context, *types.TODO) (*native.RunWorktree, error) {
+	return nil, native.ErrNoRunWorkspace
 }
 func (p *uiTestTODOProvider) SupportsGroupedExecution() bool { return false }
 

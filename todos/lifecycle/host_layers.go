@@ -12,19 +12,17 @@ import (
 	"github.com/flanksource/gavel/verify"
 )
 
-// HostKind is the entrypoint a run was started from. It decides one thing —
-// the permission posture the host itself contributes — and it is a layer like
-// any other rather than a flag threaded through the executor, so a host cannot
-// quietly rewrite a posture the prompt already declared.
+// HostKind is the entrypoint a run was started from. It contributes no spec
+// layer: every host runs the posture the layers declare, and only the caller's
+// own request — CLI flags or the run dialog's spec — may name a different one.
 type HostKind string
 
 const (
 	// HostCLI runs the prompt exactly as its frontmatter declares. The terminal
 	// answers nothing: an approval it raised would block until the timeout.
 	HostCLI HostKind = "cli"
-	// HostDashboard serves the approval endpoints, so it lowers the posture to
-	// `default` and attaches the durable broker. Every tool call it cannot
-	// pre-approve becomes a question a person can answer.
+	// HostDashboard serves the approval endpoints, so whatever the resolved
+	// posture still asks about becomes a question a person can answer.
 	HostDashboard HostKind = "dashboard"
 )
 
@@ -39,6 +37,7 @@ const DefaultTimeout = 30 * time.Minute
 type LayerInput struct {
 	Saved          *captainconfig.AIDefaults
 	RequireModel   bool
+	RuntimePresets PresetSelection
 	RuntimeProfile ProfileSelection
 	// Config is the merged .gavel.yaml: its `ai:` base and the `todos.*` section.
 	Config verify.GavelConfig
@@ -59,12 +58,9 @@ type LayerInput struct {
 	Todos []*types.TODO
 	// Prior are user-scope layers a continuation inherits from the run it
 	// continues: the spec that run was dispatched with, and the runtime it
-	// actually resolved. They sit below the host and the request, so continuing a
-	// run inherits how it ran without outranking where it is being continued from
-	// or what the caller now asks for.
+	// actually resolved. They sit below the request, so continuing a run inherits
+	// how it ran without outranking what the caller now asks for.
 	Prior []api.SpecLayer
-	// Host is the entrypoint; see HostKind.
-	Host HostKind
 	// Request is what the caller explicitly asked for: parsed CLI flags or the
 	// dashboard payload's spec. A knob the caller did not set must arrive zero or
 	// it beats the frontmatter it claims to defer to.
@@ -74,12 +70,12 @@ type LayerInput struct {
 // Layers returns the ordered spec layers, lowest precedence first:
 //
 //	.gavel.yaml ai:  <  todos.timeout  <  prompt frontmatter  <  lifecycle step
-//	<  .gavel.yaml todos.<step>  <  the todo's llm:  <  the host  <  the request
+//	<  .gavel.yaml todos.<step>  <  the todo's llm:  <  a prior run  <  the request
 //
-// todos.timeout is the odd one: it is a context CONSTRAINT rather than a value,
-// so it can only ever lower a budget. A project cap that a prompt's own longer
-// budget silently overrode was a cap in name only, and one that overrode a
-// deliberately short prompt budget was worse.
+// Every layer supplies defaults and only defaults, todos.timeout included: it
+// is the deadline nothing above it names, not a cap on the ones that do. A
+// posture or budget that must survive the whole stack is not expressible as a
+// layer at all — see ApplyClassInvariants, which runs after the fold.
 //
 // A layer that configures nothing is omitted rather than appended empty, so the
 // trace a caller reports names only the sources that actually spoke.
@@ -95,9 +91,6 @@ func Layers(in LayerInput) []api.SpecLayer {
 			layers = append(layers, prior)
 		}
 	}
-	if host, ok := hostLayer(in.Host); ok {
-		layers = append(layers, host)
-	}
 	if !api.IsEmpty(in.Request) {
 		layers = append(layers, api.RequestSpecLayer("request", in.Request))
 	}
@@ -110,16 +103,13 @@ func projectLayers(in LayerInput) []api.SpecLayer {
 		Source: api.SpecLayerSourcePreset,
 		Scope:  api.SpecLayerGlobal,
 		Spec:   in.Config.AI,
-		Constraints: api.RuntimeConstraints{
-			Permissions: api.PermissionConstraintsForSpec(in.Config.AI),
-		},
 	}}
 	if timeout := strings.TrimSpace(in.Config.Todos.Timeout); timeout != "" {
 		layers = append(layers, api.SpecLayer{
-			Name:        ".gavel.yaml todos.timeout",
-			Source:      api.SpecLayerSourcePreset,
-			Scope:       api.SpecLayerContext,
-			Constraints: api.RuntimeConstraints{Limits: api.RunLimits{Budget: api.Budget{Timeout: timeout}}},
+			Name:   ".gavel.yaml todos.timeout",
+			Source: api.SpecLayerSourcePreset,
+			Scope:  api.SpecLayerContext,
+			Spec:   api.Spec{Budget: api.Budget{Timeout: timeout}},
 		})
 	}
 	for _, layer := range in.Frontmatter {
@@ -135,26 +125,26 @@ func projectLayers(in LayerInput) []api.SpecLayer {
 		})
 	}
 	if step := stepSpec(in.Config.Todos, in.Step); !api.IsEmpty(step) {
-		layer := api.PromptSpecLayer(".gavel.yaml todos."+in.Step, step)
-		layer.Constraints.Permissions = api.PermissionConstraintsForSpec(step)
-		layers = append(layers, layer)
+		layers = append(layers, api.PromptSpecLayer(".gavel.yaml todos."+in.Step, step))
 	}
 	return layers
 }
 
 // ResolveLayers folds Layers through captain's resolver, which is where the
-// precedence, the constraint intersection and the trace all come from. Gavel
-// keeps no private fold: two implementations of "which layer wins" is one more
-// than the number of answers that can be right.
+// precedence and the trace both come from. Gavel keeps no private fold: two
+// implementations of "which layer wins" is one more than the number of answers
+// that can be right.
+//
+// Every layer only ever supplies defaults, so the last one naming a field owns
+// it. What a step must run under regardless of configuration is not expressed
+// here but by ApplyClassInvariants, after the fold.
 func ResolveLayers(in LayerInput) (api.ResolvedSpec, error) {
 	if err := api.ValidateSpecLayers(projectLayers(in)...); err != nil {
 		return api.ResolvedSpec{}, &ConfigurationError{Err: err}
 	}
-	layers, err := constrainPermissionLayers(RestrictHostPermissions(Layers(in)))
-	if err != nil {
-		return api.ResolvedSpec{}, &ConfigurationError{Err: err}
-	}
-	resolved, err := api.ResolveSpecLayers(api.ResolveSpecOptions{Layers: layers, Saved: in.Saved, RequireModel: in.RequireModel})
+	resolved, err := api.ResolveSpecLayers(api.ResolveSpecOptions{
+		Layers: Layers(in), Saved: in.Saved, RequireModel: in.RequireModel,
+	})
 	return resolved, runtimeConfigurationError(err)
 }
 
@@ -168,6 +158,8 @@ func ResolveLayers(in LayerInput) (api.ResolvedSpec, error) {
 type PromptLayerResult struct {
 	Layers         []api.SpecLayer
 	Template       string
+	Presets        []string
+	PresetsSet     bool
 	RuntimeProfile string
 }
 
@@ -187,6 +179,8 @@ func PromptLayers(workDir string, todoList []*types.TODO, definition todoprompt.
 			return result, &ConfigurationError{Err: fmt.Errorf("render built-in %s prompt frontmatter: %w", definition.Name, err)}
 		}
 		result.Layers = append(result.Layers, api.PromptSpecLayer("todos-"+definition.Name+".prompt", spec.Spec))
+		result.Presets = append([]string(nil), spec.Presets...)
+		result.PresetsSet = spec.PresetsSet
 		result.RuntimeProfile = spec.RuntimeProfile
 	}
 	template, err := definition.Template(workDir)
@@ -199,6 +193,10 @@ func PromptLayers(workDir string, todoList []*types.TODO, definition todoprompt.
 			return result, &ConfigurationError{Err: fmt.Errorf("render todos.%s file frontmatter: %w", definition.Name, err)}
 		}
 		result.Layers = append(result.Layers, api.PromptSpecLayer("todos."+definition.Name+" file", spec.Spec))
+		if spec.PresetsSet {
+			result.Presets = append([]string(nil), spec.Presets...)
+			result.PresetsSet = true
+		}
 		if spec.RuntimeProfile != "" {
 			result.RuntimeProfile = spec.RuntimeProfile
 		}
@@ -227,12 +225,22 @@ func ApplyTimeout(s *api.Spec) (time.Duration, error) {
 }
 
 // ApplyClassInvariants enforces what a behaviour class means regardless of
-// configuration. Only run-class steps produce work to commit: a plan writes a
-// document for review and a verify run grades what already exists, so a
-// `commits:` block inherited from the ai: base or todos config must not turn
-// either into a committing run.
+// configuration, and it is the LAST thing applied to a resolved spec. Layers
+// only ever default, so this — not a ceiling hung off some earlier layer — is
+// where a non-negotiable posture belongs: whatever the stack, the host or the
+// caller asked for, a step that is read-only by class runs read-only.
+//
+// The two invariants are the same statement about the same classes. Only
+// run-class steps produce work to commit: a plan or triage envelope investigates
+// and proposes, and a verify run grades what already exists, so neither may edit
+// the tree and a `commits:` block inherited from the ai: base or todos config
+// must not turn either into a committing run.
 func ApplyClassInvariants(s *api.Spec, class types.RunMode) {
-	if class == types.ModeRun || s.Workflow == nil {
+	if class == types.ModeRun {
+		return
+	}
+	s.Permissions.Mode = api.PermissionPlan
+	if s.Workflow == nil {
 		return
 	}
 	s.Workflow.Commits = nil
@@ -252,7 +260,15 @@ func ApplyClassInvariants(s *api.Spec, class types.RunMode) {
 // The resolver checks the model separately, because whether a run needs one is a
 // property of the step rather than of the spec: a verify step runs the
 // definition of done, and a fixture-only definition of done never calls a model.
-func ValidateSpec(s api.Spec) error {
+//
+// A verify-class spec may not declare setup.checkout: which commit a verify step
+// checks — the run's worktree head, a PR's topic head, or the main checkout — is
+// the lifecycle's decision, and a declared checkout would silently verify
+// something else.
+func ValidateSpec(s api.Spec, class types.RunMode) error {
+	if class == types.ModeVerify && s.Setup != nil && s.Setup.Checkout != nil {
+		return fmt.Errorf("setup.checkout: a verify step checks the todo's run commit and may not declare its own checkout")
+	}
 	if err := s.Budget.Validate(); err != nil {
 		return fmt.Errorf("budget: %w", err)
 	}
@@ -273,26 +289,6 @@ func ValidateSpec(s api.Spec) error {
 // body written there is stripped like every other layer's.
 func stepSpec(cfg verify.TodosConfig, step string) api.Spec {
 	return withoutPromptBody(stepPromptSpec(cfg, step).Spec)
-}
-
-// hostLayer is the entrypoint's own contribution. Only the dashboard has one:
-// it can answer a tool approval, so it lowers the posture to `default` and
-// brokers what the mode then asks about.
-//
-// It is emphatically NOT a per-tool policy. `permissions.tools: {Bash: ask}` is
-// unenforceable on every runtime captain speaks — RequireToolPolicySupport
-// rejects it before the first model call — so a host that wrote one turned an
-// approval-gated run into a boundary error.
-func hostLayer(host HostKind) (api.SpecLayer, bool) {
-	if host != HostDashboard {
-		return api.SpecLayer{}, false
-	}
-	return api.SpecLayer{
-		Name:   "host " + string(host),
-		Source: api.SpecLayerSourceRequest,
-		Scope:  api.SpecLayerUser,
-		Spec:   api.Spec{Permissions: api.Permissions{Mode: api.PermissionDefault}},
-	}, true
 }
 
 // todoLayer projects a todo's `llm:` frontmatter onto a layer. Zero values

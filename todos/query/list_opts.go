@@ -1,11 +1,4 @@
-// Package query owns the TODO selector: the one type that says which TODOs a
-// caller means, whether that caller is a CLI invocation, an HTTP query string,
-// or a bulk action asked to run against "everything matching these filters".
-//
-// It is deliberately one type and not three. The CLI had `DiscoveryFilters`,
-// the dashboard had its own facet set, and a bulk endpoint had a list of
-// explicit targets — so "the pending, high-severity TODOs" meant a different
-// thing in each, and none of them could express what the other two could.
+// Package query owns the TODO list selector used by the Clicky entity's read operations.
 package query
 
 import (
@@ -17,17 +10,19 @@ import (
 	"github.com/flanksource/gavel/todos/types"
 )
 
-// ListOpts selects TODOs. It is the entity's list options, the CLI's flags and
-// the bulk-action filter all at once — clicky binds the `flag:` tags as cobra
-// flags and as OpenAPI query parameters, so the three surfaces cannot drift.
+// ListOpts selects TODOs for reading. Clicky binds the `flag:` tags as Cobra
+// flags and OpenAPI query parameters for the entity's list operation.
 //
 // Every facet is include/exclude rather than a single value, because that is
 // what the dashboard's filter bar already offers and a selector that cannot say
 // "everything except completed" cannot express the default view.
 type ListOpts struct {
-	// Dir is the workspace. Empty means the caller's working directory, resolved
-	// by whoever opens the provider — the selector does not know about projects.
-	Dir string `flag:"dir" help:"Workspace directory; defaults to the current one"`
+	// Dir and Project scope the list to one workspace, named by path or by its
+	// project's short name. Naming neither lists every registered project;
+	// resolving either is the caller's job — the selector does not know about
+	// projects.
+	Dir     string `flag:"dir" help:"Only this workspace directory; by default every registered project is listed"`
+	Project string `flag:"project" help:"Only this registered project, by its short name (a project list id, e.g. clicky-ui); by default every registered project is listed"`
 
 	Status        []string `flag:"status" help:"Only TODOs in these statuses"`
 	ExcludeStatus []string `flag:"exclude-status" help:"Skip TODOs in these statuses"`
@@ -42,16 +37,33 @@ type ListOpts struct {
 	// Search is a case-insensitive substring match on the title.
 	Search string `flag:"search" help:"Match TODO titles containing this text"`
 
-	// Filter switches a bulk action from its explicit ids to this selector.
-	// clicky triggers filter mode on this field being non-empty, so it carries a
-	// human-readable summary of what is being matched rather than a bare "true"
-	// — it ends up in the run's audit trail.
-	Filter string `flag:"filter" help:"Run a bulk action against every matching TODO instead of named ids"`
+	// A child TODO is listed under its parent rather than beside it, so a list
+	// leaves children out unless it searches, names a Parent, or sets Children.
+	//
+	// Match compares Parent as a full TODO id. A caller taking a short id, alias
+	// or title from a user resolves it to that id first, because only a provider
+	// can say which TODO a reference names; the entity list does.
+	Parent   string `flag:"parent" help:"Only the children of this TODO (ID, alias, or title)"`
+	Children bool   `flag:"children" help:"Include child TODOs, which are otherwise listed only under their parent"`
+
+	// Limit and Offset window the matched TODOs. A list spanning every project
+	// is otherwise unbounded, and an agent reading it receives every body.
+	Limit  int `flag:"limit" help:"Return at most this many TODOs" default:"50"`
+	Offset int `flag:"offset" help:"Skip this many matching TODOs"`
 }
 
-// FilterMode reports whether a bulk action carrying these options was asked to
-// resolve its own selection rather than act on named ids.
-func (o ListOpts) FilterMode() bool { return strings.TrimSpace(o.Filter) != "" }
+// Page returns the window of matched TODOs the options select.
+func (o ListOpts) Page(matched types.TODOS) (types.TODOS, error) {
+	if o.Limit < 1 {
+		return nil, fmt.Errorf("limit must be at least 1, got %d", o.Limit)
+	}
+	if o.Offset < 0 {
+		return nil, fmt.Errorf("offset must not be negative, got %d", o.Offset)
+	}
+	start := min(o.Offset, len(matched))
+	end := min(start+o.Limit, len(matched))
+	return matched[start:end], nil
+}
 
 // Discovery projects the options onto the filter the provider can push down.
 // Status and labels are the only facets the store understands; severity, recency
@@ -89,10 +101,16 @@ func (o ListOpts) Match(todo *types.TODO, now time.Time) (bool, error) {
 			return false, nil
 		}
 	}
-	if search := strings.TrimSpace(o.Search); search != "" {
-		if !strings.Contains(strings.ToLower(todo.Title), strings.ToLower(search)) {
+	search := strings.TrimSpace(o.Search)
+	if search != "" && !strings.Contains(strings.ToLower(todo.Title), strings.ToLower(search)) {
+		return false, nil
+	}
+	if parent := strings.TrimSpace(o.Parent); parent != "" {
+		if !strings.EqualFold(todo.ParentID, parent) {
 			return false, nil
 		}
+	} else if todo.ParentID != "" && search == "" && !o.Children {
+		return false, nil
 	}
 	if window := strings.TrimSpace(o.Since); window != "" {
 		cutoff, err := ParseWindow(window, now)
@@ -168,6 +186,21 @@ func ParseWindow(window string, now time.Time) (time.Time, error) {
 		return time.Time{}, fmt.Errorf("invalid window %q", window)
 	}
 	return now.Add(-parsed), nil
+}
+
+// TitleMatches returns the listed TODOs whose title is exactly title, ignoring
+// case and surrounding space. A title is the last thing a reference is tried
+// as, after the ids and aliases a provider resolves itself, and it is the
+// caller's to decide what more than one match means.
+func TitleMatches(listed types.TODOS, title string) types.TODOS {
+	title = strings.TrimSpace(title)
+	var matches types.TODOS
+	for _, candidate := range listed {
+		if candidate != nil && strings.EqualFold(strings.TrimSpace(candidate.Title), title) {
+			matches = append(matches, candidate)
+		}
+	}
+	return matches
 }
 
 func lastActivity(todo *types.TODO) time.Time {

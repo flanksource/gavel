@@ -1,9 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { openEventStream } from './eventHub';
+import { readLocalCache, writeLocalCache } from './localQueryCache';
+import { parseProcStatuses, procStatusQueryOptions } from './procStatusQuery';
 import { fetchJSON, queryKeys } from './query';
-import type { Project, ProcStatus, SearchConfig, Snapshot } from './types';
+import type { Project, SearchConfig, Snapshot } from './types';
 
 const bootstrapStaleTime = 30_000;
+
+// The project catalog changes rarely and every page needs it before it can lay
+// out, so the last good response seeds the first render.
+export const PROJECTS_CACHE_KEY = 'gavel.pr-ui.cache.projects.v1';
 
 type SnapshotUpdater = (current: Snapshot) => Snapshot;
 
@@ -12,7 +19,6 @@ export interface AppQueryState {
   projects: Project[];
   projectsLoaded: boolean;
   projectError: string;
-  procStatus: Record<string, ProcStatus>;
   processError: string;
   updateSnapshot: (updater: SnapshotUpdater) => void;
   refreshProjects: () => Promise<void>;
@@ -32,23 +38,28 @@ export function useAppQueries({ enabled, initialConfig }: { enabled: boolean; in
     enabled,
     staleTime: bootstrapStaleTime,
   });
-  const projectsQuery = useQuery({
+  const projectsQuery = useQuery<Project[]>({
     queryKey: queryKeys.projects(),
-    queryFn: async ({ signal }) => parseProjects(
-      await fetchJSON<unknown>({ url: '/api/projects', signal, context: 'Load projects' }),
-    ),
+    queryFn: async ({ signal }) => {
+      const projects = parseProjects(await fetchJSON<unknown>({ url: '/api/projects', signal, context: 'Load projects' }));
+      writeLocalCache(PROJECTS_CACHE_KEY, projects);
+      return projects;
+    },
+    placeholderData: () => readLocalCache(PROJECTS_CACHE_KEY, parseProjects),
     enabled,
     retry: true,
     retryDelay: attempt => Math.min(1000 * (2 ** attempt), 15_000),
     staleTime: bootstrapStaleTime,
   });
+  // The app root loads the process-status map but only watches its error:
+  // stream frames change it every few seconds, and re-rendering the whole
+  // dashboard on each one wipes in-progress forms. Components that display it
+  // subscribe through useProcStatus instead.
   const procQuery = useQuery({
-    queryKey: queryKeys.processStatuses(),
-    queryFn: async ({ signal }) => parseProcStatuses(
-      await fetchJSON<unknown>({ url: '/api/proc/status', signal, context: 'Load process status' }),
-    ),
+    ...procStatusQueryOptions,
     enabled,
     staleTime: bootstrapStaleTime,
+    notifyOnChangeProps: ['error'],
   });
 
   useEffect(() => {
@@ -60,7 +71,7 @@ export function useAppQueries({ enabled, initialConfig }: { enabled: boolean; in
 
   useEffect(() => {
     if (!enabled) return;
-    const stream = new EventSource('/api/prs/stream');
+    const stream = openEventStream('/api/prs/stream');
     stream.addEventListener('message', event => {
       try {
         const incoming = parseSnapshot(JSON.parse((event as MessageEvent<string>).data));
@@ -83,7 +94,7 @@ export function useAppQueries({ enabled, initialConfig }: { enabled: boolean; in
 
   useEffect(() => {
     if (!enabled) return;
-    const stream = new EventSource('/api/proc/status/stream');
+    const stream = openEventStream('/api/proc/status/stream');
     stream.addEventListener('message', event => {
       try {
         queryClient.setQueryData(queryKeys.processStatuses(), parseProcStatuses(JSON.parse((event as MessageEvent<string>).data)));
@@ -115,7 +126,6 @@ export function useAppQueries({ enabled, initialConfig }: { enabled: boolean; in
     projects: projectsQuery.data ?? [],
     projectsLoaded: projectsQuery.data !== undefined || projectsQuery.failureCount > 0,
     projectError: projectFailure ? errorMessage(projectFailure) : '',
-    procStatus: procQuery.data ?? {},
     processError: processStreamError || (procQuery.error ? errorMessage(procQuery.error) : ''),
     updateSnapshot,
     refreshProjects,
@@ -208,11 +218,6 @@ function parseProjects(payload: unknown): Project[] {
     }
   }
   return payload as Project[];
-}
-
-function parseProcStatuses(payload: unknown): Record<string, ProcStatus> {
-  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('Load process status: invalid response');
-  return payload as Record<string, ProcStatus>;
 }
 
 function errorMessage(cause: unknown): string {

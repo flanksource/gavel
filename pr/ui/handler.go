@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	captaincli "github.com/flanksource/captain/pkg/cli"
 	"github.com/flanksource/captain/pkg/monitor"
 	"github.com/flanksource/clicky/metrics"
 	"github.com/flanksource/clicky/route"
@@ -30,6 +31,7 @@ type SearchConfig struct {
 	Repos       []string `json:"repos"`
 	All         bool     `json:"all,omitempty"`
 	Org         string   `json:"org,omitempty"`
+	Project     string   `json:"project,omitempty"`
 	IgnoredOrgs []string `json:"ignoredOrgs,omitempty"`
 }
 
@@ -182,9 +184,9 @@ func NewServer(interval time.Duration, ghOpts github.Options, config SearchConfi
 		gavelCache:        make(map[string]*GavelResultsSummary),
 		knownBots:         make(map[string]struct{}),
 		procMetrics:       metrics.NewMemory(metrics.MemoryConfig{Retention: 15 * time.Minute, MaxPoints: 512}),
-		taskSource:        newSupervisorTaskSource(),
 		taskHistoryImport: make(chan struct{}, 1),
 	}
+	s.taskSource = newSupervisorTaskSource(s.retryCommitRunControl)
 	// Probe runs in the background so NewServer stays fast. First /api/status
 	// hit before the probe completes returns State="" which handleStatus
 	// treats as "probing" (degraded, "checking token...").
@@ -470,10 +472,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/todos/criteria", s.handleTodoCriteria)
 	mux.HandleFunc("POST /api/todos/verification/fixture", s.handleTodoVerificationFixture)
 	mux.HandleFunc("GET /api/todos/verification/schema", s.handleTodoVerificationSchema)
-	mux.HandleFunc("GET /api/todos/commits", s.handleTodoCommits)
 	mux.HandleFunc("GET /api/todos/commits/diff", s.handleTodoCommitDiff)
 	mux.HandleFunc("GET /api/todos/commits/files", s.handleTodoCommitFiles)
-	mux.HandleFunc("/api/todos/session/stream", s.handleTodoSessionStream)
+	// A run's transcript is Captain's to read and follow: its handler resolves
+	// the session through the pool Gavel shares with Captain's CLI registry.
+	mux.Handle("/api/captain/sessions/", http.StripPrefix("/api/captain/sessions", captaincli.SessionHandler()))
 	mux.HandleFunc("/api/todos/session/stats", s.handleTodoSessionStats)
 	mux.HandleFunc("GET /api/todos/session/detail", s.handleTodoSessionDetail)
 	mux.HandleFunc("POST /api/todos/session/stop", s.handleTodoRunStop)
@@ -489,6 +492,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/todos/answer", s.handleTodoAnswer)
 	mux.HandleFunc("/api/todos/transfer", s.handleTodoTransfer)
 	mux.HandleFunc("POST /api/todos/github", s.handleTodoGitHubPush)
+	mux.HandleFunc("POST /api/todos/land", s.handleTodoLand)
 	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/favicon.svg", handleFavicon)
 	mux.HandleFunc("/react-grab-plugin.js", handleReactGrabPlugin)
@@ -506,6 +510,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/settings/prompts/catalog", s.handleSettingsPromptCatalog)
 	mux.HandleFunc("/api/settings/prompts/{id}", s.handleSettingsPromptDetail)
 	mux.HandleFunc("POST /api/settings/prompts/{id}/render", s.handleSettingsPromptRender)
+	mux.HandleFunc("GET /api/settings/runtime-presets", s.handleSettingsRuntimePresets)
+	mux.HandleFunc("POST /api/settings/runtime-presets", s.handleSettingsRuntimePresets)
+	mux.HandleFunc("PUT /api/settings/runtime-presets/{id}", s.handleSettingsRuntimePresets)
+	mux.HandleFunc("DELETE /api/settings/runtime-presets/{id}", s.handleSettingsRuntimePresets)
+	mux.HandleFunc("POST /api/settings/runtime-presets/resolve", s.handleSettingsRuntimePresetResolve)
 	mux.HandleFunc("/api/settings/gavel", s.handleSettingsGavel)
 	mux.HandleFunc("/api/settings/gavel/trace", s.handleSettingsGavelTrace)
 	mux.HandleFunc("/api/projects", s.handleProjects)
@@ -516,6 +525,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/projects/{name}/actions", s.handleProjectAction)
 	mux.HandleFunc("GET /api/projects/{name}/actions/schema", s.handleProjectActionSchema)
 	mux.HandleFunc("POST /api/projects/{name}/commit-queue", s.handleCommitQueue)
+	mux.HandleFunc("POST /api/projects/{name}/commit-queue/{runId}/retry", s.handleCommitQueueRetry)
 	mux.Handle("/api/project-runs/", http.StripPrefix("/api/project-runs", s.projectRunServer().Handler()))
 	mux.HandleFunc("GET /api/projects/{name}/diff", s.handleProjectDiff)
 	mux.HandleFunc("POST /api/projects/{name}/ignore", s.handleProjectIgnore)
@@ -532,15 +542,21 @@ func (s *Server) Handler() http.Handler {
 	metrics.RegisterRoutes(router, s.procMetrics, "/api/proc")
 	taskSource := s.taskSource
 	if taskSource == nil {
-		taskSource = newSupervisorTaskSource()
+		taskSource = newSupervisorTaskSource(s.retryCommitRunControl)
 	}
 	clickytask.RegisterHandlersWithSource(router, "/api/v1", taskSource)
-	s.registerTodoEntityRoutes(router)
+	s.registerEntityRoutes(router)
 	registerPromptRoutes(mux)
 	registerPprof(mux)
 	registerIngestStats(mux, s.readIngestStats)
 	mux.HandleFunc("/results/", s.handleGavelResults)
-	return rpchttp.TimingMiddleware(mux)
+	// A browser's direct EventSource on a stream route is refused (a stale page
+	// would starve the tab's connections); hub subs pass through by context.
+	root := refuseDirectBrowserStreams(rpchttp.TimingMiddleware(mux))
+	// One multiplexed SSE connection per tab: subs are served through root, so
+	// every stream route above is reachable exactly as a direct request sees it.
+	registerEventRoutes(mux, root, s.uiBuild())
+	return root
 }
 
 func handleFavicon(w http.ResponseWriter, r *http.Request) {
@@ -1018,6 +1034,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		s.SetConfig(cfg)
 		go SaveSettings(UISettings{
 			Repos:       cfg.Repos,
+			Project:     cfg.Project,
 			IgnoredOrgs: cfg.IgnoredOrgs,
 		})
 		select {

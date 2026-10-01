@@ -145,6 +145,14 @@ func pushWithDeps(ctx context.Context, opts Options, result *Result, deps pushDe
 		}
 	}
 
+	if opts.PushBranch != "" {
+		if err := pushHEADTo(opts, deps, opts.PushBranch); err != nil {
+			return err
+		}
+		logger.Infof("Pushed %s to %s", branch, opts.PushBranch)
+		return nil
+	}
+
 	target, candidates, err := decidePushTarget(ctx, ghOpts, branch, deps)
 	if err != nil {
 		return err
@@ -218,24 +226,35 @@ func findAncestorPRs(workDir string, prs github.PRSearchResults, isAncestor func
 }
 
 func executeExistingPRPush(opts Options, deps pushDeps, pr *github.PRListItem, reason string) error {
-	refspec := "HEAD:" + pr.Source
 	if opts.DryRun {
-		fmt.Fprintf(dryRunOutput, "would push %s (%s → PR #%d %s)\n", refspec, reason, pr.Number, pr.URL)
+		fmt.Fprintf(dryRunOutput, "would push HEAD:%s (%s → PR #%d %s)\n", pr.Source, reason, pr.Number, pr.URL)
 		return nil
 	}
-	if isProtectedBranch(pr.Source) {
-		if !deps.confirmProtectedRef(pr.Source) {
-			return fmt.Errorf("push to protected branch %q cancelled", pr.Source)
-		}
+	if err := pushHEADTo(opts, deps, pr.Source); err != nil {
+		return err
 	}
-	if err := deps.rebaseOnto(opts.WorkDir, pr.Source); err != nil {
+	logger.Infof("Pushed to PR #%d (%s): %s", pr.Number, pr.Source, pr.URL)
+	printExistingPRSummary(pr)
+	return nil
+}
+
+// pushHEADTo rebases HEAD onto origin/<branch> and pushes it there, confirming
+// first when branch is protected.
+func pushHEADTo(opts Options, deps pushDeps, branch string) error {
+	refspec := "HEAD:" + branch
+	if opts.DryRun {
+		fmt.Fprintf(dryRunOutput, "would push %s\n", refspec)
+		return nil
+	}
+	if isProtectedBranch(branch) && !deps.confirmProtectedRef(branch) {
+		return fmt.Errorf("push to protected branch %q cancelled", branch)
+	}
+	if err := deps.rebaseOnto(opts.WorkDir, branch); err != nil {
 		return err
 	}
 	if err := deps.gitPush(opts.WorkDir, refspec); err != nil {
 		return fmt.Errorf("git push %s: %w", refspec, err)
 	}
-	logger.Infof("Pushed to PR #%d (%s): %s", pr.Number, pr.Source, pr.URL)
-	printExistingPRSummary(pr)
 	return nil
 }
 

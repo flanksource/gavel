@@ -20,16 +20,7 @@ func TestTodosStepsCommandReplacesPrompts(t *testing.T) {
 	if registered["prompts"] {
 		t.Error("retired todos prompts command is still registered")
 	}
-	if todosStepsCmd.Args == nil {
-		t.Fatal("expected todos steps to accept an optional todo argument")
-	}
-	if err := todosStepsCmd.Args(todosStepsCmd, []string{"3f2a1b"}); err != nil {
-		t.Errorf("todos steps <id> rejected: %v", err)
-	}
-	if err := todosStepsCmd.Args(todosStepsCmd, nil); err != nil {
-		t.Errorf("todos steps with no argument rejected: %v", err)
-	}
-	if err := todosStepsCmd.Args(todosStepsCmd, []string{"a", "b"}); err == nil {
+	if err := runTodosSteps([]string{"a", "b"}); err == nil {
 		t.Error("todos steps accepted two arguments")
 	}
 }

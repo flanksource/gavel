@@ -27,6 +27,7 @@ func wantsClicky(r *http.Request) bool {
 func (p projectInfo) Columns() []api.ColumnDef {
 	return []api.ColumnDef{
 		{Name: "name", Label: "Name"},
+		{Name: "short", Label: "Short name"},
 		{Name: "dir", Label: "Directory"},
 		{Name: "repos", Label: "Repos"},
 		{Name: "procfile", Label: "Procfile"},
@@ -44,6 +45,7 @@ func (p projectInfo) Row() map[string]any {
 	}
 	return map[string]any{
 		"name":     p.Name,
+		"short":    p.Short,
 		"dir":      p.Dir,
 		"repos":    strings.Join(p.Repos, ", "),
 		"procfile": yesNo(p.HasProcfile),
@@ -153,7 +155,7 @@ func projectCommitQueueRequestSchema() map[string]any {
 		"required": []string{"action"},
 		"properties": map[string]any{
 			"action":  map[string]any{"type": "string", "enum": []string{"commit", "open-pr"}},
-			"files":   map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+			"files":   map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Files to commit; optional for open-pr, which pushes existing local commits when empty"},
 			"options": map[string]any{"type": "object", "additionalProperties": true, "description": "Advanced commit options; not supported for open-pr"},
 		},
 	}
@@ -328,6 +330,15 @@ func projectsOpenAPI() map[string]any {
 							"schema": map[string]any{"$ref": "#/components/schemas/ProjectCommitQueueRequest"},
 						}},
 					},
+				}),
+			},
+			"/api/projects/{name}/commit-queue/{runId}/retry": map[string]any{
+				"post": projectLifecycleOp("projects_commit_queue_retry", "Re-queue the failed and canceled commits of a finished commit run as a new run", "202", "ProjectCommitRun", map[string]any{
+					"parameters": append(nameParam()["parameters"].([]any), map[string]any{
+						"name": "runId", "in": "path", "required": true,
+						"description": "Id of the finished commit queue run to retry",
+						"schema":      map[string]any{"type": "string"},
+					}),
 				}),
 			},
 			"/api/projects/{name}/actions": map[string]any{

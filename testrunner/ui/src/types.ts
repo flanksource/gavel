@@ -10,6 +10,10 @@ export interface Test {
   line?: number;
   framework?: string;
   duration?: number; // nanoseconds
+  fixture_profile?: FixtureProfile;
+  go_profiles?: GoProfileArtifact[];
+  sql_profile?: FixtureSQLProfile;
+  fixture?: { key: string; kind: string; state: string; command_ms?: number; violations?: string[] };
   skipped?: boolean;
   failed?: boolean;
   passed?: boolean;
@@ -123,7 +127,175 @@ export interface Snapshot {
   tests: Test[];
   lint?: LinterResult[];
   bench?: BenchComparison;
+  fixture_benchmark?: FixtureBenchmarkState;
+  performance?: FixturePerformance;
+  error?: string;
   diagnostics?: DiagnosticsSnapshot;
+}
+
+export interface FixtureExecutionNode {
+  key: string;
+  name: string;
+  kind: string;
+  state: string;
+  duration?: number;
+  children?: FixtureExecutionNode[];
+}
+
+export interface FixtureExecutionSnapshot {
+  version: number;
+  iteration: number;
+  state: string;
+  root: FixtureExecutionNode;
+}
+
+export interface FixtureBenchmarkEntry {
+  key: string;
+  name: string;
+  kind: string;
+  status: string;
+  duration_ms: number;
+  command_ms?: number;
+  profile_samples?: number;
+  profile?: FixtureProfile;
+  go_profiles?: GoProfileArtifact[];
+  sql_profile?: FixtureSQLProfile;
+  violations?: string[];
+}
+
+export interface FixtureSQLProfile {
+  path: string;
+  query_count: number;
+  slow_query_count: number;
+  total_duration_ms: number;
+  max_query_ms: number;
+  statements?: FixtureSQLStatement[];
+}
+
+export interface FixtureSQLStatement {
+  sql: string;
+  params: string[];
+  duration_ms: number;
+  rows: number;
+  slow: boolean;
+  error: boolean;
+}
+
+export interface ProfileDiskIO {
+  disk_read_bytes: number;
+  disk_write_bytes: number;
+  sample_count: number;
+  missing_processes?: number;
+}
+
+export interface GoProfileArtifact {
+  name: string;
+  id?: string;
+  path?: string;
+  status: 'captured' | 'not_emitted' | 'invalid';
+  bytes?: number;
+  sample_types?: string[];
+  error?: string;
+}
+
+export interface FixtureProfile {
+  scope: 'process_tree' | 'run_tree';
+  pid?: number;
+  sample_count: number;
+  peak_cpu_percent: number;
+  peak_memory_percent: number;
+  peak_rss_bytes: number;
+  disk_io?: ProfileDiskIO;
+}
+
+export interface FixtureBenchmarkDelta {
+  key: string;
+  name: string;
+  kind: string;
+  baseline_ms: number;
+  current_ms: number;
+  delta_ms: number;
+  delta_pct?: number;
+  disk_read_bytes_delta?: number;
+  disk_write_bytes_delta?: number;
+}
+
+export interface FixtureProcess {
+  pid: number;
+  ppid?: number;
+  command?: string;
+  status?: string;
+  cpuPercent?: number;
+  memoryPercent?: number;
+  rssBytes?: number;
+  io?: { diskReadBytes: number; diskWriteBytes: number };
+}
+
+export interface FixtureProfileSample {
+  sampled_at: string;
+  cpu_percent: number;
+  memory_percent: number;
+  rss_bytes: number;
+  processes: FixtureProcess[];
+}
+
+export interface FixtureBenchmarkReport {
+  version: number;
+  mode: string;
+  started_at: string;
+  finished_at: string;
+  duration_ms: number;
+  status: string;
+  files: string[];
+  phases: FixtureBenchmarkEntry[];
+  fixtures: FixtureBenchmarkEntry[];
+  limits?: {
+    max_deviation_pct?: number;
+    max_duration_ms?: number;
+    max_rss_bytes?: number;
+    max_disk_read_bytes?: number;
+    max_disk_write_bytes?: number;
+    max_sql_duration_ms?: number;
+    max_sql_query_ms?: number;
+    max_sql_queries?: number;
+    max_slow_sql?: number;
+  };
+  violations?: { key: string; name: string; reasons: string[] }[];
+  comparison?: {
+    baseline: string;
+    deltas: FixtureBenchmarkDelta[];
+    added?: string[];
+    missing?: string[];
+    unmeasured?: string[];
+    peak_cpu_percent_delta?: number;
+    peak_rss_bytes_delta?: number;
+  };
+  profile?: {
+    interval_ms: number;
+    peak_cpu_percent: number;
+    peak_memory_percent: number;
+    peak_rss_bytes: number;
+    disk_io?: ProfileDiskIO;
+    samples: FixtureProfileSample[];
+  };
+}
+
+export interface FixtureBenchmarkState {
+  mode: string;
+  progress?: FixtureExecutionSnapshot;
+  report?: FixtureBenchmarkReport;
+  artifact_path?: string;
+}
+
+export interface FixturePerformance {
+  mode: string;
+  status: string;
+  duration_ms: number;
+  artifact_path?: string;
+  profile?: FixtureBenchmarkReport['profile'];
+  comparison?: FixtureBenchmarkReport['comparison'];
+  limits?: FixtureBenchmarkReport['limits'];
+  violations?: FixtureBenchmarkReport['violations'];
 }
 
 export interface RunMeta {

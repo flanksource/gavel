@@ -99,14 +99,14 @@ func BuildDefinitionOfDone(in DefinitionOfDoneOptions) (DefinitionOfDone, error)
 	// the todo's own `checks:` front matter turns it on.
 	if cfg.IsEnabled() {
 		if cfg.Test != nil {
-			section, err := runnerStepSection("checks:test", fixtures.RunnerKindTest, cfg.Test, gitRoot)
+			section, err := runnerStepSection("checks:test", fixtures.RunnerKindTest, cfg.Test)
 			if err != nil {
 				return DefinitionOfDone{}, err
 			}
 			sections = append(sections, section)
 		}
 		if cfg.Lint != nil {
-			section, err := runnerStepSection("checks:lint", fixtures.RunnerKindLint, cfg.Lint, gitRoot)
+			section, err := runnerStepSection("checks:lint", fixtures.RunnerKindLint, cfg.Lint)
 			if err != nil {
 				return DefinitionOfDone{}, err
 			}
@@ -119,7 +119,7 @@ func BuildDefinitionOfDone(in DefinitionOfDoneOptions) (DefinitionOfDone, error)
 	// front matter is lifted into the generated document's, because a fixture
 	// document has exactly one and the todo's is the one that knows how its own
 	// steps want to run.
-	front := dodFrontMatter{CWD: gitRoot}
+	front := dodFrontMatter{CWD: executionGitRoot}
 	var criteria []string
 	var warnings []string
 	for _, todo := range in.Todos {
@@ -303,11 +303,21 @@ func criteriaSection(criteria []string) string {
 	return b.String()
 }
 
+// executionGitRoot is the document's default cwd: the git root of the checkout
+// the document executes in, which the fixture engine injects as GIT_ROOT_DIR
+// from the verifier's working directory. The document is built from the main
+// checkout but runs wherever the step works — a run or verify step's worktree —
+// so naming the main checkout's root here would judge a tree without the work
+// under verification. Outside a git repository it is empty, and steps run in
+// the verifier's working directory.
+const executionGitRoot = "$GIT_ROOT_DIR"
+
 // runnerStepSection renders one configured check as a `yaml test` / `yaml lint`
-// fence — the same wire contract a hand-written fixture file uses. work-dir is
-// stamped explicitly so the suite runs at the git root the config was resolved
-// against, not wherever the agent's turn happened to leave the run.
-func runnerStepSection(name, kind string, options any, workDir string) (string, error) {
+// fence — the same wire contract a hand-written fixture file uses. It names no
+// work-dir: a runner step defaults to the git root of the checkout the document
+// executes in (fixtures/types resolveStepWorkDir), for the same reason the
+// document's cwd does.
+func runnerStepSection(name, kind string, options any) (string, error) {
 	body, err := yaml.Marshal(options)
 	if err != nil {
 		return "", fmt.Errorf("%s: marshal step options: %w", name, err)
@@ -319,7 +329,7 @@ func runnerStepSection(name, kind string, options any, workDir string) (string, 
 	if config != "" {
 		config += "\n"
 	}
-	return fmt.Sprintf("## %s\n\n```yaml %s\n%swork-dir: %s\n```", name, kind, config, workDir), nil
+	return fmt.Sprintf("## %s\n\n```yaml %s\n%s```", name, kind, config), nil
 }
 
 // checksWorkDirFor resolves the directory checks run in: the git root of the

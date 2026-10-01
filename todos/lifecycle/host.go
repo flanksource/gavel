@@ -27,6 +27,13 @@ type Host struct {
 	Kind     HostKind
 	Catalog  runtimeprofiles.CatalogFactory
 	Saved    *captainconfig.Config
+	// Preview holds back a triage verdict that would close a TODO — merge-into or
+	// duplicate-of — and reports what it would have done instead.
+	//
+	// It is narrower than its name: every other verdict applies as usual, and no
+	// other step is affected. What it buys is the tier between trusting an agent's
+	// duplicate call and finding out after two TODOs have closed.
+	Preview bool
 }
 
 // NewHost loads the project's configuration and lifecycle for a work dir.
@@ -196,11 +203,11 @@ func (h *Host) graderSpec(ctx context.Context, todo *types.TODO) (api.Spec, erro
 	}
 	resolved, err := h.resolveProfileLayers(ctx, LayerInput{
 		RequireModel:   true,
+		RuntimePresets: h.presetSelection(StepVerify, nil, false, nil, false),
 		RuntimeProfile: h.profileSelection(StepVerify, "", ""),
 		Config:         h.Config,
 		Step:           StepVerify,
 		Todos:          []*types.TODO{todo},
-		Host:           h.Kind,
 	})
 	if err != nil {
 		return api.Spec{}, fmt.Errorf("resolve verification spec: %w", err)
@@ -210,7 +217,7 @@ func (h *Host) graderSpec(ctx context.Context, todo *types.TODO) (api.Spec, erro
 		return api.Spec{}, err
 	}
 	ApplyClassInvariants(&spec, types.ModeVerify)
-	if err := ValidateSpec(spec); err != nil {
+	if err := ValidateSpec(spec, types.ModeVerify); err != nil {
 		return api.Spec{}, fmt.Errorf("verification spec for the acceptance-criteria grader: %w", err)
 	}
 	return spec, nil

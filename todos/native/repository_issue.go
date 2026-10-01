@@ -27,6 +27,7 @@ type issueRecord struct {
 	ExecutionState    string
 	ActivePromptRunID *uuid.UUID
 	SelectedPlanID    *uuid.UUID
+	ParentIssueID     *uuid.UUID
 	Version           int64
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
@@ -49,6 +50,7 @@ func (r issueRecord) issue() *Issue {
 		ExecutionState:    ExecutionState(r.ExecutionState),
 		ActivePromptRunID: r.ActivePromptRunID,
 		SelectedPlanID:    r.SelectedPlanID,
+		ParentID:          r.ParentIssueID,
 		Version:           r.Version,
 		CreatedAt:         r.CreatedAt,
 		UpdatedAt:         r.UpdatedAt,
@@ -59,8 +61,8 @@ const issueColumns = `
 	issue.id, issue.workspace_id, issue.title, issue.body, issue.verification,
 	issue.labels, issue.priority, issue.status,
 	COALESCE(runtime.execution_state, 'idle') AS execution_state,
-	issue.active_prompt_run_id, issue.selected_plan_id, issue.version,
-	issue.created_at, issue.updated_at`
+	issue.active_prompt_run_id, issue.selected_plan_id, issue.parent_issue_id,
+	issue.version, issue.created_at, issue.updated_at`
 
 const issueFrom = `
 	todo_issues AS issue
@@ -106,14 +108,24 @@ func (r *Repository) CreateIssue(ctx context.Context, input CreateIssueInput) (*
 		if !workspaceExists {
 			return fmt.Errorf("%w: workspace %s", ErrNotFound, input.WorkspaceID)
 		}
+		if input.ParentID != nil {
+			// The same lock SetIssueParent takes, so the parent cannot become a
+			// child between this check and the insert.
+			if err := lockWorkspaceRelationships(tx, input.WorkspaceID); err != nil {
+				return err
+			}
+			if err := requireTopLevelParent(tx, input.WorkspaceID, *input.ParentID); err != nil {
+				return err
+			}
+		}
 
 		result := tx.Exec(`
 			INSERT INTO todo_issues
 				(id, workspace_id, title, body, verification, labels, priority, status,
-				 version, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, now(), now())`,
+				 parent_issue_id, version, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, now(), now())`,
 			id, input.WorkspaceID, title, input.Body, input.Verification, pq.Array(normalizedLabels),
-			priority, status,
+			priority, status, input.ParentID,
 		)
 		if result.Error != nil {
 			return result.Error
@@ -121,17 +133,15 @@ func (r *Repository) CreateIssue(ctx context.Context, input CreateIssueInput) (*
 		if err := insertAliases(tx, input.WorkspaceID, id, aliases); err != nil {
 			return err
 		}
-		_, err := insertEvent(tx, id, 1, EventInput{
-			Kind:  "created",
-			Actor: input.Actor,
-			Payload: map[string]any{
-				"title":     title,
-				"labels":    normalizedLabels,
-				"priority":  priority,
-				"status":    status,
-				"workspace": input.WorkspaceID,
-			},
-		})
+		payload := map[string]any{
+			"title":     title,
+			"labels":    normalizedLabels,
+			"priority":  priority,
+			"status":    status,
+			"workspace": input.WorkspaceID,
+		}
+		addLineage(payload, input.ParentID, input.Origin)
+		_, err := insertEvent(tx, id, 1, EventInput{Kind: "created", Actor: input.Actor, Payload: payload})
 		return err
 	})
 	if err != nil {
@@ -146,8 +156,8 @@ func (r *Repository) GetIssue(ctx context.Context, id uuid.UUID) (*Issue, error)
 
 // MoveIssueWorkspace transfers one issue between native workspaces without
 // changing its identity or deleting its history and Captain links. Issues with
-// relationships must be detached first because relationships are
-// workspace-scoped.
+// relationships, a parent or children must be detached first because all three
+// are workspace-scoped.
 func (r *Repository) MoveIssueWorkspace(
 	ctx context.Context,
 	issueID, targetWorkspaceID uuid.UUID,
@@ -199,6 +209,9 @@ func (r *Repository) MoveIssueWorkspace(
 		}
 		if hasRelationships {
 			return fmt.Errorf("%w: issue %s", ErrIssueHasRelationships, issueID)
+		}
+		if err := requireOutsideHierarchy(tx, issueID); err != nil {
+			return err
 		}
 
 		var aliases []Alias
@@ -314,7 +327,7 @@ func (r *Repository) UpdateIssue(ctx context.Context, id uuid.UUID, expectedVers
 	}
 
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		locked, err := lockIssue(tx, id, expectedVersion)
+		locked, err := lockIssueForPatch(tx, id, expectedVersion, patch)
 		if err != nil {
 			return err
 		}

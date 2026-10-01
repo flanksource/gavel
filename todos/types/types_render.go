@@ -116,13 +116,16 @@ func (t TODO) DisplayID() string {
 	if t.ShortID != "" {
 		return t.ShortID
 	}
-	if t.ID == "" {
-		return ""
+	return ShortID(t.ID)
+}
+
+// ShortID is the 8-character form of a TODO id that lists show and references
+// accept.
+func ShortID(id string) string {
+	if len(id) > 8 {
+		return id[:8]
 	}
-	if len(t.ID) > 8 {
-		return t.ID[:8]
-	}
-	return t.ID
+	return id
 }
 
 func (t TODO) Filename() string {
@@ -183,6 +186,10 @@ func (t TODO) PrettyDetailed() api.Text {
 
 	if t.ID != "" {
 		result = result.Append("ID: ", "text-gray-500").Append(t.ID, "").NewLine()
+	}
+
+	if t.ParentID != "" {
+		result = result.Append("Parent: ", "text-gray-500").Append(t.ParentID, "").NewLine()
 	}
 
 	if t.Provider != "" {
@@ -477,6 +484,9 @@ func (c CheckResult) Pretty() api.Text {
 
 	if c.Duration > 0 {
 		result = result.Append(fmt.Sprintf(" (%s)", c.Duration.Round(time.Millisecond)), "text-gray-500")
+	}
+	if c.Target != nil {
+		result = result.Append(" verified "+c.Target.String(), "text-gray-500")
 	}
 	if c.Report == nil {
 		return result

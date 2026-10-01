@@ -21,6 +21,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 
 	captainai "github.com/flanksource/captain/pkg/ai"
@@ -62,6 +63,12 @@ type Options struct {
 	// Backlog is a compact index of the other open TODOs in the workspace, so a
 	// triage run can spot duplicates. Empty omits the section.
 	Backlog string
+	// Labels is the workspace's label taxonomy, rendered by
+	// todos.LabelTaxonomySection. It is the closed vocabulary a triage run may
+	// propose from — the same list the write side holds it to. Empty omits the
+	// section, which is also what stops an agent proposing labels it would then be
+	// rejected for.
+	Labels string
 	// Inputs are the lifecycle step's declared template variables, evaluated
 	// from the todo. They are folded over the built-in variables above, so a
 	// step that declares `existingPlan` decides what the template sees.
@@ -92,21 +99,13 @@ func Default(name string) (string, error) {
 // the same variables, and a template that computes its frontmatter would resolve
 // differently against a divergent set.
 func TemplateData(todoList []*types.TODO, opts Options) map[string]any {
-	multiple := len(todoList) > 1
-	var body strings.Builder
-	for i, todo := range todoList {
-		number := 0
-		if multiple {
-			number = i + 1
-		}
-		body.WriteString(buildTODOSection(todo, opts.WorkDir, true, number, opts.Envelope == EnvelopeTriage))
-	}
 	data := map[string]any{
-		"multiple":     multiple,
+		"multiple":     len(todoList) > 1,
 		"count":        len(todoList),
-		"body":         body.String(),
+		"body":         Sections(todoList, opts.WorkDir, opts.Envelope == EnvelopeTriage),
 		"existingPlan": opts.ExistingPlan,
 		"backlog":      opts.Backlog,
+		"labels":       opts.Labels,
 	}
 	for name, value := range opts.Inputs {
 		data[name] = value
@@ -173,7 +172,7 @@ func Render(todoList []*types.TODO, opts Options) (captainai.Request, captainai.
 		return captainai.Request{}, captainai.Config{}, fmt.Errorf("validate todos %s spec: %w", opts.promptName(), err)
 	}
 	if directive := EffortDirective(string(req.Effort)); directive != "" {
-		req.Prompt.User = directive + "\n\n" + user
+		req.Prompt.User = directive + "\n\n" + withoutEffortDirectives(user)
 	}
 	return req, captainai.Config{Model: req.Model, Budget: req.Budget}, nil
 }
@@ -231,6 +230,23 @@ func EffortDirective(effort string) string {
 		return "Think very hard, reason exhaustively, and validate edge cases before implementing."
 	default:
 		return ""
+	}
+}
+
+var effortDirectiveTiers = []string{"low", "medium", "high", "xhigh"}
+
+// withoutEffortDirectives removes the directive lines leading a prompt so Render
+// can lead it with exactly one. An override edited from a preview already starts
+// with the directive the preview rendered, possibly for a different effort.
+func withoutEffortDirectives(user string) string {
+	for {
+		line, rest, _ := strings.Cut(strings.TrimLeft(user, "\r\n"), "\n")
+		if !slices.ContainsFunc(effortDirectiveTiers, func(tier string) bool {
+			return strings.TrimRight(line, "\r ") == EffortDirective(tier)
+		}) {
+			return user
+		}
+		user = strings.TrimLeft(rest, "\r\n")
 	}
 }
 

@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
-import type { TodoItem, TodoPriority, TodoRunOptions, TodoStatus } from '../../types';
+import type { TodoChildDisposition, TodoItem, TodoPriority, TodoRunOptions, TodoStatus } from '../../types';
+import { openChildrenOf } from './todoFamily';
 import type { TodoDetailProps } from './TodoDetail';
 import { useSessionStats } from './TodoSessionTimer';
-import { loadLastTodoRunOptions, rememberTodoRunOptions, requestStepFor, runSpec, useTodoRun, useTodoRunContext } from './run';
+import { loadLastTodoRunOptions, normalizeRunOptions, rememberTodoRunOptions, requestStepFor, runSpec, useTodoRun, useTodoRunContext } from './run';
 import { loadPromptRunOptions, rememberPromptRunOptions, verificationSpec } from './PromptRunButton';
 import type { PhaseRunOptions } from './TodoPhaseButton';
 import type { TodoDetailTabKey } from './TodoDetailTabs';
@@ -10,20 +11,26 @@ import { useTodoSessionDetail } from './TodoSessionDetail';
 import { verificationAttempts, verificationBadge } from './verificationReport';
 import { TodoMutationError, useDeleteTodoMutation, useGithubPushTodoMutation, useTodoSessionStop, useTodoVerificationRun, useTransferTodoMutation, useUpdateTodoMutation } from './todoMutations';
 import { useTodoTagCounts, useTodoTagIndex } from './tagQueries';
+import { useTodoLaunchProgress } from './todoLaunch';
 import { todoVisibleLabels } from './tagResolve';
 
-export function useTodoDetail({ todo, dir, onChanged, onDeleted, workspaces = [], onTransferred }: TodoDetailProps) {
+export function useTodoDetail({ todo, dir, onChanged, onDeleted, workspaces = [], onTransferred, view, onViewChange, childTodos = [] }: TodoDetailProps) {
   const [advancedMode, setAdvancedMode] = useState<string | null>(null);
+  const [archivePrompt, setArchivePrompt] = useState<{ openChildren: TodoItem[]; serverMessage?: string } | null>(null);
   const [runSelections, setRunSelections] = useState<PhaseRunOptions>({});
   const [verifySelection, setVerifySelection] = useState<TodoRunOptions | null>(null);
   const [error, setError] = useState('');
-  const [tab, setTab] = useState<TodoDetailTabKey>('overview');
+  // A todo opened by one of its session ids (/todos/{sessionId}) lands on that
+  // session unless the view names a tab.
+  const tab: TodoDetailTabKey = view.tab ?? (todo?.lookupSessionId ? 'session' : 'overview');
+  const setTab = (next: TodoDetailTabKey) => onViewChange({ ...view, tab: next });
   const [editingTitle, setEditingTitle] = useState(false);
   const [editingBody, setEditingBody] = useState(false);
   const [draftTitle, setDraftTitle] = useState('');
   const [draftBody, setDraftBody] = useState('');
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'error'>('idle');
   const { runBusy, runMessage, runError, reset: resetRun, run } = useTodoRun(dir);
+  const launch = useTodoLaunchProgress(dir, todo?.ref ?? '');
   const { context: runContext } = useTodoRunContext({ dir });
   const updateTodo = useUpdateTodoMutation(dir, `Failed to update todo ${todo?.ref || ''}`.trim());
   const deleteTodo = useDeleteTodoMutation(dir);
@@ -35,16 +42,16 @@ export function useTodoDetail({ todo, dir, onChanged, onDeleted, workspaces = []
   const closed = todo?.status === 'completed';
   const body = todo?.body?.trim() ?? '';
   const events = todo?.events ?? [];
-  // One attempts-only poll feeds both the tab badge and the Verification tab, so
-  // a failed check is visible before the tab is ever opened. It keeps polling
+  // One attempts poll feeds both tab badges and the Verification tab, so a
+  // failed check is visible before the tab is ever opened. It keeps polling
   // while the tab is closed, just more slowly.
   const { detail: verificationDetail, error: verificationError } = useTodoSessionDetail(
     dir,
     todo?.ref ?? '',
-    undefined,
     !!todo?.ref,
-    { attemptsOnly: true, intervalMs: tab === 'verification' ? 1500 : 15000 }
+    { intervalMs: tab === 'verification' ? 1500 : 15000 }
   );
+  const sessionAttemptCount = verificationDetail?.attempts.length ?? 0;
   const verification = verificationBadge(verificationAttempts(verificationDetail));
   const verificationRun = useTodoVerificationRun(dir, todo?.ref ?? '');
   const sessionStop = useTodoSessionStop(dir, todo?.ref ?? '', todo?.sessionId);
@@ -58,7 +65,9 @@ export function useTodoDetail({ todo, dir, onChanged, onDeleted, workspaces = []
   // Same cached query as the index, so the picker can lead with the tags this
   // project actually uses without a second request.
   const tagCounts = useTodoTagCounts(dir);
-  const viewSessionId = todo?.lookupSessionId || todo?.sessionId;
+  const viewSessionId = launch?.status === 'admitted' && launch.promptRunId
+    ? launch.promptRunId
+    : todo?.lookupSessionId || todo?.sessionId;
   const viewingHistoricalSession = !!todo?.lookupSessionId && todo.lookupSessionId !== todo.sessionId;
   const { stats: headerSessionStats } = useSessionStats({ dir, sessionId: todo?.sessionId, active: !!todo?.sessionId });
   const sessionInProgress = !!todo && !!todo.sessionId && (headerSessionStats?.inProgress || (!headerSessionStats?.found && todo.status === 'in_progress'));
@@ -90,7 +99,7 @@ export function useTodoDetail({ todo, dir, onChanged, onDeleted, workspaces = []
     setError('');
     resetRun();
     setAdvancedMode(null);
-    setTab(todo?.lookupSessionId ? 'session' : 'overview');
+    setArchivePrompt(null);
     setEditingTitle(false);
     setEditingBody(false);
     setCopyState('idle');
@@ -126,6 +135,8 @@ export function useTodoDetail({ todo, dir, onChanged, onDeleted, workspaces = []
     // The complete replacement label set. TodoTagField builds it, reserved
     // lifecycle labels included, because the API replaces the whole set.
     labels?: string[];
+    // A todo ref makes it a child of that todo; the empty string detaches it.
+    parent?: string;
   }): Promise<boolean> {
     if (!todo || busy) return false;
     setError('');
@@ -198,16 +209,39 @@ export function useTodoDetail({ todo, dir, onChanged, onDeleted, workspaces = []
     }
   }
 
-  async function archiveTodo() {
-    if (!todo || busy) return;
-    if (!window.confirm('Archive this todo?')) return;
+  // Archiving a parent with open children needs the person's say on what
+  // happens to them. The loaded list says when there are any; when it cannot
+  // (still loading, failed) the request goes without a choice and the server's
+  // 409 raises the same prompt.
+  async function sendArchive(children?: TodoChildDisposition) {
+    if (!todo) return;
     setError('');
     try {
-      await deleteTodo.mutateAsync(todo.ref);
+      await deleteTodo.mutateAsync({ ref: todo.ref, children });
       onDeleted();
     } catch (err) {
+      if (!children && err instanceof TodoMutationError && err.status === 409) {
+        setArchivePrompt({ openChildren: [], serverMessage: err.message });
+        return;
+      }
       setError(err instanceof Error ? err.message : 'Failed to archive todo');
     }
+  }
+
+  async function archiveTodo() {
+    if (!todo || busy) return;
+    const open = openChildrenOf(childTodos);
+    if (open.length > 0) {
+      setArchivePrompt({ openChildren: open });
+      return;
+    }
+    if (!window.confirm('Archive this todo?')) return;
+    await sendArchive();
+  }
+
+  async function chooseArchiveChildren(children: TodoChildDisposition) {
+    setArchivePrompt(null);
+    await sendArchive(children);
   }
 
   async function copyFullId() {
@@ -242,6 +276,7 @@ export function useTodoDetail({ todo, dir, onChanged, onDeleted, workspaces = []
       try {
         await verificationRun.mutateAsync({
           ref: todo.ref,
+          presets: options.presets,
           runtimeProfile: options.runtimeProfile,
           spec: verificationSpec(runSpec(options)),
         });
@@ -254,16 +289,19 @@ export function useTodoDetail({ todo, dir, onChanged, onDeleted, workspaces = []
     await runTodo({ ...options, step: name });
   }
 
+  // The advanced dialog dispatches exactly what the operator set. Remembering
+  // reconciles its copy against the catalog for the quick-run buttons, but that
+  // copy must not replace the request (it would swap an effort nobody chose).
   function submitAdvanced(options: TodoRunOptions) {
     if (!runContext) return;
     const step = requestStepFor(options);
-    const remembered = step === 'verify'
-      ? rememberPromptRunOptions('verification', options, runContext)
-      : rememberTodoRunOptions(step, options, true);
-    if (step === 'verify') setVerifySelection(remembered);
-    else setRunSelections(previous => ({ ...previous, [step]: remembered }));
+    const dispatched = step === 'verify'
+      ? { step, presets: options.presets, spec: verificationSpec(runSpec(options)) }
+      : normalizeRunOptions(step, options);
+    if (step === 'verify') setVerifySelection(rememberPromptRunOptions('verification', dispatched, runContext));
+    else setRunSelections(previous => ({ ...previous, [step]: rememberTodoRunOptions(step, dispatched, true) }));
     setAdvancedMode(null);
-    void runPhase(step, remembered);
+    void runPhase(step, dispatched);
   }
 
   async function stopRun() {
@@ -278,6 +316,9 @@ export function useTodoDetail({ todo, dir, onChanged, onDeleted, workspaces = []
 
   async function runTodo(options?: TodoRunOptions) {
     if (!todo) return;
+    // A fresh run's attempt becomes the inspector's selection, so drop any
+    // attempts picked earlier.
+    onViewChange({ tab: 'session', ...(view.sessionTab ? { sessionTab: view.sessionTab } : {}) });
     const result = await run(todo.ref, options);
     if (result?.status === 'started') {
       onChanged({
@@ -287,8 +328,6 @@ export function useTodoDetail({ todo, dir, onChanged, onDeleted, workspaces = []
         // Adopt the run's session id so the Session tab follows the new run.
         sessionId: result.sessionId || todo.sessionId,
       });
-      // Surface the live session as soon as a run starts.
-      setTab('session');
     }
   }
 
@@ -297,11 +336,12 @@ export function useTodoDetail({ todo, dir, onChanged, onDeleted, workspaces = []
     editingTitle, setEditingTitle, editingBody, setEditingBody, draftTitle, setDraftTitle,
     draftBody, setDraftBody, copyState, runBusy, runMessage, runError, runContext,
     busy, transferTargets, closed, body, events, verificationDetail, verificationError,
-    verification, verificationRun, sessionStop, stoppableAttempt, fullTodoId, visibleLabels,
+    verification, sessionAttemptCount, verificationRun, sessionStop, stoppableAttempt, fullTodoId, visibleLabels,
     tagIndex, tagCounts, viewSessionId, viewingHistoricalSession, sessionInProgress,
     awaitingHumanAction, phaseOptions, runningPhaseLabel, changePhaseOptions, patch,
     startEditTitle, startEditBody, saveTitle, saveBody, transferTo, pushToGithub,
-    archiveTodo, copyFullId, runPhase, stopRun, runTodo, submitAdvanced,
+    archiveTodo, archivePrompt, chooseArchiveChildren, cancelArchive: () => setArchivePrompt(null),
+    copyFullId, runPhase, stopRun, runTodo, submitAdvanced,
   };
 }
 

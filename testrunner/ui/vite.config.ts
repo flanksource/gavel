@@ -2,6 +2,9 @@ import { defineConfig } from 'vite';
 import preact from '@preact/preset-vite';
 
 export default defineConfig({
+  server: {
+    hmr: false,
+  },
   plugins: [preact()],
   resolve: {
     // The preact preset aliases React (incl. react/jsx-runtime) to preact. When

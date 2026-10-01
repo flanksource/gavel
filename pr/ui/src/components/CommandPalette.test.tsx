@@ -84,3 +84,50 @@ describe('CommandPalette UUID entry', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('CommandPalette child todos', () => {
+  const workspace = { name: 'billing', dir: '/repos/billing', repos: [] };
+  const parentId = '6b1f3c9a-2d4e-4f50-8a71-93c0d5e2b418';
+  const entries = [
+    { workspace, todo: { ref: 'parent', id: parentId, title: 'Migrate ledger', status: 'pending' as const, priority: 'medium' as const } },
+    { workspace, todo: { ref: 'child', id: 'child-id', parentId, title: 'Backfill ledger rows', status: 'pending' as const, priority: 'medium' as const } },
+  ];
+
+  it('finds a child by its own title and shows which parent it hangs under', () => {
+    render(
+      <CommandPalette
+        open
+        onClose={vi.fn()}
+        prs={[]}
+        todos={entries}
+        todosLoading={false}
+        onSelectPR={vi.fn()}
+        onSelectTodo={vi.fn()}
+        onOpenUUID={vi.fn()}
+      />,
+    );
+
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'backfill' } });
+    expect(screen.getByText('Backfill ledger rows')).toBeTruthy();
+    expect(screen.getByTitle('Child of Migrate ledger').textContent).toBe('↳ Migrate ledger');
+  });
+
+  it('shows no parent hint on a top-level todo', () => {
+    render(
+      <CommandPalette
+        open
+        onClose={vi.fn()}
+        prs={[]}
+        todos={entries}
+        todosLoading={false}
+        onSelectPR={vi.fn()}
+        onSelectTodo={vi.fn()}
+        onOpenUUID={vi.fn()}
+      />,
+    );
+
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'migrate' } });
+    expect(screen.getByText('Migrate ledger')).toBeTruthy();
+    expect(screen.queryByText(/↳/)).toBeNull();
+  });
+});

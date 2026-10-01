@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/flanksource/captain/pkg/api"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -42,14 +43,18 @@ var _ = Describe("raw configuration spec layers", func() {
 		Expect(string(config.AI.Permissions.Tools["Read"])).To(Equal("allow"))
 	})
 
-	It("rejects a step that widens the project permission ceiling", func() {
+	// A step block is a later layer than the `ai:` base, so it supplies the
+	// value: the base only decides what a step does not name.
+	It("lets a step block replace what the ai: base configured", func() {
 		home, repository := GinkgoT().TempDir(), GinkgoT().TempDir()
 		GinkgoT().Setenv("HOME", home)
 		config := "ai: {permissions: {tools: {Bash: deny}}}\ntodos: {run: {permissions: {tools: {Bash: allow}}}}\n"
 		Expect(os.WriteFile(filepath.Join(repository, ".gavel.yaml"), []byte(config), 0600)).To(Succeed())
 
-		_, err := LoadGavelConfig(repository)
+		loaded, err := LoadGavelConfig(repository)
 
-		Expect(err).To(MatchError(And(ContainSubstring("permissions.tools.Bash"), ContainSubstring(".gavel.yaml ai"), ContainSubstring(".gavel.yaml todos.run"))))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(loaded.AI.Permissions.Tools).To(Equal(api.Tools{"Bash": api.ToolPolicyDeny}))
+		Expect(loaded.Todos.Run.Spec.Permissions.Tools).To(Equal(api.Tools{"Bash": api.ToolPolicyAllow}))
 	})
 })

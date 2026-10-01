@@ -29,22 +29,22 @@ func todoRunProfilePreviewFor(profile *runtimeprofiles.Resolution) *todoRunProfi
 	return &todoRunProfilePreview{Profile: profile.Profile, Presets: profile.Presets}
 }
 
-func todoRunProfileOptions(ctx context.Context, host *lifecycle.Host) ([]todoRunRuntimeProfileOption, error) {
+func todoRunPresetPreviewFor(presets *runtimeprofiles.PresetResolution) []runtimeprofiles.Preset {
+	if presets == nil {
+		return nil
+	}
+	return presets.Presets
+}
+
+func todoRunPresetOptions(ctx context.Context, host *lifecycle.Host) ([]runtimeprofiles.Preset, error) {
 	catalog, err := host.RuntimeCatalog(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("load runtime profiles: %w", err)
+		return nil, fmt.Errorf("load runtime presets: %w", err)
 	}
 	host.Catalog = func(context.Context) (*runtimeprofiles.Catalog, error) { return catalog, nil }
-	profiles, err := catalog.ListProfiles(ctx)
+	presets, err := catalog.ListPresets(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("list runtime profiles: %w", err)
+		return nil, fmt.Errorf("list runtime presets: %w", err)
 	}
-	options := make([]todoRunRuntimeProfileOption, 0, len(profiles))
-	for _, profile := range profiles {
-		options = append(options, todoRunRuntimeProfileOption{
-			ID: profile.ID, Name: profile.Name, Description: profile.Description,
-			Model: profile.Spec.Name, Presets: profile.Presets, Source: profile.Source,
-		})
-	}
-	return options, nil
+	return presets, nil
 }

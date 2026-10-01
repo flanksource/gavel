@@ -74,13 +74,6 @@ func Open(ctx context.Context, options WorkspaceOptions) (*Provider, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Todo commands open the database without migrating it — only `gavel serve`
-	// applies migrations — so this is where a binary newer than its database is
-	// caught, once, rather than as an obscure failure at whichever read first
-	// touches a column that is not there yet.
-	if err := requireVerificationColumn(db); err != nil {
-		return nil, err
-	}
 	return New(ctx, db, options)
 }
 
@@ -93,9 +86,15 @@ func OpenGlobal(ctx context.Context) (*Provider, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := requireVerificationColumn(db); err != nil {
+	if err := requireCurrentSchema(ctx, db); err != nil {
 		return nil, err
 	}
+	return NewGlobal(db)
+}
+
+// NewGlobal constructs the workspace-less provider OpenGlobal returns over an
+// already migrated GORM pool.
+func NewGlobal(db *gorm.DB) (*Provider, error) {
 	repository, err := native.NewRepository(db)
 	if err != nil {
 		return nil, err
@@ -114,8 +113,8 @@ func OpenGlobal(ctx context.Context) (*Provider, error) {
 	}, nil
 }
 
-// New constructs a provider over an already migrated GORM pool. It is useful
-// to hosts and tests that own the database lifecycle.
+// New constructs a workspace provider over a GORM pool the caller owns. It is
+// what Open, the portable import/export and tests all construct through.
 func New(ctx context.Context, db *gorm.DB, options WorkspaceOptions) (*Provider, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -124,27 +123,34 @@ func New(ctx context.Context, db *gorm.DB, options WorkspaceOptions) (*Provider,
 	if err != nil {
 		return nil, err
 	}
-	repository, err := native.NewRepository(db)
+	global, err := NewGlobal(db)
 	if err != nil {
 		return nil, err
 	}
-	workspace, err := initializeWorkspace(ctx, repository, options)
+	// Todo commands open the database without migrating it — only `gavel serve`
+	// applies migrations — so this is where a binary newer than its database is
+	// caught, once and before anything is written, rather than as an obscure
+	// failure at whichever read first touches a column that is not there yet.
+	// It lives here rather than in Open so a caller holding its own pool cannot
+	// construct a provider around it.
+	if err := requireCurrentSchema(ctx, db); err != nil {
+		return nil, err
+	}
+	workspace, err := initializeWorkspace(ctx, global.repository, options)
 	if err != nil {
 		return nil, err
 	}
-	captain, err := captaindb.Use(db)
-	if err != nil {
-		return nil, err
-	}
-	coordinator, err := native.NewLaunchCoordinator(captain, repository)
-	if err != nil {
-		return nil, err
-	}
+	return global.withWorkspace(workspace, options.RootPath), nil
+}
+
+// withWorkspace returns a provider scoped to an already resolved workspace,
+// sharing p's pool, repository and coordinator. It issues no queries.
+func (p *Provider) withWorkspace(workspace *native.Workspace, workDir string) *Provider {
 	return &Provider{
-		workDir: options.RootPath, db: db, repository: repository,
-		captain: captain, coordinator: coordinator, workspace: workspace,
+		workDir: workDir, db: p.db, repository: p.repository,
+		captain: p.captain, coordinator: p.coordinator, workspace: workspace,
 		prepared: map[uuid.UUID]map[uuid.UUID]struct{}{},
-	}, nil
+	}
 }
 
 func normalizeWorkspaceOptions(options WorkspaceOptions) (WorkspaceOptions, error) {
@@ -213,10 +219,14 @@ func initializeWorkspace(ctx context.Context, repository *native.Repository, opt
 // GetWorkspaceByPath matches retained locations too, so opening a provider at a
 // path the workspace has merely kept looks, to a caller comparing RootPath,
 // exactly like opening one at a place the workspace has moved to.
-func resolveWorkspace(ctx context.Context, repository *native.Repository, options WorkspaceOptions) (*native.Workspace, bool, error) {
+//
+// It resolves through a workspaceFinder so the same rules serve one project
+// against the repository and many projects against a native.WorkspaceLookup
+// snapshot.
+func resolveWorkspace(ctx context.Context, finder workspaceFinder, options WorkspaceOptions) (*native.Workspace, bool, error) {
 	var matched *native.Workspace
 	registeredPath := false
-	byPath, err := repository.GetWorkspaceByPath(ctx, options.RootPath)
+	byPath, err := finder.GetWorkspaceByPath(ctx, options.RootPath)
 	switch {
 	case err == nil:
 		matched = byPath
@@ -225,7 +235,7 @@ func resolveWorkspace(ctx context.Context, repository *native.Repository, option
 		return nil, false, fmt.Errorf("resolve native TODO workspace by project %q path %q: %w", options.Name, options.RootPath, err)
 	}
 	for _, repoKey := range options.Repositories {
-		byRepo, err := repository.GetWorkspaceByRepoKey(ctx, repoKey)
+		byRepo, err := finder.GetWorkspaceByRepoKey(ctx, repoKey)
 		switch {
 		case err == nil:
 			if matched != nil && matched.ID != byRepo.ID {
@@ -297,6 +307,9 @@ func (p *Provider) Workspace() *native.Workspace {
 }
 
 func (p *Provider) List(ctx context.Context, filters todos.DiscoveryFilters) (types.TODOS, error) {
+	if err := reconcileWorkspaceAnswers(ctx, map[uuid.UUID]*Provider{p.workspace.ID: p}); err != nil {
+		return nil, err
+	}
 	issues, err := p.repository.ListIssues(ctx, p.workspace.ID)
 	if err != nil {
 		return nil, err
@@ -330,6 +343,9 @@ func (p *Provider) Get(ctx context.Context, ref string) (*types.TODO, error) {
 	if err != nil {
 		return nil, err
 	}
+	if issue, err = p.reconcileIssue(ctx, issue, p.workDir); err != nil {
+		return nil, err
+	}
 	todo, err := p.todoFromIssue(ctx, issue, p.workDir, true)
 	if err != nil {
 		return nil, err
@@ -345,6 +361,10 @@ func (p *Provider) Get(ctx context.Context, ref string) (*types.TODO, error) {
 // GlobalGet resolves a UUID, short UUID, or legacy alias without a caller
 // workspace and returns both the issue and its owning workspace CWD. It is used
 // for compatibility deep links before a workspace-specific provider exists.
+//
+// It never reconciles answers given outside gavel: a global provider has no
+// workspace to settle a run in, and every caller re-reads the issue through its
+// owning workspace's Get, which does.
 func (p *Provider) GlobalGet(ctx context.Context, ref string) (*types.TODO, string, error) {
 	issue, err := p.repository.GetIssueByGlobalRef(ctx, ref)
 	if err != nil {
@@ -415,6 +435,9 @@ func (p *Provider) Create(ctx context.Context, request todos.CreateRequest) (*ty
 		Priority:     priority,
 		Status:       status,
 		Actor:        mutationActor,
+	}
+	if err := p.applyLineage(ctx, request, &issueInput); err != nil {
+		return nil, err
 	}
 	var issue *native.Issue
 	if request.Plan == nil {

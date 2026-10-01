@@ -19,7 +19,7 @@ catalog:
   # `prepare` (a full source build whose icon generator fetches
   # api.iconify.design), which CI rate-limits to HTTP 429 and then fails the
   # bundle on the icons that never downloaded. The npm tarball ships dist/.
-  '@flanksource/clicky-ui': 0.3.34
+  '@flanksource/clicky-ui': 0.3.41
   "@floating-ui/react": ^0.27.19
   '@iconify-icons/codicon': ^1.2.30
   '@iconify-icons/vscode-icons': ^1.2.29
@@ -62,6 +62,7 @@ catalog:
   "@types/react-dom": ^18.3.1
   '@types/turndown': ^5.0.6
   ai: ^6.0.199
+  ajv: ^8.18.0
   autoprefixer: ^10.4.20
   class-variance-authority: ^0.7.1
   clsx: ^2.1.1
@@ -95,6 +96,9 @@ catalog:
 catalogMode: prefer
 
 linkWorkspacePackages: true
+
+minimumReleaseAgeExclude:
+  - '@flanksource/clicky-ui@0.3.41'
 
 # Force a single @types/react major across the workspace. The linked clicky-ui
 # sibling pins React 18 while pr/ui (this app) is React 19; without a single

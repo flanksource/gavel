@@ -22,6 +22,7 @@ import (
 type fakeCommitRuns struct {
 	mu      sync.Mutex
 	started []string
+	argv    [][]string
 	gates   map[string]chan struct{}
 	failing map[string]bool
 	output  map[string]string
@@ -61,6 +62,7 @@ func newFakeCommitRuns(files ...string) *fakeCommitRuns {
 		task := clickytask.StartTask("fake commit "+file, func(ctx commonscontext.Context, _ *clickytask.Task) (cexec.ExecResult, error) {
 			runs.mu.Lock()
 			runs.started = append(runs.started, file)
+			runs.argv = append(runs.argv, append([]string(nil), args...))
 			runs.output[file] = "committing " + file + "\n"
 			gate, failing := runs.gates[file], runs.failing[file]
 			runs.mu.Unlock()
@@ -92,6 +94,18 @@ func (r *fakeCommitRuns) failOn(file string) {
 	r.failing[file] = true
 }
 
+func (r *fakeCommitRuns) clearFailure(file string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.failing, file)
+}
+
+func (r *fakeCommitRuns) arguments() [][]string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([][]string(nil), r.argv...)
+}
+
 func (r *fakeCommitRuns) release(file string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -104,73 +118,94 @@ func (r *fakeCommitRuns) commands() []string {
 	return append([]string(nil), r.started...)
 }
 
+// commitQueueProjectFiles are the working-tree changes the "gavel" project
+// reports to commit queue specs.
+var commitQueueProjectFiles = []string{"one.go", "two.go", "three.go", "four.go"}
+
+// setupCommitQueueServer registers the "gavel" project with commitQueueProjectFiles
+// as its changes and returns a server whose current commit generation is
+// cancelled and archived when the spec ends. Call it from a BeforeEach.
+func setupCommitQueueServer() *Server {
+	originalProjectsPath := projectsPath
+	projectsPath = filepath.Join(GinkgoT().TempDir(), "projects.json")
+	Expect(SaveProjects([]Project{{Name: "gavel", Dir: GinkgoT().TempDir()}})).To(Succeed())
+
+	originalGather := gatherProjectStatus
+	setCommitQueueProjectFiles(commitQueueProjectFiles...)
+	DeferCleanup(func() {
+		gatherProjectStatus = originalGather
+		projectsPath = originalProjectsPath
+	})
+
+	server := &Server{}
+	DeferCleanup(func() {
+		queue := server.projectCommitQueue("gavel")
+		queue.mu.Lock()
+		generation := queue.current
+		if generation != nil {
+			generation.group.Cancel()
+		}
+		queue.mu.Unlock()
+		if generation == nil {
+			return
+		}
+		Eventually(func() bool {
+			queue.mu.Lock()
+			defer queue.mu.Unlock()
+			return generation.archived
+		}).Should(BeTrue(), "the task generation should archive before the project directory is removed")
+	})
+	return server
+}
+
+func setCommitQueueProjectFiles(files ...string) {
+	gatherProjectStatus = func(string, status.Options) (*status.Result, error) {
+		result := &status.Result{}
+		for _, file := range files {
+			result.Files = append(result.Files, status.FileStatus{Path: file})
+		}
+		return result, nil
+	}
+}
+
+func postCommitQueue(server *Server, payload map[string]any) *httptest.ResponseRecorder {
+	body, err := json.Marshal(payload)
+	Expect(err).NotTo(HaveOccurred())
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/projects/gavel/commit-queue", bytes.NewReader(body))
+	request.SetPathValue("name", "gavel")
+	server.handleCommitQueue(recorder, request)
+	return recorder
+}
+
+func decodeCommitRun(recorder *httptest.ResponseRecorder) projectCommitRun {
+	var run projectCommitRun
+	Expect(json.Unmarshal(recorder.Body.Bytes(), &run)).To(Succeed(), recorder.Body.String())
+	return run
+}
+
+func commitTaskSnapshots(runID string) []clickytask.TaskSnapshot {
+	var tasks []clickytask.TaskSnapshot
+	for _, snapshot := range clickytask.SnapshotByID(runID) {
+		if snapshot.Type == "task" {
+			tasks = append(tasks, snapshot)
+		}
+	}
+	return tasks
+}
+
 var _ = Describe("project commit task groups", func() {
-	var (
-		originalProjectsPath string
-		server               *Server
-	)
+	var server *Server
 
 	BeforeEach(func() {
-		originalProjectsPath = projectsPath
-		projectsPath = filepath.Join(GinkgoT().TempDir(), "projects.json")
-		Expect(SaveProjects([]Project{{Name: "gavel", Dir: GinkgoT().TempDir()}})).To(Succeed())
-
-		originalGather := gatherProjectStatus
-		gatherProjectStatus = func(string, status.Options) (*status.Result, error) {
-			return &status.Result{Files: []status.FileStatus{
-				{Path: "one.go"}, {Path: "two.go"}, {Path: "three.go"}, {Path: "four.go"},
-			}}, nil
-		}
-		DeferCleanup(func() {
-			gatherProjectStatus = originalGather
-			projectsPath = originalProjectsPath
-		})
-
-		server = &Server{}
-		DeferCleanup(func() {
-			queue := server.projectCommitQueue("gavel")
-			queue.mu.Lock()
-			generation := queue.current
-			if generation != nil {
-				generation.group.Cancel()
-			}
-			queue.mu.Unlock()
-			if generation == nil {
-				return
-			}
-			Eventually(func() bool {
-				queue.mu.Lock()
-				defer queue.mu.Unlock()
-				return generation.archived
-			}).Should(BeTrue(), "the task generation should archive before the project directory is removed")
-		})
+		server = setupCommitQueueServer()
 	})
 
 	queueCommit := func(files ...string) *httptest.ResponseRecorder {
-		payload, err := json.Marshal(map[string]any{"action": "commit", "files": files})
-		Expect(err).NotTo(HaveOccurred())
-		recorder := httptest.NewRecorder()
-		request := httptest.NewRequest(http.MethodPost, "/api/projects/gavel/commit-queue", bytes.NewReader(payload))
-		request.SetPathValue("name", "gavel")
-		server.handleCommitQueue(recorder, request)
-		return recorder
+		return postCommitQueue(server, map[string]any{"action": "commit", "files": files})
 	}
-
-	decodeRun := func(recorder *httptest.ResponseRecorder) projectCommitRun {
-		var run projectCommitRun
-		Expect(json.Unmarshal(recorder.Body.Bytes(), &run)).To(Succeed())
-		return run
-	}
-
-	taskSnapshots := func(runID string) []clickytask.TaskSnapshot {
-		var tasks []clickytask.TaskSnapshot
-		for _, snapshot := range clickytask.SnapshotByID(runID) {
-			if snapshot.Type == "task" {
-				tasks = append(tasks, snapshot)
-			}
-		}
-		return tasks
-	}
+	decodeRun := decodeCommitRun
+	taskSnapshots := commitTaskSnapshots
 
 	It("runs posted commits serially and exposes their metadata through the generic task snapshot", func() {
 		runs := newFakeCommitRuns("one.go", "two.go")

@@ -20,7 +20,7 @@ func resolveCLIStep(t *testing.T, dir, step string) *lifecycle.Resolution {
 	if err != nil {
 		t.Fatalf("seed todo: %v", err)
 	}
-	opts := todosRunOptions()
+	opts := todosRunOptions(TodosRunOptions{})
 	opts.Step = step
 	prepared, err := run.Resolve(t.Context(), run.Request{Provider: provider, Todo: todo, Dir: dir, Options: opts})
 	if err != nil {

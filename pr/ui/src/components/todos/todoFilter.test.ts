@@ -4,6 +4,7 @@ import type { TodoEntry } from './todoGroup';
 import {
   defaultTodoFilters,
   externalKey,
+  isChildTodo,
   isEntryVisible,
   isStatusShown,
   isTodoVisible,
@@ -45,6 +46,16 @@ describe('todoMatchesQuery', () => {
 
   it('does not treat an unrelated UUID fragment as a match', () => {
     expect(todoMatchesQuery(todo, 'aaaaaaaa-bbbb')).toBe(false);
+  });
+});
+
+describe('isChildTodo', () => {
+  it.each([
+    ['a todo with a parent id', item({ ref: 'child', parentId: '9f1c3a52-7d0e-4b5a-8c1d-2e6f4a7b8c90' }), true],
+    ['a todo without a parent id', item({ ref: 'top' }), false],
+    ['a todo with an empty parent id', item({ ref: 'detached', parentId: '' }), false],
+  ])('classifies %s', (_name, candidate, expected) => {
+    expect(isChildTodo(candidate)).toBe(expected);
   });
 });
 

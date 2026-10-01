@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback, type MutableRefObject } from 'react';
-import type { Test, Snapshot, SnapshotStatus, LinterResult, BenchComparison, DiagnosticsSnapshot, ProcessNode, ProcessDetails, RunMeta, TestEditAction, TestEditScope } from './types';
+import type { Test, Snapshot, SnapshotStatus, LinterResult, BenchComparison, FixturePerformance, DiagnosticsSnapshot, ProcessNode, ProcessDetails, RunMeta, TestEditAction, TestEditScope } from './types';
 import { Summary } from './components/Summary';
 import { TestNode } from './components/TestNode';
 import { DetailPanel, type IgnoreRequest } from './components/DetailPanel';
@@ -9,6 +9,7 @@ import { FilterBar, type Filters } from './components/FilterBar';
 import { LintFilterBar, type LintGrouping, type LintFilters } from './components/LintFilterBar';
 import { LintView } from './components/LintView';
 import { BenchView } from './components/BenchView';
+import { FixtureBenchView } from './components/FixtureBenchView';
 import { RerunDialog } from './components/RerunDialog';
 import { SplitPane } from './components/SplitPane';
 import { copyCurrentViewForAgent } from './export';
@@ -33,8 +34,12 @@ import {
   relPath,
 } from './utils';
 import { annotateRoutePaths, buildExportRoute, buildRoute, defaultStatusFilter, findNodeByRoutePath, parseRoute, type RouteState, type TabKey } from './routes';
-import { apiUrl } from './config';
+import { apiUrl, basePath } from './config';
 import { useCopyFeedback } from './hooks/use-copy-feedback';
+
+function countFixtureWork(tests: Test[]): number {
+  return tests.reduce((count, test) => count + (test.fixture ? 1 : 0) + countFixtureWork(test.children || []), 0);
+}
 
 function applySnapshot(
   snap: Snapshot,
@@ -45,6 +50,8 @@ function applySnapshot(
   setLint: (l: LinterResult[] | undefined) => void,
   setLintRun: (r: boolean) => void,
   setBench: (b: BenchComparison | undefined) => void,
+  setPerformance: (b: FixturePerformance | undefined) => void,
+  setRunError: (error: string | undefined) => void,
   setDiagnosticsAvailable: (v: boolean) => void,
   setDiagnostics: (d: DiagnosticsSnapshot | undefined) => void,
   setSnapshotStatus: (s: SnapshotStatus) => void,
@@ -72,6 +79,8 @@ function applySnapshot(
   setLint(snap.lint);
   setLintRun(!!status.lint_run);
   setBench(snap.bench);
+  setPerformance(snap.performance);
+  setRunError(snap.error);
   setDiagnosticsAvailable(!!status.diagnostics_available);
   if (snap.diagnostics) setDiagnostics(snap.diagnostics);
   setSnapshotStatus(status);
@@ -103,8 +112,9 @@ function currentRouteState(
   filters: Filters,
   lintGrouping: LintGrouping,
   lintFilters: LintFilters,
+  sampleIndex: number | undefined,
 ): RouteState {
-  return { tab, selectedPath, filters, lintGrouping, lintFilters };
+  return { tab, selectedPath, filters, lintGrouping, lintFilters, sampleIndex };
 }
 
 function mergeProcessDetails(root: ProcessNode | undefined, details: ProcessDetails): ProcessNode | undefined {
@@ -129,12 +139,15 @@ export function App() {
     filters: { status: defaultStatusFilter(), framework: new Map() },
     lintGrouping: 'linter-rule-file' as LintGrouping,
     lintFilters: { severity: new Map(), linter: new Map() },
+    sampleIndex: undefined as number | undefined,
   };
 
   const [tests, setTests] = useState<Test[]>([]);
   const [lint, setLint] = useState<LinterResult[] | undefined>(undefined);
   const [lintRun, setLintRun] = useState(false);
   const [bench, setBench] = useState<BenchComparison | undefined>(undefined);
+  const [performance, setPerformance] = useState<FixturePerformance | undefined>(undefined);
+  const [runError, setRunError] = useState<string | undefined>(undefined);
   const [diagnosticsAvailable, setDiagnosticsAvailable] = useState(false);
   const [diagnostics, setDiagnostics] = useState<DiagnosticsSnapshot | undefined>(undefined);
   const [runMeta, setRunMeta] = useState<RunMeta | undefined>(undefined);
@@ -147,6 +160,7 @@ export function App() {
   const [lintGrouping, setLintGrouping] = useState<LintGrouping>(initialRoute.lintGrouping);
   const [lintFilters, setLintFilters] = useState<LintFilters>(initialRoute.lintFilters);
   const [selectedPath, setSelectedPath] = useState(initialRoute.selectedPath);
+  const [sampleIndex, setSampleIndex] = useState(initialRoute.sampleIndex);
   const [rerunBusy, setRerunBusy] = useState(false);
   const [rerunDialogOpen, setRerunDialogOpen] = useState(false);
   const [ignoreBusy, setIgnoreBusy] = useState(false);
@@ -161,8 +175,8 @@ export function App() {
   const doneRef = useRef(false);
 
   const routeState = useMemo(
-    () => currentRouteState(activeTab, selectedPath, filters, lintGrouping, lintFilters),
-    [activeTab, selectedPath, filters, lintGrouping, lintFilters],
+    () => currentRouteState(activeTab, selectedPath, filters, lintGrouping, lintFilters, sampleIndex),
+    [activeTab, selectedPath, filters, lintGrouping, lintFilters, sampleIndex],
   );
 
   const commitRoute = useCallback((next: RouteState, mode: 'push' | 'replace' = 'push') => {
@@ -171,6 +185,7 @@ export function App() {
     setFilters(next.filters);
     setLintGrouping(next.lintGrouping);
     setLintFilters(next.lintFilters);
+    setSampleIndex(next.sampleIndex);
     const url = buildRoute(next);
     const current = `${window.location.pathname}${window.location.search}`;
     if (url !== current) {
@@ -179,11 +194,17 @@ export function App() {
     }
   }, []);
 
+  useEffect(() => {
+    if (performance && activeTab === 'tests' && window.location.pathname === `${basePath}/`) {
+      commitRoute({ ...routeState, tab: 'bench', selectedPath: '' }, 'replace');
+    }
+  }, [performance, activeTab, routeState, commitRoute]);
+
   const refreshSnapshot = useCallback(async () => {
     const res = await fetch(apiUrl('/api/tests'));
     if (!res.ok) throw new Error(`Snapshot request failed (${res.status})`);
     const snap: Snapshot = await res.json();
-    applySnapshot(snap, startTime, endTime, doneRef, setTests, setLint, setLintRun, setBench, setDiagnosticsAvailable, setDiagnostics, setSnapshotStatus, setRunMeta, setDone, setStatus);
+    applySnapshot(snap, startTime, endTime, doneRef, setTests, setLint, setLintRun, setBench, setPerformance, setRunError, setDiagnosticsAvailable, setDiagnostics, setSnapshotStatus, setRunMeta, setDone, setStatus);
   }, []);
 
   useEffect(() => {
@@ -194,6 +215,7 @@ export function App() {
       setFilters(next.filters);
       setLintGrouping(next.lintGrouping);
       setLintFilters(next.lintFilters);
+      setSampleIndex(next.sampleIndex);
     };
 
     window.addEventListener('popstate', onPopState);
@@ -207,7 +229,7 @@ export function App() {
       fetch(apiUrl('/api/tests'))
         .then(r => r.json())
         .then((snap: Snapshot) => {
-          applySnapshot(snap, startTime, endTime, doneRef, setTests, setLint, setLintRun, setBench, setDiagnosticsAvailable, setDiagnostics, setSnapshotStatus, setRunMeta, setDone, setStatus);
+          applySnapshot(snap, startTime, endTime, doneRef, setTests, setLint, setLintRun, setBench, setPerformance, setRunError, setDiagnosticsAvailable, setDiagnostics, setSnapshotStatus, setRunMeta, setDone, setStatus);
         })
         .catch(() => {});
     }
@@ -216,12 +238,12 @@ export function App() {
 
     es.addEventListener('message', (e: MessageEvent) => {
       const snap: Snapshot = JSON.parse(e.data);
-      applySnapshot(snap, startTime, endTime, doneRef, setTests, setLint, setLintRun, setBench, setDiagnosticsAvailable, setDiagnostics, setSnapshotStatus, setRunMeta, setDone, setStatus);
-      if (!snap.status?.running) es.close();
-    });
+      applySnapshot(snap, startTime, endTime, doneRef, setTests, setLint, setLintRun, setBench, setPerformance, setRunError, setDiagnosticsAvailable, setDiagnostics, setSnapshotStatus, setRunMeta, setDone, setStatus);
+		if (!snap.status?.running) es.close();
+	});
 
     es.addEventListener('done', () => {
-      endTime.current = Date.now();
+      if (endTime.current === null) endTime.current = Date.now();
       doneRef.current = true;
       setDone(true);
       setSnapshotStatus(prev => ({ ...prev, running: false }));
@@ -679,7 +701,7 @@ export function App() {
   }, [stackBusyPID]);
 
   const showLintTab = lintRun;
-  const showBenchTab = !!bench;
+  const showBenchTab = !!bench || !!performance;
   const showDiagnosticsTab = diagnosticsAvailable;
   const showTabs = showLintTab || showBenchTab || showDiagnosticsTab;
   const benchRegressions = bench?.deltas?.filter(d => d.significant && d.delta_pct > bench.threshold).length || 0;
@@ -689,10 +711,10 @@ export function App() {
       ? lintTree.length > 0
       : activeTab === 'diagnostics'
         ? processCount > 0
-        : !!bench;
+        : !!bench || !!performance;
   const canExportCurrentView = (activeTab === 'tests' && displayedTests.length > 0)
     || (activeTab === 'lint' && lintRun)
-    || (activeTab === 'bench' && !!bench);
+    || (activeTab === 'bench' && (!!bench || !!performance));
   const canGlobalStop = snapshotStatus.running && !!snapshotStatus.stop_supported;
   const wholeResultRouteState = useMemo<RouteState>(
     () => ({ ...routeState, selectedPath: '' }),
@@ -741,7 +763,7 @@ export function App() {
               {activeTab === 'lint'
                 ? 'Lint Results'
                 : activeTab === 'bench'
-                  ? 'Benchmark Comparison'
+                  ? performance ? 'Fixture Benchmark' : 'Benchmark Comparison'
                   : activeTab === 'diagnostics'
                     ? 'Diagnostics'
                     : 'Test Results'}
@@ -829,7 +851,7 @@ export function App() {
                 onClick={() => onTabChange('bench')}
                 icon="codicon:graph"
                 label="Bench"
-                count={benchRegressions > 0 ? benchRegressions : (bench?.deltas?.length || 0)}
+                count={performance ? countFixtureWork(tests) : benchRegressions > 0 ? benchRegressions : (bench?.deltas?.length || 0)}
                 countColor={benchRegressions > 0 ? 'bg-red-500' : 'bg-gray-400'}
               />
             )}
@@ -864,7 +886,11 @@ export function App() {
         )}
       </div>
 
-      <SplitPane
+      {activeTab === 'bench' && performance ? (
+        <div className="flex-1 overflow-auto">
+          <FixtureBenchView performance={performance} tests={tests} error={runError} sampleIndex={sampleIndex} onSampleChange={index => commitRoute({ ...routeState, sampleIndex: index })} />
+        </div>
+      ) : <SplitPane
         defaultSplit={50}
         left={
           <>
@@ -909,7 +935,7 @@ export function App() {
         right={activeTab === 'diagnostics'
           ? <DiagnosticsDetailPanel process={selectedProcess} onCollectStack={onCollectStack} collectBusy={stackBusyPID === selectedProcess?.pid} runMeta={runMeta} />
           : <DetailPanel test={selected} lint={lint} onRerun={onRerun} rerunBusy={rerunBusy} onStop={onStop} stopBusy={stopBusyKey !== null} onIgnore={onIgnore} ignoreBusy={ignoreBusy} onTestEdit={onTestEdit} testEditBusy={testEditBusy} testEditSupported={snapshotStatus.test_edit_supported !== false} runMeta={runMeta} nodeRouteState={nodeRouteState} failingOnlyRouteState={failingOnlyRouteState} />}
-      />
+      />}
       <RerunDialog open={rerunDialogOpen} onClose={() => setRerunDialogOpen(false)} />
     </div>
   );

@@ -41,6 +41,7 @@ func defaultResolve(ctx context.Context, req Request) (*Prepared, error) {
 	if err != nil {
 		return nil, err
 	}
+	host.Preview = req.Options.Preview
 	step, reason, err := host.StepFor(ctx, req.Todo, req.Options.Step)
 	if err != nil {
 		return nil, err
@@ -58,6 +59,8 @@ func defaultResolve(ctx context.Context, req Request) (*Prepared, error) {
 // for a resolution, and the run's context for a dispatch.
 func runOptions(req Request, exec *todos.ExecutorContext) lifecycle.RunOptions {
 	return lifecycle.RunOptions{
+		Presets:        append([]string(nil), req.Options.Presets...),
+		PresetsSet:     req.Options.PresetsSet,
 		RuntimeProfile: req.Options.RuntimeProfile,
 		Exec:           exec,
 		Request:        req.Options.Request,
@@ -65,7 +68,8 @@ func runOptions(req Request, exec *todos.ExecutorContext) lifecycle.RunOptions {
 		Resume:         req.Options.Resume,
 		Message:        req.Options.Message,
 		Concurrent:     req.Options.Concurrent,
-		Broker:         req.Broker,
+		Batch:          append([]string(nil), req.Options.Batch...),
+		Approvals:      req.Approvals,
 	}
 }
 
@@ -127,7 +131,7 @@ func defaultStart(req Request) (StartResult, error) {
 			// The run is stoppable by the identity Captain admitted for it, which
 			// only exists from here on.
 			handle.BindPromptRun(preparation.PromptRunID)
-			notify(StartResult{Status: "started", SessionID: preparation.SessionID}, nil)
+			notify(StartResult{Status: "started", SessionID: preparation.SessionID, PromptRunID: preparation.PromptRunID}, nil)
 		})
 		err := runStep(execCtx, req, prepared)
 		// A run that ended before Captain admitted it never notified: whatever
@@ -157,18 +161,39 @@ func runStep(execCtx *todos.ExecutorContext, req Request, prepared *Prepared) er
 		logger.Warnf("todo run %s failed: %v", Label(req.Todo), err)
 		return err
 	}
-	// The outcome is applied even when the step could not be classified: the
-	// attempt happened, and losing the transcript of a run that failed to map
-	// onto a status is exactly the run whose record is worth most.
-	status := outcome.Status
-	if err != nil && status == "" {
-		status = lifecycle.OutcomeKeep
-	}
-	if applyErr := prepared.Host.OnOutcome(execCtx, req.Todo, prepared.Step, outcome, status); applyErr != nil {
-		err = errors.Join(err, applyErr)
-	}
+	err = settleOutcome(outcome, err, req.OnComplete, func(outcome *lifecycle.StepOutcome, status string) error {
+		return prepared.Host.OnOutcome(execCtx, req.Todo, prepared.Step, outcome, status)
+	})
 	if err != nil && !outcome.Execution.Cancelled {
 		logger.Warnf("todo run %s failed: %v", Label(req.Todo), err)
 	}
 	return err
+}
+
+// settleOutcome reports a finished run to its caller and then persists it,
+// returning the run's error joined with whatever the write added.
+//
+// The order is the contract, not an accident of layout: a caller that prints what
+// the agent said must not lose it to a failing write, so report runs first and
+// runs whether or not the write that follows succeeds. The outcome is persisted
+// even when the step could not be classified — the attempt happened, and losing
+// the transcript of a run that failed to map onto a status is exactly the run
+// whose record is worth most.
+func settleOutcome(
+	outcome *lifecycle.StepOutcome,
+	runErr error,
+	report func(*lifecycle.StepOutcome, string, error),
+	persist func(*lifecycle.StepOutcome, string) error,
+) error {
+	status := outcome.Status
+	if runErr != nil && status == "" {
+		status = lifecycle.OutcomeKeep
+	}
+	if report != nil {
+		report(outcome, status, runErr)
+	}
+	if persistErr := persist(outcome, status); persistErr != nil {
+		runErr = errors.Join(runErr, persistErr)
+	}
+	return runErr
 }

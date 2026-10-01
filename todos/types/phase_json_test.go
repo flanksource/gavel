@@ -19,14 +19,15 @@ func TestPhaseRunJSONContract(t *testing.T) {
 
 	encoded, err := json.Marshal(PhaseRuns{
 		VerifyPhase: {
-			Phase:      VerifyPhase,
-			State:      "failed",
-			Progress:   PhaseProgress{Done: 3, Failed: 1, Total: 4},
-			StartedAt:  &started,
-			FinishedAt: &finished,
-			DurationMS: 90_000,
-			CostUSD:    1.25,
-			Active:     true,
+			Phase:       VerifyPhase,
+			State:       "failed",
+			Progress:    PhaseProgress{Done: 3, Failed: 1, Total: 4},
+			StartedAt:   &started,
+			FinishedAt:  &finished,
+			DurationMS:  90_000,
+			CostUSD:     1.25,
+			Active:      true,
+			PromptRunID: "5f0e9d8c-7b6a-4f5e-8d4c-3b2a1f0e9d8c",
 		},
 	})
 	require.NoError(t, err)
@@ -42,6 +43,13 @@ func TestPhaseRunJSONContract(t *testing.T) {
 	assert.Equal(t, true, verify["active"])
 	assert.Equal(t, "2026-08-26T11:58:30Z", verify["started_at"])
 	assert.Equal(t, map[string]any{"done": float64(3), "failed": float64(1), "total": float64(4)}, verify["progress"])
+	// The run and verify phases of one in-run verification share this id, and a
+	// rollup sums each id once.
+	assert.Equal(t, "5f0e9d8c-7b6a-4f5e-8d4c-3b2a1f0e9d8c", verify["prompt_run_id"])
+
+	withoutRun, err := json.Marshal(PhaseRun{Phase: RunPhase, State: "succeeded"})
+	require.NoError(t, err)
+	assert.NotContains(t, string(withoutRun), "prompt_run_id")
 }
 
 // A phase that has never run must be ABSENT rather than zero-valued: that

@@ -1,5 +1,6 @@
 import { UiFolderGit } from '@flanksource/clicky-ui/icons';
-import type { Project, ProcStatus } from '../types';
+import { useProcStatus } from '../procStatusQuery';
+import type { Project } from '../types';
 import type { ProjectCatalog } from '../useProjectCatalog';
 import { ErrorBoundary } from './ErrorBoundary';
 import { ProjectsBar } from './ProjectsBar';
@@ -10,9 +11,8 @@ import { TestRunDetail } from './tests/TestRunDetail';
 // bodySidebar, ProjectDetailPane into children — so both take the shared
 // catalog rather than owning the /api/tests state between them.
 
-export function ProjectsSidebar({ catalog, procStatus, selectedName, selectedRunId, historyEnabled, onHistoryChange, onSelect, onSelectRun, onChanged, onAdd, onSettings }: {
+export function ProjectsSidebar({ catalog, selectedName, selectedRunId, historyEnabled, onHistoryChange, onSelect, onSelectRun, onChanged, onAdd, onSettings }: {
   catalog: ProjectCatalog;
-  procStatus: Record<string, ProcStatus>;
   selectedName: string;
   selectedRunId: string;
   historyEnabled: boolean;
@@ -23,6 +23,7 @@ export function ProjectsSidebar({ catalog, procStatus, selectedName, selectedRun
   onAdd: () => void;
   onSettings: (project: Project) => void;
 }) {
+  const procStatus = useProcStatus();
   return (
     <ProjectsBar
       projects={catalog.projects}

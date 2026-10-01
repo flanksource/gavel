@@ -136,7 +136,10 @@ func (s *Server) loadTodoBatchWorkspace(ctx context.Context, dir string) todoBat
 	counts := summarizeTodos(items)
 	result.Counts = &counts
 	result.Items = make([]todoSummary, 0, len(items))
-	stats := commitDiffStats(ctx, source.Dir)
+	stats, err := runDiffStats(ctx, provider, source.Dir)
+	if err != nil {
+		return todoBatchResult{Dir: dir, Error: todoBatchErrorFor(err)}
+	}
 	if err := ctx.Err(); err != nil {
 		return todoBatchResult{Dir: dir, Error: todoBatchErrorFor(err)}
 	}

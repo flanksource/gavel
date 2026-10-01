@@ -11,12 +11,11 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-// CommitStatCache stores the aggregated git diff footprint of a todo's commits
-// (those carrying its Gavel-Issue-Id trailer), keyed by (Repo, IssueID). It is a
-// pure read cache derived from `git log`: the working tree stays the source of
-// truth and SaveCommitStats refreshes the rows. Recomputing the whole workspace
-// is one git pass, so the cache spares the todo-list endpoint that pass on every
-// poll.
+// CommitStatCache stores the git diff footprint of a todo's latest recorded run
+// (its worktree's Setup..Head), keyed by (Repo, IssueID). It is a pure read
+// cache derived from git: the repository stays the source of truth and
+// SaveCommitStats refreshes the rows. The cache spares the todo-list endpoint
+// the per-issue git diffs on every poll.
 type CommitStatCache struct {
 	Repo     string `gorm:"primaryKey;size:512"`
 	IssueID  string `gorm:"primaryKey;size:128"`

@@ -13,6 +13,7 @@ import (
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/fixtures"
 	testui "github.com/flanksource/gavel/testrunner/ui"
 )
 
@@ -90,6 +91,14 @@ func runUIServe(opts UIServeOptions) (any, error) {
 
 	srv := testui.NewServer()
 	if len(opts.ResultsFiles) > 0 {
+		if path, err := filepath.Abs(opts.ResultsFiles[0]); err == nil {
+			for dir := filepath.Dir(path); dir != filepath.Dir(dir); dir = filepath.Dir(dir) {
+				if filepath.Base(dir) == ".gavel" {
+					srv.SetProfileRoot(filepath.Dir(dir))
+					break
+				}
+			}
+		}
 		if err := loadResults(srv, opts.ResultsFiles...); err != nil {
 			listener.Close() //nolint:errcheck
 			return nil, fmt.Errorf("load results %v: %w", opts.ResultsFiles, err)
@@ -192,7 +201,31 @@ func loadResults(srv *testui.Server, paths ...string) error {
 			return err
 		}
 		var payload testui.Snapshot
-		if err := json.Unmarshal(data, &payload); err != nil {
+		var shape struct {
+			Status json.RawMessage `json:"status"`
+		}
+		if err := json.Unmarshal(data, &shape); err != nil {
+			return fmt.Errorf("parse result %s: %w", path, err)
+		}
+		if len(shape.Status) == 0 || shape.Status[0] != '"' && shape.Status[0] != '{' {
+			return fmt.Errorf("unsupported result format in %s: status must be an object or a legacy benchmark string", path)
+		}
+		if len(shape.Status) > 0 && shape.Status[0] == '"' {
+			var legacy fixtures.BenchmarkReport
+			if err := json.Unmarshal(data, &legacy); err != nil {
+				return fmt.Errorf("parse legacy benchmark %s: %w", path, err)
+			}
+			if legacy.Version != 1 || legacy.Mode != "benchmark" && legacy.Mode != "profile" {
+				return fmt.Errorf("unsupported legacy benchmark format in %s: version=%d mode=%q", path, legacy.Version, legacy.Mode)
+			}
+			if legacy.StartedAt.IsZero() || legacy.FinishedAt.IsZero() || legacy.FinishedAt.Before(legacy.StartedAt) {
+				return fmt.Errorf("invalid legacy benchmark timestamps in %s", path)
+			}
+			payload = testui.Snapshot{Status: testui.SnapshotStatus{Running: false},
+				Metadata:    &testui.SnapshotMetadata{Version: "1", Started: legacy.StartedAt, Ended: legacy.FinishedAt, Kind: "fixtures"},
+				Tests:       fixtures.BenchmarkReportToTests(&legacy),
+				Performance: fixtures.BenchmarkPerformanceFromReport(&legacy, path)}
+		} else if err := json.Unmarshal(data, &payload); err != nil {
 			return fmt.Errorf("parse snapshot %s: %w", path, err)
 		}
 		merged = mergeSnapshots(merged, payload)
@@ -206,6 +239,18 @@ func mergeSnapshots(dst, src testui.Snapshot) testui.Snapshot {
 	dst.Lint = append(dst.Lint, src.Lint...)
 	if src.Bench != nil {
 		dst.Bench = src.Bench
+	}
+	if src.FixtureBenchmark != nil {
+		dst.FixtureBenchmark = src.FixtureBenchmark
+	}
+	if src.Performance != nil {
+		dst.Performance = src.Performance
+	}
+	if src.Error != "" {
+		dst.Error = src.Error
+	}
+	if src.LogTail != "" {
+		dst.LogTail = src.LogTail
 	}
 	if src.Diagnostics != nil {
 		dst.Diagnostics = src.Diagnostics

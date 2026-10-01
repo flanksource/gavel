@@ -7,9 +7,10 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"time"
 
+	"github.com/flanksource/captain/pkg/ai/approval"
 	cmuxprov "github.com/flanksource/captain/pkg/ai/provider/cmux"
+	"github.com/flanksource/captain/pkg/api"
 	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/google/uuid"
 )
@@ -20,19 +21,17 @@ import (
 // legacy on-disk Claude stream below.
 type captainSessionStore interface {
 	GetSessionByIdentity(context.Context, string, string, string, string) (*captaindb.Session, error)
+	ListPromptRuns(context.Context, captaindb.PromptRunFilter) ([]captaindb.PromptRun, error)
 	// GetTranscriptSessionByIdentity is Captain's own sibling hop: one provider
 	// session id names both the admission root and the row the transcript was
 	// ingested into, and only Captain can say which. Gavel used to pick between
 	// them here; that selection now has one implementation, in the store.
 	GetTranscriptSessionByIdentity(context.Context, string) (*captaindb.Session, error)
 	GetSessionOverviewByIdentity(context.Context, string) (*captaindb.SessionOverview, error)
-	ListTranscriptMessages(context.Context, captaindb.TranscriptPage) ([]captaindb.TranscriptMessage, error)
 }
 
 type captainThreadSessionStore interface {
-	ListSessionOverviewsByIdentity(context.Context, string) ([]captaindb.SessionOverview, error)
 	ListThreadSessionOverviews(context.Context, uuid.UUID) ([]captaindb.SessionOverview, error)
-	ListThreadTranscriptMessages(context.Context, uuid.UUID) ([]captaindb.TranscriptMessage, error)
 }
 
 type captainSessionProvider interface {
@@ -167,112 +166,25 @@ func attachPendingApproval(
 	return nil
 }
 
-// todoSessionStatsResponse is the session-stats payload plus any pending
-// tool-permission requests awaiting a decision. Approval is the oldest of them,
-// kept as a single field for the control that answers one at a time; Approvals
-// is the whole queue.
-type todoSessionStatsResponse struct {
-	cmuxprov.SessionStats
-	Approval  *todoApproval  `json:"approval,omitempty"`
-	Approvals []todoApproval `json:"approvals,omitempty"`
-}
-
-func captainSessionStats(ctx context.Context, store captainSessionStore, sessionID string, resolved captainSessionResolution) (todoSessionStatsResponse, error) {
-	stats := cmuxprov.SessionStats{SessionID: sessionID, Found: resolved.transcript != nil}
-	if resolved.transcript == nil {
-		return todoSessionStatsResponse{SessionStats: stats}, nil
-	}
-	overview, err := store.GetSessionOverviewByIdentity(ctx, resolved.transcript.ID.String())
-	if err != nil {
-		return todoSessionStatsResponse{}, err
-	}
-	overviews := []captaindb.SessionOverview{*overview}
-	if threadStore, ok := store.(captainThreadSessionStore); ok {
-		if rows, threadErr := threadStore.ListThreadSessionOverviews(ctx, resolved.transcript.ID); threadErr != nil {
-			return todoSessionStatsResponse{}, threadErr
-		} else if len(rows) > 0 {
-			overviews = rows
-			overview = &overviews[0]
-		}
-	}
-	stats.Found = true
-	stats.Agent = resolved.transcript.AgentType
-	if stats.Agent == "" && resolved.run != nil {
-		stats.Agent = resolved.run.Provider
-	}
-	stats.StartedAt = resolved.transcript.CreatedAt
-	if overview.StartedAt != nil {
-		stats.StartedAt = *overview.StartedAt
-	}
-	for _, row := range overviews {
-		if row.LastActivityAt != nil && row.LastActivityAt.After(stats.UpdatedAt) {
-			stats.UpdatedAt = *row.LastActivityAt
-		}
-	}
-	if stats.UpdatedAt.IsZero() {
-		stats.UpdatedAt = stats.StartedAt
-	}
-	for _, row := range overviews {
-		stats.InProgress = stats.InProgress || row.LifecycleStatus == string(captaindb.SessionLifecycleRunning) || row.ProcessActive
-	}
-	if stats.InProgress {
-		stats.UpdatedAt = time.Now().UTC()
-	}
-	if !stats.StartedAt.IsZero() && stats.UpdatedAt.After(stats.StartedAt) {
-		stats.DurationMs = stats.UpdatedAt.Sub(stats.StartedAt).Milliseconds()
-	} else if overview.DurationSeconds != nil {
-		stats.DurationMs = int64(*overview.DurationSeconds * 1000)
-	}
-	switch {
-	case overview.LifecycleStatus == string(captaindb.SessionLifecycleFailed) || overview.HealthState == string(captaindb.SessionHealthZombie):
-		stats.State, stats.Error = "error", resolved.transcript.StateReason
-	case overview.HealthState == string(captaindb.SessionHealthStalled):
-		stats.State = "stalled"
-	case overview.ActivityState != "" && overview.ActivityState != string(captaindb.SessionActivityIdle):
-		stats.State = overview.ActivityState
-	case stats.InProgress:
-		stats.State = "working"
-	default:
-		stats.State = projectThreadStatus(overviews)
-	}
-	if overview.Model != nil {
-		stats.Model = *overview.Model
-	}
-	if overview.Effort != nil {
-		stats.Effort = *overview.Effort
-	}
-	for _, row := range overviews {
-		stats.InputTokens += int(row.InputTokens)
-		stats.OutputTokens += int(row.OutputTokens)
-		stats.CacheReadTokens += int(row.CacheReadTokens)
-		stats.CacheCreationTokens += int(row.CacheWriteTokens)
-		stats.TotalTokens += int(row.TotalTokens)
-		stats.Turns += int(row.TurnCount)
-		stats.CostUSD += row.CostUSD
-	}
-	stats.ContextTokens = intValue(overview.ContextTokens)
-	stats.ContextWindow = intValue(overview.ContextWindowTokens)
-	return todoSessionStatsResponse{SessionStats: stats}, nil
-}
-
-func intValue(value *int64) int {
-	if value == nil {
-		return 0
-	}
-	return int(*value)
-}
-
 // todoSessionApprovePayload is what the dashboard's approval controls POST.
 //
 // ApprovalID names the durable request rather than the session, because a run
 // can have more than one outstanding and a session id cannot tell them apart.
 type todoSessionApprovePayload struct {
 	ApprovalID string `json:"approvalId"`
-	// Action is approve, deny or respond. `respond` runs the call with Input
-	// substituted; `deny` refuses it and feeds Message back as the reason.
+	// Action is approve, deny, respond or cancel. `respond` answers with Input
+	// (replacement tool input, question answers or form content) or, for a
+	// permissions request, Grants; `deny` refuses and feeds Message back as the
+	// reason; `cancel` refuses the same way and also interrupts the turn.
 	Action  string         `json:"action"`
 	Message string         `json:"message,omitempty"`
 	Input   map[string]any `json:"input,omitempty"`
+	// Scope widens an approval to the turn or session where the request offers
+	// it; empty means this request only.
+	Scope api.ApprovalScope `json:"scope,omitempty"`
+	// Grants is the approved subset of a permissions request; nil with an
+	// approval grants everything requested.
+	Grants *api.NativeSandboxPolicy `json:"grants,omitempty"`
 }
 
 // handleTodoSessionApprove answers one pending tool-permission request — the
@@ -309,12 +221,23 @@ func (s *Server) handleTodoSessionApprove(w http.ResponseWriter, r *http.Request
 		writeTodoError(w, http.StatusServiceUnavailable, err)
 		return
 	}
-	sessionID, err := approvalSessionID(r.Context(), store, strings.TrimSpace(r.URL.Query().Get("sessionId")), requestID)
+	sessionID, err := approvalSessionID(strings.TrimSpace(r.URL.Query().Get("sessionId")))
 	if err != nil {
+		writeTodoError(w, http.StatusBadRequest, err)
+		return
+	}
+	resolvedRequest, err := resolveApproval(r.Context(), store, approvalAnswer{
+		SessionID: sessionID, RequestID: requestID, Action: action, Message: payload.Message,
+		Input: payload.Input, Scope: payload.Scope, Grants: payload.Grants,
+	})
+	if errors.Is(err, captaindb.ErrTurnRequestNotFound) {
 		writeTodoError(w, http.StatusNotFound, err)
 		return
 	}
-	resolvedRequest, err := resolveApproval(r.Context(), store, sessionID, requestID, action, payload.Message, payload.Input)
+	if errors.Is(err, approval.ErrInvalidResolution) {
+		writeTodoError(w, http.StatusBadRequest, err)
+		return
+	}
 	if err != nil {
 		writeTodoError(w, http.StatusConflict, err)
 		return
@@ -326,20 +249,19 @@ func (s *Server) handleTodoSessionApprove(w http.ResponseWriter, r *http.Request
 	})
 }
 
-// approvalSessionID is the session the approval belongs to. A client that knows
-// the session sends it; one that only has the approval id from a notification
-// does not, and the row itself carries the answer.
-func approvalSessionID(ctx context.Context, store approvalStore, requested string, requestID uuid.UUID) (uuid.UUID, error) {
-	if requested != "" {
-		if sessionID, err := uuid.Parse(requested); err == nil {
-			return sessionID, nil
-		}
+// approvalSessionID is the session a client says the approval belongs to. A
+// client that only has the approval id from a notification sends none, and
+// uuid.Nil lets captain take the session off the row; one that sends a session
+// that is not a UUID is refused rather than silently answered without it.
+func approvalSessionID(requested string) (uuid.UUID, error) {
+	if requested == "" {
+		return uuid.Nil, nil
 	}
-	request, err := store.GetTurnRequest(ctx, requestID)
+	sessionID, err := uuid.Parse(requested)
 	if err != nil {
-		return uuid.Nil, err
+		return uuid.Nil, fmt.Errorf("sessionId %q must be Captain's admitted session id: %w", requested, err)
 	}
-	return request.SessionID, nil
+	return sessionID, nil
 }
 
 // handleTodoSessionApprovals lists a run's unanswered tool requests, so a

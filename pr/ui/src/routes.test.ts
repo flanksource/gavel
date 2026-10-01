@@ -1,6 +1,22 @@
 import { describe, expect, it } from 'vitest';
 import { buildRoute, emptyRouteState, parseRoute } from './routes';
 
+describe('dashboard project scope routes', () => {
+  it('round-trips the selected project on the todos route', () => {
+    const parsed = parseRoute(new URL('http://localhost:9092/todos?project=Clicky%20UI') as unknown as Location);
+
+    expect(parsed.scopeProject).toBe('Clicky UI');
+    expect(buildRoute(parsed)).toBe('/todos?project=Clicky+UI');
+  });
+
+  it('keeps the selected project alongside pull request filters', () => {
+    const parsed = parseRoute(new URL('http://localhost:9092/prs?project=gavel&state=open') as unknown as Location);
+
+    expect(parsed.scopeProject).toBe('gavel');
+    expect(buildRoute(parsed)).toBe('/prs?project=gavel&state=open');
+  });
+});
+
 describe('project routes', () => {
   it('round-trips a selected project as a dedicated top-level tab', () => {
     const location = new URL('http://localhost:9092/projects/Clicky%20UI');
@@ -61,7 +77,7 @@ describe('prompt routes', () => {
       ...emptyRouteState(),
       tab: 'prompts',
       selectedPath: 'commit.message',
-      promptScope: 'Clicky UI',
+      scopeProject: 'Clicky UI',
     });
     expect(buildRoute(parsed)).toBe('/prompts/commit.message?project=Clicky+UI');
   });
@@ -73,10 +89,10 @@ describe('prompt routes', () => {
     expect(buildRoute(parsed)).toBe('/prompts');
   });
 
-  it('ignores a prompt scope on other tabs', () => {
+  it('treats the project query as dashboard scope on every tab', () => {
     const parsed = parseRoute(new URL('http://localhost:9092/todos?project=x') as unknown as Location);
 
-    expect(parsed.promptScope).toBe('');
+    expect(parsed.scopeProject).toBe('x');
   });
 });
 
@@ -92,5 +108,46 @@ describe('task routes', () => {
       selectedPath: 'run-123',
     });
     expect(buildRoute(parsed)).toBe('/tasks/run-123');
+  });
+});
+
+describe('todo detail view routes', () => {
+  const parse = (url: string) => parseRoute(new URL(`http://localhost:9092${url}`) as unknown as Location);
+
+  it('round-trips the detail tab, inspector tab, and selected attempts of a todo', () => {
+    const url = '/todos/todo-7?tab=session&sessionTab=costs&sessions=run-a%2Crun-b';
+
+    const parsed = parse(url);
+
+    expect(parsed).toEqual({
+      ...emptyRouteState(),
+      tab: 'todos',
+      selectedPath: 'todo-7',
+      todoView: { tab: 'session', sessionTab: 'costs', sessionIds: ['run-a', 'run-b'] },
+    });
+    expect(buildRoute(parsed)).toBe(url);
+  });
+
+  it('keeps a slash-containing ref in the path and the view in the query', () => {
+    const parsed = parse('/todos/pkg/file.go/todo-3?tab=plan');
+
+    expect(parsed.selectedPath).toBe('pkg/file.go/todo-3');
+    expect(parsed.todoView).toEqual({ tab: 'plan' });
+    expect(buildRoute(parsed)).toBe('/todos/pkg/file.go/todo-3?tab=plan');
+  });
+
+  it('leaves the default view out of the URL', () => {
+    expect(buildRoute({ ...emptyRouteState(), tab: 'todos', selectedPath: 'todo-7' })).toBe('/todos/todo-7');
+  });
+
+  it('ignores unknown tab names', () => {
+    expect(parse('/todos/todo-7?tab=bogus&sessionTab=nope').todoView).toEqual({});
+  });
+
+  it('drops the view when no todo is selected', () => {
+    const parsed = parse('/todos?tab=session');
+
+    expect(parsed.todoView).toEqual({});
+    expect(buildRoute({ ...parsed, todoView: { tab: 'session' } })).toBe('/todos');
   });
 });

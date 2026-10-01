@@ -10,64 +10,33 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var (
-	todoLinkRelation   string
-	todoUnlinkRelation string
-)
-
-var todosLinkCmd = &cobra.Command{
-	Use:          "link <ref> <target-ref>",
-	SilenceUsage: true,
-	Short:        "Link two TODOs as related or dependent",
-	Long: `Record a relationship between two TODOs in the current workspace.
-
-  related-to   symmetric and non-blocking — duplicates, overlapping scope, or
-               work that should be read together (the default)
-  depends-on   <ref> is blocked until <target-ref> is verified or completed
-
-Dependency cycles, cross-workspace links, and duplicates are rejected.`,
-	Example: `  gavel todos link 3f2a1b 7c4d9e
-  gavel todos link 3f2a1b 7c4d9e --relation depends-on`,
-	Args: cobra.ExactArgs(2),
-	RunE: runTodosLink,
+type TodosLinkOptions struct {
+	TodoTargetOptions
+	Relation string `flag:"relation" default:"related-to" help:"Relation to create or remove"`
 }
 
-var todosUnlinkCmd = &cobra.Command{
-	Use:          "unlink <ref> <target-ref>",
-	SilenceUsage: true,
-	Short:        "Remove a link between two TODOs",
-	Example: `  gavel todos unlink 3f2a1b 7c4d9e
-  gavel todos unlink 3f2a1b 7c4d9e --relation depends-on`,
-	Args: cobra.ExactArgs(2),
-	RunE: runTodosUnlink,
-}
-
-var todosLinksCmd = &cobra.Command{
-	Use:          "links <ref>",
-	SilenceUsage: true,
-	Short:        "List a TODO's links",
-	Long: `List every relationship touching a TODO from its own perspective. Incoming
-dependencies are reported as the derived read-only "blocks" relation.`,
-	Example: `  gavel todos links 3f2a1b
-  gavel todos links 3f2a1b --format json`,
-	Args: cobra.ExactArgs(1),
-	RunE: runTodosLinks,
-}
+var todosLinkCmd *cobra.Command
+var todosUnlinkCmd *cobra.Command
+var todosLinksCmd *cobra.Command
 
 func init() {
-	todosCmd.AddCommand(todosLinkCmd)
-	todosLinkCmd.Flags().StringVar(&todoLinkRelation, "relation", string(types.RelationRelatedTo),
-		"Relation to create ("+joinStrings(types.LinkableRelations())+")")
-
-	todosCmd.AddCommand(todosUnlinkCmd)
-	todosUnlinkCmd.Flags().StringVar(&todoUnlinkRelation, "relation", string(types.RelationRelatedTo),
-		"Relation to remove ("+joinStrings(types.LinkableRelations())+")")
-
-	todosCmd.AddCommand(todosLinksCmd)
+	todosLinkCmd = clicky.AddNamedCommand("link", todosCmd, TodosLinkOptions{}, func(opts TodosLinkOptions) (any, error) { return nil, runTodosLink(opts) })
+	todosLinkCmd.Short = "Link two TODOs as related or dependent"
+	todosUnlinkCmd = clicky.AddNamedCommand("unlink", todosCmd, TodosLinkOptions{}, func(opts TodosLinkOptions) (any, error) { return nil, runTodosUnlink(opts) })
+	todosUnlinkCmd.Short = "Remove a link between two TODOs"
+	todosLinksCmd = clicky.AddNamedCommand("links", todosCmd, TodosGetOptions{}, func(opts TodosGetOptions) (any, error) { return nil, runTodosLinks(opts) })
+	todosLinksCmd.Short = "List a TODO's links"
 }
 
-func runTodosLink(_ *cobra.Command, args []string) error {
-	relation, err := types.ParseRelationKind(todoLinkRelation)
+func runTodosLink(opts TodosLinkOptions) error {
+	args, err := opts.Many()
+	if err != nil {
+		return err
+	}
+	if len(args) != 2 {
+		return fmt.Errorf("link requires a source and target TODO ID")
+	}
+	relation, err := types.ParseRelationKind(opts.Relation)
 	if err != nil {
 		return err
 	}
@@ -83,8 +52,15 @@ func runTodosLink(_ *cobra.Command, args []string) error {
 	return nil
 }
 
-func runTodosUnlink(_ *cobra.Command, args []string) error {
-	relation, err := types.ParseRelationKind(todoUnlinkRelation)
+func runTodosUnlink(opts TodosLinkOptions) error {
+	args, err := opts.Many()
+	if err != nil {
+		return err
+	}
+	if len(args) != 2 {
+		return fmt.Errorf("unlink requires a source and target TODO ID")
+	}
+	relation, err := types.ParseRelationKind(opts.Relation)
 	if err != nil {
 		return err
 	}
@@ -99,8 +75,12 @@ func runTodosUnlink(_ *cobra.Command, args []string) error {
 	return nil
 }
 
-func runTodosLinks(_ *cobra.Command, args []string) error {
-	linker, todo, err := openTodoLinker(args[0])
+func runTodosLinks(opts TodosGetOptions) error {
+	ref, err := opts.One()
+	if err != nil {
+		return err
+	}
+	linker, todo, err := openTodoLinker(ref)
 	if err != nil {
 		return err
 	}

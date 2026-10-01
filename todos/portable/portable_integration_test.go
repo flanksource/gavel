@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	commonsdb "github.com/flanksource/commons-db/db"
+	"github.com/flanksource/commons-db/dbtest"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/native"
@@ -19,14 +19,8 @@ import (
 )
 
 func TestPortablePostgreSQLImportExportRoundTrip(t *testing.T) {
-	if os.Getenv("GAVEL_DB_EMBEDDED_TEST") == "" {
-		t.Skip("set GAVEL_DB_EMBEDDED_TEST=1 to run embedded-postgres portable TODO tests")
-	}
-	dsn, stop, err := commonsdb.StartEmbedded(commonsdb.EmbeddedConfig{
-		DataDir: filepath.Join(t.TempDir(), "postgres"), Database: "gavel_portable_todos",
-	})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, stop()) })
+	dsn := dbtest.ForT(t, dbtest.Options{Name: "gavel_portable_todos"}).DSN()
+
 	t.Setenv(database.EnvDSN, dsn)
 	t.Setenv(database.EnvDisable, "")
 	t.Setenv(database.LegacyEnvDSN, "")
@@ -90,4 +84,20 @@ func TestPortablePostgreSQLImportExportRoundTrip(t *testing.T) {
 	assert.Equal(t, 0, replayed.Created)
 	assert.Equal(t, 0, replayed.Updated)
 	assert.Equal(t, 1, replayed.Unchanged)
+
+	// Import and export open the database without migrating it, like every todo
+	// command, so a database older than the binary must say so rather than fail
+	// on the first column it does not have.
+	t.Run("a database that predates the binary is reported as behind", func(t *testing.T) {
+		tx := opened.Gorm().WithContext(t.Context()).Begin()
+		require.NoError(t, tx.Error)
+		defer func() { require.NoError(t, tx.Rollback().Error) }()
+		require.NoError(t, tx.Exec(`ALTER TABLE public.todo_issues DROP COLUMN parent_issue_id`).Error)
+		behind := todoruntime.ErrSchemaBehind + " (todo_issues.parent_issue_id is missing)"
+
+		_, err := portable.Import(t.Context(), tx, workspaceOptions, outputDir, nil)
+		require.EqualError(t, err, behind)
+		_, err = portable.Export(t.Context(), tx, workspaceOptions, outputDir, []string{id.String()}, false)
+		require.EqualError(t, err, behind)
+	})
 }

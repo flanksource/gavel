@@ -26,13 +26,16 @@ func TestSchemaBundleIncludesOrderedCaptainProjectionSQL(t *testing.T) {
 			names = append(names, entry.Name())
 		}
 	}
+	assert.Contains(t, names, "089_drop_captain_table_hooks.sql")
 	assert.Contains(t, names, "090_prepare_runtime_state.sql")
-	assert.Contains(t, names, "100_todo_captain_constraints.sql")
 	assert.Contains(t, names, "102_todo_prompt_run_step_kind.sql")
 	assert.Contains(t, names, "105_view_todo_plan_revisions.sql")
 	assert.Contains(t, names, "110_todo_projection_functions.sql")
-	assert.Contains(t, names, "111_todo_projection_triggers.sql")
 	assert.Contains(t, names, "112_view_todo_issue_runtime.sql")
+	// Gavel installs no DDL on Captain's tables: the triggers became Captain's
+	// captain_row_change feed and the foreign keys Captain delete guards.
+	assert.NotContains(t, names, "100_todo_captain_constraints.sql")
+	assert.NotContains(t, names, "111_todo_projection_triggers.sql")
 	assert.Contains(t, names, "115_backfill_todo_activity.sql")
 	assert.Contains(t, names, "116_backfill_triage_step_kind.sql")
 	assert.Contains(t, names, "120_backfill_todo_labels.sql")
@@ -41,7 +44,10 @@ func TestSchemaBundleIncludesOrderedCaptainProjectionSQL(t *testing.T) {
 
 	prepareSQL := readEmbeddedSchemaFile(t, "schema/090_prepare_runtime_state.sql")
 	assert.Contains(t, prepareSQL, "-- phase: pre")
+	assert.Contains(t, prepareSQL, "-- dependsOn: 089_drop_captain_table_hooks.sql",
+		"090 drops the trigger functions, so the triggers using them must already be gone")
 	assert.Contains(t, prepareSQL, "DROP VIEW IF EXISTS public.todo_issue_runtime")
+	assert.NotContains(t, prepareSQL, "DROP TRIGGER")
 
 	// Hash-gated run-once scripts keep steady-state applies free of DDL; views
 	// are restored via commons-db view-dependency invalidation, so no script may
@@ -54,12 +60,20 @@ func TestSchemaBundleIncludesOrderedCaptainProjectionSQL(t *testing.T) {
 			"%s must be a hash-gated run-once script", name)
 	}
 
-	constraintSQL := readEmbeddedSchemaFile(t, "schema/100_todo_captain_constraints.sql")
-	assert.Contains(t, constraintSQL, "-- phase: post")
-	assert.Contains(t, constraintSQL, "todo_issue_prompt_runs_captain_prompt_run_fkey")
-	assert.Contains(t, constraintSQL, "todo_issue_plans_captain_plan_fkey")
-	assert.NotContains(t, constraintSQL, "todo_issue_plan_revision_details",
-		"the plan-revisions view moved to its own dependency-scoped file")
+	dropHooksSQL := readEmbeddedSchemaFile(t, "schema/089_drop_captain_table_hooks.sql")
+	assert.Contains(t, dropHooksSQL, "-- phase: pre")
+	for _, trigger := range []string{
+		"gavel_todo_prompt_run_projection ON public.captain_prompt_runs",
+		"gavel_todo_session_projection ON public.captain_sessions",
+		"gavel_todo_session_delete_projection ON public.captain_sessions",
+		"gavel_todo_turn_request_projection ON public.captain_turn_requests",
+		"gavel_todo_prompt_run_iteration_projection ON public.captain_prompt_run_iterations",
+	} {
+		assert.Contains(t, dropHooksSQL, "DROP TRIGGER IF EXISTS "+trigger+";")
+	}
+	assert.Contains(t, dropHooksSQL, "DROP CONSTRAINT IF EXISTS todo_issue_prompt_runs_captain_prompt_run_fkey;")
+	assert.Contains(t, dropHooksSQL, "DROP CONSTRAINT IF EXISTS todo_issue_plans_captain_plan_fkey;")
+	assert.NotContains(t, dropHooksSQL, "CREATE")
 
 	revisionsViewSQL := readEmbeddedSchemaFile(t, "schema/105_view_todo_plan_revisions.sql")
 	assert.Contains(t, revisionsViewSQL, "-- phase: post")
@@ -67,6 +81,8 @@ func TestSchemaBundleIncludesOrderedCaptainProjectionSQL(t *testing.T) {
 
 	functionsSQL := readEmbeddedSchemaFile(t, "schema/110_todo_projection_functions.sql")
 	assert.Contains(t, functionsSQL, "-- phase: post")
+	assert.Contains(t, functionsSQL, "-- dependsOn: 090_prepare_runtime_state.sql",
+		"090 drops these functions whenever it re-runs, so they must be recreated with it")
 	assert.Contains(t, functionsSQL, "gavel_project_todo_prompt_run")
 	assert.Contains(t, functionsSQL, "gavel_todo_issue_execution_state")
 	assert.Contains(t, functionsSQL, "GREATEST(updated_at, p_activity_at)")
@@ -92,28 +108,27 @@ func TestSchemaBundleIncludesOrderedCaptainProjectionSQL(t *testing.T) {
 	assert.NotContains(t, functionsSQL, "{workflow,autoVerifyWithoutFixture}")
 	assert.Contains(t, functionsSQL, "DROP FUNCTION IF EXISTS public.gavel_project_todo_issue(uuid);")
 	assert.NotContains(t, functionsSQL, "CREATE OR REPLACE FUNCTION public.gavel_project_todo_issue")
+	// Every function the row-change projection (todoprojection/steps.go) calls.
 	for _, fn := range []string{
 		"gavel_touch_todo_issue", "gavel_project_todo_prompt_run",
 		"gavel_touch_todo_prompt_run", "gavel_project_todo_session",
+		"gavel_project_todo_turn_request", "gavel_project_todo_root_session",
+		"gavel_resync_todo_activity",
 	} {
 		assert.Contains(t, functionsSQL, "FUNCTION public."+fn+"(", "%s must survive", fn)
 	}
-	assert.NotContains(t, functionsSQL, "CREATE OR REPLACE TRIGGER",
-		"projection triggers moved to their own file")
+	assert.NotContains(t, functionsSQL, "TRIGGER",
+		"the projection is driven by Captain's row-change feed, not triggers on Captain tables")
+	assert.NotContains(t, functionsSQL, "RETURNS trigger")
 	assert.NotContains(t, functionsSQL, "CREATE OR REPLACE VIEW",
 		"the runtime view moved to its own dependency-scoped file")
-
-	triggersSQL := readEmbeddedSchemaFile(t, "schema/111_todo_projection_triggers.sql")
-	assert.Contains(t, triggersSQL, "-- dependsOn: 110_todo_projection_functions.sql")
-	assert.Contains(t, triggersSQL, "gavel_todo_turn_request_projection")
-	assert.Contains(t, triggersSQL, "gavel_todo_prompt_run_iteration_projection")
 
 	runtimeViewSQL := readEmbeddedSchemaFile(t, "schema/112_view_todo_issue_runtime.sql")
 	assert.Contains(t, runtimeViewSQL, "-- dependsOn: 110_todo_projection_functions.sql")
 	assert.Contains(t, runtimeViewSQL, "CREATE OR REPLACE VIEW public.todo_issue_runtime")
 
 	backfillSQL := readEmbeddedSchemaFile(t, "schema/115_backfill_todo_activity.sql")
-	assert.Contains(t, backfillSQL, "-- dependsOn: 111_todo_projection_triggers.sql")
+	assert.Contains(t, backfillSQL, "-- dependsOn: 110_todo_projection_functions.sql")
 	assert.Contains(t, backfillSQL, "GREATEST(issue.updated_at, activity.activity_at)")
 
 	// Atlas leaves a renamed-nothing CHECK alone even when its expression

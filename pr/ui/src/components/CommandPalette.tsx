@@ -23,6 +23,8 @@ interface Row {
   key: string;
   icon: ComponentType<IconProps>;
   title: string;
+  // The parent's title on a child todo, which matches the search on its own.
+  hint?: string;
   subtitle: string;
   meta: string;
   onSelect: () => void;
@@ -106,6 +108,10 @@ export function CommandPalette({ open, onClose, prs, todos, todosLoading, onSele
   const directUUID = uuidQuery(query);
   const prMatches = useMemo(() => (q ? prs.filter(pr => prMatchesQuery(pr, q)) : []), [prs, q]);
   const todoMatches = useMemo(() => (q ? todos.filter(e => todoMatchesQuery(e.todo, q)) : []), [todos, q]);
+  const todoTitles = useMemo(
+    () => new Map(todos.flatMap(({ todo }) => (todo.id ? [[todo.id, todo.title] as const] : []))),
+    [todos],
+  );
 
   // One flat, ordered list (PRs then todos) backs keyboard navigation; the two
   // rendered groups index into it so the highlight and Enter stay in sync.
@@ -136,13 +142,14 @@ export function CommandPalette({ open, onClose, prs, todos, todosLoading, onSele
         key: `todo:${entry.workspace.dir}\t${entry.todo.ref}`,
         icon: UiListDashes,
         title: entry.todo.title,
+        hint: entry.todo.parentId ? (todoTitles.get(entry.todo.parentId) ?? 'parent not loaded') : undefined,
         subtitle: entry.workspace.name,
         meta: entry.todo.status.replace('_', ' '),
         onSelect: () => { onClose(); onSelectTodo(entry); },
       });
     }
     return out;
-  }, [directUUID, prMatches, todoMatches, onClose, onOpenUUID, onSelectPR, onSelectTodo]);
+  }, [directUUID, prMatches, todoMatches, todoTitles, onClose, onOpenUUID, onSelectPR, onSelectTodo]);
 
   // Keep the active index in range as results change while typing.
   useEffect(() => { setActive(a => (rows.length === 0 ? 0 : Math.min(a, rows.length - 1))); }, [rows.length]);
@@ -270,6 +277,7 @@ function PaletteRow({ row, index, active, onHover }: {
     >
       <Icon className="shrink-0 text-sm text-muted-foreground" />
       <span className="min-w-0 flex-1 truncate text-sm text-foreground">{row.title}</span>
+      {row.hint && <span className="max-w-[10rem] shrink-0 truncate text-[11px] text-muted-foreground" title={`Child of ${row.hint}`}>↳ {row.hint}</span>}
       {row.meta && <span className="shrink-0 truncate text-[11px] capitalize text-muted-foreground">{row.meta}</span>}
       <span className="shrink-0 max-w-[12rem] truncate text-[11px] tabular-nums text-muted-foreground">{row.subtitle}</span>
     </Button>

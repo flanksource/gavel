@@ -46,7 +46,7 @@ var _ = Describe("todo preview preflight", func() {
 		var response map[string]json.RawMessage
 		Expect(json.Unmarshal(recorder.Body.Bytes(), &response)).To(Succeed())
 		Expect(string(response["warnings"])).To(ContainSubstring("plugins"))
-		Expect(string(response["warnings"])).NotTo(ContainSubstring("requires Config.CanUseTool"), "preview carries the dashboard's actual deferred broker")
+		Expect(string(response["warnings"])).NotTo(ContainSubstring("requires Config.OnApproval"), "preview carries the dashboard's actual deferred broker")
 		Expect(string(response["trace"])).To(ContainSubstring(`"source":"request"`))
 	})
 
@@ -77,6 +77,23 @@ var _ = Describe("todo preview preflight", func() {
 			Expect(response.Spec.Sandbox.Policy.Filesystem.Access).To(Equal(api.SandboxFilesystemReadOnly))
 		}, Entry("agent", api.ModeAgent), Entry("cmux", api.ModeCmux),
 	)
+
+	// The plan prompt's Claude allowlist (Glob, Grep, Read) names no tool the API
+	// mode ships, so it is inert there; the preview keeps the authored keys.
+	It("keeps the built-in planning allowlist inert on the API mode", func() {
+		body, err := json.Marshal(todoRunPayload{Ref: todo.ID, Step: "plan", Spec: api.Spec{Model: api.Model{Name: "gpt-5.6-sol", Mode: api.ModeAPI}}})
+		Expect(err).NotTo(HaveOccurred())
+		recorder := httptest.NewRecorder()
+		server.handleTodoRunPreview(recorder, httptest.NewRequest(http.MethodPost, "/api/todos/run/preview", strings.NewReader(string(body))))
+		Expect(recorder.Code).To(Equal(http.StatusOK), recorder.Body.String())
+		var response struct {
+			Spec     api.Spec `json:"spec"`
+			Warnings []string `json:"warnings"`
+		}
+		Expect(json.Unmarshal(recorder.Body.Bytes(), &response)).To(Succeed())
+		Expect(response.Spec.Permissions.Tools).To(HaveKeyWithValue("Read", api.ToolPolicyAllow))
+		Expect(response.Warnings).NotTo(ContainElement(ContainSubstring("tool")))
+	})
 
 	It("rejects a missing judge in both preview and run before dispatch", func() {
 		body, err := json.Marshal(todoRunPayload{Ref: todo.ID, Step: "plan", Spec: api.Spec{

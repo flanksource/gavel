@@ -161,7 +161,7 @@ const detail: PRDetail = {
   }],
   comments: [{
     id: 901,
-    body: 'review comment body must stay out of the failure details',
+    body: 'Please keep the public API stable.\n\n## Verification\n\nSee the linked review.',
     author: 'reviewer',
     url: 'https://github.com/acme/widget/pull/17#discussion_r901',
     createdAt: '2026-07-26T12:30:00Z',
@@ -396,7 +396,7 @@ describe('CreateTodoFromPRDialog', () => {
     expect(payload.body).toContain('pkg/store/save.go:23');
     expect(payload.body).toContain('return value is not checked');
     expect(payload.body).not.toContain('check log must stay out of the body');
-    expect(payload.body).not.toContain('review comment body must stay out of the failure details');
+    expect(payload.body).not.toContain('Please keep the public API stable.');
     expect(payload.criteria).toEqual([
       { text: 'Test `storage › saves records` passes' },
       { text: 'Resolve golangci-lint (errcheck) violation at pkg/store/save.go:23' },
@@ -439,5 +439,38 @@ describe('CreateTodoFromPRDialog', () => {
       repo: 'acme/widget',
       actions: ['*'],
     });
+  });
+
+  it('submits selected comment content and its verification ID', async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => createdResponse());
+    vi.stubGlobal('fetch', fetchMock);
+    render(
+      <CreateTodoFromPRDialog
+        open
+        onClose={vi.fn()}
+        pr={pr}
+        detail={detail}
+        workspaces={workspaces}
+      />,
+    );
+
+    fireEvent.click(screen.getByLabelText('Include comment:901:0'));
+    fireEvent.click(screen.getByRole('button', { name: 'Add todo' }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    const payload = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    expect(payload.body).toContain('Please keep the public API stable.');
+    expect(payload.body).toContain('##### Verification');
+    expect(payload.body).toContain('https://github.com/acme/widget/pull/17#discussion_r901');
+    expect(payload.prVerification).toEqual({
+      prNumber: 17,
+      repo: 'acme/widget',
+      commentIds: [901],
+      actions: ['*'],
+    });
+    expect(payload.criteria).toEqual([
+      { text: 'Test `storage › saves records` passes' },
+      { text: 'Resolve golangci-lint (errcheck) violation at pkg/store/save.go:23' },
+    ]);
   });
 });

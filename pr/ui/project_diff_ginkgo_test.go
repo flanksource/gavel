@@ -56,6 +56,43 @@ var _ = Describe("project working-tree diff", func() {
 		Expect(strings.Index(response.Diff, "src/new.go")).To(BeNumerically("<", strings.Index(response.Diff, "src/staged.go")))
 	})
 
+	It("applies commit ignore and allow rules to project status and diff", func() {
+		GinkgoT().Setenv("HOME", GinkgoT().TempDir())
+		GinkgoT().Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+		dir := createDiffRepository()
+		writeDiffFile(dir, ".gavel.yaml", "commit:\n  gitignore:\n    - '*.env'\n  allow:\n    - src/keep.env\n    - generated/keep.env\n")
+		writeDiffFile(dir, "src/private.env", "PRIVATE=hidden\n")
+		writeDiffFile(dir, "src/keep.env", "PUBLIC=visible\n")
+		writeDiffFile(dir, "src/staged.env", "STAGED=visible\n")
+		writeDiffFile(dir, "generated/private.env", "NESTED_PRIVATE=hidden\n")
+		writeDiffFile(dir, "generated/keep.env", "NESTED_PUBLIC=visible\n")
+		runDiffGit(dir, "add", "src/staged.env")
+		Expect(SaveProjects([]Project{{Name: "gavel", Dir: dir}})).To(Succeed())
+
+		statusRecorder := httptest.NewRecorder()
+		statusRequest := httptest.NewRequest(http.MethodGet, "/api/projects/gavel/status", nil)
+		statusRequest.SetPathValue("name", "gavel")
+		(&Server{}).handleProjectStatus(statusRecorder, statusRequest)
+		Expect(statusRecorder.Code).To(Equal(http.StatusOK), statusRecorder.Body.String())
+		var projectStatus projectStatusResponse
+		Expect(json.Unmarshal(statusRecorder.Body.Bytes(), &projectStatus)).To(Succeed())
+		paths := make([]string, 0, len(projectStatus.Files))
+		for _, file := range projectStatus.Files {
+			paths = append(paths, file.Path)
+		}
+		Expect(paths).To(ContainElements("src/keep.env", "src/staged.env", "generated/keep.env"))
+		Expect(paths).NotTo(ContainElement("src/private.env"))
+		Expect(paths).NotTo(ContainElement("generated/private.env"))
+
+		response := requestProjectDiff("gavel", "src")
+		Expect(response.Diff).To(ContainSubstring("PUBLIC=visible"))
+		Expect(response.Diff).To(ContainSubstring("STAGED=visible"))
+		Expect(response.Diff).NotTo(ContainSubstring("PRIVATE=hidden"))
+		generated := requestProjectDiff("gavel", "generated")
+		Expect(generated.Diff).To(ContainSubstring("NESTED_PUBLIC=visible"))
+		Expect(generated.Diff).NotTo(ContainSubstring("NESTED_PRIVATE=hidden"))
+	})
+
 	It("expands a wholly untracked directory into a patch per file", func() {
 		dir := createDiffRepository()
 		writeDiffFile(dir, "src/devtools/.gitignore", "*.log\n")
