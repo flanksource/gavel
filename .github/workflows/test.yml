@@ -63,8 +63,6 @@ jobs:
       # per-package deadline. Disable with --pre-build=false.
       - name: Run tests
         run: ./.bin/gavel test
-        env:
-          GAVEL_DB_EMBEDDED_TEST: "1"
 
       # The Test job is the only writer of the Go cache: it compiles every
       # test binary on top of the gavel build, so its copy is a superset of
