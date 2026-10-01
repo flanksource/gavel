@@ -19,7 +19,7 @@ func triageOutcomeFor(execution *todos.ExecutionResult) *lifecycle.StepOutcome {
 // as a successful one.
 func TestRenderRunResultColoursTheStatusByOutcome(t *testing.T) {
 	execution := &todos.ExecutionResult{ExecutorName: "cli-claude", Summary: "Could not read the fixture."}
-	report := renderRunResult("triage", triageOutcomeFor(execution), string(types.StatusFailed), nil)
+	report := renderRunResult("ref", "triage", triageOutcomeFor(execution), string(types.StatusFailed), nil)
 
 	for _, want := range []string{"triage finished", "cli-claude", "Could not read the fixture."} {
 		if !strings.Contains(report, want) {
@@ -37,7 +37,7 @@ func TestRenderRunResultColoursTheStatusByOutcome(t *testing.T) {
 // `keep` is not a todo status: the triage step deliberately leaves it alone, and
 // printing it as one would name a transition that never happened.
 func TestRenderRunResultReportsAKeptStatus(t *testing.T) {
-	report := renderRunResult("triage", triageOutcomeFor(&todos.ExecutionResult{ExecutorName: "cli-claude"}), lifecycle.OutcomeKeep, nil)
+	report := renderRunResult("ref", "triage", triageOutcomeFor(&todos.ExecutionResult{ExecutorName: "cli-claude"}), lifecycle.OutcomeKeep, nil)
 
 	if !strings.Contains(report, "status unchanged") {
 		t.Errorf("report %q should say the status was kept", report)
@@ -59,7 +59,7 @@ func TestRenderRunResultPrintsQuestionsForAnAsk(t *testing.T) {
 			Options: []string{"the native provider", "the lifecycle host"},
 		}},
 	}
-	report := renderRunResult("triage", triageOutcomeFor(execution), string(types.StatusAsk), nil)
+	report := renderRunResult("ref", "triage", triageOutcomeFor(execution), string(types.StatusAsk), nil)
 
 	for _, want := range []string{"Which provider owns the write?", "todos/triage.go holds the lock", "the lifecycle host"} {
 		if !strings.Contains(report, want) {
@@ -81,7 +81,7 @@ func TestRenderRunResultPrintsTheTriageVerdict(t *testing.T) {
 			Merges:  []string{"ff0011aa", "cc3344bb"},
 		},
 	}
-	report := renderRunResult("triage", triageOutcomeFor(execution), lifecycle.OutcomeKeep, nil)
+	report := renderRunResult("ref", "triage", triageOutcomeFor(execution), lifecycle.OutcomeKeep, nil)
 
 	for _, want := range []string{"merge-into", "body", "ff0011aa", "cc3344bb", "Same work as the two folded in."} {
 		if !strings.Contains(report, want) {
@@ -99,7 +99,7 @@ func TestRenderRunResultPrintsAnUndecodedResponse(t *testing.T) {
 		ErrorMessage: "decode envelope: unexpected end of JSON input",
 		ResponseText: prose,
 	}
-	report := renderRunResult("triage", triageOutcomeFor(execution), string(types.StatusFailed), nil)
+	report := renderRunResult("ref", "triage", triageOutcomeFor(execution), string(types.StatusFailed), nil)
 
 	for _, want := range []string{prose, "did not match the step's schema", "unexpected end of JSON input"} {
 		if !strings.Contains(report, want) {
@@ -118,7 +118,7 @@ func TestRenderRunResultOmitsTheResponseWhenAnEnvelopeDecoded(t *testing.T) {
 		Summary:      "Triaged it.",
 		ResponseText: `{"summary":"Triaged it.","endStatus":"completed"}`,
 	}
-	report := renderRunResult("triage", triageOutcomeFor(execution), lifecycle.OutcomeKeep, nil)
+	report := renderRunResult("ref", "triage", triageOutcomeFor(execution), lifecycle.OutcomeKeep, nil)
 
 	if strings.Contains(report, "did not match the step's schema") {
 		t.Errorf("report %q should not claim a schema mismatch", report)
@@ -134,7 +134,7 @@ func TestRenderRunResultPrintsTheDefinitionOfDoneVerdict(t *testing.T) {
 		EndStatus:    types.EndCompleted,
 		DoD:          &todos.DoDOutcome{Ran: true, Report: &captainapi.VerifyReport{Reason: "2 of 3 fixtures failed"}},
 	}
-	report := renderRunResult("verify", triageOutcomeFor(execution), string(types.StatusUnverified), nil)
+	report := renderRunResult("ref", "verify", triageOutcomeFor(execution), string(types.StatusUnverified), nil)
 
 	for _, want := range []string{"definition of done", "failed", "2 of 3 fixtures failed"} {
 		if !strings.Contains(report, want) {
@@ -144,7 +144,7 @@ func TestRenderRunResultPrintsTheDefinitionOfDoneVerdict(t *testing.T) {
 }
 
 func TestRenderRunResultIsEmptyWithoutAnExecution(t *testing.T) {
-	if report := renderRunResult("triage", nil, string(types.StatusFailed), nil); report != "" {
+	if report := renderRunResult("ref", "triage", nil, string(types.StatusFailed), nil); report != "" {
 		t.Errorf("report for a run that produced nothing = %q, want empty", report)
 	}
 }

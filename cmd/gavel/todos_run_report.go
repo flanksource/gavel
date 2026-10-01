@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	captainapi "github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/clicky"
 	clickyapi "github.com/flanksource/clicky/api"
 	"github.com/flanksource/gavel/todos"
@@ -19,7 +20,7 @@ import (
 // with it. Before this the CLI printed one hardcoded-green
 // "<step> finished — <status>" line, and the summary, the error, the questions,
 // the verdict and a response that failed to decode were all dropped.
-func renderRunResult(step string, outcome *lifecycle.StepOutcome, status string, runErr error) string {
+func renderRunResult(todoRef, step string, outcome *lifecycle.StepOutcome, status string, runErr error) string {
 	if outcome == nil || outcome.Execution == nil {
 		return ""
 	}
@@ -47,8 +48,43 @@ func renderRunResult(step string, outcome *lifecycle.StepOutcome, status string,
 		add(clicky.Text("plan: ", "text-gray-500").Append(string(execution.Plan.Status), "text-blue-600"))
 	}
 	lines = append(lines, renderRunDoD(execution)...)
+	lines = append(lines, renderRunWorkspace(todoRef, execution.Workspace)...)
 	lines = append(lines, renderUndecodedResponse(execution)...)
 	return strings.Join(lines, "\n")
+}
+
+// renderRunWorkspace prints where the run's work lives: the branch, the agent's
+// own Setup..Head range, what teardown did with the worktree, each commit, and
+// — while the branch still holds commits — how to land them.
+func renderRunWorkspace(todoRef string, workspace *captainapi.WorkspaceRecord) []string {
+	if workspace == nil || (workspace.Worktree == nil && len(workspace.Commits) == 0) {
+		return nil
+	}
+	line := clicky.Text("workspace:", "text-gray-500")
+	worktree := workspace.Worktree
+	if worktree != nil {
+		line = line.Append(" "+worktree.Branch, "text-blue-600 font-bold")
+		if worktree.Setup != "" && worktree.Head != "" {
+			line = line.Append("  "+todos.ShortSHA(worktree.Setup)+".."+todos.ShortSHA(worktree.Head), "text-gray-600")
+		}
+		if fate := todos.WorktreeFate(worktree); fate != "" {
+			style := "text-gray-500"
+			if worktree.Kept {
+				style = "text-yellow-600"
+			}
+			line = line.Append("  worktree "+fate, style)
+		}
+	}
+	lines := []string{line.ANSI()}
+	for _, commit := range workspace.Commits {
+		lines = append(lines, clicky.Text("  "+todos.ShortSHA(commit.SHA), "text-yellow-600").
+			Append(" "+todos.CommitSubject(commit.Message)).ANSI())
+	}
+	if len(workspace.Commits) > 0 && (worktree == nil || !worktree.BranchDeleted) {
+		lines = append(lines, clicky.Text("land it: ", "text-gray-500").
+			Append("gavel todos land "+todoRef+" --merge|--pr", "text-blue-600").ANSI())
+	}
+	return lines
 }
 
 // runStatusText reports the status through types.Status.Pretty, so a failed run
@@ -145,8 +181,8 @@ func renderUndecodedResponse(execution *todos.ExecutionResult) []string {
 }
 
 // printRunResult writes the report, unless the run produced nothing to report.
-func printRunResult(step string, outcome *lifecycle.StepOutcome, status string, runErr error) {
-	if report := renderRunResult(step, outcome, status, runErr); report != "" {
+func printRunResult(todoRef, step string, outcome *lifecycle.StepOutcome, status string, runErr error) {
+	if report := renderRunResult(todoRef, step, outcome, status, runErr); report != "" {
 		fmt.Println(report)
 	}
 }

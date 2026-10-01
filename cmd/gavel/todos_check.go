@@ -47,33 +47,16 @@ func runTodosList(opts TodosListOptions) (any, error) {
 		}
 	}
 
-	filters := todos.DiscoveryFilters{}
+	filters := todos.DiscoveryFilters{TopLevelOnly: !opts.Children && strings.TrimSpace(opts.Parent) == ""}
 	if opts.Status != "" {
 		filters.IncludeStatuses = []types.Status{types.Status(opts.Status)}
 	} else if !opts.Done {
 		filters.ExcludeStatuses = []types.Status{types.StatusVerified, types.StatusCompleted}
 	}
 
-	ctx := context.Background()
-	var todoList types.TODOS
-	if opts.All {
-		projects, loadErr := loadTodoProjects()
-		if loadErr != nil {
-			return nil, loadErr
-		}
-		todoList, err = query.ListWorkspaces(ctx, ui.TodoWorkspaces(projects), openRuntimeTodosProvider, filters)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		provider, err := newTodosProvider(workDir)
-		if err != nil {
-			return nil, err
-		}
-		todoList, err = provider.List(ctx, filters)
-		if err != nil {
-			return nil, err
-		}
+	todoList, err := listTodos(context.Background(), workDir, opts, filters)
+	if err != nil {
+		return nil, err
 	}
 	if !since.IsZero() {
 		todoList = filterTODOsSince(todoList, since)
@@ -85,6 +68,36 @@ func runTodosList(opts TodosListOptions) (any, error) {
 	}
 
 	return todoList, nil
+}
+
+// listTodos reads the rows a list shows: one TODO's children, every registered
+// project, or this workspace.
+//
+// --parent wins over --all because a parent's children all live in the parent's
+// workspace, and resolving it as a target finds that workspace even when the
+// caller is standing in another one.
+func listTodos(ctx context.Context, workDir string, opts TodosListOptions, filters todos.DiscoveryFilters) (types.TODOS, error) {
+	parentRef := strings.TrimSpace(opts.Parent)
+	if opts.All && parentRef == "" {
+		projects, err := loadTodoProjects()
+		if err != nil {
+			return nil, err
+		}
+		return query.ListWorkspaces(ctx, ui.TodoWorkspaces(projects), openRuntimeTodosProvider, filters)
+	}
+	provider, err := newTodosProvider(workDir)
+	if err != nil {
+		return nil, err
+	}
+	if parentRef == "" {
+		return provider.List(ctx, filters)
+	}
+	parents, err := resolveRequestedTargets(ctx, provider, workDir, []string{parentRef}, todos.DiscoveryFilters{})
+	if err != nil {
+		return nil, err
+	}
+	filters.ParentID = parents[0].Todo.ID
+	return parents[0].Provider.List(ctx, filters)
 }
 
 func filterTODOsSince(todoList types.TODOS, since time.Time) types.TODOS {
@@ -118,12 +131,42 @@ func runTodosGet(opts TodosGetOptions) error {
 	if err != nil {
 		return err
 	}
-	todo, err := provider.Get(context.Background(), ref)
+	ctx := context.Background()
+	todo, err := provider.Get(ctx, ref)
 	if err != nil {
 		return err
 	}
 
 	fmt.Println(todo.PrettyDetailed().ANSI())
+	return printTodoChildren(ctx, provider, todo)
+}
+
+// printTodoChildren lists a parent's children as the rows `todos list` prints,
+// so each child shows the per-phase timings the dashboard shows for it. Done
+// children are included: the parent's view is where a finished child is found.
+func printTodoChildren(ctx context.Context, provider todos.Provider, todo *types.TODO) error {
+	if todo.ParentID != "" {
+		return nil
+	}
+	children, err := provider.List(ctx, todos.DiscoveryFilters{ParentID: todo.ID})
+	if err != nil {
+		return fmt.Errorf("list children of %s: %w", todo.DisplayID(), err)
+	}
+	if len(children) == 0 {
+		return nil
+	}
+	done := 0
+	for _, child := range children {
+		if child.Status == types.StatusVerified || child.Status == types.StatusCompleted {
+			done++
+		}
+	}
+	rows, err := clicky.Format(children)
+	if err != nil {
+		return fmt.Errorf("render children of %s: %w", todo.DisplayID(), err)
+	}
+	fmt.Println(clicky.Text(fmt.Sprintf("Children (%d/%d done)", done, len(children)), "text-blue-600 font-bold").ANSI())
+	fmt.Println(rows)
 	return nil
 }
 
@@ -311,12 +354,7 @@ func resolveRequestedTargets(ctx context.Context, provider todos.Provider, workD
 				return todoTarget{}, fmt.Errorf("%w (and listing todos to match %q by title failed: %v)", getErr, ref, listErr)
 			}
 		}
-		var titleMatches types.TODOS
-		for _, candidate := range listed {
-			if candidate != nil && strings.EqualFold(candidate.Title, ref) {
-				titleMatches = append(titleMatches, candidate)
-			}
-		}
+		titleMatches := query.TitleMatches(listed, ref)
 		if len(titleMatches) != 1 {
 			// The provider's error describes the reference but never quotes it, so a
 			// batch of refs reported "short issue reference must contain at least 8

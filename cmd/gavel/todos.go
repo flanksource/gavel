@@ -44,6 +44,7 @@ Examples:
   gavel todos list
   gavel todos list --all            # list every registered project
   gavel todos list --all --done     # include verified/completed items
+  gavel todos list --parent <id>    # list one TODO's children
   gavel todos get <id>
   gavel todos run <id>              # run the next step for one TODO
   gavel todos run <id> --step plan  # propose a reviewable plan first
@@ -59,6 +60,10 @@ type TodosListOptions struct {
 	Done    bool   `json:"done" flag:"done" help:"Include verified and completed TODOs"`
 	Since   string `json:"since" flag:"since" help:"Show TODOs created or updated since (e.g. 7d, now-30d, 2024-01-01)"`
 	GroupBy string `json:"group-by" flag:"group-by" help:"Group TODOs by: file, directory, repo, all, or none"`
+	// Children are listed under their parent, so a list leaves them out unless
+	// it names a parent or asks for them.
+	Parent   string `json:"parent" flag:"parent" help:"List only the children of this TODO (ID, alias, or title)"`
+	Children bool   `json:"children" flag:"children" help:"Include child TODOs, which are otherwise listed only under their parent"`
 }
 
 func (opts TodosListOptions) GetName() string { return "list" }

@@ -23,6 +23,8 @@ type TodosCreateOptions struct {
 	Labels       []string `flag:"label" help:"Attach a label"`
 	Priority     string   `flag:"priority" default:"medium" help:"TODO priority"`
 	Status       string   `flag:"status" default:"pending" help:"TODO status"`
+	Parent       string   `flag:"parent" help:"Make the new TODO a child of this TODO (ID or alias)"`
+	NoParent     bool     `flag:"no-parent" help:"Keep the new TODO top-level when it is created inside a TODO run"`
 	GitHub       bool     `flag:"github" help:"Push the new TODO to a GitHub issue"`
 	BaseURL      string   `flag:"base-url" help:"Absolute origin attachment links resolve against"`
 	Repo         string   `flag:"repo" help:"Target owner/repo"`
@@ -73,6 +75,9 @@ func runTodosCreate(opts TodosCreateOptions) error {
 	if err := ops.ValidateCreatePlan(resolved.Plan, lifecycle); err != nil {
 		return err
 	}
+	if err := ops.ValidateParentFlags(opts.Parent, opts.NoParent); err != nil {
+		return err
+	}
 
 	provider, err := newTodosProvider(workDir)
 	if err != nil {
@@ -82,6 +87,7 @@ func runTodosCreate(opts TodosCreateOptions) error {
 	request := todos.CreateRequest{
 		Title: title, Body: resolved.Body, Verification: resolved.Verification,
 		Priority: priority, Status: lifecycle.Status, Labels: opts.Labels,
+		Parent: opts.Parent, NoParent: opts.NoParent, Origin: ops.OriginFromEnv(),
 	}
 	if resolved.Plan != "" {
 		request.Plan = &todos.CreatePlanRequest{Markdown: resolved.Plan, Approved: lifecycle.PlanApproved}

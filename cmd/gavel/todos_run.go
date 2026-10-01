@@ -300,7 +300,7 @@ func runTodoStep(ctx context.Context, workDir string, provider todos.Provider, t
 	// said, and the status printed is the one the lifecycle decided rather than one
 	// read back off a TODO the write may never have reached.
 	req.OnComplete = func(outcome *lifecycle.StepOutcome, status string, runErr error) {
-		printRunResult(prepared.Step.Name, outcome, status, runErr)
+		printRunResult(todo.DisplayID(), prepared.Step.Name, outcome, status, runErr)
 	}
 	fmt.Println(clicky.Text("step: "+prepared.Step.Name, "text-green-600 font-bold").
 		Append("  "+prepared.Reason, "text-gray-500").ANSI())

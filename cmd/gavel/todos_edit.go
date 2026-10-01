@@ -24,6 +24,8 @@ type TodosEditOptions struct {
 	Priority     string   `flag:"priority" help:"New priority"`
 	Labels       []string `flag:"label" help:"Replace the TODO labels"`
 	ClearLabels  bool     `flag:"clear-labels" help:"Remove every label from the TODO"`
+	Parent       string   `flag:"parent" help:"Make the TODO a child of this TODO (ID or alias)"`
+	NoParent     bool     `flag:"no-parent" help:"Detach the TODO from its parent"`
 }
 
 type TodosCommentOptions struct {
@@ -45,7 +47,7 @@ var todosReopenCmd *cobra.Command
 
 func init() {
 	todosEditCmd = clicky.AddNamedCommand("edit", todosCmd, TodosEditOptions{}, func(opts TodosEditOptions) (any, error) { return nil, runTodosEdit(opts, changedTodoEditFlags()) })
-	todosEditCmd.Short = "Edit a TODO's content, plan, status, and/or priority"
+	todosEditCmd.Short = "Edit a TODO's content, plan, status, priority, and/or parent"
 
 	todosCommentCmd = clicky.AddNamedCommand("comment", todosCmd, TodosCommentOptions{}, func(opts TodosCommentOptions) (any, error) {
 		return nil, runTodosComment(opts, todosCommentCmd.Flags().Changed("body"))
@@ -83,7 +85,10 @@ func runTodosEdit(opts TodosEditOptions, changed map[string]bool) error {
 		return err
 	}
 
-	flags := ops.EditFlags{Status: opts.Status, Priority: opts.Priority, ClearLabels: opts.ClearLabels}
+	flags := ops.EditFlags{
+		Status: opts.Status, Priority: opts.Priority, ClearLabels: opts.ClearLabels,
+		Parent: opts.Parent, NoParent: opts.NoParent,
+	}
 	if changed["title"] || opts.Title != "" {
 		flags.Title = &opts.Title
 	}
