@@ -2,12 +2,10 @@ package native_test
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 	"time"
 
 	captaindb "github.com/flanksource/captain/pkg/database"
-	commonsdb "github.com/flanksource/commons-db/db"
+	"github.com/flanksource/commons-db/dbtest"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/todos/native"
 	"github.com/google/uuid"
@@ -29,15 +27,7 @@ type coordinatorFixture struct {
 
 func openCoordinatorFixture(ctx context.Context, name string) *coordinatorFixture {
 	GinkgoHelper()
-	if os.Getenv("GAVEL_DB_EMBEDDED_TEST") == "" {
-		Skip("set GAVEL_DB_EMBEDDED_TEST=1 to run embedded-postgres execution integration tests")
-	}
-	dsn, stop, err := commonsdb.StartEmbedded(commonsdb.EmbeddedConfig{
-		DataDir:  filepath.Join(GinkgoT().TempDir(), "postgres"),
-		Database: name,
-	})
-	Expect(err).NotTo(HaveOccurred())
-	DeferCleanup(func() { Expect(stop()).To(Succeed()) })
+	dsn := dbtest.ForGinkgo(dbtest.Options{Name: name}).DSN()
 
 	GinkgoT().Setenv(database.EnvDSN, dsn)
 	GinkgoT().Setenv(database.EnvDisable, "")

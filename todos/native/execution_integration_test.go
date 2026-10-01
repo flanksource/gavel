@@ -1,12 +1,11 @@
 package native_test
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 
 	captaindb "github.com/flanksource/captain/pkg/database"
 	commonsdb "github.com/flanksource/commons-db/db"
+	"github.com/flanksource/commons-db/dbtest"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/todos/native"
 	"github.com/google/uuid"
@@ -179,15 +178,7 @@ func TestExecutionIntegrationAtomicLinksAndReplay(t *testing.T) {
 
 func openExecutionRepository(t *testing.T) (*native.Repository, *gorm.DB, string) {
 	t.Helper()
-	if os.Getenv("GAVEL_DB_EMBEDDED_TEST") == "" {
-		t.Skip("set GAVEL_DB_EMBEDDED_TEST=1 to run embedded-postgres execution integration tests")
-	}
-	dsn, stop, err := commonsdb.StartEmbedded(commonsdb.EmbeddedConfig{
-		DataDir:  filepath.Join(t.TempDir(), "postgres"),
-		Database: "gavel_native_execution",
-	})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, stop()) })
+	dsn := dbtest.ForT(t, dbtest.Options{Name: "gavel_native_execution"}).DSN()
 
 	t.Setenv(database.EnvDSN, dsn)
 	t.Setenv(database.EnvDisable, "")

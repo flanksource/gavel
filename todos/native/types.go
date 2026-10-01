@@ -110,9 +110,24 @@ type Issue struct {
 	ExecutionState    ExecutionState `json:"executionState"`
 	ActivePromptRunID *uuid.UUID     `json:"activePromptRunId,omitempty"`
 	SelectedPlanID    *uuid.UUID     `json:"selectedPlanId,omitempty"`
-	Version           int64          `json:"version"`
-	CreatedAt         time.Time      `json:"createdAt"`
-	UpdatedAt         time.Time      `json:"updatedAt"`
+	// ParentID is the top-level issue this one was split out of. The hierarchy
+	// is a single level: an issue with a parent never has children.
+	ParentID  *uuid.UUID `json:"parentId,omitempty"`
+	Version   int64      `json:"version"`
+	CreatedAt time.Time  `json:"createdAt"`
+	UpdatedAt time.Time  `json:"updatedAt"`
+}
+
+// IssueOrigin is the run an issue was created inside: the issue that run was
+// working on and the agent session doing the work. It is recorded in the
+// created event and links nothing by itself.
+//
+// IssueID is a string because it is a reference, not a key: it is whatever the
+// run exported, which may be a short id, an alias, or an issue in a database
+// this one has never seen.
+type IssueOrigin struct {
+	IssueID   string
+	SessionID string
 }
 
 // IssueStatusCount is one group of CountIssuesByStatus: the workspace, the
@@ -138,12 +153,16 @@ type IssueStatusCount struct {
 // is therefore only a starting point for a UI that should tick locally rather
 // than re-poll.
 type IssuePhaseRun struct {
-	IssueID    uuid.UUID  `json:"issueId"`
-	Phase      StepKind   `json:"phase"`
-	State      string     `json:"state"`
-	RunPhase   string     `json:"runPhase"`
-	StartedAt  *time.Time `json:"startedAt,omitempty"`
-	FinishedAt *time.Time `json:"finishedAt,omitempty"`
+	IssueID uuid.UUID `json:"issueId"`
+	// PromptRunID is the Captain prompt run behind the row. A run step that
+	// verified its own work is listed under both `run` and `verify` with the
+	// same id, duration and cost; a reader totalling phases sums each id once.
+	PromptRunID uuid.UUID  `json:"promptRunId"`
+	Phase       StepKind   `json:"phase"`
+	State       string     `json:"state"`
+	RunPhase    string     `json:"runPhase"`
+	StartedAt   *time.Time `json:"startedAt,omitempty"`
+	FinishedAt  *time.Time `json:"finishedAt,omitempty"`
 	// DurationSeconds is null until the run starts.
 	DurationSeconds *float64 `json:"durationSeconds,omitempty"`
 	// Iterations/Succeeded/Failed are the progress of a plan, run or triage
@@ -277,6 +296,8 @@ type CreateIssueInput struct {
 	Priority     Priority
 	Status       IssueStatus
 	Actor        string
+	ParentID     *uuid.UUID
+	Origin       IssueOrigin
 }
 
 // IssuePatch uses pointers so callers can distinguish no change from setting

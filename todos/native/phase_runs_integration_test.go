@@ -90,7 +90,8 @@ func TestListIssuePhaseRuns(t *testing.T) {
 	// step_kind='verify' would be empty for almost every todo.
 	t.Run("folds a run that reached verification into the verify phase", func(t *testing.T) {
 		issue := createIssue(t, repo, workspace.ID, "verify inside run")
-		setRunState(t, db, linkPhaseRun(t, db, issue.ID, native.StepRun, 0), "failed", "verify")
+		runID := linkPhaseRun(t, db, issue.ID, native.StepRun, 0)
+		setRunState(t, db, runID, "failed", "verify")
 
 		runs, err := repo.ListIssuePhaseRuns(ctx, workspace.ID)
 		require.NoError(t, err)
@@ -99,6 +100,26 @@ func TestListIssuePhaseRuns(t *testing.T) {
 		require.Contains(t, byKind, native.StepVerify, "run-phase verification must surface as verify")
 		assert.Equal(t, "verify", byKind[native.StepVerify].RunPhase)
 		assert.Contains(t, byKind, native.StepRun, "and still count as the run phase")
+		// One prompt run listed under two phases carries its whole duration and
+		// cost twice. The shared id is what lets a reader sum it once.
+		assert.Equal(t, runID, byKind[native.StepRun].PromptRunID)
+		assert.Equal(t, runID, byKind[native.StepVerify].PromptRunID,
+			"the verify row of an in-run verification is the same prompt run as the run row")
+	})
+
+	t.Run("names a standalone verification as its own prompt run", func(t *testing.T) {
+		issue := createIssue(t, repo, workspace.ID, "verify beside run")
+		runID := linkPhaseRun(t, db, issue.ID, native.StepRun, 0)
+		setRunState(t, db, runID, "succeeded", "finished")
+		verifyID := linkPhaseRun(t, db, issue.ID, native.StepVerify, 0)
+		setRunState(t, db, verifyID, "succeeded", "finished")
+
+		runs, err := repo.ListIssuePhaseRuns(ctx, workspace.ID)
+		require.NoError(t, err)
+
+		byKind := phasesByKind(runs, issue.ID)
+		assert.Equal(t, runID, byKind[native.StepRun].PromptRunID)
+		assert.Equal(t, verifyID, byKind[native.StepVerify].PromptRunID)
 	})
 
 	// The verify phase draws rows from two step kinds, and ordinals are numbered

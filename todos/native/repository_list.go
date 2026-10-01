@@ -9,10 +9,13 @@ import (
 	"github.com/google/uuid"
 )
 
-// CountIssuesByStatus groups the given workspaces' issues by workspace and the
-// four columns the derived TODO status is a function of, in one query however
-// many workspaces are asked for. Callers fold the groups through the same
+// CountIssuesByStatus groups the given workspaces' top-level issues by workspace
+// and the four columns the derived TODO status is a function of, in one query
+// however many workspaces are asked for. Callers fold the groups through the same
 // derivation List uses, so counting never has to materialize issue bodies.
+//
+// Children are left out: a backlog counts the work it lists, and a child is
+// listed under its parent rather than beside it. ListIssues still returns them.
 func (r *Repository) CountIssuesByStatus(ctx context.Context, workspaceIDs []uuid.UUID) ([]IssueStatusCount, error) {
 	if len(workspaceIDs) == 0 {
 		return nil, fmt.Errorf("%w: at least one workspace ID is required to count issues", ErrInvalidInput)
@@ -31,6 +34,7 @@ func (r *Repository) CountIssuesByStatus(ctx context.Context, workspaceIDs []uui
 		 AND active_link.prompt_run_id = issue.active_prompt_run_id
 		LEFT JOIN captain_plans AS plan ON plan.id = issue.selected_plan_id
 		WHERE issue.workspace_id IN ?
+		  AND issue.parent_issue_id IS NULL
 		GROUP BY 1, 2, 3, 4, 5`,
 		workspaceIDs,
 	).Scan(&counts)
@@ -68,6 +72,7 @@ func (r *Repository) CountIssuesByStatus(ctx context.Context, workspaceIDs []uui
 func (r *Repository) ListIssuePhaseRuns(ctx context.Context, workspaceID uuid.UUID) ([]IssuePhaseRun, error) {
 	const phaseColumns = `
 		link.issue_id,
+		link.prompt_run_id,
 		%s AS phase,
 		link.ordinal,
 		run.state::text                                   AS state,
@@ -116,7 +121,7 @@ func (r *Repository) ListIssuePhaseRuns(ctx context.Context, workspaceID uuid.UU
 			  AND (run.phase = 'verify' OR run.latest_verification_result IS NOT NULL)
 		)
 		SELECT DISTINCT ON (issue_id, phase)
-		       issue_id, phase, state, run_phase, started_at, finished_at,
+		       issue_id, prompt_run_id, phase, state, run_phase, started_at, finished_at,
 		       duration_seconds, iterations, succeeded, failed,
 		       verification_result, cost_usd, active
 		FROM phase_runs
