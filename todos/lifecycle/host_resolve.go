@@ -42,6 +42,8 @@ type Resolution struct {
 	Trace      []api.SpecLayer
 	Provenance map[string]api.FieldProvenance
 	Warnings   []string
+	// VerifyTarget is the commit a verify step checks; nil for any other step.
+	VerifyTarget *types.VerifyTarget
 
 	// lc and prepared are the fold itself, carried so Dispatch runs exactly what
 	// Resolve reported. Re-folding at dispatch time would let the run and the
@@ -96,6 +98,7 @@ func (h *Host) Resolve(ctx context.Context, todo *types.TODO, step Step, opts Ru
 		Trace:          prepared.trace,
 		Provenance:     prepared.provenance,
 		Warnings:       mergeRuntimeWarnings(prepared.warnings, warnings),
+		VerifyTarget:   prepared.verifyTarget,
 		lc:             lc,
 		prepared:       prepared,
 	}, nil

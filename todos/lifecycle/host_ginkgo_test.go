@@ -7,6 +7,7 @@ import (
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/lifecycle"
+	"github.com/flanksource/gavel/todos/native"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/flanksource/gavel/verify"
 	. "github.com/onsi/ginkgo/v2"
@@ -25,6 +26,20 @@ type fakeProvider struct {
 	attempts []*todos.ExecutionResult
 	comments []string
 	events   []todos.Event
+	// runWorktree is the newest run worktree the todo recorded; nil is a todo no
+	// run step recorded one for.
+	runWorktree *native.RunWorktree
+}
+
+func (f *fakeProvider) LatestRunWorktree(context.Context, *types.TODO) (*native.RunWorktree, error) {
+	if f.runWorktree == nil {
+		return nil, native.ErrNoRunWorkspace
+	}
+	return f.runWorktree, nil
+}
+
+func (f *fakeProvider) UpdateLatestFailure(context.Context, *types.TODO, *types.TestResultInfo) error {
+	return nil
 }
 
 func (f *fakeProvider) PlanState(context.Context, *types.TODO) (todos.PlanState, error) {

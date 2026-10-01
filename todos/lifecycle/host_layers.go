@@ -260,7 +260,15 @@ func ApplyClassInvariants(s *api.Spec, class types.RunMode) {
 // The resolver checks the model separately, because whether a run needs one is a
 // property of the step rather than of the spec: a verify step runs the
 // definition of done, and a fixture-only definition of done never calls a model.
-func ValidateSpec(s api.Spec) error {
+//
+// A verify-class spec may not declare setup.checkout: which commit a verify step
+// checks — the run's worktree head, a PR's topic head, or the main checkout — is
+// the lifecycle's decision, and a declared checkout would silently verify
+// something else.
+func ValidateSpec(s api.Spec, class types.RunMode) error {
+	if class == types.ModeVerify && s.Setup != nil && s.Setup.Checkout != nil {
+		return fmt.Errorf("setup.checkout: a verify step checks the todo's run commit and may not declare its own checkout")
+	}
 	if err := s.Budget.Validate(); err != nil {
 		return fmt.Errorf("budget: %w", err)
 	}

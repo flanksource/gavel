@@ -217,7 +217,7 @@ func (h *Host) graderSpec(ctx context.Context, todo *types.TODO) (api.Spec, erro
 		return api.Spec{}, err
 	}
 	ApplyClassInvariants(&spec, types.ModeVerify)
-	if err := ValidateSpec(spec); err != nil {
+	if err := ValidateSpec(spec, types.ModeVerify); err != nil {
 		return api.Spec{}, fmt.Errorf("verification spec for the acceptance-criteria grader: %w", err)
 	}
 	return spec, nil

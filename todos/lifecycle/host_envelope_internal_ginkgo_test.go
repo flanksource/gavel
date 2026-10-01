@@ -56,6 +56,27 @@ var _ = ginkgo.Describe("collecting a finished run", func() {
 		gomega.Expect(out.Execution.Success).To(gomega.BeTrue())
 	})
 
+	ginkgo.It("collect copies the run workspace onto the execution", func() {
+		worktree := &api.WorktreeState{
+			Repo: "/src/repo", Path: "/src/repo/.worktrees/shell-1", Branch: "shell/1",
+			Base: "b000000", Setup: "5e70000", Head: "4ead000", Removed: true,
+		}
+		commits := []api.CommitRecord{{SHA: "c100000", Message: "feat: one"}, {SHA: "4ead000", Message: "fix: two"}}
+		out := collect(promptrun.Result{Response: &api.Response{Text: completed, Workspace: &api.Workspace{
+			Cwd: worktree.Path, Worktree: worktree, Commits: commits, Diff: "transient diff",
+			Notices: []api.Notice{{Text: "committed c100000"}},
+		}}})
+
+		gomega.Expect(out.Execution.Workspace).To(gomega.Equal(&api.WorkspaceRecord{
+			Cwd: worktree.Path, Worktree: worktree, Commits: commits,
+		}))
+	})
+
+	ginkgo.It("records no workspace for a run that reported none", func() {
+		out := collect(promptrun.Result{Response: &api.Response{Text: completed}})
+		gomega.Expect(out.Execution.Workspace).To(gomega.BeNil())
+	})
+
 	ginkgo.It("uses Captain's final usage and cost even after result events", func() {
 		saw := false
 		host.handleEvent(exec, captainai.Event{Kind: captainai.EventResult, Success: true,

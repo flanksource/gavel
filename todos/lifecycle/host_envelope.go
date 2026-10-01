@@ -29,10 +29,8 @@ func (h *Host) collect(step Step, prepared *preparedStep, d dispatched, start ti
 	execution := d.execution
 	execution.Duration = time.Since(start)
 	out := d.out
-	if out.Response != nil && out.Response.Workspace != nil {
-		if commits := out.Response.Workspace.Commits; len(commits) > 0 {
-			execution.CommitSHA = commits[len(commits)-1].SHA
-		}
+	if out.Response != nil {
+		execution.Workspace = api.NewWorkspaceRecord(out.Response.Workspace)
 	}
 	execution.CostUSD = out.CostUSD
 	execution.TokensUsed = out.Usage.TotalTokens()

@@ -70,6 +70,8 @@ type StepOutcome struct {
 	// Source names who ran a turn gavel did not dispatch — "captain" for a turn
 	// resumed from Captain's session page. Empty for gavel's own runs.
 	Source string
+	// VerifyTarget is the commit a verify step checked; nil for any other step.
+	VerifyTarget *types.VerifyTarget
 }
 
 // preparedStep is a step resolved down to one dispatchable request.
@@ -91,6 +93,8 @@ type preparedStep struct {
 	trace      []api.SpecLayer
 	provenance map[string]api.FieldProvenance
 	warnings   []string
+	// verifyTarget is the commit a verify step checks; nil for any other step.
+	verifyTarget *types.VerifyTarget
 }
 
 // RunStep runs one step of the lifecycle for a todo: the prompt rendered, the
@@ -144,6 +148,7 @@ func (h *Host) Dispatch(ctx context.Context, todo *types.TODO, resolution *Resol
 	outcome := h.collect(step, prepared, d, start)
 	outcome.Admission = admission
 	outcome.Request = prepared.request
+	outcome.VerifyTarget = prepared.verifyTarget
 	status, err := h.Def.Outcome(step, resolution.lc, outcome.Result)
 	if err != nil {
 		return outcome, err
@@ -211,7 +216,7 @@ func (h *Host) prepare(ctx context.Context, todo *types.TODO, step Step, lc Cont
 		return nil, err
 	}
 	spec := resolved.Resolved.Spec
-	if err := ValidateSpec(spec); err != nil {
+	if err := ValidateSpec(spec, class); err != nil {
 		return nil, fmt.Errorf("step %s: %w", step.Name, err)
 	}
 	fixture := ""
@@ -269,6 +274,11 @@ func (h *Host) prepare(ctx context.Context, todo *types.TODO, step Step, lc Cont
 		prepared.provenance = recordRuntimeFields(prepared.provenance, runtimeFields{
 			Name: "lifecycle runtime", Paths: []string{"/setup/cwd"},
 		})
+	}
+	if class == types.ModeVerify {
+		if err := h.applyVerifyTarget(ctx, todo, prepared); err != nil {
+			return nil, fmt.Errorf("step %s: %w", step.Name, err)
+		}
 	}
 	return prepared, nil
 }
