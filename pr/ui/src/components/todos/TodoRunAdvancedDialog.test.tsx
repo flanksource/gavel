@@ -1,6 +1,7 @@
 import type { ComponentProps, ReactNode } from 'react';
 import { Button } from '@flanksource/clicky-ui/components';
-import type { AIPromptRunValue } from '@flanksource/clicky-ui/ai';
+import type { PromptRunEditorProps, RuntimePreset } from '@flanksource/clicky-ui/ai';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TodoRunOptions } from '../../types';
@@ -9,6 +10,7 @@ import { requestStepFor } from './runChoiceStorage';
 import { rememberTodoRunOptions } from './run';
 import type { RunContext } from './providers';
 const preview = vi.hoisted(() => vi.fn());
+const editor = vi.hoisted(() => ({ props: undefined as PromptRunEditorProps | undefined }));
 const recentOptions = vi.hoisted(() => vi.fn((): TodoRunOptions[] => []));
 const lastUsedOptions = vi.hoisted(() => vi.fn((): TodoRunOptions | undefined => undefined));
 // contextVersion lets a test force a new `context` object identity on a
@@ -130,13 +132,17 @@ vi.mock('@flanksource/clicky-ui/data', () => ({
 
 vi.mock('@flanksource/clicky-ui/ai', async importOriginal => ({
   ...(await importOriginal<typeof import('@flanksource/clicky-ui/ai')>()),
-  PromptRunEditor: ({ value, onChange, presets, children }: { value: AIPromptRunValue & { presets?: string[] }; onChange: (value: AIPromptRunValue & { presets?: string[] }) => void; presets?: Array<{ id: string; name: string }>; children?: ReactNode }) => (
-    <div>
-      <Button onClick={() => onChange({ ...value, spec: { ...value.spec, model: 'operator-model' } })}>Change model</Button>
-      {presets?.map(preset => <Button key={preset.id} onClick={() => onChange({ ...value, presets: [preset.id] })}>{preset.name}</Button>)}
-      {children}
-    </div>
-  ),
+  PromptRunEditor: (props: PromptRunEditorProps) => {
+    editor.props = props;
+    const { value, onChange, presets, children } = props;
+    return (
+      <div>
+        <Button onClick={() => onChange({ ...value, spec: { ...value.spec, model: 'operator-model' } })}>Change model</Button>
+        {presets?.map(preset => <Button key={preset.id} onClick={() => onChange({ ...value, presets: [preset.id] })}>{preset.name}</Button>)}
+        {children}
+      </div>
+    );
+  },
   promptRuntimeValueToPayload: (value: Record<string, unknown>) => ({ spec: value }),
 }));
 
@@ -151,11 +157,13 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 function setup(props: Partial<ComponentProps<typeof TodoRunAdvancedDialog>> = {}) {
   const onRun = vi.fn();
   const onClose = vi.fn();
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const utils = render(
     <TodoRunAdvancedDialog
       open
@@ -165,8 +173,9 @@ function setup(props: Partial<ComponentProps<typeof TodoRunAdvancedDialog>> = {}
       refID="todo-1"
       {...props}
     />,
+    { wrapper: ({ children }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider> },
   );
-  return { onRun, onClose, ...utils };
+  return { onRun, onClose, queryClient, ...utils };
 }
 
 // The picker's currently-selected option always shares its label with the
@@ -235,6 +244,25 @@ describe('TodoRunAdvancedDialog step picker', () => {
 });
 
 describe('TodoRunAdvancedDialog runtime presets', () => {
+  it('persists a bar preset in the database, returns its canonical id and refreshes both catalogs', async () => {
+    const draft: RuntimePreset = { id: 'draft', name: 'Review defaults', scope: 'surface', spec: { mode: 'api', effort: 'high' }, presets: [] };
+    const saved = { ...draft, id: 'database-preset' };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ presets: [], profiles: [], sources: [{ kind: 'db', id: 'db', writable: true, records: ['preset'] }] })))
+      .mockResolvedValueOnce(new Response(JSON.stringify(saved)));
+    vi.stubGlobal('fetch', fetchMock);
+    const { queryClient } = setup({ initialMode: 'plan' });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    expect(editor.props?.onCreatePreset).toBeTypeOf('function');
+    const result = await editor.props!.onCreatePreset!(draft);
+    expect(result).toEqual(saved);
+    expect(fetchMock.mock.calls.map(([url, options]) => [url, options?.method ?? 'GET', options?.body ? JSON.parse(options.body) : undefined])).toEqual([
+      ['/api/settings/runtime-presets?scope=global', 'GET', undefined],
+      ['/api/settings/runtime-presets?scope=global', 'POST', { target: 'db', name: draft.name, scope: draft.scope, spec: draft.spec, presets: [] }],
+    ]);
+    expect(invalidate.mock.calls).toEqual([[{ queryKey: ['settings', 'runtime-presets'] }], [{ queryKey: ['todos', 'run-context'] }]]);
+  });
+
   it('previews and submits a sparse step without promoting catalog metadata into a model override', () => {
     const { onRun } = setup({ initialMode: 'plan' });
     fireEvent.click(footer().getByRole('button', { name: 'Plan' }));

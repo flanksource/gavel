@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import type { TodoItem, TodoPriority, TodoRunOptions, TodoStatus } from '../../types';
+import type { TodoChildDisposition, TodoItem, TodoPriority, TodoRunOptions, TodoStatus } from '../../types';
+import { openChildrenOf } from './todoFamily';
 import type { TodoDetailProps } from './TodoDetail';
 import { useSessionStats } from './TodoSessionTimer';
 import { loadLastTodoRunOptions, normalizeRunOptions, rememberTodoRunOptions, requestStepFor, runSpec, useTodoRun, useTodoRunContext } from './run';
@@ -13,8 +14,9 @@ import { useTodoTagCounts, useTodoTagIndex } from './tagQueries';
 import { useTodoLaunchProgress } from './todoLaunch';
 import { todoVisibleLabels } from './tagResolve';
 
-export function useTodoDetail({ todo, dir, onChanged, onDeleted, workspaces = [], onTransferred, view, onViewChange }: TodoDetailProps) {
+export function useTodoDetail({ todo, dir, onChanged, onDeleted, workspaces = [], onTransferred, view, onViewChange, childTodos = [] }: TodoDetailProps) {
   const [advancedMode, setAdvancedMode] = useState<string | null>(null);
+  const [archivePrompt, setArchivePrompt] = useState<{ openChildren: TodoItem[]; serverMessage?: string } | null>(null);
   const [runSelections, setRunSelections] = useState<PhaseRunOptions>({});
   const [verifySelection, setVerifySelection] = useState<TodoRunOptions | null>(null);
   const [error, setError] = useState('');
@@ -97,6 +99,7 @@ export function useTodoDetail({ todo, dir, onChanged, onDeleted, workspaces = []
     setError('');
     resetRun();
     setAdvancedMode(null);
+    setArchivePrompt(null);
     setEditingTitle(false);
     setEditingBody(false);
     setCopyState('idle');
@@ -132,6 +135,8 @@ export function useTodoDetail({ todo, dir, onChanged, onDeleted, workspaces = []
     // The complete replacement label set. TodoTagField builds it, reserved
     // lifecycle labels included, because the API replaces the whole set.
     labels?: string[];
+    // A todo ref makes it a child of that todo; the empty string detaches it.
+    parent?: string;
   }): Promise<boolean> {
     if (!todo || busy) return false;
     setError('');
@@ -204,16 +209,39 @@ export function useTodoDetail({ todo, dir, onChanged, onDeleted, workspaces = []
     }
   }
 
-  async function archiveTodo() {
-    if (!todo || busy) return;
-    if (!window.confirm('Archive this todo?')) return;
+  // Archiving a parent with open children needs the person's say on what
+  // happens to them. The loaded list says when there are any; when it cannot
+  // (still loading, failed) the request goes without a choice and the server's
+  // 409 raises the same prompt.
+  async function sendArchive(children?: TodoChildDisposition) {
+    if (!todo) return;
     setError('');
     try {
-      await deleteTodo.mutateAsync(todo.ref);
+      await deleteTodo.mutateAsync({ ref: todo.ref, children });
       onDeleted();
     } catch (err) {
+      if (!children && err instanceof TodoMutationError && err.status === 409) {
+        setArchivePrompt({ openChildren: [], serverMessage: err.message });
+        return;
+      }
       setError(err instanceof Error ? err.message : 'Failed to archive todo');
     }
+  }
+
+  async function archiveTodo() {
+    if (!todo || busy) return;
+    const open = openChildrenOf(childTodos);
+    if (open.length > 0) {
+      setArchivePrompt({ openChildren: open });
+      return;
+    }
+    if (!window.confirm('Archive this todo?')) return;
+    await sendArchive();
+  }
+
+  async function chooseArchiveChildren(children: TodoChildDisposition) {
+    setArchivePrompt(null);
+    await sendArchive(children);
   }
 
   async function copyFullId() {
@@ -312,7 +340,8 @@ export function useTodoDetail({ todo, dir, onChanged, onDeleted, workspaces = []
     tagIndex, tagCounts, viewSessionId, viewingHistoricalSession, sessionInProgress,
     awaitingHumanAction, phaseOptions, runningPhaseLabel, changePhaseOptions, patch,
     startEditTitle, startEditBody, saveTitle, saveBody, transferTo, pushToGithub,
-    archiveTodo, copyFullId, runPhase, stopRun, runTodo, submitAdvanced,
+    archiveTodo, archivePrompt, chooseArchiveChildren, cancelArchive: () => setArchivePrompt(null),
+    copyFullId, runPhase, stopRun, runTodo, submitAdvanced,
   };
 }
 

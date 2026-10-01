@@ -7,7 +7,7 @@ import { todoQuery } from './format';
 import { CmuxSessionButton } from './TodoSessionTimer';
 import { TodoSessionStart } from './TodoSessionStart';
 import { SessionErrorDetails, type SessionError } from './SessionErrorDetails';
-import { AttemptStopAction, CopyAllDetailsButton, PENDING_LAUNCH_ID, attemptCollection, attemptSessionId, captainSessionUrl, selectAttempt, useTodoSessionDetail } from './TodoSessionDetail';
+import { AttemptStopAction, AttemptWorkspaceSummary, CopyAllDetailsButton, PENDING_LAUNCH_ID, attemptCollection, attemptSessionId, captainSessionUrl, selectAttempt, useTodoSessionDetail } from './TodoSessionDetail';
 import type { TodoRunAction } from './run';
 import { invalidateTodoCaches, setTodoCaches, todoMutationJSON, useTodoSessionStop } from './todoMutations';
 import { sessionStatsQueryOptions, todoQueryKeys } from './todoQueries';
@@ -310,7 +310,7 @@ export function TodoSession({
           transcriptProps={transcriptProps}
           renderSessionActions={item => {
             const target = attempts.find(candidate => candidate.promptRunId === item.id);
-            return target ? <AttemptStopAction attempt={target} onStop={stopAttempt} /> : null;
+            return target ? <><AttemptWorkspaceSummary attempt={target} /><AttemptStopAction attempt={target} onStop={stopAttempt} /></> : null;
           }}
           {...inspectorTabProps}
           {...inspectorSelectionProps}

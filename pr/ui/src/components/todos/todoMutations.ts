@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query';
-import type { TodoItem, TodoListResponse, TodoRunResponse } from '../../types';
+import type { TodoChildDisposition, TodoItem, TodoLandResponse, TodoListResponse, TodoRunLanding, TodoRunResponse } from '../../types';
 import { todoQuery } from './format';
 import { setTodoQueryData, todoQueryKeys } from './todoQueries';
 import { workspaceTodoBatchKeys } from './workspaceTodoQueries';
@@ -169,12 +169,15 @@ export function useDeleteTodoMutation(dir: string) {
   const client = useQueryClient();
   return useMutation({
     mutationKey: ['todos', 'archive', { dir: dir.trim() }],
-    mutationFn: (ref: string) => {
+    // `children` says what happens to the todo's open children. Without it the
+    // server refuses (409) a parent that has any, so nothing closes silently.
+    mutationFn: ({ ref, children }: { ref: string; children?: TodoChildDisposition }) => {
       const params = new URLSearchParams(todoQuery(dir));
       params.set('ref', ref);
+      if (children) params.set('children', children);
       return todoMutationJSON<void>(`/api/todos/item?${params.toString()}`, { method: 'DELETE' }, `Failed to archive todo ${ref}`);
     },
-    onSuccess: (_result, ref) => removeTodoCaches(client, dir, ref),
+    onSuccess: (_result, { ref }) => removeTodoCaches(client, dir, ref),
   });
 }
 
@@ -237,6 +240,40 @@ export function useTodoSessionStop(dir: string, ref: string, sessionId?: string)
         client.invalidateQueries({ queryKey: todoQueryKeys.sessionDetail(dir, ref) }),
       ]);
     },
+  });
+}
+
+export interface TodoLandRequest {
+  via: TodoRunLanding['via'];
+  /** Opens the pull request as a draft; only meaningful with via 'pr'. */
+  draft?: boolean;
+}
+
+/**
+ * Land the todo's newest run branch: `POST /api/todos/land`, cherry-picking its
+ * setup..head onto the checkout's branch (`merge`) or opening a PR (`pr`). A
+ * 409 (conflict, already landed, dirty worktree, …) rejects with the server's
+ * reason. A 500 may carry a landing that was recorded before its worktree
+ * cleanup failed, so the attempt detail and list are refreshed on either
+ * outcome, never only on success.
+ */
+export function useTodoLandMutation(dir: string, ref: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationKey: ['todos', 'land', { dir: dir.trim(), ref }],
+    mutationFn: ({ via, draft }: TodoLandRequest) => todoMutationJSON<TodoLandResponse>(
+      '/api/todos/land',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ref, dir, via, ...(via === 'pr' ? { draft: !!draft } : {}) }),
+      },
+      via === 'merge' ? `Could not merge the run of todo ${ref}` : `Could not open a PR for the run of todo ${ref}`,
+    ),
+    onSettled: () => Promise.all([
+      invalidateTodoCaches(client, dir, ref),
+      client.invalidateQueries({ queryKey: todoQueryKeys.sessionDetail(dir, ref) }),
+    ]),
   });
 }
 

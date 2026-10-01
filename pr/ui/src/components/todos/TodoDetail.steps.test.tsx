@@ -31,12 +31,12 @@ vi.mock('./todoMutations', async importOriginal => ({
   useTodoSessionStop: () => ({ isPending: false }),
   useTodoVerificationRun: () => ({ isPending: false, mutateAsync: execution.verify }),
 }));
-vi.mock('./TodoSessionTimer', () => ({ useSessionStats: () => ({ stats: null }) }));
+vi.mock('./TodoSessionTimer', async importOriginal => ({ ...(await importOriginal<object>()), useSessionStats: () => ({ stats: null }) }));
 vi.mock('./TodoSessionDetail', () => ({ useTodoSessionDetail: () => ({ detail: undefined, error: '' }) }));
 vi.mock('./tagQueries', () => ({ useTodoTagIndex: () => ({}), useTodoTagCounts: () => ({}) }));
 vi.mock('./TodoTag', () => ({ TodoTagField: () => null, TodoTagRow: () => null }));
 vi.mock('./TodoTimeline', () => ({ TodoTimeline: () => null }));
-vi.mock('./TodoCommits', () => ({ TodoCommits: () => null }));
+vi.mock('./TodoRunBranch', () => ({ TodoRunBranch: () => null }));
 vi.mock('./TodoSession', () => ({
   TodoSession: ({ sessionTab, sessionIds, onSessionTabChange, onSessionIdsChange }: {
     sessionTab?: string;

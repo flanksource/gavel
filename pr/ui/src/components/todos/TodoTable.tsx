@@ -13,6 +13,7 @@ import { todoVisibleLabels } from './tagResolve';
 import {
   SessionBadge,
   StatusIcon,
+  TodoChildCountBadge,
   TodoCountsBar,
   TodoDiffBadge,
   TodoPlanIndicator,
@@ -34,6 +35,7 @@ import {
 import { defaultTodoSort, type TodoSortColumn } from './todoSort';
 import { selectionKey } from './todoSelection';
 import { useTodoBulkContext, useTodoBulkToolbar } from './todoActions';
+import type { ChildCount } from './todoFamily';
 import { TodoTagRow } from './TodoTag';
 import type { WorkspaceTodos } from './useWorkspaceTodos';
 
@@ -137,7 +139,14 @@ export function todoGroupingModes(
 // Workspace is deliberately among the unsortable ones: TodoSort sorts TodoItem,
 // which carries no workspace, and grouping by workspace already organises by it.
 export function todoTableColumns(
-  { groupBy, tagsByDir }: { groupBy: TodoGroupBy; tagsByDir?: Map<string, TagIndex> },
+  { groupBy, tagsByDir, parentTitles, childCounts }: {
+    groupBy: TodoGroupBy;
+    tagsByDir?: Map<string, TagIndex>;
+    // Title of every todo by full id, so a child the search surfaced can say which parent it hangs under.
+    parentTitles?: Map<string, string>;
+    // Every parent's children by its full id, so a parent row can badge how many it has.
+    childCounts?: Map<string, ChildCount>;
+  },
 ): DataTableColumn<TodoTableRow>[] {
   const columns: DataTableColumn<TodoTableRow>[] = [
     {
@@ -155,11 +164,18 @@ export function todoTableColumns(
       grow: true,
       minWidth: 240,
       accessor: row => row.todo.title,
-      render: (_value, row) => (
-        <span className="block truncate font-medium text-foreground" title={row.todo.title}>
-          {row.todo.title}
-        </span>
-      ),
+      render: (_value, row) => {
+        const children = row.todo.id ? childCounts?.get(row.todo.id) : undefined;
+        return (
+          <span className="flex min-w-0 items-baseline gap-2">
+            <span className="min-w-0 truncate font-medium text-foreground" title={row.todo.title}>
+              {row.todo.title}
+            </span>
+            {children && <TodoChildCountBadge done={children.done} total={children.total} />}
+            {row.todo.parentId && <ParentHint title={parentTitles?.get(row.todo.parentId)} />}
+          </span>
+        );
+      },
     },
   ];
 
@@ -242,6 +258,15 @@ export function todoTableColumns(
   );
 
   return columns;
+}
+
+export function ParentHint({ title }: { title: string | undefined }) {
+  const label = title ?? 'parent not loaded';
+  return (
+    <span className="max-w-[40%] shrink-0 truncate text-[11px] text-muted-foreground" title={`Child of ${label}`}>
+      ↳ {label}
+    </span>
+  );
 }
 
 // TodoStatusCell is the list row's status affordance: a live run reports its own

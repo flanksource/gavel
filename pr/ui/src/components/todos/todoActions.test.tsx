@@ -3,7 +3,9 @@ import { renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
 import { UiGitMerge, UiLinkExternal } from '@flanksource/clicky-ui/icons';
-import { todoBulkResultVerb, useTodoSelectionActions } from './todoActions';
+import type { TodoItem, TodoListResponse } from '../../types';
+import { todoBulkResultVerb, useTodoBulkContext, useTodoSelectionActions } from './todoActions';
+import type { WorkspaceTodos } from './useWorkspaceTodos';
 import { todoBulkActionURL, todoBulkResultMessage, type TodoBulkAction } from './todoEntity';
 import { selectionKey } from './todoSelection';
 import { buildTagIndex } from './tagResolve';
@@ -328,6 +330,80 @@ describe('useTodoSelectionActions', () => {
     ));
   });
 
+  // Archiving a parent must make the person choose what happens to its open
+  // children. The choice becomes the two items of a submenu, each confirmed in
+  // its own words, so nothing closes by a default.
+  describe('deleting parents that have open children', () => {
+    const deleteWithChildren: TodoBulkAction = {
+      ...deleteAction,
+      param_schema: {
+        type: 'object',
+        properties: { confirm: { type: 'boolean' }, children: { type: 'string', enum: ['archive', 'detach'] } },
+        required: ['confirm'],
+      },
+    };
+    const item = (ref: string, title: string, extra: Partial<TodoItem> = {}): TodoItem =>
+      ({ ref, id: `id-${ref}`, title, status: 'pending', priority: 'medium', ...extra });
+    const parent = item('todo-1', 'Migrate ledger');
+    const plain = item('todo-2', 'Rotate keys');
+    const openChildren = { 'todo-1': [item('c1', 'Backfill rows', { parentId: 'id-todo-1' }), item('c2', 'Reconcile totals', { parentId: 'id-todo-1' })] };
+    const context = (ids: string[]) => ({ selectedRowIds: ids, selectedRows: [], clearSelection: () => {} });
+    const asDelete = async (extra: Partial<Parameters<typeof useTodoSelectionActions>[0]>, catalog = [deleteWithChildren]) =>
+      (await actions(new Set([ALPHA, BETA]), catalog, extra)).current.find(action => action.id === 'delete')!;
+
+    it('replaces the single delete with a choice between archiving the children and making them full todos', async () => {
+      const remove = await asDelete({ todos: [parent, plain], openChildren });
+
+      expect(remove.children?.map(choice => choice.id)).toEqual(['delete:archive', 'delete:detach']);
+      expect(remove.confirm).toBeUndefined();
+    });
+
+    it.each([
+      ['archive', 'are archived too'],
+      ['detach', 'become full todos'],
+    ] as const)('confirms the %s choice naming the parent, its open children and the outcome', async (children, outcome) => {
+      const remove = await asDelete({ todos: [parent, plain], openChildren });
+      const confirm = remove.children!.find(choice => choice.id === `delete:${children}`)!.confirm;
+
+      expect(typeof confirm === 'object' && typeof confirm.message === 'function').toBe(true);
+      if (typeof confirm !== 'object' || typeof confirm.message !== 'function') return;
+      const message = confirm.message(context([ALPHA, BETA]));
+      expect(message).toContain('2 todos');
+      expect(message).toContain('“Migrate ledger”');
+      expect(message).toContain('2 open children');
+      expect(message).not.toContain('Rotate keys');
+      expect(message).toContain(outcome);
+    });
+
+    it.each(['archive', 'detach'] as const)('sends children=%s with the whole batch, plain todos included', async children => {
+      const remove = await asDelete({ todos: [parent, plain], openChildren });
+      await remove.children!.find(choice => choice.id === `delete:${children}`)!.onSelect(context([]));
+
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+        `/api/v1/todo/todo-1,todo-2?confirm=true&children=${children}`,
+        expect.objectContaining({ method: 'DELETE' }),
+      ));
+    });
+
+    it('stays a plain confirmed delete, with no children parameter, when no selected todo has open children', async () => {
+      const remove = await asDelete({ todos: [parent, plain], openChildren: {} });
+
+      expect(remove.children).toBeUndefined();
+      expect(remove.confirm).toBeDefined();
+      await remove.onSelect(context([]));
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+        '/api/v1/todo/todo-1,todo-2?confirm=true',
+        expect.objectContaining({ method: 'DELETE' }),
+      ));
+    });
+
+    it('stays a plain delete when the server publishes no children parameter to send', async () => {
+      const remove = await asDelete({ todos: [parent, plain], openChildren }, [deleteAction]);
+
+      expect(remove.children).toBeUndefined();
+    });
+  });
+
   // Merge retires the rows it folds in rather than deleting them, so the
   // confirmation must not promise a deletion — and it dispatches with no
   // parameters, which is the only way the toolbar can run it.
@@ -395,5 +471,38 @@ describe('useTodoSelectionActions', () => {
     } as Response)));
     const { result } = renderHook(() => useTodoSelectionActions({ selection: new Set([ALPHA]) }), { wrapper });
     await waitFor(() => expect(result.current).toEqual([]));
+  });
+});
+
+describe('useTodoBulkContext open children', () => {
+  const DIR = '/repos/alpha';
+  const PARENT_ID = 'parent-id';
+  const todo = (ref: string, status: TodoItem['status'], extra: Partial<TodoItem> = {}): TodoItem =>
+    ({ ref, id: `id-${ref}`, title: `Todo ${ref}`, status, priority: 'medium', ...extra });
+  const parent = todo('parent', 'pending', { id: PARENT_ID });
+  const openChild = todo('open', 'in_progress', { parentId: PARENT_ID });
+  const closedChild = todo('closed', 'completed', { parentId: PARENT_ID });
+  const plain = todo('plain', 'pending');
+
+  const openChildrenFor = (selected: string[], items: TodoItem[]) => {
+    const byDir: Record<string, TodoListResponse> = { [DIR]: { dir: DIR, counts: {} as TodoListResponse['counts'], items } };
+    const todos = {
+      selection: { selection: new Set(selected.map(ref => selectionKey({ dir: DIR, ref }))) },
+      byDir,
+      tagsByDir: undefined,
+    } as unknown as WorkspaceTodos;
+    return renderHook(() => useTodoBulkContext(todos)).result.current.openChildren;
+  };
+
+  it('maps each selected parent to its children that are not completed', () => {
+    expect(openChildrenFor(['parent', 'plain'], [parent, openChild, closedChild, plain])).toEqual({ parent: [openChild] });
+  });
+
+  it('is empty when the only children are closed, so they never trigger the prompt', () => {
+    expect(openChildrenFor(['parent', 'plain'], [parent, closedChild, plain])).toEqual({});
+  });
+
+  it('leaves out a parent that is not selected', () => {
+    expect(openChildrenFor(['plain'], [parent, openChild, plain])).toEqual({});
   });
 });

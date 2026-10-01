@@ -89,6 +89,13 @@ export function todoMatchesQuery(item: TodoItem, query: string): boolean {
   );
 }
 
+// isChildTodo marks a todo that hangs under a parent. The lists hide children
+// (the server already leaves them out of its counts) and the parent's detail
+// page shows them instead; search is the one way a child surfaces in a list.
+export function isChildTodo(item: TodoItem): boolean {
+  return !!item.parentId;
+}
+
 // priorityKey defaults an unknown or missing priority to medium, the same way
 // the providers and the severity buckets do.
 export function priorityKey(item: TodoItem): TodoPriority {

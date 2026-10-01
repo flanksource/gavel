@@ -175,6 +175,9 @@ export function useWorkspaceTodos(
   const errorsByDir = listQuery.data?.errorsByDir ?? noErrors;
   const error = listQuery.error?.message ?? listQuery.data?.error ?? '';
   const loadingList = listQuery.isFetching;
+  // False until the first batch has landed: `byDir` is then a placeholder of
+  // empty lists, which must not be read as workspaces that hold no todos.
+  const listReady = listQuery.data !== undefined;
   const [selected, setSelected] = useState<SelectedTodo | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   // Status / priority / external-issue facets applied to the lists. Defaults to
@@ -366,6 +369,7 @@ export function useWorkspaceTodos(
     byDir,
     errorsByDir,
     loadingList,
+    listReady,
     error,
     detailError,
     aggregate,
@@ -399,7 +403,7 @@ export function useWorkspaceTodos(
     detailView,
     setDetailView,
   }), [
-    workspaces, byDir, errorsByDir, loadingList, error, detailError, aggregate,
+    workspaces, byDir, errorsByDir, loadingList, listReady, error, detailError, aggregate,
     selected, setSelection, select, detail, loadingDetail, refresh, showCreate,
     created, updateItem, deleted, transferred, filters, setFilters, toggleStatus,
     density, setDensity, groupBy, setGroupBy, layout, setLayout, sortBy, setSortBy,

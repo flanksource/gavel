@@ -2,7 +2,7 @@ import type React from 'react';
 import { fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { TodoSessionAttempt } from '../../types';
-import { attemptCollection, captainSessionUrl, CopyAllDetailsButton, selectAttempt, useTodoSessionDetail } from './TodoSessionDetail';
+import { AttemptWorkspaceSummary, attemptCollection, captainSessionUrl, CopyAllDetailsButton, selectAttempt, useTodoSessionDetail } from './TodoSessionDetail';
 import { queryTestWrapper } from './queryTestWrapper';
 
 vi.mock('@flanksource/clicky-ui/components', () => ({
@@ -193,5 +193,44 @@ describe('CopyAllDetailsButton', () => {
 
     await waitFor(() => expect(screen.getByRole('button', { name: 'Copy all session details' }).getAttribute('title')).toContain('session execution-2 not found'));
     expect(writeText).not.toHaveBeenCalled();
+  });
+});
+
+describe('AttemptWorkspaceSummary', () => {
+  const setup = '5e7a0000aaaa1111bbbb2222cccc3333dddd4444';
+  const head = 'd0b5c966aaaa1111bbbb2222cccc3333dddd4444';
+
+  it('summarises the branch, the head and the commit count of a run attempt', () => {
+    render(<AttemptWorkspaceSummary attempt={attempt(1, {
+      workspace: {
+        worktree: { branch: 'shell/289107d9', setup, head, removed: true },
+        commits: [{ sha: head, message: 'feat: one' }, { sha: setup, message: 'fix: two' }],
+      },
+    })} />);
+
+    const summary = screen.getByTitle('shell/289107d9 · 5e7a000..d0b5c96 · 2 commits · worktree removed');
+    expect(summary.textContent).toBe('shell/289107d9 · 2');
+  });
+
+  it('flags a kept worktree in the summary', () => {
+    render(<AttemptWorkspaceSummary attempt={attempt(1, {
+      workspace: { worktree: { branch: 'shell/9', setup, head: setup, path: '/wt', kept: true, keptReason: 'commit failed' } },
+    })} />);
+
+    expect(screen.getByTitle('shell/9 · 5e7a000..5e7a000 · 0 commits · worktree kept at /wt: commit failed')).toBeTruthy();
+  });
+
+  it('names how a landed attempt was landed', () => {
+    render(<AttemptWorkspaceSummary attempt={attempt(1, {
+      workspace: { worktree: { branch: 'shell/7', setup, head, removed: true, branchDeleted: true }, commits: [{ sha: head }] },
+      landing: { promptRunId: 'run-1', via: 'pr', targetBranch: 'main', landedSha: head, prNumber: 42, prUrl: 'https://github.com/acme/widgets/pull/42', commitCount: 1, landedAt: '2026-09-14T11:00:00Z' },
+    })} />);
+
+    expect(screen.getByTitle('shell/7 · 5e7a000..d0b5c96 · 1 commit · worktree removed, branch deleted · landed as PR #42 into main at d0b5c96')).toBeTruthy();
+  });
+
+  it('renders nothing for an attempt without a recorded workspace', () => {
+    const { container } = render(<AttemptWorkspaceSummary attempt={attempt(1, { workspace: { cwd: '/repo' } })} />);
+    expect(container.textContent).toBe('');
   });
 });

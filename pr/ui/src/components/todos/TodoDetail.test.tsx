@@ -12,7 +12,7 @@ import { queryTestWrapper } from './queryTestWrapper';
 // TodoDetail coverage — so every tab-gated or unconditionally-rendered sibling
 // is stubbed to keep the surface narrow.
 vi.mock('./TodoTimeline', () => ({ TodoTimeline: () => null }));
-vi.mock('./TodoCommits', () => ({ TodoCommits: () => null }));
+vi.mock('./TodoRunBranch', () => ({ TodoRunBranch: () => null }));
 vi.mock('./TodoSession', () => ({
   TodoSession: ({ sessionId }: { sessionId?: string }) => <div data-testid="session-viewer">{sessionId}</div>,
 }));

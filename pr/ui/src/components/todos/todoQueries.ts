@@ -36,8 +36,6 @@ export const todoQueryKeys = {
   captainSession: (src: string) => ['captain', 'session', { src }] as const,
   plan: (dir: string, ref: string) =>
     ['todos', 'session', 'plan', { dir: queryDir(dir), ref }] as const,
-  commits: (dir: string, ref: string) =>
-    ['todos', 'commits', { dir: queryDir(dir), ref }] as const,
   commitFiles: (dir: string, hash: string) =>
     ['todos', 'commits', 'files', { dir: queryDir(dir), hash }] as const,
   commitDiff: (dir: string, hash: string, file: string) =>

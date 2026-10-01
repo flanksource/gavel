@@ -1,8 +1,9 @@
 import { useMemo, useState } from 'react';
 import { Button } from '@flanksource/clicky-ui/components';
 import { Markdown, Timeline, type TimelineItem } from '@flanksource/clicky-ui/data';
-import { UiAdd, UiChevronDown, UiChevronUp, UiCircleFilled, UiComment, UiDiff, UiHistory } from '@flanksource/clicky-ui/icons';
+import { UiAdd, UiChevronDown, UiChevronUp, UiCircleFilled, UiComment, UiDiff, UiGitMerge, UiHistory } from '@flanksource/clicky-ui/icons';
 import type { TodoEvent } from '../../types';
+import { landingFromPayload, TodoRunLandingSummary } from './TodoRunLandingSummary';
 import { timeAgo } from '../../utils';
 import { RelativeTime } from '../RelativeTime';
 
@@ -19,6 +20,8 @@ function eventVisual(kind?: string): EventVisual {
       return { icon: UiDiff, tone: 'info', action: 'updated this issue' };
     case 'CommentAdded':
       return { icon: UiComment, tone: 'neutral', action: 'commented' };
+    case 'run_landed':
+      return { icon: UiGitMerge, tone: 'success', action: 'landed the run' };
     default:
       return { icon: UiCircleFilled, tone: 'neutral', action: humanizeKind(kind) };
   }
@@ -70,25 +73,33 @@ const labelChip = (text: string, extra = '') => (
   <span className={`rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-foreground ${extra}`}>{text}</span>
 );
 
+// A run_landed event's detail lives in its payload (via, target branch, landed
+// sha, PR); a payload that does not read as a landing says what is wrong.
+function landedBody(event: TodoEvent): TimelineItem['body'] {
+  const landing = landingFromPayload(event.payload);
+  if (typeof landing === 'string') {
+    return <span className="text-xs text-red-600">Unreadable landing payload: {landing}</span>;
+  }
+  return <TodoRunLandingSummary landing={landing} />;
+}
+
+// Timeline only renders the body bubble when `body` is set, so a title with
+// no body content is surfaced in the body slot rather than the header.
+function eventBody(event: TodoEvent): Pick<TimelineItem, 'bodyHeader' | 'body'> {
+  if (event.kind === 'run_landed') return { body: landedBody(event) };
+  const title = event.title?.trim();
+  const body = event.body?.trim();
+  if (body) return { bodyHeader: title || undefined, body: <Markdown text={body} className="text-xs" /> };
+  return { body: title || undefined };
+}
+
 function toTimelineItem(event: TodoEvent, index: number): TimelineItem {
   const visual = eventVisual(event.kind);
   const time = eventTime(event.timestamp);
-  const title = event.title?.trim();
-  const body = event.body?.trim();
   const label = event.label?.trim();
   const oldLabel = event.old_label?.trim();
   const newLabel = event.new_label?.trim();
-
-  // Timeline only renders the body bubble when `body` is set, so a title with
-  // no body content is surfaced in the body slot rather than the header.
-  let bodyHeader: TimelineItem['bodyHeader'];
-  let bodyNode: TimelineItem['body'];
-  if (body) {
-    bodyHeader = title || undefined;
-    bodyNode = <Markdown text={body} className="text-xs" />;
-  } else if (title) {
-    bodyNode = title;
-  }
+  const { bodyHeader, body: bodyNode } = eventBody(event);
 
   return {
     id: event.id || index,

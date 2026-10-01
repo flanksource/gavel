@@ -1,7 +1,8 @@
 import type { DataTableColumn } from '@flanksource/clicky-ui/data';
 import type { Project, TodoGroupBy, TodoItem, TodoListResponse } from '../../types';
 import type { TodoFilters } from './todoFilter';
-import { isEntryVisible } from './todoFilter';
+import { childrenOf } from './todoFamily';
+import { isChildTodo, isEntryVisible } from './todoFilter';
 import { bucketTodos, flattenTodos, type TodoEntry } from './todoGroup';
 import type { SelectedTodo } from './todoSelection';
 import type { TodoSort } from './todoSort';
@@ -23,6 +24,7 @@ export function orderedTodoNavigationEntries({
   sortBy,
   timeRange,
   now,
+  includeChildren,
 }: {
   workspaces: Project[];
   byDir: Record<string, TodoListResponse>;
@@ -31,9 +33,12 @@ export function orderedTodoNavigationEntries({
   sortBy: TodoSort;
   timeRange: TodoTimeRange | null;
   now: number;
+  // Children stay out of the queue unless the table's search box has text.
+  includeChildren: boolean;
 }): TodoEntry[] {
   const range = resolveRange(timeRange, now);
-  const entries = flattenTodos(workspaces, byDir).filter(entry => isEntryVisible(entry, filters, range));
+  const entries = flattenTodos(workspaces, byDir)
+    .filter(entry => (includeChildren || !isChildTodo(entry.todo)) && isEntryVisible(entry, filters, range));
   if (groupBy !== 'workspace') {
     return bucketTodos(entries, groupBy, now, sortBy).flatMap(bucket => bucket.entries);
   }
@@ -42,6 +47,22 @@ export function orderedTodoNavigationEntries({
   return workspaces.flatMap(workspace => entries
     .filter(entry => entry.workspace.dir === workspace.dir)
     .sort((a, b) => compare(a.todo, b.todo)));
+}
+
+// A child is not in the ordinary queue, so browsing from one walks its siblings
+// instead: the parent's children in the order the Children section lists them,
+// whatever the filters say. Null for anything that is not a child of a listed
+// parent, which leaves the ordinary queue in charge.
+export function siblingNavigationEntries({ workspaces, byDir, selected }: {
+  workspaces: Project[];
+  byDir: Record<string, TodoListResponse>;
+  selected: SelectedTodo | null;
+}): TodoEntry[] | null {
+  const workspace = selected && workspaces.find(ws => ws.dir === selected.dir);
+  const items = selected && byDir[selected.dir]?.items;
+  const open = items && items.find(item => item.ref === selected.ref);
+  if (!workspace || !items || !open?.parentId) return null;
+  return childrenOf(items, open.parentId).map(todo => ({ todo, workspace }));
 }
 
 // The user-chosen settings that order and filter the queue. Each field is a
@@ -80,8 +101,12 @@ export function nextTodoNavigationPin(pin: TodoNavigationPin | null, { byDir, se
   view: TodoNavigationView;
 }): TodoNavigationPin | null {
   if (!selected) return null;
-  if (pin && pin.dir === selected.dir && pin.ref === selected.ref && sameView(pin.view, view)) return pin;
   const todo = byDir[selected.dir]?.items.find(item => item.ref === selected.ref);
+  // Attaching or detaching moves the todo between the ordinary queue and its
+  // parent's children, so the pinned copy must not outlive the change: it would
+  // keep sorting a now top-level todo as the child it used to be.
+  const sameParent = !todo || (todo.parentId ?? '') === (pin?.todo.parentId ?? '');
+  if (pin && pin.dir === selected.dir && pin.ref === selected.ref && sameView(pin.view, view) && sameParent) return pin;
   return todo ? { dir: selected.dir, ref: selected.ref, todo, view } : null;
 }
 

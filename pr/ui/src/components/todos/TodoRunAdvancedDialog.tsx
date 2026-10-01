@@ -1,7 +1,9 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Button, Field, Modal, SegmentedControl, Tabs } from "@flanksource/clicky-ui/components";
 import { CodeBlock } from "@flanksource/clicky-ui/data";
-import { PromptRunEditor, promptRuntimeValueToPayload, type AIPromptRunValue, type AISpecRuntimeValue, type ResolvedRuntimeSpec } from "@flanksource/clicky-ui/ai";
+import { PromptRunEditor, promptRuntimeValueToPayload, type AIPromptRunValue, type AISpecRuntimeValue, type ResolvedRuntimeSpec, type RuntimePreset } from "@flanksource/clicky-ui/ai";
+import { createRuntimePreset, runtimePresetLibraryQuery } from "../prompts/runtimePresetCatalog";
 import type { TodoRunOptions } from "../../types";
 import { Spinner } from "../../icons/Spinner";
 import { inputClass } from "./format";
@@ -73,6 +75,7 @@ export function TodoRunAdvancedDialog({
   dir: string;
   refID: string;
 }) {
+  const queryClient = useQueryClient();
   const [runRequest, setRunRequest] = useState<AIPromptRunValue>({ spec: INITIAL_RUNTIME_VALUE });
   const runtimeValue = runRequest.spec ?? {};
   const [step, setStep] = useState<string>(initialMode ?? nextStep ?? "run");
@@ -132,6 +135,19 @@ export function TodoRunAdvancedDialog({
     setPromptDirty(false);
     promptDirtyRef.current = false;
     setRegenNonce((value) => value + 1);
+  }
+
+  async function saveRuntimePreset(draft: RuntimePreset) {
+    const scopeQuery = "scope=global";
+    const library = await queryClient.fetchQuery(runtimePresetLibraryQuery(scopeQuery));
+    const target = library.sources.find(source => source.kind === "db" && source.writable && source.records.includes("preset"));
+    if (!target) throw new Error("No writable database source for runtime presets");
+    const saved = await createRuntimePreset(scopeQuery, target.id, draft);
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["settings", "runtime-presets"] }),
+      queryClient.invalidateQueries({ queryKey: ["todos", "run-context"] }),
+    ]);
+    return saved;
   }
 
   useEffect(() => {
@@ -244,7 +260,7 @@ export function TodoRunAdvancedDialog({
                     options={steps.map((item) => ({ id: item.name, label: item.label, disabled: item.readOnly }))}
                   />
                 </Field>
-                <PromptRunEditor value={runRequest} onChange={setRunRequest} presets={context.runtimePresets ?? []} models={activeModels} families={families} tools={context.tools} specSections={step === "verify" ? VERIFY_SPEC_SECTIONS : RUN_SPEC_SECTIONS} promptEditor={step === "verify" ? undefined : promptEditorNode} promptLabel="Prompt" resolution={resolution}>
+                <PromptRunEditor value={runRequest} onChange={setRunRequest} presets={context.runtimePresets ?? []} onCreatePreset={saveRuntimePreset} models={activeModels} families={families} tools={context.tools} specSections={step === "verify" ? VERIFY_SPEC_SECTIONS : RUN_SPEC_SECTIONS} promptEditor={step === "verify" ? undefined : promptEditorNode} promptLabel="Prompt" resolution={resolution}>
                   <>
                     {isCmux && step !== "verify" && <label className="inline-flex items-center gap-2 text-xs"><input type="checkbox" checked={resume} onChange={(event) => setResume(event.currentTarget.checked)} /><span>Resume session</span></label>}
                     {(lastUsed || recentAdvanced.length > 0) && (

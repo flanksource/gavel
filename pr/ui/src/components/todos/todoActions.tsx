@@ -33,7 +33,8 @@ import { TodoLabelsMenu } from './TodoLabelsMenu';
 import { buildTagIndex, todoVisibleLabels, type TagIndex } from './tagResolve';
 import { normalizeTag } from './tagPalette';
 import type { WorkspaceTodos } from './useWorkspaceTodos';
-import type { TodoItem } from '../../types';
+import type { TodoChildDisposition, TodoItem } from '../../types';
+import { childrenOf, openChildrenOf } from './todoFamily';
 
 /**
  * Turns the server's action catalog into the descriptors a selection toolbar
@@ -67,6 +68,10 @@ function actionIcon(action: TodoBulkAction): ComponentType<IconProps> {
 
 function todoCount(count: number): string {
   return `${count} todo${count === 1 ? '' : 's'}`;
+}
+
+function openCount(count: number): string {
+  return `${count} open ${count === 1 ? 'child' : 'children'}`;
 }
 
 /** What each destructive action actually does to the checked rows. The catalog
@@ -178,6 +183,8 @@ export function useTodoBulkContext(todos: WorkspaceTodos): {
   todos: TodoItem[];
   tags: TagIndex;
   labelCounts: Record<string, number>;
+  /** Selected parent ref → its children that are not completed. */
+  openChildren: Record<string, TodoItem[]>;
 } {
   const { selection, byDir, tagsByDir } = todos;
 
@@ -187,10 +194,16 @@ export function useTodoBulkContext(todos: WorkspaceTodos): {
     const wanted = new Set(targets.map(target => target.ref));
 
     const selected: TodoItem[] = [];
+    const openChildren: Record<string, TodoItem[]> = {};
     const counts: Record<string, number> = {};
     for (const dir of dirs) {
-      for (const todo of byDir[dir]?.items ?? []) {
-        if (wanted.has(todo.ref)) selected.push(todo);
+      const items = byDir[dir]?.items ?? [];
+      for (const todo of items) {
+        if (wanted.has(todo.ref)) {
+          selected.push(todo);
+          const open = openChildrenOf(childrenOf(items, todo.id));
+          if (open.length > 0) openChildren[todo.ref] = open;
+        }
         for (const label of new Set(todoVisibleLabels(todo).map(normalizeTag))) {
           counts[label] = (counts[label] ?? 0) + 1;
         }
@@ -199,7 +212,7 @@ export function useTodoBulkContext(todos: WorkspaceTodos): {
 
     const defs = [...dirs].flatMap(dir => tagsByDir?.get(dir)?.defs ?? []);
     const byName = new Map(defs.map(def => [def.name, def]));
-    return { todos: selected, tags: buildTagIndex([...byName.values()]), labelCounts: counts };
+    return { todos: selected, tags: buildTagIndex([...byName.values()]), labelCounts: counts, openChildren };
   }, [selection.selection, byDir, tagsByDir]);
 }
 
@@ -215,6 +228,11 @@ export interface TodoSelectionActionsOptions {
   todos?: TodoItem[];
   /** Per-label todo counts, for ordering the label menu by what this project uses. */
   labelCounts?: Record<string, number>;
+  /**
+   * Selected parent ref → its open children. Deleting one of those parents has
+   * to ask what becomes of them, so the delete action turns into that choice.
+   */
+  openChildren?: Record<string, TodoItem[]>;
   /** Label definitions, for the chips inside the label menu. */
   tags?: TagIndex;
   /** Reports each finished batch so the host can surface it. */
@@ -234,6 +252,7 @@ export function useTodoSelectionActions({
   todos,
   labelCounts,
   tags,
+  openChildren,
   onResult,
   onError,
 }: TodoSelectionActionsOptions): DataTableSelectionAction[] {
@@ -290,6 +309,31 @@ export function useTodoSelectionActions({
         // that does not is a parameter the server never published.
         const gated = 'confirm' in (action.param_schema?.properties ?? {});
         base.onSelect = () => dispatch(action, gated ? { confirm: 'true' } : undefined);
+
+        // A removal of a parent with open children is not a yes/no: the server
+        // refuses it without a disposition for them. The action becomes that
+        // choice, and each option confirms in its own words.
+        const parents = (todos ?? []).filter(todo => openChildren?.[todo.ref]?.length);
+        if (action.method === 'DELETE' && parents.length > 0 && 'children' in (action.param_schema?.properties ?? {})) {
+          const summary = parents.map(parent => `“${parent.title}” (${openCount(openChildren![parent.ref].length)})`).join(', ');
+          const choose = (children: TodoChildDisposition, label: string, outcome: string): DataTableSelectionAction => ({
+            id: `${action.name}:${children}`,
+            label,
+            variant: children === 'archive' ? 'destructive' : 'outline',
+            disabled: refs.length === 0,
+            confirm: {
+              message: context => `${confirmation.message(context.selectedRowIds.length)} Open children of ${summary} ${outcome}.`,
+              confirmLabel: label,
+            },
+            onSelect: () => dispatch(action, { ...(gated ? { confirm: 'true' } : {}), children }),
+          });
+          delete base.confirm;
+          base.onSelect = () => {};
+          base.children = [
+            choose('archive', 'Archive children too', 'are archived too'),
+            choose('detach', 'Make them full todos', 'become full todos'),
+          ];
+        }
       }
 
       const choices = enumParam(action);
@@ -355,7 +399,7 @@ export function useTodoSelectionActions({
     // first-appearance order, so this ordering is the one the menu shows.
     return descriptors.sort((a, b) =>
       Number(a.section === 'Danger') - Number(b.section === 'Danger'));
-  }, [catalog, selection, runAction, onResult, onError]);
+  }, [catalog, selection, todos, openChildren, runAction, onResult, onError]);
 }
 
 /**
@@ -370,6 +414,7 @@ export function useTodoBulkToolbar({
   todos,
   labelCounts,
   tags,
+  openChildren,
   onApplied,
 }: Omit<TodoSelectionActionsOptions, 'onResult' | 'onError'> & {
   onApplied?: () => void;
@@ -380,6 +425,7 @@ export function useTodoBulkToolbar({
     ...(todos ? { todos } : {}),
     ...(labelCounts ? { labelCounts } : {}),
     ...(tags ? { tags } : {}),
+    ...(openChildren ? { openChildren } : {}),
     onResult: (result, action) => {
       toast({
         message: todoBulkResultMessage(result, todoBulkResultVerb(action.name)),

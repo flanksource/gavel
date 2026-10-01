@@ -2,11 +2,12 @@ import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { fetchRemoteSession, type SessionCollectionInput, type SessionCollectionItem } from '@flanksource/clicky-ui/ai';
 import { Button } from '@flanksource/clicky-ui/components';
-import { UiCheck, UiCopy, UiStop } from '@flanksource/clicky-ui/icons';
-import type { TodoSessionAttempt, TodoSessionDetailResponse } from '../../types';
+import { UiCheck, UiCopy, UiGitBranch, UiStop, UiWarningTriangle } from '@flanksource/clicky-ui/icons';
+import type { TodoRunLanding, TodoRunWorktree, TodoSessionAttempt, TodoSessionDetailResponse } from '../../types';
 import { Spinner } from '../../icons/Spinner';
 import { copyText } from '../../clipboard';
 import { sessionDetailQueryOptions } from './todoQueries';
+import { hasRunWorkspace, shortSha } from './runWorkspace';
 import type { TodoLaunchProgress } from './todoLaunch';
 
 export interface TodoSessionDetailOptions {
@@ -100,6 +101,46 @@ function attemptItem(attempt: TodoSessionAttempt): SessionCollectionItem {
     },
     ...(sessionId ? { src: captainSessionUrl(sessionId) } : { session: { id: attempt.promptRunId, messages: [] } }),
   };
+}
+
+function worktreeFate(worktree: TodoRunWorktree | undefined) {
+  if (!worktree) return '';
+  if (worktree.kept) return `worktree kept at ${worktree.path ?? 'an unrecorded path'}${worktree.keptReason ? `: ${worktree.keptReason}` : ''}`;
+  if (worktree.removed) return worktree.branchDeleted ? 'worktree removed, branch deleted' : 'worktree removed';
+  return '';
+}
+
+function landingNote(landing: TodoRunLanding | undefined) {
+  if (!landing) return '';
+  const how = landing.via === 'pr' ? `as PR #${landing.prNumber}` : 'by merge';
+  return `landed ${how} into ${landing.targetBranch} at ${shortSha(landing.landedSha)}`;
+}
+
+/**
+ * A compact account of an attempt's recorded workspace — its branch and commit
+ * count, amber when teardown kept the worktree — with the range and the
+ * worktree's fate in the tooltip.
+ */
+export function AttemptWorkspaceSummary({ attempt }: { attempt: TodoSessionAttempt }) {
+  const workspace = attempt.workspace;
+  if (!hasRunWorkspace(workspace)) return null;
+  const worktree = workspace.worktree;
+  const commits = workspace.commits?.length ?? 0;
+  const title = [
+    worktree?.branch,
+    worktree?.setup && worktree.head ? `${shortSha(worktree.setup)}..${shortSha(worktree.head)}` : '',
+    `${commits} commit${commits === 1 ? '' : 's'}`,
+    worktreeFate(worktree),
+    landingNote(attempt.landing),
+  ].filter(Boolean).join(' · ');
+  const tone = worktree?.kept ? 'text-amber-600 [[data-theme=dark]_&]:text-amber-400' : 'text-muted-foreground';
+  const Icon = worktree?.kept ? UiWarningTriangle : UiGitBranch;
+  return (
+    <span className={`inline-flex max-w-40 items-center gap-1 text-[10px] ${tone}`} title={title}>
+      <Icon className="size-3 shrink-0" aria-hidden="true" />
+      <span className="truncate font-mono">{worktree?.branch ? `${worktree.branch} · ${commits}` : `${commits}`}</span>
+    </span>
+  );
 }
 
 export function AttemptStopAction({ attempt, onStop }: { attempt: TodoSessionAttempt; onStop: (attempt: TodoSessionAttempt) => Promise<void> }) {

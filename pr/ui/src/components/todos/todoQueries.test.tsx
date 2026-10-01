@@ -55,7 +55,6 @@ describe('todo query keys', () => {
     ['todo item', todoQueryKeys.item('/repo', 'todo-1'), todoQueryKeys.item('/repo', 'todo-2')],
     ['global todo item', todoQueryKeys.globalItem('todo-1'), todoQueryKeys.globalItem('todo-2')],
     ['plan todo', todoQueryKeys.plan('/repo', 'todo-1'), todoQueryKeys.plan('/repo', 'todo-2')],
-    ['commit todo', todoQueryKeys.commits('/repo', 'todo-1'), todoQueryKeys.commits('/repo', 'todo-2')],
     ['commit hash', todoQueryKeys.commitFiles('/repo', 'abc123'), todoQueryKeys.commitFiles('/repo', 'def456')],
     ['diff file', todoQueryKeys.commitDiff('/repo', 'abc123', 'one.go'), todoQueryKeys.commitDiff('/repo', 'abc123', 'two.go')],
     ['cmux agent', todoQueryKeys.cmuxSurface('/repo', 'claude'), todoQueryKeys.cmuxSurface('/repo', 'codex')],
