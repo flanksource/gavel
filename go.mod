@@ -3,10 +3,10 @@ module github.com/flanksource/gavel
 go 1.26.1
 
 require (
-	github.com/flanksource/captain v0.0.63
-	github.com/flanksource/clicky v1.21.70
-	github.com/flanksource/commons v1.59.1
-	github.com/flanksource/commons-db v0.1.39
+	github.com/flanksource/captain v0.0.66
+	github.com/flanksource/clicky v1.21.73
+	github.com/flanksource/commons v1.60.0
+	github.com/flanksource/commons-db v0.1.45
 	github.com/flanksource/gomplate/v3 v3.24.90
 	github.com/flanksource/is-healthy v1.0.92 // indirect
 	github.com/flanksource/kubectl-neat v1.0.4 // indirect
@@ -157,6 +157,7 @@ require (
 	github.com/deckarep/golang-set/v2 v2.8.0 // indirect
 	github.com/distribution/reference v0.6.0 // indirect
 	github.com/dlclark/regexp2 v1.11.5 // indirect
+	github.com/ebitengine/purego v0.10.2 // indirect
 	github.com/eko/gocache/lib/v4 v4.2.3 // indirect
 	github.com/eko/gocache/store/go_cache/v4 v4.2.5 // indirect
 	github.com/emicklei/go-restful/v3 v3.13.0 // indirect
@@ -170,7 +171,7 @@ require (
 	github.com/felixge/httpsnoop v1.1.0 // indirect
 	github.com/fergusstrange/embedded-postgres v1.34.0 // indirect
 	github.com/firebase/genkit/go v1.11.0 // indirect
-	github.com/flanksource/clicky/aichat v1.21.70 // indirect
+	github.com/flanksource/clicky/aichat v1.21.73 // indirect
 	github.com/flanksource/sandbox-runtime v1.0.2 // indirect
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.0 // indirect
@@ -323,6 +324,7 @@ require (
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3 // indirect
 	github.com/segmentio/asm v1.2.1 // indirect
 	github.com/segmentio/encoding v0.5.4 // indirect
+	github.com/shirou/gopsutil/v4 v4.26.7 // indirect
 	github.com/shoenig/go-m1cpu v0.1.7 // indirect
 	github.com/shopspring/decimal v1.4.0 // indirect
 	github.com/sirupsen/logrus v1.9.4 // indirect
