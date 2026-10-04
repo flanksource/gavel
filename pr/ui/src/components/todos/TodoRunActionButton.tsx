@@ -41,7 +41,6 @@ export function TodoRunRuntimeBar({
         value={spec}
         effectiveModel={inherited.model}
         effectiveMode={inherited.mode}
-        variant="combo"
         families={buildRunFamilies(context)}
         models={context.models ?? []}
         reasoningEfforts={context.efforts}

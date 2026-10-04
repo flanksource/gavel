@@ -56,7 +56,9 @@ describe('todo query keys', () => {
     ['global todo item', todoQueryKeys.globalItem('todo-1'), todoQueryKeys.globalItem('todo-2')],
     ['plan todo', todoQueryKeys.plan('/repo', 'todo-1'), todoQueryKeys.plan('/repo', 'todo-2')],
     ['commit hash', todoQueryKeys.commitFiles('/repo', 'abc123'), todoQueryKeys.commitFiles('/repo', 'def456')],
-    ['diff file', todoQueryKeys.commitDiff('/repo', 'abc123', 'one.go'), todoQueryKeys.commitDiff('/repo', 'abc123', 'two.go')],
+    ['commit range base', todoQueryKeys.commitFiles('/repo', 'abc123', 'base1'), todoQueryKeys.commitFiles('/repo', 'abc123')],
+    ['diff file', todoQueryKeys.commitDiff('/repo', 'abc123', '', 'one.go'), todoQueryKeys.commitDiff('/repo', 'abc123', '', 'two.go')],
+    ['diff range base', todoQueryKeys.commitDiff('/repo', 'abc123', 'base1', 'one.go'), todoQueryKeys.commitDiff('/repo', 'abc123', '', 'one.go')],
     ['cmux agent', todoQueryKeys.cmuxSurface('/repo', 'claude'), todoQueryKeys.cmuxSurface('/repo', 'codex')],
   ])('isolates the %s request parameter', (_label, left, right) => {
     expect(left).not.toEqual(right);

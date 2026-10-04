@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { fetchJSON, fetchText, mutationJSON, queryKeys } from './query';
+import { fetchJSON, fetchText, HttpError, mutationJSON, queryKeys } from './query';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -49,6 +49,22 @@ describe('query requests', () => {
       signal: new AbortController().signal,
       context: 'Failed to load example',
     })).rejects.toThrow('Failed to load example: database unavailable');
+  });
+
+  it.each([
+    ['a JSON error body', () => new Response(JSON.stringify({ error: 'commits are gone' }), { status: 410, headers: { 'Content-Type': 'application/json' } })],
+    ['a non-JSON error body', () => new Response('gone', { status: 410 })],
+  ])('exposes the HTTP status on the error for %s', async (_label, respond) => {
+    vi.stubGlobal('fetch', vi.fn(async () => respond()));
+
+    const error = await fetchJSON({
+      url: '/api/example',
+      signal: new AbortController().signal,
+      context: 'Failed to load example',
+    }).catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(HttpError);
+    expect((error as HttpError).status).toBe(410);
   });
 
   it('passes the AbortSignal to text GETs and contextualizes HTTP errors', async () => {

@@ -1,5 +1,5 @@
 import type React from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { TodoRunWorkspace, TodoSessionAttempt } from '../../types';
 import { TodoRunBranch } from './TodoRunBranch';
@@ -15,8 +15,17 @@ vi.mock('@flanksource/clicky-ui/components', () => ({
   ),
 }));
 
-vi.mock('./TodoCommitFiles', () => ({
-  CommitFiles: ({ hash }: { hash: string }) => <div data-testid="commit-files">{hash}</div>,
+vi.mock('./TodoRunChanges', () => ({
+  TodoRunChanges: ({ dir, worktree, commits, landing }: {
+    dir: string;
+    worktree?: { setup?: string; head?: string };
+    commits: Array<{ sha: string }>;
+    landing?: { via: string };
+  }) => (
+    <div data-testid="run-changes">
+      {JSON.stringify({ dir, setup: worktree?.setup, head: worktree?.head, commits: commits.map(commit => commit.sha), landing: landing?.via })}
+    </div>
+  ),
 }));
 
 const SETUP = '5e7a0000aaaa1111bbbb2222cccc3333dddd4444';
@@ -76,17 +85,38 @@ describe('latestRunWorkspace', () => {
 });
 
 describe('TodoRunBranch', () => {
-  it('shows the branch chip, setup…head and the commits, expanding a commit into its files', async () => {
-    stubAttempts([attempt(2, { workspace: committed })]);
+  it('shows the branch chip, setup…head and hands the range, commits and landing to the changes viewer', async () => {
+    stubAttempts([attempt(2, {
+      workspace: committed,
+      landing: { promptRunId: 'run-2', via: 'merge', targetBranch: 'main', landedSha: HEAD, commitCount: 1, landedAt: '2026-09-14T12:00:00Z' },
+    })]);
 
     render(<TodoRunBranch dir="/repo" todoRef="todo-1" />, { wrapper: queryTestWrapper() });
 
     expect(await screen.findByText('shell/289107d9')).toBeTruthy();
     expect(screen.getByText('5e7a000…d0b5c96')).toBeTruthy();
     expect(screen.queryByRole('alert')).toBeNull();
-    const subject = screen.getByRole('button', { name: 'feat(todos): record the workspace' });
-    fireEvent.click(subject);
-    expect(screen.getByTestId('commit-files').textContent).toBe(HEAD);
+    expect(JSON.parse(screen.getByTestId('run-changes').textContent ?? '')).toEqual({
+      dir: '/repo', setup: SETUP, head: HEAD, commits: [HEAD], landing: 'merge',
+    });
+  });
+
+  it('shows the changes viewer for a setup..head range even when no commit was recorded', async () => {
+    stubAttempts([attempt(2, { workspace: { worktree: { branch: 'shell/3', setup: SETUP, head: HEAD } } })]);
+
+    render(<TodoRunBranch dir="/repo" todoRef="todo-1" />, { wrapper: queryTestWrapper() });
+
+    await screen.findByText('shell/3');
+    expect(JSON.parse(screen.getByTestId('run-changes').textContent ?? '').commits).toEqual([]);
+  });
+
+  it('omits the changes viewer when the worktree recorded neither commits nor a range', async () => {
+    stubAttempts([attempt(2, { workspace: { worktree: { branch: 'shell/4' } } })]);
+
+    render(<TodoRunBranch dir="/repo" todoRef="todo-1" />, { wrapper: queryTestWrapper() });
+
+    await screen.findByText('shell/4');
+    expect(screen.queryByTestId('run-changes')).toBeNull();
   });
 
   it('warns about a kept worktree with its path, reason and dirty count', async () => {

@@ -1,58 +1,13 @@
-import { useState, type ReactNode } from 'react';
-import { Button } from '@flanksource/clicky-ui/components';
+import type { ReactNode } from 'react';
 import { Badge } from '@flanksource/clicky-ui/data';
-import { UiChevronDown, UiChevronRight, UiGitBranch, UiGitCommit, UiWarningTriangle } from '@flanksource/clicky-ui/icons';
-import type { TodoRunCommit } from '../../types';
-import { CommitFiles } from './TodoCommitFiles';
+import { UiGitBranch, UiWarningTriangle } from '@flanksource/clicky-ui/icons';
+import { TodoRunChanges } from './TodoRunChanges';
 import { useTodoSessionDetail } from './TodoSessionDetail';
-import { commitSubject, latestRunWorkspace, shortSha, type LatestRunWorkspace } from './runWorkspace';
+import { latestRunWorkspace, shortSha, type LatestRunWorkspace } from './runWorkspace';
 
 // RUN_BRANCH_POLL_MS matches the detail pane's background attempts poll, so the
 // branch panel shares that one query rather than adding a faster one.
 const RUN_BRANCH_POLL_MS = 15_000;
-
-// CommitRow renders one of the run's commits with an expand toggle that reveals
-// its per-file repomap status (each file revealing its own diff on hover).
-function CommitRow({ dir, commit }: { dir: string; commit: TodoRunCommit }) {
-  const [open, setOpen] = useState(false);
-  const ChevronIcon = open ? UiChevronDown : UiChevronRight;
-  const subject = commitSubject(commit.message) || shortSha(commit.sha);
-  return (
-    <li>
-      <div className="flex items-start gap-2 px-3 py-2.5 hover:bg-muted/30">
-        <Button
-          variant="ghost"
-          size="icon"
-          type="button"
-          onClick={() => setOpen(o => !o)}
-          aria-expanded={open}
-          title={open ? 'Hide files' : 'Show files'}
-          className="mt-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
-        >
-          <ChevronIcon className="text-xs" />
-        </Button>
-        <span className="mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-border bg-muted/30 text-muted-foreground">
-          <UiGitCommit className="text-xs" />
-        </span>
-        <div className="min-w-0 flex-1">
-          <Button
-            variant="ghost"
-            type="button"
-            onClick={() => setOpen(o => !o)}
-            className="block h-auto w-full truncate p-0 text-left text-sm text-foreground hover:underline"
-            title={subject}
-          >
-            {subject}
-          </Button>
-          <div className="mt-0.5 font-mono text-[11px] text-muted-foreground" title={commit.sha}>
-            {shortSha(commit.sha)}
-          </div>
-        </div>
-      </div>
-      {open && <CommitFiles dir={dir} hash={commit.sha} />}
-    </li>
-  );
-}
 
 function KeptWorktreeWarning({ path, reason, dirty }: { path?: string; reason?: string; dirty: number }) {
   return (
@@ -111,12 +66,8 @@ export function TodoRunBranch({ dir, todoRef, renderActions }: TodoRunBranchProp
       </div>
       {error && <div className="whitespace-pre-wrap px-3 py-2 text-xs text-red-600">{error}</div>}
       {worktree?.kept && <KeptWorktreeWarning path={worktree.path} reason={worktree.keptReason} dirty={worktree.dirty?.length ?? 0} />}
-      {commits.length > 0 && (
-        <ul className="divide-y divide-border">
-          {commits.map(commit => (
-            <CommitRow key={commit.sha} dir={dir} commit={commit} />
-          ))}
-        </ul>
+      {(commits.length > 0 || (worktree?.setup && worktree.head)) && (
+        <TodoRunChanges dir={dir} worktree={worktree} commits={commits} landing={latest?.attempt.landing} />
       )}
     </section>
   );

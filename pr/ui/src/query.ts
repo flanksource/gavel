@@ -30,15 +30,28 @@ interface MutationRequest {
   context: string;
 }
 
+// HttpError is a non-2xx response from fetchJSON; callers branch on `status`
+// (e.g. 410 Gone) instead of matching the message.
+export class HttpError extends Error {
+  readonly status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = 'HttpError';
+    this.status = status;
+  }
+}
+
 export async function fetchJSON<T>({ url, signal, context }: QueryRequest): Promise<T> {
   const response = await request({ url, signal, context });
   let payload: unknown;
   try {
     payload = await response.json();
   } catch {
-    throw new Error(`${context}: ${response.ok ? 'invalid JSON response' : `HTTP ${response.status}`}`);
+    if (!response.ok) throw new HttpError(`${context}: HTTP ${response.status}`, response.status);
+    throw new Error(`${context}: invalid JSON response`);
   }
-  if (!response.ok) throw new Error(`${context}: ${responseError(payload, response.status)}`);
+  if (!response.ok) throw new HttpError(`${context}: ${responseError(payload, response.status)}`, response.status);
   return payload as T;
 }
 

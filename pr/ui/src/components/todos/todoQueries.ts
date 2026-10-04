@@ -36,10 +36,10 @@ export const todoQueryKeys = {
   captainSession: (src: string) => ['captain', 'session', { src }] as const,
   plan: (dir: string, ref: string) =>
     ['todos', 'session', 'plan', { dir: queryDir(dir), ref }] as const,
-  commitFiles: (dir: string, hash: string) =>
-    ['todos', 'commits', 'files', { dir: queryDir(dir), hash }] as const,
-  commitDiff: (dir: string, hash: string, file: string) =>
-    ['todos', 'commits', 'diff', { dir: queryDir(dir), hash, file }] as const,
+  commitFiles: (dir: string, hash: string, base = '') =>
+    ['todos', 'commits', 'files', { dir: queryDir(dir), hash, base }] as const,
+  commitDiff: (dir: string, hash: string, base: string, file: string) =>
+    ['todos', 'commits', 'diff', { dir: queryDir(dir), hash, base, file }] as const,
   verificationSchema: () => ['todos', 'verification', 'schema'] as const,
   cmuxSurface: (dir: string, agent: string | undefined) =>
     ['todos', 'session', 'cmux', { dir: queryDir(dir), agent: agent ?? '' }] as const,
