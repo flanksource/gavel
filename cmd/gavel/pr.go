@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	captaincli "github.com/flanksource/captain/pkg/cli"
@@ -35,6 +36,7 @@ Examples:
   gavel pr status                 # current branch's PR + checks
   gavel pr status 123 --logs      # PR #123 with failing-job logs
   gavel pr status --follow        # block until what you filtered on settles
+  gavel pr status <actions job URL>   # the job's PR, narrowed to that job
   gavel pr create <SHA>           # open a PR from one commit
   gavel pr list --ui              # live PR dashboard
   gavel pr close 123              # close PR #123 without merging`,
@@ -48,7 +50,7 @@ type PRStatusOptions struct {
 	Logs     bool            `flag:"logs" help:"Fetch and include failed job logs (uses extra GitHub API quota)"`
 	TailLogs int             `flag:"tail-logs" help:"Number of failed log lines to show per step (only applies with --logs)" default:"100"`
 	Comments []string        `flag:"comments" help:"Filter review comments by MatchItem patterns over comment ID and @author/@bot tokens, e.g. '1,2,!3,*,!@coderabbit'"`
-	Actions  []string        `flag:"actions" help:"Filter workflow actions by MatchItem patterns over run ID, workflow ID, workflow YAML path, workflow name, and job/check name"`
+	Actions  []string        `flag:"actions" help:"Filter workflow actions by MatchItem patterns over run ID, workflow ID, workflow YAML path, workflow name, job ID, and job/check name"`
 	Args     []string        `args:"true"`
 	Context  context.Context `json:"-"`
 
@@ -70,7 +72,8 @@ func (o PRStatusOptions) Help() api.Textable {
 Use this instead of gh pr view / gh run view / gh run list: one readable view of
 every workflow step for the PR. With no argument it resolves the current branch's
 PR (falling back to your most recent PR). Accepts a PR number, owner/repo + number,
-or a full PR URL.
+a full PR URL, or a GitHub Actions run/job URL — the run's PR is resolved and the
+view is narrowed to that job (or run).
 
 When the PR published gavel results, each failing shard shows the failing tests and
 lint violations, plus a "Reproduce locally" block with the exact gavel commands that
@@ -105,7 +108,8 @@ Examples:
   gavel pr status 123                          # PR #123 in this repo
   gavel pr status owner/repo 123               # PR #123 in another repo
   gavel pr status https://github.com/o/r/pull/1
-  gavel pr status --follow                     # block until every check settles
+  gavel pr status https://github.com/o/r/actions/runs/123/job/456 --logs   # that job's PR, narrowed to the job
+  gavel pr status --follow                   # block until every check settles
   gavel pr status --follow --actions 'CI / Test' --fail-fast   # stop the moment Test goes red
   gavel pr status --follow --comments '@coderabbit'            # wait until those threads resolve
   gavel pr status 123 --logs                   # include failing-job logs
@@ -132,17 +136,25 @@ func runPRStatus(opts PRStatusOptions) (any, error) {
 		return nil, err
 	}
 
-	repo, prNumber, err := parseStatusArgs(opts.Args)
+	target, err := parseStatusTarget(opts.Args)
 	if err != nil {
 		return nil, err
 	}
 
-	ghOpts, err := prGitHubOptions(repo, opts.Repo)
+	ghOpts, err := prGitHubOptions(target.Repo, opts.Repo)
 	if err != nil {
 		return nil, err
 	}
 
-	if prNumber == 0 {
+	prNumber := target.PR
+	actions := opts.Actions
+	switch {
+	case target.RunID != 0:
+		if prNumber, err = github.FetchRunPR(ghOpts, target.RunID); err != nil {
+			return nil, err
+		}
+		actions = append(append([]string{}, actions...), target.actionSelector())
+	case prNumber == 0:
 		prNumber = resolveOrFallbackPR(ghOpts)
 	}
 
@@ -159,7 +171,7 @@ func runPRStatus(opts PRStatusOptions) (any, error) {
 		Logs:     opts.Logs,
 		TailLogs: opts.TailLogs,
 		Comments: opts.Comments,
-		Actions:  opts.Actions,
+		Actions:  actions,
 	}
 
 	result, code := prwatch.Run(watchOpts)
@@ -211,6 +223,35 @@ func prGitHubOptions(argRepo, flagRepo string) (github.Options, error) {
 		return github.Options{}, fmt.Errorf("failed to get working directory: %w", err)
 	}
 	return github.Options{WorkDir: workDir}, nil
+}
+
+// statusTarget is what `pr status` was pointed at: a PR, or an Actions run/job
+// URL whose PR is resolved from the run.
+type statusTarget struct {
+	Repo  string
+	PR    int
+	RunID int64
+	JobID int64
+}
+
+// actionSelector narrows the status view to the linked job, or the whole run.
+func (t statusTarget) actionSelector() string {
+	if t.JobID != 0 {
+		return strconv.FormatInt(t.JobID, 10)
+	}
+	return strconv.FormatInt(t.RunID, 10)
+}
+
+func parseStatusTarget(args []string) (statusTarget, error) {
+	if len(args) == 1 && strings.Contains(args[0], "/actions/runs/") {
+		repo, runID, jobID, err := github.ParseRunURL(args[0])
+		if err != nil {
+			return statusTarget{}, err
+		}
+		return statusTarget{Repo: repo, RunID: runID, JobID: jobID}, nil
+	}
+	repo, prNumber, err := parseStatusArgs(args)
+	return statusTarget{Repo: repo, PR: prNumber}, err
 }
 
 func parseStatusArgs(args []string) (repo string, prNumber int, err error) {

@@ -132,6 +132,79 @@ func TestExtractRunID(t *testing.T) {
 	}
 }
 
+func TestExtractJobID(t *testing.T) {
+	tests := []struct {
+		url    string
+		expect int64
+		hasErr bool
+	}{
+		{"https://github.com/org/repo/actions/runs/12345/job/67890", 67890, false},
+		{"https://github.com/org/repo/actions/runs/12345/attempts/2/job/67890", 67890, false},
+		{"https://github.com/org/repo/actions/runs/999", 0, true},
+		{"", 0, true},
+	}
+	for _, tc := range tests {
+		id, err := ExtractJobID(tc.url)
+		if tc.hasErr {
+			assert.Error(t, err, "url=%s", tc.url)
+		} else {
+			require.NoError(t, err, "url=%s", tc.url)
+			assert.Equal(t, tc.expect, id)
+		}
+	}
+}
+
+func TestParseRunURL(t *testing.T) {
+	tests := []struct {
+		url    string
+		repo   string
+		runID  int64
+		jobID  int64
+		hasErr bool
+	}{
+		{"https://github.com/acme/widgets/actions/runs/37193816760/job/111412775174", "acme/widgets", 37193816760, 111412775174, false},
+		{"https://github.com/acme/widgets/actions/runs/37193816760", "acme/widgets", 37193816760, 0, false},
+		{"https://github.com/acme/widgets/actions/runs/37193816760/", "acme/widgets", 37193816760, 0, false},
+		{"https://github.com/acme/widgets/actions/runs/101/attempts/2/job/7", "acme/widgets", 101, 7, false},
+		{"https://github.com/acme/widgets/actions/runs/101/job/7?pr=12", "acme/widgets", 101, 7, false},
+		{"https://github.com/acme/widgets/actions/runs/101/job/7#step:4:12", "acme/widgets", 101, 7, false},
+		{"github.com/acme/widgets/actions/runs/101/job/7", "acme/widgets", 101, 7, false},
+		{"https://github.com/acme/widgets/pull/1", "", 0, 0, true},
+		{"https://github.com/acme/widgets/actions/runs/101/artifacts/9", "", 0, 0, true},
+		{"https://example.com/acme/widgets/actions/runs/101", "", 0, 0, true},
+	}
+	for _, tc := range tests {
+		repo, runID, jobID, err := ParseRunURL(tc.url)
+		if tc.hasErr {
+			assert.Error(t, err, "url=%s", tc.url)
+			continue
+		}
+		require.NoError(t, err, "url=%s", tc.url)
+		assert.Equal(t, []any{tc.repo, tc.runID, tc.jobID}, []any{repo, runID, jobID}, "url=%s", tc.url)
+	}
+}
+
+func TestPickRunPR(t *testing.T) {
+	pr := func(number int, state, ref string) restCommitPR {
+		p := restCommitPR{Number: number, State: state}
+		p.Head.Ref = ref
+		return p
+	}
+	tests := []struct {
+		name   string
+		pulls  []restCommitPR
+		expect int
+	}{
+		{"open PR on the run's branch wins", []restCommitPR{pr(1, "closed", "feat"), pr(2, "open", "other"), pr(3, "open", "feat")}, 3},
+		{"closed PR on the run's branch beats another branch", []restCommitPR{pr(2, "open", "other"), pr(1, "closed", "feat")}, 1},
+		{"falls back to the first PR containing the commit", []restCommitPR{pr(4, "open", "other")}, 4},
+		{"no PRs", nil, 0},
+	}
+	for _, tc := range tests {
+		assert.Equal(t, tc.expect, pickRunPR(tc.pulls, "feat"), tc.name)
+	}
+}
+
 func TestAllComplete(t *testing.T) {
 	tests := []struct {
 		name   string

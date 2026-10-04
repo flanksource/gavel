@@ -178,11 +178,18 @@ func filterGavelResultsByRun(results []*GavelResultsSummary, runs map[int64]*git
 	return filtered
 }
 
-// matchingJobs returns the jobs whose name matches the action patterns.
+// matchingJobs returns the jobs whose name or job ID matches the action patterns.
 func matchingJobs(jobs []github.Job, patterns []string) []github.Job {
 	var out []github.Job
 	for _, job := range jobs {
-		if job.Name != "" && matchAnyTarget([]string{job.Name}, patterns) {
+		var targets []string
+		if job.Name != "" {
+			targets = append(targets, job.Name)
+		}
+		if job.DatabaseID != 0 {
+			targets = append(targets, strconv.FormatInt(job.DatabaseID, 10))
+		}
+		if len(targets) > 0 && matchAnyTarget(targets, patterns) {
 			out = append(out, job)
 		}
 	}
@@ -218,6 +225,9 @@ func (f resultFilters) matchStatusCheck(check github.StatusCheck, matchedRunIDs 
 			return true
 		}
 		values = append(values, strconv.FormatInt(runID, 10))
+	}
+	if jobID, err := github.ExtractJobID(check.DetailsURL); err == nil {
+		values = append(values, strconv.FormatInt(jobID, 10))
 	}
 	if check.WorkflowName != "" {
 		values = append(values, check.WorkflowName)

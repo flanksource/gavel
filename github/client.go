@@ -158,6 +158,9 @@ type restRun struct {
 	HTMLURL    string `json:"html_url"`
 	HeadSHA    string `json:"head_sha"`
 	WorkflowID int64  `json:"workflow_id"`
+	HeadBranch string `json:"head_branch"`
+
+	PullRequests []restRunPR `json:"pull_requests"`
 }
 
 func (r restRun) toWorkflowRun(jobs []Job) *WorkflowRun {
@@ -582,4 +585,107 @@ func ExtractRunID(detailsURL string) (int64, error) {
 		return 0, fmt.Errorf("no run ID found in URL: %s", detailsURL)
 	}
 	return strconv.ParseInt(matches[1], 10, 64)
+}
+
+var jobIDRegexp = regexp.MustCompile(`/actions/runs/\d+/(?:attempts/\d+/)?job/(\d+)`)
+
+func ExtractJobID(detailsURL string) (int64, error) {
+	matches := jobIDRegexp.FindStringSubmatch(detailsURL)
+	if len(matches) < 2 {
+		return 0, fmt.Errorf("no job ID found in URL: %s", detailsURL)
+	}
+	return strconv.ParseInt(matches[1], 10, 64)
+}
+
+var runURLPattern = regexp.MustCompile(`^(?:https?://)?github\.com/([^/]+/[^/]+)/actions/runs/(\d+)(?:/attempts/\d+)?(?:/job/(\d+))?/?(?:[?#].*)?$`)
+
+// ParseRunURL parses a GitHub Actions run or job URL, e.g.
+// https://github.com/owner/repo/actions/runs/123/job/456. jobID is 0 for a
+// run URL without a job.
+func ParseRunURL(url string) (repo string, runID, jobID int64, err error) {
+	m := runURLPattern.FindStringSubmatch(strings.TrimSpace(url))
+	if len(m) < 4 {
+		return "", 0, 0, fmt.Errorf("cannot parse Actions run URL: %q", url)
+	}
+	runID, err = strconv.ParseInt(m[2], 10, 64)
+	if err != nil {
+		return "", 0, 0, fmt.Errorf("invalid run ID in %q: %w", url, err)
+	}
+	if m[3] != "" {
+		if jobID, err = strconv.ParseInt(m[3], 10, 64); err != nil {
+			return "", 0, 0, fmt.Errorf("invalid job ID in %q: %w", url, err)
+		}
+	}
+	return m[1], runID, jobID, nil
+}
+
+type restRunPR struct {
+	Number int `json:"number"`
+}
+
+type restCommitPR struct {
+	Number int    `json:"number"`
+	State  string `json:"state"`
+	Head   struct {
+		Ref string `json:"ref"`
+	} `json:"head"`
+}
+
+// FetchRunPR resolves the pull request a workflow run belongs to: the run's
+// own pull_requests association first (empty for fork PRs), then the PRs
+// associated with the run's head commit.
+func FetchRunPR(opts Options, runID int64) (int, error) {
+	token, err := opts.token()
+	if err != nil {
+		return 0, err
+	}
+	repo, err := opts.resolveRepo()
+	if err != nil {
+		return 0, err
+	}
+	ctx := context.Background()
+
+	runResp, err := cachedGet(ctx, token, fmt.Sprintf("/repos/%s/actions/runs/%d", repo, runID), nil)
+	if err != nil {
+		return 0, fmt.Errorf("fetch run %d in %s: %w", runID, repo, err)
+	}
+	var run restRun
+	if err := json.Unmarshal(runResp.Body, &run); err != nil {
+		return 0, fmt.Errorf("parse run %d response: %w", runID, err)
+	}
+	if len(run.PullRequests) > 0 {
+		return run.PullRequests[0].Number, nil
+	}
+
+	pullsResp, err := cachedGet(ctx, token, fmt.Sprintf("/repos/%s/commits/%s/pulls", repo, run.HeadSHA), nil)
+	if err != nil {
+		return 0, fmt.Errorf("fetch PRs for commit %s: %w", run.HeadSHA, err)
+	}
+	var pulls []restCommitPR
+	if err := json.Unmarshal(pullsResp.Body, &pulls); err != nil {
+		return 0, fmt.Errorf("parse PRs for commit %s: %w", run.HeadSHA, err)
+	}
+	if n := pickRunPR(pulls, run.HeadBranch); n != 0 {
+		return n, nil
+	}
+	return 0, fmt.Errorf("run %d (%s@%.7s) in %s is not associated with any pull request", runID, run.HeadBranch, run.HeadSHA, repo)
+}
+
+// pickRunPR prefers an open PR whose head ref is the run's branch, then any
+// PR on that branch, then the first PR containing the commit.
+func pickRunPR(pulls []restCommitPR, headBranch string) int {
+	for _, p := range pulls {
+		if p.Head.Ref == headBranch && p.State == "open" {
+			return p.Number
+		}
+	}
+	for _, p := range pulls {
+		if p.Head.Ref == headBranch {
+			return p.Number
+		}
+	}
+	if len(pulls) > 0 {
+		return pulls[0].Number
+	}
+	return 0
 }

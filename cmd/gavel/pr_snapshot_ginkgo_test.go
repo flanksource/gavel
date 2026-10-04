@@ -31,6 +31,31 @@ var _ = Describe("PR reference parsing", func() {
 		Entry("non-PR URL", "https://github.com/acme/widgets/issues/12"),
 	)
 
+	DescribeTable("pr status targets",
+		func(args []string, want statusTarget, wantSelector string) {
+			target, err := parseStatusTarget(args)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(target).To(Equal(want))
+			if wantSelector != "" {
+				Expect(target.actionSelector()).To(Equal(wantSelector))
+			}
+		},
+		Entry("actions job URL", []string{"https://github.com/acme/widgets/actions/runs/101/job/7"},
+			statusTarget{Repo: "acme/widgets", RunID: 101, JobID: 7}, "7"),
+		Entry("actions run URL", []string{"https://github.com/acme/widgets/actions/runs/101"},
+			statusTarget{Repo: "acme/widgets", RunID: 101}, "101"),
+		Entry("pull request URL", []string{"https://github.com/acme/widgets/pull/12"},
+			statusTarget{Repo: "acme/widgets", PR: 12}, ""),
+		Entry("repo and number", []string{"acme/widgets", "12"},
+			statusTarget{Repo: "acme/widgets", PR: 12}, ""),
+		Entry("no arguments", []string{}, statusTarget{}, ""),
+	)
+
+	It("rejects a malformed actions URL", func() {
+		_, err := parseStatusTarget([]string{"https://github.com/acme/widgets/actions/runs/abc"})
+		Expect(err).To(HaveOccurred())
+	})
+
 	It("rejects --pr alongside the other narrowing flags", func() {
 		_, err := resolvePRFailed("12", "", ".gavel/last.json", "", prNarrowTests)
 		Expect(err).To(MatchError(ContainSubstring("--pr and --failed")))

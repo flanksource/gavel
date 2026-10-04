@@ -290,6 +290,33 @@ func TestResultFiltersActionsMatchJobName(t *testing.T) {
 	})
 }
 
+func TestResultFiltersActionsMatchJobID(t *testing.T) {
+	t.Run("a job ID keeps only that job and its check", func(t *testing.T) {
+		result := sampleJobFilterResult()
+		filters := newResultFilters(nil, []string{"2"})
+		filters.apply(result)
+
+		require.Len(t, result.Runs, 1)
+		run := result.Runs[502]
+		require.NotNil(t, run)
+		require.Len(t, run.Jobs, 1)
+		assert.Equal(t, "Install Tests - windows-amd64", run.Jobs[0].Name)
+
+		require.Len(t, result.PR.StatusCheckRollup, 1)
+		assert.Equal(t, "Install Tests - windows-amd64", result.PR.StatusCheckRollup[0].Name)
+	})
+
+	t.Run("a run ID still keeps every job of the run", func(t *testing.T) {
+		result := sampleJobFilterResult()
+		filters := newResultFilters(nil, []string{"502"})
+		filters.apply(result)
+
+		require.Len(t, result.Runs, 1)
+		assert.Len(t, result.Runs[502].Jobs, 2)
+		assert.ElementsMatch(t, []int64{502, 502}, statusCheckRunIDs(t, result.PR.StatusCheckRollup))
+	})
+}
+
 func TestResultFiltersNoActionMatchDetectsPrunedToEmpty(t *testing.T) {
 	result := sampleJobFilterResult()
 	preChecks := len(result.PR.StatusCheckRollup)
@@ -327,8 +354,8 @@ func sampleJobFilterResult() *PRWatchResult {
 			},
 		},
 		Runs: map[int64]*github.WorkflowRun{
-			501: {DatabaseID: 501, WorkflowID: 51, WorkflowPath: ".github/workflows/lint.yml", Name: "golangci-lint", Jobs: []github.Job{{Name: "lint"}}},
-			502: {DatabaseID: 502, WorkflowID: 52, WorkflowPath: ".github/workflows/test.yml", Name: "Test", Jobs: []github.Job{{Name: "Install Tests - windows-amd64"}, {Name: "Unit Tests"}}},
+			501: {DatabaseID: 501, WorkflowID: 51, WorkflowPath: ".github/workflows/lint.yml", Name: "golangci-lint", Jobs: []github.Job{{DatabaseID: 1, Name: "lint"}}},
+			502: {DatabaseID: 502, WorkflowID: 52, WorkflowPath: ".github/workflows/test.yml", Name: "Test", Jobs: []github.Job{{DatabaseID: 2, Name: "Install Tests - windows-amd64"}, {DatabaseID: 3, Name: "Unit Tests"}}},
 		},
 	}
 }
