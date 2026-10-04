@@ -361,6 +361,7 @@ func runSingleCommit(ctx context.Context, opts Options) (*Result, error) {
 		return result, fmt.Errorf("create commit: %w", err)
 	}
 	result.Hash = hash
+	result.Commits[0].Hash = hash
 	logger.Infof("Committed %s: %s", shortHash(hash), firstLine(result.Message))
 	restoreLocalReplaces(opts.WorkDir, source.PendingRestores)
 	return result, nil

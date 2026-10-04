@@ -2,6 +2,7 @@ package ui
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -9,90 +10,103 @@ import (
 	gavelgit "github.com/flanksource/gavel/git"
 )
 
-// todoCommitDiffResponse carries one commit's rendered diff (ANSI-colored
-// `git show` output). Truncated is set when the diff exceeded the size cap.
+// todoCommitDiffResponse is a clicky-ui GitDiffPayload: a plain unified diff of
+// one commit (or a base..commit range), optionally narrowed to path. Truncated
+// is set when the diff exceeded the size cap; Binary when every file in it is
+// binary.
 type todoCommitDiffResponse struct {
-	Hash      string `json:"hash"`
 	Diff      string `json:"diff"`
-	Truncated bool   `json:"truncated,omitempty"`
+	Truncated bool   `json:"truncated"`
+	Binary    bool   `json:"binary"`
+	Path      string `json:"path"`
+	Commit    string `json:"commit"`
 }
 
-// todoCommitFilesResponse carries one commit's per-file change summary, each
-// enriched with its repomap scope/language for the expanded commit status view.
+// todoCommitFilesResponse carries the per-file change summary of one commit
+// (or a base..hash range), each enriched with its repomap scope/language.
 type todoCommitFilesResponse struct {
 	Hash  string                `json:"hash"`
+	Base  string                `json:"base,omitempty"`
 	Files []gavelgit.CommitFile `json:"files"`
 }
 
-// handleTodoCommitDiff returns the ANSI-colored diff for a single commit so the
-// dashboard can expand a commit row to show its changes. The commit is located
-// by hash within the workspace dir; the provider/todo is not needed.
+// handleTodoCommitDiff returns the plain unified diff for a commit, or for the
+// base..hash range when base is set, optionally narrowed to one file or
+// directory, so the dashboard can render it in a diff viewer.
 func (s *Server) handleTodoCommitDiff(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	dir, opts, ok := s.todoCommitDiffRequest(w, r)
+	if !ok {
 		return
 	}
-	hash := strings.TrimSpace(r.URL.Query().Get("hash"))
-	if hash == "" {
-		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("hash is required"))
-		return
-	}
-	if !gavelgit.IsValidCommitHash(hash) {
-		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("invalid commit hash %q", hash))
-		return
-	}
-	dir, err := s.resolveTodoDir(r.URL.Query().Get("dir"))
+	result, err := gavelgit.CommitDiff(dir, opts)
 	if err != nil {
-		writeTodoError(w, http.StatusBadRequest, err)
-		return
-	}
-	// An optional file narrows the diff to a single path (the per-file hover
-	// card); empty shows the whole commit.
-	file := strings.TrimSpace(r.URL.Query().Get("file"))
-	diff, truncated, err := gavelgit.CommitDiff(dir, hash, file)
-	if err != nil {
-		writeTodoError(w, http.StatusInternalServerError, err)
+		writeTodoError(w, todoCommitDiffErrorStatus(err), err)
 		return
 	}
 	json.NewEncoder(w).Encode(todoCommitDiffResponse{ //nolint:errcheck
-		Hash:      hash,
-		Diff:      diff,
-		Truncated: truncated,
+		Diff:      result.Diff,
+		Truncated: result.Truncated,
+		Binary:    result.Binary,
+		Path:      opts.File,
+		Commit:    opts.Head,
 	})
 }
 
-// handleTodoCommitFiles returns the per-file change summary for a single commit
-// (path, change kind, +/- counts, and repomap scope/language), so the dashboard
-// can render a commit's "repomap-based status" rows and load each file's diff on
-// demand. The commit is located by hash within the workspace dir.
+// handleTodoCommitFiles returns the per-file change summary (path, change kind,
+// +/- counts, and repomap scope/language) for a commit or a base..hash range,
+// so the dashboard can render a file tree and load each file's diff on demand.
 func (s *Server) handleTodoCommitFiles(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	dir, opts, ok := s.todoCommitDiffRequest(w, r)
+	if !ok {
 		return
 	}
-	hash := strings.TrimSpace(r.URL.Query().Get("hash"))
-	if hash == "" {
-		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("hash is required"))
-		return
-	}
-	if !gavelgit.IsValidCommitHash(hash) {
-		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("invalid commit hash %q", hash))
-		return
-	}
-	dir, err := s.resolveTodoDir(r.URL.Query().Get("dir"))
+	files, err := gavelgit.CommitFiles(dir, opts)
 	if err != nil {
-		writeTodoError(w, http.StatusBadRequest, err)
-		return
-	}
-	files, err := gavelgit.CommitFiles(dir, hash)
-	if err != nil {
-		writeTodoError(w, http.StatusInternalServerError, err)
+		writeTodoError(w, todoCommitDiffErrorStatus(err), err)
 		return
 	}
 	json.NewEncoder(w).Encode(todoCommitFilesResponse{ //nolint:errcheck
-		Hash:  hash,
+		Hash:  opts.Head,
+		Base:  opts.Base,
 		Files: files,
 	})
+}
+
+// todoCommitDiffRequest reads the shared dir/hash/base/file query of the commit
+// endpoints, answering 400 (and false) for a missing or malformed value before
+// any git command runs. The commit is located within the workspace dir; the
+// provider/todo is not needed.
+func (s *Server) todoCommitDiffRequest(w http.ResponseWriter, r *http.Request) (string, gavelgit.CommitDiffOptions, bool) {
+	query := r.URL.Query()
+	opts := gavelgit.CommitDiffOptions{
+		Base: strings.TrimSpace(query.Get("base")),
+		Head: strings.TrimSpace(query.Get("hash")),
+		File: strings.TrimSpace(query.Get("file")),
+	}
+	if opts.Head == "" {
+		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("hash is required"))
+		return "", opts, false
+	}
+	if err := opts.Validate(); err != nil {
+		writeTodoError(w, http.StatusBadRequest, err)
+		return "", opts, false
+	}
+	dir, err := s.resolveTodoDir(query.Get("dir"))
+	if err != nil {
+		writeTodoError(w, http.StatusBadRequest, err)
+		return "", opts, false
+	}
+	return dir, opts, true
+}
+
+// todoCommitDiffErrorStatus answers 410 Gone for a commit that is no longer in
+// the repository (e.g. a run branch deleted and garbage-collected after it
+// landed) and 500 for any other git failure.
+func todoCommitDiffErrorStatus(err error) int {
+	if errors.Is(err, gavelgit.ErrCommitNotFound) {
+		return http.StatusGone
+	}
+	return http.StatusInternalServerError
 }

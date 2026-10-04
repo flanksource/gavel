@@ -49,10 +49,12 @@ func AgentHooks(opts AgentHooksOptions) []any {
 func agentCommitter(opts AgentHooksOptions, keepSubject bool) func(*agent.HookContext, capcommit.Plan) (string, error) {
 	return func(hc *agent.HookContext, plan capcommit.Plan) (string, error) {
 		meta := opts.Meta
-		if meta.SessionID == "" && hc.Turn != nil {
+		if meta.SessionID == "" {
 			// A provider that generates its own session id only reports it once the
-			// first turn is underway; the trailer needs whatever it settled on.
-			meta.SessionID = hc.Turn.SessionID
+			// first turn is underway; the trailer needs whatever it settled on. The
+			// workspace holds it at every phase — hc.Turn is nil after the turn
+			// ends, which left a post-run commit without its session trailer.
+			meta.SessionID = hc.Workspace().SessionID
 		}
 		run := AgentRun{
 			WorkDir:    plan.Dir,

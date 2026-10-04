@@ -54,6 +54,24 @@ func TestRunCommitAllSplitsStagedChanges(t *testing.T) {
 	assert.Empty(t, strings.TrimSpace(gitOutput(t, repo, "status", "--short")))
 }
 
+// A single (ungrouped) commit must report its hash on the per-commit entry too:
+// the todo-run commit hook reads Commits[last].Hash, and an empty one made
+// captain record the run as having committed nothing.
+func TestRunSingleCommitReportsHashOnCommitEntry(t *testing.T) {
+	repo := initCommitRepo(t)
+	writeFileInDir(t, repo, "alpha/a.txt", "one\n")
+	gitRun(t, repo, "add", "alpha/a.txt")
+
+	t.Setenv(testEnvVar, "1")
+
+	result, err := Run(context.Background(), Options{WorkDir: repo})
+	require.NoError(t, err)
+	require.Len(t, result.Commits, 1)
+	head := strings.TrimSpace(gitOutput(t, repo, "rev-parse", "HEAD"))
+	assert.Equal(t, head, result.Hash)
+	assert.Equal(t, head, result.Commits[0].Hash)
+}
+
 func TestRunCommitAllStagesAllWhenNothingIsStaged(t *testing.T) {
 	repo := initCommitRepo(t)
 	writeFileInDir(t, repo, "alpha/a.txt", "one\n")

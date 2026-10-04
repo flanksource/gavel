@@ -1,8 +1,6 @@
 package git
 
 import (
-	"fmt"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -25,25 +23,17 @@ type CommitFile struct {
 	Scopes       []string `json:"scopes,omitempty"`
 }
 
-// CommitFiles returns the per-file change summary for a single commit, parsed
-// from its diff and enriched with each file's repomap scope/language. The hash
-// is validated before shelling out so untrusted input cannot reach git. Scope
-// enrichment is best-effort: a file repomap cannot classify (e.g. a deletion
-// whose path no longer resolves) simply carries no chips rather than failing.
-func CommitFiles(dir, hash string) ([]CommitFile, error) {
-	hash = strings.TrimSpace(hash)
-	if !IsValidCommitHash(hash) {
-		return nil, fmt.Errorf("invalid commit hash %q", hash)
-	}
-	// --format= drops the commit message so only the diff body is parsed; -M
-	// surfaces renames as rename from/to pairs instead of an add+delete.
-	cmd := exec.Command("git", "show", "--format=", "-M", "--patch", hash)
-	cmd.Dir = dir
-	out, err := cmd.CombinedOutput()
+// CommitFiles returns the per-file change summary for a single commit or a
+// Base..Head range (the same diff CommitDiff renders, untruncated), enriched
+// with each file's repomap scope/language. Scope enrichment is best-effort: a
+// file repomap cannot classify (e.g. a deletion whose path no longer resolves)
+// simply carries no chips rather than failing.
+func CommitFiles(dir string, opts CommitDiffOptions) ([]CommitFile, error) {
+	out, err := commitDiffOutput(dir, opts)
 	if err != nil {
-		return nil, fmt.Errorf("git show %s: %w\nOutput: %s", hash, err, string(out))
+		return nil, err
 	}
-	files := parseCommitFiles(string(out))
+	files := parseCommitFiles(out)
 	enrichCommitFileScopes(dir, files)
 	return files, nil
 }
@@ -52,7 +42,7 @@ func CommitFiles(dir, hash string) ([]CommitFile, error) {
 // the change kind from the file header (new/deleted/rename) and the +/- counts
 // from the hunk body. It is pure so it can be unit-tested without a repository.
 func parseCommitFiles(patch string) []CommitFile {
-	var files []CommitFile
+	files := []CommitFile{}
 	var cur *CommitFile
 
 	flush := func() {
@@ -86,7 +76,7 @@ func parseCommitFiles(patch string) []CommitFile {
 		case strings.HasPrefix(line, "rename to "):
 			cur.Status = "renamed"
 			cur.Path = strings.TrimSpace(strings.TrimPrefix(line, "rename to "))
-		case strings.HasPrefix(line, "Binary files"):
+		case strings.HasPrefix(line, "Binary files"), line == "GIT binary patch":
 			cur.Binary = true
 		case strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++"):
 			cur.Adds++

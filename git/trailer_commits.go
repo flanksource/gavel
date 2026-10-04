@@ -25,44 +25,9 @@ func IsValidCommitHash(s string) bool {
 	return commitHashPattern.MatchString(strings.TrimSpace(s))
 }
 
-// CommitDiff returns the colored `git show` output for a single commit so the
-// dashboard can render it through an ANSI viewer. With an empty file it shows
-// the whole commit (diffstat + patch); with a file it narrows to that one path's
-// patch (the per-file hover card), dropping the diffstat and commit header.
-// Both untrusted inputs are validated before git runs — the hash against
-// IsValidCommitHash and the path against validateDiffPath — and `--` terminates
-// option parsing so neither can be read as a flag. Output is capped
-// at maxCommitDiffBytes; the bool reports whether it was truncated.
-func CommitDiff(path, hash, file string) (string, bool, error) {
-	hash = strings.TrimSpace(hash)
-	if !IsValidCommitHash(hash) {
-		return "", false, fmt.Errorf("invalid commit hash %q", hash)
-	}
-	args := []string{"show", "--color=always"}
-	if file = strings.TrimSpace(file); file != "" {
-		if err := validateDiffPath(file); err != nil {
-			return "", false, err
-		}
-		args = append(args, "--format=", "--patch", hash, "--", file)
-	} else {
-		args = append(args, "--stat", "--patch", hash, "--")
-	}
-	cmd := exec.Command("git", args...)
-	cmd.Dir = path
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", false, fmt.Errorf("git show %s: %w\nOutput: %s", hash, err, string(out))
-	}
-	diff, truncated := TruncateDiff(string(out))
-	if truncated {
-		return diff +
-			"\n\n… diff truncated (showing first 256 KB) …\n", true, nil
-	}
-	return diff, false, nil
-}
-
 // validateDiffPath rejects an untrusted path that git would reinterpret as
-// something other than a literal file inside the repository. `--` already stops
+// something other than a literal file or directory pathspec inside the
+// repository. `--` already stops
 // option parsing, but git still reads pathspec magic (`:(exclude)`, `:/`) after
 // it, and a control character would corrupt the argument for any consumer that
 // re-splits the command line, so the shape is checked before the value is ever

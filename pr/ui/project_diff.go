@@ -86,7 +86,7 @@ func projectWorkingTreeDiff(ctx context.Context, workDir string, files []status.
 				continue
 			}
 			patches = append(patches, patch)
-			if !isBinaryDiff(patch) {
+			if !gavelgit.IsBinaryDiff(patch) {
 				allBinary = false
 			}
 		}
@@ -184,8 +184,4 @@ func runProjectGitDiff(ctx context.Context, workDir string, allowChanges bool, a
 		return string(output), nil
 	}
 	return "", fmt.Errorf("git diff: %w\nOutput: %s", err, string(output))
-}
-
-func isBinaryDiff(diff string) bool {
-	return strings.Contains(diff, "Binary files ") || strings.Contains(diff, "GIT binary patch")
 }

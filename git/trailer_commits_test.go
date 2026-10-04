@@ -4,18 +4,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
 )
-
-// ansiEscape matches the CSI color sequences `git ... --color=always` emits, so
-// tests can assert on diff text without depending on where git splits its spans.
-var ansiEscape = regexp.MustCompile(`\x1b\[[0-9;]*m`)
-
-func stripANSI(s string) string {
-	return ansiEscape.ReplaceAllString(s, "")
-}
 
 func TestRemoteToWebURL(t *testing.T) {
 	cases := []struct {
@@ -77,22 +68,25 @@ func TestCommitDiff(t *testing.T) {
 	git("commit", "-m", "feat: add hello")
 
 	head := strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD"))
-	diff, truncated, err := CommitDiff(dir, head, "")
+	result, err := CommitDiff(dir, CommitDiffOptions{Head: head})
 	if err != nil {
 		t.Fatalf("CommitDiff: %v", err)
 	}
-	if truncated {
+	if result.Truncated {
 		t.Fatalf("small diff reported truncated")
 	}
-	// The diffstat names the file and the patch adds its content. Strip the
-	// forced ANSI coloring first: git colors the "+" and "hi" as separate spans,
-	// so the raw bytes never contain a contiguous "+hi".
-	plain := stripANSI(diff)
-	if !strings.Contains(plain, "hello.txt") || !strings.Contains(plain, "+hi") {
-		t.Fatalf("diff missing expected content:\n%s", diff)
+	// The diff is consumed by a unified-diff parser: plain text, no diffstat.
+	if strings.Contains(result.Diff, "\x1b[") {
+		t.Fatalf("diff carries ANSI escapes:\n%q", result.Diff)
+	}
+	if strings.Contains(result.Diff, " | ") || strings.Contains(result.Diff, "file changed") {
+		t.Fatalf("diff carries a diffstat block:\n%s", result.Diff)
+	}
+	if !strings.HasPrefix(result.Diff, "diff --git a/hello.txt b/hello.txt\n") || !strings.Contains(result.Diff, "+hi") {
+		t.Fatalf("diff missing expected content:\n%s", result.Diff)
 	}
 
-	if _, _, err := CommitDiff(dir, "not-a-hash", ""); err == nil {
+	if _, err := CommitDiff(dir, CommitDiffOptions{Head: "not-a-hash"}); err == nil {
 		t.Fatal("expected error for invalid hash")
 	}
 }
