@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/flanksource/captain/pkg/aiflags"
+	"github.com/flanksource/captain/pkg/captainconfig"
 	commitpkg "github.com/flanksource/gavel/commit"
 	"github.com/flanksource/gavel/verify"
 )
@@ -16,18 +18,25 @@ func contentInput(wtPath string, picked int, in Input) (commitpkg.PRContentInput
 	if err != nil {
 		return commitpkg.PRContentInput{}, fmt.Errorf("list cherry-picked commits: %w", err)
 	}
-	var commits []commitpkg.PRCommitInput
-	for _, rev := range strings.Fields(revs) {
-		commit, err := commitInput(wtPath, rev)
+	shas := strings.Fields(revs)
+	if len(shas) != picked {
+		return commitpkg.PRContentInput{}, fmt.Errorf("expected %d cherry-picked commits on HEAD, found %d", picked, len(shas))
+	}
+	return ContentInput(wtPath, shas, in.Flags, in.Saved)
+}
+
+// ContentInput describes shas (in the given order) of the repository at dir,
+// with dir's .gavel.yaml prompt configuration, for AI PR content generation.
+func ContentInput(dir string, shas []string, flags aiflags.ModelFlags, saved *captainconfig.Config) (commitpkg.PRContentInput, error) {
+	commits := make([]commitpkg.PRCommitInput, 0, len(shas))
+	for _, rev := range shas {
+		commit, err := commitInput(dir, rev)
 		if err != nil {
 			return commitpkg.PRContentInput{}, err
 		}
 		commits = append(commits, commit)
 	}
-	if len(commits) != picked {
-		return commitpkg.PRContentInput{}, fmt.Errorf("expected %d cherry-picked commits on HEAD, found %d", picked, len(commits))
-	}
-	options, err := loadContentOptions(wtPath, in)
+	options, err := loadContentOptions(dir, Input{Flags: flags, Saved: saved})
 	if err != nil {
 		return commitpkg.PRContentInput{}, err
 	}

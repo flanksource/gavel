@@ -7,9 +7,44 @@ import (
 	"github.com/flanksource/captain/pkg/aiflags"
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/captain/pkg/captainconfig"
+	commitpkg "github.com/flanksource/gavel/commit"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
+
+var _ = Describe("ContentInput", func() {
+	It("describes the given commits in order with their messages and files", func() {
+		GinkgoT().Setenv("HOME", GinkgoT().TempDir())
+		dir := GinkgoT().TempDir()
+		run := func(args ...string) string {
+			GinkgoHelper()
+			out, err := captureGit(dir, args...)
+			Expect(err).NotTo(HaveOccurred())
+			return out
+		}
+		commit := func(name, message string) string {
+			GinkgoHelper()
+			Expect(os.WriteFile(filepath.Join(dir, name), []byte(name+"\n"), 0o600)).To(Succeed())
+			run("add", name)
+			run("-c", "user.email=test@example.com", "-c", "user.name=test", "commit", "-q", "-m", message)
+			return run("rev-parse", "HEAD")
+		}
+		run("init", "-q", "-b", "main")
+		first := commit("a.txt", "feat: add a")
+		second := commit("b.txt", "feat: add b\n\nWith a body.")
+		saved := &captainconfig.Config{}
+
+		got, err := ContentInput(dir, []string{first, second}, aiflags.ModelFlags{}, saved)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(got.Commits).To(Equal([]commitpkg.PRCommitInput{
+			{Message: "feat: add a", Files: []string{"a.txt"}},
+			{Message: "feat: add b\n\nWith a body.", Files: []string{"b.txt"}},
+		}))
+		Expect(got.Options.WorkDir).To(Equal(dir))
+		Expect(got.Options.Saved).To(BeIdenticalTo(saved))
+	})
+})
 
 var _ = Describe("PR content configuration snapshot", func() {
 	It("carries the worktree full specification and captured saved settings to generation", func() {
