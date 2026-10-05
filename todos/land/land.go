@@ -13,10 +13,12 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/flanksource/captain/pkg/aiflags"
 	"github.com/flanksource/captain/pkg/api"
 	captaindb "github.com/flanksource/captain/pkg/database"
+	"github.com/flanksource/gavel/git/branchmerge"
 	"github.com/flanksource/gavel/github/prcreate"
 	"github.com/flanksource/gavel/todos/native"
 	"github.com/flanksource/gavel/todos/types"
@@ -26,12 +28,11 @@ import (
 const actor = "gavel"
 
 var (
-	ErrNotNative        = errors.New("landing a run requires native TODO storage")
-	ErrInvalidOptions   = errors.New("invalid land options")
-	ErrNoRunWorkspace   = errors.New("nothing to land")
-	ErrNoCommits        = errors.New("run made no commits to land")
-	ErrWorktreeDirty    = errors.New("run worktree was kept with uncommitted changes")
-	ErrCheckoutNotReady = errors.New("checkout is not ready to land onto")
+	ErrNotNative      = errors.New("landing a run requires native TODO storage")
+	ErrInvalidOptions = errors.New("invalid land options")
+	ErrNoRunWorkspace = errors.New("nothing to land")
+	ErrNoCommits      = errors.New("run made no commits to land")
+	ErrWorktreeDirty  = errors.New("run worktree was kept with uncommitted changes")
 )
 
 // Provider is the native TODO storage a landing reads runs from and records to.
@@ -66,21 +67,6 @@ func (o Options) Validate() error {
 		return fmt.Errorf("%w: via %q must be %q or %q", ErrInvalidOptions, o.Via, native.LandingMerge, native.LandingPR)
 	}
 }
-
-// ConflictError reports a merge whose cherry-pick conflicted. The cherry-pick
-// was aborted, so the checkout is back where it started.
-type ConflictError struct {
-	Branch string
-	Paths  []string
-	Err    error
-}
-
-func (e *ConflictError) Error() string {
-	return fmt.Sprintf("cherry-picking the run's commits onto %s conflicted in %s; the cherry-pick was aborted",
-		e.Branch, strings.Join(e.Paths, ", "))
-}
-
-func (e *ConflictError) Unwrap() error { return e.Err }
 
 // CleanupError reports a landing that was recorded but whose worktree or branch
 // could not be removed. Land returns the recorded landing alongside it.
@@ -144,7 +130,13 @@ func Land(ctx context.Context, provider Provider, todo *types.TODO, opts Options
 
 func landCommits(ctx context.Context, wt *api.WorktreeState, commits []string, opts Options) (native.RunLanding, error) {
 	if opts.Via == native.LandingMerge {
-		return merge(wt.Repo, wt.Branch, commits)
+		merged, err := branchmerge.Merge(branchmerge.Options{
+			Repo: wt.Repo, Branch: wt.Branch, Commits: commits, Mode: branchmerge.Incremental,
+		})
+		if err != nil {
+			return native.RunLanding{}, err
+		}
+		return native.RunLanding{Via: native.LandingMerge, TargetBranch: merged.TargetBranch, LandedSHA: merged.LandedSHA}, nil
 	}
 	base, err := prcreate.ResolveBase(wt.Repo, opts.Base)
 	if err != nil {
@@ -173,15 +165,28 @@ func landableCommits(runID uuid.UUID, wt *api.WorktreeState) ([]string, error) {
 		return nil, fmt.Errorf("%w: %s on %s holds %s (kept: %s); land those edits by hand",
 			ErrWorktreeDirty, wt.Path, wt.Branch, strings.Join(wt.Dirty, ", "), wt.KeptReason)
 	}
-	out, err := captureGit(wt.Repo, "rev-list", "--reverse", wt.Setup+".."+wt.Head)
+	commits, err := branchmerge.RangeCommits(wt.Repo, wt.Setup, wt.Head)
 	if err != nil {
 		return nil, fmt.Errorf("list the commits of run %s: %w", runID, err)
 	}
-	commits := strings.Fields(out)
 	if len(commits) == 0 {
 		return nil, fmt.Errorf("%w: run %s has nothing past its setup (%s..%s)", ErrNoCommits, runID, short(wt.Setup), short(wt.Head))
 	}
 	return commits, nil
+}
+
+// cleanup removes the run's worktree and deletes its branch once every commit
+// past its setup snapshot is confirmed landed, stamping BranchDeletedAt.
+func cleanup(wt *api.WorktreeState, landing *native.RunLanding) error {
+	result, err := branchmerge.Cleanup(branchmerge.CleanupOptions{
+		Repo: wt.Repo, Worktree: wt.Path, Branch: wt.Branch, LandedSHA: landing.LandedSHA,
+		Limit: wt.Setup, Mode: branchmerge.Incremental,
+	})
+	if result.BranchDeleted {
+		deletedAt := time.Now().UTC()
+		landing.BranchDeletedAt = &deletedAt
+	}
+	return err
 }
 
 func short(sha string) string {

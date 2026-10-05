@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	commitpkg "github.com/flanksource/gavel/commit"
+	"github.com/flanksource/gavel/git/branchmerge"
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/github/prcreate"
 	"github.com/flanksource/gavel/todos/land"
@@ -84,8 +85,8 @@ var _ = Describe("Land", func() {
 
 			_, err := land.Land(ctx, f.provider, f.todo, land.Options{Via: native.LandingMerge})
 
-			var conflict *land.ConflictError
-			Expect(errors.As(err, &conflict)).To(BeTrue(), "expected *land.ConflictError, got %v", err)
+			var conflict *branchmerge.ConflictError
+			Expect(errors.As(err, &conflict)).To(BeTrue(), "expected *branchmerge.ConflictError, got %v", err)
 			Expect(conflict.Paths).To(Equal([]string{"feature.txt"}))
 			Expect(git(f.repo, "rev-parse", "HEAD")).To(Equal(before))
 			Expect(git(f.repo, "status", "--porcelain")).To(BeEmpty())
@@ -101,7 +102,7 @@ var _ = Describe("Land", func() {
 			git(f.repo, "add", "staged.txt")
 
 			_, err := land.Land(ctx, f.provider, f.todo, land.Options{Via: native.LandingMerge})
-			Expect(err).To(MatchError(land.ErrCheckoutNotReady))
+			Expect(err).To(MatchError(branchmerge.ErrCheckoutNotReady))
 			Expect(git(f.repo, "log", "-1", "--format=%s")).To(Equal("chore: initial"))
 		})
 	})
