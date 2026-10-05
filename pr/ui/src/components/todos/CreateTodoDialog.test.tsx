@@ -26,6 +26,27 @@ vi.mock('./todoMutations', () => ({
 }));
 
 describe('CreateTodoDialog', () => {
+	 it('keeps a saved todo open for triage recovery without creating it again', async () => {
+	   const onCreated = vi.fn();
+	   createMutation.mutateAsync.mockReset();
+	   createMutation.mutateAsync.mockResolvedValue({ todo: { ref: 'saved' }, triage: { status: 'failed', error: 'Admission unavailable' } });
+	   render(<CreateTodoDialog open onClose={vi.fn()} workspaces={[{ name: 'acme', dir: '/work/acme', repos: [] }]} onCreated={onCreated} />);
+	   fireEvent.change(screen.getByPlaceholderText('What needs doing?'), { target: { value: 'Repair parser' } });
+	   fireEvent.click(screen.getByRole('button', { name: 'Add todo' }));
+	   expect(await screen.findByRole('button', { name: 'Retry triage' })).toBeTruthy();
+	   expect(screen.queryByRole('button', { name: 'Add todo' })).toBeNull();
+	   expect(onCreated).not.toHaveBeenCalled();
+	   fireEvent.click(screen.getByRole('button', { name: 'Continue without triage' }));
+	   expect(onCreated).toHaveBeenCalledOnce();
+	   expect(createMutation.mutateAsync).toHaveBeenCalledOnce();
+	 });
+	 it('enables triage by default and allows opting out', () => {
+	   render(<CreateTodoDialog open onClose={vi.fn()} workspaces={[{ name: 'acme', dir: '/work/acme', repos: [] }]} onCreated={vi.fn()} />);
+	   const checkbox = screen.getByRole<HTMLInputElement>('checkbox', { name: 'Triage after creation' });
+	   expect(checkbox.checked).toBe(true);
+	   fireEvent.click(checkbox);
+	   expect(checkbox.checked).toBe(false);
+	 });
   it('uses the extra-large modal and the shared tall body editor', () => {
     render(
       <CreateTodoDialog
@@ -96,7 +117,7 @@ describe('CreateTodoDialog as a child of a todo', () => {
     await waitFor(() => expect(onCreated).toHaveBeenCalledWith(parent.dir, createdTodo));
     const request = createMutation.mutateAsync.mock.calls[0][0] as { body: string };
     expect(JSON.parse(request.body)).toEqual({
-      title: 'Backfill rows', body: '', priority: 'medium', status: 'pending', parent: parent.ref,
+      title: 'Backfill rows', body: '', priority: 'medium', status: 'pending', parent: parent.ref, triage: true,
     });
   });
 

@@ -4,7 +4,8 @@ import type { Project, TodoItem, TodoPriority, TodoStatus } from '../../types';
 import { ScreenshotPicker, todoFormData, useAttachments } from './attachments';
 import { inputClass, priorities, statuses, statusLabel } from './format';
 import { TodoBodyField } from './TodoBodyField';
-import { useCreateTodoMutation } from './todoMutations';
+import { useCreateTodoMutation, type CreateTodoResponse } from './todoMutations';
+import { TriageAfterCreation, TriageCreationRecovery } from './TriageAfterCreation';
 
 // initialDir picks the workspace to preselect: the current todo's workspace when
 // it's a configured one, otherwise the first workspace.
@@ -48,25 +49,28 @@ function CreateTodoForm({ onClose, workspaces, parent, onCreated, defaultDir }: 
   const [priority, setPriority] = useState<TodoPriority>('medium');
   const [status, setStatus] = useState<TodoStatus>('pending');
   const [error, setError] = useState('');
+  const [triage, setTriage] = useState(true);
+  const [created, setCreated] = useState<CreateTodoResponse | null>(null);
   // The paste listener lives only while the form is mounted, i.e. while open.
   const { attachments, previews, add, remove } = useAttachments({ pasteAnywhere: true });
   const createTodo = useCreateTodoMutation(dir);
   const busy = createTodo.isPending;
 
   async function submit() {
-    if (!title.trim() || !dir || busy) return;
+    if (!title.trim() || !dir || busy || created) return;
     setError('');
     try {
       // /api/todos/new accepts both JSON and multipart; post the image bytes as
       // multipart when screenshots are attached, otherwise the lighter JSON path.
-      const fields = { title, body, priority, status, ...(parent ? { parent: parent.ref } : {}) };
+      const fields = { title, body, priority, status, triage, ...(parent ? { parent: parent.ref } : {}) };
       const result = await createTodo.mutateAsync(attachments.length
         ? { body: todoFormData(fields, attachments) }
         : {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(fields),
           });
-      onCreated(dir, result.todo);
+      if (result.triage?.status === 'failed') setCreated(result);
+      else onCreated(dir, result.todo);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create todo');
     }
@@ -78,14 +82,14 @@ function CreateTodoForm({ onClose, workspaces, parent, onCreated, defaultDir }: 
       onClose={onClose}
       title={parent ? 'New child todo' : 'New todo'}
       size="xl"
-      footer={
+      footer={created ? undefined :
         <div className="flex justify-end gap-2">
           <Button variant="outline" onClick={onClose}>Cancel</Button>
           <Button onClick={submit} loading={busy} disabled={!title.trim() || !dir}>Add todo</Button>
         </div>
       }
     >
-      <div className="space-y-3">
+      {created ? <TriageCreationRecovery result={created} dir={dir} onDone={() => onCreated(dir, created.todo)} /> : <div className="space-y-3">
         {error && <div className="text-sm text-destructive">{error}</div>}
         {parent ? (
           <Field label="Child of">
@@ -123,6 +127,7 @@ function CreateTodoForm({ onClose, workspaces, parent, onCreated, defaultDir }: 
             </Field>
           </div>
         </div>
+        <TriageAfterCreation checked={triage} onChange={setTriage} disabled={busy} />
         <TodoBodyField
           label="Body"
           value={body}
@@ -133,7 +138,7 @@ function CreateTodoForm({ onClose, workspaces, parent, onCreated, defaultDir }: 
         <Field label="Screenshot">
           <ScreenshotPicker previews={previews} onAdd={add} onRemove={remove} disabled={busy} />
         </Field>
-      </div>
+      </div>}
     </Modal>
   );
 }

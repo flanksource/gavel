@@ -11,7 +11,8 @@ import { loadRecentTodos, recentTodoHost, rememberRecentTodo, type RecentTodo } 
 import { useTodoTagCounts, useTodoTagIndex } from './tagQueries';
 import { TagListField } from './TodoTag';
 import { TodoBodyField } from './TodoBodyField';
-import { useCreateTodoMutation, useUpdateTodoMutation } from './todoMutations';
+import { useCreateTodoMutation, useUpdateTodoMutation, type CreateTodoResponse } from './todoMutations';
+import { TriageAfterCreation, TriageCreationRecovery } from './TriageAfterCreation';
 import {
   closedStatuses, compareRecentTodos, detectProjectDir, firstParam, listParam, modeFromParams,
   oneOf, parseBool, returnTarget, todoMatchesSearch, type TodoNewMode,
@@ -79,6 +80,8 @@ export function TodoNewPage({ projects, projectError = '' }: { projects: Project
   const [todoSearch, setTodoSearch] = useState('');
   const [selectedRef, setSelectedRef] = useState(queryRef);
   const [error, setError] = useState('');
+  const [triage, setTriage] = useState(true);
+  const [created, setCreated] = useState<CreateTodoResponse | null>(null);
   const [completeMessage, setCompleteMessage] = useState('');
   const recentForDir = useMemo(() => recent.filter(entry => entry.dir === dir), [recent, dir]);
   const { attachments, previews, add, remove } = useAttachments({ pasteAnywhere: true });
@@ -186,19 +189,20 @@ export function TodoNewPage({ projects, projectError = '' }: { projects: Project
   }
 
   async function submitNew() {
-    if (!title.trim() || busy) return;
+    if (!title.trim() || busy || created) return;
     setError('');
     try {
       // With attachments, post multipart so the image bytes ride along and the
       // server persists them; otherwise keep the lighter JSON path.
       const data = await createTodo.mutateAsync(attachments.length
-        ? { body: todoFormData({ title, body, priority, status, labels }, attachments) }
+        ? { body: todoFormData({ title, body, priority, status, labels, triage }, attachments) }
         : {
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ title, body, priority, status, labels }),
+            body: JSON.stringify({ title, body, priority, status, labels, triage }),
           });
       const todo = data.todo as TodoItem | undefined;
       if (todo?.ref) remember(todo);
+      if (data.triage?.status === 'failed') { setCreated(data); return; }
       if (embed) {
         setCompleteMessage('Todo created');
         finish('todo-created', todo?.ref);
@@ -250,6 +254,11 @@ export function TodoNewPage({ projects, projectError = '' }: { projects: Project
       </div>
     );
   }
+
+  if (created) return <main className="mx-auto max-w-4xl p-4"><TriageCreationRecovery result={created} dir={dir} onDone={() => {
+    if (embed) { setCompleteMessage('Todo created'); finish('todo-created', created.todo.ref); }
+    else leave(back ?? `/todos/${encodeURIComponent(created.todo.ref)}`);
+  }} /></main>;
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -373,6 +382,7 @@ export function TodoNewPage({ projects, projectError = '' }: { projects: Project
               <Field label="Labels">
                 <TagListField labels={labels} index={tagIndex} counts={tagCounts} disabled={busy} onChange={setLabels} />
               </Field>
+              <TriageAfterCreation checked={triage} onChange={setTriage} disabled={busy} />
               <TodoBodyField
                 label="Body"
                 value={body}

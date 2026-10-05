@@ -15,6 +15,7 @@ export interface TodoUpdateMutationBody extends TodoMutationBody {
 
 export interface CreateTodoResponse {
   todo: TodoItem;
+  triage?: { status: string; sessionId?: string; promptRunId?: string; error?: string };
 }
 
 interface WorkspaceTodoBatchCache {

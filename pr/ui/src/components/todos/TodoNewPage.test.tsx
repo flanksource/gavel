@@ -61,6 +61,22 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe('TodoNewPage', () => {
+	 it('keeps the saved issue available after triage admission fails', async () => {
+	   mocks.create.mockResolvedValue({ todo: todo('saved', 'Repair parser'), triage: { status: 'failed', error: 'Admission unavailable' } });
+	   render(<TodoNewPage projects={[workspace]} />);
+	   chooseWorkspace();
+	   fireEvent.change(screen.getByPlaceholderText('What needs doing?'), { target: { value: 'Repair parser' } });
+	   fireEvent.click(screen.getByRole('button', { name: 'Add todo' }));
+	   expect(await screen.findByRole('button', { name: 'Retry triage' })).toBeTruthy();
+	   expect(screen.queryByRole('button', { name: 'Add todo' })).toBeNull();
+	   expect(mocks.create).toHaveBeenCalledOnce();
+	 });
+	 it('enables triage for new issues and hides it for comments', () => {
+	   render(<TodoNewPage projects={[workspace]} />);
+	   expect(screen.getByRole<HTMLInputElement>('checkbox', { name: 'Triage after creation' }).checked).toBe(true);
+	   fireEvent.click(screen.getByRole('button', { name: 'Existing issue' }));
+	   expect(screen.queryByRole('checkbox', { name: 'Triage after creation' })).toBeNull();
+	 });
   it('uses the wider page and shared tall editor for new bodies and existing comments', () => {
     const { container } = render(
       <TodoNewPage projects={[{ name: 'gavel', dir: '/work/gavel', repos: [] }]} />,

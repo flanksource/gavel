@@ -190,6 +190,24 @@ function createdResponse() {
 }
 
 describe('CreateTodoFromPRDialog', () => {
+  it('offers triage recovery for the saved PR todo without another create', async () => {
+    const onCreated = vi.fn();
+    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({ todo: { ref: 'saved-pr', title: 'Repair parser' }, triage: { status: 'failed', error: 'Admission unavailable' } }) }));
+    vi.stubGlobal('fetch', fetchMock);
+    render(<CreateTodoFromPRDialog open onClose={vi.fn()} pr={pr} detail={detail} workspaces={workspaces} onCreated={onCreated} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Add todo' }));
+    expect(await screen.findByRole('button', { name: 'Retry triage' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Create another' })).toBeNull();
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(onCreated).toHaveBeenCalledOnce();
+  });
+  it('enables triage by default and allows opting out', () => {
+    render(<CreateTodoFromPRDialog open onClose={vi.fn()} pr={pr} detail={detail} workspaces={workspaces} />);
+    const checkbox = screen.getByRole<HTMLInputElement>('checkbox', { name: 'Triage after creation' });
+    expect(checkbox.checked).toBe(true);
+    fireEvent.click(checkbox);
+    expect(checkbox.checked).toBe(false);
+  });
   it('creates and selects a project without losing the todo draft', async () => {
     const onProjectsChanged = vi.fn();
     const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
