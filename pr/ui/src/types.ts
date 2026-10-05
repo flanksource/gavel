@@ -2,6 +2,7 @@ import type { TodoCounts } from './types/todos';
 export * from './types/todos';
 export * from './types/sessions';
 export * from './types/todoRun';
+export * from './types/projectGit';
 
 import type { Test } from '@flanksource/clicky-ui/data';
 import type { LinterResult } from '@flanksource/gavel/testrunner';

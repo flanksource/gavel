@@ -1,6 +1,7 @@
 import { isSessionInspectorTab, type SessionInspectorTab } from '@flanksource/clicky-ui/ai';
 import type { PRItem } from './types';
 import { emptyFilters, type Filters, type FilterMode } from './components/FilterBar';
+import { isProjectRefParam } from './projectRef';
 import { isTodoDetailTab, type TodoDetailTabKey } from './components/todos/TodoDetailTabs';
 
 export type ExportFormat = 'json' | 'md';
@@ -22,6 +23,9 @@ export interface RouteState {
   projectRunId: string;
   projectHistory: boolean;
   projectResults: boolean;
+  // projectRef is the worktree/branch shown in the project detail pane, encoded
+  // as ?ref=wt:<path> or ?ref=br:<name>; "" is the main checkout.
+  projectRef: string;
   // todoView is what the selected todo's detail pane shows, encoded as
   // ?tab=&sessionTab=&sessions= on /todos/{ref}. Query params, not path
   // segments, because a todo ref may itself contain "/". Unset fields mean the
@@ -100,6 +104,7 @@ export function parseRoute(location: Location): RouteState {
     projectRunId,
     projectHistory: tab === 'projects' && (projectRunId !== '' || params.get('history') === 'true'),
     projectResults: tab === 'projects' && params.get('results') === 'true',
+    projectRef: tab === 'projects' && !projectRunId && selectedPath && isProjectRefParam(params.get('ref') ?? '') ? params.get('ref') ?? '' : '',
     todoView: tab === 'todos' && selectedPath ? parseTodoView(params) : {},
     filters: {
       state: parseFacet(params.get('state')),
@@ -133,6 +138,7 @@ export function buildRoute(state: RouteState): string {
     if (!state.projectRunId && state.projectDiffPath) params.set('diff', state.projectDiffPath);
     if (!state.projectRunId && state.projectHistory) params.set('history', 'true');
     if (state.projectResults) params.set('results', 'true');
+    if (!state.projectRunId && state.projectRef) params.set('ref', state.projectRef);
   } else if (state.tab === 'todos' && state.selectedPath) {
     setTodoViewParams(params, state.todoView);
   }
@@ -168,6 +174,7 @@ export function emptyRouteState(): RouteState {
     projectRunId: '',
     projectHistory: false,
     projectResults: false,
+    projectRef: '',
     todoView: {},
     filters: emptyFilters(),
   };

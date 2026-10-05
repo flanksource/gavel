@@ -40,6 +40,7 @@ import { copyCurrentViewForAgent, downloadCurrentView } from './export';
 import { copyText } from './clipboard';
 import { loadUIState, saveUIState, filtersFromStored } from './storage';
 import { useDocumentVisible } from './useDocumentVisible';
+import { useProjectGitSummary } from './projectGitQueries';
 import { useProjectCatalog } from './useProjectCatalog';
 import { useAppQueries } from './useAppQueries';
 import { useProcStatus } from './procStatusQuery';
@@ -143,7 +144,7 @@ function mergePRItemFromDetail(pr: PRItem, info: PRInfo): PRItem {
 export function App() {
   const initialRoute: RouteState = typeof window !== 'undefined'
     ? parseRoute(window.location)
-    : { tab: 'prs', selectedPath: '', scopeProject: '', projectDiffPath: '', projectRunId: '', projectHistory: false, projectResults: false, todoView: {}, filters: emptyFilters() };
+    : { tab: 'prs', selectedPath: '', scopeProject: '', projectDiffPath: '', projectRunId: '', projectHistory: false, projectResults: false, projectRef: '', todoView: {}, filters: emptyFilters() };
 
   // Hydrate org/search config and filters from localStorage. URL query params
   // (if present) win for filters so deep links still work.
@@ -164,6 +165,7 @@ export function App() {
   const [projectRunId, setProjectRunId] = useState(initialRoute.projectRunId);
   const [projectHistory, setProjectHistory] = useState(initialRoute.projectHistory);
   const [projectResults, setProjectResults] = useState(initialRoute.projectResults);
+  const [projectRef, setProjectRef] = useState(initialRoute.projectRef);
   const [todoView, setTodoView] = useState(initialRoute.todoView);
   const [activeTab, setActiveTab] = useState<Tab>(initialRoute.tab);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -253,8 +255,8 @@ export function App() {
   const scopedPRs = projectScope.prs;
 
   const routeState: RouteState = useMemo(
-    () => ({ tab: activeTab, selectedPath, scopeProject, projectDiffPath, projectRunId, projectHistory, projectResults, todoView, filters }),
-    [activeTab, selectedPath, scopeProject, projectDiffPath, projectRunId, projectHistory, projectResults, todoView, filters],
+    () => ({ tab: activeTab, selectedPath, scopeProject, projectDiffPath, projectRunId, projectHistory, projectResults, projectRef, todoView, filters }),
+    [activeTab, selectedPath, scopeProject, projectDiffPath, projectRunId, projectHistory, projectResults, projectRef, todoView, filters],
   );
 
   const commitRoute = useCallback((next: RouteState, mode: 'push' | 'replace' = 'push') => {
@@ -265,6 +267,7 @@ export function App() {
     setProjectRunId(next.projectRunId);
     setProjectHistory(next.projectHistory);
     setProjectResults(next.projectResults);
+    setProjectRef(next.projectRef);
     setTodoView(next.todoView);
     setFilters(next.filters);
     const url = buildRoute(next);
@@ -278,14 +281,14 @@ export function App() {
   // Switching the top-level tab navigates (so /todos, /activity are linkable and
   // back/forward works); the PR selection is dropped when leaving the prs tab.
   const changeTab = useCallback((next: Tab) => {
-    commitRoute({ tab: next, selectedPath: '', scopeProject, projectDiffPath: '', projectRunId: '', projectHistory: false, projectResults: false, todoView: {}, filters });
+    commitRoute({ tab: next, selectedPath: '', scopeProject, projectDiffPath: '', projectRunId: '', projectHistory: false, projectResults: false, projectRef: '', todoView: {}, filters });
   }, [commitRoute, filters, scopeProject]);
 
   // Selecting a todo encodes its ref in the path (/todos/{guid}) so a todo is
   // deep-linkable and back/forward works, mirroring PR selection. An empty id
   // clears the selection back to /todos.
   const navigateTodo = useCallback((id: string) => {
-    commitRoute({ tab: 'todos', selectedPath: id, scopeProject, projectDiffPath: '', projectRunId: '', projectHistory: false, projectResults: false, todoView: {}, filters });
+    commitRoute({ tab: 'todos', selectedPath: id, scopeProject, projectDiffPath: '', projectRunId: '', projectHistory: false, projectResults: false, projectRef: '', todoView: {}, filters });
   }, [commitRoute, filters, scopeProject]);
 
   // The selected todo's detail tab, session inspector tab, and selected
@@ -297,19 +300,25 @@ export function App() {
   }, [commitRoute, routeState]);
 
   const navigateTask = useCallback((id: string | null) => {
-    commitRoute({ tab: 'tasks', selectedPath: id ?? '', scopeProject, projectDiffPath: '', projectRunId: '', projectHistory: false, projectResults: false, todoView: {}, filters });
+    commitRoute({ tab: 'tasks', selectedPath: id ?? '', scopeProject, projectDiffPath: '', projectRunId: '', projectHistory: false, projectResults: false, projectRef: '', todoView: {}, filters });
   }, [commitRoute, filters, scopeProject]);
 
   const navigateProject = useCallback((name: string) => {
-    commitRoute({ tab: 'projects', selectedPath: name, scopeProject, projectDiffPath: '', projectRunId: '', projectHistory, projectResults, todoView: {}, filters });
+    commitRoute({ tab: 'projects', selectedPath: name, scopeProject, projectDiffPath: '', projectRunId: '', projectHistory, projectResults, projectRef: '', todoView: {}, filters });
   }, [commitRoute, filters, projectHistory, projectResults, scopeProject]);
 
   const navigateProjectRun = useCallback((project: string, runId: string) => {
-    commitRoute({ tab: 'projects', selectedPath: project, scopeProject, projectDiffPath: '', projectRunId: runId, projectHistory: true, projectResults, todoView: {}, filters });
+    commitRoute({ tab: 'projects', selectedPath: project, scopeProject, projectDiffPath: '', projectRunId: runId, projectHistory: true, projectResults, projectRef: '', todoView: {}, filters });
   }, [commitRoute, filters, projectResults, scopeProject]);
 
   const navigateProjectDiff = useCallback((path: string) => {
-    commitRoute({ tab: 'projects', selectedPath, scopeProject, projectDiffPath: path, projectRunId: '', projectHistory, projectResults, todoView: {}, filters });
+    commitRoute({ tab: 'projects', selectedPath, scopeProject, projectDiffPath: path, projectRunId: '', projectHistory, projectResults, projectRef, todoView: {}, filters });
+  }, [commitRoute, filters, projectHistory, projectRef, projectResults, scopeProject, selectedPath]);
+
+  // Switching the worktree/branch drops the diff selection: a path from one ref
+  // means nothing in another.
+  const navigateProjectRef = useCallback((ref: string) => {
+    commitRoute({ tab: 'projects', selectedPath, scopeProject, projectDiffPath: '', projectRunId: '', projectHistory, projectResults, projectRef: ref, todoView: {}, filters });
   }, [commitRoute, filters, projectHistory, projectResults, scopeProject, selectedPath]);
 
   const setProjectHistoryEnabled = useCallback((enabled: boolean) => {
@@ -321,10 +330,11 @@ export function App() {
       projectRunId: enabled ? projectRunId : '',
       projectHistory: enabled,
       projectResults,
+      projectRef,
       todoView: {},
       filters,
     });
-  }, [commitRoute, filters, projectDiffPath, projectResults, projectRunId, scopeProject, selectedPath]);
+  }, [commitRoute, filters, projectDiffPath, projectRef, projectResults, projectRunId, scopeProject, selectedPath]);
 
   // The Todos data layer is mounted permanently so its chrome can live in the
   // AppShell's body slots, but only fetches while the Todos tab is active — or
@@ -341,7 +351,7 @@ export function App() {
   // Selecting a prompt encodes its id in the path (/prompts/{id}) and keeps the
   // dashboard project scope in the query so the page remains deep-linkable.
   const navigatePrompt = useCallback((id: string, scope: string) => {
-    commitRoute({ tab: 'prompts', selectedPath: id, scopeProject: scope, projectDiffPath: '', projectRunId: '', projectHistory: false, projectResults: false, todoView: {}, filters: scope === scopeProject ? filters : { ...filters, repos: {} } });
+    commitRoute({ tab: 'prompts', selectedPath: id, scopeProject: scope, projectDiffPath: '', projectRunId: '', projectHistory: false, projectResults: false, projectRef: '', todoView: {}, filters: scope === scopeProject ? filters : { ...filters, repos: {} } });
     if (scope !== scopeProject) todos.setFilters({ ...todos.filters, workspaces: {} });
   }, [commitRoute, filters, scopeProject, todos]);
   const review = useReviewMode(todos);
@@ -374,6 +384,7 @@ export function App() {
       setProjectRunId(next.projectRunId);
       setProjectHistory(next.projectHistory);
       setProjectResults(next.projectResults);
+      setProjectRef(next.projectRef);
       setTodoView(next.todoView);
       setFilters(next.filters);
     };
@@ -512,6 +523,7 @@ export function App() {
           selectedPath: activeTab === 'prs' || activeTab === 'projects' || activeTab === 'todos' ? '' : routeState.selectedPath,
           projectDiffPath: activeTab === 'projects' ? '' : routeState.projectDiffPath,
           projectRunId: activeTab === 'projects' ? '' : routeState.projectRunId,
+          projectRef: activeTab === 'projects' ? '' : routeState.projectRef,
           filters: { ...filters, repos: {} },
         });
       }
@@ -569,18 +581,21 @@ export function App() {
   // Both halves of the projects tab (the AppShell body sidebar and the detail
   // pane) read one catalog, so it is loaded here rather than inside either one.
   const projectCatalog = useProjectCatalog({ configured: scopedProjects, selectedName: selectedPath, enabled: activeTab === 'projects' && projectHistory });
+  // The git work summary shown on every project row refreshes slowly and only
+  // matters while the Projects tab is on screen.
+  const projectGitSummary = useProjectGitSummary({ enabled: activeTab === 'projects' && visible });
   function selectPRFromPalette(pr: PRItem) {
-    commitRoute({ tab: 'prs', selectedPath: pr.route_path || `${pr.repo}/${pr.number}`, scopeProject, projectDiffPath: '', projectRunId: '', projectHistory: false, projectResults: false, todoView: {}, filters });
+    commitRoute({ tab: 'prs', selectedPath: pr.route_path || `${pr.repo}/${pr.number}`, scopeProject, projectDiffPath: '', projectRunId: '', projectHistory: false, projectResults: false, projectRef: '', todoView: {}, filters });
     loadPR(pr);
   }
   function selectTodoFromPalette(entry: TodoEntry) {
-    commitRoute({ tab: 'todos', selectedPath: entry.todo.ref, scopeProject, projectDiffPath: '', projectRunId: '', projectHistory: false, projectResults: false, todoView: {}, filters });
+    commitRoute({ tab: 'todos', selectedPath: entry.todo.ref, scopeProject, projectDiffPath: '', projectRunId: '', projectHistory: false, projectResults: false, projectRef: '', todoView: {}, filters });
   }
   function openUUIDFromPalette(uuid: string) {
     // Keep the pasted identity in the URL. The global detail endpoint resolves
     // Todo UUIDs directly and Captain/provider session UUIDs through durable
     // prompt-run links, so reload/back navigation preserves the same lookup.
-    commitRoute({ tab: 'todos', selectedPath: uuid, scopeProject, projectDiffPath: '', projectRunId: '', projectHistory: false, projectResults: false, todoView: {}, filters });
+    commitRoute({ tab: 'todos', selectedPath: uuid, scopeProject, projectDiffPath: '', projectRunId: '', projectHistory: false, projectResults: false, projectRef: '', todoView: {}, filters });
   }
 
   if (useMenubarLayout) {
@@ -694,6 +709,7 @@ export function App() {
           ) : activeTab === 'projects' ? (
             <ProjectsSidebar
               catalog={projectCatalog}
+              gitSummary={projectGitSummary}
               selectedName={selectedPath}
               selectedRunId={projectRunId}
               historyEnabled={projectHistory}
@@ -733,7 +749,9 @@ export function App() {
             selectedName={selectedPath}
             selectedRunId={projectRunId}
             diffPath={projectDiffPath}
+            projectRef={projectRef}
             resultsEnabled={projectResults}
+            onRefChange={navigateProjectRef}
             onDiffPathChange={navigateProjectDiff}
             onChanged={onProcChanged}
           />

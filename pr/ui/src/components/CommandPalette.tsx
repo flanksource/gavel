@@ -40,10 +40,11 @@ function prMatchesQuery(pr: PRItem, q: string): boolean {
   );
 }
 
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const UUID_PATTERN = /^[0-9a-f]{8}(?:-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?$/i;
 
 // uuidQuery deliberately accepts every UUID version: native Todo IDs, Captain
 // IDs, and provider-issued Claude/Codex IDs do not all use the same version.
+// Eight-character prefixes resolve through the global Todo lookup.
 export function uuidQuery(value: string): string | null {
   const trimmed = value.trim();
   return UUID_PATTERN.test(trimmed) ? trimmed.toLowerCase() : null;
@@ -121,7 +122,7 @@ export function CommandPalette({ open, onClose, prs, todos, todosLoading, onSele
       out.push({
         key: `uuid:${directUUID}`,
         icon: UiSearch,
-        title: 'Open Todo or session UUID',
+        title: directUUID.length === 8 ? 'Open Todo UUID' : 'Open Todo or session UUID',
         subtitle: directUUID,
         meta: 'UUID',
         onSelect: () => { onClose(); onOpenUUID(directUUID); },

@@ -9,7 +9,7 @@ interface ProjectCommitTaskDetails {
 const activeStatuses = new Set(['pending', 'running']);
 
 export const projectCommitTaskKeys = {
-  runs: (projectName: string) => ['projects', projectName, 'commit-tasks', 'runs'] as const,
+  runs: (projectName: string, worktree = '') => ['projects', projectName, 'commit-tasks', 'runs', ...(worktree ? [worktree] : [])] as const,
   run: (projectName: string, runId: string) => ['projects', projectName, 'commit-tasks', runId] as const,
 };
 

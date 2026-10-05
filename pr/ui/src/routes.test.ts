@@ -67,6 +67,38 @@ describe('project routes', () => {
   });
 });
 
+describe('project ref routes', () => {
+  const parse = (url: string) => parseRoute(new URL(`http://localhost:9092${url}`) as unknown as Location);
+
+  it.each([
+    ['a worktree', '/projects/gavel?ref=wt%3A%2Fwork%2Fgavel-feat', 'wt:/work/gavel-feat'],
+    ['a branch', '/projects/gavel?ref=br%3Afeat%2Fx', 'br:feat/x'],
+  ])('round-trips %s selection in the ref query parameter', (_label, url, ref) => {
+    const parsed = parse(url);
+
+    expect(parsed.projectRef).toBe(ref);
+    expect(buildRoute(parsed)).toBe(url);
+  });
+
+  it('keeps the ref alongside the diff selection', () => {
+    const parsed = parse('/projects/gavel?diff=src&ref=br%3Afeat');
+
+    expect(parsed.projectDiffPath).toBe('src');
+    expect(parsed.projectRef).toBe('br:feat');
+    expect(buildRoute(parsed)).toBe('/projects/gavel?diff=src&ref=br%3Afeat');
+  });
+
+  it.each([
+    ['an unknown prefix', '/projects/gavel?ref=tag%3Av1'],
+    ['an empty target', '/projects/gavel?ref=wt%3A'],
+    ['a bare value', '/projects/gavel?ref=main'],
+    ['a non-project tab', '/todos/todo-1?ref=br%3Afeat'],
+    ['a historical run', '/projects/gavel/runs/run-1?ref=br%3Afeat'],
+  ])('ignores the ref for %s', (_label, url) => {
+    expect(parse(url).projectRef).toBe('');
+  });
+});
+
 describe('prompt routes', () => {
   it('round-trips a selected prompt with its scope project', () => {
     const location = new URL('http://localhost:9092/prompts/commit.message?project=Clicky%20UI');

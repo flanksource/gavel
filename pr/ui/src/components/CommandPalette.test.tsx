@@ -1,7 +1,7 @@
 import type React from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { CommandPalette } from './CommandPalette';
+import { CommandPalette, uuidQuery } from './CommandPalette';
 
 vi.mock('@flanksource/clicky-ui/components', () => ({
   Button: ({ children, onClick, className, 'aria-label': ariaLabel }: {
@@ -33,6 +33,34 @@ beforeEach(() => {
 });
 
 describe('CommandPalette UUID entry', () => {
+  it.each([false, true])('opens an eight-character Todo UUID when todosLoading is %s', (todosLoading) => {
+    const onClose = vi.fn();
+    const onOpenUUID = vi.fn();
+    render(
+      <CommandPalette
+        open
+        onClose={onClose}
+        prs={[]}
+        todos={[]}
+        todosLoading={todosLoading}
+        onSelectPR={vi.fn()}
+        onSelectTodo={vi.fn()}
+        onOpenUUID={onOpenUUID}
+      />,
+    );
+
+    const input = screen.getByRole('textbox');
+    fireEvent.change(input, { target: { value: ' 6B1F3C9A ' } });
+    expect(screen.getByText('Open Todo UUID')).toBeTruthy();
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(onOpenUUID).toHaveBeenCalledWith('6b1f3c9a');
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['6b1f3c9', '6b1f3c9a2', '6b1f3c9z', 'backfill', '6b1f3c9a-'])('does not offer direct lookup for %s', (query) => {
+    expect(uuidQuery(query)).toBeNull();
+  });
+
   it('provides back navigation and a pinned search header for the mobile page', () => {
     const onClose = vi.fn();
     render(

@@ -13,17 +13,19 @@ import {
   UiWarningTriangle,
   type IconProps,
 } from '@flanksource/clicky-ui/icons';
+import type { ProjectGitSummaryView } from '../projectGitQueries';
 import type { Project, ProcStatus } from '../types';
 import { GitChangesBadge } from './GitChangesBadge';
 import { ProcControl } from './ProcControl';
 import { RelativeTime } from './RelativeTime';
-import { TodoBadge } from './TodoBadge';
+import { ProjectGitBadges, projectGitBadgesState } from './ProjectGitBadges';
 import type { ProjectRuns, TestRunView } from './tests/types';
 
 interface Props {
   projects: Project[];
   runs: ProjectRuns[];
   procStatus: Record<string, ProcStatus>;
+  gitSummary: ProjectGitSummaryView;
   selected: string;
   selectedRunId: string;
   runError?: string;
@@ -107,7 +109,7 @@ export function ProjectsBar(props: Props) {
   );
 }
 
-function ProjectBranch({ project, projectRuns, open, selected, selectedRunId, procStatus, runsLoading, historyEnabled, onToggle, onOpen, onSelectRun, onChanged, onSettings }: Props & {
+function ProjectBranch({ project, projectRuns, open, selected, selectedRunId, procStatus, gitSummary, runsLoading, historyEnabled, onToggle, onOpen, onSelectRun, onChanged, onSettings }: Props & {
   project: Project;
   projectRuns: TestRunView[];
   open: boolean;
@@ -131,7 +133,7 @@ function ProjectBranch({ project, projectRuns, open, selected, selectedRunId, pr
           <span className="truncate text-sm font-medium text-foreground" title={project.dir}>{project.name}</span>
           {historyEnabled && <span className="text-[10px] tabular-nums text-muted-foreground" title={`${projectRuns.length} test and lint runs`}>{projectRuns.length}</span>}
         </Button>
-        <TodoBadge counts={project.todoCounts} />
+        <ProjectGitBadges state={projectGitBadgesState(gitSummary, project.name)} />
         <GitChangesBadge count={procStatus[project.name]?.gitChanges} />
         <Button variant="ghost" size="icon" type="button" onClick={() => onSettings(project)} title={`Edit ${project.name} .gavel.yaml`} aria-label={`Edit ${project.name} settings`} className="h-6 w-6 shrink-0 text-muted-foreground hover:text-foreground">
           <UiCog />

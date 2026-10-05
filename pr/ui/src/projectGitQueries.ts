@@ -1,0 +1,122 @@
+import { useMemo } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { readLocalCache, writeLocalCache } from './localQueryCache';
+import { fetchJSON, queryKeys } from './query';
+import type { ProjectGit, ProjectGitSummary } from './types';
+
+// The git summary walks every worktree of every project, so it refreshes
+// slowly; the last good response seeds the first render of the next page load.
+export const PROJECT_GIT_SUMMARY_CACHE_KEY = 'gavel.pr-ui.cache.project-git-summary.v1';
+const SUMMARY_REFETCH_MS = 30_000;
+
+export interface ProjectGitSummaryView {
+  byProject: ReadonlyMap<string, ProjectGitSummary>;
+  // Non-empty when the request failed and there is no earlier response to show.
+  error: string;
+  // True until the first response (or cached copy) arrives.
+  loading: boolean;
+}
+
+export function useProjectGitSummary({ enabled }: { enabled: boolean }): ProjectGitSummaryView {
+  const query = useQuery<ProjectGitSummary[]>({
+    queryKey: queryKeys.projectGitSummary(),
+    queryFn: async ({ signal }) => {
+      const summaries = parseProjectGitSummaries(await fetchJSON<unknown>({
+        url: '/api/projects/git-summary',
+        signal,
+        context: 'Load project git summary',
+      }));
+      writeLocalCache(PROJECT_GIT_SUMMARY_CACHE_KEY, summaries);
+      return summaries;
+    },
+    placeholderData: () => readLocalCache(PROJECT_GIT_SUMMARY_CACHE_KEY, parseProjectGitSummaries),
+    enabled,
+    // The interval below retries; failing fast shows the error state at once.
+    retry: false,
+    staleTime: SUMMARY_REFETCH_MS,
+    refetchInterval: SUMMARY_REFETCH_MS,
+  });
+  const byProject = useMemo(
+    () => new Map((query.data ?? []).map(summary => [summary.name, summary])),
+    [query.data],
+  );
+  return {
+    byProject,
+    error: query.data === undefined && query.error ? query.error.message : '',
+    loading: query.data === undefined && !query.error,
+  };
+}
+
+export function useProjectGit(projectName: string) {
+  return useQuery<ProjectGit>({
+    queryKey: queryKeys.projectGit(projectName),
+    queryFn: async ({ signal }) => parseProjectGit(await fetchJSON<unknown>({
+      url: `/api/projects/${encodeURIComponent(projectName)}/git`,
+      signal,
+      context: `Load git state of ${projectName}`,
+    })),
+    staleTime: 5_000,
+    refetchInterval: SUMMARY_REFETCH_MS,
+  });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function hasNumbers(value: unknown, keys: readonly string[]): boolean {
+  return isRecord(value) && keys.every(key => typeof value[key] === 'number');
+}
+
+// The payloads are read field by field by the sidebar and the detail pane, so
+// their shape is checked at the boundary: a malformed one fails the query
+// loudly instead of rendering NaN or throwing mid-render.
+export function parseProjectGitSummaries(payload: unknown): ProjectGitSummary[] {
+  if (!Array.isArray(payload)) throw new Error('Load project git summary: invalid response, expected an array');
+  for (const entry of payload) {
+    if (!isRecord(entry)
+      || typeof entry.name !== 'string'
+      || typeof entry.base !== 'string'
+      || !hasNumbers(entry, ['adds', 'dels', 'worktrees', 'branches'])
+      || (entry.error !== undefined && typeof entry.error !== 'string')) {
+      throw new Error(`Load project git summary: invalid entry ${JSON.stringify(entry)}`);
+    }
+  }
+  return payload as ProjectGitSummary[];
+}
+
+const CHANGE_KEYS = ['staged', 'unstaged', 'both', 'untracked', 'conflict', 'adds', 'dels'] as const;
+
+export function parseProjectGit(payload: unknown): ProjectGit {
+  if (!isRecord(payload)
+    || typeof payload.base !== 'string'
+    || typeof payload.currentBranch !== 'string'
+    || typeof payload.baseCheckedOut !== 'boolean'
+    || !Array.isArray(payload.worktrees)
+    || !Array.isArray(payload.branches)) {
+    throw new Error('Load project git: invalid response');
+  }
+  for (const worktree of payload.worktrees) {
+    if (!isRecord(worktree)
+      || typeof worktree.path !== 'string'
+      || typeof worktree.branch !== 'string'
+      || typeof worktree.primary !== 'boolean'
+      || typeof worktree.ahead !== 'number'
+      || typeof worktree.lastCommitAt !== 'string'
+      || (worktree.touchedAt !== undefined && typeof worktree.touchedAt !== 'string')
+      || !hasNumbers(worktree.changes, CHANGE_KEYS)) {
+      throw new Error(`Load project git: invalid worktree ${JSON.stringify(worktree)}`);
+    }
+  }
+  for (const branch of payload.branches) {
+    if (!isRecord(branch)
+      || typeof branch.name !== 'string'
+      || typeof branch.worktree !== 'string'
+      || typeof branch.lastCommitAt !== 'string'
+      || !hasNumbers(branch, ['ahead', 'behind'])
+      || !hasNumbers(branch.diff, ['commits', 'files', 'adds', 'dels'])) {
+      throw new Error(`Load project git: invalid branch ${JSON.stringify(branch)}`);
+    }
+  }
+  return payload as unknown as ProjectGit;
+}
