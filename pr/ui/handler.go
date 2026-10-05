@@ -23,6 +23,7 @@ import (
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/github/cache"
+	"github.com/flanksource/gavel/github/prcreate"
 	"github.com/flanksource/gavel/prwatch"
 	testui "github.com/flanksource/gavel/testrunner/ui"
 )
@@ -65,6 +66,9 @@ type Server struct {
 	projectActions *projectActionRegistry
 	projectRuns    *testui.MultiServer
 	taskSource     *supervisorTaskSource
+	// prDeps overrides the GitHub PR and AI content calls of the project
+	// branch PR and squash-merge endpoints; nil uses prcreate.DefaultDeps.
+	prDeps *prcreate.Deps
 
 	// taskHistoryImport nudges the archive sweep after this process writes a
 	// spool record, so a finished run reaches the database without waiting out
@@ -529,6 +533,12 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/api/project-runs/", http.StripPrefix("/api/project-runs", s.projectRunServer().Handler()))
 	mux.HandleFunc("GET /api/projects/{name}/diff", s.handleProjectDiff)
 	mux.HandleFunc("POST /api/projects/{name}/ignore", s.handleProjectIgnore)
+	mux.HandleFunc("GET /api/projects/git-summary", s.handleProjectsGitSummary)
+	mux.HandleFunc("GET /api/projects/{name}/git", s.handleProjectGit)
+	mux.HandleFunc("GET /api/projects/{name}/branch/files", s.handleProjectBranchFiles)
+	mux.HandleFunc("GET /api/projects/{name}/branch/diff", s.handleProjectBranchDiff)
+	mux.HandleFunc("POST /api/projects/{name}/branch/merge", s.handleProjectBranchMerge)
+	mux.HandleFunc("POST /api/projects/{name}/branch/pr", s.handleProjectBranchPR)
 	mux.HandleFunc("/api/openapi.json", s.handleOpenAPI)
 	mux.HandleFunc("/api/proc/status", s.handleProcStatus)
 	mux.HandleFunc("/api/proc/status/stream", s.handleProcStatusStream)

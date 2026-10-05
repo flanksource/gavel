@@ -31,7 +31,11 @@ func (s *Server) handleProjectDiff(w http.ResponseWriter, r *http.Request) {
 		respondError(w, statusForProjectErr(err), err.Error())
 		return
 	}
-	result, err := gatherProjectStatus(project.ResolvedDir(), status.Options{NoRepomap: true, NoResults: true, Context: r.Context()})
+	workDir, ok := requestWorkDir(w, r, project)
+	if !ok {
+		return
+	}
+	result, err := gatherProjectStatus(workDir, status.Options{NoRepomap: true, NoResults: true, Context: r.Context()})
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, fmt.Sprintf("gather project status: %v", err))
 		return
@@ -41,7 +45,7 @@ func (s *Server) handleProjectDiff(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	diff, binary, err := projectWorkingTreeDiff(r.Context(), project.ResolvedDir(), files)
+	diff, binary, err := projectWorkingTreeDiff(r.Context(), workDir, files)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err.Error())
 		return

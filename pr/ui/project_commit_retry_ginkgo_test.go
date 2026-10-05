@@ -59,7 +59,7 @@ func commitTaskStatuses(runID string) []string {
 }
 
 func currentCommitRunID(server *Server) string {
-	queue := server.projectCommitQueue("gavel")
+	queue := gavelCommitQueue(server)
 	queue.mu.Lock()
 	defer queue.mu.Unlock()
 	Expect(queue.current).NotTo(BeNil())

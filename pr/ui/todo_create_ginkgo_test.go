@@ -18,7 +18,7 @@ var _ = Describe("create TODO from PR", func() {
 		workDir := GinkgoT().TempDir()
 		server := &Server{ghOpts: github.Options{WorkDir: workDir}}
 		comment := "```markdown\n## Acceptance Criteria\n## Verification\n```"
-		payload := todoNewPayload{todoCreatePayload: todoCreatePayload{
+		payload := todoNewPayload{TodoCreatePayload: TodoCreatePayload{
 			Title: "Address PR feedback",
 			Body:  "## Review comments\n\n### Review summary\n\n#### Details\n\n" + comment,
 			Criteria: []types.AcceptanceCriterion{

@@ -18,9 +18,9 @@ type todoPRVerificationPayload struct {
 	Actions    []string `json:"actions,omitempty"`
 }
 
-type todoCreatePayload struct {
+type TodoCreatePayload struct {
 	Dir      string         `json:"dir,omitempty"`
-	Title    string         `json:"title"`
+	Title    string         `json:"title" jsonschema:"required,minLength=1"`
 	Body     string         `json:"body,omitempty"`
 	Priority types.Priority `json:"priority,omitempty"`
 	Status   types.Status   `json:"status,omitempty"`
@@ -42,8 +42,9 @@ type todoCreatePayload struct {
 }
 
 type todoNewPayload struct {
-	todoCreatePayload
+	TodoCreatePayload
 	AutoSave *bool `json:"autoSave,omitempty"`
+	Triage   *bool `json:"triage,omitempty" jsonschema_description:"Start a managed triage.new run after saving; omitted is false"`
 }
 
 type todoAttachmentSummary struct {
@@ -60,6 +61,7 @@ type todoNewResponse struct {
 	Todo        todoSummary             `json:"todo"`
 	AutoSave    bool                    `json:"autoSave"`
 	Attachments []todoAttachmentSummary `json:"attachments,omitempty"`
+	Triage      *todoNewTriageResponse  `json:"triage,omitempty"`
 }
 
 // todoTransferPayload moves the todo at Ref from one native workspace to another.
@@ -75,7 +77,7 @@ type todoTransferResponse struct {
 }
 
 func (s *Server) handleTodoCreate(w http.ResponseWriter, r *http.Request) {
-	var payload todoCreatePayload
+	var payload TodoCreatePayload
 	if err := decodeTodoRequest(r, &payload); err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)
 		return
@@ -207,12 +209,16 @@ func (s *Server) handleTodoNew(w http.ResponseWriter, r *http.Request) {
 		writeTodoError(w, http.StatusInternalServerError, err)
 		return
 	}
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(todoNewResponse{ //nolint:errcheck
+	response := todoNewResponse{
 		Todo:        sum,
 		AutoSave:    autoSave,
 		Attachments: attachments,
-	})
+	}
+	if payload.Triage != nil && *payload.Triage {
+		response.Triage = s.startNewTodoTriage(r, provider, source, todo)
+	}
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(response) //nolint:errcheck
 }
 
 func (s *Server) handleTodoTransfer(w http.ResponseWriter, r *http.Request) {

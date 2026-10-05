@@ -139,7 +139,7 @@ func setupCommitQueueServer() *Server {
 
 	server := &Server{}
 	DeferCleanup(func() {
-		queue := server.projectCommitQueue("gavel")
+		queue := gavelCommitQueue(server)
 		queue.mu.Lock()
 		generation := queue.current
 		if generation != nil {
@@ -156,6 +156,14 @@ func setupCommitQueueServer() *Server {
 		}).Should(BeTrue(), "the task generation should archive before the project directory is removed")
 	})
 	return server
+}
+
+// gavelCommitQueue is the commit queue of the "gavel" project's own directory.
+func gavelCommitQueue(server *Server) *commitQueue {
+	GinkgoHelper()
+	project, err := GetProject("gavel")
+	Expect(err).NotTo(HaveOccurred())
+	return server.projectCommitQueue(project, project.ResolvedDir())
 }
 
 func setCommitQueueProjectFiles(files ...string) {

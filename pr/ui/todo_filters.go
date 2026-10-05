@@ -186,15 +186,23 @@ func applyTodoNewValues(payload *todoNewPayload, values map[string][]string, ove
 			payload.Labels = labels
 		}
 	}
-	if !overwrite && payload.AutoSave != nil {
-		return nil
-	}
-	if raw := firstTodoNewValue(values, "autoSave", "autosave", "auto_save"); raw != "" {
-		parsed, err := strconv.ParseBool(raw)
-		if err != nil {
-			return fmt.Errorf("invalid autoSave %q", raw)
+	for _, field := range []struct {
+		target **bool
+		keys   []string
+	}{
+		{&payload.AutoSave, []string{"autoSave", "autosave", "auto_save"}},
+		{&payload.Triage, []string{"triage"}},
+	} {
+		if !overwrite && *field.target != nil {
+			continue
 		}
-		payload.AutoSave = &parsed
+		if raw, exists := firstTodoUpdateValue(values, field.keys...); exists {
+			parsed, err := strconv.ParseBool(strings.TrimSpace(raw))
+			if err != nil {
+				return fmt.Errorf("invalid %s %q", field.keys[0], raw)
+			}
+			*field.target = &parsed
+		}
 	}
 	return nil
 }

@@ -71,7 +71,7 @@ func TestTodoNewEndpointFoldsCriteriaIntoBody(t *testing.T) {
 	// A "create todo from PR" request carries the selected failing tests and
 	// review comments as acceptance criteria; the server folds them into the body
 	// so they round-trip back as the todo's parsed criteria.
-	payload := todoNewPayload{todoCreatePayload: todoCreatePayload{
+	payload := todoNewPayload{TodoCreatePayload: TodoCreatePayload{
 		Title: "Fix failing tests in flanksource/gavel#7",
 		Body:  "From flanksource/gavel#7",
 		Criteria: []types.AcceptanceCriterion{
@@ -112,7 +112,7 @@ func TestTodoNewEndpointAddsPRVerificationFixture(t *testing.T) {
 	workDir := t.TempDir()
 	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
 
-	payload := todoNewPayload{todoCreatePayload: todoCreatePayload{
+	payload := todoNewPayload{TodoCreatePayload: TodoCreatePayload{
 		Title: "Fix PR feedback",
 		Body:  "From flanksource/gavel#7",
 		Criteria: []types.AcceptanceCriterion{

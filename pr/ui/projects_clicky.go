@@ -77,7 +77,12 @@ func (s *Server) handleOpenAPI(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	respondJSON(w, http.StatusOK, projectsOpenAPI())
+	document := projectsOpenAPI()
+	if err := addTodoNewOpenAPI(document); err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondJSON(w, http.StatusOK, document)
 }
 
 // projectSchema is the JSON Schema for a project create/update body, also the
@@ -154,9 +159,10 @@ func projectCommitQueueRequestSchema() map[string]any {
 		"type":     "object",
 		"required": []string{"action"},
 		"properties": map[string]any{
-			"action":  map[string]any{"type": "string", "enum": []string{"commit", "open-pr"}},
-			"files":   map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Files to commit; optional for open-pr, which pushes existing local commits when empty"},
-			"options": map[string]any{"type": "object", "additionalProperties": true, "description": "Advanced commit options; not supported for open-pr"},
+			"action":   map[string]any{"type": "string", "enum": []string{"commit", "open-pr"}},
+			"files":    map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Files to commit; optional for open-pr, which pushes existing local commits when empty"},
+			"options":  map[string]any{"type": "object", "additionalProperties": true, "description": "Advanced commit options; not supported for open-pr"},
+			"worktree": map[string]any{"type": "string", "description": "Absolute path of the project worktree to commit in; defaults to the project directory"},
 		},
 	}
 }
@@ -303,7 +309,7 @@ func projectsOpenAPI() map[string]any {
 			"title":       "Projects",
 			"description": "Local workspace directories tracked by the dashboard.",
 		}}},
-		"paths": map[string]any{
+		"paths": withEntries(map[string]any{
 			"/api/projects": map[string]any{
 				"get":  clickyOp("projects_list", "List projects", "list", "collection", ""),
 				"post": clickyOp("projects_create", "Create project", "create", "collection", "", jsonBody()),
@@ -319,7 +325,7 @@ func projectsOpenAPI() map[string]any {
 						"name": "includeResults", "in": "query", "required": false,
 						"description": "Enrich changed files with the latest test and lint snapshot",
 						"schema":      map[string]any{"type": "boolean", "default": false},
-					}),
+					}, worktreeParam()),
 				}),
 			},
 			"/api/projects/{name}/commit-queue": map[string]any{
@@ -375,21 +381,16 @@ func projectsOpenAPI() map[string]any {
 					"parameters": append(nameParam()["parameters"].([]any), map[string]any{
 						"name": "path", "in": "query", "required": true,
 						"schema": map[string]any{"type": "string"},
-					}),
+					}, worktreeParam()),
 				}),
 			},
 			"/api/projects/{name}/ignore": map[string]any{
-				"post": projectLifecycleOp("projects_ignore", "Add an untracked file or directory to .gitignore", "200", "ProjectIgnoreResponse", map[string]any{
-					"requestBody": map[string]any{
-						"required": true,
-						"content": map[string]any{"application/json": map[string]any{
-							"schema": map[string]any{"$ref": "#/components/schemas/ProjectIgnoreRequest"},
-						}},
-					},
-				}),
+				"post": projectLifecycleOp("projects_ignore", "Add an untracked file or directory to .gitignore", "200", "ProjectIgnoreResponse",
+					jsonRequestBody("ProjectIgnoreRequest"),
+					map[string]any{"parameters": append(nameParam()["parameters"].([]any), worktreeParam())}),
 			},
-		},
-		"components": map[string]any{"schemas": map[string]any{
+		}, projectGitOpenAPIPaths()),
+		"components": map[string]any{"schemas": withEntries(map[string]any{
 			"Project":                   projectSchema(),
 			"ProjectFileStatus":         projectFileStatusSchema(),
 			"ProjectStatus":             projectStatusSchema(),
@@ -401,6 +402,15 @@ func projectsOpenAPI() map[string]any {
 			"ProjectDiff":               projectDiffResponseSchema(),
 			"ProjectIgnoreRequest":      projectIgnoreRequestSchema(),
 			"ProjectIgnoreResponse":     projectIgnoreResponseSchema(),
-		}},
+		}, projectGitOpenAPISchemas())},
 	}
+}
+
+// withEntries adds extra's entries to base, so a document section can be
+// assembled from several files.
+func withEntries(base, extra map[string]any) map[string]any {
+	for key, value := range extra {
+		base[key] = value
+	}
+	return base
 }

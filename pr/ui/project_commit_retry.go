@@ -126,9 +126,9 @@ func retryCommitRequests(runID string, details projectCommitGroupDetails, status
 		if !commitRetryable(status) {
 			continue
 		}
-		request := projectActionRequest{Action: entry.Action, Files: entry.Files}
+		request := projectActionRequest{Action: entry.Action, Files: entry.Files, Worktree: entry.Worktree}
 		if entry.Options != nil {
-			request = projectActionRequest{Action: entry.Action, Options: entry.Options}
+			request = projectActionRequest{Action: entry.Action, Options: entry.Options, Worktree: entry.Worktree}
 		}
 		requests = append(requests, request)
 	}
@@ -147,9 +147,15 @@ func (s *Server) enqueueCommitRetry(run retryableCommitRun) (projectCommitRun, e
 		if err != nil {
 			return projectCommitRun{}, fmt.Errorf("retry %s: %w", request.Action, err)
 		}
+		if len(queued) > 0 && next.workDir != queued[0].workDir {
+			return projectCommitRun{}, fmt.Errorf("retry spans two working directories: %s and %s", queued[0].workDir, next.workDir)
+		}
 		queued = append(queued, next)
 	}
-	return s.projectCommitQueue(run.project.Name).enqueue(s, run.project, queued)
+	if len(queued) == 0 {
+		return projectCommitRun{}, fmt.Errorf("no commits to retry for project %s", run.project.Name)
+	}
+	return s.projectCommitQueue(run.project, queued[0].workDir).enqueue(s, run.project, queued)
 }
 
 func commitRetryable(status clickytask.Status) bool {

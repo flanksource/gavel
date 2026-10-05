@@ -45,9 +45,10 @@ var _ = Describe("project Open PR queue", func() {
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(queued).To(Equal(commitQueueRequest{
-			action: projectActionOpenPR,
-			files:  []string{"one.go"},
-			args:   []string{"commit", "--work-dir", project.ResolvedDir(), "--precommit=fail", "--push", "one.go"},
+			action:  projectActionOpenPR,
+			files:   []string{"one.go"},
+			args:    []string{"commit", "--work-dir", project.ResolvedDir(), "--precommit=fail", "--push", "one.go"},
+			workDir: project.ResolvedDir(),
 		}))
 	})
 
@@ -56,9 +57,10 @@ var _ = Describe("project Open PR queue", func() {
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(queued).To(Equal(commitQueueRequest{
-			action: projectActionOpenPR,
-			files:  []string{},
-			args:   []string{"commit", "--work-dir", project.ResolvedDir(), "--precommit=fail", "--stage=staged", "--push"},
+			action:  projectActionOpenPR,
+			files:   []string{},
+			args:    []string{"commit", "--work-dir", project.ResolvedDir(), "--precommit=fail", "--stage=staged", "--push"},
+			workDir: project.ResolvedDir(),
 		}))
 	})
 

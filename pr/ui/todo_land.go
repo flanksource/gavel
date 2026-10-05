@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/flanksource/gavel/git/branchmerge"
 	"github.com/flanksource/gavel/github/prcreate"
 	"github.com/flanksource/gavel/todos/land"
 	"github.com/flanksource/gavel/todos/native"
@@ -73,7 +74,7 @@ func (s *Server) handleTodoLand(w http.ResponseWriter, r *http.Request) {
 }
 
 func todoLandStatus(err error) int {
-	var conflict *land.ConflictError
+	var conflict *branchmerge.ConflictError
 	var prConflict *prcreate.ConflictError
 	switch {
 	case errors.Is(err, land.ErrInvalidOptions):
@@ -83,7 +84,7 @@ func todoLandStatus(err error) int {
 	case errors.As(err, &conflict), errors.As(err, &prConflict),
 		errors.Is(err, native.ErrAlreadyLanded), errors.Is(err, land.ErrNoRunWorkspace),
 		errors.Is(err, land.ErrNoCommits), errors.Is(err, land.ErrWorktreeDirty),
-		errors.Is(err, land.ErrCheckoutNotReady):
+		errors.Is(err, branchmerge.ErrCheckoutNotReady):
 		return http.StatusConflict
 	default:
 		return http.StatusInternalServerError

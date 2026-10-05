@@ -11,6 +11,7 @@ import (
 	"time"
 
 	captaindb "github.com/flanksource/captain/pkg/database"
+	"github.com/flanksource/gavel/git/branchmerge"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/land"
 	"github.com/flanksource/gavel/todos/native"
@@ -128,11 +129,11 @@ var _ = Describe("todo land API", func() {
 		Expect(recorder.Code).To(Equal(http.StatusConflict), recorder.Body.String())
 		Expect(recorder.Body.String()).To(ContainSubstring(err.Error()))
 	},
-		Entry("cherry-pick conflict", &land.ConflictError{Branch: "main", Paths: []string{"feature.txt"}, Err: errors.New("exit 1")}),
+		Entry("cherry-pick conflict", &branchmerge.ConflictError{Branch: "main", Source: "shell/0a1b2c3d", Mode: branchmerge.Incremental, Paths: []string{"feature.txt"}, Err: errors.New("exit 1")}),
 		Entry("already landed", native.ErrAlreadyLanded),
 		Entry("dirty worktree", land.ErrWorktreeDirty),
 		Entry("no commits", land.ErrNoCommits),
-		Entry("checkout not ready", land.ErrCheckoutNotReady),
+		Entry("checkout not ready", branchmerge.ErrCheckoutNotReady),
 	)
 
 	It("returns the recorded landing alongside a cleanup failure", func() {
