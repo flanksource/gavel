@@ -51,7 +51,7 @@ func (s *Server) handleTodoLand(w http.ResponseWriter, r *http.Request) {
 	if opts.Via == native.LandingPR {
 		opts.Deps = prcreate.DefaultDeps()
 	}
-	provider, _, todo, err := s.resolveTodoReference(r.Context(), todoSource{Dir: payload.Dir}, payload.Ref)
+	provider, source, todo, err := s.resolveTodoReference(r.Context(), todoSource{Dir: payload.Dir}, payload.Ref)
 	if err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)
 		return
@@ -62,6 +62,11 @@ func (s *Server) handleTodoLand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	landing, err := landTodoRun(r.Context(), backed, todo, opts)
+	// Even a failed landing may have moved the checkout or removed the worktree.
+	s.context().GitState().Invalidate(source.Dir)
+	if landing != nil {
+		s.notify()
+	}
 	if err != nil && landing != nil {
 		writeTodoJSON(w, http.StatusInternalServerError, todoLandResponse{Landing: landing, Error: err.Error()})
 		return

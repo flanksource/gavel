@@ -5,14 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os/exec"
 	"path"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/flanksource/commons/logger"
+	gavelctx "github.com/flanksource/gavel/context"
 	"github.com/flanksource/gavel/github/cache"
 	"github.com/flanksource/gavel/procfile"
 )
@@ -80,12 +79,12 @@ func (s *Server) handleProcStatus(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, `{"error":"unknown project"}`, http.StatusNotFound)
 			return
 		}
-		json.NewEncoder(w).Encode(projectStatus(p)) //nolint:errcheck
+		json.NewEncoder(w).Encode(projectStatus(s.requestContext(r), p)) //nolint:errcheck
 		return
 	}
 
 	// No project param: return every project's status (see procStatusByKey).
-	json.NewEncoder(w).Encode(procStatusByKey(ps)) //nolint:errcheck
+	json.NewEncoder(w).Encode(procStatusByKey(s.requestContext(r), ps)) //nolint:errcheck
 }
 
 // procStatusByKey returns every project's status keyed by both project name (so
@@ -93,10 +92,10 @@ func (s *Server) handleProcStatus(w http.ResponseWriter, r *http.Request) {
 // the sidebar repo headers light up). Project names are bare and repos contain a
 // slash, so the keyspaces don't collide. Shared by handleProcStatus so the
 // single-shot poll carries the full wire shape (live cpu/mem + process tree).
-func procStatusByKey(projects []Project) map[string]procStatus {
+func procStatusByKey(ctx gavelctx.Context, projects []Project) map[string]procStatus {
 	byKey := make(map[string]procStatus)
 	for _, p := range projects {
-		st := projectStatus(p)
+		st := projectStatus(ctx, p)
 		byKey[p.Name] = st
 		for _, repo := range p.Repos {
 			byKey[repo] = st
@@ -107,12 +106,12 @@ func procStatusByKey(projects []Project) map[string]procStatus {
 
 // streamProcStatusByKey is procStatusByKey projected for the SSE stream — see
 // leanProcStatus for why the resource fields are dropped.
-func streamProcStatusByKey() (map[string]procStatus, error) {
+func streamProcStatusByKey(ctx gavelctx.Context) (map[string]procStatus, error) {
 	projects, err := LoadProjects()
 	if err != nil {
 		return nil, err
 	}
-	return leanProcStatus(procStatusByKey(projects)), nil
+	return leanProcStatus(procStatusByKey(ctx, projects)), nil
 }
 
 // leanProcStatus clears every continuously-fluctuating resource field from each
@@ -175,7 +174,7 @@ const (
 // their own.
 type procSampler struct {
 	ttl    time.Duration
-	sample func() (map[string]procStatus, error)
+	sample func(gavelctx.Context) (map[string]procStatus, error)
 
 	mu         sync.Mutex
 	cached     map[string]procStatus
@@ -187,12 +186,12 @@ type procSampler struct {
 // and hand it around independently, so they must not share one map. A scan
 // error is returned as-is and nothing is cached — a failed scan must surface,
 // never degrade into a stale or empty map presented as live state.
-func (p *procSampler) get() (map[string]procStatus, error) {
+func (p *procSampler) get(ctx gavelctx.Context) (map[string]procStatus, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	if p.cached == nil || time.Since(p.computedAt) >= p.ttl {
-		fresh, err := p.sample()
+		fresh, err := p.sample(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -233,7 +232,7 @@ func (s *Server) handleProcStatusStream(w http.ResponseWriter, r *http.Request) 
 		s.lastProcPoll = time.Now()
 		s.mu.Unlock()
 
-		byKey, err := sharedProcSampler.get()
+		byKey, err := sharedProcSampler.get(s.context())
 		if err != nil {
 			payload, _ := json.Marshal(map[string]string{"error": err.Error()})
 			fmt.Fprintf(w, "event: error\ndata: %s\n\n", payload)
@@ -298,7 +297,7 @@ func (s *Server) handleProcFavicon(w http.ResponseWriter, r *http.Request) {
 		respondError(w, statusForProjectErr(err), err.Error())
 		return
 	}
-	st := projectStatus(p)
+	st := projectStatus(s.requestContext(r), p)
 	if !st.HasProcfile || !procStatusHasPort(st, port) {
 		http.Error(w, "unknown process port", http.StatusNotFound)
 		return
@@ -391,7 +390,7 @@ func (s *Server) handleProcControl(w http.ResponseWriter, r *http.Request) {
 	// live-root set is stale by definition — don't make the task streams wait
 	// out its TTL to notice.
 	s.taskSource.invalidateRoots()
-	json.NewEncoder(w).Encode(projectStatus(p)) //nolint:errcheck
+	json.NewEncoder(w).Encode(projectStatus(s.requestContext(r), p)) //nolint:errcheck
 }
 
 // handleProcLogs tails the last N lines of a project's process logs as plain
@@ -437,7 +436,7 @@ func (s *Server) handleProcLogs(w http.ResponseWriter, r *http.Request) {
 // projectStatus resolves a project's directory and returns its Procfile status.
 // A directory without a Procfile is reported as hasProcfile=false (not an error)
 // so projects that aren't running anything render cleanly.
-func projectStatus(p Project) procStatus {
+func projectStatus(ctx gavelctx.Context, p Project) procStatus {
 	dir := p.ResolvedDir()
 
 	// Uncommitted-change count is a property of the workspace directory, not of
@@ -445,7 +444,7 @@ func projectStatus(p Project) procStatus {
 	// regardless of whether the directory has a Procfile.
 	var st procStatus
 	if dir != "" {
-		if n, err := gitChangeCount(dir); err != nil {
+		if n, err := gitChangeCount(ctx, dir); err != nil {
 			logger.Debugf("git status %s: %v", dir, err)
 		} else {
 			st.GitChanges = n
@@ -469,24 +468,21 @@ func projectStatus(p Project) procStatus {
 	return st
 }
 
-// gitChangeCount returns the number of uncommitted changes (staged, unstaged,
-// and untracked) in dir. A non-nil error means dir is not a git work tree (or
-// git is unavailable); callers treat that as "no git info" rather than zero
-// changes.
-func gitChangeCount(dir string) (int, error) {
-	cmd := exec.Command("git", "status", "--porcelain")
-	cmd.Dir = dir
-	out, err := cmd.Output()
+// gitChangeCount returns the number of uncommitted files (staged, unstaged,
+// untracked and conflicted) in the primary checkout of dir, read from the
+// memoized git state so the proc-status cadence never runs git itself. A non-nil
+// error means dir's git state could not be read (e.g. not a git work tree);
+// callers treat that as "no git info" rather than zero changes.
+func gitChangeCount(ctx gavelctx.Context, dir string) (int, error) {
+	state, err := ctx.GitState().Get(ctx, dir)
 	if err != nil {
 		return 0, err
 	}
-	count := 0
-	for _, line := range strings.Split(string(out), "\n") {
-		if strings.TrimSpace(line) != "" {
-			count++
-		}
+	primary, ok := state.Primary()
+	if !ok {
+		return 0, fmt.Errorf("git state of %s lists no primary checkout", dir)
 	}
-	return count, nil
+	return primary.Changes.Files(), nil
 }
 
 func writeJSONError(w http.ResponseWriter, status int, err error) {

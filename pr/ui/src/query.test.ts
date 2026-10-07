@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { fetchJSON, fetchText, HttpError, mutationJSON, queryKeys } from './query';
+import { fetchJSON, fetchText, HttpError, isProjectGitKey, mutationJSON, queryKeys } from './query';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -23,6 +23,14 @@ describe('queryKeys', () => {
     expect(queryKeys.processLogs('gavel', 'api', 5)).not.toEqual(queryKeys.processLogs('gavel', 'worker', 5));
     expect(queryKeys.prDetail('acme/gavel', 7)).not.toEqual(queryKeys.prDetail('acme/gavel', 8));
     expect(queryKeys.prDetail('acme/gavel', 7)).not.toEqual(queryKeys.prDetail('acme/clicky', 7));
+  });
+
+  it('matches every project git key and nothing else under projects', () => {
+    expect(isProjectGitKey(queryKeys.projectGit('gavel'))).toBe(true);
+    expect(isProjectGitKey(queryKeys.projectGit('clicky'))).toBe(true);
+    expect(isProjectGitKey(queryKeys.projectGitSummary())).toBe(false);
+    expect(isProjectGitKey(queryKeys.projectStatusScope('gavel'))).toBe(false);
+    expect(isProjectGitKey(queryKeys.projectBranchFiles('gavel', 'git', 'a1'))).toBe(false);
   });
 });
 

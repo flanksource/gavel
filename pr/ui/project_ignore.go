@@ -31,7 +31,7 @@ func (s *Server) handleProjectIgnore(w http.ResponseWriter, r *http.Request) {
 		respondError(w, statusForProjectErr(err), err.Error())
 		return
 	}
-	workDir, ok := requestWorkDir(w, r, project)
+	workDir, ok := s.requestWorkDir(w, r, project)
 	if !ok {
 		return
 	}
@@ -66,6 +66,7 @@ func (s *Server) handleProjectIgnore(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.context().GitState().Invalidate(workDir)
 	s.notify()
 	respondJSON(w, http.StatusOK, projectIgnoreResponse{
 		Path: normalized, Directory: request.Directory, Rule: rule, Added: added,

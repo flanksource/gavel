@@ -7,7 +7,7 @@ import type { BranchMergeResult, GitBranchInfo, GitWorktree, Project, ProjectGit
 import { useNow } from '../useNow';
 import { ProjectBranchChanges } from './ProjectBranchChanges';
 import { ProjectStatusView } from './ProjectStatusView';
-import { dirtyFileCount, projectRefAges, projectRefEntries, type ProjectRefEntry } from './projectGitView';
+import { dirtyFileCount, gitStateAge, projectRefAges, projectRefEntries, type ProjectRefEntry } from './projectGitView';
 
 type WorktreeView = 'work' | 'branch';
 
@@ -114,7 +114,17 @@ function RefBar({ git, loading, error, value, onChange }: { git: ProjectGit | un
         className="w-[42rem] min-w-0 max-w-full shrink"
       />
       {selected && <RefSummary entry={selected} />}
+      <GitStateAge computedAt={git.computedAt} />
     </div>
+  );
+}
+
+function GitStateAge({ computedAt }: { computedAt: string }) {
+  useNow();
+  return (
+    <span className="ml-auto shrink-0 whitespace-nowrap text-xs text-muted-foreground" title={`Git state computed ${new Date(computedAt).toLocaleString()}`}>
+      {gitStateAge(computedAt)}
+    </span>
   );
 }
 

@@ -1,5 +1,6 @@
 import { useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import type { TodoChildDisposition, TodoItem, TodoLandResponse, TodoListResponse, TodoRunLanding, TodoRunResponse } from '../../types';
+import { isProjectGitKey, queryKeys } from '../../query';
 import { todoQuery } from './format';
 import { setTodoQueryData, todoQueryKeys } from './todoQueries';
 import { workspaceTodoBatchKeys } from './workspaceTodoQueries';
@@ -271,9 +272,13 @@ export function useTodoLandMutation(dir: string, ref: string) {
       },
       via === 'merge' ? `Could not merge the run of todo ${ref}` : `Could not open a PR for the run of todo ${ref}`,
     ),
+    // Landing moves the checkout and removes the run's worktree, so every
+    // project's git state shown elsewhere is refetched too.
     onSettled: () => Promise.all([
       invalidateTodoCaches(client, dir, ref),
       client.invalidateQueries({ queryKey: todoQueryKeys.sessionDetail(dir, ref) }),
+      client.invalidateQueries({ queryKey: queryKeys.projectGitSummary() }),
+      client.invalidateQueries({ predicate: query => isProjectGitKey(query.queryKey) }),
     ]),
   });
 }

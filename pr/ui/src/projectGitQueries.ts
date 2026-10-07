@@ -93,7 +93,8 @@ export function parseProjectGit(payload: unknown): ProjectGit {
     || typeof payload.currentBranch !== 'string'
     || typeof payload.baseCheckedOut !== 'boolean'
     || !Array.isArray(payload.worktrees)
-    || !Array.isArray(payload.branches)) {
+    || !Array.isArray(payload.branches)
+    || typeof payload.computedAt !== 'string') {
     throw new Error('Load project git: invalid response');
   }
   for (const worktree of payload.worktrees) {

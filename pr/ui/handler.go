@@ -2,6 +2,7 @@ package ui
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"html"
@@ -21,6 +22,7 @@ import (
 	rpchttp "github.com/flanksource/clicky/rpc/http"
 	clickytask "github.com/flanksource/clicky/task"
 	"github.com/flanksource/commons/logger"
+	gavelctx "github.com/flanksource/gavel/context"
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/github/cache"
 	"github.com/flanksource/gavel/github/prcreate"
@@ -43,6 +45,11 @@ type repoInfo struct {
 }
 
 type Server struct {
+	// ctx is the process root context carrying the shared services; reach it
+	// through context(), which gives a zero-value Server its own.
+	ctx     gavelctx.Context
+	ctxOnce sync.Once
+
 	mu          sync.RWMutex
 	prs         github.PRSearchResults
 	fetchedAt   time.Time
@@ -177,8 +184,9 @@ type snapshot struct {
 	GavelResults map[string]*GavelResultsSummary `json:"gavelResults,omitempty"`
 }
 
-func NewServer(interval time.Duration, ghOpts github.Options, config SearchConfig) *Server {
+func NewServer(ctx gavelctx.Context, interval time.Duration, ghOpts github.Options, config SearchConfig) *Server {
 	s := &Server{
+		ctx:               ctx,
 		interval:          interval,
 		ghOpts:            ghOpts,
 		config:            config,
@@ -222,6 +230,23 @@ func (s *Server) refreshAuthProbe() {
 	s.auth = res
 	s.authCheckedAt = time.Now()
 	s.mu.Unlock()
+}
+
+// context is the server's root context. A Server built without NewServer
+// (specs construct &Server{} directly) gets the production default once.
+func (s *Server) context() gavelctx.Context {
+	s.ctxOnce.Do(func() {
+		if s.ctx.IsZero() {
+			s.ctx = gavelctx.New(context.Background())
+		}
+	})
+	return s.ctx
+}
+
+// requestContext binds the root context's services to a request's
+// cancellation and values.
+func (s *Server) requestContext(r *http.Request) gavelctx.Context {
+	return s.context().Wrap(r.Context())
 }
 
 func (s *Server) DetailCache() *DetailCache {

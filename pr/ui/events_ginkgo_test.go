@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	gavelctx "github.com/flanksource/gavel/context"
 	"github.com/flanksource/gavel/procfile"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -25,7 +26,7 @@ var _ = Describe("multiplexed events stream", func() {
 	It("relays a real dashboard stream route through Server.Handler()", func() {
 		fixture := sampleWith(procfile.StatusRunning)
 		original := sharedProcSampler
-		sharedProcSampler = &procSampler{ttl: time.Minute, sample: func() (map[string]procStatus, error) { return fixture, nil }}
+		sharedProcSampler = &procSampler{ttl: time.Minute, sample: func(gavelctx.Context) (map[string]procStatus, error) { return fixture, nil }}
 		DeferCleanup(func() { sharedProcSampler = original })
 		server := httptest.NewServer((&Server{}).Handler())
 		DeferCleanup(server.Close)

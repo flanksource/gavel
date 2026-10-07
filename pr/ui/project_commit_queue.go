@@ -125,7 +125,7 @@ func (s *Server) commitQueueActionArgs(project Project, request projectActionReq
 	if action != projectActionCommit && action != projectActionOpenPR {
 		return commitQueueRequest{}, fmt.Errorf("unknown commit queue action %q", action)
 	}
-	workDir, err := projectWorkDir(project, request.Worktree)
+	workDir, err := projectWorkDir(s.context(), project, request.Worktree)
 	if err != nil {
 		return commitQueueRequest{}, err
 	}
@@ -315,6 +315,7 @@ func (q *commitQueue) watch(s *Server, generation *commitQueueGeneration, entry 
 }
 
 func (q *commitQueue) settle(s *Server, generation *commitQueueGeneration) {
+	s.context().GitState().Invalidate(q.workDir)
 	q.mu.Lock()
 	if !generation.readyToArchive() {
 		q.mu.Unlock()

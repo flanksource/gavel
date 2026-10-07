@@ -69,6 +69,7 @@ const git: ProjectGit = {
   baseCheckedOut: true,
   worktrees: [primary, feat, aheadClean],
   branches: [branch('feat/x', feat.path, 2), branch('feat/y', aheadClean.path, 1), branch('spike', '', 3)],
+  computedAt: '2026-10-04T11:59:52Z',
 };
 
 function stubGit(response: () => Response = () => Response.json(git)) {
@@ -166,6 +167,14 @@ describe('ProjectRefPane', () => {
 
     const picker = await screen.findByRole('listbox', { name: 'Worktree or branch' });
     expect(Array.from(picker.nextElementSibling?.children ?? []).map(part => part.textContent)).toEqual(['2 commits', '2 uncommitted', '+3−1', '3h', '5m']);
+  });
+
+  it('shows how old the memoized git state is', async () => {
+    stubGit();
+
+    renderPane('');
+
+    expect(await screen.findByText('git state 8s ago')).toBeTruthy();
   });
 
   it('hides the picker for a project with only its main checkout', async () => {

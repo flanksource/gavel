@@ -67,6 +67,9 @@ export interface ProjectGit {
   baseCheckedOut: boolean;
   worktrees: GitWorktree[];
   branches: GitBranchInfo[];
+  // When the server computed this state (RFC 3339); it is memoized, so this
+  // can be seconds older than the response.
+  computedAt: string;
 }
 
 export type BranchMergeMode = 'squash' | 'incremental';

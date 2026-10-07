@@ -31,10 +31,11 @@ func (s *Server) handleProjectDiff(w http.ResponseWriter, r *http.Request) {
 		respondError(w, statusForProjectErr(err), err.Error())
 		return
 	}
-	workDir, ok := requestWorkDir(w, r, project)
+	workDir, ok := s.requestWorkDir(w, r, project)
 	if !ok {
 		return
 	}
+	// Read live: the detail view shows the actual file list and polls fast during actions.
 	result, err := gatherProjectStatus(workDir, status.Options{NoRepomap: true, NoResults: true, Context: r.Context()})
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, fmt.Sprintf("gather project status: %v", err))

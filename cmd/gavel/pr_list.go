@@ -17,6 +17,7 @@ import (
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/commons/logger"
+	gavelctx "github.com/flanksource/gavel/context"
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/pr/ui"
 	"github.com/flanksource/gavel/service"
@@ -274,7 +275,9 @@ func runPRUI(opts PRListOptions, databaseMode serveDatabaseMode) error {
 		searchOpts.Repos = saved.Repos
 	}
 
-	srv := ui.NewServer(interval, ghOpts, ui.SearchConfig{
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	srv := ui.NewServer(gavelctx.New(ctx), interval, ghOpts, ui.SearchConfig{
 		Repos:       searchOpts.Repos,
 		All:         searchOpts.All,
 		Org:         searchOpts.Org,
@@ -338,8 +341,6 @@ func runPRUI(opts PRListOptions, databaseMode serveDatabaseMode) error {
 	}
 
 	poller := ui.NewPoller(srv, searchFn, interval)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	ingestStats, err := startServeRuntime(ctx, defaultServeRuntimeDependencies, databaseMode)
 	if err != nil {
 		return err

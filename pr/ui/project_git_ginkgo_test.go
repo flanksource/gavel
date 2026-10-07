@@ -2,6 +2,7 @@ package ui
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -10,10 +11,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	clickytask "github.com/flanksource/clicky/task"
-	gavelgit "github.com/flanksource/gavel/git"
+	gavelctx "github.com/flanksource/gavel/context"
+	"github.com/flanksource/gavel/git/gitstate"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -46,14 +49,6 @@ func pgCommit(dir, name, content, message string) string {
 	pgGit(dir, "add", name)
 	pgGit(dir, "commit", "-q", "-m", message)
 	return pgGit(dir, "rev-parse", "HEAD")
-}
-
-// pgCommittedAt is git's own committer date for rev, in UTC.
-func pgCommittedAt(dir, rev string) time.Time {
-	GinkgoHelper()
-	at, err := time.Parse(time.RFC3339, pgGit(dir, "log", "-1", "--format=%cI", rev))
-	Expect(err).NotTo(HaveOccurred())
-	return at.UTC()
 }
 
 func newProjectGitFixture() *projectGitFixture {
@@ -126,41 +121,70 @@ var _ = Describe("project git", func() {
 			recorder := serveProjectGit(server, http.MethodGet, "/api/projects/git-summary", nil)
 
 			Expect(recorder.Code).To(Equal(http.StatusOK), recorder.Body.String())
-			summaries := decodeProjectGit[[]projectGitSummary](recorder)
+			summaries := decodeProjectGit[[]gitstate.Summary](recorder)
 			Expect(summaries).To(HaveLen(2))
 			// feature/a: a.txt +2, b.txt +1; solo: README +1 -1; worktree: b.txt +1.
-			Expect(summaries[0]).To(Equal(projectGitSummary{Name: "acme", Base: "main", Adds: 5, Dels: 1, Worktrees: 1, Branches: 2}))
+			Expect(summaries[0]).To(Equal(gitstate.Summary{Name: "acme", Base: "main", Adds: 5, Dels: 1, Worktrees: 1, Branches: 2}))
 			Expect(summaries[1].Name).To(Equal("broken"))
 			Expect(summaries[1].Error).To(ContainSubstring("worktree list"))
-			Expect(summaries[1]).To(Equal(projectGitSummary{Name: "broken", Error: summaries[1].Error}))
+			Expect(summaries[1]).To(Equal(gitstate.Summary{Name: "broken", Error: summaries[1].Error}))
 		})
 	})
 
 	Describe("GET /api/projects/{name}/git", func() {
-		It("reports the base, the primary checkout, each worktree's changes, ages and the unmerged branches", func() {
-			touched := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
-			Expect(os.Chtimes(filepath.Join(f.worktree, "b.txt"), touched, touched)).To(Succeed())
+		It("serves the project's git state with the time it was computed", func() {
+			before := time.Now().UTC().Truncate(time.Second)
 
 			recorder := serveProjectGit(server, http.MethodGet, "/api/projects/acme/git", nil)
 
 			Expect(recorder.Code).To(Equal(http.StatusOK), recorder.Body.String())
-			state := decodeProjectGit[projectGitResponse](recorder)
-			main := pgGit(f.repo, "rev-parse", "HEAD")
-			Expect(state).To(Equal(projectGitResponse{
-				Base: "main", CurrentBranch: "main", BaseCheckedOut: true,
-				Worktrees: []projectGitWorktree{
-					{Worktree: gavelgit.Worktree{Path: f.repo, Branch: "main", Head: main, Primary: true}, LastCommitAt: pgCommittedAt(f.repo, main)},
-					{
-						Worktree: gavelgit.Worktree{Path: f.worktree, Branch: pgFeature, Head: f.featureHead},
-						Changes:  projectGitChanges{Unstaged: 1, Adds: 1}, Ahead: 2,
-						LastCommitAt: pgCommittedAt(f.repo, f.featureHead), TouchedAt: &touched,
-					},
-				},
-				Branches: []gavelgit.BranchInfo{
-					{Name: pgFeature, Head: f.featureHead, Ahead: 2, Worktree: f.worktree, Diff: gavelgit.DiffStat{Commits: 2, Files: 2, Adds: 3}, LastCommitAt: pgCommittedAt(f.repo, f.featureHead)},
-					{Name: "solo", Head: f.soloHead, Ahead: 1, Diff: gavelgit.DiffStat{Commits: 1, Files: 1, Adds: 1, Dels: 1}, LastCommitAt: pgCommittedAt(f.repo, f.soloHead)},
-				},
-			}))
+			state := decodeProjectGit[gitstate.State](recorder)
+			Expect(state.Base).To(Equal("main"))
+			Expect(state.ComputedAt).To(BeTemporally(">=", before))
+			paths := []string{}
+			for _, wt := range state.Worktrees {
+				paths = append(paths, wt.Path)
+			}
+			Expect(paths).To(Equal([]string{f.repo, f.worktree}))
+		})
+	})
+
+	Describe("memoized git state", func() {
+		var computed map[string]int
+
+		BeforeEach(func() {
+			var mu sync.Mutex
+			computed = map[string]int{}
+			counting := gitstate.New(gitstate.Options{Compute: func(ctx context.Context, dir string) (gitstate.State, error) {
+				mu.Lock()
+				computed[dir]++
+				mu.Unlock()
+				return gitstate.Compute(ctx, dir)
+			}})
+			server = &Server{ctx: gavelctx.New(context.Background(), gavelctx.WithGitState(counting))}
+		})
+
+		It("computes a project once across git-summary, project git and worktree scoping", func() {
+			Expect(serveProjectGit(server, http.MethodGet, "/api/projects/git-summary", nil).Code).To(Equal(http.StatusOK))
+			Expect(serveProjectGit(server, http.MethodGet, "/api/projects/acme/git", nil).Code).To(Equal(http.StatusOK))
+			Expect(serveProjectGit(server, http.MethodGet, "/api/projects/acme/status?worktree="+url.QueryEscape(f.worktree), nil).Code).To(Equal(http.StatusOK))
+
+			Expect(computed).To(Equal(map[string]int{f.repo: 1}))
+		})
+
+		It("recomputes after a merge invalidates the project", func() {
+			Expect(serveProjectGit(server, http.MethodGet, "/api/projects/acme/git", nil).Code).To(Equal(http.StatusOK))
+
+			merged := serveProjectGit(server, http.MethodPost, "/api/projects/acme/branch/merge", map[string]any{"branch": "solo", "mode": "squash", "message": "fix: louder hello"})
+			Expect(merged.Code).To(Equal(http.StatusOK), merged.Body.String())
+			recorder := serveProjectGit(server, http.MethodGet, "/api/projects/acme/git", nil)
+
+			Expect(computed).To(Equal(map[string]int{f.repo: 2}))
+			branches := []string{}
+			for _, branch := range decodeProjectGit[gitstate.State](recorder).Branches {
+				branches = append(branches, branch.Name)
+			}
+			Expect(branches).To(Equal([]string{pgFeature}))
 		})
 	})
 

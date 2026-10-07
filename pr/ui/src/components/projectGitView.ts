@@ -1,6 +1,6 @@
 import { branchRef, worktreeRef } from '../projectRef';
 import type { GitWorktree, GitWorktreeChanges, ProjectGit } from '../types';
-import { ageShort } from '../utils';
+import { ageShort, timeAgoShort } from '../utils';
 
 export function dirtyFileCount({ staged, unstaged, both, untracked, conflict }: GitWorktreeChanges): number {
   return staged + unstaged + both + untracked + conflict;
@@ -89,4 +89,9 @@ const age = (iso: string | undefined) => (iso && Date.parse(iso) > 0 ? ageShort(
 /** Compact ages of an entry's last commit and newest uncommitted edit. */
 export function projectRefAges({ lastCommitAt, touchedAt }: { lastCommitAt: string; touchedAt?: string }): { committed: string; touched: string } {
   return { committed: age(lastCommitAt), touched: age(touchedAt) };
+}
+
+/** How old the server's memoized git state is, e.g. "git state 8s ago". */
+export function gitStateAge(computedAt: string): string {
+  return `git state ${timeAgoShort(computedAt)}`;
 }

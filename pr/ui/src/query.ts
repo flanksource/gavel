@@ -28,6 +28,11 @@ export const queryKeys = {
   activityCache: () => ['activity', 'cache'] as const,
 };
 
+/** Matches queryKeys.projectGit of any project, for invalidating them all. */
+export function isProjectGitKey(key: readonly unknown[]): boolean {
+  return key.length === 3 && key[0] === 'projects' && key[2] === 'git';
+}
+
 interface QueryRequest {
   url: string;
   signal: AbortSignal;

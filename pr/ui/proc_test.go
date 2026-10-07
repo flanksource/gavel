@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	gavelctx "github.com/flanksource/gavel/context"
 	"github.com/flanksource/gavel/procfile"
 )
 
@@ -356,16 +357,23 @@ func TestHandleProcControlValidation(t *testing.T) {
 func TestGitChangeCount(t *testing.T) {
 	// A directory that is not a git work tree is reported as an error, so the
 	// caller can omit the field rather than claiming zero changes.
-	if _, err := gitChangeCount(t.TempDir()); err == nil {
+	ctx := gavelctx.New(context.Background())
+	if _, err := gitChangeCount(ctx, t.TempDir()); err == nil {
 		t.Error("gitChangeCount on a non-git dir = nil error, want error")
 	}
 
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
 	dir := t.TempDir()
-	if out, err := runGit(dir, "init"); err != nil {
-		t.Fatalf("git init: %v\n%s", err, out)
+	for _, args := range [][]string{
+		{"init", "-q", "-b", "main"},
+		{"-c", "user.email=test@example.com", "-c", "user.name=test", "commit", "-q", "--allow-empty", "-m", "initial"},
+	} {
+		if out, err := runGit(dir, args...); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
 	}
 
-	if n, err := gitChangeCount(dir); err != nil || n != 0 {
+	if n, err := gitChangeCount(ctx, dir); err != nil || n != 0 {
 		t.Fatalf("gitChangeCount(clean repo) = (%d, %v), want (0, nil)", n, err)
 	}
 
@@ -374,8 +382,12 @@ func TestGitChangeCount(t *testing.T) {
 			t.Fatalf("write %s: %v", name, err)
 		}
 	}
-	if n, err := gitChangeCount(dir); err != nil || n != 2 {
-		t.Fatalf("gitChangeCount(2 untracked) = (%d, %v), want (2, nil)", n, err)
+	if n, err := gitChangeCount(ctx, dir); err != nil || n != 0 {
+		t.Fatalf("gitChangeCount(memoized clean repo) = (%d, %v), want the memoized (0, nil)", n, err)
+	}
+	ctx.GitState().Invalidate(dir)
+	if n, err := gitChangeCount(ctx, dir); err != nil || n != 2 {
+		t.Fatalf("gitChangeCount(2 untracked, invalidated) = (%d, %v), want (2, nil)", n, err)
 	}
 }
 

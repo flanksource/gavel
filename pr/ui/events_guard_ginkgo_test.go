@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	gavelctx "github.com/flanksource/gavel/context"
 	"github.com/flanksource/gavel/procfile"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -37,7 +38,7 @@ func browserStreamRequest(ctx context.Context, method, url string) *http.Request
 func useProcFixture() map[string]procStatus {
 	fixture := sampleWith(procfile.StatusRunning)
 	original := sharedProcSampler
-	sharedProcSampler = &procSampler{ttl: time.Minute, sample: func() (map[string]procStatus, error) { return fixture, nil }}
+	sharedProcSampler = &procSampler{ttl: time.Minute, sample: func(gavelctx.Context) (map[string]procStatus, error) { return fixture, nil }}
 	DeferCleanup(func() { sharedProcSampler = original })
 	return fixture
 }

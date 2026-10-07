@@ -9,6 +9,7 @@ import (
 
 	gavelgit "github.com/flanksource/gavel/git"
 	"github.com/flanksource/gavel/git/branchmerge"
+	"github.com/flanksource/gavel/git/gitstate"
 	"github.com/flanksource/gavel/github/prcreate"
 )
 
@@ -65,6 +66,8 @@ func (s *Server) handleProjectBranchMerge(w http.ResponseWriter, r *http.Request
 		return
 	}
 	response, err := s.mergeProjectBranch(r.Context(), ref, request)
+	// A failed merge can still have moved refs or removed the worktree.
+	s.context().GitState().Invalidate(ref.dir)
 	if err != nil {
 		respondBranchError(w, err)
 		return
@@ -120,11 +123,12 @@ func refuseDirtyWorktree(ctx context.Context, wt gavelgit.Worktree) error {
 	if wt.Path == "" || wt.Primary {
 		return nil
 	}
-	changes, _, err := projectWorktreeChanges(ctx, wt.Path)
+	// Read live, never memoized: a stale "clean" must not let a merge destroy work.
+	changes, _, err := gitstate.WorktreeChanges(ctx, wt.Path)
 	if err != nil {
 		return err
 	}
-	if changes != (projectGitChanges{}) {
+	if changes != (gitstate.Changes{}) {
 		return fmt.Errorf("%w: %s on %s; commit or discard them first", errBranchWorktreeDirty, wt.Path, wt.Branch)
 	}
 	return nil
@@ -159,6 +163,7 @@ func (s *Server) handleProjectBranchPR(w http.ResponseWriter, r *http.Request) {
 	result, err := prcreate.Create(r.Context(), ref.dir, prcreate.Input{
 		SHAs: commits, Base: baseRef, Draft: request.Draft, Deps: s.projectPRDeps(),
 	})
+	s.context().GitState().Invalidate(ref.dir)
 	if err != nil {
 		respondBranchError(w, err)
 		return

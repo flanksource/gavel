@@ -44,7 +44,7 @@ func (s *Server) sampleProcMetrics() {
 		return
 	}
 	for _, p := range projects {
-		st := projectStatus(p)
+		st := projectStatus(s.context(), p)
 		if !st.Running {
 			continue
 		}

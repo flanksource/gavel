@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { GitBranchInfo, GitWorktree, ProjectGit } from '../types';
-import { dirtyFileCount, projectRefAges, projectRefEntries } from './projectGitView';
+import { dirtyFileCount, gitStateAge, projectRefAges, projectRefEntries } from './projectGitView';
 
 const NOW = new Date('2026-10-04T12:00:00Z');
 const HOURS_AGO_3 = '2026-10-04T09:00:00Z';
@@ -38,6 +38,7 @@ const git: ProjectGit = {
   baseCheckedOut: true,
   worktrees: [primary, linked, clean, detached],
   branches: [branch('feat/x', linked.path, 2, 5, 1), branch('spike', '', 1, 7, 0)],
+  computedAt: '2026-10-05T08:00:00Z',
 };
 
 describe('dirtyFileCount', () => {
@@ -82,6 +83,14 @@ describe('projectRefAges', () => {
 
   it('leaves out a touched age for a clean checkout', () => {
     expect(projectRefAges({ lastCommitAt: DAYS_AGO_2 })).toEqual({ committed: '2d', touched: '' });
+  });
+
+  it.each([
+    ['2026-10-04T11:59:52Z', 'git state 8s ago'],
+    [MINUTES_AGO_5, 'git state 5m ago'],
+    ['2026-10-04T11:59:58Z', 'git state just now'],
+  ])('labels git state computed at %s as "%s"', (computedAt, label) => {
+    expect(gitStateAge(computedAt)).toBe(label);
   });
 
   it("treats Go's zero time (a prunable worktree) as no commit age", () => {

@@ -263,6 +263,7 @@ func (s *Server) startProjectAction(project Project, action projectAction, args 
 		completed.Output = registry.actions[project.Name].Output
 		registry.actions[project.Name] = completed
 		registry.mu.Unlock()
+		s.context().GitState().Invalidate(project.ResolvedDir())
 		s.notifyTestRunSyncer()
 		s.notify()
 		if archiveErr := taskhistory.Archive(project.ResolvedDir(), current.RunID); archiveErr != nil {
@@ -309,10 +310,11 @@ func (s *Server) handleProjectStatus(w http.ResponseWriter, r *http.Request) {
 		respondError(w, statusForProjectErr(err), err.Error())
 		return
 	}
-	workDir, ok := requestWorkDir(w, r, project)
+	workDir, ok := s.requestWorkDir(w, r, project)
 	if !ok {
 		return
 	}
+	// Read live: the detail view shows the actual file list and polls fast during actions.
 	result, err := gatherProjectStatus(workDir, status.Options{NoRepomap: true, NoResults: !includeResults, Context: r.Context()})
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err.Error())

@@ -298,10 +298,12 @@ func (s *Server) continuationRequest(c run.Continuation) (run.Request, error) {
 	if err != nil {
 		return run.Request{}, err
 	}
-	return run.Request{
+	req := run.Request{
 		Provider: c.Provider, Registry: todoRuns(), Todo: c.Todo, Dir: c.Dir,
 		Options: opts, Approvals: true,
-	}, nil
+	}
+	req.OnComplete = s.invalidateGitStateOnComplete(req)
+	return req, nil
 }
 
 // startContinuation resolves and starts a continuation, answering with the same

@@ -114,6 +114,7 @@ func validateProjectOptionPaths(dir string, paths []string) error {
 }
 
 func validateProjectActionFiles(dir string, requested []string) error {
+	// Read live, never memoized: a mutation must validate against the files as they are now.
 	result, err := gatherProjectStatus(dir, status.Options{NoRepomap: true, NoResults: true})
 	if err != nil {
 		return fmt.Errorf("gather project status: %w", err)

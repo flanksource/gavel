@@ -11,6 +11,7 @@ import (
 	"github.com/flanksource/captain/pkg/aiflags"
 	gavelgit "github.com/flanksource/gavel/git"
 	"github.com/flanksource/gavel/git/branchmerge"
+	"github.com/flanksource/gavel/git/gitstate"
 	"github.com/flanksource/gavel/github/prcreate"
 )
 
@@ -42,7 +43,7 @@ func resolveProjectBranch(w http.ResponseWriter, r *http.Request, branch string)
 		respondError(w, http.StatusBadRequest, "branch is required")
 		return projectBranchRef{}, false
 	}
-	if ref.base, err = projectGitBase(ref.dir); err != nil {
+	if ref.base, err = gitstate.Base(ref.dir); err != nil {
 		respondError(w, http.StatusInternalServerError, err.Error())
 		return projectBranchRef{}, false
 	}

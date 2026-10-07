@@ -25,6 +25,7 @@ const git: ProjectGit = {
     lastCommitAt: '2026-10-01T08:00:00Z', touchedAt: '2026-10-04T08:00:00Z',
   }],
   branches: [{ name: 'feat/x', head: 'e4f5a6b', ahead: 2, behind: 0, worktree: '', diff: { commits: 2, files: 3, adds: 10, dels: 4 }, lastCommitAt: '2026-10-02T08:00:00Z' }],
+  computedAt: '2026-10-05T08:00:00Z',
 };
 
 function wrapper() {
@@ -74,6 +75,7 @@ describe('parseProjectGit', () => {
     ['a worktree without a last commit time', { ...git, worktrees: [{ ...git.worktrees[0], lastCommitAt: undefined }] }],
     ['a worktree with a non-string touched time', { ...git, worktrees: [{ ...git.worktrees[0], touchedAt: 7 }] }],
     ['a branch without a last commit time', { ...git, branches: [{ ...git.branches[0], lastCommitAt: undefined }] }],
+    ['a state without the time it was computed', { ...git, computedAt: undefined }],
   ])('rejects %s', (_label, payload) => {
     expect(() => parseProjectGit(payload)).toThrow(/project git/i);
   });
