@@ -71,8 +71,8 @@ func (f *fakeProvider) SaveAttempt(_ context.Context, todo *types.TODO, result *
 	return nil
 }
 
-func (f *fakeProvider) Comment(_ context.Context, _ *types.TODO, body string) error {
-	f.comments = append(f.comments, body)
+func (f *fakeProvider) Comment(_ context.Context, _ *types.TODO, comment todos.CommentRequest) error {
+	f.comments = append(f.comments, comment.Body)
 	return nil
 }
 

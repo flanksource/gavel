@@ -41,6 +41,9 @@ type RunOptions struct {
 	Message string
 	// Concurrent admits the run alongside a live one the caller has confirmed.
 	Concurrent bool
+	// ReuseBranch continues on the branch the todo's previous run step left
+	// behind instead of a fresh worktree. It applies to a run step only.
+	ReuseBranch bool
 	// Batch are the refs of every todo in the request this run belongs to, so a
 	// triage render can mark the backlog entries whose verdicts are being decided
 	// alongside this one. Empty for a single-todo run.
@@ -146,6 +149,9 @@ func (h *Host) Dispatch(ctx context.Context, todo *types.TODO, resolution *Resol
 		return nil, fmt.Errorf("step %s: run %s was not admitted: %w", step.Name, admission.PromptRunID, d.err)
 	}
 	outcome := h.collect(step, prepared, d, start)
+	if input.triageNew != nil {
+		outcome.Execution.TriageNewApplier = input.triageNew
+	}
 	outcome.Admission = admission
 	outcome.Request = prepared.request
 	outcome.VerifyTarget = prepared.verifyTarget
@@ -250,6 +256,11 @@ func (h *Host) prepare(ctx context.Context, todo *types.TODO, step Step, lc Cont
 		batch: opts.Batch,
 	}
 	prepared.agent, _ = claude.ResolveAgent(spec.Name)
+	if opts.ReuseBranch {
+		if err := h.applyReusedBranch(ctx, todo, step, prepared); err != nil {
+			return nil, err
+		}
+	}
 	if class != types.ModeVerify {
 		if err := h.render(ctx, todo, step, lc, prepared); err != nil {
 			return nil, err
@@ -297,6 +308,24 @@ func (h *Host) render(ctx context.Context, todo *types.TODO, step Step, lc Conte
 	if prepared.definition.Envelope == todoprompt.EnvelopeTriage {
 		backlog = h.backlog(ctx, todo, prepared.batch)
 		labelTaxonomy = h.labelTaxonomy(ctx)
+	}
+	if prepared.definition.Envelope == todoprompt.EnvelopeTriageNew {
+		candidates, err := h.Provider.List(ctx, todos.DiscoveryFilters{})
+		if err != nil {
+			return fmt.Errorf("triage.new backlog: %w", err)
+		}
+		backlog = todos.BuildBacklogIndex(candidates, []*types.TODO{todo}, nil)
+		definitions, ok := h.Provider.(todos.LabelDefinitionProvider)
+		if !ok {
+			return fmt.Errorf("triage.new requires a workspace label taxonomy")
+		}
+		resolved, err := definitions.LabelDefinitions(ctx)
+		if err != nil {
+			return fmt.Errorf("triage.new taxonomy: %w", err)
+		}
+		for _, label := range resolved {
+			labelTaxonomy += fmt.Sprintf("- `%s` — %s\n", label.Name, label.Description)
+		}
 	}
 	req, _, err := todoprompt.Render([]*types.TODO{todo}, todoprompt.Options{
 		WorkDir:      prepared.workDir,
@@ -370,7 +399,7 @@ func (h *Host) runStartCommenter(exec *todos.ExecutorContext, todo *types.TODO, 
 		}
 		persistCtx, cancel := todos.PersistenceContext(exec)
 		defer cancel()
-		if err := h.Provider.Comment(persistCtx, todo, todos.RenderRunStartComment(meta)); err != nil {
+		if err := h.Provider.Comment(persistCtx, todo, todos.CommentRequest{Body: todos.RenderRunStartComment(meta)}); err != nil {
 			exec.Logger.Errorf("failed to comment TODO run metadata: %v", err)
 		}
 		commented = true

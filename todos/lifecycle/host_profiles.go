@@ -125,6 +125,8 @@ func stepPromptSpec(cfg verify.TodosConfig, step string) verify.PromptSpec {
 		return cfg.Plan
 	case "triage":
 		return cfg.Triage
+	case "triage.new":
+		return cfg.TriageNew
 	case StepVerify:
 		return cfg.Verify
 	default:

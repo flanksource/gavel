@@ -232,7 +232,7 @@ func classOf(step Step) types.RunMode {
 		return types.ModeVerify
 	}
 	switch step.EnvelopeOrDefault() {
-	case EnvelopePlan, EnvelopeTriage:
+	case EnvelopePlan, EnvelopeTriage, EnvelopeTriageNew:
 		return types.ModePlan
 	}
 	return types.ModeRun

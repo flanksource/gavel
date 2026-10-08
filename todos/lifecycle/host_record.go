@@ -110,6 +110,24 @@ func (h *Host) recordedOutcome(runCtx context.Context, step Step, prepared *prep
 		execution := *d.execution
 		d.execution = &execution
 		collected := h.collect(step, prepared, d, start)
+		if env := collected.Execution.TriageNew; env != nil && env.EndStatus == types.EndCompleted {
+			var validationErr error
+			if input.triageNew == nil {
+				validationErr = fmt.Errorf("triage.new result has no approval coordinator")
+			} else {
+				todo, getErr := h.Provider.Get(runCtx, input.triageNew.SourceID)
+				validationErr = getErr
+				if validationErr == nil {
+					validationErr = input.triageNew.Validate(runCtx, todo, env)
+				}
+			}
+			if validationErr != nil {
+				input.execution.ErrorMessage = validationErr.Error()
+				collected.Execution.Success = false
+				collected.Execution.EndStatus = types.EndFailed
+				collected.Execution.ErrorMessage = validationErr.Error()
+			}
+		}
 		mapped := RunOutcome(collected.Execution, prepared.class == types.ModeVerify)
 		if base.State != captaindb.PromptRunStateSucceeded {
 			mapped.State, mapped.Phase = base.State, base.Phase

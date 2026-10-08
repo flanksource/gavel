@@ -46,6 +46,20 @@ func (h *Host) OnOutcome(ctx context.Context, todo *types.TODO, step Step, outco
 	// An event that said `keep` while the todo moved to completed would record a
 	// transition that never happened.
 	recorded := status
+	var triageErr error
+	if execution.Success && execution.TriageNew != nil && execution.EndStatus == types.EndCompleted {
+		if execution.TriageNewApplier == nil {
+			return fmt.Errorf("triage.new result has no approval coordinator")
+		}
+		if err := execution.TriageNewApplier.Apply(ctx, todo, execution.TriageNew); err != nil {
+			triageErr = err
+			execution.Success, execution.EndStatus, execution.ErrorMessage = false, types.EndFailed, err.Error()
+			status, recorded = string(types.StatusFailed), string(types.StatusFailed)
+		}
+		if status == OutcomeKeep {
+			recorded = string(todo.Status)
+		}
+	}
 	if execution.Triage != nil {
 		before := todo.Status
 		applied, err := h.applyTriage(persistCtx, todo, execution.Triage)
@@ -66,7 +80,7 @@ func (h *Host) OnOutcome(ctx context.Context, todo *types.TODO, step Step, outco
 	if err := events.AppendEvent(persistCtx, todo, outcomeEvent(step, outcome, recorded)); err != nil {
 		return fmt.Errorf("record lifecycle outcome: %w", err)
 	}
-	return nil
+	return triageErr
 }
 
 // applyTriage writes the verdict, or — when the host is previewing and the

@@ -141,6 +141,7 @@ func (h *Host) collectEnvelope(execution *todos.ExecutionResult, facts *StepResu
 	execution.Questions = env.Questions
 	execution.Plan = env.Plan
 	execution.Triage = env.Triage
+	execution.TriageNew = env.TriageNew
 	facts.Envelope = Envelope{Summary: env.Summary, EndStatus: string(env.EndStatus), Extra: structuredFields(out.StructuredData)}
 	facts.Questions = questionVars(env.Questions)
 	if env.Plan != nil {
@@ -159,8 +160,9 @@ func (h *Host) collectEnvelope(execution *todos.ExecutionResult, facts *StepResu
 
 type envelope struct {
 	types.ResultEnvelope
-	Plan   *types.PlanResult
-	Triage *types.TriageEnvelope
+	Plan      *types.PlanResult
+	Triage    *types.TriageEnvelope
+	TriageNew *types.TriageNewEnvelope
 }
 
 // responseText is whatever the agent actually returned, in the same precedence
@@ -257,6 +259,12 @@ func parseEnvelope(kind todoprompt.EnvelopeKind, text string) (*envelope, error)
 			return nil, err
 		}
 		return &envelope{ResultEnvelope: parsed.ResultEnvelope, Triage: parsed}, nil
+	case todoprompt.EnvelopeTriageNew:
+		parsed, err := captainai.ParseStructured(text, (*types.TriageNewEnvelope).Validate)
+		if err != nil {
+			return nil, err
+		}
+		return &envelope{ResultEnvelope: parsed.ResultEnvelope, TriageNew: parsed}, nil
 	default:
 		parsed, err := captainai.ParseStructured(text, (*types.ResultEnvelope).Validate)
 		if err != nil {
