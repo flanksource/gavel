@@ -116,31 +116,58 @@ var _ = Describe("ListWorktrees", func() {
 	})
 })
 
-var _ = Describe("UnmergedBranches", func() {
-	It("returns branches with commits not in base, with ahead/behind, worktree, diff footprint and last commit time", func() {
+var _ = Describe("ListBranches", func() {
+	It("lists every local branch with its head, worktree and last commit time", func() {
 		r := newWorktreeRepo()
 
-		branches, err := gavelgit.UnmergedBranches(r.root, "main")
+		branches, err := gavelgit.ListBranches(r.root)
 
 		Expect(err).NotTo(HaveOccurred())
-		Expect(branches).To(Equal([]gavelgit.BranchInfo{
-			{
-				Name: "feature", Head: r.featureHead, Ahead: 2, Behind: 1, Worktree: r.featureWT,
-				Diff:         gavelgit.DiffStat{Commits: 2, Files: 2, Adds: 4, Dels: 0},
-				LastCommitAt: committedAt(r.root, r.featureHead),
-			},
-			{
-				Name: "solo", Head: r.soloHead, Ahead: 1, Behind: 1,
-				Diff:         gavelgit.DiffStat{Commits: 1, Files: 1, Adds: 1, Dels: 1},
-				LastCommitAt: committedAt(r.root, r.soloHead),
-			},
+		Expect(branches).To(Equal([]gavelgit.BranchRef{
+			{Name: "feature", Head: r.featureHead, Worktree: r.featureWT, LastCommitAt: committedAt(r.root, r.featureHead)},
+			{Name: "main", Head: r.mainHead, Worktree: r.root, LastCommitAt: committedAt(r.root, r.mainHead)},
+			{Name: "merged", Head: r.mainHead, LastCommitAt: committedAt(r.root, r.mainHead)},
+			{Name: "solo", Head: r.soloHead, LastCommitAt: committedAt(r.root, r.soloHead)},
+		}))
+	})
+})
+
+var _ = Describe("CompareRange", func() {
+	It("measures a diverged branch against base: ahead, behind, merge base and footprint", func() {
+		r := newWorktreeRepo()
+
+		compare, err := gavelgit.CompareRange(r.root, r.mainHead, r.featureHead)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(compare).To(Equal(gavelgit.RangeCompare{
+			MergeBase: r.base, Ahead: 2, Behind: 1,
+			Diff: gavelgit.DiffStat{Commits: 2, Files: 2, Adds: 4, Dels: 0},
 		}))
 	})
 
-	It("fails when the base branch does not exist locally", func() {
+	It("reports no footprint for a head already contained in base", func() {
 		r := newWorktreeRepo()
-		_, err := gavelgit.UnmergedBranches(r.root, "trunk")
-		Expect(err).To(MatchError(ContainSubstring(`base branch "trunk"`)))
+
+		compare, err := gavelgit.CompareRange(r.root, r.mainHead, r.base)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(compare).To(Equal(gavelgit.RangeCompare{MergeBase: r.base, Ahead: 0, Behind: 1}))
+	})
+
+	It("rejects a ref name in place of a commit hash", func() {
+		r := newWorktreeRepo()
+		_, err := gavelgit.CompareRange(r.root, "main", r.featureHead)
+		Expect(err).To(MatchError(ContainSubstring(`invalid commit hash "main"`)))
+	})
+
+	It("reports a commit missing from the repository as ErrCommitNotFound", func() {
+		r := newWorktreeRepo()
+		const gone = "feedfacefeedfacefeedfacefeedfacefeedface"
+
+		_, err := gavelgit.CompareRange(r.root, r.mainHead, gone)
+
+		Expect(err).To(MatchError(gavelgit.ErrCommitNotFound))
+		Expect(err).To(MatchError(ContainSubstring(gone)))
 	})
 })
 

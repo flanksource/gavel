@@ -17,10 +17,15 @@ import (
 	"github.com/flanksource/gavel/verify"
 )
 
-func runGitStatus(ctx context.Context, workDir string, expandUntracked bool) ([]byte, error) {
+// withGitConfig prefixes args with the global git options in gitArgs.
+func withGitConfig(gitArgs []string, args ...string) []string {
+	return append(append(make([]string, 0, len(gitArgs)+len(args)), gitArgs...), args...)
+}
+
+func runGitStatus(ctx context.Context, workDir string, gitConfig []string, expandUntracked bool) ([]byte, error) {
 	stopGit := rpchttp.Track(ctx, "git")
 	defer stopGit()
-	args := []string{"status", "--porcelain=v1", "-z"}
+	args := withGitConfig(gitConfig, "status", "--porcelain=v1", "-z")
 	if expandUntracked {
 		args = append(args, "--untracked-files=all")
 	}
@@ -35,10 +40,10 @@ func runGitStatus(ctx context.Context, workDir string, expandUntracked bool) ([]
 	return out, nil
 }
 
-func currentBranch(ctx context.Context, workDir string) (string, error) {
+func currentBranch(ctx context.Context, workDir string, gitConfig []string) (string, error) {
 	stopGit := rpchttp.Track(ctx, "git")
 	defer stopGit()
-	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--abbrev-ref", "HEAD")
+	cmd := exec.CommandContext(ctx, "git", withGitConfig(gitConfig, "rev-parse", "--abbrev-ref", "HEAD")...)
 	cmd.Dir = workDir
 	out, err := cmd.Output()
 	if err != nil {
@@ -240,12 +245,12 @@ func isConflictPair(staged, work byte) bool {
 // enrichWithLineCounts fills in Adds/Dels for each FileStatus by combining
 // staged and unstaged numstat output, and by counting lines of any untracked
 // file directly (git numstat does not report untracked content).
-func enrichWithLineCounts(ctx context.Context, workDir string, files []FileStatus) error {
-	staged, err := numstat(ctx, workDir, true)
+func enrichWithLineCounts(ctx context.Context, workDir string, gitConfig []string, files []FileStatus) error {
+	staged, err := numstat(ctx, workDir, gitConfig, true)
 	if err != nil {
 		return err
 	}
-	unstaged, err := numstat(ctx, workDir, false)
+	unstaged, err := numstat(ctx, workDir, gitConfig, false)
 	if err != nil {
 		return err
 	}
@@ -275,8 +280,8 @@ type numstatEntry struct {
 	dels int
 }
 
-func numstat(ctx context.Context, workDir string, cached bool) (map[string]numstatEntry, error) {
-	args := []string{"diff", "--numstat", "-z", "--find-renames"}
+func numstat(ctx context.Context, workDir string, gitConfig []string, cached bool) (map[string]numstatEntry, error) {
+	args := withGitConfig(gitConfig, "diff", "--numstat", "-z", "--find-renames")
 	if cached {
 		args = append(args, "--cached")
 	}

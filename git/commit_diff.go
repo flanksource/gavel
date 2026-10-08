@@ -15,6 +15,11 @@ type CommitDiffOptions struct {
 	Base string
 	Head string
 	File string
+	// NoScopes leaves CommitFiles' Language and Scopes empty, for a caller that
+	// caches the file list by commits and classifies it at read time with
+	// EnrichCommitFileScopes: the classification follows repomap config, not
+	// the commits.
+	NoScopes bool
 }
 
 // CommitDiffResult is a plain unified diff (no colour, no diffstat) ready for a
@@ -35,7 +40,7 @@ func (o CommitDiffOptions) Validate() error {
 }
 
 func (o CommitDiffOptions) normalize() (CommitDiffOptions, error) {
-	o = CommitDiffOptions{Base: strings.TrimSpace(o.Base), Head: strings.TrimSpace(o.Head), File: strings.TrimSpace(o.File)}
+	o = CommitDiffOptions{Base: strings.TrimSpace(o.Base), Head: strings.TrimSpace(o.Head), File: strings.TrimSpace(o.File), NoScopes: o.NoScopes}
 	if !IsValidCommitHash(o.Head) {
 		return o, fmt.Errorf("invalid commit hash %q", o.Head)
 	}

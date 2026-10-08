@@ -113,8 +113,13 @@ type Options struct {
 	// Verbose is threaded onto Result.Verbose so the renderer can expand the
 	// Problems section. Set from the global `-v` count by the CLI.
 	Verbose bool
-	Context context.Context `json:"-"`
-	Summary *SummaryOptions `json:"-"`
+	// GitConfig are global git options placed before every git subcommand,
+	// e.g. --no-optional-locks and -c core.fsmonitor=true so a background
+	// poller reads status through git's file monitor without taking the
+	// index lock.
+	GitConfig []string        `json:"-"`
+	Context   context.Context `json:"-"`
+	Summary   *SummaryOptions `json:"-"`
 }
 
 // fetchFileMapFunc is the indirection point for repomap lookups so tests can
@@ -154,12 +159,12 @@ func GatherBase(workDir string, opts Options) (*Result, error) {
 		ctx = context.Background()
 	}
 
-	branch, err := currentBranch(ctx, workDir)
+	branch, err := currentBranch(ctx, workDir, opts.GitConfig)
 	if err != nil {
 		return nil, err
 	}
 
-	raw, err := runGitStatus(ctx, workDir, len(cfg.Commit.GitIgnore) > 0)
+	raw, err := runGitStatus(ctx, workDir, opts.GitConfig, len(cfg.Commit.GitIgnore) > 0)
 	if err != nil {
 		return nil, err
 	}
@@ -181,7 +186,7 @@ func GatherBase(workDir string, opts Options) (*Result, error) {
 		return nil, err
 	}
 
-	if err := enrichWithLineCounts(ctx, workDir, files); err != nil {
+	if err := enrichWithLineCounts(ctx, workDir, opts.GitConfig, files); err != nil {
 		return nil, err
 	}
 

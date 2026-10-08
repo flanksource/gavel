@@ -96,6 +96,20 @@ var _ = Describe("CommitDiff and CommitFiles", func() {
 		Expect(paths(files)).To(ConsistOf("docs/b.md"))
 	})
 
+	It("leaves repomap language and scopes to EnrichCommitFileScopes when NoScopes is set", func() {
+		enriched, err := gavelgit.CommitFiles(repo, gavelgit.CommitDiffOptions{Head: first})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(enriched).To(HaveLen(1))
+		Expect(enriched[0].Language).To(Equal("go"))
+
+		bare, err := gavelgit.CommitFiles(repo, gavelgit.CommitDiffOptions{Head: first, NoScopes: true})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(bare).To(Equal([]gavelgit.CommitFile{{Path: "pkg/a.go", Status: "added", Adds: 1}}))
+
+		gavelgit.EnrichCommitFileScopes(repo, bare)
+		Expect(bare).To(Equal(enriched))
+	})
+
 	It("flags a diff as binary only when every file in it is binary", func() {
 		head := commit("feat: logo", map[string]string{"logo.png": "\x89PNG\x00\x01\x02", "notes.txt": "notes\n"})
 		image, err := gavelgit.CommitDiff(repo, gavelgit.CommitDiffOptions{Head: head, File: "logo.png"})

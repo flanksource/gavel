@@ -13,29 +13,30 @@ import (
 // the remote.
 var ErrCommitNotFound = errors.New("commit not found in the local repository")
 
-// LandedDiffStat is the footprint of the n commits ending at tip, tip~n..tip:
-// the work a landing carried onto a branch, measured without the run's own
-// (possibly deleted and garbage-collected) branch. A tip whose object is not in
-// the repository is ErrCommitNotFound; any other git failure, including a tip
-// with fewer than n ancestors, is surfaced as is.
-func LandedDiffStat(path, tip string, n int) (DiffStat, error) {
+// LandedBase is tip~n, the commit below the n commits a landing carried onto a
+// branch, as a full hash: LandedBase..tip is the landed work, measured without
+// the run's own (possibly deleted and garbage-collected) branch. Both commits
+// are immutable, so the result is too. A tip whose object is not in the
+// repository is ErrCommitNotFound; any other git failure, including a tip with
+// fewer than n ancestors, is surfaced as is.
+func LandedBase(path, tip string, n int) (string, error) {
 	if !IsValidCommitHash(tip) {
-		return DiffStat{}, fmt.Errorf("invalid commit hash %q", tip)
+		return "", fmt.Errorf("invalid commit hash %q", tip)
 	}
 	if n < 1 {
-		return DiffStat{}, fmt.Errorf("landed diff of %s needs at least one commit, got %d", tip, n)
+		return "", fmt.Errorf("landed diff of %s needs at least one commit, got %d", tip, n)
 	}
 	// `git cat-file -e` exits 1 for a missing object and 128 for anything else.
 	if _, err := gitOutput(path, "cat-file", "-e", tip); err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
-			return DiffStat{}, fmt.Errorf("%w: %s in %s", ErrCommitNotFound, tip, path)
+			return "", fmt.Errorf("%w: %s in %s", ErrCommitNotFound, tip, path)
 		}
-		return DiffStat{}, err
+		return "", err
 	}
 	from, err := gitOutput(path, "rev-parse", "--verify", "--end-of-options", tip+"~"+strconv.Itoa(n)+"^{commit}")
 	if err != nil {
-		return DiffStat{}, err
+		return "", err
 	}
-	return RangeDiffStat(path, strings.TrimSpace(string(from)), tip)
+	return strings.TrimSpace(string(from)), nil
 }

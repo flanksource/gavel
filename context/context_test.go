@@ -2,6 +2,7 @@ package context_test
 
 import (
 	gocontext "context"
+	"errors"
 	"testing"
 	"time"
 
@@ -11,8 +12,9 @@ import (
 
 type requestKey struct{}
 
-func TestDerivedContextsShareGitState(t *testing.T) {
-	root := gavelctx.New(gocontext.Background())
+func TestDerivedContextsShareGitTracker(t *testing.T) {
+	tracker := gitstate.NewTracker(gitstate.Options{})
+	root := gavelctx.New(gocontext.Background(), gavelctx.WithGitTracker(tracker))
 	request, cancel := gocontext.WithCancel(gocontext.WithValue(gocontext.Background(), requestKey{}, "r1"))
 	defer cancel()
 
@@ -22,8 +24,8 @@ func TestDerivedContextsShareGitState(t *testing.T) {
 	defer cancelTimed()
 
 	for name, derived := range map[string]gavelctx.Context{"Wrap": wrapped, "WithValue": valued, "WithTimeout": timed} {
-		if derived.GitState() != root.GitState() {
-			t.Errorf("%s: GitState() is a different instance from the root's", name)
+		if got, err := derived.GitTracker(); err != nil || got != tracker {
+			t.Errorf("%s: GitTracker() = %p, %v; want the root's %p", name, got, err, tracker)
 		}
 	}
 	if wrapped.Value(requestKey{}) != "r1" {
@@ -38,18 +40,11 @@ func TestDerivedContextsShareGitState(t *testing.T) {
 	}
 }
 
-func TestWithGitStateOverridesTheService(t *testing.T) {
-	fake := gitstate.New(gitstate.Options{Compute: func(gocontext.Context, string) (gitstate.State, error) {
-		return gitstate.State{Base: "fake"}, nil
-	}})
-
-	ctx := gavelctx.New(gocontext.Background(), gavelctx.WithGitState(fake))
-
-	if ctx.GitState() != fake {
-		t.Fatal("GitState() is not the injected service")
-	}
-	if ctx.Wrap(gocontext.Background()).GitState() != fake {
-		t.Fatal("a wrapped context lost the injected service")
+func TestGitTrackerMissingIsAnError(t *testing.T) {
+	for name, ctx := range map[string]gavelctx.Context{"zero": {}, "New without tracker": gavelctx.New(gocontext.Background())} {
+		if _, err := ctx.GitTracker(); !errors.Is(err, gavelctx.ErrNoGitTracker) {
+			t.Errorf("%s: GitTracker() error = %v, want ErrNoGitTracker", name, err)
+		}
 	}
 }
 

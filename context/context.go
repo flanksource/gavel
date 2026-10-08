@@ -6,11 +6,16 @@ package context
 
 import (
 	gocontext "context"
+	"errors"
 	"time"
 
 	commonscontext "github.com/flanksource/commons/context"
 	"github.com/flanksource/gavel/git/gitstate"
 )
+
+// ErrNoGitTracker is returned by GitTracker when the process runs without the
+// database the git state tracker keeps its rows in.
+var ErrNoGitTracker = errors.New("git state tracking requires PostgreSQL; set GAVEL_DB_DSN or configure embedded PostgreSQL with gavel system install --embedded")
 
 type Context struct {
 	commonscontext.Context
@@ -18,26 +23,21 @@ type Context struct {
 }
 
 type services struct {
-	gitState *gitstate.Service
+	gitTracker *gitstate.Tracker
 }
 
 type Option func(*services)
 
-// WithGitState replaces the default git state service, e.g. with one built on
-// a fake Compute.
-func WithGitState(s *gitstate.Service) Option {
-	return func(svc *services) { svc.gitState = s }
+// WithGitTracker sets the process's git state tracker.
+func WithGitTracker(t *gitstate.Tracker) Option {
+	return func(svc *services) { svc.gitTracker = t }
 }
 
-// New creates a root Context over base. Services it builds run their
-// background work on base, so they stop when base is canceled.
+// New creates a root Context over base.
 func New(base gocontext.Context, opts ...Option) Context {
 	ctx := Context{Context: commonscontext.NewContext(base), services: &services{}}
 	for _, opt := range opts {
 		opt(ctx.services)
-	}
-	if ctx.services.gitState == nil {
-		ctx.services.gitState = gitstate.New(gitstate.Options{Context: base})
 	}
 	return ctx
 }
@@ -64,10 +64,11 @@ func (c Context) WithTimeout(timeout time.Duration) (Context, gocontext.CancelFu
 	return Context{Context: inner, services: c.services}, cancel
 }
 
-// GitState is the process-wide memoized git state service.
-func (c Context) GitState() *gitstate.Service {
-	if c.services == nil {
-		panic("gavel context has no services: create it with context.New")
+// GitTracker is the process-wide git state tracker, ErrNoGitTracker when the
+// process has none.
+func (c Context) GitTracker() (*gitstate.Tracker, error) {
+	if c.services == nil || c.services.gitTracker == nil {
+		return nil, ErrNoGitTracker
 	}
-	return c.services.gitState
+	return c.services.gitTracker, nil
 }

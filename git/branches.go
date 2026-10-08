@@ -22,42 +22,79 @@ type BranchInfo struct {
 	LastCommitAt time.Time `json:"lastCommitAt"`
 }
 
-// UnmergedBranches lists the local branches of repo, other than base, that
-// have at least one commit not reachable from base. base is a local branch
-// name; a base that does not exist is an error.
-func UnmergedBranches(repo, base string) ([]BranchInfo, error) {
-	if _, err := gitOutput(repo, "rev-parse", "--verify", "--quiet", "refs/heads/"+base); err != nil {
-		return nil, fmt.Errorf("base branch %q not found in %s: %w", base, repo, err)
-	}
+// BranchRef is one local branch as `git for-each-ref refs/heads` lists it:
+// everything about a branch that is read from its ref alone, without
+// comparing it to another commit.
+type BranchRef struct {
+	Name         string
+	Head         string
+	Worktree     string
+	LastCommitAt time.Time
+}
+
+// ListBranches lists every local branch of repo, sorted by name.
+func ListBranches(repo string) ([]BranchRef, error) {
 	out, err := gitOutput(repo, "for-each-ref", "--format=%(refname:short)%00%(objectname)%00%(worktreepath)%00%(committerdate:iso-strict)", "refs/heads")
 	if err != nil {
 		return nil, err
 	}
-	var branches []BranchInfo
+	var branches []BranchRef
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line == "" {
+			continue
+		}
 		fields := strings.Split(line, "\x00")
 		if len(fields) != 4 {
 			return nil, fmt.Errorf("git for-each-ref in %s: unexpected line %q", repo, line)
 		}
-		if fields[0] == base {
-			continue
-		}
-		branch := BranchInfo{Name: fields[0], Head: fields[1], Worktree: fields[2]}
+		branch := BranchRef{Name: fields[0], Head: fields[1], Worktree: fields[2]}
 		if branch.LastCommitAt, err = parseCommitTime(fields[3]); err != nil {
 			return nil, fmt.Errorf("branch %s in %s: %w", branch.Name, repo, err)
-		}
-		if branch.Behind, branch.Ahead, err = aheadBehind(repo, base, branch.Name); err != nil {
-			return nil, err
-		}
-		if branch.Ahead == 0 {
-			continue
-		}
-		if branch.Diff, err = branchDiffStat(repo, base, branch.Head); err != nil {
-			return nil, err
 		}
 		branches = append(branches, branch)
 	}
 	return branches, nil
+}
+
+// RangeCompare is head measured against base: the commits only in head
+// (Ahead) and only in base (Behind), their best common ancestor, and the
+// footprint of MergeBase..head. Diff is zero when head has nothing base lacks.
+// It is a pure function of the two commits, so it can be cached by them.
+type RangeCompare struct {
+	MergeBase string
+	Ahead     int
+	Behind    int
+	Diff      DiffStat
+}
+
+// CompareRange compares the commit head against the commit base. Both must be
+// full commit hashes; neither is resolved as a ref. A hash naming no commit in
+// repo is ErrCommitNotFound.
+func CompareRange(repo, base, head string) (RangeCompare, error) {
+	for _, sha := range []string{base, head} {
+		if !IsValidCommitHash(sha) {
+			return RangeCompare{}, fmt.Errorf("invalid commit hash %q", sha)
+		}
+		if err := requireCommit(repo, sha); err != nil {
+			return RangeCompare{}, err
+		}
+	}
+	behind, ahead, err := aheadBehind(repo, base, head)
+	if err != nil {
+		return RangeCompare{}, err
+	}
+	mergeBase, err := MergeBase(repo, base, head)
+	if err != nil {
+		return RangeCompare{}, fmt.Errorf("merge base of %s and %s in %s: %w", base, head, repo, err)
+	}
+	compare := RangeCompare{MergeBase: mergeBase, Ahead: ahead, Behind: behind}
+	if ahead == 0 {
+		return compare, nil
+	}
+	if compare.Diff, err = RangeDiffStat(repo, mergeBase, head); err != nil {
+		return RangeCompare{}, err
+	}
+	return compare, nil
 }
 
 // CommitTime is the committer date of rev in repo, in UTC.
@@ -86,24 +123,25 @@ func MergeBase(repo, a, b string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-func branchDiffStat(repo, base, head string) (DiffStat, error) {
-	mergeBase, err := MergeBase(repo, "refs/heads/"+base, head)
+// RevParse resolves rev to a full commit hash.
+func RevParse(repo, rev string) (string, error) {
+	out, err := gitOutput(repo, "rev-parse", "--verify", "--quiet", "--end-of-options", rev+"^{commit}")
 	if err != nil {
-		return DiffStat{}, err
+		return "", fmt.Errorf("resolve %q in %s: %w", rev, repo, err)
 	}
-	return RangeDiffStat(repo, mergeBase, head)
+	return strings.TrimSpace(string(out)), nil
 }
 
-// aheadBehind counts the commits only in base (behind) and only in branch
+// aheadBehind counts the commits only in base (behind) and only in head
 // (ahead).
-func aheadBehind(repo, base, branch string) (behind, ahead int, err error) {
-	out, err := gitOutput(repo, "rev-list", "--left-right", "--count", "refs/heads/"+base+"...refs/heads/"+branch)
+func aheadBehind(repo, base, head string) (behind, ahead int, err error) {
+	out, err := gitOutput(repo, "rev-list", "--left-right", "--count", base+"..."+head)
 	if err != nil {
 		return 0, 0, err
 	}
 	fields := strings.Fields(string(out))
 	if len(fields) != 2 {
-		return 0, 0, fmt.Errorf("git rev-list --left-right --count %s...%s in %s: unexpected output %q", base, branch, repo, out)
+		return 0, 0, fmt.Errorf("git rev-list --left-right --count %s...%s in %s: unexpected output %q", base, head, repo, out)
 	}
 	if behind, err = strconv.Atoi(fields[0]); err != nil {
 		return 0, 0, fmt.Errorf("parse behind count %q: %w", fields[0], err)

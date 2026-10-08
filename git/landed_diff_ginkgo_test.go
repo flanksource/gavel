@@ -11,7 +11,7 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-var _ = Describe("LandedDiffStat", func() {
+var _ = Describe("LandedBase", func() {
 	var dir string
 	git := func(args ...string) string {
 		cmd := exec.Command("git", args...)
@@ -34,33 +34,30 @@ var _ = Describe("LandedDiffStat", func() {
 		git("config", "commit.gpgsign", "false")
 	})
 
-	It("diffs the last n commits ending at the landed tip", func() {
-		commit("base.txt", "base\n", "chore: base")
+	It("is the commit n first-parent steps below the landed tip", func() {
+		base := commit("base.txt", "base\n", "chore: base")
 		commit("a.txt", "a1\na2\n", "feat: a")
 		tip := commit("a.txt", "a1\n", "fix: trim a")
 
-		stat, err := gavelgit.LandedDiffStat(dir, tip, 2)
-
-		Expect(err).NotTo(HaveOccurred())
-		Expect(stat).To(Equal(gavelgit.DiffStat{Commits: 2, Files: 1, Adds: 1, Dels: 0}))
+		Expect(gavelgit.LandedBase(dir, tip, 2)).To(Equal(base))
 	})
 
 	It("reports ErrCommitNotFound when the tip is not in the repository", func() {
 		commit("base.txt", "base\n", "chore: base")
-		_, err := gavelgit.LandedDiffStat(dir, "feedfacefeedfacefeedfacefeedfacefeedface", 1)
+		_, err := gavelgit.LandedBase(dir, "feedfacefeedfacefeedfacefeedfacefeedface", 1)
 		Expect(err).To(MatchError(gavelgit.ErrCommitNotFound))
 	})
 
 	It("surfaces a git failure when the tip has fewer ancestors than n", func() {
 		tip := commit("a.txt", "a\n", "feat: a")
-		_, err := gavelgit.LandedDiffStat(dir, tip, 3)
+		_, err := gavelgit.LandedBase(dir, tip, 3)
 		Expect(err).To(HaveOccurred())
 		Expect(err).NotTo(MatchError(gavelgit.ErrCommitNotFound))
 		Expect(err).To(MatchError(ContainSubstring(tip + "~3")))
 	})
 
 	DescribeTable("rejects input before running git", func(tip string, n int, message string) {
-		_, err := gavelgit.LandedDiffStat(dir, tip, n)
+		_, err := gavelgit.LandedBase(dir, tip, n)
 		Expect(err).To(MatchError(ContainSubstring(message)))
 	},
 		Entry("a value that is not a commit hash", "--all", 1, `invalid commit hash "--all"`),
