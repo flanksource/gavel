@@ -1,6 +1,7 @@
-// Package gitstate computes a project repository's git state relative to its
-// base branch — worktrees, their uncommitted changes and the unmerged branches —
-// and memoizes it per project directory (see Service).
+// Package gitstate keeps a project repository's git state relative to its base
+// branch — worktrees, their uncommitted changes and the unmerged branches — in
+// PostgreSQL (see Store), current through a Tracker that rescans
+// incrementally, so the dashboard's navigation reads never run git.
 package gitstate
 
 import (
@@ -43,19 +44,27 @@ type Worktree struct {
 	// TouchedAt is the newest modification time among the worktree's
 	// uncommitted files; nil when it has none.
 	TouchedAt *time.Time `json:"touchedAt,omitempty"`
+	// StatusError is why the last status scan failed; Changes are then from
+	// the last scan that succeeded.
+	StatusError string `json:"statusError,omitempty"`
 }
 
 // State is the git state of a project's repository relative to its base
 // branch. CurrentBranch and BaseCheckedOut describe the primary checkout, which
-// is where branches merge into. ComputedAt is when the computation started, so
-// a reader can tell how old a memoized state is.
+// is where branches merge into. ComputedAt is when its least recently scanned
+// part was scanned; Generation advances on every change. Error is why the last
+// ref scan failed, the rest then being from the last scan that succeeded.
 type State struct {
-	Base           string                `json:"base"`
+	Base string `json:"base"`
+	// BaseSHA is the tip of Base the branches were compared against.
+	BaseSHA        string                `json:"baseSha"`
 	CurrentBranch  string                `json:"currentBranch"`
 	BaseCheckedOut bool                  `json:"baseCheckedOut"`
 	Worktrees      []Worktree            `json:"worktrees"`
 	Branches       []gavelgit.BranchInfo `json:"branches"`
 	ComputedAt     time.Time             `json:"computedAt"`
+	Generation     int64                 `json:"generation"`
+	Error          string                `json:"error,omitempty"`
 }
 
 // Summary is one project's row of /api/projects/git-summary: the unmerged and
@@ -73,7 +82,7 @@ type Summary struct {
 }
 
 func (state State) Summary(name string) Summary {
-	summary := Summary{Name: name, Base: state.Base, Branches: len(state.Branches)}
+	summary := Summary{Name: name, Base: state.Base, Branches: len(state.Branches), Error: state.Error}
 	for _, wt := range state.Worktrees {
 		if !wt.Primary {
 			summary.Worktrees++
@@ -106,52 +115,14 @@ func Base(dir string) (string, error) {
 	return strings.TrimPrefix(strings.TrimPrefix(ref, "refs/heads/"), "origin/"), nil
 }
 
-// Compute reads the git state of the repository at dir live.
-func Compute(ctx context.Context, dir string) (State, error) {
-	started := time.Now().UTC()
-	base, err := Base(dir)
+// WorktreeChanges reads the uncommitted changes of the worktree at path live
+// and returns the newest modification time among them, in UTC; nil when no
+// changed file exists on disk (none changed, or all deleted). gitArgs are
+// global git options (see status.Options.GitConfig).
+func WorktreeChanges(ctx context.Context, path string, gitArgs ...string) (Changes, *time.Time, []status.FileStatus, error) {
+	result, err := status.GatherBase(path, status.Options{NoRepomap: true, NoResults: true, Context: ctx, GitConfig: gitArgs})
 	if err != nil {
-		return State{}, err
-	}
-	worktrees, err := gavelgit.ListWorktrees(dir)
-	if err != nil {
-		return State{}, err
-	}
-	branches, err := gavelgit.UnmergedBranches(dir, base)
-	if err != nil {
-		return State{}, err
-	}
-	ahead := make(map[string]int, len(branches))
-	for _, branch := range branches {
-		ahead[branch.Name] = branch.Ahead
-	}
-	state := State{
-		Base: base, CurrentBranch: worktrees[0].Branch, BaseCheckedOut: worktrees[0].Branch == base,
-		Worktrees: make([]Worktree, 0, len(worktrees)), Branches: append([]gavelgit.BranchInfo{}, branches...),
-		ComputedAt: started,
-	}
-	for _, wt := range worktrees {
-		view := Worktree{Worktree: wt, Ahead: ahead[wt.Branch]}
-		if !wt.Prunable {
-			if view.Changes, view.TouchedAt, err = WorktreeChanges(ctx, wt.Path); err != nil {
-				return State{}, err
-			}
-			if view.LastCommitAt, err = gavelgit.CommitTime(wt.Path, wt.Head); err != nil {
-				return State{}, err
-			}
-		}
-		state.Worktrees = append(state.Worktrees, view)
-	}
-	return state, nil
-}
-
-// WorktreeChanges counts the uncommitted changes of the worktree at path and
-// returns the newest modification time among them, in UTC; nil when no changed
-// file exists on disk (none changed, or all deleted).
-func WorktreeChanges(ctx context.Context, path string) (Changes, *time.Time, error) {
-	result, err := status.GatherBase(path, status.Options{NoRepomap: true, NoResults: true, Context: ctx})
-	if err != nil {
-		return Changes{}, nil, fmt.Errorf("gather status of worktree %s: %w", path, err)
+		return Changes{}, nil, nil, fmt.Errorf("gather status of worktree %s: %w", path, err)
 	}
 	var touched *time.Time
 	for _, file := range result.Files {
@@ -163,5 +134,5 @@ func WorktreeChanges(ctx context.Context, path string) (Changes, *time.Time, err
 	return Changes{
 		Staged: counts.Staged, Unstaged: counts.Unstaged, Both: counts.Both, Untracked: counts.Untracked,
 		Conflict: counts.Conflict, Adds: counts.Adds, Dels: counts.Dels,
-	}, touched, nil
+	}, touched, result.Files, nil
 }
