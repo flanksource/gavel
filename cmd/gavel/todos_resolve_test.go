@@ -37,13 +37,14 @@ func resolveCLIStep(t *testing.T, dir, step string) *lifecycle.Resolution {
 func TestTodosRunResolvesModelFallbacks(t *testing.T) {
 	dir := isolatedTodosRun(t, "todos:\n  run:\n    model: \"agent:opus:high\"\n    fallbacks:\n      - sonnet\n")
 
+	opus, sonnet := catalogModelName(t, "agent:opus"), catalogModelName(t, "sonnet")
 	spec := resolveCLIStep(t, dir, "run").Spec
-	if spec.Name != "claude-opus-5" || spec.Effort != api.EffortHigh {
-		t.Fatalf("resolved model = %+v, want claude-opus-5/high", spec.Model)
+	if spec.Name != opus || spec.Effort != api.EffortHigh {
+		t.Fatalf("resolved model = %+v, want %s/high", spec.Model, opus)
 	}
 	cands := spec.Model.Candidates()
-	if len(cands) != 2 || cands[0].Name != "claude-opus-5" || cands[1].Name != "claude-sonnet-5" {
-		t.Fatalf("Candidates() = %+v, want [claude-opus-5 claude-sonnet-5]", cands)
+	if len(cands) != 2 || cands[0].Name != opus || cands[1].Name != sonnet {
+		t.Fatalf("Candidates() = %+v, want [%s %s]", cands, opus, sonnet)
 	}
 }
 

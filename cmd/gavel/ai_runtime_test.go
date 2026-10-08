@@ -12,6 +12,22 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// catalogModelName is the model a family alias resolves to in captain's current
+// catalog. These specs pin gavel's wiring — which layer's model wins — not which
+// release the alias points at, so they read the expectation from the catalog
+// instead of a literal that goes stale on the next model release.
+func catalogModelName(t interface {
+	Helper()
+	Fatalf(string, ...any)
+}, alias string) string {
+	t.Helper()
+	model, err := api.ResolveModel(api.Model{Name: alias})
+	if err != nil {
+		t.Fatalf("resolve %q from the catalog: %v", alias, err)
+	}
+	return model.Name
+}
+
 var _ = Describe("AI fix request", func() {
 	It("uses the requested working directory", func() {
 		GinkgoT().Setenv("HOME", GinkgoT().TempDir())
@@ -35,7 +51,7 @@ func TestBuildAIFixRequestUsesOperationModelIndependently(t *testing.T) {
 	resolved, err := buildAIFixRequest(aiFixRequestOptions{Layers: []api.SpecLayer{api.PromptSpecLayer("operation", operation)}, Dir: t.TempDir()})
 	require.NoError(t, err)
 	cfg, req := resolved.Config, resolved.Request
-	assert.Equal(t, "claude-sonnet-5", cfg.Model.Name)
+	assert.Equal(t, catalogModelName(t, "agent:sonnet"), cfg.Model.Name)
 	assert.Equal(t, api.ModeAgent, cfg.Model.Mode)
 	assert.Equal(t, api.EffortHigh, req.Model.Effort)
 	assert.Equal(t, 2.0, cfg.Budget.Cost)
@@ -82,6 +98,6 @@ func TestBuildAIFixRequestCLIModelOverridesOperation(t *testing.T) {
 	resolved, err := buildAIFixRequest(aiFixRequestOptions{Runtime: opts, Layers: []api.SpecLayer{api.PromptSpecLayer("operation", operation)}, Dir: t.TempDir()})
 	require.NoError(t, err)
 	cfg, req := resolved.Config, resolved.Request
-	assert.Equal(t, "claude-opus-5", cfg.Model.Name)
+	assert.Equal(t, catalogModelName(t, "agent:opus"), cfg.Model.Name)
 	assert.Equal(t, api.EffortMedium, req.Model.Effort)
 }

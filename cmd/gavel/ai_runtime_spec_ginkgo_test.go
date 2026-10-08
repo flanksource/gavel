@@ -70,10 +70,12 @@ var _ = Describe("AI fix full spec resolution", func() {
 	It("resolves CLI runtime repairs after authored capability policy", func() {
 		layers := []api.SpecLayer{api.PromptSpecLayer("operation", api.Spec{
 			Model: api.Model{Name: "gpt-5.6-sol", Mode: api.ModeAgent},
-			// A deny, not an allow: captain treats an allow naming another agent's
-			// built-in as inert, so only a deny still makes the openai agent runtime
-			// refuse the policy — which is the refusal this spec turns on.
-			Permissions: api.Permissions{Tools: api.Tools{"Read": api.ToolPolicyDeny}},
+			// A deny on a tool codex has, not an allow: captain drops an allow naming
+			// another agent's built-in as inert, and ignores a deny naming a tool the
+			// runtime lacks (codex has no Read). Bash reaches codex's shell through
+			// the shared alias, so the openai agent runtime still refuses a policy it
+			// cannot enforce — the refusal this spec turns on.
+			Permissions: api.Permissions{Tools: api.Tools{"Bash": api.ToolPolicyDeny}},
 			Prompt:      api.Prompt{User: "Repair the lint failures"},
 		})}
 		options := aiFixRequestOptions{Layers: layers}
@@ -82,8 +84,8 @@ var _ = Describe("AI fix full spec resolution", func() {
 		options.Runtime = captaincli.AIRuntimeOptions{AIProviderOptions: captaincli.AIProviderOptions{ModelFlags: aiflags.ModelFlags{Model: "agent:sonnet"}}}
 		resolved, err := buildAIFixRequest(options)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(resolved.Request.Name).To(Equal("claude-sonnet-5"))
-		Expect(resolved.Request.Permissions.Tools).To(Equal(api.Tools{"Read": api.ToolPolicyDeny}))
+		Expect(resolved.Request.Name).To(Equal(catalogModelName(GinkgoT(), "agent:sonnet")))
+		Expect(resolved.Request.Permissions.Tools).To(Equal(api.Tools{"Bash": api.ToolPolicyDeny}))
 	})
 
 	It("refuses a tool policy the selected runtime cannot enforce", func() {

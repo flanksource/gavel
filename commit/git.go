@@ -138,6 +138,29 @@ func untrackedFiles(workDir string) ([]string, error) {
 	return splitLines(string(out)), nil
 }
 
+// trackedFiles returns the subset of paths present in the index
+// (`git ls-files -z -- <paths>`), deleted from the working tree or not.
+func trackedFiles(workDir string, paths []string) (map[string]struct{}, error) {
+	tracked := make(map[string]struct{})
+	if len(paths) == 0 {
+		return tracked, nil
+	}
+	cmd := exec.Command("git", append([]string{"ls-files", "-z", "--"}, paths...)...)
+	cmd.Dir = workDir
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("git ls-files: %w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	for _, p := range strings.Split(string(out), "\x00") {
+		if p != "" {
+			tracked[p] = struct{}{}
+		}
+	}
+	return tracked, nil
+}
+
 func splitLines(out string) []string {
 	var lines []string
 	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
