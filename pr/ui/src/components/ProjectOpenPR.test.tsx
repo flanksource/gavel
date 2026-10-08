@@ -5,6 +5,10 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ProjectStatusView } from './ProjectStatusView';
 
+// The focus lease has its own spec (useGitFocus.test.tsx); here it would only
+// add a POST to the requests these tests assert on.
+vi.mock('../useGitFocus', () => ({ useGitFocus: () => ({ error: '' }) }));
+
 /* oxlint-disable clicky-ui/prefer-clicky-components --
    These raw <button>s ARE the test doubles for clicky-ui's Button/SplitButton, not a
    rebuild of them: this factory replaces the '@flanksource/clicky-ui/components'

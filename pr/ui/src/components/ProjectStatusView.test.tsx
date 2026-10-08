@@ -16,6 +16,10 @@ vi.mock('@flanksource/gavel/testrunner/hooks', () => ({
   useTestRun: useTestRunMock,
 }));
 
+// The focus lease has its own spec (useGitFocus.test.tsx); here it would only
+// add POSTs to the request counts these tests assert on.
+vi.mock('../useGitFocus', () => ({ useGitFocus: () => ({ error: '' }) }));
+
 vi.mock('@flanksource/clicky-ui/components', () => ({
   Button: ({ children, onClick, loading: _loading, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement> & { loading?: boolean }) => (
     <button onClick={onClick} {...props}>{children}</button>

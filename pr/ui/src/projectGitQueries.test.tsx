@@ -6,6 +6,7 @@ import {
   PROJECT_GIT_SUMMARY_CACHE_KEY,
   parseProjectGit,
   parseProjectGitSummaries,
+  useProjectGit,
   useProjectGitSummary,
 } from './projectGitQueries';
 import type { ProjectGit, ProjectGitSummary } from './types';
@@ -26,6 +27,7 @@ const git: ProjectGit = {
   }],
   branches: [{ name: 'feat/x', head: 'e4f5a6b', ahead: 2, behind: 0, worktree: '', diff: { commits: 2, files: 3, adds: 10, dels: 4 }, lastCommitAt: '2026-10-02T08:00:00Z' }],
   computedAt: '2026-10-05T08:00:00Z',
+  generation: 7,
 };
 
 function wrapper() {
@@ -67,6 +69,15 @@ describe('parseProjectGit', () => {
     expect(parseProjectGit(git)).toEqual(git);
   });
 
+  it('accepts a failed ref scan and a failed worktree status scan', () => {
+    const failed: ProjectGit = {
+      ...git,
+      error: 'git for-each-ref: exit status 128',
+      worktrees: [{ ...git.worktrees[0], statusError: 'git status: index.lock exists' }],
+    };
+    expect(parseProjectGit(failed)).toEqual(failed);
+  });
+
   it.each([
     ['a missing worktree list', { ...git, worktrees: undefined }],
     ['a worktree without change counts', { ...git, worktrees: [{ ...git.worktrees[0], changes: undefined }] }],
@@ -76,6 +87,10 @@ describe('parseProjectGit', () => {
     ['a worktree with a non-string touched time', { ...git, worktrees: [{ ...git.worktrees[0], touchedAt: 7 }] }],
     ['a branch without a last commit time', { ...git, branches: [{ ...git.branches[0], lastCommitAt: undefined }] }],
     ['a state without the time it was computed', { ...git, computedAt: undefined }],
+    ['a state without a generation', { ...git, generation: undefined }],
+    ['a state with a non-numeric generation', { ...git, generation: '7' }],
+    ['a state with a non-string error', { ...git, error: 500 }],
+    ['a worktree with a non-string statusError', { ...git, worktrees: [{ ...git.worktrees[0], statusError: true }] }],
   ])('rejects %s', (_label, payload) => {
     expect(() => parseProjectGit(payload)).toThrow(/project git/i);
   });
@@ -112,6 +127,32 @@ describe('useProjectGitSummary', () => {
     await waitFor(() => expect(result.current.error).toContain('git unavailable'));
     expect(result.current.loading).toBe(false);
     expect(result.current.byProject.size).toBe(0);
+  });
+
+  it('does not poll: the summary is fetched once and left to the git stream to invalidate', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(summaries), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const { result } = renderHook(() => useProjectGitSummary({ enabled: true }), { wrapper: wrapper() });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+  });
+
+  it('does not poll the project git state either', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(git), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const { result } = renderHook(() => useProjectGit('gavel'), { wrapper: wrapper() });
+    await waitFor(() => expect(result.current.data).toEqual(git));
+
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
   });
 
   it('does not fetch while disabled', () => {

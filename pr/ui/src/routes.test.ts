@@ -99,6 +99,16 @@ describe('project ref routes', () => {
   });
 });
 
+describe('session routes', () => {
+  it('round-trips a selected session id with its scope project', () => {
+    const sessionId = '0199f0aa-0000-7000-8000-00000000c0de';
+    const parsed = parseRoute(new URL(`http://localhost:9092/sessions/${sessionId}?project=gavel`) as unknown as Location);
+
+    expect(parsed).toEqual({ ...emptyRouteState(), tab: 'sessions', selectedPath: sessionId, scopeProject: 'gavel' });
+    expect(buildRoute(parsed)).toBe(`/sessions/${sessionId}?project=gavel`);
+  });
+});
+
 describe('prompt routes', () => {
   it('round-trips a selected prompt with its scope project', () => {
     const location = new URL('http://localhost:9092/prompts/commit.message?project=Clicky%20UI');

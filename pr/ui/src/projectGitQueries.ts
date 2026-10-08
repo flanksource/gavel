@@ -4,10 +4,10 @@ import { readLocalCache, writeLocalCache } from './localQueryCache';
 import { fetchJSON, queryKeys } from './query';
 import type { ProjectGit, ProjectGitSummary } from './types';
 
-// The git summary walks every worktree of every project, so it refreshes
-// slowly; the last good response seeds the first render of the next page load.
+// The last good git summary seeds the first render of the next page load. Git
+// queries never poll: the server pushes each project's generation over
+// /api/git/stream (useGitStream), which invalidates them when it changes.
 export const PROJECT_GIT_SUMMARY_CACHE_KEY = 'gavel.pr-ui.cache.project-git-summary.v1';
-const SUMMARY_REFETCH_MS = 30_000;
 
 export interface ProjectGitSummaryView {
   byProject: ReadonlyMap<string, ProjectGitSummary>;
@@ -31,10 +31,9 @@ export function useProjectGitSummary({ enabled }: { enabled: boolean }): Project
     },
     placeholderData: () => readLocalCache(PROJECT_GIT_SUMMARY_CACHE_KEY, parseProjectGitSummaries),
     enabled,
-    // The interval below retries; failing fast shows the error state at once.
+    // Failing fast shows the error state at once; the next generation change retries.
     retry: false,
-    staleTime: SUMMARY_REFETCH_MS,
-    refetchInterval: SUMMARY_REFETCH_MS,
+    staleTime: Infinity,
   });
   const byProject = useMemo(
     () => new Map((query.data ?? []).map(summary => [summary.name, summary])),
@@ -55,8 +54,7 @@ export function useProjectGit(projectName: string) {
       signal,
       context: `Load git state of ${projectName}`,
     })),
-    staleTime: 5_000,
-    refetchInterval: SUMMARY_REFETCH_MS,
+    staleTime: Infinity,
   });
 }
 
@@ -94,7 +92,9 @@ export function parseProjectGit(payload: unknown): ProjectGit {
     || typeof payload.baseCheckedOut !== 'boolean'
     || !Array.isArray(payload.worktrees)
     || !Array.isArray(payload.branches)
-    || typeof payload.computedAt !== 'string') {
+    || typeof payload.computedAt !== 'string'
+    || typeof payload.generation !== 'number'
+    || (payload.error !== undefined && typeof payload.error !== 'string')) {
     throw new Error('Load project git: invalid response');
   }
   for (const worktree of payload.worktrees) {
@@ -105,6 +105,7 @@ export function parseProjectGit(payload: unknown): ProjectGit {
       || typeof worktree.ahead !== 'number'
       || typeof worktree.lastCommitAt !== 'string'
       || (worktree.touchedAt !== undefined && typeof worktree.touchedAt !== 'string')
+      || (worktree.statusError !== undefined && typeof worktree.statusError !== 'string')
       || !hasNumbers(worktree.changes, CHANGE_KEYS)) {
       throw new Error(`Load project git: invalid worktree ${JSON.stringify(worktree)}`);
     }

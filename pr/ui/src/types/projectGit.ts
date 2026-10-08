@@ -38,6 +38,9 @@ export interface GitWorktree {
   lastCommitAt: string;
   // Newest mtime among the uncommitted files; absent when there are none.
   touchedAt?: string;
+  // Set when the last working-tree scan of this worktree failed; the counts
+  // above are then stale.
+  statusError?: string;
 }
 
 export interface GitBranchDiff {
@@ -70,6 +73,11 @@ export interface ProjectGit {
   // When the server computed this state (RFC 3339); it is memoized, so this
   // can be seconds older than the response.
   computedAt: string;
+  // Advances on every change to this project's git rows; /api/git/stream
+  // pushes it so the UI refetches instead of polling.
+  generation: number;
+  // Set when the last ref scan failed; everything else is then stale.
+  error?: string;
 }
 
 export type BranchMergeMode = 'squash' | 'incremental';

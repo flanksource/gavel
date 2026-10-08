@@ -1,6 +1,7 @@
 import type { TodoCounts } from './types/todos';
 export * from './types/todos';
 export * from './types/sessions';
+export * from './types/agentSessions';
 export * from './types/todoRun';
 export * from './types/projectGit';
 

@@ -27,6 +27,11 @@ vi.mock('@flanksource/clicky-ui/components', () => ({
 
 vi.mock('./ProjectCommitTasks', () => ({ ProjectCommitTasks: () => null }));
 
+// The focus lease has its own spec (useGitFocus.test.tsx); here it would only
+// add POSTs to the request counts these tests assert on.
+const { useGitFocusMock } = vi.hoisted(() => ({ useGitFocusMock: vi.fn(() => ({ error: '' })) }));
+vi.mock('../useGitFocus', () => ({ useGitFocus: useGitFocusMock }));
+
 let queryClient: QueryClient;
 
 beforeEach(() => {
@@ -58,6 +63,18 @@ function stubFetch(extra: (url: string, init?: RequestInit) => unknown = () => u
 }
 
 describe('ProjectStatusView in a linked worktree', () => {
+  it.each([
+    ['holds the git focus lease for the worktree on screen', WORKTREE, { project: 'gavel', worktree: WORKTREE }],
+    ['holds the git focus lease for the main checkout without a worktree', undefined, { project: 'gavel', worktree: undefined }],
+  ])('%s', async (_label, worktree, expected) => {
+    stubFetch();
+
+    renderWorktree({ worktree });
+
+    await screen.findByText('feature/projects');
+    expect(useGitFocusMock).toHaveBeenCalledWith(expected);
+  });
+
   it('scopes the status request to the worktree', async () => {
     const fetchMock = stubFetch();
 

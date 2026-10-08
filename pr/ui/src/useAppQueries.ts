@@ -5,6 +5,7 @@ import { readLocalCache, writeLocalCache } from './localQueryCache';
 import { parseProcStatuses, procStatusQueryOptions } from './procStatusQuery';
 import { fetchJSON, queryKeys } from './query';
 import type { Project, SearchConfig, Snapshot } from './types';
+import { useGitStream } from './useGitStream';
 
 const bootstrapStaleTime = 30_000;
 
@@ -107,6 +108,10 @@ export function useAppQueries({ enabled, initialConfig }: { enabled: boolean; in
     return () => stream.close();
   }, [enabled, queryClient]);
 
+  // Git state is pushed, not polled: a generation change invalidates the
+  // project git queries wherever they are mounted.
+  const gitStream = useGitStream({ enabled });
+
   const updateSnapshot = useCallback((updater: SnapshotUpdater) => {
     queryClient.setQueryData<Snapshot>(queryKeys.prSnapshot(), current => updater(current ?? initialSnapshot));
   }, [initialSnapshot, queryClient]);
@@ -126,7 +131,7 @@ export function useAppQueries({ enabled, initialConfig }: { enabled: boolean; in
     projects: projectsQuery.data ?? [],
     projectsLoaded: projectsQuery.data !== undefined || projectsQuery.failureCount > 0,
     projectError: projectFailure ? errorMessage(projectFailure) : '',
-    processError: processStreamError || (procQuery.error ? errorMessage(procQuery.error) : ''),
+    processError: processStreamError || gitStream.error || (procQuery.error ? errorMessage(procQuery.error) : ''),
     updateSnapshot,
     refreshProjects,
     refreshProjectsAndProcesses,

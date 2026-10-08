@@ -4,6 +4,7 @@ import { UiCheck, UiEdit, UiFolderGit, UiGitBranch, UiGitCommit, UiHome, UiWarni
 import { useProjectGit } from '../projectGitQueries';
 import { parseProjectRef } from '../projectRef';
 import type { BranchMergeResult, GitBranchInfo, GitWorktree, Project, ProjectGit } from '../types';
+import { useGitFocus } from '../useGitFocus';
 import { useNow } from '../useNow';
 import { ProjectBranchChanges } from './ProjectBranchChanges';
 import { ProjectStatusView } from './ProjectStatusView';
@@ -42,6 +43,18 @@ export function ProjectRefPane({ project, projectRef, diffPath, showResults, onR
   const [viewChoice, setViewChoice] = useState<{ ref: string; view: WorktreeView } | null>(null);
   const ref = parseProjectRef(projectRef);
   const git = gitQuery.data;
+  // ProjectStatusView holds the lease for the main checkout and for a worktree
+  // shown by its working changes; a branch without a worktree has no status
+  // view, so it keeps the project's main checkout fresh.
+  const focus = useGitFocus({ project: project.name, enabled: ref.kind === 'branch' });
+  const shownWorktree = ref.kind === 'worktree'
+    ? git?.worktrees.find(candidate => !candidate.primary && candidate.path === ref.path)
+    : ref.kind === 'main' ? git?.worktrees.find(candidate => candidate.primary) : undefined;
+  const notices = [
+    git?.error && `Git refresh failed: ${git.error}`,
+    shownWorktree?.statusError && `Working tree status failed: ${shownWorktree.statusError}`,
+    focus.error && `Git tracker focus failed: ${focus.error}`,
+  ].filter((notice): notice is string => !!notice);
 
   const onMerged = (branch: string) => (result: BranchMergeResult) => {
     setLanded({ branch, result });
@@ -70,14 +83,14 @@ export function ProjectRefPane({ project, projectRef, diffPath, showResults, onR
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <RefBar git={git} loading={gitQuery.isPending} error={gitQuery.error?.message ?? ''} value={projectRef} onChange={onRefChange} />
+      <RefBar git={git} loading={gitQuery.isPending} error={gitQuery.error?.message ?? ''} notices={notices} value={projectRef} onChange={onRefChange} />
       {landed && <LandedBanner landed={landed} onDismiss={() => setLanded(null)} />}
       <div className="min-h-0 flex-1">{body}</div>
     </div>
   );
 }
 
-function RefBar({ git, loading, error, value, onChange }: { git: ProjectGit | undefined; loading: boolean; error: string; value: string; onChange: (ref: string) => void }) {
+function RefBar({ git, loading, error, notices, value, onChange }: { git: ProjectGit | undefined; loading: boolean; error: string; notices: string[]; value: string; onChange: (ref: string) => void }) {
   if (error) {
     return (
       <div role="alert" className="flex shrink-0 items-center gap-1 border-b border-border px-4 py-1.5 text-xs text-red-600 dark:text-red-400">
@@ -88,7 +101,11 @@ function RefBar({ git, loading, error, value, onChange }: { git: ProjectGit | un
   if (loading) return <div className="shrink-0 border-b border-border px-4 py-1.5 text-xs text-muted-foreground">Loading git state…</div>;
   if (!git) return null;
   const entries = projectRefEntries(git);
-  if (entries.length === 1) return null;
+  if (entries.length === 1) {
+    return notices.length > 0
+      ? <div className="flex shrink-0 items-center gap-3 border-b border-border px-4 py-1.5"><GitNotices notices={notices} /></div>
+      : null;
+  }
   const selected = entries.find(entry => entry.value === value);
   const options: ComboboxOption[] = entries.map(entry => ({
     value: optionValue(entry.value),
@@ -114,8 +131,23 @@ function RefBar({ git, loading, error, value, onChange }: { git: ProjectGit | un
         className="w-[42rem] min-w-0 max-w-full shrink"
       />
       {selected && <RefSummary entry={selected} />}
+      <GitNotices notices={notices} />
       <GitStateAge computedAt={git.computedAt} />
     </div>
+  );
+}
+
+// A failed scan leaves the rest of the state stale rather than empty, so the
+// failure is shown beside the age that tells how stale it is.
+function GitNotices({ notices }: { notices: string[] }) {
+  return (
+    <>
+      {notices.map(notice => (
+        <span key={notice} role="alert" className="flex min-w-0 items-center gap-1 text-xs text-amber-700 dark:text-amber-400" title={notice}>
+          <UiWarningTriangle className="shrink-0" /><span className="truncate">{notice}</span>
+        </span>
+      ))}
+    </>
   );
 }
 
@@ -179,6 +211,9 @@ function WorktreeBody({ project, git, worktree, view, onViewChange, diffPath, sh
   const branch: GitBranchInfo | undefined = git.branches.find(candidate => candidate.name === worktree.branch);
   const canReviewBranch = worktree.ahead > 0 && !!branch;
   const active = canReviewBranch ? view ?? (dirty > 0 ? 'work' : 'branch') : 'work';
+  // The status view holds the lease while it is mounted; the committed-changes
+  // view has none of its own.
+  const focus = useGitFocus({ project: project.name, worktree: worktree.path, enabled: active === 'branch' });
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -196,6 +231,7 @@ function WorktreeBody({ project, git, worktree, view, onViewChange, diffPath, sh
           />
         </div>
       )}
+      {focus.error && <div role="alert" className="shrink-0 border-b border-border px-4 py-1.5 text-xs text-amber-700 dark:text-amber-400">Git tracker focus failed: {focus.error}</div>}
       <div className="min-h-0 flex-1 overflow-auto">
         {active === 'branch' && branch ? (
           <ProjectBranchChanges projectName={project.name} base={git.base} branch={branch} baseCheckedOut={git.baseCheckedOut} dirtyCount={dirty} worktreePath={worktree.path} onMerged={onMerged} />

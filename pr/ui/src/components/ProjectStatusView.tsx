@@ -15,6 +15,7 @@ import type { Project } from '../types';
 import { Spinner } from '../icons/Spinner';
 import { fetchJSON, mutationJSON, queryKeys } from '../query';
 import { useDocumentVisible } from '../useDocumentVisible';
+import { useGitFocus } from '../useGitFocus';
 import { ProjectActionDialog, type ProjectAction } from './ProjectActionDialog';
 import { type ProjectActionStatus } from './ProjectActionFeedback';
 import { ProjectActionRunDialog, type ProjectRunnerAction } from './ProjectActionRunDialog';
@@ -81,6 +82,7 @@ const RUNNER_MAIN_CHECKOUT_ONLY = 'Lint and test run in the main checkout only';
 export function ProjectStatusView({ project, diffPath = '', showResults = false, worktree, onDiffPathChange = ignoreDiffPathChange, onChanged = ignoreChanged }: Props) {
   const queryClient = useQueryClient();
   const visible = useDocumentVisible();
+  const focus = useGitFocus({ project: project.name, worktree });
   const statusQuery = useQuery({
     queryKey: queryKeys.projectStatus(project.name, showResults, worktree),
     queryFn: ({ signal }) => fetchJSON<ProjectStatusResponse>({
@@ -338,6 +340,7 @@ export function ProjectStatusView({ project, diffPath = '', showResults = false,
           </div>
         </div>
         {(error || statusError) && <div role="alert" className="mt-2 text-xs text-red-600 dark:text-red-400">{error || statusError}</div>}
+        {focus.error && <div role="alert" className="mt-2 text-xs text-amber-600 dark:text-amber-400">Git tracker focus failed: {focus.error}</div>}
         {showResults && status.resultsStale && <div className="mt-2 text-xs text-amber-600">Test or lint results are from an earlier commit.</div>}
       </div>
 

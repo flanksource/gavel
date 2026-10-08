@@ -39,6 +39,7 @@ const git: ProjectGit = {
   worktrees: [primary, linked, clean, detached],
   branches: [branch('feat/x', linked.path, 2, 5, 1), branch('spike', '', 1, 7, 0)],
   computedAt: '2026-10-05T08:00:00Z',
+  generation: 1,
 };
 
 describe('dirtyFileCount', () => {

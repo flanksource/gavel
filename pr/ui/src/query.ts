@@ -19,6 +19,7 @@ export const queryKeys = {
   // never shown for a branch that has moved on.
   projectBranchFiles: (projectName: string, branch: string, head: string) => ['projects', projectName, 'branch', branch, head, 'files'] as const,
   projectBranchDiff: (projectName: string, branch: string, head: string, file: string) => ['projects', projectName, 'branch', branch, head, 'diff', file] as const,
+  agentSessions: () => ['sessions', 'list'] as const,
   health: () => ['status', 'health'] as const,
   processStatuses: () => ['processes', 'status'] as const,
   processStatus: (projectName: string) => ['processes', projectName, 'status'] as const,

@@ -70,10 +70,17 @@ const git: ProjectGit = {
   worktrees: [primary, feat, aheadClean],
   branches: [branch('feat/x', feat.path, 2), branch('feat/y', aheadClean.path, 1), branch('spike', '', 3)],
   computedAt: '2026-10-04T11:59:52Z',
+  generation: 3,
 };
 
+const focusPosts = vi.hoisted(() => ({ bodies: [] as unknown[] }));
+
 function stubGit(response: () => Response = () => Response.json(git)) {
-  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input) === '/api/git/focus') {
+      focusPosts.bodies.push(JSON.parse(init?.body as string));
+      return new Response(null, { status: 204 });
+    }
     if (String(input) !== '/api/projects/gavel/git') throw new Error(`unexpected request ${String(input)}`);
     return response();
   }));
@@ -98,6 +105,7 @@ function renderPane(projectRef = '', overrides: Partial<React.ComponentProps<typ
 }
 
 beforeEach(() => {
+  focusPosts.bodies = [];
   vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(NOW);
 });
@@ -175,6 +183,66 @@ describe('ProjectRefPane', () => {
     renderPane('');
 
     expect(await screen.findByText('git state 8s ago')).toBeTruthy();
+  });
+
+  it('shows the failed ref scan next to the git state age while the rest stays stale', async () => {
+    stubGit(() => Response.json({ ...git, error: 'git for-each-ref: exit status 128' }));
+
+    renderPane('');
+
+    const notice = await screen.findByRole('alert');
+    expect(notice.textContent).toContain('git for-each-ref: exit status 128');
+    expect(notice.parentElement?.textContent).toContain('git state 8s ago');
+  });
+
+  it('shows the failed status scan of the worktree on screen only', async () => {
+    const failing: GitWorktree = { ...feat, statusError: 'git status: index.lock exists' };
+    const other: GitWorktree = { ...aheadClean, statusError: 'git status: other worktree failed' };
+    stubGit(() => Response.json({ ...git, worktrees: [primary, failing, other] }));
+
+    renderPane('wt:/work/gavel-feat');
+
+    const notice = await screen.findByRole('alert');
+    expect(notice.textContent).toContain('git status: index.lock exists');
+    expect(screen.queryByText(/other worktree failed/)).toBeNull();
+  });
+
+  it('shows the failed status scan of the main checkout when it is on screen', async () => {
+    stubGit(() => Response.json({ ...git, worktrees: [{ ...primary, statusError: 'git status: not a repository' }, feat] }));
+
+    renderPane('');
+
+    expect((await screen.findByRole('alert')).textContent).toContain('git status: not a repository');
+  });
+
+  it('shows a failed scan even when the project has only its main checkout', async () => {
+    stubGit(() => Response.json({ ...git, worktrees: [primary], branches: [], error: 'refs unreadable' }));
+
+    renderPane('');
+
+    expect((await screen.findByRole('alert')).textContent).toContain('refs unreadable');
+    expect(screen.queryByRole('listbox')).toBeNull();
+  });
+
+  it('leaves the focus lease to the status view for the main checkout and a worktree with working changes', async () => {
+    stubGit();
+
+    renderPane('wt:/work/gavel-feat');
+    await screen.findByText(/Status gavel in \/work\/gavel-feat/);
+
+    expect(focusPosts.bodies).toEqual([]);
+  });
+
+  it.each([
+    ['a branch without a worktree', 'br:spike', { project: 'gavel' }],
+    ['a worktree shown by its committed changes', 'wt:/work/gavel-ahead', { project: 'gavel', worktree: '/work/gavel-ahead' }],
+  ])('holds the focus lease itself for %s', async (_label, ref, body) => {
+    stubGit();
+
+    renderPane(ref);
+    await screen.findByRole('button', { name: /Branch view/ });
+
+    await waitFor(() => expect(focusPosts.bodies).toEqual([body]));
   });
 
   it('hides the picker for a project with only its main checkout', async () => {
