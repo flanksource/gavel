@@ -76,6 +76,9 @@ type todoRunPayload struct {
 	// running process: the two runs proceed in parallel. Without it such a
 	// dispatch is refused and the client is told which run is in the way.
 	Force bool `json:"force,omitempty"`
+	// ReuseBranch continues on the branch the todo's previous run left behind,
+	// with its commits, instead of a fresh worktree.
+	ReuseBranch bool `json:"reuseBranch,omitempty"`
 }
 
 type todoRunResponse struct {
@@ -444,6 +447,7 @@ func buildTodoRunOptions(payload todoRunPayload, prior []api.SpecLayer) (todoRun
 		Prior:          prior,
 		Resume:         payload.Resume,
 		Concurrent:     payload.Force,
+		ReuseBranch:    payload.ReuseBranch,
 		Host:           lifecycle.HostDashboard,
 	}, nil
 }

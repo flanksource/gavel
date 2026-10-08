@@ -21,6 +21,7 @@ var _ = Describe("TODO runtime preset configuration", func() {
 				"run":            map[string]any{"presets": []any{"implementer"}},
 				"plan":           map[string]any{"presets": []any{"planner"}},
 				"triage":         map[string]any{"presets": []any{"triager"}},
+				"triageNew":      map[string]any{"presets": []any{"new-triager"}},
 				// merge is a one-shot prompt rather than a lifecycle step, but it is
 				// a prompt spec like the others and rides the same flat wire shape.
 				"merge":  map[string]any{"model": "api:sonnet"},

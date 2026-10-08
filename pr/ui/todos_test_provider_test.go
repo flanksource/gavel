@@ -96,7 +96,13 @@ type uiTestTODOProvider struct {
 	// native runtime resolves it from the todo's prompt run links.
 	attempts map[string]run.SessionAttempt
 	comments []string
-	links    []uiTestLink
+	// lineComments are the anchored comments, and resolutions the comment
+	// resolutions, the handlers issued, as they issued them.
+	lineComments []todos.CommentRequest
+	resolutions  []types.CommentResolution
+	// runWorktree is the newest run worktree the todos recorded; nil is none.
+	runWorktree *native.RunWorktree
+	links       []uiTestLink
 	// rereadErr fails every Get that follows an Edit, standing in for a store
 	// that committed the edit and then could not be read back.
 	rereadErr error
@@ -301,9 +307,24 @@ func (p *uiTestTODOProvider) Edit(_ context.Context, todo *types.TODO, edit todo
 	return nil
 }
 
-func (p *uiTestTODOProvider) Comment(_ context.Context, todo *types.TODO, body string) error {
-	p.comments = append(p.comments, body)
-	updated := strings.TrimSpace(todo.MarkdownBody) + "\n\n## Comments\n\n" + strings.TrimSpace(body) + "\n"
+// ResolveComment refuses an id no recorded comment event of the todo carries,
+// the way the native runtime does.
+func (p *uiTestTODOProvider) ResolveComment(_ context.Context, todo *types.TODO, resolution types.CommentResolution) error {
+	for _, event := range todo.ProviderEvents {
+		if event.ID == resolution.CommentID && event.Kind == types.EventKindComment {
+			p.resolutions = append(p.resolutions, resolution)
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: todo %s has no comment %s", native.ErrNotFound, todo.ID, resolution.CommentID)
+}
+
+func (p *uiTestTODOProvider) Comment(_ context.Context, todo *types.TODO, comment todos.CommentRequest) error {
+	p.comments = append(p.comments, comment.Body)
+	if comment.Anchor != nil {
+		p.lineComments = append(p.lineComments, comment)
+	}
+	updated := strings.TrimSpace(todo.MarkdownBody) + "\n\n## Comments\n\n" + strings.TrimSpace(comment.Body) + "\n"
 	return p.Edit(context.Background(), todo, todos.EditRequest{Body: &updated})
 }
 
@@ -348,7 +369,10 @@ func (p *uiTestTODOProvider) SaveAttempt(context.Context, *types.TODO, *todos.Ex
 	return nil
 }
 func (p *uiTestTODOProvider) LatestRunWorktree(context.Context, *types.TODO) (*native.RunWorktree, error) {
-	return nil, native.ErrNoRunWorkspace
+	if p.runWorktree == nil {
+		return nil, native.ErrNoRunWorkspace
+	}
+	return p.runWorktree, nil
 }
 func (p *uiTestTODOProvider) SupportsGroupedExecution() bool { return false }
 

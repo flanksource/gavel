@@ -33,30 +33,86 @@ type todoUpdatePayload struct {
 	// Parent makes the TODO a child of the named top-level TODO. A nil pointer
 	// leaves the hierarchy unchanged; an explicit empty string detaches.
 	Parent *string `json:"parent,omitempty"`
+	// LineComment appends a comment anchored to one diff line of a run's branch.
+	LineComment *todoLineCommentPayload `json:"lineComment,omitempty"`
+	// ResolveComment resolves, or reopens, a comment already on the TODO.
+	ResolveComment *todoResolveCommentPayload `json:"resolveComment,omitempty"`
+}
+
+type todoLineCommentPayload struct {
+	Anchor *types.LineCommentAnchor `json:"anchor"`
+	Body   string                   `json:"body"`
+}
+
+type todoResolveCommentPayload struct {
+	ID       string `json:"id"`
+	Resolved bool   `json:"resolved"`
+}
+
+// todoPatchComments are a PATCH's history writes: a free-form comment, a line
+// comment, and a comment resolution, each optional.
+type todoPatchComments struct {
+	Comment     string
+	LineComment *todos.CommentRequest
+	Resolve     *types.CommentResolution
+}
+
+func (c todoPatchComments) empty() bool {
+	return c.Comment == "" && c.LineComment == nil && c.Resolve == nil
+}
+
+// todoPatchCommentWrites validates the PATCH's history writes at the wire.
+func todoPatchCommentWrites(payload todoUpdatePayload, attachments []todoAttachmentSummary) (todoPatchComments, error) {
+	comments := todoPatchComments{Comment: strings.TrimSpace(payload.Comment)}
+	if len(attachments) > 0 {
+		comments.Comment = todoBodyWithAttachments(comments.Comment, attachments)
+	}
+	if line := payload.LineComment; line != nil {
+		body := strings.TrimSpace(line.Body)
+		if body == "" {
+			return comments, fmt.Errorf("lineComment.body is required")
+		}
+		if line.Anchor == nil {
+			return comments, fmt.Errorf("lineComment.anchor is required")
+		}
+		if err := line.Anchor.Validate(); err != nil {
+			return comments, err
+		}
+		comments.LineComment = &todos.CommentRequest{Body: body, Anchor: line.Anchor}
+	}
+	if resolve := payload.ResolveComment; resolve != nil {
+		id := strings.TrimSpace(resolve.ID)
+		if id == "" {
+			return comments, fmt.Errorf("resolveComment.id is required")
+		}
+		comments.Resolve = &types.CommentResolution{CommentID: id, Resolved: resolve.Resolved}
+	}
+	return comments, nil
 }
 
 // todoUpdateChanges validates a PATCH and splits it by the provider write that
 // applies each part. A PATCH may move the TODO in the hierarchy (parent), edit
-// content (title/body/labels), change state (status/priority), add a comment,
-// or any combination; at least one operation is required.
-func todoUpdateChanges(payload todoUpdatePayload, attachments []todoAttachmentSummary) (ops.EditChanges, string, error) {
+// content (title/body/labels), change state (status/priority), add a comment or
+// a line comment, resolve a comment, or any combination; at least one operation
+// is required.
+func todoUpdateChanges(payload todoUpdatePayload, attachments []todoAttachmentSummary) (ops.EditChanges, todoPatchComments, error) {
 	changes := ops.EditChanges{Parent: payload.Parent}
 	if payload.Status != "" {
 		if err := types.ValidateAssignableStatus(payload.Status); err != nil {
-			return changes, "", err
+			return changes, todoPatchComments{}, err
 		}
 		changes.State.Status = &payload.Status
 	}
 	if payload.Priority != "" {
 		if err := types.ValidatePriority(payload.Priority); err != nil {
-			return changes, "", err
+			return changes, todoPatchComments{}, err
 		}
 		changes.State.Priority = &payload.Priority
 	}
 	if payload.Title != nil {
 		title := strings.TrimSpace(*payload.Title)
 		if title == "" {
-			return changes, "", fmt.Errorf("title cannot be empty")
+			return changes, todoPatchComments{}, fmt.Errorf("title cannot be empty")
 		}
 		changes.Content.Title = &title
 	}
@@ -70,14 +126,14 @@ func todoUpdateChanges(payload todoUpdatePayload, attachments []todoAttachmentSu
 		}
 		changes.Content.Labels = &normalized
 	}
-	comment := strings.TrimSpace(payload.Comment)
-	if len(attachments) > 0 {
-		comment = todoBodyWithAttachments(comment, attachments)
+	comments, err := todoPatchCommentWrites(payload, attachments)
+	if err != nil {
+		return changes, todoPatchComments{}, err
 	}
-	if changes.Parent == nil && changes.State.Status == nil && changes.State.Priority == nil && changes.Content.IsEmpty() && comment == "" {
-		return changes, "", fmt.Errorf("status, priority, title, body, labels, parent, or comment is required")
+	if changes.Parent == nil && changes.State.Status == nil && changes.State.Priority == nil && changes.Content.IsEmpty() && comments.empty() {
+		return changes, todoPatchComments{}, fmt.Errorf("status, priority, title, body, labels, parent, comment, lineComment, or resolveComment is required")
 	}
-	return changes, comment, nil
+	return changes, comments, nil
 }
 
 func (s *Server) handleTodoPatch(w http.ResponseWriter, r *http.Request) {
@@ -94,7 +150,7 @@ func (s *Server) handleTodoPatch(w http.ResponseWriter, r *http.Request) {
 		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("ref is required"))
 		return
 	}
-	changes, comment, err := todoUpdateChanges(payload, attachments)
+	changes, comments, err := todoUpdateChanges(payload, attachments)
 	if err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)
 		return
@@ -113,7 +169,11 @@ func (s *Server) handleTodoPatch(w http.ResponseWriter, r *http.Request) {
 		writeTodoError(w, http.StatusNotImplemented, fmt.Errorf("setting a parent requires native TODO storage"))
 		return
 	}
-	if todo, err = applyTodoPatch(r.Context(), provider, todo, changes, comment); err != nil {
+	if _, ok := provider.(todos.CommentResolutionProvider); comments.Resolve != nil && !ok {
+		writeTodoError(w, http.StatusNotImplemented, errResolveNeedsNativeStorage)
+		return
+	}
+	if todo, err = applyTodoPatch(r.Context(), provider, todo, changes, comments); err != nil {
 		writeTodoError(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -125,22 +185,22 @@ func (s *Server) handleTodoPatch(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(sum) //nolint:errcheck
 }
 
+var errResolveNeedsNativeStorage = errors.New("resolving comments requires native TODO storage")
+
 // applyTodoPatch performs a PATCH's writes and returns the TODO as storage now
-// holds it. Order: parent, content, reopen/close, comment. The parent is the one
-// write the hierarchy can refuse, so it goes before anything is changed; the
-// comment goes last so a reopen-with-comment posts against the now-open TODO
-// and lands last in the timeline.
-func applyTodoPatch(ctx context.Context, provider todos.Provider, todo *types.TODO, changes ops.EditChanges, comment string) (*types.TODO, error) {
+// holds it. Order: parent, content, reopen/close, comments. The parent is the
+// one write the hierarchy can refuse, so it goes before anything is changed; the
+// comments go last so a reopen-with-comment posts against the now-open TODO and
+// lands last in the timeline.
+func applyTodoPatch(ctx context.Context, provider todos.Provider, todo *types.TODO, changes ops.EditChanges, comments todoPatchComments) (*types.TODO, error) {
 	todo, err := ops.ApplyEdit(ctx, provider, todo, changes)
 	if err != nil {
 		return nil, err
 	}
-	if comment != "" {
-		if err := provider.Comment(ctx, todo, comment); err != nil {
-			return nil, err
-		}
+	if err := applyTodoPatchComments(ctx, provider, todo, comments); err != nil {
+		return nil, err
 	}
-	if changes.Parent == nil && changes.Content.IsEmpty() && comment == "" {
+	if changes.Parent == nil && changes.Content.IsEmpty() && comments.empty() {
 		return todo, nil
 	}
 	// A parent change, an edit and a comment each mutate the hierarchy, body or
@@ -151,6 +211,27 @@ func applyTodoPatch(ctx context.Context, provider todos.Provider, todo *types.TO
 		return nil, fmt.Errorf("re-read TODO %s after update: %w", todo.ID, err)
 	}
 	return refreshed, nil
+}
+
+func applyTodoPatchComments(ctx context.Context, provider todos.Provider, todo *types.TODO, comments todoPatchComments) error {
+	if comments.Comment != "" {
+		if err := provider.Comment(ctx, todo, todos.CommentRequest{Body: comments.Comment}); err != nil {
+			return err
+		}
+	}
+	if comments.LineComment != nil {
+		if err := provider.Comment(ctx, todo, *comments.LineComment); err != nil {
+			return err
+		}
+	}
+	if comments.Resolve == nil {
+		return nil
+	}
+	resolver, ok := provider.(todos.CommentResolutionProvider)
+	if !ok {
+		return errResolveNeedsNativeStorage
+	}
+	return resolver.ResolveComment(ctx, todo, *comments.Resolve)
 }
 
 // handleTodoDelete closes a TODO. `children=archive|detach` says what happens to

@@ -97,3 +97,5 @@ go.work.sum
 *.har
 .agents/plans
 .agents/memory
+/gavel-1.0.0.tgz
+/.new

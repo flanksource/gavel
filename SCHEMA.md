@@ -96,7 +96,7 @@ commit:
 
 The prompt override paths are `commit.message`, `commit.summary`,
 `commit.grouping`, `lint.fix`, `pr.content`, `pr.fix`, `todos.run`,
-`todos.plan`, `todos.triage`, `todos.merge`, `status.summary`, and
+`todos.plan`, `todos.triage`, `todos.triageNew`, `todos.merge`, `status.summary`, and
 `test.outlineSummary`.
 Use `gavel config --resolve` (`-r`) to see each
 prompt's built-in/inline/file source, complete body, declared Captain spec, and
@@ -226,6 +226,7 @@ See [MANUAL.md](MANUAL.md#gavel-todos) for the lifecycle model itself (steps,
 | `todos.run` | prompt spec | see below | field-wise override | AI spec for the `run` (implement) step. Overrides the `ai:` base field-wise. |
 | `todos.plan` | prompt spec | see below | field-wise override | AI spec for the `plan` step (read-only investigation that produces a reviewable plan). |
 | `todos.triage` | prompt spec | see below | field-wise override | AI spec for the `triage` step: a read-only pass that compacts a TODO's description and reviews its verification fixture. Auxiliary — never picked automatically, only run with `--step triage`. |
+| `todos.triageNew` | prompt spec | `api:luna:high` | field-wise override | AI spec for `triage.new` after creation. Requires a title and taxonomy labels; searches the workspace for duplicates and requests approval before duplicate closure, merge, or parenting. |
 | `todos.merge` | prompt spec | see below | field-wise override | AI spec for the merge prompt behind `gavel todos merge`: a one-shot pass that folds several TODOs into one title, body, verification fixture and plan. It records no run, so it is not a lifecycle step. |
 | `todos.verify` | Captain `api.Spec` | `{model: {mode: agent}}`, no model name | field-wise override | Spec the `verify` step (and `gavel todos check`) grades the definition of done as. No `prompt:` field — the checklist is generated from the TODO's acceptance criteria, not a template. |
 | `todos.checkConcurrency` | int | `4` | last non-zero wins | How many TODOs `gavel todos check` (and the verification phase after a bulk triage) checks at once. |

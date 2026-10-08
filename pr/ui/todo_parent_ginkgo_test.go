@@ -297,7 +297,7 @@ var _ = Describe("todo parent API", func() {
 
 			Expect(recorder.Code).To(Equal(http.StatusBadRequest), recorder.Body.String())
 			Expect(decodeObject(recorder)).To(HaveKeyWithValue("error",
-				"status, priority, title, body, labels, parent, or comment is required"))
+				"status, priority, title, body, labels, parent, comment, lineComment, or resolveComment is required"))
 		})
 	})
 

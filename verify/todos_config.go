@@ -20,7 +20,8 @@ type TodosConfig struct {
 	// Triage is the AI spec for the triage prompt: a read-only pass that compacts
 	// a TODO's description and reviews its verification fixture, reporting the
 	// edits for gavel to apply. See prompts.TodosTriage.
-	Triage PromptSpec `yaml:"triage,omitempty" json:"triage,omitempty"`
+	Triage    PromptSpec `yaml:"triage,omitempty" json:"triage,omitempty"`
+	TriageNew PromptSpec `yaml:"triageNew,omitempty" json:"triageNew,omitempty"`
 	// Merge is the AI spec for the merge prompt: the one-shot pass behind
 	// `gavel todos merge` that folds several TODOs into one body, one fixture and
 	// one plan. It is not a lifecycle step — no run is recorded — so it is
@@ -46,7 +47,7 @@ type TodosConfig struct {
 	// Steps is the spec layer for lifecycle steps that are not built in, keyed by
 	// step name: a `handoff` step a project's todos.lifecycle adds reads its
 	// project configuration from `todos.steps.handoff`, exactly where `todos.run`
-	// sits for the built-in run step. The four built-in steps keep their own
+	// sits for the built-in run step. The five built-in steps keep their own
 	// blocks above; naming one here is an error rather than a second place to
 	// configure it.
 	Steps map[string]PromptSpec `yaml:"steps,omitempty" json:"steps,omitempty"`
@@ -64,7 +65,7 @@ type TodosConfig struct {
 
 // builtinStepBlocks are the lifecycle steps configured through a typed block of
 // their own rather than through todos.steps.
-var builtinStepBlocks = map[string]bool{"run": true, "plan": true, "triage": true, "verify": true}
+var builtinStepBlocks = map[string]bool{"run": true, "plan": true, "triage": true, "triage.new": true, "verify": true}
 
 // Validate rejects a todos section that could configure one step from two
 // places. A built-in step named under todos.steps would have its typed block

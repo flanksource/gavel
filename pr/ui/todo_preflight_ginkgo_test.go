@@ -93,6 +93,10 @@ var _ = Describe("todo preview preflight", func() {
 		Expect(json.Unmarshal(recorder.Body.Bytes(), &response)).To(Succeed())
 		Expect(response.Spec.Permissions.Tools).To(HaveKeyWithValue("Read", api.ToolPolicyAllow))
 		Expect(response.Warnings).NotTo(ContainElement(ContainSubstring("tool")))
+		// The plan's read-only sandbox stays stated; the API mode runs no
+		// provider process, so captain reports it as already satisfied.
+		Expect(response.Spec.Sandbox.Policy.Filesystem.Access).To(Equal(api.SandboxFilesystemReadOnly))
+		Expect(response.Warnings).To(ContainElement(ContainSubstring(`sandbox mode "native" is vacuous`)))
 	})
 
 	It("rejects a missing judge in both preview and run before dispatch", func() {

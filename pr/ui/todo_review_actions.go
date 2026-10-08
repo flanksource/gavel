@@ -10,6 +10,7 @@ import (
 
 	cmuxprov "github.com/flanksource/captain/pkg/ai/provider/cmux"
 	captaindb "github.com/flanksource/captain/pkg/database"
+	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/lifecycle"
 	"github.com/flanksource/gavel/todos/native"
 	"github.com/flanksource/gavel/todos/run"
@@ -148,7 +149,7 @@ func (s *Server) handleTodoAnswer(w http.ResponseWriter, r *http.Request) {
 	if payload.Rejected {
 		commentLabel = "**Rejected question:** "
 	}
-	if err := provider.Comment(r.Context(), todo, commentLabel+answer); err != nil {
+	if err := provider.Comment(r.Context(), todo, todos.CommentRequest{Body: commentLabel + answer}); err != nil {
 		writeTodoLaunchError(w, stream, http.StatusInternalServerError, err)
 		return
 	}
