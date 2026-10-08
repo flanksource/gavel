@@ -3,12 +3,13 @@ import { Button, DropdownMenu, SplitButton, type DropdownMenuItem } from '@flank
 import { Icon } from '@flanksource/clicky-ui/data';
 import type { StaticIconComponent } from '@flanksource/clicky-ui/data';
 import { cn } from '@flanksource/clicky-ui/utils';
-import { UiCheckFilled, UiCog, UiListChecks, UiStop } from '@flanksource/clicky-ui/icons';
+import { UiCheckFilled, UiCog, UiGitBranch, UiListChecks, UiStop } from '@flanksource/clicky-ui/icons';
 import type { TodoItem, TodoLifecycleStep, TodoRunEffort, TodoRunOptions } from '../../types';
 import { Spinner } from '../../icons/Spinner';
 import { TodoRuntimeSummary } from './TodoRuntimeSummary';
 import type { RunContext } from './providers';
 import { runSpec } from './run';
+import { continueBranchLabel, type RunBranchChoice } from './runBranchChoice';
 
 /**
  * The todo header's single lifecycle control.
@@ -64,6 +65,31 @@ export function otherLifecycleSteps(todo: TodoItem, primary: LifecyclePrimaryAct
   return steps.filter(entry => entry.applicable && entry.name !== skip);
 }
 
+export type RunStepExtras = { reuseBranch?: boolean };
+
+// primaryRunExtras is what the header's one-click run adds when the previous
+// run's branch still exists: continuing on it is the default, so review
+// comments left on that branch reach the run that addresses them.
+export function primaryRunExtras(primary: LifecyclePrimaryAction, branchChoice: RunBranchChoice | null | undefined): RunStepExtras | undefined {
+  if (primary.kind !== 'step' || primary.name !== 'run' || !branchChoice) return undefined;
+  return { reuseBranch: true };
+}
+
+// runBranchItems are the caret's two explicit run rows — continue on the
+// previous branch or start a new one — offered whenever run applies.
+export function runBranchItems(
+  todo: TodoItem,
+  branchChoice: RunBranchChoice | null | undefined,
+  onRunStep: (name: string, extras?: RunStepExtras) => void,
+): DropdownMenuItem[] {
+  const runnable = todo.lifecycle?.steps.some(entry => entry.name === 'run' && entry.applicable);
+  if (!branchChoice || !runnable) return [];
+  return [
+    { label: continueBranchLabel(branchChoice), icon: UiGitBranch, group: 'Branch', onSelect: () => onRunStep('run', { reuseBranch: true }) },
+    { label: 'Run on a new branch', icon: UiGitBranch, group: 'Branch', onSelect: () => onRunStep('run', { reuseBranch: false }) },
+  ];
+}
+
 type StepGlyph = { icon: StaticIconComponent; tone: SessionTone };
 
 // Glyph and tone for the three pipeline steps come from the library's Agent
@@ -92,8 +118,10 @@ export type TodoPhaseButtonProps = {
   options: PhaseRunOptions;
   disabled?: boolean;
   busy?: boolean;
-  /** Enter a step now. */
-  onRunStep: (name: string) => void;
+  /** Enter a step now; extras carry the run's branch choice. */
+  onRunStep: (name: string, extras?: RunStepExtras) => void;
+  /** The previous run's branch a new run may continue on. */
+  branchChoice?: RunBranchChoice | null;
   /** Stop the run in flight. Absent when nothing is stoppable. */
   onStop?: (() => void) | undefined;
   /** Scroll to / focus the review banner for a plan awaiting a decision. */
@@ -228,11 +256,14 @@ export function TodoPhaseButton({
   onReview,
   onOptionsChange,
   onAdvanced,
+  branchChoice,
 }: TodoPhaseButtonProps) {
   const primary = primaryLifecycleAction(todo, sessionInProgress);
   const targetOptions = primary.kind === 'step' ? options[primary.name] : undefined;
   const targetGlyph = primary.kind === 'step' ? stepGlyph(primary.name) : undefined;
+  const primaryExtras = primaryRunExtras(primary, branchChoice);
   const items: DropdownMenuItem[] = [
+    ...(sessionInProgress ? [] : runBranchItems(todo, branchChoice, onRunStep)),
     ...stepItems({ todo, primary, context, options, onRunStep, onOptionsChange }),
     {
       label: 'Advanced…',
@@ -253,7 +284,7 @@ export function TodoPhaseButton({
           : 'Done';
 
   function activate() {
-    if (primary.kind === 'step') return onRunStep(primary.name);
+    if (primary.kind === 'step') return onRunStep(primary.name, primaryExtras);
     if (primary.kind === 'stop') return onStop?.();
     if (primary.kind === 'none') return;
     return onReview?.();
@@ -267,7 +298,8 @@ export function TodoPhaseButton({
     || (primary.kind === 'stop' && !onStop)
     || ((primary.kind === 'review' || primary.kind === 'answer') && !onReview);
 
-  const tooltip = primary.kind === 'step' ? (primary.reason || primary.label)
+  const tooltip = primaryExtras && branchChoice ? `${continueBranchLabel(branchChoice)} — the caret offers a new branch instead`
+    : primary.kind === 'step' ? (primary.reason || primary.label)
     : primary.kind === 'none' ? primary.reason
       : label;
 
@@ -297,6 +329,7 @@ export function TodoPhaseButton({
             />
           )}
           <span className="shrink-0 font-medium">{label}</span>
+          {primaryExtras && <UiGitBranch className="shrink-0 text-xs text-muted-foreground" aria-label="continues on the previous branch" />}
           {targetOptions && context && (
             <>
               <span className="mx-0.5 h-3.5 w-px shrink-0 bg-border" aria-hidden="true" />

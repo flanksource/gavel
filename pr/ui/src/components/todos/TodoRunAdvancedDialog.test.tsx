@@ -387,3 +387,38 @@ describe('TodoRunAdvancedDialog last used', () => {
     expect(JSON.parse(JSON.stringify(onRun.mock.lastCall?.[0]))).toEqual({ step: 'plan', spec: { model: 'operator-model' } });
   });
 });
+
+describe('TodoRunAdvancedDialog branch choice', () => {
+  const branchChoice = { branch: 'shell/1', unresolved: 2 };
+
+  it('offers continuing on the branch, preselected, or a new branch beside the run options', () => {
+    setup({ initialMode: 'run', branchChoice });
+    expect((screen.getByRole('radio', { name: 'Continue on shell/1 · 2 unresolved comments' }) as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByRole('radio', { name: 'New branch' }) as HTMLInputElement).checked).toBe(false);
+  });
+
+  it('sends reuseBranch true by default and false once "New branch" is picked, in the preview and the run', () => {
+    const { onRun } = setup({ initialMode: 'run', branchChoice });
+    expect(preview.mock.lastCall?.[0].body.reuseBranch).toBe(true);
+    fireEvent.click(footer().getByRole('button', { name: 'Run' }));
+    expect(JSON.parse(JSON.stringify(onRun.mock.lastCall?.[0])).reuseBranch).toBe(true);
+
+    fireEvent.click(screen.getByRole('radio', { name: 'New branch' }));
+    expect(preview.mock.lastCall?.[0].body.reuseBranch).toBe(false);
+    fireEvent.click(footer().getByRole('button', { name: 'Run' }));
+    expect(JSON.parse(JSON.stringify(onRun.mock.lastCall?.[0]))).toEqual({ step: 'run', spec: {}, reuseBranch: false });
+  });
+
+  it('shows no choice and sends no reuseBranch when there is no reusable branch', () => {
+    const { onRun } = setup({ initialMode: 'run', branchChoice: null });
+    expect(screen.queryByRole('radio')).toBeNull();
+    fireEvent.click(footer().getByRole('button', { name: 'Run' }));
+    expect(JSON.parse(JSON.stringify(onRun.mock.lastCall?.[0]))).toEqual({ step: 'run', spec: {} });
+  });
+
+  it('offers the choice for the run step only', () => {
+    setup({ initialMode: 'plan', branchChoice });
+    expect(screen.queryByRole('radio')).toBeNull();
+    expect(preview.mock.lastCall?.[0].body.reuseBranch).toBeUndefined();
+  });
+});

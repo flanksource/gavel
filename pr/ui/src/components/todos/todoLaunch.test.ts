@@ -39,6 +39,32 @@ describe('todoMutationStream', () => {
       .rejects.toMatchObject({ message: 'run already active', status: 409 });
   });
 
+  it.each([true, false])('posts reuseBranch %s exactly as the operator chose it', async reuseBranch => {
+    const fetchMock = vi.fn().mockResolvedValue(streamResponse([
+      'event: resolved\ndata: {"spec":{},"specYaml":"{}\\n","step":"run"}\n\n',
+      'event: admitted\ndata: {"status":"started","promptRunId":"run-new","sessionId":"session-new"}\n\n',
+    ]));
+    vi.stubGlobal('fetch', fetchMock);
+    const { result } = renderHook(() => useTodoRun('/workspace'), { wrapper: queryTestWrapper() });
+
+    await act(async () => { await result.current.run('todo-1', { step: 'run', spec: {}, reuseBranch }); });
+
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({ ref: 'todo-1', step: 'run', reuseBranch });
+  });
+
+  it('omits reuseBranch when the operator was not offered a choice', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(streamResponse([
+      'event: resolved\ndata: {"spec":{},"specYaml":"{}\\n","step":"run"}\n\n',
+      'event: admitted\ndata: {"status":"started","promptRunId":"run-new","sessionId":"session-new"}\n\n',
+    ]));
+    vi.stubGlobal('fetch', fetchMock);
+    const { result } = renderHook(() => useTodoRun('/workspace'), { wrapper: queryTestWrapper() });
+
+    await act(async () => { await result.current.run('todo-1', { step: 'run', spec: {} }); });
+
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).not.toHaveProperty('reuseBranch');
+  });
+
   it('offers the existing parallel-run confirmation and retries with force', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(streamResponse([

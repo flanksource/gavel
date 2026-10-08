@@ -13,6 +13,7 @@ import { TodoSession } from './TodoSession';
 import { TodoPlan } from './TodoPlan';
 import { statusClass, statusIcon, statusLabel } from './format';
 import { TodoRunAdvancedDialog } from './TodoRunAdvancedDialog';
+import { useReusableRunBranch } from './runBranchChoice';
 import { defaultRunOptions, loadLastTodoRunOptions } from './run';
 import { TodoPhaseButton, TodoPhaseTicks } from './TodoPhaseButton';
 import { TodoRunStatusStrip } from './TodoRunStatusStrip';
@@ -72,6 +73,7 @@ export function TodoDetail(props: TodoDetailProps) {
     archiveTodo, archivePrompt, chooseArchiveChildren, cancelArchive,
     copyFullId, runPhase, stopRun, runTodo, submitAdvanced,
   } = useTodoDetail(props);
+  const reusableBranch = useReusableRunBranch(dir, todo?.ref ?? '', events);
 
   if (!todo) {
     return (
@@ -241,7 +243,8 @@ export function TodoDetail(props: TodoDetailProps) {
                     options={phaseOptions}
                     disabled={busy || !runContext}
                     busy={runBusy || verificationRun.isPending}
-                    onRunStep={runPhase}
+                    onRunStep={(name, extras) => runPhase(name, { ...(phaseOptions[name] ?? loadLastTodoRunOptions(name, runContext)), ...extras })}
+                    branchChoice={reusableBranch}
                     onReview={() => setTab('overview')}
                     onOptionsChange={changePhaseOptions}
                     onAdvanced={setAdvancedMode}
@@ -343,6 +346,7 @@ export function TodoDetail(props: TodoDetailProps) {
         title={`${runContext?.lifecycle.steps.find(step => step.name === advancedMode)?.label ?? advancedMode ?? 'Run'} todo`}
         dir={dir}
         refID={todo.ref}
+        branchChoice={reusableBranch}
       />
       {archivePrompt && (
         <ArchiveParentDialog
@@ -440,6 +444,8 @@ export function TodoDetail(props: TodoDetailProps) {
                   dir={dir}
                   todoRef={todo.ref}
                   renderActions={latest => <TodoRunLandActions dir={dir} todoRef={todo.ref} latest={latest} />}
+                  events={events}
+                  onPatch={patch}
                 />
                 {events.length > 0 && <TodoTimeline events={events} />}
               </div>

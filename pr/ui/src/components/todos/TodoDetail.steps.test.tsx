@@ -1,7 +1,7 @@
 import { Button } from '@flanksource/clicky-ui/components';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { TodoItem, TodoRunOptions } from '../../types';
+import type { TodoItem, TodoRunOptions, TodoSessionDetailResponse } from '../../types';
 import type { RunContext } from './providers';
 import { StatefulTodoDetail } from './todoDetailTestHarness';
 import type { TodoDetailProps } from './TodoDetail';
@@ -10,6 +10,7 @@ import type { TodoDetailView } from '../../routes';
 import { readRunChoiceState } from './runChoiceStorage';
 
 const execution = vi.hoisted(() => ({ run: vi.fn(), verify: vi.fn(), reset: vi.fn(), step: 'verify', spec: undefined as Record<string, unknown> | undefined }));
+const session = vi.hoisted(() => ({ stop: vi.fn(), detail: undefined as TodoSessionDetailResponse | undefined }));
 const spec = { mode: 'agent', model: 'example-model', effort: 'medium' as const };
 const context: RunContext = {
   modes: [{ id: 'agent', label: 'Agent', provider: 'openai', agent: 'codex', defaultModel: spec.model, driver: 'agent', mechanisms: [], models: [{ id: spec.model, label: 'Example', provider: 'openai', reasoning: true }] }],
@@ -28,11 +29,11 @@ vi.mock('./todoMutations', async importOriginal => ({
   useDeleteTodoMutation: () => ({ isPending: false }),
   useTransferTodoMutation: () => ({ isPending: false }),
   useGithubPushTodoMutation: () => ({ isPending: false }),
-  useTodoSessionStop: () => ({ isPending: false }),
+  useTodoSessionStop: () => ({ isPending: false, mutateAsync: session.stop }),
   useTodoVerificationRun: () => ({ isPending: false, mutateAsync: execution.verify }),
 }));
 vi.mock('./TodoSessionTimer', async importOriginal => ({ ...(await importOriginal<object>()), useSessionStats: () => ({ stats: null }) }));
-vi.mock('./TodoSessionDetail', () => ({ useTodoSessionDetail: () => ({ detail: undefined, error: '' }) }));
+vi.mock('./TodoSessionDetail', () => ({ useTodoSessionDetail: () => ({ detail: session.detail, error: '' }) }));
 vi.mock('./tagQueries', () => ({ useTodoTagIndex: () => ({}), useTodoTagCounts: () => ({}) }));
 vi.mock('./TodoTag', () => ({ TodoTagField: () => null, TodoTagRow: () => null }));
 vi.mock('./TodoTimeline', () => ({ TodoTimeline: () => null }));
@@ -80,6 +81,8 @@ beforeEach(() => {
   execution.verify.mockReset();
   execution.step = 'verify';
   execution.spec = undefined;
+  session.stop.mockReset();
+  session.detail = undefined;
   const values = new Map<string, string>();
   vi.stubGlobal('localStorage', { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => values.set(key, value) });
 });
@@ -131,6 +134,34 @@ describe('TodoDetail routed view', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Start verify' }));
 
     await waitFor(() => expect(onViewChange).toHaveBeenCalledWith({ tab: 'verification' }, undefined));
+  });
+});
+
+describe('TodoDetail stop control', () => {
+  it.each([
+    { processActive: false, canStop: true },
+    { processActive: true, canStop: true },
+    { processActive: false, canStop: false },
+    { processActive: true, canStop: false },
+  ])('uses canStop=$canStop when processActive=$processActive', async ({ processActive, canStop }) => {
+    const attempt = {
+      promptRunId: 'active-run', admissionSessionId: 'admission-session', ordinal: 1, step: 'run',
+      requested: {}, resolved: {}, state: 'running', status: 'running', phase: 'generate',
+      queuedAt: '2026-10-05T09:24:56Z', createdAt: '2026-10-05T09:24:56Z', updatedAt: '2026-10-05T09:24:56Z',
+      verification: null, processActive, canStop,
+    };
+    session.detail = { attempts: [attempt] };
+    render(<StatefulTodoDetail todo={{ ...todo, status: 'in_progress', sessionId: 'provider-session' }} loading={false} dir="/repo" onChanged={() => {}} onDeleted={() => {}} initialView={{ tab: 'session' }} />, { wrapper: queryTestWrapper() });
+    await act(async () => {});
+
+    const stop = screen.getByRole<HTMLButtonElement>('button', { name: 'Stop' });
+    expect(stop.disabled).toBe(!canStop);
+    fireEvent.click(stop);
+    if (canStop) {
+      await waitFor(() => expect(session.stop).toHaveBeenCalledWith(attempt.promptRunId));
+    } else {
+      expect(session.stop).not.toHaveBeenCalled();
+    }
   });
 });
 

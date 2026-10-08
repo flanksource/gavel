@@ -18,23 +18,33 @@ export interface ProjectBranchChangesProps {
   onMerged: (result: BranchMergeResult) => void;
 }
 
+/** The file-list and per-file diff requests for a branch's range against its base. */
+export function branchRangeRequests(projectName: string, branch: Pick<GitBranchInfo, 'name' | 'head'>) {
+  return {
+    filesRequest: (): CommitRangeRequest => ({
+      queryKey: queryKeys.projectBranchFiles(projectName, branch.name, branch.head),
+      url: projectApiUrl({ projectName, resource: 'branch/files', query: [['branch', branch.name]] }),
+      context: `Failed to load files of ${branch.name}`,
+    }),
+    diffRequest: (_id: string, file: string): CommitRangeRequest => ({
+      queryKey: queryKeys.projectBranchDiff(projectName, branch.name, branch.head, file),
+      url: projectApiUrl({ projectName, resource: 'branch/diff', query: [['branch', branch.name], ['file', file]] }),
+      context: `Failed to load ${file} diff of ${branch.name}`,
+    }),
+  };
+}
+
+export function branchRangeSummary({ commits, files, adds, dels }: GitBranchInfo['diff']): string {
+  return `${commits} ${commits === 1 ? 'commit' : 'commits'} · ${files} ${files === 1 ? 'file' : 'files'} · +${adds} −${dels}`;
+}
+
 /**
  * A project branch's committed changes against its base — the files it adds,
  * edits and deletes beside a diff viewer — with the actions that land it
  * (merge into the base, or open a PR).
  */
 export function ProjectBranchChanges({ projectName, base, branch, baseCheckedOut, dirtyCount, worktreePath, onMerged }: ProjectBranchChangesProps) {
-  const filesRequest = (): CommitRangeRequest => ({
-    queryKey: queryKeys.projectBranchFiles(projectName, branch.name, branch.head),
-    url: projectApiUrl({ projectName, resource: 'branch/files', query: [['branch', branch.name]] }),
-    context: `Failed to load files of ${branch.name}`,
-  });
-  const diffRequest = (_id: string, file: string): CommitRangeRequest => ({
-    queryKey: queryKeys.projectBranchDiff(projectName, branch.name, branch.head, file),
-    url: projectApiUrl({ projectName, resource: 'branch/diff', query: [['branch', branch.name], ['file', file]] }),
-    context: `Failed to load ${file} diff of ${branch.name}`,
-  });
-  const { commits, files, adds, dels } = branch.diff;
+  const { filesRequest, diffRequest } = branchRangeRequests(projectName, branch);
 
   return (
     <div className="flex min-h-0 flex-col">
@@ -60,7 +70,7 @@ export function ProjectBranchChanges({ projectName, base, branch, baseCheckedOut
       <CommitRangeChanges
         options={[{ id: ALL_CHANGES, label: `All changes vs ${base}` }]}
         showPicker={false}
-        summary={`${commits} ${commits === 1 ? 'commit' : 'commits'} · ${files} ${files === 1 ? 'file' : 'files'} · +${adds} −${dels}`}
+        summary={branchRangeSummary(branch.diff)}
         filesRequest={filesRequest}
         diffRequest={diffRequest}
         unreachable={<div role="status" className="px-3 py-3 text-xs text-muted-foreground">Branch no longer exists</div>}

@@ -13,6 +13,7 @@ import { TodoMutationError, useDeleteTodoMutation, useGithubPushTodoMutation, us
 import { useTodoTagCounts, useTodoTagIndex } from './tagQueries';
 import { useTodoLaunchProgress } from './todoLaunch';
 import { todoVisibleLabels } from './tagResolve';
+import type { LineCommentPatch } from './lineComments';
 
 export function useTodoDetail({ todo, dir, onChanged, onDeleted, workspaces = [], onTransferred, view, onViewChange, childTodos = [] }: TodoDetailProps) {
   const [advancedMode, setAdvancedMode] = useState<string | null>(null);
@@ -55,10 +56,9 @@ export function useTodoDetail({ todo, dir, onChanged, onDeleted, workspaces = []
   const verification = verificationBadge(verificationAttempts(verificationDetail));
   const verificationRun = useTodoVerificationRun(dir, todo?.ref ?? '');
   const sessionStop = useTodoSessionStop(dir, todo?.ref ?? '', todo?.sessionId);
-  // The attempt the Stop control acts on. Only a live attempt the server says it
-  // can interrupt qualifies; without one the header offers a disabled Stop that
-  // says why, rather than one that looks live and does nothing.
-  const stoppableAttempt = (verificationDetail?.attempts ?? []).find(attempt => attempt.processActive && attempt.canStop);
+  // Cancellation capability comes from the run owner, independently of the
+  // execution session's process metadata.
+  const stoppableAttempt = (verificationDetail?.attempts ?? []).find(attempt => attempt.canStop);
   const fullTodoId = todo ? todoFullId(todo) : '';
   const visibleLabels = todo ? todoVisibleLabels(todo) : [];
   const tagIndex = useTodoTagIndex(dir);
@@ -137,7 +137,7 @@ export function useTodoDetail({ todo, dir, onChanged, onDeleted, workspaces = []
     labels?: string[];
     // A todo ref makes it a child of that todo; the empty string detaches it.
     parent?: string;
-  }): Promise<boolean> {
+  } & LineCommentPatch): Promise<boolean> {
     if (!todo || busy) return false;
     setError('');
     try {

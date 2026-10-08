@@ -1,8 +1,9 @@
 import { useMemo, useState } from 'react';
 import { Button } from '@flanksource/clicky-ui/components';
-import { Markdown, Timeline, type TimelineItem } from '@flanksource/clicky-ui/data';
-import { UiAdd, UiChevronDown, UiChevronUp, UiCircleFilled, UiComment, UiDiff, UiGitMerge, UiHistory } from '@flanksource/clicky-ui/icons';
+import { Badge, Markdown, Timeline, type TimelineItem } from '@flanksource/clicky-ui/data';
+import { UiAdd, UiCheck, UiChevronDown, UiChevronUp, UiCircleFilled, UiComment, UiDiff, UiGitMerge, UiHistory, UiRefresh } from '@flanksource/clicky-ui/icons';
 import type { TodoEvent } from '../../types';
+import { COMMENT_RESOLVED_KIND, lineComments, type LineComment } from './lineComments';
 import { landingFromPayload, TodoRunLandingSummary } from './TodoRunLandingSummary';
 import { timeAgo } from '../../utils';
 import { RelativeTime } from '../RelativeTime';
@@ -18,7 +19,7 @@ function eventVisual(kind?: string): EventVisual {
       return { icon: UiAdd, tone: 'success', action: 'created this issue' };
     case 'IssueUpdated':
       return { icon: UiDiff, tone: 'info', action: 'updated this issue' };
-    case 'CommentAdded':
+    case 'comment':
       return { icon: UiComment, tone: 'neutral', action: 'commented' };
     case 'run_landed':
       return { icon: UiGitMerge, tone: 'success', action: 'landed the run' };
@@ -93,13 +94,36 @@ function eventBody(event: TodoEvent): Pick<TimelineItem, 'bodyHeader' | 'body'> 
   return { body: title || undefined };
 }
 
-function toTimelineItem(event: TodoEvent, index: number): TimelineItem {
-  const visual = eventVisual(event.kind);
+const anchorChip = (comment: LineComment) => (
+  <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-foreground" title={comment.anchor.lineText}>
+    {comment.anchor.path}:{comment.anchor.line}
+  </span>
+);
+
+// A comment_resolved event reads as "resolved/reopened a comment" on the line
+// it targeted; its payload.resolved says which way the comment moved.
+function resolutionVisual(event: TodoEvent): EventVisual {
+  return event.payload?.resolved === false
+    ? { icon: UiRefresh, tone: 'neutral', action: 'reopened a comment' }
+    : { icon: UiCheck, tone: 'success', action: 'resolved a comment' };
+}
+
+function toTimelineItem(event: TodoEvent, index: number, anchored: Map<string, LineComment>): TimelineItem {
+  const visual = event.kind === COMMENT_RESOLVED_KIND ? resolutionVisual(event) : eventVisual(event.kind);
+  const lineComment = event.kind === COMMENT_RESOLVED_KIND ? anchored.get(String(event.payload?.commentId)) : event.id ? anchored.get(event.id) : undefined;
   const time = eventTime(event.timestamp);
   const label = event.label?.trim();
   const oldLabel = event.old_label?.trim();
   const newLabel = event.new_label?.trim();
-  const { bodyHeader, body: bodyNode } = eventBody(event);
+  const { bodyHeader: eventHeader, body: bodyNode } = eventBody(event);
+  const bodyHeader = lineComment && event.kind !== COMMENT_RESOLVED_KIND
+    ? (
+      <span className="inline-flex items-center gap-1.5">
+        {anchorChip(lineComment)}
+        {lineComment.resolved && <Badge variant="outline" size="sm">Resolved</Badge>}
+      </span>
+    )
+    : eventHeader;
 
   return {
     id: event.id || index,
@@ -118,6 +142,7 @@ function toTimelineItem(event: TodoEvent, index: number): TimelineItem {
         ) : (
           label && <span className="ml-1.5">{labelChip(label)}</span>
         )}
+        {event.kind === COMMENT_RESOLVED_KIND && lineComment && <span className="ml-1.5">{anchorChip(lineComment)}</span>}
         {event.short_id && <span className="ml-1.5 font-mono text-[11px]">{event.short_id}</span>}
       </>
     ),
@@ -129,7 +154,10 @@ function toTimelineItem(event: TodoEvent, index: number): TimelineItem {
 
 export function TodoTimeline({ events }: { events: TodoEvent[] }) {
   const [desc, setDesc] = useState(true);
-  const items = useMemo(() => sortEvents(events, desc).map(toTimelineItem), [events, desc]);
+  const items = useMemo(() => {
+    const anchored = new Map(lineComments(events).map(comment => [comment.event.id!, comment]));
+    return sortEvents(events, desc).map((event, index) => toTimelineItem(event, index, anchored));
+  }, [events, desc]);
 
   return (
     <section className="overflow-hidden rounded-lg border border-border bg-card shadow-sm">
