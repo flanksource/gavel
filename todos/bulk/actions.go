@@ -32,7 +32,7 @@ func SetStatus(flags StatusFlags) (ItemFunc, error) {
 			return ItemResult{}, err
 		}
 		if comment != "" {
-			if err := provider.Comment(ctx, todo, comment); err != nil {
+			if err := provider.Comment(ctx, todo, todos.CommentRequest{Body: comment}); err != nil {
 				return ItemResult{}, err
 			}
 		}
@@ -106,7 +106,7 @@ func AddComment(flags CommentFlags) (ItemFunc, error) {
 		return nil, fmt.Errorf("comment body is required")
 	}
 	return func(ctx context.Context, provider todos.Provider, todo *types.TODO) (ItemResult, error) {
-		if err := provider.Comment(ctx, todo, body); err != nil {
+		if err := provider.Comment(ctx, todo, todos.CommentRequest{Body: body}); err != nil {
 			return ItemResult{}, err
 		}
 		return ItemResult{}, nil

@@ -116,7 +116,7 @@ func retire(ctx context.Context, provider todos.Provider, todo, survivor *types.
 	if sentence := children.Sentence(); sentence != "" {
 		comment += "\n\n" + sentence
 	}
-	if err := provider.Comment(ctx, todo, comment); err != nil {
+	if err := provider.Comment(ctx, todo, todos.CommentRequest{Body: comment}); err != nil {
 		return fmt.Errorf("record the merge rationale on %s: %w", Ref(todo), err)
 	}
 	relationships, ok := provider.(todos.RelationshipProvider)
@@ -174,7 +174,7 @@ func rewrite(ctx context.Context, provider todos.Provider, selection *Selection,
 	}
 
 	comment := strings.TrimSpace(proposal.Summary) + "\n\nMerged in: " + strings.Join(refs(selection.Retired), ", ")
-	if err := provider.Comment(ctx, survivor, comment); err != nil {
+	if err := provider.Comment(ctx, survivor, todos.CommentRequest{Body: comment}); err != nil {
 		return fmt.Errorf("record the merge summary on %s: %w", Ref(survivor), err)
 	}
 	return nil

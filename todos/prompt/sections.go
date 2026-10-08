@@ -98,6 +98,7 @@ func buildTODOSection(todo *types.TODO, workDir string, grouped bool, number int
 	}
 
 	section += buildCommentsSection(todo.ProviderEvents)
+	section += buildReviewCommentsSection(todo.ProviderEvents)
 
 	if len(todo.StepsToReproduce) > 0 {
 		section += "## Steps to Reproduce\n\nRun the following to reproduce the failure:\n\n"
@@ -187,12 +188,13 @@ func fixtureCommandProjection(test fixtures.FixtureTest) []string {
 
 // buildCommentsSection renders issue comments so the agent sees the discussion
 // (clarifications, decisions, extra context) that accompanies the issue body.
-// Only CommentAdded events with a non-empty body are included; other event kinds
-// (label changes, status updates) are timeline noise for an implementation prompt.
+// Only free-form comment events with a non-empty body are included: a line
+// comment renders under review comments, and other event kinds (label changes,
+// status updates) are timeline noise for an implementation prompt.
 func buildCommentsSection(events []types.ProviderEvent) string {
 	var section string
 	for _, event := range events {
-		if event.Kind != "CommentAdded" {
+		if event.Kind != types.EventKindComment || anchoredComment(event) {
 			continue
 		}
 		body := strings.TrimSpace(event.Body)

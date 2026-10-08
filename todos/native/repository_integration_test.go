@@ -121,7 +121,7 @@ func TestRepositoryLifecycle(t *testing.T) {
 	_, err = repo.UpdateIssue(ctx, issue.ID, 1, native.IssuePatch{Title: &title})
 	require.ErrorIs(t, err, native.ErrVersionConflict)
 
-	comment, err := repo.AddComment(ctx, issue.ID, issue.Version, "reviewer", "Looks good")
+	comment, err := repo.AddComment(ctx, issue.ID, issue.Version, native.CommentInput{Actor: "reviewer", Body: "Looks good"})
 	require.NoError(t, err)
 	assert.Equal(t, int64(3), comment.Sequence)
 	assert.Equal(t, "comment", comment.Kind)

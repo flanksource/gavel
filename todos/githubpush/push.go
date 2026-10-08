@@ -116,7 +116,7 @@ func pushWithDeps(ctx context.Context, provider todos.Provider, ref string, opts
 				issue.URL, duplicateWarning(issue.Updated), err)
 		}
 	}
-	if err := provider.Comment(ctx, todo, issueHistoryNote(issue)); err != nil {
+	if err := provider.Comment(ctx, todo, todos.CommentRequest{Body: issueHistoryNote(issue)}); err != nil {
 		return nil, fmt.Errorf("wrote and linked %s but failed to record it in the todo's history: %w", issue.URL, err)
 	}
 

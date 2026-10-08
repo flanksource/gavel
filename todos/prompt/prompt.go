@@ -40,6 +40,9 @@ var planTemplate string
 //go:embed todos-triage.prompt
 var triageTemplate string
 
+//go:embed todos-triage-new.prompt
+var triageNewTemplate string
+
 // Options configures Render.
 type Options struct {
 	WorkDir string
@@ -102,7 +105,7 @@ func TemplateData(todoList []*types.TODO, opts Options) map[string]any {
 	data := map[string]any{
 		"multiple":     len(todoList) > 1,
 		"count":        len(todoList),
-		"body":         Sections(todoList, opts.WorkDir, opts.Envelope == EnvelopeTriage),
+		"body":         Sections(todoList, opts.WorkDir, opts.Envelope == EnvelopeTriage || opts.Envelope == EnvelopeTriageNew),
 		"existingPlan": opts.ExistingPlan,
 		"backlog":      opts.Backlog,
 		"labels":       opts.Labels,
@@ -136,6 +139,9 @@ func (o Options) promptName() string {
 func Render(todoList []*types.TODO, opts Options) (captainai.Request, captainai.Config, error) {
 	if len(todoList) == 0 {
 		return captainai.Request{}, captainai.Config{}, fmt.Errorf("no todos supplied")
+	}
+	if err := validateReviewComments(todoList); err != nil {
+		return captainai.Request{}, captainai.Config{}, err
 	}
 	template, err := templateSource(opts)
 	if err != nil {
@@ -206,8 +212,10 @@ func EnvelopeSchemaJSON(kind EnvelopeKind) (json.RawMessage, error) {
 		v = &types.ResultEnvelope{}
 	case EnvelopeTriage:
 		v = &types.TriageEnvelope{}
+	case EnvelopeTriageNew:
+		v = &types.TriageNewEnvelope{}
 	default:
-		return nil, fmt.Errorf("envelope %q is not one of result, plan, triage", kind)
+		return nil, fmt.Errorf("unknown envelope %q", kind)
 	}
 	raw, err := api.SchemaJSON(v)
 	if err != nil {
@@ -255,20 +263,25 @@ func withoutEffortDirectives(user string) string {
 // new built-in prompt appears in the settings UI without a second edit.
 // builtinUsedBy names the commands that run each built-in todo prompt.
 var builtinUsedBy = map[string][]string{
-	"run":    {"gavel todos run"},
-	"plan":   {"gavel todos run --mode plan", "gavel todos plan"},
-	"triage": {"gavel todos run --prompt triage"},
+	"run":        {"gavel todos run"},
+	"plan":       {"gavel todos run --mode plan", "gavel todos plan"},
+	"triage":     {"gavel todos run --prompt triage"},
+	"triage.new": {"gavel todos run --step triage.new", "/api/todos/new"},
 }
 
 func Prompts() []prompts.Prompt {
 	defs := builtins()
 	registry := make([]prompts.Prompt, 0, len(defs))
 	for _, def := range defs {
+		configPath := "todos." + def.Name
+		if def.Name == "triage.new" {
+			configPath = prompts.TodosTriageNew
+		}
 		registry = append(registry, prompts.Prompt{
-			ID:          "todos." + def.Name,
+			ID:          configPath,
 			Title:       def.Title,
 			Description: def.Description,
-			ConfigPath:  "todos." + def.Name,
+			ConfigPath:  configPath,
 			Default:     def.Builtin,
 			UsedBy:      builtinUsedBy[def.Name],
 		})
