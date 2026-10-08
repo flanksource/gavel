@@ -11,12 +11,13 @@ interface Props {
 }
 
 export function Summary({ tests, startTime, endTime, done, runMeta }: Props) {
-  const totals = { total: 0, passed: 0, failed: 0, skipped: 0, pending: 0, running: 0, timedout: 0 };
+  const totals = { total: 0, passed: 0, failed: 0, aborted: 0, skipped: 0, pending: 0, running: 0, timedout: 0 };
   for (const t of tests) {
     const s = sumNonTaskTests(t);
     totals.total += s.total;
     totals.passed += s.passed;
     totals.failed += s.failed;
+    totals.aborted += s.aborted;
     totals.skipped += s.skipped;
     totals.pending += s.pending;
     totals.running += s.running;
@@ -72,6 +73,7 @@ export function Summary({ tests, startTime, endTime, done, runMeta }: Props) {
         {totals.passed > 0 && <><Sep /><span className="text-green-600">{totals.passed} passed</span></>}
         {totals.failed > 0 && <><Sep /><span className="text-red-600">{totals.failed} failed</span></>}
         {totals.timedout > 0 && <><Sep /><span className="text-amber-600">{totals.timedout} timed out</span></>}
+        {totals.aborted > 0 && <><Sep /><span className="text-red-400">{totals.aborted} aborted</span></>}
         {totals.skipped > 0 && <><Sep /><span className="text-yellow-600">{totals.skipped} skipped</span></>}
         {totals.running > 0 && <><Sep /><span className="text-blue-500">{totals.running} running</span></>}
         {totals.pending > 0 && <><Sep /><span className="text-gray-400">{totals.pending} queued</span></>}
@@ -92,6 +94,7 @@ export function Summary({ tests, startTime, endTime, done, runMeta }: Props) {
           <ProgressBar
             segments={[
               { count: totals.passed, color: 'bg-green-500', label: 'passed' },
+              { count: totals.aborted, color: 'bg-red-300', label: 'aborted' },
               { count: totals.skipped, color: 'bg-yellow-400', label: 'skipped' },
               { count: totals.failed, color: 'bg-red-500', label: 'failed' },
               { count: totals.timedout, color: 'bg-amber-500', label: 'timed out' },

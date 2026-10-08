@@ -376,6 +376,7 @@ export function DetailPanel({ test: t, lint, onRerun, rerunBusy, onStop, stopBus
             <Stat label="Passed" value={s.passed} color="text-green-600" />
             <Stat label="Failed" value={s.failed} color="text-red-600" />
             {s.warned > 0 && <Stat label="Warned" value={s.warned} color="text-amber-600" />}
+            {s.aborted > 0 && <Stat label="Aborted" value={s.aborted} color="text-red-400" />}
             {s.skipped > 0 && <Stat label="Skipped" value={s.skipped} color="text-yellow-600" />}
             {s.pending > 0 && <Stat label="Pending" value={s.pending} color="text-blue-600" />}
           </div>
@@ -383,6 +384,7 @@ export function DetailPanel({ test: t, lint, onRerun, rerunBusy, onStop, stopBus
             segments={[
               { count: s.passed, color: 'bg-green-500', label: 'passed' },
               { count: s.warned, color: 'bg-amber-400', label: 'warned' },
+              { count: s.aborted, color: 'bg-red-300', label: 'aborted' },
               { count: s.skipped, color: 'bg-yellow-400', label: 'skipped' },
               { count: s.failed, color: 'bg-red-500', label: 'failed' },
               { count: s.pending, color: 'bg-blue-300', label: 'pending' },
