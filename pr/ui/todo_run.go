@@ -207,17 +207,16 @@ func (s *Server) loadTodoRunTargets(
 	return provider, resolvedSource, todoList, http.StatusOK, nil
 }
 
-// invalidateGitStateOnComplete chains onto req.OnComplete so a finished run —
-// which committed in, or removed, its worktree — drops the memoized git state of
-// the worktree's project and of the run's directory.
-func (s *Server) invalidateGitStateOnComplete(req todoRunRequest) func(*lifecycle.StepOutcome, string, error) {
+// touchGitOnComplete chains onto req.OnComplete so a finished run — which
+// committed in, or removed, its worktree — rescans the git state of the
+// worktree's repository and of the run's directory.
+func (s *Server) touchGitOnComplete(req todoRunRequest) func(*lifecycle.StepOutcome, string, error) {
 	next := req.OnComplete
 	return func(outcome *lifecycle.StepOutcome, status string, err error) {
-		gitState := s.context().GitState()
-		if outcome != nil && outcome.Execution != nil && outcome.Execution.Workspace != nil && outcome.Execution.Workspace.Cwd != "" {
-			gitState.Invalidate(outcome.Execution.Workspace.Cwd)
+		if outcome != nil && outcome.Execution != nil && outcome.Execution.Workspace != nil {
+			s.touchGit(outcome.Execution.Workspace.Cwd)
 		}
-		gitState.Invalidate(req.Dir)
+		s.touchGit(req.Dir)
 		if next != nil {
 			next(outcome, status, err)
 		}
@@ -250,7 +249,7 @@ func (s *Server) handleTodoRun(w http.ResponseWriter, r *http.Request) {
 		Options:   opts,
 		Approvals: true,
 	}
-	req.OnComplete = s.invalidateGitStateOnComplete(req)
+	req.OnComplete = s.touchGitOnComplete(req)
 	// Pre-flight: the one fold the run performs, so a request that cannot
 	// resolve is a 400 the dialog renders instead of a background failure. It is
 	// where the response's step, reason and runtime come from, and it is the

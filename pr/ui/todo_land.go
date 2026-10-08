@@ -63,7 +63,7 @@ func (s *Server) handleTodoLand(w http.ResponseWriter, r *http.Request) {
 	}
 	landing, err := landTodoRun(r.Context(), backed, todo, opts)
 	// Even a failed landing may have moved the checkout or removed the worktree.
-	s.context().GitState().Invalidate(source.Dir)
+	s.touchGit(source.Dir)
 	if landing != nil {
 		s.notify()
 	}

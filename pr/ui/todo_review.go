@@ -302,7 +302,7 @@ func (s *Server) continuationRequest(c run.Continuation) (run.Request, error) {
 		Provider: c.Provider, Registry: todoRuns(), Todo: c.Todo, Dir: c.Dir,
 		Options: opts, Approvals: true,
 	}
-	req.OnComplete = s.invalidateGitStateOnComplete(req)
+	req.OnComplete = s.touchGitOnComplete(req)
 	return req, nil
 }
 

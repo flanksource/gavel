@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	gavelgit "github.com/flanksource/gavel/git"
+	"github.com/flanksource/gavel/git/gitstate"
 )
 
 // todoCommitDiffResponse is a clicky-ui GitDiffPayload: a plain unified diff of
@@ -56,13 +57,30 @@ func (s *Server) handleTodoCommitDiff(w http.ResponseWriter, r *http.Request) {
 // handleTodoCommitFiles returns the per-file change summary (path, change kind,
 // +/- counts, and repomap scope/language) for a commit or a base..hash range,
 // so the dashboard can render a file tree and load each file's diff on demand.
+//
+// A whole base..hash range is read from the range's cached file list (see
+// storedRangeFiles), which lists merge-base(base, hash)..hash: the same files
+// whenever base is an ancestor of hash, as a run's setup is of its head. A
+// single commit, or a range narrowed to one file, stays live: `git show` of an
+// immutable commit is cheap, and the client caches it indefinitely.
 func (s *Server) handleTodoCommitFiles(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	dir, opts, ok := s.todoCommitDiffRequest(w, r)
 	if !ok {
 		return
 	}
-	files, err := gavelgit.CommitFiles(dir, opts)
+	var files []gavelgit.CommitFile
+	var err error
+	if opts.Base != "" && opts.File == "" {
+		tracker, trackerErr := s.context().GitTracker()
+		if trackerErr != nil {
+			writeTodoError(w, gitErrorStatus(trackerErr), trackerErr)
+			return
+		}
+		files, _, err = storedRangeFiles(s.requestContext(r), tracker, dir, gitstate.RangeKey{Base: opts.Base, Head: opts.Head})
+	} else {
+		files, err = gavelgit.CommitFiles(dir, opts)
+	}
 	if err != nil {
 		writeTodoError(w, todoCommitDiffErrorStatus(err), err)
 		return

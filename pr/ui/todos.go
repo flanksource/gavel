@@ -71,7 +71,7 @@ func (s *Server) handleTodosList(w http.ResponseWriter, r *http.Request) {
 		Counts: summarizeTodos(items),
 		Items:  make([]todoSummary, 0, len(items)),
 	}
-	stats, err := runDiffStats(r.Context(), provider, source.Dir)
+	stats, err := s.runDiffStats(r.Context(), provider)
 	if err != nil {
 		writeTodoError(w, http.StatusInternalServerError, err)
 		return
@@ -105,7 +105,7 @@ func (s *Server) handleTodoGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sum.LookupSessionID = lookupSessionID
-	stats, err := runDiffStats(r.Context(), provider, source.Dir)
+	stats, err := s.runDiffStats(r.Context(), provider)
 	if err != nil {
 		writeTodoError(w, http.StatusInternalServerError, err)
 		return

@@ -65,6 +65,11 @@ func TestHandleTodoCommitDiff(t *testing.T) {
 	}
 	for _, tc := range statusCases {
 		for name, handler := range map[string]http.HandlerFunc{"diff": s.handleTodoCommitDiff, "files": s.handleTodoCommitFiles} {
+			// A whole-range file list is read through the git state tracker this
+			// Server lacks; todo_commits_ginkgo_test covers it.
+			if name == "files" && tc.name == "unreachable base" {
+				continue
+			}
 			if rec := get(handler, tc.query); rec.Code != tc.want {
 				t.Fatalf("%s %s: status = %d, want %d; body = %q", name, tc.name, rec.Code, tc.want, rec.Body.String())
 			}
@@ -98,12 +103,8 @@ func TestHandleTodoCommitDiff(t *testing.T) {
 	if !strings.Contains(ranged.Diff, "g.txt") || strings.Contains(ranged.Diff, "f.txt") {
 		t.Fatalf("range diff must hold only g.txt:\n%s", ranged.Diff)
 	}
-	var files todoCommitFilesResponse
-	if err := json.Unmarshal(get(s.handleTodoCommitFiles, "hash="+head+"&base="+base).Body.Bytes(), &files); err != nil {
-		t.Fatalf("unmarshal files: %v", err)
-	}
-	if files.Hash != head || files.Base != base || len(files.Files) != 1 || files.Files[0].Path != "g.txt" {
-		t.Fatalf("files response = %+v, want hash %s base %s and g.txt", files, head, base)
+	if rec := get(s.handleTodoCommitFiles, "hash="+head+"&base="+base); rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("range files without a git state tracker: status = %d, want 503; body = %q", rec.Code, rec.Body.String())
 	}
 }
 

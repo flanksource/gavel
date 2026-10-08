@@ -17,7 +17,10 @@ import (
 )
 
 var _ = Describe("runDiffStats", func() {
-	var repo string
+	var (
+		repo    string
+		tracked trackedGitServer
+	)
 	git := func(args ...string) string {
 		cmd := exec.Command("git", args...)
 		cmd.Dir = repo
@@ -38,8 +41,10 @@ var _ = Describe("runDiffStats", func() {
 		return captaindb.PromptRunOverview{PromptRun: captaindb.PromptRun{ID: run, Workspace: &api.WorkspaceRecord{Worktree: worktree}}}
 	}
 	BeforeEach(func() {
+		tracked = newTrackedGitServer()
 		repo = GinkgoT().TempDir()
-		git("init", "-q")
+		// main is the PR base the tracker compares the repository's branches to.
+		git("init", "-q", "-b", "main")
 		git("config", "user.email", "test@example.com")
 		git("config", "user.name", "Test User")
 		git("config", "commit.gpgsign", "false")
@@ -56,7 +61,7 @@ var _ = Describe("runDiffStats", func() {
 		older, latest, verify := uuid.New(), uuid.New(), uuid.New()
 		t0 := time.Date(2026, 9, 1, 10, 0, 0, 0, time.UTC)
 
-		stats, err := computeRunDiffStats(
+		stats, err := computeRunDiffStats(tracked.ctx, tracked.tracker,
 			map[uuid.UUID][]native.PromptRunLink{issue: {
 				runLink(issue, older, t0),
 				runLink(issue, latest, t0.Add(time.Hour)),
@@ -73,10 +78,27 @@ var _ = Describe("runDiffStats", func() {
 		Expect(stats).To(Equal(map[string]gavelgit.DiffStat{issue.String(): {Commits: 2, Files: 1, Adds: 1, Dels: 0}}))
 	})
 
+	It("reads a range compared once from git_range_stats, without git", func() {
+		issue, run := uuid.New(), uuid.New()
+		setup := commit("base.txt", "base\n", "chore: base")
+		head := commit("a.txt", "a1\na2\n", "feat: a")
+		links := map[uuid.UUID][]native.PromptRunLink{issue: {runLink(issue, run, time.Now())}}
+		overviews := []captaindb.PromptRunOverview{overview(run, &api.WorktreeState{Repo: repo, Setup: setup, Head: head})}
+		want := map[string]gavelgit.DiffStat{issue.String(): {Commits: 1, Files: 1, Adds: 2}}
+
+		Expect(computeRunDiffStats(tracked.ctx, tracked.tracker, links, overviews, nil)).To(Equal(want))
+		var stored int64
+		Expect(tracked.db.Raw(`SELECT count(*) FROM git_range_stats WHERE base_sha = ? AND head_sha = ?`, setup, head).Scan(&stored).Error).To(Succeed())
+		Expect(stored).To(Equal(int64(1)))
+
+		withoutGit()
+		Expect(computeRunDiffStats(tracked.ctx, tracked.tracker, links, overviews, nil)).To(Equal(want))
+	})
+
 	It("gives no stats to an issue whose runs recorded no worktree range", func() {
 		issue, inCheckout, noWorkspace := uuid.New(), uuid.New(), uuid.New()
 		t0 := time.Now()
-		stats, err := computeRunDiffStats(
+		stats, err := computeRunDiffStats(tracked.ctx, tracked.tracker,
 			map[uuid.UUID][]native.PromptRunLink{issue: {runLink(issue, inCheckout, t0), runLink(issue, noWorkspace, t0.Add(time.Second))}},
 			[]captaindb.PromptRunOverview{
 				{PromptRun: captaindb.PromptRun{ID: inCheckout, Workspace: &api.WorkspaceRecord{Cwd: repo}}},
@@ -91,7 +113,7 @@ var _ = Describe("runDiffStats", func() {
 	It("surfaces a git failure for a recorded range git cannot resolve", func() {
 		issue, run := uuid.New(), uuid.New()
 		head := commit("a.txt", "a\n", "feat: a")
-		_, err := computeRunDiffStats(
+		_, err := computeRunDiffStats(tracked.ctx, tracked.tracker,
 			map[uuid.UUID][]native.PromptRunLink{issue: {runLink(issue, run, time.Now())}},
 			[]captaindb.PromptRunOverview{overview(run, &api.WorktreeState{
 				Repo: repo, Setup: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", Head: head,
@@ -103,7 +125,7 @@ var _ = Describe("runDiffStats", func() {
 
 	It("fails loudly when a linked run has no overview", func() {
 		issue := uuid.New()
-		_, err := computeRunDiffStats(map[uuid.UUID][]native.PromptRunLink{issue: {runLink(issue, uuid.New(), time.Now())}}, nil, nil)
+		_, err := computeRunDiffStats(tracked.ctx, tracked.tracker, map[uuid.UUID][]native.PromptRunLink{issue: {runLink(issue, uuid.New(), time.Now())}}, nil, nil)
 		Expect(err).To(MatchError(captaindb.ErrPromptRunNotFound))
 	})
 
@@ -131,7 +153,7 @@ var _ = Describe("runDiffStats", func() {
 			commit("a.txt", "a1\na2\n", "feat: a")
 			landedSHA := commit("b.txt", "b1\n", "feat: b")
 
-			stats, err := computeRunDiffStats(
+			stats, err := computeRunDiffStats(tracked.ctx, tracked.tracker,
 				map[uuid.UUID][]native.PromptRunLink{issue: {runLink(issue, run, time.Now())}},
 				[]captaindb.PromptRunOverview{landedOverview(run)},
 				landed(run, landedSHA, 2),
@@ -144,7 +166,7 @@ var _ = Describe("runDiffStats", func() {
 		It("gives no stats when the landed commit is not in the local repository", func() {
 			issue, run := uuid.New(), uuid.New()
 			commit("base.txt", "base\n", "chore: base")
-			stats, err := computeRunDiffStats(
+			stats, err := computeRunDiffStats(tracked.ctx, tracked.tracker,
 				map[uuid.UUID][]native.PromptRunLink{issue: {runLink(issue, run, time.Now())}},
 				[]captaindb.PromptRunOverview{landedOverview(run)},
 				landed(run, "feedfacefeedfacefeedfacefeedfacefeedface", 1),
@@ -156,7 +178,7 @@ var _ = Describe("runDiffStats", func() {
 		It("surfaces a git failure when the landed commit has fewer ancestors than it landed", func() {
 			issue, run := uuid.New(), uuid.New()
 			landedSHA := commit("a.txt", "a\n", "feat: a")
-			_, err := computeRunDiffStats(
+			_, err := computeRunDiffStats(tracked.ctx, tracked.tracker,
 				map[uuid.UUID][]native.PromptRunLink{issue: {runLink(issue, run, time.Now())}},
 				[]captaindb.PromptRunOverview{landedOverview(run)},
 				landed(run, landedSHA, 3),
