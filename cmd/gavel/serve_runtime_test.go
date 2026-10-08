@@ -96,7 +96,7 @@ func TestStartServeRuntimeStartsMonitorOnSharedPool(t *testing.T) {
 	var openedMode serveDatabaseMode
 	var logs []string
 
-	ingestStats, err := startServeRuntime(ctx, serveRuntimeDependencies{
+	runtime, err := startServeRuntime(ctx, serveRuntimeDependencies{
 		openDatabase: func(_ context.Context, mode serveDatabaseMode) (serveDatabase, error) {
 			openedMode = mode
 			return fakeServeDatabase{gorm: pool, dsn: "postgres://captain:secret@db.internal/gavel", source: "--db-url"}, nil
@@ -128,8 +128,10 @@ func TestStartServeRuntimeStartsMonitorOnSharedPool(t *testing.T) {
 	require.Equal(t, []string{`Database Info: source="--db-url" dsn="postgres://captain:REDACTED@db.internal/gavel" live_sessions=7`}, logs)
 	// The dashboard's own profiler is useless for the monitor it embeds unless
 	// the monitor's counters come back out with it.
-	require.NotNil(t, ingestStats)
-	require.Equal(t, mon.stats, ingestStats())
+	require.NotNil(t, runtime.IngestStats)
+	require.Equal(t, mon.stats, runtime.IngestStats())
+	// The git state tracker and its change feed run on the same pool.
+	require.Same(t, pool, runtime.DB)
 	select {
 	case startedCtx := <-mon.started:
 		require.Same(t, ctx, startedCtx)
@@ -200,7 +202,7 @@ func TestStartServeRuntimeSkipsMonitorWhenDatabaseDisabled(t *testing.T) {
 	projectionCalled := false
 	countCalled := false
 	var logs []string
-	ingestStats, err := startServeRuntime(t.Context(), serveRuntimeDependencies{
+	runtime, err := startServeRuntime(t.Context(), serveRuntimeDependencies{
 		openDatabase: func(context.Context, serveDatabaseMode) (serveDatabase, error) {
 			return fakeServeDatabase{disabled: true}, nil
 		},
@@ -219,7 +221,7 @@ func TestStartServeRuntimeSkipsMonitorWhenDatabaseDisabled(t *testing.T) {
 		logInfo: func(message string) { logs = append(logs, message) },
 	}, serveDatabaseNoMigrations)
 	require.NoError(t, err)
-	require.Nil(t, ingestStats, "there are no ingest counters without a monitor to keep them")
+	require.Equal(t, serveRuntime{}, runtime, "there is no pool, and no ingest counters without a monitor to keep them")
 	require.False(t, monitorCalled)
 	require.False(t, projectionCalled)
 	require.False(t, countCalled)

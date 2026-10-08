@@ -95,18 +95,50 @@ func (s *Server) projectBranchRange(w http.ResponseWriter, r *http.Request) (pro
 }
 
 // handleProjectBranchFiles lists the files a branch changed since it forked
-// from base, in the /api/todos/commits/files shape.
+// from base, in the /api/todos/commits/files shape. The branch head and base
+// tip are the last ref scan's, and the file list is the range's cached one,
+// so only the first read of a range runs git.
 func (s *Server) handleProjectBranchFiles(w http.ResponseWriter, r *http.Request) {
-	ref, opts, ok := s.projectBranchRange(w, r)
+	project, err := GetProject(r.PathValue("name"))
+	if err != nil {
+		respondError(w, statusForProjectErr(err), err.Error())
+		return
+	}
+	branch := strings.TrimSpace(r.URL.Query().Get("branch"))
+	if branch == "" {
+		respondError(w, http.StatusBadRequest, "branch is required")
+		return
+	}
+	tracker, ok := s.requestGitTracker(w)
 	if !ok {
 		return
 	}
-	files, err := gavelgit.CommitFiles(ref.dir, opts)
+	ctx, dir := s.requestContext(r), project.ResolvedDir()
+	state, err := tracker.State(ctx, dir)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	repoID, err := tracker.Track(ctx, dir)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	head, found, err := tracker.Store().BranchHead(ctx, repoID, branch)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !found {
+		respondError(w, http.StatusNotFound, fmt.Errorf("%w %q in project %s", errUnknownBranch, branch, project.Name).Error())
+		return
+	}
+	files, mergeBase, err := storedRangeFiles(ctx, tracker, dir, gitstate.RangeKey{Base: state.BaseSHA, Head: head})
 	if err != nil {
 		respondError(w, todoCommitDiffErrorStatus(err), err.Error())
 		return
 	}
-	respondJSON(w, http.StatusOK, todoCommitFilesResponse{Hash: opts.Head, Base: opts.Base, Files: files})
+	respondJSON(w, http.StatusOK, todoCommitFilesResponse{Hash: head, Base: mergeBase, Files: files})
 }
 
 // handleProjectBranchDiff returns a branch's diff since it forked from base,

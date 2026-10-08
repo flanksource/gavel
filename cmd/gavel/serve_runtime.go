@@ -27,8 +27,9 @@ type serveSessionMonitor interface {
 	IngestStats() monitor.IngestStats
 }
 
-// serveProjection is todoprojection.Projection: the LISTEN on Captain's
-// row-change feed that keeps TODO activity watermarks current.
+// serveProjection is a supervised LISTEN: todoprojection.Projection, which
+// keeps TODO activity watermarks current from Captain's row-change feed, and
+// ui.GitChangeListener, which pushes git state changes to the dashboard.
 type serveProjection interface {
 	Run(context.Context) error
 	Ready() <-chan struct{}
@@ -91,25 +92,31 @@ func serveDatabaseStartupMessage(db serveDatabase, liveSessions int64) string {
 		db.DSNSource(), captaindb.MaskDSN(db.DSN()), liveSessions)
 }
 
+// serveRuntime is what startServeRuntime started: the monitor's counter reader
+// and the shared pool, both nil when persistence is off.
+type serveRuntime struct {
+	IngestStats func() monitor.IngestStats
+	DB          *gorm.DB
+}
+
 // startServeRuntime synchronously opens Gavel's process database before any
 // serve goroutine or HTTP listener can initialize Captain independently. When
 // persistence is enabled, it then runs Captain's continuous session monitor and
 // Gavel's row-change projection on that same pool until the serve context is
-// cancelled. It returns the monitor's counter reader, or nil when persistence
-// is off and no monitor exists.
-func startServeRuntime(ctx context.Context, deps serveRuntimeDependencies, mode serveDatabaseMode) (func() monitor.IngestStats, error) {
+// cancelled.
+func startServeRuntime(ctx context.Context, deps serveRuntimeDependencies, mode serveDatabaseMode) (serveRuntime, error) {
 	db, err := deps.openDatabase(ctx, mode)
 	if err != nil {
-		return nil, fmt.Errorf("initialize Gavel shared database: %w", err)
+		return serveRuntime{}, fmt.Errorf("initialize Gavel shared database: %w", err)
 	}
 	if db.Disabled() {
 		deps.logInfo(serveDatabaseStartupMessage(db, 0))
-		return nil, nil
+		return serveRuntime{}, nil
 	}
 
 	mon, err := deps.newMonitor(db.Gorm())
 	if err != nil {
-		return nil, fmt.Errorf("initialize Captain session monitor: %w", err)
+		return serveRuntime{}, fmt.Errorf("initialize Captain session monitor: %w", err)
 	}
 	go func() {
 		if err := mon.Run(ctx); err != nil && ctx.Err() == nil {
@@ -119,59 +126,73 @@ func startServeRuntime(ctx context.Context, deps serveRuntimeDependencies, mode 
 	select {
 	case <-mon.Ready():
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return serveRuntime{}, ctx.Err()
 	}
 	if err := startProjection(ctx, deps, db.Gorm()); err != nil {
-		return nil, err
+		return serveRuntime{}, err
 	}
 	liveSessions, err := deps.countLiveSessions(ctx, db.Gorm())
 	if err != nil {
-		return nil, fmt.Errorf("count live Captain sessions: %w", err)
+		return serveRuntime{}, fmt.Errorf("count live Captain sessions: %w", err)
 	}
 	deps.logInfo(serveDatabaseStartupMessage(db, liveSessions))
-	return mon.IngestStats, nil
+	return serveRuntime{IngestStats: mon.IngestStats, DB: db.Gorm()}, nil
 }
 
-// startProjection runs the row-change projection on a plain goroutine, like the
-// session monitor, never as a clicky task: a long-lived task holds every task
-// drain open. Startup waits for the first resync, so a projection that cannot
-// run at all (for example against a database Gavel's schema was never applied
-// to) fails serve loudly. One that fails once running is logged and restarted,
-// and every restart resyncs the changes it missed.
+// startProjection runs the row-change projection under startSupervised.
 func startProjection(ctx context.Context, deps serveRuntimeDependencies, gormDB *gorm.DB) error {
 	projection, err := deps.newProjection(gormDB)
 	if err != nil {
 		return fmt.Errorf("initialize Captain row-change projection: %w", err)
 	}
+	return startSupervised(ctx, supervisedListener{
+		name: "Captain row-change projection", stale: "TODO activity is stale", restartDelay: deps.projectionRestartDelay,
+	}, projection)
+}
+
+// supervisedListener names a long-lived LISTEN for its logs and errors: stale
+// says what goes out of date while it is down.
+type supervisedListener struct {
+	name, stale  string
+	restartDelay time.Duration
+}
+
+// startSupervised runs a LISTEN on a plain goroutine, like the session
+// monitor, never as a clicky task: a long-lived task holds every task drain
+// open. Startup waits until it is ready, so one that cannot run at all (for
+// example against a database Gavel's schema was never applied to) fails serve
+// loudly. One that fails once running is logged and restarted, and every
+// restart catches up on the changes it missed.
+func startSupervised(ctx context.Context, listener supervisedListener, run serveProjection) error {
 	startFailed := make(chan error, 1)
-	go superviseProjection(ctx, projection, deps.projectionRestartDelay, startFailed)
+	go superviseProjection(ctx, listener, run, startFailed)
 	select {
-	case <-projection.Ready():
+	case <-run.Ready():
 		return nil
 	case err := <-startFailed:
-		return fmt.Errorf("start Captain row-change projection: %w", err)
+		return fmt.Errorf("start %s: %w", listener.name, err)
 	case <-ctx.Done():
 		return ctx.Err()
 	}
 }
 
-func superviseProjection(ctx context.Context, projection serveProjection, restartDelay time.Duration, startFailed chan<- error) {
+func superviseProjection(ctx context.Context, listener supervisedListener, run serveProjection, startFailed chan<- error) {
 	for {
-		err := projection.Run(ctx)
+		err := run.Run(ctx)
 		if ctx.Err() != nil {
 			return
 		}
 		select {
-		case <-projection.Ready():
+		case <-run.Ready():
 		default:
 			startFailed <- err
 			return
 		}
-		logger.Errorf("Captain row-change projection stopped, TODO activity is stale until it restarts in %s: %v", restartDelay, err)
+		logger.Errorf("%s stopped, %s until it restarts in %s: %v", listener.name, listener.stale, listener.restartDelay, err)
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(restartDelay):
+		case <-time.After(listener.restartDelay):
 		}
 	}
 }

@@ -142,6 +142,10 @@ type Server struct {
 	// selections can be committed back-to-back without overlapping git index
 	// writes. See project_commit_queue.go.
 	commitQueues *commitQueueRegistry
+
+	// gitChanges wakes /api/git/stream on every git_* row change any process
+	// sharing the database NOTIFYs (see GitChangeListener).
+	gitChanges changeNotifier
 }
 
 const orgsCacheTTL = 5 * time.Minute
@@ -559,11 +563,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/projects/{name}/diff", s.handleProjectDiff)
 	mux.HandleFunc("POST /api/projects/{name}/ignore", s.handleProjectIgnore)
 	mux.HandleFunc("GET /api/projects/git-summary", s.handleProjectsGitSummary)
+	mux.HandleFunc("GET /api/sessions", s.handleSessions)
 	mux.HandleFunc("GET /api/projects/{name}/git", s.handleProjectGit)
 	mux.HandleFunc("GET /api/projects/{name}/branch/files", s.handleProjectBranchFiles)
 	mux.HandleFunc("GET /api/projects/{name}/branch/diff", s.handleProjectBranchDiff)
 	mux.HandleFunc("POST /api/projects/{name}/branch/merge", s.handleProjectBranchMerge)
 	mux.HandleFunc("POST /api/projects/{name}/branch/pr", s.handleProjectBranchPR)
+	mux.HandleFunc("GET /api/git/stream", s.handleGitStream)
+	mux.HandleFunc("POST /api/git/focus", s.handleGitFocus)
 	mux.HandleFunc("/api/openapi.json", s.handleOpenAPI)
 	mux.HandleFunc("/api/proc/status", s.handleProcStatus)
 	mux.HandleFunc("/api/proc/status/stream", s.handleProcStatusStream)

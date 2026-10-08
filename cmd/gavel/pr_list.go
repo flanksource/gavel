@@ -17,7 +17,6 @@ import (
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/commons/logger"
-	gavelctx "github.com/flanksource/gavel/context"
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/pr/ui"
 	"github.com/flanksource/gavel/service"
@@ -277,7 +276,15 @@ func runPRUI(opts PRListOptions, databaseMode serveDatabaseMode) error {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	srv := ui.NewServer(gavelctx.New(ctx), interval, ghOpts, ui.SearchConfig{
+	runtime, err := startServeRuntime(ctx, defaultServeRuntimeDependencies, databaseMode)
+	if err != nil {
+		return err
+	}
+	tracker, err := startGitTracker(ctx, runtime.DB)
+	if err != nil {
+		return err
+	}
+	srv := ui.NewServer(serveContext(ctx, tracker), interval, ghOpts, ui.SearchConfig{
 		Repos:       searchOpts.Repos,
 		All:         searchOpts.All,
 		Org:         searchOpts.Org,
@@ -340,14 +347,13 @@ func runPRUI(opts PRListOptions, databaseMode serveDatabaseMode) error {
 		return github.SearchPRs(ghOpts, so)
 	}
 
-	poller := ui.NewPoller(srv, searchFn, interval)
-	ingestStats, err := startServeRuntime(ctx, defaultServeRuntimeDependencies, databaseMode)
-	if err != nil {
+	if runtime.IngestStats != nil {
+		srv.SetIngestStats(runtime.IngestStats)
+	}
+	if err := startGitChangeFeed(ctx, srv, tracker, runtime.DB); err != nil {
 		return err
 	}
-	if ingestStats != nil {
-		srv.SetIngestStats(ingestStats)
-	}
+	poller := ui.NewPoller(srv, searchFn, interval)
 	poller.Start(ctx)
 
 	syncer := ui.NewDetailSyncer(srv, srv.DetailCache(), ghOpts)

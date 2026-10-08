@@ -263,7 +263,7 @@ func (s *Server) startProjectAction(project Project, action projectAction, args 
 		completed.Output = registry.actions[project.Name].Output
 		registry.actions[project.Name] = completed
 		registry.mu.Unlock()
-		s.context().GitState().Invalidate(project.ResolvedDir())
+		s.touchGit(project.ResolvedDir())
 		s.notifyTestRunSyncer()
 		s.notify()
 		if archiveErr := taskhistory.Archive(project.ResolvedDir(), current.RunID); archiveErr != nil {
@@ -314,8 +314,21 @@ func (s *Server) handleProjectStatus(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// Read live: the detail view shows the actual file list and polls fast during actions.
-	result, err := gatherProjectStatus(workDir, status.Options{NoRepomap: true, NoResults: !includeResults, Context: r.Context()})
+	if !includeResults {
+		wt, files, err := storedWorktreeFiles(s.requestContext(r), project, workDir)
+		if err != nil {
+			respondError(w, gitErrorStatus(err), err.Error())
+			return
+		}
+		respondJSON(w, http.StatusOK, projectStatusResponse{
+			Project: project, WorkDir: workDir, Branch: wt.Branch, Files: projectStatusFiles(files),
+			Action: s.projectActionFor(project.Name),
+		})
+		return
+	}
+	// Results stay live: their test and lint enrichment reads the workspace's
+	// .gavel snapshots, which the stored git state does not carry.
+	result, err := gatherProjectStatus(workDir, status.Options{NoRepomap: true, Context: r.Context()})
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err.Error())
 		return

@@ -11,7 +11,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	clickytask "github.com/flanksource/clicky/task"
@@ -111,7 +110,25 @@ var _ = Describe("project git", func() {
 
 	BeforeEach(func() {
 		f = newProjectGitFixture()
-		server = &Server{}
+		server = newTrackedGitServer().server
+	})
+
+	It("answers 503 naming the missing database when the process has no git state tracker", func() {
+		untracked := &Server{ctx: gavelctx.New(context.Background())}
+		for _, target := range []string{
+			"/api/projects/git-summary",
+			"/api/projects/acme/git",
+			"/api/projects/acme/status",
+			"/api/projects/acme/branch/files?branch=" + url.QueryEscape(pgFeature),
+			"/api/projects/acme/status?worktree=" + url.QueryEscape(f.worktree),
+		} {
+			recorder := serveProjectGit(untracked, http.MethodGet, target, nil)
+			Expect(recorder.Code).To(Equal(http.StatusServiceUnavailable), target)
+			Expect(decodeProjectGit[map[string]string](recorder)).To(Equal(map[string]string{"error": gavelctx.ErrNoGitTracker.Error()}), target)
+		}
+		queued := serveProjectGit(untracked, http.MethodPost, "/api/projects/acme/commit-queue",
+			map[string]any{"action": "commit", "files": []string{"b.txt"}, "worktree": f.worktree})
+		Expect(queued.Code).To(Equal(http.StatusServiceUnavailable), queued.Body.String())
 	})
 
 	Describe("GET /api/projects/git-summary", func() {
@@ -149,42 +166,48 @@ var _ = Describe("project git", func() {
 		})
 	})
 
-	Describe("memoized git state", func() {
-		var computed map[string]int
+	Describe("reads from the stored git state", func() {
+		reads := []string{
+			"/api/projects/git-summary",
+			"/api/projects/acme/git",
+			"/api/projects/acme/status",
+			"/api/projects/acme/status?worktree=WT",
+			"/api/projects/acme/branch/files?branch=" + url.QueryEscape(pgFeature),
+		}
+		serveAll := func() map[string]string {
+			GinkgoHelper()
+			bodies := map[string]string{}
+			for _, read := range reads {
+				target := strings.ReplaceAll(read, "WT", url.QueryEscape(f.worktree))
+				recorder := serveProjectGit(server, http.MethodGet, target, nil)
+				Expect(recorder.Code).To(Equal(http.StatusOK), "%s: %s", target, recorder.Body.String())
+				bodies[read] = recorder.Body.String()
+			}
+			return bodies
+		}
 
-		BeforeEach(func() {
-			var mu sync.Mutex
-			computed = map[string]int{}
-			counting := gitstate.New(gitstate.Options{Compute: func(ctx context.Context, dir string) (gitstate.State, error) {
-				mu.Lock()
-				computed[dir]++
-				mu.Unlock()
-				return gitstate.Compute(ctx, dir)
-			}})
-			server = &Server{ctx: gavelctx.New(context.Background(), gavelctx.WithGitState(counting))}
+		It("answers git-summary, project git, status and branch files again without git once tracked", func() {
+			tracked := serveAll()
+
+			withoutGit()
+
+			Expect(serveAll()).To(Equal(tracked))
 		})
 
-		It("computes a project once across git-summary, project git and worktree scoping", func() {
-			Expect(serveProjectGit(server, http.MethodGet, "/api/projects/git-summary", nil).Code).To(Equal(http.StatusOK))
-			Expect(serveProjectGit(server, http.MethodGet, "/api/projects/acme/git", nil).Code).To(Equal(http.StatusOK))
-			Expect(serveProjectGit(server, http.MethodGet, "/api/projects/acme/status?worktree="+url.QueryEscape(f.worktree), nil).Code).To(Equal(http.StatusOK))
-
-			Expect(computed).To(Equal(map[string]int{f.repo: 1}))
-		})
-
-		It("recomputes after a merge invalidates the project", func() {
+		It("rescans after a merge touches the project", func() {
 			Expect(serveProjectGit(server, http.MethodGet, "/api/projects/acme/git", nil).Code).To(Equal(http.StatusOK))
 
 			merged := serveProjectGit(server, http.MethodPost, "/api/projects/acme/branch/merge", map[string]any{"branch": "solo", "mode": "squash", "message": "fix: louder hello"})
 			Expect(merged.Code).To(Equal(http.StatusOK), merged.Body.String())
-			recorder := serveProjectGit(server, http.MethodGet, "/api/projects/acme/git", nil)
 
-			Expect(computed).To(Equal(map[string]int{f.repo: 2}))
-			branches := []string{}
-			for _, branch := range decodeProjectGit[gitstate.State](recorder).Branches {
-				branches = append(branches, branch.Name)
-			}
-			Expect(branches).To(Equal([]string{pgFeature}))
+			Eventually(func() []string {
+				branches := []string{}
+				recorder := serveProjectGit(server, http.MethodGet, "/api/projects/acme/git", nil)
+				for _, branch := range decodeProjectGit[gitstate.State](recorder).Branches {
+					branches = append(branches, branch.Name)
+				}
+				return branches
+			}).WithTimeout(10 * time.Second).Should(Equal([]string{pgFeature}))
 		})
 	})
 

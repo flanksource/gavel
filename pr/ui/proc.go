@@ -79,7 +79,8 @@ func (s *Server) handleProcStatus(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, `{"error":"unknown project"}`, http.StatusNotFound)
 			return
 		}
-		json.NewEncoder(w).Encode(projectStatus(s.requestContext(r), p)) //nolint:errcheck
+		changes := gitChangeCounts(s.requestContext(r), []Project{p})
+		json.NewEncoder(w).Encode(projectStatus(p, changes)) //nolint:errcheck
 		return
 	}
 
@@ -93,9 +94,10 @@ func (s *Server) handleProcStatus(w http.ResponseWriter, r *http.Request) {
 // slash, so the keyspaces don't collide. Shared by handleProcStatus so the
 // single-shot poll carries the full wire shape (live cpu/mem + process tree).
 func procStatusByKey(ctx gavelctx.Context, projects []Project) map[string]procStatus {
+	changes := gitChangeCounts(ctx, projects)
 	byKey := make(map[string]procStatus)
 	for _, p := range projects {
-		st := projectStatus(ctx, p)
+		st := projectStatus(p, changes)
 		byKey[p.Name] = st
 		for _, repo := range p.Repos {
 			byKey[repo] = st
@@ -297,7 +299,7 @@ func (s *Server) handleProcFavicon(w http.ResponseWriter, r *http.Request) {
 		respondError(w, statusForProjectErr(err), err.Error())
 		return
 	}
-	st := projectStatus(s.requestContext(r), p)
+	st := projectStatus(p, nil)
 	if !st.HasProcfile || !procStatusHasPort(st, port) {
 		http.Error(w, "unknown process port", http.StatusNotFound)
 		return
@@ -390,7 +392,8 @@ func (s *Server) handleProcControl(w http.ResponseWriter, r *http.Request) {
 	// live-root set is stale by definition — don't make the task streams wait
 	// out its TTL to notice.
 	s.taskSource.invalidateRoots()
-	json.NewEncoder(w).Encode(projectStatus(s.requestContext(r), p)) //nolint:errcheck
+	changes := gitChangeCounts(s.requestContext(r), []Project{p})
+	json.NewEncoder(w).Encode(projectStatus(p, changes)) //nolint:errcheck
 }
 
 // handleProcLogs tails the last N lines of a project's process logs as plain
@@ -435,21 +438,15 @@ func (s *Server) handleProcLogs(w http.ResponseWriter, r *http.Request) {
 
 // projectStatus resolves a project's directory and returns its Procfile status.
 // A directory without a Procfile is reported as hasProcfile=false (not an error)
-// so projects that aren't running anything render cleanly.
-func projectStatus(ctx gavelctx.Context, p Project) procStatus {
+// so projects that aren't running anything render cleanly. gitChanges are the
+// uncommitted-file counts by directory (see gitChangeCounts).
+func projectStatus(p Project, gitChanges map[string]int) procStatus {
 	dir := p.ResolvedDir()
 
 	// Uncommitted-change count is a property of the workspace directory, not of
 	// Procfile supervision, so it is surfaced for every workspace in the sidebar
 	// regardless of whether the directory has a Procfile.
-	var st procStatus
-	if dir != "" {
-		if n, err := gitChangeCount(ctx, dir); err != nil {
-			logger.Debugf("git status %s: %v", dir, err)
-		} else {
-			st.GitChanges = n
-		}
-	}
+	st := procStatus{GitChanges: gitChanges[dir]}
 
 	if dir == "" || procfile.Find(dir, "") == "" {
 		return st
@@ -466,23 +463,6 @@ func projectStatus(ctx gavelctx.Context, p Project) procStatus {
 	st.Profiles = rep.Profiles
 	st.Profile = rep.Profile
 	return st
-}
-
-// gitChangeCount returns the number of uncommitted files (staged, unstaged,
-// untracked and conflicted) in the primary checkout of dir, read from the
-// memoized git state so the proc-status cadence never runs git itself. A non-nil
-// error means dir's git state could not be read (e.g. not a git work tree);
-// callers treat that as "no git info" rather than zero changes.
-func gitChangeCount(ctx gavelctx.Context, dir string) (int, error) {
-	state, err := ctx.GitState().Get(ctx, dir)
-	if err != nil {
-		return 0, err
-	}
-	primary, ok := state.Primary()
-	if !ok {
-		return 0, fmt.Errorf("git state of %s lists no primary checkout", dir)
-	}
-	return primary.Changes.Files(), nil
 }
 
 func writeJSONError(w http.ResponseWriter, status int, err error) {

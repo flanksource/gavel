@@ -67,7 +67,7 @@ func (s *Server) handleProjectBranchMerge(w http.ResponseWriter, r *http.Request
 	}
 	response, err := s.mergeProjectBranch(r.Context(), ref, request)
 	// A failed merge can still have moved refs or removed the worktree.
-	s.context().GitState().Invalidate(ref.dir)
+	s.touchGit(ref.dir)
 	if err != nil {
 		respondBranchError(w, err)
 		return
@@ -124,7 +124,7 @@ func refuseDirtyWorktree(ctx context.Context, wt gavelgit.Worktree) error {
 		return nil
 	}
 	// Read live, never memoized: a stale "clean" must not let a merge destroy work.
-	changes, _, err := gitstate.WorktreeChanges(ctx, wt.Path)
+	changes, _, _, err := gitstate.WorktreeChanges(ctx, wt.Path)
 	if err != nil {
 		return err
 	}
@@ -163,7 +163,7 @@ func (s *Server) handleProjectBranchPR(w http.ResponseWriter, r *http.Request) {
 	result, err := prcreate.Create(r.Context(), ref.dir, prcreate.Input{
 		SHAs: commits, Base: baseRef, Draft: request.Draft, Deps: s.projectPRDeps(),
 	})
-	s.context().GitState().Invalidate(ref.dir)
+	s.touchGit(ref.dir)
 	if err != nil {
 		respondBranchError(w, err)
 		return

@@ -35,13 +35,13 @@ func (s *Server) handleProjectDiff(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// Read live: the detail view shows the actual file list and polls fast during actions.
-	result, err := gatherProjectStatus(workDir, status.Options{NoRepomap: true, NoResults: true, Context: r.Context()})
+	// The files come from the stored status scan; the patch below stays live.
+	_, changed, err := storedWorktreeFiles(s.requestContext(r), project, workDir)
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, fmt.Sprintf("gather project status: %v", err))
+		respondError(w, gitErrorStatus(err), fmt.Sprintf("project changes: %v", err))
 		return
 	}
-	target, files, err := selectProjectDiffFiles(r.URL.Query().Get("path"), result.Files)
+	target, files, err := selectProjectDiffFiles(r.URL.Query().Get("path"), changed)
 	if err != nil {
 		respondError(w, http.StatusBadRequest, err.Error())
 		return

@@ -12,6 +12,7 @@ import (
 	cexec "github.com/flanksource/clicky/exec"
 	clickytask "github.com/flanksource/clicky/task"
 	"github.com/flanksource/commons/logger"
+	gavelctx "github.com/flanksource/gavel/context"
 	"github.com/flanksource/gavel/internal/taskhistory"
 	"github.com/google/uuid"
 )
@@ -315,7 +316,7 @@ func (q *commitQueue) watch(s *Server, generation *commitQueueGeneration, entry 
 }
 
 func (q *commitQueue) settle(s *Server, generation *commitQueueGeneration) {
-	s.context().GitState().Invalidate(q.workDir)
+	s.touchGit(q.workDir)
 	q.mu.Lock()
 	if !generation.readyToArchive() {
 		q.mu.Unlock()
@@ -369,6 +370,10 @@ func (s *Server) handleCommitQueue(w http.ResponseWriter, r *http.Request) {
 		var conflict *commitQueueConflictError
 		if errors.As(err, &conflict) {
 			respondError(w, http.StatusConflict, err.Error())
+			return
+		}
+		if errors.Is(err, gavelctx.ErrNoGitTracker) {
+			respondError(w, http.StatusServiceUnavailable, err.Error())
 			return
 		}
 		respondError(w, http.StatusBadRequest, err.Error())

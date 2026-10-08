@@ -9,18 +9,20 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/flanksource/gavel/status"
-
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
 
 var _ = Describe("project working-tree diff", func() {
-	var originalProjectsPath string
+	var (
+		originalProjectsPath string
+		server               *Server
+	)
 
 	BeforeEach(func() {
 		originalProjectsPath = projectsPath
 		projectsPath = filepath.Join(GinkgoT().TempDir(), "projects.json")
+		server = newTrackedGitServer().server
 	})
 
 	AfterEach(func() {
@@ -34,17 +36,11 @@ var _ = Describe("project working-tree diff", func() {
 		writeDiffFile(dir, "src/unstaged.go", "package src\n\nvar Unstaged = true\n")
 		writeDiffFile(dir, "src/new.go", "package src\n\nvar New = true\n")
 		Expect(SaveProjects([]Project{{Name: "gavel", Dir: dir}})).To(Succeed())
-		originalGather := gatherProjectStatus
-		gatherProjectStatus = func(workDir string, opts status.Options) (*status.Result, error) {
-			Expect(opts.NoResults).To(BeTrue())
-			return originalGather(workDir, opts)
-		}
-		DeferCleanup(func() { gatherProjectStatus = originalGather })
 
 		recorder := httptest.NewRecorder()
 		request := httptest.NewRequest(http.MethodGet, "/api/projects/gavel/diff?path=src", nil)
 		request.SetPathValue("name", "gavel")
-		(&Server{}).handleProjectDiff(recorder, request)
+		server.handleProjectDiff(recorder, request)
 
 		Expect(recorder.Code).To(Equal(http.StatusOK), recorder.Body.String())
 		var response projectDiffResponse
@@ -72,7 +68,7 @@ var _ = Describe("project working-tree diff", func() {
 		statusRecorder := httptest.NewRecorder()
 		statusRequest := httptest.NewRequest(http.MethodGet, "/api/projects/gavel/status", nil)
 		statusRequest.SetPathValue("name", "gavel")
-		(&Server{}).handleProjectStatus(statusRecorder, statusRequest)
+		server.handleProjectStatus(statusRecorder, statusRequest)
 		Expect(statusRecorder.Code).To(Equal(http.StatusOK), statusRecorder.Body.String())
 		var projectStatus projectStatusResponse
 		Expect(json.Unmarshal(statusRecorder.Body.Bytes(), &projectStatus)).To(Succeed())
@@ -84,11 +80,11 @@ var _ = Describe("project working-tree diff", func() {
 		Expect(paths).NotTo(ContainElement("src/private.env"))
 		Expect(paths).NotTo(ContainElement("generated/private.env"))
 
-		response := requestProjectDiff("gavel", "src")
+		response := requestProjectDiff(server, "gavel", "src")
 		Expect(response.Diff).To(ContainSubstring("PUBLIC=visible"))
 		Expect(response.Diff).To(ContainSubstring("STAGED=visible"))
 		Expect(response.Diff).NotTo(ContainSubstring("PRIVATE=hidden"))
-		generated := requestProjectDiff("gavel", "generated")
+		generated := requestProjectDiff(server, "gavel", "generated")
 		Expect(generated.Diff).To(ContainSubstring("NESTED_PUBLIC=visible"))
 		Expect(generated.Diff).NotTo(ContainSubstring("NESTED_PRIVATE=hidden"))
 	})
@@ -101,7 +97,7 @@ var _ = Describe("project working-tree diff", func() {
 		writeDiffFile(dir, "src/devtools/noise.log", "ignored output\n")
 		Expect(SaveProjects([]Project{{Name: "gavel", Dir: dir}})).To(Succeed())
 
-		response := requestProjectDiff("gavel", "src/devtools")
+		response := requestProjectDiff(server, "gavel", "src/devtools")
 
 		Expect(response.Path).To(Equal("src/devtools"))
 		Expect(response.Diff).To(ContainSubstring("export const panel = true;"))
@@ -117,10 +113,10 @@ var _ = Describe("project working-tree diff", func() {
 		writeDiffFile(dir, "src/text.go", "package src\n\nvar Text = true\n")
 		Expect(SaveProjects([]Project{{Name: "gavel", Dir: dir}})).To(Succeed())
 
-		fileResponse := requestProjectDiff("gavel", "src/image.bin")
+		fileResponse := requestProjectDiff(server, "gavel", "src/image.bin")
 		Expect(fileResponse.Binary).To(BeTrue())
 
-		folderResponse := requestProjectDiff("gavel", "src")
+		folderResponse := requestProjectDiff(server, "gavel", "src")
 		Expect(folderResponse.Binary).To(BeFalse())
 		Expect(folderResponse.Diff).To(ContainSubstring("Binary files"))
 		Expect(folderResponse.Diff).To(ContainSubstring("var Text = true"))
@@ -131,7 +127,7 @@ var _ = Describe("project working-tree diff", func() {
 		writeDiffFile(dir, "src/large.txt", strings.Repeat("a changed line with enough content\n", 12_000))
 		Expect(SaveProjects([]Project{{Name: "gavel", Dir: dir}})).To(Succeed())
 
-		response := requestProjectDiff("gavel", "src/large.txt")
+		response := requestProjectDiff(server, "gavel", "src/large.txt")
 
 		Expect(response.Truncated).To(BeTrue())
 		Expect(len(response.Diff)).To(BeNumerically("<=", 256*1024))
@@ -146,7 +142,7 @@ var _ = Describe("project working-tree diff", func() {
 			recorder := httptest.NewRecorder()
 			request := httptest.NewRequest(http.MethodGet, "/api/projects/gavel/diff?path="+path, nil)
 			request.SetPathValue("name", "gavel")
-			(&Server{}).handleProjectDiff(recorder, request)
+			server.handleProjectDiff(recorder, request)
 
 			Expect(recorder.Code).To(Equal(http.StatusBadRequest), path)
 		}
@@ -155,7 +151,8 @@ var _ = Describe("project working-tree diff", func() {
 
 func createDiffRepository() string {
 	dir := GinkgoT().TempDir()
-	runDiffGit(dir, "init", "-q")
+	// main is the PR base the git state tracker compares branches to.
+	runDiffGit(dir, "init", "-q", "-b", "main")
 	runDiffGit(dir, "config", "user.email", "developer@example.com")
 	runDiffGit(dir, "config", "user.name", "Developer")
 	writeDiffFile(dir, "src/staged.go", "package src\n\nvar Staged = false\n")
@@ -165,11 +162,11 @@ func createDiffRepository() string {
 	return dir
 }
 
-func requestProjectDiff(project, path string) projectDiffResponse {
+func requestProjectDiff(server *Server, project, path string) projectDiffResponse {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/projects/"+project+"/diff?path="+path, nil)
 	request.SetPathValue("name", project)
-	(&Server{}).handleProjectDiff(recorder, request)
+	server.handleProjectDiff(recorder, request)
 	Expect(recorder.Code).To(Equal(http.StatusOK), recorder.Body.String())
 	var response projectDiffResponse
 	Expect(json.Unmarshal(recorder.Body.Bytes(), &response)).To(Succeed())

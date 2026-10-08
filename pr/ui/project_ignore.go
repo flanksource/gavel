@@ -66,7 +66,7 @@ func (s *Server) handleProjectIgnore(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	s.context().GitState().Invalidate(workDir)
+	s.touchGit(workDir)
 	s.notify()
 	respondJSON(w, http.StatusOK, projectIgnoreResponse{
 		Path: normalized, Directory: request.Directory, Rule: rule, Added: added,

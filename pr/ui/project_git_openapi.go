@@ -51,6 +51,22 @@ func projectGitOpenAPIPaths() map[string]any {
 		"/api/projects/{name}/branch/pr": map[string]any{
 			"post": projectLifecycleOp("projects_branch_pr", "Open a pull request carrying a branch's commits", "200", "ProjectBranchPRResponse", jsonRequestBody("ProjectBranchPRRequest")),
 		},
+		"/api/git/stream": map[string]any{"get": map[string]any{
+			"operationId": "git_stream",
+			"summary":     "Stream {project: generation} for every tracked project whenever a repository's git state changes",
+			"tags":        []string{"project"},
+			"responses": map[string]any{"200": map[string]any{
+				"description": "Server-sent events; each data frame is a ProjectGitGenerations object",
+				"content":     map[string]any{"text/event-stream": map[string]any{"schema": typed("string")}},
+			}},
+		}},
+		"/api/git/focus": map[string]any{"post": map[string]any{
+			"operationId": "git_focus",
+			"summary":     "Rescan a project's worktree at the hot cadence for the next 30 seconds",
+			"tags":        []string{"project"},
+			"requestBody": jsonRequestBody("GitFocusRequest")["requestBody"],
+			"responses":   map[string]any{"204": map[string]any{"description": "Focused"}},
+		}},
 	}
 }
 
@@ -85,10 +101,19 @@ func projectGitOpenAPISchemas() map[string]any {
 	})
 	return map[string]any{
 		"ProjectGitSummaries": map[string]any{"type": "array", "items": summary},
-		"ProjectGit": objectSchema([]string{"base", "currentBranch", "baseCheckedOut", "worktrees", "branches"}, map[string]any{
-			"base": typed("string"), "currentBranch": typed("string"), "baseCheckedOut": typed("boolean"),
-			"worktrees": map[string]any{"type": "array", "items": worktree},
-			"branches":  map[string]any{"type": "array", "items": branch},
+		"ProjectGit": objectSchema([]string{"base", "baseSha", "currentBranch", "baseCheckedOut", "worktrees", "branches", "computedAt", "generation"}, map[string]any{
+			"base": typed("string"), "baseSha": typed("string"), "currentBranch": typed("string"), "baseCheckedOut": typed("boolean"),
+			"worktrees":  map[string]any{"type": "array", "items": worktree},
+			"branches":   map[string]any{"type": "array", "items": branch},
+			"computedAt": dateTime, "generation": typed("integer"), "error": typed("string"),
+		}),
+		"ProjectGitGenerations": map[string]any{"type": "object", "additionalProperties": typed("integer")},
+		"GitFocusRequest": objectSchema([]string{"project"}, map[string]any{
+			"project": typed("string"),
+			"worktree": map[string]any{
+				"type":        "string",
+				"description": "Absolute path of one of the project's git worktrees; defaults to the project directory",
+			},
 		}),
 		"ProjectBranchFiles": objectSchema([]string{"hash", "files"}, map[string]any{
 			"hash": typed("string"), "base": typed("string"), "files": map[string]any{"type": "array", "items": typed("object")},

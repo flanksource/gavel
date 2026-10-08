@@ -8,14 +8,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
-	gavelctx "github.com/flanksource/gavel/context"
 	"github.com/flanksource/gavel/procfile"
 )
 
@@ -352,49 +350,6 @@ func TestHandleProcControlValidation(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestGitChangeCount(t *testing.T) {
-	// A directory that is not a git work tree is reported as an error, so the
-	// caller can omit the field rather than claiming zero changes.
-	ctx := gavelctx.New(context.Background())
-	if _, err := gitChangeCount(ctx, t.TempDir()); err == nil {
-		t.Error("gitChangeCount on a non-git dir = nil error, want error")
-	}
-
-	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
-	dir := t.TempDir()
-	for _, args := range [][]string{
-		{"init", "-q", "-b", "main"},
-		{"-c", "user.email=test@example.com", "-c", "user.name=test", "commit", "-q", "--allow-empty", "-m", "initial"},
-	} {
-		if out, err := runGit(dir, args...); err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
-		}
-	}
-
-	if n, err := gitChangeCount(ctx, dir); err != nil || n != 0 {
-		t.Fatalf("gitChangeCount(clean repo) = (%d, %v), want (0, nil)", n, err)
-	}
-
-	for _, name := range []string{"a.txt", "b.txt"} {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(name), 0o644); err != nil {
-			t.Fatalf("write %s: %v", name, err)
-		}
-	}
-	if n, err := gitChangeCount(ctx, dir); err != nil || n != 0 {
-		t.Fatalf("gitChangeCount(memoized clean repo) = (%d, %v), want the memoized (0, nil)", n, err)
-	}
-	ctx.GitState().Invalidate(dir)
-	if n, err := gitChangeCount(ctx, dir); err != nil || n != 2 {
-		t.Fatalf("gitChangeCount(2 untracked, invalidated) = (%d, %v), want (2, nil)", n, err)
-	}
-}
-
-func runGit(dir string, args ...string) ([]byte, error) {
-	cmd := exec.Command("git", args...)
-	cmd.Dir = dir
-	return cmd.CombinedOutput()
 }
 
 func TestHandleProcLogsUnknownProject(t *testing.T) {
