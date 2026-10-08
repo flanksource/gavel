@@ -27,6 +27,7 @@ require (
 	github.com/elazarl/goproxy v1.7.2
 	github.com/flanksource/clicky/aichat v1.21.70
 	github.com/flanksource/deps v1.0.42
+	github.com/fsnotify/fsnotify v1.10.1
 	github.com/ghodss/yaml v1.0.0
 	github.com/gliderlabs/ssh v0.3.8
 	github.com/go-git/go-git/v5 v5.19.2
@@ -174,7 +175,6 @@ require (
 	github.com/fergusstrange/embedded-postgres v1.34.0 // indirect
 	github.com/firebase/genkit/go v1.11.0 // indirect
 	github.com/flanksource/sandbox-runtime v1.0.2 // indirect
-	github.com/fsnotify/fsnotify v1.10.1 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.0 // indirect
 	github.com/geoffgarside/ber v1.2.0 // indirect
 	github.com/glebarez/sqlite v1.11.0 // indirect
