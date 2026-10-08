@@ -15,6 +15,9 @@ export interface Test {
   sql_profile?: FixtureSQLProfile;
   fixture?: { key: string; kind: string; state: string; command_ms?: number; violations?: string[] };
   skipped?: boolean;
+  // aborted marks a test that never ran because the run stopped after an
+  // earlier failure — distinct from an intentional skip.
+  aborted?: boolean;
   failed?: boolean;
   passed?: boolean;
   // warned marks a node that completed with a non-blocking warning — amber,
@@ -114,6 +117,7 @@ export interface TestSummary {
   Passed: number;
   Failed: number;
   Warned?: number;
+  Aborted?: number;
   Skipped: number;
   Pending: number;
   Running?: number;

@@ -1,9 +1,7 @@
-# Keep the sibling package discoverable for local development while the catalog
-# pins builds to an exact published Clicky UI version for CI.
+# Install published Clicky UI; Vite resolves the sibling checkout in dev mode.
 packages:
   - "."
   - "../../testrunner/ui"
-  - "../../../clicky-ui/packages/ui"
 allowBuilds:
   "@parcel/watcher": true
   esbuild: true
@@ -19,7 +17,7 @@ catalog:
   # `prepare` (a full source build whose icon generator fetches
   # api.iconify.design), which CI rate-limits to HTTP 429 and then fails the
   # bundle on the icons that never downloaded. The npm tarball ships dist/.
-  '@flanksource/clicky-ui': 0.3.41
+  '@flanksource/clicky-ui': 0.3.46
   "@floating-ui/react": ^0.27.19
   '@iconify-icons/codicon': ^1.2.30
   '@iconify-icons/vscode-icons': ^1.2.29
@@ -97,20 +95,12 @@ catalog:
 catalogMode: prefer
 
 linkWorkspacePackages: true
+preferWorkspacePackages: true
 
 minimumReleaseAgeExclude:
-  - '@flanksource/clicky-ui@0.3.41'
+  - '@flanksource/clicky-ui@0.3.46'
 
-# Force a single @types/react major across the workspace. The linked clicky-ui
-# sibling pins React 18 while pr/ui (this app) is React 19; without a single
-# @types/react, shared peer-typed libs (@mdxeditor/editor, recharts, radix) resolve
-# React 19's ReactNode (with bigint) against clicky-ui's React 18 ReactNode → TS2786
-# when clicky-ui's .d.ts are generated during a local `make build`. Dedupe the *type*
-# packages to 19 (runtime react stays per-package); clicky-ui peerDeps allow React 19.
+# Keep shared peer types on React 19; the test-runner workspace uses React 18.
 overrides:
   "@types/react": ^19.2.17
   "@types/react-dom": ^19.2.3
-# Prefer the linked local clicky-ui even when the registry has a newer matching
-# version, so local edits always win. When the sibling is absent (CI) there is
-# no workspace package and clicky-ui resolves from the npm registry.
-preferWorkspacePackages: true
