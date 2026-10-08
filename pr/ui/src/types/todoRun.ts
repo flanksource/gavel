@@ -63,6 +63,10 @@ export interface TodoRunOptions {
   // process: the two runs proceed in parallel. Set only in answer to the
   // server's 409 run_owned_elsewhere, never as a default.
   force?: boolean;
+  // Continue on the branch the todo's previous run left behind (true) or start
+  // a fresh one (false). Set only when a reusable branch exists, and chosen per
+  // run rather than remembered — see run.tsx's rememberTodoRunOptions.
+  reuseBranch?: boolean;
 }
 
 export interface TodoRunResponse {

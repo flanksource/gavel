@@ -47,7 +47,10 @@ import { useProcStatus } from './procStatusQuery';
 import { useAppMutations } from './useAppMutations';
 import { usePRDetailStream } from './usePRDetailStream';
 import { useIsMobile } from './useIsMobile';
-import { UiActivity, UiArrowLeft, UiCheck, UiClose, UiCog, UiCopy, UiFolderGit, UiGitPr, UiJson, UiLink, UiListChecks, UiMarkdown, UiRobotAi } from '@flanksource/clicky-ui/icons';
+import { UiActivity, UiArrowLeft, UiCheck, UiClose, UiCog, UiCopy, UiFolderGit, UiGitPr, UiJson, UiLink, UiListChecks, UiMarkdown, UiRobotAi, UiTerminal } from '@flanksource/clicky-ui/icons';
+import { SessionsDetailPane, SessionsSidebar } from './components/sessions/SessionsView';
+import { useAgentSessions } from './components/sessions/sessionQueries';
+import { worktreeRef } from './projectRef';
 import { PromptsView } from './components/prompts/PromptsView';
 import type { IconProps } from '@flanksource/clicky-ui/icons';
 import type { ComponentType } from 'react';
@@ -59,7 +62,7 @@ const defaultConfig: SearchConfig = { repos: [] };
 // Percentage width of the AppShell body sidebar per tab. A PR row carries title,
 // repo, checks and badges so it wants half the body; a project is just a name and
 // a run list, so its list is narrow.
-const bodySplitByTab: Partial<Record<Tab, number>> = { prs: 50, projects: 22, todos: 38 };
+const bodySplitByTab: Partial<Record<Tab, number>> = { prs: 50, projects: 22, todos: 38, sessions: 32 };
 
 type WebKitExternalBridge = {
   webkit?: {
@@ -298,6 +301,15 @@ export function App() {
   const navigateTodoView = useCallback((view: TodoDetailView, mode: 'push' | 'replace' = 'push') => {
     commitRoute({ ...routeState, todoView: view }, mode);
   }, [commitRoute, routeState]);
+
+  const navigateSession = useCallback((id: string) => {
+    commitRoute({ tab: 'sessions', selectedPath: id, scopeProject, projectDiffPath: '', projectRunId: '', projectHistory: false, projectResults: false, projectRef: '', todoView: {}, filters });
+  }, [commitRoute, filters, scopeProject]);
+
+  // A session's worktree opens in its project's detail pane on that ref.
+  const navigateSessionWorktree = useCallback((project: string, path: string) => {
+    commitRoute({ tab: 'projects', selectedPath: project, scopeProject, projectDiffPath: '', projectRunId: '', projectHistory: false, projectResults: false, projectRef: worktreeRef(path), todoView: {}, filters });
+  }, [commitRoute, filters, scopeProject]);
 
   const navigateTask = useCallback((id: string | null) => {
     commitRoute({ tab: 'tasks', selectedPath: id ?? '', scopeProject, projectDiffPath: '', projectRunId: '', projectHistory: false, projectResults: false, projectRef: '', todoView: {}, filters });
@@ -584,6 +596,7 @@ export function App() {
   // The git work summary shown on every project row refreshes slowly and only
   // matters while the Projects tab is on screen.
   const projectGitSummary = useProjectGitSummary({ enabled: activeTab === 'projects' && visible });
+  const agentSessions = useAgentSessions({ enabled: activeTab === 'sessions' && visible });
   function selectPRFromPalette(pr: PRItem) {
     commitRoute({ tab: 'prs', selectedPath: pr.route_path || `${pr.repo}/${pr.number}`, scopeProject, projectDiffPath: '', projectRunId: '', projectHistory: false, projectResults: false, projectRef: '', todoView: {}, filters });
     loadPR(pr);
@@ -722,6 +735,8 @@ export function App() {
             />
           ) : activeTab === 'todos' && !todosFullWidth ? (
             <TodoWorkspaceList todos={todos} projectsLoaded={projectsLoaded} projectError={projectError} />
+          ) : activeTab === 'sessions' ? (
+            <SessionsSidebar query={agentSessions} selectedId={selectedPath} scopeProject={scopeProject} onSelect={navigateSession} />
           ) : undefined
         }
         bodySplit={bodySplitByTab[activeTab] ?? 38}
@@ -771,6 +786,8 @@ export function App() {
               )}
             </div>
           </div>
+        ) : activeTab === 'sessions' ? (
+          <SessionsDetailPane query={agentSessions} selectedId={selectedPath} onOpenTodo={navigateTodo} onOpenWorktree={navigateSessionWorktree} />
         ) : activeTab === 'tasks' ? (
           <div className="h-full overflow-y-auto p-4">
             <TaskManager basePath="/api/v1" selectedId={selectedPath || undefined} onSelectRun={navigateTask} />
@@ -1136,6 +1153,7 @@ function TabBar({ active, onChange }: { active: Tab; onChange: (t: Tab) => void 
     { id: 'prs', label: 'PRs', icon: UiGitPr },
     { id: 'projects', label: 'Projects', icon: UiFolderGit },
     { id: 'todos', label: 'Todos', icon: UiCheck },
+    { id: 'sessions', label: 'Sessions', icon: UiTerminal },
     { id: 'tasks', label: 'Tasks', icon: UiListChecks },
     { id: 'prompts', label: 'Prompts', icon: UiRobotAi },
     { id: 'activity', label: 'Activity', icon: UiActivity },
