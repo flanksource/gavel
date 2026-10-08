@@ -25,8 +25,8 @@ require (
 	github.com/creack/pty v1.1.24
 	github.com/dustin/go-humanize v1.0.1
 	github.com/elazarl/goproxy v1.7.2
-	github.com/flanksource/clicky/aichat v1.21.70
-	github.com/flanksource/deps v1.0.42
+	github.com/flanksource/clicky/aichat v1.21.76
+	github.com/flanksource/deps v1.0.43
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/ghodss/yaml v1.0.0
 	github.com/gliderlabs/ssh v0.3.8
