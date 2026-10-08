@@ -25,12 +25,10 @@ const uiVersion = git('describe --tags --always', 'dev');
 const uiCommit = git('rev-parse --short HEAD', 'unknown');
 const uiDate = new Date().toISOString();
 
-// Sibling clicky-ui checkout (the package pnpm-workspace.yaml links locally). In
-// dev (`pr list --ui --dev`) resolve clicky-ui's JS subpaths to its *source* so
-// sibling edits are available on browser refresh. The package only publishes
-// `dist`, so the linked symlink otherwise serves stale built output. Only the JS entry points
-// are redirected; `styles.css` keeps resolving to the package's generated CSS.
-const clickySrc = resolve(here, '../../../clicky-ui/packages/ui/src');
+// `pr list --ui --dev` uses sibling source and generated CSS through Vite;
+// package installs and production builds use the published dependency.
+const clickyPackage = resolve(here, '../../../clicky-ui/packages/ui');
+const clickySrc = resolve(clickyPackage, 'src');
 const gavelTestRunnerHooks = resolve(here, '../../testrunner/ui/src/hooks.ts');
 const clickySubpaths = ['components', 'data', 'icons', 'hooks', 'ai', 'chat', 'rpc', 'mdx-editor'];
 
@@ -53,10 +51,15 @@ export default defineConfig(({ command }) => {
     console.log('[pr/ui] dev: GAVEL_UI_WATCH_CLICKY=0 — clicky-ui source is not watched');
   }
   const clickyAliases = localClicky
-    ? clickySubpaths.map(sub => ({
-        find: `@flanksource/clicky-ui/${sub}`,
-        replacement: resolve(clickySrc, `${sub}.ts`),
-      }))
+    ? [
+        ...clickySubpaths.map(sub => ({
+          find: `@flanksource/clicky-ui/${sub}`,
+          replacement: resolve(clickySrc, `${sub}.ts`),
+        })),
+        { find: /^@flanksource\/clicky-ui$/, replacement: resolve(clickySrc, 'index.ts') },
+        { find: '@flanksource/clicky-ui/styles.css', replacement: resolve(clickyPackage, 'dist/styles.css') },
+        { find: '@flanksource/clicky-ui/mdx-editor.css', replacement: resolve(clickyPackage, 'dist/mdx-editor.css') },
+      ]
     : [];
 
   return {

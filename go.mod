@@ -3,10 +3,10 @@ module github.com/flanksource/gavel
 go 1.26.1
 
 require (
-	github.com/flanksource/captain v0.0.64-0.20261001052307-ba475d4fc9f9
+	github.com/flanksource/captain v0.0.67
 	github.com/flanksource/clicky v1.21.76
-	github.com/flanksource/commons v1.59.1
-	github.com/flanksource/commons-db v0.1.39
+	github.com/flanksource/commons v1.60.1
+	github.com/flanksource/commons-db v0.1.50
 	github.com/flanksource/gomplate/v3 v3.24.90
 	github.com/flanksource/is-healthy v1.0.92 // indirect
 	github.com/flanksource/kubectl-neat v1.0.4 // indirect
@@ -25,8 +25,8 @@ require (
 	github.com/creack/pty v1.1.24
 	github.com/dustin/go-humanize v1.0.1
 	github.com/elazarl/goproxy v1.7.2
-	github.com/flanksource/clicky/aichat v1.21.70
-	github.com/flanksource/deps v1.0.42
+	github.com/flanksource/clicky/aichat v1.21.76
+	github.com/flanksource/deps v1.0.43
 	github.com/ghodss/yaml v1.0.0
 	github.com/gliderlabs/ssh v0.3.8
 	github.com/go-git/go-git/v5 v5.19.2
