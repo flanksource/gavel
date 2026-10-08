@@ -72,6 +72,9 @@ type FixtureBenchmarkState struct {
 // (html, markdown, …). GetChildren hangs the Tests/Lint sections beneath it, so
 // this stays the overall roll-up while each section carries its own counts.
 func (s Snapshot) Pretty() api.Text {
+	if len(s.Tests) == 0 && s.Status.LintRun {
+		return linters.NewSummaryView(s.Lint, 0).Pretty()
+	}
 	return parsers.Tests(s.Tests).Sum().Pretty()
 }
 

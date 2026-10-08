@@ -79,8 +79,13 @@ func patchSetupDefs(specSchema map[string]any) {
 	})
 	patchDefProp(defs, "Worktree", "mode", map[string]any{
 		"description": "Worktree lifecycle: new creates a disposable worktree and removes it afterwards, " +
-			"existing reuses the one at path, none runs in the checkout itself.",
-		"enum": []any{"none", "new", "existing"},
+			"existing reuses the one at path, branch checks out the existing branch as it is, " +
+			"none runs in the checkout itself.",
+		"enum": []any{"none", "new", "existing", "branch"},
+	})
+	patchDefProp(defs, "Worktree", "branch", map[string]any{
+		"description": "Existing branch a branch-mode worktree checks out as it is. It must exist and not be " +
+			"checked out in another worktree; it is never deleted at teardown.",
 	})
 	patchDefProp(defs, "Worktree", "base", map[string]any{
 		"description": "Commit-ish the new worktree branches from. Defaults to HEAD so the start commit is " +

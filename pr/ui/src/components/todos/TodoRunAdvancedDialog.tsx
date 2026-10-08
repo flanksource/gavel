@@ -25,6 +25,7 @@ import {
 } from "./providers";
 import { lastPromptRunOptions, verificationSpec } from "./PromptRunButton";
 import { TodoRunWarnings } from './TodoRunWarnings';
+import { continueBranchLabel, NEW_BRANCH_LABEL, type RunBranchChoice } from './runBranchChoice';
 
 const RUN_SPEC_SECTIONS = ["model", "prompt", "permissions", "workspace", "verify", "commit"] as const;
 const VERIFY_SPEC_SECTIONS = ["model", "permissions", "verify"] as const;
@@ -61,6 +62,7 @@ export function TodoRunAdvancedDialog({
   nextStep = null,
   dir,
   refID,
+  branchChoice = null,
 }: {
   open: boolean;
   onClose: () => void;
@@ -74,12 +76,15 @@ export function TodoRunAdvancedDialog({
   nextStep?: string | null;
   dir: string;
   refID: string;
+  // The branch a run may continue on, when the todo's previous run left one.
+  branchChoice?: RunBranchChoice | null;
 }) {
   const queryClient = useQueryClient();
   const [runRequest, setRunRequest] = useState<AIPromptRunValue>({ spec: INITIAL_RUNTIME_VALUE });
   const runtimeValue = runRequest.spec ?? {};
   const [step, setStep] = useState<string>(initialMode ?? nextStep ?? "run");
   const [resume, setResume] = useState(false);
+  const [reuseBranch, setReuseBranch] = useState(true);
   const [promptDraft, setPromptDraft] = useState("");
   const [promptDirty, setPromptDirty] = useState(false);
   const [previewError, setPreviewError] = useState("");
@@ -93,6 +98,7 @@ export function TodoRunAdvancedDialog({
   const promptDirtyRef = useRef(false);
   const seededRef = useRef(false);
 
+  const offersBranchChoice = !!branchChoice && step === "run";
   const steps = context?.lifecycle.steps ?? [];
   const selectedStep = steps.find((item) => item.name === step);
   const submitLabel = selectedStep?.label ?? step;
@@ -153,6 +159,7 @@ export function TodoRunAdvancedDialog({
   useEffect(() => {
     if (!open) return;
     setResume(false);
+    setReuseBranch(true);
     setPromptDraft("");
     setPromptDirty(false);
     setSpecYAML("");
@@ -182,7 +189,14 @@ export function TodoRunAdvancedDialog({
     const { spec } = promptRuntimeValueToPayload(runtimeValue);
     if (step === "verify") return { ref: refID, step, presets, spec: verificationSpec(spec) };
     const prompt = promptDirty ? { ...spec.prompt, user: promptDraft } : spec.prompt;
-    return { ref: refID, step, presets, spec: { ...spec, prompt }, resume: (isCmux && resume) || undefined };
+    return {
+      ref: refID,
+      step,
+      presets,
+      spec: { ...spec, prompt },
+      resume: (isCmux && resume) || undefined,
+      reuseBranch: offersBranchChoice ? reuseBranch : undefined,
+    };
   }
 
   useEffect(() => {
@@ -216,7 +230,7 @@ export function TodoRunAdvancedDialog({
       controller.abort();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, context, contextError, refID, step, runtimeValue, runRequest.presets, resume, isCmux, promptDraft, promptDirty, regenNonce, previewMutation.mutate]);
+  }, [open, context, contextError, refID, step, runtimeValue, runRequest.presets, resume, reuseBranch, offersBranchChoice, isCmux, promptDraft, promptDirty, regenNonce, previewMutation.mutate]);
 
   if (!open) return null;
 
@@ -262,6 +276,13 @@ export function TodoRunAdvancedDialog({
                 </Field>
                 <PromptRunEditor value={runRequest} onChange={setRunRequest} presets={context.runtimePresets ?? []} onCreatePreset={saveRuntimePreset} models={activeModels} families={families} tools={context.tools} specSections={step === "verify" ? VERIFY_SPEC_SECTIONS : RUN_SPEC_SECTIONS} promptEditor={step === "verify" ? undefined : promptEditorNode} promptLabel="Prompt" resolution={resolution}>
                   <>
+                    {branchChoice && offersBranchChoice && (
+                      <fieldset className="space-y-1 border-0 p-0">
+                        <legend className="mb-1 text-xs font-medium">Branch</legend>
+                        <label className="flex items-center gap-2 text-xs"><input type="radio" name="run-branch" checked={reuseBranch} onChange={() => setReuseBranch(true)} /><span>{continueBranchLabel(branchChoice)}</span></label>
+                        <label className="flex items-center gap-2 text-xs"><input type="radio" name="run-branch" checked={!reuseBranch} onChange={() => setReuseBranch(false)} /><span>{NEW_BRANCH_LABEL}</span></label>
+                      </fieldset>
+                    )}
                     {isCmux && step !== "verify" && <label className="inline-flex items-center gap-2 text-xs"><input type="checkbox" checked={resume} onChange={(event) => setResume(event.currentTarget.checked)} /><span>Resume session</span></label>}
                     {(lastUsed || recentAdvanced.length > 0) && (
                       <div className="space-y-1 border-t border-border pt-3">

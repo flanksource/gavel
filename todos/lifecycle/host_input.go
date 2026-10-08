@@ -10,6 +10,7 @@ import (
 	"github.com/flanksource/captain/pkg/promptrun"
 	gavelai "github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/todos"
+	"github.com/flanksource/gavel/todos/triagenew"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/flanksource/gavel/utils"
 	"github.com/google/uuid"
@@ -25,8 +26,9 @@ type stepInput struct {
 	eventMu   sync.Mutex
 	// hooks are gavel's own hooks; setup is the plugin gavel adds itself when a
 	// supplied provider skips Captain's, which must trail every other hook.
-	hooks []any
-	setup *capsetup.Plugin
+	hooks     []any
+	setup     *capsetup.Plugin
+	triageNew *triagenew.Review
 }
 
 // runInput constructs the same real hooks and callbacks for preview and dispatch.
@@ -69,7 +71,11 @@ func (h *Host) runInput(exec *todos.ExecutorContext, todo *types.TODO, prepared 
 		// Changes are relative to the repository, even when a TODO runs in a subdirectory.
 		Repo: utils.GitRoot(prepared.workDir),
 	}
-	if opts.Approvals {
+	if prepared.definition.Name == "triage.new" {
+		state.triageNew = h.newTriageReview(state, todo)
+		state.input.Config.Tools = state.triageNew.Tools()
+	}
+	if opts.Approvals || prepared.definition.Name == "triage.new" {
 		state.input.Approvals = &promptrun.ApprovalOptions{RequestedBy: "gavel-dashboard"}
 	}
 	return state

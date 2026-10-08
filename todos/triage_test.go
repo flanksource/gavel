@@ -45,8 +45,8 @@ func (p *triageRecorder) UpdateState(_ context.Context, todo *types.TODO, update
 	return nil
 }
 
-func (p *triageRecorder) Comment(_ context.Context, todo *types.TODO, body string) error {
-	p.comments = append(p.comments, body)
+func (p *triageRecorder) Comment(_ context.Context, todo *types.TODO, comment CommentRequest) error {
+	p.comments = append(p.comments, comment.Body)
 	p.record("comment", todo)
 	return nil
 }
@@ -270,7 +270,7 @@ func (p *noLinkProvider) Edit(context.Context, *types.TODO, EditRequest) error {
 func (p *noLinkProvider) UpdateState(context.Context, *types.TODO, StateUpdate) error {
 	return nil
 }
-func (p *noLinkProvider) Comment(context.Context, *types.TODO, string) error { return nil }
+func (p *noLinkProvider) Comment(context.Context, *types.TODO, CommentRequest) error { return nil }
 
 func TestApplyTriageWithNothingToApplyWritesNothing(t *testing.T) {
 	provider := &triageRecorder{}

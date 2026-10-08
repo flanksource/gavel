@@ -1,6 +1,7 @@
 import type { TodoRunCommit, TodoRunLanding, TodoRunWorktree } from '../../types';
 import { CommitRangeChanges, type CommitRangeOption, type CommitRangeRequest } from '../CommitRangeChanges';
 import { todoQuery } from './format';
+import type { LineComment, LineCommentAnchor } from './lineComments';
 import { commitSubject, shortSha } from './runWorkspace';
 import { TodoRunLandingSummary } from './TodoRunLandingSummary';
 import { todoQueryKeys } from './todoQueries';
@@ -38,6 +39,14 @@ export interface TodoRunChangesProps {
   worktree?: TodoRunWorktree;
   commits: TodoRunCommit[];
   landing?: TodoRunLanding;
+  /** The attempt the run's workspace was recorded on; stamped on new line comments. */
+  attemptId?: string;
+  /** Review comments on the run's diffs; omit for a read-only viewer. */
+  lineComments?: {
+    comments: LineComment[];
+    onCreate: (anchor: LineCommentAnchor, body: string) => Promise<void>;
+    onResolve: (id: string, resolved: boolean) => Promise<void>;
+  };
 }
 
 /**
@@ -46,7 +55,7 @@ export interface TodoRunChangesProps {
  * its commits. The viewer itself is the shared CommitRangeChanges; this only
  * says which ranges a run has and where the todo commit endpoints live.
  */
-export function TodoRunChanges({ dir, worktree, commits, landing }: TodoRunChangesProps) {
+export function TodoRunChanges({ dir, worktree, commits, landing, attemptId, lineComments }: TodoRunChangesProps) {
   const combined: ChangeRange | null = worktree?.setup && worktree.head ? { base: worktree.setup, hash: worktree.head } : null;
   const ranges = new Map<string, ChangeRange>();
   if (combined) ranges.set(ALL_CHANGES, combined);
@@ -90,6 +99,15 @@ export function TodoRunChanges({ dir, worktree, commits, landing }: TodoRunChang
       diffRequest={diffRequest}
       summary={`${commits.length} ${commits.length === 1 ? 'commit' : 'commits'}`}
       unreachable={<UnreachableNotice landing={landing} />}
+      lineComments={lineComments && {
+        ...lineComments,
+        // The same base/hash strings the diff request sends, so an anchor
+        // written here matches the range again after a reload.
+        anchorFor: id => {
+          const range = rangeOf(id);
+          return { base: range.base, commit: range.hash, branch: worktree?.branch, attemptId };
+        },
+      }}
     />
   );
 }

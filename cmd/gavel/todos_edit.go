@@ -160,7 +160,7 @@ func runTodosComment(opts TodosCommentOptions, bodyChanged bool) error {
 		return fmt.Errorf("comment body is required (pass a message or --body)")
 	}
 
-	if err := provider.Comment(ctx, todo, body); err != nil {
+	if err := provider.Comment(ctx, todo, todos.CommentRequest{Body: body}); err != nil {
 		return err
 	}
 	return printTodo(ctx, provider, ref, todo)
@@ -195,7 +195,7 @@ func runTodosReopen(opts TodosReopenOptions) error {
 		return err
 	}
 	if hasComment {
-		if err := provider.Comment(ctx, todo, comment); err != nil {
+		if err := provider.Comment(ctx, todo, todos.CommentRequest{Body: comment}); err != nil {
 			return err
 		}
 	}

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	captaindb "github.com/flanksource/captain/pkg/database"
+	"github.com/flanksource/clicky/sse"
 	"github.com/flanksource/commons/logger"
 	gavelctx "github.com/flanksource/gavel/context"
 	"github.com/flanksource/gavel/git/gitstate"
@@ -105,8 +106,12 @@ func (s *Server) handleGitStream(w http.ResponseWriter, r *http.Request) {
 	}
 	wake, unsubscribe := s.gitChanges.Subscribe()
 	defer unsubscribe()
-	load := func(ctx context.Context) (any, error) { return s.gitGenerations(ctx) }
-	if err := serveSnapshotStream(w, r, load, gitStreamInterval, wake); err != nil {
+	err := sse.ServeSnapshot(w, r, sse.SnapshotOptions{
+		Load:     func(ctx context.Context) (any, error) { return s.gitGenerations(ctx) },
+		Interval: gitStreamInterval,
+		Wake:     wake,
+	})
+	if err != nil {
 		logger.Warnf("git stream: %v", err)
 	}
 }

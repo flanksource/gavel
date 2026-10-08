@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -20,6 +19,7 @@ import (
 	"github.com/flanksource/clicky/metrics"
 	"github.com/flanksource/clicky/route"
 	rpchttp "github.com/flanksource/clicky/rpc/http"
+	"github.com/flanksource/clicky/sse"
 	clickytask "github.com/flanksource/clicky/task"
 	"github.com/flanksource/commons/logger"
 	gavelctx "github.com/flanksource/gavel/context"
@@ -57,7 +57,7 @@ type Server struct {
 	err         error
 	paused      bool
 	rateLimit   *github.RateLimit
-	updated     chan struct{}
+	updated     sse.Notifier
 	refreshCh   chan struct{}
 	subscribers []chan github.PRSearchResults
 	ghOpts      github.Options
@@ -145,7 +145,7 @@ type Server struct {
 
 	// gitChanges wakes /api/git/stream on every git_* row change any process
 	// sharing the database NOTIFYs (see GitChangeListener).
-	gitChanges changeNotifier
+	gitChanges sse.Notifier
 }
 
 const orgsCacheTTL = 5 * time.Minute
@@ -194,7 +194,6 @@ func NewServer(ctx gavelctx.Context, interval time.Duration, ghOpts github.Optio
 		interval:          interval,
 		ghOpts:            ghOpts,
 		config:            config,
-		updated:           make(chan struct{}, 1),
 		refreshCh:         make(chan struct{}, 1),
 		detailCache:       NewDetailCache(),
 		gavelCache:        make(map[string]*GavelResultsSummary),
@@ -445,10 +444,7 @@ func (s *Server) TogglePause() {
 }
 
 func (s *Server) notify() {
-	select {
-	case s.updated <- struct{}{}:
-	default:
-	}
+	s.updated.Notify()
 }
 
 func (s *Server) RefreshCh() chan struct{} {
@@ -510,6 +506,7 @@ func (s *Server) Handler() http.Handler {
 	// A run's transcript is Captain's to read and follow: its handler resolves
 	// the session through the pool Gavel shares with Captain's CLI registry.
 	mux.Handle("/api/captain/sessions/", http.StripPrefix("/api/captain/sessions", captaincli.SessionHandler()))
+	mux.HandleFunc("GET /api/sessions", s.handleSessions)
 	mux.HandleFunc("/api/todos/session/stats", s.handleTodoSessionStats)
 	mux.HandleFunc("GET /api/todos/session/detail", s.handleTodoSessionDetail)
 	mux.HandleFunc("POST /api/todos/session/stop", s.handleTodoRunStop)
@@ -563,7 +560,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/projects/{name}/diff", s.handleProjectDiff)
 	mux.HandleFunc("POST /api/projects/{name}/ignore", s.handleProjectIgnore)
 	mux.HandleFunc("GET /api/projects/git-summary", s.handleProjectsGitSummary)
-	mux.HandleFunc("GET /api/sessions", s.handleSessions)
 	mux.HandleFunc("GET /api/projects/{name}/git", s.handleProjectGit)
 	mux.HandleFunc("GET /api/projects/{name}/branch/files", s.handleProjectBranchFiles)
 	mux.HandleFunc("GET /api/projects/{name}/branch/diff", s.handleProjectBranchDiff)
@@ -592,12 +588,13 @@ func (s *Server) Handler() http.Handler {
 	registerPprof(mux)
 	registerIngestStats(mux, s.readIngestStats)
 	mux.HandleFunc("/results/", s.handleGavelResults)
-	// A browser's direct EventSource on a stream route is refused (a stale page
-	// would starve the tab's connections); hub subs pass through by context.
-	root := refuseDirectBrowserStreams(rpchttp.TimingMiddleware(mux))
 	// One multiplexed SSE connection per tab: subs are served through root, so
 	// every stream route above is reachable exactly as a direct request sees it.
-	registerEventRoutes(mux, root, s.uiBuild())
+	// A browser's direct EventSource on a stream route is refused (a stale page
+	// would starve the tab's connections); hub subs pass through by context.
+	hub := sse.NewHub(sse.HubOptions{Build: s.uiBuild()})
+	root := hub.Guard(rpchttp.TimingMiddleware(mux))
+	hub.Register(mux, root)
 	return root
 }
 
@@ -899,63 +896,30 @@ func (s *Server) handleJSON(w http.ResponseWriter, _ *http.Request) {
 	json.NewEncoder(w).Encode(data) //nolint:errcheck
 }
 
+// prStreamInterval is the PR stream's liveness cadence, not its change signal:
+// the snapshot only moves when the poller refetches (minutes apart) and calls
+// notify(), which wakes every open stream at once. sse.Snapshot sends a frame
+// only when the payload changed and a ping otherwise — re-sending the full
+// snapshot every tick minted a fresh object on the client that re-rendered the
+// whole app, even on routes that show no PR data. No field is excluded from the
+// comparison: fetchedAt moving is what tells the client to merge.
+var prStreamInterval = 2 * time.Second
+
 func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "streaming not supported", http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-
-	// last is the most recently pushed payload. The 2s ticker below is a
-	// liveness cadence, not a change signal: the PR snapshot only moves when the
-	// poller refetches (every interval, minutes apart), so re-marshalling and
-	// re-sending it every tick would push the full snapshot — tens to hundreds of
-	// KB — forever at 0.5Hz. Every one of those frames mints a fresh object on
-	// the client, re-rendering the whole app even on routes that show no PR data.
-	// Compare against the previous payload and send a comment frame instead when
-	// nothing changed, matching handleProcStatusStream.
-	var last []byte
-
-	s.mu.RLock()
-	initial := s.snapshotLocked()
-	s.mu.RUnlock()
-	initial = s.withUnread(initial)
-	initial = s.withSyncStatus(initial)
-	if b, err := json.Marshal(initial); err == nil {
-		fmt.Fprintf(w, "data: %s\n\n", b)
-		last = b
-		flusher.Flush()
-	}
-
-	ticker := time.NewTicker(2 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-r.Context().Done():
-			return
-		case <-s.updated:
-		case <-ticker.C:
-		}
-
-		s.mu.RLock()
-		data := s.snapshotLocked()
-		s.mu.RUnlock()
-		data = s.withUnread(data)
-		data = s.withSyncStatus(data)
-
-		if b, err := json.Marshal(data); err == nil && !bytes.Equal(b, last) {
-			fmt.Fprintf(w, "data: %s\n\n", b)
-			last = b
-		} else {
-			// Comment frame: keeps the socket warm without firing a client re-render.
-			fmt.Fprint(w, ": ping\n\n")
-		}
-		flusher.Flush()
+	wake, unsubscribe := s.updated.Subscribe()
+	defer unsubscribe()
+	err := sse.ServeSnapshot(w, r, sse.SnapshotOptions{
+		Interval: prStreamInterval,
+		Wake:     wake,
+		Load: func(context.Context) (any, error) {
+			s.mu.RLock()
+			data := s.snapshotLocked()
+			s.mu.RUnlock()
+			return s.withSyncStatus(s.withUnread(data)), nil
+		},
+	})
+	if err != nil {
+		logger.Warnf("PR list stream: %v", err)
 	}
 }
 

@@ -72,7 +72,7 @@ func ApplyTriage(ctx context.Context, provider Provider, todo *types.TODO, env *
 		return err
 	}
 	if comment := strings.TrimSpace(env.Comment); comment != "" {
-		if err := provider.Comment(ctx, todo, comment); err != nil {
+		if err := provider.Comment(ctx, todo, CommentRequest{Body: comment}); err != nil {
 			return fmt.Errorf("record triage rationale on %s: %w", triageRef(todo), err)
 		}
 	}

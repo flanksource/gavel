@@ -4,6 +4,7 @@ export * from './types/sessions';
 export * from './types/agentSessions';
 export * from './types/todoRun';
 export * from './types/projectGit';
+export * from './types/agentSessions';
 
 import type { Test } from '@flanksource/clicky-ui/data';
 import type { LinterResult } from '@flanksource/gavel/testrunner';

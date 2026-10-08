@@ -1,9 +1,11 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import { useQuery, type QueryKey, type UseQueryResult } from '@tanstack/react-query';
 import { Select, SplitPane } from '@flanksource/clicky-ui/components';
-import { GitDiffPanel, Tree, type GitDiffPayload } from '@flanksource/clicky-ui/data';
+import { GitDiffPanel, Tree, type DiffLineTarget, type DiffLineWidget, type GitDiffPayload } from '@flanksource/clicky-ui/data';
 import { UiDiff } from '@flanksource/clicky-ui/icons';
 import type { TodoCommitFile, TodoCommitFilesResponse } from '../types';
+import { DiffLineComment, DiffLineComposer } from './todos/DiffLineComment';
+import { matchesRange, type LineComment, type LineCommentAnchor } from './todos/lineComments';
 import { HttpError, fetchJSON } from '../query';
 import { Spinner } from '../icons/Spinner';
 import { ProjectFileIcon } from '../icons/ProjectFileIcon';
@@ -92,7 +94,11 @@ function ChangeTree({ roots, selected, onSelect }: { roots: ChangeNode[]; select
   );
 }
 
-function ChangeDiff({ path, diff }: { path: string; diff: UseQueryResult<GitDiffPayload> }) {
+function ChangeDiff({ path, diff, lineActions }: {
+  path: string;
+  diff: UseQueryResult<GitDiffPayload>;
+  lineActions?: { onLineAction: (target: DiffLineTarget) => void; lineWidgets: DiffLineWidget[] };
+}) {
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
@@ -105,9 +111,66 @@ function ChangeDiff({ path, diff }: { path: string; diff: UseQueryResult<GitDiff
         error={diff.error?.message ?? ''}
         className="min-h-0 flex-1 overflow-auto border-t-0"
         maxHeightClassName="max-h-none"
+        onLineAction={lineActions?.onLineAction}
+        lineWidgets={lineActions?.lineWidgets}
       />
     </div>
   );
+}
+
+/** The range an anchor is pinned to, as the diff request of that range names it. */
+export interface LineCommentRange {
+  /** The range base; empty for a single-commit range. */
+  base: string;
+  commit: string;
+  branch?: string;
+  attemptId?: string;
+}
+
+/**
+ * Review comments on a diff. Comments whose (path, base, commit) match the
+ * selected range and file render under their line; a line's "+" button opens a
+ * composer that calls `onCreate` with the anchor it captured.
+ */
+export interface CommitRangeLineComments {
+  comments: LineComment[];
+  /** The anchor range of one option, or null when that option cannot be commented on. */
+  anchorFor: (rangeId: string) => LineCommentRange | null;
+  onCreate: (anchor: LineCommentAnchor, body: string) => Promise<void>;
+  onResolve: (id: string, resolved: boolean) => Promise<void>;
+}
+
+interface Composer {
+  rangeId: string;
+  target: DiffLineTarget;
+  path: string;
+}
+
+function lineWidgetsFor({ config, range, path, composer, onSave, onCancel }: {
+  config: CommitRangeLineComments;
+  range: LineCommentRange;
+  path: string;
+  composer: Composer | null;
+  onSave: (target: DiffLineTarget, body: string) => Promise<void>;
+  onCancel: () => void;
+}): DiffLineWidget[] {
+  const widgets: DiffLineWidget[] = config.comments
+    .filter(comment => matchesRange(comment.anchor, { path, base: range.base, commit: range.commit }))
+    .map(comment => ({
+      key: `comment:${comment.event.id}`,
+      side: comment.anchor.side,
+      line: comment.anchor.line,
+      node: <DiffLineComment comment={comment} onResolve={config.onResolve} />,
+    }));
+  if (composer) {
+    widgets.push({
+      key: 'composer',
+      side: composer.target.side,
+      line: composer.target.line,
+      node: <DiffLineComposer onSave={body => onSave(composer.target, body)} onCancel={onCancel} />,
+    });
+  }
+  return widgets;
 }
 
 /** One GET the viewer makes: its cache key, URL, and the error context. */
@@ -136,6 +199,8 @@ export interface CommitRangeChangesProps {
   unreachable?: ReactNode;
   /** Whether to render the picker; a single-option viewer may drop it. */
   showPicker?: boolean;
+  /** Enables review comments on a selected file's diff; omit for a read-only viewer. */
+  lineComments?: CommitRangeLineComments;
 }
 
 /**
@@ -146,9 +211,10 @@ export interface CommitRangeChangesProps {
  * diffs that path; the selection survives a picker change while the path still
  * exists.
  */
-export function CommitRangeChanges({ options, filesRequest, diffRequest, summary, unreachable, showPicker = true }: CommitRangeChangesProps) {
+export function CommitRangeChanges({ options, filesRequest, diffRequest, summary, unreachable, showPicker = true, lineComments }: CommitRangeChangesProps) {
   const [picked, setPicked] = useState('');
   const [selectedPath, setSelectedPath] = useState('');
+  const [composer, setComposer] = useState<Composer | null>(null);
   const activeId = options.some(option => option.id === picked) ? picked : options[0]?.id;
 
   const filesQuery = useQuery({
@@ -179,6 +245,33 @@ export function CommitRangeChanges({ options, filesRequest, diffRequest, summary
   if (activeId === undefined) return null;
 
   const gone = unreachable !== undefined && (isGone(filesQuery.error) || isGone(diffQuery.error));
+  const selectedNode = findFileTreeNode(roots, activePath);
+  const commentRange = lineComments && selectedNode?.file ? lineComments.anchorFor(activeId) : null;
+  const lineActions = lineComments && commentRange
+    ? {
+        onLineAction: (target: DiffLineTarget) => setComposer({ rangeId: activeId, path: activePath, target }),
+        lineWidgets: lineWidgetsFor({
+          config: lineComments,
+          range: commentRange,
+          path: activePath,
+          composer: composer?.rangeId === activeId && composer.path === activePath ? composer : null,
+          onSave: async (target, body) => {
+            await lineComments.onCreate({
+              path: activePath,
+              side: target.side,
+              line: target.line,
+              lineText: target.content,
+              base: commentRange.base || undefined,
+              commit: commentRange.commit,
+              branch: commentRange.branch,
+              attemptId: commentRange.attemptId,
+            }, body);
+            setComposer(null);
+          },
+          onCancel: () => setComposer(null),
+        }),
+      }
+    : undefined;
   return (
     <div className="flex flex-col">
       {(showPicker || summary) && (
@@ -214,8 +307,8 @@ export function CommitRangeChanges({ options, filesRequest, diffRequest, summary
           minRight={30}
           leftClass="overflow-auto"
           rightClass="overflow-hidden"
-          left={<ChangeTree roots={roots} selected={findFileTreeNode(roots, activePath)} onSelect={setSelectedPath} />}
-          right={<ChangeDiff path={activePath} diff={diffQuery} />}
+          left={<ChangeTree roots={roots} selected={selectedNode} onSelect={setSelectedPath} />}
+          right={<ChangeDiff path={activePath} diff={diffQuery} lineActions={lineActions} />}
         />
       )}
     </div>

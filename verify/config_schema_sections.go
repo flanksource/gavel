@@ -153,6 +153,7 @@ func todosSchema(specSchema map[string]any) map[string]any {
 			"plan": withRuntimePresetSchema(promptSpecSchema(prompts.TodosPlan,
 				"AI spec for the plan-mode prompt: the read-only investigation framing that produces a "+
 					"reviewable implementation plan.")),
+			"triageNew": withRuntimePresetSchema(promptSpecSchema(prompts.TodosTriageNew, "New TODO triage with required title and labels and reviewed relationships.")),
 			"triage": withRuntimePresetSchema(promptSpecSchema(prompts.TodosTriage,
 				"AI spec for the triage prompt: a read-only pass that compacts the TODO's description and "+
 					"reviews its verification fixture, reporting the edits for gavel to apply.")),

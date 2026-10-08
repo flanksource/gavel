@@ -267,7 +267,9 @@ export function loadRecentAdvancedTodoRunOptions(action: string, context?: RunCo
 }
 
 export function rememberTodoRunOptions(action: string, options: TodoRunOptions, advanced = false): TodoRunOptions {
-  const nextOptions = withoutPromptContent(normalizeRunOptions(action, options));
+  // reuseBranch names one todo's branch choice, so it is never replayed onto the next todo.
+  const { reuseBranch: _reuseBranch, ...remembered } = options;
+  const nextOptions = withoutPromptContent(normalizeRunOptions(action, remembered));
   const state = readRunChoiceState();
   state.last[action] = nextOptions;
   if (advanced) {
@@ -289,7 +291,7 @@ export function useTodoRun(dir: string) {
   const mutation = useMutation({
     mutationKey: ["todos", "run", { dir: dir.trim() }],
     // The endpoint decodes strictly: only dir/ref/step/spec/resume/force are
-    // accepted, so the body is built fresh from `options` rather than
+    // accepted (dir/ref/step/spec/resume/force/reuseBranch), so the body is built fresh from `options` rather than
     // spreading it — a spread would leak driver/runMode/plan/prompt, which
     // `options` still carries for the dialog's own bookkeeping (storage,
     // labels), onto the wire and get rejected with a 400.
@@ -307,6 +309,7 @@ export function useTodoRun(dir: string) {
             spec: options.spec,
             resume: options.resume,
             force: options.force,
+            reuseBranch: options.reuseBranch,
           }),
         },
         `Failed to run todo ${ref}`,
@@ -418,6 +421,7 @@ export interface TodoRunRequestPayload {
   spec: AISpecRuntimeValue;
   resume?: boolean;
   force?: boolean;
+  reuseBranch?: boolean;
 }
 
 export function buildTodoRunPayload({

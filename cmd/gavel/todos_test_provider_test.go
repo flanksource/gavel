@@ -150,7 +150,9 @@ func (p *testTODOProvider) Edit(_ context.Context, todo *types.TODO, edit todos.
 	return nil
 }
 
-func (p *testTODOProvider) Comment(context.Context, *types.TODO, string) error { return nil }
+func (p *testTODOProvider) Comment(context.Context, *types.TODO, todos.CommentRequest) error {
+	return nil
+}
 
 func (p *testTODOProvider) UpdateState(_ context.Context, todo *types.TODO, update todos.StateUpdate) error {
 	if update.Status != nil {

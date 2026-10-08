@@ -1,12 +1,15 @@
 package ui
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
 	"time"
 
+	"github.com/flanksource/clicky/sse"
+	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/github/activity"
 	ghcache "github.com/flanksource/gavel/github/cache"
 )
@@ -47,35 +50,18 @@ func (s *Server) handleActivity(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(snapshotActivity(limit)) //nolint:errcheck
 }
 
+// activityStreamInterval is how often the activity stream re-reads the
+// recorder; a frame is sent only when the snapshot changed.
+var activityStreamInterval = time.Second
+
 func (s *Server) handleActivityStream(w http.ResponseWriter, r *http.Request) {
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "streaming not supported", http.StatusInternalServerError)
-		return
-	}
 	limit := parseLimit(r.URL.Query().Get("limit"), 100, 500)
-
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-
-	writeSnap := func() {
-		if b, err := json.Marshal(snapshotActivity(limit)); err == nil {
-			fmt.Fprintf(w, "data: %s\n\n", b)
-			flusher.Flush()
-		}
-	}
-
-	writeSnap()
-	ticker := time.NewTicker(1 * time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-r.Context().Done():
-			return
-		case <-ticker.C:
-			writeSnap()
-		}
+	err := sse.ServeSnapshot(w, r, sse.SnapshotOptions{
+		Interval: activityStreamInterval,
+		Load:     func(context.Context) (any, error) { return snapshotActivity(limit), nil },
+	})
+	if err != nil {
+		logger.Warnf("activity stream: %v", err)
 	}
 }
 

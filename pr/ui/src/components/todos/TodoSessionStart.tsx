@@ -4,6 +4,7 @@ import { UiHubot, UiRobotAi, type IconProps } from '@flanksource/clicky-ui/icons
 import type { TodoItem, TodoRunOptions, TodoRunPreviewResponse } from '../../types';
 import { Spinner } from '../../icons/Spinner';
 import { TodoRunActionButton } from './TodoRunActionButton';
+import type { RunBranchChoice } from './runBranchChoice';
 import { TodoRunWarnings } from './TodoRunWarnings';
 import {
   TodoRunContextError,
@@ -98,6 +99,7 @@ export function TodoSessionStart({
   planOptions,
   onRunOptionsChange,
   onPlanOptionsChange,
+  branchChoice,
 }: {
   dir: string;
   todo: TodoItem;
@@ -109,6 +111,8 @@ export function TodoSessionStart({
   planOptions?: TodoRunOptions;
   onRunOptionsChange?: (options: TodoRunOptions) => void;
   onPlanOptionsChange?: (options: TodoRunOptions) => void;
+  // The branch a Run may continue on, when the todo's previous run left one.
+  branchChoice?: RunBranchChoice | null;
 }) {
   const { context, loading: contextLoading, error: contextError } = useTodoRunContext({ dir });
   const options = useMemo(() => context
@@ -162,7 +166,7 @@ export function TodoSessionStart({
 
       {onRun && (
         <div className="mt-5 flex items-center justify-center gap-2">
-          <TodoRunActionButton dir={dir} action="run" disabled={runDisabled || !context || !!contextError} loading={runBusy} options={options ?? undefined} onOptionsChange={onRunOptionsChange} onRun={onRun} onAdvanced={onAdvanced ?? (() => {})} />
+          <TodoRunActionButton dir={dir} action="run" disabled={runDisabled || !context || !!contextError} loading={runBusy} options={options ?? undefined} onOptionsChange={onRunOptionsChange} onRun={onRun} onAdvanced={onAdvanced ?? (() => {})} branchChoice={branchChoice} />
           <TodoRunActionButton dir={dir} action="plan" disabled={runDisabled || !context || !!contextError} loading={runBusy} options={selectedPlanOptions} onOptionsChange={onPlanOptionsChange} onRun={onRun} onAdvanced={onAdvanced ?? (() => {})} />
         </div>
       )}

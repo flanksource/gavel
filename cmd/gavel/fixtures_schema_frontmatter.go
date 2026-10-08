@@ -234,10 +234,11 @@ func fixtureSetupWorktreeSchema() fixtureJSONSchema {
 		"description":          "Disposable worktree the file's fixtures run in.",
 		"additionalProperties": true,
 		"x-help":               fixtureHelpBlock("Setup", "A worktree isolates the file from the rest of the repository — not its tests from each other, since every test in the file shares the same tree. Nothing is ever stashed: the source repository is never mutated.", "fixtures --help"),
-		"x-order":              []string{"mode", "base", "uncommitted", "ignored", "prefix", "path", "keep"},
+		"x-order":              []string{"mode", "base", "uncommitted", "ignored", "prefix", "path", "branch", "keep"},
 		"properties": map[string]any{
-			"mode": withHelp(enumProp("Mode", "Worktree lifecycle.", []string{"none", "new", "existing"}), "Setup", "`new` creates a disposable worktree and removes it afterwards; `existing` reuses the one at `path`; `none` runs in the checkout itself.", "fixtures --help", "new"),
-			"base": withHelpDefault(stringProp("Base", "Commit-ish the new worktree branches from."), "HEAD", "Setup", "Defaults to HEAD so the start commit is the tree you are looking at, independent of `checkout.ref`.", "fixtures --help", "HEAD"),
+			"mode":   withHelp(enumProp("Mode", "Worktree lifecycle.", []string{"none", "new", "existing", "branch"}), "Setup", "`new` creates a disposable worktree and removes it afterwards; `existing` reuses the one at `path`; `branch` checks out the existing `branch` as it is; `none` runs in the checkout itself.", "fixtures --help", "new"),
+			"branch": withHelp(stringProp("Branch", "Existing branch to check out, with mode: branch."), "Setup", "The branch must exist and not be checked out in another worktree. It is checked out as it is and never deleted at teardown.", "fixtures --help"),
+			"base":   withHelpDefault(stringProp("Base", "Commit-ish the new worktree branches from."), "HEAD", "Setup", "Defaults to HEAD so the start commit is the tree you are looking at, independent of `checkout.ref`.", "fixtures --help", "HEAD"),
 			// No `default:` for uncommitted — its default is conditional on
 			// base, and a static `default: clone` in the schema would tell
 			// editor completion something that is only sometimes true.

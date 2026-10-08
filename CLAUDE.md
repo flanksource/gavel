@@ -37,11 +37,13 @@ the architecture and the integration facts a consumer or contributor needs.
 
 ## Embedded UI & consuming gavel (from project memory)
 
-- **`testrunner/ui/dist/testui.js` is `//go:embed`-ed but gitignored.** A bare `go build` against a
-  *published* gavel module fails with `pattern dist/testui.js: no matching files found` — the asset
-  isn't shipped in the module zip. Consumers building from source must point a `replace` at a local
-  checkout that has the built `dist/`. Don't "fix" it by pinning a gavel version (the asset is absent
-  in every published version); CI/Docker builds need the bundle committed at the pinned ref.
+- **Both embedded bundles are committed despite being gitignored.** `testrunner/ui/dist/testui.js`
+  and `pr/ui/dist/prui.js` are `//go:embed`-ed; since c7f713a1 (first tag v0.0.38) they are tracked so
+  a module fetched by tag/SHA satisfies the embed, and `release.yml` rebuilds and `git add -f`s them
+  before tagging. `.gitignore` still lists them but has no effect on tracked files, so every local
+  `make build` (Taskfile `pr-ui`/`test-ui` regenerate them) shows them modified — that diff is
+  build noise: leave it out of feature commits and let release CI refresh it. Refs older than v0.0.38
+  lack the bundles and fail with `pattern dist/testui.js: no matching files found`.
 - **The frontend has two builds — `build` ≠ `build:lib`.** `pnpm run build` emits only the embed
   bundle (`dist/testui.js`); the consumable library (`dist/lib/testrunner.{js,cjs,d.ts}`, used via the
   `./testrunner` subpath) comes from `pnpm run build:lib` (`vite -c vite.lib.config.ts`, ESM +

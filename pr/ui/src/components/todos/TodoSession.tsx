@@ -7,6 +7,7 @@ import { todoQuery } from './format';
 import { CmuxSessionButton } from './TodoSessionTimer';
 import { TodoSessionStart } from './TodoSessionStart';
 import { SessionErrorDetails, type SessionError } from './SessionErrorDetails';
+import { reusableRunBranch } from './runBranchChoice';
 import { AttemptStopAction, AttemptWorkspaceSummary, CopyAllDetailsButton, PENDING_LAUNCH_ID, attemptCollection, attemptSessionId, captainSessionUrl, selectAttempt, useTodoSessionDetail } from './TodoSessionDetail';
 import type { TodoRunAction } from './run';
 import { invalidateTodoCaches, setTodoCaches, todoMutationJSON, useTodoSessionStop } from './todoMutations';
@@ -282,7 +283,7 @@ export function TodoSession({
   );
 
   if (!sessionId && !activeLaunch) {
-    return <>{launch && <LaunchProgress launch={launch} />}<TodoSessionStart dir={dir} todo={todo} onRun={onRun} onAdvanced={onAdvanced} runOptions={runOptions} planOptions={planOptions} onRunOptionsChange={onRunOptionsChange} onPlanOptionsChange={onPlanOptionsChange} runBusy={runBusy} runDisabled={runDisabled} /></>;
+    return <>{launch && <LaunchProgress launch={launch} />}<TodoSessionStart dir={dir} todo={todo} onRun={onRun} onAdvanced={onAdvanced} runOptions={runOptions} planOptions={planOptions} onRunOptionsChange={onRunOptionsChange} onPlanOptionsChange={onPlanOptionsChange} runBusy={runBusy} runDisabled={runDisabled} branchChoice={reusableRunBranch(attempts, todo.events ?? [])} /></>;
   }
 
   const metadata = todoSessionMetadata({ attempt, stats, sessionId: followedSessionId });

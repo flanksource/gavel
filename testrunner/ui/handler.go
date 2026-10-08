@@ -491,8 +491,32 @@ func (s *Server) handleJSON(w http.ResponseWriter, _ *http.Request) {
 	data := s.snapshot()
 	s.mu.RUnlock()
 
+	b, err := json.Marshal(data)
+	if err != nil {
+		http.Error(w, "encode test snapshot: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(data) //nolint:errcheck
+	w.Write(b) //nolint:errcheck
+}
+
+// writeSSESnapshot sends data as one SSE frame unless it equals the last one
+// sent. An unencodable snapshot goes out as an error event and ok is false, so
+// the stream ends instead of reporting a run it could not serialise as done.
+func writeSSESnapshot(w http.ResponseWriter, flusher http.Flusher, data Snapshot, last *string) bool {
+	b, err := json.Marshal(data)
+	if err != nil {
+		message, _ := json.Marshal(map[string]string{"error": "encode test snapshot: " + err.Error()})
+		fmt.Fprintf(w, "event: error\ndata: %s\n\n", message)
+		flusher.Flush()
+		return false
+	}
+	if payload := string(b); payload != *last {
+		fmt.Fprintf(w, "data: %s\n\n", b)
+		flusher.Flush()
+		*last = payload
+	}
+	return true
 }
 
 func (s *Server) snapshot() Snapshot {
@@ -637,10 +661,8 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 	initial := s.snapshot()
 	s.mu.RUnlock()
 	lastPayload := ""
-	if b, err := json.Marshal(initial); err == nil {
-		fmt.Fprintf(w, "data: %s\n\n", b)
-		flusher.Flush()
-		lastPayload = string(b)
+	if !writeSSESnapshot(w, flusher, initial, &lastPayload) {
+		return
 	}
 
 	ticker := time.NewTicker(200 * time.Millisecond)
@@ -658,12 +680,8 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 		data := s.snapshot()
 		s.mu.RUnlock()
 
-		b, _ := json.Marshal(data)
-		payload := string(b)
-		if payload != lastPayload {
-			fmt.Fprintf(w, "data: %s\n\n", b)
-			flusher.Flush()
-			lastPayload = payload
+		if !writeSSESnapshot(w, flusher, data, &lastPayload) {
+			return
 		}
 
 		if !data.Status.Running {

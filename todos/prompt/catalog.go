@@ -21,7 +21,8 @@ const (
 	// EnvelopePlan is types.PlanEnvelope.
 	EnvelopePlan EnvelopeKind = "plan"
 	// EnvelopeTriage is types.TriageEnvelope.
-	EnvelopeTriage EnvelopeKind = "triage"
+	EnvelopeTriage    EnvelopeKind = "triage"
+	EnvelopeTriageNew EnvelopeKind = "triage.new"
 )
 
 // DefaultName is the prompt a run uses when none is named.
@@ -101,6 +102,7 @@ func builtins() []Definition {
 				"verification fixture, and reports the edits for gavel to apply.",
 			Builtin: triageTemplate,
 		},
+		{Name: "triage.new", Class: types.ModePlan, Envelope: EnvelopeTriageNew, Title: "New todo triage prompt", Description: "Name and label newly created work and propose reviewed backlog relationships.", Builtin: triageNewTemplate},
 	}
 }
 
@@ -109,16 +111,17 @@ func builtins() []Definition {
 //
 //	builtin  <  .gavel.yaml todos.<name>
 //
-// The typed fields (todos.run, todos.plan, todos.triage) are how a built-in is
+// The typed fields (todos.run, todos.plan, todos.triage, todos.triageNew) are how a built-in is
 // overridden. The set of prompts is a code contract — each pairs a behaviour
 // class with the envelope the run loop parses its result against — so it is
-// exactly these three and configuration re-points them rather than extending them.
+// exactly these four and configuration re-points them rather than extending them.
 func NewCatalog(cfg verify.TodosConfig) (*Catalog, error) {
 	catalog := &Catalog{byName: map[string]Definition{}}
 	typed := map[string]verify.PromptSpec{
-		"run":    cfg.Run,
-		"plan":   cfg.Plan,
-		"triage": cfg.Triage,
+		"run":        cfg.Run,
+		"plan":       cfg.Plan,
+		"triage":     cfg.Triage,
+		"triage.new": cfg.TriageNew,
 	}
 
 	for _, def := range builtins() {
@@ -156,7 +159,7 @@ func (c *Catalog) List() []Definition {
 
 // Names returns every prompt name in List order.
 func (c *Catalog) Names() []string {
-	rank := map[string]int{"run": 0, "plan": 1, "triage": 2}
+	rank := map[string]int{"run": 0, "plan": 1, "triage": 2, "triage.new": 3}
 	names := make([]string, 0, len(c.byName))
 	for name := range c.byName {
 		names = append(names, name)
@@ -185,6 +188,9 @@ func envelopeFor(class types.RunMode) EnvelopeKind {
 }
 
 func originFor(name string, override verify.PromptSpec) string {
+	if name == "triage.new" {
+		name = "triageNew"
+	}
 	switch {
 	case override.File != "":
 		return override.ResolvedFilePath("")

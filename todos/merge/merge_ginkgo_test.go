@@ -65,9 +65,9 @@ func (p *recorder) SetParent(_ context.Context, todo *types.TODO, parentRef stri
 	return nil
 }
 
-func (p *recorder) Comment(_ context.Context, todo *types.TODO, body string) error {
+func (p *recorder) Comment(_ context.Context, todo *types.TODO, comment todos.CommentRequest) error {
 	p.writes = append(p.writes, "comment:"+Ref(todo))
-	p.comments[Ref(todo)] = append(p.comments[Ref(todo)], body)
+	p.comments[Ref(todo)] = append(p.comments[Ref(todo)], comment.Body)
 	return nil
 }
 

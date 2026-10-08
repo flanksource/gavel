@@ -456,10 +456,10 @@ func TestRenderIncludesComments(t *testing.T) {
 	todo := newTestTODO("fix-auth", "Fix the auth handler")
 	todo.ProviderEvents = []types.ProviderEvent{
 		{Kind: "IssueCreated", Actor: "agent", Body: "initial body"},
-		{Kind: "CommentAdded", Actor: "reviewer", Body: "Please include history"},
+		{Kind: types.EventKindComment, Actor: "reviewer", Body: "Please include history"},
 		{Kind: "LabelChanged", Actor: "agent", OldLabel: "status:pending", NewLabel: "status:in-progress"},
-		{Kind: "CommentAdded", Actor: "maintainer", Body: "Reuse the existing helper"},
-		{Kind: "CommentAdded", Actor: "bot", Body: "   "},
+		{Kind: types.EventKindComment, Actor: "maintainer", Body: "Reuse the existing helper"},
+		{Kind: types.EventKindComment, Actor: "bot", Body: "   "},
 	}
 	prompt := renderUser(t, []*types.TODO{todo}, Options{})
 
@@ -498,8 +498,8 @@ func TestRenderExcludesPRButIncludesSource(t *testing.T) {
 
 func TestPromptsRegistered(t *testing.T) {
 	got := Prompts()
-	if len(got) != 3 {
-		t.Fatalf("Prompts() returned %d entries, want run/plan/triage", len(got))
+	if len(got) != 4 {
+		t.Fatalf("Prompts() returned %d entries, want run/plan/triage/triage.new", len(got))
 	}
 	for _, p := range got {
 		if p.ID == "" || strings.TrimSpace(p.Default) == "" || p.ConfigPath == "" {

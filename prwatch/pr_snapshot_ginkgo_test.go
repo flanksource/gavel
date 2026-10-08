@@ -29,6 +29,33 @@ func prWith(comments ...github.PRComment) prFetcher {
 }
 
 var _ = Describe("PR snapshot download", func() {
+	It("decodes standalone lint arrays without inventing test results", func() {
+		payload := []byte(`[{"linter":"tsc","success":true,"violations":[{"file":"config.ts","line":7}]},{"linter":"ruff","skipped":true}]`)
+		snap, err := DecodeArtifactSnapshot(payload)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(snap.Tests).To(BeEmpty())
+		Expect(snap.Status.LintRun).To(BeTrue())
+		Expect(snap.Lint).To(HaveLen(2))
+		Expect(snap.Lint[0].Linter).To(Equal("tsc"))
+		Expect(snap.Lint[0].Violations).To(HaveLen(1))
+		Expect(snap.Lint[1].Skipped).To(BeTrue())
+		summary := ComputeGavelSummary(payload, github.GavelArtifact{StickyID: "gavel-lint"})
+		Expect(summary.TestsTotal).To(BeZero())
+		Expect(summary.LintLinters).To(Equal(1))
+		Expect(summary.LintViolations).To(Equal(1))
+		Expect(summary.Lint).To(Equal(snap.Lint[:1]))
+	})
+
+	DescribeTable("rejects ambiguous standalone lint arrays",
+		func(payload string) {
+			_, err := DecodeArtifactSnapshot([]byte(payload))
+			Expect(err).To(HaveOccurred())
+		},
+		Entry("mixed test and lint records", `[{"linter":"tsc"},{"name":"test","passed":true}]`),
+		Entry("empty linter", `[{"linter":""}]`),
+		Entry("null linter", `[{"linter":null}]`),
+	)
+
 	It("merges every matrix shard's results into one snapshot", func() {
 		fetch := prWith(
 			stickyComment(10, "gavel-test", 1),

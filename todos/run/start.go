@@ -37,6 +37,9 @@ func defaultResolve(ctx context.Context, req Request) (*Prepared, error) {
 	if req.Todo == nil {
 		return nil, errors.New("todo run: no todo")
 	}
+	if req.Options.ReuseBranch && len(req.Options.Batch) > 1 {
+		return nil, fmt.Errorf("reuse-branch continues one todo's branch; this request runs %d todos", len(req.Options.Batch))
+	}
 	host, err := lifecycle.NewHost(req.Provider, req.Dir, req.Options.Host)
 	if err != nil {
 		return nil, err
@@ -68,6 +71,7 @@ func runOptions(req Request, exec *todos.ExecutorContext) lifecycle.RunOptions {
 		Resume:         req.Options.Resume,
 		Message:        req.Options.Message,
 		Concurrent:     req.Options.Concurrent,
+		ReuseBranch:    req.Options.ReuseBranch,
 		Batch:          append([]string(nil), req.Options.Batch...),
 		Approvals:      req.Approvals,
 	}

@@ -96,6 +96,10 @@ type Options struct {
 	// owned by a running process, instead of refusing. It is never a default:
 	// the caller sets it after confirming (--force, or the dashboard dialog).
 	Concurrent bool
+	// ReuseBranch continues on the branch the todo's previous run step left
+	// behind — with its commits — instead of a fresh worktree. It names one
+	// todo's branch, so a request covering several todos refuses it.
+	ReuseBranch bool
 	// Batch are the refs of every todo in the request this run belongs to. A
 	// triage render marks those backlog entries, because their verdicts are being
 	// decided alongside this one and a fold naming an already-closed TODO is

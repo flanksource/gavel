@@ -58,11 +58,25 @@ type Provider interface {
 	Delete(ctx context.Context, todo *types.TODO) error
 	// Edit updates a TODO's content fields in place.
 	Edit(ctx context.Context, todo *types.TODO, edit EditRequest) error
-	// Comment appends a free-form comment to a TODO's history.
-	Comment(ctx context.Context, todo *types.TODO, body string) error
+	// Comment appends a comment to a TODO's history: free-form, or anchored to
+	// one diff line of a run's branch.
+	Comment(ctx context.Context, todo *types.TODO, comment CommentRequest) error
 	UpdateState(ctx context.Context, todo *types.TODO, updates StateUpdate) error
 	UpdateLatestFailure(ctx context.Context, todo *types.TODO, result *types.TestResultInfo) error
 	SaveAttempt(ctx context.Context, todo *types.TODO, result *ExecutionResult) error
+}
+
+// CommentRequest is one comment appended to a TODO. Anchor pins it to one diff
+// line of a run's branch; nil is a free-form comment.
+type CommentRequest struct {
+	Body   string
+	Anchor *types.LineCommentAnchor
+}
+
+// CommentResolutionProvider resolves or reopens a comment already recorded on
+// a TODO's history. The comment must be a comment of that TODO.
+type CommentResolutionProvider interface {
+	ResolveComment(ctx context.Context, todo *types.TODO, resolution types.CommentResolution) error
 }
 
 // RunPreparation is what a dispatch asks of the durable runtime before an

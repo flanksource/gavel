@@ -1,6 +1,8 @@
 import type { ReactNode } from 'react';
 import { Badge } from '@flanksource/clicky-ui/data';
 import { UiGitBranch, UiWarningTriangle } from '@flanksource/clicky-ui/icons';
+import type { TodoEvent } from '../../types';
+import { lineComments, type LineCommentAnchor, type LineCommentPatch } from './lineComments';
 import { TodoRunChanges } from './TodoRunChanges';
 import { useTodoSessionDetail } from './TodoSessionDetail';
 import { latestRunWorkspace, shortSha, type LatestRunWorkspace } from './runWorkspace';
@@ -27,6 +29,10 @@ export interface TodoRunBranchProps {
   todoRef: string;
   /** Actions for the run's branch (e.g. landing it), rendered in the header. */
   renderActions?: (latest: LatestRunWorkspace) => ReactNode;
+  /** The todo's events; with `onPatch`, enables line comments on the run's diffs. */
+  events?: TodoEvent[];
+  /** Sends a todo PATCH and resolves true once the server accepted it. */
+  onPatch?: (patch: LineCommentPatch) => Promise<boolean>;
 }
 
 /**
@@ -35,12 +41,23 @@ export interface TodoRunBranchProps {
  * teardown kept the worktree, and the commits it made. Renders nothing until a
  * run records a worktree or commits.
  */
-export function TodoRunBranch({ dir, todoRef, renderActions }: TodoRunBranchProps) {
+export function TodoRunBranch({ dir, todoRef, renderActions, events, onPatch }: TodoRunBranchProps) {
   const { detail, error } = useTodoSessionDetail(dir, todoRef, !!todoRef, { intervalMs: RUN_BRANCH_POLL_MS });
   const latest = detail ? latestRunWorkspace(detail.attempts) : null;
   if (!latest && !error) return null;
   const worktree = latest?.workspace.worktree;
   const commits = latest?.workspace.commits ?? [];
+  const lineCommentsProps = events && onPatch
+    ? {
+        comments: lineComments(events),
+        onCreate: async (anchor: LineCommentAnchor, body: string) => {
+          if (!(await onPatch({ lineComment: { anchor, body } }))) throw new Error('The comment was not saved');
+        },
+        onResolve: async (id: string, resolved: boolean) => {
+          if (!(await onPatch({ resolveComment: { id, resolved } }))) throw new Error('The comment could not be updated');
+        },
+      }
+    : undefined;
 
   return (
     <section className="overflow-hidden rounded-lg border border-border bg-card shadow-sm">
@@ -67,7 +84,14 @@ export function TodoRunBranch({ dir, todoRef, renderActions }: TodoRunBranchProp
       {error && <div className="whitespace-pre-wrap px-3 py-2 text-xs text-red-600">{error}</div>}
       {worktree?.kept && <KeptWorktreeWarning path={worktree.path} reason={worktree.keptReason} dirty={worktree.dirty?.length ?? 0} />}
       {(commits.length > 0 || (worktree?.setup && worktree.head)) && (
-        <TodoRunChanges dir={dir} worktree={worktree} commits={commits} landing={latest?.attempt.landing} />
+        <TodoRunChanges
+          dir={dir}
+          worktree={worktree}
+          commits={commits}
+          landing={latest?.attempt.landing}
+          attemptId={latest?.attempt.promptRunId}
+          lineComments={lineCommentsProps}
+        />
       )}
     </section>
   );

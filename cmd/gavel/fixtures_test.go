@@ -230,7 +230,8 @@ func TestFixturesSchemaDocumentsSetup(t *testing.T) {
 	assertSchemaEnum(t, schemaChild(t, checkout, "mode"), "none", "local", "remote")
 
 	worktree := schemaChild(t, checkout, "worktree")
-	assertSchemaEnum(t, schemaChild(t, worktree, "mode"), "none", "new", "existing")
+	assertSchemaEnum(t, schemaChild(t, worktree, "mode"), "none", "new", "existing", "branch")
+	schemaChild(t, worktree, "branch")
 	assertSchemaEnum(t, schemaChild(t, worktree, "uncommitted"), "clone", "skip")
 	assertSchemaEnum(t, schemaChild(t, worktree, "ignored"), "clone", "skip")
 

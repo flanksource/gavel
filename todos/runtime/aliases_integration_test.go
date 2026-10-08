@@ -52,7 +52,7 @@ func TestProviderAliasesIntegration(t *testing.T) {
 	// The caller's TODO is refreshed, so a follow-up mutation passes its
 	// optimistic-concurrency check against the bumped version.
 	assert.Greater(t, todo.Version, firstVersion)
-	require.NoError(t, provider.Comment(t.Context(), todo, "pushed"))
+	require.NoError(t, provider.Comment(t.Context(), todo, todos.CommentRequest{Body: "pushed"}))
 
 	// Both aliases resolve back to the same issue.
 	for _, ref := range []string{"legacy-42", "example/aliases#7"} {

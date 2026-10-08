@@ -13,6 +13,7 @@ func validateConfigSpecLayers(cfg GavelConfig, path string) error {
 		api.PromptSpecLayer(path+" todos.run", cfg.Todos.Run.Spec),
 		api.PromptSpecLayer(path+" todos.plan", cfg.Todos.Plan.Spec),
 		api.PromptSpecLayer(path+" todos.triage", cfg.Todos.Triage.Spec),
+		api.PromptSpecLayer(path+" todos.triageNew", cfg.Todos.TriageNew.Spec),
 		api.PromptSpecLayer(path+" todos.verify", cfg.Todos.Verify.Spec),
 		{
 			Name: path + " todos.timeout", Source: api.SpecLayerSourcePreset, Scope: api.SpecLayerContext,

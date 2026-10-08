@@ -57,7 +57,9 @@ type ExecutionResult struct {
 	// Triage is a triage run's verdict and the edits it wants applied. The agent
 	// is read-only, so this is a request, not a record of something that
 	// happened; the host's OnOutcome performs the writes.
-	Triage *types.TriageEnvelope
+	Triage           *types.TriageEnvelope
+	TriageNew        *types.TriageNewEnvelope
+	TriageNewApplier TriageNewApplier `json:"-"`
 	// DoD is the definition-of-done verdict: nil when the step declared no
 	// verifiers, else Ran is true and Passed reports whether every verifier
 	// passed within the iteration budget.

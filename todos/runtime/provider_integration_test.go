@@ -142,7 +142,7 @@ func TestProviderNativeLifecycleIntegration(t *testing.T) {
 
 	created, err = provider.Get(t.Context(), alias)
 	require.NoError(t, err)
-	require.NoError(t, provider.Comment(t.Context(), created, "Native comment"))
+	require.NoError(t, provider.Comment(t.Context(), created, todos.CommentRequest{Body: "Native comment"}))
 	created.Attempts = 2
 	require.NoError(t, provider.SaveAttempt(t.Context(), created, &todos.ExecutionResult{
 		Success: true, ExecutorName: "codex", Duration: 2 * time.Second,

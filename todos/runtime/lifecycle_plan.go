@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/flanksource/captain/pkg/ai/assistanttags"
 	captaincli "github.com/flanksource/captain/pkg/cli"
 	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/captain/pkg/promptrun"
@@ -244,18 +245,18 @@ func (p *Provider) planResultContent(ctx context.Context, result *todos.Executio
 		if !exists || strings.TrimSpace(read) == "" {
 			return "", path, fmt.Errorf("reported plan path %q is missing or empty", path)
 		}
-		return strings.TrimSpace(read), path, nil
+		return normalizePlanResultMarkdown(read), path, nil
 	}
 	if result != nil && result.Plan != nil {
 		if content = strings.TrimSpace(result.Plan.Content); content != "" {
-			return content, path, nil
+			return normalizePlanResultMarkdown(content), path, nil
 		}
 	}
 	resolvedPath, resolved, err := resolveSessionPlan(ctx, p.captain, sessionID)
 	if err != nil {
 		return "", path, fmt.Errorf("recover the plan of session %q: %w", strings.TrimSpace(sessionID), err)
 	}
-	return strings.TrimSpace(resolved), resolvedPath, nil
+	return normalizePlanResultMarkdown(resolved), resolvedPath, nil
 }
 
 func planResolutionSessionID(todo *types.TODO, run *captaindb.PromptRun) string {
@@ -272,6 +273,12 @@ func planResolutionSessionID(todo *types.TODO, run *captaindb.PromptRun) string 
 }
 
 func normalizePlanResultMarkdown(markdown string) string {
+	for _, segment := range assistanttags.Parse(markdown) {
+		if segment.Kind == assistanttags.SegmentPlan {
+			markdown = segment.Text
+			break
+		}
+	}
 	markdown = strings.ReplaceAll(markdown, "\r\n", "\n")
 	markdown = strings.ReplaceAll(markdown, "\r", "\n")
 	return strings.TrimSpace(markdown)

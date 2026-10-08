@@ -101,7 +101,7 @@ func Reopen(flags ReopenFlags) (ItemFunc, error) {
 			return ItemResult{}, err
 		}
 		if comment != "" {
-			if err := provider.Comment(ctx, todo, comment); err != nil {
+			if err := provider.Comment(ctx, todo, todos.CommentRequest{Body: comment}); err != nil {
 				return ItemResult{}, err
 			}
 		}

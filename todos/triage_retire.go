@@ -140,7 +140,7 @@ func retireInto(ctx context.Context, provider Provider, retirement triageRetirem
 		return fmt.Errorf("retire %s: %w", triageRef(retired), err)
 	}
 	if note := retirementNote(retirement, rationale, children); note != "" {
-		if err := provider.Comment(ctx, retired, note); err != nil {
+		if err := provider.Comment(ctx, retired, CommentRequest{Body: note}); err != nil {
 			return fmt.Errorf("record why %s was retired: %w", triageRef(retired), err)
 		}
 	}

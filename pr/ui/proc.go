@@ -2,14 +2,15 @@ package ui
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"path"
 	"strconv"
 	"sync"
 	"time"
 
+	"github.com/flanksource/clicky/sse"
 	"github.com/flanksource/commons/logger"
 	gavelctx "github.com/flanksource/gavel/context"
 	"github.com/flanksource/gavel/github/cache"
@@ -154,17 +155,18 @@ func leanProcStatus(byKey map[string]procStatus) map[string]procStatus {
 	return byKey
 }
 
-const (
+var (
 	// procStreamFast is the push cadence while a process is starting/restarting,
 	// so the dashboard tracks that progress promptly; procStreamSteady is the
 	// idle cadence. They mirror the adaptive interval the client poll used to run.
 	procStreamFast   = 1 * time.Second
 	procStreamSteady = 3 * time.Second
-	// procSampleTTL sits just under procStreamFast so the fastest cadence still
-	// gets a fresh scan every tick, while every other stream connected at that
-	// moment reuses it instead of running its own.
-	procSampleTTL = 900 * time.Millisecond
 )
+
+// procSampleTTL sits just under procStreamFast so the fastest cadence still
+// gets a fresh scan every tick, while every other stream connected at that
+// moment reuses it instead of running its own.
+const procSampleTTL = 900 * time.Millisecond
 
 // procSampler collapses the proc-status scan shared by every open dashboard
 // stream onto one computation per TTL window. The scan behind it (LoadProjects
@@ -214,51 +216,39 @@ func (p *procSampler) get(ctx gavelctx.Context) (map[string]procStatus, error) {
 var sharedProcSampler = &procSampler{ttl: procSampleTTL, sample: streamProcStatusByKey}
 
 // handleProcStatusStream pushes the proc-status map to the dashboard over SSE,
-// replacing the client's /api/proc/status poll. A per-connection adaptive ticker
-// is enough — projectStatus recomputes from the supervisor on each tick, so no
-// broadcaster is needed — and an open stream is the "dashboard is being watched"
-// signal that keeps procMetricsLoop sampling (the role the poll used to play).
+// replacing the client's /api/proc/status poll. Every load marks the dashboard
+// as watched, the signal that keeps procMetricsLoop sampling (the role the poll
+// used to play). The stream polls at the steady cadence; while any process is
+// mid start/restart, each load arms a wake one procStreamFast later, so the
+// dashboard tracks that progress without paying the ~1.7s scan every second
+// while everything is settled. openFiles is kept in the comparison: the Files
+// column renders it as a live sample (see leanProcStatus).
 func (s *Server) handleProcStatusStream(w http.ResponseWriter, r *http.Request) {
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "streaming not supported", http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-
-	var last []byte
-	for {
-		s.mu.Lock()
-		s.lastProcPoll = time.Now()
-		s.mu.Unlock()
-
-		byKey, err := sharedProcSampler.get(s.context())
-		if err != nil {
-			payload, _ := json.Marshal(map[string]string{"error": err.Error()})
-			fmt.Fprintf(w, "event: error\ndata: %s\n\n", payload)
-			flusher.Flush()
-			return
-		}
-		if b, err := json.Marshal(byKey); err == nil && !bytes.Equal(b, last) {
-			fmt.Fprintf(w, "data: %s\n\n", b)
-			last = b
-		} else {
-			// Comment frame: keeps the socket warm without firing a client re-render.
-			fmt.Fprint(w, ": ping\n\n")
-		}
-		flusher.Flush()
-
-		next := procStreamSteady
-		if anyTransitioning(byKey) {
-			next = procStreamFast
-		}
-		select {
-		case <-r.Context().Done():
-			return
-		case <-time.After(next):
-		}
+	fast := make(chan struct{}, 1)
+	err := sse.ServeSnapshot(w, r, sse.SnapshotOptions{
+		Interval: procStreamSteady,
+		Wake:     fast,
+		Load: func(context.Context) (any, error) {
+			s.mu.Lock()
+			s.lastProcPoll = time.Now()
+			s.mu.Unlock()
+			byKey, err := sharedProcSampler.get(s.context())
+			if err != nil {
+				return nil, err
+			}
+			if anyTransitioning(byKey) {
+				time.AfterFunc(procStreamFast, func() {
+					select {
+					case fast <- struct{}{}:
+					default:
+					}
+				})
+			}
+			return byKey, nil
+		},
+	})
+	if err != nil {
+		logger.Warnf("proc status stream: %v", err)
 	}
 }
 

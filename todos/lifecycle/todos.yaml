@@ -89,3 +89,12 @@ steps:
       - { status: verified, when: "verify.ran && verify.passed" }
       - { status: unverified, when: "verify.ran && !verify.passed" }
       - { status: pending, when: "true" }
+
+  - name: triage.new
+    prompt: todos.triage.new
+    envelope: triage.new
+    auxiliary: true
+    outcomes:
+      - { status: ask, when: "envelope.endStatus == 'ask'" }
+      - { status: failed, when: "run.state == 'failed' || envelope.endStatus == 'failed'" }
+      - { status: keep, when: "true" }

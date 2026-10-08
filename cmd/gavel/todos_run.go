@@ -34,6 +34,7 @@ type TodosRunOptions struct {
 	Effort         string   `flag:"effort" help:"Reasoning effort: low, medium, high, or xhigh"`
 	Resume         bool     `flag:"resume" help:"Resume the TODO's prior agent session"`
 	Force          bool     `flag:"force" help:"Dispatch despite another live run"`
+	ReuseBranch    bool     `flag:"reuse-branch" help:"Continue on the branch the TODO's previous run left behind instead of a fresh worktree (one TODO only)"`
 	Dirty          bool     `flag:"dirty" help:"Carry uncommitted and ignored files into a new worktree"`
 	DryRun         bool     `flag:"dry-run" help:"Print the prompt and resolved spec without dispatching"`
 	Preview        bool     `flag:"preview" help:"Run the agent, but report a triage verdict that would close a TODO instead of applying it (unlike --dry-run, which never runs the agent)"`
@@ -220,6 +221,7 @@ func todosRunOptions(opts TodosRunOptions) run.Options {
 		Request:        todosRequestSpec(opts),
 		Resume:         opts.Resume,
 		Concurrent:     opts.Force,
+		ReuseBranch:    opts.ReuseBranch,
 		Preview:        opts.Preview,
 		// The CLI drains no approval queue: a run that asked for one would block
 		// until its timeout, so it contributes no approval-brokering posture.

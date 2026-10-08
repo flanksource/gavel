@@ -205,10 +205,17 @@ func runLint(opts LintOptions) (any, error) {
 		logger.V(1).Infof("wrote per-run snapshot to %s", path)
 	}
 
-	if opts.Summary {
-		return linters.NewSummaryView(allResults, opts.SummaryLimit), nil
+	return lintRunReturnValue(snap, opts), nil
+}
+
+func lintRunReturnValue(snap *testui.Snapshot, opts LintOptions) any {
+	if !isPrettyFormat() {
+		return snap
 	}
-	return allResults, nil
+	if opts.Summary {
+		return linters.NewSummaryView(snap.Lint, opts.SummaryLimit)
+	}
+	return snap.Lint
 }
 
 func executeLintRerun(base LintOptions, req testui.RerunRequest) ([]*linters.LinterResult, error) {

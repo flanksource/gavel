@@ -112,12 +112,34 @@ func (p *Provider) Edit(ctx context.Context, todo *types.TODO, edit todos.EditRe
 	return p.replaceTODO(ctx, todo, issue, p.workDir)
 }
 
-func (p *Provider) Comment(ctx context.Context, todo *types.TODO, body string) error {
+func (p *Provider) Comment(ctx context.Context, todo *types.TODO, comment todos.CommentRequest) error {
 	id, version, err := p.mutationIdentity(todo)
 	if err != nil {
 		return err
 	}
-	if _, err := p.repository.AddComment(ctx, id, version, mutationActor, body); err != nil {
+	input := native.CommentInput{Actor: mutationActor, Body: comment.Body}
+	if comment.Anchor != nil {
+		if err := comment.Anchor.Validate(); err != nil {
+			return fmt.Errorf("%w: %w", native.ErrInvalidInput, err)
+		}
+		input.Payload = types.LineCommentPayload{Anchor: comment.Anchor}
+	}
+	if _, err := p.repository.AddComment(ctx, id, version, input); err != nil {
+		return err
+	}
+	return p.reloadTODO(ctx, todo, p.workDir)
+}
+
+func (p *Provider) ResolveComment(ctx context.Context, todo *types.TODO, resolution types.CommentResolution) error {
+	id, version, err := p.mutationIdentity(todo)
+	if err != nil {
+		return err
+	}
+	commentID, err := uuid.Parse(strings.TrimSpace(resolution.CommentID))
+	if err != nil {
+		return fmt.Errorf("%w: comment id %q is not a UUID: %w", native.ErrInvalidInput, resolution.CommentID, err)
+	}
+	if _, err := p.repository.ResolveComment(ctx, id, version, mutationActor, commentID, resolution.Resolved); err != nil {
 		return err
 	}
 	return p.reloadTODO(ctx, todo, p.workDir)
