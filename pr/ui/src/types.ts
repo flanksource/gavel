@@ -1,7 +1,10 @@
 import type { TodoCounts } from './types/todos';
 export * from './types/todos';
 export * from './types/sessions';
+export * from './types/agentSessions';
 export * from './types/todoRun';
+export * from './types/projectGit';
+export * from './types/agentSessions';
 
 import type { Test } from '@flanksource/clicky-ui/data';
 import type { LinterResult } from '@flanksource/gavel/testrunner';
@@ -59,6 +62,10 @@ export interface SearchConfig {
   repos: string[];
   all?: boolean;
   org?: string;
+  // Project is the configured workspace selected as the dashboard-wide scope.
+  // Its repos constrain PRs while its directory constrains workspace-backed
+  // surfaces such as Todos.
+  project?: string;
   // GitHub org logins the user has chosen to hide from the chooser and
   // exclude from default-org resolution. Persists across daemon restarts.
   ignoredOrgs?: string[];
@@ -371,6 +378,41 @@ export interface CacheStatus {
   retentionSec: number;
   counts: Record<string, number>;
   error?: string;
+}
+
+// LatencyStat matches gitstate.LatencyStat: one labelled series of a
+// gavel_git_* histogram.
+export interface LatencyStat {
+  labels: Record<string, string>;
+  count: number;
+  totalMs: number;
+  avgMs: number;
+  p50Ms: number;
+  p95Ms: number;
+}
+
+export interface CountStat {
+  labels: Record<string, string>;
+  count: number;
+}
+
+// GitMetrics matches pr/ui.gitMetricsResponse (GET /api/git/metrics).
+export interface GitMetrics {
+  tracking: boolean;
+  fsmonitor: boolean;
+  untrackedCache: boolean;
+  trackedRepos: number;
+  hotWorktrees: number;
+  idleWorktrees: number;
+  backoffWorktrees: number;
+  scansInFlight: number;
+  rangesComputed: number;
+  scanTriggers: CountStat[] | null;
+  refsScans: LatencyStat[] | null;
+  statusScans: LatencyStat[] | null;
+  commands: LatencyStat[] | null;
+  queueWait: LatencyStat[] | null;
+  reads: LatencyStat[] | null;
 }
 
 export type Severity = 'ok' | 'degraded' | 'down';

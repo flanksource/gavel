@@ -21,6 +21,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 
 	captainai "github.com/flanksource/captain/pkg/ai"
@@ -38,6 +39,9 @@ var planTemplate string
 
 //go:embed todos-triage.prompt
 var triageTemplate string
+
+//go:embed todos-triage-new.prompt
+var triageNewTemplate string
 
 // Options configures Render.
 type Options struct {
@@ -62,6 +66,12 @@ type Options struct {
 	// Backlog is a compact index of the other open TODOs in the workspace, so a
 	// triage run can spot duplicates. Empty omits the section.
 	Backlog string
+	// Labels is the workspace's label taxonomy, rendered by
+	// todos.LabelTaxonomySection. It is the closed vocabulary a triage run may
+	// propose from — the same list the write side holds it to. Empty omits the
+	// section, which is also what stops an agent proposing labels it would then be
+	// rejected for.
+	Labels string
 	// Inputs are the lifecycle step's declared template variables, evaluated
 	// from the todo. They are folded over the built-in variables above, so a
 	// step that declares `existingPlan` decides what the template sees.
@@ -92,21 +102,13 @@ func Default(name string) (string, error) {
 // the same variables, and a template that computes its frontmatter would resolve
 // differently against a divergent set.
 func TemplateData(todoList []*types.TODO, opts Options) map[string]any {
-	multiple := len(todoList) > 1
-	var body strings.Builder
-	for i, todo := range todoList {
-		number := 0
-		if multiple {
-			number = i + 1
-		}
-		body.WriteString(buildTODOSection(todo, opts.WorkDir, true, number, opts.Envelope == EnvelopeTriage))
-	}
 	data := map[string]any{
-		"multiple":     multiple,
+		"multiple":     len(todoList) > 1,
 		"count":        len(todoList),
-		"body":         body.String(),
+		"body":         Sections(todoList, opts.WorkDir, opts.Envelope == EnvelopeTriage || opts.Envelope == EnvelopeTriageNew),
 		"existingPlan": opts.ExistingPlan,
 		"backlog":      opts.Backlog,
+		"labels":       opts.Labels,
 	}
 	for name, value := range opts.Inputs {
 		data[name] = value
@@ -137,6 +139,9 @@ func (o Options) promptName() string {
 func Render(todoList []*types.TODO, opts Options) (captainai.Request, captainai.Config, error) {
 	if len(todoList) == 0 {
 		return captainai.Request{}, captainai.Config{}, fmt.Errorf("no todos supplied")
+	}
+	if err := validateReviewComments(todoList); err != nil {
+		return captainai.Request{}, captainai.Config{}, err
 	}
 	template, err := templateSource(opts)
 	if err != nil {
@@ -173,7 +178,7 @@ func Render(todoList []*types.TODO, opts Options) (captainai.Request, captainai.
 		return captainai.Request{}, captainai.Config{}, fmt.Errorf("validate todos %s spec: %w", opts.promptName(), err)
 	}
 	if directive := EffortDirective(string(req.Effort)); directive != "" {
-		req.Prompt.User = directive + "\n\n" + user
+		req.Prompt.User = directive + "\n\n" + withoutEffortDirectives(user)
 	}
 	return req, captainai.Config{Model: req.Model, Budget: req.Budget}, nil
 }
@@ -207,8 +212,10 @@ func EnvelopeSchemaJSON(kind EnvelopeKind) (json.RawMessage, error) {
 		v = &types.ResultEnvelope{}
 	case EnvelopeTriage:
 		v = &types.TriageEnvelope{}
+	case EnvelopeTriageNew:
+		v = &types.TriageNewEnvelope{}
 	default:
-		return nil, fmt.Errorf("envelope %q is not one of result, plan, triage", kind)
+		return nil, fmt.Errorf("unknown envelope %q", kind)
 	}
 	raw, err := api.SchemaJSON(v)
 	if err != nil {
@@ -234,25 +241,47 @@ func EffortDirective(effort string) string {
 	}
 }
 
+var effortDirectiveTiers = []string{"low", "medium", "high", "xhigh"}
+
+// withoutEffortDirectives removes the directive lines leading a prompt so Render
+// can lead it with exactly one. An override edited from a preview already starts
+// with the directive the preview rendered, possibly for a different effort.
+func withoutEffortDirectives(user string) string {
+	for {
+		line, rest, _ := strings.Cut(strings.TrimLeft(user, "\r\n"), "\n")
+		if !slices.ContainsFunc(effortDirectiveTiers, func(tier string) bool {
+			return strings.TrimRight(line, "\r ") == EffortDirective(tier)
+		}) {
+			return user
+		}
+		user = strings.TrimLeft(rest, "\r\n")
+	}
+}
+
 // Prompts returns the overridable todo prompt descriptors for the settings
 // registry. It is derived from the built-in catalog rather than restated, so a
 // new built-in prompt appears in the settings UI without a second edit.
 // builtinUsedBy names the commands that run each built-in todo prompt.
 var builtinUsedBy = map[string][]string{
-	"run":    {"gavel todos run"},
-	"plan":   {"gavel todos run --mode plan", "gavel todos plan"},
-	"triage": {"gavel todos run --prompt triage"},
+	"run":        {"gavel todos run"},
+	"plan":       {"gavel todos run --mode plan", "gavel todos plan"},
+	"triage":     {"gavel todos run --prompt triage"},
+	"triage.new": {"gavel todos run --step triage.new", "/api/todos/new"},
 }
 
 func Prompts() []prompts.Prompt {
 	defs := builtins()
 	registry := make([]prompts.Prompt, 0, len(defs))
 	for _, def := range defs {
+		configPath := "todos." + def.Name
+		if def.Name == "triage.new" {
+			configPath = prompts.TodosTriageNew
+		}
 		registry = append(registry, prompts.Prompt{
-			ID:          "todos." + def.Name,
+			ID:          configPath,
 			Title:       def.Title,
 			Description: def.Description,
-			ConfigPath:  "todos." + def.Name,
+			ConfigPath:  configPath,
 			Default:     def.Builtin,
 			UsedBy:      builtinUsedBy[def.Name],
 		})

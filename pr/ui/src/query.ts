@@ -3,11 +3,23 @@ export const queryKeys = {
   prDetail: (repo: string, number: number) => ['prs', repo, number, 'detail'] as const,
   projects: () => ['projects'] as const,
   projectStatusScope: (projectName: string) => ['projects', projectName, 'status'] as const,
-  projectStatus: (projectName: string, includeResults = false) => [
+  // worktree is the absolute path of a linked worktree; the main checkout
+  // omits it, so its keys are unchanged.
+  projectStatus: (projectName: string, includeResults = false, worktree = '') => [
     ...queryKeys.projectStatusScope(projectName),
     includeResults ? 'results' : 'base',
+    ...(worktree ? [worktree] : []),
   ] as const,
-  projectDiff: (projectName: string, path: string, revision: number) => ['projects', projectName, 'diff', path, revision] as const,
+  projectDiff: (projectName: string, path: string, revision: number, worktree = '') => [
+    'projects', projectName, 'diff', path, revision, ...(worktree ? [worktree] : []),
+  ] as const,
+  projectGitSummary: () => ['projects', 'git-summary'] as const,
+  projectGit: (projectName: string) => ['projects', projectName, 'git'] as const,
+  // head is the branch tip: new commits make a new key, so a cached range is
+  // never shown for a branch that has moved on.
+  projectBranchFiles: (projectName: string, branch: string, head: string) => ['projects', projectName, 'branch', branch, head, 'files'] as const,
+  projectBranchDiff: (projectName: string, branch: string, head: string, file: string) => ['projects', projectName, 'branch', branch, head, 'diff', file] as const,
+  agentSessions: () => ['sessions', 'list'] as const,
   health: () => ['status', 'health'] as const,
   processStatuses: () => ['processes', 'status'] as const,
   processStatus: (projectName: string) => ['processes', projectName, 'status'] as const,
@@ -15,7 +27,13 @@ export const queryKeys = {
   testRuns: () => ['tests', 'runs'] as const,
   activity: () => ['activity', 'snapshot'] as const,
   activityCache: () => ['activity', 'cache'] as const,
+  gitMetrics: () => ['activity', 'git'] as const,
 };
+
+/** Matches queryKeys.projectGit of any project, for invalidating them all. */
+export function isProjectGitKey(key: readonly unknown[]): boolean {
+  return key.length === 3 && key[0] === 'projects' && key[2] === 'git';
+}
 
 interface QueryRequest {
   url: string;
@@ -30,15 +48,32 @@ interface MutationRequest {
   context: string;
 }
 
+// HttpError is a non-2xx response from fetchJSON; callers branch on `status`
+// (e.g. 410 Gone) instead of matching the message.
+export class HttpError extends Error {
+  readonly status: number;
+  // The parsed JSON error body, when the server sent one, so callers can read
+  // fields beyond `error` (e.g. the `conflicts` list of a 409).
+  readonly body: unknown;
+
+  constructor(message: string, status: number, body?: unknown) {
+    super(message);
+    this.name = 'HttpError';
+    this.status = status;
+    this.body = body;
+  }
+}
+
 export async function fetchJSON<T>({ url, signal, context }: QueryRequest): Promise<T> {
   const response = await request({ url, signal, context });
   let payload: unknown;
   try {
     payload = await response.json();
   } catch {
-    throw new Error(`${context}: ${response.ok ? 'invalid JSON response' : `HTTP ${response.status}`}`);
+    if (!response.ok) throw new HttpError(`${context}: HTTP ${response.status}`, response.status);
+    throw new Error(`${context}: invalid JSON response`);
   }
-  if (!response.ok) throw new Error(`${context}: ${responseError(payload, response.status)}`);
+  if (!response.ok) throw new HttpError(`${context}: ${responseError(payload, response.status)}`, response.status, payload);
   return payload as T;
 }
 
@@ -67,7 +102,7 @@ export async function mutationJSON<T>({ url, method, body, context }: MutationRe
     } catch {
       throw new Error(`${context}: ${text.trim() || `HTTP ${response.status}`}`);
     }
-    throw new Error(`${context}: ${responseError(payload, response.status)}`);
+    throw new HttpError(`${context}: ${responseError(payload, response.status)}`, response.status, payload);
   }
   if (!text.trim()) return undefined as T;
   try {

@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -21,12 +23,15 @@ import (
 
 // RunnerOptions configures the fixture runner
 type RunnerOptions struct {
-	Paths          []string // Fixture file paths/patterns
-	Format         string   // Output format: tree, table, json, yaml, csv
-	Filter         string   // Filter tests by name pattern (glob)
-	NoColor        bool     // Disable colored output
-	WorkDir        string   // Working directory
-	MaxWorkers     int      // Maximum number of parallel workers
+	Paths   []string // Fixture file paths/patterns
+	Format  string   // Output format: tree, table, json, yaml, csv
+	Filter  string   // Filter tests by name pattern (glob)
+	NoColor bool     // Disable colored output
+	WorkDir string   // Working directory
+	// MaxWorkers caps how many fixture rows run at once. Zero means 1: rows
+	// shell out to real binaries against shared databases, files and ports, so
+	// parallelism is opt-in rather than the default.
+	MaxWorkers     int
 	Logger         logger.Logger
 	ExecutablePath string                                                // Path to the current executable (for fixtures to use)
 	ProgressSink   ProgressSink                                          // Receives immutable execution-tree snapshots
@@ -37,7 +42,12 @@ type RunnerOptions struct {
 	// Record is the run-wide `--record` default, applied only to fixtures that
 	// declared no `record:` of their own. An explicit `record: none` parses to an
 	// empty (non-nil) Spec precisely so it outranks this.
-	Record *record.Spec
+	Record     *record.Spec
+	Benchmark  bool
+	Baseline   string
+	Profile    bool
+	SQLProfile bool
+	Limits     BenchmarkLimits
 }
 
 // Runner manages fixture test execution using typed tasks
@@ -59,10 +69,64 @@ type Runner struct {
 	store     *record.Store
 	progress  *executionTracker
 	resultMu  sync.Mutex
+	benchmark *BenchmarkReport
+	baseline  *BenchmarkReport
 }
 
 // NewRunner creates a new fixture runner
 func NewRunner(opts RunnerOptions) (*Runner, error) {
+	if opts.Benchmark && opts.Display != nil {
+		display := *opts.Display
+		display.ShowPassed = true
+		opts.Display = &display
+	}
+	if opts.Baseline != "" && !opts.Benchmark {
+		return nil, fmt.Errorf("--baseline requires --benchmark")
+	}
+	if opts.Limits.Enabled() && !opts.Benchmark {
+		return nil, fmt.Errorf("benchmark limits require --benchmark")
+	}
+	if opts.Limits.MaxDurationMS < 0 || opts.Limits.MaxSQLDurationMS < 0 || opts.Limits.MaxSQLQueryMS < 0 {
+		return nil, fmt.Errorf("benchmark time limits must be non-negative")
+	}
+	if opts.Limits.MaxSQLQueries != nil && *opts.Limits.MaxSQLQueries < 0 || opts.Limits.MaxSlowSQL != nil && *opts.Limits.MaxSlowSQL < 0 {
+		return nil, fmt.Errorf("SQL query limits must be non-negative")
+	}
+	if opts.Limits.MaxDeviationPct != nil {
+		if opts.Baseline == "" {
+			return nil, fmt.Errorf("--max-deviation-pct requires --baseline")
+		}
+		if *opts.Limits.MaxDeviationPct < 0 || math.IsNaN(*opts.Limits.MaxDeviationPct) || math.IsInf(*opts.Limits.MaxDeviationPct, 0) {
+			return nil, fmt.Errorf("--max-deviation-pct must be a finite non-negative number")
+		}
+	}
+	if opts.Limits.NeedsProcessProfile() {
+		opts.Profile = true
+	}
+	if opts.Limits.MaxSQLDurationMS > 0 || opts.Limits.MaxSQLQueryMS > 0 || opts.Limits.MaxSQLQueries != nil || opts.Limits.MaxSlowSQL != nil || opts.Profile {
+		opts.SQLProfile = true
+	}
+	var baseline *BenchmarkReport
+	if opts.Baseline != "" {
+		if !filepath.IsAbs(opts.Baseline) && opts.WorkDir != "" {
+			opts.Baseline = filepath.Join(opts.WorkDir, opts.Baseline)
+		}
+		var err error
+		baseline, err = LoadBenchmarkReport(opts.Baseline)
+		if err != nil {
+			return nil, fmt.Errorf("--baseline: %w", err)
+		}
+		if opts.Limits.MaxDeviationPct != nil {
+			for _, entry := range baseline.Fixtures {
+				if entry.Profile != nil {
+					opts.Profile = true
+				}
+				if entry.SQLProfile != nil {
+					opts.SQLProfile = true
+				}
+			}
+		}
+	}
 	// Create CEL evaluator
 	evaluator, err := NewCELEvaluator()
 	if err != nil {
@@ -71,6 +135,7 @@ func NewRunner(opts RunnerOptions) (*Runner, error) {
 
 	return &Runner{
 		options:   opts,
+		baseline:  baseline,
 		fixtures:  []FixtureTest{},
 		evaluator: evaluator,
 		tree: &FixtureNode{
@@ -83,6 +148,8 @@ func NewRunner(opts RunnerOptions) (*Runner, error) {
 // Run executes the fixture tests and returns the result tree.
 // The caller is responsible for formatting/printing the output.
 func (r *Runner) Run() (*FixtureNode, error) {
+	r.benchmark = nil
+	started := time.Now()
 	if _, err := r.prepareFixtureTree(); err != nil {
 		return nil, err
 	}
@@ -91,18 +158,44 @@ func (r *Runner) Run() (*FixtureNode, error) {
 		return nil, fmt.Errorf("publish queued fixture progress: %w", err)
 	}
 
-	results, err := r.executeFixtures()
-	if err != nil {
-		return nil, fmt.Errorf("failed to execute fixtures: %w", err)
+	var sampler *profileSampler
+	if r.options.Profile {
+		sampler = startProfileSampler()
 	}
+	results, err := r.executeFixtures()
 
-	clicky.WaitForGlobalCompletion()
+	if err == nil {
+		clicky.WaitForGlobalCompletion()
+	}
+	if r.options.Benchmark || r.options.Profile {
+		var profile *ProfileReport
+		if sampler != nil {
+			var profileErr error
+			profile, profileErr = sampler.Stop()
+			err = errors.Join(err, profileErr)
+		}
+		if reportErr := r.saveBenchmarkReport(started, time.Now(), profile, err); reportErr != nil {
+			err = errors.Join(err, reportErr)
+		}
+	}
+	if err != nil {
+		return r.tree, fmt.Errorf("failed to execute fixtures: %w", err)
+	}
 
 	if results.Summary.HasFailures() {
 		return r.tree, fmt.Errorf("fixture tests failed")
 	}
 
 	return r.tree, nil
+}
+
+func (r *Runner) BenchmarkReport() *BenchmarkReport { return r.benchmark }
+
+func (r *Runner) ExecutionSnapshot() ExecutionSnapshot {
+	if r.progress == nil {
+		panic("fixture execution snapshot requested before Run")
+	}
+	return r.progress.Snapshot()
 }
 
 // Parse builds the fixture tree without executing any fixture work.
@@ -225,13 +318,25 @@ func filterFixtureTree(node *FixtureNode, pattern string) bool {
 }
 
 // executeFixtures runs all fixtures using typed task groups
-func (r *Runner) executeFixtures() (*FixtureGroup, error) {
-	results := &FixtureGroup{
+func (r *Runner) executeFixtures() (results *FixtureGroup, runErr error) {
+	results = &FixtureGroup{
 		Tests:   make([]FixtureNode, 0, len(r.fixtures)),
 		Summary: Stats{},
 	}
 
 	ctx := flanksourceContext.NewContext(context.Background())
+	if r.hasSetup() {
+		defer func() {
+			startErr := r.startProgressStep(ctx, ExecutionKindCleanup)
+			cleanupErr := r.cleanupSetups()
+			state := ExecutionPassed
+			if cleanupErr != nil {
+				state = ExecutionWarned
+			}
+			completeErr := r.progress.CompleteStep(ctx, "cleanup", state, cleanupErr)
+			runErr = errors.Join(runErr, startErr, completeErr)
+		}()
+	}
 
 	// Setup runs before the build: it can relocate a file's tests into a
 	// worktree, and a build that ran in the original repo would build tree A
@@ -248,11 +353,6 @@ func (r *Runner) executeFixtures() (*FixtureGroup, error) {
 	if err := r.completeProgressStep(ctx, ExecutionKindSetup); err != nil {
 		return nil, err
 	}
-	// Registered before the daemon's defer so LIFO stops the daemon first:
-	// removing a worktree a live process is sitting in leaves a stale git
-	// worktree registration behind.
-	defer r.cleanupSetups()
-
 	// Run build command synchronously before any fixtures
 	buildCmd, buildSetup := r.getBuildCommand()
 	if buildCmd != "" {
@@ -287,7 +387,16 @@ func (r *Runner) executeFixtures() (*FixtureGroup, error) {
 		if err := r.completeProgressStep(ctx, ExecutionKindDaemon); err != nil {
 			return nil, err
 		}
-		defer r.stopDaemon()
+		defer func() {
+			startErr := r.startProgressStep(ctx, ExecutionKindDaemonStop)
+			stopErr := r.stopDaemon()
+			state := ExecutionPassed
+			if stopErr != nil {
+				state = ExecutionWarned
+			}
+			completeErr := r.progress.CompleteStep(ctx, "daemon-stop", state, stopErr)
+			runErr = errors.Join(runErr, startErr, completeErr)
+		}()
 	}
 
 	// Recorders start after the daemon so its port can be excluded from the
@@ -299,8 +408,11 @@ func (r *Runner) executeFixtures() (*FixtureGroup, error) {
 	}
 	defer r.closeRecorders()
 
-	// Create typed task group for fixture execution
-	fixtureGroup := task.StartGroup[FixtureResult]("Fixture Tests")
+	// Create typed task group for fixture execution. The group's own semaphore
+	// is the only thing that bounds a row's concurrency — the manager's worker
+	// pool is process-wide and already sized — so MaxWorkers has to arrive here
+	// as WithConcurrency or it bounds nothing at all.
+	fixtureGroup := task.StartGroup[FixtureResult]("Fixture Tests", task.WithConcurrency(r.maxWorkers()))
 
 	r.tree.Walk(func(node *FixtureNode) {
 		if node.Test != nil {
@@ -378,6 +490,10 @@ func (r *Runner) executionSteps() []ExecutionStep {
 	}
 	if command, _ := r.getDaemonCommand(); command != "" {
 		steps = append(steps, ExecutionStep{Key: "daemon", Name: "Daemon", Kind: ExecutionKindDaemon})
+		steps = append(steps, ExecutionStep{Key: "daemon-stop", Name: "Daemon stop", Kind: ExecutionKindDaemonStop})
+	}
+	if r.hasSetup() {
+		steps = append(steps, ExecutionStep{Key: "cleanup", Name: "Cleanup", Kind: ExecutionKindCleanup})
 	}
 	return steps
 }
@@ -426,6 +542,10 @@ func progressStepKey(kind ExecutionKind) string {
 		return "build"
 	case ExecutionKindDaemon:
 		return "daemon"
+	case ExecutionKindDaemonStop:
+		return "daemon-stop"
+	case ExecutionKindCleanup:
+		return "cleanup"
 	default:
 		return ""
 	}
@@ -462,6 +582,8 @@ func (r *Runner) executeFixture(ctx flanksourceContext.Context, fixture FixtureT
 		Evaluator:      r.evaluator,
 		ExecutablePath: r.options.ExecutablePath,
 		UpdateGolden:   r.options.UpdateGolden,
+		Profile:        r.options.Profile,
+		SQLProfile:     r.options.SQLProfile,
 		Setup:          env.setup,
 		Recorder:       r.recorderContext(env.file),
 		Record:         r.effectiveRecord(fixture),

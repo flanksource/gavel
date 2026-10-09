@@ -11,11 +11,13 @@ import (
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/captain/pkg/api/registry"
 	captaincli "github.com/flanksource/captain/pkg/cli"
+	"github.com/flanksource/captain/pkg/runtimeprofiles"
 	"github.com/flanksource/gavel/todos/lifecycle"
 	"github.com/flanksource/gavel/todos/types"
 )
 
 type todoRunContextResponse struct {
+	RuntimePresets  []runtimeprofiles.Preset      `json:"runtimePresets"`
 	RuntimeProfiles []todoRunRuntimeProfileOption `json:"runtimeProfiles"`
 	// Modes is one row per (provider, mode) Captain can actually run, decorated
 	// with that runtime's models, auth state and binary. Runtimes below is
@@ -67,6 +69,7 @@ type todoRunStepOption struct {
 type todoRunPromptDefault struct {
 	Mode           string                         `json:"mode,omitempty"`
 	Model          string                         `json:"model,omitempty"`
+	Presets        []string                       `json:"presets,omitempty"`
 	RuntimeProfile string                         `json:"runtimeProfile,omitempty"`
 	Spec           api.Spec                       `json:"spec"`
 	Trace          []api.SpecLayer                `json:"trace"`
@@ -150,7 +153,7 @@ func todoRunContext(ctx context.Context, workDir string) (todoRunContextResponse
 		return todoRunContextResponse{}, err
 	}
 	definition := host.Def.Definition()
-	profiles, err := todoRunProfileOptions(ctx, host)
+	presets, err := todoRunPresetOptions(ctx, host)
 	if err != nil {
 		return todoRunContextResponse{}, err
 	}
@@ -163,7 +166,8 @@ func todoRunContext(ctx context.Context, workDir string) (todoRunContextResponse
 		return todoRunContextResponse{}, err
 	}
 	return todoRunContextResponse{
-		RuntimeProfiles: profiles,
+		RuntimePresets:  presets,
+		RuntimeProfiles: []todoRunRuntimeProfileOption{},
 		Modes:           modes,
 		Runtimes:        who.Runtimes,
 		Models:          models,
@@ -218,7 +222,7 @@ func todoRunPromptDefaults(ctx context.Context, host *lifecycle.Host) (map[strin
 			return nil, fmt.Errorf("resolve the %s step's runtime: %w", step.Name, err)
 		}
 		defaults[step.Name] = todoRunPromptDefault{
-			Mode: string(spec.Spec.Mode), Model: spec.Spec.Name, RuntimeProfile: spec.RuntimeProfile,
+			Mode: string(spec.Spec.Mode), Model: spec.Spec.Name, Presets: spec.Presets, RuntimeProfile: spec.RuntimeProfile,
 			Spec: spec.Spec, Trace: spec.Trace, Provenance: spec.Provenance, Warnings: spec.Warnings,
 		}
 	}

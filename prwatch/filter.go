@@ -8,6 +8,7 @@ import (
 
 	"github.com/flanksource/commons/collections"
 	"github.com/flanksource/gavel/github"
+	"github.com/flanksource/gavel/pr/model"
 )
 
 type resultFilters struct {
@@ -86,8 +87,8 @@ func (f resultFilters) isComplete(result *PRWatchResult) bool {
 	return !f.hasCommentFilters() || result.UnresolvedComments() == 0
 }
 
-func (f resultFilters) filterComments(comments []github.PRComment) []github.PRComment {
-	filtered := make([]github.PRComment, 0, len(comments))
+func (f resultFilters) filterComments(comments []model.PRComment) []model.PRComment {
+	filtered := make([]model.PRComment, 0, len(comments))
 	for _, comment := range comments {
 		if matchAnyTarget(commentMatchTargets(comment), f.comments) {
 			filtered = append(filtered, comment)
@@ -96,7 +97,7 @@ func (f resultFilters) filterComments(comments []github.PRComment) []github.PRCo
 	return filtered
 }
 
-func commentMatchTargets(comment github.PRComment) []string {
+func commentMatchTargets(comment model.PRComment) []string {
 	var targets []string
 	if comment.ID != 0 {
 		targets = append(targets, strconv.FormatInt(comment.ID, 10))
@@ -128,7 +129,7 @@ func (f resultFilters) filterActions(result *PRWatchResult) {
 	// checks are matched individually by name in matchStatusCheck so a sibling
 	// job's check does not leak in.
 	matchedRunIDs := map[int64]bool{}
-	filteredRuns := make(map[int64]*github.WorkflowRun, len(result.Runs))
+	filteredRuns := make(map[int64]*model.WorkflowRun, len(result.Runs))
 
 	for key, run := range result.Runs {
 		if run == nil {
@@ -147,6 +148,9 @@ func (f resultFilters) filterActions(result *PRWatchResult) {
 		if jobs := matchingJobs(run.Jobs, f.actions); len(jobs) > 0 {
 			pruned := *run
 			pruned.Jobs = jobs
+			if result.PR != nil && result.PR.Provider == "azuredevops" {
+				pruned.Status, pruned.Conclusion = scopedPipelineState(jobs)
+			}
 			filteredRuns[key] = &pruned
 		}
 	}
@@ -156,7 +160,7 @@ func (f resultFilters) filterActions(result *PRWatchResult) {
 	if result.PR == nil {
 		return
 	}
-	checks := make(github.StatusChecks, 0, len(result.PR.StatusCheckRollup))
+	checks := make(model.StatusChecks, 0, len(result.PR.StatusCheckRollup))
 	for _, check := range result.PR.StatusCheckRollup {
 		if f.matchStatusCheck(check, matchedRunIDs) {
 			checks = append(checks, check)
@@ -165,7 +169,27 @@ func (f resultFilters) filterActions(result *PRWatchResult) {
 	result.PR.StatusCheckRollup = checks
 }
 
-func filterGavelResultsByRun(results []*GavelResultsSummary, runs map[int64]*github.WorkflowRun) []*GavelResultsSummary {
+func scopedPipelineState(jobs []model.Job) (string, string) {
+	status, conclusion := "COMPLETED", "SUCCESS"
+	for _, job := range jobs {
+		if job.Status != "COMPLETED" {
+			status = "IN_PROGRESS"
+		}
+		if model.IsFailureConclusion(job.Conclusion) {
+			conclusion = "FAILURE"
+		} else if conclusion != "FAILURE" && job.Conclusion == "CANCELLED" {
+			conclusion = "CANCELLED"
+		} else if conclusion == "SUCCESS" && job.Conclusion == "PARTIAL_SUCCESS" {
+			conclusion = "PARTIAL_SUCCESS"
+		}
+	}
+	if status != "COMPLETED" {
+		conclusion = ""
+	}
+	return status, conclusion
+}
+
+func filterGavelResultsByRun(results []*GavelResultsSummary, runs map[int64]*model.WorkflowRun) []*GavelResultsSummary {
 	filtered := make([]*GavelResultsSummary, 0, len(results))
 	for _, result := range results {
 		if result == nil {
@@ -178,18 +202,28 @@ func filterGavelResultsByRun(results []*GavelResultsSummary, runs map[int64]*git
 	return filtered
 }
 
-// matchingJobs returns the jobs whose name matches the action patterns.
-func matchingJobs(jobs []github.Job, patterns []string) []github.Job {
-	var out []github.Job
+// matchingJobs returns the jobs whose name or job ID matches the action patterns.
+func matchingJobs(jobs []model.Job, patterns []string) []model.Job {
+	var out []model.Job
 	for _, job := range jobs {
-		if job.Name != "" && matchAnyTarget([]string{job.Name}, patterns) {
+		var targets []string
+		if job.NativeID != "" {
+			targets = append(targets, job.NativeID)
+		}
+		if job.Name != "" {
+			targets = append(targets, job.Name)
+		}
+		if job.DatabaseID != 0 {
+			targets = append(targets, strconv.FormatInt(job.DatabaseID, 10))
+		}
+		if len(targets) > 0 && matchAnyTarget(targets, patterns) {
 			out = append(out, job)
 		}
 	}
 	return out
 }
 
-func workflowRunMatchTargets(run *github.WorkflowRun) []string {
+func workflowRunMatchTargets(run *model.WorkflowRun) []string {
 	var targets []string
 	if run.DatabaseID != 0 {
 		targets = append(targets, strconv.FormatInt(run.DatabaseID, 10))
@@ -211,13 +245,25 @@ func workflowRunMatchTargets(run *github.WorkflowRun) []string {
 // check matches on its own run ID, workflow name, or job/check name — so a
 // job/check name shown in the tree (e.g. "lint") is a valid selector, not just
 // the workflow it belongs to.
-func (f resultFilters) matchStatusCheck(check github.StatusCheck, matchedRunIDs map[int64]bool) bool {
+func (f resultFilters) matchStatusCheck(check model.StatusCheck, matchedRunIDs map[int64]bool) bool {
 	var values []string
+	if check.RunID != 0 {
+		if matchedRunIDs[check.RunID] {
+			return true
+		}
+		values = append(values, strconv.FormatInt(check.RunID, 10))
+	}
+	if check.JobID != "" {
+		values = append(values, check.JobID)
+	}
 	if runID, err := github.ExtractRunID(check.DetailsURL); err == nil {
 		if matchedRunIDs[runID] {
 			return true
 		}
 		values = append(values, strconv.FormatInt(runID, 10))
+	}
+	if jobID, err := github.ExtractJobID(check.DetailsURL); err == nil {
+		values = append(values, strconv.FormatInt(jobID, 10))
 	}
 	if check.WorkflowName != "" {
 		values = append(values, check.WorkflowName)
@@ -249,7 +295,14 @@ func matchAnyTarget(targets, patterns []string) bool {
 // checks/runs down to nothing — a mismatched selector rather than a PR that
 // simply has no checks yet.
 func (f resultFilters) noActionMatch(preChecks, preRuns int, result *PRWatchResult) bool {
-	if !f.hasActionFilters() || (preChecks == 0 && preRuns == 0) {
+	if !f.hasActionFilters() {
+		return false
+	}
+	if preChecks == 0 && preRuns == 0 {
+		if result != nil && result.PR != nil && result.PR.Provider == "azuredevops" {
+			r := result.PR.MergeReadiness
+			return r == nil || (!r.WaitingForBuilds && !r.WaitingForMerge)
+		}
 		return false
 	}
 	if result == nil {
@@ -276,7 +329,7 @@ func (f resultFilters) noCommentMatch(preComments int, result *PRWatchResult) bo
 // actionSelectorOptions lists the selectors the user could have passed to
 // --actions for this PR: workflow names, workflow YAML basenames, and job/check
 // names. Used to make a no-match failure actionable.
-func actionSelectorOptions(pr *github.PRInfo, runs map[int64]*github.WorkflowRun) []string {
+func actionSelectorOptions(pr *model.PRInfo, runs map[int64]*model.WorkflowRun) []string {
 	seen := map[string]bool{}
 	var out []string
 	add := func(s string) {

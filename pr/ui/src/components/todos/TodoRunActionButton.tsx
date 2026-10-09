@@ -1,5 +1,5 @@
 import { useEffect, useState, type ComponentType } from "react";
-import { Button } from "@flanksource/clicky-ui/components";
+import { Button, Select } from "@flanksource/clicky-ui/components";
 import { RuntimeBar, type AISpecRuntimeValue } from "@flanksource/clicky-ui/ai";
 import { UiCog, type IconProps } from "@flanksource/clicky-ui/icons";
 import type { TodoRunOptions } from "../../types";
@@ -16,7 +16,11 @@ import {
   useTodoRunContext,
 } from "./run";
 import { buildRunFamilies, type RunContext } from "./providers";
-import { effectiveTodoRuntime, unresolvedTodoRuntimeProfile } from './runtimeProfiles';
+import { effectiveTodoRuntime, unresolvedTodoRuntimePreset } from './runtimePresets';
+import { continueBranchLabel, NEW_BRANCH_LABEL, type RunBranchChoice } from './runBranchChoice';
+
+const CONTINUE = "continue";
+const NEW = "new";
 
 export function TodoRunRuntimeBar({
   action,
@@ -33,15 +37,14 @@ export function TodoRunRuntimeBar({
 }) {
   const spec = runSpec(options);
   const inherited = effectiveTodoRuntime(options, context);
-  const profile = unresolvedTodoRuntimeProfile(options, context);
-  if (profile) return <span className="inline-flex items-center rounded-md border border-border px-2 text-xs text-muted-foreground">Profile: {profile}</span>;
+  const preset = unresolvedTodoRuntimePreset(options, context);
+  if (preset) return <span className="inline-flex items-center rounded-md border border-border px-2 text-xs text-muted-foreground">Preset: {preset}</span>;
   return (
     <fieldset disabled={disabled} className="min-w-0 border-0 p-0 disabled:opacity-50">
       <RuntimeBar<AISpecRuntimeValue>
         value={spec}
         effectiveModel={inherited.model}
         effectiveMode={inherited.mode}
-        variant="combo"
         families={buildRunFamilies(context)}
         models={context.models ?? []}
         reasoningEfforts={context.efforts}
@@ -66,6 +69,7 @@ export function TodoRunActionButton({
   onOptionsChange,
   onRun,
   onAdvanced,
+  branchChoice,
 }: {
   dir: string;
   action: TodoRunAction;
@@ -79,11 +83,17 @@ export function TodoRunActionButton({
   onOptionsChange?: (options: TodoRunOptions) => void;
   onRun: (options?: TodoRunOptions) => void;
   onAdvanced: (action: TodoRunAction) => void;
+  // The branch a run may continue on; when set, a Run offers continuing on it or
+  // starting a new branch, and the choice rides on the dispatched options.
+  branchChoice?: RunBranchChoice | null;
 }) {
   const config = runActionConfig[action];
   const { context, loading: contextLoading, error: contextError } = useTodoRunContext({ dir });
   const [selectedOptions, setSelectedOptions] = useState<TodoRunOptions | null>(null);
   useEffect(() => setSelectedOptions(null), [action, context]);
+  const [reuseBranch, setReuseBranch] = useState(true);
+  useEffect(() => setReuseBranch(true), [branchChoice?.branch]);
+  const offersBranch = action === "run" && !!branchChoice;
   const unavailable = contextLoading || !context || !!contextError;
   const candidateOptions = controlledOptions ?? selectedOptions ?? loadLastTodoRunOptions(action, context);
   const currentOptions = context ? reconcileTodoRunOptions(action, candidateOptions, context) : candidateOptions;
@@ -97,7 +107,8 @@ export function TodoRunActionButton({
   }
 
   function runWith(options: TodoRunOptions) {
-    onRun(rememberTodoRunOptions(action, options));
+    const remembered = rememberTodoRunOptions(action, options);
+    onRun(offersBranch ? { ...remembered, reuseBranch } : remembered);
   }
 
   return (
@@ -116,6 +127,19 @@ export function TodoRunActionButton({
           <UiCog className="text-sm" />
         </Button>
       </div>
+      {offersBranch && branchChoice && (
+        <Select
+          aria-label="Branch for this run"
+          value={reuseBranch ? CONTINUE : NEW}
+          disabled={disabled || unavailable}
+          onChange={event => setReuseBranch(event.currentTarget.value === CONTINUE)}
+          options={[
+            { value: CONTINUE, label: continueBranchLabel(branchChoice) },
+            { value: NEW, label: NEW_BRANCH_LABEL },
+          ]}
+          className="h-8 max-w-full text-xs"
+        />
+      )}
       <TodoRunContextError error={contextError} />
     </div>
   );

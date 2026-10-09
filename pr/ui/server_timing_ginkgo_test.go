@@ -15,17 +15,17 @@ import (
 
 var _ = Describe("project server timing", func() {
 	var originalProjectsPath string
-	var originalProjectTodoCounts func(ctx context.Context, project Project) (todoCounts, error)
+	var originalProjectsTodoCounts func(ctx context.Context, projects []Project) []todoCountsResult
 
 	BeforeEach(func() {
 		originalProjectsPath = projectsPath
-		originalProjectTodoCounts = projectTodoCounts
+		originalProjectsTodoCounts = projectsTodoCounts
 		projectsPath = filepath.Join(GinkgoT().TempDir(), "projects.json")
 	})
 
 	AfterEach(func() {
 		projectsPath = originalProjectsPath
-		projectTodoCounts = originalProjectTodoCounts
+		projectsTodoCounts = originalProjectsTodoCounts
 	})
 
 	It("reports total, file, and database time while browsing projects", func() {
@@ -36,9 +36,9 @@ var _ = Describe("project server timing", func() {
 			projects[i] = Project{Name: fmt.Sprintf("project-%d", i), Dir: projectDir}
 		}
 		Expect(SaveProjects(projects)).To(Succeed())
-		projectTodoCounts = func(_ context.Context, _ Project) (todoCounts, error) {
+		projectsTodoCounts = perProjectTodoCounts(func(Project) (todoCounts, error) {
 			return todoCounts{Total: 3, Open: 2, Completed: 1}, nil
-		}
+		})
 
 		response := requestProjectEndpoint("/api/projects")
 
@@ -47,38 +47,46 @@ var _ = Describe("project server timing", func() {
 		Expect(response.Body.String()).To(ContainSubstring(`"todoCounts":{"total":3`))
 	})
 
-	It("reports total, file, and git time for project status", func() {
+	It("reports total, file, and sql time, and no git time, for a project status read from the stored state", func() {
+		server := newTrackedGitServer().server
 		dir := createDiffRepository()
 		writeDiffFile(dir, "src/unstaged.go", "package src\n\nvar Unstaged = true\n")
 		Expect(SaveProjects([]Project{{Name: "gavel", Dir: dir}})).To(Succeed())
+		Expect(requestProjectEndpointOn(server, "/api/projects/gavel/status").Code).To(Equal(http.StatusOK), "the first read tracks the repository")
 
-		response := requestProjectEndpoint("/api/projects/gavel/status")
+		response := requestProjectEndpointOn(server, "/api/projects/gavel/status")
 
 		Expect(response.Code).To(Equal(http.StatusOK), response.Body.String())
-		Expect(serverTimingMetricNames(response.Header().Get("Server-Timing"))).To(ConsistOf("total", "file", "git"))
-		Expect(response.Body.String()).To(ContainSubstring(`"branch":`))
+		Expect(serverTimingMetricNames(response.Header().Get("Server-Timing"))).To(ConsistOf("total", "file", "sql"))
+		Expect(response.Body.String()).To(ContainSubstring(`"branch":"main"`))
 	})
 
-	It("reports total, file, and git time for successful and invalid diffs", func() {
+	It("reports git time only for the live patch of a diff", func() {
+		server := newTrackedGitServer().server
 		dir := createDiffRepository()
 		writeDiffFile(dir, "src/unstaged.go", "package src\n\nvar Unstaged = true\n")
 		Expect(SaveProjects([]Project{{Name: "gavel", Dir: dir}})).To(Succeed())
+		Expect(requestProjectEndpointOn(server, "/api/projects/gavel/status").Code).To(Equal(http.StatusOK), "the first read tracks the repository")
 
-		valid := requestProjectEndpoint("/api/projects/gavel/diff?path=src%2Funstaged.go")
-		invalid := requestProjectEndpoint("/api/projects/gavel/diff?path=missing.go")
+		valid := requestProjectEndpointOn(server, "/api/projects/gavel/diff?path=src%2Funstaged.go")
+		invalid := requestProjectEndpointOn(server, "/api/projects/gavel/diff?path=missing.go")
 
 		Expect(valid.Code).To(Equal(http.StatusOK), valid.Body.String())
-		Expect(serverTimingMetricNames(valid.Header().Get("Server-Timing"))).To(ConsistOf("total", "file", "git"))
+		Expect(serverTimingMetricNames(valid.Header().Get("Server-Timing"))).To(ConsistOf("total", "file", "sql", "git"))
 		Expect(valid.Body.String()).To(ContainSubstring(`"path":"src/unstaged.go"`))
 		Expect(invalid.Code).To(Equal(http.StatusBadRequest), invalid.Body.String())
-		Expect(serverTimingMetricNames(invalid.Header().Get("Server-Timing"))).To(ConsistOf("total", "file", "git"))
+		Expect(serverTimingMetricNames(invalid.Header().Get("Server-Timing"))).To(ConsistOf("total", "file", "sql"))
 		Expect(invalid.Body.String()).To(ContainSubstring(`"error":`))
 	})
 })
 
 func requestProjectEndpoint(path string) *httptest.ResponseRecorder {
+	return requestProjectEndpointOn(&Server{}, path)
+}
+
+func requestProjectEndpointOn(server *Server, path string) *httptest.ResponseRecorder {
 	response := httptest.NewRecorder()
-	(&Server{}).Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+	server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
 	return response
 }
 

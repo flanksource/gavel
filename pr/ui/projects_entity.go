@@ -6,14 +6,17 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"sync"
 
 	rpchttp "github.com/flanksource/clicky/rpc/http"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/procfile"
+	"github.com/flanksource/gavel/todos/query"
 )
 
-var projectTodoCounts = countProjectTodos
+// projectsTodoCounts is the seam the projects entity reads TODO counts through:
+// one call for every project it shows, one result per project in the same
+// order. Package tests swap it to drive the handlers without PostgreSQL.
+var projectsTodoCounts = countProjectsTodos
 
 // statusForProjectErr maps the shared CRUD sentinel errors onto HTTP codes.
 func statusForProjectErr(err error) int {
@@ -31,60 +34,65 @@ func statusForProjectErr(err error) int {
 
 // newProjectInfo resolves a stored Project into the wire shape returned by the
 // projects entity: the directory is ~-expanded, hasProcfile reflects the
-// directory's current contents, and todo counts are scoped to the workspace.
-func newProjectInfo(ctx context.Context, p Project) (projectInfo, error) {
+// directory's current contents, and counts is the project's own entry from
+// loadProjectTodoCounts.
+func newProjectInfo(ctx context.Context, p Project, counts todoCountsResult) (projectInfo, error) {
 	dir := p.ResolvedDir()
 	stopFile := rpchttp.Track(ctx, "file")
 	hasProcfile := dir != "" && procfile.Find(dir, "") != ""
 	stopFile()
 	info := projectInfo{
 		Name:        p.Name,
+		Short:       query.ShortProjectName(p.Name),
 		Dir:         dir,
 		Repos:       p.Repos,
 		HasProcfile: hasProcfile,
 		TodoBackend: "db",
 	}
-	stopDB := rpchttp.Track(ctx, "db")
-	counts, err := projectTodoCounts(ctx, p)
-	stopDB()
-	if err != nil {
-		return info, err
+	if counts.Err != nil {
+		return info, counts.Err
 	}
-	info.TodoCounts = &counts
+	info.TodoCounts = &counts.Counts
 	return info, nil
 }
 
-// projectInfoConcurrency bounds the parallel per-project TODO count lookups.
-// Each one is a single grouped query, so a small fan-out hides the round-trip
-// latency without opening a connection per configured project.
-const projectInfoConcurrency = 4
+// loadProjectTodoCounts reads every project's TODO counts in one batch through
+// the projectsTodoCounts seam, and checks the batch answers each project: a
+// result that cannot be matched to its project is reported on every project
+// rather than risk showing one project another's counts.
+func loadProjectTodoCounts(ctx context.Context, ps []Project) []todoCountsResult {
+	stopDB := rpchttp.Track(ctx, "db")
+	counts := projectsTodoCounts(ctx, ps)
+	stopDB()
+	if len(counts) == len(ps) {
+		return counts
+	}
+	err := fmt.Errorf("load native TODO counts: got %d results for %d projects", len(counts), len(ps))
+	counts = make([]todoCountsResult, len(ps))
+	for i := range counts {
+		counts[i].Err = err
+	}
+	return counts
+}
 
-// listProjectInfos resolves every project's wire shape concurrently while
-// preserving projects.json order.
+// listProjectInfos resolves every project's wire shape in projects.json order,
+// reading all of their TODO counts in one batch.
 //
 // A project whose TODO counts cannot be loaded reports the failure on its own
 // entry instead of failing the list: the projects payload also drives Processes
 // and PRs, so one unreachable workspace must not blank the whole dashboard. The
 // failure stays loud — logged, and visible in the response.
 func listProjectInfos(ctx context.Context, ps []Project) []projectInfo {
+	counts := loadProjectTodoCounts(ctx, ps)
 	out := make([]projectInfo, len(ps))
-	slots := make(chan struct{}, projectInfoConcurrency)
-	var wg sync.WaitGroup
 	for i, p := range ps {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			slots <- struct{}{}
-			defer func() { <-slots }()
-			info, err := newProjectInfo(ctx, p)
-			if err != nil {
-				logger.Errorf("load project %q native TODOs: %v", p.Name, err)
-				info.Error = err.Error()
-			}
-			out[i] = info
-		}()
+		info, err := newProjectInfo(ctx, p, counts[i])
+		if err != nil {
+			logger.Errorf("load project %q native TODOs: %v", p.Name, err)
+			info.Error = err.Error()
+		}
+		out[i] = info
 	}
-	wg.Wait()
 	return out
 }
 
@@ -97,14 +105,11 @@ func listProjectInfos(ctx context.Context, ps []Project) []projectInfo {
 func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		stopFile := rpchttp.Track(r.Context(), "file")
-		ps, err := LoadProjects()
-		stopFile()
+		out, err := listProjects(r.Context())
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		out := listProjectInfos(r.Context(), ps)
 		if wantsClicky(r) {
 			writeProjectsClicky(w, out)
 			return
@@ -143,7 +148,7 @@ func (s *Server) handleProjectByName(w http.ResponseWriter, r *http.Request) {
 			respondError(w, statusForProjectErr(err), err.Error())
 			return
 		}
-		info, err := newProjectInfo(r.Context(), p)
+		info, err := newProjectInfo(r.Context(), p, loadProjectTodoCounts(r.Context(), []Project{p})[0])
 		if err != nil {
 			writeTodoError(w, http.StatusInternalServerError, fmt.Errorf("load project %q native TODOs: %w", p.Name, err))
 			return

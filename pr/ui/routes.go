@@ -12,6 +12,7 @@ import (
 	"github.com/flanksource/clicky/formatters"
 	_ "github.com/flanksource/clicky/formatters/html"
 	"github.com/flanksource/gavel/github"
+	"github.com/flanksource/gavel/pr/model"
 )
 
 const (
@@ -21,6 +22,7 @@ const (
 	viewTabActivity = "activity"
 	viewTabTasks    = "tasks"
 	viewTabPrompts  = "prompts"
+	viewTabSessions = "sessions"
 )
 
 type routeRequest struct {
@@ -67,11 +69,11 @@ type PRViewNode struct {
 	RoutePath string `json:"route_path,omitempty"`
 
 	// Populated only when Selected (single-PR export).
-	PR           *github.PRInfo                `json:"pr,omitempty"`
-	Runs         map[int64]*github.WorkflowRun `json:"runs,omitempty"`
-	Comments     []github.PRComment            `json:"comments,omitempty"`
-	GavelResults []*GavelResultsSummary        `json:"gavelResults,omitempty"`
-	Detail       string                        `json:"detailError,omitempty"`
+	PR           *model.PRInfo                `json:"pr,omitempty"`
+	Runs         map[int64]*model.WorkflowRun `json:"runs,omitempty"`
+	Comments     []model.PRComment            `json:"comments,omitempty"`
+	GavelResults []*GavelResultsSummary       `json:"gavelResults,omitempty"`
+	Detail       string                       `json:"detailError,omitempty"`
 }
 
 func (n *PRViewNode) Pretty() api.Text {
@@ -228,10 +230,11 @@ func parseRouteRequest(r *http.Request) (routeRequest, bool) {
 		pathFormat = format
 	}
 
-	// projects/todos/activity/tasks/prompts are client-rendered SPA tabs with no
-	// server-side node path or export; accept them and any deeper selected-node
-	// segments so a hard load such as /projects/{project}/runs/{runId} serves the app.
-	if tabSeg == viewTabProjects || tabSeg == viewTabTodos || tabSeg == viewTabActivity || tabSeg == viewTabTasks || tabSeg == viewTabPrompts {
+	// projects/todos/activity/tasks/prompts/sessions are client-rendered SPA tabs
+	// with no server-side node path or export; accept them and any deeper
+	// selected-node segments so a hard load such as /projects/{project}/runs/{runId}
+	// serves the app.
+	if tabSeg == viewTabProjects || tabSeg == viewTabTodos || tabSeg == viewTabActivity || tabSeg == viewTabTasks || tabSeg == viewTabPrompts || tabSeg == viewTabSessions {
 		req.Tab = tabSeg
 		return req, true
 	}

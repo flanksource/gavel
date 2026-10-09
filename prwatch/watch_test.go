@@ -3,8 +3,8 @@ package prwatch
 import (
 	"testing"
 
-	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/linters"
+	"github.com/flanksource/gavel/pr/model"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -13,9 +13,9 @@ import (
 // failure signal lives in a gavel artifact harvested from a PR comment.
 func greenRollupResult() *PRWatchResult {
 	return &PRWatchResult{
-		PR: &github.PRInfo{
+		PR: &model.PRInfo{
 			Number: 2347,
-			StatusCheckRollup: github.StatusChecks{
+			StatusCheckRollup: model.StatusChecks{
 				{Name: "license/cla", Status: "COMPLETED", Conclusion: "SUCCESS"},
 				{Name: "Socket Security: Pull Request Alerts", Status: "COMPLETED", Conclusion: "NEUTRAL"},
 			},
@@ -46,8 +46,8 @@ func TestPRWatchResultHasTerminalFailure(t *testing.T) {
 			r.PR.StatusCheckRollup[0].Status, r.PR.StatusCheckRollup[0].Conclusion = "IN_PROGRESS", ""
 		}, false},
 		{"failed job under a green rollup", func(r *PRWatchResult) {
-			r.Runs = map[int64]*github.WorkflowRun{
-				7: {DatabaseID: 7, Jobs: []github.Job{{Name: "e2e", Conclusion: "failure"}}},
+			r.Runs = map[int64]*model.WorkflowRun{
+				7: {DatabaseID: 7, Jobs: []model.Job{{Name: "e2e", Conclusion: "failure"}}},
 			}
 		}, true},
 		// A download that failed this poll is retried on the next one. Aborting
@@ -81,9 +81,9 @@ func TestFollowDone(t *testing.T) {
 	// the shape --fail-fast exists for.
 	mixed := func() *PRWatchResult {
 		return &PRWatchResult{
-			PR: &github.PRInfo{
+			PR: &model.PRInfo{
 				Number: 187,
-				StatusCheckRollup: github.StatusChecks{
+				StatusCheckRollup: model.StatusChecks{
 					{Name: "Test", Status: "COMPLETED", Conclusion: "FAILURE", WorkflowName: "CI",
 						DetailsURL: "https://github.com/org/repo/actions/runs/101/job/1"},
 					{Name: "Analyze (go)", Status: "IN_PROGRESS", WorkflowName: "CodeQL"},
@@ -119,8 +119,8 @@ func TestFollowDone(t *testing.T) {
 
 	t.Run("fail-fast catches a failed job under a green rollup", func(t *testing.T) {
 		result := greenRollupResult()
-		result.Runs = map[int64]*github.WorkflowRun{
-			7: {DatabaseID: 7, Jobs: []github.Job{{Name: "e2e", Conclusion: "failure"}}},
+		result.Runs = map[int64]*model.WorkflowRun{
+			7: {DatabaseID: 7, Jobs: []model.Job{{Name: "e2e", Conclusion: "failure"}}},
 		}
 		filters := newResultFilters(nil, nil)
 		assert.True(t, followDone(filters, result, true))
@@ -142,7 +142,7 @@ func TestStatusExitCode(t *testing.T) {
 			name: "failing rollup context",
 			mutate: func(r *PRWatchResult) {
 				r.PR.StatusCheckRollup = append(r.PR.StatusCheckRollup,
-					github.StatusChecks{{Name: "build", Status: "COMPLETED", Conclusion: "FAILURE"}}...)
+					model.StatusChecks{{Name: "build", Status: "COMPLETED", Conclusion: "FAILURE"}}...)
 			},
 			wantExt: 1,
 		},
@@ -190,8 +190,8 @@ func TestStatusExitCode(t *testing.T) {
 		{
 			name: "failed job under a passing rollup context",
 			mutate: func(r *PRWatchResult) {
-				r.Runs = map[int64]*github.WorkflowRun{
-					101: {DatabaseID: 101, Name: "CI", Status: "completed", Conclusion: "success", Jobs: []github.Job{
+				r.Runs = map[int64]*model.WorkflowRun{
+					101: {DatabaseID: 101, Name: "CI", Status: "completed", Conclusion: "success", Jobs: []model.Job{
 						{Name: "unit", Status: "completed", Conclusion: "success"},
 						{Name: "e2e", Status: "completed", Conclusion: "failure"},
 					}},
@@ -202,7 +202,7 @@ func TestStatusExitCode(t *testing.T) {
 		{
 			name: "nil run is not a failure",
 			mutate: func(r *PRWatchResult) {
-				r.Runs = map[int64]*github.WorkflowRun{101: nil}
+				r.Runs = map[int64]*model.WorkflowRun{101: nil}
 			},
 			wantExt: 0,
 		},

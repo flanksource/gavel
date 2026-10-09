@@ -3,7 +3,7 @@ package prwatch
 import (
 	"testing"
 
-	"github.com/flanksource/gavel/github"
+	"github.com/flanksource/gavel/pr/model"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -59,7 +59,7 @@ Shutdown() already calls restoreTerminal().
 
 </blockquote></details>`
 
-		comment := github.PRComment{
+		comment := model.PRComment{
 			ID: 100, Author: "coderabbitai[bot]", URL: "https://example.com",
 			Body: body,
 		}
@@ -90,7 +90,7 @@ Shutdown() already calls restoreTerminal().
 </blockquote></details>
 
 </blockquote></details>`
-		parent := github.PRComment{
+		parent := model.PRComment{
 			ID: 400, Author: "coderabbitai[bot]", Body: body,
 			IsReviewThread: true, IsResolved: true,
 		}
@@ -104,7 +104,7 @@ Shutdown() already calls restoreTerminal().
 	})
 
 	t.Run("no nitpick section returns nil", func(t *testing.T) {
-		comment := github.PRComment{
+		comment := model.PRComment{
 			ID: 200, Body: "LGTM! No nitpicks.", Author: "reviewer",
 		}
 		assert.Nil(t, parseNitpickComments(comment))
@@ -120,7 +120,7 @@ Shutdown() already calls restoreTerminal().
 </blockquote></details>
 
 </blockquote></details>`
-		comment := github.PRComment{ID: 300, Body: body, Author: "bot"}
+		comment := model.PRComment{ID: 300, Body: body, Author: "bot"}
 		assert.Empty(t, parseNitpickComments(comment))
 	})
 }

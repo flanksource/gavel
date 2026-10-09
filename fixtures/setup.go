@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -156,12 +157,15 @@ func (r *Runner) prepareSetups(ctx flanksourceContext.Context) error {
 // cleanupSetups tears every prepared setup down. Failures are reported rather
 // than returned — the fixture results are the run's answer, and a worktree that
 // would not go away must not turn a passing run red.
-func (r *Runner) cleanupSetups() {
+func (r *Runner) cleanupSetups() error {
+	var cleanupErr error
 	for file, prepared := range r.setups {
 		if err := prepared.Cleanup(); err != nil {
 			logger.Warnf("%s: setup cleanup failed: %v", file, err)
+			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("%s: setup cleanup: %w", file, err))
 		}
 	}
+	return cleanupErr
 }
 
 // envForNode returns the per-file runtime environment a node executes in.

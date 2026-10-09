@@ -73,7 +73,7 @@ func TestCatalogEmptyNameIsTheRunPrompt(t *testing.T) {
 	}
 }
 
-// The catalog is exactly the three built-ins, so an unknown name must say what IS
+// The catalog is exactly the four built-ins, so an unknown name must say what IS
 // available rather than failing bare.
 func TestCatalogUnknownNameEnumeratesAvailable(t *testing.T) {
 	_, err := mustCatalog(t, verify.TodosConfig{}).Lookup("nope")
@@ -89,14 +89,14 @@ func TestCatalogUnknownNameEnumeratesAvailable(t *testing.T) {
 
 // The prompt set is a code contract — each name pairs a behaviour class with the
 // envelope the run loop parses against — so configuration re-points the built-ins
-// and cannot add a fourth prompt.
+// and cannot add another prompt.
 func TestCatalogIsExactlyTheBuiltins(t *testing.T) {
 	names := mustCatalog(t, verify.TodosConfig{
 		Run:    verify.PromptSpec{Spec: api.Spec{Prompt: api.Prompt{User: "implement it"}}},
 		Triage: verify.PromptSpec{Spec: api.Spec{Prompt: api.Prompt{User: "triage it"}}},
 	}).Names()
-	if strings.Join(names, ",") != "run,plan,triage" {
-		t.Fatalf("Names() = %v, want run,plan,triage", names)
+	if strings.Join(names, ",") != "run,plan,triage,triage.new" {
+		t.Fatalf("Names() = %v, want run,plan,triage,triage.new", names)
 	}
 }
 
@@ -158,7 +158,7 @@ func TestCatalogListIsLifecycleOrderedNotAlphabetical(t *testing.T) {
 	for _, def := range mustCatalog(t, verify.TodosConfig{}).List() {
 		names = append(names, def.Name)
 	}
-	want := []string{"run", "plan", "triage"}
+	want := []string{"run", "plan", "triage", "triage.new"}
 	if strings.Join(names, ",") != strings.Join(want, ",") {
 		t.Errorf("List order = %v, want %v", names, want)
 	}

@@ -5,11 +5,11 @@ import (
 	"context"
 	"path/filepath"
 
-	. "github.com/onsi/ginkgo/v2"
-	. "github.com/onsi/gomega"
-
 	clickyai "github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/github"
+	"github.com/flanksource/gavel/pr/model"
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 )
 
 var _ = Describe("loadAheadCommits", func() {
@@ -270,7 +270,7 @@ var _ = Describe("dry-run new-PR push generates title/body and reports without p
 				pushCalls++
 				return nil
 			},
-			createPR: func(github.Options, github.CreatePRInput) (*github.CreatePRResult, error) {
+			createPR: func(github.Options, model.CreatePRInput) (*model.CreatePRResult, error) {
 				createCalls++
 				return nil, nil
 			},

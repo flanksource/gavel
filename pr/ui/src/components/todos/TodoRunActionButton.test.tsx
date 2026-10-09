@@ -46,7 +46,7 @@ const FIXTURE_CONTEXT: RunContext = {
     },
   ],
   lifecycle: { steps: [{ name: 'run', label: 'Run', prompt: 'run', readOnly: false }] },
-  runtimeProfiles: [{ id: 'review-profile', name: 'Review profile', presets: ['cmux-preset'] }],
+  runtimePresets: [{ id: 'review-preset', name: 'Review preset', scope: 'context', spec: {} }],
 };
 
 vi.mock('./run', async importOriginal => ({
@@ -84,11 +84,11 @@ afterEach(() => {
 });
 
 describe('TodoRunActionButton', () => {
-  it('shows a sparse profile by identity without claiming the step default runtime', () => {
+  it('shows a missing preset by identity without claiming the step default runtime', () => {
     const onRun = vi.fn();
-    const options = { step: 'run', runtimeProfile: 'review-profile', spec: {} };
+    const options = { step: 'run', presets: ['missing-preset'], spec: {} };
     render(<TodoRunActionButton dir="/repo" action="run" options={options} onRun={onRun} onAdvanced={vi.fn()} />);
-    expect(screen.getByText('Profile: Review profile')).toBeTruthy();
+    expect(screen.getByText('Preset: missing-preset')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Run runtime' })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Run' }));
     expect(onRun).toHaveBeenCalledWith(options);
@@ -126,5 +126,48 @@ describe('TodoRunActionButton', () => {
     expect(onOptionsChange).toHaveBeenCalledWith(expect.objectContaining({
       spec: expect.objectContaining({ model: 'claude-opus-4-9' }),
     }) as TodoRunOptions);
+  });
+});
+
+describe('TodoRunActionButton branch choice', () => {
+  const branchChoice = { branch: 'shell/1', unresolved: 2 };
+  const branchSelect = () => screen.getByRole('combobox', { name: 'Branch for this run' }) as HTMLSelectElement;
+
+  it('continues on the branch by default and says how many comments are unresolved', () => {
+    const onRun = vi.fn();
+    render(<TodoRunActionButton dir="/repo" action="run" branchChoice={branchChoice} onRun={onRun} onAdvanced={vi.fn()} />);
+
+    expect(Array.from(branchSelect().options).map(option => option.textContent)).toEqual(['Continue on shell/1 · 2 unresolved comments', 'New branch']);
+    fireEvent.click(screen.getByRole('button', { name: 'Run' }));
+
+    expect(onRun).toHaveBeenCalledWith(expect.objectContaining({ step: 'run', reuseBranch: true }) as TodoRunOptions);
+  });
+
+  it('dispatches reuseBranch false after "New branch" is chosen, without remembering the choice', () => {
+    const onRun = vi.fn();
+    render(<TodoRunActionButton dir="/repo" action="run" branchChoice={branchChoice} onRun={onRun} onAdvanced={vi.fn()} />);
+
+    fireEvent.change(branchSelect(), { target: { value: 'new' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Run' }));
+
+    expect(onRun).toHaveBeenCalledWith(expect.objectContaining({ reuseBranch: false }) as TodoRunOptions);
+    expect(vi.mocked(localStorage.setItem).mock.calls.length).toBeGreaterThan(0);
+    expect(String(vi.mocked(localStorage.setItem).mock.lastCall?.[1])).not.toContain('reuseBranch');
+  });
+
+  it('offers no choice and sends no reuseBranch without a reusable branch', () => {
+    const onRun = vi.fn();
+    render(<TodoRunActionButton dir="/repo" action="run" branchChoice={null} onRun={onRun} onAdvanced={vi.fn()} />);
+
+    expect(screen.queryByRole('combobox', { name: 'Branch for this run' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Run' }));
+
+    expect(onRun.mock.lastCall?.[0]).not.toHaveProperty('reuseBranch');
+  });
+
+  it('offers the choice on Run only, never on Plan', () => {
+    render(<TodoRunActionButton dir="/repo" action="plan" branchChoice={branchChoice} onRun={vi.fn()} onAdvanced={vi.fn()} />);
+
+    expect(screen.queryByRole('combobox', { name: 'Branch for this run' })).toBeNull();
   });
 });

@@ -1,14 +1,19 @@
 import { Button } from '@flanksource/clicky-ui/components';
 import { Markdown } from '@flanksource/clicky-ui/data';
 import { UiArrowLeft, UiCheck, UiCopy, UiError, UiMarkdown } from '@flanksource/clicky-ui/icons';
+import { ArchiveParentDialog } from './ArchiveParentDialog';
+import { TodoChildren, TodoRouteLink } from './TodoChildren';
+import type { TodoFamilyStatus } from './todoFamily';
 import type { Project, TodoItem } from '../../types';
 import { Spinner } from '../../icons/Spinner';
 import { TodoTimeline } from './TodoTimeline';
-import { TodoCommits } from './TodoCommits';
+import { TodoRunBranch } from './TodoRunBranch';
+import { TodoRunLandActions } from './TodoRunLandActions';
 import { TodoSession } from './TodoSession';
 import { TodoPlan } from './TodoPlan';
 import { statusClass, statusIcon, statusLabel } from './format';
 import { TodoRunAdvancedDialog } from './TodoRunAdvancedDialog';
+import { useReusableRunBranch } from './runBranchChoice';
 import { defaultRunOptions, loadLastTodoRunOptions } from './run';
 import { TodoPhaseButton, TodoPhaseTicks } from './TodoPhaseButton';
 import { TodoRunStatusStrip } from './TodoRunStatusStrip';
@@ -21,6 +26,10 @@ import { TodoTagField } from './TodoTag';
 import { useTodoDetail } from './useTodoDetail';
 import { EditPencil, ExternalIssueLink, PriorityMenu, StatusMenu, TodoSection } from './TodoDetailFields';
 import { HeaderActionsMenu } from './TodoDetailActions';
+import type { TodoDetailView } from '../../routes';
+
+const noTodos: TodoItem[] = [];
+const readyFamily: TodoFamilyStatus = { state: 'ready' };
 
 export interface TodoDetailProps {
   todo: TodoItem | null;
@@ -33,21 +42,38 @@ export interface TodoDetailProps {
   workspaces?: Project[];
   onTransferred?: (toDir: string, todo: TodoItem) => void;
   navigation?: TodoNavigationControlsProps;
+  // What the pane shows (detail tab, session inspector tab, selected attempts).
+  // The dashboard routes it through the URL; the menubar keeps it local.
+  view: TodoDetailView;
+  onViewChange: (view: TodoDetailView, mode?: 'push' | 'replace') => void;
+  // This todo's place in the hierarchy, read from its workspace's list (see
+  // useTodoFamily). `childTodos` rather than `children`, which is React's.
+  childTodos?: TodoItem[];
+  parentTodo?: TodoItem | null;
+  // Top-level todos of the workspace other than this one — the "Set parent…" choices.
+  parentCandidates?: TodoItem[];
+  // Whether the family above can be trusted: still loading or failed reads as
+  // neither "no children" nor "no parent".
+  familyStatus?: TodoFamilyStatus;
+  // Opens another todo in place; without it a todo link is an ordinary page link.
+  onOpenTodo?: (ref: string) => void;
 }
 
 export function TodoDetail(props: TodoDetailProps) {
-  const { todo, loading, loadError, dir, onChanged, onBack, onTransferred, navigation } = props;
+  const { todo, loading, loadError, dir, onChanged, onBack, onTransferred, navigation, view, onViewChange, childTodos = noTodos, parentTodo = null, parentCandidates = noTodos, familyStatus = readyFamily, onOpenTodo } = props;
   const {
     advancedMode, setAdvancedMode, runSelections, setRunSelections, error, tab, setTab,
     editingTitle, setEditingTitle, editingBody, setEditingBody, draftTitle, setDraftTitle,
     draftBody, setDraftBody, copyState, runBusy, runMessage, runError, runContext,
     busy, transferTargets, closed, body, events, verificationDetail, verificationError,
-    verification, verificationRun, sessionStop, stoppableAttempt, fullTodoId, visibleLabels,
+    verification, sessionAttemptCount, verificationRun, sessionStop, stoppableAttempt, fullTodoId, visibleLabels,
     tagIndex, tagCounts, viewSessionId, viewingHistoricalSession, sessionInProgress,
     awaitingHumanAction, phaseOptions, runningPhaseLabel, changePhaseOptions, patch,
     startEditTitle, startEditBody, saveTitle, saveBody, transferTo, pushToGithub,
-    archiveTodo, copyFullId, runPhase, stopRun, runTodo, submitAdvanced,
+    archiveTodo, archivePrompt, chooseArchiveChildren, cancelArchive,
+    copyFullId, runPhase, stopRun, runTodo, submitAdvanced,
   } = useTodoDetail(props);
+  const reusableBranch = useReusableRunBranch(dir, todo?.ref ?? '', events);
 
   if (!todo) {
     return (
@@ -114,6 +140,23 @@ export function TodoDetail(props: TodoDetailProps) {
               )}
               {navigation && <TodoNavigationControls {...navigation} />}
               <div className="min-w-0 flex-1">
+                {parentTodo ? (
+                  <TodoRouteLink
+                    todoRef={parentTodo.ref}
+                    onOpen={onOpenTodo}
+                    title={`Parent: ${parentTodo.title}`}
+                    className="block max-w-full truncate text-xs text-muted-foreground hover:text-foreground hover:underline"
+                  >
+                    ↑ {parentTodo.title}
+                  </TodoRouteLink>
+                ) : todo.parentId && (
+                  <span
+                    className={`block text-xs ${familyStatus.state === 'error' ? 'text-red-600' : 'text-muted-foreground'}`}
+                    title={familyStatus.state === 'error' ? familyStatus.message : undefined}
+                  >
+                    ↑ {familyStatus.state === 'loading' ? 'loading parent…' : familyStatus.state === 'error' ? 'parent unavailable' : 'parent not found'}
+                  </span>
+                )}
                 {editingTitle ? (
                   <TodoTitleEditor
                     value={draftTitle}
@@ -155,6 +198,10 @@ export function TodoDetail(props: TodoDetailProps) {
               tags={tagIndex}
               transferTargets={transferTargets}
               canTransfer={!!onTransferred}
+              parentCandidates={parentCandidates}
+              hasChildren={childTodos.length > 0}
+              onSetParent={parent => patch({ parent })}
+              onRemoveParent={() => patch({ parent: '' })}
               className="md:hidden"
               onCopy={copyFullId}
               onEditTitle={startEditTitle}
@@ -196,7 +243,8 @@ export function TodoDetail(props: TodoDetailProps) {
                     options={phaseOptions}
                     disabled={busy || !runContext}
                     busy={runBusy || verificationRun.isPending}
-                    onRunStep={runPhase}
+                    onRunStep={(name, extras) => runPhase(name, { ...(phaseOptions[name] ?? loadLastTodoRunOptions(name, runContext)), ...extras })}
+                    branchChoice={reusableBranch}
                     onReview={() => setTab('overview')}
                     onOptionsChange={changePhaseOptions}
                     onAdvanced={setAdvancedMode}
@@ -215,6 +263,10 @@ export function TodoDetail(props: TodoDetailProps) {
                 tags={tagIndex}
                 transferTargets={transferTargets}
                 canTransfer={!!onTransferred}
+                parentCandidates={parentCandidates}
+                hasChildren={childTodos.length > 0}
+                onSetParent={parent => patch({ parent })}
+                onRemoveParent={() => patch({ parent: '' })}
                 showRunActions={false}
                 showStatusPriority={false}
                 showLabels={false}
@@ -294,9 +346,19 @@ export function TodoDetail(props: TodoDetailProps) {
         title={`${runContext?.lifecycle.steps.find(step => step.name === advancedMode)?.label ?? advancedMode ?? 'Run'} todo`}
         dir={dir}
         refID={todo.ref}
+        branchChoice={reusableBranch}
       />
-      <TodoReviewBanner todo={todo} dir={dir} onChanged={onChanged} />
-      <TodoDetailTabs tab={tab} onSelect={setTab} verification={verification} />
+      {archivePrompt && (
+        <ArchiveParentDialog
+          parentTitle={todo.title}
+          openChildren={archivePrompt.openChildren}
+          serverMessage={archivePrompt.serverMessage}
+          onChoose={chooseArchiveChildren}
+          onCancel={cancelArchive}
+        />
+      )}
+      <TodoReviewBanner todo={todo} dir={dir} onChanged={onChanged} onLaunch={() => setTab('session')} />
+      <TodoDetailTabs tab={tab} onSelect={setTab} verification={verification} sessionAttempts={sessionAttemptCount} />
       <div className="flex min-h-0 flex-1 flex-col bg-muted/30">
         {tab === 'session' ? (
           <TodoSession
@@ -315,6 +377,10 @@ export function TodoDetail(props: TodoDetailProps) {
             onPlanOptionsChange={options => setRunSelections(previous => ({ ...previous, plan: options }))}
             runBusy={runBusy}
             runDisabled={busy || runBusy || awaitingHumanAction}
+            sessionTab={view.sessionTab}
+            onSessionTabChange={sessionTab => onViewChange({ ...view, sessionTab })}
+            sessionIds={view.sessionIds}
+            onSessionIdsChange={sessionIds => onViewChange({ ...view, sessionIds }, 'replace')}
           />
         ) : tab === 'plan' ? (
           <TodoPlan dir={dir} todo={todo} active={tab === 'plan'} onChanged={onChanged} />
@@ -371,7 +437,16 @@ export function TodoDetail(props: TodoDetailProps) {
                   busy={busy}
                   onComment={(text, reopen) => patch(reopen ? { status: 'pending', comment: text } : { comment: text })}
                 />
-                <TodoCommits dir={dir} todoRef={todo.ref} />
+                {(childTodos.length > 0 || !todo.parentId) && (
+                  <TodoChildren todo={todo} dir={dir} childTodos={childTodos} familyStatus={familyStatus} onOpenTodo={onOpenTodo} />
+                )}
+                <TodoRunBranch
+                  dir={dir}
+                  todoRef={todo.ref}
+                  renderActions={latest => <TodoRunLandActions dir={dir} todoRef={todo.ref} latest={latest} />}
+                  events={events}
+                  onPatch={patch}
+                />
                 {events.length > 0 && <TodoTimeline events={events} />}
               </div>
             )}

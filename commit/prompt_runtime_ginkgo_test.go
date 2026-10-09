@@ -84,7 +84,7 @@ var _ = Describe("commit prompt runtime preservation", func() {
 		}, stagedSource{Changes: []stagedChange{{Path: "main.go", Status: "modified"}}})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(groups).To(HaveLen(1))
-		Expect(config.Model.Name).To(Equal("claude-sonnet-5"))
+		Expect(config.Model.Name).To(Equal("claude-sonnet-5-5"))
 		Expect(config.Budget).To(Equal(api.Budget{Cost: 3, MaxTokens: 1200}))
 		Expect(agent.request.Spec.Model).To(Equal(config.Model))
 		Expect(agent.request.Spec.Budget).To(Equal(config.Budget))

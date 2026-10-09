@@ -37,44 +37,39 @@ var _ = Describe("project status lifecycle", func() {
 		projectsPath = originalProjectsPath
 	})
 
-	It("returns the selected project's gavel status and action state", func() {
+	It("returns the selected project's stored git status and action state", func() {
+		server := newTrackedGitServer().server
+		dir := createDiffRepository()
+		writeDiffFile(dir, "src/unstaged.go", "package src\n\nvar Unstaged = true\n")
+		Expect(SaveProjects([]Project{{Name: "gavel", Dir: dir, Repos: []string{"acme/gavel"}}})).To(Succeed())
 		originalGather := gatherProjectStatus
-		gatherProjectStatus = func(workDir string, opts status.Options) (*status.Result, error) {
-			Expect(workDir).To(Equal("/work/gavel"))
-			Expect(opts.NoRepomap).To(BeTrue())
-			Expect(opts.NoResults).To(BeTrue())
-			return &status.Result{
-				WorkDir: "/work/gavel",
-				Branch:  "feature/projects",
-				Files: []status.FileStatus{{
-					Path:     "pr/ui/src/App.tsx",
-					State:    status.StateUnstaged,
-					WorkKind: status.KindModified,
-					Adds:     12,
-					Dels:     3,
-				}},
-			}, nil
+		gatherProjectStatus = func(string, status.Options) (*status.Result, error) {
+			Fail("the base status is read from the stored git state, never gathered live")
+			return nil, nil
 		}
 		DeferCleanup(func() { gatherProjectStatus = originalGather })
 
 		recorder := httptest.NewRecorder()
 		request := httptest.NewRequest(http.MethodGet, "/api/projects/gavel/status", nil)
 		request.SetPathValue("name", "gavel")
-		(&Server{}).handleProjectStatus(recorder, request)
+		server.handleProjectStatus(recorder, request)
 
 		Expect(recorder.Code).To(Equal(http.StatusOK), recorder.Body.String())
 		var response projectStatusResponse
 		Expect(json.Unmarshal(recorder.Body.Bytes(), &response)).To(Succeed())
+		Expect(response.Files).To(HaveLen(1))
+		Expect(response.Files[0].ModifiedAt).NotTo(BeZero())
+		response.Files[0].ModifiedAt = time.Time{}
 		Expect(response).To(Equal(projectStatusResponse{
-			Project: Project{Name: "gavel", Dir: "/work/gavel", Repos: []string{"acme/gavel"}},
-			WorkDir: "/work/gavel",
-			Branch:  "feature/projects",
+			Project: Project{Name: "gavel", Dir: dir, Repos: []string{"acme/gavel"}},
+			WorkDir: dir,
+			Branch:  "main",
 			Files: []projectFileStatus{{
-				Path:     "pr/ui/src/App.tsx",
+				Path:     "src/unstaged.go",
 				State:    status.StateUnstaged,
 				WorkKind: status.KindModified,
-				Adds:     12,
-				Dels:     3,
+				Adds:     1,
+				Dels:     1,
 			}},
 		}))
 		var rawResponse map[string]any
@@ -167,6 +162,13 @@ var _ = Describe("project status lifecycle", func() {
 		Expect(ok).To(BeTrue())
 		Expect(commitPath).To(HaveKey("post"))
 		Expect(paths).NotTo(HaveKey("/api/projects/{name}/commit-queue/{id}"))
+
+		retryPath, ok := paths["/api/projects/{name}/commit-queue/{runId}/retry"].(map[string]any)
+		Expect(ok).To(BeTrue())
+		retryJSON, err := json.Marshal(retryPath["post"])
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(retryJSON)).To(ContainSubstring(`"name":"runId"`))
+		Expect(string(retryJSON)).To(ContainSubstring(`"202"`))
 	})
 
 	It("serves project action schemas from the injected command provider", func() {

@@ -28,18 +28,18 @@ export const todoQueryKeys = {
   list: (dir: string) => ['todos', 'list', { dir: queryDir(dir) }] as const,
   item: (dir: string, ref: string) => ['todos', 'item', { dir: queryDir(dir), ref }] as const,
   globalItem: (ref: string) => ['todos', 'item', 'global', { ref }] as const,
+  launch: (dir: string, ref: string) => ['todos', 'launch', { dir: queryDir(dir), ref }] as const,
   sessionStats: (dir: string, sessionId: string) =>
     ['todos', 'session', 'stats', { dir: queryDir(dir), sessionId }] as const,
-  sessionDetail: (dir: string, ref: string, sessionId: string | undefined, attemptsOnly: boolean) =>
-    ['todos', 'session', 'detail', { dir: queryDir(dir), ref, sessionId: sessionId ?? '', attemptsOnly }] as const,
+  sessionDetail: (dir: string, ref: string) =>
+    ['todos', 'session', 'detail', { dir: queryDir(dir), ref }] as const,
+  captainSession: (src: string) => ['captain', 'session', { src }] as const,
   plan: (dir: string, ref: string) =>
     ['todos', 'session', 'plan', { dir: queryDir(dir), ref }] as const,
-  commits: (dir: string, ref: string) =>
-    ['todos', 'commits', { dir: queryDir(dir), ref }] as const,
-  commitFiles: (dir: string, hash: string) =>
-    ['todos', 'commits', 'files', { dir: queryDir(dir), hash }] as const,
-  commitDiff: (dir: string, hash: string, file: string) =>
-    ['todos', 'commits', 'diff', { dir: queryDir(dir), hash, file }] as const,
+  commitFiles: (dir: string, hash: string, base = '') =>
+    ['todos', 'commits', 'files', { dir: queryDir(dir), hash, base }] as const,
+  commitDiff: (dir: string, hash: string, base: string, file: string) =>
+    ['todos', 'commits', 'diff', { dir: queryDir(dir), hash, base, file }] as const,
   verificationSchema: () => ['todos', 'verification', 'schema'] as const,
   cmuxSurface: (dir: string, agent: string | undefined) =>
     ['todos', 'session', 'cmux', { dir: queryDir(dir), agent: agent ?? '' }] as const,
@@ -151,44 +151,32 @@ export function sessionStatsQueryOptions({ dir, sessionId, expectLive = true }: 
   });
 }
 
-export async function fetchTodoSessionDetail(
-  dir: string,
-  ref: string,
-  sessionId?: string,
-  opts: { attemptsOnly?: boolean; signal?: AbortSignal } = {},
-) {
+export async function fetchTodoSessionDetail(dir: string, ref: string, signal?: AbortSignal) {
   const params = new URLSearchParams();
   if (dir.trim()) params.set('dir', dir.trim());
   params.set('ref', ref);
-  if (sessionId) params.set('sessionId', sessionId);
-  if (opts.attemptsOnly) params.set('attempts', 'only');
-  const response = await sessionRequest(`/api/todos/session/detail?${params.toString()}`, opts.signal, 'Session detail request failed');
-  const body = (await response
-    .clone()
-    .json()
-    .catch(() => null)) as TodoSessionDetailResponse | null;
-  if ((response.ok || response.status === 409) && body?.attempts && body.diagnostics) return body;
-  throw new Error(await sessionResponseError(response, 'Session detail request failed'));
+  const response = await sessionRequest(`/api/todos/session/detail?${params.toString()}`, signal, 'Session detail request failed');
+  if (!response.ok) throw new Error(await sessionResponseError(response, 'Session detail request failed'));
+  const body = await response.json().catch((cause: unknown) => {
+    throw new Error('Session detail request failed: invalid JSON response', { cause });
+  }) as TodoSessionDetailResponse;
+  if (!Array.isArray(body?.attempts)) throw new Error(`Session detail request failed: response has no attempts list: ${JSON.stringify(body).slice(0, 200)}`);
+  return body;
 }
 
-function terminalSessionDetail(detail: TodoSessionDetailResponse | undefined) {
-  if (!detail || detail.attemptsOnly) return false;
-  const selected = detail.attempts.find(attempt => attempt.promptRunId === detail.selectedPromptRunId);
-  if (selected?.phase === 'finished') return true;
-  return !!detail.thread && detail.thread.status !== 'working';
+// SETTLED_ATTEMPTS_POLL_MS is how often a todo whose attempts have all finished
+// is re-read: a new attempt can still be started elsewhere (the CLI, another tab).
+const SETTLED_ATTEMPTS_POLL_MS = 15_000;
+
+function attemptsSettled(detail: TodoSessionDetailResponse | undefined) {
+  return !!detail && detail.attempts.every(attempt => attempt.phase === 'finished');
 }
 
-export function sessionDetailQueryOptions(
-  dir: string,
-  ref: string,
-  sessionId: string | undefined,
-  attemptsOnly: boolean,
-  intervalMs: number,
-) {
+export function sessionDetailQueryOptions(dir: string, ref: string, intervalMs: number) {
   return queryOptions({
-    queryKey: todoQueryKeys.sessionDetail(dir, ref, sessionId, attemptsOnly),
-    queryFn: ({ signal }) => fetchTodoSessionDetail(dir, ref, sessionId, { attemptsOnly, signal }),
+    queryKey: todoQueryKeys.sessionDetail(dir, ref),
+    queryFn: ({ signal }) => fetchTodoSessionDetail(dir, ref, signal),
     staleTime: Math.min(intervalMs, 1_500),
-    refetchInterval: query => terminalSessionDetail(query.state.data) ? false : intervalMs,
+    refetchInterval: query => attemptsSettled(query.state.data) ? Math.max(intervalMs, SETTLED_ATTEMPTS_POLL_MS) : intervalMs,
   });
 }

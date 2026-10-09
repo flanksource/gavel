@@ -167,7 +167,7 @@ func TestConfigJSONSchema_SetupDefsAreDocumented(t *testing.T) {
 	assert.ElementsMatch(t, []any{"none", "local", "remote"}, def("Checkout", "mode")["enum"])
 
 	worktreeMode := def("Worktree", "mode")
-	assert.ElementsMatch(t, []any{"none", "new", "existing"}, worktreeMode["enum"])
+	assert.ElementsMatch(t, []any{"none", "new", "existing", "branch"}, worktreeMode["enum"])
 
 	assert.Equal(t, "HEAD", def("Worktree", "base")["default"],
 		"worktree.base defaults to HEAD so the start commit is deterministic")

@@ -2,11 +2,13 @@ package runtime
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	captaincli "github.com/flanksource/captain/pkg/cli"
 	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/native"
@@ -21,7 +23,7 @@ func TestPlanResultContentPrefersReferencedPlanFile(t *testing.T) {
 	const detailed = "# Detailed plan\n\n1. Inspect the parser.\n2. Add regression coverage.\n"
 	require.NoError(t, os.WriteFile(path, []byte(detailed), 0o600))
 
-	content, gotPath, err := planResultContent(&todos.ExecutionResult{
+	content, gotPath, err := (&Provider{}).planResultContent(t.Context(), &todos.ExecutionResult{
 		Plan: &types.PlanResult{
 			Path:    path,
 			Content: "The existing plan remains correct.",
@@ -39,17 +41,35 @@ func TestPlanResultContentRecoversWithoutEnvelope(t *testing.T) {
 		markdown  = "# Recovered plan\n\n1. Persist the transcript plan."
 	)
 	original := resolveSessionPlan
-	resolveSessionPlan = func(got string) (string, string) {
+	resolveSessionPlan = func(_ context.Context, _ *captaindb.DB, got string) (string, string, error) {
 		assert.Equal(t, sessionID, got)
-		return path, markdown
+		return path, markdown, nil
 	}
 	t.Cleanup(func() { resolveSessionPlan = original })
 
-	content, gotPath, err := planResultContent(nil, sessionID)
+	content, gotPath, err := (&Provider{}).planResultContent(t.Context(), nil, sessionID)
 
 	require.NoError(t, err)
 	assert.Equal(t, path, gotPath)
 	assert.Equal(t, markdown, content)
+}
+
+// A session Captain resolves no plan for keeps Captain's ErrNoPlan, and says
+// why: the resolver's reason is the only account of what went wrong.
+func TestPlanResultContentReportsWhyNoPlanResolved(t *testing.T) {
+	const sessionID = "986dccbf-fe4a-4572-9702-7b36a53af63f"
+	resolverErr := fmt.Errorf("%w: session has no transcript recorded on this host", captaincli.ErrNoPlan)
+	original := resolveSessionPlan
+	resolveSessionPlan = func(context.Context, *captaindb.DB, string) (string, string, error) {
+		return "", "", resolverErr
+	}
+	t.Cleanup(func() { resolveSessionPlan = original })
+
+	_, _, err := (&Provider{}).planResultContent(t.Context(), nil, sessionID)
+
+	require.ErrorIs(t, err, captaincli.ErrNoPlan)
+	require.ErrorIs(t, err, resolverErr)
+	assert.Contains(t, err.Error(), sessionID)
 }
 
 func TestPlanResolutionSessionIDPrefersExecutionSession(t *testing.T) {

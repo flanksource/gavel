@@ -54,6 +54,24 @@ func TestRunCommitAllSplitsStagedChanges(t *testing.T) {
 	assert.Empty(t, strings.TrimSpace(gitOutput(t, repo, "status", "--short")))
 }
 
+// A single (ungrouped) commit must report its hash on the per-commit entry too:
+// the todo-run commit hook reads Commits[last].Hash, and an empty one made
+// captain record the run as having committed nothing.
+func TestRunSingleCommitReportsHashOnCommitEntry(t *testing.T) {
+	repo := initCommitRepo(t)
+	writeFileInDir(t, repo, "alpha/a.txt", "one\n")
+	gitRun(t, repo, "add", "alpha/a.txt")
+
+	t.Setenv(testEnvVar, "1")
+
+	result, err := Run(context.Background(), Options{WorkDir: repo})
+	require.NoError(t, err)
+	require.Len(t, result.Commits, 1)
+	head := strings.TrimSpace(gitOutput(t, repo, "rev-parse", "HEAD"))
+	assert.Equal(t, head, result.Hash)
+	assert.Equal(t, head, result.Commits[0].Hash)
+}
+
 func TestRunCommitAllStagesAllWhenNothingIsStaged(t *testing.T) {
 	repo := initCommitRepo(t)
 	writeFileInDir(t, repo, "alpha/a.txt", "one\n")
@@ -206,7 +224,15 @@ func TestRunCommitAllExcludesGitIgnoredAndGavelIgnored(t *testing.T) {
 	assert.FileExists(t, filepath.Join(repo, "secrets/keys.env"))
 }
 
-func initCommitRepo(t *testing.T) string {
+// testingT is the subset of *testing.T the repo helpers need, so ginkgo specs
+// can pass GinkgoT() too.
+type testingT interface {
+	require.TestingT
+	Helper()
+	TempDir() string
+}
+
+func initCommitRepo(t testingT) string {
 	t.Helper()
 	dir := t.TempDir()
 	gitRun(t, dir, "init")
@@ -223,7 +249,7 @@ func initCommitRepo(t *testing.T) string {
 	return dir
 }
 
-func gitRun(t *testing.T, dir string, args ...string) {
+func gitRun(t testingT, dir string, args ...string) {
 	t.Helper()
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
@@ -231,7 +257,7 @@ func gitRun(t *testing.T, dir string, args ...string) {
 	require.NoError(t, err, "git %v failed: %s", args, out)
 }
 
-func gitOutput(t *testing.T, dir string, args ...string) string {
+func gitOutput(t testingT, dir string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
@@ -240,7 +266,7 @@ func gitOutput(t *testing.T, dir string, args ...string) string {
 	return string(out)
 }
 
-func writeFile(t *testing.T, dir, name, content string) {
+func writeFile(t testingT, dir, name, content string) {
 	t.Helper()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644))
 }

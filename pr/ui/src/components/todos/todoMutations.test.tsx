@@ -7,6 +7,7 @@ import {
   optimisticallySetTodoCaches,
   todoMutationJSON,
   useCreateTodoMutation,
+  useDeleteTodoMutation,
   useUpdateTodoMutation,
 } from './todoMutations';
 import { todoQueryKeys } from './todoQueries';
@@ -118,6 +119,38 @@ describe('todo mutations', () => {
     expect(queryClient.getQueryData(todoQueryKeys.item('/repo', original.ref))).toEqual(original);
     expect(queryClient.getQueryData<TodoListResponse>(todoQueryKeys.list('/repo'))?.items).toEqual([original]);
     expect(queryClient.getQueryData<{ byDir: Record<string, TodoListResponse> }>(['todos', 'batch', { dirs: ['/repo'] }])?.byDir['/repo'].items).toEqual([original]);
+  });
+
+  describe('archiving a todo', () => {
+    const archive = async (request: { ref: string; children?: 'archive' | 'detach' }) => {
+      const queryClient = client();
+      queryClient.setQueryData(['todos', 'batch', { dirs: ['/repo'] }], { byDir: {} });
+      const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => new Response(null, { status: 204 }));
+      vi.stubGlobal('fetch', fetchMock);
+      const hook = renderHook(() => useDeleteTodoMutation('/repo'), { wrapper: wrapper(queryClient) });
+      await act(() => hook.result.current.mutateAsync(request));
+      return { fetchMock, queryClient, url: new URL(String(fetchMock.mock.calls[0][0]), 'http://dashboard') };
+    };
+
+    it.each(['archive', 'detach'] as const)('sends the %s disposition of open children with the delete', async children => {
+      const { fetchMock, url } = await archive({ ref: 'parent-1', children });
+
+      expect(url.pathname).toBe('/api/todos/item');
+      expect(Object.fromEntries(url.searchParams)).toMatchObject({ ref: 'parent-1', children });
+      expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: 'DELETE' });
+    });
+
+    it('sends no children parameter when none was chosen', async () => {
+      const { url } = await archive({ ref: 'plain-1' });
+
+      expect(url.searchParams.has('children')).toBe(false);
+    });
+
+    it('refreshes the workspace batches so promoted children appear and archived ones go', async () => {
+      const { queryClient } = await archive({ ref: 'parent-1', children: 'detach' });
+
+      expect(queryClient.getQueryState(['todos', 'batch', { dirs: ['/repo'] }])?.isInvalidated).toBe(true);
+    });
   });
 
   it('adds context to JSON server, non-JSON, and network failures', async () => {

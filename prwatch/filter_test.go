@@ -4,12 +4,13 @@ import (
 	"testing"
 
 	"github.com/flanksource/gavel/github"
+	"github.com/flanksource/gavel/pr/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestResultFiltersCommentsMatchIDsAndAuthors(t *testing.T) {
-	result := &PRWatchResult{Comments: []github.PRComment{
+	result := &PRWatchResult{Comments: []model.PRComment{
 		{ID: 1, Author: "alice", Body: "first"},
 		{ID: 2, Author: "coderabbitai[bot]", BotType: "coderabbit", Body: "second"},
 		{ID: 3, Author: "bob", Body: "third"},
@@ -25,7 +26,7 @@ func TestResultFiltersCommentsMatchIDsAndAuthors(t *testing.T) {
 }
 
 func TestResultFiltersCommentsCanMatchBotAliasOnly(t *testing.T) {
-	result := &PRWatchResult{Comments: []github.PRComment{
+	result := &PRWatchResult{Comments: []model.PRComment{
 		{ID: 1, Author: "alice", Body: "first"},
 		{ID: 2, Author: "coderabbitai[bot]", BotType: "coderabbit", Body: "second"},
 	}}
@@ -102,7 +103,7 @@ func TestResultFiltersIsCompleteWithoutFilters(t *testing.T) {
 			r.PR.StatusCheckRollup[1].Status = "IN_PROGRESS"
 		}, false},
 		{"no checks registered yet keeps polling", func(r *PRWatchResult) {
-			r.PR.StatusCheckRollup = github.StatusChecks{}
+			r.PR.StatusCheckRollup = model.StatusChecks{}
 		}, false},
 	}
 	for _, tc := range cases {
@@ -245,13 +246,13 @@ func TestResultFiltersNoCommentMatch(t *testing.T) {
 // nitpicks. Only the first can ever be resolved on GitHub.
 func sampleCommentGateResult() *PRWatchResult {
 	return &PRWatchResult{
-		PR: &github.PRInfo{
+		PR: &model.PRInfo{
 			Number: 1,
-			StatusCheckRollup: github.StatusChecks{
+			StatusCheckRollup: model.StatusChecks{
 				{Name: "unit", Status: "COMPLETED", Conclusion: "SUCCESS", WorkflowName: "CI", DetailsURL: "https://github.com/org/repo/actions/runs/101/job/1"},
 			},
 		},
-		Comments: []github.PRComment{
+		Comments: []model.PRComment{
 			{ID: 300, Author: "coderabbitai[bot]", BotType: "coderabbit", Path: "foo.go", Line: 42, IsReviewThread: true},
 			{ID: 200, Author: "coderabbitai[bot]", BotType: "coderabbit", Body: "**Actionable comments posted: 2**"},
 			{ID: 200, Author: "coderabbitai[bot]", BotType: "coderabbit", Path: "bar.go", Line: 7, Severity: "nitpick"},
@@ -290,6 +291,33 @@ func TestResultFiltersActionsMatchJobName(t *testing.T) {
 	})
 }
 
+func TestResultFiltersActionsMatchJobID(t *testing.T) {
+	t.Run("a job ID keeps only that job and its check", func(t *testing.T) {
+		result := sampleJobFilterResult()
+		filters := newResultFilters(nil, []string{"2"})
+		filters.apply(result)
+
+		require.Len(t, result.Runs, 1)
+		run := result.Runs[502]
+		require.NotNil(t, run)
+		require.Len(t, run.Jobs, 1)
+		assert.Equal(t, "Install Tests - windows-amd64", run.Jobs[0].Name)
+
+		require.Len(t, result.PR.StatusCheckRollup, 1)
+		assert.Equal(t, "Install Tests - windows-amd64", result.PR.StatusCheckRollup[0].Name)
+	})
+
+	t.Run("a run ID still keeps every job of the run", func(t *testing.T) {
+		result := sampleJobFilterResult()
+		filters := newResultFilters(nil, []string{"502"})
+		filters.apply(result)
+
+		require.Len(t, result.Runs, 1)
+		assert.Len(t, result.Runs[502].Jobs, 2)
+		assert.ElementsMatch(t, []int64{502, 502}, statusCheckRunIDs(t, result.PR.StatusCheckRollup))
+	})
+}
+
 func TestResultFiltersNoActionMatchDetectsPrunedToEmpty(t *testing.T) {
 	result := sampleJobFilterResult()
 	preChecks := len(result.PR.StatusCheckRollup)
@@ -318,32 +346,32 @@ func TestResultFiltersNoActionMatchFalseWhenSomethingMatched(t *testing.T) {
 
 func sampleJobFilterResult() *PRWatchResult {
 	return &PRWatchResult{
-		PR: &github.PRInfo{
+		PR: &model.PRInfo{
 			Number: 1,
-			StatusCheckRollup: github.StatusChecks{
+			StatusCheckRollup: model.StatusChecks{
 				{Name: "lint", Status: "COMPLETED", Conclusion: "FAILURE", WorkflowName: "golangci-lint", DetailsURL: "https://github.com/org/repo/actions/runs/501/job/1"},
 				{Name: "Install Tests - windows-amd64", Status: "COMPLETED", Conclusion: "FAILURE", WorkflowName: "Test", DetailsURL: "https://github.com/org/repo/actions/runs/502/job/2"},
 				{Name: "Unit Tests", Status: "COMPLETED", Conclusion: "SUCCESS", WorkflowName: "Test", DetailsURL: "https://github.com/org/repo/actions/runs/502/job/3"},
 			},
 		},
-		Runs: map[int64]*github.WorkflowRun{
-			501: {DatabaseID: 501, WorkflowID: 51, WorkflowPath: ".github/workflows/lint.yml", Name: "golangci-lint", Jobs: []github.Job{{Name: "lint"}}},
-			502: {DatabaseID: 502, WorkflowID: 52, WorkflowPath: ".github/workflows/test.yml", Name: "Test", Jobs: []github.Job{{Name: "Install Tests - windows-amd64"}, {Name: "Unit Tests"}}},
+		Runs: map[int64]*model.WorkflowRun{
+			501: {DatabaseID: 501, WorkflowID: 51, WorkflowPath: ".github/workflows/lint.yml", Name: "golangci-lint", Jobs: []model.Job{{DatabaseID: 1, Name: "lint"}}},
+			502: {DatabaseID: 502, WorkflowID: 52, WorkflowPath: ".github/workflows/test.yml", Name: "Test", Jobs: []model.Job{{DatabaseID: 2, Name: "Install Tests - windows-amd64"}, {DatabaseID: 3, Name: "Unit Tests"}}},
 		},
 	}
 }
 
 func sampleActionFilterResult() *PRWatchResult {
 	return &PRWatchResult{
-		PR: &github.PRInfo{
+		PR: &model.PRInfo{
 			Number: 1,
-			StatusCheckRollup: github.StatusChecks{
+			StatusCheckRollup: model.StatusChecks{
 				{Name: "unit", Status: "COMPLETED", Conclusion: "SUCCESS", WorkflowName: "CI", DetailsURL: "https://github.com/org/repo/actions/runs/101/job/1"},
 				{Name: "deploy", Status: "COMPLETED", Conclusion: "FAILURE", WorkflowName: "Deploy", DetailsURL: "https://github.com/org/repo/actions/runs/202/job/2"},
 				{Name: "docs", Status: "COMPLETED", Conclusion: "SUCCESS", WorkflowName: "Docs", DetailsURL: "https://github.com/org/repo/actions/runs/303/job/3"},
 			},
 		},
-		Runs: map[int64]*github.WorkflowRun{
+		Runs: map[int64]*model.WorkflowRun{
 			101: {DatabaseID: 101, WorkflowID: 11, WorkflowPath: ".github/workflows/ci.yml", Name: "CI", Status: "completed", Conclusion: "success"},
 			202: {DatabaseID: 202, WorkflowID: 22, WorkflowPath: ".github/workflows/deploy.yml", Name: "Deploy", Status: "completed", Conclusion: "failure"},
 			303: {DatabaseID: 303, WorkflowID: 33, WorkflowPath: ".github/workflows/docs.yml", Name: "Docs", Status: "completed", Conclusion: "success"},
@@ -351,7 +379,7 @@ func sampleActionFilterResult() *PRWatchResult {
 	}
 }
 
-func runIDs(runs map[int64]*github.WorkflowRun) []int64 {
+func runIDs(runs map[int64]*model.WorkflowRun) []int64 {
 	ids := make([]int64, 0, len(runs))
 	for _, run := range runs {
 		ids = append(ids, run.DatabaseID)
@@ -359,7 +387,7 @@ func runIDs(runs map[int64]*github.WorkflowRun) []int64 {
 	return ids
 }
 
-func statusCheckRunIDs(t *testing.T, checks github.StatusChecks) []int64 {
+func statusCheckRunIDs(t *testing.T, checks model.StatusChecks) []int64 {
 	t.Helper()
 	ids := make([]int64, 0, len(checks))
 	for _, check := range checks {

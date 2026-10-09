@@ -1,12 +1,10 @@
 package taskhistory_test
 
 import (
-	"os"
-	"path/filepath"
 	"time"
 
 	clickytask "github.com/flanksource/clicky/task"
-	commonsdb "github.com/flanksource/commons-db/db"
+	"github.com/flanksource/commons-db/dbtest"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/internal/taskhistory"
 	. "github.com/onsi/ginkgo/v2"
@@ -15,22 +13,11 @@ import (
 
 var _ = Describe("Task history database store", func() {
 	It("imports spool records idempotently and prunes expired runs", func() {
-		dsn := os.Getenv("GAVEL_TASK_HISTORY_TEST_DSN")
-		if dsn == "" && os.Getenv("GAVEL_DB_EMBEDDED_TEST") == "" {
-			Skip("set GAVEL_TASK_HISTORY_TEST_DSN or GAVEL_DB_EMBEDDED_TEST=1 to run task history database tests")
-		}
-		if dsn == "" {
-			var stop func() error
-			var err error
-			dsn, stop, err = commonsdb.StartEmbedded(commonsdb.EmbeddedConfig{
-				DataDir:  filepath.Join(GinkgoT().TempDir(), "postgres"),
-				Database: "gavel_task_history",
-			})
-			Expect(err).NotTo(HaveOccurred())
-			DeferCleanup(func() { Expect(stop()).To(Succeed()) })
-		}
+		dsn := dbtest.ForGinkgo(dbtest.Options{Name: "gavel_task_history"}).DSN()
 		GinkgoT().Setenv(database.EnvDSN, dsn)
 		GinkgoT().Setenv(database.EnvDisable, "")
+		GinkgoT().Setenv(database.LegacyEnvDSN, "")
+		GinkgoT().Setenv(database.LegacyEnvDisable, "")
 		GinkgoT().Setenv("HOME", GinkgoT().TempDir())
 
 		db, err := database.Open(GinkgoT().Context(), database.WithMigrations())

@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -132,6 +133,7 @@ func applyTodoUpdateValues(payload *todoUpdatePayload, values map[string][]strin
 	}
 	assignPointer(&payload.Title, true, "title", "name")
 	assignPointer(&payload.Body, false, "body", "description", "text")
+	assignPointer(&payload.Parent, true, "parent")
 	assignString(&payload.Comment, "comment")
 }
 
@@ -178,17 +180,47 @@ func applyTodoNewValues(payload *todoNewPayload, values map[string][]string, ove
 	assignString(&payload.Body, "body", "description", "text")
 	assignPriority(&payload.Priority, "priority", "severity")
 	assignStatus(&payload.Status, "status")
-	if !overwrite && payload.AutoSave != nil {
-		return nil
-	}
-	if raw := firstTodoNewValue(values, "autoSave", "autosave", "auto_save"); raw != "" {
-		parsed, err := strconv.ParseBool(raw)
-		if err != nil {
-			return fmt.Errorf("invalid autoSave %q", raw)
+	assignString(&payload.Parent, "parent")
+	if overwrite || len(payload.Labels) == 0 {
+		if labels := todoNewLabels(values, "labels", "label"); len(labels) > 0 {
+			payload.Labels = labels
 		}
-		payload.AutoSave = &parsed
+	}
+	for _, field := range []struct {
+		target **bool
+		keys   []string
+	}{
+		{&payload.AutoSave, []string{"autoSave", "autosave", "auto_save"}},
+		{&payload.Triage, []string{"triage"}},
+	} {
+		if !overwrite && *field.target != nil {
+			continue
+		}
+		if raw, exists := firstTodoUpdateValue(values, field.keys...); exists {
+			parsed, err := strconv.ParseBool(strings.TrimSpace(raw))
+			if err != nil {
+				return fmt.Errorf("invalid %s %q", field.keys[0], raw)
+			}
+			*field.target = &parsed
+		}
 	}
 	return nil
+}
+
+// todoNewLabels collects labels from every value of every key, splitting each on
+// commas, so both `labels=a&labels=b` and `labels=a,b` work.
+func todoNewLabels(values map[string][]string, keys ...string) []string {
+	var labels []string
+	for _, key := range keys {
+		for _, value := range values[key] {
+			for _, label := range strings.Split(value, ",") {
+				if trimmed := strings.TrimSpace(label); trimmed != "" && !slices.Contains(labels, trimmed) {
+					labels = append(labels, trimmed)
+				}
+			}
+		}
+	}
+	return labels
 }
 
 func firstTodoNewValue(values map[string][]string, keys ...string) string {

@@ -22,6 +22,16 @@ const deleteAction: TodoBulkAction = {
   tool_hints: { icon: 'trash', group: 'Danger', destructiveHint: true },
 };
 
+// Destructive, but served as a POST: the todos it touches still exist
+// afterwards, rewritten or started on, never removed.
+const runAction: TodoBulkAction = {
+  name: 'run',
+  short: 'Implement many TODOs',
+  method: 'POST',
+  path: '/api/v1/todo/{id}/run',
+  tool_hints: { icon: 'play', group: 'Run', destructiveHint: true },
+};
+
 const ALPHA = '/repos/alpha';
 const BETA = '/repos/beta';
 
@@ -139,5 +149,22 @@ describe('useTodoBulkActionMutation cache invalidation', () => {
     expect(client.getQueryData(todoQueryKeys.item(ALPHA, 'todo-1'))).toBeUndefined();
     expect(client.getQueryData(todoQueryKeys.globalItem('todo-1'))).toBeUndefined();
     expect(invalidated(client, workspaceTodoBatchKeys.list([ALPHA, BETA]))).toBe(true);
+  });
+
+  // `destructiveHint` says an action may change things irreversibly, not that
+  // it removes todos. A run leaves them in place, so a pane open on one must
+  // refetch rather than lose its data.
+  it('refreshes rather than drops the caches of a destructive action that removes nothing', async () => {
+    response = {
+      action: 'run',
+      applied: 1,
+      failed: 0,
+      results: [{ ref: 'todo-1', dir: ALPHA, status: 'started' }],
+    };
+
+    await run(runAction, ['todo-1']);
+
+    expect(invalidated(client, todoQueryKeys.item(ALPHA, 'todo-1'))).toBe(true);
+    expect(invalidated(client, todoQueryKeys.globalItem('todo-1'))).toBe(true);
   });
 });

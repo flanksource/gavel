@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -14,6 +15,9 @@ import (
 )
 
 // Delete preserves the issue and its history by transitioning it to cancelled.
+//
+// A TODO with open children is refused: closing it would hide them. The caller
+// decides what happens to them first, through todos.Archive.
 func (p *Provider) Delete(ctx context.Context, todo *types.TODO) error {
 	id, version, err := p.mutationIdentity(todo)
 	if err != nil {
@@ -24,6 +28,9 @@ func (p *Provider) Delete(ctx context.Context, todo *types.TODO) error {
 		Status: &status,
 		Actor:  mutationActor,
 	})
+	if errors.Is(err, native.ErrOpenChildren) {
+		return fmt.Errorf("%w; %s", err, todos.ChildrenChoice)
+	}
 	if err != nil {
 		return err
 	}
@@ -105,12 +112,34 @@ func (p *Provider) Edit(ctx context.Context, todo *types.TODO, edit todos.EditRe
 	return p.replaceTODO(ctx, todo, issue, p.workDir)
 }
 
-func (p *Provider) Comment(ctx context.Context, todo *types.TODO, body string) error {
+func (p *Provider) Comment(ctx context.Context, todo *types.TODO, comment todos.CommentRequest) error {
 	id, version, err := p.mutationIdentity(todo)
 	if err != nil {
 		return err
 	}
-	if _, err := p.repository.AddComment(ctx, id, version, mutationActor, body); err != nil {
+	input := native.CommentInput{Actor: mutationActor, Body: comment.Body}
+	if comment.Anchor != nil {
+		if err := comment.Anchor.Validate(); err != nil {
+			return fmt.Errorf("%w: %w", native.ErrInvalidInput, err)
+		}
+		input.Payload = types.LineCommentPayload{Anchor: comment.Anchor}
+	}
+	if _, err := p.repository.AddComment(ctx, id, version, input); err != nil {
+		return err
+	}
+	return p.reloadTODO(ctx, todo, p.workDir)
+}
+
+func (p *Provider) ResolveComment(ctx context.Context, todo *types.TODO, resolution types.CommentResolution) error {
+	id, version, err := p.mutationIdentity(todo)
+	if err != nil {
+		return err
+	}
+	commentID, err := uuid.Parse(strings.TrimSpace(resolution.CommentID))
+	if err != nil {
+		return fmt.Errorf("%w: comment id %q is not a UUID: %w", native.ErrInvalidInput, resolution.CommentID, err)
+	}
+	if _, err := p.repository.ResolveComment(ctx, id, version, mutationActor, commentID, resolution.Resolved); err != nil {
 		return err
 	}
 	return p.reloadTODO(ctx, todo, p.workDir)
@@ -206,7 +235,7 @@ func (p *Provider) SaveAttempt(ctx context.Context, todo *types.TODO, result *to
 			"costUsd":        result.CostUSD,
 			"tokens":         result.TokensUsed,
 			"turns":          result.NumTurns,
-			"commit":         result.CommitSHA,
+			"workspace":      result.Workspace,
 			"error":          result.ErrorMessage,
 		},
 	})
@@ -374,9 +403,7 @@ func renderAttempt(todo *types.TODO, result *todos.ExecutionResult) string {
 	if result.TokensUsed > 0 {
 		fmt.Fprintf(&body, "- **Tokens:** %d\n", result.TokensUsed)
 	}
-	if result.CommitSHA != "" {
-		fmt.Fprintf(&body, "- **Commit:** `%s`\n", result.CommitSHA)
-	}
+	body.WriteString(todos.WorkspaceMarkdown(result.Workspace))
 	if result.ErrorMessage != "" {
 		fmt.Fprintf(&body, "- **Error:**\n\n```text\n%s\n```\n", strings.TrimSpace(result.ErrorMessage))
 	}
@@ -387,6 +414,9 @@ func renderAttempt(todo *types.TODO, result *todos.ExecutionResult) string {
 }
 
 func attemptStatus(result *todos.ExecutionResult) string {
+	if result.EndStatus == types.EndAsk {
+		return "waiting"
+	}
 	if result.Success {
 		return "completed"
 	}

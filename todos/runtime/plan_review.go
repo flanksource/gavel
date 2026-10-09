@@ -157,7 +157,7 @@ func (p *Provider) setPlanReview(
 		return nil, err
 	}
 	actor = reviewActor(actor)
-	reviewed, err := p.coordinator.ReviewAndSelectPlan(ctx, captaindb.SetPlanReviewStateInput{
+	reviewed, err := p.coordinator.ReviewPlan(ctx, captaindb.SetPlanReviewStateInput{
 		PlanID: plan.ID, State: state, Actor: actor, Comment: strings.TrimSpace(comment),
 	}, native.PlanSelectionAttachment{
 		IssueID: issue.ID, Ordinal: ordinal,

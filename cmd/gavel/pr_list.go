@@ -274,10 +274,21 @@ func runPRUI(opts PRListOptions, databaseMode serveDatabaseMode) error {
 		searchOpts.Repos = saved.Repos
 	}
 
-	srv := ui.NewServer(interval, ghOpts, ui.SearchConfig{
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runtime, err := startServeRuntime(ctx, defaultServeRuntimeDependencies, databaseMode)
+	if err != nil {
+		return err
+	}
+	tracker, err := startGitTracker(ctx, runtime.DB)
+	if err != nil {
+		return err
+	}
+	srv := ui.NewServer(serveContext(ctx, tracker), interval, ghOpts, ui.SearchConfig{
 		Repos:       searchOpts.Repos,
 		All:         searchOpts.All,
 		Org:         searchOpts.Org,
+		Project:     saved.Project,
 		IgnoredOrgs: saved.IgnoredOrgs,
 	})
 	srv.SetFixtureSchemaProvider(func() (any, error) {
@@ -336,16 +347,13 @@ func runPRUI(opts PRListOptions, databaseMode serveDatabaseMode) error {
 		return github.SearchPRs(ghOpts, so)
 	}
 
-	poller := ui.NewPoller(srv, searchFn, interval)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	ingestStats, err := startServeRuntime(ctx, defaultServeRuntimeDependencies, databaseMode)
-	if err != nil {
+	if runtime.IngestStats != nil {
+		srv.SetIngestStats(runtime.IngestStats)
+	}
+	if err := startGitChangeFeed(ctx, srv, tracker, runtime.DB); err != nil {
 		return err
 	}
-	if ingestStats != nil {
-		srv.SetIngestStats(ingestStats)
-	}
+	poller := ui.NewPoller(srv, searchFn, interval)
 	poller.Start(ctx)
 
 	syncer := ui.NewDetailSyncer(srv, srv.DetailCache(), ghOpts)

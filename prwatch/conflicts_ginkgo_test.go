@@ -1,23 +1,23 @@
 package prwatch
 
 import (
+	"github.com/flanksource/gavel/github"
+	"github.com/flanksource/gavel/pr/model"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-
-	"github.com/flanksource/gavel/github"
 )
 
 // greenChecks is an all-passing rollup, so every conflict assertion below is
 // about the conflict alone and never rides on a failing check.
-var greenChecks = github.StatusChecks{
+var greenChecks = model.StatusChecks{
 	{Name: "lint", Status: "COMPLETED", Conclusion: "SUCCESS"},
 	{Name: "test", Status: "COMPLETED", Conclusion: "SUCCESS"},
 }
 
 func conflictingResult(report *github.MergeConflictReport) *PRWatchResult {
 	return &PRWatchResult{
-		PR: &github.PRInfo{
-			Number: 7, Title: "feat: widget", Author: github.PRAuthor{Login: "alice"},
+		PR: &model.PRInfo{
+			Number: 7, Title: "feat: widget", Author: model.PRAuthor{Login: "alice"},
 			BaseRefName: "main", HeadRefName: "feat/widget",
 			State: "OPEN", Mergeable: "CONFLICTING", MergeState: "DIRTY",
 			StatusCheckRollup: greenChecks,
@@ -102,7 +102,7 @@ var _ = Describe("a PR that conflicts with its base", func() {
 	})
 
 	It("renders no conflict section for a mergeable PR", func() {
-		result := &PRWatchResult{PR: &github.PRInfo{
+		result := &PRWatchResult{PR: &model.PRInfo{
 			Number: 8, BaseRefName: "main", HeadRefName: "feat/other",
 			State: "OPEN", Mergeable: "MERGEABLE", StatusCheckRollup: greenChecks,
 		}}

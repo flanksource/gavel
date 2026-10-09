@@ -1,6 +1,22 @@
 import { describe, expect, it } from 'vitest';
 import { buildRoute, emptyRouteState, parseRoute } from './routes';
 
+describe('dashboard project scope routes', () => {
+  it('round-trips the selected project on the todos route', () => {
+    const parsed = parseRoute(new URL('http://localhost:9092/todos?project=Clicky%20UI') as unknown as Location);
+
+    expect(parsed.scopeProject).toBe('Clicky UI');
+    expect(buildRoute(parsed)).toBe('/todos?project=Clicky+UI');
+  });
+
+  it('keeps the selected project alongside pull request filters', () => {
+    const parsed = parseRoute(new URL('http://localhost:9092/prs?project=gavel&state=open') as unknown as Location);
+
+    expect(parsed.scopeProject).toBe('gavel');
+    expect(buildRoute(parsed)).toBe('/prs?project=gavel&state=open');
+  });
+});
+
 describe('project routes', () => {
   it('round-trips a selected project as a dedicated top-level tab', () => {
     const location = new URL('http://localhost:9092/projects/Clicky%20UI');
@@ -51,6 +67,48 @@ describe('project routes', () => {
   });
 });
 
+describe('project ref routes', () => {
+  const parse = (url: string) => parseRoute(new URL(`http://localhost:9092${url}`) as unknown as Location);
+
+  it.each([
+    ['a worktree', '/projects/gavel?ref=wt%3A%2Fwork%2Fgavel-feat', 'wt:/work/gavel-feat'],
+    ['a branch', '/projects/gavel?ref=br%3Afeat%2Fx', 'br:feat/x'],
+  ])('round-trips %s selection in the ref query parameter', (_label, url, ref) => {
+    const parsed = parse(url);
+
+    expect(parsed.projectRef).toBe(ref);
+    expect(buildRoute(parsed)).toBe(url);
+  });
+
+  it('keeps the ref alongside the diff selection', () => {
+    const parsed = parse('/projects/gavel?diff=src&ref=br%3Afeat');
+
+    expect(parsed.projectDiffPath).toBe('src');
+    expect(parsed.projectRef).toBe('br:feat');
+    expect(buildRoute(parsed)).toBe('/projects/gavel?diff=src&ref=br%3Afeat');
+  });
+
+  it.each([
+    ['an unknown prefix', '/projects/gavel?ref=tag%3Av1'],
+    ['an empty target', '/projects/gavel?ref=wt%3A'],
+    ['a bare value', '/projects/gavel?ref=main'],
+    ['a non-project tab', '/todos/todo-1?ref=br%3Afeat'],
+    ['a historical run', '/projects/gavel/runs/run-1?ref=br%3Afeat'],
+  ])('ignores the ref for %s', (_label, url) => {
+    expect(parse(url).projectRef).toBe('');
+  });
+});
+
+describe('session routes', () => {
+  it('round-trips a selected session id with its scope project', () => {
+    const sessionId = '0199f0aa-0000-7000-8000-00000000c0de';
+    const parsed = parseRoute(new URL(`http://localhost:9092/sessions/${sessionId}?project=gavel`) as unknown as Location);
+
+    expect(parsed).toEqual({ ...emptyRouteState(), tab: 'sessions', selectedPath: sessionId, scopeProject: 'gavel' });
+    expect(buildRoute(parsed)).toBe(`/sessions/${sessionId}?project=gavel`);
+  });
+});
+
 describe('prompt routes', () => {
   it('round-trips a selected prompt with its scope project', () => {
     const location = new URL('http://localhost:9092/prompts/commit.message?project=Clicky%20UI');
@@ -61,7 +119,7 @@ describe('prompt routes', () => {
       ...emptyRouteState(),
       tab: 'prompts',
       selectedPath: 'commit.message',
-      promptScope: 'Clicky UI',
+      scopeProject: 'Clicky UI',
     });
     expect(buildRoute(parsed)).toBe('/prompts/commit.message?project=Clicky+UI');
   });
@@ -73,10 +131,10 @@ describe('prompt routes', () => {
     expect(buildRoute(parsed)).toBe('/prompts');
   });
 
-  it('ignores a prompt scope on other tabs', () => {
+  it('treats the project query as dashboard scope on every tab', () => {
     const parsed = parseRoute(new URL('http://localhost:9092/todos?project=x') as unknown as Location);
 
-    expect(parsed.promptScope).toBe('');
+    expect(parsed.scopeProject).toBe('x');
   });
 });
 
@@ -92,5 +150,46 @@ describe('task routes', () => {
       selectedPath: 'run-123',
     });
     expect(buildRoute(parsed)).toBe('/tasks/run-123');
+  });
+});
+
+describe('todo detail view routes', () => {
+  const parse = (url: string) => parseRoute(new URL(`http://localhost:9092${url}`) as unknown as Location);
+
+  it('round-trips the detail tab, inspector tab, and selected attempts of a todo', () => {
+    const url = '/todos/todo-7?tab=session&sessionTab=costs&sessions=run-a%2Crun-b';
+
+    const parsed = parse(url);
+
+    expect(parsed).toEqual({
+      ...emptyRouteState(),
+      tab: 'todos',
+      selectedPath: 'todo-7',
+      todoView: { tab: 'session', sessionTab: 'costs', sessionIds: ['run-a', 'run-b'] },
+    });
+    expect(buildRoute(parsed)).toBe(url);
+  });
+
+  it('keeps a slash-containing ref in the path and the view in the query', () => {
+    const parsed = parse('/todos/pkg/file.go/todo-3?tab=plan');
+
+    expect(parsed.selectedPath).toBe('pkg/file.go/todo-3');
+    expect(parsed.todoView).toEqual({ tab: 'plan' });
+    expect(buildRoute(parsed)).toBe('/todos/pkg/file.go/todo-3?tab=plan');
+  });
+
+  it('leaves the default view out of the URL', () => {
+    expect(buildRoute({ ...emptyRouteState(), tab: 'todos', selectedPath: 'todo-7' })).toBe('/todos/todo-7');
+  });
+
+  it('ignores unknown tab names', () => {
+    expect(parse('/todos/todo-7?tab=bogus&sessionTab=nope').todoView).toEqual({});
+  });
+
+  it('drops the view when no todo is selected', () => {
+    const parsed = parse('/todos?tab=session');
+
+    expect(parsed.todoView).toEqual({});
+    expect(buildRoute({ ...parsed, todoView: { tab: 'session' } })).toBe('/todos');
   });
 });

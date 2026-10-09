@@ -13,6 +13,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/flanksource/gavel/internal/jsonb"
+	"github.com/flanksource/gavel/todos/types"
 )
 
 func (r *Repository) SetAliases(ctx context.Context, issueID uuid.UUID, expectedVersion int64, aliases []AliasInput, actor string) (*Issue, error) {
@@ -89,15 +90,55 @@ func (r *Repository) AppendEvent(ctx context.Context, issueID uuid.UUID, expecte
 	return event, err
 }
 
-func (r *Repository) AddComment(ctx context.Context, issueID uuid.UUID, expectedVersion int64, actor, body string) (*Event, error) {
-	if strings.TrimSpace(body) == "" {
+// CommentInput is one comment appended to an issue's history. Payload carries
+// its structured detail — a line comment's anchor — and is empty for a
+// free-form comment.
+type CommentInput struct {
+	Actor   string
+	Body    string
+	Payload any
+}
+
+func (r *Repository) AddComment(ctx context.Context, issueID uuid.UUID, expectedVersion int64, input CommentInput) (*Event, error) {
+	if strings.TrimSpace(input.Body) == "" {
 		return nil, fmt.Errorf("%w: comment body is required", ErrInvalidInput)
 	}
 	return r.AppendEvent(ctx, issueID, expectedVersion, EventInput{
-		Kind:  "comment",
-		Actor: actor,
-		Body:  body,
+		Kind:    types.EventKindComment,
+		Actor:   input.Actor,
+		Body:    input.Body,
+		Payload: input.Payload,
 	})
+}
+
+// ResolveComment records a comment of the issue being resolved, or reopened when
+// resolved is false. The comment must be a comment event of this issue.
+func (r *Repository) ResolveComment(ctx context.Context, issueID uuid.UUID, expectedVersion int64, actor string, commentID uuid.UUID, resolved bool) (*Event, error) {
+	var event *Event
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		locked, err := lockIssue(tx, issueID, expectedVersion)
+		if err != nil {
+			return err
+		}
+		var kinds []string
+		if err := tx.Raw(`SELECT kind FROM todo_issue_events WHERE id = ? AND issue_id = ?`, commentID, issueID).
+			Scan(&kinds).Error; err != nil {
+			return err
+		}
+		if len(kinds) == 0 {
+			return fmt.Errorf("%w: issue %s has no comment %s", ErrNotFound, issueID, commentID)
+		}
+		if kinds[0] != types.EventKindComment {
+			return fmt.Errorf("%w: event %s of issue %s is a %s event, not a comment", ErrInvalidInput, commentID, issueID, kinds[0])
+		}
+		event, err = recordMutation(tx, locked, EventInput{
+			Kind:    types.EventKindCommentResolved,
+			Actor:   actor,
+			Payload: types.CommentResolution{CommentID: commentID.String(), Resolved: resolved},
+		})
+		return err
+	})
+	return event, err
 }
 
 func (r *Repository) ListEvents(ctx context.Context, issueID uuid.UUID) ([]Event, error) {

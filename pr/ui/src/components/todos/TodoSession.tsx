@@ -1,145 +1,35 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
+import { useCallback, useMemo } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { SessionViewer, type SessionEntry, type SessionPendingTool, type SessionToolDecision, type SessionUIMessage } from '@flanksource/clicky-ui/ai';
-import { UiCancel, UiCircleFilled, UiComment, UiError, UiLightbulb, UiPass, UiShield, type IconProps } from '@flanksource/clicky-ui/icons';
-import type { SessionStats, TodoItem, TodoRunOptions, TodoSessionAttempt } from '../../types';
+import { SessionInspector, fetchRemoteSession, questionsFromToolInput, type ApprovalScope, type NativeSandboxPolicy, type SessionInspectorTab, type SessionMetadataSummary, type SessionPendingTool, type SessionToolDecision, type SessionUIMessage } from '@flanksource/clicky-ui/ai';
+import type { SessionStats, TodoItem, TodoRunOptions, TodoSessionAttempt, TodoSessionDetailResponse } from '../../types';
 import { Spinner } from '../../icons/Spinner';
 import { todoQuery } from './format';
-import { TodoSessionTimer } from './TodoSessionTimer';
+import { CmuxSessionButton } from './TodoSessionTimer';
 import { TodoSessionStart } from './TodoSessionStart';
 import { SessionErrorDetails, type SessionError } from './SessionErrorDetails';
-import { CopyAllDetailsButton, SessionDiagnostics, ThreadInspector, useTodoSessionDetail } from './TodoSessionDetail';
+import { reusableRunBranch } from './runBranchChoice';
+import { AttemptStopAction, AttemptWorkspaceSummary, CopyAllDetailsButton, PENDING_LAUNCH_ID, attemptCollection, attemptSessionId, captainSessionUrl, selectAttempt, useTodoSessionDetail } from './TodoSessionDetail';
 import type { TodoRunAction } from './run';
-import { setTodoCaches, todoMutationJSON, useTodoSessionStop } from './todoMutations';
+import { invalidateTodoCaches, setTodoCaches, todoMutationJSON, useTodoSessionStop } from './todoMutations';
 import { sessionStatsQueryOptions, todoQueryKeys } from './todoQueries';
-
-interface SessionStateView {
-  label: string;
-  icon: ComponentType<IconProps>;
-  className: string;
-}
-
-// STATE_VIEWS maps the server-derived session state (cmux.SessionStats.State) to
-// the header badge's label, icon and colour. Tints are semi-transparent so they
-// read on both the light and dark dashboard themes. The empty key is the initial
-// "no event yet" state.
-const STATE_VIEWS: Record<string, SessionStateView> = {
-  '': {
-    label: 'Waiting',
-    icon: Spinner,
-    className: 'text-muted-foreground bg-muted/50 border-border',
-  },
-  thinking: {
-    label: 'Thinking',
-    icon: UiLightbulb,
-    className: 'text-amber-600 bg-amber-500/15 border-amber-500/30',
-  },
-  working: {
-    label: 'Working',
-    icon: Spinner,
-    className: 'text-cyan-600 bg-cyan-500/15 border-cyan-500/30',
-  },
-  ask: {
-    label: 'Awaiting input',
-    icon: UiComment,
-    className: 'text-purple-600 bg-purple-500/15 border-purple-500/30',
-  },
-  approval: {
-    label: 'Needs approval',
-    icon: UiShield,
-    className: 'text-amber-600 bg-amber-500/15 border-amber-500/30',
-  },
-  completed: {
-    label: 'Completed',
-    icon: UiPass,
-    className: 'text-emerald-600 bg-emerald-500/15 border-emerald-500/30',
-  },
-  idle: {
-    label: 'Idle',
-    icon: UiCircleFilled,
-    className: 'text-muted-foreground bg-muted/50 border-border',
-  },
-  failed: {
-    label: 'Failed',
-    icon: UiError,
-    className: 'text-red-600 bg-red-500/15 border-red-500/30',
-  },
-  cancelled: {
-    label: 'Cancelled',
-    icon: UiCancel,
-    className: 'text-muted-foreground bg-muted/50 border-border',
-  },
-  interrupted: {
-    label: 'Interrupted',
-    icon: UiError,
-    className: 'text-amber-600 bg-amber-500/15 border-amber-500/30',
-  },
-  error: {
-    label: 'Error',
-    icon: UiError,
-    className: 'text-red-600 bg-red-500/15 border-red-500/30',
-  },
-};
-
-function stateView(state: string, error: string): SessionStateView {
-  if (error) return STATE_VIEWS.error;
-  return STATE_VIEWS[state] ?? STATE_VIEWS[''];
-}
-
-// useTodoSession follows a TODO's agent session log over SSE. The server tails
-// the on-disk Claude session log and emits each conversational line as a raw
-// captain SessionEntry, which we accumulate and hand to clicky-ui's
-// SessionViewer to render. The stream replays existing history on connect, then
-// follows new entries until unmounted.
-export function useTodoSession(dir: string, sessionId: string | undefined, active: boolean) {
-  const [entries, setEntries] = useState<Array<SessionEntry | SessionUIMessage>>([]);
-  const [connected, setConnected] = useState(false);
-  const [error, setError] = useState('');
-
-  useEffect(() => {
-    setEntries([]);
-    setError('');
-    setConnected(false);
-    if (!active || !sessionId) return;
-
-    const params = new URLSearchParams(todoQuery(dir));
-    params.set('sessionId', sessionId);
-    const es = new EventSource(`/api/todos/session/stream?${params.toString()}`);
-
-    es.onopen = () => setConnected(true);
-    es.addEventListener('entry', (e: MessageEvent) => {
-      try {
-        const entry = JSON.parse(e.data) as SessionEntry | SessionUIMessage;
-        setEntries((prev) => mergeSessionEntry(prev, entry));
-      } catch {
-        // Ignore malformed frames; the next well-formed entry recovers.
-      }
-    });
-    es.addEventListener('error', (e: MessageEvent) => {
-      // A named error frame carries data; a bare connection drop does not.
-      if (e.data) {
-        try {
-          setError(JSON.parse(e.data).error || 'Session stream error');
-        } catch {
-          setError(`Session stream error\n${String(e.data)}`);
-        }
-      } else {
-        setError((previous) => previous || 'Session stream connection failed without returning error details');
-      }
-      setConnected(false);
-    });
-
-    return () => es.close();
-  }, [dir, sessionId, active]);
-
-  return { entries, connected, error };
-}
+import { setTodoLaunchProgress, todoMutationStream, updateTodoLaunchProgress, useTodoLaunchProgress, type TodoLaunchProgress } from './todoLaunch';
 
 // TodoSessionApprovalAction is the decision the server's approval endpoint
 // accepts for one pending approval: approve/deny answer a tool-permission
 // request (deny optionally carrying a rejection reason), respond answers a
-// question-shaped approval with the user's structured input.
-export type TodoSessionApprovalAction = 'approve' | 'deny' | 'respond';
+// question-shaped approval with the user's structured input (answers, or form
+// content), cancel denies and also interrupts the turn.
+export type TodoSessionApprovalAction = 'approve' | 'deny' | 'respond' | 'cancel';
+
+// TodoSessionApprovalOptions is everything a decision carries beyond the
+// action: a rejection reason, respond input, an approval scope, and the granted
+// subset of a permissions request.
+export interface TodoSessionApprovalOptions {
+  message?: string;
+  input?: Record<string, unknown>;
+  scope?: Exclude<ApprovalScope, 'request'>;
+  grants?: NativeSandboxPolicy;
+}
 
 // useSessionStatus polls the session stats endpoint for the high-level agent
 // state and any pending tool-permission requests, and exposes a resolver that
@@ -154,17 +44,15 @@ export function useSessionStatus(dir: string, sessionId: string | undefined, act
   const stats = enabled ? query.data : undefined;
   const approveMutation = useMutation({
     mutationKey: ['todos', 'session', 'approve', { sessionId: sessionId ?? '' }],
-    mutationFn: ({ approvalId, action, message, input }: {
+    mutationFn: ({ approvalId, action, message, input, scope, grants }: TodoSessionApprovalOptions & {
       approvalId: string;
       action: TodoSessionApprovalAction;
-      message?: string;
-      input?: Record<string, unknown>;
     }) => todoMutationJSON<{ resolved: boolean }>(
       `/api/todos/session/approve?${todoQuery(dir)}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ approvalId, action, message, input }),
+        body: JSON.stringify({ approvalId, action, message, input, scope, grants }),
       },
       'Session approval update failed',
     ),
@@ -176,14 +64,15 @@ export function useSessionStatus(dir: string, sessionId: string | undefined, act
   });
 
   const approve = useCallback(
-    async (approvalId: string, action: TodoSessionApprovalAction, message?: string, input?: Record<string, unknown>) => {
+    async (approvalId: string, action: TodoSessionApprovalAction, options: TodoSessionApprovalOptions = {}) => {
       if (!sessionId) throw new Error('Session is unavailable');
-      await approveMutation.mutateAsync({ approvalId, action, message, input });
+      await approveMutation.mutateAsync({ approvalId, action, ...options });
     },
     [approveMutation.mutateAsync, sessionId]
   );
 
   return {
+    stats,
     state: stats?.state ?? '',
     error: approveMutation.error?.message || query.error?.message || stats?.error || '',
     inProgress: stats?.inProgress ?? false,
@@ -209,13 +98,17 @@ export function TodoSession({
   onPlanOptionsChange,
   runBusy,
   runDisabled,
+  sessionTab,
+  onSessionTabChange,
+  sessionIds,
+  onSessionIdsChange,
 }: {
   dir: string;
   sessionId?: string;
   active: boolean;
   todo: TodoItem;
   onChanged?: (todo: TodoItem) => void;
-  // onResume/resumeDisabled back the session timer's "Resume in cmux" action,
+  // onResume/resumeDisabled back the session toolbar's "Resume in cmux" action,
   // wired from the todo detail's run flow.
   onResume?: () => void;
   resumeDisabled?: boolean;
@@ -229,24 +122,51 @@ export function TodoSession({
   onPlanOptionsChange?: (options: TodoRunOptions) => void;
   runBusy?: boolean;
   runDisabled?: boolean;
+  // The inspector's tab and selected attempts, owned by the todo detail view
+  // (routed through the URL on the dashboard).
+  sessionTab?: SessionInspectorTab;
+  onSessionTabChange?: (tab: SessionInspectorTab) => void;
+  sessionIds?: string[];
+  onSessionIdsChange?: (ids: string[]) => void;
 }) {
   const queryClient = useQueryClient();
-  const { detail, error: detailError } = useTodoSessionDetail(dir, todo.ref, sessionId, active);
-  const followedSessionId = detail?.thread?.providerSessionId || sessionId;
-  const { entries, connected, error } = useTodoSession(dir, followedSessionId, active);
-  const { state, error: statusError, inProgress, approvals, approve } = useSessionStatus(dir, followedSessionId, active);
-  const scrollRef = useRef<HTMLDivElement | null>(null);
-  // Host element for the SessionViewer's 3-dot menu: the viewer portals its menu
-  // into this header slot so the filter/density controls sit in the same fixed
-  // header as the status badge and session timer instead of scrolling with the log.
-  const [menuHost, setMenuHost] = useState<HTMLElement | null>(null);
-  // Follow the tail like a terminal, but stop following once the user scrolls up
-  // to read earlier history (re-engages when they scroll back to the bottom).
-  const followRef = useRef(true);
+  const inspectorTabProps = {
+    ...(sessionTab ? { tab: sessionTab } : {}),
+    ...(onSessionTabChange ? { onTabChange: onSessionTabChange } : {}),
+  };
+  const inspectorSelectionProps = {
+    ...(sessionIds ? { selectedSessionIds: sessionIds } : {}),
+    ...(onSessionIdsChange ? { onSelectedSessionIdsChange: onSessionIdsChange } : {}),
+  };
+  const launch = useTodoLaunchProgress(dir, todo.ref);
+  const activeLaunch = launch && launch.status !== 'failed' ? launch : null;
+  const { detail, error: detailError } = useTodoSessionDetail(dir, todo.ref, active);
+  const attempts = useMemo(() => detail?.attempts ?? [], [detail]);
+  const launchAttempt = activeLaunch?.promptRunId ? attempts.find(attempt => attempt.promptRunId === activeLaunch.promptRunId) : undefined;
+  // A launch in flight owns the view; otherwise the attempt the todo's session
+  // id names, else the newest.
+  const attempt = activeLaunch ? launchAttempt : selectAttempt(attempts, sessionId);
+  const currentId = activeLaunch ? activeLaunch.promptRunId || PENDING_LAUNCH_ID : attempt?.promptRunId;
+  const followedSessionId = activeLaunch ? launchAttempt?.providerSessionId : attempt?.providerSessionId || sessionId;
+  const { stats, state, error: statusError, inProgress, approvals, approve } = useSessionStatus(dir, followedSessionId, active);
+  const collection = useMemo(
+    () => currentId ? attemptCollection({ todoRef: todo.ref, attempts, currentId, launch: activeLaunch }) : undefined,
+    [activeLaunch, attempts, currentId, todo.ref],
+  );
+  const attemptSession = attempt ? attemptSessionId(attempt) : undefined;
+  // The blocking-question fallback needs the question's own input, which lives
+  // in the transcript: read it from Captain only while the session asks.
+  const askSrc = state === 'ask' && !inProgress && approvals.length === 0 && attemptSession ? captainSessionUrl(attemptSession) : undefined;
+  const askQuery = useQuery({
+    queryKey: todoQueryKeys.captainSession(askSrc ?? ''),
+    queryFn: ({ signal }) => fetchRemoteSession(askSrc!, signal),
+    enabled: active && !!askSrc,
+  });
   const answerMutation = useMutation({
     mutationKey: ['todos', 'session', 'answer', { dir: dir.trim(), ref: todo.ref }],
     mutationFn: async (decision: SessionToolDecision) => {
-      const data = await todoMutationJSON<{ todo?: TodoItem; status?: string }>(
+      if (!followedSessionId) throw new Error('Could not resume the agent session: there is no session to answer');
+      const data = await todoMutationStream<{ todo?: TodoItem; status?: string; promptRunId?: string; sessionId?: string }>(
         '/api/todos/answer',
         {
           method: 'POST',
@@ -254,37 +174,36 @@ export function TodoSession({
           body: JSON.stringify({
             dir,
             ref: todo.ref,
-            answer: decision.message || formatDecisionAnswers(decision.answers),
-            answers: decision.answers,
+            sessionId: followedSessionId,
+            answer: decision.message || (decision.allow ? formatDecisionAnswers(decision.answers, decision.event.toolInput) : ''),
+            ...(decision.allow ? { answers: decision.answers } : {}),
             rejected: !decision.allow,
           }),
         },
         'Could not resume the agent session',
+        resolved => updateTodoLaunchProgress(queryClient, dir, todo.ref, previous => ({ ...previous, status: 'resolved', step: resolved.step, spec: resolved.spec, specYaml: resolved.specYaml })),
       );
       if (!data.todo?.ref) throw new Error('Could not resume the agent session: response did not include the updated todo');
-      return data.todo;
+      if (!data.promptRunId) throw new Error('Could not resume the agent session: response did not include the prompt run ID');
+      return data;
     },
-    onSuccess: async (updated) => {
+    onMutate: () => setTodoLaunchProgress(queryClient, dir, todo.ref, { status: 'preparing', step: 'resume' }),
+    onSuccess: async ({ todo: updated, promptRunId, sessionId }) => {
+      if (!updated) throw new Error('Could not resume the agent session: response did not include the updated todo');
+      updateTodoLaunchProgress(queryClient, dir, todo.ref, previous => ({ ...previous, status: 'admitted', promptRunId, sessionId }));
       await setTodoCaches(queryClient, dir, updated);
       onChanged?.(updated);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: todoQueryKeys.sessionStats(dir, followedSessionId ?? '') }),
-        queryClient.invalidateQueries({ queryKey: todoQueryKeys.sessionDetail(dir, todo.ref, sessionId, false) }),
+        queryClient.invalidateQueries({ queryKey: todoQueryKeys.sessionDetail(dir, todo.ref) }),
       ]);
+    },
+    onError: async error => {
+      updateTodoLaunchProgress(queryClient, dir, todo.ref, previous => ({ ...previous, status: 'failed', error: error.message }));
+      await invalidateTodoCaches(queryClient, dir, todo.ref);
     },
   });
   const stopMutation = useTodoSessionStop(dir, todo.ref, followedSessionId ?? sessionId);
-
-  function onScroll() {
-    const el = scrollRef.current;
-    if (!el) return;
-    followRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
-  }
-
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (el && followRef.current) el.scrollTop = el.scrollHeight;
-  }, [entries.length]);
 
   const pendingTools = useMemo<SessionPendingTool[]>(() => {
     if (approvals.length > 0)
@@ -294,18 +213,13 @@ export function TodoSession({
         toolCallId: item.toolUseId,
         approvalId: item.approvalId,
         sessionId: item.sessionId,
+        ...(item.kind || item.request ? { kind: item.kind ?? item.request?.kind } : {}),
+        ...(item.request ? { request: item.request } : {}),
       }));
     if (state !== 'ask' || inProgress) return [];
-    const latest = latestQuestionTool(entries);
+    const latest = latestQuestionTool(askQuery.data?.messages ?? []);
     if (latest)
-      return [
-        {
-          tool: 'AskUserQuestion',
-          input: latest.input,
-          toolCallId: latest.toolCallId,
-          sessionId: followedSessionId,
-        },
-      ];
+      return [{ tool: 'AskUserQuestion', input: latest.input, toolCallId: latest.toolCallId, sessionId: followedSessionId }];
     if (todo.questions?.length) {
       return [
         {
@@ -326,7 +240,7 @@ export function TodoSession({
       ];
     }
     return [];
-  }, [approvals, entries, followedSessionId, inProgress, state, todo.questions]);
+  }, [approvals, askQuery.data, followedSessionId, inProgress, state, todo.questions]);
 
   // decide routes a clicky-ui SessionViewer decision to whichever endpoint
   // owns it. A decision on a live approval (SessionViewer stamps the matched
@@ -335,19 +249,27 @@ export function TodoSession({
   // textarea on "Reject with comment" already flows through as decision.message,
   // so denying with a reason is just this wire threading it through. A decision
   // with no approvalId is the ask-status blocking-question fallback (parsed
-  // from the log or from todo.questions, neither of which is a live approval)
-  // and still resumes the session via /api/todos/answer.
+  // from the transcript or from todo.questions, neither of which is a live
+  // approval) and still resumes the session via /api/todos/answer.
   const decide = useCallback(
     async (decision: SessionToolDecision) => {
       if (!followedSessionId) throw new Error('Session is unavailable');
       const approvalId = decision.event.approvalId;
       if (approvalId) {
-        if (decision.answers) {
-          const match = approvals.find(item => item.approvalId === approvalId);
-          await approve(approvalId, 'respond', undefined, { ...match?.input, answers: decision.answers });
+        if (!decision.allow) {
+          await approve(approvalId, decision.interrupt ? 'cancel' : 'deny', { message: decision.message });
           return;
         }
-        await approve(approvalId, decision.allow ? 'approve' : 'deny', decision.message);
+        if (decision.answers) {
+          const match = approvals.find(item => item.approvalId === approvalId);
+          await approve(approvalId, 'respond', { input: { ...match?.input, answers: decision.answers } });
+          return;
+        }
+        if (decision.content) {
+          await approve(approvalId, 'respond', { input: decision.content });
+          return;
+        }
+        await approve(approvalId, 'approve', { message: decision.message, scope: decision.scope, grants: decision.grants });
         return;
       }
       await answerMutation.mutateAsync(decision);
@@ -356,101 +278,127 @@ export function TodoSession({
   );
 
   const stopAttempt = useCallback(
-    (attempt: TodoSessionAttempt) => stopMutation.mutateAsync(attempt.promptRunId).then(() => undefined),
+    (target: TodoSessionAttempt) => stopMutation.mutateAsync(target.promptRunId).then(() => undefined),
     [stopMutation.mutateAsync]
   );
 
-  if (!sessionId) {
-    return <TodoSessionStart dir={dir} todo={todo} onRun={onRun} onAdvanced={onAdvanced} runOptions={runOptions} planOptions={planOptions} onRunOptionsChange={onRunOptionsChange} onPlanOptionsChange={onPlanOptionsChange} runBusy={runBusy} runDisabled={runDisabled} />;
+  if (!sessionId && !activeLaunch) {
+    return <>{launch && <LaunchProgress launch={launch} />}<TodoSessionStart dir={dir} todo={todo} onRun={onRun} onAdvanced={onAdvanced} runOptions={runOptions} planOptions={planOptions} onRunOptionsChange={onRunOptionsChange} onPlanOptionsChange={onPlanOptionsChange} runBusy={runBusy} runDisabled={runDisabled} branchChoice={reusableRunBranch(attempts, todo.events ?? [])} /></>;
   }
 
-  const threadState = detail?.thread?.status || state;
-  const view = stateView(threadState, error || statusError || detailError);
+  const metadata = todoSessionMetadata({ attempt, stats, sessionId: followedSessionId });
   const sessionErrors: SessionError[] = [
-    ...(error ? [{ source: 'Session stream', message: error }] : []),
+    ...(askQuery.error ? [{ source: 'Session transcript', message: askQuery.error.message }] : []),
     ...(statusError ? [{ source: 'Session status', message: statusError }] : []),
     ...(detailError ? [{ source: 'Session detail', message: detailError }] : []),
     ...(answerMutation.error ? [{ source: 'Session answer', message: answerMutation.error.message }] : []),
     ...(stopMutation.error ? [{ source: 'Session stop', message: stopMutation.error.message }] : []),
   ];
+  const toolbarActions = <SessionToolbarActions dir={dir} sessionId={followedSessionId} agent={stats?.agent} detail={detail} attempt={attempt} onResume={onResume} resumeDisabled={resumeDisabled} />;
+  const transcriptProps = { pendingTools, onPendingToolDecision: decide, showHeader: false, className: 'text-xs' };
 
   return (
-    <div className="m-3 flex min-h-0 flex-1 flex-col overflow-hidden rounded-md border border-border bg-card">
-      <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-border bg-muted/40 px-3 py-1.5 text-[11px] text-muted-foreground">
-        <SessionStateBadge view={view} />
-        <span className="inline-flex items-center gap-1">
-          <UiCircleFilled className={`text-[7px] ${connected ? 'text-emerald-500' : 'text-muted-foreground'}`} />
-          {connected ? 'Following session' : 'Session idle'}
-        </span>
-        <span className="font-mono">{(detail?.thread?.providerSessionId || sessionId).slice(0, 8)}</span>
-        <TodoSessionTimer dir={dir} sessionId={followedSessionId} active={active} onResume={onResume} resumeDisabled={resumeDisabled} />
-        {detail && <CopyAllDetailsButton detail={detail} entries={entries} />}
-        <span ref={setMenuHost} className="ml-auto inline-flex items-center" />
-      </div>
-      {detail && <SessionDiagnostics diagnostics={detail.diagnostics} />}
+    <div className="@container flex min-h-0 flex-1 flex-col overflow-hidden bg-muted/20">
+      {launch && <LaunchProgress launch={launch} />}
       <SessionErrorDetails errors={sessionErrors} />
-      <div ref={scrollRef} onScroll={onScroll} className={`min-h-0 flex-1 ${detail?.thread ? 'overflow-hidden' : 'overflow-y-auto px-3 py-2'}`}>
-        {entries.length === 0 && sessionErrors.length === 0 && <div className="text-xs text-muted-foreground">Waiting for session activity…</div>}
-        {detail?.thread ? (
-          <ThreadInspector detail={detail} entries={entries} dir={dir} todoRef={todo.ref} onStop={stopAttempt} pendingTools={pendingTools} onPendingToolDecision={decide} />
-        ) : (
-          entries.length > 0 && <SessionViewer session={entries as SessionEntry[] | SessionUIMessage[]} pendingTools={pendingTools} onPendingToolDecision={decide} showHeader={false} menuContainer={menuHost} className="text-xs" />
-        )}
-        {!detail?.thread && entries.length === 0 && pendingTools.length > 0 && <SessionViewer session={[]} pendingTools={pendingTools} onPendingToolDecision={decide} showHeader={false} menuContainer={menuHost} className="text-xs" />}
-      </div>
+      {collection ? (
+        <SessionInspector
+          session={collection}
+          className="h-full"
+          layout={activeLaunch && !(launchAttempt && attemptSessionId(launchAttempt)) ? 'default' : 'compact'}
+          metadata={metadata}
+          toolbarActions={toolbarActions}
+          transcriptProps={transcriptProps}
+          renderSessionActions={item => {
+            const target = attempts.find(candidate => candidate.promptRunId === item.id);
+            return target ? <><AttemptWorkspaceSummary attempt={target} /><AttemptStopAction attempt={target} onStop={stopAttempt} /></> : null;
+          }}
+          {...inspectorTabProps}
+          {...inspectorSelectionProps}
+        />
+      ) : detail && sessionId ? (
+        // A session no attempt owns (recorded before attempts were linked) is
+        // still Captain's to read by its provider id.
+        <SessionInspector
+          src={captainSessionUrl(sessionId)}
+          className="min-h-0 flex-1 text-xs"
+          layout="compact"
+          metadata={metadata}
+          toolbarActions={toolbarActions}
+          transcriptProps={transcriptProps}
+          {...inspectorTabProps}
+        />
+      ) : !detailError ? (
+        <p className="flex items-center gap-2 px-3 py-4 text-xs text-muted-foreground">
+          <Spinner /> Loading attempts…
+        </p>
+      ) : null}
     </div>
   );
 }
 
-function mergeSessionEntry(entries: Array<SessionEntry | SessionUIMessage>, entry: SessionEntry | SessionUIMessage): Array<SessionEntry | SessionUIMessage> {
-  if (!('parts' in entry) || !entry.id) return [...entries, entry];
-  const index = entries.findIndex((existing) => 'parts' in existing && existing.id === entry.id);
-  if (index < 0) return [...entries, entry];
-  const next = [...entries];
-  next[index] = entry;
-  return next;
+function LaunchProgress({ launch }: { launch: TodoLaunchProgress }) {
+  const title = launch.status === 'preparing' ? 'Preparing session'
+    : launch.status === 'resolved' ? 'Starting session'
+      : launch.status === 'failed' ? 'Session could not start' : 'Session started';
+  return (
+    <section aria-label="Launch progress" className="shrink-0 border-b bg-background px-3 py-2 text-xs">
+      <div className="font-medium">{title} · {launch.step}</div>
+      {launch.error && <div role="alert" className="mt-1 text-red-600">{launch.error}</div>}
+      {(launch.specYaml || launch.requestedSpec) && (
+        <details className="mt-1" open={launch.status === 'preparing' || launch.status === 'resolved'}>
+          <summary>{launch.specYaml ? 'Resolved spec' : 'Requested spec'}</summary>
+          <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-words">{launch.specYaml || JSON.stringify(launch.requestedSpec, null, 2)}</pre>
+        </details>
+      )}
+    </section>
+  );
 }
 
-function latestQuestionTool(entries: Array<SessionEntry | SessionUIMessage>): { input?: Record<string, unknown>; toolCallId?: string } | undefined {
-  for (let index = entries.length - 1; index >= 0; index--) {
-    const entry = entries[index];
-    if ('parts' in entry) {
-      for (let partIndex = entry.parts.length - 1; partIndex >= 0; partIndex--) {
-        const part = entry.parts[partIndex];
-        if (part.toolName === 'AskUserQuestion') {
-          const input = typeof part.input === 'object' && part.input !== null && !Array.isArray(part.input) ? (part.input as Record<string, unknown>) : undefined;
-          return { input, toolCallId: part.toolCallId };
-        }
-      }
-      continue;
-    }
-    if (entry.tool_use?.tool === 'AskUserQuestion')
-      return {
-        input: entry.tool_use.input,
-        toolCallId: entry.tool_use.tool_use_id,
-      };
-    const blocks = entry.message?.content ?? [];
-    for (let blockIndex = blocks.length - 1; blockIndex >= 0; blockIndex--) {
-      const block = blocks[blockIndex];
-      if (block.name === 'AskUserQuestion') return { input: block.input, toolCallId: block.id };
+function todoSessionMetadata({ attempt, stats, sessionId }: { attempt: TodoSessionAttempt | undefined; stats: SessionStats | undefined; sessionId: string | undefined }): SessionMetadataSummary {
+  const provider = attempt?.provider;
+  const executionMode = attempt?.runtimeMode;
+  const model = stats?.model || attempt?.model;
+  const reasoningEffort = stats?.effort || attempt?.effort;
+  const contextPercent = stats?.contextWindow ? Math.min(100, Math.max(0, stats.contextTokens / stats.contextWindow * 100)) : undefined;
+  return {
+    ...(sessionId ? { sessionId } : {}),
+    ...(provider ? { provider } : {}),
+    ...(executionMode ? { executionMode } : {}),
+    ...(model ? { model } : {}),
+    ...(reasoningEffort ? { reasoningEffort } : {}),
+    ...(contextPercent !== undefined ? { context: { usedTokens: stats?.contextTokens, windowTokens: stats?.contextWindow, freePercent: 100 - contextPercent } } : {}),
+    ...(stats ? { usage: { inputTokens: stats.inputTokens, outputTokens: stats.outputTokens, cacheReadTokens: stats.cacheReadTokens, cacheWriteTokens: stats.cacheCreationTokens, totalTokens: stats.totalTokens } } : {}),
+    ...(stats?.costUsd ? { cost: { inputCost: stats.costUsd } } : {}),
+  };
+}
+
+function SessionToolbarActions({ dir, sessionId, agent, detail, attempt, onResume, resumeDisabled }: { dir: string; sessionId: string | undefined; agent: string | undefined; detail: TodoSessionDetailResponse | null; attempt: TodoSessionAttempt | undefined; onResume: (() => void) | undefined; resumeDisabled: boolean | undefined }) {
+  return (
+    <>
+      {sessionId ? <CmuxSessionButton dir={dir} sessionId={sessionId} {...(agent ? { agent } : {})} {...(onResume ? { onResume } : {})} {...(resumeDisabled !== undefined ? { resumeDisabled } : {})} /> : null}
+      {detail ? <CopyAllDetailsButton detail={detail} attempt={attempt} compact /> : null}
+    </>
+  );
+}
+
+function latestQuestionTool(messages: SessionUIMessage[]): { input?: Record<string, unknown>; toolCallId?: string } | undefined {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const parts = messages[index]!.parts;
+    for (let partIndex = parts.length - 1; partIndex >= 0; partIndex--) {
+      const part = parts[partIndex]!;
+      if (part.toolName !== 'AskUserQuestion') continue;
+      const input = typeof part.input === 'object' && part.input !== null && !Array.isArray(part.input) ? (part.input as Record<string, unknown>) : undefined;
+      return { input, toolCallId: part.toolCallId };
     }
   }
   return undefined;
 }
 
-function formatDecisionAnswers(answers?: Record<string, string | string[]>): string {
+function formatDecisionAnswers(answers?: Record<string, string | string[]>, input?: Record<string, unknown>): string {
   if (!answers) return '';
+  const questions = new Map(questionsFromToolInput(input).map(question => [question.id, question.text]));
   return Object.entries(answers)
-    .map(([question, answer]) => `${question}: ${Array.isArray(answer) ? answer.join(', ') : answer}`)
+    .map(([id, answer]) => `${questions.get(id) ?? id}: ${Array.isArray(answer) ? answer.join(', ') : answer}`)
     .join('\n');
-}
-
-function SessionStateBadge({ view }: { view: SessionStateView }) {
-  const Icon = view.icon;
-  return (
-    <span className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-medium uppercase ${view.className}`}>
-      <Icon className="text-[11px]" />
-      {view.label}
-    </span>
-  );
 }

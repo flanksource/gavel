@@ -21,11 +21,13 @@ func runGitFetch(workDir, ref string) error {
 	return cmd.Run()
 }
 
-// runGitRebase runs `git rebase [-Xours|-Xtheirs] <upstream>` and returns
-// (clean, err). clean == false with err == nil means the rebase started but
-// hit a conflict (caller is responsible for aborting).
+// runGitRebase runs `git rebase --rebase-merges [-Xours|-Xtheirs] <upstream>`
+// and returns (clean, err). clean == false with err == nil means the rebase
+// started but hit a conflict (caller is responsible for aborting).
+// --rebase-merges keeps a merge commit a merge: plain rebase flattens it, which
+// replays the whole merged-in base branch as new commits on the PR.
 func runGitRebase(workDir, upstream, strategyOpt string) (bool, error) {
-	args := []string{"rebase", "--autostash"}
+	args := []string{"rebase", "--autostash", "--rebase-merges"}
 	if strategyOpt != "" {
 		args = append(args, "-X"+strategyOpt)
 	}

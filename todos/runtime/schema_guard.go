@@ -1,7 +1,10 @@
 package runtime
 
 import (
+	"context"
 	"fmt"
+	"slices"
+	"strings"
 
 	"gorm.io/gorm"
 )
@@ -16,28 +19,43 @@ import (
 // instead of once, here, with the command that fixes it.
 const ErrSchemaBehind = "database schema is behind this binary; run `gavel serve` once to migrate"
 
-// requireVerificationColumn asserts the column a verification verdict is read
-// from exists. It is the whole schema-drift guard: verification_result is the
-// newest column the todo runtime depends on, so a database that has it has
-// everything before it, and a database that does not needs the same one fix
-// whatever else it is missing.
-func requireVerificationColumn(db *gorm.DB) error {
+// requiredColumns are the newest columns the todo runtime reads, one per
+// migration bundle: Captain's and Gavel's are applied separately, so a database
+// can have either without the other. A bundle that has its newest column has
+// everything before it.
+var requiredColumns = []string{
+	"captain_prompt_run_iterations.verification_result",
+	"todo_issues.parent_issue_id",
+}
+
+// requireCurrentSchema is the whole schema-drift guard: it fails with
+// ErrSchemaBehind, naming what is missing, when the database lacks a column
+// every issue read now selects.
+func requireCurrentSchema(ctx context.Context, db *gorm.DB) error {
 	if db == nil {
 		return fmt.Errorf("native TODO storage: database is nil")
 	}
-	var present bool
-	err := db.Raw(`
-		SELECT EXISTS (
-			SELECT 1 FROM information_schema.columns
-			WHERE table_schema = 'public'
-			  AND table_name = 'captain_prompt_run_iterations'
-			  AND column_name = 'verification_result'
-		)`).Scan(&present).Error
+	var present []string
+	err := db.WithContext(ctx).Raw(`
+		SELECT table_name || '.' || column_name
+		FROM information_schema.columns
+		WHERE table_schema = 'public'
+		  AND table_name || '.' || column_name IN ?`, requiredColumns).Scan(&present).Error
 	if err != nil {
-		return fmt.Errorf("check Captain verification schema: %w", err)
+		return fmt.Errorf("check native TODO schema: %w", err)
 	}
-	if !present {
-		return fmt.Errorf("%s (captain_prompt_run_iterations.verification_result is missing)", ErrSchemaBehind)
+	var missing []string
+	for _, column := range requiredColumns {
+		if !slices.Contains(present, column) {
+			missing = append(missing, column)
+		}
+	}
+	if len(missing) > 0 {
+		verb := "is"
+		if len(missing) > 1 {
+			verb = "are"
+		}
+		return fmt.Errorf("%s (%s %s missing)", ErrSchemaBehind, strings.Join(missing, ", "), verb)
 	}
 	return nil
 }

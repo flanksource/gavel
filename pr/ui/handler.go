@@ -1,7 +1,7 @@
 package ui
 
 import (
-	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"html"
@@ -14,14 +14,19 @@ import (
 	"sync"
 	"time"
 
+	captaincli "github.com/flanksource/captain/pkg/cli"
 	"github.com/flanksource/captain/pkg/monitor"
 	"github.com/flanksource/clicky/metrics"
 	"github.com/flanksource/clicky/route"
 	rpchttp "github.com/flanksource/clicky/rpc/http"
+	"github.com/flanksource/clicky/sse"
 	clickytask "github.com/flanksource/clicky/task"
 	"github.com/flanksource/commons/logger"
+	gavelctx "github.com/flanksource/gavel/context"
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/github/cache"
+	prcreate "github.com/flanksource/gavel/pr/create"
+	"github.com/flanksource/gavel/pr/model"
 	"github.com/flanksource/gavel/prwatch"
 	testui "github.com/flanksource/gavel/testrunner/ui"
 )
@@ -30,6 +35,7 @@ type SearchConfig struct {
 	Repos       []string `json:"repos"`
 	All         bool     `json:"all,omitempty"`
 	Org         string   `json:"org,omitempty"`
+	Project     string   `json:"project,omitempty"`
 	IgnoredOrgs []string `json:"ignoredOrgs,omitempty"`
 }
 
@@ -40,6 +46,11 @@ type repoInfo struct {
 }
 
 type Server struct {
+	// ctx is the process root context carrying the shared services; reach it
+	// through context(), which gives a zero-value Server its own.
+	ctx     gavelctx.Context
+	ctxOnce sync.Once
+
 	mu          sync.RWMutex
 	prs         github.PRSearchResults
 	fetchedAt   time.Time
@@ -47,7 +58,7 @@ type Server struct {
 	err         error
 	paused      bool
 	rateLimit   *github.RateLimit
-	updated     chan struct{}
+	updated     sse.Notifier
 	refreshCh   chan struct{}
 	subscribers []chan github.PRSearchResults
 	ghOpts      github.Options
@@ -63,6 +74,9 @@ type Server struct {
 	projectActions *projectActionRegistry
 	projectRuns    *testui.MultiServer
 	taskSource     *supervisorTaskSource
+	// prDeps overrides the GitHub PR and AI content calls of the project
+	// branch PR and squash-merge endpoints; nil uses prcreate.DefaultDeps.
+	prDeps *prcreate.Deps
 
 	// taskHistoryImport nudges the archive sweep after this process writes a
 	// spool record, so a finished run reaches the database without waiting out
@@ -129,6 +143,10 @@ type Server struct {
 	// selections can be committed back-to-back without overlapping git index
 	// writes. See project_commit_queue.go.
 	commitQueues *commitQueueRegistry
+
+	// gitChanges wakes /api/git/stream on every git_* row change any process
+	// sharing the database NOTIFYs (see GitChangeListener).
+	gitChanges sse.Notifier
 }
 
 const orgsCacheTTL = 5 * time.Minute
@@ -171,20 +189,20 @@ type snapshot struct {
 	GavelResults map[string]*GavelResultsSummary `json:"gavelResults,omitempty"`
 }
 
-func NewServer(interval time.Duration, ghOpts github.Options, config SearchConfig) *Server {
+func NewServer(ctx gavelctx.Context, interval time.Duration, ghOpts github.Options, config SearchConfig) *Server {
 	s := &Server{
+		ctx:               ctx,
 		interval:          interval,
 		ghOpts:            ghOpts,
 		config:            config,
-		updated:           make(chan struct{}, 1),
 		refreshCh:         make(chan struct{}, 1),
 		detailCache:       NewDetailCache(),
 		gavelCache:        make(map[string]*GavelResultsSummary),
 		knownBots:         make(map[string]struct{}),
 		procMetrics:       metrics.NewMemory(metrics.MemoryConfig{Retention: 15 * time.Minute, MaxPoints: 512}),
-		taskSource:        newSupervisorTaskSource(),
 		taskHistoryImport: make(chan struct{}, 1),
 	}
+	s.taskSource = newSupervisorTaskSource(s.retryCommitRunControl)
 	// Probe runs in the background so NewServer stays fast. First /api/status
 	// hit before the probe completes returns State="" which handleStatus
 	// treats as "probing" (degraded, "checking token...").
@@ -216,6 +234,23 @@ func (s *Server) refreshAuthProbe() {
 	s.auth = res
 	s.authCheckedAt = time.Now()
 	s.mu.Unlock()
+}
+
+// context is the server's root context. A Server built without NewServer
+// (specs construct &Server{} directly) gets the production default once.
+func (s *Server) context() gavelctx.Context {
+	s.ctxOnce.Do(func() {
+		if s.ctx.IsZero() {
+			s.ctx = gavelctx.New(context.Background())
+		}
+	})
+	return s.ctx
+}
+
+// requestContext binds the root context's services to a request's
+// cancellation and values.
+func (s *Server) requestContext(r *http.Request) gavelctx.Context {
+	return s.context().Wrap(r.Context())
 }
 
 func (s *Server) DetailCache() *DetailCache {
@@ -410,10 +445,7 @@ func (s *Server) TogglePause() {
 }
 
 func (s *Server) notify() {
-	select {
-	case s.updated <- struct{}{}:
-	default:
-	}
+	s.updated.Notify()
 }
 
 func (s *Server) RefreshCh() chan struct{} {
@@ -470,10 +502,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/todos/criteria", s.handleTodoCriteria)
 	mux.HandleFunc("POST /api/todos/verification/fixture", s.handleTodoVerificationFixture)
 	mux.HandleFunc("GET /api/todos/verification/schema", s.handleTodoVerificationSchema)
-	mux.HandleFunc("GET /api/todos/commits", s.handleTodoCommits)
 	mux.HandleFunc("GET /api/todos/commits/diff", s.handleTodoCommitDiff)
 	mux.HandleFunc("GET /api/todos/commits/files", s.handleTodoCommitFiles)
-	mux.HandleFunc("/api/todos/session/stream", s.handleTodoSessionStream)
+	// A run's transcript is Captain's to read and follow: its handler resolves
+	// the session through the pool Gavel shares with Captain's CLI registry.
+	mux.Handle("/api/captain/sessions/", http.StripPrefix("/api/captain/sessions", captaincli.SessionHandler()))
+	mux.HandleFunc("GET /api/sessions", s.handleSessions)
 	mux.HandleFunc("/api/todos/session/stats", s.handleTodoSessionStats)
 	mux.HandleFunc("GET /api/todos/session/detail", s.handleTodoSessionDetail)
 	mux.HandleFunc("POST /api/todos/session/stop", s.handleTodoRunStop)
@@ -489,6 +523,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/todos/answer", s.handleTodoAnswer)
 	mux.HandleFunc("/api/todos/transfer", s.handleTodoTransfer)
 	mux.HandleFunc("POST /api/todos/github", s.handleTodoGitHubPush)
+	mux.HandleFunc("POST /api/todos/land", s.handleTodoLand)
 	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/favicon.svg", handleFavicon)
 	mux.HandleFunc("/react-grab-plugin.js", handleReactGrabPlugin)
@@ -506,6 +541,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/settings/prompts/catalog", s.handleSettingsPromptCatalog)
 	mux.HandleFunc("/api/settings/prompts/{id}", s.handleSettingsPromptDetail)
 	mux.HandleFunc("POST /api/settings/prompts/{id}/render", s.handleSettingsPromptRender)
+	mux.HandleFunc("GET /api/settings/runtime-presets", s.handleSettingsRuntimePresets)
+	mux.HandleFunc("POST /api/settings/runtime-presets", s.handleSettingsRuntimePresets)
+	mux.HandleFunc("PUT /api/settings/runtime-presets/{id}", s.handleSettingsRuntimePresets)
+	mux.HandleFunc("DELETE /api/settings/runtime-presets/{id}", s.handleSettingsRuntimePresets)
+	mux.HandleFunc("POST /api/settings/runtime-presets/resolve", s.handleSettingsRuntimePresetResolve)
 	mux.HandleFunc("/api/settings/gavel", s.handleSettingsGavel)
 	mux.HandleFunc("/api/settings/gavel/trace", s.handleSettingsGavelTrace)
 	mux.HandleFunc("/api/projects", s.handleProjects)
@@ -516,9 +556,19 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/projects/{name}/actions", s.handleProjectAction)
 	mux.HandleFunc("GET /api/projects/{name}/actions/schema", s.handleProjectActionSchema)
 	mux.HandleFunc("POST /api/projects/{name}/commit-queue", s.handleCommitQueue)
+	mux.HandleFunc("POST /api/projects/{name}/commit-queue/{runId}/retry", s.handleCommitQueueRetry)
 	mux.Handle("/api/project-runs/", http.StripPrefix("/api/project-runs", s.projectRunServer().Handler()))
 	mux.HandleFunc("GET /api/projects/{name}/diff", s.handleProjectDiff)
 	mux.HandleFunc("POST /api/projects/{name}/ignore", s.handleProjectIgnore)
+	mux.HandleFunc("GET /api/projects/git-summary", s.handleProjectsGitSummary)
+	mux.HandleFunc("GET /api/projects/{name}/git", s.handleProjectGit)
+	mux.HandleFunc("GET /api/projects/{name}/branch/files", s.handleProjectBranchFiles)
+	mux.HandleFunc("GET /api/projects/{name}/branch/diff", s.handleProjectBranchDiff)
+	mux.HandleFunc("POST /api/projects/{name}/branch/merge", s.handleProjectBranchMerge)
+	mux.HandleFunc("POST /api/projects/{name}/branch/pr", s.handleProjectBranchPR)
+	mux.HandleFunc("GET /api/git/stream", s.handleGitStream)
+	mux.HandleFunc("POST /api/git/focus", s.handleGitFocus)
+	mux.HandleFunc("GET /api/git/metrics", s.handleGitMetrics)
 	mux.HandleFunc("/api/openapi.json", s.handleOpenAPI)
 	mux.HandleFunc("/api/proc/status", s.handleProcStatus)
 	mux.HandleFunc("/api/proc/status/stream", s.handleProcStatusStream)
@@ -532,15 +582,23 @@ func (s *Server) Handler() http.Handler {
 	metrics.RegisterRoutes(router, s.procMetrics, "/api/proc")
 	taskSource := s.taskSource
 	if taskSource == nil {
-		taskSource = newSupervisorTaskSource()
+		taskSource = newSupervisorTaskSource(s.retryCommitRunControl)
 	}
 	clickytask.RegisterHandlersWithSource(router, "/api/v1", taskSource)
-	s.registerTodoEntityRoutes(router)
+	s.registerEntityRoutes(router)
 	registerPromptRoutes(mux)
 	registerPprof(mux)
+	registerMetrics(mux)
 	registerIngestStats(mux, s.readIngestStats)
 	mux.HandleFunc("/results/", s.handleGavelResults)
-	return rpchttp.TimingMiddleware(mux)
+	// One multiplexed SSE connection per tab: subs are served through root, so
+	// every stream route above is reachable exactly as a direct request sees it.
+	// A browser's direct EventSource on a stream route is refused (a stale page
+	// would starve the tab's connections); hub subs pass through by context.
+	hub := sse.NewHub(sse.HubOptions{Build: s.uiBuild()})
+	root := hub.Guard(rpchttp.TimingMiddleware(mux))
+	hub.Register(mux, root)
+	return root
 }
 
 func handleFavicon(w http.ResponseWriter, r *http.Request) {
@@ -841,63 +899,30 @@ func (s *Server) handleJSON(w http.ResponseWriter, _ *http.Request) {
 	json.NewEncoder(w).Encode(data) //nolint:errcheck
 }
 
+// prStreamInterval is the PR stream's liveness cadence, not its change signal:
+// the snapshot only moves when the poller refetches (minutes apart) and calls
+// notify(), which wakes every open stream at once. sse.Snapshot sends a frame
+// only when the payload changed and a ping otherwise — re-sending the full
+// snapshot every tick minted a fresh object on the client that re-rendered the
+// whole app, even on routes that show no PR data. No field is excluded from the
+// comparison: fetchedAt moving is what tells the client to merge.
+var prStreamInterval = 2 * time.Second
+
 func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "streaming not supported", http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-
-	// last is the most recently pushed payload. The 2s ticker below is a
-	// liveness cadence, not a change signal: the PR snapshot only moves when the
-	// poller refetches (every interval, minutes apart), so re-marshalling and
-	// re-sending it every tick would push the full snapshot — tens to hundreds of
-	// KB — forever at 0.5Hz. Every one of those frames mints a fresh object on
-	// the client, re-rendering the whole app even on routes that show no PR data.
-	// Compare against the previous payload and send a comment frame instead when
-	// nothing changed, matching handleProcStatusStream.
-	var last []byte
-
-	s.mu.RLock()
-	initial := s.snapshotLocked()
-	s.mu.RUnlock()
-	initial = s.withUnread(initial)
-	initial = s.withSyncStatus(initial)
-	if b, err := json.Marshal(initial); err == nil {
-		fmt.Fprintf(w, "data: %s\n\n", b)
-		last = b
-		flusher.Flush()
-	}
-
-	ticker := time.NewTicker(2 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-r.Context().Done():
-			return
-		case <-s.updated:
-		case <-ticker.C:
-		}
-
-		s.mu.RLock()
-		data := s.snapshotLocked()
-		s.mu.RUnlock()
-		data = s.withUnread(data)
-		data = s.withSyncStatus(data)
-
-		if b, err := json.Marshal(data); err == nil && !bytes.Equal(b, last) {
-			fmt.Fprintf(w, "data: %s\n\n", b)
-			last = b
-		} else {
-			// Comment frame: keeps the socket warm without firing a client re-render.
-			fmt.Fprint(w, ": ping\n\n")
-		}
-		flusher.Flush()
+	wake, unsubscribe := s.updated.Subscribe()
+	defer unsubscribe()
+	err := sse.ServeSnapshot(w, r, sse.SnapshotOptions{
+		Interval: prStreamInterval,
+		Wake:     wake,
+		Load: func(context.Context) (any, error) {
+			s.mu.RLock()
+			data := s.snapshotLocked()
+			s.mu.RUnlock()
+			return s.withSyncStatus(s.withUnread(data)), nil
+		},
+	})
+	if err != nil {
+		logger.Warnf("PR list stream: %v", err)
 	}
 }
 
@@ -1018,6 +1043,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		s.SetConfig(cfg)
 		go SaveSettings(UISettings{
 			Repos:       cfg.Repos,
+			Project:     cfg.Project,
 			IgnoredOrgs: cfg.IgnoredOrgs,
 		})
 		select {
@@ -1229,9 +1255,9 @@ func (s *Server) knownHomepage(homepage string) bool {
 }
 
 type prDetail struct {
-	PR       *github.PRInfo                `json:"pr,omitempty"`
-	Runs     map[int64]*github.WorkflowRun `json:"runs,omitempty"`
-	Comments []github.PRComment            `json:"comments,omitempty"`
+	PR       *model.PRInfo                `json:"pr,omitempty"`
+	Runs     map[int64]*model.WorkflowRun `json:"runs,omitempty"`
+	Comments []model.PRComment            `json:"comments,omitempty"`
 	// GavelResults holds one summary per gavel sticky comment on the PR
 	// (typically one per matrix shard). Order matches the order of the
 	// sticky comments on the PR.
@@ -1242,9 +1268,9 @@ type prDetail struct {
 // prFrame builds the SSE `pr` payload. Comments are normalized to a non-nil
 // slice: a PR with no actionable comments would otherwise marshal as
 // `"comments":null`, which the UI rejects as a malformed frame.
-func prFrame(pr *github.PRInfo, comments []github.PRComment) map[string]any {
+func prFrame(pr *model.PRInfo, comments []model.PRComment) map[string]any {
 	if comments == nil {
-		comments = []github.PRComment{}
+		comments = []model.PRComment{}
 	}
 	return map[string]any{"pr": pr, "comments": comments}
 }
@@ -1323,7 +1349,7 @@ func (s *Server) handleDetail(w http.ResponseWriter, r *http.Request) {
 	// Phase 2: Workflow runs + gavel results in parallel
 	type runResult struct {
 		id  int64
-		run *github.WorkflowRun
+		run *model.WorkflowRun
 	}
 
 	// Collect unique run IDs
@@ -1368,7 +1394,7 @@ func (s *Server) handleDetail(w http.ResponseWriter, r *http.Request) {
 		}(id)
 	}
 
-	runs := make(map[int64]*github.WorkflowRun, len(runIDs))
+	runs := make(map[int64]*model.WorkflowRun, len(runIDs))
 	for range runIDs {
 		rr := <-runCh
 		if rr.run != nil {
@@ -1413,7 +1439,7 @@ func (s *Server) fetchPRDetail(repo string, number int) prDetail {
 	}
 	result.PR = pr
 
-	runs := make(map[int64]*github.WorkflowRun)
+	runs := make(map[int64]*model.WorkflowRun)
 	seen := make(map[int64]bool)
 	for _, check := range pr.StatusCheckRollup {
 		runID, err := github.ExtractRunID(check.DetailsURL)
@@ -1472,10 +1498,10 @@ func (s *Server) prUpdatedAt(repo string, number int) time.Time {
 }
 
 type jobLogsResponse struct {
-	JobID int64         `json:"jobId"`
-	Logs  string        `json:"logs,omitempty"`
-	Steps []github.Step `json:"steps,omitempty"`
-	Error string        `json:"error,omitempty"`
+	JobID int64        `json:"jobId"`
+	Logs  string       `json:"logs,omitempty"`
+	Steps []model.Step `json:"steps,omitempty"`
+	Error string       `json:"error,omitempty"`
 }
 
 func (s *Server) handleJobLogs(w http.ResponseWriter, r *http.Request) {
@@ -1528,7 +1554,7 @@ func (s *Server) handleJobLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var job *github.Job
+	var job *model.Job
 	for i := range run.Jobs {
 		if run.Jobs[i].DatabaseID == jobID {
 			job = &run.Jobs[i]

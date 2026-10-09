@@ -8,6 +8,7 @@ import (
 
 	rpchttp "github.com/flanksource/clicky/rpc/http"
 	"github.com/flanksource/gavel/internal/prompting"
+	"github.com/flanksource/gavel/verify"
 	"github.com/flanksource/repomap"
 )
 
@@ -112,8 +113,13 @@ type Options struct {
 	// Verbose is threaded onto Result.Verbose so the renderer can expand the
 	// Problems section. Set from the global `-v` count by the CLI.
 	Verbose bool
-	Context context.Context `json:"-"`
-	Summary *SummaryOptions `json:"-"`
+	// GitConfig are global git options placed before every git subcommand,
+	// e.g. --no-optional-locks and -c core.fsmonitor=true so a background
+	// poller reads status through git's file monitor without taking the
+	// index lock.
+	GitConfig []string        `json:"-"`
+	Context   context.Context `json:"-"`
+	Summary   *SummaryOptions `json:"-"`
 }
 
 // fetchFileMapFunc is the indirection point for repomap lookups so tests can
@@ -144,17 +150,21 @@ func GatherBase(workDir string, opts Options) (*Result, error) {
 	if workDir == "" {
 		return nil, errors.New("status.GatherBase: workDir is required")
 	}
+	cfg, err := verify.LoadGavelConfig(workDir)
+	if err != nil {
+		return nil, fmt.Errorf("load Gavel config for project status: %w", err)
+	}
 	ctx := opts.Context
 	if ctx == nil {
 		ctx = context.Background()
 	}
 
-	branch, err := currentBranch(ctx, workDir)
+	branch, err := currentBranch(ctx, workDir, opts.GitConfig)
 	if err != nil {
 		return nil, err
 	}
 
-	raw, err := runGitStatus(ctx, workDir)
+	raw, err := runGitStatus(ctx, workDir, opts.GitConfig, len(cfg.Commit.GitIgnore) > 0)
 	if err != nil {
 		return nil, err
 	}
@@ -166,10 +176,17 @@ func GatherBase(workDir string, opts Options) (*Result, error) {
 	files = filterGavelCache(files)
 	files = filterByFolder(files, opts.FolderFilter)
 	stopFile := rpchttp.Track(ctx, "file")
-	files = filterGitIgnored(files, workDir)
+	files, err = filterGitIgnored(files, workDir)
 	stopFile()
+	if err != nil {
+		return nil, err
+	}
+	files, err = filterCommitIgnored(files, cfg.Commit)
+	if err != nil {
+		return nil, err
+	}
 
-	if err := enrichWithLineCounts(ctx, workDir, files); err != nil {
+	if err := enrichWithLineCounts(ctx, workDir, opts.GitConfig, files); err != nil {
 		return nil, err
 	}
 

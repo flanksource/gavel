@@ -5,8 +5,6 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
-
-	"github.com/flanksource/gavel/models"
 )
 
 const (
@@ -18,101 +16,22 @@ const (
 	TrailerSessionID = "Claude-Session-Id"
 )
 
-var commitHashPattern = regexp.MustCompile(`^[0-9a-fA-F]{4,64}$`)
+var (
+	commitHashPattern = regexp.MustCompile(`^[0-9a-fA-F]{4,64}$`)
+	diffPathPattern   = regexp.MustCompile(`^[^\x00-\x1f\x7f]+$`)
+)
 
-// IsValidCommitHash reports whether s is a syntactically valid abbreviated or
-// full git object hash, so callers can reject untrusted input before shelling
-// out to git.
+// IsValidCommitHash reports whether s, exactly as given, is a syntactically
+// valid abbreviated or full git object hash, so callers can reject untrusted
+// input before shelling out to git. Surrounding whitespace is not trimmed: the
+// value accepted is the value git receives.
 func IsValidCommitHash(s string) bool {
-	return commitHashPattern.MatchString(strings.TrimSpace(s))
-}
-
-// CommitsWithTrailer returns the commits reachable from any ref whose git
-// trailer `key` equals `value`, newest-first. It pre-filters the log with a
-// fixed-string `--grep` on the "Key: value" trailer line, then confirms each
-// candidate against the parsed trailers so a coincidental body line that merely
-// mentions the phrase never counts. An empty key/value yields no commits.
-func CommitsWithTrailer(path, key, value string) (models.Commits, error) {
-	key = strings.TrimSpace(key)
-	value = strings.TrimSpace(value)
-	if key == "" || value == "" {
-		return nil, nil
-	}
-
-	grep := key + ": " + value
-	cmd := exec.Command("git", "log", "--all", "--date=iso-strict",
-		"--fixed-strings", "--grep="+grep, commitLogPrettyFormat)
-	cmd.Dir = path
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		// A repository with no commits yet has no trailers to match; that is a
-		// valid empty result, not a failure.
-		if isNoCommitsError(output) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("git log --grep %q: %w\nOutput: %s", grep, err, string(output))
-	}
-
-	commits, err := ParseGitLogOutput(output)
-	if err != nil {
-		return nil, err
-	}
-	matched := make(models.Commits, 0, len(commits))
-	for _, c := range commits {
-		if strings.TrimSpace(c.Trailers[key]) == value {
-			matched = append(matched, c)
-		}
-	}
-	return matched, nil
-}
-
-// isNoCommitsError reports whether git log failed only because the repository
-// has no commits / refs yet (as opposed to a real error).
-func isNoCommitsError(output []byte) bool {
-	s := string(output)
-	return strings.Contains(s, "does not have any commits yet") ||
-		strings.Contains(s, "bad default revision") ||
-		strings.Contains(s, "unknown revision")
-}
-
-// CommitDiff returns the colored `git show` output for a single commit so the
-// dashboard can render it through an ANSI viewer. With an empty file it shows
-// the whole commit (diffstat + patch); with a file it narrows to that one path's
-// patch (the per-file hover card), dropping the diffstat and commit header.
-// Both untrusted inputs are validated before git runs — the hash against
-// IsValidCommitHash and the path against validateDiffPath — and `--` terminates
-// option parsing so neither can be read as a flag. Output is capped
-// at maxCommitDiffBytes; the bool reports whether it was truncated.
-func CommitDiff(path, hash, file string) (string, bool, error) {
-	hash = strings.TrimSpace(hash)
-	if !IsValidCommitHash(hash) {
-		return "", false, fmt.Errorf("invalid commit hash %q", hash)
-	}
-	args := []string{"show", "--color=always"}
-	if file = strings.TrimSpace(file); file != "" {
-		if err := validateDiffPath(file); err != nil {
-			return "", false, err
-		}
-		args = append(args, "--format=", "--patch", hash, "--", file)
-	} else {
-		args = append(args, "--stat", "--patch", hash, "--")
-	}
-	cmd := exec.Command("git", args...)
-	cmd.Dir = path
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", false, fmt.Errorf("git show %s: %w\nOutput: %s", hash, err, string(out))
-	}
-	diff, truncated := TruncateDiff(string(out))
-	if truncated {
-		return diff +
-			"\n\n… diff truncated (showing first 256 KB) …\n", true, nil
-	}
-	return diff, false, nil
+	return commitHashPattern.MatchString(s)
 }
 
 // validateDiffPath rejects an untrusted path that git would reinterpret as
-// something other than a literal file inside the repository. `--` already stops
+// something other than a literal file or directory pathspec inside the
+// repository. `--` already stops
 // option parsing, but git still reads pathspec magic (`:(exclude)`, `:/`) after
 // it, and a control character would corrupt the argument for any consumer that
 // re-splits the command line, so the shape is checked before the value is ever
@@ -125,11 +44,8 @@ func validateDiffPath(file string) error {
 		return fmt.Errorf("invalid diff path %q: must not begin with %q, git parses that as pathspec magic", file, ":")
 	case strings.HasPrefix(file, "/"):
 		return fmt.Errorf("invalid diff path %q: must be relative to the repository root, not absolute", file)
-	}
-	for i, r := range file {
-		if r < 0x20 || r == 0x7f {
-			return fmt.Errorf("invalid diff path %q: control character %q at byte %d", file, r, i)
-		}
+	case !diffPathPattern.MatchString(file):
+		return fmt.Errorf("invalid diff path %q: contains a control character", file)
 	}
 	for _, segment := range strings.Split(file, "/") {
 		if segment == ".." {

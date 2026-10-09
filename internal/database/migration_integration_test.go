@@ -7,6 +7,7 @@ import (
 	"time"
 
 	commonsdb "github.com/flanksource/commons-db/db"
+	"github.com/flanksource/commons-db/dbtest"
 	githubcache "github.com/flanksource/gavel/github/cache"
 	analysiscache "github.com/flanksource/gavel/internal/cache"
 	"github.com/flanksource/gavel/internal/database"
@@ -16,15 +17,7 @@ import (
 )
 
 func TestHCLMigrationFromExistingGitHubSchema(t *testing.T) {
-	if os.Getenv("GAVEL_DB_EMBEDDED_TEST") == "" {
-		t.Skip("set GAVEL_DB_EMBEDDED_TEST=1 to run embedded-postgres migration tests")
-	}
-	dsn, stop, err := commonsdb.StartEmbedded(commonsdb.EmbeddedConfig{
-		DataDir:  filepath.Join(t.TempDir(), "postgres"),
-		Database: "gavel_migrate",
-	})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, stop()) })
+	dsn := dbtest.ForT(t, dbtest.Options{Name: "gavel_migrate"}).DSN()
 
 	legacy, err := commonsdb.NewGorm(dsn, commonsdb.DefaultGormConfig())
 	require.NoError(t, err)
@@ -35,8 +28,6 @@ func TestHCLMigrationFromExistingGitHubSchema(t *testing.T) {
 		&githubcache.WorkflowDefCache{},
 		&githubcache.SeenPR{},
 		&githubcache.FaviconCache{},
-		&githubcache.CommitStatCache{},
-		&githubcache.CommitStatCursor{},
 		&githubcache.TestRunCache{},
 		&githubcache.TestRunCursor{},
 	))
@@ -44,6 +35,11 @@ func TestHCLMigrationFromExistingGitHubSchema(t *testing.T) {
 	require.NoError(t, legacy.Exec(`
 		CREATE TABLE migration_unmanaged (id integer PRIMARY KEY, value text NOT NULL);
 		INSERT INTO migration_unmanaged (id, value) VALUES (1, 'preserve me')
+	`).Error)
+	// The retired run diff-stat cache, replaced by git_range_stats.
+	require.NoError(t, legacy.Exec(`
+		CREATE TABLE commit_stat_caches (repo varchar(512), issue_id varchar(128), commits bigint, PRIMARY KEY (repo, issue_id));
+		CREATE TABLE commit_stat_cursors (repo varchar(512) PRIMARY KEY, synced_at timestamptz)
 	`).Error)
 	legacySQL, err := legacy.DB()
 	require.NoError(t, err)
@@ -64,11 +60,14 @@ func TestHCLMigrationFromExistingGitHubSchema(t *testing.T) {
 		"captain_sessions", "captain_prompt_runs", "captain_plans", "captain_turns", "captain_model_calls",
 		"http_cache_entries", "workflow_run_caches", "job_log_caches", "workflow_def_caches",
 		"seen_prs", "favicon_caches",
-		"commit_stat_caches", "commit_stat_cursors", "test_run_caches", "test_run_cursors",
+		"git_repos", "git_worktrees", "git_branches", "git_range_stats", "test_run_caches", "test_run_cursors",
 		"task_run_history",
 		"file_scans", "violations", "linter_executions", "debounce_metadata", "migration_unmanaged",
 	} {
 		require.True(t, db.Gorm().Migrator().HasTable(table), "%s should exist", table)
+	}
+	for _, table := range []string{"commit_stat_caches", "commit_stat_cursors"} {
+		require.False(t, db.Gorm().Migrator().HasTable(table), "retired %s should be dropped", table)
 	}
 	var cached githubcache.HTTPCacheEntry
 	require.NoError(t, db.Gorm().First(&cached, "url = ? AND method = ?", "https://example.test", "GET").Error)
@@ -84,12 +83,12 @@ func TestHCLMigrationFromExistingGitHubSchema(t *testing.T) {
 	require.NoError(t, db.Gorm().Exec(`DROP TABLE
 		http_cache_entries, workflow_run_caches, job_log_caches, workflow_def_caches,
 		seen_prs, favicon_caches,
-		commit_stat_caches, commit_stat_cursors, test_run_caches, test_run_cursors,
+		git_range_stats, git_branches, git_worktrees, git_repos, test_run_caches, test_run_cursors,
 		violations, file_scans, linter_executions, debounce_metadata CASCADE`).Error)
 	fresh, err := database.Open(t.Context(), database.WithMigrations())
 	require.NoError(t, err, "migration should create the complete schema from scratch")
 	require.NoError(t, fresh.Close())
-	for _, table := range []string{"captain_sessions", "captain_prompt_runs", "captain_plans", "http_cache_entries", "task_run_history", "violations", "file_scans", "linter_executions", "debounce_metadata", "migration_unmanaged"} {
+	for _, table := range []string{"captain_sessions", "captain_prompt_runs", "captain_plans", "http_cache_entries", "git_repos", "git_range_stats", "task_run_history", "violations", "file_scans", "linter_executions", "debounce_metadata", "migration_unmanaged"} {
 		require.True(t, db.Gorm().Migrator().HasTable(table), "%s should exist after a fresh migration", table)
 	}
 
@@ -134,15 +133,7 @@ func TestHCLMigrationFromExistingGitHubSchema(t *testing.T) {
 }
 
 func TestHCLMigrationFreshDatabaseCreatesCurrentSchema(t *testing.T) {
-	if os.Getenv("GAVEL_DB_EMBEDDED_TEST") == "" {
-		t.Skip("set GAVEL_DB_EMBEDDED_TEST=1 to run embedded-postgres migration tests")
-	}
-	dsn, stop, err := commonsdb.StartEmbedded(commonsdb.EmbeddedConfig{
-		DataDir:  filepath.Join(t.TempDir(), "postgres"),
-		Database: "gavel_migrate_fresh",
-	})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, stop()) })
+	dsn := dbtest.ForT(t, dbtest.Options{Name: "gavel_migrate_fresh"}).DSN()
 
 	t.Setenv(database.EnvDSN, dsn)
 	t.Setenv(database.EnvDisable, "")
@@ -157,7 +148,7 @@ func TestHCLMigrationFreshDatabaseCreatesCurrentSchema(t *testing.T) {
 
 	for _, table := range []string{
 		"captain_sessions", "todo_workspaces", "todo_issues",
-		"http_cache_entries", "commit_stat_caches", "test_run_caches",
+		"http_cache_entries", "git_repos", "git_worktrees", "git_branches", "git_range_stats", "test_run_caches",
 		"task_run_history",
 		"file_scans", "violations", "linter_executions", "debounce_metadata",
 	} {

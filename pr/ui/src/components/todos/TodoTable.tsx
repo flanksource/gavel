@@ -6,12 +6,14 @@ import { UiClose, UiFolder, UiRefresh } from '@flanksource/clicky-ui/icons';
 import { Spinner } from '../../icons/Spinner';
 import type { Project, TodoGroupBy, TodoItem, TodoPhase } from '../../types';
 import { TODO_PHASES } from '../../types';
+import { buildRoute, emptyRouteState } from '../../routes';
 import { TodoPhaseCell, phase as phaseMeta } from './TodoPhaseCell';
 import type { TagIndex } from './tagResolve';
 import { todoVisibleLabels } from './tagResolve';
 import {
   SessionBadge,
   StatusIcon,
+  TodoChildCountBadge,
   TodoCountsBar,
   TodoDiffBadge,
   TodoPlanIndicator,
@@ -33,6 +35,7 @@ import {
 import { defaultTodoSort, type TodoSortColumn } from './todoSort';
 import { selectionKey } from './todoSelection';
 import { useTodoBulkContext, useTodoBulkToolbar } from './todoActions';
+import type { ChildCount } from './todoFamily';
 import { TodoTagRow } from './TodoTag';
 import type { WorkspaceTodos } from './useWorkspaceTodos';
 
@@ -45,6 +48,14 @@ export type TodoTableRow = TodoEntry & Record<string, unknown>;
 // is the same todo the bulk bar acts on.
 export const todoTableRowId = (row: TodoTableRow): string =>
   selectionKey({ dir: row.workspace.dir, ref: row.todo.ref });
+
+const todoTableRowHref = (row: TodoTableRow, scopeProject: string): string =>
+  buildRoute({
+    ...emptyRouteState(),
+    tab: 'todos',
+    selectedPath: row.todo.ref,
+    scopeProject,
+  });
 
 // The phase's own label, so a column header reads the same word the detail
 // pane's phase strip and the session viewer use.
@@ -128,7 +139,14 @@ export function todoGroupingModes(
 // Workspace is deliberately among the unsortable ones: TodoSort sorts TodoItem,
 // which carries no workspace, and grouping by workspace already organises by it.
 export function todoTableColumns(
-  { groupBy, tagsByDir }: { groupBy: TodoGroupBy; tagsByDir?: Map<string, TagIndex> },
+  { groupBy, tagsByDir, parentTitles, childCounts }: {
+    groupBy: TodoGroupBy;
+    tagsByDir?: Map<string, TagIndex>;
+    // Title of every todo by full id, so a child the search surfaced can say which parent it hangs under.
+    parentTitles?: Map<string, string>;
+    // Every parent's children by its full id, so a parent row can badge how many it has.
+    childCounts?: Map<string, ChildCount>;
+  },
 ): DataTableColumn<TodoTableRow>[] {
   const columns: DataTableColumn<TodoTableRow>[] = [
     {
@@ -146,11 +164,18 @@ export function todoTableColumns(
       grow: true,
       minWidth: 240,
       accessor: row => row.todo.title,
-      render: (_value, row) => (
-        <span className="block truncate font-medium text-foreground" title={row.todo.title}>
-          {row.todo.title}
-        </span>
-      ),
+      render: (_value, row) => {
+        const children = row.todo.id ? childCounts?.get(row.todo.id) : undefined;
+        return (
+          <span className="flex min-w-0 items-baseline gap-2">
+            <span className="min-w-0 truncate font-medium text-foreground" title={row.todo.title}>
+              {row.todo.title}
+            </span>
+            {children && <TodoChildCountBadge done={children.done} total={children.total} />}
+            {row.todo.parentId && <ParentHint title={parentTitles?.get(row.todo.parentId)} />}
+          </span>
+        );
+      },
     },
   ];
 
@@ -235,6 +260,15 @@ export function todoTableColumns(
   return columns;
 }
 
+export function ParentHint({ title }: { title: string | undefined }) {
+  const label = title ?? 'parent not loaded';
+  return (
+    <span className="max-w-[40%] shrink-0 truncate text-[11px] text-muted-foreground" title={`Child of ${label}`}>
+      ↳ {label}
+    </span>
+  );
+}
+
 // TodoStatusCell is the list row's status affordance: a live run reports its own
 // state and elapsed time, anything else falls back to the lifecycle icon.
 function TodoStatusCell({ todo, dir }: { todo: TodoItem; dir: string }) {
@@ -278,17 +312,18 @@ function TodoSignalsCell({ todo }: { todo: TodoItem }) {
 // sortable, groupable table under a filter bar wide enough to show its facets
 // inline. It reuses the split layout's filter/sort/group preferences and its
 // data pipeline, so switching layouts changes the arrangement, not the contents.
-export function TodoTable({ todos, projectsLoaded, rows, columns, query, onQueryChange }: {
+export function TodoTable({ todos, projectsLoaded, rows, columns, query, onQueryChange, scopeProject }: {
   todos: WorkspaceTodos;
   projectsLoaded: boolean;
   rows: TodoTableRow[];
   columns: DataTableColumn<TodoTableRow>[];
   query: string;
   onQueryChange: (query: string) => void;
+  scopeProject: string;
 }) {
   const {
     workspaces, timeRange, setTimeRange, density, groupBy, setGroupBy,
-    sortBy, setSortBy, select, selected, loadingList, refresh, error, selection,
+    sortBy, setSortBy, selected, loadingList, refresh, error, selection,
   } = todos;
   const { facets, range } = useTodoFilterBar(todos);
   // The same descriptors the split layout renders, so a bulk action added on
@@ -404,12 +439,10 @@ export function TodoTable({ todos, projectsLoaded, rows, columns, query, onQuery
         // Selecting a todo swaps the filter row for the bulk bar in place, so
         // the rows being acted on never move under the cursor.
         selectionBar="takeover"
-        // onRowClick only, no getRowHref: DataTable's row link routes
-        // client-side through clicky-ui's RouterAdapter, and pr/ui mounts no
-        // RouterProvider — the link would fall back to a plain <a> and hard
-        // reload the app on every row click. Selection still reaches the URL
-        // through select() -> navigateTodo.
-        onRowClick={row => select({ dir: row.workspace.dir, ref: row.todo.ref })}
+        // DataTable renders one real stretched anchor per row. Its default
+        // browser adapter intercepts only plain left clicks for SPA navigation;
+        // modifier, middle and context-menu actions retain native link behavior.
+        getRowHref={row => todoTableRowHref(row, scopeProject)}
         getRowClassName={row => (
           selected?.dir === row.workspace.dir && selected?.ref === row.todo.ref ? 'bg-primary/5' : undefined
         )}

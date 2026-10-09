@@ -1,12 +1,10 @@
 package database_test
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
-	commonsdb "github.com/flanksource/commons-db/db"
+	"github.com/flanksource/commons-db/dbtest"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -16,15 +14,7 @@ import (
 )
 
 func TestNativeTodoHCLMigrationAndRepeatedApply(t *testing.T) {
-	if os.Getenv("GAVEL_DB_EMBEDDED_TEST") == "" {
-		t.Skip("set GAVEL_DB_EMBEDDED_TEST=1 to run embedded-postgres migration tests")
-	}
-	dsn, stop, err := commonsdb.StartEmbedded(commonsdb.EmbeddedConfig{
-		DataDir:  filepath.Join(t.TempDir(), "postgres"),
-		Database: "gavel_todo_migrate",
-	})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, stop()) })
+	dsn := dbtest.ForT(t, dbtest.Options{Name: "gavel_todo_migrate"}).DSN()
 
 	t.Setenv(database.EnvDSN, dsn)
 	t.Setenv(database.EnvDisable, "")
@@ -47,6 +37,7 @@ func TestNativeTodoHCLMigrationAndRepeatedApply(t *testing.T) {
 		"todo_issue_events",
 		"todo_issue_prompt_runs",
 		"todo_issue_plans",
+		"todo_run_landings",
 	}
 	for _, table := range nativeTables {
 		require.True(t, db.Gorm().Migrator().HasTable(table), "%s should exist", table)
@@ -157,6 +148,10 @@ func TestNativeTodoHCLMigrationAndRepeatedApply(t *testing.T) {
 		INSERT INTO todo_issue_relationships (workspace_id, issue_id, target_issue_id, relation)
 		VALUES (?, ?, ?, 'depends_on')`, workspaceTwo, issueOne, issueThree).Error)
 
+	assertTodoParentConstraints(t, db.Gorm(), todoParentFixture{
+		issue: issueOne, sibling: issueTwo, otherWorkspace: issueThree,
+	})
+
 	require.NoError(t, db.Gorm().Exec(`
 		INSERT INTO todo_issue_events (issue_id, sequence, kind, source, source_id)
 		VALUES (?, 1, 'created', 'portable-import', 'legacy-event-1')`, issueOne).Error)
@@ -181,6 +176,7 @@ func TestNativeTodoHCLMigrationAndRepeatedApply(t *testing.T) {
 
 	// Remove only the native surface and prove the declarative bundle recreates it.
 	require.NoError(t, db.Gorm().Exec(`DROP TABLE
+		todo_run_landings,
 		todo_issue_events,
 		todo_issue_aliases,
 		todo_issue_relationships,
@@ -274,15 +270,7 @@ func assertStepKindRejected(t *testing.T, err error, why string) {
 // 140 before 116 would leave the live constraint on 102's closed enum, so the
 // order is asserted from what actually landed.
 func TestTodoStepKindCheckOpensOnAnExistingDatabase(t *testing.T) {
-	if os.Getenv("GAVEL_DB_EMBEDDED_TEST") == "" {
-		t.Skip("set GAVEL_DB_EMBEDDED_TEST=1 to run embedded-postgres migration tests")
-	}
-	dsn, stop, err := commonsdb.StartEmbedded(commonsdb.EmbeddedConfig{
-		DataDir:  filepath.Join(t.TempDir(), "postgres"),
-		Database: "gavel_step_kind_widen",
-	})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, stop()) })
+	dsn := dbtest.ForT(t, dbtest.Options{Name: "gavel_step_kind_widen"}).DSN()
 
 	t.Setenv(database.EnvDSN, dsn)
 	t.Setenv(database.EnvDisable, "")
@@ -399,8 +387,9 @@ func TestTodoProjectionDefersStatusToLifecycleHost(t *testing.T) {
 		before := todoStatusSnapshot(t, db, fixture.issueID)
 		require.Equal(t, "open", before.Status)
 
-		// The prompt-run trigger fires gavel_project_todo_prompt_run, which is
-		// the path the projection used to write status through.
+		// The row-change projection answers this update with
+		// gavel_project_todo_prompt_run, the path the projection used to write
+		// status through.
 		require.NoError(t, db.Exec(`
 			UPDATE captain_prompt_runs
 			SET state = 'succeeded', phase = 'finished', version = 1,
@@ -408,6 +397,9 @@ func TestTodoProjectionDefersStatusToLifecycleHost(t *testing.T) {
 			WHERE id = ?`, fixture.runID).Error)
 
 		var changed int
+		require.NoError(t, db.Raw(`SELECT public.gavel_project_todo_prompt_run(?)`,
+			fixture.runID).Scan(&changed).Error)
+		assert.Equal(t, 1, changed, "the projection carries the finished run's activity onto its issue")
 		require.NoError(t, db.Raw(`SELECT public.gavel_project_todo_prompt_run(?)`,
 			fixture.runID).Scan(&changed).Error)
 		assert.Zero(t, changed, "replaying the projection advances no activity watermark and mutates nothing")

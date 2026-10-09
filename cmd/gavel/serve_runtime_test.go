@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"errors"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -42,6 +44,44 @@ func (m *fakeServeMonitor) Ready() <-chan struct{} { return m.ready }
 
 func (m *fakeServeMonitor) IngestStats() monitor.IngestStats { return m.stats }
 
+// fakeServeProjection plays one scripted result per Run: nil blocks until the
+// context ends; an error is returned before or after Ready, as scripted.
+type fakeServeProjection struct {
+	runs      chan context.Context
+	ready     chan struct{}
+	readyOnce sync.Once
+	script    []projectionRun
+	calls     atomic.Int32
+}
+
+type projectionRun struct {
+	err        error
+	afterReady bool
+}
+
+func newFakeServeProjection(script ...projectionRun) *fakeServeProjection {
+	return &fakeServeProjection{runs: make(chan context.Context, 8), ready: make(chan struct{}), script: script}
+}
+
+func (p *fakeServeProjection) Run(ctx context.Context) error {
+	call := int(p.calls.Add(1)) - 1
+	p.runs <- ctx
+	run := projectionRun{afterReady: true}
+	if call < len(p.script) {
+		run = p.script[call]
+	}
+	if run.afterReady {
+		p.readyOnce.Do(func() { close(p.ready) })
+	}
+	if run.err != nil {
+		return run.err
+	}
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func (p *fakeServeProjection) Ready() <-chan struct{} { return p.ready }
+
 func TestStartServeRuntimeStartsMonitorOnSharedPool(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	pool := &gorm.DB{}
@@ -49,12 +89,14 @@ func TestStartServeRuntimeStartsMonitorOnSharedPool(t *testing.T) {
 		started: make(chan context.Context, 1), stopped: make(chan struct{}), ready: make(chan struct{}),
 		stats: monitor.IngestStats{FilesIngested: 3, MessagesParsed: 900, MessagesOffered: 9},
 	}
+	projection := newFakeServeProjection()
 	var monitorPool *gorm.DB
+	var projectionPool *gorm.DB
 	var countPool *gorm.DB
 	var openedMode serveDatabaseMode
 	var logs []string
 
-	ingestStats, err := startServeRuntime(ctx, serveRuntimeDependencies{
+	runtime, err := startServeRuntime(ctx, serveRuntimeDependencies{
 		openDatabase: func(_ context.Context, mode serveDatabaseMode) (serveDatabase, error) {
 			openedMode = mode
 			return fakeServeDatabase{gorm: pool, dsn: "postgres://captain:secret@db.internal/gavel", source: "--db-url"}, nil
@@ -62,6 +104,10 @@ func TestStartServeRuntimeStartsMonitorOnSharedPool(t *testing.T) {
 		newMonitor: func(gormDB *gorm.DB) (serveSessionMonitor, error) {
 			monitorPool = gormDB
 			return mon, nil
+		},
+		newProjection: func(gormDB *gorm.DB) (serveProjection, error) {
+			projectionPool = gormDB
+			return projection, nil
 		},
 		countLiveSessions: func(_ context.Context, gormDB *gorm.DB) (int64, error) {
 			countPool = gormDB
@@ -72,17 +118,32 @@ func TestStartServeRuntimeStartsMonitorOnSharedPool(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, serveDatabaseWithMigrations, openedMode)
 	require.Same(t, pool, monitorPool)
+	require.Same(t, pool, projectionPool)
 	require.Same(t, pool, countPool)
+	select {
+	case <-projection.Ready():
+	default:
+		t.Fatal("startup must wait until the projection has resynced")
+	}
 	require.Equal(t, []string{`Database Info: source="--db-url" dsn="postgres://captain:REDACTED@db.internal/gavel" live_sessions=7`}, logs)
 	// The dashboard's own profiler is useless for the monitor it embeds unless
 	// the monitor's counters come back out with it.
-	require.NotNil(t, ingestStats)
-	require.Equal(t, mon.stats, ingestStats())
+	require.NotNil(t, runtime.IngestStats)
+	require.Equal(t, mon.stats, runtime.IngestStats())
+	// The git state tracker and its change feed run on the same pool.
+	require.Same(t, pool, runtime.DB)
 	select {
 	case startedCtx := <-mon.started:
 		require.Same(t, ctx, startedCtx)
 	case <-time.After(time.Second):
 		t.Fatal("session monitor did not start")
+	}
+
+	select {
+	case projectionCtx := <-projection.runs:
+		require.Same(t, ctx, projectionCtx)
+	case <-time.After(time.Second):
+		t.Fatal("row-change projection did not start")
 	}
 
 	cancel()
@@ -91,18 +152,66 @@ func TestStartServeRuntimeStartsMonitorOnSharedPool(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("session monitor did not stop with the serve context")
 	}
+	require.Never(t, func() bool { return projection.calls.Load() > 1 }, 200*time.Millisecond, 10*time.Millisecond,
+		"a projection stopped by the serve context must not be restarted")
+}
+
+func TestStartServeRuntimeRestartsAProjectionThatFailsAfterStartup(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	projection := newFakeServeProjection(projectionRun{err: errors.New("connection lost"), afterReady: true})
+
+	_, err := startServeRuntime(ctx, serveRuntimeDependencies{
+		openDatabase: func(context.Context, serveDatabaseMode) (serveDatabase, error) {
+			return fakeServeDatabase{gorm: &gorm.DB{}, dsn: "postgres://db/gavel", source: "test"}, nil
+		},
+		newMonitor: func(*gorm.DB) (serveSessionMonitor, error) {
+			return &fakeServeMonitor{started: make(chan context.Context, 1), stopped: make(chan struct{}), ready: make(chan struct{})}, nil
+		},
+		newProjection:     func(*gorm.DB) (serveProjection, error) { return projection, nil },
+		countLiveSessions: func(context.Context, *gorm.DB) (int64, error) { return 0, nil },
+		logInfo:           func(string) {},
+	}, serveDatabaseNoMigrations)
+	require.NoError(t, err)
+	require.Eventually(t, func() bool { return projection.calls.Load() == 2 }, time.Second, 10*time.Millisecond,
+		"a projection that fails once running is restarted, re-resyncing on its new LISTEN")
+}
+
+func TestStartServeRuntimeFailsWhenTheProjectionCannotStart(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	projection := newFakeServeProjection(projectionRun{err: errors.New("function gavel_resync_todo_activity() does not exist")})
+
+	_, err := startServeRuntime(ctx, serveRuntimeDependencies{
+		openDatabase: func(context.Context, serveDatabaseMode) (serveDatabase, error) {
+			return fakeServeDatabase{gorm: &gorm.DB{}, dsn: "postgres://db/gavel", source: "test"}, nil
+		},
+		newMonitor: func(*gorm.DB) (serveSessionMonitor, error) {
+			return &fakeServeMonitor{started: make(chan context.Context, 1), stopped: make(chan struct{}), ready: make(chan struct{})}, nil
+		},
+		newProjection: func(*gorm.DB) (serveProjection, error) { return projection, nil },
+		logInfo:       func(string) { t.Fatal("startup info must not be logged when the projection cannot start") },
+	}, serveDatabaseNoMigrations)
+	require.EqualError(t, err, "start Captain row-change projection: function gavel_resync_todo_activity() does not exist")
+	require.Never(t, func() bool { return projection.calls.Load() > 1 }, 200*time.Millisecond, 10*time.Millisecond,
+		"a projection that never became ready is a startup failure, not something to retry")
 }
 
 func TestStartServeRuntimeSkipsMonitorWhenDatabaseDisabled(t *testing.T) {
 	monitorCalled := false
+	projectionCalled := false
 	countCalled := false
 	var logs []string
-	ingestStats, err := startServeRuntime(t.Context(), serveRuntimeDependencies{
+	runtime, err := startServeRuntime(t.Context(), serveRuntimeDependencies{
 		openDatabase: func(context.Context, serveDatabaseMode) (serveDatabase, error) {
 			return fakeServeDatabase{disabled: true}, nil
 		},
 		newMonitor: func(*gorm.DB) (serveSessionMonitor, error) {
 			monitorCalled = true
+			return nil, nil
+		},
+		newProjection: func(*gorm.DB) (serveProjection, error) {
+			projectionCalled = true
 			return nil, nil
 		},
 		countLiveSessions: func(context.Context, *gorm.DB) (int64, error) {
@@ -112,8 +221,9 @@ func TestStartServeRuntimeSkipsMonitorWhenDatabaseDisabled(t *testing.T) {
 		logInfo: func(message string) { logs = append(logs, message) },
 	}, serveDatabaseNoMigrations)
 	require.NoError(t, err)
-	require.Nil(t, ingestStats, "there are no ingest counters without a monitor to keep them")
+	require.Equal(t, serveRuntime{}, runtime, "there is no pool, and no ingest counters without a monitor to keep them")
 	require.False(t, monitorCalled)
+	require.False(t, projectionCalled)
 	require.False(t, countCalled)
 	require.Equal(t, []string{`Database Info: source="disabled" dsn="" live_sessions=0`}, logs)
 }
@@ -126,6 +236,22 @@ func TestStartServeRuntimeSurfacesInitializationErrors(t *testing.T) {
 			},
 		}, serveDatabaseNoMigrations)
 		require.EqualError(t, err, "initialize Gavel shared database: database unavailable")
+	})
+
+	t.Run("projection", func(t *testing.T) {
+		_, err := startServeRuntime(t.Context(), serveRuntimeDependencies{
+			openDatabase: func(context.Context, serveDatabaseMode) (serveDatabase, error) {
+				return fakeServeDatabase{gorm: &gorm.DB{}}, nil
+			},
+			newMonitor: func(*gorm.DB) (serveSessionMonitor, error) {
+				return &fakeServeMonitor{started: make(chan context.Context, 1), stopped: make(chan struct{}), ready: make(chan struct{})}, nil
+			},
+			newProjection: func(*gorm.DB) (serveProjection, error) {
+				return nil, errors.New("pool unavailable")
+			},
+			logInfo: func(string) {},
+		}, serveDatabaseNoMigrations)
+		require.EqualError(t, err, "initialize Captain row-change projection: pool unavailable")
 	})
 
 	t.Run("monitor", func(t *testing.T) {
@@ -151,7 +277,8 @@ func TestStartServeRuntimeSurfacesLiveSessionCountError(t *testing.T) {
 		openDatabase: func(context.Context, serveDatabaseMode) (serveDatabase, error) {
 			return fakeServeDatabase{gorm: &gorm.DB{}, dsn: "postgres://db/gavel", source: "test"}, nil
 		},
-		newMonitor: func(*gorm.DB) (serveSessionMonitor, error) { return mon, nil },
+		newMonitor:    func(*gorm.DB) (serveSessionMonitor, error) { return mon, nil },
+		newProjection: func(*gorm.DB) (serveProjection, error) { return newFakeServeProjection(), nil },
 		countLiveSessions: func(context.Context, *gorm.DB) (int64, error) {
 			return 0, errors.New("view unavailable")
 		},

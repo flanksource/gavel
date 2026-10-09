@@ -2,39 +2,28 @@ package ui
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/flanksource/captain/pkg/ai/approval"
 	"github.com/flanksource/captain/pkg/api"
 	captaindb "github.com/flanksource/captain/pkg/database"
-	"github.com/flanksource/gavel/todos"
 	"github.com/google/uuid"
 )
 
-// approvalStore is the durable approval seam: captain's `captain_turn_requests`
-// table, addressed by the session and prompt run Captain admitted for a run.
-//
-// It replaced a process-wide in-memory registry. That registry could only ever
-// answer a run started by the same process, held one pending request per
-// session, and lost every outstanding approval on restart — so a dashboard that
-// reconnected to a live run had nothing to show and no way to unblock it.
+// approvalStore is what the dashboard reads of captain's durable approvals:
+// `captain_turn_requests` rows, addressed by the session and prompt run Captain
+// admitted for a run. It is read-only by construction — every write (raising,
+// answering, withdrawing an approval, and the run's waiting posture) goes
+// through captain's approval package, never through this seam.
 type approvalStore interface {
 	ListTurnRequests(context.Context, captaindb.TurnRequestFilter) ([]captaindb.TurnRequest, error)
 	GetTurnRequest(context.Context, uuid.UUID) (*captaindb.TurnRequest, error)
-	ResolveToolApprovalRequest(context.Context, captaindb.ResolveToolApprovalRequestInput) (*captaindb.TurnRequest, error)
-	CancelPendingTurnRequests(ctx context.Context, sessionID, promptRunID uuid.UUID, reason string) error
-	GetPromptRun(context.Context, uuid.UUID) (*captaindb.PromptRun, error)
-	UpdatePromptRun(context.Context, captaindb.UpdatePromptRunInput) (*captaindb.PromptRun, error)
 }
 
-// todoApprovalStore resolves the workspace's captain handle. A provider with no
-// captain handle cannot broker approvals at all, which is reported rather than
-// degraded: a run configured to ask, dispatched with nothing able to answer,
-// blocks until its timeout.
+// todoApprovalStore resolves the workspace's Captain handle for listing and
+// answering durable approvals. Captain binds the run's broker itself.
 //
 // It is a var so a test can hand the handlers a Captain database of its own
 // rather than standing up a whole workspace to reach the same one.
@@ -58,176 +47,6 @@ func openTodoApprovalStore(ctx context.Context, dir string) (*captaindb.DB, erro
 	return native.Captain(), nil
 }
 
-// todoApprovalBroker is the dashboard's ApprovalBroker: every tool call the
-// run's permission mode does not pre-approve becomes a durable row a person can
-// answer from the TODO's session view.
-//
-// It is built per execution because the rows are keyed on the session and
-// prompt run Captain admits, neither of which exists when the executor is
-// constructed.
-func todoApprovalBroker(dir string) todos.ApprovalBroker {
-	return func(ctx *todos.ExecutorContext) (api.PermissionFunc, error) {
-		store, err := todoApprovalStore(ctx, dir)
-		if err != nil {
-			return nil, err
-		}
-		sessionID := todos.CaptainSessionFromContext(ctx)
-		promptRunID := todos.PromptRunFromContext(ctx)
-		if sessionID == uuid.Nil || promptRunID == uuid.Nil {
-			return nil, fmt.Errorf("tool approvals need Captain's admitted session and prompt run; got session %s run %s", sessionID, promptRunID)
-		}
-		window, err := approvalWindow(ctx, store, promptRunID)
-		if err != nil {
-			return nil, err
-		}
-		broker := &approval.Broker{
-			DB:          store,
-			SessionID:   sessionID,
-			PromptRunID: promptRunID,
-			RequestedBy: "gavel-dashboard",
-			Timeout:     window,
-			// The run's own deadline, which the broker uses as the upper bound on the
-			// window. It is not redundant with the deadline on the context the tool
-			// call arrives under: a dispatch that was handed no executor context
-			// carries no deadline at all, and the window would then be the ceiling
-			// again — the exact shape this bound exists to prevent.
-			Deadline:  runDeadline(ctx),
-			Notify:    notifyApproval(ctx),
-			OnWaiting: setPromptRunState(store, promptRunID, captaindb.PromptRunStateWaiting),
-			OnRunning: setPromptRunState(store, promptRunID, captaindb.PromptRunStateRunning),
-		}
-		if err := broker.Validate(); err != nil {
-			return nil, err
-		}
-		return broker.CanUseTool, nil
-	}
-}
-
-// approvalWindow is how long this run's unanswered approvals stay open.
-//
-// It reads permissions.approvalTimeout off the spec Captain admitted the run
-// with, so the window resolves through the same layering as permissions.mode:
-// .gavel.yaml, then the prompt's frontmatter, then the request. A run that
-// declares none falls back to Captain's provider ceiling — but only as a
-// ceiling: the broker still pulls the expiry in ahead of the run's deadline, so
-// an unattended run gives up on the question before its budget gives up on it.
-//
-// The rendered spec is the durable record of what was dispatched, and it is
-// written at admission, which precedes every tool call. A spec that is present
-// but unreadable is an error rather than a fallback to the ceiling: silently
-// widening a window somebody narrowed is the failure this whole field exists to
-// stop.
-func approvalWindow(ctx context.Context, store approvalStore, promptRunID uuid.UUID) (time.Duration, error) {
-	run, err := store.GetPromptRun(ctx, promptRunID)
-	if err != nil {
-		return 0, err
-	}
-	if len(run.RenderedSpec) == 0 {
-		return approval.ProviderTimeout, nil
-	}
-	encoded, err := json.Marshal(run.RenderedSpec)
-	if err != nil {
-		return 0, fmt.Errorf("read the spec prompt run %s was admitted with: %w", promptRunID, err)
-	}
-	var spec api.Spec
-	if err := json.Unmarshal(encoded, &spec); err != nil {
-		return 0, fmt.Errorf("read the spec prompt run %s was admitted with: %w", promptRunID, err)
-	}
-	window, err := spec.Permissions.ParseApprovalTimeout()
-	if err != nil {
-		return 0, err
-	}
-	if window == 0 {
-		return approval.ProviderTimeout, nil
-	}
-	return window, nil
-}
-
-// runDeadline is when the run ends whatever anyone answers. The executor context
-// carries the resolved budget timeout as an absolute deadline; a context without
-// one leaves the zero time, which the broker reads as "unbounded".
-func runDeadline(ctx *todos.ExecutorContext) time.Time {
-	deadline, ok := ctx.Deadline()
-	if !ok {
-		return time.Time{}
-	}
-	return deadline
-}
-
-// notifyApproval surfaces a pending request on the run's own narration, which is
-// what the TODO session view already renders — the same frame the provider's
-// EventPermission produces, so an approval reads identically wherever it came
-// from. The durable row is what the dashboard acts on; this is how it learns
-// there is one without waiting for its next poll.
-// It narrates the outcome as well as the question. The broker sends the same
-// frame back, same approval ID, carrying a Reason, once the wait ends without an
-// answer — expired, or cancelled by the monitor's sweep. Narrating only the ask
-// left a run that nobody answered for reading exactly like a run somebody is
-// about to answer, and the difference is the whole point.
-func notifyApproval(ctx *todos.ExecutorContext) func(context.Context, api.Event) error {
-	return func(_ context.Context, event api.Event) error {
-		detail := map[string]any{"tool": event.Tool, "approvalId": event.ApprovalID, "input": event.Input}
-		message := "awaiting approval: " + event.Tool
-		if event.Reason != "" {
-			detail["reason"] = event.Reason
-			message = "approval " + event.Reason + ": " + event.Tool
-		}
-		ctx.GetTranscript().AddExecutorMessage(message, todos.EntryAction, detail)
-		ctx.Notify(todos.Notification{
-			Type:    todos.NotifyApproval,
-			Message: message,
-			Data:    detail,
-		})
-		return nil
-	}
-}
-
-// setPromptRunState brackets the wait with the run's own state. It is not
-// bookkeeping: captain only resolves a credential-less approval while its prompt
-// run is `waiting`, so a broker whose OnWaiting did nothing would record a
-// request nobody could ever answer.
-//
-// It never resurrects a finished run. The broker's OnRunning fires on every
-// exit from the wait — including the one where the run was stopped underneath
-// it: the stop cancelled the request, ReclaimRun wrote the terminal state, and
-// the broker woke to find its request gone. Writing `running` then would leave a
-// dead run the dashboard offers to stop forever. A concurrent write to the run
-// row between the read and the update is retried once on the fresh version; a
-// second conflict is reported rather than fought over.
-func setPromptRunState(store approvalStore, promptRunID uuid.UUID, state captaindb.PromptRunState) func(context.Context) error {
-	return func(ctx context.Context) error {
-		for attempt := 0; ; attempt++ {
-			run, err := store.GetPromptRun(ctx, promptRunID)
-			if err != nil {
-				return err
-			}
-			if run.State == state {
-				return nil
-			}
-			if terminalPromptRunState(run.State) {
-				return fmt.Errorf("prompt run %s is %s and cannot move to %s", promptRunID, run.State, state)
-			}
-			_, err = store.UpdatePromptRun(ctx, captaindb.UpdatePromptRunInput{
-				ID:              promptRunID,
-				ExpectedVersion: run.Version,
-				State:           &state,
-			})
-			if err == nil || attempt > 0 || !errors.Is(err, captaindb.ErrPromptRunConflict) {
-				return err
-			}
-		}
-	}
-}
-
-// terminalPromptRunState reports whether a prompt run has finished for good.
-func terminalPromptRunState(state captaindb.PromptRunState) bool {
-	switch state {
-	case captaindb.PromptRunStateSucceeded, captaindb.PromptRunStateFailed, captaindb.PromptRunStateCancelled:
-		return true
-	}
-	return false
-}
-
 // pendingApprovals are the run's unanswered tool requests, oldest first. The
 // filter is the durable identity, so a dashboard that reconnected — or one
 // running in a different process from the run — sees exactly what is
@@ -242,26 +61,47 @@ func pendingApprovals(ctx context.Context, store approvalStore, sessionID uuid.U
 		if request.State != captaindb.TurnRequestStatePending {
 			continue
 		}
-		pending = append(pending, todoApprovalOf(request))
+		approvalRow, err := todoApprovalOf(request)
+		if err != nil {
+			return nil, err
+		}
+		pending = append(pending, approvalRow)
 	}
 	return pending, nil
 }
 
-// todoApproval is one pending tool request as the dashboard reads it. ID is the
+// todoApproval is one pending request as the dashboard reads it. ID is the
 // durable approval id the client must send back — a session id is no longer
 // enough to name a request, because a run can have more than one outstanding.
+//
+// Tool and Input are what every reader has always seen. Kind and Request add
+// the typed request: Request is the stored document as captain wrote it, so the
+// dashboard renders each kind's payload (command, filesystem, network,
+// permissions, questions, elicitation) and its offered scopes without Gavel
+// re-modelling them.
 type todoApproval struct {
-	ID        string         `json:"approvalId"`
-	SessionID string         `json:"sessionId"`
-	Tool      string         `json:"tool"`
-	Input     map[string]any `json:"input,omitempty"`
-	CreatedAt string         `json:"createdAt,omitempty"`
+	ID        string           `json:"approvalId"`
+	SessionID string           `json:"sessionId"`
+	Tool      string           `json:"tool"`
+	Input     map[string]any   `json:"input,omitempty"`
+	Kind      api.ApprovalKind `json:"kind"`
+	Request   map[string]any   `json:"request"`
+	CreatedAt string           `json:"createdAt,omitempty"`
 }
 
-func todoApprovalOf(request captaindb.TurnRequest) todoApproval {
+func todoApprovalOf(request captaindb.TurnRequest) (todoApproval, error) {
+	kind, err := storedApprovalKind(request)
+	if err != nil {
+		return todoApproval{}, err
+	}
+	if kind == "" {
+		kind = api.ApprovalKindTool
+	}
 	approvalRow := todoApproval{
 		ID:        request.ID.String(),
 		SessionID: request.SessionID.String(),
+		Kind:      kind,
+		Request:   request.Request,
 		CreatedAt: request.CreatedAt.UTC().Format("2006-01-02T15:04:05Z07:00"),
 	}
 	if tool, ok := request.Request["tool"].(string); ok {
@@ -270,7 +110,21 @@ func todoApprovalOf(request captaindb.TurnRequest) todoApproval {
 	if input, ok := request.Request["input"].(map[string]any); ok {
 		approvalRow.Input = input
 	}
-	return approvalRow
+	return approvalRow, nil
+}
+
+// storedApprovalKind is the kind a row was raised with, or empty for a row
+// written before kinds existed — which only ever held a tool approval.
+func storedApprovalKind(request captaindb.TurnRequest) (api.ApprovalKind, error) {
+	raw, present := request.Request["kind"]
+	if !present {
+		return "", nil
+	}
+	kind, ok := raw.(string)
+	if !ok || !api.ApprovalKind(kind).Valid() {
+		return "", fmt.Errorf("approval %s has invalid kind %v", request.ID, raw)
+	}
+	return api.ApprovalKind(kind), nil
 }
 
 // todoApprovalAction is what the dashboard's buttons ask for.
@@ -281,44 +135,82 @@ const (
 	approvalApprove todoApprovalAction = "approve"
 	// approvalDeny refuses it; Message is fed back to the agent as the reason.
 	approvalDeny todoApprovalAction = "deny"
-	// approvalRespond runs the tool with the operator's edited input — an answer,
-	// not a veto, for the case where the call is right but its arguments are not.
+	// approvalRespond answers the request with content: the operator's edited
+	// tool input, a question's answers or a form's content (all as Input), or a
+	// permissions request's granted subset (as Grants).
 	approvalRespond todoApprovalAction = "respond"
+	// approvalCancel refuses the request and interrupts the agent's turn;
+	// Message is fed back as the reason.
+	approvalCancel todoApprovalAction = "cancel"
 )
 
 func parseApprovalAction(value string) (todoApprovalAction, error) {
-	switch todoApprovalAction(strings.TrimSpace(value)) {
-	case approvalApprove:
-		return approvalApprove, nil
-	case approvalDeny:
-		return approvalDeny, nil
-	case approvalRespond:
-		return approvalRespond, nil
+	switch action := todoApprovalAction(strings.TrimSpace(value)); action {
+	case approvalApprove, approvalDeny, approvalRespond, approvalCancel:
+		return action, nil
 	}
-	return "", fmt.Errorf("invalid approval action %q (valid: approve, deny, respond)", value)
+	return "", fmt.Errorf("invalid approval action %q (valid: approve, deny, respond, cancel)", value)
 }
 
-// resolveApproval answers one durable request. `respond` implies approval — it
-// is "run it, with this input instead" — so only `deny` refuses.
-func resolveApproval(
-	ctx context.Context,
-	store approvalStore,
-	sessionID, requestID uuid.UUID,
-	action todoApprovalAction,
-	message string,
-	input map[string]any,
-) (*captaindb.TurnRequest, error) {
-	if action == approvalRespond && len(input) == 0 {
-		return nil, fmt.Errorf("respond needs the replacement tool input; send approve to run the call unchanged")
+// approvalAnswer is one dashboard decision on one durable request. A nil
+// SessionID lets captain take the session off the row.
+type approvalAnswer struct {
+	SessionID, RequestID uuid.UUID
+	Action               todoApprovalAction
+	Message              string
+	Input                map[string]any
+	Scope                api.ApprovalScope
+	Grants               *api.NativeSandboxPolicy
+}
+
+// resolveApproval answers one durable request through captain's approval.Resolve,
+// which validates the decision against the stored request and refuses one it
+// cannot take with approval.ErrInvalidResolution. `respond` implies approval —
+// it is "run it, with this content" — so only `deny` and `cancel` refuse.
+//
+// The run's posture is not touched here: the broker waiting on the request reads
+// the answer and releases the run itself.
+func resolveApproval(ctx context.Context, db *captaindb.DB, answer approvalAnswer) (*captaindb.TurnRequest, error) {
+	if answer.Action == approvalRespond && len(answer.Input) == 0 && answer.Grants == nil {
+		return nil, fmt.Errorf("respond needs the replacement tool input, answers, form content or grants; send approve to run the call unchanged")
 	}
-	return store.ResolveToolApprovalRequest(ctx, captaindb.ResolveToolApprovalRequestInput{
-		SessionID:  sessionID,
-		RequestID:  requestID,
-		Approved:   action != approvalDeny,
-		ResolvedBy: "gavel-dashboard",
-		Reason:     strings.TrimSpace(message),
-		// ExpectedTurnID stays nil: a provider approval belongs to a prompt run,
-		// never to an aichat turn, so there is no turn to match it against.
-		UpdatedInput: input,
+	request, err := db.GetTurnRequest(ctx, answer.RequestID)
+	if err != nil {
+		return nil, err
+	}
+	// A question with nothing substituted leaves the agent waiting on a prompt no
+	// one can answer. The answers themselves are shaped and validated by the
+	// provider that asked (captain's api.AnswersForQuestions), which is the only
+	// side that knows how its host keys them.
+	isQuestion, err := isQuestionRequest(*request)
+	if err != nil {
+		return nil, err
+	}
+	if isQuestion && answer.Action == approvalApprove {
+		return nil, fmt.Errorf("a question needs answers; send respond or deny")
+	}
+	return approval.Resolve(ctx, db, approval.ResolveInput{
+		RequestID:    answer.RequestID,
+		SessionID:    answer.SessionID,
+		Approved:     answer.Action == approvalApprove || answer.Action == approvalRespond,
+		ResolvedBy:   "gavel-dashboard",
+		Reason:       strings.TrimSpace(answer.Message),
+		UpdatedInput: answer.Input,
+		Interrupt:    answer.Action == approvalCancel,
+		Scope:        answer.Scope,
+		Grants:       answer.Grants,
 	})
+}
+
+// isQuestionRequest reports a request that asks the operator a question. A row
+// written before kinds existed names its question by Claude's tool alone.
+func isQuestionRequest(request captaindb.TurnRequest) (bool, error) {
+	kind, err := storedApprovalKind(request)
+	if err != nil {
+		return false, err
+	}
+	if kind == "" {
+		return request.Request["tool"] == "AskUserQuestion", nil
+	}
+	return kind == api.ApprovalKindQuestion, nil
 }

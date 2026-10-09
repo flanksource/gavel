@@ -8,6 +8,8 @@ import {
   UiCheck,
   UiClose,
   UiComment,
+  UiGitMerge,
+  UiLinkExternal,
   UiListChecks,
   UiPlay,
   UiSeverityMedium,
@@ -31,7 +33,8 @@ import { TodoLabelsMenu } from './TodoLabelsMenu';
 import { buildTagIndex, todoVisibleLabels, type TagIndex } from './tagResolve';
 import { normalizeTag } from './tagPalette';
 import type { WorkspaceTodos } from './useWorkspaceTodos';
-import type { TodoItem } from '../../types';
+import type { TodoChildDisposition, TodoItem } from '../../types';
+import { childrenOf, openChildrenOf } from './todoFamily';
 
 /**
  * Turns the server's action catalog into the descriptors a selection toolbar
@@ -55,11 +58,48 @@ const ACTION_ICONS: Record<string, ComponentType<IconProps>> = {
   message: UiComment,
   trash: UiTrash,
   play: UiPlay,
+  merge: UiGitMerge,
+  github: UiLinkExternal,
 };
 
 function actionIcon(action: TodoBulkAction): ComponentType<IconProps> {
   return ACTION_ICONS[action.tool_hints?.icon ?? ''] ?? UiListChecks;
 }
+
+function todoCount(count: number): string {
+  return `${count} todo${count === 1 ? '' : 's'}`;
+}
+
+function openCount(count: number): string {
+  return `${count} open ${count === 1 ? 'child' : 'children'}`;
+}
+
+/** What each destructive action actually does to the checked rows. The catalog
+ *  publishes `destructiveHint` — an MCP hint that an action may change things
+ *  irreversibly, not that it deletes todos — so the copy lives here, keyed by
+ *  action name. An action with no entry confirms with its own catalog
+ *  description, never with another action's words: borrowing delete's once
+ *  asked to "permanently delete" a batch that was only being planned. */
+const DESTRUCTIVE_CONFIRMATIONS: Record<string, { message: (count: number) => string; confirmLabel: string }> = {
+  delete: {
+    message: count => `This permanently deletes ${todoCount(count)}.`,
+    confirmLabel: 'Delete',
+  },
+  merge: {
+    message: count =>
+      `This combines ${count} todos into the first one selected and retires the rest, using AI to write the merged description, verification and plan.`,
+    confirmLabel: 'Merge',
+  },
+  run: {
+    message: count => `This starts implementation runs on ${todoCount(count)}. Runs edit the repository.`,
+    confirmLabel: 'Run',
+  },
+  triage: {
+    message: count =>
+      `This triages ${todoCount(count)}. A duplicate or merge-into verdict closes the todo it folds away.`,
+    confirmLabel: 'Triage',
+  },
+};
 
 /**
  * Which actions get a named dropdown on the bar is derived from the catalog,
@@ -143,6 +183,8 @@ export function useTodoBulkContext(todos: WorkspaceTodos): {
   todos: TodoItem[];
   tags: TagIndex;
   labelCounts: Record<string, number>;
+  /** Selected parent ref → its children that are not completed. */
+  openChildren: Record<string, TodoItem[]>;
 } {
   const { selection, byDir, tagsByDir } = todos;
 
@@ -152,10 +194,16 @@ export function useTodoBulkContext(todos: WorkspaceTodos): {
     const wanted = new Set(targets.map(target => target.ref));
 
     const selected: TodoItem[] = [];
+    const openChildren: Record<string, TodoItem[]> = {};
     const counts: Record<string, number> = {};
     for (const dir of dirs) {
-      for (const todo of byDir[dir]?.items ?? []) {
-        if (wanted.has(todo.ref)) selected.push(todo);
+      const items = byDir[dir]?.items ?? [];
+      for (const todo of items) {
+        if (wanted.has(todo.ref)) {
+          selected.push(todo);
+          const open = openChildrenOf(childrenOf(items, todo.id));
+          if (open.length > 0) openChildren[todo.ref] = open;
+        }
         for (const label of new Set(todoVisibleLabels(todo).map(normalizeTag))) {
           counts[label] = (counts[label] ?? 0) + 1;
         }
@@ -164,7 +212,7 @@ export function useTodoBulkContext(todos: WorkspaceTodos): {
 
     const defs = [...dirs].flatMap(dir => tagsByDir?.get(dir)?.defs ?? []);
     const byName = new Map(defs.map(def => [def.name, def]));
-    return { todos: selected, tags: buildTagIndex([...byName.values()]), labelCounts: counts };
+    return { todos: selected, tags: buildTagIndex([...byName.values()]), labelCounts: counts, openChildren };
   }, [selection.selection, byDir, tagsByDir]);
 }
 
@@ -180,6 +228,11 @@ export interface TodoSelectionActionsOptions {
   todos?: TodoItem[];
   /** Per-label todo counts, for ordering the label menu by what this project uses. */
   labelCounts?: Record<string, number>;
+  /**
+   * Selected parent ref → its open children. Deleting one of those parents has
+   * to ask what becomes of them, so the delete action turns into that choice.
+   */
+  openChildren?: Record<string, TodoItem[]>;
   /** Label definitions, for the chips inside the label menu. */
   tags?: TagIndex;
   /** Reports each finished batch so the host can surface it. */
@@ -199,6 +252,7 @@ export function useTodoSelectionActions({
   todos,
   labelCounts,
   tags,
+  openChildren,
   onResult,
   onError,
 }: TodoSelectionActionsOptions): DataTableSelectionAction[] {
@@ -237,16 +291,49 @@ export function useTodoSelectionActions({
 
       // A destructive action can act on a selection the caller never
       // enumerated, so it asks first — and it asks with the count, which is the
-      // one number that makes the prompt worth stopping for.
+      // one number that makes the prompt worth stopping for. What it says
+      // happens to those rows is the action's own: merge keeps the work and
+      // retires the rows it folds in, and "permanently deletes" would be a lie
+      // about it.
       if (destructive) {
-        base.confirm = {
-          message: context =>
-            `This permanently deletes ${context.selectedRowIds.length} todo${context.selectedRowIds.length === 1 ? '' : 's'}.`,
-          confirmLabel: 'Delete',
+        const confirmation = DESTRUCTIVE_CONFIRMATIONS[action.name] ?? {
+          message: (count: number) => `${label} — ${todoCount(count)} selected.`,
+          confirmLabel: todoBulkActionShortLabel(action),
         };
-        // The server refuses without it; a UI confirmation is the caller saying
-        // it out loud.
-        base.onSelect = () => dispatch(action, { confirm: 'true' });
+        base.confirm = {
+          message: context => confirmation.message(context.selectedRowIds.length),
+          confirmLabel: confirmation.confirmLabel,
+        };
+        // Delete refuses without it, so the UI confirmation says it out loud —
+        // but only for an action that declares the parameter. Sending it to one
+        // that does not is a parameter the server never published.
+        const gated = 'confirm' in (action.param_schema?.properties ?? {});
+        base.onSelect = () => dispatch(action, gated ? { confirm: 'true' } : undefined);
+
+        // A removal of a parent with open children is not a yes/no: the server
+        // refuses it without a disposition for them. The action becomes that
+        // choice, and each option confirms in its own words.
+        const parents = (todos ?? []).filter(todo => openChildren?.[todo.ref]?.length);
+        if (action.method === 'DELETE' && parents.length > 0 && 'children' in (action.param_schema?.properties ?? {})) {
+          const summary = parents.map(parent => `“${parent.title}” (${openCount(openChildren![parent.ref].length)})`).join(', ');
+          const choose = (children: TodoChildDisposition, label: string, outcome: string): DataTableSelectionAction => ({
+            id: `${action.name}:${children}`,
+            label,
+            variant: children === 'archive' ? 'destructive' : 'outline',
+            disabled: refs.length === 0,
+            confirm: {
+              message: context => `${confirmation.message(context.selectedRowIds.length)} Open children of ${summary} ${outcome}.`,
+              confirmLabel: label,
+            },
+            onSelect: () => dispatch(action, { ...(gated ? { confirm: 'true' } : {}), children }),
+          });
+          delete base.confirm;
+          base.onSelect = () => {};
+          base.children = [
+            choose('archive', 'Archive children too', 'are archived too'),
+            choose('detach', 'Make them full todos', 'become full todos'),
+          ];
+        }
       }
 
       const choices = enumParam(action);
@@ -312,7 +399,7 @@ export function useTodoSelectionActions({
     // first-appearance order, so this ordering is the one the menu shows.
     return descriptors.sort((a, b) =>
       Number(a.section === 'Danger') - Number(b.section === 'Danger'));
-  }, [catalog, selection, runAction, onResult, onError]);
+  }, [catalog, selection, todos, openChildren, runAction, onResult, onError]);
 }
 
 /**
@@ -327,6 +414,7 @@ export function useTodoBulkToolbar({
   todos,
   labelCounts,
   tags,
+  openChildren,
   onApplied,
 }: Omit<TodoSelectionActionsOptions, 'onResult' | 'onError'> & {
   onApplied?: () => void;
@@ -337,12 +425,10 @@ export function useTodoBulkToolbar({
     ...(todos ? { todos } : {}),
     ...(labelCounts ? { labelCounts } : {}),
     ...(tags ? { tags } : {}),
+    ...(openChildren ? { openChildren } : {}),
     onResult: (result, action) => {
-      // "Started", not "ran": a run-shaped action dispatches agent sessions that
-      // land their edits later, so claiming the work is done would be a lie.
-      const verb = RUN_SHAPED_ACTIONS.has(action.name) ? 'Started' : 'Updated';
       toast({
-        message: todoBulkResultMessage(result, verb),
+        message: todoBulkResultMessage(result, todoBulkResultVerb(action.name)),
         tone: result.failed > 0 ? 'warning' : 'success',
         // A partial failure names each todo and why; that needs reading time.
         durationMs: result.failed > 0 ? 0 : undefined,
@@ -356,6 +442,15 @@ export function useTodoBulkToolbar({
 }
 
 const RUN_SHAPED_ACTIONS = new Set(['run', 'plan', 'triage']);
+
+/** The toast's verb. "Started", not "ran": a run-shaped action dispatches agent
+ *  sessions that land their edits later, so claiming the work is done would be
+ *  a lie. */
+export function todoBulkResultVerb(action: string): string {
+  if (RUN_SHAPED_ACTIONS.has(action)) return 'Started';
+  if (action === 'push') return 'Pushed';
+  return 'Updated';
+}
 
 /** Re-exported so a host can report a batch without importing the data layer. */
 export { todoBulkResultMessage };

@@ -2,9 +2,9 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -14,10 +14,11 @@ import (
 	"github.com/flanksource/gavel/pr/ui"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/lifecycle"
+	"github.com/flanksource/gavel/todos/query"
 	todoruntime "github.com/flanksource/gavel/todos/runtime"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/flanksource/gavel/verify"
-	"github.com/spf13/cobra"
+	"github.com/google/uuid"
 )
 
 var loadTodoProjects = ui.LoadProjects
@@ -46,33 +47,16 @@ func runTodosList(opts TodosListOptions) (any, error) {
 		}
 	}
 
-	filters := todos.DiscoveryFilters{}
+	filters := todos.DiscoveryFilters{TopLevelOnly: !opts.Children && strings.TrimSpace(opts.Parent) == ""}
 	if opts.Status != "" {
 		filters.IncludeStatuses = []types.Status{types.Status(opts.Status)}
 	} else if !opts.Done {
 		filters.ExcludeStatuses = []types.Status{types.StatusVerified, types.StatusCompleted}
 	}
 
-	ctx := context.Background()
-	var todoList types.TODOS
-	if opts.All {
-		projects, loadErr := loadTodoProjects()
-		if loadErr != nil {
-			return nil, loadErr
-		}
-		todoList, err = listAllProjectTodos(ctx, projects, filters)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		provider, err := newTodosProvider(workDir)
-		if err != nil {
-			return nil, err
-		}
-		todoList, err = provider.List(ctx, filters)
-		if err != nil {
-			return nil, err
-		}
+	todoList, err := listTodos(context.Background(), workDir, opts, filters)
+	if err != nil {
+		return nil, err
 	}
 	if !since.IsZero() {
 		todoList = filterTODOsSince(todoList, since)
@@ -84,6 +68,36 @@ func runTodosList(opts TodosListOptions) (any, error) {
 	}
 
 	return todoList, nil
+}
+
+// listTodos reads the rows a list shows: one TODO's children, every registered
+// project, or this workspace.
+//
+// --parent wins over --all because a parent's children all live in the parent's
+// workspace, and resolving it as a target finds that workspace even when the
+// caller is standing in another one.
+func listTodos(ctx context.Context, workDir string, opts TodosListOptions, filters todos.DiscoveryFilters) (types.TODOS, error) {
+	parentRef := strings.TrimSpace(opts.Parent)
+	if opts.All && parentRef == "" {
+		projects, err := loadTodoProjects()
+		if err != nil {
+			return nil, err
+		}
+		return query.ListWorkspaces(ctx, ui.TodoWorkspaces(projects), openRuntimeTodosProvider, filters)
+	}
+	provider, err := newTodosProvider(workDir)
+	if err != nil {
+		return nil, err
+	}
+	if parentRef == "" {
+		return provider.List(ctx, filters)
+	}
+	parents, err := resolveRequestedTargets(ctx, provider, workDir, []string{parentRef}, todos.DiscoveryFilters{})
+	if err != nil {
+		return nil, err
+	}
+	filters.ParentID = parents[0].Todo.ID
+	return parents[0].Provider.List(ctx, filters)
 }
 
 func filterTODOsSince(todoList types.TODOS, since time.Time) types.TODOS {
@@ -103,53 +117,11 @@ func filterTODOsSince(todoList types.TODOS, since time.Time) types.TODOS {
 	return filtered
 }
 
-// listAllProjectTodos aggregates TODOs from every registered workspace using
-// the native PostgreSQL runtime. Duplicate project entries that resolve to the
-// same directory are queried once; stored legacy provider preferences are
-// intentionally ignored because they can no longer select runtime storage.
-// Every database open/list failure is returned: treating an unavailable
-// database as an empty workspace would be a false successful result.
-func listAllProjectTodos(ctx context.Context, projects []ui.Project, filters todos.DiscoveryFilters) (types.TODOS, error) {
-	seen := map[string]struct{}{}
-	var todoList types.TODOS
-	var failures []error
-	for _, project := range projects {
-		dir := project.ResolvedDir()
-		if strings.TrimSpace(dir) == "" {
-			logger.Warnf("list todos for project %q: workspace directory is empty", project.Name)
-			continue
-		}
-		key := filepath.Clean(dir)
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-
-		provider, err := openRuntimeTodosProvider(ctx, dir)
-		if err != nil {
-			failures = append(failures, fmt.Errorf("open native TODO workspace for project %q (%s): %w", project.Name, dir, err))
-			continue
-		}
-		items, err := provider.List(ctx, filters)
-		if err != nil {
-			failures = append(failures, fmt.Errorf("list native TODOs for project %q (%s): %w", project.Name, dir, err))
-			continue
-		}
-		for _, todo := range items {
-			if todo != nil {
-				todo.Workspace = project.Name
-				if todo.CWD == "" {
-					todo.CWD = dir
-				}
-			}
-		}
-		todoList = append(todoList, items...)
+func runTodosGet(opts TodosGetOptions) error {
+	ref, err := opts.One()
+	if err != nil {
+		return err
 	}
-	todoList.Sort()
-	return todoList, errors.Join(failures...)
-}
-
-func runTodosGet(cmd *cobra.Command, args []string) error {
 	workDir, err := getWorkingDir()
 	if err != nil {
 		return fmt.Errorf("failed to get working directory: %w", err)
@@ -159,16 +131,50 @@ func runTodosGet(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	todo, err := provider.Get(context.Background(), args[0])
+	ctx := context.Background()
+	todo, err := provider.Get(ctx, ref)
 	if err != nil {
 		return err
 	}
 
 	fmt.Println(todo.PrettyDetailed().ANSI())
+	return printTodoChildren(ctx, provider, todo)
+}
+
+// printTodoChildren lists a parent's children as the rows `todos list` prints,
+// so each child shows the per-phase timings the dashboard shows for it. Done
+// children are included: the parent's view is where a finished child is found.
+func printTodoChildren(ctx context.Context, provider todos.Provider, todo *types.TODO) error {
+	if todo.ParentID != "" {
+		return nil
+	}
+	children, err := provider.List(ctx, todos.DiscoveryFilters{ParentID: todo.ID})
+	if err != nil {
+		return fmt.Errorf("list children of %s: %w", todo.DisplayID(), err)
+	}
+	if len(children) == 0 {
+		return nil
+	}
+	done := 0
+	for _, child := range children {
+		if child.Status == types.StatusVerified || child.Status == types.StatusCompleted {
+			done++
+		}
+	}
+	rows, err := clicky.Format(children)
+	if err != nil {
+		return fmt.Errorf("render children of %s: %w", todo.DisplayID(), err)
+	}
+	fmt.Println(clicky.Text(fmt.Sprintf("Children (%d/%d done)", done, len(children)), "text-blue-600 font-bold").ANSI())
+	fmt.Println(rows)
 	return nil
 }
 
-func runTodosCheck(cmd *cobra.Command, args []string) error {
+func runTodosCheck(opts TodosCheckOptions) error {
+	ids, err := opts.Many()
+	if err != nil {
+		return err
+	}
 	workDir, err := getWorkingDir()
 	if err != nil {
 		return fmt.Errorf("failed to get working directory: %w", err)
@@ -180,11 +186,7 @@ func runTodosCheck(cmd *cobra.Command, args []string) error {
 	}
 
 	logger.Infof("Discovering TODOs from PostgreSQL")
-	filters := todos.DiscoveryFilters{}
-	if filterStatus != "" {
-		filters.IncludeStatuses = []types.Status{types.Status(filterStatus)}
-	}
-	todoList, err := resolveRequestedTODOs(context.Background(), provider, args, filters)
+	todoList, err := ResolveRequested(context.Background(), provider, workDir, ids, todos.DiscoveryFilters{})
 	if err != nil {
 		return fmt.Errorf("failed to discover TODOs: %w", err)
 	}
@@ -205,10 +207,10 @@ func runTodosCheck(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	var request api.Spec
-	if checkTimeout > 0 {
-		request.Budget.Timeout = checkTimeout.String()
+	if opts.Timeout > 0 {
+		request.Budget.Timeout = opts.Timeout.String()
 	}
-	concurrency, err := resolveCheckConcurrency(workDir)
+	concurrency, err := resolveCheckConcurrency(workDir, opts.Concurrency)
 	if err != nil {
 		return err
 	}
@@ -257,15 +259,17 @@ func runTodosCheck(cmd *cobra.Command, args []string) error {
 
 func init() {
 	rootCmd.AddCommand(todosCmd)
-	todosCmd.AddCommand(todosRunCmd)
 	clicky.AddCommand(todosCmd, TodosListOptions{}, runTodosList)
-	todosCmd.AddCommand(todosGetCmd)
-	todosCmd.AddCommand(todosCheckCmd)
-
-	todosCheckCmd.Flags().StringVar(&filterStatus, "status", "", "Filter TODOs by status")
-	todosCheckCmd.Flags().DurationVar(&checkTimeout, "timeout", 0, "Test execution timeout (empty: .gavel.yaml todos.timeout, else 30m)")
-	todosCheckCmd.Flags().IntVar(&checkConcurrency, "concurrency", 0,
-		"How many TODOs to check at once (0: .gavel.yaml todos.checkConcurrency, else 4). Each check runs that TODO's fixture")
+	todosGetCmd = clicky.AddNamedCommand("get", todosCmd, TodosGetOptions{}, func(opts TodosGetOptions) (any, error) {
+		return nil, runTodosGet(opts)
+	})
+	todosGetCmd.Short = "Display detailed information about a PostgreSQL-backed TODO"
+	todosGetCmd.Use = "get <id>"
+	todosCheckCmd = clicky.AddNamedCommand("check", todosCmd, TodosCheckOptions{}, func(opts TodosCheckOptions) (any, error) {
+		return nil, runTodosCheck(opts)
+	})
+	todosCheckCmd.Short = "Run TODOs' fixture-backed definitions of done"
+	todosCheckCmd.Use = "check <id>..."
 }
 
 func newTodosProvider(workDir string) (todos.Provider, error) {
@@ -276,9 +280,9 @@ func newTodosProvider(workDir string) (todos.Provider, error) {
 // with the --concurrency flag on top. An unreadable .gavel.yaml is the check's
 // own error: every check resolves its verify chain from the same file, so
 // running on a default here would only defer the same failure to each todo.
-func resolveCheckConcurrency(workDir string) (int, error) {
-	if checkConcurrency > 0 {
-		return checkConcurrency, nil
+func resolveCheckConcurrency(workDir string, override int) (int, error) {
+	if override > 0 {
+		return override, nil
 	}
 	cfg, err := verify.LoadGavelConfig(workDir)
 	if err != nil {
@@ -287,38 +291,88 @@ func resolveCheckConcurrency(workDir string) (int, error) {
 	return cfg.Todos.CheckConcurrency, nil
 }
 
-// resolveRequestedTODOs preserves direct native reference semantics for UUIDs,
-// safe short IDs, and imported aliases. Listing first would discard legacy
-// aliases because list rows expose the canonical native UUID.
-func resolveRequestedTODOs(ctx context.Context, provider todos.Provider, args []string, filters todos.DiscoveryFilters) (types.TODOS, error) {
+// todoTarget is a resolved TODO together with the workspace that owns it: the
+// provider every subsequent write must go through, and the directory a run
+// executes in. They differ from the caller's own only for a TODO named by a UUID
+// from outside its workspace.
+type todoTarget struct {
+	Provider todos.Provider
+	WorkDir  string
+	Todo     *types.TODO
+}
+
+// resolveRequestedTargets resolves references to TODOs and the workspace each one
+// belongs to.
+//
+// A UUID names exactly one issue in the database, so it is resolved globally when
+// the caller's workspace does not hold it: requiring the right working directory
+// for an id that is already unique is a filter with nothing to disambiguate, and
+// it is how `todos run <uuid>` failed with "native todo record not found" for an
+// issue that existed the whole time. Short ids and titles stay workspace-scoped —
+// those genuinely can collide between projects.
+//
+// A TODO found this way is re-read through its owning workspace's provider, as
+// runtime.GlobalGet's contract requires: the global read reconciles nothing, and
+// acting through the caller's provider would write against the wrong working
+// directory and the wrong .gavel.yaml.
+func resolveRequestedTargets(ctx context.Context, provider todos.Provider, workDir string, args []string, filters todos.DiscoveryFilters) ([]todoTarget, error) {
+	local := func(todo *types.TODO) todoTarget {
+		return todoTarget{Provider: provider, WorkDir: workDir, Todo: todo}
+	}
 	if len(args) == 0 {
-		return provider.List(ctx, filters)
+		listed, err := provider.List(ctx, filters)
+		if err != nil {
+			return nil, err
+		}
+		targets := make([]todoTarget, 0, len(listed))
+		for _, todo := range listed {
+			targets = append(targets, local(todo))
+		}
+		return targets, nil
 	}
 
-	resolved := make(types.TODOS, 0, len(args))
+	resolved := make([]todoTarget, 0, len(args))
 	seen := map[string]struct{}{}
 	var listed types.TODOS
+
+	// recover handles a reference this workspace's Get could not resolve: a UUID
+	// owned elsewhere, else an exact title. getErr is preserved as the reported
+	// failure, because it describes the reference the caller actually typed.
+	recover := func(ref string, getErr error) (todoTarget, error) {
+		adopted, found, err := adoptGlobalUUID(ctx, provider, workDir, ref)
+		if err != nil {
+			return todoTarget{}, err
+		}
+		if found {
+			return adopted, nil
+		}
+		// Preserve exact-title CLI compatibility without replacing the native
+		// repository's prefix length and ambiguity checks.
+		if listed == nil {
+			var listErr error
+			if listed, listErr = provider.List(ctx, todos.DiscoveryFilters{}); listErr != nil {
+				return todoTarget{}, fmt.Errorf("%w (and listing todos to match %q by title failed: %v)", getErr, ref, listErr)
+			}
+		}
+		titleMatches := query.TitleMatches(listed, ref)
+		if len(titleMatches) != 1 {
+			// The provider's error describes the reference but never quotes it, so a
+			// batch of refs reported "short issue reference must contain at least 8
+			// characters" without saying which argument it meant.
+			return todoTarget{}, fmt.Errorf("resolve todo %q: %w", ref, getErr)
+		}
+		return local(titleMatches[0]), nil
+	}
+
 	for _, ref := range args {
+		target := local(nil)
 		todo, err := provider.Get(ctx, ref)
 		if err != nil {
-			// Preserve exact-title CLI compatibility without replacing the native
-			// repository's prefix length and ambiguity checks.
-			if listed == nil {
-				var listErr error
-				if listed, listErr = provider.List(ctx, todos.DiscoveryFilters{}); listErr != nil {
-					return nil, fmt.Errorf("%w (and listing todos to match %q by title failed: %v)", err, ref, listErr)
-				}
+			recovered, recoverErr := recover(ref, err)
+			if recoverErr != nil {
+				return nil, recoverErr
 			}
-			var titleMatches types.TODOS
-			for _, candidate := range listed {
-				if candidate != nil && strings.EqualFold(candidate.Title, ref) {
-					titleMatches = append(titleMatches, candidate)
-				}
-			}
-			if len(titleMatches) != 1 {
-				return nil, err
-			}
-			todo = titleMatches[0]
+			target, todo = recovered, recovered.Todo
 		}
 		if !filters.Matches(todo) {
 			continue
@@ -331,7 +385,89 @@ func resolveRequestedTODOs(ctx context.Context, provider todos.Provider, args []
 			continue
 		}
 		seen[key] = struct{}{}
-		resolved = append(resolved, todo)
+		target.Todo = todo
+		resolved = append(resolved, target)
+	}
+	sort.SliceStable(resolved, func(i, j int) bool {
+		return todoSortKey(resolved[i].Todo) < todoSortKey(resolved[j].Todo)
+	})
+	return resolved, nil
+}
+
+// adoptGlobalUUID resolves a UUID that the caller's workspace does not hold, and
+// returns it bound to the workspace that does.
+//
+// Only a UUID qualifies: it identifies one issue in the whole database, so there
+// is nothing for a workspace filter to disambiguate. It reports found=false for
+// anything else, and for a UUID nothing owns, so the caller falls through to its
+// own error — a global miss must not mask the workspace-scoped message.
+func adoptGlobalUUID(ctx context.Context, provider todos.Provider, workDir, ref string) (todoTarget, bool, error) {
+	ref = strings.TrimSpace(ref)
+	if _, err := uuid.Parse(ref); err != nil {
+		return todoTarget{}, false, nil
+	}
+	global, ok := provider.(todos.GlobalReferenceProvider)
+	if !ok {
+		return todoTarget{}, false, nil
+	}
+	todo, err := global.GetGlobal(ctx, ref)
+	if err != nil || todo == nil {
+		return todoTarget{}, false, nil
+	}
+	owner := strings.TrimSpace(todo.CWD)
+	if owner == "" || !filepath.IsAbs(owner) || filepath.Clean(owner) == filepath.Clean(workDir) {
+		return todoTarget{Provider: provider, WorkDir: workDir, Todo: todo}, true, nil
+	}
+	// The global read reconciles nothing and carries the caller's working
+	// directory nowhere, so the owning workspace re-reads its own issue.
+	owned, err := openRuntimeTodosProvider(ctx, owner)
+	if err != nil {
+		return todoTarget{}, false, fmt.Errorf("todo %s belongs to workspace %s, which could not be opened: %w",
+			ref, owner, err)
+	}
+	reread, err := owned.Get(ctx, todo.ID)
+	if err != nil {
+		return todoTarget{}, false, fmt.Errorf("todo %s belongs to workspace %s, which could not read it: %w",
+			ref, owner, err)
+	}
+	logger.Infof("TODO %s belongs to %s; running there", reread.ShortID, owner)
+	return todoTarget{Provider: owned, WorkDir: owner, Todo: reread}, true, nil
+}
+
+// todoSortKey mirrors types.TODOS.Sort's ordering — priority, then name — for a
+// slice that carries a provider alongside each TODO.
+func todoSortKey(todo *types.TODO) string {
+	if todo == nil {
+		return ""
+	}
+	order := map[types.Priority]int{types.PriorityHigh: 0, types.PriorityMedium: 1, types.PriorityLow: 2}
+	rank, ok := order[todo.Priority]
+	if !ok {
+		rank = 9
+	}
+	return fmt.Sprintf("%d:%s", rank, strings.ToLower(todos.TODOReference(todo)))
+}
+
+// resolveRequestedTODOs resolves references for a command that acts through the
+// single provider it opened for the current workspace.
+//
+// A UUID naming a TODO in another workspace resolves — that is the point — but it
+// is refused here rather than acted on through the wrong provider, which would
+// write against this directory's .gavel.yaml and working tree. Commands that
+// support running elsewhere use resolveRequestedTargets and honour each target's
+// own workspace.
+func ResolveRequested(ctx context.Context, provider todos.Provider, workDir string, args []string, filters todos.DiscoveryFilters) (types.TODOS, error) {
+	targets, err := resolveRequestedTargets(ctx, provider, workDir, args, filters)
+	if err != nil {
+		return nil, err
+	}
+	resolved := make(types.TODOS, 0, len(targets))
+	for _, target := range targets {
+		if target.WorkDir != workDir {
+			return nil, fmt.Errorf("todo %s belongs to workspace %s; run this command from there (--cwd %s)",
+				todos.TODOReference(target.Todo), target.WorkDir, target.WorkDir)
+		}
+		resolved = append(resolved, target.Todo)
 	}
 	resolved.Sort()
 	return resolved, nil

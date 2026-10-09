@@ -29,6 +29,7 @@ export interface RouteState {
   filters: Filters;
   lintGrouping: LintGrouping;
   lintFilters: LintFilters;
+  sampleIndex?: number;
 }
 
 export type ExportFormat = 'json' | 'md' | 'pdf';
@@ -54,6 +55,7 @@ export function parseRoute(location: Location): RouteState {
   }
 
   const params = new URLSearchParams(location.search);
+	const sample = params.get('sample');
   const rawStatus = params.get('status');
   let status: FilterState<string>;
   if (rawStatus === null) {
@@ -75,6 +77,7 @@ export function parseRoute(location: Location): RouteState {
       severity: decodeFilterState(splitCSV(params.get('severity')) as any[]),
       linter: decodeFilterState(splitCSV(params.get('linter'))),
     },
+		sampleIndex: sample !== null && /^\d+$/.test(sample) ? Number(sample) : undefined,
   };
 }
 
@@ -99,6 +102,7 @@ export function buildRoute(state: RouteState): string {
     if (state.lintFilters.severity.size > 0) params.set('severity', encodeFilterState(state.lintFilters.severity).join(','));
     if (state.lintFilters.linter.size > 0) params.set('linter', encodeFilterState(state.lintFilters.linter).join(','));
   }
+	if (state.tab === 'bench' && state.sampleIndex !== undefined) params.set('sample', String(state.sampleIndex));
 
   const query = params.toString();
   return `${basePath}/${segments.join('/')}${query ? `?${query}` : ''}`;

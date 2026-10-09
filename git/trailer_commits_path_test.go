@@ -55,35 +55,33 @@ var _ = Describe("CommitDiff file argument", func() {
 	})
 
 	It("passes a shell-metacharacter path as one inert argument", func() {
-		diff, _, err := CommitDiff(dir, head, shellMetaName)
+		result, err := CommitDiff(dir, CommitDiffOptions{Head: head, File: shellMetaName})
 		Expect(err).ToNot(HaveOccurred())
-		Expect(stripANSI(diff)).To(ContainSubstring(shellMetaName))
+		Expect(result.Diff).To(ContainSubstring(shellMetaName))
 		_, statErr := os.Stat(filepath.Join(dir, sentinelName))
 		Expect(os.IsNotExist(statErr)).To(BeTrue(),
 			"a shell evaluated the file argument and created %s", sentinelName)
 	})
 
 	It("still returns the patch for an ordinary path", func() {
-		diff, truncated, err := CommitDiff(dir, head, plainName)
+		result, err := CommitDiff(dir, CommitDiffOptions{Head: head, File: plainName})
 		Expect(err).ToNot(HaveOccurred())
-		Expect(truncated).To(BeFalse())
-		plain := stripANSI(diff)
-		Expect(plain).To(ContainSubstring(plainName))
-		Expect(plain).To(ContainSubstring("+" + strings.TrimSuffix(plainBody, "\n")))
-		Expect(plain).ToNot(ContainSubstring(shellMetaName), "the diff must stay scoped to one path")
+		Expect(result.Truncated).To(BeFalse())
+		Expect(result.Diff).To(ContainSubstring(plainName))
+		Expect(result.Diff).To(ContainSubstring("+" + strings.TrimSuffix(plainBody, "\n")))
+		Expect(result.Diff).ToNot(ContainSubstring(shellMetaName), "the diff must stay scoped to one path")
 	})
 
 	It("still returns the whole commit when no path is given", func() {
-		diff, _, err := CommitDiff(dir, head, "")
+		result, err := CommitDiff(dir, CommitDiffOptions{Head: head})
 		Expect(err).ToNot(HaveOccurred())
-		plain := stripANSI(diff)
-		Expect(plain).To(ContainSubstring(plainName))
-		Expect(plain).To(ContainSubstring(shellMetaName))
+		Expect(result.Diff).To(ContainSubstring(plainName))
+		Expect(result.Diff).To(ContainSubstring(shellMetaName))
 	})
 
 	DescribeTable("rejects a path git would reinterpret instead of reading literally",
 		func(file, wantReason string) {
-			_, _, err := CommitDiff(dir, head, file)
+			_, err := CommitDiff(dir, CommitDiffOptions{Head: head, File: file})
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring(wantReason))
 			// The message quotes the rejected value so control characters stay
@@ -110,6 +108,8 @@ var _ = DescribeTable("validateDiffPath accepts ordinary repository paths",
 	},
 	Entry("bare file", plainName),
 	Entry("nested file", "pkg/sub/main.go"),
+	Entry("directory", "pkg/sub"),
+	Entry("directory with trailing slash", "pkg/sub/"),
 	Entry("dot-prefixed file", ".gavel.yaml"),
 	Entry("single-dot segment", "./"+plainName),
 	Entry("shell metacharacters", shellMetaName),

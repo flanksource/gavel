@@ -6,9 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/flanksource/captain/pkg/api"
 	captaindb "github.com/flanksource/captain/pkg/database"
-	"github.com/flanksource/captain/pkg/runtimeprofiles"
+	"github.com/flanksource/captain/pkg/promptrun"
 	"github.com/flanksource/gavel/todos/labels"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/google/uuid"
@@ -59,16 +58,30 @@ type Provider interface {
 	Delete(ctx context.Context, todo *types.TODO) error
 	// Edit updates a TODO's content fields in place.
 	Edit(ctx context.Context, todo *types.TODO, edit EditRequest) error
-	// Comment appends a free-form comment to a TODO's history.
-	Comment(ctx context.Context, todo *types.TODO, body string) error
+	// Comment appends a comment to a TODO's history: free-form, or anchored to
+	// one diff line of a run's branch.
+	Comment(ctx context.Context, todo *types.TODO, comment CommentRequest) error
 	UpdateState(ctx context.Context, todo *types.TODO, updates StateUpdate) error
 	UpdateLatestFailure(ctx context.Context, todo *types.TODO, result *types.TestResultInfo) error
 	SaveAttempt(ctx context.Context, todo *types.TODO, result *ExecutionResult) error
 }
 
-// RunPreparation is the durable identity needed before an external agent is
-// dispatched. PostgreSQL-backed providers use it to create and attach the
-// authoritative Captain prompt run before any provider session starts.
+// CommentRequest is one comment appended to a TODO. Anchor pins it to one diff
+// line of a run's branch; nil is a free-form comment.
+type CommentRequest struct {
+	Body   string
+	Anchor *types.LineCommentAnchor
+}
+
+// CommentResolutionProvider resolves or reopens a comment already recorded on
+// a TODO's history. The comment must be a comment of that TODO.
+type CommentResolutionProvider interface {
+	ResolveComment(ctx context.Context, todo *types.TODO, resolution types.CommentResolution) error
+}
+
+// RunPreparation is what a dispatch asks of the durable runtime before an
+// external agent is started: which step it runs, who runs it, and whether it
+// continues or runs alongside a live run.
 type RunPreparation struct {
 	Mode types.RunMode
 	// Prompt is the name of the prompt being dispatched. Several prompts share a
@@ -83,19 +96,14 @@ type RunPreparation struct {
 	// distinct Captain identities and each reports its own outcome.
 	Concurrent bool
 	Requested  captaindb.PromptRunRuntimeSelection
-	// Spec is the exact request the executor will dispatch — model, budget,
-	// permissions, setup, workflow and the rendered user prompt. Native storage
-	// persists it on Captain's prompt run before external execution, so a later
-	// continuation replays what actually ran instead of reconstructing it from
-	// the run's resolved model/backend labels.
-	Spec           api.Spec
-	RuntimeProfile *runtimeprofiles.Resolution
-	SpecTrace      []api.SpecLayer
+	// PromptMarkdown is the rendered user prompt the run is given: the prompt
+	// Captain files on the run, and the answer a resumed ask records.
+	PromptMarkdown string
 }
 
-// RunPreparationResult is the durable Captain identity allocated before an
-// external agent is dispatched. SessionID is Captain's admission session UUID,
-// not the provider-specific session identity reported after launch.
+// RunPreparationResult is the durable Captain identity a dispatch runs under.
+// SessionID is Captain's admission session UUID, not the provider-specific
+// session identity reported after launch.
 type RunPreparationResult struct {
 	SessionID string
 	// PromptRunID is the run this execution owns. With concurrent runs allowed
@@ -104,37 +112,25 @@ type RunPreparationResult struct {
 	PromptRunID uuid.UUID
 }
 
+// RunAdmission is a dispatch the runtime has cleared: the identity it runs
+// under, and the Recording Captain admits it with. Captain writes every
+// captain_* row — the sessions, the run and its lifecycle — while Record.Link
+// writes only the runtime's own rows, inside the admission transaction.
+type RunAdmission struct {
+	RunPreparationResult
+	Record *promptrun.Recording
+}
+
 // RunLifecycleProvider is implemented by the native PostgreSQL runtime. Native
 // execution state is owned by Captain and projected into issues.
 type RunLifecycleProvider interface {
-	PrepareRun(ctx context.Context, todo *types.TODO, preparation RunPreparation) (RunPreparationResult, error)
-	RecordRunStart(ctx context.Context, todo *types.TODO, metadata RunStartMetadata) error
-}
-
-// RunProgressProvider persists the in-flight verification report a definition of
-// done publishes while it runs, so the dashboard can watch the tree fill in
-// rather than waiting for the verdict.
-type RunProgressProvider interface {
-	RecordRunProgress(ctx context.Context, todo *types.TODO, report api.VerifyReport) error
-}
-
-// RunNoticeProvider persists what a run's lifecycle hooks did — the commits they
-// cut between turns — into the session transcript. Flushed once the run is over,
-// because a hook firing mid-turn cannot yet know the transcript session's id:
-// that row only exists after the provider's log has been ingested.
-type RunNoticeProvider interface {
-	RecordRunNotices(ctx context.Context, sessionID string, notices []api.Notice) error
-}
-
-// RunIterationProvider files the per-turn account of a run under the prompt
-// run captain admitted: what each turn was asked, how it ended, and the
-// verification report that judged it. Captain derives the rows
-// (promptrun.IterationRecords); the host that dispatched the run writes them,
-// because captain's own CLI is the only host captain persists for. A run whose
-// rows are never written has no verification report anywhere the dashboard or
-// the lifecycle's run history reads from.
-type RunIterationProvider interface {
-	RecordRunIterations(ctx context.Context, promptRunID uuid.UUID, records []captaindb.UpsertPromptRunIterationInput) error
+	// PrepareRun decides whether and how a run may be dispatched — live-run
+	// ownership, resume, concurrency — and returns the Recording Captain admits
+	// it with. It writes no captain_* row.
+	PrepareRun(ctx context.Context, todo *types.TODO, preparation RunPreparation) (RunAdmission, error)
+	// RunAdmitted is told once Captain committed the admission: this process
+	// now drives the run, and the todo is re-read as the admission left it.
+	RunAdmitted(ctx context.Context, todo *types.TODO, admission RunPreparationResult) error
 }
 
 // GlobalReferenceProvider resolves a native UUID or imported alias without a
@@ -296,6 +292,13 @@ type LabelDefinitionProvider interface {
 	LabelCounts(ctx context.Context) (map[string]int, error)
 }
 
+// ParentProvider attaches a TODO to a parent, or detaches it when parentRef is
+// empty. The hierarchy is a single level: the parent must be a top-level TODO in
+// the same workspace, and a TODO that has children cannot become a child.
+type ParentProvider interface {
+	SetParent(ctx context.Context, todo *types.TODO, parentRef string) error
+}
+
 type CreateRequest struct {
 	Title        string
 	Body         string
@@ -306,6 +309,23 @@ type CreateRequest struct {
 	Path         types.StringOrSlice
 	Labels       []string
 	Metadata     map[string]any
+	// Parent is the ref of the top-level TODO the new one is a child of.
+	Parent string
+	// NoParent keeps the new TODO top-level even when Origin names a TODO in
+	// this workspace. The origin is still recorded.
+	NoParent bool
+	// Origin is the run the TODO is being created inside. With neither Parent
+	// nor NoParent set, an origin TODO in this workspace makes the new TODO a
+	// child of that TODO's top-level TODO.
+	Origin *CreateOrigin
+}
+
+// CreateOrigin is the run a TODO was created inside: the TODO that run was
+// working on and the agent session doing the work. The provider never reads the
+// environment; callers build this from it (see ops.OriginFromEnv).
+type CreateOrigin struct {
+	IssueID   string
+	SessionID string
 }
 
 type CreatePlanRequest struct {

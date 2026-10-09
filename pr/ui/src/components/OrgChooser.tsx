@@ -2,21 +2,19 @@ import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import type { MouseEvent as ReactMouseEvent } from 'react';
 import { Button } from '@flanksource/clicky-ui/components';
-import type { Org, SearchConfig } from '../types';
-import { UiCheck, UiChevronDown, UiChevronRight, UiEye, UiEyeClosed, UiGlobe, UiOrganization, UiUser } from '@flanksource/clicky-ui/icons';
+import type { Org, Project, SearchConfig } from '../types';
+import { UiCheck, UiChevronDown, UiChevronRight, UiEye, UiEyeClosed, UiFolder, UiGlobe, UiOrganization, UiUser } from '@flanksource/clicky-ui/icons';
 import { orgsQuery } from './oneShotQueries';
 
 interface Props {
   config: SearchConfig;
+  projects: Project[];
   onChange: (partial: Partial<SearchConfig>) => void;
 }
 
-// OrgChooser shows the currently-selected org (or "@me" when no org is
-// selected) and lets the user switch between org-wide browsing and
-// personal-only browsing. Selecting an org writes `{ org, all: true }`;
-// selecting @me clears to `{ org: '', all: false }`, scoping the fetch to the
-// local repo. Author/bot narrowing is handled client-side by the Authors
-// filter, not here.
+// OrgChooser is the dashboard-wide scope switcher. Projects bind their repos
+// to PR results and their workspace to local views such as Todos; GitHub scopes
+// retain the existing org-wide and personal browsing modes.
 //
 // Orgs are fetched lazily on first open via /api/orgs?include-ignored=1 —
 // the server caches the underlying list for 5 minutes, so the dropdown
@@ -24,7 +22,7 @@ interface Props {
 // render an inline "Manage hidden" section so users can unhide without
 // juggling a second endpoint.
 
-export function OrgChooser({ config, onChange }: Props) {
+export function OrgChooser({ config, projects, onChange }: Props) {
   const [open, setOpen] = useState(false);
   const [showHidden, setShowHidden] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -51,12 +49,22 @@ export function OrgChooser({ config, onChange }: Props) {
   const visibleOrgs = orgs.filter(o => !ignoredSet.has(o.login));
   const hiddenOrgs = orgs.filter(o => ignoredSet.has(o.login));
 
-  const activeOrg = config.all ? (config.org || '') : '';
-  // Three display modes: a specific org (label = its login), org-wide with
-  // no explicit org (label = "All orgs" — the daemon picks the default via
-  // ResolveDefaultOrg), or personal scope (label = "@me").
+  const activeProject = config.project || '';
+  const projectRepos = Array.from(new Set(projects.flatMap(project => project.repos)));
+  const allProjectsSelected = projects.length > 0
+    && !activeProject
+    && !config.all
+    && config.repos.length === projectRepos.length
+    && projectRepos.every(repo => config.repos.includes(repo));
+  const activeOrg = !activeProject && config.all ? (config.org || '') : '';
+  // Five display modes: a project, all projects, a specific org, org-wide with
+  // no explicit org, or personal scope.
   let label: string;
-  if (!config.all) {
+  if (activeProject) {
+    label = activeProject;
+  } else if (allProjectsSelected) {
+    label = 'All projects';
+  } else if (!config.all) {
     label = '@me';
   } else if (activeOrg) {
     label = activeOrg;
@@ -65,22 +73,32 @@ export function OrgChooser({ config, onChange }: Props) {
   }
   const activeOrgMeta = activeOrg ? orgs.find(o => o.login === activeOrg) : undefined;
 
+  function chooseProject(project: Project) {
+    onChange({ project: project.name, repos: project.repos, org: '', all: false });
+    setOpen(false);
+  }
+
+  function chooseAllProjects() {
+    onChange({ project: '', repos: projectRepos, org: '', all: false });
+    setOpen(false);
+  }
+
   function chooseOrg(login: string) {
     // Selecting an org implies org-wide mode. Clear the repo list because
     // old repo filters are almost always from a different org.
-    onChange({ org: login, all: true, repos: [] });
+    onChange({ project: '', org: login, all: true, repos: [] });
     setOpen(false);
   }
 
   function chooseMe() {
-    onChange({ org: '', all: false, repos: [] });
+    onChange({ project: '', org: '', all: false, repos: [] });
     setOpen(false);
   }
 
   // Org-wide browsing without pinning a specific org — daemon's
   // ResolveDefaultOrg picks one (skipping ignored orgs) each search.
   function chooseAllOrgs() {
-    onChange({ org: '', all: true, repos: [] });
+    onChange({ project: '', org: '', all: true, repos: [] });
     setOpen(false);
   }
 
@@ -88,8 +106,8 @@ export function OrgChooser({ config, onChange }: Props) {
     e.stopPropagation(); // don't also select it
     const next = Array.from(new Set([...ignoredOrgs, login]));
     const patch: Partial<SearchConfig> = { ignoredOrgs: next };
-    // If the user just hid the currently-selected org, drop back to @me
-    // so the next poll doesn't keep fetching PRs from a hidden org.
+    // If the user just hid the currently-selected org, drop back to @me so the
+    // next poll doesn't keep fetching PRs from a hidden org.
     if (config.org === login) {
       patch.org = '';
       patch.all = false;
@@ -106,34 +124,80 @@ export function OrgChooser({ config, onChange }: Props) {
   const HiddenChevron = showHidden ? UiChevronDown : UiChevronRight;
 
   return (
-    <div className="relative" ref={rootRef}>
+    <div className="relative min-w-0" ref={rootRef}>
       <Button
         variant="ghost"
-        className="inline-flex items-center justify-start gap-1.5 text-xs h-auto px-2 py-1 rounded border border-border text-muted-foreground hover:bg-muted transition-colors"
+        className="inline-flex max-w-full items-center justify-start gap-1.5 text-xs h-auto px-2 py-1 rounded border border-border text-muted-foreground hover:bg-muted transition-colors"
         onClick={() => setOpen(!open)}
-        title="Switch GitHub org / scope"
+        title="Switch project / GitHub scope"
       >
-        {activeOrgMeta?.avatarUrl ? (
+        {activeProject || allProjectsSelected ? (
+          <UiFolder className="shrink-0 text-sm" />
+        ) : activeOrgMeta?.avatarUrl ? (
           <img src={activeOrgMeta.avatarUrl} alt={activeOrg} className="w-4 h-4 rounded-sm" />
         ) : (
-          <UiOrganization className="text-sm" />
+          <UiOrganization className="shrink-0 text-sm" />
         )}
-        <span className="font-medium">{label}</span>
-        <UiChevronDown className="text-[10px]" />
+        <span className="truncate font-medium">{label}</span>
+        <UiChevronDown className="shrink-0 text-[10px]" />
       </Button>
 
       {open && (
-        <div className="absolute top-full right-0 mt-1 w-72 bg-popover rounded-lg shadow-lg border border-border z-50 py-1 text-sm">
+        <div className="absolute top-full right-0 mt-1 max-h-[min(32rem,calc(100vh-4rem))] w-72 overflow-y-auto bg-popover rounded-lg shadow-lg border border-border z-50 py-1 text-sm">
+          {projects.length > 0 && (
+            <>
+              <div className="px-3 pb-1 pt-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                Projects
+              </div>
+              <Button
+                variant="ghost"
+                className={`w-full flex items-center justify-start gap-2 h-auto px-3 py-1.5 text-left transition-colors ${
+                  allProjectsSelected ? 'bg-primary/10 text-primary' : 'hover:bg-muted text-foreground'
+                }`}
+                aria-label="Filter by all projects"
+                onClick={chooseAllProjects}
+              >
+                <UiFolder className="shrink-0 text-base" />
+                <span className="min-w-0 flex-1 truncate">All projects</span>
+                {allProjectsSelected && <UiCheck className="text-xs" />}
+              </Button>
+              {projects.map(project => {
+                const selected = activeProject === project.name;
+                return (
+                  <Button
+                    key={project.name}
+                    variant="ghost"
+                    className={`w-full flex items-center justify-start gap-2 h-auto px-3 py-1.5 text-left transition-colors ${
+                      selected ? 'bg-primary/10 text-primary' : 'hover:bg-muted text-foreground'
+                    }`}
+                    aria-label={`Filter by ${project.name} project`}
+                    onClick={() => chooseProject(project)}
+                  >
+                    <UiFolder className="shrink-0 text-base" />
+                    <span className="min-w-0 flex-1 truncate">{project.name}</span>
+                    {selected && <UiCheck className="text-xs" />}
+                  </Button>
+                );
+              })}
+              <div className="border-t border-border my-1" />
+            </>
+          )}
+
+          <div className="px-3 pb-1 pt-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+            GitHub scope
+          </div>
           <Button
             variant="ghost"
             className={`w-full flex items-center justify-start gap-2 h-auto px-3 py-1.5 text-left transition-colors ${
-              !config.all ? 'bg-primary/10 text-primary' : 'hover:bg-muted text-foreground'
+              !activeProject && !allProjectsSelected && !config.all
+                ? 'bg-primary/10 text-primary'
+                : 'hover:bg-muted text-foreground'
             }`}
             onClick={chooseMe}
           >
             <UiUser className="text-base" />
             <span className="flex-1">@me (my PRs)</span>
-            {!config.all && <UiCheck className="text-xs" />}
+            {!activeProject && !allProjectsSelected && !config.all && <UiCheck className="text-xs" />}
           </Button>
 
           <Button
@@ -167,6 +231,7 @@ export function OrgChooser({ config, onChange }: Props) {
                 <Button
                   variant="ghost"
                   className="flex-1 flex items-center justify-start gap-2 h-auto p-0 text-left"
+                  aria-label={`Select ${o.login} organization`}
                   onClick={() => chooseOrg(o.login)}
                 >
                   {o.avatarUrl
@@ -179,7 +244,7 @@ export function OrgChooser({ config, onChange }: Props) {
                   variant="ghost"
                   className="h-auto p-0 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-red-500 transition-opacity"
                   title={`Hide ${o.login} from this list`}
-                  onClick={(e) => hideOrg(o.login, e)}
+                  onClick={(e: ReactMouseEvent) => hideOrg(o.login, e)}
                 >
                   <UiEyeClosed className="text-xs" />
                 </Button>
@@ -211,7 +276,7 @@ export function OrgChooser({ config, onChange }: Props) {
                     variant="ghost"
                     className="h-auto p-0 text-muted-foreground hover:text-primary transition-colors"
                     title={`Unhide ${o.login}`}
-                    onClick={(e) => unhideOrg(o.login, e)}
+                    onClick={(e: ReactMouseEvent) => unhideOrg(o.login, e)}
                   >
                     <UiEye className="text-xs" />
                   </Button>

@@ -16,9 +16,10 @@ import (
 // started, the session it started under, and the message to show. The run
 // itself continues in the background.
 type StartResult struct {
-	Status    string
-	SessionID string
-	Message   string
+	Status      string
+	SessionID   string
+	Message     string
+	PromptRunID uuid.UUID
 	// Done receives the run's final error (nil on success) once the background
 	// run has applied its outcome, then closes. A caller that must block on the
 	// run — the CLI — reads it; an HTTP handler ignores it. Nil means there is
@@ -42,10 +43,14 @@ type Request struct {
 	// Options is what the caller decided; everything else comes from the
 	// lifecycle definition.
 	Options Options
-	// Broker answers the run's tool-permission requests. Only a caller that
-	// serves an approval surface supplies one — the CLI leaves it nil, because a
-	// run that asked it for a decision would block until its timeout.
-	Broker todos.ApprovalBroker
+	// Approvals enables Captain's broker for an attended run.
+	Approvals bool
+	// OnComplete reports the finished run to the caller before its outcome is
+	// persisted, so a terminal can print what the agent said even when the write
+	// that follows fails. The status is the one the lifecycle decided, not the
+	// one on the TODO, for the same reason: reading it back would depend on the
+	// write having succeeded. Nil for a caller that only needs Done's error.
+	OnComplete func(outcome *lifecycle.StepOutcome, status string, err error)
 	// Prepared is the resolution a caller already performed as its pre-flight.
 	// Start dispatches exactly that fold instead of folding again, so the step
 	// and session it reported cannot differ from the ones that run: a todo that
@@ -67,7 +72,11 @@ type Options struct {
 	// Step names the lifecycle step to run. Empty runs the step the lifecycle
 	// picks next for this todo.
 	Step string
-	// RuntimeProfile selects a catalog profile by name or ID before spec layers fold.
+	// Presets select ordered catalog runtime layers before spec layers fold.
+	Presets    []string
+	PresetsSet bool
+	// RuntimeProfile is deprecated. It is accepted only to emit a warning and is
+	// ignored by runtime resolution.
 	RuntimeProfile string
 	// Request is the caller's explicit spec — parsed CLI flags or the dashboard
 	// payload — folded as the TOP layer. A knob the caller did not set must
@@ -87,8 +96,24 @@ type Options struct {
 	// owned by a running process, instead of refusing. It is never a default:
 	// the caller sets it after confirming (--force, or the dashboard dialog).
 	Concurrent bool
-	// Host is the entrypoint; it decides the permission posture the host itself
-	// contributes. See lifecycle.HostKind.
+	// ReuseBranch continues on the branch the todo's previous run step left
+	// behind — with its commits — instead of a fresh worktree. It names one
+	// todo's branch, so a request covering several todos refuses it.
+	ReuseBranch bool
+	// Batch are the refs of every todo in the request this run belongs to. A
+	// triage render marks those backlog entries, because their verdicts are being
+	// decided alongside this one and a fold naming an already-closed TODO is
+	// refused. Empty for a single-todo run.
+	Batch []string
+	// Preview holds back a triage verdict that would close a TODO and reports what
+	// it would have done. Every other verdict, and every other step, is unaffected.
+	//
+	// It is not DryRun's sibling despite the name: DryRun stops before the agent
+	// runs at all, so it can never show a verdict. This runs the agent and stops
+	// before the one write a later run cannot undo.
+	Preview bool
+	// Host is the entrypoint the run was started from. It contributes no spec
+	// layer; see lifecycle.HostKind.
 	Host lifecycle.HostKind
 }
 

@@ -222,15 +222,6 @@ func TestTodoAPIPlanRevise(t *testing.T) {
 	}
 }
 
-// seedActivePhase records the phase the todo's current attempt runs, the way the
-// native runtime's phase index marks it: the latest run of that phase is the
-// todo's active pointer, parked at waiting by the ask outcome.
-func seedActivePhase(todo *types.TODO, phase types.Phase) {
-	todo.PhaseRuns = types.PhaseRuns{phase: {
-		Phase: phase, State: string(captaindb.PromptRunStateWaiting), Active: true,
-	}}
-}
-
 // Answering resumes the step that asked, with the answer as the next turn.
 func TestTodoAPIAnswer(t *testing.T) {
 	workDir := t.TempDir()
@@ -240,13 +231,14 @@ func TestTodoAPIAnswer(t *testing.T) {
 	if err := uiTestProviderFor(workDir).UpdateState(t.Context(), created, todos.StateUpdate{SessionID: &sid}); err != nil {
 		t.Fatalf("seed session: %v", err)
 	}
-	seedActivePhase(created, types.PlanPhase)
+	seedAskingAttempt(uiTestProviderFor(workDir), sid, types.PlanPhase)
 	got, _ := stubRunStart(t)
 
 	body, _ := json.Marshal(todoAnswerPayload{
-		Ref:     todos.TODOReference(created),
-		Answer:  "use postgres",
-		Options: &todoRunPayload{Spec: api.Spec{Model: api.Model{Name: "claude", Mode: api.ModeAgent, Effort: "medium"}}},
+		Ref:       todos.TODOReference(created),
+		SessionID: sid,
+		Answer:    "use postgres",
+		Options:   &todoRunPayload{Spec: api.Spec{Model: api.Model{Name: "claude", Mode: api.ModeAgent, Effort: "medium"}}},
 	})
 	rec := httptest.NewRecorder()
 	s.handleTodoAnswer(rec, httptest.NewRequest(http.MethodPost, "/api/todos/answer", strings.NewReader(string(body))))
@@ -276,7 +268,7 @@ func TestTodoAPIAnswerRejectsWrongState(t *testing.T) {
 	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
 	created := seedReviewTodo(t, workDir, types.StatusPending)
 
-	body, _ := json.Marshal(todoAnswerPayload{Ref: todos.TODOReference(created), Answer: "hello"})
+	body, _ := json.Marshal(todoAnswerPayload{Ref: todos.TODOReference(created), SessionID: "sess-answer-wrong-state", Answer: "hello"})
 	rec := httptest.NewRecorder()
 	s.handleTodoAnswer(rec, httptest.NewRequest(http.MethodPost, "/api/todos/answer", strings.NewReader(string(body))))
 	if rec.Code != http.StatusConflict {
@@ -305,10 +297,84 @@ func seedAskTodoWithRun(t *testing.T, workDir, sessionID string, phase types.Pha
 	if err := provider.UpdateState(t.Context(), created, todos.StateUpdate{SessionID: &sessionID}); err != nil {
 		t.Fatalf("seed session: %v", err)
 	}
-	seedActivePhase(created, phase)
 	provider.activeRun = run
+	seedAskingAttempt(provider, sessionID, phase)
 	provider.comments = nil
 	return created
+}
+
+// answerRequest posts an answer given in the named session.
+func answerRequest(t *testing.T, s *Server, created *types.TODO, sessionID string) *httptest.ResponseRecorder {
+	t.Helper()
+	body, err := json.Marshal(todoAnswerPayload{Ref: todos.TODOReference(created), SessionID: sessionID, Answer: "use postgres"})
+	if err != nil {
+		t.Fatalf("marshal answer payload: %v", err)
+	}
+	rec := httptest.NewRecorder()
+	s.handleTodoAnswer(rec, httptest.NewRequest(http.MethodPost, "/api/todos/answer", strings.NewReader(string(body))))
+	return rec
+}
+
+// A run step that reached verification is listed in the phase index under
+// both run and verify, and both rows point at the one waiting run. The answer
+// names its session, so it resumes the step that session's attempt was
+// dispatched for instead of refusing over two phases that are one run.
+func TestTodoAPIAnswerResumesRunStepListedUnderVerify(t *testing.T) {
+	workDir := t.TempDir()
+	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
+	const sid = "sess-answer-verify-fold"
+	created := seedAskTodoWithRun(t, workDir, sid, types.RunPhase, &captaindb.PromptRun{State: captaindb.PromptRunStateWaiting})
+	waiting := string(captaindb.PromptRunStateWaiting)
+	created.PhaseRuns = types.PhaseRuns{
+		types.RunPhase:    {Phase: types.RunPhase, State: waiting, Active: true},
+		types.VerifyPhase: {Phase: types.VerifyPhase, State: waiting, Active: true},
+	}
+	gotReq, called := stubRunStart(t)
+
+	rec := answerRequest(t, s, created, sid)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("answer status = %d, want 200; body = %q", rec.Code, rec.Body.String())
+	}
+	if !*called || gotReq.Options.Step != string(types.RunPhase) {
+		t.Errorf("dispatched = %v with step %q, want the run step the session's attempt belongs to", *called, gotReq.Options.Step)
+	}
+}
+
+// An answer must say which session it answers; one that does not, or names a
+// session that is not the todo's active attempt, resumes nothing.
+func TestTodoAPIAnswerRejectsUnresolvableSession(t *testing.T) {
+	const activeSession = "sess-answer-active"
+	const staleSession = "sess-answer-stale"
+	cases := []struct {
+		name      string
+		sessionID string
+		want      int
+	}{
+		{name: "missing session", sessionID: "", want: http.StatusBadRequest},
+		{name: "session of no attempt", sessionID: "sess-answer-unknown", want: http.StatusNotFound},
+		{name: "session of an older attempt", sessionID: staleSession, want: http.StatusConflict},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			workDir := t.TempDir()
+			s := &Server{ghOpts: github.Options{WorkDir: workDir}}
+			provider := uiTestProviderFor(workDir)
+			created := seedAskTodoWithRun(t, workDir, staleSession, types.PlanPhase, &captaindb.PromptRun{State: captaindb.PromptRunStateWaiting})
+			seedAskingAttempt(provider, activeSession, types.RunPhase)
+			_, called := stubRunStart(t)
+
+			rec := answerRequest(t, s, created, tc.sessionID)
+			if rec.Code != tc.want {
+				t.Fatalf("answer status = %d, want %d; body = %q", rec.Code, tc.want, rec.Body.String())
+			}
+			if *called {
+				t.Error("resume dispatched for an answer whose session does not resolve to the active attempt")
+			}
+			if len(provider.comments) != 0 {
+				t.Errorf("rejected answer still recorded comments: %q", provider.comments)
+			}
+		})
+	}
 }
 
 // A codex rollout answered by the dashboard must resume on codex. The answer box
@@ -330,7 +396,7 @@ func TestTodoAPIAnswerInheritsAskingRunRuntime(t *testing.T) {
 	})
 	gotReq, called := stubRunStart(t)
 
-	body, _ := json.Marshal(todoAnswerPayload{Ref: todos.TODOReference(created), Answer: "use postgres"})
+	body, _ := json.Marshal(todoAnswerPayload{Ref: todos.TODOReference(created), SessionID: sid, Answer: "use postgres"})
 	rec := httptest.NewRecorder()
 	s.handleTodoAnswer(rec, httptest.NewRequest(http.MethodPost, "/api/todos/answer", strings.NewReader(string(body))))
 	if rec.Code != http.StatusOK {
@@ -365,8 +431,9 @@ func TestTodoAPIAnswerOptionsOverrideInheritedRuntime(t *testing.T) {
 	gotReq, _ := stubRunStart(t)
 
 	raw, err := json.Marshal(todoAnswerPayload{
-		Ref:    todos.TODOReference(created),
-		Answer: "use postgres",
+		Ref:       todos.TODOReference(created),
+		SessionID: "sess-answer-override",
+		Answer:    "use postgres",
 		Options: &todoRunPayload{
 			Spec: api.Spec{Model: api.Model{Name: "claude-sonnet-5", Mode: api.ModeCmux, Effort: "medium"}},
 		},
@@ -396,7 +463,7 @@ func TestTodoAPIAnswerRejectsLiveRun(t *testing.T) {
 	})
 	_, called := stubRunStart(t)
 
-	body, _ := json.Marshal(todoAnswerPayload{Ref: todos.TODOReference(created), Answer: "use postgres"})
+	body, _ := json.Marshal(todoAnswerPayload{Ref: todos.TODOReference(created), SessionID: "sess-answer-live", Answer: "use postgres"})
 	rec := httptest.NewRecorder()
 	s.handleTodoAnswer(rec, httptest.NewRequest(http.MethodPost, "/api/todos/answer", strings.NewReader(string(body))))
 	if rec.Code != http.StatusConflict {
@@ -429,7 +496,7 @@ func TestTodoAPIAnswerPreflightFailureLeavesNoComment(t *testing.T) {
 	}
 	_, called := stubRunStart(t)
 
-	body, _ := json.Marshal(todoAnswerPayload{Ref: todos.TODOReference(created), Answer: "use postgres"})
+	body, _ := json.Marshal(todoAnswerPayload{Ref: todos.TODOReference(created), SessionID: "sess-answer-preflight", Answer: "use postgres"})
 	rec := httptest.NewRecorder()
 	s.handleTodoAnswer(rec, httptest.NewRequest(http.MethodPost, "/api/todos/answer", strings.NewReader(string(body))))
 	if rec.Code != http.StatusBadRequest {
@@ -468,7 +535,7 @@ func TestTodoAPIAnswerResumesStoppedAskSessionFromInProgressTodo(t *testing.T) {
 	if err := uiTestProviderFor(workDir).UpdateState(t.Context(), created, todos.StateUpdate{SessionID: &sid}); err != nil {
 		t.Fatal(err)
 	}
-	seedActivePhase(created, types.RunPhase)
+	seedAskingAttempt(uiTestProviderFor(workDir), sid, types.RunPhase)
 	logPath, err := cmuxprov.SessionLogPath(workDir, sid)
 	if err != nil {
 		t.Fatal(err)
@@ -483,8 +550,9 @@ func TestTodoAPIAnswerResumesStoppedAskSessionFromInProgressTodo(t *testing.T) {
 	got, _ := stubRunStart(t)
 
 	body, _ := json.Marshal(todoAnswerPayload{
-		Ref:     todos.TODOReference(created),
-		Answers: map[string]any{"Which database?": "Postgres"},
+		Ref:       todos.TODOReference(created),
+		SessionID: sid,
+		Answers:   map[string]any{"Which database?": "Postgres"},
 	})
 	rec := httptest.NewRecorder()
 	s.handleTodoAnswer(rec, httptest.NewRequest(http.MethodPost, "/api/todos/answer", strings.NewReader(string(body))))

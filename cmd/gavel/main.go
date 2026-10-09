@@ -12,6 +12,7 @@ import (
 	"github.com/flanksource/clicky/mcp"
 	"github.com/flanksource/clicky/shutdown"
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/commons/properties"
 	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/spf13/cobra"
@@ -61,6 +62,7 @@ func getWorkingDir() (string, error) {
 
 func init() {
 	clicky.BindAllFlags(rootCmd.PersistentFlags(), "format", "tasks")
+	properties.BindFlags(rootCmd.PersistentFlags())
 	database.BindDatabaseURLFlag(rootCmd.PersistentFlags())
 	// A fixture's `setup:` resolves `connection://…` references against the
 	// process database. Wired here rather than imported by fixtures, which must

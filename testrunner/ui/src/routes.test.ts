@@ -34,3 +34,11 @@ describe('lint route grouping', () => {
     })).toBe('/lint?grouping=linter-file');
   });
 });
+
+describe('fixture profile sample route', () => {
+  it('round trips a selected sample index on the Bench tab', () => {
+    const route = parseRoute(new URL('http://example.test/bench?sample=3') as unknown as Location);
+    expect(route.sampleIndex).toBe(3);
+    expect(buildRoute(route)).toBe('/bench?sample=3');
+  });
+});

@@ -166,7 +166,7 @@ var _ = Describe("Options model resolution", func() {
 			Expect(resolved.Request.Name).To(Equal(expected))
 		},
 		Entry("flag wins", Options{Flags: modelFlags("api:gpt-5"), Config: msgSpecCfg("api:sonnet"), AI: aiBaseSpec("api:haiku")}, "gpt-5"),
-		Entry("message spec used when no flag", Options{Config: msgSpecCfg("api:sonnet"), AI: aiBaseSpec("api:haiku")}, "claude-sonnet-5"),
+		Entry("message spec used when no flag", Options{Config: msgSpecCfg("api:sonnet"), AI: aiBaseSpec("api:haiku")}, "claude-sonnet-5-5"),
 		Entry("ai base used when no flag or op spec", Options{AI: aiBaseSpec("api:haiku")}, "claude-haiku-4-5"),
 		Entry("empty when nothing configures a model", Options{}, ""),
 	)
@@ -189,7 +189,7 @@ var _ = Describe("Options model resolution", func() {
 		Entry("--model beats commit.grouping.model",
 			Options{Flags: modelFlags("api:gpt-5"), Config: msgGroupSpecCfg("api:haiku", "api:sonnet")}, "gpt-5"),
 		Entry("commit.grouping.model used when no flag",
-			Options{Config: msgGroupSpecCfg("api:haiku", "api:sonnet")}, "claude-sonnet-5"),
+			Options{Config: msgGroupSpecCfg("api:haiku", "api:sonnet")}, "claude-sonnet-5-5"),
 		Entry("ai base used when no flag or grouping spec",
 			Options{Config: msgSpecCfg("api:haiku"), AI: aiBaseSpec("api:gpt-5")}, "gpt-5"),
 		Entry("ignores commit.message.model and resolves to nothing",

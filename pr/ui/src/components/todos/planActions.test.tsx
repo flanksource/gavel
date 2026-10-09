@@ -398,14 +398,24 @@ describe('QuestionsPanel', () => {
   });
 });
 
+// /api/todos/answer always carries a resume launch (see usePlanActionMutation's
+// answerMutation), so the response streams launch progress over SSE (see
+// todoLaunch.ts's todoMutationStream) rather than returning plain JSON — a
+// bare `{ok: true, json: ...}` mock is rejected before its payload is ever
+// read, and the admitted frame must carry a promptRunId or admission itself
+// throws "response omitted the prompt run ID".
+function fetchAnswerLaunch(payload: { todo: TodoItem; status: string }) {
+  return vi.fn().mockResolvedValue(new Response(
+    `event: admitted\ndata: ${JSON.stringify({ ...payload, promptRunId: 'run-1' })}\n\n`,
+    { headers: { 'Content-Type': 'text/event-stream' } },
+  ));
+}
+
 describe('TodoReviewBanner', () => {
   it('enables quick selection and submits structured answers without a flat answer', async () => {
     const todo = askTodo();
     const onChanged = vi.fn();
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ todo: { ...todo, status: 'in_progress' }, status: 'started' }),
-    });
+    const fetchMock = fetchAnswerLaunch({ todo: { ...todo, status: 'in_progress' }, status: 'started' });
     vi.stubGlobal('fetch', fetchMock);
     render(<TodoReviewBanner todo={todo} dir="/workspace" onChanged={onChanged} />);
 
@@ -455,10 +465,7 @@ describe('TodoReviewBanner', () => {
   it('keeps free-text-only submission and resets drafts when the todo changes', async () => {
     const first = askTodo();
     const second = askTodo('todo-2');
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ todo: { ...first, status: 'in_progress' }, status: 'started' }),
-    });
+    const fetchMock = fetchAnswerLaunch({ todo: { ...first, status: 'in_progress' }, status: 'started' });
     vi.stubGlobal('fetch', fetchMock);
     const onChanged = vi.fn();
     const { rerender } = render(<TodoReviewBanner todo={first} dir="/workspace" onChanged={onChanged} />);

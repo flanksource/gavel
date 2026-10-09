@@ -415,6 +415,7 @@ Common workflows:
 gavel fixtures tests/api.fixture.md
 gavel fixtures fixtures/**/*.md
 gavel fixtures -v tests.md
+gavel fixtures --profile tests.md
 gavel fixtures --no-progress tests.md
 gavel fixtures outline fixtures/**/*.md
 ```
@@ -424,6 +425,36 @@ fixture kind counts without running build commands, daemons, fixture commands,
 test/lint runner steps, skip commands, or AI checks.
 
 If your repo enables fixture discovery in `.gavel.yaml`, `gavel test --fixtures` can run the same files as part of the broader test pass.
+
+`--profile` samples CPU, memory, and disk I/O for the fixture process tree. Save this example as `profile.fixture.md` in the Gavel repository, then run `gavel fixtures --profile --ui profile.fixture.md`:
+
+````markdown
+---
+exec: sh
+goProfiles:
+  cpu:
+    file: cpu.pprof
+    env: CPU_PROFILE
+---
+
+# Go CPU profile
+
+```sh
+go test ./fixtures/record -run TestParseShorthand -cpuprofile="$CPU_PROFILE"
+```
+````
+
+Gavel supplies profile destinations only with `--profile`, gives each fixture an isolated output directory, and checks any file the command emits. A missing file or empty directory is reported as *not emitted*. An emitted file must be nonempty and parse as a Go pprof profile. Commands that accept a filename argument can use `args: ["-cpuprofile={{.path}}"]` instead of `env:`; commands that emit several profiles can use `directory:` instead of `file:`. Captured profiles can be downloaded from the fixture detail in `--ui` or opened with `go tool pprof` at the path shown in the benchmark report.
+
+Use `--benchmark` with limits to fail individual fixture tests when they exceed a budget. `--max-time`, `--max-sql-time`, and `--max-sql-query` accept Go durations; `--max-memory`, `--max-io-read`, and `--max-io-write` accept byte sizes. `--max-sql-queries` and `--max-slow-sql` cap statement counts, including zero. `--max-deviation-pct` requires `--baseline` and checks positive regressions against each matching fixture's measured time, peak RSS, disk I/O, and SQL timings and counts. Metrics absent from the baseline are skipped; a missing current measurement fails when an absolute limit or a previously measured baseline value requires it.
+
+```bash
+gavel fixtures --benchmark --max-time 2s --max-memory 512MiB tests/performance.fixture.md
+gavel fixtures --benchmark --max-sql-time 500ms --max-sql-query 100ms --max-slow-sql 0 tests/database.fixture.md
+gavel fixtures --benchmark --baseline .gavel/benchmarks/fixtures/base.json --max-deviation-pct 15 tests/performance.fixture.md
+```
+
+When profiling or SQL limits are active, Gavel passes `SQL_PROFILE_FILE` to each command. Applications using commons-db's GORM `NewSqlLogger` export one JSON line per statement there, including raw SQL text, string-rendered bound parameters, duration in nanoseconds, row count, and slow/error flags. Gavel saves those statements with per-fixture totals in its benchmark report and shows them in the fixture benchmark view. Profile files and benchmark reports can contain query data. A fixture with a SQL limit fails if its command never creates the SQL profile file.
 
 Ready-made workflow templates live in `examples/` (they run against the bundled `examples/sample-app`): `precommit.fixture.md` (lint + test the files you changed), `pre-release.fixture.md` (build, then the full suite and every linter), `smoke-test.fixture.md` (fast smoke tests + a `/health` probe), and `ai-review.fixture.md` (an AI reviewer scores the change against an acceptance-criteria checklist — needs `captain configure`). Run one with `gavel fixtures examples/precommit.fixture.md`, or copy it into your project.
 
@@ -490,9 +521,8 @@ checks, the persisted `## Verification` fixture, and any acceptance-criteria
 checklist step through the same CEL verdict used inside `todos run`.
 
 ```bash
-gavel todos check                       # check selected runnable TODOs
 gavel todos check 3f2a1b                 # check one TODO
-gavel todos check --timeout 10m          # bound each verification run
+gavel todos check 3f2a1b --timeout 10m   # bound this verification run
 ```
 
 ### `gavel commit`
@@ -535,6 +565,7 @@ Use it when you want to:
 - Inspect one issue in detail
 - Re-run verification checks
 - Drive an AI coding agent through the project's todo lifecycle
+- Combine several overlapping issues into one
 - Explicitly import or export portable `.todos` Markdown
 
 Common workflows:
@@ -546,16 +577,42 @@ gavel todos get 3f2a1b
 gavel todos create "Fix the parser race"
 gavel todos sync ./pkg/parser
 gavel todos steps 3f2a1b                   # which lifecycle steps apply to this todo now
-gavel todos check
-gavel todos run
-gavel todos run --interactive
-gavel todos run --step plan                # propose a plan; the TODO parks in `review`
+gavel todos check 3f2a1b
+gavel todos run 3f2a1b
+gavel todos run 3f2a1b --step plan         # propose a plan; the TODO parks in `review`
 gavel todos plan approve 3f2a1b --run      # accept the plan and implement it
 gavel todos plan revise 3f2a1b --feedback "split the migration in two"
 gavel todos plan reject 3f2a1b             # discard the plan; the TODO returns to pending
+gavel todos merge 3f2a1b 9c4d2e --dry-run  # preview folding two TODOs into one
+gavel todos merge 3f2a1b 9c4d2e            # write the merge
 gavel todos import --dir ./archive/todos   # explicit Markdown → PostgreSQL
 gavel todos export 3f2a1b --dir ./backup   # explicit PostgreSQL → Markdown
 ```
+
+#### `gavel todos merge <id> <id>...`
+
+Folds several TODOs into one. A single AI pass (the `todos.merge` prompt, see
+[SCHEMA.md](SCHEMA.md#prompt-overrides)) reads every selected TODO — body,
+acceptance criteria, verification fixture verbatim, and existing plan — and
+returns one of each. Gavel performs the writes:
+
+- the **survivor** (the first id given, or `--into <id>`) has its title, body,
+  verification fixture, labels and severity replaced by the merged versions, and
+  the merged plan saved as a new *unapproved* revision — merging changed the
+  scope the previous approval was given for, so the plan goes back through
+  `gavel todos plan approve|revise`;
+- every other TODO gets a comment saying why it is part of the merged work, a
+  `related_to` link to the survivor, and is then **soft-deleted** (cancelled):
+  its history, comments and runs stay intact;
+- a TODO the model judges is *not* the same work is reported as `excluded` and
+  left completely untouched.
+
+It is not a lifecycle step and records no run. Every selected TODO must belong
+to the same workspace, and the merge is refused before any write when the model
+drops a fixture or a plan a source TODO had, or returns a fixture that does not
+parse. `--dry-run` prints the proposed title, body, fixture and plan and writes
+nothing. The same action is on the dashboard's selection toolbar (Merge), where
+the survivor is the first row selected.
 
 #### The todo lifecycle
 
@@ -659,8 +716,8 @@ closes the loop: the agent doesn't just claim it's finished, it has to leave the
 suite green.
 
 ```bash
-gavel todos run
-gavel todos run --model cmux:opus   # primary path: resumes the live agent REPL
+gavel todos run 3f2a1b
+gavel todos run 3f2a1b --model cmux:opus   # primary path: resumes the live agent REPL
 ```
 
 The loop is **opt-in**: it is part of the todo's definition of done only when
@@ -761,6 +818,19 @@ registered a freshly pushed commit's checks — returned exit 0 immediately.
 
 When stderr is not a terminal, each poll prints a one-line heartbeat rather than repainting
 the whole status table; the full report is still printed once, at the end.
+
+#### Fixing a PR with `--ai-fix`
+
+`--ai-fix` hands the status snapshot to an agent through the `pr.fix` prompt. The agent edits files, gavel commits and pushes each turn to the PR's head branch, and the prompt's `workflow.verify.commands` re-poll `gavel pr status <url>` until the PR is green or `--ai-fix-max-iterations` runs out.
+
+A PR that conflicts with its base is merged first. Before the first turn, gavel starts `git merge --no-commit` of the base commit GitHub merges against and leaves the conflicted paths in the tree. The prompt opens with a **Merge conflicts** section listing those paths. The agent resolves the markers and `git add`s each file, and gavel concludes the merge commit and pushes it. Until nothing is left conflicted, two cheap git checks run ahead of the CI poll, so an unresolved file is fed back to the agent by name.
+
+Without `--worktree` the fix runs in your checkout, which must be clean and contain the PR head. `--worktree` moves the run into a fresh git worktree branched from the PR head under the user cache directory (`…/gavel/worktrees/<repo>/pr-<n>-<ts>`), so your branch and uncommitted work are never touched. The worktree is removed when the run ends. It is ordinary captain `setup:` isolation, so the same block can be declared under `pr.fix` in `.gavel.yaml` instead.
+
+```bash
+gavel pr status 42 --ai-fix              # fix in the current checkout
+gavel pr status 42 --ai-fix --worktree   # fix in an isolated worktree at the PR head
+```
 
 ### `gavel pr list`
 
@@ -961,7 +1031,7 @@ gavel ui serve gavel-results.json
 gavel pr status --logs
 gavel todos create "Fix the failing PR check" --body "Paste the relevant failure details"
 gavel todos list
-gavel todos run
+gavel todos run 3f2a1b
 ```
 
 ### Stand up a persistent PR dashboard

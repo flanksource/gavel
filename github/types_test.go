@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/flanksource/gavel/pr/model"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -21,7 +22,7 @@ func TestPRCommentIsUnresolved(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			c := PRComment{IsResolved: tc.isResolved, IsOutdated: tc.isOutdated}
+			c := model.PRComment{IsResolved: tc.isResolved, IsOutdated: tc.isOutdated}
 			assert.Equal(t, tc.want, c.IsUnresolved())
 		})
 	}
@@ -47,7 +48,7 @@ func TestIsFailureConclusion(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.conclusion, func(t *testing.T) {
-			assert.Equal(t, tc.want, IsFailureConclusion(tc.conclusion))
+			assert.Equal(t, tc.want, model.IsFailureConclusion(tc.conclusion))
 		})
 	}
 }
@@ -57,39 +58,39 @@ func TestIsFailureConclusion(t *testing.T) {
 // this, which is why --logs showed nothing while a slow e2e job kept the run
 // in_progress.
 func TestRunHasFailedJob(t *testing.T) {
-	inProgressWithFailure := &WorkflowRun{
+	inProgressWithFailure := &model.WorkflowRun{
 		Status:     "in_progress",
 		Conclusion: "",
-		Jobs: []Job{
+		Jobs: []model.Job{
 			{Name: "check", Conclusion: "failure"},
 			{Name: "e2e", Conclusion: ""},
 		},
 	}
-	assert.True(t, RunHasFailedJob(inProgressWithFailure))
+	assert.True(t, model.RunHasFailedJob(inProgressWithFailure))
 
-	allPassing := &WorkflowRun{
+	allPassing := &model.WorkflowRun{
 		Status:     "completed",
 		Conclusion: "success",
-		Jobs:       []Job{{Name: "build", Conclusion: "success"}},
+		Jobs:       []model.Job{{Name: "build", Conclusion: "success"}},
 	}
-	assert.False(t, RunHasFailedJob(allPassing))
+	assert.False(t, model.RunHasFailedJob(allPassing))
 
-	cancelledNotFailure := &WorkflowRun{
+	cancelledNotFailure := &model.WorkflowRun{
 		Status:     "completed",
 		Conclusion: "cancelled",
-		Jobs:       []Job{{Name: "build", Conclusion: "cancelled"}},
+		Jobs:       []model.Job{{Name: "build", Conclusion: "cancelled"}},
 	}
-	assert.False(t, RunHasFailedJob(cancelledNotFailure))
+	assert.False(t, model.RunHasFailedJob(cancelledNotFailure))
 }
 
 // A timed_out job with attached logs must render its step logs — the previous
 // failure-only guard returned before any step was emitted.
 func TestJobPrettyRendersLogsForTimedOutJob(t *testing.T) {
-	job := Job{
+	job := model.Job{
 		Name:       "build",
 		Status:     "completed",
 		Conclusion: "timed_out",
-		Steps: []Step{
+		Steps: []model.Step{
 			{
 				Name:       "go test",
 				Status:     "completed",
@@ -105,11 +106,11 @@ func TestJobPrettyRendersLogsForTimedOutJob(t *testing.T) {
 
 // A successful job must NOT render step logs, even if a step carries some.
 func TestJobPrettyHidesLogsForSuccessfulJob(t *testing.T) {
-	job := Job{
+	job := model.Job{
 		Name:       "build",
 		Status:     "completed",
 		Conclusion: "success",
-		Steps: []Step{
+		Steps: []model.Step{
 			{Name: "go test", Status: "completed", Conclusion: "success", Logs: "ok"},
 		},
 	}
@@ -121,7 +122,7 @@ func TestJobPrettyHidesLogsForSuccessfulJob(t *testing.T) {
 // When a failed job has no per-step logs but a job-level log tail, Pretty must
 // fall back to rendering that tail.
 func TestJobPrettyFallsBackToJobLogTail(t *testing.T) {
-	job := Job{
+	job := model.Job{
 		Name:       "build",
 		Status:     "completed",
 		Conclusion: "failure",

@@ -30,6 +30,27 @@ var _ = Describe("resolved TODO prompt runtime", func() {
 		Entry("empty prompt", `{}`),
 	)
 
+	// The dashboard's prompt editor is seeded from a preview that already leads
+	// with the directive, so an edited prompt sent back as the override must not
+	// gain a second one — nor keep a stale one after the effort changes.
+	DescribeTable("leads an overridden prompt with exactly one directive for the resolved effort",
+		func(effort api.Effort, override string) {
+			const body = "## parser\n\nReview the parser"
+			spec := api.Spec{
+				Model:  api.Model{Name: "claude-sonnet-5", Mode: api.ModeAgent, Effort: effort},
+				Prompt: api.Prompt{User: override + body},
+			}
+			request, _, err := Render([]*types.TODO{newTestTODO("other", "Unrelated todo")}, Options{Mode: types.ModePlan, Spec: spec})
+			gomega.Expect(err).NotTo(gomega.HaveOccurred())
+			gomega.Expect(request.Prompt.User).To(gomega.Equal(EffortDirective(string(effort)) + "\n\n" + body))
+		},
+		Entry("no directive in the override", api.EffortXHigh, ""),
+		Entry("the preview's directive kept in the override", api.EffortXHigh, EffortDirective("xhigh")+"\n\n"),
+		Entry("directives stacked by earlier round-trips", api.EffortXHigh, EffortDirective("xhigh")+"\n\n"+EffortDirective("xhigh")+"\n\n"),
+		Entry("a directive for an effort changed after editing", api.EffortXHigh, EffortDirective("high")+"\n\n"),
+		Entry("the medium directive under a low effort", api.EffortLow, EffortDirective("medium")+"\n\n"),
+	)
+
 	It("renders conversation without reapplying template runtime fields", func() {
 		spec := api.Spec{Model: api.Model{Name: "claude-sonnet-5", Mode: api.ModeAgent}}
 		request, config, err := Render([]*types.TODO{newTestTODO("parser", "Review the parser")}, Options{

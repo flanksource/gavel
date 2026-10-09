@@ -1,6 +1,7 @@
 package query
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -105,21 +106,65 @@ func TestMatchAppliesFacetsTheStoreCannot(t *testing.T) {
 	}
 }
 
-func TestMatchRejectsAnUnparseableWindow(t *testing.T) {
-	if _, err := (ListOpts{Since: "soon"}).Match(todo("x", ranAt(time.Hour)), now); err == nil {
-		t.Fatal("an unparseable window must fail loudly, not match everything")
+// A child is listed under its parent, not beside it, so it stays out of a list
+// unless the caller searches for it or asks for children.
+func TestMatchHidesChildrenUnlessAskedFor(t *testing.T) {
+	const (
+		parentID      = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d"
+		otherParentID = "ffffffff-4e5f-4a6b-8c7d-9e0f1a2b3c4d"
+	)
+	childOf := func(parent string) func(*types.TODO) {
+		return func(t *types.TODO) { t.ParentID = parent }
+	}
+	cases := []struct {
+		name string
+		opts ListOpts
+		todo *types.TODO
+		want bool
+	}{
+		{"a child is hidden by default", ListOpts{}, todo("Split out", childOf(parentID)), false},
+		{"a top-level todo is listed by default", ListOpts{}, todo("Top level"), true},
+		{"children shows a child", ListOpts{Children: true}, todo("Split out", childOf(parentID)), true},
+		{"children keeps top-level todos", ListOpts{Children: true}, todo("Top level"), true},
+		{"a search surfaces a matching child", ListOpts{Search: "split"}, todo("Split out", childOf(parentID)), true},
+		{"a search still drops a child it does not match", ListOpts{Search: "parser"}, todo("Split out", childOf(parentID)), false},
+		{"parent by full id shows its child", ListOpts{Parent: parentID}, todo("Split out", childOf(parentID)), true},
+		{"parent id case does not matter", ListOpts{Parent: strings.ToUpper(parentID)}, todo("Split out", childOf(parentID)), true},
+		// Match compares ids; turning a short id, alias or title into one is the
+		// caller's job, because only a provider can say which TODO a ref names.
+		{"parent is not matched by prefix", ListOpts{Parent: "0a1b2c3d"}, todo("Split out", childOf(parentID)), false},
+		{"parent drops another parent's child", ListOpts{Parent: parentID}, todo("Split out", childOf(otherParentID)), false},
+		{"parent drops top-level todos", ListOpts{Parent: parentID}, todo("Top level"), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := tc.opts.Match(tc.todo, now)
+			if err != nil {
+				t.Fatalf("Match: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("Match = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 
-func TestFilterModeIsDrivenByTheFilterField(t *testing.T) {
-	if (ListOpts{}).FilterMode() {
-		t.Fatal("no filter means explicit ids")
+func TestTitleMatchesFindsEveryExactTitleIgnoringCase(t *testing.T) {
+	listed := types.TODOS{todo("Rework the importer"), todo("rework the IMPORTER"), todo("Rework the importer again"), nil}
+
+	got := TitleMatches(listed, " Rework The Importer ")
+
+	if len(got) != 2 || got[0] != listed[0] || got[1] != listed[1] {
+		t.Fatalf("TitleMatches = %d rows, want the two exact titles and not the longer one", len(got))
 	}
-	if (ListOpts{Filter: "   "}).FilterMode() {
-		t.Fatal("whitespace is not a filter")
+	if len(TitleMatches(listed, "importer")) != 0 {
+		t.Fatal("a substring is not a title match")
 	}
-	if !(ListOpts{Filter: "status == pending"}).FilterMode() {
-		t.Fatal("a filter summary switches to filter mode")
+}
+
+func TestMatchRejectsAnUnparseableWindow(t *testing.T) {
+	if _, err := (ListOpts{Since: "soon"}).Match(todo("x", ranAt(time.Hour)), now); err == nil {
+		t.Fatal("an unparseable window must fail loudly, not match everything")
 	}
 }
 

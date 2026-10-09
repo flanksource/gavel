@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"errors"
 	"testing"
+
+	"github.com/flanksource/gavel/pr/model"
 )
 
 func TestExtractJSONFromZip(t *testing.T) {
@@ -113,12 +115,12 @@ func TestFindGavelArtifacts(t *testing.T) {
 	}
 	tests := []struct {
 		name     string
-		comments []PRComment
+		comments []model.PRComment
 		want     []want
 	}{
 		{
 			name: "single shard",
-			comments: []PRComment{
+			comments: []model.PRComment{
 				{ID: 1, Body: "Some unrelated comment"},
 				{
 					ID: 2,
@@ -131,7 +133,7 @@ func TestFindGavelArtifacts(t *testing.T) {
 		},
 		{
 			name: "repository-prefixed gavel header",
-			comments: []PRComment{
+			comments: []model.PRComment{
 				{
 					ID: 42,
 					Body: "<!-- sticky-comment:captain-gavel-test -->\n\n## Gavel summary\n\n" +
@@ -147,7 +149,7 @@ func TestFindGavelArtifacts(t *testing.T) {
 		},
 		{
 			name: "matrix shards (PR 1926 shape)",
-			comments: []PRComment{
+			comments: []model.PRComment{
 				{
 					ID: 100,
 					Body: "<!-- sticky-comment:gavel-test-pg15 -->\n\n## Gavel summary\n\n" +
@@ -172,7 +174,7 @@ func TestFindGavelArtifacts(t *testing.T) {
 		},
 		{
 			name: "duplicate sticky id keeps latest, preserves first-seen order",
-			comments: []PRComment{
+			comments: []model.PRComment{
 				{
 					ID: 10,
 					Body: "<!-- sticky-comment:gavel-test -->\n\n" +
@@ -196,7 +198,7 @@ func TestFindGavelArtifacts(t *testing.T) {
 		},
 		{
 			name: "gavel comment without artifact link is skipped",
-			comments: []PRComment{
+			comments: []model.PRComment{
 				{
 					ID:   1,
 					Body: "<!-- sticky-comment:gavel -->\n\nGavel exited with code 1.",
@@ -211,7 +213,7 @@ func TestFindGavelArtifacts(t *testing.T) {
 		},
 		{
 			name: "non-gavel sticky comments are ignored",
-			comments: []PRComment{
+			comments: []model.PRComment{
 				{
 					ID: 1,
 					Body: "<!-- sticky-comment:codecov -->\nCoverage report\n" +

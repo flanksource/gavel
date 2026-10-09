@@ -1,12 +1,14 @@
 package ui
 
 import (
+	"context"
 	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	gavelctx "github.com/flanksource/gavel/context"
 	"github.com/flanksource/gavel/procfile"
 )
 
@@ -24,7 +26,7 @@ func sampleWith(status string) map[string]procStatus {
 // callers inside one TTL window must collapse onto a single scan.
 func TestProcSamplerSharesOneScanAcrossConcurrentCallers(t *testing.T) {
 	var scans int32
-	sampler := &procSampler{ttl: time.Minute, sample: func() (map[string]procStatus, error) {
+	sampler := &procSampler{ttl: time.Minute, sample: func(gavelctx.Context) (map[string]procStatus, error) {
 		atomic.AddInt32(&scans, 1)
 		time.Sleep(20 * time.Millisecond) // a scan is slow; overlap the callers
 		return sampleWith(procfile.StatusRunning), nil
@@ -36,7 +38,7 @@ func TestProcSamplerSharesOneScanAcrossConcurrentCallers(t *testing.T) {
 	for i := 0; i < callers; i++ {
 		go func() {
 			defer wg.Done()
-			if _, err := sampler.get(); err != nil {
+			if _, err := sampler.get(gavelctx.New(context.Background())); err != nil {
 				t.Errorf("get: %v", err)
 			}
 		}()
@@ -52,15 +54,15 @@ func TestProcSamplerSharesOneScanAcrossConcurrentCallers(t *testing.T) {
 // the dashboard.
 func TestProcSamplerRecomputesAfterTTL(t *testing.T) {
 	var scans int32
-	sampler := &procSampler{ttl: 10 * time.Millisecond, sample: func() (map[string]procStatus, error) {
+	sampler := &procSampler{ttl: 10 * time.Millisecond, sample: func(gavelctx.Context) (map[string]procStatus, error) {
 		atomic.AddInt32(&scans, 1)
 		return sampleWith(procfile.StatusRunning), nil
 	}}
 
-	if _, err := sampler.get(); err != nil {
+	if _, err := sampler.get(gavelctx.New(context.Background())); err != nil {
 		t.Fatalf("first get: %v", err)
 	}
-	if _, err := sampler.get(); err != nil {
+	if _, err := sampler.get(gavelctx.New(context.Background())); err != nil {
 		t.Fatalf("cached get: %v", err)
 	}
 	if got := atomic.LoadInt32(&scans); got != 1 {
@@ -68,7 +70,7 @@ func TestProcSamplerRecomputesAfterTTL(t *testing.T) {
 	}
 
 	time.Sleep(20 * time.Millisecond)
-	if _, err := sampler.get(); err != nil {
+	if _, err := sampler.get(gavelctx.New(context.Background())); err != nil {
 		t.Fatalf("post-TTL get: %v", err)
 	}
 	if got := atomic.LoadInt32(&scans); got != 2 {
@@ -79,17 +81,17 @@ func TestProcSamplerRecomputesAfterTTL(t *testing.T) {
 // Callers must each get their own copy: handleProcStatusStream marshals what it
 // receives, and a shared map handed to several streams would race.
 func TestProcSamplerReturnsIndependentCopies(t *testing.T) {
-	sampler := &procSampler{ttl: time.Minute, sample: func() (map[string]procStatus, error) {
+	sampler := &procSampler{ttl: time.Minute, sample: func(gavelctx.Context) (map[string]procStatus, error) {
 		return sampleWith(procfile.StatusRunning), nil
 	}}
 
-	first, err := sampler.get()
+	first, err := sampler.get(gavelctx.New(context.Background()))
 	if err != nil {
 		t.Fatalf("first get: %v", err)
 	}
 	first["gavel"] = procStatus{Error: "mutated by one caller"}
 
-	second, err := sampler.get()
+	second, err := sampler.get(gavelctx.New(context.Background()))
 	if err != nil {
 		t.Fatalf("second get: %v", err)
 	}
@@ -102,11 +104,11 @@ func TestProcSamplerReturnsIndependentCopies(t *testing.T) {
 // current state.
 func TestProcSamplerPropagatesScanError(t *testing.T) {
 	want := errors.New("load projects: permission denied")
-	sampler := &procSampler{ttl: time.Minute, sample: func() (map[string]procStatus, error) {
+	sampler := &procSampler{ttl: time.Minute, sample: func(gavelctx.Context) (map[string]procStatus, error) {
 		return nil, want
 	}}
 
-	if _, err := sampler.get(); !errors.Is(err, want) {
+	if _, err := sampler.get(gavelctx.New(context.Background())); !errors.Is(err, want) {
 		t.Errorf("want the scan error surfaced, got %v", err)
 	}
 }

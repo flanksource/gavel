@@ -184,56 +184,6 @@ table "favicon_caches" {
   index "idx_favicon_caches_expires_at" { columns = [column.expires_at] }
 }
 
-table "commit_stat_caches" {
-  schema = schema.public
-
-  column "repo" {
-    null = false
-    type = varchar(512)
-  }
-  column "issue_id" {
-    null = false
-    type = varchar(128)
-  }
-  column "commits" {
-    null = true
-    type = bigint
-  }
-  column "files" {
-    null = true
-    type = bigint
-  }
-  column "adds" {
-    null = true
-    type = bigint
-  }
-  column "dels" {
-    null = true
-    type = bigint
-  }
-  column "synced_at" {
-    null = true
-    type = timestamptz
-  }
-
-  primary_key { columns = [column.repo, column.issue_id] }
-}
-
-table "commit_stat_cursors" {
-  schema = schema.public
-
-  column "repo" {
-    null = false
-    type = varchar(512)
-  }
-  column "synced_at" {
-    null = true
-    type = timestamptz
-  }
-
-  primary_key { columns = [column.repo] }
-}
-
 table "test_run_caches" {
   schema = schema.public
 

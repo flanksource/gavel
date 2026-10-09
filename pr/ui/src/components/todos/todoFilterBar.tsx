@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import type { FilterBarFilter, FilterBarRangeProps, MultiSelectOption } from '@flanksource/clicky-ui/components';
 import type { FacetModes } from '../../utils';
 import { flattenTodos } from './todoGroup';
-import { EXTERNAL_FILTER_DEFS, PRIORITY_FILTER_DEFS, STATUS_FILTER_DEFS, externalKey, priorityKey } from './todoFilter';
+import { EXTERNAL_FILTER_DEFS, PRIORITY_FILTER_DEFS, STATUS_FILTER_DEFS, externalKey, isChildTodo, priorityKey } from './todoFilter';
 import { todoTagTokens } from './tagResolve';
 import type { WorkspaceTodos } from './useWorkspaceTodos';
 
@@ -18,13 +18,15 @@ export function useTodoFilterBar(todos: WorkspaceTodos): { facets: FilterBarFilt
 
   // Priority, external-link and per-workspace counts are derived from the loaded
   // items — the server's TodoCounts only aggregates status, and the items are
-  // already here.
+  // already here. Children are left out, as the server leaves them out of its
+  // status counts, so every facet counts the same population.
   const derived = useMemo(() => {
     const priorities: Record<string, number> = {};
     const external: Record<string, number> = {};
     const tags: Record<string, number> = {};
     const dirs: Record<string, number> = {};
     for (const { todo, workspace } of flattenTodos(workspaces, byDir)) {
+      if (isChildTodo(todo)) continue;
       priorities[priorityKey(todo)] = (priorities[priorityKey(todo)] ?? 0) + 1;
       external[externalKey(todo)] = (external[externalKey(todo)] ?? 0) + 1;
       dirs[workspace.dir] = (dirs[workspace.dir] ?? 0) + 1;

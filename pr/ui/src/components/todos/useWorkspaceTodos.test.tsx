@@ -112,7 +112,7 @@ describe('useWorkspaceTodos', () => {
     vi.stubGlobal('fetch', fetchMock);
     const onNavigate = vi.fn();
 
-    const { result, unmount } = renderHook(() => useWorkspaceTodos(projects, routeRef, onNavigate), {
+    const { result, unmount } = renderHook(() => useWorkspaceTodos(projects, { selectedId: routeRef, onNavigate }), {
       wrapper: queryTestWrapper(),
     });
 
@@ -159,7 +159,7 @@ describe('useWorkspaceTodos', () => {
     const onNavigate = vi.fn();
 
     const { result, rerender } = renderHook(
-      ({ selectedId }: { selectedId: string }) => useWorkspaceTodos(projects, selectedId, onNavigate),
+      ({ selectedId }: { selectedId: string }) => useWorkspaceTodos(projects, { selectedId, onNavigate }),
       { initialProps: { selectedId: todoID }, wrapper: queryTestWrapper() },
     );
     await waitFor(() => expect(result.current.detail?.ref).toBe(todoID));
@@ -186,7 +186,7 @@ describe('useWorkspaceTodos', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    const { result } = renderHook(() => useWorkspaceTodos(projects, status === 404 ? 'missing123' : 'abc123'), {
+    const { result } = renderHook(() => useWorkspaceTodos(projects, { selectedId: status === 404 ? 'missing123' : 'abc123' }), {
       wrapper: queryTestWrapper(),
     });
 
@@ -219,6 +219,33 @@ describe('useWorkspaceTodos', () => {
     expect(detailSignals[0]?.aborted).toBe(true);
     unmount();
     expect(detailSignals[1]?.aborted).toBe(true);
+  });
+
+  it('keeps an unrouted detail view locally and resets it when another todo is selected', () => {
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => {})));
+    const { result } = renderHook(() => useWorkspaceTodos(projects), { wrapper: queryTestWrapper() });
+
+    act(() => result.current.select({ dir: '/work/gavel', ref: 'todo-one' }));
+    act(() => result.current.setDetailView({ tab: 'session', sessionTab: 'costs' }));
+    expect(result.current.detailView).toEqual({ tab: 'session', sessionTab: 'costs' });
+
+    act(() => result.current.select({ dir: '/work/gavel', ref: 'todo-two' }));
+    expect(result.current.detailView).toEqual({});
+  });
+
+  it('hands a routed detail view change to the router with its history mode', () => {
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => {})));
+    const onViewChange = vi.fn();
+    const routed = { tab: 'plan' as const };
+    const { result } = renderHook(
+      () => useWorkspaceTodos(projects, { view: routed, onViewChange }),
+      { wrapper: queryTestWrapper() },
+    );
+
+    act(() => result.current.setDetailView({ ...routed, sessionIds: ['run-a'] }, 'replace'));
+
+    expect(onViewChange).toHaveBeenCalledWith({ tab: 'plan', sessionIds: ['run-a'] }, 'replace');
+    expect(result.current.detailView).toBe(routed);
   });
 
   it('keeps a database list failure visible while retaining an empty workspace group', async () => {
@@ -349,7 +376,7 @@ describe('useWorkspaceTodos', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    const { result } = renderHook(() => useWorkspaceTodos(projects, 'run-1'), { wrapper: queryTestWrapper() });
+    const { result } = renderHook(() => useWorkspaceTodos(projects, { selectedId: 'run-1' }), { wrapper: queryTestWrapper() });
     await waitFor(() => expect(result.current.detail?.status).toBe('in_progress'));
     expect(result.current.detail?.sessionId).toBeUndefined();
 

@@ -73,8 +73,10 @@ type Test struct {
 	Framework   Framework     `json:"framework,omitempty"`
 	Duration    time.Duration `json:"duration,omitempty"`
 	Skipped     bool          `json:"skipped,omitempty"`
-	Failed      bool          `json:"failed,omitempty"`
-	Passed      bool          `json:"passed,omitempty"`
+	// Aborted marks a test that never ran because the run stopped after an earlier failure — distinct from an intentional Skipped.
+	Aborted bool `json:"aborted,omitempty"`
+	Failed  bool `json:"failed,omitempty"`
+	Passed  bool `json:"passed,omitempty"`
 	// Warned marks a node that completed with a non-blocking warning — a
 	// problem the operator should see (amber) but which is not a failure.
 	// Distinct from Failed: a warned child never flips its parent to Failed
@@ -104,8 +106,12 @@ type Test struct {
 	// Detail is provider-owned structured detail for a test. Providers should
 	// assign a JSON-marshallable value here; values may also implement api.Pretty
 	// for rich terminal/clicky rendering.
-	Detail    any              `json:"detail,omitempty"`
-	Benchmark *BenchmarkResult `json:"benchmark,omitempty"`
+	Detail         any                 `json:"detail,omitempty"`
+	Benchmark      *BenchmarkResult    `json:"benchmark,omitempty"`
+	FixtureProfile *FixtureProfile     `json:"fixture_profile,omitempty"`
+	GoProfiles     []GoProfileArtifact `json:"go_profiles,omitempty"`
+	SQLProfile     *SQLProfile         `json:"sql_profile,omitempty"`
+	Fixture        *FixtureExecution   `json:"fixture,omitempty"`
 	// Attempts is the per-run execution history for this test. A fresh run
 	// appends a TestAttempt to the tail; reruns (via the UI) append further
 	// attempts without discarding earlier ones. The Test's top-level
@@ -121,6 +127,59 @@ type Test struct {
 	// intake step being consumed). Providers set it on each progress tick and
 	// clear it (nil) on completion. Renderers show it inline on the running row.
 	Progress *TestProgress `json:"progress,omitempty"`
+}
+
+type FixtureExecution struct {
+	Key        string   `json:"key"`
+	Kind       string   `json:"kind"`
+	State      string   `json:"state"`
+	CommandMS  *float64 `json:"command_ms,omitempty"`
+	Violations []string `json:"violations,omitempty"`
+}
+
+type FixtureProfile struct {
+	Scope             string         `json:"scope"`
+	PID               int            `json:"pid,omitempty"`
+	SampleCount       int            `json:"sample_count"`
+	PeakCPUPercent    float64        `json:"peak_cpu_percent"`
+	PeakMemoryPercent float64        `json:"peak_memory_percent"`
+	PeakRSSBytes      uint64         `json:"peak_rss_bytes"`
+	DiskIO            *ProfileDiskIO `json:"disk_io,omitempty"`
+}
+
+type ProfileDiskIO struct {
+	DiskReadBytes    uint64 `json:"disk_read_bytes"`
+	DiskWriteBytes   uint64 `json:"disk_write_bytes"`
+	SampleCount      int    `json:"sample_count"`
+	MissingProcesses int    `json:"missing_processes,omitempty"`
+}
+
+type GoProfileArtifact struct {
+	Name        string   `json:"name"`
+	ID          string   `json:"id,omitempty"`
+	Path        string   `json:"path,omitempty"`
+	Status      string   `json:"status"`
+	Bytes       int64    `json:"bytes,omitempty"`
+	SampleTypes []string `json:"sample_types,omitempty"`
+	Error       string   `json:"error,omitempty"`
+}
+
+type SQLProfile struct {
+	Path            string                `json:"path"`
+	QueryCount      int                   `json:"query_count"`
+	SlowQueryCount  int                   `json:"slow_query_count"`
+	TotalDurationMS float64               `json:"total_duration_ms"`
+	MaxQueryMS      float64               `json:"max_query_ms"`
+	Statements      []SQLProfileStatement `json:"statements,omitempty"`
+}
+
+type SQLProfileStatement struct {
+	SQL        string   `json:"sql"`
+	Params     []string `json:"params"`
+	DurationMS float64  `json:"duration_ms"`
+	Rows       int64    `json:"rows"`
+	Slow       bool     `json:"slow"`
+	Error      bool     `json:"error"`
 }
 
 // TestProgress is the live phase + count of a still-running test node. Phase is
@@ -207,7 +266,7 @@ type FixtureContext struct {
 }
 
 func (t Test) IsFolder() bool {
-	return !t.Skipped && !t.Failed && !t.Passed
+	return !t.Skipped && !t.Aborted && !t.Failed && !t.Passed
 }
 
 func (t Test) IsEmpty() bool {
@@ -243,6 +302,9 @@ func (t Test) Pretty() api.Text {
 	case t.TimedOut:
 		s = s.Append("⏳", "text-amber-600 font-bold")
 		textStyle = "text-amber-600"
+	case t.Aborted:
+		s = s.Append(icons.Stop, "text-red-400")
+		textStyle = "text-red-400"
 	case t.Skipped:
 		s = s.Append(icons.Skip, "text-orange-500")
 		textStyle = "text-yellow-500"
@@ -469,6 +531,8 @@ func (tr Test) Sum() TestSummary {
 		summary.Failed = 1
 	} else if tr.Warned {
 		summary.Warned = 1
+	} else if tr.Aborted {
+		summary.Aborted = 1
 	} else if tr.Skipped {
 		summary.Skipped = 1
 	} else if tr.Passed {
@@ -487,6 +551,7 @@ func (tr Test) Sum() TestSummary {
 		summary.Passed += childSummary.Passed
 		summary.Failed += childSummary.Failed
 		summary.Warned += childSummary.Warned
+		summary.Aborted += childSummary.Aborted
 		summary.Skipped += childSummary.Skipped
 		summary.Pending += childSummary.Pending
 		summary.Running += childSummary.Running
@@ -613,6 +678,7 @@ type TestSummary struct {
 	Passed   int
 	Failed   int
 	Warned   int
+	Aborted  int
 	Skipped  int
 	Pending  int
 	Running  int
@@ -630,6 +696,9 @@ func (s TestSummary) Pretty() api.Text {
 	}
 	if s.Warned > 0 {
 		t = t.Add(clicky.KeyValue(" warned", s.Warned, "text-amber-500")).Append(" ")
+	}
+	if s.Aborted > 0 {
+		t = t.Add(clicky.KeyValue(" aborted", s.Aborted, "text-red-400")).Append(" ")
 	}
 	if s.Skipped > 0 {
 		t = t.Add(clicky.KeyValue(" skipped", s.Skipped, "text-yellow-500")).Append(" ")
@@ -651,6 +720,7 @@ func (tr TestSummary) Add(other TestSummary) TestSummary {
 		Passed:   tr.Passed + other.Passed,
 		Failed:   tr.Failed + other.Failed,
 		Warned:   tr.Warned + other.Warned,
+		Aborted:  tr.Aborted + other.Aborted,
 		Skipped:  tr.Skipped + other.Skipped,
 		Pending:  tr.Pending + other.Pending,
 		Running:  tr.Running + other.Running,
@@ -701,6 +771,7 @@ func (tr Test) Filter(filter TestFilter) Test {
 		Duration:          tr.Duration,
 		Failed:            tr.Failed,
 		Warned:            tr.Warned,
+		Aborted:           tr.Aborted,
 		Skipped:           tr.Skipped,
 		Passed:            tr.Passed,
 		Stdout:            tr.Stdout,

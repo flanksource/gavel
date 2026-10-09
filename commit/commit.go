@@ -79,6 +79,10 @@ type Options struct {
 	DryRun     bool
 	Force      bool
 	Push       bool
+	// PushBranch, with Push, pushes HEAD to this remote branch instead of
+	// searching for the PR to push to: the caller already knows which PR it is
+	// working on, and may be committing on a scratch branch no PR is open for.
+	PushBranch string
 	// AutoMerge, with Push, enables GitHub auto-merge on a newly opened PR so
 	// it merges once required checks pass. Only applies to PRs this run opens.
 	AutoMerge bool
@@ -105,7 +109,8 @@ type Options struct {
 	LintFlag        string
 	LintSecretsFlag string
 	// TidyFlag is the raw string form of --tidy. Empty = flag not provided;
-	// "true"/"false" override .gavel.yaml commit.tidy.enabled. String (not
+	// "true"/"false" override .gavel.yaml commit.tidy.enabled. With neither
+	// set, tidy follows Push. String (not
 	// *bool) so the clicky flag binding stays a plain string flag the user
 	// can set to "true" or "false".
 	TidyFlag string
@@ -194,6 +199,11 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		return nil, err
 	}
 	opts.WorkDir = gitRoot
+	if opts.Push && (opts.PushBranch == "" || opts.AutoMerge) && pushDepsForTest == nil {
+		if err := validatePushProvider(ctx, opts); err != nil {
+			return nil, err
+		}
+	}
 	// --max-commits only has meaning for the grouping flow, so setting it implies
 	// -A. Applied before the mutual-exclusion guards so a conflicting combination
 	// (e.g. --max-commits with --fixup/--interactive) is rejected, not ignored.
@@ -356,6 +366,7 @@ func runSingleCommit(ctx context.Context, opts Options) (*Result, error) {
 		return result, fmt.Errorf("create commit: %w", err)
 	}
 	result.Hash = hash
+	result.Commits[0].Hash = hash
 	logger.Infof("Committed %s: %s", shortHash(hash), firstLine(result.Message))
 	restoreLocalReplaces(opts.WorkDir, source.PendingRestores)
 	return result, nil

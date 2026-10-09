@@ -1,12 +1,16 @@
 import { Button } from '@flanksource/clicky-ui/components';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { TodoItem, TodoRunOptions } from '../../types';
+import type { TodoItem, TodoRunOptions, TodoSessionDetailResponse } from '../../types';
 import type { RunContext } from './providers';
-import { TodoDetail } from './TodoDetail';
+import { StatefulTodoDetail } from './todoDetailTestHarness';
+import type { TodoDetailProps } from './TodoDetail';
+import { queryTestWrapper } from './queryTestWrapper';
+import type { TodoDetailView } from '../../routes';
 import { readRunChoiceState } from './runChoiceStorage';
 
-const execution = vi.hoisted(() => ({ run: vi.fn(), verify: vi.fn(), reset: vi.fn(), step: 'verify' }));
+const execution = vi.hoisted(() => ({ run: vi.fn(), verify: vi.fn(), reset: vi.fn(), step: 'verify', spec: undefined as Record<string, unknown> | undefined }));
+const session = vi.hoisted(() => ({ stop: vi.fn(), detail: undefined as TodoSessionDetailResponse | undefined }));
 const spec = { mode: 'agent', model: 'example-model', effort: 'medium' as const };
 const context: RunContext = {
   modes: [{ id: 'agent', label: 'Agent', provider: 'openai', agent: 'codex', defaultModel: spec.model, driver: 'agent', mechanisms: [], models: [{ id: spec.model, label: 'Example', provider: 'openai', reasoning: true }] }],
@@ -25,16 +29,29 @@ vi.mock('./todoMutations', async importOriginal => ({
   useDeleteTodoMutation: () => ({ isPending: false }),
   useTransferTodoMutation: () => ({ isPending: false }),
   useGithubPushTodoMutation: () => ({ isPending: false }),
-  useTodoSessionStop: () => ({ isPending: false }),
+  useTodoSessionStop: () => ({ isPending: false, mutateAsync: session.stop }),
   useTodoVerificationRun: () => ({ isPending: false, mutateAsync: execution.verify }),
 }));
-vi.mock('./TodoSessionTimer', () => ({ useSessionStats: () => ({ stats: null }) }));
-vi.mock('./TodoSessionDetail', () => ({ useTodoSessionDetail: () => ({ detail: undefined, error: '' }) }));
+vi.mock('./TodoSessionTimer', async importOriginal => ({ ...(await importOriginal<object>()), useSessionStats: () => ({ stats: null }) }));
+vi.mock('./TodoSessionDetail', () => ({ useTodoSessionDetail: () => ({ detail: session.detail, error: '' }) }));
 vi.mock('./tagQueries', () => ({ useTodoTagIndex: () => ({}), useTodoTagCounts: () => ({}) }));
 vi.mock('./TodoTag', () => ({ TodoTagField: () => null, TodoTagRow: () => null }));
 vi.mock('./TodoTimeline', () => ({ TodoTimeline: () => null }));
-vi.mock('./TodoCommits', () => ({ TodoCommits: () => null }));
-vi.mock('./TodoSession', () => ({ TodoSession: () => null }));
+vi.mock('./TodoRunBranch', () => ({ TodoRunBranch: () => null }));
+vi.mock('./TodoSession', () => ({
+  TodoSession: ({ sessionTab, sessionIds, onSessionTabChange, onSessionIdsChange }: {
+    sessionTab?: string;
+    sessionIds?: string[];
+    onSessionTabChange: (tab: string) => void;
+    onSessionIdsChange: (ids: string[]) => void;
+  }) => (
+    <div>
+      <div data-testid="session-view">{`${sessionTab ?? 'default'}|${(sessionIds ?? []).join(',')}`}</div>
+      <Button onClick={() => onSessionTabChange('metadata')}>Inspector metadata</Button>
+      <Button onClick={() => onSessionIdsChange(['run-b'])}>Select run-b</Button>
+    </div>
+  ),
+}));
 vi.mock('./TodoPlan', () => ({ TodoPlan: () => null }));
 vi.mock('./TodoVerification', () => ({ TodoVerification: () => null }));
 vi.mock('./TodoCompose', () => ({ TodoTitleEditor: () => null, TodoBodyEditor: () => null, TodoCommentBox: () => null }));
@@ -50,7 +67,7 @@ vi.mock('./TodoPhaseButton', () => ({
 }));
 vi.mock('./TodoRunAdvancedDialog', () => ({
   TodoRunAdvancedDialog: ({ open, initialMode, onRun }: { open: boolean; initialMode: string; onRun: (options: TodoRunOptions) => void }) => open && (
-    <div data-testid="advanced-step">{initialMode}<Button onClick={() => onRun({ step: execution.step, spec })}>Dispatch selected step</Button></div>
+    <div data-testid="advanced-step">{initialMode}<Button onClick={() => onRun({ step: execution.step, spec: execution.spec ?? spec })}>Dispatch selected step</Button></div>
   ),
 }));
 
@@ -63,15 +80,90 @@ beforeEach(() => {
   execution.run.mockReset();
   execution.verify.mockReset();
   execution.step = 'verify';
+  execution.spec = undefined;
+  session.stop.mockReset();
+  session.detail = undefined;
   const values = new Map<string, string>();
   vi.stubGlobal('localStorage', { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => values.set(key, value) });
 });
 afterEach(() => vi.unstubAllGlobals());
 
-async function openDetail() {
-  render(<TodoDetail todo={todo} loading={false} dir="/repo" onChanged={() => {}} onDeleted={() => {}} />);
+async function openDetail(initialView: TodoDetailView = {}, onViewChange?: TodoDetailProps['onViewChange']) {
+  render(<StatefulTodoDetail todo={todo} loading={false} dir="/repo" onChanged={() => {}} onDeleted={() => {}} initialView={initialView} onViewChange={onViewChange} />, { wrapper: queryTestWrapper() });
   await act(async () => {});
 }
+
+describe('TodoDetail routed view', () => {
+  it('reports a detail tab click as a pushed view change', async () => {
+    const onViewChange = vi.fn();
+    await openDetail({}, onViewChange);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Session' }));
+
+    expect(onViewChange).toHaveBeenCalledWith({ tab: 'session' }, undefined);
+    expect(screen.getByTestId('session-view').textContent).toBe('default|');
+  });
+
+  it('hands the routed inspector tab and attempts to the session, pushing tab changes and replacing selections', async () => {
+    const onViewChange = vi.fn();
+    const view: TodoDetailView = { tab: 'session', sessionTab: 'costs', sessionIds: ['run-a'] };
+    await openDetail(view, onViewChange);
+    expect(screen.getByTestId('session-view').textContent).toBe('costs|run-a');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Inspector metadata' }));
+    expect(onViewChange).toHaveBeenLastCalledWith({ ...view, sessionTab: 'metadata' }, undefined);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Select run-b' }));
+    expect(onViewChange).toHaveBeenLastCalledWith({ ...view, sessionTab: 'metadata', sessionIds: ['run-b'] }, 'replace');
+  });
+
+  it('opens the Session tab for a new run and drops earlier attempt picks', async () => {
+    const onViewChange = vi.fn();
+    await openDetail({ tab: 'plan', sessionTab: 'raw', sessionIds: ['run-a'] }, onViewChange);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start plan' }));
+
+    await waitFor(() => expect(onViewChange).toHaveBeenCalledWith({ tab: 'session', sessionTab: 'raw' }, undefined));
+  });
+
+  it('lands on the Verification tab after dispatching a verification', async () => {
+    const onViewChange = vi.fn();
+    execution.verify.mockResolvedValue({});
+    await openDetail({ tab: 'plan' }, onViewChange);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start verify' }));
+
+    await waitFor(() => expect(onViewChange).toHaveBeenCalledWith({ tab: 'verification' }, undefined));
+  });
+});
+
+describe('TodoDetail stop control', () => {
+  it.each([
+    { processActive: false, canStop: true },
+    { processActive: true, canStop: true },
+    { processActive: false, canStop: false },
+    { processActive: true, canStop: false },
+  ])('uses canStop=$canStop when processActive=$processActive', async ({ processActive, canStop }) => {
+    const attempt = {
+      promptRunId: 'active-run', admissionSessionId: 'admission-session', ordinal: 1, step: 'run',
+      requested: {}, resolved: {}, state: 'running', status: 'running', phase: 'generate',
+      queuedAt: '2026-10-05T09:24:56Z', createdAt: '2026-10-05T09:24:56Z', updatedAt: '2026-10-05T09:24:56Z',
+      verification: null, processActive, canStop,
+    };
+    session.detail = { attempts: [attempt] };
+    render(<StatefulTodoDetail todo={{ ...todo, status: 'in_progress', sessionId: 'provider-session' }} loading={false} dir="/repo" onChanged={() => {}} onDeleted={() => {}} initialView={{ tab: 'session' }} />, { wrapper: queryTestWrapper() });
+    await act(async () => {});
+
+    const stop = screen.getByRole<HTMLButtonElement>('button', { name: 'Stop' });
+    expect(stop.disabled).toBe(!canStop);
+    fireEvent.click(stop);
+    if (canStop) {
+      await waitFor(() => expect(session.stop).toHaveBeenCalledWith(attempt.promptRunId));
+    } else {
+      expect(session.stop).not.toHaveBeenCalled();
+    }
+  });
+});
 
 describe('TodoDetail named step dispatch', () => {
   it.each(['plan', 'verify', 'review-security'])('opens Advanced %s on that exact step', async step => {
@@ -88,6 +180,17 @@ describe('TodoDetail named step dispatch', () => {
     expect(execution.run).not.toHaveBeenCalled();
   });
 
+  // The catalog only offers `medium` for this model, so reconciling the request
+  // would rewrite `high`; the advanced dialog's choice must reach the server as set.
+  it('dispatches an advanced verification runtime exactly as set, without reconciling its effort', async () => {
+    const chosen = { mode: 'agent', model: 'example-model', effort: 'high' };
+    execution.spec = chosen;
+    await openDetail();
+    fireEvent.click(screen.getByRole('button', { name: 'Advanced verify' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Dispatch selected step' }));
+    await waitFor(() => expect(execution.verify).toHaveBeenCalledWith({ ref: todo.ref, spec: chosen }));
+  });
+
   it('remembers and dispatches the selected step after changing the dialog from run to plan', async () => {
     execution.step = 'plan';
     await openDetail();
@@ -96,6 +199,22 @@ describe('TodoDetail named step dispatch', () => {
     await waitFor(() => expect(execution.run).toHaveBeenCalledWith(todo.ref, { step: 'plan', spec }));
     expect(readRunChoiceState().last.plan).toEqual({ step: 'plan', spec });
     expect(readRunChoiceState().last.run).toBeUndefined();
+  });
+
+  // The edited prompt was rendered for this todo. The advanced dispatch sends it
+  // once; a later quick run of the same step, on this or any other todo, must
+  // render its own prompt instead of replaying the remembered one.
+  it('dispatches an edited prompt once without replaying it on the next quick run', async () => {
+    const editedPrompt = { user: '## Review lifecycle routing\n\nEdited prompt body' };
+    execution.step = 'plan';
+    execution.spec = { ...spec, prompt: editedPrompt };
+    await openDetail();
+    fireEvent.click(screen.getByRole('button', { name: 'Advanced plan' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Dispatch selected step' }));
+    await waitFor(() => expect(execution.run).toHaveBeenCalledWith(todo.ref, { step: 'plan', spec: { ...spec, prompt: editedPrompt } }));
+    expect(readRunChoiceState().last.plan).toEqual({ step: 'plan', spec });
+    fireEvent.click(screen.getByRole('button', { name: 'Start plan' }));
+    await waitFor(() => expect(execution.run).toHaveBeenLastCalledWith(todo.ref, { step: 'plan', spec }));
   });
 
   // A step the operator has never configured dispatches by name with an empty

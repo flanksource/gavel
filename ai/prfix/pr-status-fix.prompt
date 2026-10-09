@@ -11,6 +11,8 @@ prompt:
     Read the `gavel pr status` snapshot the user pastes, identify the failing
     GitHub Actions jobs and unresolved review comments, and edit files in place
     to fix them. Prefer minimal, targeted edits over rewrites.
+    A merge conflict with the base branch comes first: CI results for a
+    conflicting head are stale, so resolve the conflict before any CI fix.
     Do not run any commit-related commands and do not push: each turn's changes
     are committed and pushed for you, after which the PR status is re-polled and
     any remaining failures are fed back to you.
@@ -29,8 +31,19 @@ workflow:
     # No --actions here on purpose: the agent needs the full red picture, and
     # scoping the gate would let a check outside the selector stay broken while
     # the loop reports green.
+    #
+    # The PR is named by URL, not resolved from the current branch: under
+    # --worktree the agent works on a scratch branch no PR is open for.
+    #
+    # With a merge in progress, two sub-second git checks run first so an
+    # unresolved conflict fails the turn with the offending files as feedback:
+    # unmerged index entries, then conflict markers left in resolved files.
     commands:
-      - gavel pr status --follow --fail-fast --logs --tail-logs 40
+{{#if conflicts}}
+      - git diff --name-only --diff-filter=U --exit-code
+      - git diff --check HEAD
+{{/if}}
+      - gavel pr status {{url}} --follow --fail-fast --logs --tail-logs 40
   commits:
     # A real commit per turn, not the `on: turn` default of fixup: the chain is
     # squashed only at end of run, and these commits are pushed as they are cut.
@@ -38,6 +51,22 @@ workflow:
       mode: commit
       gates: cheap
 ---
+{{#if conflicts}}
+## Merge conflicts — resolve these first
+
+`{{branch}}` conflicts with `{{baseBranch}}`. gavel has already started
+`git merge origin/{{baseBranch}}` in this tree, and these files are left conflicted:
+
+{{#each conflicts}}
+- `{{path}}`{{#if kind}} ({{kind}}){{/if}}
+{{/each}}
+
+Resolve every `<<<<<<<` / `=======` / `>>>>>>>` hunk so the result keeps the
+intent of both sides, leave no conflict markers behind, then `git add` each
+resolved file. Do not run `git merge --abort`, `git commit` or `git rebase`: the
+merge commit is concluded and pushed for you once no conflicted path remains.
+
+{{/if}}
 Fix the failures and unresolved comments visible in this PR status snapshot:
 
 ```

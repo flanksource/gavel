@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/types"
 )
@@ -45,12 +46,27 @@ func (h *Host) OnOutcome(ctx context.Context, todo *types.TODO, step Step, outco
 	// An event that said `keep` while the todo moved to completed would record a
 	// transition that never happened.
 	recorded := status
+	var triageErr error
+	if execution.Success && execution.TriageNew != nil && execution.EndStatus == types.EndCompleted {
+		if execution.TriageNewApplier == nil {
+			return fmt.Errorf("triage.new result has no approval coordinator")
+		}
+		if err := execution.TriageNewApplier.Apply(ctx, todo, execution.TriageNew); err != nil {
+			triageErr = err
+			execution.Success, execution.EndStatus, execution.ErrorMessage = false, types.EndFailed, err.Error()
+			status, recorded = string(types.StatusFailed), string(types.StatusFailed)
+		}
+		if status == OutcomeKeep {
+			recorded = string(todo.Status)
+		}
+	}
 	if execution.Triage != nil {
 		before := todo.Status
-		if err := todos.ApplyTriage(persistCtx, h.Provider, todo, execution.Triage, todos.TriageOptions{WorkDir: h.WorkDir}); err != nil {
+		applied, err := h.applyTriage(persistCtx, todo, execution.Triage)
+		if err != nil {
 			return err
 		}
-		if status == OutcomeKeep && todo.Status != before {
+		if applied && status == OutcomeKeep && todo.Status != before {
 			recorded = string(todo.Status)
 		}
 	}
@@ -64,7 +80,33 @@ func (h *Host) OnOutcome(ctx context.Context, todo *types.TODO, step Step, outco
 	if err := events.AppendEvent(persistCtx, todo, outcomeEvent(step, outcome, recorded)); err != nil {
 		return fmt.Errorf("record lifecycle outcome: %w", err)
 	}
-	return nil
+	return triageErr
+}
+
+// applyTriage writes the verdict, or — when the host is previewing and the
+// verdict would close a TODO — reports what it would have written and writes
+// nothing. It returns whether anything was applied.
+//
+// The preview is all-or-nothing on purpose. Applying a merge-into's combined body
+// while leaving the folded TODOs open would duplicate exactly the content the
+// verdict existed to combine, so a held verdict holds every field.
+func (h *Host) applyTriage(ctx context.Context, todo *types.TODO, env *types.TriageEnvelope) (bool, error) {
+	opts := todos.TriageOptions{WorkDir: h.WorkDir}
+	if h.Preview && env.RetiresTODOs() {
+		preview, err := todos.PreviewTriage(ctx, h.Provider, todo, env, opts)
+		if err != nil {
+			return false, err
+		}
+		if preview != nil {
+			logger.Infof("%s", preview)
+		}
+		return false, nil
+	}
+	if err := todos.ApplyTriage(ctx, h.Provider, todo, env, opts); err != nil {
+		return false, err
+	}
+	logger.Infof("%s", todos.RenderTriageApplied(todo, env))
+	return true, nil
 }
 
 // stateUpdate is everything the run changes about the todo besides the
@@ -137,6 +179,9 @@ func outcomeEvent(step Step, outcome *StepOutcome, status string) todos.Event {
 	}
 	if outcome.Admission.PromptRunID.String() != "00000000-0000-0000-0000-000000000000" {
 		payload["promptRunId"] = outcome.Admission.PromptRunID.String()
+	}
+	if outcome.Source != "" {
+		payload["source"] = outcome.Source
 	}
 	if execution.Plan != nil {
 		payload["plan"] = map[string]any{"status": string(execution.Plan.Status), "path": execution.Plan.Path}

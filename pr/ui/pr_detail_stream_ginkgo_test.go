@@ -4,10 +4,9 @@ import (
 	"net/http/httptest"
 	"time"
 
+	"github.com/flanksource/gavel/pr/model"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-
-	"github.com/flanksource/gavel/github"
 )
 
 var _ = Describe("PR detail stream frames", func() {
@@ -17,7 +16,7 @@ var _ = Describe("PR detail stream frames", func() {
 	// the PR.
 	It("emits comments as an array when the cached PR has none", func() {
 		srv := &Server{detailCache: NewDetailCache(), refreshCh: make(chan struct{}, 1)}
-		srv.detailCache.Put(SyncStatusKey("acme/gavel", 1), prDetail{PR: &github.PRInfo{Number: 1, Title: "Bump deps"}}, time.Now())
+		srv.detailCache.Put(SyncStatusKey("acme/gavel", 1), prDetail{PR: &model.PRInfo{Number: 1, Title: "Bump deps"}}, time.Now())
 
 		rec := httptest.NewRecorder()
 		srv.handleDetail(rec, httptest.NewRequest("GET", "/api/prs/detail?repo=acme%2Fgavel&number=1", nil))

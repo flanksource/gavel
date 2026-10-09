@@ -8,11 +8,19 @@ import { useProjectCatalog } from '../useProjectCatalog';
 
 const streamListeners = new Map<string, EventListener>();
 
+// useProjectCatalog's own stream-handling logic is exercised against a
+// stubbed global EventSource, not the connection-multiplexing hub (covered
+// separately by eventHub.test.ts) — so openEventStream is mocked straight
+// through to `new EventSource(url)`.
+vi.mock('../eventHub', () => ({
+  openEventStream: (url: string) => new EventSource(url),
+}));
+
 vi.mock('./ProcControl', () => ({ ProcControl: () => null }));
 vi.mock('./TodoBadge', () => ({ TodoBadge: () => null }));
 vi.mock('./GitChangesBadge', () => ({ GitChangesBadge: () => null }));
 vi.mock('./RelativeTime', () => ({ RelativeTime: ({ iso }: { iso: string }) => <span>{iso}</span> }));
-vi.mock('./ProjectStatusView', () => ({ ProjectStatusView: ({ project, showResults }: { project: Project; showResults: boolean }) => <div>Status {project.name}, results {showResults ? 'on' : 'off'}</div> }));
+vi.mock('./ProjectRefPane', () => ({ ProjectRefPane: ({ project, showResults, projectRef }: { project: Project; showResults: boolean; projectRef: string }) => <div>Status {project.name}, results {showResults ? 'on' : 'off'}, ref {projectRef || 'main'}</div> }));
 vi.mock('./tests/TestRunDetail', () => ({ TestRunDetail: ({ project, runId }: { project: string; runId: string }) => <div>Run {project}/{runId}</div> }));
 
 const project: Project = { name: 'gavel', dir: '/work/gavel', repos: ['acme/gavel'] };
@@ -37,20 +45,21 @@ const response = {
 
 // Stands in for App's AppShell, which renders the sidebar into `bodySidebar` and
 // the detail pane into `children` off the one catalog the hook returns.
-function ProjectsTab({ configured, selectedName, selectedRunId, enabled = true, historyEnabled = true, resultsEnabled = false }: {
+function ProjectsTab({ configured, selectedName, selectedRunId, enabled = true, historyEnabled = true, resultsEnabled = false, projectRef = '' }: {
   configured: Project[];
   selectedName: string;
   selectedRunId: string;
   enabled?: boolean;
   historyEnabled?: boolean;
   resultsEnabled?: boolean;
+  projectRef?: string;
 }) {
   const catalog = useProjectCatalog({ configured, selectedName, enabled: enabled && historyEnabled });
   return (
     <div>
       <ProjectsSidebar
         catalog={catalog}
-        procStatus={{}}
+        gitSummary={{ byProject: new Map(), error: '', loading: true }}
         selectedName={selectedName}
         selectedRunId={selectedRunId}
         historyEnabled={historyEnabled}
@@ -66,7 +75,9 @@ function ProjectsTab({ configured, selectedName, selectedRunId, enabled = true, 
         selectedName={selectedName}
         selectedRunId={selectedRunId}
         diffPath=""
+        projectRef={projectRef}
         resultsEnabled={resultsEnabled}
+        onRefChange={() => {}}
         onDiffPathChange={() => {}}
         onChanged={() => {}}
       />
@@ -179,8 +190,16 @@ describe('projects tab', () => {
 
     renderWithClient(<ProjectsTab configured={[project]} selectedName="gavel" selectedRunId="" historyEnabled={false} resultsEnabled />);
 
-    expect(screen.getByText('Status gavel, results on')).toBeTruthy();
+    expect(screen.getByText('Status gavel, results on, ref main')).toBeTruthy();
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('forwards the selected worktree or branch ref to the detail pane', () => {
+    stubRunHistory(response);
+
+    renderWithClient(<ProjectsTab configured={[project]} selectedName="gavel" selectedRunId="" historyEnabled={false} projectRef="br:feat" />);
+
+    expect(screen.getByText('Status gavel, results off, ref br:feat')).toBeTruthy();
   });
 
   it('deduplicates the run-history bootstrap request across consumers', async () => {

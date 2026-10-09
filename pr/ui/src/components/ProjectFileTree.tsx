@@ -3,6 +3,7 @@ import { Tree } from '@flanksource/clicky-ui/data';
 import { UiEyeClosed } from '@flanksource/clicky-ui/icons';
 import type { ProjectFileStatus, FileState } from './ProjectStatusView';
 import { ProjectFileIcon } from '../icons/ProjectFileIcon';
+import { buildFileTree, filesBelow, findFileTreeNode, sortedChildren, type FileTreeNode } from './fileTree';
 
 interface ProjectFileTreeProps {
   files: ProjectFileStatus[];
@@ -39,7 +40,7 @@ export function ProjectFileTree({
     <Tree<ProjectFileTreeNode>
       roots={roots}
       ariaLabel="Project files"
-      getChildren={node => [...node.children.values()].sort(compareNodes)}
+      getChildren={sortedChildren}
       getKey={node => node.path}
       getAriaLabel={node => node.path}
       getSearchText={node => node.path}
@@ -70,12 +71,7 @@ export function ProjectFileTree({
   );
 }
 
-interface ProjectFileTreeNode {
-  name: string;
-  path: string;
-  children: Map<string, ProjectFileTreeNode>;
-  file?: ProjectFileStatus;
-}
+type ProjectFileTreeNode = FileTreeNode<ProjectFileStatus>;
 
 function ProjectFileTreeRow({
   node,
@@ -223,41 +219,3 @@ function StateBadge({ state }: { state: FileState }) {
   return <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${tones[state]}`}>{state}</span>;
 }
 
-function buildFileTree(files: ProjectFileStatus[]) {
-  const roots = new Map<string, ProjectFileTreeNode>();
-  for (const file of files) {
-    const parts = file.path.split('/').filter(Boolean);
-    let nodes = roots;
-    let currentPath = '';
-    parts.forEach((part, index) => {
-      currentPath = currentPath ? `${currentPath}/${part}` : part;
-      const node: ProjectFileTreeNode = nodes.get(part) ?? { name: part, path: currentPath, children: new Map() };
-      nodes.set(part, node);
-      if (index === parts.length - 1) node.file = file;
-      nodes = node.children;
-    });
-  }
-  return [...roots.values()].sort(compareNodes);
-}
-
-function compareNodes(left: ProjectFileTreeNode, right: ProjectFileTreeNode) {
-  const leftDirectory = left.children.size > 0;
-  const rightDirectory = right.children.size > 0;
-  if (leftDirectory !== rightDirectory) return leftDirectory ? -1 : 1;
-  return left.name.localeCompare(right.name);
-}
-
-function filesBelow(node: ProjectFileTreeNode): ProjectFileStatus[] {
-  if (node.file) return [node.file];
-  return [...node.children.values()].flatMap(filesBelow);
-}
-
-function findFileTreeNode(nodes: ProjectFileTreeNode[], path: string): ProjectFileTreeNode | null {
-  if (!path) return null;
-  for (const node of nodes) {
-    if (node.path === path) return node;
-    const child = findFileTreeNode([...node.children.values()], path);
-    if (child) return child;
-  }
-  return null;
-}

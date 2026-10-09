@@ -5,14 +5,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/flanksource/gavel/github"
+	"github.com/flanksource/gavel/pr/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func job(name string, startedMinute int, conclusion string) github.Job {
+func job(name string, startedMinute int, conclusion string) model.Job {
 	started := time.Date(2026, 8, 10, 12, startedMinute, 0, 0, time.UTC)
-	return github.Job{
+	return model.Job{
 		Name:        name,
 		Status:      "COMPLETED",
 		Conclusion:  conclusion,
@@ -21,21 +21,21 @@ func job(name string, startedMinute int, conclusion string) github.Job {
 	}
 }
 
-func runsFixture() map[int64]*github.WorkflowRun {
-	return map[int64]*github.WorkflowRun{
+func runsFixture() map[int64]*model.WorkflowRun {
+	return map[int64]*model.WorkflowRun{
 		31: {DatabaseID: 31, Name: "CI", Status: "COMPLETED", Conclusion: "SUCCESS",
-			Jobs: []github.Job{job("build", 30, "SUCCESS")}},
+			Jobs: []model.Job{job("build", 30, "SUCCESS")}},
 		12: {DatabaseID: 12, Name: "Storybook", Status: "COMPLETED", Conclusion: "SUCCESS",
-			Jobs: []github.Job{job("Storybook Preview", 10, "SUCCESS")}},
+			Jobs: []model.Job{job("Storybook Preview", 10, "SUCCESS")}},
 		27: {DatabaseID: 27, Name: "Storybook", Status: "COMPLETED", Conclusion: "SUCCESS",
-			Jobs: []github.Job{job("Delete Storybook Preview", 20, "SUCCESS")}},
+			Jobs: []model.Job{job("Delete Storybook Preview", 20, "SUCCESS")}},
 	}
 }
 
 // Runs are held in a map, so rendering them in map order reshuffles the whole
 // section between two invocations against the same PR.
 func TestWorkflowRenderIsStableAcrossRuns(t *testing.T) {
-	result := PRWatchResult{PR: &github.PRInfo{Number: 61}, Runs: runsFixture()}
+	result := PRWatchResult{PR: &model.PRInfo{Number: 61}, Runs: runsFixture()}
 
 	first := result.prettyWorkflows().String()
 	for i := 0; i < 20; i++ {
@@ -49,7 +49,7 @@ func TestWorkflowRenderIsStableAcrossRuns(t *testing.T) {
 // Two runs of one workflow otherwise render under identical headings and read
 // as a duplicated section.
 func TestRepeatedWorkflowNamesAreDisambiguated(t *testing.T) {
-	result := PRWatchResult{PR: &github.PRInfo{Number: 61}, Runs: runsFixture()}
+	result := PRWatchResult{PR: &model.PRInfo{Number: 61}, Runs: runsFixture()}
 
 	rendered := result.prettyWorkflows().String()
 
@@ -63,9 +63,9 @@ func TestRepeatedWorkflowNamesAreDisambiguated(t *testing.T) {
 // bare name with nothing to act on — and it is what drives a non-zero exit.
 func TestFailedRollupCheckShowsItsDetailsURL(t *testing.T) {
 	const url = "https://github.com/acme/widgets/security/code-scanning"
-	result := PRWatchResult{PR: &github.PRInfo{
+	result := PRWatchResult{PR: &model.PRInfo{
 		Number: 61,
-		StatusCheckRollup: github.StatusChecks{
+		StatusCheckRollup: model.StatusChecks{
 			{Name: "CodeQL", Status: "COMPLETED", Conclusion: "FAILURE", DetailsURL: url},
 			{Name: "CodeRabbit", Status: "COMPLETED", Conclusion: "SUCCESS", DetailsURL: "https://example.com/ok"},
 		},
@@ -132,7 +132,7 @@ func TestClosedPullRequestBotNoticesAreNotActionable(t *testing.T) {
 	rateLimited := "<!-- This is an auto-generated comment: failure by coderabbit.ai -->\n\n" +
 		"> [!CAUTION]\n> ## Review failed\n>\n> Rate limit exceeded.\n"
 
-	kept := filterActionableComments([]github.PRComment{
+	kept := filterActionableComments([]model.PRComment{
 		{Body: coderabbit},
 		{Body: preview},
 		{Body: rateLimited},

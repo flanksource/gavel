@@ -96,6 +96,26 @@ The action is crash-resilient: if gavel exits before writing results, placeholde
 
 ## Commands
 
+### Azure DevOps pull requests
+
+`gavel pr status`, `gavel pr create`, `gavel commit -p`, and the project branch PR API support hosted Azure DevOps. Gavel detects `origin` URLs at `dev.azure.com` and legacy `visualstudio.com` hosts, including HTTPS and SSH remotes. An explicit `--repo` accepts an Azure repository URL; creation requires it to match `origin`.
+
+Set `AZURE_DEVOPS_EXT_PAT` to use a personal access token, or authenticate with `az login`. A configured PAT takes precedence; an invalid PAT produces an error. Azure CLI tokens are refreshed during long watches. Status requires repository and build read permissions; creation additionally requires code write permission. Git pushes use your existing Git credentials separately.
+
+```bash
+gavel pr status 27 --logs --tail-logs 100
+gavel pr status https://dev.azure.com/acme/product/_git/service/pullrequest/27 --follow
+gavel pr status 27 --actions 'CI,Test' --follow --fail-fast
+gavel pr create HEAD --base origin/main --draft
+gavel commit -p
+```
+
+Status shows current-revision pipeline jobs, steps, failed-step logs, and merge readiness (`ready`, `conflicting`, `blocked`, `pending`, or `unknown`) with policy reasons. `--actions` matches pipeline names and IDs, build IDs, job names, and native job UUIDs. `--follow` waits for pipeline jobs and queued merge computation; human policy blockers produce a completed report with exit code 1. A settled PR with no pipelines returns immediately. Failed or cancelled selected jobs and non-ready open PRs return exit code 1. `--tail-logs 0` includes the complete failed log.
+
+PR creation preserves the isolated worktree, ordered cherry-picks, AI-generated title/body/branch, and conflict recovery. `pr create` uses the explicit base, then `.gavel.yaml` `pr.base`, then `origin/main`; commit-push uses the repository default branch.
+
+Azure review threads, dashboard listing, close/merge actions, AI repair, auto-merge, and Azure DevOps Server are outside this support. Azure rejects `pr status --comments`, `--ai-fix`, `--worktree`, and `commit -p --auto-merge` before side effects.
+
 ### Testing & Linting
 
 #### `gavel test`
@@ -699,7 +719,8 @@ gavel todos list
 gavel todos list --status pending
 gavel todos run 3f2a1b
 gavel todos steps 3f2a1b                 # which lifecycle steps apply to this todo now
-gavel todos run --step plan              # propose a reviewable plan first (read-only)
+gavel todos run 3f2a1b --step plan      # propose a reviewable plan first (read-only)
+gavel todos run 3f2a1b --step triage --preview   # report a merge or duplicate, close nothing
 gavel todos check 3f2a1b                 # run the TODO's complete definition of done
 ```
 
@@ -707,6 +728,14 @@ gavel todos check 3f2a1b                 # run the TODO's complete definition of
 any step the project's lifecycle declares); empty lets the lifecycle pick the
 next applicable step. `--model` selects the model, in the compact
 `mode:model:effort` form (`cli:opus:high`, `api:sonnet`).
+
+Two flags withhold different things, and the difference matters for `triage`:
+`--dry-run` prints the rendered prompt and the resolved spec and stops before the
+agent runs, so it never shows a verdict. `--preview` runs the agent
+and applies everything except the two verdicts that close a TODO — `merge-into`
+and `duplicate-of` — reporting what they would have closed instead. It validates
+the same way the real apply does, so a fold naming a missing or already-closed
+TODO fails in the preview too.
 
 The configured `checks:` test/lint suite is part of every todo's definition of done: when `.gavel.yaml` `checks.enabled` (or a todo's own `checks:` front matter) turns it on, the run step executes it after the agent reports done and feeds any failures back into the same session until they pass (bounded by `todos.run.workflow.verify.maxIterations`).
 

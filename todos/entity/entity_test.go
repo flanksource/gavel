@@ -8,9 +8,11 @@ import (
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/entity"
 	"github.com/flanksource/gavel/todos"
+	"github.com/flanksource/gavel/todos/query"
 	"github.com/flanksource/gavel/todos/run"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
 
 func testDeps() Deps {
@@ -18,7 +20,8 @@ func testDeps() Deps {
 		OpenProvider: func(context.Context, string) (todos.Provider, error) { return nil, nil },
 		OpenGlobal:   func(context.Context) (todos.GlobalReferenceProvider, error) { return nil, nil },
 		Registry:     run.NewRegistry(),
-		DefaultDir:   func() string { return "/tmp/workspace" },
+		Workspaces:   func(context.Context) ([]query.Workspace, error) { return nil, nil },
+		DefaultDir:   func(context.Context) (string, error) { return "/tmp/workspace", nil },
 	}
 }
 
@@ -45,12 +48,14 @@ func registered(t *testing.T) entity.EntityInfo {
 func TestRegisterRequiresItsDependencies(t *testing.T) {
 	full := testDeps()
 	missing := map[string]Deps{
-		"OpenProvider": {OpenGlobal: full.OpenGlobal, Registry: full.Registry},
+		"OpenProvider": {OpenGlobal: full.OpenGlobal, Registry: full.Registry, Workspaces: full.Workspaces},
 		// Without it a cross-workspace selection cannot be resolved at all.
-		"OpenGlobal": {OpenProvider: full.OpenProvider, Registry: full.Registry},
+		"OpenGlobal": {OpenProvider: full.OpenProvider, Registry: full.Registry, Workspaces: full.Workspaces},
 		// Two entrypoints sharing a process must share one in-flight run map, or
 		// the same TODO could be started twice.
-		"Registry": {OpenProvider: full.OpenProvider, OpenGlobal: full.OpenGlobal},
+		"Registry": {OpenProvider: full.OpenProvider, OpenGlobal: full.OpenGlobal, Workspaces: full.Workspaces},
+		// Without it an unscoped list has no projects to read.
+		"Workspaces": {OpenProvider: full.OpenProvider, OpenGlobal: full.OpenGlobal, Registry: full.Registry},
 	}
 	for name, deps := range missing {
 		if err := Register(deps); err == nil {
@@ -64,7 +69,8 @@ func TestRegisterRequiresItsDependencies(t *testing.T) {
 func TestEveryBulkActionIsDeclaredAndRenderable(t *testing.T) {
 	want := map[string]bool{
 		"status": false, "priority": false, "labels": false, "comment": false,
-		"delete": false, "run": false, "plan": false, "triage": false,
+		"delete": false, "run": false, "plan": false, "triage": false, "push": false,
+		"merge": false, "check": false, "reopen": false,
 	}
 	for _, info := range registered(t).BulkActions {
 		if _, expected := want[info.Name]; !expected {
@@ -72,12 +78,11 @@ func TestEveryBulkActionIsDeclaredAndRenderable(t *testing.T) {
 		}
 		want[info.Name] = true
 
-		// Both selector modes, or the action can only be reached one way.
-		if info.DataFunc == nil {
+		if info.ContextDataFunc == nil {
 			t.Fatalf("%s: no id-mode handler", info.Name)
 		}
-		if info.FilterFunc == nil {
-			t.Fatalf("%s: no filter-mode handler", info.Name)
+		if info.FilterFunc != nil || info.ContextFilterFunc != nil {
+			t.Fatalf("%s: mutation must not accept filtered selections", info.Name)
 		}
 		// A front end renders from this; a name alone gives it nothing to draw.
 		if info.Short == "" {
@@ -121,6 +126,31 @@ func TestDeleteIsMarkedDestructiveAndGated(t *testing.T) {
 	t.Fatal("delete action was not declared")
 }
 
+// run edits the repository and triage can close a TODO it rules a duplicate, so
+// both announce themselves as destructive. plan investigates read-only and only
+// adds a plan, and says so explicitly — MCP reads an unset hint on a writing tool
+// as destructive, and the dashboard once confirmed a bulk plan as a deletion.
+// All three still ask before running.
+func TestRunShapedActionsDeclareWhetherTheyDestroy(t *testing.T) {
+	want := map[string]bool{"run": true, "triage": true, "plan": false}
+	for _, info := range registered(t).BulkActions {
+		destructive, ok := want[info.Name]
+		if !ok {
+			continue
+		}
+		delete(want, info.Name)
+		if hint := info.ToolHints.DestructiveHint; hint == nil || *hint != destructive {
+			t.Errorf("%s destructiveHint = %v, want %v", info.Name, hint, destructive)
+		}
+		if info.ToolHints.DefaultPermission != entity.ToolPermissionAsk {
+			t.Errorf("%s must default to asking, got %q", info.Name, info.ToolHints.DefaultPermission)
+		}
+	}
+	if len(want) > 0 {
+		t.Fatalf("run-shaped actions not declared: %v", want)
+	}
+}
+
 func TestStatusActionPublishesItsTypedFlags(t *testing.T) {
 	for _, info := range registered(t).BulkActions {
 		if info.Name == "status" {
@@ -155,10 +185,26 @@ func TestRegistrationGeneratesCLICommands(t *testing.T) {
 	root := &cobra.Command{Use: "gavel"}
 	clicky.GenerateCLI(root)
 
-	for _, name := range []string{"status", "priority", "labels", "run", "plan", "triage", "delete"} {
+	for _, name := range []string{
+		"status", "priority", "labels", "run", "plan", "triage", "delete", "push", "merge",
+		"check", "reopen",
+		// The item actions an agent could not reach at all before, because they
+		// existed only as Cobra commands in package main.
+		"create", "edit", "link", "unlink", "links", "steps", "sync",
+	} {
 		cmd, _, err := root.Find([]string{"todo", name})
 		if err != nil || cmd == nil || cmd.Name() != name {
 			t.Fatalf("expected `gavel todo %s` to be generated, got err=%v", name, err)
+		}
+	}
+
+	create, _, err := root.Find([]string{"todo", "create"})
+	if err != nil {
+		t.Fatalf("find create: %v", err)
+	}
+	for _, flag := range []string{"title", "body", "plan", "verification", "label", "priority", "status"} {
+		if create.Flags().Lookup(flag) == nil {
+			t.Fatalf("`gavel todo create` must expose --%s", flag)
 		}
 	}
 
@@ -169,12 +215,77 @@ func TestRegistrationGeneratesCLICommands(t *testing.T) {
 	if status.Flags().Lookup("to") == nil {
 		t.Fatal("`gavel todo status` must expose --to")
 	}
-	// The selector's own flags ride alongside, which is what makes
-	// `--status pending --filter ...` a filter-mode invocation.
-	if status.Flags().Lookup("filter") == nil {
-		t.Fatal("a bulk action must expose --filter to reach filter mode")
+	for _, flag := range []string{"filter", "search", "priority", "status"} {
+		if status.Flags().Lookup(flag) != nil {
+			t.Fatalf("bulk status must not expose list selector --%s", flag)
+		}
 	}
-	if status.Flags().Lookup("priority") == nil {
-		t.Fatal("the selector's facets must be bound alongside the action's parameters")
+
+	push, _, err := root.Find([]string{"todo", "push"})
+	if err != nil {
+		t.Fatalf("find push: %v", err)
 	}
+	for _, flag := range []string{"update", "base-url"} {
+		if push.Flags().Lookup(flag) == nil {
+			t.Fatalf("`gavel todo push` must expose --%s", flag)
+		}
+	}
+}
+
+// merge is the one aggregate action: it folds the selection into a single TODO
+// and retires the rest, so it publishes its parameters, announces itself as
+// destructive, and asks before running.
+func TestMergeIsAnAggregateDestructiveAction(t *testing.T) {
+	for _, info := range registered(t).BulkActions {
+		if info.Name != "merge" {
+			continue
+		}
+		if info.ToolHints.DestructiveHint == nil || !*info.ToolHints.DestructiveHint {
+			t.Fatal("merge retires the TODOs it folds in and must carry a destructive hint")
+		}
+		if info.ToolHints.DefaultPermission != entity.ToolPermissionAsk {
+			t.Fatalf("merge must default to asking, got %q", info.ToolHints.DefaultPermission)
+		}
+		if info.FlagsType == nil || info.FlagsType.Name() != "MergeFlags" {
+			t.Fatalf("merge flags type = %v", info.FlagsType)
+		}
+		return
+	}
+	t.Fatal("merge action was not declared")
+}
+
+// Every merge parameter must be optional: the dashboard's toolbar dispatches an
+// action with no parameters unless they are a closed set of values, so a
+// required one would make merge unreachable from the UI it was built for.
+func TestMergeParametersAreAllOptional(t *testing.T) {
+	root := &cobra.Command{Use: "gavel"}
+	clicky.GenerateCLI(root)
+
+	cmd, _, err := root.Find([]string{"todo", "merge"})
+	if err != nil {
+		t.Fatalf("find merge: %v", err)
+	}
+	for _, flag := range []string{"into", "dry-run", "model", "effort"} {
+		if cmd.Flags().Lookup(flag) == nil {
+			t.Fatalf("`gavel todo merge` must expose --%s", flag)
+		}
+	}
+	cmd.Flags().VisitAll(func(flag *pflag.Flag) {
+		if annotations := flag.Annotations[cobra.BashCompOneRequiredFlag]; len(annotations) > 0 && annotations[0] == "true" {
+			t.Fatalf("--%s is required, but the dashboard cannot supply merge parameters", flag.Name)
+		}
+	})
+}
+
+// push publishes outside gavel, so an agent must ask before running it.
+func TestPushAsksBeforePublishing(t *testing.T) {
+	for _, info := range registered(t).BulkActions {
+		if info.Name == "push" {
+			if info.ToolHints.DefaultPermission != entity.ToolPermissionAsk {
+				t.Fatalf("push must default to asking, got %q", info.ToolHints.DefaultPermission)
+			}
+			return
+		}
+	}
+	t.Fatal("push action was not declared")
 }

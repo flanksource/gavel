@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/flanksource/clicky/api"
+	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/testrunner/bench"
 	"github.com/flanksource/gavel/testrunner/parsers"
@@ -40,13 +41,15 @@ type SnapshotStatus struct {
 }
 
 type Snapshot struct {
-	Metadata    *SnapshotMetadata       `json:"metadata,omitempty"`
-	Git         *SnapshotGit            `json:"git,omitempty"`
-	Status      SnapshotStatus          `json:"status"`
-	Tests       []parsers.Test          `json:"tests"`
-	Lint        []*linters.LinterResult `json:"lint,omitempty"`
-	Bench       *bench.BenchComparison  `json:"bench,omitempty"`
-	Diagnostics *DiagnosticsSnapshot    `json:"diagnostics,omitempty"`
+	Metadata         *SnapshotMetadata              `json:"metadata,omitempty"`
+	Git              *SnapshotGit                   `json:"git,omitempty"`
+	Status           SnapshotStatus                 `json:"status"`
+	Tests            []parsers.Test                 `json:"tests"`
+	Lint             []*linters.LinterResult        `json:"lint,omitempty"`
+	Bench            *bench.BenchComparison         `json:"bench,omitempty"`
+	FixtureBenchmark *FixtureBenchmarkState         `json:"fixture_benchmark,omitempty"`
+	Performance      *fixtures.BenchmarkPerformance `json:"performance,omitempty"`
+	Diagnostics      *DiagnosticsSnapshot           `json:"diagnostics,omitempty"`
 
 	// Error explains why the run produced no (or only partial) results — a
 	// pre-build failure, a timeout, a crashed runner. Consumers treat a
@@ -58,10 +61,20 @@ type Snapshot struct {
 	LogTail string `json:"log_tail,omitempty"`
 }
 
+type FixtureBenchmarkState struct {
+	Mode         string                      `json:"mode"`
+	Progress     *fixtures.ExecutionSnapshot `json:"progress,omitempty"`
+	Report       *fixtures.BenchmarkReport   `json:"report,omitempty"`
+	ArtifactPath string                      `json:"artifact_path,omitempty"`
+}
+
 // Pretty is the root label of the tree clicky renders for serialized formats
 // (html, markdown, …). GetChildren hangs the Tests/Lint sections beneath it, so
 // this stays the overall roll-up while each section carries its own counts.
 func (s Snapshot) Pretty() api.Text {
+	if len(s.Tests) == 0 && s.Status.LintRun {
+		return linters.NewSummaryView(s.Lint, 0).Pretty()
+	}
 	return parsers.Tests(s.Tests).Sum().Pretty()
 }
 

@@ -15,11 +15,16 @@ type DiscoveryFilters struct {
 	IncludeStatuses []types.Status
 	ExcludeStatuses []types.Status
 	IncludeLabels   []string
+	// ParentID keeps only the children of the TODO with this ID.
+	ParentID string
+	// TopLevelOnly drops every TODO that has a parent.
+	TopLevelOnly bool
 }
 
 // IsEmpty returns true if no filters are configured.
 func (filter DiscoveryFilters) IsEmpty() bool {
-	return len(filter.IncludeStatuses) == 0 && len(filter.ExcludeStatuses) == 0 && len(filter.IncludeLabels) == 0
+	return len(filter.IncludeStatuses) == 0 && len(filter.ExcludeStatuses) == 0 && len(filter.IncludeLabels) == 0 &&
+		filter.ParentID == "" && !filter.TopLevelOnly
 }
 
 // Matches returns true if the given TODO matches the filter criteria.
@@ -47,6 +52,13 @@ func (filters DiscoveryFilters) Matches(todo *types.TODO) bool {
 		if !included {
 			return false
 		}
+	}
+
+	if filters.TopLevelOnly && todo.ParentID != "" {
+		return false
+	}
+	if filters.ParentID != "" && todo.ParentID != filters.ParentID {
+		return false
 	}
 
 	if len(filters.IncludeLabels) > 0 {

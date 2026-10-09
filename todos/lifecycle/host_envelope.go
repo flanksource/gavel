@@ -25,25 +25,15 @@ const (
 // collect folds what came back from captain into the two records a finished
 // step needs: the facts the outcome predicates read, and the execution result
 // the provider persists as the attempt.
-func (h *Host) collect(exec *todos.ExecutorContext, todo *types.TODO, step Step, prepared *preparedStep, d dispatched, start time.Time) *StepOutcome {
+func (h *Host) collect(step Step, prepared *preparedStep, d dispatched, start time.Time) *StepOutcome {
 	execution := d.execution
 	execution.Duration = time.Since(start)
 	out := d.out
-	if out.Response != nil && out.Response.Workspace != nil {
-		// Flushed here rather than from the hooks that produced them: a hook firing
-		// mid-turn cannot know the transcript session's id, because that row only
-		// exists once the monitor has ingested the provider's log.
-		exec.RecordNotices(execution.Runtime.SessionID, out.Response.Workspace.Notices)
-		if commits := out.Response.Workspace.Commits; len(commits) > 0 {
-			execution.CommitSHA = commits[len(commits)-1].SHA
-		}
+	if out.Response != nil {
+		execution.Workspace = api.NewWorkspaceRecord(out.Response.Workspace)
 	}
-	if out.CostUSD > 0 {
-		execution.CostUSD = out.CostUSD
-	}
-	if tokens := out.Usage.TotalTokens(); tokens > 0 {
-		execution.TokensUsed = tokens
-	}
+	execution.CostUSD = out.CostUSD
+	execution.TokensUsed = out.Usage.TotalTokens()
 	if out.Loop != nil {
 		execution.NumTurns = len(out.Loop.Iterations)
 	}
@@ -75,16 +65,23 @@ func (h *Host) collect(exec *todos.ExecutorContext, todo *types.TODO, step Step,
 	default:
 		h.collectEnvelope(execution, &facts, prepared, out)
 	}
-	// The runtime records a prompt run as failed whenever the run reported an
-	// error — a provider result that was not a success, an error event, an
-	// envelope that says failed — even when an envelope was still decoded. The
-	// facts the outcomes read must say the same, or a run captain stores as
-	// failed could land the todo in pending.
+	settleRunFacts(execution, &facts)
+	return &StepOutcome{Step: step, Result: facts, Execution: execution}
+}
+
+// settleRunFacts reconciles the run's fate with its execution record once both
+// are collected.
+//
+// The runtime records a prompt run as failed whenever the run reported an
+// error — a provider result that was not a success, an error event, an
+// envelope that says failed — even when an envelope was still decoded. The
+// facts the outcomes read must say the same, or a run captain stores as
+// failed could land the todo in pending.
+func settleRunFacts(execution *todos.ExecutionResult, facts *StepResult) {
 	if facts.Run.State == RunSucceeded && execution.ErrorMessage != "" {
 		facts.Run.State, facts.Run.Error = RunFailed, execution.ErrorMessage
 	}
 	execution.Success = facts.Run.State == RunSucceeded && execution.EndStatus != types.EndFailed
-	return &StepOutcome{Step: step, Result: facts, Execution: execution}
 }
 
 // stopReason is why captain's generate loop ended — condition-met,
@@ -115,17 +112,36 @@ func (h *Host) collectVerify(execution *todos.ExecutionResult, facts *StepResult
 // collectEnvelope decodes the agent's structured result into the envelope its
 // prompt promised and lifts it onto both records.
 func (h *Host) collectEnvelope(execution *todos.ExecutionResult, facts *StepResult, prepared *preparedStep, out promptrun.Result) {
+	// Captured before the decode, because the decode is what loses it: an agent
+	// that answered well in the wrong shape would otherwise leave nothing but
+	// "failed" for a reader to go on.
+	execution.ResponseText = responseText(out.Response)
 	env, err := decodeEnvelope(prepared, out.Response)
 	if err != nil {
 		execution.ErrorMessage = err.Error()
 		facts.Run.State, facts.Run.Error = RunFailed, execution.ErrorMessage
 		return
 	}
+	if out.Response != nil && out.Response.TerminalOutcome == nil {
+		output, parseErr := captainai.ParseStructured(execution.ResponseText, func(value *map[string]any) error {
+			if (*value)["endStatus"] != string(env.EndStatus) {
+				return fmt.Errorf("output endStatus does not match the validated envelope")
+			}
+			return nil
+		})
+		if parseErr != nil {
+			execution.ErrorMessage = fmt.Sprintf("decode emitted structured output: %v", parseErr)
+			facts.Run.State, facts.Run.Error = RunFailed, execution.ErrorMessage
+			return
+		}
+		execution.OutputJSON = *output
+	}
 	execution.Summary = env.Summary
 	execution.EndStatus = env.EndStatus
 	execution.Questions = env.Questions
 	execution.Plan = env.Plan
 	execution.Triage = env.Triage
+	execution.TriageNew = env.TriageNew
 	facts.Envelope = Envelope{Summary: env.Summary, EndStatus: string(env.EndStatus), Extra: structuredFields(out.StructuredData)}
 	facts.Questions = questionVars(env.Questions)
 	if env.Plan != nil {
@@ -144,8 +160,25 @@ func (h *Host) collectEnvelope(execution *todos.ExecutionResult, facts *StepResu
 
 type envelope struct {
 	types.ResultEnvelope
-	Plan   *types.PlanResult
-	Triage *types.TriageEnvelope
+	Plan      *types.PlanResult
+	Triage    *types.TriageEnvelope
+	TriageNew *types.TriageNewEnvelope
+}
+
+// responseText is whatever the agent actually returned, in the same precedence
+// order decodeEnvelope reads it: the structured payload when there is one, else
+// the plain text. It is best-effort — a payload that cannot even be re-encoded
+// contributes nothing rather than failing a run that already produced a result.
+func responseText(response *api.Response) string {
+	if response == nil {
+		return ""
+	}
+	if response.StructuredData != nil {
+		if text, err := structuredDataText(response.StructuredData); err == nil {
+			return text
+		}
+	}
+	return strings.TrimSpace(response.Text)
 }
 
 // decodeEnvelope resolves the response contract in precedence order: native
@@ -226,6 +259,12 @@ func parseEnvelope(kind todoprompt.EnvelopeKind, text string) (*envelope, error)
 			return nil, err
 		}
 		return &envelope{ResultEnvelope: parsed.ResultEnvelope, Triage: parsed}, nil
+	case todoprompt.EnvelopeTriageNew:
+		parsed, err := captainai.ParseStructured(text, (*types.TriageNewEnvelope).Validate)
+		if err != nil {
+			return nil, err
+		}
+		return &envelope{ResultEnvelope: parsed.ResultEnvelope, TriageNew: parsed}, nil
 	default:
 		parsed, err := captainai.ParseStructured(text, (*types.ResultEnvelope).Validate)
 		if err != nil {
@@ -343,9 +382,21 @@ func (h *Host) handleEvent(exec *todos.ExecutorContext, ev captainai.Event, exec
 		transcript.AddExecutorMessage(action, todos.EntryAction, map[string]any{"tool": ev.Tool})
 		exec.Notify(todos.Notification{Type: todos.NotifyAction, Message: action})
 	case captainai.EventPermission:
-		action := toolSummary(ev)
-		transcript.AddExecutorMessage("awaiting approval: "+action, todos.EntryAction, map[string]any{"tool": ev.Tool})
-		exec.Notify(todos.Notification{Type: todos.NotifyApproval, Message: action})
+		message := "awaiting approval: " + toolSummary(ev)
+		detail := map[string]any{"tool": ev.Tool}
+		if ev.ApprovalID != "" {
+			detail["approvalId"] = ev.ApprovalID
+			detail["input"] = ev.Input
+		}
+		if ev.Request != nil {
+			detail["kind"] = ev.Request.Kind
+		}
+		if ev.Reason != "" {
+			message = "approval " + ev.Reason + ": " + ev.Tool
+			detail["reason"] = ev.Reason
+		}
+		transcript.AddExecutorMessage(message, todos.EntryAction, detail)
+		exec.Notify(todos.Notification{Type: todos.NotifyApproval, Message: message, Data: detail})
 	case captainai.EventSystem:
 		if ev.SessionID != "" {
 			setSessionID(todo, ev.SessionID)
@@ -360,10 +411,6 @@ func (h *Host) handleEvent(exec *todos.ExecutorContext, ev captainai.Event, exec
 		}
 	case captainai.EventResult:
 		*sawResult = true
-		if ev.Usage != nil {
-			execution.TokensUsed += ev.Usage.TotalTokens()
-		}
-		execution.CostUSD += ev.CostUSD
 		if !ev.Success {
 			// A result that is not a success is an error even when the provider
 			// attached no text: collect turns the message into a failed run, and a

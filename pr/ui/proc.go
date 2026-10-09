@@ -2,17 +2,17 @@ package ui
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
-	"os/exec"
 	"path"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
+	"github.com/flanksource/clicky/sse"
 	"github.com/flanksource/commons/logger"
+	gavelctx "github.com/flanksource/gavel/context"
 	"github.com/flanksource/gavel/github/cache"
 	"github.com/flanksource/gavel/procfile"
 )
@@ -24,7 +24,10 @@ import (
 // pointer so an unreachable TODO store is reported as absent counts plus Error,
 // never as a zero-filled "0 todos" that reads like an empty workspace.
 type projectInfo struct {
-	Name        string      `json:"name"`
+	Name string `json:"name"`
+	// Short is the slug a TODO list is filtered by and names its project with,
+	// and the id the generated project entity addresses the project by.
+	Short       string      `json:"short"`
 	Dir         string      `json:"dir"`
 	Repos       []string    `json:"repos"`
 	HasProcfile bool        `json:"hasProcfile"`
@@ -77,12 +80,13 @@ func (s *Server) handleProcStatus(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, `{"error":"unknown project"}`, http.StatusNotFound)
 			return
 		}
-		json.NewEncoder(w).Encode(projectStatus(p)) //nolint:errcheck
+		changes := gitChangeCounts(s.requestContext(r), []Project{p})
+		json.NewEncoder(w).Encode(projectStatus(p, changes)) //nolint:errcheck
 		return
 	}
 
 	// No project param: return every project's status (see procStatusByKey).
-	json.NewEncoder(w).Encode(procStatusByKey(ps)) //nolint:errcheck
+	json.NewEncoder(w).Encode(procStatusByKey(s.requestContext(r), ps)) //nolint:errcheck
 }
 
 // procStatusByKey returns every project's status keyed by both project name (so
@@ -90,10 +94,11 @@ func (s *Server) handleProcStatus(w http.ResponseWriter, r *http.Request) {
 // the sidebar repo headers light up). Project names are bare and repos contain a
 // slash, so the keyspaces don't collide. Shared by handleProcStatus so the
 // single-shot poll carries the full wire shape (live cpu/mem + process tree).
-func procStatusByKey(projects []Project) map[string]procStatus {
+func procStatusByKey(ctx gavelctx.Context, projects []Project) map[string]procStatus {
+	changes := gitChangeCounts(ctx, projects)
 	byKey := make(map[string]procStatus)
 	for _, p := range projects {
-		st := projectStatus(p)
+		st := projectStatus(p, changes)
 		byKey[p.Name] = st
 		for _, repo := range p.Repos {
 			byKey[repo] = st
@@ -104,12 +109,12 @@ func procStatusByKey(projects []Project) map[string]procStatus {
 
 // streamProcStatusByKey is procStatusByKey projected for the SSE stream — see
 // leanProcStatus for why the resource fields are dropped.
-func streamProcStatusByKey() (map[string]procStatus, error) {
+func streamProcStatusByKey(ctx gavelctx.Context) (map[string]procStatus, error) {
 	projects, err := LoadProjects()
 	if err != nil {
 		return nil, err
 	}
-	return leanProcStatus(procStatusByKey(projects)), nil
+	return leanProcStatus(procStatusByKey(ctx, projects)), nil
 }
 
 // leanProcStatus clears every continuously-fluctuating resource field from each
@@ -150,17 +155,18 @@ func leanProcStatus(byKey map[string]procStatus) map[string]procStatus {
 	return byKey
 }
 
-const (
+var (
 	// procStreamFast is the push cadence while a process is starting/restarting,
 	// so the dashboard tracks that progress promptly; procStreamSteady is the
 	// idle cadence. They mirror the adaptive interval the client poll used to run.
 	procStreamFast   = 1 * time.Second
 	procStreamSteady = 3 * time.Second
-	// procSampleTTL sits just under procStreamFast so the fastest cadence still
-	// gets a fresh scan every tick, while every other stream connected at that
-	// moment reuses it instead of running its own.
-	procSampleTTL = 900 * time.Millisecond
 )
+
+// procSampleTTL sits just under procStreamFast so the fastest cadence still
+// gets a fresh scan every tick, while every other stream connected at that
+// moment reuses it instead of running its own.
+const procSampleTTL = 900 * time.Millisecond
 
 // procSampler collapses the proc-status scan shared by every open dashboard
 // stream onto one computation per TTL window. The scan behind it (LoadProjects
@@ -172,7 +178,7 @@ const (
 // their own.
 type procSampler struct {
 	ttl    time.Duration
-	sample func() (map[string]procStatus, error)
+	sample func(gavelctx.Context) (map[string]procStatus, error)
 
 	mu         sync.Mutex
 	cached     map[string]procStatus
@@ -184,12 +190,12 @@ type procSampler struct {
 // and hand it around independently, so they must not share one map. A scan
 // error is returned as-is and nothing is cached — a failed scan must surface,
 // never degrade into a stale or empty map presented as live state.
-func (p *procSampler) get() (map[string]procStatus, error) {
+func (p *procSampler) get(ctx gavelctx.Context) (map[string]procStatus, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	if p.cached == nil || time.Since(p.computedAt) >= p.ttl {
-		fresh, err := p.sample()
+		fresh, err := p.sample(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -210,51 +216,39 @@ func (p *procSampler) get() (map[string]procStatus, error) {
 var sharedProcSampler = &procSampler{ttl: procSampleTTL, sample: streamProcStatusByKey}
 
 // handleProcStatusStream pushes the proc-status map to the dashboard over SSE,
-// replacing the client's /api/proc/status poll. A per-connection adaptive ticker
-// is enough — projectStatus recomputes from the supervisor on each tick, so no
-// broadcaster is needed — and an open stream is the "dashboard is being watched"
-// signal that keeps procMetricsLoop sampling (the role the poll used to play).
+// replacing the client's /api/proc/status poll. Every load marks the dashboard
+// as watched, the signal that keeps procMetricsLoop sampling (the role the poll
+// used to play). The stream polls at the steady cadence; while any process is
+// mid start/restart, each load arms a wake one procStreamFast later, so the
+// dashboard tracks that progress without paying the ~1.7s scan every second
+// while everything is settled. openFiles is kept in the comparison: the Files
+// column renders it as a live sample (see leanProcStatus).
 func (s *Server) handleProcStatusStream(w http.ResponseWriter, r *http.Request) {
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "streaming not supported", http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-
-	var last []byte
-	for {
-		s.mu.Lock()
-		s.lastProcPoll = time.Now()
-		s.mu.Unlock()
-
-		byKey, err := sharedProcSampler.get()
-		if err != nil {
-			payload, _ := json.Marshal(map[string]string{"error": err.Error()})
-			fmt.Fprintf(w, "event: error\ndata: %s\n\n", payload)
-			flusher.Flush()
-			return
-		}
-		if b, err := json.Marshal(byKey); err == nil && !bytes.Equal(b, last) {
-			fmt.Fprintf(w, "data: %s\n\n", b)
-			last = b
-		} else {
-			// Comment frame: keeps the socket warm without firing a client re-render.
-			fmt.Fprint(w, ": ping\n\n")
-		}
-		flusher.Flush()
-
-		next := procStreamSteady
-		if anyTransitioning(byKey) {
-			next = procStreamFast
-		}
-		select {
-		case <-r.Context().Done():
-			return
-		case <-time.After(next):
-		}
+	fast := make(chan struct{}, 1)
+	err := sse.ServeSnapshot(w, r, sse.SnapshotOptions{
+		Interval: procStreamSteady,
+		Wake:     fast,
+		Load: func(context.Context) (any, error) {
+			s.mu.Lock()
+			s.lastProcPoll = time.Now()
+			s.mu.Unlock()
+			byKey, err := sharedProcSampler.get(s.context())
+			if err != nil {
+				return nil, err
+			}
+			if anyTransitioning(byKey) {
+				time.AfterFunc(procStreamFast, func() {
+					select {
+					case fast <- struct{}{}:
+					default:
+					}
+				})
+			}
+			return byKey, nil
+		},
+	})
+	if err != nil {
+		logger.Warnf("proc status stream: %v", err)
 	}
 }
 
@@ -295,7 +289,7 @@ func (s *Server) handleProcFavicon(w http.ResponseWriter, r *http.Request) {
 		respondError(w, statusForProjectErr(err), err.Error())
 		return
 	}
-	st := projectStatus(p)
+	st := projectStatus(p, nil)
 	if !st.HasProcfile || !procStatusHasPort(st, port) {
 		http.Error(w, "unknown process port", http.StatusNotFound)
 		return
@@ -388,7 +382,8 @@ func (s *Server) handleProcControl(w http.ResponseWriter, r *http.Request) {
 	// live-root set is stale by definition — don't make the task streams wait
 	// out its TTL to notice.
 	s.taskSource.invalidateRoots()
-	json.NewEncoder(w).Encode(projectStatus(p)) //nolint:errcheck
+	changes := gitChangeCounts(s.requestContext(r), []Project{p})
+	json.NewEncoder(w).Encode(projectStatus(p, changes)) //nolint:errcheck
 }
 
 // handleProcLogs tails the last N lines of a project's process logs as plain
@@ -433,21 +428,15 @@ func (s *Server) handleProcLogs(w http.ResponseWriter, r *http.Request) {
 
 // projectStatus resolves a project's directory and returns its Procfile status.
 // A directory without a Procfile is reported as hasProcfile=false (not an error)
-// so projects that aren't running anything render cleanly.
-func projectStatus(p Project) procStatus {
+// so projects that aren't running anything render cleanly. gitChanges are the
+// uncommitted-file counts by directory (see gitChangeCounts).
+func projectStatus(p Project, gitChanges map[string]int) procStatus {
 	dir := p.ResolvedDir()
 
 	// Uncommitted-change count is a property of the workspace directory, not of
 	// Procfile supervision, so it is surfaced for every workspace in the sidebar
 	// regardless of whether the directory has a Procfile.
-	var st procStatus
-	if dir != "" {
-		if n, err := gitChangeCount(dir); err != nil {
-			logger.Debugf("git status %s: %v", dir, err)
-		} else {
-			st.GitChanges = n
-		}
-	}
+	st := procStatus{GitChanges: gitChanges[dir]}
 
 	if dir == "" || procfile.Find(dir, "") == "" {
 		return st
@@ -464,26 +453,6 @@ func projectStatus(p Project) procStatus {
 	st.Profiles = rep.Profiles
 	st.Profile = rep.Profile
 	return st
-}
-
-// gitChangeCount returns the number of uncommitted changes (staged, unstaged,
-// and untracked) in dir. A non-nil error means dir is not a git work tree (or
-// git is unavailable); callers treat that as "no git info" rather than zero
-// changes.
-func gitChangeCount(dir string) (int, error) {
-	cmd := exec.Command("git", "status", "--porcelain")
-	cmd.Dir = dir
-	out, err := cmd.Output()
-	if err != nil {
-		return 0, err
-	}
-	count := 0
-	for _, line := range strings.Split(string(out), "\n") {
-		if strings.TrimSpace(line) != "" {
-			count++
-		}
-	}
-	return count, nil
 }
 
 func writeJSONError(w http.ResponseWriter, status int, err error) {

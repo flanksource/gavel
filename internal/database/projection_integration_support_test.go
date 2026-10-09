@@ -2,12 +2,10 @@ package database_test
 
 import (
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"testing"
 
 	captaindb "github.com/flanksource/captain/pkg/database"
-	commonsdb "github.com/flanksource/commons-db/db"
+	"github.com/flanksource/commons-db/dbtest"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -16,15 +14,7 @@ import (
 )
 
 func TestCaptainDatabaseOperatesWithoutGavelSchema(t *testing.T) {
-	if os.Getenv("GAVEL_DB_EMBEDDED_TEST") == "" {
-		t.Skip("set GAVEL_DB_EMBEDDED_TEST=1 to run embedded-postgres projection tests")
-	}
-	dsn, stop, err := commonsdb.StartEmbedded(commonsdb.EmbeddedConfig{
-		DataDir:  filepath.Join(t.TempDir(), "postgres"),
-		Database: "captain_without_gavel",
-	})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, stop()) })
+	dsn := dbtest.ForT(t, dbtest.Options{Name: "captain_without_gavel"}).DSN()
 
 	captain, err := captaindb.Open(t.Context(), captaindb.WithDSN(dsn), captaindb.WithMigrations())
 	require.NoError(t, err)
@@ -117,9 +107,9 @@ func newProjectionFixture(
 	require.NoError(t, db.Exec(`
 		UPDATE todo_issues SET active_prompt_run_id = ? WHERE id = ?`,
 		fixture.runID, fixture.issueID).Error)
-	// The run's insert fired the projection before the issue pointed at it, so
-	// this is the first projection that reaches the issue: it advances the
-	// issue's activity watermark to the run's and reports that one issue moved.
+	// This is the call the row-change projection makes for the run's insert, now
+	// that the issue points at it: it advances the issue's activity watermark to
+	// the run's and reports that one issue moved.
 	var changed int
 	require.NoError(t, db.Raw(`SELECT public.gavel_project_todo_prompt_run(?)`, fixture.runID).Scan(&changed).Error)
 	require.Equal(t, 1, changed, "the first projection carries the run's activity onto its issue")
@@ -128,15 +118,8 @@ func newProjectionFixture(
 
 func openProjectionDatabase(t *testing.T) *gorm.DB {
 	t.Helper()
-	if os.Getenv("GAVEL_DB_EMBEDDED_TEST") == "" {
-		t.Skip("set GAVEL_DB_EMBEDDED_TEST=1 to run embedded-postgres projection tests")
-	}
-	dsn, stop, err := commonsdb.StartEmbedded(commonsdb.EmbeddedConfig{
-		DataDir:  filepath.Join(t.TempDir(), "postgres"),
-		Database: "gavel_captain_projection",
-	})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, stop()) })
+	dsn := dbtest.ForT(t, dbtest.Options{Name: "gavel_captain_projection"}).DSN()
+
 	t.Setenv(database.EnvDSN, dsn)
 	t.Setenv(database.EnvDisable, "")
 	t.Setenv(database.LegacyEnvDSN, "")
@@ -158,32 +141,23 @@ func projectionCatalogObjects(t *testing.T, db *gorm.DB) []catalogObject {
 	t.Helper()
 	var objects []catalogObject
 	require.NoError(t, db.Raw(`
-		SELECT 'constraint' AS kind, con.conname AS name, con.oid::bigint AS oid
-		FROM pg_constraint AS con
-		WHERE con.conname IN (
-			'todo_issue_prompt_runs_captain_prompt_run_fkey',
-			'todo_issue_plans_captain_plan_fkey'
-		)
-		UNION ALL
-		SELECT 'trigger', trg.tgname, trg.oid::bigint
-		FROM pg_trigger AS trg
-		WHERE NOT trg.tgisinternal
-			  AND trg.tgname IN (
-				'gavel_todo_prompt_run_projection',
-				'gavel_todo_prompt_run_iteration_projection',
-				'gavel_todo_session_projection',
-				'gavel_todo_session_delete_projection',
-			'gavel_todo_turn_request_projection'
-		  )
-		UNION ALL
-		SELECT 'view', relation.relname, relation.oid::bigint
+		SELECT 'view' AS kind, relation.relname AS name, relation.oid::bigint AS oid
 		FROM pg_class AS relation
 		JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
 		WHERE namespace.nspname = 'public'
 		  AND relation.relname IN ('todo_issue_plan_revision_details', 'todo_issue_runtime')
+		UNION ALL
+		SELECT 'function', proc.proname, proc.oid::bigint
+		FROM pg_proc AS proc
+		WHERE proc.proname IN (
+			'gavel_todo_issue_execution_state',
+			'gavel_project_todo_prompt_run',
+			'gavel_project_todo_session',
+			'gavel_resync_todo_activity'
+		)
 		ORDER BY kind, name
 	`).Scan(&objects).Error)
-	require.Len(t, objects, 9)
+	require.Len(t, objects, 6)
 	return objects
 }
 

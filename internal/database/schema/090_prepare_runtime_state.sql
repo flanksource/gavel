@@ -1,15 +1,11 @@
 -- phase: pre
+-- dependsOn: 089_drop_captain_table_hooks.sql
 
 -- The prior projection function has a hard dependency on
 -- todo_issues.execution_state. Remove the SQL-owned projection objects before
 -- Atlas drops that cached column; the post-schema bundle recreates them as
--- read-time state and activity-only triggers.
-DROP TRIGGER IF EXISTS gavel_todo_prompt_run_projection ON public.captain_prompt_runs;
-DROP TRIGGER IF EXISTS gavel_todo_session_projection ON public.captain_sessions;
-DROP TRIGGER IF EXISTS gavel_todo_session_delete_projection ON public.captain_sessions;
-DROP TRIGGER IF EXISTS gavel_todo_turn_request_projection ON public.captain_turn_requests;
-DROP TRIGGER IF EXISTS gavel_todo_prompt_run_iteration_projection ON public.captain_prompt_run_iterations;
-
+-- read-time state and activity functions. 089 has already removed the triggers
+-- on Captain's tables that used the trigger functions dropped here.
 DROP VIEW IF EXISTS public.todo_issue_runtime;
 DROP FUNCTION IF EXISTS public.gavel_todo_iteration_projection_trigger();
 DROP FUNCTION IF EXISTS public.gavel_todo_request_projection_trigger();

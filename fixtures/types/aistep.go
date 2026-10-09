@@ -137,7 +137,7 @@ func checklistItems(fixture fixtures.FixtureTest) []fixtures.ChecklistItem {
 // the agent to inspect the change at repoPath and return a per-item verdict.
 // When the verification is scoped to particular files, the grader is told which,
 // so it judges the change under review rather than everything dirty in the tree.
-func buildChecklistPrompt(fixture fixtures.FixtureTest, repoPath string, items []fixtures.ChecklistItem, changed []string) string {
+func buildChecklistPrompt(fixture fixtures.FixtureTest, repoPath string, items []fixtures.ChecklistItem, changed []string, previous []fixtures.FixtureResult) string {
 	var b strings.Builder
 	b.WriteString("You are verifying whether a code change satisfies its acceptance criteria.\n")
 	fmt.Fprintf(&b, "Inspect the current change in the git repository at %s — the working-tree diff, staged changes, and the most recent commits — using your tools.\n\n", repoPath)
@@ -157,6 +157,23 @@ func buildChecklistPrompt(fixture fixtures.FixtureTest, repoPath string, items [
 			b.WriteString(custom)
 			b.WriteString("\n\n")
 		}
+	}
+	if len(previous) > 0 {
+		b.WriteString("Executable fixture results completed earlier in this verification run. Use these verdicts as evidence for the matching criteria. Do not rerun these commands to establish whether they passed:\n")
+		for _, result := range previous {
+			if result.Type == "verify" {
+				continue
+			}
+			fmt.Fprintf(&b, "- %q (%s): %s", result.Name, result.Type, result.Status)
+			if result.Command != "" {
+				fmt.Fprintf(&b, "; command %q, exit code %d", result.Command, result.ExitCode)
+			}
+			if result.Run != nil {
+				fmt.Fprintf(&b, "; %d passed, %d failed, %d warned, %d skipped", result.Run.Passed, result.Run.Failed, result.Run.Warned, result.Run.Skipped)
+			}
+			b.WriteString("\n")
+		}
+		b.WriteString("\n")
 	}
 	b.WriteString("Acceptance criteria — return exactly one verdict per item, in this order:\n")
 	for i, item := range items {
