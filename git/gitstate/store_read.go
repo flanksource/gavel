@@ -135,9 +135,9 @@ func (s *Store) Load(ctx context.Context, repoIDs []uuid.UUID) (map[uuid.UUID]St
 			touched := w.TouchedAt.UTC()
 			wt.TouchedAt = &touched
 		}
-		// The state is as old as its least recently scanned part.
-		if w.StatusScannedAt != nil && w.StatusScannedAt.Before(state.ComputedAt) {
-			state.ComputedAt = w.StatusScannedAt.UTC()
+		if w.StatusScannedAt != nil {
+			scanned := w.StatusScannedAt.UTC()
+			wt.StatusScannedAt = &scanned
 		}
 		state.Worktrees = append(state.Worktrees, wt)
 		states[w.RepoID] = state

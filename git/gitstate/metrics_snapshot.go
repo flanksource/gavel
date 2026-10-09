@@ -20,22 +20,33 @@ type LatencyStat struct {
 	P95Ms   float64           `json:"p95Ms"`
 }
 
+// CountStat is one labelled series of a gavel_git_* counter.
+type CountStat struct {
+	Labels map[string]string `json:"labels"`
+	Count  uint64            `json:"count"`
+}
+
 // MetricsSnapshot is the process's git tracking metrics as the activity page
 // shows them: the cache settings scans run with now, the tracker's size and
-// load, and the latency of each kind of scan, git command and read.
+// load, what requested its scans, and the latency of each kind of scan, git
+// command and read.
 type MetricsSnapshot struct {
-	FSMonitor      bool          `json:"fsmonitor"`
-	UntrackedCache bool          `json:"untrackedCache"`
-	TrackedRepos   int           `json:"trackedRepos"`
-	HotWorktrees   int           `json:"hotWorktrees"`
-	IdleWorktrees  int           `json:"idleWorktrees"`
-	ScansInFlight  int           `json:"scansInFlight"`
-	RangesComputed int           `json:"rangesComputed"`
-	RefsScans      []LatencyStat `json:"refsScans"`
-	StatusScans    []LatencyStat `json:"statusScans"`
-	Commands       []LatencyStat `json:"commands"`
-	QueueWait      []LatencyStat `json:"queueWait"`
-	Reads          []LatencyStat `json:"reads"`
+	FSMonitor      bool `json:"fsmonitor"`
+	UntrackedCache bool `json:"untrackedCache"`
+	TrackedRepos   int  `json:"trackedRepos"`
+	HotWorktrees   int  `json:"hotWorktrees"`
+	IdleWorktrees  int  `json:"idleWorktrees"`
+	// BackoffWorktrees are idle worktrees polled less often after scans that
+	// found nothing changed.
+	BackoffWorktrees int           `json:"backoffWorktrees"`
+	ScansInFlight    int           `json:"scansInFlight"`
+	RangesComputed   int           `json:"rangesComputed"`
+	ScanTriggers     []CountStat   `json:"scanTriggers"`
+	RefsScans        []LatencyStat `json:"refsScans"`
+	StatusScans      []LatencyStat `json:"statusScans"`
+	Commands         []LatencyStat `json:"commands"`
+	QueueWait        []LatencyStat `json:"queueWait"`
+	Reads            []LatencyStat `json:"reads"`
 }
 
 // Metrics reads the gavel_git_* metrics registered with gatherer.
@@ -52,14 +63,17 @@ func Metrics(gatherer prometheus.Gatherer) (MetricsSnapshot, error) {
 		case "gavel_git_tracked_repos":
 			snapshot.TrackedRepos = int(gaugeSum(metrics, nil))
 		case "gavel_git_tracked_worktrees":
-			snapshot.HotWorktrees = int(gaugeSum(metrics, map[string]string{"cadence": "hot"}))
-			snapshot.IdleWorktrees = int(gaugeSum(metrics, map[string]string{"cadence": "idle"}))
+			snapshot.HotWorktrees = int(gaugeSum(metrics, map[string]string{"cadence": cadenceHot}))
+			snapshot.IdleWorktrees = int(gaugeSum(metrics, map[string]string{"cadence": cadenceIdle}))
+			snapshot.BackoffWorktrees = int(gaugeSum(metrics, map[string]string{"cadence": cadenceBackoff}))
 		case "gavel_git_scans_in_flight":
 			snapshot.ScansInFlight = int(gaugeSum(metrics, nil))
 		case "gavel_git_ranges_computed_total":
 			for _, metric := range metrics {
 				snapshot.RangesComputed += int(metric.GetCounter().GetValue())
 			}
+		case "gavel_git_scans_enqueued_total":
+			snapshot.ScanTriggers = countStats(metrics)
 		case "gavel_git_refs_scan_duration_seconds":
 			snapshot.RefsScans = latencyStats(metrics)
 		case "gavel_git_status_scan_duration_seconds":
@@ -122,6 +136,21 @@ func latencyStats(metrics []*dto.Metric) []LatencyStat {
 	sort.Slice(stats, func(i, j int) bool {
 		if stats[i].TotalMs != stats[j].TotalMs {
 			return stats[i].TotalMs > stats[j].TotalMs
+		}
+		return labelKey(stats[i].Labels) < labelKey(stats[j].Labels)
+	})
+	return stats
+}
+
+// countStats lists each counter series, highest count first.
+func countStats(metrics []*dto.Metric) []CountStat {
+	stats := make([]CountStat, 0, len(metrics))
+	for _, metric := range metrics {
+		stats = append(stats, CountStat{Labels: labelMap(metric), Count: uint64(metric.GetCounter().GetValue())})
+	}
+	sort.Slice(stats, func(i, j int) bool {
+		if stats[i].Count != stats[j].Count {
+			return stats[i].Count > stats[j].Count
 		}
 		return labelKey(stats[i].Labels) < labelKey(stats[j].Labels)
 	})

@@ -198,6 +198,23 @@ var _ = Describe("Tracker", func() {
 		}).WithTimeout(10 * time.Second).WithPolling(100 * time.Millisecond).Should(Succeed())
 	})
 
+	It("dates the state by its ref scan and each worktree by its own status scan", func(ctx SpecContext) {
+		r := newTrackedRepo(ctx, gitstate.Options{})
+		_, err := r.tracker.State(ctx, r.root)
+		Expect(err).NotTo(HaveOccurred())
+		staleStatus := time.Now().Add(-time.Hour)
+		Expect(r.db.Exec(`UPDATE git_worktrees SET status_scanned_at = ? WHERE path = ?`, staleStatus, r.feature).Error).To(Succeed())
+
+		state, err := r.tracker.State(ctx, r.root)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(state.ComputedAt).To(BeTemporally("~", time.Now(), time.Minute), "a stale worktree does not age the refs")
+		Expect(state.Worktrees[0].StatusScannedAt).NotTo(BeNil())
+		Expect(*state.Worktrees[0].StatusScannedAt).To(BeTemporally("~", time.Now(), time.Minute))
+		Expect(state.Worktrees[1].StatusScannedAt).NotTo(BeNil())
+		Expect(*state.Worktrees[1].StatusScannedAt).To(BeTemporally("~", staleStatus, time.Second))
+	})
+
 	It("tracks a repository whose first scan fails and reports the failure as its state's error", func(ctx SpecContext) {
 		r := newTrackedRepo(ctx, gitstate.Options{})
 		git(r.root, "branch", "-m", "main", "trunk")

@@ -14,6 +14,7 @@ var _ = Describe("Metrics", func() {
 			slowScanSeconds = 0.05
 			repos           = 3
 			hot, idle       = 2, 5
+			backedOff       = 9
 		)
 		registry := prometheus.NewRegistry()
 		scans := prometheus.NewHistogramVec(prometheus.HistogramOpts{
@@ -30,6 +31,7 @@ var _ = Describe("Metrics", func() {
 		trackedRepos.Set(repos)
 		worktrees.WithLabelValues("hot").Set(hot)
 		worktrees.WithLabelValues("idle").Set(idle)
+		worktrees.WithLabelValues("backoff").Set(backedOff)
 
 		snapshot, err := gitstate.Metrics(registry)
 
@@ -37,6 +39,7 @@ var _ = Describe("Metrics", func() {
 		Expect(snapshot.TrackedRepos).To(Equal(repos))
 		Expect(snapshot.HotWorktrees).To(Equal(hot))
 		Expect(snapshot.IdleWorktrees).To(Equal(idle))
+		Expect(snapshot.BackoffWorktrees).To(Equal(backedOff))
 		// The series that never observed a scan is left out.
 		Expect(snapshot.StatusScans).To(HaveLen(1))
 		stat := snapshot.StatusScans[0]
@@ -47,5 +50,22 @@ var _ = Describe("Metrics", func() {
 		// Rank 2 of 4 ends the 0–10ms bucket; rank 3.8 is 90% into the 10–100ms one.
 		Expect(stat.P50Ms).To(BeNumerically("~", 10, 1e-9))
 		Expect(stat.P95Ms).To(BeNumerically("~", 91, 1e-9))
+	})
+
+	It("lists what requested scans, most frequent first", func() {
+		const watched, cadenced = 7, 3
+		registry := prometheus.NewRegistry()
+		enqueued := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "gavel_git_scans_enqueued_total"}, []string{"kind", "source"})
+		registry.MustRegister(enqueued)
+		enqueued.WithLabelValues("status", "cadence").Add(cadenced)
+		enqueued.WithLabelValues("status", "watch").Add(watched)
+
+		snapshot, err := gitstate.Metrics(registry)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(snapshot.ScanTriggers).To(Equal([]gitstate.CountStat{
+			{Labels: map[string]string{"kind": "status", "source": "watch"}, Count: watched},
+			{Labels: map[string]string{"kind": "status", "source": "cadence"}, Count: cadenced},
+		}))
 	})
 })

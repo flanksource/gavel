@@ -18,10 +18,14 @@ import (
 const (
 	// DefaultHot is how often a worktree someone is looking at, or an agent is
 	// working in, has its status rescanned.
-	DefaultHot = 2 * time.Second
-	// DefaultIdle is how often every other worktree's status, and every
-	// repo's refs, are rescanned; .git metadata events rescan sooner.
+	DefaultHot = 5 * time.Second
+	// DefaultIdle is how soon every other worktree's status, and every repo's
+	// refs, are rescanned after a scan that found a change; each scan finding
+	// nothing doubles it, up to DefaultMaxIdle. .git metadata events rescan
+	// sooner.
 	DefaultIdle = time.Minute
+	// DefaultMaxIdle caps the idle interval of a long-unchanged key.
+	DefaultMaxIdle = 30 * time.Minute
 	// DefaultDebounce coalesces a burst of .git metadata events into one scan.
 	DefaultDebounce = 250 * time.Millisecond
 	// DefaultConcurrency bounds the scans running at once.
@@ -36,6 +40,7 @@ type Options struct {
 	Context     context.Context
 	Hot         time.Duration
 	Idle        time.Duration
+	MaxIdle     time.Duration
 	Debounce    time.Duration
 	Concurrency int
 }
@@ -43,15 +48,17 @@ type Options struct {
 // Tracker keeps the git_* rows of every repository it has been asked about
 // current. Reads go to the Store; git runs only in scans, which a ref or
 // index change under .git, a Touch after a server-side mutation, or the
-// per-worktree hot/idle cadence schedules. Scans of one key coalesce: one
-// runs, at most one more waits.
+// per-worktree hot/idle cadence schedules. Scans of one key coalesce: a
+// request while one is queued joins it, a request while one runs queues at
+// most one more.
 type Tracker struct {
-	store               *Store
-	ctx                 context.Context
-	hot, idle, debounce time.Duration
-	sem                 chan struct{}
-	resolve             singleflight.Group
-	watcher             *metadataWatcher
+	store              *Store
+	ctx                context.Context
+	hot, idle, maxIdle time.Duration
+	debounce           time.Duration
+	sem                chan struct{}
+	resolve            singleflight.Group
+	watcher            *metadataWatcher
 
 	mu      sync.Mutex
 	repos   map[string]*trackedRepo // by root dir
@@ -74,10 +81,10 @@ type trackedRepo struct {
 	root      string
 	commonDir string
 	// worktrees are the live, non-prunable worktree paths of the last ref
-	// scan; lastStatus/lastRefs are when each was last scanned.
-	worktrees  []string
-	lastStatus map[string]time.Time
-	lastRefs   time.Time
+	// scan; status/refs are when each is next due.
+	worktrees []string
+	status    map[string]*pollSchedule
+	refs      pollSchedule
 }
 
 // jobKey names a scan: the repo's refs when worktree is "", else one
@@ -87,13 +94,16 @@ type jobKey struct {
 	worktree string
 }
 
+// jobState is a key's background scan: running from enqueue until its drain
+// returns, started while it holds a slot, pending when requested again after
+// it started.
 type jobState struct {
-	running, pending bool
+	running, started, pending bool
 }
 
 func NewTracker(opts Options) *Tracker {
 	t := &Tracker{
-		store: opts.Store, ctx: opts.Context, hot: opts.Hot, idle: opts.Idle, debounce: opts.Debounce,
+		store: opts.Store, ctx: opts.Context, hot: opts.Hot, idle: opts.Idle, maxIdle: opts.MaxIdle, debounce: opts.Debounce,
 		repos: map[string]*trackedRepo{}, byDir: map[string]*trackedRepo{}, jobs: map[jobKey]*jobState{},
 		focus: map[string]time.Time{}, unlocatable: map[string]locateFailure{},
 	}
@@ -105,6 +115,9 @@ func NewTracker(opts Options) *Tracker {
 	}
 	if t.idle == 0 {
 		t.idle = DefaultIdle
+	}
+	if t.maxIdle == 0 {
+		t.maxIdle = DefaultMaxIdle
 	}
 	if t.debounce == 0 {
 		t.debounce = DefaultDebounce
@@ -190,7 +203,7 @@ func (t *Tracker) register(ctx context.Context, dir string) (*trackedRepo, error
 		if err != nil {
 			return nil, err
 		}
-		repo = &trackedRepo{id: id, root: loc.RootDir, commonDir: loc.CommonDir, lastStatus: map[string]time.Time{}}
+		repo = &trackedRepo{id: id, root: loc.RootDir, commonDir: loc.CommonDir, status: map[string]*pollSchedule{}}
 		// A failed scan is recorded on the repo's rows (State.Error,
 		// Worktree.StatusError) for readers to show; the repo is tracked
 		// regardless, so the cadence and watcher retry it instead of every read.
@@ -240,9 +253,9 @@ func (t *Tracker) Touch(path string) {
 		logger.Debugf("git state: touch of untracked path %s", path)
 		return
 	}
-	t.enqueue(jobKey{root: repo.root})
+	t.enqueue(jobKey{root: repo.root}, sourceTouch)
 	if worktree != "" {
-		t.enqueue(jobKey{root: repo.root, worktree: worktree})
+		t.enqueue(jobKey{root: repo.root, worktree: worktree}, sourceTouch)
 	}
 }
 
@@ -258,7 +271,7 @@ func (t *Tracker) Focus(path string, ttl time.Duration) {
 	t.focus[worktree] = time.Now().Add(ttl)
 	t.mu.Unlock()
 	if expired {
-		t.enqueue(jobKey{root: repo.root, worktree: worktree})
+		t.enqueue(jobKey{root: repo.root, worktree: worktree}, sourceFocus)
 	}
 }
 
@@ -323,7 +336,7 @@ func (t *Tracker) runRefs(ctx context.Context, repo *trackedRepo, wait bool) (bo
 	})
 	observeSince(refsScanDuration.WithLabelValues(scanResult(ran, result.Changed, errors.Join(err, scanErr))), start)
 	t.mu.Lock()
-	repo.lastRefs = time.Now()
+	repo.refs.record(time.Now(), result.Changed, t.idle, t.maxIdle)
 	t.mu.Unlock()
 	if err != nil || !ran {
 		return false, err
@@ -359,7 +372,12 @@ func (t *Tracker) runStatus(ctx context.Context, repo *trackedRepo, path string,
 		scanResult(ran, changed, err), strconv.FormatBool(config.FSMonitor), strconv.FormatBool(config.UntrackedCache),
 	), start)
 	t.mu.Lock()
-	repo.lastStatus[path] = time.Now()
+	schedule := repo.status[path]
+	if schedule == nil {
+		schedule = &pollSchedule{}
+		repo.status[path] = schedule
+	}
+	schedule.record(time.Now(), changed, t.idle, t.maxIdle)
 	t.mu.Unlock()
 	if err == nil {
 		return nil
@@ -371,9 +389,11 @@ func (t *Tracker) runStatus(ctx context.Context, repo *trackedRepo, path string,
 	return err
 }
 
-// enqueue runs the scan named key in the background, or, when it is already
-// running, once more after it.
-func (t *Tracker) enqueue(key jobKey) {
+// enqueue runs the scan named key in the background. A request while that
+// scan still waits for a slot joins it, since it has yet to read anything;
+// one while it runs schedules it once more after.
+func (t *Tracker) enqueue(key jobKey, source string) {
+	scansEnqueued.WithLabelValues(jobKind(key), source).Inc()
 	t.mu.Lock()
 	state := t.jobs[key]
 	if state == nil {
@@ -381,7 +401,7 @@ func (t *Tracker) enqueue(key jobKey) {
 		t.jobs[key] = state
 	}
 	if state.running {
-		state.pending = true
+		state.pending = state.pending || state.started
 		t.mu.Unlock()
 		return
 	}
@@ -399,11 +419,15 @@ func (t *Tracker) drain(key jobKey, state *jobState) {
 			return
 		}
 		observeSince(scanQueueWait.WithLabelValues(jobKind(key)), queued)
+		t.mu.Lock()
+		state.started = true
+		t.mu.Unlock()
 		scansInFlight.Inc()
 		t.run(key)
 		scansInFlight.Dec()
 		<-t.sem
 		t.mu.Lock()
+		state.started = false
 		if !state.pending {
 			state.running = false
 			t.mu.Unlock()
@@ -428,7 +452,7 @@ func (t *Tracker) run(key jobKey) {
 			// A moved HEAD changes what is uncommitted; a new worktree has no
 			// status yet.
 			for _, path := range t.worktreesOf(repo) {
-				t.enqueue(jobKey{root: repo.root, worktree: path})
+				t.enqueue(jobKey{root: repo.root, worktree: path}, sourceRefs)
 			}
 		}
 	} else {
@@ -439,9 +463,10 @@ func (t *Tracker) run(key jobKey) {
 	}
 }
 
-// cadence schedules the scans whose interval has passed: refs every idle
-// interval, a worktree's status every hot interval while it is focused or an
-// agent works in it, else every idle interval.
+// cadence schedules the scans whose interval has passed: a worktree's status
+// every hot interval while it is focused or an agent works in it, and a repo's
+// refs while one of its worktrees is focused; every other key once its
+// backed-off idle interval ends.
 func (t *Tracker) cadence() {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
@@ -451,7 +476,7 @@ func (t *Tracker) cadence() {
 			return
 		case now := <-ticker.C:
 			for _, key := range t.due(now) {
-				t.enqueue(key)
+				t.enqueue(key, sourceCadence)
 			}
 		}
 	}
@@ -461,26 +486,40 @@ func (t *Tracker) due(now time.Time) []jobKey {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	var keys []jobKey
-	hot, idle := 0, 0
+	counts := map[string]int{cadenceHot: 0, cadenceIdle: 0, cadenceBackoff: 0}
 	for _, repo := range t.repos {
-		if now.Sub(repo.lastRefs) >= t.idle {
+		refsDue := !now.Before(repo.refs.next)
+		if t.focusedLocked(repo, now) {
+			refsDue = now.Sub(repo.refs.last) >= t.hot
+		}
+		if refsDue {
 			keys = append(keys, jobKey{root: repo.root})
 		}
 		for _, path := range repo.worktrees {
-			interval := t.idle
-			if t.hotLocked(path, now) {
-				interval = t.hot
-				hot++
-			} else {
-				idle++
+			schedule := repo.status[path]
+			if schedule == nil {
+				schedule = &pollSchedule{}
 			}
-			if now.Sub(repo.lastStatus[path]) >= interval {
+			var due bool
+			switch {
+			case t.hotLocked(path, now):
+				counts[cadenceHot]++
+				due = now.Sub(schedule.last) >= t.hot
+			case schedule.streak > 0:
+				counts[cadenceBackoff]++
+				due = !now.Before(schedule.next)
+			default:
+				counts[cadenceIdle]++
+				due = !now.Before(schedule.next)
+			}
+			if due {
 				keys = append(keys, jobKey{root: repo.root, worktree: path})
 			}
 		}
 	}
-	trackedWorktrees.WithLabelValues("hot").Set(float64(hot))
-	trackedWorktrees.WithLabelValues("idle").Set(float64(idle))
+	for cadence, count := range counts {
+		trackedWorktrees.WithLabelValues(cadence).Set(float64(count))
+	}
 	return keys
 }
 
@@ -490,6 +529,16 @@ func (t *Tracker) hotLocked(worktree string, now time.Time) bool {
 	}
 	for _, dir := range t.active {
 		if pathWithin(dir, worktree) {
+			return true
+		}
+	}
+	return false
+}
+
+// focusedLocked reports whether someone is looking at one of repo's worktrees.
+func (t *Tracker) focusedLocked(repo *trackedRepo, now time.Time) bool {
+	for _, path := range repo.worktrees {
+		if t.focus[path].After(now) {
 			return true
 		}
 	}

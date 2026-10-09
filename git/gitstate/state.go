@@ -44,6 +44,9 @@ type Worktree struct {
 	// TouchedAt is the newest modification time among the worktree's
 	// uncommitted files; nil when it has none.
 	TouchedAt *time.Time `json:"touchedAt,omitempty"`
+	// StatusScannedAt is when the worktree's status was last scanned, changed
+	// or not; nil before its first scan.
+	StatusScannedAt *time.Time `json:"statusScannedAt,omitempty"`
 	// StatusError is why the last status scan failed; Changes are then from
 	// the last scan that succeeded.
 	StatusError string `json:"statusError,omitempty"`
@@ -51,8 +54,9 @@ type Worktree struct {
 
 // State is the git state of a project's repository relative to its base
 // branch. CurrentBranch and BaseCheckedOut describe the primary checkout, which
-// is where branches merge into. ComputedAt is when its least recently scanned
-// part was scanned; Generation advances on every change. Error is why the last
+// is where branches merge into. ComputedAt is when its refs were last scanned,
+// each worktree carrying its own StatusScannedAt; Generation advances on every
+// change. Error is why the last
 // ref scan failed, the rest then being from the last scan that succeeded.
 type State struct {
 	Base string `json:"base"`

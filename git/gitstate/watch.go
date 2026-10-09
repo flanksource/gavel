@@ -85,8 +85,11 @@ func (w *metadataWatcher) run(ctx context.Context) {
 	}
 }
 
+// handle ignores attribute-only (Chmod) events: kqueue reports a read that
+// moves an index's atime as one, so acting on it would let every status scan,
+// which reads the index, schedule the next.
 func (w *metadataWatcher) handle(event fsnotify.Event) {
-	if strings.HasSuffix(event.Name, ".lock") {
+	if event.Op == fsnotify.Chmod || strings.HasSuffix(event.Name, ".lock") {
 		return
 	}
 	repo := w.repoOf(event.Name)
@@ -173,6 +176,6 @@ func (w *metadataWatcher) schedule(key jobKey) {
 		w.mu.Lock()
 		delete(w.timers, key)
 		w.mu.Unlock()
-		w.tracker.enqueue(key)
+		w.tracker.enqueue(key, sourceWatch)
 	})
 }

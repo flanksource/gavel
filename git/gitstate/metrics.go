@@ -19,6 +19,25 @@ const (
 	resultError   = "error"
 )
 
+// Scan triggers, the source label of gavel_git_scans_enqueued_total.
+const (
+	sourceCadence = "cadence"
+	sourceWatch   = "watch"
+	sourceTouch   = "touch"
+	sourceFocus   = "focus"
+	// sourceRefs is a ref scan that found changed refs rescanning every worktree.
+	sourceRefs = "refs"
+)
+
+// Worktree cadences, the cadence label of gavel_git_tracked_worktrees: hot
+// (focused or agent-active), idle at the base interval, or backed off after
+// unchanged scans.
+const (
+	cadenceHot     = "hot"
+	cadenceIdle    = "idle"
+	cadenceBackoff = "backoff"
+)
+
 // scanBuckets span a fingerprint-only status scan of a small worktree (a few
 // ms) to a cold ref scan comparing many branches (tens of seconds).
 var scanBuckets = prometheus.ExponentialBuckets(0.002, 2, 15)
@@ -44,6 +63,10 @@ var (
 		Help:    "Time a background scan waited for one of the tracker's concurrency slots, by kind (refs, status).",
 		Buckets: scanBuckets,
 	}, []string{"kind"})
+	scansEnqueued = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "gavel_git_scans_enqueued_total",
+		Help: "Background scans requested, by kind (refs, status) and source (cadence, watch, touch, focus, refs); a request for a scan already queued joins it.",
+	}, []string{"kind", "source"})
 	scansInFlight = promauto.NewGauge(prometheus.GaugeOpts{
 		Name: "gavel_git_scans_in_flight",
 		Help: "Background scans holding a concurrency slot.",
@@ -58,7 +81,7 @@ var (
 	})
 	trackedWorktrees = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "gavel_git_tracked_worktrees",
-		Help: "Live worktrees of the tracked repositories, by cadence (hot, idle).",
+		Help: "Live worktrees of the tracked repositories, by cadence (hot, idle, backoff).",
 	}, []string{"cadence"})
 	readDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "gavel_git_read_duration_seconds",
