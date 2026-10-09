@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/flanksource/gavel/github"
+	"github.com/flanksource/gavel/pr/model"
 	"github.com/flanksource/gavel/report"
 	"github.com/flanksource/gavel/testrunner/parsers"
 	testui "github.com/flanksource/gavel/testrunner/ui"
@@ -37,7 +38,7 @@ func DecodeArtifactSnapshot(jsonBytes []byte) (testui.Snapshot, error) {
 	}, nil
 }
 
-type prFetcher func(github.Options, int) (*github.PRInfo, error)
+type prFetcher func(github.Options, int) (*model.PRInfo, error)
 
 // DownloadPRSnapshot merges every gavel artifact published on a PR into a
 // single snapshot, so `gavel test --pr` / `gavel lint --pr` can narrow to the
@@ -54,7 +55,7 @@ func downloadPRSnapshot(opts github.Options, prNumber int, fetchPR prFetcher, do
 		return nil, fmt.Errorf("fetch PR #%d: %w", prNumber, err)
 	}
 
-	comments := append(append([]github.PRComment{}, pr.Comments...), pr.ReviewThreads...)
+	comments := append(append([]model.PRComment{}, pr.Comments...), pr.ReviewThreads...)
 	artifacts := github.FindGavelArtifacts(comments)
 	if len(artifacts) == 0 {
 		return nil, fmt.Errorf("PR #%d has no gavel result artifacts — no gavel sticky comment found on the PR", pr.Number)
