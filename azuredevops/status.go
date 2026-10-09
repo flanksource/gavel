@@ -4,17 +4,18 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/flanksource/gavel/pr/model"
 	"net/http"
 	"net/url"
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/flanksource/gavel/pr/model"
 )
 
 func (c *Client) Status(ctx context.Context, number int, opts model.StatusOptions) (*model.StatusSnapshot, error) {
 	if number <= 0 {
-		return nil, fmt.Errorf("Azure PR number must be positive")
+		return nil, fmt.Errorf("azure PR number must be positive")
 	}
 	if opts.TailLogs < 0 {
 		return nil, fmt.Errorf("--tail-logs must not be negative")
@@ -31,7 +32,7 @@ func (c *Client) Status(ctx context.Context, number int, opts model.StatusOption
 		return nil, fmt.Errorf("decode Azure PR: %w", err)
 	}
 	if pr.ID != number || !strings.HasPrefix(pr.Source, "refs/heads/") || !strings.HasPrefix(pr.Target, "refs/heads/") {
-		return nil, fmt.Errorf("Azure PR response has invalid identity or branch refs")
+		return nil, fmt.Errorf("azure PR response has invalid identity or branch refs")
 	}
 	info, err := c.prInfo(pr)
 	if err != nil {
@@ -73,54 +74,100 @@ func (c *Client) Status(ctx context.Context, number int, opts model.StatusOption
 }
 
 func (c *Client) refreshHead(ctx context.Context, pr *pullRequest, info *model.PRInfo) error {
-	refs, err := collection[struct {
-		Name string `json:"name"`
-		OID  string `json:"objectId"`
-	}](ctx, c, c.repositoryPath()+"/refs", url.Values{"filter": {strings.TrimPrefix(pr.Source, "refs/")}})
+	source, err := c.sourceRepository(*pr)
 	if err != nil {
 		return err
 	}
+	head, err := c.refOID(ctx, c.projectPath(source.Project.Name, "git/repositories/"+url.PathEscape(source.ID)), pr.Source)
+	if err != nil {
+		return err
+	}
+	stale := head != pr.SourceCommit.ID
+	pr.SourceCommit.ID, info.HeadRefOID = head, head
+	if pr.TargetCommit.ID != "" {
+		base, err := c.refOID(ctx, c.repositoryPath(), pr.Target)
+		if err != nil {
+			return err
+		}
+		stale = stale || base != pr.TargetCommit.ID
+		pr.TargetCommit.ID, info.BaseRefOID = base, base
+	}
+	if stale {
+		pr.MergeCommit.ID = ""
+		info.MergeReadiness.State = "pending"
+		info.MergeReadiness.WaitingForMerge = true
+		info.MergeReadiness.Reasons = append(info.MergeReadiness.Reasons, "merge computation has not caught up to the source or target branch")
+	}
+	return nil
+}
+
+func (c *Client) sourceRepository(pr pullRequest) (repositoryInfo, error) {
+	if pr.ForkSource == nil {
+		return *c.info, nil
+	}
+	source := pr.ForkSource.Repository
+	if source.ID == "" || source.Project.Name == "" {
+		return repositoryInfo{}, fmt.Errorf("azure fork source repository is missing identity or project")
+	}
+	return source, nil
+}
+
+func (c *Client) refOID(ctx context.Context, path, branch string) (string, error) {
+	refs, err := collection[struct {
+		Name string `json:"name"`
+		OID  string `json:"objectId"`
+	}](ctx, c, path+"/refs", url.Values{"filter": {strings.TrimPrefix(branch, "refs/")}})
+	if err != nil {
+		return "", err
+	}
 	for _, ref := range refs {
-		if ref.Name != pr.Source {
+		if ref.Name != branch {
 			continue
 		}
 		if ref.OID == "" {
-			return fmt.Errorf("Azure source ref has no objectId")
+			return "", fmt.Errorf("azure branch %q has no objectId", branch)
 		}
-		if ref.OID != pr.SourceCommit.ID {
-			pr.SourceCommit.ID = ref.OID
-			pr.MergeCommit.ID = ""
-			info.HeadRefOID = ref.OID
-			info.MergeReadiness.State = "pending"
-			info.MergeReadiness.WaitingForMerge = true
-			info.MergeReadiness.Reasons = append(info.MergeReadiness.Reasons, "merge computation has not caught up to the source branch")
-		}
-		return nil
+		return ref.OID, nil
 	}
-	return fmt.Errorf("Azure source branch %q was not found", pr.Source)
+	return "", fmt.Errorf("azure branch %q was not found", branch)
 }
 
 func (c *Client) pipelineRuns(ctx context.Context, pr pullRequest, opts model.StatusOptions) (map[int64]*model.WorkflowRun, error) {
 	var builds []build
-	for _, branch := range []string{fmt.Sprintf("refs/pull/%d/merge", pr.ID), pr.Source} {
-		items, err := collection[build](ctx, c, c.apiPath("build/builds"), url.Values{"repositoryId": {c.info.ID}, "repositoryType": {"TfsGit"}, "branchName": {branch}, "queryOrder": {"queueTimeDescending"}})
+	source, err := c.sourceRepository(pr)
+	if err != nil {
+		return nil, err
+	}
+	projects := map[int64]string{}
+	queries := []struct {
+		repository repositoryInfo
+		branch     string
+	}{{*c.info, fmt.Sprintf("refs/pull/%d/merge", pr.ID)}, {source, pr.Source}}
+	for _, query := range queries {
+		items, err := collection[build](ctx, c, c.projectPath(query.repository.Project.Name, "build/builds"), url.Values{"repositoryId": {query.repository.ID}, "repositoryType": {"TfsGit"}, "branchName": {query.branch}, "queryOrder": {"queueTimeDescending"}})
 		if err != nil {
 			return nil, err
 		}
-		builds = append(builds, items...)
+		for _, b := range items {
+			if b.SourceBranch != query.branch {
+				continue
+			}
+			builds = append(builds, b)
+			projects[b.ID] = query.repository.Project.Name
+		}
 	}
 	runs := make(map[int64]*model.WorkflowRun)
 	for _, b := range currentBuilds(pr, builds) {
 		if b.ID <= 0 || b.Definition.ID <= 0 || b.Definition.Name == "" {
-			return nil, fmt.Errorf("Azure build has invalid identity or pipeline definition")
+			return nil, fmt.Errorf("azure build has invalid identity or pipeline definition")
 		}
 		status, conclusion, err := executionState(b.Status, b.Result)
 		if err != nil {
 			return nil, fmt.Errorf("build %d: %w", b.ID, err)
 		}
-		run := &model.WorkflowRun{DatabaseID: b.ID, WorkflowID: b.Definition.ID, Name: b.Definition.Name, Status: status, Conclusion: conclusion, HeadSHA: b.SourceVersion, URL: fmt.Sprintf("https://dev.azure.com/%s/%s/_build/results?buildId=%d", url.PathEscape(c.repo.Organization), url.PathEscape(c.repo.Project), b.ID)}
+		run := &model.WorkflowRun{DatabaseID: b.ID, WorkflowID: b.Definition.ID, Name: b.Definition.Name, Status: status, Conclusion: conclusion, HeadSHA: b.SourceVersion, URL: fmt.Sprintf("https://dev.azure.com/%s/%s/_build/results?buildId=%d", url.PathEscape(c.repo.Organization), url.PathEscape(projects[b.ID]), b.ID)}
 		if b.Status != "notStarted" && b.Status != "postponed" {
-			if err := c.loadTimeline(ctx, run, opts); err != nil {
+			if err := c.loadTimeline(ctx, run, timelineOptions{StatusOptions: opts, Project: projects[b.ID]}); err != nil {
 				return nil, err
 			}
 		}

@@ -48,7 +48,7 @@ func (c *Client) request(ctx context.Context, method, path string, query url.Val
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, nil, fmt.Errorf("Azure %s %s: %w", method, path, err)
+		return nil, nil, fmt.Errorf("azure %s %s: %w", method, path, err)
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(resp.Body)
@@ -56,7 +56,7 @@ func (c *Client) request(ctx context.Context, method, path string, query url.Val
 		return nil, nil, fmt.Errorf("read Azure response: %w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, nil, fmt.Errorf("Azure %s %s: HTTP %d: %s", method, path, resp.StatusCode, data)
+		return nil, nil, fmt.Errorf("azure %s %s: HTTP %d: %s", method, path, resp.StatusCode, data)
 	}
 	return data, resp.Header, nil
 }
@@ -82,16 +82,16 @@ func collection[T any](ctx context.Context, c *Client, path string, query url.Va
 			return nil, fmt.Errorf("decode Azure collection %s: %w", path, err)
 		}
 		if page.Value == nil {
-			return nil, fmt.Errorf("Azure collection %s is missing value", path)
+			return nil, fmt.Errorf("azure collection %s is missing value", path)
 		}
 		if q.Get("$skip") != "" && string(data) == previousPage {
-			return nil, fmt.Errorf("Azure collection %s did not advance its page", path)
+			return nil, fmt.Errorf("azure collection %s did not advance its page", path)
 		}
 		previousPage = string(data)
 		all = append(all, (*page.Value)...)
 		if next := headers.Get("x-ms-continuationtoken"); next != "" {
 			if seen[next] {
-				return nil, fmt.Errorf("Azure collection %s repeated continuation token", path)
+				return nil, fmt.Errorf("azure collection %s repeated continuation token", path)
 			}
 			seen[next] = true
 			q.Set("continuationToken", next)
@@ -105,9 +105,13 @@ func collection[T any](ctx context.Context, c *Client, path string, query url.Va
 }
 
 func (c *Client) apiPath(resource string) string {
+	return c.projectPath(c.repo.Project, resource)
+}
+
+func (c *Client) projectPath(project, resource string) string {
 	path := "/" + url.PathEscape(c.repo.Organization)
-	if c.repo.Project != "" {
-		path += "/" + url.PathEscape(c.repo.Project)
+	if project != "" {
+		path += "/" + url.PathEscape(project)
 	}
 	return path + "/_apis/" + resource
 }

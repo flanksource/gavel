@@ -4,11 +4,11 @@ import { UiCheck, UiEdit, UiFolderGit, UiGitBranch, UiGitCommit, UiHome, UiWarni
 import { useProjectGit } from '../projectGitQueries';
 import { parseProjectRef } from '../projectRef';
 import type { BranchMergeResult, GitBranchInfo, GitWorktree, Project, ProjectGit } from '../types';
-import { useGitFocus } from '../useGitFocus';
+import { GIT_HOT_REFRESH_MS, useGitFocus } from '../useGitFocus';
 import { useNow } from '../useNow';
 import { ProjectBranchChanges } from './ProjectBranchChanges';
 import { ProjectStatusView } from './ProjectStatusView';
-import { dirtyFileCount, gitStateAge, projectRefAges, projectRefEntries, type ProjectRefEntry } from './projectGitView';
+import { dirtyFileCount, gitStateAge, gitStateScannedAt, projectRefAges, projectRefEntries, type ProjectRefEntry } from './projectGitView';
 
 type WorktreeView = 'work' | 'branch';
 
@@ -38,7 +38,7 @@ const shortSha = (sha: string) => sha.slice(0, 7);
  * also show their committed changes with the actions that land them.
  */
 export function ProjectRefPane({ project, projectRef, diffPath, showResults, onRefChange, onDiffPathChange, onChanged }: Props) {
-  const gitQuery = useProjectGit(project.name);
+  const gitQuery = useProjectGit(project.name, { refetchIntervalMs: GIT_HOT_REFRESH_MS });
   const [landed, setLanded] = useState<Landed | null>(null);
   const [viewChoice, setViewChoice] = useState<{ ref: string; view: WorktreeView } | null>(null);
   const ref = parseProjectRef(projectRef);
@@ -83,14 +83,14 @@ export function ProjectRefPane({ project, projectRef, diffPath, showResults, onR
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <RefBar git={git} loading={gitQuery.isPending} error={gitQuery.error?.message ?? ''} notices={notices} value={projectRef} onChange={onRefChange} />
+      <RefBar git={git} scannedAt={git ? gitStateScannedAt(git.computedAt, shownWorktree) : ''} loading={gitQuery.isPending} error={gitQuery.error?.message ?? ''} notices={notices} value={projectRef} onChange={onRefChange} />
       {landed && <LandedBanner landed={landed} onDismiss={() => setLanded(null)} />}
       <div className="min-h-0 flex-1">{body}</div>
     </div>
   );
 }
 
-function RefBar({ git, loading, error, notices, value, onChange }: { git: ProjectGit | undefined; loading: boolean; error: string; notices: string[]; value: string; onChange: (ref: string) => void }) {
+function RefBar({ git, scannedAt, loading, error, notices, value, onChange }: { git: ProjectGit | undefined; scannedAt: string; loading: boolean; error: string; notices: string[]; value: string; onChange: (ref: string) => void }) {
   if (error) {
     return (
       <div role="alert" className="flex shrink-0 items-center gap-1 border-b border-border px-4 py-1.5 text-xs text-red-600 dark:text-red-400">
@@ -132,7 +132,7 @@ function RefBar({ git, loading, error, notices, value, onChange }: { git: Projec
       />
       {selected && <RefSummary entry={selected} />}
       <GitNotices notices={notices} />
-      <GitStateAge computedAt={git.computedAt} />
+      <GitStateAge scannedAt={scannedAt} />
     </div>
   );
 }
@@ -151,11 +151,11 @@ function GitNotices({ notices }: { notices: string[] }) {
   );
 }
 
-function GitStateAge({ computedAt }: { computedAt: string }) {
+function GitStateAge({ scannedAt }: { scannedAt: string }) {
   useNow();
   return (
-    <span className="ml-auto shrink-0 whitespace-nowrap text-xs text-muted-foreground" title={`Git state computed ${new Date(computedAt).toLocaleString()}`}>
-      {gitStateAge(computedAt)}
+    <span className="ml-auto shrink-0 whitespace-nowrap text-xs text-muted-foreground" title={`Git state scanned ${new Date(scannedAt).toLocaleString()}`}>
+      {gitStateAge(scannedAt)}
     </span>
   );
 }

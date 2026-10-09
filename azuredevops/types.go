@@ -30,7 +30,10 @@ type pullRequest struct {
 	SourceCommit commitRef      `json:"lastMergeSourceCommit"`
 	TargetCommit commitRef      `json:"lastMergeTargetCommit"`
 	Repository   repositoryInfo `json:"repository"`
-	CreatedBy    struct {
+	ForkSource   *struct {
+		Repository repositoryInfo `json:"repository"`
+	} `json:"forkSource"`
+	CreatedBy struct {
 		ID     string `json:"id"`
 		Name   string `json:"displayName"`
 		Login  string `json:"uniqueName"`

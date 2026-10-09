@@ -75,13 +75,13 @@ func runLint(opts LintOptions) (any, error) {
 	if opts.UI {
 		uiServer, uiListener = startTestUI(opts.Addr)
 		if uiServer != nil {
-			uiServer.SetStopFunc(cancelRun)
+			uiServer.SetStopFunc(standaloneUIStop(cancelRun))
 			uiServer.BeginRun("initial")
 			uiServer.SetRerunFunc(func(req testui.RerunRequest, output *testui.RerunOutputBuffer) error {
 				clicky.ClearGlobalTasks()
 				rerunCtx, cancelRerun := newStopContext(opts.Context, 0)
 				defer cancelRerun()
-				uiServer.SetStopFunc(cancelRerun)
+				uiServer.SetStopFunc(standaloneUIStop(cancelRerun))
 				uiServer.BeginRun("rerun")
 				rerunOpts := opts
 				rerunOpts.Context = rerunCtx

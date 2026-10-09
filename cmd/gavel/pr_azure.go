@@ -3,12 +3,13 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/flanksource/gavel/pr/model"
-	"github.com/flanksource/gavel/pr/provider"
-	"github.com/flanksource/gavel/prwatch"
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/flanksource/gavel/pr/model"
+	"github.com/flanksource/gavel/pr/provider"
+	"github.com/flanksource/gavel/prwatch"
 )
 
 func runAzurePRStatus(opts PRStatusOptions, target statusTarget, client provider.Client, workDir string) (any, error) {
@@ -64,7 +65,7 @@ func azureBranchPR(ctx context.Context, client provider.Client, workDir string) 
 	}
 	branch := strings.TrimSpace(string(out))
 	if branch == "" {
-		return 0, fmt.Errorf("Azure PR status needs a PR number when HEAD is detached")
+		return 0, fmt.Errorf("azure PR status needs a PR number when HEAD is detached")
 	}
 	prs, err := client.OpenPRs(ctx)
 	if err != nil {

@@ -151,7 +151,7 @@ func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
 			uiServer.SetGitInfo(gitInfo)
 			uiServer.SetProfileRoot(opts.WorkDir)
 			uiServer.EnableDiagnostics(os.Getpid())
-			uiServer.SetStopFunc(cancelRun)
+			uiServer.SetStopFunc(standaloneUIStop(cancelRun))
 			uiServer.SetRunProcess(os.Getpid(), strings.Join(os.Args, " "))
 			if len(opts.Frameworks) > 0 {
 				uiServer.SetRunFrameworks(opts.Frameworks)
@@ -196,7 +196,7 @@ func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
 			clicky.ClearGlobalTasks()
 			rerunCtx, cancelRerun := newStopContext(opts.Context, opts.Timeout)
 			defer cancelRerun()
-			uiServer.SetStopFunc(cancelRerun)
+			uiServer.SetStopFunc(standaloneUIStop(cancelRerun))
 			uiServer.BeginRun("rerun")
 			if mode := fixtureBenchmarkMode(opts); mode != "" {
 				uiServer.SetFixtureBenchmarkMode(mode)

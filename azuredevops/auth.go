@@ -31,7 +31,7 @@ func (a *authenticator) authorization(ctx context.Context) (string, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.fetch == nil || a.now == nil {
-		return "", fmt.Errorf("Azure authentication resolver is not configured")
+		return "", fmt.Errorf("azure authentication resolver is not configured")
 	}
 	if a.cached.Token == "" || !a.cached.Expires.After(a.now().Add(time.Minute)) {
 		token, err := a.fetch(ctx)
@@ -39,7 +39,7 @@ func (a *authenticator) authorization(ctx context.Context) (string, error) {
 			return "", err
 		}
 		if token.Token == "" || !token.Expires.After(a.now()) {
-			return "", fmt.Errorf("Azure CLI returned an empty or expired access token")
+			return "", fmt.Errorf("azure CLI returned an empty or expired access token")
 		}
 		a.cached = token
 	}
@@ -49,7 +49,7 @@ func (a *authenticator) authorization(ctx context.Context) (string, error) {
 func cliAccessToken(ctx context.Context) (accessToken, error) {
 	out, err := exec.CommandContext(ctx, "az", "account", "get-access-token", "--resource", "499b84ac-1321-427f-aa17-267ca6975798", "--output", "json").Output()
 	if err != nil {
-		return accessToken{}, fmt.Errorf("Azure authentication: set AZURE_DEVOPS_EXT_PAT or run az login: %w", err)
+		return accessToken{}, fmt.Errorf("azure authentication: set AZURE_DEVOPS_EXT_PAT or run az login: %w", err)
 	}
 	var response struct {
 		Token        string `json:"accessToken"`

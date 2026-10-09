@@ -1,5 +1,5 @@
 import { UiGitBranch } from '@flanksource/clicky-ui/icons';
-import type { GitMetrics, LatencyStat } from '../types';
+import type { CountStat, GitMetrics, LatencyStat } from '../types';
 
 // Sections of the latency table, in the order a slow page is diagnosed: the
 // reads pages wait on, then the scans that keep the rows current, the queue
@@ -37,10 +37,15 @@ export function GitTrackingPanel({ metrics, error }: { metrics: GitMetrics | nul
         <>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
             <Stat label="Repositories" value={metrics.trackedRepos} />
-            <Stat label="Worktrees" value={metrics.hotWorktrees + metrics.idleWorktrees} sub={`${metrics.hotWorktrees} hot · ${metrics.idleWorktrees} idle`} />
+            <Stat
+              label="Worktrees"
+              value={metrics.hotWorktrees + metrics.idleWorktrees + metrics.backoffWorktrees}
+              sub={`${metrics.hotWorktrees} hot · ${metrics.idleWorktrees} idle · ${metrics.backoffWorktrees} backed off`}
+            />
             <Stat label="Scans running" value={metrics.scansInFlight} />
             <Stat label="Comparisons computed" value={metrics.rangesComputed} />
           </div>
+          <ScanTriggers triggers={metrics.scanTriggers ?? []} />
           <LatencyTable metrics={metrics} />
         </>
       )}
@@ -65,6 +70,23 @@ function Stat({ label, value, sub }: { label: string; value: number; sub?: strin
       <div className="text-[10px] text-muted-foreground">{label}</div>
       <div className="text-sm font-semibold text-foreground tabular-nums">{value.toLocaleString()}</div>
       {sub && <div className="text-[10px] text-muted-foreground">{sub}</div>}
+    </div>
+  );
+}
+
+// ScanTriggers shows what keeps requesting scans — the cadence, .git metadata
+// events, server-side mutations, focused views or changed refs.
+function ScanTriggers({ triggers }: { triggers: CountStat[] }) {
+  if (triggers.length === 0) return null;
+  return (
+    <div className="flex items-center gap-1.5 flex-wrap mb-3 text-xs">
+      <span className="text-[10px] text-muted-foreground uppercase">Scans requested</span>
+      {triggers.map(trigger => (
+        <span key={`${trigger.labels.kind}-${trigger.labels.source}`} data-testid="scan-trigger" className="bg-muted rounded px-1.5 py-0.5 font-mono">
+          <span className="text-muted-foreground">{trigger.labels.kind} ← {trigger.labels.source}</span>
+          <span className="ml-1.5 tabular-nums text-foreground">{trigger.count.toLocaleString()}</span>
+        </span>
+      ))}
     </div>
   );
 }

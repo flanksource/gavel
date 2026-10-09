@@ -15,6 +15,73 @@ const fixtureBuilds = `{"value":[{"id":101,"status":"completed","result":"failed
 const fixtureTimeline = `{"records":[{"id":"job-uuid","name":"Test","type":"Job","state":"completed","result":"failed","order":1},{"id":"task-uuid","parentId":"job-uuid","name":"Run tests","type":"Task","state":"completed","result":"failed","order":2,"log":{"id":7}}]}`
 
 var _ = Describe("pipeline status", func() {
+	It("rejects policy evaluations missing their blocking configuration", func() {
+		c := testClient(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case strings.HasSuffix(r.URL.Path, "/pullrequests/27"):
+				fmt.Fprint(w, fixturePR)
+			case strings.HasSuffix(r.URL.Path, "/evaluations"):
+				fmt.Fprint(w, `{"value":[{"evaluationId":"policy-id","status":"approved"}]}`)
+			case strings.HasSuffix(r.URL.Path, "/refs"):
+				fmt.Fprint(w, `{"value":[{"name":"refs/heads/feature","objectId":"head-sha"}]}`)
+			case strings.HasSuffix(r.URL.Path, "/builds"):
+				fmt.Fprint(w, `{"value":[]}`)
+			default:
+				fmt.Fprint(w, fixtureRepository)
+			}
+		})
+		_, err := c.Status(context.Background(), 27, model.StatusOptions{})
+		Expect(err).To(MatchError(ContainSubstring("policy configuration")))
+	})
+	It("queries a fork source repository instead of the target branch with the same name", func() {
+		c := testClient(func(w http.ResponseWriter, r *http.Request) {
+			defer GinkgoRecover()
+			switch {
+			case strings.HasSuffix(r.URL.Path, "/pullrequests/27"):
+				fmt.Fprint(w, strings.TrimSuffix(fixturePR, "}")+`,"forkSource":{"repository":{"id":"fork-id","project":{"name":"fork-project"}}}}`)
+			case strings.HasSuffix(r.URL.Path, "/refs"):
+				Expect(r.URL.Path).To(Equal("/acme/fork-project/_apis/git/repositories/fork-id/refs"))
+				fmt.Fprint(w, `{"value":[{"name":"refs/heads/feature","objectId":"head-sha"}]}`)
+			case strings.HasSuffix(r.URL.Path, "/builds"):
+				if r.URL.Query().Get("branchName") == "refs/heads/feature" {
+					Expect(r.URL.Path).To(Equal("/acme/fork-project/_apis/build/builds"))
+					Expect(r.URL.Query().Get("repositoryId")).To(Equal("fork-id"))
+				}
+				fmt.Fprint(w, `{"value":[]}`)
+			case strings.HasSuffix(r.URL.Path, "/evaluations"):
+				fmt.Fprint(w, `{"value":[]}`)
+			default:
+				fmt.Fprint(w, fixtureRepository)
+			}
+		})
+		result, err := c.Status(context.Background(), 27, model.StatusOptions{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.PR.MergeReadiness.State).To(Equal("ready"))
+	})
+	It("excludes a trial merge after the target branch changes", func() {
+		c := testClient(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case strings.HasSuffix(r.URL.Path, "/pullrequests/27"):
+				fmt.Fprint(w, strings.TrimSuffix(fixturePR, "}")+`,"lastMergeTargetCommit":{"commitId":"old-target"}}`)
+			case strings.HasSuffix(r.URL.Path, "/refs"):
+				if r.URL.Query().Get("filter") == "heads/main" {
+					fmt.Fprint(w, `{"value":[{"name":"refs/heads/main","objectId":"new-target"}]}`)
+				} else {
+					fmt.Fprint(w, `{"value":[{"name":"refs/heads/feature","objectId":"head-sha"}]}`)
+				}
+			case strings.HasSuffix(r.URL.Path, "/evaluations"):
+				fmt.Fprint(w, `{"value":[]}`)
+			case strings.HasSuffix(r.URL.Path, "/builds"):
+				fmt.Fprint(w, fixtureBuilds)
+			default:
+				fmt.Fprint(w, fixtureRepository)
+			}
+		})
+		result, err := c.Status(context.Background(), 27, model.StatusOptions{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.Runs).To(BeEmpty())
+		Expect(result.PR.MergeReadiness.WaitingForMerge).To(BeTrue())
+	})
 	It("does not reuse an old trial merge while the source branch advances", func() {
 		c := testClient(func(w http.ResponseWriter, r *http.Request) {
 			switch {

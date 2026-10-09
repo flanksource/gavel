@@ -46,8 +46,12 @@ export function useProjectGitSummary({ enabled }: { enabled: boolean }): Project
   };
 }
 
-export function useProjectGit(projectName: string) {
+// The git stream refetches on every change; a page showing how fresh the state
+// is also re-reads it every refetchIntervalMs, since an unchanged scan advances
+// no generation.
+export function useProjectGit(projectName: string, { refetchIntervalMs }: { refetchIntervalMs?: number } = {}) {
   return useQuery<ProjectGit>({
+    refetchInterval: refetchIntervalMs ?? false,
     queryKey: queryKeys.projectGit(projectName),
     queryFn: async ({ signal }) => parseProjectGit(await fetchJSON<unknown>({
       url: `/api/projects/${encodeURIComponent(projectName)}/git`,
@@ -105,6 +109,7 @@ export function parseProjectGit(payload: unknown): ProjectGit {
       || typeof worktree.ahead !== 'number'
       || typeof worktree.lastCommitAt !== 'string'
       || (worktree.touchedAt !== undefined && typeof worktree.touchedAt !== 'string')
+      || (worktree.statusScannedAt !== undefined && typeof worktree.statusScannedAt !== 'string')
       || (worktree.statusError !== undefined && typeof worktree.statusError !== 'string')
       || !hasNumbers(worktree.changes, CHANGE_KEYS)) {
       throw new Error(`Load project git: invalid worktree ${JSON.stringify(worktree)}`);

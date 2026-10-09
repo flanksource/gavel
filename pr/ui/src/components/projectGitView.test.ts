@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { GitBranchInfo, GitWorktree, ProjectGit } from '../types';
-import { dirtyFileCount, gitStateAge, projectRefAges, projectRefEntries } from './projectGitView';
+import { dirtyFileCount, gitStateAge, gitStateScannedAt, projectRefAges, projectRefEntries } from './projectGitView';
 
 const NOW = new Date('2026-10-04T12:00:00Z');
 const HOURS_AGO_3 = '2026-10-04T09:00:00Z';
@@ -92,6 +92,15 @@ describe('projectRefAges', () => {
     ['2026-10-04T11:59:58Z', 'git state just now'],
   ])('labels git state computed at %s as "%s"', (computedAt, label) => {
     expect(gitStateAge(computedAt)).toBe(label);
+  });
+
+  it.each([
+    ['a branch view: the refs scan', '2026-10-04T11:59:52Z', undefined, '2026-10-04T11:59:52Z'],
+    ['a worktree scanned after the refs: the refs scan', MINUTES_AGO_5, { statusScannedAt: '2026-10-04T11:59:52Z' }, MINUTES_AGO_5],
+    ['a worktree scanned before the refs: its status scan', '2026-10-04T11:59:52Z', { statusScannedAt: MINUTES_AGO_5 }, MINUTES_AGO_5],
+    ['a worktree never scanned: the refs scan', '2026-10-04T11:59:52Z', {}, '2026-10-04T11:59:52Z'],
+  ])('dates %s', (_case, computedAt, worktree, expected) => {
+    expect(gitStateScannedAt(computedAt, worktree)).toBe(expected);
   });
 
   it("treats Go's zero time (a prunable worktree) as no commit age", () => {

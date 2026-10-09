@@ -91,7 +91,17 @@ export function projectRefAges({ lastCommitAt, touchedAt }: { lastCommitAt: stri
   return { committed: age(lastCommitAt), touched: age(touchedAt) };
 }
 
-/** How old the server's memoized git state is, e.g. "git state 8s ago". */
-export function gitStateAge(computedAt: string): string {
-  return `git state ${timeAgoShort(computedAt)}`;
+/** How old the git state a pane shows is, e.g. "git state 8s ago". */
+export function gitStateAge(scannedAt: string): string {
+  return `git state ${timeAgoShort(scannedAt)}`;
+}
+
+/**
+ * When what a pane shows was last scanned: the repo's refs (computedAt) and,
+ * for the main checkout or a worktree, the older of that and its own status
+ * scan. Other worktrees, polled less often, do not age it.
+ */
+export function gitStateScannedAt(computedAt: string, worktree?: { statusScannedAt?: string }): string {
+  const status = worktree?.statusScannedAt;
+  return status && Date.parse(status) < Date.parse(computedAt) ? status : computedAt;
 }

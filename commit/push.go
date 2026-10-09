@@ -103,7 +103,7 @@ var pushDepsForTest *pushDeps
 // still something to seed PR title/body generation with. If HEAD has no
 // commits ahead of upstream either, returns ErrNothingToPush.
 func pushAfterCommit(ctx context.Context, opts Options, result *Result) error {
-	deps := defaultPushDeps()
+	var deps pushDeps
 	if pushDepsForTest != nil {
 		deps = *pushDepsForTest
 	} else {

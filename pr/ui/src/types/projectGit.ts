@@ -38,6 +38,9 @@ export interface GitWorktree {
   lastCommitAt: string;
   // Newest mtime among the uncommitted files; absent when there are none.
   touchedAt?: string;
+  // When this worktree's status was last scanned, changed or not (RFC 3339);
+  // absent before its first scan.
+  statusScannedAt?: string;
   // Set when the last working-tree scan of this worktree failed; the counts
   // above are then stale.
   statusError?: string;
@@ -70,8 +73,8 @@ export interface ProjectGit {
   baseCheckedOut: boolean;
   worktrees: GitWorktree[];
   branches: GitBranchInfo[];
-  // When the server computed this state (RFC 3339); it is memoized, so this
-  // can be seconds older than the response.
+  // When the repo's refs (branches, worktree list) were last scanned (RFC
+  // 3339); each worktree carries its own statusScannedAt.
   computedAt: string;
   // Advances on every change to this project's git rows; /api/git/stream
   // pushes it so the UI refetches instead of polling.

@@ -27,7 +27,7 @@ func ParseRepository(raw string) (Repository, error) {
 		return validateRepository(Repository{Organization: parts[1], Project: parts[2], Name: parts[3]})
 	}
 	if u.Scheme != "https" || u.Port() != "" {
-		return Repository{}, fmt.Errorf("Azure repository requires hosted HTTPS or SSH")
+		return Repository{}, fmt.Errorf("azure repository requires hosted HTTPS or SSH")
 	}
 	var org string
 	switch {
@@ -95,7 +95,7 @@ func parseURL(raw string) (*url.URL, error) {
 
 func validateRepository(repo Repository) (Repository, error) {
 	if repo.Organization == "" || repo.Name == "" {
-		return Repository{}, fmt.Errorf("Azure organization and repository are required")
+		return Repository{}, fmt.Errorf("azure organization and repository are required")
 	}
 	for _, part := range []string{repo.Organization, repo.Project, repo.Name} {
 		if part == "." || part == ".." || strings.ContainsAny(part, "/\\") {

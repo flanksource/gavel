@@ -27,6 +27,32 @@ func (t azureTestTransport) RoundTrip(req *http.Request) (*http.Response, error)
 }
 
 var _ = Describe("Azure creation orchestration", func() {
+	It("rejects an omitted project that resolves to a different origin repository", func() {
+		f := newRepoFixture()
+		git(f.repo, "remote", "set-url", "origin", "https://dev.azure.com/acme/product/_git/service")
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			project := "product"
+			if r.URL.Path == "/acme/_apis/git/repositories/service" {
+				project = "other"
+			}
+			fmt.Fprintf(w, `{"id":"repo-id","name":"service","defaultBranch":"refs/heads/main","project":{"id":"project-id","name":%q}}`, project)
+		}))
+		DeferCleanup(server.Close)
+		target, err := url.Parse(server.URL)
+		Expect(err).NotTo(HaveOccurred())
+		old := http.DefaultTransport
+		http.DefaultTransport = azureTestTransport{target: target, next: old}
+		DeferCleanup(func() { http.DefaultTransport = old })
+		GinkgoT().Setenv("AZURE_DEVOPS_EXT_PAT", "fixture-pat")
+		deps := DefaultDeps()
+		deps.GenerateContent = func(context.Context, commitpkg.PRContentInput) (commitpkg.PRContent, error) {
+			Fail("AI must not be called")
+			return commitpkg.PRContent{}, nil
+		}
+		_, err = Create(context.Background(), f.repo, Input{SHAs: []string{f.topicSHA}, Base: testBase, Repo: "https://dev.azure.com/acme/_git/service", Deps: deps})
+		Expect(err).To(MatchError(ContainSubstring("does not match origin")))
+		Expect(f.scratchEntries()).To(BeEmpty())
+	})
 	It("pushes ordered cherry-picks to a bare origin and creates a draft with the shared provider", func() {
 		f := newRepoFixture()
 		git(f.repo, "remote", "set-url", "--push", "origin", f.bare)

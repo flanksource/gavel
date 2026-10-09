@@ -155,6 +155,20 @@ describe('useProjectGitSummary', () => {
     vi.useRealTimers();
   });
 
+  it('re-reads the project git state on the interval a page asks for', async () => {
+    const intervalMs = 5_000;
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(git), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const { result } = renderHook(() => useProjectGit('gavel', { refetchIntervalMs: intervalMs }), { wrapper: wrapper() });
+    await waitFor(() => expect(result.current.data).toEqual(git));
+
+    await vi.advanceTimersByTimeAsync(2 * intervalMs);
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    vi.useRealTimers();
+  });
+
   it('does not fetch while disabled', () => {
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);

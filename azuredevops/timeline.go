@@ -4,16 +4,22 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/flanksource/gavel/pr/model"
 	"net/http"
 	"net/url"
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/flanksource/gavel/pr/model"
 )
 
-func (c *Client) loadTimeline(ctx context.Context, run *model.WorkflowRun, opts model.StatusOptions) error {
-	path := c.apiPath(fmt.Sprintf("build/builds/%d", run.DatabaseID))
+type timelineOptions struct {
+	model.StatusOptions
+	Project string
+}
+
+func (c *Client) loadTimeline(ctx context.Context, run *model.WorkflowRun, opts timelineOptions) error {
+	path := c.projectPath(opts.Project, fmt.Sprintf("build/builds/%d", run.DatabaseID))
 	data, _, err := c.request(ctx, http.MethodGet, path+"/timeline", nil, nil)
 	if err != nil {
 		return err
@@ -25,7 +31,7 @@ func (c *Client) loadTimeline(ctx context.Context, run *model.WorkflowRun, opts 
 		return fmt.Errorf("decode Azure timeline: %w", err)
 	}
 	if timeline.Records == nil {
-		return fmt.Errorf("Azure build %d timeline is missing records", run.DatabaseID)
+		return fmt.Errorf("azure build %d timeline is missing records", run.DatabaseID)
 	}
 	records := latestRecords(*timeline.Records)
 	byID := map[string]timelineRecord{}
@@ -106,7 +112,7 @@ func belongsToJob(task timelineRecord, jobID string, records map[string]timeline
 
 func (c *Client) logTail(ctx context.Context, path string, id int64, tail int) (string, error) {
 	if id <= 0 {
-		return "", fmt.Errorf("Azure timeline has invalid log ID")
+		return "", fmt.Errorf("azure timeline has invalid log ID")
 	}
 	logs, err := collection[logReference](ctx, c, path+"/logs", nil)
 	if err != nil {
@@ -120,7 +126,7 @@ func (c *Client) logTail(ctx context.Context, path string, id int64, tail int) (
 		}
 	}
 	if found == nil {
-		return "", fmt.Errorf("Azure build log %d was not found", id)
+		return "", fmt.Errorf("azure build log %d was not found", id)
 	}
 	start := max(int64(0), found.Lines-int64(tail))
 	if tail == 0 {

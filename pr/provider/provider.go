@@ -3,11 +3,12 @@ package provider
 import (
 	"context"
 	"fmt"
+	"os/exec"
+	"strings"
+
 	"github.com/flanksource/gavel/azuredevops"
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/pr/model"
-	"os/exec"
-	"strings"
 )
 
 type Options struct {
@@ -96,7 +97,20 @@ func PreflightCreate(ctx context.Context, opts Options) error {
 				return err
 			}
 			if !strings.EqualFold(requested.Organization, remote.Organization) || !strings.EqualFold(requested.Name, remote.Name) || (requested.Project != "" && remote.Project != "" && !strings.EqualFold(requested.Project, remote.Project)) {
-				return fmt.Errorf("Azure PR repository does not match origin; pushes target origin")
+				return fmt.Errorf("azure PR repository does not match origin; pushes target origin")
+			}
+			if requested.Project == "" || remote.Project == "" {
+				requested, err = client.(*azuredevops.Client).Repository(ctx)
+				if err != nil {
+					return err
+				}
+				remote, err = originClient.(*azuredevops.Client).Repository(ctx)
+				if err != nil {
+					return err
+				}
+				if !strings.EqualFold(requested.URL(), remote.URL()) {
+					return fmt.Errorf("azure PR repository does not match origin; pushes target origin")
+				}
 			}
 		} else if client.(gitHubClient).opts.Repo != originClient.(gitHubClient).opts.Repo {
 			return fmt.Errorf("GitHub PR repository does not match origin; pushes target origin")

@@ -88,7 +88,7 @@ func projectGitOpenAPISchemas() map[string]any {
 	worktree := objectSchema([]string{"path", "branch", "head", "primary", "detached", "prunable", "changes", "ahead", "lastCommitAt"}, map[string]any{
 		"path": typed("string"), "branch": typed("string"), "head": typed("string"), "primary": typed("boolean"),
 		"detached": typed("boolean"), "prunable": typed("boolean"), "changes": changes, "ahead": typed("integer"),
-		"lastCommitAt": dateTime, "touchedAt": dateTime,
+		"lastCommitAt": dateTime, "touchedAt": dateTime, "statusScannedAt": dateTime,
 	})
 	branch := objectSchema([]string{"name", "head", "ahead", "behind", "worktree", "diff", "lastCommitAt"}, map[string]any{
 		"name": typed("string"), "head": typed("string"), "ahead": typed("integer"), "behind": typed("integer"),

@@ -391,6 +391,11 @@ export interface LatencyStat {
   p95Ms: number;
 }
 
+export interface CountStat {
+  labels: Record<string, string>;
+  count: number;
+}
+
 // GitMetrics matches pr/ui.gitMetricsResponse (GET /api/git/metrics).
 export interface GitMetrics {
   tracking: boolean;
@@ -399,8 +404,10 @@ export interface GitMetrics {
   trackedRepos: number;
   hotWorktrees: number;
   idleWorktrees: number;
+  backoffWorktrees: number;
   scansInFlight: number;
   rangesComputed: number;
+  scanTriggers: CountStat[] | null;
   refsScans: LatencyStat[] | null;
   statusScans: LatencyStat[] | null;
   commands: LatencyStat[] | null;

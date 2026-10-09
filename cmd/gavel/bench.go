@@ -102,7 +102,7 @@ func runBenchRun(cmd *cobra.Command, args []string) error {
 			srv.SetVersion(version)
 			srv.SetRunArgs(snapshotArgs(opts))
 			srv.SetGitInfo(snapshotGitInfo(opts.WorkDir))
-			srv.SetStopFunc(cancelRun)
+			srv.SetStopFunc(standaloneUIStop(cancelRun))
 			srv.SetRunProcess(os.Getpid(), "gavel bench run")
 			srv.SetRunFrameworks([]string{"go"})
 			srv.BeginRun("initial")

@@ -5,6 +5,9 @@ import { useDocumentVisible } from './useDocumentVisible';
 // The server treats a focus as a 30s lease; renewing every third of that
 // survives two lost renewals.
 export const GIT_FOCUS_RENEW_MS = 10_000;
+// A focused worktree and its repo's refs are rescanned at the tracker's hot
+// cadence (gitstate.DefaultHot); a page re-reads them as often.
+export const GIT_HOT_REFRESH_MS = 5_000;
 
 interface GitFocusTarget {
   project: string;
