@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/pr/model"
 )
 
 // MergeConflict is one path that cannot be merged cleanly, tagged with the kind
@@ -51,7 +52,7 @@ func (r MergeConflictReport) ResolveCommands() []string {
 // conflict. It returns nil for any PR GitHub does not call CONFLICTING — a
 // clean PR has nothing to explain, and replaying its merge would spend a fetch
 // on every poll of `pr status --follow`.
-func DetectMergeConflicts(opts Options, pr *PRInfo) *MergeConflictReport {
+func DetectMergeConflicts(opts Options, pr *model.PRInfo) *MergeConflictReport {
 	if pr == nil || !pr.IsConflicting() {
 		return nil
 	}

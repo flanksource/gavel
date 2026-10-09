@@ -6,12 +6,14 @@ import (
 	"os/exec"
 	"slices"
 	"strings"
+
+	"github.com/flanksource/gavel/pr/model"
 )
 
 // EnsurePRCommits makes the PR's head and base commits readable in the local
 // object store, using the same object-only fetch conflict detection uses. A
 // worktree based on the PR head, or a merge of its base, needs both.
-func EnsurePRCommits(opts Options, pr *PRInfo) error {
+func EnsurePRCommits(opts Options, pr *model.PRInfo) error {
 	if pr == nil || pr.HeadRefOID == "" || pr.BaseRefOID == "" {
 		return fmt.Errorf("PR does not report both its head and base commits")
 	}

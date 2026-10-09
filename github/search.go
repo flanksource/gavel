@@ -12,6 +12,7 @@ import (
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/github/activity"
+	"github.com/flanksource/gavel/pr/model"
 )
 
 const prSearchQuery = `query($query: String!, $first: Int!) {
@@ -471,7 +472,7 @@ func computeCheckSummary(node searchPRNode) *CheckSummary {
 func enrichFailedChecks(opts Options, items PRSearchResults, fetchLogs bool) {
 	// Multiple failed checks across different PRs frequently point at the
 	// same workflow run. Memoize so each run is fetched at most once per call.
-	runCache := make(map[int64]*WorkflowRun)
+	runCache := make(map[int64]*model.WorkflowRun)
 	for i := range items {
 		if items[i].CheckStatus == nil {
 			continue
@@ -499,7 +500,7 @@ func enrichFailedChecks(opts Options, items PRSearchResults, fetchLogs bool) {
 				continue
 			}
 			for _, job := range run.Jobs {
-				if !IsFailureConclusion(job.Conclusion) {
+				if !model.IsFailureConclusion(job.Conclusion) {
 					continue
 				}
 				for _, step := range job.Steps {
@@ -604,7 +605,7 @@ func (item PRListItem) prettyWithIndent(indent string, showRepo bool) api.Text {
 		text = text.Append(" DRAFT", "text-gray-500")
 	}
 	if item.ReviewDecision != "" {
-		text = text.Append(" "+item.ReviewDecision, ReviewStyle(item.ReviewDecision))
+		text = text.Append(" "+item.ReviewDecision, model.ReviewStyle(item.ReviewDecision))
 	}
 
 	text = text.Append(" "+item.Source, "text-cyan-600").

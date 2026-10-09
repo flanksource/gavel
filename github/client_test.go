@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/flanksource/gavel/pr/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -208,18 +209,18 @@ func TestPickRunPR(t *testing.T) {
 func TestAllComplete(t *testing.T) {
 	tests := []struct {
 		name   string
-		checks StatusChecks
+		checks model.StatusChecks
 		expect bool
 	}{
-		{"all completed", StatusChecks{
+		{"all completed", model.StatusChecks{
 			{Status: "COMPLETED", Conclusion: "SUCCESS"},
 			{Status: "COMPLETED", Conclusion: "FAILURE"},
 		}, true},
-		{"one in progress", StatusChecks{
+		{"one in progress", model.StatusChecks{
 			{Status: "COMPLETED", Conclusion: "SUCCESS"},
 			{Status: "IN_PROGRESS"},
 		}, false},
-		{"empty", StatusChecks{}, false},
+		{"empty", model.StatusChecks{}, false},
 	}
 	for _, tc := range tests {
 		assert.Equal(t, tc.expect, tc.checks.AllComplete(), tc.name)
@@ -229,21 +230,21 @@ func TestAllComplete(t *testing.T) {
 func TestHasFailure(t *testing.T) {
 	tests := []struct {
 		name   string
-		checks StatusChecks
+		checks model.StatusChecks
 		expect bool
 	}{
-		{"has failure", StatusChecks{
+		{"has failure", model.StatusChecks{
 			{Conclusion: "SUCCESS"},
 			{Conclusion: "FAILURE"},
 		}, true},
-		{"has timed out", StatusChecks{
+		{"has timed out", model.StatusChecks{
 			{Conclusion: "TIMED_OUT"},
 		}, true},
-		{"all success", StatusChecks{
+		{"all success", model.StatusChecks{
 			{Conclusion: "SUCCESS"},
 			{Conclusion: "NEUTRAL"},
 		}, false},
-		{"empty", StatusChecks{}, false},
+		{"empty", model.StatusChecks{}, false},
 	}
 	for _, tc := range tests {
 		assert.Equal(t, tc.expect, tc.checks.HasFailure(), tc.name)
@@ -264,7 +265,7 @@ func TestStatusIcon(t *testing.T) {
 		{"PENDING", "", "○"},
 	}
 	for _, tc := range tests {
-		icon := StatusIcon(tc.status, tc.conclusion)
+		icon := model.StatusIcon(tc.status, tc.conclusion)
 		assert.Contains(t, icon.String(), tc.expectContains,
 			"status=%s conclusion=%s", tc.status, tc.conclusion)
 	}
@@ -615,9 +616,9 @@ func TestParseLogSectionsRunStepLastGroup(t *testing.T) {
 }
 
 func TestAttachLogsToSteps(t *testing.T) {
-	job := &Job{
+	job := &model.Job{
 		Name: "test", Conclusion: "failure",
-		Steps: []Step{
+		Steps: []model.Step{
 			{Name: "Set up job", Status: "completed", Conclusion: "success", Number: 1},
 			{Name: "Run tests", Status: "completed", Conclusion: "failure", Number: 2},
 		},
@@ -640,9 +641,9 @@ func TestAttachLogsToSteps(t *testing.T) {
 }
 
 func TestAttachLogsToStepsFallback(t *testing.T) {
-	job := &Job{
+	job := &model.Job{
 		Name: "test", Conclusion: "failure",
-		Steps: []Step{
+		Steps: []model.Step{
 			{Name: "Run tests", Status: "completed", Conclusion: "failure", Number: 1},
 		},
 	}
@@ -665,9 +666,9 @@ func TestCleanRawLog(t *testing.T) {
 }
 
 func TestAttachLogsToStepsCleansFallback(t *testing.T) {
-	job := &Job{
+	job := &model.Job{
 		Name: "test", Conclusion: "failure",
-		Steps: []Step{
+		Steps: []model.Step{
 			{Name: "Run tests", Status: "completed", Conclusion: "failure", Number: 1},
 		},
 	}

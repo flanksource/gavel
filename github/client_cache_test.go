@@ -5,10 +5,10 @@ import (
 	"os"
 	"testing"
 
+	githubcache "github.com/flanksource/gavel/github/cache"
+	"github.com/flanksource/gavel/pr/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	githubcache "github.com/flanksource/gavel/github/cache"
 )
 
 // TestFetchRunJobsServesCompletedRunFromCache verifies the Phase 3 invariant:
@@ -31,7 +31,7 @@ func TestFetchRunJobsServesCompletedRunFromCache(t *testing.T) {
 
 	// Pre-populate the cache with a completed run.
 	const runID = int64(987654321)
-	want := &WorkflowRun{
+	want := &model.WorkflowRun{
 		DatabaseID: runID,
 		Name:       "CI",
 		Status:     "completed",
@@ -77,17 +77,17 @@ func TestFetchRunJobsEnrichesCachedRunWithLogs(t *testing.T) {
 
 	// A completed, FAILED run cached without any logs (the poisoned state a
 	// prior `gavel pr status` without --logs would leave behind).
-	logless := &WorkflowRun{
+	logless := &model.WorkflowRun{
 		DatabaseID: runID,
 		Name:       "CI",
 		Status:     "completed",
 		Conclusion: "failure",
-		Jobs: []Job{{
+		Jobs: []model.Job{{
 			DatabaseID: jobID,
 			Name:       "build",
 			Status:     "completed",
 			Conclusion: "failure",
-			Steps:      []Step{{Name: "go test", Status: "completed", Conclusion: "failure"}},
+			Steps:      []model.Step{{Name: "go test", Status: "completed", Conclusion: "failure"}},
 		}},
 	}
 	payload, err := json.Marshal(logless)
