@@ -100,14 +100,16 @@ function isWithinAllowedSpan(index: number, spans: Array<[number, number]>): boo
   return spans.some(([start, end]) => index >= start && index < end);
 }
 
-function escapeIdentifier(name: string): string {
-  return name.replace(/\$/g, '\\$');
+// escapeRegExp makes text match itself literally inside a RegExp source.
+// Minified identifiers routinely carry `$`, a regex metacharacter.
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 // assigns reports whether `name = <value>` appears in content, where value is a
 // regex source; the lookbehind keeps `xname=` and `obj.name=` from matching.
 function assigns(content: string, name: string, value: string): boolean {
-  return new RegExp(String.raw`(?<![\w$.])${escapeIdentifier(name)}\s*=\s*${value}`).test(content);
+  return new RegExp(String.raw`(?<![\w$.])${escapeRegExp(name)}\s*=\s*${value}`).test(content);
 }
 
 function resolvesToHubUrl(content: string, arg: string): boolean {
@@ -117,7 +119,7 @@ function resolvesToHubUrl(content: string, arg: string): boolean {
   const hubLiteral = ['"', "'", '`'].map(quote => `${quote}${hubUrl}${quote}`).join('|').replace(/^(.*)$/, '(?:$1)');
   if (assigns(content, arg, hubLiteral)) return true;
   const hubConstants = [...content.matchAll(new RegExp(String.raw`(?<![\w$.])(${identifier})\s*=\s*${hubLiteral}`, 'g'))].map(m => m[1]);
-  return hubConstants.some(constant => assigns(content, arg, String.raw`${escapeIdentifier(constant)}(?![\w$(.])`));
+  return hubConstants.some(constant => assigns(content, arg, String.raw`${escapeRegExp(constant)}(?![\w$(.])`));
 }
 
 // classifyBundle lists every `new EventSource(...)` call site in content and
@@ -153,6 +155,7 @@ describe('bundle EventSource classifier', () => {
     ['the minified clicky-ui hub connection', 'const b="/api/events",F=1e3;function H(o={}){const{url:n=b}=o;const e=new EventSource(n);return e}'],
     ['a hub connection with the URL inlined', 'function H(){const t="/api/events";return new EventSource(t)}'],
     ['the pass-through default factory', 'const f=(e)=>new EventSource(e);'],
+    ['a hub connection through `$`-bearing minified names', 'const $b="/api/events";function H(o={}){const{url:n$=$b}=o;return new EventSource(n$)}'],
   ])('accepts %s', (_name, content) => {
     expect(classifyBundle(content)).toEqual({ sites: [expect.any(String)], offenders: [] });
   });
@@ -160,8 +163,7 @@ describe('bundle EventSource classifier', () => {
   it.each([
     ['a raw stream URL literal', 'const b="/api/events";function S(){return new EventSource("/api/prs/stream")}'],
     ['an identifier holding another URL', 'const b="/api/events",u="/api/prs/stream";function S(){return new EventSource(u)}'],
-    ['a member expression', 'const b="/api/events";function S(o){return new EventSource(o.url)}'],
-  ])('flags %s', (_name, content) => {
+    ['a member expression', 'const b="/api/events";function S(o){return new EventSource(o.url)}'],  ])('flags %s', (_name, content) => {
     expect(classifyBundle(content).offenders).toHaveLength(1);
   });
 });

@@ -8,25 +8,28 @@ import (
 	"strings"
 
 	"github.com/flanksource/commons/logger"
+	gavelgit "github.com/flanksource/gavel/git"
 )
 
 // preflight validates the source repo and base ref and resolves every SHA to
-// its full form, preserving order.
-func preflight(repoRoot string, in Input) ([]string, error) {
+// its full form, preserving order. It returns the validated base ref, which is
+// the only form of it later git commands may use.
+func preflight(repoRoot string, in Input) (string, []string, error) {
 	if len(in.SHAs) == 0 {
-		return nil, errors.New("prcreate: at least one SHA is required")
+		return "", nil, errors.New("prcreate: at least one SHA is required")
 	}
-	if strings.TrimSpace(in.Base) == "" {
-		return nil, errors.New("prcreate: base ref is required")
+	if err := gavelgit.ValidateRevision(in.Base); err != nil {
+		return "", nil, fmt.Errorf("prcreate: base ref: %w", err)
 	}
+	base := in.Base
 	if err := runGitQuiet(repoRoot, "rev-parse", "--git-dir"); err != nil {
-		return nil, fmt.Errorf("not a git repository: %s", repoRoot)
+		return "", nil, fmt.Errorf("not a git repository: %s", repoRoot)
 	}
-	if err := runGitQuiet(repoRoot, "rev-parse", "--verify", in.Base); err != nil {
-		return nil, fmt.Errorf("base ref %q not resolvable", in.Base)
+	if err := runGitQuiet(repoRoot, "rev-parse", "--verify", "--end-of-options", base); err != nil {
+		return "", nil, fmt.Errorf("base ref %q not resolvable", base)
 	}
 	if err := RefuseInProgressOps(repoRoot); err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	if dirty, _ := gitWorkingTreeDirty(repoRoot); dirty {
 		logger.Warnf("source repo has uncommitted changes; the new worktree is isolated, but check you're not mid-something")
@@ -35,18 +38,21 @@ func preflight(repoRoot string, in Input) ([]string, error) {
 	for _, sha := range in.SHAs {
 		resolved, err := resolveCommit(repoRoot, sha, in.Mainline)
 		if err != nil {
-			return nil, err
+			return "", nil, err
 		}
 		full = append(full, resolved)
 	}
-	return full, nil
+	return base, full, nil
 }
 
 func resolveCommit(repoRoot, sha string, mainline int) (string, error) {
+	if err := gavelgit.ValidateRevision(sha); err != nil {
+		return "", fmt.Errorf("prcreate: commit: %w", err)
+	}
 	if err := runGitQuiet(repoRoot, "cat-file", "-e", sha+"^{commit}"); err != nil {
 		return "", fmt.Errorf("commit %q not found in %s", sha, repoRoot)
 	}
-	full, err := captureGit(repoRoot, "rev-parse", sha)
+	full, err := captureGit(repoRoot, "rev-parse", "--verify", "--end-of-options", sha)
 	if err != nil {
 		return "", fmt.Errorf("resolve SHA %q: %w", sha, err)
 	}

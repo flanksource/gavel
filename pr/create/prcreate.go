@@ -13,6 +13,7 @@ import (
 	"github.com/flanksource/captain/pkg/captainconfig"
 	"github.com/flanksource/commons/logger"
 	commitpkg "github.com/flanksource/gavel/commit"
+	gavelgit "github.com/flanksource/gavel/git"
 	"github.com/flanksource/gavel/pr/model"
 	"github.com/flanksource/gavel/pr/provider"
 )
@@ -100,11 +101,11 @@ func Create(ctx context.Context, repoRoot string, in Input) (*Result, error) {
 		}
 		in.Saved = &saved
 	}
-	shas, err := preflight(repoRoot, in)
+	base, shas, err := preflight(repoRoot, in)
 	if err != nil {
 		return nil, err
 	}
-	ws, err := openWorktree(repoRoot, in.Base, shas[0])
+	ws, err := openWorktree(repoRoot, base, shas[0])
 	if err != nil {
 		return nil, err
 	}
@@ -150,6 +151,9 @@ func publish(ctx context.Context, repoRoot string, ws worktree, picked int, in I
 		return nil, fmt.Errorf("generate PR content: %w", err)
 	}
 	topic := content.Branch + "-" + ws.suffix
+	if err := gavelgit.ValidateBranchName(topic); err != nil {
+		return nil, fmt.Errorf("generated PR branch: %w", err)
+	}
 	if err := runGitQuiet(ws.path, "branch", "-m", ws.tmpBranch, topic); err != nil {
 		return nil, fmt.Errorf("rename branch %s -> %s: %w", ws.tmpBranch, topic, err)
 	}

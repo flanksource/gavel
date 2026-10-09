@@ -35,7 +35,7 @@ func openWorktree(repoRoot, base, firstSHA string) (worktree, error) {
 	if err := os.MkdirAll(filepath.Dir(ws.path), 0o755); err != nil {
 		return worktree{}, fmt.Errorf("create scratch dir: %w", err)
 	}
-	if err := runGitVerbose(repoRoot, "worktree", "add", "-b", ws.tmpBranch, ws.path, base); err != nil {
+	if err := runGitVerbose(repoRoot, "worktree", "add", "-b", ws.tmpBranch, "--end-of-options", ws.path, base); err != nil {
 		return worktree{}, fmt.Errorf("git worktree add: %w", err)
 	}
 	if err := writeMarker(ws.path, firstSHA, repoRoot); err != nil {

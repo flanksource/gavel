@@ -63,16 +63,17 @@ var _ = Describe("preflight", func() {
 	BeforeEach(func() { f = newRepoFixture() })
 
 	It("resolves an existing SHA to its full form and rejects an unknown one", func() {
-		got, err := preflight(f.repo, Input{SHAs: []string{f.topicSHA[:10]}, Base: testBase})
+		base, got, err := preflight(f.repo, Input{SHAs: []string{f.topicSHA[:10]}, Base: testBase})
 		Expect(err).NotTo(HaveOccurred())
+		Expect(base).To(Equal(testBase))
 		Expect(got).To(Equal([]string{f.topicSHA}))
 
-		_, err = preflight(f.repo, Input{SHAs: []string{"deadbeef"}, Base: testBase})
+		_, _, err = preflight(f.repo, Input{SHAs: []string{"deadbeef"}, Base: testBase})
 		Expect(err).To(MatchError(ContainSubstring(`commit "deadbeef" not found`)))
 	})
 
 	It("rejects an empty SHA list", func() {
-		_, err := preflight(f.repo, Input{Base: testBase})
+		_, _, err := preflight(f.repo, Input{Base: testBase})
 		Expect(err).To(MatchError(ContainSubstring("at least one SHA")))
 	})
 
@@ -83,17 +84,17 @@ var _ = Describe("preflight", func() {
 		git(f.repo, "merge", "--no-ff", "-m", "merge: other", "other")
 		mergeSHA := git(f.repo, "rev-parse", "HEAD")
 
-		_, err := preflight(f.repo, Input{SHAs: []string{mergeSHA}, Base: testBase})
+		_, _, err := preflight(f.repo, Input{SHAs: []string{mergeSHA}, Base: testBase})
 		Expect(err).To(MatchError(ContainSubstring("--mainline")))
 
-		_, err = preflight(f.repo, Input{SHAs: []string{mergeSHA}, Base: testBase, Mainline: 1})
+		_, _, err = preflight(f.repo, Input{SHAs: []string{mergeSHA}, Base: testBase, Mainline: 1})
 		Expect(err).NotTo(HaveOccurred())
 	})
 
 	It("refuses while the source repo is mid-rebase", func() {
 		gitDir := git(f.repo, "rev-parse", "--absolute-git-dir")
 		Expect(os.WriteFile(filepath.Join(gitDir, "REBASE_HEAD"), []byte(f.topicSHA), 0o644)).To(Succeed())
-		_, err := preflight(f.repo, Input{SHAs: []string{f.topicSHA}, Base: testBase})
+		_, _, err := preflight(f.repo, Input{SHAs: []string{f.topicSHA}, Base: testBase})
 		Expect(err).To(MatchError(ContainSubstring("REBASE_HEAD")))
 	})
 })

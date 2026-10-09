@@ -67,7 +67,7 @@ describe('prompt lifecycle options', () => {
         prompt: { user: 'Implementation prompt' }, workflow: { commits: [{ on: 'run', gates: 'full' }] },
       },
     }, context);
-    expect(JSON.parse(JSON.stringify(options))).toEqual({ step: 'verify', spec: { mode: 'agent', model: 'example-run-model', effort: 'medium' } });
+    expect(JSON.parse(JSON.stringify(options))).toEqual({ step: 'verify', spec: { mode: 'agent', model: 'example-run-model' } });
   });
 
   it('remembers an approval run without the prompt body it was dispatched with', () => {

@@ -226,19 +226,25 @@ describe('TodoDetail Resume/Run/Plan guard', () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.startsWith('/api/todos/run?') && init?.method === 'POST') {
-        return {
-          ok: true,
-          json: async () => ({
-            status: 'started',
-            ref: baseTodo.ref,
-            dir: '/repo',
-            agent: 'claude',
-            mode: 'cmux',
-            sessionId: admissionSession,
-            timeout: '30m0s',
-            message: 'Todo run started',
-          }),
-        } as Response;
+        // /api/todos/run streams launch progress over SSE (see
+        // todoLaunch.ts's todoMutationStream): a plain JSON Response is
+        // rejected as "expected a launch progress stream" before the
+        // `admitted` payload below is ever read.
+        const admitted = {
+          status: 'started',
+          ref: baseTodo.ref,
+          dir: '/repo',
+          agent: 'claude',
+          mode: 'cmux',
+          promptRunId: 'run-1',
+          sessionId: admissionSession,
+          timeout: '30m0s',
+          message: 'Todo run started',
+        };
+        return new Response(
+          `event: resolved\ndata: ${JSON.stringify({ spec: {}, specYaml: '{}\n', step: 'run' })}\n\nevent: admitted\ndata: ${JSON.stringify(admitted)}\n\n`,
+          { headers: { 'Content-Type': 'text/event-stream' } },
+        );
       }
       return { ok: true, json: async () => RUN_CONTEXT } as Response;
     }));
