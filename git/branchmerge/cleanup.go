@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	gavelgit "github.com/flanksource/gavel/git"
 )
 
 type CleanupOptions struct {
@@ -30,6 +32,10 @@ type CleanupResult struct {
 // no-op for a Squash landing (patch ids cannot match a squash commit).
 func Cleanup(opts CleanupOptions) (CleanupResult, error) {
 	var result CleanupResult
+	opts, err := opts.validated()
+	if err != nil {
+		return result, err
+	}
 	if opts.Worktree != "" {
 		if _, err := os.Stat(opts.Worktree); err == nil {
 			if out, err := combinedGit(opts.Repo, "worktree", "remove", filepath.Clean(opts.Worktree)); err != nil {
@@ -55,6 +61,25 @@ func Cleanup(opts CleanupOptions) (CleanupResult, error) {
 	}
 	result.BranchDeleted = true
 	return result, nil
+}
+
+// validated checks o and returns a copy built only from the checked values, so
+// the branch and commits that reach git have all passed validation.
+func (o CleanupOptions) validated() (CleanupOptions, error) {
+	if err := gavelgit.ValidateBranchName(o.Branch); err != nil {
+		return CleanupOptions{}, fmt.Errorf("%w: %w", ErrInvalidOptions, err)
+	}
+	if err := gavelgit.ValidateRevision(o.LandedSHA); err != nil {
+		return CleanupOptions{}, fmt.Errorf("%w: landed commit: %w", ErrInvalidOptions, err)
+	}
+	out := CleanupOptions{Repo: o.Repo, Worktree: o.Worktree, Branch: o.Branch, LandedSHA: o.LandedSHA, Mode: o.Mode}
+	if o.Limit != "" {
+		if err := gavelgit.ValidateRevision(o.Limit); err != nil {
+			return CleanupOptions{}, fmt.Errorf("%w: limit: %w", ErrInvalidOptions, err)
+		}
+		out.Limit = o.Limit
+	}
+	return out, nil
 }
 
 func verifyCherry(opts CleanupOptions) error {

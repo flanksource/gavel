@@ -39,20 +39,28 @@ func (o CommitDiffOptions) Validate() error {
 	return err
 }
 
+// normalize returns the trimmed options built only from values that passed
+// validation, so nothing unchecked can reach git through the result.
 func (o CommitDiffOptions) normalize() (CommitDiffOptions, error) {
-	o = CommitDiffOptions{Base: strings.TrimSpace(o.Base), Head: strings.TrimSpace(o.Head), File: strings.TrimSpace(o.File), NoScopes: o.NoScopes}
-	if !IsValidCommitHash(o.Head) {
-		return o, fmt.Errorf("invalid commit hash %q", o.Head)
+	out := CommitDiffOptions{NoScopes: o.NoScopes}
+	head := strings.TrimSpace(o.Head)
+	if !IsValidCommitHash(head) {
+		return out, fmt.Errorf("invalid commit hash %q", head)
 	}
-	if o.Base != "" && !IsValidCommitHash(o.Base) {
-		return o, fmt.Errorf("invalid base commit hash %q", o.Base)
-	}
-	if o.File != "" {
-		if err := validateDiffPath(o.File); err != nil {
-			return o, err
+	out.Head = head
+	if base := strings.TrimSpace(o.Base); base != "" {
+		if !IsValidCommitHash(base) {
+			return out, fmt.Errorf("invalid base commit hash %q", base)
 		}
+		out.Base = base
 	}
-	return o, nil
+	if file := strings.TrimSpace(o.File); file != "" {
+		if err := validateDiffPath(file); err != nil {
+			return out, err
+		}
+		out.File = file
+	}
+	return out, nil
 }
 
 // CommitDiff returns the plain unified diff of a commit or a Base..Head range,
@@ -101,6 +109,9 @@ func commitDiffOutput(dir string, opts CommitDiffOptions) (string, error) {
 // non-commit object (full or abbreviated) and 128 for anything else, such as a
 // dir that is not a repository, which is surfaced as is.
 func requireCommit(dir, sha string) error {
+	if err := ValidateRevision(sha); err != nil {
+		return err
+	}
 	_, err := gitOutput(dir, "rev-parse", "-q", "--verify", "--end-of-options", sha+"^{commit}")
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {

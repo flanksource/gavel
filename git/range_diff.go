@@ -24,10 +24,11 @@ type DiffStat struct {
 // file/line change between the two trees (`git diff --numstat`). Both shas are
 // validated before git runs; a sha git cannot resolve is an error.
 func RangeDiffStat(path, from, to string) (DiffStat, error) {
-	for _, sha := range []string{from, to} {
-		if !IsValidCommitHash(sha) {
-			return DiffStat{}, fmt.Errorf("invalid commit hash %q", sha)
-		}
+	if !IsValidCommitHash(from) {
+		return DiffStat{}, fmt.Errorf("invalid commit hash %q", from)
+	}
+	if !IsValidCommitHash(to) {
+		return DiffStat{}, fmt.Errorf("invalid commit hash %q", to)
 	}
 	count, err := gitOutput(path, "rev-list", "--count", from+".."+to)
 	if err != nil {

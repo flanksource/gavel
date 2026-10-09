@@ -71,10 +71,13 @@ type RangeCompare struct {
 // full commit hashes; neither is resolved as a ref. A hash naming no commit in
 // repo is ErrCommitNotFound.
 func CompareRange(repo, base, head string) (RangeCompare, error) {
+	if !IsValidCommitHash(base) {
+		return RangeCompare{}, fmt.Errorf("invalid commit hash %q", base)
+	}
+	if !IsValidCommitHash(head) {
+		return RangeCompare{}, fmt.Errorf("invalid commit hash %q", head)
+	}
 	for _, sha := range []string{base, head} {
-		if !IsValidCommitHash(sha) {
-			return RangeCompare{}, fmt.Errorf("invalid commit hash %q", sha)
-		}
 		if err := requireCommit(repo, sha); err != nil {
 			return RangeCompare{}, err
 		}
@@ -99,7 +102,10 @@ func CompareRange(repo, base, head string) (RangeCompare, error) {
 
 // CommitTime is the committer date of rev in repo, in UTC.
 func CommitTime(repo, rev string) (time.Time, error) {
-	out, err := gitOutput(repo, "log", "-1", "--format=%cI", rev, "--")
+	if err := ValidateRevision(rev); err != nil {
+		return time.Time{}, err
+	}
+	out, err := gitOutput(repo, "log", "-1", "--format=%cI", "--end-of-options", rev, "--")
 	if err != nil {
 		return time.Time{}, fmt.Errorf("commit time of %s in %s: %w", rev, repo, err)
 	}
@@ -116,7 +122,13 @@ func parseCommitTime(iso string) (time.Time, error) {
 
 // MergeBase is the full sha of the best common ancestor of a and b.
 func MergeBase(repo, a, b string) (string, error) {
-	out, err := gitOutput(repo, "merge-base", a, b)
+	if err := ValidateRevision(a); err != nil {
+		return "", err
+	}
+	if err := ValidateRevision(b); err != nil {
+		return "", err
+	}
+	out, err := gitOutput(repo, "merge-base", "--end-of-options", a, b)
 	if err != nil {
 		return "", err
 	}
@@ -125,6 +137,9 @@ func MergeBase(repo, a, b string) (string, error) {
 
 // RevParse resolves rev to a full commit hash.
 func RevParse(repo, rev string) (string, error) {
+	if err := ValidateRevision(rev); err != nil {
+		return "", err
+	}
 	out, err := gitOutput(repo, "rev-parse", "--verify", "--quiet", "--end-of-options", rev+"^{commit}")
 	if err != nil {
 		return "", fmt.Errorf("resolve %q in %s: %w", rev, repo, err)

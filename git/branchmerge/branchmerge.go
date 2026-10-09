@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"strings"
 
+	gavelgit "github.com/flanksource/gavel/git"
 	prcreate "github.com/flanksource/gavel/pr/create"
 )
 
@@ -42,26 +43,45 @@ type Options struct {
 	Message string
 }
 
-func (o Options) validate() error {
+// validated checks o and returns a copy built only from the checked values, so
+// every branch name and commit that reaches a git command line has passed
+// validation.
+func (o Options) validated() (Options, error) {
 	if strings.TrimSpace(o.Repo) == "" || strings.TrimSpace(o.Branch) == "" {
-		return fmt.Errorf("%w: repo and branch are required", ErrInvalidOptions)
+		return Options{}, fmt.Errorf("%w: repo and branch are required", ErrInvalidOptions)
+	}
+	if err := gavelgit.ValidateBranchName(o.Branch); err != nil {
+		return Options{}, fmt.Errorf("%w: %w", ErrInvalidOptions, err)
+	}
+	out := Options{Repo: o.Repo, Branch: o.Branch, Mode: o.Mode, Message: o.Message}
+	if o.Base != "" {
+		if err := gavelgit.ValidateBranchName(o.Base); err != nil {
+			return Options{}, fmt.Errorf("%w: base: %w", ErrInvalidOptions, err)
+		}
+		out.Base = o.Base
 	}
 	switch o.Mode {
 	case Incremental:
 		if len(o.Commits) == 0 {
-			return fmt.Errorf("%w: an incremental merge needs the commits to cherry-pick", ErrInvalidOptions)
+			return Options{}, fmt.Errorf("%w: an incremental merge needs the commits to cherry-pick", ErrInvalidOptions)
+		}
+		for _, commit := range o.Commits {
+			if err := gavelgit.ValidateRevision(commit); err != nil {
+				return Options{}, fmt.Errorf("%w: %w", ErrInvalidOptions, err)
+			}
+			out.Commits = append(out.Commits, commit)
 		}
 	case Squash:
 		if strings.TrimSpace(o.Message) == "" {
-			return fmt.Errorf("%w: a squash merge needs a commit message", ErrInvalidOptions)
+			return Options{}, fmt.Errorf("%w: a squash merge needs a commit message", ErrInvalidOptions)
 		}
 		if len(o.Commits) > 0 {
-			return fmt.Errorf("%w: a squash merge lands the whole branch; commits only apply to %s", ErrInvalidOptions, Incremental)
+			return Options{}, fmt.Errorf("%w: a squash merge lands the whole branch; commits only apply to %s", ErrInvalidOptions, Incremental)
 		}
 	default:
-		return fmt.Errorf("%w: mode %q must be %q or %q", ErrInvalidOptions, o.Mode, Squash, Incremental)
+		return Options{}, fmt.Errorf("%w: mode %q must be %q or %q", ErrInvalidOptions, o.Mode, Squash, Incremental)
 	}
-	return nil
+	return out, nil
 }
 
 type Result struct {
@@ -91,7 +111,8 @@ func (e *ConflictError) Unwrap() error { return e.Err }
 
 // Merge lands opts.Branch onto the branch checked out in opts.Repo.
 func Merge(opts Options) (Result, error) {
-	if err := opts.validate(); err != nil {
+	opts, err := opts.validated()
+	if err != nil {
 		return Result{}, err
 	}
 	target, err := targetBranch(opts)

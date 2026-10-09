@@ -16,13 +16,17 @@ const (
 	TrailerSessionID = "Claude-Session-Id"
 )
 
-var commitHashPattern = regexp.MustCompile(`^[0-9a-fA-F]{4,64}$`)
+var (
+	commitHashPattern = regexp.MustCompile(`^[0-9a-fA-F]{4,64}$`)
+	diffPathPattern   = regexp.MustCompile(`^[^\x00-\x1f\x7f]+$`)
+)
 
-// IsValidCommitHash reports whether s is a syntactically valid abbreviated or
-// full git object hash, so callers can reject untrusted input before shelling
-// out to git.
+// IsValidCommitHash reports whether s, exactly as given, is a syntactically
+// valid abbreviated or full git object hash, so callers can reject untrusted
+// input before shelling out to git. Surrounding whitespace is not trimmed: the
+// value accepted is the value git receives.
 func IsValidCommitHash(s string) bool {
-	return commitHashPattern.MatchString(strings.TrimSpace(s))
+	return commitHashPattern.MatchString(s)
 }
 
 // validateDiffPath rejects an untrusted path that git would reinterpret as
@@ -40,11 +44,8 @@ func validateDiffPath(file string) error {
 		return fmt.Errorf("invalid diff path %q: must not begin with %q, git parses that as pathspec magic", file, ":")
 	case strings.HasPrefix(file, "/"):
 		return fmt.Errorf("invalid diff path %q: must be relative to the repository root, not absolute", file)
-	}
-	for i, r := range file {
-		if r < 0x20 || r == 0x7f {
-			return fmt.Errorf("invalid diff path %q: control character %q at byte %d", file, r, i)
-		}
+	case !diffPathPattern.MatchString(file):
+		return fmt.Errorf("invalid diff path %q: contains a control character", file)
 	}
 	for _, segment := range strings.Split(file, "/") {
 		if segment == ".." {

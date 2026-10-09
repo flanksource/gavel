@@ -10,7 +10,7 @@ import (
 
 // cherryPick picks opts.Commits onto the target. A failed pick is aborted.
 func cherryPick(opts Options, target, before string) error {
-	out, err := combinedGit(opts.Repo, append([]string{"cherry-pick"}, opts.Commits...)...)
+	out, err := combinedGit(opts.Repo, append([]string{"cherry-pick", "--end-of-options"}, opts.Commits...)...)
 	if err == nil {
 		return nil
 	}
@@ -40,7 +40,7 @@ func squash(opts Options, target, before string) (int, error) {
 		return 0, abortMerge(opts, target, before,
 			fmt.Errorf("%w: squashing %s onto %s staged no changes", ErrNothingToMerge, opts.Branch, target))
 	}
-	if out, err := combinedGit(opts.Repo, "commit", "--no-verify", "-q", "-m", opts.Message); err != nil {
+	if out, err := commitStaged(opts.Repo, opts.Message); err != nil {
 		return 0, abortMerge(opts, target, before, fmt.Errorf("git commit: %s: %w", out, err))
 	}
 	return commits, nil

@@ -5,12 +5,20 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+
+	gavelgit "github.com/flanksource/gavel/git"
 )
 
 // RangeCommits lists the commits of from..to in repo, oldest first, as full
 // shas.
 func RangeCommits(repo, from, to string) ([]string, error) {
-	out, err := captureGit(repo, "rev-list", "--reverse", from+".."+to)
+	if err := gavelgit.ValidateRevision(from); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalidOptions, err)
+	}
+	if err := gavelgit.ValidateRevision(to); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalidOptions, err)
+	}
+	out, err := captureGit(repo, "rev-list", "--reverse", "--end-of-options", from+".."+to)
 	if err != nil {
 		return nil, err
 	}
@@ -38,6 +46,16 @@ func captureGit(dir string, args ...string) (string, error) {
 // whose failure explanation goes to either stream.
 func combinedGit(dir string, args ...string) (string, error) {
 	out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput()
+	return strings.TrimSpace(string(out)), err
+}
+
+// commitStaged commits the index with message read from stdin, so free-form
+// text never becomes a command-line argument. Hooks are skipped, as a
+// cherry-pick skips them.
+func commitStaged(dir, message string) (string, error) {
+	cmd := exec.Command("git", "-C", dir, "commit", "--no-verify", "-q", "--file=-")
+	cmd.Stdin = strings.NewReader(message)
+	out, err := cmd.CombinedOutput()
 	return strings.TrimSpace(string(out)), err
 }
 
