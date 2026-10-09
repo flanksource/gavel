@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"sync"
@@ -25,20 +26,34 @@ type gavelConfigLayer struct {
 	exists bool
 }
 
-func readGavelConfigLayers(paths []string) ([]gavelConfigLayer, error) {
-	layers := make([]gavelConfigLayer, 0, len(paths))
-	for _, path := range paths {
-		data, err := os.ReadFile(path)
+// readGavelConfigLayers reads the .gavel.yaml in each of dirs. The directory
+// may come from a request, so each file is read through an os.Root opened on
+// its directory: the name read is always exactly GavelConfigFileName, and a
+// symlink that resolves outside the directory is refused rather than followed.
+func readGavelConfigLayers(dirs []string) ([]gavelConfigLayer, error) {
+	layers := make([]gavelConfigLayer, 0, len(dirs))
+	for _, dir := range dirs {
+		path := filepath.Join(dir, GavelConfigFileName)
+		data, err := readFileInDir(dir, GavelConfigFileName)
 		if os.IsNotExist(err) {
 			layers = append(layers, gavelConfigLayer{path: path})
 			continue
 		}
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("read %s: %w", path, err)
 		}
 		layers = append(layers, gavelConfigLayer{path: path, data: data, exists: true})
 	}
 	return layers, nil
+}
+
+func readFileInDir(dir, name string) ([]byte, error) {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close() //nolint:errcheck
+	return root.ReadFile(name)
 }
 
 type gavelConfigCacheEntry struct {

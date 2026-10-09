@@ -45,7 +45,7 @@ func Contains(haystack []string, needle string) bool {
 // Existing entries keep their order and their stored spelling.
 func Apply(existing, add, remove []string) []string {
 	add, remove = Split(add), Split(remove)
-	next := make([]string, 0, len(existing)+len(add))
+	next := make([]string, 0, len(existing))
 	for _, label := range existing {
 		if !Contains(remove, label) {
 			next = append(next, label)

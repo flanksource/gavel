@@ -350,13 +350,14 @@ func (s *Server) handleFixtureProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.URL.Query().Get("id")
-	if !filepath.IsLocal(filepath.FromSlash(id)) || id == "." {
+	rel := filepath.FromSlash(id)
+	if !filepath.IsLocal(rel) || id == "." {
 		http.Error(w, "invalid profile ID", http.StatusBadRequest)
 		return
 	}
 	s.mu.RLock()
 	root := s.profileRoot
-	path := filepath.Join(root, ".gavel", "profiles", "fixtures", filepath.FromSlash(id))
+	path := filepath.Join(root, ".gavel", "profiles", "fixtures", rel)
 	known := false
 	var visit func([]parsers.Test)
 	visit = func(tests []parsers.Test) {

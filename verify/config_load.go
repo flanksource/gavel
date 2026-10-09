@@ -40,7 +40,7 @@ func LoadGavelConfig(cwd string) (GavelConfig, error) {
 	if err != nil {
 		return GavelConfig{}, fmt.Errorf("resolve config directory %q: %w", cwd, err)
 	}
-	layers, err := readGavelConfigLayers(gavelConfigChain(absCwd))
+	layers, err := readGavelConfigLayers(gavelConfigDirs(absCwd))
 	if err != nil {
 		return GavelConfig{}, err
 	}
@@ -63,23 +63,23 @@ func LoadGavelConfig(cwd string) (GavelConfig, error) {
 	return cloneGavelConfig(cfg)
 }
 
-// gavelConfigChain lists the .gavel.yaml paths LoadGavelConfig consults for
-// absCwd, lowest precedence first. $HOME and the git root are resolved on every
-// call, so a changed $HOME or a newly created .git moves the chain — and with it
-// the cache fingerprint.
-func gavelConfigChain(absCwd string) []string {
-	var paths []string
+// gavelConfigDirs lists the directories whose .gavel.yaml LoadGavelConfig
+// consults for absCwd, lowest precedence first. $HOME and the git root are
+// resolved on every call, so a changed $HOME or a newly created .git moves the
+// chain — and with it the cache fingerprint.
+func gavelConfigDirs(absCwd string) []string {
+	var dirs []string
 	if home, err := os.UserHomeDir(); err == nil {
-		paths = append(paths, filepath.Join(home, GavelConfigFileName))
+		dirs = append(dirs, home)
 	}
 	gitRoot := repomap.FindGitRoot(absCwd)
 	if gitRoot != "" {
-		paths = append(paths, filepath.Join(gitRoot, GavelConfigFileName))
+		dirs = append(dirs, gitRoot)
 	}
 	if absCwd != gitRoot {
-		paths = append(paths, filepath.Join(absCwd, GavelConfigFileName))
+		dirs = append(dirs, absCwd)
 	}
-	return paths
+	return dirs
 }
 
 // LoadGavelConfigTrace resolves the effective config for the provided file or

@@ -80,7 +80,7 @@ type RunOptions struct {
 	// CEL variable `changed_files`. RunNode records the list under
 	// Metadata["changed_files"] on every result so a verdict shows the scope it
 	// was reached under.
-	Changed         []string
+	Changed []string
 	// PreviousResults are completed fixture steps available to a later AI check.
 	PreviousResults []FixtureResult
 }

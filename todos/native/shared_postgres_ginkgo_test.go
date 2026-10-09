@@ -66,7 +66,7 @@ var _ = Describe("shared PostgreSQL test server", func() {
 		for range 2 {
 			for _, identity := range runCoordinatorReuseProcess(ctx) {
 				Expect(identity).To(SatisfyAll(
-					HaveField("Port", before.Port), HaveField("StartedAt", before.StartedAt),
+					HaveField("Port", before.Port), HaveField("StartedAt", BeTemporally("==", before.StartedAt)),
 					HaveField("Directory", before.Directory),
 				))
 				Expect(databaseNames).NotTo(ContainElement(identity.Database))

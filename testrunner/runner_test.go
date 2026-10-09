@@ -863,6 +863,9 @@ func TestDiscoverFixturesFailsOnInvalidGlob(t *testing.T) {
 }
 
 func TestResolveFixtureGlobs(t *testing.T) {
+	// LoadGavelConfig layers ~/.gavel.yaml under the work dir's config; isolate
+	// HOME so a developer's global fixtures settings cannot leak into the result.
+	t.Setenv("HOME", t.TempDir())
 	tmpDir := t.TempDir()
 
 	t.Run("disabled by default", func(t *testing.T) {
