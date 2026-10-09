@@ -25,7 +25,8 @@ import (
 	gavelctx "github.com/flanksource/gavel/context"
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/github/cache"
-	"github.com/flanksource/gavel/github/prcreate"
+	prcreate "github.com/flanksource/gavel/pr/create"
+	"github.com/flanksource/gavel/pr/model"
 	"github.com/flanksource/gavel/prwatch"
 	testui "github.com/flanksource/gavel/testrunner/ui"
 )
@@ -1252,9 +1253,9 @@ func (s *Server) knownHomepage(homepage string) bool {
 }
 
 type prDetail struct {
-	PR       *github.PRInfo                `json:"pr,omitempty"`
-	Runs     map[int64]*github.WorkflowRun `json:"runs,omitempty"`
-	Comments []github.PRComment            `json:"comments,omitempty"`
+	PR       *model.PRInfo                `json:"pr,omitempty"`
+	Runs     map[int64]*model.WorkflowRun `json:"runs,omitempty"`
+	Comments []model.PRComment            `json:"comments,omitempty"`
 	// GavelResults holds one summary per gavel sticky comment on the PR
 	// (typically one per matrix shard). Order matches the order of the
 	// sticky comments on the PR.
@@ -1265,9 +1266,9 @@ type prDetail struct {
 // prFrame builds the SSE `pr` payload. Comments are normalized to a non-nil
 // slice: a PR with no actionable comments would otherwise marshal as
 // `"comments":null`, which the UI rejects as a malformed frame.
-func prFrame(pr *github.PRInfo, comments []github.PRComment) map[string]any {
+func prFrame(pr *model.PRInfo, comments []model.PRComment) map[string]any {
 	if comments == nil {
-		comments = []github.PRComment{}
+		comments = []model.PRComment{}
 	}
 	return map[string]any{"pr": pr, "comments": comments}
 }
@@ -1346,7 +1347,7 @@ func (s *Server) handleDetail(w http.ResponseWriter, r *http.Request) {
 	// Phase 2: Workflow runs + gavel results in parallel
 	type runResult struct {
 		id  int64
-		run *github.WorkflowRun
+		run *model.WorkflowRun
 	}
 
 	// Collect unique run IDs
@@ -1391,7 +1392,7 @@ func (s *Server) handleDetail(w http.ResponseWriter, r *http.Request) {
 		}(id)
 	}
 
-	runs := make(map[int64]*github.WorkflowRun, len(runIDs))
+	runs := make(map[int64]*model.WorkflowRun, len(runIDs))
 	for range runIDs {
 		rr := <-runCh
 		if rr.run != nil {
@@ -1436,7 +1437,7 @@ func (s *Server) fetchPRDetail(repo string, number int) prDetail {
 	}
 	result.PR = pr
 
-	runs := make(map[int64]*github.WorkflowRun)
+	runs := make(map[int64]*model.WorkflowRun)
 	seen := make(map[int64]bool)
 	for _, check := range pr.StatusCheckRollup {
 		runID, err := github.ExtractRunID(check.DetailsURL)
@@ -1495,10 +1496,10 @@ func (s *Server) prUpdatedAt(repo string, number int) time.Time {
 }
 
 type jobLogsResponse struct {
-	JobID int64         `json:"jobId"`
-	Logs  string        `json:"logs,omitempty"`
-	Steps []github.Step `json:"steps,omitempty"`
-	Error string        `json:"error,omitempty"`
+	JobID int64        `json:"jobId"`
+	Logs  string       `json:"logs,omitempty"`
+	Steps []model.Step `json:"steps,omitempty"`
+	Error string       `json:"error,omitempty"`
 }
 
 func (s *Server) handleJobLogs(w http.ResponseWriter, r *http.Request) {
@@ -1551,7 +1552,7 @@ func (s *Server) handleJobLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var job *github.Job
+	var job *model.Job
 	for i := range run.Jobs {
 		if run.Jobs[i].DatabaseID == jobID {
 			job = &run.Jobs[i]

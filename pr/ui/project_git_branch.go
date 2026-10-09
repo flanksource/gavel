@@ -12,7 +12,7 @@ import (
 	gavelgit "github.com/flanksource/gavel/git"
 	"github.com/flanksource/gavel/git/branchmerge"
 	"github.com/flanksource/gavel/git/gitstate"
-	"github.com/flanksource/gavel/github/prcreate"
+	prcreate "github.com/flanksource/gavel/pr/create"
 )
 
 var (

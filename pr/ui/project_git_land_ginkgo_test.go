@@ -6,8 +6,9 @@ import (
 	"strings"
 
 	commitpkg "github.com/flanksource/gavel/commit"
-	"github.com/flanksource/gavel/github"
-	"github.com/flanksource/gavel/github/prcreate"
+	prcreate "github.com/flanksource/gavel/pr/create"
+	"github.com/flanksource/gavel/pr/model"
+	"github.com/flanksource/gavel/pr/provider"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -15,18 +16,18 @@ import (
 var _ = Describe("project branch landing", func() {
 	var f *projectGitFixture
 	var server *Server
-	var created []github.CreatePRInput
+	var created []model.CreatePRInput
 
 	BeforeEach(func() {
 		f = newProjectGitFixture()
 		created = nil
-		server = &Server{prDeps: &prcreate.Deps{
+		server = &Server{prDeps: &prcreate.Deps{Preflight: func(context.Context, provider.Options) error { return nil },
 			GenerateContent: func(_ context.Context, in commitpkg.PRContentInput) (commitpkg.PRContent, error) {
 				return commitpkg.PRContent{Title: "fix: shout the greeting", Body: "Summarises " + in.Commits[0].Message, Branch: "fix/shout"}, nil
 			},
-			CreatePR: func(_ github.Options, in github.CreatePRInput) (*github.CreatePRResult, error) {
+			CreatePR: func(_ provider.Options, in model.CreatePRInput) (*model.CreatePRResult, error) {
 				created = append(created, in)
-				return &github.CreatePRResult{Number: 7, URL: "https://github.com/acme/acme/pull/7", Base: in.Base}, nil
+				return &model.CreatePRResult{Number: 7, URL: "https://github.com/acme/acme/pull/7", Base: in.Base}, nil
 			},
 		}}
 	})
@@ -120,7 +121,7 @@ var _ = Describe("project branch landing", func() {
 		Expect(response.URL).To(Equal("https://github.com/acme/acme/pull/7"))
 		Expect(response.TopicBranch).To(HavePrefix("fix/shout-"))
 		Expect(created).To(HaveLen(1))
-		Expect(created[0]).To(Equal(github.CreatePRInput{
+		Expect(created[0]).To(Equal(model.CreatePRInput{
 			Title: "fix: shout the greeting", Body: "Summarises fix: shout hello", Head: response.TopicBranch, Base: "main", Draft: true,
 		}))
 		topicHead := pgGit(f.bare, "rev-parse", "refs/heads/"+response.TopicBranch)
