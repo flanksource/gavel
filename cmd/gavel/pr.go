@@ -12,7 +12,9 @@ import (
 	"github.com/flanksource/clicky/api"
 	commonsContext "github.com/flanksource/commons/context"
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/azuredevops"
 	"github.com/flanksource/gavel/github"
+	"github.com/flanksource/gavel/pr/provider"
 	"github.com/flanksource/gavel/prwatch"
 	"github.com/spf13/cobra"
 )
@@ -27,7 +29,7 @@ conclusions, timing, and failing-step logs in one view, and can feed failures
 into the AI. Reserve raw gh for actions gavel does not cover.
 
 Subcommands:
-  status   Show a PR's Actions status (replaces gh pr view / gh run view / gh run list)
+  status   Show PR checks and pipeline jobs for GitHub or Azure DevOps
   create   Cherry-pick a commit into a fresh worktree and open a PR (AI title/body/branch)
   list     List PRs, optionally with CI status or a live browser dashboard (--ui)
   close    Close a PR without merging it (replaces gh pr close)
@@ -43,11 +45,11 @@ Examples:
 }
 
 type PRStatusOptions struct {
-	Repo     string          `flag:"repo" short:"R" help:"GitHub repository (owner/repo)"`
+	Repo     string          `flag:"repo" short:"R" help:"GitHub owner/repo or hosted Azure DevOps repository URL"`
 	Follow   bool            `flag:"follow" help:"Keep watching until the checks and comments you filtered on are settled"`
 	FailFast bool            `flag:"fail-fast" help:"With --follow, stop as soon as any check or job fails definitively instead of waiting for the rest"`
 	Interval string          `flag:"interval" help:"Poll interval (e.g. 30s, 1m)" default:"30s"`
-	Logs     bool            `flag:"logs" help:"Fetch and include failed job logs (uses extra GitHub API quota)"`
+	Logs     bool            `flag:"logs" help:"Fetch and include failed job logs (uses extra API quota)"`
 	TailLogs int             `flag:"tail-logs" help:"Number of failed log lines to show per step (only applies with --logs)" default:"100"`
 	Comments []string        `flag:"comments" help:"Filter review comments by MatchItem patterns over comment ID and @author/@bot tokens, e.g. '1,2,!3,*,!@coderabbit'"`
 	Actions  []string        `flag:"actions" help:"Filter workflow actions by MatchItem patterns over run ID, workflow ID, workflow YAML path, workflow name, job ID, and job/check name"`
@@ -67,7 +69,13 @@ type PRStatusOptions struct {
 }
 
 func (o PRStatusOptions) Help() api.Textable {
-	return clicky.Text(`Show a PR's GitHub Actions status — checks, conclusions, timing, and failing-step logs.
+	return clicky.Text(`Show GitHub Actions or Azure DevOps pipeline status — checks, conclusions, timing, and failing-step logs.
+
+Hosted Azure DevOps repositories are detected from origin or --repo. Accepts modern
+and legacy hosted PR URLs. Uses AZURE_DEVOPS_EXT_PAT first, otherwise an Azure CLI
+login. Azure merge readiness includes blocking policies; --follow waits for pipeline
+jobs and merge computation, and returns once human policies are the remaining blocker.
+Azure does not support --comments, --ai-fix, or --worktree.
 
 Use this instead of gh pr view / gh run view / gh run list: one readable view of
 every workflow step for the PR. With no argument it resolves the current branch's
@@ -108,6 +116,7 @@ Examples:
   gavel pr status 123                          # PR #123 in this repo
   gavel pr status owner/repo 123               # PR #123 in another repo
   gavel pr status https://github.com/o/r/pull/1
+  gavel pr status https://dev.azure.com/acme/product/_git/service/pullrequest/27 --logs
   gavel pr status https://github.com/o/r/actions/runs/123/job/456 --logs   # that job's PR, narrowed to the job
   gavel pr status --follow                   # block until every check settles
   gavel pr status --follow --actions 'CI / Test' --fail-fast   # stop the moment Test goes red
@@ -140,6 +149,21 @@ func runPRStatus(opts PRStatusOptions) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	workDir, err := getWorkingDir()
+	if err != nil {
+		return nil, err
+	}
+	repo := target.Repo
+	if repo == "" {
+		repo = opts.Repo
+	}
+	client, err := provider.Resolve(provider.Options{Repo: repo, WorkDir: workDir})
+	if err != nil {
+		return nil, err
+	}
+	if client.Kind() == "azuredevops" {
+		return runAzurePRStatus(opts, target, client, workDir)
+	}
 
 	ghOpts, err := prGitHubOptions(target.Repo, opts.Repo)
 	if err != nil {
@@ -163,6 +187,7 @@ func runPRStatus(opts PRStatusOptions) (any, error) {
 		return nil, fmt.Errorf("invalid --interval %q: %w", opts.Interval, err)
 	}
 	watchOpts := prwatch.WatchOptions{
+		Context:  opts.Context,
 		Options:  ghOpts,
 		PRNumber: prNumber,
 		Interval: interval,
@@ -243,6 +268,10 @@ func (t statusTarget) actionSelector() string {
 }
 
 func parseStatusTarget(args []string) (statusTarget, error) {
+	if len(args) == 1 && provider.IsAzure(args[0]) {
+		repo, number, err := azuredevops.ParsePRURL(args[0])
+		return statusTarget{Repo: repo.URL(), PR: number}, err
+	}
 	if len(args) == 1 && strings.Contains(args[0], "/actions/runs/") {
 		repo, runID, jobID, err := github.ParseRunURL(args[0])
 		if err != nil {
@@ -262,8 +291,12 @@ func parseStatusArgs(args []string) (repo string, prNumber int, err error) {
 		return parsePRRef(args[0])
 	case 2:
 		prNumber, err = strconv.Atoi(args[1])
-		if err != nil {
-			return "", 0, fmt.Errorf("invalid PR number %q: %w", args[1], err)
+		if err != nil || prNumber <= 0 {
+			return "", 0, fmt.Errorf("invalid PR number %q: expected a positive integer", args[1])
+		}
+		if provider.IsAzure(args[0]) {
+			parsed, parseErr := azuredevops.ParseRepository(args[0])
+			return parsed.URL(), prNumber, parseErr
 		}
 		repo, err = resolveRepoArg(args[0])
 		if err != nil {

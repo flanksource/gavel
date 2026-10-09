@@ -18,6 +18,7 @@ import (
 	"github.com/flanksource/commons-db/shell"
 	"github.com/flanksource/gavel/ai/prfix"
 	"github.com/flanksource/gavel/github"
+	"github.com/flanksource/gavel/pr/model"
 	"github.com/flanksource/gavel/prwatch"
 )
 
@@ -93,13 +94,13 @@ func TestHistoryOptionsForRun_PrefersTheRunsOwnSession(t *testing.T) {
 
 func TestPRContextOf_CountsOnlyUnresolvedReviewThreads(t *testing.T) {
 	result := &prwatch.PRWatchResult{
-		PR: &github.PRInfo{
+		PR: &model.PRInfo{
 			Number:      42,
 			Title:       "feat: thing",
 			URL:         "https://github.com/o/r/pull/42",
 			HeadRefName: "feat/thing",
 		},
-		Comments: []github.PRComment{
+		Comments: []model.PRComment{
 			{IsReviewThread: true, IsResolved: false, IsOutdated: false},
 			{IsReviewThread: true, IsResolved: true, IsOutdated: false},
 			{IsReviewThread: true, IsResolved: false, IsOutdated: true},
@@ -125,7 +126,7 @@ func TestPRContextOf_CountsOnlyUnresolvedReviewThreads(t *testing.T) {
 
 func conflictingResult() *prwatch.PRWatchResult {
 	return &prwatch.PRWatchResult{
-		PR: &github.PRInfo{
+		PR: &model.PRInfo{
 			Number: 42, State: "OPEN", Mergeable: "CONFLICTING",
 			URL:         "https://github.com/o/r/pull/42",
 			BaseRefName: "main", HeadRefName: "feat/thing",
@@ -303,7 +304,7 @@ func TestPRFixHooks_TeeVerifyOutput(t *testing.T) {
 	var sink bytes.Buffer
 
 	wf := &api.Workflow{Verify: &api.Verify{Commands: []string{"echo wired"}}}
-	hooks, err := prFixHooks(context.Background(), prFixRun{Workflow: wf, Tee: &sink, Result: &prwatch.PRWatchResult{PR: &github.PRInfo{}}})
+	hooks, err := prFixHooks(context.Background(), prFixRun{Workflow: wf, Tee: &sink, Result: &prwatch.PRWatchResult{PR: &model.PRInfo{}}})
 	if err != nil {
 		t.Fatalf("prFixHooks: %v", err)
 	}

@@ -199,6 +199,11 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		return nil, err
 	}
 	opts.WorkDir = gitRoot
+	if opts.Push && (opts.PushBranch == "" || opts.AutoMerge) && pushDepsForTest == nil {
+		if err := validatePushProvider(ctx, opts); err != nil {
+			return nil, err
+		}
+	}
 	// --max-commits only has meaning for the grouping flow, so setting it implies
 	// -A. Applied before the mutual-exclusion guards so a conflicting combination
 	// (e.g. --max-commits with --fixup/--interactive) is rejected, not ignored.

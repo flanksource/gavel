@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/flanksource/gavel/github/prcreate"
+	prcreate "github.com/flanksource/gavel/pr/create"
 )
 
 type Mode string

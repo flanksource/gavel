@@ -9,8 +9,8 @@ import (
 	"github.com/flanksource/captain/pkg/aiflags"
 	"github.com/flanksource/clicky"
 	commitpkg "github.com/flanksource/gavel/commit"
-	"github.com/flanksource/gavel/github"
-	"github.com/flanksource/gavel/github/prcreate"
+	prcreate "github.com/flanksource/gavel/pr/create"
+	"github.com/flanksource/gavel/pr/model"
 	"github.com/spf13/cobra"
 )
 
@@ -56,7 +56,7 @@ func init() {
 	prCreateCmd.Flags().StringVar(&prCreateBase, "base", "", "Base ref to branch from (default: .gavel.yaml pr.base, else "+prcreate.DefaultBase+")")
 	prCreateCmd.Flags().BoolVar(&prCreateDraft, "draft", false, "Open as draft PR")
 	prCreateCmd.Flags().IntVar(&prCreateMainline, "mainline", 0, "Mainline parent for cherry-picking a merge commit (1-based)")
-	prCreateCmd.Flags().StringVarP(&prCreateRepo, "repo", "R", "", "GitHub repository (owner/repo)")
+	prCreateCmd.Flags().StringVarP(&prCreateRepo, "repo", "R", "", "GitHub owner/repo or hosted Azure DevOps repository URL (must match origin)")
 	prCreateCmd.Flags().StringVar(&prCreateModel, "model", "", "Override the LLM model used for PR title/body/branch")
 	prCreateCmd.Flags().BoolVar(&prCreateNoCache, "no-cache", false, "Disable LLM response cache")
 }
@@ -111,7 +111,7 @@ func printConflictHint(wtPath, tmpBranch string) {
 	fmt.Println(t.ANSI())
 }
 
-func printPRCreateSummary(created *github.CreatePRResult, content commitpkg.PRContent) {
+func printPRCreateSummary(created *model.CreatePRResult, content commitpkg.PRContent) {
 	t := clicky.Text(fmt.Sprintf("PR #%d", created.Number), "font-bold text-green-600").
 		Space().Append(content.Title, "font-bold").NewLine().
 		Append(created.URL, "text-muted").NewLine()

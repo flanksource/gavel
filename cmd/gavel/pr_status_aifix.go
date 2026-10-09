@@ -25,6 +25,7 @@ import (
 	commitpkg "github.com/flanksource/gavel/commit"
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/internal/database"
+	"github.com/flanksource/gavel/pr/model"
 	"github.com/flanksource/gavel/prwatch"
 	"github.com/flanksource/gavel/utils"
 	"github.com/flanksource/gavel/verify"
@@ -226,7 +227,7 @@ func prFixLayers(options prFixLayerOptions) ([]api.SpecLayer, error) {
 
 type prFixWorktree struct {
 	RepoRoot string
-	PR       *github.PRInfo
+	PR       *model.PRInfo
 	// CacheDir is the user cache directory the worktree is created under.
 	CacheDir string
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/github"
+	"github.com/flanksource/gavel/pr/model"
 )
 
 // pushTargetKind tags how we arrived at the chosen branch to push to.
@@ -33,7 +34,7 @@ type pushTarget struct {
 type pushDeps struct {
 	searchPRs           func(github.Options, github.PRSearchOptions) (github.PRSearchResults, *github.RateLimit, error)
 	defaultBranch       func(github.Options) (string, error)
-	createPR            func(github.Options, github.CreatePRInput) (*github.CreatePRResult, error)
+	createPR            func(github.Options, model.CreatePRInput) (*model.CreatePRResult, error)
 	isAncestor          func(workDir, ref, head string) bool
 	gitPush             func(workDir, refspec string) error
 	rebaseOnto          func(workDir, upstreamBranch string) error
@@ -105,6 +106,12 @@ func pushAfterCommit(ctx context.Context, opts Options, result *Result) error {
 	deps := defaultPushDeps()
 	if pushDepsForTest != nil {
 		deps = *pushDepsForTest
+	} else {
+		var err error
+		deps, err = providerPushDeps(ctx, opts)
+		if err != nil {
+			return err
+		}
 	}
 	return pushWithDeps(ctx, opts, result, deps)
 }
@@ -124,7 +131,10 @@ func pushWithDeps(ctx context.Context, opts Options, result *Result, deps pushDe
 	}
 
 	if len(result.Commits) == 0 {
-		base, _ := deps.defaultBranch(ghOpts)
+		base, baseErr := deps.defaultBranch(ghOpts)
+		if baseErr != nil {
+			return fmt.Errorf("resolve default branch: %w", baseErr)
+		}
 		baseRef := ""
 		if base != "" {
 			baseRef = "origin/" + base
@@ -259,7 +269,10 @@ func pushHEADTo(opts Options, deps pushDeps, branch string) error {
 }
 
 func executeNewPRPush(ctx context.Context, opts Options, ghOpts github.Options, deps pushDeps, branch string, result *Result) (err error) {
-	base, _ := deps.defaultBranch(ghOpts)
+	base, baseErr := deps.defaultBranch(ghOpts)
+	if baseErr != nil {
+		return fmt.Errorf("resolve default branch: %w", baseErr)
+	}
 
 	prIn := PRContentInput{
 		Commits: commitInputsFromResults(result.Commits), Options: opts,
@@ -315,10 +328,11 @@ func executeNewPRPush(ctx context.Context, opts Options, ghOpts github.Options, 
 		return fmt.Errorf("git push %s: %w", refspec, err)
 	}
 
-	created, err := deps.createPR(ghOpts, github.CreatePRInput{
+	created, err := deps.createPR(ghOpts, model.CreatePRInput{
 		Title: content.Title,
 		Body:  content.Body,
 		Head:  headBranch,
+		Base:  base,
 	})
 	if err != nil {
 		return fmt.Errorf("create PR: %w", err)
@@ -340,7 +354,7 @@ func executeNewPRPush(ctx context.Context, opts Options, ghOpts github.Options, 
 // stdout. Replaces the trailing commit re-print: the user already saw
 // "Committed <hash> ..." per commit, what they actually want at the end
 // is the PR they just opened.
-func printNewPRSummary(created *github.CreatePRResult, content PRContent) {
+func printNewPRSummary(created *model.CreatePRResult, content PRContent) {
 	if created == nil {
 		return
 	}

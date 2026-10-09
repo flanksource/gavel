@@ -189,6 +189,7 @@ var _ = Describe("runInteractiveBatch", func() {
 
 	It("does not push or hide a later empty batch after an earlier commit", func() {
 		repo := initCommitRepoForGinkgo()
+		gitOutputForGinkgo(repo, "remote", "add", "origin", "https://github.com/acme/service.git")
 		DeferCleanup(func() { Expect(os.RemoveAll(repo)).To(Succeed()) })
 		writeRepoFile(repo, "one.go", "package one\n")
 

@@ -11,7 +11,7 @@ import (
 	"time"
 
 	gavelgit "github.com/flanksource/gavel/git"
-	"github.com/flanksource/gavel/github/prcreate"
+	prcreate "github.com/flanksource/gavel/pr/create"
 	"github.com/flanksource/gavel/status"
 )
 
