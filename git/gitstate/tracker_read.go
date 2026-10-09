@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/flanksource/gavel/status"
 	"github.com/google/uuid"
@@ -38,6 +39,7 @@ func (t *Tracker) State(ctx context.Context, dir string) (State, error) {
 // dirs, keyed by dir. A dir whose repository cannot be tracked has an entry in
 // the error map instead and never fails the others.
 func (t *Tracker) States(ctx context.Context, dirs []string) (map[string]State, map[string]error) {
+	defer observeSince(readDuration.WithLabelValues("states"), time.Now())
 	ids := make(map[string]uuid.UUID, len(dirs))
 	errs := map[string]error{}
 	var mu sync.Mutex
@@ -139,6 +141,7 @@ func (state State) worktreeAt(path string) (Worktree, bool, error) {
 // worktree of the repository containing dir, as its last status scan
 // recorded them. A worktree never scanned is scanned first.
 func (t *Tracker) Files(ctx context.Context, dir, worktreePath string) ([]status.FileStatus, error) {
+	defer observeSince(readDuration.WithLabelValues("files"), time.Now())
 	id, err := t.Track(ctx, dir)
 	if err != nil {
 		return nil, err

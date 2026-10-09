@@ -8,6 +8,7 @@ import (
 
 	"github.com/flanksource/captain/pkg/monitor"
 	"github.com/flanksource/commons/logger"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 // registerPprof exposes the Go runtime profiler on the serve mux. `gavel serve`
@@ -29,6 +30,13 @@ func registerPprof(mux *http.ServeMux) {
 	} {
 		mux.Handle(path, loopbackOnly(handler))
 	}
+}
+
+// registerMetrics serves the process's Prometheus metrics, among them the git
+// state tracker's scan, git command and read latencies (gavel_git_*), gated to
+// loopback like the profiler.
+func registerMetrics(mux *http.ServeMux) {
+	mux.Handle("/metrics", loopbackOnly(promhttp.Handler()))
 }
 
 // registerIngestStats serves the embedded session monitor's counters next to

@@ -27,6 +27,7 @@ export const queryKeys = {
   testRuns: () => ['tests', 'runs'] as const,
   activity: () => ['activity', 'snapshot'] as const,
   activityCache: () => ['activity', 'cache'] as const,
+  gitMetrics: () => ['activity', 'git'] as const,
 };
 
 /** Matches queryKeys.projectGit of any project, for invalidating them all. */

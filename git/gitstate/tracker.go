@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -203,6 +204,7 @@ func (t *Tracker) register(ctx context.Context, dir string) (*trackedRepo, error
 		repo = existing
 	} else {
 		t.repos[loc.RootDir] = repo
+		trackedRepos.Set(float64(len(t.repos)))
 		if t.started {
 			if err := t.watcher.add(repo); err != nil {
 				return nil, err
@@ -314,10 +316,12 @@ func (t *Tracker) runRefs(ctx context.Context, repo *trackedRepo, wait bool) (bo
 		result  refsResult
 		scanErr error
 	)
+	start := time.Now()
 	ran, err := t.store.Locked(ctx, "git_refs:"+repo.id.String(), wait, func(tx *Store) error {
 		result, scanErr = scanRefs(ctx, tx, repo.id, repo.root)
 		return nil
 	})
+	observeSince(refsScanDuration.WithLabelValues(scanResult(ran, result.Changed, errors.Join(err, scanErr))), start)
 	t.mu.Lock()
 	repo.lastRefs = time.Now()
 	t.mu.Unlock()
@@ -343,10 +347,17 @@ func (t *Tracker) runRefs(ctx context.Context, repo *trackedRepo, wait bool) (bo
 }
 
 func (t *Tracker) runStatus(ctx context.Context, repo *trackedRepo, path string, wait bool) error {
-	_, err := t.store.Locked(ctx, "git_status:"+repo.id.String()+":"+path, wait, func(tx *Store) error {
-		_, err := scanStatus(ctx, tx, repo.id, path)
+	config := currentPollConfig()
+	var changed bool
+	start := time.Now()
+	ran, err := t.store.Locked(ctx, "git_status:"+repo.id.String()+":"+path, wait, func(tx *Store) error {
+		var err error
+		changed, err = scanStatus(ctx, tx, repo.id, path, config.gitArgs())
 		return err
 	})
+	observeSince(statusScanDuration.WithLabelValues(
+		scanResult(ran, changed, err), strconv.FormatBool(config.FSMonitor), strconv.FormatBool(config.UntrackedCache),
+	), start)
 	t.mu.Lock()
 	repo.lastStatus[path] = time.Now()
 	t.mu.Unlock()
@@ -381,12 +392,16 @@ func (t *Tracker) enqueue(key jobKey) {
 
 func (t *Tracker) drain(key jobKey, state *jobState) {
 	for {
+		queued := time.Now()
 		select {
 		case t.sem <- struct{}{}:
 		case <-t.ctx.Done():
 			return
 		}
+		observeSince(scanQueueWait.WithLabelValues(jobKind(key)), queued)
+		scansInFlight.Inc()
 		t.run(key)
+		scansInFlight.Dec()
 		<-t.sem
 		t.mu.Lock()
 		if !state.pending {
@@ -446,6 +461,7 @@ func (t *Tracker) due(now time.Time) []jobKey {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	var keys []jobKey
+	hot, idle := 0, 0
 	for _, repo := range t.repos {
 		if now.Sub(repo.lastRefs) >= t.idle {
 			keys = append(keys, jobKey{root: repo.root})
@@ -454,12 +470,17 @@ func (t *Tracker) due(now time.Time) []jobKey {
 			interval := t.idle
 			if t.hotLocked(path, now) {
 				interval = t.hot
+				hot++
+			} else {
+				idle++
 			}
 			if now.Sub(repo.lastStatus[path]) >= interval {
 				keys = append(keys, jobKey{root: repo.root, worktree: path})
 			}
 		}
 	}
+	trackedWorktrees.WithLabelValues("hot").Set(float64(hot))
+	trackedWorktrees.WithLabelValues("idle").Set(float64(idle))
 	return keys
 }
 

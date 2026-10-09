@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { queryKeys } from '../query';
-import type { ActivitySnapshot, CacheStatus } from '../types';
+import type { ActivitySnapshot, CacheStatus, GitMetrics, LatencyStat } from '../types';
 import { ActivityView } from './ActivityView';
 
 // ActivityView's own stream-handling logic is exercised against a stubbed
@@ -25,6 +25,27 @@ const cacheStatus: CacheStatus = {
   dsnMasked: 'postgres://***',
   retentionSec: 3600,
   counts: { pull_requests: 5 },
+};
+
+const statusScan: LatencyStat = {
+  labels: { result: 'unchanged', fsmonitor: 'false', untracked_cache: 'true' },
+  count: 362, totalMs: 19_884, avgMs: 54.9, p50Ms: 41.2, p95Ms: 128,
+};
+
+const gitMetrics: GitMetrics = {
+  tracking: true,
+  fsmonitor: false,
+  untrackedCache: true,
+  trackedRepos: 25,
+  hotWorktrees: 6,
+  idleWorktrees: 111,
+  scansInFlight: 4,
+  rangesComputed: 0,
+  refsScans: null,
+  statusScans: [statusScan],
+  commands: null,
+  queueWait: null,
+  reads: null,
 };
 
 class FakeEventSource {
@@ -79,7 +100,7 @@ describe('ActivityView queries', () => {
       calls.push(url);
       return {
         ok: true,
-        json: async () => url === '/api/activity' ? firstSnapshot : cacheStatus,
+        json: async () => url === '/api/activity' ? firstSnapshot : url === '/api/git/metrics' ? gitMetrics : cacheStatus,
       } as Response;
     }));
     vi.stubGlobal('EventSource', FakeEventSource);
@@ -131,6 +152,9 @@ describe('ActivityView queries', () => {
       }
       if (url === '/api/activity/cache') {
         return new Response(JSON.stringify(cacheStatus), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url === '/api/git/metrics') {
+        return new Response(JSON.stringify(gitMetrics), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
       if (resetFails) {
         return new Response(JSON.stringify({ error: 'recorder unavailable' }), { status: 503, headers: { 'Content-Type': 'application/json' } });

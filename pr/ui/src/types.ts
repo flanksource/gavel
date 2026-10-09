@@ -380,6 +380,34 @@ export interface CacheStatus {
   error?: string;
 }
 
+// LatencyStat matches gitstate.LatencyStat: one labelled series of a
+// gavel_git_* histogram.
+export interface LatencyStat {
+  labels: Record<string, string>;
+  count: number;
+  totalMs: number;
+  avgMs: number;
+  p50Ms: number;
+  p95Ms: number;
+}
+
+// GitMetrics matches pr/ui.gitMetricsResponse (GET /api/git/metrics).
+export interface GitMetrics {
+  tracking: boolean;
+  fsmonitor: boolean;
+  untrackedCache: boolean;
+  trackedRepos: number;
+  hotWorktrees: number;
+  idleWorktrees: number;
+  scansInFlight: number;
+  rangesComputed: number;
+  refsScans: LatencyStat[] | null;
+  statusScans: LatencyStat[] | null;
+  commands: LatencyStat[] | null;
+  queueWait: LatencyStat[] | null;
+  reads: LatencyStat[] | null;
+}
+
 export type Severity = 'ok' | 'degraded' | 'down';
 
 // ComponentStatus matches pr/ui.ComponentStatus — one component (db / github)

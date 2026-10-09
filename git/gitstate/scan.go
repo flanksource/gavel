@@ -11,17 +11,47 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
+	"time"
 
+	"github.com/flanksource/commons/properties"
 	gavelgit "github.com/flanksource/gavel/git"
 	"github.com/google/uuid"
 )
 
-// pollGitArgs are the global options of every git command a background scan
-// runs. --no-optional-locks keeps a poller from taking the index lock a
-// person's own git command needs; the file monitor and untracked cache make a
-// status of an unchanged worktree cost a few milliseconds.
-var pollGitArgs = []string{"--no-optional-locks", "-c", "core.fsmonitor=true", "-c", "core.untrackedCache=true"}
+// Properties (-P key=value) choosing the git caches a status scan runs with.
+// The builtin file monitor starts a daemon per worktree and measured slower
+// than a plain status across ~150 worktrees, so it is off unless enabled.
+const (
+	PropertyFSMonitor      = "git.fsmonitor"
+	PropertyUntrackedCache = "git.untrackedCache"
+)
+
+// pollConfig is the git cache configuration of one status scan, read from the
+// properties when the scan starts so a changed property applies to the next.
+type pollConfig struct {
+	FSMonitor, UntrackedCache bool
+}
+
+func currentPollConfig() pollConfig {
+	return pollConfig{
+		FSMonitor:      properties.On(false, PropertyFSMonitor),
+		UntrackedCache: properties.On(true, PropertyUntrackedCache),
+	}
+}
+
+// gitArgs are the global options of every git command a status scan runs.
+// --no-optional-locks keeps a poller from taking the index lock a person's own
+// git command needs.
+func (c pollConfig) gitArgs() []string {
+	return []string{
+		"--no-optional-locks",
+		"-c", "core.fsmonitor=" + strconv.FormatBool(c.FSMonitor),
+		"-c", "core.untrackedCache=" + strconv.FormatBool(c.UntrackedCache),
+	}
+}
 
 // repoLocation is where a repository lives: its primary checkout and the
 // directory holding the refs and worktree metadata all its worktrees share.
@@ -136,6 +166,7 @@ func saveMissingRanges(ctx context.Context, store *Store, repoID uuid.UUID, root
 			return err
 		}
 		ranges = append(ranges, Range{RangeKey: key, RangeCompare: compare})
+		rangesComputed.Inc()
 	}
 	return store.SaveRanges(ctx, repoID, ranges)
 }
@@ -156,8 +187,8 @@ func refsFingerprint(base string, worktrees []gavelgit.Worktree, branches []gave
 // fingerprint of HEAD, the porcelain status and the stat of every listed file
 // equal to the stored one ends the scan before the line counts are read. It
 // writes nothing when it fails.
-func scanStatus(ctx context.Context, store *Store, repoID uuid.UUID, path string) (bool, error) {
-	fingerprint, err := statusFingerprint(ctx, path)
+func scanStatus(ctx context.Context, store *Store, repoID uuid.UUID, path string, gitArgs []string) (bool, error) {
+	fingerprint, err := statusFingerprint(ctx, path, gitArgs)
 	if err != nil {
 		return false, err
 	}
@@ -168,15 +199,15 @@ func scanStatus(ctx context.Context, store *Store, repoID uuid.UUID, path string
 	if fingerprint == stored {
 		return false, store.MarkStatusScanned(ctx, repoID, path)
 	}
-	changes, touched, files, err := WorktreeChanges(ctx, path, pollGitArgs...)
+	changes, touched, files, err := WorktreeChanges(ctx, path, gitArgs...)
 	if err != nil {
 		return false, err
 	}
 	return true, store.ApplyStatus(ctx, repoID, path, StatusUpdate{Fingerprint: fingerprint, Changes: changes, TouchedAt: touched, Files: files})
 }
 
-func statusFingerprint(ctx context.Context, path string) (string, error) {
-	head, err := runGit(ctx, path, append(pollGitArgs, "rev-parse", "--verify", "--quiet", "HEAD")...)
+func statusFingerprint(ctx context.Context, path string, gitArgs []string) (string, error) {
+	head, err := runGit(ctx, path, slices.Concat(gitArgs, []string{"rev-parse", "--verify", "--quiet", "HEAD"})...)
 	// --quiet exits 1, and only 1, when HEAD names no commit: an unborn branch,
 	// whose status still counts.
 	var exitErr *exec.ExitError
@@ -186,7 +217,7 @@ func statusFingerprint(ctx context.Context, path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	porcelain, err := runGit(ctx, path, append(pollGitArgs, "status", "--porcelain=v1", "-z", "--untracked-files=all")...)
+	porcelain, err := runGit(ctx, path, slices.Concat(gitArgs, []string{"status", "--porcelain=v1", "-z", "--untracked-files=all"})...)
 	if err != nil {
 		return "", err
 	}
@@ -229,6 +260,7 @@ func runGit(ctx context.Context, dir string, args ...string) ([]byte, error) {
 	cmd.Dir = dir
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
+	defer observeGitCommand(args, time.Now())
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("git %s in %s: %w: %s", strings.Join(args, " "), dir, err, strings.TrimSpace(stderr.String()))

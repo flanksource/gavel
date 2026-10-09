@@ -14,6 +14,7 @@ import (
 	"github.com/flanksource/commons/logger"
 	gavelctx "github.com/flanksource/gavel/context"
 	"github.com/flanksource/gavel/git/gitstate"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 const (
@@ -114,6 +115,25 @@ func (s *Server) handleGitStream(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		logger.Warnf("git stream: %v", err)
 	}
+}
+
+// gitMetricsResponse is GET /api/git/metrics: whether this process tracks git
+// state, and the tracker's metrics so far.
+type gitMetricsResponse struct {
+	Tracking bool `json:"tracking"`
+	gitstate.MetricsSnapshot
+}
+
+// handleGitMetrics summarises the gavel_git_* metrics /metrics exposes for the
+// activity page.
+func (s *Server) handleGitMetrics(w http.ResponseWriter, r *http.Request) {
+	snapshot, err := gitstate.Metrics(prometheus.DefaultGatherer)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	_, trackerErr := s.context().GitTracker()
+	respondJSON(w, http.StatusOK, gitMetricsResponse{Tracking: trackerErr == nil, MetricsSnapshot: snapshot})
 }
 
 type gitFocusRequest struct {

@@ -18,3 +18,7 @@ func (t *Tracker) Rescan(ctx context.Context, dir string) error {
 }
 
 var PorcelainPaths = porcelainPaths
+
+func PollGitArgs() []string {
+	return currentPollConfig().gitArgs()
+}

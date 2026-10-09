@@ -67,6 +67,29 @@ var _ = Describe("git change push", func() {
 		})
 	})
 
+	Describe("GET /api/git/metrics", func() {
+		It("reports the tracker's scans once a repository is tracked", func() {
+			_, err := tracked.tracker.Track(tracked.ctx, f.repo)
+			Expect(err).NotTo(HaveOccurred())
+
+			recorder := serveProjectGit(tracked.server, http.MethodGet, "/api/git/metrics", nil)
+
+			Expect(recorder.Code).To(Equal(http.StatusOK), recorder.Body.String())
+			metrics := decodeProjectGit[gitMetricsResponse](recorder)
+			Expect(metrics.Tracking).To(BeTrue())
+			Expect(metrics.TrackedRepos).To(BeNumerically(">=", 1))
+			Expect(metrics.StatusScans).NotTo(BeEmpty())
+			Expect(metrics.RefsScans).NotTo(BeEmpty())
+		})
+
+		It("says the process tracks no git state when it has no tracker", func() {
+			recorder := serveProjectGit(&Server{ctx: gavelctx.New(context.Background())}, http.MethodGet, "/api/git/metrics", nil)
+
+			Expect(recorder.Code).To(Equal(http.StatusOK))
+			Expect(decodeProjectGit[gitMetricsResponse](recorder).Tracking).To(BeFalse())
+		})
+	})
+
 	Describe("POST /api/git/focus", func() {
 		DescribeTable("leases the hot cadence to a project's worktree",
 			func(body func() map[string]any, want int) {

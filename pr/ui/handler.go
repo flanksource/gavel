@@ -568,6 +568,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/projects/{name}/branch/pr", s.handleProjectBranchPR)
 	mux.HandleFunc("GET /api/git/stream", s.handleGitStream)
 	mux.HandleFunc("POST /api/git/focus", s.handleGitFocus)
+	mux.HandleFunc("GET /api/git/metrics", s.handleGitMetrics)
 	mux.HandleFunc("/api/openapi.json", s.handleOpenAPI)
 	mux.HandleFunc("/api/proc/status", s.handleProcStatus)
 	mux.HandleFunc("/api/proc/status/stream", s.handleProcStatusStream)
@@ -587,6 +588,7 @@ func (s *Server) Handler() http.Handler {
 	s.registerEntityRoutes(router)
 	registerPromptRoutes(mux)
 	registerPprof(mux)
+	registerMetrics(mux)
 	registerIngestStats(mux, s.readIngestStats)
 	mux.HandleFunc("/results/", s.handleGavelResults)
 	// One multiplexed SSE connection per tab: subs are served through root, so
