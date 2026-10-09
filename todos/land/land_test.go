@@ -8,8 +8,9 @@ import (
 
 	commitpkg "github.com/flanksource/gavel/commit"
 	"github.com/flanksource/gavel/git/branchmerge"
-	"github.com/flanksource/gavel/github"
-	"github.com/flanksource/gavel/github/prcreate"
+	prcreate "github.com/flanksource/gavel/pr/create"
+	"github.com/flanksource/gavel/pr/model"
+	"github.com/flanksource/gavel/pr/provider"
 	"github.com/flanksource/gavel/todos/land"
 	"github.com/flanksource/gavel/todos/native"
 	"github.com/google/uuid"
@@ -152,16 +153,16 @@ var _ = Describe("Land", func() {
 		It("pr uses prcreate and deletes the branch only after the PR is created", func(ctx SpecContext) {
 			f.runWorktree(false)
 			runID := f.recordRun(ctx)
-			var created []github.CreatePRInput
+			var created []model.CreatePRInput
 			branchAtCreate := false
-			deps := prcreate.Deps{
+			deps := prcreate.Deps{Preflight: func(context.Context, provider.Options) error { return nil },
 				GenerateContent: func(context.Context, commitpkg.PRContentInput) (commitpkg.PRContent, error) {
 					return commitpkg.PRContent{Title: "feat: add feature", Body: "Adds feature.txt", Branch: "feat/feature"}, nil
 				},
-				CreatePR: func(_ github.Options, in github.CreatePRInput) (*github.CreatePRResult, error) {
+				CreatePR: func(_ provider.Options, in model.CreatePRInput) (*model.CreatePRResult, error) {
 					created = append(created, in)
 					branchAtCreate = branchExists(f.repo, shellBranch)
-					return &github.CreatePRResult{Number: 7, URL: "https://github.com/acme/land/pull/7", Base: in.Base}, nil
+					return &model.CreatePRResult{Number: 7, URL: "https://github.com/acme/land/pull/7", Base: in.Base}, nil
 				},
 			}
 

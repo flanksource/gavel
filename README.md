@@ -96,6 +96,26 @@ The action is crash-resilient: if gavel exits before writing results, placeholde
 
 ## Commands
 
+### Azure DevOps pull requests
+
+`gavel pr status`, `gavel pr create`, `gavel commit -p`, and the project branch PR API support hosted Azure DevOps. Gavel detects `origin` URLs at `dev.azure.com` and legacy `visualstudio.com` hosts, including HTTPS and SSH remotes. An explicit `--repo` accepts an Azure repository URL; creation requires it to match `origin`.
+
+Set `AZURE_DEVOPS_EXT_PAT` to use a personal access token, or authenticate with `az login`. A configured PAT takes precedence; an invalid PAT produces an error. Azure CLI tokens are refreshed during long watches. Status requires repository and build read permissions; creation additionally requires code write permission. Git pushes use your existing Git credentials separately.
+
+```bash
+gavel pr status 27 --logs --tail-logs 100
+gavel pr status https://dev.azure.com/acme/product/_git/service/pullrequest/27 --follow
+gavel pr status 27 --actions 'CI,Test' --follow --fail-fast
+gavel pr create HEAD --base origin/main --draft
+gavel commit -p
+```
+
+Status shows current-revision pipeline jobs, steps, failed-step logs, and merge readiness (`ready`, `conflicting`, `blocked`, `pending`, or `unknown`) with policy reasons. `--actions` matches pipeline names and IDs, build IDs, job names, and native job UUIDs. `--follow` waits for pipeline jobs and queued merge computation; human policy blockers produce a completed report with exit code 1. A settled PR with no pipelines returns immediately. Failed or cancelled selected jobs and non-ready open PRs return exit code 1. `--tail-logs 0` includes the complete failed log.
+
+PR creation preserves the isolated worktree, ordered cherry-picks, AI-generated title/body/branch, and conflict recovery. `pr create` uses the explicit base, then `.gavel.yaml` `pr.base`, then `origin/main`; commit-push uses the repository default branch.
+
+Azure review threads, dashboard listing, close/merge actions, AI repair, auto-merge, and Azure DevOps Server are outside this support. Azure rejects `pr status --comments`, `--ai-fix`, `--worktree`, and `commit -p --auto-merge` before side effects.
+
 ### Testing & Linting
 
 #### `gavel test`

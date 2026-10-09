@@ -19,7 +19,7 @@ import (
 	"github.com/flanksource/captain/pkg/api"
 	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/gavel/git/branchmerge"
-	"github.com/flanksource/gavel/github/prcreate"
+	prcreate "github.com/flanksource/gavel/pr/create"
 	"github.com/flanksource/gavel/todos/native"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/google/uuid"
