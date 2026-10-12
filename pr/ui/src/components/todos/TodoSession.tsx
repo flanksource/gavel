@@ -7,6 +7,7 @@ import { todoQuery } from './format';
 import { CmuxSessionButton } from './TodoSessionTimer';
 import { TodoSessionStart } from './TodoSessionStart';
 import { SessionErrorDetails, type SessionError } from './SessionErrorDetails';
+import { VerificationFailureStatus } from './VerificationFailureStatus';
 import { reusableRunBranch } from './runBranchChoice';
 import { AttemptStopAction, AttemptWorkspaceSummary, CopyAllDetailsButton, PENDING_LAUNCH_ID, attemptCollection, captainSessionUrl, selectAttempt, useTodoSessionDetail } from './TodoSessionDetail';
 import type { TodoRunAction } from './run';
@@ -88,6 +89,7 @@ export function TodoSession({
   active,
   todo,
   onChanged,
+  onVerification,
   onResume,
   resumeDisabled,
   onRun,
@@ -108,6 +110,7 @@ export function TodoSession({
   active: boolean;
   todo: TodoItem;
   onChanged?: (todo: TodoItem) => void;
+  onVerification?: () => void;
   // onResume/resumeDisabled back the session toolbar's "Resume in cmux" action,
   // wired from the todo detail's run flow.
   onResume?: () => void;
@@ -300,6 +303,7 @@ export function TodoSession({
     <div className="@container flex min-h-0 flex-1 flex-col overflow-hidden bg-muted/20">
       {launch && <LaunchProgress launch={launch} />}
       <SessionErrorDetails errors={sessionErrors} />
+      <VerificationFailureStatus stats={stats} onOpen={onVerification} />
       {collection ? (
         <SessionInspector
           session={collection}
