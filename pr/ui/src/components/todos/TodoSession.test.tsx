@@ -322,14 +322,14 @@ describe('TodoSession', () => {
 
   const items = (inspector: HTMLElement) => JSON.parse(inspector.getAttribute('data-items') ?? '[]');
 
-  it('hands the inspector one attempt per prompt run, each loaded from its Captain session', async () => {
+  it('hands the inspector one attempt per prompt run, each loaded from its admission session', async () => {
     stubServer(statsRoute({}));
     renderSession();
 
     const inspector = await screen.findByTestId('session-inspector');
     await waitFor(() => expect(items(inspector)).toEqual([
-      { id: 'run-2', label: 'Attempt #2', status: 'running', src: '/api/captain/sessions/exec-2' },
-      { id: 'run-1', label: 'Attempt #1', status: 'completed', src: '/api/captain/sessions/provider-older' },
+      { id: 'run-2', label: 'Attempt #2', status: 'running', src: '/api/captain/sessions/admission-2' },
+      { id: 'run-1', label: 'Attempt #1', status: 'completed', src: '/api/captain/sessions/admission-1' },
     ]));
     expect(inspector.getAttribute('data-current')).toBe('run-2');
   });
@@ -365,8 +365,8 @@ describe('TodoSession', () => {
     const question = { questions: [{ id: 'q1', question: 'Which location?', options: [{ label: 'Inline' }] }] };
     const fetchMock = stubServer(url => {
       if (url.includes('/session/stats')) return Response.json(sessionStats);
-      if (url === '/api/captain/sessions/exec-2') return Response.json({
-        id: 'exec-2',
+      if (url === '/api/captain/sessions/admission-2') return Response.json({
+        id: 'admission-2',
         messages: [{ id: 'm1', role: 'assistant', parts: [{ type: 'tool', toolName: 'AskUserQuestion', toolCallId: 'call-7', input: question }] }],
       });
       return undefined;
@@ -377,7 +377,7 @@ describe('TodoSession', () => {
     await waitFor(() => expect(JSON.parse(inspector.getAttribute('data-pending') ?? '[]')).toEqual([
       { tool: 'AskUserQuestion', input: question, toolCallId: 'call-7', sessionId: 'session-1' },
     ]));
-    expect(fetchMock.mock.calls.map(call => String(call[0]))).toContain('/api/captain/sessions/exec-2');
+    expect(fetchMock.mock.calls.map(call => String(call[0]))).toContain('/api/captain/sessions/admission-2');
   });
 
   it('shows requested then exact resolved spec while a new session is admitted', async () => {
@@ -409,6 +409,21 @@ describe('TodoSession', () => {
     expect(inspector.getAttribute('data-current')).toBe('pending-launch');
     expect(inspector.getAttribute('data-layout')).toBe('default');
     expect(items(inspector)).toEqual([{ id: 'pending-launch', label: 'Attempt #1', status: 'starting' }]);
+  });
+
+  // An API-mode attempt that failed before the provider reported a session
+  // leaves the todo without a session id; its admission session still holds
+  // the spec, prompt and error, so the attempt is inspected rather than the
+  // never-run start form shown.
+  it('inspects an attempt that failed before the provider reported a session', async () => {
+    const failed = attempt(1, { status: 'failed', state: 'failed', provider: 'anthropic', runtimeMode: 'api', model: 'claude-haiku-5-5' });
+    stubServer(() => undefined, [failed]);
+    renderSession({ sessionId: undefined, todo: { ...todo, status: 'failed', sessionId: undefined, attempts: 1 } });
+
+    const inspector = await screen.findByTestId('session-inspector');
+    await waitFor(() => expect(items(inspector)).toEqual([
+      { id: 'run-1', label: 'Attempt #1', status: 'failed', src: '/api/captain/sessions/admission-1' },
+    ]));
   });
 
   it('reads a session no attempt owns straight from Captain by its provider id', async () => {

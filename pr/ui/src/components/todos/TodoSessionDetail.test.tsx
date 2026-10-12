@@ -88,14 +88,18 @@ describe('attemptCollection', () => {
     runtimeMode: 'agent',
     model: 'claude-opus-4-8',
     effort: 'high',
-    executionSessionId: 'execution/2',
+    admissionSessionId: 'admission/2',
+    executionSessionId: 'execution-2',
     providerSessionId: 'provider-2',
     durationMs: 60_000,
   });
   const providerOnly = attempt(1, { providerSessionId: 'provider-1', pid: 4242, stopping: true });
   const unstarted = attempt(3, { status: 'queued', phase: 'queued' });
 
-  it('loads each attempt from its Captain session, preferring the execution session', () => {
+  // Captain folds an admission session onto the transcript it executed in, so the
+  // admission id is the one identity every attempt has — before the provider
+  // reports a session, in API mode (no transcript), and after.
+  it('loads every attempt from its admission session', () => {
     const collection = attemptCollection({ todoRef: 'todo-1', attempts: [unstarted, current, providerOnly], currentId: 'run-2', launch: null });
 
     expect(collection).toEqual({
@@ -106,7 +110,7 @@ describe('attemptCollection', () => {
         {
           id: 'run-3', label: 'Attempt #3', mode: 'run', status: 'queued',
           summary: { mode: 'run', status: 'queued', updatedAt: unstarted.updatedAt },
-          session: { id: 'run-3', messages: [] },
+          src: '/api/captain/sessions/admission-3',
         },
         {
           id: 'run-2', label: 'Attempt #2', mode: 'plan', status: 'completed',
@@ -114,12 +118,12 @@ describe('attemptCollection', () => {
             provider: 'anthropic', modelMode: 'agent', model: 'claude-opus-4-8', effort: 'high',
             mode: 'plan', status: 'completed', durationMs: 60_000, updatedAt: current.updatedAt,
           },
-          src: '/api/captain/sessions/execution%2F2',
+          src: '/api/captain/sessions/admission%2F2',
         },
         {
           id: 'run-1', label: 'Attempt #1', mode: 'run', status: 'stopping',
           summary: { mode: 'run', status: 'stopping', pid: 4242, updatedAt: providerOnly.updatedAt },
-          src: '/api/captain/sessions/provider-1',
+          src: '/api/captain/sessions/admission-1',
         },
       ],
     });
@@ -169,7 +173,7 @@ describe('CopyAllDetailsButton', () => {
   it('copies the attempts with the selected attempt session read from Captain', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
-    const session = { id: 'execution-2', messages: [{ id: 'm1', role: 'assistant', parts: [{ type: 'text', text: 'plan ready' }] }] };
+    const session = { id: 'admission-2', messages: [{ id: 'm1', role: 'assistant', parts: [{ type: 'text', text: 'plan ready' }] }] };
     const fetchMock = vi.fn(async (_input: RequestInfo | URL) => jsonResponse(session));
     vi.stubGlobal('fetch', fetchMock);
     const selected = attempt(2, { executionSessionId: 'execution-2' });
@@ -178,20 +182,20 @@ describe('CopyAllDetailsButton', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Copy all session details' }));
 
     await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
-    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(captainSessionUrl('execution-2'));
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(captainSessionUrl('admission-2'));
     expect(JSON.parse(writeText.mock.calls[0]?.[0] as string)).toEqual({ attempts: [selected], session });
   });
 
   it('reports a failed session read instead of copying a partial payload', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
-    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ error: 'session execution-2 not found' }, 404)));
-    const selected = attempt(2, { executionSessionId: 'execution-2' });
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ error: 'session admission-2 not found' }, 404)));
+    const selected = attempt(2);
 
     render(<CopyAllDetailsButton detail={{ attempts: [selected] }} attempt={selected} />);
     fireEvent.click(screen.getByRole('button', { name: 'Copy all session details' }));
 
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Copy all session details' }).getAttribute('title')).toContain('session execution-2 not found'));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Copy all session details' }).getAttribute('title')).toContain('session admission-2 not found'));
     expect(writeText).not.toHaveBeenCalled();
   });
 });

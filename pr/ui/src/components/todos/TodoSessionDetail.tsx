@@ -27,14 +27,14 @@ export function useTodoSessionDetail(dir: string, ref: string, active: boolean, 
   };
 }
 
-/** Captain's session handler, mounted on the dashboard (pr/ui/handler.go). */
+/**
+ * Captain's session handler, mounted on the dashboard (pr/ui/handler.go). An
+ * attempt is read by its admission session id: Captain folds that onto the
+ * transcript the run executed in, so it names the whole session before the
+ * provider reports one, in API mode (which has no transcript), and after.
+ */
 export function captainSessionUrl(sessionId: string) {
   return `/api/captain/sessions/${encodeURIComponent(sessionId)}`;
-}
-
-/** The Captain session holding an attempt's transcript, once the run has one. */
-export function attemptSessionId(attempt: TodoSessionAttempt) {
-  return attempt.executionSessionId || attempt.providerSessionId || undefined;
 }
 
 /**
@@ -52,9 +52,9 @@ export function selectAttempt(attempts: TodoSessionAttempt[], sessionId: string 
 export const PENDING_LAUNCH_ID = 'pending-launch';
 
 /**
- * One collection item per attempt. An attempt with a Captain session loads it
- * from `src` (SessionInspector fetches, and follows while live); one that has
- * none yet — or a launch still being admitted — shows as an empty session.
+ * One collection item per attempt, loaded from its Captain session via `src`
+ * (SessionInspector fetches, and follows while live). Only a launch still being
+ * admitted — no attempt, so no session yet — shows as an empty session.
  */
 export function attemptCollection({ todoRef, attempts, currentId, launch }: {
   todoRef: string;
@@ -82,7 +82,6 @@ export function attemptCollection({ todoRef, attempts, currentId, launch }: {
 function attemptItem(attempt: TodoSessionAttempt): SessionCollectionItem {
   const status = attempt.stopping ? 'stopping' : attempt.status;
   const mode = attempt.mode || attempt.step;
-  const sessionId = attemptSessionId(attempt);
   return {
     id: attempt.promptRunId,
     label: `Attempt #${attempt.ordinal}`,
@@ -99,7 +98,7 @@ function attemptItem(attempt: TodoSessionAttempt): SessionCollectionItem {
       durationMs: attempt.durationMs,
       updatedAt: attempt.updatedAt,
     },
-    ...(sessionId ? { src: captainSessionUrl(sessionId) } : { session: { id: attempt.promptRunId, messages: [] } }),
+    src: captainSessionUrl(attempt.admissionSessionId),
   };
 }
 
@@ -187,11 +186,10 @@ export function AttemptStopAction({ attempt, onStop }: { attempt: TodoSessionAtt
 export function CopyAllDetailsButton({ detail, attempt, compact = false }: { detail: TodoSessionDetailResponse; attempt: TodoSessionAttempt | undefined; compact?: boolean }) {
   const [state, setState] = useState<'idle' | 'copied' | 'error'>('idle');
   const [error, setError] = useState('');
-  const sessionId = attempt ? attemptSessionId(attempt) : undefined;
   const copy = async () => {
     setError('');
     try {
-      const session = sessionId ? await fetchRemoteSession(captainSessionUrl(sessionId)) : null;
+      const session = attempt ? await fetchRemoteSession(captainSessionUrl(attempt.admissionSessionId)) : null;
       await copyText(JSON.stringify({ ...detail, session }, null, 2));
       setState('copied');
     } catch (reason) {
