@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/flanksource/captain/pkg/ai/agent"
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/lifecycle"
@@ -251,27 +252,81 @@ var _ = Describe("Host", func() {
 	})
 
 	Describe("Hooks", func() {
-		It("orders the commit pipeline before the run environment", func() {
+		hookNames := func(hooks []any) []string {
+			var names []string
+			for _, hook := range hooks {
+				names = append(names, hook.(interface{ Name() string }).Name())
+			}
+			return names
+		}
+
+		It("orders the commit pipeline, the run environment and the run labels", func() {
 			req := api.Spec{Workflow: &api.Workflow{Commits: []api.Commit{{On: "run"}, {On: "turn"}}}}
 			meta := todos.RunStartMetadata{SessionID: "session-1"}
 
 			hooks := host.Hooks(hostTodo(), req, meta)
 
-			var names []string
-			for _, hook := range hooks {
-				names = append(names, hook.(interface{ Name() string }).Name())
-			}
-			Expect(names).To(Equal([]string{"commit:run", "commit:turn", "gavel-run-env"}))
+			Expect(hookNames(hooks)).To(Equal([]string{
+				"commit:run", "commit:turn", "gavel-run-env", "gavel-run-labels",
+			}))
 		})
 
 		It("declares no commit hook for a spec without commit policies", func() {
 			hooks := host.Hooks(hostTodo(), api.Spec{}, todos.RunStartMetadata{})
 
-			var names []string
-			for _, hook := range hooks {
-				names = append(names, hook.(interface{ Name() string }).Name())
+			Expect(hookNames(hooks)).To(Equal([]string{"gavel-run-env", "gavel-run-labels"}))
+		})
+
+		It("labels the request with the todo the run is working", func() {
+			todo := hostTodo()
+			todo.Title = "Stack Trace Viewer improvements"
+			meta := todos.RunStartMetadata{SessionID: "session-1", Mode: "run"}
+			var labeller interface {
+				PreRun(*agent.HookContext) error
 			}
-			Expect(names).To(Equal([]string{"gavel-run-env"}))
+			for _, hook := range host.Hooks(todo, api.Spec{}, meta) {
+				if hook.(interface{ Name() string }).Name() == "gavel-run-labels" {
+					labeller = hook.(interface {
+						PreRun(*agent.HookContext) error
+					})
+				}
+			}
+			Expect(labeller).ToNot(BeNil())
+
+			req := &api.Spec{}
+			Expect(labeller.PreRun(&agent.HookContext{Request: req})).To(Succeed())
+
+			Expect(req.Labels).To(Equal(map[string]string{
+				"todo":  hostIssueID,
+				"title": "Stack Trace Viewer improvements",
+				"href":  "/todos/" + hostIssueID,
+				"phase": "run",
+				"dir":   host.WorkDir,
+			}))
+		})
+
+		It("omits the title and phase it has no value for", func() {
+			todo := hostTodo()
+			todo.Title = "   "
+			var labeller interface {
+				PreRun(*agent.HookContext) error
+			}
+			for _, hook := range host.Hooks(todo, api.Spec{}, todos.RunStartMetadata{}) {
+				if hook.(interface{ Name() string }).Name() == "gavel-run-labels" {
+					labeller = hook.(interface {
+						PreRun(*agent.HookContext) error
+					})
+				}
+			}
+
+			req := &api.Spec{}
+			Expect(labeller.PreRun(&agent.HookContext{Request: req})).To(Succeed())
+
+			Expect(req.Labels).To(Equal(map[string]string{
+				"todo": hostIssueID,
+				"href": "/todos/" + hostIssueID,
+				"dir":  host.WorkDir,
+			}))
 		})
 	})
 
