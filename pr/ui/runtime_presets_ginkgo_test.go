@@ -62,6 +62,11 @@ var _ = Describe("runtime preset settings API", func() {
 		Expect(rec.Code).To(Equal(http.StatusOK), rec.Body.String())
 		var response runtimePresetLibraryResponse
 		Expect(json.Unmarshal(rec.Body.Bytes(), &response)).To(Succeed())
+		// File sources stamp UpdatedAt with a Local-zone ModTime; JSON round-trips it into a different
+		// *time.Location, so normalise both sides to UTC before deep-comparing.
+		Expect(response.Presets).To(HaveLen(1))
+		response.Presets[0].UpdatedAt = response.Presets[0].UpdatedAt.UTC()
+		preset.UpdatedAt = preset.UpdatedAt.UTC()
 		Expect(response.Presets).To(HaveExactElements(preset))
 		Expect(response.Profiles).To(HaveLen(1))
 		Expect(response.Profiles[0].Presets).To(HaveExactElements(preset.ID))
