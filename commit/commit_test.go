@@ -167,7 +167,7 @@ var _ = Describe("Options model resolution", func() {
 		},
 		Entry("flag wins", Options{Flags: modelFlags("api:gpt-5"), Config: msgSpecCfg("api:sonnet"), AI: aiBaseSpec("api:haiku")}, "gpt-5"),
 		Entry("message spec used when no flag", Options{Config: msgSpecCfg("api:sonnet"), AI: aiBaseSpec("api:haiku")}, "claude-sonnet-5-5"),
-		Entry("ai base used when no flag or op spec", Options{AI: aiBaseSpec("api:haiku")}, "claude-haiku-4-5"),
+		Entry("ai base used when no flag or op spec", Options{AI: aiBaseSpec("api:haiku")}, "claude-haiku-5-5"),
 		Entry("empty when nothing configures a model", Options{}, ""),
 	)
 

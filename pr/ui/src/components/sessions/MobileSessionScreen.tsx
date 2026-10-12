@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import { SessionChatComposer, SessionInspector, type SessionInspectorLoadState } from '@flanksource/clicky-ui/ai';
 import { Button } from '@flanksource/clicky-ui/components';
-import { UiArrowLeft, UiRobotAi } from '@flanksource/clicky-ui/icons';
+import { UiArrowLeft } from '@flanksource/clicky-ui/icons';
 import type { AgentSession } from '../../types';
 import { Spinner } from '../../icons/Spinner';
 import { captainSessionUrl } from '../todos/TodoSessionDetail';
@@ -81,12 +81,7 @@ export function MobileSessionScreen({ query, sessionId, onBack }: {
         ) : !query.data ? (
           <div role="status" className="flex items-center gap-2 p-3 text-xs text-muted-foreground"><Spinner /> Loading session…</div>
         ) : (
-          <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
-            <div className="text-center">
-              <UiRobotAi className="mb-2 text-4xl" />
-              <p>That session is no longer in the recent list</p>
-            </div>
-          </div>
+          <SessionInspector key={sessionId} src={captainSessionUrl(sessionId)} className="min-h-0 flex-1 text-xs" />
         )}
       </ScreenFrame>
     );
