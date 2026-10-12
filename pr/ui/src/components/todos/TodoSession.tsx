@@ -8,7 +8,7 @@ import { CmuxSessionButton } from './TodoSessionTimer';
 import { TodoSessionStart } from './TodoSessionStart';
 import { SessionErrorDetails, type SessionError } from './SessionErrorDetails';
 import { reusableRunBranch } from './runBranchChoice';
-import { AttemptStopAction, AttemptWorkspaceSummary, CopyAllDetailsButton, PENDING_LAUNCH_ID, attemptCollection, attemptSessionId, captainSessionUrl, selectAttempt, useTodoSessionDetail } from './TodoSessionDetail';
+import { AttemptStopAction, AttemptWorkspaceSummary, CopyAllDetailsButton, PENDING_LAUNCH_ID, attemptCollection, captainSessionUrl, selectAttempt, useTodoSessionDetail } from './TodoSessionDetail';
 import type { TodoRunAction } from './run';
 import { invalidateTodoCaches, setTodoCaches, todoMutationJSON, useTodoSessionStop } from './todoMutations';
 import { sessionStatsQueryOptions, todoQueryKeys } from './todoQueries';
@@ -153,10 +153,9 @@ export function TodoSession({
     () => currentId ? attemptCollection({ todoRef: todo.ref, attempts, currentId, launch: activeLaunch }) : undefined,
     [activeLaunch, attempts, currentId, todo.ref],
   );
-  const attemptSession = attempt ? attemptSessionId(attempt) : undefined;
   // The blocking-question fallback needs the question's own input, which lives
   // in the transcript: read it from Captain only while the session asks.
-  const askSrc = state === 'ask' && !inProgress && approvals.length === 0 && attemptSession ? captainSessionUrl(attemptSession) : undefined;
+  const askSrc = state === 'ask' && !inProgress && approvals.length === 0 && attempt ? captainSessionUrl(attempt.admissionSessionId) : undefined;
   const askQuery = useQuery({
     queryKey: todoQueryKeys.captainSession(askSrc ?? ''),
     queryFn: ({ signal }) => fetchRemoteSession(askSrc!, signal),
@@ -282,7 +281,7 @@ export function TodoSession({
     [stopMutation.mutateAsync]
   );
 
-  if (!sessionId && !activeLaunch) {
+  if (!sessionId && !activeLaunch && attempts.length === 0) {
     return <>{launch && <LaunchProgress launch={launch} />}<TodoSessionStart dir={dir} todo={todo} onRun={onRun} onAdvanced={onAdvanced} runOptions={runOptions} planOptions={planOptions} onRunOptionsChange={onRunOptionsChange} onPlanOptionsChange={onPlanOptionsChange} runBusy={runBusy} runDisabled={runDisabled} branchChoice={reusableRunBranch(attempts, todo.events ?? [])} /></>;
   }
 
@@ -305,7 +304,7 @@ export function TodoSession({
         <SessionInspector
           session={collection}
           className="h-full"
-          layout={activeLaunch && !(launchAttempt && attemptSessionId(launchAttempt)) ? 'default' : 'compact'}
+          layout={activeLaunch && !launchAttempt ? 'default' : 'compact'}
           metadata={metadata}
           toolbarActions={toolbarActions}
           transcriptProps={transcriptProps}
