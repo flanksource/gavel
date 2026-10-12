@@ -21,7 +21,8 @@ import (
 //     pre-commit gates and stamps the issue/session trailers (promptrun is told
 //     CallerOwnsCommits so it builds none of its own);
 //  2. the run environment, so a `gavel commit` the agent runs itself writes the
-//     same trailers.
+//     same trailers;
+//  3. the run labels identifying the todo and workspace on the task row.
 //
 // Recording the run — its start, the spec setup produced, its outcome — is
 // Captain's: promptrun appends its own recorder after setup.
@@ -39,7 +40,7 @@ func (h *Host) Hooks(todo *types.TODO, req captainai.Request, meta todos.RunStar
 	if labels := runLabelsFor(todo, meta, h.WorkDir); len(labels) > 0 {
 		hooks = append(hooks, &runLabels{labels: labels})
 	}
-	return append(hooks, &specRecorder{meta: meta, workflow: req.Workflow, report: report})
+	return hooks
 }
 
 // runEnv stamps GAVEL_ISSUE_ID / GAVEL_SESSION_ID onto the setup's environment

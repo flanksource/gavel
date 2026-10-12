@@ -40,15 +40,9 @@ var _ = g.Describe("lifecycle actual run input", func() {
 		o.Expect(input.input.Config.Model).To(o.Equal(prepared.request.Model))
 		o.Expect(input.input.Config.NoCache).To(o.BeTrue())
 		o.Expect(input.input.Verify.Timeout).To(o.Equal(time.Minute))
-		o.Expect(input.input.Verify.Progress).NotTo(o.BeNil())
-		var hookNames []string
-		for _, hook := range input.input.Hooks {
-			hookNames = append(hookNames, hook.(interface{ Name() string }).Name())
-		}
-		o.Expect(hookNames).To(o.Equal([]string{"commit:run", "gavel-run-env", "gavel-run-labels", "gavel-spec-recorder"}))
 		o.Expect(input.input.Verify.Progress).To(o.BeNil(), "Captain records verification progress on a recorded run")
 		o.Expect(input.input.Record).To(o.BeNil(), "nothing is recorded before the runtime admits the run")
-		o.Expect(hookNames(input.input.Hooks)).To(o.Equal([]string{"commit:run", "gavel-run-env"}))
+		o.Expect(hookNames(input.input.Hooks)).To(o.Equal([]string{"commit:run", "gavel-run-env", "gavel-run-labels"}))
 		o.Expect(prepared.request.Setup.Env).To(o.BeEmpty())
 		o.Expect(input.input.Approvals).To(o.Equal(&promptrun.ApprovalOptions{RequestedBy: "gavel-dashboard"}))
 		o.Expect(input.input.Config.OnApproval).To(o.BeNil())

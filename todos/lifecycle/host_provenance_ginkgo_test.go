@@ -73,7 +73,7 @@ var _ = g.Describe("lifecycle admission", func() {
 		)))
 		o.Expect(input.input.Record).To(o.BeIdenticalTo(provider.admission.Record))
 		o.Expect(todos.PromptRunFromContext(exec)).To(o.Equal(identity.PromptRunID))
-		o.Expect(hookNames(input.input.Hooks)).To(o.Equal([]string{"gavel-run-env", "gavel-run-admitted", "setup"}))
+		o.Expect(hookNames(input.input.Hooks)).To(o.Equal([]string{"gavel-run-env", "gavel-run-labels", "gavel-run-admitted", "setup"}))
 	})
 
 	g.It("tells the runtime and the dashboard of the run only once Captain has admitted it", func() {

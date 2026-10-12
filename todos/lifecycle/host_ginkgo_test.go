@@ -260,27 +260,21 @@ var _ = Describe("Host", func() {
 			return names
 		}
 
-		It("orders the commit pipeline, the run environment, the run labels and the spec recorder", func() {
-		It("orders the commit pipeline before the run environment", func() {
+		It("orders the commit pipeline, the run environment and the run labels", func() {
 			req := api.Spec{Workflow: &api.Workflow{Commits: []api.Commit{{On: "run"}, {On: "turn"}}}}
 			meta := todos.RunStartMetadata{SessionID: "session-1"}
 
 			hooks := host.Hooks(hostTodo(), req, meta)
 
 			Expect(hookNames(hooks)).To(Equal([]string{
-				"commit:run", "commit:turn", "gavel-run-env", "gavel-run-labels", "gavel-spec-recorder",
+				"commit:run", "commit:turn", "gavel-run-env", "gavel-run-labels",
 			}))
-			var names []string
-			for _, hook := range hooks {
-				names = append(names, hook.(interface{ Name() string }).Name())
-			}
-			Expect(names).To(Equal([]string{"commit:run", "commit:turn", "gavel-run-env"}))
 		})
 
 		It("declares no commit hook for a spec without commit policies", func() {
 			hooks := host.Hooks(hostTodo(), api.Spec{}, todos.RunStartMetadata{})
 
-			Expect(hookNames(hooks)).To(Equal([]string{"gavel-run-env", "gavel-run-labels", "gavel-spec-recorder"}))
+			Expect(hookNames(hooks)).To(Equal([]string{"gavel-run-env", "gavel-run-labels"}))
 		})
 
 		It("labels the request with the todo the run is working", func() {
@@ -290,7 +284,7 @@ var _ = Describe("Host", func() {
 			var labeller interface {
 				PreRun(*agent.HookContext) error
 			}
-			for _, hook := range host.Hooks(todo, api.Spec{}, meta, func(todos.RunStartMetadata) {}) {
+			for _, hook := range host.Hooks(todo, api.Spec{}, meta) {
 				if hook.(interface{ Name() string }).Name() == "gavel-run-labels" {
 					labeller = hook.(interface {
 						PreRun(*agent.HookContext) error
@@ -317,7 +311,7 @@ var _ = Describe("Host", func() {
 			var labeller interface {
 				PreRun(*agent.HookContext) error
 			}
-			for _, hook := range host.Hooks(todo, api.Spec{}, todos.RunStartMetadata{}, func(todos.RunStartMetadata) {}) {
+			for _, hook := range host.Hooks(todo, api.Spec{}, todos.RunStartMetadata{}) {
 				if hook.(interface{ Name() string }).Name() == "gavel-run-labels" {
 					labeller = hook.(interface {
 						PreRun(*agent.HookContext) error
@@ -333,7 +327,6 @@ var _ = Describe("Host", func() {
 				"href": "/todos/" + hostIssueID,
 				"dir":  host.WorkDir,
 			}))
-			Expect(names).To(Equal([]string{"gavel-run-env"}))
 		})
 	})
 
