@@ -1372,6 +1372,10 @@
           "description": "Commit-ish the new worktree branches from. Defaults to HEAD so the start commit is the tree you are looking at, independent of checkout.ref.",
           "type": "string"
         },
+        "branch": {
+          "description": "Existing branch a branch-mode worktree checks out as it is. It must exist and not be checked out in another worktree; it is never deleted at teardown.",
+          "type": "string"
+        },
         "ignored": {
           "default": "clone",
           "description": "Whether gitignored content is copied into the new worktree. `git worktree add` never brings it, so skip leaves the tree without node_modules/, .env and build caches. Use skip in repositories with a very large ignored tree.",
@@ -1385,11 +1389,12 @@
           "type": "boolean"
         },
         "mode": {
-          "description": "Worktree lifecycle: new creates a disposable worktree and removes it afterwards, existing reuses the one at path, none runs in the checkout itself.",
+          "description": "Worktree lifecycle: new creates a disposable worktree and removes it afterwards, existing reuses the one at path, branch checks out the existing branch as it is, none runs in the checkout itself.",
           "enum": [
             "none",
             "new",
-            "existing"
+            "existing",
+            "branch"
           ],
           "type": "string"
         },
@@ -1920,8 +1925,7 @@
           "description": "Controls whether `gavel commit` runs `go mod tidy` in every Go module and stages the resulting go.mod/go.sum changes. CLI flag --tidy overrides per invocation.",
           "properties": {
             "enabled": {
-              "default": true,
-              "description": "Toggle the tidy step. Omit to keep on.",
+              "description": "Toggle the tidy step. Omit to run it only when pushing (`gavel commit -p`).",
               "type": "boolean"
             }
           },
@@ -2607,9 +2611,9 @@
           },
           "type": "object"
         },
-        "plan": {
+        "merge": {
           "additionalProperties": false,
-          "description": "AI spec for the plan-mode prompt: the read-only investigation framing that produces a reviewable implementation plan.",
+          "description": "AI spec for the merge prompt: the one-shot pass behind `gavel todos merge` that folds several TODOs into one title, body, verification fixture and plan. It records no run, so it is not a lifecycle step.",
           "properties": {
             "budget": {
               "additionalProperties": false,
@@ -2673,8 +2677,93 @@
               },
               "type": "object"
             },
+            "workflow": {
+              "$ref": "#/$defs/Workflow",
+              "description": "Loop shape for operations that run one: verify commands (the definition of done, whose exit code gates a re-run and whose output tail becomes the feedback) and the commit policy. Overriding it replaces the operation's declared workflow field-wise."
+            }
+          },
+          "type": [
+            "string",
+            "object"
+          ],
+          "x-prompt-id": "todos.merge"
+        },
+        "plan": {
+          "additionalProperties": false,
+          "description": "AI spec for the plan-mode prompt: the read-only investigation framing that produces a reviewable implementation plan.",
+          "properties": {
+            "budget": {
+              "additionalProperties": false,
+              "description": "Resource ceilings for the run. Zero/unset means unbounded.",
+              "properties": {
+                "cost": {
+                  "description": "Maximum spend in USD; 0 = no ceiling.",
+                  "type": "number"
+                },
+                "maxTokens": {
+                  "description": "Cap on output tokens per model call; 0 = backend default.",
+                  "type": "integer"
+                },
+                "maxTurns": {
+                  "description": "Cap on agent turns; 0 = backend default.",
+                  "type": "integer"
+                }
+              },
+              "type": "object"
+            },
+            "effort": {
+              "description": "Reasoning effort for thinking-capable models.",
+              "enum": [
+                "",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max",
+                "ultra"
+              ],
+              "type": "string"
+            },
+            "fallbacks": {
+              "description": "Alternative model slugs tried in order when the primary is unavailable or its provider cannot be constructed.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "file": {
+              "description": "Path to a .prompt file whose frontmatter/body supply this operation's spec. Relative paths resolve against the .gavel.yaml directory.",
+              "type": "string"
+            },
+            "model": {
+              "description": "Catalog model slug for this operation (e.g. claude-haiku-4-5). Overrides the base ai.model.",
+              "type": "string"
+            },
+            "presets": {
+              "description": "Ordered runtime preset catalog IDs or names pinned by this operation. Omitted inherits the configured default.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "prompt": {
+              "additionalProperties": false,
+              "description": "The prompt body. A bare string in place of the whole spec is shorthand for prompt.user.",
+              "properties": {
+                "system": {
+                  "description": "Optional system-prompt framing.",
+                  "type": "string"
+                },
+                "user": {
+                  "description": "The user prompt / template body (Handlebars).",
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
             "runtimeProfile": {
-              "description": "Runtime profile catalog ID or name for this operation. Omitted inherits the configured default.",
+              "deprecated": true,
+              "description": "Deprecated and ignored. Use presets.",
               "type": "string"
             },
             "workflow": {
@@ -2687,6 +2776,13 @@
             "object"
           ],
           "x-prompt-id": "todos.plan"
+        },
+        "presets": {
+          "description": "Ordered runtime preset catalog IDs or names used by default for TODO lifecycle steps. A prompt pin or request selection overrides them.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "run": {
           "additionalProperties": false,
@@ -2739,6 +2835,13 @@
               "description": "Catalog model slug for this operation (e.g. claude-haiku-4-5). Overrides the base ai.model.",
               "type": "string"
             },
+            "presets": {
+              "description": "Ordered runtime preset catalog IDs or names pinned by this operation. Omitted inherits the configured default.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
             "prompt": {
               "additionalProperties": false,
               "description": "The prompt body. A bare string in place of the whole spec is shorthand for prompt.user.",
@@ -2755,7 +2858,8 @@
               "type": "object"
             },
             "runtimeProfile": {
-              "description": "Runtime profile catalog ID or name for this operation. Omitted inherits the configured default.",
+              "deprecated": true,
+              "description": "Deprecated and ignored. Use presets.",
               "type": "string"
             },
             "workflow": {
@@ -2770,7 +2874,8 @@
           "x-prompt-id": "todos.run"
         },
         "runtimeProfile": {
-          "description": "Default runtime profile catalog ID or name for TODO lifecycle steps. A step or request profile overrides it.",
+          "deprecated": true,
+          "description": "Deprecated and ignored. Use presets.",
           "type": "string"
         },
         "steps": {
@@ -2848,6 +2953,13 @@
               "permissions": {
                 "$ref": "#/$defs/Permissions"
               },
+              "presets": {
+                "description": "Ordered runtime preset catalog IDs or names pinned by this operation. Omitted inherits the configured default.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
               "prompt": {
                 "$ref": "#/$defs/Prompt"
               },
@@ -2855,7 +2967,8 @@
                 "type": "boolean"
               },
               "runtimeProfile": {
-                "description": "Runtime profile catalog ID or name for this operation. Omitted inherits the configured default.",
+                "deprecated": true,
+                "description": "Deprecated and ignored. Use presets.",
                 "type": "string"
               },
               "sandbox": {
@@ -2952,6 +3065,13 @@
               "description": "Catalog model slug for this operation (e.g. claude-haiku-4-5). Overrides the base ai.model.",
               "type": "string"
             },
+            "presets": {
+              "description": "Ordered runtime preset catalog IDs or names pinned by this operation. Omitted inherits the configured default.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
             "prompt": {
               "additionalProperties": false,
               "description": "The prompt body. A bare string in place of the whole spec is shorthand for prompt.user.",
@@ -2968,7 +3088,8 @@
               "type": "object"
             },
             "runtimeProfile": {
-              "description": "Runtime profile catalog ID or name for this operation. Omitted inherits the configured default.",
+              "deprecated": true,
+              "description": "Deprecated and ignored. Use presets.",
               "type": "string"
             },
             "workflow": {
@@ -2981,6 +3102,95 @@
             "object"
           ],
           "x-prompt-id": "todos.triage"
+        },
+        "triageNew": {
+          "additionalProperties": false,
+          "description": "New TODO triage with required title and labels and reviewed relationships.",
+          "properties": {
+            "budget": {
+              "additionalProperties": false,
+              "description": "Resource ceilings for the run. Zero/unset means unbounded.",
+              "properties": {
+                "cost": {
+                  "description": "Maximum spend in USD; 0 = no ceiling.",
+                  "type": "number"
+                },
+                "maxTokens": {
+                  "description": "Cap on output tokens per model call; 0 = backend default.",
+                  "type": "integer"
+                },
+                "maxTurns": {
+                  "description": "Cap on agent turns; 0 = backend default.",
+                  "type": "integer"
+                }
+              },
+              "type": "object"
+            },
+            "effort": {
+              "description": "Reasoning effort for thinking-capable models.",
+              "enum": [
+                "",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max",
+                "ultra"
+              ],
+              "type": "string"
+            },
+            "fallbacks": {
+              "description": "Alternative model slugs tried in order when the primary is unavailable or its provider cannot be constructed.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "file": {
+              "description": "Path to a .prompt file whose frontmatter/body supply this operation's spec. Relative paths resolve against the .gavel.yaml directory.",
+              "type": "string"
+            },
+            "model": {
+              "description": "Catalog model slug for this operation (e.g. claude-haiku-4-5). Overrides the base ai.model.",
+              "type": "string"
+            },
+            "presets": {
+              "description": "Ordered runtime preset catalog IDs or names pinned by this operation. Omitted inherits the configured default.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "prompt": {
+              "additionalProperties": false,
+              "description": "The prompt body. A bare string in place of the whole spec is shorthand for prompt.user.",
+              "properties": {
+                "system": {
+                  "description": "Optional system-prompt framing.",
+                  "type": "string"
+                },
+                "user": {
+                  "description": "The user prompt / template body (Handlebars).",
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "runtimeProfile": {
+              "deprecated": true,
+              "description": "Deprecated and ignored. Use presets.",
+              "type": "string"
+            },
+            "workflow": {
+              "$ref": "#/$defs/Workflow",
+              "description": "Loop shape for operations that run one: verify commands (the definition of done, whose exit code gates a re-run and whose output tail becomes the feedback) and the commit policy. Overriding it replaces the operation's declared workflow field-wise."
+            }
+          },
+          "type": [
+            "string",
+            "object"
+          ],
+          "x-prompt-id": "todos.triageNew"
         },
         "verify": {
           "additionalProperties": false,
@@ -3056,6 +3266,13 @@
             "permissions": {
               "$ref": "#/$defs/Permissions"
             },
+            "presets": {
+              "description": "Ordered runtime preset catalog IDs or names pinned by this operation. Omitted inherits the configured default.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
             "prompt": {
               "$ref": "#/$defs/Prompt"
             },
@@ -3063,7 +3280,8 @@
               "type": "boolean"
             },
             "runtimeProfile": {
-              "description": "Runtime profile catalog ID or name for this operation. Omitted inherits the configured default.",
+              "deprecated": true,
+              "description": "Deprecated and ignored. Use presets.",
               "type": "string"
             },
             "sandbox": {

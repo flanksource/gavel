@@ -48,8 +48,8 @@ func codexPlanRun() *captaindb.PromptRun {
 			// the concrete model it became.
 			Model:  api.Model{Name: "codex", Mode: api.ModeAgent},
 			Budget: api.Budget{Cost: priorPlanCost, MaxTurns: priorPlanTurns},
-			// The turn that ran, the tree it ran in, and the fixture stamped on the
-			// record — none of which is configuration.
+			// The turn that ran and the tree it ran in are consumed, while the
+			// verifier declared by the run is part of its configuration.
 			Prompt:   api.Prompt{User: "the previous turn's instructions"},
 			Setup:    &shell.Setup{Cwd: "/previous/worktree"},
 			Workflow: &api.Workflow{Verify: &api.Verify{Fixture: "```test\n```"}},
@@ -95,7 +95,7 @@ var _ = Describe("Continue", func() {
 		Expect(spec.Permissions.Mode).To(Equal(api.PermissionPlan))
 		Expect(spec.Prompt.User).To(BeEmpty(), "the previous turn's instructions must not be re-sent")
 		Expect(spec.Setup).To(BeNil(), "a consumed checkout must not pin the continuation to the old tree")
-		Expect(spec.Workflow.Verify.Fixture).To(BeEmpty(), "the persistence stamp is re-stamped from the issue")
+		Expect(spec.Workflow.Verify.Fixture).To(Equal("```test\n```"), "a declared verifier remains part of the prior run spec")
 		Expect(spec.SessionID).To(BeEmpty(), "a continuation that does not resume inherits no session")
 	})
 

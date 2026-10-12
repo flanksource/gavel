@@ -1,18 +1,20 @@
 import { UiFolderGit } from '@flanksource/clicky-ui/icons';
-import type { Project, ProcStatus } from '../types';
+import { useProcStatus } from '../procStatusQuery';
+import type { ProjectGitSummaryView } from '../projectGitQueries';
+import type { Project } from '../types';
 import type { ProjectCatalog } from '../useProjectCatalog';
 import { ErrorBoundary } from './ErrorBoundary';
 import { ProjectsBar } from './ProjectsBar';
-import { ProjectStatusView } from './ProjectStatusView';
+import { ProjectRefPane } from './ProjectRefPane';
 import { TestRunDetail } from './tests/TestRunDetail';
 
 // The projects tab renders as two AppShell slots — ProjectsSidebar into
 // bodySidebar, ProjectDetailPane into children — so both take the shared
 // catalog rather than owning the /api/tests state between them.
 
-export function ProjectsSidebar({ catalog, procStatus, selectedName, selectedRunId, historyEnabled, onHistoryChange, onSelect, onSelectRun, onChanged, onAdd, onSettings }: {
+export function ProjectsSidebar({ catalog, gitSummary, selectedName, selectedRunId, historyEnabled, onHistoryChange, onSelect, onSelectRun, onChanged, onAdd, onSettings }: {
   catalog: ProjectCatalog;
-  procStatus: Record<string, ProcStatus>;
+  gitSummary: ProjectGitSummaryView;
   selectedName: string;
   selectedRunId: string;
   historyEnabled: boolean;
@@ -23,11 +25,13 @@ export function ProjectsSidebar({ catalog, procStatus, selectedName, selectedRun
   onAdd: () => void;
   onSettings: (project: Project) => void;
 }) {
+  const procStatus = useProcStatus();
   return (
     <ProjectsBar
       projects={catalog.projects}
       runs={catalog.runs}
       procStatus={procStatus}
+      gitSummary={gitSummary}
       selected={selectedName}
       selectedRunId={selectedRunId}
       runError={catalog.error}
@@ -43,12 +47,14 @@ export function ProjectsSidebar({ catalog, procStatus, selectedName, selectedRun
   );
 }
 
-export function ProjectDetailPane({ catalog, selectedName, selectedRunId, diffPath, resultsEnabled, onDiffPathChange, onChanged }: {
+export function ProjectDetailPane({ catalog, selectedName, selectedRunId, diffPath, projectRef, resultsEnabled, onRefChange, onDiffPathChange, onChanged }: {
   catalog: ProjectCatalog;
   selectedName: string;
   selectedRunId: string;
   diffPath: string;
+  projectRef: string;
   resultsEnabled: boolean;
+  onRefChange: (ref: string) => void;
   onDiffPathChange: (path: string) => void;
   onChanged: () => void;
 }) {
@@ -70,5 +76,5 @@ export function ProjectDetailPane({ catalog, selectedName, selectedRunId, diffPa
       </ErrorBoundary>
     );
   }
-  return <ProjectStatusView key={selected.name} project={selected} diffPath={diffPath} showResults={resultsEnabled} onDiffPathChange={onDiffPathChange} onChanged={onChanged} />;
+  return <ProjectRefPane key={selected.name} project={selected} projectRef={projectRef} diffPath={diffPath} showResults={resultsEnabled} onRefChange={onRefChange} onDiffPathChange={onDiffPathChange} onChanged={onChanged} />;
 }

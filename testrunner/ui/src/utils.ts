@@ -952,6 +952,7 @@ export function statusIcon(t: Test): string {
   if (t.pending) return 'codicon:circle-large-outline';
   if (t.failed) return 'codicon:error';
   if (t.warned) return 'codicon:warning';
+  if (t.aborted) return 'codicon:debug-stop';
   if (t.skipped) return 'codicon:circle-slash';
   if (t.passed) return 'codicon:pass-filled';
   if (t.children && t.children.length > 0) {
@@ -995,6 +996,7 @@ export function statusColor(t: Test): string {
   if (t.pending) return 'text-gray-400';
   if (t.failed) return 'text-red-600';
   if (t.warned) return 'text-amber-600';
+  if (t.aborted) return 'text-red-400';
   if (t.skipped) return 'text-yellow-600';
   if (t.passed) return 'text-green-600';
   if (t.children && t.children.length > 0) {
@@ -1012,6 +1014,7 @@ export function statusColor(t: Test): string {
 
 export function statusBg(t: Test): string {
   if (t.failed) return 'bg-red-50';
+  if (t.aborted) return 'bg-red-50';
   if (t.skipped) return 'bg-yellow-50';
   return '';
 }
@@ -1137,19 +1140,21 @@ export type StatusCounts = {
   passed: number;
   failed: number;
   warned: number;
+  aborted: number;
   skipped: number;
   pending: number;
   running: number;
   timedout: number;
 };
 
-const emptyCounts = (): StatusCounts => ({ total: 0, passed: 0, failed: 0, warned: 0, skipped: 0, pending: 0, running: 0, timedout: 0 });
+const emptyCounts = (): StatusCounts => ({ total: 0, passed: 0, failed: 0, warned: 0, aborted: 0, skipped: 0, pending: 0, running: 0, timedout: 0 });
 
 const addCounts = (r: StatusCounts, s: StatusCounts) => {
   r.total += s.total;
   r.passed += s.passed;
   r.failed += s.failed;
   r.warned += s.warned;
+  r.aborted += s.aborted;
   r.skipped += s.skipped;
   r.pending += s.pending;
   r.running += s.running;
@@ -1161,6 +1166,7 @@ const countsFromSummary = (summary: TestSummary): StatusCounts => ({
   passed: summary.Passed,
   failed: summary.Failed,
   warned: summary.Warned || 0,
+  aborted: summary.Aborted || 0,
   skipped: summary.Skipped,
   pending: summary.Pending || 0,
   running: summary.Running || 0,
@@ -1169,13 +1175,14 @@ const countsFromSummary = (summary: TestSummary): StatusCounts => ({
 
 const countsFromLeaf = (t: Test): StatusCounts => {
   const isTimedOut = !!t.timed_out;
-  const counted = isTimedOut || t.passed || t.failed || t.warned || t.skipped || t.pending || t.running;
+  const counted = isTimedOut || t.passed || t.failed || t.warned || t.aborted || t.skipped || t.pending || t.running;
   return {
     total: counted ? 1 : 0,
     passed: !isTimedOut && t.passed ? 1 : 0,
     failed: !isTimedOut && t.failed ? 1 : 0,
     warned: !isTimedOut && t.warned ? 1 : 0,
-    skipped: !isTimedOut && t.skipped ? 1 : 0,
+    aborted: !isTimedOut && t.aborted ? 1 : 0,
+    skipped: !isTimedOut && !t.aborted && t.skipped ? 1 : 0,
     pending: !isTimedOut && t.pending ? 1 : 0,
     running: !isTimedOut && t.running ? 1 : 0,
     timedout: isTimedOut ? 1 : 0,
@@ -1204,7 +1211,7 @@ export function sumNonTaskTests(t: Test): StatusCounts {
 }
 
 export function isFolder(t: Test): boolean {
-  return !t.passed && !t.failed && !t.skipped && !t.pending && !t.running;
+  return !t.passed && !t.failed && !t.aborted && !t.skipped && !t.pending && !t.running;
 }
 
 export function hasFailed(t: Test): boolean {
@@ -1234,6 +1241,7 @@ export function testStatus(t: Test): string | null {
   if (t.pending) return 'pending';
   if (t.failed) return 'failed';
   if (t.warned) return 'warned';
+  if (t.aborted) return 'aborted';
   if (t.skipped) return 'skipped';
   if (t.passed) return 'passed';
   return null;
@@ -1289,7 +1297,7 @@ function collapseLintNode(t: Test): Test {
 }
 
 function isCollapsibleContainer(t: Test): boolean {
-  if (t.passed || t.failed || t.skipped || t.pending) return false;
+  if (t.passed || t.failed || t.aborted || t.skipped || t.pending) return false;
   if (t.kind === 'violation') return false;
   if (t.violations && t.violations.length > 0) return false;
   return true;

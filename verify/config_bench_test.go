@@ -6,14 +6,40 @@ import (
 	"testing"
 )
 
-// BenchmarkLoadGavelConfig measures the uncached per-call cost of the config
-// load that procfile.gather performs for every project on every status poll.
+// BenchmarkLoadGavelConfig measures the config load procfile.gather performs for
+// every project on every status poll, against an empty directory and against a
+// checkout that carries a .gavel.yaml (so the git-root merge is exercised).
+// "cold" clears the cache before every load — the full read, parse, merge and
+// validate — while "warm" is the steady state of an unchanged chain: read every
+// file, compare bytes, deep-copy the cached result.
 func BenchmarkLoadGavelConfig(b *testing.B) {
-	dir := b.TempDir()
-	for b.Loop() {
-		if _, err := LoadGavelConfig(dir); err != nil {
-			b.Fatal(err)
-		}
+	for _, target := range []struct {
+		name string
+		dir  func(*testing.B) string
+	}{
+		{"empty", func(b *testing.B) string { return b.TempDir() }},
+		{"repo", benchRepoDir},
+	} {
+		b.Run(target.name+"/cold", func(b *testing.B) {
+			dir := target.dir(b)
+			for b.Loop() {
+				resetGavelConfigCache()
+				if _, err := LoadGavelConfig(dir); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+		b.Run(target.name+"/warm", func(b *testing.B) {
+			dir := target.dir(b)
+			if _, err := LoadGavelConfig(dir); err != nil {
+				b.Fatal(err)
+			}
+			for b.Loop() {
+				if _, err := LoadGavelConfig(dir); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
 	}
 }
 
@@ -25,16 +51,10 @@ func BenchmarkDefaultGavelConfig(b *testing.B) {
 	}
 }
 
-// BenchmarkLoadGavelConfigRealRepo measures the cost against a checkout that
-// actually carries a .gavel.yaml, so the git-root merge is exercised — the
-// shape procfile.gather hits for every configured project on every poll.
-func BenchmarkLoadGavelConfigRealRepo(b *testing.B) {
-	dir := benchRepoDir(b)
-	for b.Loop() {
-		if _, err := LoadGavelConfig(dir); err != nil {
-			b.Fatal(err)
-		}
-	}
+func resetGavelConfigCache() {
+	gavelConfigCache.Lock()
+	defer gavelConfigCache.Unlock()
+	clear(gavelConfigCache.entries)
 }
 
 func benchRepoDir(b *testing.B) string {

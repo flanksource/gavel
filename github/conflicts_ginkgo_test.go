@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 
+	"github.com/flanksource/gavel/pr/model"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -59,8 +60,8 @@ func (r *conflictRepo) oid(rev string) string {
 
 // conflictingPR builds the PRInfo shape FetchPR produces for a PR GitHub has
 // marked CONFLICTING, pointing at this repo's two branch tips.
-func (r *conflictRepo) conflictingPR() *PRInfo {
-	return &PRInfo{
+func (r *conflictRepo) conflictingPR() *model.PRInfo {
+	return &model.PRInfo{
 		Number:      7,
 		State:       "OPEN",
 		Mergeable:   "CONFLICTING",
@@ -165,7 +166,7 @@ var _ = Describe("DetectMergeConflicts", func() {
 	It("reports a missing endpoint rather than an empty conflict list", func() {
 		// GitHub nulls baseRef once the base branch is deleted, leaving the
 		// merge undefined rather than clean.
-		pr := &PRInfo{
+		pr := &model.PRInfo{
 			Number: 7, State: "OPEN", Mergeable: "CONFLICTING",
 			BaseRefName: "main", HeadRefName: "feature",
 			HeadRefOID: "0123456789abcdef0123456789abcdef01234567",
@@ -178,12 +179,12 @@ var _ = Describe("DetectMergeConflicts", func() {
 	})
 
 	DescribeTable("returns nothing for a PR GitHub is not blocking on conflicts",
-		func(pr *PRInfo) {
+		func(pr *model.PRInfo) {
 			Expect(DetectMergeConflicts(Options{Repo: conflictRepoSlug}, pr)).To(BeNil())
 		},
 		Entry("no PR at all", nil),
-		Entry("cleanly mergeable", &PRInfo{State: "OPEN", Mergeable: "MERGEABLE"}),
-		Entry("mergeability not yet computed", &PRInfo{State: "OPEN", Mergeable: "UNKNOWN"}),
-		Entry("already merged, where GitHub leaves a stale verdict", &PRInfo{State: "MERGED", Mergeable: "CONFLICTING"}),
+		Entry("cleanly mergeable", &model.PRInfo{State: "OPEN", Mergeable: "MERGEABLE"}),
+		Entry("mergeability not yet computed", &model.PRInfo{State: "OPEN", Mergeable: "UNKNOWN"}),
+		Entry("already merged, where GitHub leaves a stale verdict", &model.PRInfo{State: "MERGED", Mergeable: "CONFLICTING"}),
 	)
 })

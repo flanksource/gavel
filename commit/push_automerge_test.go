@@ -4,11 +4,11 @@ import (
 	"context"
 	"errors"
 
-	. "github.com/onsi/ginkgo/v2"
-	. "github.com/onsi/gomega"
-
 	clickyai "github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/github"
+	"github.com/flanksource/gavel/pr/model"
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 )
 
 var _ = Describe("commit -p --auto-merge", func() {
@@ -45,8 +45,8 @@ var _ = Describe("commit -p --auto-merge", func() {
 			},
 			rebaseOnto: func(_, _ string) error { return nil },
 			gitPush:    func(_, _ string) error { return nil },
-			createPR: func(github.Options, github.CreatePRInput) (*github.CreatePRResult, error) {
-				return &github.CreatePRResult{Number: 7, URL: "http://x/7", Title: "feat: work", NodeID: "PR_node_7", Base: "main"}, nil
+			createPR: func(github.Options, model.CreatePRInput) (*model.CreatePRResult, error) {
+				return &model.CreatePRResult{Number: 7, URL: "http://x/7", Title: "feat: work", NodeID: "PR_node_7", Base: "main"}, nil
 			},
 			enableAutoMerge: autoMerge,
 		}

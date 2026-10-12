@@ -58,14 +58,15 @@ func sectionLines(body, header string) []string {
 	want := "## " + header
 	var out []string
 	inSection := false
-	for _, line := range strings.Split(body, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == want || strings.HasPrefix(trimmed, want+" ") {
+	headings := topLevelSectionHeadings(body)
+	for i, line := range strings.Split(body, "\n") {
+		heading := headings[i]
+		if heading == want || strings.HasPrefix(heading, want+" ") {
 			inSection = true
 			continue
 		}
 		if inSection {
-			if strings.HasPrefix(trimmed, "## ") {
+			if heading != "" {
 				break
 			}
 			out = append(out, line)

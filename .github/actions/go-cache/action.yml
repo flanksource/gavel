@@ -1,0 +1,51 @@
+name: Restore Go cache
+description: >
+  Restore the Go build and module caches read-only. setup-go's built-in cache
+  is disabled everywhere because it lets whichever job finishes first own the
+  cache: the Lint job compiles only ./cmd/gavel, so its copy never contains
+  the test binaries the Test job spends minutes compiling, and setup-go only
+  saves on success, so a failing Test job cannot replace it. Instead every
+  job restores through this action and only the Test job saves, with
+  actions/cache/save keyed by the `key` output, so the one copy on the
+  default branch is always the most complete one. Must run after setup-go.
+
+outputs:
+  key:
+    description: Exact cache key for this go.mod/go.sum; pass to actions/cache/save.
+    value: ${{ steps.key.outputs.key }}
+  cache-hit:
+    description: true when the exact key was restored, so there is nothing new to save.
+    value: ${{ steps.restore.outputs.cache-hit }}
+  paths:
+    description: Newline-separated cache directories; pass to actions/cache/save.
+    value: ${{ steps.key.outputs.paths }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve Go cache key
+      id: key
+      shell: bash
+      env:
+        # hashFiles is evaluated in the workflow's workspace, so a go.sum
+        # change gives a new exact key while the prefix still matches the
+        # newest cache saved from the default branch (restore-keys below).
+        GO_SUM_HASH: ${{ hashFiles('go.mod', 'go.sum') }}
+      run: |
+        set -euo pipefail
+        echo "key=go-${RUNNER_OS}-${RUNNER_ARCH}-${GO_SUM_HASH}" >> "$GITHUB_OUTPUT"
+        echo "prefix=go-${RUNNER_OS}-${RUNNER_ARCH}-" >> "$GITHUB_OUTPUT"
+        {
+          echo 'paths<<EOF'
+          go env GOCACHE
+          go env GOMODCACHE
+          echo 'EOF'
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Restore Go cache
+      id: restore
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ steps.key.outputs.paths }}
+        key: ${{ steps.key.outputs.key }}
+        restore-keys: ${{ steps.key.outputs.prefix }}

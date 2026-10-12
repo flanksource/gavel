@@ -1,6 +1,11 @@
 package todos
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/text"
+)
 
 // ReplaceOrAppendSection replaces the markdown "## <header>" section in content
 // with newSection (which must include its own "## <header>" heading line), or
@@ -13,19 +18,20 @@ import "strings"
 func ReplaceOrAppendSection(content, header, newSection string, insertBefore ...string) string {
 	lines := strings.Split(content, "\n")
 	want := "## " + header
+	headings := topLevelSectionHeadings(content)
 
 	start, end, insertAt := -1, -1, -1
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
+	for i := range lines {
+		heading := headings[i]
 		switch {
-		case trimmed == want || strings.HasPrefix(trimmed, want+" "):
+		case heading == want || strings.HasPrefix(heading, want+" "):
 			if start < 0 {
 				start = i
 			}
-		case start >= 0 && end < 0 && strings.HasPrefix(trimmed, "## "):
+		case start >= 0 && end < 0 && heading != "":
 			end = i
 		}
-		if insertAt < 0 && matchesAny(trimmed, insertBefore) {
+		if insertAt < 0 && matchesAny(heading, insertBefore) {
 			insertAt = i
 		}
 	}
@@ -55,6 +61,20 @@ func ReplaceOrAppendSection(content, header, newSection string, insertBefore ...
 		b.WriteString(section)
 	}
 	return b.String()
+}
+
+func topLevelSectionHeadings(content string) map[int]string {
+	source := []byte(content)
+	document := goldmark.New().Parser().Parse(text.NewReader(source))
+	headings := make(map[int]string)
+	for _, heading := range documentHeadings(document) {
+		if heading.Level != 2 {
+			continue
+		}
+		line := strings.Count(content[:headingLineStart(source, heading)], "\n")
+		headings[line] = "## " + strings.TrimSpace(markdownNodeText(heading, source))
+	}
+	return headings
 }
 
 func matchesAny(trimmed string, headers []string) bool {

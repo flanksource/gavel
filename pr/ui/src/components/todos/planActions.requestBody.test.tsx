@@ -38,15 +38,18 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function fetchJSON(payload: unknown) {
-  const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => payload });
+function fetchLaunch(payload: unknown) {
+  const fetchMock = vi.fn().mockResolvedValue(new Response(
+    `event: resolved\ndata: ${JSON.stringify({ spec: {}, specYaml: '{}\n', step: 'run' })}\n\nevent: admitted\ndata: ${JSON.stringify({ ...payload as object, promptRunId: 'run-1', run: { promptRunId: 'run-1' } })}\n\n`,
+    { headers: { 'Content-Type': 'text/event-stream' } },
+  ));
   vi.stubGlobal('fetch', fetchMock);
   return fetchMock;
 }
 
 describe('usePlanActions request bodies', () => {
   it('sends only step/spec through approve, stripping the driver/runMode the caller carried', async () => {
-    const fetchMock = fetchJSON({ todo: { ref: 'todo-1', title: 'x', status: 'in_progress', priority: 'medium' } });
+    const fetchMock = fetchLaunch({ todo: { ref: 'todo-1', title: 'x', status: 'in_progress', priority: 'medium' } });
     const { result } = renderHook(() => usePlanActions('/workspace'), { wrapper: queryTestWrapper() });
     const options: TodoRunOptions = { driver: 'agent', runMode: 'plan', spec: { mode: 'agent', model: 'claude-opus-4-8', effort: 'high' } };
 
@@ -70,7 +73,7 @@ describe('usePlanActions request bodies', () => {
         recentAdvanced: {},
       }),
     );
-    const fetchMock = fetchJSON({ todo: { ref: 'todo-1', title: 'x', status: 'review', priority: 'medium' }, status: 'revising' });
+    const fetchMock = fetchLaunch({ todo: { ref: 'todo-1', title: 'x', status: 'review', priority: 'medium' }, status: 'revising' });
     const { result } = renderHook(() => usePlanActions('/workspace'), { wrapper: queryTestWrapper() });
 
     await act(async () => {
@@ -86,7 +89,7 @@ describe('usePlanActions request bodies', () => {
   });
 
   it('strips driver/runMode from answer options without asserting a step of its own', async () => {
-    const fetchMock = fetchJSON({ todo: { ref: 'todo-1', title: 'x', status: 'in_progress', priority: 'medium' }, status: 'resumed' });
+    const fetchMock = fetchLaunch({ todo: { ref: 'todo-1', title: 'x', status: 'in_progress', priority: 'medium' }, status: 'resumed' });
     const { result } = renderHook(() => usePlanActions('/workspace'), { wrapper: queryTestWrapper() });
     const options: TodoRunOptions = { driver: 'cmux', runMode: 'run', spec: { mode: 'cmux', model: 'gpt-5.5', effort: 'high' }, resume: true };
 

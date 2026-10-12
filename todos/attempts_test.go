@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	captainapi "github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -81,17 +82,20 @@ Some failure info.
 
 func TestFormatAttemptRow(t *testing.T) {
 	attempt := types.Attempt{
-		Status:     types.StatusCompleted,
-		Timestamp:  time.Date(2026, 2, 13, 15, 30, 0, 0, time.UTC),
-		Duration:   105 * time.Second,
-		Cost:       0.03,
-		Tokens:     9876,
-		Model:      "claude-code",
-		Commit:     "abc1234",
+		Status:    types.StatusCompleted,
+		Timestamp: time.Date(2026, 2, 13, 15, 30, 0, 0, time.UTC),
+		Duration:  105 * time.Second,
+		Cost:      0.03,
+		Tokens:    9876,
+		Model:     "claude-code",
+		Workspace: &captainapi.WorkspaceRecord{Commits: []captainapi.CommitRecord{
+			{SHA: "abc1234ffff", Message: "feat: one"}, {SHA: "def5678eeee", Message: "fix: two"},
+		}},
 		Transcript: "foo.attempts/attempt-2.md",
 	}
 
 	row := formatAttemptRow(2, attempt)
+	assert.Contains(t, row, "| `abc1234` `def5678` |")
 
 	assert.Contains(t, row, "| 2 |")
 	assert.Contains(t, row, "completed")
@@ -126,7 +130,10 @@ func TestSaveAttempt_WritesTranscriptAndTable(t *testing.T) {
 		TokensUsed: 12345,
 		CostUSD:    0.05,
 		Duration:   150 * time.Second,
-		CommitSHA:  "abc1234",
+		Workspace: &captainapi.WorkspaceRecord{
+			Worktree: &captainapi.WorktreeState{Branch: "shell/ab12", Setup: "5e7a0001", Head: "abc1234f", Removed: true},
+			Commits:  []captainapi.CommitRecord{{SHA: "abc1234f", Message: "feat: do it"}},
+		},
 		Transcript: NewExecutionTranscript(),
 	}
 
@@ -148,6 +155,7 @@ func TestSaveAttempt_WritesTranscriptAndTable(t *testing.T) {
 		"**Mode:** agent",
 		"**Model:** claude-sonnet-5",
 		"**Effort:** high",
+		"- **Branch:** `shell/ab12`\n- **Range:** `5e7a000..abc1234`\n- **Worktree:** removed\n- **Commit:** `abc1234` feat: do it\n",
 	} {
 		assert.Contains(t, string(transcriptContent), field)
 	}

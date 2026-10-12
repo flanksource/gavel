@@ -83,12 +83,13 @@ var _ = Describe("AI fixture final runtime resolution", func() {
 		Expect(resolved.Warnings).To(BeEmpty())
 	}, Entry("serialized ai.spec", true), Entry("explicit runner Spec", false))
 
-	It("checks the final fixture override against the retained profile constraint", func() {
+	It("lets the fixture's own model override the profile's default", func() {
 		options := api.ResolveSpecOptions{Layers: []api.SpecLayer{{Name: "review.catalog", Scope: api.SpecLayerGlobal,
-			Constraints: api.RuntimeConstraints{Models: []string{"claude-sonnet-4-6"}},
+			Spec: api.Spec{Model: api.Model{Name: "claude-sonnet-4-6"}},
 		}}}
-		_, _, err := resolveAIStepSpec(checklistFixture(&fixtures.FixtureAIConfig{Model: "api:gpt-5"}), fixtures.RunOptions{Runtime: &options}, &checklistResponse{})
-		Expect(err).To(MatchError(ContainSubstring("outside the effective model catalog")))
+		resolved, _, err := resolveAIStepSpec(checklistFixture(&fixtures.FixtureAIConfig{Model: "api:gpt-5"}), fixtures.RunOptions{Runtime: &options}, &checklistResponse{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(resolved.Spec.Name).To(Equal("gpt-5"))
 	})
 
 	It("rejects a snapshot whose fallback cannot honor its sandbox", func() {

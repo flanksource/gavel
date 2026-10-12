@@ -75,13 +75,13 @@ func runLint(opts LintOptions) (any, error) {
 	if opts.UI {
 		uiServer, uiListener = startTestUI(opts.Addr)
 		if uiServer != nil {
-			uiServer.SetStopFunc(cancelRun)
+			uiServer.SetStopFunc(standaloneUIStop(cancelRun))
 			uiServer.BeginRun("initial")
 			uiServer.SetRerunFunc(func(req testui.RerunRequest, output *testui.RerunOutputBuffer) error {
 				clicky.ClearGlobalTasks()
 				rerunCtx, cancelRerun := newStopContext(opts.Context, 0)
 				defer cancelRerun()
-				uiServer.SetStopFunc(cancelRerun)
+				uiServer.SetStopFunc(standaloneUIStop(cancelRerun))
 				uiServer.BeginRun("rerun")
 				rerunOpts := opts
 				rerunOpts.Context = rerunCtx
@@ -205,10 +205,17 @@ func runLint(opts LintOptions) (any, error) {
 		logger.V(1).Infof("wrote per-run snapshot to %s", path)
 	}
 
-	if opts.Summary {
-		return linters.NewSummaryView(allResults, opts.SummaryLimit), nil
+	return lintRunReturnValue(snap, opts), nil
+}
+
+func lintRunReturnValue(snap *testui.Snapshot, opts LintOptions) any {
+	if !isPrettyFormat() {
+		return snap
 	}
-	return allResults, nil
+	if opts.Summary {
+		return linters.NewSummaryView(snap.Lint, opts.SummaryLimit)
+	}
+	return snap.Lint
 }
 
 func executeLintRerun(base LintOptions, req testui.RerunRequest) ([]*linters.LinterResult, error) {

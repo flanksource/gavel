@@ -13,6 +13,7 @@ import (
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/models"
+	"github.com/flanksource/gavel/pr/model"
 	"github.com/flanksource/gavel/report"
 	"github.com/flanksource/gavel/testrunner/parsers"
 )
@@ -281,14 +282,14 @@ func compactGavelSummaries(summaries []*GavelResultsSummary) []*GavelResultsSumm
 	return usable
 }
 
-func removeRenderedArtifactComments(comments []github.PRComment, results []*GavelResultsSummary) []github.PRComment {
+func removeRenderedArtifactComments(comments []model.PRComment, results []*GavelResultsSummary) []model.PRComment {
 	commentIDs := make(map[int64]bool, len(results))
 	for _, result := range results {
 		if result != nil && result.CommentID != 0 {
 			commentIDs[result.CommentID] = true
 		}
 	}
-	filtered := make([]github.PRComment, 0, len(comments))
+	filtered := make([]model.PRComment, 0, len(comments))
 	for _, comment := range comments {
 		if !commentIDs[comment.ID] {
 			filtered = append(filtered, comment)

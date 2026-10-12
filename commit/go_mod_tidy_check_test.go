@@ -73,25 +73,30 @@ func TestTidyEnabled(t *testing.T) {
 		name string
 		flag string
 		cfg  *bool
+		push bool
 		want bool
 	}{
-		{"default (no flag, no config) is on", "", nil, true},
-		{"config false disables", "", ptrBool(false), false},
-		{"config true enables", "", ptrBool(true), true},
-		{"flag false overrides config true", "false", ptrBool(true), false},
-		{"flag true overrides config false", "true", ptrBool(false), true},
-		{"flag whitespace tolerated", "  TRUE  ", ptrBool(false), true},
-		{"unknown flag falls back to config", "maybe", ptrBool(false), false},
+		{"default (no flag, no config) is off", "", nil, false, false},
+		{"default with push is on", "", nil, true, true},
+		{"config false disables", "", ptrBool(false), false, false},
+		{"config false disables even with push", "", ptrBool(false), true, false},
+		{"config true enables", "", ptrBool(true), false, true},
+		{"flag false overrides config true", "false", ptrBool(true), false, false},
+		{"flag false overrides push", "false", nil, true, false},
+		{"flag true overrides config false", "true", ptrBool(false), false, true},
+		{"flag whitespace tolerated", "  TRUE  ", ptrBool(false), false, true},
+		{"unknown flag falls back to config", "maybe", ptrBool(false), true, false},
+		{"unknown flag falls back to push", "maybe", nil, true, true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			opts := Options{TidyFlag: c.flag, Config: verify.CommitConfig{Tidy: verify.CommitTidyConfig{Enabled: c.cfg}}}
+			opts := Options{TidyFlag: c.flag, Push: c.push, Config: verify.CommitConfig{Tidy: verify.CommitTidyConfig{Enabled: c.cfg}}}
 			assert.Equal(t, c.want, tidyEnabled(opts))
 		})
 	}
 }
 
-func TestApplyGoModTidy_OnByDefault(t *testing.T) {
+func TestApplyGoModTidy_OffByDefault(t *testing.T) {
 	repo := initCommitRepo(t)
 	writeGoMod(t, repo, "example.com/app")
 	withFindGoModRoots(t, []string{repo})
@@ -99,6 +104,19 @@ func TestApplyGoModTidy_OnByDefault(t *testing.T) {
 
 	src := stagedSource{Files: []string{"README.md"}}
 	got, err := applyGoModTidy(context.Background(), Options{WorkDir: repo}, src)
+	require.NoError(t, err)
+	assert.Empty(t, *calls, "no --tidy, no config, no --push -> runGoModTidy never called")
+	assert.Equal(t, src.Files, got.Files)
+}
+
+func TestApplyGoModTidy_OnByDefaultWhenPushing(t *testing.T) {
+	repo := initCommitRepo(t)
+	writeGoMod(t, repo, "example.com/app")
+	withFindGoModRoots(t, []string{repo})
+	calls := withStubbedTidyRecording(t, nil)
+
+	src := stagedSource{Files: []string{"README.md"}}
+	got, err := applyGoModTidy(context.Background(), Options{WorkDir: repo, Push: true}, src)
 	require.NoError(t, err)
 	assert.Equal(t, []string{repo}, *calls)
 	assert.Equal(t, src.Files, got.Files, "no changes -> source returned unchanged")
@@ -155,7 +173,7 @@ func TestApplyGoModTidy_SingleModuleChanged(t *testing.T) {
 	source, err := readStagedSource(repo)
 	require.NoError(t, err)
 
-	got, err := applyGoModTidy(context.Background(), Options{WorkDir: repo}, source)
+	got, err := applyGoModTidy(context.Background(), Options{WorkDir: repo, TidyFlag: "true"}, source)
 	require.NoError(t, err)
 	assert.Len(t, *calls, 1)
 	assert.Contains(t, got.Files, "go.mod", "tidied go.mod should be staged into refreshed source")
@@ -177,7 +195,7 @@ func TestApplyGoModTidy_NoChange(t *testing.T) {
 	require.NoError(t, err)
 	originalFiles := append([]string(nil), source.Files...)
 
-	got, err := applyGoModTidy(context.Background(), Options{WorkDir: repo}, source)
+	got, err := applyGoModTidy(context.Background(), Options{WorkDir: repo, TidyFlag: "true"}, source)
 	require.NoError(t, err)
 	assert.Len(t, *calls, 1)
 	assert.Equal(t, originalFiles, got.Files, "unchanged files -> source returned as-is")
@@ -206,7 +224,7 @@ func TestApplyGoModTidy_NestedModules(t *testing.T) {
 	source, err := readStagedSource(repo)
 	require.NoError(t, err)
 
-	got, err := applyGoModTidy(context.Background(), Options{WorkDir: repo}, source)
+	got, err := applyGoModTidy(context.Background(), Options{WorkDir: repo, TidyFlag: "true"}, source)
 	require.NoError(t, err)
 	assert.Equal(t, []string{repo, nested}, *calls)
 	log := logBuf.String()
@@ -224,7 +242,7 @@ func TestApplyGoModTidy_FailsLoudly(t *testing.T) {
 		return fmt.Errorf("network unreachable")
 	})
 
-	_, err := applyGoModTidy(context.Background(), Options{WorkDir: repo}, stagedSource{})
+	_, err := applyGoModTidy(context.Background(), Options{WorkDir: repo, TidyFlag: "true"}, stagedSource{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "go mod tidy in .")
 	assert.Contains(t, err.Error(), "network unreachable")
@@ -237,7 +255,7 @@ func TestApplyGoModTidy_NoGoModFiles(t *testing.T) {
 	logBuf := captureLogger(t)
 
 	src := stagedSource{Files: []string{"README.md"}}
-	got, err := applyGoModTidy(context.Background(), Options{WorkDir: repo}, src)
+	got, err := applyGoModTidy(context.Background(), Options{WorkDir: repo, TidyFlag: "true"}, src)
 	require.NoError(t, err)
 	assert.Empty(t, *calls, "no go.mod -> stub never called")
 	assert.Equal(t, src.Files, got.Files)
@@ -262,7 +280,7 @@ func TestApplyGoModTidy_GoSumCreated(t *testing.T) {
 	source, err := readStagedSource(repo)
 	require.NoError(t, err)
 
-	got, err := applyGoModTidy(context.Background(), Options{WorkDir: repo}, source)
+	got, err := applyGoModTidy(context.Background(), Options{WorkDir: repo, TidyFlag: "true"}, source)
 	require.NoError(t, err)
 	log := logBuf.String()
 	assert.Contains(t, log, "go mod tidy: updated ./go.sum")

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/flanksource/gavel/github"
+	"github.com/flanksource/gavel/pr/model"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -43,7 +43,7 @@ func TestFollowProgressLineCountsCheckStates(t *testing.T) {
 		{
 			name: "an unresolved thread is surfaced",
 			mutate: func(r *PRWatchResult) {
-				r.Comments = []github.PRComment{{ID: 1, IsReviewThread: true}}
+				r.Comments = []model.PRComment{{ID: 1, IsReviewThread: true}}
 			},
 			contains: []string{"1 unresolved comment(s)"},
 		},
@@ -59,8 +59,8 @@ func TestFollowProgressLineCountsCheckStates(t *testing.T) {
 		{
 			name: "a failed job under a green rollup",
 			mutate: func(r *PRWatchResult) {
-				r.Runs = map[int64]*github.WorkflowRun{
-					7: {DatabaseID: 7, Jobs: []github.Job{{Name: "e2e", Conclusion: "failure"}}},
+				r.Runs = map[int64]*model.WorkflowRun{
+					7: {DatabaseID: 7, Jobs: []model.Job{{Name: "e2e", Conclusion: "failure"}}},
 				}
 			},
 			contains: []string{"failed jobs present"},
@@ -88,10 +88,10 @@ func TestFollowProgressLineCountsCheckStates(t *testing.T) {
 func TestFollowProgressLineIsASingleLine(t *testing.T) {
 	result := singleCheckResult()
 	result.PR.StatusCheckRollup = append(result.PR.StatusCheckRollup,
-		github.StatusCheck{Name: "Analyze (go)", Status: "IN_PROGRESS", WorkflowName: "CodeQL"})
-	result.Comments = []github.PRComment{{ID: 1, IsReviewThread: true}}
-	result.Runs = map[int64]*github.WorkflowRun{
-		7: {DatabaseID: 7, Jobs: []github.Job{{Name: "e2e", Conclusion: "failure"}}},
+		model.StatusCheck{Name: "Analyze (go)", Status: "IN_PROGRESS", WorkflowName: "CodeQL"})
+	result.Comments = []model.PRComment{{ID: 1, IsReviewThread: true}}
+	result.Runs = map[int64]*model.WorkflowRun{
+		7: {DatabaseID: 7, Jobs: []model.Job{{Name: "e2e", Conclusion: "failure"}}},
 	}
 
 	line := followProgressLine(result, time.Minute)
@@ -102,9 +102,9 @@ func TestFollowProgressLineIsASingleLine(t *testing.T) {
 
 func singleCheckResult() *PRWatchResult {
 	return &PRWatchResult{
-		PR: &github.PRInfo{
+		PR: &model.PRInfo{
 			Number: 1,
-			StatusCheckRollup: github.StatusChecks{
+			StatusCheckRollup: model.StatusChecks{
 				{Name: "Test", Status: "COMPLETED", Conclusion: "SUCCESS", WorkflowName: "CI"},
 			},
 		},

@@ -66,6 +66,7 @@ func stageSessionFiles(workDir, sessionID string, cfg verify.CommitConfig) error
 	}
 
 	candidates := make([]string, 0, len(modified))
+	var missing []string
 	for _, p := range modified {
 		if !filepath.IsAbs(p) {
 			// Captain anchors every path to the cwd of the tool use that wrote it,
@@ -83,11 +84,34 @@ func stageSessionFiles(workDir, sessionID string, cfg verify.CommitConfig) error
 			logger.Infof("commit: skipping %s (edited outside %s)", p, absWork)
 			continue
 		}
-		if _, statErr := os.Stat(p); statErr != nil {
-			logger.Infof("commit: skipping %s (no longer present)", rel)
+		if link := symlinkedParent(absWork, rel); link != "" {
+			// git refuses any pathspec that traverses a symlink ("beyond a
+			// symbolic link"), so the file cannot be staged from this repo.
+			logger.Infof("commit: skipping %s (beyond symlink %s)", rel, link)
+			continue
+		}
+		if _, statErr := os.Lstat(p); statErr != nil {
+			if !os.IsNotExist(statErr) {
+				return fmt.Errorf("stat session file %q: %w", p, statErr)
+			}
+			missing = append(missing, rel)
 			continue
 		}
 		candidates = append(candidates, rel)
+	}
+
+	// A missing file the index still tracks was deleted by the session: `git add
+	// -A` stages that deletion. One git never tracked was a scratch file.
+	tracked, err := trackedFiles(absWork, missing)
+	if err != nil {
+		return fmt.Errorf("stage session %q: %w", sessionID, err)
+	}
+	for _, rel := range missing {
+		if _, ok := tracked[rel]; ok {
+			candidates = append(candidates, rel)
+		} else {
+			logger.Infof("commit: skipping %s (no longer present)", rel)
+		}
 	}
 
 	keep, err := filterIgnoredPaths(absWork, candidates, cfg)
@@ -99,6 +123,27 @@ func stageSessionFiles(workDir, sessionID string, cfg verify.CommitConfig) error
 		return fmt.Errorf("stage session %q (%d edited, all skipped): %w", sessionID, len(modified), ErrSessionNoFiles)
 	}
 	return addFiles(workDir, keep)
+}
+
+// symlinkedParent returns the first directory of rel (relative to root) that is
+// a symlink, or "" when none is. Directories that no longer exist cannot be
+// symlinks, so the walk stops at the first missing one.
+func symlinkedParent(root, rel string) string {
+	dir := root
+	for _, part := range strings.Split(filepath.Dir(rel), string(filepath.Separator)) {
+		if part == "." {
+			break
+		}
+		dir = filepath.Join(dir, part)
+		info, err := os.Lstat(dir)
+		if err != nil {
+			return ""
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return dir
+		}
+	}
+	return ""
 }
 
 // filterIgnoredPaths drops paths the repo's .gitignore (naming one to `git add`

@@ -2,12 +2,11 @@ package runtime
 
 import (
 	"encoding/json"
-	"os"
-	"path/filepath"
 
-	commonsdb "github.com/flanksource/commons-db/db"
+	"github.com/flanksource/commons-db/dbtest"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/todos"
+	"github.com/flanksource/gavel/todos/runtime/runtimetest"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
@@ -18,16 +17,7 @@ var _ = Describe("TODO Captain session hierarchy", Ordered, func() {
 	var provider *Provider
 
 	BeforeAll(func(ctx SpecContext) {
-		if os.Getenv("GAVEL_DB_EMBEDDED_TEST") == "" {
-			Skip("set GAVEL_DB_EMBEDDED_TEST=1 to run embedded-postgres native runtime tests")
-		}
-
-		dsn, stop, err := commonsdb.StartEmbedded(commonsdb.EmbeddedConfig{
-			DataDir:  filepath.Join(GinkgoT().TempDir(), "postgres"),
-			Database: "gavel_todo_session_hierarchy",
-		})
-		Expect(err).NotTo(HaveOccurred())
-		DeferCleanup(func() { Expect(stop()).To(Succeed()) })
+		dsn := dbtest.ForGinkgo(dbtest.Options{Name: "gavel_todo_session_hierarchy"}).DSN()
 
 		GinkgoT().Setenv(database.EnvDSN, dsn)
 		GinkgoT().Setenv(database.EnvDisable, "")
@@ -69,10 +59,11 @@ var _ = Describe("TODO Captain session hierarchy", Ordered, func() {
 				Title: "Track the " + tag + " operation", Status: types.StatusPending,
 			})
 			Expect(err).NotTo(HaveOccurred())
-			preparation, err := provider.PrepareRun(ctx, created, todos.RunPreparation{
+			preparation, err := runtimetest.Admit(ctx, provider, created, todos.RunPreparation{
 				Mode: mode, ExecutorName: "codex",
-			})
+			}, runtimetest.Started(""))
 			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(func() { provider.ownership.stop(preparation.PromptRunID) })
 			Expect(preparation.SessionID).NotTo(BeEmpty())
 
 			issue, err := provider.Repository().GetIssue(ctx, uuid.MustParse(created.ID))
@@ -121,15 +112,12 @@ var _ = Describe("TODO Captain session hierarchy", Ordered, func() {
 			Title: "Nest the provider transcript", Status: types.StatusPending,
 		})
 		Expect(err).NotTo(HaveOccurred())
-		preparation, err := provider.PrepareRun(ctx, created, todos.RunPreparation{
+		preparation, err := runtimetest.Admit(ctx, provider, created, todos.RunPreparation{
 			Mode: types.ModeRun, ExecutorName: "codex",
-		})
+		}, runtimetest.Started("todo-hierarchy-provider"))
 		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func() { provider.ownership.stop(preparation.PromptRunID) })
 		Expect(preparation.SessionID).NotTo(BeEmpty())
-		Expect(provider.RecordRunStart(ctx, created, todos.RunStartMetadata{
-			SessionID: "todo-hierarchy-provider", Provider: "openai",
-			RuntimeMode: "agent", Mode: "run",
-		})).To(Succeed())
 
 		issue, err := provider.Repository().GetIssue(ctx, uuid.MustParse(created.ID))
 		Expect(err).NotTo(HaveOccurred())

@@ -33,3 +33,30 @@ describe('named lifecycle step history', () => {
     expect(state.last.run).toBeUndefined();
   });
 });
+
+// A prompt body is rendered from one todo. Remembering it as a reusable run
+// choice replays that todo's prompt against every todo run afterwards.
+describe('run choice history without prompt content', () => {
+  const runtime = { mode: 'agent', model: 'example-model', effort: 'xhigh' as const };
+  const otherTodoPrompt = '## Other todo title\n\nOther todo body';
+  const attachment = { id: 'attachment-1', mediaType: 'image/png' };
+
+  it('drops the prompt body and attachments but keeps the rest of the prompt section', () => {
+    const options = { step: 'plan', spec: { ...runtime, prompt: { user: otherTodoPrompt, system: 'Shared system prompt', attachments: [attachment] } } };
+    const expected = { step: 'plan', spec: { ...runtime, prompt: { system: 'Shared system prompt' } } };
+    expect(rememberTodoRunOptionsForMode(options, true)).toEqual(expected);
+    expect(readRunChoiceState()).toEqual({ last: { plan: expected }, recentAdvanced: { plan: [expected] } });
+  });
+
+  it('removes a prompt section left empty instead of storing an explicit empty prompt', () => {
+    const remembered = rememberTodoRunOptionsForMode({ step: 'plan', spec: { ...runtime, prompt: { user: otherTodoPrompt } } });
+    expect(remembered).toEqual({ step: 'plan', spec: runtime });
+    expect(readRunChoiceState().last.plan?.spec).not.toHaveProperty('prompt');
+  });
+
+  it('strips prompt content already persisted by an earlier session', () => {
+    const persisted = { step: 'plan', spec: { ...runtime, prompt: { user: otherTodoPrompt } } };
+    localStorage.setItem('gavel.pr-ui.todoRunChoices.v3', JSON.stringify({ last: { plan: persisted }, recentAdvanced: { plan: [persisted] } }));
+    expect(readRunChoiceState()).toEqual({ last: { plan: { step: 'plan', spec: runtime } }, recentAdvanced: { plan: [{ step: 'plan', spec: runtime }] } });
+  });
+});

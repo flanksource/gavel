@@ -33,6 +33,32 @@ var _ = Describe("runtime profiler endpoint", func() {
 	})
 })
 
+var _ = Describe("metrics endpoint", func() {
+	get := func(remoteAddr string) *httptest.ResponseRecorder {
+		mux := http.NewServeMux()
+		registerMetrics(mux)
+		request := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+		request.RemoteAddr = remoteAddr
+		recorder := httptest.NewRecorder()
+		mux.ServeHTTP(recorder, request)
+		return recorder
+	}
+
+	It("serves the git state tracker's metrics to this host", func() {
+		recorder := get("127.0.0.1:54321")
+		Expect(recorder.Code).To(Equal(http.StatusOK))
+		Expect(recorder.Body.String()).To(SatisfyAll(
+			ContainSubstring("gavel_git_tracked_repos "),
+			ContainSubstring("gavel_git_scans_in_flight "),
+			ContainSubstring("gavel_git_ranges_computed_total "),
+		))
+	})
+
+	It("hides the metrics from off-host callers", func() {
+		Expect(get("10.1.2.3:54321").Code).To(Equal(http.StatusNotFound))
+	})
+})
+
 var _ = Describe("ingest counter endpoint", func() {
 	get := func(read func() (monitor.IngestStats, bool), remoteAddr string) *httptest.ResponseRecorder {
 		mux := http.NewServeMux()

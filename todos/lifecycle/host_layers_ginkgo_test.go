@@ -126,30 +126,23 @@ var _ = Describe("todo spec layers", func() {
 		})
 	})
 
+	// todos.timeout is a project DEFAULT, not a cap: it supplies the deadline
+	// nothing above it names, and a prompt or a request that names its own wins.
 	Describe("todos.timeout", func() {
-		It("lowers a longer budget the prompt declared", func() {
-			cfg := verify.GavelConfig{Todos: verify.TodosConfig{Timeout: "45m"}}
+		DescribeTable("yields the deadline to whichever layer above it names one",
+			func(front, request api.Spec, expected string) {
+				cfg := verify.GavelConfig{Todos: verify.TodosConfig{Timeout: "45m"}}
 
-			spec := resolveRun(cfg, api.Spec{Budget: api.Budget{Timeout: "90m"}}, api.Spec{})
+				spec := resolveRun(cfg, front, request)
 
-			Expect(spec.Budget.Timeout).To(Equal("45m"))
-		})
-
-		It("never raises a shorter budget the prompt declared", func() {
-			cfg := verify.GavelConfig{Todos: verify.TodosConfig{Timeout: "45m"}}
-
-			spec := resolveRun(cfg, api.Spec{Budget: api.Budget{Timeout: "10m"}}, api.Spec{})
-
-			Expect(spec.Budget.Timeout).To(Equal("10m"))
-		})
-
-		It("caps a request that asked for longer", func() {
-			cfg := verify.GavelConfig{Todos: verify.TodosConfig{Timeout: "45m"}}
-
-			spec := resolveRun(cfg, api.Spec{}, api.Spec{Budget: api.Budget{Timeout: "3h"}})
-
-			Expect(spec.Budget.Timeout).To(Equal("45m"))
-		})
+				Expect(spec.Budget.Timeout).To(Equal(expected))
+			},
+			Entry("a longer prompt deadline", api.Spec{Budget: api.Budget{Timeout: "90m"}}, api.Spec{}, "90m"),
+			Entry("a shorter prompt deadline", api.Spec{Budget: api.Budget{Timeout: "10m"}}, api.Spec{}, "10m"),
+			Entry("a longer request deadline", api.Spec{}, api.Spec{Budget: api.Budget{Timeout: "3h"}}, "3h"),
+			Entry("a request over a prompt", api.Spec{Budget: api.Budget{Timeout: "90m"}}, api.Spec{Budget: api.Budget{Timeout: "5m"}}, "5m"),
+			Entry("nothing above it", api.Spec{}, api.Spec{}, "45m"),
+		)
 
 		It("leaves the rest of the frontmatter's budget alone", func() {
 			cfg := verify.GavelConfig{Todos: verify.TodosConfig{Timeout: "45m"}}
@@ -163,8 +156,11 @@ var _ = Describe("todo spec layers", func() {
 		})
 	})
 
+	// Permissions layer like every other field: a restriction authored below is a
+	// default, so a request may widen it. What a step must never widen is pinned
+	// after the fold by ApplyClassInvariants, not by a ceiling on a layer.
 	Describe("permissions", func() {
-		It("keeps prompt frontmatter restrictions as request ceilings", func() {
+		It("lets a request restore a tool the prompt frontmatter denied", func() {
 			in := runLayerInput(verify.GavelConfig{}, api.Spec{}, api.Spec{
 				Permissions: api.Permissions{Tools: api.Tools{"Bash": api.ToolPolicyAllow}},
 			})
@@ -172,47 +168,79 @@ var _ = Describe("todo spec layers", func() {
 				Permissions: api.Permissions{Tools: api.Tools{"Bash": api.ToolPolicyDeny}},
 			})}
 
-			_, err := lifecycle.ResolveLayers(in)
+			resolved, err := lifecycle.ResolveLayers(in)
 
-			Expect(err).To(MatchError(And(ContainSubstring("permissions.tools.Bash"), ContainSubstring("todos-run.prompt"), ContainSubstring("request"))))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resolved.Spec.Permissions.Tools).To(Equal(api.Tools{"Bash": api.ToolPolicyAllow}))
 		})
 
-		DescribeTable("projects project permission ceilings into Captain constraints",
-			func(configured, requested api.Spec, field string) {
+		DescribeTable("lets a request replace what the project configured",
+			func(configured, requested api.Spec, effective func(api.Spec)) {
 				cfg := verify.GavelConfig{AI: configured}
-				_, err := lifecycle.ResolveLayers(runLayerInput(cfg, api.Spec{}, requested))
-				Expect(err).To(MatchError(And(ContainSubstring(field), ContainSubstring(".gavel.yaml ai"), ContainSubstring("request"))))
+
+				resolved, err := lifecycle.ResolveLayers(runLayerInput(cfg, api.Spec{}, requested))
+
+				Expect(err).NotTo(HaveOccurred())
+				effective(resolved.Spec)
 			},
 			Entry("tool denial",
 				api.Spec{Permissions: api.Permissions{Tools: api.Tools{"Bash": api.ToolPolicyDeny}}},
-				api.Spec{Permissions: api.Permissions{Tools: api.Tools{"Bash": api.ToolPolicyAllow}}}, "permissions.tools.Bash"),
+				api.Spec{Permissions: api.Permissions{Tools: api.Tools{"Bash": api.ToolPolicyAllow}}},
+				func(spec api.Spec) {
+					Expect(spec.Permissions.Tools).To(Equal(api.Tools{"Bash": api.ToolPolicyAllow}))
+				}),
 			Entry("permission posture",
 				api.Spec{Permissions: api.Permissions{Mode: api.PermissionPlan}},
-				api.Spec{Permissions: api.Permissions{Mode: api.PermissionAcceptEdits}}, "permissions.mode"),
+				api.Spec{Permissions: api.Permissions{Mode: api.PermissionAcceptEdits}},
+				func(spec api.Spec) {
+					Expect(spec.Permissions.Mode).To(Equal(api.PermissionAcceptEdits))
+				}),
+			Entry("an unordered posture below a request",
+				api.Spec{Permissions: api.Permissions{Mode: api.PermissionAuto}},
+				api.Spec{Permissions: api.Permissions{Mode: api.PermissionPlan}},
+				func(spec api.Spec) {
+					Expect(spec.Permissions.Mode).To(Equal(api.PermissionPlan))
+				}),
 			Entry("disabled skill",
 				api.Spec{Permissions: api.Permissions{Skills: api.ResourcePolicies{"review": api.ResourceDisabled}}},
-				api.Spec{Permissions: api.Permissions{Skills: api.ResourcePolicies{"review": api.ResourceEnabled}}}, "permissions.skills.review"),
-			Entry("sandbox allowlist",
+				api.Spec{Permissions: api.Permissions{Skills: api.ResourcePolicies{"review": api.ResourceEnabled}}},
+				func(spec api.Spec) {
+					Expect(spec.Permissions.Skills).To(Equal(api.ResourcePolicies{"review": api.ResourceEnabled}))
+				}),
+			Entry("sandbox",
 				api.Spec{Sandbox: &api.SandboxRef{Mode: api.SandboxNative}},
-				api.Spec{Sandbox: &api.SandboxRef{Mode: api.SandboxOff}}, "sandbox.mode"),
+				api.Spec{Sandbox: &api.SandboxRef{Mode: api.SandboxOff}},
+				func(spec api.Spec) {
+					Expect(spec.Sandbox.Mode).To(Equal(api.SandboxOff))
+				}),
 		)
 
-		DescribeTable("rejects a request that clears a project tool denial",
-			func(encoded string) {
+		// A request clears a project tool policy only by actually naming the tool
+		// map. Mentioning the section without supplying one leaves it alone, so a
+		// payload that always carries a `permissions` object cannot quietly drop
+		// the policy the project authored.
+		DescribeTable("clears a project tool denial only when the request names the tool map",
+			func(encoded string, expected api.Tools) {
 				var request api.Spec
 				Expect(json.Unmarshal([]byte(encoded), &request)).To(Succeed())
 				cfg := verify.GavelConfig{AI: api.Spec{Permissions: api.Permissions{Tools: api.Tools{"Bash": api.ToolPolicyDeny}}}}
 
-				_, err := lifecycle.ResolveLayers(runLayerInput(cfg, api.Spec{}, request))
+				resolved, err := lifecycle.ResolveLayers(runLayerInput(cfg, api.Spec{}, request))
 
-				Expect(err).To(MatchError(And(ContainSubstring("permissions.tools.Bash"), ContainSubstring(".gavel.yaml ai"), ContainSubstring("request"))))
+				Expect(err).NotTo(HaveOccurred())
+				if len(expected) == 0 {
+					Expect(resolved.Spec.Permissions.Tools).To(BeEmpty())
+					return
+				}
+				Expect(resolved.Spec.Permissions.Tools).To(Equal(expected))
 			},
-			Entry("empty map", `{"permissions":{"tools":{}}}`),
-			Entry("null map", `{"permissions":{"tools":null}}`),
-			Entry("empty permissions", `{"permissions":{}}`),
+			Entry("empty tool map", `{"permissions":{"tools":{}}}`, api.Tools(nil)),
+			Entry("null tool map", `{"permissions":{"tools":null}}`, api.Tools(nil)),
+			Entry("empty permissions", `{"permissions":{}}`, api.Tools{"Bash": api.ToolPolicyDeny}),
+			Entry("empty request", `{}`, api.Tools{"Bash": api.ToolPolicyDeny}),
 		)
 
-		It("keeps a global project ceiling when a step config tries to widen it", func() {
+		It("lets the step config widen what the global project config denied", func() {
 			cfg := verify.GavelConfig{
 				AI: api.Spec{Permissions: api.Permissions{Tools: api.Tools{"Bash": api.ToolPolicyDeny}}},
 				Todos: verify.TodosConfig{Run: verify.PromptSpec{Spec: api.Spec{
@@ -220,9 +248,10 @@ var _ = Describe("todo spec layers", func() {
 				}}},
 			}
 
-			_, err := lifecycle.ResolveLayers(runLayerInput(cfg, api.Spec{}, api.Spec{}))
+			resolved, err := lifecycle.ResolveLayers(runLayerInput(cfg, api.Spec{}, api.Spec{}))
 
-			Expect(err).To(MatchError(And(ContainSubstring("permissions.tools.Bash"), ContainSubstring(".gavel.yaml ai"), ContainSubstring(".gavel.yaml todos.run"))))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resolved.Spec.Permissions.Tools).To(Equal(api.Tools{"Bash": api.ToolPolicyAllow}))
 		})
 
 		It("allows a request to narrow tool and sandbox authority", func() {
@@ -249,10 +278,9 @@ var _ = Describe("todo spec layers", func() {
 			Expect(spec.Permissions.Mode).To(Equal(api.PermissionDontAsk))
 		})
 
-		It("keeps the CLI host out of the prompt's declared posture", func() {
+		It("runs the prompt's declared posture when the request names none", func() {
 			in := runLayerInput(verify.GavelConfig{},
 				api.Spec{Permissions: api.Permissions{Mode: api.PermissionAcceptEdits}}, api.Spec{})
-			in.Host = lifecycle.HostCLI
 
 			resolved, err := lifecycle.ResolveLayers(in)
 
@@ -260,26 +288,17 @@ var _ = Describe("todo spec layers", func() {
 			Expect(resolved.Spec.Permissions.Mode).To(Equal(api.PermissionAcceptEdits))
 		})
 
-		It("puts the dashboard host on permissions.mode default so the broker is consulted", func() {
+		It("lets the run dialog's permissions.mode override the declared posture", func() {
 			in := runLayerInput(verify.GavelConfig{},
-				api.Spec{Permissions: api.Permissions{Mode: api.PermissionAcceptEdits}}, api.Spec{})
-			in.Host = lifecycle.HostDashboard
+				api.Spec{Permissions: api.Permissions{Mode: api.PermissionAcceptEdits}},
+				api.Spec{Permissions: api.Permissions{Mode: api.PermissionDefault}})
 
 			resolved, err := lifecycle.ResolveLayers(in)
 
 			Expect(err).ToNot(HaveOccurred())
 			Expect(resolved.Spec.Permissions.Mode).To(Equal(api.PermissionDefault))
-		})
-
-		It("still lets the request override the dashboard's posture", func() {
-			in := runLayerInput(verify.GavelConfig{}, api.Spec{},
-				api.Spec{Permissions: api.Permissions{Mode: api.PermissionPlan}})
-			in.Host = lifecycle.HostDashboard
-
-			resolved, err := lifecycle.ResolveLayers(in)
-
-			Expect(err).ToNot(HaveOccurred())
-			Expect(resolved.Spec.Permissions.Mode).To(Equal(api.PermissionPlan))
+			Expect(resolved.Provenance).To(HaveKeyWithValue("/permissions/mode",
+				HaveField("Source.Name", "request")))
 		})
 
 		// The regression: an approval-capable host used to rewrite the tool map to
@@ -287,9 +306,9 @@ var _ = Describe("todo spec layers", func() {
 		// the policy gate instead of prompting. Approval is a permission MODE plus a
 		// broker now, never a per-tool policy.
 		DescribeTable("never emits a per-tool ask on any layer",
-			func(host lifecycle.HostKind, step string, cfg verify.GavelConfig, front api.Spec, request api.Spec) {
+			func(step string, cfg verify.GavelConfig, front api.Spec, request api.Spec) {
 				in := lifecycle.LayerInput{
-					Config: cfg, Step: step, Host: host, Request: request,
+					Config: cfg, Step: step, Request: request,
 					Frontmatter: []api.SpecLayer{api.PromptSpecLayer("todos-"+step+".prompt", front)},
 					Todos:       []*types.TODO{{TODOFrontmatter: types.TODOFrontmatter{Title: "t", LLM: &types.LLM{Model: "opus"}}}},
 				}
@@ -302,12 +321,11 @@ var _ = Describe("todo spec layers", func() {
 				Expect(err).ToNot(HaveOccurred())
 				Expect(askPolicies(resolved.Spec.Permissions)).To(BeEmpty())
 			},
-			Entry("cli run", lifecycle.HostCLI, "run", verify.GavelConfig{}, api.Spec{}, api.Spec{}),
-			Entry("dashboard run", lifecycle.HostDashboard, "run", verify.GavelConfig{}, api.Spec{}, api.Spec{}),
-			Entry("dashboard plan", lifecycle.HostDashboard, "plan", verify.GavelConfig{}, api.Spec{}, api.Spec{}),
-			Entry("dashboard verify", lifecycle.HostDashboard, "verify", verify.GavelConfig{}, api.Spec{}, api.Spec{}),
-			Entry("dashboard run with an allowlist",
-				lifecycle.HostDashboard, "run", verify.GavelConfig{},
+			Entry("run", "run", verify.GavelConfig{}, api.Spec{}, api.Spec{}),
+			Entry("plan", "plan", verify.GavelConfig{}, api.Spec{}, api.Spec{}),
+			Entry("verify", "verify", verify.GavelConfig{}, api.Spec{}, api.Spec{}),
+			Entry("run with an allowlist",
+				"run", verify.GavelConfig{},
 				api.Spec{Permissions: api.Permissions{Tools: api.ToolsFromLists([]string{"Read", "Edit"}, nil)}},
 				api.Spec{}),
 		)
@@ -327,21 +345,28 @@ var _ = Describe("todo spec layers", func() {
 			Expect(resolved.Spec.Budget.MaxTurns).To(Equal(5))
 		})
 
-		It("yields to the host's posture and to the caller's own request", func() {
-			in := runLayerInput(verify.GavelConfig{}, api.Spec{},
-				api.Spec{Budget: api.Budget{MaxTurns: 2}})
-			in.Host = lifecycle.HostDashboard
-			in.Prior = []api.SpecLayer{api.RequestSpecLayer("prior run", api.Spec{
+		It("inherits the prior run's posture unless the caller's request names one", func() {
+			prior := []api.SpecLayer{api.RequestSpecLayer("prior run", api.Spec{
 				Budget:      api.Budget{MaxTurns: 5},
 				Permissions: api.Permissions{Mode: api.PermissionBypass},
 			})}
+			inherited := runLayerInput(verify.GavelConfig{},
+				api.Spec{Permissions: api.Permissions{Mode: api.PermissionAcceptEdits}},
+				api.Spec{Budget: api.Budget{MaxTurns: 2}})
+			inherited.Prior = prior
+			overridden := runLayerInput(verify.GavelConfig{},
+				api.Spec{Permissions: api.Permissions{Mode: api.PermissionAcceptEdits}},
+				api.Spec{Permissions: api.Permissions{Mode: api.PermissionDefault}})
+			overridden.Prior = prior
 
-			resolved, err := lifecycle.ResolveLayers(in)
-
+			fromPrior, err := lifecycle.ResolveLayers(inherited)
 			Expect(err).ToNot(HaveOccurred())
-			Expect(resolved.Spec.Budget.MaxTurns).To(Equal(2))
-			Expect(resolved.Spec.Permissions.Mode).To(Equal(api.PermissionDefault),
-				"a continuation runs where it is continued from, not where it started")
+			fromRequest, err := lifecycle.ResolveLayers(overridden)
+			Expect(err).ToNot(HaveOccurred())
+
+			Expect(fromPrior.Spec.Budget.MaxTurns).To(Equal(2))
+			Expect(fromPrior.Spec.Permissions.Mode).To(Equal(api.PermissionBypass))
+			Expect(fromRequest.Spec.Permissions.Mode).To(Equal(api.PermissionDefault))
 		})
 
 		It("contributes no layer when the prior run configured nothing", func() {
@@ -361,7 +386,6 @@ var _ = Describe("todo spec layers", func() {
 			in := runLayerInput(cfg, api.Spec{Budget: api.Budget{MaxTokens: 10}},
 				api.Spec{Model: api.Model{Effort: api.EffortHigh}})
 			in.StepSpec = api.Spec{Permissions: api.Permissions{Mode: api.PermissionAcceptEdits}}
-			in.Host = lifecycle.HostDashboard
 			in.Todos = []*types.TODO{{TODOFrontmatter: types.TODOFrontmatter{Title: "widen", LLM: &types.LLM{MaxCost: 2}}}}
 
 			Expect(layerNames(in)).To(Equal([]string{
@@ -371,7 +395,6 @@ var _ = Describe("todo spec layers", func() {
 				"lifecycle step run",
 				".gavel.yaml todos.run",
 				"todo widen",
-				"host dashboard",
 				"request",
 			}))
 		})
@@ -379,7 +402,7 @@ var _ = Describe("todo spec layers", func() {
 		It("omits a layer that configures nothing", func() {
 			Expect(layerNames(runLayerInput(verify.GavelConfig{}, api.Spec{}, api.Spec{}))).To(
 				Equal([]string{".gavel.yaml ai", "todos-run.prompt"}),
-				"an empty todos.timeout, lifecycle step, todos.<step>, todo llm:, host and request contribute no layer")
+				"an empty todos.timeout, lifecycle step, todos.<step>, todo llm: and request contribute no layer")
 		})
 
 		It("records the resolved order as captain's trace", func() {
@@ -441,6 +464,21 @@ var _ = Describe("todo spec layers", func() {
 			in := lifecycle.LayerInput{Config: verify.GavelConfig{}, Step: "handoff"}
 
 			Expect(layerNames(in)).ToNot(ContainElement(".gavel.yaml todos.handoff"))
+		})
+	})
+
+	Describe("commit policies", func() {
+		It("merges a request's run stanza into the lifecycle step's by phase", func() {
+			stepCommit := api.Commit{On: api.CommitOnRun, Stage: api.CommitStageWorktree, Gates: api.CommitGatesFull}
+			in := runLayerInput(verify.GavelConfig{}, api.Spec{},
+				api.Spec{Workflow: &api.Workflow{Commits: []api.Commit{{On: api.CommitOnRun}}}})
+			in.StepSpec = api.Spec{Workflow: &api.Workflow{Commits: []api.Commit{stepCommit}}}
+
+			resolved, err := lifecycle.ResolveLayers(in)
+
+			Expect(err).ToNot(HaveOccurred())
+			Expect(resolved.Spec.Workflow.Commits).To(Equal([]api.Commit{stepCommit}),
+				"a request naming only the phase must keep the step's staging and gates")
 		})
 	})
 

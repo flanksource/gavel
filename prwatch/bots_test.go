@@ -3,7 +3,7 @@ package prwatch
 import (
 	"testing"
 
-	"github.com/flanksource/gavel/github"
+	"github.com/flanksource/gavel/pr/model"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -35,7 +35,7 @@ func TestIdentifyBot(t *testing.T) {
 }
 
 func TestAnnotateBots(t *testing.T) {
-	comments := []github.PRComment{
+	comments := []model.PRComment{
 		{ID: 1, Author: "coderabbitai[bot]", Body: "review"},
 		{ID: 2, Author: "vercel[bot]", Body: "preview ready"},
 		{ID: 3, Author: "octocat", Body: "looks good"},

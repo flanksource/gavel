@@ -25,6 +25,7 @@ const pageTemplateSource = `<!DOCTYPE html>
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <meta name="apple-mobile-web-app-title" content="gavel">
+    <meta name="gavel-ui-build" content="{{.UIBuild}}">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;500;600;700&family=Fira+Code:wght@400;500;600&display=swap" rel="stylesheet">
@@ -48,13 +49,15 @@ const pageTemplateSource = `<!DOCTYPE html>
 
 var pageTemplate = template.Must(template.New("page").Parse(pageTemplateSource))
 
-// pageData binds the shell's two dynamic values. BundleCSS is the embedded
+// pageData binds the shell's dynamic values. BundleCSS is the embedded
 // build artifact, marked as CSS so html/template emits it verbatim; Build is
 // rendered by html/template's JS-context escaper, which serializes it as JSON
-// and neutralizes any quote or `</script>` a build stamp might carry.
+// and neutralizes any quote or `</script>` a build stamp might carry. UIBuild is
+// the embedded bundle's id, compared by the page against the /api/events hello.
 type pageData struct {
 	BundleCSS template.CSS
 	Build     BuildInfo
+	UIBuild   string
 }
 
 // pageHTML renders the dashboard shell. The template is static and validated at
@@ -64,7 +67,7 @@ type pageData struct {
 // broken embed.
 func pageHTML() string {
 	var buf strings.Builder
-	if err := pageTemplate.Execute(&buf, pageData{BundleCSS: template.CSS(bundleCSS), Build: Build}); err != nil {
+	if err := pageTemplate.Execute(&buf, pageData{BundleCSS: template.CSS(bundleCSS), Build: Build, UIBuild: uiBuildID}); err != nil {
 		panic("ui: render dashboard page: " + err.Error())
 	}
 	return buf.String()

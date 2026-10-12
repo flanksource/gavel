@@ -195,13 +195,43 @@ function quotedPreformatted(value: string): string {
   return [`> ${fence}`, ...clean.split('\n').map(line => `> ${line}`), `> ${fence}`].join('\n');
 }
 
+function nestCommentHeadings(markdown: string): string {
+  const lines = markdown.replace(/\r\n?/g, '\n').split('\n');
+  let fence: { marker: string; length: number } | null = null;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const delimiter = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
+    if (fence) {
+      if (delimiter && delimiter[1][0] === fence.marker && delimiter[1].length >= fence.length && !delimiter[2].trim()) fence = null;
+      continue;
+    }
+    if (delimiter) {
+      fence = { marker: delimiter[1][0], length: delimiter[1].length };
+      continue;
+    }
+    const heading = line.match(/^( {0,3})(#{1,6})([ \t]+|$)(.*)$/);
+    if (heading) {
+      lines[i] = `${heading[1]}${'#'.repeat(Math.min(6, heading[2].length + 3))}${heading[3]}${heading[4]}`;
+      continue;
+    }
+    const setext = lines[i + 1]?.match(/^ {0,3}(=+|-+)[ \t]*$/);
+    if (setext && line.trim()) {
+      lines[i] = `${'#'.repeat(setext[1][0] === '=' ? 4 : 5)} ${line.trim()}`;
+      lines.splice(i + 1, 1);
+    }
+  }
+  return lines.join('\n');
+}
+
 function formatCandidate(candidate: PRTodoCandidate): string {
   const detail = candidate.detail;
-  const parts = [`#### ${stripAnsi(detail.heading).replace(/\r?\n/g, ' ')}`];
+  const parts = [`${candidate.group === 'comments' ? '###' : '####'} ${stripAnsi(detail.heading).replace(/\r?\n/g, ' ')}`];
   if (detail.location) parts.push(`**Location:** ${inlineCode(detail.location)}`);
-  if (detail.meta) parts.push(`**Details:** ${stripAnsi(detail.meta).replace(/\r?\n/g, ' ')}`);
+  if (detail.meta) parts.push(`**${candidate.group === 'comments' ? 'Author' : 'Details'}:** ${stripAnsi(detail.meta).replace(/\r?\n/g, ' ')}`);
   if (detail.message) parts.push(`**Message**\n\n${quotedPreformatted(detail.message)}`);
   if (detail.log) parts.push(`**Log**\n\n${quotedPreformatted(detail.log)}`);
+  if (detail.markdown) parts.push(nestCommentHeadings(detail.markdown));
+  if (detail.url && candidate.group === 'comments') parts.push(`[View comment on GitHub](${detail.url})`);
   return parts.join('\n\n');
 }
 
@@ -215,23 +245,25 @@ export function buildPRTodoBody(
     `_From [${pr.repo}#${pr.number}](${pr.url})._`,
   ].filter(Boolean);
   const failures = selected.filter(isPRTodoCriterion);
-  if (failures.length === 0) return parts.join('\n\n');
+  if (failures.length > 0) {
+    const grouped = new Map<'tests' | 'lint', PRTodoCandidate[]>();
+    for (const candidate of failures) {
+      const group = candidate.group as 'tests' | 'lint';
+      const groupCandidates = grouped.get(group);
+      if (groupCandidates) groupCandidates.push(candidate);
+      else grouped.set(group, [candidate]);
+    }
 
-  const grouped = new Map<'tests' | 'lint', PRTodoCandidate[]>();
-  for (const candidate of failures) {
-    const group = candidate.group as 'tests' | 'lint';
-    const groupCandidates = grouped.get(group);
-    if (groupCandidates) groupCandidates.push(candidate);
-    else grouped.set(group, [candidate]);
+    const details = ['## Failure details'];
+    for (const [group, candidates] of grouped) {
+      details.push(
+        `### ${group === 'tests' ? 'Failing tests' : 'Lint violations'}`,
+        candidates.map(formatCandidate).join('\n\n'),
+      );
+    }
+    parts.push(details.join('\n\n'));
   }
-
-  const details = ['## Failure details'];
-  for (const [group, candidates] of grouped) {
-    details.push(
-      `### ${group === 'tests' ? 'Failing tests' : 'Lint violations'}`,
-      candidates.map(formatCandidate).join('\n\n'),
-    );
-  }
-  parts.push(details.join('\n\n'));
+  const comments = selected.filter(candidate => candidate.group === 'comments');
+  if (comments.length > 0) parts.push(['## Review comments', comments.map(formatCandidate).join('\n\n')].join('\n\n'));
   return parts.join('\n\n');
 }

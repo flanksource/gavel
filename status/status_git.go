@@ -5,20 +5,31 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	rpchttp "github.com/flanksource/clicky/rpc/http"
-	"github.com/flanksource/gavel/utils"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
+
+	rpchttp "github.com/flanksource/clicky/rpc/http"
+	"github.com/flanksource/gavel/utils"
+	"github.com/flanksource/gavel/verify"
 )
 
-func runGitStatus(ctx context.Context, workDir string) ([]byte, error) {
+// withGitConfig prefixes args with the global git options in gitArgs.
+func withGitConfig(gitArgs []string, args ...string) []string {
+	return append(append(make([]string, 0, len(gitArgs)+len(args)), gitArgs...), args...)
+}
+
+func runGitStatus(ctx context.Context, workDir string, gitConfig []string, expandUntracked bool) ([]byte, error) {
 	stopGit := rpchttp.Track(ctx, "git")
 	defer stopGit()
-	cmd := exec.CommandContext(ctx, "git", "status", "--porcelain=v1", "-z")
+	args := withGitConfig(gitConfig, "status", "--porcelain=v1", "-z")
+	if expandUntracked {
+		args = append(args, "--untracked-files=all")
+	}
+	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = workDir
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
@@ -29,10 +40,10 @@ func runGitStatus(ctx context.Context, workDir string) ([]byte, error) {
 	return out, nil
 }
 
-func currentBranch(ctx context.Context, workDir string) (string, error) {
+func currentBranch(ctx context.Context, workDir string, gitConfig []string) (string, error) {
 	stopGit := rpchttp.Track(ctx, "git")
 	defer stopGit()
-	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--abbrev-ref", "HEAD")
+	cmd := exec.CommandContext(ctx, "git", withGitConfig(gitConfig, "rev-parse", "--abbrev-ref", "HEAD")...)
 	cmd.Dir = workDir
 	out, err := cmd.Output()
 	if err != nil {
@@ -118,28 +129,50 @@ func filterByFolder(files []FileStatus, prefix string) []FileStatus {
 // but ignored bundles (e.g. testrunner/ui/dist/testui.js) don't surface as
 // modifications. Staged files are kept regardless: what status shows then
 // matches what `gavel commit` will commit, and a manually `git add`-ed ignored
-// file stays visible. A !-negation in .gitignore re-includes a path.
-func filterGitIgnored(files []FileStatus, workDir string) []FileStatus {
+// file stays visible. A !-negation in Git's ignore rules re-includes a path.
+func filterGitIgnored(files []FileStatus, workDir string) ([]FileStatus, error) {
 	paths := make([]string, len(files))
 	for i, f := range files {
 		paths[i] = filepath.Join(workDir, f.Path)
 	}
-	_, ignored := utils.PartitionGitIgnored(paths, workDir)
-	if len(ignored) == 0 {
-		return files
+	ignored, err := utils.GitIgnoredPaths(paths, workDir)
+	if err != nil {
+		return nil, fmt.Errorf("check ignored project files: %w", err)
 	}
-	ignoredSet := make(map[string]struct{}, len(ignored))
-	for _, p := range ignored {
-		ignoredSet[p] = struct{}{}
+	if len(ignored) == 0 {
+		return files, nil
 	}
 	out := files[:0]
 	for i, f := range files {
-		_, isIgnored := ignoredSet[paths[i]]
+		_, isIgnored := ignored[paths[i]]
 		if !isIgnored || f.State == StateStaged || f.State == StateBoth || f.State == StateConflict {
 			out = append(out, f)
 		}
 	}
-	return out
+	return out, nil
+}
+
+func filterCommitIgnored(files []FileStatus, cfg verify.CommitConfig) ([]FileStatus, error) {
+	paths := make([]string, len(files))
+	for i, file := range files {
+		paths[i] = file.Path
+	}
+	matches, err := verify.MatchCommitIgnoreFiles(paths, cfg.GitIgnore, cfg.Allow)
+	if err != nil {
+		return nil, fmt.Errorf("evaluate .gavel.yaml commit.gitignore: %w", err)
+	}
+	ignored := make(map[string]struct{}, len(matches))
+	for _, match := range matches {
+		ignored[match.File] = struct{}{}
+	}
+	out := files[:0]
+	for _, file := range files {
+		_, blocked := ignored[file.Path]
+		if !blocked || file.State == StateStaged || file.State == StateBoth || file.State == StateConflict {
+			out = append(out, file)
+		}
+	}
+	return out, nil
 }
 
 func splitNullDelimited(raw []byte) []string {
@@ -212,12 +245,12 @@ func isConflictPair(staged, work byte) bool {
 // enrichWithLineCounts fills in Adds/Dels for each FileStatus by combining
 // staged and unstaged numstat output, and by counting lines of any untracked
 // file directly (git numstat does not report untracked content).
-func enrichWithLineCounts(ctx context.Context, workDir string, files []FileStatus) error {
-	staged, err := numstat(ctx, workDir, true)
+func enrichWithLineCounts(ctx context.Context, workDir string, gitConfig []string, files []FileStatus) error {
+	staged, err := numstat(ctx, workDir, gitConfig, true)
 	if err != nil {
 		return err
 	}
-	unstaged, err := numstat(ctx, workDir, false)
+	unstaged, err := numstat(ctx, workDir, gitConfig, false)
 	if err != nil {
 		return err
 	}
@@ -247,8 +280,8 @@ type numstatEntry struct {
 	dels int
 }
 
-func numstat(ctx context.Context, workDir string, cached bool) (map[string]numstatEntry, error) {
-	args := []string{"diff", "--numstat", "-z", "--find-renames"}
+func numstat(ctx context.Context, workDir string, gitConfig []string, cached bool) (map[string]numstatEntry, error) {
+	args := withGitConfig(gitConfig, "diff", "--numstat", "-z", "--find-renames")
 	if cached {
 		args = append(args, "--cached")
 	}

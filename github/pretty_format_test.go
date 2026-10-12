@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/flanksource/clicky/api"
+	"github.com/flanksource/gavel/pr/model"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -37,7 +38,7 @@ func styleFor(spans []styledSpan, substr string) (string, bool) {
 }
 
 func TestWorkflowRunPrettyActionNameNotBold(t *testing.T) {
-	run := WorkflowRun{Name: "CI Build", Status: "completed", Conclusion: "success"}
+	run := model.WorkflowRun{Name: "CI Build", Status: "completed", Conclusion: "success"}
 	spans := flattenText(run.Pretty())
 
 	style, ok := styleFor(spans, "CI Build")
@@ -46,7 +47,7 @@ func TestWorkflowRunPrettyActionNameNotBold(t *testing.T) {
 }
 
 func TestPRInfoPrettyTitleNotBold(t *testing.T) {
-	pr := PRInfo{Number: 7, Title: "Fix the thing"}
+	pr := model.PRInfo{Number: 7, Title: "Fix the thing"}
 	spans := flattenText(pr.Pretty())
 
 	style, ok := styleFor(spans, "Fix the thing")

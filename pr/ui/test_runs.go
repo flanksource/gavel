@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flanksource/clicky/sse"
 	"github.com/flanksource/commons/logger"
 	cache "github.com/flanksource/gavel/github/cache"
 	"github.com/flanksource/gavel/snapshots"
@@ -61,50 +62,25 @@ func (s *Server) handleTestRuns(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp) //nolint:errcheck
 }
 
-// handleTestRunsStream pushes the grouped run list on every server update (the
-// syncer calls s.notify() after a scan) with a slow ticker as a fallback.
+// testRunsStreamInterval is how often the test runs stream rescans; a frame is
+// sent only when the grouped run list changed. It deliberately does not wake on
+// the PR poller's notify(): a PR refetch says nothing about local test runs.
+var testRunsStreamInterval = 5 * time.Second
+
+// handleTestRunsStream pushes the grouped run list whenever it changes.
 func (s *Server) handleTestRunsStream(w http.ResponseWriter, r *http.Request) {
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "streaming not supported", http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-
-	writeSnap := func() bool {
-		projects, err := collectTestRuns(r.Context())
-		if err != nil {
-			payload, _ := json.Marshal(map[string]string{"error": err.Error()})
-			fmt.Fprintf(w, "event: error\ndata: %s\n\n", payload)
-			flusher.Flush()
-			return false
-		}
-		payload, err := json.Marshal(testRunsResponse{Projects: projects})
-		if err != nil {
-			return false
-		}
-		fmt.Fprintf(w, "data: %s\n\n", payload)
-		flusher.Flush()
-		return true
-	}
-
-	if !writeSnap() {
-		return
-	}
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-r.Context().Done():
-			return
-		case <-s.updated:
-		case <-ticker.C:
-		}
-		if !writeSnap() {
-			return
-		}
+	err := sse.ServeSnapshot(w, r, sse.SnapshotOptions{
+		Interval: testRunsStreamInterval,
+		Load: func(ctx context.Context) (any, error) {
+			projects, err := collectTestRuns(ctx)
+			if err != nil {
+				return nil, err
+			}
+			return testRunsResponse{Projects: projects}, nil
+		},
+	})
+	if err != nil {
+		logger.Warnf("test runs stream: %v", err)
 	}
 }
 

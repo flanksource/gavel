@@ -7,6 +7,7 @@ import (
 	capapi "github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/gavel/todos/native"
 	"github.com/flanksource/gavel/todos/types"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -66,6 +67,19 @@ func TestVerifyPhaseFailsLoudlyOnACorruptCaptainReport(t *testing.T) {
 	_, err := verificationProgress(`{"summary":`)
 
 	require.Error(t, err, "a corrupt verification result must not read as an empty pass")
+}
+
+// The run and verify rows of one in-run verification are the same prompt run,
+// so the id has to reach the TODO for a rollup to count it once.
+func TestPhaseRunCarriesItsPromptRunID(t *testing.T) {
+	promptRunID := uuid.MustParse("5f0e9d8c-7b6a-4f5e-8d4c-3b2a1f0e9d8c")
+
+	run, err := phaseRunFromNative(native.IssuePhaseRun{
+		Phase: native.StepRun, State: "succeeded", PromptRunID: promptRunID,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, promptRunID.String(), run.PromptRunID)
 }
 
 // Every other phase counts agent iterations, and must keep doing so.

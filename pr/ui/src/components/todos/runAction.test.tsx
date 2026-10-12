@@ -1,8 +1,32 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TodoRunActionButton } from './TodoRunActionButton';
 import type { RunContext } from './providers';
 import { queryTestWrapper } from './queryTestWrapper';
+
+// RuntimeBar is a clicky-ui primitive (mode-first identity + overflow fields);
+// its own interaction surface is clicky-ui's test responsibility, not
+// gavel's. Mocking it here — the same pattern TodoRunActionButton.test.tsx
+// uses — lets this suite verify gavel's own plumbing (remembering a runtime
+// choice, keeping the primary action sparse until it fires, dispatching the
+// final spec) without re-deriving clicky-ui's current DOM/ARIA structure.
+vi.mock('@flanksource/clicky-ui/ai', async importOriginal => ({
+  ...(await importOriginal<typeof import('@flanksource/clicky-ui/ai')>()),
+  RuntimeBar: ({ value, onChange, ariaLabel }: {
+    value: Record<string, unknown>;
+    onChange: (value: Record<string, unknown>) => void;
+    ariaLabel?: string;
+  }) => (
+    // oxlint-disable-next-line clicky-ui/prefer-clicky-components -- test mock for RuntimeBar itself.
+    <button
+      type="button"
+      aria-label={ariaLabel}
+      onClick={() => onChange({ ...value, mode: 'cli', model: 'claude-opus-4-8', effort: 'high' })}
+    >
+      {ariaLabel}
+    </button>
+  ),
+}));
 
 const context: RunContext = {
   defaultMode: 'agent',
@@ -108,18 +132,8 @@ describe('TodoRunActionButton RuntimeBar', () => {
 
     const primary = screen.getByRole('button', { name: 'Run' });
     await waitFor(() => expect((primary as HTMLButtonElement).disabled).toBe(false));
-    fireEvent.click(await screen.findByRole('button', {
-      name: 'Run runtime: Codex, Agent, Prompt default, effort None',
-    }));
 
-    let menu = screen.getByRole('menu');
-    fireEvent.click(within(menu).getByRole('radio', { name: 'Claude' }));
-    menu = screen.getByRole('menu');
-    fireEvent.click(within(menu).getByRole('radio', { name: 'CLI' }));
-    menu = screen.getByRole('menu');
-    fireEvent.click(within(menu).getByRole('button', { name: 'Claude Opus 4.8' }));
-    menu = screen.getByRole('menu');
-    expect(within(menu).getByRole('slider', { name: 'Reasoning effort' }).getAttribute('aria-valuetext')).toBe('High');
+    fireEvent.click(screen.getByRole('button', { name: 'Run runtime' }));
 
     expect(onRun).not.toHaveBeenCalled();
     await waitFor(() => expect(JSON.parse(localStorage.getItem('gavel.pr-ui.todoRunChoices.v3') ?? '{}')).toMatchObject({
@@ -154,7 +168,7 @@ describe('TodoRunActionButton RuntimeBar', () => {
     expect(onAdvanced).toHaveBeenCalledWith('plan');
 
     rerender(<TodoRunActionButton dir="/repo" action="plan" disabled onRun={vi.fn()} onAdvanced={onAdvanced} />);
-    const runtime = screen.getByRole('button', { name: /^Plan runtime:/ });
+    const runtime = screen.getByRole('button', { name: 'Plan runtime' });
     expect((runtime.closest('fieldset') as HTMLFieldSetElement).disabled).toBe(true);
     expect((screen.getByRole('button', { name: 'Advanced plan options' }) as HTMLButtonElement).disabled).toBe(true);
   });

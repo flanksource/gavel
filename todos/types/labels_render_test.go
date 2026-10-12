@@ -47,6 +47,28 @@ func TestPrettyRowLabelsColumn(t *testing.T) {
 	})
 }
 
+func TestPrettyDetailedParentLine(t *testing.T) {
+	const parentID = "0a1b2c3d-5f56-4c2c-833f-83e9b7774657"
+	child := TODO{ParentID: parentID, TODOFrontmatter: TODOFrontmatter{Title: "Split out"}}
+	assert.Contains(t, child.PrettyDetailed().String(), "Parent: "+parentID)
+
+	t.Run("omits the line for a top-level TODO", func(t *testing.T) {
+		topLevel := TODO{TODOFrontmatter: TODOFrontmatter{Title: "Top level"}}
+		assert.NotContains(t, topLevel.PrettyDetailed().String(), "Parent:")
+	})
+}
+
+func TestShortID(t *testing.T) {
+	for id, want := range map[string]string{
+		"0a1b2c3d-5f56-4c2c-833f-83e9b7774657": "0a1b2c3d",
+		"0a1b2c3d":                             "0a1b2c3d",
+		"0a1b":                                 "0a1b",
+		"":                                     "",
+	} {
+		assert.Equal(t, want, ShortID(id), "ShortID(%q)", id)
+	}
+}
+
 func TestPrettyDetailedLabelsLine(t *testing.T) {
 	todo := TODO{
 		Labels:          []string{"security"},

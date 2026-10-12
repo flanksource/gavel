@@ -3,6 +3,8 @@ package todos
 import (
 	"context"
 	"errors"
+	"os/exec"
+	"path/filepath"
 
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/gavel/fixtures"
@@ -70,6 +72,32 @@ var _ = Describe("TODO verification runtime spec", func() {
 		Expect(front.OS).To(Equal("!plan9"))
 		Expect(front.Arch).To(Equal("arm64"))
 		Expect(front.Skip).To(Equal("false"))
+	})
+
+	// The document is built from one checkout and run in another — a run step's
+	// or verify step's worktree. Naming the checkout it was built from would run
+	// every step there, judging a tree without the work under verification.
+	It("names no checkout: its steps and checks run where the document executes", func() {
+		workDir := GinkgoT().TempDir()
+		init := exec.Command("git", "init", "-b", "main")
+		init.Dir = workDir
+		Expect(init.Run()).To(Succeed())
+		enabled := true
+
+		dod, err := BuildDefinitionOfDone(DefinitionOfDoneOptions{
+			WorkDir: workDir,
+			Todos: []*types.TODO{{
+				VerificationMarkdown: verificationBody,
+				TODOFrontmatter:      types.TODOFrontmatter{Checks: &types.AgentChecksConfig{Enabled: &enabled}},
+			}},
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(dod.Fixture).To(ContainSubstring("## checks:test"))
+		Expect(dod.Fixture).To(ContainSubstring("## checks:lint"))
+		resolved, err := filepath.EvalSymlinks(workDir)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(dod.Fixture).NotTo(Or(ContainSubstring(workDir), ContainSubstring(resolved)))
 	})
 
 	// A key the node runner would ignore is dropped with a warning rather than

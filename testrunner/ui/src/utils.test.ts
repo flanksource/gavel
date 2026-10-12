@@ -15,6 +15,36 @@ import {
 } from './utils';
 import type { LinterResult, Test } from './types';
 
+describe('aborted verdict', () => {
+  const abortedLeaf = { name: 'after-failure', aborted: true, skipped: true } as Test;
+
+  it('statusIcon, statusColor and testStatus treat an aborted+skipped leaf as aborted', () => {
+    expect(statusIcon(abortedLeaf)).toBe('codicon:debug-stop');
+    expect(statusColor(abortedLeaf)).toBe('text-red-400');
+    expect(testStatus(abortedLeaf)).toBe('aborted');
+  });
+
+  it('sum counts an aborted+skipped child once as aborted, distinct from an intentional skip', () => {
+    const s = sum({
+      name: 'plan',
+      children: [
+        { name: 'setup', passed: true },
+        abortedLeaf,
+        { name: 'gated', skipped: true },
+      ],
+    } as Test);
+    expect(s).toEqual({ total: 3, passed: 1, failed: 0, warned: 0, aborted: 1, skipped: 1, pending: 0, running: 0, timedout: 0 });
+  });
+
+  it('sum reads Aborted from a server summary', () => {
+    const s = sum({
+      name: 'plan',
+      summary: { Total: 2, Passed: 0, Failed: 1, Aborted: 1, Skipped: 0, Pending: 0, Duration: 0 },
+    } as Test);
+    expect(s.aborted).toBe(1);
+  });
+});
+
 describe('warned verdict', () => {
   it('sum tallies a warned leaf in total + warned, not passed or failed', () => {
     const s = sum({ name: 'trace', warned: true } as Test);

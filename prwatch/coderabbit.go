@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/flanksource/gavel/github"
+	"github.com/flanksource/gavel/pr/model"
 )
 
 var severityBadgeRegex = regexp.MustCompile(`_(?:🔴\s*Critical|🟠\s*Major|🟡\s*Minor)_`)
@@ -30,19 +30,19 @@ var nitpickFilePathRegex = regexp.MustCompile(`^([^\s(]+\.\w+)`)
 // Matches line references like `44-107`: or `10`:
 var nitpickLineRegex = regexp.MustCompile("^`(\\d+)(?:-\\d+)?`:")
 
-func parseNitpickComments(comment github.PRComment) []github.PRComment {
+func parseNitpickComments(comment model.PRComment) []model.PRComment {
 	outerBody := extractNestedDetailsBody(comment.Body, "Nitpick comments")
 	if outerBody == "" {
 		return nil
 	}
 
 	fileBlocks := parseNestedFileBlocks(outerBody)
-	var results []github.PRComment
+	var results []model.PRComment
 	for _, fb := range fileBlocks {
 		if fb.Body == "" {
 			continue
 		}
-		results = append(results, github.PRComment{
+		results = append(results, model.PRComment{
 			ID:     comment.ID,
 			Author: comment.Author,
 			URL:    comment.URL,

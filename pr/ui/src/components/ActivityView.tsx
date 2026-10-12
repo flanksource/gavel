@@ -1,13 +1,15 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@flanksource/clicky-ui/components';
+import { openEventStream } from '../eventHub';
 import { fetchJSON, mutationJSON, queryKeys } from '../query';
-import type { ActivitySnapshot, ActivityEntry, ActivityKindStats, CacheStatus } from '../types';
+import type { ActivitySnapshot, ActivityEntry, ActivityKindStats, CacheStatus, GitMetrics } from '../types';
 import { useDocumentVisible } from '../useDocumentVisible';
 import { UiActivity, UiCheck, UiCloudDownload, UiDatabase, UiGlobe, UiTrash, UiWarningTriangle, UiWatch } from '@flanksource/clicky-ui/icons';
 import type { IconProps } from '@flanksource/clicky-ui/icons';
 import type { ComponentType } from 'react';
 import { RelativeTime } from './RelativeTime';
+import { GitTrackingPanel } from './GitTrackingPanel';
 
 const KIND_LABELS: Record<string, string> = {
   rest: 'REST',
@@ -49,6 +51,16 @@ export function ActivityView() {
     refetchInterval: visible ? 10_000 : false,
     refetchIntervalInBackground: false,
   });
+  const gitMetricsQuery = useQuery({
+    queryKey: queryKeys.gitMetrics(),
+    queryFn: async ({ signal }) => parseGitMetrics(
+      await fetchJSON<unknown>({ url: '/api/git/metrics', signal, context: 'Load git tracking metrics' }),
+    ),
+    enabled: visible,
+    staleTime: 10_000,
+    refetchInterval: visible ? 10_000 : false,
+    refetchIntervalInBackground: false,
+  });
   const snap = activityQuery.data ?? emptyActivity;
   const cache = cacheQuery.data ?? null;
   const resetMutation = useMutation({
@@ -64,6 +76,7 @@ export function ActivityView() {
     if (visible) return;
     void queryClient.cancelQueries({ queryKey: queryKeys.activity(), exact: true });
     void queryClient.cancelQueries({ queryKey: queryKeys.activityCache(), exact: true });
+    void queryClient.cancelQueries({ queryKey: queryKeys.gitMetrics(), exact: true });
   }, [queryClient, visible]);
 
   // Stream the activity feed only while visible: a hidden window has no reason to
@@ -71,10 +84,10 @@ export function ActivityView() {
   // shared useNow() clock inside <RelativeTime/>, so no app-level tick is needed.
   useEffect(() => {
     if (!visible) return;
-    const es = new EventSource('/api/activity/stream');
-    es.addEventListener('message', (e: MessageEvent) => {
+    const es = openEventStream('/api/activity/stream');
+    es.addEventListener('message', (event) => {
       try {
-        queryClient.setQueryData<ActivitySnapshot>(queryKeys.activity(), parseActivitySnapshot(JSON.parse(e.data)));
+        queryClient.setQueryData<ActivitySnapshot>(queryKeys.activity(), parseActivitySnapshot(JSON.parse((event as MessageEvent).data)));
         setStreamError('');
       } catch {
         setStreamError('HTTP activity stream received an invalid update.');
@@ -155,6 +168,13 @@ export function ActivityView() {
         </div>
 
         {cache && <CachePanel cache={cache} />}
+
+        {(gitMetricsQuery.data || gitMetricsQuery.error) && (
+          <GitTrackingPanel
+            metrics={gitMetricsQuery.data ?? null}
+            error={gitMetricsQuery.error instanceof Error ? gitMetricsQuery.error.message : undefined}
+          />
+        )}
 
         <div className="bg-card border border-border rounded-md mb-4 p-3">
           <div className="text-xs font-semibold text-muted-foreground uppercase mb-2">By kind</div>
@@ -365,6 +385,13 @@ function parseActivitySnapshot(payload: unknown): ActivitySnapshot {
     throw new Error('Load HTTP activity: invalid response');
   }
   return payload as ActivitySnapshot;
+}
+
+function parseGitMetrics(payload: unknown): GitMetrics {
+  if (!payload || typeof payload !== 'object' || !('tracking' in payload) || typeof payload.tracking !== 'boolean') {
+    throw new Error('Load git tracking metrics: invalid response');
+  }
+  return payload as GitMetrics;
 }
 
 function parseCacheStatus(payload: unknown): CacheStatus {

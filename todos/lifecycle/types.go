@@ -65,9 +65,10 @@ type Outcome struct {
 type EnvelopeKind string
 
 const (
-	EnvelopeResult EnvelopeKind = "result"
-	EnvelopePlan   EnvelopeKind = "plan"
-	EnvelopeTriage EnvelopeKind = "triage"
+	EnvelopeResult    EnvelopeKind = "result"
+	EnvelopePlan      EnvelopeKind = "plan"
+	EnvelopeTriage    EnvelopeKind = "triage"
+	EnvelopeTriageNew EnvelopeKind = "triage.new"
 )
 
 // OutcomeKeep is the status an outcome names when the run itself decided the
@@ -141,7 +142,7 @@ func (s Step) validate() error {
 			name, s.Prompt, promptRefPrefix+StepVerify)
 	}
 	switch s.Envelope {
-	case "", EnvelopeResult, EnvelopePlan, EnvelopeTriage:
+	case "", EnvelopeResult, EnvelopePlan, EnvelopeTriage, EnvelopeTriageNew:
 	default:
 		return fmt.Errorf("step %s: envelope %q is not one of result, plan, triage", name, s.Envelope)
 	}

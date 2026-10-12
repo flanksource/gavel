@@ -56,4 +56,34 @@ var _ = Describe("fixture test projection", func() {
 			CELTrace:      trace,
 		}))
 	})
+
+	It("projects recorded fixture resource peaks onto the test", func() {
+		node := &fixtures.FixtureNode{
+			Name: "command", Type: fixtures.TestNode,
+			Results: &fixtures.FixtureResult{Status: task.StatusPASS, Profile: &fixtures.FixtureProfile{
+				Scope: "process_tree", PID: 123, SampleCount: 2,
+				PeakCPUPercent: 25, PeakMemoryPercent: 0.5, PeakRSSBytes: 4096,
+			}},
+		}
+
+		projected := fixtureNodeToTests(node)
+		Expect(projected).To(HaveLen(1))
+		Expect(projected[0].FixtureProfile).To(Equal(&parsers.FixtureProfile{
+			Scope: "process_tree", PID: 123, SampleCount: 2,
+			PeakCPUPercent: 25, PeakMemoryPercent: 0.5, PeakRSSBytes: 4096,
+		}))
+	})
+
+	It("projects SQL text and parameters onto the fixture test", func() {
+		node := &fixtures.FixtureNode{
+			Name: "command", Type: fixtures.TestNode,
+			Results: &fixtures.FixtureResult{Status: task.StatusPASS, SQLProfile: &fixtures.SQLProfile{
+				QueryCount: 1, TotalDurationMS: 10,
+				Statements: []fixtures.SQLProfileStatement{{SQL: "SELECT ?", Params: []string{"42"}, DurationMS: 10}},
+			}},
+		}
+		projected := fixtureNodeToTests(node)
+		Expect(projected).To(HaveLen(1))
+		Expect(projected[0].SQLProfile.Statements[0].Params).To(Equal([]string{"42"}))
+	})
 })

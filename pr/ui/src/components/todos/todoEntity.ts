@@ -185,9 +185,11 @@ async function invalidateBulkTodoCaches(
   action: TodoBulkAction,
 ) {
   // A removed todo cannot be refetched, so its caches are dropped rather than
-  // invalidated — the same thing the single-todo delete does. The catalog's own
-  // destructive hint is the test, so this never has to know an action's name.
-  const removes = action.tool_hints?.destructiveHint === true;
+  // invalidated — the same thing the single-todo delete does. The published
+  // method is the test: only a removal is served as DELETE onto `/{id}`, so this
+  // never has to know an action's name. `destructiveHint` is not — run and merge
+  // carry it, and the todos they touch are still there to refetch.
+  const removes = action.method === 'DELETE';
   const applied = result.results.filter(item => !item.error);
   const tasks: Promise<unknown>[] = [client.invalidateQueries({ queryKey: workspaceTodoBatchKeys.all })];
   for (const dir of new Set(applied.map(item => item.dir ?? ''))) {

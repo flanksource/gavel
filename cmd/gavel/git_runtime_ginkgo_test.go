@@ -32,7 +32,7 @@ var _ = Describe("Git CLI runtime preparation", func() {
 		prepared, err := git.PrepareCommitMessage(models.CommitAnalysis{}, options)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(prepared.Request).To(SatisfyAll(
-			HaveField("Model.Name", "claude-haiku-4-5"), HaveField("Model.NoCache", false),
+			HaveField("Model.Name", "claude-haiku-5-5"), HaveField("Model.NoCache", false),
 			HaveField("Budget.Cost", float64(2)), HaveField("Budget.MaxTokens", 0),
 			HaveField("Memory.SkipMemory", true),
 		))

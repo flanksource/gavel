@@ -3,7 +3,7 @@ package prwatch
 import (
 	"strings"
 
-	"github.com/flanksource/gavel/github"
+	"github.com/flanksource/gavel/pr/model"
 )
 
 var botAuthors = map[string]string{
@@ -34,7 +34,7 @@ func identifyBot(author, body string) string {
 	return ""
 }
 
-func annotateBots(comments []github.PRComment) []github.PRComment {
+func annotateBots(comments []model.PRComment) []model.PRComment {
 	for i := range comments {
 		comments[i].BotType = identifyBot(comments[i].Author, comments[i].Body)
 	}

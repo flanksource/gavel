@@ -1,11 +1,68 @@
 package ui
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
+
+func projectNames(ps []Project) []string {
+	names := make([]string, 0, len(ps))
+	for _, p := range ps {
+		names = append(names, p.Name)
+	}
+	return names
+}
+
+// The catalog is sorted case-insensitively at the store so every surface (the
+// dashboard, `gavel projects`, the new-todo form) lists projects the same way.
+// Names that differ only by case fall back to a byte comparison so the order
+// is deterministic.
+func TestProjectsStoreSortsCaseInsensitively(t *testing.T) {
+	orig := projectsPath
+	projectsPath = filepath.Join(t.TempDir(), "projects.json")
+	defer func() { projectsPath = orig }()
+
+	unsorted := []string{"infra", "gavel", "alpha", "Gavel", "Beta"}
+	want := []string{"alpha", "Beta", "Gavel", "gavel", "infra"}
+
+	// A catalog written by an older gavel is unsorted on disk.
+	raw := `[` +
+		`{"name":"infra","dir":"/i"},{"name":"gavel","dir":"/g"},{"name":"alpha","dir":"/a"},` +
+		`{"name":"Gavel","dir":"/G"},{"name":"Beta","dir":"/b"}]`
+	if err := os.WriteFile(projectsPath, []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadProjects()
+	if err != nil {
+		t.Fatalf("LoadProjects() = %v", err)
+	}
+	if !slices.Equal(projectNames(got), want) {
+		t.Fatalf("LoadProjects() order = %v, want %v", projectNames(got), want)
+	}
+
+	projects := make([]Project, 0, len(unsorted))
+	for _, name := range unsorted {
+		projects = append(projects, Project{Name: name, Dir: "/" + name})
+	}
+	if err := SaveProjects(projects); err != nil {
+		t.Fatalf("SaveProjects() = %v", err)
+	}
+	data, err := os.ReadFile(projectsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var onDisk []Project
+	if err := json.Unmarshal(data, &onDisk); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(projectNames(onDisk), want) {
+		t.Fatalf("projects.json order = %v, want %v", projectNames(onDisk), want)
+	}
+}
 
 func TestProjectsRoundTrip(t *testing.T) {
 	orig := projectsPath

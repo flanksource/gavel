@@ -27,7 +27,7 @@ func TestHandleTodoVerificationFixtureSavesSection(t *testing.T) {
 	workDir := t.TempDir()
 	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
 
-	createPayload := todoCreatePayload{
+	createPayload := TodoCreatePayload{
 		Title:    "Fix parser",
 		Body:     verificationFixtureBody("Some description.", "```test\nquery: SELECT 1\n```"),
 		Priority: types.PriorityHigh,

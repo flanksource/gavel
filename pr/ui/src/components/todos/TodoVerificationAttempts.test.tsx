@@ -77,7 +77,7 @@ function attempt(ordinal: number, overrides: Partial<TodoSessionAttempt> = {}): 
 }
 
 function detailOf(...attempts: TodoSessionAttempt[]): TodoSessionDetailResponse {
-  return { attempts, diagnostics: [] };
+  return { attempts };
 }
 
 function report(overrides: Partial<VerifyReport> = {}): VerifyReport {
@@ -93,7 +93,7 @@ function report(overrides: Partial<VerifyReport> = {}): VerifyReport {
 
 function renderAttempts(detail: TodoSessionDetailResponse | null, error?: string) {
   return render(
-    <TodoVerificationAttempts dir="/workspace" todoRef="todo-1" detail={detail} error={error} />,
+    <TodoVerificationAttempts detail={detail} error={error} />,
     { wrapper: queryTestWrapper() },
   );
 }
@@ -122,7 +122,7 @@ describe('TodoVerificationAttempts', () => {
     const { rerender } = renderAttempts(null);
     expect(screen.getByText('Loading attempts…')).toBeTruthy();
 
-    rerender(<TodoVerificationAttempts dir="/workspace" todoRef="todo-1" detail={detailOf()} />);
+    rerender(<TodoVerificationAttempts detail={detailOf()} />);
     expect(screen.queryByText('Loading attempts…')).toBeNull();
     expect(screen.getByText(/No verification has run yet/)).toBeTruthy();
   });

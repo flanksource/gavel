@@ -79,6 +79,29 @@ var _ = Describe("todo batch API", func() {
 		})))
 	})
 
+	It("returns children with their parentId while counting only top-level todos", func() {
+		dir := filepath.Clean(GinkgoT().TempDir())
+		provider := uiTestProviderFor(dir)
+		parent, err := provider.Create(GinkgoT().Context(), todos.CreateRequest{
+			Title: "Batch parent", Status: types.StatusPending,
+		})
+		Expect(err).NotTo(HaveOccurred())
+		_, err = provider.Create(GinkgoT().Context(), todos.CreateRequest{
+			Title: "Batch child", Status: types.StatusCompleted, Parent: parent.ID,
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		recorder, response := postTodoBatch(context.Background(), []string{dir})
+
+		Expect(recorder.Code).To(Equal(http.StatusOK))
+		Expect(response.Results).To(HaveLen(1))
+		Expect(response.Results[0].Counts).To(PointTo(Equal(todoCounts{Total: 1, Open: 1, Pending: 1})))
+		Expect(response.Results[0].Items).To(ConsistOf(
+			MatchFields(IgnoreExtras, Fields{"Title": Equal("Batch parent"), "ParentID": BeEmpty()}),
+			MatchFields(IgnoreExtras, Fields{"Title": Equal("Batch child"), "ParentID": Equal(parent.ID)}),
+		))
+	})
+
 	It("bounds many workspace loads and preserves input order", func() {
 		root := filepath.Clean(GinkgoT().TempDir())
 		dirs := make([]string, todoBatchConcurrency+3)

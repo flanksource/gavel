@@ -55,7 +55,7 @@ func (s *Server) handleTodoGitHubPush(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	baseURL, err := s.resolveTodoPushBaseURL(payload.BaseURL, src.Dir, requestOrigin(r))
+	baseURL, err := resolveTodoPushBaseURL(payload.BaseURL, src.Dir, requestOrigin(r))
 	if err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)
 		return
@@ -100,8 +100,8 @@ func (s *Server) handleTodoGitHubPush(w http.ResponseWriter, r *http.Request) {
 // resolveTodoPushBaseURL prefers an explicit request value, then the project
 // config, and only then the origin this request arrived on. The request origin
 // is last because the dashboard is usually reached over loopback, which GitHub
-// cannot fetch.
-func (s *Server) resolveTodoPushBaseURL(requested, dir, origin string) (string, error) {
+// cannot fetch. A bulk push has no request, so it passes an empty origin.
+func resolveTodoPushBaseURL(requested, dir, origin string) (string, error) {
 	var configured string
 	if config, err := verify.LoadGavelConfig(dir); err == nil {
 		configured = config.Todos.BaseURL

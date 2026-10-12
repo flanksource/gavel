@@ -1,15 +1,26 @@
 import type { ComponentProps, ReactNode } from 'react';
 import { Button } from '@flanksource/clicky-ui/components';
-import type { AIPromptRunValue } from '@flanksource/clicky-ui/ai';
+import type { PromptRunEditorProps, RuntimePreset } from '@flanksource/clicky-ui/ai';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TodoRunOptions } from '../../types';
 import { TodoRunAdvancedDialog } from './TodoRunAdvancedDialog';
 import { requestStepFor } from './runChoiceStorage';
+import { rememberTodoRunOptions } from './run';
 import type { RunContext } from './providers';
 const preview = vi.hoisted(() => vi.fn());
+const editor = vi.hoisted(() => ({ props: undefined as PromptRunEditorProps | undefined }));
 const recentOptions = vi.hoisted(() => vi.fn((): TodoRunOptions[] => []));
-const initialOptions = vi.hoisted(() => vi.fn((): TodoRunOptions => ({ spec: {} })));
+const lastUsedOptions = vi.hoisted(() => vi.fn((): TodoRunOptions | undefined => undefined));
+// contextVersion lets a test force a new `context` object identity on a
+// later render — simulating a background run-context query refetch — while
+// FIXTURE_CONTEXT's actual data stays put, without changing any props.
+const contextVersion = vi.hoisted(() => ({ current: 0 }));
+// One context object per version, like react-query's structurally shared data:
+// a fresh identity on every render would re-run the dialog's preview effect on
+// every render and never settle.
+const contextsByVersion = vi.hoisted(() => new Map<number, unknown>());
 
 // The run dialog's step picker now lists whatever the project's lifecycle
 // declares — including a custom, non-built-in step — rather than a hardcoded
@@ -50,17 +61,24 @@ const FIXTURE_CONTEXT: RunContext = {
     },
   ],
   promptDefaults: { 'security-review': { mode: 'agent', model: 'claude-opus-4-8' } },
-  runtimeProfiles: [{ id: 'review-profile', name: 'Review profile', model: 'profile-model', presets: [] }],
+  runtimePresets: [{ id: 'review-preset', name: 'Review preset', scope: 'context', spec: { model: 'preset-model' } }],
   lifecycle: { steps: STEPS },
 };
 
 vi.mock('./run', async importOriginal => ({
   ...(await importOriginal<typeof import('./run')>()),
-  useTodoRunContext: () => ({ context: FIXTURE_CONTEXT, loading: false, error: '' }),
+  useTodoRunContext: () => {
+    const version = contextVersion.current;
+    if (!contextsByVersion.has(version)) contextsByVersion.set(version, { ...FIXTURE_CONTEXT, __v: version });
+    return { context: contextsByVersion.get(version) as RunContext, loading: false, error: '' };
+  },
   useTodoRunPreview: () => ({ isPending: false, mutate: preview }),
-  loadLastTodoRunOptions: initialOptions,
+  lastTodoRunOptions: lastUsedOptions,
   loadRecentAdvancedTodoRunOptions: recentOptions,
-  reconcileTodoRunOptions: (_action: string, options: TodoRunOptions) => options,
+  // A reconcile that visibly rewrites effort: the dialog must never route a
+  // restore or a submit through it, so any 'reconciled-effort' in a request
+  // body is a regression.
+  reconcileTodoRunOptions: (_action: string, options: TodoRunOptions) => ({ ...options, spec: { ...options.spec, effort: 'reconciled-effort' } }),
 }));
 
 vi.mock('@flanksource/clicky-ui/components', () => ({
@@ -69,9 +87,6 @@ vi.mock('@flanksource/clicky-ui/components', () => ({
     <button type="button" {...props}>{children}</button>
   ),
   Field: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
-  Combobox: ({ options, onChange }: { options: Array<{ value: string; label: string }>; onChange: (value: string) => void }) => (
-    <div>{options.map(option => <Button key={option.value} onClick={() => onChange(option.value)}>{option.label}</Button>)}</div>
-  ),
   Modal: ({ children, footer, open }: { children?: ReactNode; footer?: ReactNode; open?: boolean }) => (
     open === false ? null : <div><div>{children}</div><div data-testid="dialog-footer">{footer}</div></div>
   ),
@@ -117,26 +132,39 @@ vi.mock('@flanksource/clicky-ui/data', () => ({
 
 vi.mock('@flanksource/clicky-ui/ai', async importOriginal => ({
   ...(await importOriginal<typeof import('@flanksource/clicky-ui/ai')>()),
-  PromptRunEditor: ({ value, onChange, children }: { value: AIPromptRunValue; onChange: (value: AIPromptRunValue) => void; children?: ReactNode }) => (
-    <div><Button onClick={() => onChange({ ...value, spec: { ...value.spec, model: 'operator-model' } })}>Change model</Button>{children}</div>
-  ),
+  PromptRunEditor: (props: PromptRunEditorProps) => {
+    editor.props = props;
+    const { value, onChange, presets, children } = props;
+    return (
+      <div>
+        <Button onClick={() => onChange({ ...value, spec: { ...value.spec, model: 'operator-model' } })}>Change model</Button>
+        {presets?.map(preset => <Button key={preset.id} onClick={() => onChange({ ...value, presets: [preset.id] })}>{preset.name}</Button>)}
+        {children}
+      </div>
+    );
+  },
   promptRuntimeValueToPayload: (value: Record<string, unknown>) => ({ spec: value }),
 }));
 
 beforeEach(() => {
   preview.mockReset();
   recentOptions.mockReturnValue([]);
-  initialOptions.mockReturnValue({ spec: {} });
+  lastUsedOptions.mockReturnValue(undefined);
+  contextVersion.current = 0;
+  contextsByVersion.clear();
+  localStorage.clear();
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 function setup(props: Partial<ComponentProps<typeof TodoRunAdvancedDialog>> = {}) {
   const onRun = vi.fn();
   const onClose = vi.fn();
-  render(
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const utils = render(
     <TodoRunAdvancedDialog
       open
       onClose={onClose}
@@ -145,8 +173,9 @@ function setup(props: Partial<ComponentProps<typeof TodoRunAdvancedDialog>> = {}
       refID="todo-1"
       {...props}
     />,
+    { wrapper: ({ children }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider> },
   );
-  return { onRun, onClose };
+  return { onRun, onClose, queryClient, ...utils };
 }
 
 // The picker's currently-selected option always shares its label with the
@@ -214,7 +243,26 @@ describe('TodoRunAdvancedDialog step picker', () => {
   });
 });
 
-describe('TodoRunAdvancedDialog runtime profile', () => {
+describe('TodoRunAdvancedDialog runtime presets', () => {
+  it('persists a bar preset in the database, returns its canonical id and refreshes both catalogs', async () => {
+    const draft: RuntimePreset = { id: 'draft', name: 'Review defaults', scope: 'surface', spec: { mode: 'api', effort: 'high' }, presets: [] };
+    const saved = { ...draft, id: 'database-preset' };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ presets: [], profiles: [], sources: [{ kind: 'db', id: 'db', writable: true, records: ['preset'] }] })))
+      .mockResolvedValueOnce(new Response(JSON.stringify(saved)));
+    vi.stubGlobal('fetch', fetchMock);
+    const { queryClient } = setup({ initialMode: 'plan' });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    expect(editor.props?.onCreatePreset).toBeTypeOf('function');
+    const result = await editor.props!.onCreatePreset!(draft);
+    expect(result).toEqual(saved);
+    expect(fetchMock.mock.calls.map(([url, options]) => [url, options?.method ?? 'GET', options?.body ? JSON.parse(options.body) : undefined])).toEqual([
+      ['/api/settings/runtime-presets?scope=global', 'GET', undefined],
+      ['/api/settings/runtime-presets?scope=global', 'POST', { target: 'db', name: draft.name, scope: draft.scope, spec: draft.spec, presets: [] }],
+    ]);
+    expect(invalidate.mock.calls).toEqual([[{ queryKey: ['settings', 'runtime-presets'] }], [{ queryKey: ['todos', 'run-context'] }]]);
+  });
+
   it('previews and submits a sparse step without promoting catalog metadata into a model override', () => {
     const { onRun } = setup({ initialMode: 'plan' });
     fireEvent.click(footer().getByRole('button', { name: 'Plan' }));
@@ -226,13 +274,13 @@ describe('TodoRunAdvancedDialog runtime profile', () => {
     const consoleError = vi.spyOn(console, 'error');
     preview.mockImplementation(({ body }, callbacks) => callbacks.onSuccess({
       prompt: '', specYaml: '', count: 1,
-      warnings: body.runtimeProfile ? [] : ['permissions.plugins is unsupported', 'permissions.plugins is unsupported'],
+      warnings: body.presets ? [] : ['permissions.plugins is unsupported', 'permissions.plugins is unsupported'],
     }));
     setup({ initialMode: 'plan' });
     expect(screen.getAllByText('permissions.plugins is unsupported')).toHaveLength(2);
     expect(consoleError).not.toHaveBeenCalled();
     expect((footer().getByRole('button', { name: 'Plan' }) as HTMLButtonElement).disabled).toBe(false);
-    fireEvent.click(screen.getByRole('button', { name: 'Review profile' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Review preset' }));
     expect(screen.queryByText('permissions.plugins is unsupported')).toBeNull();
     preview.mockImplementation((_request, callbacks) => callbacks.onSuccess({ prompt: '', specYaml: '', count: 1, warnings: ['permissions.skills is unsupported'] }));
     fireEvent.click(screen.getByRole('button', { name: 'Change model' }));
@@ -243,41 +291,134 @@ describe('TodoRunAdvancedDialog runtime profile', () => {
     expect(screen.getByText('judge prompt is missing')).toBeTruthy();
   });
 
-  it('restores the saved profile and resume choice from recent advanced options', () => {
-    recentOptions.mockReturnValue([{ step: 'plan', runtimeProfile: 'saved-profile', spec: { mode: 'cmux' }, resume: true }]);
+  it('restores the saved presets and resume choice from recent advanced options', () => {
+    recentOptions.mockReturnValue([{ step: 'plan', presets: ['saved-preset'], spec: { mode: 'cmux' }, resume: true }]);
     const { onRun } = setup({ initialMode: 'plan' });
-    fireEvent.click(screen.getByRole('button', { name: 'Review profile' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Review preset' }));
     fireEvent.click(screen.getByRole('button', { name: /^1\./ }));
     fireEvent.click(footer().getByRole('button', { name: 'Plan' }));
-    expect(JSON.parse(JSON.stringify(onRun.mock.lastCall?.[0]))).toEqual({ step: 'plan', runtimeProfile: 'saved-profile', spec: { mode: 'cmux' }, resume: true });
+    expect(JSON.parse(JSON.stringify(onRun.mock.lastCall?.[0]))).toEqual({ step: 'plan', presets: ['saved-preset'], spec: { mode: 'cmux' }, resume: true });
   });
 
-  it('offers resume for a cmux profile resolved by preview without sending inherited mode', () => {
+  it('offers resume for cmux presets resolved by preview without sending inherited mode', () => {
     preview.mockImplementation(({ body }, callbacks) => callbacks.onSuccess({
-      prompt: '', specYaml: '', model: 'resolved-model', runtimeMode: body.runtimeProfile === 'review-profile' ? 'cmux' : 'agent', count: 1,
+      prompt: '', specYaml: '', model: 'resolved-model', runtimeMode: body.presets?.includes('review-preset') ? 'cmux' : 'agent', count: 1,
     }));
     const { onRun } = setup({ initialMode: 'plan' });
-    fireEvent.click(screen.getByRole('button', { name: 'Review profile' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Review preset' }));
     expect(screen.getByText('resolved-model · cmux')).toBeTruthy();
     fireEvent.click(screen.getByRole('checkbox', { name: 'Resume session' }));
     fireEvent.click(footer().getByRole('button', { name: 'Plan' }));
-    expect(JSON.parse(JSON.stringify(onRun.mock.lastCall?.[0]))).toEqual({ step: 'plan', runtimeProfile: 'review-profile', spec: {}, resume: true });
+    expect(JSON.parse(JSON.stringify(onRun.mock.lastCall?.[0]))).toEqual({ step: 'plan', presets: ['review-preset'], spec: {}, resume: true });
   });
 
-  it.each(['plan', 'verify', 'security-review'])('previews and submits %s with a profile and no seeded model override', step => {
+  it.each(['plan', 'verify', 'security-review'])('previews and submits %s with presets and no seeded model override', step => {
     const { onRun } = setup({ initialMode: step });
-    fireEvent.click(screen.getByRole('button', { name: 'Review profile' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Review preset' }));
     fireEvent.click(footer().getByRole('button', { name: STEPS.find(entry => entry.name === step)!.label }));
-    expect(JSON.parse(JSON.stringify(preview.mock.lastCall?.[0].body))).toEqual({ ref: 'todo-1', step, runtimeProfile: 'review-profile', spec: {} });
-    expect(JSON.parse(JSON.stringify(onRun.mock.lastCall?.[0]))).toEqual({ step, runtimeProfile: 'review-profile', spec: {} });
+    expect(JSON.parse(JSON.stringify(preview.mock.lastCall?.[0].body))).toEqual({ ref: 'todo-1', step, presets: ['review-preset'], spec: {} });
+    expect(JSON.parse(JSON.stringify(onRun.mock.lastCall?.[0]))).toEqual({ step, presets: ['review-preset'], spec: {} });
   });
 
-  it.each(['before', 'after'])('retains a model edited %s selecting the profile', when => {
+  it.each(['before', 'after'])('retains a model edited %s selecting presets', when => {
     const { onRun } = setup({ initialMode: 'plan' });
     if (when === 'before') fireEvent.click(screen.getByRole('button', { name: 'Change model' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Review profile' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Review preset' }));
     if (when === 'after') fireEvent.click(screen.getByRole('button', { name: 'Change model' }));
     fireEvent.click(footer().getByRole('button', { name: 'Plan' }));
-    expect(JSON.parse(JSON.stringify(onRun.mock.lastCall?.[0]))).toEqual({ step: 'plan', runtimeProfile: 'review-profile', spec: { model: 'operator-model' } });
+    expect(JSON.parse(JSON.stringify(onRun.mock.lastCall?.[0]))).toEqual({ step: 'plan', presets: ['review-preset'], spec: { model: 'operator-model' } });
+  });
+});
+
+describe('TodoRunAdvancedDialog last used', () => {
+  it('opens with an empty spec even when a last-used entry exists', () => {
+    // Real storage, read by the quick-run loader the dialog used to seed from.
+    rememberTodoRunOptions('plan', { step: 'plan', presets: ['review-preset'], spec: { mode: 'cmux', model: 'claude-opus-4-8', effort: 'high' } });
+    lastUsedOptions.mockReturnValue({ step: 'plan', presets: ['review-preset'], spec: { mode: 'cmux', model: 'claude-opus-4-8' }, resume: true });
+    const { onRun } = setup({ initialMode: 'plan' });
+    fireEvent.click(footer().getByRole('button', { name: 'Plan' }));
+    expect(JSON.parse(JSON.stringify(preview.mock.lastCall?.[0].body))).toEqual({ ref: 'todo-1', step: 'plan', spec: {} });
+    expect(JSON.parse(JSON.stringify(onRun.mock.lastCall?.[0]))).toEqual({ step: 'plan', spec: {} });
+  });
+
+  it('restores the remembered spec, presets and resume from "Last used"', () => {
+    lastUsedOptions.mockReturnValue({ step: 'plan', presets: ['review-preset'], spec: { mode: 'cmux', model: 'claude-opus-4-8' }, resume: true });
+    const { onRun } = setup({ initialMode: 'plan' });
+    fireEvent.click(screen.getByRole('button', { name: /^Last used/ }));
+    fireEvent.click(footer().getByRole('button', { name: 'Plan' }));
+    expect(JSON.parse(JSON.stringify(onRun.mock.lastCall?.[0]))).toEqual({
+      step: 'plan', presets: ['review-preset'], spec: { mode: 'cmux', model: 'claude-opus-4-8' }, resume: true,
+    });
+  });
+
+  it('does not offer "Last used" when nothing has been run for the step yet', () => {
+    setup({ initialMode: 'plan' });
+    expect(screen.queryByRole('button', { name: /^Last used/ })).toBeNull();
+  });
+
+  it('hides a recent-advanced entry equal to the last-used entry', () => {
+    const duplicate: TodoRunOptions = { step: 'plan', spec: { model: 'claude-opus-4-8' } };
+    lastUsedOptions.mockReturnValue(duplicate);
+    recentOptions.mockReturnValue([duplicate, { step: 'plan', spec: { model: 'other-model' } }]);
+    setup({ initialMode: 'plan' });
+    expect(screen.getAllByRole('button', { name: /^\d+\./ })).toHaveLength(1);
+    expect(screen.getByRole('button', { name: /^1\./ }).textContent).toContain('other-model');
+  });
+
+  it('offers the verification prompt history as "Last used" for the verify step', () => {
+    // Written directly: remembering goes through this file's effort-rewriting reconcile mock.
+    localStorage.setItem('gavel.pr-ui.promptRunChoices.v2', JSON.stringify({ verification: { last: { step: 'verify', spec: { model: 'claude-opus-4-8', effort: 'high' } } } }));
+    const { onRun } = setup({ initialMode: 'verify' });
+    fireEvent.click(screen.getByRole('button', { name: /^Last used/ }));
+    fireEvent.click(footer().getByRole('button', { name: 'Verify' }));
+    expect(JSON.parse(JSON.stringify(onRun.mock.lastCall?.[0]))).toEqual({
+      step: 'verify', spec: { model: 'claude-opus-4-8', effort: 'high' },
+    });
+  });
+
+  it('keeps an explicit edit when the run context refetches', () => {
+    const { onRun, rerender } = setup({ initialMode: 'plan' });
+    fireEvent.click(screen.getByRole('button', { name: 'Change model' }));
+    contextVersion.current += 1;
+    rerender(
+      <TodoRunAdvancedDialog open onClose={() => {}} onRun={onRun} dir="/workspace" refID="todo-1" initialMode="plan" />,
+    );
+    fireEvent.click(footer().getByRole('button', { name: 'Plan' }));
+    expect(JSON.parse(JSON.stringify(onRun.mock.lastCall?.[0]))).toEqual({ step: 'plan', spec: { model: 'operator-model' } });
+  });
+});
+
+describe('TodoRunAdvancedDialog branch choice', () => {
+  const branchChoice = { branch: 'shell/1', unresolved: 2 };
+
+  it('offers continuing on the branch, preselected, or a new branch beside the run options', () => {
+    setup({ initialMode: 'run', branchChoice });
+    expect((screen.getByRole('radio', { name: 'Continue on shell/1 · 2 unresolved comments' }) as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByRole('radio', { name: 'New branch' }) as HTMLInputElement).checked).toBe(false);
+  });
+
+  it('sends reuseBranch true by default and false once "New branch" is picked, in the preview and the run', () => {
+    const { onRun } = setup({ initialMode: 'run', branchChoice });
+    expect(preview.mock.lastCall?.[0].body.reuseBranch).toBe(true);
+    fireEvent.click(footer().getByRole('button', { name: 'Run' }));
+    expect(JSON.parse(JSON.stringify(onRun.mock.lastCall?.[0])).reuseBranch).toBe(true);
+
+    fireEvent.click(screen.getByRole('radio', { name: 'New branch' }));
+    expect(preview.mock.lastCall?.[0].body.reuseBranch).toBe(false);
+    fireEvent.click(footer().getByRole('button', { name: 'Run' }));
+    expect(JSON.parse(JSON.stringify(onRun.mock.lastCall?.[0]))).toEqual({ step: 'run', spec: {}, reuseBranch: false });
+  });
+
+  it('shows no choice and sends no reuseBranch when there is no reusable branch', () => {
+    const { onRun } = setup({ initialMode: 'run', branchChoice: null });
+    expect(screen.queryByRole('radio')).toBeNull();
+    fireEvent.click(footer().getByRole('button', { name: 'Run' }));
+    expect(JSON.parse(JSON.stringify(onRun.mock.lastCall?.[0]))).toEqual({ step: 'run', spec: {} });
+  });
+
+  it('offers the choice for the run step only', () => {
+    setup({ initialMode: 'plan', branchChoice });
+    expect(screen.queryByRole('radio')).toBeNull();
+    expect(preview.mock.lastCall?.[0].body.reuseBranch).toBeUndefined();
   });
 });

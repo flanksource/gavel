@@ -380,6 +380,10 @@ describe('todo run runtime adapter', () => {
 			},
 		});
 
+		// A model/mode reconcile never invents a reasoning effort the user did
+		// not choose — it only drops one the model can no longer run (see
+		// clicky-ui's reconcileModelCapabilities). 'xhigh' is unsupported here,
+		// so it is dropped rather than replaced with the model's own default.
 		expect(reconcileTodoRunOptions('plan', {
 			driver: 'agent',
 			runMode: 'plan',
@@ -389,9 +393,13 @@ describe('todo run runtime adapter', () => {
 			spec: expect.objectContaining({
 				mode: 'agent',
 				model: 'claude-opus-4-8',
-				effort: 'high',
 			}),
 		}));
+		expect(reconcileTodoRunOptions('plan', {
+			driver: 'agent',
+			runMode: 'plan',
+			spec: { mode: 'agent', model: 'claude-opus-4-8', effort: 'xhigh', temperature: 0.7 },
+		}, context).spec).not.toHaveProperty('effort');
 		expect(reconcileTodoRunOptions('plan', {
 			driver: 'agent',
 			spec: { mode: 'agent', model: 'claude-opus-4-8', effort: 'xhigh', temperature: 0.7 },

@@ -2,6 +2,7 @@ package report
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	"github.com/flanksource/gavel/linters"
@@ -21,9 +22,11 @@ type ResultFileMetadata struct {
 // the PR dashboard, and the todo check loop — so the shape cannot drift between
 // producer and consumer.
 //
-// Three producers write it:
+// Producers write it as:
 //   - `gavel test`:        a bare JSON array of parsers.Test
 //   - `gavel test --lint`: a testui.Snapshot object with tests/lint/bench keys
+//   - `gavel lint`:        a testui.Snapshot object with lint results
+//     (previous runs wrote a bare JSON array of linters.LinterResult)
 //   - a crashed run:       the same object with Error set and no results, either
 //     from gavel itself or from the composite action's fallback stub
 type ResultFile struct {
@@ -40,15 +43,40 @@ type ResultFile struct {
 	Metadata *ResultFileMetadata `json:"metadata,omitempty"`
 }
 
-// UnmarshalJSON accepts both shapes gavel emits: a plain JSON array of
-// parsers.Test, or an object with tests/lint/bench keys.
+// UnmarshalJSON accepts snapshots and stored bare arrays of tests or linters.
 func (r *ResultFile) UnmarshalJSON(data []byte) error {
 	if strings.HasPrefix(strings.TrimSpace(string(data)), "[") {
+		var records []map[string]json.RawMessage
+		if err := json.Unmarshal(data, &records); err != nil {
+			return err
+		}
+		lintCount := 0
+		for _, record := range records {
+			if _, ok := record["linter"]; ok {
+				lintCount++
+			}
+		}
+		if lintCount > 0 {
+			if lintCount != len(records) {
+				return fmt.Errorf("result array mixes lint and test records")
+			}
+			var results []*linters.LinterResult
+			if err := json.Unmarshal(data, &results); err != nil {
+				return err
+			}
+			for i, result := range results {
+				if strings.TrimSpace(result.Linter) == "" {
+					return fmt.Errorf("lint result %d has no linter name", i)
+				}
+			}
+			*r = ResultFile{Lint: results}
+			return nil
+		}
 		var tests []parsers.Test
 		if err := json.Unmarshal(data, &tests); err != nil {
 			return err
 		}
-		r.Tests = tests
+		*r = ResultFile{Tests: tests}
 		return nil
 	}
 	type alias ResultFile

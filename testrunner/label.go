@@ -96,6 +96,9 @@ func compactCounts(sum parsers.TestSummary) string {
 	if sum.Failed > 0 {
 		parts = append(parts, fmt.Sprintf("%d failed", sum.Failed))
 	}
+	if sum.Aborted > 0 {
+		parts = append(parts, fmt.Sprintf("%d aborted", sum.Aborted))
+	}
 	if sum.Skipped > 0 {
 		parts = append(parts, fmt.Sprintf("%d skipped", sum.Skipped))
 	}

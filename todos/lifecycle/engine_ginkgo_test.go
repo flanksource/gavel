@@ -57,7 +57,7 @@ var _ = Describe("default lifecycle", func() {
 		for _, step := range engine.Definition().Steps {
 			names = append(names, step.Name)
 		}
-		Expect(names).To(Equal([]string{"triage", "plan", "verify", "run"}))
+		Expect(names).To(Equal([]string{"triage", "plan", "verify", "run", "triage.new"}))
 		Expect(engine.Definition().Name).To(Equal("todos"))
 		_, hasVerify := engine.Definition().Step(lifecycle.StepVerify)
 		Expect(hasVerify).To(BeTrue())
@@ -111,7 +111,7 @@ var _ = Describe("default lifecycle", func() {
 		for _, step := range steps {
 			names = append(names, step.Name)
 		}
-		Expect(names).To(Equal([]string{"triage", "plan"}))
+		Expect(names).To(Equal([]string{"triage", "plan", "triage.new"}))
 	})
 
 	It("evaluates step inputs from the subject", func() {

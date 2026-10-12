@@ -142,6 +142,33 @@ func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opt
 			exec.Env[k] = templateData[k]
 		}
 	}
+	var profiles *preparedGoProfiles
+	if opts.Profile || opts.SQLProfile {
+		if opts.WorkDir == "" {
+			return result.Errorf(fmt.Errorf("profile artifact working directory is empty"), "prepare Go profiles")
+		}
+		outputs := exec.GoProfiles
+		if !opts.Profile {
+			outputs = nil
+		}
+		profiles, err = prepareGoProfiles(opts.WorkDir, outputs)
+		if err != nil {
+			return result.Errorf(err, "prepare Go profiles")
+		}
+		if opts.Profile {
+			exec.Args = append(exec.Args, profiles.Args...)
+		}
+		for key, value := range profiles.Env {
+			if declared, exists := exec.Env[key]; exists && fmt.Sprint(declared) != value {
+				return result.Errorf(fmt.Errorf("environment variable %s conflicts with goProfiles", key), "prepare Go profiles")
+			}
+			exec.Env[key] = value
+		}
+		if _, exists := exec.Env["SQL_PROFILE_FILE"]; exists {
+			return result.Errorf(fmt.Errorf("environment variable SQL_PROFILE_FILE conflicts with fixture profiling"), "prepare SQL profile")
+		}
+		exec.Env["SQL_PROFILE_FILE"] = filepath.Join(profiles.Root, "sqlprofile.jsonl")
+	}
 
 	if exec.Exec == "" {
 		return result.Errorf(fmt.Errorf("no command specified"), "no command specified")
@@ -171,6 +198,24 @@ func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opt
 	}
 
 	result.Actual = p
+	if p != nil {
+		result.CommandDuration = p.Duration
+	}
+	var profileErr error
+	if profiles != nil {
+		result.GoProfiles, profileErr = collectGoProfiles(profiles)
+		sqlPath := filepath.Join(profiles.Root, "sqlprofile.jsonl")
+		if info, err := os.Lstat(sqlPath); err == nil {
+			if !info.Mode().IsRegular() {
+				profileErr = errors.Join(profileErr, fmt.Errorf("SQL profile %s is not a regular file", sqlPath))
+			} else {
+				result.SQLProfile, err = fixtures.ReadSQLProfile(sqlPath)
+				profileErr = errors.Join(profileErr, err)
+			}
+		} else if !os.IsNotExist(err) {
+			profileErr = errors.Join(profileErr, fmt.Errorf("inspect SQL profile %s: %w", sqlPath, err))
+		}
+	}
 
 	// Harvested here rather than by the runner because the CEL roots have to
 	// exist before Evaluate runs the fixture's expression. The window is the
@@ -214,9 +259,18 @@ func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opt
 				result.Command = p.Command
 			}
 		}
-		return result.Errorf(err, "command execution failed")
+		return result.Errorf(errors.Join(err, profileErr), "command execution failed")
 	}
 	evaluated := fixture.Expected.Evaluate(result, *p, evaluate)
+	evaluated.GoProfiles = result.GoProfiles
+	evaluated.SQLProfile = result.SQLProfile
+	if profileErr != nil {
+		if evaluated.Error != "" {
+			evaluated.Error += "; " + profileErr.Error()
+		} else {
+			evaluated = evaluated.Failf("%v", profileErr)
+		}
+	}
 
 	// A `requireEntries` shortfall only decides a fixture the assertions left
 	// passing — the fixture's own expectations are the more specific answer.

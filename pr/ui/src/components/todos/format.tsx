@@ -2,7 +2,7 @@ import type { ComponentType } from 'react';
 import { memo, useCallback, useMemo } from 'react';
 import { Button, ListMenuItem } from '@flanksource/clicky-ui/components';
 import type { IconProps } from '@flanksource/clicky-ui/icons';
-import { UiAdd, UiBeaker, UiCancel, UiCheck, UiCheckFilled, UiChevronDown, UiChevronUp, UiCircleOutline, UiCircleXFilled, UiClock, UiComment, UiError, UiEye, UiFolder, UiGitGraph, UiHistory, UiLightbulb, UiListDashes, UiPass, UiPlay, UiQuestion, UiWarningTriangle } from '@flanksource/clicky-ui/icons';
+import { UiAdd, UiBeaker, UiCancel, UiCheck, UiCheckFilled, UiChevronDown, UiChevronUp, UiCircleOutline, UiCircleXFilled, UiClock, UiComment, UiError, UiEye, UiFolder, UiGitGraph, UiHistory, UiLightbulb, UiListDashes, UiListTree, UiPass, UiPlay, UiQuestion, UiWarningTriangle } from '@flanksource/clicky-ui/icons';
 import type { SessionStats, TodoCounts, TodoDensity, TodoDiffStat, TodoItem, TodoLayout, TodoPriority, TodoStatus } from '../../types';
 import { TODO_PHASES } from '../../types';
 import { ageShort, timeAgo } from '../../utils';
@@ -379,6 +379,20 @@ export function TodoDiffBadge({ diff }: { diff: TodoDiffStat }) {
   );
 }
 
+// TodoChildCountBadge marks a parent todo with how many of its children are done
+// out of how many it has. Rendered only on a todo that has children.
+export function TodoChildCountBadge({ done, total }: { done: number; total: number }) {
+  return (
+    <span
+      className="inline-flex shrink-0 items-center gap-1 rounded border border-border px-1 text-[11px] tabular-nums text-muted-foreground"
+      title={`${total} child todo${total === 1 ? '' : 's'}, ${done} done`}
+    >
+      <UiListTree className="text-[11px]" />
+      {done}/{total}
+    </span>
+  );
+}
+
 // TodoPlanIndicator/TodoVerificationIndicator flag, from the row, that a todo
 // has a plan worth opening or a verification fixture defined, without opening
 // the detail pane's Plan/Verification tabs. Icons match those tabs' own icons
@@ -464,7 +478,7 @@ export interface TodoRowTarget {
 // the memo below can actually hold — a per-row `() => onSelect(ref)` in the
 // parent would hand every row a new function on every parent render and defeat
 // it entirely.
-function TodoRowImpl({ todo, active, onSelect, density = 'comfortable', selectable = false, selected = false, onToggleSelect, workspace, dir, tags }: {
+function TodoRowImpl({ todo, active, onSelect, density = 'comfortable', selectable = false, selected = false, onToggleSelect, workspace, dir, tags, childDone, childTotal }: {
   todo: TodoItem;
   active: boolean;
   onSelect: (target: TodoRowTarget) => void;
@@ -477,6 +491,10 @@ function TodoRowImpl({ todo, active, onSelect, density = 'comfortable', selectab
   // Resolved from the row's own workspace by the list. Optional so a caller that
   // has not wired the taxonomy renders exactly as before.
   tags?: TagIndex;
+  // The todo's children, done and in all; absent on a todo without children.
+  // Two numbers rather than an object so the memo below compares them by value.
+  childDone?: number;
+  childTotal?: number;
 }) {
   const compact = density === 'compact';
   const tagLabels = tags ? todoVisibleLabels(todo) : [];
@@ -529,6 +547,7 @@ function TodoRowImpl({ todo, active, onSelect, density = 'comfortable', selectab
             <StatusIcon status={todo.status} />
           )}
           <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">{todo.title}</span>
+          {childTotal ? <TodoChildCountBadge done={childDone ?? 0} total={childTotal} /> : null}
           {compact && (
             <span className="flex min-w-0 max-w-[55%] items-center gap-2 overflow-hidden text-xs text-muted-foreground">
               <TodoAges todo={todo} short />

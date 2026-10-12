@@ -1,11 +1,13 @@
 package ui
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	gavelctx "github.com/flanksource/gavel/context"
 	"github.com/flanksource/gavel/github"
 )
 
@@ -13,7 +15,7 @@ import (
 // concrete routes so they resolve in both prod and `--dev` mode (where only "/"
 // is proxied to Vite).
 func TestHandleHomeScreenAssets(t *testing.T) {
-	s := NewServer(0, github.Options{}, SearchConfig{})
+	s := NewServer(gavelctx.New(context.Background()), 0, github.Options{}, SearchConfig{})
 	cases := []struct {
 		path     string
 		wantType string
@@ -47,7 +49,7 @@ func TestHandleHomeScreenAssets(t *testing.T) {
 // The served React Grab plugin must capture up to 2KB of the grabbed element's
 // raw outerHTML into the todo body. Guards against the capture being dropped.
 func TestReactGrabPluginCapturesHTML(t *testing.T) {
-	s := NewServer(0, github.Options{}, SearchConfig{})
+	s := NewServer(gavelctx.New(context.Background()), 0, github.Options{}, SearchConfig{})
 	rec := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/react-grab-plugin.js", nil))
 	if rec.Code != http.StatusOK {
@@ -65,7 +67,7 @@ func TestReactGrabPluginCapturesHTML(t *testing.T) {
 // as "Add to gavel todo", so copied content and created/commented todos stay
 // aligned.
 func TestReactGrabPluginCopyUsesTodoBodyFormatter(t *testing.T) {
-	s := NewServer(0, github.Options{}, SearchConfig{})
+	s := NewServer(gavelctx.New(context.Background()), 0, github.Options{}, SearchConfig{})
 	rec := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/react-grab-plugin.js", nil))
 	if rec.Code != http.StatusOK {
@@ -90,7 +92,7 @@ func TestReactGrabPluginCopyUsesTodoBodyFormatter(t *testing.T) {
 // Grab's Open action must remove that transport prefix before asking the dev
 // server to open the source file, including through the Cmd/Ctrl+O shortcut.
 func TestReactGrabPluginNormalizesViteOpenPath(t *testing.T) {
-	s := NewServer(0, github.Options{}, SearchConfig{})
+	s := NewServer(gavelctx.New(context.Background()), 0, github.Options{}, SearchConfig{})
 	rec := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/react-grab-plugin.js", nil))
 	if rec.Code != http.StatusOK {
@@ -112,7 +114,7 @@ func TestReactGrabPluginNormalizesViteOpenPath(t *testing.T) {
 // Screenshot-copy actions upload a captured PNG first, then write either the
 // normal todo Markdown plus image URL or just the screenshot URL to the clipboard.
 func TestReactGrabPluginCopyScreenshotActions(t *testing.T) {
-	s := NewServer(0, github.Options{}, SearchConfig{})
+	s := NewServer(gavelctx.New(context.Background()), 0, github.Options{}, SearchConfig{})
 	rec := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/react-grab-plugin.js", nil))
 	if rec.Code != http.StatusOK {
@@ -138,7 +140,7 @@ func TestReactGrabPluginCopyScreenshotActions(t *testing.T) {
 // the grabbed element via Region Capture (CropTarget/cropTo), shipped to the todo
 // form. Guards against the capture path being dropped.
 func TestReactGrabPluginCapturesScreenshot(t *testing.T) {
-	s := NewServer(0, github.Options{}, SearchConfig{})
+	s := NewServer(gavelctx.New(context.Background()), 0, github.Options{}, SearchConfig{})
 	rec := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/react-grab-plugin.js", nil))
 	if rec.Code != http.StatusOK {
@@ -158,7 +160,7 @@ func TestReactGrabPluginCapturesScreenshot(t *testing.T) {
 // (MutationObserver), the own-modal skip (gavel-rg-frame), and that the script
 // injects its own URL into each frame.
 func TestReactGrabPluginInjectsIntoFrames(t *testing.T) {
-	s := NewServer(0, github.Options{}, SearchConfig{})
+	s := NewServer(gavelctx.New(context.Background()), 0, github.Options{}, SearchConfig{})
 	rec := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/react-grab-plugin.js", nil))
 	if rec.Code != http.StatusOK {

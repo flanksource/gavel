@@ -123,6 +123,61 @@ func TestStageSessionModeResolvesCodexRollout(t *testing.T) {
 	assert.Equal(t, []string{"app.go"}, mustStagedFiles(t, dir))
 }
 
+// TestStageSessionModeSkipsPathsBeyondSymlink pins that a session file reached
+// through a symlinked directory (e.g. a repo-local `.tmp` pointing at a cache
+// volume) is skipped like an out-of-repo edit. git refuses such paths outright —
+// `git check-ignore` exits 128 "beyond a symbolic link" — which used to abort the
+// whole commit.
+func TestStageSessionModeSkipsPathsBeyondSymlink(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	clearSessionEnv(t)
+
+	dir := initCommitRepo(t)
+	external := t.TempDir()
+	writeFileInDir(t, external, "scratch/out.txt", "scratch\n")
+	require.NoError(t, os.Symlink(external, filepath.Join(dir, ".tmp")))
+	writeFile(t, dir, "app.go", "package app\n")
+
+	sessionID := "claude-sess-symlink"
+	writeSessionLog(t, home, sessionID, []string{
+		filepath.Join(dir, "app.go"),
+		filepath.Join(dir, ".tmp", "scratch", "out.txt"),
+	})
+	t.Setenv("CLAUDE_SESSION_ID", sessionID)
+
+	require.NoError(t, stageFiles(dir, StageSession, verify.CommitConfig{}))
+	assert.Equal(t, []string{"app.go"}, mustStagedFiles(t, dir))
+}
+
+// TestStageSessionModeStagesTrackedDeletions pins that a tracked file the session
+// deleted is staged as a deletion. Skipping it as "no longer present" committed
+// the session's new code while leaving the files it replaced in the tree; a
+// missing file git never tracked (a scratch file) is still skipped.
+func TestStageSessionModeStagesTrackedDeletions(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	clearSessionEnv(t)
+
+	dir := initCommitRepo(t)
+	writeFile(t, dir, "old.go", "package old\n")
+	gitRun(t, dir, "add", "old.go")
+	gitRun(t, dir, "commit", "-m", "add old")
+	require.NoError(t, os.Remove(filepath.Join(dir, "old.go")))
+	writeFile(t, dir, "new.go", "package replacement\n\nfunc Unrelated() {}\n")
+
+	sessionID := "claude-sess-delete"
+	writeSessionLog(t, home, sessionID, []string{
+		filepath.Join(dir, "old.go"),
+		filepath.Join(dir, "new.go"),
+		filepath.Join(dir, "never-tracked.go"),
+	})
+	t.Setenv("CLAUDE_SESSION_ID", sessionID)
+
+	require.NoError(t, stageFiles(dir, StageSession, verify.CommitConfig{}))
+	assert.Equal(t, []string{"new.go", "old.go"}, mustStagedFiles(t, dir))
+}
+
 // writeCodexRollout lays down a Codex rollout under the fake HOME whose filename
 // carries sessionID and whose custom tool call applies a patch to relPaths.
 func writeCodexRollout(t *testing.T, home, sessionID, cwd string, relPaths []string) {

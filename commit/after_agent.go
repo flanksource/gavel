@@ -8,6 +8,7 @@ import (
 
 	"github.com/flanksource/clicky/prompt"
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/verify"
 	"github.com/flanksource/repomap"
 )
@@ -55,6 +56,9 @@ type AgentRun struct {
 	// dry-run). Loops whose verification re-polls the remote need it: without the
 	// push, CI never sees the change the next verification round checks.
 	Push bool
+	// PushBranch, with Push, is the remote branch HEAD is pushed to (see
+	// Options.PushBranch).
+	PushBranch string
 }
 
 // RunAfterAgent stages and commits what an agent changed, driving the same
@@ -100,7 +104,7 @@ func RunAfterAgent(ctx context.Context, run AgentRun) (*Result, error) {
 		logger.Infof("commit: no agent session id; staging all changes")
 	}
 
-	result, err := Run(ctx, Options{
+	opts := Options{
 		WorkDir:     commitDir,
 		Stage:       stage,
 		AddMetadata: true,
@@ -116,11 +120,18 @@ func RunAfterAgent(ctx context.Context, run AgentRun) (*Result, error) {
 		DryRun:      run.DryRun,
 		Force:       run.SkipGates,
 		Push:        run.Push,
+		PushBranch:  run.PushBranch,
 		// Autosquash stays off here even for fixups: the caller cutting a chain
 		// collapses it once, at the end of the run, rather than rebasing after
 		// every turn.
 		Autosquash: false,
-	})
+	}
+	if _, merging, err := github.MergeInProgress(commitDir); err != nil {
+		return nil, err
+	} else if merging {
+		return concludeAgentMerge(ctx, opts)
+	}
+	result, err := Run(ctx, opts)
 	if err != nil {
 		if errors.Is(err, ErrNothingStaged) {
 			logger.Infof("commit: no changes to commit")

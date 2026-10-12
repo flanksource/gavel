@@ -9,6 +9,7 @@ import {
   lintNodeCount,
   formatRunTimestamp,
   formatRunDuration,
+  formatBytes,
   hasTimeoutArgs,
   timeoutArgValue,
 } from '../utils';
@@ -18,6 +19,7 @@ import { JsonView } from './JsonView';
 import { AnsiHtml } from './AnsiHtml';
 import { ProgressBar } from './ProgressBar';
 import { TestAttempts } from './TestAttempts';
+import { SQLProfileDetails } from './SQLProfileDetails';
 import { DownloadMenu } from './DownloadMenu';
 import { copyCurrentViewForAgent } from '../export';
 import type { RouteState } from '../routes';
@@ -327,6 +329,45 @@ export function DetailPanel({ test: t, lint, onRerun, rerunBusy, onStop, stopBus
         </Section>
       )}
 
+	  {(t.fixture_profile || t.go_profiles?.length) && (
+        <Section title="Resources">
+		  {t.fixture_profile && (t.fixture_profile.sample_count > 0 ? (
+            <div className="grid grid-cols-3 gap-3 text-sm">
+              <MetaCard label="Peak CPU" value={`${t.fixture_profile.peak_cpu_percent.toFixed(1)}%`} />
+              <MetaCard label="Peak RSS" value={formatBytes(t.fixture_profile.peak_rss_bytes)} />
+              <MetaCard label="Peak memory" value={`${t.fixture_profile.peak_memory_percent.toFixed(1)}%`} />
+            </div>
+		  ) : <p className="text-sm text-gray-500">No process samples were captured during this test.</p>)}
+		  {t.fixture_profile?.disk_io && <div className="grid grid-cols-2 gap-3 text-sm mt-3">
+			  <MetaCard label="Observed disk read" value={formatBytes(t.fixture_profile.disk_io.disk_read_bytes)} />
+			  <MetaCard label="Observed disk write" value={formatBytes(t.fixture_profile.disk_io.disk_write_bytes)} />
+		  </div>}
+		  {t.fixture_profile && <p className="mt-2 text-xs text-gray-500">
+            {t.fixture_profile.sample_count} samples · {t.fixture_profile.scope === 'process_tree'
+              ? `Command process tree · PID ${t.fixture_profile.pid}`
+              : 'Run process tree during this test'}
+		  </p>}
+		  {!!t.go_profiles?.length && <div className="mt-3 space-y-1 text-sm">
+			  <div className="font-medium">Go profiles</div>
+			  {t.go_profiles.map(artifact => <div key={`${artifact.name}-${artifact.id || artifact.status}`} className="flex items-center gap-2">
+				  <span>{artifact.name}</span>
+				  {artifact.status === 'captured' && artifact.id
+					? <a href={`/api/tests/fixture-profile?id=${encodeURIComponent(artifact.id)}`} className="text-blue-600 hover:underline">Download ({formatBytes(artifact.bytes || 0)})</a>
+					: <span className="text-gray-500">{artifact.status === 'not_emitted' ? 'Not emitted' : artifact.error || 'Invalid'}</span>}
+			  </div>)}
+		  </div>}
+        </Section>
+      )}
+
+      {t.sql_profile && <Section title="SQL profile">
+        <div className="grid grid-cols-3 gap-3 text-sm">
+          <MetaCard label="Queries" value={t.sql_profile.query_count} />
+          <MetaCard label="Total SQL" value={`${t.sql_profile.total_duration_ms.toFixed(1)} ms`} />
+          <MetaCard label="Slow queries" value={t.sql_profile.slow_query_count} />
+        </div>
+        <SQLProfileDetails profile={t.sql_profile} />
+      </Section>}
+
       {/* Summary for containers */}
       {s && s.total > 0 && (
         <div className="space-y-3 border rounded-lg p-3 bg-gray-50">
@@ -335,6 +376,7 @@ export function DetailPanel({ test: t, lint, onRerun, rerunBusy, onStop, stopBus
             <Stat label="Passed" value={s.passed} color="text-green-600" />
             <Stat label="Failed" value={s.failed} color="text-red-600" />
             {s.warned > 0 && <Stat label="Warned" value={s.warned} color="text-amber-600" />}
+            {s.aborted > 0 && <Stat label="Aborted" value={s.aborted} color="text-red-400" />}
             {s.skipped > 0 && <Stat label="Skipped" value={s.skipped} color="text-yellow-600" />}
             {s.pending > 0 && <Stat label="Pending" value={s.pending} color="text-blue-600" />}
           </div>
@@ -342,6 +384,7 @@ export function DetailPanel({ test: t, lint, onRerun, rerunBusy, onStop, stopBus
             segments={[
               { count: s.passed, color: 'bg-green-500', label: 'passed' },
               { count: s.warned, color: 'bg-amber-400', label: 'warned' },
+              { count: s.aborted, color: 'bg-red-300', label: 'aborted' },
               { count: s.skipped, color: 'bg-yellow-400', label: 'skipped' },
               { count: s.failed, color: 'bg-red-500', label: 'failed' },
               { count: s.pending, color: 'bg-blue-300', label: 'pending' },

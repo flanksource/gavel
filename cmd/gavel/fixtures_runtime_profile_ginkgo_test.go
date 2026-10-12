@@ -17,7 +17,7 @@ import (
 
 const fixtureProfileDocument = "---\nai: {}\n---\n\n# Review\n\n- [ ] The implementation has evidence.\n"
 
-var _ = Describe("standalone fixture runtime profiles", func() {
+var _ = Describe("standalone fixture runtime presets", func() {
 	var cwd string
 	var captured []api.ResolveSpecOptions
 	var capturedMu sync.Mutex
@@ -45,13 +45,13 @@ var _ = Describe("standalone fixture runtime profiles", func() {
 		DeferCleanup(func() { fixtures.AIStepRunner = original })
 	})
 
-	DescribeTable("resolves the verification profile before the AI fixture dispatch",
+	DescribeTable("resolves verification presets before the AI fixture dispatch",
 		func(input, selection string, expectedCost float64) {
-			profiles := filepath.Join(cwd, ".captain", "profiles")
-			Expect(os.MkdirAll(profiles, 0o755)).To(Succeed())
-			Expect(os.WriteFile(filepath.Join(profiles, "global.yaml"), []byte("name: global\nspec:\n  budget:\n    cost: 2\n"), 0o600)).To(Succeed())
-			Expect(os.WriteFile(filepath.Join(profiles, "review.yaml"), []byte("name: review\nspec:\n  budget:\n    cost: 3\n    maxTurns: 7\n"), 0o600)).To(Succeed())
-			config := "ai:\n  budget:\n    maxTokens: 100\ntodos:\n  runtimeProfile: global\n  verify:\n    budget:\n      maxTurns: 9\n" + selection
+			presets := filepath.Join(cwd, ".captain", "presets")
+			Expect(os.MkdirAll(presets, 0o755)).To(Succeed())
+			Expect(os.WriteFile(filepath.Join(presets, "global.yaml"), []byte("name: global\nscope: context\nspec:\n  budget:\n    cost: 2\n"), 0o600)).To(Succeed())
+			Expect(os.WriteFile(filepath.Join(presets, "review.yaml"), []byte("name: review\nscope: context\nspec:\n  budget:\n    cost: 3\n    maxTurns: 7\n"), 0o600)).To(Succeed())
+			config := "ai:\n  budget:\n    maxTokens: 100\ntodos:\n  presets: [global]\n  verify:\n    budget:\n      maxTurns: 9\n" + selection
 			Expect(os.WriteFile(filepath.Join(cwd, ".gavel.yaml"), []byte(config), 0o600)).To(Succeed())
 
 			Expect(runProfileFixture(input, cwd, fixtureProfileDocument)).To(Succeed())
@@ -61,33 +61,33 @@ var _ = Describe("standalone fixture runtime profiles", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(composed.Spec.Budget).To(Equal(api.Budget{Cost: expectedCost, MaxTokens: 100, MaxTurns: 9}))
 		},
-		Entry("file runner uses the global profile", "file", "", 2.0),
-		Entry("report runner uses the global profile", "report", "", 2.0),
-		Entry("file runner prefers the verify profile", "file", "    runtimeProfile: review\n", 3.0),
-		Entry("report runner prefers the verify profile", "report", "    runtimeProfile: review\n", 3.0),
+		Entry("file runner uses the global preset", "file", "", 2.0),
+		Entry("report runner uses the global preset", "report", "", 2.0),
+		Entry("file runner prefers the verify preset", "file", "    presets: [review]\n", 3.0),
+		Entry("report runner prefers the verify preset", "report", "    presets: [review]\n", 3.0),
 	)
 
-	DescribeTable("does not resolve an unused profile for a command-only document", func(input string) {
-		Expect(os.WriteFile(filepath.Join(cwd, ".gavel.yaml"), []byte("todos:\n  runtimeProfile: missing\n"), 0o600)).To(Succeed())
+	DescribeTable("does not resolve unused presets for a command-only document", func(input string) {
+		Expect(os.WriteFile(filepath.Join(cwd, ".gavel.yaml"), []byte("todos:\n  presets: [missing]\n"), 0o600)).To(Succeed())
 		Expect(os.WriteFile(filepath.Join(os.Getenv("HOME"), ".captain.yaml"), []byte("ai: [invalid"), 0o600)).To(Succeed())
 		Expect(runProfileFixture(input, cwd, verifyReportDocument)).To(Succeed())
 		Expect(captured).To(BeEmpty())
 	}, Entry("file runner", "file"), Entry("report runner", "report"))
 
-	It("reports the missing profile as failed verification without dispatching AI", func() {
-		Expect(os.WriteFile(filepath.Join(cwd, ".gavel.yaml"), []byte("todos:\n  verify:\n    runtimeProfile: missing\n"), 0o600)).To(Succeed())
+	It("reports a missing preset as failed verification without dispatching AI", func() {
+		Expect(os.WriteFile(filepath.Join(cwd, ".gavel.yaml"), []byte("todos:\n  verify:\n    presets: [missing]\n"), 0o600)).To(Succeed())
 		lines, err := runVerifyReportCommand(fixtureProfileDocument, cwd)
 		Expect(err).NotTo(HaveOccurred())
 		reports := reportLines(lines)
 		Expect(reports).To(HaveLen(1))
 		Expect(reports[0].State).To(Equal(api.VerifyStateFailed))
 		Expect(reports[0].Passed).To(BeFalse())
-		Expect(reports[0].Feedback).To(ContainSubstring(`runtime profile "missing" selected by default`))
+		Expect(reports[0].Feedback).To(ContainSubstring(`runtime presets "missing" selected by default`))
 		Expect(captured).To(BeEmpty())
 	})
 
-	It("dispatches a serialized snapshot without looking up the current default profile", func() {
-		Expect(os.WriteFile(filepath.Join(cwd, ".gavel.yaml"), []byte("todos:\n  verify:\n    runtimeProfile: missing\n"), 0o600)).To(Succeed())
+	It("dispatches a serialized snapshot without looking up current preset defaults", func() {
+		Expect(os.WriteFile(filepath.Join(cwd, ".gavel.yaml"), []byte("todos:\n  verify:\n    presets: [missing]\n"), 0o600)).To(Succeed())
 		Expect(os.WriteFile(filepath.Join(os.Getenv("HOME"), ".captain.yaml"), []byte("ai: [invalid"), 0o600)).To(Succeed())
 		document := "---\nai:\n  spec:\n    budget:\n      maxTurns: 12\n---\n\n# Review\n\n- [ ] The implementation has evidence.\n"
 		lines, err := runVerifyReportCommand(document, cwd)

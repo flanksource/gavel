@@ -95,3 +95,7 @@ go.work.sum
 !.agents/.claude-plugin/
 !.claude/skills/
 *.har
+.agents/plans
+.agents/memory
+/gavel-1.0.0.tgz
+/.new

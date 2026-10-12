@@ -299,6 +299,122 @@ func TestRenderTriageIncludesBacklogForDedupe(t *testing.T) {
 	}
 }
 
+// Both closing verdicts need the other TODO's full body, which the excerpt does
+// not carry — so the prompt has to say where to get it and must be allowed to.
+func TestRenderTriageDirectsTheAgentToReadCandidatesInFull(t *testing.T) {
+	req, _, err := renderResolvedForTest([]*types.TODO{newTestTODO("solo", "task")}, Options{
+		Prompt: "triage", Envelope: EnvelopeTriage, Backlog: "- ab12cd  Other  (pending, high)",
+	})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	for _, want := range []string{"gavel todos get", "[in this batch]", "merges", "duplicateOf"} {
+		if !strings.Contains(req.Prompt.System, want) {
+			t.Errorf("triage system prompt omitted %q:\n%s", want, req.Prompt.System)
+		}
+	}
+}
+
+// Triage is asked to correct the priority and the labels, so it has to be shown
+// them. Before this block existed it was judging a priority it could not see.
+func TestRenderTriageShowsCurrentStatusPriorityAndLabels(t *testing.T) {
+	todo := newTestTODO("solo", "task")
+	todo.Status = types.StatusPending
+	todo.Priority = types.PriorityLow
+	todo.Labels = []string{"docs", "source:todo"}
+
+	user := renderUser(t, []*types.TODO{todo}, Options{Prompt: "triage", Envelope: EnvelopeTriage})
+	for _, want := range []string{"## Current State", "**Status:** pending", "**Priority:** low", "**Labels:** docs, source:todo"} {
+		if !strings.Contains(user, want) {
+			t.Errorf("triage prompt omitted %q:\n%s", want, user)
+		}
+	}
+}
+
+// A TODO with no priority and no labels is the one triage most needs to fix, so
+// the absence is spelled out rather than rendered as a missing line.
+func TestRenderTriageStatesUnsetPriorityAndLabels(t *testing.T) {
+	user := renderUser(t, []*types.TODO{newTestTODO("solo", "task")}, Options{Prompt: "triage", Envelope: EnvelopeTriage})
+	for _, want := range []string{"**Priority:** unset", "**Labels:** none"} {
+		if !strings.Contains(user, want) {
+			t.Errorf("triage prompt omitted %q:\n%s", want, user)
+		}
+	}
+}
+
+// `title` was always applied by ApplyTriage and never asked for: it appeared only
+// in the schema description and the field list, so an inaccurate title survived
+// every rewrite of the body under it.
+func TestRenderTriageAsksForATitleOnlyWhenItIsWrong(t *testing.T) {
+	req, _, err := renderResolvedForTest([]*types.TODO{newTestTODO("solo", "task")}, Options{Prompt: "triage", Envelope: EnvelopeTriage})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	body, _, found := strings.Cut(req.Prompt.System, "### 3.")
+	if !found {
+		t.Fatalf("triage system prompt has no step 3 to bound the body step:\n%s", req.Prompt.System)
+	}
+	_, bodyStep, found := strings.Cut(body, "### 2.")
+	if !found {
+		t.Fatalf("triage system prompt has no step 2:\n%s", req.Prompt.System)
+	}
+	for _, want := range []string{"Send `title` only when", "Never reword a title that is already accurate"} {
+		if !strings.Contains(bodyStep, want) {
+			t.Errorf("the body step omitted %q:\n%s", want, bodyStep)
+		}
+	}
+}
+
+func TestRenderTriageSeparatesInstructionsFromInput(t *testing.T) {
+	req, _, err := renderResolvedForTest([]*types.TODO{newTestTODO("solo", "task")}, Options{Prompt: "triage", Envelope: EnvelopeTriage})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if !strings.Contains(req.Prompt.System, "### 1. Pick a verdict") || !strings.Contains(req.Prompt.System, "final JSON object") {
+		t.Fatalf("triage instructions missing from system prompt: %q", req.Prompt.System)
+	}
+	if strings.Contains(req.Prompt.User, "### 1. Pick a verdict") || !strings.Contains(req.Prompt.User, "## solo") {
+		t.Fatalf("triage user prompt must contain task data without static instructions: %q", req.Prompt.User)
+	}
+	if !strings.Contains(string(req.Prompt.SchemaJSON), `"verdict"`) {
+		t.Fatalf("triage output schema missing verdict: %s", req.Prompt.SchemaJSON)
+	}
+}
+
+// An implementation run is not judging the TODO's state, and the block would be
+// context it cannot act on.
+func TestRenderRunOmitsTheCurrentStateBlock(t *testing.T) {
+	todo := newTestTODO("solo", "task")
+	todo.Priority = types.PriorityHigh
+
+	user := renderUser(t, []*types.TODO{todo}, Options{Prompt: "run", Mode: types.ModeRun})
+	if strings.Contains(user, "## Current State") {
+		t.Errorf("run prompt should not carry the triage state block:\n%s", user)
+	}
+}
+
+// The label vocabulary is closed on the write side, so the prompt must carry it —
+// and must omit the section entirely when there is none, rather than inviting a
+// proposal that would then be rejected.
+func TestRenderTriageIncludesTheLabelTaxonomy(t *testing.T) {
+	taxonomy := "- `bug` — Something is broken.\n- `api` — API surface."
+	user := renderUser(t, []*types.TODO{newTestTODO("solo", "task")}, Options{
+		Prompt: "triage", Envelope: EnvelopeTriage, Labels: taxonomy,
+	})
+	if !strings.Contains(user, taxonomy) {
+		t.Errorf("triage prompt omitted the label taxonomy:\n%s", user)
+	}
+	// The heading on its own line, not the `## Labels` the instructions quote.
+	if !strings.Contains(user, "\n## Labels\n") {
+		t.Errorf("triage prompt omitted the Labels heading:\n%s", user)
+	}
+
+	without := renderUser(t, []*types.TODO{newTestTODO("solo", "task")}, Options{Prompt: "triage", Envelope: EnvelopeTriage})
+	if strings.Contains(without, "\n## Labels\n") {
+		t.Errorf("an empty taxonomy should omit the section entirely:\n%s", without)
+	}
+}
+
 // Run and plan must keep the executable command projection: an implementation
 // run needs to know what to execute, not what the fixture source looks like.
 func TestRenderRunKeepsFixtureCommandProjection(t *testing.T) {
@@ -340,10 +456,10 @@ func TestRenderIncludesComments(t *testing.T) {
 	todo := newTestTODO("fix-auth", "Fix the auth handler")
 	todo.ProviderEvents = []types.ProviderEvent{
 		{Kind: "IssueCreated", Actor: "agent", Body: "initial body"},
-		{Kind: "CommentAdded", Actor: "reviewer", Body: "Please include history"},
+		{Kind: types.EventKindComment, Actor: "reviewer", Body: "Please include history"},
 		{Kind: "LabelChanged", Actor: "agent", OldLabel: "status:pending", NewLabel: "status:in-progress"},
-		{Kind: "CommentAdded", Actor: "maintainer", Body: "Reuse the existing helper"},
-		{Kind: "CommentAdded", Actor: "bot", Body: "   "},
+		{Kind: types.EventKindComment, Actor: "maintainer", Body: "Reuse the existing helper"},
+		{Kind: types.EventKindComment, Actor: "bot", Body: "   "},
 	}
 	prompt := renderUser(t, []*types.TODO{todo}, Options{})
 
@@ -382,8 +498,8 @@ func TestRenderExcludesPRButIncludesSource(t *testing.T) {
 
 func TestPromptsRegistered(t *testing.T) {
 	got := Prompts()
-	if len(got) != 3 {
-		t.Fatalf("Prompts() returned %d entries, want run/plan/triage", len(got))
+	if len(got) != 4 {
+		t.Fatalf("Prompts() returned %d entries, want run/plan/triage/triage.new", len(got))
 	}
 	for _, p := range got {
 		if p.ID == "" || strings.TrimSpace(p.Default) == "" || p.ConfigPath == "" {

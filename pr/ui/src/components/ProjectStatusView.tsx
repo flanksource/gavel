@@ -15,12 +15,14 @@ import type { Project } from '../types';
 import { Spinner } from '../icons/Spinner';
 import { fetchJSON, mutationJSON, queryKeys } from '../query';
 import { useDocumentVisible } from '../useDocumentVisible';
+import { useGitFocus } from '../useGitFocus';
 import { ProjectActionDialog, type ProjectAction } from './ProjectActionDialog';
 import { type ProjectActionStatus } from './ProjectActionFeedback';
 import { ProjectActionRunDialog, type ProjectRunnerAction } from './ProjectActionRunDialog';
 import { ProjectCommitTasks } from './ProjectCommitTasks';
 import { ProjectDiffView } from './ProjectDiffView';
 import { ProjectFileTree } from './ProjectFileTree';
+import { projectApiUrl } from './projectApiUrl';
 import { projectDiffQueryKey } from './projectMutations';
 
 export type FileState = 'staged' | 'unstaged' | 'both' | 'untracked' | 'conflict';
@@ -63,6 +65,9 @@ interface Props {
   project: Project;
   diffPath?: string;
   showResults?: boolean;
+  // Absolute path of the linked worktree to review and commit in. Omitted for
+  // the project's main checkout.
+  worktree?: string;
   onDiffPathChange?: (path: string) => void;
   onChanged?: () => void;
 }
@@ -70,14 +75,18 @@ interface Props {
 const ignoreDiffPathChange = () => {};
 const ignoreChanged = () => {};
 const STATUS_POLL_INTERVAL_MS = 750;
+// The lint/test action endpoint is not worktree-scoped, so offering it here would
+// silently run against the main checkout.
+const RUNNER_MAIN_CHECKOUT_ONLY = 'Lint and test run in the main checkout only';
 
-export function ProjectStatusView({ project, diffPath = '', showResults = false, onDiffPathChange = ignoreDiffPathChange, onChanged = ignoreChanged }: Props) {
+export function ProjectStatusView({ project, diffPath = '', showResults = false, worktree, onDiffPathChange = ignoreDiffPathChange, onChanged = ignoreChanged }: Props) {
   const queryClient = useQueryClient();
   const visible = useDocumentVisible();
+  const focus = useGitFocus({ project: project.name, worktree });
   const statusQuery = useQuery({
-    queryKey: queryKeys.projectStatus(project.name, showResults),
+    queryKey: queryKeys.projectStatus(project.name, showResults, worktree),
     queryFn: ({ signal }) => fetchJSON<ProjectStatusResponse>({
-      url: `/api/projects/${encodeURIComponent(project.name)}/status${showResults ? '?includeResults=true' : ''}`,
+      url: projectApiUrl({ projectName: project.name, resource: 'status', query: showResults ? [['includeResults', 'true']] : [], worktree }),
       signal,
       context: `Failed to load project status for ${project.name}`,
     }),
@@ -157,7 +166,7 @@ export function ProjectStatusView({ project, diffPath = '', showResults = false,
       const result = await mutationJSON<ProjectCommitRun>({
         url: `/api/projects/${encodeURIComponent(project.name)}/commit-queue`,
         method: 'POST',
-        body: options ? { action, options } : { action, files },
+        body: { ...(options ? { action, options } : { action, files }), ...(worktree ? { worktree } : {}) },
         context: `Failed to queue ${label} for ${project.name}`,
       });
       if (typeof result.runId !== 'string' || result.runId === '') {
@@ -187,7 +196,7 @@ export function ProjectStatusView({ project, diffPath = '', showResults = false,
     },
     onSuccess: async ({ actionStatus, runId }, { action }) => {
       setActiveRun({ action, runId });
-      queryClient.setQueryData<ProjectStatusResponse>(queryKeys.projectStatus(project.name, showResults), current => (
+      queryClient.setQueryData<ProjectStatusResponse>(queryKeys.projectStatus(project.name, showResults, worktree), current => (
         current ? { ...current, action: actionStatus } : current
       ));
       setError('');
@@ -197,7 +206,7 @@ export function ProjectStatusView({ project, diffPath = '', showResults = false,
 
   const ignoreMutation = useMutation({
     mutationFn: ({ path, directory }: { path: string; directory: boolean }) => mutationJSON({
-      url: `/api/projects/${encodeURIComponent(project.name)}/ignore`,
+      url: projectApiUrl({ projectName: project.name, resource: 'ignore', worktree }),
       method: 'POST',
       body: { path, directory },
       context: `Failed to ignore ${path} in ${project.name}`,
@@ -282,9 +291,9 @@ export function ProjectStatusView({ project, diffPath = '', showResults = false,
             <SplitButton
               variant="outline"
               size="sm"
-              disabled={busy}
+              disabled={busy || !!worktree}
               label={<span className="flex items-center gap-1"><UiWarningTriangle />{selected.size > 0 ? 'Lint selected' : 'Lint project'}</span>}
-              title="Lint options"
+              title={worktree ? RUNNER_MAIN_CHECKOUT_ONLY : 'Lint options'}
               onClick={() => void run('lint')}
               items={[{
                 label: <span className="flex items-center gap-2"><UiCog />Advanced…</span>,
@@ -294,9 +303,9 @@ export function ProjectStatusView({ project, diffPath = '', showResults = false,
             <SplitButton
               variant="outline"
               size="sm"
-              disabled={busy}
+              disabled={busy || !!worktree}
               label={<span className="flex items-center gap-1"><UiBeaker />Test changed</span>}
-              title="Test options"
+              title={worktree ? RUNNER_MAIN_CHECKOUT_ONLY : 'Test options'}
               onClick={() => void run('test')}
               items={[{
                 label: <span className="flex items-center gap-2"><UiCog />Advanced…</span>,
@@ -310,33 +319,40 @@ export function ProjectStatusView({ project, diffPath = '', showResults = false,
               label={<span className="flex items-center gap-1"><UiGitCommit />Commit selected ({selected.size})</span>}
               title="Commit options"
               onClick={() => void run('commit')}
-              items={[
-                {
-                  label: <span className="flex items-center gap-2"><UiGitPr />Open PR</span>,
-                  onSelect: () => void queueSelected('open-pr'),
-                },
-                {
-                  label: <span className="flex items-center gap-2"><UiCog />Advanced…</span>,
-                  onSelect: () => setAdvancedAction('commit'),
-                },
-              ]}
+              items={[{
+                label: <span className="flex items-center gap-2"><UiCog />Advanced…</span>,
+                onSelect: () => setAdvancedAction('commit'),
+              }]}
             />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={queueCommitMutation.isPending || commitTaskError !== ''}
+              title={selected.size > 0 ? 'Commit the selected files, push, and open a PR' : 'Push local commits and open or update the branch PR'}
+              onClick={() => void queueSelected('open-pr')}
+            >
+              <span className="flex items-center gap-1"><UiGitPr />{selected.size > 0 ? `Commit & open PR (${selected.size})` : 'Open PR'}</span>
+            </Button>
             <Button type="button" variant="ghost" size="icon" disabled={busy} onClick={refreshAfterCommit} aria-label="Refresh project status">
               <UiRefresh />
             </Button>
           </div>
         </div>
         {(error || statusError) && <div role="alert" className="mt-2 text-xs text-red-600 dark:text-red-400">{error || statusError}</div>}
+        {focus.error && <div role="alert" className="mt-2 text-xs text-amber-600 dark:text-amber-400">Git tracker focus failed: {focus.error}</div>}
         {showResults && status.resultsStale && <div className="mt-2 text-xs text-amber-600">Test or lint results are from an earlier commit.</div>}
       </div>
 
       <ProjectCommitTasks
-        key={project.name}
+        key={`${project.name}\0${worktree ?? ''}`}
         projectName={project.name}
+        worktree={worktree}
         preferredRunId={commitRunId}
         onLockedFilesChange={setLockedFiles}
         onErrorChange={setCommitTaskError}
         onComplete={refreshAfterCommit}
+        onRunChange={setCommitRunId}
       />
 
       <SplitPane
@@ -379,7 +395,7 @@ export function ProjectStatusView({ project, diffPath = '', showResults = false,
             </div>
           </div>
         }
-        right={<ProjectDiffView projectName={project.name} path={diffPath} />}
+        right={<ProjectDiffView projectName={project.name} path={diffPath} worktree={worktree} />}
       />
 
       <ProjectActionDialog

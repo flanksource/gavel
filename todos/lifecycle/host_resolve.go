@@ -22,6 +22,7 @@ import (
 // read one answer. A preview that resolved separately from the run it previews
 // is a preview of a different run.
 type Resolution struct {
+	RuntimePresets *runtimeprofiles.PresetResolution
 	RuntimeProfile *runtimeprofiles.Resolution
 	Step           Step
 	// Class is the behaviour class the step runs as: what the commit and verify
@@ -41,6 +42,8 @@ type Resolution struct {
 	Trace      []api.SpecLayer
 	Provenance map[string]api.FieldProvenance
 	Warnings   []string
+	// VerifyTarget is the commit a verify step checks; nil for any other step.
+	VerifyTarget *types.VerifyTarget
 
 	// lc and prepared are the fold itself, carried so Dispatch runs exactly what
 	// Resolve reported. Re-folding at dispatch time would let the run and the
@@ -84,6 +87,7 @@ func (h *Host) Resolve(ctx context.Context, todo *types.TODO, step Step, opts Ru
 		return nil, fmt.Errorf("step %s preflight: %w", step.Name, err)
 	}
 	return &Resolution{
+		RuntimePresets: prepared.runtimePresets,
 		RuntimeProfile: prepared.runtimeProfile,
 		Step:           step,
 		Class:          prepared.class,
@@ -94,6 +98,7 @@ func (h *Host) Resolve(ctx context.Context, todo *types.TODO, step Step, opts Ru
 		Trace:          prepared.trace,
 		Provenance:     prepared.provenance,
 		Warnings:       mergeRuntimeWarnings(prepared.warnings, warnings),
+		VerifyTarget:   prepared.verifyTarget,
 		lc:             lc,
 		prepared:       prepared,
 	}, nil

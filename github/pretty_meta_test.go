@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/flanksource/gavel/pr/model"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -13,14 +14,14 @@ import (
 func TestMergeableIsLabelledAndOnlyShownWhileOpen(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
-		pr        PRInfo
+		pr        model.PRInfo
 		wantShown bool
 	}{
-		{"open and mergeable", PRInfo{State: "OPEN", Mergeable: "MERGEABLE"}, true},
-		{"open and conflicting", PRInfo{State: "OPEN", Mergeable: "CONFLICTING"}, true},
-		{"open but unknown", PRInfo{State: "OPEN", Mergeable: "UNKNOWN"}, false},
-		{"merged", PRInfo{State: "MERGED", Mergeable: "UNKNOWN"}, false},
-		{"closed", PRInfo{State: "CLOSED", Mergeable: "MERGEABLE"}, false},
+		{"open and mergeable", model.PRInfo{State: "OPEN", Mergeable: "MERGEABLE"}, true},
+		{"open and conflicting", model.PRInfo{State: "OPEN", Mergeable: "CONFLICTING"}, true},
+		{"open but unknown", model.PRInfo{State: "OPEN", Mergeable: "UNKNOWN"}, false},
+		{"merged", model.PRInfo{State: "MERGED", Mergeable: "UNKNOWN"}, false},
+		{"closed", model.PRInfo{State: "CLOSED", Mergeable: "MERGEABLE"}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tc.pr.Number = 61
@@ -41,15 +42,15 @@ func TestMergeableIsLabelledAndOnlyShownWhileOpen(t *testing.T) {
 func TestFormatDurationOmitsJobsThatNeverRan(t *testing.T) {
 	at := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
 
-	assert.Equal(t, "", FormatDuration(Job{Status: "COMPLETED", Conclusion: "SKIPPED", StartedAt: at, CompletedAt: at}))
-	assert.Equal(t, "", FormatDuration(Job{Status: "COMPLETED", Conclusion: "SKIPPED"}))
-	assert.Equal(t, "(17s)", FormatDuration(Job{Status: "COMPLETED", Conclusion: "SUCCESS", StartedAt: at, CompletedAt: at.Add(17 * time.Second)}))
-	assert.Equal(t, "(2m 32s)", FormatDuration(Job{Status: "COMPLETED", Conclusion: "SUCCESS", StartedAt: at, CompletedAt: at.Add(152 * time.Second)}))
+	assert.Equal(t, "", model.FormatDuration(model.Job{Status: "COMPLETED", Conclusion: "SKIPPED", StartedAt: at, CompletedAt: at}))
+	assert.Equal(t, "", model.FormatDuration(model.Job{Status: "COMPLETED", Conclusion: "SKIPPED"}))
+	assert.Equal(t, "(17s)", model.FormatDuration(model.Job{Status: "COMPLETED", Conclusion: "SUCCESS", StartedAt: at, CompletedAt: at.Add(17 * time.Second)}))
+	assert.Equal(t, "(2m 32s)", model.FormatDuration(model.Job{Status: "COMPLETED", Conclusion: "SUCCESS", StartedAt: at, CompletedAt: at.Add(152 * time.Second)}))
 }
 
 func TestJobPrettyDropsEmptyDuration(t *testing.T) {
 	at := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
-	skipped := Job{Name: "Delete Storybook Preview", Status: "COMPLETED", Conclusion: "SKIPPED", StartedAt: at, CompletedAt: at}
+	skipped := model.Job{Name: "Delete Storybook Preview", Status: "COMPLETED", Conclusion: "SKIPPED", StartedAt: at, CompletedAt: at}
 
 	rendered := skipped.Pretty().String()
 
@@ -59,7 +60,7 @@ func TestJobPrettyDropsEmptyDuration(t *testing.T) {
 }
 
 func TestWorkflowRunPrettyAsOverridesTheHeading(t *testing.T) {
-	run := WorkflowRun{DatabaseID: 27, Name: "Storybook", Status: "COMPLETED", Conclusion: "SUCCESS"}
+	run := model.WorkflowRun{DatabaseID: 27, Name: "Storybook", Status: "COMPLETED", Conclusion: "SUCCESS"}
 
 	assert.Contains(t, run.Pretty().String(), "Storybook")
 	assert.Contains(t, run.PrettyAs("Storybook (run 27)").String(), "Storybook (run 27)")

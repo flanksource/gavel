@@ -4,11 +4,11 @@ import (
 	"context"
 	"path/filepath"
 
-	. "github.com/onsi/ginkgo/v2"
-	. "github.com/onsi/gomega"
-
 	clickyai "github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/github"
+	"github.com/flanksource/gavel/pr/model"
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 )
 
 var _ = Describe("isProtectedBranch", func() {
@@ -96,9 +96,9 @@ var _ = Describe("executeNewPRPush on a protected current branch", func() {
 				pushedRef = refspec
 				return nil
 			},
-			createPR: func(_ github.Options, in github.CreatePRInput) (*github.CreatePRResult, error) {
+			createPR: func(_ github.Options, in model.CreatePRInput) (*model.CreatePRResult, error) {
 				createdHead = in.Head
-				return &github.CreatePRResult{Number: 7, URL: "http://x/7", Title: in.Title, Base: "main"}, nil
+				return &model.CreatePRResult{Number: 7, URL: "http://x/7", Title: in.Title, Base: "main"}, nil
 			},
 			confirmProtectedRef: func(string) bool {
 				confirmCalls++

@@ -13,27 +13,42 @@ import {
 
 interface Props {
   projectName: string;
+  // Absolute path of the linked worktree whose commit runs are shown; omitted
+  // for the main checkout, which shows only runs that carry no worktree label.
+  worktree?: string;
   preferredRunId?: string;
   onLockedFilesChange: (files: Map<string, number>) => void;
   onErrorChange: (error: string) => void;
   onComplete: () => void;
+  onRunChange: (runId: string) => void;
 }
 
 export function ProjectCommitTasks({
   projectName,
+  worktree,
   preferredRunId,
   onLockedFilesChange,
   onErrorChange,
   onComplete,
+  onRunChange,
 }: Props) {
   const queryClient = useQueryClient();
-  const labels = useMemo(() => ({ project: projectName }), [projectName]);
-  const { runs, status: runsStatus } = useTaskRuns({
+  const labels = useMemo(() => ({ project: projectName, ...(worktree ? { worktree } : {}) }), [projectName, worktree]);
+  const listed = useTaskRuns({
     basePath: '/api/v1',
     kind: 'gavel-commit',
     labels,
     enabled: !preferredRunId,
   });
+  const runsStatus = listed.status;
+  // A label filter can only require a label, not its absence, so the main
+  // checkout drops the runs the queue labelled with a worktree here. The same
+  // check keeps a listing fetched for the previous ref off screen while a new
+  // one is still loading.
+  const runs = useMemo(
+    () => listed.runs.filter(run => (run.labels?.worktree ?? '') === (worktree ?? '')),
+    [listed.runs, worktree],
+  );
   const runId = preferredRunId || runs[0]?.id || '';
   const { snapshots, isComplete, status: runStatus } = useTaskRun({
     id: runId,
@@ -44,9 +59,10 @@ export function ProjectCommitTasks({
   const pendingControls = useRef(new Set<string>());
   const controlMutation = useMutation({
     mutationFn: requestProjectCommitTaskControl,
-    onSuccess: async () => queryClient.invalidateQueries({
-      queryKey: queryKeys.projectStatusScope(projectName),
-    }),
+    onSuccess: async (followRunId, request) => {
+      if (followRunId !== request.runId) onRunChange(followRunId);
+      await queryClient.invalidateQueries({ queryKey: queryKeys.projectStatusScope(projectName) });
+    },
   });
 
   const ownership = useMemo(() => {
@@ -61,8 +77,8 @@ export function ProjectCommitTasks({
   }, [snapshots]);
 
   useEffect(() => {
-    if (!preferredRunId) queryClient.setQueryData(projectCommitTaskKeys.runs(projectName), runs);
-  }, [preferredRunId, projectName, queryClient, runs]);
+    if (!preferredRunId) queryClient.setQueryData(projectCommitTaskKeys.runs(projectName, worktree), runs);
+  }, [preferredRunId, projectName, queryClient, runs, worktree]);
   useEffect(() => {
     if (runId) queryClient.setQueryData(projectCommitTaskKeys.run(projectName, runId), snapshots);
   }, [projectName, queryClient, runId, snapshots]);
@@ -94,10 +110,10 @@ export function ProjectCommitTasks({
     }
   }, [controlMutation.mutateAsync, controlMutation.reset]);
   const controlGroup = (action: TaskControlAction) => {
-    void control({ runId, action });
+    void control({ projectName, runId, action });
   };
   const controlTask = (action: TaskControlAction, task: TaskSnapshot) => {
-    void control({ runId, taskId: task.id, action });
+    void control({ projectName, runId, taskId: task.id, action });
   };
 
   if (!runId || snapshots.length === 0) {

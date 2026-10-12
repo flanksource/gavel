@@ -138,6 +138,68 @@ func TestResolveSpecOverrideKeepsDefaultPromptAndBudget(t *testing.T) {
 	}
 }
 
+// The verify command runs from wherever the agent works — a --worktree run sits on
+// a scratch branch no PR is open for — so it must name the PR rather than resolve
+// it from the current branch.
+func TestResolveSpecVerifyCommandTargetsThePRURL(t *testing.T) {
+	pr := prContext()
+	commands := resolve(t, verify.PromptSpec{}, pr).Workflow.Verify.Commands
+	last := commands[len(commands)-1]
+	if !strings.Contains(last, "gavel pr status "+pr.URL) {
+		t.Errorf("verify command %q does not target %s", last, pr.URL)
+	}
+}
+
+func conflictingPR() PRContext {
+	pr := prContext()
+	pr.BaseBranch = "main"
+	pr.Conflicts = []Conflict{{Path: "go.mod", Kind: "content"}, {Path: "cmd/app/main.go", Kind: "modify/delete"}}
+	return pr
+}
+
+func TestResolveSpecHighlightsMergeConflictsFirst(t *testing.T) {
+	pr := conflictingPR()
+	out := resolve(t, verify.PromptSpec{}, pr).Prompt.User
+	section := strings.Index(out, "## Merge conflicts")
+	if section < 0 {
+		t.Fatalf("user prompt has no merge-conflict section: %q", out)
+	}
+	if status := strings.Index(out, pr.StatusText); status < section {
+		t.Errorf("the conflict section must come before the status snapshot; out=%q", out)
+	}
+	for _, want := range []string{"`go.mod` (content)", "`cmd/app/main.go` (modify/delete)", "git merge origin/main", "`feat/thing`", "git add"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("conflict section missing %q; out=%q", want, out)
+		}
+	}
+}
+
+func TestResolveSpecOmitsMergeConflictSectionWithoutConflicts(t *testing.T) {
+	out := resolve(t, verify.PromptSpec{}, prContext()).Prompt.User
+	if strings.Contains(out, "Merge conflicts") {
+		t.Errorf("user prompt should have no conflict section for a mergeable PR: %q", out)
+	}
+}
+
+// The unmerged-path and leftover-marker checks are captain cmd verifiers declared
+// ahead of the PR poll, so an unresolved merge fails the turn on a sub-second git
+// check with the offending files as feedback, instead of on a CI poll.
+func TestResolveSpecVerifiesConflictResolutionBeforePolling(t *testing.T) {
+	commands := resolve(t, verify.PromptSpec{}, conflictingPR()).Workflow.Verify.Commands
+	want := []string{"git diff --name-only --diff-filter=U --exit-code", "git diff --check HEAD"}
+	if len(commands) != 3 || commands[0] != want[0] || commands[1] != want[1] {
+		t.Fatalf("Commands = %q, want %q ahead of the pr status poll", commands, want)
+	}
+	if !strings.HasPrefix(commands[2], "gavel pr status ") {
+		t.Errorf("last command = %q, want the pr status poll", commands[2])
+	}
+
+	clean := resolve(t, verify.PromptSpec{}, prContext()).Workflow.Verify.Commands
+	if len(clean) != 1 {
+		t.Errorf("a mergeable PR should only poll pr status; got %q", clean)
+	}
+}
+
 func TestPromptsRegistersPRFixOnce(t *testing.T) {
 	got := Prompts()
 	if len(got) != 1 {

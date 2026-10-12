@@ -83,11 +83,13 @@ var _ = Describe("project repos are never null", func() {
 	BeforeEach(func() {
 		originalPath = projectsPath
 		projectsPath = filepath.Join(GinkgoT().TempDir(), "projects.json")
-		originalCounts := projectTodoCounts
-		projectTodoCounts = func(context.Context, Project) (todoCounts, error) { return todoCounts{}, nil }
+		originalCounts := projectsTodoCounts
+		projectsTodoCounts = func(_ context.Context, projects []Project) []todoCountsResult {
+			return make([]todoCountsResult, len(projects))
+		}
 		DeferCleanup(func() {
 			projectsPath = originalPath
-			projectTodoCounts = originalCounts
+			projectsTodoCounts = originalCounts
 		})
 	})
 

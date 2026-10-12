@@ -2,12 +2,10 @@ package native_test
 
 import (
 	"errors"
-	"os"
-	"path/filepath"
 	"sync"
 	"testing"
 
-	commonsdb "github.com/flanksource/commons-db/db"
+	"github.com/flanksource/commons-db/dbtest"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/todos/native"
 	"github.com/google/uuid"
@@ -123,7 +121,7 @@ func TestRepositoryLifecycle(t *testing.T) {
 	_, err = repo.UpdateIssue(ctx, issue.ID, 1, native.IssuePatch{Title: &title})
 	require.ErrorIs(t, err, native.ErrVersionConflict)
 
-	comment, err := repo.AddComment(ctx, issue.ID, issue.Version, "reviewer", "Looks good")
+	comment, err := repo.AddComment(ctx, issue.ID, issue.Version, native.CommentInput{Actor: "reviewer", Body: "Looks good"})
 	require.NoError(t, err)
 	assert.Equal(t, int64(3), comment.Sequence)
 	assert.Equal(t, "comment", comment.Kind)
@@ -418,15 +416,7 @@ func TestRepositoryListAliasesByKind(t *testing.T) {
 
 func openRepository(t *testing.T) (*native.Repository, *gorm.DB) {
 	t.Helper()
-	if os.Getenv("GAVEL_DB_EMBEDDED_TEST") == "" {
-		t.Skip("set GAVEL_DB_EMBEDDED_TEST=1 to run embedded-postgres native repository tests")
-	}
-	dsn, stop, err := commonsdb.StartEmbedded(commonsdb.EmbeddedConfig{
-		DataDir:  filepath.Join(t.TempDir(), "postgres"),
-		Database: "gavel_native_todos",
-	})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, stop()) })
+	dsn := dbtest.ForT(t, dbtest.Options{Name: "gavel_native_todos"}).DSN()
 
 	t.Setenv(database.EnvDSN, dsn)
 	t.Setenv(database.EnvDisable, "")

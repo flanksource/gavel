@@ -67,6 +67,9 @@ func (p *Provider) todoFromIssue(
 	todo.ShortID = issue.ID.String()[:8]
 	todo.Version = issue.Version
 	todo.WorkspaceID = issue.WorkspaceID.String()
+	if issue.ParentID != nil {
+		todo.ParentID = issue.ParentID.String()
+	}
 	todo.ExecutionState = string(issue.ExecutionState)
 	todo.Provider = todos.ProviderDB
 	todo.ProviderState = string(issue.Status)
@@ -126,7 +129,7 @@ func providerEvents(events []native.Event) []types.ProviderEvent {
 		id := event.ID.String()
 		result = append(result, types.ProviderEvent{
 			ID: id, ShortID: id[:8], Kind: event.Kind, Actor: event.Actor,
-			Timestamp: event.CreatedAt, Title: event.Kind, Body: event.Body,
+			Timestamp: event.CreatedAt, Title: event.Kind, Body: event.Body, Payload: event.Payload,
 		})
 	}
 	return result
@@ -161,12 +164,23 @@ func toNativePriority(priority types.Priority) (native.Priority, error) {
 
 func todoStatus(status native.IssueStatus, execution native.ExecutionState) types.Status {
 	switch status {
-	case native.StatusDraft:
-		return types.StatusDraft
 	case native.StatusVerified:
 		return types.StatusVerified
 	case native.StatusClosed, native.StatusCancelled:
 		return types.StatusCompleted
+	}
+	if execution == native.ExecutionWaiting {
+		return types.StatusAsk
+	}
+	if status == native.StatusDraft {
+		switch execution {
+		case native.ExecutionFailed, native.ExecutionStalled:
+			return types.StatusFailed
+		case native.ExecutionVerificationFailed:
+			return types.StatusUnverified
+		default:
+			return types.StatusDraft
+		}
 	}
 	switch execution {
 	case native.ExecutionPlanning, native.ExecutionRunning, native.ExecutionVerifying:

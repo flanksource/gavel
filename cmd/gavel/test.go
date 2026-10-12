@@ -20,6 +20,7 @@ import (
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/baseline"
+	"github.com/flanksource/gavel/fixtures"
 	_ "github.com/flanksource/gavel/fixtures/types"
 	"github.com/flanksource/gavel/lint"
 	"github.com/flanksource/gavel/linters"
@@ -148,8 +149,9 @@ func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
 			uiServer.SetVersion(version)
 			uiServer.SetRunArgs(snapshotArgs(opts))
 			uiServer.SetGitInfo(gitInfo)
+			uiServer.SetProfileRoot(opts.WorkDir)
 			uiServer.EnableDiagnostics(os.Getpid())
-			uiServer.SetStopFunc(cancelRun)
+			uiServer.SetStopFunc(standaloneUIStop(cancelRun))
 			uiServer.SetRunProcess(os.Getpid(), strings.Join(os.Args, " "))
 			if len(opts.Frameworks) > 0 {
 				uiServer.SetRunFrameworks(opts.Frameworks)
@@ -180,13 +182,25 @@ func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
 			return testrunnerUpdates
 		}
 		uiServer.BeginRun("initial")
+		if mode := fixtureBenchmarkMode(opts); mode != "" {
+			uiServer.SetFixtureBenchmarkMode(mode)
+			opts.FixtureBenchmarkProgress = uiServer.SetFixtureBenchmarkProgress
+			opts.FixtureBenchmarkResult = func(report *fixtures.BenchmarkReport) {
+				if report != nil {
+					uiServer.SetFixtureBenchmarkReport(report, report.Path)
+				}
+			}
+		}
 		opts.Updates = attachRecorderTee(recorder, opts, runStarted, attachUIUpdates())
 		uiServer.SetRerunFunc(func(req testui.RerunRequest, output *testui.RerunOutputBuffer) error {
 			clicky.ClearGlobalTasks()
 			rerunCtx, cancelRerun := newStopContext(opts.Context, opts.Timeout)
 			defer cancelRerun()
-			uiServer.SetStopFunc(cancelRerun)
+			uiServer.SetStopFunc(standaloneUIStop(cancelRerun))
 			uiServer.BeginRun("rerun")
+			if mode := fixtureBenchmarkMode(opts); mode != "" {
+				uiServer.SetFixtureBenchmarkMode(mode)
+			}
 			if req.Lint {
 				results, err := executeLintRerun(LintOptions{
 					WorkDir:   opts.WorkDir,
@@ -207,6 +221,18 @@ func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
 			_, err := testrunner.Run(rerunOpts)
 			return err
 		})
+	}
+	var fixturePerformance *fixtures.BenchmarkPerformance
+	if fixtureBenchmarkMode(opts) != "" {
+		upstream := opts.FixtureBenchmarkResult
+		opts.FixtureBenchmarkResult = func(report *fixtures.BenchmarkReport) {
+			if upstream != nil {
+				upstream(report)
+			}
+			if report != nil {
+				fixturePerformance = fixtures.BenchmarkPerformanceFromReport(report, report.Path)
+			}
+		}
 	}
 
 	// In non-UI mode the recorder still needs a feed of test updates; attach
@@ -321,7 +347,35 @@ func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
 		}
 		// Serialized formats get the partial tree plus the failure reason as
 		// a crash envelope, so `--format json=FILE` always produces a file.
-		return nil, testRunFailureValue(opts, tests, lintResults, runStarted, err)
+		if uiServer != nil && fixtureBenchmarkMode(opts) != "" {
+			uiServer.SetRunError(err)
+			uiServer.MarkDone()
+			failedSnapshot := buildTestSnapshot(opts, tests, lintResults, runStarted, time.Now().UTC(), captureFinalDiagnostics(opts.Diagnostics, os.Getpid()))
+			failedSnapshot.Performance = fixturePerformance
+			failedSnapshot.Error = err.Error()
+			failed := 1
+			failedSnapshot.Metadata.ExitCode = &failed
+			if path, saveErr := snapshots.SavePerRun(opts.WorkDir, &failedSnapshot, runStarted, ""); saveErr != nil {
+				logger.Warnf("persist per-run snapshot: %v", saveErr)
+			} else {
+				logger.V(1).Infof("wrote per-run snapshot to %s", path)
+			}
+			if detach {
+				if handoffErr := handoffDetachedUI(uiListener, failedSnapshot, opts.AutoStop, opts.IdleTimeout); handoffErr != nil {
+					logger.Warnf("Detached UI handoff failed: %v", handoffErr)
+				}
+			} else {
+				sig := make(chan os.Signal, 1)
+				signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+				<-sig
+			}
+		}
+		failure := testRunFailureValue(opts, tests, lintResults, runStarted, err)
+		if envelope, ok := failure.(testRunFailure); ok {
+			envelope.Performance = fixturePerformance
+			failure = envelope
+		}
+		return nil, failure
 	}
 	if tests, ok := result.([]parsers.Test); ok {
 		if opts.Baseline != "" {
@@ -338,6 +392,7 @@ func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
 		if uiServer != nil {
 			if detach {
 				snapshot := buildTestSnapshot(opts, tests, lintResults, runStarted, time.Now().UTC(), captureFinalDiagnostics(opts.Diagnostics, os.Getpid()))
+				snapshot.Performance = fixturePerformance
 				if path, err := snapshots.Save(opts.WorkDir, &snapshot); err != nil {
 					logger.Warnf("persist snapshot: %v", err)
 				} else {
@@ -374,6 +429,7 @@ func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
 			// flooded unless the user opts in.
 			printTestRunResults(tests, opts, fullSummary, lintResults)
 			snapshot := buildTestSnapshot(opts, tests, lintResults, runStarted, time.Now().UTC(), captureFinalDiagnostics(opts.Diagnostics, os.Getpid()))
+			snapshot.Performance = fixturePerformance
 			if path, err := snapshots.SavePerRun(opts.WorkDir, &snapshot, runStarted, ""); err != nil {
 				logger.Warnf("persist per-run snapshot: %v", err)
 			} else {
@@ -386,6 +442,7 @@ func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
 			return nil, nil
 		}
 		snapshot := buildTestSnapshot(opts, tests, lintResults, runStarted, time.Now().UTC(), captureFinalDiagnostics(opts.Diagnostics, os.Getpid()))
+		snapshot.Performance = fixturePerformance
 		if path, err := snapshots.Save(opts.WorkDir, &snapshot); err != nil {
 			logger.Warnf("persist snapshot: %v", err)
 		} else {

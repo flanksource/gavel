@@ -4,14 +4,21 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	captainai "github.com/flanksource/captain/pkg/ai"
+	"github.com/flanksource/captain/pkg/ai/agent"
 	capverify "github.com/flanksource/captain/pkg/ai/agent/verify"
 	"github.com/flanksource/captain/pkg/api"
+	"github.com/flanksource/commons-db/shell"
+	"github.com/flanksource/gavel/ai/prfix"
 	"github.com/flanksource/gavel/github"
+	"github.com/flanksource/gavel/pr/model"
 	"github.com/flanksource/gavel/prwatch"
 )
 
@@ -87,13 +94,13 @@ func TestHistoryOptionsForRun_PrefersTheRunsOwnSession(t *testing.T) {
 
 func TestPRContextOf_CountsOnlyUnresolvedReviewThreads(t *testing.T) {
 	result := &prwatch.PRWatchResult{
-		PR: &github.PRInfo{
+		PR: &model.PRInfo{
 			Number:      42,
 			Title:       "feat: thing",
 			URL:         "https://github.com/o/r/pull/42",
 			HeadRefName: "feat/thing",
 		},
-		Comments: []github.PRComment{
+		Comments: []model.PRComment{
 			{IsReviewThread: true, IsResolved: false, IsOutdated: false},
 			{IsReviewThread: true, IsResolved: true, IsOutdated: false},
 			{IsReviewThread: true, IsResolved: false, IsOutdated: true},
@@ -117,6 +124,179 @@ func TestPRContextOf_CountsOnlyUnresolvedReviewThreads(t *testing.T) {
 	}
 }
 
+func conflictingResult() *prwatch.PRWatchResult {
+	return &prwatch.PRWatchResult{
+		PR: &model.PRInfo{
+			Number: 42, State: "OPEN", Mergeable: "CONFLICTING",
+			URL:         "https://github.com/o/r/pull/42",
+			BaseRefName: "main", HeadRefName: "feat/thing",
+			HeadRefOID: "0123456789abcdef0123456789abcdef01234567",
+		},
+		Conflicts: &github.MergeConflictReport{
+			BaseRefName: "main", HeadRefName: "feat/thing",
+			Files: []github.MergeConflict{{Path: "go.mod", Kind: "content"}},
+		},
+	}
+}
+
+func TestPRContextOf_ProjectsTheMergeConflicts(t *testing.T) {
+	got := prContextOf(conflictingResult(), "status")
+	if got.BaseBranch != "main" {
+		t.Errorf("BaseBranch = %q, want main", got.BaseBranch)
+	}
+	if len(got.Conflicts) != 1 || got.Conflicts[0] != (prfix.Conflict{Path: "go.mod", Kind: "content"}) {
+		t.Errorf("Conflicts = %+v, want go.mod (content)", got.Conflicts)
+	}
+
+	// A CONFLICTING verdict git could not reproduce (stale, or no local checkout)
+	// has no files to resolve, so there is no merge to start and nothing to list.
+	stale := conflictingResult()
+	stale.Conflicts.Files, stale.Conflicts.Unavailable = nil, "GitHub's CONFLICTING verdict looks stale"
+	if got := prContextOf(stale, "status"); len(got.Conflicts) != 0 {
+		t.Errorf("Conflicts = %+v, want none for an unreproducible conflict", got.Conflicts)
+	}
+}
+
+// --worktree is a spec layer, so it composes like any other setup: the worktree
+// is branched from the PR head (not the caller's HEAD, which may be another
+// branch entirely) and lives outside the repository.
+func TestPRFixLayers_WorktreeBranchesFromThePRHeadOutsideTheRepo(t *testing.T) {
+	repoRoot := t.TempDir()
+	result := conflictingResult()
+	setup := prFixWorktreeSetup(prFixWorktree{RepoRoot: repoRoot, PR: result.PR, CacheDir: t.TempDir()})
+
+	layers, err := prFixLayers(prFixLayerOptions{
+		Resolve: prfix.ResolveOptions{Base: api.Spec{Model: api.Model{Name: "agent:sonnet"}}, Dir: repoRoot, PR: prContextOf(result, "status")},
+		Setup:   setup,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	composed, err := api.ComposeSpecLayers(api.ResolveSpecOptions{Layers: layers})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := composed.Spec.Setup
+	if got == nil || got.Checkout == nil || got.Checkout.Worktree == nil {
+		t.Fatalf("composed spec has no worktree setup: %+v", got)
+	}
+	wt := got.Checkout.Worktree
+	if got.Checkout.Path != repoRoot {
+		t.Errorf("Checkout.Path = %q, want the repo root %q", got.Checkout.Path, repoRoot)
+	}
+	if wt.Mode != shell.WorktreeNew || wt.Base != result.PR.HeadRefOID {
+		t.Errorf("worktree = %+v, want a new worktree based on the PR head %s", wt, result.PR.HeadRefOID)
+	}
+	if strings.HasPrefix(wt.Path, repoRoot) {
+		t.Errorf("worktree path %q is inside the repo %q", wt.Path, repoRoot)
+	}
+	if !strings.Contains(wt.Prefix, "pr-42") {
+		t.Errorf("worktree branch prefix %q does not name the PR", wt.Prefix)
+	}
+}
+
+func hookNames(hooks []any) []string {
+	names := make([]string, 0, len(hooks))
+	for _, h := range hooks {
+		if named, ok := h.(interface{ Name() string }); ok {
+			names = append(names, named.Name())
+		}
+	}
+	return names
+}
+
+// Order is load-bearing: setup relocates the run before the merge starts, so the
+// merge lands in the worktree; the commit hooks cut (and conclude the merge)
+// before the verifiers judge the turn.
+func TestPRFixHooks_SetupThenMergeThenCommitThenVerify(t *testing.T) {
+	wf := &api.Workflow{
+		Verify:  &api.Verify{Commands: []string{"true"}},
+		Commits: []api.Commit{{On: api.CommitOnTurn, Mode: api.CommitModeCommit}},
+	}
+	hooks, err := prFixHooks(context.Background(), prFixRun{Workflow: wf, Tee: io.Discard, RepoRoot: t.TempDir(), Result: conflictingResult()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := hookNames(hooks)
+	if len(names) != 4 || names[0] != "setup" || names[1] != prFixMergeHookName || names[2] != "commit:turn" {
+		t.Fatalf("hook order = %q, want setup, %s, commit:turn, then the verifier", names, prFixMergeHookName)
+	}
+	if _, ok := hooks[3].(*capverify.Plugin); !ok {
+		t.Errorf("last hook = %T, want the workflow's verifier", hooks[3])
+	}
+
+	clean := conflictingResult()
+	clean.Conflicts = nil
+	hooks, err = prFixHooks(context.Background(), prFixRun{Workflow: wf, Tee: io.Discard, RepoRoot: t.TempDir(), Result: clean})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range hookNames(hooks) {
+		if name == prFixMergeHookName {
+			t.Errorf("a PR with no conflicts must not start a merge; hooks = %q", hookNames(hooks))
+		}
+	}
+}
+
+func runGit(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v: %s", args, err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// conflictingCheckout is a repo on branch feat/thing whose go.mod conflicts
+// with main's, plus the report prwatch would have produced for it.
+func conflictingCheckout(t *testing.T) (string, *github.MergeConflictReport) {
+	t.Helper()
+	dir := t.TempDir()
+	runGit(t, dir, "init", "-b", "main")
+	runGit(t, dir, "config", "user.email", "gavel@example.com")
+	runGit(t, dir, "config", "user.name", "Gavel Test")
+	write := func(content string) {
+		if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("require xz v0.5.12\n")
+	runGit(t, dir, "add", "go.mod")
+	runGit(t, dir, "commit", "-m", "base")
+	runGit(t, dir, "switch", "-c", "feat/thing")
+	write("require xz v0.5.14\n")
+	runGit(t, dir, "commit", "-am", "branch")
+	runGit(t, dir, "switch", "main")
+	write("require xz v0.5.20\n")
+	runGit(t, dir, "commit", "-am", "main")
+	runGit(t, dir, "switch", "feat/thing")
+	return dir, &github.MergeConflictReport{
+		BaseRefName: "main", HeadRefName: "feat/thing",
+		BaseOID: runGit(t, dir, "rev-parse", "main"), HeadOID: runGit(t, dir, "rev-parse", "feat/thing"),
+		Files: []github.MergeConflict{{Path: "go.mod", Kind: "content"}},
+	}
+}
+
+// The merge is reported on the run's own stream — in order with the agent's
+// events and kept with the run's notices — not as a detached log line.
+func TestPRFixMergeHook_ReportsTheMergeItStartsOnTheRunStream(t *testing.T) {
+	dir, report := conflictingCheckout(t)
+	hc := &agent.HookContext{Context: context.Background(), Response: &captainai.Response{Workspace: &api.Workspace{Cwd: dir}}}
+
+	if err := (&prFixMergeHook{report: report}).PreRun(hc); err != nil {
+		t.Fatalf("PreRun: %v", err)
+	}
+
+	notices := hc.Workspace().Notices
+	want := "[pre-run] merging origin/main into feat/thing: 1 conflicted — go.mod"
+	if len(notices) != 1 || notices[0].Text != want {
+		t.Fatalf("notices = %+v, want exactly %q", notices, want)
+	}
+}
+
 // The original defect was a wiring one: captain's CmdVerifier swallowed a
 // ten-minute check's output because nothing handed it a live sink. This asserts
 // the sink actually reaches the verifier, which is where that would have shown.
@@ -124,7 +304,7 @@ func TestPRFixHooks_TeeVerifyOutput(t *testing.T) {
 	var sink bytes.Buffer
 
 	wf := &api.Workflow{Verify: &api.Verify{Commands: []string{"echo wired"}}}
-	hooks, err := prFixHooks(context.Background(), wf, nil, &sink)
+	hooks, err := prFixHooks(context.Background(), prFixRun{Workflow: wf, Tee: &sink, Result: &prwatch.PRWatchResult{PR: &model.PRInfo{}}})
 	if err != nil {
 		t.Fatalf("prFixHooks: %v", err)
 	}

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/captain/pkg/captainconfig"
 	"github.com/flanksource/gavel/verify"
@@ -17,6 +19,7 @@ var _ = Describe("commit runtime flag presence", func() {
 			return nil, nil
 		})
 		Expect(cmd.ParseFlags([]string{"--model=api:sonnet", "--group-model="})).To(Succeed())
+		cmd.SetContext(context.Background())
 		Expect(cmd.RunE(cmd, nil)).To(Succeed())
 		opts := buildCommitOptions(captured, "/work/review", verify.GavelConfig{}, nil)
 		model, err := opts.Flags.ToModel()
@@ -38,6 +41,7 @@ var _ = Describe("commit runtime flag presence", func() {
 			return nil, nil
 		})
 		Expect(cmd.ParseFlags([]string{"--model=api:sonnet", "--effort="})).To(Succeed())
+		cmd.SetContext(context.Background())
 		Expect(cmd.RunE(cmd, nil)).To(Succeed())
 		model, err := captured.ModelFlags.ToModel()
 		Expect(err).NotTo(HaveOccurred())
@@ -59,6 +63,7 @@ var _ = Describe("commit runtime flag presence", func() {
 			return nil, nil
 		})
 		Expect(cmd.ParseFlags([]string{"--model=api:sonnet", "--no-cache=false", "--fallback="})).To(Succeed())
+		cmd.SetContext(context.Background())
 		Expect(cmd.RunE(cmd, nil)).To(Succeed())
 		model, err := captured.ModelFlags.ToModel()
 		Expect(err).NotTo(HaveOccurred())

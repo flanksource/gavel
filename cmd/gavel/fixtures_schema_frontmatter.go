@@ -21,7 +21,7 @@ func fixtureFrontmatterSchema() fixtureJSONSchema {
 			"fixtures --help",
 		),
 		"x-order": []string{
-			"build", "daemon", "exec", "args", "env", "cwd", "terminal", "setup", "record", "files", "codeBlocks",
+			"build", "daemon", "exec", "args", "env", "cwd", "terminal", "setup", "record", "goProfiles", "files", "codeBlocks",
 			"timeout", "os", "arch", "skip", "ai", "verify",
 		},
 		"properties": map[string]any{
@@ -34,6 +34,7 @@ func fixtureFrontmatterSchema() fixtureJSONSchema {
 			"terminal":   withHelp(enumProp("Terminal", "Terminal mode. `pty` uses a pseudo-terminal and merges stdout/stderr.", []string{"pty"}), "File structure", "`pty` mode uses a pseudo-terminal, which is useful for terminal UI output and ANSI assertions.", "fixtures --help", "pty"),
 			"setup":      fixtureSetupSchema(),
 			"record":     fixtureRecordSchema(),
+			"goProfiles": fixtureGoProfilesSchema(),
 			"files":      withHelp(stringProp("Files", "Glob pattern: replicate tests per matching file."), "File expansion", "Set `files` to replicate each test per matched file. File variables such as `file`, `filename`, `dir`, and `ext` become available.", "fixtures --help", "**/*.go"),
 			"codeBlocks": withHelp(stringArrayProp("Code blocks", "Executable code fence languages."), "Supported languages", "Languages to execute from standalone code fences. Non-executable labels such as yaml/frontmatter/json are parsed as config.", "fixtures --help", []string{"bash", "python"}),
 			"timeout":    withHelp(stringProp("Timeout", "Total timeout for fixture execution."), "Execution", "Total timeout for test execution. Individual command blocks can override this with YAML config or `timeout=N` fence attributes.", "fixtures --help", "30s"),
@@ -189,10 +190,11 @@ func fixtureRecordHTTPSchema() fixtureJSONSchema {
 			"Points the child at a recording proxy through HTTP_PROXY/HTTPS_PROXY and writes what it sees as a HAR, openable in Chrome DevTools. In the default `connect` mode TLS payloads stay encrypted and each tunnel is recorded as one entry with its host, duration and byte counts; plain HTTP is always recorded in full.",
 			"fixtures --help",
 		),
-		"x-order": []string{"mode", "hosts", "bodies", "redact", "requireEntries", "scope"},
+		"x-order": []string{"mode", "hosts", "paths", "bodies", "redact", "requireEntries", "scope"},
 		"properties": map[string]any{
 			"mode":   withHelpDefault(enumProp("Mode", "How much of the traffic is visible.", []string{"off", "connect", "mitm"}), "connect", "Recording", "`connect` records TLS tunnels without decrypting them. `mitm` terminates TLS with a generated, ephemeral CA — opt-in, because whether a given runtime trusts that CA is best-effort. The CA is never installed into a system trust store.", "fixtures --help", "connect"),
 			"hosts":  withHelp(stringArrayProp("Hosts", "Glob patterns limiting what is recorded. Empty records everything."), "Recording", "Only matching hosts are recorded, and under `mitm` only matching hosts are decrypted.", "fixtures --help", []string{"*.github.com"}),
+			"paths":  withHelp(stringArrayProp("Paths", "URL-path globs limiting which exchanges are recorded. Empty records every path."), "Recording", "Only exchanges whose path matches are recorded; tunnels have no visible path and follow `hosts` alone.", "fixtures --help", []string{"/api/*"}),
 			"bodies": withHelp(stringProp("Bodies", "Cap on captured body size, e.g. 64KiB. Zero in connect mode — a tunnel has no readable body."), "Recording", "How much of each request and response body is written to the HAR. Bodies over the cap are truncated and marked.", "fixtures --help", "64KiB"),
 			"redact": withHelp(stringArrayProp("Redact", "Extra header names to blank out."), "Recording", "Blanked in addition to the built-in denylist (authorization, proxy-authorization, cookie, set-cookie, x-api-key, x-auth-token), which is always applied on disk and cannot be disabled.", "fixtures --help", []string{"x-my-token"}),
 			"requireEntries": withHelp(integerProp("Require entries", "Fail the fixture when fewer than N entries were recorded.", 0, 0), "Recording",
@@ -233,10 +235,11 @@ func fixtureSetupWorktreeSchema() fixtureJSONSchema {
 		"description":          "Disposable worktree the file's fixtures run in.",
 		"additionalProperties": true,
 		"x-help":               fixtureHelpBlock("Setup", "A worktree isolates the file from the rest of the repository — not its tests from each other, since every test in the file shares the same tree. Nothing is ever stashed: the source repository is never mutated.", "fixtures --help"),
-		"x-order":              []string{"mode", "base", "uncommitted", "ignored", "prefix", "path", "keep"},
+		"x-order":              []string{"mode", "base", "uncommitted", "ignored", "prefix", "path", "branch", "keep"},
 		"properties": map[string]any{
-			"mode": withHelp(enumProp("Mode", "Worktree lifecycle.", []string{"none", "new", "existing"}), "Setup", "`new` creates a disposable worktree and removes it afterwards; `existing` reuses the one at `path`; `none` runs in the checkout itself.", "fixtures --help", "new"),
-			"base": withHelpDefault(stringProp("Base", "Commit-ish the new worktree branches from."), "HEAD", "Setup", "Defaults to HEAD so the start commit is the tree you are looking at, independent of `checkout.ref`.", "fixtures --help", "HEAD"),
+			"mode":   withHelp(enumProp("Mode", "Worktree lifecycle.", []string{"none", "new", "existing", "branch"}), "Setup", "`new` creates a disposable worktree and removes it afterwards; `existing` reuses the one at `path`; `branch` checks out the existing `branch` as it is; `none` runs in the checkout itself.", "fixtures --help", "new"),
+			"branch": withHelp(stringProp("Branch", "Existing branch to check out, with mode: branch."), "Setup", "The branch must exist and not be checked out in another worktree. It is checked out as it is and never deleted at teardown.", "fixtures --help"),
+			"base":   withHelpDefault(stringProp("Base", "Commit-ish the new worktree branches from."), "HEAD", "Setup", "Defaults to HEAD so the start commit is the tree you are looking at, independent of `checkout.ref`.", "fixtures --help", "HEAD"),
 			// No `default:` for uncommitted — its default is conditional on
 			// base, and a static `default: clone` in the schema would tell
 			// editor completion something that is only sometimes true.
@@ -291,6 +294,23 @@ func fixturePromptFenceSchema(description string) fixtureJSONSchema {
 	}
 }
 
+func fixtureGoProfilesSchema() fixtureJSONSchema {
+	return fixtureJSONSchema{
+		"type":        "object",
+		"description": "Named Go pprof outputs checked after each exec when --profile is enabled. Missing outputs are valid.",
+		"additionalProperties": fixtureJSONSchema{
+			"type":                 "object",
+			"additionalProperties": false,
+			"properties": map[string]any{
+				"file":      stringProp("File", "Relative pprof filename under this fixture's isolated artifact directory."),
+				"directory": stringProp("Directory", "Relative directory whose emitted files are Go pprof profiles."),
+				"args":      stringArrayProp("Arguments", "Arguments appended to the exec only with --profile; use {{.path}} for the absolute destination."),
+				"env":       stringProp("Environment variable", "Variable set to the absolute destination only with --profile."),
+			},
+		},
+	}
+}
+
 func fixtureExecFenceSchema() fixtureJSONSchema {
 	return fixtureJSONSchema{
 		"type":                 "object",
@@ -302,9 +322,10 @@ func fixtureExecFenceSchema() fixtureJSONSchema {
 			"fixtures --help",
 		),
 		"x-order": []string{
-			"content", "exitCode", "cel", "stdout", "stderr", "output", "error", "format", "count", "timeout", "properties",
+			"content", "exitCode", "cel", "stdout", "stderr", "output", "error", "format", "count", "timeout", "goProfiles", "properties",
 		},
 		"properties": map[string]any{
+			"goProfiles": fixtureGoProfilesSchema(),
 			"content": fixtureSchemaProperty{
 				"type":        "string",
 				"title":       "Content",

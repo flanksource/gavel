@@ -197,7 +197,25 @@ type ExecFixtureBase struct {
 	// terminal's ANSI stream, the child's HTTP calls, its SQL. Nil means none
 	// start: every fixture in a run shares one parallel task group, so an
 	// always-on recorder would multiply listeners across the whole run.
-	Record *record.Spec `yaml:"record,omitempty" json:"record,omitempty"`
+	Record     *record.Spec               `yaml:"record,omitempty" json:"record,omitempty"`
+	GoProfiles map[string]GoProfileOutput `yaml:"goProfiles,omitempty" json:"go_profiles,omitempty"`
+}
+
+type GoProfileOutput struct {
+	File      string   `yaml:"file,omitempty" json:"file,omitempty"`
+	Directory string   `yaml:"directory,omitempty" json:"directory,omitempty"`
+	Args      []string `yaml:"args,omitempty" json:"args,omitempty"`
+	Env       string   `yaml:"env,omitempty" json:"env,omitempty"`
+}
+
+type GoProfileArtifact struct {
+	Name        string   `json:"name"`
+	ID          string   `json:"id,omitempty"`
+	Path        string   `json:"path,omitempty"`
+	Status      string   `json:"status"`
+	Bytes       int64    `json:"bytes,omitempty"`
+	SampleTypes []string `json:"sample_types,omitempty"`
+	Error       string   `json:"error,omitempty"`
 }
 
 func relativePath(path string) string {
@@ -372,6 +390,9 @@ func (e ExecFixtureBase) MergeInto(other ExecFixtureBase) ExecFixtureBase {
 	if other.Record != nil {
 		merged.Record = other.Record
 	}
+	if other.GoProfiles != nil {
+		merged.GoProfiles = other.GoProfiles
+	}
 
 	if merged.Exec == "" {
 		merged.Exec = "bash"
@@ -508,11 +529,15 @@ func (nt NodeType) Pretty() api.Text {
 // It contains core information, execution results, and metadata about the test run.
 type FixtureResult struct {
 	// Core fields
-	Name     string        `json:"name" pretty:"label=Test Name,style=text-blue-600"`
-	Type     string        `json:"type,omitempty" pretty:"label=Type,style=text-gray-500"`
-	Status   task.Status   `json:"status,omitempty" `
-	Duration time.Duration `json:"duration,omitempty" pretty:"label=Duration,style=text-yellow-600,omitempty"`
-	Test     FixtureTest   `json:"-"` // Only populated for Test nodes
+	Name            string              `json:"name" pretty:"label=Test Name,style=text-blue-600"`
+	Type            string              `json:"type,omitempty" pretty:"label=Type,style=text-gray-500"`
+	Status          task.Status         `json:"status,omitempty" `
+	Duration        time.Duration       `json:"duration,omitempty" pretty:"label=Duration,style=text-yellow-600,omitempty"`
+	CommandDuration time.Duration       `json:"command_duration,omitempty"`
+	Profile         *FixtureProfile     `json:"profile,omitempty"`
+	SQLProfile      *SQLProfile         `json:"sql_profile,omitempty"`
+	GoProfiles      []GoProfileArtifact `json:"go_profiles,omitempty" pretty:"hide"`
+	Test            FixtureTest         `json:"-"` // Only populated for Test nodes
 
 	// Result data
 	Error     string      `json:"error,omitempty" pretty:"label=Error,style=text-red-600,omitempty"`

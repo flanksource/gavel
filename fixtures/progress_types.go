@@ -24,18 +24,20 @@ const (
 type ExecutionKind string
 
 const (
-	ExecutionKindRoot      ExecutionKind = "root"
-	ExecutionKindFile      ExecutionKind = "file"
-	ExecutionKindSection   ExecutionKind = "section"
-	ExecutionKindTable     ExecutionKind = "table"
-	ExecutionKindCommand   ExecutionKind = "command"
-	ExecutionKindTest      ExecutionKind = "test"
-	ExecutionKindLint      ExecutionKind = "lint"
-	ExecutionKindAI        ExecutionKind = "ai"
-	ExecutionKindChecklist ExecutionKind = "checklist"
-	ExecutionKindSetup     ExecutionKind = "setup"
-	ExecutionKindBuild     ExecutionKind = "build"
-	ExecutionKindDaemon    ExecutionKind = "daemon"
+	ExecutionKindRoot       ExecutionKind = "root"
+	ExecutionKindFile       ExecutionKind = "file"
+	ExecutionKindSection    ExecutionKind = "section"
+	ExecutionKindTable      ExecutionKind = "table"
+	ExecutionKindCommand    ExecutionKind = "command"
+	ExecutionKindTest       ExecutionKind = "test"
+	ExecutionKindLint       ExecutionKind = "lint"
+	ExecutionKindAI         ExecutionKind = "ai"
+	ExecutionKindChecklist  ExecutionKind = "checklist"
+	ExecutionKindSetup      ExecutionKind = "setup"
+	ExecutionKindBuild      ExecutionKind = "build"
+	ExecutionKindDaemon     ExecutionKind = "daemon"
+	ExecutionKindDaemonStop ExecutionKind = "daemon-stop"
+	ExecutionKindCleanup    ExecutionKind = "cleanup"
 )
 
 type ExecutionStep struct {

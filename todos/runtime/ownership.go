@@ -8,6 +8,7 @@ import (
 	"time"
 
 	captaindb "github.com/flanksource/captain/pkg/database"
+	"github.com/flanksource/captain/pkg/promptrun"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/native"
@@ -136,6 +137,11 @@ func (p *Provider) resolveActiveRunConflict(
 	}
 	owner := link.Owner()
 	alive, reason := owner.Alive(time.Now())
+	if !alive && preparation.Resume && run.State == captaindb.PromptRunStateWaiting {
+		// A parked run waits on its answer, not on the process that parked it:
+		// PrepareRun's resume branch claims it in place.
+		return false, nil
+	}
 	if !alive {
 		// Nothing is driving this run to completion, so it will never reach a
 		// terminal state on its own. Reclaim it rather than leaving the TODO
@@ -169,20 +175,12 @@ func (p *Provider) resolveActiveRunConflict(
 	}
 }
 
-// reclaimRun marks an abandoned run cancelled so the TODO can be dispatched
-// again. The reason is recorded on the run itself: a reclaimed run must not
-// look like one that simply stopped.
+// reclaimRun cancels an abandoned run through Captain so the TODO can be
+// dispatched again; Captain withdraws its pending tool approvals with it. The
+// reason is recorded on the run itself: a reclaimed run must not look like one
+// that simply stopped.
 func (p *Provider) reclaimRun(ctx context.Context, run *captaindb.PromptRun, reason string) error {
-	state := captaindb.PromptRunStateCancelled
-	phase := run.Phase
-	if phase == captaindb.PromptRunPhaseQueued || phase == captaindb.PromptRunPhasePreRun {
-		phase = captaindb.PromptRunPhaseGenerate
-	}
-	errorText := "reclaimed: " + reason
-	if _, err := p.captain.UpdatePromptRun(ctx, captaindb.UpdatePromptRunInput{
-		ID: run.ID, ExpectedVersion: run.Version,
-		State: &state, Phase: &phase, Error: &errorText,
-	}); err != nil {
+	if _, err := promptrun.Cancel(ctx, p.captain, run.ID, "reclaimed: "+reason); err != nil {
 		return fmt.Errorf("reclaim orphaned prompt run %s: %w", run.ID, err)
 	}
 	p.ownership.stop(run.ID)

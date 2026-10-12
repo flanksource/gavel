@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/clicky"
 	clickyapi "github.com/flanksource/clicky/api"
 	"github.com/flanksource/clicky/api/icons"
@@ -26,9 +25,6 @@ type ExecutorContext struct {
 	onSessionID   func(sessionID string)
 	onRunPrepared func(RunPreparationResult)
 	onRunStart    func(RunStartMetadata)
-	onNotices     func(sessionID string, notices []api.Notice)
-	// onVerifyProgress receives the definition of done's in-flight reports.
-	onVerifyProgress func(api.VerifyReport)
 }
 
 // RunStartMetadata is the human-facing run identity recorded on a TODO issue
@@ -42,12 +38,6 @@ type RunStartMetadata struct {
 	RuntimeMode   string
 	ResolvedModel string
 	Effort        string
-	// Spec, when set, is the request as it stands after setup has run: the
-	// checkout consumed and Cwd pointing at the tree the agent works in. It is
-	// reported once, from a hook that trails the setup plugin, and updates the
-	// run's persisted rendered spec. Reports that cannot see it leave it nil
-	// rather than overwriting with the pre-setup request.
-	Spec *api.Spec
 }
 
 // UserInteraction handles user-facing communication during TODO execution.
@@ -258,11 +248,11 @@ func (ctx *ExecutorContext) SetRunPreparedHook(fn func(RunPreparationResult)) {
 	ctx.onRunPrepared = fn
 }
 
-// RecordRunPrepared reports Captain's durable admission identity, and binds the
-// admitted run to this execution's context. A TODO can have more than one run
-// in flight, so every later callback has to report against the run it was
+// BindRun binds the identity a run is dispatched under to this execution's
+// context, before the run is dispatched. A TODO can have more than one run in
+// flight, so every later callback has to report against the run it was
 // prepared for rather than against whichever run the TODO points at now.
-func (ctx *ExecutorContext) RecordRunPrepared(result RunPreparationResult) {
+func (ctx *ExecutorContext) BindRun(result RunPreparationResult) {
 	if result.PromptRunID != uuid.Nil {
 		ctx.Context = WithPromptRun(ctx.Context, result.PromptRunID)
 	}
@@ -272,6 +262,10 @@ func (ctx *ExecutorContext) RecordRunPrepared(result RunPreparationResult) {
 	if sessionID, err := uuid.Parse(result.SessionID); err == nil && sessionID != uuid.Nil {
 		ctx.Context = WithCaptainSession(ctx.Context, sessionID)
 	}
+}
+
+// RecordRunPrepared reports that Captain has committed the run's admission.
+func (ctx *ExecutorContext) RecordRunPrepared(result RunPreparationResult) {
 	if result.SessionID == "" || ctx.onRunPrepared == nil {
 		return
 	}
@@ -316,50 +310,20 @@ func PromptRunFromContext(ctx context.Context) uuid.UUID {
 }
 
 // SetRunStartHook registers a callback an executor invokes with the resolved
-// runtime before dispatch and again if the provider later supplies a session ID.
+// runtime once Captain has admitted the run, and again if the provider later
+// supplies a session ID.
 func (ctx *ExecutorContext) SetRunStartHook(fn func(RunStartMetadata)) {
 	ctx.onRunStart = fn
 }
 
 // RecordRunStart reports the run metadata to the registered hook (if any).
-// Executors call it once before dispatch with the resolved runtime, then again
-// when the provider supplies a session ID.
+// Executors call it once the run is admitted, then again when the provider
+// supplies a session ID.
 func (ctx *ExecutorContext) RecordRunStart(meta RunStartMetadata) {
 	if ctx.onRunStart == nil {
 		return
 	}
 	ctx.onRunStart(meta)
-}
-
-// SetVerifyProgressHook registers a callback an executor hands to captain's
-// verify Options.Progress, so every in-flight verification report reaches the
-// run's persistence without the executor knowing what persistence is.
-func (ctx *ExecutorContext) SetVerifyProgressHook(fn func(api.VerifyReport)) {
-	ctx.onVerifyProgress = fn
-}
-
-// RecordVerifyProgress reports one in-flight verification snapshot to the
-// registered hook (if any).
-func (ctx *ExecutorContext) RecordVerifyProgress(report api.VerifyReport) {
-	if ctx.onVerifyProgress == nil {
-		return
-	}
-	ctx.onVerifyProgress(report)
-}
-
-// SetNoticesHook registers a callback an executor invokes (via RecordNotices)
-// once the run is over, with everything its lifecycle hooks reported doing.
-func (ctx *ExecutorContext) SetNoticesHook(fn func(sessionID string, notices []api.Notice)) {
-	ctx.onNotices = fn
-}
-
-// RecordNotices reports the run's lifecycle notices to the registered hook (if
-// any). Executors call it after the run, when the session id is settled.
-func (ctx *ExecutorContext) RecordNotices(sessionID string, notices []api.Notice) {
-	if len(notices) == 0 || ctx.onNotices == nil {
-		return
-	}
-	ctx.onNotices(sessionID, notices)
 }
 
 // ExecutionTranscript records the complete interaction history during TODO execution.

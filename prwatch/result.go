@@ -12,17 +12,18 @@ import (
 	"github.com/flanksource/clicky/api"
 	clickymarkdown "github.com/flanksource/clicky/markdown"
 	"github.com/flanksource/gavel/github"
+	"github.com/flanksource/gavel/pr/model"
 )
 
 type PRWatchResult struct {
-	PR   *github.PRInfo                `json:"pr"`
-	Runs map[int64]*github.WorkflowRun `json:"runs,omitempty"`
+	PR   *model.PRInfo                `json:"pr"`
+	Runs map[int64]*model.WorkflowRun `json:"runs,omitempty"`
 	// Conflicts is populated only while the PR is CONFLICTING, and carries the
 	// conflicting paths reconstructed locally — GitHub reports the verdict but
 	// never the files.
 	Conflicts    *github.MergeConflictReport `json:"conflicts,omitempty"`
 	GavelResults []*GavelResultsSummary      `json:"gavelResults,omitempty"`
-	Comments     []github.PRComment          `json:"comments,omitempty"`
+	Comments     []model.PRComment           `json:"comments,omitempty"`
 }
 
 // HasMergeConflict reports whether GitHub currently refuses to merge the PR
@@ -38,7 +39,7 @@ func (r PRWatchResult) HasMergeConflict() bool {
 // an independent failure signal rather than a restatement of the rollup.
 func (r PRWatchResult) HasFailedRun() bool {
 	for _, run := range r.Runs {
-		if run != nil && github.RunHasFailedJob(run) {
+		if run != nil && model.RunHasFailedJob(run) {
 			return true
 		}
 	}
@@ -111,17 +112,20 @@ func (r PRWatchResult) prettyWorkflows() api.Text {
 	}
 
 	for _, check := range r.PR.StatusCheckRollup {
+		if check.RunID != 0 && r.Runs[check.RunID] != nil {
+			continue
+		}
 		runID, err := github.ExtractRunID(check.DetailsURL)
 		if err == nil && r.Runs[runID] != nil {
 			continue
 		}
 		text = text.NewLine().Append("  ", "").
-			Add(github.StatusIcon(check.Status, check.Conclusion)).
+			Add(model.StatusIcon(check.Status, check.Conclusion)).
 			Append(" "+check.Name, "")
 		// A rollup-only check has no jobs to expand, so a failure would
 		// otherwise render as a bare name with nothing to act on — and it is
 		// exactly what drives a non-zero exit code.
-		if github.IsFailureConclusion(check.Conclusion) && check.DetailsURL != "" {
+		if model.IsFailureConclusion(check.Conclusion) && check.DetailsURL != "" {
 			text = text.NewLine().Append("    "+check.DetailsURL, "text-blue-600")
 		}
 	}
@@ -132,8 +136,8 @@ func (r PRWatchResult) prettyWorkflows() api.Text {
 // sortedRuns gives the workflow list a stable order. Runs are held in a map
 // keyed by run ID, so ranging over it directly reorders the whole section
 // between invocations.
-func sortedRuns(runs map[int64]*github.WorkflowRun) []*github.WorkflowRun {
-	sorted := make([]*github.WorkflowRun, 0, len(runs))
+func sortedRuns(runs map[int64]*model.WorkflowRun) []*model.WorkflowRun {
+	sorted := make([]*model.WorkflowRun, 0, len(runs))
 	for _, run := range runs {
 		if run != nil {
 			sorted = append(sorted, run)
@@ -156,7 +160,7 @@ func sortedRuns(runs map[int64]*github.WorkflowRun) []*github.WorkflowRun {
 
 // runStartedAt is the earliest job start in the run. Skipped jobs never start,
 // so their zero time is ignored rather than winning the comparison.
-func runStartedAt(run *github.WorkflowRun) time.Time {
+func runStartedAt(run *model.WorkflowRun) time.Time {
 	var earliest time.Time
 	for i := range run.Jobs {
 		started := run.Jobs[i].StartedAt
@@ -173,7 +177,7 @@ func runStartedAt(run *github.WorkflowRun) time.Time {
 // runLabels disambiguates workflows that ran more than once on the same PR.
 // Two runs of the same workflow otherwise render under identical headings and
 // read as a duplicated section rather than two separate runs.
-func runLabels(runs []*github.WorkflowRun) map[int64]string {
+func runLabels(runs []*model.WorkflowRun) map[int64]string {
 	counts := make(map[string]int, len(runs))
 	for _, run := range runs {
 		counts[run.Name]++
@@ -202,10 +206,10 @@ func (r PRWatchResult) prettyComments() api.Text {
 	type fileEntry struct {
 		dir      string
 		file     string
-		comments []github.PRComment
+		comments []model.PRComment
 	}
 	fileMap := make(map[string]*fileEntry)
-	var noPath []github.PRComment
+	var noPath []model.PRComment
 
 	for _, c := range r.Comments {
 		if c.Path == "" {
@@ -268,8 +272,8 @@ func (r PRWatchResult) prettyComments() api.Text {
 	return text
 }
 
-func prettyCommentLine(c github.PRComment, indent string) api.Text {
-	text := clicky.Text(indent, "").Add(github.SeverityIcon(c.Severity))
+func prettyCommentLine(c model.PRComment, indent string) api.Text {
+	text := clicky.Text(indent, "").Add(model.SeverityIcon(c.Severity))
 	if c.Line > 0 {
 		text = text.Append(fmt.Sprintf(" :%d", c.Line), "text-gray-500")
 	}

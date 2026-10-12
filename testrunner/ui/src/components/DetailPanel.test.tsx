@@ -64,3 +64,39 @@ describe('DetailPanel fixture CEL trace', () => {
     expect(screen.queryByText('actual == expected')).toBeNull();
   });
 });
+
+describe('DetailPanel fixture resources', () => {
+	it('shows SQL text and bound parameters for a fixture test', () => {
+		render(<DetailPanel test={{ name: 'SQL fixture', framework: 'fixture', passed: true,
+			sql_profile: { path: 'sqlprofile.jsonl', query_count: 1, slow_query_count: 0, total_duration_ms: 10, max_query_ms: 10,
+				statements: [{ sql: 'SELECT * FROM users WHERE id = ?', params: ['42'], duration_ms: 10, rows: 1, slow: false, error: false }] },
+		}} />);
+		fireEvent.click(screen.getByText('1 query'));
+		expect(screen.getByText('SELECT * FROM users WHERE id = ?')).toBeTruthy();
+		expect(screen.getByText('42')).toBeTruthy();
+	});
+	it('distinguishes an absent Go profile from a captured download', () => {
+		render(<DetailPanel test={{ name: 'profiled fixture', framework: 'fixture', passed: true,
+			fixture_profile: { scope: 'process_tree', sample_count: 2, peak_cpu_percent: 2, peak_memory_percent: 1, peak_rss_bytes: 1024,
+				disk_io: { disk_read_bytes: 1024, disk_write_bytes: 2048, sample_count: 2 } },
+			go_profiles: [{ name: 'cpu', id: 'run-a/cpu.pprof', status: 'captured', bytes: 4096 }, { name: 'heap', status: 'not_emitted' }],
+		}} />);
+		expect(screen.getByText('Observed disk read')).toBeTruthy();
+		expect(screen.getByText('Not emitted')).toBeTruthy();
+		expect(screen.getByRole('link', { name: /Download/ }).getAttribute('href')).toBe('/api/tests/fixture-profile?id=run-a%2Fcpu.pprof');
+	});
+
+  it('shows the selected fixture process tree peaks and sample coverage', () => {
+    render(<DetailPanel test={{
+      name: 'single star function', framework: 'fixture', passed: true,
+      fixture_profile: { scope: 'process_tree', pid: 11232, sample_count: 4, peak_cpu_percent: 104.4, peak_memory_percent: 0.3, peak_rss_bytes: 119914496 },
+    }} />);
+
+    expect(screen.getByText('Resources')).toBeTruthy();
+    expect(screen.getByText('104.4%')).toBeTruthy();
+    expect(screen.getByText('114 MB')).toBeTruthy();
+    expect(screen.getByText('0.3%')).toBeTruthy();
+    expect(screen.getByText(/4 samples/)).toBeTruthy();
+    expect(screen.getByText(/PID 11232/)).toBeTruthy();
+  });
+});

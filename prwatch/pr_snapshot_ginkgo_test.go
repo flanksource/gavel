@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/flanksource/gavel/github"
+	"github.com/flanksource/gavel/pr/model"
 	"github.com/flanksource/gavel/testrunner/parsers"
 	testui "github.com/flanksource/gavel/testrunner/ui"
 	. "github.com/onsi/ginkgo/v2"
@@ -14,21 +15,48 @@ import (
 
 // stickyComment builds the PR comment gavel posts per matrix shard: a sticky id
 // plus the artifact link FindGavelArtifacts scans for.
-func stickyComment(id int64, stickyID string, artifactID int64) github.PRComment {
-	return github.PRComment{
+func stickyComment(id int64, stickyID string, artifactID int64) model.PRComment {
+	return model.PRComment{
 		ID: id,
 		Body: fmt.Sprintf("<!-- sticky-comment:%s -->\n[View full results](https://github.com/acme/widgets/actions/runs/123/artifacts/%d)",
 			stickyID, artifactID),
 	}
 }
 
-func prWith(comments ...github.PRComment) prFetcher {
-	return func(github.Options, int) (*github.PRInfo, error) {
-		return &github.PRInfo{Number: 12, Comments: comments}, nil
+func prWith(comments ...model.PRComment) prFetcher {
+	return func(github.Options, int) (*model.PRInfo, error) {
+		return &model.PRInfo{Number: 12, Comments: comments}, nil
 	}
 }
 
 var _ = Describe("PR snapshot download", func() {
+	It("decodes standalone lint arrays without inventing test results", func() {
+		payload := []byte(`[{"linter":"tsc","success":true,"violations":[{"file":"config.ts","line":7}]},{"linter":"ruff","skipped":true}]`)
+		snap, err := DecodeArtifactSnapshot(payload)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(snap.Tests).To(BeEmpty())
+		Expect(snap.Status.LintRun).To(BeTrue())
+		Expect(snap.Lint).To(HaveLen(2))
+		Expect(snap.Lint[0].Linter).To(Equal("tsc"))
+		Expect(snap.Lint[0].Violations).To(HaveLen(1))
+		Expect(snap.Lint[1].Skipped).To(BeTrue())
+		summary := ComputeGavelSummary(payload, github.GavelArtifact{StickyID: "gavel-lint"})
+		Expect(summary.TestsTotal).To(BeZero())
+		Expect(summary.LintLinters).To(Equal(1))
+		Expect(summary.LintViolations).To(Equal(1))
+		Expect(summary.Lint).To(Equal(snap.Lint[:1]))
+	})
+
+	DescribeTable("rejects ambiguous standalone lint arrays",
+		func(payload string) {
+			_, err := DecodeArtifactSnapshot([]byte(payload))
+			Expect(err).To(HaveOccurred())
+		},
+		Entry("mixed test and lint records", `[{"linter":"tsc"},{"name":"test","passed":true}]`),
+		Entry("empty linter", `[{"linter":""}]`),
+		Entry("null linter", `[{"linter":null}]`),
+	)
+
 	It("merges every matrix shard's results into one snapshot", func() {
 		fetch := prWith(
 			stickyComment(10, "gavel-test", 1),
@@ -150,7 +178,7 @@ var _ = Describe("PR snapshot download", func() {
 
 	It("fails loudly when the PR published no gavel artifacts", func() {
 		_, err := downloadPRSnapshot(github.Options{}, 12,
-			prWith(github.PRComment{ID: 10, Body: "looks good to me"}),
+			prWith(model.PRComment{ID: 10, Body: "looks good to me"}),
 			func(github.Options, int64) ([]byte, error) { return nil, errors.New("never called") })
 
 		Expect(err).To(MatchError(ContainSubstring("PR #12 has no gavel result artifacts")))

@@ -53,24 +53,29 @@ func (h *Host) VerifyStep(ctx context.Context, todo *types.TODO, request api.Spe
 	if report == nil {
 		return nil, fmt.Errorf("definition of done produced no report")
 	}
-	return h.checkResult(ctx, todo, *report, time.Since(start)), nil
+	return h.checkResult(ctx, todo, outcome, *report, time.Since(start))
 }
 
 // checkResult renders the verdict for display and persists the "Latest Failure"
-// record a failing check leaves on the todo.
-func (h *Host) checkResult(ctx context.Context, todo *types.TODO, report api.VerifyReport, elapsed time.Duration) *types.CheckResult {
-	workDir := h.stepWorkDir(todo)
-	branch, commit, dirty, _ := todos.GetGitInfo(workDir)
-	testResult := todos.BuildTestResultInfo(report, types.BuildTestResultInfoOptions{
-		CWD: workDir, GitBranch: branch, GitCommit: commit, GitDirty: dirty,
-		Timestamp: time.Now().Add(-elapsed), Passed: report.Passed, Duration: elapsed,
-	})
+// record a failing check leaves on the todo. The commit it reports is the one
+// the verify step checked — a run's worktree head is not the main checkout's.
+func (h *Host) checkResult(ctx context.Context, todo *types.TODO, outcome *StepOutcome, report api.VerifyReport, elapsed time.Duration) (*types.CheckResult, error) {
+	var workspace *api.WorkspaceRecord
+	if outcome.Execution != nil {
+		workspace = outcome.Execution.Workspace
+	}
+	target, info, err := verifiedTarget(outcome.VerifyTarget, workspace, h.stepWorkDir(todo))
+	if err != nil {
+		return nil, err
+	}
+	info.Timestamp, info.Passed, info.Duration = time.Now().Add(-elapsed), report.Passed, elapsed
+	testResult := todos.BuildTestResultInfo(report, info)
 	result := &types.CheckResult{
 		TODO: todo, AllPassed: report.Passed, Duration: elapsed,
-		Report: &report, TestResult: testResult,
+		Report: &report, TestResult: testResult, Target: &target,
 	}
 	if report.Passed || h.Provider == nil {
-		return result
+		return result, nil
 	}
 	persistCtx, cancel := todos.PersistenceContext(ctx)
 	defer cancel()
@@ -79,5 +84,5 @@ func (h *Host) checkResult(ctx context.Context, todo *types.TODO, report api.Ver
 		// section is not worth turning a reported result into an error.
 		fmt.Fprintf(os.Stderr, "failed to update Latest Failure section for %s: %v\n", todos.TODOReference(todo), err)
 	}
-	return result
+	return result, nil
 }

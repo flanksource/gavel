@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { TodoItem } from '../../types';
 import { LIFECYCLE_MOCK_DRAFT, LIFECYCLE_MOCK_IMPLEMENTED, LIFECYCLE_MOCK_REVIEW } from './lifecycleMock';
-import { otherLifecycleSteps, primaryLifecycleAction } from './TodoPhaseButton';
+import { otherLifecycleSteps, primaryLifecycleAction, primaryRunExtras, runBranchItems } from './TodoPhaseButton';
 
 function todoWith(overrides: Partial<TodoItem> = {}): TodoItem {
   return { ref: 'todo-1', title: 'A todo', status: 'pending', priority: 'medium', ...overrides };
@@ -65,6 +65,41 @@ describe('primaryLifecycleAction', () => {
 
   it('reports none when the server marks nothing as next for a review todo with no lifecycle payload', () => {
     expect(primaryLifecycleAction(todoWith({ status: 'review' }), false)).toEqual({ kind: 'review' });
+  });
+});
+
+describe('run branch choice', () => {
+  const runStep = { name: 'run', label: 'Run', applicable: true, suggested: true, done: false, lastRun: null };
+  const planStep = { ...runStep, name: 'plan', label: 'Plan', suggested: false };
+  const choice = { branch: 'shell/abc', unresolved: 2 };
+
+  it('continues on the reusable branch when the primary action is run', () => {
+    const todo = todoWith({ lifecycle: { steps: [runStep], next: 'run', reason: '' } });
+    expect(primaryRunExtras(primaryLifecycleAction(todo, false), choice)).toEqual({ reuseBranch: true });
+  });
+
+  it('adds nothing when no branch can be reused or the primary step is not run', () => {
+    const runTodo = todoWith({ lifecycle: { steps: [runStep], next: 'run', reason: '' } });
+    const planTodo = todoWith({ lifecycle: { steps: [planStep, runStep], next: 'plan', reason: '' } });
+    expect(primaryRunExtras(primaryLifecycleAction(runTodo, false), null)).toBeUndefined();
+    expect(primaryRunExtras(primaryLifecycleAction(planTodo, false), choice)).toBeUndefined();
+  });
+
+  it('offers continue and new-branch runs whenever run is applicable', () => {
+    const calls: Array<[string, { reuseBranch?: boolean } | undefined]> = [];
+    const todo = todoWith({ lifecycle: { steps: [planStep, runStep], next: 'plan', reason: '' } });
+    const items = runBranchItems(todo, choice, (name, extras) => calls.push([name, extras]));
+
+    expect(items.map(item => item.label)).toEqual(['Continue on shell/abc · 2 unresolved comments', 'Run on a new branch']);
+    items.forEach(item => item.onSelect?.());
+    expect(calls).toEqual([['run', { reuseBranch: true }], ['run', { reuseBranch: false }]]);
+  });
+
+  it('offers no branch rows when run is inapplicable or nothing is reusable', () => {
+    const blocked = todoWith({ lifecycle: { steps: [{ ...runStep, applicable: false }], next: null, reason: '' } });
+    const runnable = todoWith({ lifecycle: { steps: [runStep], next: 'run', reason: '' } });
+    expect(runBranchItems(blocked, choice, () => {})).toEqual([]);
+    expect(runBranchItems(runnable, null, () => {})).toEqual([]);
   });
 });
 

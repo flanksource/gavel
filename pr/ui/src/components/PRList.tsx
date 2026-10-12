@@ -1,5 +1,6 @@
 import { ListMenu, ListMenuHeader, ListMenuSection } from '@flanksource/clicky-ui/components';
-import type { PRItem, PRSyncStatus, GavelResultsSummary, Project, ProcStatus } from '../types';
+import { useProcStatus } from '../procStatusQuery';
+import type { PRItem, PRSyncStatus, GavelResultsSummary, Project } from '../types';
 import { PRRow } from './PRRow';
 import { ProcControl } from './ProcControl';
 import { groupByOrg, prKey, computeCounts } from '../utils';
@@ -17,7 +18,6 @@ interface Props {
   syncStatus?: Record<string, PRSyncStatus>;
   gavelResults?: Record<string, GavelResultsSummary>;
   projectsByRepo?: Record<string, Project>;
-  procStatus?: Record<string, ProcStatus>;
   onProcChanged?: () => void;
 }
 
@@ -42,7 +42,8 @@ function GroupCounts({ items }: { items: PRItem[] }) {
   );
 }
 
-export function PRList({ prs, selected, onSelect, unread, syncStatus, gavelResults, projectsByRepo, procStatus, onProcChanged }: Props) {
+export function PRList({ prs, selected, onSelect, unread, syncStatus, gavelResults, projectsByRepo, onProcChanged }: Props) {
+  const procStatus = useProcStatus();
   if (prs.length === 0) {
     return (
       <div className="p-6 text-center text-muted-foreground">

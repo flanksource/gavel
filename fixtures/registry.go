@@ -44,6 +44,8 @@ type RunOptions struct {
 	ExtraArgs      map[string]interface{}
 	ExecutablePath string // Path to the current executable
 	UpdateGolden   bool   // When true, mismatched @file expectations are rewritten with actual output instead of failing
+	Profile        bool
+	SQLProfile     bool
 	Progress       func(done, total int) error
 
 	// Setup is the environment prepared for the markdown file this fixture came
@@ -79,6 +81,8 @@ type RunOptions struct {
 	// Metadata["changed_files"] on every result so a verdict shows the scope it
 	// was reached under.
 	Changed []string
+	// PreviousResults are completed fixture steps available to a later AI check.
+	PreviousResults []FixtureResult
 }
 
 // OutputMode controls when captured command output is shown in rendered

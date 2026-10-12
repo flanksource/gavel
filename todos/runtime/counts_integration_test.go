@@ -5,9 +5,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	commonsdb "github.com/flanksource/commons-db/db"
+	"github.com/flanksource/commons-db/dbtest"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/todos"
+	"github.com/flanksource/gavel/todos/runtime/runtimetest"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -19,14 +20,7 @@ import (
 // CountByStatus. Any drift between the GROUP BY projection and
 // todoStatusWithPlan shows up here as a bucket mismatch.
 func TestCountByStatusMatchesListIntegration(t *testing.T) {
-	if os.Getenv("GAVEL_DB_EMBEDDED_TEST") == "" {
-		t.Skip("set GAVEL_DB_EMBEDDED_TEST=1 to run embedded-postgres native runtime tests")
-	}
-	dsn, stop, err := commonsdb.StartEmbedded(commonsdb.EmbeddedConfig{
-		DataDir: filepath.Join(t.TempDir(), "postgres"), Database: "gavel_todo_counts",
-	})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, stop()) })
+	dsn := dbtest.ForT(t, dbtest.Options{Name: "gavel_todo_counts"}).DSN()
 
 	t.Setenv(database.EnvDSN, dsn)
 	t.Setenv(database.EnvDisable, "")
@@ -86,11 +80,12 @@ func TestCountByStatusMatchesListIntegration(t *testing.T) {
 		Title: "Has an admitted prompt run", Body: "Body", Status: types.StatusPending,
 	})
 	require.NoError(t, err)
-	preparation, err := provider.PrepareRun(t.Context(), running, todos.RunPreparation{
+	preparation, err := runtimetest.Admit(t.Context(), provider, running, todos.RunPreparation{
 		Mode: types.ModeRun, ExecutorName: "codex",
-	})
+	}, runtimetest.Started(""))
 	require.NoError(t, err)
 	require.NotEmpty(t, preparation.SessionID)
+	t.Cleanup(func() { provider.ownership.stop(preparation.PromptRunID) })
 
 	awaitingReview, err := provider.Create(t.Context(), todos.CreateRequest{
 		Title: "Has a plan awaiting review", Body: "Body", Status: types.StatusPending,

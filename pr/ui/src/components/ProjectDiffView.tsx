@@ -2,18 +2,22 @@ import { useQuery } from '@tanstack/react-query';
 import { GitDiffPanel, type GitDiffPayload } from '@flanksource/clicky-ui/data';
 import { UiDiff } from '@flanksource/clicky-ui/icons';
 import { fetchJSON, queryKeys } from '../query';
+import { projectApiUrl } from './projectApiUrl';
 
 interface Props {
   projectName: string;
   path: string;
   refreshKey?: number;
+  // Absolute path of a linked worktree whose working tree is diffed; omitted
+  // for the main checkout.
+  worktree?: string;
 }
 
-export function ProjectDiffView({ projectName, path, refreshKey = 0 }: Props) {
+export function ProjectDiffView({ projectName, path, refreshKey = 0, worktree }: Props) {
   const diff = useQuery({
-    queryKey: queryKeys.projectDiff(projectName, path, refreshKey),
+    queryKey: queryKeys.projectDiff(projectName, path, refreshKey, worktree),
     queryFn: ({ signal }) => fetchJSON<GitDiffPayload>({
-      url: `/api/projects/${encodeURIComponent(projectName)}/diff?path=${encodeURIComponent(path)}`,
+      url: projectApiUrl({ projectName, resource: 'diff', query: [['path', path]], worktree }),
       signal,
       context: `Failed to load diff for ${path}`,
     }),

@@ -6,24 +6,9 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	"github.com/flanksource/gavel/pr/model"
 )
-
-type CreatePRInput struct {
-	Title string
-	Body  string
-	Head  string // head branch name, e.g. "feat/foo"
-	Base  string // optional; falls back to repo default branch
-	Draft bool
-}
-
-type CreatePRResult struct {
-	Number int    `json:"number"`
-	URL    string `json:"html_url"`
-	Title  string `json:"title"`
-	State  string `json:"state"`
-	NodeID string `json:"node_id"` // GraphQL global node ID, required to enable auto-merge
-	Base   string `json:"-"`
-}
 
 type repoInfo struct {
 	DefaultBranch string `json:"default_branch"`
@@ -56,7 +41,7 @@ func DefaultBranch(opts Options) (string, error) {
 
 // CreatePR opens a pull request against the resolved repo. Base defaults to
 // the repo's default branch when empty.
-func CreatePR(opts Options, in CreatePRInput) (*CreatePRResult, error) {
+func CreatePR(opts Options, in model.CreatePRInput) (*model.CreatePRResult, error) {
 	if strings.TrimSpace(in.Title) == "" {
 		return nil, fmt.Errorf("CreatePR: Title is required")
 	}
@@ -106,7 +91,7 @@ func CreatePR(opts Options, in CreatePRInput) (*CreatePRResult, error) {
 		return nil, fmt.Errorf("create PR on %s: HTTP %d: %s", repo, resp.StatusCode, string(body))
 	}
 
-	var out CreatePRResult
+	var out model.CreatePRResult
 	if err := json.Unmarshal(body, &out); err != nil {
 		return nil, fmt.Errorf("parse create-PR response: %w", err)
 	}

@@ -4,6 +4,9 @@ import (
 	"context"
 	"testing"
 
+	"github.com/flanksource/captain/pkg/ai"
+	"github.com/flanksource/captain/pkg/ai/agent"
+	capcommit "github.com/flanksource/captain/pkg/ai/agent/commit"
 	"github.com/flanksource/gavel/github"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -66,6 +69,28 @@ func TestRunAfterAgentDoesNotPushByDefault(t *testing.T) {
 	_, err := RunAfterAgent(context.Background(), AgentRun{WorkDir: repo, Files: []string{"a.txt"}})
 	require.NoError(t, err)
 	assert.Empty(t, *pushed, "a run that did not ask to push must leave the remote alone")
+}
+
+// A post-run commit (the default `on: run` policy) fires after captain cleared
+// hc.Turn, so the session trailer must come from the run's settled session id on
+// the workspace — a todo run whose metadata had none committed with only
+// Gavel-Issue-Id.
+func TestAgentCommitterStampsTheRunSessionAfterTheTurnEnds(t *testing.T) {
+	const issueID, sessionID = "issue-1", "sess-settled"
+	repo := initCommitRepo(t)
+	writeFile(t, repo, "a.txt", "agent edit\n")
+	t.Setenv(testEnvVar, "1")
+	hc := &agent.HookContext{Context: context.Background(), Phase: agent.PhaseRun, Response: &ai.Response{}}
+	hc.Workspace().SessionID = sessionID
+
+	commit := agentCommitter(AgentHooksOptions{Meta: AgentRunMetadata{IssueID: issueID}}, false)
+	sha, err := commit(hc, capcommit.Plan{Dir: repo, Phase: agent.PhaseRun, Paths: []string{"a.txt"}})
+	require.NoError(t, err)
+	require.NotEmpty(t, sha)
+
+	body := gitOutput(t, repo, "log", "-1", "--format=%B", sha)
+	assert.Contains(t, body, TrailerIssueID+": "+issueID)
+	assert.Contains(t, body, trailerSessionID+": "+sessionID)
 }
 
 // The path set captain's commit hook selected is the whole point of AgentRun.Files:

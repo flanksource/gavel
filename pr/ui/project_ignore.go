@@ -31,6 +31,10 @@ func (s *Server) handleProjectIgnore(w http.ResponseWriter, r *http.Request) {
 		respondError(w, statusForProjectErr(err), err.Error())
 		return
 	}
+	workDir, ok := s.requestWorkDir(w, r, project)
+	if !ok {
+		return
+	}
 	var request projectIgnoreRequest
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
@@ -47,7 +51,7 @@ func (s *Server) handleProjectIgnore(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	result, err := gatherProjectStatus(project.ResolvedDir(), status.Options{NoRepomap: true})
+	result, err := gatherProjectStatus(workDir, status.Options{NoRepomap: true})
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, fmt.Sprintf("gather project status: %v", err))
 		return
@@ -57,11 +61,12 @@ func (s *Server) handleProjectIgnore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rule := projectIgnoreRule(normalized, request.Directory)
-	added, err := appendProjectIgnoreRule(project.ResolvedDir(), rule)
+	added, err := appendProjectIgnoreRule(workDir, rule)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.touchGit(workDir)
 	s.notify()
 	respondJSON(w, http.StatusOK, projectIgnoreResponse{
 		Path: normalized, Directory: request.Directory, Rule: rule, Added: added,

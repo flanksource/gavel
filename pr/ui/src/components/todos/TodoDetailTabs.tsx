@@ -3,11 +3,16 @@ import { Button } from '@flanksource/clicky-ui/components';
 import type { IconProps } from '@flanksource/clicky-ui/icons';
 import { UiComment, UiListDashes, UiListFlat } from '@flanksource/clicky-ui/icons';
 
-export type TodoDetailTabKey = 'overview' | 'verification' | 'session' | 'plan';
+export const TODO_DETAIL_TABS = ['overview', 'verification', 'session', 'plan'] as const;
+export type TodoDetailTabKey = typeof TODO_DETAIL_TABS[number];
+
+export function isTodoDetailTab(value: string): value is TodoDetailTabKey {
+  return (TODO_DETAIL_TABS as readonly string[]).includes(value);
+}
 
 export interface TodoDetailBadge {
   count: number;
-  /** Tints the badge red — the last verification attempt did not pass. */
+  /** Highlights the tab red — the last verification attempt did not pass. */
   failing: boolean;
   title: string;
 }
@@ -16,10 +21,13 @@ export function TodoDetailTabs({
   tab,
   onSelect,
   verification,
+  sessionAttempts,
 }: {
   tab: TodoDetailTabKey;
   onSelect: (tab: TodoDetailTabKey) => void;
   verification: TodoDetailBadge;
+  /** Every attempt the todo has made — the entries of the Session tab's picker. */
+  sessionAttempts: number;
 }) {
   return (
     <div className="flex shrink-0 flex-nowrap gap-1 overflow-x-auto border-b border-border bg-background px-4 pt-2">
@@ -33,7 +41,14 @@ export function TodoDetailTabs({
         tone={verification.failing ? 'danger' : 'default'}
         title={verification.title}
       />
-      <DetailTab active={tab === 'session'} onClick={() => onSelect('session')} icon={UiComment} label="Session" />
+      <DetailTab
+        active={tab === 'session'}
+        onClick={() => onSelect('session')}
+        icon={UiComment}
+        label="Session"
+        count={sessionAttempts}
+        title={`${sessionAttempts} ${sessionAttempts === 1 ? 'attempt' : 'attempts'}`}
+      />
       <DetailTab active={tab === 'plan'} onClick={() => onSelect('plan')} icon={UiListDashes} label="Plan" />
     </div>
   );
@@ -64,7 +79,9 @@ export function DetailTab({
       aria-pressed={active}
       title={title}
       className={`-mb-px inline-flex h-auto shrink-0 items-center gap-1.5 border-b-2 px-2.5 py-1.5 text-xs font-medium transition-colors ${
-        active
+        tone === 'danger'
+          ? `bg-red-500/10 text-red-700 hover:bg-red-500/15 hover:text-red-700 [[data-theme=dark]_&]:text-red-400 [[data-theme=dark]_&]:hover:text-red-400 ${active ? 'border-red-500' : 'border-transparent'}`
+          : active
           ? 'border-primary text-foreground'
           : 'border-transparent text-muted-foreground hover:text-foreground'
       }`}
@@ -75,7 +92,7 @@ export function DetailTab({
         <span
           className={`ml-0.5 inline-flex min-w-[1.25rem] items-center justify-center rounded-full border px-1.5 py-0.5 text-[10px] tabular-nums ${
             tone === 'danger'
-              ? 'border-red-500/25 bg-red-500/10 text-red-700 dark:text-red-400'
+              ? 'border-red-500/25 bg-red-500/10 text-red-700 [[data-theme=dark]_&]:text-red-400'
               : 'border-border bg-background text-muted-foreground'
           }`}
         >

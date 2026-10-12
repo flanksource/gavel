@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
+	"github.com/flanksource/gavel/todos/query"
 	todoruntime "github.com/flanksource/gavel/todos/runtime"
 )
 
@@ -52,9 +54,23 @@ func normalizeRepos(ps []Project) []Project {
 	return ps
 }
 
-// LoadProjects reads ~/.config/gavel/projects.json. A missing file is the
-// normal "no projects configured yet" state. Read and parse failures name the
-// exact catalog file instead of being mistaken for an empty configuration.
+// sortProjects orders the catalog case-insensitively by name, so every surface
+// that reads the store lists projects the same way. Names that differ only by
+// case fall back to a byte comparison to keep the order deterministic.
+func sortProjects(ps []Project) []Project {
+	slices.SortStableFunc(ps, func(a, b Project) int {
+		if c := strings.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name)); c != 0 {
+			return c
+		}
+		return strings.Compare(a.Name, b.Name)
+	})
+	return ps
+}
+
+// LoadProjects reads ~/.config/gavel/projects.json, sorted by name. A missing
+// file is the normal "no projects configured yet" state. Read and parse
+// failures name the exact catalog file instead of being mistaken for an empty
+// configuration.
 func LoadProjects() ([]Project, error) {
 	data, err := os.ReadFile(projectsPath)
 	if errors.Is(err, os.ErrNotExist) {
@@ -67,15 +83,16 @@ func LoadProjects() ([]Project, error) {
 	if err := json.Unmarshal(data, &ps); err != nil {
 		return nil, fmt.Errorf("parse gavel projects file %s: %w", projectsPath, err)
 	}
-	return normalizeRepos(ps), nil
+	return sortProjects(normalizeRepos(ps)), nil
 }
 
-// SaveProjects writes the project list back to ~/.config/gavel/projects.json.
+// SaveProjects writes the project list back to ~/.config/gavel/projects.json,
+// sorted by name.
 func SaveProjects(ps []Project) error {
 	if err := os.MkdirAll(filepath.Dir(projectsPath), 0o755); err != nil {
 		return fmt.Errorf("create gavel projects directory for %s: %w", projectsPath, err)
 	}
-	data, err := json.MarshalIndent(normalizeRepos(ps), "", "  ")
+	data, err := json.MarshalIndent(sortProjects(normalizeRepos(slices.Clone(ps))), "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal gavel projects file %s: %w", projectsPath, err)
 	}
@@ -105,6 +122,21 @@ func (p Project) WorkspaceOptions() todoruntime.WorkspaceOptions {
 		RootPath:     p.ResolvedDir(),
 		Repositories: append([]string(nil), p.Repos...),
 	}
+}
+
+// TodoWorkspace projects the catalog record into the directory a TODO list
+// reads, named the way the projects list displays it.
+func (p Project) TodoWorkspace() query.Workspace {
+	return query.Workspace{Name: p.Name, Dir: p.ResolvedDir()}
+}
+
+// TodoWorkspaces projects a whole catalog, in catalog order.
+func TodoWorkspaces(ps []Project) []query.Workspace {
+	workspaces := make([]query.Workspace, len(ps))
+	for i, p := range ps {
+		workspaces[i] = p.TodoWorkspace()
+	}
+	return workspaces
 }
 
 // ProjectForRepo returns the first project whose Repos list contains repo.

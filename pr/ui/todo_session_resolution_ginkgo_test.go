@@ -15,6 +15,7 @@ import (
 // can assert that the transcript hop is delegated to Captain rather than
 // re-derived here from a list of candidate rows.
 type recordingSessionStore struct {
+	fakeCaptainSessionStore
 	run           *captaindb.Session
 	transcript    *captaindb.Session
 	transcriptErr error
@@ -42,6 +43,10 @@ func (s *recordingSessionStore) GetSessionOverviewByIdentity(context.Context, st
 }
 
 func (s *recordingSessionStore) ListTranscriptMessages(context.Context, captaindb.TranscriptPage) ([]captaindb.TranscriptMessage, error) {
+	return nil, nil
+}
+
+func (s *recordingSessionStore) ListPromptRuns(context.Context, captaindb.PromptRunFilter) ([]captaindb.PromptRun, error) {
 	return nil, nil
 }
 

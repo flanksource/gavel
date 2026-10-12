@@ -6,12 +6,11 @@ import (
 
 	"github.com/flanksource/captain/pkg/ai/agent"
 	"github.com/flanksource/captain/pkg/api"
-	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/lifecycle"
+	"github.com/flanksource/gavel/todos/native"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/flanksource/gavel/verify"
-	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -21,23 +20,26 @@ import (
 // silent success.
 type fakeProvider struct {
 	todos.Provider
-	plan       todos.PlanState
-	runs       []todos.StepRunRecord
-	backlog    types.TODOS
-	states     []todos.StateUpdate
-	attempts   []*todos.ExecutionResult
-	comments   []string
-	events     []todos.Event
-	iterations []captaindb.UpsertPromptRunIterationInput
+	plan     todos.PlanState
+	runs     []todos.StepRunRecord
+	backlog  types.TODOS
+	states   []todos.StateUpdate
+	attempts []*todos.ExecutionResult
+	comments []string
+	events   []todos.Event
+	// runWorktree is the newest run worktree the todo recorded; nil is a todo no
+	// run step recorded one for.
+	runWorktree *native.RunWorktree
 }
 
-// RecordRunIterations captures the rows the host files for a finished run,
-// stamped with the run they belong to as the native runtime stamps them.
-func (f *fakeProvider) RecordRunIterations(_ context.Context, promptRunID uuid.UUID, records []captaindb.UpsertPromptRunIterationInput) error {
-	for _, record := range records {
-		record.PromptRunID = promptRunID
-		f.iterations = append(f.iterations, record)
+func (f *fakeProvider) LatestRunWorktree(context.Context, *types.TODO) (*native.RunWorktree, error) {
+	if f.runWorktree == nil {
+		return nil, native.ErrNoRunWorkspace
 	}
+	return f.runWorktree, nil
+}
+
+func (f *fakeProvider) UpdateLatestFailure(context.Context, *types.TODO, *types.TestResultInfo) error {
 	return nil
 }
 
@@ -70,8 +72,8 @@ func (f *fakeProvider) SaveAttempt(_ context.Context, todo *types.TODO, result *
 	return nil
 }
 
-func (f *fakeProvider) Comment(_ context.Context, _ *types.TODO, body string) error {
-	f.comments = append(f.comments, body)
+func (f *fakeProvider) Comment(_ context.Context, _ *types.TODO, comment todos.CommentRequest) error {
+	f.comments = append(f.comments, comment.Body)
 	return nil
 }
 
@@ -104,7 +106,7 @@ func newHost(provider *fakeProvider) *lifecycle.Host {
 // done's acceptance-criteria grader: `.gavel.yaml todos.verify` over `ai:`.
 func graderFor(host *lifecycle.Host) api.Spec {
 	GinkgoHelper()
-	resolved, err := lifecycle.ResolveLayers(lifecycle.LayerInput{Config: host.Config, Step: lifecycle.StepVerify, Host: host.Kind})
+	resolved, err := lifecycle.ResolveLayers(lifecycle.LayerInput{Config: host.Config, Step: lifecycle.StepVerify})
 	Expect(err).NotTo(HaveOccurred())
 	return resolved.Spec
 }
@@ -259,18 +261,24 @@ var _ = Describe("Host", func() {
 		}
 
 		It("orders the commit pipeline, the run environment, the run labels and the spec recorder", func() {
+		It("orders the commit pipeline before the run environment", func() {
 			req := api.Spec{Workflow: &api.Workflow{Commits: []api.Commit{{On: "run"}, {On: "turn"}}}}
 			meta := todos.RunStartMetadata{SessionID: "session-1"}
 
-			hooks := host.Hooks(hostTodo(), req, meta, func(todos.RunStartMetadata) {})
+			hooks := host.Hooks(hostTodo(), req, meta)
 
 			Expect(hookNames(hooks)).To(Equal([]string{
 				"commit:run", "commit:turn", "gavel-run-env", "gavel-run-labels", "gavel-spec-recorder",
 			}))
+			var names []string
+			for _, hook := range hooks {
+				names = append(names, hook.(interface{ Name() string }).Name())
+			}
+			Expect(names).To(Equal([]string{"commit:run", "commit:turn", "gavel-run-env"}))
 		})
 
 		It("declares no commit hook for a spec without commit policies", func() {
-			hooks := host.Hooks(hostTodo(), api.Spec{}, todos.RunStartMetadata{}, func(todos.RunStartMetadata) {})
+			hooks := host.Hooks(hostTodo(), api.Spec{}, todos.RunStartMetadata{})
 
 			Expect(hookNames(hooks)).To(Equal([]string{"gavel-run-env", "gavel-run-labels", "gavel-spec-recorder"}))
 		})
@@ -325,6 +333,7 @@ var _ = Describe("Host", func() {
 				"href": "/todos/" + hostIssueID,
 				"dir":  host.WorkDir,
 			}))
+			Expect(names).To(Equal([]string{"gavel-run-env"}))
 		})
 	})
 
@@ -378,7 +387,7 @@ var _ = Describe("Host", func() {
 		It("records the status a triage verdict assigned when the step kept it", func() {
 			outcome.Execution.Triage = &types.TriageEnvelope{
 				ResultEnvelope: types.ResultEnvelope{Summary: "Shelve it.", EndStatus: types.EndCompleted},
-				Verdict:        types.VerdictRetire, Status: string(types.StatusDraft), Comment: "obsolete",
+				Verdict:        types.VerdictReady, Status: string(types.StatusDraft), Comment: "not ready to queue",
 			}
 
 			Expect(host.OnOutcome(ctx, todo, stepNamed(host.Def, "triage"), outcome, lifecycle.OutcomeKeep)).To(Succeed())

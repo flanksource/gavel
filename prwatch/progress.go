@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/flanksource/gavel/github"
+	"github.com/flanksource/gavel/pr/model"
 )
 
 // followProgressLine is the heartbeat a follower that cannot redraw gets in
@@ -23,7 +23,7 @@ func followProgressLine(result *PRWatchResult, interval time.Duration) string {
 		switch {
 		case check.Status != "COMPLETED":
 			running++
-		case github.IsFailureConclusion(check.Conclusion):
+		case model.IsFailureConclusion(check.Conclusion):
 			complete, failed = complete+1, failed+1
 		default:
 			complete++

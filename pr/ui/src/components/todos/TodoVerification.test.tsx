@@ -67,6 +67,7 @@ vi.mock('@flanksource/clicky-ui/ai', () => ({
   reconcileModelCapabilities: (value: unknown) => value,
   RuntimeBar: ({ ariaLabel }: { ariaLabel?: string }) => <Button type="button" aria-label={ariaLabel}>Runtime</Button>,
   SpecRuntimeEditor: () => <div>Verification runtime editor</div>,
+  OrderedPresetSelect: () => null,
 }));
 
 vi.mock('@flanksource/clicky-ui/icons', async (importOriginal) => ({
@@ -303,7 +304,6 @@ describe('TodoVerification', () => {
           verification: null,
         },
       ],
-      diagnostics: [],
     };
     render(<TodoVerification dir="/workspace" todo={todo} onChanged={onChanged} attempts={attempts} />, {
       wrapper: ({ children }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>,
@@ -336,7 +336,7 @@ describe('TodoVerification', () => {
     expect(onChanged).toHaveBeenCalledTimes(1);
     expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: workspaceTodoBatchKeys.all });
     expect(invalidateQueries).toHaveBeenCalledWith({
-      queryKey: todoQueryKeys.sessionDetail('/workspace', 'todo-1', undefined, true),
+      queryKey: todoQueryKeys.sessionDetail('/workspace', 'todo-1'),
     });
     expect(client.getQueryState(todoQueryKeys.verificationSchema())?.isInvalidated).toBe(false);
   });
@@ -365,7 +365,7 @@ describe('TodoVerification', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    render(<TodoVerification dir="/workspace" todo={todo} onChanged={() => {}} attempts={{ attempts: [], diagnostics: [] }} />, {
+    render(<TodoVerification dir="/workspace" todo={todo} onChanged={() => {}} attempts={{ attempts: [] }} />, {
       wrapper: queryTestWrapper(),
     });
     await waitFor(() => expect(fixtureEditorCalls.props.at(-1)).toBeDefined());
@@ -393,7 +393,7 @@ describe('TodoVerification', () => {
       }
       throw new Error(`unexpected fetch ${url}`);
     }));
-    render(<TodoVerification dir="/workspace" todo={todo} onChanged={() => {}} attempts={{ attempts: [], diagnostics: [] }} />, {
+    render(<TodoVerification dir="/workspace" todo={todo} onChanged={() => {}} attempts={{ attempts: [] }} />, {
       wrapper: queryTestWrapper(),
     });
     await waitFor(() => expect(fixtureEditorCalls.props.at(-1)).toBeDefined());

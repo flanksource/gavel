@@ -6,7 +6,6 @@ import (
 
 	captainai "github.com/flanksource/captain/pkg/ai"
 	"github.com/flanksource/captain/pkg/ai/agent"
-	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/commons-db/shell"
 	"github.com/flanksource/gavel/commit"
 	"github.com/flanksource/gavel/todos"
@@ -22,10 +21,11 @@ import (
 //     pre-commit gates and stamps the issue/session trailers (promptrun is told
 //     CallerOwnsCommits so it builds none of its own);
 //  2. the run environment, so a `gavel commit` the agent runs itself writes the
-//     same trailers;
-//  3. the spec recorder, trailing setup so the persisted spec is the one that
-//     actually ran.
-func (h *Host) Hooks(todo *types.TODO, req captainai.Request, meta todos.RunStartMetadata, report func(todos.RunStartMetadata)) []any {
+//     same trailers.
+//
+// Recording the run — its start, the spec setup produced, its outcome — is
+// Captain's: promptrun appends its own recorder after setup.
+func (h *Host) Hooks(todo *types.TODO, req captainai.Request, meta todos.RunStartMetadata) []any {
 	var hooks []any
 	if req.Workflow != nil && len(req.Workflow.Commits) > 0 {
 		hooks = append(hooks, commit.AgentHooks(commit.AgentHooksOptions{
@@ -142,44 +142,17 @@ func runLabelsFor(todo *types.TODO, meta todos.RunStartMetadata, workDir string)
 	return labels
 }
 
-// specRecorder reports the run's request once setup has transformed it — the
-// checkout consumed, Cwd pointing at the tree the agent works in. That
-// distinction is the whole point: replaying a persisted spec that still asked
-// for a checkout would clone a second tree.
-//
-// It reports from Post at the first turn boundary rather than from PreRun,
-// because promptrun dispatches every caller hook's PreRun BEFORE the setup
-// plugin's — a PreRun here would record the spec the run was asked for, which
-// is exactly the one that must not be replayed.
-type specRecorder struct {
-	meta     todos.RunStartMetadata
-	workflow *api.Workflow
-	report   func(todos.RunStartMetadata)
-	reported bool
+// admittedHook runs once Captain has committed the run's admission — the first
+// gavel code a recorded run executes after it — and before setup relocates the
+// tree: the dashboard learns the run's identity, and the runtime starts
+// driving it.
+type admittedHook struct {
+	admitted func() error
 }
 
-func (r *specRecorder) Name() string { return "gavel-spec-recorder" }
+func (h *admittedHook) Name() string { return "gavel-run-admitted" }
 
-// Phases pairs the earliest boundary that can see the transformed request with
-// the one that is guaranteed to fire. PhaseTurn reports as soon as a turn lands,
-// which is what the dashboard wants; PhaseAgent is the backstop for a run whose
-// loop ended without a turn boundary. Whichever arrives first reports, once.
-func (r *specRecorder) Phases() []agent.Phase {
-	return []agent.Phase{agent.PhaseTurn, agent.PhaseAgent}
-}
-
-func (r *specRecorder) Post(hc *agent.HookContext, _ agent.Phase) error {
-	if r.reported || hc.Request == nil {
-		return nil
-	}
-	r.reported = true
-	meta := r.meta
-	spec := *hc.Request
-	spec.Workflow = r.workflow
-	meta.Spec = &spec
-	r.report(meta)
-	return nil
-}
+func (h *admittedHook) PreRun(*agent.HookContext) error { return h.admitted() }
 
 func firstNonEmpty(a, b string) string {
 	if a != "" {

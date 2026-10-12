@@ -54,7 +54,7 @@ var _ = Describe("Host step selection", func() {
 				}
 			}
 			// Definition order, auxiliary steps included.
-			Expect(names).To(Equal([]string{"triage", "plan", "verify", "run"}))
+			Expect(names).To(Equal([]string{"triage", "plan", "verify", "run", "triage.new"}))
 			// A pending todo with an approved plan and no prior run implements next;
 			// verify needs a succeeded run to judge, and plan is satisfied.
 			Expect(suggested).To(Equal("run"))

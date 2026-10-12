@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	commonsdb "github.com/flanksource/commons-db/db"
+	"github.com/flanksource/commons-db/dbtest"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/types"
@@ -14,14 +14,7 @@ import (
 )
 
 func TestProviderAliasesIntegration(t *testing.T) {
-	if os.Getenv("GAVEL_DB_EMBEDDED_TEST") == "" {
-		t.Skip("set GAVEL_DB_EMBEDDED_TEST=1 to run embedded-postgres native runtime tests")
-	}
-	dsn, stop, err := commonsdb.StartEmbedded(commonsdb.EmbeddedConfig{
-		DataDir: filepath.Join(t.TempDir(), "postgres"), Database: "gavel_todo_aliases",
-	})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, stop()) })
+	dsn := dbtest.ForT(t, dbtest.Options{Name: "gavel_todo_aliases"}).DSN()
 
 	t.Setenv(database.EnvDSN, dsn)
 	t.Setenv(database.EnvDisable, "")
@@ -59,7 +52,7 @@ func TestProviderAliasesIntegration(t *testing.T) {
 	// The caller's TODO is refreshed, so a follow-up mutation passes its
 	// optimistic-concurrency check against the bumped version.
 	assert.Greater(t, todo.Version, firstVersion)
-	require.NoError(t, provider.Comment(t.Context(), todo, "pushed"))
+	require.NoError(t, provider.Comment(t.Context(), todo, todos.CommentRequest{Body: "pushed"}))
 
 	// Both aliases resolve back to the same issue.
 	for _, ref := range []string{"legacy-42", "example/aliases#7"} {
@@ -78,14 +71,7 @@ func TestProviderAliasesIntegration(t *testing.T) {
 // linked to, so the dashboard can filter linked from unlinked work. Only the
 // `github` alias counts: an imported reference is not an issue link.
 func TestProviderExternalIssueIntegration(t *testing.T) {
-	if os.Getenv("GAVEL_DB_EMBEDDED_TEST") == "" {
-		t.Skip("set GAVEL_DB_EMBEDDED_TEST=1 to run embedded-postgres native runtime tests")
-	}
-	dsn, stop, err := commonsdb.StartEmbedded(commonsdb.EmbeddedConfig{
-		DataDir: filepath.Join(t.TempDir(), "postgres"), Database: "gavel_todo_external",
-	})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, stop()) })
+	dsn := dbtest.ForT(t, dbtest.Options{Name: "gavel_todo_external"}).DSN()
 
 	t.Setenv(database.EnvDSN, dsn)
 	t.Setenv(database.EnvDisable, "")

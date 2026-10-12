@@ -41,7 +41,7 @@ var _ = Describe("Load", func() {
 		}}}
 		def, err := lifecycle.LoadWith(override, workDir)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(stepNames(def)).To(Equal([]string{"triage", "plan", "verify", "run"}))
+		Expect(stepNames(def)).To(Equal([]string{"triage", "plan", "verify", "run", "triage.new"}))
 		run, _ := def.Step("run")
 		Expect(run.Prompt).To(Equal("file:prompts/custom-run.prompt"))
 		Expect(run.When).To(BeEmpty(), "an override replaces the step wholesale")
@@ -61,7 +61,7 @@ var _ = Describe("Load", func() {
 		}
 		def, err := lifecycle.LoadWith(override, workDir)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(stepNames(def)).To(Equal([]string{"triage", "plan", "verify", "run", "handoff"}))
+		Expect(stepNames(def)).To(Equal([]string{"triage", "plan", "verify", "run", "triage.new", "handoff"}))
 		Expect(def.Subject).To(HaveKeyWithValue("owner", "string"))
 		Expect(def.Subject).To(HaveKeyWithValue("status", "string"))
 		_, err = lifecycle.New(def)

@@ -39,10 +39,10 @@ var _ = Describe("lifecycle final runtime provenance", func() {
 		Expect(resolution.Trace[len(resolution.Trace)-1].Spec.Setup.Cwd).To(BeEmpty())
 	})
 
-	DescribeTable("fills a missing deadline only after saved defaults and project limits",
-		func(saved, limit, timeout string, source api.FieldSourceKind) {
+	DescribeTable("fills a missing deadline only after saved defaults and the project deadline",
+		func(saved, configured, timeout string, source api.FieldSourceKind) {
 			host.Saved.AI.Timeout = saved
-			host.Config.Todos.Timeout = limit
+			host.Config.Todos.Timeout = configured
 			resolution, err := host.Resolve(context.Background(), hostTodo(), stepNamed(host.Def, "plan"), lifecycle.RunOptions{})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(resolution.Spec.Budget.Timeout).To(Equal(timeout))
@@ -53,7 +53,7 @@ var _ = Describe("lifecycle final runtime provenance", func() {
 		},
 		Entry("host default", "", "", "30m0s", api.FieldSourceContext),
 		Entry("saved deadline", "40m", "", "40m0s", api.FieldSourceSaved),
-		Entry("project cap", "40m", "10m", "10m0s", api.FieldSourceSaved),
+		Entry("project deadline outranks the saved one", "40m", "10m", "10m0s", api.FieldSourceLayer),
 	)
 
 	It("removes forbidden commit values and presence from plan provenance without altering the authored trace", func() {

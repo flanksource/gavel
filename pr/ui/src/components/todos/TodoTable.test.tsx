@@ -1,3 +1,4 @@
+import { render } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import type { DataTableGroupingCustomMode } from '@flanksource/clicky-ui/data';
 import type { Project, TodoItem, TodoPriority } from '../../types';
@@ -77,6 +78,56 @@ describe('todoTableColumns', () => {
       .map(column => column.key)
       .filter(key => key.startsWith('phase.'));
     expect(phaseKeys).toEqual(TODO_PHASES.map(phase => `phase.${phase}`));
+  });
+});
+
+describe('title cell parent hint', () => {
+  const PARENT_ID = '5d0c8f7e-1b2a-4c3d-9e4f-6a7b8c9d0e1f';
+  const parentTitles = new Map([[PARENT_ID, 'Migrate billing']]);
+  const cell = (candidate: TodoTableRow, titles?: Map<string, string>) => {
+    const column = todoTableColumns({ groupBy: 'none', parentTitles: titles }).find(entry => entry.key === 'title')!;
+    return render(<>{column.render!(candidate.todo.title, candidate)}</>);
+  };
+  const child = (): TodoTableRow => {
+    const base = row('child-todo', 'medium');
+    return { ...base, todo: { ...base.todo, parentId: PARENT_ID } } as TodoTableRow;
+  };
+
+  it('names the parent under which a search-surfaced child hangs', () => {
+    const view = cell(child(), parentTitles);
+    expect(view.getByTitle('Child of Migrate billing').textContent).toBe('↳ Migrate billing');
+    expect(view.getByTitle('child-todo').textContent).toBe('child-todo');
+  });
+
+  it('shows no hint for a top-level todo', () => {
+    const view = cell(row('top-level', 'medium'), parentTitles);
+    expect(view.queryByText(/↳/)).toBeNull();
+  });
+
+  it('says so when the parent is not in the loaded list', () => {
+    const view = cell(child(), new Map());
+    expect(view.getByText(/↳/).textContent).toBe('↳ parent not loaded');
+  });
+});
+
+describe('title cell child count', () => {
+  const PARENT_ID = '7e1d2c3b-4a5f-4e6d-8c7b-9a0f1e2d3c4b';
+  const childCounts = new Map([[PARENT_ID, { done: 1, total: 3 }]]);
+  const cell = (candidate: TodoTableRow) => {
+    const column = todoTableColumns({ groupBy: 'none', childCounts }).find(entry => entry.key === 'title')!;
+    return render(<>{column.render!(candidate.todo.title, candidate)}</>);
+  };
+  const parent = (): TodoTableRow => {
+    const base = row('parent-todo', 'medium');
+    return { ...base, todo: { ...base.todo, id: PARENT_ID } } as TodoTableRow;
+  };
+
+  it("badges a parent with its children's done/total", () => {
+    expect(cell(parent()).getByTitle('3 child todos, 1 done').textContent).toBe('1/3');
+  });
+
+  it('shows no badge on a todo without children', () => {
+    expect(cell(row('lonely', 'medium')).queryByTitle(/child todo/)).toBeNull();
   });
 });
 

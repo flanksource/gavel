@@ -100,3 +100,38 @@ describe('WorkspaceTodoGroup re-render cost', () => {
     expect(container.firstElementChild).toBe(sectionBefore);
   });
 });
+
+describe('WorkspaceTodoGroup child todos', () => {
+  const parentId = '0c4a6e8f-1b3d-4a5c-9e7f-2d4b6a8c0e1f';
+
+  it('lists top-level todos only and does not count a child as filtered away', () => {
+    const child = { ...todo('child', 'sub-task'), parentId };
+    const { queryByTestId, getByText } = renderGroup({
+      data: data([todo('parent', 'parent'), child]),
+      filters: { statuses: { pending: 'exclude' }, priorities: {}, external: {}, tags: {}, workspaces: {} },
+    });
+
+    expect(queryByTestId('row-child')).toBeNull();
+    expect(getByText('1 todo hidden by filter')).toBeTruthy();
+  });
+
+  it("hands a parent row its children's done/total and a childless row neither", () => {
+    const kids = [
+      { ...todo('kid-1', 'one'), parentId, status: 'completed' as const },
+      { ...todo('kid-2', 'two'), parentId },
+      { ...todo('kid-3', 'three'), parentId, status: 'verified' as const },
+    ];
+    renderGroup({ data: data([{ ...todo('parent', 'parent'), id: parentId }, todo('plain', 'plain'), ...kids]) });
+
+    const byRef = Object.fromEntries(rowProps.map(p => [(p.todo as TodoItem).ref, p]));
+    expect([byRef.parent.childDone, byRef.parent.childTotal]).toEqual([2, 3]);
+    expect([byRef.plain.childDone, byRef.plain.childTotal]).toEqual([undefined, undefined]);
+  });
+
+  it('shows the empty note when a workspace holds nothing but children', () => {
+    const { queryByTestId, getByText } = renderGroup({ data: data([{ ...todo('child', 'sub-task'), parentId }]) });
+
+    expect(queryByTestId('row-child')).toBeNull();
+    expect(getByText('No todos')).toBeTruthy();
+  });
+});

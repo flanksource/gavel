@@ -1,11 +1,12 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { ProjectsBar } from './ProjectsBar';
+import type { ProjectGitSummaryView } from '../projectGitQueries';
 import type { Project } from '../types';
 import type { ProjectRuns } from './tests/types';
 
 vi.mock('./ProcControl', () => ({ ProcControl: () => <span>process</span> }));
-vi.mock('./TodoBadge', () => ({ TodoBadge: () => null }));
+vi.mock('./TodoBadge', () => ({ TodoBadge: () => <span>todo-badge</span> }));
 vi.mock('./GitChangesBadge', () => ({ GitChangesBadge: () => null }));
 vi.mock('./RelativeTime', () => ({ RelativeTime: ({ iso }: { iso: string }) => <span>{iso}</span> }));
 
@@ -26,7 +27,44 @@ const runHistory: ProjectRuns[] = [{
   }],
 }];
 
+const noGitSummary: ProjectGitSummaryView = { byProject: new Map(), error: '', loading: true };
+
 describe('ProjectsBar', () => {
+  it('shows the git work summary of each project in place of the todo badge', () => {
+    const projects: Project[] = [
+      { name: 'gavel', dir: '/work/gavel', repos: ['acme/gavel'] },
+      { name: 'clicky', dir: '/work/clicky', repos: [] },
+    ];
+    const gitSummary: ProjectGitSummaryView = {
+      byProject: new Map([['gavel', { name: 'gavel', base: 'main', adds: 40, dels: 7, worktrees: 2, branches: 1 }]]),
+      error: '',
+      loading: false,
+    };
+
+    render(
+      <ProjectsBar
+        projects={projects}
+        runs={[]}
+        procStatus={{}}
+        gitSummary={gitSummary}
+        selected=""
+        selectedRunId=""
+        historyEnabled={false}
+        onSelect={() => {}}
+        onSelectRun={() => {}}
+        onHistoryChange={() => {}}
+        onChanged={() => {}}
+        onAdd={() => {}}
+        onSettings={() => {}}
+      />,
+    );
+
+    expect(screen.getByText('+40')).toBeTruthy();
+    expect(screen.getByText('−7')).toBeTruthy();
+    expect(screen.getByLabelText('2 linked worktrees')).toBeTruthy();
+    expect(screen.queryByText('todo-badge')).toBeNull();
+  });
+
   it('selects a project from the dedicated projects list without treating settings as selection', () => {
     const project: Project = { name: 'gavel', dir: '/work/gavel', repos: ['acme/gavel'] };
     const onSelect = vi.fn();
@@ -37,6 +75,7 @@ describe('ProjectsBar', () => {
         projects={[project]}
         runs={runHistory}
         procStatus={{}}
+        gitSummary={noGitSummary}
         selected="gavel"
         selectedRunId=""
         historyEnabled
@@ -66,6 +105,7 @@ describe('ProjectsBar', () => {
         projects={[project]}
         runs={runHistory}
         procStatus={{}}
+        gitSummary={noGitSummary}
         selected="gavel"
         selectedRunId="run-2026-07-21T10-59-33Z"
         historyEnabled
@@ -101,6 +141,7 @@ describe('ProjectsBar', () => {
         projects={projects}
         runs={histories}
         procStatus={{}}
+        gitSummary={noGitSummary}
         selected=""
         selectedRunId=""
         historyEnabled
@@ -129,6 +170,7 @@ describe('ProjectsBar', () => {
         projects={[project]}
         runs={runHistory}
         procStatus={{}}
+        gitSummary={noGitSummary}
         selected="gavel"
         selectedRunId=""
         historyEnabled={false}

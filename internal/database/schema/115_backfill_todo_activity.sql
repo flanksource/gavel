@@ -1,8 +1,9 @@
 -- phase: post
--- dependsOn: 111_todo_projection_triggers.sql
+-- dependsOn: 110_todo_projection_functions.sql
 
 -- One-time migration for issues whose monitored agent activity already
--- predates the activity propagation trigger.
+-- predates activity propagation. Ongoing propagation, including catching up
+-- after the projection was not listening, is gavel_resync_todo_activity (110).
 WITH agent_roots AS (
   SELECT link.issue_id, agent.id AS agent_root_id
   FROM public.todo_issue_prompt_runs link

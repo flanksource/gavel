@@ -48,12 +48,13 @@ func RunNodes(ctx context.Context, nodes []*FixtureNode, opts RunOptions) ([]Fix
 	if err := reporter.Publish(ctx); err != nil {
 		return nil, nil, fmt.Errorf("fixtures: publish queued fixture progress: %w", err)
 	}
-	results, err := runNodeTree(ctx, nodes, opts, reporter)
+	previous := append([]FixtureResult(nil), opts.PreviousResults...)
+	results, err := runNodeTree(ctx, nodes, opts, reporter, &previous)
 	snapshot := reporter.Snapshot()
 	return results, &snapshot, err
 }
 
-func runNodeTree(ctx context.Context, nodes []*FixtureNode, opts RunOptions, reporter *ExecutionReporter) ([]FixtureResult, error) {
+func runNodeTree(ctx context.Context, nodes []*FixtureNode, opts RunOptions, reporter *ExecutionReporter, previous *[]FixtureResult) ([]FixtureResult, error) {
 	var results []FixtureResult
 	for _, node := range nodes {
 		if node == nil {
@@ -64,16 +65,18 @@ func runNodeTree(ctx context.Context, nodes []*FixtureNode, opts RunOptions, rep
 				return results, err
 			}
 			nodeOpts := opts
+			nodeOpts.PreviousResults = *previous
 			nodeOpts.Progress = func(done, total int) error {
 				return reporter.UpdateFixture(ctx, node, done, total)
 			}
 			result := RunNode(ctx, *node.Test, nodeOpts)
 			results = append(results, result)
+			*previous = append(*previous, result)
 			if err := reporter.CompleteFixture(ctx, node, result); err != nil {
 				return results, err
 			}
 		}
-		childResults, err := runNodeTree(ctx, node.Children, opts, reporter)
+		childResults, err := runNodeTree(ctx, node.Children, opts, reporter, previous)
 		results = append(results, childResults...)
 		if err != nil {
 			return results, err

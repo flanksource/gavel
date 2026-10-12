@@ -24,7 +24,11 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
+
+      - name: Restore Go cache
+        id: go-cache
+        uses: ./.github/actions/go-cache
 
       - name: Set up Node.js and TypeScript
         uses: actions/setup-node@v4
@@ -59,56 +63,23 @@ jobs:
       # per-package deadline. Disable with --pre-build=false.
       - name: Run tests
         run: ./.bin/gavel test
-        env:
-          GAVEL_DB_EMBEDDED_TEST: "1"
 
-  lint:
-    name: Lint
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      # The Test job is the only writer of the Go cache: it compiles every
+      # test binary on top of the gavel build, so its copy is a superset of
+      # what Lint or the action self-test would save. always() keeps a failing
+      # test run from throwing that compile work away, and saving only from
+      # the default branch keeps one copy per go.sum instead of one per PR
+      # (PR-branch caches are invisible to other branches anyway). An exact
+      # hit means the key already exists and cannot be replaced, so skip it.
+      - name: Save Go cache
+        if: >-
+          always()
+          && github.ref_name == github.event.repository.default_branch
+          && steps.go-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
         with:
-          fetch-depth: 0
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      - name: Set up Node.js and TypeScript
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
-      - name: Enable corepack (pnpm)
-        run: corepack enable
-
-      - name: Install Task
-        uses: ./.github/actions/setup-task
-
-      - name: Build gavel
-        run: task build:prod
-
-      # Node + TypeScript for the tsc / eslint linters live in these UI
-      # projects' devDependencies; install them so gavel lint can run them.
-      - name: Install test runner dependencies
-        run: pnpm install --no-frozen-lockfile
-        working-directory: testrunner/ui
-
-      - name: Install PR UI dependencies
-        run: pnpm install --no-frozen-lockfile
-        working-directory: pr/ui
-
-      - name: Install site dependencies
-        run: npm ci
-        working-directory: site
-
-      - name: Run linters
-        run: ./.bin/gavel lint
-        env:
-          CGO_ENABLED: 0
+          path: ${{ steps.go-cache.outputs.paths }}
+          key: ${{ steps.go-cache.outputs.key }}
 
   gavel-npm:
     name: "@flanksource/gavel library"
@@ -132,44 +103,3 @@ jobs:
       - run: pnpm run check
       - run: pnpm test
       - run: pnpm run build:lib
-
-  build:
-    name: Build
-    runs-on: ubuntu-latest
-    needs: test
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
-      - name: Enable corepack (pnpm)
-        run: corepack enable
-
-      - name: Install Task
-        uses: ./.github/actions/setup-task
-
-      - name: Build binary
-        run: task build:prod
-
-      - name: Test binary
-        run: |
-          ./.bin/gavel --help
-          ./.bin/gavel version
-
-      - name: Upload binary artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: gavel-linux-amd64
-          path: gavel

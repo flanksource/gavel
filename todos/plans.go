@@ -8,34 +8,38 @@ import (
 	"time"
 
 	captaincli "github.com/flanksource/captain/pkg/cli"
-	"github.com/flanksource/gavel/internal/database"
+	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/gavel/todos/types"
 )
 
 // ResolveSessionPlan recovers the plan from the todo's agent session via
-// captain's canonical plan resolver (the same one the dashboard's Plan tab
-// uses), for when the envelope's reported path/content is missing or wrong.
+// captain's canonical, read-only plan resolver (the same one the dashboard's
+// Plan tab uses), for when the envelope's reported path/content is missing or
+// wrong. It never ingests transcripts: a read must not write Captain's tables.
 // File-backed sessions return path+content; inline-only sessions return content
-// with an empty path.
-func ResolveSessionPlan(sessionID string) (path string, content string) {
+// with an empty path. A session with no plan keeps Captain's
+// captaincli.ErrNoPlan in the error chain, for a caller that tolerates exactly
+// that; every other resolver error, and a resolved plan with no content, is a
+// plain error.
+func ResolveSessionPlan(ctx context.Context, captain *captaindb.DB, sessionID string) (path string, content string, err error) {
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" {
-		return "", ""
+		return "", "", fmt.Errorf("resolve session plan: a session ID is required")
 	}
-	// Configure Captain with Gavel's process-owned pool only when a path that
-	// can consult Captain persistence is actually used. Unconfigured databases
-	// remain disabled and preserve Captain's file-backed plan resolution.
-	if _, err := database.Shared(context.Background()); err != nil {
-		return "", ""
+	if captain == nil {
+		return "", "", fmt.Errorf("resolve plan of session %s: Captain database handle is nil", sessionID)
 	}
-	res, err := captaincli.RunPlan(captaincli.PlanOptions{SessionID: sessionID})
+	res, err := captaincli.ResolvePlan(ctx, captain, captaincli.PlanOptions{SessionID: sessionID, Source: "all"})
 	if err != nil {
-		return "", ""
+		return "", "", fmt.Errorf("resolve plan of session %s: %w", sessionID, err)
+	}
+	if strings.TrimSpace(res.Content) == "" {
+		return "", "", fmt.Errorf("resolve plan of session %s: the resolved plan is empty", sessionID)
 	}
 	if res.OnDisk {
 		path = res.Path
 	}
-	return path, res.Content
+	return path, res.Content, nil
 }
 
 // ValidatePlanFile verifies the agent-reported native plan file exists and is

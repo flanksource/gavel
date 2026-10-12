@@ -68,6 +68,13 @@ func todosCreateHelp(cmd *cobra.Command) api.Text {
 		Append(todoVerificationExample, code).NewLine().NewLine().
 		Append("  Use it with ", muted).Append(`--verification @verification.md`, code).Append("; it is also runnable on its own.", muted).NewLine().
 		Append("  See ", muted).Append("gavel fixtures --help", code).Append(" for frontmatter, checklists, command blocks, tables, CEL assertions, and every runner key.", muted).NewLine().NewLine().
+		Append("PARENT", heading).NewLine().
+		Append("  ").Append("--parent", flag).Append(" makes the new TODO a child of a top-level TODO in this workspace.", muted).NewLine().
+		Append("  Children stay out of ", muted).Append("gavel todos list", code).Append(" and its counts; ", muted).
+		Append("gavel todos get", code).Append(" on the parent lists them.", muted).NewLine().
+		Append("  Inside a TODO run (", muted).Append("GAVEL_ISSUE_ID", code).Append(" is set) the new TODO becomes a child of the running", muted).NewLine().
+		Append("  TODO, or of its parent when the running TODO is itself a child. ", muted).Append("--no-parent", flag).
+		Append(" keeps it top-level.", muted).NewLine().NewLine().
 		Append("GITHUB", heading).NewLine().
 		Append("  ").Append("--github", flag).Append(" opens a GitHub issue for the new TODO and links the two, exactly as ", muted).
 		Append("gavel todos push", code).Append(" does.", muted).NewLine().
@@ -80,7 +87,8 @@ func todosCreateHelp(cmd *cobra.Command) api.Text {
 		Append("  ").Append(`gavel todos create "Fix parser" --plan @plan.md`, code).Append("  create a plan awaiting review", muted).NewLine().
 		Append("  ").Append(`gavel todos create "Fix parser" --plan @plan.md --status approved`, code).Append("  create a runnable approved plan", muted).NewLine().
 		Append("  ").Append(`gavel todos create "Fix parser" --verification @verification.md`, code).Append("  attach a definition of done", muted).NewLine().
-		Append("  ").Append(`gavel todos create "Fix parser" --github`, code).Append("  create it and open a linked GitHub issue", muted).NewLine().NewLine().
+		Append("  ").Append(`gavel todos create "Fix parser" --github`, code).Append("  create it and open a linked GitHub issue", muted).NewLine().
+		Append("  ").Append(`gavel todos create "Fix lexer" --parent 6408dc66`, code).Append("  create a child of another TODO", muted).NewLine().NewLine().
 		Add(renderHelpFlags("FLAGS", cmd.NonInheritedFlags())).
 		Add(renderHelpFlags("GLOBAL FLAGS", cmd.InheritedFlags()))
 

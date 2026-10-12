@@ -10,6 +10,26 @@ import (
 	"github.com/flanksource/gavel/todos/types"
 )
 
+// Sections renders the per-TODO prompt sections for a group of todos: the same
+// numbered body every todo prompt embeds as {{{body}}}.
+//
+// It is exported because the one-shot prompts outside the lifecycle — merge —
+// render the same todos and must not grow a second renderer that drifts from
+// this one. rawFixture shows each TODO's verification fixture verbatim instead
+// of as the commands it projects to, which a prompt that must REVIEW or REWRITE
+// the fixture requires.
+func Sections(todoList []*types.TODO, workDir string, rawFixture bool) string {
+	var body strings.Builder
+	for i, todo := range todoList {
+		number := 0
+		if len(todoList) > 1 {
+			number = i + 1
+		}
+		body.WriteString(buildTODOSection(todo, workDir, true, number, rawFixture))
+	}
+	return body.String()
+}
+
 // buildTODOSection renders one TODO. grouped omits the per-todo PR context (the
 // group framing carries it instead); number, when > 0, prefixes the heading with
 // its position in the list so multi-todo runs read as a numbered checklist.
@@ -58,6 +78,10 @@ func buildTODOSection(todo *types.TODO, workDir string, grouped bool, number int
 		}
 	}
 
+	if rawFixture {
+		section += buildCurrentStateSection(todo)
+	}
+
 	if refs := todo.PathRefs(); len(refs) > 0 && workDir != "" {
 		for _, ref := range refs {
 			src, err := ReadSourceLines(workDir, ref)
@@ -74,6 +98,7 @@ func buildTODOSection(todo *types.TODO, workDir string, grouped bool, number int
 	}
 
 	section += buildCommentsSection(todo.ProviderEvents)
+	section += buildReviewCommentsSection(todo.ProviderEvents)
 
 	if len(todo.StepsToReproduce) > 0 {
 		section += "## Steps to Reproduce\n\nRun the following to reproduce the failure:\n\n"
@@ -91,6 +116,34 @@ func buildTODOSection(todo *types.TODO, workDir string, grouped bool, number int
 	section += buildVerificationSection(todo, rawFixture)
 
 	return section
+}
+
+// buildCurrentStateSection renders the state a triage or merge run is asked to
+// correct: status, priority and labels.
+//
+// It is rendered only on the rawFixture path, for the same reason the fixture is
+// shown verbatim there — a prompt that must JUDGE these values cannot judge what
+// it cannot see. Asking an agent to "correct the priority if it is wrong" without
+// showing it the priority is asking it to guess.
+//
+// An unset value is spelled out rather than omitted: a TODO with no labels and no
+// priority is exactly the one triage exists to fix, and a missing line reads as
+// "not your concern".
+func buildCurrentStateSection(todo *types.TODO) string {
+	status := strings.TrimSpace(string(todo.Status))
+	if status == "" {
+		status = "unknown"
+	}
+	priority := strings.TrimSpace(string(todo.Priority))
+	if priority == "" {
+		priority = "unset"
+	}
+	labelList := "none"
+	if applied := strings.Join(todo.Labels, ", "); strings.TrimSpace(applied) != "" {
+		labelList = applied
+	}
+	return fmt.Sprintf("## Current State\n\n- **Status:** %s\n- **Priority:** %s\n- **Labels:** %s\n\n",
+		status, priority, labelList)
 }
 
 // buildVerificationSection renders the TODO's definition of done: its literal
@@ -135,12 +188,13 @@ func fixtureCommandProjection(test fixtures.FixtureTest) []string {
 
 // buildCommentsSection renders issue comments so the agent sees the discussion
 // (clarifications, decisions, extra context) that accompanies the issue body.
-// Only CommentAdded events with a non-empty body are included; other event kinds
-// (label changes, status updates) are timeline noise for an implementation prompt.
+// Only free-form comment events with a non-empty body are included: a line
+// comment renders under review comments, and other event kinds (label changes,
+// status updates) are timeline noise for an implementation prompt.
 func buildCommentsSection(events []types.ProviderEvent) string {
 	var section string
 	for _, event := range events {
-		if event.Kind != "CommentAdded" {
+		if event.Kind != types.EventKindComment || anchoredComment(event) {
 			continue
 		}
 		body := strings.TrimSpace(event.Body)

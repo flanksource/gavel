@@ -27,6 +27,9 @@ var (
 	ErrRelationshipCycle     = errors.New("native todo dependency cycle")
 	ErrRelationshipNotFound  = errors.New("native todo relationship not found")
 	ErrIssueHasRelationships = errors.New("native todo issue has relationships")
+	ErrInvalidParent         = errors.New("invalid native todo parent")
+	ErrIssueInHierarchy      = errors.New("native todo issue has a parent or children")
+	ErrOpenChildren          = errors.New("native todo issue has open children")
 	ErrLinkConflict          = errors.New("native todo Captain link conflict")
 	ErrEventConflict         = errors.New("native todo event source already exists")
 )
@@ -119,6 +122,9 @@ func mapDeleteIssueError(err error, issueID uuid.UUID) error {
 		strings.HasPrefix(pgErr.ConstraintName, "todo_issue_relationships_") {
 		return fmt.Errorf("%w: issue %s", ErrIssueHasRelationships, issueID)
 	}
+	if errors.As(err, &pgErr) && pgErr.Code == "23503" && pgErr.ConstraintName == "todo_issues_parent_fkey" {
+		return fmt.Errorf("%w: issue %s has children; detach or delete them first", ErrIssueInHierarchy, issueID)
+	}
 	return err
 }
 
@@ -138,6 +144,12 @@ func (s IssueStatus) valid() bool {
 	default:
 		return false
 	}
+}
+
+// IsClosed reports a status no work is left under: finished or cancelled. A
+// verified issue is not closed; it is waiting for someone to close it.
+func (s IssueStatus) IsClosed() bool {
+	return s == StatusClosed || s == StatusCancelled
 }
 
 func (r RelationshipKind) valid() bool {

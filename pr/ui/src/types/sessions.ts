@@ -1,4 +1,4 @@
-import type { SessionUIMessage } from '@flanksource/clicky-ui/ai';
+import type { ApprovalKind, ApprovalRequest } from '@flanksource/clicky-ui/ai';
 import type { VerifyReport } from '@flanksource/clicky-ui/data';
 
 // Rolled-up stats for a TODO's agent session (see /api/todos/session/stats):
@@ -29,12 +29,11 @@ export interface SessionStats {
   costUsd: number;
   inProgress: boolean;
   found: boolean;
-  // High-level agent state from the latest session-log event: thinking | working
-  // | ask | completed | error. 'approval' is set when a tool-permission request
-  // is pending (see approval). Empty before the first event.
-  state?: 'thinking' | 'working' | 'ask' | 'approval' | 'completed' | 'error';
-  // API/network failure reason when state === 'error' (the "API Error: …" message).
+  // Agent activity, pending approval, or the terminal runtime/verification state.
+  state?: 'thinking' | 'working' | 'ask' | 'approval' | 'completed' | 'error' | 'verification_failed';
+  // Operational failure reason when state === 'error'.
   error?: string;
+  verification?: VerifyReport;
   // Pending tool-permission requests awaiting the user's approve/deny/respond.
   // Non-empty (and state === 'approval') only while a driver is blocked on at
   // least one. Also served standalone by GET /api/todos/session/approvals.
@@ -47,6 +46,67 @@ export interface SessionRuntimeSelection {
   mode?: string;
   model?: string;
   effort?: string;
+}
+
+// What became of the git worktree a run was isolated in — captain's
+// api.WorktreeState. The agent's own work is setup..head; base..setup is the
+// setup snapshot of work-in-progress copied from the source checkout.
+export interface TodoRunWorktree {
+  repo?: string;
+  path?: string;
+  branch?: string;
+  base?: string;
+  setup?: string;
+  head?: string;
+  // kept: teardown left the worktree in place for keptReason, holding the
+  // uncommitted `dirty` paths.
+  kept?: boolean;
+  keptReason?: string;
+  dirty?: string[];
+  removed?: boolean;
+  // branchDeleted: teardown also deleted a branch that held nothing past setup.
+  branchDeleted?: boolean;
+}
+
+// One commit a run made (captain's api.CommitRecord).
+export interface TodoRunCommit {
+  sha: string;
+  message?: string;
+}
+
+// A run's recorded workspace (captain's api.WorkspaceRecord): where it ran, the
+// worktree it was isolated in (absent when it worked in the checkout itself),
+// and the commits it made.
+export interface TodoRunWorkspace {
+  cwd?: string;
+  worktree?: TodoRunWorktree;
+  commits?: TodoRunCommit[];
+}
+
+// How a run's worktree commits reached a branch (gavel's native.RunLanding):
+// cherry-picked onto the checkout's branch (`merge`), or opened as a pull
+// request (`pr`). landedSha is the tip that carries the run's commits — the
+// checkout's HEAD after a merge, the PR's topic head after a PR.
+export interface TodoRunLanding {
+  promptRunId: string;
+  via: 'merge' | 'pr';
+  targetBranch: string;
+  landedSha: string;
+  prNumber?: number;
+  prUrl?: string;
+  // How many commits the landing carried (setup..head at land time).
+  commitCount: number;
+  // When the run's worktree branch was deleted, once every commit was
+  // confirmed landed; absent while the branch is kept.
+  branchDeletedAt?: string;
+  landedAt: string;
+}
+
+// POST /api/todos/land: 200 {landing}; 500 {landing, error} when the landing
+// was recorded but the worktree cleanup after it failed.
+export interface TodoLandResponse {
+  landing: TodoRunLanding;
+  error?: string;
 }
 
 export interface TodoSessionAttempt {
@@ -80,6 +140,11 @@ export interface TodoSessionAttempt {
   // attempt that was never verified) — see todo_session_detail.go's
   // todoAttemptDetail.Verification.
   verification: VerifyReport | null;
+  // The run's recorded workspace; absent until the run finishes, and for a run
+  // that reported none.
+  workspace?: TodoRunWorkspace;
+  // How the run's commits were landed; absent until `todos land` records one.
+  landing?: TodoRunLanding;
   admissionSessionId: string;
   executionSessionId?: string;
   providerSessionId?: string;
@@ -89,155 +154,25 @@ export interface TodoSessionAttempt {
   updatedAt: string;
 }
 
-export interface TodoSessionDiagnostic {
-  severity: 'warning' | 'error';
-  code: string;
-  message: string;
-  details?: unknown;
-}
-
-export interface TodoSessionOverview {
-  id: string;
-  providerSessionId?: string;
-  source: string;
-  provider?: string;
-  hostId: string;
-  parentSessionId?: string;
-  rootSessionId?: string;
-  path?: string;
-  historyFile?: string;
-  project?: string;
-  cwd?: string;
-  title?: string;
-  agentType?: string;
-  description?: string;
-  lifecycleStatus: string;
-  activityState: string;
-  healthState: string;
-  startedAt?: string;
-  endedAt?: string;
-  lastActivityAt?: string;
-  processActive: boolean;
-  processStatus?: string;
-  pid?: number;
-  model?: string;
-  modelProvider?: string;
-  modelMode?: string;
-  effort?: string;
-  messageCount: number;
-  turnCount: number;
-  inputTokens: number;
-  outputTokens: number;
-  totalTokens: number;
-  costUsd: number;
-}
-
-export interface TodoSessionTurn {
-  id: string;
-  sessionId: string;
-  providerTurnId?: string;
-  turnIndex: number;
-  status: string;
-  stopReason?: string;
-  error?: string;
-  startedAt?: string;
-  endedAt?: string;
-  model?: string;
-  modelProvider?: string;
-  modelMode?: string;
-  effort?: string;
-  inputTokens: number;
-  outputTokens: number;
-  reasoningTokens: number;
-  cacheReadTokens: number;
-  cacheWriteTokens: number;
-  totalTokens: number;
-  costUsd: number;
-  messageCount: number;
-}
-
-export interface TodoSessionAgent {
-  id: string;
-  sessionId: string;
-  parentSessionId?: string;
-  rootSessionId?: string;
-  isRoot: boolean;
-  agentType?: string;
-  description?: string;
-  historyFile?: string;
-  source: string;
-  provider?: string;
-  lifecycleStatus: string;
-  activityState: string;
-  healthState: string;
-  startedAt?: string;
-  endedAt?: string;
-  inputTokens: number;
-  outputTokens: number;
-  reasoningTokens: number;
-  cacheReadTokens: number;
-  cacheWriteTokens: number;
-  totalTokens: number;
-  costUsd: number;
-}
-
-export interface TodoSessionCost {
-  id: string;
-  sessionId: string;
-  model: string;
-  provider?: string;
-  modelMode?: string;
-  effort?: string;
-  currency: string;
-  modelCallCount: number;
-  inputTokens: number;
-  outputTokens: number;
-  reasoningTokens: number;
-  cacheReadTokens: number;
-  cacheWriteTokens: number;
-  totalTokens: number;
-  totalCost: number;
-  firstCallAt?: string;
-  lastCallAt?: string;
-}
-
-export interface TodoProviderThread {
-  id: string;
-  providerSessionId?: string;
-  status: string;
-  root: TodoSessionOverview;
-  sessions: TodoSessionOverview[];
-  turns: TodoSessionTurn[];
-  agents: TodoSessionAgent[];
-  costs: TodoSessionCost[];
-  messages: SessionUIMessage[];
-  startedAt?: string;
-  lastActivityAt?: string;
-  durationMs: number;
-  inputTokens: number;
-  outputTokens: number;
-  totalTokens: number;
-  costUsd: number;
-}
-
+// GET /api/todos/session/detail: the todo's attempts, newest first. The
+// transcript behind each is Captain's, loaded from /api/captain/sessions/{id}.
 export interface TodoSessionDetailResponse {
   attempts: TodoSessionAttempt[];
-  selectedPromptRunId?: string;
-  selectedExecutionSessionId?: string;
-  thread?: TodoProviderThread;
-  diagnostics: TodoSessionDiagnostic[];
-  // Set when the request asked for attempts only: the provider thread was
-  // deliberately not resolved, so a missing `thread` is not a missing session.
-  attemptsOnly?: boolean;
 }
 
 // TodoSessionApproval is a tool-permission request a driver surfaced for human
 // review; the dashboard answers it via POST /api/todos/session/approve with
-// `{approvalId, action: "approve" | "deny" | "respond", message?, input?}`.
+// `{approvalId, action: "approve" | "deny" | "respond" | "cancel", message?,
+// input?, scope?, grants?}`. Form content and question answers travel as
+// `input` on a respond; cancel is a deny that also interrupts the turn.
 export interface TodoSessionApproval {
   approvalId: string;
   sessionId: string;
   toolUseId?: string;
   tool: string;
   input?: Record<string, unknown>;
+  // What kind of approval this is, and the stored request document behind it
+  // (Captain's ApprovalRequest). Both absent on an untyped tool approval.
+  kind?: ApprovalKind;
+  request?: ApprovalRequest;
 }

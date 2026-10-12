@@ -227,7 +227,9 @@ func (p *sourceSyncProvider) Edit(_ context.Context, todo *types.TODO, edit todo
 	return nil
 }
 
-func (p *sourceSyncProvider) Comment(context.Context, *types.TODO, string) error { return nil }
+func (p *sourceSyncProvider) Comment(context.Context, *types.TODO, todos.CommentRequest) error {
+	return nil
+}
 
 func (p *sourceSyncProvider) UpdateState(_ context.Context, todo *types.TODO, update todos.StateUpdate) error {
 	if update.Status != nil {

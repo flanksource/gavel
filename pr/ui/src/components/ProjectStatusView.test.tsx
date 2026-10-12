@@ -3,6 +3,7 @@ import type { ReactElement, ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { openEventStream } from '../eventHub';
 import { queryKeys } from '../query';
 import { projectDiffQueryKey } from './projectMutations';
 import { projectStatusResponse as statusResponse } from './ProjectStatusView.fixture';
@@ -14,6 +15,10 @@ let queryClient: QueryClient;
 vi.mock('@flanksource/gavel/testrunner/hooks', () => ({
   useTestRun: useTestRunMock,
 }));
+
+// The focus lease has its own spec (useGitFocus.test.tsx); here it would only
+// add POSTs to the request counts these tests assert on.
+vi.mock('../useGitFocus', () => ({ useGitFocus: () => ({ error: '' }) }));
 
 vi.mock('@flanksource/clicky-ui/components', () => ({
   Button: ({ children, onClick, loading: _loading, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement> & { loading?: boolean }) => (
@@ -29,7 +34,7 @@ vi.mock('@flanksource/clicky-ui/components', () => ({
     <div>
       <button type="button" onClick={onClick} disabled={disabled}>{label}</button>
       {items.map((item, index) => (
-        <button key={index} type="button" aria-label={`${title}: ${items.length > 1 && index === 0 ? 'open PR' : 'advanced'}`} onClick={item.onSelect} disabled={disabled}>
+        <button key={index} type="button" aria-label={`${title}: advanced`} onClick={item.onSelect} disabled={disabled}>
           {item.label}
         </button>
       ))}
@@ -50,15 +55,17 @@ vi.mock('@flanksource/clicky-ui/components', () => ({
 }));
 
 vi.mock('./ProjectCommitTasks', () => ({
-  ProjectCommitTasks: ({ preferredRunId, onLockedFilesChange, onComplete }: {
+  ProjectCommitTasks: ({ preferredRunId, onLockedFilesChange, onComplete, onRunChange }: {
     preferredRunId?: string;
     onLockedFilesChange: (files: Map<string, number>) => void;
     onComplete: () => void;
+    onRunChange: (runId: string) => void;
   }) => preferredRunId ? (
     <section aria-label="Commit tasks">
       <span>{preferredRunId}</span>
       <button type="button" onClick={() => onLockedFilesChange(new Map([['one.go', 1]]))}>Report one.go locked</button>
       <button type="button" onClick={onComplete}>Complete commit tasks</button>
+      <button type="button" onClick={() => onRunChange('commit-run-2')}>Retry commit tasks</button>
     </section>
   ) : null,
 }));
@@ -139,6 +146,10 @@ describe('ProjectStatusView', () => {
     });
     const tasks = await screen.findByRole('region', { name: 'Commit tasks' });
     expect(within(tasks).getByText('commit-run-1')).toBeTruthy();
+
+    fireEvent.click(within(tasks).getByRole('button', { name: 'Retry commit tasks' }));
+
+    expect(within(await screen.findByRole('region', { name: 'Commit tasks' })).getByText('commit-run-2')).toBeTruthy();
   });
 
   it('keeps queueing enabled while a commit runs and locks its files out of the next group', async () => {
@@ -424,6 +435,7 @@ describe('ProjectStatusView', () => {
       baseUrl: '/api/project-runs',
       enabled: true,
       runId,
+      createEventSource: openEventStream,
     });
   });
 

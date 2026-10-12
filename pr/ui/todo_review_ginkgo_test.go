@@ -17,6 +17,7 @@ import (
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/run"
 	"github.com/flanksource/gavel/todos/types"
+	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -39,13 +40,13 @@ func specAskTodo(workDir, sessionID string, phase types.Phase) *types.TODO {
 	created := specTodo(workDir, types.StatusAsk)
 	provider := uiTestProviderFor(workDir)
 	Expect(provider.UpdateState(GinkgoT().Context(), created, todos.StateUpdate{SessionID: &sessionID})).To(Succeed())
-	seedActivePhase(created, phase)
 	provider.activeRun = &captaindb.PromptRun{
 		State: captaindb.PromptRunStateWaiting,
 		Runtime: captaindb.PromptRunRuntime{Resolved: captaindb.PromptRunRuntimeSelection{
 			Provider: "openai", Mode: "agent", Model: "gpt-5.6-sol", Effort: "high",
 		}},
 	}
+	seedAskingAttempt(provider, sessionID, phase)
 	provider.comments = nil
 	return created
 }
@@ -218,7 +219,7 @@ var _ = Describe("todo answer", func() {
 	answer := func(todo *types.TODO) *httptest.ResponseRecorder {
 		GinkgoHelper()
 		return postJSON(server.handleTodoAnswer, "/api/todos/answer",
-			todoAnswerPayload{Ref: todos.TODOReference(todo), Answer: "use postgres"})
+			todoAnswerPayload{Ref: todos.TODOReference(todo), SessionID: run.PriorSessionID(todo), Answer: "use postgres"})
 	}
 
 	It("fails instead of dispatching when the approval store cannot be read", func() {
@@ -267,29 +268,18 @@ var _ = Describe("todo answer", func() {
 		Expect(resp.Todo.Lifecycle.Steps).NotTo(BeEmpty())
 	})
 
-	It("refuses to guess between two resumable phases", func() {
-		created := specAskTodo(workDir, "sess-two-phases", types.PlanPhase)
-		created.PhaseRuns[types.RunPhase] = types.PhaseRun{Phase: types.RunPhase, State: "failed", Active: true}
+	It("resumes from the answered session's attempt, not from the phase index", func() {
+		created := specAskTodo(workDir, "sess-phase-index", types.PlanPhase)
+		created.PhaseRuns = types.PhaseRuns{
+			types.PlanPhase: {Phase: types.PlanPhase, State: "waiting", Active: true},
+			types.RunPhase:  {Phase: types.RunPhase, State: "failed", Active: true},
+		}
 		called := stubSpecRunStart(nil)
 
 		rec := answer(created)
 
-		Expect(rec.Code).To(Equal(http.StatusConflict), rec.Body.String())
-		Expect(rec.Body.String()).To(ContainSubstring("plan, run"))
-		Expect(*called).To(BeFalse())
-		Expect(uiTestProviderFor(workDir).comments).To(BeEmpty())
-	})
-
-	It("refuses a todo whose index marks no phase to resume", func() {
-		created := specAskTodo(workDir, "sess-no-phase", types.PlanPhase)
-		created.PhaseRuns = nil
-		called := stubSpecRunStart(nil)
-
-		rec := answer(created)
-
-		Expect(rec.Code).To(Equal(http.StatusConflict), rec.Body.String())
-		Expect(rec.Body.String()).To(ContainSubstring("no active or waiting step run"))
-		Expect(*called).To(BeFalse())
+		Expect(rec.Code).To(Equal(http.StatusOK), rec.Body.String())
+		Expect(*called).To(BeTrue())
 	})
 
 	It("reports the recorded answer together with a resume that could not start", func() {
@@ -307,5 +297,64 @@ var _ = Describe("todo answer", func() {
 		Expect(uiTestProviderFor(workDir).comments).To(HaveLen(1))
 		Expect(resp.Todo.Lifecycle).NotTo(BeNil(), "the failed-answer response must carry the lifecycle")
 		Expect(resp.Todo.Lifecycle.Steps).NotTo(BeEmpty())
+	})
+
+	It("refuses a todo whose ask was already answered from Captain", func() {
+		created := specAskTodo(workDir, "sess-captain-answered", types.RunPhase)
+		created.Status = types.StatusInProgress
+		created.ProviderEvents = []types.ProviderEvent{
+			{Kind: "lifecycle_outcome", Actor: "gavel"},
+			{Kind: "ask_answered", Actor: "captain", Body: "**Answer (Captain):** use mysql"},
+		}
+		called := stubSpecRunStart(nil)
+
+		rec := answer(created)
+
+		Expect(rec.Code).To(Equal(http.StatusConflict), rec.Body.String())
+		Expect(rec.Body.String()).To(ContainSubstring("already answered from Captain"))
+		Expect(*called).To(BeFalse())
+		Expect(uiTestProviderFor(workDir).comments).To(BeEmpty())
+	})
+
+	It("answers again once the Captain answer's turn asked anew", func() {
+		created := specAskTodo(workDir, "sess-captain-asked-again", types.RunPhase)
+		created.ProviderEvents = []types.ProviderEvent{
+			{Kind: "ask_answered", Actor: "captain"},
+			{Kind: "lifecycle_outcome", Actor: "gavel"},
+		}
+		called := stubSpecRunStart(nil)
+
+		rec := answer(created)
+
+		Expect(rec.Code).To(Equal(http.StatusOK), rec.Body.String())
+		Expect(*called).To(BeTrue())
+	})
+})
+
+// fakeLivenessStore is the Captain store as the answer liveness check reads
+// it. Only the read that check makes is implemented; any other call panics
+// through the nil embedded interface.
+type fakeLivenessStore struct {
+	approvalStore
+	requests []captaindb.TurnRequest
+}
+
+func (s fakeLivenessStore) ListTurnRequests(context.Context, captaindb.TurnRequestFilter) ([]captaindb.TurnRequest, error) {
+	return s.requests, nil
+}
+
+var _ = Describe("answer liveness", func() {
+	waiting := &captaindb.PromptRun{
+		ID: uuid.MustParse("0199f0aa-0000-7000-8000-0000000a5c01"), SessionID: uuid.MustParse("0199f0aa-0000-7000-8000-0000000a5c02"),
+		State: captaindb.PromptRunStateWaiting,
+	}
+
+	// A cmux run leaves its TUI alive while parked, so the session keeps a live
+	// process for the whole ask: that process must not refuse the answer.
+	It("lets a parked ask through whatever process its session still has", func() {
+		status, err := answerLivenessError(context.Background(), fakeLivenessStore{}, waiting)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(status).To(Equal(http.StatusOK))
 	})
 })

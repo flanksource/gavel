@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/flanksource/captain/pkg/api"
+	"github.com/flanksource/clicky/task"
 	"github.com/flanksource/gavel/fixtures"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -21,6 +22,29 @@ func checklistFixture(ai *fixtures.FixtureAIConfig) fixtures.FixtureTest {
 }
 
 var _ = Describe("AI fixture runtime spec", func() {
+	It("includes executable verdicts without forwarding captured command output", func() {
+		var schema checklistResponse
+		resolved, _, err := resolveAIStepSpec(checklistFixture(nil), fixtures.RunOptions{
+			Spec: &api.Spec{Model: api.Model{Name: "gpt-5", Mode: api.ModeAPI}},
+			PreviousResults: []fixtures.FixtureResult{
+				{Name: "formula reference", Type: "exec", Status: task.StatusPASS, Command: "pnpm --dir webapp test formula-reference.test.ts", ExitCode: 0, Stdout: "private output"},
+				{Name: "build", Type: "exec", Status: task.StatusFAIL, Command: "make build", ExitCode: 1, Stderr: "private diagnostic"},
+			},
+		}, &schema)
+
+		Expect(err).NotTo(HaveOccurred())
+		prompt := resolved.Spec.Prompt.User
+		Expect(prompt).To(ContainSubstring("pnpm --dir webapp test formula-reference.test.ts"))
+		Expect(prompt).To(ContainSubstring("make build"))
+		Expect(prompt).To(ContainSubstring("PASS"))
+		Expect(prompt).To(ContainSubstring("FAIL"))
+		Expect(prompt).To(ContainSubstring("exit code 0"))
+		Expect(prompt).To(ContainSubstring("exit code 1"))
+		Expect(prompt).To(ContainSubstring("Do not rerun"))
+		Expect(prompt).NotTo(ContainSubstring("private output"))
+		Expect(prompt).NotTo(ContainSubstring("private diagnostic"))
+	})
+
 	It("applies flat fixture options over a canonical runtime snapshot", func() {
 		canonical := api.Spec{
 			Model: api.Model{Name: "claude-sonnet-4-6", Mode: api.ModeCLI, Effort: api.EffortHigh,

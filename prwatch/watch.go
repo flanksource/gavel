@@ -1,6 +1,7 @@
 package prwatch
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -9,9 +10,12 @@ import (
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/internal/ttyrender"
+	"github.com/flanksource/gavel/pr/model"
 )
 
 type WatchOptions struct {
+	Context       context.Context
+	FetchSnapshot func(context.Context, WatchOptions) (*PRWatchResult, error)
 	github.Options
 	PRNumber int
 	Interval time.Duration
@@ -27,6 +31,13 @@ type WatchOptions struct {
 }
 
 func Run(opts WatchOptions) (*PRWatchResult, int) {
+	if opts.Context == nil {
+		opts.Context = context.Background()
+	}
+	fetch := opts.FetchSnapshot
+	if fetch == nil {
+		fetch = fetchGitHubSnapshot
+	}
 	logger.Debugf("starting watch (pr=%d, interval=%s, follow=%t)", opts.PRNumber, opts.Interval, opts.Follow)
 
 	var (
@@ -35,38 +46,27 @@ func Run(opts WatchOptions) (*PRWatchResult, int) {
 	)
 
 	for {
-		pr, err := github.FetchPR(opts.Options, opts.PRNumber)
+		if opts.Context.Err() != nil {
+			return nil, 1
+		}
+		result, err := fetch(opts.Context, opts)
 		if err != nil {
-			if !opts.Follow {
+			if !opts.Follow || opts.FetchSnapshot != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 				return nil, 1
 			}
 			logger.Errorf("fetch failed: %v, retrying in %s", err, opts.Interval)
-			time.Sleep(opts.Interval)
+			if !waitForPoll(opts) {
+				return nil, 1
+			}
 			continue
 		}
 
-		allComments := append(append([]github.PRComment{}, pr.Comments...), pr.ReviewThreads...)
-		artifacts := github.FindGavelArtifacts(allComments)
-		gavelResultsCh := make(chan []*GavelResultsSummary, 1)
-		go func() {
-			gavelResultsCh <- FetchGavelArtifacts(opts.Options, artifacts)
-		}()
-
-		// The persistent github cache short-circuits already-completed runs.
-		runs := fetchRuns(opts, pr)
-		gavelResults := <-gavelResultsCh
-		annotateReproduceCommands(gavelResults, opts.Repo, pr.Number)
-		comments := MergeAndFilter(pr.Comments, pr.ReviewThreads)
-		comments = removeRenderedArtifactComments(comments, gavelResults)
-
-		result := &PRWatchResult{
-			PR:           pr,
-			Runs:         runs,
-			Conflicts:    github.DetectMergeConflicts(opts.Options, pr),
-			GavelResults: gavelResults,
-			Comments:     comments,
+		if result == nil || result.PR == nil {
+			fmt.Fprintln(os.Stderr, "Error: PR provider returned no PR snapshot")
+			return nil, 1
 		}
+		pr, runs := result.PR, result.Runs
 		filters := newResultFilters(opts.Comments, opts.Actions)
 
 		preChecks := len(pr.StatusCheckRollup)
@@ -131,8 +131,37 @@ func Run(opts WatchOptions) (*PRWatchResult, int) {
 			fmt.Fprintln(os.Stderr, followProgressLine(result, opts.Interval))
 		}
 
-		time.Sleep(opts.Interval)
+		if !waitForPoll(opts) {
+			return result, 1
+		}
 	}
+}
+
+func waitForPoll(opts WatchOptions) bool {
+	timer := time.NewTimer(opts.Interval)
+	defer timer.Stop()
+	select {
+	case <-opts.Context.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+func fetchGitHubSnapshot(ctx context.Context, opts WatchOptions) (*PRWatchResult, error) {
+	pr, err := github.FetchPR(opts.Options, opts.PRNumber)
+	if err != nil {
+		return nil, err
+	}
+	allComments := append(append([]model.PRComment{}, pr.Comments...), pr.ReviewThreads...)
+	artifacts := github.FindGavelArtifacts(allComments)
+	gavelResultsCh := make(chan []*GavelResultsSummary, 1)
+	go func() { gavelResultsCh <- FetchGavelArtifacts(opts.Options, artifacts) }()
+	runs := fetchRuns(opts, pr)
+	gavelResults := <-gavelResultsCh
+	annotateReproduceCommands(gavelResults, opts.Repo, pr.Number)
+	comments := removeRenderedArtifactComments(MergeAndFilter(pr.Comments, pr.ReviewThreads), gavelResults)
+	return &PRWatchResult{PR: pr, Runs: runs, Conflicts: github.DetectMergeConflicts(opts.Options, pr), GavelResults: gavelResults, Comments: comments}, nil
 }
 
 // followDone reports whether --follow has seen everything it was asked to wait
@@ -142,6 +171,25 @@ func Run(opts WatchOptions) (*PRWatchResult, int) {
 func followDone(filters resultFilters, result *PRWatchResult, failFast bool) bool {
 	if failFast && result.HasTerminalFailure() {
 		return true
+	}
+	if result != nil && result.PR != nil && result.PR.Provider == "azuredevops" {
+		if result.PR.State != "OPEN" {
+			return true
+		}
+		r := result.PR.MergeReadiness
+		if r == nil {
+			return true
+		}
+		if r.WaitingForMerge {
+			return false
+		}
+		if !filters.hasActionFilters() && r.WaitingForBuilds {
+			return false
+		}
+		if len(result.PR.StatusCheckRollup) == 0 {
+			return !filters.hasActionFilters()
+		}
+		return result.PR.StatusCheckRollup.AllComplete()
 	}
 	return filters.isComplete(result)
 }
@@ -158,6 +206,29 @@ func followDone(filters resultFilters, result *PRWatchResult, failFast bool) boo
 func statusExitCode(result *PRWatchResult) int {
 	if result == nil {
 		return 0
+	}
+	if result.PR != nil && result.PR.Provider == "azuredevops" {
+		if result.PR.State == "OPEN" && (result.PR.MergeReadiness == nil || result.PR.MergeReadiness.State != "ready") {
+			return 1
+		}
+		for _, check := range result.PR.StatusCheckRollup {
+			if check.Conclusion == "CANCELLED" {
+				return 1
+			}
+		}
+		for _, run := range result.Runs {
+			if run == nil {
+				continue
+			}
+			if len(run.Jobs) == 0 && (model.IsFailureConclusion(run.Conclusion) || run.Conclusion == "CANCELLED") {
+				return 1
+			}
+			for _, job := range run.Jobs {
+				if model.IsFailureConclusion(job.Conclusion) || job.Conclusion == "CANCELLED" {
+					return 1
+				}
+			}
+		}
 	}
 	if result.HasMergeConflict() {
 		return 1
@@ -176,8 +247,8 @@ func statusExitCode(result *PRWatchResult) int {
 	return 0
 }
 
-func fetchRuns(opts WatchOptions, pr *github.PRInfo) map[int64]*github.WorkflowRun {
-	runs := make(map[int64]*github.WorkflowRun)
+func fetchRuns(opts WatchOptions, pr *model.PRInfo) map[int64]*model.WorkflowRun {
+	runs := make(map[int64]*model.WorkflowRun)
 	seen := make(map[int64]bool)
 
 	for _, check := range pr.StatusCheckRollup {
@@ -200,7 +271,7 @@ func fetchRuns(opts WatchOptions, pr *github.PRInfo) map[int64]*github.WorkflowR
 			continue
 		}
 
-		if github.RunHasFailedJob(run) || newResultFilters(nil, opts.Actions).hasActionFilters() {
+		if model.RunHasFailedJob(run) || newResultFilters(nil, opts.Actions).hasActionFilters() {
 			if _, err := github.FetchWorkflowDefinition(opts.Options, run); err != nil {
 				logger.Warnf("failed to fetch workflow definition for run %d: %v", runID, err)
 			}
@@ -211,15 +282,15 @@ func fetchRuns(opts WatchOptions, pr *github.PRInfo) map[int64]*github.WorkflowR
 }
 
 // MergeAndFilter combines comments with thread state, extracts nitpick sub-comments, and filters noise.
-func MergeAndFilter(comments []github.PRComment, threads []github.PRComment) []github.PRComment {
+func MergeAndFilter(comments []model.PRComment, threads []model.PRComment) []model.PRComment {
 	comments = mergeThreadState(comments, threads)
 	comments = annotateBots(comments)
 	comments = extractNitpicks(comments)
 	return filterActionableComments(comments)
 }
 
-func mergeThreadState(comments []github.PRComment, threads []github.PRComment) []github.PRComment {
-	threadByID := make(map[int64]github.PRComment, len(threads))
+func mergeThreadState(comments []model.PRComment, threads []model.PRComment) []model.PRComment {
+	threadByID := make(map[int64]model.PRComment, len(threads))
 	for _, t := range threads {
 		threadByID[t.ID] = t
 	}
@@ -241,8 +312,8 @@ func mergeThreadState(comments []github.PRComment, threads []github.PRComment) [
 	return comments
 }
 
-func extractNitpicks(comments []github.PRComment) []github.PRComment {
-	var result []github.PRComment
+func extractNitpicks(comments []model.PRComment) []model.PRComment {
+	var result []model.PRComment
 	for _, c := range comments {
 		result = append(result, c)
 		if c.BotType == "coderabbit" {
@@ -252,8 +323,8 @@ func extractNitpicks(comments []github.PRComment) []github.PRComment {
 	return result
 }
 
-func filterActionableComments(comments []github.PRComment) []github.PRComment {
-	var result []github.PRComment
+func filterActionableComments(comments []model.PRComment) []model.PRComment {
+	var result []model.PRComment
 	for _, c := range comments {
 		if c.Severity != "" || c.Path != "" {
 			result = append(result, c)

@@ -22,6 +22,16 @@ func TestPRStatusFailFastRequiresFollow(t *testing.T) {
 		}
 	})
 
+	t.Run("--worktree without --ai-fix has nothing to isolate", func(t *testing.T) {
+		err := PRStatusOptions{Worktree: true}.validate()
+		if err == nil || !strings.Contains(err.Error(), "--ai-fix") {
+			t.Fatalf("want an error naming --ai-fix, got %v", err)
+		}
+		if err := (PRStatusOptions{Worktree: true, AIFix: true}).validate(); err != nil {
+			t.Fatalf("--worktree with --ai-fix: unexpected error: %v", err)
+		}
+	})
+
 	t.Run("neither flag is fine", func(t *testing.T) {
 		if err := (PRStatusOptions{}).validate(); err != nil {
 			t.Fatalf("unexpected error: %v", err)

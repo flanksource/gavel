@@ -49,9 +49,12 @@ tasks:
       - cd pr/ui && CI=true corepack pnpm install --no-frozen-lockfile
     sources:
       - testrunner/ui/package.json
+      - testrunner/ui/pnpm-workspace.yaml
       - testrunner/ui/pnpm-lock.yaml
       - pr/ui/package.json
+      - pr/ui/pnpm-workspace.yaml
       - pr/ui/pnpm-lock.yaml
+      - ../clicky-ui/packages/ui/package.json
     generates:
       - testrunner/ui/node_modules/.modules.yaml
       - pr/ui/node_modules/.modules.yaml

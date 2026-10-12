@@ -26,6 +26,7 @@ func Class(step Step) types.RunMode {
 // a step is therefore not reflected in the defaults, only in the run.
 type StepDefaultResult struct {
 	Spec           api.Spec
+	Presets        []string
 	RuntimeProfile string
 	Trace          []api.SpecLayer
 	Provenance     map[string]api.FieldProvenance
@@ -41,9 +42,15 @@ func (h *Host) StepDefaults(ctx context.Context, step Step) (StepDefaultResult, 
 	if err != nil {
 		return StepDefaultResult{}, fmt.Errorf("compose defaults for step %s: %w", step.Name, runtimeConfigurationError(err))
 	}
+	// The dialog displays what the run would do, so it must show the posture the
+	// run will actually resolve to — the class invariant is applied to a preview
+	// for the same reason it is applied last to a run.
+	ApplyClassInvariants(&composed.Spec, Class(step))
 	defaults := StepDefaultResult{Spec: composed.Spec, Trace: composed.Trace, Provenance: composed.Provenance, Warnings: composed.Warnings}
-	if layers.Profile != nil {
-		defaults.RuntimeProfile = layers.Profile.Profile.ID
+	if layers.Presets != nil {
+		for _, preset := range layers.Presets.Presets {
+			defaults.Presets = append(defaults.Presets, preset.ID)
+		}
 	}
 	return defaults, nil
 }
@@ -61,8 +68,9 @@ func (h *Host) StepLayers(ctx context.Context, step Step) (runtimeprofiles.Layer
 		}
 	}
 	layers, err := h.profileLayers(ctx, LayerInput{
+		RuntimePresets: h.presetSelection(step.Name, nil, false, prompt.Presets, prompt.PresetsSet),
 		RuntimeProfile: h.profileSelection(step.Name, "", prompt.RuntimeProfile),
-		Config:         h.Config, Step: step.Name, Frontmatter: prompt.Layers, Host: h.Kind,
+		Config:         h.Config, Step: step.Name, Frontmatter: prompt.Layers,
 	})
 	if err != nil {
 		return runtimeprofiles.LayerResult{}, fmt.Errorf("resolve defaults for step %s: %w", step.Name, err)

@@ -9,6 +9,7 @@ import (
 
 	"github.com/flanksource/clicky/task"
 	flanksourceContext "github.com/flanksource/commons/context"
+	"github.com/flanksource/commons/logger"
 	"github.com/onsi/ginkgo/v2"
 	"github.com/onsi/gomega"
 	"github.com/onsi/gomega/types"
@@ -103,8 +104,12 @@ func (r *Runner) RegisterGinkgoSpecs() {
 			// Then the daemon, because removing a worktree a live process is
 			// sitting in leaves a stale git worktree registration behind.
 			r.closeRecorders()
-			r.stopDaemon()
-			r.cleanupSetups()
+			if err := r.stopDaemon(); err != nil {
+				logger.Warnf("daemon stop failed: %v", err)
+			}
+			if err := r.cleanupSetups(); err != nil {
+				logger.Warnf("setup cleanup failed: %v", err)
+			}
 		})
 
 		for _, child := range tree.Children {

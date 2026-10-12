@@ -17,9 +17,11 @@ func saveAttempt(todo *types.TODO, result *ExecutionResult) error {
 		Cost:      result.CostUSD,
 		Tokens:    result.TokensUsed,
 		Model:     result.Runtime.ResolvedModel,
-		Commit:    result.CommitSHA,
+		Workspace: result.Workspace,
 	}
-	if result.Success {
+	if result.EndStatus == types.EndAsk {
+		attempt.Status = types.StatusAsk
+	} else if result.Success {
 		attempt.Status = types.StatusCompleted
 	} else {
 		attempt.Status = types.StatusFailed
@@ -63,9 +65,7 @@ func writeTranscript(todo *types.TODO, result *ExecutionResult) (string, error) 
 	fmt.Fprintf(&sb, "- **Duration:** %s\n", result.Duration.Round(time.Second))
 	fmt.Fprintf(&sb, "- **Cost:** $%.4f\n", result.CostUSD)
 	fmt.Fprintf(&sb, "- **Tokens:** %d\n", result.TokensUsed)
-	if result.CommitSHA != "" {
-		fmt.Fprintf(&sb, "- **Commit:** `%s`\n", result.CommitSHA)
-	}
+	sb.WriteString(WorkspaceMarkdown(result.Workspace))
 
 	if result.Transcript != nil && len(result.Transcript.Entries) > 0 {
 		sb.WriteString("\n## Transcript\n\n")
@@ -107,10 +107,13 @@ func appendAttemptRow(todo *types.TODO, attempt types.Attempt) error {
 }
 
 func formatAttemptRow(n int, a types.Attempt) string {
-	commit := ""
-	if a.Commit != "" {
-		commit = "`" + a.Commit + "`"
+	var commits []string
+	if a.Workspace != nil {
+		for _, c := range a.Workspace.Commits {
+			commits = append(commits, "`"+ShortSHA(c.SHA)+"`")
+		}
 	}
+	commit := strings.Join(commits, " ")
 	transcript := ""
 	if a.Transcript != "" {
 		transcript = fmt.Sprintf("[transcript](%s)", a.Transcript)
@@ -165,6 +168,9 @@ func upsertAttemptsSection(content, newRow string) string {
 }
 
 func (r *ExecutionResult) statusString() string {
+	if r.EndStatus == types.EndAsk {
+		return "waiting"
+	}
 	if r.Success {
 		return "completed"
 	}

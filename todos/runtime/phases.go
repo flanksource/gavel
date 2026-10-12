@@ -90,6 +90,9 @@ func phaseRunFromNative(row native.IssuePhaseRun) (types.PhaseRun, error) {
 	if row.DurationSeconds != nil {
 		run.DurationMS = int64(*row.DurationSeconds * float64(time.Second/time.Millisecond))
 	}
+	if row.PromptRunID != uuid.Nil {
+		run.PromptRunID = row.PromptRunID.String()
+	}
 	return run, nil
 }
 

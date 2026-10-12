@@ -8,6 +8,14 @@ import (
 	"testing"
 )
 
+// An empty diff must encode as [] rather than null: the dashboard treats a
+// missing files list as a malformed response.
+func TestParseCommitFilesEmptyIsNonNil(t *testing.T) {
+	if files := parseCommitFiles(""); files == nil || len(files) != 0 {
+		t.Fatalf("parseCommitFiles(\"\") = %#v, want empty non-nil slice", files)
+	}
+}
+
 func TestParseCommitFiles(t *testing.T) {
 	patch := strings.Join([]string{
 		`diff --git a/added.go b/added.go`,
@@ -113,7 +121,7 @@ func TestCommitFiles(t *testing.T) {
 	git("commit", "-q", "-m", "change")
 
 	head := strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD"))
-	files, err := CommitFiles(dir, head)
+	files, err := CommitFiles(dir, CommitDiffOptions{Head: head})
 	if err != nil {
 		t.Fatalf("CommitFiles: %v", err)
 	}
@@ -135,7 +143,7 @@ func TestCommitFiles(t *testing.T) {
 		t.Fatalf("keep.go counts = +%d/-%d, want +1/-1", f.Adds, f.Dels)
 	}
 
-	if _, err := CommitFiles(dir, "not-a-hash"); err == nil {
+	if _, err := CommitFiles(dir, CommitDiffOptions{Head: "not-a-hash"}); err == nil {
 		t.Fatal("expected error for invalid hash")
 	}
 }
@@ -164,14 +172,14 @@ func TestCommitDiffFileScopesToOnePath(t *testing.T) {
 	git("commit", "-q", "-m", "two files")
 
 	head := strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD"))
-	diff, _, err := CommitDiff(dir, head, "a.txt")
+	result, err := CommitDiff(dir, CommitDiffOptions{Head: head, File: "a.txt"})
 	if err != nil {
 		t.Fatalf("CommitDiff(file): %v", err)
 	}
-	if !strings.Contains(diff, "a.txt") {
-		t.Fatalf("scoped diff missing a.txt:\n%s", diff)
+	if !strings.Contains(result.Diff, "a.txt") {
+		t.Fatalf("scoped diff missing a.txt:\n%s", result.Diff)
 	}
-	if strings.Contains(diff, "b.txt") {
-		t.Fatalf("scoped diff should exclude b.txt:\n%s", diff)
+	if strings.Contains(result.Diff, "b.txt") {
+		t.Fatalf("scoped diff should exclude b.txt:\n%s", result.Diff)
 	}
 }

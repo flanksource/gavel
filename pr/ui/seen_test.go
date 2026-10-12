@@ -44,7 +44,9 @@ func TestSeenEndpointValidation(t *testing.T) {
 // with a disabled cache succeeds (because MarkSeen is a no-op when disabled).
 // This exercises the full JSON decode path and the notify() trigger.
 func TestSeenEndpointAcceptsValidBody(t *testing.T) {
-	s := &Server{updated: make(chan struct{}, 1)}
+	s := &Server{}
+	wake, unsubscribe := s.updated.Subscribe()
+	defer unsubscribe()
 	req := httptest.NewRequest("POST", "/api/prs/seen",
 		bytes.NewBufferString(`{"repo":"owner/name","number":42}`))
 	rec := httptest.NewRecorder()
@@ -52,9 +54,9 @@ func TestSeenEndpointAcceptsValidBody(t *testing.T) {
 	if rec.Code != 200 {
 		t.Errorf("status = %d, want 200; body = %q", rec.Code, rec.Body.String())
 	}
-	// notify() should have pushed to s.updated
+	// notify() should have woken every s.updated subscriber
 	select {
-	case <-s.updated:
+	case <-wake:
 	case <-time.After(100 * time.Millisecond):
 		t.Error("handleSeen did not trigger notify() after marking seen")
 	}

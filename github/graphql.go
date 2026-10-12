@@ -9,6 +9,7 @@ import (
 
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/github/activity"
+	"github.com/flanksource/gavel/pr/model"
 )
 
 const prByNumberQuery = `query($owner: String!, $repo: String!, $number: Int!) {
@@ -306,13 +307,13 @@ type graphQLWorkflow struct {
 	Name string `json:"name"`
 }
 
-func (pr graphQLPR) toPRInfo() *PRInfo {
-	info := &PRInfo{
+func (pr graphQLPR) toPRInfo() *model.PRInfo {
+	info := &model.PRInfo{
 		NodeID:         pr.ID,
 		Number:         pr.Number,
 		Title:          pr.Title,
 		Body:           pr.Body,
-		Author:         PRAuthor{Login: pr.Author.Login, AvatarURL: pr.Author.AvatarURL},
+		Author:         model.PRAuthor{Login: pr.Author.Login, AvatarURL: pr.Author.AvatarURL},
 		HeadRefName:    pr.HeadRefName,
 		BaseRefName:    pr.BaseRefName,
 		State:          pr.State,
@@ -348,7 +349,7 @@ func (pr graphQLPR) toPRInfo() *PRInfo {
 	// Populate commit list.
 	for _, cn := range pr.Commits.Nodes {
 		c := cn.Commit
-		ci := PRCommitInfo{
+		ci := model.PRCommitInfo{
 			OID:             c.OID,
 			MessageHeadline: c.MessageHeadline,
 			MessageBody:     c.MessageBody,
@@ -371,7 +372,7 @@ func (pr graphQLPR) toPRInfo() *PRInfo {
 
 	// Populate changed files list.
 	for _, f := range pr.Files.Nodes {
-		info.PRFiles = append(info.PRFiles, PRFileInfo(f))
+		info.PRFiles = append(info.PRFiles, model.PRFileInfo(f))
 	}
 
 	// Flatten issue-level comments and top-level review bodies into Comments.
@@ -390,7 +391,7 @@ func (pr graphQLPR) toPRInfo() *PRInfo {
 	// carry the path/line context and the thread's resolved/outdated state.
 	for _, thread := range pr.ReviewThreads.Nodes {
 		for _, c := range thread.Comments.Nodes {
-			comment := PRComment{
+			comment := model.PRComment{
 				ID:         c.DatabaseID,
 				Body:       c.Body,
 				Author:     c.Author.Login,
@@ -415,8 +416,8 @@ func (pr graphQLPR) toPRInfo() *PRInfo {
 	return info
 }
 
-func (c graphQLCommentNode) toPRComment() PRComment {
-	return PRComment{
+func (c graphQLCommentNode) toPRComment() model.PRComment {
+	return model.PRComment{
 		ID:        c.DatabaseID,
 		Body:      c.Body,
 		Author:    c.Author.Login,
@@ -426,15 +427,15 @@ func (c graphQLCommentNode) toPRComment() PRComment {
 	}
 }
 
-func (n graphQLCheckNode) toStatusCheck() StatusCheck {
+func (n graphQLCheckNode) toStatusCheck() model.StatusCheck {
 	if n.Typename == "CheckRun" {
 		return n.checkRunToStatusCheck()
 	}
 	return n.statusContextToStatusCheck()
 }
 
-func (n graphQLCheckNode) checkRunToStatusCheck() StatusCheck {
-	sc := StatusCheck{
+func (n graphQLCheckNode) checkRunToStatusCheck() model.StatusCheck {
+	sc := model.StatusCheck{
 		Name:       n.Name,
 		Status:     strings.ToUpper(n.Status),
 		DetailsURL: n.DetailsURL,
@@ -448,8 +449,8 @@ func (n graphQLCheckNode) checkRunToStatusCheck() StatusCheck {
 	return sc
 }
 
-func (n graphQLCheckNode) statusContextToStatusCheck() StatusCheck {
-	sc := StatusCheck{
+func (n graphQLCheckNode) statusContextToStatusCheck() model.StatusCheck {
+	sc := model.StatusCheck{
 		Name:       n.Context,
 		DetailsURL: n.TargetURL,
 	}
@@ -470,7 +471,7 @@ func (n graphQLCheckNode) statusContextToStatusCheck() StatusCheck {
 	return sc
 }
 
-func FetchPR(opts Options, prNumber int) (*PRInfo, error) {
+func FetchPR(opts Options, prNumber int) (*model.PRInfo, error) {
 	token, err := opts.token()
 	if err != nil {
 		return nil, err

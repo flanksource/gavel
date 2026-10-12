@@ -14,6 +14,7 @@ import (
 	"github.com/flanksource/clicky/api/icons"
 	"github.com/flanksource/clicky/formatters"
 	_ "github.com/flanksource/clicky/formatters/html"
+	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/models"
 	"github.com/flanksource/gavel/testrunner/bench"
@@ -48,34 +49,41 @@ type lintRouteFilters struct {
 }
 
 type exportReport struct {
-	Tab      string      `json:"tab"`
-	Path     string      `json:"path,omitempty"`
-	Filters  any         `json:"filters,omitempty"`
-	Selected *ViewNode   `json:"selected,omitempty"`
-	Tests    []*ViewNode `json:"tests,omitempty"`
-	Lint     []*ViewNode `json:"lint,omitempty"`
-	Bench    []*ViewNode `json:"bench,omitempty"`
-	Done     bool        `json:"done"`
+	Tab              string                         `json:"tab"`
+	Path             string                         `json:"path,omitempty"`
+	Filters          any                            `json:"filters,omitempty"`
+	Selected         *ViewNode                      `json:"selected,omitempty"`
+	Tests            []*ViewNode                    `json:"tests,omitempty"`
+	Lint             []*ViewNode                    `json:"lint,omitempty"`
+	Bench            []*ViewNode                    `json:"bench,omitempty"`
+	FixtureBenchmark *FixtureBenchmarkState         `json:"fixture_benchmark,omitempty"`
+	Performance      *fixtures.BenchmarkPerformance `json:"performance,omitempty"`
+	Error            string                         `json:"error,omitempty"`
+	Done             bool                           `json:"done"`
 
 	roots []*ViewNode `json:"-"`
 }
 
 type ViewNode struct {
-	Name        string        `json:"name"`
-	Path        string        `json:"path,omitempty"`
-	Framework   string        `json:"framework,omitempty"`
-	Kind        string        `json:"kind,omitempty"`
-	Status      string        `json:"status,omitempty"`
-	Package     string        `json:"package,omitempty"`
-	PackagePath string        `json:"package_path,omitempty"`
-	File        string        `json:"file,omitempty"`
-	Line        int           `json:"line,omitempty"`
-	Command     string        `json:"command,omitempty"`
-	Message     string        `json:"message,omitempty"`
-	Stdout      string        `json:"stdout,omitempty"`
-	Stderr      string        `json:"stderr,omitempty"`
-	Duration    time.Duration `json:"duration,omitempty"`
-	Children    []*ViewNode   `json:"children,omitempty"`
+	Name           string                      `json:"name"`
+	Path           string                      `json:"path,omitempty"`
+	Framework      string                      `json:"framework,omitempty"`
+	Kind           string                      `json:"kind,omitempty"`
+	Status         string                      `json:"status,omitempty"`
+	Package        string                      `json:"package,omitempty"`
+	PackagePath    string                      `json:"package_path,omitempty"`
+	File           string                      `json:"file,omitempty"`
+	Line           int                         `json:"line,omitempty"`
+	Command        string                      `json:"command,omitempty"`
+	Message        string                      `json:"message,omitempty"`
+	Stdout         string                      `json:"stdout,omitempty"`
+	Stderr         string                      `json:"stderr,omitempty"`
+	Duration       time.Duration               `json:"duration,omitempty"`
+	FixtureProfile *parsers.FixtureProfile     `json:"fixture_profile,omitempty"`
+	GoProfiles     []parsers.GoProfileArtifact `json:"go_profiles,omitempty"`
+	SQLProfile     *parsers.SQLProfile         `json:"sql_profile,omitempty"`
+	Violations     []string                    `json:"violations,omitempty"`
+	Children       []*ViewNode                 `json:"children,omitempty"`
 }
 
 func (n *ViewNode) Pretty() api.Text {
@@ -110,6 +118,10 @@ func (n *ViewNode) Pretty() api.Text {
 
 	if n.Duration > 0 {
 		text = text.Space().Append(n.Duration.String(), "text-muted")
+	}
+	if n.FixtureProfile != nil && n.FixtureProfile.SampleCount > 0 {
+		text = text.NewLine().Append(fmt.Sprintf("Peak CPU %.1f%%, peak RSS %d bytes (%d samples)",
+			n.FixtureProfile.PeakCPUPercent, n.FixtureProfile.PeakRSSBytes, n.FixtureProfile.SampleCount), "text-muted")
 	}
 
 	if n.Message != "" {
@@ -149,6 +161,47 @@ func (r exportReport) Pretty() api.Text {
 	text := clicky.Text(label+" export", "bold")
 	if r.Path != "" {
 		text = text.Space().Append("("+r.Path+")", "text-muted")
+	}
+	if fixture := r.FixtureBenchmark; fixture != nil {
+		text = text.Space().Append("fixture "+fixture.Mode, "text-muted")
+		if fixture.Report != nil {
+			text = text.Space().Append(fmt.Sprintf("%.1f ms", fixture.Report.DurationMS), "text-muted")
+			if fixture.Report.Comparison != nil {
+				comparison := fixture.Report.Comparison
+				text = text.NewLine().Append("Baseline: "+comparison.Baseline, "text-muted")
+				if len(comparison.Added) > 0 {
+					text = text.NewLine().Append("Added: "+strings.Join(comparison.Added, ", "), "text-muted")
+				}
+				if len(comparison.Missing) > 0 {
+					text = text.NewLine().Append("Missing: "+strings.Join(comparison.Missing, ", "), "text-muted")
+				}
+				if len(comparison.Unmeasured) > 0 {
+					text = text.NewLine().Append("Unmeasured: "+strings.Join(comparison.Unmeasured, ", "), "text-muted")
+				}
+			}
+			if fixture.Report.Profile != nil {
+				text = text.NewLine().Append(fmt.Sprintf("Peak CPU %.1f%%, peak RSS %d bytes", fixture.Report.Profile.PeakCPUPercent, fixture.Report.Profile.PeakRSSBytes), "text-muted")
+			}
+		}
+		if fixture.ArtifactPath != "" {
+			text = text.NewLine().Append("Artifact: "+fixture.ArtifactPath, "text-muted")
+		}
+	}
+	if performance := r.Performance; performance != nil {
+		text = text.Space().Append("fixture "+performance.Mode, "text-muted")
+		text = text.Space().Append(fmt.Sprintf("%.1f ms", performance.DurationMS), "text-muted")
+		if performance.Comparison != nil {
+			text = text.NewLine().Append("Baseline: "+performance.Comparison.Baseline, "text-muted")
+		}
+		if performance.Profile != nil {
+			text = text.NewLine().Append(fmt.Sprintf("Peak CPU %.1f%%, peak RSS %d bytes", performance.Profile.PeakCPUPercent, performance.Profile.PeakRSSBytes), "text-muted")
+		}
+		if performance.ArtifactPath != "" {
+			text = text.NewLine().Append("Artifact: "+performance.ArtifactPath, "text-muted")
+		}
+	}
+	if r.Error != "" {
+		text = text.NewLine().Append("Error: "+r.Error, "text-red-600")
 	}
 	if r.Filters != nil {
 		switch f := r.Filters.(type) {
@@ -339,9 +392,10 @@ func capitalize(s string) string {
 func (s *Server) buildExportReport(req routeRequest) (*exportReport, error) {
 	snap := s.snapshot()
 	report := &exportReport{
-		Tab:  req.Tab,
-		Done: !snap.Status.Running,
-		Path: strings.Join(req.NodePath, "/"),
+		Tab:   req.Tab,
+		Done:  !snap.Status.Running,
+		Path:  strings.Join(req.NodePath, "/"),
+		Error: snap.Error,
 	}
 
 	switch req.Tab {
@@ -362,7 +416,15 @@ func (s *Server) buildExportReport(req routeRequest) (*exportReport, error) {
 		report.Lint = roots
 		report.roots = roots
 	case viewTabBench:
-		report.Bench = buildBenchViewNodes(snap.Bench)
+		report.FixtureBenchmark = snap.FixtureBenchmark
+		report.Performance = snap.Performance
+		if snap.Performance != nil {
+			report.Bench = buildPerformanceViewNodes(snap.Tests, snap.Performance)
+		} else if snap.FixtureBenchmark != nil {
+			report.Bench = buildFixtureBenchmarkViewNodes(snap.FixtureBenchmark)
+		} else {
+			report.Bench = buildBenchViewNodes(snap.Bench)
+		}
 		annotateViewPaths(report.Bench, nil)
 		report.roots = report.Bench
 	default:
@@ -404,18 +466,20 @@ func writeExportResponse(w http.ResponseWriter, r *http.Request, report *exportR
 
 func testToViewNode(test parsers.Test) *ViewNode {
 	node := &ViewNode{
-		Name:        displayTestName(test.Name, test.Framework.String()),
-		Framework:   test.Framework.String(),
-		Kind:        "test",
-		Package:     test.Package,
-		PackagePath: test.PackagePath,
-		File:        test.File,
-		Line:        test.Line,
-		Command:     test.Command,
-		Message:     test.Message,
-		Stdout:      test.Stdout,
-		Stderr:      test.Stderr,
-		Duration:    test.Duration,
+		Name:           displayTestName(test.Name, test.Framework.String()),
+		Framework:      test.Framework.String(),
+		Kind:           "test",
+		Package:        test.Package,
+		PackagePath:    test.PackagePath,
+		File:           test.File,
+		Line:           test.Line,
+		Command:        test.Command,
+		Message:        test.Message,
+		Stdout:         test.Stdout,
+		Stderr:         test.Stderr,
+		Duration:       test.Duration,
+		FixtureProfile: test.FixtureProfile,
+		GoProfiles:     test.GoProfiles,
 	}
 	switch {
 	case test.TimedOut:
@@ -1067,6 +1131,98 @@ func buildBenchViewNodes(cmp *bench.BenchComparison) []*ViewNode {
 			Package:   delta.Package,
 			Message:   message,
 		})
+	}
+	return nodes
+}
+
+func buildPerformanceViewNodes(tests []parsers.Test, performance *fixtures.BenchmarkPerformance) []*ViewNode {
+	deltas := make(map[string]fixtures.BenchmarkDelta)
+	if performance.Comparison != nil {
+		for _, delta := range performance.Comparison.Deltas {
+			deltas[delta.Key] = delta
+		}
+	}
+	var nodes []*ViewNode
+	var visit func([]parsers.Test)
+	visit = func(items []parsers.Test) {
+		for _, test := range items {
+			if test.Fixture != nil {
+				message := fmt.Sprintf("%.1f ms", float64(test.Duration)/float64(time.Millisecond))
+				if test.Fixture.CommandMS != nil {
+					message += fmt.Sprintf(", command %.1f ms", *test.Fixture.CommandMS)
+				}
+				if delta, ok := deltas[test.Fixture.Key]; ok {
+					message += fmt.Sprintf(", baseline %.1f ms, change %+.1f ms", delta.BaselineMS, delta.DeltaMS)
+				}
+				nodes = append(nodes, &ViewNode{Name: test.Name, Kind: test.Fixture.Kind,
+					Status: test.Fixture.State, Duration: test.Duration, Message: message,
+					File: test.File, Line: test.Line, FixtureProfile: test.FixtureProfile, GoProfiles: test.GoProfiles,
+					SQLProfile: test.SQLProfile, Violations: test.Fixture.Violations})
+			}
+			visit(test.Children)
+		}
+	}
+	visit(tests)
+	if profile := performance.Profile; profile != nil {
+		profileNode := &ViewNode{Name: "Process samples", Kind: "profile", Status: "passed", Message: fmt.Sprintf("%d samples at %d ms", len(profile.Samples), profile.IntervalMS)}
+		for i, sample := range profile.Samples {
+			profileNode.Children = append(profileNode.Children, &ViewNode{Name: fmt.Sprintf("Sample %d", i+1), Kind: "sample", Status: "passed", Message: fmt.Sprintf("CPU %.1f%%, RSS %d bytes", sample.CPUPercent, sample.RSSBytes)})
+		}
+		nodes = append(nodes, profileNode)
+	}
+	return nodes
+}
+
+func buildFixtureBenchmarkViewNodes(state *FixtureBenchmarkState) []*ViewNode {
+	if state.Report == nil {
+		var nodes []*ViewNode
+		if state.Progress != nil {
+			var visit func(*fixtures.ExecutionNode)
+			visit = func(node *fixtures.ExecutionNode) {
+				if node == nil {
+					return
+				}
+				if len(node.Children) == 0 && node.State != fixtures.ExecutionQueued && node.State != fixtures.ExecutionRunning {
+					nodes = append(nodes, &ViewNode{Name: node.Name, Kind: string(node.Kind), Status: string(node.State), Duration: node.Duration})
+				}
+				for _, child := range node.Children {
+					visit(child)
+				}
+			}
+			visit(state.Progress.Root)
+		}
+		return nodes
+	}
+	deltas := make(map[string]fixtures.BenchmarkDelta)
+	if state.Report.Comparison != nil {
+		for _, delta := range state.Report.Comparison.Deltas {
+			deltas[delta.Key] = delta
+		}
+	}
+	var nodes []*ViewNode
+	for _, entry := range append(append([]fixtures.BenchmarkEntry{}, state.Report.Phases...), state.Report.Fixtures...) {
+		message := fmt.Sprintf("%.1f ms", entry.DurationMS)
+		if entry.CommandMS != nil {
+			message += fmt.Sprintf(", command %.1f ms", *entry.CommandMS)
+		}
+		if delta, ok := deltas[entry.Key]; ok {
+			message += fmt.Sprintf(", baseline %.1f ms, change %+.1f ms", delta.BaselineMS, delta.DeltaMS)
+			if delta.DeltaPct != nil {
+				message += fmt.Sprintf(" (%+.1f%%)", *delta.DeltaPct)
+			}
+		}
+		nodes = append(nodes, &ViewNode{Name: entry.Name, Kind: entry.Kind, Status: string(entry.Status), Message: message})
+	}
+	if profile := state.Report.Profile; profile != nil {
+		profileNode := &ViewNode{Name: "Process samples", Kind: "profile", Status: "passed", Message: fmt.Sprintf("%d samples at %d ms", len(profile.Samples), profile.IntervalMS)}
+		for i, sample := range profile.Samples {
+			sampleNode := &ViewNode{Name: fmt.Sprintf("Sample %d", i+1), Kind: "sample", Status: "passed", Message: fmt.Sprintf("CPU %.1f%%, RSS %d bytes", sample.CPUPercent, sample.RSSBytes)}
+			for _, process := range sample.Processes {
+				sampleNode.Children = append(sampleNode.Children, &ViewNode{Name: fmt.Sprintf("PID %d %s", process.PID, process.Command), Kind: "process", Status: "passed", Message: fmt.Sprintf("PPID %d, CPU %.1f%%, RSS %d bytes", process.PPID, process.CPUPercent, process.RSSBytes)})
+			}
+			profileNode.Children = append(profileNode.Children, sampleNode)
+		}
+		nodes = append(nodes, profileNode)
 	}
 	return nodes
 }

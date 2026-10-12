@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	captaindb "github.com/flanksource/captain/pkg/database"
+	"github.com/flanksource/captain/pkg/sessiontree"
 	"github.com/google/uuid"
 )
 
@@ -26,6 +27,8 @@ type UpdateIssueSessionInput struct {
 	Session              captaindb.CreateSessionInput
 }
 
+// CreateIssueWithSession has Captain ensure the TODO root session and creates
+// the native issue in the same transaction through the session-tree link.
 func (c *LaunchCoordinator) CreateIssueWithSession(
 	ctx context.Context,
 	input CreateIssueSessionInput,
@@ -33,28 +36,26 @@ func (c *LaunchCoordinator) CreateIssueWithSession(
 	if input.Issue.ID == uuid.Nil || input.RootSession.ID != input.Issue.ID {
 		return nil, fmt.Errorf("%w: issue and root session must share a non-empty ID", ErrInvalidInput)
 	}
-	if input.RootSession.ParentSessionID != nil || input.RootSession.RootSessionID != nil {
-		return nil, fmt.Errorf("%w: TODO root session must be canonical", ErrInvalidInput)
-	}
 	result := &CreatedIssueSession{}
-	err := c.captain.Transaction(ctx, func(captainTx *captaindb.DB) error {
-		repositoryTx, err := NewRepository(captainTx.Gorm())
-		if err != nil {
+	sessions, err := sessiontree.Ensure(ctx, c.captain, []captaindb.CreateSessionInput{input.RootSession},
+		func(ctx context.Context, tx *captaindb.DB, _ []*captaindb.Session) error {
+			repositoryTx, err := NewRepository(tx.Gorm())
+			if err != nil {
+				return err
+			}
+			result.Issue, err = repositoryTx.CreateIssue(ctx, input.Issue)
 			return err
-		}
-		result.Issue, err = repositoryTx.CreateIssue(ctx, input.Issue)
-		if err != nil {
-			return err
-		}
-		result.Root, err = captainTx.CreateOrGetSession(ctx, input.RootSession)
-		return err
-	})
+		})
 	if err != nil {
 		return nil, err
 	}
+	result.Root = sessions[0]
 	return result, nil
 }
 
+// UpdateIssueWithSession has Captain ensure the TODO root and one operation
+// session under it, and applies the issue patch in the same transaction
+// through the session-tree link.
 func (c *LaunchCoordinator) UpdateIssueWithSession(
 	ctx context.Context,
 	input UpdateIssueSessionInput,
@@ -62,35 +63,16 @@ func (c *LaunchCoordinator) UpdateIssueWithSession(
 	if input.IssueID == uuid.Nil || input.RootSession.ID != input.IssueID {
 		return nil, fmt.Errorf("%w: issue and root session must share a non-empty ID", ErrInvalidInput)
 	}
-	if input.RootSession.ParentSessionID != nil || input.RootSession.RootSessionID != nil {
-		return nil, fmt.Errorf("%w: TODO root session must be canonical", ErrInvalidInput)
-	}
 	var issue *Issue
-	err := c.captain.Transaction(ctx, func(captainTx *captaindb.DB) error {
-		repositoryTx, err := NewRepository(captainTx.Gorm())
-		if err != nil {
+	_, err := sessiontree.Ensure(ctx, c.captain, []captaindb.CreateSessionInput{input.RootSession, input.Session},
+		func(ctx context.Context, tx *captaindb.DB, _ []*captaindb.Session) error {
+			repositoryTx, err := NewRepository(tx.Gorm())
+			if err != nil {
+				return err
+			}
+			issue, err = repositoryTx.UpdateIssue(ctx, input.IssueID, input.ExpectedIssueVersion, input.Patch)
 			return err
-		}
-		issue, err = repositoryTx.UpdateIssue(
-			ctx,
-			input.IssueID,
-			input.ExpectedIssueVersion,
-			input.Patch,
-		)
-		if err != nil {
-			return err
-		}
-		root, err := captainTx.CreateOrGetSession(ctx, input.RootSession)
-		if err != nil {
-			return err
-		}
-		if input.Session.ParentSessionID != nil && *input.Session.ParentSessionID != root.ID {
-			return fmt.Errorf("%w: operation session parent must be the TODO root", ErrInvalidInput)
-		}
-		input.Session.ParentSessionID = &root.ID
-		_, err = captainTx.CreateOrGetSession(ctx, input.Session)
-		return err
-	})
+		})
 	if err != nil {
 		return nil, err
 	}

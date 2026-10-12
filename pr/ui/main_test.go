@@ -25,6 +25,14 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	os.Setenv("HOME", home)
+	// The process database is the same kind of hidden input, and a worse one: a
+	// developer shell that exports it would have any handler reaching
+	// database.Shared read and write that developer's real Gavel database, and
+	// pin Captain's registry to it for the rest of the run. Specs that need a
+	// database provision their own (dbtest) and wire it explicitly.
+	for _, env := range []string{"GAVEL_DB_DSN", "GAVEL_GITHUB_CACHE_DSN", "CAPTAIN_SESSION_DB_URL"} {
+		os.Unsetenv(env)
+	}
 	// Pin a model in the isolated home layer. gavel has no built-in default any
 	// more, so an otherwise-empty home makes every todo run fail with "model name
 	// is required" long before it reaches whatever the test is asserting. Naming

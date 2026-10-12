@@ -11,7 +11,6 @@ import (
 	"strings"
 
 	"github.com/bmatcuk/doublestar/v4"
-	"github.com/go-git/go-billy/v5/osfs"
 	"github.com/go-git/go-git/v5/plumbing/format/gitignore"
 )
 
@@ -294,46 +293,28 @@ func stopAtNestedProjectRoot(root, path string, d fs.DirEntry) (bool, error) {
 	return false, nil
 }
 
-// FilterGitIgnored returns the subset of absolute paths that are not matched
-// by .gitignore patterns. Uses go-git's ReadPatterns to recursively load all
-// .gitignore files. If no git root is found, all paths are returned.
-func FilterGitIgnored(paths []string, dir string) []string {
-	kept, _ := PartitionGitIgnored(paths, dir)
-	return kept
+// FilterGitIgnored returns the supplied paths that native Git does not ignore.
+// If no Git root is found, all paths are returned.
+func FilterGitIgnored(paths []string, dir string) ([]string, error) {
+	kept, _, err := PartitionGitIgnored(paths, dir)
+	return kept, err
 }
 
-// PartitionGitIgnored splits absolute paths into those NOT matched by
-// .gitignore (kept) and those matched (ignored). It honors !-negation via
-// go-git's matcher. Fail-open: if no git root is found or no patterns load,
-// every path is kept and ignored is empty.
-func PartitionGitIgnored(paths []string, dir string) (kept, ignored []string) {
-	dir, _ = filepath.Abs(dir)
-	gitRoot := FindGitRoot(dir)
-	if gitRoot == "" {
-		return paths, nil
+// PartitionGitIgnored splits supplied paths using native Git's ignore rules.
+// If no Git root is found, every path is kept.
+func PartitionGitIgnored(paths []string, dir string) (kept, ignored []string, err error) {
+	ignoredSet, err := GitIgnoredPaths(paths, dir)
+	if err != nil {
+		return nil, nil, err
 	}
-
-	fs := osfs.New(gitRoot)
-	patterns, err := gitignore.ReadPatterns(fs, nil)
-	if err != nil || len(patterns) == 0 {
-		return paths, nil
-	}
-
-	matcher := gitignore.NewMatcher(patterns)
 	for _, p := range paths {
-		rel, err := filepath.Rel(gitRoot, p)
-		if err != nil {
-			kept = append(kept, p)
-			continue
-		}
-		parts := strings.Split(filepath.ToSlash(rel), "/")
-		if matcher.Match(parts, false) {
+		if _, ok := ignoredSet[p]; ok {
 			ignored = append(ignored, p)
 		} else {
 			kept = append(kept, p)
 		}
 	}
-	return kept, ignored
+	return kept, ignored, nil
 }
 
 // GlobFilesBounded resolves doublestar patterns to absolute file paths using

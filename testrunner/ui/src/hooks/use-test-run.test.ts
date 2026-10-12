@@ -155,6 +155,25 @@ describe('useTestRun (SSE transport)', () => {
     );
   });
 
+  it('opens the stream through an injected createEventSource factory and closes it on unmount', async () => {
+    const closeSpy = vi.fn();
+    const injected = {
+      addEventListener: vi.fn(),
+      close: closeSpy,
+      onerror: null,
+    };
+    const createEventSource = vi.fn(() => injected);
+
+    const { unmount } = renderHook(() => useTestRun({ baseUrl: '/live', createEventSource }));
+    await waitFor(() => expect(createEventSource).toHaveBeenCalledWith('/live/api/tests/stream'));
+    // The native EventSource constructor must never be reached when a factory
+    // is injected — only the factory opens the connection.
+    expect(FakeEventSource.instances).toHaveLength(0);
+
+    unmount();
+    expect(closeSpy).toHaveBeenCalledTimes(1);
+  });
+
   it('editTest() POSTs the body to <baseUrl>/api/tests/edit', async () => {
     const { result } = renderHook(() => useTestRun({ baseUrl: '/b' }));
     await waitFor(() => expect(FakeEventSource.instances.length).toBe(1));

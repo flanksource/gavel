@@ -13,7 +13,11 @@ type StopRequest struct {
 	TaskID string `json:"task_id,omitempty"`
 }
 
-// SetStopFunc installs the callback used by the UI to stop the active run.
+// SetStopFunc installs the callback used by the UI to stop the active run. A
+// global stop invokes only this callback: the Server never cancels clicky's
+// process-global tasks itself, because an embedded Server (a MultiServer child,
+// a host serving several environments) shares that registry with unrelated
+// work. A host that owns the whole process cancels global tasks inside fn.
 func (s *Server) SetStopFunc(fn func()) {
 	s.mu.Lock()
 	s.stopFn = fn
@@ -67,7 +71,6 @@ func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
 	case "global":
 		s.requestStop("Stopped by user")
 		s.stopFunc()()
-		clicky.CancelAllGlobalTasks()
 		w.WriteHeader(http.StatusAccepted)
 	case "task":
 		if req.TaskID == "" {

@@ -52,11 +52,11 @@ func (f *fakeProvider) AddAlias(_ context.Context, _ *types.TODO, alias todos.To
 	return nil
 }
 
-func (f *fakeProvider) Comment(_ context.Context, _ *types.TODO, body string) error {
+func (f *fakeProvider) Comment(_ context.Context, _ *types.TODO, comment todos.CommentRequest) error {
 	if f.commentErr != nil {
 		return f.commentErr
 	}
-	f.comments = append(f.comments, body)
+	f.comments = append(f.comments, comment.Body)
 	return nil
 }
 
@@ -109,8 +109,8 @@ func (p *planlessProvider) AddAlias(ctx context.Context, todo *types.TODO, alias
 	return p.inner.AddAlias(ctx, todo, alias)
 }
 
-func (p *planlessProvider) Comment(ctx context.Context, todo *types.TODO, body string) error {
-	return p.inner.Comment(ctx, todo, body)
+func (p *planlessProvider) Comment(ctx context.Context, todo *types.TODO, comment todos.CommentRequest) error {
+	return p.inner.Comment(ctx, todo, comment)
 }
 
 type recordedIssue struct {

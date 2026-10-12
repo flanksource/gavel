@@ -17,6 +17,20 @@ import { isLintOnlyPhase } from '../utils';
 // returns the latest full Snapshot plus derived fields and the rerun/stop
 // actions, modelled on clicky-ui's useTaskRun.
 
+// The subset of the DOM `EventSource` surface this hook actually uses. A host
+// that needs to route this connection through its own transport (e.g. to
+// multiplex several SSE streams over one connection, working around the
+// six-connections-per-origin cap HTTP/1.1 imposes) can inject a factory that
+// returns anything satisfying this — never the full `EventSource` interface.
+// This type is deliberately local rather than imported from clicky-ui: this
+// package is a Preact library consumed by both React 18 and 19 hosts, and
+// must not pull in clicky-ui's React context.
+export interface EventSourceLike {
+  addEventListener(type: string, listener: EventListenerOrEventListenerObject): void;
+  close(): void;
+  onerror: ((event: Event) => void) | null;
+}
+
 export interface UseTestRunOptions {
   /** API prefix, e.g. "" or "https://host" or "/results/{repo}/{id}". */
   baseUrl?: string;
@@ -34,6 +48,11 @@ export interface UseTestRunOptions {
   pollMs?: number;
   /** Force the polling transport even when EventSource exists (mainly tests). */
   forcePoll?: boolean;
+  /** Builds the SSE connection for a URL. Defaults to `(url) => new
+   *  EventSource(url)`. A host embedding this hook behind a connection
+   *  multiplexer (e.g. pr/ui's eventHub) passes its own factory here instead
+   *  of letting this hook open a raw `EventSource`. */
+  createEventSource?: (url: string) => EventSourceLike;
 }
 
 export interface UseTestRunResult {
@@ -56,6 +75,10 @@ export interface UseTestRunResult {
 
 const DEFAULT_POLL_MS = 2_000;
 const IDLE_STATUS: SnapshotStatus = { running: false };
+
+function defaultCreateEventSource(url: string): EventSourceLike {
+  return new EventSource(url);
+}
 
 function defaultBase(): string {
   if (typeof window !== 'undefined') {
@@ -91,6 +114,7 @@ export function useTestRun(options: UseTestRunOptions = {}): UseTestRunResult {
     enabled = true,
     pollMs = DEFAULT_POLL_MS,
     forcePoll = false,
+    createEventSource,
   } = options;
   const root = baseUrl ?? basePath ?? defaultBase();
   // When a run id is supplied, every endpoint is scoped under it so the host can
@@ -103,6 +127,11 @@ export function useTestRun(options: UseTestRunOptions = {}): UseTestRunResult {
   const [error, setError] = useState<string | undefined>(undefined);
   const [streamToken, setStreamToken] = useState(0);
   const doneRef = useRef(false);
+  // Held in a ref (rather than an effect dependency) so an inline
+  // `createEventSource` function passed by the host doesn't cause the
+  // subscription effect below to tear down and re-open on every render.
+  const createEventSourceRef = useRef(createEventSource ?? defaultCreateEventSource);
+  createEventSourceRef.current = createEventSource ?? defaultCreateEventSource;
 
   const apply = useCallback((snap: Snapshot) => {
     const running = !!(snap.status && snap.status.running);
@@ -153,7 +182,7 @@ export function useTestRun(options: UseTestRunOptions = {}): UseTestRunResult {
       .then((snap: Snapshot) => apply(snap))
       .catch(() => {});
 
-    const es = new EventSource(`${base}/api/tests/stream`);
+    const es = createEventSourceRef.current(`${base}/api/tests/stream`);
     es.addEventListener('message', (e) => {
       const snap = JSON.parse((e as MessageEvent).data) as Snapshot;
       apply(snap);

@@ -10,6 +10,7 @@ import (
 	"github.com/flanksource/gavel/prompts"
 	"github.com/flanksource/gavel/status"
 	"github.com/flanksource/gavel/testrunner/outline"
+	todomerge "github.com/flanksource/gavel/todos/merge"
 	todoprompt "github.com/flanksource/gavel/todos/prompt"
 )
 
@@ -21,6 +22,7 @@ func All() []prompts.Prompt {
 	all = append(all, gavelgit.Prompts()...)
 	all = append(all, commit.Prompts()...)
 	all = append(all, todoprompt.Prompts()...)
+	all = append(all, todomerge.Prompts()...)
 	all = append(all, status.Prompts()...)
 	all = append(all, outline.Prompts()...)
 	return all

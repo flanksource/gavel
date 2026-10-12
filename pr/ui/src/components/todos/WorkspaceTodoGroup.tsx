@@ -5,7 +5,8 @@ import type { Project, TodoDensity, TodoListResponse, TodoStatus } from '../../t
 import { RepoIcon } from '../RepoIcon';
 import { emptyCounts, TodoCountsBar, TodoRow, type TodoRowTarget } from './format';
 import type { TagIndex } from './tagResolve';
-import { defaultTodoFilters, isTodoVisible, type TodoFilters } from './todoFilter';
+import { childCountsById } from './todoFamily';
+import { defaultTodoFilters, isChildTodo, isTodoVisible, type TodoFilters } from './todoFilter';
 import { GroupSelectAll } from './TodoGroupSelectAll';
 import type { TodoSelection } from './todoSelection';
 import type { TodoSort } from './todoSort';
@@ -40,7 +41,8 @@ export function WorkspaceTodoGroup({ workspace, data, selectedRef, onSelect, fil
   const [open, setOpen] = useState(true);
 
   const active = filters ?? defaultTodoFilters();
-  const allItems = data?.items ?? emptyItems;
+  const allItems = useMemo(() => (data?.items ?? emptyItems).filter(item => !isChildTodo(item)), [data?.items]);
+  const childCounts = useMemo(() => childCountsById(data?.items ?? emptyItems), [data?.items]);
   // Filtering and sorting the workspace's todos is O(n log n) over every todo it
   // owns. Unmemoised it ran on every render of this group — and this group
   // re-renders whenever anything above it does — so an idle dashboard re-sorted
@@ -120,6 +122,8 @@ export function WorkspaceTodoGroup({ workspace, data, selectedRef, onSelect, fil
           selected={selection?.isSelected({ dir: workspace.dir, ref: item.ref })}
           onToggleSelect={handleToggleSelect}
           tags={tags}
+          childDone={item.id ? childCounts.get(item.id)?.done : undefined}
+          childTotal={item.id ? childCounts.get(item.id)?.total : undefined}
         />
       ))}
       {open && items.length === 0 && (

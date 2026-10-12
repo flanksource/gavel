@@ -8,6 +8,7 @@ import { Spinner } from '../../icons/Spinner';
 import { todoQuery } from './format';
 import { todoMutationJSON } from './todoMutations';
 import { sessionStatsQueryOptions, todoQueryKeys } from './todoQueries';
+import { VerificationFailureStatus } from './VerificationFailureStatus';
 
 // useSessionStats polls /api/todos/session/stats for one agent session. The
 // server serves live runs from the cmux tailer's in-memory cache and reads
@@ -155,6 +156,7 @@ export function TodoSessionTimer({ dir, sessionId, active = true, onResume, resu
           {cost}
         </span>
       )}
+      <VerificationFailureStatus stats={stats} compact />
       {stats.state === 'error' && (
         <span
           className="inline-flex max-w-full items-center gap-1 rounded border border-red-500/30 bg-red-500/15 px-1.5 py-0.5 font-medium text-red-300"

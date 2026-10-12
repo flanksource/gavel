@@ -116,9 +116,7 @@ func stagedFiles(workDir string) ([]string, error) {
 // staged here too, then stripped by unstageGitIgnored so they stay out of the
 // commit while remaining tracked.
 func gitAddUpdate(workDir string) error {
-	cmd := exec.Command("git", "add", "-u")
-	cmd.Dir = workDir
-	if out, err := cmd.CombinedOutput(); err != nil {
+	if out, err := runGitRetryingLocks(workDir, "add", "-u"); err != nil {
 		return fmt.Errorf("git add -u: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
@@ -140,6 +138,29 @@ func untrackedFiles(workDir string) ([]string, error) {
 	return splitLines(string(out)), nil
 }
 
+// trackedFiles returns the subset of paths present in the index
+// (`git ls-files -z -- <paths>`), deleted from the working tree or not.
+func trackedFiles(workDir string, paths []string) (map[string]struct{}, error) {
+	tracked := make(map[string]struct{})
+	if len(paths) == 0 {
+		return tracked, nil
+	}
+	cmd := exec.Command("git", append([]string{"ls-files", "-z", "--"}, paths...)...)
+	cmd.Dir = workDir
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("git ls-files: %w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	for _, p := range strings.Split(string(out), "\x00") {
+		if p != "" {
+			tracked[p] = struct{}{}
+		}
+	}
+	return tracked, nil
+}
+
 func splitLines(out string) []string {
 	var lines []string
 	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
@@ -155,9 +176,7 @@ func addFiles(workDir string, files []string) error {
 		return nil
 	}
 	args := append([]string{"add", "-A", "--"}, files...)
-	cmd := exec.Command("git", args...)
-	cmd.Dir = workDir
-	if out, err := cmd.CombinedOutput(); err != nil {
+	if out, err := runGitRetryingLocks(workDir, args...); err != nil {
 		return fmt.Errorf("git add -A: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
@@ -175,9 +194,7 @@ func gitRmCached(workDir string, files []string) error {
 		return nil
 	}
 	args := append([]string{"rm", "--cached", "--ignore-unmatch", "--"}, files...)
-	cmd := exec.Command("git", args...)
-	cmd.Dir = workDir
-	if out, err := cmd.CombinedOutput(); err != nil {
+	if out, err := runGitRetryingLocks(workDir, args...); err != nil {
 		return fmt.Errorf("git rm --cached: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
@@ -188,18 +205,14 @@ func resetFiles(workDir string, files []string) error {
 		return nil
 	}
 	args := append([]string{"reset", "--"}, files...)
-	cmd := exec.Command("git", args...)
-	cmd.Dir = workDir
-	if out, err := cmd.CombinedOutput(); err != nil {
+	if out, err := runGitRetryingLocks(workDir, args...); err != nil {
 		return fmt.Errorf("git reset --: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }
 
 func commitWithMessage(workDir, msg string) (string, error) {
-	cmd := exec.Command("git", "commit", "-m", msg)
-	cmd.Dir = workDir
-	if out, err := cmd.CombinedOutput(); err != nil {
+	if out, err := runGitRetryingLocks(workDir, "commit", "-m", msg); err != nil {
 		return "", fmt.Errorf("git commit: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	hashCmd := exec.Command("git", "rev-parse", "HEAD")
@@ -328,9 +341,7 @@ func lastTouchingCommit(workDir, base, file string) (string, error) {
 // (`fixup! <subject of target>`) is produced by git itself, so we do not
 // build it manually.
 func commitFixup(workDir, targetHash string) (string, error) {
-	cmd := exec.Command("git", "commit", "--fixup="+targetHash)
-	cmd.Dir = workDir
-	if out, err := cmd.CombinedOutput(); err != nil {
+	if out, err := runGitRetryingLocks(workDir, "commit", "--fixup="+targetHash); err != nil {
 		return "", fmt.Errorf("git commit --fixup=%s: %w: %s", targetHash, err, strings.TrimSpace(string(out)))
 	}
 	hashCmd := exec.Command("git", "rev-parse", "HEAD")

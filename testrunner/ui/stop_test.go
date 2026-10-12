@@ -67,6 +67,60 @@ func TestGlobalStopMarksSnapshotStopped(t *testing.T) {
 	}
 }
 
+// startUnrelatedGlobalTask starts a clicky global task that only ends when
+// cancelled — host-process work (another environment's run) that a run's stop
+// must never touch.
+func startUnrelatedGlobalTask(t *testing.T) *clickytask.Task {
+	t.Helper()
+	other := clicky.StartTask[string]("another environment's run", func(ctx commonsContext.Context, _ *clickytask.Task) (string, error) {
+		<-ctx.Done()
+		return "", ctx.Err()
+	})
+	t.Cleanup(func() {
+		other.Cancel()
+		other.WaitFor()
+	})
+	return other.Task
+}
+
+func TestGlobalStopInvokesOnlyTheServersStopFunc(t *testing.T) {
+	other := startUnrelatedGlobalTask(t)
+	srv, handler := newTestServer(t)
+	srv.BeginRun("initial")
+	var stopCalled atomic.Bool
+	srv.SetStopFunc(func() { stopCalled.Store(true) })
+
+	resp := doRequest(t, handler, http.MethodPost, "/api/stop", strings.NewReader(`{"scope":"global"}`))
+	if resp.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202: %s", resp.Code, resp.Body.String())
+	}
+	if !stopCalled.Load() {
+		t.Fatalf("expected the server's stop callback to be invoked")
+	}
+	if err := other.Context().Err(); err != nil {
+		t.Fatalf("unrelated global task was cancelled by the run's stop: %v (status %s)", err, other.Status())
+	}
+}
+
+func TestMultiServerStopCancelsOnlyThatRun(t *testing.T) {
+	other := startUnrelatedGlobalTask(t)
+	multi := testui.NewMultiServer()
+	var stoppedA, stoppedB atomic.Bool
+	multi.BeginRun("run-a", "fixtures").SetStopFunc(func() { stoppedA.Store(true) })
+	multi.BeginRun("run-b", "fixtures").SetStopFunc(func() { stoppedB.Store(true) })
+
+	resp := doRequest(t, multi.Handler(), http.MethodPost, "/run-a/api/stop", strings.NewReader(`{"scope":"global"}`))
+	if resp.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202: %s", resp.Code, resp.Body.String())
+	}
+	if got := [2]bool{stoppedA.Load(), stoppedB.Load()}; got != [2]bool{true, false} {
+		t.Fatalf("stop callbacks (run-a, run-b) = %v, want [true false]", got)
+	}
+	if err := other.Context().Err(); err != nil {
+		t.Fatalf("unrelated global task was cancelled by run-a's stop: %v (status %s)", err, other.Status())
+	}
+}
+
 func TestTaskStopUsesTaskID(t *testing.T) {
 	clicky.ClearGlobalTasks()
 	t.Cleanup(func() {

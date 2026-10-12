@@ -62,6 +62,7 @@ func (l *ClientLog) Entries() []Entry {
 	l.mu.Lock()
 	entries := append([]Entry(nil), l.entries...)
 	l.mu.Unlock()
+	materializeStreams(entries)
 
 	sort.SliceStable(entries, func(i, j int) bool { return entries[i].started.Before(entries[j].started) })
 	return entries

@@ -16,3 +16,15 @@ func TruncateDiff(diff string) (string, bool) {
 	}
 	return cut, true
 }
+
+// IsBinaryDiff reports whether a unified diff holds at least one file and every
+// file in it is binary, i.e. there is no text hunk a diff viewer could show.
+func IsBinaryDiff(diff string) bool {
+	files := parseCommitFiles(diff)
+	for _, file := range files {
+		if !file.Binary {
+			return false
+		}
+	}
+	return len(files) > 0
+}

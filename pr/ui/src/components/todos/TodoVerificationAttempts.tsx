@@ -22,13 +22,9 @@ type EvidenceTab = 'results' | 'session';
  * captain webapp uses), with the agent session behind it when one was recorded.
  */
 export function TodoVerificationAttempts({
-  dir,
-  todoRef,
   detail,
   error,
 }: {
-  dir: string;
-  todoRef: string;
   detail: TodoSessionDetailResponse | null;
   error?: string;
 }) {
@@ -94,7 +90,7 @@ export function TodoVerificationAttempts({
                   selected={isSelected}
                   onSelect={() => setSelectedId(entry.attempt.promptRunId)}
                 />
-                {isSelected && <AttemptEvidence dir={dir} todoRef={todoRef} entry={entry} />}
+                {isSelected && <AttemptEvidence entry={entry} />}
               </li>
             );
           })}
@@ -136,7 +132,7 @@ function AttemptRow({ entry, selected, onSelect }: { entry: VerificationAttemptE
   );
 }
 
-function AttemptEvidence({ dir, todoRef, entry }: { dir: string; todoRef: string; entry: VerificationAttemptEntry }) {
+function AttemptEvidence({ entry }: { entry: VerificationAttemptEntry }) {
   const sessionId = entry.attempt.executionSessionId || entry.attempt.providerSessionId;
   const [tab, setTab] = useState<EvidenceTab>('results');
   const active = tab === 'session' && sessionId ? 'session' : 'results';
@@ -150,7 +146,7 @@ function AttemptEvidence({ dir, todoRef, entry }: { dir: string; todoRef: string
         </div>
       )}
       {active === 'session' && sessionId ? (
-        <VerificationAttemptSession dir={dir} todoRef={todoRef} sessionId={sessionId} />
+        <VerificationAttemptSession sessionId={sessionId} />
       ) : (
         <VerificationResults
           report={entry.report}

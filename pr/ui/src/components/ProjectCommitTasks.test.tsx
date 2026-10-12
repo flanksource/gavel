@@ -19,6 +19,7 @@ vi.mock('@flanksource/clicky-ui/data', async importOriginal => {
       return (
         <div>
           {group && <Button type="button" onClick={() => onControl?.('stop', group)}>Stop group</Button>}
+          {group && <Button type="button" onClick={() => onControl?.('retry', group)}>Retry group</Button>}
           {group && task && <Button type="button" onClick={() => onTaskControl?.('stop', task, group)}>Stop task</Button>}
         </div>
       );
@@ -45,6 +46,14 @@ const snapshots: TaskSnapshot[] = [
     controls: ['stop'],
   },
 ];
+
+const failedSnapshots: TaskSnapshot[] = snapshots.map(snapshot => ({
+  ...snapshot,
+  status: 'failed',
+  controls: snapshot.type === 'group' ? ['retry'] : [],
+}));
+
+const retryURL = '/api/projects/gavel/commit-queue/commit-run-1/retry';
 
 beforeEach(() => {
   vi.stubGlobal('EventSource', undefined);
@@ -79,6 +88,7 @@ describe('ProjectCommitTasks', () => {
         onLockedFilesChange={onLockedFilesChange}
         onErrorChange={vi.fn()}
         onComplete={vi.fn()}
+        onRunChange={vi.fn()}
       />,
     );
 
@@ -94,6 +104,72 @@ describe('ProjectCommitTasks', () => {
     expect(invalidateQueries).toHaveBeenCalledTimes(2);
     expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: queryKeys.projectStatusScope('gavel') });
     expect(client.getQueryData(projectCommitTaskKeys.run('gavel', 'commit-run-1'))).toEqual(snapshots);
+  });
+
+  describe('per-ref run listing', () => {
+    const WORKTREE = '/work/gavel-feat';
+    const runMeta = (id: string, labels: Record<string, string>) => ({
+      id, name: 'Commit gavel', status: 'running', total: 1, completed: 0, failed: 0, running: 1, labels,
+    });
+
+    function stubRuns(runs: unknown[]) {
+      const fetchMock = vi.fn(async (input: RequestInfo | URL) => ({
+        ok: true,
+        json: async () => String(input).includes('/tasks?') ? runs : snapshots,
+      }) as Response);
+      vi.stubGlobal('fetch', fetchMock);
+      return fetchMock;
+    }
+
+    const fetched = (fetchMock: ReturnType<typeof stubRuns>) => fetchMock.mock.calls.map(([input]) => decodeURIComponent(String(input)));
+
+    const renderTasks = (worktree?: string) => renderWithClient(createClient(),
+      <ProjectCommitTasks
+        projectName="gavel"
+        worktree={worktree}
+        onLockedFilesChange={vi.fn()}
+        onErrorChange={vi.fn()}
+        onComplete={vi.fn()}
+        onRunChange={vi.fn()}
+      />,
+    );
+
+    it('lists the runs labelled with the selected worktree and follows the newest of them', async () => {
+      const fetchMock = stubRuns([
+        runMeta('wt-run', { project: 'gavel', worktree: WORKTREE }),
+        runMeta('main-run', { project: 'gavel' }),
+      ]);
+
+      renderTasks(WORKTREE);
+
+      await waitFor(() => expect(fetched(fetchMock).some(url => url.includes('/tasks/wt-run'))).toBe(true));
+      expect(fetched(fetchMock).find(url => url.includes('/tasks?'))).toContain(`label=worktree=${WORKTREE}`);
+      expect(fetched(fetchMock).find(url => url.includes('/tasks?'))).toContain('label=project=gavel');
+      expect(fetched(fetchMock).some(url => url.includes('/tasks/main-run'))).toBe(false);
+    });
+
+    it('ignores worktree runs for the main checkout and follows its own newest run', async () => {
+      const fetchMock = stubRuns([
+        runMeta('wt-run', { project: 'gavel', worktree: WORKTREE }),
+        runMeta('main-run', { project: 'gavel' }),
+      ]);
+
+      renderTasks();
+
+      await waitFor(() => expect(fetched(fetchMock).some(url => url.includes('/tasks/main-run'))).toBe(true));
+      expect(fetched(fetchMock).find(url => url.includes('/tasks?'))).not.toContain('worktree');
+      expect(fetched(fetchMock).some(url => url.includes('/tasks/wt-run'))).toBe(false);
+    });
+
+    it('shows no run for the main checkout when only worktree runs exist', async () => {
+      const fetchMock = stubRuns([runMeta('wt-run', { project: 'gavel', worktree: WORKTREE })]);
+
+      renderTasks();
+
+      await waitFor(() => expect(fetched(fetchMock).some(url => url.includes('/tasks?'))).toBe(true));
+      expect(fetched(fetchMock).some(url => url.includes('/tasks/wt-run'))).toBe(false);
+      expect(screen.queryByRole('region', { name: 'Commit tasks' })).toBeNull();
+    });
   });
 
   it('refreshes the project once when a run becomes complete', async () => {
@@ -114,6 +190,7 @@ describe('ProjectCommitTasks', () => {
         onLockedFilesChange={vi.fn()}
         onErrorChange={vi.fn()}
         onComplete={onComplete}
+        onRunChange={vi.fn()}
       />,
     );
     rerender(withClient(client,
@@ -123,6 +200,7 @@ describe('ProjectCommitTasks', () => {
         onLockedFilesChange={vi.fn()}
         onErrorChange={vi.fn()}
         onComplete={onComplete}
+        onRunChange={vi.fn()}
       />,
     ));
 
@@ -146,6 +224,7 @@ describe('ProjectCommitTasks', () => {
         onLockedFilesChange={vi.fn()}
         onErrorChange={vi.fn()}
         onComplete={onComplete}
+        onRunChange={vi.fn()}
       />,
     );
 
@@ -177,6 +256,7 @@ describe('ProjectCommitTasks', () => {
         onLockedFilesChange={vi.fn()}
         onErrorChange={vi.fn()}
         onComplete={vi.fn()}
+        onRunChange={vi.fn()}
       />,
     );
 
@@ -209,6 +289,7 @@ describe('ProjectCommitTasks', () => {
         onLockedFilesChange={vi.fn()}
         onErrorChange={onErrorChange}
         onComplete={vi.fn()}
+        onRunChange={vi.fn()}
       />,
     );
 
@@ -216,6 +297,70 @@ describe('ProjectCommitTasks', () => {
 
     expect((await screen.findByRole('alert')).textContent).toContain('Failed to stop commit task: task is already stopped');
     await waitFor(() => expect(onErrorChange).toHaveBeenLastCalledWith('Failed to stop commit task: task is already stopped'));
+  });
+
+  it('retries a failed run through the commit queue and follows the run it starts', async () => {
+    const client = createClient();
+    const invalidateQueries = vi.spyOn(client, 'invalidateQueries');
+    const onRunChange = vi.fn();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === 'POST') return { ok: true, json: async () => ({ runId: 'commit-run-2' }) } as Response;
+      return { ok: true, json: async () => failedSnapshots } as Response;
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderWithClient(client,
+      <ProjectCommitTasks
+        projectName="gavel"
+        preferredRunId="commit-run-1"
+        onLockedFilesChange={vi.fn()}
+        onErrorChange={vi.fn()}
+        onComplete={vi.fn()}
+        onRunChange={onRunChange}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry group' }));
+
+    await waitFor(() => expect(onRunChange).toHaveBeenCalledWith('commit-run-2'));
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST').map(call => call[0])).toEqual([retryURL]);
+    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: queryKeys.projectStatusScope('gavel') });
+  });
+
+  it.each([
+    {
+      name: 'the queue rejects the retry',
+      response: { ok: false, status: 400, text: async () => 'one.go is not a current project change' } as Response,
+      message: 'Failed to retry commit task: one.go is not a current project change',
+    },
+    {
+      name: 'the queue does not return the new run',
+      response: { ok: true, json: async () => ({}) } as Response,
+      message: 'Failed to retry commit task: response did not include a run id',
+    },
+  ])('surfaces a retry failure when $name and keeps the failed run', async ({ response, message }) => {
+    const onRunChange = vi.fn();
+    const onErrorChange = vi.fn();
+    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => (
+      init?.method === 'POST' ? response : { ok: true, json: async () => failedSnapshots } as Response
+    )));
+
+    renderWithClient(createClient(),
+      <ProjectCommitTasks
+        projectName="gavel"
+        preferredRunId="commit-run-1"
+        onLockedFilesChange={vi.fn()}
+        onErrorChange={onErrorChange}
+        onComplete={vi.fn()}
+        onRunChange={onRunChange}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry group' }));
+
+    expect((await screen.findByRole('alert')).textContent).toContain(message);
+    await waitFor(() => expect(onErrorChange).toHaveBeenLastCalledWith(message));
+    expect(onRunChange).not.toHaveBeenCalled();
   });
 
   it('owns one preferred-run stream, mirrors frames into the query cache, and closes it on unmount', async () => {
@@ -247,6 +392,7 @@ describe('ProjectCommitTasks', () => {
         onLockedFilesChange={vi.fn()}
         onErrorChange={vi.fn()}
         onComplete={vi.fn()}
+        onRunChange={vi.fn()}
       />,
     );
 
@@ -264,6 +410,7 @@ describe('ProjectCommitTasks', () => {
         onLockedFilesChange={vi.fn()}
         onErrorChange={vi.fn()}
         onComplete={vi.fn()}
+        onRunChange={vi.fn()}
       />,
     ));
     expect(eventSources).toHaveLength(1);

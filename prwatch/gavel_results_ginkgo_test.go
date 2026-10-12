@@ -9,6 +9,7 @@ import (
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/models"
+	"github.com/flanksource/gavel/pr/model"
 	"github.com/flanksource/gavel/testrunner/parsers"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -17,11 +18,11 @@ import (
 var _ = Describe("Gavel artifact results", func() {
 	It("hides HTML comments while preserving fenced examples in review output", func() {
 		result := PRWatchResult{
-			PR: &github.PRInfo{
-				Number: 57, Title: "comments", Author: github.PRAuthor{Login: "alice"},
+			PR: &model.PRInfo{
+				Number: 57, Title: "comments", Author: model.PRAuthor{Login: "alice"},
 				HeadRefName: "feature", BaseRefName: "main",
 			},
-			Comments: []github.PRComment{{
+			Comments: []model.PRComment{{
 				ID: 20,
 				Body: strings.Join([]string{
 					"Visible finding",
@@ -41,8 +42,8 @@ var _ = Describe("Gavel artifact results", func() {
 
 	It("renders structured failures and lint violations in PR status", func() {
 		result := PRWatchResult{
-			PR: &github.PRInfo{
-				Number: 57, Title: "artifact failures", Author: github.PRAuthor{Login: "alice"},
+			PR: &model.PRInfo{
+				Number: 57, Title: "artifact failures", Author: model.PRAuthor{Login: "alice"},
 				HeadRefName: "feature", BaseRefName: "main",
 			},
 			GavelResults: []*GavelResultsSummary{{
@@ -88,7 +89,7 @@ var _ = Describe("Gavel artifact results", func() {
 	It("renders a crash envelope log tail in PR status", func() {
 		exitCode := 1
 		result := PRWatchResult{
-			PR: &github.PRInfo{Number: 83},
+			PR: &model.PRInfo{Number: 83},
 			GavelResults: []*GavelResultsSummary{{
 				StickyID:    "gavel",
 				Error:       "gavel exited 1 before writing results",
@@ -117,7 +118,7 @@ var _ = Describe("Gavel artifact results", func() {
 		Expect(results[1].Commands).To(Equal([]string{"gavel lint --pr 57"}))
 		Expect(results[2].Commands).To(BeEmpty())
 
-		plain := PRWatchResult{PR: &github.PRInfo{Number: 57}, GavelResults: results}.Pretty().String()
+		plain := PRWatchResult{PR: &model.PRInfo{Number: 57}, GavelResults: results}.Pretty().String()
 		Expect(plain).To(ContainSubstring("Reproduce locally"))
 		Expect(plain).To(ContainSubstring("$ gavel test --pr 57"))
 		Expect(plain).To(ContainSubstring("$ gavel lint --pr 57"))
@@ -145,7 +146,7 @@ var _ = Describe("Gavel artifact results", func() {
 
 	It("renders lint findings through the shared gavel lint summary tree", func() {
 		result := PRWatchResult{
-			PR: &github.PRInfo{Number: 57},
+			PR: &model.PRInfo{Number: 57},
 			GavelResults: []*GavelResultsSummary{{
 				StickyID:       "gavel-lint",
 				LintLinters:    1,
@@ -190,7 +191,7 @@ var _ = Describe("Gavel artifact results", func() {
 	})
 
 	It("removes only comments backed by rendered artifacts", func() {
-		comments := []github.PRComment{
+		comments := []model.PRComment{
 			{ID: 10, Body: "<!-- sticky-comment:gavel -->\nresults"},
 			{ID: 20, Body: "review finding"},
 		}
@@ -198,18 +199,18 @@ var _ = Describe("Gavel artifact results", func() {
 
 		filtered := removeRenderedArtifactComments(comments, results)
 
-		Expect(filtered).To(Equal([]github.PRComment{{ID: 20, Body: "review finding"}}))
+		Expect(filtered).To(Equal([]model.PRComment{{ID: 20, Body: "review finding"}}))
 	})
 
 	It("scopes artifact results with workflow action filters", func() {
 		result := &PRWatchResult{
-			PR: &github.PRInfo{StatusCheckRollup: github.StatusChecks{
+			PR: &model.PRInfo{StatusCheckRollup: model.StatusChecks{
 				{Name: "gavel", Status: "COMPLETED", Conclusion: "FAILURE", DetailsURL: "https://github.com/acme/widgets/actions/runs/123/job/1"},
 				{Name: "analyze", Status: "COMPLETED", Conclusion: "SUCCESS", DetailsURL: "https://github.com/acme/widgets/actions/runs/456/job/2"},
 			}},
-			Runs: map[int64]*github.WorkflowRun{
-				123: {DatabaseID: 123, Name: "CI", Jobs: []github.Job{{Name: "gavel"}}},
-				456: {DatabaseID: 456, Name: "CodeQL", Jobs: []github.Job{{Name: "analyze"}}},
+			Runs: map[int64]*model.WorkflowRun{
+				123: {DatabaseID: 123, Name: "CI", Jobs: []model.Job{{Name: "gavel"}}},
+				456: {DatabaseID: 456, Name: "CodeQL", Jobs: []model.Job{{Name: "analyze"}}},
 			},
 			GavelResults: []*GavelResultsSummary{{RunID: 123, ArtifactID: 789}},
 		}
@@ -269,7 +270,7 @@ var _ = Describe("Gavel artifact results", func() {
 
 	It("exports artifact summaries without internal filtering metadata", func() {
 		payload, err := json.Marshal(PRWatchResult{
-			PR: &github.PRInfo{Number: 57},
+			PR: &model.PRInfo{Number: 57},
 			GavelResults: []*GavelResultsSummary{{
 				StickyID: "gavel", RunID: 123, CommentID: 10, ArtifactID: 456,
 			}},

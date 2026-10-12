@@ -7,6 +7,7 @@ import (
 	captainai "github.com/flanksource/captain/pkg/ai"
 	"github.com/flanksource/captain/pkg/ai/agent"
 	"github.com/flanksource/captain/pkg/api"
+	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/captain/pkg/promptrun"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/todos"
@@ -39,7 +40,7 @@ var _ = ginkgo.Describe("collecting a finished run", func() {
 	})
 
 	collect := func(out promptrun.Result) *StepOutcome {
-		return host.collect(exec, &types.TODO{}, Step{Name: "run"}, prepared, dispatched{out: out, execution: execution}, time.Now())
+		return host.collect(Step{Name: "run"}, prepared, dispatched{out: out, execution: execution}, time.Now())
 	}
 
 	ginkgo.It("reports a decoded envelope as a succeeded run with the loop's stop reason", func() {
@@ -51,7 +52,96 @@ var _ = ginkgo.Describe("collecting a finished run", func() {
 		gomega.Expect(out.Result.Run.State).To(gomega.Equal(RunSucceeded))
 		gomega.Expect(out.Result.Run.StopReason).To(gomega.Equal("condition-met"))
 		gomega.Expect(out.Result.Envelope.EndStatus).To(gomega.Equal("completed"))
+		gomega.Expect(out.Execution.OutputJSON).To(gomega.Equal(map[string]any{"summary": "Built it.", "endStatus": "completed"}))
 		gomega.Expect(out.Execution.Success).To(gomega.BeTrue())
+	})
+
+	ginkgo.It("collect copies the run workspace onto the execution", func() {
+		worktree := &api.WorktreeState{
+			Repo: "/src/repo", Path: "/src/repo/.worktrees/shell-1", Branch: "shell/1",
+			Base: "b000000", Setup: "5e70000", Head: "4ead000", Removed: true,
+		}
+		commits := []api.CommitRecord{{SHA: "c100000", Message: "feat: one"}, {SHA: "4ead000", Message: "fix: two"}}
+		out := collect(promptrun.Result{Response: &api.Response{Text: completed, Workspace: &api.Workspace{
+			Cwd: worktree.Path, Worktree: worktree, Commits: commits, Diff: "transient diff",
+			Notices: []api.Notice{{Text: "committed c100000"}},
+		}}})
+
+		gomega.Expect(out.Execution.Workspace).To(gomega.Equal(&api.WorkspaceRecord{
+			Cwd: worktree.Path, Worktree: worktree, Commits: commits,
+		}))
+	})
+
+	ginkgo.It("records no workspace for a run that reported none", func() {
+		out := collect(promptrun.Result{Response: &api.Response{Text: completed}})
+		gomega.Expect(out.Execution.Workspace).To(gomega.BeNil())
+	})
+
+	ginkgo.It("uses Captain's final usage and cost even after result events", func() {
+		saw := false
+		host.handleEvent(exec, captainai.Event{Kind: captainai.EventResult, Success: true,
+			Usage: &captainai.Usage{InputTokens: 20}, CostUSD: 2}, execution, &types.TODO{}, &saw, todos.RunStartMetadata{})
+		out := collect(promptrun.Result{Response: &api.Response{Text: completed},
+			Usage: captainai.Usage{InputTokens: 3, OutputTokens: 2}, CostUSD: 0.5})
+		gomega.Expect(out.Execution.TokensUsed).To(gomega.Equal(5))
+		gomega.Expect(out.Execution.CostUSD).To(gomega.Equal(0.5))
+	})
+
+	ginkgo.It("renders Captain approval IDs and terminal reasons in the session transcript", func() {
+		saw := false
+		event := captainai.Event{Kind: captainai.EventPermission, Tool: "Bash",
+			ApprovalID: "approval-1", Input: map[string]any{"command": "pwd"}}
+		host.handleEvent(exec, event, execution, &types.TODO{}, &saw, todos.RunStartMetadata{})
+		gomega.Expect(exec.GetTranscript().Entries).To(gomega.HaveLen(2))
+		gomega.Expect(exec.GetTranscript().Entries[0].Metadata).To(gomega.HaveKeyWithValue("approvalId", "approval-1"))
+		gomega.Expect(exec.GetTranscript().Entries[0].Metadata).To(gomega.HaveKeyWithValue("input", event.Input))
+
+		event.Reason = "expired"
+		host.handleEvent(exec, event, execution, &types.TODO{}, &saw, todos.RunStartMetadata{})
+		gomega.Expect(exec.GetTranscript().Entries).To(gomega.HaveLen(4))
+		gomega.Expect(exec.GetTranscript().Entries[2].Content).To(gomega.Equal("approval expired: Bash"))
+		gomega.Expect(exec.GetTranscript().Entries[2].Metadata).To(gomega.HaveKeyWithValue("reason", "expired"))
+	})
+
+	// The dashboard labels a request by its kind; the tool, input and approval id
+	// every reader already uses stay beside it.
+	ginkgo.It("carries the approval kind in the notification beside the existing detail", func() {
+		saw := false
+		var notified []todos.Notification
+		exec = todos.NewExecutorContext(context.Background(), logger.StandardLogger(), &todos.UserInteraction{
+			NotifyFunc: func(n todos.Notification) { notified = append(notified, n) },
+		})
+		input := map[string]any{"command": "make build"}
+		event := captainai.Event{Kind: captainai.EventPermission, Tool: "exec_command", ApprovalID: "approval-2", Input: input,
+			Request: &api.ApprovalRequest{Tool: "exec_command", Input: input, Kind: api.ApprovalKindCommand,
+				Command: &api.CommandApproval{Command: "make build"}}}
+
+		host.handleEvent(exec, event, execution, &types.TODO{}, &saw, todos.RunStartMetadata{})
+
+		expected := map[string]any{"tool": "exec_command", "approvalId": "approval-2", "input": input, "kind": api.ApprovalKindCommand}
+		gomega.Expect(exec.GetTranscript().Entries[0].Metadata).To(gomega.Equal(expected))
+		gomega.Expect(notified).To(gomega.HaveLen(1))
+		gomega.Expect(notified[0].Data).To(gomega.Equal(expected))
+	})
+
+	ginkgo.It("preserves Captain's cancellation classification in the recording callback", func() {
+		classify := host.recordedOutcome(context.Background(), Step{Name: "run"}, prepared,
+			&stepInput{execution: execution}, time.Now())
+		outcome, err := classify(promptrun.Result{Response: &api.Response{Text: completed}}, context.Canceled, true)
+		gomega.Expect(err).NotTo(gomega.HaveOccurred())
+		gomega.Expect(outcome.State).To(gomega.Equal(captaindb.PromptRunStateCancelled))
+		gomega.Expect(outcome.Phase).To(gomega.Equal(captaindb.PromptRunPhaseFinished))
+	})
+
+	ginkgo.It("maps a completed ask envelope after Captain's generic outcome", func() {
+		classify := host.recordedOutcome(context.Background(), Step{Name: "run"}, prepared,
+			&stepInput{execution: execution}, time.Now())
+		outcome, err := classify(promptrun.Result{Passed: true, Response: &api.Response{
+			Text: `{"summary":"Which database?","endStatus":"ask","questions":[{"text":"Which database?"}]}`,
+		}}, nil, false)
+		gomega.Expect(err).NotTo(gomega.HaveOccurred())
+		gomega.Expect(outcome.State).To(gomega.Equal(captaindb.PromptRunStateWaiting))
+		gomega.Expect(outcome.Phase).To(gomega.Equal(captaindb.PromptRunPhaseGenerate))
 	})
 
 	ginkgo.It("fails a run whose provider result was not a success, even with an envelope", func() {
@@ -92,6 +182,31 @@ var _ = ginkgo.Describe("collecting a finished run", func() {
 
 		gomega.Expect(out.Result.Run.State).To(gomega.Equal(RunWaiting))
 		gomega.Expect(out.Execution.Success).To(gomega.BeFalse())
+	})
+
+	// A reply that answered the question in the wrong shape used to leave nothing
+	// behind but the word "failed": the decode error replaced the only account of
+	// what the agent said.
+	ginkgo.It("keeps an undecodable response verbatim, alongside the decode error", func() {
+		const prose = "I read the code and this TODO is already done."
+		out := collect(promptrun.Result{Response: &api.Response{Text: prose}})
+
+		gomega.Expect(out.Execution.ResponseText).To(gomega.Equal(prose))
+		gomega.Expect(out.Execution.EndStatus).To(gomega.BeEmpty(), "no envelope was captured")
+		gomega.Expect(out.Execution.ErrorMessage).NotTo(gomega.BeEmpty())
+		gomega.Expect(out.Result.Run.State).To(gomega.Equal(RunFailed))
+		gomega.Expect(out.Result.Run.Error).To(gomega.Equal(out.Execution.ErrorMessage))
+	})
+
+	ginkgo.It("keeps the response of a run that did decode, from the structured payload", func() {
+		out := collect(promptrun.Result{Response: &api.Response{
+			Text:           completed,
+			StructuredData: map[string]any{"summary": "Built it.", "endStatus": "completed"},
+		}})
+
+		gomega.Expect(out.Execution.ResponseText).To(gomega.ContainSubstring("Built it."))
+		gomega.Expect(out.Execution.EndStatus).To(gomega.Equal(types.EndCompleted))
+		gomega.Expect(out.Execution.OutputJSON).To(gomega.Equal(map[string]any{"summary": "Built it.", "endStatus": "completed"}))
 	})
 
 	ginkgo.Describe("the definition-of-done record", func() {

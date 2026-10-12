@@ -2,12 +2,10 @@ package native_test
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 	"testing"
 
 	captaindb "github.com/flanksource/captain/pkg/database"
-	commonsdb "github.com/flanksource/commons-db/db"
+	"github.com/flanksource/commons-db/dbtest"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/todos/native"
 	"github.com/google/uuid"
@@ -22,17 +20,8 @@ func TestNativePlanCreation(t *testing.T) {
 
 var _ = Describe("atomic issue and plan creation", func() {
 	It("rolls back the issue and Captain provenance when the revision is invalid", func() {
-		if os.Getenv("GAVEL_DB_EMBEDDED_TEST") == "" {
-			Skip("set GAVEL_DB_EMBEDDED_TEST=1 to run embedded-postgres execution integration tests")
-		}
-
 		ctx := context.Background()
-		dsn, stop, err := commonsdb.StartEmbedded(commonsdb.EmbeddedConfig{
-			DataDir:  filepath.Join(GinkgoT().TempDir(), "postgres"),
-			Database: "gavel_native_create_plan",
-		})
-		Expect(err).NotTo(HaveOccurred())
-		DeferCleanup(func() { Expect(stop()).To(Succeed()) })
+		dsn := dbtest.ForGinkgo(dbtest.Options{Name: "gavel_native_create_plan"}).DSN()
 
 		GinkgoT().Setenv(database.EnvDSN, dsn)
 		GinkgoT().Setenv(database.EnvDisable, "")

@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/pr/model"
 )
 
 var artifactURLPattern = regexp.MustCompile(
@@ -66,7 +67,7 @@ type GavelArtifact struct {
 // rewrites the sticky comment on every push), the most recent occurrence
 // wins. Order is determined by first appearance in the comment list so
 // the UI renders shards in a stable, source-controlled order.
-func FindGavelArtifacts(comments []PRComment) []GavelArtifact {
+func FindGavelArtifacts(comments []model.PRComment) []GavelArtifact {
 	type slot struct {
 		idx int
 		art GavelArtifact

@@ -11,6 +11,7 @@ import (
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/github"
+	"github.com/flanksource/gavel/pr/model"
 )
 
 // pushTargetKind tags how we arrived at the chosen branch to push to.
@@ -33,7 +34,7 @@ type pushTarget struct {
 type pushDeps struct {
 	searchPRs           func(github.Options, github.PRSearchOptions) (github.PRSearchResults, *github.RateLimit, error)
 	defaultBranch       func(github.Options) (string, error)
-	createPR            func(github.Options, github.CreatePRInput) (*github.CreatePRResult, error)
+	createPR            func(github.Options, model.CreatePRInput) (*model.CreatePRResult, error)
 	isAncestor          func(workDir, ref, head string) bool
 	gitPush             func(workDir, refspec string) error
 	rebaseOnto          func(workDir, upstreamBranch string) error
@@ -102,9 +103,15 @@ var pushDepsForTest *pushDeps
 // still something to seed PR title/body generation with. If HEAD has no
 // commits ahead of upstream either, returns ErrNothingToPush.
 func pushAfterCommit(ctx context.Context, opts Options, result *Result) error {
-	deps := defaultPushDeps()
+	var deps pushDeps
 	if pushDepsForTest != nil {
 		deps = *pushDepsForTest
+	} else {
+		var err error
+		deps, err = providerPushDeps(ctx, opts)
+		if err != nil {
+			return err
+		}
 	}
 	return pushWithDeps(ctx, opts, result, deps)
 }
@@ -124,7 +131,10 @@ func pushWithDeps(ctx context.Context, opts Options, result *Result, deps pushDe
 	}
 
 	if len(result.Commits) == 0 {
-		base, _ := deps.defaultBranch(ghOpts)
+		base, baseErr := deps.defaultBranch(ghOpts)
+		if baseErr != nil {
+			return fmt.Errorf("resolve default branch: %w", baseErr)
+		}
 		baseRef := ""
 		if base != "" {
 			baseRef = "origin/" + base
@@ -143,6 +153,14 @@ func pushWithDeps(ctx context.Context, opts Options, result *Result, deps pushDe
 		if opts.DryRun {
 			printDryRunPreview(result)
 		}
+	}
+
+	if opts.PushBranch != "" {
+		if err := pushHEADTo(opts, deps, opts.PushBranch); err != nil {
+			return err
+		}
+		logger.Infof("Pushed %s to %s", branch, opts.PushBranch)
+		return nil
 	}
 
 	target, candidates, err := decidePushTarget(ctx, ghOpts, branch, deps)
@@ -218,29 +236,43 @@ func findAncestorPRs(workDir string, prs github.PRSearchResults, isAncestor func
 }
 
 func executeExistingPRPush(opts Options, deps pushDeps, pr *github.PRListItem, reason string) error {
-	refspec := "HEAD:" + pr.Source
 	if opts.DryRun {
-		fmt.Fprintf(dryRunOutput, "would push %s (%s → PR #%d %s)\n", refspec, reason, pr.Number, pr.URL)
+		fmt.Fprintf(dryRunOutput, "would push HEAD:%s (%s → PR #%d %s)\n", pr.Source, reason, pr.Number, pr.URL)
 		return nil
 	}
-	if isProtectedBranch(pr.Source) {
-		if !deps.confirmProtectedRef(pr.Source) {
-			return fmt.Errorf("push to protected branch %q cancelled", pr.Source)
-		}
-	}
-	if err := deps.rebaseOnto(opts.WorkDir, pr.Source); err != nil {
+	if err := pushHEADTo(opts, deps, pr.Source); err != nil {
 		return err
-	}
-	if err := deps.gitPush(opts.WorkDir, refspec); err != nil {
-		return fmt.Errorf("git push %s: %w", refspec, err)
 	}
 	logger.Infof("Pushed to PR #%d (%s): %s", pr.Number, pr.Source, pr.URL)
 	printExistingPRSummary(pr)
 	return nil
 }
 
+// pushHEADTo rebases HEAD onto origin/<branch> and pushes it there, confirming
+// first when branch is protected.
+func pushHEADTo(opts Options, deps pushDeps, branch string) error {
+	refspec := "HEAD:" + branch
+	if opts.DryRun {
+		fmt.Fprintf(dryRunOutput, "would push %s\n", refspec)
+		return nil
+	}
+	if isProtectedBranch(branch) && !deps.confirmProtectedRef(branch) {
+		return fmt.Errorf("push to protected branch %q cancelled", branch)
+	}
+	if err := deps.rebaseOnto(opts.WorkDir, branch); err != nil {
+		return err
+	}
+	if err := deps.gitPush(opts.WorkDir, refspec); err != nil {
+		return fmt.Errorf("git push %s: %w", refspec, err)
+	}
+	return nil
+}
+
 func executeNewPRPush(ctx context.Context, opts Options, ghOpts github.Options, deps pushDeps, branch string, result *Result) (err error) {
-	base, _ := deps.defaultBranch(ghOpts)
+	base, baseErr := deps.defaultBranch(ghOpts)
+	if baseErr != nil {
+		return fmt.Errorf("resolve default branch: %w", baseErr)
+	}
 
 	prIn := PRContentInput{
 		Commits: commitInputsFromResults(result.Commits), Options: opts,
@@ -296,10 +328,11 @@ func executeNewPRPush(ctx context.Context, opts Options, ghOpts github.Options, 
 		return fmt.Errorf("git push %s: %w", refspec, err)
 	}
 
-	created, err := deps.createPR(ghOpts, github.CreatePRInput{
+	created, err := deps.createPR(ghOpts, model.CreatePRInput{
 		Title: content.Title,
 		Body:  content.Body,
 		Head:  headBranch,
+		Base:  base,
 	})
 	if err != nil {
 		return fmt.Errorf("create PR: %w", err)
@@ -321,7 +354,7 @@ func executeNewPRPush(ctx context.Context, opts Options, ghOpts github.Options, 
 // stdout. Replaces the trailing commit re-print: the user already saw
 // "Committed <hash> ..." per commit, what they actually want at the end
 // is the PR they just opened.
-func printNewPRSummary(created *github.CreatePRResult, content PRContent) {
+func printNewPRSummary(created *model.CreatePRResult, content PRContent) {
 	if created == nil {
 		return
 	}

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { fetchJSON, fetchText, mutationJSON, queryKeys } from './query';
+import { fetchJSON, fetchText, HttpError, isProjectGitKey, mutationJSON, queryKeys } from './query';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -13,11 +13,24 @@ describe('queryKeys', () => {
     expect(queryKeys.projectStatus('gavel', true)).toEqual([...queryKeys.projectStatusScope('gavel'), 'results']);
     expect(queryKeys.projectDiff('gavel', 'one.go', 0)).not.toEqual(queryKeys.projectDiff('gavel', 'two.go', 0));
     expect(queryKeys.projectDiff('gavel', 'one.go', 0)).not.toEqual(queryKeys.projectDiff('gavel', 'one.go', 1));
+    expect(queryKeys.projectStatus('gavel', false, '/work/gavel-feat')).not.toEqual(queryKeys.projectStatus('gavel', false));
+    expect(queryKeys.projectStatus('gavel', true, '/work/gavel-feat').slice(0, 3)).toEqual(queryKeys.projectStatusScope('gavel'));
+    expect(queryKeys.projectDiff('gavel', 'one.go', 0, '/work/gavel-feat')).not.toEqual(queryKeys.projectDiff('gavel', 'one.go', 0));
+    expect(queryKeys.projectBranchFiles('gavel', 'feat', 'a1')).not.toEqual(queryKeys.projectBranchFiles('gavel', 'feat', 'b2'));
+    expect(queryKeys.projectBranchDiff('gavel', 'feat', 'a1', 'x.go')).not.toEqual(queryKeys.projectBranchDiff('gavel', 'feat', 'a1', 'y.go'));
     expect(queryKeys.processStatus('gavel')).not.toEqual(queryKeys.processStatus('clicky'));
     expect(queryKeys.processLogs('gavel', 'api', 5)).not.toEqual(queryKeys.processLogs('gavel', 'api', 500));
     expect(queryKeys.processLogs('gavel', 'api', 5)).not.toEqual(queryKeys.processLogs('gavel', 'worker', 5));
     expect(queryKeys.prDetail('acme/gavel', 7)).not.toEqual(queryKeys.prDetail('acme/gavel', 8));
     expect(queryKeys.prDetail('acme/gavel', 7)).not.toEqual(queryKeys.prDetail('acme/clicky', 7));
+  });
+
+  it('matches every project git key and nothing else under projects', () => {
+    expect(isProjectGitKey(queryKeys.projectGit('gavel'))).toBe(true);
+    expect(isProjectGitKey(queryKeys.projectGit('clicky'))).toBe(true);
+    expect(isProjectGitKey(queryKeys.projectGitSummary())).toBe(false);
+    expect(isProjectGitKey(queryKeys.projectStatusScope('gavel'))).toBe(false);
+    expect(isProjectGitKey(queryKeys.projectBranchFiles('gavel', 'git', 'a1'))).toBe(false);
   });
 });
 
@@ -49,6 +62,22 @@ describe('query requests', () => {
       signal: new AbortController().signal,
       context: 'Failed to load example',
     })).rejects.toThrow('Failed to load example: database unavailable');
+  });
+
+  it.each([
+    ['a JSON error body', () => new Response(JSON.stringify({ error: 'commits are gone' }), { status: 410, headers: { 'Content-Type': 'application/json' } })],
+    ['a non-JSON error body', () => new Response('gone', { status: 410 })],
+  ])('exposes the HTTP status on the error for %s', async (_label, respond) => {
+    vi.stubGlobal('fetch', vi.fn(async () => respond()));
+
+    const error = await fetchJSON({
+      url: '/api/example',
+      signal: new AbortController().signal,
+      context: 'Failed to load example',
+    }).catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(HttpError);
+    expect((error as HttpError).status).toBe(410);
   });
 
   it('passes the AbortSignal to text GETs and contextualizes HTTP errors', async () => {
@@ -126,5 +155,20 @@ describe('query requests', () => {
       method: 'DELETE',
       context: 'Delete project',
     })).rejects.toThrow('Delete project: project is running');
+  });
+
+  it('exposes the status and parsed JSON body of a rejected mutation', async () => {
+    const body = { error: 'squash conflicts', conflicts: ['a.txt'] };
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(body), { status: 409 })));
+
+    const error = await mutationJSON({
+      url: '/api/projects/gavel/branch/merge',
+      method: 'POST',
+      body: {},
+      context: 'Merge',
+    }).catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(HttpError);
+    expect(error).toMatchObject({ message: 'Merge: squash conflicts', status: 409, body });
   });
 });

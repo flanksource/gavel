@@ -71,7 +71,7 @@ func installTimeoutDiagnosticsHook(reporter *runDiagnosticsReporter) {
 }
 
 func snapshotArgs(opts testrunner.RunOptions) map[string]any {
-	return map[string]any{
+	args := map[string]any{
 		"starting_paths": append([]string(nil), opts.StartingPaths...),
 		"extra_args":     append([]string(nil), opts.ExtraArgs...),
 		"tags":           append([]string(nil), opts.Tags...),
@@ -102,6 +102,25 @@ func snapshotArgs(opts testrunner.RunOptions) map[string]any {
 		"fixtures":       opts.Fixtures,
 		"fixture_files":  append([]string(nil), opts.FixtureFiles...),
 	}
+	if opts.FixtureRunner != nil {
+		args["fixture_benchmark"] = opts.FixtureRunner.Benchmark
+		args["fixture_baseline"] = opts.FixtureRunner.Baseline
+		args["fixture_profile"] = opts.FixtureRunner.Profile
+	}
+	return args
+}
+
+func fixtureBenchmarkMode(opts testrunner.RunOptions) string {
+	if opts.FixtureRunner == nil {
+		return ""
+	}
+	if opts.FixtureRunner.Benchmark {
+		return "benchmark"
+	}
+	if opts.FixtureRunner.Profile {
+		return "profile"
+	}
+	return ""
 }
 
 func durationString(d time.Duration) string {

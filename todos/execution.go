@@ -20,16 +20,6 @@ const providerPersistenceTimeout = 30 * time.Second
 
 var ErrExecutionCancelled = errors.New("todo run stopped by user")
 
-// ApprovalBroker builds the callback a run answers tool-permission requests
-// with. Only a host that serves an approval surface supplies one — the CLI
-// leaves it nil, because a run that asked a terminal for a decision would block
-// until its timeout.
-//
-// It is a factory rather than a callback because the durable approval rows are
-// keyed on the session and prompt run Captain admits, neither of which exists
-// until the run is under way.
-type ApprovalBroker func(ctx *ExecutorContext) (captainapi.PermissionFunc, error)
-
 // ExecutionResult is the record one lifecycle step run leaves behind: what it
 // cost, what it said, and what it decided. The lifecycle host produces it and
 // the provider persists it as the todo's attempt.
@@ -44,9 +34,20 @@ type ExecutionResult struct {
 	NumTurns         int           // Number of interaction rounds
 	ActionsPerformed []string      // List of actions taken (tool uses, etc.)
 	ErrorMessage     string
-	CommitSHA        string
-	Runtime          RunStartMetadata
-	Transcript       *ExecutionTranscript
+	// Workspace is where the run worked and what it left behind: the worktree
+	// it was isolated in (branch, Setup..Head, kept or removed) and the commits
+	// it made. nil when the run reported no workspace.
+	Workspace  *captainapi.WorkspaceRecord
+	Runtime    RunStartMetadata
+	Transcript *ExecutionTranscript
+	// ResponseText is the agent's final response verbatim, captured before the
+	// envelope is decoded and kept even when that decode fails — which is exactly
+	// when it is the only account of what the agent said. A reply that was sound
+	// but shaped wrong would otherwise be discarded, leaving a bare "failed".
+	//
+	// It is display state, not part of the persisted attempt.
+	ResponseText string
+	OutputJSON   map[string]any
 	// Envelope fields — the agent's structured final result. EndStatus is empty
 	// when no envelope was captured.
 	Summary   string
@@ -56,7 +57,9 @@ type ExecutionResult struct {
 	// Triage is a triage run's verdict and the edits it wants applied. The agent
 	// is read-only, so this is a request, not a record of something that
 	// happened; the host's OnOutcome performs the writes.
-	Triage *types.TriageEnvelope
+	Triage           *types.TriageEnvelope
+	TriageNew        *types.TriageNewEnvelope
+	TriageNewApplier TriageNewApplier `json:"-"`
 	// DoD is the definition-of-done verdict: nil when the step declared no
 	// verifiers, else Ran is true and Passed reports whether every verifier
 	// passed within the iteration budget.
