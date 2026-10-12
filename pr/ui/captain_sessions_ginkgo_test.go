@@ -37,6 +37,7 @@ var _ = Describe("todo sessions served through Captain", Ordered, func() {
 		todo    *types.TODO
 		promptR uuid.UUID
 		execID  uuid.UUID
+		emptyID uuid.UUID
 	)
 
 	BeforeAll(func(ctx SpecContext) {
@@ -81,6 +82,11 @@ var _ = Describe("todo sessions served through Captain", Ordered, func() {
 			SessionID: execID, ProviderMessageID: "assistant-1", Role: "assistant",
 			Parts: json.RawMessage(`[{"type":"text","text":"` + transcriptText + `"}]`),
 		})).To(Succeed())
+		empty, err := provider.Captain().CreateOrGetSession(ctx, captaindb.CreateSessionInput{
+			Source: "claude", Provider: "anthropic", HostID: "empty-session-test", CWD: workDir,
+		})
+		Expect(err).NotTo(HaveOccurred())
+		emptyID = empty.ID
 
 		handler = (&Server{ghOpts: github.Options{WorkDir: workDir}}).Handler()
 	})
@@ -134,6 +140,16 @@ var _ = Describe("todo sessions served through Captain", Ordered, func() {
 		recorder := get("/api/captain/sessions/" + uuid.NewString())
 
 		Expect(recorder.Code).To(Equal(http.StatusNotFound), recorder.Body.String())
+	})
+
+	It("serves an existing metadata-only direct link with unavailable transcript detail", func() {
+		recorder := get("/api/captain/sessions/" + emptyID.String())
+		Expect(recorder.Code).To(Equal(http.StatusOK), recorder.Body.String())
+		var detail map[string]any
+		Expect(json.Unmarshal(recorder.Body.Bytes(), &detail)).To(Succeed())
+		Expect(detail).To(HaveKeyWithValue("id", emptyID.String()))
+		Expect(detail).To(HaveKeyWithValue("cwd", workDir))
+		Expect(detail).To(HaveKeyWithValue("detailAvailable", false))
 	})
 
 	It("no longer serves the retired session stream route", func() {

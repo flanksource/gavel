@@ -5,6 +5,7 @@ import (
 	"time"
 
 	cmuxprov "github.com/flanksource/captain/pkg/ai/provider/cmux"
+	"github.com/flanksource/captain/pkg/api"
 	captaindb "github.com/flanksource/captain/pkg/database"
 )
 
@@ -14,25 +15,38 @@ import (
 // is the whole queue.
 type todoSessionStatsResponse struct {
 	cmuxprov.SessionStats
-	Approval  *todoApproval  `json:"approval,omitempty"`
-	Approvals []todoApproval `json:"approvals,omitempty"`
+	Approval     *todoApproval     `json:"approval,omitempty"`
+	Approvals    []todoApproval    `json:"approvals,omitempty"`
+	Verification *api.VerifyReport `json:"verification,omitempty"`
 }
 
 func captainSessionStats(ctx context.Context, store captainSessionStore, sessionID string, resolved captainSessionResolution) (todoSessionStatsResponse, error) {
 	stats := cmuxprov.SessionStats{SessionID: sessionID, Found: resolved.transcript != nil}
 	awaitingAnswer := false
+	var verification *api.VerifyReport
 	if resolved.run != nil {
 		runs, err := store.ListPromptRuns(ctx, captaindb.PromptRunFilter{SessionID: &resolved.run.ID})
 		if err != nil {
 			return todoSessionStatsResponse{}, err
 		}
 		awaitingAnswer = len(runs) > 0 && runs[0].State == captaindb.PromptRunStateWaiting && runs[0].ResultJSON["endStatus"] == "ask"
+		if len(runs) > 0 && runs[0].State == captaindb.PromptRunStateFailed && runs[0].Phase == captaindb.PromptRunPhaseVerify {
+			report, iteration, err := store.LatestPromptRunVerification(ctx, runs[0].ID)
+			if err != nil {
+				return todoSessionStatsResponse{}, err
+			}
+			if iteration == runs[0].CurrentIteration && report != nil && report.Ran && report.State == api.VerifyStateFailed {
+				verification = report
+			}
+		}
 	}
 	if resolved.transcript == nil {
 		if awaitingAnswer {
 			stats.State = "ask"
+		} else if verification != nil {
+			stats.State = "verification_failed"
 		}
-		return todoSessionStatsResponse{SessionStats: stats}, nil
+		return todoSessionStatsResponse{SessionStats: stats, Verification: verification}, nil
 	}
 	overview, err := store.GetSessionOverviewByIdentity(ctx, resolved.transcript.ID.String())
 	if err != nil {
@@ -76,6 +90,8 @@ func captainSessionStats(ctx context.Context, store captainSessionStore, session
 		stats.DurationMs = int64(*overview.DurationSeconds * 1000)
 	}
 	switch {
+	case verification != nil && !stats.InProgress && overview.HealthState != string(captaindb.SessionHealthZombie) && overview.HealthState != string(captaindb.SessionHealthStalled):
+		stats.State = "verification_failed"
 	case overview.LifecycleStatus == string(captaindb.SessionLifecycleFailed) || overview.HealthState == string(captaindb.SessionHealthZombie):
 		stats.State, stats.Error = "error", resolved.transcript.StateReason
 	case overview.HealthState == string(captaindb.SessionHealthStalled):
@@ -108,7 +124,10 @@ func captainSessionStats(ctx context.Context, store captainSessionStore, session
 	}
 	stats.ContextTokens = intValue(overview.ContextTokens)
 	stats.ContextWindow = intValue(overview.ContextWindowTokens)
-	return todoSessionStatsResponse{SessionStats: stats}, nil
+	if stats.State != "verification_failed" {
+		verification = nil
+	}
+	return todoSessionStatsResponse{SessionStats: stats, Verification: verification}, nil
 }
 
 // projectThreadStatus is the settled state the stats header reports for a

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	cmuxprov "github.com/flanksource/captain/pkg/ai/provider/cmux"
+	"github.com/flanksource/captain/pkg/api"
 	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/google/uuid"
 )
@@ -40,6 +41,10 @@ func TestProjectThreadStatusKeepsAttemptFailureIndependent(t *testing.T) {
 
 func (f fakeCaptainSessionStore) ListPromptRuns(context.Context, captaindb.PromptRunFilter) ([]captaindb.PromptRun, error) {
 	return f.runs, nil
+}
+
+func (f fakeCaptainSessionStore) LatestPromptRunVerification(context.Context, uuid.UUID) (*api.VerifyReport, int, error) {
+	return nil, 0, nil
 }
 
 func (f fakeCaptainSessionStore) GetSessionByIdentity(_ context.Context, _ string, source, _, _ string) (*captaindb.Session, error) {
