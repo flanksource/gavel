@@ -33,7 +33,7 @@ func TestGitAnalyzeAIFlagsReachTheAgentConfig(t *testing.T) {
 	require.NoError(t, cmd.Flags().Parse([]string{"--ai", "--ai-model", "api:haiku"}))
 
 	resolved := resolveAnalyzeModel(t, analyzeAI.Model)
-	assert.Equal(t, "claude-haiku-4-5", resolved.Name)
+	assert.Equal(t, "claude-haiku-5-5", resolved.Name)
 	assert.EqualValues(t, "api", resolved.Mode, "an explicit api: prefix must beat the provider's agent default")
 }
 

@@ -3,6 +3,7 @@ package record
 import (
 	"io"
 	"sync"
+	"unicode/utf8"
 )
 
 // streamCapture tees an event stream's bytes as the child reads them. Such a
@@ -37,7 +38,11 @@ func (c *streamCapture) apply(content *Content) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	content.Size = c.total
-	content.Text, content.Encoding = encodeBody(c.kept)
+	kept := c.kept
+	if c.total > int64(len(kept)) || !c.closed {
+		kept = trimPartialRune(kept)
+	}
+	content.Text, content.Encoding = encodeBody(kept)
 	switch {
 	case c.total > int64(len(c.kept)):
 		content.Comment = "truncated by record.http.bodies"
@@ -46,6 +51,20 @@ func (c *streamCapture) apply(content *Content) {
 	default:
 		content.Comment = ""
 	}
+}
+
+// trimPartialRune drops a UTF-8 rune split by the cap or a chunk boundary, so a
+// cut-off prefix still encodes as text instead of falling back to base64.
+func trimPartialRune(b []byte) []byte {
+	for i := len(b) - 1; i >= 0 && i >= len(b)-utf8.UTFMax; i-- {
+		if utf8.RuneStart(b[i]) {
+			if !utf8.FullRune(b[i:]) {
+				return b[:i]
+			}
+			break
+		}
+	}
+	return b
 }
 
 type teeStream struct {

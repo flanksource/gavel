@@ -29,7 +29,7 @@ func TestStatusAIFlagsReachTheAgentConfig(t *testing.T) {
 	resolved, err := captainai.Resolve(statusAI.Model)
 	require.NoError(t, err)
 
-	assert.Equal(t, "claude-haiku-4-5", resolved.Name)
+	assert.Equal(t, "claude-haiku-5-5", resolved.Name)
 	assert.EqualValues(t, "api", resolved.Mode, "an explicit api: prefix must beat the provider's agent default")
 	assert.Equal(t, 7, statusAI.MaxConcurrent)
 	assert.Equal(t, 512, statusAI.Budget.MaxTokens)

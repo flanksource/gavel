@@ -11,13 +11,12 @@ function env(name: string) {
   return value;
 }
 
-const baseURL = env('SESSION_TAIL_BASE_URL');
-const sessionId = env('SESSION_TAIL_ID');
-const controlURL = env('SESSION_TAIL_CONTROL_URL');
-const seeded = Number(env('SESSION_TAIL_SEEDED'));
+// Plain `playwright test` discovery (e.g. `gavel test`) has no harness: the
+// spec is skipped there, and only a partially configured harness fails.
+const harnessed = Boolean(process.env.SESSION_TAIL_BASE_URL);
 const label = (index: number) => `tail message ${String(index).padStart(3, '0')}`;
 
-async function append(count: number) {
+async function append(controlURL: string, count: number) {
   const response = await fetch(`${controlURL}/append?n=${count}`, { method: 'POST' });
   if (!response.ok) throw new Error(`append ${count}: HTTP ${response.status} ${await response.text()}`);
   return ((await response.json()) as { last: number }).last;
@@ -38,10 +37,16 @@ async function scrollTranscriptToTop(page: Page) {
 }
 
 test('tails a live session and loads history on scroll-up', async ({ page }) => {
+  test.skip(!harnessed, 'SESSION_TAIL_BASE_URL is not set: run this spec through hack/session_tail_e2e.go');
+  const baseURL = env('SESSION_TAIL_BASE_URL');
+  const sessionId = env('SESSION_TAIL_ID');
+  const controlURL = env('SESSION_TAIL_CONTROL_URL');
+  const seeded = Number(env('SESSION_TAIL_SEEDED'));
+
   await page.goto(`${baseURL}/sessions/${sessionId}`);
   await expect(page.getByText(label(seeded - 1), { exact: true })).toBeVisible();
 
-  const last = await append(5);
+  const last = await append(controlURL, 5);
   await expect(page.getByText(label(last), { exact: true })).toBeVisible();
 
   await expect(async () => {

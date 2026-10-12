@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -168,18 +169,22 @@ func TestHTTPRecorderPathsFilter(t *testing.T) {
 // An event stream never ends while the page is open, so capturing its body
 // would hold every frame back from the child until the cap filled.
 // eventStream serves one frame, waits for release, serves a second and ends —
-// a stream whose page is open, then closes.
-func eventStream(t *testing.T, first, second string) (*httptest.Server, chan struct{}) {
+// a stream whose page is open, then closes. Cleanup releases the handler before
+// closing the server, so a failed assertion cannot leave Close waiting on it.
+func eventStream(t *testing.T, first, second string) (*httptest.Server, func()) {
 	t.Helper()
-	release := make(chan struct{})
+	gate := make(chan struct{})
+	var once sync.Once
+	release := func() { once.Do(func() { close(gate) }) }
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = io.WriteString(w, first)
 		w.(http.Flusher).Flush()
-		<-release
+		<-gate
 		_, _ = io.WriteString(w, second)
 	}))
 	t.Cleanup(upstream.Close)
+	t.Cleanup(release)
 	return upstream, release
 }
 
@@ -205,7 +210,7 @@ func TestHTTPRecorderCapturesEventStreamsAsTheyPass(t *testing.T) {
 		Comment: "event stream still open when recorded",
 	}, recorder.Entries()[0].Response.Content)
 
-	close(release)
+	release()
 	rest, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
 	assert.Equal(t, second, string(rest))
@@ -224,7 +229,7 @@ func TestHTTPRecorderCapsEventStreamTextButCountsEveryByte(t *testing.T) {
 	resp, err := proxyClient(t, recorder).Get(upstream.URL + "/stream")
 	require.NoError(t, err)
 	defer resp.Body.Close()
-	close(release)
+	release()
 	_, err = io.ReadAll(resp.Body)
 	require.NoError(t, err)
 
@@ -234,6 +239,20 @@ func TestHTTPRecorderCapsEventStreamTextButCountsEveryByte(t *testing.T) {
 	content := recorder.Entries()[0].Response.Content
 	assert.Equal(t, (first + second)[:16], content.Text)
 	assert.Equal(t, "truncated by record.http.bodies", content.Comment)
+}
+
+func TestStreamCaptureKeepsTruncatedTextValidUTF8(t *testing.T) {
+	const frame = "data: café\n\n"
+	cut := strings.Index(frame, "é") + 1
+	capture := &streamCapture{limit: cut}
+	capture.record([]byte(frame))
+	capture.finish()
+
+	var content Content
+	capture.apply(&content)
+	assert.Equal(t, Content{
+		Size: int64(len(frame)), Text: frame[:cut-1], Comment: "truncated by record.http.bodies",
+	}, content, "the rune split by the cap is dropped, not the whole prefix")
 }
 
 func TestHTTPRecorderRecordsConnectTunnel(t *testing.T) {

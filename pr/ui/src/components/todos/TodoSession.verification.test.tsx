@@ -49,6 +49,20 @@ describe('TODO session verification failure', () => {
     expect(onVerification).toHaveBeenCalledOnce();
   });
 
+  it('reads the status of an attempt without a transcript through its admission session', async () => {
+    const admissionOnly: TodoSessionAttempt = { ...attempt, providerSessionId: undefined };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('/api/todos/session/detail')) return Response.json({ attempts: [admissionOnly] });
+      if (url.startsWith('/api/todos/session/stats')) return Response.json({ found: false, inProgress: false, state: 'verification_failed', verification: report });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    render(<TodoSession dir="/repo" active todo={{ ...todo, sessionId: undefined }} />, { wrapper: queryTestWrapper() });
+    expect(await screen.findByText('Verification failed')).toBeTruthy();
+    expect(fetchMock.mock.calls.map(([input]) => String(input))).toContainEqual(expect.stringContaining('sessionId=admission'));
+  });
+
   it.each([
     { state: 'completed', verification: undefined, error: undefined },
     { state: 'error', verification: report, error: 'Agent connection failed' },

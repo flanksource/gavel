@@ -151,7 +151,10 @@ export function TodoSession({
   const attempt = activeLaunch ? launchAttempt : selectAttempt(attempts, sessionId);
   const currentId = activeLaunch ? activeLaunch.promptRunId || PENDING_LAUNCH_ID : attempt?.promptRunId;
   const followedSessionId = activeLaunch ? launchAttempt?.providerSessionId : attempt?.providerSessionId || sessionId;
-  const { stats, state, error: statusError, inProgress, approvals, approve } = useSessionStatus(dir, followedSessionId, active);
+  // An attempt with no transcript still has its admission session, which the
+  // stats endpoint resolves to the run: that is how a verification failure shows.
+  const statusSessionId = followedSessionId || (activeLaunch ? launchAttempt : attempt)?.admissionSessionId;
+  const { stats, state, error: statusError, inProgress, approvals, approve } = useSessionStatus(dir, statusSessionId, active);
   const collection = useMemo(
     () => currentId ? attemptCollection({ todoRef: todo.ref, attempts, currentId, launch: activeLaunch }) : undefined,
     [activeLaunch, attempts, currentId, todo.ref],
@@ -196,7 +199,7 @@ export function TodoSession({
       await setTodoCaches(queryClient, dir, updated);
       onChanged?.(updated);
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: todoQueryKeys.sessionStats(dir, followedSessionId ?? '') }),
+        queryClient.invalidateQueries({ queryKey: todoQueryKeys.sessionStats(dir, statusSessionId ?? '') }),
         queryClient.invalidateQueries({ queryKey: todoQueryKeys.sessionDetail(dir, todo.ref) }),
       ]);
     },

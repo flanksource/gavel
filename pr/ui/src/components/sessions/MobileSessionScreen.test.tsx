@@ -221,13 +221,13 @@ describe('MobileSessionScreen', () => {
     expect(composerDisabledReason()).toBe(UNREADABLE_REASON);
   });
 
-  it('says so, with a way back, when the session is no longer in the recent list', () => {
-    const { onBack } = renderScreen({ sessions: [], sessionId: 'gone' });
+  it('loads a session outside the recent list by id, with a way back', () => {
+    const { onBack } = renderScreen({ sessions: [], sessionId: 'older' });
 
-    expect(screen.getByText('That session is no longer in the recent list')).toBeTruthy();
+    expect(screen.getByTestId('inspector')).toBeTruthy();
+    expect(inspector.props?.src).toContain('older');
     fireEvent.click(screen.getByRole('button', { name: 'Back to sessions' }));
     expect(onBack).toHaveBeenCalledOnce();
-    expect(inspector.props).toBeNull();
   });
 
   it('shows the load error instead of an empty screen', () => {
