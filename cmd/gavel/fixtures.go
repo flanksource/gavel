@@ -360,6 +360,13 @@ func fixturesHelp(cmd *cobra.Command) api.Text {
 		Append("      ", "text-muted").Append("that CA is best-effort. The CA is never installed into a system trust store.").NewLine().
 		Append("    * ", "text-muted").Add(code("requireEntries: N")).Append(" turns \"recorded nothing\" into a red test, which is the only").NewLine().
 		Append("      ", "text-muted").Append("defence against a child that silently failed to trust the CA.").NewLine().
+		Append("    * ", "text-muted").Add(code("paths: [\"/api/*\"]")).Append(" records only exchanges whose URL path matches a glob, so a").NewLine().
+		Append("      ", "text-muted").Append("page's static assets cannot push the calls under test past the 200-request cap.").NewLine().
+		Append("    * ", "text-muted").Append("Each request carries ").Add(code("query")).Append(" (first value per name), ").Add(code("response_size")).Append(" (bytes) and, with").NewLine().
+		Append("      ", "text-muted").Add(code("bodies:")).Append(", its ").Add(code("body")).Append(", ").Add(code("response_body")).Append(" and — for a whole JSON body — ").Add(code("response_json")).Append(".").NewLine().
+		Append("    * ", "text-muted").Append("A ").Add(code("text/event-stream")).Append(" body is teed as it passes, never held back: the recording has").NewLine().
+		Append("      ", "text-muted").Append("every byte that streamed before it was read, e.g.").NewLine().
+		Append("      ", "text-muted").Add(code("regexp.FindAll([r'event: entry', r.response_body]).size() == 5")).Append(".").NewLine().
 		Append("    * ", "text-muted").Append("Sensitive headers (authorization, cookie, set-cookie, x-api-key, …) are blanked").NewLine().
 		Append("      ", "text-muted").Append("in the artifact itself. That denylist cannot be disabled; ").Add(code("redact:")).Append(" extends it.").NewLine().
 		Append("    * ", "text-muted").Add(code("scope: file")).Append(" (default) shares one proxy across the file, so attributing an entry").NewLine().

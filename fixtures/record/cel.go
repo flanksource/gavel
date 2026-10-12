@@ -1,6 +1,8 @@
 package record
 
 import (
+	"encoding/json"
+	"mime"
 	"net/url"
 	"sort"
 	"strconv"
@@ -78,8 +80,28 @@ func requestVars(entry Entry, host, urlPath string) map[string]any {
 		"mime":             entry.Response.Content.MimeType,
 		"request_headers":  headerMap(entry.Request.Headers),
 		"response_headers": headerMap(entry.Response.Headers),
+		"query":            headerMap(entry.Request.QueryString),
+		"body":             "",
 		"tunnelled":        entry.Gavel != nil && entry.Gavel.Tunnelled,
 		"error":            "",
+	}
+	if entry.Request.PostData != nil {
+		vars["body"] = entry.Request.PostData.Text
+	}
+	content := entry.Response.Content
+	vars["response_size"] = content.Size
+	vars["response_body"] = ""
+	if content.Encoding == "" {
+		vars["response_body"] = content.Text
+	}
+	// Only a whole JSON body is parsed: a truncated one is not valid JSON, and
+	// guessing at it would hand CEL a value the server never sent.
+	if mediaType, _, _ := mime.ParseMediaType(content.MimeType); mediaType == "application/json" &&
+		content.Text != "" && content.Encoding == "" && content.Comment == "" {
+		var parsed any
+		if json.Unmarshal([]byte(content.Text), &parsed) == nil {
+			vars["response_json"] = parsed
+		}
 	}
 	if entry.Gavel != nil {
 		vars["error"] = entry.Gavel.Error

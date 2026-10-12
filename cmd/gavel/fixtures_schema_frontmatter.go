@@ -190,10 +190,11 @@ func fixtureRecordHTTPSchema() fixtureJSONSchema {
 			"Points the child at a recording proxy through HTTP_PROXY/HTTPS_PROXY and writes what it sees as a HAR, openable in Chrome DevTools. In the default `connect` mode TLS payloads stay encrypted and each tunnel is recorded as one entry with its host, duration and byte counts; plain HTTP is always recorded in full.",
 			"fixtures --help",
 		),
-		"x-order": []string{"mode", "hosts", "bodies", "redact", "requireEntries", "scope"},
+		"x-order": []string{"mode", "hosts", "paths", "bodies", "redact", "requireEntries", "scope"},
 		"properties": map[string]any{
 			"mode":   withHelpDefault(enumProp("Mode", "How much of the traffic is visible.", []string{"off", "connect", "mitm"}), "connect", "Recording", "`connect` records TLS tunnels without decrypting them. `mitm` terminates TLS with a generated, ephemeral CA — opt-in, because whether a given runtime trusts that CA is best-effort. The CA is never installed into a system trust store.", "fixtures --help", "connect"),
 			"hosts":  withHelp(stringArrayProp("Hosts", "Glob patterns limiting what is recorded. Empty records everything."), "Recording", "Only matching hosts are recorded, and under `mitm` only matching hosts are decrypted.", "fixtures --help", []string{"*.github.com"}),
+			"paths":  withHelp(stringArrayProp("Paths", "URL-path globs limiting which exchanges are recorded. Empty records every path."), "Recording", "Only exchanges whose path matches are recorded; tunnels have no visible path and follow `hosts` alone.", "fixtures --help", []string{"/api/*"}),
 			"bodies": withHelp(stringProp("Bodies", "Cap on captured body size, e.g. 64KiB. Zero in connect mode — a tunnel has no readable body."), "Recording", "How much of each request and response body is written to the HAR. Bodies over the cap are truncated and marked.", "fixtures --help", "64KiB"),
 			"redact": withHelp(stringArrayProp("Redact", "Extra header names to blank out."), "Recording", "Blanked in addition to the built-in denylist (authorization, proxy-authorization, cookie, set-cookie, x-api-key, x-auth-token), which is always applied on disk and cannot be disabled.", "fixtures --help", []string{"x-my-token"}),
 			"requireEntries": withHelp(integerProp("Require entries", "Fail the fixture when fewer than N entries were recorded.", 0, 0), "Recording",

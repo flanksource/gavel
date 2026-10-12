@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"io"
+	"mime"
 	"net/http"
 	"time"
 	"unicode/utf8"
@@ -103,7 +104,8 @@ func exchangeEntry(policy capturePolicy, req *http.Request, resp *http.Response,
 		return entry
 	}
 
-	content, truncated := captureResponseBody(policy, resp)
+	content, truncated, stream := captureResponseBody(policy, resp)
+	entry.stream = stream
 	entry.Response = Response{
 		Status:      resp.StatusCode,
 		StatusText:  http.StatusText(resp.StatusCode),
@@ -122,17 +124,23 @@ func exchangeEntry(policy capturePolicy, req *http.Request, resp *http.Response,
 }
 
 // captureResponseBody reads up to the configured cap and puts back what it
-// read, so the child still receives the whole response.
-func captureResponseBody(policy capturePolicy, resp *http.Response) (Content, bool) {
+// read, so the child still receives the whole response. An event stream is
+// instead teed as it passes (see streamCapture), returned for the entry to keep.
+func captureResponseBody(policy capturePolicy, resp *http.Response) (Content, bool, *streamCapture) {
 	content := Content{Size: resp.ContentLength, MimeType: resp.Header.Get("Content-Type")}
 	if policy.Bodies <= 0 || resp.Body == nil {
-		return content, false
+		return content, false, nil
+	}
+	if mediaType, _, _ := mime.ParseMediaType(content.MimeType); mediaType == "text/event-stream" {
+		capture := &streamCapture{limit: int(policy.Bodies.Or(defaultBodies))}
+		resp.Body = teeStream{ReadCloser: resp.Body, capture: capture}
+		return content, false, capture
 	}
 
 	consumed, keep, truncated, err := readCapped(resp.Body, policy.Bodies.Or(defaultBodies))
 	if err != nil {
 		content.Comment = "body capture failed: " + err.Error()
-		return content, false
+		return content, false, nil
 	}
 	resp.Body = replayBody{Reader: io.MultiReader(bytes.NewReader(consumed), resp.Body), Closer: resp.Body}
 
@@ -140,7 +148,7 @@ func captureResponseBody(policy capturePolicy, resp *http.Response) (Content, bo
 		content.Size = int64(len(consumed))
 	}
 	content.Text, content.Encoding = encodeBody(keep)
-	return content, truncated
+	return content, truncated, nil
 }
 
 // readCapped reads one byte past the cap so it can tell a body that exactly

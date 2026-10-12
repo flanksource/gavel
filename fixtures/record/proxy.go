@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"path"
 	"sort"
 	"strings"
@@ -169,6 +170,23 @@ func (r *HTTPRecorder) records(host string) bool {
 	return false
 }
 
+// recordsExchange reports whether a visible request is in scope: its host
+// under `hosts:` and its path under `paths:` (empty records every path).
+func (r *HTTPRecorder) recordsExchange(target *url.URL) bool {
+	if !r.records(target.Host) {
+		return false
+	}
+	if len(r.opts.Paths) == 0 {
+		return true
+	}
+	for _, pattern := range r.opts.Paths {
+		if ok, _ := path.Match(pattern, target.Path); ok {
+			return true
+		}
+	}
+	return false
+}
+
 // handleConnect accepts every tunnel and, for in-scope hosts, swaps in a dialer
 // whose connection counts its own bytes. Counting this way rather than
 // hijacking the tunnel leaves goproxy's half-close handling — and its careful
@@ -211,7 +229,7 @@ func (r *HTTPRecorder) dial(network, addr string) (net.Conn, error) {
 // ProxyCtx to the response handler, so UserData carries the state across.
 func (r *HTTPRecorder) onRequest(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
 	state := exchangeState{started: time.Now()}
-	if r.opts.Bodies > 0 && req.Body != nil && r.records(req.URL.Host) {
+	if r.opts.Bodies > 0 && req.Body != nil && r.recordsExchange(req.URL) {
 		state.post = capturePostData(req, r.opts.Bodies.Or(defaultBodies))
 	}
 	ctx.UserData = state
@@ -219,7 +237,7 @@ func (r *HTTPRecorder) onRequest(req *http.Request, ctx *goproxy.ProxyCtx) (*htt
 }
 
 func (r *HTTPRecorder) onResponse(resp *http.Response, ctx *goproxy.ProxyCtx) *http.Response {
-	if ctx.Req == nil || !r.records(ctx.Req.URL.Host) {
+	if ctx.Req == nil || !r.recordsExchange(ctx.Req.URL) {
 		return resp
 	}
 	state, ok := ctx.UserData.(exchangeState)
@@ -259,6 +277,7 @@ func (r *HTTPRecorder) Entries() []Entry {
 	r.mu.Lock()
 	entries := append([]Entry(nil), r.entries...)
 	r.mu.Unlock()
+	materializeStreams(entries)
 
 	sort.SliceStable(entries, func(i, j int) bool { return entries[i].started.Before(entries[j].started) })
 	return entries

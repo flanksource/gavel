@@ -54,6 +54,9 @@ type Entry struct {
 	// started is the wall clock of the request, kept unformatted so entries can
 	// be attributed to a fixture by time slice without reparsing the string.
 	started time.Time
+	// stream is set for an event-stream response, whose content is filled
+	// from what has streamed so far each time the entries are read.
+	stream *streamCapture
 }
 
 // Extras are gavel's own annotations on an entry.

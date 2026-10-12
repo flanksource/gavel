@@ -89,6 +89,10 @@ type ANSIOptions struct {
 type HTTPOptions struct {
 	Mode  HTTPMode `yaml:"mode,omitempty" json:"mode,omitempty"`
 	Hosts []string `yaml:"hosts,omitempty" json:"hosts,omitempty"`
+	// Paths are URL-path globs (path.Match) limiting which exchanges are
+	// recorded; empty records every path. Tunnels have no visible path, so they
+	// are recorded on Hosts alone.
+	Paths []string `yaml:"paths,omitempty" json:"paths,omitempty"`
 	// Bodies caps how much of each request/response body is written to the HAR.
 	// Zero in connect mode: there are no bodies to capture through a tunnel.
 	Bodies Size `yaml:"bodies,omitempty" json:"bodies,omitempty"`

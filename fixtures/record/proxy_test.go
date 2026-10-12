@@ -145,6 +145,97 @@ func TestHTTPRecorderHostsFilter(t *testing.T) {
 	assert.Empty(t, recorder.Entries(), "an out-of-scope host must still be proxied but not recorded")
 }
 
+func TestHTTPRecorderPathsFilter(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
+	defer upstream.Close()
+
+	recorder := startRecorder(t, HTTPOptions{Paths: []string{"/api/*"}})
+
+	client := proxyClient(t, recorder)
+	for _, path := range []string{"/src/index.tsx", "/api/status", "/api/sessions/s1"} {
+		resp, err := client.Get(upstream.URL + path)
+		require.NoError(t, err)
+		require.NoError(t, resp.Body.Close())
+	}
+
+	var recorded []string
+	for _, entry := range recorder.Entries() {
+		recorded = append(recorded, strings.TrimPrefix(entry.Request.URL, upstream.URL))
+	}
+	assert.Equal(t, []string{"/api/status"}, recorded, "out-of-scope paths are proxied but not recorded")
+}
+
+// An event stream never ends while the page is open, so capturing its body
+// would hold every frame back from the child until the cap filled.
+// eventStream serves one frame, waits for release, serves a second and ends —
+// a stream whose page is open, then closes.
+func eventStream(t *testing.T, first, second string) (*httptest.Server, chan struct{}) {
+	t.Helper()
+	release := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, first)
+		w.(http.Flusher).Flush()
+		<-release
+		_, _ = io.WriteString(w, second)
+	}))
+	t.Cleanup(upstream.Close)
+	return upstream, release
+}
+
+// An event stream never ends while its page is open, so it cannot be read
+// ahead like a finite body: each frame reaches the child as it arrives, and the
+// recording holds whatever has passed when it is read.
+func TestHTTPRecorderCapturesEventStreamsAsTheyPass(t *testing.T) {
+	const first, second = "event: entry\ndata: {\"id\":\"a\"}\n\n", "event: entry\ndata: {\"id\":\"b\"}\n\n"
+	upstream, release := eventStream(t, first, second)
+	recorder := startRecorder(t, HTTPOptions{Bodies: 64 * 1024})
+
+	resp, err := proxyClient(t, recorder).Get(upstream.URL + "/stream")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	frame := make([]byte, len(first))
+	_, err = io.ReadFull(resp.Body, frame)
+	require.NoError(t, err, "the first frame must reach the client while the stream is open")
+	assert.Equal(t, first, string(frame))
+
+	require.Len(t, recorder.Entries(), 1)
+	assert.Equal(t, Content{
+		Size: int64(len(first)), MimeType: "text/event-stream", Text: first,
+		Comment: "event stream still open when recorded",
+	}, recorder.Entries()[0].Response.Content)
+
+	close(release)
+	rest, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Equal(t, second, string(rest))
+	require.Eventually(t, func() bool {
+		return recorder.Entries()[0].Response.Content.Comment == ""
+	}, 5*time.Second, 20*time.Millisecond, "the stream's end finalizes the entry")
+	assert.Equal(t, Content{Size: int64(len(first + second)), MimeType: "text/event-stream", Text: first + second},
+		recorder.Entries()[0].Response.Content)
+}
+
+func TestHTTPRecorderCapsEventStreamTextButCountsEveryByte(t *testing.T) {
+	const first, second = "event: entry\ndata: 1\n\n", "event: entry\ndata: 2\n\n"
+	upstream, release := eventStream(t, first, second)
+	recorder := startRecorder(t, HTTPOptions{Bodies: 16})
+
+	resp, err := proxyClient(t, recorder).Get(upstream.URL + "/stream")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	close(release)
+	_, err = io.ReadAll(resp.Body)
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		return recorder.Entries()[0].Response.Content.Size == int64(len(first+second))
+	}, 5*time.Second, 20*time.Millisecond)
+	content := recorder.Entries()[0].Response.Content
+	assert.Equal(t, (first + second)[:16], content.Text)
+	assert.Equal(t, "truncated by record.http.bodies", content.Comment)
+}
+
 func TestHTTPRecorderRecordsConnectTunnel(t *testing.T) {
 	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, "over tls")
