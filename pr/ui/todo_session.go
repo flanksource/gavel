@@ -22,6 +22,7 @@ import (
 type captainSessionStore interface {
 	GetSessionByIdentity(context.Context, string, string, string, string) (*captaindb.Session, error)
 	ListPromptRuns(context.Context, captaindb.PromptRunFilter) ([]captaindb.PromptRun, error)
+	LatestPromptRunVerification(context.Context, uuid.UUID) (*api.VerifyReport, int, error)
 	// GetTranscriptSessionByIdentity is Captain's own sibling hop: one provider
 	// session id names both the admission root and the row the transcript was
 	// ingested into, and only Captain can say which. Gavel used to pick between

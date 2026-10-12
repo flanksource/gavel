@@ -15,6 +15,7 @@ import (
 // can assert that the transcript hop is delegated to Captain rather than
 // re-derived here from a list of candidate rows.
 type recordingSessionStore struct {
+	fakeCaptainSessionStore
 	run           *captaindb.Session
 	transcript    *captaindb.Session
 	transcriptErr error

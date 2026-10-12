@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	captools "github.com/flanksource/captain/pkg/ai/tools"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/types"
 	. "github.com/onsi/ginkgo/v2"
@@ -97,6 +98,24 @@ var _ = Describe("Triage new review", func() {
 		cancel()
 		Expect(review.Apply(ctx, provider.items["source"], &proposal.Result)).To(HaveOccurred())
 		Expect(provider.applied).To(BeZero())
+	})
+	// The reflected envelope schemas are `{"$ref": "#/$defs/…"}` documents; the
+	// Anthropic API rejected the run when one reached it without a root object.
+	It("offers every tool to the model as a self-contained object schema", func() {
+		definitions, err := captools.ResolveDefinitions(review.Tools(), captools.ResolveOptions{})
+		Expect(err).NotTo(HaveOccurred())
+		properties := map[string][]string{}
+		for _, definition := range definitions {
+			Expect(definition.InputSchema).To(HaveKeyWithValue("type", "object"), definition.Name)
+			raw, err := json.Marshal(definition.InputSchema)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(string(raw)).NotTo(ContainSubstring(`"$ref"`), definition.Name)
+			for name := range definition.InputSchema["properties"].(map[string]any) {
+				properties[definition.Name] = append(properties[definition.Name], name)
+			}
+		}
+		Expect(properties).To(HaveKeyWithValue("triage_prepare", ContainElements("summary", "endStatus", "title", "labels", "action")))
+		Expect(properties).To(HaveKeyWithValue("triage_review", ContainElements("result", "sourceId", "targetId")))
 	})
 })
 

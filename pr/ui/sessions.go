@@ -73,7 +73,7 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusServiceUnavailable, "captain session store unavailable: no configured project has a native todo provider")
 		return
 	}
-	page, err := captain.ListSessionSummaries(r.Context(), captaindb.SessionListFilter{ExcludeSubagents: true, Limit: sessionSummaryScan})
+	page, err := captain.ListSessionSummaries(r.Context(), captaindb.SessionListFilter{ExcludeSubagents: true, ExcludeInactiveEmpty: true, Limit: sessionSummaryScan})
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err.Error())
 		return

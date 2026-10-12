@@ -32,7 +32,11 @@ var _ = Describe("GET /api/sessions", func() {
 		DeferCleanup(func() { openTodoProvider = previous })
 
 		_, err = provider.Captain().CreateOrGetSession(ctx, captaindb.CreateSessionInput{
-			ID: uuid.New(), Source: "claude", Provider: "anthropic", CWD: f.worktree, Title: "Add b",
+			ID: uuid.New(), Source: "claude", Provider: "anthropic", CWD: f.worktree, Title: "Add b", InitialPrompt: "Add b to the example",
+		})
+		Expect(err).NotTo(HaveOccurred())
+		_, err = provider.Captain().CreateOrGetSession(ctx, captaindb.CreateSessionInput{
+			ID: uuid.New(), Source: "claude", Provider: "anthropic", CWD: f.worktree, Title: "Metadata only",
 		})
 		Expect(err).NotTo(HaveOccurred())
 	})
@@ -57,6 +61,7 @@ var _ = Describe("GET /api/sessions", func() {
 		Expect(response.Errors).To(BeEmpty())
 		Expect(response.Sessions).To(HaveLen(1))
 		row := response.Sessions[0]
+		Expect(row.Title).To(Equal("Add b"))
 		Expect(row.Project).To(Equal("acme"))
 		Expect(row.Worktree).To(Equal(&sessionWorktree{Path: f.worktree, Branch: pgFeature, Base: "main"}))
 		Expect(row.Git).To(Equal(&sessionGit{
