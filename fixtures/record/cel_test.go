@@ -98,3 +98,44 @@ func TestHeaderMapKeepsFirstValueOfRepeatedHeader(t *testing.T) {
 
 	assert.Equal(t, map[string]string{"Set-Cookie": "a=1", "Content-Type": "text/plain"}, got)
 }
+
+// A fixture asserting on how a client pages an API needs the query it sent and,
+// for a POST, the body: both are on the HAR entry, so CEL sees them too.
+func TestHTTPCELVarsExposeQueryAndBody(t *testing.T) {
+	get := exchange(http.MethodGet, "http://api.example.com/sessions/s1?tail=50&tail=60&follow=1", 200, "application/json")
+	get.Request.QueryString = []NameValue{{Name: "tail", Value: "50"}, {Name: "tail", Value: "60"}, {Name: "follow", Value: "1"}}
+	post := exchange(http.MethodPost, "http://api.example.com/events/c1/subs", 204, "")
+	post.Request.PostData = &PostData{MimeType: "application/json", Text: `{"id":"s1","path":"/sessions/s1?follow=1"}`}
+
+	requests := HTTPCELVars([]Entry{get, post}, "")["requests"].([]map[string]any)
+
+	assert.Equal(t, map[string]string{"tail": "50", "follow": "1"}, requests[0]["query"])
+	assert.Equal(t, "", requests[0]["body"])
+	assert.Equal(t, map[string]string{}, requests[1]["query"])
+	assert.Equal(t, `{"id":"s1","path":"/sessions/s1?follow=1"}`, requests[1]["body"])
+}
+
+// What came back is half of what a paging assertion needs: how many bytes, and
+// for a captured JSON body, its parsed value — `r.response_json.messages.size()`.
+func TestHTTPCELVarsExposeTheResponse(t *testing.T) {
+	page := exchange(http.MethodGet, "http://api.example.com/sessions/s1?tail=2", 200, "application/json; charset=utf-8")
+	page.Response.Content.Size = 42
+	page.Response.Content.Text = `{"messages":[{"id":"m1"},{"id":"m2"}]}`
+	stream := exchange(http.MethodGet, "http://api.example.com/events", 200, "text/event-stream")
+	stream.Response.Content.Size = 900
+	stream.Response.Content.Text = "event: s1/entry\ndata: {}\n\n"
+	cut := exchange(http.MethodGet, "http://api.example.com/sessions/s1", 200, "application/json")
+	cut.Response.Content.Size = 70000
+	cut.Response.Content.Text = `{"messages":[`
+	cut.Response.Content.Comment = "truncated by record.http.bodies"
+
+	requests := HTTPCELVars([]Entry{page, stream, cut}, "")["requests"].([]map[string]any)
+
+	assert.Equal(t, int64(42), requests[0]["response_size"])
+	assert.Equal(t, map[string]any{"messages": []any{map[string]any{"id": "m1"}, map[string]any{"id": "m2"}}}, requests[0]["response_json"])
+	assert.Equal(t, int64(900), requests[1]["response_size"])
+	assert.Equal(t, "event: s1/entry\ndata: {}\n\n", requests[1]["response_body"])
+	assert.NotContains(t, requests[1], "response_json", "only a JSON body is parsed")
+	assert.NotContains(t, requests[2], "response_json", "a truncated body is not valid JSON and is not guessed at")
+	assert.Equal(t, int64(70000), requests[2]["response_size"])
+}

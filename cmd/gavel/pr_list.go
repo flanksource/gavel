@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	captaincli "github.com/flanksource/captain/pkg/cli"
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/commons/logger"
@@ -276,6 +277,10 @@ func runPRUI(opts PRListOptions, databaseMode serveDatabaseMode) error {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	// The dashboard mounts captain's SessionHandler, whose message route starts
+	// chat runs in this process: prune them, and stop them when the server exits.
+	stopSessionHost := captaincli.StartSessionHost(ctx)
+	defer stopSessionHost()
 	runtime, err := startServeRuntime(ctx, defaultServeRuntimeDependencies, databaseMode)
 	if err != nil {
 		return err

@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import type { PRItem, PRDetail, PRInfo, SearchConfig, PRSyncStatus, GavelResultsSummary, Project } from './types';
+import type { PRItem, PRDetail, PRInfo, SearchConfig, Project } from './types';
 import { PRList } from './components/PRList';
 import { PRDetailPanel } from './components/PRDetail';
 import { FilterBar, emptyFilters, type Filters } from './components/FilterBar';
@@ -12,20 +12,17 @@ import { useWorkspaceTodos } from './components/todos/useWorkspaceTodos';
 import { PlanReviewBar, TodoReviewButton, useReviewMode } from './components/todos/PlanReview';
 import { CreateTodoDialog } from './components/todos/CreateTodoDialog';
 import { TodoNewPage } from './components/todos/TodoNewPage';
-import { MenubarTodos } from './components/MenubarTodos';
 import { StatusIndicator } from './components/StatusIndicator';
 import { OrgChooser } from './components/OrgChooser';
 import { AddProjectDialog } from './components/AddProjectDialog';
 import { SettingsPage, type SettingsScope } from './components/settings/SettingsPage';
 import { ProjectDetailPane, ProjectsSidebar } from './components/ProjectsView';
 import { ProcessManager } from './components/ProcessManager';
-import { ProjectsPlaceholder } from './components/ProjectsPlaceholder';
 import { ThemeToggle } from './components/ThemeToggle';
 import { ReactGrabHelp } from './components/ReactGrabHelp';
 import { CommandPalette, SearchTrigger } from './components/CommandPalette';
 import { flattenTodos, type TodoEntry } from './components/todos/todoGroup';
-import { WorkspaceGroup } from './components/ProcessTable';
-import { aggregateDotClass, aggregateGavelShards, computeCounts, collectRepos, collectAuthors, filterPRs, flattenProcesses, prKey, emptyProcStatus } from './utils';
+import { aggregateGavelShards, computeCounts, collectRepos, collectAuthors, filterPRs, prKey } from './utils';
 import { useCopyFeedback } from './useCopyFeedback';
 import {
   annotateRoutePaths,
@@ -37,18 +34,19 @@ import {
   type TodoDetailView,
 } from './routes';
 import { copyCurrentViewForAgent, downloadCurrentView } from './export';
-import { copyText } from './clipboard';
 import { loadUIState, saveUIState, filtersFromStored } from './storage';
 import { useDocumentVisible } from './useDocumentVisible';
 import { useProjectGitSummary } from './projectGitQueries';
 import { useProjectCatalog } from './useProjectCatalog';
 import { useAppQueries } from './useAppQueries';
-import { useProcStatus } from './procStatusQuery';
 import { useAppMutations } from './useAppMutations';
 import { usePRDetailStream } from './usePRDetailStream';
 import { useIsMobile } from './useIsMobile';
-import { UiActivity, UiArrowLeft, UiCheck, UiClose, UiCog, UiCopy, UiFolderGit, UiGitPr, UiJson, UiLink, UiListChecks, UiMarkdown, UiRobotAi, UiTerminal } from '@flanksource/clicky-ui/icons';
+import { UiActivity, UiCheck, UiCog, UiCopy, UiFolderGit, UiGitPr, UiJson, UiListChecks, UiMarkdown, UiRobotAi, UiTerminal } from '@flanksource/clicky-ui/icons';
 import { SessionsDetailPane, SessionsSidebar } from './components/sessions/SessionsView';
+import { MenubarView } from './components/mobile/MenubarView';
+import { ProcessesPage } from './components/ProcessesPage';
+import { mobileTabFromRoute, routeTabFromMobile, type MobileTab } from './mobileTabs';
 import { useAgentSessions } from './components/sessions/sessionQueries';
 import { worktreeRef } from './projectRef';
 import { PromptsView } from './components/prompts/PromptsView';
@@ -63,48 +61,6 @@ const defaultConfig: SearchConfig = { repos: [] };
 // repo, checks and badges so it wants half the body; a project is just a name and
 // a run list, so its list is narrow.
 const bodySplitByTab: Partial<Record<Tab, number>> = { prs: 50, projects: 22, todos: 38, sessions: 32 };
-
-type WebKitExternalBridge = {
-  webkit?: {
-    messageHandlers?: {
-      external?: {
-        postMessage: (message: string) => void;
-      };
-    };
-  };
-};
-
-const menubarOpenExternalMessage = 'gavel:open-external';
-const menubarPointerEnterMessage = 'gavel:pointer-enter';
-const menubarPointerLeaveMessage = 'gavel:pointer-leave';
-
-function postMenubarMessage(type: string, payload: Record<string, unknown> = {}) {
-  const bridge = (window as WebKitExternalBridge).webkit?.messageHandlers?.external;
-  if (!bridge) return false;
-  bridge.postMessage(JSON.stringify({ type, ...payload }));
-  return true;
-}
-
-function useMenubarExternalLinks() {
-  useEffect(() => {
-    const onClick = (event: MouseEvent) => {
-      if (event.defaultPrevented || event.button !== 0) return;
-      const target = event.target;
-      if (!(target instanceof Element)) return;
-      const anchor = target.closest('a[href]');
-      if (!(anchor instanceof HTMLAnchorElement) || !anchor.href || anchor.hasAttribute('data-app-link')) return;
-
-      if (!postMenubarMessage(menubarOpenExternalMessage, { url: anchor.href })) return;
-
-      event.preventDefault();
-      event.stopPropagation();
-      event.stopImmediatePropagation();
-    };
-
-    document.addEventListener('click', onClick, true);
-    return () => document.removeEventListener('click', onClick, true);
-  }, []);
-}
 
 function prFromRoutePath(path: string): PRItem | null {
   const parts = path.split('/').filter(Boolean);
@@ -171,6 +127,8 @@ export function App() {
   const [projectRef, setProjectRef] = useState(initialRoute.projectRef);
   const [todoView, setTodoView] = useState(initialRoute.todoView);
   const [activeTab, setActiveTab] = useState<Tab>(initialRoute.tab);
+  const [menubarTab, setMenubarTab] = useState<MobileTab>('prs');
+  const [menubarSessionId, setMenubarSessionId] = useState('');
   const [paletteOpen, setPaletteOpen] = useState(false);
   const { copyState, copyError, beginCopy, resetCopyFeedback } = useCopyFeedback({ copiedMs: 2500, errorMs: 2500 });
   const [addOpen, setAddOpen] = useState(false);
@@ -596,7 +554,24 @@ export function App() {
   // The git work summary shown on every project row refreshes slowly and only
   // matters while the Projects tab is on screen.
   const projectGitSummary = useProjectGitSummary({ enabled: activeTab === 'projects' && visible });
-  const agentSessions = useAgentSessions({ enabled: activeTab === 'sessions' && visible });
+  // The compact layout (mobile or the native menubar) keeps its tab and open
+  // session in the URL on mobile, and in local state in the menubar webview,
+  // which must stay on /menubar.
+  const mobileTab: MobileTab = isMenubar ? menubarTab : mobileTabFromRoute(activeTab);
+  const mobileSessionId = isMenubar ? menubarSessionId : activeTab === 'sessions' ? selectedPath : '';
+  const changeMobileTab = useCallback((next: MobileTab) => {
+    if (isMenubar) {
+      setMenubarTab(next);
+      setMenubarSessionId('');
+    } else changeTab(routeTabFromMobile(next));
+  }, [changeTab, isMenubar]);
+  const openMobileSession = useCallback((id: string) => {
+    if (isMenubar) setMenubarSessionId(id);
+    else navigateSession(id);
+  }, [isMenubar, navigateSession]);
+  const agentSessions = useAgentSessions({
+    enabled: (useMenubarLayout ? mobileTab === 'sessions' : activeTab === 'sessions') && streamsActive,
+  });
   function selectPRFromPalette(pr: PRItem) {
     commitRoute({ tab: 'prs', selectedPath: pr.route_path || `${pr.repo}/${pr.number}`, scopeProject, projectDiffPath: '', projectRunId: '', projectHistory: false, projectResults: false, projectRef: '', todoView: {}, filters });
     loadPR(pr);
@@ -633,6 +608,12 @@ export function App() {
         onProcChanged={onProcChanged}
         fetchedAt={fetchedAt}
         error={error}
+        tab={mobileTab}
+        onTabChange={changeMobileTab}
+        sessions={agentSessions}
+        sessionId={mobileSessionId}
+        onSessionChange={openMobileSession}
+        chatEnabled={!isMenubar}
       />
     );
   }
@@ -826,325 +807,6 @@ export function App() {
         />
       )}
     </>
-  );
-}
-
-function ProcessesPage({
-  projects,
-  projectsLoaded,
-  projectError,
-  onProcChanged,
-}: {
-  projects: Project[];
-  projectsLoaded: boolean;
-  projectError?: string;
-  onProcChanged: () => void;
-}) {
-  const procStatus = useProcStatus();
-  const workspaces = useMemo(
-    () => projects.map(p => ({ project: p, status: procStatus[p.name] ?? emptyProcStatus })),
-    [projects, procStatus],
-  );
-  const procs = useMemo(() => flattenProcesses(projects, procStatus), [projects, procStatus]);
-  const running = procs.filter(p => p.proc.status === 'running').length;
-  const dot = aggregateDotClass(procs.map(p => p.proc));
-
-  return (
-    <div className="min-h-screen bg-background text-foreground">
-      <header className="flex items-center justify-between border-b border-border px-4 py-3">
-        <div className="flex min-w-0 items-center gap-3">
-          <img src="/brand/gavel-logo.svg" alt="gavel" className="h-7 shrink-0" />
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <span className={`inline-block h-2.5 w-2.5 rounded-full ${dot}`} />
-              <span className="text-sm font-semibold">Processes</span>
-            </div>
-            <div className="text-xs text-muted-foreground">{running} running of {procs.length}</div>
-          </div>
-        </div>
-        <a
-          href="/prs"
-          className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
-          title="Back to PR dashboard"
-          aria-label="Back to PR dashboard"
-        >
-          <UiClose className="text-base" />
-        </a>
-      </header>
-
-      <main className="mx-auto w-full max-w-6xl px-4 py-4">
-        {workspaces.length > 0 ? (
-          <div className="divide-y divide-border border-y border-border">
-            {workspaces.map(w => (
-              <WorkspaceGroup key={w.project.name} project={w.project} status={w.status} onChanged={onProcChanged} />
-            ))}
-          </div>
-        ) : (
-          <ProjectsPlaceholder
-            loaded={projectsLoaded}
-            error={projectError}
-            emptyText="No projects configured"
-            className="py-10 text-center text-sm text-muted-foreground"
-          />
-        )}
-      </main>
-    </div>
-  );
-}
-
-// CopyLinkButton copies a PR's URL to the clipboard. It uses copyText so it
-// works inside the native menu-bar WKWebView, where navigator.clipboard is
-// denied and the async Clipboard API silently fails.
-function CopyLinkButton({ url }: { url: string }) {
-  const { copyState, beginCopy, resetCopyFeedback } = useCopyFeedback();
-  const copied = copyState === 'copied';
-  const errored = copyState === 'error';
-
-  async function onCopy() {
-    beginCopy();
-    try {
-      await copyText(url);
-      resetCopyFeedback('copied');
-    } catch {
-      resetCopyFeedback('error');
-    }
-  }
-
-  return (
-    <Button
-      variant="ghost"
-      size="icon"
-      type="button"
-      onClick={onCopy}
-      className={`h-8 w-8 rounded-md hover:bg-muted hover:text-foreground ${copied ? 'text-green-600' : errored ? 'text-red-600' : 'text-muted-foreground'}`}
-      title={copied ? 'Link copied' : errored ? 'Copy failed' : 'Copy link to this PR'}
-      aria-label="Copy link to this PR"
-    >
-      {copied ? <UiCheck className="text-base" /> : <UiLink className="text-base" />}
-    </Button>
-  );
-}
-
-function MenubarView({
-  prs,
-  selected,
-  detail,
-  detailLoading,
-  unread,
-  config,
-  projects,
-  availableProjects,
-  projectsLoaded,
-  projectError,
-  projectsByRepo,
-  syncStatus,
-  gavelResults,
-  onSelect,
-  onBack,
-  onScopeChange,
-  onProcChanged,
-  fetchedAt,
-  error,
-}: {
-  prs: PRItem[];
-  selected: PRItem | null;
-  detail: PRDetail | null;
-  detailLoading: boolean;
-  unread: Record<string, boolean>;
-  config: SearchConfig;
-  projects: Project[];
-  availableProjects: Project[];
-  projectsLoaded: boolean;
-  projectError?: string;
-  projectsByRepo: Record<string, Project>;
-  syncStatus: Record<string, PRSyncStatus>;
-  gavelResults: Record<string, GavelResultsSummary>;
-  onSelect: (pr: PRItem) => void;
-  onBack: () => void;
-  onScopeChange: (partial: Partial<SearchConfig>) => void;
-  onProcChanged: () => void;
-  fetchedAt: string;
-  error?: string;
-}) {
-  useMenubarExternalLinks();
-  const [menubarTab, setMenubarTab] = useState<'processes' | 'prs' | 'todos'>('prs');
-  const procStatus = useProcStatus();
-
-  const workspaces = useMemo(
-    () => projects.map(p => ({ project: p, status: procStatus[p.name] ?? emptyProcStatus })),
-    [projects, procStatus],
-  );
-  const procs = useMemo(() => flattenProcesses(projects, procStatus), [projects, procStatus]);
-  const running = procs.filter(p => p.proc.status === 'running').length;
-  const dot = aggregateDotClass(procs.map(p => p.proc));
-  const failed = prs.filter(pr => pr.checkStatus?.failed && pr.checkStatus.failed > 0).length;
-  // Tab count/badge come from the projects poll's per-workspace todoCounts, so
-  // the strip reflects todos without fetching the lists until the tab is opened.
-  const openTodos = projects.reduce((n, p) => n + (p.todoCounts?.open ?? 0), 0);
-  const failedTodos = projects.reduce((n, p) => n + (p.todoCounts?.failed ?? 0), 0);
-  const unreadCount = prs.filter(pr => unread[prKey(pr)]).length;
-  const fetched = fetchedAt ? new Date(fetchedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
-
-  if (selected) {
-    return (
-      <div
-        className="h-screen overflow-hidden bg-background text-foreground"
-        onPointerEnter={() => postMenubarMessage(menubarPointerEnterMessage)}
-        onPointerLeave={() => postMenubarMessage(menubarPointerLeaveMessage)}
-      >
-        <div className="flex h-11 items-center justify-between border-b border-border px-2">
-          <div className="flex min-w-0 items-center gap-2">
-            <Button
-              variant="ghost"
-              size="icon"
-              type="button"
-              onClick={onBack}
-              className="h-8 w-8 rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
-              title="Back to pull requests"
-              aria-label="Back to pull requests"
-            >
-              <UiArrowLeft className="text-base" />
-            </Button>
-            <div className="min-w-0">
-              <div className="truncate text-sm font-semibold">{selected.repo}#{selected.number}</div>
-              <div className="truncate text-[11px] text-muted-foreground">{selected.title}</div>
-            </div>
-          </div>
-          <div className="flex shrink-0 items-center gap-1">
-            <CopyLinkButton url={selected.url} />
-            <div className="text-[11px] text-muted-foreground tabular-nums">{error || fetched}</div>
-          </div>
-        </div>
-        <div className="h-[calc(100vh-2.75rem)] overflow-hidden">
-          <PRDetailPanel pr={selected} detail={detail} loading={detailLoading} projects={projects} onActionDone={() => { if (selected) onSelect(selected); }} />
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div
-      className="flex h-screen flex-col overflow-hidden bg-background text-foreground"
-      onPointerEnter={() => postMenubarMessage(menubarPointerEnterMessage)}
-      onPointerLeave={() => postMenubarMessage(menubarPointerLeaveMessage)}
-    >
-      <div className="flex shrink-0 items-center justify-between border-b border-border px-3 py-2">
-        <div className="flex items-center gap-2 min-w-0">
-          <span className={`inline-block h-2.5 w-2.5 rounded-full ${dot}`} />
-          <div className="min-w-0">
-            <div className="text-sm font-semibold leading-tight">Gavel</div>
-            <div className="truncate text-[11px] text-muted-foreground">
-              {running}/{procs.length} processes
-              {failed > 0 ? ` · ${failed} failing` : ''}
-              {unreadCount > 0 ? ` · ${unreadCount} unread` : ''}
-            </div>
-          </div>
-        </div>
-        {/* A failed project load is otherwise invisible in the menubar: every tab
-            just renders empty. Surface it here, ahead of the PR poll's clock. */}
-        <div className="flex min-w-0 items-center justify-end gap-2">
-          <div className="min-w-0 max-w-40">
-            <OrgChooser config={config} projects={availableProjects} onChange={onScopeChange} />
-          </div>
-          {projectError ? (
-            <div role="alert" className="max-w-32 truncate text-[11px] text-destructive">{projectError}</div>
-          ) : (
-            <div className="shrink-0 text-[11px] text-muted-foreground tabular-nums">{error || fetched}</div>
-          )}
-        </div>
-      </div>
-
-      <div className="flex shrink-0 items-center gap-1 border-b border-border px-2 py-1">
-        <MenubarTab
-          label="Processes"
-          dot={dot}
-          count={`${running}/${procs.length}`}
-          active={menubarTab === 'processes'}
-          onClick={() => setMenubarTab('processes')}
-        />
-        <MenubarTab
-          label="PRs"
-          icon={UiGitPr}
-          count={prs.length}
-          badge={failed > 0 ? failed : undefined}
-          active={menubarTab === 'prs'}
-          onClick={() => setMenubarTab('prs')}
-        />
-        <MenubarTab
-          label="Todos"
-          icon={UiCheck}
-          count={openTodos}
-          badge={failedTodos > 0 ? failedTodos : undefined}
-          active={menubarTab === 'todos'}
-          onClick={() => setMenubarTab('todos')}
-        />
-      </div>
-
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        {menubarTab === 'processes' ? (
-          workspaces.length > 0 ? (
-            <div className="divide-y divide-border p-2">
-              {workspaces.map(w => (
-                <WorkspaceGroup key={w.project.name} project={w.project} status={w.status} onChanged={onProcChanged} />
-              ))}
-            </div>
-          ) : (
-            <ProjectsPlaceholder
-              loaded={projectsLoaded}
-              error={projectError}
-              emptyText="No projects configured"
-              className="px-3 py-6 text-center text-xs text-muted-foreground"
-            />
-          )
-        ) : menubarTab === 'todos' ? (
-          <MenubarTodos projects={projects} projectsLoaded={projectsLoaded} projectError={projectError} />
-        ) : (
-          <PRList
-            prs={prs}
-            selected={selected}
-            onSelect={onSelect}
-            unread={unread}
-            syncStatus={syncStatus}
-            gavelResults={gavelResults}
-            projectsByRepo={projectsByRepo}
-            onProcChanged={onProcChanged}
-          />
-        )}
-      </div>
-    </div>
-  );
-}
-
-// MenubarTab is one segment of the menubar's Processes/PRs switcher. A status
-// dot (process health) or an icon leads the label; count is the inline subtotal
-// and badge is an attention-grabbing count (e.g. failing PRs).
-function MenubarTab({ label, icon: Icon, dot, count, badge, active, onClick }: {
-  label: string;
-  icon?: ComponentType<IconProps>;
-  dot?: string;
-  count?: number | string;
-  badge?: number;
-  active: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <Button
-      variant="ghost"
-      type="button"
-      onClick={onClick}
-      className={`flex items-center gap-1.5 rounded-md px-2 py-1 text-xs transition h-auto justify-start ${
-        active ? 'bg-primary/10 text-primary font-medium' : 'text-muted-foreground hover:bg-muted'
-      }`}
-    >
-      {dot ? <span className={`inline-block h-2 w-2 rounded-full ${dot}`} /> : Icon ? <Icon /> : null}
-      <span>{label}</span>
-      {count !== undefined && count !== '' && (
-        <span className="tabular-nums text-[10px] text-muted-foreground">{count}</span>
-      )}
-      {badge !== undefined && badge > 0 && (
-        <span className="rounded-full bg-red-500/15 px-1 text-[10px] font-medium tabular-nums text-red-600 dark:text-red-400">{badge}</span>
-      )}
-    </Button>
   );
 }
 

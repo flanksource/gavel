@@ -29,12 +29,11 @@ export interface SessionStats {
   costUsd: number;
   inProgress: boolean;
   found: boolean;
-  // High-level agent state from the latest session-log event: thinking | working
-  // | ask | completed | error. 'approval' is set when a tool-permission request
-  // is pending (see approval). Empty before the first event.
-  state?: 'thinking' | 'working' | 'ask' | 'approval' | 'completed' | 'error';
-  // API/network failure reason when state === 'error' (the "API Error: …" message).
+  // Agent activity, pending approval, or the terminal runtime/verification state.
+  state?: 'thinking' | 'working' | 'ask' | 'approval' | 'completed' | 'error' | 'verification_failed';
+  // Operational failure reason when state === 'error'.
   error?: string;
+  verification?: VerifyReport;
   // Pending tool-permission requests awaiting the user's approve/deny/respond.
   // Non-empty (and state === 'approval') only while a driver is blocked on at
   // least one. Also served standalone by GET /api/todos/session/approvals.
