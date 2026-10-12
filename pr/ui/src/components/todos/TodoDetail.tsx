@@ -367,6 +367,7 @@ export function TodoDetail(props: TodoDetailProps) {
             active={tab === 'session'}
             todo={todo}
             onChanged={onChanged}
+            onVerification={() => setTab('verification')}
             onResume={() => runTodo({ ...defaultRunOptions, resume: true })}
             resumeDisabled={busy || runBusy || sessionInProgress || viewingHistoricalSession}
             onRun={runTodo}

@@ -1,9 +1,11 @@
 import { useMemo } from 'react';
 import { UiRobotAi } from '@flanksource/clicky-ui/icons';
+import { SessionInspector } from '@flanksource/clicky-ui/ai';
 import type { AgentSessionsResponse } from '../../types';
 import { Spinner } from '../../icons/Spinner';
 import { SessionDetail, type SessionDetailProps } from './SessionDetail';
 import { SessionList } from './SessionList';
+import { captainSessionUrl } from '../todos/TodoSessionDetail';
 
 export interface SessionsQueryView {
   data: AgentSessionsResponse | undefined;
@@ -54,15 +56,16 @@ export function SessionsDetailPane({ query, selectedId, ...actions }: {
   selectedId: string;
 } & Omit<SessionDetailProps, 'session'>) {
   const session = query.data?.sessions.find(candidate => candidate.id === selectedId);
-  if (!session) {
-    return (
-      <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-        <div className="text-center">
-          <UiRobotAi className="mb-2 text-4xl" />
-          <p>{selectedId && query.data ? 'That session is no longer in the recent list' : 'Select a session to view details'}</p>
-        </div>
-      </div>
-    );
+  if (session) return <SessionDetail key={session.id} session={session} {...actions} />;
+  if (selectedId) {
+    return <SessionInspector key={selectedId} src={captainSessionUrl(selectedId)} className="h-full min-h-0" />;
   }
-  return <SessionDetail key={session.id} session={session} {...actions} />;
+  return (
+    <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+      <div className="text-center">
+        <UiRobotAi className="mb-2 text-4xl" />
+        <p>Select a session to view details</p>
+      </div>
+    </div>
+  );
 }

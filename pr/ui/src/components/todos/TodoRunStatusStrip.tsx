@@ -2,6 +2,7 @@ import { Button } from '@flanksource/clicky-ui/components';
 import { UiClock, UiCollapseAll, UiError, UiHubot, UiStop } from '@flanksource/clicky-ui/icons';
 import { Spinner } from '../../icons/Spinner';
 import { formatCost, formatDuration, formatTokens, useSessionStats } from './TodoSessionTimer';
+import { VerificationFailureStatus } from './VerificationFailureStatus';
 
 /**
  * What the header becomes while a run is in flight.
@@ -88,6 +89,7 @@ export function TodoRunStatusStrip({
             </span>
           )}
 
+          <VerificationFailureStatus stats={stats} compact />
           {stats.state === 'error' && (
             <span
               className="inline-flex min-w-0 items-center gap-1 rounded border border-red-500/30 bg-red-500/15 px-1.5 py-0.5 font-medium text-red-600 [[data-theme=dark]_&]:text-red-300"
