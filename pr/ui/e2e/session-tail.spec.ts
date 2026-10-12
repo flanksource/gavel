@@ -36,8 +36,11 @@ async function scrollTranscriptToTop(page: Page) {
   });
 }
 
+// File-level skip: an in-test skip runs after the `page` fixture has already
+// launched Chromium, which fails where browsers are not installed.
+test.skip(!harnessed, 'SESSION_TAIL_BASE_URL is not set: run this spec through hack/session_tail_e2e.go');
+
 test('tails a live session and loads history on scroll-up', async ({ page }) => {
-  test.skip(!harnessed, 'SESSION_TAIL_BASE_URL is not set: run this spec through hack/session_tail_e2e.go');
   const baseURL = env('SESSION_TAIL_BASE_URL');
   const sessionId = env('SESSION_TAIL_ID');
   const controlURL = env('SESSION_TAIL_CONTROL_URL');
