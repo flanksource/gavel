@@ -16,6 +16,7 @@ import (
 	"github.com/flanksource/clicky/api/icons"
 	commonsContext "github.com/flanksource/commons/context"
 	"github.com/flanksource/gavel/models"
+	"github.com/flanksource/gavel/processruntime"
 )
 
 // Linter represents a generic linter that can analyze files
@@ -111,18 +112,21 @@ type LinterWithLanguageSupport interface {
 
 // RunOptions provides configuration for linter execution
 type RunOptions struct {
-	WorkDir    string
-	Executable string
-	Files      []string
-	Config     *models.LinterConfig
-	ArchConfig *models.Config // Full arch-unit config for all_language_excludes macro
-	ForceJSON  bool
-	Fix        bool // Enable auto-fixing mode
-	NoCache    bool // Disable caching
-	Timeout    time.Duration
-	Ignores    []string
-	ExtraArgs  []string
-	OutputTee  io.Writer
+	ConfigDir       string
+	Runtime         processruntime.Options
+	runtimeResolved bool
+	WorkDir         string
+	Executable      string
+	Files           []string
+	Config          *models.LinterConfig
+	ArchConfig      *models.Config // Full arch-unit config for all_language_excludes macro
+	ForceJSON       bool
+	Fix             bool // Enable auto-fixing mode
+	NoCache         bool // Disable caching
+	Timeout         time.Duration
+	Ignores         []string
+	ExtraArgs       []string
+	OutputTee       io.Writer
 }
 
 // WrapWriter returns w wrapped with OutputTee via io.MultiWriter when OutputTee
@@ -413,7 +417,12 @@ func readFileLine(path string, lineNum int) string {
 // line that should be displayed and recorded for the run. opts.Executable, when
 // set, overrides the command name from DryRunCommand so reporting matches the
 // actual executable used at runtime.
-func PrepareCommand(linter Linter, opts RunOptions) (string, []string) {
+func PrepareCommand(linter Linter, opts RunOptions) (string, []string, error) {
+	var err error
+	opts, err = opts.resolveRuntime(linter.Name())
+	if err != nil {
+		return "", nil, err
+	}
 	if mixin, ok := linter.(OptionsMixin); ok {
 		mixin.SetOptions(opts)
 	}
@@ -429,7 +438,7 @@ func PrepareCommand(linter Linter, opts RunOptions) (string, []string) {
 	if strings.TrimSpace(cmd) == "" {
 		cmd = linter.Name()
 	}
-	return cmd, args
+	return cmd, args, nil
 }
 
 func runningCommandLabel(cmd string, args []string) string {
@@ -450,14 +459,27 @@ func runningCommandLabel(cmd string, args []string) string {
 // The task name is set to the full command while the linter is running and
 // updated to the compact completion label once finished.
 func RunLinterWithTask(ctx context.Context, task *clicky.Task, linter Linter, opts RunOptions) *LinterResult {
+	var err error
+	opts, err = opts.resolveRuntime(linter.Name())
+	if err != nil {
+		return &LinterResult{Linter: linter.Name(), WorkDir: opts.WorkDir, Error: err.Error()}
+	}
 	timeout := opts.Timeout
-	if timeout <= 0 {
+	if opts.Runtime.Timeout == nil && timeout <= 0 {
 		timeout = models.DefaultLinterTimeout
 	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
+	var cancel context.CancelFunc
+	if timeout > 0 {
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+	} else {
+		ctx, cancel = context.WithCancel(ctx)
+	}
 	defer cancel()
 
-	cmd, args := PrepareCommand(linter, opts)
+	cmd, args, err := PrepareCommand(linter, opts)
+	if err != nil {
+		return &LinterResult{Linter: linter.Name(), WorkDir: opts.WorkDir, Error: err.Error()}
+	}
 	label := runningCommandLabel(cmd, args)
 	if label == "" {
 		label = linter.Name()

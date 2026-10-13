@@ -43,7 +43,18 @@ ai:
     maxTokens: 8192
     maxTurns: 20
 
+runtime:
+  nice: 10
+  cpu: 200
+  mem: 2GiB
+  timeout: 5m
+  env:
+    GOMAXPROCS: "2"
+    GOMEMLIMIT: 1536MiB
+
 lint:
+  runtime:
+    timeout: 10m
   # Source repair uses an editing-capable agent independently of the compact
   # commit.message model below. `gavel lint --model` overrides this per run.
   fix:
@@ -66,6 +77,10 @@ lint:
   linters:
     # Linter enablement is keyed by name and overrides per linter.
     # This is useful for opt-in linters like jscpd or selectively disabling one tool.
+    golangci-lint:
+      args: [--concurrency=2]
+      runtime:
+        timeout: 15m
     jscpd:
       enabled: true
 
@@ -208,6 +223,15 @@ status:
         {{details}}
 
 test:
+  frameworks:
+    go:
+      args: [-p=2]
+    ginkgo:
+      runtime: {timeout: 15m}
+    vitest:
+      args: [--maxWorkers=2]
+    fixture:
+      runtime: {timeout: 2m}
   # Per-test summary used by `gavel test outline --ai-summary`.
   outlineSummary:
     model: claude-haiku-4-5

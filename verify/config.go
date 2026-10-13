@@ -9,6 +9,7 @@ import (
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/commons/collections"
 	"github.com/flanksource/gavel/models"
+	"github.com/flanksource/gavel/processruntime"
 	"github.com/flanksource/gavel/todos/types"
 	yamlv3 "gopkg.in/yaml.v3"
 )
@@ -150,6 +151,7 @@ func (r LintIgnoreRule) MatchesViolation(v models.Violation) bool {
 }
 
 type LintConfig struct {
+	Runtime processruntime.Options `yaml:"runtime,omitempty" json:"runtime,omitempty"`
 	// AIFix is the AI spec used to repair lint violations. It is independent of
 	// commit.message because source repair needs an editing-capable agent while
 	// commit-message generation only needs to summarize a diff.
@@ -161,7 +163,9 @@ type LintConfig struct {
 }
 
 type LintLinterConfig struct {
-	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	Enabled *bool                  `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	Args    []string               `yaml:"args,omitempty" json:"args,omitempty"`
+	Runtime processruntime.Options `yaml:"runtime,omitempty" json:"runtime,omitempty"`
 }
 
 func (c LintConfig) IsLinterEnabled(name string, defaultEnabled bool) bool {
@@ -295,6 +299,8 @@ func (f FixturesConfig) ResolvedFiles() []string {
 }
 
 type GavelConfig struct {
+	Runtime       processruntime.Options `yaml:"runtime,omitempty" json:"runtime,omitempty"`
+	RuntimeLayers []RuntimeLayer         `yaml:"-" json:"-"`
 	// AI is the base spec (model/fallbacks/budget/effort defaults) that every AI
 	// operation inherits and overrides field-wise. See DefaultAIConfig.
 	AI       api.Spec       `yaml:"ai,omitempty" json:"ai,omitempty"`
@@ -343,6 +349,8 @@ type StatusConfig struct {
 
 // TestConfig configures `gavel test`.
 type TestConfig struct {
+	Runtime    processruntime.Options         `yaml:"runtime,omitempty" json:"runtime,omitempty"`
+	Frameworks map[string]TestFrameworkConfig `yaml:"frameworks,omitempty" json:"frameworks,omitempty"`
 	// OutlineSummary is the AI spec for the per-test summary used by
 	// `gavel test outline --ai-summary`. Empty uses the built-in default. See
 	// prompts.TestOutlineSummary.

@@ -154,9 +154,6 @@ func (r *Runner) prepareSetups(ctx flanksourceContext.Context) error {
 	return nil
 }
 
-// cleanupSetups tears every prepared setup down. Failures are reported rather
-// than returned — the fixture results are the run's answer, and a worktree that
-// would not go away must not turn a passing run red.
 func (r *Runner) cleanupSetups() error {
 	var cleanupErr error
 	for file, prepared := range r.setups {

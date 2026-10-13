@@ -150,8 +150,7 @@ func (r *Ruff) Run(ctx commonsContext.Context, task *clicky.Task) ([]models.Viol
 	args := r.buildArgs()
 
 	// Execute command
-	cmd := exec.CommandContext(ctx, "ruff", args...)
-	cmd.Dir = r.WorkDir
+	cmd := r.CommandContext(ctx, r.Name(), "ruff", args...)
 
 	logger.Infof("Executing: ruff %s", strings.Join(args, " "))
 

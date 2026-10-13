@@ -3,6 +3,7 @@ package reactdoctor
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -147,8 +148,7 @@ func (r *ReactDoctor) DryRunCommand() (string, []string) {
 func (r *ReactDoctor) Run(ctx commonsContext.Context, _ *clicky.Task) ([]models.Violation, error) {
 	cmdName := r.commandName()
 	args := r.buildArgs()
-	cmd := exec.CommandContext(ctx, cmdName, args...)
-	cmd.Dir = r.WorkDir
+	cmd := r.CommandContext(ctx, r.Name(), cmdName, args...)
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = r.WrapWriter(&stdout)
@@ -157,6 +157,10 @@ func (r *ReactDoctor) Run(ctx commonsContext.Context, _ *clicky.Task) ([]models.
 	logger.Infof("Executing: %s %s", cmdName, strings.Join(args, " "))
 
 	runErr := cmd.Run()
+	var nativeExit *exec.ExitError
+	if runErr != nil && !errors.As(runErr, &nativeExit) {
+		return nil, fmt.Errorf("react-doctor execution failed: %w\nOutput:\n%s", runErr, stderr.String())
+	}
 	if stdout.Len() > 0 {
 		violations, parseErr := r.parseViolations(stdout.Bytes())
 		if parseErr != nil {

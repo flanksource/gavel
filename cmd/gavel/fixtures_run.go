@@ -11,6 +11,7 @@ import (
 	"github.com/flanksource/commons/properties"
 	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/fixtures/record"
+	"github.com/flanksource/gavel/processruntime"
 	"github.com/flanksource/gavel/verify"
 	"github.com/samber/lo"
 	"github.com/spf13/cobra"
@@ -74,7 +75,14 @@ func runFixtures(cmd *cobra.Command, args []string) error {
 		*item.dest = uint64(bytes)
 	}
 
+	runtime, runtimeArgs, err := cfg.RuntimeFor("test", "fixture", processruntime.Options{})
+	if err != nil {
+		return err
+	}
 	runnerOpts := fixtures.RunnerOptions{
+		ProcessRuntime: runtime,
+		Args:           runtimeArgs,
+		Context:        cmd.Context(),
 		Paths:          args,
 		ResolveSpec:    fixtureSpecResolver(wd, cfg),
 		Format:         clicky.Flags.ResolveFormat(),

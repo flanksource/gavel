@@ -169,8 +169,7 @@ func (e *ESLint) Run(ctx commonsContext.Context, task *clicky.Task) ([]models.Vi
 	args := e.buildArgs()
 
 	// Execute command
-	cmd := exec.CommandContext(ctx, "eslint", args...)
-	cmd.Dir = e.WorkDir
+	cmd := e.CommandContext(ctx, e.Name(), "eslint", args...)
 
 	logger.Infof("Executing: eslint %s", strings.Join(args, " "))
 

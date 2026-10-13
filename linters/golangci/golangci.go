@@ -152,8 +152,7 @@ func (g *GolangciLint) Run(ctx commonsContext.Context, task *clicky.Task) ([]mod
 	cmdName := g.commandName()
 
 	// Execute command — capture stdout (JSON) separately from stderr (text)
-	cmd := exec.CommandContext(ctx, cmdName, args...)
-	cmd.Dir = g.WorkDir
+	cmd := g.CommandContext(ctx, g.Name(), cmdName, args...)
 
 	logger.Infof("Executing: %s %s", cmdName, strings.Join(args, " "))
 

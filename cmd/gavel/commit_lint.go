@@ -27,7 +27,6 @@ func runCommitLint(ctx context.Context, workDir string, linterNames, files []str
 		WorkDir: workDir,
 		Linters: requested,
 		Files:   files,
-		Timeout: "5m",
 		Context: ctx,
 	}
 	results, err := lint.Execute(opts)
