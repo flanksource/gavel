@@ -704,12 +704,42 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler
 - Register both on the Server mux (`Handler()`), so they work in both modes. `/api/auth/config`
   needs the auth mode, so add `func (s *Server) SetAuthConfig(cfg AuthConfigResponse)`.
 
-**Features off in clerk mode.** `Server.SetHostedMode(true)` makes these handlers return `404`:
-- `/api/proc/*`
-- `/api/v1/tasks/*/control` and `/stdin` for supervisor tasks
-- `PUT/POST /api/settings/gavel` when the target is global
-- `/api/projects/{name}/diff`
-- `/debug/*`, which is already loopback-only
+**Features off in clerk mode: an allowlist (Batman, 2026-10-14).** `Server.SetHostedMode(true)`
+serves only the routes in `hostedRoutes` (`pr/ui/hosted.go`); every other route returns `404`.
+A route added later stays off in hosted mode until someone adds it, after checking it is
+org-scoped. The gate sits inside the SSE hub (`hub.Guard(gate(mux))`), so a hub subscription
+can't reach a route that is turned off. The list for M3 (`hostedRoutes` is the authoritative
+copy):
+
+- **Shell and assets:** `/` (the SPA routes `handleRoute` serves), `/_assets/`, `/favicon.svg`,
+  `/brand/`, `/manifest.webmanifest`, and the SSE hub's endpoints.
+- **Auth:** `/api/auth/config`, `/api/me`.
+- **PR dashboard** (the org's GitHub token, M5): `/api/prs`, `/api/prs/stream`, `/refresh`,
+  `/bots`, `/closed`, `/pause`, `/detail`, `/commits/diff`, `/files/diff`, `/merge`, `/approve`,
+  `/update-branch`, `/job-logs`, `/seen`; `/api/config`, `/api/repos`, `/api/repos/favicon`,
+  `/api/orgs`.
+- **Todos:** `/api/todos`, `/api/todos/batch`, `/api/todos/new`, `/api/todos/item`,
+  `/api/todos/links`, `/api/todos/labels`, `/api/todos/attachments` and
+  `/api/todos/attachments/{id}`; the `/api/v1/todos` entity routes.
+- **Answered without running anything:** `/api/todos/run`, `/plan/approve`, `/plan/revise`,
+  `/answer` and `/api/v1/todo/{id}/{run|plan|triage}` return
+  `501 {"error":"agent runs are not available in hosted mode yet"}` (M10 lifts this).
+- **Projects:** `/api/projects` and `/api/projects/{name}` (from the `repos` table; a `dir` is
+  rejected), and `POST /api/projects/{name}/actions` (`test`/`lint` 501, `commit`/`open-pr` 400,
+  as below).
+- **Settings:** `/api/settings/schema` and `/api/settings/runtime-presets*` (owner rows exist).
+- **Status:** `/api/status`, with the database section reduced to health (no DSN source, no table
+  counts) when the cache store's org isn't the local org.
+
+Off in hosted mode until a milestone makes them org-aware, among others: `/api/captain/sessions/`,
+`/api/sessions`, `/api/todos/session/*` (every org's sessions); `/api/git/*`,
+`/api/projects/git-summary`, `/api/projects/{name}/git|diff|branch/*`, `/api/tests*`,
+`/results/`, `/api/todos/land`, `/api/todos/commits/*` (the host's files and checkouts);
+`/api/activity*`, pprof, metrics, ingest stats, `/api/openapi.json`, `/api/proc/*`,
+`/api/v1/tasks/*` (process-wide state); `/api/chat` (the assistant runs with the host's keys and
+tools); `/api/settings/gavel*` and `/api/settings/prompts*` (host files); `/api/todos/github`,
+`/api/todos/transfer`, `/api/todos/criteria`, `/api/todos/verification/*`,
+`/api/todos/run/context|preview`, `/api/project-runs/`, `/react-grab*`.
 
 Also:
 - `startServeRuntime` doesn't start the Captain session monitor in clerk mode. Add a mode
@@ -1749,6 +1779,40 @@ Clerk-mode manual checks:
     with the reason, which the tests assert. A 401/403 from the Backend API adds "check the Clerk
     secret key".
   - Commits: commit whenever a change makes sense on its own, not strictly per milestone.
+- **2026-10-14: M3.1 deviations from the spec.**
+  - The options type is `DashboardOptions` (`cmd/gavel/dashboard_options.go`), because
+    `ServeOptions` already belongs to `gavel ssh serve`. It embeds `PRListOptions`; clicky flattens
+    embedded structs (`flags.parseStructFieldsRecursive`).
+  - clicky has no env-var tag, so `withEnv(os.Getenv)` fills empty `--clerk-*` flags and reads
+    `CLERK_SECRET_KEY` and `GAVEL_SECRET_KEY` into untagged fields, which have no flag.
+  - Each flag lands with the milestone that uses it. M3 adds `--auth`, `--public-url`,
+    `--clerk-issuer`, `--clerk-publishable-key`, `--clerk-client-id` and `--trusted-proxy`. M5 adds
+    the GitHub App flags, and M6 adds `--ssh-addr`, `--ssh-host-key` and `--data-dir`. The
+    `--sandbox*`, `--kubeconfig` and `--sandbox-secret-env` flags wait for M9/M10 (PR 2). Also,
+    clicky can't tell an explicit `--sandbox` from its default, so "reject `--sandbox` with
+    `--auth none`" needs that flag to have no default; M9 should keep that in mind.
+  - `Validate` makes no I/O and reports all problems at once (`errors.Join`). It also checks that
+    `--public-url` is an origin, that the issuer is https, the `pk_`/`sk_` prefixes, that
+    `GAVEL_SECRET_KEY` is base64 of at least 32 bytes, and that each `--trusted-proxy` is a CIDR.
+    The "DB required in clerk mode" check runs at startup with `database.Require`, because it
+    needs the database.
+- **2026-10-14: hosted routes are an allowlist (Batman).** A review of every route in
+  `Server.Handler()` found that the spec's denylist (`/api/proc/*`, task control, global settings,
+  project diff, `/debug/*`) left host-wide state reachable to any signed-in tenant: Captain's
+  session handler (every org's transcripts), the git, test-run and results endpoints (the host's
+  checkouts and files), `/api/activity*` (every org's GitHub calls), and `/api/status`'s DSN
+  source and table counts. Batman chose the allowlist; M3.3's "Features off" section is rewritten
+  with the list. The hosted dashboard therefore starts without the sessions, git and test-run
+  views, which return when M9/M10 make them org-aware.
+- **2026-10-14: M5.1 `TokenSource` pulled forward into M3 (commit `7b87e94`).** Before M5, a
+  hosted org's `Server` would have used the host's `GITHUB_TOKEN`, `GH_TOKEN` or `auth.json` for
+  every PR call. `github.Options.TokenSource`, when set, is the only credential. The M3.2 factory
+  gives each org a source that answers "connect GitHub" until M5 mints installation tokens.
+  `token()` is the only code path in `github/` and `pr/` that reads host credentials.
+- **2026-10-14: `Server` background loops stop with its context (commit `2d0df94`).** The auth
+  probe, process metrics and task history import loops never returned, so evicting an org's
+  `Server` (M3.2) would have leaked them. A test counts the loop goroutines through
+  `runtime.Stack`, with no new dependency.
 
 ## 14. Progress checklist
 
@@ -1763,12 +1827,12 @@ Clerk-mode manual checks:
 - [x] M1.3 runtime OpenForOrg, IdentityStore memberships
 - [x] M2.0 spike: CLI access token (JWT, verified locally)
 - [x] M2.1 JWKS cache, session verifier, access verifier, GitHub OIDC verifier, Clerk memberships
-- [ ] M3.1 ServeOptions plus Validate
+- [x] M3.1 ServeOptions plus Validate (`DashboardOptions`)
 - [ ] M3.2 OrgServers
 - [ ] M3.3 middleware, /api/auth/config, /api/me, features off in hosted mode (incl. execution 501s), spec stripping, attachment headers
 - [ ] M4 UI
 - [ ] M5.0 spike: GitHub App via Clerk
-- [ ] M5.1 TokenSource
+- [x] M5.1 TokenSource (pulled into M3, `7b87e94`)
 - [ ] M5.2 App tokens
 - [ ] M5.3 install linking plus repo sync
 - [ ] M5.4 org PR polling

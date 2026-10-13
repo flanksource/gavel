@@ -1,6 +1,11 @@
 package main
 
-import "github.com/flanksource/clicky"
+import (
+	"errors"
+	"os"
+
+	"github.com/flanksource/clicky"
+)
 
 // applyServeDefaults adapts PRListOptions for `gavel serve`: the command always
 // serves the dashboard (UI mode, unless --menu-bar) and defaults to an org-wide
@@ -19,12 +24,19 @@ func applyServeDefaults(opts PRListOptions) PRListOptions {
 // runServeDashboard backs `gavel serve` — the PR dashboard web UI. It reuses
 // PRListOptions + runPRUI (same path as `pr list --ui`) and forces UI mode so
 // the command serves the dashboard rather than printing a PR list.
-func runServeDashboard(opts PRListOptions) (any, error) {
-	return nil, runPRUI(applyServeDefaults(opts), serveDatabaseWithMigrations)
+func runServeDashboard(opts DashboardOptions) (any, error) {
+	opts = opts.withEnv(os.Getenv)
+	if err := opts.Validate(); err != nil {
+		return nil, err
+	}
+	if opts.Auth == authClerk {
+		return nil, errors.New("--auth clerk is not wired yet")
+	}
+	return nil, runPRUI(applyServeDefaults(opts.PRListOptions), serveDatabaseWithMigrations)
 }
 
 func init() {
-	cmd := clicky.AddNamedCommand("serve", rootCmd, PRListOptions{}, runServeDashboard)
+	cmd := clicky.AddNamedCommand("serve", rootCmd, DashboardOptions{}, runServeDashboard)
 	cmd.Short = "Serve the PR dashboard web UI (live PR & check status)"
 	cmd.Long = "Serve the PR dashboard web UI. Equivalent to `gavel pr list --ui`, " +
 		"but defaults to an org-wide (--all) fetch unless you pass repo args to scope it. " +
