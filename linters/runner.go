@@ -127,11 +127,6 @@ func (r *Runner) RunWithIntelligentDebounce(ctx context.Context, linterName stri
 	// Get configuration
 	config := r.config.GetLinterConfig(linterName, r.workDir)
 
-	// Apply per-linter timeout
-	timeout := config.GetTimeout()
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
 	// Check intelligent debounce (only if cache is enabled)
 	if r.linterStats != nil {
 		shouldSkip, actualDebounce, err := r.linterStats.ShouldSkipLinter(linterName, r.workDir, config.Debounce)
@@ -153,13 +148,29 @@ func (r *Runner) RunWithIntelligentDebounce(ctx context.Context, linterName stri
 		Fix:        fix,
 		NoCache:    r.noCache,
 	}
+	if config.Timeout != "" {
+		var err error
+		opts.Timeout, err = time.ParseDuration(config.Timeout)
+		if err != nil || opts.Timeout <= 0 {
+			return nil, fmt.Errorf("invalid %s timeout %q", linterName, config.Timeout)
+		}
+	}
+	var err error
+	opts, err = opts.resolveRuntime(linterName)
+	if err != nil {
+		return nil, err
+	}
 
 	if mixin, ok := linter.(OptionsMixin); ok {
 		mixin.SetOptions(opts)
 	}
 
-	task := clicky.StartTask[[]models.Violation](fmt.Sprintf("Running %s", linterName), func(fCtx commonsCtx.Context, t *task.Task) ([]models.Violation, error) {
-		return linter.Run(fCtx, t)
+	task := clicky.StartTask[[]models.Violation](fmt.Sprintf("Running %s", linterName), func(_ commonsCtx.Context, t *task.Task) ([]models.Violation, error) {
+		result := RunLinterWithTask(ctx, t, linter, opts)
+		if !result.Success {
+			return result.Violations, fmt.Errorf("%s", result.Error)
+		}
+		return result.Violations, nil
 	})
 	violations, err := task.GetResult()
 

@@ -1,6 +1,8 @@
 package fixtures
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -16,6 +18,7 @@ import (
 	"github.com/flanksource/clicky/task"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/fixtures/record"
+	"github.com/flanksource/gavel/processruntime"
 	"github.com/flanksource/gomplate/v3"
 )
 
@@ -159,7 +162,7 @@ func (fixture FixtureTest) Pretty() api.Text {
 }
 
 // ShouldSkip checks per-test overrides first, then falls back to file-level FrontMatter.
-func (fixture FixtureTest) ShouldSkip() string {
+func (fixture FixtureTest) ShouldSkip(opts RunOptions) (string, error) {
 	os := fixture.TestOS
 	if os == "" {
 		os = fixture.OS
@@ -174,7 +177,7 @@ func (fixture FixtureTest) ShouldSkip() string {
 	}
 
 	fm := FrontMatter{OS: os, Arch: arch, Skip: skip}
-	return fm.ShouldSkip()
+	return fm.ShouldSkip(opts)
 }
 
 type ExecFixtureBase struct {
@@ -474,30 +477,41 @@ func (f *FrontMatter) CleanMetadata() {
 
 // ShouldSkip returns a non-empty reason string if the fixture should be skipped
 // based on os, arch, or skip command constraints.
-func (f *FrontMatter) ShouldSkip() string {
+func (f *FrontMatter) ShouldSkip(opts RunOptions) (string, error) {
 	if f.OS != "" {
 		if strings.HasPrefix(f.OS, "!") {
 			if runtime.GOOS == f.OS[1:] {
-				return fmt.Sprintf("os %s excluded", runtime.GOOS)
+				return fmt.Sprintf("os %s excluded", runtime.GOOS), nil
 			}
 		} else if runtime.GOOS != f.OS {
-			return fmt.Sprintf("requires os %s, got %s", f.OS, runtime.GOOS)
+			return fmt.Sprintf("requires os %s, got %s", f.OS, runtime.GOOS), nil
 		}
 	}
 
 	if f.Arch != "" {
 		if runtime.GOARCH != f.Arch {
-			return fmt.Sprintf("requires arch %s, got %s", f.Arch, runtime.GOARCH)
+			return fmt.Sprintf("requires arch %s, got %s", f.Arch, runtime.GOARCH), nil
 		}
 	}
 
 	if f.Skip != "" {
-		if err := exec.Command("bash", "-c", f.Skip).Run(); err == nil {
-			return fmt.Sprintf("skip command returned true: %s", f.Skip)
+		ctx := opts.Context
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		command := processruntime.NewCommand(ctx, opts.ProcessRuntime, "bash", "-c", f.Skip)
+		command.Dir = opts.WorkDir
+		err := command.Run()
+		if err == nil {
+			return fmt.Sprintf("skip command returned true: %s", f.Skip), nil
+		}
+		var exit *exec.ExitError
+		if !errors.As(err, &exit) {
+			return "", fmt.Errorf("fixture skip command: %w", err)
 		}
 	}
 
-	return ""
+	return "", nil
 }
 
 // TODO: Register custom renderer for status icons when clicky supports it

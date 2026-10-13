@@ -230,9 +230,6 @@ func executeLintRerun(base LintOptions, req testui.RerunRequest) ([]*linters.Lin
 		Files:     append([]string(nil), req.LintFiles...),
 		OutputTee: base.OutputTee,
 	}
-	if rerunOpts.Timeout == "" {
-		rerunOpts.Timeout = "5m"
-	}
 	if len(req.LintLinters) > 0 {
 		rerunOpts.Linters = append([]string(nil), req.LintLinters...)
 	}

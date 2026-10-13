@@ -178,8 +178,7 @@ func (v *Vale) Run(ctx commonsContext.Context, task *clicky.Task) ([]models.Viol
 	}
 
 	// Execute command
-	cmd := exec.CommandContext(ctx, "vale", args...)
-	cmd.Dir = v.WorkDir
+	cmd := v.CommandContext(ctx, v.Name(), "vale", args...)
 
 	logger.Infof("Executing: vale %s", strings.Join(args, " "))
 

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	cexec "github.com/flanksource/clicky/exec"
+	"github.com/flanksource/gavel/processruntime"
 	"os"
 	osExec "os/exec"
 	"strings"
@@ -31,6 +33,7 @@ const captureCancelGrace = 5 * time.Second
 // by settled snapshots. SnapshotInterval controls how often the live viewport
 // is appended to the snapshot timeline.
 type CaptureOptions struct {
+	Runtime          processruntime.Options
 	Context          context.Context
 	Width, Height    int
 	SnapshotInterval time.Duration
@@ -152,9 +155,16 @@ func CaptureANSI(opts CaptureOptions) (*Capture, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("ansi capture: %w", err)
 	}
-	cmd := osExec.Command(opts.Command[0], opts.Command[1:]...)
+	process := cexec.NewExec(opts.Command[0], opts.Command[1:]...)
+	if err := opts.Runtime.Apply(process); err != nil {
+		return nil, err
+	}
+	cmd, err := process.PrepareCommand()
+	if err != nil {
+		return nil, err
+	}
 	cmd.Dir = opts.Dir
-	cmd.Env = append(os.Environ(), opts.Env...)
+	cmd.Env = append(cmd.Env, opts.Env...)
 	cmd.Env = ensureEnv(cmd.Env, "CLICKY_FORCE_INTERACTIVE", "1")
 	cmd.Env = ensureEnv(cmd.Env, "TERM", "xterm-256color")
 

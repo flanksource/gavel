@@ -57,6 +57,45 @@ field is left undocumented.
 
 ---
 
+## Shared process runtime
+
+`runtime` configures every linter and test type, including fixtures. Put defaults in `~/.gavel.yaml`, then override them in a repository or invocation directory. Each file applies root `runtime`, category `lint.runtime` or `test.runtime`, then the type's runtime. Later files win even when an earlier file has a more specific override; explicit CLI/caller settings win last. `gavel config --runtime --json` shows the effective settings for each type with environment names only.
+
+| Field | Meaning |
+| --- | --- |
+| `env` | Child environment map, merged by key. Empty values clear inherited values. |
+| `nice` | Child priority adjustment from -20 to 19. Positive values lower priority; negative values require OS permission. The parent keeps its priority. |
+| `cpu` | Aggregate sustained CPU percentage across the process tree; 100 means one core. Zero disables the cap. Sampling runs every 2 seconds and terminates after 18 consecutive high samples. |
+| `mem` | Aggregate resident-memory cap, such as `2GiB` or `512MB`. Empty disables it. Memory is sampled immediately and every 2 seconds. |
+| `timeout` | Positive Go duration such as `5m` for each invocation. Empty disables the inherited invocation deadline. The whole-run `test.timeout`/`--timeout` remains separate. |
+
+Type settings live in `lint.linters.<name>` and `test.frameworks.<name>`. Test names are `go`, `ginkgo`, `jest`, `vitest`, `playwright`, and `fixture`. Each accepts `args` and `runtime`; nonempty argument lists replace inherited lists. Native arguments control tool concurrency and soft budgets, while runtime CPU/memory/deadline settings terminate processes that exceed caps. Sampling can permit short bursts beyond a cap.
+
+Fixtures run in process unless an explicit CPU, memory, or timeout cap is active. Capped invocations run in a supervised worker, including their setup, build, daemons, recordings, and profiling. Environment and niceness settings alone apply to child commands without changing the parent. Fixture native arguments append to each exec step's argv. Built-in per-test deadlines alone do not trigger worker isolation.
+
+```yaml
+runtime:
+  nice: 10
+  mem: 2GiB
+  timeout: 5m
+lint:
+  linters:
+    golangci-lint:
+      args: [--concurrency=2]
+      runtime:
+        env: {GOMAXPROCS: "2", GOMEMLIMIT: 1536MiB}
+test:
+  frameworks:
+    go:
+      args: [-p=2]
+    vitest:
+      args: [--maxWorkers=2]
+    fixture:
+      runtime: {timeout: 2m}
+```
+
+Run `gavel lint --dry-run` or `gavel test --dry-run` to inspect resolved commands and runtime settings. Dry-run output prints environment names, without values. Go and Ginkgo retain a native timeout with headroom for failure diagnostics. Defaults are five minutes per linter and ten minutes per test subprocess when no runtime deadline is authored.
+
 ## `ai`
 
 The base Captain spec every AI operation inherits and overrides field-wise:

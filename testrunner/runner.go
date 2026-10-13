@@ -14,7 +14,6 @@ import (
 	"sort"
 	"strings"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/bmatcuk/doublestar/v4"
@@ -27,6 +26,7 @@ import (
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/baseline"
 	"github.com/flanksource/gavel/fixtures"
+	"github.com/flanksource/gavel/processruntime"
 	"github.com/flanksource/gavel/testrunner/parsers"
 	"github.com/flanksource/gavel/testrunner/runners"
 	"github.com/flanksource/gavel/utils"
@@ -114,6 +114,8 @@ type TestOrchestrator struct {
 // The yaml tags mirror the CLI flag names so a `yaml test` fixture code block
 // unmarshals directly onto this struct (see fixtures/types/runstep.go).
 type RunOptions struct {
+	runtimeConfigDir         string
+	Runtime                  processruntime.Options           `json:"runtime,omitempty" yaml:"runtime,omitempty" flag:"-"`
 	StartingPaths            []string                         `json:"starting_paths,omitempty" yaml:"paths,omitempty" args:"true"`                               // Package paths to test (e.g., ["./pkg/testrunner"]). If empty, all packages are discovered.
 	ExtraArgs                []string                         `json:"extra_args,omitempty" yaml:"extra-args,omitempty" flag:"extra-args"`                        // Additional arguments broadcast to every selected test runner.
 	Tags                     []string                         `json:"tags,omitempty" yaml:"tags,omitempty" flag:"tags"`                                          // Go build tags mapped to each supported framework.
@@ -421,6 +423,11 @@ func Run(opts RunOptions) (any, error) {
 	if opts.WorkDir == "" {
 		opts.WorkDir, _ = os.Getwd()
 	}
+	var configDirErr error
+	opts.runtimeConfigDir, configDirErr = filepath.Abs(opts.WorkDir)
+	if configDirErr != nil {
+		return nil, configDirErr
+	}
 	if opts.FixturesOnly {
 		opts.WorkDir, _ = filepath.Abs(opts.WorkDir)
 		result, err := runSingleRoot(opts)
@@ -601,6 +608,9 @@ func runSingleRoot(opts RunOptions) (any, error) {
 }
 
 func runSingleRootWithUpdateOwnership(opts RunOptions, closeUpdates bool) (any, error) {
+	if _, err := verify.LoadGavelConfig(opts.runtimeWorkDir()); err != nil {
+		return nil, err
+	}
 	logger.Infof("Running tests  %s", renderText(opts.Pretty()))
 
 	var streamer *TestStreamer
@@ -648,15 +658,17 @@ func runSingleRootWithUpdateOwnership(opts RunOptions, closeUpdates bool) (any, 
 	// runner errors so invalid baselines and report failures reach the command.
 	var fixtureErr error
 	if opts.FixtureRunner != nil {
-		fixtureTests, err := runFixtureRunner(*opts.FixtureRunner, streamer, opts.FixtureBenchmarkProgress, opts.FixtureBenchmarkResult)
+		opts.FixtureRunner.Context = opts.Context
+		opts.FixtureRunner.ProcessRuntime = opts.FixtureRunner.ProcessRuntime.Merge(opts.fixtureRuntime())
+		fixtureTests, err := t.runFixtureRunner(*opts.FixtureRunner)
 		if err != nil {
 			fixtureErr = err
 		}
 		tree = append(tree, fixtureTests...)
 	} else if globs := resolveFixtureGlobs(opts); globs != nil {
-		fixtureTests, err := runDiscoveredFixtures(opts.WorkDir, opts.StartingPaths, globs, streamer)
+		fixtureTests, err := t.runDiscoveredFixtures(globs)
 		if err != nil {
-			logger.Warnf("fixture discovery failed: %v", err)
+			fixtureErr = err
 		}
 		tree = append(tree, fixtureTests...)
 	}
@@ -1081,14 +1093,14 @@ func (o *TestOrchestrator) detectAndRun(frameworks []Framework, startingPaths []
 
 	// If dry-run mode, display what would be executed and return early
 	if o.DryRun {
-		return o.displayDryRun(packagesByFramework, argsByFramework), nil
+		return o.displayDryRun(packagesByFramework, argsByFramework)
 	}
 
 	// Compile all Go test binaries up front so the per-package timeout below
 	// covers execution only. Heavy packages otherwise compile from a cold
 	// cache under concurrency and blow their deadline before any test runs.
 	if o.PreBuild {
-		if err := o.preBuildGoPackages(goPackagesToWarm(packagesByFramework)); err != nil {
+		if err := o.preBuildFrameworks(packagesByFramework); err != nil {
 			return nil, err
 		}
 	}
@@ -1228,6 +1240,9 @@ func subprocessTimeoutArgs(framework Framework, subTimeout time.Duration) []stri
 // it while the caller reads it).
 func (o *TestOrchestrator) supervisePackage(parent commonsCtx.Context, process *exec.Process, pkgPath string) (commonsCtx.Context, context.CancelFunc, *atomic.Bool) {
 	timedOut := new(atomic.Bool)
+	if o.TestTimeout > 0 {
+		process.WithTimeout(o.TestTimeout)
+	}
 
 	// Compose: parent (clicky task ctx) ∧ o.Context (global --timeout) ∧ per-package deadline.
 	base := context.Context(parent)
@@ -1243,8 +1258,8 @@ func (o *TestOrchestrator) supervisePackage(parent commonsCtx.Context, process *
 		pkgCtx    context.Context
 		cancelPkg context.CancelFunc
 	)
-	if o.TestTimeout > 0 {
-		pkgCtx, cancelPkg = context.WithTimeout(base, o.TestTimeout)
+	if process.Timeout > 0 {
+		pkgCtx, cancelPkg = context.WithTimeout(base, process.Timeout)
 	} else {
 		pkgCtx, cancelPkg = context.WithCancel(base)
 	}
@@ -1270,88 +1285,6 @@ func (o *TestOrchestrator) supervisePackage(parent commonsCtx.Context, process *
 	return commonsCtx.NewContext(pkgCtx), cancelPkg, timedOut
 }
 
-// runProcessBounded runs the subprocess and returns its ExecResult with two
-// safety nets:
-//
-//  1. When pkgCtx fires (global or per-package timeout), the supervisor has
-//     already issued KillTree; give the pipes a bounded window to drain.
-//  2. When the subprocess pid is dead but Run() still hasn't returned (e.g.
-//     because a grandchild or Go toolchain helper kept the stdout pipe open),
-//     wait 1s for Run() to catch up, then synthesise the result from
-//     captureOutput so the CLI task completes in sync with the UI signal.
-//
-// The spawned Run goroutine is deliberately orphaned in the synthesise path:
-// Go's runtime will reclaim it once the pipes eventually EOF.
-func runProcessBounded(process *exec.Process, pkgCtx commonsCtx.Context, pkgPath string) *exec.ExecResult {
-	done := make(chan *exec.ExecResult, 1)
-	go func() {
-		done <- process.Run().Result()
-	}()
-
-	pidDead := watchPidDeath(process)
-
-	for {
-		select {
-		case r := <-done:
-			return r
-		case <-pkgCtx.Done():
-			// Supervisor kill is in flight; give the pipes a bounded window.
-			select {
-			case r := <-done:
-				return r
-			case <-time.After(gracefulKillWait + 5*time.Second):
-				logger.Warnf("test package %s: subprocess pipes did not drain after KillTree", pkgPath)
-				return process.Result()
-			}
-		case <-pidDead:
-			// Subprocess exited normally, but Run() still hasn't returned
-			// because something holds the pipes. Wait briefly; then bail.
-			select {
-			case r := <-done:
-				return r
-			case <-time.After(1500 * time.Millisecond):
-				logger.V(1).Infof("test package %s: pid exited but pipes still open, synthesising result", pkgPath)
-				return process.Result()
-			}
-		}
-	}
-}
-
-// watchPidDeath returns a channel closed when process's OS pid is no longer
-// alive. Polls signal(0) every 100ms. Returns an already-closed channel if
-// the pid can't be determined yet or was never set.
-func watchPidDeath(process *exec.Process) <-chan struct{} {
-	out := make(chan struct{})
-	go func() {
-		defer close(out)
-		// Wait for the pid to appear.
-		for process.Pid() <= 0 {
-			time.Sleep(50 * time.Millisecond)
-		}
-		pid := process.Pid()
-		for {
-			if !pidReachable(pid) {
-				return
-			}
-			time.Sleep(100 * time.Millisecond)
-		}
-	}()
-	return out
-}
-
-// pidReachable reports whether pid is still alive on the current host,
-// using signal 0 (the canonical POSIX liveness probe).
-func pidReachable(pid int) bool {
-	if pid <= 0 {
-		return false
-	}
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	return proc.Signal(syscall.Signal(0)) == nil
-}
-
 // mergeParentContext returns a child context that is cancelled when either
 // primary or parent is cancelled. Cancelling child never cancels the parents.
 func mergeParentContext(primary, parent context.Context) (context.Context, context.CancelFunc) {
@@ -1368,10 +1301,6 @@ func mergeParentContext(primary, parent context.Context) (context.Context, conte
 	}()
 	return child, cancel
 }
-
-// gracefulKillWait is the grace period between process.Kill() (SIGTERM) and
-// ForceKill() (SIGKILL) when a per-package or global timeout fires.
-const gracefulKillWait = 3 * time.Second
 
 // captureGlobalDiagnostics is set by the CLI layer. It is called before each
 // subprocess kill so timeout output captures live goroutine, task, and process state.
@@ -1399,12 +1328,8 @@ func (o *TestOrchestrator) runPackageTest(
 	// Prepend subprocess-timeout flags so the test binary fires its own
 	// timeout (goroutine dump / progress report) before gavel SIGKILLs it.
 	// Prepend (not append) so user-supplied extraArgs still win.
-	if subTimeout := subprocessTimeoutFor(o.TestTimeout); subTimeout > 0 {
-		extraArgs = append(subprocessTimeoutArgs(framework, subTimeout), extraArgs...)
-	}
-
 	// Build the test command (without executing)
-	testRun, err := runner.BuildCommand(pkgPath, extraArgs...)
+	testRun, err := o.buildCommand(runner, pkgPath, extraArgs)
 	if err != nil {
 		// Fold the build-command error into the compact task label so
 		// the single CI line carries the reason. Avoid t.Errorf which
@@ -1445,11 +1370,11 @@ func (o *TestOrchestrator) runPackageTest(
 
 	pkgCtx, cancelPkg, timedOutPtr := o.supervisePackage(ctx, process, pkgPath)
 	defer cancelPkg()
-	_ = pkgCtx
+	process.WithContext(pkgCtx)
 
 	runStart := time.Now()
 	stopSampler, peakPtr := startProcessMetricsSampler(process)
-	result := runProcessBounded(process, pkgCtx, pkgPath)
+	result := process.WithContext(pkgCtx).Run().Result()
 	runDuration := time.Since(runStart)
 	stopSampler()
 	cancelPkg()
@@ -1462,12 +1387,17 @@ func (o *TestOrchestrator) runPackageTest(
 	// Always attempt to parse test results first, even if there was an execution error
 	// This handles cases like `go test -json` which outputs valid JSON even when tests fail
 	testResults, parseErr := o.parseTestResults(testRun, result, pkgPath)
+	if result.Error != nil && len(testResults.All()) > 0 {
+		testResults = append(testResults, parsers.TestResults{Framework: framework, Tests: parsers.Tests{{Name: fmt.Sprintf("%s Runtime", framework), Failed: true, TimedOut: timedOut, Message: result.Error.Error()}}})
+	}
 
 	// If parsing failed or returned no tests, create a fallback execution test
 	if parseErr != nil || len(testResults.All()) == 0 {
 		var message string
 		if parseErr != nil {
-			message = fmt.Sprintf("%s: %s", parseErr.Error(), result.Output())
+			message = fmt.Sprintf("%s: %s", errors.Join(result.Error, parseErr), result.Output())
+		} else if result.Error != nil {
+			message = result.Error.Error()
 		} else {
 			message = strings.TrimSpace(result.Output())
 		}
@@ -1918,7 +1848,7 @@ func (o *TestOrchestrator) parseReportFile(testRun *runners.TestRun) (parsers.Te
 }
 
 // displayDryRun shows what tests would be executed without running them.
-func (o *TestOrchestrator) displayDryRun(packagesByFramework map[Framework][]string, argsByFramework map[Framework][]string) parsers.TestSuiteResults {
+func (o *TestOrchestrator) displayDryRun(packagesByFramework map[Framework][]string, argsByFramework map[Framework][]string) (parsers.TestSuiteResults, error) {
 	logger.Infof("🔍 Dry-run mode: showing what would be executed\n")
 
 	var totalPackages int
@@ -1943,10 +1873,9 @@ func (o *TestOrchestrator) displayDryRun(packagesByFramework map[Framework][]str
 			if framework == parsers.GoTest {
 				pkgExtraArgs = o.augmentBenchArgs(runner, pkg, pkgExtraArgs)
 			}
-			testRun, err := runner.BuildCommand(pkg, pkgExtraArgs...)
+			testRun, err := o.buildCommand(runner, pkg, pkgExtraArgs)
 			if err != nil {
-				logger.Errorf("[test:%s] %s: build failed: %v", framework, pkg, err)
-				continue
+				return nil, fmt.Errorf("[test:%s] %s: build failed: %w", framework, pkg, err)
 			}
 			PrintDryRunCommand(
 				fmt.Sprintf("test:%s", framework),
@@ -1955,10 +1884,17 @@ func (o *TestOrchestrator) displayDryRun(packagesByFramework map[Framework][]str
 				testRun.Process.Args,
 				testRun.Process.Cwd,
 			)
+			runtime, _, runtimeErr := o.runtimeFor(framework)
+			if runtimeErr != nil {
+				return nil, runtimeErr
+			}
+			if summary := runtime.Summary().String(); summary != "" {
+				logger.Infof("  runtime: %s", summary)
+			}
 		}
 	}
 
-	return nil
+	return nil, nil
 }
 
 // PrintDryRunCommand renders a single dry-run command line in the shared
@@ -2009,7 +1945,7 @@ type Runner = TestOrchestrator
 // .gavel.yaml fixtures.enabled is set). Flag-supplied globs take precedence
 // over config; config takes precedence over the default glob.
 func resolveFixtureGlobs(opts RunOptions) []string {
-	cfg, err := verify.LoadGavelConfig(opts.WorkDir)
+	cfg, err := verify.LoadGavelConfig(opts.runtimeWorkDir())
 	if err != nil {
 		logger.Warnf("failed to load .gavel.yaml for fixture config: %v", err)
 	}
@@ -2060,8 +1996,9 @@ func discoverFixtures(workDir string, startingPaths []string, globs []string) ([
 	return filtered, nil
 }
 
-func runDiscoveredFixtures(workDir string, startingPaths []string, globs []string, streamer *TestStreamer) ([]parsers.Test, error) {
-	fixtureFiles, err := discoverFixtures(workDir, startingPaths, globs)
+func (t *TestOrchestrator) runDiscoveredFixtures(globs []string) ([]parsers.Test, error) {
+	opts := t.RunOptions
+	fixtureFiles, err := discoverFixtures(opts.WorkDir, opts.StartingPaths, globs)
 	if err != nil {
 		return nil, err
 	}
@@ -2069,16 +2006,27 @@ func runDiscoveredFixtures(workDir string, startingPaths []string, globs []strin
 		return nil, nil
 	}
 
-	execPath, _ := os.Executable()
-	return runFixtureRunner(fixtures.RunnerOptions{
-		Paths:          fixtureFiles,
-		WorkDir:        workDir,
-		Logger:         logger.StandardLogger(),
-		ExecutablePath: execPath,
-	}, streamer, nil, nil)
+	execPath, err := os.Executable()
+	if err != nil {
+		return nil, err
+	}
+	return t.runFixtureRunner(fixtures.RunnerOptions{Context: opts.Context, ProcessRuntime: opts.fixtureRuntime(), Paths: fixtureFiles, WorkDir: opts.WorkDir, Logger: logger.StandardLogger(), ExecutablePath: execPath})
+
 }
 
-func runFixtureRunner(runnerOpts fixtures.RunnerOptions, streamer *TestStreamer, onProgress func(fixtures.ExecutionSnapshot), onReport func(*fixtures.BenchmarkReport)) ([]parsers.Test, error) {
+func (t *TestOrchestrator) runFixtureRunner(runnerOpts fixtures.RunnerOptions) ([]parsers.Test, error) {
+	streamer := t.streamer
+	onProgress, onReport := t.FixtureBenchmarkProgress, t.FixtureBenchmarkResult
+	config, err := verify.LoadGavelConfig(t.runtimeWorkDir())
+	if err != nil {
+		return nil, err
+	}
+	var runtimeArgs []string
+	runnerOpts.ProcessRuntime, runtimeArgs, err = config.RuntimeFor("test", "fixture", runnerOpts.ProcessRuntime)
+	if err != nil {
+		return nil, err
+	}
+	runnerOpts.Args = append(runtimeArgs, runnerOpts.Args...)
 	if streamer != nil || onProgress != nil {
 		upstream := runnerOpts.ProgressSink
 		runnerOpts.ProgressSink = func(ctx context.Context, snapshot fixtures.ExecutionSnapshot) error {
@@ -2100,6 +2048,14 @@ func runFixtureRunner(runnerOpts fixtures.RunnerOptions, streamer *TestStreamer,
 	runner, err := fixtures.NewRunner(runnerOpts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create fixture runner: %w", err)
+	}
+	if t.DryRun {
+		tree, err := runner.Parse()
+		if err != nil {
+			return nil, err
+		}
+		printFixtureDryRun(tree, runnerOpts)
+		return nil, nil
 	}
 
 	result, err := runner.Run()

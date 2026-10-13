@@ -1,9 +1,9 @@
 package fixtures
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
+	cexec "github.com/flanksource/clicky/exec"
 	"net"
 	"os"
 	"os/exec"
@@ -14,6 +14,7 @@ import (
 
 	flanksourceContext "github.com/flanksource/commons/context"
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/processruntime"
 	"github.com/flanksource/gomplate/v3"
 )
 
@@ -90,21 +91,18 @@ func (r *Runner) executeBuildCommand(ctx flanksourceContext.Context, buildCmd st
 
 	ctx.Logger.V(4).Infof("🔨 Build command: %s", templatedCmd)
 
-	cmd := exec.CommandContext(ctx, "sh", "-c", templatedCmd)
+	cmd := processruntime.NewCommand(ctx, r.options.ProcessRuntime, "sh", "-c", templatedCmd)
 	cmd.Dir = workDir
-	cmd.Env = setup.Environ()
-
-	var buildOut bytes.Buffer
-	cmd.Stdout = &buildOut
-	cmd.Stderr = &buildOut
-
-	if err := cmd.Run(); err != nil {
-		ctx.Errorf("Build failed: %v\nOutput: %s", err, buildOut.String())
-		return fmt.Errorf("build command failed: %v\nOutput: %s", err, buildOut.String())
+	if setup != nil {
+		cmd.Process.WithEnv(setup.Env)
 	}
-
-	if buildOut.Len() > 0 {
-		ctx.Logger.V(5).Infof("Build output: %s", buildOut.String())
+	buildOut, err := cmd.CombinedOutput()
+	if err != nil {
+		ctx.Errorf("Build failed: %v\nOutput: %s", err, buildOut)
+		return fmt.Errorf("build command failed: %w\nOutput: %s", err, buildOut)
+	}
+	if len(buildOut) > 0 {
+		ctx.Logger.V(5).Infof("Build output: %s", buildOut)
 	}
 
 	return nil
@@ -140,12 +138,19 @@ func (r *Runner) startDaemon(ctx flanksourceContext.Context, daemonCmd string, s
 
 	logger.Infof("Starting daemon on port %d: %s", port, templated)
 
-	cmd := exec.CommandContext(ctx, "sh", "-c", templated)
-	cmd.Dir = workDir
-	cmd.Env = setup.Environ()
+	process := cexec.NewExec("sh", "-c", templated).WithContext(ctx).WithCwd(workDir).WithProcessGroup()
+	if err := r.options.ProcessRuntime.Apply(process); err != nil {
+		return err
+	}
+	if setup != nil {
+		process.WithEnv(setup.Env)
+	}
+	cmd, err := process.PrepareCommand()
+	if err != nil {
+		return err
+	}
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start daemon: %w", err)
@@ -155,6 +160,9 @@ func (r *Runner) startDaemon(ctx flanksourceContext.Context, daemonCmd string, s
 	// Wait for port to be ready
 	addr := net.JoinHostPort("localhost", strconv.Itoa(port))
 	for i := 0; i < 60; i++ {
+		if ctx.Err() != nil {
+			return errors.Join(ctx.Err(), r.stopDaemon())
+		}
 		conn, err := net.DialTimeout("tcp", addr, 200*time.Millisecond)
 		if err == nil {
 			conn.Close()
