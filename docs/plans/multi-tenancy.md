@@ -1815,6 +1815,15 @@ Clerk-mode manual checks:
     a typo can't turn a route off unnoticed. Every hosted test runs this check.
   - Hub subscriptions go through the gate. The hub accepts a subscription with 204 and then
     closes it with a `<sub>/__closed` frame carrying the 404.
+- **2026-10-14: the GitHub client's cache is per org (`github.Options.Cache`).** `cachedGet`, the
+  completed-run, job-log and workflow-definition caches all used `cache.Shared()`, the local
+  org's store. Job logs and completed runs are served from that cache by ID without calling
+  GitHub, so in hosted mode one org could have read another's private CI logs by job ID. On a
+  network error, `cachedGet` would also have served another org's stale responses.
+  `Options.Cache` is the org's store (`cache.Shared().ForOrg(org)` in the M3.2 factory), and nil
+  keeps the local-org cache. `cachedGet` takes the store explicitly. A test covers each path
+  with two orgs, and fails if `Options.Cache` is ignored. The github package has no other
+  process-wide caches.
 - **2026-10-14: M5.1 `TokenSource` pulled forward into M3 (commit `7b87e94`).** Before M5, a
   hosted org's `Server` would have used the host's `GITHUB_TOKEN`, `GH_TOKEN` or `auth.json` for
   every PR call. `github.Options.TokenSource`, when set, is the only credential. The M3.2 factory

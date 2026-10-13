@@ -32,9 +32,8 @@ type cachedGetResult struct {
 //  5. On 2xx, store the new body + ETag and return it.
 //  6. On 5xx with a stale cached body, log a warning and return the stale
 //     body so the caller can degrade gracefully.
-func cachedGet(ctx context.Context, token, path string, extraHeaders map[string]string) (*cachedGetResult, error) {
+func cachedGet(ctx context.Context, store *cache.Store, token, path string, extraHeaders map[string]string) (*cachedGetResult, error) {
 	absURL := githubAPIBase() + path
-	store := cache.Shared()
 	entry := store.LookupHTTP(absURL, "GET")
 
 	client := newClient(token)

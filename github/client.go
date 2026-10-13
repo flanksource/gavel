@@ -27,6 +27,16 @@ type Options struct {
 	// TokenSource, when set, is the only credential: no fallback to Token, the
 	// environment or auth.json, so a hosted organization never uses the host's token.
 	TokenSource func() (string, error)
+	// Cache is the GitHub response cache of the organization this client acts for;
+	// nil is the shared local-org cache.
+	Cache *cache.Store
+}
+
+func (o Options) cacheStore() *cache.Store {
+	if o.Cache != nil {
+		return o.Cache
+	}
+	return cache.Shared()
 }
 
 // ErrNoToken is wrapped by every error Options.token() returns when no token
@@ -260,13 +270,13 @@ func FetchRunJobs(opts Options, runID int64, logOpts RunLogOptions) (*model.Work
 	// stored one we never have to talk to GitHub again — except that a run
 	// cached without logs must still be enriched (and re-cached) when the
 	// caller now wants logs, otherwise --logs would be a silent no-op.
-	if payload := cache.Shared().GetCompletedRunPayload(runID); payload != nil {
+	if payload := opts.cacheStore().GetCompletedRunPayload(runID); payload != nil {
 		var cached model.WorkflowRun
 		if err := json.Unmarshal(payload, &cached); err == nil {
 			logger.Tracef("github cache hit for completed run %d", runID)
 			if logOpts.FetchLogs && !runHasFailureLogs(&cached) {
 				FetchAndAttachLogs(opts, &cached, logOpts.TailLines)
-				persistCompletedRun(repo, runID, &cached)
+				persistCompletedRun(opts.cacheStore(), repo, runID, &cached)
 			}
 			return &cached, nil
 		}
@@ -276,7 +286,7 @@ func FetchRunJobs(opts Options, runID int64, logOpts RunLogOptions) (*model.Work
 	ctx := context.Background()
 
 	runPath := fmt.Sprintf("/repos/%s/actions/runs/%d", repo, runID)
-	runResp, err := cachedGet(ctx, token, runPath, nil)
+	runResp, err := cachedGet(ctx, opts.cacheStore(), token, runPath, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -286,7 +296,7 @@ func FetchRunJobs(opts Options, runID int64, logOpts RunLogOptions) (*model.Work
 	}
 
 	jobsPath := fmt.Sprintf("/repos/%s/actions/runs/%d/jobs", repo, runID)
-	jobsResp, err := cachedGet(ctx, token, jobsPath, nil)
+	jobsResp, err := cachedGet(ctx, opts.cacheStore(), token, jobsPath, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -316,19 +326,19 @@ func FetchRunJobs(opts Options, runID int64, logOpts RunLogOptions) (*model.Work
 	// (including from new processes) will short-circuit at the top of this
 	// function.
 	if result.Status == "completed" {
-		persistCompletedRun(repo, runID, result)
+		persistCompletedRun(opts.cacheStore(), repo, runID, result)
 	}
 
 	return result, nil
 }
 
-func persistCompletedRun(repo string, runID int64, run *model.WorkflowRun) {
+func persistCompletedRun(store *cache.Store, repo string, runID int64, run *model.WorkflowRun) {
 	payload, err := cache.MarshalJSON(run)
 	if err != nil {
 		logger.Warnf("github cache: marshal run %d failed: %v", runID, err)
 		return
 	}
-	cache.Shared().PutCompletedRun(repo, runID, run.Status, run.Conclusion, payload)
+	store.PutCompletedRun(repo, runID, run.Status, run.Conclusion, payload)
 }
 
 func FetchAndAttachLogs(opts Options, run *model.WorkflowRun, tailLines int) {
@@ -380,7 +390,7 @@ func FetchJobLogs(opts Options, job *model.Job, tailLines int) error {
 		return fmt.Errorf("cannot resolve repo for logs: %w", err)
 	}
 
-	if logs, ok := cache.Shared().GetJobLogs(job.DatabaseID); ok {
+	if logs, ok := opts.cacheStore().GetJobLogs(job.DatabaseID); ok {
 		logger.Tracef("github cache hit for job logs %d", job.DatabaseID)
 		attachLogsToSteps(job, logs, tailLines)
 		return nil
@@ -388,7 +398,7 @@ func FetchJobLogs(opts Options, job *model.Job, tailLines int) error {
 
 	ctx := context.Background()
 	path := fmt.Sprintf("/repos/%s/actions/jobs/%d/logs", repo, job.DatabaseID)
-	result, err := cachedGet(ctx, token, path, nil)
+	result, err := cachedGet(ctx, opts.cacheStore(), token, path, nil)
 	if err != nil {
 		return err
 	}
@@ -398,7 +408,7 @@ func FetchJobLogs(opts Options, job *model.Job, tailLines int) error {
 	// Only persist logs once the job has reached a terminal state — otherwise
 	// the cache would lock in a half-finished log stream.
 	if job.Conclusion != "" {
-		cache.Shared().PutJobLogs(job.DatabaseID, repo, logs)
+		opts.cacheStore().PutJobLogs(job.DatabaseID, repo, logs)
 	}
 	return nil
 }
@@ -425,7 +435,7 @@ func FetchWorkflowDefinition(opts Options, run *model.WorkflowRun) (string, erro
 	// (repo, workflowID, sha) tuple — the path is recovered from the cache
 	// when present.
 	if run.HeadSHA != "" {
-		if yaml, path, ok := cache.Shared().GetWorkflowDef(repo, run.WorkflowID, run.HeadSHA); ok {
+		if yaml, path, ok := opts.cacheStore().GetWorkflowDef(repo, run.WorkflowID, run.HeadSHA); ok {
 			logger.Tracef("github cache hit for workflow def %s/%d@%s", repo, run.WorkflowID, run.HeadSHA)
 			run.WorkflowPath = path
 			run.WorkflowYAML = yaml
@@ -436,7 +446,7 @@ func FetchWorkflowDefinition(opts Options, run *model.WorkflowRun) (string, erro
 	ctx := context.Background()
 
 	wfPath := fmt.Sprintf("/repos/%s/actions/workflows/%d", repo, run.WorkflowID)
-	wfResp, err := cachedGet(ctx, token, wfPath, nil)
+	wfResp, err := cachedGet(ctx, opts.cacheStore(), token, wfPath, nil)
 	if err != nil {
 		return "", err
 	}
@@ -451,7 +461,7 @@ func FetchWorkflowDefinition(opts Options, run *model.WorkflowRun) (string, erro
 		ref = "HEAD"
 	}
 	contentPath := fmt.Sprintf("/repos/%s/contents/%s?ref=%s", repo, wf.Path, ref)
-	contentResp, err := cachedGet(ctx, token, contentPath, map[string]string{
+	contentResp, err := cachedGet(ctx, opts.cacheStore(), token, contentPath, map[string]string{
 		"Accept": "application/vnd.github.raw+json",
 	})
 	if err != nil {
@@ -461,7 +471,7 @@ func FetchWorkflowDefinition(opts Options, run *model.WorkflowRun) (string, erro
 	run.WorkflowYAML = yaml
 
 	if run.HeadSHA != "" {
-		cache.Shared().PutWorkflowDef(repo, run.WorkflowID, run.HeadSHA, wf.Path, yaml)
+		opts.cacheStore().PutWorkflowDef(repo, run.WorkflowID, run.HeadSHA, wf.Path, yaml)
 	}
 	return yaml, nil
 }
@@ -657,7 +667,7 @@ func FetchRunPR(opts Options, runID int64) (int, error) {
 	}
 	ctx := context.Background()
 
-	runResp, err := cachedGet(ctx, token, fmt.Sprintf("/repos/%s/actions/runs/%d", repo, runID), nil)
+	runResp, err := cachedGet(ctx, opts.cacheStore(), token, fmt.Sprintf("/repos/%s/actions/runs/%d", repo, runID), nil)
 	if err != nil {
 		return 0, fmt.Errorf("fetch run %d in %s: %w", runID, repo, err)
 	}
@@ -669,7 +679,7 @@ func FetchRunPR(opts Options, runID int64) (int, error) {
 		return run.PullRequests[0].Number, nil
 	}
 
-	pullsResp, err := cachedGet(ctx, token, fmt.Sprintf("/repos/%s/commits/%s/pulls", repo, run.HeadSHA), nil)
+	pullsResp, err := cachedGet(ctx, opts.cacheStore(), token, fmt.Sprintf("/repos/%s/commits/%s/pulls", repo, run.HeadSHA), nil)
 	if err != nil {
 		return 0, fmt.Errorf("fetch PRs for commit %s: %w", run.HeadSHA, err)
 	}
