@@ -3,6 +3,8 @@ package verify
 import (
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/commons/merge"
+	"github.com/flanksource/gavel/processruntime"
+	"slices"
 )
 
 // Merge layers one .gavel.yaml config value over another: the override's set
@@ -21,7 +23,17 @@ func Merge[T any](base, override T) T {
 // .gavel.yaml found, lowest precedence first: built-in defaults, the user's home
 // config, the git root's, then the target directory's.
 func MergeGavelConfig(base, override GavelConfig) GavelConfig {
-	return Merge(base, override)
+	out := Merge(base, override)
+	out.RuntimeLayers = slices.Clone(base.RuntimeLayers)
+	if len(out.RuntimeLayers) == 0 {
+		out.RuntimeLayers = append(out.RuntimeLayers, base.runtimeLayer())
+	}
+	if len(override.RuntimeLayers) > 0 {
+		out.RuntimeLayers = append(out.RuntimeLayers, override.RuntimeLayers...)
+	} else {
+		out.RuntimeLayers = append(out.RuntimeLayers, override.runtimeLayer())
+	}
+	return out
 }
 
 // configPolicy is the merge policy for every .gavel.yaml type. It is the spec
@@ -32,5 +44,5 @@ func MergeGavelConfig(base, override GavelConfig) GavelConfig {
 // The lists that accumulate across layers instead of being replaced say so on the
 // field, with a `merge:"append"` tag.
 func configPolicy() merge.Policy {
-	return api.MergePolicy().With(merge.Policy{Merger: []any{PromptSpec{}}})
+	return api.MergePolicy().With(merge.Policy{Merger: []any{PromptSpec{}, processruntime.Options{}}})
 }

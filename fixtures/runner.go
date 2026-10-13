@@ -19,22 +19,27 @@ import (
 	"github.com/flanksource/commons/logger"
 
 	"github.com/flanksource/gavel/fixtures/record"
+	"github.com/flanksource/gavel/processruntime"
 )
 
 // RunnerOptions configures the fixture runner
 type RunnerOptions struct {
-	Paths   []string // Fixture file paths/patterns
-	Format  string   // Output format: tree, table, json, yaml, csv
-	Filter  string   // Filter tests by name pattern (glob)
-	NoColor bool     // Disable colored output
-	WorkDir string   // Working directory
+	ProcessRuntime processruntime.Options
+	Args           []string
+	Context        context.Context `json:"-" yaml:"-"`
+	worker         bool
+	Paths          []string // Fixture file paths/patterns
+	Format         string   // Output format: tree, table, json, yaml, csv
+	Filter         string   // Filter tests by name pattern (glob)
+	NoColor        bool     // Disable colored output
+	WorkDir        string   // Working directory
 	// MaxWorkers caps how many fixture rows run at once. Zero means 1: rows
 	// shell out to real binaries against shared databases, files and ports, so
 	// parallelism is opt-in rather than the default.
 	MaxWorkers     int
-	Logger         logger.Logger
+	Logger         logger.Logger                                         `json:"-" yaml:"-"`
 	ExecutablePath string                                                // Path to the current executable (for fixtures to use)
-	ProgressSink   ProgressSink                                          // Receives immutable execution-tree snapshots
+	ProgressSink   ProgressSink                                          `json:"-" yaml:"-"` // Receives immutable execution-tree snapshots
 	UpdateGolden   bool                                                  // When true, mismatched @file expectations are rewritten with actual output instead of failing
 	Display        *DisplayOptions                                       // Optional result visibility controls for CLI rendering
 	Spec           *api.Spec                                             // Runtime options for embedded AI prompts
@@ -65,16 +70,20 @@ type Runner struct {
 	// recorders holds the diagnostics recorders per markdown file, keyed the
 	// same way. nil when nothing in the run declared `record:` — no goroutine,
 	// no listener, no file.
-	recorders map[string]*recorderSet
-	store     *record.Store
-	progress  *executionTracker
-	resultMu  sync.Mutex
-	benchmark *BenchmarkReport
-	baseline  *BenchmarkReport
+	recorders      map[string]*recorderSet
+	store          *record.Store
+	progress       *executionTracker
+	resultMu       sync.Mutex
+	benchmark      *BenchmarkReport
+	workerSnapshot *ExecutionSnapshot
+	baseline       *BenchmarkReport
 }
 
 // NewRunner creates a new fixture runner
 func NewRunner(opts RunnerOptions) (*Runner, error) {
+	if err := opts.ProcessRuntime.Validate(); err != nil {
+		return nil, err
+	}
 	if opts.Benchmark && opts.Display != nil {
 		display := *opts.Display
 		display.ShowPassed = true
@@ -148,6 +157,9 @@ func NewRunner(opts RunnerOptions) (*Runner, error) {
 // Run executes the fixture tests and returns the result tree.
 // The caller is responsible for formatting/printing the output.
 func (r *Runner) Run() (*FixtureNode, error) {
+	if r.options.ProcessRuntime.Isolated() && !r.options.worker {
+		return r.runIsolated()
+	}
 	r.benchmark = nil
 	started := time.Now()
 	if _, err := r.prepareFixtureTree(); err != nil {
@@ -192,6 +204,12 @@ func (r *Runner) Run() (*FixtureNode, error) {
 func (r *Runner) BenchmarkReport() *BenchmarkReport { return r.benchmark }
 
 func (r *Runner) ExecutionSnapshot() ExecutionSnapshot {
+	r.resultMu.Lock()
+	workerSnapshot := r.workerSnapshot
+	r.resultMu.Unlock()
+	if workerSnapshot != nil {
+		return *workerSnapshot
+	}
 	if r.progress == nil {
 		panic("fixture execution snapshot requested before Run")
 	}
@@ -324,17 +342,21 @@ func (r *Runner) executeFixtures() (results *FixtureGroup, runErr error) {
 		Summary: Stats{},
 	}
 
-	ctx := flanksourceContext.NewContext(context.Background())
+	parent := r.options.Context
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx := flanksourceContext.NewContext(parent)
 	if r.hasSetup() {
 		defer func() {
 			startErr := r.startProgressStep(ctx, ExecutionKindCleanup)
 			cleanupErr := r.cleanupSetups()
 			state := ExecutionPassed
 			if cleanupErr != nil {
-				state = ExecutionWarned
+				state = ExecutionErrored
 			}
 			completeErr := r.progress.CompleteStep(ctx, "cleanup", state, cleanupErr)
-			runErr = errors.Join(runErr, startErr, completeErr)
+			runErr = errors.Join(runErr, cleanupErr, startErr, completeErr)
 		}()
 	}
 
@@ -384,19 +406,19 @@ func (r *Runner) executeFixtures() (results *FixtureGroup, runErr error) {
 			}
 			return nil, fmt.Errorf("daemon failed to start: %w", err)
 		}
-		if err := r.completeProgressStep(ctx, ExecutionKindDaemon); err != nil {
-			return nil, err
-		}
 		defer func() {
 			startErr := r.startProgressStep(ctx, ExecutionKindDaemonStop)
 			stopErr := r.stopDaemon()
 			state := ExecutionPassed
 			if stopErr != nil {
-				state = ExecutionWarned
+				state = ExecutionErrored
 			}
 			completeErr := r.progress.CompleteStep(ctx, "daemon-stop", state, stopErr)
-			runErr = errors.Join(runErr, startErr, completeErr)
+			runErr = errors.Join(runErr, stopErr, startErr, completeErr)
 		}()
+		if err := r.completeProgressStep(ctx, ExecutionKindDaemon); err != nil {
+			return nil, err
+		}
 	}
 
 	// Recorders start after the daemon so its port can be excluded from the
@@ -430,7 +452,7 @@ func (r *Runner) executeFixtures() (results *FixtureGroup, runErr error) {
 					return result, progressErr
 				}
 				return result, err
-			}, clicky.WithTaskTimeout(fixtureTimeout(*node.Test)))
+			}, task.WithContext(parent), clicky.WithTaskTimeout(fixtureTimeout(*node.Test)))
 		}
 	})
 
@@ -574,6 +596,8 @@ func (r *Runner) executeFixture(ctx flanksourceContext.Context, fixture FixtureT
 	ctx.Logger.V(5).Infof("Using CWD: %s", r.options.WorkDir)
 
 	opts := RunOptions{
+		ProcessRuntime: r.options.ProcessRuntime,
+		Args:           r.options.Args,
 		Context:        ctx,
 		WorkDir:        r.options.WorkDir,
 		Verbose:        ctx.Logger.IsLevelEnabled(logger.Debug),

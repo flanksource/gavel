@@ -50,6 +50,8 @@ func RunTestStep(fixture fixtures.FixtureTest, opts fixtures.RunOptions) fixture
 	// A fixture test step is headless: never launch the dashboard or recurse
 	// back into fixture discovery (fixture → test → fixture).
 	ro.UI = false
+	ro.Context = opts.Context
+	ro.Runtime = opts.ProcessRuntime.Merge(ro.Runtime)
 	ro.Fixtures = false
 	ro.OutputTee = nil
 	if ro.WorkDir == "" {
@@ -141,8 +143,12 @@ func RunLintStep(fixture fixtures.FixtureTest, opts fixtures.RunOptions) fixture
 	if len(lo.Files) == 0 {
 		lo.Files = opts.Changed
 	}
-	ctx := context.Background()
+	ctx := opts.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	lo.Context = ctx
+	lo.Runtime = opts.ProcessRuntime.Merge(lo.Runtime)
 
 	results, runErr := lint.Run(ctx, lo)
 
@@ -171,6 +177,9 @@ func RunLintStep(fixture fixtures.FixtureTest, opts fixtures.RunOptions) fixture
 	for _, lr := range results {
 		if lr.Skipped {
 			continue
+		}
+		if !lr.Success {
+			return result.Errorf(fmt.Errorf("%s: %s", lr.Linter, lr.Error), "lint execution failed")
 		}
 		violations += len(lr.Violations)
 	}

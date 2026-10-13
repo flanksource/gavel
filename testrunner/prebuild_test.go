@@ -35,7 +35,7 @@ func TestGoPreBuildArgs_CompilesWithoutRunning(t *testing.T) {
 
 func TestPreBuildGoPackages_NoPackagesIsNoop(t *testing.T) {
 	o := &TestOrchestrator{}
-	if err := o.preBuildGoPackages(nil); err != nil {
+	if err := o.preBuildGoPackages(nil, parsers.GoTest); err != nil {
 		t.Fatalf("preBuildGoPackages(nil) = %v, want nil", err)
 	}
 }
@@ -47,7 +47,7 @@ func TestPreBuildGoPackages_CompilesValidPackage(t *testing.T) {
 	o := &TestOrchestrator{}
 	o.WorkDir = repo
 
-	if err := o.preBuildGoPackages([]string{"./sample"}); err != nil {
+	if err := o.preBuildGoPackages([]string{"./sample"}, parsers.GoTest); err != nil {
 		t.Fatalf("preBuildGoPackages on a valid package = %v, want nil", err)
 	}
 }
@@ -64,7 +64,7 @@ func TestPreBuildGoPackages_FailsFastOnCompileError(t *testing.T) {
 	o := &TestOrchestrator{}
 	o.WorkDir = repo
 
-	err := o.preBuildGoPackages([]string{"./sample"})
+	err := o.preBuildGoPackages([]string{"./sample"}, parsers.GoTest)
 	if err == nil {
 		t.Fatal("preBuildGoPackages on a broken package = nil, want compile error")
 	}

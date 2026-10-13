@@ -12,6 +12,7 @@ import (
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
 	gaveldocs "github.com/flanksource/gavel"
+	"github.com/flanksource/gavel/processruntime"
 	promptregistry "github.com/flanksource/gavel/prompts/registry"
 	"github.com/flanksource/gavel/verify"
 	"github.com/spf13/cobra"
@@ -21,6 +22,7 @@ import (
 type ConfigOptions struct {
 	Args    []string `json:"-" args:"true"`
 	Resolve bool     `json:"resolve,omitempty" flag:"resolve" short:"r" help:"Resolve registered AI prompts with saved defaults and field provenance"`
+	Runtime bool     `json:"runtime,omitempty" flag:"runtime" help:"Show effective linter and test runtime settings, with environment names only"`
 }
 
 type ConfigResult struct {
@@ -80,6 +82,9 @@ func runConfig(opts ConfigOptions) (any, error) {
 		}
 		return ResolvedConfigResult{Config: trace.Merged, Prompts: resolved, Trace: trace}, nil
 	}
+	if opts.Runtime {
+		return resolvedProcessRuntime(trace.Merged)
+	}
 
 	return ConfigResult{
 		TargetPath: trace.TargetPath,
@@ -88,6 +93,26 @@ func runConfig(opts ConfigOptions) (any, error) {
 		Sources:    trace.Sources,
 		Merged:     trace.Merged,
 	}, nil
+}
+
+type RuntimeConfigResult struct {
+	Runtime processruntime.Summary `json:"runtime" yaml:"runtime"`
+	Args    []string               `json:"args,omitempty" yaml:"args,omitempty"`
+}
+
+func resolvedProcessRuntime(config verify.GavelConfig) (map[string]map[string]RuntimeConfigResult, error) {
+	result := make(map[string]map[string]RuntimeConfigResult)
+	for category, names := range map[string][]string{"lint": verify.BuiltinLinterNames, "test": {"go", "ginkgo", "jest", "vitest", "playwright", "fixture"}} {
+		result[category] = make(map[string]RuntimeConfigResult)
+		for _, name := range names {
+			runtime, args, err := config.RuntimeFor(category, name, processruntime.Options{})
+			if err != nil {
+				return nil, err
+			}
+			result[category][name] = RuntimeConfigResult{Runtime: runtime.Summary(), Args: args}
+		}
+	}
+	return result, nil
 }
 
 func configHelp(cmd *cobra.Command) api.Text {

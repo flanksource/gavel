@@ -152,8 +152,7 @@ func (p *Pyright) Run(ctx commonsContext.Context, task *clicky.Task) ([]models.V
 	args := p.buildArgs()
 
 	// Execute command
-	cmd := exec.CommandContext(ctx, "pyright", args...)
-	cmd.Dir = p.WorkDir
+	cmd := p.CommandContext(ctx, p.Name(), "pyright", args...)
 
 	logger.Infof("Executing: pyright %s", strings.Join(args, " "))
 

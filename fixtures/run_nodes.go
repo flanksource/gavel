@@ -33,6 +33,12 @@ func RunNodes(ctx context.Context, nodes []*FixtureNode, opts RunOptions) ([]Fix
 	if ctx == nil {
 		return nil, nil, fmt.Errorf("fixtures: RunNodes requires a context")
 	}
+	if err := opts.ProcessRuntime.Validate(); err != nil {
+		return nil, nil, err
+	}
+	if opts.ProcessRuntime.Isolated() {
+		return runNodesIsolated(ctx, nodes, opts)
+	}
 	if opts.Context == nil {
 		opts.Context = ctx
 	}
@@ -106,7 +112,11 @@ func dispatchNode(ctx context.Context, test FixtureTest, opts RunOptions) Fixtur
 	if missing := opts.Record.Missing(); len(missing) > 0 {
 		return nodeError(test, fmt.Sprintf("record: %v is not implemented yet", missing))
 	}
-	if reason := test.ShouldSkip(); reason != "" {
+	reason, skipErr := test.ShouldSkip(opts)
+	if skipErr != nil {
+		return nodeError(test, skipErr.Error())
+	}
+	if reason != "" {
 		return FixtureResult{Name: test.Name, Status: task.StatusSKIP, Test: test, Error: reason}
 	}
 	if test.IsAIStep() {

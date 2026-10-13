@@ -22,7 +22,13 @@ try {
   process.exit(1);
 }
 
-const configPath = ts.findConfigFile("./", ts.sys.fileExists, "tsconfig.json");
+const nativeArgs = process.argv.slice(2);
+const parsed = nativeArgs.length ? ts.parseBuildCommand(nativeArgs) : { buildOptions: {}, projects: [], errors: [] };
+if (parsed.errors.length || parsed.buildOptions.watch) {
+  process.stderr.write("gavel-tsc: " + (parsed.errors.map((d) => ts.flattenDiagnosticMessageText(d.messageText, "\n")).join("\n") || "watch mode is not supported") + "\n");
+  process.exit(1);
+}
+const configPath = parsed.projects.length ? parsed.projects[0] : ts.findConfigFile("./", ts.sys.fileExists, "tsconfig.json");
 if (!configPath) {
   process.stderr.write("gavel-tsc: no tsconfig.json found in " + process.cwd() + "\n");
   process.exit(1);
@@ -43,7 +49,8 @@ const host = ts.createSolutionBuilderHost(
 );
 host.writeFile = () => {};
 
-const builder = ts.createSolutionBuilder(host, [configPath], {
+const builder = ts.createSolutionBuilder(host, parsed.projects.length ? parsed.projects : [configPath], {
+  ...parsed.buildOptions,
   force: true,
   noEmit: true,
   pretty: false,

@@ -147,8 +147,7 @@ func (m *Markdownlint) Run(ctx commonsContext.Context, task *clicky.Task) ([]mod
 
 	// Execute command (markdownlint-cli2 is the modern version)
 	cmdName := "markdownlint"
-	cmd := exec.CommandContext(ctx, cmdName, args...)
-	cmd.Dir = m.WorkDir
+	cmd := m.CommandContext(ctx, m.Name(), cmdName, args...)
 
 	logger.Infof("Executing: %s %s", cmdName, strings.Join(args, " "))
 

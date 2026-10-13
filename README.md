@@ -773,6 +773,8 @@ Project-level configuration placed at the repository root. Gavel also loads `~/.
 Use `gavel config [path]` to inspect the merged result for any directory or file path.
 A full annotated example lives in `gavel.yaml.example` and is also rendered in `gavel config --help`.
 
+Set shared `runtime` defaults in `~/.gavel.yaml` for every linter and test type: child environment, niceness, sustained CPU, aggregate memory, and per-invocation timeout. Override them under `lint.runtime`, `test.runtime`, `lint.linters.<name>.runtime`, or `test.frameworks.<name>.runtime`. Type entries also accept native `args`. Inspect effective settings with `gavel config --runtime --json`; see [runtime configuration](SCHEMA.md#shared-process-runtime) for precedence, cap resets, fixture isolation, and examples.
+
 ```yaml
 verify:
   model: claude                      # AI model for generic AI verification fixtures

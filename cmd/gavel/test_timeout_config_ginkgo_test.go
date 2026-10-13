@@ -5,7 +5,9 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/flanksource/gavel/processruntime"
 	"github.com/flanksource/gavel/testrunner"
+	"github.com/flanksource/gavel/verify"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/spf13/cobra"
@@ -48,8 +50,17 @@ var _ = Describe("test timeouts from .gavel.yaml", func() {
 		opts, _, err := finalizeTestCommandOptions(timeoutCommand(), testrunner.RunOptions{}, defaultFlags())
 		Expect(err).NotTo(HaveOccurred())
 		Expect(opts.Timeout).To(Equal(45 * time.Minute))
-		Expect(opts.TestTimeout).To(Equal(20 * time.Minute))
-		Expect(opts.LintTimeout).To(Equal(8 * time.Minute))
+		Expect(opts.TestTimeout).To(BeZero())
+		Expect(opts.LintTimeout).To(BeZero())
+		config, err := verify.LoadGavelConfig(workingDir)
+		Expect(err).NotTo(HaveOccurred())
+		test, _, err := config.RuntimeFor("test", "go", processruntime.Options{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(test.Timeout).NotTo(BeNil())
+		Expect(*test.Timeout).To(Equal("20m"))
+		lint, _, err := config.RuntimeFor("lint", "golangci-lint", processruntime.Options{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(*lint.Timeout).To(Equal("8m"))
 	})
 
 	It("lets an explicit flag override the configured value", func() {
@@ -65,14 +76,14 @@ var _ = Describe("test timeouts from .gavel.yaml", func() {
 		Expect(opts.TestTimeout).To(Equal(90 * time.Second))
 	})
 
-	It("leaves flag defaults alone when the config declares no timeouts", func() {
+	It("defers per-invocation defaults to runtime resolution", func() {
 		writeGavelConfig("test:\n  outlineSummary: {}\n")
 
 		opts, _, err := finalizeTestCommandOptions(timeoutCommand(), testrunner.RunOptions{}, defaultFlags())
 		Expect(err).NotTo(HaveOccurred())
 		Expect(opts.Timeout).To(Equal(10 * time.Minute))
-		Expect(opts.TestTimeout).To(Equal(5 * time.Minute))
-		Expect(opts.LintTimeout).To(Equal(5 * time.Minute))
+		Expect(opts.TestTimeout).To(BeZero())
+		Expect(opts.LintTimeout).To(BeZero())
 	})
 
 	It("reports a malformed duration instead of silently using the default", func() {

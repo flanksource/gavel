@@ -125,8 +125,7 @@ func (j *JSCPD) Run(ctx commonsContext.Context, task *clicky.Task) ([]models.Vio
 
 	args := j.buildArgs(tempDir)
 
-	cmd := exec.CommandContext(ctx, "jscpd", args...)
-	cmd.Dir = j.WorkDir
+	cmd := j.CommandContext(ctx, j.Name(), "jscpd", args...)
 
 	logger.Infof("Executing: jscpd %s", strings.Join(args, " "))
 

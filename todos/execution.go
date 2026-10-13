@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -13,7 +14,9 @@ import (
 	"github.com/flanksource/clicky/api/icons"
 	"github.com/flanksource/clicky/task"
 	"github.com/flanksource/gavel/fixtures"
+	"github.com/flanksource/gavel/processruntime"
 	"github.com/flanksource/gavel/todos/types"
+	"github.com/flanksource/gavel/verify"
 )
 
 const providerPersistenceTimeout = 30 * time.Second
@@ -155,7 +158,19 @@ func PersistenceContext(ctx context.Context) (context.Context, context.CancelFun
 // as an extra errored result rather than as a short list that reads like
 // everything passed.
 func RunNodes(ctx context.Context, workDir string, nodes []*fixtures.FixtureNode) []fixtures.FixtureResult {
-	results, _, err := fixtures.RunNodes(ctx, nodes, fixtures.RunOptions{WorkDir: workDir})
+	var results []fixtures.FixtureResult
+	config, err := verify.LoadGavelConfig(workDir)
+	if err == nil {
+		runtime, runtimeArgs, runtimeErr := config.RuntimeFor("test", "fixture", processruntime.Options{})
+		err = runtimeErr
+		if err == nil {
+			executable, exeErr := os.Executable()
+			err = exeErr
+			if err == nil {
+				results, _, err = fixtures.RunNodes(ctx, nodes, fixtures.RunOptions{WorkDir: workDir, ProcessRuntime: runtime, ExecutablePath: executable, Args: runtimeArgs})
+			}
+		}
+	}
 	if err != nil {
 		return append(results, fixtures.FixtureResult{
 			Name: "verification progress", Status: task.StatusERR,

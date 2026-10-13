@@ -8,6 +8,7 @@ import (
 	"github.com/flanksource/captain/pkg/api"
 
 	"github.com/flanksource/gavel/fixtures/record"
+	"github.com/flanksource/gavel/processruntime"
 )
 
 // FixtureType defines the interface for different types of fixture tests.
@@ -33,20 +34,22 @@ type FixtureType interface {
 // RunOptions provides configuration options for executing fixture tests.
 // It controls execution behavior including working directory, verbosity, and caching.
 type RunOptions struct {
-	Context        context.Context
+	ProcessRuntime processruntime.Options
+	Args           []string
+	Context        context.Context `json:"-" yaml:"-"`
 	WorkDir        string
 	Verbose        bool
 	NoCache        bool
 	Spec           *api.Spec
 	Runtime        *api.ResolveSpecOptions                               `json:"-" yaml:"-"`
 	ResolveSpec    func(context.Context) (api.ResolveSpecOptions, error) `json:"-" yaml:"-"`
-	Evaluator      *CELEvaluator
+	Evaluator      *CELEvaluator                                         `json:"-" yaml:"-"`
 	ExtraArgs      map[string]interface{}
 	ExecutablePath string // Path to the current executable
 	UpdateGolden   bool   // When true, mismatched @file expectations are rewritten with actual output instead of failing
 	Profile        bool
 	SQLProfile     bool
-	Progress       func(done, total int) error
+	Progress       func(done, total int) error `json:"-" yaml:"-"`
 
 	// Setup is the environment prepared for the markdown file this fixture came
 	// from, or nil when that file declared no `setup:`. It lives here rather than
@@ -59,7 +62,7 @@ type RunOptions struct {
 	// recorders watching its file — nil when nothing is recording it. Here for
 	// the same reason as Setup: a proxy address is runtime state, not part of the
 	// fixture's declaration.
-	Recorder *RecorderContext
+	Recorder *RecorderContext `json:"-" yaml:"-"`
 
 	// Record is the recorder declaration in force for this fixture — its own
 	// `record:` or the run-wide default — so RunNode can refuse a recorder that

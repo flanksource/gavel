@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -127,8 +126,7 @@ func (b *Betterleaks) Run(ctx commonsContext.Context, _ *clicky.Task) ([]models.
 	_ = os.Remove(reportPath)
 
 	args := b.buildArgs(tomlPath, reportPath)
-	cmd := exec.CommandContext(ctx, "betterleaks", args...)
-	cmd.Dir = b.WorkDir
+	cmd := b.CommandContext(ctx, b.Name(), "betterleaks", args...)
 
 	logger.V(1).Infof("Executing: betterleaks")
 	logger.V(2).Infof("Executing: betterleaks %s", strings.Join(args, " "))
