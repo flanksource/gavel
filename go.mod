@@ -26,6 +26,7 @@ require (
 	github.com/chromedp/chromedp v0.15.1
 	github.com/creack/pty v1.1.24
 	github.com/dustin/go-humanize v1.0.1
+	github.com/eko/gocache/lib/v4 v4.2.3
 	github.com/elazarl/goproxy v1.7.2
 	github.com/flanksource/clicky/aichat v1.21.77
 	github.com/flanksource/deps v1.0.46
@@ -183,7 +184,6 @@ require (
 	github.com/docker/go-sdk/network v0.1.0-alpha013 // indirect
 	github.com/docker/go-units v0.5.0 // indirect
 	github.com/ebitengine/purego v0.10.2 // indirect
-	github.com/eko/gocache/lib/v4 v4.2.3 // indirect
 	github.com/eko/gocache/store/go_cache/v4 v4.2.5 // indirect
 	github.com/emicklei/go-restful/v3 v3.13.0 // indirect
 	github.com/emirpasic/gods v1.18.1 // indirect

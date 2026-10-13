@@ -3,13 +3,10 @@ package api
 
 import (
 	"context"
-	"crypto/rsa"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"math/big"
 	"net/http"
 	"net/url"
 	"strings"
@@ -58,6 +55,7 @@ type AuthClient struct {
 	metadata metadata
 	http     *http.Client
 	oauth    oauth2.Config
+	jwks     *JWKSCache
 }
 
 func secureURL(raw string) error {
@@ -78,14 +76,8 @@ func NewAuthClient(ctx context.Context, config AuthConfig, client *http.Client) 
 	if err := secureURL(config.Issuer); err != nil {
 		return nil, fmt.Errorf("set GAVEL_CLERK_ISSUER or --issuer to your Clerk Frontend API URL: %w", err)
 	}
-	if client == nil {
-		client = &http.Client{Timeout: 20 * time.Second}
-	}
-	// Never follow redirects with tokens or discovery requests.
-	copyClient := *client
-	copyClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	a := &AuthClient{config: config, http: &copyClient}
-	if err := a.getJSON(ctx, config.Issuer+"/.well-known/oauth-authorization-server", &a.metadata); err != nil {
+	a := &AuthClient{config: config, http: withoutRedirects(client)}
+	if err := getJSON(ctx, a.http, config.Issuer+"/.well-known/oauth-authorization-server", &a.metadata); err != nil {
 		return nil, err
 	}
 	if a.metadata.Issuer != config.Issuer {
@@ -102,6 +94,7 @@ func NewAuthClient(ctx context.Context, config AuthConfig, client *http.Client) 
 			return nil, errors.New("OAuth endpoints must belong to the configured Clerk origin")
 		}
 	}
+	a.jwks = NewJWKSCache(a.metadata.JWKSURI, a.http, 10*time.Minute)
 	a.oauth = oauth2.Config{ClientID: config.ClientID, Scopes: []string{"openid", "profile", "email", "offline_access"}, Endpoint: oauth2.Endpoint{
 		AuthURL: a.metadata.AuthorizationEndpoint, TokenURL: a.metadata.TokenEndpoint, DeviceAuthURL: a.metadata.DeviceEndpoint, AuthStyle: oauth2.AuthStyleInParams,
 	}}
@@ -200,42 +193,23 @@ type identityClaims struct {
 }
 
 func (a *AuthClient) verifyIdentity(ctx context.Context, raw string) (Identity, error) {
-	var keys struct {
-		Keys []struct {
-			Kty string `json:"kty"`
-			Kid string `json:"kid"`
-			Use string `json:"use"`
-			Alg string `json:"alg"`
-			N   string `json:"n"`
-			E   string `json:"e"`
-		} `json:"keys"`
-	}
 	if raw == "" {
 		return Identity{}, errors.New("Clerk returned no ID token; enable the openid scope")
 	}
-	if err := a.getJSON(ctx, a.metadata.JWKSURI, &keys); err != nil {
-		return Identity{}, err
-	}
 	claims := &identityClaims{}
+	var keyErr error
 	_, err := jwt.ParseWithClaims(raw, claims, func(token *jwt.Token) (any, error) {
 		kid, _ := token.Header["kid"].(string)
 		if kid == "" {
 			return nil, errors.New("missing signing key ID")
 		}
-		for _, key := range keys.Keys {
-			if key.Kid != kid || key.Kty != "RSA" || (key.Use != "" && key.Use != "sig") || (key.Alg != "" && key.Alg != "RS256") {
-				continue
-			}
-			n, nerr := base64.RawURLEncoding.DecodeString(key.N)
-			e, eerr := base64.RawURLEncoding.DecodeString(key.E)
-			exponent := new(big.Int).SetBytes(e)
-			if nerr != nil || eerr != nil || len(n) < 256 || !exponent.IsInt64() || exponent.Int64() < 3 || exponent.Int64() > 2147483647 {
-				return nil, errors.New("invalid RSA signing key")
-			}
-			return &rsa.PublicKey{N: new(big.Int).SetBytes(n), E: int(exponent.Int64())}, nil
-		}
-		return nil, errors.New("unknown signing key")
+		key, err := a.jwks.Key(ctx, kid)
+		keyErr = err
+		return key, err
 	}, jwt.WithValidMethods([]string{"RS256"}), jwt.WithIssuer(a.config.Issuer), jwt.WithAudience(a.config.ClientID), jwt.WithExpirationRequired(), jwt.WithIssuedAt())
+	if keyErr != nil && !errors.Is(keyErr, errUnknownSigningKey) {
+		return Identity{}, keyErr
+	}
 	if err != nil || claims.Subject == "" || claims.IssuedAt == nil ||
 		(claims.OrganizationSlug != "" && claims.OrganizationID == "") ||
 		(len(claims.Audience) > 1 && claims.AuthorizedParty == "") ||
@@ -245,12 +219,23 @@ func (a *AuthClient) verifyIdentity(ctx context.Context, raw string) (Identity, 
 	return Identity{ID: claims.Subject, Issuer: claims.Issuer, Name: claims.Name, Email: claims.Email, EmailVerified: claims.EmailVerified, OrganizationID: claims.OrganizationID, OrganizationSlug: claims.OrganizationSlug}, nil
 }
 
-func (a *AuthClient) getJSON(ctx context.Context, endpoint string, output any) error {
+// withoutRedirects copies client (or a default one) so it never follows redirects
+// with tokens or discovery requests.
+func withoutRedirects(client *http.Client) *http.Client {
+	if client == nil {
+		client = &http.Client{Timeout: 20 * time.Second}
+	}
+	copyClient := *client
+	copyClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return &copyClient
+}
+
+func getJSON(ctx context.Context, client *http.Client, endpoint string, output any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return err
 	}
-	response, err := a.http.Do(req)
+	response, err := client.Do(req)
 	if err != nil {
 		return errors.New("cannot reach Clerk authentication service")
 	}

@@ -489,25 +489,37 @@ the answers:
     present, and `azp` in `AuthorizedParties` when `azp` is present.
   - `SessionClaims{UserID string; OrgID, OrgSlug, OrgRole string}` supports both Clerk claim
     versions: v2 `o: {id, slg, rol}` and v1 `org_id`/`org_slug`/`org_role`.
+  - `OrgRole` always has the `org:` prefix. v2's `rol` comes without it and gets it added, so roles
+    compare equal to v1 claims and to Backend API memberships.
+  - A session whose `sts` is `pending` is rejected; Clerk's SDKs treat it as signed out (§15).
 - `api/access_token.go`: the CLI verifier, chosen by the spike. Signature:
   `func (v AccessTokenVerifier) Verify(ctx, raw string) (clerkUserID string, err error)`.
-  - `type AccessTokenVerifier struct { Issuer, ClientID string; JWKS *JWKSCache }`. The M2.0 spike
-    showed Clerk OAuth access tokens are RS256 JWTs signed by the instance JWKS, so verification is
-    local.
+  - `func NewAccessTokenVerifier(issuer, clientID string, jwks *JWKSCache, clerk ClerkOrganizations, ttl time.Duration) *AccessTokenVerifier`.
+    A constructor rather than a struct literal, because the verifier owns its result cache. The
+    M2.0 spike showed Clerk OAuth access tokens are RS256 JWTs signed by the instance JWKS, so the
+    first checks are local.
   - Requirements: header `typ == "at+jwt"`, RS256, `iss == Issuer`, `client_id == ClientID`,
     `exp`/`nbf` with 5 seconds of leeway, and `sub` present. There is no `aud` claim.
   - The `typ` and `client_id` checks matter: ID tokens and browser session tokens are signed by the
     same keys, and neither may be accepted as a CLI bearer token.
-  - **Revocation.** After the local checks pass, ask Clerk's Backend API whether the token is still
-    valid (OAuth access-token verification, with the server's secret key). Before coding, confirm
-    the endpoint and response shape in Clerk's Backend API docs, and record them in the spike log.
-    A revoked or unknown token is rejected.
+  - **Revocation.** After the local checks pass, call
+    `POST https://api.clerk.com/v1/oauth_applications/access_tokens/verify` with the server's
+    secret key (confirmed 2026-10-14, §13). Accept only a token object with `revoked` and
+    `expired` false whose `subject` and `client_id` match the JWT. Reject `{"active": false}`, a
+    404, and a revoked token. Any other response is an error.
   - **Cache.** Cache the result with `commons-db/cache.NewCache[T]`, keyed by `sha256(token)`
     (never the raw token). Each entry expires at the earlier of the token's `exp` and the check
     time plus `auth.token.cache.ttl` (`properties.Duration`, default 10m). Requests never extend
     an entry, so a revoked token stops working within one TTL. Only successful checks are cached.
 - `SessionVerifier` rejects a token whose header `typ` is `at+jwt` or that carries `client_id`, so an
   OAuth access token never passes as a browser session.
+- **Errors.** All three verifiers return an error wrapping `api.ErrInvalidToken` for a bad token
+  (M3 answers 401; check it with `errors.Is`). Each says why, e.g. `invalid token: the Clerk
+  session is pending: finish signing in, e.g. choose an organization`, or `... was issued to OAuth
+  client "x", not "y"`. Messages never include the token or the secret key.
+  A JWKS fetch failure or a Backend API failure comes back as a different error, so M3 can tell
+  "invalid" from "couldn't check". Shared checks (RS256, kid lookup, 5s leeway, `exp` required)
+  live in `parseSigned` in `api/jwks.go`.
 - `api/github_oidc.go`: `type GitHubOIDCVerifier struct { Audience string; JWKS *JWKSCache }`.
   - Issuer `https://token.actions.githubusercontent.com`; JWKS
     `https://token.actions.githubusercontent.com/.well-known/jwks`.
@@ -516,7 +528,7 @@ the answers:
   - `repository_id` arrives as a string claim; parse it.
 - `api/clerk_organizations.go`: add `func (c ClerkOrganizations) UserMemberships(ctx, clerkUserID string) ([]Membership, error)`.
   - It calls `GET https://api.clerk.com/v1/users/{id}/organization_memberships?limit=100` and
-    paginates on `total_count`.
+    paginates with `offset` until it has `total_count` memberships.
   - `Membership{OrgID, OrgSlug, OrgName, Role string}`.
   - Check the response shape against Clerk's Backend API docs before coding; record any surprises
     in the spike log.
@@ -524,8 +536,9 @@ the answers:
   calls `GET /v1/users/{id}/oauth_access_tokens/oauth_github` and returns the token of the first
   entry. Used in M5.
 
-**Tests** use `httptest` servers that sign with a generated RSA key, following the
-`api/auth_test.go` pattern. Cover:
+**Tests** use `api/clerktest`, which signs with a generated RSA key and also serves the Backend
+API endpoints above. Its `BackendClient()` routes `api.clerk.com` requests to the fake, so
+`ClerkOrganizations` keeps the real URL. Cover:
 - a valid token;
 - an expired token;
 - an ID token or session token presented as an access token, and an access token presented as a
@@ -1452,15 +1465,14 @@ Clerk-mode manual checks:
   - M3.3's all-mode changes are accepted on purpose: stripping `setup`/`sandbox`/`cliArgs` in
     `validateTodoRunSpec`, and dropping the attachment CORS header.
   - Milestones may be reordered when that keeps each merged state complete and safe.
-  - Delivery is phased across three PRs. Each merged state must leave none mode working and clerk
-    mode safe:
-    1. **PR 1: M0 + M1.** None mode only. Tenancy exists in the schema and stores; nothing uses
-       another org yet. The migration is one-way (PK changes break an older binary's upserts);
+  - Delivery is phased across two PRs (three until the 2026-10-14 entry below). Each merged state
+    must leave none mode working and clerk mode safe:
+    1. **PR 1: M0–M6, on branch `api-auth`.** Tenancy in the schema and stores, Clerk login, org
+       switcher, GitHub App, CI uploads, SSH keys, authorized push. Execution in clerk mode
+       returns 501. The migration is one-way (PK changes break an older binary's upserts);
        Batman accepted this: nobody goes back to an older binary after running this one.
-    2. **PR 2: M2–M6.** Clerk login, org switcher, GitHub App, CI uploads, SSH keys, authorized push.
-       Execution in clerk mode returns 501.
-    3. **PR 3: M7–M10.** Blob store, retention, sandboxes, agents.
-  - Reorders so PR 2 is safe on its own: the execution 501s move from M9.5 into M3.3, and
+    2. **PR 2: M7–M10, on a separate branch.** Blob store, retention, sandboxes, agents.
+  - Reorders so PR 1 is safe on its own: the execution 501s move from M9.5 into M3.3, and
     clerk-mode push never runs host hooks (M6.2 placeholder `OnPushed`).
   - Hosted `commit`/`open-pr` project actions return 400; commits come only from agent runs.
     Bundle upload and serve-side push move from M9 into M10, so model keys
@@ -1678,6 +1690,65 @@ Clerk-mode manual checks:
     earlier (401). Separately, Cloudflare in front of Clerk blocked Python-urllib's default user
     agent (`403 error code: 1010`). Go's default client worked for `gavel login`, but if a Clerk
     call ever returns that 403, the user agent is the cause.
+- **2026-10-14: PR split changed to two PRs.** Batman's call: M0–M1 and M2–M6 ship together as
+  one PR from `api-auth` (its M0–M1 commits stay as they are); M7–M10 get their own PR on a
+  separate branch. The delivery list in the 2026-10-13 planning entry is updated.
+- **2026-10-14: Atlas plan for the `git_repos` key change reviewed.** Captured with `LOG_LEVEL=trace`
+  on `TestTenancyMigrationFromMainSchema`. On main's schema, Atlas runs: `DROP INDEX
+  git_repos_root_dir_key`; `ADD COLUMN user_id uuid NULL, ADD COLUMN org_id uuid NOT NULL DEFAULT
+  <local org>` plus the user FK (a constant default, so no table rewrite); `CREATE INDEX
+  git_repos_owner_idx`; `CREATE UNIQUE INDEX git_repos_org_root_dir_key (org_id, root_dir)`.
+  Existing rows are already unique on `root_dir`, so the new key can't fail. An older binary's
+  `ON CONFLICT (root_dir)` stops working once the old index is dropped, which is covered by the
+  one-way migration decision.
+- **2026-10-14: M2.1 Clerk Backend API endpoints confirmed.** Source: Clerk's OpenAPI spec
+  (`clerk/openapi-specs`, `bapi/2026-05-12.yml`, server `https://api.clerk.com/v1`) and Clerk's JS
+  backend SDK (`API_URL` + `/v1` + path). Clerk's guide page shows the verify URL without `/v1`;
+  the SDK and spec both use `/v1`, so we do too. An unauthenticated probe returns 401 on both, so
+  it can't tell them apart.
+  - **Verify:** `POST /v1/oauth_applications/access_tokens/verify`, `Authorization: Bearer
+    <secret key>`, body `{"access_token": "..."}`. It accepts JWT access tokens.
+    - 200 has two shapes: `{object: "clerk_idp_oauth_access_token", id, client_id, subject, scopes,
+      revoked, revocation_reason, expired, expiration, ...}`, or `{"active": false}` for an
+      inactive JWT.
+    - 404 for an unknown token, 400 for a bad request.
+    - **Surprise:** a revoked token still returns 200, with `revoked: true`. The verifier accepts
+      only a 200 token object with `revoked` and `expired` false, and with `subject` and
+      `client_id` matching the JWT's `sub` and `client_id`. `{active:false}` and 404 are
+      rejections. Any other status is an error and isn't cached.
+  - **Memberships:** `GET /v1/users/{id}/organization_memberships?limit=&offset=` returns
+    `{data: [OrganizationMembership], total_count}`. Pagination is by `offset` (`limit` up to 500),
+    not a cursor. Each membership has `role` and `organization{id, slug, name}`.
+  - **GitHub token:** `GET /v1/users/{id}/oauth_access_tokens/oauth_github` returns a bare JSON
+    array (no `data` wrapper) of `{token, expires_at, scopes, provider, ...}`. Clerk refreshes an
+    expired OAuth 2.0 token transparently.
+- **2026-10-14: M2.1 done.**
+  - `api/jwks.go`: `JWKSCache` (10m TTL, an unknown kid refetches at most every 30s, the same key
+    validation as before) and `parseSigned`. `AuthClient.verifyIdentity` uses the cache. A JWKS
+    fetch failure still surfaces as its own error, with a test that fails when the distinction is
+    removed.
+  - `api/session_token.go` `SessionVerifier`, `api/access_token.go` `AccessTokenVerifier`,
+    `api/github_oidc.go` `GitHubOIDCVerifier`, `ClerkOrganizations.UserMemberships`, and
+    `api/clerk_users.go` `GitHubToken`. `ClerkOrganizations` has one Backend API `call` helper,
+    which `ResolveOrganization` now uses too. Its error texts say "Clerk Backend API".
+  - Access token cache: `commons-db/cache` (go-cache), each entry set with
+    `store.WithExpiration(min(ttl, exp - check time))`. Getting an entry never extends it. A
+    lifetime of zero or less isn't cached, because go-cache reads 0 as "use the default TTL".
+    `github.com/eko/gocache/lib/v4` becomes a direct dependency (`go mod tidy`).
+  - `api/clerktest` gained `SessionToken`, `AccessToken` (a unique `jti` per token), `SignWithType`,
+    `PublishKey`, `JWKSReads`, `RevokeAccessToken`, `Memberships`, `GitHubToken`,
+    `BackendRequests`, and `BackendClient`.
+  - Mutation checks: the `at+jwt` guard, the `exp` cap on cache entries, and the local `client_id`
+    check are each caught by a test.
+  - Tests: `go test ./api/...` plus the `cmd/gavel` auth tests pass. Not yet wired into
+    `gavel serve`; that's M3.
+- **2026-10-14: Batman on M2.1 follow-ups.**
+  - Reject a session that is pending on Clerk's side. A session with no org picked is rejected by
+    M3.3 (`409 no_active_org`), as already specced.
+  - "Give descriptive error messages wherever you can." Rejections now wrap `ErrInvalidToken`
+    with the reason, which the tests assert. A 401/403 from the Backend API adds "check the Clerk
+    secret key".
+  - Commits: commit whenever a change makes sense on its own, not strictly per milestone.
 
 ## 14. Progress checklist
 
@@ -1691,7 +1762,7 @@ Clerk-mode manual checks:
 - [x] M1.3 todos/native ForOrg plus session_owners
 - [x] M1.3 runtime OpenForOrg, IdentityStore memberships
 - [x] M2.0 spike: CLI access token (JWT, verified locally)
-- [ ] M2.1 JWKS cache, session verifier, access verifier, GitHub OIDC verifier, Clerk memberships
+- [x] M2.1 JWKS cache, session verifier, access verifier, GitHub OIDC verifier, Clerk memberships
 - [ ] M3.1 ServeOptions plus Validate
 - [ ] M3.2 OrgServers
 - [ ] M3.3 middleware, /api/auth/config, /api/me, features off in hosted mode (incl. execution 501s), spec stripping, attachment headers
@@ -1737,3 +1808,9 @@ Clerk-mode manual checks:
   token works for at most one TTL. A sliding expiry was rejected, because a revoked token in
   constant use would never be re-checked. Revisit if Clerk's verify endpoint is slow or
   rate-limited at our request volume, or if multiple server replicas need a shared cache.
+
+- **Pending Clerk sessions are rejected (2026-10-14).** `SessionVerifier` refuses a session token
+  whose `sts` is `pending` (a sign-in with unfinished tasks, such as choosing an organization),
+  matching Clerk's SDK default of treating it as signed out. Batman confirmed it on 2026-10-14,
+  together with M3.3's `409 no_active_org` for a session with no org picked. Revisit if hosted mode adds its own "choose an org" step that should run on a pending
+  session.
