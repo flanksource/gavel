@@ -62,12 +62,6 @@ func TestDashboardOptionsValidate(t *testing.T) {
 		{"GAVEL_SECRET_KEY not base64", func(o *DashboardOptions) { o.secretKey = "not base64!" }, []string{
 			"GAVEL_SECRET_KEY must be at least 32 random bytes, base64-encoded (it isn't valid base64)",
 		}},
-		{"bad trusted proxy", func(o *DashboardOptions) { o.TrustedProxies = []string{"10.0.0.0/8", "10.0.0.1"} }, []string{
-			`--trusted-proxy "10.0.0.1" is not a CIDR like 10.0.0.0/8`,
-		}},
-		{"bad trusted proxy with --auth none", func(o *DashboardOptions) { *o = DashboardOptions{Auth: "none", TrustedProxies: []string{"nope"}} }, []string{
-			`--trusted-proxy "nope" is not a CIDR like 10.0.0.0/8`,
-		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			opts := clerkDashboardOptions()
@@ -105,9 +99,10 @@ func TestDashboardOptionsFromEnv(t *testing.T) {
 func TestServeCommandHasAuthFlags(t *testing.T) {
 	serve := findCommand(rootCmd, "serve")
 	require.NotNil(t, serve)
-	for _, name := range []string{"auth", "public-url", "clerk-issuer", "clerk-publishable-key", "clerk-client-id", "trusted-proxy", "dev", "port"} {
+	for _, name := range []string{"auth", "public-url", "clerk-issuer", "clerk-publishable-key", "clerk-client-id", "dev", "port"} {
 		assert.NotNilf(t, serve.Flags().Lookup(name), "serve should expose --%s", name)
 	}
+	assert.Nil(t, serve.Flags().Lookup("trusted-proxy"), "nothing reads forwarded headers: hosted origins come from --public-url")
 	assert.Equal(t, "none", serve.Flags().Lookup("auth").DefValue)
 	for _, name := range []string{"clerk-secret-key", "secret-key"} {
 		assert.Nilf(t, serve.Flags().Lookup(name), "secrets come from env only, not --%s", name)

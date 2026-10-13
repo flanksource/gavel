@@ -576,7 +576,6 @@ Fields (`flag` tags as in the existing code):
 | `--clerk-issuer` | env `GAVEL_CLERK_ISSUER` | |
 | `--clerk-publishable-key` | env `GAVEL_CLERK_PUBLISHABLE_KEY` | |
 | `--clerk-client-id` | env `GAVEL_CLERK_CLIENT_ID` | The public OAuth client, so `gavel login --server` can discover it. |
-| `--trusted-proxy` | | CIDRs whose `X-Forwarded-*` headers are trusted. |
 | `--sandbox` | `kubernetes` | `kubernetes`, `docker` or `podman`. Only valid with clerk. |
 | `--sandbox-image` | | |
 | `--sandbox-namespace` | `gavel-runs` | |
@@ -684,8 +683,10 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler
    nullable `github_login text` column to `users`.
 6. **CSRF.** For unsafe methods (POST, PUT, PATCH, DELETE) with cookie auth, require
    `Origin == --public-url` (or `Sec-Fetch-Site: same-origin`). Return `403` otherwise.
-7. **Forwarded headers.** Fix the request-origin logic at `pr/ui/handler.go:579-603`: only honour
-   `X-Forwarded-Proto` and `X-Forwarded-Host` when `RemoteAddr` is in `Trusted`.
+7. **Forwarded headers: dropped (2026-10-14).** Every caller of `requestOrigin` is behind a
+   route that's off in hosted mode, and CSRF compares `Origin` with `--public-url`, so nothing
+   in hosted mode reads forwarded headers and `--trusted-proxy` was removed. When todos return
+   to hosted mode (M6), their origin is `--public-url`.
 
 **Wiring.**
 - `cmd/gavel/serve_dashboard.go`: in clerk mode, `http.Serve(listener, auth.Middleware(orgServers.Handler()))`.
@@ -1792,14 +1793,15 @@ Clerk-mode manual checks:
   - clicky has no env-var tag, so `withEnv(os.Getenv)` fills empty `--clerk-*` flags and reads
     `CLERK_SECRET_KEY` and `GAVEL_SECRET_KEY` into untagged fields, which have no flag.
   - Each flag lands with the milestone that uses it. M3 adds `--auth`, `--public-url`,
-    `--clerk-issuer`, `--clerk-publishable-key`, `--clerk-client-id` and `--trusted-proxy`. M5 adds
+    `--clerk-issuer`, `--clerk-publishable-key` and `--clerk-client-id` (`--trusted-proxy` was
+    added, then removed when M3.3 found no consumer). M5 adds
     the GitHub App flags, and M6 adds `--ssh-addr`, `--ssh-host-key` and `--data-dir`. The
     `--sandbox*`, `--kubeconfig` and `--sandbox-secret-env` flags wait for M9/M10 (PR 2). Also,
     clicky can't tell an explicit `--sandbox` from its default, so "reject `--sandbox` with
     `--auth none`" needs that flag to have no default; M9 should keep that in mind.
   - `Validate` makes no I/O and reports all problems at once (`errors.Join`). It also checks that
     `--public-url` is an origin, that the issuer is https, the `pk_`/`sk_` prefixes, that
-    `GAVEL_SECRET_KEY` is base64 of at least 32 bytes, and that each `--trusted-proxy` is a CIDR.
+    `GAVEL_SECRET_KEY` is base64 of at least 32 bytes.
     The "DB required in clerk mode" check runs at startup with `database.Require`, because it
     needs the database.
 - **2026-10-14: hosted routes are an allowlist (Batman).** A review of every route in
@@ -1879,8 +1881,8 @@ Clerk-mode manual checks:
   - Backend API transport errors now include the cause ("cannot reach Clerk Backend API: ...").
 - **2026-10-14: `Authenticator` (M3.3, `pr/ui/auth.go`).**
   - The struct holds `Session`, `Access` (`*AccessTokenVerifier`), `Members` and `PublicURL`.
-    `Identity`/`Clerk` from the spec are folded into `Members`. Trusted proxies stay with the
-    request-origin fix in `handler.go`.
+    `Identity`/`Clerk` from the spec are folded into `Members`. There are no trusted proxies (see
+    M3.3 item 7).
   - `Middleware(next, public)`: requests that need no identity go to `public`. Those are
     non-`/api/` `GET`/`HEAD` (page loads and assets; the SPA gates itself) and
     `/api/auth/config`. The serve wiring passes a hosted-mode Server with no org, so the

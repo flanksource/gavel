@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"net/netip"
 	"net/url"
 	"strings"
 )
@@ -20,12 +19,11 @@ const (
 // only (withEnv), so they never appear in flags, shell history or process lists.
 type DashboardOptions struct {
 	PRListOptions
-	Auth                string   `flag:"auth" help:"Authentication: none (local, single user) or clerk (hosted, one dashboard per Clerk organization)" default:"none"`
-	PublicURL           string   `flag:"public-url" help:"Origin users reach the dashboard at, e.g. https://gavel.example.com (required with --auth clerk)"`
-	ClerkIssuer         string   `flag:"clerk-issuer" help:"Clerk Frontend API URL (or GAVEL_CLERK_ISSUER)"`
-	ClerkPublishableKey string   `flag:"clerk-publishable-key" help:"Clerk publishable key for the browser sign-in (or GAVEL_CLERK_PUBLISHABLE_KEY)"`
-	ClerkClientID       string   `flag:"clerk-client-id" help:"Clerk public OAuth client ID that gavel login uses (or GAVEL_CLERK_CLIENT_ID)"`
-	TrustedProxies      []string `flag:"trusted-proxy" help:"CIDR of a reverse proxy whose X-Forwarded-Proto and X-Forwarded-Host headers are trusted; repeatable"`
+	Auth                string `flag:"auth" help:"Authentication: none (local, single user) or clerk (hosted, one dashboard per Clerk organization)" default:"none"`
+	PublicURL           string `flag:"public-url" help:"Origin users reach the dashboard at, e.g. https://gavel.example.com (required with --auth clerk)"`
+	ClerkIssuer         string `flag:"clerk-issuer" help:"Clerk Frontend API URL (or GAVEL_CLERK_ISSUER)"`
+	ClerkPublishableKey string `flag:"clerk-publishable-key" help:"Clerk publishable key for the browser sign-in (or GAVEL_CLERK_PUBLISHABLE_KEY)"`
+	ClerkClientID       string `flag:"clerk-client-id" help:"Clerk public OAuth client ID that gavel login uses (or GAVEL_CLERK_CLIENT_ID)"`
 
 	clerkSecretKey string
 	secretKey      string
@@ -54,11 +52,6 @@ func (o DashboardOptions) withEnv(getenv func(string) string) DashboardOptions {
 func (o DashboardOptions) Validate() error {
 	var problems []error
 	add := func(format string, args ...any) { problems = append(problems, fmt.Errorf(format, args...)) }
-	for _, proxy := range o.TrustedProxies {
-		if _, err := netip.ParsePrefix(proxy); err != nil {
-			add("--trusted-proxy %q is not a CIDR like 10.0.0.0/8", proxy)
-		}
-	}
 	switch o.Auth {
 	case authNone:
 	case authClerk:
