@@ -24,6 +24,9 @@ type Options struct {
 	WorkDir string
 	Repo    string // owner/repo
 	Token   string // optional; falls back to GITHUB_TOKEN then GH_TOKEN env
+	// TokenSource, when set, is the only credential: no fallback to Token, the
+	// environment or auth.json, so a hosted organization never uses the host's token.
+	TokenSource func() (string, error)
 }
 
 // ErrNoToken is wrapped by every error Options.token() returns when no token
@@ -32,6 +35,13 @@ type Options struct {
 var ErrNoToken = errors.New("no GitHub token")
 
 func (o Options) token() (string, error) {
+	if o.TokenSource != nil {
+		token, err := o.TokenSource()
+		if err == nil && token == "" {
+			err = fmt.Errorf("%w: the token source returned an empty token", ErrNoToken)
+		}
+		return token, err
+	}
 	if o.Token != "" {
 		return o.Token, nil
 	}
