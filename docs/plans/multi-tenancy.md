@@ -1844,6 +1844,20 @@ Clerk-mode manual checks:
     the host's own files.
   - The allowed PR handlers all copy `s.ghOpts` and change only `Repo`, so the org's token
     source and cache carry through. Nothing in `pr/ui` builds a fresh `github.Options{}`.
+- **2026-10-14: `OrgServers` (M3.2).** `pr/ui/orgservers.go`, as specced, with these differences:
+  - The factory returns only `*Server`. Everything it starts (the Server's loops, the poller
+    from M5) runs on the `ctx` it is given, and eviction cancels that context. Building happens
+    under the lock and is fast: one `org_settings` read, then `NewServer`.
+  - Eviction skips any org with a request still open, such as a PR SSE stream, instead of using
+    `Server.Busy()`. In hosted mode, project actions and commit queues are answered (501/400)
+    before their registries are touched, so `Busy()` would always be false until M9.5. M9.5
+    adds it when hosted actions can run.
+  - A request without an org scope gets `500 the request has no organization` and never gets a
+    Server: in hosted mode the local org's Server would serve the host's own data. A factory
+    error is a 500 with the reason and isn't cached.
+  - Tests cover one Server per org, the missing scope, factory errors, idle eviction (the
+    evicted context ends), an open stream keeping its Server (mutation-checked), and `Close`.
+    They pass under `-race`.
 - **2026-10-14: M5.1 `TokenSource` pulled forward into M3 (commit `7b87e94`).** Before M5, a
   hosted org's `Server` would have used the host's `GITHUB_TOKEN`, `GH_TOKEN` or `auth.json` for
   every PR call. `github.Options.TokenSource`, when set, is the only credential. The M3.2 factory
@@ -1868,7 +1882,7 @@ Clerk-mode manual checks:
 - [x] M2.0 spike: CLI access token (JWT, verified locally)
 - [x] M2.1 JWKS cache, session verifier, access verifier, GitHub OIDC verifier, Clerk memberships
 - [x] M3.1 ServeOptions plus Validate (`DashboardOptions`)
-- [ ] M3.2 OrgServers
+- [x] M3.2 OrgServers (the factory lands with M3.3's wiring)
 - [ ] M3.3 middleware, /api/auth/config, /api/me, features off in hosted mode (incl. execution 501s), spec stripping, attachment headers
 - [ ] M4 UI
 - [ ] M5.0 spike: GitHub App via Clerk
