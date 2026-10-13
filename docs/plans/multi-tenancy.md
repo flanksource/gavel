@@ -1898,6 +1898,18 @@ Clerk-mode manual checks:
   - `clerktest.New` takes a three-method `TB` interface, so Ginkgo's `GinkgoT()` works.
   - Tests: 8 Ginkgo specs against a migrated database and the fake Clerk. Mutation checks: no
     CSRF guard, and API GETs treated as public, are both caught.
+- **2026-10-14: `/api/auth/config` and `/api/me` (M3.3, `pr/ui/me.go`).**
+  - `/api/me` answers `{"user", "org", "orgs"}` in both modes. Each org is
+    `{id, slug, name, role}`. In none mode, `org` is the local org and `orgs` is `[local]`, so
+    clients see the same shape either way. `user` is `{id, name, email, githubLogin}`, or null
+    without a local login.
+  - In none mode, the user comes from `api.Session.StoredIdentity()`, which decodes the saved ID
+    token without a network call or a signature check. It's for display only, and the doc
+    comment says so. `identityClaims.identity()` is shared with `verifyIdentity`.
+  - For an org, the user and memberships come from the org's database (`SetOrg`'s `db`). The
+    current org's role is the request's, since a session's role can be newer than the stored
+    one.
+  - Both routes are registered in every mode, and `/api/me` is on the hosted allowlist.
 - **2026-10-14: M5.1 `TokenSource` pulled forward into M3 (commit `7b87e94`).** Before M5, a
   hosted org's `Server` would have used the host's `GITHUB_TOKEN`, `GH_TOKEN` or `auth.json` for
   every PR call. `github.Options.TokenSource`, when set, is the only credential. The M3.2 factory
