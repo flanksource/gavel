@@ -16,7 +16,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"testing"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -35,6 +34,13 @@ const (
 // Membership is one organization the server's user belongs to, as the Backend API lists it.
 type Membership struct {
 	OrgID, OrgSlug, OrgName, Role string
+}
+
+// TB is the part of testing.TB the server uses, so Ginkgo's GinkgoT() works as well.
+type TB interface {
+	Helper()
+	Fatal(args ...any)
+	Cleanup(func())
 }
 
 // User is the identity the server signs into ID tokens.
@@ -63,7 +69,7 @@ type Server struct {
 	GitHubToken string
 
 	key       *rsa.PrivateKey
-	t         testing.TB
+	t         TB
 	refreshes atomic.Int64
 	jwksReads atomic.Int64
 	mu        sync.Mutex
@@ -75,7 +81,7 @@ type Server struct {
 }
 
 // New starts an issuer for the public OAuth client clientID and closes it when the test ends.
-func New(t testing.TB, clientID string, user User) *Server {
+func New(t TB, clientID string, user User) *Server {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
