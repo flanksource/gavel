@@ -30,6 +30,11 @@ table "users" {
     type = boolean
     default = false
   }
+  # The username of the user's GitHub connection in Clerk, for the @me PR filter.
+  column "github_login" {
+    null = true
+    type = text
+  }
   column "created_at" {
     null = false
     type = timestamptz

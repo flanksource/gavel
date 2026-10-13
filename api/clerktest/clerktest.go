@@ -46,6 +46,8 @@ type User struct {
 	OrgSlug string
 	// OrgRole is the v1 form, e.g. "org:admin"; session tokens carry it without the prefix.
 	OrgRole string
+	// GitHubLogin is the username of the user's GitHub connection; empty means none.
+	GitHubLogin string
 }
 
 // Server is a TLS issuer. Use Client() as the HTTP client; its certificate is self-signed.
@@ -171,8 +173,9 @@ func (s *Server) BackendRequests() []string {
 }
 
 // BackendClient is an HTTP client that sends requests for api.clerk.com to this server.
+// It is a copy: Client() returns one shared client, which must keep its own transport.
 func (s *Server) BackendClient() *http.Client {
-	client := s.Client()
+	client := *s.Client()
 	target, err := url.Parse(s.URL)
 	if err != nil {
 		s.t.Fatal(err)
@@ -186,7 +189,7 @@ func (s *Server) BackendClient() *http.Client {
 		r.URL.Scheme, r.URL.Host = target.Scheme, target.Host
 		return transport.RoundTrip(r)
 	})
-	return client
+	return &client
 }
 
 type roundTripper func(*http.Request) (*http.Response, error)
@@ -284,6 +287,8 @@ func (s *Server) serveBackend(w http.ResponseWriter, r *http.Request) {
 	}
 	userPath := "/v1/users/" + s.User.ID + "/"
 	switch {
+	case r.Method == http.MethodGet && r.URL.Path == strings.TrimSuffix(userPath, "/"):
+		s.writeUser(w)
 	case r.Method == http.MethodPost && r.URL.Path == "/v1/oauth_applications/access_tokens/verify":
 		s.verifyAccessToken(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == userPath+"organization_memberships":
@@ -330,6 +335,24 @@ func (s *Server) verifyAccessToken(w http.ResponseWriter, r *http.Request) {
 		"object": "clerk_idp_oauth_access_token", "id": claims["jti"], "client_id": claims["client_id"], "subject": claims["sub"],
 		"scopes": strings.Fields(fmt.Sprint(claims["scope"])), "revoked": revoked, "revocation_reason": nil, "expired": false,
 		"expiration": expiry.Unix(), "created_at": claims["iat"], "updated_at": claims["iat"],
+	})
+}
+
+// writeUser answers GET /v1/users/{id} with the fields gavel reads, shaped like Clerk's.
+func (s *Server) writeUser(w http.ResponseWriter) {
+	first, last, _ := strings.Cut(s.User.Name, " ")
+	accounts := []map[string]any{}
+	if s.User.GitHubLogin != "" {
+		accounts = append(accounts, map[string]any{"object": "external_account", "id": "eac_clerktest", "provider": "oauth_github", "username": s.User.GitHubLogin})
+	}
+	writeJSON(w, map[string]any{
+		"object": "user", "id": s.User.ID, "first_name": first, "last_name": last, "username": nil,
+		"primary_email_address_id": "idn_primary",
+		"email_addresses": []map[string]any{
+			{"object": "email_address", "id": "idn_other", "email_address": "other@example.com", "verification": map[string]any{"status": "unverified"}},
+			{"object": "email_address", "id": "idn_primary", "email_address": s.User.Email, "verification": map[string]any{"status": "verified"}},
+		},
+		"external_accounts": accounts,
 	})
 }
 

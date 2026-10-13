@@ -74,3 +74,25 @@ func TestGitHubToken(t *testing.T) {
 		t.Fatal("accepted an invalid user ID")
 	}
 }
+
+func TestClerkUser(t *testing.T) {
+	clerk := clerktest.New(t, "cli", clerktest.User{ID: "user_123", Name: "Ada Lovelace", Email: "ada@example.com", GitHubLogin: "ada"})
+	backend := ClerkOrganizations{SecretKey: clerktest.SecretKey, HTTPClient: clerk.BackendClient()}
+	ctx := context.Background()
+
+	got, err := backend.User(ctx, "user_123")
+	if err != nil || got != (ClerkUser{Name: "Ada Lovelace", Email: "ada@example.com", EmailVerified: true, GitHubLogin: "ada"}) {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+	if _, err := backend.User(ctx, "user_unknown"); err == nil || !strings.Contains(err.Error(), "HTTP 404") {
+		t.Fatalf("unknown user: %v", err)
+	}
+	if _, err := backend.User(ctx, "user_123/x"); err == nil {
+		t.Fatal("accepted an invalid user ID")
+	}
+
+	clerk.User.GitHubLogin = ""
+	if got, err := backend.User(ctx, "user_123"); err != nil || got.GitHubLogin != "" {
+		t.Fatalf("user without GitHub: %+v, %v", got, err)
+	}
+}
