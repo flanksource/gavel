@@ -1877,6 +1877,27 @@ Clerk-mode manual checks:
   - Fixed in clerktest: `BackendClient()` mutated `httptest.Server.Client()`, which is shared, so
     a second call stacked host rewrites and broke the JWKS client. It now copies the client.
   - Backend API transport errors now include the cause ("cannot reach Clerk Backend API: ...").
+- **2026-10-14: `Authenticator` (M3.3, `pr/ui/auth.go`).**
+  - The struct holds `Session`, `Access` (`*AccessTokenVerifier`), `Members` and `PublicURL`.
+    `Identity`/`Clerk` from the spec are folded into `Members`. Trusted proxies stay with the
+    request-origin fix in `handler.go`.
+  - `Middleware(next, public)`: requests that need no identity go to `public`. Those are
+    non-`/api/` `GET`/`HEAD` (page loads and assets; the SPA gates itself) and
+    `/api/auth/config`. The serve wiring passes a hosted-mode Server with no org, so the
+    allowlist still applies to it. `/api/ci/`, `/api/github/setup` and `/api/runs/` join the
+    public list in M5 and M10, when they exist.
+  - The token is `Authorization: Bearer` or else the `__session` cookie. Its unverified `typ`
+    picks the verifier (`at+jwt` means the CLI path, anything else the session path), and that
+    verifier then checks it in full.
+  - Responses are `{"error": code, "message": why}`: 401 `unauthenticated` (missing or invalid
+    token, with the reason), 409 `no_active_org`, 403 `not_a_member`, 403 `cross_site_request`,
+    and 503 `auth_unavailable` when Clerk, the JWKS or the database can't answer (also logged).
+  - CSRF: a cookie-authenticated POST/PUT/PATCH/DELETE needs `Origin == --public-url`, or no
+    Origin with `Sec-Fetch-Site: same-origin`. This runs before verification, so a cross-site
+    request causes no database writes. Bearer tokens are exempt.
+  - `clerktest.New` takes a three-method `TB` interface, so Ginkgo's `GinkgoT()` works.
+  - Tests: 8 Ginkgo specs against a migrated database and the fake Clerk. Mutation checks: no
+    CSRF guard, and API GETs treated as public, are both caught.
 - **2026-10-14: M5.1 `TokenSource` pulled forward into M3 (commit `7b87e94`).** Before M5, a
   hosted org's `Server` would have used the host's `GITHUB_TOKEN`, `GH_TOKEN` or `auth.json` for
   every PR call. `github.Options.TokenSource`, when set, is the only credential. The M3.2 factory
