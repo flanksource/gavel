@@ -68,7 +68,7 @@ func (c ClerkOrganizations) call(ctx context.Context, method, path string, body,
 	}
 	response, err := withoutRedirects(c.HTTPClient).Do(req)
 	if err != nil {
-		return errors.New("cannot reach Clerk Backend API")
+		return fmt.Errorf("cannot reach Clerk Backend API: %w", err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {

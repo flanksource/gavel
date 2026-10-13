@@ -1858,6 +1858,25 @@ Clerk-mode manual checks:
   - Tests cover one Server per org, the missing scope, factory errors, idle eviction (the
     evicted context ends), an open stream keeping its Server (mutation-checked), and `Close`.
     They pass under `-race`.
+- **2026-10-14: `api.Members` resolves who a request acts as (M3.3).** The middleware can't call
+  `IdentityStore.Sync` per request: it overwrites name and email, and session tokens carry
+  neither. `Members` (`api/members.go`) takes a verified Clerk user ID and returns a
+  `tenant.Scope`:
+  - The first time it sees a user, or when gavel's copy is older than `maxAge` (5 minutes in
+    serve), it reads the profile (`ClerkOrganizations.User`: name, primary email, and the
+    `oauth_github` external account's username as `github_login`) and the memberships from
+    Clerk, then writes `users` and `org_memberships`. Freshness is tracked in memory per
+    process, so the first request after a restart refreshes.
+  - `ForSession`: the session's org and role are authoritative. The org row is written only
+    when it's new or its slug changed, and the membership only when its role changed. With no
+    org: `ErrNoActiveOrg` ("choose an organization in the dashboard").
+  - `ForAccessToken(user, X-Gavel-Org)`: the header names a slug or Clerk org ID among the
+    user's memberships. Not one of them: `ErrNotMember`. Header missing: the only membership,
+    otherwise `ErrNoActiveOrg` listing the slugs to pick from.
+  - `users.github_login` (nullable text) is added in `identity.hcl`.
+  - Fixed in clerktest: `BackendClient()` mutated `httptest.Server.Client()`, which is shared, so
+    a second call stacked host rewrites and broke the JWKS client. It now copies the client.
+  - Backend API transport errors now include the cause ("cannot reach Clerk Backend API: ...").
 - **2026-10-14: M5.1 `TokenSource` pulled forward into M3 (commit `7b87e94`).** Before M5, a
   hosted org's `Server` would have used the host's `GITHUB_TOKEN`, `GH_TOKEN` or `auth.json` for
   every PR call. `github.Options.TokenSource`, when set, is the only credential. The M3.2 factory
