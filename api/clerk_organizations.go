@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,7 +10,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 )
 
 // ClerkOrganizations resolves canonical org metadata on a trusted backend.
@@ -21,39 +21,63 @@ type ClerkOrganizations struct {
 }
 
 func (c ClerkOrganizations) ResolveOrganization(ctx context.Context, id string) (Organization, error) {
-	if c.SecretKey == "" {
-		return Organization{}, errors.New("backend Clerk secret is not configured")
-	}
 	if id == "" || strings.ContainsAny(id, "/?#") {
 		return Organization{}, errors.New("invalid Clerk organization ID")
 	}
-	client := c.HTTPClient
-	if client == nil {
-		client = &http.Client{Timeout: 20 * time.Second}
-	}
-	copyClient := *client
-	copyClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.clerk.com/v1/organizations/"+url.PathEscape(id), nil)
-	if err != nil {
-		return Organization{}, err
-	}
-	req.Header.Set("Authorization", "Bearer "+c.SecretKey)
-	response, err := copyClient.Do(req)
-	if err != nil {
-		return Organization{}, errors.New("cannot reach Clerk organization service")
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return Organization{}, fmt.Errorf("Clerk organization service returned HTTP %d", response.StatusCode)
-	}
 	var org Organization
-	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&org); err != nil {
-		return Organization{}, errors.New("invalid Clerk organization response")
+	if err := c.call(ctx, http.MethodGet, "/organizations/"+url.PathEscape(id), nil, &org); err != nil {
+		return Organization{}, err
 	}
 	if org.ID != id {
 		return Organization{}, errors.New("Clerk returned a different organization")
 	}
 	return org, nil
+}
+
+// backendStatusError is a Backend API response other than 200 OK.
+type backendStatusError struct{ status int }
+
+func (e backendStatusError) Error() string {
+	if e.status == http.StatusUnauthorized || e.status == http.StatusForbidden {
+		return fmt.Sprintf("Clerk Backend API returned HTTP %d: check the Clerk secret key", e.status)
+	}
+	return fmt.Sprintf("Clerk Backend API returned HTTP %d", e.status)
+}
+
+// call sends body (if any) as JSON to the Backend API path under /v1 and decodes a 200
+// response into output. Errors never include the secret key or the response body.
+func (c ClerkOrganizations) call(ctx context.Context, method, path string, body, output any) error {
+	if c.SecretKey == "" {
+		return errors.New("backend Clerk secret is not configured")
+	}
+	var payload io.Reader
+	if body != nil {
+		encoded, err := json.Marshal(body)
+		if err != nil {
+			return err
+		}
+		payload = bytes.NewReader(encoded)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, "https://api.clerk.com/v1"+path, payload)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.SecretKey)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	response, err := withoutRedirects(c.HTTPClient).Do(req)
+	if err != nil {
+		return errors.New("cannot reach Clerk Backend API")
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return backendStatusError{status: response.StatusCode}
+	}
+	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(output); err != nil {
+		return errors.New("invalid Clerk Backend API response")
+	}
+	return nil
 }
 
 // Membership is one Clerk organization a user belongs to, with their role in it.
@@ -62,4 +86,46 @@ type Membership struct {
 	OrgSlug string `json:"orgSlug"`
 	OrgName string `json:"orgName"`
 	Role    string `json:"role"`
+}
+
+// membershipPageSize is how many memberships each Backend API page asks for.
+const membershipPageSize = 100
+
+// UserMemberships lists every organization clerkUserID belongs to, paging by offset.
+func (c ClerkOrganizations) UserMemberships(ctx context.Context, clerkUserID string) ([]Membership, error) {
+	if err := validUserID(clerkUserID); err != nil {
+		return nil, err
+	}
+	memberships := []Membership{}
+	for {
+		var page struct {
+			Data []struct {
+				Role         string `json:"role"`
+				Organization struct {
+					ID   string `json:"id"`
+					Slug string `json:"slug"`
+					Name string `json:"name"`
+				} `json:"organization"`
+			} `json:"data"`
+			TotalCount int `json:"total_count"`
+		}
+		path := fmt.Sprintf("/users/%s/organization_memberships?limit=%d&offset=%d", url.PathEscape(clerkUserID), membershipPageSize, len(memberships))
+		if err := c.call(ctx, http.MethodGet, path, nil, &page); err != nil {
+			return nil, err
+		}
+		for _, m := range page.Data {
+			memberships = append(memberships, Membership{OrgID: m.Organization.ID, OrgSlug: m.Organization.Slug, OrgName: m.Organization.Name, Role: m.Role})
+		}
+		if len(page.Data) == 0 || len(memberships) >= page.TotalCount {
+			return memberships, nil
+		}
+	}
+}
+
+// validUserID rejects a Clerk user ID that would change the Backend API path.
+func validUserID(id string) error {
+	if id == "" || strings.ContainsAny(id, "/?#") {
+		return errors.New("invalid Clerk user ID")
+	}
+	return nil
 }
