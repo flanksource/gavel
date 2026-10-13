@@ -131,8 +131,8 @@ func (r *Repository) ClaimPromptRunOwner(ctx context.Context, promptRunID uuid.U
 	result := r.db.WithContext(ctx).Exec(`
 		UPDATE todo_issue_prompt_runs
 		SET owner_host_id = ?, owner_pid = ?, owner_started_at = ?, owner_token = ?, owner_heartbeat_at = now()
-		WHERE prompt_run_id = ?`,
-		owner.HostID, owner.PID, owner.StartedAt.UTC(), owner.Token, promptRunID,
+		WHERE prompt_run_id = ? AND `+inOrgIssue("issue_id"),
+		owner.HostID, owner.PID, owner.StartedAt.UTC(), owner.Token, promptRunID, r.org,
 	)
 	if result.Error != nil {
 		return fmt.Errorf("claim prompt run %s: %w", promptRunID, result.Error)
@@ -149,7 +149,7 @@ func (r *Repository) TouchPromptRunOwner(ctx context.Context, promptRunID uuid.U
 	result := r.db.WithContext(ctx).Exec(`
 		UPDATE todo_issue_prompt_runs
 		SET owner_heartbeat_at = now()
-		WHERE prompt_run_id = ? AND owner_token = ?`, promptRunID, token,
+		WHERE prompt_run_id = ? AND owner_token = ? AND `+inOrgIssue("issue_id"), promptRunID, token, r.org,
 	)
 	if result.Error != nil {
 		return false, fmt.Errorf("refresh prompt run %s ownership: %w", promptRunID, result.Error)
@@ -164,7 +164,7 @@ func (r *Repository) ReleasePromptRunOwner(ctx context.Context, promptRunID uuid
 		UPDATE todo_issue_prompt_runs
 		SET owner_host_id = NULL, owner_pid = NULL, owner_started_at = NULL,
 		    owner_token = NULL, owner_heartbeat_at = NULL
-		WHERE prompt_run_id = ? AND owner_token = ?`, promptRunID, token,
+		WHERE prompt_run_id = ? AND owner_token = ? AND `+inOrgIssue("issue_id"), promptRunID, token, r.org,
 	)
 	if result.Error != nil {
 		return fmt.Errorf("release prompt run %s ownership: %w", promptRunID, result.Error)
@@ -177,7 +177,7 @@ func (r *Repository) ReleasePromptRunOwner(ctx context.Context, promptRunID uuid
 func (r *Repository) PromptRunOwner(ctx context.Context, promptRunID uuid.UUID) (*RunOwner, error) {
 	var links []PromptRunLink
 	result := r.db.WithContext(ctx).Raw(
-		promptRunLinkSelect+` FROM todo_issue_prompt_runs WHERE prompt_run_id = ?`, promptRunID,
+		promptRunLinkSelect+` FROM todo_issue_prompt_runs WHERE prompt_run_id = ? AND `+inOrgIssue("issue_id"), promptRunID, r.org,
 	).Scan(&links)
 	if result.Error != nil {
 		return nil, fmt.Errorf("read prompt run %s ownership: %w", promptRunID, result.Error)

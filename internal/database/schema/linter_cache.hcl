@@ -1,6 +1,23 @@
 table "file_scans" {
   schema = schema.public
 
+  column "user_id" {
+    null = true
+    type = uuid
+  }
+  column "org_id" {
+    null    = false
+    type    = uuid
+    default = sql("'00000000-0000-0000-0000-000000000001'::uuid")
+  }
+  foreign_key "file_scans_user_id_fkey" {
+    columns = [column.user_id]
+    ref_columns = [table.users.column.id]
+    on_delete = SET_NULL
+    on_update = NO_ACTION
+  }
+  index "file_scans_owner_idx" { columns = [column.org_id, column.user_id] }
+
   column "file_path" {
     null = false
     type = text
@@ -18,12 +35,17 @@ table "file_scans" {
     type = text
   }
 
-  primary_key { columns = [column.file_path] }
+  primary_key { columns = [column.org_id, column.file_path] }
 }
 
 table "violations" {
   schema = schema.public
 
+  column "org_id" {
+    null    = false
+    type    = uuid
+    default = sql("'00000000-0000-0000-0000-000000000001'::uuid")
+  }
   column "id" {
     null = false
     type = bigserial
@@ -79,9 +101,9 @@ table "violations" {
   index "idx_violations_source" { columns = [column.source] }
   index "idx_violations_created_at" { columns = [column.created_at] }
 
-  foreign_key "violations_file_path_fkey" {
-    columns     = [column.file_path]
-    ref_columns = [table.file_scans.column.file_path]
+  foreign_key "violations_file_scan_fkey" {
+    columns     = [column.org_id, column.file_path]
+    ref_columns = [table.file_scans.column.org_id, table.file_scans.column.file_path]
     on_update   = NO_ACTION
     on_delete   = CASCADE
   }
@@ -89,6 +111,23 @@ table "violations" {
 
 table "linter_executions" {
   schema = schema.public
+
+  column "user_id" {
+    null = true
+    type = uuid
+  }
+  column "org_id" {
+    null    = false
+    type    = uuid
+    default = sql("'00000000-0000-0000-0000-000000000001'::uuid")
+  }
+  foreign_key "linter_executions_user_id_fkey" {
+    columns = [column.user_id]
+    ref_columns = [table.users.column.id]
+    on_delete = SET_NULL
+    on_update = NO_ACTION
+  }
+  index "linter_executions_owner_idx" { columns = [column.org_id, column.user_id] }
 
   column "id" {
     null = false
@@ -122,7 +161,7 @@ table "linter_executions" {
   primary_key { columns = [column.id] }
   index "linter_executions_unique" {
     unique  = true
-    columns = [column.linter_name, column.work_dir, column.executed_at]
+    columns = [column.org_id, column.linter_name, column.work_dir, column.executed_at]
   }
   index "idx_linter_workdir" { columns = [column.linter_name, column.work_dir] }
   index "idx_executed_at" { columns = [column.executed_at] }
@@ -130,6 +169,23 @@ table "linter_executions" {
 
 table "debounce_metadata" {
   schema = schema.public
+
+  column "user_id" {
+    null = true
+    type = uuid
+  }
+  column "org_id" {
+    null    = false
+    type    = uuid
+    default = sql("'00000000-0000-0000-0000-000000000001'::uuid")
+  }
+  foreign_key "debounce_metadata_user_id_fkey" {
+    columns = [column.user_id]
+    ref_columns = [table.users.column.id]
+    on_delete = SET_NULL
+    on_update = NO_ACTION
+  }
+  index "debounce_metadata_owner_idx" { columns = [column.org_id, column.user_id] }
 
   column "linter_name" {
     null = false
@@ -164,5 +220,5 @@ table "debounce_metadata" {
     default = sql("now()")
   }
 
-  primary_key { columns = [column.linter_name, column.work_dir] }
+  primary_key { columns = [column.org_id, column.linter_name, column.work_dir] }
 }

@@ -86,7 +86,7 @@ func (r *Repository) RecordLanding(ctx context.Context, issueID uuid.UUID, landi
 	}
 	var recorded RunLanding
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		issue, err := lockExecutionIssue(tx, issueID)
+		issue, err := lockExecutionIssue(tx, r.org, issueID)
 		if err != nil {
 			return err
 		}
@@ -112,18 +112,20 @@ func (r *Repository) RecordLanding(ctx context.Context, issueID uuid.UUID, landi
 	return &recorded, nil
 }
 
-// ListLandings returns the issue's run landings, oldest first.
+// ListLandings returns the issue's run landings, oldest first. Another org's
+// issue has none.
 func (r *Repository) ListLandings(ctx context.Context, issueID uuid.UUID) ([]RunLanding, error) {
 	var landings []RunLanding
 	result := r.db.WithContext(ctx).Raw(`
 		SELECT `+runLandingColumns+`
-		FROM todo_run_landings WHERE issue_id = ? ORDER BY created_at, prompt_run_id`, issueID,
+		FROM todo_run_landings WHERE issue_id = ? AND `+inOrgIssue("issue_id")+`
+		ORDER BY created_at, prompt_run_id`, issueID, r.org,
 	).Scan(&landings)
 	return landings, result.Error
 }
 
 // ListLandingsForRuns reads the landings of the named prompt runs in one query,
-// keyed by run; a run that was never landed has no entry. The todo list diffs
+// keyed by run; a run that was never landed, or another org's run, has no entry. The todo list diffs
 // every issue's latest run, so the per-issue ListLandings would be an N+1.
 func (r *Repository) ListLandingsForRuns(ctx context.Context, promptRunIDs []uuid.UUID) (map[uuid.UUID]RunLanding, error) {
 	byRun := make(map[uuid.UUID]RunLanding, len(promptRunIDs))
@@ -133,7 +135,7 @@ func (r *Repository) ListLandingsForRuns(ctx context.Context, promptRunIDs []uui
 	var landings []RunLanding
 	result := r.db.WithContext(ctx).Raw(`
 		SELECT `+runLandingColumns+`
-		FROM todo_run_landings WHERE prompt_run_id IN ?`, promptRunIDs,
+		FROM todo_run_landings WHERE prompt_run_id IN ? AND `+inOrgIssue("issue_id"), promptRunIDs, r.org,
 	).Scan(&landings)
 	if result.Error != nil {
 		return nil, result.Error

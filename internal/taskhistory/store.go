@@ -8,14 +8,19 @@ import (
 	"time"
 
 	clickytask "github.com/flanksource/clicky/task"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
 
 	"github.com/flanksource/gavel/internal/jsonb"
+	"github.com/flanksource/gavel/tenant"
 )
 
+// Store reads and writes one organization's archived runs: the local org
+// unless built by ForOrg. Pruning is global.
 type Store struct {
-	db *gorm.DB
+	db  *gorm.DB
+	org uuid.UUID
 }
 
 // RunSummary is the listing projection of an archived run: everything a run
@@ -36,7 +41,14 @@ func NewStore(db *gorm.DB) (*Store, error) {
 	if db == nil {
 		return nil, errors.New("task history store requires a database")
 	}
-	return &Store{db: db}, nil
+	return &Store{db: db, org: tenant.LocalOrgID}, nil
+}
+
+// ForOrg returns a Store over org's runs, sharing the connection.
+func (s *Store) ForOrg(org uuid.UUID) *Store {
+	scoped := *s
+	scoped.org = org
+	return &scoped
 }
 
 // ImportResult reports what one Import pass achieved.
@@ -70,7 +82,7 @@ func (s *Store) Import(ctx context.Context, records []Record) (ImportResult, err
 	var result ImportResult
 	for _, record := range records {
 		err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-			return importRecord(tx, record)
+			return importRecord(tx, s.org, record)
 		})
 		switch {
 		case err == nil:
@@ -111,7 +123,7 @@ func asRecordFault(err error) error {
 	return err
 }
 
-func importRecord(db *gorm.DB, record Record) error {
+func importRecord(db *gorm.DB, org uuid.UUID, record Record) error {
 	if err := validateRecord(record); err != nil {
 		// A record that fails validation is malformed on disk and will fail
 		// identically every pass.
@@ -140,27 +152,31 @@ func importRecord(db *gorm.DB, record Record) error {
 	// sweep re-offers every retained record on each pass. Without the guard an
 	// unchanged re-import still writes a new tuple, so a 40-row table accumulates
 	// dead tuples (and WAL) in proportion to sweep frequency rather than content.
+	// The org guard keeps another organization from overwriting a run it imports
+	// under the same ID; org_id itself is never updated.
 	result := db.Exec(`
-		INSERT INTO task_run_history (id, started_at, run, snapshots, archived_at, expires_at)
-		VALUES (?, ?, CAST(? AS jsonb), CAST(? AS jsonb), ?, ?)
+		INSERT INTO task_run_history (id, org_id, started_at, run, snapshots, archived_at, expires_at)
+		VALUES (?, ?, ?, CAST(? AS jsonb), CAST(? AS jsonb), ?, ?)
 		ON CONFLICT (id) DO UPDATE SET
 			started_at = EXCLUDED.started_at,
 			run = EXCLUDED.run,
 			snapshots = EXCLUDED.snapshots,
 			archived_at = EXCLUDED.archived_at,
 			expires_at = EXCLUDED.expires_at
-		WHERE task_run_history.started_at IS DISTINCT FROM EXCLUDED.started_at
+		WHERE task_run_history.org_id = EXCLUDED.org_id AND (
+			task_run_history.started_at IS DISTINCT FROM EXCLUDED.started_at
 			OR task_run_history.archived_at IS DISTINCT FROM EXCLUDED.archived_at
 			OR task_run_history.expires_at IS DISTINCT FROM EXCLUDED.expires_at
 			OR task_run_history.run IS DISTINCT FROM EXCLUDED.run
-			OR task_run_history.snapshots IS DISTINCT FROM EXCLUDED.snapshots`,
-		record.Run.ID, startedAt, string(run), string(snapshots), record.ArchivedAt, record.ArchivedAt.Add(Retention))
+			OR task_run_history.snapshots IS DISTINCT FROM EXCLUDED.snapshots)`,
+		record.Run.ID, org, startedAt, string(run), string(snapshots), record.ArchivedAt, record.ArchivedAt.Add(Retention))
 	if result.Error != nil {
 		return asRecordFault(fmt.Errorf("import task history %q: %w", record.Run.ID, result.Error))
 	}
 	return nil
 }
 
+// Prune removes expired runs for every organization.
 func (s *Store) Prune(ctx context.Context, now time.Time) error {
 	if err := s.db.WithContext(ctx).Exec("DELETE FROM task_run_history WHERE expires_at <= ?", now).Error; err != nil {
 		return fmt.Errorf("prune task history database: %w", err)
@@ -176,8 +192,8 @@ func (s *Store) ListRuns(ctx context.Context, now time.Time) ([]RunSummary, erro
 	if err := s.db.WithContext(ctx).Raw(`
 		SELECT CAST(run AS text) AS run, archived_at
 		FROM task_run_history
-		WHERE expires_at > ?
-		ORDER BY started_at DESC`, now).Scan(&stored).Error; err != nil {
+		WHERE org_id = ? AND expires_at > ?
+		ORDER BY started_at DESC`, s.org, now).Scan(&stored).Error; err != nil {
 		return nil, fmt.Errorf("list task history database: %w", err)
 	}
 	runs := make([]RunSummary, 0, len(stored))
@@ -205,7 +221,7 @@ func (s *Store) Snapshot(ctx context.Context, id string) ([]clickytask.TaskSnaps
 	if err := s.db.WithContext(ctx).Raw(`
 		SELECT CAST(snapshots AS text)
 		FROM task_run_history
-		WHERE id = ?`, id).Scan(&stored).Error; err != nil {
+		WHERE org_id = ? AND id = ?`, s.org, id).Scan(&stored).Error; err != nil {
 		return nil, fmt.Errorf("load task history snapshot %q: %w", id, err)
 	}
 	if len(stored) == 0 {

@@ -22,7 +22,7 @@ func (r *Repository) SetAliases(ctx context.Context, issueID uuid.UUID, expected
 		return nil, err
 	}
 	err = r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		locked, err := lockIssue(tx, issueID, expectedVersion)
+		locked, err := lockIssue(tx, r.org, issueID, expectedVersion)
 		if err != nil {
 			return err
 		}
@@ -51,7 +51,7 @@ func (r *Repository) ListAliases(ctx context.Context, issueID uuid.UUID) ([]Alia
 	var aliases []Alias
 	result := r.db.WithContext(ctx).Raw(`
 		SELECT workspace_id, alias, issue_id, COALESCE(kind, '') AS kind, created_at
-		FROM todo_issue_aliases WHERE issue_id = ? ORDER BY alias`, issueID,
+		FROM todo_issue_aliases WHERE issue_id = ? AND `+inOrgWorkspace("workspace_id")+` ORDER BY alias`, issueID, r.org,
 	).Scan(&aliases)
 	return aliases, result.Error
 }
@@ -64,8 +64,8 @@ func (r *Repository) ListAliasesByKind(ctx context.Context, workspaceID uuid.UUI
 	result := r.db.WithContext(ctx).Raw(`
 		SELECT workspace_id, alias, issue_id, COALESCE(kind, '') AS kind, created_at
 		FROM todo_issue_aliases
-		WHERE workspace_id = ? AND lower(COALESCE(kind, '')) = lower(?)
-		ORDER BY alias`, workspaceID, kind,
+		WHERE workspace_id = ? AND lower(COALESCE(kind, '')) = lower(?) AND `+inOrgWorkspace("workspace_id")+`
+		ORDER BY alias`, workspaceID, kind, r.org,
 	).Scan(&aliases)
 	if result.Error != nil {
 		return nil, result.Error
@@ -80,7 +80,7 @@ func (r *Repository) ListAliasesByKind(ctx context.Context, workspaceID uuid.UUI
 func (r *Repository) AppendEvent(ctx context.Context, issueID uuid.UUID, expectedVersion int64, input EventInput) (*Event, error) {
 	var event *Event
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		locked, err := lockIssue(tx, issueID, expectedVersion)
+		locked, err := lockIssue(tx, r.org, issueID, expectedVersion)
 		if err != nil {
 			return err
 		}
@@ -116,7 +116,7 @@ func (r *Repository) AddComment(ctx context.Context, issueID uuid.UUID, expected
 func (r *Repository) ResolveComment(ctx context.Context, issueID uuid.UUID, expectedVersion int64, actor string, commentID uuid.UUID, resolved bool) (*Event, error) {
 	var event *Event
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		locked, err := lockIssue(tx, issueID, expectedVersion)
+		locked, err := lockIssue(tx, r.org, issueID, expectedVersion)
 		if err != nil {
 			return err
 		}
@@ -157,7 +157,7 @@ func (r *Repository) ListEvents(ctx context.Context, issueID uuid.UUID) ([]Event
 	var records []eventRecord
 	result := r.db.WithContext(ctx).Raw(`
 		SELECT id, issue_id, sequence, kind, actor, body, payload, source, source_id, created_at
-		FROM todo_issue_events WHERE issue_id = ? ORDER BY sequence`, issueID,
+		FROM todo_issue_events WHERE issue_id = ? AND `+inOrgIssue("issue_id")+` ORDER BY sequence`, issueID, r.org,
 	).Scan(&records)
 	if result.Error != nil {
 		return nil, result.Error
@@ -258,10 +258,10 @@ func insertEvent(tx *gorm.DB, issueID uuid.UUID, sequence int64, input EventInpu
 	var record eventRecord
 	result := tx.Raw(`
 		INSERT INTO todo_issue_events
-			(id, issue_id, sequence, kind, actor, body, payload, source, source_id, created_at)
-		VALUES (?, ?, ?, ?, NULLIF(?, ''), NULLIF(?, ''), CAST(? AS jsonb), ?, NULLIF(?, ''), now())
+			(id, issue_id, sequence, kind, actor, actor_user_id, body, payload, source, source_id, created_at)
+		VALUES (?, ?, ?, ?, NULLIF(?, ''), ?, NULLIF(?, ''), CAST(? AS jsonb), ?, NULLIF(?, ''), now())
 		RETURNING id, issue_id, sequence, kind, actor, body, payload, source, source_id, created_at`,
-		uuid.New(), issueID, sequence, kind, strings.TrimSpace(input.Actor), input.Body,
+		uuid.New(), issueID, sequence, kind, strings.TrimSpace(input.Actor), requestUser(tx), input.Body,
 		string(payload), source, strings.TrimSpace(input.SourceID),
 	).Scan(&record)
 	if result.Error != nil {

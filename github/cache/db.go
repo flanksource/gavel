@@ -10,6 +10,8 @@ import (
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/service"
+	"github.com/flanksource/gavel/tenant"
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
@@ -30,11 +32,28 @@ const (
 // Store wraps the underlying postgres connection. A nil Store (or a Store
 // returned in disabled mode) is safe to call — every operation becomes a
 // pass-through, so callers don't need to branch on whether caching is
-// configured.
+// configured. Every read and write is scoped to one organization: the local
+// org unless the Store came from ForOrg.
 type Store struct {
 	db       *database.DB
 	disabled bool
-	writeMu  sync.Mutex
+	writeMu  *sync.Mutex
+	org      uuid.UUID
+}
+
+func newStore(db *database.DB) *Store {
+	return &Store{db: db, writeMu: &sync.Mutex{}, org: tenant.LocalOrgID}
+}
+
+// ForOrg returns a Store that reads and writes org's rows. It shares the
+// connection and the write lock with s.
+func (s *Store) ForOrg(org uuid.UUID) *Store {
+	if s == nil {
+		return nil
+	}
+	scoped := *s
+	scoped.org = org
+	return &scoped
 }
 
 // Open initializes the GitHub cache store through the shared Gavel database.
@@ -56,7 +75,7 @@ func Open() (*Store, error) {
 	}
 
 	logger.Debugf("github cache ready (postgres, source=%s)", db.DSNSource())
-	s := &Store{db: db}
+	s := newStore(db)
 	s.pruneOnOpen()
 	return s, nil
 }
@@ -69,7 +88,7 @@ func openShared() (*Store, error) {
 	if db.Disabled() {
 		return &Store{db: db, disabled: true}, nil
 	}
-	s := &Store{db: db}
+	s := newStore(db)
 	s.pruneOnOpen()
 	return s, nil
 }
@@ -210,6 +229,7 @@ func (s *Store) Status() Status {
 }
 
 // pruneOnOpen drops http_cache_entries older than the retention horizon.
+// It is global maintenance and deliberately prunes every organization's rows.
 // We don't prune the immutable caches (workflow runs, job logs, workflow
 // definitions) — those are addressable by ID/SHA forever and represent
 // data that may have been GC'd from GitHub itself.

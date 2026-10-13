@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flanksource/gavel/tenant"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
@@ -56,9 +57,9 @@ func (r *Repository) CreateWorkspace(ctx context.Context, input CreateWorkspaceI
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		result := tx.Exec(`
 			INSERT INTO todo_workspaces
-				(id, repo_key, display_name, created_at, updated_at)
-			VALUES (?, NULLIF(?, ''), NULLIF(?, ''), now(), now())`,
-			id, repoKey, strings.TrimSpace(input.DisplayName),
+				(id, org_id, user_id, repo_key, display_name, created_at, updated_at)
+			VALUES (?, ?, ?, NULLIF(?, ''), NULLIF(?, ''), now(), now())`,
+			id, r.org, tenant.FromContext(ctx).UserID, repoKey, strings.TrimSpace(input.DisplayName),
 		)
 		if result.Error != nil {
 			return mapUniqueError(result.Error, ErrWorkspaceConflict, "workspace repo key %q", repoKey)
@@ -77,7 +78,7 @@ func (r *Repository) CreateWorkspace(ctx context.Context, input CreateWorkspaceI
 func (r *Repository) GetWorkspace(ctx context.Context, id uuid.UUID) (*Workspace, error) {
 	var record workspaceRecord
 	result := r.db.WithContext(ctx).Raw(
-		`SELECT `+workspaceColumns+` FROM `+workspaceFrom+` WHERE workspace.id = ?`, id,
+		`SELECT `+workspaceColumns+` FROM `+workspaceFrom+` WHERE workspace.org_id = ? AND workspace.id = ?`, r.org, id,
 	).Scan(&record)
 	if result.Error != nil {
 		return nil, result.Error
@@ -95,7 +96,7 @@ func (r *Repository) GetWorkspaceByRepoKey(ctx context.Context, repoKey string) 
 	}
 	var record workspaceRecord
 	result := r.db.WithContext(ctx).Raw(
-		`SELECT `+workspaceColumns+` FROM `+workspaceFrom+` WHERE workspace.repo_key = ?`, repoKey,
+		`SELECT `+workspaceColumns+` FROM `+workspaceFrom+` WHERE workspace.org_id = ? AND workspace.repo_key = ?`, r.org, repoKey,
 	).Scan(&record)
 	if result.Error != nil {
 		return nil, result.Error
@@ -117,7 +118,7 @@ func (r *Repository) GetWorkspaceByPath(ctx context.Context, path string) (*Work
 	result := r.db.WithContext(ctx).Raw(
 		`SELECT `+workspaceColumns+` FROM `+workspaceFrom+`
 		 JOIN todo_workspace_paths AS matched_path ON matched_path.workspace_id = workspace.id
-		 WHERE matched_path.path = ?`, path,
+		 WHERE workspace.org_id = ? AND matched_path.path = ?`, r.org, path,
 	).Scan(&record)
 	if result.Error != nil {
 		return nil, result.Error
@@ -135,8 +136,8 @@ func (r *Repository) ListWorkspacePaths(ctx context.Context, workspaceID uuid.UU
 	result := r.db.WithContext(ctx).Raw(`
 		SELECT workspace_id, path, is_primary, created_at, updated_at
 		FROM todo_workspace_paths
-		WHERE workspace_id = ?
-		ORDER BY is_primary DESC, path`, workspaceID,
+		WHERE workspace_id = ? AND `+inOrgWorkspace("workspace_id")+`
+		ORDER BY is_primary DESC, path`, workspaceID, r.org,
 	).Scan(&paths)
 	if result.Error != nil {
 		return nil, result.Error
@@ -144,7 +145,7 @@ func (r *Repository) ListWorkspacePaths(ctx context.Context, workspaceID uuid.UU
 	if result.RowsAffected == 0 {
 		var exists bool
 		if err := r.db.WithContext(ctx).Raw(
-			`SELECT EXISTS(SELECT 1 FROM todo_workspaces WHERE id = ?)`, workspaceID,
+			`SELECT EXISTS(SELECT 1 FROM todo_workspaces WHERE org_id = ? AND id = ?)`, r.org, workspaceID,
 		).Scan(&exists).Error; err != nil {
 			return nil, err
 		}
@@ -179,7 +180,7 @@ func (r *Repository) UpdateWorkspace(ctx context.Context, id uuid.UUID, input Up
 		var current struct {
 			RepoKey sql.NullString
 		}
-		result := tx.Raw(`SELECT repo_key FROM todo_workspaces WHERE id = ? FOR UPDATE`, id).Scan(&current)
+		result := tx.Raw(`SELECT repo_key FROM todo_workspaces WHERE org_id = ? AND id = ? FOR UPDATE`, r.org, id).Scan(&current)
 		if result.Error != nil {
 			return result.Error
 		}
@@ -225,7 +226,7 @@ func (r *Repository) UpdateWorkspace(ctx context.Context, id uuid.UUID, input Up
 }
 
 func (r *Repository) DeleteWorkspace(ctx context.Context, id uuid.UUID) error {
-	result := r.db.WithContext(ctx).Exec(`DELETE FROM todo_workspaces WHERE id = ?`, id)
+	result := r.db.WithContext(ctx).Exec(`DELETE FROM todo_workspaces WHERE org_id = ? AND id = ?`, r.org, id)
 	if result.Error != nil {
 		return result.Error
 	}

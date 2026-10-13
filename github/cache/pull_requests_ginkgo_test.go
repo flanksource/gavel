@@ -37,7 +37,7 @@ var _ = Describe("the persisted PR index", Ordered, func() {
 		opened, err := database.Open(context.Background(), database.WithMigrations())
 		Expect(err).NotTo(HaveOccurred())
 		DeferCleanup(func() { Expect(opened.Close()).To(Succeed()) })
-		store = &Store{db: opened}
+		store = newStore(opened)
 
 		Expect(store.UpsertPRs([]PullRequest{
 			indexedPR("Acme/Widgets", 12, "Fix parser panic on unterminated string", "OPEN", base.Add(3*time.Hour)),

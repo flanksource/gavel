@@ -71,7 +71,7 @@ func (r *Repository) LinkIssuePR(ctx context.Context, issueID uuid.UUID, expecte
 	}
 	var created PRLink
 	err = r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		locked, err := lockIssue(tx, issueID, expectedVersion)
+		locked, err := lockIssue(tx, r.org, issueID, expectedVersion)
 		if err != nil {
 			return err
 		}
@@ -105,7 +105,7 @@ func (r *Repository) UnlinkIssuePR(ctx context.Context, issueID uuid.UUID, expec
 		return fmt.Errorf("%w: %w", ErrInvalidInput, err)
 	}
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		locked, err := lockIssue(tx, issueID, expectedVersion)
+		locked, err := lockIssue(tx, r.org, issueID, expectedVersion)
 		if err != nil {
 			return err
 		}
@@ -117,7 +117,7 @@ func (r *Repository) UnlinkIssuePR(ctx context.Context, issueID uuid.UUID, expec
 		if result.RowsAffected == 0 {
 			return fmt.Errorf("%w: issue %s does not link %s", ErrPRLinkNotFound, issueID, ref.URL)
 		}
-		current, err := getIssue(tx, `id = ?`, issueID)
+		current, err := getIssue(tx, r.org, `id = ?`, issueID)
 		if err != nil {
 			return err
 		}
@@ -146,8 +146,8 @@ func (r *Repository) ListIssuePRLinks(ctx context.Context, issueID uuid.UUID) ([
 	var links []PRLink
 	err := r.db.WithContext(ctx).Raw(`
 		SELECT `+prLinkColumns+` FROM todo_pr_links
-		WHERE issue_id = ?
-		ORDER BY relation = 'implements' DESC, created_at DESC, provider, repo, number`, issueID,
+		WHERE issue_id = ? AND `+inOrgWorkspace("workspace_id")+`
+		ORDER BY relation = 'implements' DESC, created_at DESC, provider, repo, number`, issueID, r.org,
 	).Scan(&links).Error
 	return links, err
 }
@@ -162,9 +162,9 @@ func (r *Repository) ListPRLinkedIssues(ctx context.Context, workspaceID uuid.UU
 	var links []PRLink
 	if err := db.Raw(`
 		SELECT `+prLinkColumns+` FROM todo_pr_links
-		WHERE workspace_id = ? AND provider = ? AND repo = ? AND number = ?
+		WHERE workspace_id = ? AND `+inOrgWorkspace("workspace_id")+` AND provider = ? AND repo = ? AND number = ?
 		ORDER BY relation = 'implements' DESC, created_at DESC, issue_id`,
-		workspaceID, ref.Provider, ref.Repo, ref.Number,
+		workspaceID, r.org, ref.Provider, ref.Repo, ref.Number,
 	).Scan(&links).Error; err != nil {
 		return nil, err
 	}

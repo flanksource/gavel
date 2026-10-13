@@ -56,7 +56,7 @@ func (c *LaunchCoordinator) RecordAskAnswer(ctx context.Context, input AskAnswer
 	}
 	err := c.captain.Transaction(ctx, func(captainTx *captaindb.DB) error {
 		tx := captainTx.Gorm()
-		issue, err := lockExecutionIssue(tx, input.IssueID)
+		issue, err := lockExecutionIssue(tx, c.repository.org, input.IssueID)
 		if err != nil {
 			return err
 		}

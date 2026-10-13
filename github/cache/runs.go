@@ -19,7 +19,7 @@ func (s *Store) GetCompletedRunPayload(runID int64) []byte {
 		return nil
 	}
 	var entry WorkflowRunCache
-	res := s.gorm().Where("run_id = ?", runID).First(&entry)
+	res := s.gorm().Where("org_id = ? AND run_id = ?", s.org, runID).First(&entry)
 	if res.Error != nil {
 		return nil
 	}
@@ -41,6 +41,7 @@ func (s *Store) PutCompletedRun(repo string, runID int64, status, conclusion str
 		return
 	}
 	entry := WorkflowRunCache{
+		OrgID:      s.org,
 		RunID:      runID,
 		Repo:       repo,
 		Status:     status,
@@ -51,8 +52,8 @@ func (s *Store) PutCompletedRun(repo string, runID int64, status, conclusion str
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	res := s.gorm().Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "run_id"}},
-		UpdateAll: true,
+		Columns:   []clause.Column{{Name: "org_id"}, {Name: "run_id"}},
+		DoUpdates: clause.AssignmentColumns([]string{"repo", "status", "conclusion", "payload", "fetched_at"}),
 	}).Create(&entry)
 	if res.Error != nil {
 		logger.Warnf("github cache: PutCompletedRun(%d) failed: %v", runID, res.Error)
@@ -65,7 +66,7 @@ func (s *Store) GetJobLogs(jobID int64) (string, bool) {
 		return "", false
 	}
 	var entry JobLogCache
-	if err := s.gorm().Where("job_id = ?", jobID).First(&entry).Error; err != nil {
+	if err := s.gorm().Where("org_id = ? AND job_id = ?", s.org, jobID).First(&entry).Error; err != nil {
 		return "", false
 	}
 	logs, err := gunzipString(entry.LogsGz)
@@ -90,6 +91,7 @@ func (s *Store) PutJobLogs(jobID int64, repo, logs string) {
 		return
 	}
 	entry := JobLogCache{
+		OrgID:     s.org,
 		JobID:     jobID,
 		Repo:      repo,
 		LogsGz:    gz,
@@ -98,8 +100,8 @@ func (s *Store) PutJobLogs(jobID int64, repo, logs string) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	res := s.gorm().Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "job_id"}},
-		UpdateAll: true,
+		Columns:   []clause.Column{{Name: "org_id"}, {Name: "job_id"}},
+		DoUpdates: clause.AssignmentColumns([]string{"repo", "logs_gz", "fetched_at"}),
 	}).Create(&entry)
 	if res.Error != nil {
 		logger.Warnf("github cache: PutJobLogs(%d) failed: %v", jobID, res.Error)
@@ -114,7 +116,7 @@ func (s *Store) GetWorkflowDef(repo string, workflowID int64, sha string) (yaml,
 	}
 	var entry WorkflowDefCache
 	if err := s.gorm().
-		Where("repo = ? AND workflow_id = ? AND sha = ?", repo, workflowID, sha).
+		Where("org_id = ? AND repo = ? AND workflow_id = ? AND sha = ?", s.org, repo, workflowID, sha).
 		First(&entry).Error; err != nil {
 		return "", "", false
 	}
@@ -133,6 +135,7 @@ func (s *Store) PutWorkflowDef(repo string, workflowID int64, sha, path, yaml st
 		return
 	}
 	entry := WorkflowDefCache{
+		OrgID:      s.org,
 		Repo:       repo,
 		WorkflowID: workflowID,
 		SHA:        sha,
@@ -143,8 +146,8 @@ func (s *Store) PutWorkflowDef(repo string, workflowID int64, sha, path, yaml st
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	res := s.gorm().Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "repo"}, {Name: "workflow_id"}, {Name: "sha"}},
-		UpdateAll: true,
+		Columns:   []clause.Column{{Name: "org_id"}, {Name: "repo"}, {Name: "workflow_id"}, {Name: "sha"}},
+		DoUpdates: clause.AssignmentColumns([]string{"path", "yaml", "fetched_at"}),
 	}).Create(&entry)
 	if res.Error != nil {
 		logger.Warnf("github cache: PutWorkflowDef(%s/%d/%s) failed: %v", repo, workflowID, sha, res.Error)
