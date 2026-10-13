@@ -149,6 +149,9 @@ type Server struct {
 	// gitChanges wakes /api/git/stream on every git_* row change any process
 	// sharing the database NOTIFYs (see GitChangeListener).
 	gitChanges sse.Notifier
+
+	// hosted restricts Handler to the hosted route allowlist (see hosted.go).
+	hosted bool
 }
 
 const orgsCacheTTL = 5 * time.Minute
@@ -637,8 +640,16 @@ func (s *Server) Handler() http.Handler {
 	// gavel's own prompts (prompts/library) resolve by bare name for every
 	// Captain prompt operation, alongside Captain's configured sources.
 	prompts := captaincli.PromptSources{FS: []captaincli.PromptFS{{Label: promptlibrary.Label, FS: promptlibrary.FS}}}
-	root := hub.Guard(rpchttp.TimingMiddleware(captaincli.PromptSourcesMiddleware(mux, prompts)))
+	var served http.Handler = mux
+	if s.hosted {
+		// Inside the hub, so a sub can't reach a route hosted mode turns off.
+		served = s.hostedRoutes(mux)
+	}
+	root := hub.Guard(rpchttp.TimingMiddleware(captaincli.PromptSourcesMiddleware(served, prompts)))
 	hub.Register(mux, root)
+	if s.hosted {
+		mustRegisterHostedRoutes(mux)
+	}
 	return root
 }
 
