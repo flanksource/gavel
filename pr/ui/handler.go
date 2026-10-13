@@ -230,8 +230,13 @@ func NewServer(ctx gavelctx.Context, interval time.Duration, ghOpts github.Optio
 func (s *Server) authProbeLoop() {
 	t := time.NewTicker(authProbeInterval)
 	defer t.Stop()
-	for range t.C {
-		s.refreshAuthProbe()
+	for {
+		select {
+		case <-s.context().Done():
+			return
+		case <-t.C:
+			s.refreshAuthProbe()
+		}
 	}
 }
 

@@ -75,7 +75,12 @@ func (s *Server) recordProcPoint(id string, at time.Time, value float64) {
 func (s *Server) procMetricsLoop() {
 	t := time.NewTicker(procSampleInterval)
 	defer t.Stop()
-	for range t.C {
+	for {
+		select {
+		case <-s.context().Done():
+			return
+		case <-t.C:
+		}
 		s.mu.RLock()
 		last := s.lastProcPoll
 		s.mu.RUnlock()
