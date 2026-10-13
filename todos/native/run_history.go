@@ -47,7 +47,7 @@ func (r *Repository) ListIssueRunHistory(ctx context.Context, issueID uuid.UUID,
 		WITH issue_links AS MATERIALIZED (
 			SELECT issue_id, prompt_run_id, step_kind::text AS step_kind, ordinal, created_at
 			FROM todo_issue_prompt_runs
-			WHERE issue_id = ?
+			WHERE issue_id = ? AND `+inOrgIssue("issue_id")+`
 		),
 		issue_runs AS MATERIALIZED (
 			SELECT run.id, run.state, run.phase, run.queued_at, run.started_at, run.finished_at,
@@ -70,7 +70,7 @@ func (r *Repository) ListIssueRunHistory(ctx context.Context, issueID uuid.UUID,
 		FROM history
 		-- A run precedes its own verify listing; otherwise dispatch order.
 		ORDER BY queued_at, ordinal, (phase = 'verify')`,
-		issueID, outcomeEventKind, outcomeEventKind,
+		issueID, r.org, outcomeEventKind, outcomeEventKind,
 	).Scan(&records)
 	if result.Error != nil {
 		return nil, result.Error

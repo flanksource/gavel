@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	"gorm.io/gorm/clause"
 )
 
@@ -12,9 +13,11 @@ import (
 // row exists at all. The primary key is (Repo, Number) so each PR has at most
 // one row regardless of how many times it has been clicked.
 type SeenPR struct {
-	Repo      string    `gorm:"primaryKey;size:255"`
-	Number    int       `gorm:"primaryKey"`
-	SeenAt    time.Time `gorm:"not null"`
+	OrgID     uuid.UUID  `gorm:"primaryKey;type:uuid"`
+	UserID    *uuid.UUID `gorm:"type:uuid"`
+	Repo      string     `gorm:"primaryKey;size:255"`
+	Number    int        `gorm:"primaryKey"`
+	SeenAt    time.Time  `gorm:"not null"`
 	UpdatedAt time.Time
 }
 
@@ -34,9 +37,9 @@ func (s *Store) MarkSeen(repo string, number int) error {
 	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	row := SeenPR{Repo: repo, Number: number, SeenAt: time.Now()}
+	row := SeenPR{OrgID: s.org, Repo: repo, Number: number, SeenAt: time.Now()}
 	return s.gorm().Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "repo"}, {Name: "number"}},
+		Columns:   []clause.Column{{Name: "org_id"}, {Name: "repo"}, {Name: "number"}},
 		DoUpdates: clause.AssignmentColumns([]string{"seen_at"}),
 	}).Create(&row).Error
 }
@@ -50,12 +53,12 @@ func (s *Store) MarkManySeen(keys []SeenKey) error {
 	now := time.Now()
 	rows := make([]SeenPR, len(keys))
 	for i, k := range keys {
-		rows[i] = SeenPR{Repo: k.Repo, Number: k.Number, SeenAt: now}
+		rows[i] = SeenPR{OrgID: s.org, Repo: k.Repo, Number: k.Number, SeenAt: now}
 	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	return s.gorm().Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "repo"}, {Name: "number"}},
+		Columns:   []clause.Column{{Name: "org_id"}, {Name: "repo"}, {Name: "number"}},
 		DoUpdates: clause.AssignmentColumns([]string{"seen_at"}),
 	}).Create(&rows).Error
 }
@@ -86,7 +89,7 @@ func (s *Store) LoadSeenMap(keys []SeenKey) (map[SeenKey]time.Time, error) {
 	// This overfetches on cross-repo number collisions (#42 in two repos)
 	// which we filter out below; that's cheaper than N individual queries.
 	err := s.gorm().
-		Where("repo IN ? AND number IN ?", repos, numbers).
+		Where("org_id = ? AND repo IN ? AND number IN ?", s.org, repos, numbers).
 		Find(&rows).Error
 	if err != nil {
 		return nil, fmt.Errorf("load seen map: %w", err)

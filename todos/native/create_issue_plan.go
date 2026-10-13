@@ -38,7 +38,7 @@ func (c *LaunchCoordinator) CreateIssueWithPlan(ctx context.Context, input Creat
 	}
 	result := &PersistedPlan{}
 	err := c.captain.Transaction(ctx, func(captainTx *captaindb.DB) error {
-		saved, issue, err := saveCreatedIssuePlan(ctx, captainTx, input)
+		saved, issue, err := saveCreatedIssuePlan(ctx, captainTx, c.repository, input)
 		if err != nil {
 			return err
 		}
@@ -46,7 +46,7 @@ func (c *LaunchCoordinator) CreateIssueWithPlan(ctx context.Context, input Creat
 		if input.Approval == nil {
 			return nil
 		}
-		result.Plan, result.Issue, err = approveCreatedIssuePlan(ctx, captainTx, input, saved.Plan.ID, issue)
+		result.Plan, result.Issue, err = approveCreatedIssuePlan(ctx, captainTx, c.repository.org, input, saved.Plan.ID, issue)
 		return err
 	})
 	if err != nil {
@@ -55,12 +55,15 @@ func (c *LaunchCoordinator) CreateIssueWithPlan(ctx context.Context, input Creat
 	return result, nil
 }
 
-// saveCreatedIssuePlan ensures the session tree, saves the plan, and creates the
-// issue in the plan link. Without an initial approval the link also selects
+// saveCreatedIssuePlan ensures the session tree and records its owners, saves
+// the plan, and creates the issue through repository in the plan link. Without an initial approval the link also selects
 // the plan; with one, selection waits for the approval link.
-func saveCreatedIssuePlan(ctx context.Context, captainTx *captaindb.DB, input CreateIssuePlanInput) (plans.Outcome, *Issue, error) {
+func saveCreatedIssuePlan(ctx context.Context, captainTx *captaindb.DB, repository *Repository, input CreateIssuePlanInput) (plans.Outcome, *Issue, error) {
 	sessions, err := sessiontree.EnsureTx(ctx, captainTx, []captaindb.CreateSessionInput{input.RootSession, input.Session})
 	if err != nil {
+		return plans.Outcome{}, nil, err
+	}
+	if err := repository.recordSessionOwners(ctx, captainTx, sessions); err != nil {
 		return plans.Outcome{}, nil, err
 	}
 	planInput := input.Plan
@@ -70,17 +73,14 @@ func saveCreatedIssuePlan(ctx context.Context, captainTx *captaindb.DB, input Cr
 		Plan: planInput, Markdown: input.Revision.PlanMarkdown,
 		Feedback: input.Revision.Feedback, CreatedBy: input.Revision.CreatedBy,
 	}, plans.SaveOptions{Hooks: input.Hooks, Link: func(ctx context.Context, tx *captaindb.DB, outcome plans.Outcome) error {
-		repositoryTx, err := NewRepository(tx.Gorm())
-		if err != nil {
-			return err
-		}
-		if issue, err = repositoryTx.CreateIssue(ctx, input.Issue); err != nil {
+		var err error
+		if issue, err = repository.inTx(tx.Gorm()).CreateIssue(ctx, input.Issue); err != nil {
 			return err
 		}
 		if input.Approval != nil {
 			return nil
 		}
-		issue, err = selectCreatedPlan(tx, issue, outcome.Plan, &EventInput{
+		issue, err = selectCreatedPlan(tx, repository.org, issue, outcome.Plan, &EventInput{
 			Kind: "plan_created_and_selected", Actor: input.Actor,
 			Payload: map[string]any{"planId": outcome.Plan.ID, "revisionId": outcome.Revision.ID, "ordinal": 0},
 		})
@@ -92,6 +92,7 @@ func saveCreatedIssuePlan(ctx context.Context, captainTx *captaindb.DB, input Cr
 func approveCreatedIssuePlan(
 	ctx context.Context,
 	captainTx *captaindb.DB,
+	org uuid.UUID,
 	input CreateIssuePlanInput,
 	planID uuid.UUID,
 	created *Issue,
@@ -104,7 +105,7 @@ func approveCreatedIssuePlan(
 		event := approvalEvent(outcome.Plan, PlanSelectionAttachment{Actor: input.Actor})
 		event.Kind = "plan_approved_and_selected"
 		var err error
-		issue, err = selectCreatedPlan(tx, created, outcome.Plan, event)
+		issue, err = selectCreatedPlan(tx, org, created, outcome.Plan, event)
 		return err
 	})
 	if err != nil {
@@ -113,8 +114,8 @@ func approveCreatedIssuePlan(
 	return approved.Plan, issue, nil
 }
 
-func selectCreatedPlan(tx *captaindb.DB, created *Issue, plan *captaindb.Plan, event *EventInput) (*Issue, error) {
-	locked, err := lockExecutionIssue(tx.Gorm(), created.ID)
+func selectCreatedPlan(tx *captaindb.DB, org uuid.UUID, created *Issue, plan *captaindb.Plan, event *EventInput) (*Issue, error) {
+	locked, err := lockExecutionIssue(tx.Gorm(), org, created.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -123,5 +124,5 @@ func selectCreatedPlan(tx *captaindb.DB, created *Issue, plan *captaindb.Plan, e
 	}, event); err != nil {
 		return nil, err
 	}
-	return getIssue(tx.Gorm(), "id = ?", created.ID)
+	return getIssue(tx.Gorm(), org, "id = ?", created.ID)
 }

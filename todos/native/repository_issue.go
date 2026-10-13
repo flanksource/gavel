@@ -108,12 +108,8 @@ func (r *Repository) CreateIssue(ctx context.Context, input CreateIssueInput) (*
 	}
 
 	err = r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var workspaceExists bool
-		if err := tx.Raw(`SELECT EXISTS(SELECT 1 FROM todo_workspaces WHERE id = ?)`, input.WorkspaceID).Scan(&workspaceExists).Error; err != nil {
+		if err := requireWorkspace(tx, r.org, input.WorkspaceID); err != nil {
 			return err
-		}
-		if !workspaceExists {
-			return fmt.Errorf("%w: workspace %s", ErrNotFound, input.WorkspaceID)
 		}
 		if input.ParentID != nil {
 			// The same lock SetIssueParent takes, so the parent cannot become a
@@ -121,7 +117,7 @@ func (r *Repository) CreateIssue(ctx context.Context, input CreateIssueInput) (*
 			if err := lockWorkspaceRelationships(tx, input.WorkspaceID); err != nil {
 				return err
 			}
-			if err := requireTopLevelParent(tx, input.WorkspaceID, *input.ParentID); err != nil {
+			if err := requireTopLevelParent(tx, r.org, input.WorkspaceID, *input.ParentID); err != nil {
 				return err
 			}
 		}
@@ -129,10 +125,10 @@ func (r *Repository) CreateIssue(ctx context.Context, input CreateIssueInput) (*
 		result := tx.Exec(`
 			INSERT INTO todo_issues
 				(id, workspace_id, title, body, verification, labels, priority, status, pr,
-				 parent_issue_id, version, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, now(), now())`,
+				 parent_issue_id, version, created_by_user_id, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, now(), now())`,
 			id, input.WorkspaceID, title, input.Body, input.Verification, pq.Array(normalizedLabels),
-			priority, status, input.PR, input.ParentID,
+			priority, status, input.PR, input.ParentID, requestUser(tx),
 		)
 		if result.Error != nil {
 			return result.Error
@@ -162,7 +158,7 @@ func (r *Repository) CreateIssue(ctx context.Context, input CreateIssueInput) (*
 }
 
 func (r *Repository) GetIssue(ctx context.Context, id uuid.UUID) (*Issue, error) {
-	return getIssue(r.db.WithContext(ctx), `id = ?`, id)
+	return getIssue(r.db.WithContext(ctx), r.org, `id = ?`, id)
 }
 
 // MoveIssueWorkspace transfers one issue between native workspaces without
@@ -180,7 +176,7 @@ func (r *Repository) MoveIssueWorkspace(
 	}
 
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		sourceWorkspaceID, err := issueWorkspace(tx, issueID)
+		sourceWorkspaceID, err := issueWorkspace(tx, r.org, issueID)
 		if err != nil {
 			return err
 		}
@@ -189,7 +185,7 @@ func (r *Repository) MoveIssueWorkspace(
 		if err := lockWorkspaceRelationships(tx, sourceWorkspaceID); err != nil {
 			return err
 		}
-		locked, err := lockIssue(tx, issueID, expectedVersion)
+		locked, err := lockIssue(tx, r.org, issueID, expectedVersion)
 		if err != nil {
 			return err
 		}
@@ -201,7 +197,7 @@ func (r *Repository) MoveIssueWorkspace(
 		}
 
 		var targetWorkspace struct{ ID uuid.UUID }
-		targetResult := tx.Raw(`SELECT id FROM todo_workspaces WHERE id = ? FOR SHARE`, targetWorkspaceID).Scan(&targetWorkspace)
+		targetResult := tx.Raw(`SELECT id FROM todo_workspaces WHERE org_id = ? AND id = ? FOR SHARE`, r.org, targetWorkspaceID).Scan(&targetWorkspace)
 		if targetResult.Error != nil {
 			return targetResult.Error
 		}
@@ -345,11 +341,11 @@ func (r *Repository) UpdateIssue(ctx context.Context, id uuid.UUID, expectedVers
 	}
 
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		locked, err := lockIssueForPatch(tx, id, expectedVersion, patch)
+		locked, err := lockIssueForPatch(tx, r.org, id, expectedVersion, patch)
 		if err != nil {
 			return err
 		}
-		current, err := getIssue(tx, `id = ?`, id)
+		current, err := getIssue(tx, r.org, `id = ?`, id)
 		if err != nil {
 			return err
 		}
@@ -413,7 +409,7 @@ func pruneUnchangedIssueUpdates(current *Issue, updates, payload map[string]any)
 // should use StatusCancelled so append-only history remains available.
 func (r *Repository) DeleteIssue(ctx context.Context, id uuid.UUID, expectedVersion int64) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if _, err := lockIssue(tx, id, expectedVersion); err != nil {
+		if _, err := lockIssue(tx, r.org, id, expectedVersion); err != nil {
 			return err
 		}
 		result := tx.Exec(`DELETE FROM todo_issues WHERE id = ?`, id)

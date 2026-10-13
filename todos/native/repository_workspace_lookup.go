@@ -35,7 +35,7 @@ type workspaceLookupRow struct {
 }
 
 // LookupWorkspaces resolves every path (current or retained) and repository key
-// to its workspace in a single query.
+// to its workspace in the repository's org in a single query.
 func (r *Repository) LookupWorkspaces(ctx context.Context, paths, repoKeys []string) (*WorkspaceLookup, error) {
 	lookup := &WorkspaceLookup{
 		paths: map[string]*Workspace{}, repoKeys: map[string]*Workspace{}, requested: map[string]bool{},
@@ -52,12 +52,12 @@ func (r *Repository) LookupWorkspaces(ctx context.Context, paths, repoKeys []str
 		SELECT `+workspaceColumns+`, 'path' AS matched_by, matched.path AS matched_key
 		FROM `+workspaceFrom+`
 		JOIN todo_workspace_paths AS matched ON matched.workspace_id = workspace.id
-		WHERE matched.path IN ?
+		WHERE workspace.org_id = ? AND matched.path IN ?
 		UNION ALL
 		SELECT `+workspaceColumns+`, 'repo' AS matched_by, workspace.repo_key AS matched_key
 		FROM `+workspaceFrom+`
-		WHERE workspace.repo_key IN ?`,
-		normalizedPaths, normalizedKeys,
+		WHERE workspace.org_id = ? AND workspace.repo_key IN ?`,
+		r.org, normalizedPaths, r.org, normalizedKeys,
 	).Scan(&rows).Error
 	if err != nil {
 		return nil, fmt.Errorf("look up workspaces by %d paths and %d repository keys: %w", len(normalizedPaths), len(normalizedKeys), err)

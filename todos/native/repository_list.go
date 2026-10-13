@@ -33,10 +33,10 @@ func (r *Repository) CountIssuesByStatus(ctx context.Context, workspaceIDs []uui
 		  ON active_link.issue_id = issue.id
 		 AND active_link.prompt_run_id = issue.active_prompt_run_id
 		LEFT JOIN captain_plans AS plan ON plan.id = issue.selected_plan_id
-		WHERE issue.workspace_id IN ?
+		WHERE issue.workspace_id IN ? AND `+inOrgWorkspace("issue.workspace_id")+`
 		  AND issue.parent_issue_id IS NULL
 		GROUP BY 1, 2, 3, 4, 5`,
-		workspaceIDs,
+		workspaceIDs, r.org,
 	).Scan(&counts)
 	if result.Error != nil {
 		return nil, result.Error
@@ -99,7 +99,7 @@ func (r *Repository) ListIssuePhaseRuns(ctx context.Context, workspaceID uuid.UU
 			       link.prompt_run_id, issue.active_prompt_run_id
 			FROM todo_issue_prompt_runs AS link
 			JOIN todo_issues AS issue ON issue.id = link.issue_id
-			WHERE issue.workspace_id = ?
+			WHERE issue.workspace_id = ? AND `+inOrgWorkspace("issue.workspace_id")+`
 		),
 		workspace_runs AS MATERIALIZED (
 			SELECT run.id, run.state, run.phase, run.started_at, run.finished_at,
@@ -130,7 +130,7 @@ func (r *Repository) ListIssuePhaseRuns(ctx context.Context, workspaceID uuid.UU
 		-- standalone verify at ordinal 0 would otherwise lose to an older run at
 		-- ordinal 3. Within one kind the two agree anyway.
 		ORDER BY issue_id, phase, queued_at DESC NULLS LAST, ordinal DESC`,
-		workspaceID,
+		workspaceID, r.org,
 	).Scan(&records)
 	if result.Error != nil {
 		return nil, result.Error
@@ -141,8 +141,8 @@ func (r *Repository) ListIssuePhaseRuns(ctx context.Context, workspaceID uuid.UU
 func (r *Repository) ListIssues(ctx context.Context, workspaceID uuid.UUID) ([]Issue, error) {
 	var records []issueRecord
 	result := r.db.WithContext(ctx).Raw(
-		`SELECT `+issueColumns+` FROM `+issueFrom+` WHERE issue.workspace_id = ? ORDER BY issue.updated_at DESC, issue.id`,
-		workspaceID,
+		`SELECT `+issueColumns+` FROM `+issueFrom+` WHERE issue.workspace_id = ? AND `+inOrgWorkspace("issue.workspace_id")+` ORDER BY issue.updated_at DESC, issue.id`,
+		workspaceID, r.org,
 	).Scan(&records)
 	if result.Error != nil {
 		return nil, result.Error
@@ -166,17 +166,17 @@ func (r *Repository) GetIssueByRef(ctx context.Context, workspaceID uuid.UUID, r
 	var exactAlias struct{ IssueID uuid.UUID }
 	aliasResult := r.db.WithContext(ctx).Raw(`
 		SELECT issue_id FROM todo_issue_aliases
-		WHERE workspace_id = ? AND alias = ?`, workspaceID, ref,
+		WHERE workspace_id = ? AND alias = ? AND `+inOrgWorkspace("workspace_id"), workspaceID, ref, r.org,
 	).Scan(&exactAlias)
 	if aliasResult.Error != nil {
 		return nil, aliasResult.Error
 	}
 	if aliasResult.RowsAffected > 0 {
-		return getIssue(r.db.WithContext(ctx), `workspace_id = ? AND id = ?`, workspaceID, exactAlias.IssueID)
+		return getIssue(r.db.WithContext(ctx), r.org, `workspace_id = ? AND id = ?`, workspaceID, exactAlias.IssueID)
 	}
 
 	if id, err := uuid.Parse(ref); err == nil {
-		issue, err := getIssue(r.db.WithContext(ctx), `workspace_id = ? AND id = ?`, workspaceID, id)
+		issue, err := getIssue(r.db.WithContext(ctx), r.org, `workspace_id = ? AND id = ?`, workspaceID, id)
 		if err == nil || !errors.Is(err, ErrNotFound) {
 			return issue, err
 		}
@@ -201,7 +201,8 @@ func (r *Repository) GetIssueByRef(ctx context.Context, workspaceID uuid.UUID, r
 			FROM todo_issue_aliases
 			WHERE workspace_id = ? AND alias LIKE ? ESCAPE '\'
 		) AS matched_refs
-		LIMIT 2`, workspaceID, compactPrefix, workspaceID, prefix,
+		WHERE `+inOrgIssue("issue_id")+`
+		LIMIT 2`, workspaceID, compactPrefix, workspaceID, prefix, r.org,
 	).Scan(&matches)
 	if result.Error != nil {
 		return nil, result.Error
@@ -210,7 +211,7 @@ func (r *Repository) GetIssueByRef(ctx context.Context, workspaceID uuid.UUID, r
 	case 0:
 		return nil, fmt.Errorf("%w: issue reference %q", ErrNotFound, ref)
 	case 1:
-		return getIssue(r.db.WithContext(ctx), `workspace_id = ? AND id = ?`, workspaceID, matches[0].IssueID)
+		return getIssue(r.db.WithContext(ctx), r.org, `workspace_id = ? AND id = ?`, workspaceID, matches[0].IssueID)
 	default:
 		return nil, fmt.Errorf("%w: issue reference %q", ErrAmbiguousReference, ref)
 	}
@@ -230,21 +231,21 @@ func (r *Repository) GetIssueByGlobalRef(ctx context.Context, ref string) (*Issu
 	aliasResult := r.db.WithContext(ctx).Raw(`
 		SELECT DISTINCT issue_id
 		FROM todo_issue_aliases
-		WHERE alias = ?
-		LIMIT 2`, ref,
+		WHERE alias = ? AND `+inOrgWorkspace("workspace_id")+`
+		LIMIT 2`, ref, r.org,
 	).Scan(&exactAliases)
 	if aliasResult.Error != nil {
 		return nil, aliasResult.Error
 	}
 	switch len(exactAliases) {
 	case 1:
-		return getIssue(r.db.WithContext(ctx), `id = ?`, exactAliases[0].IssueID)
+		return getIssue(r.db.WithContext(ctx), r.org, `id = ?`, exactAliases[0].IssueID)
 	case 2:
 		return nil, fmt.Errorf("%w: issue reference %q", ErrAmbiguousReference, ref)
 	}
 
 	if id, err := uuid.Parse(ref); err == nil {
-		issue, err := getIssue(r.db.WithContext(ctx), `id = ?`, id)
+		issue, err := getIssue(r.db.WithContext(ctx), r.org, `id = ?`, id)
 		if err == nil || !errors.Is(err, ErrNotFound) {
 			return issue, err
 		}
@@ -268,7 +269,8 @@ func (r *Repository) GetIssueByGlobalRef(ctx context.Context, ref string) (*Issu
 			FROM todo_issue_aliases
 			WHERE alias LIKE ? ESCAPE '\'
 		) AS matched_refs
-		LIMIT 2`, compactPrefix, prefix,
+		WHERE `+inOrgIssue("issue_id")+`
+		LIMIT 2`, compactPrefix, prefix, r.org,
 	).Scan(&matches)
 	if result.Error != nil {
 		return nil, result.Error
@@ -277,7 +279,7 @@ func (r *Repository) GetIssueByGlobalRef(ctx context.Context, ref string) (*Issu
 	case 0:
 		return nil, fmt.Errorf("%w: issue reference %q", ErrNotFound, ref)
 	case 1:
-		return getIssue(r.db.WithContext(ctx), `id = ?`, matches[0].IssueID)
+		return getIssue(r.db.WithContext(ctx), r.org, `id = ?`, matches[0].IssueID)
 	default:
 		return nil, fmt.Errorf("%w: issue reference %q", ErrAmbiguousReference, ref)
 	}
@@ -323,8 +325,9 @@ func (r *Repository) GetIssueBySessionRef(ctx context.Context, ref string) (*Iss
 		FROM todo_issue_prompt_runs AS link
 		JOIN captain_prompt_runs AS run ON run.id = link.prompt_run_id
 		JOIN candidate_sessions AS candidate ON candidate.id = run.session_id
+		WHERE `+inOrgIssue("link.issue_id")+`
 		GROUP BY link.issue_id
-		LIMIT 2`, parsed, ref,
+		LIMIT 2`, parsed, ref, r.org,
 	).Scan(&matches)
 	if result.Error != nil {
 		return nil, "", result.Error
@@ -333,7 +336,7 @@ func (r *Repository) GetIssueBySessionRef(ctx context.Context, ref string) (*Iss
 	case 0:
 		return nil, "", fmt.Errorf("%w: session reference %q", ErrNotFound, ref)
 	case 1:
-		issue, err := getIssue(r.db.WithContext(ctx), `id = ?`, matches[0].IssueID)
+		issue, err := getIssue(r.db.WithContext(ctx), r.org, `id = ?`, matches[0].IssueID)
 		return issue, matches[0].SessionIdentity, err
 	default:
 		return nil, "", fmt.Errorf("%w: session reference %q", ErrAmbiguousReference, ref)

@@ -9,6 +9,7 @@ import (
 
 	gavelgit "github.com/flanksource/gavel/git"
 	"github.com/flanksource/gavel/status"
+	"github.com/flanksource/gavel/tenant"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
@@ -18,15 +19,43 @@ import (
 // its UI.
 const ChangeChannel = "gavel_git_change"
 
-// Store reads and writes the git_* tables. Writes that change what a reader
-// sees advance the repo's generation and NOTIFY ChangeChannel in the same
-// transaction.
+// ErrNotFound reports a repository that is not one of the store's org's.
+var ErrNotFound = errors.New("git repo not found")
+
+// Store reads and writes one org's rows of the git_* tables. Writes that change
+// what a reader sees advance the repo's generation and NOTIFY ChangeChannel in
+// the same transaction.
 type Store struct {
-	db *gorm.DB
+	db  *gorm.DB
+	org uuid.UUID
 }
 
+// NewStore returns the local org's store.
 func NewStore(db *gorm.DB) *Store {
-	return &Store{db: db}
+	return &Store{db: db, org: tenant.LocalOrgID}
+}
+
+// ForOrg returns a Store over org's git state, sharing the connection.
+func (s *Store) ForOrg(org uuid.UUID) *Store {
+	return &Store{db: s.db, org: org}
+}
+
+// inOrgRepo limits a repo_id column to the org's repositories. The returned
+// condition takes the org ID as its one argument.
+func inOrgRepo(column string) string {
+	return column + ` IN (SELECT id FROM git_repos WHERE org_id = ?)`
+}
+
+// requireRepo fails with ErrNotFound unless repoID is one of the org's repos.
+func (s *Store) requireRepo(db *gorm.DB, repoID uuid.UUID) error {
+	var exists bool
+	if err := db.Raw(`SELECT EXISTS(SELECT 1 FROM git_repos WHERE id = ? AND org_id = ?)`, repoID, s.org).Scan(&exists).Error; err != nil {
+		return fmt.Errorf("look up git repo %s: %w", repoID, err)
+	}
+	if !exists {
+		return fmt.Errorf("%w: %s", ErrNotFound, repoID)
+	}
+	return nil
 }
 
 // WorktreeRef is a worktree as a ref scan records it.
@@ -66,14 +95,14 @@ type Range struct {
 	gavelgit.RangeCompare
 }
 
-// EnsureRepo returns the id of the repository whose primary checkout is
+// EnsureRepo returns the id of the org's repository whose primary checkout is
 // rootDir, creating its row on first sight.
 func (s *Store) EnsureRepo(ctx context.Context, rootDir, commonDir string) (uuid.UUID, error) {
 	var row struct{ ID uuid.UUID }
 	err := s.db.WithContext(ctx).Raw(`
-		INSERT INTO git_repos (root_dir, common_dir) VALUES (?, ?)
-		ON CONFLICT (root_dir) DO UPDATE SET common_dir = EXCLUDED.common_dir
-		RETURNING id`, rootDir, commonDir).Scan(&row).Error
+		INSERT INTO git_repos (org_id, user_id, root_dir, common_dir) VALUES (?, ?, ?, ?)
+		ON CONFLICT (org_id, root_dir) DO UPDATE SET common_dir = EXCLUDED.common_dir
+		RETURNING id`, s.org, tenant.FromContext(ctx).UserID, rootDir, commonDir).Scan(&row).Error
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("register git repo %s: %w", rootDir, err)
 	}
@@ -93,7 +122,7 @@ func (s *Store) Locked(ctx context.Context, key string, wait bool, fn func(tx *S
 			if err := tx.Exec(`SELECT pg_advisory_xact_lock(hashtextextended(?, 0))`, key).Error; err != nil {
 				return fmt.Errorf("lock %s: %w", key, err)
 			}
-			return fn(&Store{db: tx})
+			return fn(&Store{db: tx, org: s.org})
 		}
 		var acquired bool
 		if err := tx.Raw(`SELECT pg_try_advisory_xact_lock(hashtextextended(?, 0))`, key).Scan(&acquired).Error; err != nil {
@@ -102,7 +131,7 @@ func (s *Store) Locked(ctx context.Context, key string, wait bool, fn func(tx *S
 		if !acquired {
 			return errLocked
 		}
-		return fn(&Store{db: tx})
+		return fn(&Store{db: tx, org: s.org})
 	})
 	if errors.Is(err, errLocked) {
 		return false, nil
@@ -114,7 +143,7 @@ func (s *Store) Locked(ctx context.Context, key string, wait bool, fn func(tx *S
 // repo was never scanned or its last scan failed.
 func (s *Store) RefsFingerprint(ctx context.Context, repoID uuid.UUID) (string, error) {
 	var fingerprint *string
-	err := s.db.WithContext(ctx).Raw(`SELECT refs_fingerprint FROM git_repos WHERE id = ? AND error IS NULL`, repoID).Scan(&fingerprint).Error
+	err := s.db.WithContext(ctx).Raw(`SELECT refs_fingerprint FROM git_repos WHERE id = ? AND org_id = ? AND error IS NULL`, repoID, s.org).Scan(&fingerprint).Error
 	if err != nil {
 		return "", fmt.Errorf("read refs fingerprint of git repo %s: %w", repoID, err)
 	}
@@ -126,7 +155,7 @@ func (s *Store) RefsFingerprint(ctx context.Context, repoID uuid.UUID) (string, 
 
 // MarkRefsScanned records an unchanged ref scan.
 func (s *Store) MarkRefsScanned(ctx context.Context, repoID uuid.UUID) error {
-	if err := s.db.WithContext(ctx).Exec(`UPDATE git_repos SET refs_scanned_at = now() WHERE id = ?`, repoID).Error; err != nil {
+	if err := s.db.WithContext(ctx).Exec(`UPDATE git_repos SET refs_scanned_at = now() WHERE id = ? AND org_id = ?`, repoID, s.org).Error; err != nil {
 		return fmt.Errorf("mark refs of git repo %s scanned: %w", repoID, err)
 	}
 	return nil
@@ -136,6 +165,9 @@ func (s *Store) MarkRefsScanned(ctx context.Context, repoID uuid.UUID) error {
 // from it are marked removed, branches missing from it are deleted.
 func (s *Store) ApplyRefs(ctx context.Context, repoID uuid.UUID, update RefsUpdate) error {
 	db := s.db.WithContext(ctx)
+	if err := s.requireRepo(db, repoID); err != nil {
+		return err
+	}
 	if err := db.Exec(`
 		UPDATE git_repos SET refs_fingerprint = ?, refs_scanned_at = now(), base_branch = ?, base_sha = ?,
 			current_branch = ?, base_checked_out = ?, error = NULL, error_at = NULL
@@ -190,8 +222,8 @@ func (s *Store) MissingRanges(ctx context.Context, repoID uuid.UUID, keys []Rang
 	for _, key := range keys {
 		heads = append(heads, key.Head)
 	}
-	err := s.db.WithContext(ctx).Raw(`SELECT base_sha AS base, head_sha AS head FROM git_range_stats WHERE repo_id = ? AND head_sha IN ?`,
-		repoID, heads).Scan(&present).Error
+	err := s.db.WithContext(ctx).Raw(`SELECT base_sha AS base, head_sha AS head FROM git_range_stats WHERE repo_id = ? AND head_sha IN ? AND `+inOrgRepo("repo_id"),
+		repoID, heads, s.org).Scan(&present).Error
 	if err != nil {
 		return nil, fmt.Errorf("read cached ranges of git repo %s: %w", repoID, err)
 	}
@@ -213,6 +245,9 @@ func (s *Store) MissingRanges(ctx context.Context, repoID uuid.UUID, keys []Rang
 // two commits, so a row that already exists is left as is.
 func (s *Store) SaveRanges(ctx context.Context, repoID uuid.UUID, ranges []Range) error {
 	db := s.db.WithContext(ctx)
+	if err := s.requireRepo(db, repoID); err != nil {
+		return err
+	}
 	for _, r := range ranges {
 		if err := db.Exec(`
 			INSERT INTO git_range_stats (repo_id, base_sha, head_sha, merge_base, ahead, behind, commits, files, adds, dels)
@@ -229,8 +264,8 @@ func (s *Store) SaveRanges(ctx context.Context, repoID uuid.UUID, ranges []Range
 // stored, "" when it was never scanned.
 func (s *Store) StatusFingerprint(ctx context.Context, repoID uuid.UUID, path string) (string, error) {
 	var fingerprint *string
-	err := s.db.WithContext(ctx).Raw(`SELECT status_fingerprint FROM git_worktrees WHERE repo_id = ? AND path = ? AND status_error IS NULL`,
-		repoID, path).Scan(&fingerprint).Error
+	err := s.db.WithContext(ctx).Raw(`SELECT status_fingerprint FROM git_worktrees WHERE repo_id = ? AND path = ? AND status_error IS NULL AND `+inOrgRepo("repo_id"),
+		repoID, path, s.org).Scan(&fingerprint).Error
 	if err != nil {
 		return "", fmt.Errorf("read status fingerprint of worktree %s: %w", path, err)
 	}
@@ -242,7 +277,7 @@ func (s *Store) StatusFingerprint(ctx context.Context, repoID uuid.UUID, path st
 
 // MarkStatusScanned records an unchanged status scan.
 func (s *Store) MarkStatusScanned(ctx context.Context, repoID uuid.UUID, path string) error {
-	if err := s.db.WithContext(ctx).Exec(`UPDATE git_worktrees SET status_scanned_at = now() WHERE repo_id = ? AND path = ?`, repoID, path).Error; err != nil {
+	if err := s.db.WithContext(ctx).Exec(`UPDATE git_worktrees SET status_scanned_at = now() WHERE repo_id = ? AND path = ? AND `+inOrgRepo("repo_id"), repoID, path, s.org).Error; err != nil {
 		return fmt.Errorf("mark worktree %s scanned: %w", path, err)
 	}
 	return nil
@@ -257,6 +292,9 @@ func (s *Store) ApplyStatus(ctx context.Context, repoID uuid.UUID, path string, 
 	blob, err := json.Marshal(files)
 	if err != nil {
 		return fmt.Errorf("encode files of worktree %s: %w", path, err)
+	}
+	if err := s.requireRepo(s.db.WithContext(ctx), repoID); err != nil {
+		return err
 	}
 	// Advance the generation first: ApplyRefs locks the repo row before its
 	// worktree rows, so a status write taking them the other way round
@@ -283,6 +321,9 @@ func (s *Store) ApplyStatus(ctx context.Context, repoID uuid.UUID, path string, 
 // RecordStatusError records a failed status scan of the worktree, keeping
 // its last good state.
 func (s *Store) RecordStatusError(ctx context.Context, repoID uuid.UUID, path string, scanErr error) error {
+	if err := s.requireRepo(s.db.WithContext(ctx), repoID); err != nil {
+		return err
+	}
 	// Repo row before worktree row, as in ApplyStatus.
 	if err := s.bump(ctx, repoID); err != nil {
 		return err
@@ -297,6 +338,9 @@ func (s *Store) RecordStatusError(ctx context.Context, repoID uuid.UUID, path st
 // RecordError records a failed ref scan of the repo, keeping its last good
 // rows.
 func (s *Store) RecordError(ctx context.Context, repoID uuid.UUID, scanErr error) error {
+	if err := s.requireRepo(s.db.WithContext(ctx), repoID); err != nil {
+		return err
+	}
 	if err := s.db.WithContext(ctx).Exec(`UPDATE git_repos SET error = ?, error_at = now() WHERE id = ?`, scanErr.Error(), repoID).Error; err != nil {
 		return fmt.Errorf("record error of git repo %s: %w", repoID, err)
 	}

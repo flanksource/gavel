@@ -4,12 +4,15 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/flanksource/gavel/tenant"
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
 type LinterExecution struct {
-	ID             int64 `gorm:"primaryKey;autoIncrement"`
+	ID             int64     `gorm:"primaryKey;autoIncrement"`
+	OrgID          uuid.UUID `gorm:"type:uuid"`
 	LinterName     string
 	WorkDir        string
 	ExecutedAt     time.Time
@@ -21,8 +24,9 @@ type LinterExecution struct {
 func (LinterExecution) TableName() string { return "linter_executions" }
 
 type DebounceMetadata struct {
-	LinterName              string `gorm:"primaryKey"`
-	WorkDir                 string `gorm:"primaryKey"`
+	OrgID                   uuid.UUID `gorm:"primaryKey;type:uuid"`
+	LinterName              string    `gorm:"primaryKey"`
+	WorkDir                 string    `gorm:"primaryKey"`
 	LastDebounceUsedMS      *int64
 	ConsecutiveNoViolations int
 	ConsecutiveViolations   int
@@ -32,8 +36,12 @@ type DebounceMetadata struct {
 
 func (DebounceMetadata) TableName() string { return "debounce_metadata" }
 
-// LinterStats tracks execution metrics for intelligent debouncing.
-type LinterStats struct{ db *gorm.DB }
+// LinterStats tracks execution metrics for intelligent debouncing. Every read
+// and write is scoped to one organization: the local org unless built by ForOrg.
+type LinterStats struct {
+	db  *gorm.DB
+	org uuid.UUID
+}
 
 type ExecutionStats struct {
 	LinterName     string
@@ -50,13 +58,26 @@ func NewLinterStats(db *gorm.DB) (*LinterStats, error) {
 	if db == nil {
 		return nil, fmt.Errorf("linter stats database is nil")
 	}
-	return &LinterStats{db: db}, nil
+	return &LinterStats{db: db, org: tenant.LocalOrgID}, nil
+}
+
+// ForOrg returns LinterStats over org's rows, sharing the connection.
+func (ls *LinterStats) ForOrg(org uuid.UUID) *LinterStats {
+	scoped := *ls
+	scoped.org = org
+	return &scoped
+}
+
+// rows starts a query limited to the stats' organization.
+func (ls *LinterStats) rows() *gorm.DB {
+	return ls.db.Where("org_id = ?", ls.org)
 }
 
 func (ls *LinterStats) RecordExecution(linterName, workDir string, duration time.Duration, violations int, success bool) error {
 	now := time.Now()
 	return ls.db.Transaction(func(tx *gorm.DB) error {
 		execution := LinterExecution{
+			OrgID:          ls.org,
 			LinterName:     linterName,
 			WorkDir:        workDir,
 			ExecutedAt:     now,
@@ -65,20 +86,20 @@ func (ls *LinterStats) RecordExecution(linterName, workDir string, duration time
 			Success:        success,
 		}
 		if err := tx.Clauses(clause.OnConflict{
-			Columns: []clause.Column{{Name: "linter_name"}, {Name: "work_dir"}, {Name: "executed_at"}},
+			Columns: []clause.Column{{Name: "org_id"}, {Name: "linter_name"}, {Name: "work_dir"}, {Name: "executed_at"}},
 			DoUpdates: clause.AssignmentColumns([]string{
 				"duration_ms", "violation_count", "success",
 			}),
 		}).Create(&execution).Error; err != nil {
 			return err
 		}
-		return updateDebounceMetadata(tx, linterName, workDir, violations, now)
+		return updateDebounceMetadata(tx, ls.org, linterName, workDir, violations, now)
 	})
 }
 
-func updateDebounceMetadata(tx *gorm.DB, linterName, workDir string, violations int, now time.Time) error {
-	metadata := DebounceMetadata{LinterName: linterName, WorkDir: workDir, AdaptationFactor: 1}
-	err := tx.Where("linter_name = ? AND work_dir = ?", linterName, workDir).First(&metadata).Error
+func updateDebounceMetadata(tx *gorm.DB, org uuid.UUID, linterName, workDir string, violations int, now time.Time) error {
+	metadata := DebounceMetadata{OrgID: org, LinterName: linterName, WorkDir: workDir, AdaptationFactor: 1}
+	err := tx.Where("org_id = ? AND linter_name = ? AND work_dir = ?", org, linterName, workDir).First(&metadata).Error
 	if err != nil && err != gorm.ErrRecordNotFound {
 		return err
 	}
@@ -101,7 +122,7 @@ func updateDebounceMetadata(tx *gorm.DB, linterName, workDir string, violations 
 	metadata.UpdatedAt = now
 
 	return tx.Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "linter_name"}, {Name: "work_dir"}},
+		Columns:   []clause.Column{{Name: "org_id"}, {Name: "linter_name"}, {Name: "work_dir"}},
 		DoUpdates: clause.AssignmentColumns([]string{"consecutive_no_violations", "consecutive_violations", "adaptation_factor", "updated_at"}),
 	}).Create(&metadata).Error
 }
@@ -111,7 +132,7 @@ func (ls *LinterStats) GetIntelligentDebounce(linterName, workDir string) (time.
 		AvgDuration float64
 		RunCount    int64
 	}
-	err := ls.db.Model(&LinterExecution{}).
+	err := ls.rows().Model(&LinterExecution{}).
 		Select("COALESCE(AVG(duration_ms), 1000) AS avg_duration, COUNT(*) AS run_count").
 		Where("linter_name = ? AND work_dir = ? AND executed_at > ?", linterName, workDir, time.Now().Add(-7*24*time.Hour)).
 		Scan(&aggregate).Error
@@ -121,7 +142,7 @@ func (ls *LinterStats) GetIntelligentDebounce(linterName, workDir string) (time.
 
 	adaptationFactor := 1.0
 	var metadata DebounceMetadata
-	if err := ls.db.Where("linter_name = ? AND work_dir = ?", linterName, workDir).First(&metadata).Error; err == nil && metadata.AdaptationFactor != 0 {
+	if err := ls.rows().Where("linter_name = ? AND work_dir = ?", linterName, workDir).First(&metadata).Error; err == nil && metadata.AdaptationFactor != 0 {
 		adaptationFactor = metadata.AdaptationFactor
 	} else if err != nil && err != gorm.ErrRecordNotFound {
 		return 0, err
@@ -170,7 +191,7 @@ func (ls *LinterStats) ShouldSkipLinter(linterName, workDir, configured string) 
 	}
 
 	var result struct{ LastRun *time.Time }
-	if err := ls.db.Model(&LinterExecution{}).
+	if err := ls.rows().Model(&LinterExecution{}).
 		Select("MAX(executed_at) AS last_run").
 		Where("linter_name = ? AND work_dir = ?", linterName, workDir).
 		Scan(&result).Error; err != nil {
@@ -190,7 +211,7 @@ func (ls *LinterStats) GetStats(linterName, workDir string) (*ExecutionStats, er
 		Violations    int64
 		SuccessRate   float64
 	}
-	if err := ls.db.Model(&LinterExecution{}).
+	if err := ls.rows().Model(&LinterExecution{}).
 		Select(`COUNT(*) AS run_count,
 			COALESCE(AVG(duration_ms), 0) AS avg_duration_ms,
 			COALESCE(SUM(violation_count), 0) AS violations,
@@ -206,7 +227,7 @@ func (ls *LinterStats) GetStats(linterName, workDir string) (*ExecutionStats, er
 
 	if stats.RunCount > 0 {
 		var latest LinterExecution
-		if err := ls.db.Where("linter_name = ? AND work_dir = ?", linterName, workDir).
+		if err := ls.rows().Where("linter_name = ? AND work_dir = ?", linterName, workDir).
 			Order("executed_at DESC").First(&latest).Error; err != nil {
 			return nil, err
 		}
@@ -218,7 +239,7 @@ func (ls *LinterStats) GetStats(linterName, workDir string) (*ExecutionStats, er
 
 func (ls *LinterStats) GetLinterHistory(workDir string) ([]string, error) {
 	var linters []string
-	if err := ls.db.Model(&LinterExecution{}).
+	if err := ls.rows().Model(&LinterExecution{}).
 		Distinct("linter_name").
 		Where("work_dir = ?", workDir).
 		Order("linter_name").

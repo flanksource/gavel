@@ -80,6 +80,9 @@ func (c *LaunchCoordinator) PersistAndSelectPlan(ctx context.Context, input Pers
 			if err != nil {
 				return err
 			}
+			if err := c.repository.recordSessionOwners(ctx, captainTx, sessions); err != nil {
+				return err
+			}
 			planInput.SourceSessionID = sessions[1].ID
 		}
 		_, err := plans.Save(ctx, captainTx, plans.SaveInput{
@@ -96,7 +99,7 @@ func (c *LaunchCoordinator) PersistAndSelectPlan(ctx context.Context, input Pers
 					"revision": outcome.Revision.Revision, "ordinal": input.Attachment.Ordinal,
 				}}
 			}
-			issue, err := linkPlanSelection(tx, input.Attachment, outcome, mutation, "plan_revision_persisted", "plan_persisted_and_selected")
+			issue, err := linkPlanSelection(tx, c.repository.org, input.Attachment, outcome, mutation, "plan_revision_persisted", "plan_persisted_and_selected")
 			if err != nil {
 				return err
 			}
@@ -147,7 +150,7 @@ func (c *LaunchCoordinator) ApproveAndSelectPlan(
 		if outcome.Changed {
 			mutation = approvalEvent(outcome.Plan, attachment)
 		}
-		issue, err := linkPlanSelection(tx, attachment, outcome, mutation, "plan_approval_changed", "plan_approved_and_selected")
+		issue, err := linkPlanSelection(tx, c.repository.org, attachment, outcome, mutation, "plan_approval_changed", "plan_approved_and_selected")
 		if err != nil {
 			return err
 		}
@@ -168,20 +171,22 @@ func approvalEvent(plan *captaindb.Plan, attachment PlanSelectionAttachment) *Ev
 	}}
 }
 
-// linkPlanSelection is the Gavel half of a plan Save/Approve: it locks the
-// issue (after Captain's plan lock) and selects the plan. A Captain replay
+// linkPlanSelection is the Gavel half of a plan Save/Approve: it locks org's
+// issue (after Captain's plan lock) and selects the plan. Another org's issue is
+// ErrNotFound, which rolls Captain's change back. A Captain replay
 // whose selection already holds returns the current issue without touching it;
 // otherwise mutation, when set, is recorded under changedKind if the plan was
 // already selected and selectedKind if this link selects it.
 func linkPlanSelection(
 	tx *captaindb.DB,
+	org uuid.UUID,
 	attachment PlanSelectionAttachment,
 	outcome plans.Outcome,
 	mutation *EventInput,
 	changedKind, selectedKind string,
 ) (*Issue, error) {
 	gormTx := tx.Gorm()
-	issue, err := lockExecutionIssue(gormTx, attachment.IssueID)
+	issue, err := lockExecutionIssue(gormTx, org, attachment.IssueID)
 	if err != nil {
 		return nil, err
 	}
@@ -190,7 +195,7 @@ func linkPlanSelection(
 		return nil, err
 	}
 	if !outcome.Changed && selectionExact {
-		return getIssue(gormTx, "id = ?", attachment.IssueID)
+		return getIssue(gormTx, org, "id = ?", attachment.IssueID)
 	}
 	if mutation != nil {
 		mutation.Kind = changedKind
@@ -204,7 +209,7 @@ func linkPlanSelection(
 	}, mutation); err != nil {
 		return nil, err
 	}
-	return getIssue(gormTx, "id = ?", attachment.IssueID)
+	return getIssue(gormTx, org, "id = ?", attachment.IssueID)
 }
 
 // ReviewPlan records a non-approval review decision through Captain's plans
@@ -221,7 +226,7 @@ func (c *LaunchCoordinator) ReviewPlan(
 	}
 	result := &ReviewedPlan{}
 	_, err := plans.Review(ctx, c.captain, review, func(ctx context.Context, tx *captaindb.DB, outcome plans.Outcome) error {
-		issue, err := linkPlanReview(tx, review, attachment, outcome)
+		issue, err := linkPlanReview(tx, c.repository.org, review, attachment, outcome)
 		if err != nil {
 			return err
 		}
@@ -236,12 +241,13 @@ func (c *LaunchCoordinator) ReviewPlan(
 
 func linkPlanReview(
 	tx *captaindb.DB,
+	org uuid.UUID,
 	review captaindb.SetPlanReviewStateInput,
 	attachment PlanSelectionAttachment,
 	outcome plans.Outcome,
 ) (*Issue, error) {
 	gormTx := tx.Gorm()
-	issue, err := lockExecutionIssue(gormTx, attachment.IssueID)
+	issue, err := lockExecutionIssue(gormTx, org, attachment.IssueID)
 	if err != nil {
 		return nil, err
 	}
@@ -250,7 +256,7 @@ func linkPlanReview(
 		return nil, err
 	}
 	if !outcome.Changed && selectionExact {
-		return getIssue(gormTx, "id = ?", attachment.IssueID)
+		return getIssue(gormTx, org, "id = ?", attachment.IssueID)
 	}
 	mutation := &EventInput{Kind: reviewEventKind(review.State), Actor: attachment.Actor, Payload: map[string]any{
 		"planId": outcome.Plan.ID, "state": review.State,
@@ -269,7 +275,7 @@ func linkPlanReview(
 	if err != nil {
 		return nil, err
 	}
-	return getIssue(gormTx, "id = ?", attachment.IssueID)
+	return getIssue(gormTx, org, "id = ?", attachment.IssueID)
 }
 
 func reviewEventKind(state captaindb.PlanApprovalState) string {

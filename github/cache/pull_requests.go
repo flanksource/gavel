@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"gorm.io/gorm/clause"
 )
 
@@ -28,18 +29,20 @@ const MaxPRSearchLimit = 200
 // dashboard poller. Repo keeps the host's display spelling; lookups compare it
 // case-insensitively.
 type PullRequest struct {
-	Provider  string    `gorm:"primaryKey" json:"provider"`
-	Repo      string    `gorm:"primaryKey" json:"repo"`
-	Number    int       `gorm:"primaryKey" json:"number"`
-	URL       string    `json:"url"`
-	Title     string    `json:"title"`
-	Author    string    `json:"author"`
-	State     string    `json:"state"`
-	IsDraft   bool      `json:"isDraft"`
-	Head      string    `json:"head,omitempty"`
-	Base      string    `json:"base,omitempty"`
-	UpdatedAt time.Time `gorm:"autoUpdateTime:false" json:"updatedAt"`
-	SyncedAt  time.Time `json:"syncedAt"`
+	OrgID     uuid.UUID  `gorm:"primaryKey;type:uuid" json:"-"`
+	UserID    *uuid.UUID `gorm:"type:uuid" json:"-"`
+	Provider  string     `gorm:"primaryKey" json:"provider"`
+	Repo      string     `gorm:"primaryKey" json:"repo"`
+	Number    int        `gorm:"primaryKey" json:"number"`
+	URL       string     `json:"url"`
+	Title     string     `json:"title"`
+	Author    string     `json:"author"`
+	State     string     `json:"state"`
+	IsDraft   bool       `json:"isDraft"`
+	Head      string     `json:"head,omitempty"`
+	Base      string     `json:"base,omitempty"`
+	UpdatedAt time.Time  `gorm:"autoUpdateTime:false" json:"updatedAt"`
+	SyncedAt  time.Time  `json:"syncedAt"`
 }
 
 func (PullRequest) TableName() string { return "pull_requests" }
@@ -81,13 +84,14 @@ func (s *Store) UpsertPRs(prs []PullRequest) error {
 		if pr.Provider == "" || pr.Repo == "" || pr.Number <= 0 || pr.URL == "" {
 			return fmt.Errorf("index PR %s %s#%d: provider, repo, number and url are required", pr.Provider, pr.Repo, pr.Number)
 		}
+		pr.OrgID = s.org
 		pr.SyncedAt = now
 		rows[i] = pr
 	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	err := s.gorm().Clauses(clause.OnConflict{
-		Columns: []clause.Column{{Name: "provider"}, {Name: "repo"}, {Name: "number"}},
+		Columns: []clause.Column{{Name: "org_id"}, {Name: "provider"}, {Name: "repo"}, {Name: "number"}},
 		DoUpdates: clause.AssignmentColumns([]string{
 			"url", "title", "author", "state", "is_draft", "head", "base", "updated_at", "synced_at",
 		}),
@@ -110,7 +114,7 @@ func (s *Store) SearchPRs(query PRQuery) ([]PullRequest, error) {
 	if query.Limit <= 0 || query.Limit > MaxPRSearchLimit {
 		return nil, fmt.Errorf("%w: limit %d must be between 1 and %d", ErrInvalidPRQuery, query.Limit, MaxPRSearchLimit)
 	}
-	db := s.gorm().Model(&PullRequest{})
+	db := s.gorm().Model(&PullRequest{}).Where("org_id = ?", s.org)
 	switch state := strings.ToLower(strings.TrimSpace(query.State)); state {
 	case "", "all":
 	case "open", "closed", "merged":
@@ -153,7 +157,7 @@ func (s *Store) GetPRs(keys []PRKey) (map[PRKey]PullRequest, error) {
 		tuples = append(tuples, []any{key.Provider, key.Repo, key.Number})
 	}
 	var rows []PullRequest
-	if err := s.gorm().Where("(provider, lower(repo), number) IN ?", tuples).Find(&rows).Error; err != nil {
+	if err := s.gorm().Where("org_id = ? AND (provider, lower(repo), number) IN ?", s.org, tuples).Find(&rows).Error; err != nil {
 		return nil, fmt.Errorf("load indexed PRs: %w", err)
 	}
 	for _, row := range rows {

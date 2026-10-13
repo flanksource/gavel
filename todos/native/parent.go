@@ -32,7 +32,7 @@ func (r *Repository) SetIssueParent(
 	}
 
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		locked, err := lockIssueHierarchy(tx, issueID, expectedVersion)
+		locked, err := lockIssueHierarchy(tx, r.org, issueID, expectedVersion)
 		if err != nil {
 			return err
 		}
@@ -44,7 +44,7 @@ func (r *Repository) SetIssueParent(
 			return nil
 		}
 		if parentID != nil {
-			if err := requireTopLevelParent(tx, locked.WorkspaceID, *parentID); err != nil {
+			if err := requireTopLevelParent(tx, r.org, locked.WorkspaceID, *parentID); err != nil {
 				return err
 			}
 			if err := requireNoChildren(tx, issueID); err != nil {
@@ -69,15 +69,15 @@ func (r *Repository) SetIssueParent(
 
 // lockIssueHierarchy takes the workspace relationship lock and then the issue
 // row lock, the order relationships and workspace moves use.
-func lockIssueHierarchy(tx *gorm.DB, issueID uuid.UUID, expectedVersion int64) (*lockedIssue, error) {
-	workspaceID, err := issueWorkspace(tx, issueID)
+func lockIssueHierarchy(tx *gorm.DB, org, issueID uuid.UUID, expectedVersion int64) (*lockedIssue, error) {
+	workspaceID, err := issueWorkspace(tx, org, issueID)
 	if err != nil {
 		return nil, err
 	}
 	if err := lockWorkspaceRelationships(tx, workspaceID); err != nil {
 		return nil, err
 	}
-	locked, err := lockIssue(tx, issueID, expectedVersion)
+	locked, err := lockIssue(tx, org, issueID, expectedVersion)
 	if err != nil {
 		return nil, err
 	}
@@ -88,17 +88,17 @@ func lockIssueHierarchy(tx *gorm.DB, issueID uuid.UUID, expectedVersion int64) (
 }
 
 // requireTopLevelParent is the rule every new parent link must pass: the parent
-// exists, belongs to workspaceID, is not itself a child, and is still open, so
-// nothing is attached where a closed parent would hide it. Callers hold the
-// workspace relationship lock, which is what keeps the answer true until they
-// commit.
-func requireTopLevelParent(tx *gorm.DB, workspaceID, parentID uuid.UUID) error {
+// exists in org, belongs to workspaceID, is not itself a child, and is still
+// open, so nothing is attached where a closed parent would hide it. Callers hold
+// the workspace relationship lock, which is what keeps the answer true until
+// they commit. Another org's issue is ErrNotFound.
+func requireTopLevelParent(tx *gorm.DB, org, workspaceID, parentID uuid.UUID) error {
 	var parent struct {
 		WorkspaceID   uuid.UUID
 		ParentIssueID *uuid.UUID
 		Status        IssueStatus
 	}
-	result := tx.Raw(`SELECT workspace_id, parent_issue_id, status FROM todo_issues WHERE id = ?`, parentID).Scan(&parent)
+	result := tx.Raw(`SELECT workspace_id, parent_issue_id, status FROM todo_issues WHERE id = ? AND `+inOrgWorkspace("workspace_id"), parentID, org).Scan(&parent)
 	if result.Error != nil {
 		return result.Error
 	}
@@ -123,11 +123,11 @@ func requireTopLevelParent(tx *gorm.DB, workspaceID, parentID uuid.UUID) error {
 // lockIssueForPatch locks an issue for UpdateIssue. Cancelling is how an issue
 // is deleted, and it must not take open children out of sight with it, so that
 // one change is decided under the hierarchy lock.
-func lockIssueForPatch(tx *gorm.DB, issueID uuid.UUID, expectedVersion int64, patch IssuePatch) (*lockedIssue, error) {
+func lockIssueForPatch(tx *gorm.DB, org, issueID uuid.UUID, expectedVersion int64, patch IssuePatch) (*lockedIssue, error) {
 	if patch.Status == nil || *patch.Status != StatusCancelled {
-		return lockIssue(tx, issueID, expectedVersion)
+		return lockIssue(tx, org, issueID, expectedVersion)
 	}
-	locked, err := lockIssueHierarchy(tx, issueID, expectedVersion)
+	locked, err := lockIssueHierarchy(tx, org, issueID, expectedVersion)
 	if err != nil {
 		return nil, err
 	}

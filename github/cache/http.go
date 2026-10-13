@@ -40,7 +40,7 @@ func (s *Store) LookupHTTP(url, method string) *CachedHTTPResponse {
 		method = "GET"
 	}
 	var entry HTTPCacheEntry
-	res := s.gorm().Where("url = ? AND method = ?", url, method).First(&entry)
+	res := s.gorm().Where("org_id = ? AND url = ? AND method = ?", s.org, url, method).First(&entry)
 	if res.Error != nil {
 		return nil
 	}
@@ -69,6 +69,7 @@ func (s *Store) StoreHTTP(url, method string, statusCode int, body []byte, heade
 		method = "GET"
 	}
 	entry := HTTPCacheEntry{
+		OrgID:        s.org,
 		URL:          url,
 		Method:       method,
 		ETag:         headers.Get("ETag"),
@@ -81,10 +82,10 @@ func (s *Store) StoreHTTP(url, method string, statusCode int, body []byte, heade
 	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	// Upsert: postgres ON CONFLICT (url, method) DO UPDATE.
+	// Upsert: postgres ON CONFLICT (org_id, url, method) DO UPDATE.
 	res := s.gorm().Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "url"}, {Name: "method"}},
-		UpdateAll: true,
+		Columns:   []clause.Column{{Name: "org_id"}, {Name: "url"}, {Name: "method"}},
+		DoUpdates: clause.AssignmentColumns([]string{"e_tag", "last_modified", "status_code", "body", "headers", "fetched_at", "expires_at"}),
 	}).Create(&entry)
 	if res.Error != nil {
 		logger.Warnf("github cache upsert failed for %s %s: %v", method, url, res.Error)
@@ -104,7 +105,7 @@ func (s *Store) TouchHTTP(url, method string) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	s.gorm().Model(&HTTPCacheEntry{}).
-		Where("url = ? AND method = ?", url, method).
+		Where("org_id = ? AND url = ? AND method = ?", s.org, url, method).
 		Update("fetched_at", time.Now())
 }
 

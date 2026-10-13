@@ -71,11 +71,7 @@ func (c *LaunchCoordinator) AttachPromptRun(
 		return nil, fmt.Errorf("%w: attachment names prompt run %s but Captain admitted %s", ErrInvalidInput, attachment.PromptRunID, run.ID)
 	}
 	attachment.PromptRunID = run.ID
-	repositoryTx, err := NewRepository(tx.Gorm())
-	if err != nil {
-		return nil, err
-	}
-	integration, err := NewExecutionIntegration(repositoryTx)
+	integration, err := NewExecutionIntegration(c.repository.inTx(tx.Gorm()))
 	if err != nil {
 		return nil, err
 	}
@@ -86,6 +82,9 @@ func (c *LaunchCoordinator) AttachPromptRun(
 	session, err := tx.GetSession(ctx, run.SessionID)
 	if err != nil {
 		return nil, fmt.Errorf("read admitted session %s of prompt run %s: %w", run.SessionID, run.ID, err)
+	}
+	if err := c.repository.recordSessionOwners(ctx, tx, []*captaindb.Session{session}); err != nil {
+		return nil, err
 	}
 	return &PromptRunLaunch{Session: session, PromptRun: run, Issue: issue, DispatchOwned: dispatchOwned}, nil
 }

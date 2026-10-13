@@ -38,12 +38,12 @@ func (c *LaunchCoordinator) CreateIssueWithSession(
 	}
 	result := &CreatedIssueSession{}
 	sessions, err := sessiontree.Ensure(ctx, c.captain, []captaindb.CreateSessionInput{input.RootSession},
-		func(ctx context.Context, tx *captaindb.DB, _ []*captaindb.Session) error {
-			repositoryTx, err := NewRepository(tx.Gorm())
-			if err != nil {
+		func(ctx context.Context, tx *captaindb.DB, sessions []*captaindb.Session) error {
+			if err := c.repository.recordSessionOwners(ctx, tx, sessions); err != nil {
 				return err
 			}
-			result.Issue, err = repositoryTx.CreateIssue(ctx, input.Issue)
+			var err error
+			result.Issue, err = c.repository.inTx(tx.Gorm()).CreateIssue(ctx, input.Issue)
 			return err
 		})
 	if err != nil {
@@ -65,13 +65,13 @@ func (c *LaunchCoordinator) UpdateIssueWithSession(
 	}
 	var issue *Issue
 	_, err := sessiontree.Ensure(ctx, c.captain, []captaindb.CreateSessionInput{input.RootSession, input.Session},
-		func(ctx context.Context, tx *captaindb.DB, _ []*captaindb.Session) error {
-			repositoryTx, err := NewRepository(tx.Gorm())
+		func(ctx context.Context, tx *captaindb.DB, sessions []*captaindb.Session) error {
+			var err error
+			issue, err = c.repository.inTx(tx.Gorm()).UpdateIssue(ctx, input.IssueID, input.ExpectedIssueVersion, input.Patch)
 			if err != nil {
 				return err
 			}
-			issue, err = repositoryTx.UpdateIssue(ctx, input.IssueID, input.ExpectedIssueVersion, input.Patch)
-			return err
+			return c.repository.recordSessionOwners(ctx, tx, sessions)
 		})
 	if err != nil {
 		return nil, err
