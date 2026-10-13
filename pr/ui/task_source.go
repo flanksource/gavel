@@ -244,6 +244,8 @@ func (s *Server) taskHistoryImportLoop() {
 	defer t.Stop()
 	for {
 		select {
+		case <-s.context().Done():
+			return
 		case <-t.C:
 		case <-s.taskHistoryImport:
 		}
