@@ -167,3 +167,19 @@ func TestCacheIsolatesOrganizations(t *testing.T) {
 		assert.Len(t, runs, 1)
 	})
 }
+
+func TestStatusShowsHostDetailsOnlyToTheLocalOrg(t *testing.T) {
+	local, other := openTenancyStores(t)
+
+	hostView := local.Status()
+	assert.True(t, hostView.Enabled)
+	assert.NotEmpty(t, hostView.DSNSource)
+	assert.NotEmpty(t, hostView.Counts)
+
+	orgView := other.Status()
+	assert.True(t, orgView.Enabled)
+	assert.Empty(t, orgView.Error)
+	assert.Empty(t, orgView.DSNSource, "an organization never sees how the host's database is configured")
+	assert.Empty(t, orgView.DSNMasked)
+	assert.Empty(t, orgView.Counts, "table counts span every organization")
+}

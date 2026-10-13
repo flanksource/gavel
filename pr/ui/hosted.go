@@ -14,8 +14,10 @@ import (
 
 // hostedPassThrough lists the dashboard routes a hosted organization is served, as
 // the patterns Handler registers them under, optionally narrowed to a method
-// ("GET /api/projects" for the any-method "/api/projects"). Any other route is 404
-// in hosted mode, so a route added later stays off until it is known to be org-scoped.
+// ("GET /api/x" for an any-method "/api/x"). Any other route is 404 in hosted mode,
+// so a route added later stays off until it is known to be org-scoped. Todos,
+// projects and runtime presets resolve workspaces from the host's directories, so
+// they stay off until workspaces come from the organization's repositories.
 var hostedPassThrough = []string{
 	"/_assets/", "/favicon.svg", "/manifest.webmanifest", "/brand/gavel-logo.svg", "/brand/menubar.png",
 	"/brand/menubar-unread.png", "/brand/apple-touch-icon.png", "/brand/icon-192.png", "/brand/icon-512.png",
@@ -28,20 +30,9 @@ var hostedPassThrough = []string{
 	"/api/prs/job-logs", "/api/prs/seen",
 	"/api/config", "/api/repos", "/api/repos/favicon", "/api/orgs",
 
-	"/api/todos", "POST /api/todos/batch", "POST /api/todos/new", "/api/todos/item",
-	"/api/todos/links", "/api/todos/labels", "/api/todos/attachments", "GET /api/todos/attachments/{id}",
-	"GET /api/v1/todo", "POST /api/v1/todo", "GET /api/v1/todo/{id}",
-	"POST /api/v1/todo/{id}/comment", "DELETE /api/v1/todo/{id}/delete", "PUT /api/v1/todo/{id}/edit",
-	"POST /api/v1/todo/{id}/labels", "POST /api/v1/todo/{id}/link", "POST /api/v1/todo/{id}/links",
-	"POST /api/v1/todo/{id}/unlink", "POST /api/v1/todo/{id}/priority", "POST /api/v1/todo/{id}/status",
-	"POST /api/v1/todo/{id}/reopen",
-
-	"GET /api/projects", "GET /api/projects/{name}", "POST /api/projects/{name}/actions",
-
 	"/api/settings/schema",
-	"GET /api/settings/runtime-presets", "POST /api/settings/runtime-presets",
-	"PUT /api/settings/runtime-presets/{id}", "DELETE /api/settings/runtime-presets/{id}",
-	"POST /api/settings/runtime-presets/resolve",
+	// Answered by answerHostedProjectAction before the host's projects are read.
+	"POST /api/projects/{name}/actions",
 }
 
 // hostedAnswer is a fixed response a hosted dashboard gives instead of the handler.
