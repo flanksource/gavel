@@ -30,7 +30,10 @@ import (
 	"github.com/flanksource/gavel/pr/model"
 	promptlibrary "github.com/flanksource/gavel/prompts/library"
 	"github.com/flanksource/gavel/prwatch"
+	"github.com/flanksource/gavel/tenant"
 	testui "github.com/flanksource/gavel/testrunner/ui"
+	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 type SearchConfig struct {
@@ -152,6 +155,36 @@ type Server struct {
 
 	// hosted restricts Handler to the hosted route allowlist (see hosted.go).
 	hosted bool
+
+	// org owns every row this Server reads and writes; uuid.Nil is the local
+	// org. orgDB holds an organization's settings. githubCache is the GitHub
+	// cache those rows live in; nil is the shared cache.
+	org         uuid.UUID
+	orgDB       *gorm.DB
+	githubCache *cache.Store
+}
+
+// SetOrg scopes the Server's stores to org, whose settings live in db. Call it
+// before serving.
+func (s *Server) SetOrg(org uuid.UUID, db *gorm.DB) {
+	s.org, s.orgDB = org, db
+}
+
+// orgID is the organization the Server serves.
+func (s *Server) orgID() uuid.UUID {
+	if s.org == uuid.Nil {
+		return tenant.LocalOrgID
+	}
+	return s.org
+}
+
+// cacheStore is the Server organization's view of the GitHub cache.
+func (s *Server) cacheStore() *cache.Store {
+	store := s.githubCache
+	if store == nil {
+		store = cache.Shared()
+	}
+	return store.ForOrg(s.orgID())
 }
 
 const orgsCacheTTL = 5 * time.Minute
@@ -884,7 +917,7 @@ func (s *Server) UnreadMap(prs github.PRSearchResults) map[string]bool {
 	if len(prs) == 0 {
 		return nil
 	}
-	store := cache.Shared()
+	store := s.cacheStore()
 	keys := make([]cache.SeenKey, len(prs))
 	for i, pr := range prs {
 		keys[i] = cache.SeenKey{Repo: pr.Repo, Number: pr.Number}
@@ -916,7 +949,7 @@ func (s *Server) UnreadCount() int {
 // MarkSeen delegates to the shared cache store and triggers a snapshot
 // push so the UI and menubar update without waiting for the next poll.
 func (s *Server) MarkSeen(repo string, number int) error {
-	if err := cache.Shared().MarkSeen(repo, number); err != nil {
+	if err := s.cacheStore().MarkSeen(repo, number); err != nil {
 		return err
 	}
 	s.notify()
@@ -935,7 +968,7 @@ func (s *Server) MarkAllSeen() error {
 	for i, pr := range prs {
 		keys[i] = cache.SeenKey{Repo: pr.Repo, Number: pr.Number}
 	}
-	if err := cache.Shared().MarkManySeen(keys); err != nil {
+	if err := s.cacheStore().MarkManySeen(keys); err != nil {
 		return err
 	}
 	s.notify()
@@ -1103,12 +1136,20 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
 			return
 		}
-		s.SetConfig(cfg)
-		go SaveSettings(UISettings{
-			Repos:       cfg.Repos,
-			Project:     cfg.Project,
-			IgnoredOrgs: cfg.IgnoredOrgs,
-		})
+		if s.orgID() != tenant.LocalOrgID {
+			if err := SaveOrgSearchConfig(r.Context(), s.orgDB, s.orgID(), cfg); err != nil {
+				writeJSONError(w, http.StatusInternalServerError, err)
+				return
+			}
+			s.SetConfig(cfg)
+		} else {
+			s.SetConfig(cfg)
+			go SaveSettings(UISettings{
+				Repos:       cfg.Repos,
+				Project:     cfg.Project,
+				IgnoredOrgs: cfg.IgnoredOrgs,
+			})
+		}
 		select {
 		case s.refreshCh <- struct{}{}:
 		default:

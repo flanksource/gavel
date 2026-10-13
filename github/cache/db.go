@@ -163,13 +163,20 @@ type Status struct {
 }
 
 // Status returns a point-in-time snapshot of cache config and row counts.
-// Safe to call on a disabled store.
+// Safe to call on a disabled store. Another organization than the local one
+// sees only whether the cache works: the DSN and the counts describe the host.
 func (s *Store) Status() Status {
 	st := Status{
 		Enabled:      !s.Disabled(),
 		Driver:       "postgres",
 		RetentionSec: int64(retention().Seconds()),
 		Counts:       map[string]int64{},
+	}
+	if s != nil && s.org != uuid.Nil && s.org != tenant.LocalOrgID {
+		if !st.Enabled {
+			st.Error = "the cache database is unavailable"
+		}
+		return st
 	}
 
 	// Prefer the DSN we actually opened with (env var OR db.json — including

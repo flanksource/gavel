@@ -718,18 +718,22 @@ copy):
   `/bots`, `/closed`, `/pause`, `/detail`, `/commits/diff`, `/files/diff`, `/merge`, `/approve`,
   `/update-branch`, `/job-logs`, `/seen`; `/api/config`, `/api/repos`, `/api/repos/favicon`,
   `/api/orgs`.
-- **Todos:** `/api/todos`, `/api/todos/batch`, `/api/todos/new`, `/api/todos/item`,
-  `/api/todos/links`, `/api/todos/labels`, `/api/todos/attachments` and
-  `/api/todos/attachments/{id}`; the `/api/v1/todo` entity routes for list, get, create, comment,
-  delete, edit, labels, link(s), unlink, priority, status and reopen.
+- **Not in M3: todos, projects and runtime presets.** Every todo path resolves its workspace
+  from a host directory: `openTodoProvider(ctx, dir)` calls `ProjectForDir` with a
+  client-supplied `dir`, the entity's `Workspaces`/`DefaultDir`/`ProjectDir` read the host's
+  project registry, and its `DB` hook is the unscoped database. `GET /api/projects` and the
+  runtime presets read the host registry too. They return in M6, once workspaces and projects
+  come from the org's repositories (`repos`), and M6's tests include "org A's todo ID requested
+  with org B's session returns 404".
 - **Answered without running anything:** `/api/todos/run`, `/plan/approve`, `/plan/revise`,
   `/answer` and `/api/v1/todo/{id}/{run|plan|triage}` return
   `501 {"error":"agent runs are not available in hosted mode yet"}` (M10 lifts this).
-- **Projects:** `/api/projects` and `/api/projects/{name}` (from the `repos` table; a `dir` is
-  rejected), and `POST /api/projects/{name}/actions` (`test`/`lint` 501, `commit` 400, answered
-  before the host's project registry is read). `POST .../commit-queue` and `.../branch/pr` (open
+- **Projects:** only `POST /api/projects/{name}/actions` (`test`/`lint` 501, `commit` 400,
+  answered before the host's project registry is read), and `POST /api/projects`,
+  `PUT`/`DELETE /api/projects/{name}` answer `400 projects are repos in hosted mode`. `POST .../commit-queue` and `.../branch/pr` (open
   a PR) answer `400 commits come from agent runs in hosted mode`.
-- **Settings:** `/api/settings/schema` and `/api/settings/runtime-presets*` (owner rows exist).
+- **Settings:** `/api/settings/schema`. `/api/config` POST saves to `org_settings` for any org
+  but the local one (`SaveOrgSearchConfig`), never to the host's settings file.
 - **Status:** `/api/status`, with the database section reduced to health (no DSN source, no table
   counts) when the cache store's org isn't the local org.
 
@@ -1824,6 +1828,22 @@ Clerk-mode manual checks:
   keeps the local-org cache. `cachedGet` takes the store explicitly. A test covers each path
   with two orgs, and fails if `Options.Cache` is ignored. The github package has no other
   process-wide caches.
+- **2026-10-14: `Server` org scoping (M3.2).**
+  - `Server.SetOrg(org, db)` takes the org's database handle along with the org (the spec had
+    `SetOrg(org)`), because pr/ui wires its stores explicitly instead of through
+    `database.Shared`. `cacheStore()` is the org's GitHub cache: `Server.githubCache` (nil means
+    `cache.Shared()`), always `ForOrg(org)`. Seen PRs, unread maps and `/api/status` use it.
+  - `cache.Store.Status()` shows the DSN and per-table counts only to the local org. Another
+    org sees whether the cache works. A store with a zero org, such as the disabled one, counts
+    as local.
+  - `/api/config` POST for a non-local org goes to `org_settings` (`LoadOrgSearchConfig` and
+    `SaveOrgSearchConfig` in `pr/ui/org_settings.go`) synchronously, and errors are reported.
+  - Left on the shared or local cache on purpose: repo favicons (public homepage URLs, already
+    guarded against private addresses), and the process favicon, test-run syncer,
+    `collectTestRuns` and `/api/activity/cache`, whose routes are off in hosted mode and read
+    the host's own files.
+  - The allowed PR handlers all copy `s.ghOpts` and change only `Repo`, so the org's token
+    source and cache carry through. Nothing in `pr/ui` builds a fresh `github.Options{}`.
 - **2026-10-14: M5.1 `TokenSource` pulled forward into M3 (commit `7b87e94`).** Before M5, a
   hosted org's `Server` would have used the host's `GITHUB_TOKEN`, `GH_TOKEN` or `auth.json` for
   every PR call. `github.Options.TokenSource`, when set, is the only credential. The M3.2 factory
