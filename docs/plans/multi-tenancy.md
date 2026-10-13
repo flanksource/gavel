@@ -720,13 +720,15 @@ copy):
   `/api/orgs`.
 - **Todos:** `/api/todos`, `/api/todos/batch`, `/api/todos/new`, `/api/todos/item`,
   `/api/todos/links`, `/api/todos/labels`, `/api/todos/attachments` and
-  `/api/todos/attachments/{id}`; the `/api/v1/todos` entity routes.
+  `/api/todos/attachments/{id}`; the `/api/v1/todo` entity routes for list, get, create, comment,
+  delete, edit, labels, link(s), unlink, priority, status and reopen.
 - **Answered without running anything:** `/api/todos/run`, `/plan/approve`, `/plan/revise`,
   `/answer` and `/api/v1/todo/{id}/{run|plan|triage}` return
   `501 {"error":"agent runs are not available in hosted mode yet"}` (M10 lifts this).
 - **Projects:** `/api/projects` and `/api/projects/{name}` (from the `repos` table; a `dir` is
-  rejected), and `POST /api/projects/{name}/actions` (`test`/`lint` 501, `commit`/`open-pr` 400,
-  as below).
+  rejected), and `POST /api/projects/{name}/actions` (`test`/`lint` 501, `commit` 400, answered
+  before the host's project registry is read). `POST .../commit-queue` and `.../branch/pr` (open
+  a PR) answer `400 commits come from agent runs in hosted mode`.
 - **Settings:** `/api/settings/schema` and `/api/settings/runtime-presets*` (owner rows exist).
 - **Status:** `/api/status`, with the database section reduced to health (no DSN source, no table
   counts) when the cache store's org isn't the local org.
@@ -1804,6 +1806,15 @@ Clerk-mode manual checks:
   source and table counts. Batman chose the allowlist; M3.3's "Features off" section is rewritten
   with the list. The hosted dashboard therefore starts without the sessions, git and test-run
   views, which return when M9/M10 make them org-aware.
+  - **How the gate works:** `hostedRoutes` asks the dashboard's own mux which pattern a request
+    resolves to (`mux.Handler(r)`) and allows it only if that registered pattern is listed. A
+    first version matched with a separate `ServeMux` of allowed patterns. A test caught that
+    `GET /api/projects/{name}` then admitted `/api/projects/git-summary`, which the real mux
+    routes to a blocked handler. Resolving through the real mux removes that class of mismatch.
+  - With hosted mode on, `Handler()` panics if an allowlist entry isn't a registered pattern, so
+    a typo can't turn a route off unnoticed. Every hosted test runs this check.
+  - Hub subscriptions go through the gate. The hub accepts a subscription with 204 and then
+    closes it with a `<sub>/__closed` frame carrying the 404.
 - **2026-10-14: M5.1 `TokenSource` pulled forward into M3 (commit `7b87e94`).** Before M5, a
   hosted org's `Server` would have used the host's `GITHUB_TOKEN`, `GH_TOKEN` or `auth.json` for
   every PR call. `github.Options.TokenSource`, when set, is the only credential. The M3.2 factory
