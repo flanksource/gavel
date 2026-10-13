@@ -162,6 +162,9 @@ type Server struct {
 	org         uuid.UUID
 	orgDB       *gorm.DB
 	githubCache *cache.Store
+
+	// authConfig is what /api/auth/config reports (see me.go).
+	authConfig AuthConfigResponse
 }
 
 // SetOrg scopes the Server's stores to org, whose settings live in db. Call it
@@ -599,6 +602,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/todos/github", s.handleTodoGitHubPush)
 	mux.HandleFunc("POST /api/todos/land", s.handleTodoLand)
 	mux.HandleFunc("/api/status", s.handleStatus)
+	mux.HandleFunc("GET /api/auth/config", s.handleAuthConfig)
+	mux.HandleFunc("GET /api/me", s.handleMe)
 	mux.HandleFunc("/favicon.svg", handleFavicon)
 	mux.HandleFunc("/react-grab-plugin.js", handleReactGrabPlugin)
 	mux.HandleFunc("/react-grab", handleReactGrabInstall)

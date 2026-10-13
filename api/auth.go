@@ -192,6 +192,21 @@ type identityClaims struct {
 	AuthorizedParty  string `json:"azp"`
 }
 
+// StoredIdentity reads the identity in the session's saved ID token without a network
+// call or a signature check. Use it only for display: the session file is the user's own,
+// and anything that grants access must verify the token instead.
+func (s *Session) StoredIdentity() (Identity, error) {
+	claims := &identityClaims{}
+	if _, _, err := jwt.NewParser().ParseUnverified(s.IDToken, claims); err != nil || claims.Subject == "" {
+		return Identity{}, errors.New("the saved login has no readable ID token; run gavel login again")
+	}
+	return claims.identity(), nil
+}
+
+func (c identityClaims) identity() Identity {
+	return Identity{ID: c.Subject, Issuer: c.Issuer, Name: c.Name, Email: c.Email, EmailVerified: c.EmailVerified, OrganizationID: c.OrganizationID, OrganizationSlug: c.OrganizationSlug}
+}
+
 func (a *AuthClient) verifyIdentity(ctx context.Context, raw string) (Identity, error) {
 	if raw == "" {
 		return Identity{}, errors.New("Clerk returned no ID token; enable the openid scope")
@@ -216,7 +231,7 @@ func (a *AuthClient) verifyIdentity(ctx context.Context, raw string) (Identity, 
 		(claims.AuthorizedParty != "" && claims.AuthorizedParty != a.config.ClientID) {
 		return Identity{}, errors.New("identity token is invalid or expired; run gavel login again")
 	}
-	return Identity{ID: claims.Subject, Issuer: claims.Issuer, Name: claims.Name, Email: claims.Email, EmailVerified: claims.EmailVerified, OrganizationID: claims.OrganizationID, OrganizationSlug: claims.OrganizationSlug}, nil
+	return claims.identity(), nil
 }
 
 // withoutRedirects copies client (or a default one) so it never follows redirects

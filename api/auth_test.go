@@ -152,3 +152,23 @@ func TestRejectDiscoveryAndDeviceURLs(t *testing.T) {
 		t.Fatal("accepted unsafe verification URL")
 	}
 }
+
+func TestStoredIdentityNeedsNoNetwork(t *testing.T) {
+	clerk := clerktest.New(t, "cli", clerktest.User{ID: "user_123", Name: "Ada", Email: "ada@example.com", OrgID: "org_123", OrgSlug: "team"})
+	session := &Session{Config: AuthConfig{Issuer: clerk.URL, ClientID: "cli"}, IDToken: clerk.IDToken(time.Now().Add(-time.Hour))}
+	clerk.Close()
+
+	identity, err := session.StoredIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := Identity{ID: "user_123", Issuer: clerk.URL, Name: "Ada", Email: "ada@example.com", OrganizationID: "org_123", OrganizationSlug: "team", EmailVerified: true}
+	if identity != want {
+		t.Fatalf("got %+v, want %+v", identity, want)
+	}
+	for name, raw := range map[string]string{"empty": "", "malformed": "not-a-token"} {
+		if _, err := (&Session{IDToken: raw}).StoredIdentity(); err == nil {
+			t.Fatalf("%s ID token accepted", name)
+		}
+	}
+}
