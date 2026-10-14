@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"strings"
 )
@@ -24,6 +25,9 @@ type DashboardOptions struct {
 	ClerkIssuer         string `flag:"clerk-issuer" help:"Clerk Frontend API URL (or GAVEL_CLERK_ISSUER)"`
 	ClerkPublishableKey string `flag:"clerk-publishable-key" help:"Clerk publishable key for the browser sign-in (or GAVEL_CLERK_PUBLISHABLE_KEY)"`
 	ClerkClientID       string `flag:"clerk-client-id" help:"Clerk public OAuth client ID that gavel login uses (or GAVEL_CLERK_CLIENT_ID)"`
+	SSHAddr             string `flag:"ssh-addr" help:"Address for the hosted git push server, e.g. :2222 (--auth clerk only; gavel ssh serve is the local one)"`
+	SSHHostKey          string `flag:"ssh-host-key" help:"Push server host key file; created if missing (default <data-dir>/ssh_host_key)"`
+	DataDir             string `flag:"data-dir" help:"Directory for hosted repositories" default:"/var/lib/gavel"`
 
 	clerkSecretKey string
 	secretKey      string
@@ -52,8 +56,16 @@ func (o DashboardOptions) withEnv(getenv func(string) string) DashboardOptions {
 func (o DashboardOptions) Validate() error {
 	var problems []error
 	add := func(format string, args ...any) { problems = append(problems, fmt.Errorf(format, args...)) }
+	if o.SSHAddr != "" {
+		if _, port, err := net.SplitHostPort(o.SSHAddr); err != nil || port == "" {
+			add("--ssh-addr must be host:port like :2222, got %q", o.SSHAddr)
+		}
+	}
 	switch o.Auth {
 	case authNone:
+		if o.SSHAddr != "" {
+			add("--ssh-addr serves hosted pushes and needs --auth clerk; use gavel ssh serve locally")
+		}
 	case authClerk:
 		if o.PublicURL == "" {
 			add("--auth clerk requires --public-url")

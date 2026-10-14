@@ -3,11 +3,19 @@
 package main
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -17,9 +25,11 @@ import (
 	ghcache "github.com/flanksource/gavel/github/cache"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/pr/ui"
+	"github.com/flanksource/gavel/sshkeys"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	gossh "golang.org/x/crypto/ssh"
 )
 
 const hostedPublicURL = "https://gavel.example.com"
@@ -30,6 +40,8 @@ type hostedFixture struct {
 	server *httptest.Server
 	clerk  *clerktest.Server
 	db     *database.DB
+	opts   DashboardOptions
+	stack  hostedStack
 }
 
 func newHostedFixture(t *testing.T) hostedFixture {
@@ -63,14 +75,15 @@ func newHostedFixture(t *testing.T) hostedFixture {
 		ClerkClientID:       "cli",
 		clerkSecretKey:      clerktest.SecretKey,
 		secretKey:           base64.StdEncoding.EncodeToString([]byte(strings.Repeat("k", 32))),
+		DataDir:             t.TempDir(),
 	}
 	require.NoError(t, opts.Validate())
-	handler, stop, err := hostedDashboard(t.Context(), opts, opened.Gorm(), cache)
+	stack, err := hostedDashboard(t.Context(), opts, opened.Gorm(), cache)
 	require.NoError(t, err)
-	t.Cleanup(stop)
-	server := httptest.NewServer(handler)
+	t.Cleanup(stack.stop)
+	server := httptest.NewServer(stack.handler)
 	t.Cleanup(server.Close)
-	return hostedFixture{server: server, clerk: clerk, db: opened}
+	return hostedFixture{server: server, clerk: clerk, db: opened, opts: opts, stack: stack}
 }
 
 func TestHostedDashboard(t *testing.T) {
@@ -131,4 +144,58 @@ func TestHostedDashboard(t *testing.T) {
 	saved, err := ui.LoadOrgSearchConfig(t.Context(), opened.Gorm(), alpha.ID)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"acme/app"}, saved.Repos)
+}
+
+func TestHostedPush(t *testing.T) {
+	f := newHostedFixture(t)
+	ctx := t.Context()
+	_, err := f.stack.members.Orgs(ctx, "user_ada")
+	require.NoError(t, err)
+	var ada struct{ ID uuid.UUID }
+	require.NoError(t, f.db.Gorm().Raw(`SELECT id FROM users WHERE clerk_user_id = 'user_ada'`).Scan(&ada).Error)
+
+	_, private, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	signer, err := gossh.NewSignerFromKey(private)
+	require.NoError(t, err)
+	_, err = sshkeys.Store{DB: f.db.Gorm()}.Add(ctx, ada.ID, "laptop", string(gossh.MarshalAuthorizedKey(signer.PublicKey())))
+	require.NoError(t, err)
+	block, err := gossh.MarshalPrivateKey(private, "")
+	require.NoError(t, err)
+	keyPath := filepath.Join(t.TempDir(), "id_ed25519")
+	require.NoError(t, os.WriteFile(keyPath, pem.EncodeToMemory(block), 0o600))
+
+	f.opts.SSHHostKey = filepath.Join(t.TempDir(), "ssh_host_key")
+	push, err := hostedPushServer(f.opts, f.db.Gorm(), f.stack.members)
+	require.NoError(t, err)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	go push.Serve(listener) //nolint:errcheck
+	t.Cleanup(func() { _ = push.Close() })
+
+	repo := t.TempDir()
+	for _, args := range [][]string{{"init", "-b", "main"}, {"-c", "user.email=a@b.c", "-c", "user.name=A", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", "first"}} {
+		out, err := exec.Command("git", append([]string{"-C", repo}, args...)...).CombinedOutput()
+		require.NoError(t, err, string(out))
+	}
+	gitPush := func(path string) (string, error) {
+		cmd := exec.Command("git", "-C", repo, "push", "ssh://127.0.0.1/"+path, "main")
+		cmd.Env = append(os.Environ(), fmt.Sprintf("GIT_SSH_COMMAND=ssh -i %s -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p %d",
+			keyPath, listener.Addr().(*net.TCPAddr).Port))
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+
+	out, err := gitPush("alpha/app")
+	require.NoError(t, err, out)
+	assert.Contains(t, out, "push checks are not available yet")
+	var alpha struct{ ID uuid.UUID }
+	require.NoError(t, f.db.Gorm().Raw(`SELECT id FROM orgs WHERE slug = 'alpha'`).Scan(&alpha).Error)
+	bares, err := filepath.Glob(filepath.Join(f.opts.DataDir, "repos", alpha.ID.String(), "*.git"))
+	require.NoError(t, err)
+	assert.Len(t, bares, 1, "the push landed in the org's repository directory")
+
+	out, err = gitPush("gamma/app")
+	require.Error(t, err)
+	assert.Contains(t, out, "repository not found or access denied")
 }
