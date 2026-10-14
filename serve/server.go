@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"crypto/x509"
 
@@ -88,7 +89,13 @@ func (s *Server) handleSession(sess ssh.Session) {
 		return
 	}
 
-	repoPath := cleanRepoPath(cmd[1])
+	repoPath, err := cleanRepoPath(cmd[1])
+	if err != nil {
+		logger.Infof("Rejected push from %s: %v", sess.RemoteAddr(), err)
+		fmt.Fprintln(sess.Stderr(), err)
+		sess.Exit(1) //nolint:errcheck
+		return
+	}
 	logger.Infof("Receiving push for %s from %s", repoPath, sess.RemoteAddr())
 	exitCode := HandleGitReceive(sess, repoPath, s.opts.RepoDir, s.hookWriter)
 	logger.V(1).Infof("Push for %s completed with exit code %d", repoPath, exitCode)
@@ -133,7 +140,12 @@ func loadOrGenerateHostKey(path string) (gossh.Signer, error) {
 	return gossh.ParsePrivateKey(pemBlock)
 }
 
-func cleanRepoPath(raw string) string {
+// maxRepoSegments bounds a pushed repository's path: <repo> or <owner>/<repo>.
+const maxRepoSegments = 2
+
+// cleanRepoPath turns git-receive-pack's path argument into a relative repository path.
+// Each segment must be a plain name, so the path can never leave the repository directory.
+func cleanRepoPath(raw string) (string, error) {
 	// git-receive-pack sends the path with surrounding quotes
 	path := raw
 	if len(path) >= 2 && path[0] == '\'' && path[len(path)-1] == '\'' {
@@ -144,7 +156,25 @@ func cleanRepoPath(raw string) string {
 		path = path[1:]
 	}
 	if path == "" {
-		path = "default"
+		return "default", nil
 	}
-	return path
+	segments := strings.Split(path, "/")
+	for _, segment := range segments {
+		switch {
+		case segment == "":
+			return "", fmt.Errorf("repository path %q has an empty segment", path)
+		case segment == "." || segment == "..":
+			return "", fmt.Errorf("repository path %q may not contain %q", path, segment)
+		case strings.IndexFunc(segment, func(r rune) bool { return !repoNameRune(r) }) >= 0:
+			return "", fmt.Errorf("repository path %q may only use letters, digits, '.', '_' and '-' in each segment", path)
+		}
+	}
+	if len(segments) > maxRepoSegments {
+		return "", fmt.Errorf("repository path %q has %d segments; use at most %d (<repo> or <owner>/<repo>)", path, len(segments), maxRepoSegments)
+	}
+	return path, nil
+}
+
+func repoNameRune(r rune) bool {
+	return r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '.' || r == '_' || r == '-'
 }

@@ -18,16 +18,35 @@ func TestServe(t *testing.T) {
 var _ = Describe("cleanRepoPath", func() {
 	DescribeTable("strips quotes and leading slashes",
 		func(input, expected string) {
-			Expect(cleanRepoPath(input)).To(Equal(expected))
+			path, err := cleanRepoPath(input)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(path).To(Equal(expected))
 		},
 		Entry("bare path", "myproject", "myproject"),
 		Entry("quoted path", "'/myproject'", "myproject"),
 		Entry("leading slash", "/myproject", "myproject"),
 		Entry("multiple slashes", "///myproject", "myproject"),
 		Entry("nested path", "'/org/repo'", "org/repo"),
+		Entry("dots and dashes in a name", "my.repo_v2-x", "my.repo_v2-x"),
 		Entry("empty becomes default", "", "default"),
 		Entry("just slash becomes default", "/", "default"),
 		Entry("quoted empty becomes default", "'/'", "default"),
+	)
+
+	DescribeTable("rejects paths that could leave the repository directory",
+		func(input, reason string) {
+			_, err := cleanRepoPath(input)
+			Expect(err).To(MatchError(ContainSubstring(reason)))
+		},
+		Entry("parent directory", "../x", `".."`),
+		Entry("parent in the middle", "a/../../b", `".."`),
+		Entry("current directory", "a/./b", `"."`),
+		Entry("empty segment", "a//b", "empty"),
+		Entry("trailing slash", "a/b/", "empty"),
+		Entry("three segments", "a/b/c", "at most 2"),
+		Entry("space", "'a b'", "letters, digits"),
+		Entry("backslash", `a\b`, "letters, digits"),
+		Entry("NUL byte", "a\x00b", "letters, digits"),
 	)
 })
 
