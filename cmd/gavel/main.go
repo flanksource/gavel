@@ -66,7 +66,7 @@ func init() {
 	database.BindDatabaseURLFlag(rootCmd.PersistentFlags())
 	// A fixture's `setup:` resolves `connection://…` references against the
 	// process database. Wired here rather than imported by fixtures, which must
-	// stay free of internal/database — the same hook seam as AIStepRunner.
+	// stay free of internal/database.
 	fixtures.SetupDBProvider = func(ctx context.Context) *gorm.DB {
 		db, err := database.Shared(ctx)
 		if err != nil {

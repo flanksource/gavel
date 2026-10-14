@@ -1,0 +1,92 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "services step",
+  "description": "Starts deps catalog services, supervised exec processes and seeded git repositories in declaration order; stops them in reverse order at teardown.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["services"],
+  "properties": {
+    "services": {
+      "description": "A mapping of name to entry (declaration order is kept), or a list of entries each carrying a name.",
+      "oneOf": [
+        {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": { "pattern": "^[A-Za-z][A-Za-z0-9_]*$", "not": { "enum": ["services", "ready"] } },
+          "additionalProperties": { "$ref": "#/definitions/entry" }
+        },
+        {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "allOf": [
+              { "$ref": "#/definitions/entry" },
+              {
+                "required": ["name"],
+                "properties": { "name": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]*$", "not": { "enum": ["services", "ready"] } } }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "definitions": {
+    "stringMap": { "type": "object", "additionalProperties": { "type": "string" } },
+    "duration": { "type": "string", "description": "A Go duration such as 500ms or 2m." },
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "oneOf": [{ "required": ["deps"] }, { "required": ["exec"] }, { "required": ["git"] }],
+      "properties": {
+        "name": { "type": "string" },
+        "deps": { "type": "string", "description": "deps catalog service name, e.g. postgres." },
+        "version": { "type": "string", "description": "deps: version constraint." },
+        "runtime": { "type": "string", "enum": ["binary", "docker", "helm", "command"], "description": "deps: force a runtime; docker/helm use an ephemeral volume." },
+        "parameters": { "$ref": "#/definitions/stringMap", "description": "deps: service parameters." },
+        "exec": { "type": "string", "description": "Shell command; {{.port}} allocates a free port for this entry." },
+        "cwd": { "type": "string", "description": "exec: working directory, relative to the fixture work dir." },
+        "ready": {
+          "type": "object",
+          "additionalProperties": false,
+          "oneOf": [{ "required": ["http"] }, { "required": ["tcp"] }, { "required": ["exec"] }],
+          "properties": {
+            "http": { "type": "string", "description": "URL probed with GET." },
+            "status": { "type": "integer", "description": "Expected HTTP status, default 200." },
+            "tcp": { "type": "string", "description": "host:port that must accept a connection." },
+            "exec": { "type": "string", "description": "Shell command that must exit 0." }
+          }
+        },
+        "git": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["files"],
+          "properties": {
+            "files": { "$ref": "#/definitions/stringMap", "description": "Relative path to verbatim content." },
+            "commit": { "type": "boolean", "description": "Record the files as one commit." }
+          }
+        },
+        "env": { "$ref": "#/definitions/stringMap", "description": "Extra environment for the service; also its env output." },
+        "wait": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Readiness cadence (default interval 200ms, factor 1.5, max 2s, timeout 60s); deps entries take only timeout.",
+          "properties": {
+            "interval": { "$ref": "#/definitions/duration" },
+            "backoff": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": { "factor": { "type": "number", "minimum": 1 }, "max": { "$ref": "#/definitions/duration" } }
+            },
+            "jitter": { "type": "string", "description": "A percentage (20%) or a duration (500ms)." },
+            "timeout": { "$ref": "#/definitions/duration" }
+          }
+        },
+        "export": {
+          "$ref": "#/definitions/stringMap",
+          "description": "NAME: template over {{.outputs.*}}; \"*\": \"{{.outputs.<map>}}\" exports every key of a map output. Defaults <NAME>_URL and <NAME>_PORT."
+        }
+      }
+    }
+  }
+}

@@ -21,7 +21,7 @@ import (
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/baseline"
 	"github.com/flanksource/gavel/fixtures"
-	_ "github.com/flanksource/gavel/fixtures/types"
+	_ "github.com/flanksource/gavel/fixtures/kinds/all"
 	"github.com/flanksource/gavel/lint"
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/snapshots"
