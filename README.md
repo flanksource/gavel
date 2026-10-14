@@ -706,6 +706,8 @@ and `<target-dir>/.gavel.yaml` (or the parent directory when the target is a fil
 
 Manage and execute native PostgreSQL TODO issues with Claude or Codex.
 
+[PR-linked TODOs](docs/pr-todos.md) publish completed turns to an explicitly linked PR and feed whole-PR verification failures into the next turn. Create or edit a link with `--pr <URL>`; remove it with `--clear-pr`.
+
 Every todo moves through a **lifecycle**: an ordered set of steps, each a
 captain prompt reference plus a CEL `when` predicate (deciding whether the
 step applies now) and ordered `outcomes` (deciding which status a finished run
