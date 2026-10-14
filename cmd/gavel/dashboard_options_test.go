@@ -45,6 +45,13 @@ func TestDashboardOptionsValidate(t *testing.T) {
 		}},
 		{"menu bar with clerk", func(o *DashboardOptions) { o.MenuBar = true }, []string{"--menu-bar is local-only and can't be used with --auth clerk"}},
 		{"dev mode with clerk", func(o *DashboardOptions) { o.Dev = true }, []string{"--dev is local-only and can't be used with --auth clerk"}},
+		{"push server with clerk", func(o *DashboardOptions) { o.SSHAddr = ":2222" }, nil},
+		{"push server without clerk", func(o *DashboardOptions) { *o = DashboardOptions{Auth: "none", SSHAddr: ":2222"} }, []string{
+			"--ssh-addr serves hosted pushes and needs --auth clerk; use gavel ssh serve locally",
+		}},
+		{"push server address without a port", func(o *DashboardOptions) { o.SSHAddr = "localhost" }, []string{
+			`--ssh-addr must be host:port like :2222, got "localhost"`,
+		}},
 		{"public URL with a path", func(o *DashboardOptions) { o.PublicURL = "https://gavel.example.com/app" }, []string{
 			`--public-url must be an origin like https://gavel.example.com, got "https://gavel.example.com/app"`,
 		}},
@@ -103,7 +110,7 @@ func TestDashboardOptionsFromEnv(t *testing.T) {
 func TestServeCommandHasAuthFlags(t *testing.T) {
 	serve := findCommand(rootCmd, "serve")
 	require.NotNil(t, serve)
-	for _, name := range []string{"auth", "public-url", "clerk-issuer", "clerk-publishable-key", "clerk-client-id", "dev", "port"} {
+	for _, name := range []string{"auth", "public-url", "clerk-issuer", "clerk-publishable-key", "clerk-client-id", "ssh-addr", "ssh-host-key", "data-dir", "dev", "port"} {
 		assert.NotNilf(t, serve.Flags().Lookup(name), "serve should expose --%s", name)
 	}
 	assert.Nil(t, serve.Flags().Lookup("trusted-proxy"), "nothing reads forwarded headers: hosted origins come from --public-url")

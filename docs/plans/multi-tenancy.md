@@ -2098,6 +2098,14 @@ Clerk-mode manual checks:
     `DBAuthorizer` specs run against Postgres and the fake Clerk: key mapping, a member pushing
     (same repo ID twice), and a non-member, unknown org, path without an org and unknown user
     all refused.
+- **2026-10-14: push server inside `gavel serve --auth clerk`.** The flags are `--ssh-addr`
+  (host:port, clerk only: "use gavel ssh serve locally"), `--ssh-host-key` (default
+  `<data-dir>/ssh_host_key`, created if missing) and `--data-dir` (default `/var/lib/gavel`).
+  `hostedPushServer` runs `serve.NewServer` with `DBAuthorizer`, sharing the dashboard's
+  `api.Members`. `hostedDashboard` now returns a `hostedStack{handler, members, stop}`. Until
+  M9.5, `OnPushed` writes "push received; push checks are not available yet". `TestHostedPush`
+  registers a key, then pushes over SSH to `alpha/app` (stored under
+  `<data-dir>/repos/<org_id>/`) and to `gamma/app` (refused).
 - **2026-10-14: M5.1 `TokenSource` pulled forward into M3 (commit `7b87e94`).** Before M5, a
   hosted org's `Server` would have used the host's `GITHUB_TOKEN`, `GH_TOKEN` or `auth.json` for
   every PR call. `github.Options.TokenSource`, when set, is the only credential. The M3.2 factory
@@ -2132,7 +2140,7 @@ Clerk-mode manual checks:
 - [ ] M5.4 org PR polling
 - [ ] M5.5 OIDC upload, `gavel ci upload`, action.yml (moved to PR 2, after M7)
 - [x] M6.1 SSH keys API/UI (plus CLI if M2.0 allows), `login --server`, `org use`
-- [ ] M6.2 push server Authorizer, traversal fix, in-process SSH (no host hooks in clerk mode), tests
+- [x] M6.2 push server Authorizer, traversal fix, in-process SSH (no host hooks in clerk mode), tests
 - [ ] M7.0 commons-db upstream PR plus bump
 - [ ] M7.1 blob package
 - [ ] M7.2 snapshots, attachments, recordings, (transcripts: ask), job logs

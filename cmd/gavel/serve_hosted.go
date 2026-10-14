@@ -6,9 +6,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -21,6 +23,7 @@ import (
 	ghcache "github.com/flanksource/gavel/github/cache"
 	shared "github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/pr/ui"
+	"github.com/flanksource/gavel/serve"
 	"github.com/flanksource/gavel/tenant"
 	"gorm.io/gorm"
 )
@@ -54,19 +57,33 @@ func runHostedDashboard(opts DashboardOptions) error {
 		return err
 	}
 	logger.Infof("%s", serveDatabaseStartupMessage(opened, 0))
-	handler, stop, err := hostedDashboard(ctx, opts, db, ghcache.Shared())
+	stack, err := hostedDashboard(ctx, opts, db, ghcache.Shared())
 	if err != nil {
 		return err
 	}
-	defer stop()
+	defer stack.stop()
 	ui.Build = ui.BuildInfo{Version: version, Commit: commit, Date: date}
 
 	_, listener, err := bindUIListener(opts.Addr, opts.Port)
 	if err != nil {
 		return err
 	}
-	go http.Serve(listener, handler) //nolint:errcheck
+	go http.Serve(listener, stack.handler) //nolint:errcheck
 	logger.Infof("Hosted dashboard at %s (listening on %s)", opts.PublicURL, listener.Addr())
+
+	if opts.SSHAddr != "" {
+		push, err := hostedPushServer(opts, db, stack.members)
+		if err != nil {
+			return err
+		}
+		defer push.Close() //nolint:errcheck
+		pushListener, err := net.Listen("tcp", opts.SSHAddr)
+		if err != nil {
+			return fmt.Errorf("listen for pushes on %s: %w", opts.SSHAddr, err)
+		}
+		go push.Serve(pushListener) //nolint:errcheck
+		logger.Infof("Hosted push server listening on %s", pushListener.Addr())
+	}
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
@@ -74,13 +91,21 @@ func runHostedDashboard(opts DashboardOptions) error {
 	return nil
 }
 
+// hostedStack is what --auth clerk serves over HTTP, and the membership resolver the
+// push server shares with it.
+type hostedStack struct {
+	handler http.Handler
+	members *api.Members
+	// stop releases every organization's Server.
+	stop func()
+}
+
 // hostedDashboard builds the handler --auth clerk serves: the Authenticator in front of
 // one dashboard Server per organization, and an org-less Server for page loads.
-// stop releases every organization's Server.
-func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, cache *ghcache.Store) (http.Handler, func(), error) {
+func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, cache *ghcache.Store) (hostedStack, error) {
 	interval, err := time.ParseDuration(opts.Interval)
 	if err != nil {
-		return nil, nil, fmt.Errorf("invalid interval %q: %w", opts.Interval, err)
+		return hostedStack{}, fmt.Errorf("invalid interval %q: %w", opts.Interval, err)
 	}
 	issuer := strings.TrimRight(opts.ClerkIssuer, "/")
 	authConfig := ui.AuthConfigResponse{Mode: authClerk, PublishableKey: opts.ClerkPublishableKey, Issuer: issuer, ClientID: opts.ClerkClientID}
@@ -115,5 +140,23 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 		orgs.Close()
 		stopShell()
 	}
-	return auth.Middleware(orgs.Handler(), shell.Handler()), stop, nil
+	return hostedStack{handler: auth.Middleware(orgs.Handler(), shell.Handler()), members: auth.Members, stop: stop}, nil
+}
+
+// hostedPushServer is the git push server for --auth clerk: registered SSH keys only,
+// pushes to <org>/<repo> for the org's members, and no hook ever runs on the host.
+func hostedPushServer(opts DashboardOptions, db *gorm.DB, members *api.Members) (*serve.Server, error) {
+	hostKey := opts.SSHHostKey
+	if hostKey == "" {
+		hostKey = filepath.Join(opts.DataDir, "ssh_host_key")
+	}
+	return serve.NewServer(serve.Options{
+		HostKeyPath: hostKey,
+		RepoDir:     filepath.Join(opts.DataDir, "repos"),
+		Authorizer:  serve.DBAuthorizer{DB: db, Members: members, Issuer: strings.TrimRight(opts.ClerkIssuer, "/"), DataDir: opts.DataDir},
+		// Push checks need sandboxed execution (M9.5); until then a push is only stored.
+		OnPushed: func(_ context.Context, push serve.Push) {
+			fmt.Fprintln(push.Out, "push received; push checks are not available yet")
+		},
+	})
 }
