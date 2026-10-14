@@ -99,15 +99,13 @@ func (t *TSC) ValidateConfig(config *models.LinterConfig) error {
 	return nil
 }
 
-// resolveScript writes the embedded wrapper into <WorkDir>/.tmp/ keyed by a
-// content hash so repeated runs reuse the same file. Returns the absolute path.
+// resolveScript writes the embedded wrapper into gavel's scratch dir (outside
+// WorkDir, so the checked tree stays clean) keyed by a content hash so repeated
+// runs reuse the same file. Returns the absolute path.
 func (t *TSC) resolveScript() (string, error) {
-	if t.WorkDir == "" {
-		return "", fmt.Errorf("tsc: WorkDir is empty")
-	}
-	dir := filepath.Join(t.WorkDir, ".tmp")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", fmt.Errorf("create .tmp dir: %w", err)
+	dir, err := linters.ScratchDir(t.WorkDir, t.Name())
+	if err != nil {
+		return "", err
 	}
 	name := fmt.Sprintf("gavel-tsc-json-%s.cjs", scriptHash(tscJSONScript))
 	path := filepath.Join(dir, name)

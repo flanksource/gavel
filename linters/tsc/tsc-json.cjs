@@ -12,7 +12,9 @@
 
 let ts;
 try {
-  ts = require("typescript");
+  // The wrapper lives in gavel's scratch dir, not the project, so resolve
+  // from the project root (cwd) rather than from this file's location.
+  ts = require("module").createRequire(require("path").join(process.cwd(), "noop.js"))("typescript");
 } catch (err) {
   process.stderr.write(
     "gavel-tsc: cannot load 'typescript' from " +
