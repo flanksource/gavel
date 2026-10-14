@@ -2068,6 +2068,14 @@ Clerk-mode manual checks:
     runs the whole flow against the hosted stack: device login, server-side verification with
     the Clerk revocation check, org selection, and key add/duplicate/list/remove.
     `newHostedFixture` is shared with `TestHostedDashboard`.
+- **2026-10-14: M6.2 push paths (both modes).** Batman's call: **up to 2 segments in both modes**,
+  not 1 in none mode as specced, because local pushes to `host:org/repo` are an existing,
+  tested behaviour. `cleanRepoPath` returns `(string, error)`. Each segment must be a plain name
+  (letters, digits, `.`, `_`, `-`); empty segments, `.` and `..` are rejected, each with a
+  message naming the problem, then more than 2 segments. An empty path is still `default`.
+  `handleSession` writes the reason to stderr and exits 1. `HandleGitReceive` re-checks that the
+  bare repository stays inside the repository directory. The e2e test now sets `HostKeyPath` to
+  a temp file, so it no longer writes `~/.gavel/ssh_host_key` (§3 item 4).
 - **2026-10-14: M5.1 `TokenSource` pulled forward into M3 (commit `7b87e94`).** Before M5, a
   hosted org's `Server` would have used the host's `GITHUB_TOKEN`, `GH_TOKEN` or `auth.json` for
   every PR call. `github.Options.TokenSource`, when set, is the only credential. The M3.2 factory
