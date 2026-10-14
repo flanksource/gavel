@@ -61,10 +61,12 @@ export function useTodoDetail({ todo, dir, onChanged, onDeleted, workspaces = []
   const stoppableAttempt = (verificationDetail?.attempts ?? []).find(attempt => attempt.canStop);
   const fullTodoId = todo ? todoFullId(todo) : '';
   const visibleLabels = todo ? todoVisibleLabels(todo) : [];
-  const tagIndex = useTodoTagIndex(dir);
+  // The split layout mounts this pane before a todo is selected, with no dir;
+  // the taxonomy is scoped to the todo's workspace, so wait for the todo.
+  const tagIndex = useTodoTagIndex(dir, !!todo);
   // Same cached query as the index, so the picker can lead with the tags this
   // project actually uses without a second request.
-  const tagCounts = useTodoTagCounts(dir);
+  const tagCounts = useTodoTagCounts(dir, !!todo);
   const viewSessionId = launch?.status === 'admitted' && launch.promptRunId
     ? launch.promptRunId
     : todo?.lookupSessionId || todo?.sessionId;
