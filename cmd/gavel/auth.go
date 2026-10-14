@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"time"
 
 	"github.com/flanksource/clicky"
@@ -60,7 +61,7 @@ func printAuthIdentity(cmd *cobra.Command, identity api.Identity, migrate bool) 
 }
 
 func init() {
-	var issuer, clientID string
+	var issuer, clientID, server string
 	var noBrowser bool
 	login := &cobra.Command{
 		Use: "login", Short: "Authenticate with Clerk for Gavel hosted services",
@@ -72,6 +73,13 @@ func init() {
 			path, err := api.CredentialPath()
 			if err != nil {
 				return err
+			}
+			if server != "" {
+				cfg, err := serverAuthConfig(ctx, server)
+				if err != nil {
+					return err
+				}
+				issuer, clientID = cfg.Issuer, cfg.ClientID
 			}
 			client, err := api.NewAuthClient(ctx, api.AuthConfig{Issuer: issuer, ClientID: clientID}, authHTTPClient)
 			if err != nil {
@@ -95,6 +103,12 @@ func init() {
 			if err != nil {
 				return err
 			}
+			if server != "" {
+				session.Server = strings.TrimRight(server, "/")
+				if err := pickOnlyOrg(ctx, cmd, gavelServer{session: session}); err != nil {
+					return err
+				}
+			}
 			if err := api.SaveSession(path, session); err != nil {
 				return err
 			}
@@ -105,6 +119,7 @@ func init() {
 	login.Flags().StringVar(&issuer, "issuer", os.Getenv("GAVEL_CLERK_ISSUER"), "Clerk Frontend API issuer URL (or GAVEL_CLERK_ISSUER)")
 	login.Flags().StringVar(&clientID, "client-id", os.Getenv("GAVEL_CLERK_CLIENT_ID"), "Clerk public OAuth client ID (or GAVEL_CLERK_CLIENT_ID)")
 	login.Flags().BoolVar(&noBrowser, "no-browser", false, "Print the verification URL without opening a browser")
+	login.Flags().StringVar(&server, "server", "", "Hosted gavel URL to log in to; its Clerk issuer and client ID are discovered from it")
 	rootCmd.AddCommand(login)
 	rootCmd.AddCommand(&cobra.Command{
 		Use: "whoami", Short: "Show the verified identity of the logged-in Gavel user", Args: cobra.NoArgs,

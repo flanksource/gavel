@@ -38,6 +38,10 @@ type Session struct {
 	Config  AuthConfig    `json:"config"`
 	Token   *oauth2.Token `json:"token"`
 	IDToken string        `json:"id_token"`
+	// Server is the hosted gavel the login was made for (gavel login --server), and Org
+	// the organization slug its requests act in (gavel org use).
+	Server string `json:"server,omitempty"`
+	Org    string `json:"org,omitempty"`
 }
 
 type metadata struct {
