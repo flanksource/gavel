@@ -55,6 +55,16 @@ func TestDevProxyRouting(t *testing.T) {
 		assert.NotContains(t, rec.Body.String(), viteUpstreamMarker)
 	})
 
+	t.Run("unregistered api route is a JSON 404, not vite's html fallback", func(t *testing.T) {
+		const missingAPIRoute = "/api/not-a-route"
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, missingAPIRoute, nil))
+
+		assert.Equal(t, http.StatusNotFound, rec.Code)
+		assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
+		assert.JSONEq(t, `{"error":"no API route for GET `+missingAPIRoute+`"}`, rec.Body.String())
+	})
+
 	t.Run("export request bypasses the proxy", func(t *testing.T) {
 		// /prs?format=json is an export route — it must render server-side via
 		// handleExport, not get forwarded to Vite.

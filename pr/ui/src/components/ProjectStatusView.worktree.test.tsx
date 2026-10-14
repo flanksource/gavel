@@ -22,6 +22,7 @@ vi.mock('@flanksource/clicky-ui/components', () => ({
   Modal: () => null,
   JsonSchemaForm: () => null,
   SplitPane: ({ left, right }: { left: ReactNode; right: ReactNode }) => <div>{left}{right}</div>,
+  FilterBar: () => null,
 }));
 /* oxlint-enable clicky-ui/prefer-clicky-components */
 

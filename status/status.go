@@ -196,9 +196,7 @@ func GatherBase(workDir string, opts Options) (*Result, error) {
 	stopFile()
 
 	if !opts.NoRepomap {
-		for i := range files {
-			enrichWithRepomap(&files[i], workDir)
-		}
+		EnrichRepomap(workDir, files)
 	}
 
 	result := &Result{

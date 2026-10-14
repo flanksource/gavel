@@ -20,6 +20,9 @@ vi.mock('@flanksource/gavel/testrunner/hooks', () => ({
 // add POSTs to the request counts these tests assert on.
 vi.mock('../useGitFocus', () => ({ useGitFocus: () => ({ error: '' }) }));
 
+/* oxlint-disable clicky-ui/prefer-clicky-components --
+   Raw elements are the test doubles for clicky-ui's components: the real
+   SplitButton and FilterBar mount floating-ui, which crashes under vitest. */
 vi.mock('@flanksource/clicky-ui/components', () => ({
   Button: ({ children, onClick, loading: _loading, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement> & { loading?: boolean }) => (
     <button onClick={onClick} {...props}>{children}</button>
@@ -52,7 +55,17 @@ vi.mock('@flanksource/clicky-ui/components', () => ({
     </div>
   ),
   SplitPane: ({ left, right }: { left: ReactNode; right: ReactNode }) => <div>{left}{right}</div>,
+  FilterBar: ({ filters = [] }: { filters?: { key: string; options: { value: string; label?: string }[]; value: Record<string, string>; onChange: (value: Record<string, string>) => void }[] }) => (
+    <div>
+      {filters.flatMap(filter => filter.options.map(option => (
+        <button key={`${filter.key}:${option.value}`} type="button" onClick={() => filter.onChange({ ...filter.value, [option.value]: 'include' })}>
+          {`Include ${filter.key} ${option.label ?? option.value}`}
+        </button>
+      )))}
+    </div>
+  ),
 }));
+/* oxlint-enable clicky-ui/prefer-clicky-components */
 
 vi.mock('./ProjectCommitTasks', () => ({
   ProjectCommitTasks: ({ preferredRunId, onLockedFilesChange, onComplete, onRunChange }: {
@@ -189,6 +202,50 @@ describe('ProjectStatusView', () => {
 
     expect((await screen.findByRole('checkbox', { name: 'Select conflicted.go' })).hasAttribute('disabled')).toBe(true);
     expect(screen.getByRole('button', { name: 'Commit selected (0)' }).hasAttribute('disabled')).toBe(true);
+  });
+
+  describe('select all with a scope filter', () => {
+    const scoped = {
+      ...statusResponse,
+      files: statusResponse.files.map(file => ({
+        ...file,
+        scopes: file.path.startsWith('generated/') ? ['generated'] : ['app'],
+      })),
+    };
+    const generatedFiles = ['generated/output.log', 'generated/cache/data.json'];
+
+    beforeEach(() => {
+      vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => scoped }) as Response));
+    });
+
+    it('selects only the files the scope filter shows', async () => {
+      renderStatus(<ProjectStatusView project={statusResponse.project} />);
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Include scope generated (2)' }));
+      expect(screen.queryByRole('checkbox', { name: 'Select one.go' })).toBeNull();
+      expect(screen.getByText('Select 2 filtered files')).toBeTruthy();
+
+      fireEvent.click(screen.getByRole('checkbox', { name: 'Select all files' }));
+
+      expect(screen.getByRole('button', { name: `Commit selected (${generatedFiles.length})` })).toBeTruthy();
+      for (const path of generatedFiles) {
+        expect((screen.getByRole('checkbox', { name: `Select ${path}` }) as HTMLInputElement).checked).toBe(true);
+      }
+    });
+
+    it('keeps hidden selections when select-all is toggled on and off', async () => {
+      renderStatus(<ProjectStatusView project={statusResponse.project} />);
+
+      fireEvent.click(await screen.findByRole('checkbox', { name: 'Select one.go' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Include scope generated (2)' }));
+      const selectAll = screen.getByRole('checkbox', { name: 'Select all files' });
+
+      fireEvent.click(selectAll);
+      expect(screen.getByRole('button', { name: `Commit selected (${generatedFiles.length + 1})` })).toBeTruthy();
+
+      fireEvent.click(selectAll);
+      expect(screen.getByRole('button', { name: 'Commit selected (1)' })).toBeTruthy();
+    });
   });
 
   it('renders changed paths as a file tree and ignores an untracked directory', async () => {
