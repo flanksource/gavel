@@ -12,19 +12,22 @@ import { UiAdd, type IconProps } from '@flanksource/clicky-ui/icons';
 // the test exercises PRActions' own collapse branching, not clicky internals. A
 // closed DropdownMenu renders only its trigger — mirror that so hidden menu items
 // stay out of the DOM.
-vi.mock('@flanksource/clicky-ui/components', () => ({
-  Button: ({ children, onClick, title, disabled, loading, ...rest }: any) => (
-    <button onClick={onClick} title={title} disabled={disabled || loading} aria-label={rest['aria-label']}>{children}</button>
-  ),
-  SplitButton: ({ label, onClick, title, disabled }: { label: ReactNode; onClick?: () => void; title?: string; disabled?: boolean }) => (
-    <button onClick={onClick} title={title} disabled={disabled}>{label}</button>
+vi.mock('@flanksource/clicky-ui/components', async (importOriginal) => {
+  const { Button } = await importOriginal<typeof import('@flanksource/clicky-ui/components')>();
+  return {
+  Button,
+  SplitButton: ({ label, onClick, title, disabled, items }: { label: ReactNode; onClick?: () => void; title?: string; disabled?: boolean; items?: Array<{ label: ReactNode; onSelect?: () => void }> }) => (
+    <div><Button onClick={onClick} title={title} disabled={disabled}>{label}</Button>
+      {items?.map((item, index) => <Button key={index} onClick={item.onSelect} disabled={disabled}>{item.label}</Button>)}
+    </div>
   ),
   DropdownMenu: ({ trigger }: { trigger: ReactNode }) => <div>{trigger}</div>,
   Modal: ({ children, footer, title }: { children: ReactNode; footer: ReactNode; title: string }) => (
     // oxlint-disable-next-line clicky-ui/no-adhoc-overlay -- this IS the stub standing in for clicky's Modal.
     <div role="dialog" aria-label={title}>{children}{footer}</div>
   ),
-}));
+  };
+});
 
 function makePR(overrides: Partial<PRItem> = {}): PRItem {
   return {
@@ -64,6 +67,38 @@ afterEach(() => {
 });
 
 describe('PRActions responsive collapse', () => {
+  it('disables mutations while the parent TODO run is active, including an open confirmation', () => {
+    const view = renderActions();
+    fireEvent.click(screen.getByRole('button', { name: 'Merge' }));
+    view.rerender(<QueryClientProvider client={view.client}><PRActions pr={makePR()} detail={detail} disabled /></QueryClientProvider>);
+    expect(screen.getAllByRole('button', { name: 'Merge' }).every(button => (button as HTMLButtonElement).disabled)).toBe(true);
+    expect((screen.getByRole('button', { name: 'Approve' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('confirms an Azure rebase merge without requiring a GitHub node ID', async () => {
+    const url = 'https://dev.azure.com/acme/product/_git/service/pullrequest/27';
+    const fetchMock = vi.fn(async () => new Response('{"status":"ok"}'));
+    vi.stubGlobal('fetch', fetchMock);
+    renderActions({ pr: makePR({ number: 27, repo: 'acme/product/service', url }), detail: { pr: { provider: 'azuredevops', state: 'OPEN', headRefOid: 'reviewed-head' } } as PRDetail });
+    expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Enable auto-merge (rebase)' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Update branch' })).toBeNull();
+    expect((screen.getByRole('button', { name: 'Merge' }) as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Merge' }));
+    expect(fetchMock).not.toHaveBeenCalled();
+    fireEvent.click(screen.getAllByRole('button', { name: 'Merge' }).at(-1)!);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/prs/merge', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url, method: 'rebase', auto: false, headSha: 'reviewed-head' }),
+    }));
+  });
+
+  it('names rebase, squash and merge-commit strategies on demand', () => {
+    renderActions();
+    for (const label of ['Rebase and merge', 'Squash and merge', 'Create a merge commit']) {
+      expect(screen.getByRole('button', { name: label })).toBeTruthy();
+    }
+  });
   it('renders every action inline when not collapsed', () => {
     renderActions({ detail: null, collapsed: false, extras: [newTodo] });
 

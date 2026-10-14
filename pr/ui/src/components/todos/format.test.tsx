@@ -74,6 +74,11 @@ describe('todoQuery', () => {
 });
 
 describe('TodoRow', () => {
+  it.each(['comfortable', 'compact'] as const)('indicates a linked PR in %s rows without fetching it', density => {
+    const pr = { number: 27, url: 'https://github.com/acme/service/pull/27' };
+    render(<TodoRow todo={{ ...baseTodo, pr }} density={density} active={false} onSelect={() => {}} />);
+    expect(screen.getByTitle(pr.url).textContent).toBe('PR #27');
+  });
   it('shows a plan indicator when hasPlan is true', () => {
     render(<TodoRow todo={{ ...baseTodo, hasPlan: true, hasVerification: false }} active={false} onSelect={() => {}} />);
 

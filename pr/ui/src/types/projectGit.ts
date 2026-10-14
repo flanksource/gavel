@@ -94,6 +94,7 @@ export interface BranchMergeRequest {
 // POST /api/projects/{name}/branch/merge
 export interface BranchMergeResult {
   targetBranch: string;
+  // "" when the branch-merge prompt landed it: its post-verify git steps report no SHA.
   landedSha: string;
   mode: BranchMergeMode;
   commits: number;

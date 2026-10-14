@@ -8,18 +8,18 @@ import (
 
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/github"
+	"github.com/flanksource/gavel/pr/model"
+	"github.com/flanksource/gavel/pr/provider"
+	"github.com/flanksource/gavel/todos/types"
 )
 
-// prActionRequest is the shared body for the PR mutation endpoints. nodeId is
+// prActionRequest is the body for approval requests. nodeId is
 // the GraphQL node ID the UI already holds from the loaded PR detail; repo and
 // number identify which cached detail to invalidate once the action lands.
 type prActionRequest struct {
 	Repo   string `json:"repo"`
 	Number int    `json:"number"`
 	NodeID string `json:"nodeId"`
-	// Merge-only fields.
-	Method string `json:"method,omitempty"` // rebase|squash|merge
-	Auto   bool   `json:"auto,omitempty"`   // enable auto-merge instead of merging now
 	// Approve-only field.
 	Body string `json:"body,omitempty"`
 }
@@ -57,31 +57,45 @@ func (s *Server) afterPRAction(repo string, number int) {
 	}
 }
 
-// handlePRMerge merges the PR now, or enables GitHub auto-merge when auto=true.
-// Both routes through the user's configured token; GitHub rejects the action
-// (not mergeable, no permission, auto-merge disallowed) with an error that is
-// surfaced verbatim rather than swallowed.
+type prMergePayload struct {
+	URL string `json:"url"`
+	model.MergeInput
+}
+
+// handlePRMerge completes a linked hosted PR using its native merge strategy.
 func (s *Server) handlePRMerge(w http.ResponseWriter, r *http.Request) {
-	body, ok := decodePRAction(w, r)
-	if !ok {
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
 		return
 	}
-	opts := s.ghOpts
-	opts.Repo = body.Repo
-
-	var err error
-	if body.Auto {
-		err = github.EnableAutoMerge(opts, body.NodeID, body.Method)
-	} else {
-		err = github.MergePullRequest(opts, body.NodeID, body.Method)
+	var body prMergePayload
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSONError(w, http.StatusBadRequest, err)
+		return
+	}
+	link, err := types.PRFromURL(body.URL)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, err)
+		return
+	}
+	repo, err := linkedPRRepository(link.URL)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, err)
+		return
+	}
+	if _, err := github.MergeMethodFor(body.Method); err != nil {
+		writeJSONError(w, http.StatusBadRequest, err)
+		return
+	}
+	client, number, err := provider.ResolveURL(provider.Options{WorkDir: s.ghOpts.WorkDir, Token: s.ghOpts.Token}, link.URL)
+	if err == nil {
+		err = client.MergePR(r.Context(), number, body.MergeInput)
 	}
 	if err != nil {
-		logger.Warnf("merge PR %s#%d (auto=%v, method=%s): %v", body.Repo, body.Number, body.Auto, body.Method, err)
 		writeJSONError(w, http.StatusBadGateway, err)
 		return
 	}
-
-	s.afterPRAction(body.Repo, body.Number)
+	s.afterPRAction(repo, number)
 	w.Header().Set("Content-Type", "application/json")
 	fmt.Fprint(w, `{"status":"ok"}`)
 }

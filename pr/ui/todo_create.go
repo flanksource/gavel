@@ -24,6 +24,7 @@ type TodoCreatePayload struct {
 	Body     string         `json:"body,omitempty"`
 	Priority types.Priority `json:"priority,omitempty"`
 	Status   types.Status   `json:"status,omitempty"`
+	PR       *types.PR      `json:"pr,omitempty"`
 	// Criteria, when set, are folded into the body as a "## Acceptance Criteria"
 	// checklist on create — used by the dashboard's "create todo from PR" flow to
 	// seed a todo with the PR's failing tests and lint violations as criteria.
@@ -103,13 +104,15 @@ func (s *Server) handleTodoCreate(w http.ResponseWriter, r *http.Request) {
 		writeTodoError(w, http.StatusBadRequest, err)
 		return
 	}
+	if err := payload.PR.Validate(); err != nil {
+		writeTodoError(w, http.StatusBadRequest, err)
+		return
+	}
 	todo, err := provider.Create(r.Context(), todos.CreateRequest{
 		Title:    payload.Title,
 		Body:     bodyWithCreateSections(payload.Body, payload.Criteria, payload.PRVerification),
-		Priority: payload.Priority,
-		Status:   payload.Status,
-		Labels:   payload.Labels,
-		Parent:   payload.Parent,
+		Priority: payload.Priority, Status: payload.Status,
+		Labels: payload.Labels, Parent: payload.Parent, PR: payload.PR,
 	})
 	if err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)
@@ -192,13 +195,15 @@ func (s *Server) handleTodoNew(w http.ResponseWriter, r *http.Request) {
 		writeTodoError(w, http.StatusBadRequest, err)
 		return
 	}
+	if err := payload.PR.Validate(); err != nil {
+		writeTodoError(w, http.StatusBadRequest, err)
+		return
+	}
 	todo, err := provider.Create(r.Context(), todos.CreateRequest{
 		Title:    payload.Title,
 		Body:     bodyWithCreateSections(todoBodyWithAttachments(payload.Body, attachments), payload.Criteria, payload.PRVerification),
-		Priority: payload.Priority,
-		Status:   payload.Status,
-		Labels:   payload.Labels,
-		Parent:   payload.Parent,
+		Priority: payload.Priority, Status: payload.Status,
+		Labels: payload.Labels, Parent: payload.Parent, PR: payload.PR,
 	})
 	if err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)

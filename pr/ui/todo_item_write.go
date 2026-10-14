@@ -22,8 +22,10 @@ type todoUpdatePayload struct {
 	Priority types.Priority `json:"priority,omitempty"`
 	// Title/Body edit the TODO's content; a nil pointer leaves the field
 	// unchanged (an explicit empty body is allowed, an empty title is not).
-	Title *string `json:"title,omitempty"`
-	Body  *string `json:"body,omitempty"`
+	Title   *string   `json:"title,omitempty"`
+	Body    *string   `json:"body,omitempty"`
+	PR      *types.PR `json:"pr,omitempty"`
+	ClearPR bool      `json:"clearPR,omitempty"`
 	// Comment, when set, appends a comment. Combined with status it reopens (or
 	// closes) the TODO with a comment in one request.
 	Comment string `json:"comment,omitempty"`
@@ -97,6 +99,19 @@ func todoPatchCommentWrites(payload todoUpdatePayload, attachments []todoAttachm
 // is required.
 func todoUpdateChanges(payload todoUpdatePayload, attachments []todoAttachmentSummary) (ops.EditChanges, todoPatchComments, error) {
 	changes := ops.EditChanges{Parent: payload.Parent}
+	if payload.PR != nil && payload.ClearPR {
+		return changes, todoPatchComments{}, fmt.Errorf("pr and clearPR cannot be combined")
+	}
+	if payload.PR != nil {
+		if err := payload.PR.Validate(); err != nil {
+			return changes, todoPatchComments{}, err
+		}
+		changes.Content.PR = &payload.PR
+	}
+	if payload.ClearPR {
+		var pr *types.PR
+		changes.Content.PR = &pr
+	}
 	if payload.Status != "" {
 		if err := types.ValidateAssignableStatus(payload.Status); err != nil {
 			return changes, todoPatchComments{}, err
@@ -131,7 +146,7 @@ func todoUpdateChanges(payload todoUpdatePayload, attachments []todoAttachmentSu
 		return changes, todoPatchComments{}, err
 	}
 	if changes.Parent == nil && changes.State.Status == nil && changes.State.Priority == nil && changes.Content.IsEmpty() && comments.empty() {
-		return changes, todoPatchComments{}, fmt.Errorf("status, priority, title, body, labels, parent, comment, lineComment, or resolveComment is required")
+		return changes, todoPatchComments{}, fmt.Errorf("status, priority, title, body, pr, clearPR, labels, parent, comment, lineComment, or resolveComment is required")
 	}
 	return changes, comments, nil
 }

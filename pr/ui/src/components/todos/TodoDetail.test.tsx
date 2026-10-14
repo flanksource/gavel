@@ -219,6 +219,14 @@ afterEach(() => {
 });
 
 describe('TodoDetail Resume/Run/Plan guard', () => {
+  it('shows the linked PR above the tabs without fetching status until requested', async () => {
+    const pr = { number: 27, url: 'https://github.com/acme/service/pull/27' };
+    await renderDetail({ ...baseTodo, pr });
+    fireEvent.click(screen.getByText('Session').closest('button')!);
+    expect(screen.getByRole('link', { name: 'PR #27' }).getAttribute('href')).toBe(pr.url);
+    expect(screen.getByRole('button', { name: 'PR status and actions' })).toBeTruthy();
+    expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).startsWith('/api/prs/linked'))).toBe(false);
+  });
   it('adopts the admitted Captain session id as soon as a run starts', async () => {
     const admissionSession = '11111111-1111-4111-8111-111111111111';
     const runReason = 'Work landed but the definition of done has not been checked.';

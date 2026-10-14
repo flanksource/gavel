@@ -13,6 +13,7 @@ import { TagListField } from './TodoTag';
 import { TodoBodyField } from './TodoBodyField';
 import { useCreateTodoMutation, useUpdateTodoMutation, type CreateTodoResponse } from './todoMutations';
 import { TriageAfterCreation, TriageCreationRecovery } from './TriageAfterCreation';
+import { TodoPRField, todoPRLink } from './TodoPRLink';
 import {
   closedStatuses, compareRecentTodos, detectProjectDir, firstParam, listParam, modeFromParams,
   oneOf, parseBool, returnTarget, todoMatchesSearch, type TodoNewMode,
@@ -74,6 +75,7 @@ export function TodoNewPage({ projects, projectError = '' }: { projects: Project
   const [dirTouched, setDirTouched] = useState(() => !!queryDir || !!queryProjectDir);
   const [title, setTitle] = useState(() => firstParam(params, 'title', 'name'));
   const [body, setBody] = useState(() => firstParam(params, 'body', 'description', 'text'));
+  const [prURL, setPRURL] = useState(() => firstParam(params, 'pr'));
   const [priority, setPriority] = useState<TodoPriority>(() => oneOf(firstParam(params, 'priority', 'severity'), priorities, 'medium'));
   const [status, setStatus] = useState<TodoStatus>(() => oneOf(firstParam(params, 'status'), statuses, autoSave ? 'pending' : 'draft'));
   const [labels, setLabels] = useState(() => listParam(params, 'labels', 'label'));
@@ -194,11 +196,12 @@ export function TodoNewPage({ projects, projectError = '' }: { projects: Project
     try {
       // With attachments, post multipart so the image bytes ride along and the
       // server persists them; otherwise keep the lighter JSON path.
+      const fields = { title, body, priority, status, labels, triage, pr: todoPRLink(prURL) };
       const data = await createTodo.mutateAsync(attachments.length
-        ? { body: todoFormData({ title, body, priority, status, labels, triage }, attachments) }
+        ? { body: todoFormData(fields, attachments) }
         : {
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ title, body, priority, status, labels, triage }),
+            body: JSON.stringify(fields),
           });
       const todo = data.todo as TodoItem | undefined;
       if (todo?.ref) remember(todo);
@@ -383,6 +386,7 @@ export function TodoNewPage({ projects, projectError = '' }: { projects: Project
                 <TagListField labels={labels} index={tagIndex} counts={tagCounts} disabled={busy} onChange={setLabels} />
               </Field>
               <TriageAfterCreation checked={triage} onChange={setTriage} disabled={busy} />
+              <TodoPRField value={prURL} onChange={setPRURL} disabled={busy} />
               <TodoBodyField
                 label="Body"
                 value={body}

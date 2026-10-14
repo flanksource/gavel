@@ -1,11 +1,11 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@flanksource/clicky-ui/components';
 import { UiSave } from '@flanksource/clicky-ui/icons';
 import { Spinner } from '../../icons/Spinner';
 import type { TodoItem } from '../../types';
-import { fetchJSON } from '../../query';
 import { inputClass, todoQuery } from './format';
+import { PlanTldrCallout, usePlanQuery, type PlanResponse } from './PlanTldr';
 import { setTodoCaches, todoMutationJSON } from './todoMutations';
 import { todoQueryKeys } from './todoQueries';
 
@@ -15,17 +15,6 @@ import { todoQueryKeys } from './todoQueries';
 const MdxEditorField = lazy(() =>
   import('@flanksource/clicky-ui/mdx-editor').then(m => ({ default: m.MdxEditorField })),
 );
-
-interface PlanResponse {
-  found: boolean;
-  path?: string;
-  content?: string;
-  onDisk?: boolean;
-  slug?: string;
-  ref?: string;
-  version?: number;
-  todo?: TodoItem;
-}
 
 // TodoPlan shows the latest immutable Captain revision selected on the issue.
 // Human edits append another database revision; they never rewrite an agent's
@@ -45,20 +34,7 @@ export function TodoPlan({
   const [loaded, setLoaded] = useState(''); // server content — the save baseline
   const [draft, setDraft] = useState('');
   const queryKey = todoQueryKeys.plan(dir, todo.ref);
-  const planQuery = useQuery({
-    queryKey,
-    queryFn: async ({ signal }) => {
-      const params = new URLSearchParams(todoQuery(dir));
-      params.set('ref', todo.ref);
-      return fetchJSON<PlanResponse>({
-        url: `/api/todos/session/plan?${params.toString()}`,
-        signal,
-        context: 'Plan request failed',
-      });
-    },
-    enabled: active && !!todo.ref,
-    staleTime: 5_000,
-  });
+  const planQuery = usePlanQuery(dir, todo.ref, active);
   const saveMutation = useMutation({
     mutationKey: ['todos', 'session', 'plan', 'save', { dir: dir.trim(), ref: todo.ref }],
     mutationFn: (content: string) => todoMutationJSON<PlanResponse>(
@@ -116,7 +92,8 @@ export function TodoPlan({
           Save
         </Button>
       </div>
-      {saveMutation.error && <div className="shrink-0 text-xs text-red-600">{saveMutation.error.message}</div>}
+      <PlanTldrCallout plan={planQuery.data} />
+      {saveMutation.error &&<div className="shrink-0 text-xs text-red-600">{saveMutation.error.message}</div>}
       <div className="min-h-0 flex-1 overflow-auto">
         <Suspense
           fallback={

@@ -49,6 +49,7 @@ export interface TodoEvent {
 export type TodoChildDisposition = 'archive' | 'detach';
 
 export interface TodoItem {
+  pr?: { number: number; url: string; head?: string; base?: string };
   ref: string;
   id?: string;
   shortId?: string;
@@ -115,6 +116,10 @@ export interface TodoItem {
   // Questions blocking an `ask` todo — the agent needs a human decision before
   // it can continue. Answered via /api/todos/answer, which resumes the session.
   questions?: TodoQuestion[];
+  // The latest ask was answered from Captain's session page: the transcript
+  // still ends on the question while Captain's turn continues, and
+  // /api/todos/answer refuses a second answer. Detail responses only.
+  answeredFromCaptain?: boolean;
   // The server's verdict on where this todo stands in its lifecycle: every
   // step's status, which one to run next, and why. Supersedes the client-side
   // plan/run/verify machine that used to derive this from status + hasPlan +

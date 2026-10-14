@@ -38,6 +38,7 @@ type todoListResponse struct {
 }
 
 type todoSummary struct {
+	PR             *types.PR      `json:"pr,omitempty"`
 	Ref            string         `json:"ref"`
 	ID             string         `json:"id,omitempty"`
 	ShortID        string         `json:"shortId,omitempty"`
@@ -99,6 +100,10 @@ type todoSummary struct {
 	PlanStatus     types.PlanStatus      `json:"planStatus,omitempty"`
 	LastRunSummary string                `json:"lastRunSummary,omitempty"`
 	Questions      []types.AgentQuestion `json:"questions,omitempty"`
+	// AnsweredFromCaptain marks a todo whose latest ask was answered from
+	// Captain's session page: the transcript still ends on the question while
+	// Captain's turn continues, and /api/todos/answer refuses a second answer.
+	AnsweredFromCaptain bool `json:"answeredFromCaptain,omitempty"`
 }
 
 // todoDiffStat is the JSON shape of a todo's aggregated git diff footprint,
@@ -130,6 +135,7 @@ func summarizeTodo(todo *types.TODO, detail bool) todoSummary {
 		title = todo.Filename()
 	}
 	out := todoSummary{
+		PR:             todo.PR,
 		Ref:            todos.TODOReference(todo),
 		ID:             todo.ID,
 		ShortID:        todo.DisplayID(),
@@ -169,6 +175,7 @@ func summarizeTodo(todo *types.TODO, detail bool) todoSummary {
 		out.PlanStatus = todo.PlanStatus
 		out.LastRunSummary = todo.LastRunSummary
 		out.Questions = todo.Questions
+		out.AnsweredFromCaptain = answeredFromCaptain(todo)
 	}
 	return out
 }

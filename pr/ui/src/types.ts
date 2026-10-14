@@ -192,6 +192,11 @@ export interface PRSyncStatus {
 // Detail API types
 
 export interface PRInfo {
+  provider?: string;
+  headRefOid?: string;
+  mergeStateStatus?: string;
+  mergeReadiness?: { state: string; reasons?: string[] };
+  reviewThreads?: PRComment[];
   number: number;
   // nodeId is the GraphQL global node ID, required by the merge / approve /
   // auto-merge actions. Present once PR detail has loaded.
@@ -274,6 +279,7 @@ export interface WorkflowRun {
 }
 
 export interface PRComment {
+  threadId?: string;
   id: number;
   body: string;
   author: string;

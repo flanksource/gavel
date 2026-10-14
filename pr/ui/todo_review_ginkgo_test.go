@@ -314,6 +314,7 @@ var _ = Describe("todo answer", func() {
 		Expect(rec.Body.String()).To(ContainSubstring("already answered from Captain"))
 		Expect(*called).To(BeFalse())
 		Expect(uiTestProviderFor(workDir).comments).To(BeEmpty())
+		Expect(summarizeTodo(created, true).AnsweredFromCaptain).To(BeTrue(), "the detail tells the session view not to offer the answer the endpoint refuses")
 	})
 
 	It("answers again once the Captain answer's turn asked anew", func() {

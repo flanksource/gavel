@@ -13,7 +13,7 @@ import { AttemptStopAction, AttemptWorkspaceSummary, CopyAllDetailsButton, PENDI
 import type { TodoRunAction } from './run';
 import { invalidateTodoCaches, setTodoCaches, todoMutationJSON, useTodoSessionStop } from './todoMutations';
 import { sessionStatsQueryOptions, todoQueryKeys } from './todoQueries';
-import { setTodoLaunchProgress, todoMutationStream, updateTodoLaunchProgress, useTodoLaunchProgress, type TodoLaunchProgress } from './todoLaunch';
+import { setTodoLaunchProgress, todoMutationStream, updateTodoLaunchProgress, useTodoLaunchProgress } from './todoLaunch';
 
 // TodoSessionApprovalAction is the decision the server's approval endpoint
 // accepts for one pending approval: approve/deny answer a tool-permission
@@ -161,7 +161,10 @@ export function TodoSession({
   );
   // The blocking-question fallback needs the question's own input, which lives
   // in the transcript: read it from Captain only while the session asks.
-  const askSrc = state === 'ask' && !inProgress && approvals.length === 0 && attempt ? captainSessionUrl(attempt.admissionSessionId) : undefined;
+  // A question answered from Captain stays the transcript's last word until
+  // Captain's turn lands, but the answer endpoint refuses it: never offer it.
+  const askOpen = state === 'ask' && !inProgress && !todo.answeredFromCaptain;
+  const askSrc = askOpen && approvals.length === 0 && attempt ? captainSessionUrl(attempt.admissionSessionId) : undefined;
   const askQuery = useQuery({
     queryKey: todoQueryKeys.captainSession(askSrc ?? ''),
     queryFn: ({ signal }) => fetchRemoteSession(askSrc!, signal),
@@ -221,7 +224,7 @@ export function TodoSession({
         ...(item.kind || item.request ? { kind: item.kind ?? item.request?.kind } : {}),
         ...(item.request ? { request: item.request } : {}),
       }));
-    if (state !== 'ask' || inProgress) return [];
+    if (!askOpen) return [];
     const latest = latestQuestionTool(askQuery.data?.messages ?? []);
     if (latest)
       return [{ tool: 'AskUserQuestion', input: latest.input, toolCallId: latest.toolCallId, sessionId: followedSessionId }];
@@ -245,7 +248,7 @@ export function TodoSession({
       ];
     }
     return [];
-  }, [approvals, askQuery.data, followedSessionId, inProgress, state, todo.questions]);
+  }, [approvals, askOpen, askQuery.data, followedSessionId, todo.questions]);
 
   // decide routes a clicky-ui SessionViewer decision to whichever endpoint
   // owns it. A decision on a live approval (SessionViewer stamps the matched
@@ -287,12 +290,14 @@ export function TodoSession({
     [stopMutation.mutateAsync]
   );
 
+  const launchErrors: SessionError[] = launch?.error ? [{ source: 'Session launch', message: launch.error }] : [];
   if (!sessionId && !activeLaunch && attempts.length === 0) {
-    return <>{launch && <LaunchProgress launch={launch} />}<TodoSessionStart dir={dir} todo={todo} onRun={onRun} onAdvanced={onAdvanced} runOptions={runOptions} planOptions={planOptions} onRunOptionsChange={onRunOptionsChange} onPlanOptionsChange={onPlanOptionsChange} runBusy={runBusy} runDisabled={runDisabled} branchChoice={reusableRunBranch(attempts, todo.events ?? [])} /></>;
+    return <><SessionErrorDetails errors={launchErrors} /><TodoSessionStart dir={dir} todo={todo} onRun={onRun} onAdvanced={onAdvanced} runOptions={runOptions} planOptions={planOptions} onRunOptionsChange={onRunOptionsChange} onPlanOptionsChange={onPlanOptionsChange} runBusy={runBusy} runDisabled={runDisabled} branchChoice={todo.pr ? undefined : reusableRunBranch(attempts, todo.events ?? [])} /></>;
   }
 
   const metadata = todoSessionMetadata({ attempt, stats, sessionId: followedSessionId });
   const sessionErrors: SessionError[] = [
+    ...launchErrors,
     ...(askQuery.error ? [{ source: 'Session transcript', message: askQuery.error.message }] : []),
     ...(statusError ? [{ source: 'Session status', message: statusError }] : []),
     ...(detailError ? [{ source: 'Session detail', message: detailError }] : []),
@@ -304,9 +309,13 @@ export function TodoSession({
 
   return (
     <div className="@container flex min-h-0 flex-1 flex-col overflow-hidden bg-muted/20">
-      {launch && <LaunchProgress launch={launch} />}
       <SessionErrorDetails errors={sessionErrors} />
       <VerificationFailureStatus stats={stats} onOpen={onVerification} />
+      {todo.answeredFromCaptain && state === 'ask' && (
+        <p role="status" className="shrink-0 border-b bg-background px-3 py-2 text-xs text-muted-foreground">
+          Answered from Captain: the agent's turn continues in Captain's session, so this question can't be answered here.
+        </p>
+      )}
       {collection ? (
         <SessionInspector
           session={collection}
@@ -340,24 +349,6 @@ export function TodoSession({
         </p>
       ) : null}
     </div>
-  );
-}
-
-function LaunchProgress({ launch }: { launch: TodoLaunchProgress }) {
-  const title = launch.status === 'preparing' ? 'Preparing session'
-    : launch.status === 'resolved' ? 'Starting session'
-      : launch.status === 'failed' ? 'Session could not start' : 'Session started';
-  return (
-    <section aria-label="Launch progress" className="shrink-0 border-b bg-background px-3 py-2 text-xs">
-      <div className="font-medium">{title} · {launch.step}</div>
-      {launch.error && <div role="alert" className="mt-1 text-red-600">{launch.error}</div>}
-      {(launch.specYaml || launch.requestedSpec) && (
-        <details className="mt-1" open={launch.status === 'preparing' || launch.status === 'resolved'}>
-          <summary>{launch.specYaml ? 'Resolved spec' : 'Requested spec'}</summary>
-          <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-words">{launch.specYaml || JSON.stringify(launch.requestedSpec, null, 2)}</pre>
-        </details>
-      )}
-    </section>
   );
 }
 
