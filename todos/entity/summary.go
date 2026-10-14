@@ -13,6 +13,7 @@ import (
 // each TODO's body, plan and verification ran to half a megabyte a page — far
 // more than an agent can be handed. `todo get` returns the whole record.
 type Summary struct {
+	PR *types.PR `json:"pr,omitempty"`
 	// ID is the short id, which resolves back to the TODO wherever a full id is
 	// accepted.
 	ID       string         `json:"id"`
@@ -34,6 +35,7 @@ type Summary struct {
 
 func summarize(todo *types.TODO) Summary {
 	return Summary{
+		PR:               todo.PR,
 		ID:               todo.DisplayID(),
 		Title:            todo.Title,
 		Status:           todo.Status,

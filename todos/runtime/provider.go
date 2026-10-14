@@ -36,6 +36,9 @@ type Provider struct {
 	workspace   *native.Workspace
 	preparedMu  sync.RWMutex
 	prepared    map[uuid.UUID]map[uuid.UUID]struct{}
+	// discoverPlanHooks runs Captain's plan.revision hook prompts on every plan
+	// save. See planHooks.
+	discoverPlanHooks bool
 	// ownership drives the heartbeats that prove this process is still running
 	// the prompt runs it dispatched. See ownership.go.
 	ownership runOwnership
@@ -74,7 +77,12 @@ func Open(ctx context.Context, options WorkspaceOptions) (*Provider, error) {
 	if err != nil {
 		return nil, err
 	}
-	return New(ctx, db, options)
+	provider, err := New(ctx, db, options)
+	if err != nil {
+		return nil, err
+	}
+	provider.discoverPlanHooks = true
+	return provider, nil
 }
 
 // OpenGlobal opens the native repository without requiring a caller workspace.
@@ -89,7 +97,12 @@ func OpenGlobal(ctx context.Context) (*Provider, error) {
 	if err := requireCurrentSchema(ctx, db); err != nil {
 		return nil, err
 	}
-	return NewGlobal(db)
+	provider, err := NewGlobal(db)
+	if err != nil {
+		return nil, err
+	}
+	provider.discoverPlanHooks = true
+	return provider, nil
 }
 
 // NewGlobal constructs the workspace-less provider OpenGlobal returns over an
@@ -149,7 +162,7 @@ func (p *Provider) withWorkspace(workspace *native.Workspace, workDir string) *P
 	return &Provider{
 		workDir: workDir, db: p.db, repository: p.repository,
 		captain: p.captain, coordinator: p.coordinator, workspace: workspace,
-		prepared: map[uuid.UUID]map[uuid.UUID]struct{}{},
+		prepared: map[uuid.UUID]map[uuid.UUID]struct{}{}, discoverPlanHooks: p.discoverPlanHooks,
 	}
 }
 
@@ -431,6 +444,7 @@ func (p *Provider) Create(ctx context.Context, request todos.CreateRequest) (*ty
 		Title:        title,
 		Body:         body,
 		Verification: verification,
+		PR:           request.PR,
 		Labels:       request.Labels,
 		Priority:     priority,
 		Status:       status,

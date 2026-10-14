@@ -318,6 +318,7 @@ type CreateRequest struct {
 	// nor NoParent set, an origin TODO in this workspace makes the new TODO a
 	// child of that TODO's top-level TODO.
 	Origin *CreateOrigin
+	PR     *types.PR
 }
 
 // CreateOrigin is the run a TODO was created inside: the TODO that run was
@@ -346,11 +347,12 @@ type EditRequest struct {
 	// "remove the last label" indistinguishable from "don't touch labels".
 	Labels   *[]string
 	Metadata map[string]any
+	PR       **types.PR
 }
 
 // IsEmpty reports whether the edit would change nothing.
 func (e EditRequest) IsEmpty() bool {
-	return e.Title == nil && e.Body == nil && e.Verification == nil && e.Path == nil && e.Labels == nil && len(e.Metadata) == 0
+	return e.Title == nil && e.Body == nil && e.Verification == nil && e.Path == nil && e.Labels == nil && e.PR == nil && len(e.Metadata) == 0
 }
 
 func TODOReference(todo *types.TODO) string {

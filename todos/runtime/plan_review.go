@@ -78,7 +78,12 @@ func (p *Provider) SavePlanRevision(ctx context.Context, todo *types.TODO, markd
 		return nil, err
 	}
 	actor = reviewActor(actor)
+	hooks, err := p.planHooks(todo.CWD)
+	if err != nil {
+		return nil, err
+	}
 	input := native.PersistPlanInput{
+		Hooks:    hooks,
 		Revision: captaindb.AppendPlanRevisionInput{PlanMarkdown: markdown, CreatedBy: actor},
 		Attachment: native.PlanSelectionAttachment{
 			IssueID: issue.ID, Ordinal: ordinal,

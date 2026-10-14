@@ -3,6 +3,7 @@ package native
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"slices"
 	"sort"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/flanksource/gavel/todos/labels"
+	"github.com/flanksource/gavel/todos/types"
 )
 
 type issueRecord struct {
@@ -21,6 +23,7 @@ type issueRecord struct {
 	Title             string
 	Body              string
 	Verification      string
+	PR                *types.PR      `gorm:"type:jsonb"`
 	Labels            pq.StringArray `gorm:"type:text[]"`
 	Priority          string
 	Status            string
@@ -44,6 +47,7 @@ func (r issueRecord) issue() *Issue {
 		Title:             r.Title,
 		Body:              r.Body,
 		Verification:      r.Verification,
+		PR:                r.PR,
 		Labels:            labels,
 		Priority:          Priority(r.Priority),
 		Status:            IssueStatus(r.Status),
@@ -58,7 +62,7 @@ func (r issueRecord) issue() *Issue {
 }
 
 const issueColumns = `
-	issue.id, issue.workspace_id, issue.title, issue.body, issue.verification,
+	issue.id, issue.workspace_id, issue.title, issue.body, issue.verification, issue.pr,
 	issue.labels, issue.priority, issue.status,
 	COALESCE(runtime.execution_state, 'idle') AS execution_state,
 	issue.active_prompt_run_id, issue.selected_plan_id, issue.parent_issue_id,
@@ -69,6 +73,9 @@ const issueFrom = `
 	LEFT JOIN todo_issue_runtime AS runtime ON runtime.issue_id = issue.id`
 
 func (r *Repository) CreateIssue(ctx context.Context, input CreateIssueInput) (*Issue, error) {
+	if err := input.PR.Validate(); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalidInput, err)
+	}
 	if input.WorkspaceID == uuid.Nil {
 		return nil, fmt.Errorf("%w: workspace ID is required", ErrInvalidInput)
 	}
@@ -121,11 +128,11 @@ func (r *Repository) CreateIssue(ctx context.Context, input CreateIssueInput) (*
 
 		result := tx.Exec(`
 			INSERT INTO todo_issues
-				(id, workspace_id, title, body, verification, labels, priority, status,
+				(id, workspace_id, title, body, verification, labels, priority, status, pr,
 				 parent_issue_id, version, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, now(), now())`,
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, now(), now())`,
 			id, input.WorkspaceID, title, input.Body, input.Verification, pq.Array(normalizedLabels),
-			priority, status, input.ParentID,
+			priority, status, input.PR, input.ParentID,
 		)
 		if result.Error != nil {
 			return result.Error
@@ -139,6 +146,7 @@ func (r *Repository) CreateIssue(ctx context.Context, input CreateIssueInput) (*
 			"priority":  priority,
 			"status":    status,
 			"workspace": input.WorkspaceID,
+			"pr":        input.PR,
 		}
 		addLineage(payload, input.ParentID, input.Origin)
 		_, err := insertEvent(tx, id, 1, EventInput{Kind: "created", Actor: input.Actor, Payload: payload})
@@ -287,6 +295,13 @@ func (r *Repository) MoveIssueWorkspace(
 func (r *Repository) UpdateIssue(ctx context.Context, id uuid.UUID, expectedVersion int64, patch IssuePatch) (*Issue, error) {
 	updates := map[string]any{}
 	payload := map[string]any{}
+	if patch.PR != nil {
+		if err := (*patch.PR).Validate(); err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrInvalidInput, err)
+		}
+		updates["pr"] = *patch.PR
+		payload["pr"] = *patch.PR
+	}
 	if patch.Title != nil {
 		title := strings.TrimSpace(*patch.Title)
 		if title == "" {
@@ -356,6 +371,10 @@ func (r *Repository) UpdateIssue(ctx context.Context, id uuid.UUID, expectedVers
 }
 
 func pruneUnchangedIssueUpdates(current *Issue, updates, payload map[string]any) {
+	if value, ok := updates["pr"]; ok && reflect.DeepEqual(current.PR, value) {
+		delete(updates, "pr")
+		delete(payload, "pr")
+	}
 	if value, ok := updates["title"].(string); ok && current.Title == value {
 		delete(updates, "title")
 		delete(payload, "title")

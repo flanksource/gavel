@@ -26,15 +26,27 @@ import (
 //
 // Recording the run — its start, the spec setup produced, its outcome — is
 // Captain's: promptrun appends its own recorder after setup.
-func (h *Host) Hooks(todo *types.TODO, req captainai.Request, meta todos.RunStartMetadata) []any {
+type HookOptions struct {
+	Meta todos.RunStartMetadata
+	pr   *prExecution
+}
+
+func (h *Host) Hooks(todo *types.TODO, req captainai.Request, opts HookOptions) []any {
 	var hooks []any
 	if req.Workflow != nil && len(req.Workflow.Commits) > 0 {
-		hooks = append(hooks, commit.AgentHooks(commit.AgentHooksOptions{
+		options := commit.AgentHooksOptions{
 			Commits: req.Workflow.Commits,
-			Meta:    commit.AgentRunMetadata{IssueID: todo.ID, SessionID: meta.SessionID},
-		})...)
+			Meta:    commit.AgentRunMetadata{IssueID: todo.ID, SessionID: opts.Meta.SessionID},
+		}
+		if opts.pr != nil && opts.pr.write {
+			options.PRTarget, options.ShouldCommit = opts.pr.target, completedPRTurn
+		}
+		hooks = append(hooks, commit.AgentHooks(options)...)
 	}
-	if env := runEnvFor(todo, firstNonEmpty(req.SessionID, meta.SessionID)); len(env) > 0 {
+	if opts.pr != nil {
+		hooks = append(hooks, opts.pr)
+	}
+	if env := runEnvFor(todo, firstNonEmpty(req.SessionID, opts.Meta.SessionID)); len(env) > 0 {
 		hooks = append(hooks, &runEnv{env: env})
 	}
 	if labels := runLabelsFor(todo, meta, h.WorkDir); len(labels) > 0 {

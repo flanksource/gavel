@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/flanksource/gavel/todos/types"
+
 	"github.com/google/uuid"
 )
 
@@ -116,6 +118,7 @@ type Issue struct {
 	Version   int64      `json:"version"`
 	CreatedAt time.Time  `json:"createdAt"`
 	UpdatedAt time.Time  `json:"updatedAt"`
+	PR        *types.PR  `json:"pr,omitempty"`
 }
 
 // IssueOrigin is the run an issue was created inside: the issue that run was
@@ -298,6 +301,7 @@ type CreateIssueInput struct {
 	Actor        string
 	ParentID     *uuid.UUID
 	Origin       IssueOrigin
+	PR           *types.PR
 }
 
 // IssuePatch uses pointers so callers can distinguish no change from setting
@@ -310,6 +314,7 @@ type IssuePatch struct {
 	Priority     *Priority
 	Status       *IssueStatus
 	Actor        string
+	PR           **types.PR
 }
 
 type EventInput struct {

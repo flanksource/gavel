@@ -42,6 +42,8 @@ type PersistPlanInput struct {
 	Attachment  PlanSelectionAttachment
 	RootSession *captaindb.CreateSessionInput
 	Session     *captaindb.CreateSessionInput
+	// Hooks are the plan.revision hooks Captain runs before persisting.
+	Hooks []plans.Hook
 }
 
 // ApprovedPlanSelection is the cross-owner approval result. Captain remains
@@ -83,7 +85,7 @@ func (c *LaunchCoordinator) PersistAndSelectPlan(ctx context.Context, input Pers
 		_, err := plans.Save(ctx, captainTx, plans.SaveInput{
 			Plan: planInput, Markdown: input.Revision.PlanMarkdown,
 			Feedback: input.Revision.Feedback, CreatedBy: input.Revision.CreatedBy,
-		}, func(ctx context.Context, tx *captaindb.DB, outcome plans.Outcome) error {
+		}, plans.SaveOptions{Hooks: input.Hooks, Link: func(ctx context.Context, tx *captaindb.DB, outcome plans.Outcome) error {
 			if requested := input.Revision.PlanID; requested != uuid.Nil && requested != outcome.Plan.ID {
 				return fmt.Errorf("%w: revision plan %s does not match the authoritative plan %s", ErrInvalidInput, requested, outcome.Plan.ID)
 			}
@@ -100,7 +102,7 @@ func (c *LaunchCoordinator) PersistAndSelectPlan(ctx context.Context, input Pers
 			}
 			result.Plan, result.Revision, result.Issue = outcome.Plan, outcome.Revision, issue
 			return nil
-		})
+		}})
 		return err
 	})
 	if err != nil {

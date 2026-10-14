@@ -46,7 +46,11 @@ func (a externalAnswer) turnFinished() bool {
 // (recorded_at, created_at) or transcript sequence, never a provider timestamp.
 //
 // The answer is the first user text message ingested after gavel parked the run
-// that follows an asking StructuredOutput on the transcript. Gavel's own resume
+// that follows, in transcript sequence, the run's own ask: the first asking
+// StructuredOutput recorded after the run was created. Captain ingests a turn
+// after gavel parks it, so the asking turn's own prompt is also ingested after
+// the park; only the run's ask, not an earlier run's, orders it before the
+// answer. Gavel's own resume
 // sends its answer as a user message too; that message is recognised by the
 // ask_answered event gavel recorded when it admitted the resume, and skipped.
 // The turn's messages are the ones after the answer and before the next user
@@ -69,11 +73,11 @@ WITH answer AS (
   WHERE message.session_id = @session AND message.sequence >= 0 AND message.role = 'user'
     AND message.recorded_at > @parked
     AND reply.text IS NOT NULL
-    AND EXISTS (
-      SELECT 1 FROM captain_messages ask
+    AND message.sequence > (
+      SELECT min(ask.sequence) FROM captain_messages ask
       CROSS JOIN LATERAL jsonb_array_elements(CASE WHEN jsonb_typeof(ask.parts) = 'array' THEN ask.parts ELSE '[]'::jsonb END) part
-      WHERE ask.session_id = @session AND ask.role = 'assistant'
-        AND ask.sequence >= 0 AND ask.sequence < message.sequence
+      WHERE ask.session_id = @session AND ask.role = 'assistant' AND ask.sequence >= 0
+        AND ask.recorded_at >= (SELECT run.created_at FROM captain_prompt_runs run WHERE run.id = CAST(@run AS uuid))
         AND part->>'type' = 'dynamic-tool' AND part->>'toolName' = 'StructuredOutput'
         AND part->'input'->>'endStatus' = 'ask')
     AND NOT EXISTS (
