@@ -203,6 +203,10 @@ table "todo_issues" {
     type    = text
     default = ""
   }
+  column "pr" {
+    null = true
+    type = jsonb
+  }
   column "labels" {
     null    = false
     type    = sql("text[]")

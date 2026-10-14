@@ -26,6 +26,7 @@ import (
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/pr/model"
+	"github.com/flanksource/gavel/pr/provider"
 	"github.com/flanksource/gavel/prwatch"
 	"github.com/flanksource/gavel/utils"
 	"github.com/flanksource/gavel/verify"
@@ -180,14 +181,17 @@ type prFixRun struct {
 //  4. the workflow's checks, teed to the terminal so a multi-minute check is
 //     visibly moving.
 func prFixHooks(ctx context.Context, run prFixRun) ([]any, error) {
+	target, err := provider.TargetOf(run.Result.PR)
+	if err != nil {
+		return nil, err
+	}
 	hooks := []any{&capsetup.Plugin{BaseDir: run.RepoRoot}}
 	if report := prConflicts(run.Result); report != nil {
 		hooks = append(hooks, &prFixMergeHook{report: report})
 	}
 	hooks = append(hooks, commitpkg.AgentHooks(commitpkg.AgentHooksOptions{
-		Commits:    run.Workflow.Commits,
-		Push:       true,
-		PushBranch: run.Result.PR.HeadRefName,
+		Commits:  run.Workflow.Commits,
+		PRTarget: target,
 	})...)
 	verifyHooks, err := capverify.HooksFor(ctx, run.Workflow, capverify.Options{Provider: run.Provider, Output: run.Tee})
 	if err != nil {
