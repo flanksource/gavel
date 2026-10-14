@@ -29,6 +29,7 @@ func TestWrapperChecksReferencedProjectsWithoutWritingBuildArtifacts(t *testing.
 	wrapper := &TSC{RunOptions: linters.RunOptions{WorkDir: workDir}}
 	scriptPath, err := wrapper.resolveScript()
 	require.NoError(t, err)
+	require.NotContains(t, scriptPath, workDir, "wrapper must live outside the checked tree")
 	nodePath, err := exec.LookPath("node")
 	require.NoError(t, err)
 

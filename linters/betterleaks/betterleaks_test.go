@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	commonsContext "github.com/flanksource/commons/context"
+	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/models"
 	"github.com/hairyhenderson/toml"
 	"github.com/stretchr/testify/require"
@@ -91,6 +92,8 @@ func TestResolveConfigEmpty(t *testing.T) {
 }
 
 func TestResolveConfigSinglePassthrough(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	tmp := t.TempDir()
 	cfg := filepath.Join(tmp, "only.toml")
 	require.NoError(t, os.WriteFile(cfg, []byte(`title = "solo"`+"\n"), 0o644))
@@ -98,8 +101,9 @@ func TestResolveConfigSinglePassthrough(t *testing.T) {
 	path, err := ResolveConfig(ResolveConfigOptions{WorkDir: tmp, Configs: []string{cfg}})
 	require.NoError(t, err)
 	require.Equal(t, cfg, path, "single config passed through unchanged")
-	_, statErr := os.Stat(filepath.Join(tmp, ".tmp", "betterleaks.toml"))
-	require.True(t, os.IsNotExist(statErr), ".tmp/betterleaks.toml must not be created for single config")
+	scratch, err := linters.ScratchDir(tmp, "betterleaks")
+	require.NoError(t, err)
+	require.NoFileExists(t, filepath.Join(scratch, "betterleaks.toml"), "merged config must not be written for a single config")
 }
 
 func TestRunCreatesReportDirForSingleConfig(t *testing.T) {
@@ -146,7 +150,9 @@ printf '[]' >"$report"
 	require.NoError(t, err)
 	require.Empty(t, violations)
 
-	reportPath := filepath.Join(workDir, ".tmp", "betterleaks-report.json")
+	reportPath, err := b.reportPath()
+	require.NoError(t, err)
+	require.NotContains(t, reportPath, workDir, "report must live outside the scanned tree")
 	data, err := os.ReadFile(reportPath)
 	require.NoError(t, err)
 	require.JSONEq(t, "[]", string(data))
@@ -197,9 +203,13 @@ paths = ["testdata/.*"]
 	require.NoError(t, os.WriteFile(homeCfg, []byte(homeTOML), 0o644))
 	require.NoError(t, os.WriteFile(repoCfg, []byte(repoTOML), 0o644))
 
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	out, err := ResolveConfig(ResolveConfigOptions{WorkDir: tmp, Configs: []string{homeCfg, repoCfg}})
 	require.NoError(t, err)
-	require.Equal(t, filepath.Join(tmp, ".tmp", "betterleaks.toml"), out)
+	scratch, err := linters.ScratchDir(tmp, "betterleaks")
+	require.NoError(t, err)
+	require.Equal(t, filepath.Join(scratch, "betterleaks.toml"), out)
 
 	data, err := os.ReadFile(out)
 	require.NoError(t, err)

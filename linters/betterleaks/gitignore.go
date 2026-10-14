@@ -41,15 +41,6 @@ func gitIgnoredScanPaths(workDir string) ([]string, error) {
 		}
 	}
 
-	generatedDir := filepath.Join(workDir, ".tmp")
-	ignoredGenerated, err := utils.GitIgnoredPaths([]string{generatedDir}, workDir)
-	if err != nil {
-		return nil, err
-	}
-	if _, ok := ignoredGenerated[generatedDir]; ok {
-		paths[".tmp/"] = struct{}{}
-	}
-
 	result := make([]string, 0, len(paths))
 	for path := range paths {
 		result = append(result, path)
