@@ -4,9 +4,9 @@ go 1.26.1
 
 require (
 	github.com/flanksource/captain v0.0.68
-	github.com/flanksource/clicky v1.21.77-0.20261012060459-14e4772f3f3e
+	github.com/flanksource/clicky v1.21.77
 	github.com/flanksource/commons v1.60.1
-	github.com/flanksource/commons-db v0.1.50
+	github.com/flanksource/commons-db v0.1.55
 	github.com/flanksource/gomplate/v3 v3.24.90
 	github.com/flanksource/is-healthy v1.0.92 // indirect
 	github.com/flanksource/kubectl-neat v1.0.4 // indirect
@@ -27,8 +27,8 @@ require (
 	github.com/creack/pty v1.1.24
 	github.com/dustin/go-humanize v1.0.1
 	github.com/elazarl/goproxy v1.7.2
-	github.com/flanksource/clicky/aichat v1.21.76
-	github.com/flanksource/deps v1.0.43
+	github.com/flanksource/clicky/aichat v1.21.77
+	github.com/flanksource/deps v1.0.45
 	github.com/flanksource/deps/start v0.0.0-20261009090519-f5045eccb6ab
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/ghodss/yaml v1.0.0
