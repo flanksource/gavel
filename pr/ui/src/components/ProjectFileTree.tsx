@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, type ReactNode } from 'react';
 import { Tree } from '@flanksource/clicky-ui/data';
 import { UiEyeClosed } from '@flanksource/clicky-ui/icons';
 import type { ProjectFileStatus, FileState } from './ProjectStatusView';
@@ -6,7 +6,12 @@ import { ProjectFileIcon } from '../icons/ProjectFileIcon';
 import { buildFileTree, filesBelow, findFileTreeNode, sortedChildren, type FileTreeNode } from './fileTree';
 
 interface ProjectFileTreeProps {
+  // files are already filtered by the parent; search is echoed into the tree's
+  // own search box so there is a single filter row.
   files: ProjectFileStatus[];
+  search: string;
+  onSearchChange: (search: string) => void;
+  filterActions?: ReactNode;
   selected: Set<string>;
   // locked maps a path already claimed by a queued commit group to that group's
   // position, so it cannot be selected into a second group.
@@ -24,6 +29,9 @@ const noLockedFiles = new Map<string, number>();
 
 export function ProjectFileTree({
   files,
+  search,
+  onSearchChange,
+  filterActions,
   selected,
   locked = noLockedFiles,
   disabled,
@@ -43,7 +51,12 @@ export function ProjectFileTree({
       getChildren={sortedChildren}
       getKey={node => node.path}
       getAriaLabel={node => node.path}
-      getSearchText={node => node.path}
+      getSearchText={node => [node.path, node.file?.previousPath].filter(Boolean).join(' ')}
+      showSearch
+      searchQuery={search}
+      onSearchQueryChange={onSearchChange}
+      actions={filterActions}
+      empty={<div className="px-3 py-4 text-sm text-muted-foreground">No files match the filter.</div>}
       defaultOpen={() => true}
       selected={diffNode}
       revealSelected

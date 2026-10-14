@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Button, SplitButton, SplitPane } from '@flanksource/clicky-ui/components';
+import { Button, FilterBar, SplitButton, SplitPane, type FilterBarFilter } from '@flanksource/clicky-ui/components';
 import {
   UiBeaker,
   UiCheck,
@@ -22,6 +22,14 @@ import { ProjectActionRunDialog, type ProjectRunnerAction } from './ProjectActio
 import { ProjectCommitTasks } from './ProjectCommitTasks';
 import { ProjectDiffView } from './ProjectDiffView';
 import { ProjectFileTree } from './ProjectFileTree';
+import {
+  emptyProjectFileFilters,
+  filterProjectFiles,
+  projectFileFiltersActive,
+  scopeCounts,
+  UNSCOPED_SCOPE,
+  type ProjectFileFilters,
+} from './projectFileFilter';
 import { projectApiUrl } from './projectApiUrl';
 import { projectDiffQueryKey } from './projectMutations';
 
@@ -97,6 +105,7 @@ export function ProjectStatusView({ project, diffPath = '', showResults = false,
   });
   const status = statusQuery.data ?? null;
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [filters, setFilters] = useState<ProjectFileFilters>(emptyProjectFileFilters);
   const [error, setError] = useState('');
   const [advancedAction, setAdvancedAction] = useState<ProjectAction | null>(null);
   const [activeRun, setActiveRun] = useState<{ action: ProjectRunnerAction; runId: string } | null>(projectActionRunFromLocation);
@@ -114,6 +123,7 @@ export function ProjectStatusView({ project, diffPath = '', showResults = false,
 
   useEffect(() => {
     setSelected(new Set());
+    setFilters(emptyProjectFileFilters());
     setActiveRun(projectActionRunFromLocation());
     setCommitRunId('');
     setLockedFiles(new Map());
@@ -149,11 +159,31 @@ export function ProjectStatusView({ project, diffPath = '', showResults = false,
     if (!present) onDiffPathChange('');
   }, [diffPath, onDiffPathChange, status]);
 
+  const visibleFiles = useMemo(() => filterProjectFiles(status?.files ?? [], filters), [filters, status]);
+  const filtered = projectFileFiltersActive(filters);
+  // Select-all acts on the files the filter shows; selections of hidden files are
+  // left alone so the commit count still covers them.
   const selectable = useMemo(
-    () => commitTaskError ? [] : status?.files.filter(file => file.state !== 'conflict' && !lockedFiles.has(file.path)) ?? [],
-    [commitTaskError, lockedFiles, status],
+    () => commitTaskError ? [] : visibleFiles.filter(file => file.state !== 'conflict' && !lockedFiles.has(file.path)),
+    [commitTaskError, lockedFiles, visibleFiles],
   );
   const allSelected = selectable.length > 0 && selectable.every(file => selected.has(file.path));
+  const scopeFilter = useMemo<FilterBarFilter[]>(() => {
+    const counts = scopeCounts(status?.files ?? []);
+    const scoped = Object.keys(counts).some(scope => scope !== UNSCOPED_SCOPE);
+    if (!scoped && Object.keys(filters.scopes).length === 0) return [];
+    const options = Object.entries(counts)
+      .sort(([aName, aCount], [bName, bCount]) => bCount - aCount || aName.localeCompare(bName))
+      .map(([scope, count]) => ({ value: scope, label: `${scope} (${count})` }));
+    // A selected scope no file carries any more keeps its option so it can be cleared.
+    for (const scope of Object.keys(filters.scopes)) {
+      if (!(scope in counts)) options.push({ value: scope, label: `${scope} (0)` });
+    }
+    return [{
+      key: 'scope', kind: 'multi', label: 'Scope', options,
+      value: filters.scopes, onChange: scopes => setFilters(current => ({ ...current, scopes })),
+    }];
+  }, [filters.scopes, status]);
   const selectedFiles = useMemo(() => [...selected].sort(), [selected]);
 
   const queueCommitMutation = useMutation({
@@ -374,12 +404,15 @@ export function ProjectStatusView({ project, diffPath = '', showResults = false,
                       aria-label="Select all files"
                       checked={allSelected}
                       disabled={busy || ignoreMutation.isPending || commitTaskError !== '' || selectable.length === 0}
-                      onChange={() => setSelected(allSelected ? new Set() : new Set(selectable.map(file => file.path)))}
+                      onChange={() => setSelected(current => setPaths(current, selectable.map(file => file.path), !allSelected))}
                     />
-                    Select all committable files
+                    {filtered ? `Select ${selectable.length} filtered file${selectable.length === 1 ? '' : 's'}` : 'Select all committable files'}
                   </label>
                   <ProjectFileTree
-                    files={status.files}
+                    files={visibleFiles}
+                    search={filters.search}
+                    onSearchChange={search => setFilters(current => ({ ...current, search }))}
+                    filterActions={scopeFilter.length > 0 && <FilterBar className="min-w-0" filters={scopeFilter} />}
                     selected={selected}
                     locked={lockedFiles}
                     disabled={busy || ignoreMutation.isPending || commitTaskError !== ''}
@@ -436,9 +469,12 @@ function togglePath(current: Set<string>, path: string) {
 }
 
 function togglePaths(current: Set<string>, paths: string[]) {
+  return setPaths(current, paths, !paths.every(path => current.has(path)));
+}
+
+function setPaths(current: Set<string>, paths: string[], select: boolean) {
   const next = new Set(current);
-  const remove = paths.every(path => next.has(path));
-  paths.forEach(path => remove ? next.delete(path) : next.add(path));
+  paths.forEach(path => select ? next.add(path) : next.delete(path));
   return next;
 }
 

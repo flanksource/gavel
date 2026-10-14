@@ -320,6 +320,8 @@ func (s *Server) handleProjectStatus(w http.ResponseWriter, r *http.Request) {
 			respondError(w, gitErrorStatus(err), err.Error())
 			return
 		}
+		// The stored scan carries no repomap classification; the scope filter needs it.
+		status.EnrichRepomap(workDir, files)
 		respondJSON(w, http.StatusOK, projectStatusResponse{
 			Project: project, WorkDir: workDir, Branch: wt.Branch, Files: projectStatusFiles(files),
 			Action: s.projectActionFor(project.Name),
@@ -328,7 +330,7 @@ func (s *Server) handleProjectStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	// Results stay live: their test and lint enrichment reads the workspace's
 	// .gavel snapshots, which the stored git state does not carry.
-	result, err := gatherProjectStatus(workDir, status.Options{NoRepomap: true, Context: r.Context()})
+	result, err := gatherProjectStatus(workDir, status.Options{Context: r.Context()})
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err.Error())
 		return
