@@ -2076,6 +2076,28 @@ Clerk-mode manual checks:
   `handleSession` writes the reason to stderr and exits 1. `HandleGitReceive` re-checks that the
   bare repository stays inside the repository directory. The e2e test now sets `HostKeyPath` to
   a temp file, so it no longer writes `~/.gavel/ssh_host_key` (§3 item 4).
+- **2026-10-14: M6.2 authorized push (`serve/authorize.go`, `serve/authorizer.go`).**
+  - `Options.Authorizer` and `Options.OnPushed` are as specced. With an Authorizer, the key
+    handler resolves the user (`UserForKey`) and keeps it on the connection; an unknown key fails
+    SSH auth ("Permission denied").
+  - `AuthorizePush` errors answer "repository not found or access denied" (deliberately
+    ambiguous) and create no repository.
+  - Receive runs `git -c core.hooksPath=/dev/null receive-pack`, snapshots
+    `for-each-ref` before and after, and calls `OnPushed` with the sorted ref changes (`Old`
+    empty for a created ref, `New` empty for a deleted one) and the pusher's stderr. A missing
+    bare repository is created on first push.
+  - `DBAuthorizer{DB, Members, Issuer, DataDir}`: the path must be `<org-slug>/<repo>`. The user
+    is looked up by gavel ID and issuer, and membership comes from
+    `Members.ForAccessToken(clerkUserID, slug)`, which re-reads stale memberships from Clerk; any
+    role may push. A non-member and an unknown slug both get `ErrNotMember`. The repository is
+    upserted as `repos(org_id, name, source='push')` and lives at
+    `<data-dir>/repos/<org_id>/<repo_id>.git`.
+  - Tests: real `git push` over SSH with a test-double Authorizer (unknown key, denied repo,
+    accepted push with the refs reported, created on first push). A pre-seeded `pre-receive`
+    hook proves hooks don't run, and a mutation that enables the repository's hooks is caught.
+    `DBAuthorizer` specs run against Postgres and the fake Clerk: key mapping, a member pushing
+    (same repo ID twice), and a non-member, unknown org, path without an org and unknown user
+    all refused.
 - **2026-10-14: M5.1 `TokenSource` pulled forward into M3 (commit `7b87e94`).** Before M5, a
   hosted org's `Server` would have used the host's `GITHUB_TOKEN`, `GH_TOKEN` or `auth.json` for
   every PR call. `github.Options.TokenSource`, when set, is the only credential. The M3.2 factory
