@@ -3,6 +3,7 @@ package github
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	nethttp "net/http"
 	"os"
@@ -25,10 +26,10 @@ type Options struct {
 	Token   string // optional; falls back to GITHUB_TOKEN then GH_TOKEN env
 }
 
-// ErrNoTokenMarker is a substring of the "no GitHub token" error returned
-// by Options.token(). ProbeToken uses it to distinguish "token was never
-// configured" (AuthStateNoToken) from other token() failures.
-const ErrNoTokenMarker = "no GitHub token"
+// ErrNoToken is wrapped by every error Options.token() returns when no token
+// was ever configured, so callers (ProbeToken, the PR dashboard) can tell
+// that state (AuthStateNoToken) from other failures with errors.Is.
+var ErrNoToken = errors.New("no GitHub token")
 
 func (o Options) token() (string, error) {
 	if o.Token != "" {
@@ -50,7 +51,7 @@ func (o Options) token() (string, error) {
 	if cfg.Token != "" {
 		return cfg.Token, nil
 	}
-	return "", fmt.Errorf("no GitHub token: set Options.Token, GITHUB_TOKEN, GH_TOKEN, or run `gavel system install` to persist one")
+	return "", fmt.Errorf("%w: set Options.Token, GITHUB_TOKEN, GH_TOKEN, or run `gavel system install` to persist one", ErrNoToken)
 }
 
 func (o Options) resolveRepo() (string, error) {
