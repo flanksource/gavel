@@ -86,6 +86,10 @@ func (s *Server) handleOpenAPI(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if err := addTodoPRLinksOpenAPI(document); err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	respondJSON(w, http.StatusOK, document)
 }
 

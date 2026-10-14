@@ -422,13 +422,95 @@ table "todo_issue_relationships" {
   }
 
   check "todo_issue_relationships_relation_check" {
-    expr = "relation = ANY (ARRAY['depends_on'::text, 'related_to'::text])"
+    expr = "relation = ANY (ARRAY['depends_on'::text, 'related_to'::text, 'duplicates'::text])"
   }
   check "todo_issue_relationships_not_self" {
     expr = "issue_id <> target_issue_id"
   }
+  # related_to and duplicates are symmetric, so each pair is stored once with the
+  # lower id first; depends_on is directed and keeps its own order.
   check "todo_issue_relationships_related_order" {
-    expr = "relation <> 'related_to' OR issue_id < target_issue_id"
+    expr = "relation = 'depends_on' OR issue_id < target_issue_id"
+  }
+}
+
+# Pull requests linked to an issue. The issue's own pr column stays its primary
+# (working) PR and is mirrored here as an implements link; triage and manual
+# links add more. There is no foreign key to pull_requests: a link may predate
+# the poller's first sync of that PR, so title and state are joined at read time.
+table "todo_pr_links" {
+  schema = schema.public
+
+  column "workspace_id" {
+    null = false
+    type = uuid
+  }
+  column "issue_id" {
+    null = false
+    type = uuid
+  }
+  column "provider" {
+    null = false
+    type = text
+  }
+  # Lower-cased repository key (owner/name, or org[/project]/name for Azure);
+  # see types.PRRefFromURL.
+  column "repo" {
+    null = false
+    type = text
+  }
+  column "number" {
+    null = false
+    type = bigint
+  }
+  column "url" {
+    null = false
+    type = text
+  }
+  column "relation" {
+    null = false
+    type = text
+  }
+  column "source" {
+    null = false
+    type = text
+  }
+  column "created_at" {
+    null    = false
+    type    = timestamptz
+    default = sql("now()")
+  }
+
+  primary_key {
+    columns = [column.workspace_id, column.issue_id, column.provider, column.repo, column.number]
+  }
+
+  # ON UPDATE CASCADE follows an issue moved to another workspace.
+  foreign_key "todo_pr_links_issue_workspace_fkey" {
+    columns     = [column.issue_id, column.workspace_id]
+    ref_columns = [table.todo_issues.column.id, table.todo_issues.column.workspace_id]
+    on_update   = CASCADE
+    on_delete   = CASCADE
+  }
+
+  index "todo_pr_links_pr_idx" {
+    columns = [column.provider, column.repo, column.number]
+  }
+
+  check "todo_pr_links_provider_check" {
+    expr = "provider = ANY (ARRAY['github'::text, 'azure'::text])"
+  }
+  check "todo_pr_links_repo_normalized" {
+    expr = "repo <> '' AND repo = lower(repo)"
+  }
+  check "todo_pr_links_number_positive" {
+    expr = "number > 0"
+  }
+  check "todo_pr_links_relation_check" {
+    expr = "relation = ANY (ARRAY['implements'::text, 'related'::text])"
+  }
+  check "todo_pr_links_source_check" {
+    expr = "source = ANY (ARRAY['triage'::text, 'manual'::text])"
   }
 }
 

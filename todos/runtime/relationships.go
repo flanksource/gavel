@@ -91,8 +91,8 @@ func (p *Provider) relationshipOperands(
 		return uuid.Nil, 0, nil, err
 	}
 	if parsed != relation {
-		return uuid.Nil, 0, nil, fmt.Errorf("relation %q is not writable; use %s or %s",
-			relation, types.RelationDependsOn, types.RelationRelatedTo)
+		return uuid.Nil, 0, nil, fmt.Errorf("relation %q is not writable; use %s, %s or %s",
+			relation, types.RelationDependsOn, types.RelationRelatedTo, types.RelationDuplicates)
 	}
 	id, version, err := p.mutationIdentity(todo)
 	if err != nil {

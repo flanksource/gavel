@@ -135,6 +135,8 @@ type TriageEnvelope struct {
 	Merges       []string      `json:"merges,omitempty" jsonschema_description:"Short ids of the TODOs to fold INTO this one, which are then linked here and closed. Required when verdict is merge-into"`
 	DuplicateOf  string        `json:"duplicateOf,omitempty" jsonschema_description:"Short id of the surviving TODO that already covers this work. Required when verdict is duplicate-of, and used by no other verdict"`
 	Related      []string      `json:"related,omitempty" jsonschema_description:"Short ids of related TODOs to link"`
+	Duplicates   []string      `json:"duplicates,omitempty" jsonschema_description:"Short ids of TODOs that describe the same work as this one, linked as duplicates without closing either. Never the duplicateOf or merges targets"`
+	PRs          []string      `json:"prs,omitempty" jsonschema_description:"Full URLs of pull requests whose diff or description addresses this TODO, linked as related PRs. The TODO's own pr field is not changed"`
 	Comment      string        `json:"comment,omitempty" jsonschema_description:"Rationale recorded on the TODO. Required when verdict is retire"`
 }
 
@@ -162,6 +164,9 @@ func (e *TriageEnvelope) Validate() error {
 		return fmt.Errorf("triage verdict %q requires a comment recording why", VerdictRetire)
 	}
 	if err := e.validateRetirements(); err != nil {
+		return err
+	}
+	if err := e.validateLinks(); err != nil {
 		return err
 	}
 	if raw := strings.TrimSpace(e.Status); raw != "" {
@@ -246,6 +251,36 @@ func (e *TriageEnvelope) rejectClosingEdits() error {
 	} {
 		if strings.TrimSpace(field.value) != "" {
 			return fmt.Errorf("triage verdict %q closes this TODO and cannot also set %s", e.Verdict, field.name)
+		}
+	}
+	return nil
+}
+
+// validateLinks holds the non-closing links to what they can mean. A duplicate
+// that is also the duplicate-of survivor or a folded TODO would write the same
+// pair twice under two verdicts — the retirement path already links those — so
+// it is refused rather than half-written. A PR is checked here, not when it is
+// linked, so a malformed URL rejects the whole verdict before anything lands.
+func (e *TriageEnvelope) validateLinks() error {
+	if len(trimmedNonEmpty(e.Duplicates)) != len(e.Duplicates) {
+		return fmt.Errorf("triage duplicates contains a blank id")
+	}
+	for _, ref := range trimmedNonEmpty(e.Duplicates) {
+		if strings.EqualFold(ref, strings.TrimSpace(e.DuplicateOf)) {
+			return fmt.Errorf("triage duplicates names %q, which duplicateOf already closes this TODO into", ref)
+		}
+		for _, merged := range trimmedNonEmpty(e.Merges) {
+			if strings.EqualFold(ref, merged) {
+				return fmt.Errorf("triage duplicates names %q, which merges already folds into this TODO", ref)
+			}
+		}
+	}
+	if len(trimmedNonEmpty(e.PRs)) != len(e.PRs) {
+		return fmt.Errorf("triage prs contains a blank URL")
+	}
+	for _, raw := range e.PRs {
+		if _, err := PRRefFromURL(raw); err != nil {
+			return fmt.Errorf("triage prs: %w", err)
 		}
 	}
 	return nil

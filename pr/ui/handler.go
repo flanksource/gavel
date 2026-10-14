@@ -383,7 +383,23 @@ func (s *Server) SetShowClosed(show bool) {
 	}
 }
 
-func (s *Server) SetResults(prs github.PRSearchResults, incremental bool) {
+// SetResults publishes the poller's results and persists them to the PR index.
+// The dashboard is updated first, so a database failure costs the index, not the
+// live list; the failure is still returned for the poller to surface. A disabled
+// database is a no-op, as for every other cache write.
+func (s *Server) SetResults(prs github.PRSearchResults, incremental bool) error {
+	s.publishResults(prs)
+	rows := make([]cache.PullRequest, len(prs))
+	for i, pr := range prs {
+		rows[i] = prIndexRow(pr)
+	}
+	if err := prIndexStore().UpsertPRs(rows); err != nil {
+		return fmt.Errorf("persist PR index: %w", err)
+	}
+	return nil
+}
+
+func (s *Server) publishResults(prs github.PRSearchResults) {
 	s.mu.Lock()
 	s.prs = prs
 	s.fetchedAt = time.Now()
@@ -472,6 +488,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/prs/pause", s.handlePause)
 	mux.HandleFunc("/api/prs/detail", s.handleDetail)
 	mux.HandleFunc("GET /api/prs/linked", s.handleLinkedPR)
+	mux.HandleFunc("GET /api/prs/todos", s.handlePRTodos)
+	mux.HandleFunc("GET /api/prs/search", s.handlePRSearch)
 	mux.HandleFunc("GET /api/prs/commits/diff", s.handlePRCommitDiff)
 	mux.HandleFunc("GET /api/prs/files/diff", s.handlePRFileDiff)
 	mux.HandleFunc("POST /api/prs/merge", s.handlePRMerge)
@@ -497,6 +515,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/todos/attachments/{id}", s.handleTodoAttachment)
 	mux.HandleFunc("/api/todos/item", s.handleTodoItem)
 	mux.HandleFunc("/api/todos/links", s.handleTodoLinks)
+	mux.HandleFunc("/api/todos/pr-links", s.handleTodoPRLinks)
 	mux.HandleFunc("/api/todos/labels", s.handleTodoLabels)
 	mux.HandleFunc("/api/todos/run", s.handleTodoRun)
 	mux.HandleFunc("GET /api/todos/run/context", s.handleTodoRunContext)

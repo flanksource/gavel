@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, fireEvent } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PRDetailPanel } from './PRDetail';
 import type { GavelResultsSummary, PRItem } from '../types';
 
@@ -240,5 +240,23 @@ describe('Gavel Results section', () => {
     );
 
     expect(screen.queryByText('Reproduce locally')).toBeNull();
+  });
+});
+
+describe('PRDetailPanel linked todos', () => {
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  it('lists the todos linked to the PR on the overview tab, looked up by the PR url', async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL) => ({
+      ok: true,
+      json: async () => [{ id: 'full-1', shortId: 'ab12', title: 'Fix ledger rounding', status: 'pending', priority: 'medium', relation: 'implements', source: 'manual' }],
+    }) as unknown as Response);
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderPRDetail(<PRDetailPanel pr={makePR()} detail={null} loading={false} />);
+
+    expect(await screen.findByRole('heading', { name: 'Linked TODOs' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Fix ledger rounding' }).getAttribute('href')).toBe('/todos/ab12');
+    expect(String(fetchMock.mock.calls[0]![0])).toBe(`/api/prs/todos?url=${encodeURIComponent(makePR().url)}`);
   });
 });

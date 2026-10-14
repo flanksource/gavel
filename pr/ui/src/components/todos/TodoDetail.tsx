@@ -25,6 +25,7 @@ import { TodoNavigationControls, type TodoNavigationControlsProps } from './Todo
 import { TodoTagField } from './TodoTag';
 import { TodoPRLink } from './TodoPRLink';
 import { TodoPRStatus } from './TodoPRStatus';
+import { TodoLinks } from './TodoLinks';
 import { useTodoDetail } from './useTodoDetail';
 import { EditPencil, ExternalIssueLink, PriorityMenu, StatusMenu, TodoSection } from './TodoDetailFields';
 import { HeaderActionsMenu } from './TodoDetailActions';
@@ -190,6 +191,7 @@ export function TodoDetail(props: TodoDetailProps) {
 
             <HeaderActionsMenu
               todo={todo}
+              dir={dir}
               busy={busy}
               runBusy={runBusy}
               closed={closed}
@@ -255,6 +257,7 @@ export function TodoDetail(props: TodoDetailProps) {
               )}
               <HeaderActionsMenu
                 todo={todo}
+                dir={dir}
                 busy={busy}
                 runBusy={runBusy}
                 closed={closed}
@@ -447,6 +450,7 @@ export function TodoDetail(props: TodoDetailProps) {
                   <TodoChildren todo={todo} dir={dir} childTodos={childTodos} familyStatus={familyStatus} onOpenTodo={onOpenTodo} />
                 )}
                 <TodoPRLink key={todo.ref} pr={todo.pr} disabled={busy || sessionInProgress} onSave={patch} />
+                <TodoLinks key={`${todo.ref}:links`} todoRef={todo.ref} dir={dir} disabled={busy} onOpenTodo={onOpenTodo} />
                 <TodoRunBranch
                   dir={dir}
                   todoRef={todo.ref}

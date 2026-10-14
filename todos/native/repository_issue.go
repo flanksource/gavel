@@ -140,6 +140,9 @@ func (r *Repository) CreateIssue(ctx context.Context, input CreateIssueInput) (*
 		if err := insertAliases(tx, input.WorkspaceID, id, aliases); err != nil {
 			return err
 		}
+		if err := syncPrimaryPRLink(tx, input.WorkspaceID, id, nil, input.PR); err != nil {
+			return err
+		}
 		payload := map[string]any{
 			"title":     title,
 			"labels":    normalizedLabels,
@@ -356,6 +359,11 @@ func (r *Repository) UpdateIssue(ctx context.Context, id uuid.UUID, expectedVers
 		}
 		if err := tx.Table("todo_issues").Where("id = ?", id).Updates(updates).Error; err != nil {
 			return err
+		}
+		if next, ok := updates["pr"].(*types.PR); ok {
+			if err := syncPrimaryPRLink(tx, current.WorkspaceID, id, current.PR, next); err != nil {
+				return err
+			}
 		}
 		_, err = recordMutation(tx, locked, EventInput{
 			Kind:    "updated",

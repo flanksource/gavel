@@ -262,12 +262,51 @@ type Link struct {
 }
 
 // RelationshipProvider exposes issue-to-issue links: depends_on for blocking
-// work and related_to for duplicates and overlapping scope. Links reports both,
+// work, related_to for overlapping scope and duplicates for the same work. Links
+// reports all three,
 // plus the derived read-only blocks relation for incoming dependencies.
 type RelationshipProvider interface {
 	Link(ctx context.Context, todo *types.TODO, targetRef string, relation types.RelationKind) (*Link, error)
 	Unlink(ctx context.Context, todo *types.TODO, targetRef string, relation types.RelationKind) error
 	Links(ctx context.Context, todo *types.TODO) ([]Link, error)
+}
+
+// PRLink is one pull request linked to a TODO. The TODO's own PR (todo.PR, the
+// primary PR verification, merge and land act on) is always among them as an
+// implements link.
+type PRLink struct {
+	types.PRRef
+	Relation  types.PRRelation   `json:"relation"`
+	Source    types.PRLinkSource `json:"source"`
+	CreatedAt time.Time          `json:"createdAt"`
+}
+
+// PRLinkRequest links the PR at URL to a TODO.
+type PRLinkRequest struct {
+	URL      string
+	Relation types.PRRelation
+	Source   types.PRLinkSource
+}
+
+// PRLinkedTODO is a TODO found through a PR, summarised for a PR page.
+type PRLinkedTODO struct {
+	ID       string             `json:"id"`
+	ShortID  string             `json:"shortId"`
+	Title    string             `json:"title"`
+	Status   types.Status       `json:"status"`
+	Priority types.Priority     `json:"priority"`
+	Relation types.PRRelation   `json:"relation"`
+	Source   types.PRLinkSource `json:"source"`
+}
+
+// PRLinkProvider exposes TODO-to-PR links. A URL that is not a hosted GitHub or
+// Azure DevOps PR is rejected rather than stored. UnlinkPR on the TODO's primary
+// PR also clears todo.PR, since the primary PR is defined as an implements link.
+type PRLinkProvider interface {
+	LinkPR(ctx context.Context, todo *types.TODO, request PRLinkRequest) (*PRLink, error)
+	UnlinkPR(ctx context.Context, todo *types.TODO, url string) error
+	PRLinks(ctx context.Context, todo *types.TODO) ([]PRLink, error)
+	TodosForPR(ctx context.Context, url string) ([]PRLinkedTODO, error)
 }
 
 // PlanRevisionProvider appends a human-edited immutable Captain revision and

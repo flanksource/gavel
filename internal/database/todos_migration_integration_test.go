@@ -38,6 +38,7 @@ func TestNativeTodoHCLMigrationAndRepeatedApply(t *testing.T) {
 		"todo_issue_prompt_runs",
 		"todo_issue_plans",
 		"todo_run_landings",
+		"todo_pr_links",
 	}
 	for _, table := range nativeTables {
 		require.True(t, db.Gorm().Migrator().HasTable(table), "%s should exist", table)
@@ -177,6 +178,7 @@ func TestNativeTodoHCLMigrationAndRepeatedApply(t *testing.T) {
 	// Remove only the native surface and prove the declarative bundle recreates it.
 	require.NoError(t, db.Gorm().Exec(`DROP TABLE
 		todo_run_landings,
+		todo_pr_links,
 		todo_issue_events,
 		todo_issue_aliases,
 		todo_issue_relationships,

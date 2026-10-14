@@ -34,8 +34,8 @@ func triageRef(todo *types.TODO) string {
 // TODO, instead of being applied piecemeal by an agent that cannot see the
 // optimistic-lock version.
 //
-// The write order mirrors `gavel todos edit`: content, then state, then links,
-// then the comment, and last the retirements. Every write is guarded on
+// The write order mirrors `gavel todos edit`: content, then state, then links
+// (related, duplicates, then PRs), then the comment, and last the retirements. Every write is guarded on
 // todo_issues.version and each one refreshes it, so they cannot be reordered or
 // batched. Retirement goes last because it is terminal — a soft-deleted TODO
 // takes no further edits.
@@ -72,6 +72,9 @@ func ApplyTriage(ctx context.Context, provider Provider, todo *types.TODO, env *
 		return err
 	}
 	if err := applyTriageLinks(ctx, provider, todo, env); err != nil {
+		return err
+	}
+	if err := applyTriagePRLinks(ctx, provider, todo, env); err != nil {
 		return err
 	}
 	if comment := strings.TrimSpace(env.Comment); comment != "" {
@@ -198,52 +201,4 @@ func applyTriageState(ctx context.Context, provider Provider, todo *types.TODO, 
 		todo.Priority = *update.Priority
 	}
 	return nil
-}
-
-// applyTriageLinks records the related references the agent found, as related_to:
-// depends_on means "blocked until", which is a claim triage is not in a position
-// to make.
-//
-// A link to a TODO that cannot be resolved is reported rather than skipped — a
-// silently dropped duplicate link is how two TODOs stay duplicated.
-func applyTriageLinks(ctx context.Context, provider Provider, todo *types.TODO, env *types.TriageEnvelope) error {
-	relationships, ok := provider.(RelationshipProvider)
-	targets := triageLinkTargets(todo, env)
-	if len(targets) == 0 {
-		return nil
-	}
-	if !ok {
-		return fmt.Errorf("triage linked %s to %s but the TODO provider does not support links",
-			triageRef(todo), strings.Join(targets, ", "))
-	}
-	for _, target := range targets {
-		if _, err := relationships.Link(ctx, todo, target, types.RelationRelatedTo); err != nil {
-			return fmt.Errorf("link %s to %s: %w", triageRef(todo), target, err)
-		}
-	}
-	return nil
-}
-
-// triageLinkTargets collects the link references, deduplicated and with the TODO
-// itself removed. An agent asked to name a related TODO will sometimes name the
-// one it is looking at; linking a TODO to itself is noise, not an error worth
-// failing the whole triage over.
-//
-// duplicateOf and merges are deliberately absent: those edges are written by the
-// retirement path, which links the TODO being closed to its survivor. Writing
-// them here too would attempt the same edge twice, and todo_issue_relationships
-// is unique on (workspace, issue, target, relation).
-func triageLinkTargets(todo *types.TODO, env *types.TriageEnvelope) []string {
-	self := selfRefs(todo)
-	seen := map[string]bool{}
-	var targets []string
-	for _, ref := range env.Related {
-		ref = strings.TrimSpace(ref)
-		if ref == "" || seen[ref] || self[strings.ToLower(ref)] {
-			continue
-		}
-		seen[ref] = true
-		targets = append(targets, ref)
-	}
-	return targets
 }
