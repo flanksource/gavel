@@ -144,6 +144,23 @@ var _ = Describe("services kind: exec entries", func() {
 		Expect(strings.Fields(string(order))).To(Equal([]string{"mid", "alpha", "zeta"}))
 	})
 
+	It("waits for the service, not just its shell wrapper, before teardown returns", func() {
+		termFile := filepath.Join(GinkgoT().TempDir(), "order.log")
+		// The trailing `; true` keeps sh as the parent, so SIGTERM ends sh at once
+		// while the service is still in its term delay.
+		step := newStep("stack", fmt.Sprintf(`{"services": {"slow": {
+			"exec": "%s --label slow --term-delay 300ms --term-file %s --addr 127.0.0.1:{{.port}}; true",
+			"ready": {"tcp": "127.0.0.1:{{.port}}"}}}}`, svcBin, termFile))
+
+		outcome, err := execute(step)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(outcome.Cleanup(context.Background())).To(Succeed())
+
+		order, err := os.ReadFile(termFile)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(strings.Fields(string(order))).To(Equal([]string{"slow"}))
+	})
+
 	It("renders later entries against earlier entries' outputs in declaration order", func() {
 		step := newStep("stack", fmt.Sprintf(`{"services": {
 			"zeta": {"exec": "%[1]s --label zeta --addr 127.0.0.1:{{.port}}", "ready": {"tcp": "127.0.0.1:{{.port}}"}},
