@@ -133,13 +133,42 @@
     return u.toString();
   }
 
+  // cssPath locates el in the page: nth-child steps up to the nearest unique id
+  // or <body>. The source stack names the code; this names the instance, which
+  // matters when one component renders many identical elements.
+  function cssPath(el) {
+    var segments = [];
+    var node = el;
+    while (node && node.parentElement && node !== document.body) {
+      var id = node.getAttribute("id");
+      if (id && /^[A-Za-z][\w-]*$/.test(id) && document.querySelectorAll("#" + id).length === 1) {
+        segments.unshift("#" + id);
+        return segments.join(" > ");
+      }
+      var index = Array.prototype.indexOf.call(node.parentElement.children, node) + 1;
+      segments.unshift(node.tagName.toLowerCase() + ":nth-child(" + index + ")");
+      node = node.parentElement;
+    }
+    segments.unshift("body");
+    return segments.join(" > ");
+  }
+
+  // todoTitle names the component and, when the element has one, its
+  // accessible name — the part that tells sibling instances apart.
+  function todoTitle(el, componentName, tagName) {
+    var name = componentName || tagName || "UI element";
+    var label = el && el.getAttribute ? (el.getAttribute("aria-label") || "").trim() : "";
+    return label ? name + ": " + label : name;
+  }
+
   // buildBody renders the grabbed element as Markdown for the todo body: the
-  // component, the page it was grabbed from, the source/component stack, and up
-  // to 2KB of the element's raw HTML — each in its own code block.
-  function buildBody(componentName, source, html) {
+  // component, the page it was grabbed from, a selector for the instance, the
+  // source/component stack, and up to 2KB of the element's raw HTML.
+  function buildBody(componentName, selector, source, html) {
     var parts = [];
     if (componentName) parts.push("**Component:** `<" + componentName + ">`");
     parts.push("**Page:** " + window.location.href);
+    if (selector) parts.push("**Selector:** `" + selector + "`");
     if (source) {
       parts.push("");
       parts.push("```");
@@ -225,12 +254,14 @@
     var html = opts.html != null ? opts.html : grabHtml(el);
     var componentName = displayNameForElement(el, opts.componentName);
     var fallback = fileLine(opts.filePath, opts.lineNumber);
+    // Snapshot the selector with the markup, before cleanup() may re-render.
+    var selector = el && el.isConnected ? cssPath(el) : "";
     return fallbackSourceForElement(el, fallback)
       .then(function (sourceFallback) {
         return stackSourceForElement(el, sourceFallback);
       })
       .then(function (source) {
-        return buildBody(componentName, source, html);
+        return buildBody(componentName, selector, source, html);
       });
   }
 
@@ -428,7 +459,7 @@
   // optionally carrying a captured screenshot ({blob,name}) to attach.
   function openTodo(ctx, attachment) {
     var el = ctx.element;
-    var title = ctx.componentName || ctx.tagName || "UI element";
+    var title = todoTitle(el, ctx.componentName, ctx.tagName);
     // Snapshot the markup now, before cleanup() unfreezes and may re-render the page.
     var html = grabHtml(el);
     var sourceUrl = window.location.href;
