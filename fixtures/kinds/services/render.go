@@ -117,8 +117,10 @@ func expandText(step *fixtures.StepContext, extra map[string]any, text string) (
 
 func withVars(step *fixtures.StepContext, extra map[string]any) *fixtures.StepContext {
 	scoped := *step
-	scoped.Test.TemplateVars = make(map[string]any, len(step.Test.TemplateVars)+len(extra))
-	maps.Copy(scoped.Test.TemplateVars, step.Test.TemplateVars)
+	scoped.Test.TemplateVars = maps.Clone(step.Test.TemplateVars)
+	if scoped.Test.TemplateVars == nil {
+		scoped.Test.TemplateVars = map[string]any{}
+	}
 	maps.Copy(scoped.Test.TemplateVars, extra)
 	return &scoped
 }

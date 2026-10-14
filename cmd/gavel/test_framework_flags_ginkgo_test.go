@@ -38,7 +38,9 @@ var _ = Describe("test framework command flags", func() {
 		GinkgoT().Setenv("CI", "")
 		command := &cobra.Command{Use: "go"}
 		command.Flags().Bool("skip-hooks", false, "")
-		Expect(command.Flags().Parse([]string{"--skip-hooks=false"})).To(Succeed())
+		command.Flags().Duration("lint-timeout", 0, "")
+		command.Flags().Duration("test-timeout", 0, "")
+		Expect(command.Flags().Parse([]string{"--skip-hooks=false", "--lint-timeout=4m", "--test-timeout=5m"})).To(Succeed())
 
 		flags := testCommandFlags{
 			AutoStop:    time.Minute,
