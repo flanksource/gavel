@@ -212,8 +212,12 @@ func (p *Provider) persistPlanResult(ctx context.Context, todo *types.TODO, acti
 			}
 		}
 	}
+	hooks, err := p.planHooks(todo.CWD)
+	if err != nil {
+		return err
+	}
 	persisted, err := p.coordinator.PersistAndSelectPlan(ctx, native.PersistPlanInput{
-		Plan: planInput,
+		Plan: planInput, Hooks: hooks,
 		Revision: captaindb.AppendPlanRevisionInput{
 			PlanMarkdown: markdown,
 			CreatedBy:    strings.TrimSpace(result.ExecutorName),

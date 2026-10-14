@@ -28,7 +28,7 @@ prompt:
 
     Keep lines under 160 columns. Never rewrite a body to describe what the code already does — that is the **done** verdict, not a rewrite.
 
-    Send `title` only when the current one does not describe the work — a bare file path, a symptom that turned out to be something else, or a title the rewritten body now contradicts. Never reword a title that is already accurate.
+    Send `title` only when the current one does not describe the work — a bare file path, a symptom that turned out to be something else, or a title the rewritten body now contradicts. Generic workflow titles such as "Address feedback on PR ...", "Resolve review comments", "Fix failing checks", or "Follow up on PR ..." do not describe the work: you must replace them with a concise title naming the concrete defect, change, or outcome established by the feedback and code. A PR number alone is provenance, not a description. This also applies to ready and investigate verdicts; if the evidence is insufficient, report ask rather than inventing a scope. Closing retire and duplicate-of verdicts still omit title. Never reword a title that is already accurate.
 
     ### 3. Review the verification fixture (`verification`)
 
@@ -83,6 +83,7 @@ prompt:
        `[in this batch]` may be closed by its own verdict before yours is applied — when you fold one in anyway,
        say so in `comment` so the refusal is readable.
     5. Never fold a TODO you have not read, and never name this TODO itself.
+    6. Preserve explicit PR links. Never merge TODOs linked to different PRs or infer a link from a title, body, or verification command.
 
     If the two are genuinely equal and you cannot tell which should survive, that is the `ask` case at the end of
     these instructions — stop and ask rather than picking one.

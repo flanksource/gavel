@@ -130,6 +130,10 @@ func BuildDefinitionOfDone(in DefinitionOfDoneOptions) (DefinitionOfDone, error)
 		if err != nil {
 			return DefinitionOfDone{}, err
 		}
+		body, err = PRVerificationFixture(todo.PR, body)
+		if err != nil {
+			return DefinitionOfDone{}, fmt.Errorf("todo %s PR verification: %w", todo.DisplayID(), err)
+		}
 		for _, warning := range dropped {
 			// Named, because several todos can contribute to one document and a
 			// warning nobody can trace back to a record is one nobody will fix.

@@ -61,6 +61,9 @@ func ApplyTriage(ctx context.Context, provider Provider, todo *types.TODO, env *
 	if err != nil {
 		return err
 	}
+	if err := preserveRetirementPR(ctx, provider, retiring); err != nil {
+		return err
+	}
 
 	if err := applyTriageContent(ctx, provider, todo, env); err != nil {
 		return err

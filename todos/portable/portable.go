@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"sort"
 	"strings"
@@ -53,6 +54,7 @@ type importIssue struct {
 	Title        string
 	Body         string
 	Verification string
+	PR           *types.PR
 	Labels       []string
 	Priority     native.Priority
 	Status       native.IssueStatus
@@ -114,6 +116,7 @@ func Import(ctx context.Context, db *gorm.DB, options todoruntime.WorkspaceOptio
 					Title:        input.Title,
 					Body:         input.Body,
 					Verification: input.Verification,
+					PR:           input.PR,
 					Labels:       input.Labels,
 					Priority:     input.Priority,
 					Status:       input.Status,
@@ -136,6 +139,7 @@ func Import(ctx context.Context, db *gorm.DB, options todoruntime.WorkspaceOptio
 					Title:        &input.Title,
 					Body:         &input.Body,
 					Verification: &input.Verification,
+					PR:           &input.PR,
 					Labels:       &labels,
 					Priority:     &input.Priority,
 					Status:       &input.Status,
@@ -283,6 +287,7 @@ func importIssueFromTODO(todo *types.TODO, root string, workspaceID uuid.UUID) (
 	return importIssue{
 		ID: id, Title: title, Body: body,
 		Verification: strings.TrimSpace(todo.VerificationMarkdown),
+		PR:           todo.PR,
 		Labels:       importedLabels(todo.Metadata),
 		Priority:     priority,
 		Status:       status,
@@ -346,6 +351,7 @@ func exportMarkdown(issue native.Issue) (string, error) {
 	}
 	body = todos.ComposeIssueMarkdown(body, verification)
 	frontmatter := types.TODOFrontmatter{
+		PR:       issue.PR,
 		Title:    issue.Title,
 		Priority: priority,
 		Status:   status,
@@ -358,7 +364,7 @@ func exportMarkdown(issue native.Issue) (string, error) {
 }
 
 func portableIssueMatches(issue *native.Issue, input importIssue) bool {
-	return issue.Title == input.Title && issue.Body == input.Body && issue.Verification == input.Verification &&
+	return reflect.DeepEqual(issue.PR, input.PR) && issue.Title == input.Title && issue.Body == input.Body && issue.Verification == input.Verification &&
 		issue.Priority == input.Priority && issue.Status == input.Status && sameStrings(issue.Labels, input.Labels)
 }
 

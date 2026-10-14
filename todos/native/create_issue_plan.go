@@ -23,6 +23,8 @@ type CreateIssuePlanInput struct {
 	Revision    captaindb.AppendPlanRevisionInput
 	Approval    *InitialPlanApproval
 	Actor       string
+	// Hooks are the plan.revision hooks Captain runs before persisting.
+	Hooks []plans.Hook
 }
 
 // CreateIssueWithPlan creates a native issue and its manually supplied Captain
@@ -67,7 +69,7 @@ func saveCreatedIssuePlan(ctx context.Context, captainTx *captaindb.DB, input Cr
 	saved, err := plans.Save(ctx, captainTx, plans.SaveInput{
 		Plan: planInput, Markdown: input.Revision.PlanMarkdown,
 		Feedback: input.Revision.Feedback, CreatedBy: input.Revision.CreatedBy,
-	}, func(ctx context.Context, tx *captaindb.DB, outcome plans.Outcome) error {
+	}, plans.SaveOptions{Hooks: input.Hooks, Link: func(ctx context.Context, tx *captaindb.DB, outcome plans.Outcome) error {
 		repositoryTx, err := NewRepository(tx.Gorm())
 		if err != nil {
 			return err
@@ -83,7 +85,7 @@ func saveCreatedIssuePlan(ctx context.Context, captainTx *captaindb.DB, input Cr
 			Payload: map[string]any{"planId": outcome.Plan.ID, "revisionId": outcome.Revision.ID, "ordinal": 0},
 		})
 		return err
-	})
+	}})
 	return saved, issue, err
 }
 

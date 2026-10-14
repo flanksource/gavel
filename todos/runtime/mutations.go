@@ -47,6 +47,10 @@ func (p *Provider) Edit(ctx context.Context, todo *types.TODO, edit todos.EditRe
 	}
 	patch := native.IssuePatch{Actor: mutationActor}
 	hasNativeChange := false
+	if edit.PR != nil {
+		patch.PR = edit.PR
+		hasNativeChange = true
+	}
 	if edit.Title != nil {
 		patch.Title = edit.Title
 		hasNativeChange = true

@@ -24,6 +24,7 @@ func TestPortableMarkdownRoundTripsSupportedFields(t *testing.T) {
 	issue := native.Issue{
 		ID: issueID, WorkspaceID: workspaceID,
 		Title: "Round-trip portable fields", Body: body,
+		PR:           &types.PR{Number: 27, URL: "https://github.com/acme/service/pull/27", Head: "topic", Base: "main"},
 		Verification: "## Focused tests\n\n```bash\ngo test ./todos/portable\n```\n\n## Assertions\n\n- export remains lossless",
 		Labels:       []string{"database", "todos"},
 		Priority:     native.PriorityHigh,
@@ -46,6 +47,7 @@ func TestPortableMarkdownRoundTripsSupportedFields(t *testing.T) {
 	assert.Equal(t, issue.Title, imported.Title)
 	assert.Equal(t, issue.Body, imported.Body)
 	assert.Equal(t, issue.Verification, imported.Verification)
+	assert.Equal(t, issue.PR, imported.PR)
 	assert.ElementsMatch(t, issue.Labels, imported.Labels)
 	assert.Equal(t, issue.Priority, imported.Priority)
 	assert.Equal(t, issue.Status, imported.Status)

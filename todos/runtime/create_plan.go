@@ -19,7 +19,12 @@ func (p *Provider) createIssueWithPlan(
 	if markdown == "" {
 		return nil, fmt.Errorf("plan markdown is required")
 	}
+	hooks, err := p.planHooks(p.workDir)
+	if err != nil {
+		return nil, err
+	}
 	input := native.CreateIssuePlanInput{
+		Hooks:       hooks,
 		Issue:       issueInput,
 		RootSession: p.todoRootSessionInput(issueInput),
 		Session: p.todoOperationSessionInput(&native.Issue{

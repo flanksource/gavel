@@ -59,6 +59,22 @@ func Run(ctx context.Context, targets []bulk.Target, opts Options) (bulk.Result,
 func Apply(ctx context.Context, targets []bulk.Target, selection *Selection, proposal *Proposal, opts Options) bulk.Result {
 	result := bulk.Result{Action: "merge", Results: make([]bulk.ItemResult, 0, len(targets))}
 	survivorRef := Ref(selection.Survivor)
+	pr, err := types.MergedPR(append([]*types.TODO{selection.Survivor}, selection.Retired...))
+	if err != nil {
+		item := itemFor(targets, selection.Survivor)
+		item.Error = err.Error()
+		add(&result, item)
+		return result
+	}
+	if selection.Survivor.PR == nil && pr != nil {
+		if err := providerOf(targets, selection.Survivor).Edit(ctx, selection.Survivor, todos.EditRequest{PR: &pr}); err != nil {
+			item := itemFor(targets, selection.Survivor)
+			item.Error = err.Error()
+			add(&result, item)
+			return result
+		}
+		selection.Survivor.PR = pr
+	}
 
 	// A child merged along with its parent is retired first. Closed, it is not an
 	// open child the parent's retirement would move, which would leave the copy in
