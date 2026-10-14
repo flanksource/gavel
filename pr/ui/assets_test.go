@@ -77,7 +77,7 @@ func TestReactGrabPluginCopyUsesTodoBodyFormatter(t *testing.T) {
 	for _, want := range []string{
 		"transformCopyContent",
 		"todoBodyForElement",
-		"buildBody(componentName, source, html)",
+		"buildBody(componentName, selector, source, html)",
 		"getStackContext",
 		"getSource",
 		`join("\n\n---\n\n")`,

@@ -229,7 +229,9 @@ func (d dryRunLinter) DryRunCommand() (string, []string) {
 
 func TestRunningCommandLabel(t *testing.T) {
 	cmd, args, err := PrepareCommand(dryRunLinter{}, RunOptions{})
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	if got := runningCommandLabel(cmd, args); got != "eslint --format=json ." {
 		t.Errorf("runningCommandLabel(dryRunLinter) = %q, want %q", got, "eslint --format=json .")
 	}

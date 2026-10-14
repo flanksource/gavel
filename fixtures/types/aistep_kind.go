@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -84,8 +85,8 @@ func applyAIConfig(step *fixtures.StepContext) (fixtures.FixtureTest, error) {
 	if err != nil {
 		return step.Test, err
 	}
-	items := make([]fixtures.ChecklistItem, 0, len(cfg.Criteria)+len(cfg.Checklist))
-	for _, text := range append(append([]string{}, cfg.Criteria...), cfg.Checklist...) {
+	var items []fixtures.ChecklistItem
+	for _, text := range slices.Concat(cfg.Criteria, cfg.Checklist) {
 		items = append(items, fixtures.ChecklistItem{Text: text})
 	}
 	if len(items) == 0 && strings.TrimSpace(cfg.Prompt) == "" {
