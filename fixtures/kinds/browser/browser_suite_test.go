@@ -62,6 +62,15 @@ func requireChrome() {
 	}
 }
 
+// requireAgentBrowser skips (loudly) only when no agent-browser binary is
+// installed; one that is installed but cannot attach still fails the spec.
+func requireAgentBrowser() {
+	if _, err := resolveAgentBrowser(""); errors.Is(err, errAgentBrowserNotFound) {
+		fmt.Fprintf(GinkgoWriter, "\n!!! SKIPPING agent-browser spec: %v\n", err)
+		Skip(err.Error())
+	}
+}
+
 // startChrome runs the browser kind and registers its teardown.
 func startChrome(scope *fixtures.StepScope, cfg map[string]any) (*fixtures.StepContext, fixtures.StepOutcome) {
 	requireChrome()

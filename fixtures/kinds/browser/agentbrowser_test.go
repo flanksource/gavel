@@ -19,6 +19,7 @@ var _ = Describe("agent-browser kind", func() {
 	})
 
 	It("opens a local page in the shared Chrome, snapshots it and re-observes", func() {
+		requireAgentBrowser()
 		server := newPageServer(page(`<h1>Hello agent</h1><button>Remove enhancement</button>`))
 		scope := fixtures.NewStepScope(os.Environ())
 		_, chrome := startChrome(scope, nil)
@@ -53,6 +54,7 @@ var _ = Describe("agent-browser kind", func() {
 	})
 
 	It("fails the step with the command and its stderr when a command exits non-zero", func() {
+		requireAgentBrowser()
 		scope := fixtures.NewStepScope(os.Environ())
 		startChrome(scope, nil)
 		step := newStep(scope, "ui", "agent-browser", map[string]any{"commands": []string{"no-such-command"}})
