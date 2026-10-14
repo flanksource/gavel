@@ -1,0 +1,199 @@
+# The todo lifecycle end to end, driven by the real `codex` binary against
+# captain's scripted OpenAI mock, watched from the todo's Session tab:
+#
+#   create (auto triage.new: title + labels) → plan → approve → run → verify
+#
+# The flow and assertions match claude.fixture.yaml; what differs is how codex
+# is pointed at the mock. codex ignores OPENAI_BASE_URL, so the fake HOME gets a
+# ~/.codex/config.toml whose model_provider is the mock — written between the
+# mocks starting (their port is known) and the dashboard starting (it spawns
+# codex with that HOME).
+#
+#   gavel fixtures pr/ui/testdata/todo-lifecycle/codex.fixture.yaml
+kind: Fixture
+name: todo lifecycle (codex cli, aimock)
+defaults:
+  wait: { interval: 1s, backoff: { factor: 1.5, max: 5s }, jitter: 20%, timeout: 2m }
+  timeout: 6m
+steps:
+  - id: shims
+    kind: exec
+    script: |
+      mkdir -p {{.tmp}}/bin {{.tmp}}/home/.codex
+      for name in open xdg-open; do printf '#!/bin/sh\nexit 0\n' > {{.tmp}}/bin/$name; chmod +x {{.tmp}}/bin/$name; done
+    export:
+      PATH: "{{.tmp}}/bin:{{.env.PATH}}"
+      FAKE_HOME: "{{.tmp}}/home"
+    override: true
+
+  - id: mocks
+    kind: services
+    services:
+      postgres:
+        deps: postgres
+      # codex (triage.new via app-server; plan, run, commit message via exec).
+      openai:
+        exec: captain ai mock --only openai --openai-addr 127.0.0.1:{{.port}} --scenario {{.fixture.dir}}/codex.aimock.yaml --journal {{.fixture.dir}}/../../../../.tmp/todo-lifecycle-codex.openai.jsonl
+        ready: { tcp: "127.0.0.1:{{.port}}" }
+      # captain's plan-tldr hook declares its own anthropic (haiku) model.
+      anthropic:
+        exec: captain ai mock --only anthropic --addr 127.0.0.1:{{.port}} --scenario {{.fixture.dir}}/codex.aimock.yaml --journal {{.fixture.dir}}/../../../../.tmp/todo-lifecycle-codex.anthropic.jsonl
+        ready: { tcp: "127.0.0.1:{{.port}}" }
+    # default exports: POSTGRES_URL, OPENAI_URL, ANTHROPIC_URL (+ _PORT)
+
+  - id: codex-home
+    kind: exec
+    script: |
+      printf '%s\n' 'model_provider = "aimock"' '' '[model_providers.aimock]' 'name = "aimock"' \
+        "base_url = \"$OPENAI_URL/v1\"" 'env_key = "OPENAI_API_KEY"' 'wire_api = "responses"' \
+        > $FAKE_HOME/.codex/config.toml
+      cat $FAKE_HOME/.codex/config.toml
+    cel: stdout.contains(env.OPENAI_URL + '/v1')
+
+  - id: dashboard
+    kind: services
+    timeout: 8m
+    services:
+      workspace:
+        git:
+          commit: true
+          files:
+            go.mod: |
+              module example.com/acme
+
+              go 1.24
+            # See claude.fixture.yaml: without it the run's commit gates leave
+            # .tmp/betterleaks-report.json in the run worktree and verify refuses it.
+            .gitignore: |
+              .tmp/
+            greet/greet_test.go: |
+              package greet
+
+              import "testing"
+
+              func TestGreeting(t *testing.T) {
+              	if got := Greeting("x"); got != "hello x" {
+              		t.Fatalf("Greeting(x) = %q, want %q", got, "hello x")
+              	}
+              }
+            # triage.new needs caller tools, which only agent mode exposes; for
+            # the openai family that is the codex app-server.
+            .gavel.yaml: |
+              ai: { model: "cli:gpt-5" }
+              todos:
+                triageNew: { model: "agent:gpt-5" }
+                plan: { model: "cli:gpt-5" }
+                run: { model: "cli:gpt-5" }
+        export:
+          WORKSPACE: "{{.outputs.dir}}"
+      gavel:
+        # --dev serves current UI source against the sibling clicky-ui; see claude.fixture.yaml.
+        exec: go run ./cmd/gavel serve --dev --addr 127.0.0.1 --port {{.port}} acme/todo-lifecycle
+        cwd: "{{.fixture.dir}}/../../../.."
+        env:
+          GAVEL_DB_DSN: $POSTGRES_URL
+          HOME: $FAKE_HOME
+          OPENAI_API_KEY: captain-mock
+          ANTHROPIC_BASE_URL: $ANTHROPIC_URL
+          ANTHROPIC_API_KEY: captain-mock
+          ANTHROPIC_AUTH_TOKEN: captain-mock
+        ready: { http: "http://127.0.0.1:{{.port}}/todos", status: 200 }
+        wait: { timeout: 5m }
+
+  - id: project
+    kind: exec
+    script: |
+      curl -fsS -X POST "$GAVEL_URL/api/projects" -H 'Content-Type: application/json' \
+        -d "{\"name\":\"acme\",\"dir\":\"$WORKSPACE\",\"repos\":[]}"
+    cel: json.dir == env.WORKSPACE
+
+  - id: chrome
+    kind: browser
+    profile: { fresh: true }
+
+  - id: todo
+    kind: todo
+    dir: $WORKSPACE
+    create:
+      title: greeting thing
+      triage: true
+      body: |
+        add a greeting helper
+
+        ## Verification
+
+        ```bash
+        go test ./greet/...
+        ```
+    wait: { until: "id != ''" }
+
+  - id: watch
+    kind: playwright
+    background: true
+    file: ../../e2e/watch-session.ts
+    url: $TODO_URL?tab=session
+
+  - id: triaged
+    kind: todo
+    get: true
+    dir: $WORKSPACE
+    # Wait for the applied outcome (the rename), not just the run state.
+    wait:
+      until: "triage.state == 'completed' && todo.title != 'greeting thing'"
+      failWhen: "triage.state in ['failed', 'cancelled'] || todo.status == 'ask'"
+      timeout: 90s
+    cel: todo.title == 'Add Greeting helper to greet package' && 'api' in todo.labels
+
+  - id: triaged-ui
+    kind: agent-browser
+    commands: ["open $TODO_URL?tab=session"]
+    observe: snapshot
+    wait: { until: "snapshot.contains('Add Greeting helper to greet package')", timeout: 30s }
+
+  - id: plan
+    kind: todo_prompt
+    step: plan
+    dir: $WORKSPACE
+    wait:
+      until: "todo.status == 'review'"
+      failWhen: "todo.status in ['failed', 'ask'] || size(session.errors) > 0"
+      timeout: 3m
+    cel: plan.content.contains('greet/greet.go')
+
+  - id: approve
+    kind: todo
+    approve: true
+    dir: $WORKSPACE
+    wait: { until: "todo.status == 'pending'", timeout: 20s }
+
+  - id: run
+    kind: todo_prompt
+    step: run
+    dir: $WORKSPACE
+    retry: { attempts: 2, when: "launch.failed && launch.status == 409", delay: 2s, jitter: 25% }
+    wait:
+      until: "todo.status in ['verified', 'unverified']"
+      failWhen: "todo.status in ['failed', 'ask'] || size(session.errors) > 0"
+      timeout: 5m
+    cel: todo.status == 'verified'
+
+  - id: verify
+    kind: todo_prompt
+    step: verify
+    force: true
+    dir: $WORKSPACE
+    wait: { until: "verify.ran", timeout: 3m }
+    cel: verify.passed
+
+  - id: session-ui
+    kind: playwright
+    script: |
+      import { test, expect } from '../fixtures/cdp'
+
+      test('session tab lists every attempt without session errors', async ({ page }) => {
+        await page.setViewportSize({ width: 1440, height: 900 })
+        await page.goto(`${process.env.TODO_URL}?tab=session`)
+        await expect(page.getByRole('heading', { name: /Add Greeting helper to greet package/ })).toBeVisible()
+        await expect(page.getByTitle('4 attempts')).toBeVisible()
+        await expect(page.getByRole('alert').filter({ hasText: /session errors?/i })).toHaveCount(0)
+      })
