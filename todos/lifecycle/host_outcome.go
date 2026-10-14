@@ -2,6 +2,7 @@ package lifecycle
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -14,6 +15,10 @@ import (
 // EventLifecycleOutcome is the history event kind OnOutcome records: which
 // step ran and which status its outcome chose.
 const EventLifecycleOutcome = "lifecycle_outcome"
+
+// OutcomeErrorKey is the lifecycle_outcome payload key naming why a finished
+// run's outcome could not be persisted. Its event's status is always failed.
+const OutcomeErrorKey = "error"
 
 // OnOutcome applies a finished step to the todo. It is the single place a run
 // writes a status: the attempt is persisted (which, for a plan step, is where
@@ -64,7 +69,7 @@ func (h *Host) OnOutcome(ctx context.Context, todo *types.TODO, step Step, outco
 		before := todo.Status
 		applied, err := h.applyTriage(persistCtx, todo, execution.Triage)
 		if err != nil {
-			return err
+			return h.unpersistedOutcome(persistCtx, events, todo, step, outcome, fmt.Errorf("apply triage verdict: %w", err))
 		}
 		if applied && status == OutcomeKeep && todo.Status != before {
 			recorded = string(todo.Status)
@@ -72,15 +77,35 @@ func (h *Host) OnOutcome(ctx context.Context, todo *types.TODO, step Step, outco
 	}
 	update := h.stateUpdate(todo, step, execution, status)
 	if err := h.Provider.SaveAttempt(persistCtx, todo, execution); err != nil {
-		return fmt.Errorf("persist TODO attempt: %w", err)
+		return h.unpersistedOutcome(persistCtx, events, todo, step, outcome, fmt.Errorf("persist TODO attempt: %w", err))
 	}
 	if err := h.Provider.UpdateState(persistCtx, todo, update); err != nil {
-		return fmt.Errorf("update TODO state: %w", err)
+		return h.unpersistedOutcome(persistCtx, events, todo, step, outcome, fmt.Errorf("update TODO state: %w", err))
 	}
-	if err := events.AppendEvent(persistCtx, todo, outcomeEvent(step, outcome, recorded)); err != nil {
+	if err := events.AppendEvent(persistCtx, todo, outcomeEvent(step, outcome, recorded, nil)); err != nil {
 		return fmt.Errorf("record lifecycle outcome: %w", err)
 	}
 	return triageErr
+}
+
+// unpersistedOutcome records a finished run whose outcome could not be
+// persisted as a failed outcome, carrying the reason, and returns that reason.
+// The run may well have succeeded in Captain — the failure is gavel's, after
+// it — so this event is the only record of why the attempt did not land; the
+// todo projects failed from it, and the session detail shows its error.
+//
+// The todo is reloaded first: the write that failed may have left it at a
+// version the store has moved past, or with a status it never reached.
+func (h *Host) unpersistedOutcome(ctx context.Context, events todos.EventProvider, todo *types.TODO, step Step, outcome *StepOutcome, persistErr error) error {
+	current, err := h.Provider.Get(ctx, todo.ID)
+	if err != nil {
+		return errors.Join(persistErr, fmt.Errorf("reload TODO to record its unpersisted outcome: %w", err))
+	}
+	*todo = *current
+	if err := events.AppendEvent(ctx, todo, outcomeEvent(step, outcome, string(types.StatusFailed), persistErr)); err != nil {
+		return errors.Join(persistErr, fmt.Errorf("record unpersisted lifecycle outcome: %w", err))
+	}
+	return persistErr
 }
 
 // applyTriage writes the verdict, or — when the host is previewing and the
@@ -155,7 +180,9 @@ func (h *Host) stateUpdate(todo *types.TODO, step Step, execution *todos.Executi
 	return update
 }
 
-func outcomeEvent(step Step, outcome *StepOutcome, status string) todos.Event {
+// outcomeEvent is the lifecycle_outcome event for a finished run. persistErr,
+// when set, is why the run's outcome could not be persisted.
+func outcomeEvent(step Step, outcome *StepOutcome, status string, persistErr error) todos.Event {
 	execution := outcome.Execution
 	body := fmt.Sprintf("**Lifecycle:** `%s` → `%s`", step.Name, status)
 	if summary := strings.TrimSpace(execution.Summary); summary != "" {
@@ -163,6 +190,9 @@ func outcomeEvent(step Step, outcome *StepOutcome, status string) todos.Event {
 	}
 	if execution.ErrorMessage != "" && outcome.Result.Run.State != RunSucceeded {
 		body += "\n\n```text\n" + strings.TrimSpace(execution.ErrorMessage) + "\n```"
+	}
+	if persistErr != nil {
+		body += "\n\n**Outcome not persisted:**\n\n```text\n" + strings.TrimSpace(persistErr.Error()) + "\n```"
 	}
 	payload := map[string]any{
 		"step":   step.Name,
@@ -185,6 +215,9 @@ func outcomeEvent(step Step, outcome *StepOutcome, status string) todos.Event {
 	}
 	if execution.Plan != nil {
 		payload["plan"] = map[string]any{"status": string(execution.Plan.Status), "path": execution.Plan.Path}
+	}
+	if persistErr != nil {
+		payload[OutcomeErrorKey] = persistErr.Error()
 	}
 	return todos.Event{Kind: EventLifecycleOutcome, Body: body, Payload: payload}
 }
