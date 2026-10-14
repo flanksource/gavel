@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@ai-sdk/react": "catalog:",
+    "@clerk/react": "catalog:",
     "@flanksource/clicky-ui": "catalog:",
     "@flanksource/gavel": "^0.1.2",
     "@iconify-icons/ph": "^1.2.5",

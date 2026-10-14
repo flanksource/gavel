@@ -21,7 +21,11 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { EventSourceProvider, ThemeProvider } from "@flanksource/clicky-ui/hooks";
 import { ToastProvider } from "@flanksource/clicky-ui/components";
 import { ChatWindowManagerProvider } from "@flanksource/clicky-ui/ai";
+import { ClerkProvider } from "@clerk/react";
 import { App } from "./App";
+import { type AuthConfig, loadAuthConfig } from "./authConfig";
+import { AuthGate } from "./components/AuthGate";
+import { setAuthMode } from "./query";
 import { ChatLayer, chatLayerEnabled } from "./components/ChatLayer";
 import { openEventStream } from "./eventHub";
 import { registerIconifyFallback } from "./icons/iconifyFallback";
@@ -41,25 +45,58 @@ const queryClient = new QueryClient({
   },
 });
 
-createRoot(document.getElementById("root")!).render(
-  <QueryClientProvider client={queryClient}>
-    {/* Routes every clicky-ui SSE-opening hook (useTaskRun, usePrompts,
-        useLogTail, useDebugStream) through the same connection-multiplexing
-        hub the app's own streams use, so they share the one real
-        /api/events connection instead of opening native EventSources that
-        would compete for Chrome's six-per-host HTTP/1.1 connection cap. */}
-    <EventSourceProvider value={openEventStream}>
-      <ThemeProvider defaultTheme="system">
-        {/* Bulk actions report their outcome as a toast: the results of a batch
-            have nowhere to live inside DataTable's flex toolbar, and a partial
-            failure needs more room than a toolbar row. */}
-        <ToastProvider>
-          <ChatWindowManagerProvider storageId="gavel-chat">
-            <App />
-            {chatLayerEnabled(window.location.pathname) && <ChatLayer />}
-          </ChatWindowManagerProvider>
-        </ToastProvider>
-      </ThemeProvider>
-    </EventSourceProvider>
-  </QueryClientProvider>,
-);
+const root = createRoot(document.getElementById("root")!);
+
+// render mounts the app for the server's sign-in mode. In clerk mode the gate wraps
+// App from outside, so pages App returns early for are gated too.
+function render(auth: AuthConfig) {
+  setAuthMode(auth.mode);
+  const hosted = auth.mode === "clerk";
+  const app = (
+    <QueryClientProvider client={queryClient}>
+      {/* Routes every clicky-ui SSE-opening hook (useTaskRun, usePrompts,
+          useLogTail, useDebugStream) through the same connection-multiplexing
+          hub the app's own streams use, so they share the one real
+          /api/events connection instead of opening native EventSources that
+          would compete for Chrome's six-per-host HTTP/1.1 connection cap. */}
+      <EventSourceProvider value={openEventStream}>
+        <ThemeProvider defaultTheme="system">
+          {/* Bulk actions report their outcome as a toast: the results of a batch
+              have nowhere to live inside DataTable's flex toolbar, and a partial
+              failure needs more room than a toolbar row. */}
+          <ToastProvider>
+            <ChatWindowManagerProvider storageId="gavel-chat">
+              {hosted ? (
+                <AuthGate>
+                  <App />
+                </AuthGate>
+              ) : (
+                <>
+                  <App />
+                  {chatLayerEnabled(window.location.pathname) && <ChatLayer />}
+                </>
+              )}
+            </ChatWindowManagerProvider>
+          </ToastProvider>
+        </ThemeProvider>
+      </EventSourceProvider>
+    </QueryClientProvider>
+  );
+  root.render(
+    hosted ? (
+      <ClerkProvider publishableKey={auth.publishableKey ?? ""} afterSignOutUrl="/">
+        {app}
+      </ClerkProvider>
+    ) : (
+      app
+    ),
+  );
+}
+
+loadAuthConfig().then(render, (error: unknown) => {
+  root.render(
+    <div className="flex min-h-screen items-center justify-center p-4 text-sm text-muted-foreground">
+      gavel can't start: {error instanceof Error ? error.message : String(error)}
+    </div>,
+  );
+});

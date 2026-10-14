@@ -1,4 +1,5 @@
 export const queryKeys = {
+  me: () => ['me'] as const,
   prSnapshot: () => ['prs', 'snapshot'] as const,
   prDetail: (repo: string, number: number) => ['prs', repo, number, 'detail'] as const,
   linkedPR: (url: string) => ['prs', 'linked', url] as const,
@@ -71,6 +72,41 @@ export class HttpError extends Error {
   }
 }
 
+export type AuthMode = 'none' | 'clerk';
+
+// A signed-in Clerk session token lives about a minute and is refreshed in the
+// background; a 401 means it lapsed, and a reload lets Clerk issue a new one.
+// Reloads are spaced so a server that keeps refusing the session can't loop.
+const authReloadKey = 'gavel.authReloadAt';
+const authReloadSpacingMs = 30_000;
+let authMode: AuthMode = 'none';
+let reloadPage = () => window.location.reload();
+
+// setAuthMode records how the dashboard signs in, set once before the app renders.
+export function setAuthMode(mode: AuthMode, reload: () => void = () => window.location.reload()) {
+  authMode = mode;
+  reloadPage = reload;
+}
+
+// currentAuthMode is how the dashboard signs in: "none" until setAuthMode says otherwise.
+export function currentAuthMode(): AuthMode {
+  return authMode;
+}
+
+function reloadWhenSignedOut(response: Response) {
+  if (response.status !== 401 || authMode !== 'clerk') return;
+  let last = 0;
+  try {
+    last = Number(sessionStorage.getItem(authReloadKey) ?? 0);
+    if (Date.now() - last < authReloadSpacingMs) return;
+    sessionStorage.setItem(authReloadKey, String(Date.now()));
+  } catch {
+    // Without storage there is no loop guard, so leave the error on screen.
+    return;
+  }
+  reloadPage();
+}
+
 export async function fetchJSON<T>({ url, signal, context }: QueryRequest): Promise<T> {
   const response = await request({ url, signal, context });
   let payload: unknown;
@@ -101,6 +137,7 @@ export async function mutationJSON<T>({ url, method, body, context }: MutationRe
   } catch (cause) {
     throw new Error(`${context}: ${cause instanceof Error ? cause.message : 'request failed'}`, { cause });
   }
+  reloadWhenSignedOut(response);
   const text = await response.text();
   if (!response.ok) {
     let payload: unknown;
@@ -121,16 +158,21 @@ export async function mutationJSON<T>({ url, method, body, context }: MutationRe
 
 async function request({ url, signal, context }: QueryRequest): Promise<Response> {
   try {
-    return await fetch(url, { signal });
+    const response = await fetch(url, { signal });
+    reloadWhenSignedOut(response);
+    return response;
   } catch (cause) {
     if (signal.aborted) throw cause;
     throw new Error(`${context}: ${cause instanceof Error ? cause.message : 'request failed'}`, { cause });
   }
 }
 
+// responseError reads {"error": ...}, adding the server's "message" (why it failed)
+// when it sends one alongside a stable error code.
 function responseError(payload: unknown, status: number): string {
   if (typeof payload === 'object' && payload !== null && 'error' in payload && typeof payload.error === 'string' && payload.error.trim()) {
-    return payload.error;
+    const message = 'message' in payload && typeof payload.message === 'string' ? payload.message.trim() : '';
+    return message ? `${payload.error}: ${message}` : payload.error;
   }
   return `HTTP ${status}`;
 }

@@ -1937,6 +1937,42 @@ Clerk-mode manual checks:
     against a migrated database and the fake Clerk. It covers the public shell,
     `/api/auth/config`, 401 without a token, `/api/me` by cookie, a CLI token with
     `X-Gavel-Org`, the allowlist's 404, and a same-origin config save landing in `org_settings`.
+- **2026-10-14: M4 UI done, with these differences from the spec.**
+  - **Package:** `@clerk/clerk-react` is deprecated. Clerk Core 3 renamed it `@clerk/react`.
+    Batman approved `@clerk/react@6.17.3` (published 2026-09-29, the newest release at least two
+    weeks old, with peers accepting React 19.2). pnpm 11 records it as an exact pin in the
+    `pr/ui/pnpm-workspace.yaml` catalog, with `catalog:` in `package.json`.
+  - **Core 3 has no `SignedIn`/`SignedOut`.** `AuthGate` uses
+    `<Show when="signed-in" fallback={<SignIn routing="hash"/>}>`. `Show` treats pending
+    sessions as signed out by default, so a session waiting on its choose-organization task
+    gets Clerk's sign-in, which runs the task. That matches the server rejecting pending
+    sessions.
+  - **Org switch:** without a router, Clerk's `afterSelectOrganizationUrl="/"` is a full page
+    load, which already clears the query cache and reopens the SSE streams. No extra
+    `queryClient.clear()` is needed.
+  - **401 reload (`query.ts`):** it applies to `fetchJSON`, `fetchText` and `mutationJSON`, at
+    most once per 30s (a timestamp in `sessionStorage`; without storage it doesn't reload), so
+    a server that keeps refusing a valid Clerk session can't cause a reload loop. `setAuthMode`
+    takes the reload function, so tests pass a recorder. `responseError` now shows
+    `error: message` when the server sends both, so auth failures say why.
+  - **Hosted UI matches the hosted allowlist (`src/hostedUI.ts`, new).** In clerk mode only the
+    PR tab shows. A link to another tab opens PRs (`tabFor`). The assistant, task manager,
+    process manager, `~/.gavel.yaml` settings and the chat layer are hidden. `/processes` and
+    `/todos/new` fall through to the dashboard. Without this, a hosted user would see tabs and
+    buttons that only return 404s.
+  - **`UserMenu`** is in the main header before `ThemeToggle`, but not in `MenubarView` or the
+    processes page. Both are local-only views (hosted mode rejects `--menu-bar` and
+    `/api/proc`), and a login badge in the menubar popover is clutter.
+  - **Item 6 (`OrgChooser` label)** needed no change: its trigger already reads "Switch project /
+    GitHub scope".
+  - **Tests:** vitest for `AuthGate` and `UserMenu` (Clerk components replaced with `vi.mock`, as
+    the spec says, so they test our gating), `authConfig`, `hostedUI`, and the 401 reload in
+    `query.ts`. All 1267 tests pass, and `pnpm run build` bundles. The rebuilt `dist/prui.js`
+    isn't committed (CLAUDE.md).
+  - **Not caused by this branch:** `tsc --noEmit` in `pr/ui` reports 19 errors in files from
+    main (`MobileSessionScreen` against clicky-ui 0.3.46's types, `runtimePresetCatalog.test`,
+    and `node:` imports in `noRawEventSource.test`). `vite build` doesn't typecheck, so they
+    don't block the bundle. Raised with Batman.
 - **2026-10-14: M5.1 `TokenSource` pulled forward into M3 (commit `7b87e94`).** Before M5, a
   hosted org's `Server` would have used the host's `GITHUB_TOKEN`, `GH_TOKEN` or `auth.json` for
   every PR call. `github.Options.TokenSource`, when set, is the only credential. The M3.2 factory
@@ -1963,7 +1999,7 @@ Clerk-mode manual checks:
 - [x] M3.1 ServeOptions plus Validate (`DashboardOptions`)
 - [x] M3.2 OrgServers (the factory lands with M3.3's wiring)
 - [x] M3.3 middleware, /api/auth/config, /api/me, features off in hosted mode (incl. execution 501s); spec stripping moved to M10 and attachment headers to M6 (hosted only)
-- [ ] M4 UI
+- [x] M4 UI (`@clerk/react` 6.17.3; hosted UI limited to the allowlist)
 - [ ] M5.0 spike: GitHub App via Clerk
 - [x] M5.1 TokenSource (pulled into M3, `7b87e94`)
 - [ ] M5.2 App tokens

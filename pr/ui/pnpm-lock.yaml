@@ -9,6 +9,9 @@ catalogs:
     '@ai-sdk/react':
       specifier: ^3.0.201
       version: 3.0.208
+    '@clerk/react':
+      specifier: 6.17.3
+      version: 6.17.3
     '@flanksource/clicky-ui':
       specifier: 0.3.47
       version: 0.3.47
@@ -60,6 +63,9 @@ importers:
       '@ai-sdk/react':
         specifier: 'catalog:'
         version: 3.0.208(react@19.2.7)(zod@4.4.3)
+      '@clerk/react':
+        specifier: 'catalog:'
+        version: 6.17.3(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@flanksource/clicky-ui':
         specifier: 'catalog:'
         version: 0.3.47(@ai-sdk/react@3.0.208(react@19.2.7)(zod@4.4.3))(@babel/core@7.29.7(supports-color@8.1.1))(@babel/template@7.29.7)(@mdxeditor/editor@4.0.4(@codemirror/language@6.12.4)(@lezer/highlight@1.2.3)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(supports-color@8.1.1)(yjs@13.6.31))(@shikijs/langs@1.29.2)(@shikijs/themes@1.29.2)(@shikijs/transformers@1.29.2)(@tanstack/react-query@5.101.1(react@19.2.7))(@types/react@19.2.17)(ai@6.0.206(zod@4.4.3))(marked@15.0.12)(monaco-editor@0.48.0)(react-dom@19.2.7(react@19.2.7))(react-rnd@10.5.3(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(react@19.2.7)(recharts@3.8.1(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react-is@17.0.2)(react@19.2.7)(redux@5.0.1))(shiki@1.29.2)(streamdown@2.5.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(supports-color@8.1.1))(tailwindcss@4.3.1)
@@ -345,6 +351,25 @@ packages:
 
   '@chevrotain/types@11.1.2':
     resolution: {integrity: sha512-U+HFai5+zmJCkK86QsaJtoITlboZHBqrVketcO2ROv865xfCMSFpELQoz1GkX5GzME8pTa+3kbKrZHQtI0gdbw==}
+
+  '@clerk/react@6.17.3':
+    resolution: {integrity: sha512-g5UsCSBeZqNYV/2GG12EsWxZIKfwBgMC92Tc5gxHhCkXW/xMqipSzHnGuN9ykNBallE676A/BgEr5hIBREwm8g==}
+    engines: {node: '>=20.9.0'}
+    peerDependencies:
+      react: ^18.0.0 || ~19.0.3 || ~19.1.4 || ~19.2.3 || ~19.3.0-0
+      react-dom: ^18.0.0 || ~19.0.3 || ~19.1.4 || ~19.2.3 || ~19.3.0-0
+
+  '@clerk/shared@4.40.0':
+    resolution: {integrity: sha512-80KM/uw5ZseYTKwJjIhJj7jsHqX6rFem6cwcFJVCUriE3R4tpzkhXsfbhtdho6cG2pQD3NVqKspxTVbSjATzPg==}
+    engines: {node: '>=20.9.0'}
+    peerDependencies:
+      react: ^18.0.0 || ~19.0.3 || ~19.1.4 || ~19.2.3 || ~19.3.0-0
+      react-dom: ^18.0.0 || ~19.0.3 || ~19.1.4 || ~19.2.3 || ~19.3.0-0
+    peerDependenciesMeta:
+      react:
+        optional: true
+      react-dom:
+        optional: true
 
   '@codemirror/autocomplete@6.20.3':
     resolution: {integrity: sha512-tlosUqb+3BbxCxZdu4tKeRghPFC+QM7q4X5YhKV2eCmPG+1r2F3f4AaSz5sCrFqUtX4Jh20VFTKecl16MgiV9g==}
@@ -1954,6 +1979,9 @@ packages:
   '@tanstack/query-core@5.101.1':
     resolution: {integrity: sha512-Y6Y92dkXtNqx67m2pMSxUsA3zOCwv862JexZRP8/EPwvKXMPu9m8rv43spiXWzOUIggQ3SQApttALStzhA8B4g==}
 
+  '@tanstack/query-core@5.104.2':
+    resolution: {integrity: sha512-/qbsxJK5c3Ve1aFIULWYNcT2jeRUAiD4HME6Eu2ZdpofHoVgAjpkQhLg5xHuOoBkTPQUJLfP7zOxy0qsBcqROA==}
+
   '@tanstack/react-query@5.101.1':
     resolution: {integrity: sha512-ZnONUuQKJe1bJMStXUL1s5uKN9FcfC28j5cK+iDZcdSHtUv1wtin1cGc/Oewhf2Oc4eKY7lggtpvT/AbMmhHew==}
     peerDependencies:
@@ -2869,6 +2897,9 @@ packages:
     resolution: {integrity: sha512-sTSfBjoXBp89JvIKIefqw7U2CCebsc74kiY6awiGogKtoSGbgjYE/G/+l9sF3MWFPNc9IcoOC4ODfKHfxFmp0g==}
     engines: {node: '>= 0.4'}
 
+  glob-to-regexp@0.4.1:
+    resolution: {integrity: sha512-lkX1HJXwyMcprw/5YUZc2s7DrpAiHB21/V+E1rHUrVNokkvB6bqMzT0VfV6/86ZNabt1k14YOIaT7nDvOX3Iiw==}
+
   gopd@1.2.0:
     resolution: {integrity: sha512-ZUKRh6/kUFoAiTAtTYPZJ3hw9wNxx+BIBOijnlG9PnrJsCcSjs1wyyD6vJpaYtgnzDrKYRSqf3OO6Rfa93xsRg==}
     engines: {node: '>= 0.4'}
@@ -3036,6 +3067,9 @@ packages:
         optional: true
       react:
         optional: true
+
+  js-cookie@3.0.8:
+    resolution: {integrity: sha512-yeJd4aNAdYZQjaon2bpD/Gb0B/omw7HQOsynXXcOiWVCacbBcPlgn8S/d1X6blFSaHao7ozqtW7NZW19xpCtIw==}
 
   js-tokens@4.0.0:
     resolution: {integrity: sha512-RdJUflcE3cUzKiMqQgsCu06FPu9UdIJO0beYbPhHN4k6apgJtifcoCtT9bcxOpYBtpD2kCM6Sbzg4CausW/PKQ==}
@@ -4493,6 +4527,23 @@ snapshots:
   '@braintree/sanitize-url@7.1.2': {}
 
   '@chevrotain/types@11.1.2': {}
+
+  '@clerk/react@6.17.3(react-dom@19.2.7(react@19.2.7))(react@19.2.7)':
+    dependencies:
+      '@clerk/shared': 4.40.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      react: 19.2.7
+      react-dom: 19.2.7(react@19.2.7)
+      tslib: 2.8.1
+
+  '@clerk/shared@4.40.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7)':
+    dependencies:
+      '@tanstack/query-core': 5.104.2
+      dequal: 2.0.3
+      glob-to-regexp: 0.4.1
+      js-cookie: 3.0.8
+    optionalDependencies:
+      react: 19.2.7
+      react-dom: 19.2.7(react@19.2.7)
 
   '@codemirror/autocomplete@6.20.3':
     dependencies:
@@ -6225,6 +6276,8 @@ snapshots:
 
   '@tanstack/query-core@5.101.1': {}
 
+  '@tanstack/query-core@5.104.2': {}
+
   '@tanstack/react-query@5.101.1(react@18.3.1)':
     dependencies:
       '@tanstack/query-core': 5.101.1
@@ -7235,6 +7288,8 @@ snapshots:
       dunder-proto: 1.0.1
       es-object-atoms: 1.1.2
 
+  glob-to-regexp@0.4.1: {}
+
   gopd@1.2.0: {}
 
   graceful-fs@4.2.11: {}
@@ -7428,6 +7483,8 @@ snapshots:
       '@babel/template': 7.29.7
       '@types/react': 19.2.17
       react: 19.2.7
+
+  js-cookie@3.0.8: {}
 
   js-tokens@4.0.0: {}
 

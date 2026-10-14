@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { fetchJSON, fetchText, HttpError, isProjectGitKey, mutationJSON, queryKeys } from './query';
+import { fetchJSON, fetchText, HttpError, isProjectGitKey, mutationJSON, queryKeys, setAuthMode } from './query';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -170,5 +170,34 @@ describe('query requests', () => {
 
     expect(error).toBeInstanceOf(HttpError);
     expect(error).toMatchObject({ message: 'Merge: squash conflicts', status: 409, body });
+  });
+});
+
+describe('signed-out responses', () => {
+  const unauthenticated = () => new Response(JSON.stringify({ error: 'unauthenticated', message: 'token is expired' }), { status: 401 });
+
+  afterEach(() => {
+    setAuthMode('none');
+    sessionStorage.clear();
+  });
+
+  it('reloads once in clerk mode so Clerk can refresh the session', async () => {
+    const reload = vi.fn();
+    setAuthMode('clerk', reload);
+    vi.stubGlobal('fetch', vi.fn(async () => unauthenticated()));
+    const signal = new AbortController().signal;
+
+    await expect(fetchJSON({ url: '/api/prs', signal, context: 'load PRs' })).rejects.toThrow('load PRs: unauthenticated: token is expired');
+    await expect(mutationJSON({ url: '/api/config', method: 'POST', body: {}, context: 'save' })).rejects.toThrow(HttpError);
+
+    expect(reload).toHaveBeenCalledOnce();
+  });
+
+  it('never reloads in none mode', async () => {
+    const reload = vi.fn();
+    setAuthMode('none', reload);
+    vi.stubGlobal('fetch', vi.fn(async () => unauthenticated()));
+    await expect(fetchJSON({ url: '/api/prs', signal: new AbortController().signal, context: 'load PRs' })).rejects.toThrow(HttpError);
+    expect(reload).not.toHaveBeenCalled();
   });
 });
