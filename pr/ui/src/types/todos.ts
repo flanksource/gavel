@@ -49,6 +49,7 @@ export interface TodoEvent {
 export type TodoChildDisposition = 'archive' | 'detach';
 
 export interface TodoItem {
+  pr?: { number: number; url: string; head?: string; base?: string };
   ref: string;
   id?: string;
   shortId?: string;
@@ -115,6 +116,10 @@ export interface TodoItem {
   // Questions blocking an `ask` todo — the agent needs a human decision before
   // it can continue. Answered via /api/todos/answer, which resumes the session.
   questions?: TodoQuestion[];
+  // The latest ask was answered from Captain's session page: the transcript
+  // still ends on the question while Captain's turn continues, and
+  // /api/todos/answer refuses a second answer. Detail responses only.
+  answeredFromCaptain?: boolean;
   // The server's verdict on where this todo stands in its lifecycle: every
   // step's status, which one to run next, and why. Supersedes the client-side
   // plan/run/verify machine that used to derive this from status + hasPlan +
@@ -309,4 +314,66 @@ export interface TodoCommitFile {
 export interface TodoCommitFilesResponse {
   hash: string;
   files: TodoCommitFile[];
+}
+
+// A TODO-to-TODO link as /api/todos/links reports it (todos.Link, snake_case).
+// 'blocks' is derived from the other side's depends_on and is read-only.
+export type TodoLinkRelation = 'related_to' | 'depends_on' | 'blocks' | 'duplicates';
+
+export interface TodoLink {
+  relation: TodoLinkRelation;
+  target_id: string;
+  target_short_id?: string;
+  target_title?: string;
+  target_status?: TodoStatus;
+  created_at?: string;
+}
+
+export interface TodoLinksResponse {
+  links: TodoLink[];
+}
+
+// 'implements' marks the PR that carries the todo's work; 'related' is a PR that
+// only touches the same ground.
+export type TodoPRLinkRelation = 'implements' | 'related';
+export type TodoPRLinkSource = 'triage' | 'manual';
+
+export interface TodoPRLinkItem {
+  provider: string;
+  repo: string;
+  number: number;
+  url: string;
+  relation: TodoPRLinkRelation;
+  source: TodoPRLinkSource;
+  createdAt: string;
+  // Joined from the persisted PR index at read time; absent when the link
+  // predates the first sync of that PR.
+  title?: string;
+  state?: string;
+  author?: string;
+  isDraft?: boolean;
+}
+
+// One row of the persisted PR index, as /api/prs/search returns it.
+export interface PRSearchItem {
+  provider: string;
+  repo: string;
+  number: number;
+  url: string;
+  title: string;
+  state: string;
+  author: string;
+  isDraft: boolean;
+  updatedAt: string;
+}
+
+// A todo linked to a PR, as /api/prs/todos summarises it.
+export interface PRLinkedTodo {
+  id: string;
+  shortId: string;
+  title: string;
+  status: TodoStatus;
+  priority: TodoPriority;
+  relation: TodoPRLinkRelation;
+  source: TodoPRLinkSource;
 }

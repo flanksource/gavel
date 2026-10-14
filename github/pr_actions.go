@@ -9,11 +9,15 @@ import (
 	"github.com/flanksource/gavel/github/activity"
 )
 
-const mergePullRequestMutation = `mutation($prId: ID!, $method: PullRequestMergeMethod!) {
-  mergePullRequest(input: {pullRequestId: $prId, mergeMethod: $method}) {
+const mergePullRequestMutation = `mutation($prId: ID!, $method: PullRequestMergeMethod!, $head: GitObjectID) {
+  mergePullRequest(input: {pullRequestId: $prId, mergeMethod: $method, expectedHeadOid: $head}) {
     pullRequest { number state }
   }
 }`
+
+type MergeOptions struct {
+	NodeID, Method, HeadSHA string
+}
 
 // MergePullRequest merges the pull request identified by its GraphQL node ID
 // immediately, using the given merge method (rebase|squash|merge). Unlike
@@ -22,11 +26,11 @@ const mergePullRequestMutation = `mutation($prId: ID!, $method: PullRequestMerge
 // mergeable state (conflicts, failing required checks, missing approvals).
 // postGraphQL surfaces those errors as Go errors, so any failure propagates
 // rather than being swallowed.
-func MergePullRequest(opts Options, prNodeID, mergeType string) error {
-	if strings.TrimSpace(prNodeID) == "" {
+func MergePullRequest(opts Options, input MergeOptions) error {
+	if strings.TrimSpace(input.NodeID) == "" {
 		return fmt.Errorf("MergePullRequest: PR node ID is required")
 	}
-	method, err := MergeMethodFor(mergeType)
+	method, err := MergeMethodFor(input.Method)
 	if err != nil {
 		return err
 	}
@@ -35,10 +39,14 @@ func MergePullRequest(opts Options, prNodeID, mergeType string) error {
 		return err
 	}
 
-	_, _, err = postGraphQL(token, graphqlEndpoint(), activity.KindGraphQL, mergePullRequestMutation, map[string]any{
-		"prId":   prNodeID,
+	variables := map[string]any{
+		"prId":   input.NodeID,
 		"method": method,
-	})
+	}
+	if input.HeadSHA != "" {
+		variables["head"] = input.HeadSHA
+	}
+	_, _, err = postGraphQL(token, graphqlEndpoint(), activity.KindGraphQL, mergePullRequestMutation, variables)
 	if err != nil {
 		return fmt.Errorf("merge pull request (%s): %w", method, err)
 	}

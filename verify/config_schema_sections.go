@@ -10,6 +10,7 @@ func lintSchema() map[string]any {
 	return object(
 		"Settings for `gavel lint`.",
 		map[string]any{
+			"runtime": runtimeSchema(),
 			"fix": promptSpecSchema(prompts.LintFix,
 				"AI spec for repairing lint violations from `gavel lint --ai-fix` and the `gavel commit` lint gate. "+
 					"This is independent of commit.message because fixing source requires an editing-capable agent."),
@@ -36,6 +37,8 @@ func lintSchema() map[string]any {
 				object(
 					"Override for one linter.",
 					map[string]any{
+						"runtime": runtimeSchema(),
+						"args":    stringArray("Native linter arguments. Nonempty lists replace inherited arguments."),
 						"enabled": boolProp(
 							"Force the linter on (true) or off (false). Omit to keep the linter's built-in " +
 								"default."),
@@ -238,6 +241,11 @@ func testSchema() map[string]any {
 	return object(
 		"Settings for `gavel test`.",
 		map[string]any{
+			"runtime": runtimeSchema(),
+			"frameworks": mapObject("Per-framework settings: go, ginkgo, jest, vitest, playwright, or fixture.", object("Runtime and native arguments for one test type.", map[string]any{
+				"runtime": runtimeSchema(),
+				"args":    stringArray("Native runner arguments. Nonempty lists replace inherited arguments. Fixture arguments are passed to exec steps."),
+			})),
 			"outlineSummary": promptSpecSchema(prompts.TestOutlineSummary,
 				"AI spec for the per-test summary prompt (`gavel test outline --ai-summary`). Variables: "+
 					"{{ids}} (the test ids), {{file}}, {{source}}. The output schema (tests[]) is fixed."),

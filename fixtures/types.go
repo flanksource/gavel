@@ -1,6 +1,8 @@
 package fixtures
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -16,6 +18,7 @@ import (
 	"github.com/flanksource/clicky/task"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/fixtures/record"
+	"github.com/flanksource/gavel/processruntime"
 	"github.com/flanksource/gomplate/v3"
 )
 
@@ -40,9 +43,14 @@ type FixtureTest struct {
 
 	// RunnerStep, when set, makes this a `yaml test` / `yaml lint` fence: the raw
 	// YAML body is unmarshalled onto testrunner.RunOptions / lint.Options and the
-	// engine is run. Dispatched by the runner via the TestStepRunner /
-	// LintStepRunner hooks (implemented in fixtures/types to avoid an import cycle).
+	// engine is run. Dispatched to the `test` / `lint` kind (registered by
+	// fixtures/types, which can import the engines without a cycle).
 	RunnerStep *RunnerStepSpec `json:"runner_step,omitempty"`
+
+	// Step is the typed step of a YAML/JSON fixture document: its kind, envelope
+	// (id, cel, export, wait, retry, …) and kind-specific config. Markdown nodes
+	// leave it nil; their kind is derived by KindName.
+	Step *StepSpec `json:"step,omitempty"`
 
 	// Per-test overrides for skip conditions (override file-level FrontMatter values)
 	TestOS   string `json:"test_os,omitempty"`
@@ -118,10 +126,39 @@ func (fixture FixtureTest) ExecBase() ExecFixtureBase {
 }
 
 // IsAIStep reports whether this fixture runs an AI verification prompt instead of
-// a shell/query step. AI steps are dispatched by the runner before the type
-// registry (they are not a registered FixtureType).
+// a shell/query step.
 func (fixture FixtureTest) IsAIStep() bool {
 	return fixture.AIStep != nil
+}
+
+// KindName is the registered Kind this fixture dispatches to: a YAML/JSON
+// step's declared kind, or the kind a markdown node lowers to — `ai` for an AI
+// step, `test`/`lint` for a runner fence, `query` for a query row, `exec` for
+// anything with a command. Empty when the node declares nothing runnable.
+func (fixture FixtureTest) KindName() string {
+	switch {
+	case fixture.Step != nil:
+		return fixture.Step.Kind
+	case fixture.IsAIStep():
+		return "ai"
+	case fixture.RunnerStep != nil:
+		return fixture.RunnerStep.Kind
+	case fixture.Query != "":
+		return "query"
+	case !fixture.IsEmpty():
+		return "exec"
+	default:
+		return ""
+	}
+}
+
+// StepSpec is the step envelope this fixture runs under: the YAML/JSON step
+// itself, or a bare `{kind}` envelope for a markdown node.
+func (fixture FixtureTest) StepSpec() StepSpec {
+	if fixture.Step != nil {
+		return *fixture.Step
+	}
+	return StepSpec{Kind: fixture.KindName()}
 }
 
 // RunnerStepKind identifies which engine a RunnerStep drives.
@@ -159,7 +196,7 @@ func (fixture FixtureTest) Pretty() api.Text {
 }
 
 // ShouldSkip checks per-test overrides first, then falls back to file-level FrontMatter.
-func (fixture FixtureTest) ShouldSkip() string {
+func (fixture FixtureTest) ShouldSkip(opts RunOptions) (string, error) {
 	os := fixture.TestOS
 	if os == "" {
 		os = fixture.OS
@@ -174,7 +211,7 @@ func (fixture FixtureTest) ShouldSkip() string {
 	}
 
 	fm := FrontMatter{OS: os, Arch: arch, Skip: skip}
-	return fm.ShouldSkip()
+	return fm.ShouldSkip(opts)
 }
 
 type ExecFixtureBase struct {
@@ -474,30 +511,41 @@ func (f *FrontMatter) CleanMetadata() {
 
 // ShouldSkip returns a non-empty reason string if the fixture should be skipped
 // based on os, arch, or skip command constraints.
-func (f *FrontMatter) ShouldSkip() string {
+func (f *FrontMatter) ShouldSkip(opts RunOptions) (string, error) {
 	if f.OS != "" {
 		if strings.HasPrefix(f.OS, "!") {
 			if runtime.GOOS == f.OS[1:] {
-				return fmt.Sprintf("os %s excluded", runtime.GOOS)
+				return fmt.Sprintf("os %s excluded", runtime.GOOS), nil
 			}
 		} else if runtime.GOOS != f.OS {
-			return fmt.Sprintf("requires os %s, got %s", f.OS, runtime.GOOS)
+			return fmt.Sprintf("requires os %s, got %s", f.OS, runtime.GOOS), nil
 		}
 	}
 
 	if f.Arch != "" {
 		if runtime.GOARCH != f.Arch {
-			return fmt.Sprintf("requires arch %s, got %s", f.Arch, runtime.GOARCH)
+			return fmt.Sprintf("requires arch %s, got %s", f.Arch, runtime.GOARCH), nil
 		}
 	}
 
 	if f.Skip != "" {
-		if err := exec.Command("bash", "-c", f.Skip).Run(); err == nil {
-			return fmt.Sprintf("skip command returned true: %s", f.Skip)
+		ctx := opts.Context
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		command := processruntime.NewCommand(ctx, opts.ProcessRuntime, "bash", "-c", f.Skip)
+		command.Dir = opts.WorkDir
+		err := command.Run()
+		if err == nil {
+			return fmt.Sprintf("skip command returned true: %s", f.Skip), nil
+		}
+		var exit *exec.ExitError
+		if !errors.As(err, &exit) {
+			return "", fmt.Errorf("fixture skip command: %w", err)
 		}
 	}
 
-	return ""
+	return "", nil
 }
 
 // TODO: Register custom renderer for status icons when clicky supports it

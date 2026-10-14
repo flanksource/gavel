@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"html/template"
@@ -27,6 +28,7 @@ import (
 	"github.com/flanksource/gavel/github/cache"
 	prcreate "github.com/flanksource/gavel/pr/create"
 	"github.com/flanksource/gavel/pr/model"
+	promptlibrary "github.com/flanksource/gavel/prompts/library"
 	"github.com/flanksource/gavel/prwatch"
 	testui "github.com/flanksource/gavel/testrunner/ui"
 )
@@ -156,6 +158,10 @@ const orgsCacheTTL = 5 * time.Minute
 // the user's rate-limit budget with self-checks".
 const authProbeInterval = 5 * time.Minute
 
+// noTokenMessage is the dashboard's error when the poller cannot fetch because
+// no GitHub token is configured; it names the fix rather than the env lookup.
+const noTokenMessage = "GitHub token not configured: set GITHUB_TOKEN or GH_TOKEN, or run `gavel system install` to persist one"
+
 type snapshot struct {
 	PRs         github.PRSearchResults `json:"prs"`
 	FetchedAt   time.Time              `json:"fetchedAt"`
@@ -163,7 +169,11 @@ type snapshot struct {
 	Incremental bool                   `json:"incremental"`
 	Paused      bool                   `json:"paused"`
 	Error       string                 `json:"error,omitempty"`
-	Config      SearchConfig           `json:"config"`
+	// ErrorKind classifies Error when the UI should treat it as a known state
+	// rather than a failure; "no-token" (github.AuthStateNoToken) means the
+	// poller cannot run until a GitHub token is configured.
+	ErrorKind github.AuthState `json:"errorKind,omitempty"`
+	Config    SearchConfig     `json:"config"`
 	// Viewer is the authenticated GitHub login, surfaced so the UI can resolve
 	// the @me author filter client-side. Empty until the auth probe completes.
 	Viewer string `json:"viewer,omitempty"`
@@ -382,7 +392,23 @@ func (s *Server) SetShowClosed(show bool) {
 	}
 }
 
-func (s *Server) SetResults(prs github.PRSearchResults, incremental bool) {
+// SetResults publishes the poller's results and persists them to the PR index.
+// The dashboard is updated first, so a database failure costs the index, not the
+// live list; the failure is still returned for the poller to surface. A disabled
+// database is a no-op, as for every other cache write.
+func (s *Server) SetResults(prs github.PRSearchResults, incremental bool) error {
+	s.publishResults(prs)
+	rows := make([]cache.PullRequest, len(prs))
+	for i, pr := range prs {
+		rows[i] = prIndexRow(pr)
+	}
+	if err := prIndexStore().UpsertPRs(rows); err != nil {
+		return fmt.Errorf("persist PR index: %w", err)
+	}
+	return nil
+}
+
+func (s *Server) publishResults(prs github.PRSearchResults) {
 	s.mu.Lock()
 	s.prs = prs
 	s.fetchedAt = time.Now()
@@ -470,6 +496,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/prs/closed", s.handleClosed)
 	mux.HandleFunc("/api/prs/pause", s.handlePause)
 	mux.HandleFunc("/api/prs/detail", s.handleDetail)
+	mux.HandleFunc("GET /api/prs/linked", s.handleLinkedPR)
+	mux.HandleFunc("GET /api/prs/todos", s.handlePRTodos)
+	mux.HandleFunc("GET /api/prs/search", s.handlePRSearch)
 	mux.HandleFunc("GET /api/prs/commits/diff", s.handlePRCommitDiff)
 	mux.HandleFunc("GET /api/prs/files/diff", s.handlePRFileDiff)
 	mux.HandleFunc("POST /api/prs/merge", s.handlePRMerge)
@@ -495,6 +524,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/todos/attachments/{id}", s.handleTodoAttachment)
 	mux.HandleFunc("/api/todos/item", s.handleTodoItem)
 	mux.HandleFunc("/api/todos/links", s.handleTodoLinks)
+	mux.HandleFunc("/api/todos/pr-links", s.handleTodoPRLinks)
 	mux.HandleFunc("/api/todos/labels", s.handleTodoLabels)
 	mux.HandleFunc("/api/todos/run", s.handleTodoRun)
 	mux.HandleFunc("GET /api/todos/run/context", s.handleTodoRunContext)
@@ -507,6 +537,9 @@ func (s *Server) Handler() http.Handler {
 	// A run's transcript is Captain's to read and follow: its handler resolves
 	// the session through the pool Gavel shares with Captain's CLI registry.
 	mux.Handle("/api/captain/sessions/", http.StripPrefix("/api/captain/sessions", captaincli.SessionHandler()))
+	// Prompt runs started through POST /api/v1/prompt/run are followed, stopped
+	// and messaged here; their transcript is the session above.
+	mux.Handle("/api/captain/prompt/runs/", http.StripPrefix("/api/captain/prompt/runs", captaincli.PromptRunHandler()))
 	mux.HandleFunc("GET /api/sessions", s.handleSessions)
 	mux.HandleFunc("/api/todos/session/stats", s.handleTodoSessionStats)
 	mux.HandleFunc("GET /api/todos/session/detail", s.handleTodoSessionDetail)
@@ -596,7 +629,10 @@ func (s *Server) Handler() http.Handler {
 	// A browser's direct EventSource on a stream route is refused (a stale page
 	// would starve the tab's connections); hub subs pass through by context.
 	hub := sse.NewHub(sse.HubOptions{Build: s.uiBuild()})
-	root := hub.Guard(rpchttp.TimingMiddleware(mux))
+	// gavel's own prompts (prompts/library) resolve by bare name for every
+	// Captain prompt operation, alongside Captain's configured sources.
+	prompts := captaincli.PromptSources{FS: []captaincli.PromptFS{{Label: promptlibrary.Label, FS: promptlibrary.FS}}}
+	root := hub.Guard(rpchttp.TimingMiddleware(captaincli.PromptSourcesMiddleware(mux, prompts)))
 	hub.Register(mux, root)
 	return root
 }
@@ -751,19 +787,30 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request, req routeR
 // NOT compute the unread map — that requires a database round-trip and is
 // populated by withUnread() outside the lock.
 func (s *Server) snapshotLocked() snapshot {
+	// The client contract is arrays, never null: before the first successful
+	// fetch (or when none can happen, e.g. no token) the lists are empty.
+	prs, config := s.prs, s.config
+	if prs == nil {
+		prs = github.PRSearchResults{}
+	}
+	if config.Repos == nil {
+		config.Repos = []string{}
+	}
 	snap := snapshot{
-		PRs:           s.prs,
+		PRs:           prs,
 		FetchedAt:     s.fetchedAt,
 		NextFetchIn:   int(s.interval.Seconds()),
 		Paused:        s.paused,
-		Config:        s.config,
+		Config:        config,
 		Viewer:        s.auth.Login,
 		BotsAvailable: len(s.knownBots) > 0,
 		IncludeBots:   s.includeBots,
 		ShowClosed:    s.showClosed,
 		RateLimit:     s.rateLimit,
 	}
-	if s.err != nil {
+	if errors.Is(s.err, github.ErrNoToken) {
+		snap.Error, snap.ErrorKind = noTokenMessage, github.AuthStateNoToken
+	} else if s.err != nil {
 		snap.Error = s.err.Error()
 	}
 	if len(s.gavelCache) > 0 {

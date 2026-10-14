@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"sync"
 
+	captaincli "github.com/flanksource/captain/pkg/cli"
 	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/route"
@@ -23,6 +24,7 @@ func entityCommandRoot() (*cobra.Command, error) {
 		return nil, fmt.Errorf("register the todos entity: %w", err)
 	}
 	registerProjectEntity()
+	captaincli.RegisterPromptEntity()
 	root := &cobra.Command{Use: "gavel"}
 	clicky.GenerateCLI(root)
 	return root, nil

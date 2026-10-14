@@ -98,6 +98,7 @@ type preparedStep struct {
 	warnings   []string
 	// verifyTarget is the commit a verify step checks; nil for any other step.
 	verifyTarget *types.VerifyTarget
+	pr           *prExecution
 }
 
 // RunStep runs one step of the lifecycle for a todo: the prompt rendered, the
@@ -232,6 +233,11 @@ func (h *Host) prepare(ctx context.Context, todo *types.TODO, step Step, lc Cont
 	if err := h.finalizeVerification(ctx, todo, lc, class, &spec); err != nil {
 		return nil, fmt.Errorf("step %s: %w", step.Name, err)
 	}
+	if class != types.ModePlan {
+		if err := requirePRFixture(todo, &spec); err != nil {
+			return nil, err
+		}
+	}
 	if spec.Workflow != nil && spec.Workflow.Verify != nil && spec.Workflow.Verify.Fixture != fixture {
 		resolved.Resolved.Provenance = recordRuntimeFields(resolved.Resolved.Provenance, runtimeFields{
 			Name: "lifecycle verification", Paths: []string{"/workflow/verify/fixture"},
@@ -256,7 +262,14 @@ func (h *Host) prepare(ctx context.Context, todo *types.TODO, step Step, lc Cont
 		batch: opts.Batch,
 	}
 	prepared.agent, _ = claude.ResolveAgent(spec.Name)
+	prepared.pr, err = h.resolvePR(ctx, todo, class, workDir)
+	if err != nil {
+		return nil, err
+	}
 	if opts.ReuseBranch {
+		if prepared.pr != nil {
+			return nil, fmt.Errorf("linked PR runs start from the current source head; --reuse-branch is not supported")
+		}
 		if err := h.applyReusedBranch(ctx, todo, step, prepared); err != nil {
 			return nil, err
 		}
@@ -286,10 +299,16 @@ func (h *Host) prepare(ctx context.Context, todo *types.TODO, step Step, lc Cont
 			Name: "lifecycle runtime", Paths: []string{"/setup/cwd"},
 		})
 	}
-	if class == types.ModeVerify {
+	if class == types.ModeVerify && prepared.pr == nil {
 		if err := h.applyVerifyTarget(ctx, todo, prepared); err != nil {
 			return nil, fmt.Errorf("step %s: %w", step.Name, err)
 		}
+	}
+	if prepared.pr != nil {
+		if err := prepared.pr.configure(prepared); err != nil {
+			return nil, err
+		}
+		prepared.provenance = recordRuntimeFields(prepared.provenance, runtimeFields{Name: "linked PR execution", Paths: []string{"/setup", "/workflow", "/prompt/user", "/prompt/schemaJSON"}, Replace: true})
 	}
 	return prepared, nil
 }

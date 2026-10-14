@@ -14,25 +14,14 @@ import (
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/fixtures/record"
+	"github.com/flanksource/gavel/processruntime"
 	"github.com/flanksource/gomplate/v3"
 	"github.com/flanksource/repomap"
 )
 
-// ExecFixture implements FixtureType for command execution tests
+// ExecFixture runs a command fixture: a markdown fence or table row, or a
+// YAML/JSON `kind: exec` step once its config is applied (see execKind).
 type ExecFixture struct{}
-
-// ValidateFixture implements fixtures.FixtureType.
-func (e *ExecFixture) ValidateFixture(fixture fixtures.FixtureTest) error {
-	panic("unimplemented")
-}
-
-// ensure ExecFixture implements FixtureType
-var _ fixtures.FixtureType = (*ExecFixture)(nil)
-
-// Name returns the type identifier
-func (e *ExecFixture) Name() string {
-	return "exec"
-}
 
 // Run executes the command test with gomplate template support
 func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opts fixtures.RunOptions) fixtures.FixtureResult {
@@ -109,16 +98,25 @@ func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opt
 		return result.Errorf(err, "failed to template exec base")
 	}
 	exec.CWD = templatedCWD
+	exec.Args = append(exec.Args, opts.Args...)
 
 	result.CWD = workDir
 
 	if exec.Env == nil {
 		exec.Env = make(map[string]any)
 	}
-	// Precedence, highest first: the fixture's own `env:` > the setup's
-	// environment > the auto-injected roots > whatever the process already
-	// had. Both clicky and os/exec start the child from os.Environ(), so a
-	// setup's environment is additive and overriding, never hermetic.
+	// Precedence, highest first: the fixture's own `env:` > variables earlier
+	// steps exported into the fixture Env > the setup's environment > the
+	// auto-injected roots > whatever the process already had. Both clicky and
+	// os/exec start the child from os.Environ(), so the rest of the fixture Env
+	// (process, setup, front matter) already reaches it.
+	if opts.Scope != nil {
+		for name := range opts.Scope.Env.Exported() {
+			if _, ok := exec.Env[name]; !ok {
+				exec.Env[name], _ = opts.Scope.Env.Get(name)
+			}
+		}
+	}
 	if opts.Setup != nil {
 		for k, v := range opts.Setup.Env {
 			if _, ok := exec.Env[k]; !ok {
@@ -184,9 +182,12 @@ func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opt
 	var p *clickyExec.ExecResult
 	var capture *fixtures.Capture
 	if exec.Terminal == "pty" || ansi != nil {
-		p, capture = runWithPTY(ctx, exec, workDir, ansi)
+		p, capture = runWithPTY(ctx, exec, workDir, ansi, opts.ProcessRuntime)
 	} else {
-		process := clickyExec.NewExec(exec.Exec, exec.Args...).WithCwd(workDir)
+		process := clickyExec.NewExec(exec.Exec, exec.Args...).WithCwd(workDir).WithProcessGroup()
+		if err := opts.ProcessRuntime.Apply(process); err != nil {
+			return result.Errorf(err, "fixture runtime")
+		}
 		if len(exec.Env) > 0 {
 			env := make(map[string]string, len(exec.Env))
 			for key, value := range exec.Env {
@@ -308,13 +309,14 @@ func processLaunchError(p *clickyExec.ExecResult) error {
 // run is being recorded, which adds settled-screen tracking on top; without it
 // the capture is only the output stream, which costs no more than the plain
 // io.Copy this replaced.
-func runWithPTY(ctx context.Context, execBase fixtures.ExecFixtureBase, workDir string, ansi *record.ANSIOptions) (*clickyExec.ExecResult, *fixtures.Capture) {
+func runWithPTY(ctx context.Context, execBase fixtures.ExecFixtureBase, workDir string, ansi *record.ANSIOptions, runtime processruntime.Options) (*clickyExec.ExecResult, *fixtures.Capture) {
 	// Invoke the configured executable directly so shells like bash/sh don't
 	// get double-wrapped (`bash -c "bash -c '<script>'"` mis-parses: the
 	// outer shell treats the inner `bash` as the script and the rest as
 	// positional args — the command never runs and we get the target
 	// program's help banner instead).
 	opts := fixtures.CaptureOptions{
+		Runtime: runtime,
 		Context: ctx,
 		Command: append([]string{execBase.Exec}, execBase.Args...),
 		Dir:     workDir,
@@ -412,16 +414,6 @@ func templateString(value string, data map[string]any) (string, error) {
 	return gomplate.RunTemplate(data, gomplate.Template{Template: value})
 }
 
-// GetRequiredFields returns required fields
-func (e *ExecFixture) GetRequiredFields() []string {
-	return []string{"CLI or CLIArgs"}
-}
-
-// GetOptionalFields returns optional fields
-func (e *ExecFixture) GetOptionalFields() []string {
-	return []string{"CWD", "CEL", "Expected.Output", "Expected.Error", "Expected.exitCode", "env"}
-}
-
 func findGoModRoot(path string) string {
 	dir := path
 	if info, err := os.Stat(path); err == nil && !info.IsDir() {
@@ -440,9 +432,4 @@ func findGoModRoot(path string) string {
 		}
 		dir = parent
 	}
-}
-
-func init() {
-	// Register the exec fixture type
-	_ = fixtures.Register(&ExecFixture{})
 }

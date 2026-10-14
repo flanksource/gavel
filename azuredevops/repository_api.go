@@ -120,7 +120,12 @@ func (c *Client) prInfo(pr pullRequest) (*model.PRInfo, error) {
 	if !ok {
 		return nil, fmt.Errorf("unexpected Azure PR state %q", pr.Status)
 	}
+	source, err := c.sourceRepository(pr)
+	if err != nil {
+		return nil, err
+	}
 	return &model.PRInfo{Number: pr.ID, Provider: "azuredevops", Title: pr.Title, Body: pr.Description, State: state, IsDraft: pr.Draft,
-		HeadRefName: strings.TrimPrefix(pr.Source, "refs/heads/"), BaseRefName: strings.TrimPrefix(pr.Target, "refs/heads/"), HeadRefOID: pr.SourceCommit.ID, BaseRefOID: pr.TargetCommit.ID,
+		HeadRepositoryURL: (Repository{Organization: c.repo.Organization, Project: source.Project.Name, Name: source.Name}).URL(),
+		HeadRefName:       strings.TrimPrefix(pr.Source, "refs/heads/"), BaseRefName: strings.TrimPrefix(pr.Target, "refs/heads/"), HeadRefOID: pr.SourceCommit.ID, BaseRefOID: pr.TargetCommit.ID,
 		Author: model.PRAuthor{Login: pr.CreatedBy.Login, Name: pr.CreatedBy.Name, AvatarURL: pr.CreatedBy.Avatar}, URL: fmt.Sprintf("%s/pullrequest/%d", c.repo.URL(), pr.ID)}, nil
 }

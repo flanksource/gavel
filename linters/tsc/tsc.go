@@ -5,10 +5,6 @@
 // that uses the TypeScript compiler API to emit diagnostics as JSON. The
 // wrapper resolves the `typescript` package from the project's own
 // node_modules so the user's pinned compiler version is used.
-//
-// Config.Args and ExtraArgs are ignored: tsc's behavior is driven by the
-// project's tsconfig.json. Override the tsconfig by editing it, not by
-// passing flags.
 package tsc
 
 import (
@@ -103,15 +99,13 @@ func (t *TSC) ValidateConfig(config *models.LinterConfig) error {
 	return nil
 }
 
-// resolveScript writes the embedded wrapper into <WorkDir>/.tmp/ keyed by a
-// content hash so repeated runs reuse the same file. Returns the absolute path.
+// resolveScript writes the embedded wrapper into gavel's scratch dir (outside
+// WorkDir, so the checked tree stays clean) keyed by a content hash so repeated
+// runs reuse the same file. Returns the absolute path.
 func (t *TSC) resolveScript() (string, error) {
-	if t.WorkDir == "" {
-		return "", fmt.Errorf("tsc: WorkDir is empty")
-	}
-	dir := filepath.Join(t.WorkDir, ".tmp")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", fmt.Errorf("create .tmp dir: %w", err)
+	dir, err := linters.ScratchDir(t.WorkDir, t.Name())
+	if err != nil {
+		return "", err
 	}
 	name := fmt.Sprintf("gavel-tsc-json-%s.cjs", scriptHash(tscJSONScript))
 	path := filepath.Join(dir, name)
@@ -134,17 +128,18 @@ func (t *TSC) DryRunCommand() (string, []string) {
 	if err != nil {
 		return nodePath, []string{"<gavel-tsc-wrapper>"}
 	}
-	return nodePath, []string{path}
+	return nodePath, append([]string{path}, t.nativeArgs()...)
+}
+
+func (t *TSC) nativeArgs() []string {
+	var args []string
+	if t.Config != nil {
+		args = append(args, t.Config.Args...)
+	}
+	return append(args, t.ExtraArgs...)
 }
 
 func (t *TSC) Run(ctx commonsContext.Context, _ *clicky.Task) ([]models.Violation, error) {
-	if t.Config != nil && len(t.Config.Args) > 0 {
-		logger.Debugf("tsc: Config.Args is ignored; configure via tsconfig.json")
-	}
-	if len(t.ExtraArgs) > 0 {
-		logger.Debugf("tsc: ExtraArgs is ignored; configure via tsconfig.json")
-	}
-
 	scriptPath, err := t.resolveScript()
 	if err != nil {
 		return nil, err
@@ -155,14 +150,14 @@ func (t *TSC) Run(ctx commonsContext.Context, _ *clicky.Task) ([]models.Violatio
 		return nil, fmt.Errorf("tsc wrapper failed to launch (is node installed?): %w", err)
 	}
 
-	cmd := exec.CommandContext(ctx, nodePath, scriptPath)
-	cmd.Dir = t.WorkDir
+	args := append([]string{scriptPath}, t.nativeArgs()...)
+	cmd := t.CommandContext(ctx, t.Name(), nodePath, args...)
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = t.WrapWriter(&stdout)
 	cmd.Stderr = t.WrapWriter(&stderr)
 
-	logger.Infof("Executing: %s", formatCommand(nodePath, []string{scriptPath}, t.WorkDir))
+	logger.Infof("Executing: %s", formatCommand(nodePath, args, t.WorkDir))
 
 	runErr := cmd.Run()
 	if runErr != nil {

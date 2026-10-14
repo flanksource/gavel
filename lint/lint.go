@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"time"
 
 	"github.com/flanksource/clicky"
 	clickytask "github.com/flanksource/clicky/task"
@@ -13,7 +12,6 @@ import (
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/baseline"
 	"github.com/flanksource/gavel/linters"
-	"github.com/flanksource/gavel/models"
 	"github.com/flanksource/gavel/testrunner"
 	testui "github.com/flanksource/gavel/testrunner/ui"
 	"github.com/flanksource/gavel/utils"
@@ -91,13 +89,16 @@ func NarrowToFailed(opts Options) (Options, error) {
 // Execute runs all applicable linters and returns their results. Reusable by
 // both the lint command and the test --lint flag.
 func Execute(opts Options) ([]*linters.LinterResult, error) {
+	if err := opts.captureConfigDir(); err != nil {
+		return nil, err
+	}
 	if opts.WorkDir == "" {
 		opts.WorkDir, _ = os.Getwd()
 	}
 
-	timeout, err := time.ParseDuration(opts.Timeout)
+	timeout, err := parseTimeout(opts.Timeout)
 	if err != nil {
-		timeout = models.DefaultLinterTimeout
+		return nil, err
 	}
 
 	registry := buildLinterRegistry(opts.WorkDir)
@@ -147,7 +148,10 @@ func Execute(opts Options) ([]*linters.LinterResult, error) {
 				logger.V(2).Infof("Skipping %s at %s: covered by scheduled ancestor", linter.Name(), inv.projectRoot)
 				continue
 			}
-			projectCfg, _ := verify.LoadGavelConfig(inv.projectRoot)
+			projectCfg, err := verify.LoadGavelConfig(verify.RuntimeConfigDirectory(inv.projectRoot, opts.ConfigDir))
+			if err != nil {
+				return nil, err
+			}
 			if ok, reason := shouldSelectLinter(inv.projectRoot, projectCfg, linter, explicit); !ok {
 				logger.V(2).Infof("Skipping %s at %s: %s", linter.Name(), inv.projectRoot, reason)
 				if linter.Name() == "betterleaks" && !anyScheduled {
@@ -173,15 +177,15 @@ func Execute(opts Options) ([]*linters.LinterResult, error) {
 			}
 
 			runOpts := linters.RunOptions{
-				WorkDir:    inv.projectRoot,
+				WorkDir: inv.projectRoot, ConfigDir: opts.ConfigDir,
 				Executable: executable,
 				Files:      inv.files,
 				Ignores:    opts.Ignore,
 				Fix:        opts.Fix,
 				NoCache:    opts.NoCache,
-				Timeout:    timeout,
-				ForceJSON:  true,
-				OutputTee:  opts.OutputTee,
+				Timeout:    timeout, Runtime: opts.Runtime,
+				ForceJSON: true,
+				OutputTee: opts.OutputTee,
 			}
 			if linter.Name() == "golangci-lint" && len(golangciExtraArgs) > 0 {
 				runOpts.ExtraArgs = append(runOpts.ExtraArgs, golangciExtraArgs...)
@@ -315,6 +319,9 @@ func GroupFilesByGitRoot(opts Options) []Group {
 // executing anything. It loops over every git root discovered from opts.Files
 // so multi-repo inputs each print their own plan.
 func DryRun(opts Options) error {
+	if err := opts.captureConfigDir(); err != nil {
+		return err
+	}
 	for _, g := range GroupFilesByGitRoot(opts) {
 		groupOpts := opts
 		groupOpts.WorkDir = g.GitRoot
@@ -337,9 +344,9 @@ func dryRunGroup(opts Options) error {
 	if opts.WorkDir == "" {
 		opts.WorkDir, _ = os.Getwd()
 	}
-	timeout, err := time.ParseDuration(opts.Timeout)
+	timeout, err := parseTimeout(opts.Timeout)
 	if err != nil {
-		timeout = models.DefaultLinterTimeout
+		return err
 	}
 
 	registry := buildLinterRegistry(opts.WorkDir)
@@ -373,7 +380,10 @@ func dryRunGroup(opts Options) error {
 				testrunner.PrintDryRunSkipped("lint", linter.Name()+" @ "+inv.projectRoot, "covered by scheduled ancestor")
 				continue
 			}
-			projectCfg, _ := verify.LoadGavelConfig(inv.projectRoot)
+			projectCfg, err := verify.LoadGavelConfig(verify.RuntimeConfigDirectory(inv.projectRoot, opts.ConfigDir))
+			if err != nil {
+				return err
+			}
 			if ok, reason := shouldSelectLinter(inv.projectRoot, projectCfg, linter, explicit); !ok {
 				testrunner.PrintDryRunSkipped("lint", linter.Name()+" @ "+inv.projectRoot, reason)
 				continue
@@ -389,14 +399,14 @@ func dryRunGroup(opts Options) error {
 			}
 
 			runOpts := linters.RunOptions{
-				WorkDir:    inv.projectRoot,
+				WorkDir: inv.projectRoot, ConfigDir: opts.ConfigDir,
 				Executable: executable,
 				Files:      inv.files,
 				Ignores:    opts.Ignore,
 				Fix:        opts.Fix,
 				NoCache:    opts.NoCache,
-				Timeout:    timeout,
-				ForceJSON:  true,
+				Timeout:    timeout, Runtime: opts.Runtime,
+				ForceJSON: true,
 			}
 			if linter.Name() == "golangci-lint" {
 				if ref := lintBaseRef(opts); ref != "" {
@@ -406,8 +416,23 @@ func dryRunGroup(opts Options) error {
 					runOpts.ExtraArgs = append(runOpts.ExtraArgs, "--new-from-rev=<merge-base HEAD "+ref+">")
 				}
 			}
-			cmdName, args := linters.PrepareCommand(linter, runOpts)
+			cmdName, args, err := linters.PrepareCommand(linter, runOpts)
+			if err != nil {
+				return err
+			}
 			testrunner.PrintDryRunCommand("lint", linter.Name(), cmdName, args, inv.projectRoot)
+			caller := opts.Runtime
+			if timeout > 0 {
+				value := timeout.String()
+				caller.Timeout = &value
+			}
+			runtime, _, err := projectCfg.RuntimeFor("lint", linter.Name(), caller)
+			if err != nil {
+				return err
+			}
+			if summary := runtime.Summary().String(); summary != "" {
+				logger.Infof("  runtime: %s", summary)
+			}
 			scheduledRoots = append(scheduledRoots, inv.projectRoot)
 		}
 	}

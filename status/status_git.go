@@ -473,6 +473,15 @@ func isLikelyBinary(r io.Reader) bool {
 	return bytes.IndexByte(buf[:n], 0) >= 0
 }
 
+// EnrichRepomap classifies each file's language and scopes with repomap, for
+// files gathered without it (e.g. a stored status scan). Paths are relative to
+// workDir; a file repomap cannot classify carries its RepomapError instead.
+func EnrichRepomap(workDir string, files []FileStatus) {
+	for i := range files {
+		enrichWithRepomap(&files[i], workDir)
+	}
+}
+
 func enrichWithRepomap(fs *FileStatus, workDir string) {
 	// Untracked files usually aren't in the arch index, but repomap can still
 	// classify by extension/path — try anyway, ignore empty results.

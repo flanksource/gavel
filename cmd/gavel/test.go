@@ -21,7 +21,7 @@ import (
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/baseline"
 	"github.com/flanksource/gavel/fixtures"
-	_ "github.com/flanksource/gavel/fixtures/types"
+	_ "github.com/flanksource/gavel/fixtures/kinds/all"
 	"github.com/flanksource/gavel/lint"
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/snapshots"
@@ -109,7 +109,7 @@ func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
 	// before tests run.
 	gavelCfg, cfgErr := verify.LoadGavelConfig(opts.WorkDir)
 	if cfgErr != nil {
-		logger.Warnf("Failed to load .gavel.yaml: %v", cfgErr)
+		return nil, fmt.Errorf("load .gavel.yaml: %w", cfgErr)
 	}
 
 	// Dry-run: print hooks and delegate to testrunner (which has its own
@@ -124,7 +124,7 @@ func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
 		}
 		if opts.Lint {
 			for _, workDir := range lintWorkDirs(opts.WorkDir, opts.StartingPaths) {
-				if err := lint.DryRun(LintOptions{WorkDir: workDir, Timeout: "5m"}); err != nil {
+				if err := lint.DryRun(LintOptions{WorkDir: workDir, Runtime: opts.Runtime, ConfigDir: opts.WorkDir, Timeout: configuredLintTimeout(opts)}); err != nil {
 					return nil, err
 				}
 			}
@@ -203,8 +203,9 @@ func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
 			}
 			if req.Lint {
 				results, err := executeLintRerun(LintOptions{
-					WorkDir:   opts.WorkDir,
-					Timeout:   "5m",
+					WorkDir: opts.WorkDir,
+					Timeout: configuredLintTimeout(opts),
+					Runtime: opts.Runtime, ConfigDir: opts.WorkDir,
 					Context:   rerunCtx,
 					OutputTee: output.StdoutWriter(),
 				}, req)
@@ -264,13 +265,14 @@ func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
 				workDir, _ = os.Getwd()
 			}
 			lintTimeout := opts.LintTimeout
-			if lintTimeout <= 0 {
-				lintTimeout = 5 * time.Minute
+			lintTimeoutValue := ""
+			if lintTimeout > 0 {
+				lintTimeoutValue = lintTimeout.String()
 			}
 			for _, dir := range lintWorkDirs(workDir, opts.StartingPaths) {
 				results, err := lint.Execute(LintOptions{
 					WorkDir: dir,
-					Timeout: lintTimeout.String(),
+					Timeout: lintTimeoutValue, Runtime: opts.Runtime, ConfigDir: opts.WorkDir,
 					Context: opts.Context,
 				})
 				if err != nil {
@@ -885,6 +887,12 @@ func finalizeTestCommandOptions(cmd *cobra.Command, opts testrunner.RunOptions, 
 	if err := applyConfiguredTimeouts(cmd, &opts); err != nil {
 		return opts, false, err
 	}
+	if !cmd.Flags().Changed("test-timeout") {
+		opts.TestTimeout = 0
+	}
+	if !cmd.Flags().Changed("lint-timeout") {
+		opts.LintTimeout = 0
+	}
 	if opts.Failed == failedAutoSentinel && opts.Baseline != "" {
 		opts.Failed = opts.Baseline
 	}
@@ -938,9 +946,9 @@ func bindTestCommandFlags(cmd *cobra.Command, flags *testCommandFlags) {
 		"With --ui --detach, exit the detached UI server after this long with no HTTP requests (default 5m when --detach is set).")
 	cmd.Flags().DurationVar(&flags.Timeout, "timeout", 20*time.Minute,
 		"Global wall-clock deadline for the entire test+lint run. On timeout, diagnostics are captured and every subprocess is killed.")
-	cmd.Flags().DurationVar(&flags.LintTimeout, "lint-timeout", 10*time.Minute,
+	cmd.Flags().DurationVar(&flags.LintTimeout, "lint-timeout", 0,
 		"Per-linter subprocess deadline when --lint is set. Applies to each linter invocation.")
-	cmd.Flags().DurationVar(&flags.TestTimeout, "test-timeout", 10*time.Minute,
+	cmd.Flags().DurationVar(&flags.TestTimeout, "test-timeout", 0,
 		"Per-test-package subprocess deadline. Applies to each go test / ginkgo / vitest invocation.")
 	if failed := cmd.Flags().Lookup("failed"); failed != nil {
 		failed.NoOptDefVal = failedAutoSentinel

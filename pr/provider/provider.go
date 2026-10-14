@@ -23,6 +23,8 @@ type Client interface {
 	OpenPRs(context.Context) ([]model.PRInfo, error)
 	CreatePR(context.Context, model.CreatePRInput) (*model.CreatePRResult, error)
 	Status(context.Context, int, model.StatusOptions) (*model.StatusSnapshot, error)
+	ResolveThread(context.Context, int, string) error
+	MergePR(context.Context, int, model.MergeInput) error
 }
 
 func Resolve(opts Options) (Client, error) {

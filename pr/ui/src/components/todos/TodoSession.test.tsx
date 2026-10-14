@@ -380,22 +380,37 @@ describe('TodoSession', () => {
     expect(fetchMock.mock.calls.map(call => String(call[0]))).toContain('/api/captain/sessions/admission-2');
   });
 
-  it('shows requested then exact resolved spec while a new session is admitted', async () => {
-    stubServer(statsRoute({}));
-    const { client } = renderSession();
-    act(() => client.setQueryData(todoQueryKeys.launch('/repo', 'todo-1'), {
-      status: 'preparing', step: 'plan', requestedSpec: { model: 'gpt-5.5' },
-    }));
-    await waitFor(() => expect(screen.getByText('Preparing session · plan')).toBeTruthy());
-    expect(screen.getByText('Requested spec')).toBeTruthy();
-    expect(screen.getByText(/"model": "gpt-5.5"/)).toBeTruthy();
-    act(() => client.setQueryData(todoQueryKeys.launch('/repo', 'todo-1'), {
-      status: 'resolved', step: 'plan', requestedSpec: { model: 'gpt-5.5' },
-      spec: { model: 'gpt-5.5', effort: 'high' }, specYaml: 'model: gpt-5.5\neffort: high\n',
-    }));
-    await waitFor(() => expect(screen.getByText('Starting session · plan')).toBeTruthy());
-    expect(screen.getByText('Resolved spec')).toBeTruthy();
-    expect(screen.getByText(/effort: high/)).toBeTruthy();
+  it('offers no answer to a question already answered from Captain and says where the turn continues', async () => {
+    const fetchMock = stubServer(url => url.includes('/session/stats') ? Response.json(sessionStats) : undefined);
+    renderSession({ todo: { ...todo, status: 'in_progress', answeredFromCaptain: true } });
+
+    const inspector = await screen.findByTestId('session-inspector');
+    await waitFor(() => expect(fetchMock.mock.calls.map(call => String(call[0]))).toContainEqual(expect.stringContaining('/session/stats')));
+    expect(JSON.parse(inspector.getAttribute('data-pending') ?? '[]')).toEqual([]);
+    expect(screen.getByRole('status').textContent).toContain('Answered from Captain');
+    expect(fetchMock.mock.calls.map(call => String(call[0]))).not.toContain('/api/captain/sessions/admission-2');
+  });
+
+  it('surfaces a failed launch error in the session error details', async () => {
+    stubServer(() => undefined, []);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const launchError = 'admission rejected: model unavailable';
+    client.setQueryData(todoQueryKeys.launch('/repo', 'todo-1'), { status: 'failed', step: 'run', error: launchError });
+    renderSession({ sessionId: undefined, todo: { ...todo, sessionId: undefined } }, client);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show details' }));
+    expect(screen.getByRole('alert').textContent).toContain(`Session launch\n${launchError}`);
+    expect(screen.queryByText('Resolved spec')).toBeNull();
+  });
+
+  it('surfaces an attempt whose outcome could not be persisted in the session error details', async () => {
+    const outcomeError = 'persist TODO attempt: persist Captain plan revision: save Captain plan: plan hook plan-tldr failed';
+    const unpersisted = { ...current, status: 'failed', state: 'succeeded', processActive: false, error: outcomeError, outcomeError };
+    stubServer(statsRoute({ state: 'idle', inProgress: false }), [unpersisted, older]);
+    renderSession();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Show details' }));
+    expect(screen.getByRole('alert').textContent).toContain(`Session outcome\n${outcomeError}`);
   });
 
   it('shows a launch session before a never-run todo has a session ID', async () => {
@@ -404,7 +419,6 @@ describe('TodoSession', () => {
     client.setQueryData(todoQueryKeys.launch('/repo', 'todo-1'), { status: 'preparing', step: 'run', requestedSpec: { model: 'gpt-5.5' } });
     renderSession({ sessionId: undefined, todo: { ...todo, sessionId: undefined } }, client);
 
-    expect(screen.getByText('Preparing session · run')).toBeTruthy();
     const inspector = screen.getByTestId('session-inspector');
     expect(inspector.getAttribute('data-current')).toBe('pending-launch');
     expect(inspector.getAttribute('data-layout')).toBe('default');

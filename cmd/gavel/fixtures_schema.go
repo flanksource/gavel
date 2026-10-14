@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/testrunner/parsers"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -97,12 +98,17 @@ func fixturesSchemaDocument() (map[string]any, error) {
 	})
 	addStepDisplaySchema(testSchema)
 	addStepDisplaySchema(lintSchema)
+	document, err := fixtureDocumentSchema(testSchema, lintSchema)
+	if err != nil {
+		return nil, err
+	}
 
 	return map[string]any{
 		"schemaVersion": 1,
 		"source":        "gavel fixtures --schema",
 		"help":          fixturesSchemaHelpDocument(fixturesCommand),
 		"frontmatter":   fixtureFrontmatterSchema(),
+		"document":      document,
 		"fences": map[string]any{
 			"test": map[string]any{
 				"schema":  testSchema,
@@ -126,6 +132,21 @@ func fixturesSchemaDocument() (map[string]any, error) {
 			},
 		},
 	}, nil
+}
+
+// fixtureDocumentSchema is the YAML/JSON fixture document schema: a step oneOf
+// over every registered kind, with the test and lint steps taking the same
+// option sets as their `yaml test` / `yaml lint` fences.
+func fixtureDocumentSchema(testSchema, lintSchema fixtureJSONSchema) (map[string]any, error) {
+	overrides := map[string]json.RawMessage{}
+	for name, schema := range map[string]fixtureJSONSchema{"test": testSchema, "lint": lintSchema} {
+		raw, err := json.Marshal(schema)
+		if err != nil {
+			return nil, fmt.Errorf("encode %s step schema: %w", name, err)
+		}
+		overrides[name] = raw
+	}
+	return fixtures.DocumentSchema(overrides)
 }
 
 func schemaCommand(name string) (*cobra.Command, error) {

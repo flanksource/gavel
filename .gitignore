@@ -99,3 +99,4 @@ go.work.sum
 .agents/memory
 /gavel-1.0.0.tgz
 /.new
+pr/ui/test-results/

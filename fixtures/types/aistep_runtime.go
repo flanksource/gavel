@@ -8,9 +8,19 @@ import (
 	"github.com/flanksource/gavel/fixtures"
 )
 
-// A serialized grader or an explicit runner spec is authoritative. Authored
-// standalone fixtures receive raw layers so saved defaults see the final model.
+// resolveAIStepSpec resolves the grader runtime of an acceptance-criteria
+// checklist step.
 func resolveAIStepSpec(fixture fixtures.FixtureTest, opts fixtures.RunOptions, schema *checklistResponse) (api.ResolvedSpec, ai.AgentConfig, error) {
+	return resolveAISpec(fixture, opts, "fixture.checklist", api.Prompt{
+		User:   buildChecklistPrompt(fixture, fixtureRepoPath(fixture, opts), checklistItems(fixture), opts.Changed, opts.PreviousResults),
+		Source: "fixtures.ai-step", Schema: schema,
+	})
+}
+
+// resolveAISpec resolves the runtime of an AI step around prompt. A serialized
+// grader or an explicit runner spec is authoritative. Authored standalone
+// fixtures receive raw layers so saved defaults see the final model.
+func resolveAISpec(fixture fixtures.FixtureTest, opts fixtures.RunOptions, layer string, prompt api.Prompt) (api.ResolvedSpec, ai.AgentConfig, error) {
 	var options api.ResolveSpecOptions
 	snapshot := false
 	switch {
@@ -29,10 +39,7 @@ func resolveAIStepSpec(fixture fixtures.FixtureTest, opts fixtures.RunOptions, s
 	}
 	options.Layers = append(options.Layers,
 		api.RequestSpecLayer("fixture.ai", fixture.AI.SpecOverride()),
-		api.RequestSpecLayer("fixture.checklist", api.Spec{Prompt: api.Prompt{
-			User:   buildChecklistPrompt(fixture, fixtureRepoPath(fixture, opts), checklistItems(fixture), opts.Changed, opts.PreviousResults),
-			Source: "fixtures.ai-step", Schema: schema,
-		}}),
+		api.RequestSpecLayer(layer, api.Spec{Prompt: prompt}),
 	)
 	var resolved api.ResolvedSpec
 	var err error

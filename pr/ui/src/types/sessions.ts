@@ -145,6 +145,10 @@ export interface TodoSessionAttempt {
   workspace?: TodoRunWorkspace;
   // How the run's commits were landed; absent until `todos land` records one.
   landing?: TodoRunLanding;
+  // Why gavel could not persist the outcome of a run Captain had finished. The
+  // attempt failed: `status` reads failed and `error` carries this, while
+  // `state` stays the run state Captain filed.
+  outcomeError?: string;
   admissionSessionId: string;
   executionSessionId?: string;
   providerSessionId?: string;

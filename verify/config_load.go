@@ -200,6 +200,9 @@ func parseGavelConfig(path string, data []byte) (GavelConfig, error) {
 	if err := gc.Todos.Validate(); err != nil {
 		return GavelConfig{}, fmt.Errorf("%s: %w", path, err)
 	}
+	if err := gc.validateRuntime(); err != nil {
+		return GavelConfig{}, fmt.Errorf("%s: %w", path, err)
+	}
 	if err := validateConfigSpecLayers(gc, path); err != nil {
 		return GavelConfig{}, err
 	}

@@ -22,6 +22,9 @@ type triageRetirement struct {
 	// Reason leads the comment recorded on Retired. It is unused without a
 	// Survivor to name: a retire's rationale is the verdict's own comment.
 	Reason string
+	// Relation links Retired to Survivor: duplicates for duplicate-of, related_to
+	// for a fold, whose TODOs overlapped rather than repeated each other.
+	Relation types.RelationKind
 }
 
 // resolveTriageRetirements resolves every TODO a verdict closes, plus its
@@ -46,7 +49,7 @@ func resolveTriageRetirements(ctx context.Context, provider Provider, todo *type
 		}
 		// The survivor may be closed: "this duplicates work already finished" is a
 		// normal verdict. Only the TODO being retired has to be open.
-		return []triageRetirement{{Retired: todo, Survivor: survivor, Reason: "Duplicate of"}}, nil
+		return []triageRetirement{{Retired: todo, Survivor: survivor, Reason: "Duplicate of", Relation: types.RelationDuplicates}}, nil
 	default:
 		return nil, nil
 	}
@@ -73,7 +76,7 @@ func resolveFolds(ctx context.Context, provider Provider, todo *types.TODO, env 
 			return nil, fmt.Errorf("triage of %s folds in %s, which is already closed", triageRef(todo), triageRef(folded))
 		}
 		seen[folded.ID] = true
-		out = append(out, triageRetirement{Retired: folded, Survivor: todo, Reason: "Merged into"})
+		out = append(out, triageRetirement{Retired: folded, Survivor: todo, Reason: "Merged into", Relation: types.RelationRelatedTo})
 	}
 	return out, nil
 }
@@ -117,13 +120,13 @@ func applyTriageRetirements(ctx context.Context, provider Provider, retiring []t
 }
 
 // retireInto closes one TODO into its survivor: a comment naming where the work
-// went, a related_to link to it, then the soft delete.
+// went, a link to it (retirement.Relation), then the soft delete.
 //
 // The order is `todos/merge/apply.go` retire()'s, and for the same reason — the
 // comment and the link must land before the delete, so a failed delete leaves a
 // TODO that still says where its work went rather than a silently orphaned one.
-// related_to is the only honest relation: depends_on means "blocked until", which
-// is not what a duplicate is.
+// depends_on is never used: it means "blocked until", which is not what a
+// duplicate or a fold is.
 //
 // A retirement with no survivor is just the delete: there is nowhere to point at,
 // and ApplyTriage has already recorded the rationale that verdict requires.
@@ -150,8 +153,16 @@ func retireInto(ctx context.Context, provider Provider, retirement triageRetirem
 			return fmt.Errorf("triage retired %s into %s but the TODO provider does not support links",
 				triageRef(retired), triageRef(survivor))
 		}
-		if _, err := relationships.Link(ctx, retired, triageRef(survivor), types.RelationRelatedTo); err != nil {
-			return fmt.Errorf("link %s to %s: %w", triageRef(retired), triageRef(survivor), err)
+		// An earlier triage may already have linked the pair (a duplicates link
+		// recorded before this verdict closed one of them); the edge is the same.
+		existing, err := relationships.Links(ctx, retired)
+		if err != nil {
+			return fmt.Errorf("read links of %s: %w", triageRef(retired), err)
+		}
+		if !hasLink(existing, retirement.Relation, survivor.ID) {
+			if _, err := relationships.Link(ctx, retired, triageRef(survivor), retirement.Relation); err != nil {
+				return fmt.Errorf("link %s to %s: %w", triageRef(retired), triageRef(survivor), err)
+			}
 		}
 	}
 	if err := provider.Delete(ctx, retired); err != nil {

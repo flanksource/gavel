@@ -44,13 +44,20 @@ func goPreBuildArgs(pkgs, tags []string) []string {
 // run. It is rendered as a single phase task. A compile failure aborts the run
 // (a broken build would fail every package anyway), so the compiler output is
 // surfaced in the returned error.
-func (o *TestOrchestrator) preBuildGoPackages(pkgs []string) error {
+func (o *TestOrchestrator) preBuildGoPackages(pkgs []string, framework parsers.Framework) error {
 	if len(pkgs) == 0 {
 		return nil
 	}
 
 	name := fmt.Sprintf("Pre-build (compiling %d Go test %s)", len(pkgs), plural(len(pkgs), "package", "packages"))
 	process := exec.NewExec("go", goPreBuildArgs(pkgs, o.Tags)...).WithCwd(o.WorkDir).WithProcessGroup()
+	runtime, _, err := o.runtimeFor(framework)
+	if err != nil {
+		return err
+	}
+	if err := runtime.Apply(process); err != nil {
+		return err
+	}
 	if o.OutputTee != nil {
 		process = process.Stream(o.OutputTee, o.OutputTee)
 	}
@@ -66,7 +73,7 @@ func (o *TestOrchestrator) preBuildGoPackages(pkgs []string) error {
 			defer cancel()
 		}
 	}
-	result, err := runPreBuildProcess(ctx, process, name)
+	result, err := runPreBuildProcess(ctx, process.WithContext(ctx), name)
 	if ctx.Err() != nil {
 		return fmt.Errorf("pre-build: %w", ctx.Err())
 	}

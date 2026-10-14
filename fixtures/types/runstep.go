@@ -16,11 +16,6 @@ import (
 	"github.com/goccy/go-yaml"
 )
 
-func init() {
-	fixtures.TestStepRunner = RunTestStep
-	fixtures.LintStepRunner = RunLintStep
-}
-
 // stepDisplay carries the fixture-tree rendering knobs a runner step supports,
 // read from the same YAML body as the engine options. Failing children are
 // shown by default; passing children only when show-passed is set.
@@ -50,6 +45,8 @@ func RunTestStep(fixture fixtures.FixtureTest, opts fixtures.RunOptions) fixture
 	// A fixture test step is headless: never launch the dashboard or recurse
 	// back into fixture discovery (fixture → test → fixture).
 	ro.UI = false
+	ro.Context = opts.Context
+	ro.Runtime = opts.ProcessRuntime.Merge(ro.Runtime)
 	ro.Fixtures = false
 	ro.OutputTee = nil
 	if ro.WorkDir == "" {
@@ -141,8 +138,12 @@ func RunLintStep(fixture fixtures.FixtureTest, opts fixtures.RunOptions) fixture
 	if len(lo.Files) == 0 {
 		lo.Files = opts.Changed
 	}
-	ctx := context.Background()
+	ctx := opts.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	lo.Context = ctx
+	lo.Runtime = opts.ProcessRuntime.Merge(lo.Runtime)
 
 	results, runErr := lint.Run(ctx, lo)
 
@@ -171,6 +172,9 @@ func RunLintStep(fixture fixtures.FixtureTest, opts fixtures.RunOptions) fixture
 	for _, lr := range results {
 		if lr.Skipped {
 			continue
+		}
+		if !lr.Success {
+			return result.Errorf(fmt.Errorf("%s: %s", lr.Linter, lr.Error), "lint execution failed")
 		}
 		violations += len(lr.Violations)
 	}

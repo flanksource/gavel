@@ -66,7 +66,7 @@ func init() {
 	database.BindDatabaseURLFlag(rootCmd.PersistentFlags())
 	// A fixture's `setup:` resolves `connection://…` references against the
 	// process database. Wired here rather than imported by fixtures, which must
-	// stay free of internal/database — the same hook seam as AIStepRunner.
+	// stay free of internal/database.
 	fixtures.SetupDBProvider = func(ctx context.Context) *gorm.DB {
 		db, err := database.Shared(ctx)
 		if err != nil {
@@ -221,6 +221,18 @@ func gavelMCPFormatIgnoredParams() []string {
 }
 
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == fixtures.WorkerCommand {
+		output := os.NewFile(3, "fixture-worker-protocol")
+		if output == nil {
+			fmt.Fprintln(os.Stderr, "fixture worker protocol descriptor is missing")
+			os.Exit(1)
+		}
+		if err := fixtures.RunWorker(os.Stdin, output); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
 	// os.Exit skips deferred functions, so the hooks have to be drained here
 	// rather than via a defer in execute — otherwise every non-zero exit leaves
 	// hooks unrun and the terminal unrestored.

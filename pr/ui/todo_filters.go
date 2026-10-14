@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"slices"
@@ -80,7 +81,9 @@ func parseTodoUpdatePayload(r *http.Request) (todoUpdatePayload, []todoAttachmen
 			return payload, nil, fmt.Errorf("invalid multipart form: %w", err)
 		}
 		if r.MultipartForm != nil {
-			applyTodoUpdateValues(&payload, r.MultipartForm.Value)
+			if err := applyTodoUpdateValues(&payload, r.MultipartForm.Value); err != nil {
+				return payload, nil, err
+			}
 			stored, err := persistMultipartAttachments(r.MultipartForm)
 			if err != nil {
 				return payload, nil, err
@@ -91,7 +94,9 @@ func parseTodoUpdatePayload(r *http.Request) (todoUpdatePayload, []todoAttachmen
 		if err := r.ParseForm(); err != nil {
 			return payload, nil, fmt.Errorf("invalid form: %w", err)
 		}
-		applyTodoUpdateValues(&payload, r.PostForm)
+		if err := applyTodoUpdateValues(&payload, r.PostForm); err != nil {
+			return payload, nil, err
+		}
 	case strings.HasPrefix(contentType, "application/json"), contentType == "":
 		// A body with no explicit Content-Type is treated as JSON — many clients
 		// (and httptest.NewRequest) omit the header. A bodyless request decodes
@@ -105,10 +110,13 @@ func parseTodoUpdatePayload(r *http.Request) (todoUpdatePayload, []todoAttachmen
 	default:
 		return payload, nil, fmt.Errorf("unsupported content type %q", r.Header.Get("Content-Type"))
 	}
+	if err := applyTodoUpdateValues(&payload, r.URL.Query()); err != nil {
+		return payload, nil, err
+	}
 	return payload, attachments, nil
 }
 
-func applyTodoUpdateValues(payload *todoUpdatePayload, values map[string][]string) {
+func applyTodoUpdateValues(payload *todoUpdatePayload, values map[string][]string) error {
 	assignString := func(target *string, keys ...string) {
 		if value, ok := firstTodoUpdateValue(values, keys...); ok {
 			*target = strings.TrimSpace(value)
@@ -135,6 +143,35 @@ func applyTodoUpdateValues(payload *todoUpdatePayload, values map[string][]strin
 	assignPointer(&payload.Body, false, "body", "description", "text")
 	assignPointer(&payload.Parent, true, "parent")
 	assignString(&payload.Comment, "comment")
+	if raw, exists := firstTodoUpdateValue(values, "pr"); exists {
+		pr, err := todoPRFormValue(raw)
+		if err != nil {
+			return err
+		}
+		payload.PR = pr
+	}
+	if raw, exists := firstTodoUpdateValue(values, "clearPR"); exists {
+		value, err := strconv.ParseBool(raw)
+		if err != nil {
+			return fmt.Errorf("invalid clearPR: %w", err)
+		}
+		payload.ClearPR = value
+	}
+	return nil
+}
+
+func todoPRFormValue(raw string) (*types.PR, error) {
+	if !strings.HasPrefix(strings.TrimSpace(raw), "{") {
+		return types.PRFromURL(raw)
+	}
+	var pr types.PR
+	if err := json.Unmarshal([]byte(raw), &pr); err != nil {
+		return nil, fmt.Errorf("invalid pr: %w", err)
+	}
+	if err := pr.Validate(); err != nil {
+		return nil, err
+	}
+	return &pr, nil
 }
 
 func firstTodoUpdateValue(values map[string][]string, keys ...string) (string, bool) {
@@ -181,6 +218,13 @@ func applyTodoNewValues(payload *todoNewPayload, values map[string][]string, ove
 	assignPriority(&payload.Priority, "priority", "severity")
 	assignStatus(&payload.Status, "status")
 	assignString(&payload.Parent, "parent")
+	if raw := firstTodoNewValue(values, "pr"); raw != "" && (overwrite || payload.PR == nil) {
+		pr, err := todoPRFormValue(raw)
+		if err != nil {
+			return err
+		}
+		payload.PR = pr
+	}
 	if overwrite || len(payload.Labels) == 0 {
 		if labels := todoNewLabels(values, "labels", "label"); len(labels) > 0 {
 			payload.Labels = labels

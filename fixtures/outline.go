@@ -174,24 +174,19 @@ func buildOutlineNode(node *FixtureNode, report *OutlineReport) *OutlineNode {
 }
 
 func OutlineKind(fixture FixtureTest) string {
-	switch {
-	case fixture.IsAIStep():
-		return "ai"
-	case fixture.IsTestStep():
-		return "test"
-	case fixture.IsLintStep():
-		return "lint"
-	case fixture.Query != "":
-		return "query"
-	case !fixture.ExecBase().IsEmpty():
-		return "exec"
-	default:
-		return "fixture"
+	if kind := fixture.KindName(); kind != "" {
+		return kind
 	}
+	return "fixture"
 }
 
 func outlineSummary(fixture FixtureTest) string {
 	switch {
+	case fixture.Step != nil:
+		if fixture.Step.ID != "" {
+			return fmt.Sprintf("%s step %s", fixture.Step.Kind, fixture.Step.ID)
+		}
+		return fixture.Step.Kind + " step"
 	case fixture.IsAIStep():
 		if fixture.AIStep == nil {
 			return "ai verification"

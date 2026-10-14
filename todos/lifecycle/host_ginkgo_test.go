@@ -264,7 +264,7 @@ var _ = Describe("Host", func() {
 			req := api.Spec{Workflow: &api.Workflow{Commits: []api.Commit{{On: "run"}, {On: "turn"}}}}
 			meta := todos.RunStartMetadata{SessionID: "session-1"}
 
-			hooks := host.Hooks(hostTodo(), req, meta)
+			hooks := host.Hooks(hostTodo(), req, lifecycle.HookOptions{Meta: meta})
 
 			Expect(hookNames(hooks)).To(Equal([]string{
 				"commit:run", "commit:turn", "gavel-run-env", "gavel-run-labels",
@@ -272,7 +272,7 @@ var _ = Describe("Host", func() {
 		})
 
 		It("declares no commit hook for a spec without commit policies", func() {
-			hooks := host.Hooks(hostTodo(), api.Spec{}, todos.RunStartMetadata{})
+			hooks := host.Hooks(hostTodo(), api.Spec{}, lifecycle.HookOptions{Meta: todos.RunStartMetadata{}})
 
 			Expect(hookNames(hooks)).To(Equal([]string{"gavel-run-env", "gavel-run-labels"}))
 		})

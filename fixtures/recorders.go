@@ -19,6 +19,7 @@ import (
 type fixtureEnv struct {
 	file  string
 	setup *PreparedSetup
+	scope *StepScope
 }
 
 // recorderSet holds the recorders prepared for one markdown file. Under the

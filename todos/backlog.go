@@ -94,6 +94,9 @@ func backlogEntry(todo *types.TODO, inBatch map[string]bool) string {
 		priority = "unset"
 	}
 	entry := fmt.Sprintf("- %s  %s  (%s, %s)", ref, title, status, priority)
+	if todo.PR != nil {
+		entry += fmt.Sprintf("  pr #%d", todo.PR.Number)
+	}
 	if inBatch[strings.ToLower(ref)] || inBatch[strings.ToLower(strings.TrimSpace(todo.ID))] {
 		entry += "  [in this batch]"
 	}

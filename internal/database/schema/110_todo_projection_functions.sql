@@ -116,6 +116,22 @@ WITH active AS (
         AND outcome.payload ->> 'status' = 'ask'
     ), 0)
   ) AS after_ask
+), unpersisted AS (
+  -- A run Captain finished whose outcome gavel then failed to persist (a plan
+  -- revision refused by its hooks, a status write that conflicted) is recorded
+  -- by the lifecycle host as a failed lifecycle_outcome event carrying the
+  -- error. Captain's row still reads the run's own end; the attempt failed.
+  -- The run's latest outcome decides: a later outcome that did persist clears it.
+  SELECT COALESCE((
+    SELECT outcome.payload ->> 'status' = 'failed' AND outcome.payload ->> 'error' IS NOT NULL
+    FROM active
+    JOIN public.todo_issue_events outcome
+      ON outcome.issue_id = p_issue_id
+     AND outcome.kind = 'lifecycle_outcome'
+     AND outcome.payload ->> 'promptRunId' = active.active_prompt_run_id::text
+    ORDER BY outcome.sequence DESC
+    LIMIT 1
+  ), false) AS failed
 )
 SELECT CASE
   WHEN active.active_prompt_run_id IS NULL THEN 'idle'
@@ -123,6 +139,7 @@ SELECT CASE
   WHEN active.prompt_state = 'failed' THEN
     CASE WHEN active.verify_only OR active.prompt_phase = 'verify' OR latest_iteration.verification_failed
          THEN 'verification_failed' ELSE 'failed' END
+  WHEN unpersisted.failed THEN 'failed'
   WHEN signals.failed THEN 'failed'
   WHEN signals.stalled THEN 'stalled'
   WHEN active.prompt_state = 'waiting' AND answered.after_ask AND NOT pending.waiting THEN 'running'
@@ -138,6 +155,7 @@ CROSS JOIN signals
 CROSS JOIN latest_iteration
 CROSS JOIN pending
 CROSS JOIN answered
+CROSS JOIN unpersisted
 $$;
 
 -- Timestamp propagation is intentionally not an issue mutation: it neither

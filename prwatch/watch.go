@@ -23,14 +23,20 @@ type WatchOptions struct {
 	// FailFast stops --follow at the first definitive failure instead of waiting
 	// for every remaining check. Off by default: the default contract of --follow
 	// is a complete picture of the run.
-	FailFast bool
-	Logs     bool // fetch failing job log tails (extra API quota)
-	TailLogs int
-	Comments []string
-	Actions  []string
+	FailFast     bool
+	Logs         bool // fetch failing job log tails (extra API quota)
+	TailLogs     int
+	Comments     []string
+	Actions      []string
+	ExpectedHead string
+	WholePR      bool
 }
 
 func Run(opts WatchOptions) (*PRWatchResult, int) {
+	if opts.WholePR && (len(opts.Actions) > 0 || len(opts.Comments) > 0) {
+		fmt.Fprintln(os.Stderr, "Error: --whole-pr cannot be scoped to selected checks or comments")
+		return nil, 1
+	}
 	if opts.Context == nil {
 		opts.Context = context.Background()
 	}
@@ -51,7 +57,7 @@ func Run(opts WatchOptions) (*PRWatchResult, int) {
 		}
 		result, err := fetch(opts.Context, opts)
 		if err != nil {
-			if !opts.Follow || opts.FetchSnapshot != nil {
+			if opts.WholePR || !opts.Follow || opts.FetchSnapshot != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 				return nil, 1
 			}
@@ -67,6 +73,23 @@ func Run(opts WatchOptions) (*PRWatchResult, int) {
 			return nil, 1
 		}
 		pr, runs := result.PR, result.Runs
+		unresolved := result.UnresolvedComments()
+		if opts.WholePR {
+			unresolved = 0
+			for _, thread := range pr.ReviewThreads {
+				if !thread.IsResolved {
+					unresolved++
+				}
+			}
+		}
+		if opts.ExpectedHead != "" && pr.HeadRefOID != opts.ExpectedHead {
+			fmt.Fprintf(os.Stderr, "Error: PR head %s does not match expected pushed head %s\n", pr.HeadRefOID, opts.ExpectedHead)
+			return result, 1
+		}
+		if opts.WholePR && wholePRBlocked(result) {
+			fmt.Fprintf(os.Stderr, "Error: the PR cannot pass verification (state=%s, merge=%s, reviews=%s): closed, conflicting, blocked, cancelled, or lint findings\n", pr.State, pr.MergeState, pr.ReviewDecision)
+			return result, 1
+		}
 		filters := newResultFilters(opts.Comments, opts.Actions)
 
 		preChecks := len(pr.StatusCheckRollup)
@@ -78,6 +101,9 @@ func Run(opts WatchOptions) (*PRWatchResult, int) {
 		}
 
 		filters.apply(result)
+		if !opts.WholePR {
+			unresolved = result.UnresolvedComments()
+		}
 
 		// Fail loudly when a selector was given but matched nothing, rather than
 		// printing "No checks found" and exiting 0 — a silent empty masks a
@@ -100,10 +126,17 @@ func Run(opts WatchOptions) (*PRWatchResult, int) {
 		}
 
 		if !opts.Follow {
+			if (opts.WholePR && (!wholePRComplete(result) || !followDone(filters, result, false) || unresolved > 0)) || (filters.hasCommentFilters() && unresolved > 0) {
+				return result, 1
+			}
 			return result, statusExitCode(result)
 		}
 
-		if followDone(filters, result, opts.FailFast) {
+		done := followDone(filters, result, opts.FailFast)
+		if opts.WholePR {
+			done = wholePRComplete(result) && followDone(filters, result, false) && unresolved == 0 || opts.FailFast && (result.HasTerminalFailure() || unresolved > 0 || statusExitCode(result) != 0 && pr.StatusCheckRollup.AllComplete())
+		}
+		if done {
 			// The caller prints the completed report to stdout. Painting the
 			// final frame to stderr as well would show it twice to anyone
 			// merging the two streams; on a TTY it also has to be erased so
@@ -112,6 +145,9 @@ func Run(opts WatchOptions) (*PRWatchResult, int) {
 				if err := render.Clear(os.Stderr); err != nil {
 					logger.Warnf("render: %v", err)
 				}
+			}
+			if opts.WholePR && (!wholePRComplete(result) || unresolved > 0) {
+				return result, 1
 			}
 			return result, statusExitCode(result)
 		}
@@ -155,10 +191,16 @@ func fetchGitHubSnapshot(ctx context.Context, opts WatchOptions) (*PRWatchResult
 	}
 	allComments := append(append([]model.PRComment{}, pr.Comments...), pr.ReviewThreads...)
 	artifacts := github.FindGavelArtifacts(allComments)
+	if opts.WholePR {
+		artifacts = currentPRArtifacts(pr, artifacts)
+	}
 	gavelResultsCh := make(chan []*GavelResultsSummary, 1)
 	go func() { gavelResultsCh <- FetchGavelArtifacts(opts.Options, artifacts) }()
-	runs := fetchRuns(opts, pr)
+	runs, err := fetchRuns(opts, pr)
 	gavelResults := <-gavelResultsCh
+	if err != nil {
+		return nil, err
+	}
 	annotateReproduceCommands(gavelResults, opts.Repo, pr.Number)
 	comments := removeRenderedArtifactComments(MergeAndFilter(pr.Comments, pr.ReviewThreads), gavelResults)
 	return &PRWatchResult{PR: pr, Runs: runs, Conflicts: github.DetectMergeConflicts(opts.Options, pr), GavelResults: gavelResults, Comments: comments}, nil
@@ -247,7 +289,7 @@ func statusExitCode(result *PRWatchResult) int {
 	return 0
 }
 
-func fetchRuns(opts WatchOptions, pr *model.PRInfo) map[int64]*model.WorkflowRun {
+func fetchRuns(opts WatchOptions, pr *model.PRInfo) (map[int64]*model.WorkflowRun, error) {
 	runs := make(map[int64]*model.WorkflowRun)
 	seen := make(map[int64]bool)
 
@@ -267,8 +309,14 @@ func fetchRuns(opts WatchOptions, pr *model.PRInfo) map[int64]*model.WorkflowRun
 			TailLines: opts.TailLogs,
 		})
 		if err != nil {
+			if opts.WholePR {
+				return nil, fmt.Errorf("fetch PR workflow %d: %w", runID, err)
+			}
 			logger.Warnf("failed to fetch run %d: %v", runID, err)
 			continue
+		}
+		if opts.WholePR && run.HeadSHA != pr.HeadRefOID {
+			return nil, fmt.Errorf("workflow %d reports head %s, expected %s", runID, run.HeadSHA, pr.HeadRefOID)
 		}
 
 		if model.RunHasFailedJob(run) || newResultFilters(nil, opts.Actions).hasActionFilters() {
@@ -278,7 +326,55 @@ func fetchRuns(opts WatchOptions, pr *model.PRInfo) map[int64]*model.WorkflowRun
 		}
 		runs[runID] = run
 	}
-	return runs
+	return runs, nil
+}
+
+func wholePRBlocked(result *PRWatchResult) bool {
+	if result.PR.State != "OPEN" || result.HasMergeConflict() || result.PR.IsDraft || result.PR.ReviewDecision == "REVIEW_REQUIRED" || result.PR.ReviewDecision == "CHANGES_REQUESTED" {
+		return true
+	}
+	if readiness := result.PR.MergeReadiness; readiness != nil && readiness.State != "ready" && !readiness.WaitingForBuilds && !readiness.WaitingForMerge {
+		return true
+	}
+	if pr := result.PR; pr.Provider != "azuredevops" && pr.StatusCheckRollup.AllComplete() && pr.MergeState != "UNKNOWN" && pr.MergeState != "CLEAN" && pr.MergeState != "HAS_HOOKS" {
+		return true
+	}
+	for _, summary := range result.GavelResults {
+		if summary != nil && summary.LintViolations > 0 {
+			return true
+		}
+	}
+	for _, check := range result.PR.StatusCheckRollup {
+		if check.Conclusion == "CANCELLED" || check.Conclusion == "ACTION_REQUIRED" {
+			return true
+		}
+	}
+	return false
+}
+
+func wholePRComplete(result *PRWatchResult) bool {
+	pr := result.PR
+	if pr.Provider == "azuredevops" {
+		return pr.MergeReadiness != nil && pr.MergeReadiness.State == "ready" && pr.StatusCheckRollup.AllComplete()
+	}
+	return pr.Mergeable == "MERGEABLE" && (pr.MergeState == "CLEAN" || pr.MergeState == "HAS_HOOKS") && pr.StatusCheckRollup.AllComplete()
+}
+
+func currentPRArtifacts(pr *model.PRInfo, artifacts []github.GavelArtifact) []github.GavelArtifact {
+	current := map[int64]bool{}
+	for _, check := range pr.StatusCheckRollup {
+		id, err := github.ExtractRunID(check.DetailsURL)
+		if err == nil {
+			current[id] = true
+		}
+	}
+	var filtered []github.GavelArtifact
+	for _, artifact := range artifacts {
+		if current[artifact.RunID] {
+			filtered = append(filtered, artifact)
+		}
+	}
+	return filtered
 }
 
 // MergeAndFilter combines comments with thread state, extracts nitpick sub-comments, and filters noise.

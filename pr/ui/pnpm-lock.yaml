@@ -10,8 +10,8 @@ catalogs:
       specifier: ^3.0.201
       version: 3.0.208
     '@flanksource/clicky-ui':
-      specifier: 0.3.46
-      version: 0.3.46
+      specifier: 0.3.47
+      version: 0.3.47
     '@iconify-icons/vscode-icons':
       specifier: ^1.2.29
       version: 1.2.29
@@ -62,7 +62,7 @@ importers:
         version: 3.0.208(react@19.2.7)(zod@4.4.3)
       '@flanksource/clicky-ui':
         specifier: 'catalog:'
-        version: 0.3.46(@ai-sdk/react@3.0.208(react@19.2.7)(zod@4.4.3))(@babel/core@7.29.7(supports-color@8.1.1))(@babel/template@7.29.7)(@mdxeditor/editor@4.0.4(@codemirror/language@6.12.4)(@lezer/highlight@1.2.3)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(supports-color@8.1.1)(yjs@13.6.31))(@shikijs/langs@1.29.2)(@shikijs/themes@1.29.2)(@shikijs/transformers@1.29.2)(@tanstack/react-query@5.101.1(react@19.2.7))(@types/react@19.2.17)(ai@6.0.206(zod@4.4.3))(marked@15.0.12)(monaco-editor@0.48.0)(react-dom@19.2.7(react@19.2.7))(react-rnd@10.5.3(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(react@19.2.7)(recharts@3.8.1(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react-is@17.0.2)(react@19.2.7)(redux@5.0.1))(shiki@1.29.2)(streamdown@2.5.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(supports-color@8.1.1))(tailwindcss@4.3.1)
+        version: 0.3.47(@ai-sdk/react@3.0.208(react@19.2.7)(zod@4.4.3))(@babel/core@7.29.7(supports-color@8.1.1))(@babel/template@7.29.7)(@mdxeditor/editor@4.0.4(@codemirror/language@6.12.4)(@lezer/highlight@1.2.3)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(supports-color@8.1.1)(yjs@13.6.31))(@shikijs/langs@1.29.2)(@shikijs/themes@1.29.2)(@shikijs/transformers@1.29.2)(@tanstack/react-query@5.101.1(react@19.2.7))(@types/react@19.2.17)(ai@6.0.206(zod@4.4.3))(marked@15.0.12)(monaco-editor@0.48.0)(react-dom@19.2.7(react@19.2.7))(react-rnd@10.5.3(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(react@19.2.7)(recharts@3.8.1(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react-is@17.0.2)(react@19.2.7)(redux@5.0.1))(shiki@1.29.2)(streamdown@2.5.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(supports-color@8.1.1))(tailwindcss@4.3.1)
       '@flanksource/gavel':
         specifier: ^0.1.2
         version: link:../../testrunner/ui
@@ -815,8 +815,8 @@ packages:
       streamdown:
         optional: true
 
-  '@flanksource/clicky-ui@0.3.46':
-    resolution: {integrity: sha512-ejTj5cVnhsornYIdyp7o1BRzeVDlH9Vk3AJi66+u2P2BPHXmsuI7cPFs0vMsIEiPnuK7fIu47VeSDH92j14V6A==}
+  '@flanksource/clicky-ui@0.3.47':
+    resolution: {integrity: sha512-bz4F5TIkJGz9rxIhqkFfhBA4cxuYT5KgZrMFG33hGBkkZF6ky1m9+1CILOB+cJ7K8LdUJkaTrWgAkVjPHR7rQA==}
     peerDependencies:
       '@ai-sdk/react': ^3.0.0
       '@mdxeditor/editor': ^4.0.4
@@ -4957,7 +4957,7 @@ snapshots:
     transitivePeerDependencies:
       - '@types/react'
 
-  '@flanksource/clicky-ui@0.3.46(@ai-sdk/react@3.0.208(react@19.2.7)(zod@4.4.3))(@babel/core@7.29.7(supports-color@8.1.1))(@babel/template@7.29.7)(@mdxeditor/editor@4.0.4(@codemirror/language@6.12.4)(@lezer/highlight@1.2.3)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(supports-color@8.1.1)(yjs@13.6.31))(@shikijs/langs@1.29.2)(@shikijs/themes@1.29.2)(@shikijs/transformers@1.29.2)(@tanstack/react-query@5.101.1(react@19.2.7))(@types/react@19.2.17)(ai@6.0.206(zod@4.4.3))(marked@15.0.12)(monaco-editor@0.48.0)(react-dom@19.2.7(react@19.2.7))(react-rnd@10.5.3(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(react@19.2.7)(recharts@3.8.1(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react-is@17.0.2)(react@19.2.7)(redux@5.0.1))(shiki@1.29.2)(streamdown@2.5.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(supports-color@8.1.1))(tailwindcss@4.3.1)':
+  '@flanksource/clicky-ui@0.3.47(@ai-sdk/react@3.0.208(react@19.2.7)(zod@4.4.3))(@babel/core@7.29.7(supports-color@8.1.1))(@babel/template@7.29.7)(@mdxeditor/editor@4.0.4(@codemirror/language@6.12.4)(@lezer/highlight@1.2.3)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(supports-color@8.1.1)(yjs@13.6.31))(@shikijs/langs@1.29.2)(@shikijs/themes@1.29.2)(@shikijs/transformers@1.29.2)(@tanstack/react-query@5.101.1(react@19.2.7))(@types/react@19.2.17)(ai@6.0.206(zod@4.4.3))(marked@15.0.12)(monaco-editor@0.48.0)(react-dom@19.2.7(react@19.2.7))(react-rnd@10.5.3(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(react@19.2.7)(recharts@3.8.1(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react-is@17.0.2)(react@19.2.7)(redux@5.0.1))(shiki@1.29.2)(streamdown@2.5.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(supports-color@8.1.1))(tailwindcss@4.3.1)':
     dependencies:
       '@codemirror/autocomplete': 6.20.3
       '@codemirror/commands': 6.10.4

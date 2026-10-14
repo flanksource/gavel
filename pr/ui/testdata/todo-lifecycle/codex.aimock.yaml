@@ -1,0 +1,59 @@
+name: todo-lifecycle-codex
+description: >
+  Scripted OpenAI Responses replies for the todo lifecycle fixture, served to the
+  real `codex` binary gavel runs for each step (codex app-server for triage.new,
+  `codex exec` for plan, run and the commit message). codex returns structured
+  output as the final message text, so each step's reply is its JSON envelope.
+  The anthropic section serves captain's plan-tldr hook, which declares its own
+  (haiku) model whichever agent ran the plan. There is deliberately no
+  catch-all: an unexpected request is a 400 miss that fails the step loudly.
+
+anthropic:
+  - match:
+      system_contains: "You write TL;DRs for software implementation plans"
+    respond:
+      text: '{"tldr":"- **TL;DR** Adds `greet.Greeting` in `greet/greet.go`, verified by the existing `go test ./greet/...`."}'
+      stop_reason: end_turn
+
+openai:
+  # triage.new (agent mode, codex app-server): name and label the new TODO. The
+  # app-server carries the prompt's system text in the user turn.
+  - match:
+      prompt_contains: "Triage this newly created TODO"
+    respond:
+      text: '{"summary":"Named the greeting helper work and labelled it as API surface.","endStatus":"completed","title":"Add Greeting helper to greet package","labels":["api"],"action":"keep"}'
+      finish_reason: stop
+
+  # plan: read-only investigation ending in a new plan.
+  - match:
+      prompt_contains: "You are planning the implementation"
+    respond:
+      text: '{"summary":"Planned a one-function greet package satisfying the existing test.","endStatus":"completed","planStatus":"new","planContent":"## Plan\n\n1. Add `greet/greet.go` with `func Greeting(name string) string` returning `\"hello \" + name`.\n2. Run `go test ./greet/...`; `greet/greet_test.go` already covers it.\n"}'
+      finish_reason: stop
+
+  # run, turn 1: write the file the plan names, in the run worktree. codex's
+  # command tool is exec_command ({cmd}); it runs in the turn's cwd.
+  - match:
+      prompt_contains: "You are implementing the todo item"
+    respond:
+      function_call:
+        name: exec_command
+        call_id: call_run_write
+        arguments:
+          cmd: "mkdir -p greet && printf 'package greet\\n\\n// Greeting greets name.\\nfunc Greeting(name string) string { return \"hello \" + name }\\n' > greet/greet.go"
+          login: false
+      finish_reason: tool_calls
+
+  # run, turn 2: the command's result came back; report completion.
+  - match:
+      tool_result_for: exec_command
+    respond:
+      text: '{"summary":"Added greet.Greeting; go test ./greet/... covers it.","endStatus":"completed"}'
+      finish_reason: stop
+
+  # run's commit:run hook: gavel's commit message generator.
+  - match:
+      prompt_contains: "produce a Conventional Commit message"
+    respond:
+      text: '{"type":"feat","scope":"greet","subject":"add Greeting helper"}'
+      finish_reason: stop

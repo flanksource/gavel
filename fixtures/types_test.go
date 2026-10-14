@@ -298,7 +298,8 @@ func TestFrontMatterShouldSkip(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			reason := tt.fm.ShouldSkip()
+			reason, err := tt.fm.ShouldSkip(RunOptions{})
+			assert.NoError(t, err)
 			if tt.wantSkip {
 				assert.NotEmpty(t, reason)
 			} else {

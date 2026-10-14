@@ -15,10 +15,6 @@ import (
 	"github.com/flanksource/repomap"
 )
 
-func init() {
-	fixtures.AIStepRunner = RunAIStep
-}
-
 // checklistResponse is the ai-step's structured output: one verdict per
 // acceptance-criterion checklist item.
 type checklistResponse struct {
@@ -161,7 +157,7 @@ func buildChecklistPrompt(fixture fixtures.FixtureTest, repoPath string, items [
 	if len(previous) > 0 {
 		b.WriteString("Executable fixture results completed earlier in this verification run. Use these verdicts as evidence for the matching criteria. Do not rerun these commands to establish whether they passed:\n")
 		for _, result := range previous {
-			if result.Type == "verify" {
+			if result.Type == "verify" || result.Type == aiKindName {
 				continue
 			}
 			fmt.Fprintf(&b, "- %q (%s): %s", result.Name, result.Type, result.Status)

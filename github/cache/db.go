@@ -185,6 +185,7 @@ func (s *Store) Status() Status {
 		"job_log_caches",
 		"workflow_def_caches",
 		"seen_prs",
+		"pull_requests",
 		"favicon_caches",
 		"git_repos",
 		"git_worktrees",

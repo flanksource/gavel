@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -63,10 +62,14 @@ func (b *Betterleaks) ValidateConfig(config *models.LinterConfig) error {
 }
 
 // reportPath returns the absolute path where we ask betterleaks to write its
-// JSON report. Kept deterministic per-workdir so successive runs overwrite
-// rather than accumulate.
-func (b *Betterleaks) reportPath() string {
-	return filepath.Join(b.WorkDir, ".tmp", "betterleaks-report.json")
+// JSON report: in gavel's scratch dir (never inside WorkDir, which would dirty
+// the tree being scanned), deterministic per-workdir so runs overwrite.
+func (b *Betterleaks) reportPath() (string, error) {
+	dir, err := linters.ScratchDir(b.WorkDir, b.Name())
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "betterleaks-report.json"), nil
 }
 
 // buildArgs returns the argv (without the command name) that Run would use.
@@ -97,11 +100,11 @@ func (b *Betterleaks) buildArgs(tomlPath, reportPath string) []string {
 	return args
 }
 
-// DryRunCommand reports the command that would be executed. The merged
-// secrets config is NOT materialized in dry-run mode; we show a placeholder
-// so users see the intent without side effects.
+// DryRunCommand reports the command that would be executed. Neither the merged
+// secrets config nor the scratch report dir is materialized in dry-run mode; we
+// show placeholders so users see the intent without side effects.
 func (b *Betterleaks) DryRunCommand() (string, []string) {
-	args := b.buildArgs("<merged-secrets-config>", b.reportPath())
+	args := b.buildArgs("<merged-secrets-config>", "<betterleaks-report>")
 	return "betterleaks", args
 }
 
@@ -120,15 +123,16 @@ func (b *Betterleaks) Run(ctx commonsContext.Context, _ *clicky.Task) ([]models.
 		return nil, fmt.Errorf("resolve betterleaks config: %w", err)
 	}
 
-	reportPath := b.reportPath()
-	if err := os.MkdirAll(filepath.Dir(reportPath), 0o755); err != nil {
-		return nil, fmt.Errorf("create betterleaks report dir: %w", err)
+	reportPath, err := b.reportPath()
+	if err != nil {
+		return nil, err
 	}
-	_ = os.Remove(reportPath)
+	if err := os.Remove(reportPath); err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("remove stale betterleaks report %s: %w", reportPath, err)
+	}
 
 	args := b.buildArgs(tomlPath, reportPath)
-	cmd := exec.CommandContext(ctx, "betterleaks", args...)
-	cmd.Dir = b.WorkDir
+	cmd := b.CommandContext(ctx, b.Name(), "betterleaks", args...)
 
 	logger.V(1).Infof("Executing: betterleaks")
 	logger.V(2).Infof("Executing: betterleaks %s", strings.Join(args, " "))

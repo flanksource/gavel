@@ -23,6 +23,9 @@ import { TodoDetailTabs } from './TodoDetailTabs';
 import { TodoReviewBanner } from './planActions';
 import { TodoNavigationControls, type TodoNavigationControlsProps } from './TodoNavigationControls';
 import { TodoTagField } from './TodoTag';
+import { TodoPRLink } from './TodoPRLink';
+import { TodoPRStatus } from './TodoPRStatus';
+import { TodoLinks } from './TodoLinks';
 import { useTodoDetail } from './useTodoDetail';
 import { EditPencil, ExternalIssueLink, PriorityMenu, StatusMenu, TodoSection } from './TodoDetailFields';
 import { HeaderActionsMenu } from './TodoDetailActions';
@@ -188,6 +191,7 @@ export function TodoDetail(props: TodoDetailProps) {
 
             <HeaderActionsMenu
               todo={todo}
+              dir={dir}
               busy={busy}
               runBusy={runBusy}
               closed={closed}
@@ -244,7 +248,7 @@ export function TodoDetail(props: TodoDetailProps) {
                     disabled={busy || !runContext}
                     busy={runBusy || verificationRun.isPending}
                     onRunStep={(name, extras) => runPhase(name, { ...(phaseOptions[name] ?? loadLastTodoRunOptions(name, runContext)), ...extras })}
-                    branchChoice={reusableBranch}
+                    branchChoice={todo.pr ? undefined : reusableBranch}
                     onReview={() => setTab('overview')}
                     onOptionsChange={changePhaseOptions}
                     onAdvanced={setAdvancedMode}
@@ -253,6 +257,7 @@ export function TodoDetail(props: TodoDetailProps) {
               )}
               <HeaderActionsMenu
                 todo={todo}
+                dir={dir}
                 busy={busy}
                 runBusy={runBusy}
                 closed={closed}
@@ -346,7 +351,7 @@ export function TodoDetail(props: TodoDetailProps) {
         title={`${runContext?.lifecycle.steps.find(step => step.name === advancedMode)?.label ?? advancedMode ?? 'Run'} todo`}
         dir={dir}
         refID={todo.ref}
-        branchChoice={reusableBranch}
+        branchChoice={todo.pr ? undefined : reusableBranch}
       />
       {archivePrompt && (
         <ArchiveParentDialog
@@ -357,6 +362,9 @@ export function TodoDetail(props: TodoDetailProps) {
           onCancel={cancelArchive}
         />
       )}
+      {todo.pr && <div className="shrink-0 border-b border-border px-4 py-2">
+        <TodoPRStatus key={todo.pr.url} pr={todo.pr} disabled={busy || runBusy || sessionInProgress} />
+      </div>}
       <TodoReviewBanner todo={todo} dir={dir} onChanged={onChanged} onLaunch={() => setTab('session')} />
       <TodoDetailTabs tab={tab} onSelect={setTab} verification={verification} sessionAttempts={sessionAttemptCount} />
       <div className="flex min-h-0 flex-1 flex-col bg-muted/30">
@@ -441,10 +449,12 @@ export function TodoDetail(props: TodoDetailProps) {
                 {(childTodos.length > 0 || !todo.parentId) && (
                   <TodoChildren todo={todo} dir={dir} childTodos={childTodos} familyStatus={familyStatus} onOpenTodo={onOpenTodo} />
                 )}
+                <TodoPRLink key={todo.ref} pr={todo.pr} disabled={busy || sessionInProgress} onSave={patch} />
+                <TodoLinks key={`${todo.ref}:links`} todoRef={todo.ref} dir={dir} disabled={busy} onOpenTodo={onOpenTodo} />
                 <TodoRunBranch
                   dir={dir}
                   todoRef={todo.ref}
-                  renderActions={latest => <TodoRunLandActions dir={dir} todoRef={todo.ref} latest={latest} />}
+                  renderActions={todo.pr ? undefined : latest => <TodoRunLandActions dir={dir} todoRef={todo.ref} latest={latest} />}
                   events={events}
                   onPatch={patch}
                 />

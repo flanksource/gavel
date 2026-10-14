@@ -123,30 +123,34 @@ func (v *Vale) ValidateConfig(config *models.LinterConfig) error {
 	return nil
 }
 
-// buildArgsWithConfig assembles the argv. If generateConfig is true it may
-// write a temporary Vale config file (and reports that the caller is
-// responsible for cleanup via the returned cleanup flag).
-func (v *Vale) buildArgsWithConfig(generateConfig bool) (args []string, cleanupNeeded bool) {
-	hasCustomConfig := false
+// generatedConfig writes a Vale config into gavel's scratch dir (outside
+// WorkDir) when no custom --config is given and an arch config exists.
+// Returns "" when no config should be generated.
+func (v *Vale) generatedConfig() (string, error) {
+	if v.ArchConfig == nil {
+		return "", nil
+	}
 	if v.Config != nil {
 		for _, arg := range v.Config.Args {
 			if strings.HasPrefix(arg, "--config") {
-				hasCustomConfig = true
-				break
+				return "", nil
 			}
 		}
 	}
-
-	if generateConfig && !hasCustomConfig && v.ArchConfig != nil {
-		generatedConfig, err := GenerateValeConfig(v.WorkDir, v.ArchConfig, "markdown", v.DefaultExcludes())
-		if err != nil {
-			logger.Warnf("Failed to generate Vale config with excludes: %v", err)
-		} else {
-			cleanupNeeded = true
-			args = append(args, "--config="+generatedConfig)
-		}
+	path, err := GenerateValeConfig(v.WorkDir, v.ArchConfig, "markdown", v.DefaultExcludes())
+	if err != nil {
+		return "", fmt.Errorf("generate Vale config with excludes: %w", err)
 	}
+	return path, nil
+}
 
+// buildArgsWithConfig assembles the argv, prefixed with --config=configPath
+// when configPath is non-empty.
+func (v *Vale) buildArgsWithConfig(configPath string) []string {
+	var args []string
+	if configPath != "" {
+		args = append(args, "--config="+configPath)
+	}
 	if v.Config != nil {
 		args = append(args, v.Config.Args...)
 	}
@@ -159,27 +163,26 @@ func (v *Vale) buildArgsWithConfig(generateConfig bool) (args []string, cleanupN
 	} else if !v.hasPathArg(args) {
 		args = append(args, ".")
 	}
-	return args, cleanupNeeded
+	return args
 }
 
 // DryRunCommand reports the command vale would execute. Dry-run does not
 // generate the dynamic Vale config on disk; the printed argv will omit
 // --config=... when it would have been generated.
 func (v *Vale) DryRunCommand() (string, []string) {
-	args, _ := v.buildArgsWithConfig(false)
-	return "vale", args
+	return "vale", v.buildArgsWithConfig("")
 }
 
 // Run executes vale and returns violations
 func (v *Vale) Run(ctx commonsContext.Context, task *clicky.Task) ([]models.Violation, error) {
-	args, cleanupNeeded := v.buildArgsWithConfig(true)
-	if cleanupNeeded {
-		defer CleanupValeConfig(v.WorkDir)
+	configPath, err := v.generatedConfig()
+	if err != nil {
+		return nil, err
 	}
+	args := v.buildArgsWithConfig(configPath)
 
 	// Execute command
-	cmd := exec.CommandContext(ctx, "vale", args...)
-	cmd.Dir = v.WorkDir
+	cmd := v.CommandContext(ctx, v.Name(), "vale", args...)
 
 	logger.Infof("Executing: vale %s", strings.Join(args, " "))
 

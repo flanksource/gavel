@@ -19,9 +19,6 @@ func runAzurePRStatus(opts PRStatusOptions, target statusTarget, client provider
 	if opts.Worktree {
 		return nil, fmt.Errorf("--worktree is not supported for Azure DevOps")
 	}
-	if len(opts.Comments) > 0 {
-		return nil, fmt.Errorf("--comments is not supported for Azure DevOps")
-	}
 	interval, err := time.ParseDuration(opts.Interval)
 	if err != nil || interval <= 0 {
 		return nil, fmt.Errorf("invalid --interval %q: expected a positive duration", opts.Interval)
@@ -40,13 +37,13 @@ func runAzurePRStatus(opts PRStatusOptions, target statusTarget, client provider
 			return nil, err
 		}
 	}
-	result, code := prwatch.Run(prwatch.WatchOptions{Context: ctx, PRNumber: number, Interval: interval, Follow: opts.Follow, FailFast: opts.FailFast, Logs: opts.Logs, TailLogs: opts.TailLogs, Actions: opts.Actions,
+	result, code := prwatch.Run(prwatch.WatchOptions{Context: ctx, PRNumber: number, Interval: interval, Follow: opts.Follow, FailFast: opts.FailFast, Logs: opts.Logs, TailLogs: opts.TailLogs, Actions: opts.Actions, Comments: opts.Comments, ExpectedHead: opts.HeadSHA, WholePR: opts.WholePR,
 		FetchSnapshot: func(ctx context.Context, watch prwatch.WatchOptions) (*prwatch.PRWatchResult, error) {
-			snapshot, err := client.Status(ctx, watch.PRNumber, model.StatusOptions{Logs: watch.Logs, TailLogs: watch.TailLogs})
+			snapshot, err := client.Status(ctx, watch.PRNumber, model.StatusOptions{Logs: watch.Logs, TailLogs: watch.TailLogs, Threads: watch.WholePR || len(watch.Comments) > 0})
 			if err != nil {
 				return nil, err
 			}
-			return &prwatch.PRWatchResult{PR: snapshot.PR, Runs: snapshot.Runs}, nil
+			return &prwatch.PRWatchResult{PR: snapshot.PR, Runs: snapshot.Runs, Comments: snapshot.PR.ReviewThreads}, nil
 		},
 	})
 	exitCode = code

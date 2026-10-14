@@ -26,6 +26,8 @@ type TodosEditOptions struct {
 	ClearLabels  bool     `flag:"clear-labels" help:"Remove every label from the TODO"`
 	Parent       string   `flag:"parent" help:"Make the TODO a child of this TODO (ID or alias)"`
 	NoParent     bool     `flag:"no-parent" help:"Detach the TODO from its parent"`
+	ClearPR      bool     `flag:"clear-pr" help:"Remove the PR link"`
+	PRURL        string   `flag:"pr" help:"Link this TODO to an existing PR URL"`
 }
 
 type TodosCommentOptions struct {
@@ -87,7 +89,7 @@ func runTodosEdit(opts TodosEditOptions, changed map[string]bool) error {
 
 	flags := ops.EditFlags{
 		Status: opts.Status, Priority: opts.Priority, ClearLabels: opts.ClearLabels,
-		Parent: opts.Parent, NoParent: opts.NoParent,
+		Parent: opts.Parent, NoParent: opts.NoParent, PRURL: opts.PRURL, ClearPR: opts.ClearPR,
 	}
 	if changed["title"] || opts.Title != "" {
 		flags.Title = &opts.Title

@@ -233,13 +233,12 @@ func executionKind(node *FixtureNode) ExecutionKind {
 	if node.Test == nil {
 		return ExecutionKindCommand
 	}
-	if node.Test.IsTestStep() {
+	switch node.Test.KindName() {
+	case RunnerKindTest:
 		return ExecutionKindTest
-	}
-	if node.Test.IsLintStep() {
+	case RunnerKindLint:
 		return ExecutionKindLint
-	}
-	if node.Test.IsAIStep() {
+	case "ai":
 		return ExecutionKindAI
 	}
 	return ExecutionKindCommand

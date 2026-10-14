@@ -2,10 +2,12 @@ package commit
 
 import (
 	"errors"
+	"fmt"
 
 	"github.com/flanksource/captain/pkg/ai/agent"
 	capcommit "github.com/flanksource/captain/pkg/ai/agent/commit"
 	"github.com/flanksource/captain/pkg/api"
+	"github.com/flanksource/gavel/pr/provider"
 )
 
 // AgentHooksOptions describes the commit hooks one agent run wants.
@@ -21,7 +23,9 @@ type AgentHooksOptions struct {
 	Push bool
 	// PushBranch, with Push, is the remote branch every commit is pushed to (see
 	// Options.PushBranch).
-	PushBranch string
+	PushBranch   string
+	PRTarget     *provider.RunTarget
+	ShouldCommit func(*agent.HookContext) (bool, error)
 }
 
 // AgentHooks builds captain commit hooks from a run's spec, one per declared
@@ -37,7 +41,11 @@ func AgentHooks(opts AgentHooksOptions) []any {
 	for _, spec := range opts.Commits {
 		hook := capcommit.New(spec)
 		hook.Do = agentCommitter(opts, spec.Message != "")
-		hooks = append(hooks, hook)
+		if opts.ShouldCommit != nil {
+			hooks = append(hooks, &conditionalCommitHook{Hook: hook, shouldCommit: opts.ShouldCommit})
+		} else {
+			hooks = append(hooks, hook)
+		}
 	}
 	return hooks
 }
@@ -94,10 +102,28 @@ func agentCommitter(opts AgentHooksOptions, keepSubject bool) func(*agent.HookCo
 		if result == nil || len(result.Commits) == 0 {
 			return "", nil
 		}
+		if opts.PRTarget != nil {
+			if _, err := opts.PRTarget.PushHead(hc.Context, plan.Dir); err != nil {
+				return "", fmt.Errorf("push PR turn: %w", err)
+			}
+		}
 		// The last hash is the one a following turn fixes up onto — the pipeline
 		// may split a change set into several grouped commits.
 		return result.Commits[len(result.Commits)-1].Hash, nil
 	}
+}
+
+type conditionalCommitHook struct {
+	*capcommit.Hook
+	shouldCommit func(*agent.HookContext) (bool, error)
+}
+
+func (h *conditionalCommitHook) Post(hc *agent.HookContext, phase agent.Phase) error {
+	allowed, err := h.shouldCommit(hc)
+	if err != nil || !allowed {
+		return err
+	}
+	return h.Hook.Post(hc, phase)
 }
 
 func filesUnlessFixup(plan capcommit.Plan) []string {

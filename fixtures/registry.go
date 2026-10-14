@@ -2,51 +2,32 @@ package fixtures
 
 import (
 	"context"
-	"fmt"
-	"sync"
 
 	"github.com/flanksource/captain/pkg/api"
 
 	"github.com/flanksource/gavel/fixtures/record"
+	"github.com/flanksource/gavel/processruntime"
 )
-
-// FixtureType defines the interface for different types of fixture tests.
-// Implementations provide type-specific execution logic and validation for tests
-// such as query tests, exec tests, or linter tests.
-type FixtureType interface {
-	// Name returns the type identifier (e.g., "query", "exec", "linter")
-	Name() string
-
-	// Run executes the fixture test and returns the result
-	Run(ctx context.Context, fixture FixtureTest, opts RunOptions) FixtureResult
-
-	// ValidateFixture validates that the fixture has required fields for this type
-	ValidateFixture(fixture FixtureTest) error
-
-	// GetRequiredFields returns a list of required fields for this fixture type
-	GetRequiredFields() []string
-
-	// GetOptionalFields returns a list of optional fields for this fixture type
-	GetOptionalFields() []string
-}
 
 // RunOptions provides configuration options for executing fixture tests.
 // It controls execution behavior including working directory, verbosity, and caching.
 type RunOptions struct {
-	Context        context.Context
+	ProcessRuntime processruntime.Options
+	Args           []string
+	Context        context.Context `json:"-" yaml:"-"`
 	WorkDir        string
 	Verbose        bool
 	NoCache        bool
 	Spec           *api.Spec
 	Runtime        *api.ResolveSpecOptions                               `json:"-" yaml:"-"`
 	ResolveSpec    func(context.Context) (api.ResolveSpecOptions, error) `json:"-" yaml:"-"`
-	Evaluator      *CELEvaluator
+	Evaluator      *CELEvaluator                                         `json:"-" yaml:"-"`
 	ExtraArgs      map[string]interface{}
 	ExecutablePath string // Path to the current executable
 	UpdateGolden   bool   // When true, mismatched @file expectations are rewritten with actual output instead of failing
 	Profile        bool
 	SQLProfile     bool
-	Progress       func(done, total int) error
+	Progress       func(done, total int) error `json:"-" yaml:"-"`
 
 	// Setup is the environment prepared for the markdown file this fixture came
 	// from, or nil when that file declared no `setup:`. It lives here rather than
@@ -59,7 +40,7 @@ type RunOptions struct {
 	// recorders watching its file — nil when nothing is recording it. Here for
 	// the same reason as Setup: a proxy address is runtime state, not part of the
 	// fixture's declaration.
-	Recorder *RecorderContext
+	Recorder *RecorderContext `json:"-" yaml:"-"`
 
 	// Record is the recorder declaration in force for this fixture — its own
 	// `record:` or the run-wide default — so RunNode can refuse a recorder that
@@ -83,6 +64,11 @@ type RunOptions struct {
 	Changed []string
 	// PreviousResults are completed fixture steps available to a later AI check.
 	PreviousResults []FixtureResult
+
+	// Scope is the fixture-scoped environment, step outputs and teardown stack
+	// this node runs in: one per fixture file (Runner) or per RunNodes call.
+	// RunNode given none runs the node as a fixture of its own.
+	Scope *StepScope `json:"-" yaml:"-"`
 }
 
 // OutputMode controls when captured command output is shown in rendered
@@ -162,99 +148,4 @@ type FixtureGroup struct {
 	Children []FixtureResult `json:"children" pretty:"type:tree"`
 	Tests    []FixtureNode   `json:"tests"`
 	Summary  Stats           `json:"summary"`
-}
-
-// Registry manages the registration and retrieval of fixture type implementations.
-// It provides thread-safe access to registered fixture types.
-type Registry struct {
-	mu    sync.RWMutex
-	types map[string]FixtureType
-}
-
-// NewRegistry creates a new fixture type registry
-func NewRegistry() *Registry {
-	return &Registry{
-		types: make(map[string]FixtureType),
-	}
-}
-
-// Register adds a fixture type to the registry
-func (r *Registry) Register(fixtureType FixtureType) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	name := fixtureType.Name()
-	if _, exists := r.types[name]; exists {
-		return fmt.Errorf("fixture type '%s' already registered", name)
-	}
-
-	r.types[name] = fixtureType
-	return nil
-}
-
-// Get retrieves a fixture type by name
-func (r *Registry) Get(name string) (FixtureType, bool) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	ft, ok := r.types[name]
-	return ft, ok
-}
-
-// GetForFixture determines the appropriate fixture type for a given fixture
-func (r *Registry) GetForFixture(fixture FixtureTest) (FixtureType, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	if fixture.Query != "" {
-		if ft, ok := r.types["query"]; ok {
-			return ft, nil
-		}
-		return nil, fmt.Errorf("query fixture type not registered")
-	}
-
-	if !fixture.IsEmpty() {
-		if ft, ok := r.types["exec"]; ok {
-			return ft, nil
-		}
-		return nil, fmt.Errorf("exec fixture type not registered; import _ \"github.com/flanksource/gavel/fixtures/types\"")
-	}
-	// Add more type detection logic as needed
-
-	return nil, fmt.Errorf("unable to determine fixture type for fixture: %s", fixture.Pretty().ANSI())
-}
-
-// List returns all registered fixture type names
-func (r *Registry) List() []string {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	names := make([]string, 0, len(r.types))
-	for name := range r.types {
-		names = append(names, name)
-	}
-	return names
-}
-
-// ValidateFixture validates a fixture against its determined type
-func (r *Registry) ValidateFixture(fixture FixtureTest) error {
-	ft, err := r.GetForFixture(fixture)
-	if err != nil {
-		return err
-	}
-
-	return ft.ValidateFixture(fixture)
-}
-
-// DefaultRegistry is the global fixture type registry
-var DefaultRegistry = NewRegistry()
-
-// Register adds a fixture type to the default registry
-func Register(fixtureType FixtureType) error {
-	return DefaultRegistry.Register(fixtureType)
-}
-
-// Get retrieves a fixture type from the default registry
-func Get(name string) (FixtureType, bool) {
-	return DefaultRegistry.Get(name)
 }

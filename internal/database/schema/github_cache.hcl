@@ -151,6 +151,76 @@ table "seen_prs" {
   primary_key { columns = [column.repo, column.number] }
 }
 
+# The PR dashboard poller's results, persisted so triage and the TODO pages can
+# search PRs without a live host call. Repo keeps the host's display spelling;
+# lookups compare it case-insensitively against todo_pr_links' lower-cased key.
+table "pull_requests" {
+  schema = schema.public
+
+  column "provider" {
+    null = false
+    type = text
+  }
+  column "repo" {
+    null = false
+    type = varchar(255)
+  }
+  column "number" {
+    null = false
+    type = bigint
+  }
+  column "url" {
+    null = false
+    type = varchar(1024)
+  }
+  column "title" {
+    null = false
+    type = text
+  }
+  column "author" {
+    null = true
+    type = varchar(255)
+  }
+  column "state" {
+    null = true
+    type = varchar(32)
+  }
+  column "is_draft" {
+    null    = false
+    type    = boolean
+    default = false
+  }
+  column "head" {
+    null = true
+    type = varchar(255)
+  }
+  column "base" {
+    null = true
+    type = varchar(255)
+  }
+  column "updated_at" {
+    null = true
+    type = timestamptz
+  }
+  column "synced_at" {
+    null = false
+    type = timestamptz
+  }
+
+  primary_key { columns = [column.provider, column.repo, column.number] }
+  index "idx_pull_requests_updated_at" { columns = [column.updated_at] }
+  index "idx_pull_requests_title_search" {
+    type = GIN
+    on {
+      expr = "to_tsvector('simple'::regconfig, title)"
+    }
+  }
+
+  check "pull_requests_provider_check" {
+    expr = "provider = ANY (ARRAY['github'::text, 'azure'::text])"
+  }
+}
+
 table "favicon_caches" {
   schema = schema.public
 

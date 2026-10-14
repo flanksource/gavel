@@ -6,6 +6,7 @@ import { inputClass, priorities, statuses, statusLabel } from './format';
 import { TodoBodyField } from './TodoBodyField';
 import { useCreateTodoMutation, type CreateTodoResponse } from './todoMutations';
 import { TriageAfterCreation, TriageCreationRecovery } from './TriageAfterCreation';
+import { TodoPRField, todoPRLink } from './TodoPRLink';
 
 // initialDir picks the workspace to preselect: the current todo's workspace when
 // it's a configured one, otherwise the first workspace.
@@ -46,6 +47,7 @@ function CreateTodoForm({ onClose, workspaces, parent, onCreated, defaultDir }: 
   const dir = parent ? parent.dir : chosenDir;
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
+  const [prURL, setPRURL] = useState('');
   const [priority, setPriority] = useState<TodoPriority>('medium');
   const [status, setStatus] = useState<TodoStatus>('pending');
   const [error, setError] = useState('');
@@ -62,7 +64,7 @@ function CreateTodoForm({ onClose, workspaces, parent, onCreated, defaultDir }: 
     try {
       // /api/todos/new accepts both JSON and multipart; post the image bytes as
       // multipart when screenshots are attached, otherwise the lighter JSON path.
-      const fields = { title, body, priority, status, triage, ...(parent ? { parent: parent.ref } : {}) };
+      const fields = { title, body, priority, status, triage, pr: todoPRLink(prURL), ...(parent ? { parent: parent.ref } : {}) };
       const result = await createTodo.mutateAsync(attachments.length
         ? { body: todoFormData(fields, attachments) }
         : {
@@ -128,6 +130,7 @@ function CreateTodoForm({ onClose, workspaces, parent, onCreated, defaultDir }: 
           </div>
         </div>
         <TriageAfterCreation checked={triage} onChange={setTriage} disabled={busy} />
+        <TodoPRField value={prURL} onChange={setPRURL} disabled={busy} />
         <TodoBodyField
           label="Body"
           value={body}

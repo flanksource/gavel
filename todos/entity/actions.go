@@ -129,6 +129,7 @@ type CreateFlags struct {
 	GitHub       bool     `flag:"github" help:"Push the new TODO to a GitHub issue"`
 	BaseURL      string   `flag:"base-url" help:"Absolute origin attachment links resolve against"`
 	Repo         string   `flag:"repo" help:"Target owner/repo"`
+	PRURL        string   `flag:"pr" help:"Link this TODO to an existing PR URL"`
 }
 
 func (CreateFlags) ClickyActionFlags() {}
@@ -172,6 +173,12 @@ func (d Deps) create(ctx context.Context, _ string, flags CreateFlags) (*types.T
 		Title: title, Body: resolved.Body, Verification: resolved.Verification,
 		Priority: priority, Status: start.Status, Labels: flags.Labels,
 		Parent: flags.Parent, NoParent: flags.NoParent,
+	}
+	if flags.PRURL != "" {
+		request.PR, err = types.PRFromURL(flags.PRURL)
+		if err != nil {
+			return nil, rejected(err)
+		}
 	}
 	// A terminal create runs inside whatever started it, so its environment
 	// names the run. A server's environment names whoever started the server,
@@ -218,6 +225,8 @@ type EditFlags struct {
 	ClearLabels  bool     `flag:"clear-labels" help:"Remove every label from the TODO"`
 	Parent       string   `flag:"parent" help:"Make the TODO a child of this TODO (ID or alias)"`
 	NoParent     bool     `flag:"no-parent" help:"Detach the TODO from its parent"`
+	ClearPR      bool     `flag:"clear-pr" help:"Remove the PR link"`
+	PRURL        string   `flag:"pr" help:"Link this TODO to an existing PR URL"`
 }
 
 func (EditFlags) ClickyActionFlags() {}
@@ -233,7 +242,7 @@ func (d Deps) edit(ctx context.Context, ref string, flags EditFlags) (*types.TOD
 	}
 	edits := ops.EditFlags{
 		Status: flags.Status, Priority: flags.Priority, ClearLabels: flags.ClearLabels,
-		Parent: flags.Parent, NoParent: flags.NoParent,
+		Parent: flags.Parent, NoParent: flags.NoParent, PRURL: flags.PRURL, ClearPR: flags.ClearPR,
 	}
 	if flags.Title != "" {
 		edits.Title = &flags.Title

@@ -64,7 +64,7 @@ function Probe({ name, enabled, onRender }: { name: string; enabled: boolean; on
   const state = useAppQueries({ enabled, initialConfig: { repos: [] } });
   onRender?.();
   return (
-    <div data-testid={name} data-error={state.processError} data-project-error={state.projectError}>
+    <div data-testid={name} data-error={state.processError} data-project-error={state.projectError} data-pr-error={state.snapshot.error ?? ''}>
       {state.snapshot.prs.length}/{state.projects.length}
     </div>
   );
@@ -233,6 +233,43 @@ describe('useAppQueries', () => {
 
     await waitFor(() => expect(screen.getByTestId('procs').textContent).toBe('gavel,widgets'));
     expect(rootRender).toHaveBeenCalledTimes(settledRenders);
+  });
+
+  // Mirrors the frame `gavel serve` sends before any fetch has succeeded
+  // because no GitHub token is configured (pr/ui/pr_stream_no_token_ginkgo_test.go).
+  it('shows the no-token message from the stream and clears it once a fetch succeeds', async () => {
+    const noTokenMessage = 'GitHub token not configured: set GITHUB_TOKEN or GH_TOKEN, or run `gavel system install` to persist one';
+    const noTokenFrame = {
+      prs: [],
+      fetchedAt: '0001-01-01T00:00:00Z',
+      nextFetchIn: 60,
+      incremental: false,
+      paused: false,
+      error: noTokenMessage,
+      errorKind: 'no-token',
+      config: { repos: [] },
+    };
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const payload = url === '/api/prs' ? noTokenFrame : url === '/api/projects' ? [] : procStatus;
+      return { ok: true, json: async () => payload } as Response;
+    }));
+    vi.stubGlobal('EventSource', FakeEventSource);
+
+    render(
+      <Provider client={createClient()}>
+        <Probe name="probe" enabled />
+      </Provider>,
+    );
+    await waitFor(() => expect(screen.getByTestId('probe').dataset.prError).toBe(noTokenMessage));
+
+    const stream = FakeEventSource.instances.find(s => s.url === '/api/prs/stream');
+    act(() => stream?.emit('message', noTokenFrame));
+    expect(screen.getByTestId('probe').dataset.prError).toBe(noTokenMessage);
+
+    act(() => stream?.emit('message', snapshot));
+    await waitFor(() => expect(screen.getByTestId('probe').textContent).toBe('1/0'));
+    expect(screen.getByTestId('probe').dataset.prError).toBe('');
   });
 
   it('aborts in-flight bootstrap reads and closes streams when disabled', async () => {

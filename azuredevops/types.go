@@ -17,20 +17,21 @@ type commitRef struct {
 }
 
 type pullRequest struct {
-	ID           int            `json:"pullRequestId"`
-	Title        string         `json:"title"`
-	Description  string         `json:"description"`
-	Status       string         `json:"status"`
-	Draft        bool           `json:"isDraft"`
-	Source       string         `json:"sourceRefName"`
-	Target       string         `json:"targetRefName"`
-	MergeStatus  string         `json:"mergeStatus"`
-	MergeFailure string         `json:"mergeFailureMessage"`
-	MergeCommit  commitRef      `json:"lastMergeCommit"`
-	SourceCommit commitRef      `json:"lastMergeSourceCommit"`
-	TargetCommit commitRef      `json:"lastMergeTargetCommit"`
-	Repository   repositoryInfo `json:"repository"`
-	ForkSource   *struct {
+	ID                  int            `json:"pullRequestId"`
+	Title               string         `json:"title"`
+	Description         string         `json:"description"`
+	Status              string         `json:"status"`
+	Draft               bool           `json:"isDraft"`
+	Source              string         `json:"sourceRefName"`
+	Target              string         `json:"targetRefName"`
+	MergeStatus         string         `json:"mergeStatus"`
+	MergeFailure        string         `json:"mergeFailureMessage"`
+	CompletionQueueTime time.Time      `json:"completionQueueTime"`
+	MergeCommit         commitRef      `json:"lastMergeCommit"`
+	SourceCommit        commitRef      `json:"lastMergeSourceCommit"`
+	TargetCommit        commitRef      `json:"lastMergeTargetCommit"`
+	Repository          repositoryInfo `json:"repository"`
+	ForkSource          *struct {
 		Repository repositoryInfo `json:"repository"`
 	} `json:"forkSource"`
 	CreatedBy struct {

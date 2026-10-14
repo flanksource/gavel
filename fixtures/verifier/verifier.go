@@ -12,6 +12,7 @@ package verifier
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -19,12 +20,14 @@ import (
 	"github.com/flanksource/captain/pkg/api"
 
 	"github.com/flanksource/gavel/fixtures"
+	"github.com/flanksource/gavel/processruntime"
+	"github.com/flanksource/gavel/verify"
 
-	// Registers the exec/query fixture types and the ai / `yaml test` /
-	// `yaml lint` step hooks the documents dispatch to. Without it a declared
+	// Registers every fixture step kind the documents dispatch to (exec, test,
+	// lint, ai, services, todo, browser, …). Without it a declared
 	// step errors instead of running, which is a false red rather than a false
 	// green — but a false red on every run all the same.
-	_ "github.com/flanksource/gavel/fixtures/types"
+	_ "github.com/flanksource/gavel/fixtures/kinds/all"
 )
 
 func init() { capverify.Register(capverify.KindFixture, New) }
@@ -114,8 +117,20 @@ func (v *Verifier) Verify(ctx context.Context, cwd string, changed []string) (ca
 		return capverify.Verdict{}, fmt.Errorf("verify fixture: %w", err)
 	}
 
+	config, err := verify.LoadGavelConfig(cwd)
+	if err != nil {
+		return capverify.Verdict{}, err
+	}
+	runtime, runtimeArgs, err := config.RuntimeFor("test", "fixture", processruntime.Options{})
+	if err != nil {
+		return capverify.Verdict{}, err
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		return capverify.Verdict{}, err
+	}
 	results, snapshot, runErr := fixtures.RunNodes(v.progressContext(ctx), tree.Children,
-		fixtures.RunOptions{WorkDir: cwd, Spec: v.Spec, ResolveSpec: v.ResolveSpec, Changed: changed})
+		fixtures.RunOptions{WorkDir: cwd, Spec: v.Spec, ResolveSpec: v.ResolveSpec, Changed: changed, ProcessRuntime: runtime, ExecutablePath: executable, Args: runtimeArgs})
 	if runErr != nil {
 		// The walk itself could not finish, so some declared step never ran. That
 		// is a scheduling failure, and Report says so from the snapshot — the

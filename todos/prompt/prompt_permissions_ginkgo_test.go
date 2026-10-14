@@ -57,13 +57,23 @@ var _ = Describe("the triage prompt permission posture", func() {
 			"Bash(gavel todos get:*)", "Bash(gavel todos list:*)"))
 	})
 
-	It("never allows a TODO-mutating command", func() {
+	// PR candidates come from the persisted PR index, which `gavel pr search`
+	// reads without touching GitHub. The allow is scoped to that subcommand: an
+	// allow on `gavel pr:*` would also cover create, close and merge.
+	It("allows searching the PR index", func() {
+		gomega.Expect(permissions.Tools.AllowList()).To(gomega.ContainElement("Bash(gavel pr search:*)"))
+	})
+
+	It("never allows a TODO- or PR-mutating command", func() {
 		for _, allowed := range permissions.Tools.AllowList() {
 			gomega.Expect(allowed).NotTo(gomega.SatisfyAny(
 				gomega.ContainSubstring("todos edit"),
 				gomega.ContainSubstring("todos delete"),
 				gomega.ContainSubstring("todos run"),
 				gomega.Equal("Bash(gavel todos:*)"),
+				gomega.Equal("Bash(gavel pr:*)"),
+				gomega.ContainSubstring("pr create"),
+				gomega.ContainSubstring("pr close"),
 				gomega.Equal("Bash"),
 			), "triage writes nothing itself: %s", allowed)
 		}

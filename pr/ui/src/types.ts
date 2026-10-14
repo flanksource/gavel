@@ -156,6 +156,9 @@ export interface Snapshot {
   incremental: boolean;
   paused: boolean;
   error?: string;
+  // Classifies `error` as a known server state: 'no-token' means PR polling
+  // cannot run until a GitHub token is configured (error says how).
+  errorKind?: 'no-token';
   config: SearchConfig;
   // Login of the authenticated GitHub user, used to resolve the @me author
   // filter client-side. Empty until the auth probe completes.
@@ -192,6 +195,11 @@ export interface PRSyncStatus {
 // Detail API types
 
 export interface PRInfo {
+  provider?: string;
+  headRefOid?: string;
+  mergeStateStatus?: string;
+  mergeReadiness?: { state: string; reasons?: string[] };
+  reviewThreads?: PRComment[];
   number: number;
   // nodeId is the GraphQL global node ID, required by the merge / approve /
   // auto-merge actions. Present once PR detail has loaded.
@@ -274,6 +282,7 @@ export interface WorkflowRun {
 }
 
 export interface PRComment {
+  threadId?: string;
   id: number;
   body: string;
   author: string;

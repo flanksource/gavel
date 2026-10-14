@@ -9,6 +9,7 @@ import (
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/clicky/task"
 	"github.com/flanksource/gavel/fixtures"
+	fixturetypes "github.com/flanksource/gavel/fixtures/types"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/verify"
 	. "github.com/onsi/ginkgo/v2"
@@ -32,8 +33,7 @@ var _ = Describe("standalone fixture runtime presets", func() {
 		DeferCleanup(database.ResetDisabledSharedForTest)
 		captured = nil
 		dispatched = 0
-		original := fixtures.AIStepRunner
-		fixtures.AIStepRunner = func(test fixtures.FixtureTest, options fixtures.RunOptions) fixtures.FixtureResult {
+		DeferCleanup(fixtures.DefaultKinds.Replace(fixturetypes.NewAIKind(func(test fixtures.FixtureTest, options fixtures.RunOptions) fixtures.FixtureResult {
 			capturedMu.Lock()
 			defer capturedMu.Unlock()
 			dispatched++
@@ -41,8 +41,7 @@ var _ = Describe("standalone fixture runtime presets", func() {
 				captured = append(captured, *options.Runtime)
 			}
 			return fixtures.FixtureResult{Name: test.Name, Status: task.StatusPASS, Test: test}
-		}
-		DeferCleanup(func() { fixtures.AIStepRunner = original })
+		})))
 	})
 
 	DescribeTable("resolves verification presets before the AI fixture dispatch",

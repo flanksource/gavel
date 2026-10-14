@@ -1,0 +1,32 @@
+# A YAML fixture document: typed exec steps sharing a fixture-scoped Env.
+#   gavel fixtures fixtures/testdata/kinds/exec-env.fixture.yaml
+kind: Fixture
+name: exec steps share exported env
+defaults:
+  wait: { interval: 50ms, backoff: { factor: 2, max: 500ms }, jitter: 20%, timeout: 10s }
+  timeout: 1m
+env:
+  GREETING: hello
+steps:
+  - id: mint
+    kind: exec
+    script: 'printf "{\"token\":\"t-%s\",\"greeting\":\"%s\"}" 42 "$GREETING"'
+    cel: json.token == 't-42' && json.greeting == 'hello'
+    export:
+      TOKEN: "{{.outputs.json.token}}"
+
+  - id: ready
+    kind: exec
+    # Each observation re-runs the script; the third run reports ready.
+    script: 'n=$(cat {{.tmp}}/ready 2>/dev/null || echo 0); n=$((n+1)); echo $n > {{.tmp}}/ready; [ $n -ge 3 ] && echo ready || echo starting'
+    wait:
+      until: stdout.contains('ready')
+      failWhen: exitCode > 1
+
+  - id: use
+    kind: exec
+    script: 'echo "token=$TOKEN minted-by={{.steps.mint.json.token}} greeting=$GREETING"'
+    cel: >-
+      stdout.contains('token=t-42 minted-by=t-42 greeting=hello')
+      && steps.ready.stdout.contains('ready')
+      && env.TOKEN == 't-42'

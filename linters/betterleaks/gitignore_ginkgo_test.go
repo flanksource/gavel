@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/flanksource/gavel/linters"
 	"github.com/hairyhenderson/toml"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -18,6 +19,8 @@ func TestBetterleaksGitIgnore(t *testing.T) {
 
 var _ = Describe("Betterleaks Git ignore passthrough", func() {
 	It("adds ignored paths to a wrapper scan config", func() {
+		GinkgoT().Setenv("HOME", GinkgoT().TempDir())
+		GinkgoT().Setenv("XDG_CACHE_HOME", GinkgoT().TempDir())
 		workDir := GinkgoT().TempDir()
 		base := filepath.Join(workDir, "base.toml")
 		Expect(os.WriteFile(base, []byte("title = \"base\"\n"), 0o644)).To(Succeed())
@@ -28,7 +31,9 @@ var _ = Describe("Betterleaks Git ignore passthrough", func() {
 			IgnoredPaths: []string{".agents/", "debug.log"},
 		})
 		Expect(err).NotTo(HaveOccurred())
-		Expect(out).To(Equal(filepath.Join(workDir, ".tmp", "betterleaks-scan.toml")))
+		scratch, err := linters.ScratchDir(workDir, "betterleaks")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(out).To(Equal(filepath.Join(scratch, "betterleaks-scan.toml")))
 
 		data, err := os.ReadFile(out)
 		Expect(err).NotTo(HaveOccurred())

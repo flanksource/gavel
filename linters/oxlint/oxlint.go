@@ -213,8 +213,7 @@ func (o *Oxlint) Run(ctx commonsContext.Context, task *clicky.Task) ([]models.Vi
 	args := o.buildArgs()
 
 	command := o.commandName()
-	cmd := exec.CommandContext(ctx, command, args...)
-	cmd.Dir = o.WorkDir
+	cmd := o.CommandContext(ctx, o.Name(), command, args...)
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = o.WrapWriter(&stdout)

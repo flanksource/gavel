@@ -29,7 +29,7 @@ func TestMergePullRequest_SendsMutation(t *testing.T) {
 	t.Cleanup(srv.Close)
 	t.Setenv("GITHUB_API_URL", srv.URL)
 
-	err := MergePullRequest(Options{Token: "tok"}, "PR_node_1", "squash")
+	err := MergePullRequest(Options{Token: "tok"}, MergeOptions{NodeID: "PR_node_1", Method: "squash"})
 	require.NoError(t, err)
 	assert.Contains(t, gotQuery, "mergePullRequest")
 	assert.Equal(t, "PR_node_1", gotVars["prId"])
@@ -43,7 +43,7 @@ func TestMergePullRequest_SurfacesGraphQLError(t *testing.T) {
 	t.Cleanup(srv.Close)
 	t.Setenv("GITHUB_API_URL", srv.URL)
 
-	err := MergePullRequest(Options{Token: "tok"}, "PR_node_1", "rebase")
+	err := MergePullRequest(Options{Token: "tok"}, MergeOptions{NodeID: "PR_node_1", Method: "rebase"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "Pull request is not mergeable")
 }
@@ -55,13 +55,13 @@ func TestMergePullRequest_EmptyNodeIDFailsBeforeRequest(t *testing.T) {
 	t.Cleanup(srv.Close)
 	t.Setenv("GITHUB_API_URL", srv.URL)
 
-	err := MergePullRequest(Options{Token: "tok"}, "  ", "rebase")
+	err := MergePullRequest(Options{Token: "tok"}, MergeOptions{NodeID: "  ", Method: "rebase"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "node ID is required")
 }
 
 func TestMergePullRequest_InvalidMergeType(t *testing.T) {
-	err := MergePullRequest(Options{Token: "tok"}, "PR_node_1", "fast-forward")
+	err := MergePullRequest(Options{Token: "tok"}, MergeOptions{NodeID: "PR_node_1", Method: "fast-forward"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid merge type")
 }

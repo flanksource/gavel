@@ -139,6 +139,23 @@ var _ = Describe("recording answers given outside gavel", func() {
 		Expect(f.eventsOf(ctx, parked.todo, native.EventAskAnswered)).To(BeEmpty())
 	})
 
+	It("does not read the asking turn's own prompt as an answer when Captain ingests that turn after the park", func(ctx SpecContext) {
+		parked := f.parkRunAsk(ctx, "Revised after an earlier ask")
+		// The ask already on the transcript is an earlier run's: it was recorded
+		// before this run started.
+		Expect(f.db.WithContext(ctx).Exec(`
+			UPDATE captain_messages SET recorded_at = (SELECT created_at FROM captain_prompt_runs WHERE id = ?) - interval '1 minute'
+			WHERE session_id = ?`, parked.runID, parked.executionSessionID).Error).To(Succeed())
+		f.insertMessage(ctx, parked.executionSessionID, "user", textParts("Include the option of unselecting plans"))
+		f.insertMessage(ctx, parked.executionSessionID, "assistant", structuredOutput(askEnvelope(askedQuestion)))
+
+		read, err := f.reader.Get(ctx, parked.todo.ID)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(read.Status).To(Equal(types.StatusAsk))
+		Expect(f.eventsOf(ctx, parked.todo, native.EventAskAnswered)).To(BeEmpty())
+	})
+
 	It("writes nothing for a todo that is not asking", func(ctx SpecContext) {
 		todo, err := f.dispatcher.Create(ctx, todos.CreateRequest{Title: "Never asked", Status: types.StatusPending})
 		Expect(err).NotTo(HaveOccurred())

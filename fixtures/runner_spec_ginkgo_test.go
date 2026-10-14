@@ -12,15 +12,12 @@ import (
 
 var _ = Describe("fixture runner AI spec", func() {
 	It("passes the runner spec to an embedded AI fixture", func() {
-		original := AIStepRunner
-		DeferCleanup(func() { AIStepRunner = original })
-
 		spec := api.Spec{Model: api.Model{Name: "verification-model"}}
 		var received *api.Spec
-		AIStepRunner = func(fixture FixtureTest, opts RunOptions) FixtureResult {
-			received = opts.Spec
-			return FixtureResult{Name: fixture.Name, Status: task.StatusPASS}
-		}
+		useKind(fakeKind{name: "ai", execute: func(_ context.Context, step *StepContext) (StepOutcome, error) {
+			received = step.Opts.Spec
+			return StepOutcome{Result: FixtureResult{Name: step.Test.Name, Status: task.StatusPASS}}, nil
+		}})
 		runner := &Runner{options: RunnerOptions{WorkDir: GinkgoT().TempDir(), Spec: &spec}}
 
 		_, err := runner.executeFixture(

@@ -706,6 +706,8 @@ and `<target-dir>/.gavel.yaml` (or the parent directory when the target is a fil
 
 Manage and execute native PostgreSQL TODO issues with Claude or Codex.
 
+[PR-linked TODOs](docs/pr-todos.md) publish completed turns to an explicitly linked PR and feed whole-PR verification failures into the next turn. Create or edit a link with `--pr <URL>`; remove it with `--clear-pr`.
+
 Every todo moves through a **lifecycle**: an ordered set of steps, each a
 captain prompt reference plus a CEL `when` predicate (deciding whether the
 step applies now) and ordered `outcomes` (deciding which status a finished run
@@ -772,6 +774,8 @@ Project-level configuration placed at the repository root. Gavel also loads `~/.
 
 Use `gavel config [path]` to inspect the merged result for any directory or file path.
 A full annotated example lives in `gavel.yaml.example` and is also rendered in `gavel config --help`.
+
+Set shared `runtime` defaults in `~/.gavel.yaml` for every linter and test type: child environment, niceness, sustained CPU, aggregate memory, and per-invocation timeout. Override them under `lint.runtime`, `test.runtime`, `lint.linters.<name>.runtime`, or `test.frameworks.<name>.runtime`. Type entries also accept native `args`. Inspect effective settings with `gavel config --runtime --json`; see [runtime configuration](SCHEMA.md#shared-process-runtime) for precedence, cap resets, fixture isolation, and examples.
 
 ```yaml
 verify:

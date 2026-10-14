@@ -48,6 +48,9 @@ func resolveLintPath(workDir, value string) string {
 // FilterViolationsByUserScope. Promoting WorkDir + clearing Files would
 // destroy both signals, so we leave them alone in the in-repo case.
 func NormalizeRootArg(opts Options) (Options, error) {
+	if err := opts.captureConfigDir(); err != nil {
+		return opts, err
+	}
 	if opts.WorkDir != "" || len(opts.Files) != 1 {
 		return opts, nil
 	}

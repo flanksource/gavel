@@ -456,6 +456,61 @@ gavel fixtures --benchmark --baseline .gavel/benchmarks/fixtures/base.json --max
 
 When profiling or SQL limits are active, Gavel passes `SQL_PROFILE_FILE` to each command. Applications using commons-db's GORM `NewSqlLogger` export one JSON line per statement there, including raw SQL text, string-rendered bound parameters, duration in nanoseconds, row count, and slow/error flags. Gavel saves those statements with per-fixture totals in its benchmark report and shows them in the fixture benchmark view. Profile files and benchmark reports can contain query data. A fixture with a SQL limit fails if its command never creates the SQL profile file.
 
+#### YAML and JSON fixtures
+
+A fixture can also be a YAML or JSON document (`*.fixture.yaml`, `*.fixture.yml`, `*.fixture.json`, discovered alongside `*.fixture.md`). Instead of Markdown tables and code blocks, it lists typed **steps**. Each step has an `id` and a `kind`, which selects what the step does and which fields it takes. Steps run in order; once one fails, the later steps are reported as skipped. `gavel fixtures --schema` prints the JSON schema of every kind.
+
+```yaml
+kind: Fixture
+name: exec steps share exported env
+defaults:
+  wait: { interval: 50ms, backoff: { factor: 2, max: 500ms }, jitter: 20%, timeout: 10s }
+  timeout: 1m
+env:
+  GREETING: hello
+steps:
+  - id: mint
+    kind: exec
+    script: 'printf "{\"token\":\"t-%s\"}" 42'
+    cel: json.token == 't-42'
+    export:
+      TOKEN: "{{.outputs.json.token}}"
+
+  - id: use
+    kind: exec
+    script: 'echo "token=$TOKEN"'
+    cel: stdout.contains('token=t-42') && steps.mint.json.token == 't-42'
+```
+
+Save this as `env.fixture.yaml` and run `gavel fixtures env.fixture.yaml`. The full version is `fixtures/testdata/kinds/exec-env.fixture.yaml`.
+
+**Environment and exports.** A fixture has one environment, made of the process env plus `env:`. Every step's subprocesses receive it. Inside a step, `{{.env.NAME}}` and `$NAME` read from it. A step's `export:` map renders templates over that step's outputs (`{{.outputs.…}}`) and adds the results to the environment of every later step. Some kinds also export defaults, for example `TODO_ID` and `GAVEL_URL`, so URLs, ids and session names are mapped once rather than repeated. Exporting a name that an earlier step already set is an error unless the step sets `override: true`. Referencing an unset `$NAME` fails the step. A later step's CEL and templates can also read an earlier step's outputs through `steps.<id>.*`.
+
+**Templates.** Step fields are gomplate templates with access to `.env`, `.steps`, `.tmp` (a per-fixture scratch directory) and `.fixture.dir`. Shell scripts keep `$NAME` and `$?` as plain shell, so only `{{…}}` is expanded in them.
+
+**Wait, retry and timeout.** These work the same way for every kind:
+
+- `wait` acts the step out once, then re-observes its state on a schedule until `until` is true. The schedule starts at `interval`, grows by `backoff.factor` up to `backoff.max`, and varies each delay by `jitter`, given either as a percentage or a duration. The step fails early when `failWhen` is true, and fails with the last observed outputs once `timeout` passes. Every observation is recorded in the step result, so a timeout shows how the state changed over time.
+- `retry` re-runs a failed step up to `attempts` times, but only while the CEL `when` holds. Its `delay`, `backoff` and `jitter` work the same way as for `wait`.
+- `timeout` caps the whole step.
+
+A fixture's `defaults:` block sets the `wait`, `retry` and `timeout` that every step inherits.
+
+**Background steps.** A step with `background: true` starts and keeps running while later steps execute. Its verdict is collected at teardown.
+
+| Kind | Does | Default exports |
+|------|------|-----------------|
+| `exec` | Runs `script` in a shell. CEL sees `stdout`, `stderr`, `exitCode` and `json` (stdout parsed as JSON). | – |
+| `ai` | Runs a captain AI check from `prompt`/`criteria`/`checklist` with an optional `model`. | – |
+| `services` | Starts named services in order and tears them down in reverse. Each entry is one of `deps: postgres` (a deps catalog service), `exec:` (a supervised command, with `{{.port}}` allocated and readiness checked by `ready: {http\|tcp\|exec}`), or `git:` (a seeded temporary repository). Later entries can read earlier ones through `{{.services.<name>.url}}`. | `<NAME>_URL`, `<NAME>_PORT` |
+| `todo` | Creates a gavel TODO (`create: {title, body, triage}`), or runs `approve`, `reject` or `get` on one, over `$GAVEL_URL`. CEL sees `todo`, `triage`, … | `TODO_ID`, `TODO_URL` |
+| `todo_prompt` | Launches a lifecycle `step` (`plan`, `run` or `verify`) and observes it. CEL sees `launch`, `todo`, `plan`, `verify`, `session.errors`. | – |
+| `browser` | Starts Chrome with a profile (`profile: {fresh: true}`) for later steps to attach to over CDP. | `BROWSER_CDP_URL`, `BROWSER_WS_URL`, `BROWSER_SESSION`, `BROWSER_PROFILE_DIR` |
+| `playwright` | Runs a Playwright spec, either from `file:` or inline `script:`, against the shared Chrome (`import { test } from '../fixtures/cdp'`). It reports each test as a child result. With `background: true`, `file: ../../e2e/watch-session.ts` watches a page and fails at teardown on any session error alert, stream error banner, console error, page error, or `/api/` response with status 400 or higher. | – |
+| `agent-browser` | Runs `commands:` with `agent-browser --engine chrome` attached to the shared Chrome. Setting `observe: snapshot` re-takes the snapshot on each `wait` observation. | – |
+
+`pr/ui/testdata/todo-lifecycle/claude.fixture.yaml` drives a TODO end to end: create, triage, plan, approve, run and verify. It runs the real `claude` CLI against captain's scripted AI mock and watches the Session tab for errors throughout. Run it with `gavel fixtures pr/ui/testdata/todo-lifecycle/claude.fixture.yaml`. It needs `captain`, `claude` and Chrome on `PATH`, and the sibling `clicky-ui` checkout for `serve --dev`. `codex.fixture.yaml` runs the same flow with the `codex` CLI.
+
 Ready-made workflow templates live in `examples/` (they run against the bundled `examples/sample-app`): `precommit.fixture.md` (lint + test the files you changed), `pre-release.fixture.md` (build, then the full suite and every linter), `smoke-test.fixture.md` (fast smoke tests + a `/health` probe), and `ai-review.fixture.md` (an AI reviewer scores the change against an acceptance-criteria checklist — needs `captain configure`). Run one with `gavel fixtures examples/precommit.fixture.md`, or copy it into your project.
 
 ### `gavel bench`

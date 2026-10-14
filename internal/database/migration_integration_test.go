@@ -59,7 +59,7 @@ func TestHCLMigrationFromExistingGitHubSchema(t *testing.T) {
 	for _, table := range []string{
 		"captain_sessions", "captain_prompt_runs", "captain_plans", "captain_turns", "captain_model_calls",
 		"http_cache_entries", "workflow_run_caches", "job_log_caches", "workflow_def_caches",
-		"seen_prs", "favicon_caches",
+		"seen_prs", "pull_requests", "favicon_caches",
 		"git_repos", "git_worktrees", "git_branches", "git_range_stats", "test_run_caches", "test_run_cursors",
 		"task_run_history",
 		"file_scans", "violations", "linter_executions", "debounce_metadata", "migration_unmanaged",
@@ -82,7 +82,7 @@ func TestHCLMigrationFromExistingGitHubSchema(t *testing.T) {
 
 	require.NoError(t, db.Gorm().Exec(`DROP TABLE
 		http_cache_entries, workflow_run_caches, job_log_caches, workflow_def_caches,
-		seen_prs, favicon_caches,
+		seen_prs, pull_requests, favicon_caches,
 		git_range_stats, git_branches, git_worktrees, git_repos, test_run_caches, test_run_cursors,
 		violations, file_scans, linter_executions, debounce_metadata CASCADE`).Error)
 	fresh, err := database.Open(t.Context(), database.WithMigrations())

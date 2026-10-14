@@ -1,0 +1,5 @@
+# Inline `script:` bodies of gavel fixture `playwright` steps are written here
+# (inside the Playwright testDir, so they resolve @playwright/test and
+# ../fixtures/cdp) for the duration of one run, then removed.
+*
+!.gitignore

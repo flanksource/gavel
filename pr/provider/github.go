@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"fmt"
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/pr/model"
 )
@@ -9,6 +10,26 @@ import (
 type gitHubClient struct{ opts github.Options }
 
 func (c gitHubClient) Kind() string { return "github" }
+
+func (c gitHubClient) ResolveThread(ctx context.Context, number int, threadID string) error {
+	pr, err := github.FetchPR(c.opts, number)
+	if err != nil {
+		return err
+	}
+	for _, thread := range pr.ReviewThreads {
+		if thread.ThreadID != threadID {
+			continue
+		}
+		if thread.IsResolved {
+			return nil
+		}
+		if !thread.CanResolve {
+			return fmt.Errorf("review thread %s cannot be resolved by the current viewer", threadID)
+		}
+		return github.ResolveReviewThread(c.opts, threadID)
+	}
+	return fmt.Errorf("review thread %s does not belong to PR #%d", threadID, number)
+}
 func (c gitHubClient) Preflight(ctx context.Context) error {
 	_, err := github.DefaultBranch(c.opts)
 	return err

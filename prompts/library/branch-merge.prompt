@@ -1,0 +1,110 @@
+---
+name: branch-merge
+description: Rebase a branch onto its base in the branch's worktree, resolve the conflicts, then land it into the base checkout.
+model: claude
+effort: high
+budget:
+  maxTurns: 40
+  timeout: 30m
+setup:
+  cwd: "{{worktree}}"
+prompt:
+  system: >-
+    You are running inside the git worktree {{worktree}}, which has branch
+    {{branch}} checked out. Rebase {{branch}} onto {{base}} and resolve every
+    conflict the rebase stops on, keeping each commit's own intent on top of
+    what {{base}} already contains. Do not push, do not abort the rebase, and
+    never touch the main checkout at {{repo}}: once your work verifies, gavel
+    lands the branch there for you.
+permissions:
+  # Edits stay in the worktree; git is limited to inspecting, staging and
+  # driving the rebase forward. Patterned Bash rules only bind on Claude,
+  # which is why the model is pinned above.
+  mode: acceptEdits
+  tools:
+    Read: allow
+    Glob: allow
+    Grep: allow
+    Edit: allow
+    Write: allow
+    Bash(git status:*): allow
+    Bash(git diff:*): allow
+    Bash(git log:*): allow
+    Bash(git show:*): allow
+    Bash(git add:*): allow
+    Bash(git rm:*): allow
+    Bash(git commit:*): allow
+    Bash(git commit --amend:*): deny
+    Bash(git rebase:*): allow
+    Bash(git -c core.editor=true rebase:*): allow
+    Bash(gavel test:*): allow
+    Bash(gavel lint:*): allow
+    Bash(make build:*): allow
+    Bash(git rebase --abort:*): deny
+    Bash(git rebase -i:*): deny
+    Bash(git rebase --interactive:*): deny
+    Bash(git push:*): deny
+    Bash(git reset:*): deny
+    Bash(git merge:*): deny
+    Bash(git checkout:*): deny
+    Bash(git switch:*): deny
+    Bash(git branch:*): deny
+    Bash(git worktree:*): deny
+workflow:
+  verify:
+    maxIterations: 3
+    # Run in the worktree, after each turn. A failing check is fed back to the
+    # agent with its output tail.
+    commands:
+      # No rebase is still stopped on a commit.
+      - test ! -d "$(git rev-parse --git-path rebase-merge)" && test ! -d "$(git rev-parse --git-path rebase-apply)"
+      # The branch now sits on top of the base.
+      - |-
+        git merge-base --is-ancestor {{shq base}} HEAD
+      # No conflict markers survived into the rebased commits.
+      - |-
+        git diff --check {{shq base}}...HEAD
+      # Every fix is committed: landing only carries commits.
+      - test -z "$(git status --porcelain)"
+  after:
+    # Runs once, in the main checkout, only after verify passed. Rebasing made
+    # the history linear, so incremental landing is a plain fast-forward.
+    # Commands carrying user values are block scalars (a quoted value holding
+    # ": " or " #" would break the YAML), and branch with shell rather than
+    # Handlebars blocks so the frontmatter stays valid YAML before rendering.
+    - when: onVerify
+      cwd: "{{repo}}"
+      commands:
+        - |-
+          case {{shq mode}} in
+            squash) git merge --squash {{shq branch}} ;;
+            incremental) git merge --ff-only {{shq branch}} ;;
+            *) echo "mode must be squash or incremental, got "{{shq mode}} >&2; exit 1 ;;
+          esac
+        - |-
+          [ {{shq mode}} != squash ] || if [ -n {{shq message}} ]; then git commit -m {{shq message}}; else git commit --no-edit; fi
+        - |-
+          git worktree remove {{shq worktree}}
+        - |-
+          git branch -D {{shq branch}}
+---
+## Rebase `{{branch}}` onto `{{base}}`
+
+{{#if conflicts}}
+Landing `{{branch}}` into `{{base}}` failed on these files:
+
+{{#each conflicts}}
+- `{{this}}`
+{{/each}}
+
+Expect the rebase to stop on them; later commits may conflict on other files too.
+
+{{/if}}
+1. Run `git rebase {{base}}`.
+2. Each time the rebase stops on a conflict:
+   - Resolve every `<<<<<<<` / `=======` / `>>>>>>>` hunk so the commit keeps its own intent on top of `{{base}}`. Leave no markers behind.
+   - `git add` (or `git rm`) each resolved file.
+   - Continue with `git -c core.editor=true rebase --continue`.
+   - Use `git rebase --skip` only when the commit became empty because `{{base}}` already contains its change.
+3. When the rebase has finished, run the project's build and tests. Fix any breakage the rebase introduced and commit the fix as a new commit with `git commit` — no amending, no squashing.
+4. Finish with a clean worktree. Do not push, merge, reset, or switch branches.

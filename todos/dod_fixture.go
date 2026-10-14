@@ -10,9 +10,8 @@ import (
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/fixtures"
 
-	// Registers the fixture engine's `yaml test` / `yaml lint` step runners
-	// (fixtures.TestStepRunner / LintStepRunner) via its init.
-	_ "github.com/flanksource/gavel/fixtures/types"
+	// Registers every fixture step kind (exec, test, lint, ai, services, todo, …).
+	_ "github.com/flanksource/gavel/fixtures/kinds/all"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/flanksource/gavel/verify"
 	"github.com/flanksource/repomap"
@@ -129,6 +128,10 @@ func BuildDefinitionOfDone(in DefinitionOfDoneOptions) (DefinitionOfDone, error)
 		body, dropped, err := adoptVerificationFrontMatter(&front, todo.VerificationMarkdown)
 		if err != nil {
 			return DefinitionOfDone{}, err
+		}
+		body, err = PRVerificationFixture(todo.PR, body)
+		if err != nil {
+			return DefinitionOfDone{}, fmt.Errorf("todo %s PR verification: %w", todo.DisplayID(), err)
 		}
 		for _, warning := range dropped {
 			// Named, because several todos can contribute to one document and a

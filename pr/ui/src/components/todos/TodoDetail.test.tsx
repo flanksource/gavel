@@ -219,6 +219,14 @@ afterEach(() => {
 });
 
 describe('TodoDetail Resume/Run/Plan guard', () => {
+  it('shows the linked PR above the tabs without fetching status until requested', async () => {
+    const pr = { number: 27, url: 'https://github.com/acme/service/pull/27' };
+    await renderDetail({ ...baseTodo, pr });
+    fireEvent.click(screen.getByText('Session').closest('button')!);
+    expect(screen.getByRole('link', { name: 'PR #27' }).getAttribute('href')).toBe(pr.url);
+    expect(screen.getByRole('button', { name: 'PR status and actions' })).toBeTruthy();
+    expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).startsWith('/api/prs/linked'))).toBe(false);
+  });
   it('adopts the admitted Captain session id as soon as a run starts', async () => {
     const admissionSession = '11111111-1111-4111-8111-111111111111';
     const runReason = 'Work landed but the definition of done has not been checked.';
@@ -339,6 +347,20 @@ describe('TodoDetail Resume/Run/Plan guard', () => {
 
     expect(screen.getByRole('alert').textContent).toContain('todo reference abc123 is ambiguous');
     expect(screen.getByRole('button', { name: 'Back to todos' })).toBeTruthy();
+  });
+
+  // The split layout mounts the detail pane before a todo is selected, with no
+  // dir; an unscoped taxonomy request falls back to the server's own workdir,
+  // which is not a registered project, and 404s.
+  it('loads the label taxonomy only once a todo is loaded', async () => {
+    const props = { loading: true, onChanged: () => {}, onDeleted: () => {} };
+    const { rerender } = render(<StatefulTodoDetail todo={null} dir="" {...props} />, { wrapper: queryTestWrapper() });
+    await act(async () => {});
+    const labelRequests = () => vi.mocked(fetch).mock.calls.map(([url]) => String(url)).filter(url => url.startsWith('/api/todos/labels'));
+    expect(labelRequests()).toEqual([]);
+
+    rerender(<StatefulTodoDetail todo={baseTodo} dir="/repo" {...props} loading={false} />);
+    await waitFor(() => expect(labelRequests()).toEqual(['/api/todos/labels?dir=%2Frepo']));
   });
 
   it('opens the exact historical Session tab resolved from a session UUID', async () => {

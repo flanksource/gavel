@@ -8,7 +8,7 @@ import (
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/gavel/fixtures"
-	_ "github.com/flanksource/gavel/fixtures/types"
+	_ "github.com/flanksource/gavel/fixtures/kinds/all"
 	"github.com/spf13/cobra"
 )
 
