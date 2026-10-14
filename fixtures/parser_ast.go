@@ -177,7 +177,7 @@ func parseMarkdownWithGoldmarkTree(content string, frontMatter *FrontMatter, sou
 
 			if kind := runnerStepKind(infoString); kind != "" {
 				// `yaml test` / `yaml lint` (or bare `test`/`lint`): the body is
-				// engine options, run by the TestStepRunner/LintStepRunner hook.
+				// engine options, run by the registered `test` / `lint` kind.
 				name := parentHeading
 				if name == "" {
 					name = kind + "-step"

@@ -19,21 +19,9 @@ import (
 	"github.com/flanksource/repomap"
 )
 
-// ExecFixture implements FixtureType for command execution tests
+// ExecFixture runs a command fixture: a markdown fence or table row, or a
+// YAML/JSON `kind: exec` step once its config is applied (see execKind).
 type ExecFixture struct{}
-
-// ValidateFixture implements fixtures.FixtureType.
-func (e *ExecFixture) ValidateFixture(fixture fixtures.FixtureTest) error {
-	panic("unimplemented")
-}
-
-// ensure ExecFixture implements FixtureType
-var _ fixtures.FixtureType = (*ExecFixture)(nil)
-
-// Name returns the type identifier
-func (e *ExecFixture) Name() string {
-	return "exec"
-}
 
 // Run executes the command test with gomplate template support
 func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opts fixtures.RunOptions) fixtures.FixtureResult {
@@ -117,10 +105,18 @@ func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opt
 	if exec.Env == nil {
 		exec.Env = make(map[string]any)
 	}
-	// Precedence, highest first: the fixture's own `env:` > the setup's
-	// environment > the auto-injected roots > whatever the process already
-	// had. Both clicky and os/exec start the child from os.Environ(), so a
-	// setup's environment is additive and overriding, never hermetic.
+	// Precedence, highest first: the fixture's own `env:` > variables earlier
+	// steps exported into the fixture Env > the setup's environment > the
+	// auto-injected roots > whatever the process already had. Both clicky and
+	// os/exec start the child from os.Environ(), so the rest of the fixture Env
+	// (process, setup, front matter) already reaches it.
+	if opts.Scope != nil {
+		for name := range opts.Scope.Env.Exported() {
+			if _, ok := exec.Env[name]; !ok {
+				exec.Env[name], _ = opts.Scope.Env.Get(name)
+			}
+		}
+	}
 	if opts.Setup != nil {
 		for k, v := range opts.Setup.Env {
 			if _, ok := exec.Env[k]; !ok {
@@ -418,16 +414,6 @@ func templateString(value string, data map[string]any) (string, error) {
 	return gomplate.RunTemplate(data, gomplate.Template{Template: value})
 }
 
-// GetRequiredFields returns required fields
-func (e *ExecFixture) GetRequiredFields() []string {
-	return []string{"CLI or CLIArgs"}
-}
-
-// GetOptionalFields returns optional fields
-func (e *ExecFixture) GetOptionalFields() []string {
-	return []string{"CWD", "CEL", "Expected.Output", "Expected.Error", "Expected.exitCode", "env"}
-}
-
 func findGoModRoot(path string) string {
 	dir := path
 	if info, err := os.Stat(path); err == nil && !info.IsDir() {
@@ -446,9 +432,4 @@ func findGoModRoot(path string) string {
 		}
 		dir = parent
 	}
-}
-
-func init() {
-	// Register the exec fixture type
-	_ = fixtures.Register(&ExecFixture{})
 }

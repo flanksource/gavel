@@ -7,6 +7,7 @@ import (
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/clicky/task"
 	"github.com/flanksource/gavel/fixtures"
+	fixturetypes "github.com/flanksource/gavel/fixtures/types"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -21,13 +22,11 @@ var _ = Describe("lazy fixture runtime spec", func() {
 		dispatched, received = false, nil
 		runtime = nil
 		test = fixtures.FixtureTest{Name: "review", AIStep: &fixtures.AIStepSpec{Criteria: []fixtures.ChecklistItem{{Text: "The change has evidence."}}}}
-		original := fixtures.AIStepRunner
-		fixtures.AIStepRunner = func(test fixtures.FixtureTest, opts fixtures.RunOptions) fixtures.FixtureResult {
+		DeferCleanup(fixtures.DefaultKinds.Replace(fixturetypes.NewAIKind(func(test fixtures.FixtureTest, opts fixtures.RunOptions) fixtures.FixtureResult {
 			dispatched, received = true, opts.Spec
 			runtime = opts.Runtime
 			return fixtures.FixtureResult{Name: test.Name, Status: task.StatusPASS}
-		}
-		DeferCleanup(func() { fixtures.AIStepRunner = original })
+		})))
 	})
 
 	It("passes raw runtime layers to the AI step without pre-filling a spec", func() {

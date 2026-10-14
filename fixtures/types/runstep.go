@@ -16,11 +16,6 @@ import (
 	"github.com/goccy/go-yaml"
 )
 
-func init() {
-	fixtures.TestStepRunner = RunTestStep
-	fixtures.LintStepRunner = RunLintStep
-}
-
 // stepDisplay carries the fixture-tree rendering knobs a runner step supports,
 // read from the same YAML body as the engine options. Failing children are
 // shown by default; passing children only when show-passed is set.

@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/flanksource/clicky/task"
@@ -54,8 +53,15 @@ func RunNodes(ctx context.Context, nodes []*FixtureNode, opts RunOptions) ([]Fix
 	if err := reporter.Publish(ctx); err != nil {
 		return nil, nil, fmt.Errorf("fixtures: publish queued fixture progress: %w", err)
 	}
+	ownScope := opts.Scope == nil
+	if ownScope {
+		opts.Scope = NewStepScope(scopeSeed(opts.Setup, firstFrontMatter(nodes)))
+	}
 	previous := append([]FixtureResult(nil), opts.PreviousResults...)
 	results, err := runNodeTree(ctx, nodes, opts, reporter, &previous)
+	if ownScope {
+		results = append(results, teardownResults(ctx, opts.Scope)...)
+	}
 	snapshot := reporter.Snapshot()
 	return results, &snapshot, err
 }
@@ -91,14 +97,24 @@ func runNodeTree(ctx context.Context, nodes []*FixtureNode, opts RunOptions, rep
 	return results, nil
 }
 
-// RunNode runs one fixture test through the node-type dispatch every caller
-// shares — `gavel fixtures run` and RunNodes alike, so a fixture kind added
-// here runs everywhere: a recorder the fixture declares but nothing implements
-// is refused, a skip declaration honoured, then `ai` steps go via the
-// AIStepRunner hook, `yaml test` / `yaml lint` fences via the runner-step
-// hooks, and everything else via the type registry.
+// RunNode runs one fixture test through the dispatch every caller shares —
+// `gavel fixtures run` and RunNodes alike, so a kind registered once runs
+// everywhere: a recorder the fixture declares but nothing implements is
+// refused, a skip declaration honoured, then the node runs through its Kind
+// (DefaultKinds) — markdown fences and rows lower to exec/test/lint/ai, a
+// YAML/JSON step names its kind.
+//
+// Given no opts.Scope, the node is a fixture of its own: it gets a fresh scope
+// that is torn down before RunNode returns, folding a background verdict into
+// the result's children and a teardown failure into its error.
 func RunNode(ctx context.Context, test FixtureTest, opts RunOptions) FixtureResult {
-	result := dispatchNode(ctx, test, opts)
+	var result FixtureResult
+	if opts.Scope == nil {
+		opts.Scope = NewStepScope(scopeSeed(opts.Setup, test.FrontMatter))
+		result = foldTeardown(dispatchNode(ctx, test, opts), teardownResults(ctx, opts.Scope))
+	} else {
+		result = dispatchNode(ctx, test, opts)
+	}
 	if len(opts.Changed) > 0 {
 		if result.Metadata == nil {
 			result.Metadata = map[string]interface{}{}
@@ -119,40 +135,7 @@ func dispatchNode(ctx context.Context, test FixtureTest, opts RunOptions) Fixtur
 	if reason != "" {
 		return FixtureResult{Name: test.Name, Status: task.StatusSKIP, Test: test, Error: reason}
 	}
-	if test.IsAIStep() {
-		if AIStepRunner == nil {
-			return nodeError(test, "AI step runner not registered; import _ \"github.com/flanksource/gavel/fixtures/types\"")
-		}
-		if opts.ResolveSpec != nil && opts.Spec == nil && (test.AI == nil || test.AI.Spec == nil) && len(test.AIStep.Criteria) > 0 {
-			runtime, err := opts.ResolveSpec(ctx)
-			if err != nil {
-				return nodeError(test, fmt.Sprintf("resolve AI fixture runtime: %v", err))
-			}
-			opts.Runtime = &runtime
-		}
-		return AIStepRunner(test, opts)
-	}
-	if test.IsRunnerStep() {
-		runner := TestStepRunner
-		if test.IsLintStep() {
-			runner = LintStepRunner
-		}
-		if runner == nil {
-			return nodeError(test, "runner step hook not registered; import _ \"github.com/flanksource/gavel/fixtures/types\"")
-		}
-		return runner(test, opts)
-	}
-	fixtureType, err := DefaultRegistry.GetForFixture(test)
-	if err != nil {
-		return nodeError(test, err.Error())
-	}
-	if opts.DaemonPort > 0 {
-		if test.TemplateVars == nil {
-			test.TemplateVars = map[string]any{}
-		}
-		test.TemplateVars["port"] = strconv.Itoa(opts.DaemonPort)
-	}
-	return fixtureType.Run(ctx, test, opts)
+	return runStep(ctx, test, opts)
 }
 
 func nodeError(test FixtureTest, msg string) FixtureResult {
