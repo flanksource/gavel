@@ -349,6 +349,20 @@ describe('TodoDetail Resume/Run/Plan guard', () => {
     expect(screen.getByRole('button', { name: 'Back to todos' })).toBeTruthy();
   });
 
+  // The split layout mounts the detail pane before a todo is selected, with no
+  // dir; an unscoped taxonomy request falls back to the server's own workdir,
+  // which is not a registered project, and 404s.
+  it('loads the label taxonomy only once a todo is loaded', async () => {
+    const props = { loading: true, onChanged: () => {}, onDeleted: () => {} };
+    const { rerender } = render(<StatefulTodoDetail todo={null} dir="" {...props} />, { wrapper: queryTestWrapper() });
+    await act(async () => {});
+    const labelRequests = () => vi.mocked(fetch).mock.calls.map(([url]) => String(url)).filter(url => url.startsWith('/api/todos/labels'));
+    expect(labelRequests()).toEqual([]);
+
+    rerender(<StatefulTodoDetail todo={baseTodo} dir="/repo" {...props} loading={false} />);
+    await waitFor(() => expect(labelRequests()).toEqual(['/api/todos/labels?dir=%2Frepo']));
+  });
+
   it('opens the exact historical Session tab resolved from a session UUID', async () => {
     const historicalSession = '019f5b29-7890-7c11-8e7a-838e5d373e39';
     await renderDetail({
