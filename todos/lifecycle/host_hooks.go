@@ -49,7 +49,7 @@ func (h *Host) Hooks(todo *types.TODO, req captainai.Request, opts HookOptions) 
 	if env := runEnvFor(todo, firstNonEmpty(req.SessionID, opts.Meta.SessionID)); len(env) > 0 {
 		hooks = append(hooks, &runEnv{env: env})
 	}
-	if labels := runLabelsFor(todo, meta, h.WorkDir); len(labels) > 0 {
+	if labels := runLabelsFor(todo, opts.Meta, h.WorkDir); len(labels) > 0 {
 		hooks = append(hooks, &runLabels{labels: labels})
 	}
 	return hooks
