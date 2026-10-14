@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	osexec "os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -1374,7 +1375,7 @@ func (o *TestOrchestrator) runPackageTest(
 
 	runStart := time.Now()
 	stopSampler, peakPtr := startProcessMetricsSampler(process)
-	result := process.WithContext(pkgCtx).Run().Result()
+	result := clearOrphanedPipeError(process.WithContext(pkgCtx).Run().Result(), pkgPath)
 	runDuration := time.Since(runStart)
 	stopSampler()
 	cancelPkg()
@@ -1549,6 +1550,18 @@ func stampAttemptSubtree(t *parsers.Test, runKind string, runStart, runEnd time.
 		attempt.StackTrace = extractStackTrace(t.Stdout, t.Stderr)
 	}
 	t.Attempts = append(t.Attempts, attempt)
+}
+
+// clearOrphanedPipeError keeps a test package that exited 0 from failing only
+// because something it spawned (a Go toolchain helper, a grandchild) still held
+// its stdout when clicky's WaitDelay force-closed the pipes. The output that
+// matters was already read; any other error, or a non-zero exit, is kept.
+func clearOrphanedPipeError(result *exec.ExecResult, pkgPath string) *exec.ExecResult {
+	if result.ExitCode == 0 && errors.Is(result.Error, osexec.ErrWaitDelay) {
+		logger.Warnf("test package %s: exited 0 but a descendant kept its output pipe open; pipes were closed after WaitDelay", pkgPath)
+		result.Error = nil
+	}
+	return result
 }
 
 // startProcessMetricsSampler spawns a background goroutine that polls the
