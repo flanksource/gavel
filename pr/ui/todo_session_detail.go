@@ -11,7 +11,9 @@ import (
 
 	"github.com/flanksource/captain/pkg/api"
 	captaindb "github.com/flanksource/captain/pkg/database"
+	"github.com/flanksource/gavel/todos/lifecycle"
 	"github.com/flanksource/gavel/todos/native"
+	"github.com/flanksource/gavel/todos/types"
 	"github.com/google/uuid"
 )
 
@@ -36,9 +38,13 @@ type todoAttemptDetail struct {
 	Verification *api.VerifyReport `json:"verification"`
 	// Landing is how the attempt's worktree commits reached a branch; absent
 	// until `todos land` records one.
-	Landing  *native.RunLanding `json:"landing,omitempty"`
-	CanStop  bool               `json:"canStop,omitempty"`
-	Stopping bool               `json:"stopping,omitempty"`
+	Landing *native.RunLanding `json:"landing,omitempty"`
+	// OutcomeError is why gavel could not persist the outcome of a run Captain
+	// had finished. Such an attempt failed: its status reads failed and its
+	// error carries this, while State stays the run state Captain filed.
+	OutcomeError string `json:"outcomeError,omitempty"`
+	CanStop      bool   `json:"canStop,omitempty"`
+	Stopping     bool   `json:"stopping,omitempty"`
 }
 
 type todoSessionDetailResponse struct {
@@ -125,28 +131,77 @@ func listTodoAttempts(ctx context.Context, provider sessionDetailProvider, issue
 	if err != nil {
 		return nil, fmt.Errorf("list landings of TODO %s: %w", issueID, err)
 	}
-	return assembleTodoAttempts(links, overviews, verifications, landings)
+	events, err := provider.Repository().ListEvents(ctx, issueID)
+	if err != nil {
+		return nil, fmt.Errorf("list events of TODO %s: %w", issueID, err)
+	}
+	unpersisted, err := unpersistedOutcomes(events)
+	if err != nil {
+		return nil, fmt.Errorf("read lifecycle outcomes of TODO %s: %w", issueID, err)
+	}
+	return assembleTodoAttempts(todoAttemptRecords{
+		Links: links, Overviews: overviews, Verifications: verifications, Landings: landings, Unpersisted: unpersisted,
+	})
+}
+
+// todoAttemptRecords is everything recorded about a TODO's prompt runs.
+type todoAttemptRecords struct {
+	Links         []native.PromptRunLink
+	Overviews     []captaindb.PromptRunOverview
+	Verifications map[uuid.UUID]captaindb.PromptRunVerification
+	Landings      []native.RunLanding
+	// Unpersisted maps a run to why its outcome could not be persisted.
+	Unpersisted map[uuid.UUID]string
+}
+
+// unpersistedOutcomes reads, from a TODO's history, the runs whose latest
+// lifecycle outcome records that it could not be persisted, and why.
+func unpersistedOutcomes(events []native.Event) (map[uuid.UUID]string, error) {
+	type outcomePayload struct {
+		PromptRunID string `json:"promptRunId"`
+		Status      string `json:"status"`
+		Error       string `json:"error"`
+	}
+	unpersisted := map[uuid.UUID]string{}
+	sort.SliceStable(events, func(i, j int) bool { return events[i].Sequence < events[j].Sequence })
+	for _, event := range events {
+		if event.Kind != lifecycle.EventLifecycleOutcome {
+			continue
+		}
+		var payload outcomePayload
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			return nil, fmt.Errorf("decode lifecycle outcome %d: %w", event.Sequence, err)
+		}
+		if payload.PromptRunID == "" {
+			continue
+		}
+		runID, err := uuid.Parse(payload.PromptRunID)
+		if err != nil {
+			return nil, fmt.Errorf("lifecycle outcome %d names invalid prompt run %q: %w", event.Sequence, payload.PromptRunID, err)
+		}
+		delete(unpersisted, runID)
+		if payload.Status == string(types.StatusFailed) && payload.Error != "" {
+			unpersisted[runID] = payload.Error
+		}
+	}
+	return unpersisted, nil
 }
 
 // assembleTodoAttempts joins a TODO's prompt-run links with captain's overview
 // of each run — which carries the run's recorded workspace — its latest
-// verification and its landing, newest first. A link whose run captain does
-// not know, or a landing of a run that is not linked, is an error, never a
-// silently shorter history.
-func assembleTodoAttempts(
-	links []native.PromptRunLink,
-	overviews []captaindb.PromptRunOverview,
-	verifications map[uuid.UUID]captaindb.PromptRunVerification,
-	landings []native.RunLanding,
-) ([]todoAttemptDetail, error) {
+// verification, its landing and an outcome gavel could not persist, newest
+// first. A link whose run captain does not know, or a landing of a run that is
+// not linked, is an error, never a silently shorter history.
+func assembleTodoAttempts(records todoAttemptRecords) ([]todoAttemptDetail, error) {
+	links := records.Links
 	sort.SliceStable(links, func(i, j int) bool { return links[i].CreatedAt.Before(links[j].CreatedAt) })
-	byID := make(map[uuid.UUID]captaindb.PromptRunOverview, len(overviews))
-	for index := range overviews {
-		byID[overviews[index].ID] = overviews[index]
+	byID := make(map[uuid.UUID]captaindb.PromptRunOverview, len(records.Overviews))
+	for index := range records.Overviews {
+		byID[records.Overviews[index].ID] = records.Overviews[index]
 	}
-	landingByRun := make(map[uuid.UUID]*native.RunLanding, len(landings))
-	for index := range landings {
-		landingByRun[landings[index].PromptRunID] = &landings[index]
+	landingByRun := make(map[uuid.UUID]*native.RunLanding, len(records.Landings))
+	for index := range records.Landings {
+		landingByRun[records.Landings[index].PromptRunID] = &records.Landings[index]
 	}
 	attempts := make([]todoAttemptDetail, len(links))
 	for index, link := range links {
@@ -158,8 +213,12 @@ func assembleTodoAttempts(
 			PromptRunOverview: overview, PromptRunID: overview.ID, AdmissionSession: overview.SessionID,
 			Ordinal: index + 1, Step: string(link.StepKind),
 		}
-		if verification, ok := verifications[link.PromptRunID]; ok {
+		if verification, ok := records.Verifications[link.PromptRunID]; ok {
 			attempt.Verification = verification.Report
+		}
+		if reason, ok := records.Unpersisted[link.PromptRunID]; ok {
+			attempt.OutcomeError, attempt.Status = reason, captaindb.PromptRunStatusFailed
+			attempt.Error = strings.TrimSpace(strings.Join([]string{attempt.Error, reason}, "\n"))
 		}
 		attempt.Landing = landingByRun[link.PromptRunID]
 		delete(landingByRun, link.PromptRunID)

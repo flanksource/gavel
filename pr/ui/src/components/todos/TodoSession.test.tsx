@@ -403,6 +403,16 @@ describe('TodoSession', () => {
     expect(screen.queryByText('Resolved spec')).toBeNull();
   });
 
+  it('surfaces an attempt whose outcome could not be persisted in the session error details', async () => {
+    const outcomeError = 'persist TODO attempt: persist Captain plan revision: save Captain plan: plan hook plan-tldr failed';
+    const unpersisted = { ...current, status: 'failed', state: 'succeeded', processActive: false, error: outcomeError, outcomeError };
+    stubServer(statsRoute({ state: 'idle', inProgress: false }), [unpersisted, older]);
+    renderSession();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Show details' }));
+    expect(screen.getByRole('alert').textContent).toContain(`Session outcome\n${outcomeError}`);
+  });
+
   it('shows a launch session before a never-run todo has a session ID', async () => {
     stubServer(() => undefined, []);
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });

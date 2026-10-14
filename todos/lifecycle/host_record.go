@@ -104,7 +104,7 @@ func (h *Host) recordedOutcome(runCtx context.Context, step Step, prepared *prep
 	return func(out promptrun.Result, runErr error, stopped bool) (promptrun.Outcome, error) {
 		base, err := promptrun.DefaultOutcome(out, runErr, stopped)
 		if err != nil || stopped || runErr != nil {
-			return base, err
+			return failedAfterVerification(base, out, runErr, stopped), err
 		}
 		d := input.dispatched(runCtx, out, runErr)
 		execution := *d.execution
@@ -137,6 +137,18 @@ func (h *Host) recordedOutcome(runCtx context.Context, step Step, prepared *prep
 		}
 		return mapped, nil
 	}
+}
+
+// failedAfterVerification files a run whose definition of done passed and that
+// then failed — a run-phase hook such as its commit policy — in post_run. Left
+// in the phase it was in, verify, the run reads as a failed verification, and
+// its todo as unverified when verification is the one thing that did not fail.
+func failedAfterVerification(base promptrun.Outcome, out promptrun.Result, runErr error, stopped bool) promptrun.Outcome {
+	verified := out.Report != nil && out.Report.Ran && out.Passed && len(out.Verdicts) > 0
+	if runErr != nil && !stopped && verified && base.State == captaindb.PromptRunStateFailed {
+		base.Phase = captaindb.PromptRunPhasePostRun
+	}
+	return base
 }
 
 // dispatched is what came back from captain, with the two facts only the
