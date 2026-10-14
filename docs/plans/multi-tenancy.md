@@ -2016,6 +2016,31 @@ Clerk-mode manual checks:
     install the gavel GitHub App").
   - Still waiting on the spike: the `/api/github/install` and `/setup` endpoints, and their check
     that the user can access the installation.
+- **2026-10-14: M5.5 moves to PR 2 (Batman).** It depends on M7's blob store, which moved to PR 2
+  in the re-split, and there are no hosted views to show uploads until M9/M10. The PR plan in the
+  planning entry is unchanged otherwise.
+- **2026-10-14: M6.1 SSH keys: store, API and UI.**
+  - `sshkeys` (new package) holds `Parse`, which accepts `ssh-ed25519`, `ecdsa-sha2-*` and
+    `ssh-rsa` of at least 3072 bits, with a message naming what's wrong (e.g. "ssh-rsa keys must be
+    at least 3072 bits, this one is 2048"). `Store{DB}` has `Add`, `List`, `Delete` and
+    `UserForKey`.
+    - `Add` stores the normalized key (comment dropped) and its SHA256 fingerprint. A duplicate is
+      detected with `ON CONFLICT (fingerprint) DO NOTHING`, so a race can't register one key
+      twice.
+    - `Delete` only removes the caller's own key; anyone else's is `ErrNotFound`.
+    - `UserForKey` sets `last_used_at` in the same `UPDATE … RETURNING`. M6.2's Authorizer uses
+      it.
+  - Routes `GET`/`POST /api/ssh-keys` and `DELETE /api/ssh-keys/{id}` act for the signed-in user
+    (not the org) and are on the hosted allowlist. The status codes are 201, 400 (bad key or
+    JSON, with the reason), 409 (duplicate), 404 (another user's key) and 204. In none mode they
+    answer `404 SSH keys are only used by the hosted push server`.
+  - **UI deviation:** the spec put the keys in the global settings dialog, but its cog is hidden
+    in hosted mode (it edits the host's `~/.gavel.yaml`). Keys are per user, so `SSHKeysPanel`
+    is a page in Clerk's own profile modal (`UserButton.UserProfilePage`, "SSH keys"). It lists
+    keys with fingerprint and last use, adds one (name plus pasted public key), deletes keys, and
+    shows the server's error text.
+  - The CLI (`gavel ssh-key`, `login --server`, `org use`) comes next. The M2.0 spike confirmed
+    the CLI access token works, so it isn't blocked.
 - **2026-10-14: M5.1 `TokenSource` pulled forward into M3 (commit `7b87e94`).** Before M5, a
   hosted org's `Server` would have used the host's `GITHUB_TOKEN`, `GH_TOKEN` or `auth.json` for
   every PR call. `github.Options.TokenSource`, when set, is the only credential. The M3.2 factory

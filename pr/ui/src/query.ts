@@ -1,5 +1,6 @@
 export const queryKeys = {
   me: () => ['me'] as const,
+  sshKeys: () => ['ssh-keys'] as const,
   prSnapshot: () => ['prs', 'snapshot'] as const,
   prDetail: (repo: string, number: number) => ['prs', repo, number, 'detail'] as const,
   linkedPR: (url: string) => ['prs', 'linked', url] as const,

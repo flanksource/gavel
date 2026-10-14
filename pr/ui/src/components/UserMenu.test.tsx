@@ -1,17 +1,24 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { ReactNode } from 'react';
 import { setAuthMode } from '../query';
 import { UserMenu } from './UserMenu';
 
 // Clerk's components are stand-ins: these tests cover what UserMenu renders in
 // each auth mode, not Clerk's own behaviour.
-vi.mock('@clerk/react', () => ({
-  OrganizationSwitcher: (props: { hidePersonal?: boolean; afterSelectOrganizationUrl?: string }) => (
-    <div data-testid="organization-switcher" data-hide-personal={String(props.hidePersonal)} data-after={props.afterSelectOrganizationUrl} />
-  ),
-  UserButton: () => <div data-testid="user-button" />,
-}));
+vi.mock('@clerk/react', () => {
+  const UserButton = ({ children }: { children?: ReactNode }) => <div data-testid="user-button">{children}</div>;
+  UserButton.UserProfilePage = ({ label, url }: { label: string; url: string }) => (
+    <div data-testid="profile-page" data-label={label} data-url={url} />
+  );
+  return {
+    OrganizationSwitcher: (props: { hidePersonal?: boolean; afterSelectOrganizationUrl?: string }) => (
+      <div data-testid="organization-switcher" data-hide-personal={String(props.hidePersonal)} data-after={props.afterSelectOrganizationUrl} />
+    ),
+    UserButton,
+  };
+});
 
 function renderMenu() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -56,6 +63,9 @@ describe('UserMenu', () => {
     expect(switcher.dataset.hidePersonal).toBe('true');
     expect(switcher.dataset.after).toBe('/');
     expect(screen.getByTestId('user-button')).toBeTruthy();
+    const page = screen.getByTestId('profile-page');
+    expect(page.dataset.label).toBe('SSH keys');
+    expect(page.dataset.url).toBe('ssh-keys');
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
