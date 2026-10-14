@@ -3,6 +3,7 @@ package github
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	nethttp "net/http"
 	"os"
@@ -60,7 +61,7 @@ func ProbeToken(opts Options) AuthProbeResult {
 func probeToken(opts Options, baseURL string) AuthProbeResult {
 	token, err := opts.token()
 	if err != nil {
-		if strings.Contains(err.Error(), ErrNoTokenMarker) {
+		if errors.Is(err, ErrNoToken) {
 			return AuthProbeResult{State: AuthStateNoToken, Message: "no GitHub token — run `gavel system install` to persist one"}
 		}
 		return AuthProbeResult{State: AuthStateUnreachable, Message: err.Error()}

@@ -186,6 +186,10 @@ function buildMergedSnapshot(current: Snapshot, incoming: Snapshot): Snapshot {
     ...current,
     ...incoming,
     prs: incoming.prs,
+    // The server omits error/errorKind once a fetch succeeds, so absence
+    // clears them — spreading `current` would pin a stale no-token banner.
+    error: incoming.error,
+    errorKind: incoming.errorKind,
     viewer: incoming.viewer || current.viewer,
     unread: incoming.unread ?? {},
     config: {
@@ -204,6 +208,9 @@ function buildMergedSnapshot(current: Snapshot, incoming: Snapshot): Snapshot {
 function parseSnapshot(payload: unknown): Snapshot {
   if (!payload || typeof payload !== 'object' || !('prs' in payload) || !Array.isArray(payload.prs) || !('config' in payload) || !payload.config || typeof payload.config !== 'object' || !('fetchedAt' in payload) || typeof payload.fetchedAt !== 'string') {
     throw new Error('Load pull requests: invalid response');
+  }
+  if ('errorKind' in payload && payload.errorKind !== 'no-token') {
+    throw new Error(`Load pull requests: unknown errorKind ${JSON.stringify(payload.errorKind)}`);
   }
   return payload as Snapshot;
 }
