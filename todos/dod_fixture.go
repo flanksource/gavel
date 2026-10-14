@@ -10,9 +10,8 @@ import (
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/fixtures"
 
-	// Registers the fixture engine's `yaml test` / `yaml lint` step runners
-	// (fixtures.TestStepRunner / LintStepRunner) via its init.
-	_ "github.com/flanksource/gavel/fixtures/types"
+	// Registers every fixture step kind (exec, test, lint, ai, services, todo, …).
+	_ "github.com/flanksource/gavel/fixtures/kinds/all"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/flanksource/gavel/verify"
 	"github.com/flanksource/repomap"
