@@ -1998,6 +1998,24 @@ Clerk-mode manual checks:
   `GITHUB_API_URL` (`githubAPIBase`), which the fake-GitHub tests use. Tests cover the JWT
   claims, caching (a mutation removing the 5m margin is caught), installation lookup,
   250-repo pagination and bad keys, and pass under `-race`.
+- **2026-10-14: M5.3/M5.4 groundwork, the parts that don't depend on the spike
+  (`github/installations`).** `Store{DB, App}`:
+  - `Link(org, user, installation)` inserts into `github_installations`. Linking again to the
+    same org is a no-op. An installation owned by another org gives `ErrLinkedToAnotherOrg`
+    (409 in M5.3), naming the account.
+  - `SyncRepos(org, installation)` refuses an installation the org didn't link
+    (`ErrNotLinked`), then upserts every granted repository on `github_repo_id`. Renames happen
+    in place, and the upsert's `WHERE repos.org_id = EXCLUDED.org_id` never moves a row between
+    orgs. Repositories no longer granted are deleted unless a `sandbox_runs` row refers to them
+    (the only FK into `repos`). Those keep their row with `installation_id` NULL. An
+    installation that grants nothing removes everything; a guard against `NOT IN ()` makes this
+    work, and a mutation removing the guard is caught.
+  - `Repos(org)` lists repositories that an installation still grants. `Installations(org)`
+    lists unsuspended installations, oldest first. `TokenSource(org)` mints a token for the
+    first installation, or returns `ErrNoInstallation` ("connect GitHub to this organization:
+    install the gavel GitHub App").
+  - Still waiting on the spike: the `/api/github/install` and `/setup` endpoints, and their check
+    that the user can access the installation.
 - **2026-10-14: M5.1 `TokenSource` pulled forward into M3 (commit `7b87e94`).** Before M5, a
   hosted org's `Server` would have used the host's `GITHUB_TOKEN`, `GH_TOKEN` or `auth.json` for
   every PR call. `github.Options.TokenSource`, when set, is the only credential. The M3.2 factory
