@@ -45,6 +45,8 @@ Examples:
 }
 
 type PRStatusOptions struct {
+	HeadSHA  string          `flag:"head-sha" help:"Require this PR head SHA (HEAD resolves the local checkout revision)"`
+	WholePR  bool            `flag:"whole-pr" help:"Require all checks and actionable review threads to be green"`
 	Repo     string          `flag:"repo" short:"R" help:"GitHub owner/repo or hosted Azure DevOps repository URL"`
 	Follow   bool            `flag:"follow" help:"Keep watching until the checks and comments you filtered on are settled"`
 	FailFast bool            `flag:"fail-fast" help:"With --follow, stop as soon as any check or job fails definitively instead of waiting for the rest"`
@@ -75,7 +77,8 @@ Hosted Azure DevOps repositories are detected from origin or --repo. Accepts mod
 and legacy hosted PR URLs. Uses AZURE_DEVOPS_EXT_PAT first, otherwise an Azure CLI
 login. Azure merge readiness includes blocking policies; --follow waits for pipeline
 jobs and merge computation, and returns once human policies are the remaining blocker.
-Azure does not support --comments, --ai-fix, or --worktree.
+Azure does not support --ai-fix or --worktree. Both providers support --whole-pr
+and --head-sha for linked TODO verification, including native review threads.
 
 Use this instead of gh pr view / gh run view / gh run list: one readable view of
 every workflow step for the PR. With no argument it resolves the current branch's
@@ -131,6 +134,9 @@ Examples:
 
 // validate rejects flag combinations that would silently do nothing.
 func (o PRStatusOptions) validate() error {
+	if o.WholePR && (len(o.Actions) > 0 || len(o.Comments) > 0) {
+		return fmt.Errorf("--whole-pr cannot be narrowed with --actions or --comments")
+	}
 	if o.FailFast && !o.Follow {
 		return fmt.Errorf("--fail-fast requires --follow: without it `pr status` already returns after a single poll")
 	}
@@ -152,6 +158,12 @@ func runPRStatus(opts PRStatusOptions) (any, error) {
 	workDir, err := getWorkingDir()
 	if err != nil {
 		return nil, err
+	}
+	if opts.HeadSHA != "" {
+		opts.HeadSHA, err = provider.Revision(opts.Context, workDir, opts.HeadSHA)
+		if err != nil {
+			return nil, err
+		}
 	}
 	repo := target.Repo
 	if repo == "" {
@@ -187,16 +199,18 @@ func runPRStatus(opts PRStatusOptions) (any, error) {
 		return nil, fmt.Errorf("invalid --interval %q: %w", opts.Interval, err)
 	}
 	watchOpts := prwatch.WatchOptions{
-		Context:  opts.Context,
-		Options:  ghOpts,
-		PRNumber: prNumber,
-		Interval: interval,
-		Follow:   opts.Follow,
-		FailFast: opts.FailFast,
-		Logs:     opts.Logs,
-		TailLogs: opts.TailLogs,
-		Comments: opts.Comments,
-		Actions:  actions,
+		Context:      opts.Context,
+		Options:      ghOpts,
+		PRNumber:     prNumber,
+		Interval:     interval,
+		Follow:       opts.Follow,
+		FailFast:     opts.FailFast,
+		Logs:         opts.Logs,
+		TailLogs:     opts.TailLogs,
+		Comments:     opts.Comments,
+		Actions:      actions,
+		ExpectedHead: opts.HeadSHA,
+		WholePR:      opts.WholePR,
 	}
 
 	result, code := prwatch.Run(watchOpts)
