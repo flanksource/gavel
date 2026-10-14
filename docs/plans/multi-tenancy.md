@@ -1973,6 +1973,31 @@ Clerk-mode manual checks:
     main (`MobileSessionScreen` against clicky-ui 0.3.46's types, `runtimePresetCatalog.test`,
     and `node:` imports in `noRawEventSource.test`). `vite build` doesn't typecheck, so they
     don't block the bundle. Raised with Batman.
+- **2026-10-14: M5.0 spike pending on Batman's GitHub App setup.** Work continues on the parts
+  that don't depend on it: M5.2 (App installation tokens), M5.5 (OIDC uploads) and M6. The
+  steps for Batman:
+  1. Create, or reuse, a GitHub App and install it on an org or account.
+  2. In Clerk (dev instance `adequate-wolf-6.clerk.accounts.dev`), set the GitHub social
+     connection to "Use custom credentials" with the App's OAuth client ID and secret.
+  3. Sign in with GitHub and note the Clerk user ID (`user_…`).
+  4. Run the spike script (job scratch dir, `github_app_via_clerk.py`). It reads
+     `CLERK_SECRET_KEY` and a user ID, calls `GET /v1/users/{id}/oauth_access_tokens/oauth_github`
+     (with its own User-Agent, since Cloudflare blocks Python-urllib's), reports the token kind
+     (`ghu_` for a GitHub App user token, `gho_` for an OAuth App token), then calls GitHub
+     `/user` and `/user/installations`, printing statuses, counts and installation IDs, never a
+     token.
+  - It answers whether the Clerk-held token lists the App's installations (200). If it doesn't,
+    the fallback is a gavel-handled GitHub App user-authorization redirect, and Batman decides.
+    M5.3 (install linking) waits for this answer.
+- **2026-10-14: M5.2 done (`github/app.go`).** `LoadApp` reads a PKCS#1 or PKCS#8 PEM and
+  rejects a non-positive ID, with descriptive errors. The App JWT is RS256 with `iss` set to the
+  App ID as a string, `iat = now-60s` and `exp = now+9m`. Installation tokens are cached per
+  installation until `expires_at - 5m`, under a mutex. `InstallationRepos` reads
+  `per_page=100` pages until `total_count`. Requests send `X-GitHub-Api-Version: 2022-11-28`,
+  and errors carry GitHub's `message`, never a credential. The API base honours
+  `GITHUB_API_URL` (`githubAPIBase`), which the fake-GitHub tests use. Tests cover the JWT
+  claims, caching (a mutation removing the 5m margin is caught), installation lookup,
+  250-repo pagination and bad keys, and pass under `-race`.
 - **2026-10-14: M5.1 `TokenSource` pulled forward into M3 (commit `7b87e94`).** Before M5, a
   hosted org's `Server` would have used the host's `GITHUB_TOKEN`, `GH_TOKEN` or `auth.json` for
   every PR call. `github.Options.TokenSource`, when set, is the only credential. The M3.2 factory
@@ -2002,7 +2027,7 @@ Clerk-mode manual checks:
 - [x] M4 UI (`@clerk/react` 6.17.3; hosted UI limited to the allowlist)
 - [ ] M5.0 spike: GitHub App via Clerk
 - [x] M5.1 TokenSource (pulled into M3, `7b87e94`)
-- [ ] M5.2 App tokens
+- [x] M5.2 App tokens
 - [ ] M5.3 install linking plus repo sync
 - [ ] M5.4 org PR polling
 - [ ] M5.5 OIDC upload, `gavel ci upload`, action.yml
