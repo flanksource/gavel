@@ -1,6 +1,7 @@
 package serve
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/pem"
@@ -24,6 +25,11 @@ type Options struct {
 	HostKeyPath string
 	RepoDir     string
 	HookWriter  func(bareRepo, gavelPath string) error
+	// Authorizer, when set, decides which keys and repositories a push may use, and
+	// pushes are received without running any hook. nil accepts every key (local mode).
+	Authorizer Authorizer
+	// OnPushed is called after an authorized push with the refs it changed.
+	OnPushed func(ctx context.Context, push Push)
 }
 
 type Server struct {
@@ -56,6 +62,9 @@ func NewServer(opts Options) (*Server, error) {
 		PublicKeyHandler: func(ctx ssh.Context, key ssh.PublicKey) bool {
 			return true // accept all keys for local dev
 		},
+	}
+	if opts.Authorizer != nil {
+		s.srv.PublicKeyHandler = s.authorizeKey
 	}
 	s.srv.AddHostKey(hostKey)
 	return s, nil
@@ -97,7 +106,12 @@ func (s *Server) handleSession(sess ssh.Session) {
 		return
 	}
 	logger.Infof("Receiving push for %s from %s", repoPath, sess.RemoteAddr())
-	exitCode := HandleGitReceive(sess, repoPath, s.opts.RepoDir, s.hookWriter)
+	var exitCode int
+	if s.opts.Authorizer != nil {
+		exitCode = s.receiveAuthorized(sess, repoPath)
+	} else {
+		exitCode = HandleGitReceive(sess, repoPath, s.opts.RepoDir, s.hookWriter)
+	}
 	logger.V(1).Infof("Push for %s completed with exit code %d", repoPath, exitCode)
 	sess.Exit(exitCode) //nolint:errcheck
 }
