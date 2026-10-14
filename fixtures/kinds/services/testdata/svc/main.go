@@ -18,6 +18,7 @@ func main() {
 	label := flag.String("label", "svc", "label written to --term-file on SIGTERM")
 	termFile := flag.String("term-file", "", "file the label is appended to on SIGTERM")
 	delay := flag.Duration("delay", 0, "wait before listening")
+	termDelay := flag.Duration("term-delay", 0, "wait after SIGTERM before writing --term-file and exiting")
 	flag.Parse()
 	if *addr == "" {
 		fmt.Fprintln(os.Stderr, "--addr is required")
@@ -28,6 +29,7 @@ func main() {
 	signal.Notify(signals, syscall.SIGTERM)
 	go func() {
 		<-signals
+		time.Sleep(*termDelay)
 		if *termFile != "" {
 			f, err := os.OpenFile(*termFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 			if err != nil {

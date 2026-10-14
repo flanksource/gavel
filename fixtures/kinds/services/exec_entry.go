@@ -141,6 +141,9 @@ func (s *execService) stop() error {
 			return errors.Join(signalErr, forced, fmt.Errorf("service %q (pid %d) did not exit after SIGKILL", s.name, s.cmd.Process.Pid))
 		}
 	}
+	// The leader is the `sh -c` wrapper: it can exit while the service it
+	// started is still handling SIGTERM, so teardown waits for the whole group.
+	forced = errors.Join(forced, awaitGroupExit(s.name, pgid))
 	// The leader is reaped now. On darwin, signalling a group whose members
 	// are all zombies fails with EPERM — that is a group that already exited,
 	// not a live process we could not stop.
@@ -166,6 +169,20 @@ func (s *execService) stop() error {
 func signalGroup(pgid int, signal syscall.Signal) error {
 	if err := syscall.Kill(pgid, signal); err != nil && !errors.Is(err, syscall.ESRCH) {
 		return fmt.Errorf("signal %s to process group %d: %w", signal, -pgid, err)
+	}
+	return nil
+}
+
+// awaitGroupExit waits up to stopGrace for every member of the process group
+// to exit, then SIGKILLs what is left. EPERM means only zombies remain (darwin).
+func awaitGroupExit(name string, pgid int) error {
+	deadline := time.Now().Add(stopGrace)
+	for syscall.Kill(pgid, 0) == nil {
+		if time.Now().After(deadline) {
+			return errors.Join(fmt.Errorf("service %q left processes in group %d after %s; sent SIGKILL", name, -pgid, stopGrace),
+				signalGroup(pgid, syscall.SIGKILL))
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 	return nil
 }
