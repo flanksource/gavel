@@ -15,6 +15,7 @@ import {
   type TodoQuestionSelections,
 } from './planActions';
 import { loadLastTodoRunOptions } from './run';
+import { PlanTldr } from './PlanTldr';
 import { statusClass, statusLabel } from './format';
 
 // Plan Review mode: a queue over the todos waiting for a human — approve their
@@ -132,6 +133,7 @@ export function PlanReviewBar({ review, todos }: { review: ReviewMode; todos: Wo
   }, [sel?.ref, sel?.dir, reset]);
 
   const ref = current?.ref ?? '';
+  const sessionId = current?.sessionId ?? '';
   const status = current?.status;
   const questions = current?.questions ?? [];
 
@@ -149,14 +151,14 @@ export function PlanReviewBar({ review, todos }: { review: ReviewMode; todos: Wo
 
   const onAnswer = useCallback(async () => {
     if (!ref) return;
-    const result = await answer(ref, buildTodoAnswerInput(questions, questionSelections, answerText));
+    const result = await answer(ref, { ...buildTodoAnswerInput(questions, questionSelections, answerText), sessionId });
     if (!result) return;
     todos.updateItem(result.todo);
     setAnswerText('');
     setQuestionSelections({});
     review.advanceAfterAction();
     todos.refresh();
-  }, [ref, questions, questionSelections, answerText, answer, todos, review]);
+  }, [ref, sessionId, questions, questionSelections, answerText, answer, todos, review]);
 
   const onReject = useCallback(async () => {
     if (!ref) return;
@@ -294,6 +296,7 @@ export function PlanReviewBar({ review, todos }: { review: ReviewMode; todos: Wo
         </Button>
       </div>
       {total === 0 && <div className="text-xs text-muted-foreground">All caught up — no plans or questions waiting.</div>}
+      {status === 'review' && sel && <PlanTldr dir={sel.dir} refId={sel.ref} />}
       {status === 'review' && showChanges && (
         <AnswerBox
           value={changesText}

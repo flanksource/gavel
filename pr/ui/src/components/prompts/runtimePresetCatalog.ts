@@ -50,7 +50,11 @@ type RuntimePresetResolveRequestCompat = {
   presets: RuntimePresetRecord[];
 };
 
-type RuntimeProfilesClientCompat = RuntimeProfilesClient & {
+// The client resolves both a published profile (`resolve`) and a linked preset
+// selection (`resolvePresets`, whose presets may carry their own `presets`), so
+// it is typed as what it implements rather than the narrower published client.
+export type RuntimeProfilesClientCompat = Omit<RuntimeProfilesClient, 'resolve' | 'resolvePresets'> & {
+  resolve: (request: RuntimeProfileResolveRequest, signal?: AbortSignal) => Promise<ResolvedRuntimeProfile>;
   resolvePresets: (
     request: RuntimePresetResolveRequestCompat,
     signal?: AbortSignal,
@@ -103,7 +107,7 @@ export async function deleteRuntimePreset(scopeQuery: string, preset: RuntimePre
   if (!response.ok) throw await responseError(response, `Failed to delete runtime preset ${preset.name}`);
 }
 
-export function runtimePresetClient(scopeQuery: string, tools: ToolMeta[]): RuntimeProfilesClient {
+export function runtimePresetClient(scopeQuery: string, tools: ToolMeta[]): RuntimeProfilesClientCompat {
   const client: RuntimeProfilesClientCompat = {
     resolvePresets: (request, signal) => resolveRuntimePresets(scopeQuery, request, signal),
     resolve: (request, signal) => resolveRuntimePresets(scopeQuery, request, signal),

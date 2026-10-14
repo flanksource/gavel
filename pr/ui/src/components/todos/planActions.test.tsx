@@ -333,6 +333,7 @@ function askTodo(ref = 'todo-1'): TodoItem {
     ref,
     title: `Question ${ref}`,
     status: 'ask',
+    sessionId: `session-${ref}`,
     priority: 'medium',
     questions,
   };
@@ -430,6 +431,7 @@ describe('TodoReviewBanner', () => {
     const request = fetchMock.mock.calls[0][1] as RequestInit;
     expect(JSON.parse(String(request.body))).toEqual({
       ref: 'todo-1',
+      sessionId: 'session-todo-1',
       answers: {
         'Which database?': 'Postgres',
         'Which environment?': 'Production',
@@ -453,6 +455,7 @@ describe('TodoReviewBanner', () => {
     const request = fetchMock.mock.calls[0][1] as RequestInit;
     expect(JSON.parse(String(request.body))).toEqual({
       ref: 'todo-1',
+      sessionId: 'session-todo-1',
       answers: {
         'Which database?': 'SQLite',
         'Additional details': 'Keep the adapter boundary.',
@@ -475,6 +478,7 @@ describe('TodoReviewBanner', () => {
     await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1));
     expect(JSON.parse(String((fetchMock.mock.calls[0][1] as RequestInit).body))).toEqual({
       ref: 'todo-1',
+      sessionId: 'session-todo-1',
       answer: 'Use the current default.',
     });
 

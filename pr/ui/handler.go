@@ -27,6 +27,7 @@ import (
 	"github.com/flanksource/gavel/github/cache"
 	prcreate "github.com/flanksource/gavel/pr/create"
 	"github.com/flanksource/gavel/pr/model"
+	promptlibrary "github.com/flanksource/gavel/prompts/library"
 	"github.com/flanksource/gavel/prwatch"
 	testui "github.com/flanksource/gavel/testrunner/ui"
 )
@@ -470,6 +471,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/prs/closed", s.handleClosed)
 	mux.HandleFunc("/api/prs/pause", s.handlePause)
 	mux.HandleFunc("/api/prs/detail", s.handleDetail)
+	mux.HandleFunc("GET /api/prs/linked", s.handleLinkedPR)
 	mux.HandleFunc("GET /api/prs/commits/diff", s.handlePRCommitDiff)
 	mux.HandleFunc("GET /api/prs/files/diff", s.handlePRFileDiff)
 	mux.HandleFunc("POST /api/prs/merge", s.handlePRMerge)
@@ -507,6 +509,9 @@ func (s *Server) Handler() http.Handler {
 	// A run's transcript is Captain's to read and follow: its handler resolves
 	// the session through the pool Gavel shares with Captain's CLI registry.
 	mux.Handle("/api/captain/sessions/", http.StripPrefix("/api/captain/sessions", captaincli.SessionHandler()))
+	// Prompt runs started through POST /api/v1/prompt/run are followed, stopped
+	// and messaged here; their transcript is the session above.
+	mux.Handle("/api/captain/prompt/runs/", http.StripPrefix("/api/captain/prompt/runs", captaincli.PromptRunHandler()))
 	mux.HandleFunc("GET /api/sessions", s.handleSessions)
 	mux.HandleFunc("/api/todos/session/stats", s.handleTodoSessionStats)
 	mux.HandleFunc("GET /api/todos/session/detail", s.handleTodoSessionDetail)
@@ -596,7 +601,10 @@ func (s *Server) Handler() http.Handler {
 	// A browser's direct EventSource on a stream route is refused (a stale page
 	// would starve the tab's connections); hub subs pass through by context.
 	hub := sse.NewHub(sse.HubOptions{Build: s.uiBuild()})
-	root := hub.Guard(rpchttp.TimingMiddleware(mux))
+	// gavel's own prompts (prompts/library) resolve by bare name for every
+	// Captain prompt operation, alongside Captain's configured sources.
+	prompts := captaincli.PromptSources{FS: []captaincli.PromptFS{{Label: promptlibrary.Label, FS: promptlibrary.FS}}}
+	root := hub.Guard(rpchttp.TimingMiddleware(captaincli.PromptSourcesMiddleware(mux, prompts)))
 	hub.Register(mux, root)
 	return root
 }

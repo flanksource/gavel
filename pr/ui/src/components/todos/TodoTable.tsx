@@ -38,6 +38,7 @@ import { useTodoBulkContext, useTodoBulkToolbar } from './todoActions';
 import type { ChildCount } from './todoFamily';
 import { TodoTagRow } from './TodoTag';
 import type { WorkspaceTodos } from './useWorkspaceTodos';
+import { TodoPRBadge } from './TodoPRBadge';
 
 // A DataTable row is the same {todo, workspace} pair the list groups on. The
 // index signature is DataTable's `T extends Record<string, unknown>` constraint;
@@ -172,6 +173,7 @@ export function todoTableColumns(
               {row.todo.title}
             </span>
             {children && <TodoChildCountBadge done={children.done} total={children.total} />}
+            {row.todo.pr && <TodoPRBadge pr={row.todo.pr} link />}
             {row.todo.parentId && <ParentHint title={parentTitles?.get(row.todo.parentId)} />}
           </span>
         );

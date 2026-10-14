@@ -4,6 +4,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { TodoItem } from '../../types';
 import { TodoPlan } from './TodoPlan';
+import { TLDR_HOOK } from './PlanTldr';
 import { queryTestWrapper } from './queryTestWrapper';
 import { todoQueryKeys } from './todoQueries';
 
@@ -68,6 +69,30 @@ describe('TodoPlan', () => {
 
     await waitFor(() => expect(onChanged).toHaveBeenCalledWith(updatedTodo));
     expect(client.getQueryData<{ content?: string }>(todoQueryKeys.plan('/repo', 'native-id'))?.content).toBe('updated plan');
+  });
+
+  it('shows the plan-tldr hook block above the editor without putting it in the editable body', async () => {
+    const tldr = 'Adds a cache in front of the plan endpoint';
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ found: true, content: 'original plan', blocks: { [TLDR_HOOK]: tldr }, version: 3 }),
+    }) as Response));
+
+    render(<TodoPlan dir="/repo" todo={todo} active />, { wrapper: queryTestWrapper() });
+    const editor = await screen.findByRole('textbox', { name: 'Plan content' });
+    expect([screen.getByRole('note', { name: 'Plan TL;DR' }).textContent, (editor as HTMLTextAreaElement).value])
+      .toEqual([tldr, 'original plan']);
+  });
+
+  it('renders no TL;DR callout when the plan has no hook blocks', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ found: true, content: 'original plan', version: 3 }),
+    }) as Response));
+
+    render(<TodoPlan dir="/repo" todo={todo} active />, { wrapper: queryTestWrapper() });
+    await screen.findByRole('textbox', { name: 'Plan content' });
+    expect(screen.queryByRole('note', { name: 'Plan TL;DR' })).toBeNull();
   });
 
   it('surfaces plan save failures with action context', async () => {

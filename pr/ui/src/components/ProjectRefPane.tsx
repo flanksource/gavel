@@ -258,7 +258,7 @@ function LandedBanner({ landed: { branch, result }, onDismiss }: { landed: Lande
     <div role="status" className="flex shrink-0 items-center gap-2 border-b border-border bg-green-500/10 px-4 py-1.5 text-xs text-green-700 dark:text-green-300">
       <UiCheck className="shrink-0" />
       <span className="min-w-0 flex-1">
-        Merged {branch} into {result.targetBranch} as {shortSha(result.landedSha)} ({result.commits} {result.commits === 1 ? 'commit' : 'commits'}, {result.mode}){cleanup && `; ${cleanup}`}.
+        Merged {branch} into {result.targetBranch}{result.landedSha && ` as ${shortSha(result.landedSha)}`} ({result.commits} {result.commits === 1 ? 'commit' : 'commits'}, {result.mode}){cleanup && `; ${cleanup}`}.
       </span>
       <Button type="button" variant="ghost" size="sm" onClick={onDismiss}>Dismiss</Button>
     </div>

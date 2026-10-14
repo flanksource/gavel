@@ -43,7 +43,7 @@ function menuLabel(icon: ComponentType<IconProps>, text: string) {
 }
 
 // PRActions renders merge / auto-merge / approve / update-branch controls for an
-// OPEN PR. Each action is confirmed in a modal before it hits GitHub. On success
+// OPEN PR. Each action is confirmed in a modal before it hits the PR host. On success
 // it calls onChanged so the host can re-fetch the detail and reflect the new state
 // (merged / approved), at which point these controls disappear or update.
 export function PRActions({
@@ -52,6 +52,7 @@ export function PRActions({
   onChanged,
   collapsed = false,
   extras = [],
+  disabled = false,
 }: {
   pr: PRItem;
   detail: PRDetail | null;
@@ -60,6 +61,7 @@ export function PRActions({
   // panel when its container is too narrow to lay the buttons out inline.
   collapsed?: boolean;
   extras?: ExtraAction[];
+  disabled?: boolean;
 }) {
   const queryClient = useQueryClient();
   const [pending, setPending] = useState<Pending | null>(null);
@@ -67,6 +69,7 @@ export function PRActions({
   const submittingRef = useRef(false);
 
   const info = detail?.pr;
+  const azure = info?.provider === 'azuredevops';
   const nodeId = info?.nodeId;
   const state = (info?.state || pr.state || '').toUpperCase();
   const isDraft = info?.isDraft ?? pr.isDraft ?? false;
@@ -77,7 +80,7 @@ export function PRActions({
   // approve, but callers may still pass extras (e.g. New todo) to render.
   const isOpen = state === 'OPEN';
   const actionMutation = useMutation({
-    mutationFn: (request: { pending: Pending; comment: string }) => submitAction(pr, nodeId, request),
+    mutationFn: (request: { pending: Pending; comment: string }) => submitAction(pr, nodeId, info?.headRefOid, request),
     onSuccess: async () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.prSnapshot(), exact: true }),
@@ -92,10 +95,12 @@ export function PRActions({
   const error = actionMutation.error instanceof Error ? actionMutation.error.message : '';
 
   // The node ID arrives with the first detail SSE frame; gate actions until then.
-  const loading = !nodeId;
-  const conflicting = mergeable === 'CONFLICTING';
+  const loading = disabled || actionMutation.isPending || !info || (!azure && !nodeId) || (azure && !info.headRefOid);
+  const conflicting = mergeable === 'CONFLICTING' || info?.mergeReadiness?.state === 'conflicting';
   const mergeDisabled = loading || isDraft || conflicting;
-  const mergeDisabledReason = loading
+  const mergeDisabledReason = disabled
+    ? 'Wait for the TODO turn to finish'
+    : loading
     ? 'Loading PR details…'
     : isDraft
       ? 'PR is a draft — mark it ready for review first'
@@ -103,10 +108,7 @@ export function PRActions({
         ? 'Resolve merge conflicts before merging'
         : undefined;
 
-  // mergeMethods list every merge option; the first (rebase) mirrors the
-  // SplitButton's default click, so it stays reachable once Merge collapses into
-  // a submenu. mergeItems are the SplitButton's dropdown (everything but the
-  // default rebase click).
+  // The default click rebases; the menu names every strategy explicitly.
   const mergeMethods: DropdownMenuItem[] = [
     {
       label: menuLabel(UiGitMerge, 'Rebase and merge'),
@@ -120,7 +122,7 @@ export function PRActions({
       label: menuLabel(UiGitGraph, 'Create a merge commit'),
       onSelect: () => open({ type: 'merge', method: 'merge' }),
     },
-    {
+    ...(!azure ? [{
       label: menuLabel(UiRocket, 'Enable auto-merge (rebase)'),
       title: 'Merge automatically once all required checks pass',
       onSelect: () => open({ type: 'automerge', method: 'rebase' }),
@@ -129,9 +131,8 @@ export function PRActions({
       label: menuLabel(UiSync, 'Update branch'),
       title: `Merge ${base} into this PR's branch to bring it up to date`,
       onSelect: () => open({ type: 'update-branch' }),
-    },
+    }] : []),
   ];
-  const mergeItems = mergeMethods.slice(1);
 
   const extraItems: DropdownMenuItem[] = extras.map(x => ({
     label: menuLabel(x.icon, x.label),
@@ -144,12 +145,12 @@ export function PRActions({
   const menuItems: DropdownMenuItem[] = [
     ...(isOpen
       ? [
-          {
+          ...(!azure ? [{
             label: menuLabel(UiCheck, 'Approve'),
             title: 'Submit an approving review',
             disabled: loading,
             onSelect: () => open({ type: 'approve' as const }),
-          },
+          }] : []),
           {
             label: menuLabel(UiGitMerge, 'Merge'),
             title: mergeDisabledReason ?? 'Merge options',
@@ -157,7 +158,7 @@ export function PRActions({
             onSelect: () => {},
             children: mergeMethods,
           },
-          ...(behind > 0
+          ...(!azure && behind > 0
             ? [
                 {
                   label: menuLabel(UiSync, 'Update branch'),
@@ -173,6 +174,7 @@ export function PRActions({
   ];
 
   function open(p: Pending) {
+    if (loading || (p.type !== 'update-branch' && p.type !== 'approve' && mergeDisabled)) return;
     actionMutation.reset();
     setComment('');
     setPending(p);
@@ -184,7 +186,7 @@ export function PRActions({
   }
 
   function confirm() {
-    if (!pending || submittingRef.current) return;
+    if (!pending || loading || submittingRef.current) return;
     submittingRef.current = true;
     actionMutation.mutate({ pending, comment: comment.trim() });
   }
@@ -203,7 +205,7 @@ export function PRActions({
       footer={
         <div className="flex justify-end gap-2">
           <Button variant="outline" onClick={cancel} disabled={busy}>Cancel</Button>
-          <Button onClick={confirm} loading={busy}>{copy.confirmLabel}</Button>
+          <Button onClick={confirm} loading={busy} disabled={disabled}>{copy.confirmLabel}</Button>
         </div>
       }
     >
@@ -253,7 +255,7 @@ export function PRActions({
     <>
       {isOpen && (
         <>
-          <Button
+          {!azure && <Button
             variant="outline"
             size="sm"
             className="h-7 shrink-0 gap-1 px-2 text-xs"
@@ -263,7 +265,7 @@ export function PRActions({
           >
             <UiCheck className="text-xs" />
             Approve
-          </Button>
+          </Button>}
 
           <span title={mergeDisabledReason}>
             <SplitButton
@@ -273,11 +275,11 @@ export function PRActions({
               title="Merge options"
               disabled={mergeDisabled}
               onClick={() => open({ type: 'merge', method: 'rebase' })}
-              items={mergeItems}
+              items={mergeMethods}
             />
           </span>
 
-          {behind > 0 && (
+          {!azure && behind > 0 && (
             <Button
               variant="outline"
               size="sm"
@@ -316,7 +318,7 @@ export function PRActions({
   );
 }
 
-function submitAction(pr: PRItem, nodeId: string | undefined, request: { pending: Pending; comment: string }) {
+function submitAction(pr: PRItem, nodeId: string | undefined, headSha: string | undefined, request: { pending: Pending; comment: string }) {
   if (request.pending.type === 'approve') {
     if (!nodeId) throw new Error('Approve pull request: missing pull request node ID');
     return mutationJSON({
@@ -334,16 +336,14 @@ function submitAction(pr: PRItem, nodeId: string | undefined, request: { pending
       context: 'Update pull request branch',
     });
   }
-  if (!nodeId) throw new Error('Merge pull request: missing pull request node ID');
   return mutationJSON({
     url: '/api/prs/merge',
     method: 'POST',
     body: {
-      repo: pr.repo,
-      number: pr.number,
-      nodeId,
+      url: pr.url,
       method: request.pending.method,
       auto: request.pending.type === 'automerge',
+      headSha,
     },
     context: 'Merge pull request',
   });

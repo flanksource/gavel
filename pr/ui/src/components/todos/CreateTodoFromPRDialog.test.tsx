@@ -406,6 +406,7 @@ describe('CreateTodoFromPRDialog', () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/todos/new?dir=%2Fwork%2Fgavel');
     const payload = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    expect(payload.pr).toEqual({ number: pr.number, url: pr.url });
     expect(payload.body).toContain('Keep the public API stable.');
     expect(payload.body).toContain('## Failure details');
     expect(payload.body).toContain('expected record to persist');

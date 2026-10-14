@@ -1,7 +1,10 @@
 import { useState } from 'react';
-import { InputField, SplitButton } from '@flanksource/clicky-ui/components';
-import { UiGitMerge, UiGitPr } from '@flanksource/clicky-ui/icons';
-import type { BranchMergeResult } from '../types';
+import { SessionTail } from '@flanksource/clicky-ui/ai';
+import { Button, InputField, SplitButton } from '@flanksource/clicky-ui/components';
+import { UiGitMerge, UiGitPr, UiSparkles } from '@flanksource/clicky-ui/icons';
+import { useProjectGit } from '../projectGitQueries';
+import type { BranchMergeMode, BranchMergeResult } from '../types';
+import { useBranchAIMerge } from './branchAIMerge';
 import { landConflicts, useBranchLandMutation, type BranchLandRequest } from './projectGitMutations';
 
 export interface BranchLandReasonInput {
@@ -28,6 +31,18 @@ export function branchLandBlockedReasons({ base, ahead, dirtyCount, baseCheckedO
   return { merge, pr: common };
 }
 
+/**
+ * Why the AI merge cannot start: everything that refuses a merge, plus the
+ * prompt's own needs — a linked worktree for the agent to rebase in, and the
+ * primary checkout to land into.
+ */
+export function branchAIMergeBlockedReason({ merge, worktreePath, repo }: { merge: string; worktreePath?: string; repo?: string }): string {
+  if (merge) return merge;
+  if (!worktreePath) return 'The AI merge rebases in the branch\'s worktree, and this branch has none.';
+  if (!repo) return 'Loading the project\'s primary checkout…';
+  return '';
+}
+
 export interface BranchLandActionsProps extends BranchLandReasonInput {
   projectName: string;
   branch: string;
@@ -40,17 +55,34 @@ export interface BranchLandActionsProps extends BranchLandReasonInput {
  * menu, an optional message for the squash commit), and "Create PR" (draft from
  * the menu). Disabled with the reason as a tooltip while landing is refused;
  * server refusals render inline, listing conflicting paths when it names them.
+ * "Merge with AI" (menu, or beside a conflict) runs the branch-merge prompt,
+ * which rebases in the worktree, resolves conflicts and lands; its latest
+ * message or tool call tails inline until it finishes.
  */
 export function BranchLandActions({ projectName, branch, onMerged, ...reasonInput }: BranchLandActionsProps) {
   const land = useBranchLandMutation({ projectName, onMerged });
+  const ai = useBranchAIMerge({ projectName, onMerged });
+  const repo = useProjectGit(projectName).data?.worktrees.find(worktree => worktree.primary)?.path;
   const [message, setMessage] = useState('');
   const reasons = branchLandBlockedReasons(reasonInput);
+  const aiReason = branchAIMergeBlockedReason({ merge: reasons.merge, worktreePath: reasonInput.worktreePath, repo });
+  const aiActive = ai.state.status === 'starting' || ai.state.status === 'running';
+  const busy = land.isPending || aiActive;
   const submit = (request: BranchLandRequest) => land.mutate(request);
-  const merge = (mode: 'squash' | 'incremental') => {
+  const merge = (mode: BranchMergeMode) => {
     const text = message.trim();
     submit({ via: 'merge', branch, mode, ...(mode === 'squash' && text ? { message: text } : {}) });
   };
   const conflicts = landConflicts(land.error);
+  const mergeWithAI = (mode: BranchMergeMode) => {
+    if (!repo || !reasonInput.worktreePath) return;
+    land.reset();
+    void ai.start({
+      repo, worktree: reasonInput.worktreePath, branch, base: reasonInput.base, mode,
+      message, conflicts, ahead: reasonInput.ahead,
+    });
+  };
+  const failedMode: BranchMergeMode = land.variables?.via === 'merge' ? land.variables.mode : 'squash';
   const merging = land.isPending && land.variables?.via === 'merge';
   const opening = land.isPending && land.variables?.via === 'pr';
   const opened = land.data?.via === 'pr' ? land.data : null;
@@ -62,7 +94,7 @@ export function BranchLandActions({ projectName, branch, onMerged, ...reasonInpu
           aria-label="Squash commit message"
           placeholder="Squash message (optional)"
           value={message}
-          disabled={land.isPending}
+          disabled={busy}
           onChange={setMessage}
           className="h-8 w-56 text-xs"
         />
@@ -70,14 +102,19 @@ export function BranchLandActions({ projectName, branch, onMerged, ...reasonInpu
           <SplitButton
             variant="outline"
             size="sm"
-            disabled={!!reasons.merge || land.isPending}
-            loading={merging}
+            disabled={!!reasons.merge || busy}
+            loading={merging || aiActive}
             title={reasons.merge || 'Merge options'}
             label={<span className="flex items-center gap-1"><UiGitMerge />Squash &amp; merge into {reasonInput.base}</span>}
             onClick={() => merge('squash')}
             items={[{
               label: <span className="flex items-center gap-2"><UiGitMerge />Merge each commit (cherry-pick)</span>,
               onSelect: () => merge('incremental'),
+            }, {
+              label: <span className="flex items-center gap-2"><UiSparkles />Merge with AI (rebase &amp; resolve conflicts)</span>,
+              title: aiReason || `Rebase onto ${reasonInput.base} in the worktree, resolve conflicts with an agent, then squash into ${reasonInput.base}`,
+              disabled: !!aiReason,
+              onSelect: () => mergeWithAI('squash'),
             }]}
           />
         </span>
@@ -85,7 +122,7 @@ export function BranchLandActions({ projectName, branch, onMerged, ...reasonInpu
           <SplitButton
             variant="outline"
             size="sm"
-            disabled={!!reasons.pr || land.isPending}
+            disabled={!!reasons.pr || busy}
             loading={opening}
             title={reasons.pr || 'Pull request options'}
             label={<span className="flex items-center gap-1"><UiGitPr />Create PR</span>}
@@ -106,6 +143,28 @@ export function BranchLandActions({ projectName, branch, onMerged, ...reasonInpu
         <span role="alert" className="max-w-md whitespace-pre-wrap text-right text-[11px] text-red-600">
           {land.error.message}
           {conflicts.length > 0 && <ul className="mt-0.5 list-none font-mono">{conflicts.map(path => <li key={path}>{path}</li>)}</ul>}
+        </span>
+      )}
+      {conflicts.length > 0 && !aiActive && (
+        <span className="inline-flex" title={aiReason || undefined}>
+          <Button variant="outline" size="sm" className="h-7 text-xs" disabled={!!aiReason} onClick={() => mergeWithAI(failedMode)}>
+            <UiSparkles />Resolve with AI &amp; {failedMode === 'squash' ? 'squash' : 'merge each commit'}
+          </Button>
+        </span>
+      )}
+      {aiActive && (
+        <span className="flex w-full max-w-md items-center justify-end gap-2 text-[11px]">
+          {ai.state.status === 'running' && ai.state.sessionId
+            ? <SessionTail src={`/api/captain/sessions/${encodeURIComponent(ai.state.sessionId)}`} className="min-w-0 flex-1" />
+            : <span className="min-w-0 flex-1 text-right text-muted-foreground">Starting the AI merge…</span>}
+          {ai.state.status === 'running' && (
+            <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={() => { void ai.stop(); }}>Stop</Button>
+          )}
+        </span>
+      )}
+      {ai.state.status === 'failed' && (
+        <span role="alert" className="max-w-md whitespace-pre-wrap text-right text-[11px] text-red-600">
+          AI merge failed: {ai.state.error}
         </span>
       )}
     </span>
