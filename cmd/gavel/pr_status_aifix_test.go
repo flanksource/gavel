@@ -130,7 +130,8 @@ func conflictingResult() *prwatch.PRWatchResult {
 			Number: 42, State: "OPEN", Mergeable: "CONFLICTING",
 			URL:         "https://github.com/o/r/pull/42",
 			BaseRefName: "main", HeadRefName: "feat/thing",
-			HeadRefOID: "0123456789abcdef0123456789abcdef01234567",
+			HeadRefOID:        "0123456789abcdef0123456789abcdef01234567",
+			HeadRepositoryURL: "https://github.com/o/r",
 		},
 		Conflicts: &github.MergeConflictReport{
 			BaseRefName: "main", HeadRefName: "feat/thing",
@@ -304,7 +305,7 @@ func TestPRFixHooks_TeeVerifyOutput(t *testing.T) {
 	var sink bytes.Buffer
 
 	wf := &api.Workflow{Verify: &api.Verify{Commands: []string{"echo wired"}}}
-	hooks, err := prFixHooks(context.Background(), prFixRun{Workflow: wf, Tee: &sink, Result: &prwatch.PRWatchResult{PR: &model.PRInfo{}}})
+	hooks, err := prFixHooks(context.Background(), prFixRun{Workflow: wf, Tee: &sink, Result: conflictingResult()})
 	if err != nil {
 		t.Fatalf("prFixHooks: %v", err)
 	}

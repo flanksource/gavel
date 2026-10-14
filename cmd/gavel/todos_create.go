@@ -11,6 +11,7 @@ import (
 	"github.com/flanksource/gavel/todos/content"
 	"github.com/flanksource/gavel/todos/githubpush"
 	"github.com/flanksource/gavel/todos/ops"
+	"github.com/flanksource/gavel/todos/types"
 	"github.com/spf13/cobra"
 )
 
@@ -28,6 +29,7 @@ type TodosCreateOptions struct {
 	GitHub       bool     `flag:"github" help:"Push the new TODO to a GitHub issue"`
 	BaseURL      string   `flag:"base-url" help:"Absolute origin attachment links resolve against"`
 	Repo         string   `flag:"repo" help:"Target owner/repo"`
+	PRURL        string   `flag:"pr" help:"Link this TODO to an existing PR URL"`
 }
 
 var todosCreateCmd *cobra.Command
@@ -88,6 +90,12 @@ func runTodosCreate(opts TodosCreateOptions) error {
 		Title: title, Body: resolved.Body, Verification: resolved.Verification,
 		Priority: priority, Status: lifecycle.Status, Labels: opts.Labels,
 		Parent: opts.Parent, NoParent: opts.NoParent, Origin: ops.OriginFromEnv(),
+	}
+	if opts.PRURL != "" {
+		request.PR, err = types.PRFromURL(opts.PRURL)
+		if err != nil {
+			return err
+		}
 	}
 	if resolved.Plan != "" {
 		request.Plan = &todos.CreatePlanRequest{Markdown: resolved.Plan, Approved: lifecycle.PlanApproved}

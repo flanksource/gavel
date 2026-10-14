@@ -13,6 +13,7 @@ type StatusSnapshot struct {
 }
 
 type StatusOptions struct {
+	Threads  bool
 	Logs     bool
 	TailLogs int
 }

@@ -37,6 +37,7 @@ type PRInfo struct {
 	// GitHub has marked the PR CONFLICTING.
 	BaseRefOID        string       `json:"baseRefOid,omitempty"`
 	HeadRefOID        string       `json:"headRefOid,omitempty"`
+	HeadRepositoryURL string       `json:"headRepositoryUrl,omitempty"`
 	URL               string       `json:"url"`
 	Additions         int          `json:"additions"`
 	Deletions         int          `json:"deletions"`
@@ -127,6 +128,8 @@ type Step struct {
 }
 
 type PRComment struct {
+	ThreadID   string    `json:"threadId,omitempty"`
+	CanResolve bool      `json:"canResolve,omitempty"`
 	ID         int64     `json:"id"`
 	Body       string    `json:"body"`
 	Author     string    `json:"author"`
