@@ -91,7 +91,7 @@ func TestTriageEnvelopeSchemaUsesFlatScalarFields(t *testing.T) {
 			t.Fatalf("TriageEnvelope.%s = %#v, want a top-level scalar", field, property)
 		}
 	}
-	for _, field := range []string{"related", "addLabels", "removeLabels"} {
+	for _, field := range []string{"related", "addLabels", "removeLabels", "duplicates", "prs"} {
 		array, ok := properties[field].(map[string]any)
 		if !ok {
 			t.Fatalf("TriageEnvelope.%s is %T, want schema object", field, properties[field])

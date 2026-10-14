@@ -2,6 +2,11 @@ export const queryKeys = {
   prSnapshot: () => ['prs', 'snapshot'] as const,
   prDetail: (repo: string, number: number) => ['prs', repo, number, 'detail'] as const,
   linkedPR: (url: string) => ['prs', 'linked', url] as const,
+  // Links between a todo and other todos / PRs, and the reverse lookup from a PR.
+  todoLinks: (dir: string, ref: string) => ['todos', 'links', { dir: dir.trim(), ref }] as const,
+  todoPRLinks: (dir: string, ref: string) => ['todos', 'pr-links', { dir: dir.trim(), ref }] as const,
+  prLinkedTodos: (url: string) => ['prs', 'todos', url] as const,
+  prSearch: (query: string, repo: string) => ['prs', 'search', { query, repo }] as const,
   projects: () => ['projects'] as const,
   projectStatusScope: (projectName: string) => ['projects', projectName, 'status'] as const,
   // worktree is the absolute path of a linked worktree; the main checkout

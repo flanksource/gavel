@@ -78,7 +78,7 @@ func (p *Poller) fetchFull() {
 	}
 	p.lastFetch = time.Now()
 	p.lastFull = time.Now()
-	p.srv.SetResults(p.knownAsList(), false)
+	p.publish(false)
 	p.srv.notifyDetailSyncer()
 }
 
@@ -98,8 +98,18 @@ func (p *Poller) fetchIncremental() {
 		p.known[prKey(item)] = item
 	}
 	p.lastFetch = time.Now()
-	p.srv.SetResults(p.knownAsList(), true)
+	p.publish(true)
 	p.srv.notifyDetailSyncer()
+}
+
+// publish hands the known PRs to the server. A PR index that could not be
+// persisted is reported as the dashboard's error, so it is seen rather than
+// only logged; the live list itself was already published.
+func (p *Poller) publish(incremental bool) {
+	if err := p.srv.SetResults(p.knownAsList(), incremental); err != nil {
+		logger.Errorf("pr poller: %v", err)
+		p.srv.SetError(err)
+	}
 }
 
 func (p *Poller) knownAsList() github.PRSearchResults {

@@ -131,8 +131,8 @@ func TestApplyTriageDuplicateOfClosesThisTODO(t *testing.T) {
 	if strings.Join(provider.writes, " ") != strings.Join(want, " ") {
 		t.Errorf("write order =\n  %v\nwant\n  %v", provider.writes, want)
 	}
-	if strings.Join(provider.links, ",") != "related_to:ff0011" {
-		t.Errorf("links = %v, want a single related_to to the survivor", provider.links)
+	if strings.Join(provider.links, ",") != "duplicates:ff0011" {
+		t.Errorf("links = %v, want a single duplicates link to the survivor", provider.links)
 	}
 	if !strings.Contains(provider.comments[1], "Duplicate of ff0011 — Fix the parser panic") {
 		t.Errorf("retirement comment = %q, should name the survivor and its title", provider.comments[1])

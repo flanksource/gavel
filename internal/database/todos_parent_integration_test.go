@@ -84,7 +84,9 @@ func TestTodoParentColumnArrivesOnAnExistingDatabase(t *testing.T) {
 		ALTER TABLE public.todo_issue_relationships ADD CONSTRAINT todo_issue_relationships_issue_workspace_fkey
 			FOREIGN KEY (issue_id, workspace_id) REFERENCES public.todo_issues (id, workspace_id);
 		ALTER TABLE public.todo_issue_relationships ADD CONSTRAINT todo_issue_relationships_target_workspace_fkey
-			FOREIGN KEY (target_issue_id, workspace_id) REFERENCES public.todo_issues (id, workspace_id)`).Error)
+			FOREIGN KEY (target_issue_id, workspace_id) REFERENCES public.todo_issues (id, workspace_id);
+		ALTER TABLE public.todo_pr_links ADD CONSTRAINT todo_pr_links_issue_workspace_fkey
+			FOREIGN KEY (issue_id, workspace_id) REFERENCES public.todo_issues (id, workspace_id) ON UPDATE CASCADE ON DELETE CASCADE`).Error)
 
 	existing := todoIssueKeyDependents(t, db.Gorm())
 	delete(fresh, "todo_issues_parent_fkey")

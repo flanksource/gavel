@@ -1,16 +1,18 @@
 import { useState, type ComponentType, type ReactNode } from 'react';
 import { Button, DropdownMenu } from '@flanksource/clicky-ui/components';
-import { UiCheck, UiCheckFilled, UiChevronRight, UiClose, UiCog, UiCopy, UiDebugStepOver, UiDotsVertical, UiEdit, UiFolder, UiLink, UiLinkExternal, UiListDashes, UiPass, UiPlay, UiRestart, UiStop, UiTrash, type IconProps } from '@flanksource/clicky-ui/icons';
+import { UiCheck, UiCheckFilled, UiClose, UiCog, UiCopy, UiDebugStepOver, UiDotsVertical, UiEdit, UiGitPr, UiLinkExternal, UiListDashes, UiPass, UiPlay, UiRestart, UiStop, UiTrash, type IconProps } from '@flanksource/clicky-ui/icons';
 import type { Project, TodoItem, TodoPriority, TodoStatus } from '../../types';
 import { Spinner } from '../../icons/Spinner';
-import { inputClass, priorities, priorityIcon, statusIcon, statuses, statusLabel } from './format';
+import { priorities, priorityIcon, statusIcon, statuses, statusLabel } from './format';
 import type { TodoRunAction } from './run';
 import { TodoTagRow } from './TodoTag';
 import type { TagIndex } from './tagResolve';
-import { todoMatchesQuery } from './todoFilter';
+import { LinkPRDialog } from './LinkPRDialog';
+import { MoveSubmenu, SetParentSubmenu, UnlinkPRSubmenu } from './TodoActionSubmenus';
 
 export function HeaderActionsMenu({
   todo,
+  dir,
   busy,
   runBusy,
   closed,
@@ -45,6 +47,8 @@ export function HeaderActionsMenu({
   onRemoveParent,
 }: {
   todo: TodoItem;
+  /** The todo's workspace, which scopes its PR links. */
+  dir: string;
   busy: boolean;
   runBusy: boolean;
   closed: boolean;
@@ -82,7 +86,10 @@ export function HeaderActionsMenu({
   onSetParent: (ref: string) => void;
   onRemoveParent: () => void;
 }) {
+  // Owned here, not by the menu content: that unmounts the moment the menu closes.
+  const [linkingPR, setLinkingPR] = useState(false);
   return (
+    <>
     <DropdownMenu
       align="right"
       menuLabel="Issue actions"
@@ -262,6 +269,17 @@ export function HeaderActionsMenu({
               }}
             />
             <MobileMenuItem
+              icon={UiGitPr}
+              label="Link PR…"
+              detail="Pick a pull request or paste its URL"
+              disabled={busy}
+              onClick={() => {
+                close();
+                setLinkingPR(true);
+              }}
+            />
+            <UnlinkPRSubmenu dir={dir} todoRef={todo.ref} disabled={busy} onCloseParent={close} />
+            <MobileMenuItem
               icon={UiLinkExternal}
               label="Push to GitHub"
               disabled={busy}
@@ -296,6 +314,8 @@ export function HeaderActionsMenu({
         </div>
       )}
     </DropdownMenu>
+    <LinkPRDialog open={linkingPR} dir={dir} todoRef={todo.ref} onClose={() => setLinkingPR(false)} />
+    </>
   );
 }
 
@@ -345,139 +365,3 @@ function MobileMenuItem({
   );
 }
 
-function SetParentSubmenu({
-  disabled,
-  candidates,
-  currentParentId,
-  onSelect,
-  onCloseParent,
-}: {
-  disabled?: boolean;
-  candidates: TodoItem[];
-  currentParentId?: string;
-  onSelect: (ref: string) => void;
-  onCloseParent: () => void;
-}) {
-  const [query, setQuery] = useState('');
-  const matches = candidates.filter(candidate => todoMatchesQuery(candidate, query));
-  return (
-    <DropdownMenu
-      align="right"
-      menuLabel="Choose the parent todo"
-      menuClassName="w-72 max-w-[calc(100vw-24px)]"
-      trigger={
-        <Button
-          variant="ghost"
-          type="button"
-          disabled={disabled}
-          className="flex h-auto w-full items-center justify-start gap-2 rounded px-2 py-1.5 text-left hover:bg-muted disabled:opacity-50"
-          title="Make this todo a child of another"
-        >
-          <UiLink className="shrink-0 text-sm text-muted-foreground" />
-          <span className="min-w-0 flex-1">
-            <span className="block truncate font-medium text-foreground">Set parent…</span>
-            <span className="block truncate text-[11px] text-muted-foreground">Choose a todo</span>
-          </span>
-          <UiChevronRight className="text-[11px] text-muted-foreground" />
-        </Button>
-      }
-    >
-      {close => (
-        <div className="p-1 text-xs">
-          <input
-            className={`${inputClass} mb-1`}
-            value={query}
-            placeholder="Filter todos"
-            aria-label="Filter parent todos"
-            onChange={event => setQuery(event.currentTarget.value)}
-          />
-          <div className="max-h-64 overflow-y-auto">
-            {matches.length === 0 && <div className="px-2 py-1.5 text-muted-foreground">No matching todos</div>}
-            {matches.map(candidate => (
-              <Button
-                key={candidate.ref}
-                variant="ghost"
-                type="button"
-                disabled={disabled || candidate.id === currentParentId}
-                onClick={() => {
-                  close();
-                  onCloseParent();
-                  onSelect(candidate.ref);
-                }}
-                className="flex h-auto w-full items-start justify-start gap-2 rounded px-2 py-1.5 text-left hover:bg-muted"
-              >
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate font-medium text-foreground">{candidate.title}</span>
-                  {candidate.shortId && <span className="block truncate font-mono text-[10px] text-muted-foreground">{candidate.shortId}</span>}
-                </span>
-                {candidate.id === currentParentId && <UiCheck className="mt-0.5 text-xs text-primary" />}
-              </Button>
-            ))}
-          </div>
-        </div>
-      )}
-    </DropdownMenu>
-  );
-}
-
-function MoveSubmenu({
-  disabled,
-  targets,
-  onSelect,
-  onCloseParent,
-}: {
-  disabled?: boolean;
-  targets: Project[];
-  onSelect: (dir: string) => void;
-  onCloseParent: () => void;
-}) {
-  return (
-    <DropdownMenu
-      align="right"
-      menuLabel="Move todo to another project"
-      menuClassName="w-72 max-w-[calc(100vw-24px)]"
-      trigger={
-        <Button
-          variant="ghost"
-          type="button"
-          disabled={disabled}
-          className="flex h-auto w-full items-center justify-start gap-2 rounded px-2 py-1.5 text-left hover:bg-muted disabled:opacity-50"
-          title="Move todo to another project"
-          aria-label="Move todo to another project"
-        >
-          <UiFolder className="shrink-0 text-sm text-muted-foreground" />
-          <span className="min-w-0 flex-1">
-            <span className="block truncate font-medium text-foreground">Move to</span>
-            <span className="block truncate text-[11px] text-muted-foreground">Choose project</span>
-          </span>
-          <UiChevronRight className="text-[11px] text-muted-foreground" />
-        </Button>
-      }
-    >
-      {close => (
-        <div className="p-1 text-xs">
-          {targets.map(target => (
-            <Button
-              key={target.dir}
-              variant="ghost"
-              type="button"
-              disabled={disabled}
-              onClick={() => {
-                close();
-                onCloseParent();
-                onSelect(target.dir);
-              }}
-              className="flex h-auto w-full items-start justify-start gap-2 rounded px-2 py-1.5 text-left hover:bg-muted"
-            >
-              <UiFolder className="mt-0.5 shrink-0 text-sm text-muted-foreground" />
-              <span className="min-w-0 flex-1">
-                <span className="block truncate font-medium text-foreground">{target.name || target.dir}</span>
-                <span className="block truncate font-mono text-[10px] text-muted-foreground">{target.dir}</span>
-              </span>
-            </Button>
-          ))}
-        </div>
-      )}
-    </DropdownMenu>
-  );
-}

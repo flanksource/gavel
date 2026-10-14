@@ -163,7 +163,8 @@ func (r *Repository) DeleteRelationship(
 
 // ListRelationships returns every edge touching issueID from that issue's
 // perspective: outgoing dependencies are depends_on, incoming dependencies
-// are the derived read-only blocks relation, and related_to is symmetric. The
+// are the derived read-only blocks relation, and related_to and duplicates are
+// symmetric. The
 // returned IssueID is always issueID and TargetIssueID is always the other end.
 func (r *Repository) ListRelationships(ctx context.Context, issueID uuid.UUID) ([]Relationship, error) {
 	var relationships []Relationship
@@ -250,7 +251,7 @@ func lockWorkspaceRelationships(tx *gorm.DB, workspaceID uuid.UUID) error {
 }
 
 func canonicalRelationship(issueID, targetIssueID uuid.UUID, relation RelationshipKind) (uuid.UUID, uuid.UUID) {
-	if relation == RelationshipRelatedTo && strings.Compare(issueID.String(), targetIssueID.String()) > 0 {
+	if relation.symmetric() && strings.Compare(issueID.String(), targetIssueID.String()) > 0 {
 		return targetIssueID, issueID
 	}
 	return issueID, targetIssueID
