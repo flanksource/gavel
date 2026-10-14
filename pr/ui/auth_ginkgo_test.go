@@ -155,6 +155,22 @@ var _ = Describe("hosted auth middleware", func() {
 		Expect(message).To(ContainSubstring("alpha, beta"))
 	})
 
+	It("lists the caller's organizations without needing one picked", func() {
+		req := httptest.NewRequest(http.MethodGet, "/api/auth/orgs", nil)
+		req.Header.Set("Authorization", "Bearer "+f.clerk.AccessToken(time.Now().Add(time.Hour)))
+		rec := f.serve(req)
+		Expect(rec.Code).To(Equal(http.StatusOK), rec.Body.String())
+		var orgs []api.MemberOrg
+		Expect(json.Unmarshal(rec.Body.Bytes(), &orgs)).To(Succeed())
+		Expect(orgs).To(HaveLen(2))
+		Expect(orgs[0].Slug).To(Equal("alpha"))
+		Expect(orgs[1].Slug).To(Equal("beta"))
+		Expect(f.scopes).To(BeEmpty(), "answered by the middleware, not an org's dashboard")
+
+		rec = f.serve(httptest.NewRequest(http.MethodGet, "/api/auth/orgs", nil))
+		Expect(rec.Code).To(Equal(http.StatusUnauthorized))
+	})
+
 	It("refuses a cross-site write made with the session cookie", func() {
 		token := f.clerk.SessionToken(authPublicURL, time.Now().Add(time.Hour))
 		post := func(header http.Header) *httptest.ResponseRecorder {
