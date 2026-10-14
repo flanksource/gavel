@@ -13,6 +13,7 @@ import (
 	"github.com/flanksource/clicky/task"
 	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/testrunner/parsers"
+	"github.com/flanksource/gavel/verify"
 )
 
 func writeGoTestPackage(t *testing.T, repoRoot, pkgDir, modulePath string) {
@@ -876,8 +877,8 @@ func TestResolveFixtureGlobs(t *testing.T) {
 
 	t.Run("flag enables default glob", func(t *testing.T) {
 		got := resolveFixtureGlobs(RunOptions{WorkDir: tmpDir, Fixtures: true})
-		if len(got) != 1 || got[0] != "**/*.fixture.md" {
-			t.Errorf("expected [**/*.fixture.md], got %v", got)
+		if len(got) != 1 || got[0] != verify.DefaultFixturesGlob {
+			t.Errorf("expected [%s], got %v", verify.DefaultFixturesGlob, got)
 		}
 	})
 

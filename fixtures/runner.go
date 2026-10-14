@@ -263,7 +263,7 @@ func (r *Runner) parseFixtureFiles() error {
 
 		for _, filepath := range matches {
 			// Parse with tree structure
-			fileTree, err := ParseMarkdownFixturesWithTree(filepath)
+			fileTree, err := ParseFixtureFile(filepath)
 			if err != nil {
 				return fmt.Errorf("failed to parse fixture file '%s': %w", filepath, err)
 			}
@@ -435,29 +435,11 @@ func (r *Runner) executeFixtures() (results *FixtureGroup, runErr error) {
 	// pool is process-wide and already sized — so MaxWorkers has to arrive here
 	// as WithConcurrency or it bounds nothing at all.
 	fixtureGroup := task.StartGroup[FixtureResult]("Fixture Tests", task.WithConcurrency(r.maxWorkers()))
-
-	r.tree.Walk(func(node *FixtureNode) {
-		if node.Test != nil {
-			env := r.envForNode(node)
-			fixtureGroup.Add(node.Test.String(), func(ctx flanksourceContext.Context, t *task.Task) (FixtureResult, error) {
-				if err := r.progress.Start(ctx, node); err != nil {
-					return FixtureResult{Name: node.Name, Status: task.StatusERR, Error: err.Error()}, err
-				}
-				runContext := flanksourceContext.NewContext(withFixtureProgress(ctx, func(done, total int) error {
-					return r.progress.Update(ctx, node, done, total)
-				}))
-				result, err := r.executeFixture(runContext, *node.Test, env)
-				r.attachResult(node, result)
-				if progressErr := r.progress.Complete(ctx, node, result); progressErr != nil {
-					return result, progressErr
-				}
-				return result, err
-			}, task.WithContext(parent), clicky.WithTaskTimeout(fixtureTimeout(*node.Test)))
-		}
-	})
+	scopes := r.addFixtureTasks(fixtureGroup, parent)
 
 	// Wait for all fixture tasks to complete and collect results
 	groupResult := fixtureGroup.WaitFor()
+	r.attachTeardownResults(ctx, scopes)
 	if groupResult.Error != nil {
 		logger.Warnf("Some fixture tests failed: %v", groupResult.Error)
 	}
@@ -493,13 +475,16 @@ func (r *Runner) executeFixtures() (results *FixtureGroup, runErr error) {
 }
 
 func fixtureTimeout(fixture FixtureTest) time.Duration {
+	if fixture.Step != nil {
+		return stepTaskTimeout(*fixture.Step)
+	}
 	if fixture.Expected.Timeout != nil {
 		return *fixture.Expected.Timeout
 	}
 	if fixture.Timeout != nil {
 		return *fixture.Timeout
 	}
-	return 2 * time.Minute
+	return defaultFixtureTimeout
 }
 
 func (r *Runner) executionSteps() []ExecutionStep {
@@ -609,6 +594,7 @@ func (r *Runner) executeFixture(ctx flanksourceContext.Context, fixture FixtureT
 		Profile:        r.options.Profile,
 		SQLProfile:     r.options.SQLProfile,
 		Setup:          env.setup,
+		Scope:          env.scope,
 		Recorder:       r.recorderContext(env.file),
 		Record:         r.effectiveRecord(fixture),
 		DaemonPort:     r.daemonPort,

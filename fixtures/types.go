@@ -43,9 +43,14 @@ type FixtureTest struct {
 
 	// RunnerStep, when set, makes this a `yaml test` / `yaml lint` fence: the raw
 	// YAML body is unmarshalled onto testrunner.RunOptions / lint.Options and the
-	// engine is run. Dispatched by the runner via the TestStepRunner /
-	// LintStepRunner hooks (implemented in fixtures/types to avoid an import cycle).
+	// engine is run. Dispatched to the `test` / `lint` kind (registered by
+	// fixtures/types, which can import the engines without a cycle).
 	RunnerStep *RunnerStepSpec `json:"runner_step,omitempty"`
+
+	// Step is the typed step of a YAML/JSON fixture document: its kind, envelope
+	// (id, cel, export, wait, retry, …) and kind-specific config. Markdown nodes
+	// leave it nil; their kind is derived by KindName.
+	Step *StepSpec `json:"step,omitempty"`
 
 	// Per-test overrides for skip conditions (override file-level FrontMatter values)
 	TestOS   string `json:"test_os,omitempty"`
@@ -121,10 +126,39 @@ func (fixture FixtureTest) ExecBase() ExecFixtureBase {
 }
 
 // IsAIStep reports whether this fixture runs an AI verification prompt instead of
-// a shell/query step. AI steps are dispatched by the runner before the type
-// registry (they are not a registered FixtureType).
+// a shell/query step.
 func (fixture FixtureTest) IsAIStep() bool {
 	return fixture.AIStep != nil
+}
+
+// KindName is the registered Kind this fixture dispatches to: a YAML/JSON
+// step's declared kind, or the kind a markdown node lowers to — `ai` for an AI
+// step, `test`/`lint` for a runner fence, `query` for a query row, `exec` for
+// anything with a command. Empty when the node declares nothing runnable.
+func (fixture FixtureTest) KindName() string {
+	switch {
+	case fixture.Step != nil:
+		return fixture.Step.Kind
+	case fixture.IsAIStep():
+		return "ai"
+	case fixture.RunnerStep != nil:
+		return fixture.RunnerStep.Kind
+	case fixture.Query != "":
+		return "query"
+	case !fixture.IsEmpty():
+		return "exec"
+	default:
+		return ""
+	}
+}
+
+// StepSpec is the step envelope this fixture runs under: the YAML/JSON step
+// itself, or a bare `{kind}` envelope for a markdown node.
+func (fixture FixtureTest) StepSpec() StepSpec {
+	if fixture.Step != nil {
+		return *fixture.Step
+	}
+	return StepSpec{Kind: fixture.KindName()}
 }
 
 // RunnerStepKind identifies which engine a RunnerStep drives.

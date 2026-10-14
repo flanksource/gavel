@@ -78,19 +78,13 @@ echo gomega
 	}
 }
 
-func TestRegistryReportsMissingExecRegistration(t *testing.T) {
-	registry := fixtures.NewRegistry()
-	_, err := registry.GetForFixture(fixtures.FixtureTest{
-		Name: "missing exec registration",
-		ExecFixtureBase: fixtures.ExecFixtureBase{
-			Exec: "echo",
-		},
-	})
+func TestKindRegistryReportsUnregisteredKind(t *testing.T) {
+	_, err := fixtures.DefaultKinds.Lookup("not-registered")
 	if err == nil {
-		t.Fatalf("expected missing exec registration error")
+		t.Fatalf("expected an unknown kind error")
 	}
-	if !strings.Contains(err.Error(), `import _ "github.com/flanksource/gavel/fixtures/types"`) {
-		t.Fatalf("expected actionable import guidance, got %q", err.Error())
+	if !strings.Contains(err.Error(), "import the package that registers it") || !strings.Contains(err.Error(), "exec") {
+		t.Fatalf("expected the registered kinds and import guidance, got %q", err.Error())
 	}
 }
 

@@ -11,8 +11,8 @@ import (
 	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/fixtures/record"
 
-	// Registers the exec/query fixture types and the ai/runner step hooks.
-	_ "github.com/flanksource/gavel/fixtures/types"
+	// Registers the exec, test, lint and ai kinds.
+	fixturetypes "github.com/flanksource/gavel/fixtures/types"
 )
 
 const passingDocument = `---
@@ -101,13 +101,11 @@ func namesOf(results []fixtures.FixtureResult) []string {
 
 var _ = Describe("fixtures.RunNodes", func() {
 	It("passes completed command evidence to the later acceptance checker", func() {
-		original := fixtures.AIStepRunner
-		DeferCleanup(func() { fixtures.AIStepRunner = original })
 		var previous []fixtures.FixtureResult
-		fixtures.AIStepRunner = func(test fixtures.FixtureTest, opts fixtures.RunOptions) fixtures.FixtureResult {
+		DeferCleanup(fixtures.DefaultKinds.Replace(fixturetypes.NewAIKind(func(test fixtures.FixtureTest, opts fixtures.RunOptions) fixtures.FixtureResult {
 			previous = append([]fixtures.FixtureResult(nil), opts.PreviousResults...)
 			return fixtures.FixtureResult{Name: test.Name, Status: task.StatusPASS}
-		}
+		})))
 
 		results, _, err := fixtures.RunNodes(context.Background(), parseDocument(checklistEvidenceDocument),
 			fixtures.RunOptions{WorkDir: GinkgoT().TempDir()})
