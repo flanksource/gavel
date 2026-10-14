@@ -284,7 +284,7 @@ var _ = Describe("Host", func() {
 			var labeller interface {
 				PreRun(*agent.HookContext) error
 			}
-			for _, hook := range host.Hooks(todo, api.Spec{}, meta) {
+			for _, hook := range host.Hooks(todo, api.Spec{}, lifecycle.HookOptions{Meta: meta}) {
 				if hook.(interface{ Name() string }).Name() == "gavel-run-labels" {
 					labeller = hook.(interface {
 						PreRun(*agent.HookContext) error
@@ -311,7 +311,7 @@ var _ = Describe("Host", func() {
 			var labeller interface {
 				PreRun(*agent.HookContext) error
 			}
-			for _, hook := range host.Hooks(todo, api.Spec{}, todos.RunStartMetadata{}) {
+			for _, hook := range host.Hooks(todo, api.Spec{}, lifecycle.HookOptions{Meta: todos.RunStartMetadata{}}) {
 				if hook.(interface{ Name() string }).Name() == "gavel-run-labels" {
 					labeller = hook.(interface {
 						PreRun(*agent.HookContext) error

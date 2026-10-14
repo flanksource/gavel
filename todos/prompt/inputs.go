@@ -3,6 +3,8 @@ package prompt
 import (
 	"encoding/json"
 	"fmt"
+	"path"
+	"reflect"
 
 	"github.com/flanksource/gavel/lint"
 	"github.com/flanksource/gavel/testrunner"
@@ -33,6 +35,14 @@ func InputSchema(mode types.RunMode) ([]byte, error) {
 		FieldNameTag:               "yaml",
 		RequiredFromJSONSchemaTags: true,
 		DoNotReference:             false,
+		// Definitions are keyed by package-qualified name: lint.Options holds a
+		// processruntime.Options, and bare names would let one overwrite the other.
+		Namer: func(t reflect.Type) string {
+			for t.Kind() == reflect.Pointer {
+				t = t.Elem()
+			}
+			return path.Base(t.PkgPath()) + "." + t.Name()
+		},
 	}
 	schema := reflector.Reflect(&RunInputs{})
 	raw, err := json.Marshal(schema)
