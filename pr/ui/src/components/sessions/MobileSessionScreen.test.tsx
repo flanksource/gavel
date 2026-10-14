@@ -118,7 +118,8 @@ describe('MobileSessionScreen', () => {
     renderScreen();
 
     expect(composerDisabledReason()).toBe(LOADING_REASON);
-    expect(screen.getByTestId('inspector').contains(screen.getByPlaceholderText(COMPOSER_PLACEHOLDER))).toBe(true);
+    // A disabled composer shows its reason in place of the placeholder.
+    expect(screen.getByTestId('inspector').contains(screen.getByPlaceholderText(LOADING_REASON))).toBe(true);
 
     reportLoadState({ status: 'loading' });
     expect(composerDisabledReason()).toBe(LOADING_REASON);
@@ -205,7 +206,7 @@ describe('MobileSessionScreen', () => {
 
     reportLoadState({ status: 'error', error: new Error('Failed to load session (HTTP 404): session sess-1 has no transcript') });
 
-    expect(screen.getByTestId('inspector').contains(screen.getByPlaceholderText(COMPOSER_PLACEHOLDER))).toBe(true);
+    expect(screen.getByTestId('inspector').contains(screen.getByPlaceholderText(UNREADABLE_REASON))).toBe(true);
     expect(composerDisabledReason()).toBe(UNREADABLE_REASON);
     expect(fetchMock.mock.calls.some(([url]) => url === MESSAGE_URL)).toBe(false);
   });
@@ -217,7 +218,7 @@ describe('MobileSessionScreen', () => {
 
     reportLoadState({ status: 'error', error: new Error('stream failed') });
 
-    expect(screen.getByPlaceholderText(COMPOSER_PLACEHOLDER)).toBeTruthy();
+    expect(screen.getByPlaceholderText(UNREADABLE_REASON)).toBeTruthy();
     expect(composerDisabledReason()).toBe(UNREADABLE_REASON);
   });
 
