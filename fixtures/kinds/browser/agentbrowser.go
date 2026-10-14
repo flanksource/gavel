@@ -3,6 +3,7 @@ package browser
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -194,6 +195,10 @@ func isSnapshot(command string) bool {
 
 var cdpSupport sync.Map // binary → error (nil when --cdp is supported)
 
+// errAgentBrowserNotFound marks that no agent-browser binary resolved, as
+// opposed to one that resolved but cannot attach over CDP.
+var errAgentBrowserNotFound = errors.New("agent-browser not found")
+
 // resolveAgentBrowser finds agent-browser and checks it can attach over CDP.
 func resolveAgentBrowser(binary string) (string, error) {
 	candidates := []string{binary}
@@ -214,7 +219,7 @@ func resolveAgentBrowser(binary string) (string, error) {
 		}
 		return path, nil
 	}
-	return "", fmt.Errorf("agent-browser not found (tried %s); install it with `pnpm add -g agent-browser`", strings.Join(candidates, ", "))
+	return "", fmt.Errorf("%w (tried %s); install it with `pnpm add -g agent-browser`", errAgentBrowserNotFound, strings.Join(candidates, ", "))
 }
 
 func checkCDPFlag(path string) error {
