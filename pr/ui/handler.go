@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"html/template"
@@ -157,6 +158,10 @@ const orgsCacheTTL = 5 * time.Minute
 // the user's rate-limit budget with self-checks".
 const authProbeInterval = 5 * time.Minute
 
+// noTokenMessage is the dashboard's error when the poller cannot fetch because
+// no GitHub token is configured; it names the fix rather than the env lookup.
+const noTokenMessage = "GitHub token not configured: set GITHUB_TOKEN or GH_TOKEN, or run `gavel system install` to persist one"
+
 type snapshot struct {
 	PRs         github.PRSearchResults `json:"prs"`
 	FetchedAt   time.Time              `json:"fetchedAt"`
@@ -164,7 +169,11 @@ type snapshot struct {
 	Incremental bool                   `json:"incremental"`
 	Paused      bool                   `json:"paused"`
 	Error       string                 `json:"error,omitempty"`
-	Config      SearchConfig           `json:"config"`
+	// ErrorKind classifies Error when the UI should treat it as a known state
+	// rather than a failure; "no-token" (github.AuthStateNoToken) means the
+	// poller cannot run until a GitHub token is configured.
+	ErrorKind github.AuthState `json:"errorKind,omitempty"`
+	Config    SearchConfig     `json:"config"`
 	// Viewer is the authenticated GitHub login, surfaced so the UI can resolve
 	// the @me author filter client-side. Empty until the auth probe completes.
 	Viewer string `json:"viewer,omitempty"`
@@ -778,19 +787,30 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request, req routeR
 // NOT compute the unread map — that requires a database round-trip and is
 // populated by withUnread() outside the lock.
 func (s *Server) snapshotLocked() snapshot {
+	// The client contract is arrays, never null: before the first successful
+	// fetch (or when none can happen, e.g. no token) the lists are empty.
+	prs, config := s.prs, s.config
+	if prs == nil {
+		prs = github.PRSearchResults{}
+	}
+	if config.Repos == nil {
+		config.Repos = []string{}
+	}
 	snap := snapshot{
-		PRs:           s.prs,
+		PRs:           prs,
 		FetchedAt:     s.fetchedAt,
 		NextFetchIn:   int(s.interval.Seconds()),
 		Paused:        s.paused,
-		Config:        s.config,
+		Config:        config,
 		Viewer:        s.auth.Login,
 		BotsAvailable: len(s.knownBots) > 0,
 		IncludeBots:   s.includeBots,
 		ShowClosed:    s.showClosed,
 		RateLimit:     s.rateLimit,
 	}
-	if s.err != nil {
+	if errors.Is(s.err, github.ErrNoToken) {
+		snap.Error, snap.ErrorKind = noTokenMessage, github.AuthStateNoToken
+	} else if s.err != nil {
 		snap.Error = s.err.Error()
 	}
 	if len(s.gavelCache) > 0 {
