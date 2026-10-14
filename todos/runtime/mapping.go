@@ -88,6 +88,7 @@ func (p *Provider) todoFromIssue(
 	}
 	todo.PhaseRuns = phases[issue.ID]
 	todo.Title = issue.Title
+	todo.PR = issue.PR
 	todo.Priority = priority
 	todo.Status = status
 	todo.Created = &created

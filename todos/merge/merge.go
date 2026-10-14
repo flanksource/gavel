@@ -97,6 +97,9 @@ func Targets(todoList []*types.TODO, into string) (*types.TODO, []*types.TODO, e
 	if len(todoList) < 2 {
 		return nil, nil, fmt.Errorf("merge needs at least two TODOs; got %d", len(todoList))
 	}
+	if _, err := types.MergedPR(todoList); err != nil {
+		return nil, nil, err
+	}
 	workspaces := map[string][]string{}
 	for _, todo := range todoList {
 		workspaces[strings.TrimSpace(todo.CWD)] = append(workspaces[strings.TrimSpace(todo.CWD)], Ref(todo))

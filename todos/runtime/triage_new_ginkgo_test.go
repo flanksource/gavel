@@ -74,6 +74,8 @@ var _ = Describe("Triage new native writes", Ordered, func() {
 	It("closes a duplicate while keeping the existing target open", func(ctx SpecContext) {
 		source := create(ctx, "Duplicate parser report", "Same parser work")
 		target := create(ctx, "Original parser repair", "Same parser work")
+		pr := &types.PR{Number: 27, URL: "https://github.com/acme/service/pull/27"}
+		Expect(provider.Edit(ctx, source, todos.EditRequest{PR: &pr})).To(Succeed())
 		Expect(provider.ApplyTriageNew(ctx, source, result("duplicate-of", target), todos.TriageNewApplyOptions{TargetVersion: target.Version})).To(Succeed())
 		fresh, err := provider.Get(ctx, source.ID)
 		Expect(err).NotTo(HaveOccurred())
@@ -82,6 +84,27 @@ var _ = Describe("Triage new native writes", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(original.Title).To(Equal("Original parser repair"))
 		Expect(original.Status).NotTo(Equal(types.StatusCompleted))
+		Expect(original.PR).To(Equal(pr))
+	})
+	It("rejects duplicate or merge proposals for different PRs before writes", func(ctx SpecContext) {
+		source := create(ctx, "Separate PR scope", "Parser work")
+		target := create(ctx, "Other PR scope", "Parser work")
+		pr := &types.PR{Number: 27, URL: "https://github.com/acme/service/pull/27"}
+		otherPR := &types.PR{Number: 28, URL: "https://github.com/acme/service/pull/28"}
+		Expect(provider.Edit(ctx, source, todos.EditRequest{PR: &pr})).To(Succeed())
+		Expect(provider.Edit(ctx, target, todos.EditRequest{PR: &otherPR})).To(Succeed())
+		for _, action := range []string{"duplicate-of", "merge-into"} {
+			env := result(action, target)
+			if action == "merge-into" {
+				env.Body = "Combined parser work"
+			}
+			Expect(provider.ValidateTriageNew(ctx, source, env)).To(MatchError(ContainSubstring("different PRs")))
+			Expect(provider.ApplyTriageNew(ctx, source, env, todos.TriageNewApplyOptions{TargetVersion: target.Version})).To(HaveOccurred())
+		}
+		fresh, err := provider.Get(ctx, source.ID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(fresh.Title).To(Equal("Separate PR scope"))
+		Expect(fresh.Status).NotTo(Equal(types.StatusCompleted))
 	})
 	It("rejects merge content that drops an acceptance criterion or attachment", func(ctx SpecContext) {
 		source := create(ctx, "Report with evidence", "## Acceptance Criteria\n\n- [ ] Handle terminal separator\n\n[evidence](/api/todos/attachments/trace.txt)")
@@ -96,6 +119,8 @@ var _ = Describe("Triage new native writes", Ordered, func() {
 		const plan = "# Parser repair\n\nRetain separator boundaries."
 		source := create(ctx, "Merge parser report", body)
 		target := create(ctx, "Merge parser target", "Existing parser work")
+		pr := &types.PR{Number: 27, URL: "https://github.com/acme/service/pull/27"}
+		Expect(provider.Edit(ctx, source, todos.EditRequest{PR: &pr})).To(Succeed())
 		Expect(provider.Edit(ctx, source, todos.EditRequest{Verification: stringPointer(fixture)})).To(Succeed())
 		updated, err := provider.SavePlanRevision(ctx, source, plan, "triage-test")
 		Expect(err).NotTo(HaveOccurred())
@@ -109,6 +134,7 @@ var _ = Describe("Triage new native writes", Ordered, func() {
 		Expect(fresh.MarkdownBody).To(ContainSubstring("/api/todos/attachments/trace.txt"))
 		Expect(fresh.VerificationMarkdown).To(ContainSubstring("Parser | true"))
 		Expect(fresh.Labels).To(ConsistOf("pr", "bug"))
+		Expect(fresh.PR).To(Equal(pr))
 		savedPlan, err := provider.PlanMarkdown(ctx, fresh, types.ModePlan)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(savedPlan).To(Equal(plan))

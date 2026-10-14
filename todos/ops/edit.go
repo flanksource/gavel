@@ -37,6 +37,8 @@ type EditFlags struct {
 	// NoParent is --no-parent, which detaches; the two are mutually exclusive.
 	Parent   string
 	NoParent bool
+	PRURL    string
+	ClearPR  bool
 }
 
 // EditChanges is an edit split by the provider call that applies it. They are
@@ -55,6 +57,20 @@ type EditChanges struct {
 // silently declined write.
 func BuildEdit(flags EditFlags) (EditChanges, error) {
 	var changes EditChanges
+	if flags.ClearPR && flags.PRURL != "" {
+		return changes, fmt.Errorf("--clear-pr cannot be combined with --pr")
+	}
+	if flags.PRURL != "" || flags.ClearPR {
+		var link *types.PR
+		if flags.PRURL != "" {
+			var err error
+			link, err = types.PRFromURL(flags.PRURL)
+			if err != nil {
+				return changes, err
+			}
+		}
+		changes.Content.PR = &link
+	}
 
 	if flags.Title != nil {
 		title := strings.TrimSpace(*flags.Title)
@@ -114,7 +130,7 @@ func BuildEdit(flags EditFlags) (EditChanges, error) {
 	}
 
 	if changes.Content.IsEmpty() && changes.Plan == nil && changes.Parent == nil && changes.State.Status == nil && changes.State.Priority == nil {
-		return changes, fmt.Errorf("nothing to edit: provide --title, --body, --plan, --verification, --status, --priority, --label, --clear-labels, --parent, and/or --no-parent")
+		return changes, fmt.Errorf("nothing to edit: provide --title, --body, --plan, --verification, --status, --priority, --label, --clear-labels, --parent, --no-parent, --pr, and/or --clear-pr")
 	}
 	return changes, nil
 }

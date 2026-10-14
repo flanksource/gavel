@@ -46,7 +46,7 @@ func (h *Host) runInput(exec *todos.ExecutorContext, todo *types.TODO, prepared 
 	}
 	state := &stepInput{meta: h.runMetadata(req, providerSessionID, todo, prepared)}
 	state.execution = &todos.ExecutionResult{ExecutorName: h.executorName(prepared), Runtime: state.meta, Transcript: exec.GetTranscript()}
-	state.hooks = h.Hooks(todo, req, state.meta)
+	state.hooks = h.Hooks(todo, req, HookOptions{Meta: state.meta, pr: prepared.pr})
 	if opts.Provider != nil {
 		// A supplied provider skips Captain's setup hook, and gavel's
 		// supplied-provider seam still needs local setup.

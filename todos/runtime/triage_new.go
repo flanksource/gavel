@@ -52,6 +52,10 @@ func (p *Provider) ValidateTriageNew(ctx context.Context, todo *types.TODO, env 
 	if closedTriageTODO(target) {
 		return fmt.Errorf("triage.new target %s is closed", target.ID)
 	}
+	if env.Action == "duplicate-of" {
+		_, err := types.MergedPR([]*types.TODO{target, todo})
+		return err
+	}
 	if env.Action == "child-of" {
 		children, err := p.List(ctx, todos.DiscoveryFilters{ParentID: todo.ID})
 		if err != nil {
@@ -175,6 +179,9 @@ func (p *Provider) applyTriageNew(ctx context.Context, todo *types.TODO, env *ty
 }
 
 func (p *Provider) triageNewMerge(ctx context.Context, source, target *types.TODO, env *types.TriageNewEnvelope) (*merge.Proposal, bool, error) {
+	if _, err := types.MergedPR([]*types.TODO{target, source}); err != nil {
+		return nil, false, err
+	}
 	hasPlan := false
 	criteria := map[string]bool{}
 	for _, criterion := range todos.ParseAcceptanceCriteria(env.Body) {
