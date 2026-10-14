@@ -7,8 +7,8 @@ import (
 )
 
 func runNodesIsolated(ctx context.Context, nodes []*FixtureNode, opts RunOptions) ([]FixtureResult, *ExecutionSnapshot, error) {
-	if opts.Evaluator != nil || opts.Progress != nil || opts.Recorder != nil {
-		return nil, nil, fmt.Errorf("fixture isolation cannot serialize an evaluator, progress callback, or active recorder")
+	if opts.Evaluator != nil || opts.Progress != nil || opts.Recorder != nil || opts.Scope != nil {
+		return nil, nil, fmt.Errorf("fixture isolation cannot serialize an evaluator, progress callback, active recorder, or fixture scope")
 	}
 	if opts.Runtime != nil {
 		runtime := *opts.Runtime
@@ -30,11 +30,16 @@ func runNodesIsolated(ctx context.Context, nodes []*FixtureNode, opts RunOptions
 			}
 		})
 	}
-	if len(result.Results) > len(tests) {
-		return nil, carrier.workerSnapshot, fmt.Errorf("fixture worker returned %d results for %d tests", len(result.Results), len(tests))
-	}
+	next := 0
 	for i := range result.Results {
-		result.Results[i].Test = tests[i]
+		if isTeardownResult(result.Results[i]) {
+			continue
+		}
+		if next >= len(tests) {
+			return nil, carrier.workerSnapshot, fmt.Errorf("fixture worker returned more results than the %d tests sent", len(tests))
+		}
+		result.Results[i].Test = tests[next]
+		next++
 	}
 	return result.Results, result.Snapshot, err
 }

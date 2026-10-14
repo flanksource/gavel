@@ -1,6 +1,7 @@
 package fixtures
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -91,22 +92,12 @@ touch `+filepath.Join(dir, "ran-ai-exec")+`
 		t.Fatalf("write ai fixture: %v", err)
 	}
 
-	oldAI, oldTest, oldLint := AIStepRunner, TestStepRunner, LintStepRunner
-	AIStepRunner = func(fixture FixtureTest, opts RunOptions) FixtureResult {
-		t.Fatalf("AI runner should not be called by Outline")
-		return FixtureResult{}
+	for _, name := range []string{"ai", RunnerKindTest, RunnerKindLint} {
+		t.Cleanup(DefaultKinds.Replace(fakeKind{name: name, execute: func(context.Context, *StepContext) (StepOutcome, error) {
+			t.Fatalf("%s kind should not be executed by Outline", name)
+			return StepOutcome{}, nil
+		}}))
 	}
-	TestStepRunner = func(fixture FixtureTest, opts RunOptions) FixtureResult {
-		t.Fatalf("test runner step should not be called by Outline")
-		return FixtureResult{}
-	}
-	LintStepRunner = func(fixture FixtureTest, opts RunOptions) FixtureResult {
-		t.Fatalf("lint runner step should not be called by Outline")
-		return FixtureResult{}
-	}
-	t.Cleanup(func() {
-		AIStepRunner, TestStepRunner, LintStepRunner = oldAI, oldTest, oldLint
-	})
 
 	report, err := Outline(OutlineOptions{
 		Paths:   []string{standardPath, aiPath},

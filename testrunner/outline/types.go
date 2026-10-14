@@ -15,7 +15,7 @@ type Options struct {
 	WorkDir      string
 	Paths        []string            // positional path filters, relative to WorkDir
 	Frameworks   []parsers.Framework // empty = every supported outline framework
-	FixtureFiles []string            // fixture globs; empty = config or **/*.fixture.md
+	FixtureFiles []string            // fixture globs; empty = config or **/*.fixture.{md,yaml,yml,json}
 	AISummary    bool
 	Duplication  bool
 	History      bool

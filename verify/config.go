@@ -282,8 +282,9 @@ type SSHConfig struct {
 	Cmd string `yaml:"cmd,omitempty" json:"cmd,omitempty"`
 }
 
-// DefaultFixturesGlob is the default glob pattern used to discover fixture files.
-const DefaultFixturesGlob = "**/*.fixture.md"
+// DefaultFixturesGlob is the default glob pattern used to discover fixture
+// files: markdown fixtures and YAML/JSON fixture documents.
+const DefaultFixturesGlob = "**/*.fixture.{md,yaml,yml,json}"
 
 type FixturesConfig struct {
 	Enabled bool     `yaml:"enabled,omitempty" json:"enabled,omitempty"`

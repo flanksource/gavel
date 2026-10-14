@@ -230,7 +230,8 @@ func contextFrom(result *fixtures.FixtureResult) *api.VerifyNodeContext {
 
 // detailFrom carries the evidence that has no field of its own on a verify node:
 // the CEL evaluation trace, the run artifact a `yaml test` / `yaml lint` step
-// points at, and the changed files the node was scoped to. An unencodable
+// points at, the changed files the node was scoped to, and a typed step's
+// step/outputs/exports/wait/attempts/background record. An unencodable
 // detail is dropped rather than failing the report — the verdict is what
 // matters, and the trace is an aid.
 func detailFrom(result *fixtures.FixtureResult) json.RawMessage {
@@ -246,6 +247,13 @@ func detailFrom(result *fixtures.FixtureResult) json.RawMessage {
 	}
 	if changed, ok := result.Metadata["changed_files"]; ok {
 		detail["changed_files"] = changed
+	}
+	// A typed (YAML/JSON) step's record: which step it was, what it produced and
+	// exported, how its wait went and every Execute attempt.
+	for _, key := range []string{"step", "outputs", "exports", "wait", "attempts", "background"} {
+		if value, ok := result.Metadata[key]; ok {
+			detail[key] = value
+		}
 	}
 	if len(detail) == 0 {
 		return nil
