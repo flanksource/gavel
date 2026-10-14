@@ -29,6 +29,7 @@ vi.mock('@flanksource/clicky-ui/components', () => ({
     </div>
   ),
   SplitPane: ({ left, right }: { left: ReactNode; right: ReactNode }) => <div>{left}{right}</div>,
+  FilterBar: () => null,
 }));
 /* oxlint-enable clicky-ui/prefer-clicky-components */
 

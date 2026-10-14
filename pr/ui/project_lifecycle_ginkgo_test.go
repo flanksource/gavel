@@ -37,7 +37,7 @@ var _ = Describe("project status lifecycle", func() {
 		projectsPath = originalProjectsPath
 	})
 
-	It("returns the selected project's stored git status and action state", func() {
+	It("returns the selected project's stored git status, classified by repomap, and action state", func() {
 		server := newTrackedGitServer().server
 		dir := createDiffRepository()
 		writeDiffFile(dir, "src/unstaged.go", "package src\n\nvar Unstaged = true\n")
@@ -70,6 +70,8 @@ var _ = Describe("project status lifecycle", func() {
 				WorkKind: status.KindModified,
 				Adds:     1,
 				Dels:     1,
+				Language: "go",
+				Scopes:   []string{"go"},
 			}},
 		}))
 		var rawResponse map[string]any
@@ -82,6 +84,7 @@ var _ = Describe("project status lifecycle", func() {
 		gatherProjectStatus = func(workDir string, opts status.Options) (*status.Result, error) {
 			Expect(workDir).To(Equal("/work/gavel"))
 			Expect(opts.NoResults).To(BeFalse())
+			Expect(opts.NoRepomap).To(BeFalse(), "the scope filter needs repomap scopes on the live path too")
 			return &status.Result{
 				WorkDir:      workDir,
 				ResultsStale: true,
