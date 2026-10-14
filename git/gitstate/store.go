@@ -258,6 +258,12 @@ func (s *Store) ApplyStatus(ctx context.Context, repoID uuid.UUID, path string, 
 	if err != nil {
 		return fmt.Errorf("encode files of worktree %s: %w", path, err)
 	}
+	// Advance the generation first: ApplyRefs locks the repo row before its
+	// worktree rows, so a status write taking them the other way round
+	// deadlocks with the refs scan a commit triggers alongside it.
+	if err := s.bump(ctx, repoID); err != nil {
+		return err
+	}
 	c := update.Changes
 	result := s.db.WithContext(ctx).Exec(`
 		UPDATE git_worktrees SET staged = ?, unstaged = ?, "both" = ?, untracked = ?, conflict = ?, adds = ?, dels = ?,
@@ -271,17 +277,21 @@ func (s *Store) ApplyStatus(ctx context.Context, repoID uuid.UUID, path string, 
 	if result.RowsAffected == 0 {
 		return fmt.Errorf("update status of worktree %s: not a recorded worktree of git repo %s", path, repoID)
 	}
-	return s.bump(ctx, repoID)
+	return nil
 }
 
 // RecordStatusError records a failed status scan of the worktree, keeping
 // its last good state.
 func (s *Store) RecordStatusError(ctx context.Context, repoID uuid.UUID, path string, scanErr error) error {
+	// Repo row before worktree row, as in ApplyStatus.
+	if err := s.bump(ctx, repoID); err != nil {
+		return err
+	}
 	if err := s.db.WithContext(ctx).Exec(`UPDATE git_worktrees SET status_error = ?, status_scanned_at = now() WHERE repo_id = ? AND path = ?`,
 		scanErr.Error(), repoID, path).Error; err != nil {
 		return fmt.Errorf("record status error of worktree %s: %w", path, err)
 	}
-	return s.bump(ctx, repoID)
+	return nil
 }
 
 // RecordError records a failed ref scan of the repo, keeping its last good
