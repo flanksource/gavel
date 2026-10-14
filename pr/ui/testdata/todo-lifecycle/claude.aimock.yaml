@@ -1,0 +1,108 @@
+name: todo-lifecycle-claude
+description: >
+  Scripted Anthropic replies for the todo lifecycle fixture, served to the real
+  `claude` CLI that gavel runs for each step. Rule order is the script: each
+  step's prompt matches its own rules. Under `cli` mode a StructuredOutput tool
+  call ends the run; under `agent` mode (triage.new, which needs caller tools)
+  the SDK sends the tool result back and needs a closing turn — the first rule
+  answers that, for any agent step, however many there are. Otherwise there is
+  deliberately no catch-all: an unexpected request is a 400 miss that fails the
+  step loudly.
+
+anthropic:
+  # The Agent SDK names each session in a side request that quotes the user
+  # prompt; answer it before the step rules can match it.
+  - match:
+      system_contains: "You are naming a coding session"
+    repeat: -1
+    respond:
+      text: Todo lifecycle step
+      stop_reason: end_turn
+
+  # agent mode only: close the turn after a StructuredOutput call.
+  - match:
+      tool_result_for: StructuredOutput
+    repeat: -1
+    respond:
+      text: Result recorded.
+      stop_reason: end_turn
+
+  # triage.new (agent mode): name and label the new TODO. Matched on the
+  # prompt's system text, which only the real turn carries.
+  - match:
+      system_contains: "Triage this newly created TODO"
+    respond:
+      tool_use:
+        name: StructuredOutput
+        id: toolu_triage_new
+        input:
+          summary: Named the greeting helper work and labelled it as API surface.
+          endStatus: completed
+          title: Add Greeting helper to greet package
+          labels: [api]
+          action: keep
+      stop_reason: tool_use
+
+  # plan: read-only investigation ending in a new plan.
+  - match:
+      prompt_contains: "You are planning the implementation"
+    respond:
+      tool_use:
+        name: StructuredOutput
+        id: toolu_plan
+        input:
+          summary: Planned a one-function greet package satisfying the existing test.
+          endStatus: completed
+          planStatus: new
+          planContent: |
+            ## Plan
+
+            1. Add `greet/greet.go` with `func Greeting(name string) string` returning `"hello " + name`.
+            2. Run `go test ./greet/...`; `greet/greet_test.go` already covers it.
+      stop_reason: tool_use
+
+  # captain's plan-tldr hook (api mode, haiku) summarises the saved plan; its
+  # structured output is the reply text.
+  - match:
+      system_contains: "You write TL;DRs for software implementation plans"
+    respond:
+      text: '{"tldr":"- **TL;DR** Adds `greet.Greeting` in `greet/greet.go`, verified by the existing `go test ./greet/...`."}'
+      stop_reason: end_turn
+
+  # run, turn 1: write the file the plan names (relative to the run worktree).
+  - match:
+      prompt_contains: "You are implementing the todo item"
+    respond:
+      tool_use:
+        name: Write
+        id: toolu_run_write
+        input:
+          file_path: greet/greet.go
+          content: |
+            package greet
+
+            // Greeting greets name.
+            func Greeting(name string) string { return "hello " + name }
+      stop_reason: tool_use
+
+  # run's commit:run hook: gavel's commit message generator (git/ai-commit-message.prompt).
+  - match:
+      prompt_contains: "produce a Conventional Commit message"
+    respond:
+      tool_use:
+        name: StructuredOutput
+        id: toolu_commit_message
+        input: { type: feat, scope: greet, subject: add Greeting helper }
+      stop_reason: tool_use
+
+  # run, turn 2: the Write result came back; report completion.
+  - match:
+      tool_result_for: Write
+    respond:
+      tool_use:
+        name: StructuredOutput
+        id: toolu_run_done
+        input:
+          summary: Added greet.Greeting; go test ./greet/... covers it.
+          endStatus: completed
+      stop_reason: tool_use
