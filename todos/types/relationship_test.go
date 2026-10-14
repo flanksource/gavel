@@ -16,7 +16,8 @@ func TestParseRelationKind(t *testing.T) {
 		{name: "snake case related_to", input: "related_to", want: RelationRelatedTo},
 		{name: "kebab case related-to", input: "related-to", want: RelationRelatedTo},
 		{name: "blocks is derived and cannot be written", input: "blocks", wantErr: true},
-		{name: "unknown relation is rejected", input: "duplicates", wantErr: true},
+		{name: "duplicates is writable", input: "duplicates", want: RelationDuplicates},
+		{name: "unknown relation is rejected", input: "supersedes", wantErr: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -45,7 +46,7 @@ func TestLinkableRelationsExcludeBlocks(t *testing.T) {
 			t.Fatal("LinkableRelations() includes the derived blocks relation")
 		}
 	}
-	if len(LinkableRelations()) != 2 {
-		t.Fatalf("LinkableRelations() = %v, want depends_on and related_to", LinkableRelations())
+	if len(LinkableRelations()) != 3 {
+		t.Fatalf("LinkableRelations() = %v, want depends_on, related_to and duplicates", LinkableRelations())
 	}
 }

@@ -115,3 +115,16 @@ func TestBuildBacklogIndexReportsTruncation(t *testing.T) {
 		t.Errorf("truncation must be stated in the text:\n%s", index[len(index)-200:])
 	}
 }
+
+// Two TODOs naming one working PR are a strong duplicate signal, so the index
+// shows each TODO's primary PR.
+func TestBuildBacklogIndexShowsThePrimaryPR(t *testing.T) {
+	linked := indexTODO("ab12cd", "Fix the parser panic", "")
+	linked.PR = &types.PR{Number: 42, URL: "https://github.com/acme/widgets/pull/42"}
+	index := BuildBacklogIndex([]*types.TODO{linked, indexTODO("ff0011", "Unlinked", "")}, nil, nil)
+
+	want := "- ab12cd  Fix the parser panic  (pending, high)  pr #42\n- ff0011  Unlinked  (pending, high)"
+	if index != want {
+		t.Fatalf("index =\n%q\nwant\n%q", index, want)
+	}
+}

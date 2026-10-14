@@ -4,6 +4,7 @@ import type { PRItem, PRDetail, PRComment, PRCommitInfo, PRFileInfo, GavelResult
 import { aggregateGavelShards, stateColor, reviewColor, severityIcon, extractCommentTitle, isDeploymentComment } from '../utils';
 import { DetailPanel, LintView, TestNode, groupLintByLinterRuleFile } from '@flanksource/gavel/testrunner';
 import { CreateTodoFromPRDialog } from './todos/CreateTodoFromPRDialog';
+import { PRLinkedTodos } from './PRLinkedTodos';
 import { PRActions, type ExtraAction } from './PRActions';
 import { RelativeTime } from './RelativeTime';
 import { stripAnsi } from '../ansi';
@@ -245,6 +246,8 @@ export function PRDetailPanel({ pr, detail, loading, projects, onTodoCreated, on
 
       {activeTab === 'overview' && (
         <>
+          <PRLinkedTodos prUrl={pr.url} />
+
           {detail?.runs && Object.keys(detail.runs).length > 0 && (
             <Section
               title="Workflows"

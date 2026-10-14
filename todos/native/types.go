@@ -52,6 +52,9 @@ type RelationshipKind string
 const (
 	RelationshipDependsOn RelationshipKind = "depends_on"
 	RelationshipRelatedTo RelationshipKind = "related_to"
+	// RelationshipDuplicates is symmetric like related_to and stored once per
+	// pair, lower id first.
+	RelationshipDuplicates RelationshipKind = "duplicates"
 	// RelationshipBlocks is the read-only reverse presentation of depends_on.
 	// It is returned by relationship queries and is never persisted.
 	RelationshipBlocks RelationshipKind = "blocks"

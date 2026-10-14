@@ -33,6 +33,7 @@ Subcommands:
   create   Cherry-pick a commit into a fresh worktree and open a PR (AI title/body/branch)
   list     List PRs, optionally with CI status or a live browser dashboard (--ui)
   close    Close a PR without merging it (replaces gh pr close)
+  search   Search the PR index the dashboard poller persisted (read-only, offline)
 
 Examples:
   gavel pr status                 # current branch's PR + checks
@@ -41,7 +42,8 @@ Examples:
   gavel pr status <actions job URL>   # the job's PR, narrowed to that job
   gavel pr create <SHA>           # open a PR from one commit
   gavel pr list --ui              # live PR dashboard
-  gavel pr close 123              # close PR #123 without merging`,
+  gavel pr close 123              # close PR #123 without merging
+  gavel pr search parser panic    # find indexed PRs by title words`,
 }
 
 type PRStatusOptions struct {

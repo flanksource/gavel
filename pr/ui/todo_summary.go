@@ -286,9 +286,10 @@ func todoErrorStatus(fallback int, err error) int {
 	case errors.Is(err, database.ErrUnavailable):
 		return http.StatusServiceUnavailable
 	case errors.Is(err, native.ErrAmbiguousReference), errors.Is(err, native.ErrVersionConflict), errors.Is(err, native.ErrAliasConflict),
-		errors.Is(err, native.ErrIssueInHierarchy), errors.Is(err, native.ErrOpenChildren):
+		errors.Is(err, native.ErrIssueInHierarchy), errors.Is(err, native.ErrOpenChildren),
+		errors.Is(err, native.ErrPRLinkExists):
 		return http.StatusConflict
-	case errors.Is(err, native.ErrNotFound):
+	case errors.Is(err, native.ErrNotFound), errors.Is(err, native.ErrPRLinkNotFound):
 		return http.StatusNotFound
 	case errors.Is(err, native.ErrInvalidInput), errors.Is(err, native.ErrInvalidParent):
 		return http.StatusBadRequest

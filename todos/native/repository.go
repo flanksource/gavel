@@ -153,7 +153,13 @@ func (s IssueStatus) IsClosed() bool {
 }
 
 func (r RelationshipKind) valid() bool {
-	return r == RelationshipDependsOn || r == RelationshipRelatedTo
+	return r == RelationshipDependsOn || r.symmetric()
+}
+
+// symmetric relations read the same from both ends, so each pair is stored once
+// in canonical order (see todo_issue_relationships_related_order).
+func (r RelationshipKind) symmetric() bool {
+	return r == RelationshipRelatedTo || r == RelationshipDuplicates
 }
 
 // valid mirrors the todo_issue_prompt_runs.step_kind CHECK exactly: a non-empty,

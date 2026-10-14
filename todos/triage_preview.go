@@ -89,8 +89,13 @@ func TriageEnvelopeFields(env *types.TriageEnvelope) []string {
 	if env.ChangesLabels() {
 		fields = append(fields, "labels")
 	}
-	if len(env.Related) > 0 {
-		fields = append(fields, "related")
+	for _, field := range []struct {
+		name   string
+		values []string
+	}{{"related", env.Related}, {"duplicates", env.Duplicates}, {"prs", env.PRs}} {
+		if len(field.values) > 0 {
+			fields = append(fields, field.name)
+		}
 	}
 	return fields
 }
