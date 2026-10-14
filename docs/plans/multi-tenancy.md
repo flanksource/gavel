@@ -1912,6 +1912,31 @@ Clerk-mode manual checks:
     current org's role is the request's, since a session's role can be newer than the stored
     one.
   - Both routes are registered in every mode, and `/api/me` is on the hosted allowlist.
+- **2026-10-14: the M3 "all modes" changes move to hosted-only (Batman).** Both would have broken
+  a local feature with no hosted benefit yet. The local run dialog sends cmux args as `cliArgs`,
+  and React Grab uploads attachments cross-origin. Spec stripping moves to M10 and attachment
+  headers to M6, both for hosted orgs only. This supersedes the planning entry that accepted
+  them in all modes.
+- **2026-10-14: `gavel serve --auth clerk` is wired (M3.3, `cmd/gavel/serve_hosted.go`).**
+  - `runHostedDashboard` opens the database with migrations and requires it
+    (`database.Require`). It starts neither Captain's session monitor nor the todo projection:
+    the monitor watches the host's own sessions, and todos are off in hosted mode. No mode
+    parameter on `startServeRuntime` is needed.
+  - `hostedDashboard(ctx, opts, db, cache)` builds the stack: `Authenticator.Middleware` in front
+    of `OrgServers` (30m idle TTL), with a hosted-mode Server with no org as the public shell.
+    Each org's Server gets `LoadOrgSearchConfig`, `github.Options{TokenSource:
+    githubNotConnected, Cache: cache.ForOrg(org)}`, `SetOrg`, hosted mode and the auth config.
+    Until M5 the PR tab therefore says "connect GitHub to this organization", and the host's
+    token is never used.
+  - The access-token cache TTL is `properties.Duration(10m, "auth.token.cache.ttl")`, and
+    memberships are refreshed after 5 minutes.
+  - `Validate` now also requires `--clerk-client-id` (CLI access tokens are checked against it)
+    and rejects `--dev` and `--menu-bar` with `--auth clerk`, since both are local-only.
+  - JWKS fetches use the existing `authHTTPClient` package variable and Backend API calls the new
+    `clerkBackendHTTPClient` (nil in production), so `TestHostedDashboard` runs the real stack
+    against a migrated database and the fake Clerk. It covers the public shell,
+    `/api/auth/config`, 401 without a token, `/api/me` by cookie, a CLI token with
+    `X-Gavel-Org`, the allowlist's 404, and a same-origin config save landing in `org_settings`.
 - **2026-10-14: M5.1 `TokenSource` pulled forward into M3 (commit `7b87e94`).** Before M5, a
   hosted org's `Server` would have used the host's `GITHUB_TOKEN`, `GH_TOKEN` or `auth.json` for
   every PR call. `github.Options.TokenSource`, when set, is the only credential. The M3.2 factory
@@ -1937,7 +1962,7 @@ Clerk-mode manual checks:
 - [x] M2.1 JWKS cache, session verifier, access verifier, GitHub OIDC verifier, Clerk memberships
 - [x] M3.1 ServeOptions plus Validate (`DashboardOptions`)
 - [x] M3.2 OrgServers (the factory lands with M3.3's wiring)
-- [ ] M3.3 middleware, /api/auth/config, /api/me, features off in hosted mode (incl. execution 501s), spec stripping, attachment headers
+- [x] M3.3 middleware, /api/auth/config, /api/me, features off in hosted mode (incl. execution 501s); spec stripping moved to M10 and attachment headers to M6 (hosted only)
 - [ ] M4 UI
 - [ ] M5.0 spike: GitHub App via Clerk
 - [x] M5.1 TokenSource (pulled into M3, `7b87e94`)

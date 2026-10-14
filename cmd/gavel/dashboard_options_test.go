@@ -19,6 +19,7 @@ func clerkDashboardOptions() DashboardOptions {
 		PublicURL:           "https://gavel.example.com",
 		ClerkIssuer:         "https://clerk.example.com",
 		ClerkPublishableKey: "pk_test_abc",
+		ClerkClientID:       "cli",
 		clerkSecretKey:      "sk_test_abc",
 		secretKey:           testSecretKey,
 	}
@@ -38,9 +39,12 @@ func TestDashboardOptionsValidate(t *testing.T) {
 			"--auth clerk requires --public-url",
 			"--auth clerk requires --clerk-issuer or GAVEL_CLERK_ISSUER",
 			"--auth clerk requires --clerk-publishable-key or GAVEL_CLERK_PUBLISHABLE_KEY",
+			"--auth clerk requires --clerk-client-id or GAVEL_CLERK_CLIENT_ID",
 			"--auth clerk requires the CLERK_SECRET_KEY environment variable",
 			"--auth clerk requires the GAVEL_SECRET_KEY environment variable",
 		}},
+		{"menu bar with clerk", func(o *DashboardOptions) { o.MenuBar = true }, []string{"--menu-bar is local-only and can't be used with --auth clerk"}},
+		{"dev mode with clerk", func(o *DashboardOptions) { o.Dev = true }, []string{"--dev is local-only and can't be used with --auth clerk"}},
 		{"public URL with a path", func(o *DashboardOptions) { o.PublicURL = "https://gavel.example.com/app" }, []string{
 			`--public-url must be an origin like https://gavel.example.com, got "https://gavel.example.com/app"`,
 		}},

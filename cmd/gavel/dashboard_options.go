@@ -71,6 +71,17 @@ func (o DashboardOptions) Validate() error {
 		} else if !strings.HasPrefix(o.ClerkPublishableKey, "pk_") {
 			add("--clerk-publishable-key must start with pk_")
 		}
+		if o.ClerkClientID == "" {
+			add("--auth clerk requires --clerk-client-id or GAVEL_CLERK_CLIENT_ID")
+		}
+		for _, local := range []struct {
+			flag string
+			set  bool
+		}{{"--dev", o.Dev}, {"--menu-bar", o.MenuBar}} {
+			if local.set {
+				add("%s is local-only and can't be used with --auth clerk", local.flag)
+			}
+		}
 		if o.clerkSecretKey == "" {
 			add("--auth clerk requires the CLERK_SECRET_KEY environment variable")
 		} else if !strings.HasPrefix(o.clerkSecretKey, "sk_") {

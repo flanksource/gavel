@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"os"
 
 	"github.com/flanksource/clicky"
@@ -30,7 +29,7 @@ func runServeDashboard(opts DashboardOptions) (any, error) {
 		return nil, err
 	}
 	if opts.Auth == authClerk {
-		return nil, errors.New("--auth clerk is not wired yet")
+		return nil, runHostedDashboard(opts)
 	}
 	return nil, runPRUI(applyServeDefaults(opts.PRListOptions), serveDatabaseWithMigrations)
 }
