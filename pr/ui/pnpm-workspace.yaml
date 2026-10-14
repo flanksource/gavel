@@ -17,7 +17,7 @@ catalog:
   # `prepare` (a full source build whose icon generator fetches
   # api.iconify.design), which CI rate-limits to HTTP 429 and then fails the
   # bundle on the icons that never downloaded. The npm tarball ships dist/.
-  '@flanksource/clicky-ui': 0.3.46
+  '@flanksource/clicky-ui': 0.3.47
   "@floating-ui/react": ^0.27.19
   '@iconify-icons/codicon': ^1.2.30
   '@iconify-icons/vscode-icons': ^1.2.29
@@ -98,7 +98,7 @@ linkWorkspacePackages: true
 preferWorkspacePackages: true
 
 minimumReleaseAgeExclude:
-  - '@flanksource/clicky-ui@0.3.46'
+  - '@flanksource/clicky-ui'
 
 # Keep shared peer types on React 19; the test-runner workspace uses React 18.
 overrides:
