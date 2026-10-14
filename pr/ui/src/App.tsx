@@ -19,6 +19,9 @@ import { SettingsPage, type SettingsScope } from './components/settings/Settings
 import { ProjectDetailPane, ProjectsSidebar } from './components/ProjectsView';
 import { ProcessManager } from './components/ProcessManager';
 import { ThemeToggle } from './components/ThemeToggle';
+import { UserMenu } from './components/UserMenu';
+import { hostControlsVisible, tabFor, visibleTabs } from './hostedUI';
+import { currentAuthMode } from './query';
 import { ReactGrabHelp } from './components/ReactGrabHelp';
 import { CommandPalette, SearchTrigger } from './components/CommandPalette';
 import { flattenTodos, type TodoEntry } from './components/todos/todoGroup';
@@ -126,7 +129,9 @@ export function App() {
   const [projectResults, setProjectResults] = useState(initialRoute.projectResults);
   const [projectRef, setProjectRef] = useState(initialRoute.projectRef);
   const [todoView, setTodoView] = useState(initialRoute.todoView);
-  const [activeTab, setActiveTab] = useState<Tab>(initialRoute.tab);
+  const authMode = currentAuthMode();
+  const hostControls = hostControlsVisible(authMode);
+  const [activeTab, setActiveTab] = useState<Tab>(tabFor(authMode, initialRoute.tab));
   const [menubarTab, setMenubarTab] = useState<MobileTab>('prs');
   const [menubarSessionId, setMenubarSessionId] = useState('');
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -139,12 +144,13 @@ export function App() {
 
   const pathname = typeof window !== 'undefined' ? window.location.pathname : '';
   const isMenubar = pathname === '/menubar';
-  const isProcessesPage = pathname === '/processes';
+  // The processes and new-todo pages act on the host, so a hosted org gets the dashboard.
+  const isProcessesPage = hostControls && pathname === '/processes';
   // The focused /todos/new form is a standalone page (like /menubar, /processes)
   // rather than a view inside the Todos tab, so it can be linked to and returns
   // to its referer. parseRoute reads it as the todos tab with selectedPath="new";
   // the early return below renders the form before any of that matters.
-  const isTodoNewPage = pathname === '/todos/new';
+  const isTodoNewPage = hostControls && pathname === '/todos/new';
   // On mobile the desktop AppShell (split panes, sidebar, toolbars) has no room,
   // so the dashboard falls back to the same compact, single-column menubar
   // dropdown layout the native menubar webview uses. The standalone /processes
@@ -221,7 +227,7 @@ export function App() {
   );
 
   const commitRoute = useCallback((next: RouteState, mode: 'push' | 'replace' = 'push') => {
-    setActiveTab(next.tab);
+    setActiveTab(tabFor(currentAuthMode(), next.tab));
     setSelectedPath(next.selectedPath);
     setScopeProject(next.scopeProject);
     setProjectDiffPath(next.projectDiffPath);
@@ -347,7 +353,7 @@ export function App() {
   useEffect(() => {
     const onPopState = () => {
       const next = parseRoute(window.location);
-      setActiveTab(next.tab);
+      setActiveTab(tabFor(currentAuthMode(), next.tab));
       setSelectedPath(next.selectedPath);
       setScopeProject(next.scopeProject);
       setProjectDiffPath(next.projectDiffPath);
@@ -646,9 +652,9 @@ export function App() {
             {activeTab === 'todos' && <TodoNavbarDensityPicker todos={todos} />}
             {activeTab === 'todos' && <ReactGrabHelp />}
             {activeTab === 'todos' && <TodoNewButton todos={todos} />}
-            <ChatButton label="Open Gavel assistant" />
-            <TaskManagerButton basePath="/api/v1" />
-            <ProcessManager projects={scopedProjects} onProcChanged={onProcChanged} />
+            {hostControls && <ChatButton label="Open Gavel assistant" />}
+            {hostControls && <TaskManagerButton basePath="/api/v1" />}
+            {hostControls && <ProcessManager projects={scopedProjects} onProcChanged={onProcChanged} />}
             <OrgChooser config={{ ...config, project: scopeProject }} projects={projects} onChange={updateScopeConfig} />
             <StatusIndicator
               fetchedAt={fetchedAt}
@@ -660,17 +666,20 @@ export function App() {
               onPause={handlePause}
               networkBusy={detailLoading}
             />
-            <Button
-              variant="ghost"
-              size="icon"
-              type="button"
-              onClick={openGlobalSettings}
-              title="Global settings (~/.gavel.yaml)"
-              aria-label="Global settings"
-              className="text-muted-foreground hover:text-foreground"
-            >
-              <UiCog />
-            </Button>
+            {hostControls && (
+              <Button
+                variant="ghost"
+                size="icon"
+                type="button"
+                onClick={openGlobalSettings}
+                title="Global settings (~/.gavel.yaml)"
+                aria-label="Global settings"
+                className="text-muted-foreground hover:text-foreground"
+              >
+                <UiCog />
+              </Button>
+            )}
+            <UserMenu />
             <ThemeToggle />
           </>
         }
@@ -811,7 +820,7 @@ export function App() {
 }
 
 function TabBar({ active, onChange }: { active: Tab; onChange: (t: Tab) => void }) {
-  const tabs: { id: Tab; label: string; icon: ComponentType<IconProps> }[] = [
+  const allTabs: { id: Tab; label: string; icon: ComponentType<IconProps> }[] = [
     { id: 'prs', label: 'PRs', icon: UiGitPr },
     { id: 'projects', label: 'Projects', icon: UiFolderGit },
     { id: 'todos', label: 'Todos', icon: UiCheck },
@@ -820,6 +829,8 @@ function TabBar({ active, onChange }: { active: Tab; onChange: (t: Tab) => void 
     { id: 'prompts', label: 'Prompts', icon: UiRobotAi },
     { id: 'activity', label: 'Activity', icon: UiActivity },
   ];
+  const shown = new Set(visibleTabs(currentAuthMode(), allTabs.map(t => t.id)));
+  const tabs = allTabs.filter(t => shown.has(t.id));
   return (
     <div className="flex gap-1 border-b border-transparent">
       {tabs.map(t => {

@@ -3,6 +3,7 @@ import type { PromptSpecDetail } from '@flanksource/clicky-ui/ai';
 import type { GitDiffPayload } from '@flanksource/clicky-ui/data';
 import type { JsonSchemaObject } from '@flanksource/clicky-ui/components';
 import type { Org } from '../types';
+import { queryKeys } from '../query';
 
 const oneShotStaleTime = 5 * 60 * 1000;
 
@@ -55,6 +56,29 @@ export async function fetchJSON<T>(url: string, signal: AbortSignal, context: st
   } catch (cause) {
     throw new Error(`${context}: invalid JSON response`, { cause });
   }
+}
+
+// MeResponse is /api/me: the caller (null when nobody is logged in locally), their
+// current organization, and every organization they belong to.
+export interface MeOrg {
+  id: string;
+  slug: string;
+  name: string;
+  role: string;
+}
+
+export interface MeResponse {
+  user: { id: string; name: string; email: string; githubLogin: string } | null;
+  org: MeOrg;
+  orgs: MeOrg[];
+}
+
+export function meQuery() {
+  return queryOptions({
+    queryKey: queryKeys.me(),
+    queryFn: ({ signal }) => fetchJSON<MeResponse>('/api/me', signal, 'Failed to load the signed-in user'),
+    staleTime: oneShotStaleTime,
+  });
 }
 
 export function orgsQuery() {
