@@ -23,11 +23,11 @@ import (
 	"github.com/flanksource/gavel/processruntime"
 	"github.com/flanksource/gavel/verify"
 
-	// Registers the exec/query fixture types and the ai / `yaml test` /
-	// `yaml lint` step hooks the documents dispatch to. Without it a declared
+	// Registers every fixture step kind the documents dispatch to (exec, test,
+	// lint, ai, services, todo, browser, …). Without it a declared
 	// step errors instead of running, which is a false red rather than a false
 	// green — but a false red on every run all the same.
-	_ "github.com/flanksource/gavel/fixtures/types"
+	_ "github.com/flanksource/gavel/fixtures/kinds/all"
 )
 
 func init() { capverify.Register(capverify.KindFixture, New) }
