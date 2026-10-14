@@ -282,7 +282,8 @@ export function CreateTodoFromPRDialog({
         criteria: AcceptanceCriterion[];
         triage: boolean;
         prVerification?: PRTodoVerificationPayload;
-      } = { title: title.trim(), body: buildPRTodoBody(pr, notes, selected), priority, status, criteria, triage };
+        pr: { number: number; url: string };
+      } = { title: title.trim(), body: buildPRTodoBody(pr, notes, selected), priority, status, criteria, triage, pr: { number: pr.number, url: pr.url } };
       if (prVerification) payload.prVerification = prVerification;
       const data = await createTodo.mutateAsync({
         headers: { 'Content-Type': 'application/json' },

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/flanksource/captain/pkg/plans"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/types"
 )
@@ -13,15 +14,20 @@ import (
 // todoPlanResponse is the exit-plan-mode plan for a TODO's agent session: the plan
 // markdown plus where it lives. Found is false when the session produced no plan
 // (yet) — the normal "nothing to show" state, mirroring the session-stats endpoint.
+//
+// Content is the authored plan body; Captain plan.revision hook blocks (e.g. the
+// plan-tldr TL;DR) are lifted out into Blocks, keyed by hook name, so the editor
+// never round-trips them — saving an unchanged body reuses them.
 type todoPlanResponse struct {
-	Found   bool         `json:"found"`
-	Path    string       `json:"path,omitempty"`
-	Content string       `json:"content,omitempty"`
-	OnDisk  bool         `json:"onDisk,omitempty"`
-	Slug    string       `json:"slug,omitempty"`
-	Ref     string       `json:"ref,omitempty"`
-	Version int64        `json:"version,omitempty"`
-	Todo    *todoSummary `json:"todo,omitempty"`
+	Found   bool              `json:"found"`
+	Path    string            `json:"path,omitempty"`
+	Content string            `json:"content,omitempty"`
+	Blocks  map[string]string `json:"blocks,omitempty"`
+	OnDisk  bool              `json:"onDisk,omitempty"`
+	Slug    string            `json:"slug,omitempty"`
+	Ref     string            `json:"ref,omitempty"`
+	Version int64             `json:"version,omitempty"`
+	Todo    *todoSummary      `json:"todo,omitempty"`
 }
 
 // handleTodoSessionPlan returns the latest immutable Captain revision selected
@@ -39,18 +45,18 @@ func (s *Server) handleTodoSessionPlan(w http.ResponseWriter, r *http.Request) {
 		writeTodoError(w, http.StatusNotFound, err)
 		return
 	}
-	plans, ok := provider.(todos.PlanContentProvider)
+	reader, ok := provider.(todos.PlanContentProvider)
 	if !ok {
 		writeTodoError(w, http.StatusNotImplemented, fmt.Errorf("PostgreSQL TODO provider cannot read Captain plan revisions"))
 		return
 	}
-	content, err := plans.PlanMarkdown(r.Context(), todo, types.ModePlan)
+	content, err := reader.PlanMarkdown(r.Context(), todo, types.ModePlan)
 	if err != nil {
 		writeTodoError(w, http.StatusInternalServerError, err)
 		return
 	}
 	json.NewEncoder(w).Encode(todoPlanResponse{ //nolint:errcheck
-		Found: strings.TrimSpace(content) != "", Content: content,
+		Found: strings.TrimSpace(content) != "", Content: plans.StripBlocks(content), Blocks: plans.Blocks(content),
 		Ref: todo.ID, Version: todo.Version,
 	})
 }
@@ -106,8 +112,18 @@ func (s *Server) handleTodoSessionPlanSave(w http.ResponseWriter, r *http.Reques
 		writeTodoError(w, http.StatusInternalServerError, err)
 		return
 	}
+	reader, ok := provider.(todos.PlanContentProvider)
+	if !ok {
+		writeTodoError(w, http.StatusNotImplemented, fmt.Errorf("PostgreSQL TODO provider cannot read Captain plan revisions"))
+		return
+	}
+	content, err := reader.PlanMarkdown(r.Context(), updated, types.ModePlan)
+	if err != nil {
+		writeTodoError(w, http.StatusInternalServerError, err)
+		return
+	}
 	json.NewEncoder(w).Encode(todoPlanResponse{ //nolint:errcheck
-		Found: true, Content: payload.Content,
+		Found: true, Content: plans.StripBlocks(content), Blocks: plans.Blocks(content),
 		Ref: updated.ID, Version: updated.Version,
 		Todo: todoSummaryPointer(sum),
 	})

@@ -36,19 +36,13 @@ describe('runtimePresetClient', () => {
       profile: { id: 'profile', name: 'Profile', spec: {}, presets: [preset.id] },
       presets: [preset],
     });
-    expect('resolvePresets' in client).toBe(true);
-    if (!('resolvePresets' in client) || typeof client.resolvePresets !== 'function') {
-      throw new Error('runtime preset client does not support linked preset resolution');
-    }
-    await client.resolvePresets({
-      selected: [preset.id],
-      presets: [{
-        ...preset,
-        key: 'stored-key',
-        source: { kind: 'db', id: 'db', label: 'Database', writable: true, records: ['preset'] },
-        updatedAt: '2026-09-15T10:00:00Z',
-      }],
-    });
+    const stored: StoredRuntimePreset = {
+      ...preset,
+      key: 'stored-key',
+      source: { kind: 'db', id: 'db', label: 'Database', writable: true, records: ['preset'] },
+      updatedAt: '2026-09-15T10:00:00Z',
+    };
+    await client.resolvePresets({ selected: [preset.id], presets: [stored] });
 
     expect(bodies).toEqual([
       { selected: [preset.id], presets: [resolvedPreset] },

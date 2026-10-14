@@ -1,6 +1,7 @@
 export const queryKeys = {
   prSnapshot: () => ['prs', 'snapshot'] as const,
   prDetail: (repo: string, number: number) => ['prs', repo, number, 'detail'] as const,
+  linkedPR: (url: string) => ['prs', 'linked', url] as const,
   projects: () => ['projects'] as const,
   projectStatusScope: (projectName: string) => ['projects', projectName, 'status'] as const,
   // worktree is the absolute path of a linked worktree; the main checkout

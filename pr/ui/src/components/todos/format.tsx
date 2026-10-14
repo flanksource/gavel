@@ -16,6 +16,7 @@ import { isStatusShown } from './todoFilter';
 import { formatCost, formatDuration, useSessionStats } from './TodoSessionTimer';
 import { TodoTagRow } from './TodoTag';
 import { todoVisibleLabels, type TagIndex } from './tagResolve';
+import { TodoPRBadge } from './TodoPRBadge';
 
 export const inputClass = 'w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring';
 
@@ -547,6 +548,7 @@ function TodoRowImpl({ todo, active, onSelect, density = 'comfortable', selectab
             <StatusIcon status={todo.status} />
           )}
           <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">{todo.title}</span>
+          {todo.pr && <TodoPRBadge pr={todo.pr} />}
           {childTotal ? <TodoChildCountBadge done={childDone ?? 0} total={childTotal} /> : null}
           {compact && (
             <span className="flex min-w-0 max-w-[55%] items-center gap-2 overflow-hidden text-xs text-muted-foreground">

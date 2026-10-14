@@ -137,6 +137,8 @@ export function useTodoDetail({ todo, dir, onChanged, onDeleted, workspaces = []
     labels?: string[];
     // A todo ref makes it a child of that todo; the empty string detaches it.
     parent?: string;
+    pr?: TodoItem['pr'];
+    clearPR?: boolean;
   } & LineCommentPatch): Promise<boolean> {
     if (!todo || busy) return false;
     setError('');

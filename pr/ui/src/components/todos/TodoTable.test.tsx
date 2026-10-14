@@ -93,6 +93,13 @@ describe('title cell parent hint', () => {
     return { ...base, todo: { ...base.todo, parentId: PARENT_ID } } as TodoTableRow;
   };
 
+  it('links to the explicitly linked PR from the title cell', () => {
+    const base = child();
+    const pr = { number: 27, url: 'https://github.com/acme/service/pull/27' };
+    const view = cell({ ...base, todo: { ...base.todo, pr } });
+    expect(view.getByRole('link', { name: 'PR #27' }).getAttribute('href')).toBe(pr.url);
+  });
+
   it('names the parent under which a search-surfaced child hangs', () => {
     const view = cell(child(), parentTitles);
     expect(view.getByTitle('Child of Migrate billing').textContent).toBe('↳ Migrate billing');

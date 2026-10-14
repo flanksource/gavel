@@ -24,11 +24,12 @@ export interface PlanAnswerResult {
 
 export type TodoQuestionSelections = Record<number, string>;
 export interface TodoAnswerInput {
+  sessionId: string;
   answer?: string;
   answers?: Record<string, string>;
   options?: TodoRunOptions;
 }
-export function buildTodoAnswerInput(questions: TodoQuestion[], selections: TodoQuestionSelections, details: string): TodoAnswerInput {
+export function buildTodoAnswerInput(questions: TodoQuestion[], selections: TodoQuestionSelections, details: string): Omit<TodoAnswerInput, 'sessionId'> {
   const questionTexts = questions.map((question, index) => question.text.trim() || `Question ${index + 1}`);
   const textCounts = questionTexts.reduce<Record<string, number>>((counts, text) => {
     counts[text] = (counts[text] ?? 0) + 1;
@@ -177,12 +178,17 @@ export function usePlanActions(dir: string) {
       .map(([question, value]) => [question.trim(), value.trim()]).filter(([question, value]) => question && value));
     const hasAnswers = Object.keys(normalizedAnswers).length > 0;
     if (busy || !ref.trim() || (!trimmedAnswer && !hasAnswers)) return null;
+    const sessionId = input.sessionId.trim();
+    if (!sessionId) {
+      setValidationError('Session ID is required to resume the session that asked');
+      return null;
+    }
     if (trimmedAnswer && hasAnswers) {
       setValidationError('Answer must use either free text or structured selections, not both');
       return null;
     }
     setValidationError('');
-    const body: Record<string, unknown> = { ref: ref.trim() };
+    const body: Record<string, unknown> = { ref: ref.trim(), sessionId };
     if (hasAnswers) body.answers = normalizedAnswers;
     else body.answer = trimmedAnswer;
     if (input.options) body.options = runRequestOptions(input.options);
@@ -386,14 +392,17 @@ export function TodoReviewBanner({
   }, [revise, todo.ref, changesText, onChanged, onLaunch]);
 
   const onAnswer = useCallback(async () => {
-    if (answerText.trim() || Object.values(questionSelections).some(Boolean)) onLaunch?.();
-    const result = await answer(todo.ref, buildTodoAnswerInput(todo.questions ?? [], questionSelections, answerText));
+    if (todo.sessionId?.trim() && (answerText.trim() || Object.values(questionSelections).some(Boolean))) onLaunch?.();
+    const result = await answer(todo.ref, {
+      ...buildTodoAnswerInput(todo.questions ?? [], questionSelections, answerText),
+      sessionId: todo.sessionId ?? '',
+    });
     if (result) {
       setAnswerText('');
       setQuestionSelections({});
       onChanged(result.todo);
     }
-  }, [answer, todo.ref, todo.questions, questionSelections, answerText, onChanged, onLaunch]);
+  }, [answer, todo.ref, todo.sessionId, todo.questions, questionSelections, answerText, onChanged, onLaunch]);
 
   if (todo.status === 'review') {
     return (

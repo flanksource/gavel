@@ -229,6 +229,7 @@ func (p *uiTestTODOProvider) Create(_ context.Context, request todos.CreateReque
 		return nil, err
 	}
 	parsed.VerificationMarkdown = verification
+	parsed.PR = request.PR
 	parsed.Verification, err = todos.ParseVerificationMarkdown(todos.VerificationMarkdownOptions{
 		Name: request.Title, Markdown: verification, SourceDir: p.dir,
 		FrontMatter: parsed.FrontMatter,
@@ -270,6 +271,9 @@ func (p *uiTestTODOProvider) Delete(_ context.Context, todo *types.TODO) error {
 }
 
 func (p *uiTestTODOProvider) Edit(_ context.Context, todo *types.TODO, edit todos.EditRequest) error {
+	if edit.PR != nil {
+		todo.PR = *edit.PR
+	}
 	if edit.Title != nil {
 		todo.Title = strings.TrimSpace(*edit.Title)
 	}
