@@ -37,13 +37,27 @@ type authFailure struct {
 
 // Middleware serves page loads, assets and the auth config with public, which needs no
 // identity, and every other request with next, scoped to the caller's organization.
+// It answers /api/auth/orgs itself: listing your organizations needs none picked.
 func (a *Authenticator) Middleware(next, public http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if publicRequest(r) {
 			public.ServeHTTP(w, r)
 			return
 		}
-		scope, failure := a.authenticate(r)
+		caller, failure := a.verify(r)
+		if failure == nil && r.Method == http.MethodGet && r.URL.Path == "/api/auth/orgs" {
+			orgs, err := a.Members.Orgs(r.Context(), caller.clerkUserID)
+			if err != nil {
+				failure = classifyAuthError(r, err)
+			} else {
+				writeJSON(w, orgs)
+				return
+			}
+		}
+		var scope tenant.Scope
+		if failure == nil {
+			scope, failure = a.scope(r, caller)
+		}
 		if failure != nil {
 			writeAuthFailure(w, *failure)
 			return
@@ -61,7 +75,15 @@ func publicRequest(r *http.Request) bool {
 	return (r.Method == http.MethodGet || r.Method == http.MethodHead) && !strings.HasPrefix(r.URL.Path, "/api/")
 }
 
-func (a *Authenticator) authenticate(r *http.Request) (tenant.Scope, *authFailure) {
+// caller is a verified Clerk user, and their browser session's claims when they came
+// with a session rather than a CLI access token.
+type caller struct {
+	clerkUserID string
+	session     *api.SessionClaims
+}
+
+// verify checks the request's token: a bearer token, or else the session cookie.
+func (a *Authenticator) verify(r *http.Request) (caller, *authFailure) {
 	raw, fromCookie := "", false
 	if token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); ok {
 		raw = strings.TrimSpace(token)
@@ -69,41 +91,57 @@ func (a *Authenticator) authenticate(r *http.Request) (tenant.Scope, *authFailur
 		raw, fromCookie = cookie.Value, true
 	}
 	if raw == "" {
-		return tenant.Scope{}, &authFailure{http.StatusUnauthorized, "unauthenticated",
+		return caller{}, &authFailure{http.StatusUnauthorized, "unauthenticated",
 			"sign in to the dashboard, or send a Clerk session or access token as Authorization: Bearer <token>"}
 	}
 	// A browser sends its cookie on every request, so a write carried by the cookie
 	// must come from the dashboard's own pages.
 	if fromCookie && unsafeMethod(r.Method) && !a.sameOrigin(r) {
-		return tenant.Scope{}, &authFailure{http.StatusForbidden, "cross_site_request",
+		return caller{}, &authFailure{http.StatusForbidden, "cross_site_request",
 			fmt.Sprintf("a %s signed in by cookie must come from %s, not %q", r.Method, a.PublicURL, r.Header.Get("Origin"))}
 	}
-	ctx := r.Context()
+	if tokenType(raw) == "at+jwt" {
+		user, err := a.Access.Verify(r.Context(), raw)
+		if err != nil {
+			return caller{}, classifyAuthError(r, err)
+		}
+		return caller{clerkUserID: user}, nil
+	}
+	claims, err := a.Session.Verify(r.Context(), raw)
+	if err != nil {
+		return caller{}, classifyAuthError(r, err)
+	}
+	return caller{clerkUserID: claims.UserID, session: &claims}, nil
+}
+
+// scope resolves the organization the caller acts in: a session's active org, or the
+// org a CLI request names with X-Gavel-Org.
+func (a *Authenticator) scope(r *http.Request, c caller) (tenant.Scope, *authFailure) {
 	var scope tenant.Scope
 	var err error
-	if tokenType(raw) == "at+jwt" {
-		var user string
-		if user, err = a.Access.Verify(ctx, raw); err == nil {
-			scope, err = a.Members.ForAccessToken(ctx, user, r.Header.Get("X-Gavel-Org"))
-		}
+	if c.session != nil {
+		scope, err = a.Members.ForSession(r.Context(), *c.session)
 	} else {
-		var claims api.SessionClaims
-		if claims, err = a.Session.Verify(ctx, raw); err == nil {
-			scope, err = a.Members.ForSession(ctx, claims)
-		}
+		scope, err = a.Members.ForAccessToken(r.Context(), c.clerkUserID, r.Header.Get("X-Gavel-Org"))
 	}
+	if err != nil {
+		return tenant.Scope{}, classifyAuthError(r, err)
+	}
+	return scope, nil
+}
+
+// classifyAuthError answers a verification or membership error with its status and code.
+func classifyAuthError(r *http.Request, err error) *authFailure {
 	switch {
-	case err == nil:
-		return scope, nil
 	case errors.Is(err, api.ErrInvalidToken):
-		return tenant.Scope{}, &authFailure{http.StatusUnauthorized, "unauthenticated", err.Error()}
+		return &authFailure{http.StatusUnauthorized, "unauthenticated", err.Error()}
 	case errors.Is(err, api.ErrNoActiveOrg):
-		return tenant.Scope{}, &authFailure{http.StatusConflict, "no_active_org", err.Error()}
+		return &authFailure{http.StatusConflict, "no_active_org", err.Error()}
 	case errors.Is(err, api.ErrNotMember):
-		return tenant.Scope{}, &authFailure{http.StatusForbidden, "not_a_member", err.Error()}
+		return &authFailure{http.StatusForbidden, "not_a_member", err.Error()}
 	default:
 		logger.Warnf("authenticate %s %s: %v", r.Method, r.URL.Path, err)
-		return tenant.Scope{}, &authFailure{http.StatusServiceUnavailable, "auth_unavailable",
+		return &authFailure{http.StatusServiceUnavailable, "auth_unavailable",
 			"could not check the request's identity: " + err.Error()}
 	}
 }

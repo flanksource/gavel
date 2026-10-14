@@ -78,6 +78,43 @@ func (m *Members) ForSession(ctx context.Context, claims SessionClaims) (tenant.
 	return tenant.Scope{OrgID: orgID, UserID: &user.id, Role: claims.OrgRole, GitHubLogin: user.githubLogin}, nil
 }
 
+// MemberOrg is an organization a user belongs to, with their role in it.
+type MemberOrg struct {
+	ID         uuid.UUID `json:"id"`
+	ClerkOrgID string    `json:"clerkOrgId"`
+	Slug       string    `json:"slug"`
+	Name       string    `json:"name"`
+	Role       string    `json:"role"`
+}
+
+// selector is how the CLI names the org: its slug, or its Clerk ID without one.
+func (o MemberOrg) selector() string {
+	if o.Slug != "" {
+		return o.Slug
+	}
+	return o.ClerkOrgID
+}
+
+// Orgs lists every organization clerkUserID belongs to, without picking one.
+func (m *Members) Orgs(ctx context.Context, clerkUserID string) ([]MemberOrg, error) {
+	user, err := m.user(ctx, clerkUserID)
+	if err != nil {
+		return nil, err
+	}
+	return m.orgs(ctx, user.id)
+}
+
+func (m *Members) orgs(ctx context.Context, userID uuid.UUID) ([]MemberOrg, error) {
+	orgs := []MemberOrg{}
+	if err := m.db.WithContext(ctx).Raw(`
+		SELECT o.id, o.clerk_org_id, COALESCE(o.slug, '') AS slug, o.name, m.role
+		FROM org_memberships m JOIN orgs o ON o.id = m.org_id
+		WHERE m.user_id = ? ORDER BY o.slug, o.clerk_org_id`, userID).Scan(&orgs).Error; err != nil {
+		return nil, fmt.Errorf("read the user's organizations: %w", err)
+	}
+	return orgs, nil
+}
+
 // ForAccessToken scopes a CLI request to the organization named by selector (a slug
 // or Clerk org ID), or to the user's only organization when selector is empty.
 func (m *Members) ForAccessToken(ctx context.Context, clerkUserID, selector string) (tenant.Scope, error) {
@@ -85,28 +122,16 @@ func (m *Members) ForAccessToken(ctx context.Context, clerkUserID, selector stri
 	if err != nil {
 		return tenant.Scope{}, err
 	}
-	var memberships []struct {
-		OrgID      uuid.UUID
-		ClerkOrgID string
-		Slug       *string
-		Role       string
-	}
-	if err := m.db.WithContext(ctx).Raw(`
-		SELECT o.id AS org_id, o.clerk_org_id, o.slug, m.role
-		FROM org_memberships m JOIN orgs o ON o.id = m.org_id
-		WHERE m.user_id = ? ORDER BY o.slug, o.clerk_org_id`, user.id).Scan(&memberships).Error; err != nil {
-		return tenant.Scope{}, fmt.Errorf("read the user's organizations: %w", err)
+	memberships, err := m.orgs(ctx, user.id)
+	if err != nil {
+		return tenant.Scope{}, err
 	}
 	names := make([]string, 0, len(memberships))
 	for _, membership := range memberships {
-		name := membership.ClerkOrgID
-		if membership.Slug != nil && *membership.Slug != "" {
-			name = *membership.Slug
-		}
-		names = append(names, name)
-		if selector != "" && (selector == name || selector == membership.ClerkOrgID) ||
+		names = append(names, membership.selector())
+		if selector != "" && (selector == membership.selector() || selector == membership.ClerkOrgID) ||
 			selector == "" && len(memberships) == 1 {
-			return tenant.Scope{OrgID: membership.OrgID, UserID: &user.id, Role: membership.Role, GitHubLogin: user.githubLogin}, nil
+			return tenant.Scope{OrgID: membership.ID, UserID: &user.id, Role: membership.Role, GitHubLogin: user.githubLogin}, nil
 		}
 	}
 	switch {

@@ -2041,6 +2041,12 @@ Clerk-mode manual checks:
     shows the server's error text.
   - The CLI (`gavel ssh-key`, `login --server`, `org use`) comes next. The M2.0 spike confirmed
     the CLI access token works, so it isn't blocked.
+- **2026-10-14: `GET /api/auth/orgs` (M6.1, needed by `gavel org list`).** A CLI user with several
+  orgs can't call any org-scoped route before picking one (409). The middleware therefore answers
+  `/api/auth/orgs` itself, after verifying the token and before resolving an org, with
+  `Members.Orgs`: `[{id, clerkOrgId, slug, name, role}]`. `Authenticator` is now split into
+  `verify` (token to Clerk user) and `scope` (user to org), sharing `classifyAuthError`.
+  `ForAccessToken` uses the same membership query as `Orgs`.
 - **2026-10-14: M5.1 `TokenSource` pulled forward into M3 (commit `7b87e94`).** Before M5, a
   hosted org's `Server` would have used the host's `GITHUB_TOKEN`, `GH_TOKEN` or `auth.json` for
   every PR call. `github.Options.TokenSource`, when set, is the only credential. The M3.2 factory

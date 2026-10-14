@@ -142,3 +142,13 @@ func TestMembersReportsClerkFailures(t *testing.T) {
 	assert.False(t, errors.Is(err, api.ErrNotMember) || errors.Is(err, api.ErrNoActiveOrg), "a Clerk outage is not a membership answer: %v", err)
 	assert.Contains(t, err.Error(), "check the Clerk secret key")
 }
+
+func TestMembersOrgs(t *testing.T) {
+	f := newMembersFixture(t, 5*time.Minute)
+	orgs, err := f.members.Orgs(context.Background(), "user_ada")
+	require.NoError(t, err)
+	assert.Equal(t, []api.MemberOrg{
+		{ID: f.orgID(t, "org_a"), ClerkOrgID: "org_a", Slug: "alpha", Name: "Alpha", Role: "org:admin"},
+		{ID: f.orgID(t, "org_b"), ClerkOrgID: "org_b", Slug: "beta", Name: "Beta", Role: "org:member"},
+	}, orgs, "every membership, without picking one")
+}
