@@ -23,6 +23,7 @@ var hostedPassThrough = []string{
 	"/brand/menubar-unread.png", "/brand/apple-touch-icon.png", "/brand/icon-192.png", "/brand/icon-512.png",
 	"GET /api/events", "POST /api/events/{conn}/subs", "DELETE /api/events/{conn}/subs/{id}",
 	"/api/status", "GET /api/auth/config", "GET /api/me",
+	"GET /api/ssh-keys", "POST /api/ssh-keys", "DELETE /api/ssh-keys/{id}",
 
 	"/api/prs", "/api/prs/stream", "/api/prs/refresh", "/api/prs/bots", "/api/prs/closed",
 	"/api/prs/pause", "/api/prs/detail", "GET /api/prs/commits/diff", "GET /api/prs/files/diff",
