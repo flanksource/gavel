@@ -229,7 +229,10 @@ var _ = Describe("FindNearestProjectRoot", func() {
 	var root string
 
 	BeforeEach(func() {
-		root = GinkgoT().TempDir()
+		// The repo sits one level inside the temp dir, so a spec writing above
+		// the git root writes into a directory it owns, never into $TMPDIR.
+		root = filepath.Join(GinkgoT().TempDir(), "repo")
+		Expect(os.MkdirAll(root, 0o755)).To(Succeed())
 		setupGitRepo(root)
 	})
 
