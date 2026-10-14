@@ -301,6 +301,7 @@ export function TodoSession({
     ...(askQuery.error ? [{ source: 'Session transcript', message: askQuery.error.message }] : []),
     ...(statusError ? [{ source: 'Session status', message: statusError }] : []),
     ...(detailError ? [{ source: 'Session detail', message: detailError }] : []),
+    ...(attempt?.outcomeError ? [{ source: 'Session outcome', message: attempt.outcomeError }] : []),
     ...(answerMutation.error ? [{ source: 'Session answer', message: answerMutation.error.message }] : []),
     ...(stopMutation.error ? [{ source: 'Session stop', message: stopMutation.error.message }] : []),
   ];
