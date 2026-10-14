@@ -6,16 +6,16 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/models"
 )
 
-// GenerateValeConfig generates a temporary .vale.ini configuration file
-// that respects the all_language_excludes macro
+// GenerateValeConfig generates a .vale.ini configuration file in gavel's
+// scratch dir (outside workDir) that respects the all_language_excludes macro
 func GenerateValeConfig(workDir string, config *models.Config, language string, linterDefaults []string) (string, error) {
-	// Create a temporary directory for Vale config
-	tempDir := filepath.Join(workDir, ".arch-unit-vale-temp")
-	if err := os.MkdirAll(tempDir, 0755); err != nil {
-		return "", fmt.Errorf("failed to create temp dir for Vale config: %w", err)
+	tempDir, err := linters.ScratchDir(workDir, "vale")
+	if err != nil {
+		return "", err
 	}
 
 	configPath := filepath.Join(tempDir, ".vale.ini")
@@ -96,10 +96,4 @@ func convertToValePattern(pattern string) string {
 	pattern = strings.TrimPrefix(pattern, "/")
 
 	return pattern
-}
-
-// CleanupValeConfig removes temporary Vale configuration
-func CleanupValeConfig(workDir string) {
-	tempDir := filepath.Join(workDir, ".arch-unit-vale-temp")
-	_ = os.RemoveAll(tempDir)
 }

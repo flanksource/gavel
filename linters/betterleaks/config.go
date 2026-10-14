@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/verify"
 	"github.com/flanksource/repomap"
 	"github.com/hairyhenderson/toml"
@@ -141,10 +142,12 @@ func appendExtraConfigs(acc []string, baseDir string, extras []string) []string 
 //     don't rewrite user files that are already canonical;
 //   - otherwise parses each TOML, merges them additively (dedupe rules by
 //     ID, union disabledRules, append allowlists, later files win for
-//     scalars), writes the result to <workDir>/.tmp/betterleaks.toml, and
+//     scalars), writes the result to <scratch>/betterleaks.toml, and
 //     returns that path;
 //   - when ignored paths are present, wraps the resolved config with a Git
-//     ignore path allowlist in <workDir>/.tmp/betterleaks-scan.toml.
+//     ignore path allowlist in <scratch>/betterleaks-scan.toml.
+//
+// <scratch> is linters.ScratchDir: outside workDir, so the scan never dirties it.
 type ResolveConfigOptions struct {
 	WorkDir      string
 	Configs      []string
@@ -180,9 +183,9 @@ func resolveBaseConfig(workDir string, configs []string) (string, error) {
 		merged = mergeTOMLConfigs(merged, cfg)
 	}
 
-	tmpDir := filepath.Join(workDir, ".tmp")
-	if err := os.MkdirAll(tmpDir, 0o755); err != nil {
-		return "", fmt.Errorf("create .tmp: %w", err)
+	tmpDir, err := linters.ScratchDir(workDir, "betterleaks")
+	if err != nil {
+		return "", err
 	}
 	var buf bytes.Buffer
 	if err := toml.NewEncoder(&buf).Encode(merged); err != nil {
@@ -208,9 +211,9 @@ func writeScanConfig(opts ResolveConfigOptions, base string) (string, error) {
 		cfg.Extend.Path = base
 	}
 
-	tmpDir := filepath.Join(opts.WorkDir, ".tmp")
-	if err := os.MkdirAll(tmpDir, 0o755); err != nil {
-		return "", fmt.Errorf("create .tmp: %w", err)
+	tmpDir, err := linters.ScratchDir(opts.WorkDir, "betterleaks")
+	if err != nil {
+		return "", err
 	}
 	var buf bytes.Buffer
 	if err := toml.NewEncoder(&buf).Encode(cfg); err != nil {
