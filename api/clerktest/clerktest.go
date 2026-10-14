@@ -273,7 +273,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "unsupported_grant_type", "")
 			return
 		}
-		writeJSON(w, map[string]any{"access_token": "access", "refresh_token": RefreshToken, "token_type": "Bearer", "expires_in": 3600, "id_token": s.IDToken(time.Now().Add(time.Hour))})
+		writeJSON(w, map[string]any{"access_token": s.AccessToken(time.Now().Add(time.Hour)), "refresh_token": RefreshToken, "token_type": "Bearer", "expires_in": 3600, "id_token": s.IDToken(time.Now().Add(time.Hour))})
 	default:
 		if strings.HasPrefix(r.URL.Path, "/v1/") {
 			s.serveBackend(w, r)

@@ -24,7 +24,16 @@ import (
 
 const hostedPublicURL = "https://gavel.example.com"
 
-func TestHostedDashboard(t *testing.T) {
+// hostedFixture is `gavel serve --auth clerk` running against a migrated database
+// and the fake Clerk, whose user belongs to orgs "alpha" and "beta".
+type hostedFixture struct {
+	server *httptest.Server
+	clerk  *clerktest.Server
+	db     *database.DB
+}
+
+func newHostedFixture(t *testing.T) hostedFixture {
+	t.Helper()
 	dsn := commonsdbtest.ForT(t, commonsdbtest.Options{Name: "gavel_serve_hosted"}).DSN()
 	t.Setenv(database.EnvDSN, dsn)
 	t.Setenv(ghcache.EnvDisable, "")
@@ -61,6 +70,12 @@ func TestHostedDashboard(t *testing.T) {
 	t.Cleanup(stop)
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
+	return hostedFixture{server: server, clerk: clerk, db: opened}
+}
+
+func TestHostedDashboard(t *testing.T) {
+	f := newHostedFixture(t)
+	server, clerk, opened := f.server, f.clerk, f.db
 
 	session := clerk.SessionToken(hostedPublicURL, time.Now().Add(time.Hour))
 	do := func(method, path, body string, header http.Header) (int, string) {

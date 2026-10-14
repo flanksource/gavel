@@ -2047,6 +2047,27 @@ Clerk-mode manual checks:
   `Members.Orgs`: `[{id, clerkOrgId, slug, name, role}]`. `Authenticator` is now split into
   `verify` (token to Clerk user) and `scope` (user to org), sharing `classifyAuthError`.
   `ForAccessToken` uses the same membership query as `Orgs`.
+- **2026-10-14: M6.1 CLI done.**
+  - `api.Session` gained `Server` and `Org` (both `omitempty`, so existing session files still
+    load).
+  - `gavel login --server URL` reads `URL/api/auth/config`, refuses a server not in clerk mode or
+    without a client ID, and logs in against the discovered issuer and client ID. It then saves
+    `Server` and calls `/api/auth/orgs`: with one org it selects it, otherwise it prints "Pick an
+    organization with gavel org use <slug>: …". Without `--server`, login is unchanged.
+  - `gavel org list` (marks the current org with `*`) and `gavel org use <slug>`. For an org the
+    user doesn't belong to: "you're not a member of "x"; your organizations: a, b".
+  - `gavel ssh-key add [file] --name`, `list` and `rm <id>`. The default file is
+    `~/.ssh/id_ed25519.pub`.
+  - `cmd/gavel/server_client.go`: `openGavelServer` loads the session and refreshes it through
+    `WhoAmI`, saving rotated tokens. `call` sends `Authorization: Bearer <access token>` and
+    `X-Gavel-Org: Session.Org`, and turns `{"error","message"}` into the error text. When not
+    logged in: "not logged in to a gavel server; run gavel login --server <url>".
+    `gavelServerHTTPClient` is a package variable for tests.
+  - `org` and `ssh-key` are excluded from the MCP surface.
+  - clerktest's token endpoint now issues a real `at+jwt` access token, so `TestServerCommands`
+    runs the whole flow against the hosted stack: device login, server-side verification with
+    the Clerk revocation check, org selection, and key add/duplicate/list/remove.
+    `newHostedFixture` is shared with `TestHostedDashboard`.
 - **2026-10-14: M5.1 `TokenSource` pulled forward into M3 (commit `7b87e94`).** Before M5, a
   hosted org's `Server` would have used the host's `GITHUB_TOKEN`, `GH_TOKEN` or `auth.json` for
   every PR call. `github.Options.TokenSource`, when set, is the only credential. The M3.2 factory
@@ -2079,8 +2100,8 @@ Clerk-mode manual checks:
 - [x] M5.2 App tokens
 - [ ] M5.3 install linking plus repo sync
 - [ ] M5.4 org PR polling
-- [ ] M5.5 OIDC upload, `gavel ci upload`, action.yml
-- [ ] M6.1 SSH keys API/UI (plus CLI if M2.0 allows), `login --server`, `org use`
+- [ ] M5.5 OIDC upload, `gavel ci upload`, action.yml (moved to PR 2, after M7)
+- [x] M6.1 SSH keys API/UI (plus CLI if M2.0 allows), `login --server`, `org use`
 - [ ] M6.2 push server Authorizer, traversal fix, in-process SSH (no host hooks in clerk mode), tests
 - [ ] M7.0 commons-db upstream PR plus bump
 - [ ] M7.1 blob package

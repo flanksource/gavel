@@ -121,7 +121,7 @@ func gavelMCPExcludedCommands() []string {
 	return []string{
 		"^action-watchdog$",
 		// Interactive authentication and credential mutation are not agent tools.
-		"^login$", "^logout$", "^whoami$",
+		"^login$", "^logout$", "^whoami$", "^org$", "^org ", "^ssh-key$", "^ssh-key ",
 		// long-running servers that would block the MCP request indefinitely
 		"^ssh$", "^ssh ",
 		"^ui$", "^ui ",
