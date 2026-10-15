@@ -5,7 +5,7 @@ GOBIN := $(shell if command -v go >/dev/null 2>&1; then gobin=$$(go env GOBIN); 
 TASK := PATH="$(if $(GOBIN),$(GOBIN):)$(PATH)" task
 UI_DIRS := testrunner/ui pr/ui
 
-.PHONY: build lint test install restart fmt tidy clean all ensure-task deps
+.PHONY: build lint test install restart fmt tidy clean all ensure-task deps runner-image
 
 ensure-task:
 	@if ! PATH="$(if $(GOBIN),$(GOBIN):)$(PATH)" command -v task >/dev/null 2>&1; then \
@@ -27,6 +27,12 @@ deps: ensure-task
 
 build: deps
 	@$(TASK) build
+
+RUNNER_IMAGE ?= gavel-runner:dev
+
+# The image sandbox jobs run in (see docs/sandbox.md).
+runner-image:
+	docker build -f sandbox/runner.Dockerfile -t $(RUNNER_IMAGE) .
 
 lint: deps
 	@$(TASK) lint

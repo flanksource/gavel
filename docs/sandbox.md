@@ -54,6 +54,13 @@ before the REJECTs.
 The check was written against the format `iptables -S` prints for these rules. It hasn't yet
 been run against a live firewall.
 
+## The runner image
+
+Sandbox jobs start from the image `--sandbox-image` names. `make runner-image` builds it from
+`sandbox/runner.Dockerfile` (set `RUNNER_IMAGE` to tag it). It holds gavel, Go, Node with pnpm,
+Python, git, yq and the Claude Code and Codex CLIs, all at pinned versions, and runs as uid 1000
+with `GAVEL_DB=off`.
+
 ## Podman
 
 Podman works when it runs as root. Rootless podman isn't supported: its networking bypasses the
