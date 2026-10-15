@@ -18,6 +18,7 @@ import (
 	flanksourceContext "github.com/flanksource/commons/context"
 	"github.com/flanksource/commons/logger"
 
+	"github.com/flanksource/gavel/blob"
 	"github.com/flanksource/gavel/fixtures/record"
 	"github.com/flanksource/gavel/processruntime"
 )
@@ -47,7 +48,10 @@ type RunnerOptions struct {
 	// Record is the run-wide `--record` default, applied only to fixtures that
 	// declared no `record:` of their own. An explicit `record: none` parses to an
 	// empty (non-nil) Spec precisely so it outranks this.
-	Record     *record.Spec
+	Record *record.Spec
+	// Recordings receives a copy of the run's recordings when it ends, under recordings/. nil —
+	// no storage configured — leaves them only in .gavel/recordings.
+	Recordings blob.Store `json:"-" yaml:"-"`
 	Benchmark  bool
 	Baseline   string
 	Profile    bool

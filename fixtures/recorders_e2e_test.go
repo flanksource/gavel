@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/flanksource/gavel/blob"
 	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/fixtures/record"
 	_ "github.com/flanksource/gavel/fixtures/types"
@@ -386,4 +387,42 @@ func TestWithoutRecordNoRecordingsAreProduced(t *testing.T) {
 
 	require.Equal(t, "", result.Error)
 	assert.Empty(t, result.Recordings)
+}
+
+// With storage configured, a run's recordings are copied to the store when the run ends, under
+// recordings/, so they outlive the workspace.
+func TestRecordingsArePersistedToTheConfiguredStore(t *testing.T) {
+	curl := curlPath(t)
+	server := recordingServer(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "record.fixture.md")
+	require.NoError(t, os.WriteFile(path, []byte(fmt.Sprintf(`---
+record: http
+---
+
+# Recorded
+
+## fetches a url
+
+`+"```bash"+`
+%s -sS -o /dev/null %s/ok
+`+"```"+`
+`, curl, server.URL)), 0o644))
+	bucket := blob.Local(t.TempDir())
+
+	runner, err := fixtures.NewRunner(fixtures.RunnerOptions{Paths: []string{path}, WorkDir: dir, Recordings: bucket})
+	require.NoError(t, err)
+	tree, _ := runner.Run()
+	require.NotNil(t, tree)
+
+	var recording record.Result
+	tree.Walk(func(node *fixtures.FixtureNode) {
+		if node.Results != nil && len(node.Results.Recordings) > 0 {
+			recording = node.Results.Recordings[0]
+		}
+	})
+	require.NotEmpty(t, recording.Path, "the fixture recorded")
+	exists, err := bucket.Exists(t.Context(), "recordings/"+filepath.Base(recording.Path))
+	require.NoError(t, err)
+	assert.True(t, exists, "the recording is in the store")
 }

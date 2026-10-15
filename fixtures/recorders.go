@@ -1,6 +1,7 @@
 package fixtures
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -326,6 +327,15 @@ func (r *Runner) closeRecorders() {
 		}
 		if set.clients != nil {
 			record.StopClients()
+		}
+	}
+	if r.store != nil {
+		ctx := r.options.Context
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		if err := r.store.Persist(ctx, r.options.Recordings); err != nil {
+			logger.Warnf("copy recordings to storage: %v", err)
 		}
 	}
 }

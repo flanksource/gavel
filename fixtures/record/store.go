@@ -1,6 +1,7 @@
 package record
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/flanksource/gavel/blob"
 )
 
 // Dir is the subdirectory recordings are written to, relative to the fixture
@@ -58,6 +61,8 @@ type Store struct {
 	started time.Time
 
 	mu sync.Mutex
+	// created lists every file this run created, for Persist.
+	created []string
 }
 
 // NewStore returns a Store writing under workDir/.gavel/recordings. The
@@ -112,7 +117,38 @@ func (s *Store) create(label string, kind Kind, ext string) (*os.File, string, e
 	if err != nil {
 		return nil, "", fmt.Errorf("create recording %s: %w", path, err)
 	}
+	s.created = append(s.created, path)
 	return file, path, nil
+}
+
+// Persist copies every file this run created to recordings/<name> in dst, so they outlive the
+// workspace. Call it once the recorders have closed their files. A nil dst — no storage
+// configured — leaves the recordings only in .gavel/recordings.
+func (s *Store) Persist(ctx context.Context, dst blob.Store) error {
+	if dst == nil {
+		return nil
+	}
+	s.mu.Lock()
+	created := append([]string(nil), s.created...)
+	s.mu.Unlock()
+	for _, path := range created {
+		if err := persistFile(ctx, dst, path); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func persistFile(ctx context.Context, dst blob.Store, path string) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("persist recording %s: %w", path, err)
+	}
+	defer file.Close()
+	if err := dst.Write(ctx, "recordings/"+filepath.Base(path), file); err != nil {
+		return fmt.Errorf("persist recording %s: %w", path, err)
+	}
+	return nil
 }
 
 // uniquePath suffixes -2, -3, … when the name is taken, so two fixtures with

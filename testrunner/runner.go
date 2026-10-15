@@ -2023,7 +2023,15 @@ func (t *TestOrchestrator) runDiscoveredFixtures(globs []string) ([]parsers.Test
 	if err != nil {
 		return nil, err
 	}
-	return t.runFixtureRunner(fixtures.RunnerOptions{Context: opts.Context, ProcessRuntime: opts.fixtureRuntime(), Paths: fixtureFiles, WorkDir: opts.WorkDir, Logger: logger.StandardLogger(), ExecutablePath: execPath})
+	ctx := opts.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	recordings, err := verify.OpenWorkspaceStorage(ctx, opts.WorkDir)
+	if err != nil {
+		return nil, err
+	}
+	return t.runFixtureRunner(fixtures.RunnerOptions{Context: opts.Context, ProcessRuntime: opts.fixtureRuntime(), Paths: fixtureFiles, WorkDir: opts.WorkDir, Logger: logger.StandardLogger(), ExecutablePath: execPath, Recordings: recordings})
 
 }
 

@@ -79,7 +79,12 @@ func runFixtures(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	recordings, err := verify.OpenWorkspaceStorage(cmd.Context(), wd)
+	if err != nil {
+		return err
+	}
 	runnerOpts := fixtures.RunnerOptions{
+		Recordings:     recordings,
 		ProcessRuntime: runtime,
 		Args:           runtimeArgs,
 		Context:        cmd.Context(),
