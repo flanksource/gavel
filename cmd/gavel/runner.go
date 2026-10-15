@@ -1,0 +1,250 @@
+// `gavel runner exec`, run inside a sandbox job: fetches the run's spec and source from gavel
+// serve with the job's run token, runs it, posts the results and exits with the job's exit code.
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/flanksource/gavel/sandbox"
+	"github.com/flanksource/gavel/snapshots"
+	"github.com/flanksource/gavel/verify"
+	"github.com/spf13/cobra"
+)
+
+func init() {
+	runnerCmd := &cobra.Command{Use: "runner", Short: "Runs inside gavel's sandbox jobs", Hidden: true}
+	var run, workspace string
+	execCmd := &cobra.Command{
+		Use:    "exec",
+		Short:  "Run a sandbox job: fetch its spec and source, run it, post its results",
+		Hidden: true,
+		Args:   cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			code, err := runnerExec(cmd.Context(), runnerOptions{
+				Run: run, Workspace: workspace, Getenv: os.Getenv, Command: runCommandIn, Output: cmd.OutOrStdout(),
+			})
+			if err != nil {
+				return err
+			}
+			if code != 0 {
+				os.Exit(code)
+			}
+			return nil
+		},
+	}
+	execCmd.Flags().StringVar(&run, "run", "", "The sandbox run's ID")
+	execCmd.Flags().StringVar(&workspace, "workspace", "/workspace", "Scratch directory for the source")
+	runnerCmd.AddCommand(execCmd)
+	rootCmd.AddCommand(runnerCmd)
+}
+
+type runnerOptions struct {
+	Run       string
+	Workspace string
+	Getenv    func(string) string
+	// Command runs name with args in dir, streaming its output, and returns its exit code.
+	Command func(ctx context.Context, dir, name string, args []string, output io.Writer) (int, error)
+	Output  io.Writer
+}
+
+// runnerExec runs the sandbox job and returns its exit code.
+func runnerExec(ctx context.Context, opts runnerOptions) (int, error) {
+	server, token, envRun := opts.Getenv("GAVEL_SERVER"), opts.Getenv("GAVEL_RUN_TOKEN"), opts.Getenv("GAVEL_RUN_ID")
+	if opts.Getenv("GAVEL_DB") != "off" {
+		return 0, errors.New("gavel runner exec needs GAVEL_DB=off: a sandbox job never reaches a database")
+	}
+	if server == "" || token == "" || envRun == "" {
+		return 0, errors.New("GAVEL_SERVER, GAVEL_RUN_TOKEN and GAVEL_RUN_ID must be set; gavel runner exec runs inside a sandbox job")
+	}
+	if opts.Run != envRun {
+		return 0, fmt.Errorf("--run %s doesn't match GAVEL_RUN_ID %s", opts.Run, envRun)
+	}
+	api := runAPI{server: strings.TrimRight(server, "/"), token: token, run: envRun, client: &http.Client{Timeout: 10 * time.Minute}}
+
+	var spec sandbox.RunSpec
+	if err := api.getJSON(ctx, "spec", &spec); err != nil {
+		return 0, err
+	}
+	src, err := checkout(ctx, api, spec, opts.Workspace)
+	if err != nil {
+		return 0, err
+	}
+	name, args, err := jobCommand(spec, src)
+	if err != nil {
+		return 0, err
+	}
+	before := runSnapshots(src)
+	code, err := opts.Command(ctx, src, name, args, opts.Output)
+	if err != nil {
+		return 0, fmt.Errorf("run %s: %w", name, err)
+	}
+	after := runSnapshots(src)
+	paths := make([]string, 0, len(after))
+	for path := range after {
+		if !before[path] {
+			paths = append(paths, path)
+		}
+	}
+	sort.Strings(paths)
+	for _, path := range paths {
+		if err := api.postResults(ctx, path); err != nil {
+			return code, err
+		}
+	}
+	return code, nil
+}
+
+// checkout fetches the run's source bundle and checks out its commit in <workspace>/src.
+func checkout(ctx context.Context, api runAPI, spec sandbox.RunSpec, workspace string) (string, error) {
+	bundle := filepath.Join(workspace, "src.bundle")
+	if err := api.download(ctx, "source", bundle); err != nil {
+		return "", err
+	}
+	src := filepath.Join(workspace, "src")
+	if out, err := exec.CommandContext(ctx, "git", "clone", "--quiet", bundle, src).CombinedOutput(); err != nil {
+		return "", fmt.Errorf("clone the source bundle: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	target := spec.SHA
+	if target == "" {
+		target = spec.Ref
+	}
+	if target != "" {
+		if out, err := exec.CommandContext(ctx, "git", "-C", src, "checkout", "--quiet", "--detach", target).CombinedOutput(); err != nil {
+			return "", fmt.Errorf("check out %s: %w: %s", target, err, strings.TrimSpace(string(out)))
+		}
+	}
+	return src, nil
+}
+
+// jobCommand is what the run's kind runs in src.
+func jobCommand(spec sandbox.RunSpec, src string) (string, []string, error) {
+	gavel, err := os.Executable()
+	if err != nil {
+		return "", nil, fmt.Errorf("find the gavel executable: %w", err)
+	}
+	switch spec.Kind {
+	case "test", "lint":
+		return gavel, append([]string{spec.Kind, "--work-dir", src}, spec.Args...), nil
+	case "push-check":
+		config, err := verify.LoadSingleGavelConfig(filepath.Join(src, verify.GavelConfigFileName))
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return "", nil, fmt.Errorf("read the repository's %s: %w", verify.GavelConfigFileName, err)
+		}
+		if command := strings.TrimSpace(config.SSH.Cmd); command != "" {
+			return "sh", []string{"-c", command}, nil
+		}
+		return gavel, []string{"test", "--lint", "--work-dir", src}, nil
+	case "agent":
+		return "", nil, errors.New("agent runs aren't supported by this gavel runner yet")
+	default:
+		return "", nil, fmt.Errorf("run kind %q is not one of test, lint, push-check, agent", spec.Kind)
+	}
+}
+
+// runSnapshots lists the per-run snapshots in src's .gavel directory.
+func runSnapshots(src string) map[string]bool {
+	matches, _ := filepath.Glob(filepath.Join(src, snapshots.Dir, snapshots.PerRunPrefix+"*.json"))
+	found := map[string]bool{}
+	for _, match := range matches {
+		found[match] = true
+	}
+	return found
+}
+
+func runCommandIn(ctx context.Context, dir, name string, args []string, output io.Writer) (int, error) {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Dir = dir
+	cmd.Stdout, cmd.Stderr = output, output
+	err := cmd.Run()
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return exitErr.ExitCode(), nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return 0, nil
+}
+
+// runAPI calls gavel serve's run API with the job's run token.
+type runAPI struct {
+	server, token, run string
+	client             *http.Client
+}
+
+func (a runAPI) request(ctx context.Context, method, path string, body io.Reader) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, method, a.server+"/api/runs/"+a.run+"/"+path, body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+a.token)
+	resp, err := a.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode/100 != 2 {
+		defer resp.Body.Close()
+		data, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+		var failure struct {
+			Error string `json:"error"`
+		}
+		if json.Unmarshal(data, &failure) == nil && failure.Error != "" {
+			return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, failure.Error)
+		}
+		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	return resp, nil
+}
+
+func (a runAPI) getJSON(ctx context.Context, path string, out any) error {
+	resp, err := a.request(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return fmt.Errorf("get the %s of run %s: %w", path, a.run, err)
+	}
+	defer resp.Body.Close()
+	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+		return fmt.Errorf("decode the %s of run %s: %w", path, a.run, err)
+	}
+	return nil
+}
+
+func (a runAPI) download(ctx context.Context, path, to string) error {
+	resp, err := a.request(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return fmt.Errorf("get the %s of run %s: %w", path, a.run, err)
+	}
+	defer resp.Body.Close()
+	file, err := os.Create(to)
+	if err != nil {
+		return fmt.Errorf("save the %s of run %s: %w", path, a.run, err)
+	}
+	if _, err := io.Copy(file, resp.Body); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("save the %s of run %s: %w", path, a.run, err)
+	}
+	return file.Close()
+}
+
+func (a runAPI) postResults(ctx context.Context, path string) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("read results %s: %w", path, err)
+	}
+	defer file.Close()
+	resp, err := a.request(ctx, http.MethodPost, "results", file)
+	if err != nil {
+		return fmt.Errorf("post results %s of run %s: %w", filepath.Base(path), a.run, err)
+	}
+	return resp.Body.Close()
+}
