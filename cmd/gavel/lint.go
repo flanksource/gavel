@@ -73,7 +73,10 @@ func runLint(opts LintOptions) (any, error) {
 	}
 
 	if opts.UI {
-		uiServer, uiListener = startTestUI(opts.Addr)
+		var err error
+		if uiServer, uiListener, err = startTestUI(opts.Addr); err != nil {
+			return nil, err
+		}
 		if uiServer != nil {
 			uiServer.SetStopFunc(standaloneUIStop(cancelRun))
 			uiServer.BeginRun("initial")

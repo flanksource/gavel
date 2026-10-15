@@ -10,9 +10,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/flanksource/clicky/process"
 	"github.com/flanksource/clicky/task"
 	"github.com/flanksource/commons/logger"
-	testui "github.com/flanksource/gavel/testrunner/ui"
 )
 
 const defaultDiagnosticsProbeTimeout = 2 * time.Second
@@ -21,7 +21,7 @@ type runDiagnosticsOptions struct {
 	Output           io.Writer
 	CaptureStack     func(io.Writer) error
 	CaptureTasks     func() []task.TaskSnapshot
-	CaptureProcesses func() (*testui.DiagnosticsSnapshot, error)
+	CaptureProcesses func() ([]process.Process, error)
 	ProbeTimeout     time.Duration
 }
 
@@ -43,7 +43,13 @@ func newRunDiagnosticsReporter(options runDiagnosticsOptions) *runDiagnosticsRep
 		options.CaptureTasks = func() []task.TaskSnapshot { return task.SnapshotAll() }
 	}
 	if options.CaptureProcesses == nil {
-		options.CaptureProcesses = testui.NewDiagnosticsManager(os.Getpid(), nil).Snapshot
+		options.CaptureProcesses = func() ([]process.Process, error) {
+			snapshot, err := process.Discover(context.Background(), process.SnapshotOptions{})
+			if err != nil {
+				return nil, err
+			}
+			return snapshot.Subtree(os.Getpid()), nil
+		}
 	}
 	if options.ProbeTimeout <= 0 {
 		options.ProbeTimeout = defaultDiagnosticsProbeTimeout
@@ -96,13 +102,13 @@ func printActiveTasks(w io.Writer, snapshots []task.TaskSnapshot, ready bool, ti
 }
 
 type processProbeResult struct {
-	snapshot *testui.DiagnosticsSnapshot
-	err      error
+	processes []process.Process
+	err       error
 }
 
 func (o runDiagnosticsOptions) captureProcessesResult() processProbeResult {
-	snapshot, err := o.CaptureProcesses()
-	return processProbeResult{snapshot: snapshot, err: err}
+	processes, err := o.CaptureProcesses()
+	return processProbeResult{processes: processes, err: err}
 }
 
 func printDiagnosticsProcesses(w io.Writer, result processProbeResult, ready bool, timeout time.Duration) {
@@ -115,11 +121,15 @@ func printDiagnosticsProcesses(w io.Writer, result processProbeResult, ready boo
 		fmt.Fprintf(w, "process snapshot failed: %v\n", result.err)
 		return
 	}
-	if result.snapshot == nil || result.snapshot.Root == nil {
+	if len(result.processes) == 0 {
 		fmt.Fprintln(w, "unavailable")
 		return
 	}
-	printDiagnosticsProcess(w, result.snapshot.Root, 0)
+	children := map[int][]process.Process{}
+	for _, p := range result.processes[1:] {
+		children[p.PPID] = append(children[p.PPID], p)
+	}
+	printDiagnosticsProcess(w, children, result.processes[0], 0)
 }
 
 func boundedProbe[T any](timeout time.Duration, probe func() T) (T, bool) {
@@ -136,13 +146,11 @@ func boundedProbe[T any](timeout time.Duration, probe func() T) (T, bool) {
 	}
 }
 
-func printDiagnosticsProcess(w io.Writer, node *testui.ProcessNode, depth int) {
-	if node == nil {
-		return
-	}
-	fmt.Fprintf(w, "%s- pid=%d ppid=%d status=%s command=%s\n", strings.Repeat("  ", depth), node.PID, node.PPID, node.Status, node.Command)
-	for _, child := range node.Children {
-		printDiagnosticsProcess(w, child, depth+1)
+// printDiagnosticsProcess prints p and, indented beneath it, its children.
+func printDiagnosticsProcess(w io.Writer, children map[int][]process.Process, p process.Process, depth int) {
+	fmt.Fprintf(w, "%s- pid=%d ppid=%d status=%s command=%s\n", strings.Repeat("  ", depth), p.PID, p.PPID, p.Status, p.Command)
+	for _, child := range children[p.PID] {
+		printDiagnosticsProcess(w, children, child, depth+1)
 	}
 }
 

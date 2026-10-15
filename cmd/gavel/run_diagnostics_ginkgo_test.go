@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/flanksource/clicky/process"
 	"github.com/flanksource/clicky/task"
-	testui "github.com/flanksource/gavel/testrunner/ui"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -30,12 +30,11 @@ var _ = Describe("run diagnostics", func() {
 					{Name: "completed task", Type: "task", Status: string(task.StatusSuccess)},
 				}
 			},
-			CaptureProcesses: func() (*testui.DiagnosticsSnapshot, error) {
-				return &testui.DiagnosticsSnapshot{Root: &testui.ProcessNode{
-					PID:      101,
-					Command:  "gavel test",
-					Children: []*testui.ProcessNode{{PID: 202, Command: "go test ./pkg"}},
-				}}, nil
+			CaptureProcesses: func() ([]process.Process, error) {
+				return []process.Process{
+					{PID: 101, Command: "gavel test"},
+					{PID: 202, PPID: 101, Command: "go test ./pkg"},
+				}, nil
 			},
 			ProbeTimeout: 100 * time.Millisecond,
 		})
@@ -47,7 +46,7 @@ var _ = Describe("run diagnostics", func() {
 		Expect(text).To(ContainSubstring("goroutine fake-stack"))
 		Expect(text).To(ContainSubstring("github.com/acme/pkg TestWidget"))
 		Expect(text).NotTo(ContainSubstring("completed task"))
-		Expect(text).To(ContainSubstring("go test ./pkg"))
+		Expect(text).To(ContainSubstring("  - pid=202 ppid=101 status= command=go test ./pkg"), "the child indented under its parent")
 	})
 
 	It("does not let a blocked task snapshot delay cancellation", func() {
@@ -60,7 +59,7 @@ var _ = Describe("run diagnostics", func() {
 				<-blocked
 				return nil
 			},
-			CaptureProcesses: func() (*testui.DiagnosticsSnapshot, error) { return nil, nil },
+			CaptureProcesses: func() ([]process.Process, error) { return nil, nil },
 			ProbeTimeout:     20 * time.Millisecond,
 		})
 

@@ -11,7 +11,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -92,6 +91,20 @@ func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
 	runStarted := time.Now().UTC()
 	gitInfo := snapshotGitInfo(opts.WorkDir)
 
+	var trace *runTrace
+	if wantsRunTrace(opts) && !opts.DryRun {
+		var err error
+		if trace, err = startRunTrace(opts, runStarted); err != nil {
+			return nil, err
+		}
+		opts.TraceHost = trace.host
+		defer func() {
+			if err := trace.close(opts.WorkDir); err != nil {
+				logger.Warnf("close run traces: %v", err)
+			}
+		}()
+	}
+
 	// Periodic snapshots: every 3s the recorder writes the in-flight tree to
 	// .gavel/running.json. Removed on clean termination, retained on
 	// interrupt / timeout / non-zero exit so callers can inspect what was
@@ -144,18 +157,21 @@ func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
 		attachUIUpdates func() chan []parsers.Test
 	)
 	if opts.UI {
-		uiServer, uiListener = startTestUI(opts.Addr)
-		if uiServer != nil {
-			uiServer.SetVersion(version)
-			uiServer.SetRunArgs(snapshotArgs(opts))
-			uiServer.SetGitInfo(gitInfo)
-			uiServer.SetProfileRoot(opts.WorkDir)
-			uiServer.EnableDiagnostics(os.Getpid())
-			uiServer.SetStopFunc(standaloneUIStop(cancelRun))
-			uiServer.SetRunProcess(os.Getpid(), strings.Join(os.Args, " "))
-			if len(opts.Frameworks) > 0 {
-				uiServer.SetRunFrameworks(opts.Frameworks)
-			}
+		var err error
+		if uiServer, uiListener, err = startTestUI(opts.Addr); err != nil {
+			return nil, err
+		}
+		uiServer.SetVersion(version)
+		uiServer.SetRunArgs(snapshotArgs(opts))
+		uiServer.SetGitInfo(gitInfo)
+		uiServer.SetProfileRoot(opts.WorkDir)
+		if err := trace.serveOn(uiServer); err != nil {
+			return nil, err
+		}
+		uiServer.SetStopFunc(standaloneUIStop(cancelRun))
+		uiServer.SetRunProcess(os.Getpid(), strings.Join(os.Args, " "))
+		if len(opts.Frameworks) > 0 {
+			uiServer.SetRunFrameworks(opts.Frameworks)
 		}
 		attachUIUpdates = func() chan []parsers.Test {
 			testrunnerUpdates := make(chan []parsers.Test, 16)
@@ -352,7 +368,7 @@ func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
 		if uiServer != nil && fixtureBenchmarkMode(opts) != "" {
 			uiServer.SetRunError(err)
 			uiServer.MarkDone()
-			failedSnapshot := buildTestSnapshot(opts, tests, lintResults, runStarted, time.Now().UTC(), captureFinalDiagnostics(opts.Diagnostics, os.Getpid()))
+			failedSnapshot := buildTestSnapshot(opts, tests, lintResults, runStarted, time.Now().UTC(), trace)
 			failedSnapshot.Performance = fixturePerformance
 			failedSnapshot.Error = err.Error()
 			failed := 1
@@ -393,7 +409,7 @@ func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
 		}
 		if uiServer != nil {
 			if detach {
-				snapshot := buildTestSnapshot(opts, tests, lintResults, runStarted, time.Now().UTC(), captureFinalDiagnostics(opts.Diagnostics, os.Getpid()))
+				snapshot := buildTestSnapshot(opts, tests, lintResults, runStarted, time.Now().UTC(), trace)
 				snapshot.Performance = fixturePerformance
 				if path, err := snapshots.Save(opts.WorkDir, &snapshot); err != nil {
 					logger.Warnf("persist snapshot: %v", err)
@@ -430,7 +446,7 @@ func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
 			// gated by --show-stdout / --show-stderr so CI logs don't get
 			// flooded unless the user opts in.
 			printTestRunResults(tests, opts, fullSummary, lintResults)
-			snapshot := buildTestSnapshot(opts, tests, lintResults, runStarted, time.Now().UTC(), captureFinalDiagnostics(opts.Diagnostics, os.Getpid()))
+			snapshot := buildTestSnapshot(opts, tests, lintResults, runStarted, time.Now().UTC(), trace)
 			snapshot.Performance = fixturePerformance
 			if path, err := snapshots.SavePerRun(opts.WorkDir, &snapshot, runStarted, ""); err != nil {
 				logger.Warnf("persist per-run snapshot: %v", err)
@@ -443,7 +459,7 @@ func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
 			<-sig
 			return nil, nil
 		}
-		snapshot := buildTestSnapshot(opts, tests, lintResults, runStarted, time.Now().UTC(), captureFinalDiagnostics(opts.Diagnostics, os.Getpid()))
+		snapshot := buildTestSnapshot(opts, tests, lintResults, runStarted, time.Now().UTC(), trace)
 		snapshot.Performance = fixturePerformance
 		if path, err := snapshots.Save(opts.WorkDir, &snapshot); err != nil {
 			logger.Warnf("persist snapshot: %v", err)
@@ -789,25 +805,25 @@ func mergeHooksWithTests(batch []parsers.Test) []parsers.Test {
 // on it. Returns the server and the listener so the caller can later
 // hand the listener off to a detached child process (fork path in
 // handoffDetachedUI) instead of tearing the connection down and rebinding.
-func startTestUI(addr string) (*testui.Server, net.Listener) {
+// --addr names an interface only; the port is always picked.
+func startTestUI(addr string) (*testui.Server, net.Listener, error) {
 	srv := testui.NewServer()
 	if addr == "" {
 		addr = "0.0.0.0"
 	}
 	listener, err := net.Listen("tcp", net.JoinHostPort(addr, "0"))
 	if err != nil {
-		fmt.Printf("Failed to start test UI server: %v\n", err)
-		return nil, nil
+		return nil, nil, fmt.Errorf("start test UI on --addr %q (an interface, without a port): %w", addr, err)
 	}
 	bound := listener.Addr().(*net.TCPAddr)
-	url := fmt.Sprintf("http://%s", net.JoinHostPort(announceHost(addr), strconv.Itoa(bound.Port)))
+	url, networkURL := uiURLs(addr, bound.Port)
 
 	go http.Serve(listener, srv.Handler()) //nolint:errcheck
 
 	time.Sleep(100 * time.Millisecond)
-	fmt.Printf("Test UI at %s\n", url)
+	fmt.Println(uiBanner("Test UI", url, networkURL))
 	openBrowser(url)
-	return srv, listener
+	return srv, listener, nil
 }
 
 func openBrowser(url string) {
