@@ -173,7 +173,7 @@ func TestHostedPush(t *testing.T) {
 	require.NoError(t, os.WriteFile(keyPath, pem.EncodeToMemory(block), 0o600))
 
 	f.opts.SSHHostKey = filepath.Join(t.TempDir(), "ssh_host_key")
-	push, err := hostedPushServer(f.opts, f.db.Gorm(), f.stack.members)
+	push, err := hostedPushServer(f.opts, f.db.Gorm(), f.stack.members, f.stack.dispatcher)
 	require.NoError(t, err)
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
@@ -195,7 +195,7 @@ func TestHostedPush(t *testing.T) {
 
 	out, err := gitPush("alpha/app")
 	require.NoError(t, err, out)
-	assert.Contains(t, out, "push checks are not available yet")
+	assert.Contains(t, out, "push checks need a sandbox: start gavel serve with --sandbox")
 	var alpha struct{ ID uuid.UUID }
 	require.NoError(t, f.db.Gorm().Raw(`SELECT id FROM orgs WHERE slug = 'alpha'`).Scan(&alpha).Error)
 	bares, err := filepath.Glob(filepath.Join(f.opts.DataDir, "repos", alpha.ID.String(), "*.git"))
@@ -327,4 +327,22 @@ func TestRunTokenKeyIsDerivedFromTheSecret(t *testing.T) {
 	assert.Len(t, key, 32)
 	assert.NotEqual(t, secret, key, "not the secret itself")
 	assert.Equal(t, key, runTokenKey(secret))
+}
+
+func TestHostedDashboardWithoutASandboxHasNoDispatcher(t *testing.T) {
+	f := newHostedFixture(t)
+	assert.Nil(t, f.stack.dispatcher, "pushes are only stored")
+}
+
+func TestHostedDashboardRefusesAnUnpreparedContainerSandbox(t *testing.T) {
+	f := newHostedFixture(t)
+	opts := f.opts
+	opts.Sandbox, opts.SandboxImage, opts.SandboxServeAddr = "docker", "runner:1", "10.0.0.5:9092"
+	opts.SandboxNetwork = "gavel-sandbox-missing-" + uuid.NewString()[:8]
+	require.NoError(t, opts.Validate())
+
+	_, err := hostedDashboard(t.Context(), opts, f.db.Gorm(), nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "the sandbox network "+opts.SandboxNetwork+" is missing")
+	assert.Contains(t, err.Error(), "docker network create "+opts.SandboxNetwork)
 }

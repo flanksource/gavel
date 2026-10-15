@@ -52,6 +52,20 @@ func TestDashboardOptionsValidate(t *testing.T) {
 		{"push server address without a port", func(o *DashboardOptions) { o.SSHAddr = "localhost" }, []string{
 			`--ssh-addr must be host:port like :2222, got "localhost"`,
 		}},
+		{"docker sandbox", func(o *DashboardOptions) {
+			o.Sandbox, o.SandboxImage, o.SandboxServeAddr = "docker", "ghcr.io/flanksource/gavel-runner:1", "10.0.0.5:9092"
+		}, nil},
+		{"kubernetes sandbox", func(o *DashboardOptions) { o.Sandbox, o.SandboxImage = "kubernetes", "runner:1" }, nil},
+		{"unknown sandbox", func(o *DashboardOptions) { o.Sandbox, o.SandboxImage = "firecracker", "runner:1" }, []string{
+			`--sandbox must be docker, podman or kubernetes, got "firecracker"`,
+		}},
+		{"sandbox without an image", func(o *DashboardOptions) { o.Sandbox = "kubernetes" }, []string{"--sandbox requires --sandbox-image"}},
+		{"container sandbox without the serve address", func(o *DashboardOptions) { o.Sandbox, o.SandboxImage = "podman", "runner:1" }, []string{
+			"--sandbox podman requires --sandbox-serve-addr, the IP:port sandbox containers reach gavel serve at",
+		}},
+		{"sandbox without clerk", func(o *DashboardOptions) { *o = DashboardOptions{Auth: "none", Sandbox: "docker"} }, []string{
+			"--sandbox runs hosted push checks and needs --auth clerk",
+		}},
 		{"GitHub App with clerk", func(o *DashboardOptions) {
 			o.GitHubAppID, o.GitHubAppSlug, o.GitHubAppPrivateKey = "123", "gavel-dev", "/keys/app.pem"
 		}, nil},

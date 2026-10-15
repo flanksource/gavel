@@ -21,18 +21,25 @@ const (
 // only (withEnv), so they never appear in flags, shell history or process lists.
 type DashboardOptions struct {
 	PRListOptions
-	Auth                string `flag:"auth" help:"Authentication: none (local, single user) or clerk (hosted, one dashboard per Clerk organization)" default:"none"`
-	PublicURL           string `flag:"public-url" help:"Origin users reach the dashboard at, e.g. https://gavel.example.com (required with --auth clerk)"`
-	ClerkIssuer         string `flag:"clerk-issuer" help:"Clerk Frontend API URL (or GAVEL_CLERK_ISSUER)"`
-	ClerkPublishableKey string `flag:"clerk-publishable-key" help:"Clerk publishable key for the browser sign-in (or GAVEL_CLERK_PUBLISHABLE_KEY)"`
-	ClerkClientID       string `flag:"clerk-client-id" help:"Clerk public OAuth client ID that gavel login uses (or GAVEL_CLERK_CLIENT_ID)"`
-	SSHAddr             string `flag:"ssh-addr" help:"Address for the hosted git push server, e.g. :2222 (--auth clerk only; gavel ssh serve is the local one)"`
-	SSHHostKey          string `flag:"ssh-host-key" help:"Push server host key file; created if missing (default <data-dir>/ssh_host_key)"`
-	DataDir             string `flag:"data-dir" help:"Directory for hosted repositories" default:"/var/lib/gavel"`
-	GitHubAppID         string `flag:"github-app-id" help:"ID of the GitHub App organizations install to show their pull requests (--auth clerk)"`
-	GitHubAppSlug       string `flag:"github-app-slug" help:"URL name of the GitHub App, as in github.com/apps/<slug>"`
-	GitHubAppPrivateKey string `flag:"github-app-private-key" help:"Path to the GitHub App's private key PEM (or GAVEL_GITHUB_APP_PRIVATE_KEY_FILE)"`
-	PropertiesFile      string `flag:"properties-file" help:"Properties file with retention.* windows such as retention.job_logs=60d (default /etc/gavel/gavel.properties when it exists)"`
+	Auth                string   `flag:"auth" help:"Authentication: none (local, single user) or clerk (hosted, one dashboard per Clerk organization)" default:"none"`
+	PublicURL           string   `flag:"public-url" help:"Origin users reach the dashboard at, e.g. https://gavel.example.com (required with --auth clerk)"`
+	ClerkIssuer         string   `flag:"clerk-issuer" help:"Clerk Frontend API URL (or GAVEL_CLERK_ISSUER)"`
+	ClerkPublishableKey string   `flag:"clerk-publishable-key" help:"Clerk publishable key for the browser sign-in (or GAVEL_CLERK_PUBLISHABLE_KEY)"`
+	ClerkClientID       string   `flag:"clerk-client-id" help:"Clerk public OAuth client ID that gavel login uses (or GAVEL_CLERK_CLIENT_ID)"`
+	SSHAddr             string   `flag:"ssh-addr" help:"Address for the hosted git push server, e.g. :2222 (--auth clerk only; gavel ssh serve is the local one)"`
+	SSHHostKey          string   `flag:"ssh-host-key" help:"Push server host key file; created if missing (default <data-dir>/ssh_host_key)"`
+	DataDir             string   `flag:"data-dir" help:"Directory for hosted repositories" default:"/var/lib/gavel"`
+	GitHubAppID         string   `flag:"github-app-id" help:"ID of the GitHub App organizations install to show their pull requests (--auth clerk)"`
+	GitHubAppSlug       string   `flag:"github-app-slug" help:"URL name of the GitHub App, as in github.com/apps/<slug>"`
+	GitHubAppPrivateKey string   `flag:"github-app-private-key" help:"Path to the GitHub App's private key PEM (or GAVEL_GITHUB_APP_PRIVATE_KEY_FILE)"`
+	Sandbox             string   `flag:"sandbox" help:"Run hosted push checks in a sandbox: docker, podman or kubernetes (--auth clerk); empty runs none"`
+	SandboxImage        string   `flag:"sandbox-image" help:"Runner image sandbox jobs start from, e.g. ghcr.io/flanksource/gavel-runner:<version>"`
+	SandboxNetwork      string   `flag:"sandbox-network" help:"Bridge network sandbox containers join (docker, podman); see docs/sandbox.md" default:"gavel-sandbox"`
+	SandboxServeAddr    string   `flag:"sandbox-serve-addr" help:"IP:port sandbox containers reach gavel serve at, the one private address the firewall allows (docker, podman)"`
+	SandboxNamespace    string   `flag:"sandbox-namespace" help:"Namespace sandbox Jobs run in (kubernetes)" default:"gavel-sandbox"`
+	ServePodSelector    string   `flag:"serve-pod-selector" help:"Labels of gavel serve's pods, which sandbox Jobs may reach (kubernetes)" default:"app.kubernetes.io/name=gavel"`
+	SandboxExtraDeny    []string `flag:"sandbox-extra-deny" help:"More CIDRs sandbox Jobs may not reach, such as cluster pod and service ranges outside RFC 1918 (kubernetes)"`
+	PropertiesFile      string   `flag:"properties-file" help:"Properties file with retention.* windows such as retention.job_logs=60d (default /etc/gavel/gavel.properties when it exists)"`
 
 	clerkSecretKey string
 	secretKey      string
@@ -79,6 +86,9 @@ func (o DashboardOptions) Validate() error {
 	githubApp := o.GitHubAppID != "" || o.GitHubAppSlug != "" || o.GitHubAppPrivateKey != ""
 	switch o.Auth {
 	case authNone:
+		if o.Sandbox != "" {
+			add("--sandbox runs hosted push checks and needs --auth clerk")
+		}
 		if o.SSHAddr != "" {
 			add("--ssh-addr serves hosted pushes and needs --auth clerk; use gavel ssh serve locally")
 		}
@@ -121,6 +131,18 @@ func (o DashboardOptions) Validate() error {
 		}
 		if o.ClerkClientID == "" {
 			add("--auth clerk requires --clerk-client-id or GAVEL_CLERK_CLIENT_ID")
+		}
+		switch o.Sandbox {
+		case "":
+		case "docker", "podman", "kubernetes":
+			if o.SandboxImage == "" {
+				add("--sandbox requires --sandbox-image")
+			}
+			if o.Sandbox != "kubernetes" && o.SandboxServeAddr == "" {
+				add("--sandbox %s requires --sandbox-serve-addr, the IP:port sandbox containers reach gavel serve at", o.Sandbox)
+			}
+		default:
+			add("--sandbox must be docker, podman or kubernetes, got %q", o.Sandbox)
 		}
 		for _, local := range []struct {
 			flag string

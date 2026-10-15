@@ -82,7 +82,7 @@ func runHostedDashboard(opts DashboardOptions) error {
 	logger.Infof("Hosted dashboard at %s (listening on %s)", opts.PublicURL, listener.Addr())
 
 	if opts.SSHAddr != "" {
-		push, err := hostedPushServer(opts, db, stack.members)
+		push, err := hostedPushServer(opts, db, stack.members, stack.dispatcher)
 		if err != nil {
 			return err
 		}
@@ -106,6 +106,8 @@ func runHostedDashboard(opts DashboardOptions) error {
 type hostedStack struct {
 	handler http.Handler
 	members *api.Members
+	// dispatcher runs push checks; nil without --sandbox.
+	dispatcher *sandbox.Dispatcher
 	// stop releases every organization's Server.
 	stop func()
 }
@@ -202,7 +204,12 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 	root.Handle("/api/ci/", ciResults.Handler())
 	root.Handle("/api/runs/", runs.Handler())
 	root.Handle("/", auth.Middleware(next, shell.Handler()))
-	return hostedStack{handler: root, members: auth.Members, stop: stop}, nil
+	dispatcher, err := newSandboxDispatcher(ctx, opts, db, cache, secret)
+	if err != nil {
+		stop()
+		return hostedStack{}, err
+	}
+	return hostedStack{handler: root, members: auth.Members, stop: stop, dispatcher: dispatcher}, nil
 }
 
 // repoSyncInterval is how often an active organization's repositories are re-read from
@@ -261,7 +268,7 @@ func orgPRSearch(srv *ui.Server, store installations.Store, cache *ghcache.Store
 
 // hostedPushServer is the git push server for --auth clerk: registered SSH keys only,
 // pushes to <org>/<repo> for the org's members, and no hook ever runs on the host.
-func hostedPushServer(opts DashboardOptions, db *gorm.DB, members *api.Members) (*serve.Server, error) {
+func hostedPushServer(opts DashboardOptions, db *gorm.DB, members *api.Members, dispatcher *sandbox.Dispatcher) (*serve.Server, error) {
 	hostKey := opts.SSHHostKey
 	if hostKey == "" {
 		hostKey = filepath.Join(opts.DataDir, "ssh_host_key")
@@ -270,10 +277,7 @@ func hostedPushServer(opts DashboardOptions, db *gorm.DB, members *api.Members) 
 		HostKeyPath: hostKey,
 		RepoDir:     filepath.Join(opts.DataDir, "repos"),
 		Authorizer:  serve.DBAuthorizer{DB: db, Members: members, Issuer: strings.TrimRight(opts.ClerkIssuer, "/"), DataDir: opts.DataDir},
-		// Push checks need sandboxed execution (M9.5); until then a push is only stored.
-		OnPushed: func(_ context.Context, push serve.Push) {
-			fmt.Fprintln(push.Out, "push received; push checks are not available yet")
-		},
+		OnPushed:    pushChecks(dispatcher),
 	})
 }
 
