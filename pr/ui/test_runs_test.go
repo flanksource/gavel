@@ -1,15 +1,19 @@
 package ui
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/flanksource/gavel/blob"
 	"github.com/flanksource/gavel/github"
+	"github.com/flanksource/gavel/snapshots"
 )
 
 func TestGroupRuns(t *testing.T) {
@@ -107,62 +111,84 @@ func TestHandleTestRunAcceptsDir(t *testing.T) {
 	}
 }
 
-func TestResolveRunPath(t *testing.T) {
+func TestHandleTestRunReadsRunsByID(t *testing.T) {
 	dir := t.TempDir()
 	gavelDir := filepath.Join(dir, ".gavel")
 	if err := os.MkdirAll(gavelDir, 0o755); err != nil {
 		t.Fatalf("mkdir .gavel: %v", err)
 	}
 	const stem = "run-2026-06-28T10-43-42Z"
-	runPath := filepath.Join(gavelDir, stem+".json")
-	if err := os.WriteFile(runPath, []byte(`{"tests":[]}`), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(gavelDir, stem+".json"), []byte(`{"tests":[]}`), 0o644); err != nil {
 		t.Fatalf("write run file: %v", err)
 	}
 	// A sibling secret outside .gavel that a traversal attempt would target.
-	if err := os.WriteFile(filepath.Join(dir, "secret.json"), []byte(`{}`), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "secret.json"), []byte(`{"secret":true}`), 0o644); err != nil {
 		t.Fatalf("write secret: %v", err)
 	}
+	// A symlink planted inside .gavel that points at the secret.
+	if err := os.Symlink(filepath.Join(dir, "secret.json"), filepath.Join(gavelDir, "run-link.json")); err != nil {
+		t.Fatalf("plant symlink: %v", err)
+	}
+	s := &Server{}
+	call := func(runID string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		s.handleTestRun(w, httptest.NewRequest(http.MethodGet, "/api/tests/run?dir="+url.QueryEscape(dir)+"&runId="+url.QueryEscape(runID), nil))
+		return w
+	}
 
-	t.Run("valid run stem resolves to the file", func(t *testing.T) {
-		got, err := resolveRunPath(dir, stem)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if got != runPath {
-			t.Errorf("path = %q, want %q", got, runPath)
+	t.Run("a run id streams its snapshot", func(t *testing.T) {
+		w := call(stem)
+		if w.Code != http.StatusOK || w.Body.String() != `{"tests":[]}` {
+			t.Fatalf("status = %d, body = %q", w.Code, w.Body.String())
 		}
 	})
 
-	t.Run("missing run returns empty path, no error", func(t *testing.T) {
-		got, err := resolveRunPath(dir, "run-9999-01-01T00-00-00Z")
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if got != "" {
-			t.Errorf("path = %q, want empty for missing run", got)
+	t.Run("a missing run is 404", func(t *testing.T) {
+		if w := call("run-9999-01-01T00-00-00Z"); w.Code != http.StatusNotFound {
+			t.Errorf("status = %d, want 404 (%s)", w.Code, w.Body.String())
 		}
 	})
 
-	// Every malformed/hostile runId must be rejected as a bad request (error),
-	// never resolved to a path — defends the endpoint against path traversal and
-	// reading non-run files out of .gavel.
+	t.Run("a symlink out of .gavel is not followed", func(t *testing.T) {
+		w := call("run-link")
+		if w.Code == http.StatusOK || strings.Contains(w.Body.String(), "secret") {
+			t.Errorf("status = %d, body = %q: the symlink was followed", w.Code, w.Body.String())
+		}
+	})
+
+	// Every malformed or hostile runId must be a bad request, never resolved to a
+	// file — defends the endpoint against path traversal and reading non-run files
+	// out of .gavel.
 	for _, bad := range []string{
 		"",
 		"../secret",
 		"run-../../etc/passwd",
 		"sub/run-x",
 		`run-x\..\secret`,
-		"sha-abc123", // not a per-run file
+		"sha-abc123", // not a per-run snapshot
 		"run-x/../secret",
 	} {
 		t.Run("rejects "+bad, func(t *testing.T) {
-			got, err := resolveRunPath(dir, bad)
-			if err == nil {
-				t.Errorf("runId %q: want error, got path %q", bad, got)
-			}
-			if got != "" {
-				t.Errorf("runId %q: want empty path, got %q", bad, got)
+			if w := call(bad); w.Code != http.StatusBadRequest {
+				t.Errorf("runId %q: status = %d, want 400 (%s)", bad, w.Code, w.Body.String())
 			}
 		})
+	}
+}
+
+func TestHandleTestRunReadsTheSnapshotStore(t *testing.T) {
+	store := blob.Local(t.TempDir())
+	previous := snapshots.OpenStore
+	snapshots.OpenStore = func(string) (blob.Store, error) { return store, nil }
+	t.Cleanup(func() { snapshots.OpenStore = previous })
+	const stem = "run-2026-06-28T10-43-42Z"
+	if err := store.Write(context.Background(), stem+".json", strings.NewReader(`{"tests":[]}`)); err != nil {
+		t.Fatalf("write run: %v", err)
+	}
+	dir := t.TempDir()
+	w := httptest.NewRecorder()
+	(&Server{}).handleTestRun(w, httptest.NewRequest(http.MethodGet, "/api/tests/run?dir="+url.QueryEscape(dir)+"&runId="+stem, nil))
+	if w.Code != http.StatusOK || w.Body.String() != `{"tests":[]}` {
+		t.Fatalf("status = %d, body = %q", w.Code, w.Body.String())
 	}
 }

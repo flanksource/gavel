@@ -3,6 +3,9 @@ package ui
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"time"
@@ -70,9 +73,13 @@ var _ = Describe("project tree test runs", func() {
 	})
 
 	It("resolves the last run route through the pointer", func() {
-		path, err := resolveRunPath(workDir, snapshots.PointerLast)
+		w := httptest.NewRecorder()
+		(&Server{}).handleTestRun(w, httptest.NewRequest(http.MethodGet,
+			"/api/tests/run?dir="+url.QueryEscape(workDir)+"&runId="+snapshots.PointerLast, nil))
 
+		Expect(w.Code).To(Equal(http.StatusOK))
+		want, err := os.ReadFile(currentPath)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(path).To(Equal(currentPath))
+		Expect(w.Body.String()).To(Equal(string(want)))
 	})
 })

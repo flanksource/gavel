@@ -38,9 +38,13 @@ func loadCompletedProjectActionSnapshot(workDir string, started time.Time, run *
 	if err != nil || len(runs) == 0 {
 		return
 	}
-	snapshot, err := readProjectActionSnapshot(runs[0].Path)
-	if err == nil {
-		run.LoadSnapshot(*snapshot)
+	data, err := snapshots.ReadRun(workDir, runs[0].RunID)
+	if err != nil {
+		return
+	}
+	var snapshot testui.Snapshot
+	if err := json.Unmarshal(data, &snapshot); err == nil {
+		run.LoadSnapshot(snapshot)
 	}
 }
 
