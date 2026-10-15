@@ -34,3 +34,10 @@ func TestWindow(t *testing.T) {
 		assert.Contains(t, err.Error(), "positive duration such as 60d or 36h")
 	}
 }
+
+// setProperty sets a property for the rest of the test.
+func setProperty(t *testing.T, key, value string) {
+	t.Helper()
+	properties.Set(key, value)
+	t.Cleanup(func() { properties.Set(key, "") })
+}
