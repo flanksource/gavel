@@ -219,9 +219,9 @@ func TestHostedGitHub(t *testing.T) {
 
 	noRedirects := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	cookie := "__session=" + f.clerk.SessionToken(hostedPublicURL, time.Now().Add(time.Hour))
-	call := func(method, path string) *http.Response {
+	call := func(method, path, body string) *http.Response {
 		t.Helper()
-		req, err := http.NewRequest(method, f.server.URL+path, nil)
+		req, err := http.NewRequest(method, f.server.URL+path, strings.NewReader(body))
 		require.NoError(t, err)
 		req.Header.Set("Cookie", cookie)
 		req.Header.Set("Origin", hostedPublicURL)
@@ -231,17 +231,29 @@ func TestHostedGitHub(t *testing.T) {
 		return resp
 	}
 
-	install := call(http.MethodGet, "/api/github/install")
-	require.Equal(t, http.StatusFound, install.StatusCode)
-	target, err := url.Parse(install.Header.Get("Location"))
+	install := call(http.MethodPost, "/api/github/install", "")
+	installJSON := readAll(t, install)
+	require.Equal(t, http.StatusOK, install.StatusCode, installJSON)
+	var installBody struct{ URL string }
+	require.NoError(t, json.Unmarshal([]byte(installJSON), &installBody))
+	target, err := url.Parse(installBody.URL)
 	require.NoError(t, err)
 	assert.Equal(t, "/apps/gavel-test/installations/new", target.Path)
 
-	setup := call(http.MethodGet, "/api/github/setup?setup_action=install&installation_id=42&state="+url.QueryEscape(target.Query().Get("state")))
-	require.Equal(t, http.StatusFound, setup.StatusCode, readAll(t, setup))
-	assert.Equal(t, "/", setup.Header.Get("Location"))
+	// GitHub returns the browser to this page, which the SPA serves without a session:
+	// the page then sends what GitHub reported with a fresh session token.
+	page, err := http.Get(f.server.URL + "/github/setup?setup_action=install&installation_id=42&state=x")
+	require.NoError(t, err)
+	t.Cleanup(func() { page.Body.Close() })
+	assert.Equal(t, http.StatusOK, page.StatusCode)
+	assert.Contains(t, readAll(t, page), "<html")
 
-	require.Equal(t, http.StatusAccepted, call(http.MethodPost, "/api/prs/refresh").StatusCode)
+	setupBody, err := json.Marshal(map[string]string{"installation_id": "42", "state": target.Query().Get("state")})
+	require.NoError(t, err)
+	setup := call(http.MethodPost, "/api/github/setup", string(setupBody))
+	require.Equal(t, http.StatusOK, setup.StatusCode, readAll(t, setup))
+
+	require.Equal(t, http.StatusAccepted, call(http.MethodPost, "/api/prs/refresh", "").StatusCode)
 	var snapshot struct {
 		Viewer string
 		PRs    []struct {
@@ -250,7 +262,7 @@ func TestHostedGitHub(t *testing.T) {
 		} `json:"prs"`
 	}
 	require.Eventually(t, func() bool {
-		resp := call(http.MethodGet, "/api/prs")
+		resp := call(http.MethodGet, "/api/prs", "")
 		return json.NewDecoder(resp.Body).Decode(&snapshot) == nil && len(snapshot.PRs) == 1
 	}, 10*time.Second, 50*time.Millisecond, "the org's poller fetches its installation's PRs")
 	assert.Equal(t, "acme/api", snapshot.PRs[0].Repo)

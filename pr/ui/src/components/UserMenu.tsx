@@ -2,8 +2,9 @@
 // in clerk mode, or a badge with the local `gavel login` identity in none mode.
 import { OrganizationSwitcher, UserButton } from '@clerk/react';
 import { useQuery } from '@tanstack/react-query';
-import { UiGitPr, UiKey, UiUser } from '@flanksource/clicky-ui/icons';
+import { UiKey, UiUser } from '@flanksource/clicky-ui/icons';
 import { currentAuthMode } from '../query';
+import { ConnectGitHubButton } from './GitHubConnect';
 import { meQuery } from './oneShotQueries';
 import { SSHKeysPanel } from './SSHKeysPanel';
 
@@ -13,14 +14,7 @@ export function UserMenu() {
     // router), which clears cached queries and reopens event streams for the new org.
     return (
       <div className="flex items-center gap-2">
-        <a
-          href="/api/github/install"
-          className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 text-xs text-muted-foreground hover:bg-muted"
-          title="Install the gavel GitHub App on a GitHub organization or account, to see its pull requests"
-        >
-          <UiGitPr className="shrink-0 text-sm" />
-          Connect GitHub
-        </a>
+        <ConnectGitHubButton />
         <OrganizationSwitcher hidePersonal afterSelectOrganizationUrl="/" />
         <UserButton>
           <UserButton.UserProfilePage label="SSH keys" url="ssh-keys" labelIcon={<UiKey />}>

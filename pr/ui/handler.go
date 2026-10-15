@@ -814,6 +814,12 @@ func (s *Server) handleRoute(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, pageHTML())
 		return
 	}
+	// GitHub returns a hosted dashboard's user here after they install the App.
+	if s.hosted && r.URL.Path == "/github/setup" {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, pageHTML())
+		return
+	}
 	req, ok := parseRouteRequest(r)
 	if !ok {
 		http.NotFound(w, r)

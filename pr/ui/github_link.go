@@ -1,8 +1,9 @@
-// Connects an organization to the gavel GitHub App: /api/github/install sends the user to
-// GitHub, /api/github/setup links the installation they made, /api/github/sync re-reads repos.
+// Connects an organization to the gavel GitHub App: /api/github/install answers GitHub's install
+// page, /api/github/setup links the installation made there, /api/github/sync re-reads repos.
 package ui
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/github/installations"
 	"github.com/flanksource/gavel/tenant"
+	"github.com/google/uuid"
 )
 
 // GitHubLink serves the GitHub App install routes for the request's organization.
@@ -27,10 +29,13 @@ type GitHubLink struct {
 }
 
 // Handler serves the routes; it must sit behind the Authenticator, which sets the scope.
+// Install and setup are POSTs from the dashboard rather than browser navigations, so they
+// carry a fresh session token: the session cookie expires within a minute, and a trip
+// through GitHub's install page can take longer.
 func (l *GitHubLink) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/github/install", l.install)
-	mux.HandleFunc("GET /api/github/setup", l.setup)
+	mux.HandleFunc("POST /api/github/install", l.install)
+	mux.HandleFunc("POST /api/github/setup", l.setup)
 	mux.HandleFunc("POST /api/github/sync", l.sync)
 	return mux
 }
@@ -42,16 +47,27 @@ func (l *GitHubLink) install(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	state := installations.SignState(l.SecretKey, scope.OrgID, *scope.UserID, time.Now())
-	http.Redirect(w, r, "https://github.com/apps/"+url.PathEscape(l.App.Slug)+"/installations/new?state="+url.QueryEscape(state), http.StatusFound)
+	writeJSON(w, map[string]string{"url": "https://github.com/apps/" + url.PathEscape(l.App.Slug) + "/installations/new?state=" + url.QueryEscape(state)})
+}
+
+// setupRequest is what GitHub sent back to the dashboard's /github/setup page.
+type setupRequest struct {
+	InstallationID string `json:"installation_id"`
+	State          string `json:"state"`
 }
 
 // setup links the installation GitHub reports, after checking the state was signed for
-// this org and user and that the user's GitHub account can reach the installation.
+// this org and user and that the user's GitHub account can reach the installation, and
+// answers with the organization's repositories.
 func (l *GitHubLink) setup(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	scope := tenant.FromContext(ctx)
-	query := r.URL.Query()
-	state, err := installations.VerifyState(l.SecretKey, query.Get("state"), time.Now())
+	var body setupRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSONError(w, http.StatusBadRequest, fmt.Errorf("the setup request must be JSON with installation_id and state: %w", err))
+		return
+	}
+	state, err := installations.VerifyState(l.SecretKey, body.State, time.Now())
 	if err != nil {
 		writeJSONError(w, http.StatusBadRequest, err)
 		return
@@ -60,7 +76,7 @@ func (l *GitHubLink) setup(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusForbidden, errors.New("this GitHub install was started by another user or organization; start it again from gavel"))
 		return
 	}
-	raw := query.Get("installation_id")
+	raw := body.InstallationID
 	if raw == "" {
 		writeJSONError(w, http.StatusBadRequest, errors.New("GitHub didn't send an installation; if an organization owner must approve the App, connect GitHub again once they do"))
 		return
@@ -106,7 +122,7 @@ func (l *GitHubLink) setup(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusInternalServerError, err)
 		return
 	}
-	http.Redirect(w, r, "/", http.StatusFound)
+	l.writeRepos(w, r, scope.OrgID)
 }
 
 func (l *GitHubLink) sync(w http.ResponseWriter, r *http.Request) {
@@ -115,6 +131,11 @@ func (l *GitHubLink) sync(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadGateway, err)
 		return
 	}
+	l.writeRepos(w, r, org)
+}
+
+// writeRepos answers with the organization's repositories.
+func (l *GitHubLink) writeRepos(w http.ResponseWriter, r *http.Request, org uuid.UUID) {
 	repos, err := l.Store.Repos(r.Context(), org)
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, err)
