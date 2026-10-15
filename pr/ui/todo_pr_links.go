@@ -14,11 +14,6 @@ import (
 	"github.com/flanksource/gavel/todos/types"
 )
 
-// prIndexStore is the persisted PR index the poller writes and the PR link and
-// search endpoints read. It is a variable so package tests can point it at a
-// provisioned database instead of the process-wide store.
-var prIndexStore = func() *cache.Store { return cache.Shared() }
-
 // defaultPRSearchLimit is the page a PR picker asks for when it names no limit.
 const defaultPRSearchLimit = 20
 
@@ -64,7 +59,7 @@ func (s *Server) handleTodoPRLinks(w http.ResponseWriter, r *http.Request) {
 			writeTodoError(w, http.StatusInternalServerError, err)
 			return
 		}
-		items, err := withIndexedPRs(links)
+		items, err := s.withIndexedPRs(links)
 		if err != nil {
 			writePRIndexError(w, err)
 			return
@@ -120,7 +115,7 @@ func (s *Server) handleTodoPRLinkCreate(w http.ResponseWriter, r *http.Request) 
 		writeTodoError(w, http.StatusInternalServerError, err)
 		return
 	}
-	items, err := withIndexedPRs([]todos.PRLink{*link})
+	items, err := s.withIndexedPRs([]todos.PRLink{*link})
 	if err != nil {
 		writePRIndexError(w, err)
 		return
@@ -161,7 +156,7 @@ func (s *Server) todoPRLinkProvider(ctx context.Context, dir string) (todos.Prov
 }
 
 // withIndexedPRs joins each link to the PR index for its title and state.
-func withIndexedPRs(links []todos.PRLink) ([]todoPRLinkItem, error) {
+func (s *Server) withIndexedPRs(links []todos.PRLink) ([]todoPRLinkItem, error) {
 	items := make([]todoPRLinkItem, len(links))
 	if len(links) == 0 {
 		return items, nil
@@ -170,7 +165,7 @@ func withIndexedPRs(links []todos.PRLink) ([]todoPRLinkItem, error) {
 	for i, link := range links {
 		keys[i] = cache.PRKey{Provider: link.Provider, Repo: link.Repo, Number: link.Number}
 	}
-	indexed, err := prIndexStore().GetPRs(keys)
+	indexed, err := s.cacheStore().GetPRs(keys)
 	if err != nil {
 		return nil, err
 	}
@@ -219,7 +214,7 @@ func (s *Server) handlePRSearch(w http.ResponseWriter, r *http.Request) {
 		}
 		limit = parsed
 	}
-	rows, err := prIndexStore().SearchPRs(cache.PRQuery{
+	rows, err := s.cacheStore().SearchPRs(cache.PRQuery{
 		Text: query.Get("q"), Repo: query.Get("repo"), State: query.Get("state"), Limit: limit,
 	})
 	if err != nil {

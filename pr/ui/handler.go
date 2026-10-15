@@ -446,7 +446,7 @@ func (s *Server) SetResults(prs github.PRSearchResults, incremental bool) error 
 	for i, pr := range prs {
 		rows[i] = prIndexRow(pr)
 	}
-	if err := prIndexStore().UpsertPRs(rows); err != nil {
+	if err := s.cacheStore().UpsertPRs(rows); err != nil {
 		return fmt.Errorf("persist PR index: %w", err)
 	}
 	return nil

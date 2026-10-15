@@ -47,9 +47,6 @@ var _ = Describe("TODO PR links over HTTP", Ordered, func() {
 		// process-wide database (and Captain's registry, which accepts one pool
 		// per process) picks this spec's database up. See TestMain.
 		GinkgoT().Setenv(database.EnvDSN, "")
-		previousStore := prIndexStore
-		prIndexStore = func() *cache.Store { return store }
-		DeferCleanup(func() { prIndexStore = previousStore })
 
 		workDir = GinkgoT().TempDir()
 		provider, err := todoruntime.New(ctx, opened.Gorm(), todoruntime.WorkspaceOptions{
@@ -65,7 +62,7 @@ var _ = Describe("TODO PR links over HTTP", Ordered, func() {
 		duplicate, err = provider.Create(ctx, todos.CreateRequest{Title: "Parser panics"})
 		Expect(err).NotTo(HaveOccurred())
 
-		server = &Server{ghOpts: github.Options{WorkDir: workDir}, knownBots: map[string]struct{}{}}
+		server = &Server{ghOpts: github.Options{WorkDir: workDir}, knownBots: map[string]struct{}{}, githubCache: store}
 		Expect(server.SetResults(github.PRSearchResults{{
 			Number: 30, Repo: "Acme/Widgets", Title: "Speed up the parser", Author: "octocat", State: "OPEN",
 			URL: linkedURL, UpdatedAt: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC),
