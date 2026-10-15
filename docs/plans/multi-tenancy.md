@@ -658,7 +658,7 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler
 
 1. **Public paths** pass through with no scope: `/`, `/prs`, `/todos`, every SPA page route that
    `handleRoute` serves, `/_assets/`, `/favicon.svg`, `/brand/`, `/manifest.webmanifest`,
-   `/api/auth/config`, `/api/github/setup` (it has its own state check), `/api/ci/` (OIDC, M5),
+   `/api/auth/config`, `/api/ci/` (OIDC, M5),
    and `/api/runs/` (run token, M10). The page shell is public; the SPA gates itself.
 2. **Token source:**
    - `Authorization: Bearer <t>`. If it verifies as a session token, use the browser flow;
@@ -880,20 +880,25 @@ func (a *App) InstallationRepos(ctx context.Context, installationID int64) ([]In
 
 ### M5.3 Linking an installation to an org
 
-- `GET /api/github/install` (authenticated) responds `302` to
-  `https://github.com/apps/<slug>/installations/new?state=<state>`.
+- Both endpoints are `POST`s the dashboard sends with a session token it fetched from Clerk just
+  before (`Authorization: Bearer`), never browser navigations. The `__session` cookie expires
+  within a minute and is only refreshed while the dashboard's JavaScript runs, so a navigation
+  back from GitHub's install page would often carry an expired token.
+- `POST /api/github/install` (authenticated) answers `{"url": "https://github.com/apps/<slug>/installations/new?state=<state>"}`;
+  the "Connect GitHub" button goes there.
   - `state = base64url(json{org, user, exp: now+15m}) + "." + base64url(HMAC-SHA256(GAVEL_SECRET_KEY, payload))`.
-- `GET /api/github/setup?installation_id=&setup_action=&state=`:
-  - This path is public in the middleware, but it still requires the session cookie. Re-run the
-    verifier inline.
-  - Verify the state HMAC and expiry, and that `state.user` matches the session user.
+- The App's **Setup URL** is the dashboard page `<public-url>/github/setup`, served by the public
+  page shell. Once Clerk has signed the user in, the page sends GitHub's `installation_id` and
+  `state` to the API below, then lists the linked repositories or shows why linking failed.
+- `POST /api/github/setup` with `{"installation_id", "state"}` (authenticated):
+  - Verify the state HMAC and expiry, and that `state.user` and `state.org` match the caller.
   - Verify the user can access the installation: the user's GitHub token from Clerk →
     `GET /user/installations` must contain the installation ID.
   - Then:
     - `INSERT INTO github_installations (id, org_id, account_login, account_type, created_by_user_id) ... ON CONFLICT (id) DO NOTHING`.
     - If the installation is **already linked to another org**, return `409`.
     - Sync the repos: `INSERT INTO repos (org_id, name, source, github_repo_id, installation_id, default_branch) ... ON CONFLICT (github_repo_id) WHERE github_repo_id IS NOT NULL DO UPDATE SET name, installation_id, default_branch, updated_at`.
-  - Redirect to `/`.
+  - Answer `{"repositories": [...]}`, the org's repositories.
 - **Repo sync** also runs every 10 minutes per active org server, and on `POST /api/github/sync`.
   Repos that are gone from the installation are deleted when nothing references them; otherwise
   `installation_id` is set to NULL.
@@ -1886,8 +1891,8 @@ Clerk-mode manual checks:
   - `Middleware(next, public)`: requests that need no identity go to `public`. Those are
     non-`/api/` `GET`/`HEAD` (page loads and assets; the SPA gates itself) and
     `/api/auth/config`. The serve wiring passes a hosted-mode Server with no org, so the
-    allowlist still applies to it. `/api/ci/`, `/api/github/setup` and `/api/runs/` join the
-    public list in M5 and M10, when they exist.
+    allowlist still applies to it. `/api/ci/` and `/api/runs/` join the public list in M5 and
+    M10, when they exist.
   - The token is `Authorization: Bearer` or else the `__session` cookie. Its unverified `typ`
     picks the verifier (`at+jwt` means the CLI path, anything else the session path), and that
     verifier then checks it in full.
@@ -2183,6 +2188,50 @@ Clerk-mode manual checks:
     the PR appearing with `viewer: ada`, and the search made with `ghs_42` over `repo:acme/api`.
   - A combined `go test ./github/...` run hit the known commons-db shared-Postgres start race
     once ("process already listening on port 7432"); the same run passed on repeat.
+- **2026-10-15: Batman's browser check found two bugs.**
+  - The org showed no PRs because no installation was linked. The `gavel-dev` App's only
+    installation is still flanksource's, from the spike; choosing a personal account on GitHub's
+    install page didn't install it there.
+  - Linking had a design bug the handler tests couldn't see. `/api/github/install` and
+    `/api/github/setup` were `GET` navigations authenticated by the `__session` cookie, which
+    Clerk issues for 60 seconds and refreshes only from a running dashboard tab. A trip through
+    GitHub's install page that took longer than that came back with an expired cookie and got
+    a 401 from `/api/github/setup`. Both are now `POST`s with a freshly fetched bearer token.
+    The App's Setup URL is the new `/github/setup` page, which sends GitHub's parameters (M5.3,
+    Batman approved).
+  - Hosted dashboards showed "Sync error". The SPA still opened the host-only process status
+    and git streams and read `/api/projects`, all 404 in hosted mode. They are now off in clerk
+    mode (`46663b9`).
+- **2026-10-15: PR 1 acceptance run (Batman approved the full build and tests).**
+  - `make build` succeeds at `9feba6c`.
+  - `go test ./...` (with `GOTMPDIR=$HOME/.cache/gavel-gotmp`): 77 packages pass and 8 fail. None
+    of the failures is caused by this branch's code:
+    - Three timing-sensitive tests from main, none touched by this branch, failed under full
+      load. Each was traced to its root cause and fixed in a test-only commit:
+      - `TestDetachedUI_InheritedListener_E2E` hung for 10 minutes. The child exits after a 500ms
+        idle period, and the test kept its own copy of the listening socket open, so a request
+        sent after the child exited waited in the accept queue forever. Reproduced by pausing
+        1s before the request. Fixed by closing the test's socket copy after the child starts,
+        a 10s client timeout, and a 3s idle / 20s hard stop; it passes with the 1s pause
+        (`11e9281`).
+      - `fixtures` "fails a fixture whose duration regresses": under load the 10ms baseline took
+        301ms, longer than the 122ms "regressed" run. The regressed run now sleeps 2s
+        (`849ede5`).
+      - `commit` `TestPromptSelectIndexRoutesToInstalledManager`: a ~0.5s polling budget ran out
+        before the prompt goroutine was scheduled. It now waits with `require.Eventually` for up
+        to 10s (`32b9fbf`).
+    - The commons-db shared embedded Postgres start race ("process already listening on port
+      7432") hit `api`, `cmd/gavel` (`TestHostedDashboard`), `pr/ui` (`TestGitHubLink`) and
+      `todos`. All pass when run alone. The race is in `commons-db/dbtest`'s shared start when
+      several test processes start Postgres at once; it should be fixed upstream with M7.0's
+      commons-db PR.
+    - `procfile` hit its known 3-4s supervisor timeout under load and passes alone.
+    - `internal/archtest` fails the same way on main: Go 1.27.2 export data version 5 against
+      `golang.org/x/tools v0.47.0`.
+  - The frontend suite passes (1272 tests). `tsc --noEmit` reports the 19 type errors from
+    main's code noted at M4.
+  - Left for Batman: a real-browser check of `gavel serve --auth clerk` with the `gavel-dev`
+    App.
 - **2026-10-14: M5.1 `TokenSource` pulled forward into M3 (commit `7b87e94`).** Before M5, a
   hosted org's `Server` would have used the host's `GITHUB_TOKEN`, `GH_TOKEN` or `auth.json` for
   every PR call. `github.Options.TokenSource`, when set, is the only credential. The M3.2 factory

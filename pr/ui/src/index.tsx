@@ -25,6 +25,7 @@ import { ClerkProvider } from "@clerk/react";
 import { App } from "./App";
 import { type AuthConfig, loadAuthConfig } from "./authConfig";
 import { AuthGate } from "./components/AuthGate";
+import { GitHubSetupPage } from "./components/GitHubConnect";
 import { setAuthMode } from "./query";
 import { ChatLayer, chatLayerEnabled } from "./components/ChatLayer";
 import { openEventStream } from "./eventHub";
@@ -68,7 +69,8 @@ function render(auth: AuthConfig) {
             <ChatWindowManagerProvider storageId="gavel-chat">
               {hosted ? (
                 <AuthGate>
-                  <App />
+                  {/* GitHub returns here after the App is installed. */}
+                  {window.location.pathname === "/github/setup" ? <GitHubSetupPage /> : <App />}
                 </AuthGate>
               ) : (
                 <>
