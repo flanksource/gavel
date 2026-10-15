@@ -175,7 +175,7 @@ export function App() {
     updateSnapshot,
     refreshProjects,
     refreshProjectsAndProcesses,
-  } = useAppQueries({ enabled: streamsActive, initialConfig });
+  } = useAppQueries({ enabled: streamsActive, hostData: hostControls, initialConfig });
   const {
     error: mutationError,
     markSeen,
