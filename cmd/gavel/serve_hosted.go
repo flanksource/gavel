@@ -152,7 +152,7 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 		}
 		return srv, nil
 	}, orgIdleTTL)
-	var next http.Handler = orgs.Handler()
+	next := orgs.Handler()
 	if app != nil {
 		secret, err := base64.StdEncoding.DecodeString(opts.secretKey)
 		if err != nil {

@@ -19,8 +19,12 @@ func TestDeviceDenialDoesNotLeakCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.BeginLogin(ctx); err == nil || strings.Contains(err.Error(), clerktest.DeviceCode) {
+	_, err = client.BeginLogin(ctx)
+	if err == nil || strings.Contains(err.Error(), clerktest.DeviceCode) {
 		t.Fatalf("unsafe device error: %v", err)
+	}
+	if want := "device authorization with Clerk failed; check the public OAuth application and Device Authorization Grant settings"; err.Error() != want {
+		t.Fatalf("device error = %q, want %q", err, want)
 	}
 	device := &oauth2.DeviceAuthResponse{DeviceCode: "secret-device-code", Expiry: time.Now().Add(time.Minute), Interval: 1}
 	if _, _, err := client.CompleteLogin(ctx, device); err == nil || strings.Contains(err.Error(), "secret-device-code") {

@@ -150,6 +150,8 @@ func TestRejectDiscoveryAndDeviceURLs(t *testing.T) {
 	}
 	if _, err := client.BeginLogin(context.Background()); err == nil {
 		t.Fatal("accepted unsafe verification URL")
+	} else if want := "the verification URL from Clerk is invalid"; err.Error() != want {
+		t.Fatalf("verification URL error = %q, want %q", err, want)
 	}
 }
 

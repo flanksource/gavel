@@ -121,10 +121,10 @@ func (a *AuthClient) oauthContext(ctx context.Context) context.Context {
 func (a *AuthClient) BeginLogin(ctx context.Context) (*oauth2.DeviceAuthResponse, error) {
 	response, err := a.oauth.DeviceAuth(a.oauthContext(ctx))
 	if err != nil {
-		return nil, errors.New("Clerk device authorization failed; check the public OAuth application and Device Authorization Grant settings")
+		return nil, errors.New("device authorization with Clerk failed; check the public OAuth application and Device Authorization Grant settings")
 	}
 	if response.DeviceCode == "" || response.UserCode == "" || response.Expiry.IsZero() {
-		return nil, errors.New("Clerk returned an incomplete device authorization response")
+		return nil, errors.New("the device authorization response from Clerk is incomplete")
 	}
 	for _, raw := range []string{response.VerificationURI, response.VerificationURIComplete} {
 		if raw == "" {
@@ -132,11 +132,11 @@ func (a *AuthClient) BeginLogin(ctx context.Context) (*oauth2.DeviceAuthResponse
 		}
 		u, err := url.Parse(raw)
 		if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil {
-			return nil, errors.New("Clerk returned an invalid verification URL")
+			return nil, errors.New("the verification URL from Clerk is invalid")
 		}
 	}
 	if response.VerificationURI == "" {
-		return nil, errors.New("Clerk returned no verification URL")
+		return nil, errors.New("the device authorization response from Clerk has no verification URL")
 	}
 	return response, nil
 }
@@ -213,7 +213,7 @@ func (c identityClaims) identity() Identity {
 
 func (a *AuthClient) verifyIdentity(ctx context.Context, raw string) (Identity, error) {
 	if raw == "" {
-		return Identity{}, errors.New("Clerk returned no ID token; enable the openid scope")
+		return Identity{}, errors.New("the token response from Clerk has no ID token; enable the openid scope")
 	}
 	claims := &identityClaims{}
 	var keyErr error
@@ -260,7 +260,7 @@ func getJSON(ctx context.Context, client *http.Client, endpoint string, output a
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("Clerk authentication endpoint returned HTTP %d", response.StatusCode)
+		return fmt.Errorf("the Clerk authentication endpoint returned HTTP %d", response.StatusCode)
 	}
 	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(output); err != nil {
 		return errors.New("invalid Clerk authentication response")
