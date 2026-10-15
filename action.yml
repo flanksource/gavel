@@ -55,6 +55,13 @@ inputs:
     description: Fail the action when gavel exits non-zero. Artifacts and the PR comment are still posted either way.
     required: false
     default: "true"
+  gavel-server:
+    description: >-
+      URL of a hosted gavel to upload the results to with `gavel ci upload`. The job authenticates
+      with its OIDC token, so the workflow needs `permissions: id-token: write`, and the repository
+      must be linked to a gavel organization through the gavel GitHub App.
+    required: false
+    default: ""
 
 outputs:
   exit-code:
@@ -173,6 +180,15 @@ runs:
           echo "log_path=$(pwd)/${GAVEL_LOG_FILE}"
         } >> "$GITHUB_OUTPUT"
         echo "gavel exited with $code"
+
+    - name: Upload results to gavel
+      if: always() && inputs.gavel-server != ''
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        GAVEL_SERVER: ${{ inputs.gavel-server }}
+        JSON_FILE: ${{ inputs.json-file }}
+      run: gavel ci upload --server "${GAVEL_SERVER}" --file "${JSON_FILE}"
 
     - name: Upload artifacts
       id: upload
