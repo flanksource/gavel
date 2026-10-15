@@ -22,12 +22,14 @@ type RunsAPI struct {
 	DB       *gorm.DB
 	TokenKey []byte
 	Cache    *cache.Store
+	Sources  *sandbox.Sources
 }
 
 // Handler routes the run API.
 func (a *RunsAPI) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/runs/{id}/spec", a.withRun(a.handleSpec))
+	mux.HandleFunc("GET /api/runs/{id}/source", a.withRun(a.handleSource))
 	mux.HandleFunc("POST /api/runs/{id}/results", a.withRun(a.handleResults))
 	return mux
 }
@@ -83,4 +85,43 @@ func (a *RunsAPI) handleResults(w http.ResponseWriter, r *http.Request, run sand
 		return
 	}
 	storeResults(w, r, a.Cache, run.Org, run.Spec.RepoID, run.Spec.SHA, "sandbox run "+run.ID.String())
+}
+
+// handleSource streams a git bundle of the run's ref.
+func (a *RunsAPI) handleSource(w http.ResponseWriter, r *http.Request, run sandbox.RunRecord) {
+	var repo sandbox.Repo
+	result := a.DB.WithContext(r.Context()).Raw(`SELECT id, org_id AS org, source, name, COALESCE(github_repo_id, 0) AS git_hub_repo_id, COALESCE(installation_id, 0) AS installation_id
+		FROM repos WHERE id = ? AND org_id = ?`, run.Spec.RepoID, run.Org).Scan(&repo)
+	if result.Error != nil {
+		logger.Warnf("read the repository of sandbox run %s: %v", run.ID, result.Error)
+		writeCIError(w, http.StatusInternalServerError, "could not read the run's repository")
+		return
+	}
+	if result.RowsAffected == 0 {
+		writeCIError(w, http.StatusNotFound, fmt.Sprintf("run %s has no repository", run.ID))
+		return
+	}
+	body := &startedWriter{ResponseWriter: w, contentType: "application/x-git-bundle"}
+	if _, err := a.Sources.Bundle(r.Context(), repo, run.Spec.Ref, body); err != nil {
+		logger.Warnf("bundle the source of sandbox run %s: %v", run.ID, err)
+		if !body.started {
+			writeCIError(w, http.StatusInternalServerError, err.Error())
+		}
+	}
+}
+
+// startedWriter sets the content type on the first write and records that the response began,
+// so an error before any bundle bytes can still be a proper error response.
+type startedWriter struct {
+	http.ResponseWriter
+	contentType string
+	started     bool
+}
+
+func (w *startedWriter) Write(p []byte) (int, error) {
+	if !w.started {
+		w.started = true
+		w.Header().Set("Content-Type", w.contentType)
+	}
+	return w.ResponseWriter.Write(p)
 }

@@ -27,6 +27,7 @@ import (
 	"github.com/flanksource/gavel/github/installations"
 	shared "github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/pr/ui"
+	"github.com/flanksource/gavel/sandbox"
 	"github.com/flanksource/gavel/serve"
 	"github.com/flanksource/gavel/tenant"
 	"github.com/flanksource/gavel/verify"
@@ -192,7 +193,11 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 		Cache: cache,
 	}
 	// Sandbox jobs authenticate with their run token.
-	runs := &ui.RunsAPI{DB: db, TokenKey: runTokenKey(secret), Cache: cache}
+	sources := &sandbox.Sources{DataDir: opts.DataDir}
+	if app != nil {
+		sources.Token = app.InstallationToken
+	}
+	runs := &ui.RunsAPI{DB: db, TokenKey: runTokenKey(secret), Cache: cache, Sources: sources}
 	root := http.NewServeMux()
 	root.Handle("/api/ci/", ciResults.Handler())
 	root.Handle("/api/runs/", runs.Handler())

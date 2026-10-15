@@ -9,6 +9,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -50,8 +52,26 @@ func TestRunsAPI(t *testing.T) {
 			id, org, repo.ID, string(encoded)).Error)
 	}
 
+	// A pushed repository and a run of it, for the source bundle.
+	dataDir := t.TempDir()
+	var pushed struct{ ID uuid.UUID }
+	require.NoError(t, db.Raw(`INSERT INTO repos (org_id, name, source) VALUES (?, 'app', 'push') RETURNING id`, org).Scan(&pushed).Error)
+	work := t.TempDir()
+	runGit(t, work, "init", "-q", "-b", "main")
+	require.NoError(t, os.WriteFile(filepath.Join(work, "README.md"), []byte("pushed"), 0o644))
+	runGit(t, work, "add", "README.md")
+	runGit(t, work, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "first")
+	runGit(t, work, "clone", "-q", "--bare", work, filepath.Join(dataDir, "repos", org.String(), pushed.ID.String()+".git"))
+	pushRun, missingRefRun := uuid.New(), uuid.New()
+	for id, ref := range map[uuid.UUID]string{pushRun: "refs/heads/main", missingRefRun: "refs/heads/gone"} {
+		pushSpec, err := json.Marshal(sandbox.RunSpec{Kind: "push-check", RepoID: pushed.ID, Ref: ref})
+		require.NoError(t, err)
+		require.NoError(t, db.Exec(`INSERT INTO sandbox_runs (id, org_id, repo_id, kind, status, backend, spec) VALUES (?, ?, ?, 'push-check', 'running', 'memory', ?)`,
+			id, org, pushed.ID, string(pushSpec)).Error)
+	}
+
 	key := []byte(strings.Repeat("k", 32))
-	api := &RunsAPI{DB: db, TokenKey: key, Cache: cache}
+	api := &RunsAPI{DB: db, TokenKey: key, Cache: cache, Sources: &sandbox.Sources{DataDir: dataDir}}
 	server := httptest.NewServer(api.Handler())
 	t.Cleanup(server.Close)
 	token := func(id uuid.UUID, exp time.Time) string { return sandbox.SignRunToken(key, id, org, exp) }
@@ -76,6 +96,16 @@ func TestRunsAPI(t *testing.T) {
 		var got sandbox.RunSpec
 		require.NoError(t, json.Unmarshal([]byte(body), &got))
 		assert.Equal(t, spec, got)
+	})
+
+	t.Run("source", func(t *testing.T) {
+		status, body := call(http.MethodGet, "/api/runs/"+pushRun.String()+"/source", token(pushRun, time.Now().Add(time.Hour)), nil)
+		require.Equal(t, http.StatusOK, status, body)
+		assert.True(t, strings.HasPrefix(body, "# v2 git bundle"), "a git bundle")
+
+		status, body = call(http.MethodGet, "/api/runs/"+missingRefRun.String()+"/source", token(missingRefRun, time.Now().Add(time.Hour)), nil)
+		assert.Equal(t, http.StatusInternalServerError, status)
+		assert.Contains(t, body, "resolve refs/heads/gone")
 	})
 
 	t.Run("results", func(t *testing.T) {
@@ -108,4 +138,12 @@ func TestRunsAPI(t *testing.T) {
 			assert.Contains(t, body, tc.want)
 		})
 	}
+}
+
+func runGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "git %v: %s", args, out)
 }
