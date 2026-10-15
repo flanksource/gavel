@@ -1,0 +1,43 @@
+---
+title: Browser
+description: Start Chrome and expose its session and DevTools connection.
+parent: fixture-step-reference
+order: 6
+---
+
+import FixtureKindReference from "../../src/components/site/FixtureKindReference";
+
+Use the `browser` step to start Chrome and expose its session and DevTools connection.
+
+## Example
+
+```yaml
+kind: Fixture
+name: Browser example
+steps:
+  - id: chrome
+    kind: browser
+    engine: chrome
+    headless: true
+    session: fixture_browser
+    cel: cdp.ready
+```
+
+Save the document as a `.fixture.yaml` file. Inspect it with `gavel fixtures outline <file>`, then execute it with `gavel fixtures <file>` once its prerequisites are available.
+
+## Configuration and prerequisites
+
+The supported engine is Chrome. Provide `binary` when automatic executable discovery is unsuitable. `profile`, `headless`, extra `args`, and `startTimeout` configure startup. A created browser is stopped at fixture teardown.
+
+## Results and lifetime
+
+Outputs include `cdp.ready`, `cdp.url`, `cdp.wsUrl`, session name, profile directory, binary, and process ID. Default exports include `BROWSER_CDP_URL`, `BROWSER_WS_URL`, `BROWSER_SESSION`, and `BROWSER_PROFILE_DIR`. Observation re-probes DevTools readiness.
+
+Use the [Agent-browser step](/docs/fixture-kind-agent-browser) next to drive this browser session.
+
+## Complete step reference
+
+Expand objects and array items to inspect nested fields. This reference includes the common step envelope; its behavior is documented in [Step policies](/docs/fixture-step-policies).
+
+<FixtureKindReference kind="browser" />
+

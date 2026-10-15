@@ -1,0 +1,47 @@
+---
+title: Go tests
+description: Go packages containing ordinary testing-package tests.
+parent: test-execution
+order: 1
+---
+
+import SchemaReference from "../../src/components/site/SchemaReference";
+import schema from "../../../gavel.schema.json";
+
+## Discovery and prerequisites
+
+Gavel detects `_test.go` files and discovers Go packages. It runs ordinary Go tests and Ginkgo v2 suites through one `go test -json -v` command by default. See the Ginkgo page for suite-specific metadata and filters.
+
+## Execute and focus
+
+```bash
+gavel test go --dry-run .
+gavel test go .
+gavel test go ./pkg/parser -- -run TestParser -count=1
+```
+
+Replace example paths and test names with your project. Arguments after `--` go to the selected framework. Use `--tags` for build tags and `--test-timeout` for the Go command deadline. Native Go flags follow `--`. Flags such as `-run` and `-count=1` disable Go's result cache.
+
+## Configure the adapter
+
+```yaml
+test:
+  frameworks:
+    go:
+      runtime:
+        timeout: 5m
+        mem: 2GiB
+```
+
+`test.frameworks.go.args` supplies native runner arguments; nonempty lists replace inherited lists. Global execution and reporting options are covered by [Test execution](/docs/test-execution) and [Reporting](/docs/reporting).
+
+## Results
+
+Gavel groups interleaved `go test -json` events by package, uses Go's package pass/fail events as the package outcome, and marks results replayed from Go's test cache. Use `--failed <snapshot>` to verify a repair, and `--show-passed` to expose successful tests. The Go command deadline is separate from the whole-run deadline.
+
+## Framework configuration reference
+
+The fields below are the configuration for `test.frameworks.go`. Native framework configuration remains in its own project files.
+
+<SchemaReference schema={schema.properties.test.properties.frameworks.additionalProperties} id="framework-go" />
+

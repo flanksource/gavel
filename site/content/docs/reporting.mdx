@@ -1,0 +1,113 @@
+---
+title: Reporting
+description: Export test and lint evidence, inspect snapshots, summarize CI results, and browse live or saved runs.
+order: 5
+---
+
+Gavel separates execution from report rendering. Choose terminal output for immediate feedback and explicit file sinks for artifacts that another developer, CI job, or agent can inspect.
+
+## Export artifacts
+
+```bash
+mkdir -p .tmp
+gavel test --lint --format "json=.tmp/checks.json,html=.tmp/checks.html,markdown=.tmp/checks.md"
+gavel summary --input .tmp/checks.json --output .tmp/summary.md
+```
+
+Each `format=file` pair writes one representation of the run. A bare `--format json` or `--json` renders to stdout. Report files are requested explicitly; a plain `gavel test` does not promise `dist/tests.json` or `dist/tests.html`.
+
+`gavel summary` reads test JSON and creates compact Markdown suitable for a PR comment: counts and selected failures. Keep the original JSON for full details. Tests and lint findings determine the execution result even when output is redirected or written to several sinks.
+
+## JSON shapes
+
+| Producer | Shape | Useful fields |
+| --- | --- | --- |
+| `gavel test --json` | Test snapshot object | `tests`, `lint_results`, `start_time`, `end_time` |
+| `gavel lint --json` | Array of linter results | `linter`, `violations`, `error` |
+| `gavel fixtures --json` | Fixture tree | `root`, `all_tests`, `stats` |
+| `gavel fixtures run --format captain-verify-report` | NDJSON progress and final report envelopes | `progress`, final `report` |
+
+Test entries expose names, framework, package, source location, duration, state flags, message, and hierarchical children. Runner containers and executable leaves can both appear; count the appropriate level rather than treating every tree node as an independent test. Lint findings include tool, rule, file, location, message, and severity. A tool error is separate from a successfully executed tool reporting a violation.
+
+```bash
+# Inspect failed test entries in a combined report.
+jq '.tests[] | select(.failed) | {name, package_path, framework, message}' .tmp/checks.json
+
+# Inspect lint findings in that same combined report.
+jq '.lint_results[]? | {linter, error, violations}' .tmp/checks.json
+
+# Standalone lint JSON is an array.
+gavel lint --format "json=.tmp/lint.json"
+jq '.[] | {linter, error, violations}' .tmp/lint.json
+```
+
+The [Verification](/docs/verification) contract has its own exit semantics: an executed failing verdict can exit zero while reporting failure in JSON. Read the final report when calling that machine protocol; ordinary test, lint, and fixture commands use their normal failure exit behavior.
+
+## Saved run history
+
+Completed runs save snapshots under `.gavel/run-*.json`. `.gavel/last.json` is a pointer with `path`, `sha`, and `uncommitted` metadata; follow `path` before parsing results:
+
+```bash
+GAVEL_SNAPSHOT="$(jq -r '.path' .gavel/last.json)"
+jq '.tests[] | select(.failed) | .name' "$GAVEL_SNAPSHOT"
+cp "$GAVEL_SNAPSHOT" .tmp/previous.json
+gavel test history
+gavel test --failed
+```
+
+`test history` aggregates execution count, pass rate, durations, and last pass/fail times. Bare `--failed` follows the latest pointer automatically. Explicit `--failed <file>` and `--baseline <file>` expect snapshot objects; resolve a pointer first. The copied `.tmp/previous.json` is suitable for subsequent test or lint selection according to the evidence it contains. A standalone lint JSON array is useful for analysis but cannot replace this snapshot.
+
+## Control terminal detail
+
+```bash
+gavel test -v
+gavel test --show-passed --show-stdout Always --show-stderr OnFailure
+gavel fixtures -vvv smoke.fixture.md
+```
+
+Output policies are `Never`, `OnFailure`, and `Always`. Increased fixture verbosity exposes passed nodes, executed commands, and then CEL variables and streams. Use JSON when investigating a hidden failure rather than relying only on the compact terminal view.
+
+## Live and replayed reports
+
+```bash
+gavel test --ui --addr localhost
+gavel ui serve .tmp/checks.json --addr localhost
+```
+
+Use the printed server URL. The live UI streams changes and supports rerunning selected tests. Serving a saved snapshot makes completed evidence browsable without repeating the original execution.
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /api/tests` | Current JSON snapshot |
+| `GET /api/tests/stream` | Server-sent events with test updates |
+| `/query/` | The run's trace store, served by the commons-db query explorer (see below) |
+| `GET /api/process/metrics` | Process metrics |
+| `POST /api/rerun` | Request selected tests or frameworks in an execution-capable server |
+| `GET /api/rerun/stream` | Rerun updates |
+| `POST /api/stop` | Stop an in-flight run |
+
+```bash
+# Replace 8080 with the port printed by Gavel.
+curl -fsS http://localhost:8080/api/tests | jq '.tests[] | select(.failed) | .name'
+curl -N http://localhost:8080/api/tests/stream
+```
+
+### Traces
+
+Each run records its traces — the process tree and CPU/RSS samples of everything it started, and the HTTP, Postgres, and terminal traces fixtures arm — in a store under `.gavel/traces/<run_id>`. The UI mounts that store at `/query/`: the query explorer's UI, its profile API at `/query/api/v1`, and its sessions API. `status.traces` in `GET /api/tests` names the mount, the process-trace streams, and (while the run is live) the capture session a stack checkpoint goes to.
+
+- The **Processes** tab reads the process tree and samples from the store. *Collect stack trace* checkpoints the running capture (`POST /query/api/v1/sessions/<session>/checkpoint`), which records the tree and dumps the run's goroutines onto its root.
+- A fixture's detail panel lists its **Traces**: kind, record count, summary, and error. *Open in query* opens the explorer on exactly that fixture's window (`/query/traces/<kind>?stream=…&afterSeq=…&toSeq=…`). Each export format (NDJSON, HAR, cast, …) downloads from `/query/api/v1/traces/<kind>/export`, and *View* renders the window inline.
+
+```bash
+# Every request one fixture's http_proxy trace saw, as HAR (stream and toSeq from the fixture's trace).
+curl -fsS "http://localhost:8080/query/api/v1/traces/http_proxy/export?stream=<stream>&toSeq=<seq>&format=har" | jq '.log.entries[].request.url'
+```
+
+`gavel ui serve` on a saved snapshot reopens that run's store from `<work_dir>/.gavel/traces/<run_id>` read-only, so the same links work after the run. When the store is gone (pruned, or the snapshot was copied without it), the report is still served, without the mount, and `status.traces.unavailable` says why. A store that exists but fails to open is an error.
+
+## CI evidence
+
+Run the same scoped commands locally and in CI, write explicit JSON and Markdown sinks, and upload the generated files with your CI system's artifact step. Preserve the command's failure status even when collecting artifacts; a report file being present does not establish a passing run.
+
+Keep full reports alongside summaries so later `gavel test --pr <ref>` and `gavel lint --pr <ref>` runs can identify the failing tests and tools from Gavel CI artifacts. The repository's [composite action](https://github.com/flanksource/gavel/blob/main/action.yml) defines its current inputs and artifact behavior.

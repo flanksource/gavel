@@ -1,0 +1,52 @@
+---
+title: jscpd
+description: Duplicate-code detection.
+parent: lint-execution
+order: 10
+---
+
+import SchemaReference from "../../src/components/site/SchemaReference";
+import schema from "../../../gavel.schema.json";
+
+## Detection and native configuration
+
+Detection input: Explicit selection with `gavel lint jscpd` or `lint.linters.jscpd.enabled: true`. Explicit selection pins this tool; matching source files and an available executable are still required. Inspect planned commands before execution:
+
+```bash
+gavel lint jscpd --dry-run
+gavel lint jscpd
+gavel lint jscpd --changed
+```
+
+This tool is opt-in. Review duplicate blocks and thresholds in the native tool's configuration; there is no native automatic fix for deciding how to consolidate code.
+
+## Configure execution
+
+```yaml
+lint:
+  linters:
+    jscpd:
+      enabled: true
+      runtime:
+        timeout: 2m
+        mem: 1GiB
+```
+
+`lint.linters.jscpd.args` supplies native tool arguments. Process settings inherit from `runtime` and `lint.runtime`; explicit invocation settings take precedence. Native rule configuration is separate from these Gavel orchestration fields.
+
+## Findings and reruns
+
+```bash
+mkdir -p .tmp
+gavel lint jscpd --format "json=.tmp/jscpd.json,markdown=.tmp/jscpd.md"
+gavel lint jscpd --failed
+```
+
+Standalone lint JSON is an array of tool results. For an explicit rerun or baseline, save the snapshot named by `.gavel/last.json`, as shown in [Reporting](/docs/reporting). Changed and baseline filters affect which findings are reported, and do not necessarily narrow native analysis to the same files. See [Lint execution](/docs/lint-execution) for common filters and repair behavior.
+
+## Linter configuration reference
+
+These fields configure `lint.linters.jscpd`; rule names and native options are owned by the tool. The [adapter source](https://github.com/flanksource/gavel/blob/main/linters/jscpd/jscpd.go) defines Gavel's integration.
+
+<SchemaReference schema={schema.properties.lint.properties.linters.additionalProperties} id="linter-jscpd" />
+

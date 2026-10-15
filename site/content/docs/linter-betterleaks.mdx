@@ -1,0 +1,52 @@
+---
+title: betterleaks
+description: Secret-scanning findings.
+parent: lint-execution
+order: 11
+---
+
+import SchemaReference from "../../src/components/site/SchemaReference";
+import schema from "../../../gavel.schema.json";
+
+## Detection and native configuration
+
+Detection input: `.betterleaks.toml`, `betterleaks.toml`, `.gitleaks.toml`, or `gitleaks.toml`; additional files can be named by `secrets.configs`. Explicit selection pins this tool; matching source files and an available executable are still required. Inspect planned commands before execution:
+
+```bash
+gavel lint betterleaks --dry-run
+gavel lint betterleaks
+gavel lint betterleaks --changed
+```
+
+Alias: `gavel lint secrets`. Gavel merges discovered native rule files across config layers. `secrets.disabled` controls activation; rule authoring remains in TOML. The scanner does not supply native fixes.
+
+## Configure execution
+
+```yaml
+lint:
+  linters:
+    betterleaks:
+      enabled: true
+      runtime:
+        timeout: 2m
+        mem: 1GiB
+```
+
+`lint.linters.betterleaks.args` supplies native tool arguments. Process settings inherit from `runtime` and `lint.runtime`; explicit invocation settings take precedence. Native rule configuration is separate from these Gavel orchestration fields.
+
+## Findings and reruns
+
+```bash
+mkdir -p .tmp
+gavel lint betterleaks --format "json=.tmp/betterleaks.json,markdown=.tmp/betterleaks.md"
+gavel lint betterleaks --failed
+```
+
+Standalone lint JSON is an array of tool results. For an explicit rerun or baseline, save the snapshot named by `.gavel/last.json`, as shown in [Reporting](/docs/reporting). Changed and baseline filters affect which findings are reported, and do not necessarily narrow native analysis to the same files. See [Lint execution](/docs/lint-execution) for common filters and repair behavior.
+
+## Linter configuration reference
+
+These fields configure `lint.linters.betterleaks`; rule names and native options are owned by the tool. The [adapter source](https://github.com/flanksource/gavel/blob/main/linters/betterleaks/betterleaks.go) defines Gavel's integration.
+
+<SchemaReference schema={schema.properties.lint.properties.linters.additionalProperties} id="linter-betterleaks" />
+

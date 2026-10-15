@@ -1,0 +1,52 @@
+---
+title: Oxlint
+description: JavaScript and TypeScript lint diagnostics.
+parent: lint-execution
+order: 4
+---
+
+import SchemaReference from "../../src/components/site/SchemaReference";
+import schema from "../../../gavel.schema.json";
+
+## Detection and native configuration
+
+Detection input: `.oxlintrc.json`, `.oxlintrc.jsonc`, `oxlint.json`, or `oxlintrc.json`. Explicit selection pins this tool; matching source files and an available executable are still required. Inspect planned commands before execution:
+
+```bash
+gavel lint oxlint --dry-run
+gavel lint oxlint
+gavel lint oxlint --changed
+```
+
+Keep Oxlint rules and plugins in its native config. Use this page for the Oxlint adapter and the ESLint page when your project needs that separate tool.
+
+## Configure execution
+
+```yaml
+lint:
+  linters:
+    oxlint:
+      enabled: true
+      runtime:
+        timeout: 2m
+        mem: 1GiB
+```
+
+`lint.linters.oxlint.args` supplies native tool arguments. Process settings inherit from `runtime` and `lint.runtime`; explicit invocation settings take precedence. Native rule configuration is separate from these Gavel orchestration fields.
+
+## Findings and reruns
+
+```bash
+mkdir -p .tmp
+gavel lint oxlint --format "json=.tmp/oxlint.json,markdown=.tmp/oxlint.md"
+gavel lint oxlint --failed
+```
+
+Standalone lint JSON is an array of tool results. For an explicit rerun or baseline, save the snapshot named by `.gavel/last.json`, as shown in [Reporting](/docs/reporting). Changed and baseline filters affect which findings are reported, and do not necessarily narrow native analysis to the same files. See [Lint execution](/docs/lint-execution) for common filters and repair behavior.
+
+## Linter configuration reference
+
+These fields configure `lint.linters.oxlint`; rule names and native options are owned by the tool. The [adapter source](https://github.com/flanksource/gavel/blob/main/linters/oxlint/oxlint.go) defines Gavel's integration.
+
+<SchemaReference schema={schema.properties.lint.properties.linters.additionalProperties} id="linter-oxlint" />
+

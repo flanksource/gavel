@@ -1,0 +1,14 @@
+kind: Fixture
+name: Step exports
+steps:
+  - id: first
+    kind: exec
+    exec: printf
+    args: ["%s", "ready"]
+    export:
+      MESSAGE: "{{.outputs.stdout}}"
+  - id: second
+    kind: exec
+    exec: printf
+    args: ["%s", "{{.env.MESSAGE}}"]
+    cel: stdout == steps.first.stdout && stdout == "ready"

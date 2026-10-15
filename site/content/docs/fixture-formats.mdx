@@ -1,7 +1,8 @@
 ---
 title: Fixture formats
 description: Tables, command blocks, standalone code blocks, templates, CEL, variables, and cwd rules.
-order: 3
+order: 7
+parent: fixtures-overview
 ---
 
 Fixture files are ordinary markdown with optional YAML front matter. File-level front matter sets defaults; table columns and command-block config override those defaults for individual tests.
@@ -71,17 +72,15 @@ env:
 ```
 
 ```bash
-tmp="$(mktemp)"
-echo "hello" > "$tmp" # [!code focus] [!code note:produce stdout]
-cat "$tmp"
-rm -f "$tmp"
+printf '%s\n' "hello" # [!code focus] [!code note:produce stdout]
+printf '%s\n' "$KEY"
 ```
 
 - contains: hello
 - not: contains: error
 ````
 
-Lines 4-6 configure this one command. Lines 10-13 are the script. Lines 16-17 validate the output and guard against unexpected error text. This shape is better than a table when setup and cleanup are part of the test itself.
+The YAML block configures this command's environment and expected exit. The Bash block produces stdout, and the following bullets validate it and guard against unexpected error text. Use this shape when a case needs its own environment or a multi-line script.
 
 Validation bullets after a command are joined with `&&`:
 
@@ -99,10 +98,10 @@ Executable code blocks outside `command:` headings are auto-detected. The neares
 ## Version output
 
 ```bash
-gavel --version # [!code focus] [!code note:test command]
+gavel version # [!code focus] [!code note:test command]
 ```
 
-- regex: gavel version # [!code highlight]
+- regex: ^gavel v # [!code highlight]
 ````
 
 Line 1 names the test. Lines 3-5 run the command. Line 7 checks stdout with a regex. Use this compact form for one-off checks that do not need per-test YAML.
@@ -125,11 +124,11 @@ Here `exitCode=1` says the non-zero exit is expected, and `timeout=30` bounds th
 exec: $executablePath
 daemon: go run ./server --port {{.port}} # [!code word:{{.port}}]
 args: ["--file", "$file"] # [!code word:$file]
-build: go build -o $workDir/myapp # [!code word:$workDir]
+build: make build
 cwd: $GIT_ROOT_DIR/testdata # [!code word:$GIT_ROOT_DIR] [!code note:resolved before run]
 ```
 
-`$executablePath` and `$workDir` come from the runner. `{{.port}}` is a free TCP port created for daemon fixtures. `$file` is available when `files:` expands a test across matched files. `cwd` is templated before Gavel resolves the final working directory.
+`$executablePath` and `$workDir` come from the runner. `{{.port}}` is a free TCP port created for daemon fixtures. `$file` is available when `files:` expands a test across matched files. `cwd` is templated before Gavel resolves the final working directory. Point `exec` at the executable your build target actually produces.
 
 Auto-injected variables are available in shell syntax, template syntax, CEL, and the command environment:
 
@@ -160,4 +159,75 @@ CEL expressions can inspect:
 - `executablePath`
 - `ansi.has_color`, `ansi.has_any`, `ansi.has_updates`, and related terminal-state fields
 
-Working directory resolution is deterministic: test-level `cwd`, then file-level `cwd`, then the fixture file's directory, then the runner workdir or current directory. Relative paths are resolved from the fixture file's directory.
+Working directory resolution is deterministic: test-level `cwd`, file-level `cwd`, prepared setup directory, fixture source directory, then runner workdir or current directory. Relative paths resolve from the prepared setup when one exists, otherwise from the fixture source directory. Golden files resolve from the source directory even when commands run in a worktree.
+
+## Golden files
+
+Use `@path` in stdout or stderr expectations to compare against a file relative to the fixture source:
+
+```markdown
+| Name | Command | Exit Code | Stdout |
+| --- | --- | --- | --- |
+| Help contract | gavel version | 0 | @golden/version.txt |
+```
+
+Create the golden file with the expected output. Inspect a mismatch before updating it. When the output change is intentional, `gavel fixtures --update-golden checks.fixture.md` rewrites mismatched golden files; it is a write operation.
+
+## Traces and profiling
+
+`traces:` arms commons-db trace kinds around a fixture. Every process the fixture starts — a command, a `services` entry, a browser — inherits the trace's exports, such as `HTTPS_PROXY` for a recording proxy, unless the setup, front matter or a step sets the variable itself. A `deps:` services entry passes them on only when deps runs the service as a host process (the binary and command runtimes), under the catalog's and the entry's own `env`; a docker or helm service never sees them, since a `127.0.0.1` proxy is unreachable from a container. Each kind's summary of the fixture's window becomes the CEL root named by the kind, and the records stay in the run's store under `.gavel/traces/<run>`, where the newest 20 runs are kept. A root of a trace the fixture did not arm is absent, so an assertion cannot treat an untraced request count as zero.
+
+```yaml
+---
+traces:
+  - kind: http_proxy        # a recording proxy every child is pointed at
+    params: {mode: mitm, hosts: ["api.example.com"]}
+    scope: test             # test (default) | file | run
+    require: count > 0      # CEL over the kind's summary; false fails a passing fixture
+  - kind: terminal          # runs the command under a PTY and records it
+---
+
+# Calls the API
+
+| Name  | Command                                    | CEL                                                         |
+| ----- | ------------------------------------------ | ----------------------------------------------------------- |
+| fetch | curl -sS -o /dev/null https://api.example.com/health | http_proxy.entries == 1 && terminal.exit_code == 0 |
+```
+
+| Kind | What it records | CEL root keys |
+| --- | --- | --- |
+| `http_proxy` | Every exchange a child sends through a recording proxy (`mode: connect` records TLS tunnels, `mitm` decrypts them with an ephemeral CA the child is told to trust, and verifies the upstream against the system roots plus an `upstreamCA` PEM file; one it does not trust is answered 502 and recorded with its `error`) | `entries`, `errors`, `hosts`, `methods`, `statuses`, `requests[]` (with `query`, `body`, `response_body`, `response_json`), `tunnelled`, `bytes_in`, `bytes_out` |
+| `pg_proxy` | Every statement a child runs through a postgres wire proxy in front of `dsn` (else `GAVEL_DB_DSN`, `DATABASE_URL`); children get `DATABASE_URL`, `GAVEL_DB_DSN` and `PGHOST`/`PGPORT`/`PGUSER`/`PGDATABASE`/`PGSSLMODE` pointing at the proxy | `statements`, `errors`, `duration_ms`, `by_op`, `tables`, `queries[]` |
+| `terminal` | The command's PTY session; it implies `terminal: pty` and only command fixtures run under one | `exit_code`, `final`, `duplicates`, `has_duplicates`, `width`, `height`, `duration_ms`, `truncated` |
+| `http` | gavel's own outbound HTTP (`features: [gavel]` by default) | as `http_proxy`, without the tunnel counts |
+| `sql_statements` | gavel's own SQL (`connections: [self]` by default) | as `pg_proxy` |
+| `process_tree`, `process_samples` | The processes under a root and their CPU and memory | `live`, `exited`, `peak_cpu_percent`, `peak_rss_bytes` |
+
+Every summary has `count`, the window's records. A `test`-scoped trace is a capture of its own around the fixture; a `file` or `run` trace is one capture the file's or run's fixtures share, each windowed between marks taken before and after it, so concurrent rows of one file see each other's records there. A `Traces` table column takes the compact form (`http_proxy,terminal`, or `none`), and a fixture document takes `traces:` at the document or step level.
+
+A `test`-scoped trace's `params` are templates rendered when its capture starts, like a step's config: `{{.env.X}}` reads the fixture Env, `{{.steps.<id>.…}}` an earlier step's outputs. So a proxy can front a service a previous step started on a port it allocated; templated params are validated once rendered. A `file` or `run` capture starts before any step runs, so its params cannot be templated.
+
+```yaml
+kind: Fixture
+steps:
+  - id: db
+    kind: services
+    services:
+      pg:
+        exec: ./start-postgres.sh {{.port}}
+        ready: {tcp: "127.0.0.1:{{.port}}"}
+  - id: migrate
+    kind: exec
+    traces:
+      - kind: pg_proxy
+        params: {dsn: "postgres://postgres@127.0.0.1:{{.steps.db.pg.port}}/postgres"}
+        require: errors == 0
+    script: psql "$DATABASE_URL" -f schema.sql
+```
+
+```bash
+gavel fixtures --traces http_proxy --profile checks.fixture.md
+gavel fixtures --benchmark --max-time 2s checks.fixture.md
+```
+
+`--traces` arms its kinds, test-scoped with default params, for every fixture that declares no `traces:` of its own; `traces: []` opts one out. `--profile` captures process metrics and declared Go profile outputs. `--benchmark` records stage durations and supports a saved benchmark baseline and regression thresholds. Use the [Fixture file reference](/docs/fixture-reference) for all `traces` and `goProfiles` options.

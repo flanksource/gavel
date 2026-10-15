@@ -26,9 +26,10 @@ From the root of any Go project:
 
 ```bash
 gavel test
+gavel test --lint --format "json=tests.json,html=tests.html"
 ```
 
-Gavel discovers your `go test` packages, runs them, and writes a structured `dist/tests.json` plus a browsable `dist/tests.html`. Pass `--lint` to also run every linter whose config file is present in the repo.
+Gavel discovers test suites and runs their native engines. The second command combines tests and detected linters and explicitly writes JSON and HTML reports. See [Test execution](/docs/test-execution) for Go, Ginkgo, Jest, Vitest, Playwright, and fixture discovery, and [Reporting](/docs/reporting) for output formats and run history.
 
 ## Lint in parallel
 
@@ -52,12 +53,34 @@ All run concurrently and merge into a single report.
 gavel fixtures checks.fixture.md
 ```
 
-Fixtures combine Markdown tables, executable command blocks, test/lint runner
-steps, CEL assertions, and optional AI review steps. TODO `## Verification`
-sections use the same fixture engine.
+Fixtures combine Markdown tables, executable command blocks, test/lint runner steps, CEL assertions, and optional AI review steps. YAML and JSON fixtures can also orchestrate services, browsers, and TODO lifecycle steps. TODO definitions of done use the same fixture engine.
+
+## Inspect configuration
+
+```bash
+gavel config
+gavel config --runtime --json
+gavel fixtures --schema
+```
+
+Use the [Configuration reference](/docs/configuration-reference) for every `.gavel.yaml` field and the [Fixture file reference](/docs/fixture-reference) for fixture frontmatter and runner options.
+
+## Track work with TODOs
+
+```bash
+gavel todos create --title "Fix parser error messages" --body @todo.md --verification @verification.md
+gavel todos list
+gavel todos steps 90ec80f0
+gavel todos run 90ec80f0 --step plan --dry-run
+```
+
+Create `todo.md` and `verification.md` with your task and runnable checks first, and replace `90ec80f0` with the created reference. TODOs use a PostgreSQL workspace. Planning, approval, implementation, and verification are covered in [Todo engine](/docs/todo-engine) and [Todo run loop](/docs/todo-run-loop).
 
 ## What's next
 
+- Use [CLI usage](/docs/cli-usage) as a command map and learn runner argument forwarding.
+- Scope runs and iterate on failures with [Test execution](/docs/test-execution) and [Lint execution](/docs/lint-execution).
+- Export CI artifacts, replay reports, and read snapshots with [Reporting](/docs/reporting).
 - Learn how to turn markdown into runnable checks in [Fixture overview](/docs/fixtures-overview).
 - Use [Fixture formats](/docs/fixture-formats) when you need tables, command blocks, CEL assertions, templates, or working-directory rules.
 - Read [Todo engine](/docs/todo-engine) to understand how Gavel stores, runs, and checks work items.
