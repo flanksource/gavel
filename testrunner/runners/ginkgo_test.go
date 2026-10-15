@@ -361,8 +361,8 @@ func TestGinkgoName(t *testing.T) {
 func TestGinkgoParserType(t *testing.T) {
 	runner := NewGinkgo("/tmp")
 	parser := runner.Parser()
-	if parser.Name() != "ginkgo json" {
-		t.Errorf("expected parser name 'ginkgo json', got %s", parser.Name())
+	if parser.Name() != "ginkgo go test json" {
+		t.Errorf("expected parser name 'ginkgo go test json', got %s", parser.Name())
 	}
 }
 
@@ -482,25 +482,22 @@ import "github.com/onsi/gomega"
 }
 
 func TestGinkgoBuildCommandArgs(t *testing.T) {
-	tmpDir := t.TempDir()
-	writeGinkgoGoMod(t, tmpDir)
-	runner := NewGinkgo(tmpDir)
+	workDir, err := filepath.Abs("../..")
+	if err != nil { t.Fatal(err) }
+	runner := NewGinkgo(workDir)
 
-	testRun, err := runner.BuildCommand("./pkg", "--timeout=4m30s", "--poll-progress-after=4m20s")
+	testRun, err := runner.BuildCommand("./testrunner/runners/testdata/overlayfixture", "--focus", "reports metadata", "--label-filter=leaf")
 	if err != nil {
 		t.Fatalf("BuildCommand: %v", err)
 	}
 	args := strings.Join(testRun.Process.Args, " ")
-	for _, want := range []string{"-v", "--json-report=", "--timeout=4m30s", "--poll-progress-after=4m20s", "./pkg"} {
+	for _, want := range []string{"test -json -v", "-overlay=", "-ginkgo.focus=reports metadata", "-ginkgo.label-filter=leaf", "./testrunner/runners/testdata/overlayfixture"} {
 		if !strings.Contains(args, want) {
 			t.Errorf("expected args to contain %q, got: %s", want, args)
 		}
 	}
-	if strings.Contains(args, "--show-node-events=false") {
-		t.Errorf("expected --show-node-events=false to be removed, got: %s", args)
-	}
-	if strings.Index(args, "--timeout=4m30s") > strings.Index(args, "./pkg") {
-		t.Errorf("timeout flag should precede package path, got: %s", args)
+	if strings.Contains(args, "--json-report") || testRun.ReportPath != "" {
+		t.Errorf("file-based report unexpectedly configured: %s", args)
 	}
 }
 
