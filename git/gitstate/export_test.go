@@ -19,6 +19,20 @@ func (t *Tracker) Rescan(ctx context.Context, dir string) error {
 	return t.scanRepo(ctx, repo)
 }
 
+// HotWorktrees lists, sorted, the worktrees the cadence rescans at the hot
+// interval right now.
+func (t *Tracker) HotWorktrees() []string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	hot := t.hotLocked(time.Now())
+	paths := make([]string, 0, len(hot))
+	for path := range hot {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	return paths
+}
+
 // HoldSlot takes one of the tracker's concurrency slots until release is
 // called, keeping background scans queued.
 func (t *Tracker) HoldSlot() (release func()) {
