@@ -1,5 +1,5 @@
-// A Store over a commons-db filesystem: local disk, S3 or GCS. It validates keys, maps each
-// backend's not-found error to ErrNotFound, and turns its listings into sorted keys.
+// A Store over a commons-db filesystem, S3 or GCS. It validates keys, maps each backend's
+// not-found error to ErrNotFound, and turns its listings into sorted keys.
 package blob
 
 import (
@@ -9,7 +9,6 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
-	"path/filepath"
 	"sort"
 	"strings"
 
@@ -21,15 +20,8 @@ import (
 // fsStore is a Store over a commons-db filesystem.
 type fsStore struct {
 	fs commonsfs.FilesystemRW
-	// root is set for local disk, whose listings carry absolute paths instead of keys.
-	root string
 	// literalListing is set for GCS, whose ReadDir takes a literal prefix rather than a glob.
 	literalListing bool
-}
-
-// Local returns a Store over the directory root.
-func Local(root string) Store {
-	return &fsStore{fs: commonsfs.NewLocalFS(root), root: root}
 }
 
 func (s *fsStore) Write(ctx context.Context, key string, r io.Reader) error {
@@ -106,10 +98,7 @@ func (s *fsStore) List(ctx context.Context, prefix string) ([]Object, error) {
 		if entry.IsDir() {
 			continue
 		}
-		key, err := s.keyOf(entry)
-		if err != nil {
-			return nil, err
-		}
+		key := entry.FullPath()
 		if strings.HasPrefix(key, prefix) {
 			objects = append(objects, Object{Key: key, Size: entry.Size(), ModTime: entry.ModTime()})
 		}
@@ -118,20 +107,8 @@ func (s *fsStore) List(ctx context.Context, prefix string) ([]Object, error) {
 	return objects, nil
 }
 
-// keyOf is entry's key: its path relative to root on local disk, its full name elsewhere.
-func (s *fsStore) keyOf(entry commonsfs.FileInfo) (string, error) {
-	if s.root == "" {
-		return entry.FullPath(), nil
-	}
-	rel, err := filepath.Rel(s.root, entry.FullPath())
-	if err != nil {
-		return "", fmt.Errorf("list blobs: %s is outside %s: %w", entry.FullPath(), s.root, err)
-	}
-	return filepath.ToSlash(rel), nil
-}
-
-// isNotFound reports each backend's missing-object error: local disk's fs.ErrNotExist, S3's
-// HTTP 404 and GCS's ErrObjectNotExist.
+// isNotFound reports each backend's missing-object error: S3's HTTP 404 and GCS's
+// ErrObjectNotExist, plus fs.ErrNotExist.
 func isNotFound(err error) bool {
 	if err == nil {
 		return false
