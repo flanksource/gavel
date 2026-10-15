@@ -60,7 +60,9 @@ func TestRunDeletesWhatOutlivedItsWindow(t *testing.T) {
 	logs := blob.Local(t.TempDir())
 	orgStore := func(org uuid.UUID) blob.Store { return blob.WithPrefix(logs, "orgs/"+org.String()+"/") }
 	workDir, otherWorkDir := t.TempDir(), t.TempDir()
-	workspace := func(_ uuid.UUID, dir string) (blob.Store, error) { return blob.Local(filepath.Join(dir, ".gavel")), nil }
+	workspace := func(_ uuid.UUID, dir string) (blob.Store, error) {
+		return blob.Local(filepath.Join(dir, ".gavel")), nil
+	}
 	recordingsRoot := t.TempDir()
 	recordings := blob.Local(recordingsRoot)
 
