@@ -110,6 +110,20 @@ func (s Store) SyncRepos(ctx context.Context, org uuid.UUID, installationID int6
 	return nil
 }
 
+// SyncAll syncs the repositories of every installation org linked.
+func (s Store) SyncAll(ctx context.Context, org uuid.UUID) error {
+	ids, err := s.Installations(ctx, org)
+	if err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if err := s.SyncRepos(ctx, org, id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // repoRow names the repos table for gorm's query builder.
 type repoRow struct{}
 
@@ -124,6 +138,44 @@ func (s Store) Repos(ctx context.Context, org uuid.UUID) ([]string, error) {
 		return nil, fmt.Errorf("read the organization's repositories: %w", err)
 	}
 	return names, nil
+}
+
+// InstallationRepos is the GitHub repositories one installation grants.
+type InstallationRepos struct {
+	Installation int64
+	Repos        []string
+}
+
+// ReposByInstallation groups org's GitHub repositories by the installation that grants
+// them, oldest installation first, so each group is searched with its own token.
+func (s Store) ReposByInstallation(ctx context.Context, org uuid.UUID) ([]InstallationRepos, error) {
+	var rows []struct {
+		InstallationID int64
+		Name           string
+	}
+	if err := s.DB.WithContext(ctx).Raw(`
+		SELECT r.installation_id, r.name FROM repos r
+		JOIN github_installations i ON i.id = r.installation_id
+		WHERE r.org_id = ? AND r.source = 'github' AND i.suspended_at IS NULL
+		ORDER BY i.created_at, i.id, r.name`, org).Scan(&rows).Error; err != nil {
+		return nil, fmt.Errorf("read the organization's repositories: %w", err)
+	}
+	var groups []InstallationRepos
+	for _, row := range rows {
+		if len(groups) == 0 || groups[len(groups)-1].Installation != row.InstallationID {
+			groups = append(groups, InstallationRepos{Installation: row.InstallationID})
+		}
+		last := &groups[len(groups)-1]
+		last.Repos = append(last.Repos, row.Name)
+	}
+	return groups, nil
+}
+
+// InstallationTokenSource mints tokens for one installation, for github.Options.TokenSource.
+func (s Store) InstallationTokenSource(installationID int64) func() (string, error) {
+	return func() (string, error) {
+		return s.App.InstallationToken(context.Background(), installationID)
+	}
 }
 
 // TokenSource mints tokens for org's first installation, for github.Options.TokenSource.

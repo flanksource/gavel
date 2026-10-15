@@ -4,24 +4,12 @@ package installations_test
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/rsa"
-	"crypto/x509"
-	"encoding/json"
-	"encoding/pem"
-	"net/http"
-	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"sort"
-	"strconv"
-	"strings"
-	"sync"
 	"testing"
-	"time"
 
 	commonsdbtest "github.com/flanksource/commons-db/dbtest"
 	"github.com/flanksource/gavel/github"
+	"github.com/flanksource/gavel/github/githubtest"
 	"github.com/flanksource/gavel/github/installations"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/google/uuid"
@@ -30,46 +18,15 @@ import (
 	"gorm.io/gorm"
 )
 
-// fakeGitHub serves installation tokens and the repositories each installation grants.
-type fakeGitHub struct {
-	mu    sync.Mutex
-	repos map[int64][]github.InstallationRepo
-}
-
-func (f *fakeGitHub) set(installation int64, repos ...github.InstallationRepo) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.repos[installation] = repos
-}
-
-func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	w.Header().Set("Content-Type", "application/json")
-	switch {
-	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/access_tokens"):
-		token := "ghs_" + strings.Split(r.URL.Path, "/")[3]
-		json.NewEncoder(w).Encode(map[string]any{"token": token, "expires_at": time.Now().Add(time.Hour)}) //nolint:errcheck
-	case r.URL.Path == "/installation/repositories":
-		installation, err := strconv.ParseInt(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ghs_"), 10, 64)
-		if err != nil || r.URL.Query().Get("page") != "1" {
-			json.NewEncoder(w).Encode(map[string]any{"total_count": 0, "repositories": []any{}}) //nolint:errcheck
-			return
-		}
-		repos := f.repos[installation]
-		json.NewEncoder(w).Encode(map[string]any{"total_count": len(repos), "repositories": repos}) //nolint:errcheck
-	default:
-		http.NotFound(w, r)
-	}
-}
-
 type fixture struct {
 	db         *gorm.DB
 	store      installations.Store
-	github     *fakeGitHub
+	github     *githubtest.Server
 	orgA, orgB uuid.UUID
 	user       uuid.UUID
 }
+
+var acmeAccount = github.InstallationAccount{Login: "acme", Type: "Organization"}
 
 func newFixture(t *testing.T) fixture {
 	t.Helper()
@@ -80,22 +37,12 @@ func newFixture(t *testing.T) fixture {
 	t.Cleanup(func() { require.NoError(t, opened.Close()) })
 	db := opened.Gorm()
 
-	f := fixture{db: db, github: &fakeGitHub{repos: map[int64][]github.InstallationRepo{}}, orgA: uuid.New(), orgB: uuid.New(), user: uuid.New()}
+	f := fixture{db: db, github: githubtest.New(t), orgA: uuid.New(), orgB: uuid.New(), user: uuid.New()}
 	for _, org := range []uuid.UUID{f.orgA, f.orgB} {
 		require.NoError(t, db.Exec(`INSERT INTO orgs (id, issuer, clerk_org_id, name) VALUES (?, 'https://clerk.example', ?, 'Org')`, org, org.String()).Error)
 	}
 	require.NoError(t, db.Exec(`INSERT INTO users (id, issuer, clerk_user_id) VALUES (?, 'https://clerk.example', 'user_ada')`, f.user).Error)
-
-	server := httptest.NewServer(f.github)
-	t.Cleanup(server.Close)
-	t.Setenv("GITHUB_API_URL", server.URL)
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
-	require.NoError(t, err)
-	keyPath := filepath.Join(t.TempDir(), "app.pem")
-	require.NoError(t, os.WriteFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)}), 0o600))
-	app, err := github.LoadApp(123, "gavel", keyPath)
-	require.NoError(t, err)
-	f.store = installations.Store{DB: db, App: app}
+	f.store = installations.Store{DB: db, App: f.github.App(t)}
 	return f
 }
 
@@ -145,7 +92,7 @@ func TestSyncRepos(t *testing.T) {
 	ctx := context.Background()
 	require.NoError(t, f.store.Link(ctx, f.orgA, f.user, github.Installation{ID: 42, Account: github.InstallationAccount{Login: "acme", Type: "Organization"}}))
 
-	f.github.set(42, acme(1, "api"), acme(2, "web"), acme(3, "old"))
+	f.github.Install(42, acmeAccount, acme(1, "api"), acme(2, "web"), acme(3, "old"))
 	require.NoError(t, f.store.SyncRepos(ctx, f.orgA, 42))
 	assert.Equal(t, []string{"acme/api linked", "acme/old linked", "acme/web linked"}, f.repoRows(t, f.orgA))
 	names, err := f.store.Repos(ctx, f.orgA)
@@ -158,7 +105,7 @@ func TestSyncRepos(t *testing.T) {
 	require.NoError(t, f.db.Exec(`INSERT INTO sandbox_runs (id, org_id, repo_id, kind, status, backend) VALUES (?, ?, ?, 'test', 'succeeded', 'docker')`,
 		uuid.New(), f.orgA, web.ID).Error)
 
-	f.github.set(42, acme(1, "api-v2"), acme(4, "new"))
+	f.github.Install(42, acmeAccount, acme(1, "api-v2"), acme(4, "new"))
 	require.NoError(t, f.store.SyncRepos(ctx, f.orgA, 42))
 	assert.Equal(t, []string{"acme/api-v2 linked", "acme/new linked", "acme/web unlinked"}, f.repoRows(t, f.orgA),
 		"renamed in place, added, unreferenced removed, referenced kept without its installation")
@@ -167,7 +114,7 @@ func TestSyncRepos(t *testing.T) {
 	sort.Strings(names)
 	assert.Equal(t, []string{"acme/api-v2", "acme/new"}, names, "only repos an installation still grants")
 
-	f.github.set(42)
+	f.github.Install(42, acmeAccount)
 	require.NoError(t, f.store.SyncRepos(ctx, f.orgA, 42))
 	assert.Equal(t, []string{"acme/web unlinked"}, f.repoRows(t, f.orgA), "an installation that grants nothing keeps nothing")
 
@@ -182,8 +129,35 @@ func TestTokenSource(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "connect GitHub", "an org without an installation is told to connect one")
 
+	f.github.Install(42, acmeAccount)
 	require.NoError(t, f.store.Link(ctx, f.orgA, f.user, github.Installation{ID: 42, Account: github.InstallationAccount{Login: "acme"}}))
 	token, err := f.store.TokenSource(f.orgA)()
 	require.NoError(t, err)
 	assert.Equal(t, "ghs_42", token)
+}
+
+func TestReposByInstallation(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	for id, login := range map[int64]string{42: "acme", 43: "globex"} {
+		account := github.InstallationAccount{Login: login, Type: "Organization"}
+		f.github.Install(id, account, github.InstallationRepo{ID: id * 10, FullName: login + "/api"}, github.InstallationRepo{ID: id*10 + 1, FullName: login + "/web"})
+		require.NoError(t, f.store.Link(ctx, f.orgA, f.user, github.Installation{ID: id, Account: account}))
+		require.NoError(t, f.store.SyncRepos(ctx, f.orgA, id))
+	}
+
+	groups, err := f.store.ReposByInstallation(ctx, f.orgA)
+	require.NoError(t, err)
+	assert.Equal(t, []installations.InstallationRepos{
+		{Installation: 42, Repos: []string{"acme/api", "acme/web"}},
+		{Installation: 43, Repos: []string{"globex/api", "globex/web"}},
+	}, groups)
+
+	token, err := f.store.InstallationTokenSource(43)()
+	require.NoError(t, err)
+	assert.Equal(t, "ghs_43", token)
+
+	groups, err = f.store.ReposByInstallation(ctx, f.orgB)
+	require.NoError(t, err)
+	assert.Empty(t, groups)
 }

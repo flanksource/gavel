@@ -2143,6 +2143,45 @@ Clerk-mode manual checks:
     `--github-app-slug`, and `--github-app-private-key` (or
     `GAVEL_GITHUB_APP_PRIVATE_KEY_FILE`). They're refused without `--auth clerk`, and in clerk
     mode all three are required together, with the missing ones named.
+- **2026-10-15: M5.3 and M5.4 done.**
+  - `ui.GitHubLink` (`pr/ui/github_link.go`) serves `GET /api/github/install`,
+    `GET /api/github/setup` and `POST /api/github/sync`. `hostedDashboard` mounts it under
+    `/api/github/` behind the Authenticator when the App is configured.
+    - **Deviation:** `/setup` isn't a public path that re-verifies the session itself. It goes
+      through the Authenticator like any API call: GitHub's return is a top-level GET, so the
+      `__session` cookie (SameSite=Lax) arrives.
+    - Setup checks, in order:
+      - the state's signature and expiry (400);
+      - that the state's org and user are the request's (403, "started by another user or
+        organization");
+      - that `installation_id` is present (400; with `setup_action=request`, an owner must
+        approve first) and numeric;
+      - the user's GitHub token from Clerk, then `App.UserInstallations`, which must contain
+        the installation (403, "your GitHub account can't access installation N").
+    - Then `App.Installation`, `Store.Link` (409 when linked to another org), `SyncRepos`, and a
+      redirect to `/`.
+  - `Store.SyncAll` runs every 10 minutes per active org server (on the org's context) and on
+    `POST /api/github/sync`, which returns `{"repositories": [...]}`.
+  - The M5.4 factory: `ghOpts.TokenSource = store.TokenSource(org)` (first installation), and a
+    poller whose search (`orgPRSearch`) runs `github.SearchPRs` once per installation
+    (`Store.ReposByInstallation`), with that installation's token
+    (`Store.InstallationTokenSource`) and the org's cache, and merges the results. Closed PRs
+    and the bot filter follow the server's settings. Without the App flags, orgs keep the
+    "connect GitHub" token source.
+  - The snapshot's `viewer` (the `@me` filter) is the requesting member's `scope.GitHubLogin` in
+    `handleJSON`/`handleSSE` (`withViewer`). Locally it's still the token probe's login.
+  - UI: in clerk mode, `UserMenu` has a "Connect GitHub" link (`/api/github/install`) and the
+    GitHub scope chooser is hidden (`githubScopeVisible`): an org's repositories come from its
+    installations, and `/user/orgs` doesn't work with an App token.
+  - `github/githubtest` (new) is a fake GitHub App API: installation tokens, installations and
+    their repositories, `/user/installations` per user token, and a GraphQL PR search that
+    records the token and query it was asked with. The installations tests moved onto it.
+  - Tests: `TestGitHubLink` covers the redirect and state, every refusal, linking with sync, the
+    409, and sync; a mutation removing the user-access check is caught. `TestHostedGitHub` runs
+    the real stack: cookie sign-in, install redirect, setup linking installation 42, refresh,
+    the PR appearing with `viewer: ada`, and the search made with `ghs_42` over `repo:acme/api`.
+  - A combined `go test ./github/...` run hit the known commons-db shared-Postgres start race
+    once ("process already listening on port 7432"); the same run passed on repeat.
 - **2026-10-14: M5.1 `TokenSource` pulled forward into M3 (commit `7b87e94`).** Before M5, a
   hosted org's `Server` would have used the host's `GITHUB_TOKEN`, `GH_TOKEN` or `auth.json` for
   every PR call. `github.Options.TokenSource`, when set, is the only credential. The M3.2 factory
@@ -2173,8 +2212,8 @@ Clerk-mode manual checks:
 - [ ] M5.0 spike: GitHub App via Clerk
 - [x] M5.1 TokenSource (pulled into M3, `7b87e94`)
 - [x] M5.2 App tokens
-- [ ] M5.3 install linking plus repo sync
-- [ ] M5.4 org PR polling
+- [x] M5.3 install linking plus repo sync
+- [x] M5.4 org PR polling
 - [ ] M5.5 OIDC upload, `gavel ci upload`, action.yml (moved to PR 2, after M7)
 - [x] M6.1 SSH keys API/UI (plus CLI if M2.0 allows), `login --server`, `org use`
 - [x] M6.2 push server Authorizer, traversal fix, in-process SSH (no host hooks in clerk mode), tests

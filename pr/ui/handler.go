@@ -840,6 +840,15 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request, req routeR
 	writeExportResponse(w, r, report, req.Format)
 }
 
+// withViewer makes the requesting member the snapshot's viewer in an organization's
+// dashboard: its PRs are fetched with an App token, which has no user of its own.
+func withViewer(snap snapshot, r *http.Request) snapshot {
+	if scope := tenant.FromContext(r.Context()); !scope.IsLocal() {
+		snap.Viewer = scope.GitHubLogin
+	}
+	return snap
+}
+
 // snapshotLocked builds a snapshot using the already-held RLock. It does
 // NOT compute the unread map — that requires a database round-trip and is
 // populated by withUnread() outside the lock.
@@ -992,12 +1001,13 @@ func (s *Server) withSyncStatus(snap snapshot) snapshot {
 	return snap
 }
 
-func (s *Server) handleJSON(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleJSON(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
 	data := s.snapshotLocked()
 	s.mu.RUnlock()
 	data = s.withUnread(data)
 	data = s.withSyncStatus(data)
+	data = withViewer(data, r)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(data) //nolint:errcheck
@@ -1022,7 +1032,7 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 			s.mu.RLock()
 			data := s.snapshotLocked()
 			s.mu.RUnlock()
-			return s.withSyncStatus(s.withUnread(data)), nil
+			return withViewer(s.withSyncStatus(s.withUnread(data)), r), nil
 		},
 	})
 	if err != nil {
