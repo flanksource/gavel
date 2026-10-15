@@ -49,6 +49,23 @@ func TestServerScopesSeenPRsToItsOrg(t *testing.T) {
 	assert.Equal(t, map[string]bool{"acme/app#1": true}, other.UnreadMap(prs), "another org hasn't read it")
 }
 
+func TestServerIndexesPRsUnderItsOrg(t *testing.T) {
+	db, store, org := openOrgDB(t)
+	other := &Server{githubCache: store, knownBots: map[string]struct{}{}}
+	other.SetOrg(org, db)
+	require.NoError(t, other.SetResults(github.PRSearchResults{{
+		Repo: "acme/app", Number: 1, URL: "https://github.com/acme/app/pull/1", Title: "Fix", UpdatedAt: time.Now(),
+	}}, false))
+
+	key := ghcache.PRKey{Provider: "github", Repo: "acme/app", Number: 1}
+	indexed, err := store.ForOrg(org).GetPRs([]ghcache.PRKey{key})
+	require.NoError(t, err)
+	assert.Contains(t, indexed, key, "the org whose poller found the PR")
+	indexed, err = store.GetPRs([]ghcache.PRKey{key})
+	require.NoError(t, err)
+	assert.Empty(t, indexed, "the local org's index is untouched")
+}
+
 func TestOrgConfigPersistsToOrgSettings(t *testing.T) {
 	db, _, org := openOrgDB(t)
 	original := settingsPath
