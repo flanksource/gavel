@@ -95,6 +95,16 @@ func sortedEnv(env map[string]string) ([]string, error) {
 	return pairs, nil
 }
 
+// sortedKeys lists env's names in order.
+func sortedKeys(env map[string]string) []string {
+	keys := make([]string, 0, len(env))
+	for key := range env {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
 // cpuCores is a Kubernetes CPU quantity as a number of cores.
 func cpuCores(quantity string) (string, error) {
 	parsed, err := resource.ParseQuantity(quantity)
