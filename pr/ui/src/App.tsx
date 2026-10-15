@@ -131,7 +131,7 @@ export function App() {
   const [todoView, setTodoView] = useState(initialRoute.todoView);
   const authMode = currentAuthMode();
   const hostControls = hostControlsVisible(authMode);
-  const [activeTab, setActiveTab] = useState<Tab>(tabFor(authMode, initialRoute.tab));
+  const [activeTab, setActiveTab] = useState<Tab>(() => tabFor(authMode, initialRoute.tab));
   const [menubarTab, setMenubarTab] = useState<MobileTab>('prs');
   const [menubarSessionId, setMenubarSessionId] = useState('');
   const [paletteOpen, setPaletteOpen] = useState(false);
