@@ -68,7 +68,9 @@ var _ = Describe("fixture benchmarking", func() {
 		Expect(err).NotTo(HaveOccurred())
 		_, err = baseline.Run()
 		Expect(err).NotTo(HaveOccurred())
-		Expect(os.WriteFile(path, []byte("# Deviation\n\n```bash\nsleep 0.1\n```\n"), 0o600)).To(Succeed())
+		// Far slower than the baseline even when a loaded machine inflates the
+		// baseline's run time well past its 10ms sleep.
+		Expect(os.WriteFile(path, []byte("# Deviation\n\n```bash\nsleep 2\n```\n"), 0o600)).To(Succeed())
 		zero := 0.0
 		current, err := fixtures.NewRunner(fixtures.RunnerOptions{Paths: []string{path}, WorkDir: workDir, Benchmark: true,
 			Baseline: baseline.BenchmarkReport().Path, Limits: fixtures.BenchmarkLimits{MaxDeviationPct: &zero}})
