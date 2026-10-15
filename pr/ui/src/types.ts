@@ -308,6 +308,8 @@ export interface GavelResultsSummary {
   artifactUrl: string;
   testsPassed: number;
   testsFailed: number;
+  // testsTimedOut is the subset of testsFailed that timed out; omitted when zero.
+  testsTimedOut?: number;
   testsSkipped: number;
   testsTotal: number;
   lintViolations: number;

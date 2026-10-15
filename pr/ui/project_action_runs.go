@@ -2,10 +2,12 @@ package ui
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
 
+	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/snapshots"
 	testui "github.com/flanksource/gavel/testrunner/ui"
 )
@@ -41,6 +43,21 @@ func loadCompletedProjectActionSnapshot(workDir string, started time.Time, run *
 	snapshot, err := readProjectActionSnapshot(runs[0].Path)
 	if err == nil {
 		run.LoadSnapshot(*snapshot)
+	}
+}
+
+// serveProjectActionTraces reopens the store the finished run left, read-only,
+// so its Traces sections and Processes tab read it; the project-runs
+// MultiServer closes it as it evicts the run. A store that does not open is
+// the run's error.
+func serveProjectActionTraces(run *testui.Server) {
+	trace, err := testui.TraceRunOf(run.Snapshot().Metadata)
+	if err == nil && trace != nil {
+		err = run.ReopenTraces(*trace)
+	}
+	if err != nil {
+		logger.Errorf("serve a project action run's trace store: %v", err)
+		run.SetRunError(fmt.Errorf("serve the run's trace store: %w", err))
 	}
 }
 

@@ -7,13 +7,17 @@ import {
   type TestFilters,
 } from '@flanksource/clicky-ui/data';
 import { Button } from '@flanksource/clicky-ui/components';
-import { UiAdd, UiBeaker, UiWarningTriangle, type IconProps } from '@flanksource/clicky-ui/icons';
+import { UiAdd, UiBeaker, UiTerminal, UiWarningTriangle, type IconProps } from '@flanksource/clicky-ui/icons';
 import { CreateTodoFromRunDialog } from './CreateTodoFromRunDialog';
 import { LintResults } from './LintResults';
 import { buildRunFailureCandidates } from './RunFailureCandidates';
+import type { TracesStatus } from '@flanksource/gavel/testrunner';
+import { processMount } from '@flanksource/gavel/testrunner';
+import { RunProcesses, tracesAdapter } from './runTraces';
 import type { RunSnapshot } from './types';
 
 export function TestRunResults({
+  traces,
   snapshot,
   done,
   runKey,
@@ -29,11 +33,15 @@ export function TestRunResults({
   projectDir: string;
   onTodoCreated?: () => void;
   emptyMessage?: string;
+  // traces is the run's trace stores with their mounts as the dashboard serves them.
+  traces?: TracesStatus;
 }) {
   const [selected, setSelected] = useState<Test | null>(null);
   const [filters, setFilters] = useState<TestFilters>(emptyTestFilters());
   const [expandAll, setExpandAll] = useState<boolean | null>(null);
-  const [view, setView] = useState<'tests' | 'lint'>('tests');
+  const [view, setView] = useState<'tests' | 'lint' | 'processes'>('tests');
+  const adapters = useMemo(() => [tracesAdapter(traces)], [traces]);
+  const hasProcesses = Boolean(processMount(traces));
   const [todoOpen, setTodoOpen] = useState(false);
   const tests = snapshot.tests ?? [];
   const lint = useMemo(() => (snapshot.lint ?? []).filter(result => !result.skipped), [snapshot.lint]);
@@ -57,16 +65,25 @@ export function TestRunResults({
   return (
     <>
       <div className="flex h-full flex-col">
-        {(hasTests && hasLint || canCreateTodo) && (
+        {(hasTests && hasLint || hasProcesses || canCreateTodo) && (
           <div className="flex items-center gap-1 border-b border-border px-2 py-1.5">
-            {hasTests && hasLint && (
+            {(hasTests && hasLint || hasProcesses) && (
               <>
-                <ToggleButton active={view === 'tests'} onClick={() => setView('tests')} icon={UiBeaker}>
-                  Tests <Count>{summaryTotal(snapshot)}</Count>
-                </ToggleButton>
-                <ToggleButton active={view === 'lint'} onClick={() => setView('lint')} icon={UiWarningTriangle}>
-                  Lint <Count>{lintCount}</Count>
-                </ToggleButton>
+                {hasTests && (
+                  <ToggleButton active={view === 'tests'} onClick={() => setView('tests')} icon={UiBeaker}>
+                    Tests <Count>{summaryTotal(snapshot)}</Count>
+                  </ToggleButton>
+                )}
+                {hasLint && (
+                  <ToggleButton active={view === 'lint'} onClick={() => setView('lint')} icon={UiWarningTriangle}>
+                    Lint <Count>{lintCount}</Count>
+                  </ToggleButton>
+                )}
+                {hasProcesses && (
+                  <ToggleButton active={view === 'processes'} onClick={() => setView('processes')} icon={UiTerminal}>
+                    Processes
+                  </ToggleButton>
+                )}
               </>
             )}
             {canCreateTodo && (
@@ -77,8 +94,11 @@ export function TestRunResults({
           </div>
         )}
         <div className="min-h-0 flex-1">
-          {view === 'tests' && hasTests ? (
+          {view === 'processes' && traces ? (
+            <RunProcesses traces={traces} done={done} />
+          ) : view === 'tests' && hasTests ? (
             <TestRunner
+              adapters={adapters}
               tests={visible}
               selected={selected}
               filters={filters}

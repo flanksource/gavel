@@ -31,8 +31,21 @@ openai:
       text: '{"summary":"Planned a one-function greet package satisfying the existing test.","endStatus":"completed","planStatus":"new","planContent":"## Plan\n\n1. Add `greet/greet.go` with `func Greeting(name string) string` returning `\"hello \" + name`.\n2. Run `go test ./greet/...`; `greet/greet_test.go` already covers it.\n"}'
       finish_reason: stop
 
+  # run's auto-review: `permissions.mode: auto` hands the escalation request
+  # below to codex's auto-review subagent (model codex-auto-review), which asks
+  # for a strict-JSON verdict. First, because its transcript quotes the run
+  # prompt the next rule matches on.
+  - match:
+      prompt_contains: "whose request action you are assessing"
+    respond:
+      text: '{"outcome":"allow"}'
+      finish_reason: stop
+
   # run, turn 1: write the file the plan names, in the run worktree. codex's
-  # command tool is exec_command ({cmd}); it runs in the turn's cwd.
+  # command tool is exec_command ({cmd}); it runs in the turn's cwd. The run
+  # prompt's `permissions.mode: auto` leaves `codex exec` on its read-only
+  # sandbox with on-request approvals reviewed by codex's auto-review
+  # subagent, so a write has to ask for escalation, as a real model does.
   - match:
       prompt_contains: "You are implementing the todo item"
     respond:
@@ -42,6 +55,8 @@ openai:
         arguments:
           cmd: "mkdir -p greet && printf 'package greet\\n\\n// Greeting greets name.\\nfunc Greeting(name string) string { return \"hello \" + name }\\n' > greet/greet.go"
           login: false
+          sandbox_permissions: require_escalated
+          justification: "Write greet/greet.go, the file the approved plan adds."
       finish_reason: tool_calls
 
   # run, turn 2: the command's result came back; report completion.

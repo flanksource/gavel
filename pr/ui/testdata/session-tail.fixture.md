@@ -1,11 +1,12 @@
 ---
 cwd: $GIT_ROOT_DIR
 timeout: 10m
-record:
-  http:
-    paths: ["/api/captain/sessions/*", "/api/events", "/api/events/*/subs"]
-    bodies: 1MiB
-    requireEntries: 1
+traces:
+  - kind: http_proxy
+    params:
+      paths: ["/api/captain/sessions/*", "/api/events", "/api/events/*/subs"]
+      bodies: 1MiB
+    require: count > 0
 ---
 
 # Session inspector tails a live session
@@ -28,19 +29,19 @@ go run hack/session_tail_e2e.go -gavel .bin/gavel -messages 300
 
 The first read is the newest page: one `?tail=100` read returning 100 of the 300 messages.
 
-* cel: http.requests.filter(r, r.method == "GET" && r.path == "/api/captain/sessions/0199f0aa-7a11-7000-8000-00000000a11e" && "tail" in r.query).size() == 1
-* cel: http.requests.filter(r, r.method == "GET" && r.path == "/api/captain/sessions/0199f0aa-7a11-7000-8000-00000000a11e" && "tail" in r.query).all(r, r.query.tail == "100" && r.response_json.messages.size() == 100 && r.response_json.window.messages == 300 && r.response_size < 12000)
+* cel: http_proxy.requests.filter(r, r.method == "GET" && r.path == "/api/captain/sessions/0199f0aa-7a11-7000-8000-00000000a11e" && "tail" in r.query).size() == 1
+* cel: http_proxy.requests.filter(r, r.method == "GET" && r.path == "/api/captain/sessions/0199f0aa-7a11-7000-8000-00000000a11e" && "tail" in r.query).all(r, r.query.tail == "100" && r.response_json.messages.size() == 100 && r.response_json.window.messages == 300 && r.response_size < 12000)
 
 Every read is windowed, and scrolling up fetched at least the two pages of history before the tail, each at most one page of messages and bytes.
 
-* cel: http.requests.filter(r, r.method == "GET" && r.path == "/api/captain/sessions/0199f0aa-7a11-7000-8000-00000000a11e").all(r, "tail" in r.query || "before" in r.query || ("follow" in r.query && "after" in r.query))
-* cel: http.requests.filter(r, r.method == "GET" && r.path == "/api/captain/sessions/0199f0aa-7a11-7000-8000-00000000a11e" && "before" in r.query).size() >= 2
-* cel: http.requests.filter(r, r.method == "GET" && r.path == "/api/captain/sessions/0199f0aa-7a11-7000-8000-00000000a11e" && "before" in r.query).all(r, r.query.limit == "100" && r.response_json.messages.size() <= 100 && r.response_size < 12000)
+* cel: http_proxy.requests.filter(r, r.method == "GET" && r.path == "/api/captain/sessions/0199f0aa-7a11-7000-8000-00000000a11e").all(r, "tail" in r.query || "before" in r.query || ("follow" in r.query && "after" in r.query))
+* cel: http_proxy.requests.filter(r, r.method == "GET" && r.path == "/api/captain/sessions/0199f0aa-7a11-7000-8000-00000000a11e" && "before" in r.query).size() >= 2
+* cel: http_proxy.requests.filter(r, r.method == "GET" && r.path == "/api/captain/sessions/0199f0aa-7a11-7000-8000-00000000a11e" && "before" in r.query).all(r, r.query.limit == "100" && r.response_json.messages.size() <= 100 && r.response_size < 12000)
 
 The follow stream resumes after the newest message the tail returned, so the hub connection carries exactly the 5 appended messages and none of the 300 already loaded. The hub stream is captured whole (under the 1 MiB cap), so the count is not cut short.
 
-* cel: http.requests.filter(r, r.method == "POST" && r.body.contains("/api/captain/sessions/0199f0aa-7a11-7000-8000-00000000a11e")).size() > 0
-* cel: http.requests.filter(r, r.method == "POST" && r.body.contains("/api/captain/sessions/0199f0aa-7a11-7000-8000-00000000a11e")).all(r, r.body.contains("after=m-299"))
-* cel: http.requests.filter(r, r.method == "GET" && r.path == "/api/events").size() > 0
-* cel: http.requests.filter(r, r.method == "GET" && r.path == "/api/events").all(r, r.response_size < 1048576)
-* cel: http.requests.filter(r, r.method == "GET" && r.path == "/api/events").all(r, regexp.FindAll([r'event: s[0-9]+/entry\ndata: \{"id":"m-[0-9]+"', r.response_body]).size() == 5)
+* cel: http_proxy.requests.filter(r, r.method == "POST" && r.body.contains("/api/captain/sessions/0199f0aa-7a11-7000-8000-00000000a11e")).size() > 0
+* cel: http_proxy.requests.filter(r, r.method == "POST" && r.body.contains("/api/captain/sessions/0199f0aa-7a11-7000-8000-00000000a11e")).all(r, r.body.contains("after=m-299"))
+* cel: http_proxy.requests.filter(r, r.method == "GET" && r.path == "/api/events").size() > 0
+* cel: http_proxy.requests.filter(r, r.method == "GET" && r.path == "/api/events").all(r, r.response_size < 1048576)
+* cel: http_proxy.requests.filter(r, r.method == "GET" && r.path == "/api/events").all(r, regexp.FindAll([r'event: s[0-9]+/entry\ndata: \{"id":"m-[0-9]+"', r.response_body]).size() == 5)

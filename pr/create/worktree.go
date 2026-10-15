@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/flanksource/gavel/internal/safefs"
 )
 
 const (
@@ -106,8 +108,8 @@ func removeWorktree(repoRoot, path string) error {
 	if err := runGitVerbose(repoRoot, "worktree", "remove", "--force", path); err != nil {
 		return fmt.Errorf("git worktree remove %s: %w (leaving for manual cleanup)", path, err)
 	}
-	if err := os.RemoveAll(path); err != nil {
-		return fmt.Errorf("os.RemoveAll %s: %w", path, err)
+	if err := safefs.SafeRemove(path, safefs.RemoveContext{AllowedRoot: filepath.Join(repoRoot, scratchSub), Protected: []string{repoRoot}}); err != nil {
+		return fmt.Errorf("remove worktree %s: %w", path, err)
 	}
 	return nil
 }

@@ -133,6 +133,11 @@ func (s *Server) handleTestRun(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "failed to read run")
 		return
 	}
+	if data, err = s.withTestRunTraces(data); err != nil {
+		logger.Errorf("serve the trace store of test run %s: %v", path, err)
+		respondError(w, http.StatusInternalServerError, fmt.Sprintf("serve the run's trace store: %v", err))
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write(data)
 }

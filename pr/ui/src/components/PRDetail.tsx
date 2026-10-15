@@ -1,7 +1,7 @@
 import { useState, useMemo, useRef, useCallback, type ReactNode, type ComponentType } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import type { PRItem, PRDetail, PRComment, PRCommitInfo, PRFileInfo, GavelResultsSummary, Test, Project } from '../types';
-import { aggregateGavelShards, stateColor, reviewColor, severityIcon, extractCommentTitle, isDeploymentComment } from '../utils';
+import { aggregateGavelShards, failedTestsLabel, timedOutNote, stateColor, reviewColor, severityIcon, extractCommentTitle, isDeploymentComment } from '../utils';
 import { DetailPanel, LintView, TestNode, groupLintByLinterRuleFile } from '@flanksource/gavel/testrunner';
 import { CreateTodoFromPRDialog } from './todos/CreateTodoFromPRDialog';
 import { PRLinkedTodos } from './PRLinkedTodos';
@@ -77,7 +77,7 @@ function gavelLocation(file?: string, line?: number): string {
 function formatGavelText(g: GavelResultsSummary): string {
   const lines: string[] = [];
   if (g.testsTotal > 0) {
-    lines.push(`Tests: ${g.testsPassed} passed / ${g.testsFailed} failed / ${g.testsSkipped} skipped (total ${g.testsTotal})`);
+    lines.push(`Tests: ${g.testsPassed} passed / ${failedTestsLabel(g)} / ${g.testsSkipped} skipped (total ${g.testsTotal})`);
   }
   if (g.lintLinters > 0) {
     lines.push(`Lint: ${g.lintViolations} violations across ${g.lintLinters} linters`);
@@ -112,7 +112,7 @@ function formatGavelText(g: GavelResultsSummary): string {
 function formatGavelMarkdown(g: GavelResultsSummary): string {
   const lines: string[] = [];
   if (g.testsTotal > 0) {
-    lines.push(`- **Tests**: ✅ ${g.testsPassed} · ❌ ${g.testsFailed} · ⏭ ${g.testsSkipped} (total ${g.testsTotal})`);
+    lines.push(`- **Tests**: ✅ ${g.testsPassed} · ❌ ${g.testsFailed}${timedOutNote(g)} ·⏭ ${g.testsSkipped} (total ${g.testsTotal})`);
   }
   if (g.lintLinters > 0) {
     lines.push(`- **Lint**: ${g.lintViolations} violations across ${g.lintLinters} linters`);
@@ -987,7 +987,7 @@ function buildMetricCards(
       icon: UiError,
       label: 'Failed',
       value: results.testsFailed,
-      sub: results.testsFailed > 0 ? 'need triage' : 'none',
+      sub: results.testsFailed > 0 ? `need triage${timedOutNote(results)}` : 'none',
       tone: results.testsFailed > 0 ? 'fail' : 'neutral',
     });
     if (results.testsSkipped > 0) {
@@ -1175,7 +1175,7 @@ function ShardSummaryBadges({ g }: { g: GavelResultsSummary }) {
     items.push({ icon: UiPass, color: 'text-green-600', count: g.testsPassed, title: `${g.testsPassed} passed` });
   }
   if (g.testsFailed > 0) {
-    items.push({ icon: UiError, color: 'text-red-600', count: g.testsFailed, title: `${g.testsFailed} failed` });
+    items.push({ icon: UiError, color: 'text-red-600', count: g.testsFailed, title: failedTestsLabel(g) });
   }
   if (g.testsSkipped > 0) {
     items.push({ icon: UiDebugStepOver, color: 'text-muted-foreground', count: g.testsSkipped, title: `${g.testsSkipped} skipped` });

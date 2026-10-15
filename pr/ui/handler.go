@@ -75,6 +75,7 @@ type Server struct {
 	testRunSyncer  *TestRunSyncer
 	projectActions *projectActionRegistry
 	projectRuns    *testui.MultiServer
+	testRunStores  *testRunTraceStores
 	taskSource     *supervisorTaskSource
 	// prDeps overrides the GitHub PR and AI content calls of the project
 	// branch PR and squash-merge endpoints; nil uses prcreate.DefaultDeps.
@@ -516,6 +517,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/tests", s.handleTestRuns)
 	mux.HandleFunc("/api/tests/stream", s.handleTestRunsStream)
 	mux.HandleFunc("/api/tests/run", s.handleTestRun)
+	mux.Handle(testRunTracesPrefix+"/", s.testRunTraces())
 	mux.HandleFunc("/api/todos", s.handleTodos)
 	mux.HandleFunc("POST /api/todos/batch", s.handleTodoBatch)
 	mux.HandleFunc("POST /api/todos/new", s.handleTodoNew)

@@ -230,6 +230,54 @@ describe('Gavel Results section', () => {
     expect(screen.getByText('gavel lint --pr 57')).toBeTruthy();
   });
 
+  // Timed-out tests are already inside the failed count, so they annotate the
+  // failed figure rather than adding a separate total.
+  it('annotates the failed count with timed-out tests only when there are some', () => {
+    const { unmount } = renderPRDetail(
+      <PRDetailPanel
+        pr={makePR()}
+        detail={{ gavelResults: [makeGavelShard({ testsTotal: 12, testsPassed: 9, testsFailed: 3, testsTimedOut: 1 })] }}
+        loading={false}
+      />,
+    );
+
+    expect(screen.getByText('need triage (1 timed out)')).toBeTruthy();
+    unmount();
+
+    renderPRDetail(
+      <PRDetailPanel
+        pr={makePR()}
+        detail={{ gavelResults: [makeGavelShard({ testsTotal: 12, testsPassed: 9, testsFailed: 3 })] }}
+        loading={false}
+      />,
+    );
+
+    expect(screen.getByText('need triage')).toBeTruthy();
+    expect(screen.queryByText(/timed out/)).toBeNull();
+  });
+
+  it('sums timed-out tests across shards and annotates each shard badge', () => {
+    renderPRDetail(
+      <PRDetailPanel
+        pr={makePR()}
+        detail={{
+          gavelResults: [
+            makeGavelShard({ artifactId: 1, stickyId: 'gavel-test-pg15', testsTotal: 6, testsFailed: 3, testsTimedOut: 1 }),
+            makeGavelShard({ artifactId: 2, stickyId: 'gavel-test-pg16', testsTotal: 6, testsFailed: 2 }),
+          ],
+        }}
+        loading={false}
+      />,
+    );
+
+    expect(screen.getByText('need triage (1 timed out)')).toBeTruthy();
+
+    fireEvent.click(screen.getByText('Per-shard breakdown'));
+
+    expect(screen.getByTitle('3 failed (1 timed out)')).toBeTruthy();
+    expect(screen.getByTitle('2 failed')).toBeTruthy();
+  });
+
   it('omits the reproduce block for a shard with nothing to re-run', () => {
     renderPRDetail(
       <PRDetailPanel

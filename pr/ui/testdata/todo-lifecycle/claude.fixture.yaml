@@ -103,7 +103,7 @@ steps:
 
   - id: chrome
     kind: browser
-    profile: { fresh: true }
+    profile: {}
     # default exports: BROWSER_CDP_URL, BROWSER_WS_URL, BROWSER_SESSION, BROWSER_PROFILE_DIR
 
   - id: todo

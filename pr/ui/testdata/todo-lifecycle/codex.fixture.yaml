@@ -109,7 +109,7 @@ steps:
 
   - id: chrome
     kind: browser
-    profile: { fresh: true }
+    profile: {}
 
   - id: todo
     kind: todo

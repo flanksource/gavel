@@ -55,8 +55,14 @@ func (c *artifactCache) get(id int64) (*artifactEntry, bool) {
 func (c *artifactCache) put(id int64, e *artifactEntry) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	// Cap at 50 entries — simple eviction: drop everything when full
+	// Cap at 50 entries — simple eviction: drop everything when full, closing
+	// the trace stores the dropped runs reopened.
 	if len(c.entries) >= 50 {
+		for id, dropped := range c.entries {
+			if err := dropped.srv.CloseTraces(); err != nil {
+				logger.Errorf("close the trace stores of artifact %d: %v", id, err)
+			}
+		}
 		c.entries = make(map[int64]*artifactEntry)
 	}
 	c.entries[id] = e
@@ -85,6 +91,15 @@ func (s *Server) getOrCreateArtifact(artifactID int64, repo string) (*artifactEn
 	srv := testui.NewServer()
 	srv.LoadSnapshot(snap)
 	srv.MarkDone()
+	// A CI artifact names a store on the machine that ran it, so it is usually
+	// gone here and the run is served without it; a local one opens.
+	if run, err := testui.TraceRunOf(snap.Metadata); err != nil {
+		return nil, fmt.Errorf("artifact %d: %w", artifactID, err)
+	} else if run != nil {
+		if err := srv.ReopenTraces(*run); err != nil {
+			return nil, fmt.Errorf("artifact %d: %w", artifactID, err)
+		}
+	}
 
 	entry := &artifactEntry{
 		srv:     srv,
@@ -118,7 +133,7 @@ func (s *Server) handleGavelResults(w http.ResponseWriter, r *http.Request) {
 	prefix := fmt.Sprintf("/results/%s/%d", repo, artifactID)
 
 	// API and export routes: strip prefix and delegate to testui handler
-	if strings.HasPrefix(rest, "/api/") || isExportPath(rest) {
+	if strings.HasPrefix(rest, "/api/") || strings.HasPrefix(rest, testui.QueryMount+"/") || isExportPath(rest) {
 		http.StripPrefix(prefix, entry.handler).ServeHTTP(w, r)
 		return
 	}

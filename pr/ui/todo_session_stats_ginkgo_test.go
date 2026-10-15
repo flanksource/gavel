@@ -23,4 +23,22 @@ var _ = Describe("terminal question session statistics", func() {
 		Expect(stats.State).To(Equal("ask"))
 		Expect(stats.InProgress).To(BeFalse())
 	})
+
+	It("shows ask over stale transcript activity for a parked run", func() {
+		root := &captaindb.Session{ID: uuid.New(), Source: "gavel"}
+		transcript := &captaindb.Session{ID: uuid.New(), Source: "claude"}
+		store := fakeCaptainSessionStore{
+			run: root, transcript: transcript,
+			overview: &captaindb.SessionOverview{LifecycleStatus: "running", ActivityState: "working", ProcessActive: true},
+			runs: []captaindb.PromptRun{{
+				SessionID: root.ID, State: captaindb.PromptRunStateWaiting, Phase: captaindb.PromptRunPhaseGenerate,
+				ResultJSON: map[string]any{"endStatus": "ask"},
+			}},
+		}
+		stats, err := captainSessionStats(context.Background(), store, "provider-1", captainSessionResolution{run: root, transcript: transcript, known: true})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(stats.State).To(Equal("ask"))
+		Expect(stats.InProgress).To(BeFalse())
+		Expect(stats.Error).To(BeEmpty())
+	})
 })
