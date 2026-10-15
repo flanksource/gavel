@@ -122,7 +122,10 @@ func (p *PlaywrightJSON) toTest(spec pwSpec, suite []string) Test {
 	switch finalResult.Status {
 	case "passed":
 		t.Passed = true
-	case "failed", "timedOut", "interrupted":
+	case "timedOut":
+		t.Failed = true
+		t.TimedOut = true
+	case "failed", "interrupted":
 		t.Failed = true
 	case "skipped":
 		t.Skipped = true

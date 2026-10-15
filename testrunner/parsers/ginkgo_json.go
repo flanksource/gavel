@@ -78,15 +78,29 @@ type ginkgoFailure struct {
 
 // ginkgoSpecReport represents a single test spec in Ginkgo JSON format.
 type ginkgoSpecReport struct {
-	ContainerHierarchyTexts    []string       `json:"ContainerHierarchyTexts"`
-	LeafNodeText               string         `json:"LeafNodeText"`
-	LeafNodeLocation           ginkgoLocation `json:"LeafNodeLocation"`
-	State                      string         `json:"State"`
-	RunTime                    int64          `json:"RunTime"`
-	Failure                    *ginkgoFailure `json:"Failure"`
-	CapturedStdOutOutput       string         `json:"CapturedStdOutOutput"`
-	CapturedStdErrOutput       string         `json:"CapturedStdErrOutput"`
-	CapturedGinkgoWriterOutput string         `json:"CapturedGinkgoWriterOutput"`
+	ContainerHierarchyTexts    []string            `json:"ContainerHierarchyTexts"`
+	ContainerHierarchyLabels   [][]string          `json:"ContainerHierarchyLabels"`
+	LeafNodeText               string              `json:"LeafNodeText"`
+	LeafNodeLabels             []string            `json:"LeafNodeLabels"`
+	LeafNodeLocation           ginkgoLocation      `json:"LeafNodeLocation"`
+	State                      string              `json:"State"`
+	RunTime                    int64               `json:"RunTime"`
+	NumAttempts                int                 `json:"NumAttempts"`
+	ParallelProcess            int                 `json:"ParallelProcess"`
+	ReportEntries              []ginkgoReportEntry `json:"ReportEntries"`
+	Failure                    *ginkgoFailure      `json:"Failure"`
+	CapturedStdOutOutput       string              `json:"CapturedStdOutOutput"`
+	CapturedStdErrOutput       string              `json:"CapturedStdErrOutput"`
+	CapturedGinkgoWriterOutput string              `json:"CapturedGinkgoWriterOutput"`
+}
+
+type ginkgoReportEntry struct {
+	Name  string `json:"Name"`
+	Value struct {
+		AsJSON         string `json:"AsJSON"`
+		Representation string `json:"Representation"`
+	} `json:"Value"`
+	Location ginkgoLocation `json:"Location"`
 }
 
 // ginkoSuiteReport represents a complete test suite in Ginkgo JSON format.
@@ -130,6 +144,26 @@ func (p *GinkgoJSON) specReportToTest(spec ginkgoSpecReport, suite ginkgoSuiteRe
 	ctx := GinkgoContext{
 		SuiteDescription: suite.SuiteDescription,
 		SuitePath:        suite.SuitePath,
+		NumAttempts:      spec.NumAttempts,
+		ParallelProcess:  spec.ParallelProcess,
+	}
+	seenLabels := map[string]bool{}
+	for _, labels := range append(spec.ContainerHierarchyLabels, spec.LeafNodeLabels) {
+		for _, label := range labels {
+			if !seenLabels[label] {
+				ctx.Labels = append(ctx.Labels, label)
+				seenLabels[label] = true
+			}
+		}
+	}
+	for _, entry := range spec.ReportEntries {
+		ctx.ReportEntries = append(ctx.ReportEntries, GinkgoReportEntry{
+			Name:           entry.Name,
+			Value:          json.RawMessage(entry.Value.AsJSON),
+			Representation: entry.Value.Representation,
+			File:           p.relToWorkDir(entry.Location.FileName),
+			Line:           entry.Location.LineNumber,
+		})
 	}
 
 	stdout := spec.CapturedStdOutOutput
@@ -170,24 +204,44 @@ func (p *GinkgoJSON) specReportToTest(spec ginkgoSpecReport, suite ginkgoSuiteRe
 	switch spec.State {
 	case "passed":
 		test.Passed = true
-	case "failed":
+	// Every ginkgo failure state (types.SpecStateFailureStates). "interrupted"
+	// is a signal or another parallel process aborting; the JSON report does not
+	// expose a suite timeout as its cause, so it is not marked TimedOut.
+	case "failed", "timedout", "panicked", "aborted", "interrupted":
 		test.Failed = true
-		if spec.Failure != nil {
-			test.Message = spec.Failure.Message
-			test.FailureDetail = ParseFailureDetail(spec.Failure.Message)
-			failLoc := fmt.Sprintf("%s:%d", p.relToWorkDir(spec.Failure.Location.FileName), spec.Failure.Location.LineNumber)
-			testLoc := fmt.Sprintf("%s:%d", p.relToWorkDir(spec.LeafNodeLocation.FileName), spec.LeafNodeLocation.LineNumber)
-			if failLoc != testLoc {
-				ctx.FailureLocation = failLoc
-			}
-			if test.FailureDetail != nil && test.FailureDetail.Location == "" && ctx.FailureLocation != "" {
-				test.FailureDetail.Location = ctx.FailureLocation
-			}
-		}
+		test.TimedOut = spec.State == "timedout"
+		test.Aborted = spec.State == "aborted"
+		p.applyFailure(&test, &ctx, spec)
 	case "skipped", "pending":
 		test.Skipped = true
+	// SpecStateInvalid ("INVALID SPEC STATE") or a state a newer ginkgo adds:
+	// fail it so it can never read as passed or drop out of the counts.
+	default:
+		test.Failed = true
+		p.applyFailure(&test, &ctx, spec)
+		unknown := fmt.Sprintf("unknown ginkgo spec state %q", spec.State)
+		if test.Message != "" {
+			unknown += ": " + test.Message
+		}
+		test.Message = unknown
 	}
 
 	test.Context = ctx
 	return test
+}
+
+func (p *GinkgoJSON) applyFailure(test *Test, ctx *GinkgoContext, spec ginkgoSpecReport) {
+	if spec.Failure == nil {
+		return
+	}
+	test.Message = spec.Failure.Message
+	test.FailureDetail = ParseFailureDetail(spec.Failure.Message)
+	failLoc := fmt.Sprintf("%s:%d", p.relToWorkDir(spec.Failure.Location.FileName), spec.Failure.Location.LineNumber)
+	testLoc := fmt.Sprintf("%s:%d", p.relToWorkDir(spec.LeafNodeLocation.FileName), spec.LeafNodeLocation.LineNumber)
+	if failLoc != testLoc {
+		ctx.FailureLocation = failLoc
+	}
+	if test.FailureDetail != nil && test.FailureDetail.Location == "" && ctx.FailureLocation != "" {
+		test.FailureDetail.Location = ctx.FailureLocation
+	}
 }

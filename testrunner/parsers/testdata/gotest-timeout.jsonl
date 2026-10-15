@@ -1,0 +1,27 @@
+{"Action":"start","Package":"example.com/tmo"}
+{"Action":"run","Package":"example.com/tmo","Test":"TestFast"}
+{"Action":"output","Package":"example.com/tmo","Test":"TestFast","Output":"=== RUN   TestFast\n"}
+{"Action":"output","Package":"example.com/tmo","Test":"TestFast","Output":"--- PASS: TestFast (0.00s)\n"}
+{"Action":"pass","Package":"example.com/tmo","Test":"TestFast","Elapsed":0}
+{"Action":"run","Package":"example.com/tmo","Test":"TestSlow"}
+{"Action":"output","Package":"example.com/tmo","Test":"TestSlow","Output":"=== RUN   TestSlow\n"}
+{"Action":"run","Package":"example.com/tmo","Test":"TestSlow/sub"}
+{"Action":"output","Package":"example.com/tmo","Test":"TestSlow/sub","Output":"=== RUN   TestSlow/sub\n"}
+{"Action":"output","Package":"example.com/tmo","Test":"TestSlow/sub","Output":"panic: test timed out after 1s\n"}
+{"Action":"output","Package":"example.com/tmo","Test":"TestSlow/sub","Output":"\trunning tests:\n"}
+{"Action":"output","Package":"example.com/tmo","Test":"TestSlow/sub","Output":"\t\tTestSlow (1s)\n"}
+{"Action":"output","Package":"example.com/tmo","Test":"TestSlow/sub","Output":"\t\tTestSlow/sub (1s)\n"}
+{"Action":"output","Package":"example.com/tmo","Test":"TestSlow/sub","Output":"\n"}
+{"Action":"output","Package":"example.com/tmo","Test":"TestSlow/sub","Output":"goroutine 5 [running]:\n"}
+{"Action":"output","Package":"example.com/tmo","Test":"TestSlow/sub","Output":"\n"}
+{"Action":"output","Package":"example.com/tmo","Test":"TestSlow/sub","Output":"goroutine 1 [chan receive]:\n"}
+{"Action":"output","Package":"example.com/tmo","Test":"TestSlow/sub","Output":"\n"}
+{"Action":"output","Package":"example.com/tmo","Test":"TestSlow/sub","Output":"goroutine 19 [chan receive]:\n"}
+{"Action":"output","Package":"example.com/tmo","Test":"TestSlow/sub","Output":"example.com/tmo.TestSlow(0x14000092a80?)\n"}
+{"Action":"output","Package":"example.com/tmo","Test":"TestSlow/sub","Output":"\texample.com/tmo/a_test.go:11 +0x30\n"}
+{"Action":"output","Package":"example.com/tmo","Test":"TestSlow/sub","Output":"\n"}
+{"Action":"output","Package":"example.com/tmo","Test":"TestSlow/sub","Output":"goroutine 20 [sleep]:\n"}
+{"Action":"output","Package":"example.com/tmo","Test":"TestSlow/sub","Output":"example.com/tmo.TestSlow.func1(0x14000092c40?)\n"}
+{"Action":"output","Package":"example.com/tmo","Test":"TestSlow/sub","Output":"\texample.com/tmo/a_test.go:11 +0x28\n"}
+{"Action":"output","Package":"example.com/tmo","Output":"FAIL\texample.com/tmo\t1.010s\n"}
+{"Action":"fail","Package":"example.com/tmo","Elapsed":1.01}

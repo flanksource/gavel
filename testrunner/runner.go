@@ -30,6 +30,7 @@ import (
 	"github.com/flanksource/gavel/processruntime"
 	"github.com/flanksource/gavel/testrunner/parsers"
 	"github.com/flanksource/gavel/testrunner/runners"
+	"github.com/flanksource/gavel/traces"
 	"github.com/flanksource/gavel/utils"
 	"github.com/flanksource/gavel/verify"
 	"github.com/samber/lo"
@@ -127,7 +128,6 @@ type RunOptions struct {
 	WorkDir                  string                           `json:"work_dir,omitempty" yaml:"work-dir,omitempty" flag:"work-dir"`                              // Working directory to run tests in
 	DryRun                   bool                             `json:"dry_run,omitempty" yaml:"dry-run,omitempty" flag:"dry-run"`                                 // Show what tests would be executed without running them
 	Recursive                bool                             `json:"recursive,omitempty" yaml:"recursive,omitempty" flag:"recursive" default:"true"`            // Recursively discover test packages in subdirectories
-	PreBuild                 bool                             `json:"pre_build,omitempty" yaml:"pre-build,omitempty" flag:"pre-build" default:"true"`            // Compile all Go test binaries once before the timed run so per-package timeouts cover execution, not cold compilation. Disable with --pre-build=false.
 	Nodes                    int                              `json:"nodes,omitempty" yaml:"nodes,omitempty" flag:"nodes" short:"p"`                             // Number of parallel ginkgo nodes (0 = default, -1 = auto)
 	Concurrency              int                              `json:"concurrency,omitempty" yaml:"concurrency,omitempty" flag:"concurrency"`                     // Max test package subprocesses to run at once. 0 = auto-bounded default.
 	UI                       bool                             `json:"ui,omitempty" yaml:"-" flag:"ui"`                                                           // Launch browser with real-time task progress dashboard
@@ -150,6 +150,7 @@ type RunOptions struct {
 	FixtureFiles             []string                         `json:"fixture_files,omitempty" yaml:"fixture-files,omitempty" flag:"fixture-files"`               // Globs for fixture discovery. Overrides .gavel.yaml fixtures.files. Default: **/*.fixture.{md,yaml,yml,json}
 	FixturesOnly             bool                             `json:"-" yaml:"-"`                                                                                // Run only the supplied fixture runner without discovering ordinary test frameworks.
 	FixtureRunner            *fixtureOptions                  `json:"-" yaml:"-"`                                                                                // Direct fixture command options; nil uses normal fixture discovery.
+	TraceHost                *traces.Host                     `json:"-" yaml:"-"`                                                                                // The run's trace store, shared by the fixtures it runs; nil lets a fixture runner open its own when a fixture arms a trace.
 	FixtureBenchmarkProgress func(fixtures.ExecutionSnapshot) `json:"-" yaml:"-"`
 	FixtureBenchmarkResult   func(*fixtures.BenchmarkReport)  `json:"-" yaml:"-"`
 	Frameworks               []string                         `json:"frameworks,omitempty" yaml:"framework,omitempty" flag:"framework"` // Restrict execution to these frameworks (e.g. jest, vitest, playwright, go, ginkgo). Empty = run every detected framework. Unknown names hard-fail.
@@ -660,6 +661,7 @@ func runSingleRootWithUpdateOwnership(opts RunOptions, closeUpdates bool) (any, 
 	var fixtureErr error
 	if opts.FixtureRunner != nil {
 		opts.FixtureRunner.Context = opts.Context
+		opts.FixtureRunner.TraceHost = opts.TraceHost
 		opts.FixtureRunner.ProcessRuntime = opts.FixtureRunner.ProcessRuntime.Merge(opts.fixtureRuntime())
 		fixtureTests, err := t.runFixtureRunner(*opts.FixtureRunner)
 		if err != nil {
@@ -968,6 +970,9 @@ func (o *TestOrchestrator) detectAndRun(frameworks []Framework, startingPaths []
 	if err != nil {
 		return nil, err
 	}
+	if o.Nodes != 0 && o.Nodes != 1 {
+		return nil, fmt.Errorf("--nodes=%d is unsupported by the unified go test runner", o.Nodes)
+	}
 	// Validate that starting paths exist
 	if len(startingPaths) > 0 {
 		for _, path := range startingPaths {
@@ -1060,6 +1065,9 @@ func (o *TestOrchestrator) detectAndRun(frameworks []Framework, startingPaths []
 	cachedByFramework := map[Framework][]cacheHit{}
 	if o.Cache && o.selector != nil {
 		for fw, pkgs := range packagesByFramework {
+			if fw == parsers.GoTest || fw == parsers.Ginkgo {
+				continue
+			}
 			need, hits, err := o.selector.filterByRunCache(fw, pkgs)
 			if err != nil {
 				return nil, fmt.Errorf("run-cache filter for %s: %w", fw, err)
@@ -1094,16 +1102,7 @@ func (o *TestOrchestrator) detectAndRun(frameworks []Framework, startingPaths []
 
 	// If dry-run mode, display what would be executed and return early
 	if o.DryRun {
-		return o.displayDryRun(packagesByFramework, argsByFramework)
-	}
-
-	// Compile all Go test binaries up front so the per-package timeout below
-	// covers execution only. Heavy packages otherwise compile from a cold
-	// cache under concurrency and blow their deadline before any test runs.
-	if o.PreBuild {
-		if err := o.preBuildFrameworks(packagesByFramework); err != nil {
-			return nil, err
-		}
+		return o.displayDryRun(packagesByFramework, argsByFramework, o.unfocusedGoRun(startingPaths))
 	}
 
 	// Send pending package outline to UI before execution
@@ -1126,9 +1125,22 @@ func (o *TestOrchestrator) detectAndRun(frameworks []Framework, startingPaths []
 	// Keep package fanout bounded; CI runners can OOM when every package starts
 	// a Go/Ginkgo subprocess at once.
 	group := task.StartGroup[packageResult]("Running tests across packages", task.WithConcurrency(o.packageConcurrency()))
+	goBatches, err := o.planGoBatches(packagesByFramework, argsByFramework, o.unfocusedGoRun(startingPaths))
+	if err != nil {
+		return nil, err
+	}
+	for _, batch := range goBatches {
+		batch := batch
+		group.Add("go test", func(ctx commonsCtx.Context, t *task.Task) (packageResult, error) {
+			return o.runGoBatch(ctx, t, batch)
+		})
+	}
 
 	// Launch a task for each package per framework
 	for _, fw := range frameworks {
+		if fw == parsers.GoTest || fw == parsers.Ginkgo {
+			continue
+		}
 		packages := packagesByFramework[fw]
 		runner, ok := o.registry.Get(fw)
 		if !ok {
@@ -1861,7 +1873,7 @@ func (o *TestOrchestrator) parseReportFile(testRun *runners.TestRun) (parsers.Te
 }
 
 // displayDryRun shows what tests would be executed without running them.
-func (o *TestOrchestrator) displayDryRun(packagesByFramework map[Framework][]string, argsByFramework map[Framework][]string) (parsers.TestSuiteResults, error) {
+func (o *TestOrchestrator) displayDryRun(packagesByFramework map[Framework][]string, argsByFramework map[Framework][]string, unfocused bool) (parsers.TestSuiteResults, error) {
 	logger.Infof("🔍 Dry-run mode: showing what would be executed\n")
 
 	var totalPackages int
@@ -1871,8 +1883,22 @@ func (o *TestOrchestrator) displayDryRun(packagesByFramework map[Framework][]str
 
 	logger.Infof("Detected Frameworks: %s", clicky.CompactList(lo.Keys(packagesByFramework)).ANSI())
 	logger.Infof("Total Packages: %d\n", totalPackages)
+	goBatches, err := o.planGoBatches(packagesByFramework, argsByFramework, unfocused)
+	if err != nil {
+		return nil, err
+	}
+	for _, batch := range goBatches {
+		process, err := o.buildGoBatchCommand(batch)
+		if err != nil {
+			return nil, err
+		}
+		PrintDryRunCommand("test:go", fmt.Sprintf("%d packages", len(batch.packages)), process.Cmd, process.Args, process.Cwd)
+	}
 
 	for framework, packages := range packagesByFramework {
+		if framework == parsers.GoTest || framework == parsers.Ginkgo {
+			continue
+		}
 		runner, ok := o.registry.Get(framework)
 		if !ok {
 			continue
@@ -2023,7 +2049,7 @@ func (t *TestOrchestrator) runDiscoveredFixtures(globs []string) ([]parsers.Test
 	if err != nil {
 		return nil, err
 	}
-	return t.runFixtureRunner(fixtures.RunnerOptions{Context: opts.Context, ProcessRuntime: opts.fixtureRuntime(), Paths: fixtureFiles, WorkDir: opts.WorkDir, Logger: logger.StandardLogger(), ExecutablePath: execPath})
+	return t.runFixtureRunner(fixtures.RunnerOptions{Context: opts.Context, ProcessRuntime: opts.fixtureRuntime(), Paths: fixtureFiles, WorkDir: opts.WorkDir, Logger: logger.StandardLogger(), ExecutablePath: execPath, TraceHost: opts.TraceHost})
 
 }
 
@@ -2116,6 +2142,7 @@ func fixtureNodeToTestsWithFile(node *fixtures.FixtureNode, inheritedFile string
 				CELVars:       r.CELVars,
 				Expected:      r.Expected,
 				Actual:        r.Actual,
+				Traces:        r.Traces,
 			},
 		}
 		if r.Profile != nil {

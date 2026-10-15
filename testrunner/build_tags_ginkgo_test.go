@@ -37,12 +37,6 @@ var _ = Describe("build tags", func() {
 		Expect(err).To(MatchError(ContainSubstring("--tags is not supported")))
 	})
 
-	It("includes tags in the Go pre-build invocation", func() {
-		Expect(goPreBuildArgs([]string{"./api", "./store"}, []string{"integration", "postgres"})).To(
-			Equal([]string{"test", "-count=0", "-tags=integration,postgres", "./api", "./store"}),
-		)
-	})
-
 	It("salts run-cache fingerprints with tags", func() {
 		workDir := GinkgoT().TempDir()
 		Expect(os.WriteFile(filepath.Join(workDir, "go.mod"), []byte("module example.com/tags\n\ngo 1.24\n"), 0o644)).To(Succeed())

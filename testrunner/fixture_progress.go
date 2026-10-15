@@ -123,6 +123,9 @@ func executionNodeToTest(node *fixtures.ExecutionNode) parsers.Test {
 		test.File = node.Origin.File
 		test.Line = node.Origin.Line
 	}
+	if len(node.Traces) > 0 {
+		test.Context = parsers.FixtureContext{Traces: node.Traces}
+	}
 	for _, child := range node.Children {
 		test.Children = append(test.Children, executionNodeToTest(child))
 	}
@@ -131,7 +134,7 @@ func executionNodeToTest(node *fixtures.ExecutionNode) parsers.Test {
 		summary := parsers.Tests(test.Children).Sum()
 		test.Summary = &summary
 	} else if node.Kind != fixtures.ExecutionKindFile && node.Kind != fixtures.ExecutionKindSection && node.Kind != fixtures.ExecutionKindTable {
-		test.Fixture = &parsers.FixtureExecution{Key: node.Key, Kind: string(node.Kind), State: string(node.State)}
+		test.Fixture = &parsers.FixtureExecution{Key: node.Key, Kind: string(node.Kind), State: string(node.State), PIDs: node.PIDs}
 	}
 	if node.Total > 0 {
 		test.Progress = &parsers.TestProgress{Phase: string(node.Kind), Done: node.Done, Total: node.Total}

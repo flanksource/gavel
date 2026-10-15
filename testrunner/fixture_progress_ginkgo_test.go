@@ -3,6 +3,7 @@ package testrunner
 import (
 	"time"
 
+	"github.com/flanksource/commons-db/tracing"
 	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/testrunner/parsers"
 	. "github.com/onsi/ginkgo/v2"
@@ -43,5 +44,17 @@ var _ = Describe("fixture progress adapter", func() {
 		Expect(tests[1].Children[0].Progress).To(Equal(&parsers.TestProgress{Phase: "test", Done: 3, Total: 8}))
 		Expect(tests[1].Children[1].Pending).To(BeTrue())
 		Expect(tests[1].Children[0].TaskID).To(Equal("tests"))
+	})
+
+	It("carries a finished fixture's trace windows into its context, so the UI links them", func() {
+		windows := []parsers.TraceResult{{TraceRef: tracing.TraceRef{Kind: "terminal", Stream: "s1", ToSeq: 3}, Count: 3}}
+		snapshot := fixtures.ExecutionSnapshot{Root: &fixtures.ExecutionNode{
+			Key: "fixtures", Kind: fixtures.ExecutionKindRoot, State: fixtures.ExecutionPassed,
+			Children: []*fixtures.ExecutionNode{{
+				Key: "hello", Name: "hello", Kind: fixtures.ExecutionKindCommand, State: fixtures.ExecutionPassed, Traces: windows,
+			}},
+		}}
+
+		Expect(executionSnapshotToTests(snapshot)[0].Context).To(Equal(parsers.FixtureContext{Traces: windows}))
 	})
 })

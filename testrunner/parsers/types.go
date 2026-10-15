@@ -1,6 +1,7 @@
 package parsers
 
 import (
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -10,6 +11,7 @@ import (
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/clicky/api/icons"
+	"github.com/flanksource/commons-db/tracing"
 	"github.com/flanksource/commons/logger"
 	"github.com/samber/lo"
 )
@@ -135,6 +137,9 @@ type FixtureExecution struct {
 	State      string   `json:"state"`
 	CommandMS  *float64 `json:"command_ms,omitempty"`
 	Violations []string `json:"violations,omitempty"`
+	// PIDs are the processes the fixture started, which the UI links to the
+	// process trace by pid.
+	PIDs []int `json:"pids,omitempty"`
 }
 
 type FixtureProfile struct {
@@ -223,9 +228,21 @@ type GoTestContext struct {
 }
 
 type GinkgoContext struct {
-	SuiteDescription string `json:"suite_description,omitempty"`
-	SuitePath        string `json:"suite_path,omitempty"`
-	FailureLocation  string `json:"failure_location,omitempty"`
+	SuiteDescription string              `json:"suite_description,omitempty"`
+	SuitePath        string              `json:"suite_path,omitempty"`
+	FailureLocation  string              `json:"failure_location,omitempty"`
+	Labels           []string            `json:"labels,omitempty"`
+	NumAttempts      int                 `json:"num_attempts,omitempty"`
+	ParallelProcess  int                 `json:"parallel_process,omitempty"`
+	ReportEntries    []GinkgoReportEntry `json:"report_entries,omitempty"`
+}
+
+type GinkgoReportEntry struct {
+	Name           string          `json:"name"`
+	Value          json.RawMessage `json:"value,omitempty"`
+	Representation string          `json:"representation,omitempty"`
+	File           string          `json:"file,omitempty"`
+	Line           int             `json:"line,omitempty"`
 }
 
 type BenchmarkResult struct {
@@ -263,6 +280,22 @@ type FixtureContext struct {
 	CELVars       map[string]any `json:"cel_vars,omitempty"`
 	Expected      any            `json:"expected,omitempty"`
 	Actual        any            `json:"actual,omitempty"`
+	// Traces are the windows of the traces the fixture armed, read from the
+	// run's trace store through the UI's query mount.
+	Traces []TraceResult `json:"traces,omitempty"`
+}
+
+// TraceResult is one armed trace's window of a fixture: the TraceRef that
+// reads it from the run's store, its record count and the kind's summary of
+// it, or the error that kept it from being read.
+type TraceResult struct {
+	tracing.TraceRef
+	// RunID names the run whose store holds the window, .gavel/traces/<run_id>,
+	// so a UI showing several runs opens it in the right one.
+	RunID   string         `json:"run_id"`
+	Count   int            `json:"count"`
+	Summary map[string]any `json:"summary,omitempty"`
+	Error   string         `json:"error,omitempty"`
 }
 
 func (t Test) IsFolder() bool {
@@ -544,6 +577,11 @@ func (tr Test) Sum() TestSummary {
 	} else {
 		summary.Total = 0
 	}
+	// A parent is flagged TimedOut by propagation from its leaves; count only
+	// the leaves so one timeout is not counted twice.
+	if tr.TimedOut && len(tr.Children) == 0 {
+		summary.TimedOut = 1
+	}
 
 	for _, child := range tr.Children {
 		childSummary := child.Sum()
@@ -555,6 +593,7 @@ func (tr Test) Sum() TestSummary {
 		summary.Skipped += childSummary.Skipped
 		summary.Pending += childSummary.Pending
 		summary.Running += childSummary.Running
+		summary.TimedOut += childSummary.TimedOut
 		summary.Duration += childSummary.Duration
 	}
 
@@ -673,6 +712,8 @@ func (results TestSuiteResults) Sort() {
 	})
 }
 
+// TestSummary counts tests per outcome. TimedOut is a subset of Failed (a
+// timed-out leaf is also failed), not a separate bucket of Total.
 type TestSummary struct {
 	Total    int
 	Passed   int
@@ -682,6 +723,7 @@ type TestSummary struct {
 	Skipped  int
 	Pending  int
 	Running  int
+	TimedOut int
 	Duration time.Duration
 }
 
@@ -693,6 +735,9 @@ func (s TestSummary) Pretty() api.Text {
 	}
 	if s.Failed > 0 {
 		t = t.Add(clicky.KeyValue(" failed", s.Failed, "text-red-500")).Append(" ")
+	}
+	if s.TimedOut > 0 {
+		t = t.Add(clicky.KeyValue(" timed out", s.TimedOut, "text-amber-600")).Append(" ")
 	}
 	if s.Warned > 0 {
 		t = t.Add(clicky.KeyValue(" warned", s.Warned, "text-amber-500")).Append(" ")
@@ -724,6 +769,7 @@ func (tr TestSummary) Add(other TestSummary) TestSummary {
 		Skipped:  tr.Skipped + other.Skipped,
 		Pending:  tr.Pending + other.Pending,
 		Running:  tr.Running + other.Running,
+		TimedOut: tr.TimedOut + other.TimedOut,
 		Duration: tr.Duration + other.Duration,
 	}
 }
@@ -774,10 +820,16 @@ func (tr Test) Filter(filter TestFilter) Test {
 		Aborted:           tr.Aborted,
 		Skipped:           tr.Skipped,
 		Passed:            tr.Passed,
+		Cached:            tr.Cached,
+		TimedOut:          tr.TimedOut,
 		Stdout:            tr.Stdout,
 		Stderr:            tr.Stderr,
 		Framework:         tr.Framework,
+		Context:           tr.Context,
+		Detail:            tr.Detail,
 		Benchmark:         tr.Benchmark,
+		FailureDetail:     tr.FailureDetail,
+		Attempts:          tr.Attempts,
 		IsGinkgoBootstrap: tr.IsGinkgoBootstrap,
 		// Set summary before filtering to maintain summary even if child tests are filtered out
 		Summary: lo.ToPtr(tr.Sum()),
