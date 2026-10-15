@@ -139,7 +139,12 @@ func TestTokenSource(t *testing.T) {
 func TestReposByInstallation(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()
-	for id, login := range map[int64]string{42: "acme", 43: "globex"} {
+	// Linked in this order: groups come oldest-linked first.
+	for _, install := range []struct {
+		id    int64
+		login string
+	}{{42, "acme"}, {43, "globex"}} {
+		id, login := install.id, install.login
 		account := github.InstallationAccount{Login: login, Type: "Organization"}
 		f.github.Install(id, account, github.InstallationRepo{ID: id * 10, FullName: login + "/api"}, github.InstallationRepo{ID: id*10 + 1, FullName: login + "/web"})
 		require.NoError(t, f.store.Link(ctx, f.orgA, f.user, github.Installation{ID: id, Account: account}))
