@@ -1,11 +1,12 @@
+import { useState } from 'react';
 import { ListMenu, ListMenuHeader, ListMenuSection } from '@flanksource/clicky-ui/components';
 import { useProcStatus } from '../procStatusQuery';
 import type { PRItem, PRSyncStatus, GavelResultsSummary, Project } from '../types';
 import { PRRow } from './PRRow';
 import { ProcControl } from './ProcControl';
-import { groupByOrg, prKey, computeCounts } from '../utils';
+import { groupByOrg, prKey, computeCounts, type RepoGroup } from '../utils';
 import { Avatar } from './Avatar';
-import { UiError, UiGitPr } from '@flanksource/clicky-ui/icons';
+import { UiChevronDown, UiChevronRight, UiError, UiGitPr } from '@flanksource/clicky-ui/icons';
 import { RepoIcon } from './RepoIcon';
 import { TodoBadge } from './TodoBadge';
 import { GitChangesBadge } from './GitChangesBadge';
@@ -43,7 +44,6 @@ function GroupCounts({ items }: { items: PRItem[] }) {
 }
 
 export function PRList({ prs, selected, onSelect, unread, syncStatus, gavelResults, projectsByRepo, onProcChanged }: Props) {
-  const procStatus = useProcStatus();
   if (prs.length === 0) {
     return (
       <div className="p-6 text-center text-muted-foreground">
@@ -75,54 +75,87 @@ export function PRList({ prs, selected, onSelect, unread, syncStatus, gavelResul
             </ListMenuHeader>
           )}
           {og.repos.map(group => (
-            <div key={group.repo}>
-              <ListMenuHeader className="top-9 z-10 pl-6">
-                <a
-                  href={`https://github.com/${group.repo}`}
-                  target="_blank"
-                  rel="noopener"
-                  className="inline-flex shrink-0"
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  <RepoIcon repo={group.repo} homepageUrl={group.repoHomepageUrl} size={20} />
-                </a>
-                <a
-                  href={`https://github.com/${group.repo}`}
-                  target="_blank"
-                  rel="noopener"
-                  onClick={(e) => e.stopPropagation()}
-                  className="text-sm font-medium text-foreground truncate min-w-0 flex-1 hover:underline"
-                  title={group.repo}
-                >
-                  {group.repoShort}
-                </a>
-                {onProcChanged && (
-                  <ProcControl
-                    repo={group.repo}
-                    project={projectsByRepo?.[group.repo]}
-                    status={procStatus?.[group.repo]}
-                    onChanged={onProcChanged}
-                  />
-                )}
-                <TodoBadge counts={projectsByRepo?.[group.repo]?.todoCounts} />
-                <GitChangesBadge count={procStatus?.[group.repo]?.gitChanges} />
-                <GroupCounts items={group.items} />
-              </ListMenuHeader>
-              {group.items.map(pr => (
-                <PRRow
-                  key={prKey(pr)}
-                  pr={pr}
-                  selected={selected?.repo === pr.repo && selected?.number === pr.number}
-                  unread={!!unread?.[prKey(pr)]}
-                  syncStatus={syncStatus?.[prKey(pr)]}
-                  gavelResults={gavelResults?.[prKey(pr)]}
-                  onClick={() => onSelect(pr)}
-                />
-              ))}
-            </div>
+            <RepoSection
+              key={group.repo}
+              group={group}
+              selected={selected}
+              onSelect={onSelect}
+              unread={unread}
+              syncStatus={syncStatus}
+              gavelResults={gavelResults}
+              projectsByRepo={projectsByRepo}
+              onProcChanged={onProcChanged}
+            />
           ))}
         </ListMenuSection>
       ))}
     </ListMenu>
+  );
+}
+
+type RepoSectionProps = Omit<Props, 'prs'> & { group: RepoGroup };
+
+// RepoSection is one repository's header and pull requests; the arrow beside the
+// repository hides its pull requests, keeping the header and counts.
+function RepoSection({ group, selected, onSelect, unread, syncStatus, gavelResults, projectsByRepo, onProcChanged }: RepoSectionProps) {
+  const procStatus = useProcStatus();
+  const [open, setOpen] = useState(true);
+  const Chevron = open ? UiChevronDown : UiChevronRight;
+  return (
+    <div>
+      <ListMenuHeader className="top-9 z-10 pl-2">
+        <button
+          type="button"
+          onClick={() => setOpen(o => !o)}
+          aria-expanded={open}
+          aria-label={`${open ? 'Collapse' : 'Expand'} ${group.repo}`}
+          title={open ? 'Collapse' : 'Expand'}
+          className="inline-flex shrink-0 items-center text-xs text-muted-foreground hover:text-foreground"
+        >
+          <Chevron />
+        </button>
+        <a
+          href={`https://github.com/${group.repo}`}
+          target="_blank"
+          rel="noopener"
+          className="inline-flex shrink-0"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <RepoIcon repo={group.repo} homepageUrl={group.repoHomepageUrl} size={20} />
+        </a>
+        <a
+          href={`https://github.com/${group.repo}`}
+          target="_blank"
+          rel="noopener"
+          onClick={(e) => e.stopPropagation()}
+          className="text-sm font-medium text-foreground truncate min-w-0 flex-1 hover:underline"
+          title={group.repo}
+        >
+          {group.repoShort}
+        </a>
+        {onProcChanged && (
+          <ProcControl
+            repo={group.repo}
+            project={projectsByRepo?.[group.repo]}
+            status={procStatus?.[group.repo]}
+            onChanged={onProcChanged}
+          />
+        )}
+        <TodoBadge counts={projectsByRepo?.[group.repo]?.todoCounts} />
+        <GitChangesBadge count={procStatus?.[group.repo]?.gitChanges} />
+        <GroupCounts items={group.items} />
+      </ListMenuHeader>
+      {open && group.items.map(pr => (
+        <PRRow
+          key={prKey(pr)}
+          pr={pr}
+          selected={selected?.repo === pr.repo && selected?.number === pr.number}
+          unread={!!unread?.[prKey(pr)]}
+          syncStatus={syncStatus?.[prKey(pr)]}
+          gavelResults={gavelResults?.[prKey(pr)]}
+          onClick={() => onSelect(pr)}
+        />
+      ))}
+    </div>
   );
 }
