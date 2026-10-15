@@ -133,9 +133,11 @@ func TestDispatcherRunsAJobToItsOutcome(t *testing.T) {
 	assert.Equal(t, "go test ./...\nFAIL\n", string(stored))
 	assert.Equal(t, "go test ./...\nFAIL\n", streamed.String(), "the log is also streamed to the caller")
 
-	spec, err := dispatcher.Spec(ctx, run.ID)
+	record, err := LoadRun(ctx, db, run.ID)
 	require.NoError(t, err)
-	assert.Equal(t, RunSpec{Kind: "test", Args: []string{"./..."}, RepoID: repo, Ref: "refs/heads/main", SHA: "abc123"}, spec)
+	assert.Equal(t, RunRecord{ID: run.ID, Org: org, Spec: RunSpec{Kind: "test", Args: []string{"./..."}, RepoID: repo, Ref: "refs/heads/main", SHA: "abc123"}}, record)
+	_, err = LoadRun(ctx, db, uuid.New())
+	assert.ErrorIs(t, err, ErrRunNotFound)
 
 	require.Len(t, executor.submitted, 1)
 	job := executor.submitted[0]

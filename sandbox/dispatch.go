@@ -159,21 +159,31 @@ func (d *Dispatcher) finish(ctx context.Context, id uuid.UUID, status string, ex
 	}
 }
 
-// Spec is the RunSpec run id was started with.
-func (d *Dispatcher) Spec(ctx context.Context, id uuid.UUID) (RunSpec, error) {
-	var row struct{ Spec string }
-	result := d.DB.WithContext(ctx).Raw(`SELECT spec::text AS spec FROM sandbox_runs WHERE id = ?`, id).Scan(&row)
+// RunRecord is what the run API needs of a run: its organization and spec.
+type RunRecord struct {
+	ID   uuid.UUID
+	Org  uuid.UUID
+	Spec RunSpec
+}
+
+// LoadRun reads run id's organization and spec.
+func LoadRun(ctx context.Context, db *gorm.DB, id uuid.UUID) (RunRecord, error) {
+	var row struct {
+		OrgID uuid.UUID
+		Spec  string
+	}
+	result := db.WithContext(ctx).Raw(`SELECT org_id, spec::text AS spec FROM sandbox_runs WHERE id = ?`, id).Scan(&row)
 	if result.Error != nil {
-		return RunSpec{}, fmt.Errorf("read sandbox run %s: %w", id, result.Error)
+		return RunRecord{}, fmt.Errorf("read sandbox run %s: %w", id, result.Error)
 	}
 	if result.RowsAffected == 0 {
-		return RunSpec{}, fmt.Errorf("%w: sandbox run %s", ErrRunNotFound, id)
+		return RunRecord{}, fmt.Errorf("%w: sandbox run %s", ErrRunNotFound, id)
 	}
 	var spec RunSpec
 	if err := json.Unmarshal([]byte(row.Spec), &spec); err != nil {
-		return RunSpec{}, fmt.Errorf("decode the spec of sandbox run %s: %w", id, err)
+		return RunRecord{}, fmt.Errorf("decode the spec of sandbox run %s: %w", id, err)
 	}
-	return spec, nil
+	return RunRecord{ID: id, Org: row.OrgID, Spec: spec}, nil
 }
 
 // ErrRunNotFound reports a run ID with no sandbox_runs record.

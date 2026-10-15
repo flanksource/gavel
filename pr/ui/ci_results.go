@@ -66,6 +66,12 @@ func (c *CIResults) handleUpload(w http.ResponseWriter, r *http.Request) {
 		writeCIError(w, http.StatusForbidden, fmt.Sprintf("%s (%d) is not linked to a gavel organization; install the gavel GitHub App on it", claims.Repository, claims.RepositoryID))
 		return
 	}
+	storeResults(w, r, c.Cache, repo.OrgID, repo.ID, claims.SHA, claims.Repository)
+}
+
+// storeResults reads a snapshot of up to 50 MB from r and stores it as a run of repoID in org,
+// answering 201 with its run ID.
+func storeResults(w http.ResponseWriter, r *http.Request, store *cache.Store, org, repoID uuid.UUID, sha, what string) {
 	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxCIResultsBytes))
 	var tooLarge *http.MaxBytesError
 	if errors.As(err, &tooLarge) {
@@ -81,9 +87,9 @@ func (c *CIResults) handleUpload(w http.ResponseWriter, r *http.Request) {
 		writeCIError(w, http.StatusBadRequest, fmt.Sprintf("decode the results as a gavel snapshot: %v", err))
 		return
 	}
-	runID, err := ingestRunSnapshot(r.Context(), c.Cache, repo.OrgID, repo.ID, claims.SHA, data, snap)
+	runID, err := ingestRunSnapshot(r.Context(), store, org, repoID, sha, data, snap)
 	if err != nil {
-		logger.Warnf("store CI results for %s: %v", claims.Repository, err)
+		logger.Warnf("store results for %s: %v", what, err)
 		writeCIError(w, http.StatusInternalServerError, "could not store the results")
 		return
 	}

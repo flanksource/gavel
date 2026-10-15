@@ -1,0 +1,86 @@
+// The run API sandbox jobs call back to: their spec and their results, authenticated only by the
+// run token the dispatcher gave the job, for that run alone.
+package ui
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/github/cache"
+	"github.com/flanksource/gavel/sandbox"
+	"github.com/google/uuid"
+	"gorm.io/gorm"
+)
+
+// RunsAPI serves /api/runs/{id}/... to sandbox jobs. It is mounted outside the Clerk middleware.
+type RunsAPI struct {
+	DB       *gorm.DB
+	TokenKey []byte
+	Cache    *cache.Store
+}
+
+// Handler routes the run API.
+func (a *RunsAPI) Handler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/runs/{id}/spec", a.withRun(a.handleSpec))
+	mux.HandleFunc("POST /api/runs/{id}/results", a.withRun(a.handleResults))
+	return mux
+}
+
+// withRun authenticates the run token, which must be for the run in the path, and loads the run.
+func (a *RunsAPI) withRun(next func(http.ResponseWriter, *http.Request, sandbox.RunRecord)) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, err := uuid.Parse(r.PathValue("id"))
+		if err != nil {
+			writeCIError(w, http.StatusBadRequest, fmt.Sprintf("%q is not a run id", r.PathValue("id")))
+			return
+		}
+		raw, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+		if !ok || raw == "" {
+			writeCIError(w, http.StatusUnauthorized, "send the job's run token as Authorization: Bearer")
+			return
+		}
+		tokenRun, tokenOrg, err := sandbox.VerifyRunToken(a.TokenKey, raw, time.Now())
+		if err != nil {
+			writeCIError(w, http.StatusUnauthorized, err.Error())
+			return
+		}
+		if tokenRun != id {
+			writeCIError(w, http.StatusForbidden, fmt.Sprintf("this run token is for run %s, not %s", tokenRun, id))
+			return
+		}
+		run, err := sandbox.LoadRun(r.Context(), a.DB, id)
+		if errors.Is(err, sandbox.ErrRunNotFound) {
+			writeCIError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		if err != nil {
+			logger.Warnf("load sandbox run %s: %v", id, err)
+			writeCIError(w, http.StatusInternalServerError, "could not read the run")
+			return
+		}
+		if run.Org != tokenOrg {
+			writeCIError(w, http.StatusForbidden, fmt.Sprintf("run %s belongs to another organization", id))
+			return
+		}
+		next(w, r, run)
+	}
+}
+
+func (a *RunsAPI) handleSpec(w http.ResponseWriter, _ *http.Request, run sandbox.RunRecord) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(run.Spec)
+}
+
+func (a *RunsAPI) handleResults(w http.ResponseWriter, r *http.Request, run sandbox.RunRecord) {
+	if run.Spec.RepoID == uuid.Nil {
+		writeCIError(w, http.StatusBadRequest, fmt.Sprintf("run %s has no repository to store results under", run.ID))
+		return
+	}
+	storeResults(w, r, a.Cache, run.Org, run.Spec.RepoID, run.Spec.SHA, "sandbox run "+run.ID.String())
+}
