@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ListMenu, ListMenuHeader, ListMenuSection } from '@flanksource/clicky-ui/components';
+import { IconButton, ListMenu, ListMenuHeader, ListMenuSection } from '@flanksource/clicky-ui/components';
 import { useProcStatus } from '../procStatusQuery';
 import type { PRItem, PRSyncStatus, GavelResultsSummary, Project } from '../types';
 import { PRRow } from './PRRow';
@@ -100,20 +100,16 @@ type RepoSectionProps = Omit<Props, 'prs'> & { group: RepoGroup };
 function RepoSection({ group, selected, onSelect, unread, syncStatus, gavelResults, projectsByRepo, onProcChanged }: RepoSectionProps) {
   const procStatus = useProcStatus();
   const [open, setOpen] = useState(true);
-  const Chevron = open ? UiChevronDown : UiChevronRight;
   return (
     <div>
       <ListMenuHeader className="top-9 z-10 pl-2">
-        <button
-          type="button"
-          onClick={() => setOpen(o => !o)}
+        <IconButton
+          icon={open ? UiChevronDown : UiChevronRight}
+          label={`${open ? 'Collapse' : 'Expand'} ${group.repo}`}
           aria-expanded={open}
-          aria-label={`${open ? 'Collapse' : 'Expand'} ${group.repo}`}
-          title={open ? 'Collapse' : 'Expand'}
-          className="inline-flex shrink-0 items-center text-xs text-muted-foreground hover:text-foreground"
-        >
-          <Chevron />
-        </button>
+          onClick={() => setOpen(o => !o)}
+          className="shrink-0 text-xs text-muted-foreground hover:text-foreground"
+        />
         <a
           href={`https://github.com/${group.repo}`}
           target="_blank"

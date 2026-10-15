@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useAuth } from '@clerk/react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Modal } from '@flanksource/clicky-ui/components';
+import { Button, Modal } from '@flanksource/clicky-ui/components';
 import { UiGitPr } from '@flanksource/clicky-ui/icons';
 import { fetchJSON, mutationJSON, queryKeys } from '../query';
 
@@ -17,8 +17,6 @@ interface Installation {
   status: 'linked' | 'linked_elsewhere' | 'available';
 }
 
-const buttonClass = 'inline-flex items-center gap-1 rounded border border-border px-2 py-1 text-xs text-muted-foreground hover:bg-muted disabled:opacity-60';
-
 function errorText(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
 }
@@ -27,15 +25,16 @@ export function ConnectGitHubButton({ navigate = url => window.location.assign(u
   const [open, setOpen] = useState(false);
   return (
     <>
-      <button
+      <Button
         type="button"
+        variant="outline"
+        size="sm"
         onClick={() => setOpen(true)}
-        className={buttonClass}
         title="Link a gavel GitHub App installation to this organization, to see its pull requests"
       >
         <UiGitPr className="shrink-0 text-sm" />
         Connect GitHub
-      </button>
+      </Button>
       {open && <ConnectGitHubDialog navigate={navigate} onClose={() => setOpen(false)} />}
     </>
   );
@@ -80,9 +79,9 @@ function ConnectGitHubDialog({ navigate, onClose }: { navigate: (url: string) =>
       title="Connect GitHub"
       size="md"
       footer={(
-        <button type="button" className={buttonClass} disabled={busy} onClick={() => void install()}>
+        <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => void install()}>
           Install on another GitHub account
-        </button>
+        </Button>
       )}
     >
       <div className="space-y-3 text-sm">
@@ -102,9 +101,9 @@ function ConnectGitHubDialog({ navigate, onClose }: { navigate: (url: string) =>
                   <span className="ml-1 text-xs text-muted-foreground">{installation.accountType === 'User' ? 'user' : 'organization'}</span>
                 </span>
                 {installation.status === 'available' ? (
-                  <button type="button" className={buttonClass} disabled={busy} aria-label={`Link ${installation.account}`} onClick={() => void link(installation)}>
+                  <Button type="button" variant="outline" size="sm" disabled={busy} aria-label={`Link ${installation.account}`} onClick={() => void link(installation)}>
                     Link
-                  </button>
+                  </Button>
                 ) : (
                   <span className="text-xs text-muted-foreground">
                     {installation.status === 'linked' ? 'Linked to this organization' : 'Linked to another gavel organization'}
@@ -132,7 +131,10 @@ export function GitHubSetupPage({ search = window.location.search }: { search?: 
   // Read through a ref: getToken's identity can change between renders, and the link
   // must be requested once per visit.
   const getTokenRef = useRef(getToken);
-  getTokenRef.current = getToken;
+  // Declared before the link effect, so the ref is current when that effect runs.
+  useEffect(() => {
+    getTokenRef.current = getToken;
+  });
   const [state, setState] = useState<SetupState>({ status: 'linking' });
 
   const params = new URLSearchParams(search);
