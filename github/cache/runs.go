@@ -11,6 +11,7 @@ import (
 
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/blob"
+	"github.com/google/uuid"
 	"gorm.io/gorm/clause"
 )
 
@@ -68,12 +69,18 @@ func jobLogKey(jobID int64) string {
 	return fmt.Sprintf("joblogs/%d.log.gz", jobID)
 }
 
-// jobLogs is the organization's view of the blob store, or nil when the Store has none.
+// jobLogs is the Store organization's part of the blob store, or nil when the Store has none.
 func (s *Store) jobLogs() blob.Store {
-	if s.blobs == nil {
+	return s.OrgBlobs(s.org)
+}
+
+// OrgBlobs is org's part of the blob store, which holds its job logs: orgs/<org>/ of the
+// configured store, or of <user cache dir>/gavel/blobs. It is nil when the Store has no blob store.
+func (s *Store) OrgBlobs(org uuid.UUID) blob.Store {
+	if s == nil || s.blobs == nil {
 		return nil
 	}
-	return blob.WithPrefix(s.blobs, "orgs/"+s.org.String()+"/")
+	return blob.WithPrefix(s.blobs, "orgs/"+org.String()+"/")
 }
 
 // GetJobLogs returns cached logs for a job, or ("", false) on a miss. A row from before job

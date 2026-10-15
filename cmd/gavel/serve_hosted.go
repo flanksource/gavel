@@ -66,6 +66,9 @@ func runHostedDashboard(opts DashboardOptions) error {
 		return err
 	}
 	defer stack.stop()
+	if err := startRetention(ctx, db, ghcache.Shared()); err != nil {
+		return err
+	}
 	ui.Build = ui.BuildInfo{Version: version, Commit: commit, Date: date}
 
 	_, listener, err := bindUIListener(opts.Addr, opts.Port)

@@ -22,7 +22,8 @@ const defaultWindow = 60 * 24 * time.Hour
 
 // Stores are where the deleted rows' blobs live.
 type Stores struct {
-	// Org is an organization's part of the blob store, holding job and sandbox logs.
+	// Org is an organization's part of the blob store, holding job and sandbox logs; it may
+	// return nil when there is none.
 	Org func(org uuid.UUID) blob.Store
 	// Workspace is a workspace's snapshot store (snapshots.OpenStore), holding run snapshots.
 	Workspace func(workDir string) (blob.Store, error)
@@ -84,10 +85,14 @@ func deleteOrgBlob(ctx context.Context, stores Stores, org uuid.UUID, key, what 
 	if key == "" {
 		return nil
 	}
-	if stores.Org == nil {
+	var store blob.Store
+	if stores.Org != nil {
+		store = stores.Org(org)
+	}
+	if store == nil {
 		return fmt.Errorf("delete %s %s: no blob store for organization %s", what, key, org)
 	}
-	if err := stores.Org(org).Delete(ctx, key); err != nil && !errors.Is(err, blob.ErrNotFound) {
+	if err := store.Delete(ctx, key); err != nil && !errors.Is(err, blob.ErrNotFound) {
 		return fmt.Errorf("delete %s %s of organization %s: %w", what, key, org, err)
 	}
 	return nil

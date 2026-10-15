@@ -19,6 +19,7 @@ import (
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/github"
+	ghcache "github.com/flanksource/gavel/github/cache"
 	"github.com/flanksource/gavel/pr/ui"
 	"github.com/flanksource/gavel/service"
 	"github.com/flanksource/gavel/verify"
@@ -48,6 +49,9 @@ type PRListOptions struct {
 	Dev         bool     `flag:"dev" help:"Dev mode: spawn the Vite dev server and reverse-proxy to it for hot-module-reload (requires a source checkout)"`
 	DevDir      string   `flag:"dev-dir" help:"pr/ui source directory for the Vite dev server" default:"pr/ui"`
 	Repos       []string `args:"true"`
+
+	// retention runs the retention cleanup alongside the dashboard; gavel serve sets it.
+	retention bool
 }
 
 func (o PRListOptions) Help() api.Textable {
@@ -289,6 +293,11 @@ func runPRUI(opts PRListOptions, databaseMode serveDatabaseMode) error {
 	tracker, err := startGitTracker(ctx, runtime.DB)
 	if err != nil {
 		return err
+	}
+	if opts.retention && runtime.DB != nil {
+		if err := startRetention(ctx, runtime.DB, ghcache.Shared()); err != nil {
+			return err
+		}
 	}
 	srv := ui.NewServer(serveContext(ctx, tracker), interval, ghOpts, ui.SearchConfig{
 		Repos:       searchOpts.Repos,

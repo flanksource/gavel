@@ -81,3 +81,11 @@ func TestLegacyJobLogsMoveToTheBlobStoreOnRead(t *testing.T) {
 	require.True(t, ok, "and reads from the store afterwards")
 	assert.Equal(t, "legacy logs", logs)
 }
+
+func TestOrgBlobsIsWhereJobLogsLive(t *testing.T) {
+	local, _ := openTenancyStores(t)
+	local.blobs = blob.Local(t.TempDir())
+	local.PutJobLogs(5, "a/b", "logs")
+
+	assert.True(t, blobExists(t, local.OrgBlobs(tenant.LocalOrgID), "joblogs/5.log.gz"))
+}

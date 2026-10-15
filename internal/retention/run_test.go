@@ -178,3 +178,14 @@ func TestRunHonoursConfiguredWindows(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, report.LinterExecutions, "two hours is past a one-hour window")
 }
+
+func TestRunReportsAMissingBlobStore(t *testing.T) {
+	db := openRetentionDB(t)
+	require.NoError(t, db.Exec(`INSERT INTO job_log_caches (org_id, job_id, repo, log_key, fetched_at) VALUES (?, 1, 'a/b', 'joblogs/1.log.gz', ?)`,
+		tenant.LocalOrgID, time.Now().Add(-90*24*time.Hour)).Error)
+
+	_, err := Run(context.Background(), db, Stores{Org: func(uuid.UUID) blob.Store { return nil }}, time.Now())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no blob store for organization "+tenant.LocalOrgID.String())
+	assert.Equal(t, 1, countRows(t, db, `SELECT count(*) FROM job_log_caches`), "the row stays with its blob")
+}

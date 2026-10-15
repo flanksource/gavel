@@ -32,6 +32,7 @@ type DashboardOptions struct {
 	GitHubAppID         string `flag:"github-app-id" help:"ID of the GitHub App organizations install to show their pull requests (--auth clerk)"`
 	GitHubAppSlug       string `flag:"github-app-slug" help:"URL name of the GitHub App, as in github.com/apps/<slug>"`
 	GitHubAppPrivateKey string `flag:"github-app-private-key" help:"Path to the GitHub App's private key PEM (or GAVEL_GITHUB_APP_PRIVATE_KEY_FILE)"`
+	PropertiesFile      string `flag:"properties-file" help:"Properties file with retention.* windows such as retention.job_logs=60d (default /etc/gavel/gavel.properties when it exists)"`
 
 	clerkSecretKey string
 	secretKey      string
