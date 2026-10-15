@@ -136,9 +136,18 @@ table "job_log_caches" {
     null = true
     type = varchar(255)
   }
+  # Inline logs from before job logs moved to the blob store; GetJobLogs moves a row's logs
+  # to the store on first read.
   column "logs_gz" {
     null = true
     type = bytea
+  }
+  # Key of the gzipped logs in the organization's blob store; empty for a row whose logs are
+  # still inline.
+  column "log_key" {
+    null    = false
+    type    = text
+    default = ""
   }
   column "fetched_at" {
     null = true

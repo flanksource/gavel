@@ -49,15 +49,17 @@ type WorkflowRunCache struct {
 	FetchedAt time.Time
 }
 
-// JobLogCache stores raw GitHub Actions job logs once the job has reached a
-// terminal conclusion. Logs can be 10–50MB so we store them gzipped; callers
-// see plain strings.
+// JobLogCache records raw GitHub Actions job logs once the job has reached a
+// terminal conclusion. Logs can be 10–50MB, so they are stored gzipped in the
+// organization's blob store under LogKey; callers see plain strings.
 type JobLogCache struct {
-	OrgID     uuid.UUID  `gorm:"primaryKey;type:uuid"`
-	UserID    *uuid.UUID `gorm:"type:uuid"`
-	JobID     int64      `gorm:"primaryKey"`
-	Repo      string     `gorm:"size:255"`
-	LogsGz    []byte     // gzip-compressed
+	OrgID  uuid.UUID  `gorm:"primaryKey;type:uuid"`
+	UserID *uuid.UUID `gorm:"type:uuid"`
+	JobID  int64      `gorm:"primaryKey"`
+	Repo   string     `gorm:"size:255"`
+	// LogsGz holds the gzipped logs of a row written before LogKey existed.
+	LogsGz    []byte
+	LogKey    string
 	FetchedAt time.Time
 }
 

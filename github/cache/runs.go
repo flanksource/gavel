@@ -3,11 +3,14 @@ package cache
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"time"
 
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/blob"
 	"gorm.io/gorm/clause"
 )
 
@@ -60,21 +63,66 @@ func (s *Store) PutCompletedRun(repo string, runID int64, status, conclusion str
 	}
 }
 
-// GetJobLogs returns cached logs for a job, or ("", false) on a miss.
+// jobLogKey is where a job's gzipped logs live in its organization's blob store.
+func jobLogKey(jobID int64) string {
+	return fmt.Sprintf("joblogs/%d.log.gz", jobID)
+}
+
+// jobLogs is the organization's view of the blob store, or nil when the Store has none.
+func (s *Store) jobLogs() blob.Store {
+	if s.blobs == nil {
+		return nil
+	}
+	return blob.WithPrefix(s.blobs, "orgs/"+s.org.String()+"/")
+}
+
+// GetJobLogs returns cached logs for a job, or ("", false) on a miss. A row from before job
+// logs moved to the blob store is moved there on its first read.
 func (s *Store) GetJobLogs(jobID int64) (string, bool) {
 	if s == nil || s.disabled {
+		return "", false
+	}
+	store := s.jobLogs()
+	if store == nil {
 		return "", false
 	}
 	var entry JobLogCache
 	if err := s.gorm().Where("org_id = ? AND job_id = ?", s.org, jobID).First(&entry).Error; err != nil {
 		return "", false
 	}
-	logs, err := gunzipString(entry.LogsGz)
+	gz := entry.LogsGz
+	if entry.LogKey != "" {
+		data, err := readBlob(store, entry.LogKey)
+		if err != nil {
+			logger.Warnf("github cache: read logs for job %d: %v", jobID, err)
+			return "", false
+		}
+		gz = data
+	}
+	logs, err := gunzipString(gz)
 	if err != nil {
 		logger.Warnf("github cache: corrupt logs for job %d: %v", jobID, err)
 		return "", false
 	}
+	if entry.LogKey == "" {
+		s.moveJobLogs(store, jobID, gz)
+	}
 	return logs, true
+}
+
+// moveJobLogs writes a legacy row's inline logs to the blob store and clears them from the row.
+func (s *Store) moveJobLogs(store blob.Store, jobID int64, gz []byte) {
+	key := jobLogKey(jobID)
+	if err := store.Write(context.Background(), key, bytes.NewReader(gz)); err != nil {
+		logger.Warnf("github cache: move logs for job %d to the blob store: %v", jobID, err)
+		return
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if err := s.gorm().Exec(`UPDATE job_log_caches SET log_key = ?, logs_gz = NULL WHERE org_id = ? AND job_id = ?`,
+		key, s.org, jobID).Error; err != nil {
+		logger.Warnf("github cache: record moved logs for job %d: %v", jobID, err)
+	}
 }
 
 // PutJobLogs stores gzip-compressed logs for a terminal job. Callers should
@@ -85,27 +133,45 @@ func (s *Store) PutJobLogs(jobID int64, repo, logs string) {
 	if s == nil || s.disabled {
 		return
 	}
+	store := s.jobLogs()
+	if store == nil {
+		return
+	}
 	gz, err := gzipString(logs)
 	if err != nil {
 		logger.Warnf("github cache: gzip job %d logs failed: %v", jobID, err)
+		return
+	}
+	key := jobLogKey(jobID)
+	if err := store.Write(context.Background(), key, bytes.NewReader(gz)); err != nil {
+		logger.Warnf("github cache: PutJobLogs(%d) failed: %v", jobID, err)
 		return
 	}
 	entry := JobLogCache{
 		OrgID:     s.org,
 		JobID:     jobID,
 		Repo:      repo,
-		LogsGz:    gz,
+		LogKey:    key,
 		FetchedAt: time.Now(),
 	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	res := s.gorm().Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "org_id"}, {Name: "job_id"}},
-		DoUpdates: clause.AssignmentColumns([]string{"repo", "logs_gz", "fetched_at"}),
+		DoUpdates: clause.AssignmentColumns([]string{"repo", "log_key", "logs_gz", "fetched_at"}),
 	}).Create(&entry)
 	if res.Error != nil {
 		logger.Warnf("github cache: PutJobLogs(%d) failed: %v", jobID, res.Error)
 	}
+}
+
+func readBlob(store blob.Store, key string) ([]byte, error) {
+	reader, err := store.Read(context.Background(), key)
+	if err != nil {
+		return nil, err
+	}
+	defer reader.Close()
+	return io.ReadAll(reader)
 }
 
 // GetWorkflowDef returns the cached YAML and path for a workflow definition
