@@ -152,3 +152,31 @@ func TestMembersOrgs(t *testing.T) {
 		{ID: f.orgID(t, "org_b"), ClerkOrgID: "org_b", Slug: "beta", Name: "Beta", Role: "org:member"},
 	}, orgs, "every membership, without picking one")
 }
+
+// A page load sends several requests at once, and each refreshes stale memberships;
+// concurrent syncs of one user's memberships must all succeed.
+func TestSyncMembershipsConcurrently(t *testing.T) {
+	f := newMembersFixture(t, time.Minute)
+	ctx := context.Background()
+	_, err := f.members.Orgs(ctx, "user_ada")
+	require.NoError(t, err)
+	id, _, _, _ := f.user(t)
+	store := api.IdentityStore{DB: f.db}
+	memberships := []api.Membership{
+		{OrgID: "org_a", OrgSlug: "alpha", OrgName: "Alpha", Role: "org:admin"},
+		{OrgID: "org_b", OrgSlug: "beta", OrgName: "Beta", Role: "org:member"},
+	}
+
+	for round := 0; round < 10; round++ {
+		errs := make(chan error, 20)
+		for range 20 {
+			go func() { errs <- store.SyncMemberships(ctx, id, memberships) }()
+		}
+		for range 20 {
+			require.NoError(t, <-errs, "round %d", round)
+		}
+	}
+	var count int64
+	require.NoError(t, f.db.Raw(`SELECT count(*) FROM org_memberships WHERE user_id = ?`, id).Scan(&count).Error)
+	assert.Equal(t, int64(2), count)
+}
