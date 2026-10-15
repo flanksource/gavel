@@ -2106,6 +2106,43 @@ Clerk-mode manual checks:
   M9.5, `OnPushed` writes "push received; push checks are not available yet". `TestHostedPush`
   registers a key, then pushes over SSH to `alpha/app` (stored under
   `<data-dir>/repos/<org_id>/`) and to `gamma/app` (refused).
+- **2026-10-14: hosted todos, projects and runtime presets move to PR 2 (Batman).** A todo
+  workspace today is a directory: identified by its path, with attachments stored inside it and
+  runs executed in it. Hosted repositories have no checkout on the server, attachments need M7's
+  blob store, and runs need M10. So bringing these views back to hosted mode, including hosted
+  attachment headers, `--public-url` todo origins and the "org A's todo ID with org B's session
+  returns 404" test, happens in PR 2 after M7. PR 1 ships hosted PR review, SSH keys and
+  authorized pushes; its remaining items are M5.3/M5.4 (waiting on the GitHub App spike) and
+  the acceptance run.
+- **2026-10-15: M5.0 spike passed.** Batman created the `gavel-dev` GitHub App (owned by
+  flanksource, installed on flanksource with 2 repos) and set Clerk's GitHub connection to custom
+  credentials with the App's Client ID and secret. The spike script reported:
+  `oauth_github` 200 with one token (scopes `read:user user:email`, expiry about 8h, which Clerk
+  refreshes), token kind `ghu_` (GitHub App user token), `/user` 200 (`yashmehrotra`), and
+  `/user/installations` 200 listing installation `171601362` on `flanksource` (app `gavel-dev`).
+  **Decision (per the rule):** M5.3 verifies installation access through the Clerk-held user
+  token and `/user/installations`. No separate GitHub App user-authorization flow is needed.
+  - Setup lessons for the operator docs:
+    - A GitHub App's email access is an account permission, granted by each user at sign-in,
+      so it shows under the user's **Authorized GitHub Apps**, not on the installation page.
+    - A wrong client secret in Clerk fails only the code-for-token exchange, after GitHub's
+      consent screen. Clerk shows a generic "Unable to complete action" and no browser-side
+      error, and GitHub shows the authorization as "Never used". The fix was a fresh client
+      secret.
+    - Users who signed in under Clerk's shared GitHub credentials reconnect GitHub to get a
+      `ghu_` token.
+- **2026-10-15: M5.3 building blocks.**
+  - `installations.SignState` and `VerifyState`: base64url(json{org, user, exp}) + "." +
+    base64url(HMAC-SHA256(GAVEL_SECRET_KEY, payload)), valid for 15 minutes. Errors are "the
+    GitHub install link isn't valid" or "… expired; start the install again from gavel", and
+    tampering, a wrong key and malformed states are all tested.
+  - `github.App.UserInstallations(ctx, userToken)` pages `/user/installations` and keeps only
+    this App's installations (`app_id`).
+  - The `gavel serve` flags are `--github-app-id` (an `int`, because clicky doesn't bind `int64`
+    fields; a field of an unsupported type is silently left without a flag),
+    `--github-app-slug`, and `--github-app-private-key` (or
+    `GAVEL_GITHUB_APP_PRIVATE_KEY_FILE`). They're refused without `--auth clerk`, and in clerk
+    mode all three are required together, with the missing ones named.
 - **2026-10-14: M5.1 `TokenSource` pulled forward into M3 (commit `7b87e94`).** Before M5, a
   hosted org's `Server` would have used the host's `GITHUB_TOKEN`, `GH_TOKEN` or `auth.json` for
   every PR call. `github.Options.TokenSource`, when set, is the only credential. The M3.2 factory

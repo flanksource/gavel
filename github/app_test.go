@@ -84,6 +84,22 @@ func (f *fakeGitHubApp) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		json.NewEncoder(w).Encode(map[string]any{"id": 42, "account": map[string]any{"login": "acme", "id": 7, "type": "Organization"}}) //nolint:errcheck
+	case r.Method == http.MethodGet && r.URL.Path == "/user/installations":
+		if r.Header.Get("Authorization") != "Bearer ghu_ada" {
+			http.Error(w, `{"message":"Bad credentials"}`, http.StatusUnauthorized)
+			return
+		}
+		page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+		all := []map[string]any{}
+		for i := 0; i < 120; i++ {
+			all = append(all, map[string]any{"id": 5000 + i, "app_id": 123})
+		}
+		all = append(all, map[string]any{"id": 9999, "app_id": 456})
+		var installs []map[string]any
+		for i := (page - 1) * 100; i < len(all) && i < page*100; i++ {
+			installs = append(installs, all[i])
+		}
+		json.NewEncoder(w).Encode(map[string]any{"total_count": len(all), "installations": installs}) //nolint:errcheck
 	case r.Method == http.MethodGet && r.URL.Path == "/installation/repositories":
 		if !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ghs_") || r.URL.Query().Get("per_page") != "100" {
 			http.Error(w, `{"message":"Bad credentials"}`, http.StatusUnauthorized)
@@ -169,4 +185,21 @@ func TestLoadAppRejectsBadKeys(t *testing.T) {
 	_, err = LoadApp(0, "gavel", notPEM)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "GitHub App ID")
+}
+
+func TestAppUserInstallations(t *testing.T) {
+	fake := newFakeGitHubApp(t, 0)
+	app, err := LoadApp(123, "gavel", writeAppKey(t, fake.key))
+	require.NoError(t, err)
+
+	ids, err := app.UserInstallations(context.Background(), "ghu_ada")
+	require.NoError(t, err)
+	require.Len(t, ids, 120, "every page, and only this App's installations")
+	assert.Equal(t, int64(5000), ids[0])
+	assert.NotContains(t, ids, int64(9999))
+
+	_, err = app.UserInstallations(context.Background(), "ghu_wrong")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Bad credentials")
+	assert.NotContains(t, err.Error(), "ghu_wrong")
 }

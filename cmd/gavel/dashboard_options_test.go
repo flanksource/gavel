@@ -52,6 +52,15 @@ func TestDashboardOptionsValidate(t *testing.T) {
 		{"push server address without a port", func(o *DashboardOptions) { o.SSHAddr = "localhost" }, []string{
 			`--ssh-addr must be host:port like :2222, got "localhost"`,
 		}},
+		{"GitHub App with clerk", func(o *DashboardOptions) {
+			o.GitHubAppID, o.GitHubAppSlug, o.GitHubAppPrivateKey = 123, "gavel-dev", "/keys/app.pem"
+		}, nil},
+		{"GitHub App without clerk", func(o *DashboardOptions) { *o = DashboardOptions{Auth: "none", GitHubAppID: 123} }, []string{
+			"--github-app-* flags serve hosted orgs and need --auth clerk",
+		}},
+		{"partial GitHub App", func(o *DashboardOptions) { o.GitHubAppID = 123 }, []string{
+			"--github-app-id, --github-app-slug and --github-app-private-key (or GAVEL_GITHUB_APP_PRIVATE_KEY_FILE) go together; missing --github-app-slug, --github-app-private-key",
+		}},
 		{"public URL with a path", func(o *DashboardOptions) { o.PublicURL = "https://gavel.example.com/app" }, []string{
 			`--public-url must be an origin like https://gavel.example.com, got "https://gavel.example.com/app"`,
 		}},
@@ -93,11 +102,12 @@ func TestDashboardOptionsValidate(t *testing.T) {
 
 func TestDashboardOptionsFromEnv(t *testing.T) {
 	env := map[string]string{
-		"GAVEL_CLERK_ISSUER":          "https://env-clerk.example.com",
-		"GAVEL_CLERK_PUBLISHABLE_KEY": "pk_env",
-		"GAVEL_CLERK_CLIENT_ID":       "env-client",
-		"CLERK_SECRET_KEY":            "sk_env",
-		"GAVEL_SECRET_KEY":            testSecretKey,
+		"GAVEL_CLERK_ISSUER":                "https://env-clerk.example.com",
+		"GAVEL_CLERK_PUBLISHABLE_KEY":       "pk_env",
+		"GAVEL_CLERK_CLIENT_ID":             "env-client",
+		"CLERK_SECRET_KEY":                  "sk_env",
+		"GAVEL_SECRET_KEY":                  testSecretKey,
+		"GAVEL_GITHUB_APP_PRIVATE_KEY_FILE": "/keys/app.pem",
 	}
 	got := DashboardOptions{ClerkIssuer: "https://flag-clerk.example.com"}.withEnv(func(key string) string { return env[key] })
 	assert.Equal(t, "https://flag-clerk.example.com", got.ClerkIssuer, "a flag wins over its env var")
@@ -105,12 +115,13 @@ func TestDashboardOptionsFromEnv(t *testing.T) {
 	assert.Equal(t, "env-client", got.ClerkClientID)
 	assert.Equal(t, "sk_env", got.clerkSecretKey)
 	assert.Equal(t, testSecretKey, got.secretKey)
+	assert.Equal(t, "/keys/app.pem", got.GitHubAppPrivateKey)
 }
 
 func TestServeCommandHasAuthFlags(t *testing.T) {
 	serve := findCommand(rootCmd, "serve")
 	require.NotNil(t, serve)
-	for _, name := range []string{"auth", "public-url", "clerk-issuer", "clerk-publishable-key", "clerk-client-id", "ssh-addr", "ssh-host-key", "data-dir", "dev", "port"} {
+	for _, name := range []string{"auth", "public-url", "clerk-issuer", "clerk-publishable-key", "clerk-client-id", "ssh-addr", "ssh-host-key", "data-dir", "github-app-id", "github-app-slug", "github-app-private-key", "dev", "port"} {
 		assert.NotNilf(t, serve.Flags().Lookup(name), "serve should expose --%s", name)
 	}
 	assert.Nil(t, serve.Flags().Lookup("trusted-proxy"), "nothing reads forwarded headers: hosted origins come from --public-url")

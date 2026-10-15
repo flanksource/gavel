@@ -28,6 +28,9 @@ type DashboardOptions struct {
 	SSHAddr             string `flag:"ssh-addr" help:"Address for the hosted git push server, e.g. :2222 (--auth clerk only; gavel ssh serve is the local one)"`
 	SSHHostKey          string `flag:"ssh-host-key" help:"Push server host key file; created if missing (default <data-dir>/ssh_host_key)"`
 	DataDir             string `flag:"data-dir" help:"Directory for hosted repositories" default:"/var/lib/gavel"`
+	GitHubAppID         int    `flag:"github-app-id" help:"ID of the GitHub App organizations install to show their pull requests (--auth clerk)"`
+	GitHubAppSlug       string `flag:"github-app-slug" help:"URL name of the GitHub App, as in github.com/apps/<slug>"`
+	GitHubAppPrivateKey string `flag:"github-app-private-key" help:"Path to the GitHub App's private key PEM (or GAVEL_GITHUB_APP_PRIVATE_KEY_FILE)"`
 
 	clerkSecretKey string
 	secretKey      string
@@ -42,6 +45,7 @@ func (o DashboardOptions) withEnv(getenv func(string) string) DashboardOptions {
 		{&o.ClerkIssuer, "GAVEL_CLERK_ISSUER"},
 		{&o.ClerkPublishableKey, "GAVEL_CLERK_PUBLISHABLE_KEY"},
 		{&o.ClerkClientID, "GAVEL_CLERK_CLIENT_ID"},
+		{&o.GitHubAppPrivateKey, "GAVEL_GITHUB_APP_PRIVATE_KEY_FILE"},
 	} {
 		if *setting.value == "" {
 			*setting.value = getenv(setting.env)
@@ -61,10 +65,14 @@ func (o DashboardOptions) Validate() error {
 			add("--ssh-addr must be host:port like :2222, got %q", o.SSHAddr)
 		}
 	}
+	githubApp := o.GitHubAppID != 0 || o.GitHubAppSlug != "" || o.GitHubAppPrivateKey != ""
 	switch o.Auth {
 	case authNone:
 		if o.SSHAddr != "" {
 			add("--ssh-addr serves hosted pushes and needs --auth clerk; use gavel ssh serve locally")
+		}
+		if githubApp {
+			add("--github-app-* flags serve hosted orgs and need --auth clerk")
 		}
 	case authClerk:
 		if o.PublicURL == "" {
@@ -82,6 +90,21 @@ func (o DashboardOptions) Validate() error {
 			add("--auth clerk requires --clerk-publishable-key or GAVEL_CLERK_PUBLISHABLE_KEY")
 		} else if !strings.HasPrefix(o.ClerkPublishableKey, "pk_") {
 			add("--clerk-publishable-key must start with pk_")
+		}
+		if githubApp {
+			var missing []string
+			if o.GitHubAppID <= 0 {
+				missing = append(missing, "--github-app-id")
+			}
+			if o.GitHubAppSlug == "" {
+				missing = append(missing, "--github-app-slug")
+			}
+			if o.GitHubAppPrivateKey == "" {
+				missing = append(missing, "--github-app-private-key")
+			}
+			if len(missing) > 0 {
+				add("--github-app-id, --github-app-slug and --github-app-private-key (or GAVEL_GITHUB_APP_PRIVATE_KEY_FILE) go together; missing %s", strings.Join(missing, ", "))
+			}
 		}
 		if o.ClerkClientID == "" {
 			add("--auth clerk requires --clerk-client-id or GAVEL_CLERK_CLIENT_ID")
