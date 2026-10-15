@@ -64,7 +64,7 @@ func TestHandleProjectsCreate(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("POST status = %d, want 201; body = %q", rec.Code, rec.Body.String())
 	}
-	projects, err := LoadProjects()
+	projects, err := LoadProjects(LoadProjectsOptions{})
 	if err != nil {
 		t.Fatalf("LoadProjects: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestHandleProjectsCreateConflict(t *testing.T) {
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("POST duplicate name status = %d, want 409; body = %q", rec.Code, rec.Body.String())
 	}
-	projects, err := LoadProjects()
+	projects, err := LoadProjects(LoadProjectsOptions{})
 	if err != nil {
 		t.Fatalf("LoadProjects: %v", err)
 	}

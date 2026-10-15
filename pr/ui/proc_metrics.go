@@ -38,7 +38,7 @@ func procRunKey(project string, ps procfile.ProcState) string {
 // workspace header gauges read. Recording is best-effort instrumentation.
 func (s *Server) sampleProcMetrics() {
 	now := time.Now()
-	projects, err := LoadProjects()
+	projects, err := LoadProjects(LoadProjectsOptions{})
 	if err != nil {
 		logger.Errorf("sample process metrics: %v", err)
 		return

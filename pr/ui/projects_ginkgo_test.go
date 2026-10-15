@@ -38,7 +38,7 @@ var _ = Describe("project catalog resolution", func() {
 	It("returns malformed catalog errors with the catalog path", func() {
 		Expect(os.WriteFile(projectsPath, []byte("{"), 0o600)).To(Succeed())
 
-		_, err := LoadProjects()
+		_, err := LoadProjects(LoadProjectsOptions{})
 
 		Expect(err).To(MatchError(ContainSubstring(projectsPath)))
 	})
@@ -106,7 +106,7 @@ var _ = Describe("project repos are never null", func() {
 	It("heals a catalog written by an older gavel that stored repos as null", func() {
 		Expect(os.WriteFile(projectsPath, []byte(`[{"name":"time-kiosk","dir":"/tmp/time-kiosk","repos":null}]`), 0o600)).To(Succeed())
 
-		projects, err := LoadProjects()
+		projects, err := LoadProjects(LoadProjectsOptions{})
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(projects).To(HaveLen(1))

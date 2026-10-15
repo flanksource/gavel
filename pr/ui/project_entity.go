@@ -46,16 +46,17 @@ func registerProjectEntity() {
 }
 
 // loadProjectsTracked reads the project catalog, timed as file work.
-func loadProjectsTracked(ctx context.Context) ([]Project, error) {
+func loadProjectsTracked(ctx context.Context, opts LoadProjectsOptions) ([]Project, error) {
 	stopFile := rpchttp.Track(ctx, "file")
 	defer stopFile()
-	return LoadProjects()
+	return LoadProjects(opts)
 }
 
-// listProjects resolves every registered project's wire shape. A project whose
+// listProjects resolves every registered project's wire shape, hidden ones
+// included so the project picker can offer to show them again. A project whose
 // TODO counts cannot be loaded carries the failure on its own row.
 func listProjects(ctx context.Context) ([]projectInfo, error) {
-	ps, err := loadProjectsTracked(ctx)
+	ps, err := loadProjectsTracked(ctx, LoadProjectsOptions{IncludeHidden: true})
 	if err != nil {
 		return nil, err
 	}
@@ -68,7 +69,7 @@ func listProjects(ctx context.Context) ([]projectInfo, error) {
 // /api/projects keeps listing such a catalog, so the projects bar stays usable
 // while the clash is fixed.
 func listProjectEntities(ctx context.Context) ([]projectInfo, error) {
-	ps, err := loadProjectsTracked(ctx)
+	ps, err := loadProjectsTracked(ctx, LoadProjectsOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -81,7 +82,7 @@ func listProjectEntities(ctx context.Context) ([]projectInfo, error) {
 // getProjectInfo resolves one registered project by its short name. An unknown
 // name is a 404 rather than a server fault.
 func getProjectInfo(ctx context.Context, short string) (projectInfo, error) {
-	ps, err := loadProjectsTracked(ctx)
+	ps, err := loadProjectsTracked(ctx, LoadProjectsOptions{})
 	if err != nil {
 		return projectInfo{}, err
 	}

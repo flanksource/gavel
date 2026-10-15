@@ -64,6 +64,14 @@ gavel
 |   |-- fix
 |   |-- list
 |   `-- status
+|-- projects
+|   |-- add
+|   |-- delete
+|   |-- get
+|   |-- hide
+|   |-- list
+|   |-- unhide
+|   `-- update
 |-- repomap
 |   |-- get
 |   `-- view
@@ -910,6 +918,30 @@ gavel pr list --menu-bar
 ```
 
 If you want the UI-first version of PR operations, this is it. `--ui` is for an explicit browser dashboard; `--menu-bar` is for ambient status on macOS.
+
+### `gavel projects`
+
+`projects` manages the workspace projects the dashboard shows: named local directories, each backing zero or more GitHub repos, stored in `~/.config/gavel/projects.json`. The dashboard's `/api/projects` serves the same store.
+
+```bash
+gavel projects list
+gavel projects add acme ~/src/acme --repo acme/acme
+gavel projects update acme --repo acme/acme --repo acme/acme-ui
+gavel projects hide acme
+gavel projects unhide acme
+gavel projects delete acme
+```
+
+#### Hiding a project
+
+A hidden project stays registered but drops out of the dashboard: the project picker, the Projects sidebar, processes, sessions, TODO lists and the git summary all leave it out, and the git state tracker stops scanning its repository. Its stored git rows are kept but no longer read.
+
+- In the dashboard, hover a project in the project picker and click the hide (closed eye) button. Hidden projects are listed under **Manage hidden** in the same picker, where the eye button shows them again.
+- From the CLI, `gavel projects hide <name>` and `gavel projects unhide <name>` set the same flag. `gavel projects list` lists every project, hidden ones included, with a `hidden` column.
+
+Hiding from the dashboard stops git tracking immediately. Hiding from the CLI only takes effect for a running dashboard's tracker when it restarts, because the tracker lives in the dashboard process. Editing a project in the dashboard's form keeps its hidden flag.
+
+One exception is intentional: a view that reads stored git data for a specific repository, such as the diff stats of a TODO run whose worktree is in a hidden project's repository, registers that repository with the tracker again so the data it shows is current. Hiding the project again, or restarting the dashboard, stops it.
 
 ### `gavel git history`
 

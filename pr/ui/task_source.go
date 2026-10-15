@@ -391,7 +391,7 @@ func runningSupervisorRoots() ([]string, error) {
 }
 
 func configuredProjectRoots() ([]string, error) {
-	projects, err := LoadProjects()
+	projects, err := LoadProjects(LoadProjectsOptions{})
 	if err != nil {
 		return nil, err
 	}

@@ -78,6 +78,9 @@ export interface Project {
   dir: string;
   repos: string[];
   hasProcfile?: boolean;
+  // Hidden projects are returned by /api/projects but left out of every project
+  // list and not tracked for git state; only the project picker lists them.
+  hidden?: boolean;
   // Absent when this workspace's todo store could not be reached — see error.
   // A project is still listed (and its processes still managed) in that case, so
   // never read a missing todoCounts as "zero todos".

@@ -585,6 +585,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/projects/{name}", s.handleProjectByName)
 	mux.HandleFunc("PUT /api/projects/{name}", s.handleProjectByName)
 	mux.HandleFunc("DELETE /api/projects/{name}", s.handleProjectByName)
+	mux.HandleFunc("POST /api/projects/{name}/hidden", s.handleProjectHidden)
 	mux.HandleFunc("GET /api/projects/{name}/status", s.handleProjectStatus)
 	mux.HandleFunc("POST /api/projects/{name}/actions", s.handleProjectAction)
 	mux.HandleFunc("GET /api/projects/{name}/actions/schema", s.handleProjectActionSchema)

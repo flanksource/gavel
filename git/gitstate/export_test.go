@@ -3,6 +3,7 @@ package gitstate
 import (
 	"context"
 	"path/filepath"
+	"sort"
 	"time"
 )
 
@@ -47,4 +48,19 @@ var (
 
 func PollGitArgs() []string {
 	return currentPollConfig().gitArgs()
+}
+
+// DueRoots lists, sorted and deduplicated, the repository roots the cadence
+// would scan at now.
+func (t *Tracker) DueRoots(now time.Time) []string {
+	seen := map[string]bool{}
+	var roots []string
+	for _, key := range t.due(now) {
+		if !seen[key.root] {
+			seen[key.root] = true
+			roots = append(roots, key.root)
+		}
+	}
+	sort.Strings(roots)
+	return roots
 }

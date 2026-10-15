@@ -19,7 +19,7 @@ var errUnknownWorktree = errors.New("not a worktree of the project")
 // handleProjectsGitSummary answers every project's row from the stored git
 // state; no git runs once each repository has been tracked.
 func (s *Server) handleProjectsGitSummary(w http.ResponseWriter, r *http.Request) {
-	projects, err := LoadProjects()
+	projects, err := LoadProjects(LoadProjectsOptions{})
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -46,7 +46,7 @@ func (s *Server) handleProjectsGitSummary(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Server) handleProjectGit(w http.ResponseWriter, r *http.Request) {
-	project, err := GetProject(r.PathValue("name"))
+	project, err := getVisibleProject(r.PathValue("name"))
 	if err != nil {
 		respondError(w, statusForProjectErr(err), err.Error())
 		return

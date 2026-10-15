@@ -162,7 +162,7 @@ export function App() {
 
   const {
     snapshot,
-    projects,
+    projects: allProjects,
     projectsLoaded,
     projectError,
     processError,
@@ -178,6 +178,7 @@ export function App() {
     saveConfig,
     setIncludeBots,
     setShowClosed,
+    setProjectHidden,
   } = useAppMutations();
   const { detail, loading: detailLoading, refresh: refreshDetail } = usePRDetailStream(selected);
   const rawPrs = snapshot.prs;
@@ -208,9 +209,14 @@ export function App() {
   }, [isMenubar]);
 
   const prs = useMemo(() => annotateRoutePaths(rawPrs), [rawPrs]);
+  // /api/projects also returns hidden projects; only the project picker lists
+  // them (so they can be shown again). Everything else sees visible ones.
+  const visibleProjects = useMemo(() => allProjects.filter(project => !project.hidden), [allProjects]);
+  const hiddenDirs = useMemo(() => allProjects.filter(project => project.hidden).map(project => project.dir), [allProjects]);
+  const scopeProjectHidden = allProjects.some(project => project.hidden && project.name === scopeProject);
   const projectScope = useMemo(
-    () => applyProjectScope(projects, prs, scopeProject),
-    [projects, prs, scopeProject],
+    () => applyProjectScope(visibleProjects, prs, scopeProject),
+    [visibleProjects, prs, scopeProject],
   );
   const scopedProjects = projectScope.projects;
   const scopedPRs = projectScope.prs;
@@ -374,11 +380,18 @@ export function App() {
       saveConfig({ ...config, project: '', repos: [], org: '', all: true });
       return;
     }
-    const project = projects.find(candidate => candidate.name === scopeProject);
+    const project = visibleProjects.find(candidate => candidate.name === scopeProject);
     if (!project) return;
     syncedScopeProject.current = project.name;
     saveConfig({ ...config, project: project.name, repos: project.repos, org: '', all: false });
-  }, [config, projects, projectsLoaded, saveConfig, scopeProject]);
+  }, [config, visibleProjects, projectsLoaded, saveConfig, scopeProject]);
+
+  // A project hidden while it is the scope (from the picker, the Projects
+  // sidebar, or a deep link to one) drops back to All projects, like hideOrg.
+  useEffect(() => {
+    if (!scopeProjectHidden) return;
+    updateScopeConfig({ project: '', repos: Array.from(new Set(visibleProjects.flatMap(project => project.repos))), org: '', all: false });
+  }, [scopeProjectHidden]);
 
   // When PRs arrive (or the URL selection changes), reconcile `selected` with
   // the route's selectedPath. Fetches detail automatically for deep-linked PRs.
@@ -479,6 +492,10 @@ export function App() {
     saveConfig({ ...config, ...partial });
   }
 
+  function hideProject(name: string, hidden: boolean) {
+    setProjectHidden({ name, hidden });
+  }
+
   function updateScopeConfig(partial: Partial<SearchConfig>) {
     if (partial.project !== undefined && partial.project !== scopeProject) {
       syncedScopeProject.current = partial.project;
@@ -550,7 +567,7 @@ export function App() {
 
   // Both halves of the projects tab (the AppShell body sidebar and the detail
   // pane) read one catalog, so it is loaded here rather than inside either one.
-  const projectCatalog = useProjectCatalog({ configured: scopedProjects, selectedName: selectedPath, enabled: activeTab === 'projects' && projectHistory });
+  const projectCatalog = useProjectCatalog({ configured: scopedProjects, hiddenDirs, selectedName: selectedPath, enabled: activeTab === 'projects' && projectHistory });
   // The git work summary shown on every project row refreshes slowly and only
   // matters while the Projects tab is on screen.
   const projectGitSummary = useProjectGitSummary({ enabled: activeTab === 'projects' && visible });
@@ -596,7 +613,8 @@ export function App() {
         unread={unread}
         config={{ ...config, project: scopeProject }}
         projects={scopedProjects}
-        availableProjects={projects}
+        availableProjects={allProjects}
+        onSetProjectHidden={hideProject}
         projectsLoaded={projectsLoaded}
         projectError={projectError}
         projectsByRepo={projectsByRepo}
@@ -630,7 +648,7 @@ export function App() {
   }
 
   if (isTodoNewPage) {
-    return <TodoNewPage projects={projects} projectError={projectError} />;
+    return <TodoNewPage projects={visibleProjects} projectError={projectError} />;
   }
 
   return (
@@ -649,7 +667,7 @@ export function App() {
             <ChatButton label="Open Gavel assistant" />
             <TaskManagerButton basePath="/api/v1" />
             <ProcessManager projects={scopedProjects} onProcChanged={onProcChanged} />
-            <OrgChooser config={{ ...config, project: scopeProject }} projects={projects} onChange={updateScopeConfig} />
+            <OrgChooser config={{ ...config, project: scopeProject }} projects={allProjects} onChange={updateScopeConfig} onSetProjectHidden={hideProject} />
             <StatusIndicator
               fetchedAt={fetchedAt}
               error={error}
@@ -713,6 +731,7 @@ export function App() {
               onChanged={onProcChanged}
               onAdd={openAdd}
               onSettings={openProjectSettings}
+              onHide={project => hideProject(project.name, true)}
             />
           ) : activeTab === 'todos' && !todosFullWidth ? (
             <TodoWorkspaceList todos={todos} projectsLoaded={projectsLoaded} projectError={projectError} />
@@ -796,7 +815,7 @@ export function App() {
         onOpenUUID={openUUIDFromPalette}
       />
 
-      <CreateTodoDialog open={todos.showCreate} onClose={() => todos.setShowCreate(false)} workspaces={projects.filter(project => !!project.dir)} onCreated={todos.created} defaultDir={todos.selected?.dir ?? scopedProjects[0]?.dir} />
+      <CreateTodoDialog open={todos.showCreate} onClose={() => todos.setShowCreate(false)} workspaces={visibleProjects.filter(project => !!project.dir)} onCreated={todos.created} defaultDir={todos.selected?.dir ?? scopedProjects[0]?.dir} />
       <AddProjectDialog open={addOpen} onClose={() => setAddOpen(false)} onSaved={onProcChanged} repoOptions={reposList} />
       {settingsScope && (
         <SettingsPage

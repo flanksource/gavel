@@ -6,9 +6,10 @@ import { ChatWindowManagerProvider } from '@flanksource/clicky-ui/ai';
 import type { AgentSession, Project } from './types';
 import { App } from './App';
 
-const { isMobileMock, saveConfigMock, agentSessionsMock, inspectorProps } = vi.hoisted(() => ({
+const { isMobileMock, saveConfigMock, setProjectHiddenMock, agentSessionsMock, inspectorProps } = vi.hoisted(() => ({
   isMobileMock: vi.fn(() => false),
   saveConfigMock: vi.fn(),
+  setProjectHiddenMock: vi.fn(),
   agentSessionsMock: vi.fn(),
   inspectorProps: { current: null as null | Record<string, unknown> },
 }));
@@ -16,6 +17,7 @@ const { isMobileMock, saveConfigMock, agentSessionsMock, inspectorProps } = vi.h
 const projects: Project[] = [
   { name: 'gavel', dir: '/work/gavel', repos: ['acme/gavel'] },
   { name: 'clicky', dir: '/work/clicky', repos: ['acme/clicky'] },
+  { name: 'archive', dir: '/work/archive', repos: ['acme/archive'], hidden: true },
 ];
 
 vi.mock('./useAppQueries', () => ({
@@ -44,6 +46,7 @@ vi.mock('./useAppMutations', () => ({
     saveConfig: saveConfigMock,
     setIncludeBots: vi.fn(),
     setShowClosed: vi.fn(),
+    setProjectHidden: setProjectHiddenMock,
   }),
 }));
 
@@ -148,6 +151,7 @@ const agentSession: AgentSession = {
 beforeEach(() => {
   isMobileMock.mockReturnValue(false);
   saveConfigMock.mockReset();
+  setProjectHiddenMock.mockReset();
   agentSessionsMock.mockReset();
   agentSessionsMock.mockReturnValue({ data: { sessions: [agentSession], errors: [] }, error: null });
   inspectorProps.current = null;
@@ -186,6 +190,35 @@ describe('todo creation project choices', () => {
     const dialog = screen.getByTestId('create-dialog-projects');
     expect(dialog.textContent).toBe('gavelclicky');
     expect(dialog.dataset.defaultDir).toBe('/work/gavel');
+  });
+});
+
+describe('hidden projects', () => {
+  it('offers a hidden project only under Manage hidden and unhides it through the mutation', () => {
+    isMobileMock.mockReturnValue(true);
+    window.history.replaceState({}, '', '/todos?project=gavel');
+    renderApp();
+
+    fireEvent.click(screen.getByTitle('Switch project / GitHub scope'));
+    expect(screen.queryByRole('button', { name: 'Filter by archive project' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /Manage hidden \(1\)/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Unhide archive project' }));
+
+    expect(setProjectHiddenMock).toHaveBeenCalledExactlyOnceWith({ name: 'archive', hidden: false });
+  });
+
+  it('falls back to all visible projects when the scoped project is hidden', () => {
+    isMobileMock.mockReturnValue(true);
+    window.history.replaceState({}, '', '/todos?project=archive');
+    renderApp();
+
+    expect(saveConfigMock).toHaveBeenCalledWith({
+      repos: ['acme/gavel', 'acme/clicky'],
+      project: '',
+      org: '',
+      all: false,
+    });
+    expect(`${window.location.pathname}${window.location.search}`).toBe('/todos');
   });
 });
 

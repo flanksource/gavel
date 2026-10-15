@@ -107,6 +107,42 @@ describe('useAppMutations', () => {
     ]);
   });
 
+  it('posts the hidden flag to the narrow project endpoint and refreshes the project list and git summary', async () => {
+    const projectName = 'my project';
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ name: projectName, hidden: true }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })));
+    const client = createClient();
+    const invalidate = vi.spyOn(client, 'invalidateQueries').mockResolvedValue(undefined);
+    const { result } = renderHook(useAppMutations, { wrapper: wrapper(client) });
+
+    act(() => result.current.setProjectHidden({ name: projectName, hidden: true }));
+
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.projects(), exact: true }));
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.projectGitSummary(), exact: true });
+    expect(fetch).toHaveBeenCalledWith('/api/projects/my%20project/hidden', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hidden: true }),
+    });
+  });
+
+  it('reports a failed hide and leaves the project queries untouched', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: 'project "ghost" not found' }), {
+      status: 404,
+      headers: { 'Content-Type': 'application/json' },
+    })));
+    const client = createClient();
+    const invalidate = vi.spyOn(client, 'invalidateQueries').mockResolvedValue(undefined);
+    const { result } = renderHook(useAppMutations, { wrapper: wrapper(client) });
+
+    act(() => result.current.setProjectHidden({ name: 'ghost', hidden: true }));
+
+    await waitFor(() => expect(result.current.error).toBe('Update project visibility: project "ghost" not found'));
+    expect(invalidate).not.toHaveBeenCalled();
+  });
+
   it('optimistically saves config, accepts the server response, and rolls back a later failure', async () => {
     const requestedConfig: SearchConfig = { repos: ['acme/clicky'], all: true };
     const savedConfig: SearchConfig = { ...requestedConfig, org: 'server-normalized' };

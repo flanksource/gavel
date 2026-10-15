@@ -73,7 +73,7 @@ func registerTodoEntity() error {
 // todoEntityWorkspaces lists the registered projects an unscoped TODO list
 // reads, read per call so a project registered after startup is listed.
 func todoEntityWorkspaces(context.Context) ([]query.Workspace, error) {
-	projects, err := LoadProjects()
+	projects, err := LoadProjects(LoadProjectsOptions{})
 	if err != nil {
 		return nil, err
 	}
