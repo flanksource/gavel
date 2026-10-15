@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { DetailPanel } from './DetailPanel';
-import type { Test } from '../types';
+import type { ProcessTraceNode, Test } from '../types';
 
 const editableTest: Test = {
   name: 'works',
@@ -100,3 +100,32 @@ describe('DetailPanel fixture resources', () => {
     expect(screen.getByText(/PID 11232/)).toBeTruthy();
   });
 });
+
+describe('DetailPanel fixture processes', () => {
+  const traceNode = (key: string, pid: number, command: string): ProcessTraceNode => ({
+    key, pid, ppid: 1, name: command.split(' ')[0], command, status: 'exited',
+    startedAt: '2026-01-01T00:00:00Z', lastSeenAt: '2026-01-01T00:00:03Z',
+    cpuPercent: 0, rssBytes: 0, peakCpuPercent: 12.5, peakRssBytes: 2 * 1024 * 1024,
+  });
+  const step: Test = { name: 'go test', framework: 'fixture', passed: true, fixture: { key: 'k', kind: 'exec', state: 'passed', pids: [4243, 9999] } };
+
+  it('lists the trace nodes for the step pids and links to the Processes tab, skipping pids without a node', () => {
+    const onOpenProcess = vi.fn();
+    render(<DetailPanel test={step} processes={[traceNode('4243@2', 4243, 'go test ./pkg'), traceNode('1@1', 1, 'init')]} onOpenProcess={onOpenProcess} />);
+
+    expect(screen.getByText('Processes')).toBeTruthy();
+    expect(screen.getByText('go test ./pkg')).toBeTruthy();
+    expect(screen.getByText(/peak 12.5% CPU \/ 2.0 MB/)).toBeTruthy();
+    expect(screen.queryByText('init')).toBeNull();
+    expect(screen.getAllByText('View process')).toHaveLength(1);
+
+    fireEvent.click(screen.getByText('View process'));
+    expect(onOpenProcess).toHaveBeenCalledWith('4243@2');
+  });
+
+  it('omits the Processes section when the trace has no node for the step pids', () => {
+    render(<DetailPanel test={step} processes={[traceNode('1@1', 1, 'init')]} />);
+    expect(screen.queryByText('Processes')).toBeNull();
+  });
+});
+

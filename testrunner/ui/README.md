@@ -80,14 +80,28 @@ export default function Page() {
 ```
 
 Lower-level pieces are also exported for composing your own layout: `Summary`, `TestNode`,
-`DetailPanel`, `FilterBar`, `ProgressBar`, `LintView`, `BenchView`, `DiagnosticsView`, `SplitPane`,
-`JsonView`, `AnsiHtml`.
+`DetailPanel`, `FilterBar`, `ProgressBar`, `LintView`, `BenchView`, `ProcessesView`,
+`TracesSection`, `SplitPane`, `JsonView`, `AnsiHtml`.
+
+## Traces
+
+A run's traces live in its trace store, which the gavel server mounts at `status.traces.mount`
+(`/query`): the commons-db query explorer and its profile and sessions APIs. Nothing here reads a
+gavel-specific trace route.
+
+- `ProcessesView` (fed by `useProcessTrace({ traces: status.traces, done })`) reads the process
+  tree and samples streams named by `status.traces.process` from the store's NDJSON export, and
+  checkpoints `status.traces.process_session` to collect a stack while the run is live.
+- `TracesSection` renders a fixture's `context.traces` (`TraceResult[]`: kind, stream, seq window,
+  count, summary, error) with an *Open in query* deep link, a download per export format, and an
+  inline clicky-ui `TraceView`.
 
 ## Types
 
-All result and progress types (`Test`, `Snapshot`, `SnapshotStatus`, `LinterResult`, `Violation`,
-`RunMeta`, `BenchComparison`, `ProcessNode`, `DiagnosticsSnapshot`, `RerunRequest`, …) are exported
-from `@flanksource/gavel/testrunner/types`. They mirror the JSON gavel's handlers emit.
+All result and progress types (`Test`, `Snapshot`, `SnapshotStatus`, `TracesStatus`, `TraceResult`,
+`LinterResult`, `Violation`, `RunMeta`, `BenchComparison`, `ProcessTraceNode`, `ProcessSample`,
+`RerunRequest`, …) are exported from `@flanksource/gavel/testrunner/types`. They mirror the JSON
+gavel's handlers emit.
 
 ## Styling
 

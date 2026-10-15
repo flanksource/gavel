@@ -1,10 +1,12 @@
 import { useState, useEffect, useRef, useMemo, useCallback, type MutableRefObject } from 'react';
-import type { Test, Snapshot, SnapshotStatus, LinterResult, BenchComparison, FixturePerformance, DiagnosticsSnapshot, ProcessNode, ProcessDetails, RunMeta, TestEditAction, TestEditScope } from './types';
+import type { Test, Snapshot, SnapshotStatus, LinterResult, BenchComparison, FixturePerformance, RunMeta, TestEditAction, TestEditScope } from './types';
 import { Summary } from './components/Summary';
 import { TestNode } from './components/TestNode';
 import { DetailPanel, type IgnoreRequest } from './components/DetailPanel';
-import { DiagnosticsView } from './components/DiagnosticsView';
-import { DiagnosticsDetailPanel } from './components/DiagnosticsDetailPanel';
+import { ProcessesView } from './components/ProcessesView';
+import { ProcessDetailPanel } from './components/ProcessDetailPanel';
+import { useProcessTrace } from './hooks/use-process-trace';
+import { processMount } from './traces';
 import { FilterBar, type Filters } from './components/FilterBar';
 import { LintFilterBar, type LintGrouping, type LintFilters } from './components/LintFilterBar';
 import { LintView } from './components/LintView';
@@ -26,8 +28,8 @@ import {
   groupLintByLinterFile,
   groupLintByFileLinterRule,
   groupLintBySummary,
-  countProcesses,
-  findProcessByPID,
+  countLiveProcesses,
+  processLinksByPid,
   isLintNode,
   isLintOnlyPhase,
   stripTestTaskGroup,
@@ -52,8 +54,6 @@ function applySnapshot(
   setBench: (b: BenchComparison | undefined) => void,
   setPerformance: (b: FixturePerformance | undefined) => void,
   setRunError: (error: string | undefined) => void,
-  setDiagnosticsAvailable: (v: boolean) => void,
-  setDiagnostics: (d: DiagnosticsSnapshot | undefined) => void,
   setSnapshotStatus: (s: SnapshotStatus) => void,
   setRunMeta: (r: RunMeta | undefined) => void,
   setDone: (d: boolean) => void,
@@ -81,8 +81,6 @@ function applySnapshot(
   setBench(snap.bench);
   setPerformance(snap.performance);
   setRunError(snap.error);
-  setDiagnosticsAvailable(!!status.diagnostics_available);
-  if (snap.diagnostics) setDiagnostics(snap.diagnostics);
   setSnapshotStatus(status);
   setRunMeta(meta);
   if (!status.running) {
@@ -113,23 +111,9 @@ function currentRouteState(
   lintGrouping: LintGrouping,
   lintFilters: LintFilters,
   sampleIndex: number | undefined,
+  hideExited: boolean,
 ): RouteState {
-  return { tab, selectedPath, filters, lintGrouping, lintFilters, sampleIndex };
-}
-
-function mergeProcessDetails(root: ProcessNode | undefined, details: ProcessDetails): ProcessNode | undefined {
-  if (!root) return root;
-  if (root.pid === details.pid) {
-    return {
-      ...root,
-      ...details,
-      children: root.children,
-    };
-  }
-  return {
-    ...root,
-    children: (root.children || []).map(child => mergeProcessDetails(child, details) || child),
-  };
+  return { tab, selectedPath, filters, lintGrouping, lintFilters, sampleIndex, hideExited };
 }
 
 export function App() {
@@ -140,6 +124,7 @@ export function App() {
     lintGrouping: 'linter-rule-file' as LintGrouping,
     lintFilters: { severity: new Map(), linter: new Map() },
     sampleIndex: undefined as number | undefined,
+    hideExited: false,
   };
 
   const [tests, setTests] = useState<Test[]>([]);
@@ -148,8 +133,6 @@ export function App() {
   const [bench, setBench] = useState<BenchComparison | undefined>(undefined);
   const [performance, setPerformance] = useState<FixturePerformance | undefined>(undefined);
   const [runError, setRunError] = useState<string | undefined>(undefined);
-  const [diagnosticsAvailable, setDiagnosticsAvailable] = useState(false);
-  const [diagnostics, setDiagnostics] = useState<DiagnosticsSnapshot | undefined>(undefined);
   const [runMeta, setRunMeta] = useState<RunMeta | undefined>(undefined);
   const [snapshotStatus, setSnapshotStatus] = useState<SnapshotStatus>({ running: false });
   const [done, setDone] = useState(false);
@@ -161,11 +144,11 @@ export function App() {
   const [lintFilters, setLintFilters] = useState<LintFilters>(initialRoute.lintFilters);
   const [selectedPath, setSelectedPath] = useState(initialRoute.selectedPath);
   const [sampleIndex, setSampleIndex] = useState(initialRoute.sampleIndex);
+  const [hideExited, setHideExited] = useState(initialRoute.hideExited ?? false);
   const [rerunBusy, setRerunBusy] = useState(false);
   const [rerunDialogOpen, setRerunDialogOpen] = useState(false);
   const [ignoreBusy, setIgnoreBusy] = useState(false);
   const [testEditBusy, setTestEditBusy] = useState(false);
-  const [stackBusyPID, setStackBusyPID] = useState<number | null>(null);
   const { copyState, copyError, beginCopy, resetCopyFeedback } = useCopyFeedback();
   const [streamToken, setStreamToken] = useState(0);
   const [stopBusyKey, setStopBusyKey] = useState<string | null>(null);
@@ -175,8 +158,8 @@ export function App() {
   const doneRef = useRef(false);
 
   const routeState = useMemo(
-    () => currentRouteState(activeTab, selectedPath, filters, lintGrouping, lintFilters, sampleIndex),
-    [activeTab, selectedPath, filters, lintGrouping, lintFilters, sampleIndex],
+    () => currentRouteState(activeTab, selectedPath, filters, lintGrouping, lintFilters, sampleIndex, hideExited),
+    [activeTab, selectedPath, filters, lintGrouping, lintFilters, sampleIndex, hideExited],
   );
 
   const commitRoute = useCallback((next: RouteState, mode: 'push' | 'replace' = 'push') => {
@@ -186,6 +169,7 @@ export function App() {
     setLintGrouping(next.lintGrouping);
     setLintFilters(next.lintFilters);
     setSampleIndex(next.sampleIndex);
+    setHideExited(next.hideExited ?? false);
     const url = buildRoute(next);
     const current = `${window.location.pathname}${window.location.search}`;
     if (url !== current) {
@@ -204,7 +188,7 @@ export function App() {
     const res = await fetch(apiUrl('/api/tests'));
     if (!res.ok) throw new Error(`Snapshot request failed (${res.status})`);
     const snap: Snapshot = await res.json();
-    applySnapshot(snap, startTime, endTime, doneRef, setTests, setLint, setLintRun, setBench, setPerformance, setRunError, setDiagnosticsAvailable, setDiagnostics, setSnapshotStatus, setRunMeta, setDone, setStatus);
+    applySnapshot(snap, startTime, endTime, doneRef, setTests, setLint, setLintRun, setBench, setPerformance, setRunError, setSnapshotStatus, setRunMeta, setDone, setStatus);
   }, []);
 
   useEffect(() => {
@@ -216,6 +200,7 @@ export function App() {
       setLintGrouping(next.lintGrouping);
       setLintFilters(next.lintFilters);
       setSampleIndex(next.sampleIndex);
+      setHideExited(next.hideExited ?? false);
     };
 
     window.addEventListener('popstate', onPopState);
@@ -229,7 +214,7 @@ export function App() {
       fetch(apiUrl('/api/tests'))
         .then(r => r.json())
         .then((snap: Snapshot) => {
-          applySnapshot(snap, startTime, endTime, doneRef, setTests, setLint, setLintRun, setBench, setPerformance, setRunError, setDiagnosticsAvailable, setDiagnostics, setSnapshotStatus, setRunMeta, setDone, setStatus);
+          applySnapshot(snap, startTime, endTime, doneRef, setTests, setLint, setLintRun, setBench, setPerformance, setRunError, setSnapshotStatus, setRunMeta, setDone, setStatus);
         })
         .catch(() => {});
     }
@@ -238,7 +223,7 @@ export function App() {
 
     es.addEventListener('message', (e: MessageEvent) => {
       const snap: Snapshot = JSON.parse(e.data);
-      applySnapshot(snap, startTime, endTime, doneRef, setTests, setLint, setLintRun, setBench, setPerformance, setRunError, setDiagnosticsAvailable, setDiagnostics, setSnapshotStatus, setRunMeta, setDone, setStatus);
+      applySnapshot(snap, startTime, endTime, doneRef, setTests, setLint, setLintRun, setBench, setPerformance, setRunError, setSnapshotStatus, setRunMeta, setDone, setStatus);
 		if (!snap.status?.running) es.close();
 	});
 
@@ -266,25 +251,6 @@ export function App() {
       setStopBusyKey(null);
     }
   }, [snapshotStatus.running]);
-
-  const fetchDiagnostics = useCallback(async () => {
-    const res = await fetch(apiUrl('/api/diagnostics'));
-    if (!res.ok) throw new Error(`Diagnostics request failed (${res.status})`);
-    const next: DiagnosticsSnapshot = await res.json();
-    setDiagnostics(next);
-  }, []);
-
-  useEffect(() => {
-    if (!diagnosticsAvailable) return;
-
-    fetchDiagnostics().catch(() => {});
-    const timer = window.setInterval(() => {
-      fetchDiagnostics().catch(() => {});
-    }, 1000);
-    return () => {
-      window.clearInterval(timer);
-    };
-  }, [diagnosticsAvailable, fetchDiagnostics]);
 
   // While linters are still running but the test phase has settled, drop the
   // "Running tests across packages" virtual task group so the UI's only
@@ -339,7 +305,6 @@ export function App() {
     return annotateRoutePaths(collapsed);
   }, [lint, lintFilters, lintGrouping]);
   const lintTotal = useMemo(() => totalLintViolations(lint), [lint]);
-  const processCount = useMemo(() => countProcesses(diagnostics?.root), [diagnostics]);
 
   const selected = useMemo(() => {
     if (!selectedPath) return null;
@@ -348,17 +313,33 @@ export function App() {
     return null;
   }, [activeTab, filteredTests, lintTree, selectedPath]);
 
+  const traces = snapshotStatus.traces;
+  const processTraceAvailable = !!processMount(traces);
+  const trace = useProcessTrace({
+    traces,
+    done,
+    selectedKey: activeTab === 'processes' ? selectedPath : undefined,
+  });
+  const processCount = useMemo(() => countLiveProcesses(trace.nodes), [trace.nodes]);
+  const rootProcess = useMemo(() => trace.nodes.find(n => n.isRoot) ?? null, [trace.nodes]);
+
   const selectedProcess = useMemo(() => {
-    if (activeTab !== 'diagnostics' || !selectedPath || !diagnostics?.root) return null;
-    const pid = Number(selectedPath);
-    if (!Number.isFinite(pid)) return null;
-    return findProcessByPID(diagnostics.root, pid);
-  }, [activeTab, selectedPath, diagnostics]);
+    if (activeTab !== 'processes' || !selectedPath) return null;
+    return trace.nodes.find(n => n.key === selectedPath) ?? null;
+  }, [activeTab, selectedPath, trace.nodes]);
+
+  // Route paths for step links come from the unfiltered tree so a link never
+  // lands on a test the active status filter would hide.
+  const unfilteredTests = useMemo(
+    () => processTraceAvailable ? annotateRoutePaths(collapseSingleChildChains(displayedTests)) : [],
+    [processTraceAvailable, displayedTests],
+  );
+  const processLinks = useMemo(() => processLinksByPid(unfilteredTests), [unfilteredTests]);
 
   useEffect(() => {
-    if (activeTab !== 'diagnostics' || selectedPath || !diagnostics?.root) return;
-    commitRoute({ ...routeState, selectedPath: String(diagnostics.root.pid) }, 'replace');
-  }, [activeTab, selectedPath, diagnostics, routeState, commitRoute]);
+    if (activeTab !== 'processes' || selectedPath || !rootProcess) return;
+    commitRoute({ ...routeState, selectedPath: rootProcess.key }, 'replace');
+  }, [activeTab, selectedPath, rootProcess, routeState, commitRoute]);
 
   useEffect(() => {
     if (!selectedPath) return;
@@ -366,16 +347,16 @@ export function App() {
       ? (tests.length > 0 || done)
       : activeTab === 'lint'
         ? (lintRun || done || !!lint)
-        : activeTab === 'diagnostics'
-          ? !!diagnostics?.root
+        : activeTab === 'processes'
+          ? trace.nodes.length > 0
         : true;
-    const currentSelected = activeTab === 'diagnostics' ? selectedProcess : selected;
+    const currentSelected = activeTab === 'processes' ? selectedProcess : selected;
     if (!ready || currentSelected) return;
     commitRoute({
       ...routeState,
-      selectedPath: activeTab === 'diagnostics' && diagnostics?.root ? String(diagnostics.root.pid) : '',
+      selectedPath: activeTab === 'processes' && rootProcess ? rootProcess.key : '',
     }, 'replace');
-  }, [selectedPath, selected, selectedProcess, activeTab, tests.length, done, lintRun, lint, diagnostics, routeState, commitRoute]);
+  }, [selectedPath, selected, selectedProcess, activeTab, tests.length, done, lintRun, lint, trace.nodes.length, rootProcess, routeState, commitRoute]);
 
   const onTabChange = useCallback((tab: TabKey) => {
     commitRoute({
@@ -393,14 +374,26 @@ export function App() {
     });
   }, [routeState, selectedPath, commitRoute]);
 
-  const onProcessSelect = useCallback((pid: number) => {
-    const nextPath = selectedPath === String(pid) ? '' : String(pid);
+  const onProcessSelect = useCallback((key: string) => {
     commitRoute({
       ...routeState,
-      tab: 'diagnostics',
-      selectedPath: nextPath,
+      tab: 'processes',
+      selectedPath: key,
     });
-  }, [routeState, selectedPath, commitRoute]);
+  }, [routeState, commitRoute]);
+
+  const onHideExitedChange = useCallback((hide: boolean) => {
+    commitRoute({ ...routeState, tab: 'processes', hideExited: hide }, 'replace');
+  }, [routeState, commitRoute]);
+
+  const onOpenStep = useCallback((link: { routePath: string }) => {
+    commitRoute({
+      ...routeState,
+      tab: 'tests',
+      filters: { status: new Map(), framework: new Map() },
+      selectedPath: link.routePath,
+    });
+  }, [routeState, commitRoute]);
 
   const onTestFiltersChange = useCallback((nextFilters: Filters) => {
     commitRoute({
@@ -674,44 +667,17 @@ export function App() {
     }
   }, [testEditBusy, snapshotStatus.test_edit_supported, routeState, commitRoute, refreshSnapshot]);
 
-  const onCollectStack = useCallback(async (pid: number) => {
-    if (stackBusyPID !== null) return;
-    setStackBusyPID(pid);
-    setStatus(`Collecting stack trace for pid ${pid}...`);
-    try {
-      const res = await fetch(apiUrl('/api/diagnostics/collect'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pid }),
-      });
-      if (!res.ok) {
-        const text = await res.text();
-        setStatus(`Stack capture failed: ${text.trim()}`);
-        return;
-      }
-      const details: ProcessDetails = await res.json();
-      setDiagnostics(prev => prev?.root
-        ? { ...prev, root: mergeProcessDetails(prev.root, details) }
-        : prev);
-      setStatus(`Collected stack trace for pid ${pid}`);
-    } catch (e: any) {
-      setStatus(`Stack capture error: ${e?.message || e}`);
-    } finally {
-      setStackBusyPID(null);
-    }
-  }, [stackBusyPID]);
-
   const showLintTab = lintRun;
   const showBenchTab = !!bench || !!performance;
-  const showDiagnosticsTab = diagnosticsAvailable;
-  const showTabs = showLintTab || showBenchTab || showDiagnosticsTab;
+  const showProcessesTab = processTraceAvailable;
+  const showTabs = showLintTab || showBenchTab || showProcessesTab;
   const benchRegressions = bench?.deltas?.filter(d => d.significant && d.delta_pct > bench.threshold).length || 0;
   const hasContent = activeTab === 'tests'
     ? displayedTests.length > 0
     : activeTab === 'lint'
       ? lintTree.length > 0
-      : activeTab === 'diagnostics'
-        ? processCount > 0
+      : activeTab === 'processes'
+        ? trace.nodes.length > 0
         : !!bench || !!performance;
   const canExportCurrentView = (activeTab === 'tests' && displayedTests.length > 0)
     || (activeTab === 'lint' && lintRun)
@@ -765,8 +731,8 @@ export function App() {
                 ? 'Lint Results'
                 : activeTab === 'bench'
                   ? performance ? 'Fixture Benchmark' : 'Benchmark Comparison'
-                  : activeTab === 'diagnostics'
-                    ? 'Diagnostics'
+                  : activeTab === 'processes'
+                    ? 'Processes'
                     : 'Test Results'}
             </h1>
             {hasContent && (
@@ -856,12 +822,12 @@ export function App() {
                 countColor={benchRegressions > 0 ? 'bg-red-500' : 'bg-gray-400'}
               />
             )}
-            {showDiagnosticsTab && (
+            {showProcessesTab && (
               <TabButton
-                active={activeTab === 'diagnostics'}
-                onClick={() => onTabChange('diagnostics')}
+                active={activeTab === 'processes'}
+                onClick={() => onTabChange('processes')}
                 icon="codicon:server-process"
-                label="Diagnostics"
+                label="Processes"
                 count={processCount}
                 countColor="bg-blue-500"
               />
@@ -923,19 +889,31 @@ export function App() {
               />
             )}
             {activeTab === 'bench' && <BenchView bench={bench} />}
-            {activeTab === 'diagnostics' && (
-              <DiagnosticsView
-                root={diagnostics?.root}
-                selectedPid={selectedProcess?.pid}
+            {activeTab === 'processes' && (
+              <ProcessesView
+                nodes={trace.nodes}
+                selectedKey={selectedProcess?.key}
                 expandAll={expandAll}
+                hideExited={hideExited}
+                error={trace.error}
+                onHideExitedChange={onHideExitedChange}
                 onSelect={onProcessSelect}
               />
             )}
           </>
         }
-        right={activeTab === 'diagnostics'
-          ? <DiagnosticsDetailPanel process={selectedProcess} onCollectStack={onCollectStack} collectBusy={stackBusyPID === selectedProcess?.pid} runMeta={runMeta} />
-          : <DetailPanel test={selected} lint={lint} onRerun={onRerun} rerunBusy={rerunBusy} onStop={onStop} stopBusy={stopBusyKey !== null} onIgnore={onIgnore} ignoreBusy={ignoreBusy} onTestEdit={onTestEdit} testEditBusy={testEditBusy} testEditSupported={snapshotStatus.test_edit_supported !== false} runMeta={runMeta} nodeRouteState={nodeRouteState} failingOnlyRouteState={failingOnlyRouteState} />}
+        right={activeTab === 'processes'
+          ? <ProcessDetailPanel
+              node={selectedProcess}
+              samples={trace.samples}
+              stack={trace.stack}
+              collecting={trace.collecting}
+              collectMessage={trace.collectMessage}
+              stepLink={selectedProcess ? processLinks.get(selectedProcess.pid) : undefined}
+              onCollectStack={trace.collectStack}
+              onOpenStep={onOpenStep}
+            />
+          : <DetailPanel traces={traces} processes={trace.nodes} onOpenProcess={onProcessSelect} test={selected} lint={lint} onRerun={onRerun} rerunBusy={rerunBusy} onStop={onStop} stopBusy={stopBusyKey !== null} onIgnore={onIgnore} ignoreBusy={ignoreBusy} onTestEdit={onTestEdit} testEditBusy={testEditBusy} testEditSupported={snapshotStatus.test_edit_supported !== false} runMeta={runMeta} nodeRouteState={nodeRouteState} failingOnlyRouteState={failingOnlyRouteState} />}
       />}
       <RerunDialog open={rerunDialogOpen} onClose={() => setRerunDialogOpen(false)} />
     </div>

@@ -34,14 +34,14 @@ type Server struct {
 	// replayed marks a server hydrated from a static JSON snapshot
 	// (LoadSnapshot). Its results are fixed, so snapshot() must not consult
 	// the process-global clicky task registry — there is no live run behind it.
-	replayed            bool
-	metadata            *SnapshotMetadata
-	git                 *SnapshotGit
-	embeddedDiagnostics *DiagnosticsSnapshot
-	updated             chan struct{}
-	gitRoot             string
-	profileRoot         string
-	diag                *DiagnosticsManager
+	replayed       bool
+	metadata       *SnapshotMetadata
+	git            *SnapshotGit
+	updated        chan struct{}
+	gitRoot        string
+	profileRoot    string
+	traceRuns      map[string]*servedTraces
+	processSession string
 
 	rerunMu       sync.Mutex
 	rerunFn       RerunFunc
@@ -154,12 +154,6 @@ func (s *Server) SetGitInfo(git *SnapshotGit) {
 	}
 }
 
-func (s *Server) SetEmbeddedDiagnostics(snapshot *DiagnosticsSnapshot) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.embeddedDiagnostics = cloneDiagnosticsSnapshot(snapshot)
-}
-
 func (s *Server) LoadSnapshot(snapshot Snapshot) {
 	s.mu.Lock()
 	s.tests = snapshot.Tests
@@ -172,7 +166,6 @@ func (s *Server) LoadSnapshot(snapshot Snapshot) {
 	s.logTail = snapshot.LogTail
 	s.metadata = cloneSnapshotMetadata(snapshot.Metadata)
 	s.git = cloneSnapshotGit(snapshot.Git)
-	s.embeddedDiagnostics = cloneDiagnosticsSnapshot(snapshot.Diagnostics)
 	s.done = !snapshot.Status.Running
 	s.replayed = true
 	s.stopRequested = snapshot.Status.Stopped
@@ -332,9 +325,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/tests", s.handleJSON)
 	mux.HandleFunc("/api/tests/fixture-profile", s.handleFixtureProfile)
 	mux.HandleFunc("/api/tests/stream", s.handleSSE)
-	mux.HandleFunc("/api/diagnostics", s.handleDiagnosticsJSON)
-	mux.HandleFunc("/api/diagnostics/collect", s.handleDiagnosticsCollect)
+	mux.HandleFunc(QueryMount, s.handleTraces)
+	mux.HandleFunc(QueryMount+"/", s.handleTraces)
 	mux.HandleFunc("/api/process/metrics", s.handleProcessMetrics)
+	mux.HandleFunc("/api/process/", s.handleProcessInspect)
 	mux.HandleFunc("/api/rerun", s.handleRerun)
 	mux.HandleFunc("/api/rerun/stream", s.handleRerunStream)
 	mux.HandleFunc("/api/stop", s.handleStop)
@@ -424,7 +418,7 @@ func (s *Server) handleRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.IsExport {
-		if req.Tab == viewTabDiagnostics {
+		if req.Tab == viewTabProcesses {
 			http.NotFound(w, r)
 			return
 		}
@@ -547,13 +541,13 @@ func (s *Server) snapshot() Snapshot {
 		Metadata: cloneSnapshotMetadata(s.metadata),
 		Git:      cloneSnapshotGit(s.git),
 		Status: SnapshotStatus{
-			Running:              running,
-			LintRun:              s.lintRun,
-			DiagnosticsAvailable: s.diag != nil || s.embeddedDiagnostics != nil,
-			StopSupported:        s.stopFn != nil,
-			TestEditSupported:    s.testEditSupportedLocked(),
-			Stopped:              stopped,
-			StopMessage:          stopMessage,
+			Running:           running,
+			LintRun:           s.lintRun,
+			Traces:            s.tracesStatusLocked(),
+			StopSupported:     s.stopFn != nil,
+			TestEditSupported: s.testEditSupportedLocked(),
+			Stopped:           stopped,
+			StopMessage:       stopMessage,
 		},
 		Tests:            tests,
 		Lint:             s.lint,
@@ -562,7 +556,6 @@ func (s *Server) snapshot() Snapshot {
 		Performance:      s.performance,
 		Error:            s.runError,
 		LogTail:          s.logTail,
-		Diagnostics:      cloneDiagnosticsSnapshot(s.embeddedDiagnostics),
 	}
 }
 
@@ -709,84 +702,6 @@ func tasksDone() bool {
 	return true
 }
 
-func (s *Server) EnableDiagnostics(rootPID int) {
-	s.mu.Lock()
-	s.diag = NewDiagnosticsManager(rootPID, nil)
-	s.mu.Unlock()
-	s.notify()
-}
-
-func (s *Server) SetDiagnosticsManager(manager *DiagnosticsManager) {
-	s.mu.Lock()
-	s.diag = manager
-	s.mu.Unlock()
-	s.notify()
-}
-
-func (s *Server) diagnosticsManager() *DiagnosticsManager {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.diag
-}
-
-func (s *Server) handleDiagnosticsJSON(w http.ResponseWriter, _ *http.Request) {
-	manager := s.diagnosticsManager()
-	if manager == nil {
-		s.mu.RLock()
-		embedded := cloneDiagnosticsSnapshot(s.embeddedDiagnostics)
-		s.mu.RUnlock()
-		if embedded != nil {
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(embedded) //nolint:errcheck
-			return
-		}
-		http.Error(w, "diagnostics unavailable", http.StatusNotFound)
-		return
-	}
-	snapshot, err := manager.Snapshot()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(snapshot) //nolint:errcheck
-}
-
-func (s *Server) handleDiagnosticsCollect(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	manager := s.diagnosticsManager()
-	if manager == nil {
-		http.NotFound(w, r)
-		return
-	}
-
-	var req StackCaptureRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid json: "+err.Error(), http.StatusBadRequest)
-		return
-	}
-	if req.PID == 0 {
-		http.Error(w, "pid is required", http.StatusBadRequest)
-		return
-	}
-
-	details, err := manager.CollectStack(req.PID)
-	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
-			http.Error(w, err.Error(), http.StatusNotFound)
-			return
-		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	s.notify()
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(details) //nolint:errcheck
-}
-
 // handleProcessMetrics returns live CPU/memory/file-descriptor stats for a
 // given PID so the UI can render metrics next to a running test when the
 // user clicks it. Returns 404 when the process has already exited so the
@@ -812,11 +727,45 @@ func (s *Server) handleProcessMetrics(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "process not running", http.StatusNotFound)
 		return
 	}
-	node, err := snapshotProcess(proc, false)
+	metrics, err := readProcessMetrics(proc)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(node) //nolint:errcheck
+	writeJSON(w, metrics)
+}
+
+type processMetrics struct {
+	PID        int     `json:"pid"`
+	Command    string  `json:"command,omitempty"`
+	Status     string  `json:"status,omitempty"`
+	CPUPercent float64 `json:"cpu_percent"`
+	RSS        uint64  `json:"rss"`
+	VMS        uint64  `json:"vms"`
+	OpenFiles  int32   `json:"open_files"`
+}
+
+func readProcessMetrics(proc *gopsutilProcess.Process) (processMetrics, error) {
+	metrics := processMetrics{PID: int(proc.Pid)}
+	var err error
+	if metrics.Command, err = proc.Cmdline(); err != nil {
+		return metrics, fmt.Errorf("read command of process %d: %w", proc.Pid, err)
+	}
+	status, err := proc.Status()
+	if err != nil {
+		return metrics, fmt.Errorf("read status of process %d: %w", proc.Pid, err)
+	}
+	metrics.Status = strings.Join(status, ", ")
+	if metrics.CPUPercent, err = proc.CPUPercent(); err != nil {
+		return metrics, fmt.Errorf("read CPU of process %d: %w", proc.Pid, err)
+	}
+	memory, err := proc.MemoryInfo()
+	if err != nil {
+		return metrics, fmt.Errorf("read memory of process %d: %w", proc.Pid, err)
+	}
+	metrics.RSS, metrics.VMS = memory.RSS, memory.VMS
+	if metrics.OpenFiles, err = proc.NumFDs(); err != nil {
+		return metrics, fmt.Errorf("read open files of process %d: %w", proc.Pid, err)
+	}
+	return metrics, nil
 }

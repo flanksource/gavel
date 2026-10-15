@@ -1,5 +1,5 @@
 import { useCallback, type ReactNode } from 'react';
-import type { Test, FixtureContext, GinkgoContext, GoTestContext, Violation, LinterResult, RunMeta, FailureDetail, TestEditAction, TestEditScope } from '../types';
+import type { Test, FixtureContext, GinkgoContext, GoTestContext, Violation, LinterResult, RunMeta, FailureDetail, ProcessTraceNode, TestEditAction, TestEditScope, TracesStatus } from '../types';
 import {
   statusIcon,
   statusColor,
@@ -10,6 +10,9 @@ import {
   formatRunTimestamp,
   formatRunDuration,
   formatBytes,
+  processLabel,
+  processStateColor,
+  processStateIcon,
   hasTimeoutArgs,
   timeoutArgValue,
 } from '../utils';
@@ -20,6 +23,7 @@ import { AnsiHtml } from './AnsiHtml';
 import { ProgressBar } from './ProgressBar';
 import { TestAttempts } from './TestAttempts';
 import { SQLProfileDetails } from './SQLProfileDetails';
+import { TracesSection } from './TracesSection';
 import { DownloadMenu } from './DownloadMenu';
 import { copyCurrentViewForAgent } from '../export';
 import type { RouteState } from '../routes';
@@ -49,6 +53,11 @@ interface Props {
   runMeta?: RunMeta;
   nodeRouteState?: RouteState;
   failingOnlyRouteState?: RouteState;
+  // processes is the run's process trace; a fixture step lists the nodes whose pid it started.
+  processes?: ProcessTraceNode[];
+  onOpenProcess?: (key: string) => void;
+  // traces is status.traces: where the run's trace store is served, for a fixture's Traces section.
+  traces?: TracesStatus;
 }
 
 function isLegacyClickyDocument(value: unknown): value is { version: unknown; node: unknown } {
@@ -77,7 +86,7 @@ function taskMeta(t: Test): { duration?: string; status?: string; type?: string 
   };
 }
 
-export function DetailPanel({ test: t, lint, onRerun, rerunBusy, onStop, stopBusy, onIgnore, ignoreBusy, onTestEdit, testEditBusy, testEditSupported, runMeta, nodeRouteState, failingOnlyRouteState }: Props) {
+export function DetailPanel({ test: t, lint, onRerun, rerunBusy, onStop, stopBusy, onIgnore, ignoreBusy, onTestEdit, testEditBusy, testEditSupported, runMeta, nodeRouteState, failingOnlyRouteState, processes = [], onOpenProcess, traces }: Props) {
   const { copyState, copyError, beginCopy, resetCopyFeedback } = useCopyFeedback();
 
   const onCopyAIPrompt = useCallback(async () => {
@@ -102,6 +111,8 @@ export function DetailPanel({ test: t, lint, onRerun, rerunBusy, onStop, stopBus
     );
   }
 
+  const stepPids = new Set(t.fixture?.pids || []);
+  const stepProcesses = processes.filter(p => stepPids.has(p.pid));
   const hasChildren = (t.children?.length ?? 0) > 0;
   const s = hasChildren ? sum(t) : null;
   const fw = t.framework;
@@ -178,6 +189,7 @@ export function DetailPanel({ test: t, lint, onRerun, rerunBusy, onStop, stopBus
             </div>
           </div>
           <div className="flex items-center gap-2 mt-1 flex-wrap">
+            {t.cached && <span className="text-xs text-blue-700 bg-blue-50 rounded px-1.5 py-0.5">cached</span>}
             {fwIcon && (
               <span className="inline-flex items-center gap-1 text-xs bg-gray-100 rounded px-1.5 py-0.5 text-gray-600">
                 <iconify-icon icon={fwIcon} className="text-sm" />
@@ -359,6 +371,32 @@ export function DetailPanel({ test: t, lint, onRerun, rerunBusy, onStop, stopBus
         </Section>
       )}
 
+      {stepProcesses.length > 0 && (
+        <Section title="Processes">
+          <div className="space-y-1.5">
+            {stepProcesses.map(p => (
+              <div key={p.key} className="rounded-lg border bg-gray-50 px-2.5 py-2 text-xs">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-medium text-gray-800">{processLabel(p)}</span>
+                  <span className="font-mono text-gray-500">pid {p.pid}</span>
+                  <span className={`inline-flex items-center gap-1 ${processStateColor(p.status)}`}>
+                    <iconify-icon icon={processStateIcon(p.status)} />
+                    {p.status}
+                  </span>
+                  <span className="text-gray-500">peak {p.peakCpuPercent.toFixed(1)}% CPU / {formatBytes(p.peakRssBytes)}</span>
+                  {onOpenProcess && (
+                    <button className="ml-auto text-blue-600 hover:underline" onClick={() => onOpenProcess(p.key)}>
+                      View process
+                    </button>
+                  )}
+                </div>
+                <div className="mt-1 font-mono text-gray-600 break-all">{p.command}</div>
+              </div>
+            ))}
+          </div>
+        </Section>
+      )}
+
       {t.sql_profile && <Section title="SQL profile">
         <div className="grid grid-cols-3 gap-3 text-sm">
           <MetaCard label="Queries" value={t.sql_profile.query_count} />
@@ -446,6 +484,9 @@ export function DetailPanel({ test: t, lint, onRerun, rerunBusy, onStop, stopBus
 
       {/* Framework-specific context */}
       {fw === 'fixture' && t.context && <FixtureDetail ctx={t.context as FixtureContext} />}
+      {fw === 'fixture' && !!(t.context as FixtureContext | undefined)?.traces?.length && (
+        <TracesSection windows={(t.context as FixtureContext).traces!} traces={traces} />
+      )}
       {fw === 'ginkgo' && t.context && <GinkgoDetail ctx={t.context as GinkgoContext} failureLocation={t.failure_detail?.location} suiteAbove={t.suite?.join(' > ')} />}
       {fw === 'go test' && t.context && <GoTestDetail ctx={t.context as GoTestContext} />}
 
@@ -647,6 +688,34 @@ function GinkgoDetail({
       {showLocation && (
         <Section title="Failure Location">
           <span className="text-sm text-red-600 font-mono">{ctx.failure_location}</span>
+        </Section>
+      )}
+
+      {!!ctx.labels?.length && (
+        <Section title="Labels">
+          <div className="flex flex-wrap gap-1">
+            {ctx.labels.map(label => <span key={label} className="rounded bg-blue-50 px-2 py-0.5 text-xs text-blue-700">{label}</span>)}
+          </div>
+        </Section>
+      )}
+
+      {!!ctx.num_attempts && ctx.num_attempts > 1 && (
+        <Section title="Ginkgo attempts">
+          <span className="text-sm text-gray-700">{ctx.num_attempts}</span>
+        </Section>
+      )}
+
+      {!!ctx.report_entries?.length && (
+        <Section title="Report entries">
+          <div className="space-y-2">
+            {ctx.report_entries.map((entry, index) => (
+              <div key={`${entry.name}-${index}`} className="rounded border border-gray-200 bg-gray-50 p-2">
+                <div className="text-sm font-medium text-gray-800">{entry.name}</div>
+                {entry.file && <div className="text-xs font-mono text-gray-500">{entry.file}{entry.line ? `:${entry.line}` : ''}</div>}
+                <div className="mt-1 break-words"><JsonView data={entry.value ?? entry.representation} /></div>
+              </div>
+            ))}
+          </div>
         </Section>
       )}
     </>

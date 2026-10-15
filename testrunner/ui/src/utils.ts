@@ -1,4 +1,4 @@
-import type { Test, TestSummary, LinterResult, Violation, Severity, ProcessNode } from './types';
+import type { Test, TestSummary, LinterResult, Violation, Severity, ProcessTraceNode, ProcessForestNode } from './types';
 import type { FilterState } from './filterState';
 import { matchesFilterState } from './filterState';
 
@@ -1366,24 +1366,83 @@ export function totalDuration(t: Test): number {
   return d;
 }
 
-export function countProcesses(node?: ProcessNode): number {
-  if (!node) return 0;
-  return 1 + (node.children || []).reduce((sum, child) => sum + countProcesses(child), 0);
+function startedAtMs(node: ProcessTraceNode): number {
+  const ms = Date.parse(node.startedAt);
+  return Number.isNaN(ms) ? 0 : ms;
 }
 
-export function findProcessByPID(node: ProcessNode | undefined, pid: number): ProcessNode | null {
-  if (!node) return null;
-  if (node.pid === pid) return node;
-  for (const child of node.children || []) {
-    const found = findProcessByPID(child, pid);
-    if (found) return found;
+// buildProcessForest nests trace nodes by parentKey. A node whose parent is
+// absent from the set (or that has no parentKey) becomes a root; siblings are
+// ordered by start time, then pid, so the layout is stable across polls.
+export function buildProcessForest(nodes: ProcessTraceNode[]): ProcessForestNode[] {
+  const byKey = new Map<string, ProcessForestNode>();
+  for (const node of nodes) byKey.set(node.key, { node, children: [] });
+
+  const roots: ProcessForestNode[] = [];
+  for (const entry of byKey.values()) {
+    const parentKey = entry.node.parentKey;
+    const parent = parentKey && parentKey !== entry.node.key ? byKey.get(parentKey) : undefined;
+    if (parent) parent.children.push(entry);
+    else roots.push(entry);
   }
-  return null;
+
+  const order = (a: ProcessForestNode, b: ProcessForestNode) =>
+    startedAtMs(a.node) - startedAtMs(b.node) || a.node.pid - b.node.pid;
+  const sortTree = (list: ProcessForestNode[]) => {
+    list.sort(order);
+    for (const entry of list) sortTree(entry.children);
+  };
+  sortTree(roots);
+  return roots;
+}
+
+// pruneExitedProcesses drops exited processes from a forest, keeping an exited
+// process only while it still has a live descendant to hang off.
+export function pruneExitedProcesses(forest: ProcessForestNode[]): ProcessForestNode[] {
+  return forest.flatMap(entry => {
+    const children = pruneExitedProcesses(entry.children);
+    return isProcessExited(entry.node) && children.length === 0 ? [] : [{ node: entry.node, children }];
+  });
+}
+
+export interface ProcessStepLink {
+  pid: number;
+  routePath: string;
+  name: string;
+}
+
+// processLinksByPid maps each pid recorded in a fixture step's fixture.pids to
+// the test node that started it. The first step to claim a pid wins.
+export function processLinksByPid(tests: Test[]): Map<number, ProcessStepLink> {
+  const links = new Map<number, ProcessStepLink>();
+  const walk = (list: Test[]) => {
+    for (const test of list) {
+      for (const pid of test.fixture?.pids || []) {
+        if (!links.has(pid) && test.route_path) {
+          links.set(pid, { pid, routePath: test.route_path, name: test.name });
+        }
+      }
+      if (test.children) walk(test.children);
+    }
+  };
+  walk(tests);
+  return links;
+}
+
+// isProcessExited is true for a node whose status is "exited" or that carries
+// an exit time.
+export function isProcessExited(node: ProcessTraceNode): boolean {
+  return node.status === 'exited' || !!node.exitedAt;
+}
+
+export function countLiveProcesses(nodes: ProcessTraceNode[]): number {
+  return nodes.filter(node => !isProcessExited(node)).length;
 }
 
 export function processStateIcon(status?: string): string {
   const value = (status || '').toLowerCase();
-  if (value.includes('run')) return 'codicon:play-circle';
+  if (value.includes('exit')) return 'codicon:circle-slash';
+  if (value.includes('run') || value.includes('active')) return 'codicon:play-circle';
   if (value.includes('sleep') || value.includes('idle')) return 'codicon:clock';
   if (value.includes('stop') || value.includes('halt')) return 'codicon:debug-pause';
   if (value.includes('zombie') || value.includes('dead')) return 'codicon:error';
@@ -1393,7 +1452,8 @@ export function processStateIcon(status?: string): string {
 
 export function processStateColor(status?: string): string {
   const value = (status || '').toLowerCase();
-  if (value.includes('run')) return 'text-green-600';
+  if (value.includes('exit')) return 'text-gray-400';
+  if (value.includes('run') || value.includes('active')) return 'text-green-600';
   if (value.includes('sleep') || value.includes('idle')) return 'text-amber-500';
   if (value.includes('stop') || value.includes('halt')) return 'text-orange-600';
   if (value.includes('zombie') || value.includes('dead')) return 'text-red-600';
@@ -1413,7 +1473,7 @@ export function formatBytes(value?: number): string {
   return `${size >= 10 || unit === 0 ? size.toFixed(0) : size.toFixed(1)} ${units[unit]}`;
 }
 
-export function processLabel(node: ProcessNode): string {
+export function processLabel(node: ProcessTraceNode): string {
   if (node.name) return node.name;
   if (node.command) {
     const [first] = node.command.split(/\s+/, 1);

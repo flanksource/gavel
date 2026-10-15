@@ -1,11 +1,14 @@
 import { defineConfig } from 'vite';
 import preact from '@preact/preset-vite';
 
-export default defineConfig({
+export default defineConfig(({ command }) => ({
   server: {
     hmr: false,
   },
   plugins: [preact()],
+  // Lib/IIFE builds don't replace process.env.NODE_ENV, which clicky-ui's data
+  // views reference at runtime; without it the bundle throws before rendering.
+  define: command === 'build' ? { 'process.env.NODE_ENV': JSON.stringify('production') } : {},
   resolve: {
     // The preact preset aliases React (incl. react/jsx-runtime) to preact. When
     // @flanksource/clicky-ui is linked from a local sibling checkout, its realpath
@@ -32,4 +35,4 @@ export default defineConfig({
       output: { inlineDynamicImports: true },
     },
   },
-});
+}));

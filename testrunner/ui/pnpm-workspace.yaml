@@ -92,7 +92,11 @@ catalog:
   vite-plugin-dts: ^4.3.0
   vitest: ^3.0.5
   yaml: ^2.8.3
+  '@flanksource/clicky-ui': ^0.3.48
 
 allowBuilds:
   "@parcel/watcher": true
   esbuild: true
+
+minimumReleaseAgeExclude:
+  - '@flanksource/clicky-ui@0.3.48'

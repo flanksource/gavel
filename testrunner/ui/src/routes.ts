@@ -21,7 +21,7 @@ function isDefaultStatusFilter(state: FilterState<string>): boolean {
   return want.every((token, i) => token === got[i]);
 }
 
-export type TabKey = 'tests' | 'lint' | 'bench' | 'diagnostics';
+export type TabKey = 'tests' | 'lint' | 'bench' | 'processes';
 
 export interface RouteState {
   tab: TabKey;
@@ -30,6 +30,7 @@ export interface RouteState {
   lintGrouping: LintGrouping;
   lintFilters: LintFilters;
   sampleIndex?: number;
+  hideExited?: boolean;
 }
 
 export type ExportFormat = 'json' | 'md' | 'pdf';
@@ -49,7 +50,7 @@ export function parseRoute(location: Location): RouteState {
   let tab: TabKey = 'tests';
   let selectedPath = '';
 
-  if (segments[0] === 'tests' || segments[0] === 'lint' || segments[0] === 'bench' || segments[0] === 'diagnostics') {
+  if (segments[0] === 'tests' || segments[0] === 'lint' || segments[0] === 'bench' || segments[0] === 'processes') {
     tab = segments[0];
     selectedPath = segments.slice(1).join('/');
   }
@@ -78,6 +79,7 @@ export function parseRoute(location: Location): RouteState {
       linter: decodeFilterState(splitCSV(params.get('linter'))),
     },
 		sampleIndex: sample !== null && /^\d+$/.test(sample) ? Number(sample) : undefined,
+    hideExited: params.get('hideExited') === '1',
   };
 }
 
@@ -103,6 +105,7 @@ export function buildRoute(state: RouteState): string {
     if (state.lintFilters.linter.size > 0) params.set('linter', encodeFilterState(state.lintFilters.linter).join(','));
   }
 	if (state.tab === 'bench' && state.sampleIndex !== undefined) params.set('sample', String(state.sampleIndex));
+  if (state.tab === 'processes' && state.hideExited) params.set('hideExited', '1');
 
   const query = params.toString();
   return `${basePath}/${segments.join('/')}${query ? `?${query}` : ''}`;

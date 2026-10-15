@@ -22,10 +22,10 @@ import (
 )
 
 const (
-	viewTabTests       = "tests"
-	viewTabLint        = "lint"
-	viewTabBench       = "bench"
-	viewTabDiagnostics = "diagnostics"
+	viewTabTests     = "tests"
+	viewTabLint      = "lint"
+	viewTabBench     = "bench"
+	viewTabProcesses = "processes"
 )
 
 type routeRequest struct {
@@ -280,7 +280,7 @@ func parseRouteRequest(r *http.Request) (routeRequest, bool) {
 	}
 
 	switch tabSeg {
-	case viewTabTests, viewTabLint, viewTabBench, viewTabDiagnostics:
+	case viewTabTests, viewTabLint, viewTabBench, viewTabProcesses:
 		req.Tab = tabSeg
 	default:
 		return routeRequest{}, false

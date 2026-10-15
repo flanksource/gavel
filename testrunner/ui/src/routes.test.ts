@@ -42,3 +42,19 @@ describe('fixture profile sample route', () => {
     expect(buildRoute(route)).toBe('/bench?sample=3');
   });
 });
+
+describe('processes route', () => {
+  it('round trips the processes tab, an encoded node key and the hide-exited filter', () => {
+    const route = parseRoute(new URL('http://example.test/processes/4242%401?hideExited=1') as unknown as Location);
+    expect(route.tab).toBe('processes');
+    expect(route.selectedPath).toBe('4242@1');
+    expect(route.hideExited).toBe(true);
+    expect(buildRoute(route)).toBe('/processes/4242%401?hideExited=1');
+  });
+
+  it('omits hideExited from the URL by default', () => {
+    const route = parseRoute(new URL('http://example.test/processes') as unknown as Location);
+    expect(route.hideExited).toBe(false);
+    expect(buildRoute(route)).toBe('/processes');
+  });
+});
