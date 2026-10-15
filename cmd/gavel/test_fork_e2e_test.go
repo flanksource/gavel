@@ -72,19 +72,18 @@ func TestDetachedUI_InheritedListener_E2E(t *testing.T) {
 	tcpListener := listener.(*net.TCPListener)
 	listenerFile, err := tcpListener.File()
 	require.NoError(t, err)
-	defer listenerFile.Close() //nolint:errcheck
 
 	urlFile := filepath.Join(workDir, "url.txt")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Bound the test runtime with a conservative idle timeout (500ms) and
-	// slightly-longer hard deadline (5s) so a bug can't wedge the suite.
+	// The idle timeout leaves room for a loaded machine between the child's ready
+	// beat and the request below; the hard deadline stays inside ctx's 30s.
 	cmd := exec.CommandContext(ctx, binPath, "ui", "serve",
 		"--listener-fd=3",
-		"--auto-stop=5s",
-		"--idle-timeout=500ms",
+		"--auto-stop=20s",
+		"--idle-timeout=3s",
 		"--url-file="+urlFile,
 		resultsPath,
 	)
@@ -97,10 +96,11 @@ func TestDetachedUI_InheritedListener_E2E(t *testing.T) {
 	require.NoError(t, cmd.Start())
 	childPID := cmd.Process.Pid
 
-	// Parent closes its listener copy; the child's inherited dup keeps the
-	// socket alive. A bug in the inheritance path would cause the HTTP
-	// request below to be refused.
+	// Parent closes both of its socket copies; the child's inherited dup keeps the
+	// socket alive. A bug in the inheritance path, or a child that already exited,
+	// makes the HTTP request below fail instead of waiting in the accept queue.
 	require.NoError(t, tcpListener.Close())
+	require.NoError(t, listenerFile.Close())
 
 	// Wait for the child to write the url file — that's its "ready" beat.
 	var url string
@@ -120,7 +120,7 @@ func TestDetachedUI_InheritedListener_E2E(t *testing.T) {
 	}
 
 	// Prove the inherited socket actually serves traffic.
-	resp, err := http.Get(url + "/api/tests")
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Get(url + "/api/tests")
 	require.NoError(t, err, "child did not serve /api/tests on inherited socket")
 	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
