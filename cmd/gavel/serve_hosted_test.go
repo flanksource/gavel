@@ -289,3 +289,14 @@ func readAll(t *testing.T, resp *http.Response) string {
 	require.NoError(t, err)
 	return string(data)
 }
+
+func TestHostedDashboardRefusesAnIncompleteStorageConfig(t *testing.T) {
+	f := newHostedFixture(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	require.NoError(t, os.WriteFile(filepath.Join(home, ".gavel.yaml"), []byte("storage:\n  type: gcs\n  bucket: blobs\n"), 0o644))
+
+	_, err := hostedDashboard(t.Context(), f.opts, f.db.Gorm(), nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "storage.gcs.credentials is required")
+}

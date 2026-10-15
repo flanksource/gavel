@@ -296,6 +296,11 @@ func runPRUI(opts PRListOptions, databaseMode serveDatabaseMode) error {
 		Project:     saved.Project,
 		IgnoredOrgs: saved.IgnoredOrgs,
 	})
+	blobs, err := configuredBlobStore(ctx)
+	if err != nil {
+		return err
+	}
+	srv.SetBlobStore(blobs)
 	srv.SetFixtureSchemaProvider(func() (any, error) {
 		return fixturesSchemaDocument()
 	})

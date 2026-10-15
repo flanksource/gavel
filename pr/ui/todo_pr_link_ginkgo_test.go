@@ -59,7 +59,7 @@ var _ = Describe("explicit TODO PR links over HTTP", func() {
 		for _, value := range []url.Values{{"pr": {prURL}}, {"clearPR": {"true"}}} {
 			req := httptest.NewRequest(http.MethodPatch, "/api/todos/item", strings.NewReader(value.Encode()))
 			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-			payload, _, err := parseTodoUpdatePayload(req)
+			payload, _, err := (&Server{}).parseTodoUpdatePayload(req)
 			Expect(err).NotTo(HaveOccurred())
 			if value.Has("pr") {
 				Expect(payload.PR).To(Equal(&types.PR{Number: 27, URL: prURL}))

@@ -152,7 +152,7 @@ func todoUpdateChanges(payload todoUpdatePayload, attachments []todoAttachmentSu
 }
 
 func (s *Server) handleTodoPatch(w http.ResponseWriter, r *http.Request) {
-	payload, attachments, err := parseTodoUpdatePayload(r)
+	payload, attachments, err := s.parseTodoUpdatePayload(r)
 	if err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)
 		return

@@ -23,6 +23,7 @@ import (
 	"github.com/flanksource/clicky/sse"
 	clickytask "github.com/flanksource/clicky/task"
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/blob"
 	gavelctx "github.com/flanksource/gavel/context"
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/github/cache"
@@ -163,6 +164,10 @@ type Server struct {
 	orgDB       *gorm.DB
 	githubCache *cache.Store
 
+	// blobs is the storage: store from ~/.gavel.yaml; nil keeps attachments in
+	// attachmentsDir.
+	blobs blob.Store
+
 	// authConfig is what /api/auth/config reports (see me.go).
 	authConfig AuthConfigResponse
 }
@@ -171,6 +176,12 @@ type Server struct {
 // before serving.
 func (s *Server) SetOrg(org uuid.UUID, db *gorm.DB) {
 	s.org, s.orgDB = org, db
+}
+
+// SetBlobStore makes store, the configured storage: store, hold the Server's attachments. Call it
+// before serving.
+func (s *Server) SetBlobStore(store blob.Store) {
+	s.blobs = store
 }
 
 // orgID is the organization the Server serves.

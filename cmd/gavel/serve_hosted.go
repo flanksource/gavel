@@ -132,6 +132,10 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 		}
 	}
 	store := installations.Store{DB: db, App: app}
+	blobs, err := configuredBlobStore(ctx)
+	if err != nil {
+		return hostedStack{}, err
+	}
 
 	orgs := ui.NewOrgServers(func(ctx context.Context, scope tenant.Scope) (*ui.Server, error) {
 		cfg, err := ui.LoadOrgSearchConfig(ctx, db, scope.OrgID)
@@ -144,6 +148,7 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 		}
 		srv := ui.NewServer(gavelctx.New(ctx), interval, ghOpts, cfg)
 		srv.SetOrg(scope.OrgID, db)
+		srv.SetBlobStore(blobs)
 		srv.SetHostedMode(true)
 		srv.SetAuthConfig(authConfig)
 		if app != nil {

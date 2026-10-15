@@ -157,7 +157,7 @@ func (s *Server) handleTodoNew(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	payload, attachments, err := parseTodoNewPayload(r)
+	payload, attachments, err := s.parseTodoNewPayload(r)
 	if err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)
 		return

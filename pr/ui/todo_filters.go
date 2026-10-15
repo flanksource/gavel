@@ -25,7 +25,7 @@ func todoFiltersFromRequest(r *http.Request) (todos.DiscoveryFilters, error) {
 	return todos.DiscoveryFilters{IncludeStatuses: []types.Status{status}}, nil
 }
 
-func parseTodoNewPayload(r *http.Request) (todoNewPayload, []todoAttachmentSummary, error) {
+func (s *Server) parseTodoNewPayload(r *http.Request) (todoNewPayload, []todoAttachmentSummary, error) {
 	var payload todoNewPayload
 	var attachments []todoAttachmentSummary
 	contentType := strings.ToLower(r.Header.Get("Content-Type"))
@@ -39,7 +39,7 @@ func parseTodoNewPayload(r *http.Request) (todoNewPayload, []todoAttachmentSumma
 			if err := applyTodoNewValues(&payload, r.MultipartForm.Value, true); err != nil {
 				return payload, nil, err
 			}
-			stored, err := persistMultipartAttachments(r.MultipartForm)
+			stored, err := s.persistMultipartAttachments(r.Context(), r.MultipartForm)
 			if err != nil {
 				return payload, nil, err
 			}
@@ -70,7 +70,7 @@ func parseTodoNewPayload(r *http.Request) (todoNewPayload, []todoAttachmentSumma
 	return payload, attachments, nil
 }
 
-func parseTodoUpdatePayload(r *http.Request) (todoUpdatePayload, []todoAttachmentSummary, error) {
+func (s *Server) parseTodoUpdatePayload(r *http.Request) (todoUpdatePayload, []todoAttachmentSummary, error) {
 	var payload todoUpdatePayload
 	var attachments []todoAttachmentSummary
 	contentType := strings.ToLower(r.Header.Get("Content-Type"))
@@ -84,7 +84,7 @@ func parseTodoUpdatePayload(r *http.Request) (todoUpdatePayload, []todoAttachmen
 			if err := applyTodoUpdateValues(&payload, r.MultipartForm.Value); err != nil {
 				return payload, nil, err
 			}
-			stored, err := persistMultipartAttachments(r.MultipartForm)
+			stored, err := s.persistMultipartAttachments(r.Context(), r.MultipartForm)
 			if err != nil {
 				return payload, nil, err
 			}

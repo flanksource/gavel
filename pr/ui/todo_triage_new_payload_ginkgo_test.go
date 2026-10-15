@@ -15,7 +15,7 @@ var _ = Describe("Triage new payload", func() {
 	DescribeTable("decodes triage with body precedence over query", func(contentType, body, query string, want bool) {
 		request := httptest.NewRequest(http.MethodPost, "/api/todos/new"+query, strings.NewReader(body))
 		request.Header.Set("Content-Type", contentType)
-		payload, attachments, err := parseTodoNewPayload(request)
+		payload, attachments, err := (&Server{}).parseTodoNewPayload(request)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(attachments).To(BeEmpty())
 		Expect(payload.Triage).NotTo(BeNil())
@@ -36,7 +36,7 @@ var _ = Describe("Triage new payload", func() {
 		Expect(writer.Close()).To(Succeed())
 		request := httptest.NewRequest(http.MethodPost, "/api/todos/new?triage=true", &body)
 		request.Header.Set("Content-Type", writer.FormDataContentType())
-		payload, _, err := parseTodoNewPayload(request)
+		payload, _, err := (&Server{}).parseTodoNewPayload(request)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(payload.Triage).NotTo(BeNil())
 		Expect(*payload.Triage).To(BeFalse())
@@ -44,7 +44,7 @@ var _ = Describe("Triage new payload", func() {
 	DescribeTable("rejects invalid values", func(contentType, body, query string) {
 		request := httptest.NewRequest(http.MethodPost, "/api/todos/new"+query, strings.NewReader(body))
 		request.Header.Set("Content-Type", contentType)
-		_, _, err := parseTodoNewPayload(request)
+		_, _, err := (&Server{}).parseTodoNewPayload(request)
 		Expect(err).To(HaveOccurred())
 	},
 		Entry("JSON string", "application/json", `{"triage":"yes"}`, ""),
