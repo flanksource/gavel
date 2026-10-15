@@ -2,6 +2,7 @@ package fixtures
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -9,7 +10,6 @@ import (
 
 	"github.com/flanksource/clicky/task"
 	flanksourceContext "github.com/flanksource/commons/context"
-	"github.com/flanksource/commons/logger"
 	"github.com/onsi/ginkgo/v2"
 	"github.com/onsi/gomega"
 	"github.com/onsi/gomega/types"
@@ -93,32 +93,50 @@ func (r *Runner) RegisterGinkgoSpecs() {
 	}
 
 	ginkgo.Describe("Fixtures", ginkgo.Ordered, func() {
+		scopes := make([]*fileScope, 0, len(tree.Children))
+		for _, file := range tree.Children {
+			scopes = append(scopes, &fileScope{file: file})
+		}
 		ginkgo.BeforeAll(func() {
 			ginkgo.GinkgoHelper()
 			if err := r.setupGinkgoRun(); err != nil {
 				ginkgo.Fail(err.Error(), 1)
 			}
+			for _, file := range scopes {
+				var setup *PreparedSetup
+				if file.file.Origin != nil {
+					setup = r.setups[file.file.Origin.File]
+				}
+				file.scope = NewStepScope(scopeSeed(setup, firstFrontMatter([]*FixtureNode{file.file}), r.fileTraceEnv(file.file)))
+			}
 		})
 		ginkgo.AfterAll(func() {
-			// Recorders first: a daemon shutting down can still emit requests.
-			// Then the daemon, because removing a worktree a live process is
-			// sitting in leaves a stale git worktree registration behind.
-			r.closeRecorders()
-			if err := r.stopDaemon(); err != nil {
-				logger.Warnf("daemon stop failed: %v", err)
+			var teardownErr error
+			for i := len(scopes) - 1; i >= 0; i-- {
+				if scopes[i].scope == nil {
+					continue
+				}
+				for _, result := range teardownResults(context.Background(), scopes[i].scope) {
+					verdict := result
+					scopes[i].file.AddChild(&FixtureNode{Name: verdict.Name, Type: TestNode, Results: &verdict})
+					if isFailureStatus(verdict.Status) {
+						teardownErr = errors.Join(teardownErr, fmt.Errorf("%s: %s: %s", scopes[i].file.Name, verdict.Name, verdict.Error))
+					}
+				}
 			}
-			if err := r.cleanupSetups(); err != nil {
-				logger.Warnf("setup cleanup failed: %v", err)
+			teardownErr = errors.Join(teardownErr, r.closeTraces(), r.stopDaemon(), r.cleanupSetups())
+			if teardownErr != nil {
+				ginkgo.Fail(teardownErr.Error(), 1)
 			}
 		})
 
-		for _, child := range tree.Children {
-			registerGinkgoNode(r, child)
+		for _, file := range scopes {
+			registerGinkgoNode(r, file.file, file)
 		}
 	})
 }
 
-func registerGinkgoNode(r *Runner, node *FixtureNode) {
+func registerGinkgoNode(r *Runner, node *FixtureNode, file *fileScope) {
 	if node == nil {
 		return
 	}
@@ -129,7 +147,9 @@ func registerGinkgoNode(r *Runner, node *FixtureNode) {
 			ginkgo.GinkgoHelper()
 			// Looked up inside the It, not at registration: setups are prepared
 			// in BeforeAll, which has not run yet while specs are being built.
-			result, err := r.runSingleFixture(fixture, r.envForNode(node))
+			env := r.envForNode(node)
+			env.scope = file.scope
+			result, err := r.runSingleFixture(fixture, env)
 			node.Results = &result
 			if err != nil {
 				ginkgo.Fail(formatNodeFailure(node, &result, err), 1)
@@ -144,7 +164,7 @@ func registerGinkgoNode(r *Runner, node *FixtureNode) {
 	ginkgo.Describe(testNodeName(node), func() {
 		for _, child := range node.Children {
 			child := child
-			registerGinkgoNode(r, child)
+			registerGinkgoNode(r, child, file)
 		}
 	})
 }
@@ -180,7 +200,7 @@ func (r *Runner) setupGinkgoRun() error {
 		}
 	}
 
-	return nil
+	return r.prepareTraces()
 }
 
 func reportTestingNode(t *testing.T, node *FixtureNode) {
@@ -255,7 +275,8 @@ func formatRunFailure(tree *FixtureNode, err error) string {
 
 	if tree != nil {
 		stats := tree.GetStats()
-		fmt.Fprintf(&b, "\nsummary: total=%d passed=%d failed=%d skipped=%d errors=%d", stats.Total, stats.Passed, stats.Failed, stats.Skipped, stats.Error)
+		fmt.Fprintf(&b, "\nsummary: total=%d passed=%d failed=%d timed_out=%d warned=%d skipped=%d errors=%d",
+			stats.Total, stats.Passed, stats.Failed, stats.TimedOut, stats.Warned, stats.Skipped, stats.Error)
 
 		var failures []*FixtureNode
 		tree.Walk(func(node *FixtureNode) {

@@ -47,6 +47,7 @@ type fixtureDocument struct {
 	Defaults *StepDefaults     `json:"defaults,omitempty"`
 	Setup    *SetupSpec        `json:"setup,omitempty"`
 	Env      map[string]any    `json:"env,omitempty"`
+	Traces   *TraceSpecs       `json:"traces,omitempty"`
 	Steps    []json.RawMessage `json:"steps"`
 }
 

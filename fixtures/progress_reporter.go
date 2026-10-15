@@ -80,7 +80,7 @@ func (r *ExecutionReporter) CompleteStep(ctx context.Context, key string, result
 	if r == nil {
 		return nil
 	}
-	return r.tracker.CompleteStep(ctx, key, executionState(result.Status), fixtureResultError(result))
+	return r.tracker.completeStep(ctx, key, executionState(result), fixtureResultError(result), result.Traces)
 }
 
 func fixtureResultError(result FixtureResult) error {

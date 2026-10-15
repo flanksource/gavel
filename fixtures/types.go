@@ -13,12 +13,13 @@ import (
 	"strings"
 	"time"
 
+	captainapi "github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/clicky/task"
 	"github.com/flanksource/commons/logger"
-	"github.com/flanksource/gavel/fixtures/record"
 	"github.com/flanksource/gavel/processruntime"
+	"github.com/flanksource/gavel/testrunner/parsers"
 	"github.com/flanksource/gomplate/v3"
 )
 
@@ -230,11 +231,11 @@ type ExecFixtureBase struct {
 	CWD string `yaml:"cwd,omitempty" json:"cwd,omitempty"`
 	// Terminal mode: "pty" to allocate a pseudo-terminal, "" for piped (default)
 	Terminal string `yaml:"terminal,omitempty" json:"terminal,omitempty"`
-	// Record declares which diagnostic recorders run for this fixture — the
-	// terminal's ANSI stream, the child's HTTP calls, its SQL. Nil means none
-	// start: every fixture in a run shares one parallel task group, so an
-	// always-on recorder would multiply listeners across the whole run.
-	Record     *record.Spec               `yaml:"record,omitempty" json:"record,omitempty"`
+	// Traces declares the commons-db traces armed around this fixture — a
+	// recording proxy for its children, its terminal, its SQL. Nil declares
+	// none and leaves the run-wide --traces default in force; an empty list
+	// opts out of it.
+	Traces     *TraceSpecs                `yaml:"traces,omitempty" json:"traces,omitempty"`
 	GoProfiles map[string]GoProfileOutput `yaml:"goProfiles,omitempty" json:"go_profiles,omitempty"`
 }
 
@@ -420,12 +421,11 @@ func (e ExecFixtureBase) MergeInto(other ExecFixtureBase) ExecFixtureBase {
 		merged.Terminal = other.Terminal
 	}
 
-	// A per-test `record:` replaces the file's wholesale rather than unioning
-	// with it, matching args/exec above — otherwise a test that names one
-	// recorder would silently inherit the file's other three, and `record: none`
-	// would have no way to opt out.
-	if other.Record != nil {
-		merged.Record = other.Record
+	// A per-test `traces:` replaces the file's wholesale rather than unioning
+	// with it, matching args/exec above — otherwise `traces: []` would have no
+	// way to opt one test out.
+	if other.Traces != nil {
+		merged.Traces = other.Traces
 	}
 	if other.GoProfiles != nil {
 		merged.GoProfiles = other.GoProfiles
@@ -496,7 +496,7 @@ func (f *FrontMatter) CleanMetadata() {
 	delete(f.Metadata, "env")
 	delete(f.Metadata, "cwd")
 	delete(f.Metadata, "terminal")
-	delete(f.Metadata, "record")
+	delete(f.Metadata, "traces")
 	// Keys from FrontMatter itself
 	delete(f.Metadata, "files")
 	delete(f.Metadata, "codeBlocks")
@@ -617,16 +617,20 @@ type FixtureResult struct {
 	// steps, which carry their evidence in Command/Stdout/Stderr.
 	Run *RunArtifact `json:"run,omitempty" pretty:"hide"`
 
-	// Recordings reference the diagnostic artifacts the fixture's `record:`
-	// produced — one fixture can emit a cast, a HAR and a SQL log at once. Like
-	// Run, they carry counts inline and leave the payload on disk.
-	Recordings []Recording `json:"recordings,omitempty" pretty:"hide"`
-}
+	// TimedOut marks a failed result whose test was killed by a timeout; a
+	// verify node counts it in its own bucket rather than as failed.
+	TimedOut bool `json:"timed_out,omitempty"`
 
-// Recording is one diagnostic artifact produced for a fixture. Aliased rather
-// than mirrored because package record is a leaf that imports nothing from
-// gavel, so embedding it here costs no dependency.
-type Recording = record.Result
+	// Summary is a runner step's tally of every engine result, including the
+	// children it elided from Children; it wins over counting Children.
+	Summary *captainapi.VerifySummary `json:"summary,omitempty" pretty:"hide"`
+
+	// Traces are the windows of the traces the fixture armed — one per
+	// `traces:` entry — referenced by stream and seq, with the count and
+	// summary its assertions read inline and the records left in the run's
+	// trace store.
+	Traces []parsers.TraceResult `json:"traces,omitempty" pretty:"hide"`
+}
 
 // RunArtifact is a runner step's engine output recorded by reference: the counts
 // and top failures needed to render a verdict inline, plus the .gavel snapshot
@@ -877,23 +881,36 @@ type Visitor interface {
 }
 
 // Stats provides summary statistics for fixture test execution.
-// It tracks the total number of tests and their outcomes.
+// It tracks the total number of tests and their outcomes. TimedOut is the part
+// of Failed that was killed by a timeout; Warned is a soft failure counted in
+// Total only.
 type Stats struct {
-	Total   int `json:"total,omitempty"`
-	Passed  int `json:"passed,omitempty"`
-	Failed  int `json:"failed,omitempty"`
-	Skipped int `json:"skipped,omitempty"`
-	Error   int `json:"error,omitempty"`
+	Total    int `json:"total,omitempty"`
+	Passed   int `json:"passed,omitempty"`
+	Failed   int `json:"failed,omitempty"`
+	TimedOut int `json:"timed_out,omitempty"`
+	Warned   int `json:"warned,omitempty"`
+	Skipped  int `json:"skipped,omitempty"`
+	Error    int `json:"error,omitempty"`
 }
 
 func (s Stats) Merge(o Stats) Stats {
 	return Stats{
-		Total:   s.Total + o.Total,
-		Passed:  s.Passed + o.Passed,
-		Failed:  s.Failed + o.Failed,
-		Skipped: s.Skipped + o.Skipped,
-		Error:   s.Error + o.Error,
+		Total:    s.Total + o.Total,
+		Passed:   s.Passed + o.Passed,
+		Failed:   s.Failed + o.Failed,
+		TimedOut: s.TimedOut + o.TimedOut,
+		Warned:   s.Warned + o.Warned,
+		Skipped:  s.Skipped + o.Skipped,
+		Error:    s.Error + o.Error,
 	}
+}
+
+// statsFromSummary maps a runner step's tally onto Stats. A timeout is a
+// failure here; running and pending tests only reach a summary when the step
+// never finished, which its own failed verdict already reports.
+func statsFromSummary(s captainapi.VerifySummary) Stats {
+	return Stats{Total: s.Total, Passed: s.Passed, Failed: s.Failed + s.TimedOut, TimedOut: s.TimedOut, Warned: s.Warned, Skipped: s.Skipped}
 }
 
 func (s Stats) Add(result *FixtureResult) Stats {
@@ -904,6 +921,11 @@ func (s Stats) Add(result *FixtureResult) Stats {
 	switch result.Status {
 	case task.StatusFailed, task.StatusFAIL:
 		s.Failed++
+		if result.TimedOut {
+			s.TimedOut++
+		}
+	case task.StatusWarning:
+		s.Warned++
 	case task.StatusPASS, task.StatusSuccess:
 		s.Passed++
 	case task.StatusSKIP:
@@ -914,12 +936,26 @@ func (s Stats) Add(result *FixtureResult) Stats {
 	return s
 }
 
+// GetStats counts a node whose result carries a runner step's summary from that
+// summary (its visible children are a subset of it), a leaf by its own result,
+// and any other node by its children. A node whose own result failed or errored
+// while those counts show no failure counts that verdict once more, so a failed
+// step never reads as passed.
 func (f FixtureNode) GetStats() Stats {
-	s := Stats{}
-
-	s = s.Add(f.Results)
-	for _, child := range f.Children {
-		s = s.Merge(child.GetStats())
+	own := Stats{}.Add(f.Results)
+	var s Stats
+	switch {
+	case f.Results != nil && f.Results.Summary != nil:
+		s = statsFromSummary(*f.Results.Summary)
+	case len(f.Children) == 0:
+		return own
+	default:
+		for _, child := range f.Children {
+			s = s.Merge(child.GetStats())
+		}
+	}
+	if own.HasFailures() && !s.HasFailures() {
+		s = s.Merge(own)
 	}
 	return s
 }
@@ -973,6 +1009,12 @@ func (s Stats) Pretty() api.Text {
 		t = t.Append(strconv.Itoa(s.Failed), "text-red-500")
 
 	}
+	if s.TimedOut > 0 {
+		t = t.Append(fmt.Sprintf(" %d timed out", s.TimedOut), "text-red-500")
+	}
+	if s.Warned > 0 {
+		t = t.Append(fmt.Sprintf(" %d warned", s.Warned), "text-amber-500")
+	}
 	if s.Skipped > 0 {
 		t = t.Append(fmt.Sprintf(" %d skipped", s.Skipped), "text-yellow-500")
 	}
@@ -990,6 +1032,14 @@ func (s Stats) String() string {
 		return "-"
 	}
 	str := fmt.Sprintf("%d/%d", s.Passed, s.Failed+s.Passed)
+
+	if s.TimedOut > 0 {
+		str += fmt.Sprintf(" %d timed out", s.TimedOut)
+	}
+
+	if s.Warned > 0 {
+		str += fmt.Sprintf(" %d warned", s.Warned)
+	}
 
 	if s.Skipped > 0 {
 		str += fmt.Sprintf(" %d skipped", s.Skipped)
@@ -1023,7 +1073,7 @@ func (s *Stats) Health() task.Health {
 	if s.Failed+s.Error > 0 {
 		return task.HealthError
 	}
-	if s.Total == 0 || s.Skipped > 0 {
+	if s.Total == 0 || s.Skipped > 0 || s.Warned > 0 {
 		return task.HealthWarning
 	}
 	return task.HealthOK
@@ -1107,7 +1157,7 @@ func (fn *FixtureNode) ApplyDisplayOptions(opts DisplayOptions) {
 	for _, child := range fn.Children {
 		child.ApplyDisplayOptions(opts)
 		if child.Results != nil {
-			if !opts.ShowPassed && isPassingStatus(child.Results.Status) {
+			if !opts.ShowPassed && isPassingStatus(child.Results.Status) && !child.GetStats().HasFailures() {
 				continue
 			}
 			child.Results.Display = &opts

@@ -88,9 +88,16 @@ func backoffDelay(base time.Duration, backoff *Backoff, spread jitter, n int, rn
 
 // validateWait rejects a wait policy that could not run to a verdict.
 func validateWait(policy WaitPolicy) error {
-	switch {
-	case strings.TrimSpace(policy.Until) == "":
+	if strings.TrimSpace(policy.Until) == "" {
 		return fmt.Errorf("wait: until is required")
+	}
+	return policy.ValidateTiming()
+}
+
+// ValidateTiming rejects a schedule (interval, timeout, backoff, jitter) a
+// wait could not run on.
+func (policy WaitPolicy) ValidateTiming() error {
+	switch {
 	case policy.Interval == nil || policy.Interval.Std() <= 0:
 		return fmt.Errorf("wait: interval must be a positive duration")
 	case policy.Timeout == nil || policy.Timeout.Std() <= 0:
@@ -190,133 +197,222 @@ func firstDuration(values ...*Duration) *Duration {
 	return nil
 }
 
-// observationTimeLayout is RFC3339 with milliseconds, the precision a UI parses.
-const observationTimeLayout = "2006-01-02T15:04:05.000Z07:00"
-
-// WaitObservation is one poll of a step's observable state.
-type WaitObservation struct {
-	At       string         `json:"at"` // RFC3339, millisecond precision
-	DelayMs  int64          `json:"delayMs"`
-	Until    bool           `json:"until"`
-	FailWhen bool           `json:"failWhen"`
-	Outputs  map[string]any `json:"outputs"`
-	Error    string         `json:"error,omitempty"`
+type waitObservation struct {
+	Until, FailWhen bool
+	Outputs         map[string]any
+	Error           string
 }
 
-// WaitReport is recorded under Metadata["wait"]: the effective policy, how
-// the wait ended, and every observation so a timeout shows its trajectory.
+// WaitReport records the terminal observation and actual time spent waiting.
 type WaitReport struct {
-	Policy       WaitPolicy        `json:"policy"`
-	Outcome      string            `json:"outcome"`
-	Observations []WaitObservation `json:"observations"`
-	Error        string            `json:"error,omitempty"`
-	Trace        string            `json:"trace,omitempty"`
+	Policy     WaitPolicy     `json:"policy"`
+	Outcome    string         `json:"outcome"`
+	DurationMs int64          `json:"durationMs"`
+	Outputs    map[string]any `json:"outputs"`
+	Error      string         `json:"error,omitempty"`
+	Trace      string         `json:"trace,omitempty"`
 }
 
 // celCheck evaluates a boolean CEL expression, returning the trace of a false
 // or failed evaluation.
 type celCheck func(expression string, vars map[string]any) (bool, string, error)
 
-// waiter polls observe on the policy's backoff schedule until until holds,
-// failWhen holds, or the timeout passes. The first observation is immediate.
+// WaitProbe is one observation judged in Go instead of by CEL, such as a
+// service readiness probe.
+type WaitProbe struct {
+	Outputs map[string]any
+	// Until satisfies the wait; FailWhen ends it, failed, at once.
+	Until, FailWhen bool
+	// Error is why the probe does not hold. It is recorded on the observation
+	// and names the last probe when the wait fails or times out.
+	Error error
+}
+
+// WaitOptions drives Wait: Probe polled on Policy's timing.
+type WaitOptions struct {
+	// Policy supplies the timing only; until/failWhen are CEL and rejected.
+	Policy WaitPolicy
+	Probe  func(ctx context.Context) WaitProbe
+	// Wake, when it closes, cuts the current delay short so a terminal change
+	// (a process exiting) is probed at once.
+	Wake <-chan struct{}
+}
+
+// Wait polls opts.Probe on the shared backoff schedule until it holds, fails
+// or the timeout passes. An unrunnable policy is an error; every other ending
+// is the report's outcome.
+func Wait(ctx context.Context, opts WaitOptions) (WaitReport, error) {
+	switch {
+	case opts.Probe == nil:
+		return WaitReport{}, fmt.Errorf("wait: a probe is required")
+	case opts.Policy.Until != "" || opts.Policy.FailWhen != "":
+		return WaitReport{}, fmt.Errorf("wait: until/failWhen are CEL; a probed wait is judged by its probe")
+	}
+	if err := opts.Policy.ValidateTiming(); err != nil {
+		return WaitReport{}, err
+	}
+	report, _ := waiter{policy: opts.Policy, probe: opts.Probe, wake: opts.Wake, clock: realClock{}, rand: defaultRand}.run(ctx)
+	return report, nil
+}
+
+// waiter polls on the policy's backoff schedule until the wait is satisfied,
+// fails, or the timeout passes. The first observation is immediate. A probe
+// judges each observation in Go; otherwise observe's outputs are judged by
+// the policy's until/failWhen CEL.
 type waiter struct {
 	policy  WaitPolicy
 	observe func(ctx context.Context) (map[string]any, error)
 	vars    func(outputs map[string]any) map[string]any
 	check   celCheck
+	probe   func(ctx context.Context) WaitProbe
+	wake    <-chan struct{}
 	clock   stepClock
 	rand    func() float64
 }
 
-func (w waiter) run(ctx context.Context) (WaitReport, map[string]any) {
-	report := WaitReport{Policy: w.policy, Observations: []WaitObservation{}}
+func (w waiter) run(ctx context.Context) (report WaitReport, outputs map[string]any) {
+	started := w.clock.Now()
+	report = WaitReport{Policy: w.policy, Outputs: map[string]any{}}
+	defer func() { report.DurationMs = w.clock.Now().Sub(started).Milliseconds() }()
 	spread, err := parseJitter(w.policy.Jitter)
 	if err != nil {
 		report.Outcome, report.Error = WaitFailed, err.Error()
 		return report, nil
 	}
-	deadline := w.clock.Now().Add(w.policy.Timeout.Std())
-	var last map[string]any
+	deadline := started.Add(w.policy.Timeout.Std())
 	var delay time.Duration
 	for n := 0; ; n++ {
-		obs, done := w.observeOnce(ctx, delay, &report)
-		if len(obs.Outputs) > 0 {
-			last = obs.Outputs
-		}
+		obs, done := w.observeOnce(ctx, &report)
+		report.Outputs = obs.Outputs
 		if done {
-			return report, last
+			return report, report.Outputs
 		}
 		now := w.clock.Now()
 		if !now.Before(deadline) {
-			return w.timedOut(report, last), last
+			return w.timedOut(report, obs), report.Outputs
 		}
 		delay = backoffDelay(w.policy.Interval.Std(), w.policy.Backoff, spread, n, w.rand)
 		if remaining := deadline.Sub(now); delay > remaining {
 			delay = remaining
 		}
-		if err := w.clock.Sleep(ctx, delay); err != nil {
+		if err := w.sleep(ctx, delay); err != nil {
 			report.Outcome, report.Error = WaitTimeout, fmt.Sprintf("wait interrupted: %v", err)
-			return report, last
+			return report, report.Outputs
 		}
 	}
 }
 
+// sleep waits out delay, returning early (without error) once wake closes.
+func (w waiter) sleep(ctx context.Context, delay time.Duration) error {
+	if w.wake == nil {
+		return w.clock.Sleep(ctx, delay)
+	}
+	sleepCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() {
+		select {
+		case <-w.wake:
+			cancel()
+		case <-sleepCtx.Done():
+		}
+	}()
+	if err := w.clock.Sleep(sleepCtx, delay); err != nil && ctx.Err() != nil {
+		return err
+	}
+	return nil
+}
+
+// probeOnce records one Go-judged probe; done reports a terminal verdict
+// already written to report.
+func (w waiter) probeOnce(ctx context.Context, report *WaitReport) (waitObservation, bool) {
+	probe := w.probe(ctx)
+	obs := waitObservation{Until: probe.Until, FailWhen: probe.FailWhen, Outputs: probe.Outputs}
+	if obs.Outputs == nil {
+		obs.Outputs = map[string]any{}
+	}
+	if probe.Error != nil {
+		obs.Error = probe.Error.Error()
+	}
+
+	switch {
+	case probe.FailWhen && probe.Error == nil:
+		report.Outcome, report.Error = WaitFailed, "wait probe set FailWhen without an Error; a failing probe must say why"
+	case probe.FailWhen:
+		report.Outcome, report.Error = WaitFailed, obs.Error
+	case probe.Until:
+		report.Outcome = WaitSatisfied
+	default:
+		return obs, false
+	}
+	return obs, true
+}
+
 // observeOnce takes one observation and evaluates the policy against it; done
 // reports a terminal verdict (satisfied or failed) already written to report.
-func (w waiter) observeOnce(ctx context.Context, delay time.Duration, report *WaitReport) (WaitObservation, bool) {
+func (w waiter) observeOnce(ctx context.Context, report *WaitReport) (waitObservation, bool) {
+	if w.probe != nil {
+		return w.probeOnce(ctx, report)
+	}
 	outputs, err := w.observe(ctx)
-	obs := WaitObservation{At: w.clock.Now().UTC().Format(observationTimeLayout), DelayMs: delay.Milliseconds(), Outputs: outputs}
+	obs := waitObservation{Outputs: outputs}
 	if obs.Outputs == nil {
 		obs.Outputs = map[string]any{}
 	}
 	if err != nil {
 		obs.Error = err.Error()
-		report.Observations = append(report.Observations, obs)
 		return obs, false
 	}
 	vars := w.vars(outputs)
 	if w.policy.FailWhen != "" {
-		failed, _, err := w.check(w.policy.FailWhen, vars)
+		failed, trace, err := w.check(w.policy.FailWhen, vars)
+
 		if err != nil {
-			return w.evalFailed(report, obs, "failWhen", w.policy.FailWhen, err)
+			return w.evalFailed(report, obs, "failWhen", w.policy.FailWhen, trace, err)
+
 		}
 		obs.FailWhen = failed
 		if failed {
 			_, trace, _ := w.check("!("+w.policy.FailWhen+")", vars)
-			report.Observations = append(report.Observations, obs)
 			report.Outcome, report.Trace = WaitFailed, trace
 			report.Error = fmt.Sprintf("wait failWhen %s is true", w.policy.FailWhen)
 			return obs, true
 		}
 	}
-	satisfied, _, err := w.check(w.policy.Until, vars)
+	satisfied, trace, err := w.check(w.policy.Until, vars)
 	if err != nil {
-		return w.evalFailed(report, obs, "until", w.policy.Until, err)
+		return w.evalFailed(report, obs, "until", w.policy.Until, trace, err)
+
 	}
 	obs.Until = satisfied
-	report.Observations = append(report.Observations, obs)
+
 	if satisfied {
 		report.Outcome = WaitSatisfied
 	}
 	return obs, satisfied
 }
 
-func (w waiter) evalFailed(report *WaitReport, obs WaitObservation, field, expression string, err error) (WaitObservation, bool) {
+func (w waiter) evalFailed(report *WaitReport, obs waitObservation, field, expression, trace string, err error) (waitObservation, bool) {
 	obs.Error = err.Error()
-	report.Observations = append(report.Observations, obs)
+
 	report.Outcome = WaitFailed
+	report.Trace = trace
 	report.Error = fmt.Sprintf("wait %s %s: %v", field, expression, err)
 	return obs, true
 }
 
-func (w waiter) timedOut(report WaitReport, last map[string]any) WaitReport {
+func (w waiter) timedOut(report WaitReport, last waitObservation) WaitReport {
 	report.Outcome = WaitTimeout
-	report.Error = fmt.Sprintf("wait until %s did not hold within %s", w.policy.Until, w.policy.Timeout.Std())
-	if last != nil {
-		_, report.Trace, _ = w.check(w.policy.Until, w.vars(last))
+	if w.probe != nil {
+		lastProbe := firstNonEmpty(last.Error, "not ready")
+		report.Error = fmt.Sprintf("not ready after %s: last probe: %s", w.policy.Timeout.Std(), lastProbe)
+		return report
 	}
-	if n := len(report.Observations); n > 0 && report.Observations[n-1].Error != "" {
-		report.Error += "; last observation failed: " + report.Observations[n-1].Error
+	report.Error = fmt.Sprintf("wait until %s did not hold within %s", w.policy.Until, w.policy.Timeout.Std())
+	if last.Outputs != nil && last.Error == "" {
+		_, report.Trace, _ = w.check(w.policy.Until, w.vars(last.Outputs))
+	}
+	if last.Error != "" {
+		report.Error += "; last observation failed: " + last.Error
 	}
 	return report
 }

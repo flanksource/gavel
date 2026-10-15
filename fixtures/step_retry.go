@@ -2,17 +2,21 @@ package fixtures
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"maps"
+	"time"
 
 	"github.com/flanksource/clicky/task"
 )
 
 // AttemptReport is one Execute attempt, recorded under Metadata["attempts"].
 type AttemptReport struct {
-	Attempt    int    `json:"attempt"`
-	Status     string `json:"status"`
-	Error      string `json:"error,omitempty"`
-	DurationMs int64  `json:"durationMs"`
+	Attempt    int            `json:"attempt"`
+	Status     string         `json:"status"`
+	Error      string         `json:"error,omitempty"`
+	DurationMs int64          `json:"durationMs"`
+	Result     *FixtureResult `json:"result"`
 }
 
 // retrier re-runs a failed Execute while the policy's `when` holds, up to its
@@ -35,10 +39,20 @@ func (r retrier) run(ctx context.Context, execute func(context.Context) (StepOut
 	for n := 1; ; n++ {
 		started := r.clock.Now()
 		outcome, err := execute(ctx)
+		outcome = withExecuteError(outcome, err)
 		report := AttemptReport{Attempt: n, Status: attemptStatus(outcome.Result.Status),
 			DurationMs: r.clock.Now().Sub(started).Milliseconds(), Error: outcome.Result.Error}
-		if err != nil {
-			report.Status, report.Error = attemptStatus(task.StatusERR), err.Error()
+		recorded := outcome.Result
+		recorded.Metadata = maps.Clone(recorded.Metadata)
+		recorded.Duration = r.clock.Now().Sub(started)
+		if recorded.Metadata == nil {
+			recorded.Metadata = map[string]any{}
+		}
+		recorded.Metadata["outputs"] = outcome.Outputs
+		var snapshotErr error
+		report.Result, snapshotErr = snapshotAttempt(recorded)
+		if snapshotErr != nil {
+			return failOutcome(outcome, snapshotErr), reports
 		}
 		reports = append(reports, report)
 		if err == nil && isPassingStatus(outcome.Result.Status) {
@@ -58,6 +72,15 @@ func (r retrier) run(ctx context.Context, execute func(context.Context) (StepOut
 		if !retry {
 			return outcome, reports
 		}
+		if outcome.Cleanup != nil {
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+			cleanupErr := outcome.Cleanup(cleanupCtx)
+			cancel()
+			if cleanupErr != nil {
+				return failOutcome(outcome, fmt.Errorf("clean attempt %d before retry: %w", n, cleanupErr)), reports
+			}
+			outcome.Cleanup = nil
+		}
 		var base Duration
 		if r.policy.Delay != nil {
 			base = *r.policy.Delay
@@ -67,6 +90,36 @@ func (r retrier) run(ctx context.Context, execute func(context.Context) (StepOut
 			return failOutcome(outcome, fmt.Errorf("retry interrupted: %w", err)), reports
 		}
 	}
+}
+
+func snapshotAttempt(result FixtureResult) (*FixtureResult, error) {
+	result.Metadata = maps.Clone(result.Metadata)
+	delete(result.Metadata, "attempts")
+	raw, err := json.Marshal(result)
+	if err != nil {
+		return nil, fmt.Errorf("encode attempt result: %w", err)
+	}
+	var snapshot FixtureResult
+	if err := json.Unmarshal(raw, &snapshot); err != nil {
+		return nil, fmt.Errorf("decode attempt result: %w", err)
+	}
+	return &snapshot, nil
+}
+
+func recordFinalAttempt(result FixtureResult, attempts []AttemptReport) FixtureResult {
+	if len(attempts) == 0 {
+		return result
+	}
+	last := &attempts[len(attempts)-1]
+	last.Status, last.Error = attemptStatus(result.Status), result.Error
+	terminal := result
+	terminal.Duration = time.Duration(last.DurationMs) * time.Millisecond
+	snapshot, err := snapshotAttempt(terminal)
+	if err != nil {
+		return result.Errorf(err, "record terminal attempt")
+	}
+	last.Result = snapshot
+	return result
 }
 
 // Attempt statuses recorded under Metadata["attempts"][].status.

@@ -101,7 +101,7 @@ func snapshotNodes(node *fixtures.ExecutionNode) []api.VerifyNode {
 		} else {
 			applySnapshotState(&mapped, child.State)
 			if child.Total > 0 {
-				mapped.Progress = &api.VerifyNodeProgress{Done: child.Done, Total: child.Total}
+				mapped.Progress = &api.VerifyNodeProgress{Phase: string(child.Kind), Done: child.Done, Total: child.Total}
 			}
 		}
 		nodes = append(nodes, mapped)
@@ -120,7 +120,7 @@ func applySnapshotState(node *api.VerifyNode, state fixtures.ExecutionState) {
 	case fixtures.ExecutionSkipped, fixtures.ExecutionCancelled:
 		node.Skipped = true
 	case fixtures.ExecutionTimedOut:
-		node.TimedOut = true
+		node.Failed, node.TimedOut = true, true
 	case fixtures.ExecutionRunning:
 		node.Running = true
 	default:
@@ -129,8 +129,9 @@ func applySnapshotState(node *api.VerifyNode, state fixtures.ExecutionState) {
 }
 
 // nodeFrom maps one fixture result onto a verify node. A result with children is
-// a group: it carries the children's evidence and no verdict of its own, which
-// is what captain's SummarizeNodes counts on when it tallies leaves.
+// a group: it carries the children's evidence and no state flags of its own,
+// which is what captain's SummarizeNodes counts on when it tallies leaves; a
+// step that failed on its own keeps that verdict through keepStepVerdict.
 func nodeFrom(result *fixtures.FixtureResult) api.VerifyNode {
 	node := api.VerifyNode{
 		Name:      result.Name,
@@ -143,6 +144,7 @@ func nodeFrom(result *fixtures.FixtureResult) api.VerifyNode {
 		Duration:  result.Duration,
 		Context:   contextFrom(result),
 		Detail:    detailFrom(result),
+		Summary:   result.Summary,
 	}
 	for _, child := range result.Children {
 		if child == nil {
@@ -155,9 +157,37 @@ func nodeFrom(result *fixtures.FixtureResult) api.VerifyNode {
 		node.Children = append(node.Children, api.VerifyNode{Name: child.Name, Children: childNodes(child)})
 	}
 	if len(node.Children) == 0 {
-		applyStatus(&node, result.Status)
+		applyLeafStatus(&node, result)
+		return node
 	}
+	own := api.VerifyNode{Message: result.Error}
+	applyLeafStatus(&own, result)
+	keepStepVerdict(&node, own)
 	return node
+}
+
+func applyLeafStatus(node *api.VerifyNode, result *fixtures.FixtureResult) {
+	applyStatus(node, result.Status)
+	node.TimedOut = node.Failed && result.TimedOut
+}
+
+// keepStepVerdict stops a group from reading as passed when the step itself
+// failed (a non-zero exit, a folded teardown) but none of its children did: the
+// group's summary becomes its children's tally plus the step's own failed leaf,
+// so captain's SummarizeNodes and StateForReport see the failure.
+func keepStepVerdict(node *api.VerifyNode, own api.VerifyNode) {
+	if !own.Failed {
+		return
+	}
+	tally := api.SummarizeNodes(node.Children)
+	if node.Summary != nil {
+		tally = *node.Summary
+	}
+	if tally.Failed+tally.TimedOut > 0 {
+		return
+	}
+	summary := api.AddSummaries(tally, api.SummarizeNodes([]api.VerifyNode{own}))
+	node.Summary = &summary
 }
 
 func childNodes(node *fixtures.FixtureNode) []api.VerifyNode {
@@ -231,9 +261,9 @@ func contextFrom(result *fixtures.FixtureResult) *api.VerifyNodeContext {
 // detailFrom carries the evidence that has no field of its own on a verify node:
 // the CEL evaluation trace, the run artifact a `yaml test` / `yaml lint` step
 // points at, the changed files the node was scoped to, and a typed step's
-// step/outputs/exports/wait/attempts/background record. An unencodable
-// detail is dropped rather than failing the report — the verdict is what
-// matters, and the trace is an aid.
+// step/outputs/exports/wait/attempts/background record plus a background
+// watcher's events. An unencodable detail is dropped rather than failing the
+// report — the verdict is what matters, and the trace is an aid.
 func detailFrom(result *fixtures.FixtureResult) json.RawMessage {
 	detail := map[string]any{}
 	if result.CELTrace != "" {
@@ -242,16 +272,22 @@ func detailFrom(result *fixtures.FixtureResult) json.RawMessage {
 	if result.Run != nil {
 		detail["run"] = result.Run
 	}
-	if len(result.Recordings) > 0 {
-		detail["recordings"] = result.Recordings
+	if len(result.Traces) > 0 {
+		detail["traces"] = result.Traces
 	}
 	if changed, ok := result.Metadata["changed_files"]; ok {
 		detail["changed_files"] = changed
 	}
 	// A typed (YAML/JSON) step's record: which step it was, what it produced and
-	// exported, how its wait went and every Execute attempt.
-	for _, key := range []string{"step", "outputs", "exports", "wait", "attempts", "background"} {
+	// exported, how its wait went, every Execute attempt and what a background
+	// watcher saw.
+	for _, key := range []string{"step", "outputs", "exports", "wait", "attempts", "events", "background"} {
 		if value, ok := result.Metadata[key]; ok {
+			if key == "attempts" {
+				if attempts, typed := value.([]fixtures.AttemptReport); typed {
+					value = attemptDetails(attempts)
+				}
+			}
 			detail[key] = value
 		}
 	}
@@ -263,6 +299,21 @@ func detailFrom(result *fixtures.FixtureResult) json.RawMessage {
 		return nil
 	}
 	return raw
+}
+
+func attemptDetails(attempts []fixtures.AttemptReport) []map[string]any {
+	details := make([]map[string]any, 0, len(attempts))
+	for _, attempt := range attempts {
+		entry := map[string]any{"attempt": attempt.Attempt, "status": attempt.Status, "durationMs": attempt.DurationMs}
+		if attempt.Error != "" {
+			entry["error"] = attempt.Error
+		}
+		if attempt.Result != nil {
+			entry["result"] = nodeFrom(attempt.Result)
+		}
+		details = append(details, entry)
+	}
+	return details
 }
 
 // checklistFrom collects the acceptance-criteria verdicts an `ai` step recorded

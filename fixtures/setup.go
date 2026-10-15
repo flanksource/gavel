@@ -165,6 +165,14 @@ func (r *Runner) cleanupSetups() error {
 }
 
 // envForNode returns the per-file runtime environment a node executes in.
+// fixtureEnv is the per-file runtime environment a fixture executes in: the
+// file it came from, its prepared `setup:` and the step scope its steps share.
+type fixtureEnv struct {
+	file  string
+	setup *PreparedSetup
+	scope *StepScope
+}
+
 func (r *Runner) envForNode(node *FixtureNode) fixtureEnv {
 	if node == nil || node.Origin == nil {
 		return fixtureEnv{}

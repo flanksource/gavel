@@ -84,7 +84,9 @@ type StepSpec struct {
 	Wait       *WaitPolicy       `yaml:"wait,omitempty" json:"wait,omitempty"`
 	Retry      *RetryPolicy      `yaml:"retry,omitempty" json:"retry,omitempty"`
 	Timeout    *Duration         `yaml:"timeout,omitempty" json:"timeout,omitempty"`
-	Config     json.RawMessage   `yaml:"-" json:"config,omitempty"`
+	// Traces arms traces around this step, replacing the document's.
+	Traces *TraceSpecs     `yaml:"traces,omitempty" json:"traces,omitempty"`
+	Config json.RawMessage `yaml:"-" json:"config,omitempty"`
 	// Defaults are the document's `defaults:`, merged under Wait/Retry/Timeout
 	// field by field when the step runs. Set by the parser, never by a step.
 	Defaults *StepDefaults `yaml:"-" json:"defaults,omitempty"`
@@ -98,7 +100,7 @@ type StepDefaults struct {
 }
 
 // StepSpecKeys are the envelope keys; everything else on a step is Config.
-var StepSpecKeys = []string{"id", "name", "kind", "cel", "export", "override", "background", "wait", "retry", "timeout"}
+var StepSpecKeys = []string{"id", "name", "kind", "cel", "export", "override", "background", "wait", "retry", "timeout", "traces"}
 
 // EffectiveTimeout is the step's hard cap: its own `timeout:`, else the
 // document default; nil when neither declares one.
@@ -153,8 +155,20 @@ func (s *StepContext) Expand(text string) (string, error) {
 	return s.Scope.Expand(text, s.vars())
 }
 
-// Environ is the subprocess environment for this step: the fixture Env.
-func (s *StepContext) Environ() []string { return s.Scope.Env.Environ() }
+// ChildEnv is the environment a process this step starts inherits: the
+// fixture Env with its armed traces' exports (RunOptions.ChildEnv).
+func (s *StepContext) ChildEnv() map[string]string { return childEnv(s.Scope, s.Opts.Traces) }
+
+// Environ is ChildEnv as sorted KEY=VALUE pairs, for os/exec.
+func (s *StepContext) Environ() []string {
+	env := s.ChildEnv()
+	pairs := make([]string, 0, len(env))
+	for key, value := range env {
+		pairs = append(pairs, key+"="+value)
+	}
+	sort.Strings(pairs)
+	return pairs
+}
 
 func (s *StepContext) vars() map[string]any {
 	vars := map[string]any{}

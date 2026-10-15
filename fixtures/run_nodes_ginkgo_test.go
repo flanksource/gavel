@@ -9,7 +9,6 @@ import (
 	. "github.com/onsi/gomega"
 
 	"github.com/flanksource/gavel/fixtures"
-	"github.com/flanksource/gavel/fixtures/record"
 
 	// Registers the exec, test, lint and ai kinds.
 	fixturetypes "github.com/flanksource/gavel/fixtures/types"
@@ -215,16 +214,14 @@ codeBlocks: [bash]
 - cel: stdout.contains('port=4242')
 `
 
-	It("refuses a recorder that has no implementation before the fixture runs", func() {
-		previous := record.Implemented[record.KindSQL]
-		record.Implemented[record.KindSQL] = false
-		DeferCleanup(func() { record.Implemented[record.KindSQL] = previous })
+	It("refuses a fixture that declares traces when no trace host runs it", func() {
+		test := firstTest(parseDocument(passingDocument))
+		test.Traces = &fixtures.TraceSpecs{{Kind: "http_proxy", Scope: fixtures.TraceScopeTest}}
 
-		result := fixtures.RunNode(context.Background(), firstTest(parseDocument(passingDocument)),
-			fixtures.RunOptions{WorkDir: GinkgoT().TempDir(), Record: &record.Spec{SQL: &record.SQLOptions{}}})
+		result := fixtures.RunNode(context.Background(), test, fixtures.RunOptions{WorkDir: GinkgoT().TempDir()})
 
 		Expect(result.Status).To(Equal(task.StatusERR))
-		Expect(result.Error).To(ContainSubstring("record: [sql] is not implemented yet"))
+		Expect(result.Error).To(ContainSubstring("declares traces: but runs without a trace host"))
 	})
 
 	It("exposes the daemon port to exec fixtures as {{.port}}", func() {
