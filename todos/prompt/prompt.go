@@ -21,6 +21,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -171,9 +172,20 @@ func Render(todoList []*types.TODO, opts Options) (captainai.Request, captainai.
 	// template/body override cannot touch a separate field. It is set identically
 	// on every turn of the run session (see the executor), which is what the
 	// claude-agent per-turn byte-equality guard requires.
+	prURL, err := linkedPRURL(todoList)
+	if err != nil {
+		return captainai.Request{}, captainai.Config{}, err
+	}
 	req.Prompt.User = user
 	req.Prompt.SchemaJSON = schema
 	req.Prompt.Source = "todos." + opts.promptName()
+	if prURL != "" {
+		req.Prompt.Metadata = maps.Clone(req.Prompt.Metadata)
+		if req.Prompt.Metadata == nil {
+			req.Prompt.Metadata = map[string]string{}
+		}
+		req.Prompt.Metadata[PRURLMetadataKey] = prURL
+	}
 	if err := req.Validate(); err != nil {
 		return captainai.Request{}, captainai.Config{}, fmt.Errorf("validate todos %s spec: %w", opts.promptName(), err)
 	}
@@ -181,6 +193,32 @@ func Render(todoList []*types.TODO, opts Options) (captainai.Request, captainai.
 		req.Prompt.User = directive + "\n\n" + withoutEffortDirectives(user)
 	}
 	return req, captainai.Config{Model: req.Model, Budget: req.Budget}, nil
+}
+
+// PRURLMetadataKey is the prompt metadata key carrying the URL of the PR the
+// rendered todos are linked to. Prompt-context hooks match on it rather than on
+// the rendered prose, which a template override is free to reword.
+const PRURLMetadataKey = "gavel.pr.url"
+
+// PRWriteMetadataKey is set to "true" on a run that commits and pushes each
+// completed turn to its linked PR, so the PR context hook can tell the agent how
+// its work is published and which threads it may report addressed.
+const PRWriteMetadataKey = "gavel.pr.write"
+
+// linkedPRURL is the one PR the todos are linked to, or "" when none is. Todos
+// linked to different PRs cannot share a run: it works on one source branch.
+func linkedPRURL(todoList []*types.TODO) (string, error) {
+	url := ""
+	for _, todo := range todoList {
+		if todo.PR == nil || todo.PR.URL == "" {
+			continue
+		}
+		if url != "" && url != todo.PR.URL {
+			return "", fmt.Errorf("todos are linked to different PRs: %s and %s", url, todo.PR.URL)
+		}
+		url = todo.PR.URL
+	}
+	return url, nil
 }
 
 func templateSource(opts Options) (string, error) {

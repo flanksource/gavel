@@ -8,6 +8,8 @@ import (
 
 	captainai "github.com/flanksource/captain/pkg/ai"
 	"github.com/flanksource/captain/pkg/api"
+	"github.com/flanksource/captain/pkg/captainconfig"
+	"github.com/flanksource/captain/pkg/promptcontext"
 	"github.com/flanksource/captain/pkg/promptrun"
 	"github.com/flanksource/captain/pkg/runtimeprofiles"
 	"github.com/flanksource/commons-db/shell"
@@ -99,6 +101,9 @@ type preparedStep struct {
 	// verifyTarget is the commit a verify step checks; nil for any other step.
 	verifyTarget *types.VerifyTarget
 	pr           *prExecution
+	// contextSources are the prompt.context hook sources Captain applies to the
+	// rendered prompt at dispatch; a preview applies the same ones.
+	contextSources []promptcontext.Source
 }
 
 // RunStep runs one step of the lifecycle for a todo: the prompt rendered, the
@@ -277,6 +282,13 @@ func (h *Host) prepare(ctx context.Context, todo *types.TODO, step Step, lc Cont
 	if class != types.ModeVerify {
 		if err := h.render(ctx, todo, step, lc, prepared); err != nil {
 			return nil, err
+		}
+		cfg, _, err := captainconfig.Load()
+		if err != nil {
+			return nil, fmt.Errorf("load Captain configuration for prompt context hooks: %w", err)
+		}
+		if prepared.contextSources, err = todoprompt.ContextSources(cfg, workDir); err != nil {
+			return nil, fmt.Errorf("step %s: %w", step.Name, err)
 		}
 	}
 	if message := strings.TrimSpace(opts.Message); message != "" {

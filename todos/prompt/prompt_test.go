@@ -9,6 +9,7 @@ import (
 	"github.com/flanksource/commons-db/shell"
 	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/todos/types"
+	"github.com/stretchr/testify/require"
 )
 
 func newTestTODO(name, impl string) *types.TODO {
@@ -476,24 +477,56 @@ func TestRenderIncludesComments(t *testing.T) {
 	}
 }
 
-func TestRenderExcludesPRButIncludesSource(t *testing.T) {
+func TestRenderIncludesLinkedPRAndSource(t *testing.T) {
+	const (
+		prURL      = "https://example.com/acme/service/pull/42"
+		commentURL = "https://example.com/acme/service/pull/42#discussion_r7"
+		reviewer   = "reviewer-a"
+	)
 	dir := t.TempDir()
 	writeTestFile(t, dir, "pkg/auth.go", 50)
 
-	todo := newTestTODO("fix-auth", "Fix the auth handler")
-	todo.PR = &types.PR{Number: 42, URL: "https://example.com/pull/42", Head: "feat/x", Base: "main"}
-	todo.Path = types.StringOrSlice{"pkg/auth.go:25"}
+	for _, opts := range []Options{
+		{WorkDir: dir, Mode: types.ModeRun},
+		{WorkDir: dir, Mode: types.ModePlan},
+		{WorkDir: dir, Prompt: "triage", Mode: types.ModePlan, Envelope: EnvelopeTriage},
+	} {
+		t.Run(opts.promptName(), func(t *testing.T) {
+			todo := newTestTODO("fix-auth", "Fix the auth handler")
+			todo.PR = &types.PR{Number: 42, URL: prURL, Head: "feat/x", Base: "main", CommentAuthor: reviewer, CommentURL: commentURL}
+			todo.Path = types.StringOrSlice{"pkg/auth.go:25"}
 
-	prompt := renderUser(t, []*types.TODO{todo}, Options{WorkDir: dir})
-	if strings.Contains(prompt, "## PR Context") {
-		t.Error("grouped prompt should not contain PR Context section")
+			req, _, err := renderResolvedForTest([]*types.TODO{todo}, opts)
+			require.NoError(t, err)
+			prompt := req.Prompt.User
+			for _, want := range []string{
+				"## Linked PR",
+				"[#42](" + prURL + ")",
+				"`feat/x` → `main`",
+				"review comment by " + reviewer + ": " + commentURL,
+				"```go file=pkg/auth.go:25",
+				"line 25 content",
+			} {
+				require.Contains(t, prompt, want)
+			}
+			require.Equal(t, prURL, req.Prompt.Metadata[PRURLMetadataKey])
+		})
 	}
-	if !strings.Contains(prompt, "```go file=pkg/auth.go:25") {
-		t.Error("grouped prompt should contain annotated code block")
-	}
-	if !strings.Contains(prompt, "line 25 content") {
-		t.Error("should contain actual source code lines")
-	}
+}
+
+func TestRenderOmitsLinkedPRWithoutPR(t *testing.T) {
+	req, _, err := renderResolvedForTest([]*types.TODO{newTestTODO("plain", "Fix it")}, Options{Mode: types.ModeRun})
+	require.NoError(t, err)
+	require.NotContains(t, req.Prompt.User, "## Linked PR")
+	require.NotContains(t, req.Prompt.Metadata, PRURLMetadataKey)
+}
+
+func TestRenderRejectsTodosLinkedToDifferentPRs(t *testing.T) {
+	first, second := newTestTODO("first", "a"), newTestTODO("second", "b")
+	first.PR = &types.PR{Number: 1, URL: "https://example.com/acme/service/pull/1"}
+	second.PR = &types.PR{Number: 2, URL: "https://example.com/acme/service/pull/2"}
+	_, _, err := renderResolvedForTest([]*types.TODO{first, second}, Options{Mode: types.ModeRun})
+	require.ErrorContains(t, err, "different PRs")
 }
 
 func TestPromptsRegistered(t *testing.T) {

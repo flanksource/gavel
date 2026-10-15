@@ -1,0 +1,14 @@
+---
+# The publish contract of a run that pushes to its linked PR. Gavel sets
+# gavel.pr.write only on such runs; a plan or verify run of the same TODO gets
+# pr-status alone.
+hook:
+  on: prompt.context
+  mode: append
+  when: '"gavel.pr.write" in metadata && metadata["gavel.pr.write"] == "true"'
+---
+## Publishing to the PR
+
+Work on the PR's source branch. Do not commit or push: Gavel commits each completed turn and pushes it to the PR before verification. Never merge, approve, force-push, or close the PR.
+
+Report `addressedThreadIds` containing only the native IDs of review threads this TODO is about and that your completed turn addressed; Gavel resolves them after a successful push and refuses any thread that was not open when this run started. CI, merge readiness, and unresolved feedback on the entire PR are verified at the pushed revision, and failures come back as feedback for your next turn. Ask when a human decision or credentials are required.

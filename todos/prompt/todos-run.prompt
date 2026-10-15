@@ -3,10 +3,13 @@ model: claude
 prompt:
   schemaStrictness: retry
 permissions:
-  # Use the runtime's native edit approval. A per-tool allow policy would refuse
-  # runtimes that cannot enforce it and broaden Claude's approval beyond the
-  # working directory; neither is part of the implementation prompt's posture.
-  mode: acceptEdits
+  # Use the runtime's native auto approval: an implementation run executes
+  # commands and edits files without stopping to ask, and each runtime's own
+  # reviewer (Claude's auto mode, Codex's auto-review subagent) decides what
+  # needs escalating. acceptEdits left codex exec on its read-only default
+  # sandbox with no one to approve a write. A per-tool allow policy would refuse
+  # runtimes that cannot enforce it, so the posture stays a mode.
+  mode: auto
 ---
 {{#if multiple}}You are implementing the {{count}} todo items listed below. Each is a separate task — implement ALL of them.{{else}}You are implementing the todo item below in a codebase.{{/if}}
 

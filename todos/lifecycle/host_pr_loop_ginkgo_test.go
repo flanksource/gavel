@@ -116,7 +116,7 @@ var _ = ginkgo.Describe("PR turns through Captain", func() {
 		client := &localPRClient{remote: remote, info: model.PRInfo{Number: 27, State: "OPEN", URL: "https://github.com/acme/service/pull/27", HeadRepositoryURL: remote, HeadRefName: "topic", HeadRefOID: initial, ReviewThreads: []model.PRComment{{ThreadID: "addressed", CanResolve: true}, {ThreadID: "remaining", CanResolve: true}}}}
 		target, err := provider.TargetOf(&client.info)
 		gomega.Expect(err).NotTo(gomega.HaveOccurred())
-		state := &prExecution{client: client, number: 27, target: target, snapshot: &model.StatusSnapshot{PR: &client.info}, workDir: work, write: true}
+		state := &prExecution{client: client, number: 27, target: target, snapshot: &model.StatusSnapshot{PR: &client.info}, openThreads: openThreads(&model.StatusSnapshot{PR: &client.info}), workDir: work, write: true}
 		prepared := &preparedStep{class: types.ModeRun, request: api.Spec{Prompt: api.Prompt{User: "Fix the parser."}}}
 		gomega.Expect(state.configure(prepared)).To(gomega.Succeed())
 		prepared.request.Setup.Checkout.Worktree.Path = filepath.Join(root, "run")
@@ -134,8 +134,10 @@ var _ = ginkgo.Describe("PR turns through Captain", func() {
 		gomega.Expect(result.Verdicts).To(gomega.HaveLen(2))
 		gomega.Expect(result.Verdicts[0].Report.Passed).To(gomega.BeFalse())
 		gomega.Expect(modelProvider.requests).To(gomega.HaveLen(2))
-		gomega.Expect(modelProvider.requests[1].Prompt.User).To(gomega.ContainSubstring(`"conclusion":"FAILURE"`))
-		gomega.Expect(modelProvider.requests[1].Prompt.User).To(gomega.ContainSubstring(client.resolvedHeads[0]))
+		first, second := modelProvider.requests[0].Prompt.User, modelProvider.requests[1].Prompt.User
+		gomega.Expect(second).To(gomega.HavePrefix(first), "a retry extends the turn-1 prompt with feedback only; nothing rewrites it")
+		gomega.Expect(strings.TrimPrefix(second, first)).To(gomega.ContainSubstring(`"conclusion":"FAILURE"`))
+		gomega.Expect(second).NotTo(gomega.ContainSubstring(`"reviewThreads"`))
 		gomega.Expect(client.resolved).To(gomega.Equal([]string{"addressed", "remaining"}))
 		gomega.Expect(client.resolvedHeads[0]).NotTo(gomega.Equal(initial))
 		gomega.Expect(client.resolvedHeads[1]).NotTo(gomega.Equal(client.resolvedHeads[0]))

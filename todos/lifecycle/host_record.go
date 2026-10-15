@@ -129,7 +129,7 @@ func (h *Host) recordedOutcome(runCtx context.Context, step Step, prepared *prep
 			}
 		}
 		mapped := RunOutcome(collected.Execution, prepared.class == types.ModeVerify)
-		if base.State != captaindb.PromptRunStateSucceeded {
+		if base.State != captaindb.PromptRunStateSucceeded && mapped.State != captaindb.PromptRunStateWaiting {
 			mapped.State, mapped.Phase = base.State, base.Phase
 			if mapped.Error == "" {
 				mapped.Error = base.Error

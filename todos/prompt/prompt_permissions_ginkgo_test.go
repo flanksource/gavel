@@ -15,13 +15,23 @@ func TestPromptPermissions(t *testing.T) {
 }
 
 var _ = Describe("the run prompt permission posture", func() {
-	It("declares native edit approval without a preset or an explicit tool policy", func() {
+	It("declares auto approval without a preset or an explicit tool policy", func() {
 		req, _, err := renderResolvedForTest([]*types.TODO{newTestTODO("edit-parser", "Update the parser")}, Options{Mode: types.ModeRun})
 		gomega.Expect(err).NotTo(gomega.HaveOccurred())
-		gomega.Expect(req.Permissions).To(gomega.Equal(api.Permissions{Mode: api.PermissionAcceptEdits}))
+		gomega.Expect(req.Permissions).To(gomega.Equal(api.Permissions{Mode: api.PermissionAuto}))
 	})
 
 	for _, runtime := range api.AllRuntimes() {
+		// API runtimes honour no posture at all, so they never ran todos; every
+		// runtime that honoured the former acceptEdits posture must honour this one.
+		It("is honoured by "+runtime.String()+" wherever acceptEdits was", func() {
+			req, _, err := renderResolvedForTest([]*types.TODO{newTestTODO("edit-parser", "Update the parser")}, Options{Mode: types.ModeRun})
+			gomega.Expect(err).NotTo(gomega.HaveOccurred())
+			capabilities := api.PermissionCapabilitiesFor(runtime)
+			support := capabilities.ModeSupport(req.Permissions.Mode)
+			gomega.Expect(support.Honoured()).To(gomega.Equal(capabilities.ModeSupport(api.PermissionAcceptEdits).Honoured()), "%s: %+v", runtime, support)
+		})
+
 		It("passes the tool-policy guard for "+runtime.String(), func() {
 			req, _, err := renderResolvedForTest([]*types.TODO{newTestTODO("edit-parser", "Update the parser")}, Options{Mode: types.ModeRun})
 			gomega.Expect(err).NotTo(gomega.HaveOccurred())

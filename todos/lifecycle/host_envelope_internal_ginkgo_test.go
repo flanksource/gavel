@@ -133,15 +133,59 @@ var _ = ginkgo.Describe("collecting a finished run", func() {
 		gomega.Expect(outcome.Phase).To(gomega.Equal(captaindb.PromptRunPhaseFinished))
 	})
 
-	ginkgo.It("maps a completed ask envelope after Captain's generic outcome", func() {
+	ginkgo.DescribeTable("parks an ask envelope after Captain's generic outcome",
+		func(passed bool, report *api.VerifyReport, structured bool) {
+			const summary = "Which database?"
+			const questionContext = "Choose the staging database."
+			question := map[string]any{"text": summary, "context": questionContext, "options": []any{"Postgres", "SQLite"}}
+			output := map[string]any{"summary": summary, "endStatus": "ask", "questions": []any{question}}
+			response := &api.Response{Text: `{"summary":"Which database?","endStatus":"ask","questions":[{"text":"Which database?","context":"Choose the staging database.","options":["Postgres","SQLite"]}]}`}
+			result := promptrun.Result{Passed: passed, Report: report, Response: response}
+			if report != nil {
+				prepared.request.Workflow = &api.Workflow{Verify: &api.Verify{Fixture: "# dod"}}
+				result.Verdicts = []agent.VerifyResult{{Valid: passed, Report: report, Iteration: 1}}
+			}
+			if structured {
+				response.Text, response.StructuredData, result.StructuredData = "", output, output
+			}
+			classify := host.recordedOutcome(context.Background(), Step{Name: "run"}, prepared,
+				&stepInput{execution: execution}, time.Now())
+			outcome, err := classify(result, nil, false)
+			gomega.Expect(err).NotTo(gomega.HaveOccurred())
+			gomega.Expect(outcome).To(gomega.Equal(promptrun.Outcome{
+				State: captaindb.PromptRunStateWaiting, Phase: captaindb.PromptRunPhaseGenerate, Text: summary, JSON: output,
+			}))
+		},
+		ginkgo.Entry("with passing verification", true, &api.VerifyReport{Ran: true, Passed: true, State: api.VerifyStatePassed}, false),
+		ginkgo.Entry("with failed verification", false, &api.VerifyReport{Ran: true, State: api.VerifyStateFailed, Reason: "fixture failed"}, false),
+		ginkgo.Entry("without verification", false, nil, false),
+		ginkgo.Entry("from structured output with failed verification", false, &api.VerifyReport{Ran: true, State: api.VerifyStateFailed, Reason: "fixture failed"}, true),
+	)
+
+	ginkgo.DescribeTable("preserves runtime failures ahead of an ask envelope",
+		func(runErr error, stopped bool, state captaindb.PromptRunState) {
+			classify := host.recordedOutcome(context.Background(), Step{Name: "run"}, prepared,
+				&stepInput{execution: execution}, time.Now())
+			outcome, err := classify(promptrun.Result{Response: &api.Response{
+				Text: `{"summary":"Which database?","endStatus":"ask","questions":[{"text":"Which database?"}]}`,
+			}}, runErr, stopped)
+			gomega.Expect(err).NotTo(gomega.HaveOccurred())
+			gomega.Expect(outcome.State).To(gomega.Equal(state))
+			gomega.Expect(outcome.Error).To(gomega.Equal(runErr.Error()))
+		},
+		ginkgo.Entry("cancelled", context.Canceled, true, captaindb.PromptRunStateCancelled),
+		ginkgo.Entry("timed out", context.DeadlineExceeded, false, captaindb.PromptRunStateFailed),
+	)
+
+	ginkgo.It("rejects an ask envelope without questions in the recording callback", func() {
 		classify := host.recordedOutcome(context.Background(), Step{Name: "run"}, prepared,
 			&stepInput{execution: execution}, time.Now())
 		outcome, err := classify(promptrun.Result{Passed: true, Response: &api.Response{
-			Text: `{"summary":"Which database?","endStatus":"ask","questions":[{"text":"Which database?"}]}`,
+			Text: `{"summary":"Which database?","endStatus":"ask"}`,
 		}}, nil, false)
 		gomega.Expect(err).NotTo(gomega.HaveOccurred())
-		gomega.Expect(outcome.State).To(gomega.Equal(captaindb.PromptRunStateWaiting))
-		gomega.Expect(outcome.Phase).To(gomega.Equal(captaindb.PromptRunPhaseGenerate))
+		gomega.Expect(outcome.State).To(gomega.Equal(captaindb.PromptRunStateFailed))
+		gomega.Expect(outcome.Error).To(gomega.ContainSubstring("no questions were provided"))
 	})
 
 	ginkgo.It("fails a run whose provider result was not a success, even with an envelope", func() {

@@ -88,30 +88,30 @@ func (p *prExecution) Post(hc *agent.HookContext, phase agent.Phase) error {
 	if err != nil {
 		return err
 	}
-	if err := validateAddressedThreads(snapshot, head, env.AddressedThreadIDs); err != nil {
+	if err := validateAddressedThreads(snapshot, head, env.AddressedThreadIDs, p.openThreads); err != nil {
 		return err
 	}
 	for _, id := range env.AddressedThreadIDs {
 		if err := p.client.ResolveThread(hc.Context, p.number, id); err != nil {
 			return fmt.Errorf("resolve addressed PR thread %s: %w", id, err)
 		}
+		delete(p.openThreads, id)
 	}
-	snapshot, err = p.client.Status(hc.Context, p.number, model.StatusOptions{Threads: true, Logs: true, TailLogs: 40})
+	snapshot, err = p.client.Status(hc.Context, p.number, model.StatusOptions{Threads: true})
 	if err != nil {
 		return err
 	}
-	if err := validateAddressedThreads(snapshot, head, nil); err != nil {
-		return err
-	}
-	p.snapshot = snapshot
-	if err := setPRStatusContext(&hc.Request.Prompt, snapshot); err != nil {
+	if err := validateAddressedThreads(snapshot, head, nil, p.openThreads); err != nil {
 		return err
 	}
 	hc.Notify("PR #%d pushed revision %s; addressed threads: %s. The fixture will verify the entire PR at this revision.", p.number, head, strings.Join(env.AddressedThreadIDs, ", "))
 	return nil
 }
 
-func validateAddressedThreads(snapshot *model.StatusSnapshot, head string, ids []string) error {
+// validateAddressedThreads refuses to resolve anything unless the PR is open at
+// the pushed head, and every ID is a resolvable thread of this PR that was open
+// when the run was prepared (see openThreads).
+func validateAddressedThreads(snapshot *model.StatusSnapshot, head string, ids []string, open map[string]bool) error {
 	if snapshot == nil || snapshot.PR == nil || snapshot.PR.State != "OPEN" || snapshot.PR.HeadRefOID != head {
 		return fmt.Errorf("PR status does not match the pushed open PR head %s", head)
 	}
@@ -126,6 +126,9 @@ func validateAddressedThreads(snapshot *model.StatusSnapshot, head string, ids [
 		}
 		if !thread.IsResolved && !thread.CanResolve {
 			return fmt.Errorf("addressed thread %q cannot be resolved by the current user", id)
+		}
+		if !open[id] {
+			return fmt.Errorf("addressed thread %q was not open when this run was prepared", id)
 		}
 	}
 	return nil

@@ -3,10 +3,12 @@ package lifecycle
 import (
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"time"
 
 	"github.com/flanksource/captain/pkg/api"
+	"github.com/flanksource/captain/pkg/promptcontext"
 	"github.com/flanksource/captain/pkg/promptrun"
 	"github.com/flanksource/captain/pkg/runtimeprofiles"
 	"github.com/flanksource/commons/logger"
@@ -86,13 +88,17 @@ func (h *Host) Resolve(ctx context.Context, todo *types.TODO, step Step, opts Ru
 	if err != nil {
 		return nil, fmt.Errorf("step %s preflight: %w", step.Name, err)
 	}
+	preview, err := previewContext(ctx, prepared)
+	if err != nil {
+		return nil, fmt.Errorf("step %s: %w", step.Name, err)
+	}
 	return &Resolution{
 		RuntimePresets: prepared.runtimePresets,
 		RuntimeProfile: prepared.runtimeProfile,
 		Step:           step,
 		Class:          prepared.class,
-		Prompt:         prepared.request.Prompt.User,
-		Spec:           prepared.request,
+		Prompt:         preview.Prompt.User,
+		Spec:           preview,
 		Timeout:        prepared.timeout,
 		WorkDir:        prepared.workDir,
 		Trace:          prepared.trace,
@@ -102,6 +108,26 @@ func (h *Host) Resolve(ctx context.Context, todo *types.TODO, step Step, opts Ru
 		lc:             lc,
 		prepared:       prepared,
 	}, nil
+}
+
+// previewContext is the request with its prompt.context hooks applied, as
+// promptrun.Run will apply them at dispatch. The prepared request stays
+// unapplied: Run strips and re-applies context blocks, so either form dispatches
+// the same prompt.
+func previewContext(ctx context.Context, prepared *preparedStep) (api.Spec, error) {
+	preview := prepared.request
+	if len(prepared.contextSources) == 0 {
+		return preview, nil
+	}
+	hooks, err := promptcontext.Discover(prepared.contextSources...)
+	if err != nil {
+		return api.Spec{}, err
+	}
+	preview.Prompt.Metadata = maps.Clone(preview.Prompt.Metadata)
+	if _, err := promptcontext.Apply(ctx, &preview, hooks); err != nil {
+		return api.Spec{}, err
+	}
+	return preview, nil
 }
 
 func mergeRuntimeWarnings(groups ...[]string) []string {

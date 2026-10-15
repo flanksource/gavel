@@ -60,6 +60,7 @@ func (h *Host) runInput(exec *todos.ExecutorContext, todo *types.TODO, prepared 
 		RuntimeProfile: prepared.runtimeProfile,
 		Config:         captainai.Config{Model: req.Model, Budget: req.Budget, NoCache: req.NoCache, SessionID: providerSessionID},
 		Provider:       opts.Provider, Hooks: state.hookList(nil),
+		ContextSources:    prepared.contextSources,
 		CallerOwnsCommits: req.Workflow != nil && len(req.Workflow.Commits) > 0,
 		Verify:            capverify.Options{Timeout: prepared.timeout},
 		OnEvent: func(_ int, ev captainai.Event) {
