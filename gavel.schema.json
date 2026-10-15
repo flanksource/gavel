@@ -2609,6 +2609,291 @@
       },
       "type": "object"
     },
+    "storage": {
+      "additionalProperties": false,
+      "description": "Where gavel serve keeps run results, attachments, recordings and logs. Read from ~/.gavel.yaml only: a repository's .gavel.yaml can't redirect storage. Unset, each kind of data stays in its usual local directory.",
+      "properties": {
+        "bucket": {
+          "description": "Bucket name. Required for s3 and gcs.",
+          "type": "string"
+        },
+        "gcs": {
+          "additionalProperties": false,
+          "description": "GCS bucket. The bucket is private, so credentials are required.",
+          "properties": {
+            "credentials": {
+              "additionalProperties": false,
+              "description": "Service-account key file contents (JSON). Required. Give the value directly, or where to read it from.",
+              "properties": {
+                "name": {
+                  "description": "Optional name of the variable.",
+                  "type": "string"
+                },
+                "value": {
+                  "description": "The value itself.",
+                  "type": "string"
+                },
+                "valueFrom": {
+                  "additionalProperties": false,
+                  "description": "Where to read the value from.",
+                  "properties": {
+                    "configMapKeyRef": {
+                      "additionalProperties": false,
+                      "description": "A key of a Kubernetes config map in gavel's namespace.",
+                      "properties": {
+                        "key": {
+                          "description": "Key within it.",
+                          "type": "string"
+                        },
+                        "name": {
+                          "description": "Name of the object.",
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "helmRef": {
+                      "additionalProperties": false,
+                      "description": "A JSONPath key of a deployed Helm release's values.",
+                      "properties": {
+                        "key": {
+                          "description": "Key within it.",
+                          "type": "string"
+                        },
+                        "name": {
+                          "description": "Name of the object.",
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "onePassword": {
+                      "description": "A 1Password reference, op://\u003cvault\u003e/\u003citem\u003e/\u003cfield\u003e.",
+                      "type": "string"
+                    },
+                    "secretKeyRef": {
+                      "additionalProperties": false,
+                      "description": "A key of a Kubernetes secret in gavel's namespace.",
+                      "properties": {
+                        "key": {
+                          "description": "Key within it.",
+                          "type": "string"
+                        },
+                        "name": {
+                          "description": "Name of the object.",
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "serviceAccount": {
+                      "description": "A Kubernetes service account whose token is the value.",
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                }
+              },
+              "type": "object"
+            },
+            "endpoint": {
+              "description": "Endpoint of a GCS emulator; empty means Google Cloud Storage.",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "path": {
+          "description": "Directory for local storage. Required when type is local.",
+          "type": "string"
+        },
+        "prefix": {
+          "description": "Prefix for every key, e.g. gavel/. A trailing slash is implied.",
+          "type": "string"
+        },
+        "s3": {
+          "additionalProperties": false,
+          "description": "S3 or S3-compatible bucket. Without keys, the AWS default credential chain applies.",
+          "properties": {
+            "accessKey": {
+              "additionalProperties": false,
+              "description": "Access key ID. Give the value directly, or where to read it from.",
+              "properties": {
+                "name": {
+                  "description": "Optional name of the variable.",
+                  "type": "string"
+                },
+                "value": {
+                  "description": "The value itself.",
+                  "type": "string"
+                },
+                "valueFrom": {
+                  "additionalProperties": false,
+                  "description": "Where to read the value from.",
+                  "properties": {
+                    "configMapKeyRef": {
+                      "additionalProperties": false,
+                      "description": "A key of a Kubernetes config map in gavel's namespace.",
+                      "properties": {
+                        "key": {
+                          "description": "Key within it.",
+                          "type": "string"
+                        },
+                        "name": {
+                          "description": "Name of the object.",
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "helmRef": {
+                      "additionalProperties": false,
+                      "description": "A JSONPath key of a deployed Helm release's values.",
+                      "properties": {
+                        "key": {
+                          "description": "Key within it.",
+                          "type": "string"
+                        },
+                        "name": {
+                          "description": "Name of the object.",
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "onePassword": {
+                      "description": "A 1Password reference, op://\u003cvault\u003e/\u003citem\u003e/\u003cfield\u003e.",
+                      "type": "string"
+                    },
+                    "secretKeyRef": {
+                      "additionalProperties": false,
+                      "description": "A key of a Kubernetes secret in gavel's namespace.",
+                      "properties": {
+                        "key": {
+                          "description": "Key within it.",
+                          "type": "string"
+                        },
+                        "name": {
+                          "description": "Name of the object.",
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "serviceAccount": {
+                      "description": "A Kubernetes service account whose token is the value.",
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                }
+              },
+              "type": "object"
+            },
+            "endpoint": {
+              "description": "Endpoint of an S3-compatible server; empty means AWS.",
+              "type": "string"
+            },
+            "region": {
+              "description": "AWS region, e.g. us-east-1.",
+              "type": "string"
+            },
+            "secretKey": {
+              "additionalProperties": false,
+              "description": "Secret access key. Give the value directly, or where to read it from.",
+              "properties": {
+                "name": {
+                  "description": "Optional name of the variable.",
+                  "type": "string"
+                },
+                "value": {
+                  "description": "The value itself.",
+                  "type": "string"
+                },
+                "valueFrom": {
+                  "additionalProperties": false,
+                  "description": "Where to read the value from.",
+                  "properties": {
+                    "configMapKeyRef": {
+                      "additionalProperties": false,
+                      "description": "A key of a Kubernetes config map in gavel's namespace.",
+                      "properties": {
+                        "key": {
+                          "description": "Key within it.",
+                          "type": "string"
+                        },
+                        "name": {
+                          "description": "Name of the object.",
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "helmRef": {
+                      "additionalProperties": false,
+                      "description": "A JSONPath key of a deployed Helm release's values.",
+                      "properties": {
+                        "key": {
+                          "description": "Key within it.",
+                          "type": "string"
+                        },
+                        "name": {
+                          "description": "Name of the object.",
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "onePassword": {
+                      "description": "A 1Password reference, op://\u003cvault\u003e/\u003citem\u003e/\u003cfield\u003e.",
+                      "type": "string"
+                    },
+                    "secretKeyRef": {
+                      "additionalProperties": false,
+                      "description": "A key of a Kubernetes secret in gavel's namespace.",
+                      "properties": {
+                        "key": {
+                          "description": "Key within it.",
+                          "type": "string"
+                        },
+                        "name": {
+                          "description": "Name of the object.",
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "serviceAccount": {
+                      "description": "A Kubernetes service account whose token is the value.",
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                }
+              },
+              "type": "object"
+            },
+            "usePathStyle": {
+              "default": false,
+              "description": "Address the bucket in the path (http://host/bucket/key), as most S3-compatible servers need.",
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "type": {
+          "default": "local",
+          "description": "Where gavel serve stores blobs: local disk, an S3 or S3-compatible bucket, or GCS.",
+          "enum": [
+            "local",
+            "s3",
+            "gcs"
+          ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "test": {
       "additionalProperties": false,
       "description": "Settings for `gavel test`.",

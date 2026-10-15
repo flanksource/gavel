@@ -370,6 +370,40 @@ the TOML files themselves; Gavel only discovers and merges them.
 | `secrets.disabled` | bool | `false` | sticky OR — once true in any layer, stays true | Disable the betterleaks linter even when the binary is on `PATH`. |
 | `secrets.configs` | string[] | `[]` | appended + deduped | Additional `.betterleaks.toml` / `.gitleaks.toml` paths to merge in, beyond those discovered in the home dir, git root, and cwd. Relative paths resolve against the `.gavel.yaml` directory. |
 
+## `storage`
+
+Where `gavel serve` keeps run results, attachments, recordings and logs. It is
+read from `~/.gavel.yaml` only: a repository's `.gavel.yaml` can't redirect
+storage. Unset, each kind of data stays in its usual local directory.
+
+| Key | Type | Default | Merge | Description |
+| --- | --- | --- | --- | --- |
+| `storage.type` | `local` \| `s3` \| `gcs` | `local` | home config only | Local disk, an S3 or S3-compatible bucket, or GCS. |
+| `storage.path` | string | — | home config only | Directory for local storage. Required when `type` is `local`. |
+| `storage.bucket` | string | — | home config only | Bucket name. Required for `s3` and `gcs`. |
+| `storage.prefix` | string | — | home config only | Prefix for every key, e.g. `gavel/`. A trailing slash is implied. |
+| `storage.s3.region` | string | — | home config only | AWS region. |
+| `storage.s3.endpoint` | string | — | home config only | Endpoint of an S3-compatible server; empty means AWS. |
+| `storage.s3.usePathStyle` | bool | `false` | home config only | Address the bucket in the path, as most S3-compatible servers need. |
+| `storage.s3.accessKey` / `secretKey` | EnvVar | — | home config only | Keys. Without them, the AWS default credential chain applies. |
+| `storage.gcs.endpoint` | string | — | home config only | Endpoint of a GCS emulator; empty means Google Cloud Storage. |
+| `storage.gcs.credentials` | EnvVar | — | home config only | Service-account key file contents (JSON). Required: the bucket is private. |
+
+An EnvVar is either `{value: ...}` or `{valueFrom: ...}` naming a Kubernetes
+`secretKeyRef` / `configMapKeyRef` (`name`, `key`), a `helmRef`, a
+`serviceAccount`, or a 1Password `onePassword` reference (`op://vault/item/field`).
+
+```yaml
+storage:
+  type: s3
+  bucket: gavel-blobs
+  prefix: gavel/
+  s3:
+    region: us-east-1
+    accessKey: {valueFrom: {secretKeyRef: {name: gavel-s3, key: access-key}}}
+    secretKey: {valueFrom: {secretKeyRef: {name: gavel-s3, key: secret-key}}}
+```
+
 ---
 
 ## Minimal example

@@ -476,3 +476,55 @@ func hookStepsSchema(desc string) map[string]any {
 		},
 	))
 }
+
+func storageSchema() map[string]any {
+	storageType := stringWithDefault("Where gavel serve stores blobs: local disk, an S3 or S3-compatible bucket, or GCS.", "local")
+	storageType["enum"] = []any{"local", "s3", "gcs"}
+	return object(
+		"Where gavel serve keeps run results, attachments, recordings and logs. Read from ~/.gavel.yaml "+
+			"only: a repository's .gavel.yaml can't redirect storage. Unset, each kind of data stays in "+
+			"its usual local directory.",
+		map[string]any{
+			"type":   storageType,
+			"path":   stringProp("Directory for local storage. Required when type is local."),
+			"bucket": stringProp("Bucket name. Required for s3 and gcs."),
+			"prefix": stringProp("Prefix for every key, e.g. gavel/. A trailing slash is implied."),
+			"s3": object("S3 or S3-compatible bucket. Without keys, the AWS default credential chain applies.",
+				map[string]any{
+					"region":       stringProp("AWS region, e.g. us-east-1."),
+					"endpoint":     stringProp("Endpoint of an S3-compatible server; empty means AWS."),
+					"usePathStyle": boolWithDefault("Address the bucket in the path (http://host/bucket/key), as most S3-compatible servers need.", false),
+					"accessKey":    envVarSchema("Access key ID."),
+					"secretKey":    envVarSchema("Secret access key."),
+				}),
+			"gcs": object("GCS bucket. The bucket is private, so credentials are required.",
+				map[string]any{
+					"endpoint":    stringProp("Endpoint of a GCS emulator; empty means Google Cloud Storage."),
+					"credentials": envVarSchema("Service-account key file contents (JSON). Required."),
+				}),
+		},
+	)
+}
+
+// envVarSchema documents a commons-db EnvVar: a literal value, or a reference resolved at startup.
+func envVarSchema(desc string) map[string]any {
+	keyRef := func(desc string) map[string]any {
+		return object(desc, map[string]any{
+			"name": stringProp("Name of the object."),
+			"key":  stringProp("Key within it."),
+		})
+	}
+	return object(desc+" Give the value directly, or where to read it from.",
+		map[string]any{
+			"name":  stringProp("Optional name of the variable."),
+			"value": stringProp("The value itself."),
+			"valueFrom": object("Where to read the value from.", map[string]any{
+				"secretKeyRef":    keyRef("A key of a Kubernetes secret in gavel's namespace."),
+				"configMapKeyRef": keyRef("A key of a Kubernetes config map in gavel's namespace."),
+				"helmRef":         keyRef("A JSONPath key of a deployed Helm release's values."),
+				"serviceAccount":  stringProp("A Kubernetes service account whose token is the value."),
+				"onePassword":     stringProp("A 1Password reference, op://<vault>/<item>/<field>."),
+			}),
+		},
+	)
+}

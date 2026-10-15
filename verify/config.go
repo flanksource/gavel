@@ -8,6 +8,7 @@ import (
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/commons/collections"
+	"github.com/flanksource/gavel/blob"
 	"github.com/flanksource/gavel/models"
 	"github.com/flanksource/gavel/processruntime"
 	"github.com/flanksource/gavel/todos/types"
@@ -324,6 +325,9 @@ type GavelConfig struct {
 	Status StatusConfig            `yaml:"status,omitempty" json:"status,omitempty"`
 	Test   TestConfig              `yaml:"test,omitempty" json:"test,omitempty"`
 	PR     PRConfig                `yaml:"pr,omitempty" json:"pr,omitempty"`
+	// Storage is where gavel serve keeps run results, attachments, recordings and logs. Only the
+	// home config's is read (see LoadGlobalGavelConfig), so a repository can't redirect it.
+	Storage blob.Config `yaml:"storage,omitempty" json:"storage,omitempty"`
 }
 
 // PRConfig configures `gavel pr`.
