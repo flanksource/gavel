@@ -291,6 +291,12 @@ table "sandbox_runs" {
     type = text
     default = ""
   }
+  # The RunSpec the run API serves to the job (sandbox.RunSpec).
+  column "spec" {
+    null    = false
+    type    = jsonb
+    default = sql("'{}'::jsonb")
+  }
   column "created_at" {
     null = false
     type = timestamptz
