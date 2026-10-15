@@ -10,6 +10,7 @@ import (
 
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
+	"github.com/flanksource/gavel/blob"
 	"github.com/flanksource/gavel/snapshots"
 	"github.com/flanksource/gavel/testrunner/parsers"
 	testui "github.com/flanksource/gavel/testrunner/ui"
@@ -206,4 +207,22 @@ func findEntry(t *testing.T, report *Report, name string) Entry {
 	}
 	t.Fatalf("entry %q not found in %#v", name, report.Tests)
 	return Entry{}
+}
+
+func TestLoadReadsRunsFromTheSnapshotStore(t *testing.T) {
+	store := blob.Local(t.TempDir())
+	previous := snapshots.OpenStore
+	snapshots.OpenStore = func(string) (blob.Store, error) { return store, nil }
+	t.Cleanup(func() { snapshots.OpenStore = previous })
+	workDir := t.TempDir()
+	started := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
+	_, err := snapshots.SavePerRun(workDir, &testui.Snapshot{Tests: []parsers.Test{fooTest(workDir, "TestFoo", true, false, time.Millisecond)}}, started, "")
+	require.NoError(t, err)
+	require.NoDirExists(t, filepath.Join(workDir, snapshots.Dir), "the run lives only in the store")
+
+	report, err := Load(Options{WorkDir: workDir})
+	require.NoError(t, err)
+	assert.Equal(t, 1, report.RunCount)
+	require.Len(t, report.Tests, 1)
+	assert.Equal(t, "TestFoo", report.Tests[0].Name)
 }

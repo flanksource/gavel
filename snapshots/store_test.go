@@ -149,3 +149,22 @@ func TestOpenStoreDefaultsToTheWorkspaceDirectory(t *testing.T) {
 func sampleSnapshot() *testui.Snapshot {
 	return &testui.Snapshot{Tests: []parsers.Test{{Name: "TestA", Passed: true}}}
 }
+
+func TestLoadRunsReturnsEachSnapshotWithItsSummary(t *testing.T) {
+	useRemoteStore(t)
+	repo := initRepo(t)
+	older := time.Date(2026, 10, 15, 9, 0, 0, 0, time.UTC)
+	newer := older.Add(time.Hour)
+	_, err := SavePerRun(repo, &testui.Snapshot{Tests: []parsers.Test{{Name: "old", Passed: true}}}, older, "")
+	require.NoError(t, err)
+	_, err = SavePerRun(repo, &testui.Snapshot{Tests: []parsers.Test{{Name: "new", Failed: true}}}, newer, "")
+	require.NoError(t, err)
+
+	runs, err := LoadRuns(repo)
+	require.NoError(t, err)
+	require.Len(t, runs, 2)
+	assert.Equal(t, "new", runs[0].Snapshot.Tests[0].Name, "newest first, as ListRuns")
+	assert.Equal(t, newer, runs[0].Info.Started)
+	assert.Equal(t, 1, runs[0].Info.Failed)
+	assert.Equal(t, "old", runs[1].Snapshot.Tests[0].Name)
+}

@@ -82,6 +82,30 @@ func LastRun(workDir string) (*RunInfo, error) {
 // skipped — run-*.json snapshots are immutable once written, so the start time is a sound
 // incremental watermark. A workspace that never ran yields no runs.
 func ListRuns(workDir string, since time.Time) ([]RunInfo, error) {
+	runs, err := scanRuns(workDir, since)
+	if err != nil {
+		return nil, err
+	}
+	var infos []RunInfo
+	for _, run := range runs {
+		infos = append(infos, run.Info)
+	}
+	return infos, nil
+}
+
+// Run is one per-run snapshot and its summary.
+type Run struct {
+	Info     RunInfo
+	Snapshot testui.Snapshot
+}
+
+// LoadRuns returns every per-run snapshot of workDir with its summary, newest first, in
+// ListRuns' order.
+func LoadRuns(workDir string) ([]Run, error) {
+	return scanRuns(workDir, time.Time{})
+}
+
+func scanRuns(workDir string, since time.Time) ([]Run, error) {
 	if workDir == "" {
 		return nil, errors.New("snapshots.ListRuns: workDir is required")
 	}
@@ -94,7 +118,7 @@ func ListRuns(workDir string, since time.Time) ([]RunInfo, error) {
 		return nil, err
 	}
 
-	var runs []RunInfo
+	var runs []Run
 	for _, object := range objects {
 		name := object.Key
 		if strings.Contains(name, "/") || !strings.HasSuffix(name, ".json") {
@@ -122,14 +146,15 @@ func ListRuns(workDir string, since time.Time) ([]RunInfo, error) {
 		if !since.IsZero() && !started.After(since) {
 			continue
 		}
-		runs = append(runs, runInfo(*snap, name, Location(workDir, name), started))
+		runs = append(runs, Run{Info: runInfo(*snap, name, Location(workDir, name), started), Snapshot: *snap})
 	}
 
 	sort.Slice(runs, func(i, j int) bool {
-		if runs[i].Started.Equal(runs[j].Started) {
-			return runs[i].Path > runs[j].Path
+		a, b := runs[i].Info, runs[j].Info
+		if a.Started.Equal(b.Started) {
+			return a.Path > b.Path
 		}
-		return runs[i].Started.After(runs[j].Started)
+		return a.Started.After(b.Started)
 	})
 	return runs, nil
 }
