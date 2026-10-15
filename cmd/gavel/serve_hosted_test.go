@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -209,7 +210,7 @@ func TestHostedPush(t *testing.T) {
 func TestHostedGitHub(t *testing.T) {
 	gh := githubtest.New(t)
 	f := newHostedFixture(t, func(o *DashboardOptions) {
-		o.GitHubAppID, o.GitHubAppSlug, o.GitHubAppPrivateKey = githubtest.AppID, "gavel-test", gh.KeyPath
+		o.GitHubAppID, o.GitHubAppSlug, o.GitHubAppPrivateKey = strconv.Itoa(githubtest.AppID), "gavel-test", gh.KeyPath
 	})
 	f.clerk.GitHubToken = "ghu_ada"
 	gh.Install(42, github.InstallationAccount{Login: "acme", Type: "Organization"}, github.InstallationRepo{ID: 1, FullName: "acme/api", DefaultBranch: "main"})

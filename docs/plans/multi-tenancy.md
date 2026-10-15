@@ -2138,8 +2138,9 @@ Clerk-mode manual checks:
     tampering, a wrong key and malformed states are all tested.
   - `github.App.UserInstallations(ctx, userToken)` pages `/user/installations` and keeps only
     this App's installations (`app_id`).
-  - The `gavel serve` flags are `--github-app-id` (an `int`, because clicky doesn't bind `int64`
-    fields; a field of an unsupported type is silently left without a flag),
+  - The `gavel serve` flags are `--github-app-id` (a string, per Batman: it's an identifier, not a
+    number to compute with; `Validate` checks it parses as a positive integer. An `int64` field
+    was tried first, but clicky silently gives an unsupported field type no flag),
     `--github-app-slug`, and `--github-app-private-key` (or
     `GAVEL_GITHUB_APP_PRIVATE_KEY_FILE`). They're refused without `--auth clerk`, and in clerk
     mode all three are required together, with the missing ones named.
