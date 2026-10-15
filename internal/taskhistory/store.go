@@ -80,9 +80,13 @@ type RejectedRecord struct {
 // discarding the spool.
 func (s *Store) Import(ctx context.Context, records []Record) (ImportResult, error) {
 	var result ImportResult
+	keep, err := Retention()
+	if err != nil {
+		return result, err
+	}
 	for _, record := range records {
 		err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-			return importRecord(tx, s.org, record)
+			return importRecord(tx, s.org, record, keep)
 		})
 		switch {
 		case err == nil:
@@ -123,7 +127,7 @@ func asRecordFault(err error) error {
 	return err
 }
 
-func importRecord(db *gorm.DB, org uuid.UUID, record Record) error {
+func importRecord(db *gorm.DB, org uuid.UUID, record Record, keep time.Duration) error {
 	if err := validateRecord(record); err != nil {
 		// A record that fails validation is malformed on disk and will fail
 		// identically every pass.
@@ -169,7 +173,7 @@ func importRecord(db *gorm.DB, org uuid.UUID, record Record) error {
 			OR task_run_history.expires_at IS DISTINCT FROM EXCLUDED.expires_at
 			OR task_run_history.run IS DISTINCT FROM EXCLUDED.run
 			OR task_run_history.snapshots IS DISTINCT FROM EXCLUDED.snapshots)`,
-		record.Run.ID, org, startedAt, string(run), string(snapshots), record.ArchivedAt, record.ArchivedAt.Add(Retention))
+		record.Run.ID, org, startedAt, string(run), string(snapshots), record.ArchivedAt, record.ArchivedAt.Add(keep))
 	if result.Error != nil {
 		return asRecordFault(fmt.Errorf("import task history %q: %w", record.Run.ID, result.Error))
 	}

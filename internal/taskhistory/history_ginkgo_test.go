@@ -5,6 +5,7 @@ import (
 	"time"
 
 	clickytask "github.com/flanksource/clicky/task"
+	"github.com/flanksource/commons/properties"
 	"github.com/flanksource/gavel/internal/taskhistory"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -32,6 +33,34 @@ var _ = Describe("Task history spool", func() {
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(records).To(ConsistOf(fresh))
+	})
+
+	It("keeps runs for the retention.task_history window", func() {
+		properties.Set("retention.task_history", "1d")
+		DeferCleanup(func() { properties.Set("retention.task_history", "") })
+		root := GinkgoT().TempDir()
+		now := time.Now().UTC().Truncate(time.Second)
+		twoDaysOld := taskhistory.Record{
+			Run:        clickytask.RunMeta{ID: "two-days-old", Name: "Old", StartedAt: now.Add(-48 * time.Hour).Format(time.RFC3339Nano)},
+			Snapshots:  []clickytask.TaskSnapshot{{ID: "two-days-old", GroupID: "two-days-old", Type: "group", Status: string(clickytask.StatusSuccess)}},
+			ArchivedAt: now.Add(-48 * time.Hour),
+		}
+		Expect(taskhistory.Write(root, twoDaysOld)).To(Succeed())
+
+		records, err := taskhistory.LoadRoots([]string{root}, taskhistory.LoadOptions{Now: now})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(records).To(BeEmpty(), "a day's window drops a run the thirty-day default keeps")
+		Expect(filepath.Join(root, ".gavel", "tasks", "two-days-old.json")).NotTo(BeAnExistingFile(), "and Write prunes it")
+	})
+
+	It("reports a retention.task_history that isn't a duration", func() {
+		properties.Set("retention.task_history", "a month")
+		DeferCleanup(func() { properties.Set("retention.task_history", "") })
+
+		_, err := taskhistory.LoadRoots([]string{GinkgoT().TempDir()}, taskhistory.LoadOptions{Now: time.Now()})
+
+		Expect(err).To(MatchError(ContainSubstring("retention.task_history=a month")))
 	})
 
 	It("lets a sweep skip spool files it has already imported", func() {
