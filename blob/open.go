@@ -5,6 +5,7 @@ package blob
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/flanksource/commons-db/connection"
@@ -44,6 +45,23 @@ type GCSConfig struct {
 // IsZero reports a config with no storage set, so callers keep their own default.
 func (c Config) IsZero() bool {
 	return c == Config{}
+}
+
+// Location describes where c stores key, for messages: a file path for local storage, an
+// s3:// or gs:// URL for a bucket.
+func (c Config) Location(key string) string {
+	prefix := c.Prefix
+	if prefix != "" && !strings.HasSuffix(prefix, "/") {
+		prefix += "/"
+	}
+	switch c.Type {
+	case "s3":
+		return "s3://" + c.Bucket + "/" + prefix + key
+	case "gcs":
+		return "gs://" + c.Bucket + "/" + prefix + key
+	default:
+		return filepath.Join(c.Path, filepath.FromSlash(prefix+key))
+	}
 }
 
 // Open returns the Store c describes.

@@ -144,3 +144,17 @@ func serviceAccountKey(t *testing.T, tokenURL string) string {
 	require.NoError(t, err)
 	return string(data)
 }
+
+func TestConfigLocation(t *testing.T) {
+	for _, tc := range []struct {
+		config Config
+		want   string
+	}{
+		{Config{Path: "/var/lib/gavel"}, "/var/lib/gavel/runs/a.json"},
+		{Config{Path: "/var/lib/gavel", Prefix: "gavel"}, "/var/lib/gavel/gavel/runs/a.json"},
+		{Config{Type: "s3", Bucket: "blobs", Prefix: "gavel/"}, "s3://blobs/gavel/runs/a.json"},
+		{Config{Type: "gcs", Bucket: "blobs"}, "gs://blobs/runs/a.json"},
+	} {
+		assert.Equal(t, tc.want, tc.config.Location("runs/a.json"))
+	}
+}
