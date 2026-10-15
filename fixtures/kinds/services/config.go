@@ -259,5 +259,8 @@ func (e Entry) validateExec() error {
 	if e.Version != "" || e.Runtime != "" || len(e.Parameters) > 0 {
 		return fmt.Errorf("entry %q: version, runtime and parameters apply to deps entries", e.Name)
 	}
+	if err := readinessPolicy(e.Wait).ValidateTiming(); err != nil {
+		return fmt.Errorf("entry %q: %w", e.Name, err)
+	}
 	return nil
 }

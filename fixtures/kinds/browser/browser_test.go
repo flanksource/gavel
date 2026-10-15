@@ -44,6 +44,11 @@ var _ = Describe("browser kind", func() {
 		Expect(resp.Body.Close()).To(Succeed())
 		Expect(outcome.Exports).To(HaveKeyWithValue("BROWSER_WS_URL", version.WebSocketDebuggerURL))
 		Expect(filepath.Join(profileDir, "Local State")).To(BeAnExistingFile())
+		_, err = Browser{}.Execute(context.Background(), newStep(fixtures.NewStepScope(os.Environ()), "second", "browser", map[string]any{
+			"profile": map[string]any{"dir": profileDir},
+		}))
+		Expect(err).To(MatchError(ContainSubstring("already in use")))
+		Expect(probeError(cdpURL)).To(Succeed(), "rejecting a second browser must leave the owner running")
 
 		observed, err := Browser{}.Observe(context.Background(), step, outcome.Handle)
 		Expect(err).ToNot(HaveOccurred())
@@ -56,7 +61,7 @@ var _ = Describe("browser kind", func() {
 		Expect(observed).To(HaveKeyWithValue("cdp", HaveKeyWithValue("ready", false)))
 	})
 
-	It("wipes a fresh profile, seeds it from another profile and honours a session override", func() {
+	It("reuses an explicit profile and honours a session override", func() {
 		scope := fixtures.NewStepScope(os.Environ())
 		profileDir := filepath.Join(GinkgoT().TempDir(), "profile")
 		writeFile(filepath.Join(profileDir, "stale-marker"), "old run")
@@ -65,11 +70,29 @@ var _ = Describe("browser kind", func() {
 
 		_, outcome := startChrome(scope, map[string]any{
 			"session": "e2e-session",
-			"profile": map[string]any{"dir": profileDir, "fresh": true, "from": seed},
+			"profile": map[string]any{"dir": profileDir, "from": seed},
 		})
 		Expect(outcome.Exports).To(HaveKeyWithValue("BROWSER_SESSION", "e2e-session"))
-		Expect(filepath.Join(profileDir, "stale-marker")).ToNot(BeAnExistingFile())
-		Expect(filepath.Join(profileDir, "Default", "seed-marker")).To(BeAnExistingFile())
+		Expect(filepath.Join(profileDir, "stale-marker")).To(BeAnExistingFile())
+		Expect(filepath.Join(profileDir, "Default", "seed-marker")).NotTo(BeAnExistingFile())
+	})
+
+	It("rejects the removed fresh option instead of silently ignoring it", func() {
+		scope := fixtures.NewStepScope(os.Environ())
+		step := newStep(scope, "chrome", "browser", map[string]any{"profile": map[string]any{"fresh": true}})
+		_, err := Browser{}.Execute(context.Background(), step)
+		Expect(err).To(MatchError(ContainSubstring("fresh")))
+	})
+
+	It("removes a stale DevTools port copied from a seed profile", func() {
+		seed := GinkgoT().TempDir()
+		writeFile(filepath.Join(seed, "Default", "seed-marker"), "seeded")
+		writeFile(filepath.Join(seed, devToolsActivePort), "1\n")
+		dir := filepath.Join(GinkgoT().TempDir(), "profile")
+		_, err := prepareProfile(context.Background(), Profile{Dir: dir, From: seed})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(filepath.Join(dir, "Default", "seed-marker")).To(BeAnExistingFile())
+		Expect(filepath.Join(dir, devToolsActivePort)).NotTo(BeAnExistingFile())
 	})
 
 	It("seeds cookies and localStorage from a Playwright storage-state file", func() {

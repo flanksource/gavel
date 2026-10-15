@@ -19,8 +19,6 @@ import (
 type Profile struct {
 	// Dir is the user-data-dir; default <tmp>/browser-profile-<step id>.
 	Dir string `json:"dir,omitempty" jsonschema:"description=Chrome user-data-dir (default: a per-step temp dir)"`
-	// Fresh wipes Dir before Chrome starts.
-	Fresh bool `json:"fresh,omitempty" jsonschema:"description=Delete the profile directory before starting"`
 	// From seeds the profile: a profile directory is copied into Dir; a
 	// Playwright storage-state JSON file has its cookies and localStorage
 	// applied once Chrome is up.
@@ -34,39 +32,48 @@ type preparedProfile struct {
 	StorageState string
 }
 
-func prepareProfile(profile Profile) (preparedProfile, error) {
+func prepareProfile(ctx context.Context, profile Profile) (preparedProfile, error) {
 	prepared := preparedProfile{Dir: profile.Dir}
-	if profile.Fresh {
-		if err := os.RemoveAll(profile.Dir); err != nil {
-			return prepared, fmt.Errorf("wipe fresh profile %s: %w", profile.Dir, err)
-		}
-	}
 	if err := os.MkdirAll(profile.Dir, 0o755); err != nil {
 		return prepared, fmt.Errorf("create profile %s: %w", profile.Dir, err)
 	}
-	// Chrome rewrites it with the port it bound; a stale one would be read as
-	// this run's port.
-	if err := os.Remove(filepath.Join(profile.Dir, devToolsActivePort)); err != nil && !os.IsNotExist(err) {
-		return prepared, fmt.Errorf("remove stale %s: %w", devToolsActivePort, err)
+	entries, err := os.ReadDir(profile.Dir)
+	if err != nil {
+		return prepared, fmt.Errorf("read profile %s: %w", profile.Dir, err)
+	}
+	if port, err := readDevToolsPort(profile.Dir); err == nil {
+		if _, err := probeVersion(ctx, fmt.Sprintf("http://127.0.0.1:%d", port)); err == nil {
+			return prepared, fmt.Errorf("profile %s is already in use by Chrome on port %d", profile.Dir, port)
+		}
 	}
 	if profile.From == "" {
-		return prepared, nil
+		return prepared, removeStaleDevToolsPort(prepared)
 	}
 	info, err := os.Stat(profile.From)
 	if err != nil {
 		return prepared, fmt.Errorf("profile.from: %w", err)
 	}
-	if info.IsDir() {
+	if info.IsDir() && len(entries) == 0 {
 		if err := os.CopyFS(profile.Dir, os.DirFS(profile.From)); err != nil {
 			return prepared, fmt.Errorf("seed profile %s from %s: %w", profile.Dir, profile.From, err)
 		}
-		return prepared, nil
+		return prepared, removeStaleDevToolsPort(prepared)
+	}
+	if info.IsDir() {
+		return prepared, removeStaleDevToolsPort(prepared)
 	}
 	if filepath.Ext(profile.From) != ".json" {
 		return prepared, fmt.Errorf("profile.from %s is neither a profile directory nor a Playwright storage-state .json file", profile.From)
 	}
 	prepared.StorageState = profile.From
-	return prepared, nil
+	return prepared, removeStaleDevToolsPort(prepared)
+}
+
+func removeStaleDevToolsPort(profile preparedProfile) error {
+	if err := os.Remove(filepath.Join(profile.Dir, devToolsActivePort)); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove stale %s from %s: %w", devToolsActivePort, profile.Dir, err)
+	}
+	return nil
 }
 
 // storageState is Playwright's `storageState()` file format.

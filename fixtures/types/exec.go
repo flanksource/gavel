@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -11,9 +13,9 @@ import (
 	"time"
 
 	clickyExec "github.com/flanksource/clicky/exec"
+	"github.com/flanksource/commons-db/tracing/terminal"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/fixtures"
-	"github.com/flanksource/gavel/fixtures/record"
 	"github.com/flanksource/gavel/processruntime"
 	"github.com/flanksource/gomplate/v3"
 	"github.com/flanksource/repomap"
@@ -105,31 +107,22 @@ func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opt
 	if exec.Env == nil {
 		exec.Env = make(map[string]any)
 	}
-	// Precedence, highest first: the fixture's own `env:` > variables earlier
-	// steps exported into the fixture Env > the setup's environment > the
-	// auto-injected roots > whatever the process already had. Both clicky and
-	// os/exec start the child from os.Environ(), so the rest of the fixture Env
-	// (process, setup, front matter) already reaches it.
-	if opts.Scope != nil {
-		for name := range opts.Scope.Env.Exported() {
-			if _, ok := exec.Env[name]; !ok {
-				exec.Env[name], _ = opts.Scope.Env.Get(name)
-			}
+	// The child starts from the fixture's ChildEnv — the process environment,
+	// the armed traces' exports, front matter and the setup — and the rest is
+	// set over it. Precedence, highest first: the fixture's own `env:` >
+	// variables earlier steps exported into the fixture Env > the setup's
+	// environment > the auto-injected roots > ChildEnv.
+	childEnv, err := opts.ChildEnv()
+	if err != nil {
+		return result.Errorf(err, "child environment")
+	}
+	for name := range opts.Scope.Env.Exported() {
+		if _, ok := exec.Env[name]; !ok {
+			exec.Env[name], _ = opts.Scope.Env.Get(name)
 		}
 	}
 	if opts.Setup != nil {
 		for k, v := range opts.Setup.Env {
-			if _, ok := exec.Env[k]; !ok {
-				exec.Env[k] = v
-			}
-		}
-	}
-	// The recorder's proxy sits below both declarations: a fixture or setup that
-	// names HTTP_PROXY itself is pointing at something it needs, and silently
-	// hijacking it would be worse than not recording. `requireEntries:` is how a
-	// fixture turns "recorded nothing" into a failure.
-	if opts.Recorder != nil {
-		for k, v := range opts.Recorder.ProxyEnv {
 			if _, ok := exec.Env[k]; !ok {
 				exec.Env[k] = v
 			}
@@ -172,35 +165,28 @@ func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opt
 		return result.Errorf(fmt.Errorf("no command specified"), "no command specified")
 	}
 
-	// `record: ansi` implies a PTY: there is no ANSI to record from a pipe.
-	var ansi *record.ANSIOptions
-	if opts.Recorder != nil {
-		ansi = opts.Recorder.ANSI
-	}
-
-	started := time.Now()
+	// An armed terminal trace implies a PTY: there is no terminal to trace
+	// from a pipe.
+	terminalTrace := opts.Traces.Terminal()
 	var p *clickyExec.ExecResult
-	var capture *fixtures.Capture
-	if exec.Terminal == "pty" || ansi != nil {
-		p, capture = runWithPTY(ctx, exec, workDir, ansi, opts.ProcessRuntime)
+	if exec.Terminal == "pty" || terminalTrace != nil {
+		p = runWithPTY(ctx, ptyRun{exec: exec, workDir: workDir, env: childEnv, terminal: terminalTrace, runtime: opts.ProcessRuntime})
 	} else {
-		process := clickyExec.NewExec(exec.Exec, exec.Args...).WithCwd(workDir).WithProcessGroup()
+		process := clickyExec.NewExec(exec.Exec, exec.Args...).WithCwd(workDir).WithProcessGroup().WithExactEnv(childEnv)
 		if err := opts.ProcessRuntime.Apply(process); err != nil {
 			return result.Errorf(err, "fixture runtime")
 		}
-		if len(exec.Env) > 0 {
-			env := make(map[string]string, len(exec.Env))
-			for key, value := range exec.Env {
-				env[key] = fmt.Sprintf("%v", value)
-			}
-			process.WithEnv(env)
-		}
-		p = process.WithContext(ctx).Run().Result()
+		p = process.WithEnv(stringEnv(exec.Env)).WithContext(ctx).Run().Result()
 	}
 
 	result.Actual = p
 	if p != nil {
 		result.CommandDuration = p.Duration
+		if p.PID > 0 {
+			if err := fixtures.ReportProcess(ctx, p.PID); err != nil {
+				return result.Errorf(err, "report command process")
+			}
+		}
 	}
 	var profileErr error
 	if profiles != nil {
@@ -218,22 +204,14 @@ func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opt
 		}
 	}
 
-	// Harvested here rather than by the runner because the CEL roots have to
-	// exist before Evaluate runs the fixture's expression. The window is the
-	// child's own lifetime; under the default file scope every test in the file
-	// shares one proxy, so overlapping fixtures see each other's traffic — that
-	// is what `scope: test` is for.
-	var harvest fixtures.Harvest
+	// A markdown command's traces are collected here rather than by the runner
+	// because the CEL roots — one per armed trace, named by its kind — have to
+	// exist before Evaluate runs its expression; the runner lands the same
+	// harvest on the result. A typed exec step may be re-run by its wait, so
+	// its traces end only once it is done, and its `cel:` reads them.
 	evaluate := fixtures.EvaluateOptions{SourceDir: fixture.SourceDir, UpdateGolden: opts.UpdateGolden}
-	if opts.Recorder != nil && opts.Recorder.Harvest != nil {
-		harvest = opts.Recorder.Harvest(fixtures.HarvestRequest{
-			Label:   fixture.Name,
-			Start:   started,
-			End:     time.Now(),
-			Capture: capture,
-		})
-		result.Recordings = harvest.Recordings
-		evaluate.CELVars = harvest.CELVars
+	if fixture.Step == nil {
+		evaluate.CELVars = maps.Clone(opts.Traces.Collect(ctx).CELVars)
 	}
 	// The change under review, as the CEL root `changed_files`, so a fixture that
 	// only makes sense against particular files can say so; absent, not empty,
@@ -272,13 +250,16 @@ func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opt
 			evaluated = evaluated.Failf("%v", profileErr)
 		}
 	}
-
-	// A `requireEntries` shortfall only decides a fixture the assertions left
-	// passing — the fixture's own expectations are the more specific answer.
-	if harvest.Err != nil && evaluated.Error == "" {
-		return evaluated.Failf("%s", harvest.Err.Error())
-	}
 	return evaluated
+}
+
+// stringEnv renders a fixture's env values as the strings a process takes.
+func stringEnv(env map[string]any) map[string]string {
+	out := make(map[string]string, len(env))
+	for key, value := range env {
+		out[key] = fmt.Sprintf("%v", value)
+	}
+	return out
 }
 
 // ptyWidth and ptyHeight are the terminal a fixture sees when it does not say.
@@ -305,69 +286,96 @@ func processLaunchError(p *clickyExec.ExecResult) error {
 	return nil
 }
 
-// runWithPTY runs the command under a pseudo-terminal. ansi is non-nil when the
-// run is being recorded, which adds settled-screen tracking on top; without it
-// the capture is only the output stream, which costs no more than the plain
-// io.Copy this replaced.
-func runWithPTY(ctx context.Context, execBase fixtures.ExecFixtureBase, workDir string, ansi *record.ANSIOptions, runtime processruntime.Options) (*clickyExec.ExecResult, *fixtures.Capture) {
+// ptyRun is one command run under a pseudo-terminal: the fixture's command,
+// where and with which environment it runs, and the terminal trace its output
+// feeds, nil when none is armed.
+type ptyRun struct {
+	exec     fixtures.ExecFixtureBase
+	workDir  string
+	env      map[string]string
+	terminal *fixtures.TerminalTrace
+	runtime  processruntime.Options
+}
+
+// runWithPTY runs the command under a pseudo-terminal, of the terminal trace's
+// size when one is armed. The trace is fed the output as it is read, told the
+// size and how the command exited, and closed, which ends its capture; a feed
+// that fails fails the command.
+func runWithPTY(ctx context.Context, run ptyRun) *clickyExec.ExecResult {
 	// Invoke the configured executable directly so shells like bash/sh don't
 	// get double-wrapped (`bash -c "bash -c '<script>'"` mis-parses: the
 	// outer shell treats the inner `bash` as the script and the rest as
 	// positional args — the command never runs and we get the target
 	// program's help banner instead).
 	opts := fixtures.CaptureOptions{
-		Runtime: runtime,
-		Context: ctx,
-		Command: append([]string{execBase.Exec}, execBase.Args...),
-		Dir:     workDir,
-		Width:   ptyWidth,
-		Height:  ptyHeight,
+		Runtime: run.runtime, Context: ctx, Dir: run.workDir,
+		Command: append([]string{run.exec.Exec}, run.exec.Args...),
+		Width:   ptyWidth, Height: ptyHeight, BaseEnv: run.env,
 	}
-	for k, v := range execBase.Env {
+	for k, v := range run.exec.Env {
 		opts.Env = append(opts.Env, fmt.Sprintf("%s=%v", k, v))
 	}
-	if ansi != nil {
-		opts.Snapshots = true
-		opts.MaxBytes = int64(ansi.MaxBytes)
-		opts.SnapshotInterval = ansi.Interval
-		if ansi.Width > 0 {
-			opts.Width = ansi.Width
-		}
-		if ansi.Height > 0 {
-			opts.Height = ansi.Height
-		}
-	}
-
 	now := time.Now()
+	failed := func(err error) *clickyExec.ExecResult {
+		return &clickyExec.ExecResult{ExitCode: -1, Error: err, Started: &now, Command: run.exec.Exec, Args: run.exec.Args}
+	}
+	var feed io.WriteCloser
+	if run.terminal != nil {
+		opts.Width, opts.Height = run.terminal.Width, run.terminal.Height
+		var err error
+		if feed, err = startTerminalFeed(*run.terminal); err != nil {
+			return failed(err)
+		}
+		opts.Output = feed
+	}
 	capture, err := fixtures.CaptureANSI(opts)
 	if err != nil {
-		return &clickyExec.ExecResult{
-			ExitCode: -1,
-			Error:    fmt.Errorf("failed to start PTY: %w", err),
-			Started:  &now,
-			Command:  execBase.Exec,
-			Args:     execBase.Args,
-		}, nil
+		return failed(errors.Join(fmt.Errorf("failed to start PTY: %w", err), closeTerminalFeed(run.terminal, feed, -1)))
 	}
 
 	// PTY merges stdout+stderr into a single byte stream; there is no way
 	// to separate them at the consumer. Assign the full capture to Stdout
 	// only and leave Stderr empty so that CEL expressions (which build
-	// `combined := stdout + stderr`) see the stream once, not twice. The
-	// doubled form was flagging every non-empty line as a duplicate in
-	// ansi.has_duplicates.
+	// `combined := stdout + stderr`) see the stream once, not twice.
 	result := &clickyExec.ExecResult{
 		Stdout:   capture.Raw(),
 		ExitCode: capture.ExitCode,
 		Started:  &now,
 		Duration: time.Duration(capture.DurationMs) * time.Millisecond,
-		Command:  execBase.Exec,
-		Args:     execBase.Args,
+		Command:  run.exec.Exec,
+		Args:     run.exec.Args,
 	}
-	if ctx.Err() != nil {
-		result.Error = ctx.Err()
+	result.Error = errors.Join(ctx.Err(), closeTerminalFeed(run.terminal, feed, capture.ExitCode))
+	return result
+}
+
+// startTerminalFeed tells the terminal trace the PTY's size and returns the
+// writer its output is copied into.
+func startTerminalFeed(trace fixtures.TerminalTrace) (io.WriteCloser, error) {
+	if err := terminal.Resize(trace.Stream, trace.Width, trace.Height); err != nil {
+		return nil, fmt.Errorf("terminal trace: %w", err)
 	}
-	return result, capture
+	feed, err := terminal.Writer(trace.Stream)
+	if err != nil {
+		return nil, fmt.Errorf("terminal trace: %w", err)
+	}
+	return feed, nil
+}
+
+// closeTerminalFeed records how the command exited and closes the feed,
+// which ends the terminal capture; nothing when no terminal is traced.
+func closeTerminalFeed(trace *fixtures.TerminalTrace, feed io.WriteCloser, exitCode int) error {
+	if feed == nil {
+		return nil
+	}
+	if err := terminal.SetExitCode(trace.Stream, exitCode); err != nil {
+		return errors.Join(fmt.Errorf("terminal trace: %w", err), feed.Close())
+	}
+	if err := feed.Close(); err != nil {
+		return fmt.Errorf("terminal trace: %w", err)
+	}
+	trace.Fed = true
+	return nil
 }
 
 // ResolveWorkDir determines the working directory for fixture execution.

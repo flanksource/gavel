@@ -1,6 +1,7 @@
 package browser
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -12,7 +13,6 @@ import (
 	"strings"
 	"time"
 
-	cexec "github.com/flanksource/clicky/exec"
 	"github.com/flanksource/gavel/fixtures"
 )
 
@@ -44,7 +44,7 @@ func (Browser) DefaultWait(fixtures.StepSpec) *fixtures.WaitPolicy {
 
 // chromeHandle is the running Chrome, passed back to Observe.
 type chromeHandle struct {
-	process *cexec.Process
+	process *managedProcess
 	cdpURL  string
 }
 
@@ -58,13 +58,15 @@ func (Browser) Execute(ctx context.Context, step *fixtures.StepContext) (fixture
 	if err != nil {
 		return fixtures.StepOutcome{}, fmt.Errorf("browser step %q: %w", step.Spec.ID, err)
 	}
-	profile, err := prepareProfile(cfg.Profile)
+	profile, err := prepareProfile(ctx, cfg.Profile)
 	if err != nil {
 		return fixtures.StepOutcome{}, fmt.Errorf("browser step %q: %w", step.Spec.ID, err)
 	}
 	args := chromeArgs(cfg, profile.Dir)
-	process := cexec.NewExec(binary, args...).WithExactEnv(environ(step)).WithProcessGroup()
-	go process.Run()
+	process, err := startManagedProcess(ctx, binary, args, "", environ(step), nil)
+	if err != nil {
+		return fixtures.StepOutcome{}, fmt.Errorf("browser step %q: %w", step.Spec.ID, err)
+	}
 	handle := &chromeHandle{process: process}
 
 	version, err := handle.await(ctx, profile.Dir, cfg.StartTimeout.Std())
@@ -84,7 +86,7 @@ func (Browser) Execute(ctx context.Context, step *fixtures.StepContext) (fixture
 			"session":    cfg.Session,
 			"profileDir": profile.Dir,
 			"binary":     binary,
-			"pid":        process.Pid(),
+			"pid":        process.pid(),
 		},
 		Exports: map[string]string{
 			"BROWSER_CDP_URL":     handle.cdpURL,
@@ -113,10 +115,15 @@ func (Browser) Observe(ctx context.Context, _ *fixtures.StepContext, handle any)
 }
 
 func browserConfig(step *fixtures.StepContext) (BrowserConfig, error) {
-	cfg, err := fixtures.KindConfig[BrowserConfig](step)
-	if err != nil {
-		return cfg, err
+	var cfg BrowserConfig
+	if len(step.Spec.Config) > 0 {
+		decoder := json.NewDecoder(bytes.NewReader(step.Spec.Config))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&cfg); err != nil {
+			return cfg, fmt.Errorf("browser step %q: decode config: %w", step.Spec.ID, err)
+		}
 	}
+	var err error
 	if cfg.Engine != "" && cfg.Engine != "chrome" {
 		return cfg, fmt.Errorf("browser step %q: engine %q is not supported (only chrome)", step.Spec.ID, cfg.Engine)
 	}
@@ -178,8 +185,8 @@ func (h *chromeHandle) await(ctx context.Context, profileDir string, timeout tim
 	deadline := time.Now().Add(timeout)
 	var lastErr error
 	for time.Now().Before(deadline) {
-		if status := h.process.Result().Status; status != "pending" {
-			return cdpVersion{}, fmt.Errorf("chrome exited (%s, code %d) before DevTools was ready: %s", status, h.process.ExitCode(), strings.TrimSpace(h.process.GetStderr()))
+		if h.process.exited() {
+			return cdpVersion{}, fmt.Errorf("chrome exited (code %d) before DevTools was ready: %s", h.process.exitCode(), strings.TrimSpace(h.process.stderr.String()))
 		}
 		if h.cdpURL == "" {
 			if port, err := readDevToolsPort(profileDir); err == nil {
@@ -245,18 +252,8 @@ func probeVersion(ctx context.Context, cdpURL string) (cdpVersion, error) {
 // stop kills Chrome's whole process group (renderers, GPU, crashpad) and
 // waits for it to be reaped.
 func (h *chromeHandle) stop(context.Context) error {
-	if err := h.process.KillTree(); err != nil {
+	if err := h.process.killTree(); err != nil {
 		return fmt.Errorf("kill chrome process tree: %w", err)
 	}
-	done := make(chan struct{})
-	go func() {
-		_ = h.process.Wait() // a killed Chrome always reports a signal error
-		close(done)
-	}()
-	select {
-	case <-done:
-		return nil
-	case <-time.After(10 * time.Second):
-		return fmt.Errorf("chrome (pid %d) was not reaped within 10s of SIGKILL", h.process.Pid())
-	}
+	return h.process.waitWithin(10 * time.Second)
 }

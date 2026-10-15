@@ -22,10 +22,10 @@ var _ = Describe("fixture Go profile artifacts", func() {
 				GoProfiles: map[string]fixtures.GoProfileOutput{"cpu": {File: "cpu.pprof", Env: "PROFILE_OUTPUT"}},
 			},
 		}
-		without := (&ExecFixture{}).Run(context.Background(), fixture, fixtures.RunOptions{WorkDir: root})
+		without := (&ExecFixture{}).Run(context.Background(), fixture, fixtures.RunOptions{WorkDir: root, Scope: fixtures.NewStepScope(os.Environ())})
 		Expect(without.GoProfiles).To(BeEmpty())
 		Expect(without.Status).To(Equal(task.StatusPASS))
-		with := (&ExecFixture{}).Run(context.Background(), fixture, fixtures.RunOptions{WorkDir: root, Profile: true})
+		with := (&ExecFixture{}).Run(context.Background(), fixture, fixtures.RunOptions{WorkDir: root, Profile: true, Scope: fixtures.NewStepScope(os.Environ())})
 		Expect(with.GoProfiles).To(HaveLen(1))
 		Expect(with.GoProfiles[0].Status).To(Equal("invalid"))
 		Expect(with.Error).To(ContainSubstring("go profile cpu"))
@@ -38,11 +38,11 @@ var _ = Describe("fixture Go profile artifacts", func() {
 		fixture := fixtures.FixtureTest{
 			Name: "Go CPU", SourceDir: filepath.Dir(cwd),
 			ExecFixtureBase: fixtures.ExecFixtureBase{
-				Exec: "go", Args: []string{"test", "./record", "-run", "TestParseShorthand"},
+				Exec: "go", Args: []string{"test", "../internal/safefs", "-run", "TestSafeRemove"},
 				GoProfiles: map[string]fixtures.GoProfileOutput{"cpu": {File: "cpu.pprof", Args: []string{"-cpuprofile={{.path}}"}}},
 			},
 		}
-		result := (&ExecFixture{}).Run(context.Background(), fixture, fixtures.RunOptions{WorkDir: root, Profile: true})
+		result := (&ExecFixture{}).Run(context.Background(), fixture, fixtures.RunOptions{WorkDir: root, Profile: true, Scope: fixtures.NewStepScope(os.Environ())})
 		Expect(result.Error).To(BeEmpty())
 		Expect(result.GoProfiles).To(HaveLen(1))
 		Expect(result.GoProfiles[0].Status).To(Equal("captured"))
