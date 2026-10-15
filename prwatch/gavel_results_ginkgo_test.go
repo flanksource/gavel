@@ -242,6 +242,25 @@ var _ = Describe("Gavel artifact results", func() {
 		Expect(summary.CommentID).To(Equal(int64(10)))
 	})
 
+	It("carries timed-out leaves from the artifact through aggregation into the rendered roll-up", func() {
+		shard := func(id int64, leaves ...string) *GavelResultsSummary {
+			return ComputeGavelSummary([]byte(`[{"name":"pkg","children":[`+strings.Join(leaves, ",")+`]}]`),
+				github.GavelArtifact{StickyID: "gavel", ArtifactID: id})
+		}
+		const (
+			passed   = `{"name":"ok","passed":true}`
+			timedOut = `{"name":"slow","failed":true,"timed_out":true}`
+			failed   = `{"name":"broken","failed":true}`
+		)
+		aggregate := AggregateGavelSummaries([]*GavelResultsSummary{
+			shard(1, passed, timedOut, failed),
+			shard(2, timedOut),
+		})
+
+		Expect(aggregate.testSummary()).To(Equal(parsers.TestSummary{Total: 4, Passed: 1, Failed: 3, TimedOut: 2}))
+		Expect(aggregate.Pretty().String()).To(ContainSubstring("timed out: 2"))
+	})
+
 	It("surfaces download errors and omits artifacts without result JSON", func() {
 		artifacts := []github.GavelArtifact{
 			{StickyID: "gavel-test", RunID: 100, ArtifactID: 1, CommentID: 10},

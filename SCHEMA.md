@@ -71,7 +71,7 @@ field is left undocumented.
 
 Type settings live in `lint.linters.<name>` and `test.frameworks.<name>`. Test names are `go`, `ginkgo`, `jest`, `vitest`, `playwright`, and `fixture`. Each accepts `args` and `runtime`; nonempty argument lists replace inherited lists. Native arguments control tool concurrency and soft budgets, while runtime CPU/memory/deadline settings terminate processes that exceed caps. Sampling can permit short bursts beyond a cap.
 
-Fixtures run in process unless an explicit CPU, memory, or timeout cap is active. Capped invocations run in a supervised worker, including their setup, build, daemons, recordings, and profiling. Environment and niceness settings alone apply to child commands without changing the parent. Fixture native arguments append to each exec step's argv. Built-in per-test deadlines alone do not trigger worker isolation.
+Fixtures run in process unless an explicit CPU, memory, or timeout cap is active. Capped invocations run in a supervised worker, including their setup, build, daemons, traces, and profiling. Environment and niceness settings alone apply to child commands without changing the parent. Fixture native arguments append to each exec step's argv. Built-in per-test deadlines alone do not trigger worker isolation.
 
 ```yaml
 runtime:

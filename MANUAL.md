@@ -448,7 +448,7 @@ goProfiles:
 # Go CPU profile
 
 ```sh
-go test ./fixtures/record -run TestParseShorthand -cpuprofile="$CPU_PROFILE"
+go test ./internal/safefs -run TestSafeRemove -cpuprofile="$CPU_PROFILE"
 ```
 ````
 

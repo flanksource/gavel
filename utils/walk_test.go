@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/flanksource/gavel/internal/safefs"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -662,7 +664,7 @@ var _ = Describe("GlobFilesBounded", func() {
 		outer := filepath.Dir(root)
 		shared := filepath.Join(outer, "shared-"+filepath.Base(root))
 		Expect(os.MkdirAll(shared, 0o755)).To(Succeed())
-		DeferCleanup(os.RemoveAll, shared)
+		DeferCleanup(func() { Expect(safefs.SafeRemove(shared, safefs.RemoveContext{AllowedRoot: outer})).To(Succeed()) })
 		external := filepath.Join(shared, "a.fixture.md")
 		Expect(os.WriteFile(external, nil, 0o644)).To(Succeed())
 
