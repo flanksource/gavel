@@ -138,16 +138,16 @@ func (a *App) InstallationRepos(ctx context.Context, installationID int64) ([]In
 	}
 }
 
-// UserInstallations lists the IDs of this App's installations that userToken (a GitHub
-// App user token, e.g. from Clerk) can access, page by page.
-func (a *App) UserInstallations(ctx context.Context, userToken string) ([]int64, error) {
-	var ids []int64
+// UserInstallations lists this App's installations that userToken (a GitHub App user
+// token, e.g. from Clerk) can access, page by page.
+func (a *App) UserInstallations(ctx context.Context, userToken string) ([]Installation, error) {
+	var installations []Installation
 	seen := 0
 	for page := 1; ; page++ {
 		var body struct {
 			TotalCount    int `json:"total_count"`
 			Installations []struct {
-				ID    int64 `json:"id"`
+				Installation
 				AppID int64 `json:"app_id"`
 			} `json:"installations"`
 		}
@@ -156,12 +156,12 @@ func (a *App) UserInstallations(ctx context.Context, userToken string) ([]int64,
 		}
 		for _, installation := range body.Installations {
 			if installation.AppID == a.ID {
-				ids = append(ids, installation.ID)
+				installations = append(installations, installation.Installation)
 			}
 		}
 		seen += len(body.Installations)
 		if len(body.Installations) == 0 || seen >= body.TotalCount {
-			return ids, nil
+			return installations, nil
 		}
 	}
 }

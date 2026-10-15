@@ -58,6 +58,24 @@ func (s Store) Installations(ctx context.Context, org uuid.UUID) ([]int64, error
 	return ids, nil
 }
 
+// Owners maps each of ids that is linked to an organization to that organization.
+func (s Store) Owners(ctx context.Context, ids []int64) (map[int64]uuid.UUID, error) {
+	var rows []struct {
+		ID    int64
+		OrgID uuid.UUID
+	}
+	if len(ids) > 0 {
+		if err := s.DB.WithContext(ctx).Raw(`SELECT id, org_id FROM github_installations WHERE id IN ?`, ids).Scan(&rows).Error; err != nil {
+			return nil, fmt.Errorf("read which organizations GitHub App installations are linked to: %w", err)
+		}
+	}
+	owners := make(map[int64]uuid.UUID, len(rows))
+	for _, row := range rows {
+		owners[row.ID] = row.OrgID
+	}
+	return owners, nil
+}
+
 // SyncRepos makes repos match what installationID grants org. A repository the
 // installation no longer grants is deleted, unless a sandbox run refers to it; then it
 // is kept without its installation.

@@ -884,8 +884,18 @@ func (a *App) InstallationRepos(ctx context.Context, installationID int64) ([]In
   before (`Authorization: Bearer`), never browser navigations. The `__session` cookie expires
   within a minute and is only refreshed while the dashboard's JavaScript runs, so a navigation
   back from GitHub's install page would often carry an expired token.
+- **Linking an installation that already exists.** GitHub's install page only installs on accounts
+  that don't have the App yet. For an existing installation it opens that installation's settings,
+  and it redirects back only if a setting changes. So "Connect GitHub" opens a dialog instead:
+  - `GET /api/github/installations` lists the App installations the user's GitHub account can
+    reach (their Clerk GitHub token → `GET /user/installations`), each with a `status`: `linked`
+    (to this org), `linked_elsewhere` or `available`.
+  - `POST /api/github/installations/{id}/link` links one, with setup's checks minus the state: the
+    user's GitHub account reaches it and no other org has it. The click stands in for the state.
+    The request carries a bearer token, so no other site can send it.
+  - "Install on another GitHub account" starts the install flow below.
 - `POST /api/github/install` (authenticated) answers `{"url": "https://github.com/apps/<slug>/installations/new?state=<state>"}`;
-  the "Connect GitHub" button goes there.
+  the dialog's "Install on another GitHub account" button goes there.
   - `state = base64url(json{org, user, exp: now+15m}) + "." + base64url(HMAC-SHA256(GAVEL_SECRET_KEY, payload))`.
 - The App's **Setup URL** is the dashboard page `<public-url>/github/setup`, served by the public
   page shell. Once Clerk has signed the user in, the page sends GitHub's `installation_id` and
@@ -2202,6 +2212,12 @@ Clerk-mode manual checks:
   - Hosted dashboards showed "Sync error". The SPA still opened the host-only process status
     and git streams and read `/api/projects`, all 404 in hosted mode. They are now off in clerk
     mode (`46663b9`).
+- **2026-10-15: Existing installations are linked from a list (Batman approved).** GitHub's install
+  flow never came back for flanksource: the App was already installed there, so GitHub opened
+  the installation's settings, which redirect only after a change. "Connect GitHub" now lists
+  the installations the user's GitHub account reaches and links one with a click (M5.3).
+  `/github/setup` stays for brand-new installs, and explains itself when opened without GitHub's
+  parameters.
 - **2026-10-15: Concurrent membership syncs collided.** Batman's server logged `duplicate key
   value violates unique constraint "org_memberships_pkey"` when a page load's parallel requests
   each refreshed stale memberships. `SyncMemberships` deletes and re-inserts in a transaction; a

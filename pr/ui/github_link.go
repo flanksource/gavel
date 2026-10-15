@@ -1,5 +1,5 @@
-// Connects an organization to the gavel GitHub App: /api/github/install answers GitHub's install
-// page, /api/github/setup links the installation made there, /api/github/sync re-reads repos.
+// Connects an organization to the gavel GitHub App: linking an installation the user's GitHub
+// account already reaches, or a new one made on GitHub's install page; and re-reading repos.
 package ui
 
 import (
@@ -36,6 +36,8 @@ func (l *GitHubLink) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/github/install", l.install)
 	mux.HandleFunc("POST /api/github/setup", l.setup)
+	mux.HandleFunc("GET /api/github/installations", l.installations)
+	mux.HandleFunc("POST /api/github/installations/{id}/link", l.linkInstallation)
 	mux.HandleFunc("POST /api/github/sync", l.sync)
 	return mux
 }
@@ -86,31 +88,104 @@ func (l *GitHubLink) setup(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, fmt.Errorf("installation_id %q isn't a number", raw))
 		return
 	}
+	l.link(w, r, installationID)
+}
+
+// installationStatus says whether an installation is linked to the caller's organization
+// ("linked"), to another organization ("linked_elsewhere"), or to none ("available").
+type installationStatus struct {
+	ID          int64  `json:"id"`
+	Account     string `json:"account"`
+	AccountType string `json:"accountType"`
+	Status      string `json:"status"`
+}
+
+// installations lists the App installations the user's GitHub account can access, so
+// one installed before (or by someone else) can be linked without visiting GitHub.
+func (l *GitHubLink) installations(w http.ResponseWriter, r *http.Request) {
+	org := tenant.FromContext(r.Context()).OrgID
+	reachable, ok := l.reachable(w, r)
+	if !ok {
+		return
+	}
+	ids := make([]int64, len(reachable))
+	for i, installation := range reachable {
+		ids[i] = installation.ID
+	}
+	owners, err := l.Store.Owners(r.Context(), ids)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err)
+		return
+	}
+	list := make([]installationStatus, len(reachable))
+	for i, installation := range reachable {
+		status := "available"
+		if owner, linked := owners[installation.ID]; linked {
+			status = "linked_elsewhere"
+			if owner == org {
+				status = "linked"
+			}
+		}
+		list[i] = installationStatus{ID: installation.ID, Account: installation.Account.Login, AccountType: installation.Account.Type, Status: status}
+	}
+	writeJSON(w, list)
+}
+
+// linkInstallation links an installation the user picked from installations. The click
+// is the intent GitHub's state stands for in setup: the request carries a bearer token,
+// which no other site can send.
+func (l *GitHubLink) linkInstallation(w http.ResponseWriter, r *http.Request) {
+	raw := r.PathValue("id")
+	installationID, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, fmt.Errorf("installation ID %q isn't a number", raw))
+		return
+	}
+	l.link(w, r, installationID)
+}
+
+// reachable lists the App installations the signed-in user's GitHub account can access,
+// answering the request with the reason when they can't be read.
+func (l *GitHubLink) reachable(w http.ResponseWriter, r *http.Request) ([]github.Installation, bool) {
+	ctx := r.Context()
+	scope := tenant.FromContext(ctx)
+	if scope.UserID == nil {
+		writeJSONError(w, http.StatusUnauthorized, errors.New("sign in to connect GitHub"))
+		return nil, false
+	}
 	var user struct{ ClerkUserID string }
 	if err := l.Store.DB.WithContext(ctx).Raw(`SELECT clerk_user_id FROM users WHERE id = ?`, *scope.UserID).Scan(&user).Error; err != nil {
 		writeJSONError(w, http.StatusInternalServerError, fmt.Errorf("read the signed-in user: %w", err))
-		return
+		return nil, false
 	}
 	token, err := l.Clerk.GitHubToken(ctx, user.ClerkUserID)
 	if err != nil {
 		writeJSONError(w, http.StatusForbidden, fmt.Errorf("read your GitHub connection from Clerk: %w", err))
-		return
+		return nil, false
 	}
 	reachable, err := l.App.UserInstallations(ctx, token)
 	if err != nil {
 		writeJSONError(w, http.StatusBadGateway, err)
+		return nil, false
+	}
+	return reachable, true
+}
+
+// link links installationID to the caller's organization once the user's GitHub account
+// is shown to reach it, syncs its repositories, and answers with the org's repositories.
+func (l *GitHubLink) link(w http.ResponseWriter, r *http.Request, installationID int64) {
+	ctx := r.Context()
+	scope := tenant.FromContext(ctx)
+	reachable, ok := l.reachable(w, r)
+	if !ok {
 		return
 	}
-	if !slices.Contains(reachable, installationID) {
+	i := slices.IndexFunc(reachable, func(installation github.Installation) bool { return installation.ID == installationID })
+	if i < 0 {
 		writeJSONError(w, http.StatusForbidden, fmt.Errorf("your GitHub account can't access installation %d", installationID))
 		return
 	}
-	installation, err := l.App.Installation(ctx, installationID)
-	if err != nil {
-		writeJSONError(w, http.StatusBadGateway, err)
-		return
-	}
-	err = l.Store.Link(ctx, scope.OrgID, *scope.UserID, installation)
+	err := l.Store.Link(ctx, scope.OrgID, *scope.UserID, reachable[i])
 	if errors.Is(err, installations.ErrLinkedToAnotherOrg) {
 		writeJSONError(w, http.StatusConflict, err)
 		return
