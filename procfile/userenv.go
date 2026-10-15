@@ -168,6 +168,9 @@ func captureShellEnv(shell string) (map[string]string, error) {
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, shell, "-l", "-i", "-c", "env")
+	// An interactive shell sharing our terminal makes itself the terminal
+	// foreground and can leave it stranded, so Ctrl+C reaches nobody.
+	cmd.SysProcAttr = detachedSysProcAttr()
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = io.Discard
