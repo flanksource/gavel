@@ -300,3 +300,13 @@ func TestHostedDashboardRefusesAnIncompleteStorageConfig(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "storage.gcs.credentials is required")
 }
+
+func TestHostedDashboardAcceptsCIResultsWithoutClerk(t *testing.T) {
+	f := newHostedFixture(t)
+	resp, err := http.Post(f.server.URL+"/api/ci/results", "application/json", strings.NewReader(`{}`))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+	assert.Contains(t, string(body), "GitHub Actions OIDC token", "answered by the CI endpoint, not the Clerk middleware")
+}

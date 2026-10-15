@@ -7,16 +7,20 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	clickytask "github.com/flanksource/clicky/task"
 	commonscontext "github.com/flanksource/commons/context"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/commons/properties"
+	"github.com/flanksource/gavel/blob"
 	ghcache "github.com/flanksource/gavel/github/cache"
 	"github.com/flanksource/gavel/internal/retention"
+	"github.com/flanksource/gavel/pr/ui"
 	"github.com/flanksource/gavel/snapshots"
 	"github.com/flanksource/gavel/verify"
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
@@ -50,10 +54,11 @@ func startRetention(ctx context.Context, db *gorm.DB, cache *ghcache.Store) erro
 	if err != nil {
 		return err
 	}
-	stores := retention.Stores{Workspace: snapshots.OpenStore, Recordings: recordings}
+	stores := retention.Stores{Recordings: recordings}
 	if cache != nil {
 		stores.Org = cache.OrgBlobs
 	}
+	stores.Workspace = retentionWorkspaces(stores.Org)
 	go func() {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
@@ -75,5 +80,29 @@ func runRetentionPass(db *gorm.DB, stores retention.Stores) {
 	})
 	if _, err := task.GetResult(); err != nil {
 		logger.Warnf("retention cleanup: %v", err)
+	}
+}
+
+// retentionWorkspaces maps a test_run_caches workspace to the store of its run snapshots: a
+// repository's uploaded runs (repo:<id>) are in its organization's store, a local workspace's in
+// its snapshot store.
+func retentionWorkspaces(orgBlobs func(uuid.UUID) blob.Store) func(uuid.UUID, string) (blob.Store, error) {
+	return func(org uuid.UUID, workDir string) (blob.Store, error) {
+		id, ok := strings.CutPrefix(workDir, "repo:")
+		if !ok {
+			return snapshots.OpenStore(workDir)
+		}
+		repo, err := uuid.Parse(id)
+		if err != nil {
+			return nil, fmt.Errorf("workspace %s does not name a repository: %w", workDir, err)
+		}
+		var store blob.Store
+		if orgBlobs != nil {
+			store = orgBlobs(org)
+		}
+		if store == nil {
+			return nil, fmt.Errorf("workspace %s: no blob store for organization %s", workDir, org)
+		}
+		return blob.WithPrefix(store, ui.RepoRunsPrefix(repo)), nil
 	}
 }

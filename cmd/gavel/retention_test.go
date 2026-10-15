@@ -6,12 +6,16 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	commonsdbtest "github.com/flanksource/commons-db/dbtest"
 	"github.com/flanksource/commons/properties"
+	"github.com/flanksource/gavel/blob"
 	"github.com/flanksource/gavel/internal/database"
+	"github.com/flanksource/gavel/pr/ui"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -89,4 +93,29 @@ func TestStartRetentionReportsAnInvalidInterval(t *testing.T) {
 	err := startRetention(context.Background(), (*gorm.DB)(nil), nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "retention.interval=hourly")
+}
+
+func TestRetentionWorkspaceStores(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	base := blob.Local(t.TempDir())
+	org, repo := uuid.New(), uuid.New()
+	orgBlobs := func(id uuid.UUID) blob.Store { return blob.WithPrefix(base, "orgs/"+id.String()+"/") }
+	workspace := retentionWorkspaces(orgBlobs)
+
+	uploaded, err := workspace(org, ui.RepoWorkspace(repo))
+	require.NoError(t, err)
+	require.NoError(t, uploaded.Write(context.Background(), "run-x.json", strings.NewReader("{}")))
+	exists, err := base.Exists(context.Background(), "orgs/"+org.String()+"/"+ui.RepoRunsPrefix(repo)+"run-x.json")
+	require.NoError(t, err)
+	assert.True(t, exists, "an uploaded repository's runs are in its organization's store")
+
+	workDir := t.TempDir()
+	local, err := workspace(org, workDir)
+	require.NoError(t, err)
+	require.NoError(t, local.Write(context.Background(), "run-y.json", strings.NewReader("{}")))
+	assert.FileExists(t, filepath.Join(workDir, ".gavel", "run-y.json"), "a workspace's runs are in its snapshot store")
+
+	_, err = workspace(org, "repo:not-a-uuid")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "repo:not-a-uuid")
 }

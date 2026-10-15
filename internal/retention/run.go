@@ -25,8 +25,9 @@ type Stores struct {
 	// Org is an organization's part of the blob store, holding job and sandbox logs; it may
 	// return nil when there is none.
 	Org func(org uuid.UUID) blob.Store
-	// Workspace is a workspace's snapshot store (snapshots.OpenStore), holding run snapshots.
-	Workspace func(workDir string) (blob.Store, error)
+	// Workspace is the store holding the run snapshots of org's workspace workDir, as named in
+	// test_run_caches.workspace_dir.
+	Workspace func(org uuid.UUID, workDir string) (blob.Store, error)
 	// Recordings is the configured blob store, holding workspaces/*/recordings/; nil when
 	// recordings are only on local disk.
 	Recordings blob.Store
@@ -142,7 +143,7 @@ func deleteRuns(ctx context.Context, db *gorm.DB, stores Stores, kinds []string,
 		}
 		for _, row := range rows {
 			if strings.HasPrefix(row.RunID, "run-") {
-				store, err := workspaceStore(stores, workspaces, row.WorkspaceDir)
+				store, err := workspaceStore(stores, workspaces, row.OrgID, row.WorkspaceDir)
 				if err != nil {
 					return deleted, err
 				}
@@ -162,18 +163,19 @@ func deleteRuns(ctx context.Context, db *gorm.DB, stores Stores, kinds []string,
 	}
 }
 
-func workspaceStore(stores Stores, opened map[string]blob.Store, workDir string) (blob.Store, error) {
-	if store, ok := opened[workDir]; ok {
+func workspaceStore(stores Stores, opened map[string]blob.Store, org uuid.UUID, workDir string) (blob.Store, error) {
+	cacheKey := org.String() + "\x00" + workDir
+	if store, ok := opened[cacheKey]; ok {
 		return store, nil
 	}
 	if stores.Workspace == nil {
 		return nil, fmt.Errorf("delete runs of %s: no snapshot store for workspaces", workDir)
 	}
-	store, err := stores.Workspace(workDir)
+	store, err := stores.Workspace(org, workDir)
 	if err != nil {
 		return nil, fmt.Errorf("open the snapshot store of %s: %w", workDir, err)
 	}
-	opened[workDir] = store
+	opened[cacheKey] = store
 	return store, nil
 }
 

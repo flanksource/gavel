@@ -183,7 +183,16 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 		orgs.Close()
 		stopShell()
 	}
-	return hostedStack{handler: auth.Middleware(next, shell.Handler()), members: auth.Members, stop: stop}, nil
+	// CI jobs authenticate with their GitHub Actions OIDC token, not a Clerk session.
+	ciResults := &ui.CIResults{
+		DB:    db,
+		OIDC:  api.GitHubOIDCVerifier{Audience: opts.PublicURL, JWKS: api.NewJWKSCache(api.GitHubOIDCJWKSURL, &http.Client{Timeout: 10 * time.Second}, 10*time.Minute)},
+		Cache: cache,
+	}
+	root := http.NewServeMux()
+	root.Handle("/api/ci/", ciResults.Handler())
+	root.Handle("/", auth.Middleware(next, shell.Handler()))
+	return hostedStack{handler: root, members: auth.Members, stop: stop}, nil
 }
 
 // repoSyncInterval is how often an active organization's repositories are re-read from

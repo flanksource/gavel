@@ -234,3 +234,9 @@ func runStartTime(snap testui.Snapshot, name string, modTime time.Time) time.Tim
 	}
 	return modTime.UTC()
 }
+
+// Summarize is the RunInfo of snap, stored under key at location: its counts, kind and start
+// time, which falls back to key's timestamp and then modTime.
+func Summarize(snap testui.Snapshot, key, location string, modTime time.Time) RunInfo {
+	return runInfo(snap, key, location, runStartTime(snap, key, modTime))
+}

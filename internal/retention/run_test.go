@@ -60,7 +60,7 @@ func TestRunDeletesWhatOutlivedItsWindow(t *testing.T) {
 	logs := blob.Local(t.TempDir())
 	orgStore := func(org uuid.UUID) blob.Store { return blob.WithPrefix(logs, "orgs/"+org.String()+"/") }
 	workDir, otherWorkDir := t.TempDir(), t.TempDir()
-	workspace := func(dir string) (blob.Store, error) { return blob.Local(filepath.Join(dir, ".gavel")), nil }
+	workspace := func(_ uuid.UUID, dir string) (blob.Store, error) { return blob.Local(filepath.Join(dir, ".gavel")), nil }
 	recordingsRoot := t.TempDir()
 	recordings := blob.Local(recordingsRoot)
 
@@ -78,8 +78,8 @@ func TestRunDeletesWhatOutlivedItsWindow(t *testing.T) {
 	}
 
 	// Test and lint runs. A sha-* row names the snapshot last.json points at, so only its row goes.
-	localRuns, _ := workspace(workDir)
-	otherRuns, _ := workspace(otherWorkDir)
+	localRuns, _ := workspace(local, workDir)
+	otherRuns, _ := workspace(other, otherWorkDir)
 	for _, row := range []struct {
 		org     uuid.UUID
 		dir     string
