@@ -20,7 +20,7 @@ import { ProjectDetailPane, ProjectsSidebar } from './components/ProjectsView';
 import { ProcessManager } from './components/ProcessManager';
 import { ThemeToggle } from './components/ThemeToggle';
 import { UserMenu } from './components/UserMenu';
-import { hostControlsVisible, tabFor, visibleTabs } from './hostedUI';
+import { githubScopeVisible, hostControlsVisible, tabFor, visibleTabs } from './hostedUI';
 import { currentAuthMode } from './query';
 import { ReactGrabHelp } from './components/ReactGrabHelp';
 import { CommandPalette, SearchTrigger } from './components/CommandPalette';
@@ -655,7 +655,9 @@ export function App() {
             {hostControls && <ChatButton label="Open Gavel assistant" />}
             {hostControls && <TaskManagerButton basePath="/api/v1" />}
             {hostControls && <ProcessManager projects={scopedProjects} onProcChanged={onProcChanged} />}
-            <OrgChooser config={{ ...config, project: scopeProject }} projects={projects} onChange={updateScopeConfig} />
+            {githubScopeVisible(authMode) && (
+              <OrgChooser config={{ ...config, project: scopeProject }} projects={projects} onChange={updateScopeConfig} />
+            )}
             <StatusIndicator
               fetchedAt={fetchedAt}
               error={error}

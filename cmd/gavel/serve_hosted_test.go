@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,7 +23,9 @@ import (
 
 	commonsdbtest "github.com/flanksource/commons-db/dbtest"
 	"github.com/flanksource/gavel/api/clerktest"
+	"github.com/flanksource/gavel/github"
 	ghcache "github.com/flanksource/gavel/github/cache"
+	"github.com/flanksource/gavel/github/githubtest"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/pr/ui"
 	"github.com/flanksource/gavel/sshkeys"
@@ -44,7 +47,7 @@ type hostedFixture struct {
 	stack  hostedStack
 }
 
-func newHostedFixture(t *testing.T) hostedFixture {
+func newHostedFixture(t *testing.T, configure ...func(*DashboardOptions)) hostedFixture {
 	t.Helper()
 	dsn := commonsdbtest.ForT(t, commonsdbtest.Options{Name: "gavel_serve_hosted"}).DSN()
 	t.Setenv(database.EnvDSN, dsn)
@@ -76,6 +79,9 @@ func newHostedFixture(t *testing.T) hostedFixture {
 		clerkSecretKey:      clerktest.SecretKey,
 		secretKey:           base64.StdEncoding.EncodeToString([]byte(strings.Repeat("k", 32))),
 		DataDir:             t.TempDir(),
+	}
+	for _, change := range configure {
+		change(&opts)
 	}
 	require.NoError(t, opts.Validate())
 	stack, err := hostedDashboard(t.Context(), opts, opened.Gorm(), cache)
@@ -198,4 +204,70 @@ func TestHostedPush(t *testing.T) {
 	out, err = gitPush("gamma/app")
 	require.Error(t, err)
 	assert.Contains(t, out, "repository not found or access denied")
+}
+
+func TestHostedGitHub(t *testing.T) {
+	gh := githubtest.New(t)
+	f := newHostedFixture(t, func(o *DashboardOptions) {
+		o.GitHubAppID, o.GitHubAppSlug, o.GitHubAppPrivateKey = githubtest.AppID, "gavel-test", gh.KeyPath
+	})
+	f.clerk.GitHubToken = "ghu_ada"
+	gh.Install(42, github.InstallationAccount{Login: "acme", Type: "Organization"}, github.InstallationRepo{ID: 1, FullName: "acme/api", DefaultBranch: "main"})
+	gh.GrantUser("ghu_ada", 42)
+	gh.AddPullRequest(githubtest.PullRequest{Repo: "acme/api", Number: 7, Title: "Add login", Author: "ada"})
+
+	noRedirects := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	cookie := "__session=" + f.clerk.SessionToken(hostedPublicURL, time.Now().Add(time.Hour))
+	call := func(method, path string) *http.Response {
+		t.Helper()
+		req, err := http.NewRequest(method, f.server.URL+path, nil)
+		require.NoError(t, err)
+		req.Header.Set("Cookie", cookie)
+		req.Header.Set("Origin", hostedPublicURL)
+		resp, err := noRedirects.Do(req)
+		require.NoError(t, err)
+		t.Cleanup(func() { resp.Body.Close() })
+		return resp
+	}
+
+	install := call(http.MethodGet, "/api/github/install")
+	require.Equal(t, http.StatusFound, install.StatusCode)
+	target, err := url.Parse(install.Header.Get("Location"))
+	require.NoError(t, err)
+	assert.Equal(t, "/apps/gavel-test/installations/new", target.Path)
+
+	setup := call(http.MethodGet, "/api/github/setup?setup_action=install&installation_id=42&state="+url.QueryEscape(target.Query().Get("state")))
+	require.Equal(t, http.StatusFound, setup.StatusCode, readAll(t, setup))
+	assert.Equal(t, "/", setup.Header.Get("Location"))
+
+	require.Equal(t, http.StatusAccepted, call(http.MethodPost, "/api/prs/refresh").StatusCode)
+	var snapshot struct {
+		Viewer string
+		PRs    []struct {
+			Repo   string
+			Number int
+		} `json:"prs"`
+	}
+	require.Eventually(t, func() bool {
+		resp := call(http.MethodGet, "/api/prs")
+		return json.NewDecoder(resp.Body).Decode(&snapshot) == nil && len(snapshot.PRs) == 1
+	}, 10*time.Second, 50*time.Millisecond, "the org's poller fetches its installation's PRs")
+	assert.Equal(t, "acme/api", snapshot.PRs[0].Repo)
+	assert.Equal(t, 7, snapshot.PRs[0].Number)
+	assert.Equal(t, "ada", snapshot.Viewer, "@me is the signed-in member")
+
+	searched := false
+	for _, search := range gh.Searches() {
+		if search.Token == "ghs_42" && strings.Contains(search.Query, "repo:acme/api") {
+			searched = true
+		}
+	}
+	assert.True(t, searched, "searched with the installation's token: %+v", gh.Searches())
+}
+
+func readAll(t *testing.T, resp *http.Response) string {
+	t.Helper()
+	data, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	return string(data)
 }

@@ -16,6 +16,12 @@ export function tabFor(mode: AuthMode, tab: Tab): Tab {
   return mode === 'clerk' && !hostedTabs.includes(tab) ? 'prs' : tab;
 }
 
+// githubScopeVisible reports whether the GitHub org/project scope chooser is shown. A
+// hosted org's repositories come from its GitHub App installations instead.
+export function githubScopeVisible(mode: AuthMode): boolean {
+  return mode !== 'clerk';
+}
+
 // hostControlsVisible reports whether controls that act on the host itself (the
 // assistant, task and process managers, ~/.gavel.yaml settings) are shown.
 export function hostControlsVisible(mode: AuthMode): boolean {

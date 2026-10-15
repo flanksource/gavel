@@ -47,6 +47,7 @@ describe('UserMenu', () => {
     expect(await screen.findByText('Ada Lovelace')).toBeTruthy();
     expect(fetchMock).toHaveBeenCalledWith('/api/me', { signal: expect.any(AbortSignal) });
     expect(screen.queryByTestId('organization-switcher')).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Connect GitHub' })).toBeNull();
   });
 
   it('shows "local" in none mode when nobody is logged in', async () => {
@@ -63,6 +64,7 @@ describe('UserMenu', () => {
     expect(switcher.dataset.hidePersonal).toBe('true');
     expect(switcher.dataset.after).toBe('/');
     expect(screen.getByTestId('user-button')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Connect GitHub' }).getAttribute('href')).toBe('/api/github/install');
     const page = screen.getByTestId('profile-page');
     expect(page.dataset.label).toBe('SSH keys');
     expect(page.dataset.url).toBe('ssh-keys');

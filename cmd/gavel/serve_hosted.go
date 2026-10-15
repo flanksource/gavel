@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net"
@@ -21,10 +22,12 @@ import (
 	gavelctx "github.com/flanksource/gavel/context"
 	"github.com/flanksource/gavel/github"
 	ghcache "github.com/flanksource/gavel/github/cache"
+	"github.com/flanksource/gavel/github/installations"
 	shared "github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/pr/ui"
 	"github.com/flanksource/gavel/serve"
 	"github.com/flanksource/gavel/tenant"
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
@@ -118,18 +121,45 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 		PublicURL: opts.PublicURL,
 	}
 
+	var app *github.App
+	if opts.GitHubAppID != 0 {
+		if app, err = github.LoadApp(int64(opts.GitHubAppID), opts.GitHubAppSlug, opts.GitHubAppPrivateKey); err != nil {
+			return hostedStack{}, err
+		}
+	}
+	store := installations.Store{DB: db, App: app}
+
 	orgs := ui.NewOrgServers(func(ctx context.Context, scope tenant.Scope) (*ui.Server, error) {
 		cfg, err := ui.LoadOrgSearchConfig(ctx, db, scope.OrgID)
 		if err != nil {
 			return nil, err
 		}
 		ghOpts := github.Options{TokenSource: githubNotConnected, Cache: cache.ForOrg(scope.OrgID)}
+		if app != nil {
+			ghOpts.TokenSource = store.TokenSource(scope.OrgID)
+		}
 		srv := ui.NewServer(gavelctx.New(ctx), interval, ghOpts, cfg)
 		srv.SetOrg(scope.OrgID, db)
 		srv.SetHostedMode(true)
 		srv.SetAuthConfig(authConfig)
+		if app != nil {
+			ui.NewPoller(srv, orgPRSearch(srv, store, cache, scope.OrgID), interval).Start(ctx)
+			go syncReposEvery(ctx, store, scope.OrgID, repoSyncInterval)
+		}
 		return srv, nil
 	}, orgIdleTTL)
+	var next http.Handler = orgs.Handler()
+	if app != nil {
+		secret, err := base64.StdEncoding.DecodeString(opts.secretKey)
+		if err != nil {
+			return hostedStack{}, fmt.Errorf("decode GAVEL_SECRET_KEY: %w", err)
+		}
+		link := &ui.GitHubLink{App: app, Store: store, Clerk: backend, SecretKey: secret}
+		mux := http.NewServeMux()
+		mux.Handle("/api/github/", link.Handler())
+		mux.Handle("/", next)
+		next = mux
+	}
 
 	shellCtx, stopShell := context.WithCancel(ctx)
 	shell := ui.NewServer(gavelctx.New(shellCtx), interval, github.Options{TokenSource: githubNotConnected}, ui.SearchConfig{})
@@ -140,7 +170,61 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 		orgs.Close()
 		stopShell()
 	}
-	return hostedStack{handler: auth.Middleware(orgs.Handler(), shell.Handler()), members: auth.Members, stop: stop}, nil
+	return hostedStack{handler: auth.Middleware(next, shell.Handler()), members: auth.Members, stop: stop}, nil
+}
+
+// repoSyncInterval is how often an active organization's repositories are re-read from
+// its GitHub App installations.
+const repoSyncInterval = 10 * time.Minute
+
+// syncReposEvery re-reads org's installation repositories until ctx ends.
+func syncReposEvery(ctx context.Context, store installations.Store, org uuid.UUID, every time.Duration) {
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if err := store.SyncAll(ctx, org); err != nil && ctx.Err() == nil {
+				logger.Warnf("sync the repositories of org %s: %v", org, err)
+			}
+		}
+	}
+}
+
+// orgPRSearch is an org's PR poller search: each installation's repositories, searched
+// with that installation's token, merged. An org without repositories has no PRs.
+func orgPRSearch(srv *ui.Server, store installations.Store, cache *ghcache.Store, org uuid.UUID) func(time.Time) (github.PRSearchResults, *github.RateLimit, error) {
+	return func(since time.Time) (github.PRSearchResults, *github.RateLimit, error) {
+		groups, err := store.ReposByInstallation(context.Background(), org)
+		if err != nil {
+			return nil, nil, err
+		}
+		search := github.PRSearchOptions{State: "open", Since: since, Status: true, ShowAuthor: true}
+		if srv.ShowClosed() {
+			search.State = "all"
+			if since.IsZero() {
+				search.Since = time.Now().Add(-closedPRLookback)
+			}
+		}
+		if !srv.IncludeBots() {
+			search.ExcludeAuthors = srv.KnownBots()
+		}
+		var all github.PRSearchResults
+		var rateLimit *github.RateLimit
+		for _, group := range groups {
+			search.Repos = group.Repos
+			opts := github.Options{TokenSource: store.InstallationTokenSource(group.Installation), Cache: cache.ForOrg(org)}
+			results, rl, err := github.SearchPRs(opts, search)
+			if err != nil {
+				return all, rl, fmt.Errorf("search the pull requests of installation %d: %w", group.Installation, err)
+			}
+			all = append(all, results...)
+			rateLimit = rl
+		}
+		return all, rateLimit, nil
+	}
 }
 
 // hostedPushServer is the git push server for --auth clerk: registered SSH keys only,
