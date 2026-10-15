@@ -310,3 +310,21 @@ func TestHostedDashboardAcceptsCIResultsWithoutClerk(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 	assert.Contains(t, string(body), "GitHub Actions OIDC token", "answered by the CI endpoint, not the Clerk middleware")
 }
+
+func TestHostedDashboardServesTheRunAPIWithoutClerk(t *testing.T) {
+	f := newHostedFixture(t)
+	resp, err := http.Get(f.server.URL + "/api/runs/" + uuid.NewString() + "/spec")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+	assert.Contains(t, string(body), "run token", "answered by the run API, not the Clerk middleware")
+}
+
+func TestRunTokenKeyIsDerivedFromTheSecret(t *testing.T) {
+	secret := []byte(strings.Repeat("k", 32))
+	key := runTokenKey(secret)
+	assert.Len(t, key, 32)
+	assert.NotEqual(t, secret, key, "not the secret itself")
+	assert.Equal(t, key, runTokenKey(secret))
+}

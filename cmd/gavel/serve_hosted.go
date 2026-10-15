@@ -4,6 +4,8 @@ package main
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -162,11 +164,11 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 		return srv, nil
 	}, orgIdleTTL)
 	next := orgs.Handler()
+	secret, err := base64.StdEncoding.DecodeString(opts.secretKey)
+	if err != nil {
+		return hostedStack{}, fmt.Errorf("decode GAVEL_SECRET_KEY: %w", err)
+	}
 	if app != nil {
-		secret, err := base64.StdEncoding.DecodeString(opts.secretKey)
-		if err != nil {
-			return hostedStack{}, fmt.Errorf("decode GAVEL_SECRET_KEY: %w", err)
-		}
 		link := &ui.GitHubLink{App: app, Store: store, Clerk: backend, SecretKey: secret}
 		mux := http.NewServeMux()
 		mux.Handle("/api/github/", link.Handler())
@@ -189,8 +191,11 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 		OIDC:  api.GitHubOIDCVerifier{Audience: opts.PublicURL, JWKS: api.NewJWKSCache(api.GitHubOIDCJWKSURL, &http.Client{Timeout: 10 * time.Second}, 10*time.Minute)},
 		Cache: cache,
 	}
+	// Sandbox jobs authenticate with their run token.
+	runs := &ui.RunsAPI{DB: db, TokenKey: runTokenKey(secret), Cache: cache}
 	root := http.NewServeMux()
 	root.Handle("/api/ci/", ciResults.Handler())
+	root.Handle("/api/runs/", runs.Handler())
 	root.Handle("/", auth.Middleware(next, shell.Handler()))
 	return hostedStack{handler: root, members: auth.Members, stop: stop}, nil
 }
@@ -265,4 +270,12 @@ func hostedPushServer(opts DashboardOptions, db *gorm.DB, members *api.Members) 
 			fmt.Fprintln(push.Out, "push received; push checks are not available yet")
 		},
 	})
+}
+
+// runTokenKey derives the key run tokens are signed with from GAVEL_SECRET_KEY, so a run token
+// can't be mistaken for another value signed with the secret.
+func runTokenKey(secret []byte) []byte {
+	mac := hmac.New(sha256.New, secret)
+	mac.Write([]byte("gavel-run-token"))
+	return mac.Sum(nil)
 }
