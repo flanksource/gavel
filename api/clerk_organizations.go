@@ -29,7 +29,7 @@ func (c ClerkOrganizations) ResolveOrganization(ctx context.Context, id string) 
 		return Organization{}, err
 	}
 	if org.ID != id {
-		return Organization{}, errors.New("Clerk returned a different organization")
+		return Organization{}, errors.New("the organization from Clerk has a different ID than the one requested")
 	}
 	return org, nil
 }

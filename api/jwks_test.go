@@ -96,7 +96,7 @@ func TestVerifyIdentityReportsUnreachableJWKS(t *testing.T) {
 		t.Fatal(err)
 	}
 	client.jwks = NewJWKSCache(clerk.URL+"/missing", clerk.Client(), 10*time.Minute)
-	if _, err := client.verifyIdentity(ctx, clerk.IDToken(time.Now().Add(time.Hour))); err == nil || err.Error() != "Clerk authentication endpoint returned HTTP 404" {
+	if _, err := client.verifyIdentity(ctx, clerk.IDToken(time.Now().Add(time.Hour))); err == nil || err.Error() != "the Clerk authentication endpoint returned HTTP 404" {
 		t.Fatalf("want the JWKS fetch error, got %v", err)
 	}
 }
