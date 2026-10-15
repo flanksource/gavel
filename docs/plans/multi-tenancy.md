@@ -2202,6 +2202,12 @@ Clerk-mode manual checks:
   - Hosted dashboards showed "Sync error". The SPA still opened the host-only process status
     and git streams and read `/api/projects`, all 404 in hosted mode. They are now off in clerk
     mode (`46663b9`).
+- **2026-10-15: Concurrent membership syncs collided.** Batman's server logged `duplicate key
+  value violates unique constraint "org_memberships_pkey"` when a page load's parallel requests
+  each refreshed stale memberships. `SyncMemberships` deletes and re-inserts in a transaction; a
+  second transaction's DELETE missed the first's uncommitted rows, so its INSERT collided (or
+  deadlocked). It now locks the user row (`FOR UPDATE`) first, so syncs of one user take turns. A
+  test runs 20 concurrent syncs for 10 rounds.
 - **2026-10-15: PR 1 acceptance run (Batman approved the full build and tests).**
   - `make build` succeeds at `9feba6c`.
   - `go test ./...` (with `GOTMPDIR=$HOME/.cache/gavel-gotmp`): 77 packages pass and 8 fail. None

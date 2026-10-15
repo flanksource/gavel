@@ -168,8 +168,10 @@ func (s IdentityStore) SyncMemberships(ctx context.Context, userID uuid.UUID, me
 		}
 	}
 	return s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// Locking the user serializes concurrent syncs of their memberships: without it, a
+		// second sync's DELETE misses the first's uncommitted rows and its INSERT collides.
 		var issuer string
-		result := tx.Raw(`SELECT issuer FROM users WHERE id = ?`, userID).Scan(&issuer)
+		result := tx.Raw(`SELECT issuer FROM users WHERE id = ? FOR UPDATE`, userID).Scan(&issuer)
 		if result.Error != nil {
 			return result.Error
 		}
