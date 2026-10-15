@@ -110,12 +110,46 @@ func TestGitHubLink(t *testing.T) {
 		assert.Contains(t, rec.Body.String(), "linked to another organization")
 	})
 
+	t.Run("installations lists what the user's GitHub account can reach, and who has each", func(t *testing.T) {
+		gh.Install(44, github.InstallationAccount{Login: "ada", Type: "User"}, github.InstallationRepo{ID: 3, FullName: "ada/tools", DefaultBranch: "main"})
+		gh.GrantUser("ghu_ada", 42, 43, 44)
+		rec := serve(http.MethodGet, "/api/github/installations", "")
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		assert.JSONEq(t, `[
+			{"id": 42, "account": "acme", "accountType": "Organization", "status": "linked"},
+			{"id": 43, "account": "acme", "accountType": "Organization", "status": "linked_elsewhere"},
+			{"id": 44, "account": "ada", "accountType": "User", "status": "available"}
+		]`, rec.Body.String())
+	})
+
+	t.Run("link refuses what it can't trust", func(t *testing.T) {
+		for name, test := range map[string]struct {
+			id     string
+			status int
+			want   string
+		}{
+			"not the user's": {"99", http.StatusForbidden, "your GitHub account can't access installation 99"},
+			"another org's":  {"43", http.StatusConflict, "linked to another organization"},
+			"not a number":   {"abc", http.StatusBadRequest, `abc`},
+		} {
+			rec := serve(http.MethodPost, "/api/github/installations/"+test.id+"/link", "")
+			assert.Equal(t, test.status, rec.Code, name)
+			assert.Contains(t, rec.Body.String(), test.want, name)
+		}
+	})
+
+	t.Run("link links an installation the user can reach, without a trip through GitHub", func(t *testing.T) {
+		rec := serve(http.MethodPost, "/api/github/installations/44/link", "")
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		assert.JSONEq(t, `{"repositories":["acme/api","ada/tools"]}`, rec.Body.String())
+	})
+
 	t.Run("sync re-reads every installation's repositories", func(t *testing.T) {
 		gh.Install(42, acme, github.InstallationRepo{ID: 1, FullName: "acme/api", DefaultBranch: "main"}, github.InstallationRepo{ID: 2, FullName: "acme/web", DefaultBranch: "main"})
 		rec := serve(http.MethodPost, "/api/github/sync", "")
 		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 		var body struct{ Repositories []string }
 		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-		assert.Equal(t, []string{"acme/api", "acme/web"}, body.Repositories)
+		assert.Equal(t, []string{"acme/api", "acme/web", "ada/tools"}, body.Repositories)
 	})
 }

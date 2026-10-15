@@ -158,7 +158,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		installs := []map[string]any{}
 		for _, id := range ids {
-			installs = append(installs, map[string]any{"id": id, "app_id": AppID})
+			installs = append(installs, map[string]any{"id": id, "app_id": AppID, "account": s.installations[id].account})
 		}
 		if r.URL.Query().Get("page") != "1" {
 			installs = []map[string]any{}
@@ -192,7 +192,7 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request, token string) {
 		nodes = append(nodes, map[string]any{
 			"number": pr.Number, "title": pr.Title, "author": map[string]any{"login": pr.Author},
 			"repository": map[string]any{"nameWithOwner": pr.Repo, "owner": map[string]any{}},
-			"state": "OPEN", "url": fmt.Sprintf("https://github.com/%s/pull/%d", pr.Repo, pr.Number),
+			"state":      "OPEN", "url": fmt.Sprintf("https://github.com/%s/pull/%d", pr.Repo, pr.Number),
 			"updatedAt": time.Now().UTC().Format(time.RFC3339), "commits": map[string]any{"nodes": []any{}},
 		})
 	}

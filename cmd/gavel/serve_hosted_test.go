@@ -248,6 +248,11 @@ func TestHostedGitHub(t *testing.T) {
 	assert.Equal(t, http.StatusOK, page.StatusCode)
 	assert.Contains(t, readAll(t, page), "<html")
 
+	listed := call(http.MethodGet, "/api/github/installations", "")
+	listedJSON := readAll(t, listed)
+	require.Equal(t, http.StatusOK, listed.StatusCode, listedJSON)
+	assert.JSONEq(t, `[{"id":42,"account":"acme","accountType":"Organization","status":"available"}]`, listedJSON)
+
 	setupBody, err := json.Marshal(map[string]string{"installation_id": "42", "state": target.Query().Get("state")})
 	require.NoError(t, err)
 	setup := call(http.MethodPost, "/api/github/setup", string(setupBody))

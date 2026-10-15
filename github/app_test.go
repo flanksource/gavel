@@ -92,7 +92,7 @@ func (f *fakeGitHubApp) serve(w http.ResponseWriter, r *http.Request) {
 		page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 		all := []map[string]any{}
 		for i := 0; i < 120; i++ {
-			all = append(all, map[string]any{"id": 5000 + i, "app_id": 123})
+			all = append(all, map[string]any{"id": 5000 + i, "app_id": 123, "account": map[string]any{"login": fmt.Sprintf("org%d", i), "id": i, "type": "Organization"}})
 		}
 		all = append(all, map[string]any{"id": 9999, "app_id": 456})
 		var installs []map[string]any
@@ -192,11 +192,13 @@ func TestAppUserInstallations(t *testing.T) {
 	app, err := LoadApp(123, "gavel", writeAppKey(t, fake.key))
 	require.NoError(t, err)
 
-	ids, err := app.UserInstallations(context.Background(), "ghu_ada")
+	installations, err := app.UserInstallations(context.Background(), "ghu_ada")
 	require.NoError(t, err)
-	require.Len(t, ids, 120, "every page, and only this App's installations")
-	assert.Equal(t, int64(5000), ids[0])
-	assert.NotContains(t, ids, int64(9999))
+	require.Len(t, installations, 120, "every page, and only this App's installations")
+	assert.Equal(t, Installation{ID: 5000, Account: InstallationAccount{Login: "org0", ID: 0, Type: "Organization"}}, installations[0])
+	for _, installation := range installations {
+		assert.NotEqual(t, int64(9999), installation.ID)
+	}
 
 	_, err = app.UserInstallations(context.Background(), "ghu_wrong")
 	require.Error(t, err)
