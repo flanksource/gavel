@@ -4,6 +4,8 @@ package blob
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"io"
 	"strings"
 	"testing"
@@ -41,4 +43,17 @@ func TestWithPrefixRejectsInvalidPrefixes(t *testing.T) {
 	for _, prefix := range []string{"", "orgs/a", "/orgs/a/", "orgs/../a/"} {
 		assert.Panics(t, func() { WithPrefix(Local(t.TempDir()), prefix) }, prefix)
 	}
+}
+
+func TestWorkspacePrefix(t *testing.T) {
+	workDir := t.TempDir()
+	prefix, err := WorkspacePrefix(workDir)
+	require.NoError(t, err)
+	sum := sha256.Sum256([]byte(workDir))
+	assert.Equal(t, "workspaces/"+hex.EncodeToString(sum[:])[:16]+"/", prefix)
+
+	other, err := WorkspacePrefix(t.TempDir())
+	require.NoError(t, err)
+	assert.NotEqual(t, prefix, other)
+	assert.NotPanics(t, func() { WithPrefix(Local(t.TempDir()), prefix) }, "usable as a prefix")
 }

@@ -27,6 +27,7 @@ import (
 	"github.com/flanksource/gavel/pr/ui"
 	"github.com/flanksource/gavel/serve"
 	"github.com/flanksource/gavel/tenant"
+	"github.com/flanksource/gavel/verify"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
@@ -132,7 +133,7 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 		}
 	}
 	store := installations.Store{DB: db, App: app}
-	blobs, err := configuredBlobStore(ctx)
+	blobs, err := verify.OpenGlobalStorage(ctx)
 	if err != nil {
 		return hostedStack{}, err
 	}

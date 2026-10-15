@@ -5,8 +5,6 @@ package snapshots
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,22 +22,14 @@ var ErrInvalidRunID = errors.New("invalid run id")
 // OpenStore returns the store holding workDir's snapshots. It is a variable so tests can point
 // it elsewhere.
 var OpenStore = func(workDir string) (blob.Store, error) {
-	config, err := storageConfig()
+	store, err := verify.OpenWorkspaceStorage(context.Background(), workDir)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("open the snapshot store: %w", err)
 	}
-	if config.IsZero() {
+	if store == nil {
 		return blob.Local(filepath.Join(workDir, Dir)), nil
 	}
-	prefix, err := workspacePrefix(workDir)
-	if err != nil {
-		return nil, err
-	}
-	store, err := blob.Open(context.Background(), config)
-	if err != nil {
-		return nil, err
-	}
-	return blob.WithPrefix(store, prefix), nil
+	return store, nil
 }
 
 // Location describes where key, one of workDir's snapshots, is stored: a path under workDir's
@@ -50,7 +40,7 @@ func Location(workDir, key string) string {
 	if err != nil || config.IsZero() {
 		return local
 	}
-	prefix, err := workspacePrefix(workDir)
+	prefix, err := blob.WorkspacePrefix(workDir)
 	if err != nil {
 		return local
 	}
@@ -63,17 +53,6 @@ func storageConfig() (blob.Config, error) {
 		return blob.Config{}, fmt.Errorf("read the snapshot storage config: %w", err)
 	}
 	return config.Storage, nil
-}
-
-// workspacePrefix keeps workspaces sharing one store apart: workspaces/<16 hex chars of the
-// SHA-256 of workDir's absolute path>/.
-func workspacePrefix(workDir string) (string, error) {
-	abs, err := filepath.Abs(workDir)
-	if err != nil {
-		return "", fmt.Errorf("resolve workspace %q: %w", workDir, err)
-	}
-	sum := sha256.Sum256([]byte(abs))
-	return "workspaces/" + hex.EncodeToString(sum[:])[:16] + "/", nil
 }
 
 // ReadRun returns the raw snapshot runID names: PointerLast for the run last.json points at,

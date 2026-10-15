@@ -21,6 +21,7 @@ import (
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/pr/ui"
 	"github.com/flanksource/gavel/service"
+	"github.com/flanksource/gavel/verify"
 	"github.com/timberio/go-datemath"
 )
 
@@ -296,7 +297,7 @@ func runPRUI(opts PRListOptions, databaseMode serveDatabaseMode) error {
 		Project:     saved.Project,
 		IgnoredOrgs: saved.IgnoredOrgs,
 	})
-	blobs, err := configuredBlobStore(ctx)
+	blobs, err := verify.OpenGlobalStorage(ctx)
 	if err != nil {
 		return err
 	}

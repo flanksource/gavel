@@ -4,9 +4,12 @@ package blob
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 )
 
@@ -68,4 +71,15 @@ func (s *prefixStore) List(ctx context.Context, prefix string) ([]Object, error)
 		objects[i].Key = strings.TrimPrefix(objects[i].Key, s.prefix)
 	}
 	return objects, nil
+}
+
+// WorkspacePrefix keeps workspaces sharing one store apart: workspaces/<16 hex chars of the
+// SHA-256 of workDir's absolute path>/.
+func WorkspacePrefix(workDir string) (string, error) {
+	abs, err := filepath.Abs(workDir)
+	if err != nil {
+		return "", fmt.Errorf("resolve workspace %q: %w", workDir, err)
+	}
+	sum := sha256.Sum256([]byte(abs))
+	return "workspaces/" + hex.EncodeToString(sum[:])[:16] + "/", nil
 }
