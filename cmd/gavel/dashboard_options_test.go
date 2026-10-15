@@ -53,12 +53,15 @@ func TestDashboardOptionsValidate(t *testing.T) {
 			`--ssh-addr must be host:port like :2222, got "localhost"`,
 		}},
 		{"GitHub App with clerk", func(o *DashboardOptions) {
-			o.GitHubAppID, o.GitHubAppSlug, o.GitHubAppPrivateKey = 123, "gavel-dev", "/keys/app.pem"
+			o.GitHubAppID, o.GitHubAppSlug, o.GitHubAppPrivateKey = "123", "gavel-dev", "/keys/app.pem"
 		}, nil},
-		{"GitHub App without clerk", func(o *DashboardOptions) { *o = DashboardOptions{Auth: "none", GitHubAppID: 123} }, []string{
+		{"GitHub App without clerk", func(o *DashboardOptions) { *o = DashboardOptions{Auth: "none", GitHubAppID: "123"} }, []string{
 			"--github-app-* flags serve hosted orgs and need --auth clerk",
 		}},
-		{"partial GitHub App", func(o *DashboardOptions) { o.GitHubAppID = 123 }, []string{
+		{"GitHub App ID that isn't a number", func(o *DashboardOptions) {
+			o.GitHubAppID, o.GitHubAppSlug, o.GitHubAppPrivateKey = "gavel-dev", "gavel-dev", "/keys/app.pem"
+		}, []string{`--github-app-id must be the App's numeric ID (from its settings page), got "gavel-dev"`}},
+		{"partial GitHub App", func(o *DashboardOptions) { o.GitHubAppID = "123" }, []string{
 			"--github-app-id, --github-app-slug and --github-app-private-key (or GAVEL_GITHUB_APP_PRIVATE_KEY_FILE) go together; missing --github-app-slug, --github-app-private-key",
 		}},
 		{"public URL with a path", func(o *DashboardOptions) { o.PublicURL = "https://gavel.example.com/app" }, []string{

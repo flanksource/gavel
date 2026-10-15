@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"strconv"
 	"strings"
 )
 
@@ -28,7 +29,7 @@ type DashboardOptions struct {
 	SSHAddr             string `flag:"ssh-addr" help:"Address for the hosted git push server, e.g. :2222 (--auth clerk only; gavel ssh serve is the local one)"`
 	SSHHostKey          string `flag:"ssh-host-key" help:"Push server host key file; created if missing (default <data-dir>/ssh_host_key)"`
 	DataDir             string `flag:"data-dir" help:"Directory for hosted repositories" default:"/var/lib/gavel"`
-	GitHubAppID         int    `flag:"github-app-id" help:"ID of the GitHub App organizations install to show their pull requests (--auth clerk)"`
+	GitHubAppID         string `flag:"github-app-id" help:"ID of the GitHub App organizations install to show their pull requests (--auth clerk)"`
 	GitHubAppSlug       string `flag:"github-app-slug" help:"URL name of the GitHub App, as in github.com/apps/<slug>"`
 	GitHubAppPrivateKey string `flag:"github-app-private-key" help:"Path to the GitHub App's private key PEM (or GAVEL_GITHUB_APP_PRIVATE_KEY_FILE)"`
 
@@ -56,6 +57,15 @@ func (o DashboardOptions) withEnv(getenv func(string) string) DashboardOptions {
 	return o
 }
 
+// gitHubAppID is --github-app-id as GitHub's numeric App ID.
+func (o DashboardOptions) gitHubAppID() (int64, error) {
+	id, err := strconv.ParseInt(o.GitHubAppID, 10, 64)
+	if err == nil && id <= 0 {
+		err = errors.New("not positive")
+	}
+	return id, err
+}
+
 // Validate reports every problem with the options at once. Messages never include secrets.
 func (o DashboardOptions) Validate() error {
 	var problems []error
@@ -65,7 +75,7 @@ func (o DashboardOptions) Validate() error {
 			add("--ssh-addr must be host:port like :2222, got %q", o.SSHAddr)
 		}
 	}
-	githubApp := o.GitHubAppID != 0 || o.GitHubAppSlug != "" || o.GitHubAppPrivateKey != ""
+	githubApp := o.GitHubAppID != "" || o.GitHubAppSlug != "" || o.GitHubAppPrivateKey != ""
 	switch o.Auth {
 	case authNone:
 		if o.SSHAddr != "" {
@@ -93,8 +103,10 @@ func (o DashboardOptions) Validate() error {
 		}
 		if githubApp {
 			var missing []string
-			if o.GitHubAppID <= 0 {
+			if o.GitHubAppID == "" {
 				missing = append(missing, "--github-app-id")
+			} else if _, err := o.gitHubAppID(); err != nil {
+				add("--github-app-id must be the App's numeric ID (from its settings page), got %q", o.GitHubAppID)
 			}
 			if o.GitHubAppSlug == "" {
 				missing = append(missing, "--github-app-slug")

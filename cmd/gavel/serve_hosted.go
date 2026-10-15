@@ -122,8 +122,12 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 	}
 
 	var app *github.App
-	if opts.GitHubAppID != 0 {
-		if app, err = github.LoadApp(int64(opts.GitHubAppID), opts.GitHubAppSlug, opts.GitHubAppPrivateKey); err != nil {
+	if opts.GitHubAppID != "" {
+		id, err := opts.gitHubAppID()
+		if err != nil {
+			return hostedStack{}, fmt.Errorf("--github-app-id %q: %w", opts.GitHubAppID, err)
+		}
+		if app, err = github.LoadApp(id, opts.GitHubAppSlug, opts.GitHubAppPrivateKey); err != nil {
 			return hostedStack{}, err
 		}
 	}
