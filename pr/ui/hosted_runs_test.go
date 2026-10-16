@@ -139,30 +139,47 @@ func (h *inProcessHandle) Cancel(context.Context) error {
 }
 func (h *inProcessHandle) Ref() string { return "in-process" }
 
-func TestHostedTodoRunsInASandboxJob(t *testing.T) {
+// hostedRuns is a hosted dashboard whose agent runs execute in this process, serving one pushed
+// repository, app, to two members, ada and grace.
+type hostedRuns struct {
+	db              *gorm.DB
+	workspace, base string
+	ada, grace      uuid.UUID
+	executor        *inProcessExecutor
+}
+
+// newHostedRuns serves a hosted dashboard whose runs' turns agent answers; nil is planAgent.
+func newHostedRuns(t *testing.T, agent captainai.Provider) hostedRuns {
+	t.Helper()
 	db, _, org := openOrgDB(t)
 	t.Setenv("HOME", t.TempDir())
-	creator := uuid.New()
-	require.NoError(t, db.Exec(`INSERT INTO users (id, issuer, clerk_user_id) VALUES (?, 'https://clerk.example', 'user_ada')`, creator).Error)
+	h := hostedRuns{db: db, ada: uuid.New(), grace: uuid.New()}
+	for name, id := range map[string]uuid.UUID{"ada": h.ada, "grace": h.grace} {
+		require.NoError(t, db.Exec(`INSERT INTO users (id, issuer, clerk_user_id) VALUES (?, 'https://clerk.example', ?)`, id, "user_"+name).Error)
+	}
 	dataDir := t.TempDir()
-	repo := pushedRepo(t, db, org, dataDir, "app")
-	workspace := "repo:" + repo.String()
-
+	h.workspace = "repo:" + pushedRepo(t, db, org, dataDir, "app").String()
 	relay := &remote.Relay{}
 	logs := blob.Local(t.TempDir())
+	h.executor = &inProcessExecutor{db: db, relay: relay, agent: agent, bareDir: func(id uuid.UUID) string {
+		return filepath.Join(dataDir, "repos", org.String(), id.String()+".git")
+	}}
 	dispatcher := &sandbox.Dispatcher{
 		DB: db, Image: "runner", Server: "https://gavel.example", TokenKey: []byte(strings.Repeat("k", 32)),
-		Logs: func(uuid.UUID) blob.Store { return logs }, Limits: sandbox.Limits{Timeout: time.Minute},
-		Executor: &inProcessExecutor{db: db, relay: relay, bareDir: func(id uuid.UUID) string {
-			return filepath.Join(dataDir, "repos", org.String(), id.String()+".git")
-		}},
+		Logs: func(uuid.UUID) blob.Store { return logs }, Limits: sandbox.Limits{Timeout: time.Minute}, Executor: h.executor,
 	}
 	srv := &Server{}
 	srv.SetOrg(org, db)
 	srv.SetHostedMode(true)
 	srv.SetHostedWorkspaces(HostedWorkspaces{DB: db, Sources: &sandbox.Sources{DataDir: dataDir}})
 	srv.SetAgentRuns(AgentRuns{Dispatcher: dispatcher, Relay: relay})
-	base := serveActingAs(t, srv, org)
+	h.base = serveActingAs(t, srv, org)
+	return h
+}
+
+func TestHostedTodoRunsInASandboxJob(t *testing.T) {
+	h := newHostedRuns(t, nil)
+	db, base, workspace, creator := h.db, h.base, h.workspace, h.ada
 
 	status, created := hostedCall(t, base, http.MethodPost, "/api/todos", creator, "org:member", map[string]any{"dir": workspace, "title": "Fix the build"})
 	require.Equal(t, http.StatusCreated, status, created)
@@ -270,30 +287,8 @@ func (workingAgent) ExecuteStream(ctx context.Context, _ api.Spec) (<-chan capta
 }
 
 func TestHostedTodoRunsBelongToTheTodosCreator(t *testing.T) {
-	db, _, org := openOrgDB(t)
-	t.Setenv("HOME", t.TempDir())
-	creator, member := uuid.New(), uuid.New()
-	for name, id := range map[string]uuid.UUID{"ada": creator, "grace": member} {
-		require.NoError(t, db.Exec(`INSERT INTO users (id, issuer, clerk_user_id) VALUES (?, 'https://clerk.example', ?)`, id, "user_"+name).Error)
-	}
-	dataDir := t.TempDir()
-	repo := pushedRepo(t, db, org, dataDir, "app")
-	workspace := "repo:" + repo.String()
-	relay := &remote.Relay{}
-	logs := blob.Local(t.TempDir())
-	executor := &inProcessExecutor{db: db, relay: relay, agent: workingAgent{}, bareDir: func(id uuid.UUID) string {
-		return filepath.Join(dataDir, "repos", org.String(), id.String()+".git")
-	}}
-	dispatcher := &sandbox.Dispatcher{
-		DB: db, Image: "runner", Server: "https://gavel.example", TokenKey: []byte(strings.Repeat("k", 32)),
-		Logs: func(uuid.UUID) blob.Store { return logs }, Limits: sandbox.Limits{Timeout: time.Minute}, Executor: executor,
-	}
-	srv := &Server{}
-	srv.SetOrg(org, db)
-	srv.SetHostedMode(true)
-	srv.SetHostedWorkspaces(HostedWorkspaces{DB: db, Sources: &sandbox.Sources{DataDir: dataDir}})
-	srv.SetAgentRuns(AgentRuns{Dispatcher: dispatcher, Relay: relay})
-	base := serveActingAs(t, srv, org)
+	h := newHostedRuns(t, workingAgent{})
+	db, base, workspace, creator, member, executor := h.db, h.base, h.workspace, h.ada, h.grace, h.executor
 
 	_, created := hostedCall(t, base, http.MethodPost, "/api/todos", creator, "org:member", map[string]any{"dir": workspace, "title": "Shared", "visibility": "public"})
 	todo := created["id"].(string)
@@ -327,28 +322,8 @@ func TestHostedTodoRunsBelongToTheTodosCreator(t *testing.T) {
 }
 
 func TestHostedTriageNewRunsWithItsToolsOnServe(t *testing.T) {
-	db, _, org := openOrgDB(t)
-	t.Setenv("HOME", t.TempDir())
-	creator := uuid.New()
-	require.NoError(t, db.Exec(`INSERT INTO users (id, issuer, clerk_user_id) VALUES (?, 'https://clerk.example', 'user_ada')`, creator).Error)
-	dataDir := t.TempDir()
-	repo := pushedRepo(t, db, org, dataDir, "app")
-	workspace := "repo:" + repo.String()
-	relay := &remote.Relay{}
-	logs := blob.Local(t.TempDir())
-	dispatcher := &sandbox.Dispatcher{
-		DB: db, Image: "runner", Server: "https://gavel.example", TokenKey: []byte(strings.Repeat("k", 32)),
-		Logs: func(uuid.UUID) blob.Store { return logs }, Limits: sandbox.Limits{Timeout: time.Minute},
-		Executor: &inProcessExecutor{db: db, relay: relay, agent: workingAgent{}, bareDir: func(id uuid.UUID) string {
-			return filepath.Join(dataDir, "repos", org.String(), id.String()+".git")
-		}},
-	}
-	srv := &Server{}
-	srv.SetOrg(org, db)
-	srv.SetHostedMode(true)
-	srv.SetHostedWorkspaces(HostedWorkspaces{DB: db, Sources: &sandbox.Sources{DataDir: dataDir}})
-	srv.SetAgentRuns(AgentRuns{Dispatcher: dispatcher, Relay: relay})
-	base := serveActingAs(t, srv, org)
+	h := newHostedRuns(t, workingAgent{})
+	db, base, workspace, creator := h.db, h.base, h.workspace, h.ada
 	_, created := hostedCall(t, base, http.MethodPost, "/api/todos", creator, "org:member", map[string]any{"dir": workspace, "title": "Fix the build"})
 	todo := created["id"].(string)
 
@@ -380,30 +355,8 @@ func TestHostedTriageNewRunsWithItsToolsOnServe(t *testing.T) {
 }
 
 func TestHostedApprovalsBelongToTheTodosOwner(t *testing.T) {
-	db, _, org := openOrgDB(t)
-	t.Setenv("HOME", t.TempDir())
-	creator, member := uuid.New(), uuid.New()
-	for name, id := range map[string]uuid.UUID{"ada": creator, "grace": member} {
-		require.NoError(t, db.Exec(`INSERT INTO users (id, issuer, clerk_user_id) VALUES (?, 'https://clerk.example', ?)`, id, "user_"+name).Error)
-	}
-	dataDir := t.TempDir()
-	repo := pushedRepo(t, db, org, dataDir, "app")
-	workspace := "repo:" + repo.String()
-	relay := &remote.Relay{}
-	logs := blob.Local(t.TempDir())
-	dispatcher := &sandbox.Dispatcher{
-		DB: db, Image: "runner", Server: "https://gavel.example", TokenKey: []byte(strings.Repeat("k", 32)),
-		Logs: func(uuid.UUID) blob.Store { return logs }, Limits: sandbox.Limits{Timeout: time.Minute},
-		Executor: &inProcessExecutor{db: db, relay: relay, agent: workingAgent{}, bareDir: func(id uuid.UUID) string {
-			return filepath.Join(dataDir, "repos", org.String(), id.String()+".git")
-		}},
-	}
-	srv := &Server{}
-	srv.SetOrg(org, db)
-	srv.SetHostedMode(true)
-	srv.SetHostedWorkspaces(HostedWorkspaces{DB: db, Sources: &sandbox.Sources{DataDir: dataDir}})
-	srv.SetAgentRuns(AgentRuns{Dispatcher: dispatcher, Relay: relay})
-	base := serveActingAs(t, srv, org)
+	h := newHostedRuns(t, workingAgent{})
+	db, base, workspace, creator, member := h.db, h.base, h.workspace, h.ada, h.grace
 	_, created := hostedCall(t, base, http.MethodPost, "/api/todos", creator, "org:member", map[string]any{"dir": workspace, "title": "Shared", "visibility": "public"})
 	todo := created["id"].(string)
 	status, started := hostedCall(t, base, http.MethodPost, "/api/todos/run", creator, "org:member", map[string]any{"dir": workspace, "ref": todo, "step": "plan"})
