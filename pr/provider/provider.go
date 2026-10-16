@@ -30,7 +30,12 @@ type Client interface {
 	MergePR(context.Context, int, model.MergeInput) error
 }
 
+// Resolve is the PR client for opts' repository. Inside a sandbox job, it is the job's: serve
+// answers for the job's PR.
 func Resolve(opts Options) (Client, error) {
+	if api := inJob(); api != nil {
+		return jobClient{api: api}, nil
+	}
 	repo := opts.Repo
 	if repo == "" {
 		remote, err := Origin(opts.WorkDir)

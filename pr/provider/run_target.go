@@ -52,6 +52,9 @@ func (t *RunTarget) FetchHead(ctx context.Context, dir string) error {
 	if t == nil || t.RepositoryURL == "" || !commitSHA.MatchString(t.HeadSHA) {
 		return fmt.Errorf("PR fetch requires a complete source target")
 	}
+	if api := inJob(); api != nil {
+		return t.fetchHeadInJob(ctx, api, dir)
+	}
 	if _, err := targetGit(ctx, dir, "check-ref-format", "refs/heads/"+t.Branch); err != nil {
 		return fmt.Errorf("invalid PR source branch: %w", err)
 	}
@@ -80,7 +83,11 @@ func (t *RunTarget) PushHead(ctx context.Context, dir string) (string, error) {
 		return "", fmt.Errorf("PR push must fast-forward the source branch: %w", err)
 	}
 	if head != t.HeadSHA {
-		if _, err := targetGit(ctx, dir, "push", "--porcelain", "--", t.RepositoryURL, "HEAD:refs/heads/"+t.Branch); err != nil {
+		if api := inJob(); api != nil {
+			if err := t.pushHeadInJob(ctx, api, dir, head); err != nil {
+				return "", err
+			}
+		} else if _, err := targetGit(ctx, dir, "push", "--porcelain", "--", t.RepositoryURL, "HEAD:refs/heads/"+t.Branch); err != nil {
 			return "", err
 		}
 	}

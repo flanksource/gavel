@@ -6,7 +6,7 @@ import (
 )
 
 func ResolveURL(opts Options, ref string) (Client, int, error) {
-	if IsAzure(ref) {
+	if IsAzure(ref) && inJob() == nil {
 		repo, number, err := azuredevops.ParsePRURL(ref)
 		if err != nil {
 			return nil, 0, err
