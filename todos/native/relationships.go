@@ -198,18 +198,20 @@ func (r *Repository) ListRelationships(ctx context.Context, issueID uuid.UUID) (
 // ListDependents returns issues that directly depend on issueID. In UI terms,
 // issueID blocks each returned issue.
 func (r *Repository) ListDependents(ctx context.Context, issueID uuid.UUID) ([]Issue, error) {
+	visible, visibleArgs := visibleIssue(ctx, "dependent")
 	return r.listRelationshipIssues(ctx, `
 		SELECT dependent.*
 		FROM todo_issue_relationships AS relationship
 		JOIN todo_issues AS dependent ON dependent.id = relationship.issue_id
 		WHERE relationship.target_issue_id = ? AND relationship.relation = 'depends_on'
-		  AND `+inOrgWorkspace("relationship.workspace_id")+`
-		ORDER BY dependent.updated_at DESC, dependent.id`, issueID, r.org)
+		  AND `+inOrgWorkspace("relationship.workspace_id")+` AND `+visible+`
+		ORDER BY dependent.updated_at DESC, dependent.id`, append([]any{issueID, r.org}, visibleArgs...)...)
 }
 
 // ListUnsatisfiedDependencies returns the direct dependencies that still block
 // issueID. Verified and closed issues satisfy a dependency.
 func (r *Repository) ListUnsatisfiedDependencies(ctx context.Context, issueID uuid.UUID) ([]Issue, error) {
+	visible, visibleArgs := visibleIssue(ctx, "dependency")
 	return r.listRelationshipIssues(ctx, `
 		SELECT dependency.*
 		FROM todo_issue_relationships AS relationship
@@ -217,8 +219,8 @@ func (r *Repository) ListUnsatisfiedDependencies(ctx context.Context, issueID uu
 		WHERE relationship.issue_id = ?
 		  AND relationship.relation = 'depends_on'
 		  AND dependency.status NOT IN ('verified', 'closed')
-		  AND `+inOrgWorkspace("relationship.workspace_id")+`
-		ORDER BY dependency.updated_at DESC, dependency.id`, issueID, r.org)
+		  AND `+inOrgWorkspace("relationship.workspace_id")+` AND `+visible+`
+		ORDER BY dependency.updated_at DESC, dependency.id`, append([]any{issueID, r.org}, visibleArgs...)...)
 }
 
 func (r *Repository) listRelationshipIssues(ctx context.Context, query string, args ...any) ([]Issue, error) {

@@ -21,6 +21,7 @@ func (r *Repository) CountIssuesByStatus(ctx context.Context, workspaceIDs []uui
 		return nil, fmt.Errorf("%w: at least one workspace ID is required to count issues", ErrInvalidInput)
 	}
 	var counts []IssueStatusCount
+	visible, visibleArgs := visibleIssue(ctx, "issue")
 	result := r.db.WithContext(ctx).Raw(`
 		SELECT issue.workspace_id,
 		       issue.status,
@@ -33,10 +34,10 @@ func (r *Repository) CountIssuesByStatus(ctx context.Context, workspaceIDs []uui
 		  ON active_link.issue_id = issue.id
 		 AND active_link.prompt_run_id = issue.active_prompt_run_id
 		LEFT JOIN captain_plans AS plan ON plan.id = issue.selected_plan_id
-		WHERE issue.workspace_id IN ? AND `+inOrgWorkspace("issue.workspace_id")+`
+		WHERE issue.workspace_id IN ? AND `+inOrgWorkspace("issue.workspace_id")+` AND `+visible+`
 		  AND issue.parent_issue_id IS NULL
 		GROUP BY 1, 2, 3, 4, 5`,
-		workspaceIDs, r.org,
+		append([]any{workspaceIDs, r.org}, visibleArgs...)...,
 	).Scan(&counts)
 	if result.Error != nil {
 		return nil, result.Error
@@ -140,9 +141,10 @@ func (r *Repository) ListIssuePhaseRuns(ctx context.Context, workspaceID uuid.UU
 
 func (r *Repository) ListIssues(ctx context.Context, workspaceID uuid.UUID) ([]Issue, error) {
 	var records []issueRecord
+	visible, visibleArgs := visibleIssue(ctx, "issue")
 	result := r.db.WithContext(ctx).Raw(
-		`SELECT `+issueColumns+` FROM `+issueFrom+` WHERE issue.workspace_id = ? AND `+inOrgWorkspace("issue.workspace_id")+` ORDER BY issue.updated_at DESC, issue.id`,
-		workspaceID, r.org,
+		`SELECT `+issueColumns+` FROM `+issueFrom+` WHERE issue.workspace_id = ? AND `+inOrgWorkspace("issue.workspace_id")+` AND `+visible+` ORDER BY issue.updated_at DESC, issue.id`,
+		append([]any{workspaceID, r.org}, visibleArgs...)...,
 	).Scan(&records)
 	if result.Error != nil {
 		return nil, result.Error

@@ -34,6 +34,8 @@ type issueRecord struct {
 	Version           int64
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
+	CreatedByUserID   *uuid.UUID
+	Visibility        string
 }
 
 func (r issueRecord) issue() *Issue {
@@ -58,6 +60,8 @@ func (r issueRecord) issue() *Issue {
 		Version:           r.Version,
 		CreatedAt:         r.CreatedAt,
 		UpdatedAt:         r.UpdatedAt,
+		CreatedBy:         r.CreatedByUserID,
+		Visibility:        Visibility(r.Visibility),
 	}
 }
 
@@ -66,7 +70,7 @@ const issueColumns = `
 	issue.labels, issue.priority, issue.status,
 	COALESCE(runtime.execution_state, 'idle') AS execution_state,
 	issue.active_prompt_run_id, issue.selected_plan_id, issue.parent_issue_id,
-	issue.version, issue.created_at, issue.updated_at`
+	issue.version, issue.created_at, issue.updated_at, issue.created_by_user_id, issue.visibility`
 
 const issueFrom = `
 	todo_issues AS issue
@@ -97,6 +101,10 @@ func (r *Repository) CreateIssue(ctx context.Context, input CreateIssueInput) (*
 	if !status.valid() {
 		return nil, fmt.Errorf("%w: unsupported status %q", ErrInvalidInput, status)
 	}
+	visibility, err := normalizeVisibility(input.Visibility)
+	if err != nil {
+		return nil, err
+	}
 	aliases, err := normalizeAliases(input.Aliases)
 	if err != nil {
 		return nil, err
@@ -125,10 +133,10 @@ func (r *Repository) CreateIssue(ctx context.Context, input CreateIssueInput) (*
 		result := tx.Exec(`
 			INSERT INTO todo_issues
 				(id, workspace_id, title, body, verification, labels, priority, status, pr,
-				 parent_issue_id, version, created_by_user_id, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, now(), now())`,
+				 parent_issue_id, version, created_by_user_id, visibility, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, now(), now())`,
 			id, input.WorkspaceID, title, input.Body, input.Verification, pq.Array(normalizedLabels),
-			priority, status, input.PR, input.ParentID, requestUser(tx),
+			priority, status, input.PR, input.ParentID, requestUser(tx), visibility,
 		)
 		if result.Error != nil {
 			return result.Error
@@ -336,6 +344,14 @@ func (r *Repository) UpdateIssue(ctx context.Context, id uuid.UUID, expectedVers
 		updates["status"] = *patch.Status
 		payload["status"] = *patch.Status
 	}
+	if patch.Visibility != nil {
+		visibility, err := normalizeVisibility(*patch.Visibility)
+		if err != nil {
+			return nil, err
+		}
+		updates["visibility"] = visibility
+		payload["visibility"] = visibility
+	}
 	if len(updates) == 0 {
 		return nil, ErrNoChanges
 	}
@@ -402,6 +418,10 @@ func pruneUnchangedIssueUpdates(current *Issue, updates, payload map[string]any)
 	if value, ok := updates["status"].(IssueStatus); ok && current.Status == value {
 		delete(updates, "status")
 		delete(payload, "status")
+	}
+	if value, ok := updates["visibility"].(Visibility); ok && current.Visibility == value {
+		delete(updates, "visibility")
+		delete(payload, "visibility")
 	}
 }
 

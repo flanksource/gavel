@@ -253,12 +253,13 @@ func (r *Repository) CountIssuesByLabel(ctx context.Context, workspaceID uuid.UU
 		Label string `gorm:"column:label"`
 		Count int    `gorm:"column:count"`
 	}
+	visible, visibleArgs := visibleIssue(ctx, "issue")
 	err := r.db.WithContext(ctx).Raw(`
 		SELECT label, COUNT(*) AS count
 		FROM todo_issues AS issue, unnest(issue.labels) AS label
-		WHERE issue.workspace_id = ? AND `+inOrgWorkspace("issue.workspace_id")+`
+		WHERE issue.workspace_id = ? AND `+inOrgWorkspace("issue.workspace_id")+` AND `+visible+`
 		GROUP BY label
-		ORDER BY label`, workspaceID, r.org).Scan(&rows).Error
+		ORDER BY label`, append([]any{workspaceID, r.org}, visibleArgs...)...).Scan(&rows).Error
 	if err != nil {
 		return nil, err
 	}

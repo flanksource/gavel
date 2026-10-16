@@ -33,6 +33,7 @@ var (
 	ErrOpenChildren          = errors.New("native todo issue has open children")
 	ErrLinkConflict          = errors.New("native todo Captain link conflict")
 	ErrEventConflict         = errors.New("native todo event source already exists")
+	ErrForbidden             = errors.New("native todo change forbidden")
 )
 
 // Repository persists native TODO state. It deliberately accepts an injected
@@ -99,17 +100,21 @@ func requireWorkspace(tx *gorm.DB, org, workspaceID uuid.UUID) error {
 }
 
 type lockedIssue struct {
-	ID          uuid.UUID
-	WorkspaceID uuid.UUID
-	Version     int64
+	ID              uuid.UUID
+	WorkspaceID     uuid.UUID
+	Version         int64
+	CreatedByUserID *uuid.UUID
 }
 
-// lockIssue locks an issue of org for update; another org's issue is ErrNotFound.
+// lockIssue locks an issue of org for update. Another org's issue, and one the
+// transaction's user can't see, is ErrNotFound; one they can see but didn't
+// create is ErrForbidden unless they are an org admin.
 func lockIssue(tx *gorm.DB, org, id uuid.UUID, expectedVersion int64) (*lockedIssue, error) {
 	var issue lockedIssue
+	visible, visibleArgs := visibleIssue(tx.Statement.Context, "todo_issues")
 	result := tx.Raw(`
-		SELECT id, workspace_id, version FROM todo_issues
-		WHERE id = ? AND `+inOrgWorkspace("workspace_id")+` FOR UPDATE`, id, org,
+		SELECT id, workspace_id, version, created_by_user_id FROM todo_issues
+		WHERE id = ? AND `+inOrgWorkspace("workspace_id")+` AND `+visible+` FOR UPDATE`, append([]any{id, org}, visibleArgs...)...,
 	).Scan(&issue)
 	if result.Error != nil {
 		return nil, result.Error
@@ -117,17 +122,23 @@ func lockIssue(tx *gorm.DB, org, id uuid.UUID, expectedVersion int64) (*lockedIs
 	if result.RowsAffected == 0 {
 		return nil, fmt.Errorf("%w: issue %s", ErrNotFound, id)
 	}
+	if err := requireChangeable(tx, id, issue.CreatedByUserID); err != nil {
+		return nil, err
+	}
 	if issue.Version != expectedVersion {
 		return nil, fmt.Errorf("%w: issue %s expected version %d, current version %d", ErrVersionConflict, id, expectedVersion, issue.Version)
 	}
 	return &issue, nil
 }
 
-// getIssue reads one issue of org matching condition; another org's issue is ErrNotFound.
+// getIssue reads one issue of org matching condition. Another org's issue, and
+// one the context's user can't see, is ErrNotFound.
 func getIssue(db *gorm.DB, org uuid.UUID, condition string, args ...any) (*Issue, error) {
 	var record issueRecord
-	result := db.Raw(`SELECT `+issueColumns+` FROM `+issueFrom+` WHERE `+inOrgWorkspace("issue.workspace_id")+` AND (`+condition+`)`,
-		append([]any{org}, args...)...).Scan(&record)
+	visible, visibleArgs := visibleIssue(db.Statement.Context, "issue")
+	query := append(append([]any{org}, visibleArgs...), args...)
+	result := db.Raw(`SELECT `+issueColumns+` FROM `+issueFrom+` WHERE `+inOrgWorkspace("issue.workspace_id")+` AND `+visible+` AND (`+condition+`)`,
+		query...).Scan(&record)
 	if result.Error != nil {
 		return nil, result.Error
 	}

@@ -266,6 +266,12 @@ table "todo_issues" {
     type    = text
     default = "medium"
   }
+  # Hosted todos are private to their creator unless made public to the org.
+  column "visibility" {
+    null    = false
+    type    = text
+    default = "private"
+  }
   column "status" {
     null    = false
     type    = text
@@ -355,6 +361,9 @@ table "todo_issues" {
 
   check "todo_issues_title_not_empty" {
     expr = "btrim(title) <> ''"
+  }
+  check "todo_issues_visibility_check" {
+    expr = "visibility = ANY (ARRAY['private'::text, 'public'::text])"
   }
   check "todo_issues_priority_check" {
     expr = "priority = ANY (ARRAY['low'::text, 'medium'::text, 'high'::text, 'critical'::text])"

@@ -328,20 +328,26 @@ type executionIssue struct {
 	Version           int64
 	ActivePromptRunID *uuid.UUID
 	SelectedPlanID    *uuid.UUID
+	CreatedByUserID   *uuid.UUID
 }
 
-// lockExecutionIssue locks an issue of org for update; another org's issue is ErrNotFound.
+// lockExecutionIssue locks an issue of org for update, with lockIssue's
+// visibility and ownership rules.
 func lockExecutionIssue(tx *gorm.DB, org, id uuid.UUID) (*executionIssue, error) {
 	var issue executionIssue
+	visible, visibleArgs := visibleIssue(tx.Statement.Context, "todo_issues")
 	result := tx.Raw(`
-		SELECT id, workspace_id, status, version, active_prompt_run_id, selected_plan_id
-		FROM todo_issues WHERE id = ? AND `+inOrgWorkspace("workspace_id")+` FOR UPDATE`, id, org,
+		SELECT id, workspace_id, status, version, active_prompt_run_id, selected_plan_id, created_by_user_id
+		FROM todo_issues WHERE id = ? AND `+inOrgWorkspace("workspace_id")+` AND `+visible+` FOR UPDATE`, append([]any{id, org}, visibleArgs...)...,
 	).Scan(&issue)
 	if result.Error != nil {
 		return nil, result.Error
 	}
 	if result.RowsAffected == 0 {
 		return nil, fmt.Errorf("%w: issue %s", ErrNotFound, id)
+	}
+	if err := requireChangeable(tx, id, issue.CreatedByUserID); err != nil {
+		return nil, err
 	}
 	return &issue, nil
 }

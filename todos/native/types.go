@@ -122,6 +122,9 @@ type Issue struct {
 	CreatedAt time.Time  `json:"createdAt"`
 	UpdatedAt time.Time  `json:"updatedAt"`
 	PR        *types.PR  `json:"pr,omitempty"`
+	// CreatedBy is the user who created the issue; nil in local mode.
+	CreatedBy  *uuid.UUID `json:"createdBy,omitempty"`
+	Visibility Visibility `json:"visibility"`
 }
 
 // IssueOrigin is the run an issue was created inside: the issue that run was
@@ -305,6 +308,8 @@ type CreateIssueInput struct {
 	ParentID     *uuid.UUID
 	Origin       IssueOrigin
 	PR           *types.PR
+	// Visibility defaults to private.
+	Visibility Visibility
 }
 
 // IssuePatch uses pointers so callers can distinguish no change from setting
@@ -318,6 +323,7 @@ type IssuePatch struct {
 	Status       *IssueStatus
 	Actor        string
 	PR           **types.PR
+	Visibility   *Visibility
 }
 
 type EventInput struct {

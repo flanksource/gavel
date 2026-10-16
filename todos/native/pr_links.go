@@ -176,7 +176,8 @@ func (r *Repository) ListPRLinkedIssues(ctx context.Context, workspaceID uuid.UU
 		ids[i] = link.IssueID
 	}
 	var records []issueRecord
-	if err := db.Raw(`SELECT `+issueColumns+` FROM `+issueFrom+` WHERE issue.id IN ?`, ids).Scan(&records).Error; err != nil {
+	visible, visibleArgs := visibleIssue(ctx, "issue")
+	if err := db.Raw(`SELECT `+issueColumns+` FROM `+issueFrom+` WHERE issue.id IN ? AND `+visible, append([]any{ids}, visibleArgs...)...).Scan(&records).Error; err != nil {
 		return nil, err
 	}
 	issues := make(map[uuid.UUID]*Issue, len(records))
@@ -186,6 +187,9 @@ func (r *Repository) ListPRLinkedIssues(ctx context.Context, workspaceID uuid.UU
 	out := make([]PRLinkedIssue, 0, len(links))
 	for _, link := range links {
 		issue, ok := issues[link.IssueID]
+		if !ok && viewer(ctx) != nil {
+			continue
+		}
 		if !ok {
 			return nil, fmt.Errorf("%w: PR link names issue %s", ErrNotFound, link.IssueID)
 		}
