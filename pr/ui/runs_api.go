@@ -13,6 +13,7 @@ import (
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/github/cache"
 	"github.com/flanksource/gavel/sandbox"
+	"github.com/flanksource/gavel/todos/remote"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
@@ -23,6 +24,8 @@ type RunsAPI struct {
 	TokenKey []byte
 	Cache    *cache.Store
 	Sources  *sandbox.Sources
+	// Relay hands an agent run's messages to the host waiting for the run.
+	Relay *remote.Relay
 }
 
 // Handler routes the run API.
@@ -31,6 +34,7 @@ func (a *RunsAPI) Handler() http.Handler {
 	mux.HandleFunc("GET /api/runs/{id}/spec", a.withRun(a.handleSpec))
 	mux.HandleFunc("GET /api/runs/{id}/source", a.withRun(a.handleSource))
 	mux.HandleFunc("POST /api/runs/{id}/results", a.withRun(a.handleResults))
+	mux.HandleFunc("POST /api/runs/{id}/messages", a.withRun(a.handleMessage))
 	return mux
 }
 
@@ -73,6 +77,36 @@ func (a *RunsAPI) withRun(next func(http.ResponseWriter, *http.Request, sandbox.
 		next(w, r, run)
 	}
 }
+
+// handleMessage hands one message of an agent run to the host waiting for the run, once it has
+// taken it, so a job's messages arrive in the order it sends them.
+func (a *RunsAPI) handleMessage(w http.ResponseWriter, r *http.Request, run sandbox.RunRecord) {
+	if run.Spec.Kind != "agent" {
+		writeCIError(w, http.StatusBadRequest, fmt.Sprintf("run %s is a %s run; only agent runs send messages", run.ID, run.Spec.Kind))
+		return
+	}
+	var message remote.Message
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRunMessageBytes)).Decode(&message); err != nil {
+		writeCIError(w, http.StatusBadRequest, fmt.Sprintf("decode the message of run %s: %v", run.ID, err))
+		return
+	}
+	if a.Relay == nil {
+		writeCIError(w, http.StatusConflict, fmt.Sprintf("%v: run %s", remote.ErrNoListener, run.ID))
+		return
+	}
+	if err := a.Relay.Deliver(r.Context(), run.ID, message); err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, remote.ErrNoListener) {
+			status = http.StatusConflict
+		}
+		writeCIError(w, status, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
+}
+
+// maxRunMessageBytes bounds one message: a run's result carries its whole loop.
+const maxRunMessageBytes = 64 << 20
 
 func (a *RunsAPI) handleSpec(w http.ResponseWriter, _ *http.Request, run sandbox.RunRecord) {
 	w.Header().Set("Content-Type", "application/json")
