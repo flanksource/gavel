@@ -59,7 +59,6 @@ var _ = Describe("hosted mode routes", func() {
 			{http.MethodPost, "/todos/new"},
 			{http.MethodGet, "/debug/pprof/"},
 			{http.MethodGet, "/metrics"},
-			{http.MethodPost, "/api/todos/new"},
 			{http.MethodGet, "/api/v1/todo"},
 			{http.MethodGet, "/api/v1/todo/abc"},
 			{http.MethodGet, "/api/projects/app"},

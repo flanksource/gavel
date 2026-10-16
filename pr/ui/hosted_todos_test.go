@@ -5,6 +5,7 @@ package ui
 import (
 	"bytes"
 	"encoding/json"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -185,4 +186,36 @@ func TestAHostedDashboardWithoutWorkspacesReadsNoSessions(t *testing.T) {
 		assert.Equal(t, http.StatusNotFound, status, "%s %s: %v", call.method, call.path, refused)
 		assert.Equal(t, "this hosted dashboard has no todo workspaces", refused["error"], "%s %s", call.method, call.path)
 	}
+}
+
+func TestHostedTodoFormCreatesTodosWithTheirVisibility(t *testing.T) {
+	db, _, org := openOrgDB(t)
+	creator := uuid.New()
+	require.NoError(t, db.Exec(`INSERT INTO users (id, issuer, clerk_user_id) VALUES (?, 'https://clerk.example', 'user_ada')`, creator).Error)
+	dataDir := t.TempDir()
+	workspace := "repo:" + pushedRepo(t, db, org, dataDir, "app").String()
+	base := hostedTodosServer(t, db, org, dataDir)
+
+	status, created := hostedCall(t, base, http.MethodPost, "/api/todos/new", creator, "org:member", map[string]any{"dir": workspace, "title": "From the form", "visibility": "public"})
+	require.Equal(t, http.StatusCreated, status, created)
+	assert.Equal(t, "public", created["todo"].(map[string]any)["visibility"])
+
+	var form bytes.Buffer
+	writer := multipart.NewWriter(&form)
+	for name, value := range map[string]string{"dir": workspace, "title": "With a screenshot", "visibility": "public"} {
+		require.NoError(t, writer.WriteField(name, value))
+	}
+	require.NoError(t, writer.Close())
+	req, err := http.NewRequest(http.MethodPost, base+"/api/todos/new", &form)
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("X-Test-User", creator.String())
+	req.Header.Set("X-Test-Role", "org:member")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	var multipartCreated map[string]any
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&multipartCreated))
+	require.Equal(t, http.StatusCreated, resp.StatusCode, multipartCreated)
+	assert.Equal(t, "public", multipartCreated["todo"].(map[string]any)["visibility"], "a multipart form keeps its visibility")
 }

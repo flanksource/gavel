@@ -218,6 +218,7 @@ func applyTodoNewValues(payload *todoNewPayload, values map[string][]string, ove
 	assignPriority(&payload.Priority, "priority", "severity")
 	assignStatus(&payload.Status, "status")
 	assignString(&payload.Parent, "parent")
+	assignString(&payload.Visibility, "visibility")
 	if raw := firstTodoNewValue(values, "pr"); raw != "" && (overwrite || payload.PR == nil) {
 		pr, err := todoPRFormValue(raw)
 		if err != nil {

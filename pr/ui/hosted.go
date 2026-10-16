@@ -35,7 +35,7 @@ var hostedPassThrough = []string{
 	// Answered by answerHostedProjectAction before the host's projects are read.
 	"POST /api/projects/{name}/actions",
 
-	"GET /api/projects", "/api/todos", "POST /api/todos/batch", "/api/todos/item", "/api/todos/labels", "/api/todos/links",
+	"GET /api/projects", "/api/todos", "POST /api/todos/batch", "POST /api/todos/new", "/api/todos/item", "/api/todos/labels", "/api/todos/links",
 	"/api/todos/pr-links", "POST /api/todos/criteria", "/api/todos/attachments", "GET /api/todos/attachments/{id}",
 	// Runs execute in sandbox jobs (see agent_runs.go).
 	"/api/todos/run", "POST /api/todos/plan/approve", "POST /api/todos/plan/revise", "POST /api/todos/plan/reject",
