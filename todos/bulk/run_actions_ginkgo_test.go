@@ -2,6 +2,7 @@ package bulk
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 
@@ -70,4 +71,37 @@ var _ = Describe("Bulk runtime preset transport", func() {
 		Expect(dispatched.Options.Batch).To(Equal([]string{"ab12cd", "ff0011"}),
 			"every run is told the whole selection, so a triage render can mark the batch")
 	}, Entry("absolute owning workspace", "absolute"), Entry("relative execution subdirectory", "relative"), Entry("selected batch workspace", "unset"))
+
+	It("readies each run's request for where it runs before it resolves", func() {
+		oldResolve, oldStart := run.Resolve, run.Start
+		DeferCleanup(func() { run.Resolve, run.Start = oldResolve, oldStart })
+		var resolved run.Request
+		run.Resolve = func(_ context.Context, req run.Request) (*run.Prepared, error) {
+			resolved = req
+			return &run.Prepared{}, nil
+		}
+		run.Start = func(run.Request) (run.StartResult, error) { return run.StartResult{Status: "started"}, nil }
+		attached := func(_ context.Context, req *run.Request) error {
+			req.Options.Message = "attached"
+			return nil
+		}
+		fn, err := StartRun(RunSpec{Step: "plan", Registry: run.NewRegistry(), Dir: GinkgoT().TempDir(), Attach: attached})
+		Expect(err).NotTo(HaveOccurred())
+		_, err = fn(context.Background(), nil, &types.TODO{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(resolved.Options.Message).To(Equal("attached"))
+
+		refused := func(context.Context, *run.Request) error { return errors.New("only its creator can run it") }
+		fn, err = StartRun(RunSpec{Step: "plan", Registry: run.NewRegistry(), Dir: GinkgoT().TempDir(), Attach: refused})
+		Expect(err).NotTo(HaveOccurred())
+		_, err = fn(context.Background(), nil, &types.TODO{})
+		Expect(err).To(MatchError("only its creator can run it"))
+	})
+
+	It("refuses a TODO with no workspace when the batch names none", func() {
+		fn, err := StartRun(RunSpec{Step: "plan", Registry: run.NewRegistry()})
+		Expect(err).NotTo(HaveOccurred())
+		_, err = fn(context.Background(), nil, &types.TODO{ID: "ab12cd"})
+		Expect(err).To(MatchError(ContainSubstring("names no workspace directory and the batch has none")))
+	})
 })

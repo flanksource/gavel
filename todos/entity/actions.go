@@ -8,7 +8,6 @@ import (
 
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/entity"
-	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/bulk"
 	"github.com/flanksource/gavel/todos/content"
@@ -147,6 +146,7 @@ func (d Deps) create(ctx context.Context, _ string, flags CreateFlags) (*types.T
 		Body: flags.Body, BodySet: flags.Body != "",
 		Plan: flags.Plan, PlanSet: flags.Plan != "",
 		Verification: flags.Verification, VerificationSet: flags.Verification != "",
+		Literal: d.literal(ctx),
 	})
 	if err != nil {
 		return nil, rejected(err)
@@ -200,8 +200,12 @@ func (d Deps) create(ctx context.Context, _ string, flags CreateFlags) (*types.T
 	if err != nil {
 		return todo, err
 	}
+	account, err := d.github(ctx, dir, flags.Repo)
+	if err != nil {
+		return todo, fmt.Errorf("created %s but could not push it to GitHub: %w", todo.DisplayID(), err)
+	}
 	if _, err := githubpush.Push(ctx, provider, todo.ID, githubpush.Options{
-		GitHub:  github.Options{WorkDir: dir, Repo: flags.Repo},
+		GitHub:  account,
 		BaseURL: baseURL,
 		Labels:  true,
 	}); err != nil {
@@ -258,7 +262,7 @@ func (d Deps) edit(ctx context.Context, ref string, flags EditFlags) (*types.TOD
 		if field.value == "" {
 			continue
 		}
-		text, err := content.Resolve(content.Options{WorkDir: dir, Flag: field.flag, Value: field.value})
+		text, err := content.Resolve(content.Options{WorkDir: dir, Flag: field.flag, Value: field.value, Literal: d.literal(ctx)})
 		if err != nil {
 			return nil, rejected(err)
 		}
@@ -392,7 +396,7 @@ func (d Deps) steps(ctx context.Context, ref string, flags StepsFlags) (StepsRes
 		if err != nil {
 			return StepsResult{}, rejected(err)
 		}
-		host, err := lifecycle.NewHost(nil, dir, d.hostKind(ctx))
+		host, err := d.lifecycleHost(ctx, nil, dir)
 		if err != nil {
 			return StepsResult{}, err
 		}
@@ -407,7 +411,7 @@ func (d Deps) steps(ctx context.Context, ref string, flags StepsFlags) (StepsRes
 	if err != nil {
 		return StepsResult{}, rejected(err)
 	}
-	host, err := lifecycle.NewHost(provider, dir, d.hostKind(ctx))
+	host, err := d.lifecycleHost(ctx, provider, dir)
 	if err != nil {
 		return StepsResult{}, err
 	}

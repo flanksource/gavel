@@ -24,6 +24,9 @@ type Options struct {
 	WorkDir string
 	Flag    string
 	Value   string
+	// Literal takes Value as the text itself, never as a file to read: a caller that may not
+	// read this host's files, such as a hosted organization, passes text only.
+	Literal bool
 }
 
 // Resolve expands a field value to its markdown.
@@ -34,6 +37,9 @@ type Options struct {
 // is what makes `--body ./notes.md` work without the sigil, and it is checked
 // last so a literal string is never shadowed by a same-named file.
 func Resolve(opts Options) (string, error) {
+	if opts.Literal {
+		return strings.TrimSpace(opts.Value), nil
+	}
 	ref, err := fixtures.ResolveFileRef(opts.WorkDir, opts.Value)
 	if err != nil {
 		return "", fmt.Errorf("resolve %s: %w", opts.Flag, err)
@@ -72,6 +78,8 @@ type CreateOptions struct {
 	PlanSet         bool
 	Verification    string
 	VerificationSet bool
+	// Literal takes every field as the text itself; see Options.Literal.
+	Literal bool
 }
 
 // Create is the resolved content of a new TODO.
@@ -88,13 +96,13 @@ func ResolveCreate(workDir string, opts CreateOptions) (Create, error) {
 	var content Create
 	var err error
 	if opts.BodySet {
-		content.Body, err = Resolve(Options{WorkDir: workDir, Flag: "--body", Value: opts.Body})
+		content.Body, err = Resolve(Options{WorkDir: workDir, Flag: "--body", Value: opts.Body, Literal: opts.Literal})
 		if err != nil {
 			return Create{}, err
 		}
 	}
 	if opts.PlanSet {
-		content.Plan, err = Resolve(Options{WorkDir: workDir, Flag: "--plan", Value: opts.Plan})
+		content.Plan, err = Resolve(Options{WorkDir: workDir, Flag: "--plan", Value: opts.Plan, Literal: opts.Literal})
 		if err != nil {
 			return Create{}, err
 		}
@@ -103,7 +111,7 @@ func ResolveCreate(workDir string, opts CreateOptions) (Create, error) {
 		}
 	}
 	if opts.VerificationSet {
-		content.Verification, err = Resolve(Options{WorkDir: workDir, Flag: "--verification", Value: opts.Verification})
+		content.Verification, err = Resolve(Options{WorkDir: workDir, Flag: "--verification", Value: opts.Verification, Literal: opts.Literal})
 		if err != nil {
 			return Create{}, err
 		}

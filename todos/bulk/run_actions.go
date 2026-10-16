@@ -102,6 +102,9 @@ type RunSpec struct {
 	Dir       string
 	Resolve   RunResolver
 	Approvals bool
+	// Attach, when set, readies each run's request for where it runs, before it resolves: a
+	// hosted organization's run goes to a sandbox.
+	Attach func(ctx context.Context, req *run.Request) error
 }
 
 // StartRun returns the item function for a named-step bulk action.
@@ -131,6 +134,9 @@ func StartRun(spec RunSpec) (ItemFunc, error) {
 		if cwd := strings.TrimSpace(todo.CWD); filepath.IsAbs(cwd) {
 			workDir = filepath.Clean(cwd)
 		}
+		if workDir == "" {
+			return ItemResult{}, fmt.Errorf("bulk run: todo %s names no workspace directory and the batch has none", todo.DisplayID())
+		}
 		opts, err := resolve(ctx, RunRequest{
 			Dir: workDir, Step: step, Todo: todo, Batch: spec.Batch, Flags: spec.Flags,
 		})
@@ -144,6 +150,11 @@ func StartRun(spec RunSpec) (ItemFunc, error) {
 			Dir:       workDir,
 			Options:   opts,
 			Approvals: spec.Approvals,
+		}
+		if spec.Attach != nil {
+			if err := spec.Attach(ctx, &req); err != nil {
+				return ItemResult{}, err
+			}
 		}
 		// Resolving first turns a misconfigured run into a per-item error before
 		// any agent session is admitted, so one bad TODO does not leave a
