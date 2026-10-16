@@ -36,6 +36,7 @@ func (a *RunsAPI) Handler() http.Handler {
 	mux.HandleFunc("POST /api/runs/{id}/results", a.withRun(a.handleResults))
 	mux.HandleFunc("POST /api/runs/{id}/messages", a.withRun(a.handleMessage))
 	mux.HandleFunc("POST /api/runs/{id}/commits", a.withRun(a.handleCommits))
+	mux.HandleFunc("POST /api/runs/{id}/transcripts", a.withRun(a.handleTranscript))
 	return mux
 }
 
@@ -153,7 +154,6 @@ func (a *RunsAPI) handleCommits(w http.ResponseWriter, r *http.Request, run sand
 	branch := sandbox.RunBranchPrefix + run.Spec.TodoID.String()[:8] + "-" + run.ID.String()[:8]
 	sha, err := a.Sources.PushRunCommits(r.Context(), repo, run.Spec.SHA, branch, http.MaxBytesReader(w, r.Body, maxRunCommitsBytes))
 	if err != nil {
-		logger.Warnf("push the commits of sandbox run %s: %v", run.ID, err)
 		status := http.StatusBadRequest
 		if errors.Is(err, sandbox.ErrBranchExists) {
 			status = http.StatusConflict

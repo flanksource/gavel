@@ -184,20 +184,23 @@ func (d *Dispatcher) finish(ctx context.Context, id uuid.UUID, status string, ex
 	}
 }
 
-// RunRecord is what the run API needs of a run: its organization and spec.
+// RunRecord is what the run API needs of a run: its organization, the user it runs for (nil
+// for a system run) and its spec.
 type RunRecord struct {
 	ID   uuid.UUID
 	Org  uuid.UUID
+	User *uuid.UUID
 	Spec RunSpec
 }
 
 // LoadRun reads run id's organization and spec.
 func LoadRun(ctx context.Context, db *gorm.DB, id uuid.UUID) (RunRecord, error) {
 	var row struct {
-		OrgID uuid.UUID
-		Spec  string
+		OrgID  uuid.UUID
+		UserID *uuid.UUID
+		Spec   string
 	}
-	result := db.WithContext(ctx).Raw(`SELECT org_id, spec::text AS spec FROM sandbox_runs WHERE id = ?`, id).Scan(&row)
+	result := db.WithContext(ctx).Raw(`SELECT org_id, user_id, spec::text AS spec FROM sandbox_runs WHERE id = ?`, id).Scan(&row)
 	if result.Error != nil {
 		return RunRecord{}, fmt.Errorf("read sandbox run %s: %w", id, result.Error)
 	}
@@ -208,7 +211,7 @@ func LoadRun(ctx context.Context, db *gorm.DB, id uuid.UUID) (RunRecord, error) 
 	if err := json.Unmarshal([]byte(row.Spec), &spec); err != nil {
 		return RunRecord{}, fmt.Errorf("decode the spec of sandbox run %s: %w", id, err)
 	}
-	return RunRecord{ID: id, Org: row.OrgID, Spec: spec}, nil
+	return RunRecord{ID: id, Org: row.OrgID, User: row.UserID, Spec: spec}, nil
 }
 
 // ErrRunNotFound reports a run ID with no sandbox_runs record.
