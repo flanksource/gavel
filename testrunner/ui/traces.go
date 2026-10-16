@@ -29,9 +29,11 @@ type TracesStatus struct {
 	// store is not served.
 	ProcessRun string              `json:"process_run,omitempty"`
 	Process    *traces.ProcessRefs `json:"process,omitempty"`
-	// ProcessSession is the running process capture's session, which a
-	// checkpoint names; empty once the run has ended.
-	ProcessSession string `json:"process_session,omitempty"`
+	// Sessions are the running process capture's sessions, which a
+	// checkpoint names (POST {mount}/api/v1/sessions/{id}/checkpoint): stacks
+	// to collect a process's stacks, samples to refresh its facets. Nil once
+	// the run has ended.
+	Sessions *traces.ProcessSessions `json:"sessions,omitempty"`
 }
 
 // RunTraces is one run's store as the UI reaches it.
@@ -80,24 +82,24 @@ func (s *Server) SetTraceRun(runID string, process *traces.ProcessRefs) {
 }
 
 // ServeTraces mounts handler, run runID's store served through query, at
-// QueryMount/<runID>; its owner closes the store. processSession names the
-// running process capture, empty when there is none.
-func (s *Server) ServeTraces(runID string, handler http.Handler, processSession string) {
-	s.setTraces(runID, &servedTraces{handler: handler}, processSession)
+// QueryMount/<runID>; its owner closes the store. sessions are the running
+// process capture's, nil when there is none.
+func (s *Server) ServeTraces(runID string, handler http.Handler, sessions *traces.ProcessSessions) {
+	s.setTraces(runID, &servedTraces{handler: handler}, sessions)
 }
 
 // TracesUnavailable records why run runID's store is not served.
 func (s *Server) TracesUnavailable(runID, reason string) {
-	s.setTraces(runID, &servedTraces{unavailable: reason}, "")
+	s.setTraces(runID, &servedTraces{unavailable: reason}, nil)
 }
 
-func (s *Server) setTraces(runID string, served *servedTraces, processSession string) {
+func (s *Server) setTraces(runID string, served *servedTraces, sessions *traces.ProcessSessions) {
 	s.mu.Lock()
 	if s.traceRuns == nil {
 		s.traceRuns = map[string]*servedTraces{}
 	}
 	s.traceRuns[runID] = served
-	s.processSession = processSession
+	s.processSessions = sessions
 	s.mu.Unlock()
 	s.notify()
 }
@@ -112,7 +114,7 @@ func (s *Server) ReopenTraces(runs ...TraceRun) error {
 		if err != nil {
 			return errors.Join(err, s.CloseTraces())
 		}
-		s.setTraces(run.RunID, served, "")
+		s.setTraces(run.RunID, served, nil)
 	}
 	return nil
 }
@@ -171,7 +173,7 @@ func (s *Server) tracesStatusLocked() *TracesStatus {
 		status.Runs[runID] = run
 	}
 	if status.Runs[primary].Mount != "" && s.metadata.ProcessTrace != nil {
-		status.ProcessRun, status.Process, status.ProcessSession = primary, s.metadata.ProcessTrace, s.processSession
+		status.ProcessRun, status.Process, status.Sessions = primary, s.metadata.ProcessTrace, s.processSessions
 	}
 	return status
 }

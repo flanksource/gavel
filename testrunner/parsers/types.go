@@ -108,12 +108,11 @@ type Test struct {
 	// Detail is provider-owned structured detail for a test. Providers should
 	// assign a JSON-marshallable value here; values may also implement api.Pretty
 	// for rich terminal/clicky rendering.
-	Detail         any                 `json:"detail,omitempty"`
-	Benchmark      *BenchmarkResult    `json:"benchmark,omitempty"`
-	FixtureProfile *FixtureProfile     `json:"fixture_profile,omitempty"`
-	GoProfiles     []GoProfileArtifact `json:"go_profiles,omitempty"`
-	SQLProfile     *SQLProfile         `json:"sql_profile,omitempty"`
-	Fixture        *FixtureExecution   `json:"fixture,omitempty"`
+	Detail         any               `json:"detail,omitempty"`
+	Benchmark      *BenchmarkResult  `json:"benchmark,omitempty"`
+	FixtureProfile *FixtureProfile   `json:"fixture_profile,omitempty"`
+	SQLProfile     *SQLProfile       `json:"sql_profile,omitempty"`
+	Fixture        *FixtureExecution `json:"fixture,omitempty"`
 	// Attempts is the per-run execution history for this test. A fresh run
 	// appends a TestAttempt to the tail; reruns (via the UI) append further
 	// attempts without discarding earlier ones. The Test's top-level
@@ -159,16 +158,6 @@ type ProfileDiskIO struct {
 	MissingProcesses int    `json:"missing_processes,omitempty"`
 }
 
-type GoProfileArtifact struct {
-	Name        string   `json:"name"`
-	ID          string   `json:"id,omitempty"`
-	Path        string   `json:"path,omitempty"`
-	Status      string   `json:"status"`
-	Bytes       int64    `json:"bytes,omitempty"`
-	SampleTypes []string `json:"sample_types,omitempty"`
-	Error       string   `json:"error,omitempty"`
-}
-
 type SQLProfile struct {
 	Path            string                `json:"path"`
 	QueryCount      int                   `json:"query_count"`
@@ -199,27 +188,33 @@ type TestProgress struct {
 // the command invoked, and the final state. Populated by the runner on
 // completion and extended by the UI on rerun.
 type TestAttempt struct {
-	Sequence    int           `json:"sequence"`
-	RunKind     string        `json:"run_kind,omitempty"` // "initial", "rerun"
-	Started     time.Time     `json:"started,omitempty"`
-	Ended       time.Time     `json:"ended,omitempty"`
-	Duration    time.Duration `json:"duration,omitempty"`
-	PID         int           `json:"pid,omitempty"`
-	Command     string        `json:"command,omitempty"`
-	Framework   Framework     `json:"framework,omitempty"`
-	ExitCode    *int          `json:"exit_code,omitempty"`
-	Passed      bool          `json:"passed,omitempty"`
-	Failed      bool          `json:"failed,omitempty"`
-	Skipped     bool          `json:"skipped,omitempty"`
-	Pending     bool          `json:"pending,omitempty"`
-	TimedOut    bool          `json:"timed_out,omitempty"`
-	Message     string        `json:"message,omitempty"`
-	Stdout      string        `json:"stdout,omitempty"`
-	Stderr      string        `json:"stderr,omitempty"`
-	StackTrace  string        `json:"stack_trace,omitempty"`
-	CPUPercent  float64       `json:"cpu_percent,omitempty"`
-	RSS         uint64        `json:"rss,omitempty"`
-	GoroutineCt int           `json:"goroutine_count,omitempty"`
+	Sequence int           `json:"sequence"`
+	RunKind  string        `json:"run_kind,omitempty"` // "initial", "rerun"
+	Started  time.Time     `json:"started,omitempty"`
+	Ended    time.Time     `json:"ended,omitempty"`
+	Duration time.Duration `json:"duration,omitempty"`
+	PID      int           `json:"pid,omitempty"`
+	// ProcessKey is the process's key in the run's process_tree, whose
+	// process_samples the CPU and RSS peaks were read from.
+	ProcessKey  string    `json:"process_key,omitempty"`
+	Command     string    `json:"command,omitempty"`
+	Framework   Framework `json:"framework,omitempty"`
+	ExitCode    *int      `json:"exit_code,omitempty"`
+	Passed      bool      `json:"passed,omitempty"`
+	Failed      bool      `json:"failed,omitempty"`
+	Skipped     bool      `json:"skipped,omitempty"`
+	Pending     bool      `json:"pending,omitempty"`
+	TimedOut    bool      `json:"timed_out,omitempty"`
+	Message     string    `json:"message,omitempty"`
+	Stdout      string    `json:"stdout,omitempty"`
+	Stderr      string    `json:"stderr,omitempty"`
+	StackTrace  string    `json:"stack_trace,omitempty"`
+	CPUPercent  float64   `json:"cpu_percent,omitempty"`
+	RSS         uint64    `json:"rss,omitempty"`
+	GoroutineCt int       `json:"goroutine_count,omitempty"`
+	// SharedProcess marks an attempt whose PID, CPU and RSS belong to a go test
+	// batch that ran several packages in one process, not to this test alone.
+	SharedProcess bool `json:"shared_process,omitempty"`
 }
 
 type GoTestContext struct {

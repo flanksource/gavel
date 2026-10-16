@@ -90,8 +90,9 @@ A run's traces live in its trace store, which the gavel server mounts at `status
 gavel-specific trace route.
 
 - `ProcessesView` (fed by `useProcessTrace({ traces: status.traces, done })`) reads the process
-  tree and samples streams named by `status.traces.process` from the store's NDJSON export, and
-  checkpoints `status.traces.process_session` to collect a stack while the run is live.
+  tree, samples and stacks streams named by `status.traces.process` from the store's NDJSON export,
+  and checkpoints `status.traces.sessions.stacks` to collect a stack (`sessions.samples` to refresh
+  a process's facets) while the run is live.
 - `TracesSection` renders a fixture's `context.traces` (`TraceResult[]`: kind, stream, seq window,
   count, summary, error) with an *Open in query* deep link, a download per export format, and an
   inline clicky-ui `TraceView`.

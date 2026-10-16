@@ -328,16 +328,18 @@ var _ = Describe("Test UI E2E", func() {
 	})
 
 	It("shows summary counts for all frameworks", func() {
-		var text string
+		var text, chips string
 		err := chromedp.Run(ctx,
 			chromedp.Navigate(url),
 			chromedp.Sleep(2*time.Second),
 			chromedp.Text(`body`, &text, chromedp.ByQuery),
+			// The summary chips show counts; their words live in the aria-label.
+			chromedp.Evaluate(`Array.from(document.querySelectorAll('[aria-label]')).map(e => e.getAttribute('aria-label')).join('|')`, &chips),
 		)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(text).To(ContainSubstring("passed"))
-		Expect(text).To(ContainSubstring("failed"))
-		Expect(text).To(ContainSubstring("skipped"))
+		Expect(chips).To(MatchRegexp(`\d+ passed`))
+		Expect(chips).To(MatchRegexp(`\d+ failed`))
+		Expect(chips).To(MatchRegexp(`\d+ skipped`))
 		Expect(text).To(ContainSubstring("9 tests"))
 	})
 
@@ -359,21 +361,25 @@ var _ = Describe("Test UI E2E", func() {
 		host, err := traces.Open(GinkgoT().TempDir(), traces.RunID(time.Now()))
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(func() { Expect(host.Close(context.Background())).To(Succeed()) })
-		trace, err := host.StartProcessTrace(os.Getpid())
+		trace, err := host.StartProcessTrace(traces.ProcessTraceOptions{RootPID: os.Getpid(), Facets: true})
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(func() { Expect(trace.Stop(context.Background())).To(Succeed()) })
 		handler, err := traceserve.Handler(traceserve.Options{Runtime: host.Runtime(), Authorize: traceserve.ReadOnly})
 		Expect(err).ToNot(HaveOccurred())
-		refs := trace.Refs()
+		refs, sessions := trace.Refs(), trace.Sessions()
 		srv.SetTraceRun(host.RunID(), &refs)
-		srv.ServeTraces(host.RunID(), handler, trace.Session())
+		srv.ServeTraces(host.RunID(), handler, &sessions)
+		// A capture takes checkpoints only while its run is live: the UI offers
+		// collect and refresh for a running run, never for a finished one.
+		srv.BeginRun("initial")
 		DeferCleanup(func() {
+			srv.MarkDone()
 			srv.TracesUnavailable(host.RunID(), "spec ended")
 			srv.SetTraceRun("", nil)
 		})
-		// The run is done, so the UI reads the tree once: wait until the capture's
-		// periodic commit (which, unlike a checkpoint, collects no stack) has put
-		// this process in the stream — a 200 alone can still be an empty export.
+		// Wait until the capture's periodic commit (which, unlike a checkpoint,
+		// collects no stack) has put this process in the stream — a 200 alone can
+		// still be an empty export.
 		Eventually(func() string {
 			resp, err := http.Get(url + "/query/" + host.RunID() + "/api/v1/traces/process_tree/export?format=ndjson&stream=" + refs.Tree.Stream)
 			Expect(err).ToNot(HaveOccurred())
@@ -388,7 +394,7 @@ var _ = Describe("Test UI E2E", func() {
 		err = chromedp.Run(ctx,
 			chromedp.Navigate(url),
 			chromedp.Sleep(2*time.Second),
-			clickWithTimeout(`//button[contains(text(), "Processes")]`),
+			clickWithTimeout(`//button[@role="tab"][contains(., "Processes")]`),
 			chromedp.Sleep(500*time.Millisecond),
 			// "Collect stack trace", or "Refresh stack trace" once a commit carried one.
 			clickWithTimeout(`//button[contains(., "stack trace")]`),
@@ -581,7 +587,7 @@ var _ = Describe("Test UI E2E", func() {
 			chromedp.Navigate(url),
 			chromedp.Sleep(2*time.Second),
 			// Click collapse
-			clickWithTimeout(`//button[contains(text(), "Collapse")]`),
+			clickWithTimeout(`//button[@aria-label="Collapse all"]`),
 			chromedp.Sleep(500*time.Millisecond),
 			chromedp.Text(`body`, &collapsed, chromedp.ByQuery),
 		)
@@ -591,7 +597,7 @@ var _ = Describe("Test UI E2E", func() {
 
 		err = chromedp.Run(ctx,
 			// Click expand
-			clickWithTimeout(`//button[contains(text(), "Expand")]`),
+			clickWithTimeout(`//button[@aria-label="Expand all"]`),
 			chromedp.Sleep(500*time.Millisecond),
 			chromedp.Text(`body`, &expanded, chromedp.ByQuery),
 		)

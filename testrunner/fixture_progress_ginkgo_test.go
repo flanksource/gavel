@@ -1,8 +1,12 @@
 package testrunner
 
 import (
+	"encoding/json"
+	"path/filepath"
+	"strconv"
 	"time"
 
+	"github.com/flanksource/clicky/task"
 	"github.com/flanksource/commons-db/tracing"
 	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/testrunner/parsers"
@@ -56,5 +60,42 @@ var _ = Describe("fixture progress adapter", func() {
 		}}
 
 		Expect(executionSnapshotToTests(snapshot)[0].Context).To(Equal(parsers.FixtureContext{Traces: windows}))
+	})
+
+	It("projects a finished step's attempts into its detail, as the verification report does", func() {
+		file := filepath.Join(GinkgoT().TempDir(), "retry.fixture.yaml")
+		origin := &fixtures.FixtureOrigin{File: file, Line: 7}
+		snapshot := fixtures.ExecutionSnapshot{Root: &fixtures.ExecutionNode{
+			Key: "fixtures", Kind: fixtures.ExecutionKindRoot, State: fixtures.ExecutionPassed,
+			Children: []*fixtures.ExecutionNode{{
+				Key: "flaky", Name: "flaky", Kind: fixtures.ExecutionKindCommand, State: fixtures.ExecutionPassed, Origin: origin,
+			}},
+		}}
+		attempts := []fixtures.AttemptReport{
+			{Attempt: 1, Status: fixtures.AttemptFailed, Error: "exit 1", DurationMs: 12, Result: &fixtures.FixtureResult{Name: "flaky", Status: task.StatusFAIL}},
+			{Attempt: 2, Status: fixtures.AttemptPassed, DurationMs: 9},
+		}
+		tree := &fixtures.FixtureNode{Children: []*fixtures.FixtureNode{{
+			Name: "flaky", Type: fixtures.TestNode, Origin: origin,
+			Results: &fixtures.FixtureResult{Name: "flaky", Status: task.StatusPASS, Metadata: map[string]any{
+				"step": map[string]any{"id": "flaky", "kind": "exec"}, "attempts": attempts,
+			}},
+		}}}
+
+		tests := executionSnapshotToTests(snapshot)
+		mergeFixtureResultDetails(tests, tree, "")
+
+		raw, err := json.Marshal(tests[0].Detail)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(raw).To(MatchJSON(`{
+			"key": "flaky", "name": "flaky", "kind": "command", "state": "passed",
+			"origin": {"file": ` + strconv.Quote(file) + `, "line": 7},
+			"step": {"id": "flaky", "kind": "exec"},
+			"attempts": [
+				{"attempt": 1, "status": "failed", "error": "exit 1", "durationMs": 12,
+				 "result": {"name": "flaky", "framework": "fixture", "failed": true}},
+				{"attempt": 2, "status": "passed", "durationMs": 9}
+			]
+		}`))
 	})
 })

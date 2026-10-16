@@ -65,25 +65,24 @@ type exportReport struct {
 }
 
 type ViewNode struct {
-	Name           string                      `json:"name"`
-	Path           string                      `json:"path,omitempty"`
-	Framework      string                      `json:"framework,omitempty"`
-	Kind           string                      `json:"kind,omitempty"`
-	Status         string                      `json:"status,omitempty"`
-	Package        string                      `json:"package,omitempty"`
-	PackagePath    string                      `json:"package_path,omitempty"`
-	File           string                      `json:"file,omitempty"`
-	Line           int                         `json:"line,omitempty"`
-	Command        string                      `json:"command,omitempty"`
-	Message        string                      `json:"message,omitempty"`
-	Stdout         string                      `json:"stdout,omitempty"`
-	Stderr         string                      `json:"stderr,omitempty"`
-	Duration       time.Duration               `json:"duration,omitempty"`
-	FixtureProfile *parsers.FixtureProfile     `json:"fixture_profile,omitempty"`
-	GoProfiles     []parsers.GoProfileArtifact `json:"go_profiles,omitempty"`
-	SQLProfile     *parsers.SQLProfile         `json:"sql_profile,omitempty"`
-	Violations     []string                    `json:"violations,omitempty"`
-	Children       []*ViewNode                 `json:"children,omitempty"`
+	Name           string                  `json:"name"`
+	Path           string                  `json:"path,omitempty"`
+	Framework      string                  `json:"framework,omitempty"`
+	Kind           string                  `json:"kind,omitempty"`
+	Status         string                  `json:"status,omitempty"`
+	Package        string                  `json:"package,omitempty"`
+	PackagePath    string                  `json:"package_path,omitempty"`
+	File           string                  `json:"file,omitempty"`
+	Line           int                     `json:"line,omitempty"`
+	Command        string                  `json:"command,omitempty"`
+	Message        string                  `json:"message,omitempty"`
+	Stdout         string                  `json:"stdout,omitempty"`
+	Stderr         string                  `json:"stderr,omitempty"`
+	Duration       time.Duration           `json:"duration,omitempty"`
+	FixtureProfile *parsers.FixtureProfile `json:"fixture_profile,omitempty"`
+	SQLProfile     *parsers.SQLProfile     `json:"sql_profile,omitempty"`
+	Violations     []string                `json:"violations,omitempty"`
+	Children       []*ViewNode             `json:"children,omitempty"`
 }
 
 func (n *ViewNode) Pretty() api.Text {
@@ -342,11 +341,23 @@ func routeRequestedFormat(r *http.Request, pathFormat string) string {
 	}
 }
 
+// Status filter values as the UI writes them (src/routes.ts): a URL without
+// `status` means the failing-only default, `status=all` means no filter.
+const statusFilterAll = "all"
+
+var defaultStatusFilter = []string{"!passed", "!skipped"}
+
 func parseTestFilters(r *http.Request) testRouteFilters {
-	return testRouteFilters{
-		Status:    splitList(r.URL.Query().Get("status")),
-		Framework: splitList(r.URL.Query().Get("framework")),
+	filters := testRouteFilters{Framework: splitList(r.URL.Query().Get("framework"))}
+	status, present := r.URL.Query()["status"]
+	switch {
+	case !present:
+		filters.Status = append([]string(nil), defaultStatusFilter...)
+	case len(status) == 1 && status[0] == statusFilterAll:
+	default:
+		filters.Status = splitList(strings.Join(status, ","))
 	}
+	return filters
 }
 
 func parseLintFilters(r *http.Request) lintRouteFilters {
@@ -479,7 +490,6 @@ func testToViewNode(test parsers.Test) *ViewNode {
 		Stderr:         test.Stderr,
 		Duration:       test.Duration,
 		FixtureProfile: test.FixtureProfile,
-		GoProfiles:     test.GoProfiles,
 	}
 	switch {
 	case test.TimedOut:
@@ -1156,7 +1166,7 @@ func buildPerformanceViewNodes(tests []parsers.Test, performance *fixtures.Bench
 				}
 				nodes = append(nodes, &ViewNode{Name: test.Name, Kind: test.Fixture.Kind,
 					Status: test.Fixture.State, Duration: test.Duration, Message: message,
-					File: test.File, Line: test.Line, FixtureProfile: test.FixtureProfile, GoProfiles: test.GoProfiles,
+					File: test.File, Line: test.Line, FixtureProfile: test.FixtureProfile,
 					SQLProfile: test.SQLProfile, Violations: test.Fixture.Violations})
 			}
 			visit(test.Children)

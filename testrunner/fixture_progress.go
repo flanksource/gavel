@@ -1,6 +1,7 @@
 package testrunner
 
 import (
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 
@@ -8,7 +9,11 @@ import (
 	"github.com/flanksource/gavel/testrunner/parsers"
 )
 
-func mergeFixtureResultDetails(tests []parsers.Test, tree *fixtures.FixtureNode, workDir string) {
+// mergeFixtureResultDetails enriches the progress tree's tests with what each
+// fixture's final result recorded: output, context, profiles and, merged
+// into the progress node's detail, the typed step record (step, attempts, …)
+// fixtures.ResultDetail projects for the verification report.
+func mergeFixtureResultDetails(tests []parsers.Test, tree *fixtures.FixtureNode, workDir string) error {
 	byLocation := make(map[string][]parsers.Test)
 	location := func(test parsers.Test) string {
 		file := test.File
@@ -31,8 +36,8 @@ func mergeFixtureResultDetails(tests []parsers.Test, tree *fixtures.FixtureNode,
 	for _, child := range tree.Children {
 		collect(fixtureNodeToTests(child))
 	}
-	var enrich func([]parsers.Test)
-	enrich = func(items []parsers.Test) {
+	var enrich func([]parsers.Test) error
+	enrich = func(items []parsers.Test) error {
 		for i := range items {
 			test := &items[i]
 			if test.Fixture != nil && test.File != "" {
@@ -42,13 +47,50 @@ func mergeFixtureResultDetails(tests []parsers.Test, tree *fixtures.FixtureNode,
 					byLocation[key] = matches[1:]
 					test.Stdout, test.Stderr, test.Context = result.Stdout, result.Stderr, result.Context
 					test.Message, test.FixtureProfile = result.Message, result.FixtureProfile
-					test.GoProfiles, test.SQLProfile = result.GoProfiles, result.SQLProfile
+					test.SQLProfile = result.SQLProfile
+					if err := mergeDetail(test, result.Detail); err != nil {
+						return err
+					}
 				}
 			}
-			enrich(test.Children)
+			if err := enrich(test.Children); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	return enrich(tests)
+}
+
+// mergeDetail lays a result's detail (fixtures.ResultDetail) over the
+// progress node test.Detail holds, keeping the node's own fields.
+func mergeDetail(test *parsers.Test, detail any) error {
+	raw, ok := detail.(json.RawMessage)
+	if detail == nil || ok && len(raw) == 0 {
+		return nil
+	}
+	if !ok {
+		return fmt.Errorf("fixture %s: result detail is %T, want json.RawMessage", test.Name, detail)
+	}
+	merged := map[string]json.RawMessage{}
+	if test.Detail != nil {
+		base, err := json.Marshal(test.Detail)
+		if err != nil {
+			return fmt.Errorf("fixture %s: encode progress detail: %w", test.Name, err)
+		}
+		if err := json.Unmarshal(base, &merged); err != nil {
+			return fmt.Errorf("fixture %s: progress detail is not an object: %w", test.Name, err)
 		}
 	}
-	enrich(tests)
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return fmt.Errorf("fixture %s: result detail is not an object: %w", test.Name, err)
+	}
+	for key, value := range fields {
+		merged[key] = value
+	}
+	test.Detail = merged
+	return nil
 }
 
 func mergeFixtureMeasurements(tests []parsers.Test, report *fixtures.BenchmarkReport) {
@@ -73,9 +115,6 @@ func mergeFixtureMeasurements(tests []parsers.Test, report *fixtures.BenchmarkRe
 					test.Fixture.Violations = result.Fixture.Violations
 					if result.FixtureProfile != nil {
 						test.FixtureProfile = result.FixtureProfile
-					}
-					if len(result.GoProfiles) > 0 {
-						test.GoProfiles = result.GoProfiles
 					}
 					if result.SQLProfile != nil {
 						test.SQLProfile = result.SQLProfile

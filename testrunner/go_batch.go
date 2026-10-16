@@ -143,13 +143,22 @@ func (o *TestOrchestrator) runGoBatch(ctx commonsCtx.Context, t *task.Task, plan
 	}
 	t.SetName(formatRunningCommand(process.Cmd, process.Args))
 	started := time.Now()
-	runContext, cancel, timedOut := o.supervisePackage(ctx, process, "Go packages")
+	runContext, cancel, supervision := o.supervisePackage(ctx, process, strings.Join(plan.targets, " "))
 	defer cancel()
-	stopSampler, peak := startProcessMetricsSampler(process)
+	if o.SigquitDumper != nil {
+		defer o.SigquitDumper.watch(process)()
+	}
+	span, err := o.beginProcessSpan()
+	if err != nil {
+		return packageResult{}, err
+	}
 	result := process.WithContext(runContext).Run().Result()
-	stopSampler()
 	if result == nil {
 		return packageResult{}, fmt.Errorf("go test produced no process result")
+	}
+	usage, err := span.usage(process.Pid())
+	if err != nil {
+		return packageResult{}, err
 	}
 	parsed, err := parsers.ParseGoTestBatch(strings.NewReader(result.Stdout), o.WorkDir, nil)
 	if err != nil {
@@ -188,12 +197,18 @@ func (o *TestOrchestrator) runGoBatch(ctx commonsCtx.Context, t *task.Task, plan
 				packageSuites[i].Tests[j].Command = packageSuites[i].Command
 			}
 		}
-		if timedOut.Load() {
+		if supervision.TimedOut() {
 			markTimedOutTests(packageSuites, time.Since(started), result.Stdout, result.Stderr, parsers.GoTest)
 		}
 		dedupeGinkgoBootstraps(packageSuites)
 		for i := range packageSuites {
-			stampAttempts(parsers.TestSuiteResults{packageSuites[i]}, o.RunKind, started, time.Now(), process.Pid(), packageSuites[i].ExitCode, *peak)
+			stampAttempts(parsers.TestSuiteResults{packageSuites[i]}, attemptStamp{
+				RunKind: o.RunKind, Started: started, Ended: time.Now(), PID: process.Pid(),
+				ExitCode: packageSuites[i].ExitCode, Usage: usage, SharedProcess: len(paths) > 1,
+			})
+		}
+		if supervision.TimedOut() {
+			o.checkpointTimeoutDump(pkgPath, packageSuites, supervision.Dumped())
 		}
 		suites = append(suites, packageSuites...)
 		if o.streamer != nil {

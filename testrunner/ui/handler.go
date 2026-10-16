@@ -4,9 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
-	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -17,7 +14,7 @@ import (
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/testrunner/bench"
 	"github.com/flanksource/gavel/testrunner/parsers"
-	gopsutilProcess "github.com/shirou/gopsutil/v4/process"
+	"github.com/flanksource/gavel/traces"
 )
 
 type Server struct {
@@ -34,14 +31,15 @@ type Server struct {
 	// replayed marks a server hydrated from a static JSON snapshot
 	// (LoadSnapshot). Its results are fixed, so snapshot() must not consult
 	// the process-global clicky task registry — there is no live run behind it.
-	replayed       bool
-	metadata       *SnapshotMetadata
-	git            *SnapshotGit
-	updated        chan struct{}
-	gitRoot        string
-	profileRoot    string
-	traceRuns      map[string]*servedTraces
-	processSession string
+	replayed  bool
+	metadata  *SnapshotMetadata
+	git       *SnapshotGit
+	updated   chan struct{}
+	gitRoot   string
+	traceRuns map[string]*servedTraces
+	// processSessions are the running process capture's sessions, nil once
+	// the run ended.
+	processSessions *traces.ProcessSessions
 
 	rerunMu       sync.Mutex
 	rerunFn       RerunFunc
@@ -55,12 +53,6 @@ func NewServer() *Server {
 	return &Server{
 		updated: make(chan struct{}, 1),
 	}
-}
-
-func (s *Server) SetProfileRoot(root string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.profileRoot = filepath.Clean(root)
 }
 
 func (s *Server) BeginRun(kind string) {
@@ -323,12 +315,9 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleRoute)
 	mux.HandleFunc("/api/tests", s.handleJSON)
-	mux.HandleFunc("/api/tests/fixture-profile", s.handleFixtureProfile)
 	mux.HandleFunc("/api/tests/stream", s.handleSSE)
 	mux.HandleFunc(QueryMount, s.handleTraces)
 	mux.HandleFunc(QueryMount+"/", s.handleTraces)
-	mux.HandleFunc("/api/process/metrics", s.handleProcessMetrics)
-	mux.HandleFunc("/api/process/", s.handleProcessInspect)
 	mux.HandleFunc("/api/rerun", s.handleRerun)
 	mux.HandleFunc("/api/rerun/stream", s.handleRerunStream)
 	mux.HandleFunc("/api/stop", s.handleStop)
@@ -336,67 +325,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/tests/edit", s.handleTestEdit)
 	mux.HandleFunc("/api/benchmarks", s.handleBenchJSON)
 	return mux
-}
-
-func (s *Server) handleFixtureProfile(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "GET required", http.StatusMethodNotAllowed)
-		return
-	}
-	id := r.URL.Query().Get("id")
-	rel := filepath.FromSlash(id)
-	if !filepath.IsLocal(rel) || id == "." {
-		http.Error(w, "invalid profile ID", http.StatusBadRequest)
-		return
-	}
-	s.mu.RLock()
-	root := s.profileRoot
-	path := filepath.Join(root, ".gavel", "profiles", "fixtures", rel)
-	known := false
-	var visit func([]parsers.Test)
-	visit = func(tests []parsers.Test) {
-		for _, test := range tests {
-			for _, artifact := range test.GoProfiles {
-				known = known || artifact.Status == "captured" && artifact.ID == id && filepath.Clean(artifact.Path) == path
-			}
-			visit(test.Children)
-		}
-	}
-	visit(s.tests)
-	if s.fixtureBenchmark != nil && s.fixtureBenchmark.Report != nil {
-		for _, entry := range s.fixtureBenchmark.Report.Fixtures {
-			for _, artifact := range entry.GoProfiles {
-				known = known || artifact.Status == "captured" && artifact.ID == id && filepath.Clean(artifact.Path) == path
-			}
-		}
-	}
-	s.mu.RUnlock()
-	if root == "" || !known {
-		http.NotFound(w, r)
-		return
-	}
-	base, err := filepath.EvalSymlinks(filepath.Join(root, ".gavel", "profiles", "fixtures"))
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
-	resolved, err := filepath.EvalSymlinks(path)
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
-	if rel, err := filepath.Rel(base, resolved); err != nil || !filepath.IsLocal(rel) || rel == "." {
-		http.Error(w, "profile path escapes artifact store", http.StatusBadRequest)
-		return
-	}
-	info, err := os.Lstat(path)
-	if err != nil || !info.Mode().IsRegular() {
-		http.NotFound(w, r)
-		return
-	}
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filepath.Base(path)))
-	w.Header().Set("Content-Type", "application/octet-stream")
-	http.ServeFile(w, r, path)
 }
 
 func (s *Server) handleBenchJSON(w http.ResponseWriter, _ *http.Request) {
@@ -457,8 +385,6 @@ func pageHTML() string {
 						api.HtmlElement{Tag: "meta", Attributes: map[string]string{"charset": "UTF-8"}},
 						api.HtmlElement{Tag: "meta", Attributes: map[string]string{"name": "viewport", "content": "width=device-width, initial-scale=1.0"}},
 						api.HtmlElement{Tag: "title", Content: "Test Results"},
-						api.HtmlElement{Tag: "script", Attributes: map[string]string{"src": "https://cdn.tailwindcss.com"}},
-						api.HtmlElement{Tag: "script", Attributes: map[string]string{"src": "https://code.iconify.design/iconify-icon/2.0.0/iconify-icon.min.js"}},
 					),
 				},
 				api.HtmlElement{
@@ -700,72 +626,4 @@ func tasksDone() bool {
 	}
 
 	return true
-}
-
-// handleProcessMetrics returns live CPU/memory/file-descriptor stats for a
-// given PID so the UI can render metrics next to a running test when the
-// user clicks it. Returns 404 when the process has already exited so the
-// frontend can distinguish "still alive" from "gone".
-func (s *Server) handleProcessMetrics(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	pidStr := r.URL.Query().Get("pid")
-	pid, err := strconv.ParseInt(pidStr, 10, 32)
-	if err != nil || pid <= 0 {
-		http.Error(w, "pid query param required and must be a positive 32-bit integer", http.StatusBadRequest)
-		return
-	}
-	proc, err := gopsutilProcess.NewProcess(int32(pid))
-	if err != nil {
-		http.Error(w, "process not found", http.StatusNotFound)
-		return
-	}
-	running, _ := proc.IsRunning()
-	if !running {
-		http.Error(w, "process not running", http.StatusNotFound)
-		return
-	}
-	metrics, err := readProcessMetrics(proc)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, metrics)
-}
-
-type processMetrics struct {
-	PID        int     `json:"pid"`
-	Command    string  `json:"command,omitempty"`
-	Status     string  `json:"status,omitempty"`
-	CPUPercent float64 `json:"cpu_percent"`
-	RSS        uint64  `json:"rss"`
-	VMS        uint64  `json:"vms"`
-	OpenFiles  int32   `json:"open_files"`
-}
-
-func readProcessMetrics(proc *gopsutilProcess.Process) (processMetrics, error) {
-	metrics := processMetrics{PID: int(proc.Pid)}
-	var err error
-	if metrics.Command, err = proc.Cmdline(); err != nil {
-		return metrics, fmt.Errorf("read command of process %d: %w", proc.Pid, err)
-	}
-	status, err := proc.Status()
-	if err != nil {
-		return metrics, fmt.Errorf("read status of process %d: %w", proc.Pid, err)
-	}
-	metrics.Status = strings.Join(status, ", ")
-	if metrics.CPUPercent, err = proc.CPUPercent(); err != nil {
-		return metrics, fmt.Errorf("read CPU of process %d: %w", proc.Pid, err)
-	}
-	memory, err := proc.MemoryInfo()
-	if err != nil {
-		return metrics, fmt.Errorf("read memory of process %d: %w", proc.Pid, err)
-	}
-	metrics.RSS, metrics.VMS = memory.RSS, memory.VMS
-	if metrics.OpenFiles, err = proc.NumFDs(); err != nil {
-		return metrics, fmt.Errorf("read open files of process %d: %w", proc.Pid, err)
-	}
-	return metrics, nil
 }
