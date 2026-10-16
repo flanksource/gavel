@@ -122,7 +122,12 @@ type TODO struct {
 	Provider       string                `json:"provider,omitempty"`
 	Workspace      string                `json:"workspace,omitempty"`
 	ProviderState  string                `json:"provider_state,omitempty"`
-	Labels         []string              `json:"labels,omitempty"`
+	// CreatedBy is the ID of the user who created the TODO; empty in local mode.
+	CreatedBy string `json:"created_by,omitempty"`
+	// Visibility is private (seen only by its creator) or public (seen by the
+	// whole organization). Hosted mode honours it; local mode shows everything.
+	Visibility string   `json:"visibility,omitempty"`
+	Labels     []string `json:"labels,omitempty"`
 	// LabelDefinitions are the resolved presentations of Labels, in the same
 	// order. The runtime provider populates them from one definition read per
 	// request; a TODO from a source with no definition store leaves them empty

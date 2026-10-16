@@ -468,6 +468,7 @@ func (p *Provider) Create(ctx context.Context, request todos.CreateRequest) (*ty
 		Priority:     priority,
 		Status:       status,
 		Actor:        mutationActor,
+		Visibility:   native.Visibility(request.Visibility),
 	}
 	if err := p.applyLineage(ctx, request, &issueInput); err != nil {
 		return nil, err

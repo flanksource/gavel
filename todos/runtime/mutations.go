@@ -51,6 +51,11 @@ func (p *Provider) Edit(ctx context.Context, todo *types.TODO, edit todos.EditRe
 		patch.PR = edit.PR
 		hasNativeChange = true
 	}
+	if edit.Visibility != nil {
+		visibility := native.Visibility(*edit.Visibility)
+		patch.Visibility = &visibility
+		hasNativeChange = true
+	}
 	if edit.Title != nil {
 		patch.Title = edit.Title
 		hasNativeChange = true

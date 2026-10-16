@@ -73,6 +73,10 @@ func (p *Provider) todoFromIssue(
 	todo.ExecutionState = string(issue.ExecutionState)
 	todo.Provider = todos.ProviderDB
 	todo.ProviderState = string(issue.Status)
+	todo.Visibility = string(issue.Visibility)
+	if issue.CreatedBy != nil {
+		todo.CreatedBy = issue.CreatedBy.String()
+	}
 	todo.Workspace = workspaceName(workspace)
 	todo.Labels = append([]string(nil), issue.Labels...)
 	if len(todo.Labels) > 0 {
