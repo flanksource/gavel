@@ -238,7 +238,7 @@ func TestEveryHostedRunGoesToASandbox(t *testing.T) {
 	require.NotNil(t, req.PRs, "and reads linked PRs with the organization's GitHub App")
 	_, _, err = req.PRs(context.Background(), "https://dev.azure.com/acme/app/_git/app/pullrequest/7")
 	require.EqualError(t, err, "hosted todos work on GitHub PRs; https://dev.azure.com/acme/app/_git/app/pullrequest/7 isn't one")
-	assert.False(t, req.Approvals, "a sandboxed run can't ask for approvals")
+	assert.True(t, req.Approvals, "a sandboxed run asks serve for approvals")
 
 	_, err = (&Server{}).continuationRequest(context.Background(), hosted, continuation)
 	require.ErrorIs(t, err, errAgentRunsNeedSandbox)
@@ -317,6 +317,59 @@ func TestHostedTodoRunsBelongToTheTodosCreator(t *testing.T) {
 	executor.mu.Lock()
 	assert.Equal(t, 1, executor.canceled, "stopping the run cancels its sandbox job")
 	executor.mu.Unlock()
+	var outcomes int64
+	require.Eventually(t, func() bool {
+		require.NoError(t, db.Raw(`SELECT count(*) FROM todo_issue_events WHERE issue_id = ? AND kind = 'lifecycle_outcome'`, todo).Scan(&outcomes).Error)
+		return outcomes == 1
+	}, 30*time.Second, 50*time.Millisecond, "the stopped run's outcome reached the todo")
+}
+
+func TestHostedTriageNewRunsWithItsToolsOnServe(t *testing.T) {
+	db, _, org := openOrgDB(t)
+	t.Setenv("HOME", t.TempDir())
+	creator := uuid.New()
+	require.NoError(t, db.Exec(`INSERT INTO users (id, issuer, clerk_user_id) VALUES (?, 'https://clerk.example', 'user_ada')`, creator).Error)
+	dataDir := t.TempDir()
+	repo := pushedRepo(t, db, org, dataDir, "app")
+	workspace := "repo:" + repo.String()
+	relay := &remote.Relay{}
+	logs := blob.Local(t.TempDir())
+	dispatcher := &sandbox.Dispatcher{
+		DB: db, Image: "runner", Server: "https://gavel.example", TokenKey: []byte(strings.Repeat("k", 32)),
+		Logs: func(uuid.UUID) blob.Store { return logs }, Limits: sandbox.Limits{Timeout: time.Minute},
+		Executor: &inProcessExecutor{db: db, relay: relay, agent: workingAgent{}, bareDir: func(id uuid.UUID) string {
+			return filepath.Join(dataDir, "repos", org.String(), id.String()+".git")
+		}},
+	}
+	srv := &Server{}
+	srv.SetOrg(org, db)
+	srv.SetHostedMode(true)
+	srv.SetHostedWorkspaces(HostedWorkspaces{DB: db, Sources: &sandbox.Sources{DataDir: dataDir}})
+	srv.SetAgentRuns(AgentRuns{Dispatcher: dispatcher, Relay: relay})
+	base := serveActingAs(t, srv, org)
+	_, created := hostedCall(t, base, http.MethodPost, "/api/todos", creator, "org:member", map[string]any{"dir": workspace, "title": "Fix the build"})
+	todo := created["id"].(string)
+
+	status, started := hostedCall(t, base, http.MethodPost, "/api/todos/run", creator, "org:member", map[string]any{"dir": workspace, "ref": todo, "step": "triage.new"})
+	require.Equal(t, http.StatusOK, status, started)
+
+	var spec string
+	require.Eventually(t, func() bool {
+		require.NoError(t, db.Raw(`SELECT spec->>'agent' FROM sandbox_runs WHERE todo_id = ?`, todo).Scan(&spec).Error)
+		return spec != ""
+	}, 30*time.Second, 50*time.Millisecond)
+	var job remote.Job
+	require.NoError(t, json.Unmarshal([]byte(spec), &job))
+	var tools []string
+	for _, tool := range job.Tools {
+		tools = append(tools, tool.Name)
+	}
+	assert.ElementsMatch(t, []string{"todo_search", "todo_get", "triage_prepare", "triage_review"}, tools, "the job calls serve for triage.new's tools")
+	assert.True(t, job.Approvals, "and asks serve for the person's approval of the proposal")
+
+	stop := map[string]any{"ref": todo, "promptRunId": started["promptRunId"]}
+	status, stopped := hostedCall(t, base, http.MethodPost, "/api/todos/session/stop?dir="+workspace, creator, "org:member", stop)
+	require.Equal(t, http.StatusAccepted, status, stopped)
 	var outcomes int64
 	require.Eventually(t, func() bool {
 		require.NoError(t, db.Raw(`SELECT count(*) FROM todo_issue_events WHERE issue_id = ? AND kind = 'lifecycle_outcome'`, todo).Scan(&outcomes).Error)

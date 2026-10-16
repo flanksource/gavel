@@ -8,8 +8,6 @@ import (
 
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/captain/pkg/promptrun"
-	todoprompt "github.com/flanksource/gavel/todos/prompt"
-	"github.com/flanksource/gavel/todos/types"
 )
 
 // RemoteRunner runs a step's prompt somewhere else and returns its result, as promptrun.Run
@@ -30,18 +28,14 @@ type RemoteRun struct {
 	Admitted func() error
 }
 
-// remoteRunnable refuses a step a remote runner can't run yet: one whose tools read todos
-// through the provider while the agent works, and one that resumes an agent session, whose
-// transcript the sandbox doesn't have.
-func (h *Host) remoteRunnable(step Step, todo *types.TODO, definition todoprompt.Definition, opts RunOptions) error {
+// remoteRunnable refuses a step a remote runner can't run: one that resumes an agent session,
+// whose transcript the sandbox doesn't have.
+func (h *Host) remoteRunnable(step Step, opts RunOptions) error {
 	if h.Remote == nil {
 		return nil
 	}
 	if opts.Resume {
 		return fmt.Errorf("step %s resumes an agent session, which a run executing elsewhere can't do yet: start a fresh run", step.Name)
-	}
-	if definition.Envelope == todoprompt.EnvelopeTriageNew {
-		return fmt.Errorf("step %s reads todos while it runs, which a run executing elsewhere can't do yet", step.Name)
 	}
 	return nil
 }

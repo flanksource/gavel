@@ -98,12 +98,6 @@ var _ = Describe("a host whose runs execute elsewhere", func() {
 		Expect(runner.runs[0].Input.Resolved.Spec.Prompt.User).To(ContainSubstring("Implement the thing"))
 	})
 
-	It("refuses a step whose tools read todos through the provider", func() {
-		host.Remote = &loopbackRunner{}
-		_, err := host.RunStep(ctx, hostTodo(), stepNamed(host.Def, "triage.new"), lifecycle.RunOptions{})
-		Expect(err).To(MatchError("step triage.new reads todos while it runs, which a run executing elsewhere can't do yet"))
-	})
-
 	It("refuses to resume a session", func() {
 		host.Remote = &loopbackRunner{}
 		_, err := host.RunStep(ctx, hostTodo(), stepNamed(host.Def, "run"), lifecycle.RunOptions{Resume: true})

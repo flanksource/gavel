@@ -198,7 +198,7 @@ func (h *Host) prepare(ctx context.Context, todo *types.TODO, step Step, lc Cont
 		return nil, &ConfigurationError{Err: err}
 	}
 	class := definition.Class
-	if err := h.remoteRunnable(step, todo, definition, opts); err != nil {
+	if err := h.remoteRunnable(step, opts); err != nil {
 		return nil, err
 	}
 	stepSpec, err := expandSpec(step.Spec, map[string]any{VarSubject: lc.Subject})

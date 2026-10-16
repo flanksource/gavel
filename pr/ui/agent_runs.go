@@ -51,9 +51,9 @@ func requireTodoChangeable(ctx context.Context, todo *types.TODO) error {
 var errAgentRunsNeedSandbox = errors.New("agent runs need a sandbox: start gavel serve with --sandbox")
 
 // attachRemote runs req in a sandbox when source is one of a hosted organization's repositories,
-// without approvals, which a sandboxed run can't ask for, and only for the todo's creator or an
-// org admin: the run writes as a system job, so this is where the request's user is checked. A
-// local source's run is left as it is.
+// and only for the todo's creator or an org admin: the run writes as a system job, so this is
+// where the request's user is checked. A sandboxed run's tool calls and approvals are answered
+// on serve. A local source's run is left as it is.
 func (s *Server) attachRemote(ctx context.Context, source todoSource, req *run.Request) error {
 	if source.Hosted == nil {
 		return nil
@@ -65,8 +65,7 @@ func (s *Server) attachRemote(ctx context.Context, source todoSource, req *run.R
 	if err != nil {
 		return err
 	}
-	req.Remote, req.Approvals = runner, false
-	req.PRs = s.organizationPRs
+	req.Remote, req.PRs = runner, s.organizationPRs
 	return nil
 }
 
