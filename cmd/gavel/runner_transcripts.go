@@ -85,7 +85,7 @@ func (u *transcriptUploader) upload(ctx context.Context, source, name, path stri
 	}
 	defer file.Close()
 	query := url.Values{"source": {source}, "name": {name}}
-	resp, err := u.api.request(ctx, http.MethodPost, "transcripts?"+query.Encode(), file)
+	resp, err := u.api.Do(ctx, http.MethodPost, "transcripts?"+query.Encode(), file)
 	if err != nil {
 		return fmt.Errorf("upload %s: %w", name, err)
 	}

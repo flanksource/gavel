@@ -21,6 +21,7 @@ import (
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/commons-db/shell"
 	"github.com/flanksource/gavel/sandbox"
+	"github.com/flanksource/gavel/sandbox/runclient"
 	"github.com/flanksource/gavel/todos/remote"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -363,7 +364,7 @@ func TestTranscriptUploaderUploadsOnlyWhatChanged(t *testing.T) {
 	fake := &fakeRunAPI{token: "run-token"}
 	server := httptest.NewServer(fake.handler(run))
 	t.Cleanup(server.Close)
-	uploader := &transcriptUploader{api: runAPI{server: server.URL, token: "run-token", run: run.String(), client: http.DefaultClient}, home: home}
+	uploader := &transcriptUploader{api: runAPI{&runclient.Client{Server: server.URL, Token: "run-token", Run: run.String(), HTTP: http.DefaultClient}}, home: home}
 	dir := filepath.Join(home, ".codex", "sessions", "2026", "10", "16")
 	require.NoError(t, os.MkdirAll(dir, 0o755))
 	path := filepath.Join(dir, "rollout-1.jsonl")

@@ -15,11 +15,11 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 
 	captainai "github.com/flanksource/captain/pkg/ai"
 	"github.com/flanksource/captain/pkg/promptrun"
 	"github.com/flanksource/gavel/sandbox"
+	"github.com/flanksource/gavel/sandbox/runclient"
 	"github.com/flanksource/gavel/snapshots"
 	"github.com/flanksource/gavel/todos/remote"
 	"github.com/flanksource/gavel/verify"
@@ -66,17 +66,17 @@ type runnerOptions struct {
 
 // runnerExec runs the sandbox job and returns its exit code.
 func runnerExec(ctx context.Context, opts runnerOptions) (int, error) {
-	server, token, envRun := opts.Getenv("GAVEL_SERVER"), opts.Getenv("GAVEL_RUN_TOKEN"), opts.Getenv("GAVEL_RUN_ID")
 	if opts.Getenv("GAVEL_DB") != "off" {
 		return 0, errors.New("gavel runner exec needs GAVEL_DB=off: a sandbox job never reaches a database")
 	}
-	if server == "" || token == "" || envRun == "" {
-		return 0, errors.New("GAVEL_SERVER, GAVEL_RUN_TOKEN and GAVEL_RUN_ID must be set; gavel runner exec runs inside a sandbox job")
+	client, err := runclient.FromEnv(opts.Getenv)
+	if err != nil {
+		return 0, fmt.Errorf("%w; gavel runner exec runs inside a sandbox job", err)
 	}
-	if opts.Run != envRun {
-		return 0, fmt.Errorf("--run %s doesn't match GAVEL_RUN_ID %s", opts.Run, envRun)
+	if opts.Run != client.Run {
+		return 0, fmt.Errorf("--run %s doesn't match GAVEL_RUN_ID %s", opts.Run, client.Run)
 	}
-	api := runAPI{server: strings.TrimRight(server, "/"), token: token, run: envRun, client: &http.Client{Timeout: 10 * time.Minute}}
+	api := runAPI{client}
 
 	var spec sandbox.RunSpec
 	if err := api.getJSON(ctx, "spec", &spec); err != nil {
@@ -164,7 +164,7 @@ func jobCommand(spec sandbox.RunSpec, src string) (string, []string, error) {
 func runAgentJob(ctx context.Context, api runAPI, spec sandbox.RunSpec, src string, agent captainai.Provider, output io.Writer) error {
 	var job remote.Job
 	if err := json.Unmarshal(spec.Agent, &job); err != nil {
-		return fmt.Errorf("decode the agent job of run %s: %w", api.run, err)
+		return fmt.Errorf("decode the agent job of run %s: %w", api.Run, err)
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -219,14 +219,14 @@ func pushRunCommits(ctx context.Context, api runAPI, result promptrun.Result) er
 		return fmt.Errorf("read the bundle of the run's commits: %w", err)
 	}
 	defer data.Close()
-	resp, err := api.request(ctx, http.MethodPost, "commits", data)
+	resp, err := api.Do(ctx, http.MethodPost, "commits", data)
 	if err != nil {
-		return fmt.Errorf("push the commits of run %s: %w", api.run, err)
+		return fmt.Errorf("push the commits of run %s: %w", api.Run, err)
 	}
 	defer resp.Body.Close()
 	var pushed struct{ Branch, SHA string }
 	if err := json.NewDecoder(resp.Body).Decode(&pushed); err != nil {
-		return fmt.Errorf("read where run %s's commits were pushed: %w", api.run, err)
+		return fmt.Errorf("read where run %s's commits were pushed: %w", api.Run, err)
 	}
 	worktree.Branch, worktree.Head = pushed.Branch, pushed.SHA
 	return nil
@@ -258,60 +258,33 @@ func runCommandIn(ctx context.Context, dir, name string, args []string, output i
 }
 
 // runAPI calls gavel serve's run API with the job's run token.
-type runAPI struct {
-	server, token, run string
-	client             *http.Client
-}
-
-func (a runAPI) request(ctx context.Context, method, path string, body io.Reader) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(ctx, method, a.server+"/api/runs/"+a.run+"/"+path, body)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+a.token)
-	resp, err := a.client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode/100 != 2 {
-		defer resp.Body.Close()
-		data, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
-		var failure struct {
-			Error string `json:"error"`
-		}
-		if json.Unmarshal(data, &failure) == nil && failure.Error != "" {
-			return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, failure.Error)
-		}
-		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
-	}
-	return resp, nil
-}
+type runAPI struct{ *runclient.Client }
 
 func (a runAPI) getJSON(ctx context.Context, path string, out any) error {
-	resp, err := a.request(ctx, http.MethodGet, path, nil)
+	resp, err := a.Do(ctx, http.MethodGet, path, nil)
 	if err != nil {
-		return fmt.Errorf("get the %s of run %s: %w", path, a.run, err)
+		return fmt.Errorf("get the %s of run %s: %w", path, a.Run, err)
 	}
 	defer resp.Body.Close()
 	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
-		return fmt.Errorf("decode the %s of run %s: %w", path, a.run, err)
+		return fmt.Errorf("decode the %s of run %s: %w", path, a.Run, err)
 	}
 	return nil
 }
 
 func (a runAPI) download(ctx context.Context, path, to string) error {
-	resp, err := a.request(ctx, http.MethodGet, path, nil)
+	resp, err := a.Do(ctx, http.MethodGet, path, nil)
 	if err != nil {
-		return fmt.Errorf("get the %s of run %s: %w", path, a.run, err)
+		return fmt.Errorf("get the %s of run %s: %w", path, a.Run, err)
 	}
 	defer resp.Body.Close()
 	file, err := os.Create(to)
 	if err != nil {
-		return fmt.Errorf("save the %s of run %s: %w", path, a.run, err)
+		return fmt.Errorf("save the %s of run %s: %w", path, a.Run, err)
 	}
 	if _, err := io.Copy(file, resp.Body); err != nil {
 		_ = file.Close()
-		return fmt.Errorf("save the %s of run %s: %w", path, a.run, err)
+		return fmt.Errorf("save the %s of run %s: %w", path, a.Run, err)
 	}
 	return file.Close()
 }
@@ -319,11 +292,11 @@ func (a runAPI) download(ctx context.Context, path, to string) error {
 func (a runAPI) postMessage(ctx context.Context, message remote.Message) error {
 	data, err := json.Marshal(message)
 	if err != nil {
-		return fmt.Errorf("encode a %s message of run %s: %w", message.Kind, a.run, err)
+		return fmt.Errorf("encode a %s message of run %s: %w", message.Kind, a.Run, err)
 	}
-	resp, err := a.request(ctx, http.MethodPost, "messages", bytes.NewReader(data))
+	resp, err := a.Do(ctx, http.MethodPost, "messages", bytes.NewReader(data))
 	if err != nil {
-		return fmt.Errorf("send a %s message of run %s: %w", message.Kind, a.run, err)
+		return fmt.Errorf("send a %s message of run %s: %w", message.Kind, a.Run, err)
 	}
 	return resp.Body.Close()
 }
@@ -334,9 +307,9 @@ func (a runAPI) postResults(ctx context.Context, path string) error {
 		return fmt.Errorf("read results %s: %w", path, err)
 	}
 	defer file.Close()
-	resp, err := a.request(ctx, http.MethodPost, "results", file)
+	resp, err := a.Do(ctx, http.MethodPost, "results", file)
 	if err != nil {
-		return fmt.Errorf("post results %s of run %s: %w", filepath.Base(path), a.run, err)
+		return fmt.Errorf("post results %s of run %s: %w", filepath.Base(path), a.Run, err)
 	}
 	return resp.Body.Close()
 }
