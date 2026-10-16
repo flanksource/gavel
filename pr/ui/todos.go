@@ -22,6 +22,8 @@ import (
 
 type todoSource struct {
 	Dir string
+	// Hosted is the organization's repository the todos live in; nil outside hosted mode.
+	Hosted *HostedWorkspace
 }
 
 func (s *Server) handleTodos(w http.ResponseWriter, r *http.Request) {
@@ -251,16 +253,19 @@ var authorizeTodoDir = func(dir string) (string, error) {
 
 func (s *Server) todoProviderContext(ctx context.Context, source todoSource) (todos.Provider, todoSource, error) {
 	if s.workspaces != nil {
-		options, err := s.workspaces.Resolve(ctx, s.orgID(), source.Dir)
+		workspace, err := s.workspaces.Resolve(ctx, s.orgID(), source.Dir)
 		if err != nil {
 			return nil, source, err
 		}
-		provider, err := todoruntime.NewForOrg(ctx, s.orgDB, options, tenant.FromContext(ctx))
+		provider, err := todoruntime.NewForOrg(ctx, s.orgDB, workspace.Options, tenant.FromContext(ctx))
 		if err != nil {
 			return nil, source, err
 		}
-		source.Dir = options.RootPath
+		source.Dir, source.Hosted = workspace.Options.RootPath, &workspace
 		return provider, source, nil
+	}
+	if s.hosted {
+		return nil, source, errors.New("this hosted dashboard has no todo workspaces")
 	}
 	resolved, err := s.resolveTodoDir(source.Dir)
 	if err != nil {

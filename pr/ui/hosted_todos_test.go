@@ -21,13 +21,20 @@ import (
 )
 
 // hostedTodosServer serves org's hosted dashboard, acting for the user and role named in
-// the X-Test-User and X-Test-Role headers, as the Clerk middleware would.
-func hostedTodosServer(t *testing.T, db *gorm.DB, org uuid.UUID, dataDir string) *httptest.Server {
+// the X-Test-User and X-Test-Role headers, as the Clerk middleware would, and returns its URL.
+func hostedTodosServer(t *testing.T, db *gorm.DB, org uuid.UUID, dataDir string) string {
 	t.Helper()
 	srv := &Server{}
 	srv.SetOrg(org, db)
 	srv.SetHostedMode(true)
 	srv.SetHostedWorkspaces(HostedWorkspaces{DB: db, Sources: &sandbox.Sources{DataDir: dataDir}})
+	return serveActingAs(t, srv, org)
+}
+
+// serveActingAs serves srv acting for the user and role in the X-Test-User and X-Test-Role
+// headers, and returns its URL.
+func serveActingAs(t *testing.T, srv *Server, org uuid.UUID) string {
+	t.Helper()
 	handler := srv.Handler()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user := uuid.MustParse(r.Header.Get("X-Test-User"))
@@ -35,7 +42,7 @@ func hostedTodosServer(t *testing.T, db *gorm.DB, org uuid.UUID, dataDir string)
 		handler.ServeHTTP(w, r.WithContext(tenant.WithScope(r.Context(), scope)))
 	}))
 	t.Cleanup(server.Close)
-	return server
+	return server.URL
 }
 
 // pushedRepo records a pushed repository of org with one commit and returns its ID.
@@ -98,7 +105,7 @@ func TestHostedTodosLiveInTheOrgsRepositories(t *testing.T) {
 	}
 	dataDir := t.TempDir()
 	repo := pushedRepo(t, db, org, dataDir, "app")
-	base := hostedTodosServer(t, db, org, dataDir).URL
+	base := hostedTodosServer(t, db, org, dataDir)
 	workspace := "repo:" + repo.String()
 
 	status, projects := hostedCall(t, base, http.MethodGet, "/api/projects", creator, "org:member", nil)

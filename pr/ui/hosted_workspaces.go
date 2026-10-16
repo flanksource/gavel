@@ -57,30 +57,42 @@ func (w HostedWorkspaces) Projects(ctx context.Context, org uuid.UUID) ([]projec
 	return out, nil
 }
 
+// HostedWorkspace is one of the organization's repositories as a todo workspace, checked out at
+// SHA, its default branch's commit.
+type HostedWorkspace struct {
+	Options todoruntime.WorkspaceOptions
+	Repo    sandbox.Repo
+	SHA     string
+}
+
 // Resolve checks out the repository ref names and returns its workspace. ref is repo:<id>, or
 // the repository's checkout path as an earlier response gave it.
-func (w HostedWorkspaces) Resolve(ctx context.Context, org uuid.UUID, ref string) (todoruntime.WorkspaceOptions, error) {
+func (w HostedWorkspaces) Resolve(ctx context.Context, org uuid.UUID, ref string) (HostedWorkspace, error) {
 	ref = strings.TrimSpace(ref)
 	id, ok := w.repoID(org, ref)
 	if !ok {
-		return todoruntime.WorkspaceOptions{}, fmt.Errorf("todo workspace %q %w: name it repo:<id>", ref, errHostedWorkspace)
+		return HostedWorkspace{}, fmt.Errorf("todo workspace %q %w: name it repo:<id>", ref, errHostedWorkspace)
 	}
 	repos, err := w.repos(ctx, org, &id)
 	if err != nil {
-		return todoruntime.WorkspaceOptions{}, err
+		return HostedWorkspace{}, err
 	}
 	if len(repos) == 0 {
-		return todoruntime.WorkspaceOptions{}, fmt.Errorf("%w: todo workspace %q %w", ErrProjectNotFound, ref, errHostedWorkspace)
+		return HostedWorkspace{}, fmt.Errorf("%w: todo workspace %q %w", ErrProjectNotFound, ref, errHostedWorkspace)
 	}
 	checkout, err := w.Sources.Checkout(ctx, repos[0])
 	if err != nil {
-		return todoruntime.WorkspaceOptions{}, err
+		return HostedWorkspace{}, err
 	}
-	options := todoruntime.WorkspaceOptions{Name: repos[0].Name, RootPath: checkout.Dir}
+	workspace := HostedWorkspace{
+		Options: todoruntime.WorkspaceOptions{Name: repos[0].Name, RootPath: checkout.Dir},
+		Repo:    repos[0],
+		SHA:     checkout.SHA,
+	}
 	if repos[0].Source == "github" {
-		options.Repositories = []string{repos[0].Name}
+		workspace.Options.Repositories = []string{repos[0].Name}
 	}
-	return options, nil
+	return workspace, nil
 }
 
 func (w HostedWorkspaces) repoID(org uuid.UUID, ref string) (uuid.UUID, bool) {

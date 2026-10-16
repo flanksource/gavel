@@ -174,6 +174,8 @@ type Server struct {
 	// workspaces are a hosted organization's repositories as todo workspaces;
 	// nil serves todos from the host's projects.
 	workspaces *HostedWorkspaces
+	// agentRuns runs hosted todos' steps in sandbox jobs; nil without a sandbox.
+	agentRuns *AgentRuns
 }
 
 // SetOrg scopes the Server's stores to org, whose settings live in db. Call it

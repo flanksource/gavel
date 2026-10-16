@@ -75,7 +75,7 @@ var _ = Describe("hosted mode routes", func() {
 
 	It("answers agent run endpoints with 501 instead of running them", func() {
 		base := hostedTestServer()
-		for _, path := range []string{"/api/todos/run", "/api/todos/plan/approve", "/api/todos/plan/revise", "/api/todos/answer",
+		for _, path := range []string{"/api/todos/plan/approve", "/api/todos/plan/revise", "/api/todos/answer",
 			"/api/v1/todo/abc/run", "/api/v1/todo/abc/plan", "/api/v1/todo/abc/triage"} {
 			resp := doRequest(newRequest(http.MethodPost, base+path, nil, strings.NewReader(`{}`)))
 			Expect(resp.StatusCode).To(Equal(http.StatusNotImplemented), path)
