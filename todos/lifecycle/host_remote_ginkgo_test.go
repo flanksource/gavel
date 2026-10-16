@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"os"
 	"os/exec"
+	"path/filepath"
 
 	captainai "github.com/flanksource/captain/pkg/ai"
 	"github.com/flanksource/captain/pkg/api"
@@ -104,5 +105,21 @@ var _ = Describe("a host whose runs execute elsewhere", func() {
 		todo.PR = &types.PR{Number: 7, URL: "https://github.com/acme/app/pull/7"}
 		_, err := host.RunStep(ctx, todo, stepNamed(host.Def, "run"), lifecycle.RunOptions{})
 		Expect(err).To(MatchError(ContainSubstring("can't run elsewhere yet")))
+	})
+})
+
+var _ = Describe("a host for a hosted repository", func() {
+	It("reads the repository's configuration alone", func() {
+		home, repo := GinkgoT().TempDir(), GinkgoT().TempDir()
+		GinkgoT().Setenv("HOME", home)
+		Expect(os.WriteFile(filepath.Join(home, ".gavel.yaml"), []byte("ssh:\n  cmd: make deploy-from-the-host\n"), 0o644)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(repo, ".gavel.yaml"), []byte("ssh:\n  cmd: make check\n"), 0o644)).To(Succeed())
+
+		host, err := lifecycle.NewRepositoryHost(&fakeProvider{}, repo, lifecycle.HostDashboard)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(host.Config.SSH.Cmd).To(Equal("make check"))
+		Expect(host.WorkDir).To(Equal(repo))
+		Expect(*host.Saved).To(BeZero(), "the serve host's Captain defaults don't apply")
 	})
 })

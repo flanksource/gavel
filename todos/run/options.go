@@ -58,6 +58,9 @@ type Request struct {
 	// caller was told about, and a cmux run would be watched on a session id
 	// nothing writes to. Nil means Start resolves for itself.
 	Prepared *Prepared
+	// Remote, when set, runs the step's prompt elsewhere — a sandbox job — through a host
+	// that reads the repository's own configuration alone. Nil runs it in this process.
+	Remote lifecycle.RemoteRunner
 }
 
 // Options is what a caller decides about one step run. Everything else — which

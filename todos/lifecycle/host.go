@@ -45,6 +45,25 @@ func NewHost(provider todos.Provider, workDir string, kind HostKind) (*Host, err
 	if err != nil {
 		return nil, &ConfigurationError{Err: fmt.Errorf("load .gavel.yaml: %w", err)}
 	}
+	saved, _, err := captainconfig.Load()
+	if err != nil {
+		return nil, &ConfigurationError{Err: fmt.Errorf("load Captain defaults: %w", err)}
+	}
+	return newHost(provider, workDir, kind, cfg, &saved)
+}
+
+// NewRepositoryHost is NewHost for a hosted repository checked out at workDir: its
+// configuration is the repository's own .gavel.yaml alone, and none of this host's
+// configuration or Captain defaults apply.
+func NewRepositoryHost(provider todos.Provider, workDir string, kind HostKind) (*Host, error) {
+	cfg, err := verify.LoadRepositoryGavelConfig(workDir)
+	if err != nil {
+		return nil, &ConfigurationError{Err: fmt.Errorf("load .gavel.yaml: %w", err)}
+	}
+	return newHost(provider, workDir, kind, cfg, &captainconfig.Config{})
+}
+
+func newHost(provider todos.Provider, workDir string, kind HostKind, cfg verify.GavelConfig, saved *captainconfig.Config) (*Host, error) {
 	def, err := LoadWith(cfg.Todos.Lifecycle, workDir)
 	if err != nil {
 		return nil, &ConfigurationError{Err: err}
@@ -53,11 +72,7 @@ func NewHost(provider todos.Provider, workDir string, kind HostKind) (*Host, err
 	if err != nil {
 		return nil, &ConfigurationError{Err: err}
 	}
-	saved, _, err := captainconfig.Load()
-	if err != nil {
-		return nil, &ConfigurationError{Err: fmt.Errorf("load Captain defaults: %w", err)}
-	}
-	return &Host{Provider: provider, Def: engine, Config: cfg, WorkDir: workDir, Kind: kind, Saved: &saved}, nil
+	return &Host{Provider: provider, Def: engine, Config: cfg, WorkDir: workDir, Kind: kind, Saved: saved}, nil
 }
 
 // Subject projects the todo onto the variables the lifecycle declares. Every
