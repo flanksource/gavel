@@ -200,7 +200,7 @@ func TestDispatcherRejectsAnUnknownKind(t *testing.T) {
 func TestDispatcherStartsAnAgentRunUnderTheCallersID(t *testing.T) {
 	executor := &memoryExecutor{output: "ok\n"}
 	dispatcher, _, _, org := newDispatcher(t, executor)
-	dispatcher.SecretEnv = map[string]string{"ANTHROPIC_API_KEY": "model-key"}
+	dispatcher.SecretEnv = map[string]string{"ANTHROPIC_API_KEY": "model-key", "GAVEL_RUN_TOKEN": "forged"}
 	id, todo := uuid.New(), uuid.New()
 	job := json.RawMessage(`{"root":"/srv/repo"}`)
 
@@ -209,7 +209,7 @@ func TestDispatcherStartsAnAgentRunUnderTheCallersID(t *testing.T) {
 	assert.Equal(t, id, run.ID)
 	require.Len(t, executor.submitted, 1)
 	assert.Equal(t, "model-key", executor.submitted[0].SecretEnv["ANTHROPIC_API_KEY"])
-	assert.NotEmpty(t, executor.submitted[0].SecretEnv["GAVEL_RUN_TOKEN"])
+	assert.NotContains(t, []string{"", "forged"}, executor.submitted[0].SecretEnv["GAVEL_RUN_TOKEN"], "a configured secret never replaces the run's token")
 
 	record, err := LoadRun(context.Background(), dispatcher.DB, id)
 	require.NoError(t, err)
