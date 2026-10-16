@@ -26,6 +26,9 @@ var inJob = func() *runclient.Client {
 	return client
 }
 
+// InJob reports whether this process runs inside a sandbox job, whose PR client is serve's.
+func InJob() bool { return inJob() != nil }
+
 // jobClient is a PR client inside a sandbox job.
 type jobClient struct{ api *runclient.Client }
 

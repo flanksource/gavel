@@ -12,12 +12,14 @@ import (
 	"github.com/flanksource/gavel/prwatch"
 )
 
-func runAzurePRStatus(opts PRStatusOptions, target statusTarget, client provider.Client, workDir string) (any, error) {
+// runClientPRStatus watches a PR through client alone, for Azure DevOps and inside a sandbox job,
+// where serve answers for the job's PR. where names it in what isn't supported there.
+func runClientPRStatus(opts PRStatusOptions, target statusTarget, client provider.Client, workDir, where string) (any, error) {
 	if opts.AIFix {
-		return nil, fmt.Errorf("--ai-fix is not supported for Azure DevOps")
+		return nil, fmt.Errorf("--ai-fix is not supported in %s", where)
 	}
 	if opts.Worktree {
-		return nil, fmt.Errorf("--worktree is not supported for Azure DevOps")
+		return nil, fmt.Errorf("--worktree is not supported in %s", where)
 	}
 	interval, err := time.ParseDuration(opts.Interval)
 	if err != nil || interval <= 0 {
