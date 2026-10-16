@@ -219,7 +219,7 @@ func fixturePromptFenceSchema(description string) fixtureJSONSchema {
 func fixtureGoProfilesSchema() fixtureJSONSchema {
 	return fixtureJSONSchema{
 		"type":        "object",
-		"description": "Named Go pprof outputs checked after each exec when --profile is enabled. Missing outputs are valid.",
+		"description": "Named Go pprof outputs ingested into the run's goprof trace after each exec when --profile is enabled, one window per file that downloads as pprof. The name (cpu, heap, allocs, mutex, block, goroutine) says which profile it is; another name is read from the profile. Missing outputs are valid.",
 		"additionalProperties": fixtureJSONSchema{
 			"type":                 "object",
 			"additionalProperties": false,

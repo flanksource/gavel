@@ -2,6 +2,7 @@ package traces
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"maps"
 
@@ -44,6 +45,19 @@ func (c *Capture) Mark(ctx context.Context) (int64, error) {
 		return 0, fmt.Errorf("mark %s trace: %w", c.kind, err)
 	}
 	return seq, nil
+}
+
+// Checkpoint has the capture take the reading params (its kind's checkpoint
+// params) ask for, committed when it returns.
+func (c *Capture) Checkpoint(ctx context.Context, params any) error {
+	raw, err := json.Marshal(params)
+	if err != nil {
+		return fmt.Errorf("encode %s checkpoint params: %w", c.kind, err)
+	}
+	if err := c.host.runtime.Checkpoint(tracing.WithCheckpointParams(ctx, raw), c.managed); err != nil {
+		return fmt.Errorf("checkpoint %s trace: %w", c.kind, err)
+	}
+	return nil
 }
 
 // Ref names the capture's rows after seq after, through seq to.

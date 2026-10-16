@@ -110,7 +110,7 @@ var _ = Describe("trace host", func() {
 	It("refuses an unknown kind by naming the registered ones", func() {
 		host := openHost(GinkgoT().TempDir())
 		_, err := host.Start("smtp", nil)
-		Expect(err).To(MatchError(ContainSubstring(`unknown trace kind "smtp" (registered: http, http_proxy, pg_proxy, process_samples, process_tree, sql_statements, terminal)`)))
+		Expect(err).To(MatchError(ContainSubstring(`unknown trace kind "smtp" (registered: goprof, http, http_proxy, pg_proxy, process_samples, process_tree, sql_statements, stacks, terminal)`)))
 	})
 
 	It("refuses params the kind refuses before starting anything", func() {

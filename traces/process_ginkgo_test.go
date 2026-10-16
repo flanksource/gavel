@@ -20,6 +20,7 @@ import (
 	"github.com/flanksource/commons-db/cmd/query/traceserve"
 	"github.com/flanksource/commons-db/tracing"
 	"github.com/flanksource/commons-db/tracing/process"
+	"github.com/flanksource/commons-db/tracing/stacks"
 
 	"github.com/flanksource/gavel/traces"
 )
@@ -35,8 +36,8 @@ func serveHost(host *traces.Host) served {
 	return served{server: server}
 }
 
-func (s served) post(path string) int {
-	response, err := s.server.Client().Post(s.server.URL+path, "application/json", nil)
+func (s served) post(path, body string) int {
+	response, err := s.server.Client().Post(s.server.URL+path, "application/json", strings.NewReader(body))
 	Expect(err).ToNot(HaveOccurred())
 	Expect(response.Body.Close()).To(Succeed())
 	return response.StatusCode
@@ -73,42 +74,91 @@ func byCommand(records []map[string]any) map[string]map[string]any {
 	return commands
 }
 
-var _ = Describe("process trace", func() {
-	It("serves the tree under the root and its processes' samples through query", func() {
-		cmd := exec.Command("sh", "-c", "sleep 30 & wait")
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-		Expect(cmd.Start()).To(Succeed())
-		root := cmd.Process.Pid
-		go func() { _ = cmd.Wait() }()
-		DeferCleanup(func() { _ = syscall.Kill(-root, syscall.SIGKILL) })
+// startShell starts a shell whose child sleeps, in its own process group.
+func startShell() int {
+	cmd := exec.Command("sh", "-c", "sleep 30 & wait")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Env = append(os.Environ(), "GAVEL_TRACE_PROBE=1")
+	Expect(cmd.Start()).To(Succeed())
+	root := cmd.Process.Pid
+	go func() { _ = cmd.Wait() }()
+	DeferCleanup(func() { _ = syscall.Kill(-root, syscall.SIGKILL) })
+	return root
+}
 
+func startTrace(host *traces.Host, options traces.ProcessTraceOptions) *traces.ProcessTrace {
+	trace, err := host.StartProcessTrace(options)
+	Expect(err).ToNot(HaveOccurred())
+	DeferCleanup(func() { Expect(trace.Stop(context.Background())).To(Succeed()) })
+	return trace
+}
+
+var _ = Describe("process trace", func() {
+	It("serves the tree under the root and its processes' samples through query, reading no facet unarmed", func() {
+		root := startShell()
 		host := openHost(GinkgoT().TempDir())
-		trace, err := host.StartProcessTrace(root)
-		Expect(err).ToNot(HaveOccurred())
-		DeferCleanup(func() { Expect(trace.Stop(context.Background())).To(Succeed()) })
+		trace := startTrace(host, traces.ProcessTraceOptions{RootPID: root})
 		refs := trace.Refs()
-		Expect(refs.Tree.Kind).To(Equal(process.TreeKind))
-		Expect(refs.Samples.Kind).To(Equal(process.SamplesKind))
+		Expect([]string{refs.Tree.Kind, refs.Samples.Kind, refs.Stacks.Kind}).To(Equal([]string{process.TreeKind, process.SamplesKind, stacks.Kind}))
 		store := serveHost(host)
 
 		Eventually(func() map[string]map[string]any { return byCommand(store.records(refs.Tree)) }).WithTimeout(5 * time.Second).
 			Should(HaveKeyWithValue("sleep 30", HaveKeyWithValue("ppid", BeEquivalentTo(root))))
 		sleep := byCommand(store.records(refs.Tree))["sleep 30"]
+		Expect(sleep).To(HaveKeyWithValue("environment", BeNil()))
 		Eventually(func() []map[string]any { return store.records(refs.Samples) }).WithTimeout(5 * time.Second).
 			Should(ContainElement(HaveKeyWithValue("key", sleep["key"])))
+		Expect(store.records(refs.Samples)).To(HaveEach(HaveKeyWithValue("openFiles", BeNil())))
 	})
 
-	It("checkpoints the run's own goroutines onto its root through the session it names", func() {
+	It("arms every facet and reads each process's environment when watched in a UI", func() {
+		root := startShell()
 		host := openHost(GinkgoT().TempDir())
-		trace, err := host.StartProcessTrace(os.Getpid())
-		Expect(err).ToNot(HaveOccurred())
-		DeferCleanup(func() { Expect(trace.Stop(context.Background())).To(Succeed()) })
+		trace := startTrace(host, traces.ProcessTraceOptions{RootPID: root, Facets: true})
 		store := serveHost(host)
 
-		Expect(store.post("/api/v1/sessions/" + trace.Session() + "/checkpoint")).To(Equal(http.StatusOK))
-		Expect(store.records(trace.Refs().Tree)).To(ContainElement(And(
-			HaveKeyWithValue("isRoot", true),
-			HaveKeyWithValue("stack", ContainSubstring("goroutine ")),
+		Eventually(func() map[string]map[string]any { return byCommand(store.records(trace.Refs().Tree)) }).WithTimeout(5 * time.Second).
+			Should(HaveKeyWithValue("sleep 30", HaveKeyWithValue("environment", HaveKeyWithValue("GAVEL_TRACE_PROBE", "1"))))
+		Eventually(func() []map[string]any { return store.records(trace.Refs().Samples) }).WithTimeout(5 * time.Second).
+			Should(ContainElement(And(
+				HaveKeyWithValue("openFiles", BeNumerically(">", 0)), HaveKeyWithValue("openFileList", Not(BeEmpty())),
+				HaveKeyWithValue("sockets", Not(BeNil())), HaveKeyWithValue("ports", Not(BeNil())), HaveKeyWithValue("connections", Not(BeNil())),
+			)))
+	})
+
+	It("dumps the run's own goroutines into stacks through the session it names", func() {
+		host := openHost(GinkgoT().TempDir())
+		trace := startTrace(host, traces.ProcessTraceOptions{RootPID: os.Getpid()})
+		store := serveHost(host)
+
+		Expect(store.post("/api/v1/sessions/"+trace.Sessions().Stacks+"/checkpoint", `{"transport": "inprocess", "reason": "manual"}`)).To(Equal(http.StatusOK))
+		Expect(store.records(trace.Refs().Stacks)).To(ContainElement(And(
+			HaveKeyWithValue("pid", BeEquivalentTo(os.Getpid())),
+			HaveKeyWithValue("transport", stacks.TransportInProcess),
+			HaveKeyWithValue("reason", "manual"),
+			HaveKeyWithValue("frames", ContainElement(HaveKeyWithValue("func", ContainSubstring("traces_test")))),
+		)))
+	})
+
+	It("records a dump taken elsewhere on the process it names, with its reason", func() {
+		root := startShell()
+		host := openHost(GinkgoT().TempDir())
+		trace := startTrace(host, traces.ProcessTraceOptions{RootPID: root})
+		store := serveHost(host)
+		Eventually(func() map[string]map[string]any { return byCommand(store.records(trace.Refs().Tree)) }).WithTimeout(5 * time.Second).
+			Should(HaveKey("sleep 30"))
+		key := byCommand(store.records(trace.Refs().Tree))["sleep 30"]["key"].(string)
+
+		dump := "goroutine 1 [chan receive]:\nmain.main()\n\t/src/main.go:7 +0x1d\n"
+		Expect(trace.CheckpointStacks(context.Background(), stacks.CheckpointParams{
+			Key: key, Reason: "package-timeout:./pkg",
+			Dump: &stacks.Dump{Format: stacks.FormatGo, Text: dump, CollectedAt: time.Now().UTC()},
+		})).To(Succeed())
+		Expect(store.records(trace.Refs().Stacks)).To(ConsistOf(And(
+			HaveKeyWithValue("key", key),
+			HaveKeyWithValue("goroutineId", BeEquivalentTo(1)),
+			HaveKeyWithValue("state", "chan receive"),
+			HaveKeyWithValue("reason", "package-timeout:./pkg"),
 		)))
 	})
 })

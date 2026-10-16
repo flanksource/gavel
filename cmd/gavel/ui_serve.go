@@ -92,14 +92,6 @@ func runUIServe(opts UIServeOptions) (any, error) {
 
 	srv := testui.NewServer()
 	if len(opts.ResultsFiles) > 0 {
-		if path, err := filepath.Abs(opts.ResultsFiles[0]); err == nil {
-			for dir := filepath.Dir(path); dir != filepath.Dir(dir); dir = filepath.Dir(dir) {
-				if filepath.Base(dir) == ".gavel" {
-					srv.SetProfileRoot(filepath.Dir(dir))
-					break
-				}
-			}
-		}
 		if err := loadResults(srv, opts.ResultsFiles...); err != nil {
 			listener.Close() //nolint:errcheck
 			return nil, fmt.Errorf("load results %v: %w", opts.ResultsFiles, err)

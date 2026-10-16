@@ -21,11 +21,13 @@ import (
 	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/recordstore"
 	"github.com/flanksource/commons-db/tracing"
+	"github.com/flanksource/commons-db/tracing/goprof"
 	tracehttp "github.com/flanksource/commons-db/tracing/http"
 	"github.com/flanksource/commons-db/tracing/httpproxy"
 	"github.com/flanksource/commons-db/tracing/pgproxy"
 	"github.com/flanksource/commons-db/tracing/process"
 	"github.com/flanksource/commons-db/tracing/sqlstatements"
+	"github.com/flanksource/commons-db/tracing/stacks"
 	"github.com/flanksource/commons-db/tracing/terminal"
 
 	"github.com/flanksource/gavel/internal/httpx"
@@ -50,6 +52,7 @@ type Host struct {
 	runID   string
 	dir     string
 	runtime *tracing.Runtime
+	dumpers *stacks.Dumpers
 }
 
 // RunPrefix and RunTimestampLayout name a run: run-<UTC start>, filesystem
@@ -80,7 +83,11 @@ func Open(workDir, runID string) (*Host, error) {
 	if err != nil {
 		return nil, err
 	}
-	runtime, _, err := openStore(dir)
+	dumpers, err := NewDumpers()
+	if err != nil {
+		return nil, err
+	}
+	runtime, _, err := openStore(dir, dumpers)
 	if err != nil {
 		return nil, err
 	}
@@ -88,7 +95,13 @@ func Open(workDir, runID string) (*Host, error) {
 	runtime.Sessions = query.NewSessionRegistry(query.RegistryOptions{
 		MaxDuration: maxDuration, BeforeRead: runtime.Results.Registry.BeforeRead,
 	})
-	return &Host{runID: name, dir: dir, runtime: runtime}, nil
+	return &Host{runID: name, dir: dir, runtime: runtime, dumpers: dumpers}, nil
+}
+
+// RegisterDumper adds a stack transport the run's stacks are dumped over,
+// such as gavel's sigquit for the Go test binaries it supervises.
+func (h *Host) RegisterDumper(dumper stacks.Dumper) error {
+	return h.dumpers.Register(dumper)
 }
 
 // StoreDir is where the run runID of workDir keeps its trace store.
@@ -107,13 +120,17 @@ func Reopen(dir string) (*tracing.Runtime, func() error, error) {
 	if !info.IsDir() {
 		return nil, nil, fmt.Errorf("reopen trace store: %s is not a directory", dir)
 	}
-	return openStore(dir)
+	dumpers, err := NewDumpers()
+	if err != nil {
+		return nil, nil, err
+	}
+	return openStore(dir, dumpers)
 }
 
 // openStore opens the store in dir with every kind of the gavel catalog, the
 // way query serves a store.
-func openStore(dir string) (*tracing.Runtime, func() error, error) {
-	kinds, err := Kinds()
+func openStore(dir string, dumpers *stacks.Dumpers) (*tracing.Runtime, func() error, error) {
+	kinds, err := kindsWith(dumpers)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -139,11 +156,29 @@ func claimRunDir(root, runID string) (string, string, error) {
 	return "", "", fmt.Errorf("open trace store: no free directory for run %s in %s", runID, root)
 }
 
-// Kinds is the catalog every gavel trace store serves: the kinds a fixture
-// can arm and the process kinds the run-wide capture uses, sharing one
-// process sampler. The `http` and `sql_statements` kinds default to gavel's
-// own traffic: its HTTP feature and its own database.
+// NewDumpers are the stack transports every run dumps over: the in-process
+// one for gavel itself and the OS's native sampler for any process. A run
+// that supervises Go test binaries adds gavel's sigquit (RegisterDumper).
+func NewDumpers() (*stacks.Dumpers, error) {
+	return stacks.NewDumpers(stacks.InProcess(), stacks.Native(stacks.NativeOptions{}))
+}
+
+// Kinds is the catalog every gavel trace store serves, its stacks dumped over
+// NewDumpers.
 func Kinds() (*tracing.Kinds, error) {
+	dumpers, err := NewDumpers()
+	if err != nil {
+		return nil, err
+	}
+	return kindsWith(dumpers)
+}
+
+// kindsWith is the catalog over dumpers: the kinds a fixture can arm and the
+// process kinds the run-wide capture uses, sharing one process sampler and
+// the dumpers. The `http` and `sql_statements` kinds default to gavel's own
+// traffic: its HTTP feature and its own database. goprof reads profile files
+// only: gavel knows no pprof or gops address.
+func kindsWith(dumpers *stacks.Dumpers) (*tracing.Kinds, error) {
 	kinds := tracing.NewKinds()
 	sampler := process.NewSampler()
 	for name, plugin := range map[string]tracing.TracePlugin{
@@ -152,8 +187,10 @@ func Kinds() (*tracing.Kinds, error) {
 		pgproxy.Kind:          pgproxy.NewKind(),
 		sqlstatements.RowKind: sqlstatements.Kind().WithDefaults(sqlstatements.Params{Connections: []string{"self"}}),
 		terminal.Kind:         terminal.NewKind(),
-		process.TreeKind:      process.NewTreeKind(sampler, process.TreeOptions{}),
+		process.TreeKind:      process.NewTreeKind(sampler, process.TreeOptions{Dumpers: dumpers}),
 		process.SamplesKind:   process.NewSamplesKind(sampler),
+		stacks.Kind:           stacks.NewKind(dumpers),
+		goprof.Kind:           goprof.NewKind(nil),
 	} {
 		if err := kinds.RegisterKind(name, plugin); err != nil {
 			return nil, err

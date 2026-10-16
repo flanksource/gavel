@@ -50,7 +50,7 @@ func buildTestSnapshot(
 }
 
 func installTimeoutDiagnosticsHook(reporter *runDiagnosticsReporter) {
-	testrunner.SetCaptureGlobalDiagnostics(func() { reporter.Capture("test package timeout") })
+	testrunner.SetCaptureGlobalDiagnostics(reporter.Capture)
 }
 
 func snapshotArgs(opts testrunner.RunOptions) map[string]any {
@@ -71,6 +71,7 @@ func snapshotArgs(opts testrunner.RunOptions) map[string]any {
 		"ui":             opts.UI,
 		"addr":           opts.Addr,
 		"diagnostics":    opts.Diagnostics,
+		"process_facets": opts.ProcessFacets,
 		"skip_hooks":     opts.SkipHooks,
 		"auto_stop":      durationString(opts.AutoStop),
 		"idle_timeout":   durationString(opts.IdleTimeout),

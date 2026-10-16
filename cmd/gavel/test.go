@@ -98,6 +98,10 @@ func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
 			return nil, err
 		}
 		opts.TraceHost = trace.host
+		if trace.process != nil {
+			opts.ProcessTrace, opts.SigquitDumper = trace.process, trace.sigquit
+			diagnostics.recordOn(trace.process)
+		}
 		defer func() {
 			if err := trace.close(opts.WorkDir); err != nil {
 				logger.Warnf("close run traces: %v", err)
@@ -164,7 +168,6 @@ func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
 		uiServer.SetVersion(version)
 		uiServer.SetRunArgs(snapshotArgs(opts))
 		uiServer.SetGitInfo(gitInfo)
-		uiServer.SetProfileRoot(opts.WorkDir)
 		if err := trace.serveOn(uiServer); err != nil {
 			return nil, err
 		}
