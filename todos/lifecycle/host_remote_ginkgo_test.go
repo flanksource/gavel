@@ -99,6 +99,12 @@ var _ = Describe("a host whose runs execute elsewhere", func() {
 		Expect(err).To(MatchError("step triage.new reads todos while it runs, which a run executing elsewhere can't do yet"))
 	})
 
+	It("refuses to resume a session", func() {
+		host.Remote = &loopbackRunner{}
+		_, err := host.RunStep(ctx, hostTodo(), stepNamed(host.Def, "run"), lifecycle.RunOptions{Resume: true})
+		Expect(err).To(MatchError("step run resumes an agent session, which a run executing elsewhere can't do yet: start a fresh run"))
+	})
+
 	It("refuses a run in a terminal on this host", func() {
 		host.Remote = &loopbackRunner{}
 		_, err := host.RunStep(ctx, hostTodo(), stepNamed(host.Def, "run"), lifecycle.RunOptions{Request: api.Spec{Model: api.Model{Mode: api.ModeCmux}}})
