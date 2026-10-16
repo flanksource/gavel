@@ -70,7 +70,15 @@ func (s *Sources) PushRunCommits(ctx context.Context, repo Repo, base, branch st
 		if err != nil {
 			return "", err
 		}
-		// The mirror's origin pushes everything; this pushes the one branch, to its URL.
+		existing, err := runGit(ctx, nil, "-c", header, "ls-remote", s.githubURL(repo), "refs/heads/"+branch)
+		if err != nil {
+			return "", fmt.Errorf("look for branch %s of %s on GitHub: %w", branch, repo.label(), err)
+		}
+		if strings.TrimSpace(existing) != "" {
+			return "", fmt.Errorf("create branch %s of %s on GitHub: it already exists", branch, repo.label())
+		}
+		// The mirror's origin pushes everything; this pushes the one branch, to its URL. The lease
+		// refuses a branch created since the check above.
 		if _, err := runGit(ctx, nil, "-c", header, "-C", source, "push", "--quiet",
 			"--force-with-lease=refs/heads/"+branch+":", s.githubURL(repo), sha+":refs/heads/"+branch); err != nil {
 			return "", fmt.Errorf("create branch %s of %s on GitHub: %w", branch, repo.label(), err)
