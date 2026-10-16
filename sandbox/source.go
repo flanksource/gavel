@@ -39,7 +39,8 @@ type Sources struct {
 	// Token returns an installation token for fetching a GitHub repository.
 	Token func(ctx context.Context, installationID int64) (string, error)
 
-	mirrors sync.Map // mirror path → *sync.Mutex
+	mirrors   sync.Map // mirror path → *sync.Mutex
+	checkouts sync.Map // workspace path → *sync.Mutex
 }
 
 // Bundle writes a git bundle of ref in repo to w and returns the commit ref names.
@@ -47,17 +48,9 @@ func (s *Sources) Bundle(ctx context.Context, repo Repo, ref string, w io.Writer
 	if strings.HasPrefix(ref, "-") {
 		return "", fmt.Errorf("ref %q can't start with \"-\"", ref)
 	}
-	var dir string
-	switch repo.Source {
-	case "push":
-		dir = filepath.Join(s.DataDir, "repos", repo.Org.String(), repo.ID.String()+".git")
-	case "github":
-		var err error
-		if dir, err = s.updateMirror(ctx, repo); err != nil {
-			return "", err
-		}
-	default:
-		return "", fmt.Errorf("repository %s has source %q, not push or github", repo.ID, repo.Source)
+	dir, err := s.sourceDir(ctx, repo)
+	if err != nil {
+		return "", err
 	}
 	sha, err := runGit(ctx, nil, "-C", dir, "rev-parse", "--verify", "--end-of-options", ref+"^{commit}")
 	if err != nil {
