@@ -45,7 +45,8 @@ func loadServeProperties(path string) error {
 
 // startRetention runs a retention pass now and then every retention.interval (1h by default)
 // until ctx ends. cache supplies each organization's job logs; nil leaves them alone.
-func startRetention(ctx context.Context, db *gorm.DB, cache *ghcache.Store) error {
+// transcripts is where agent runs' uploaded transcripts are kept; empty when there are none.
+func startRetention(ctx context.Context, db *gorm.DB, cache *ghcache.Store, transcripts string) error {
 	interval, err := retention.Window("retention.interval", time.Hour)
 	if err != nil {
 		return err
@@ -54,7 +55,7 @@ func startRetention(ctx context.Context, db *gorm.DB, cache *ghcache.Store) erro
 	if err != nil {
 		return err
 	}
-	stores := retention.Stores{Recordings: recordings}
+	stores := retention.Stores{Recordings: recordings, Transcripts: transcripts}
 	if cache != nil {
 		stores.Org = cache.OrgBlobs
 	}

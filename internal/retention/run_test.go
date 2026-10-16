@@ -107,7 +107,9 @@ func TestRunDeletesWhatOutlivedItsWindow(t *testing.T) {
 		require.NoError(t, db.Exec(`INSERT INTO linter_executions (linter_name, work_dir, executed_at, duration_ms, violation_count, success) VALUES ('golangci-lint', '/w', ?, 1, 0, true)`, executed).Error)
 	}
 
-	// Sandbox runs: an old finished one with a log, a fresh one, and an unfinished old one.
+	// Sandbox runs: an old finished one with a log, a fresh one, and an unfinished old one, each
+	// with an uploaded transcript.
+	transcripts := t.TempDir()
 	oldRun, freshRun, unfinished := uuid.New(), uuid.New(), uuid.New()
 	for _, row := range []struct {
 		id       uuid.UUID
@@ -119,6 +121,9 @@ func TestRunDeletesWhatOutlivedItsWindow(t *testing.T) {
 		if row.key != "" {
 			putBlob(t, orgStore(other), row.key)
 		}
+		transcript := filepath.Join(transcripts, other.String(), row.id.String(), "claude", "session.jsonl")
+		require.NoError(t, os.MkdirAll(filepath.Dir(transcript), 0o755))
+		require.NoError(t, os.WriteFile(transcript, []byte("{}\n"), 0o644))
 	}
 
 	// Recordings, aged by modification time.
@@ -129,7 +134,7 @@ func TestRunDeletesWhatOutlivedItsWindow(t *testing.T) {
 	require.NoError(t, os.Chtimes(filepath.Join(recordingsRoot, filepath.FromSlash(oldRecording)), old, old))
 	require.NoError(t, os.Chtimes(filepath.Join(recordingsRoot, "workspaces", "abc", "run-old.json"), old, old))
 
-	report, err := Run(ctx, db, Stores{Org: orgStore, Workspace: workspace, Recordings: recordings}, now)
+	report, err := Run(ctx, db, Stores{Org: orgStore, Workspace: workspace, Recordings: recordings, Transcripts: transcripts}, now)
 	require.NoError(t, err)
 
 	assert.Equal(t, Report{JobLogs: 3, TestRuns: 3, LintRuns: 1, Recordings: 1, LinterExecutions: 1, SandboxRuns: 1}, report)
@@ -156,6 +161,8 @@ func TestRunDeletesWhatOutlivedItsWindow(t *testing.T) {
 	assert.ElementsMatch(t, []uuid.UUID{freshRun, unfinished}, sandbox, "an unfinished run stays")
 	assert.False(t, hasBlob(t, orgStore(other), "sandbox/"+oldRun.String()+".log"))
 	assert.True(t, hasBlob(t, orgStore(other), "sandbox/"+freshRun.String()+".log"))
+	assert.NoDirExists(t, filepath.Join(transcripts, other.String(), oldRun.String()), "a deleted run's transcripts go with it")
+	assert.DirExists(t, filepath.Join(transcripts, other.String(), freshRun.String()))
 
 	assert.False(t, hasBlob(t, recordings, oldRecording))
 	assert.True(t, hasBlob(t, recordings, freshRecording))

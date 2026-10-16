@@ -80,7 +80,7 @@ func TestStartRetentionRunsAtStartupAndOnEachInterval(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	require.NoError(t, startRetention(ctx, db, nil))
+	require.NoError(t, startRetention(ctx, db, nil, ""))
 	require.Eventually(t, func() bool { return remaining() == 0 }, 5*time.Second, 20*time.Millisecond, "the startup pass deletes it")
 
 	insertOld()
@@ -90,7 +90,7 @@ func TestStartRetentionRunsAtStartupAndOnEachInterval(t *testing.T) {
 func TestStartRetentionReportsAnInvalidInterval(t *testing.T) {
 	properties.Set("retention.interval", "hourly")
 	t.Cleanup(func() { properties.Set("retention.interval", "") })
-	err := startRetention(context.Background(), (*gorm.DB)(nil), nil)
+	err := startRetention(context.Background(), (*gorm.DB)(nil), nil, "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "retention.interval=hourly")
 }

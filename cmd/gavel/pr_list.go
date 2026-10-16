@@ -295,7 +295,7 @@ func runPRUI(opts PRListOptions, databaseMode serveDatabaseMode) error {
 		return err
 	}
 	if opts.retention && runtime.DB != nil {
-		if err := startRetention(ctx, runtime.DB, ghcache.Shared()); err != nil {
+		if err := startRetention(ctx, runtime.DB, ghcache.Shared(), ""); err != nil {
 			return err
 		}
 	}

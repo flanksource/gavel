@@ -70,7 +70,7 @@ func runHostedDashboard(opts DashboardOptions) error {
 		return err
 	}
 	defer stack.stop()
-	if err := startRetention(ctx, db, ghcache.Shared()); err != nil {
+	if err := startRetention(ctx, db, ghcache.Shared(), ui.TranscriptsDir(opts.DataDir)); err != nil {
 		return err
 	}
 	ui.Build = ui.BuildInfo{Version: version, Commit: commit, Date: date}

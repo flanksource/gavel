@@ -16,6 +16,11 @@ import (
 	"github.com/flanksource/gavel/sandbox"
 )
 
+// TranscriptsDir is where serve keeps the transcripts agent runs upload, under dataDir.
+func TranscriptsDir(dataDir string) string {
+	return filepath.Join(dataDir, "transcripts")
+}
+
 // maxTranscriptBytes bounds one uploaded transcript file.
 const maxTranscriptBytes = 256 << 20
 
@@ -37,7 +42,7 @@ func (a *RunsAPI) handleTranscript(w http.ResponseWriter, r *http.Request, run s
 		writeCIError(w, http.StatusBadRequest, fmt.Sprintf("transcript name %q must be a relative .jsonl path inside the run's transcripts", name))
 		return
 	}
-	path := filepath.Join(a.Sources.DataDir, "transcripts", run.Org.String(), run.ID.String(), source, clean)
+	path := filepath.Join(TranscriptsDir(a.Sources.DataDir), run.Org.String(), run.ID.String(), source, clean)
 	if err := writeFileAtomically(path, http.MaxBytesReader(w, r.Body, maxTranscriptBytes)); err != nil {
 		logger.Warnf("store a transcript of sandbox run %s: %v", run.ID, err)
 		writeCIError(w, http.StatusInternalServerError, "could not store the transcript")

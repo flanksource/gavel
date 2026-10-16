@@ -6,6 +6,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -31,6 +33,9 @@ type Stores struct {
 	// Recordings is the configured blob store, holding workspaces/*/recordings/; nil when
 	// recordings are only on local disk.
 	Recordings blob.Store
+	// Transcripts is the directory holding the transcripts agent runs uploaded, under
+	// <org>/<run>/; empty when there is none.
+	Transcripts string
 }
 
 // Report counts what one Run deleted, per category.
@@ -230,6 +235,12 @@ func deleteSandboxRuns(ctx context.Context, db *gorm.DB, stores Stores, cutoff t
 		for _, row := range rows {
 			if err := deleteOrgBlob(ctx, stores, row.OrgID, row.LogKey, "sandbox log"); err != nil {
 				return deleted, err
+			}
+			if stores.Transcripts != "" {
+				dir := filepath.Join(stores.Transcripts, row.OrgID.String(), row.ID.String())
+				if err := os.RemoveAll(dir); err != nil {
+					return deleted, fmt.Errorf("delete the transcripts of sandbox run %s: %w", row.ID, err)
+				}
 			}
 			if err := db.Exec(`DELETE FROM sandbox_runs WHERE id = ?`, row.ID).Error; err != nil {
 				return deleted, fmt.Errorf("delete sandbox run %s: %w", row.ID, err)
