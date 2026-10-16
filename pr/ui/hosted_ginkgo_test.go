@@ -59,8 +59,6 @@ var _ = Describe("hosted mode routes", func() {
 			{http.MethodPost, "/todos/new"},
 			{http.MethodGet, "/debug/pprof/"},
 			{http.MethodGet, "/metrics"},
-			{http.MethodGet, "/api/v1/todo"},
-			{http.MethodGet, "/api/v1/todo/abc"},
 			{http.MethodGet, "/api/projects/app"},
 			{http.MethodGet, "/api/settings/runtime-presets"},
 		} {
@@ -72,12 +70,18 @@ var _ = Describe("hosted mode routes", func() {
 		Expect(resp.StatusCode).To(Equal(http.StatusNotFound), "a page path that isn't a dashboard page")
 	})
 
-	It("answers agent run endpoints with 501 instead of running them", func() {
+	It("answers todo actions that would run code on serve or touch its files with 501", func() {
 		base := hostedTestServer()
-		for _, path := range []string{"/api/v1/todo/abc/run", "/api/v1/todo/abc/plan", "/api/v1/todo/abc/triage"} {
+		for path, message := range map[string]string{
+			"/api/v1/todo/abc/check":  "this action would run code on serve; it isn't available in hosted mode until it runs in a sandbox",
+			"/api/v1/todo/abc/merge":  "this action would run code on serve; it isn't available in hosted mode until it runs in a sandbox",
+			"/api/v1/todo/sync":       "this action reads or writes the host's files, which hosted mode doesn't allow",
+			"/api/v1/todo/import":     "this action reads or writes the host's files, which hosted mode doesn't allow",
+			"/api/v1/todo/abc/export": "this action reads or writes the host's files, which hosted mode doesn't allow",
+		} {
 			resp := doRequest(newRequest(http.MethodPost, base+path, nil, strings.NewReader(`{}`)))
 			Expect(resp.StatusCode).To(Equal(http.StatusNotImplemented), path)
-			Expect(hostedError(resp)).To(Equal("agent runs are not available in hosted mode yet"))
+			Expect(hostedError(resp)).To(Equal(message), path)
 		}
 	})
 

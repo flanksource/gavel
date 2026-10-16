@@ -181,6 +181,7 @@ func TestAHostedDashboardWithoutWorkspacesReadsNoSessions(t *testing.T) {
 		{http.MethodPost, "/api/todos/session/approve", map[string]any{"approvalId": uuid.NewString(), "action": "approve"}},
 		{http.MethodGet, "/api/todos/session/stats?sessionId=" + session, nil},
 		{http.MethodGet, "/api/captain/sessions/" + session, nil},
+		{http.MethodGet, "/api/todos/item?ref=ab12cd", nil},
 	} {
 		status, refused := hostedCall(t, base, call.method, call.path, user, "org:member", call.body)
 		assert.Equal(t, http.StatusNotFound, status, "%s %s: %v", call.method, call.path, refused)

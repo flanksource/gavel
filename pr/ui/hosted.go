@@ -43,6 +43,13 @@ var hostedPassThrough = []string{
 	"GET /api/todos/session/approvals", "POST /api/todos/session/approve",
 	"GET /api/todos/session/detail", "GET /api/todos/session/plan", "/api/todos/session/stats",
 	"GET /api/captain/sessions/{id}", "GET /api/todos/run/context", "/api/todos/run/preview",
+	// The todo entity acts for the organization's user (see todo_entity.go).
+	"GET /api/entities", "GET /api/v1/todo", "POST /api/v1/todo", "GET /api/v1/todo/{id}",
+	"POST /api/v1/todo/steps", "DELETE /api/v1/todo/{id}/delete", "PUT /api/v1/todo/{id}/edit",
+	"POST /api/v1/todo/{id}/comment", "POST /api/v1/todo/{id}/labels", "POST /api/v1/todo/{id}/priority",
+	"POST /api/v1/todo/{id}/status", "POST /api/v1/todo/{id}/reopen", "POST /api/v1/todo/{id}/transfer",
+	"POST /api/v1/todo/{id}/link", "POST /api/v1/todo/{id}/unlink", "POST /api/v1/todo/{id}/links",
+	"POST /api/v1/todo/{id}/run", "POST /api/v1/todo/{id}/plan", "POST /api/v1/todo/{id}/triage",
 }
 
 // hostedAnswer is a fixed response a hosted dashboard gives instead of the handler.
@@ -52,19 +59,22 @@ type hostedAnswer struct {
 }
 
 var (
-	agentRunsUnavailable = hostedAnswer{http.StatusNotImplemented, "agent runs are not available in hosted mode yet"}
+	runsOnServe          = hostedAnswer{http.StatusNotImplemented, "this action would run code on serve; it isn't available in hosted mode until it runs in a sandbox"}
+	readsHostFiles       = hostedAnswer{http.StatusNotImplemented, "this action reads or writes the host's files, which hosted mode doesn't allow"}
 	projectsAreRepos     = hostedAnswer{http.StatusBadRequest, "projects are repos in hosted mode"}
 	commitsFromAgentRuns = hostedAnswer{http.StatusBadRequest, "commits come from agent runs in hosted mode"}
 	actionsUnavailable   = hostedAnswer{http.StatusNotImplemented, "project actions are not available in hosted mode yet"}
 )
 
 // hostedAnswers lists the routes a hosted dashboard answers itself, keyed like
-// hostedPassThrough. Agent runs wait for sandboxed execution (M10); projects come
-// from the org's repositories.
+// hostedPassThrough: todo actions that would run code on serve or touch its files,
+// and project writes, since projects come from the org's repositories.
 var hostedAnswers = map[string]hostedAnswer{
-	"POST /api/v1/todo/{id}/run":             agentRunsUnavailable,
-	"POST /api/v1/todo/{id}/plan":            agentRunsUnavailable,
-	"POST /api/v1/todo/{id}/triage":          agentRunsUnavailable,
+	"POST /api/v1/todo/{id}/check":           runsOnServe,
+	"POST /api/v1/todo/{id}/merge":           runsOnServe,
+	"POST /api/v1/todo/sync":                 readsHostFiles,
+	"POST /api/v1/todo/import":               readsHostFiles,
+	"POST /api/v1/todo/{id}/export":          readsHostFiles,
 	"POST /api/projects":                     projectsAreRepos,
 	"PUT /api/projects/{name}":               projectsAreRepos,
 	"DELETE /api/projects/{name}":            projectsAreRepos,
@@ -114,7 +124,7 @@ func (s *Server) hostedRoutes(mux *http.ServeMux) http.Handler {
 		}
 		page := pattern == "/" && (r.Method == http.MethodGet || r.Method == http.MethodHead) && !strings.HasPrefix(r.URL.Path, "/api/")
 		if allowed[pattern] || allowed[narrowed] || page {
-			mux.ServeHTTP(w, r)
+			mux.ServeHTTP(w, r.WithContext(withEntityServer(r.Context(), s)))
 			return
 		}
 		writeJSONError(w, http.StatusNotFound, fmt.Errorf("%s %s is not available in hosted mode", r.Method, r.URL.Path))

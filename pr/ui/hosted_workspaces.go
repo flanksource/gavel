@@ -119,5 +119,8 @@ func (s *Server) projectList(ctx context.Context) ([]projectInfo, error) {
 	if s.workspaces != nil {
 		return s.workspaces.Projects(ctx, s.orgID())
 	}
+	if s.hosted {
+		return nil, errNoHostedWorkspaces
+	}
 	return listProjects(ctx)
 }

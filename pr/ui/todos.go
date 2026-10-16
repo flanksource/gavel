@@ -308,6 +308,9 @@ func (s *Server) globalTodoProvider(ctx context.Context) (todos.GlobalReferenceP
 	if s.workspaces != nil {
 		return todoruntime.NewGlobalForOrg(s.orgDB, s.orgID())
 	}
+	if s.hosted {
+		return nil, errNoHostedWorkspaces
+	}
 	return openGlobalTodoProvider(ctx)
 }
 
