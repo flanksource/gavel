@@ -51,8 +51,8 @@ func TestPushRunCommitsToAPushedRepository(t *testing.T) {
 	assert.Empty(t, git(t, bare, "for-each-ref", "refs/gavel/"), "nothing is left behind but the branch")
 
 	_, err = sources.PushRunCommits(context.Background(), pushed, base, "gavel/todo-run", bytes.NewReader(bundle))
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "create branch gavel/todo-run of app")
+	require.ErrorIs(t, err, ErrBranchExists)
+	assert.EqualError(t, err, "create branch gavel/todo-run of app: the branch already exists")
 
 	elsewhere := newWork(t)
 	commitFile(t, elsewhere, "README.md", "unrelated")
@@ -92,8 +92,8 @@ func TestPushRunCommitsToGitHub(t *testing.T) {
 	assert.Equal(t, tip, head)
 	assert.Equal(t, tip, git(t, remote, "rev-parse", "refs/heads/gavel/todo-run"), "the branch is on GitHub")
 	_, err = sources.PushRunCommits(context.Background(), github, base, "gavel/todo-run", bytes.NewReader(bundle))
-	require.Error(t, err, "a branch already on GitHub is never moved")
-	assert.Contains(t, err.Error(), "create branch gavel/todo-run of acme/app on GitHub")
+	require.ErrorIs(t, err, ErrBranchExists, "a branch already on GitHub is never moved")
+	assert.EqualError(t, err, "create branch gavel/todo-run of acme/app on GitHub: the branch already exists")
 	config, err := os.ReadFile(filepath.Join(dataDir, "mirrors", org.String(), "42.git", "config"))
 	require.NoError(t, err)
 	assert.NotContains(t, string(config), "installation-token")

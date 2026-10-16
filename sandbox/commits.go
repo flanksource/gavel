@@ -4,6 +4,7 @@ package sandbox
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -14,6 +15,9 @@ import (
 
 // RunBranchPrefix starts the name of every branch a run's commits go on.
 const RunBranchPrefix = "gavel/"
+
+// ErrBranchExists is a run branch that is already there: a run's branch is created once.
+var ErrBranchExists = errors.New("the branch already exists")
 
 // PushRunCommits creates branch, which must start with RunBranchPrefix and not exist yet, at the
 // one branch bundle holds, after checking it continues from base, the commit the run started at.
@@ -62,6 +66,9 @@ func (s *Sources) PushRunCommits(ctx context.Context, repo Repo, base, branch st
 
 	switch repo.Source {
 	case "push":
+		if _, err := runGit(ctx, nil, "-C", source, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch); err == nil {
+			return "", fmt.Errorf("create branch %s of %s: %w", branch, repo.label(), ErrBranchExists)
+		}
 		if _, err := runGit(ctx, nil, "-C", source, "update-ref", "refs/heads/"+branch, sha, ""); err != nil {
 			return "", fmt.Errorf("create branch %s of %s: %w", branch, repo.label(), err)
 		}
@@ -75,7 +82,7 @@ func (s *Sources) PushRunCommits(ctx context.Context, repo Repo, base, branch st
 			return "", fmt.Errorf("look for branch %s of %s on GitHub: %w", branch, repo.label(), err)
 		}
 		if strings.TrimSpace(existing) != "" {
-			return "", fmt.Errorf("create branch %s of %s on GitHub: it already exists", branch, repo.label())
+			return "", fmt.Errorf("create branch %s of %s on GitHub: %w", branch, repo.label(), ErrBranchExists)
 		}
 		// The mirror's origin pushes everything; this pushes the one branch, to its URL. The lease
 		// refuses a branch created since the check above.

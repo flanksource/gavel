@@ -35,6 +35,7 @@ func (a *RunsAPI) Handler() http.Handler {
 	mux.HandleFunc("GET /api/runs/{id}/source", a.withRun(a.handleSource))
 	mux.HandleFunc("POST /api/runs/{id}/results", a.withRun(a.handleResults))
 	mux.HandleFunc("POST /api/runs/{id}/messages", a.withRun(a.handleMessage))
+	mux.HandleFunc("POST /api/runs/{id}/commits", a.withRun(a.handleCommits))
 	return mux
 }
 
@@ -121,18 +122,57 @@ func (a *RunsAPI) handleResults(w http.ResponseWriter, r *http.Request, run sand
 	storeResults(w, r, a.Cache, run.Org, run.Spec.RepoID, run.Spec.SHA, "sandbox run "+run.ID.String())
 }
 
-// handleSource streams a git bundle of the run's ref.
-func (a *RunsAPI) handleSource(w http.ResponseWriter, r *http.Request, run sandbox.RunRecord) {
+// runRepo reads run's repository, answering the request itself when it can't.
+func (a *RunsAPI) runRepo(w http.ResponseWriter, r *http.Request, run sandbox.RunRecord) (sandbox.Repo, bool) {
 	var repo sandbox.Repo
 	result := a.DB.WithContext(r.Context()).Raw(`SELECT id, org_id AS org, source, name, COALESCE(github_repo_id, 0) AS git_hub_repo_id, COALESCE(installation_id, 0) AS installation_id
 		FROM repos WHERE id = ? AND org_id = ?`, run.Spec.RepoID, run.Org).Scan(&repo)
 	if result.Error != nil {
 		logger.Warnf("read the repository of sandbox run %s: %v", run.ID, result.Error)
 		writeCIError(w, http.StatusInternalServerError, "could not read the run's repository")
-		return
+		return sandbox.Repo{}, false
 	}
 	if result.RowsAffected == 0 {
 		writeCIError(w, http.StatusNotFound, fmt.Sprintf("run %s has no repository", run.ID))
+		return sandbox.Repo{}, false
+	}
+	return repo, true
+}
+
+// handleCommits puts the commits an agent run made, a git bundle, on the run's own branch:
+// gavel/<todo>-<run>, from the commit the run started at.
+func (a *RunsAPI) handleCommits(w http.ResponseWriter, r *http.Request, run sandbox.RunRecord) {
+	if run.Spec.Kind != "agent" || run.Spec.TodoID == nil {
+		writeCIError(w, http.StatusBadRequest, fmt.Sprintf("run %s is a %s run; only agent runs push commits", run.ID, run.Spec.Kind))
+		return
+	}
+	repo, ok := a.runRepo(w, r, run)
+	if !ok {
+		return
+	}
+	branch := sandbox.RunBranchPrefix + run.Spec.TodoID.String()[:8] + "-" + run.ID.String()[:8]
+	sha, err := a.Sources.PushRunCommits(r.Context(), repo, run.Spec.SHA, branch, http.MaxBytesReader(w, r.Body, maxRunCommitsBytes))
+	if err != nil {
+		logger.Warnf("push the commits of sandbox run %s: %v", run.ID, err)
+		status := http.StatusBadRequest
+		if errors.Is(err, sandbox.ErrBranchExists) {
+			status = http.StatusConflict
+		}
+		writeCIError(w, status, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(map[string]string{"branch": branch, "sha": sha})
+}
+
+// maxRunCommitsBytes bounds the bundle of a run's commits.
+const maxRunCommitsBytes = 256 << 20
+
+// handleSource streams a git bundle of the run's ref.
+func (a *RunsAPI) handleSource(w http.ResponseWriter, r *http.Request, run sandbox.RunRecord) {
+	repo, ok := a.runRepo(w, r, run)
+	if !ok {
 		return
 	}
 	body := &startedWriter{ResponseWriter: w, contentType: "application/x-git-bundle"}
