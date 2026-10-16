@@ -3,6 +3,7 @@
 package ui
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/github/cache"
+	"github.com/flanksource/gavel/pr/provider"
 	"github.com/flanksource/gavel/sandbox"
 	"github.com/flanksource/gavel/todos/remote"
 	"github.com/google/uuid"
@@ -26,6 +28,9 @@ type RunsAPI struct {
 	Sources  *sandbox.Sources
 	// Relay hands an agent run's messages to the host waiting for the run.
 	Relay *remote.Relay
+	// PRs is the client an organization's PR at url is read and resolved through, and its
+	// number: the organization's GitHub App installation.
+	PRs func(ctx context.Context, org uuid.UUID, url string) (provider.Client, int, error)
 }
 
 // Handler routes the run API.
@@ -37,6 +42,10 @@ func (a *RunsAPI) Handler() http.Handler {
 	mux.HandleFunc("POST /api/runs/{id}/messages", a.withRun(a.handleMessage))
 	mux.HandleFunc("POST /api/runs/{id}/commits", a.withRun(a.handleCommits))
 	mux.HandleFunc("POST /api/runs/{id}/transcripts", a.withRun(a.handleTranscript))
+	mux.HandleFunc("GET /api/runs/{id}/pr/status", a.withRun(a.withPR(a.handlePRStatus)))
+	mux.HandleFunc("GET /api/runs/{id}/pr/head", a.withRun(a.withPR(a.handlePRHead)))
+	mux.HandleFunc("POST /api/runs/{id}/pr/threads/{thread}/resolve", a.withRun(a.withPR(a.handlePRResolve)))
+	mux.HandleFunc("POST /api/runs/{id}/pr/push", a.withRun(a.withPR(a.handlePRPush)))
 	return mux
 }
 
