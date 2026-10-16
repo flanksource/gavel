@@ -32,18 +32,18 @@ func (r *Repository) AddRelationship(
 
 	var created Relationship
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		workspaceID, err := issueWorkspace(tx, issueID)
+		workspaceID, err := issueWorkspace(tx, r.org, issueID)
 		if err != nil {
 			return err
 		}
 		if err := lockWorkspaceRelationships(tx, workspaceID); err != nil {
 			return err
 		}
-		locked, err := lockIssue(tx, issueID, expectedVersion)
+		locked, err := lockIssue(tx, r.org, issueID, expectedVersion)
 		if err != nil {
 			return err
 		}
-		targetWorkspaceID, err := issueWorkspace(tx, targetIssueID)
+		targetWorkspaceID, err := issueWorkspace(tx, r.org, targetIssueID)
 		if err != nil {
 			return err
 		}
@@ -119,18 +119,18 @@ func (r *Repository) DeleteRelationship(
 	}
 
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		workspaceID, err := issueWorkspace(tx, issueID)
+		workspaceID, err := issueWorkspace(tx, r.org, issueID)
 		if err != nil {
 			return err
 		}
 		if err := lockWorkspaceRelationships(tx, workspaceID); err != nil {
 			return err
 		}
-		locked, err := lockIssue(tx, issueID, expectedVersion)
+		locked, err := lockIssue(tx, r.org, issueID, expectedVersion)
 		if err != nil {
 			return err
 		}
-		targetWorkspaceID, err := issueWorkspace(tx, targetIssueID)
+		targetWorkspaceID, err := issueWorkspace(tx, r.org, targetIssueID)
 		if err != nil {
 			return err
 		}
@@ -171,7 +171,7 @@ func (r *Repository) ListRelationships(ctx context.Context, issueID uuid.UUID) (
 	result := r.db.WithContext(ctx).Raw(`
 		SELECT workspace_id, issue_id, target_issue_id, relation, created_at
 		FROM todo_issue_relationships
-		WHERE issue_id = ? OR target_issue_id = ?`, issueID, issueID,
+		WHERE (issue_id = ? OR target_issue_id = ?) AND `+inOrgWorkspace("workspace_id"), issueID, issueID, r.org,
 	).Scan(&relationships)
 	if result.Error != nil {
 		return nil, result.Error
@@ -203,7 +203,8 @@ func (r *Repository) ListDependents(ctx context.Context, issueID uuid.UUID) ([]I
 		FROM todo_issue_relationships AS relationship
 		JOIN todo_issues AS dependent ON dependent.id = relationship.issue_id
 		WHERE relationship.target_issue_id = ? AND relationship.relation = 'depends_on'
-		ORDER BY dependent.updated_at DESC, dependent.id`, issueID)
+		  AND `+inOrgWorkspace("relationship.workspace_id")+`
+		ORDER BY dependent.updated_at DESC, dependent.id`, issueID, r.org)
 }
 
 // ListUnsatisfiedDependencies returns the direct dependencies that still block
@@ -216,7 +217,8 @@ func (r *Repository) ListUnsatisfiedDependencies(ctx context.Context, issueID uu
 		WHERE relationship.issue_id = ?
 		  AND relationship.relation = 'depends_on'
 		  AND dependency.status NOT IN ('verified', 'closed')
-		ORDER BY dependency.updated_at DESC, dependency.id`, issueID)
+		  AND `+inOrgWorkspace("relationship.workspace_id")+`
+		ORDER BY dependency.updated_at DESC, dependency.id`, issueID, r.org)
 }
 
 func (r *Repository) listRelationshipIssues(ctx context.Context, query string, args ...any) ([]Issue, error) {
@@ -231,9 +233,10 @@ func (r *Repository) listRelationshipIssues(ctx context.Context, query string, a
 	return issues, nil
 }
 
-func issueWorkspace(tx *gorm.DB, issueID uuid.UUID) (uuid.UUID, error) {
+// issueWorkspace returns the workspace of an issue of org; another org's issue is ErrNotFound.
+func issueWorkspace(tx *gorm.DB, org, issueID uuid.UUID) (uuid.UUID, error) {
 	var record struct{ WorkspaceID uuid.UUID }
-	result := tx.Raw(`SELECT workspace_id FROM todo_issues WHERE id = ?`, issueID).Scan(&record)
+	result := tx.Raw(`SELECT workspace_id FROM todo_issues WHERE id = ? AND `+inOrgWorkspace("workspace_id"), issueID, org).Scan(&record)
 	if result.Error != nil {
 		return uuid.Nil, result.Error
 	}

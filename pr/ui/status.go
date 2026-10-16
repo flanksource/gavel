@@ -58,7 +58,7 @@ func (s *Server) handleStatus(w nethttp.ResponseWriter, _ *nethttp.Request) {
 func (s *Server) buildStatus() StatusResponse {
 	return StatusResponse{
 		Overall:   SeverityOK, // overwritten below
-		Database:  statusFromCache(ghcache.Shared().Status()),
+		Database:  statusFromCache(s.cacheStore().Status()),
 		GitHub:    s.statusFromGitHub(),
 		CheckedAt: time.Now(),
 	}.withOverall()

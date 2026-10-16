@@ -10,15 +10,18 @@ import (
 
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/flanksource/gavel/models"
+	"github.com/flanksource/gavel/tenant"
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
 // FileScan records the content fingerprint used to invalidate cached findings.
 type FileScan struct {
-	FilePath     string `gorm:"primaryKey;column:file_path"`
-	LastScanTime int64  `gorm:"column:last_scan_time;not null"`
-	FileModTime  int64  `gorm:"column:file_mod_time;not null"`
-	FileHash     string `gorm:"column:file_hash;not null"`
+	OrgID        uuid.UUID `gorm:"primaryKey;type:uuid"`
+	FilePath     string    `gorm:"primaryKey;column:file_path"`
+	LastScanTime int64     `gorm:"column:last_scan_time;not null"`
+	FileModTime  int64     `gorm:"column:file_mod_time;not null"`
+	FileHash     string    `gorm:"column:file_hash;not null"`
 }
 
 func (FileScan) TableName() string { return "file_scans" }
@@ -26,7 +29,8 @@ func (FileScan) TableName() string { return "file_scans" }
 // violationRecord keeps persistence concerns out of the public violation
 // model. In particular, Rule is encoded explicitly as JSONB.
 type violationRecord struct {
-	ID               int64 `gorm:"primaryKey;autoIncrement"`
+	ID               int64     `gorm:"primaryKey;autoIncrement"`
+	OrgID            uuid.UUID `gorm:"type:uuid"`
 	FilePath         string
 	Line             int
 	Column           int
@@ -42,14 +46,34 @@ type violationRecord struct {
 
 func (violationRecord) TableName() string { return "violations" }
 
-// ViolationCache manages cached linter findings in PostgreSQL.
-type ViolationCache struct{ db *gorm.DB }
+// ViolationCache manages cached linter findings in PostgreSQL. Every read and
+// write is scoped to one organization: the local org unless built by ForOrg.
+type ViolationCache struct {
+	db  *gorm.DB
+	org uuid.UUID
+}
 
 func NewViolationCache(db *gorm.DB) (*ViolationCache, error) {
 	if db == nil {
 		return nil, fmt.Errorf("violation cache database is nil")
 	}
-	return &ViolationCache{db: db}, nil
+	return &ViolationCache{db: db, org: tenant.LocalOrgID}, nil
+}
+
+// ForOrg returns a ViolationCache over org's rows, sharing the connection.
+func (c *ViolationCache) ForOrg(org uuid.UUID) *ViolationCache {
+	scoped := *c
+	scoped.org = org
+	return &scoped
+}
+
+// violationOrder sorts findings by position. "column" is a reserved word in
+// PostgreSQL and must be quoted.
+const violationOrder = `file_path, line, "column"`
+
+// rows starts a query limited to the cache's organization.
+func (c *ViolationCache) rows() *gorm.DB {
+	return c.db.Where("org_id = ?", c.org)
 }
 
 func GetFileHash(filePath string) (string, error) {
@@ -68,7 +92,7 @@ func (c *ViolationCache) NeedsRescan(filePath string) (bool, error) {
 	}
 
 	var scan FileScan
-	err = c.db.Where("file_path = ?", filePath).First(&scan).Error
+	err = c.rows().Where("file_path = ?", filePath).First(&scan).Error
 	if err == gorm.ErrRecordNotFound {
 		return true, nil
 	}
@@ -86,22 +110,22 @@ func (c *ViolationCache) NeedsRescan(filePath string) (bool, error) {
 }
 
 func (c *ViolationCache) GetCachedViolations(filePath string) ([]models.Violation, error) {
-	return c.find(c.db.Where("file_path = ?", filePath))
+	return c.find(c.rows().Where("file_path = ?", filePath))
 }
 
 func (c *ViolationCache) GetAllViolations() ([]models.Violation, error) {
-	return c.find(c.db.Order("file_path, line, column"))
+	return c.find(c.rows().Order(violationOrder))
 }
 
 func (c *ViolationCache) GetViolationsBySource(source string) ([]models.Violation, error) {
-	return c.find(c.db.Where("source = ?", source).Order("file_path, line, column"))
+	return c.find(c.rows().Where("source = ?", source).Order(violationOrder))
 }
 
 func (c *ViolationCache) GetViolationsBySources(sources []string) ([]models.Violation, error) {
 	if len(sources) == 0 {
 		return []models.Violation{}, nil
 	}
-	return c.find(c.db.Where("source IN ?", sources).Order("file_path, line, column"))
+	return c.find(c.rows().Where("source IN ?", sources).Order(violationOrder))
 }
 
 func (c *ViolationCache) find(query *gorm.DB) ([]models.Violation, error) {
@@ -186,14 +210,16 @@ func (c *ViolationCache) StoreViolations(filePath string, violations []models.Vi
 		if err != nil {
 			return err
 		}
+		record.OrgID = c.org
 		records = append(records, record)
 	}
 
 	return c.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("file_path = ?", filePath).Delete(&FileScan{}).Error; err != nil {
+		if err := tx.Where("org_id = ? AND file_path = ?", c.org, filePath).Delete(&FileScan{}).Error; err != nil {
 			return err
 		}
 		scan := FileScan{
+			OrgID:        c.org,
 			FilePath:     filePath,
 			LastScanTime: time.Now().Unix(),
 			FileModTime:  info.ModTime().Unix(),
@@ -211,7 +237,7 @@ func (c *ViolationCache) StoreViolations(filePath string, violations []models.Vi
 
 func (c *ViolationCache) GetAllCachedFiles() ([]string, error) {
 	var scans []FileScan
-	if err := c.db.Select("file_path").Find(&scans).Error; err != nil {
+	if err := c.rows().Select("file_path").Find(&scans).Error; err != nil {
 		return nil, err
 	}
 	files := make([]string, len(scans))
@@ -222,25 +248,26 @@ func (c *ViolationCache) GetAllCachedFiles() ([]string, error) {
 }
 
 func (c *ViolationCache) ClearCache() error {
-	return c.db.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&FileScan{}).Error
+	return c.rows().Delete(&FileScan{}).Error
 }
 
 func (c *ViolationCache) ClearFileCache(filePaths []string) error {
 	if len(filePaths) == 0 {
 		return nil
 	}
-	return c.db.Where("file_path IN ?", filePaths).Delete(&FileScan{}).Error
+	return c.rows().Where("file_path IN ?", filePaths).Delete(&FileScan{}).Error
 }
 
 func (c *ViolationCache) GetStats() (map[string]interface{}, error) {
 	stats := map[string]interface{}{}
 	var fileCount, violationCount int64
-	if err := c.db.Model(&FileScan{}).Count(&fileCount).Error; err != nil {
+	if err := c.rows().Model(&FileScan{}).Count(&fileCount).Error; err != nil {
 		return nil, err
 	}
-	if err := c.db.Model(&violationRecord{}).Count(&violationCount).Error; err != nil {
+	if err := c.rows().Model(&violationRecord{}).Count(&violationCount).Error; err != nil {
 		return nil, err
 	}
+	// Storage size across all orgs: PostgreSQL reports relation size table-wide.
 	var size int64
 	if err := c.db.Raw(`SELECT pg_total_relation_size('public.file_scans'::regclass) + pg_total_relation_size('public.violations'::regclass)`).Scan(&size).Error; err != nil {
 		return nil, err
@@ -274,7 +301,7 @@ func (c *ViolationCache) ClearViolations(olderThan time.Time, pathPattern string
 
 	var deleted int64
 	err := c.db.Transaction(func(tx *gorm.DB) error {
-		query := tx.Model(&violationRecord{})
+		query := tx.Model(&violationRecord{}).Where("org_id = ?", c.org)
 		if !olderThan.IsZero() {
 			query = query.Where("created_at < ?", olderThan)
 		}
@@ -284,22 +311,16 @@ func (c *ViolationCache) ClearViolations(olderThan time.Time, pathPattern string
 		if err := query.Count(&deleted).Error; err != nil {
 			return err
 		}
-		if olderThan.IsZero() && len(files) == 0 {
-			if err := tx.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&violationRecord{}).Error; err != nil {
-				return err
-			}
-		} else if err := query.Delete(&violationRecord{}).Error; err != nil {
+		if err := query.Delete(&violationRecord{}).Error; err != nil {
 			return err
 		}
 
-		scans := tx.Model(&FileScan{})
+		scans := tx.Model(&FileScan{}).Where("org_id = ?", c.org)
 		switch {
 		case len(files) > 0:
 			scans = scans.Where("file_path IN ?", files)
 		case !olderThan.IsZero():
 			scans = scans.Where("last_scan_time < ?", olderThan.Unix())
-		default:
-			scans = scans.Session(&gorm.Session{AllowGlobalUpdate: true})
 		}
 		return scans.Delete(&FileScan{}).Error
 	})

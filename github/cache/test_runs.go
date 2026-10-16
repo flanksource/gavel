@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -17,13 +18,15 @@ import (
 // never stored here. Primary key is (WorkspaceDir, RunID) so each run has at
 // most one row per workspace.
 type TestRunCache struct {
-	WorkspaceDir string `gorm:"primaryKey;size:512"`
-	RunID        string `gorm:"primaryKey;size:255"` // run-*.json file stem
-	Path         string `gorm:"size:1024"`           // absolute path to the run-*.json
-	Kind         string `gorm:"size:16;index"`       // test | lint | test+lint
-	Repo         string `gorm:"size:255"`
-	SHA          string `gorm:"size:64"`
-	StartedTS    int64  `gorm:"index"` // unix nanos, the scan watermark
+	OrgID        uuid.UUID  `gorm:"primaryKey;type:uuid"`
+	UserID       *uuid.UUID `gorm:"type:uuid"`
+	WorkspaceDir string     `gorm:"primaryKey;size:512"`
+	RunID        string     `gorm:"primaryKey;size:255"` // run-*.json file stem
+	Path         string     `gorm:"size:1024"`           // absolute path to the run-*.json
+	Kind         string     `gorm:"size:16;index"`       // test | lint | test+lint
+	Repo         string     `gorm:"size:255"`
+	SHA          string     `gorm:"size:64"`
+	StartedTS    int64      `gorm:"index"` // unix nanos, the scan watermark
 	EndedTS      int64
 
 	Passed  int
@@ -43,7 +46,9 @@ type TestRunCache struct {
 // scanned into the cache (the `since` watermark for the next scan) and when the
 // last scan ran.
 type TestRunCursor struct {
-	WorkspaceDir string `gorm:"primaryKey;size:512"`
+	OrgID        uuid.UUID  `gorm:"primaryKey;type:uuid"`
+	UserID       *uuid.UUID `gorm:"type:uuid"`
+	WorkspaceDir string     `gorm:"primaryKey;size:512"`
 	LastRunTS    int64
 	SyncedAt     time.Time
 }
@@ -55,7 +60,7 @@ func (s *Store) LoadTestRunCursor(ctx context.Context, dir string) (int64, time.
 		return 0, time.Time{}, nil
 	}
 	var cur TestRunCursor
-	err := s.gorm().WithContext(ctx).Where("workspace_dir = ?", dir).First(&cur).Error
+	err := s.gorm().WithContext(ctx).Where("org_id = ? AND workspace_dir = ?", s.org, dir).First(&cur).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return 0, time.Time{}, nil
 	}
@@ -65,13 +70,13 @@ func (s *Store) LoadTestRunCursor(ctx context.Context, dir string) (int64, time.
 	return cur.LastRunTS, cur.SyncedAt, nil
 }
 
-// ListTestRuns returns every cached run across all workspaces, newest-first.
+// ListTestRuns returns every cached run across the org's workspaces, newest-first.
 func (s *Store) ListTestRuns(ctx context.Context) ([]TestRunCache, error) {
 	if s.Disabled() {
 		return nil, nil
 	}
 	var rows []TestRunCache
-	if err := s.gorm().WithContext(ctx).Order("started_ts DESC").Find(&rows).Error; err != nil {
+	if err := s.gorm().WithContext(ctx).Where("org_id = ?", s.org).Order("started_ts DESC").Find(&rows).Error; err != nil {
 		return nil, fmt.Errorf("list test runs: %w", err)
 	}
 	return rows, nil
@@ -83,7 +88,7 @@ func (s *Store) ListTestRunsForDir(ctx context.Context, dir string) ([]TestRunCa
 		return nil, nil
 	}
 	var rows []TestRunCache
-	err := s.gorm().WithContext(ctx).Where("workspace_dir = ?", dir).Order("started_ts DESC").Find(&rows).Error
+	err := s.gorm().WithContext(ctx).Where("org_id = ? AND workspace_dir = ?", s.org, dir).Order("started_ts DESC").Find(&rows).Error
 	if err != nil {
 		return nil, fmt.Errorf("list test runs for %s: %w", dir, err)
 	}
@@ -100,7 +105,7 @@ func (s *Store) GetTestRun(ctx context.Context, dir, runID string) (*TestRunCach
 	}
 	var row TestRunCache
 	err := s.gorm().WithContext(ctx).
-		Where("workspace_dir = ? AND run_id = ?", dir, runID).First(&row).Error
+		Where("org_id = ? AND workspace_dir = ? AND run_id = ?", s.org, dir, runID).First(&row).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
@@ -123,14 +128,22 @@ func (s *Store) UpsertTestRuns(ctx context.Context, dir string, rows []TestRunCa
 	now := time.Now()
 	return s.gorm().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		for _, row := range rows {
+			row.OrgID = s.org
 			row.WorkspaceDir = dir
 			row.SyncedAt = now
-			if err := tx.Clauses(clause.OnConflict{UpdateAll: true}).Create(&row).Error; err != nil {
+			if err := tx.Clauses(clause.OnConflict{
+				Columns: []clause.Column{{Name: "org_id"}, {Name: "workspace_dir"}, {Name: "run_id"}},
+				DoUpdates: clause.AssignmentColumns([]string{"path", "kind", "repo", "sha", "started_ts", "ended_ts",
+					"passed", "failed", "skipped", "warned", "total", "lint_violations", "lint_linters", "frameworks", "synced_at"}),
+			}).Create(&row).Error; err != nil {
 				return fmt.Errorf("upsert test run %s: %w", row.RunID, err)
 			}
 		}
-		cursor := TestRunCursor{WorkspaceDir: dir, LastRunTS: lastRunTS, SyncedAt: now}
-		if err := tx.Clauses(clause.OnConflict{UpdateAll: true}).Create(&cursor).Error; err != nil {
+		cursor := TestRunCursor{OrgID: s.org, WorkspaceDir: dir, LastRunTS: lastRunTS, SyncedAt: now}
+		if err := tx.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "org_id"}, {Name: "workspace_dir"}},
+			DoUpdates: clause.AssignmentColumns([]string{"last_run_ts", "synced_at"}),
+		}).Create(&cursor).Error; err != nil {
 			return fmt.Errorf("upsert test run cursor: %w", err)
 		}
 		return nil

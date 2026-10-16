@@ -387,6 +387,10 @@ func projectStatusFiles(files []status.FileStatus) []projectFileStatus {
 }
 
 func (s *Server) handleProjectAction(w http.ResponseWriter, r *http.Request) {
+	if s.hosted {
+		answerHostedProjectAction(w, r)
+		return
+	}
 	project, err := GetProject(r.PathValue("name"))
 	if err != nil {
 		respondError(w, statusForProjectErr(err), err.Error())

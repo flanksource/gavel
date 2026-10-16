@@ -69,9 +69,10 @@ done
 		}
 
 		server, err = NewServer(Options{
-			Host:       "127.0.0.1",
-			RepoDir:    repoDir,
-			HookWriter: hookWriter,
+			Host:        "127.0.0.1",
+			RepoDir:     repoDir,
+			HookWriter:  hookWriter,
+			HostKeyPath: filepath.Join(GinkgoT().TempDir(), "ssh_host_key"),
 		})
 		Expect(err).NotTo(HaveOccurred())
 

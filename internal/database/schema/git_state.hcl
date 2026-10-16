@@ -7,6 +7,23 @@
 table "git_repos" {
   schema = schema.public
 
+  column "user_id" {
+    null = true
+    type = uuid
+  }
+  column "org_id" {
+    null    = false
+    type    = uuid
+    default = sql("'00000000-0000-0000-0000-000000000001'::uuid")
+  }
+  foreign_key "git_repos_user_id_fkey" {
+    columns = [column.user_id]
+    ref_columns = [table.users.column.id]
+    on_delete = SET_NULL
+    on_update = NO_ACTION
+  }
+  index "git_repos_owner_idx" { columns = [column.org_id, column.user_id] }
+
   column "id" {
     null    = false
     type    = uuid
@@ -69,9 +86,10 @@ table "git_repos" {
   }
 
   primary_key { columns = [column.id] }
-  index "git_repos_root_dir_key" {
+  // Each org registers its own checkouts; the same path in two orgs is two repos.
+  index "git_repos_org_root_dir_key" {
     unique  = true
-    columns = [column.root_dir]
+    columns = [column.org_id, column.root_dir]
   }
 }
 

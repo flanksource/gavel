@@ -92,6 +92,7 @@ catalog:
   vite-plugin-dts: ^4.3.0
   vitest: ^3.0.5
   yaml: ^2.8.3
+  '@clerk/react': 6.17.3
 catalogMode: prefer
 
 linkWorkspacePackages: true

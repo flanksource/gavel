@@ -4,7 +4,7 @@ import "testing"
 
 func TestGavelMCPProfileExcludesLintAndTestSubcommands(t *testing.T) {
 	excluded := gavelMCPExcludedCommands()
-	for _, want := range []string{"^lint ", "^test "} {
+	for _, want := range []string{"^lint ", "^test ", "^login$", "^logout$", "^whoami$"} {
 		if !containsString(excluded, want) {
 			t.Fatalf("missing MCP exclude %q in %v", want, excluded)
 		}

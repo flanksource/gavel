@@ -116,6 +116,22 @@ PR creation preserves the isolated worktree, ordered cherry-picks, AI-generated 
 
 Azure review threads, dashboard listing, close/merge actions, AI repair, auto-merge, and Azure DevOps Server are outside this support. Azure rejects `pr status --comments`, `--ai-fix`, `--worktree`, and `commit -p --auto-merge` before side effects.
 
+### Hosted authentication (Clerk)
+
+Configure a Clerk public OAuth application with Device Authorization Grant:
+
+```bash
+export GAVEL_CLERK_ISSUER=https://your-instance.clerk.accounts.dev
+export GAVEL_CLERK_CLIENT_ID=your_public_oauth_client_id
+gavel login
+gavel whoami --json
+gavel logout
+```
+
+Use `gavel login --no-browser` for SSH/headless terminals. See
+[Clerk authentication setup](api/README.md) for configuration, credential storage,
+and current limitations. Local tests and linting do not require login.
+
 ### Testing & Linting
 
 #### `gavel test`
