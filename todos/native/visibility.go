@@ -57,10 +57,15 @@ func visibleIssue(ctx context.Context, alias string) (string, []any) {
 	return "(" + alias + ".visibility = 'public' OR " + alias + ".created_by_user_id = ?)", []any{*scope.UserID}
 }
 
-// requireChangeable fails with ErrForbidden unless the transaction's user created
-// the issue or is an org admin. Local mode and system jobs may change any issue.
+// requireChangeable is RequireChangeable for the transaction's user.
 func requireChangeable(tx *gorm.DB, id uuid.UUID, createdBy *uuid.UUID) error {
-	scope := viewer(tx.Statement.Context)
+	return RequireChangeable(tx.Statement.Context, id, createdBy)
+}
+
+// RequireChangeable fails with ErrForbidden unless the context's user created issue id, which
+// createdBy names, or is an org admin. Local mode and system jobs may change any issue.
+func RequireChangeable(ctx context.Context, id uuid.UUID, createdBy *uuid.UUID) error {
+	scope := viewer(ctx)
 	if scope == nil || scope.Role == orgAdminRole || (createdBy != nil && *createdBy == *scope.UserID) {
 		return nil
 	}

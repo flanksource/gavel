@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	captaindb "github.com/flanksource/captain/pkg/database"
+	"github.com/flanksource/gavel/todos/native"
 	"github.com/flanksource/gavel/todos/run"
 	todoruntime "github.com/flanksource/gavel/todos/runtime"
 	"github.com/google/uuid"
@@ -27,14 +28,9 @@ func (s *Server) handleTodoRunStop(w http.ResponseWriter, r *http.Request) {
 		writeTodoError(w, http.StatusBadRequest, errors.New("ref and promptRunId are required"))
 		return
 	}
-	dir, err := s.resolveTodoDir(r.URL.Query().Get("dir"))
+	provider, _, err := s.todoProviderContext(r.Context(), todoSourceFromRequest(r))
 	if err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)
-		return
-	}
-	provider, err := openTodoProvider(r.Context(), dir)
-	if err != nil {
-		writeTodoError(w, http.StatusInternalServerError, err)
 		return
 	}
 	detailProvider, ok := provider.(sessionDetailProvider)
@@ -55,6 +51,10 @@ func (s *Server) handleTodoRunStop(w http.ResponseWriter, r *http.Request) {
 	issue, err := detailProvider.Repository().GetIssue(r.Context(), issueID)
 	if err != nil {
 		writeTodoError(w, http.StatusNotFound, err)
+		return
+	}
+	if err := native.RequireChangeable(r.Context(), issue.ID, issue.CreatedBy); err != nil {
+		writeTodoError(w, http.StatusForbidden, err)
 		return
 	}
 	if issue.ActivePromptRunID == nil || *issue.ActivePromptRunID != payload.PromptRunID {

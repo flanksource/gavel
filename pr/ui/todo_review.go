@@ -84,7 +84,7 @@ func (s *Server) handleTodoPlanApprove(w http.ResponseWriter, r *http.Request) {
 		// The approved plan executes as an implement run, whatever the dialog sent,
 		// and as a fresh turn: the plan reaches it through the provider, not
 		// through the planning conversation.
-		req, err := s.continuationRequest(run.Continuation{
+		req, err := s.continuationRequest(r.Context(), source, run.Continuation{
 			Dir: source.Dir, Provider: provider, Todo: todo, Prior: planRun,
 			Override: override, Step: string(types.RunPhase),
 		})
@@ -230,7 +230,7 @@ func (s *Server) handleTodoPlanRevise(w http.ResponseWriter, r *http.Request) {
 	if resume {
 		c.Resume, c.Message = true, feedback
 	}
-	req, err := s.continuationRequest(c)
+	req, err := s.continuationRequest(r.Context(), source, c)
 	if err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)
 		return
@@ -293,7 +293,7 @@ func continuationOverride(payload *todoRunPayload) (run.Options, error) {
 
 // continuationRequest is the run request a continuation dispatches: resolved
 // through run.Continue, brokered by the dashboard like every run it starts.
-func (s *Server) continuationRequest(c run.Continuation) (run.Request, error) {
+func (s *Server) continuationRequest(ctx context.Context, source todoSource, c run.Continuation) (run.Request, error) {
 	opts, err := run.Continue(c)
 	if err != nil {
 		return run.Request{}, err
@@ -303,6 +303,9 @@ func (s *Server) continuationRequest(c run.Continuation) (run.Request, error) {
 		Options: opts, Approvals: true,
 	}
 	req.OnComplete = s.touchGitOnComplete(req)
+	if err := s.attachRemote(ctx, source, &req); err != nil {
+		return run.Request{}, err
+	}
 	return req, nil
 }
 

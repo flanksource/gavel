@@ -38,7 +38,8 @@ var hostedPassThrough = []string{
 	"GET /api/projects", "/api/todos", "/api/todos/item", "/api/todos/labels", "/api/todos/links",
 	"/api/todos/pr-links", "POST /api/todos/criteria", "/api/todos/attachments", "GET /api/todos/attachments/{id}",
 	// Runs execute in sandbox jobs (see agent_runs.go).
-	"/api/todos/run",
+	"/api/todos/run", "POST /api/todos/plan/approve", "POST /api/todos/plan/revise", "POST /api/todos/plan/reject",
+	"POST /api/todos/answer", "POST /api/todos/session/stop",
 }
 
 // hostedAnswer is a fixed response a hosted dashboard gives instead of the handler.
@@ -58,9 +59,6 @@ var (
 // hostedPassThrough. Agent runs wait for sandboxed execution (M10); projects come
 // from the org's repositories.
 var hostedAnswers = map[string]hostedAnswer{
-	"POST /api/todos/plan/approve":           agentRunsUnavailable,
-	"POST /api/todos/plan/revise":            agentRunsUnavailable,
-	"POST /api/todos/answer":                 agentRunsUnavailable,
 	"POST /api/v1/todo/{id}/run":             agentRunsUnavailable,
 	"POST /api/v1/todo/{id}/plan":            agentRunsUnavailable,
 	"POST /api/v1/todo/{id}/triage":          agentRunsUnavailable,

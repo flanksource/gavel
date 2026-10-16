@@ -253,13 +253,9 @@ func (s *Server) handleTodoRun(w http.ResponseWriter, r *http.Request) {
 		Approvals: true,
 	}
 	req.OnComplete = s.touchGitOnComplete(req)
-	if source.Hosted != nil {
-		runner, err := s.remoteRunner(r.Context(), *source.Hosted, todoList[0])
-		if err != nil {
-			writeTodoError(w, http.StatusNotImplemented, err)
-			return
-		}
-		req.Remote, req.Approvals = runner, false
+	if err := s.attachRemote(r.Context(), source, &req); err != nil {
+		writeTodoError(w, http.StatusBadRequest, err)
+		return
 	}
 	// Pre-flight: the one fold the run performs, so a request that cannot
 	// resolve is a 400 the dialog renders instead of a background failure. It is

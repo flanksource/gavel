@@ -18,6 +18,9 @@ type todoNewTriageResponse struct {
 
 func (s *Server) startNewTodoTriage(r *http.Request, provider todos.Provider, source todoSource, todo *types.TODO) *todoNewTriageResponse {
 	req := run.Request{Provider: provider, Registry: todoRuns(), Todo: todo, Dir: source.Dir, Options: run.Options{Step: "triage.new", Host: lifecycle.HostDashboard}, Approvals: true}
+	if err := s.attachRemote(r.Context(), source, &req); err != nil {
+		return &todoNewTriageResponse{Status: "failed", Error: err.Error()}
+	}
 	todo.MarkdownBody = todos.AbsolutizeAttachmentURLs(todo.MarkdownBody, requestOrigin(r))
 	prepared, err := run.Resolve(r.Context(), req)
 	if err == nil {

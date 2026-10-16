@@ -10,7 +10,9 @@ import (
 	"github.com/flanksource/gavel/sandbox"
 	"github.com/flanksource/gavel/tenant"
 	"github.com/flanksource/gavel/todos/lifecycle"
+	"github.com/flanksource/gavel/todos/native"
 	"github.com/flanksource/gavel/todos/remote"
+	"github.com/flanksource/gavel/todos/run"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/google/uuid"
 )
@@ -27,7 +29,43 @@ func (s *Server) SetAgentRuns(runs AgentRuns) {
 	s.agentRuns = &runs
 }
 
+// requireTodoChangeable fails with native.ErrForbidden unless the request's user may change todo.
+func requireTodoChangeable(ctx context.Context, todo *types.TODO) error {
+	id, err := uuid.Parse(todo.ID)
+	if err != nil {
+		return fmt.Errorf("todo %q has no native ID: %w", todo.ID, err)
+	}
+	var createdBy *uuid.UUID
+	if todo.CreatedBy != "" {
+		creator, err := uuid.Parse(todo.CreatedBy)
+		if err != nil {
+			return fmt.Errorf("todo %s names creator %q, which isn't a user ID: %w", todo.ID, todo.CreatedBy, err)
+		}
+		createdBy = &creator
+	}
+	return native.RequireChangeable(ctx, id, createdBy)
+}
+
 var errAgentRunsNeedSandbox = errors.New("agent runs need a sandbox: start gavel serve with --sandbox")
+
+// attachRemote runs req in a sandbox when source is one of a hosted organization's repositories,
+// without approvals, which a sandboxed run can't ask for, and only for the todo's creator or an
+// org admin: the run writes as a system job, so this is where the request's user is checked. A
+// local source's run is left as it is.
+func (s *Server) attachRemote(ctx context.Context, source todoSource, req *run.Request) error {
+	if source.Hosted == nil {
+		return nil
+	}
+	if err := requireTodoChangeable(ctx, req.Todo); err != nil {
+		return err
+	}
+	runner, err := s.remoteRunner(ctx, *source.Hosted, req.Todo)
+	if err != nil {
+		return err
+	}
+	req.Remote, req.Approvals = runner, false
+	return nil
+}
 
 // remoteRunner runs todo's steps in sandbox jobs of workspace's repository, as the request's user.
 func (s *Server) remoteRunner(ctx context.Context, workspace HostedWorkspace, todo *types.TODO) (lifecycle.RemoteRunner, error) {
