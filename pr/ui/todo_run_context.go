@@ -115,7 +115,17 @@ func (s *Server) handleTodoRunContext(w http.ResponseWriter, r *http.Request) {
 	// .gavel.yaml layers, so the dialog reflects the project the operator is
 	// looking at rather than the process's own directory. An unknown dir resolves
 	// against the cwd, matching how the CLI reads configuration.
-	context, err := todoRunContext(r.Context(), strings.TrimSpace(r.URL.Query().Get("dir")))
+	dir := strings.TrimSpace(r.URL.Query().Get("dir"))
+	if s.hosted {
+		context, err := s.hostedRunContext(r.Context(), dir)
+		if err != nil {
+			writeTodoError(w, http.StatusServiceUnavailable, fmt.Errorf("load the run context of %s: %w", dir, err))
+			return
+		}
+		json.NewEncoder(w).Encode(context) //nolint:errcheck
+		return
+	}
+	context, err := todoRunContext(r.Context(), dir)
 	if err != nil {
 		writeTodoError(w, http.StatusServiceUnavailable, fmt.Errorf("load run providers from Captain: %w", err))
 		return
@@ -181,6 +191,118 @@ func todoRunContext(ctx context.Context, workDir string) (todoRunContextResponse
 	}, nil
 }
 
+// hostedRunContext is a hosted repository's run context: its own lifecycle, and for each step
+// the runtime the repository's configuration resolves it to. Those are the only runtimes its
+// runs use; serve's own agents and credentials aren't what a sandbox offers.
+func (s *Server) hostedRunContext(ctx context.Context, dir string) (todoRunContextResponse, error) {
+	provider, source, err := s.todoProviderContext(ctx, todoSource{Dir: dir})
+	if err != nil {
+		return todoRunContextResponse{}, err
+	}
+	host, err := lifecycle.NewRepositoryHost(provider, source.Dir, lifecycle.HostDashboard)
+	if err != nil {
+		return todoRunContextResponse{}, err
+	}
+	definition := host.Def.Definition()
+	promptDefaults, err := todoRunPromptDefaults(ctx, host)
+	if err != nil {
+		return todoRunContextResponse{}, err
+	}
+	// A step's model may be an alias, such as `claude`, with no mode: the run resolves it to a
+	// concrete model and mode, and the dialog shows what the run will use.
+	for step, resolved := range promptDefaults {
+		model, err := api.ResolveModel(resolved.Spec.Model)
+		if err != nil {
+			return todoRunContextResponse{}, fmt.Errorf("resolve the %s step's model %q: %w", step, resolved.Spec.Model.Name, err)
+		}
+		if model.Name != "" {
+			resolved.Model, resolved.Mode = model.Name, string(model.Mode)
+			promptDefaults[step] = resolved
+		}
+	}
+	inputSchemas, err := todoRunInputSchemas(definition.Steps)
+	if err != nil {
+		return todoRunContextResponse{}, err
+	}
+	modes, models := stepDefaultRuntimes(promptDefaults)
+	return todoRunContextResponse{
+		RuntimePresets:  []runtimeprofiles.Preset{},
+		RuntimeProfiles: []todoRunRuntimeProfileOption{},
+		Modes:           modes,
+		Runtimes:        runtimeFamiliesOf(modes),
+		Models:          models,
+		Efforts:         todoRunEfforts(),
+		DefaultMode:     promptDefaults["run"].Mode,
+		DefaultProvider: providerKey(promptDefaults["run"].Spec.Model),
+		Tools:           todoRunToolCatalog(),
+		Lifecycle:       todoRunLifecycleFor(definition),
+		InputSchemas:    inputSchemas,
+		PromptDefaults:  promptDefaults,
+	}, nil
+}
+
+// stepDefaultRuntimes lists each (provider, mode) the steps default to, each offering only the
+// models the steps default to in it.
+func stepDefaultRuntimes(defaults map[string]todoRunPromptDefault) ([]todoRunModeOption, []todoRunModelOption) {
+	steps := make([]string, 0, len(defaults))
+	for step := range defaults {
+		steps = append(steps, step)
+	}
+	slices.Sort(steps)
+	modes, models := []todoRunModeOption{}, []todoRunModelOption{}
+	for _, step := range steps {
+		resolved := defaults[step]
+		provider, ok := api.ProviderByName(providerKey(api.Model{Name: resolved.Model}))
+		if !ok || resolved.Mode == "" || resolved.Model == "" {
+			continue
+		}
+		model := todoRunModelOption{
+			ID: resolved.Model, Provider: provider.Name, Label: modelLabel(resolved.Model), Configured: true,
+			Modes: []string{resolved.Mode}, Runtime: api.Model{Name: resolved.Model, Mode: api.RuntimeMode(resolved.Mode)},
+		}
+		mode := slices.IndexFunc(modes, func(option todoRunModeOption) bool {
+			return option.Provider == provider.Name && option.ID == resolved.Mode
+		})
+		if mode < 0 {
+			modes = append(modes, todoRunModeOption{
+				ID: resolved.Mode, Label: modeLabel(provider, resolved.Mode), Provider: provider.Name, Agent: provider.AgentName,
+				DefaultModel: resolved.Model, Driver: resolved.Mode, Configured: true,
+				Mechanisms: []todoRunMechanismItem{{Value: resolved.Mode, Label: mechanismLabel(resolved.Mode), Driver: resolved.Mode}},
+			})
+			mode = len(modes) - 1
+		}
+		if !slices.ContainsFunc(modes[mode].Models, func(option todoRunModelOption) bool { return option.ID == model.ID }) {
+			modes[mode].Models = append(modes[mode].Models, model)
+		}
+		listed := slices.IndexFunc(models, func(option todoRunModelOption) bool {
+			return option.Provider == model.Provider && option.ID == model.ID
+		})
+		switch {
+		case listed < 0:
+			models = append(models, model)
+		case !slices.Contains(models[listed].Modes, resolved.Mode):
+			models[listed].Modes = append(models[listed].Modes, resolved.Mode)
+		}
+	}
+	return modes, models
+}
+
+// runtimeFamiliesOf is Captain's runtime catalog narrowed to the providers modes run on.
+func runtimeFamiliesOf(modes []todoRunModeOption) []api.RuntimeFamily {
+	families := []api.RuntimeFamily{}
+	for _, family := range api.RuntimeCatalog() {
+		if slices.ContainsFunc(modes, func(mode todoRunModeOption) bool { return mode.Provider == family.Provider }) {
+			families = append(families, family)
+		}
+	}
+	return families
+}
+
+// modeLabel names a runtime as the run dialog lists it: `Claude agent`.
+func modeLabel(provider *api.ModelProvider, mode string) string {
+	return strings.ToUpper(provider.AgentName[:1]) + provider.AgentName[1:] + " " + mechanismLabel(mode)
+}
+
 // todoRunLifecycleFor projects the definition onto the dialog's step picker.
 func todoRunLifecycleFor(definition lifecycle.Lifecycle) todoRunLifecycle {
 	steps := make([]todoRunStepOption, 0, len(definition.Steps))
@@ -238,10 +360,9 @@ func todoRunModeOptionFor(
 	configured := status.Ready()
 	mode := string(runtimeMode)
 	models := todoRunModelsForMode(catalog, provider.Name, mode, configured)
-	label := strings.ToUpper(provider.AgentName[:1]) + provider.AgentName[1:] + " " + mechanismLabel(mode)
 	return todoRunModeOption{
 		ID:            mode,
-		Label:         label,
+		Label:         modeLabel(provider, mode),
 		Provider:      provider.Name,
 		Agent:         provider.AgentName,
 		Driver:        mode,

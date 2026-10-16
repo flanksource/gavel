@@ -449,3 +449,66 @@ func TestHostedRunSessionsAreSeenByThoseWhoSeeTheTodo(t *testing.T) {
 		assert.Equal(t, http.StatusNotFound, status, "another member doesn't see %s of a private todo: %v", path, refused)
 	}
 }
+
+func TestHostedRunsUseTheRepositorysRuntimeForEachStep(t *testing.T) {
+	h := newHostedRuns(t, nil)
+	status, context := hostedCall(t, h.base, http.MethodGet, "/api/todos/run/context?dir="+h.workspace, h.ada, "org:member", nil)
+	require.Equal(t, http.StatusOK, status, context)
+
+	var steps []string
+	for _, step := range context["lifecycle"].(map[string]any)["steps"].([]any) {
+		steps = append(steps, step.(map[string]any)["name"].(string))
+	}
+	assert.Contains(t, steps, "plan")
+	assert.Contains(t, steps, "run")
+	assert.Empty(t, context["runtimePresets"], "a hosted run picks no presets")
+	assert.NotEmpty(t, context["runtimes"])
+
+	defaults := map[string]bool{}
+	for step, raw := range context["promptDefaults"].(map[string]any) {
+		resolved := raw.(map[string]any)
+		if step == "verify" {
+			continue // the definition of done runs checks, not a model
+		}
+		require.NotEmpty(t, resolved["model"], "step %s resolves a model", step)
+		require.NotEmpty(t, resolved["mode"], "step %s resolves a mode", step)
+		defaults[resolved["mode"].(string)+"/"+resolved["model"].(string)] = true
+	}
+	modes := context["modes"].([]any)
+	require.NotEmpty(t, modes)
+	for _, raw := range modes {
+		mode := raw.(map[string]any)
+		models := mode["models"].([]any)
+		require.NotEmpty(t, models, "mode %s offers its default model", mode["id"])
+		for _, model := range models {
+			assert.True(t, defaults[mode["id"].(string)+"/"+model.(map[string]any)["id"].(string)],
+				"mode %s offers only a step default, not %v", mode["id"], model.(map[string]any)["id"])
+		}
+	}
+
+	_, created := hostedCall(t, h.base, http.MethodPost, "/api/todos", h.ada, "org:member", map[string]any{"dir": h.workspace, "title": "Fix the build"})
+	status, refused := hostedCall(t, h.base, http.MethodPost, "/api/todos/run", h.ada, "org:member", map[string]any{
+		"dir": h.workspace, "ref": created["id"], "step": "plan", "spec": map[string]any{"model": "gpt-5", "mode": "agent"},
+	})
+	assert.Equal(t, http.StatusBadRequest, status, refused)
+	assert.Equal(t, "a hosted run uses the repository's runtime for each step; this one asks for model gpt-5", refused["error"])
+}
+
+func TestHostedRunPreviewsResolveAsTheRunWould(t *testing.T) {
+	h := newHostedRuns(t, nil)
+	_, created := hostedCall(t, h.base, http.MethodPost, "/api/todos", h.ada, "org:member", map[string]any{"dir": h.workspace, "title": "Fix the build", "visibility": "public"})
+	preview := map[string]any{"dir": h.workspace, "ref": created["id"], "step": "plan"}
+
+	status, previewed := hostedCall(t, h.base, http.MethodPost, "/api/todos/run/preview", h.ada, "org:member", preview)
+	require.Equal(t, http.StatusOK, status, previewed)
+	assert.Equal(t, "plan", previewed["step"])
+	assert.Equal(t, "claude-opus-5-5", previewed["model"], "the repository's plan runtime")
+
+	status, refused := hostedCall(t, h.base, http.MethodPost, "/api/todos/run/preview", h.grace, "org:member", preview)
+	assert.Equal(t, http.StatusForbidden, status, "only those who can run it preview a run: %v", refused)
+
+	preview["spec"] = map[string]any{"model": "gpt-5"}
+	status, refused = hostedCall(t, h.base, http.MethodPost, "/api/todos/run/preview", h.ada, "org:member", preview)
+	assert.Equal(t, http.StatusBadRequest, status, refused)
+	assert.Equal(t, "a hosted run uses the repository's runtime for each step; this one asks for model gpt-5", refused["error"])
+}

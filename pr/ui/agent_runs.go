@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/flanksource/gavel/github/cache"
 	"github.com/flanksource/gavel/pr/provider"
@@ -61,12 +62,39 @@ func (s *Server) attachRemote(ctx context.Context, source todoSource, req *run.R
 	if err := requireTodoChangeable(ctx, req.Todo); err != nil {
 		return err
 	}
+	if err := requireRepositoryRuntime(req.Options); err != nil {
+		return err
+	}
 	runner, err := s.remoteRunner(ctx, *source.Hosted, req.Todo)
 	if err != nil {
 		return err
 	}
 	req.Remote, req.PRs = runner, s.organizationPRs
 	return nil
+}
+
+// requireRepositoryRuntime refuses a hosted run that chooses its own runtime: each step runs
+// with the runtime the repository's configuration resolves it to.
+func requireRepositoryRuntime(options run.Options) error {
+	model := options.Request.Model
+	var chosen string
+	switch {
+	case model.Name != "":
+		chosen = "model " + model.Name
+	case model.ID != "":
+		chosen = "model " + model.ID
+	case model.Provider != nil:
+		chosen = "provider " + model.Provider.Name
+	case model.Mode != "":
+		chosen = "mode " + string(model.Mode)
+	case len(model.Fallbacks) > 0:
+		chosen = "fallback models"
+	case len(options.Presets) > 0:
+		chosen = "presets " + strings.Join(options.Presets, ", ")
+	default:
+		return nil
+	}
+	return fmt.Errorf("a hosted run uses the repository's runtime for each step; this one asks for %s", chosen)
 }
 
 // organizationPRs is the client the Server's organization's PR at url is read and acted on

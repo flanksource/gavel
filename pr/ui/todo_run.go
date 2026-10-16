@@ -371,7 +371,7 @@ func (s *Server) handleTodoRunPreview(w http.ResponseWriter, r *http.Request) {
 		writeTodoError(w, status, err)
 		return
 	}
-	prepared, specYAML, err := buildTodoRunSpecPreview(r.Context(), provider, source, todoList[0], opts)
+	prepared, specYAML, err := s.buildTodoRunSpecPreview(r.Context(), provider, source, todoList[0], opts)
 	if err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)
 		return
@@ -398,21 +398,26 @@ func (s *Server) handleTodoRunPreview(w http.ResponseWriter, r *http.Request) {
 
 // buildTodoRunSpecPreview folds the run without dispatching it and renders the
 // resolved spec as YAML.
-func buildTodoRunSpecPreview(
+func (s *Server) buildTodoRunSpecPreview(
 	ctx context.Context,
 	provider todos.Provider,
 	source todoSource,
 	todo *types.TODO,
 	opts todoRunOptions,
 ) (*run.Prepared, string, error) {
-	prepared, err := run.Resolve(ctx, todoRunRequest{
+	req := todoRunRequest{
 		Provider:  provider,
 		Registry:  todoRuns(),
 		Todo:      todo,
 		Dir:       source.Dir,
 		Options:   opts,
 		Approvals: true,
-	})
+	}
+	// A hosted run resolves through its repository's own configuration, so its preview does too.
+	if err := s.attachRemote(ctx, source, &req); err != nil {
+		return nil, "", err
+	}
+	prepared, err := run.Resolve(ctx, req)
 	if err != nil {
 		return nil, "", err
 	}
