@@ -124,7 +124,7 @@ func (r *Runner) Run(ctx context.Context, run lifecycle.RemoteRun) (promptrun.Re
 					in.Verify.Progress(*message.Progress)
 				}
 			case KindTool, KindApproval:
-				go func(message Message) { message.reply <- answer(ctx, in, broker, message) }(message)
+				go func(message Message) { message.Answer(answer(ctx, in, broker, message)) }(message)
 			case KindResult:
 				var runErr error
 				if message.Error != "" {

@@ -133,6 +133,11 @@ type Reply struct {
 	Error    string                `json:"error,omitempty"`
 }
 
+// Answer replies to a call.
+func (m Message) Answer(reply Reply) {
+	m.reply <- reply
+}
+
 // ToolCallMessage calls the run's tool with input.
 func ToolCallMessage(tool string, input map[string]any) Message {
 	return Message{Kind: KindTool, Tool: tool, Input: input}

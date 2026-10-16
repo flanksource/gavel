@@ -76,3 +76,39 @@ func TestRunsAPIDeliversAgentRunMessages(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, status)
 	assert.Contains(t, body, "decode the message of run "+agentRun.String())
 }
+
+func TestRunsAPIRelaysAnAgentRunsCalls(t *testing.T) {
+	t.Setenv(database.EnvDSN, commonsdbtest.ForT(t, commonsdbtest.Options{Name: "gavel_runs_api_calls"}).DSN())
+	t.Setenv(database.EnvDisable, "")
+	opened, err := database.Open(t.Context(), database.WithMigrations())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, opened.Close()) })
+	db := opened.Gorm()
+	org, run := uuid.New(), uuid.New()
+	require.NoError(t, db.Exec(`INSERT INTO orgs (id, issuer, clerk_org_id, name) VALUES (?, 'https://clerk.example', ?, 'Acme')`, org, org.String()).Error)
+	spec, err := json.Marshal(sandbox.RunSpec{Kind: "agent"})
+	require.NoError(t, err)
+	require.NoError(t, db.Exec(`INSERT INTO sandbox_runs (id, org_id, kind, status, backend, spec) VALUES (?, ?, 'agent', 'running', 'memory', ?)`, run, org, string(spec)).Error)
+
+	key := []byte(strings.Repeat("k", 32))
+	relay := &remote.Relay{}
+	server := httptest.NewServer((&RunsAPI{DB: db, TokenKey: key, Relay: relay}).Handler())
+	t.Cleanup(server.Close)
+	messages, stop := relay.Listen(run)
+	defer stop()
+	go func() {
+		message := <-messages
+		message.Answer(remote.Reply{Output: json.RawMessage(`{"found":"` + message.Input["query"].(string) + `"}`)})
+	}()
+
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/api/runs/"+run.String()+"/calls", bytes.NewBufferString(`{"kind":"tool","tool":"todo_search","input":{"query":"bug"}}`))
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer "+sandbox.SignRunToken(key, run, org, time.Now().Add(time.Hour)))
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode, string(body))
+	assert.JSONEq(t, `{"output":{"found":"bug"}}`, string(body))
+}

@@ -40,6 +40,7 @@ func (a *RunsAPI) Handler() http.Handler {
 	mux.HandleFunc("GET /api/runs/{id}/source", a.withRun(a.handleSource))
 	mux.HandleFunc("POST /api/runs/{id}/results", a.withRun(a.handleResults))
 	mux.HandleFunc("POST /api/runs/{id}/messages", a.withRun(a.handleMessage))
+	mux.HandleFunc("POST /api/runs/{id}/calls", a.withRun(a.handleCall))
 	mux.HandleFunc("POST /api/runs/{id}/commits", a.withRun(a.handleCommits))
 	mux.HandleFunc("POST /api/runs/{id}/transcripts", a.withRun(a.handleTranscript))
 	mux.HandleFunc("GET /api/runs/{id}/pr/status", a.withRun(a.withPR(a.handlePRStatus)))
@@ -92,17 +93,8 @@ func (a *RunsAPI) withRun(next func(http.ResponseWriter, *http.Request, sandbox.
 // handleMessage hands one message of an agent run to the host waiting for the run, once it has
 // taken it, so a job's messages arrive in the order it sends them.
 func (a *RunsAPI) handleMessage(w http.ResponseWriter, r *http.Request, run sandbox.RunRecord) {
-	if run.Spec.Kind != "agent" {
-		writeCIError(w, http.StatusBadRequest, fmt.Sprintf("run %s is a %s run; only agent runs send messages", run.ID, run.Spec.Kind))
-		return
-	}
-	var message remote.Message
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRunMessageBytes)).Decode(&message); err != nil {
-		writeCIError(w, http.StatusBadRequest, fmt.Sprintf("decode the message of run %s: %v", run.ID, err))
-		return
-	}
-	if a.Relay == nil {
-		writeCIError(w, http.StatusConflict, fmt.Sprintf("%v: run %s", remote.ErrNoListener, run.ID))
+	message, ok := a.runMessage(w, r, run)
+	if !ok {
 		return
 	}
 	if err := a.Relay.Deliver(r.Context(), run.ID, message); err != nil {
@@ -114,6 +106,48 @@ func (a *RunsAPI) handleMessage(w http.ResponseWriter, r *http.Request, run sand
 		return
 	}
 	w.WriteHeader(http.StatusAccepted)
+}
+
+// handleCall hands a call of an agent run, a tool call or an approval request, to the host
+// waiting for the run, and answers with its reply once there is one.
+func (a *RunsAPI) handleCall(w http.ResponseWriter, r *http.Request, run sandbox.RunRecord) {
+	message, ok := a.runMessage(w, r, run)
+	if !ok {
+		return
+	}
+	if message.Kind != remote.KindTool && message.Kind != remote.KindApproval {
+		writeCIError(w, http.StatusBadRequest, fmt.Sprintf("a %q message isn't a call; calls are tool calls and approval requests", message.Kind))
+		return
+	}
+	reply, err := a.Relay.Call(r.Context(), run.ID, message)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, remote.ErrNoListener) {
+			status = http.StatusConflict
+		}
+		writeCIError(w, status, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(reply)
+}
+
+// runMessage decodes the message of an agent run, answering the request itself when it can't.
+func (a *RunsAPI) runMessage(w http.ResponseWriter, r *http.Request, run sandbox.RunRecord) (remote.Message, bool) {
+	if run.Spec.Kind != "agent" {
+		writeCIError(w, http.StatusBadRequest, fmt.Sprintf("run %s is a %s run; only agent runs send messages", run.ID, run.Spec.Kind))
+		return remote.Message{}, false
+	}
+	var message remote.Message
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRunMessageBytes)).Decode(&message); err != nil {
+		writeCIError(w, http.StatusBadRequest, fmt.Sprintf("decode the message of run %s: %v", run.ID, err))
+		return remote.Message{}, false
+	}
+	if a.Relay == nil {
+		writeCIError(w, http.StatusConflict, fmt.Sprintf("%v: run %s", remote.ErrNoListener, run.ID))
+		return remote.Message{}, false
+	}
+	return message, true
 }
 
 // maxRunMessageBytes bounds one message: a run's result carries its whole loop.
