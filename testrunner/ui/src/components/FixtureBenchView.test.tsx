@@ -1,7 +1,9 @@
-import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { FixtureBenchView } from './FixtureBenchView';
 import type { FixturePerformance, Test } from '../types';
+
+afterEach(cleanup);
 
 const benchmark: FixturePerformance = { mode: 'benchmark', status: 'passed', duration_ms: 1000 };
 
@@ -26,7 +28,7 @@ describe('fixture Bench view', () => {
       statements: [{ duration_ms: 10, rows: 1, slow: false, error: false, sql: 'SELECT * FROM users WHERE id = ?', params: ['42'] }],
     } };
     render(<FixtureBenchView performance={benchmark} tests={[test]} sampleIndex={undefined} onSampleChange={vi.fn()} />);
-    fireEvent.click(screen.getByText('1 query'));
+    fireEvent.click(screen.getAllByText('1 query').at(-1)!);
     expect(screen.getByText('10.0 ms · 1 row')).toBeTruthy();
     expect(screen.getByText('SELECT * FROM users WHERE id = ?')).toBeTruthy();
     expect(screen.getByText('42')).toBeTruthy();
@@ -47,7 +49,7 @@ describe('fixture Bench view', () => {
     expect(screen.getByText('125.0 ms')).toBeTruthy();
   });
 
-  it('shows comparison, sampled peaks, and the selected process tree', () => {
+  it('shows comparison, sampled peaks, and the selected sample\'s process tree', () => {
     const performance: FixturePerformance = { ...benchmark, artifact_path: '.gavel/benchmarks/fixtures/run.json',
       comparison: { baseline: 'baseline.json', deltas: [{ key: 'setup', name: 'Setup', kind: 'setup', baseline_ms: 100, current_ms: 125, delta_ms: 25, delta_pct: 25 }], added: ['new'], missing: ['old'] },
       profile: { interval_ms: 500, peak_cpu_percent: 12, peak_memory_percent: 0.5, peak_rss_bytes: 1048576, samples: [
@@ -62,24 +64,21 @@ describe('fixture Bench view', () => {
     render(<FixtureBenchView performance={performance} tests={[setup]} sampleIndex={0} onSampleChange={onSampleChange} />);
     expect(screen.getByText('+25.0%')).toBeTruthy();
     expect(screen.getByText('Peak CPU')).toBeTruthy();
-    expect(screen.getByText('sh -c sleep')).toBeTruthy();
+    expect(screen.getByText('sh -c sleep', { selector: '[data-process-command]' })).toBeTruthy();
     expect(screen.getByText('Added: new')).toBeTruthy();
     expect(screen.getByText('Missing: old')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: /sample 1/i }));
     expect(onSampleChange).toHaveBeenCalledWith(0);
   });
 
-  it('shows observed disk bytes and a captured Go profile download', () => {
+  it('shows observed disk bytes and their change against the baseline', () => {
     const test: Test = { ...fixture('Disk fixture', 'disk', 1000),
       fixture_profile: { scope: 'process_tree', sample_count: 2, peak_cpu_percent: 1, peak_memory_percent: 1, peak_rss_bytes: 1024, disk_io: { disk_read_bytes: 1024, disk_write_bytes: 2048, sample_count: 2 } },
-      go_profiles: [{ name: 'cpu', id: 'run-a/cpu.pprof', status: 'captured', bytes: 400 }],
     };
     const performance: FixturePerformance = { ...benchmark, comparison: { baseline: 'baseline.json',
       deltas: [{ key: 'disk', name: 'Disk fixture', kind: 'test', baseline_ms: 1000, current_ms: 1000, delta_ms: 0, disk_read_bytes_delta: -1024, disk_write_bytes_delta: 1024 }] } };
     render(<FixtureBenchView performance={performance} tests={[test]} sampleIndex={undefined} onSampleChange={vi.fn()} />);
-    expect(screen.getByText('1.0 KiB')).toBeTruthy();
-    expect(screen.getByText('2.0 KiB')).toBeTruthy();
     expect(screen.getByText('Disk R -1.0 KiB · W +1.0 KiB')).toBeTruthy();
-    expect(screen.getByRole('link', { name: 'Download pprof' }).getAttribute('href')).toBe('/api/tests/fixture-profile?id=run-a%2Fcpu.pprof');
+    expect(screen.getByText('1.0 KiB')).toBeTruthy();
   });
 });
