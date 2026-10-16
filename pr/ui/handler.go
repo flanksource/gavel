@@ -170,12 +170,22 @@ type Server struct {
 
 	// authConfig is what /api/auth/config reports (see me.go).
 	authConfig AuthConfigResponse
+
+	// workspaces are a hosted organization's repositories as todo workspaces;
+	// nil serves todos from the host's projects.
+	workspaces *HostedWorkspaces
 }
 
 // SetOrg scopes the Server's stores to org, whose settings live in db. Call it
 // before serving.
 func (s *Server) SetOrg(org uuid.UUID, db *gorm.DB) {
 	s.org, s.orgDB = org, db
+}
+
+// SetHostedWorkspaces serves the organization's repositories as its todo workspaces.
+// Call it before serving.
+func (s *Server) SetHostedWorkspaces(workspaces HostedWorkspaces) {
+	s.workspaces = &workspaces
 }
 
 // SetBlobStore makes store, the configured storage: store, hold the Server's attachments. Call it

@@ -105,7 +105,7 @@ func listProjectInfos(ctx context.Context, ps []Project) []projectInfo {
 func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		out, err := listProjects(r.Context())
+		out, err := s.projectList(r.Context())
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, err.Error())
 			return

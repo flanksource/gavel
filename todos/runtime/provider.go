@@ -119,6 +119,11 @@ func NewGlobal(db *gorm.DB) (*Provider, error) {
 	return newGlobal(db, tenant.LocalOrgID)
 }
 
+// NewGlobalForOrg is NewGlobal for org's todos.
+func NewGlobalForOrg(db *gorm.DB, org uuid.UUID) (*Provider, error) {
+	return newGlobal(db, org)
+}
+
 // newGlobal constructs a workspace-less provider over org's todos.
 func newGlobal(db *gorm.DB, org uuid.UUID) (*Provider, error) {
 	repository, err := native.NewRepository(db)

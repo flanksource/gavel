@@ -59,12 +59,9 @@ var _ = Describe("hosted mode routes", func() {
 			{http.MethodPost, "/todos/new"},
 			{http.MethodGet, "/debug/pprof/"},
 			{http.MethodGet, "/metrics"},
-			{http.MethodGet, "/api/todos"},
 			{http.MethodPost, "/api/todos/new"},
-			{http.MethodGet, "/api/todos/attachments/abc"},
 			{http.MethodGet, "/api/v1/todo"},
 			{http.MethodGet, "/api/v1/todo/abc"},
-			{http.MethodGet, "/api/projects"},
 			{http.MethodGet, "/api/projects/app"},
 			{http.MethodGet, "/api/settings/runtime-presets"},
 		} {

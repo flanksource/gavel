@@ -25,6 +25,9 @@ type TodoCreatePayload struct {
 	Priority types.Priority `json:"priority,omitempty"`
 	Status   types.Status   `json:"status,omitempty"`
 	PR       *types.PR      `json:"pr,omitempty"`
+	// Visibility is private (the default: only the creator sees it) or public
+	// (the whole organization sees it). Local mode shows every todo.
+	Visibility string `json:"visibility,omitempty"`
 	// Criteria, when set, are folded into the body as a "## Acceptance Criteria"
 	// checklist on create — used by the dashboard's "create todo from PR" flow to
 	// seed a todo with the PR's failing tests and lint violations as criteria.
@@ -113,6 +116,7 @@ func (s *Server) handleTodoCreate(w http.ResponseWriter, r *http.Request) {
 		Body:     bodyWithCreateSections(payload.Body, payload.Criteria, payload.PRVerification),
 		Priority: payload.Priority, Status: payload.Status,
 		Labels: payload.Labels, Parent: payload.Parent, PR: payload.PR,
+		Visibility: payload.Visibility,
 	})
 	if err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)
@@ -204,6 +208,7 @@ func (s *Server) handleTodoNew(w http.ResponseWriter, r *http.Request) {
 		Body:     bodyWithCreateSections(todoBodyWithAttachments(payload.Body, attachments), payload.Criteria, payload.PRVerification),
 		Priority: payload.Priority, Status: payload.Status,
 		Labels: payload.Labels, Parent: payload.Parent, PR: payload.PR,
+		Visibility: payload.Visibility,
 	})
 	if err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)

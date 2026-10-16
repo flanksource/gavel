@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/flanksource/gavel/tenant"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/native"
 	"github.com/flanksource/gavel/todos/run"
@@ -135,7 +136,7 @@ func (s *Server) resolveTodoGetReference(
 		return nil, source, nil, "", err
 	}
 
-	global, globalErr := openGlobalTodoProvider(ctx)
+	global, globalErr := s.globalTodoProvider(ctx)
 	if globalErr != nil {
 		return nil, source, nil, "", err
 	}
@@ -181,7 +182,7 @@ func (s *Server) resolveTodoReference(ctx context.Context, requested todoSource,
 		return provider, source, todo, err
 	}
 
-	global, err := openGlobalTodoProvider(ctx)
+	global, err := s.globalTodoProvider(ctx)
 	if err != nil {
 		return nil, requested, nil, err
 	}
@@ -249,6 +250,18 @@ var authorizeTodoDir = func(dir string) (string, error) {
 }
 
 func (s *Server) todoProviderContext(ctx context.Context, source todoSource) (todos.Provider, todoSource, error) {
+	if s.workspaces != nil {
+		options, err := s.workspaces.Resolve(ctx, s.orgID(), source.Dir)
+		if err != nil {
+			return nil, source, err
+		}
+		provider, err := todoruntime.NewForOrg(ctx, s.orgDB, options, tenant.FromContext(ctx))
+		if err != nil {
+			return nil, source, err
+		}
+		source.Dir = options.RootPath
+		return provider, source, nil
+	}
 	resolved, err := s.resolveTodoDir(source.Dir)
 	if err != nil {
 		return nil, source, err
@@ -282,6 +295,15 @@ var openTodoProvider = func(ctx context.Context, dir string) (todos.Provider, er
 
 var openGlobalTodoProvider = func(ctx context.Context) (todos.GlobalReferenceProvider, error) {
 	return todoruntime.OpenGlobal(ctx)
+}
+
+// globalTodoProvider resolves todo references across the Server's workspaces: the
+// organization's repositories in hosted mode, the host's projects otherwise.
+func (s *Server) globalTodoProvider(ctx context.Context) (todos.GlobalReferenceProvider, error) {
+	if s.workspaces != nil {
+		return todoruntime.NewGlobalForOrg(s.orgDB, s.orgID())
+	}
+	return openGlobalTodoProvider(ctx)
 }
 
 func (s *Server) todoWorkDir() string {

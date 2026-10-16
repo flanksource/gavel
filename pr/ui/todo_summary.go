@@ -50,6 +50,8 @@ type todoSummary struct {
 	Status         types.Status   `json:"status"`
 	Priority       types.Priority `json:"priority"`
 	CWD            string         `json:"cwd,omitempty"`
+	CreatedBy      string         `json:"createdBy,omitempty"`
+	Visibility     string         `json:"visibility,omitempty"`
 	Labels         []string       `json:"labels,omitempty"`
 	Attempts       int            `json:"attempts,omitempty"`
 	Created        *time.Time     `json:"created,omitempty"`
@@ -147,6 +149,8 @@ func summarizeTodo(todo *types.TODO, detail bool) todoSummary {
 		Status:         todo.Status,
 		Priority:       todo.Priority,
 		CWD:            todo.CWD,
+		CreatedBy:      todo.CreatedBy,
+		Visibility:     todo.Visibility,
 		Labels:         todo.Labels,
 		Attempts:       todo.Attempts,
 		Created:        todo.Created,
@@ -291,6 +295,8 @@ func todoErrorStatus(fallback int, err error) int {
 		return http.StatusConflict
 	case errors.Is(err, native.ErrNotFound), errors.Is(err, native.ErrPRLinkNotFound):
 		return http.StatusNotFound
+	case errors.Is(err, native.ErrForbidden):
+		return http.StatusForbidden
 	case errors.Is(err, native.ErrInvalidInput), errors.Is(err, native.ErrInvalidParent):
 		return http.StatusBadRequest
 	}

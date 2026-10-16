@@ -15,9 +15,9 @@ import (
 // hostedPassThrough lists the dashboard routes a hosted organization is served, as
 // the patterns Handler registers them under, optionally narrowed to a method
 // ("GET /api/x" for an any-method "/api/x"). Any other route is 404 in hosted mode,
-// so a route added later stays off until it is known to be org-scoped. Todos,
-// projects and runtime presets resolve workspaces from the host's directories, so
-// they stay off until workspaces come from the organization's repositories.
+// so a route added later stays off until it is known to be org-scoped. Projects are
+// the organization's repositories and todos live in them (see hosted_workspaces.go);
+// runtime presets still resolve from the host's directories, so they stay off.
 var hostedPassThrough = []string{
 	"/_assets/", "/favicon.svg", "/manifest.webmanifest", "/brand/gavel-logo.svg", "/brand/menubar.png",
 	"/brand/menubar-unread.png", "/brand/apple-touch-icon.png", "/brand/icon-192.png", "/brand/icon-512.png",
@@ -34,6 +34,9 @@ var hostedPassThrough = []string{
 	"/api/settings/schema",
 	// Answered by answerHostedProjectAction before the host's projects are read.
 	"POST /api/projects/{name}/actions",
+
+	"GET /api/projects", "/api/todos", "/api/todos/item", "/api/todos/labels", "/api/todos/links",
+	"/api/todos/pr-links", "POST /api/todos/criteria", "/api/todos/attachments", "GET /api/todos/attachments/{id}",
 }
 
 // hostedAnswer is a fixed response a hosted dashboard gives instead of the handler.

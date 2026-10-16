@@ -141,6 +141,12 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 		}
 	}
 	store := installations.Store{DB: db, App: app}
+	// Sandbox jobs and hosted todo workspaces read repositories from the pushed ones and
+	// from GitHub mirrors.
+	sources := &sandbox.Sources{DataDir: opts.DataDir}
+	if app != nil {
+		sources.Token = app.InstallationToken
+	}
 	blobs, err := verify.OpenGlobalStorage(ctx)
 	if err != nil {
 		return hostedStack{}, err
@@ -159,6 +165,7 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 		srv.SetOrg(scope.OrgID, db)
 		srv.SetBlobStore(blobs)
 		srv.SetHostedMode(true)
+		srv.SetHostedWorkspaces(ui.HostedWorkspaces{DB: db, Sources: sources})
 		srv.SetAuthConfig(authConfig)
 		if app != nil {
 			ui.NewPoller(srv, orgPRSearch(srv, store, cache, scope.OrgID), interval).Start(ctx)
@@ -195,10 +202,6 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 		Cache: cache,
 	}
 	// Sandbox jobs authenticate with their run token.
-	sources := &sandbox.Sources{DataDir: opts.DataDir}
-	if app != nil {
-		sources.Token = app.InstallationToken
-	}
 	runs := &ui.RunsAPI{DB: db, TokenKey: runTokenKey(secret), Cache: cache, Sources: sources}
 	root := http.NewServeMux()
 	root.Handle("/api/ci/", ciResults.Handler())
