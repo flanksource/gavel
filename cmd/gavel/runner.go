@@ -164,9 +164,12 @@ func runAgentJob(ctx context.Context, api runAPI, spec sandbox.RunSpec, src stri
 	if err := json.Unmarshal(spec.Agent, &job); err != nil {
 		return fmt.Errorf("decode the agent job of run %s: %w", api.run, err)
 	}
-	return remote.Execute(ctx, job, src, agent, func(message remote.Message) error {
-		return api.postMessage(ctx, message)
-	})
+	send := func(message remote.Message) error { return api.postMessage(ctx, message) }
+	finished, err := remote.Execute(ctx, job, src, agent, send)
+	if err != nil {
+		return err
+	}
+	return send(remote.ResultMessage(finished.Result, finished.Err))
 }
 
 // runSnapshots lists the per-run snapshots in src's .gavel directory.

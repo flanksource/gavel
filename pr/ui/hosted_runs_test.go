@@ -88,7 +88,7 @@ func (e *inProcessExecutor) run(ctx context.Context, id uuid.UUID) error {
 	if out, err := exec.Command("git", "-C", dir, "checkout", "-q", "--detach", record.Spec.SHA).CombinedOutput(); err != nil {
 		return errors.New(string(out))
 	}
-	return remote.Execute(ctx, job, dir, planAgent{}, func(message remote.Message) error {
+	send := func(message remote.Message) error {
 		data, err := json.Marshal(message)
 		if err != nil {
 			return err
@@ -98,7 +98,12 @@ func (e *inProcessExecutor) run(ctx context.Context, id uuid.UUID) error {
 			return err
 		}
 		return e.relay.Deliver(ctx, id, received)
-	})
+	}
+	finished, err := remote.Execute(ctx, job, dir, planAgent{}, send)
+	if err != nil {
+		return err
+	}
+	return send(remote.ResultMessage(finished.Result, finished.Err))
 }
 
 func (h *inProcessHandle) Logs(context.Context) (io.ReadCloser, error) {

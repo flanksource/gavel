@@ -64,7 +64,7 @@ func TestExecuteReportsTheRunInOrder(t *testing.T) {
 		{Kind: captainai.EventResult, Success: true, CostUSD: 0.25, Usage: &api.Usage{InputTokens: 7, OutputTokens: 3}},
 	}}
 	var sent []Message
-	err := Execute(context.Background(), scriptedJob("/srv/gavel/workspaces/org/repo"), dir, agent, func(message Message) error {
+	finished, err := Execute(context.Background(), scriptedJob("/srv/gavel/workspaces/org/repo"), dir, agent, func(message Message) error {
 		sent = append(sent, message)
 		return nil
 	})
@@ -76,15 +76,12 @@ func TestExecuteReportsTheRunInOrder(t *testing.T) {
 	assert.Equal(t, dir, sent[0].Spec.Cwd(), "the run works in the sandbox's checkout")
 	assert.Contains(t, sent[0].Spec.Setup.Env, commit.EnvIssueID+"=todo-1", "gavel's hooks ran before the start")
 
-	last := sent[len(sent)-1]
-	assert.Equal(t, KindResult, last.Kind)
-	assert.Empty(t, last.Error)
-	result := last.Result.Unwrap()
-	assert.Equal(t, "done", result.Response.Text)
-	assert.Equal(t, 0.25, result.CostUSD)
+	require.NoError(t, finished.Err)
+	assert.Equal(t, "done", finished.Result.Response.Text, "the result is the caller's to report")
+	assert.Equal(t, 0.25, finished.Result.CostUSD)
 
 	var kinds []captainai.EventKind
-	for _, message := range sent[1 : len(sent)-1] {
+	for _, message := range sent[1:] {
 		require.Equal(t, KindEvent, message.Kind)
 		kinds = append(kinds, message.DecodedEvent().Kind)
 	}
@@ -96,7 +93,7 @@ func TestExecuteReportsTheRunInOrder(t *testing.T) {
 
 func TestExecuteStopsWhenServeStopsListening(t *testing.T) {
 	agent := &scriptedAgent{events: []captainai.Event{{Kind: captainai.EventText, Text: "done"}, {Kind: captainai.EventResult, Success: true}}}
-	err := Execute(context.Background(), scriptedJob("/srv/root"), t.TempDir(), agent, func(Message) error {
+	_, err := Execute(context.Background(), scriptedJob("/srv/root"), t.TempDir(), agent, func(Message) error {
 		return errors.New("connection reset")
 	})
 	require.EqualError(t, err, "report the run's start to serve: connection reset")

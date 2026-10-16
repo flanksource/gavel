@@ -62,10 +62,7 @@ func (s *inProcessJobs) Start(ctx context.Context, id uuid.UUID, job Job) (Start
 	started := &inProcessJob{done: make(chan struct{}), cancel: cancel}
 	go func() {
 		defer close(started.done)
-		err := Execute(runCtx, job, s.dir, s.agent, func(message Message) error {
-			if s.skipResult && message.Kind == KindResult {
-				return nil
-			}
+		send := func(message Message) error {
 			// Messages reach serve as JSON, so nothing they carry is shared with the job.
 			data, err := json.Marshal(message)
 			if err != nil {
@@ -76,7 +73,11 @@ func (s *inProcessJobs) Start(ctx context.Context, id uuid.UUID, job Job) (Start
 				return err
 			}
 			return s.relay.Deliver(runCtx, id, received)
-		})
+		}
+		finished, err := Execute(runCtx, job, s.dir, s.agent, send)
+		if err == nil && !s.skipResult {
+			err = send(ResultMessage(finished.Result, finished.Err))
+		}
 		if err != nil || s.skipResult {
 			started.exitCode = 1
 		}

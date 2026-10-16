@@ -13,11 +13,18 @@ import (
 	"github.com/flanksource/captain/pkg/promptrun"
 )
 
-// Execute runs job in dir, the sandbox's checkout, and sends its start, events, verification
-// progress and result. agent is the provider the run uses; nil builds it from the job's model,
-// as a local run does. The run's own failure goes in its result message; Execute returns an
-// error only when a message couldn't be sent, and stops the run when its start couldn't.
-func Execute(ctx context.Context, job Job, dir string, agent captainai.Provider, send func(Message) error) error {
+// Finished is how a run ended: its result, and its own error.
+type Finished struct {
+	Result promptrun.Result
+	Err    error
+}
+
+// Execute runs job in dir, the sandbox's checkout, sends its start, events and verification
+// progress, and returns how it ended, for the caller to report once it has uploaded what the run
+// left behind. agent is the provider the run uses; nil builds it from the job's model, as a local
+// run does. Execute returns an error only when a message couldn't be sent, and stops the run when
+// its start couldn't.
+func Execute(ctx context.Context, job Job, dir string, agent captainai.Provider, send func(Message) error) (Finished, error) {
 	reporter := &reporter{send: send}
 	in := job.Input(dir)
 	in.Provider = agent
@@ -30,10 +37,11 @@ func Execute(ctx context.Context, job Job, dir string, agent captainai.Provider,
 	}
 	result, err := promptrun.Run(ctx, in)
 	if reporter.startErr != nil {
-		return reporter.startErr
+		return Finished{}, reporter.startErr
 	}
-	reporter.report(ResultMessage(result, err), "the result")
-	return reporter.err
+	reporter.mu.Lock()
+	defer reporter.mu.Unlock()
+	return Finished{Result: result, Err: err}, reporter.err
 }
 
 // reporter sends messages one at a time and keeps the first failure.
