@@ -190,7 +190,13 @@ func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opt
 	}
 	var profileErr error
 	if profiles != nil {
-		result.GoProfiles, profileErr = collectGoProfiles(profiles)
+		if len(profiles.Paths) > 0 {
+			pid := 0
+			if p != nil {
+				pid = p.PID
+			}
+			profileErr = ingestGoProfiles(ctx, opts.Traces, profiles, pid)
+		}
 		sqlPath := filepath.Join(profiles.Root, "sqlprofile.jsonl")
 		if info, err := os.Lstat(sqlPath); err == nil {
 			if !info.Mode().IsRegular() {
@@ -241,7 +247,6 @@ func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opt
 		return result.Errorf(errors.Join(err, profileErr), "command execution failed")
 	}
 	evaluated := fixture.Expected.Evaluate(result, *p, evaluate)
-	evaluated.GoProfiles = result.GoProfiles
 	evaluated.SQLProfile = result.SQLProfile
 	if profileErr != nil {
 		if evaluated.Error != "" {

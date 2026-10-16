@@ -50,12 +50,15 @@ type RunnerOptions struct {
 	DefaultTraces *TraceSpecs
 	// TraceHost is the run's trace store, shared with the run that owns it
 	// (gavel test); nil opens one under WorkDir once a fixture arms a trace.
-	TraceHost  *traces.Host `json:"-" yaml:"-"`
-	Benchmark  bool
-	Baseline   string
-	Profile    bool
-	SQLProfile bool
-	Limits     BenchmarkLimits
+	TraceHost *traces.Host `json:"-" yaml:"-"`
+	// ProcessTrace is the run's process capture, which --profile reads; nil
+	// starts one on the trace host for --profile.
+	ProcessTrace *traces.ProcessTrace `json:"-" yaml:"-"`
+	Benchmark    bool
+	Baseline     string
+	Profile      bool
+	SQLProfile   bool
+	Limits       BenchmarkLimits
 }
 
 // Runner manages fixture test execution using typed tasks
@@ -73,14 +76,21 @@ type Runner struct {
 	// traceHost is the store the run's traces commit to, nil while no fixture
 	// arms one; ownsTraceHost when the runner opened it. sharedTraces are the
 	// running file- and run-scope captures, by sharedTraceKey.
-	traceHost      *traces.Host
-	ownsTraceHost  bool
-	sharedTraces   map[string]*traces.Capture
-	progress       *executionTracker
-	resultMu       sync.Mutex
-	benchmark      *BenchmarkReport
-	workerSnapshot *ExecutionSnapshot
-	baseline       *BenchmarkReport
+	traceHost     *traces.Host
+	ownsTraceHost bool
+	sharedTraces  map[string]*traces.Capture
+	// profileTrace is the process capture --profile reads from profileMark
+	// on, ownsProfileTrace when the runner started it; profile is what it
+	// read once the run ended.
+	profileTrace     *traces.ProcessTrace
+	ownsProfileTrace bool
+	profileMark      traces.ProcessMark
+	profile          *ProfileReport
+	progress         *executionTracker
+	resultMu         sync.Mutex
+	benchmark        *BenchmarkReport
+	workerSnapshot   *ExecutionSnapshot
+	baseline         *BenchmarkReport
 	// backstopGrace is how long a fixture task's deadline outlasts a declared
 	// timeout (declaredTimeoutGrace outside tests).
 	backstopGrace time.Duration
@@ -182,23 +192,20 @@ func (r *Runner) Run() (*FixtureNode, error) {
 		return nil, fmt.Errorf("publish queued fixture progress: %w", err)
 	}
 
-	var sampler *profileSampler
-	if r.options.Profile {
-		sampler = startProfileSampler()
+	r.profile = nil
+	if err := r.startProfile(); err != nil {
+		return nil, errors.Join(err, r.closeTraces())
 	}
 	results, err := r.executeFixtures()
+	// executeFixtures closes the traces it prepared; one that returned before
+	// preparing them leaves the profile's for here.
+	err = errors.Join(err, r.closeTraces())
 
 	if err == nil {
 		clicky.WaitForGlobalCompletion()
 	}
 	if r.options.Benchmark || r.options.Profile {
-		var profile *ProfileReport
-		if sampler != nil {
-			var profileErr error
-			profile, profileErr = sampler.Stop()
-			err = errors.Join(err, profileErr)
-		}
-		if reportErr := r.saveBenchmarkReport(started, time.Now(), profile, err); reportErr != nil {
+		if reportErr := r.saveBenchmarkReport(started, time.Now(), r.profile, err); reportErr != nil {
 			err = errors.Join(err, reportErr)
 		}
 	}

@@ -52,7 +52,7 @@ var _ = Describe("traces: declarations", func() {
 
 	It("refuses an unknown kind by naming the registered ones", func() {
 		_, err := fixtures.ParseTraces("smtp")
-		Expect(err).To(MatchError(ContainSubstring(`unknown trace kind "smtp" (registered: http, http_proxy, pg_proxy, process_samples, process_tree, sql_statements, terminal)`)))
+		Expect(err).To(MatchError(ContainSubstring(`unknown trace kind "smtp" (registered: goprof, http, http_proxy, pg_proxy, process_samples, process_tree, sql_statements, stacks, terminal)`)))
 	})
 
 	DescribeTable("refuses an entry the host could not arm",

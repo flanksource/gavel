@@ -49,6 +49,7 @@ func (r *Runner) prepareTraces() error {
 		if node.Test == nil {
 			return
 		}
+		armed = armed || r.wantsGoProfiles(*node.Test)
 		for _, spec := range r.effectiveTraces(*node.Test) {
 			armed = true
 			if spec.Scope != TraceScopeTest {
@@ -79,6 +80,9 @@ type sharedTrace struct {
 }
 
 func (r *Runner) openTraceHost() error {
+	if r.traceHost != nil {
+		return nil
+	}
 	if r.options.TraceHost != nil {
 		r.traceHost = r.options.TraceHost
 		return nil
@@ -99,15 +103,16 @@ func (r *Runner) openTraceHost() error {
 }
 
 // closeTraces stops the run- and file-scope captures after every file's
-// teardown, so a service stopping is still traced, then closes a host the
-// runner opened itself and prunes old runs' stores.
+// teardown, so a service stopping is still traced, reads the --profile
+// samples, then closes a host the runner opened itself and prunes old runs'
+// stores. A later call does nothing.
 func (r *Runner) closeTraces() error {
-	if r.traceHost == nil {
-		return nil
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	var errs []error
+	errs := []error{r.finishProfile(ctx)}
+	if r.traceHost == nil {
+		return errors.Join(errs...)
+	}
 	for _, capture := range r.sharedTraces {
 		_, err := capture.Stop(ctx)
 		errs = append(errs, err)
@@ -150,7 +155,7 @@ func (r *Runner) fileTraceEnv(file *FixtureNode) map[string]string {
 // marks where its window of each shared one begins. Nil when it traces nothing.
 func (r *Runner) armTraces(ctx context.Context, fixture FixtureTest, env fixtureEnv) (*FixtureTraces, error) {
 	specs := r.effectiveTraces(fixture)
-	if len(specs) == 0 {
+	if len(specs) == 0 && !r.wantsGoProfiles(fixture) {
 		return nil, nil
 	}
 	armed := &FixtureTraces{host: r.traceHost, env: map[string]string{}}
@@ -208,6 +213,9 @@ type FixtureTraces struct {
 	env      map[string]string
 	armed    []armedTrace
 	terminal *TerminalTrace
+	// profiles are the goprof windows of the profiles the fixture's
+	// `goProfiles:` wrote under --profile, one each.
+	profiles []parsers.TraceResult
 
 	collected bool
 	harvest   TraceHarvest
@@ -344,6 +352,7 @@ func (t *FixtureTraces) Collect(ctx context.Context) TraceHarvest {
 			t.harvest.CELVars[armed.spec.Kind] = result.Summary
 		}
 	}
+	t.harvest.Results = append(t.harvest.Results, t.profiles...)
 	t.harvest.Err = errors.Join(errs...)
 	return t.harvest
 }

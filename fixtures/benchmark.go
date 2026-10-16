@@ -19,18 +19,17 @@ import (
 const benchmarkReportVersion = 1
 
 type BenchmarkEntry struct {
-	Key            string              `json:"key"`
-	Name           string              `json:"name"`
-	Kind           string              `json:"kind"`
-	Status         ExecutionState      `json:"status"`
-	Origin         *FixtureOrigin      `json:"origin,omitempty"`
-	DurationMS     float64             `json:"duration_ms"`
-	CommandMS      *float64            `json:"command_ms,omitempty"`
-	ProfileSamples *int                `json:"profile_samples,omitempty"`
-	Profile        *FixtureProfile     `json:"profile,omitempty"`
-	GoProfiles     []GoProfileArtifact `json:"go_profiles,omitempty"`
-	SQLProfile     *SQLProfile         `json:"sql_profile,omitempty"`
-	Violations     []string            `json:"violations,omitempty"`
+	Key            string          `json:"key"`
+	Name           string          `json:"name"`
+	Kind           string          `json:"kind"`
+	Status         ExecutionState  `json:"status"`
+	Origin         *FixtureOrigin  `json:"origin,omitempty"`
+	DurationMS     float64         `json:"duration_ms"`
+	CommandMS      *float64        `json:"command_ms,omitempty"`
+	ProfileSamples *int            `json:"profile_samples,omitempty"`
+	Profile        *FixtureProfile `json:"profile,omitempty"`
+	SQLProfile     *SQLProfile     `json:"sql_profile,omitempty"`
+	Violations     []string        `json:"violations,omitempty"`
 }
 
 type FixtureProfile struct {
@@ -175,7 +174,6 @@ func (r *Runner) fillBenchmarkEntries(report *BenchmarkReport, root *ExecutionNo
 		entry := BenchmarkEntry{Key: node.Key, Name: node.Name, Kind: string(node.Kind), Status: node.State,
 			Origin: node.Origin, DurationMS: milliseconds(node.Duration)}
 		if result := results[node.Key]; result != nil {
-			entry.GoProfiles = result.GoProfiles
 			entry.SQLProfile = result.SQLProfile
 		}
 		if report.Profile != nil {
@@ -408,12 +406,6 @@ func (r BenchmarkReport) Pretty() api.Text {
 		}
 		for _, violation := range entry.Violations {
 			text = text.NewLine().Append("    limit: "+violation, "text-red-600")
-		}
-		for _, artifact := range entry.GoProfiles {
-			text = text.NewLine().Append(fmt.Sprintf("    Go profile %s: %s", artifact.Name, artifact.Status), "text-muted")
-			if artifact.Status == "captured" {
-				text = text.Space().Append(artifact.Path, "text-muted")
-			}
 		}
 	}
 	if r.Profile != nil {
