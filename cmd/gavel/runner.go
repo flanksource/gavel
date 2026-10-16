@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -16,8 +17,10 @@ import (
 	"strings"
 	"time"
 
+	captainai "github.com/flanksource/captain/pkg/ai"
 	"github.com/flanksource/gavel/sandbox"
 	"github.com/flanksource/gavel/snapshots"
+	"github.com/flanksource/gavel/todos/remote"
 	"github.com/flanksource/gavel/verify"
 	"github.com/spf13/cobra"
 )
@@ -56,6 +59,8 @@ type runnerOptions struct {
 	// Command runs name with args in dir, streaming its output, and returns its exit code.
 	Command func(ctx context.Context, dir, name string, args []string, output io.Writer) (int, error)
 	Output  io.Writer
+	// Agent is the provider an agent run's turns go to; nil builds it from the job's model.
+	Agent captainai.Provider
 }
 
 // runnerExec runs the sandbox job and returns its exit code.
@@ -79,6 +84,9 @@ func runnerExec(ctx context.Context, opts runnerOptions) (int, error) {
 	src, err := checkout(ctx, api, spec, opts.Workspace)
 	if err != nil {
 		return 0, err
+	}
+	if spec.Kind == "agent" {
+		return 0, runAgentJob(ctx, api, spec, src, opts.Agent)
 	}
 	name, args, err := jobCommand(spec, src)
 	if err != nil {
@@ -145,11 +153,20 @@ func jobCommand(spec sandbox.RunSpec, src string) (string, []string, error) {
 			return "sh", []string{"-c", command}, nil
 		}
 		return gavel, []string{"test", "--lint", "--work-dir", src}, nil
-	case "agent":
-		return "", nil, errors.New("agent runs aren't supported by this gavel runner yet")
 	default:
 		return "", nil, fmt.Errorf("run kind %q is not one of test, lint, push-check, agent", spec.Kind)
 	}
+}
+
+// runAgentJob runs an agent run's step in src and reports it to serve as it goes.
+func runAgentJob(ctx context.Context, api runAPI, spec sandbox.RunSpec, src string, agent captainai.Provider) error {
+	var job remote.Job
+	if err := json.Unmarshal(spec.Agent, &job); err != nil {
+		return fmt.Errorf("decode the agent job of run %s: %w", api.run, err)
+	}
+	return remote.Execute(ctx, job, src, agent, func(message remote.Message) error {
+		return api.postMessage(ctx, message)
+	})
 }
 
 // runSnapshots lists the per-run snapshots in src's .gavel directory.
@@ -234,6 +251,18 @@ func (a runAPI) download(ctx context.Context, path, to string) error {
 		return fmt.Errorf("save the %s of run %s: %w", path, a.run, err)
 	}
 	return file.Close()
+}
+
+func (a runAPI) postMessage(ctx context.Context, message remote.Message) error {
+	data, err := json.Marshal(message)
+	if err != nil {
+		return fmt.Errorf("encode a %s message of run %s: %w", message.Kind, a.run, err)
+	}
+	resp, err := a.request(ctx, http.MethodPost, "messages", bytes.NewReader(data))
+	if err != nil {
+		return fmt.Errorf("send a %s message of run %s: %w", message.Kind, a.run, err)
+	}
+	return resp.Body.Close()
 }
 
 func (a runAPI) postResults(ctx context.Context, path string) error {

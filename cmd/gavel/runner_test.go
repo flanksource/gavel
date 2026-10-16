@@ -15,19 +15,24 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	captainai "github.com/flanksource/captain/pkg/ai"
+	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/gavel/sandbox"
+	"github.com/flanksource/gavel/todos/remote"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 type fakeRunAPI struct {
-	spec    sandbox.RunSpec
-	bundle  []byte
-	token   string
-	mu      sync.Mutex
-	results []string
+	spec     sandbox.RunSpec
+	bundle   []byte
+	token    string
+	mu       sync.Mutex
+	results  []string
+	messages []remote.Message
 }
 
 func (f *fakeRunAPI) handler(run uuid.UUID) http.Handler {
@@ -51,6 +56,17 @@ func (f *fakeRunAPI) handler(run uuid.UUID) http.Handler {
 		f.mu.Unlock()
 		w.WriteHeader(http.StatusCreated)
 		_, _ = w.Write([]byte(`{"runId":"run-x"}`))
+	}))
+	mux.HandleFunc("POST "+prefix+"/messages", auth(func(w http.ResponseWriter, r *http.Request) {
+		var message remote.Message
+		if err := json.NewDecoder(r.Body).Decode(&message); err != nil {
+			http.Error(w, `{"error":"bad message"}`, http.StatusBadRequest)
+			return
+		}
+		f.mu.Lock()
+		f.messages = append(f.messages, message)
+		f.mu.Unlock()
+		w.WriteHeader(http.StatusAccepted)
 	}))
 	return mux
 }
@@ -167,4 +183,50 @@ func TestRunnerExecReportsAnAPIError(t *testing.T) {
 	_, err := runnerExec(context.Background(), runnerOptions{Run: run.String(), Workspace: t.TempDir(), Getenv: runnerEnv(server.URL, "wrong", run), Output: io.Discard})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), fmt.Sprintf("get the spec of run %s: HTTP 401: bad token", run))
+}
+
+// scriptedRunnerAgent answers every turn with one scripted response in place of an agent CLI.
+type scriptedRunnerAgent struct{ text string }
+
+func (a scriptedRunnerAgent) GetModel() string { return "claude-sonnet-5" }
+func (a scriptedRunnerAgent) GetRuntime() api.Runtime {
+	return api.RuntimeOf(api.Anthropic, api.ModeAgent)
+}
+func (a scriptedRunnerAgent) Execute(context.Context, api.Spec) (*api.Response, error) {
+	return nil, fmt.Errorf("the scripted agent only streams")
+}
+func (a scriptedRunnerAgent) ExecuteStream(context.Context, api.Spec) (<-chan captainai.Event, error) {
+	ch := make(chan captainai.Event, 2)
+	ch <- captainai.Event{Kind: captainai.EventText, Text: a.text}
+	ch <- captainai.Event{Kind: captainai.EventResult, Success: true}
+	close(ch)
+	return ch, nil
+}
+
+func TestRunnerExecRunsAnAgentJobAndReportsIt(t *testing.T) {
+	run := uuid.New()
+	bundle, first := sourceBundle(t, map[string]string{"README.md": "first"})
+	spec := api.Spec{Model: api.Model{Name: "claude-sonnet-5", Provider: api.Anthropic, Mode: api.ModeAgent}, Prompt: api.Prompt{User: "fix the build"}}
+	spec.SetCwd("/srv/gavel/workspaces/org/repo")
+	job, err := json.Marshal(remote.Job{Resolved: api.ResolvedSpec{Spec: spec}, Config: remote.JobConfig{Model: spec.Model}, Timeout: time.Minute, Root: "/srv/gavel/workspaces/org/repo"})
+	require.NoError(t, err)
+	fake := &fakeRunAPI{spec: sandbox.RunSpec{Kind: "agent", Ref: "refs/heads/main", SHA: first, Agent: job}, bundle: bundle, token: "run-token"}
+	server := httptest.NewServer(fake.handler(run))
+	t.Cleanup(server.Close)
+	workspace := t.TempDir()
+
+	code, err := runnerExec(context.Background(), runnerOptions{
+		Run: run.String(), Workspace: workspace, Getenv: runnerEnv(server.URL, "run-token", run), Output: io.Discard,
+		Agent: scriptedRunnerAgent{text: "done"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 0, code)
+
+	require.NotEmpty(t, fake.messages)
+	assert.Equal(t, remote.KindStarted, fake.messages[0].Kind)
+	assert.Equal(t, filepath.Join(workspace, "src"), fake.messages[0].Spec.Cwd(), "the agent works in the job's checkout")
+	last := fake.messages[len(fake.messages)-1]
+	require.Equal(t, remote.KindResult, last.Kind)
+	assert.Empty(t, last.Error)
+	assert.Equal(t, "done", last.Result.Unwrap().Response.Text)
 }
