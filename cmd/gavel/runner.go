@@ -87,7 +87,7 @@ func runnerExec(ctx context.Context, opts runnerOptions) (int, error) {
 		return 0, err
 	}
 	if spec.Kind == "agent" {
-		return 0, runAgentJob(ctx, api, spec, src, opts.Agent)
+		return 0, runAgentJob(ctx, api, spec, src, opts.Agent, opts.Output)
 	}
 	name, args, err := jobCommand(spec, src)
 	if err != nil {
@@ -159,16 +159,34 @@ func jobCommand(spec sandbox.RunSpec, src string) (string, []string, error) {
 	}
 }
 
-// runAgentJob runs an agent run's step in src and reports it to serve as it goes.
-func runAgentJob(ctx context.Context, api runAPI, spec sandbox.RunSpec, src string, agent captainai.Provider) error {
+// runAgentJob runs an agent run's step in src and reports it to serve as it goes: its messages,
+// its agent's transcripts, and once it ends, its commits and then its result.
+func runAgentJob(ctx context.Context, api runAPI, spec sandbox.RunSpec, src string, agent captainai.Provider, output io.Writer) error {
 	var job remote.Job
 	if err := json.Unmarshal(spec.Agent, &job); err != nil {
 		return fmt.Errorf("decode the agent job of run %s: %w", api.run, err)
 	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("find the home directory the agent writes its transcripts under: %w", err)
+	}
+	transcripts := &transcriptUploader{api: api, home: home}
+	uploading, stopUploading := context.WithCancel(ctx)
+	uploaderDone := make(chan struct{})
+	go func() {
+		defer close(uploaderDone)
+		transcripts.every(uploading, transcriptInterval, output)
+	}()
+
 	send := func(message remote.Message) error { return api.postMessage(ctx, message) }
 	finished, err := remote.Execute(ctx, job, src, agent, send)
+	stopUploading()
+	<-uploaderDone
 	if err != nil {
 		return err
+	}
+	if err := transcripts.sync(ctx); err != nil {
+		fmt.Fprintf(output, "gavel runner: %s\n", err)
 	}
 	if err := pushRunCommits(ctx, api, finished.Result); err != nil {
 		finished.Err = errors.Join(finished.Err, err)

@@ -36,7 +36,8 @@ type fakeRunAPI struct {
 	messages []remote.Message
 	commits  [][]byte
 	// pushedSHA is the commit the commits endpoint says it pushed.
-	pushedSHA string
+	pushedSHA   string
+	transcripts map[string]string
 }
 
 func (f *fakeRunAPI) handler(run uuid.UUID) http.Handler {
@@ -68,6 +69,16 @@ func (f *fakeRunAPI) handler(run uuid.UUID) http.Handler {
 		f.mu.Unlock()
 		w.WriteHeader(http.StatusCreated)
 		_, _ = w.Write([]byte(`{"branch":"gavel/todo1234-run56789","sha":"` + f.pushedSHA + `"}`))
+	}))
+	mux.HandleFunc("POST "+prefix+"/transcripts", auth(func(w http.ResponseWriter, r *http.Request) {
+		data, _ := io.ReadAll(r.Body)
+		f.mu.Lock()
+		if f.transcripts == nil {
+			f.transcripts = map[string]string{}
+		}
+		f.transcripts[r.URL.Query().Get("source")+":"+r.URL.Query().Get("name")] = string(data)
+		f.mu.Unlock()
+		w.WriteHeader(http.StatusAccepted)
 	}))
 	mux.HandleFunc("POST "+prefix+"/messages", auth(func(w http.ResponseWriter, r *http.Request) {
 		var message remote.Message
@@ -299,4 +310,77 @@ func TestRunnerExecPushesTheCommitsAnAgentRunMade(t *testing.T) {
 	require.NotNil(t, result.Response.Workspace.Worktree)
 	assert.Equal(t, "gavel/todo1234-run56789", result.Response.Workspace.Worktree.Branch, "the result names the branch serve pushed")
 	assert.Equal(t, "abc123", result.Response.Workspace.Worktree.Head)
+}
+
+// transcribingAgent writes a Claude transcript under $HOME, as the Claude CLI does.
+type transcribingAgent struct{ t *testing.T }
+
+func (a transcribingAgent) GetModel() string { return "claude-sonnet-5" }
+func (a transcribingAgent) GetRuntime() api.Runtime {
+	return api.RuntimeOf(api.Anthropic, api.ModeAgent)
+}
+func (a transcribingAgent) Execute(context.Context, api.Spec) (*api.Response, error) {
+	return nil, fmt.Errorf("the transcribing agent only streams")
+}
+func (a transcribingAgent) ExecuteStream(context.Context, api.Spec) (<-chan captainai.Event, error) {
+	home, err := os.UserHomeDir()
+	require.NoError(a.t, err)
+	dir := filepath.Join(home, ".claude", "projects", "-workspace-src")
+	require.NoError(a.t, os.MkdirAll(dir, 0o755))
+	require.NoError(a.t, os.WriteFile(filepath.Join(dir, "session-1.jsonl"), []byte(`{"type":"user"}`+"\n"), 0o644))
+	ch := make(chan captainai.Event, 2)
+	ch <- captainai.Event{Kind: captainai.EventText, Text: "done"}
+	ch <- captainai.Event{Kind: captainai.EventResult, Success: true}
+	close(ch)
+	return ch, nil
+}
+
+func TestRunnerExecUploadsTheAgentsTranscripts(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	run := uuid.New()
+	bundle, first := sourceBundle(t, map[string]string{"README.md": "first"})
+	spec := api.Spec{Model: api.Model{Name: "claude-sonnet-5", Provider: api.Anthropic, Mode: api.ModeAgent}, Prompt: api.Prompt{User: "fix the build"}}
+	spec.SetCwd("/srv/repo")
+	job, err := json.Marshal(remote.Job{Resolved: api.ResolvedSpec{Spec: spec}, Config: remote.JobConfig{Model: spec.Model}, Timeout: time.Minute, Root: "/srv/repo"})
+	require.NoError(t, err)
+	fake := &fakeRunAPI{spec: sandbox.RunSpec{Kind: "agent", Ref: "refs/heads/main", SHA: first, Agent: job}, bundle: bundle, token: "run-token"}
+	server := httptest.NewServer(fake.handler(run))
+	t.Cleanup(server.Close)
+
+	code, err := runnerExec(context.Background(), runnerOptions{
+		Run: run.String(), Workspace: t.TempDir(), Getenv: runnerEnv(server.URL, "run-token", run), Output: io.Discard,
+		Agent: transcribingAgent{t: t},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 0, code)
+	assert.Equal(t, map[string]string{"claude:-workspace-src/session-1.jsonl": `{"type":"user"}` + "\n"}, fake.transcripts)
+	assert.Equal(t, remote.KindResult, fake.messages[len(fake.messages)-1].Kind, "the transcripts are up before the result")
+}
+
+func TestTranscriptUploaderUploadsOnlyWhatChanged(t *testing.T) {
+	home := t.TempDir()
+	run := uuid.New()
+	fake := &fakeRunAPI{token: "run-token"}
+	server := httptest.NewServer(fake.handler(run))
+	t.Cleanup(server.Close)
+	uploader := &transcriptUploader{api: runAPI{server: server.URL, token: "run-token", run: run.String(), client: http.DefaultClient}, home: home}
+	dir := filepath.Join(home, ".codex", "sessions", "2026", "10", "16")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	path := filepath.Join(dir, "rollout-1.jsonl")
+	require.NoError(t, os.WriteFile(path, []byte("one\n"), 0o644))
+
+	require.NoError(t, uploader.sync(context.Background()))
+	assert.Equal(t, map[string]string{"codex:2026/10/16/rollout-1.jsonl": "one\n"}, fake.transcripts)
+
+	fake.transcripts = nil
+	require.NoError(t, uploader.sync(context.Background()))
+	assert.Empty(t, fake.transcripts, "an unchanged transcript isn't uploaded again")
+
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err)
+	_, err = file.WriteString("two\n")
+	require.NoError(t, err)
+	require.NoError(t, file.Close())
+	require.NoError(t, uploader.sync(context.Background()))
+	assert.Equal(t, map[string]string{"codex:2026/10/16/rollout-1.jsonl": "one\ntwo\n"}, fake.transcripts, "a grown transcript is uploaded whole")
 }
