@@ -198,6 +198,9 @@ func (h *Host) prepare(ctx context.Context, todo *types.TODO, step Step, lc Cont
 		return nil, &ConfigurationError{Err: err}
 	}
 	class := definition.Class
+	if err := h.remoteRunnable(step, todo, definition); err != nil {
+		return nil, err
+	}
 	stepSpec, err := expandSpec(step.Spec, map[string]any{VarSubject: lc.Subject})
 	if err != nil {
 		return nil, &ConfigurationError{Err: fmt.Errorf("step %s: %w", step.Name, err)}
@@ -451,7 +454,13 @@ func (h *Host) dispatch(exec *todos.ExecutorContext, todo *types.TODO, step Step
 	if input.input.Record != nil {
 		input.input.Record.Outcome = h.recordedOutcome(runCtx, step, prepared, input, start)
 	}
-	out, err := promptrun.Run(runCtx, input.input)
+	var out promptrun.Result
+	var err error
+	if h.Remote != nil {
+		out, err = h.Remote.Run(runCtx, RemoteRun{Input: input.input, Hooks: input.runHooks, Admitted: input.admitted})
+	} else {
+		out, err = promptrun.Run(runCtx, input.input)
+	}
 	return input.dispatched(runCtx, out, err)
 }
 

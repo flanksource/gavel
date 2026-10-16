@@ -6,6 +6,7 @@ import (
 
 	captainai "github.com/flanksource/captain/pkg/ai"
 	"github.com/flanksource/captain/pkg/ai/agent"
+	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/commons-db/shell"
 	"github.com/flanksource/gavel/commit"
 	"github.com/flanksource/gavel/todos"
@@ -32,25 +33,56 @@ type HookOptions struct {
 }
 
 func (h *Host) Hooks(todo *types.TODO, req captainai.Request, opts HookOptions) []any {
-	var hooks []any
+	return h.runHooks(todo, req, opts).build(opts.pr)
+}
+
+// RunHooks is the data gavel's hooks for one run are built from, so a run that executes in a
+// sandbox rebuilds the same hooks there. It crosses to the sandbox as JSON.
+type RunHooks struct {
+	// Commits are the commit policies the resolved spec declares, and Meta the trailers the
+	// commits carry.
+	Commits []api.Commit            `json:"commits,omitempty"`
+	Meta    commit.AgentRunMetadata `json:"meta"`
+	Env     map[string]string       `json:"env,omitempty"`
+	Labels  map[string]string       `json:"labels,omitempty"`
+}
+
+func (h *Host) runHooks(todo *types.TODO, req captainai.Request, opts HookOptions) RunHooks {
+	hooks := RunHooks{
+		Env:    runEnvFor(todo, firstNonEmpty(req.SessionID, opts.Meta.SessionID)),
+		Labels: runLabelsFor(todo, opts.Meta, h.WorkDir),
+	}
 	if req.Workflow != nil && len(req.Workflow.Commits) > 0 {
-		options := commit.AgentHooksOptions{
-			Commits: req.Workflow.Commits,
-			Meta:    commit.AgentRunMetadata{IssueID: todo.ID, SessionID: opts.Meta.SessionID},
-		}
-		if opts.pr != nil && opts.pr.write {
-			options.PRTarget, options.ShouldCommit = opts.pr.target, completedPRTurn
+		hooks.Commits = req.Workflow.Commits
+		hooks.Meta = commit.AgentRunMetadata{IssueID: todo.ID, SessionID: opts.Meta.SessionID}
+	}
+	return hooks
+}
+
+// Build makes the hooks, in the order Hooks documents.
+func (r RunHooks) Build() []any {
+	return r.build(nil)
+}
+
+// build makes the hooks for a run, with pr's commit target and its own hook when the todo is
+// linked to a PR.
+func (r RunHooks) build(pr *prExecution) []any {
+	var hooks []any
+	if len(r.Commits) > 0 {
+		options := commit.AgentHooksOptions{Commits: r.Commits, Meta: r.Meta}
+		if pr != nil && pr.write {
+			options.PRTarget, options.ShouldCommit = pr.target, completedPRTurn
 		}
 		hooks = append(hooks, commit.AgentHooks(options)...)
 	}
-	if opts.pr != nil {
-		hooks = append(hooks, opts.pr)
+	if pr != nil {
+		hooks = append(hooks, pr)
 	}
-	if env := runEnvFor(todo, firstNonEmpty(req.SessionID, opts.Meta.SessionID)); len(env) > 0 {
-		hooks = append(hooks, &runEnv{env: env})
+	if len(r.Env) > 0 {
+		hooks = append(hooks, &runEnv{env: r.Env})
 	}
-	if labels := runLabelsFor(todo, opts.Meta, h.WorkDir); len(labels) > 0 {
-		hooks = append(hooks, &runLabels{labels: labels})
+	if len(r.Labels) > 0 {
+		hooks = append(hooks, &runLabels{labels: r.Labels})
 	}
 	return hooks
 }

@@ -24,9 +24,13 @@ type stepInput struct {
 	execution *todos.ExecutionResult
 	sawResult bool
 	eventMu   sync.Mutex
-	// hooks are gavel's own hooks; setup is the plugin gavel adds itself when a
-	// supplied provider skips Captain's, which must trail every other hook.
-	hooks     []any
+	// hooks are gavel's own hooks, built from runHooks; setup is the plugin
+	// gavel adds itself when a supplied provider skips Captain's, which must
+	// trail every other hook.
+	hooks    []any
+	runHooks RunHooks
+	// admitted runs once Captain committed a recorded run's admission.
+	admitted  func() error
 	setup     *capsetup.Plugin
 	triageNew *triagenew.Review
 }
@@ -46,7 +50,8 @@ func (h *Host) runInput(exec *todos.ExecutorContext, todo *types.TODO, prepared 
 	}
 	state := &stepInput{meta: h.runMetadata(req, providerSessionID, todo, prepared)}
 	state.execution = &todos.ExecutionResult{ExecutorName: h.executorName(prepared), Runtime: state.meta, Transcript: exec.GetTranscript()}
-	state.hooks = h.Hooks(todo, req, HookOptions{Meta: state.meta, pr: prepared.pr})
+	state.runHooks = h.runHooks(todo, req, HookOptions{Meta: state.meta, pr: prepared.pr})
+	state.hooks = state.runHooks.build(prepared.pr)
 	if opts.Provider != nil {
 		// A supplied provider skips Captain's setup hook, and gavel's
 		// supplied-provider seam still needs local setup.
@@ -99,6 +104,7 @@ func (in *stepInput) hookList(admitted *admittedHook) []any {
 func (in *stepInput) record(recording *promptrun.Recording, admitted func() error) {
 	in.input.Record = recording
 	in.input.Hooks = in.hookList(&admittedHook{admitted: admitted})
+	in.admitted = admitted
 }
 
 func (in *stepInput) start(exec *todos.ExecutorContext, todo *types.TODO, prepared *preparedStep) {

@@ -34,6 +34,9 @@ type Host struct {
 	// other step is affected. What it buys is the tier between trusting an agent's
 	// duplicate call and finding out after two TODOs have closed.
 	Preview bool
+	// Remote, when set, runs each step's prompt somewhere else — a sandbox job —
+	// while this host admits, records and classifies the run. Nil runs it here.
+	Remote RemoteRunner
 }
 
 // NewHost loads the project's configuration and lifecycle for a work dir.
