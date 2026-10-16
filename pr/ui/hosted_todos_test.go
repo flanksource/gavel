@@ -5,12 +5,14 @@ package ui
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/flanksource/gavel/sandbox"
@@ -247,4 +249,43 @@ func TestHostedTodosMoveAndTakeFixturesForTheirOwner(t *testing.T) {
 	require.Equal(t, http.StatusOK, status, moved)
 	_, list := hostedCall(t, base, http.MethodGet, "/api/todos?dir="+api, member, "org:member", nil)
 	assert.Equal(t, []string{"Shared"}, listedTitles(list), "it moved, still public")
+}
+
+func TestHostedRunCommitsAreReadFromTheOrgsRepository(t *testing.T) {
+	db, _, org := openOrgDB(t)
+	member := uuid.New()
+	require.NoError(t, db.Exec(`INSERT INTO users (id, issuer, clerk_user_id) VALUES (?, 'https://clerk.example', 'user_grace')`, member).Error)
+	dataDir := t.TempDir()
+	repo := pushedRepo(t, db, org, dataDir, "app")
+	workspace := "repo:" + repo.String()
+	base := hostedTodosServer(t, db, org, dataDir)
+
+	// A run's commits reach the repository on a gavel/ branch, as a sandbox job uploads them.
+	bare := filepath.Join(dataDir, "repos", org.String(), repo.String()+".git")
+	work := t.TempDir()
+	git := func(args ...string) string {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = work
+		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com")
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git %v: %s", args, out)
+		return strings.TrimSpace(string(out))
+	}
+	git("clone", "-q", bare, ".")
+	require.NoError(t, os.WriteFile(filepath.Join(work, "fix.go"), []byte("package app\n"), 0o644))
+	git("add", ".")
+	git("commit", "-q", "-m", "fix the build")
+	sha := git("rev-parse", "HEAD")
+	git("push", "-q", "origin", "HEAD:refs/heads/gavel/abcd1234-ef567890")
+
+	status, files := hostedCall(t, base, http.MethodGet, "/api/todos/commits/files?dir="+workspace+"&hash="+sha, member, "org:member", nil)
+	require.Equal(t, http.StatusOK, status, files)
+	assert.Contains(t, fmt.Sprint(files["files"]), "fix.go")
+
+	status, diff := hostedCall(t, base, http.MethodGet, "/api/todos/commits/diff?dir="+workspace+"&hash="+sha, member, "org:member", nil)
+	require.Equal(t, http.StatusOK, status, diff)
+	assert.Contains(t, diff["diff"], "+package app")
+
+	status, refused := hostedCall(t, base, http.MethodGet, "/api/todos/commits/diff?dir=/etc&hash="+sha, member, "org:member", nil)
+	assert.Equal(t, http.StatusBadRequest, status, refused)
 }

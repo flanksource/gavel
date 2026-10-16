@@ -59,6 +59,12 @@ func (s *Sources) Checkout(ctx context.Context, repo Repo) (Checkout, error) {
 
 // sourceDir is the repository Sources reads repo from: its pushed bare repository, or its GitHub
 // mirror, fetched first.
+// GitDir is repo's git directory on serve: a pushed repository's bare repository, or a GitHub
+// repository's mirror, brought up to date. A run's uploaded commits are there.
+func (s *Sources) GitDir(ctx context.Context, repo Repo) (string, error) {
+	return s.sourceDir(ctx, repo)
+}
+
 func (s *Sources) sourceDir(ctx context.Context, repo Repo) (string, error) {
 	switch repo.Source {
 	case "push":

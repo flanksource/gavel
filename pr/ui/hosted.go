@@ -52,6 +52,7 @@ var hostedPassThrough = []string{
 	"POST /api/v1/todo/{id}/run", "POST /api/v1/todo/{id}/plan", "POST /api/v1/todo/{id}/triage",
 	"POST /api/todos/verification/fixture", "GET /api/todos/verification/schema", "/api/todos/transfer",
 	"POST /api/todos/github", "POST /api/v1/todo/{id}/push",
+	"GET /api/todos/commits/diff", "GET /api/todos/commits/files",
 }
 
 // hostedAnswer is a fixed response a hosted dashboard gives instead of the handler.

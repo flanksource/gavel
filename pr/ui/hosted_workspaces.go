@@ -72,31 +72,50 @@ type HostedWorkspace struct {
 // Resolve checks out the repository ref names and returns its workspace. ref is repo:<id>, or
 // the repository's checkout path as an earlier response gave it.
 func (w HostedWorkspaces) Resolve(ctx context.Context, org uuid.UUID, ref string) (HostedWorkspace, error) {
-	ref = strings.TrimSpace(ref)
-	id, ok := w.repoID(org, ref)
-	if !ok {
-		return HostedWorkspace{}, fmt.Errorf("todo workspace %q %w: name it repo:<id>", ref, errHostedWorkspace)
-	}
-	repos, err := w.repos(ctx, org, &id)
+	repo, err := w.repo(ctx, org, ref)
 	if err != nil {
 		return HostedWorkspace{}, err
 	}
-	if len(repos) == 0 {
-		return HostedWorkspace{}, fmt.Errorf("%w: todo workspace %q %w", ErrProjectNotFound, ref, errHostedWorkspace)
-	}
-	checkout, err := w.Sources.Checkout(ctx, repos[0])
+	checkout, err := w.Sources.Checkout(ctx, repo)
 	if err != nil {
 		return HostedWorkspace{}, err
 	}
 	workspace := HostedWorkspace{
-		Options: todoruntime.WorkspaceOptions{Name: repos[0].Name, RootPath: checkout.Dir},
-		Repo:    repos[0],
+		Options: todoruntime.WorkspaceOptions{Name: repo.Name, RootPath: checkout.Dir},
+		Repo:    repo,
 		SHA:     checkout.SHA,
 	}
-	if repos[0].Source == "github" {
-		workspace.Options.Repositories = []string{repos[0].Name}
+	if repo.Source == "github" {
+		workspace.Options.Repositories = []string{repo.Name}
 	}
 	return workspace, nil
+}
+
+// repo is the organization's repository ref names: repo:<id>, or its checkout path.
+func (w HostedWorkspaces) repo(ctx context.Context, org uuid.UUID, ref string) (sandbox.Repo, error) {
+	ref = strings.TrimSpace(ref)
+	id, ok := w.repoID(org, ref)
+	if !ok {
+		return sandbox.Repo{}, fmt.Errorf("todo workspace %q %w: name it repo:<id>", ref, errHostedWorkspace)
+	}
+	repos, err := w.repos(ctx, org, &id)
+	if err != nil {
+		return sandbox.Repo{}, err
+	}
+	if len(repos) == 0 {
+		return sandbox.Repo{}, fmt.Errorf("%w: todo workspace %q %w", ErrProjectNotFound, ref, errHostedWorkspace)
+	}
+	return repos[0], nil
+}
+
+// GitDir is the git directory of the repository ref names, as Resolve reads ref, without
+// checking it out: a run's commits are read from it.
+func (w HostedWorkspaces) GitDir(ctx context.Context, org uuid.UUID, ref string) (string, error) {
+	repo, err := w.repo(ctx, org, ref)
+	if err != nil {
+		return "", err
+	}
+	return w.Sources.GitDir(ctx, repo)
 }
 
 func (w HostedWorkspaces) repoID(org uuid.UUID, ref string) (uuid.UUID, bool) {
