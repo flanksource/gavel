@@ -35,23 +35,10 @@ jobs:
 
       - uses: ./.github/actions/setup-task
 
-      # Build and force-commit the embedded UI bundles (testui.js / prui.js)
-      # so the release tag carries them. They are gitignored, so without this
-      # step a downstream `go get` by tag/SHA fails with
-      # `//go:embed dist/*.js`: "no matching files found".
-      - name: Build and commit embedded UI bundles
+      - name: Build embedded UI bundles
         run: |
           task test-ui
           task pr-ui
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -f testrunner/ui/dist/testui.js pr/ui/dist/prui.js
-          if ! git diff --cached --quiet; then
-            git commit -m "chore(embed): rebuild UI bundles for release"
-            git push origin HEAD:${{ github.ref_name }}
-          else
-            echo "UI bundles unchanged"
-          fi
 
       - uses: flanksource/deps@v1.0.23
         with:
@@ -59,17 +46,29 @@ jobs:
             svu
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # The tag must carry the embedded UI bundles (testui.js / prui.js):
+      # without them a downstream `go get` by tag fails with
+      # `//go:embed dist/*.js`: "no matching files found". The bundles are
+      # committed on a release-only commit and only the tag is pushed, because
+      # main's ruleset requires status checks and rejects a direct bot push.
+      # That commit is never on main, so svu must count tags on every branch.
       - id: tag
         run: |
-          next=$(svu patch)
-          current=$(svu current)
+          next=$(svu patch --tag.mode all --tag.pattern 'v*')
+          current=$(svu current --tag.mode all --tag.pattern 'v*')
           if [ "$next" = "$current" ]; then
             echo "created=false" >> "$GITHUB_OUTPUT"
             echo "No new version to tag (current: $current)"
             exit 0
           fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -f testrunner/ui/dist/testui.js pr/ui/dist/prui.js
+          if ! git diff --cached --quiet; then
+            git commit -m "chore(embed): rebuild UI bundles for $next"
+          fi
           git tag "$next"
-          git push origin "$next"
+          git push origin "refs/tags/$next"
           echo "tag=$next" >> "$GITHUB_OUTPUT"
           echo "created=true" >> "$GITHUB_OUTPUT"
 
