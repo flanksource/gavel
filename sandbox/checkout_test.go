@@ -26,9 +26,11 @@ func TestCheckoutKeepsTheDefaultBranchCurrent(t *testing.T) {
 	sources := &Sources{DataDir: dataDir}
 	target := Repo{ID: repo, Org: org, Source: "push"}
 
-	dir, err := sources.Checkout(context.Background(), target)
+	checkout, err := sources.Checkout(context.Background(), target)
 	require.NoError(t, err)
+	dir := checkout.Dir
 	assert.Equal(t, filepath.Join(dataDir, "workspaces", org.String(), repo.String()), dir)
+	assert.Equal(t, git(t, work, "rev-parse", "HEAD"), checkout.SHA)
 	config, err := os.ReadFile(filepath.Join(dir, ".gavel.yaml"))
 	require.NoError(t, err)
 	assert.Equal(t, "todos: {}\n", string(config))
@@ -42,9 +44,10 @@ func TestCheckoutKeepsTheDefaultBranchCurrent(t *testing.T) {
 
 	commitFile(t, work, ".gavel.yaml", "todos: {lifecycle: custom}\n")
 	git(t, work, "push", "-q", bare, "main")
-	dir, err = sources.Checkout(context.Background(), target)
+	checkout, err = sources.Checkout(context.Background(), target)
 	require.NoError(t, err)
-	config, err = os.ReadFile(filepath.Join(dir, ".gavel.yaml"))
+	assert.Equal(t, git(t, work, "rev-parse", "HEAD"), checkout.SHA)
+	config, err = os.ReadFile(filepath.Join(checkout.Dir, ".gavel.yaml"))
 	require.NoError(t, err)
 	assert.Equal(t, "todos: {lifecycle: custom}\n", string(config), "the checkout follows the default branch")
 }

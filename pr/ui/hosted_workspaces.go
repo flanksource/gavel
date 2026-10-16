@@ -72,11 +72,11 @@ func (w HostedWorkspaces) Resolve(ctx context.Context, org uuid.UUID, ref string
 	if len(repos) == 0 {
 		return todoruntime.WorkspaceOptions{}, fmt.Errorf("%w: todo workspace %q %w", ErrProjectNotFound, ref, errHostedWorkspace)
 	}
-	dir, err := w.Sources.Checkout(ctx, repos[0])
+	checkout, err := w.Sources.Checkout(ctx, repos[0])
 	if err != nil {
 		return todoruntime.WorkspaceOptions{}, err
 	}
-	options := todoruntime.WorkspaceOptions{Name: repos[0].Name, RootPath: dir}
+	options := todoruntime.WorkspaceOptions{Name: repos[0].Name, RootPath: checkout.Dir}
 	if repos[0].Source == "github" {
 		options.Repositories = []string{repos[0].Name}
 	}
