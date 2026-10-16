@@ -12,6 +12,7 @@ import (
 	cmuxprov "github.com/flanksource/captain/pkg/ai/provider/cmux"
 	"github.com/flanksource/captain/pkg/api"
 	captaindb "github.com/flanksource/captain/pkg/database"
+	"github.com/flanksource/gavel/todos/native"
 	"github.com/google/uuid"
 )
 
@@ -99,6 +100,10 @@ func (s *Server) handleTodoSessionStats(w http.ResponseWriter, r *http.Request) 
 		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("sessionId is required"))
 		return
 	}
+	if s.workspaces != nil {
+		s.writeHostedSessionStats(w, r, sessionID)
+		return
+	}
 	dir, err := s.resolveTodoDir(r.URL.Query().Get("dir"))
 	if err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)
@@ -111,16 +116,7 @@ func (s *Server) handleTodoSessionStats(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		if resolved.known {
-			resp, err := captainSessionStats(r.Context(), store, sessionID, resolved)
-			if err != nil {
-				writeTodoError(w, http.StatusInternalServerError, err)
-				return
-			}
-			if err := attachPendingApproval(r.Context(), store, resolved, &resp); err != nil {
-				writeTodoError(w, http.StatusInternalServerError, err)
-				return
-			}
-			json.NewEncoder(w).Encode(resp) //nolint:errcheck
+			writeCaptainSessionStats(w, r, store, sessionID, resolved)
 			return
 		}
 	}
@@ -137,6 +133,49 @@ func (s *Server) handleTodoSessionStats(w http.ResponseWriter, r *http.Request) 
 	// A session with no Captain row has no durable approval table behind it, and
 	// therefore nothing that could be awaiting a decision.
 	json.NewEncoder(w).Encode(todoSessionStatsResponse{SessionStats: stats}) //nolint:errcheck
+}
+
+// writeHostedSessionStats answers the stats of a hosted run's session, which Captain records,
+// when it is a run of one of the organization's todos the request's user can see.
+func (s *Server) writeHostedSessionStats(w http.ResponseWriter, r *http.Request, sessionID string) {
+	store, status, err := s.approvalStore(r.Context(), r.URL.Query().Get("dir"))
+	if err != nil {
+		writeTodoError(w, status, err)
+		return
+	}
+	resolved, err := resolveCaptainSession(r.Context(), store, sessionID)
+	if err != nil {
+		writeTodoError(w, http.StatusInternalServerError, err)
+		return
+	}
+	session := resolved.run
+	if session == nil {
+		session = resolved.transcript
+	}
+	if session == nil {
+		writeTodoError(w, http.StatusNotFound, fmt.Errorf("%w: session %s isn't a run of this organization's todos", native.ErrNotFound, sessionID))
+		return
+	}
+	if err := s.requireSessionAccess(r.Context(), session.ID, false); err != nil {
+		writeTodoError(w, http.StatusNotFound, err)
+		return
+	}
+	writeCaptainSessionStats(w, r, store, sessionID, resolved)
+}
+
+// writeCaptainSessionStats answers the stats of a session Captain knows, with its pending
+// approval.
+func writeCaptainSessionStats(w http.ResponseWriter, r *http.Request, store captainSessionStore, sessionID string, resolved captainSessionResolution) {
+	resp, err := captainSessionStats(r.Context(), store, sessionID, resolved)
+	if err != nil {
+		writeTodoError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if err := attachPendingApproval(r.Context(), store, resolved, &resp); err != nil {
+		writeTodoError(w, http.StatusInternalServerError, err)
+		return
+	}
+	json.NewEncoder(w).Encode(resp) //nolint:errcheck
 }
 
 // attachPendingApproval overrides the derived state when a tool request is
@@ -228,7 +267,7 @@ func (s *Server) handleTodoSessionApprove(w http.ResponseWriter, r *http.Request
 			writeTodoError(w, http.StatusNotFound, err)
 			return
 		}
-		if err := s.requireApprovalAccess(r.Context(), request.SessionID, true); err != nil {
+		if err := s.requireSessionAccess(r.Context(), request.SessionID, true); err != nil {
 			writeTodoError(w, http.StatusNotFound, err)
 			return
 		}
@@ -294,7 +333,7 @@ func (s *Server) handleTodoSessionApprovals(w http.ResponseWriter, r *http.Reque
 		writeTodoError(w, status, err)
 		return
 	}
-	if err := s.requireApprovalAccess(r.Context(), sessionID, false); err != nil {
+	if err := s.requireSessionAccess(r.Context(), sessionID, false); err != nil {
 		writeTodoError(w, http.StatusNotFound, err)
 		return
 	}

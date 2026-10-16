@@ -41,7 +41,7 @@ var _ = Describe("hosted mode routes", func() {
 			{http.MethodGet, "/api/activity/cache"},
 			{http.MethodGet, "/api/captain/sessions/abc"},
 			{http.MethodGet, "/api/sessions"},
-			{http.MethodGet, "/api/todos/session/detail"},
+			{http.MethodPost, "/api/todos/session/focus"},
 			{http.MethodGet, "/api/git/metrics"},
 			{http.MethodGet, "/api/projects/git-summary"},
 			{http.MethodGet, "/api/projects/app/diff"},

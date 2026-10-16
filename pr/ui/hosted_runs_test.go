@@ -406,3 +406,42 @@ func TestHostedApprovalsBelongToTheTodosOwner(t *testing.T) {
 		return outcomes == 1
 	}, 30*time.Second, 50*time.Millisecond, "the stopped run's outcome reached the todo")
 }
+
+func TestHostedRunSessionsAreSeenByThoseWhoSeeTheTodo(t *testing.T) {
+	h := newHostedRuns(t, nil)
+	_, created := hostedCall(t, h.base, http.MethodPost, "/api/todos", h.ada, "org:member", map[string]any{"dir": h.workspace, "title": "Fix the build"})
+	todo := created["id"].(string)
+	status, started := hostedCall(t, h.base, http.MethodPost, "/api/todos/run", h.ada, "org:member", map[string]any{"dir": h.workspace, "ref": todo, "step": "plan"})
+	require.Equal(t, http.StatusOK, status, started)
+	var outcomes int64
+	require.Eventually(t, func() bool {
+		require.NoError(t, h.db.Raw(`SELECT count(*) FROM todo_issue_events WHERE issue_id = ? AND kind = 'lifecycle_outcome'`, todo).Scan(&outcomes).Error)
+		return outcomes == 1
+	}, 30*time.Second, 50*time.Millisecond, "the plan run finished")
+
+	detailPath := "/api/todos/session/detail?dir=" + h.workspace + "&ref=" + todo
+	status, detail := hostedCall(t, h.base, http.MethodGet, detailPath, h.ada, "org:member", nil)
+	require.Equal(t, http.StatusOK, status, detail)
+	attempts := detail["attempts"].([]any)
+	require.Len(t, attempts, 1)
+	attempt := attempts[0].(map[string]any)
+	assert.Equal(t, started["promptRunId"], attempt["promptRunId"])
+	admission := attempt["admissionSessionId"].(string)
+
+	planPath := "/api/todos/session/plan?dir=" + h.workspace + "&ref=" + todo
+	status, plan := hostedCall(t, h.base, http.MethodGet, planPath, h.ada, "org:member", nil)
+	require.Equal(t, http.StatusOK, status, plan)
+	assert.Contains(t, plan["content"], "Fix the build.", "the plan the sandboxed agent wrote")
+
+	statsPath := "/api/todos/session/stats?dir=" + h.workspace + "&sessionId=" + admission
+	status, stats := hostedCall(t, h.base, http.MethodGet, statsPath, h.ada, "org:member", nil)
+	require.Equal(t, http.StatusOK, status, stats)
+	agentStatsPath := "/api/todos/session/stats?dir=" + h.workspace + "&sessionId=" + attempt["providerSessionId"].(string)
+	status, stats = hostedCall(t, h.base, http.MethodGet, agentStatsPath, h.ada, "org:member", nil)
+	require.Equal(t, http.StatusOK, status, "the agent's own session, as the dashboard follows it: %v", stats)
+
+	for _, path := range []string{detailPath, planPath, statsPath, agentStatsPath} {
+		status, refused := hostedCall(t, h.base, http.MethodGet, path, h.grace, "org:member", nil)
+		assert.Equal(t, http.StatusNotFound, status, "another member doesn't see %s of a private todo: %v", path, refused)
+	}
+}

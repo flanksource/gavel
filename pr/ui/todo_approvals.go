@@ -218,8 +218,8 @@ func isQuestionRequest(request captaindb.TurnRequest) (bool, error) {
 	return kind == api.ApprovalKindQuestion, nil
 }
 
-// approvalStore is the Captain store the approvals of dir's runs are in, with the status to
-// answer when there is none.
+// approvalStore is the Captain store dir's runs, and their approvals, are recorded in, with the
+// status to answer when there is none.
 func (s *Server) approvalStore(ctx context.Context, dir string) (*captaindb.DB, int, error) {
 	if s.workspaces == nil {
 		resolved, err := s.resolveTodoDir(dir)
@@ -234,7 +234,7 @@ func (s *Server) approvalStore(ctx context.Context, dir string) (*captaindb.DB, 
 	}
 	provider, _, err := s.todoProviderContext(ctx, todoSource{Dir: dir})
 	if err != nil {
-		return nil, http.StatusBadRequest, err
+		return nil, todoErrorStatus(http.StatusBadRequest, err), err
 	}
 	native, ok := provider.(captainSessionProvider)
 	if !ok || native.Captain() == nil {
@@ -243,10 +243,10 @@ func (s *Server) approvalStore(ctx context.Context, dir string) (*captaindb.DB, 
 	return native.Captain(), 0, nil
 }
 
-// requireApprovalAccess fails unless the run that asked for approval in session belongs to one
-// of this organization's todos, which the request's user may see or, with change, change. A
-// dashboard serving the host's projects answers every approval.
-func (s *Server) requireApprovalAccess(ctx context.Context, session uuid.UUID, change bool) error {
+// requireSessionAccess fails unless session, a run's admission session or its agent's session,
+// belongs to one of this organization's todos, which the request's user may see or, with change,
+// change. A dashboard serving the host's projects reaches every session.
+func (s *Server) requireSessionAccess(ctx context.Context, session uuid.UUID, change bool) error {
 	if s.workspaces == nil {
 		return nil
 	}
@@ -261,8 +261,8 @@ func (s *Server) requireApprovalAccess(ctx context.Context, session uuid.UUID, c
 		JOIN todo_issue_prompt_runs AS link ON link.prompt_run_id = run.id
 		JOIN todo_issues AS issue ON issue.id = link.issue_id
 		JOIN todo_workspaces AS workspace ON workspace.id = issue.workspace_id
-		WHERE run.session_id = ? AND workspace.org_id = ?
-		LIMIT 1`, session, s.orgID()).Scan(&issue)
+		WHERE (run.session_id = ? OR run.execution_session_id = ?) AND workspace.org_id = ?
+		LIMIT 1`, session, session, s.orgID()).Scan(&issue)
 	if result.Error != nil {
 		return result.Error
 	}
