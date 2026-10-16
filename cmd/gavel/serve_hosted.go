@@ -30,6 +30,7 @@ import (
 	"github.com/flanksource/gavel/sandbox"
 	"github.com/flanksource/gavel/serve"
 	"github.com/flanksource/gavel/tenant"
+	"github.com/flanksource/gavel/todos/remote"
 	"github.com/flanksource/gavel/verify"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -151,6 +152,17 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 	if err != nil {
 		return hostedStack{}, err
 	}
+	secret, err := base64.StdEncoding.DecodeString(opts.secretKey)
+	if err != nil {
+		return hostedStack{}, fmt.Errorf("decode GAVEL_SECRET_KEY: %w", err)
+	}
+	dispatcher, err := newSandboxDispatcher(ctx, opts, db, cache, secret)
+	if err != nil {
+		return hostedStack{}, err
+	}
+	// An agent run's sandbox job sends its messages to the run API, which the relay hands to the
+	// run waiting for them.
+	relay := &remote.Relay{}
 
 	orgs := ui.NewOrgServers(func(ctx context.Context, scope tenant.Scope) (*ui.Server, error) {
 		cfg, err := ui.LoadOrgSearchConfig(ctx, db, scope.OrgID)
@@ -166,6 +178,9 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 		srv.SetBlobStore(blobs)
 		srv.SetHostedMode(true)
 		srv.SetHostedWorkspaces(ui.HostedWorkspaces{DB: db, Sources: sources})
+		if dispatcher != nil {
+			srv.SetAgentRuns(ui.AgentRuns{Dispatcher: dispatcher, Relay: relay})
+		}
 		srv.SetAuthConfig(authConfig)
 		if app != nil {
 			ui.NewPoller(srv, orgPRSearch(srv, store, cache, scope.OrgID), interval).Start(ctx)
@@ -174,10 +189,6 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 		return srv, nil
 	}, orgIdleTTL)
 	next := orgs.Handler()
-	secret, err := base64.StdEncoding.DecodeString(opts.secretKey)
-	if err != nil {
-		return hostedStack{}, fmt.Errorf("decode GAVEL_SECRET_KEY: %w", err)
-	}
 	if app != nil {
 		link := &ui.GitHubLink{App: app, Store: store, Clerk: backend, SecretKey: secret}
 		mux := http.NewServeMux()
@@ -202,16 +213,11 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 		Cache: cache,
 	}
 	// Sandbox jobs authenticate with their run token.
-	runs := &ui.RunsAPI{DB: db, TokenKey: runTokenKey(secret), Cache: cache, Sources: sources}
+	runs := &ui.RunsAPI{DB: db, TokenKey: runTokenKey(secret), Cache: cache, Sources: sources, Relay: relay}
 	root := http.NewServeMux()
 	root.Handle("/api/ci/", ciResults.Handler())
 	root.Handle("/api/runs/", runs.Handler())
 	root.Handle("/", auth.Middleware(next, shell.Handler()))
-	dispatcher, err := newSandboxDispatcher(ctx, opts, db, cache, secret)
-	if err != nil {
-		stop()
-		return hostedStack{}, err
-	}
 	return hostedStack{handler: root, members: auth.Members, stop: stop, dispatcher: dispatcher}, nil
 }
 

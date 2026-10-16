@@ -346,3 +346,46 @@ func TestHostedDashboardRefusesAnUnpreparedContainerSandbox(t *testing.T) {
 	assert.Contains(t, err.Error(), "the sandbox network "+opts.SandboxNetwork+" is missing")
 	assert.Contains(t, err.Error(), "docker network create "+opts.SandboxNetwork)
 }
+
+func TestHostedDashboardServesTodosInTheOrgsRepositories(t *testing.T) {
+	f := newHostedFixture(t)
+	cookie := "__session=" + f.clerk.SessionToken(hostedPublicURL, time.Now().Add(time.Hour))
+	do := func(method, path, body string) (int, string) {
+		t.Helper()
+		req, err := http.NewRequest(method, f.server.URL+path, strings.NewReader(body))
+		require.NoError(t, err)
+		req.Header.Set("Cookie", cookie)
+		req.Header.Set("Origin", hostedPublicURL)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		data, err := io.ReadAll(resp.Body)
+		require.NoError(t, err)
+		return resp.StatusCode, string(data)
+	}
+	status, body := do(http.MethodGet, "/api/me", "")
+	require.Equal(t, http.StatusOK, status, body)
+	var org struct{ ID uuid.UUID }
+	require.NoError(t, f.db.Gorm().Raw(`SELECT id FROM orgs WHERE clerk_org_id = 'org_a'`).Scan(&org).Error)
+	var repo struct{ ID uuid.UUID }
+	require.NoError(t, f.db.Gorm().Raw(`INSERT INTO repos (org_id, name, source) VALUES (?, 'app', 'push') RETURNING id`, org.ID).Scan(&repo).Error)
+	work := t.TempDir()
+	gitIn(t, work, "init", "-q", "-b", "main")
+	gitIn(t, work, "commit", "-q", "--allow-empty", "-m", "init")
+	gitIn(t, work, "clone", "-q", "--bare", work, filepath.Join(f.opts.DataDir, "repos", org.ID.String(), repo.ID.String()+".git"))
+	workspace := "repo:" + repo.ID.String()
+
+	status, body = do(http.MethodGet, "/api/projects", "")
+	require.Equal(t, http.StatusOK, status, body)
+	assert.Contains(t, body, `"dir":"`+workspace+`"`)
+
+	status, body = do(http.MethodPost, "/api/todos", `{"dir":"`+workspace+`","title":"Fix the build"}`)
+	require.Equal(t, http.StatusCreated, status, body)
+	var created struct{ ID string }
+	require.NoError(t, json.Unmarshal([]byte(body), &created))
+
+	status, body = do(http.MethodPost, "/api/todos/run", `{"dir":"`+workspace+`","ref":"`+created.ID+`","step":"plan"}`)
+	assert.Equal(t, http.StatusNotImplemented, status)
+	assert.Contains(t, body, "agent runs need a sandbox: start gavel serve with --sandbox")
+}

@@ -60,6 +60,18 @@ func TestDashboardOptionsValidate(t *testing.T) {
 			`--sandbox must be docker, podman or kubernetes, got "firecracker"`,
 		}},
 		{"sandbox without an image", func(o *DashboardOptions) { o.Sandbox = "kubernetes" }, []string{"--sandbox requires --sandbox-image"}},
+		{"model keys for sandbox jobs", func(o *DashboardOptions) {
+			o.Sandbox, o.SandboxImage, o.SandboxSecretEnv = "kubernetes", "runner:1", []string{"ANTHROPIC_API_KEY", "OPENAI_API_KEY"}
+		}, nil},
+		{"secrets without a sandbox", func(o *DashboardOptions) { o.SandboxSecretEnv = []string{"ANTHROPIC_API_KEY"} }, []string{
+			"--sandbox-secret-env copies secrets into sandbox jobs and needs --sandbox",
+		}},
+		{"a secret named like a job's own", func(o *DashboardOptions) {
+			o.Sandbox, o.SandboxImage, o.SandboxSecretEnv = "kubernetes", "runner:1", []string{"GAVEL_RUN_TOKEN", "not a name"}
+		}, []string{
+			"--sandbox-secret-env GAVEL_RUN_TOKEN: a job's GAVEL_ variables are its own",
+			`--sandbox-secret-env "not a name" is not an environment variable name`,
+		}},
 		{"container sandbox without the serve address", func(o *DashboardOptions) { o.Sandbox, o.SandboxImage = "podman", "runner:1" }, []string{
 			"--sandbox podman requires --sandbox-serve-addr, the IP:port sandbox containers reach gavel serve at",
 		}},
@@ -146,4 +158,16 @@ func TestServeCommandHasAuthFlags(t *testing.T) {
 	for _, name := range []string{"clerk-secret-key", "secret-key"} {
 		assert.Nilf(t, serve.Flags().Lookup(name), "secrets come from env only, not --%s", name)
 	}
+}
+
+func TestSandboxSecretsCopyServesEnvironment(t *testing.T) {
+	env := map[string]string{"ANTHROPIC_API_KEY": "sk-ant", "OPENAI_API_KEY": ""}
+	getenv := func(name string) string { return env[name] }
+
+	secrets, err := sandboxSecrets([]string{"ANTHROPIC_API_KEY"}, getenv)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"ANTHROPIC_API_KEY": "sk-ant"}, secrets)
+
+	_, err = sandboxSecrets([]string{"ANTHROPIC_API_KEY", "OPENAI_API_KEY"}, getenv)
+	require.EqualError(t, err, "--sandbox-secret-env OPENAI_API_KEY is not set in gavel serve's environment")
 }

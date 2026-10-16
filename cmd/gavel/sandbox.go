@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	ghcache "github.com/flanksource/gavel/github/cache"
@@ -43,12 +44,30 @@ func newSandboxDispatcher(ctx context.Context, opts DashboardOptions, db *gorm.D
 	default:
 		return nil, fmt.Errorf("--sandbox must be docker, podman or kubernetes, got %q", opts.Sandbox)
 	}
+	secrets, err := sandboxSecrets(opts.SandboxSecretEnv, os.Getenv)
+	if err != nil {
+		return nil, err
+	}
 	dispatcher := &sandbox.Dispatcher{
 		DB: db, Executor: executor, Image: opts.SandboxImage, Server: strings.TrimRight(opts.PublicURL, "/"),
-		TokenKey: runTokenKey(secret),
+		TokenKey: runTokenKey(secret), SecretEnv: secrets,
 	}
 	if cache != nil {
 		dispatcher.Logs = cache.OrgBlobs
 	}
 	return dispatcher, nil
+}
+
+// sandboxSecrets reads the --sandbox-secret-env variables from serve's environment. A variable
+// that isn't set is an error: a job would run without the key it was meant to get.
+func sandboxSecrets(names []string, getenv func(string) string) (map[string]string, error) {
+	secrets := make(map[string]string, len(names))
+	for _, name := range names {
+		value := getenv(name)
+		if value == "" {
+			return nil, fmt.Errorf("--sandbox-secret-env %s is not set in gavel serve's environment", name)
+		}
+		secrets[name] = value
+	}
+	return secrets, nil
 }

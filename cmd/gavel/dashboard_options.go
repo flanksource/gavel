@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -38,6 +39,7 @@ type DashboardOptions struct {
 	SandboxServeAddr    string   `flag:"sandbox-serve-addr" help:"IP:port sandbox containers reach gavel serve at, the one private address the firewall allows (docker, podman)"`
 	SandboxNamespace    string   `flag:"sandbox-namespace" help:"Namespace sandbox Jobs run in (kubernetes)" default:"gavel-sandbox"`
 	ServePodSelector    string   `flag:"serve-pod-selector" help:"Labels of gavel serve's pods, which sandbox Jobs may reach (kubernetes)" default:"app.kubernetes.io/name=gavel"`
+	SandboxSecretEnv    []string `flag:"sandbox-secret-env" help:"Environment variables copied from gavel serve into every sandbox job's secrets, such as ANTHROPIC_API_KEY for agent runs; repeat for each"`
 	SandboxExtraDeny    []string `flag:"sandbox-extra-deny" help:"More CIDRs sandbox Jobs may not reach, such as cluster pod and service ranges outside RFC 1918 (kubernetes)"`
 	PropertiesFile      string   `flag:"properties-file" help:"Properties file with retention.* windows such as retention.job_logs=60d (default /etc/gavel/gavel.properties when it exists)"`
 
@@ -144,6 +146,17 @@ func (o DashboardOptions) Validate() error {
 		default:
 			add("--sandbox must be docker, podman or kubernetes, got %q", o.Sandbox)
 		}
+		if len(o.SandboxSecretEnv) > 0 && o.Sandbox == "" {
+			add("--sandbox-secret-env copies secrets into sandbox jobs and needs --sandbox")
+		}
+		for _, name := range o.SandboxSecretEnv {
+			switch {
+			case !envName.MatchString(name):
+				add("--sandbox-secret-env %q is not an environment variable name", name)
+			case strings.HasPrefix(name, "GAVEL_"):
+				add("--sandbox-secret-env %s: a job's GAVEL_ variables are its own", name)
+			}
+		}
 		for _, local := range []struct {
 			flag string
 			set  bool
@@ -169,3 +182,6 @@ func (o DashboardOptions) Validate() error {
 	}
 	return errors.Join(problems...)
 }
+
+// envName is what an environment variable may be named.
+var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
