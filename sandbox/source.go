@@ -73,20 +73,15 @@ func (s *Sources) updateMirror(ctx context.Context, repo Repo) (string, error) {
 	lock.(*sync.Mutex).Lock()
 	defer lock.(*sync.Mutex).Unlock()
 
-	token, err := s.Token(ctx, repo.InstallationID)
+	header, err := s.authHeader(ctx, repo)
 	if err != nil {
-		return "", fmt.Errorf("get an installation token for %s: %w", repo.Name, err)
-	}
-	header := "http.extraHeader=Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte("x-access-token:"+token))
-	base := strings.TrimRight(s.GitHubURL, "/")
-	if base == "" {
-		base = "https://github.com"
+		return "", err
 	}
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
 		if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
 			return "", fmt.Errorf("create the mirror directory for %s: %w", repo.Name, err)
 		}
-		if _, err := runGit(ctx, nil, "-c", header, "clone", "--quiet", "--mirror", base+"/"+repo.Name+".git", dir); err != nil {
+		if _, err := runGit(ctx, nil, "-c", header, "clone", "--quiet", "--mirror", s.githubURL(repo), dir); err != nil {
 			return "", fmt.Errorf("mirror %s: %w", repo.Name, err)
 		}
 		return dir, nil
@@ -95,6 +90,25 @@ func (s *Sources) updateMirror(ctx context.Context, repo Repo) (string, error) {
 		return "", fmt.Errorf("fetch %s: %w", repo.Name, err)
 	}
 	return dir, nil
+}
+
+// githubURL is where repo is cloned from and pushed to.
+func (s *Sources) githubURL(repo Repo) string {
+	base := strings.TrimRight(s.GitHubURL, "/")
+	if base == "" {
+		base = "https://github.com"
+	}
+	return base + "/" + repo.Name + ".git"
+}
+
+// authHeader is the git -c setting that authenticates one command to GitHub with a fresh
+// installation token for repo.
+func (s *Sources) authHeader(ctx context.Context, repo Repo) (string, error) {
+	token, err := s.Token(ctx, repo.InstallationID)
+	if err != nil {
+		return "", fmt.Errorf("get an installation token for %s: %w", repo.Name, err)
+	}
+	return "http.extraHeader=Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte("x-access-token:"+token)), nil
 }
 
 // runGit runs git, writing its output to stdout when set, or returning it otherwise. A failure
