@@ -229,6 +229,9 @@ func (h *Host) prepare(ctx context.Context, todo *types.TODO, step Step, lc Cont
 	if err := ValidateSpec(spec, class); err != nil {
 		return nil, fmt.Errorf("step %s: %w", step.Name, err)
 	}
+	if err := h.remoteRuntime(step, spec); err != nil {
+		return nil, err
+	}
 	fixture := ""
 	if spec.Workflow != nil && spec.Workflow.Verify != nil {
 		fixture = spec.Workflow.Verify.Fixture

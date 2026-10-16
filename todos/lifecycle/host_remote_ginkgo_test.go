@@ -99,6 +99,12 @@ var _ = Describe("a host whose runs execute elsewhere", func() {
 		Expect(err).To(MatchError("step triage.new reads todos while it runs, which a run executing elsewhere can't do yet"))
 	})
 
+	It("refuses a run in a terminal on this host", func() {
+		host.Remote = &loopbackRunner{}
+		_, err := host.RunStep(ctx, hostTodo(), stepNamed(host.Def, "run"), lifecycle.RunOptions{Request: api.Spec{Model: api.Model{Mode: api.ModeCmux}}})
+		Expect(err).To(MatchError("step run runs in cmux, a terminal on this host, which a run executing elsewhere can't use: choose the agent or cli mode"))
+	})
+
 	It("refuses a step on a todo linked to a PR", func() {
 		host.Remote = &loopbackRunner{}
 		todo := hostTodo()

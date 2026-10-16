@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/captain/pkg/promptrun"
 	todoprompt "github.com/flanksource/gavel/todos/prompt"
 	"github.com/flanksource/gavel/todos/types"
@@ -40,6 +41,15 @@ func (h *Host) remoteRunnable(step Step, todo *types.TODO, definition todoprompt
 	}
 	if todo.PR != nil && definition.Class != types.ModePlan {
 		return fmt.Errorf("step %s works on linked PR %s, which can't run elsewhere yet", step.Name, todo.PR.URL)
+	}
+	return nil
+}
+
+// remoteRuntime refuses a runtime a remote runner can't provide: cmux, whose agent runs in a
+// terminal on this host.
+func (h *Host) remoteRuntime(step Step, spec api.Spec) error {
+	if h.Remote != nil && spec.Mode == api.ModeCmux {
+		return fmt.Errorf("step %s runs in cmux, a terminal on this host, which a run executing elsewhere can't use: choose the agent or cli mode", step.Name)
 	}
 	return nil
 }
