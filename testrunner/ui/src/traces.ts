@@ -1,9 +1,10 @@
-import { apiUrl } from './config';
 import type { RunTraces, TraceRef, TracesStatus } from './types';
 
 // The run's trace store is served through commons-db query at status.traces.mount
 // (traceserve.Handler): its result profiles, trace exports, session checkpoints
-// and the query app, all under that mount.
+// and the query app, all under that mount. A mount is a URL path as the browser
+// reaches it: rebaseTraces puts the page's base path (and a MultiServer run id)
+// in front of what the server reports relative to itself.
 
 export type TraceRecord = Record<string, unknown>;
 
@@ -38,17 +39,19 @@ export function processMount(status: TracesStatus | undefined): string | undefin
 
 /**
  * status with every mount under base: a host that serves the runner's server
- * under a prefix of its own (pr/ui's /api/project-runs/<id>) rebases the mounts
- * the server reports relative to itself.
+ * under a prefix of its own (the page's base path, a MultiServer run id, or
+ * pr/ui's /api/project-runs/<id>) rebases the mounts the server reports
+ * relative to itself.
  */
 export function rebaseTraces(status: TracesStatus | undefined, base: string): TracesStatus | undefined {
   if (!status) return undefined;
+  if (!base) return status;
   const runs = Object.fromEntries(Object.entries(status.runs).map(([id, run]) => [id, run.mount ? { ...run, mount: `${base}${run.mount}` } : run]));
   return { ...status, runs };
 }
 
 export function queryUrl(mount: string, path: string): string {
-  return apiUrl(`${mount}${path}`);
+  return `${mount}${path}`;
 }
 
 function windowQuery(ref: TraceRef, extra: Record<string, string> = {}): string {
@@ -69,7 +72,7 @@ export function openInQueryUrl(mount: string, ref: TraceRef): string {
   return queryUrl(mount, `/traces/${encodeURIComponent(ref.kind)}?${windowQuery(ref)}`);
 }
 
-async function failure(res: Response, what: string): Promise<Error> {
+export async function failure(res: Response, what: string): Promise<Error> {
   const text = (await res.text()).trim();
   return new Error(`${what} failed (${res.status})${text ? `: ${text}` : ''}`);
 }
@@ -91,11 +94,19 @@ export async function fetchTraceRecords(mount: string, ref: TraceRef, signal?: A
   return parseNdjson(await res.text());
 }
 
+/**
+ * The id the query server surfaces a kind's result profile (`traces/<kind>`)
+ * under: commons-db `profiles.SurfaceKey`, `profile-` plus the slugged name.
+ */
+export function traceProfileId(kind: string): string {
+  const slug = `traces/${kind}`.toLowerCase().replace(/[ _/.-]/g, '-').replace(/[^a-z0-9-]/g, '');
+  return `profile-${slug.replace(/^-+|-+$/g, '')}`;
+}
+
 /** The highest seq ref's stream has committed, read from its result profile; 0 when it has none. */
 export async function fetchLatestSeq(mount: string, ref: TraceRef): Promise<number> {
-  const profile = encodeURIComponent(`traces/${ref.kind}`);
   const query = new URLSearchParams({ stream: ref.stream, sort: 'seq', order: 'desc', limit: '1' });
-  const res = await fetch(queryUrl(mount, `/api/v1/profile/${profile}?${query}`), { headers: { Accept: 'application/json' } });
+  const res = await fetch(queryUrl(mount, `/api/v1/profile/${traceProfileId(ref.kind)}?${query}`), { headers: { Accept: 'application/json' } });
   if (!res.ok) throw await failure(res, `read ${ref.kind} stream`);
   const rows = await res.json() as Array<{ seq?: number }>;
   return rows[0]?.seq ?? 0;
@@ -108,8 +119,23 @@ export async function fetchTraceKinds(mount: string): Promise<TraceKindInfo[]> {
   return res.json() as Promise<TraceKindInfo[]>;
 }
 
-/** Has the running capture of session take a reading now; for the process tree, a dump of the root's goroutines. */
-export async function checkpointSession(mount: string, session: string): Promise<void> {
-  const res = await fetch(queryUrl(mount, `/api/v1/sessions/${encodeURIComponent(session)}/checkpoint`), { method: 'POST' });
+export interface CheckpointRequest {
+  mount: string;
+  session: string;
+  /**
+   * The kind's checkpoint params: `{key, transport, reason}` takes a stack dump
+   * of one process on a `stacks` session, `{key}` forces a full facet reading
+   * of one process on a `process_samples` session.
+   */
+  params: Record<string, string>;
+}
+
+/** Has the running session take a reading now, as its kind's checkpoint params describe it. */
+export async function checkpointSession({ mount, session, params }: CheckpointRequest): Promise<void> {
+  const res = await fetch(queryUrl(mount, `/api/v1/sessions/${encodeURIComponent(session)}/checkpoint`), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  });
   if (!res.ok) throw await failure(res, 'checkpoint');
 }

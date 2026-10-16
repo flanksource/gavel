@@ -1,3 +1,5 @@
+import type { ProcessDescriptor as ClickyProcessDescriptor, ProcessNodeRow, ProcessSampleRow } from '@flanksource/clicky-ui/data';
+
 export interface FixtureExecution {
   key: string;
   kind: string;
@@ -22,7 +24,6 @@ export interface Test {
   framework?: string;
   duration?: number; // nanoseconds
   fixture_profile?: FixtureProfile;
-  go_profiles?: GoProfileArtifact[];
   sql_profile?: FixtureSQLProfile;
   fixture?: FixtureExecution;
   skipped?: boolean;
@@ -58,16 +59,14 @@ export interface Test {
   // intake step being consumed). Cleared on completion.
   progress?: { phase?: string; done: number; total: number };
 
-  // Synthetic node markers (frontend-only). Used to render lint results as tree nodes.
-  kind?: 'lint-root' | 'lint-folder' | 'linter' | 'violation' | 'lint-file' | 'lint-rule' | 'lint-rule-group';
-  violation?: Violation;
-  violations?: Violation[];
-  noFileViolations?: Violation[];
-  linter?: LinterResult;
-  linterName?: string;
-  ruleName?: string;
-  target_path?: string;
+  // route_path is the host-assigned stable path used for selection and the URL.
   route_path?: string;
+  // own_name is the node's name before single-child chains were joined into it
+  // ("pkg/ > TestFoo" is TestFoo's row); frontend-only, set by the host.
+  own_name?: string;
+  // export_path is the path the server's export of this node is requested at
+  // (its uncollapsed ancestry); frontend-only, set by the host.
+  export_path?: string;
 }
 
 export type Severity = 'error' | 'warning' | 'info';
@@ -107,6 +106,9 @@ export interface TestAttempt {
   ended?: string;
   duration?: number;
   pid?: number;
+  // process_key names the attempt's process in the run's process_tree
+  // (`<pid>@<startUnix>`); its live metrics are that key's process_samples.
+  process_key?: string;
   command?: string;
   framework?: string;
   exit_code?: number;
@@ -122,6 +124,9 @@ export interface TestAttempt {
   cpu_percent?: number;
   rss?: number;
   goroutine_count?: number;
+  // shared_process marks a pid, CPU and RSS that belong to the go test batch
+  // the package ran in, not to the package alone.
+  shared_process?: boolean;
 }
 
 export interface TestSummary {
@@ -173,7 +178,6 @@ export interface FixtureBenchmarkEntry {
   command_ms?: number;
   profile_samples?: number;
   profile?: FixtureProfile;
-  go_profiles?: GoProfileArtifact[];
   sql_profile?: FixtureSQLProfile;
   violations?: string[];
 }
@@ -201,16 +205,6 @@ export interface ProfileDiskIO {
   disk_write_bytes: number;
   sample_count: number;
   missing_processes?: number;
-}
-
-export interface GoProfileArtifact {
-  name: string;
-  id?: string;
-  path?: string;
-  status: 'captured' | 'not_emitted' | 'invalid';
-  bytes?: number;
-  sample_types?: string[];
-  error?: string;
 }
 
 export interface FixtureProfile {
@@ -348,53 +342,18 @@ export interface SnapshotStatus {
   stop_message?: string;
 }
 
-export interface ProcessTraceNode {
-  // "<pid>@<start unix second>": stable across ticks and unique on pid reuse.
-  key: string;
-  parentKey?: string;
-  pid: number;
-  ppid: number;
-  name: string;
-  command: string;
-  cwd?: string;
-  // "sleeping" | "active" | "stopped" | "zombie" | "exited"
-  status: string;
-  isRoot?: boolean;
-  startedAt: string;
-  exitedAt?: string | null;
-  lastSeenAt: string;
-  cpuPercent: number;
-  rssBytes: number;
-  peakCpuPercent: number;
-  peakRssBytes: number;
-  stack?: string | null;
-  stackCollectedAt?: string | null;
-  stackError?: string | null;
-  truncated?: unknown;
-}
+// ProcessTraceNode is one process_tree record (commons-db tracing/process):
+// cpuPercent and peakCpuPercent are absent until a full sampling window has
+// been observed, and stackTransports lists the ways a stack of the process can
+// be collected.
+export type ProcessTraceNode = ProcessNodeRow;
 
-// ProcessDescriptor is one file or socket a live process holds open
-// (clicky process.Descriptor), read on demand from /api/process/{files,sockets,ports}.
-export type ProcessDescriptor = {
-  fd: string;
-  type: string;
-  name: string;
-  protocol?: string;
-  state?: string;
-  localAddr?: string;
-  remoteAddr?: string;
-  port?: number;
-};
+// ProcessDescriptor is one file or socket a process holds open
+// (clicky process.Descriptor), as process_samples stores it.
+export type ProcessDescriptor = ClickyProcessDescriptor;
 
-export interface ProcessSample {
-  sampledAt: string;
-  tick: number;
-  key: string;
-  pid: number;
-  cpuPercent: number;
-  memoryPercent: number;
-  rssBytes: number;
-}
+// ProcessSample is one process_samples record: a process's usage at one tick.
+export type ProcessSample = ProcessSampleRow;
 
 // TraceRef names a window of a trace stream: the records after seq afterSeq
 // through seq toSeq (0 = unbounded) of kind's stream (commons-db tracing.TraceRef).
@@ -415,9 +374,24 @@ export interface TraceResult extends TraceRef {
   error?: string;
 }
 
+// ProcessTraceRefs are the windows of the run's process capture: the process
+// tree, the per-tick samples (resources, disk IO, facet counts and lists), the
+// stack dumps and, when the run ingests Go profiles, goprof.
 export interface ProcessTraceRefs {
   tree: TraceRef;
   samples: TraceRef;
+  stacks: TraceRef;
+  goprof?: TraceRef;
+}
+
+// ProcessTraceSessions are the session ids of the same four streams while the
+// capture runs: a checkpoint of stacks takes a stack dump, one of samples
+// forces a full facet reading.
+export interface ProcessTraceSessions {
+  tree: string;
+  samples: string;
+  stacks: string;
+  goprof?: string;
 }
 
 // RunTraces is one run's store as the UI reaches it.
@@ -435,13 +409,10 @@ export interface TracesStatus {
   // process_run is the run whose process capture (process) the Processes tab reads.
   process_run?: string;
   process?: ProcessTraceRefs;
-  // process_session is the running process capture, which a checkpoint names.
-  process_session?: string;
-}
-
-export interface ProcessForestNode {
-  node: ProcessTraceNode;
-  children: ProcessForestNode[];
+  // sessions are the running capture's session ids, which a checkpoint names;
+  // absent once the run has ended (and for a stored run), when nothing can be
+  // checkpointed any more.
+  sessions?: ProcessTraceSessions;
 }
 
 export interface BenchDelta {

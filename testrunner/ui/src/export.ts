@@ -1,3 +1,4 @@
+import { copyText } from '@flanksource/clicky-ui/components';
 import { buildExportRoute, type ExportFormat, type RouteState } from './routes';
 
 function exportFilename(state: RouteState, format: ExportFormat): string {
@@ -20,11 +21,8 @@ function promptHeader(state: RouteState): string {
   return 'Use this gavel test report as context for your analysis or code changes.';
 }
 
+/** Copies the view's Markdown export, framed as an AI prompt; rejects when the export or the clipboard fails. */
 export async function copyCurrentViewForAgent(state: RouteState) {
-  if (!navigator.clipboard?.writeText) {
-    throw new Error('Clipboard access is unavailable in this browser');
-  }
-
   const exportPath = buildExportRoute(state, 'md');
   const exportURL = new URL(exportPath, window.location.origin).toString();
   const response = await fetch(exportPath, {
@@ -45,5 +43,5 @@ export async function copyCurrentViewForAgent(state: RouteState) {
     '```',
   ].join('\n');
 
-  await navigator.clipboard.writeText(prompt);
+  await copyText(prompt);
 }
