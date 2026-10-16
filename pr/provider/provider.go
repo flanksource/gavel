@@ -14,6 +14,9 @@ import (
 type Options struct {
 	WorkDir, Repo, Token string
 	Context              context.Context
+	// TokenSource, when set, is the GitHub client's only credential, as a hosted
+	// organization's App installation is.
+	TokenSource func() (string, error)
 }
 
 type Client interface {
@@ -55,7 +58,7 @@ func Resolve(opts Options) (Client, error) {
 	if len(strings.Split(repo, "/")) != 2 {
 		return nil, fmt.Errorf("unsupported PR repository %q", repo)
 	}
-	return gitHubClient{opts: github.Options{WorkDir: opts.WorkDir, Repo: repo, Token: opts.Token}}, nil
+	return gitHubClient{opts: github.Options{WorkDir: opts.WorkDir, Repo: repo, Token: opts.Token, TokenSource: opts.TokenSource}}, nil
 }
 
 func IsAzure(ref string) bool {
