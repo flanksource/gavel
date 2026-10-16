@@ -50,7 +50,7 @@ var _ = Describe("hosted mode routes", func() {
 			{http.MethodGet, "/api/openapi.json"},
 			{http.MethodGet, "/api/v1/openapi.json"},
 			{http.MethodGet, "/api/v1/project"},
-			{http.MethodPost, "/api/v1/todo/abc/push"},
+			{http.MethodPost, "/api/v1/todo/abc/links/extra"},
 			{http.MethodGet, "/api/v1/tasks"},
 			{http.MethodPost, "/api/chat"},
 			{http.MethodGet, "/api/settings/gavel"},

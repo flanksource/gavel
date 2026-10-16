@@ -96,3 +96,23 @@ func TestHostedTodoEntityActsForTheOrgsUser(t *testing.T) {
 		assert.Contains(t, body, "hosted mode", path)
 	}
 }
+
+func TestHostedTodosOnAPushedRepositoryHaveNoGitHubIssues(t *testing.T) {
+	h := newHostedRuns(t, nil)
+	_, shared := hostedCall(t, h.base, http.MethodPost, "/api/todos", h.ada, "org:member", map[string]any{"dir": h.workspace, "title": "Shared", "visibility": "public"})
+	ref := shared["id"].(string)
+	const noIssues = "repository app was pushed to gavel, not linked from GitHub, so its todos have no GitHub issues"
+
+	status, refused := hostedCall(t, h.base, http.MethodPost, "/api/todos/github", h.grace, "org:member", map[string]any{"dir": h.workspace, "ref": ref})
+	assert.Equal(t, http.StatusForbidden, status, "another member can't push it: %v", refused)
+
+	status, refused = hostedCall(t, h.base, http.MethodPost, "/api/todos/github", h.ada, "org:member", map[string]any{"dir": h.workspace, "ref": ref})
+	assert.Equal(t, http.StatusBadRequest, status, refused)
+	assert.Equal(t, noIssues, refused["error"])
+
+	status, body := hostedRaw(t, h.base, http.MethodPost, "/api/v1/todo/"+ref+"/push", h.ada)
+	require.Equal(t, http.StatusOK, status, body)
+	outcome := bulkOutcome(t, body)
+	require.Len(t, outcome.Results, 1, body)
+	assert.Equal(t, noIssues, outcome.Results[0].Error)
+}

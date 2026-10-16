@@ -17,6 +17,7 @@ import (
 	"github.com/flanksource/gavel/todos/query"
 	"github.com/flanksource/gavel/todos/run"
 	todoruntime "github.com/flanksource/gavel/todos/runtime"
+	"github.com/flanksource/gavel/todos/types"
 	"gorm.io/gorm"
 )
 
@@ -137,13 +138,26 @@ func todoEntityLifecycleHost(ctx context.Context, provider todos.Provider, dir s
 	return lifecycle.NewRepositoryHost(provider, source.Dir, kind)
 }
 
-// todoEntityGitHub is this host's credentials and dir's origin, which a TODO is pushed to GitHub
-// through. A hosted organization's would be its GitHub App's.
-func todoEntityGitHub(ctx context.Context, dir, repo string) (github.Options, error) {
-	if entityServer(ctx) != nil {
-		return github.Options{}, errors.New("pushing a todo to GitHub isn't available in hosted mode yet")
+// todoEntityGitHub is the account a TODO in dir is pushed to GitHub through: this host's
+// credentials and dir's origin, or a hosted organization's GitHub App on the todo's own
+// repository (see todoGitHub).
+func todoEntityGitHub(ctx context.Context, todo *types.TODO, dir, repo string) (github.Options, error) {
+	s := entityServer(ctx)
+	if s == nil {
+		return github.Options{WorkDir: dir, Repo: repo}, nil
 	}
-	return github.Options{WorkDir: dir, Repo: repo}, nil
+	_, source, err := s.todoProviderContext(ctx, todoSource{Dir: dir})
+	if err != nil {
+		return github.Options{}, err
+	}
+	account, err := s.todoGitHub(ctx, source, todo)
+	if err != nil {
+		return github.Options{}, err
+	}
+	if repo != "" && repo != account.Repo {
+		return github.Options{}, fmt.Errorf("a hosted todo is pushed to its own repository %s, not %s", account.Repo, repo)
+	}
+	return account, nil
 }
 
 // todoEntityWorkspaces lists the projects an unscoped TODO list reads: a hosted organization's

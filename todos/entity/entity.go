@@ -92,9 +92,9 @@ type Deps struct {
 	// verification text literally, never reading a file: a hosted organization may not read
 	// this host's files.
 	LiteralContent func(ctx context.Context) bool
-	// GitHub, when set, is the account and repository a TODO in dir is pushed to through, repo
+	// GitHub, when set, is the account and repository todo, in dir, is pushed to through, repo
 	// naming the repository explicitly. Unset, it is this host's credentials and dir's origin.
-	GitHub func(ctx context.Context, dir, repo string) (github.Options, error)
+	GitHub func(ctx context.Context, todo *types.TODO, dir, repo string) (github.Options, error)
 }
 
 // literal reports whether ctx's operation takes content text literally.
@@ -103,9 +103,9 @@ func (d Deps) literal(ctx context.Context) bool {
 }
 
 // github is the account and repository a TODO in dir is pushed to through.
-func (d Deps) github(ctx context.Context, dir, repo string) (github.Options, error) {
+func (d Deps) github(ctx context.Context, todo *types.TODO, dir, repo string) (github.Options, error) {
 	if d.GitHub != nil {
-		return d.GitHub(ctx, dir, repo)
+		return d.GitHub(ctx, todo, dir, repo)
 	}
 	return github.Options{WorkDir: dir, Repo: repo}, nil
 }
@@ -371,7 +371,9 @@ func (d Deps) bulkActions() []clicky.EntityBulkAction {
 		action(d, "push", "Push many TODOs to GitHub issues",
 			entity.MCPToolHints{Icon: "github", Group: "GitHub", DefaultPermission: entity.ToolPermissionAsk},
 			bulk.PushFlags{}, func(_ context.Context, flags bulk.PushFlags, _ []string) (bulk.ItemFunc, error) {
-				return bulk.Push(flags, d.pushBaseURL())
+				return bulk.Push(flags, d.pushBaseURL(), func(ctx context.Context, todo *types.TODO) (github.Options, error) {
+					return d.github(ctx, todo, todo.CWD, "")
+				})
 			}),
 
 		// The verify step, which is the only thing that decides whether a TODO

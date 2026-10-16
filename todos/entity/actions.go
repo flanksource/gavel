@@ -200,7 +200,7 @@ func (d Deps) create(ctx context.Context, _ string, flags CreateFlags) (*types.T
 	if err != nil {
 		return todo, err
 	}
-	account, err := d.github(ctx, dir, flags.Repo)
+	account, err := d.github(ctx, todo, dir, flags.Repo)
 	if err != nil {
 		return todo, fmt.Errorf("created %s but could not push it to GitHub: %w", todo.DisplayID(), err)
 	}
