@@ -6,6 +6,7 @@ import (
 
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/commons-db/shell"
+	"github.com/flanksource/gavel/pr/provider"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/lifecycle"
 	"github.com/flanksource/gavel/todos/types"
@@ -61,6 +62,8 @@ type Request struct {
 	// Remote, when set, runs the step's prompt elsewhere — a sandbox job — through a host
 	// that reads the repository's own configuration alone. Nil runs it in this process.
 	Remote lifecycle.RemoteRunner
+	// PRs, with Remote, is the client a linked PR is read through: the organization's.
+	PRs func(ctx context.Context, url string) (provider.Client, int, error)
 }
 
 // Options is what a caller decides about one step run. Everything else — which

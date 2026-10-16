@@ -26,6 +26,7 @@ import (
 	ghcache "github.com/flanksource/gavel/github/cache"
 	"github.com/flanksource/gavel/github/installations"
 	shared "github.com/flanksource/gavel/internal/database"
+	"github.com/flanksource/gavel/pr/provider"
 	"github.com/flanksource/gavel/pr/ui"
 	"github.com/flanksource/gavel/sandbox"
 	"github.com/flanksource/gavel/serve"
@@ -214,6 +215,11 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 	}
 	// Sandbox jobs authenticate with their run token.
 	runs := &ui.RunsAPI{DB: db, TokenKey: runTokenKey(secret), Cache: cache, Sources: sources, Relay: relay}
+	if app != nil {
+		runs.PRs = func(ctx context.Context, org uuid.UUID, url string) (provider.Client, int, error) {
+			return ui.OrganizationPRs(store.TokenSource(org), cache.ForOrg(org))(ctx, url)
+		}
+	}
 	root := http.NewServeMux()
 	root.Handle("/api/ci/", ciResults.Handler())
 	root.Handle("/api/runs/", runs.Handler())

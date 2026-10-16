@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/flanksource/captain/pkg/promptrun"
+	"github.com/flanksource/gavel/pr/provider"
 	"github.com/flanksource/gavel/todos/lifecycle"
 	"github.com/flanksource/gavel/todos/run"
 	. "github.com/onsi/ginkgo/v2"
@@ -26,11 +27,13 @@ var _ = Describe("the host a run resolves through", func() {
 		GinkgoT().Setenv("HOME", home)
 		Expect(os.WriteFile(filepath.Join(home, ".gavel.yaml"), []byte("ssh:\n  cmd: make deploy-from-the-host\n"), 0o644)).To(Succeed())
 		runner := idleRunner{}
+		prs := func(context.Context, string) (provider.Client, int, error) { return nil, 7, nil }
 
-		host, err := run.NewHost(run.Request{Dir: repo, Remote: runner, Options: run.Options{Host: lifecycle.HostDashboard}})
+		host, err := run.NewHost(run.Request{Dir: repo, Remote: runner, PRs: prs, Options: run.Options{Host: lifecycle.HostDashboard}})
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(host.Remote).To(Equal(lifecycle.RemoteRunner(runner)))
+		Expect(host.PRs).NotTo(BeNil(), "the host reads linked PRs through the request's client")
 		Expect(host.Config.SSH.Cmd).To(BeEmpty(), "the serve host's own configuration doesn't apply")
 	})
 

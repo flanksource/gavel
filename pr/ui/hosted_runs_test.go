@@ -234,6 +234,9 @@ func TestEveryHostedRunGoesToASandbox(t *testing.T) {
 	req, err := withSandbox.continuationRequest(context.Background(), hosted, continuation)
 	require.NoError(t, err)
 	assert.NotNil(t, req.Remote, "a hosted continuation runs in a sandbox")
+	require.NotNil(t, req.PRs, "and reads linked PRs with the organization's GitHub App")
+	_, _, err = req.PRs(context.Background(), "https://dev.azure.com/acme/app/_git/app/pullrequest/7")
+	require.EqualError(t, err, "hosted todos work on GitHub PRs; https://dev.azure.com/acme/app/_git/app/pullrequest/7 isn't one")
 	assert.False(t, req.Approvals, "a sandboxed run can't ask for approvals")
 
 	_, err = (&Server{}).continuationRequest(context.Background(), hosted, continuation)

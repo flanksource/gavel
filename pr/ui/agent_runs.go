@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/flanksource/gavel/github/cache"
+	"github.com/flanksource/gavel/pr/provider"
 	"github.com/flanksource/gavel/sandbox"
 	"github.com/flanksource/gavel/tenant"
 	"github.com/flanksource/gavel/todos/lifecycle"
@@ -64,7 +66,29 @@ func (s *Server) attachRemote(ctx context.Context, source todoSource, req *run.R
 		return err
 	}
 	req.Remote, req.Approvals = runner, false
+	req.PRs = s.organizationPRs
 	return nil
+}
+
+// organizationPRs is the client the Server's organization's PR at url is read and acted on
+// through.
+func (s *Server) organizationPRs(ctx context.Context, url string) (provider.Client, int, error) {
+	return OrganizationPRs(s.ghOpts.TokenSource, s.cacheStore())(ctx, url)
+}
+
+// OrganizationPRs reads an organization's PRs with token, its GitHub App installation's token
+// source, never the host's credentials, keeping GitHub's responses in responses, its own cache.
+// Hosted todos work on GitHub PRs only.
+func OrganizationPRs(token func() (string, error), responses *cache.Store) func(ctx context.Context, url string) (provider.Client, int, error) {
+	return func(ctx context.Context, url string) (provider.Client, int, error) {
+		if provider.IsAzure(url) {
+			return nil, 0, fmt.Errorf("hosted todos work on GitHub PRs; %s isn't one", url)
+		}
+		if token == nil {
+			return nil, 0, fmt.Errorf("this organization has no GitHub App installation to read %s with", url)
+		}
+		return provider.ResolveURL(provider.Options{Context: ctx, TokenSource: token, Cache: responses}, url)
+	}
 }
 
 // remoteRunner runs todo's steps in sandbox jobs of workspace's repository, as the request's user.

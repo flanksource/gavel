@@ -8,6 +8,7 @@ import (
 
 	"github.com/flanksource/gavel/azuredevops"
 	"github.com/flanksource/gavel/github"
+	"github.com/flanksource/gavel/github/cache"
 	"github.com/flanksource/gavel/pr/model"
 )
 
@@ -17,6 +18,9 @@ type Options struct {
 	// TokenSource, when set, is the GitHub client's only credential, as a hosted
 	// organization's App installation is.
 	TokenSource func() (string, error)
+	// Cache keeps the GitHub client's responses: a hosted organization's own, so no
+	// other organization is served them. Nil is the shared cache.
+	Cache *cache.Store
 }
 
 type Client interface {
@@ -63,7 +67,7 @@ func Resolve(opts Options) (Client, error) {
 	if len(strings.Split(repo, "/")) != 2 {
 		return nil, fmt.Errorf("unsupported PR repository %q", repo)
 	}
-	return gitHubClient{opts: github.Options{WorkDir: opts.WorkDir, Repo: repo, Token: opts.Token, TokenSource: opts.TokenSource}}, nil
+	return gitHubClient{opts: github.Options{WorkDir: opts.WorkDir, Repo: repo, Token: opts.Token, TokenSource: opts.TokenSource, Cache: opts.Cache}}, nil
 }
 
 func IsAzure(ref string) bool {

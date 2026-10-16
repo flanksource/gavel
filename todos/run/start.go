@@ -68,7 +68,7 @@ func NewHost(req Request) (*lifecycle.Host, error) {
 	if err != nil {
 		return nil, err
 	}
-	host.Remote = req.Remote
+	host.Remote, host.PRs = req.Remote, req.PRs
 	return host, nil
 }
 
