@@ -179,7 +179,9 @@ func runAgentJob(ctx context.Context, api runAPI, spec sandbox.RunSpec, src stri
 	}()
 
 	send := func(message remote.Message) error { return api.postMessage(ctx, message) }
-	finished, err := remote.Execute(ctx, job, src, agent, send)
+	finished, err := remote.Execute(ctx, job, src, agent, remote.Serve{Send: send, Call: func(message remote.Message) (remote.Reply, error) {
+		return api.call(ctx, message)
+	}})
 	stopUploading()
 	<-uploaderDone
 	if err != nil {
@@ -299,6 +301,24 @@ func (a runAPI) postMessage(ctx context.Context, message remote.Message) error {
 		return fmt.Errorf("send a %s message of run %s: %w", message.Kind, a.Run, err)
 	}
 	return resp.Body.Close()
+}
+
+// call asks serve for its reply to message, a tool call or an approval request.
+func (a runAPI) call(ctx context.Context, message remote.Message) (remote.Reply, error) {
+	data, err := json.Marshal(message)
+	if err != nil {
+		return remote.Reply{}, fmt.Errorf("encode a %s call of run %s: %w", message.Kind, a.Run, err)
+	}
+	resp, err := a.Do(ctx, http.MethodPost, "calls", bytes.NewReader(data))
+	if err != nil {
+		return remote.Reply{}, fmt.Errorf("send a %s call of run %s: %w", message.Kind, a.Run, err)
+	}
+	defer resp.Body.Close()
+	var reply remote.Reply
+	if err := json.NewDecoder(resp.Body).Decode(&reply); err != nil {
+		return remote.Reply{}, fmt.Errorf("decode the reply to a %s call of run %s: %w", message.Kind, a.Run, err)
+	}
+	return reply, nil
 }
 
 func (a runAPI) postResults(ctx context.Context, path string) error {

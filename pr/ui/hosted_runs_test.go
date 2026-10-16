@@ -113,7 +113,8 @@ func (e *inProcessExecutor) run(ctx context.Context, id uuid.UUID) error {
 	if e.agent != nil {
 		agent = e.agent
 	}
-	finished, err := remote.Execute(ctx, job, dir, agent, send)
+	call := func(message remote.Message) (remote.Reply, error) { return e.relay.Call(ctx, id, message) }
+	finished, err := remote.Execute(ctx, job, dir, agent, remote.Serve{Send: send, Call: call})
 	if err != nil {
 		return err
 	}

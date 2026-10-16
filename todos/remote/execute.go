@@ -4,6 +4,8 @@ package remote
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -13,6 +15,50 @@ import (
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/captain/pkg/promptrun"
 )
+
+// Serve is how a job reaches serve: Send reports a message, Call asks for a reply.
+type Serve struct {
+	Send func(Message) error
+	Call func(Message) (Reply, error)
+}
+
+// callServe gives in the job's tools, each run by serve, and, when the run asks for approvals, an
+// approval callback that asks serve.
+func callServe(in *promptrun.Input, job Job, serve Serve) {
+	for _, tool := range job.Tools {
+		name := tool.Name
+		tool.Handler = func(_ context.Context, input map[string]any) (any, error) {
+			reply, err := serve.Call(ToolCallMessage(name, input))
+			if err == nil && reply.Error != "" {
+				err = errors.New(reply.Error)
+			}
+			if err != nil {
+				return nil, fmt.Errorf("tool %s: %w", name, err)
+			}
+			var output any
+			if err := json.Unmarshal(reply.Output, &output); err != nil {
+				return nil, fmt.Errorf("decode the output of tool %s: %w", name, err)
+			}
+			return output, nil
+		}
+		in.Config.Tools = append(in.Config.Tools, tool)
+	}
+	if job.Approvals {
+		in.Config.OnApproval = func(_ context.Context, request api.ApprovalRequest) (api.ApprovalDecision, error) {
+			reply, err := serve.Call(ApprovalMessage(request))
+			if err == nil && reply.Error != "" {
+				err = errors.New(reply.Error)
+			}
+			if err == nil && reply.Decision == nil {
+				err = errors.New("serve answered without a decision")
+			}
+			if err != nil {
+				return api.ApprovalDecision{}, fmt.Errorf("approval of %s: %w", request.Tool, err)
+			}
+			return *reply.Decision, nil
+		}
+	}
+}
 
 // Finished is how a run ended: its result, and its own error.
 type Finished struct {
@@ -25,9 +71,10 @@ type Finished struct {
 // left behind. agent is the provider the run uses; nil builds it from the job's model, as a local
 // run does. Execute returns an error only when a message couldn't be sent, and stops the run when
 // its start couldn't.
-func Execute(ctx context.Context, job Job, dir string, agent captainai.Provider, send func(Message) error) (Finished, error) {
-	reporter := &reporter{send: send}
+func Execute(ctx context.Context, job Job, dir string, agent captainai.Provider, serve Serve) (Finished, error) {
+	reporter := &reporter{send: serve.Send}
 	in := job.Input(dir)
+	callServe(&in, job, serve)
 	in.Provider = agent
 	hooks, err := job.HooksIn(dir).Build()
 	if err != nil {

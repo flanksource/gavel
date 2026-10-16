@@ -4,6 +4,7 @@ package remote
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sync"
 	"testing"
@@ -64,10 +65,10 @@ func TestExecuteReportsTheRunInOrder(t *testing.T) {
 		{Kind: captainai.EventResult, Success: true, CostUSD: 0.25, Usage: &api.Usage{InputTokens: 7, OutputTokens: 3}},
 	}}
 	var sent []Message
-	finished, err := Execute(context.Background(), scriptedJob("/srv/gavel/workspaces/org/repo"), dir, agent, func(message Message) error {
+	finished, err := Execute(context.Background(), scriptedJob("/srv/gavel/workspaces/org/repo"), dir, agent, Serve{Send: func(message Message) error {
 		sent = append(sent, message)
 		return nil
-	})
+	}})
 	require.NoError(t, err)
 
 	require.NotEmpty(t, sent)
@@ -93,8 +94,48 @@ func TestExecuteReportsTheRunInOrder(t *testing.T) {
 
 func TestExecuteStopsWhenServeStopsListening(t *testing.T) {
 	agent := &scriptedAgent{events: []captainai.Event{{Kind: captainai.EventText, Text: "done"}, {Kind: captainai.EventResult, Success: true}}}
-	_, err := Execute(context.Background(), scriptedJob("/srv/root"), t.TempDir(), agent, func(Message) error {
+	_, err := Execute(context.Background(), scriptedJob("/srv/root"), t.TempDir(), agent, Serve{Send: func(Message) error {
 		return errors.New("connection reset")
-	})
+	}})
 	require.EqualError(t, err, "report the run's start to serve: connection reset")
+}
+
+func TestAJobsToolsAndApprovalsCallServe(t *testing.T) {
+	job := scriptedJob("/srv/repo")
+	job.Tools = []api.ToolDefinition{{Name: "todo_search", Description: "Search the backlog.", DefaultPermission: api.ToolPolicyAllow}}
+	job.Approvals = true
+	var calls []Message
+	serve := Serve{
+		Send: func(Message) error { return nil },
+		Call: func(message Message) (Reply, error) {
+			calls = append(calls, message)
+			if message.Kind == KindTool {
+				return Reply{Output: json.RawMessage(`{"found":"bug"}`)}, nil
+			}
+			return Reply{Decision: &api.ApprovalDecision{Allow: true}}, nil
+		},
+	}
+	in := job.Input(t.TempDir())
+	callServe(&in, job, serve)
+
+	require.Len(t, in.Config.Tools, 1)
+	assert.Equal(t, "Search the backlog.", in.Config.Tools[0].Description)
+	output, err := in.Config.Tools[0].Handler(context.Background(), map[string]any{"query": "bug"})
+	require.NoError(t, err)
+	assert.Equal(t, map[string]any{"found": "bug"}, output)
+
+	require.NotNil(t, in.Config.OnApproval)
+	decision, err := in.Config.OnApproval(context.Background(), api.ApprovalRequest{Tool: "triage_review", Kind: api.ApprovalKindTool})
+	require.NoError(t, err)
+	assert.True(t, decision.Allow)
+
+	require.Len(t, calls, 2)
+	assert.Equal(t, ToolCallMessage("todo_search", map[string]any{"query": "bug"}), calls[0])
+	assert.Equal(t, KindApproval, calls[1].Kind)
+
+	refused := Serve{Call: func(Message) (Reply, error) { return Reply{Error: "the run has no tool \"todo_search\""}, nil }}
+	in = job.Input(t.TempDir())
+	callServe(&in, job, refused)
+	_, err = in.Config.Tools[0].Handler(context.Background(), nil)
+	require.EqualError(t, err, `tool todo_search: the run has no tool "todo_search"`)
 }

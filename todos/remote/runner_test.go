@@ -75,7 +75,8 @@ func (s *inProcessJobs) Start(ctx context.Context, id uuid.UUID, job Job) (Start
 			}
 			return s.relay.Deliver(runCtx, id, received)
 		}
-		finished, err := Execute(runCtx, job, s.dir, s.agent, send)
+		call := func(message Message) (Reply, error) { return s.relay.Call(runCtx, id, message) }
+		finished, err := Execute(runCtx, job, s.dir, s.agent, Serve{Send: send, Call: call})
 		if err == nil && !s.skipResult {
 			err = send(ResultMessage(finished.Result, finished.Err))
 		}

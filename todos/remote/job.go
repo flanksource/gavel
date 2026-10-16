@@ -27,6 +27,10 @@ type Job struct {
 	VerifyTimeout     time.Duration      `json:"verifyTimeout,omitempty"`
 	Timeout           time.Duration      `json:"timeout,omitempty"`
 	Root              string             `json:"root"`
+	// Tools are the run's caller tools, without their handlers: the job calls serve to run them.
+	Tools []api.ToolDefinition `json:"tools,omitempty"`
+	// Approvals is set when the run asks a person to approve its tool uses, through serve.
+	Approvals bool `json:"approvals,omitempty"`
 }
 
 // JobConfig is the part of the provider configuration a job carries. Credentials stay out: the
@@ -42,7 +46,7 @@ type JobConfig struct {
 // JobFor is the job that runs run in a sandbox.
 func JobFor(run lifecycle.RemoteRun) Job {
 	in := run.Input
-	return Job{
+	job := Job{
 		Resolved: in.Resolved,
 		Config: JobConfig{
 			Model: in.Config.Model, Budget: in.Config.Budget, NoCache: in.Config.NoCache, SessionID: in.Config.SessionID,
@@ -52,7 +56,13 @@ func JobFor(run lifecycle.RemoteRun) Job {
 		VerifyTimeout:     in.Verify.Timeout,
 		Timeout:           in.Timeout,
 		Root:              in.Repo,
+		Approvals:         in.Approvals != nil,
 	}
+	for _, tool := range in.Config.Tools {
+		tool.Handler = nil
+		job.Tools = append(job.Tools, tool)
+	}
+	return job
 }
 
 // Input is the prompt run the job describes, with its paths under dir, the sandbox's checkout.
