@@ -3,6 +3,7 @@
 package remote
 
 import (
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -94,12 +95,15 @@ func underRoot(root, dir, path string) string {
 }
 
 // Message kinds, in the order a run sends them: started once its setup is done, then events and
-// verification progress as they happen, and its result last.
+// verification progress as they happen, and its result last. A tool call and an approval
+// request are calls: the run waits for serve's reply.
 const (
 	KindStarted  = "started"
 	KindEvent    = "event"
 	KindProgress = "progress"
 	KindResult   = "result"
+	KindTool     = "tool"
+	KindApproval = "approval"
 )
 
 // Message is one thing a run reports to serve.
@@ -112,6 +116,31 @@ type Message struct {
 	Result    *Result           `json:"result,omitempty"`
 	// Error is the run's error, with its result; empty when the run completed.
 	Error string `json:"error,omitempty"`
+	// Tool and Input are a call of one of the run's tools, which serve runs.
+	Tool  string         `json:"tool,omitempty"`
+	Input map[string]any `json:"input,omitempty"`
+	// Approval is a tool use the run asks a person to approve.
+	Approval *api.ApprovalRequest `json:"approval,omitempty"`
+
+	// reply is where serve answers a call; it never leaves serve.
+	reply chan Reply
+}
+
+// Reply is serve's answer to a call: a tool's output, or the decision on an approval.
+type Reply struct {
+	Output   json.RawMessage       `json:"output,omitempty"`
+	Decision *api.ApprovalDecision `json:"decision,omitempty"`
+	Error    string                `json:"error,omitempty"`
+}
+
+// ToolCallMessage calls the run's tool with input.
+func ToolCallMessage(tool string, input map[string]any) Message {
+	return Message{Kind: KindTool, Tool: tool, Input: input}
+}
+
+// ApprovalMessage asks for a person's approval of request.
+func ApprovalMessage(request api.ApprovalRequest) Message {
+	return Message{Kind: KindApproval, Approval: &request}
 }
 
 // DecodedEvent is the event an event message carries.

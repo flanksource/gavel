@@ -4,11 +4,14 @@ package remote
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
 
+	"github.com/flanksource/captain/pkg/ai/approval"
 	"github.com/flanksource/captain/pkg/api"
+	"github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/captain/pkg/promptrun"
 	"github.com/flanksource/gavel/todos/lifecycle"
 	"github.com/google/uuid"
@@ -42,6 +45,7 @@ func (r *Runner) Run(ctx context.Context, run lifecycle.RemoteRun) (promptrun.Re
 
 	in := run.Input
 	var recorder *promptrun.Recorder
+	var broker *approval.Broker
 	if in.Record != nil {
 		admitted, err := promptrun.Admit(ctx, in)
 		if err != nil {
@@ -52,6 +56,9 @@ func (r *Runner) Run(ctx context.Context, run lifecycle.RemoteRun) (promptrun.Re
 			model = in.Resolved.Spec.Model
 		}
 		recorder = promptrun.Track(ctx, in.Record, admitted, api.RuntimeOf(model.Provider, model.Mode), model, in.Resolved.Spec, in.Config.SessionID)
+		if broker, err = approvals(ctx, in, admitted); err != nil {
+			return promptrun.Result{}, err
+		}
 	}
 	finish := func(result promptrun.Result, runErr error, stopped bool) (promptrun.Result, error) {
 		if recorder == nil {
@@ -116,6 +123,8 @@ func (r *Runner) Run(ctx context.Context, run lifecycle.RemoteRun) (promptrun.Re
 				if in.Verify.Progress != nil {
 					in.Verify.Progress(*message.Progress)
 				}
+			case KindTool, KindApproval:
+				go func(message Message) { message.reply <- answer(ctx, in, broker, message) }(message)
 			case KindResult:
 				var runErr error
 				if message.Error != "" {
@@ -128,6 +137,67 @@ func (r *Runner) Run(ctx context.Context, run lifecycle.RemoteRun) (promptrun.Re
 		case <-ctx.Done():
 			return stop(fmt.Errorf("run %s stopped: %w", id, context.Cause(ctx)))
 		}
+	}
+}
+
+// approvals is the broker that asks a person to approve the run's tool uses, as a local recorded
+// run's does; nil for a run that asks for none.
+func approvals(ctx context.Context, in promptrun.Input, run *database.PromptRun) (*approval.Broker, error) {
+	if in.Approvals == nil {
+		return nil, nil
+	}
+	window, err := in.Resolved.Spec.Permissions.ParseApprovalTimeout()
+	if err != nil {
+		return nil, fmt.Errorf("approvals of run %s: %w", run.ID, err)
+	}
+	if window == 0 {
+		window = approval.ProviderTimeout
+	}
+	deadline, _ := ctx.Deadline()
+	broker := &approval.Broker{
+		DB: in.Record.DB, SessionID: run.SessionID, PromptRunID: run.ID,
+		RequestedBy: in.Approvals.RequestedBy, Timeout: window, Deadline: deadline,
+		Notify: func(_ context.Context, event api.Event) error {
+			if in.OnEvent != nil {
+				in.OnEvent(0, event)
+			}
+			return nil
+		},
+	}
+	if err := broker.Validate(); err != nil {
+		return nil, fmt.Errorf("approvals of run %s: %w", run.ID, err)
+	}
+	return broker, nil
+}
+
+// answer runs one of the run's tools, or asks a person to approve a tool use, for its job.
+func answer(ctx context.Context, in promptrun.Input, broker *approval.Broker, message Message) Reply {
+	switch message.Kind {
+	case KindTool:
+		for _, tool := range in.Config.Tools {
+			if tool.Name != message.Tool || tool.Handler == nil {
+				continue
+			}
+			output, err := tool.Handler(ctx, message.Input)
+			if err != nil {
+				return Reply{Error: err.Error()}
+			}
+			data, err := json.Marshal(output)
+			if err != nil {
+				return Reply{Error: fmt.Sprintf("encode the output of tool %s: %v", message.Tool, err)}
+			}
+			return Reply{Output: data}
+		}
+		return Reply{Error: fmt.Sprintf("the run has no tool %q", message.Tool)}
+	default:
+		if broker == nil || message.Approval == nil {
+			return Reply{Error: "the run asks for no approvals"}
+		}
+		decision, err := broker.OnApproval(ctx, *message.Approval)
+		if err != nil {
+			return Reply{Error: err.Error()}
+		}
+		return Reply{Decision: &decision}
 	}
 }
 
@@ -154,6 +224,20 @@ func (r *Relay) Listen(id uuid.UUID) (<-chan Message, func()) {
 		r.mu.Lock()
 		defer r.mu.Unlock()
 		delete(r.runs, id)
+	}
+}
+
+// Call hands a call to run id's Runner and waits for its reply, or until ctx ends.
+func (r *Relay) Call(ctx context.Context, id uuid.UUID, message Message) (Reply, error) {
+	message.reply = make(chan Reply, 1)
+	if err := r.Deliver(ctx, id, message); err != nil {
+		return Reply{}, err
+	}
+	select {
+	case reply := <-message.reply:
+		return reply, nil
+	case <-ctx.Done():
+		return Reply{}, ctx.Err()
 	}
 }
 

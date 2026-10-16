@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/flanksource/captain/pkg/ai/approval"
 	"github.com/flanksource/captain/pkg/api"
 	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/captain/pkg/promptrun"
@@ -171,4 +172,63 @@ func TestRunnerFailsARunWhoseJobExitsWithoutAResult(t *testing.T) {
 func TestRelayRefusesARunNobodyIsWaitingFor(t *testing.T) {
 	err := (&Relay{}).Deliver(context.Background(), uuid.New(), Message{Kind: KindStarted})
 	require.True(t, errors.Is(err, ErrNoListener))
+}
+
+// callingJobs is a job that, once started, calls a tool and asks for an approval through the
+// relay, as a job's agent does mid-run, then reports a result.
+type callingJobs struct {
+	relay    *Relay
+	toolCall Reply
+	approval Reply
+}
+
+func (c *callingJobs) Start(ctx context.Context, id uuid.UUID, _ Job) (Started, error) {
+	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	started := &inProcessJob{done: make(chan struct{}), cancel: cancel}
+	go func() {
+		defer close(started.done)
+		_ = c.relay.Deliver(runCtx, id, StartedMessage(api.Spec{}))
+		var err error
+		if c.toolCall, err = c.relay.Call(runCtx, id, ToolCallMessage("todo_search", map[string]any{"query": "bug"})); err != nil {
+			c.toolCall.Error = err.Error()
+		}
+		if c.approval, err = c.relay.Call(runCtx, id, ApprovalMessage(api.ApprovalRequest{Tool: "triage_review", Kind: api.ApprovalKindTool, Input: map[string]any{"proposal": "p-1"}, ToolUseID: "call-1"})); err != nil {
+			c.approval.Error = err.Error()
+		}
+		_ = c.relay.Deliver(runCtx, id, ResultMessage(promptrun.Result{Response: &api.Response{Text: "triaged"}}, nil))
+	}()
+	return started, nil
+}
+
+func TestRunnerAnswersAJobsToolCallsAndApprovals(t *testing.T) {
+	record := openRecording(t)
+	relay := &Relay{}
+	jobs := &callingJobs{relay: relay}
+	run, _, _ := remoteRun(record)
+	run.Input.Config.Tools = []api.ToolDefinition{{Name: "todo_search", Handler: func(_ context.Context, input map[string]any) (any, error) {
+		return map[string]any{"found": input["query"]}, nil
+	}}}
+	run.Input.Approvals = &promptrun.ApprovalOptions{RequestedBy: "gavel-dashboard"}
+	onEvent := run.Input.OnEvent
+	run.Input.OnEvent = func(iteration int, event api.Event) {
+		onEvent(iteration, event)
+		if event.Kind == api.EventPermission && event.ApprovalID != "" {
+			// A person approves it on the dashboard.
+			go func() {
+				_, err := approval.Resolve(context.Background(), record.DB, approval.ResolveInput{
+					RequestID: uuid.MustParse(event.ApprovalID), Approved: true, ResolvedBy: "ada",
+				})
+				assert.NoError(t, err)
+			}()
+		}
+	}
+
+	_, err := (&Runner{Jobs: jobs, Relay: relay}).Run(context.Background(), run)
+	require.NoError(t, err)
+
+	assert.Empty(t, jobs.toolCall.Error)
+	assert.JSONEq(t, `{"found":"bug"}`, string(jobs.toolCall.Output), "the tool ran on serve")
+	assert.Empty(t, jobs.approval.Error)
+	require.NotNil(t, jobs.approval.Decision)
+	assert.True(t, jobs.approval.Decision.Allow, "the person's approval reached the job")
 }
