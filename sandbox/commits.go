@@ -33,36 +33,11 @@ func (s *Sources) PushRunCommits(ctx context.Context, repo Repo, base, branch st
 	if err != nil {
 		return "", err
 	}
-	file, err := os.CreateTemp("", "gavel-run-*.bundle")
+	sha, done, err := receiveCommits(ctx, source, base, bundle)
 	if err != nil {
-		return "", fmt.Errorf("save the run's commits: %w", err)
+		return "", err
 	}
-	defer os.Remove(file.Name())
-	if _, err := io.Copy(file, bundle); err != nil {
-		_ = file.Close()
-		return "", fmt.Errorf("save the run's commits: %w", err)
-	}
-	if err := file.Close(); err != nil {
-		return "", fmt.Errorf("save the run's commits: %w", err)
-	}
-	heads, err := runGit(ctx, nil, "bundle", "list-heads", file.Name())
-	if err != nil {
-		return "", fmt.Errorf("read the run's bundle: %w", err)
-	}
-	lines := strings.Split(strings.TrimSpace(heads), "\n")
-	if len(lines) != 1 || lines[0] == "" {
-		return "", fmt.Errorf("the run's bundle has %d branches; a run's commits are on one", len(lines))
-	}
-	sha, ref, _ := strings.Cut(lines[0], " ")
-
-	incoming := "refs/gavel/incoming/" + uuid.NewString()
-	if _, err := runGit(ctx, nil, "-C", source, "fetch", "--quiet", file.Name(), ref+":"+incoming); err != nil {
-		return "", fmt.Errorf("read the run's commits on %s: %w", strings.TrimPrefix(ref, "refs/heads/"), err)
-	}
-	defer func() { _, _ = runGit(context.WithoutCancel(ctx), nil, "-C", source, "update-ref", "-d", incoming) }()
-	if _, err := runGit(ctx, nil, "-C", source, "merge-base", "--is-ancestor", base, sha); err != nil {
-		return "", fmt.Errorf("the run's commits on %s don't continue from %s, the commit it started at", strings.TrimPrefix(ref, "refs/heads/"), base)
-	}
+	defer done()
 
 	switch repo.Source {
 	case "push":
@@ -92,4 +67,72 @@ func (s *Sources) PushRunCommits(ctx context.Context, repo Repo, base, branch st
 		}
 	}
 	return sha, nil
+}
+
+// PushPRHead fast-forwards the PR's source branch, branch of the repository at headURL, from base,
+// the head the run started its turn at, to the one branch bundle holds. The push fails if the
+// branch has moved since. It returns the branch's new commit.
+func (s *Sources) PushPRHead(ctx context.Context, repo Repo, headURL, branch, base string, bundle io.Reader) (string, error) {
+	if _, err := runGit(ctx, nil, "check-ref-format", "refs/heads/"+branch); err != nil || strings.HasPrefix(branch, "-") {
+		return "", fmt.Errorf("%q is not a branch name: %v", branch, err)
+	}
+	if repo.Source != "github" {
+		return "", fmt.Errorf("repository %s has source %q; only GitHub repositories have PRs", repo.label(), repo.Source)
+	}
+	source, err := s.sourceDir(ctx, repo)
+	if err != nil {
+		return "", err
+	}
+	sha, done, err := receiveCommits(ctx, source, base, bundle)
+	if err != nil {
+		return "", err
+	}
+	defer done()
+	header, err := s.authHeader(ctx, repo)
+	if err != nil {
+		return "", err
+	}
+	if _, err := runGit(ctx, nil, "-c", header, "-C", source, "push", "--quiet",
+		"--force-with-lease=refs/heads/"+branch+":"+base, "--", headURL, sha+":refs/heads/"+branch); err != nil {
+		return "", fmt.Errorf("push the PR's source branch %s: %w", branch, err)
+	}
+	return sha, nil
+}
+
+// receiveCommits reads the one branch bundle holds into source under a temporary ref, after
+// checking it continues from base, and returns its commit and a func that drops the ref.
+func receiveCommits(ctx context.Context, source, base string, bundle io.Reader) (string, func(), error) {
+	file, err := os.CreateTemp("", "gavel-run-*.bundle")
+	if err != nil {
+		return "", nil, fmt.Errorf("save the run's commits: %w", err)
+	}
+	defer os.Remove(file.Name())
+	if _, err := io.Copy(file, bundle); err != nil {
+		_ = file.Close()
+		return "", nil, fmt.Errorf("save the run's commits: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return "", nil, fmt.Errorf("save the run's commits: %w", err)
+	}
+	heads, err := runGit(ctx, nil, "bundle", "list-heads", file.Name())
+	if err != nil {
+		return "", nil, fmt.Errorf("read the run's bundle: %w", err)
+	}
+	lines := strings.Split(strings.TrimSpace(heads), "\n")
+	if len(lines) != 1 || lines[0] == "" {
+		return "", nil, fmt.Errorf("the run's bundle has %d branches; a run's commits are on one", len(lines))
+	}
+	sha, ref, _ := strings.Cut(lines[0], " ")
+	name := strings.TrimPrefix(ref, "refs/heads/")
+
+	incoming := "refs/gavel/incoming/" + uuid.NewString()
+	if _, err := runGit(ctx, nil, "-C", source, "fetch", "--quiet", file.Name(), ref+":"+incoming); err != nil {
+		return "", nil, fmt.Errorf("read the run's commits on %s: %w", name, err)
+	}
+	done := func() { _, _ = runGit(context.WithoutCancel(ctx), nil, "-C", source, "update-ref", "-d", incoming) }
+	if _, err := runGit(ctx, nil, "-C", source, "merge-base", "--is-ancestor", base, sha); err != nil {
+		done()
+		return "", nil, fmt.Errorf("the run's commits on %s don't continue from %s, the commit it started at", name, base)
+	}
+	return sha, done, nil
 }

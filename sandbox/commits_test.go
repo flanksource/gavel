@@ -98,3 +98,33 @@ func TestPushRunCommitsToGitHub(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, string(config), "installation-token")
 }
+
+func TestPushPRHeadFastForwardsTheSourceBranch(t *testing.T) {
+	dataDir, remotes := t.TempDir(), t.TempDir()
+	org, repo := uuid.New(), uuid.New()
+	work := newWork(t)
+	base := commitFile(t, work, "README.md", "first")
+	remote := filepath.Join(remotes, "acme", "app.git")
+	git(t, work, "clone", "-q", "--bare", work, remote)
+	git(t, remote, "branch", "topic", base)
+	sources := &Sources{
+		DataDir:   dataDir,
+		GitHubURL: "file://" + remotes,
+		Token:     func(context.Context, int64) (string, error) { return "installation-token", nil },
+	}
+	github := Repo{ID: repo, Org: org, Source: "github", Name: "acme/app", GitHubRepoID: 42, InstallationID: 7}
+	_, err := sources.Checkout(context.Background(), github)
+	require.NoError(t, err)
+
+	bundle, tip := runCommits(t, remote, base, "topic-turn")
+	head, err := sources.PushPRHead(context.Background(), github, "file://"+remote, "topic", base, bytes.NewReader(bundle))
+	require.NoError(t, err)
+	assert.Equal(t, tip, head)
+	assert.Equal(t, tip, git(t, remote, "rev-parse", "refs/heads/topic"))
+
+	stale, _ := runCommits(t, remote, base, "another-turn")
+	_, err = sources.PushPRHead(context.Background(), github, "file://"+remote, "topic", base, bytes.NewReader(stale))
+	require.Error(t, err, "a branch that moved since the job saw it isn't pushed over")
+	assert.Contains(t, err.Error(), "push the PR's source branch topic")
+	assert.Equal(t, tip, git(t, remote, "rev-parse", "refs/heads/topic"))
+}
