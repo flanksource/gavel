@@ -19,6 +19,10 @@ import (
 // organization's repositories.
 var errHostedWorkspace = errors.New("is not one of this organization's repositories")
 
+// errNoHostedWorkspaces is a todo request to a hosted dashboard that serves no organization's
+// repositories, such as the one answering before an organization is chosen.
+var errNoHostedWorkspaces = errors.New("this hosted dashboard has no todo workspaces")
+
 // HostedWorkspaces resolves a hosted organization's repositories to todo workspaces.
 type HostedWorkspaces struct {
 	DB      *gorm.DB

@@ -440,7 +440,11 @@ func TestHostedRunSessionsAreSeenByThoseWhoSeeTheTodo(t *testing.T) {
 	status, stats = hostedCall(t, h.base, http.MethodGet, agentStatsPath, h.ada, "org:member", nil)
 	require.Equal(t, http.StatusOK, status, "the agent's own session, as the dashboard follows it: %v", stats)
 
-	for _, path := range []string{detailPath, planPath, statsPath, agentStatsPath} {
+	transcriptPath := "/api/captain/sessions/" + admission
+	status, transcript := hostedCall(t, h.base, http.MethodGet, transcriptPath, h.ada, "org:member", nil)
+	require.Equal(t, http.StatusOK, status, "the run's transcript: %v", transcript)
+
+	for _, path := range []string{detailPath, planPath, statsPath, agentStatsPath, transcriptPath} {
 		status, refused := hostedCall(t, h.base, http.MethodGet, path, h.grace, "org:member", nil)
 		assert.Equal(t, http.StatusNotFound, status, "another member doesn't see %s of a private todo: %v", path, refused)
 	}

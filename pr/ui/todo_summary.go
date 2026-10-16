@@ -285,7 +285,7 @@ func todoErrorStatus(fallback int, err error) int {
 	switch {
 	case errors.As(err, &configuration):
 		return http.StatusInternalServerError
-	case errors.Is(err, ErrProjectNotFound):
+	case errors.Is(err, ErrProjectNotFound), errors.Is(err, errNoHostedWorkspaces):
 		return http.StatusNotFound
 	case errors.Is(err, database.ErrUnavailable):
 		return http.StatusServiceUnavailable

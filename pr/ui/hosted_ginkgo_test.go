@@ -39,7 +39,7 @@ var _ = Describe("hosted mode routes", func() {
 		for _, route := range []struct{ method, path string }{
 			{http.MethodGet, "/api/activity"},
 			{http.MethodGet, "/api/activity/cache"},
-			{http.MethodGet, "/api/captain/sessions/abc"},
+			{http.MethodPost, "/api/captain/sessions/abc/message"},
 			{http.MethodGet, "/api/sessions"},
 			{http.MethodPost, "/api/todos/session/focus"},
 			{http.MethodGet, "/api/git/metrics"},

@@ -265,7 +265,7 @@ func (s *Server) todoProviderContext(ctx context.Context, source todoSource) (to
 		return provider, source, nil
 	}
 	if s.hosted {
-		return nil, source, errors.New("this hosted dashboard has no todo workspaces")
+		return nil, source, errNoHostedWorkspaces
 	}
 	resolved, err := s.resolveTodoDir(source.Dir)
 	if err != nil {

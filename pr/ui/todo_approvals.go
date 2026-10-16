@@ -221,7 +221,7 @@ func isQuestionRequest(request captaindb.TurnRequest) (bool, error) {
 // approvalStore is the Captain store dir's runs, and their approvals, are recorded in, with the
 // status to answer when there is none.
 func (s *Server) approvalStore(ctx context.Context, dir string) (*captaindb.DB, int, error) {
-	if s.workspaces == nil {
+	if !s.hosted {
 		resolved, err := s.resolveTodoDir(dir)
 		if err != nil {
 			return nil, http.StatusBadRequest, err
@@ -247,8 +247,11 @@ func (s *Server) approvalStore(ctx context.Context, dir string) (*captaindb.DB, 
 // belongs to one of this organization's todos, which the request's user may see or, with change,
 // change. A dashboard serving the host's projects reaches every session.
 func (s *Server) requireSessionAccess(ctx context.Context, session uuid.UUID, change bool) error {
-	if s.workspaces == nil {
+	if !s.hosted {
 		return nil
+	}
+	if s.workspaces == nil {
+		return errNoHostedWorkspaces
 	}
 	var issue struct {
 		ID              uuid.UUID

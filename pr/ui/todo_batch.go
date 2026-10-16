@@ -46,7 +46,7 @@ func (s *Server) handleTodoBatch(w http.ResponseWriter, r *http.Request) {
 		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("dirs is required and must be an array"))
 		return
 	}
-	if err := validateTodoBatchDirs(*payload.Dirs, s.workspaces == nil); err != nil {
+	if err := validateTodoBatchDirs(*payload.Dirs, !s.hosted); err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)
 		return
 	}

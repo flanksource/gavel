@@ -164,3 +164,25 @@ func TestHostedTodoBatchListsTheOrgsWorkspaces(t *testing.T) {
 	require.Equal(t, http.StatusOK, status, refused)
 	assert.Contains(t, refused["results"].([]any)[0].(map[string]any)["error"].(map[string]any)["message"], `todo workspace "/etc" is not one of this organization's repositories`)
 }
+
+func TestAHostedDashboardWithoutWorkspacesReadsNoSessions(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	srv := &Server{}
+	srv.SetHostedMode(true)
+	base := serveActingAs(t, srv, uuid.New())
+	user, session := uuid.New(), uuid.NewString()
+
+	for _, call := range []struct {
+		method, path string
+		body         any
+	}{
+		{http.MethodGet, "/api/todos/session/approvals?sessionId=" + session, nil},
+		{http.MethodPost, "/api/todos/session/approve", map[string]any{"approvalId": uuid.NewString(), "action": "approve"}},
+		{http.MethodGet, "/api/todos/session/stats?sessionId=" + session, nil},
+		{http.MethodGet, "/api/captain/sessions/" + session, nil},
+	} {
+		status, refused := hostedCall(t, base, call.method, call.path, user, "org:member", call.body)
+		assert.Equal(t, http.StatusNotFound, status, "%s %s: %v", call.method, call.path, refused)
+		assert.Equal(t, "this hosted dashboard has no todo workspaces", refused["error"], "%s %s", call.method, call.path)
+	}
+}

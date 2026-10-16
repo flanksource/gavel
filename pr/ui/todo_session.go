@@ -11,6 +11,7 @@ import (
 	"github.com/flanksource/captain/pkg/ai/approval"
 	cmuxprov "github.com/flanksource/captain/pkg/ai/provider/cmux"
 	"github.com/flanksource/captain/pkg/api"
+	captaincli "github.com/flanksource/captain/pkg/cli"
 	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/gavel/todos/native"
 	"github.com/google/uuid"
@@ -100,7 +101,7 @@ func (s *Server) handleTodoSessionStats(w http.ResponseWriter, r *http.Request) 
 		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("sessionId is required"))
 		return
 	}
-	if s.workspaces != nil {
+	if s.hosted {
 		s.writeHostedSessionStats(w, r, sessionID)
 		return
 	}
@@ -143,24 +144,55 @@ func (s *Server) writeHostedSessionStats(w http.ResponseWriter, r *http.Request,
 		writeTodoError(w, status, err)
 		return
 	}
-	resolved, err := resolveCaptainSession(r.Context(), store, sessionID)
+	resolved, err := s.hostedSession(r.Context(), store, sessionID)
 	if err != nil {
 		writeTodoError(w, http.StatusInternalServerError, err)
 		return
+	}
+	writeCaptainSessionStats(w, r, store, sessionID, resolved)
+}
+
+// hostedSession resolves sessionID, a run's admission or agent session, failing unless it is a
+// run of one of the organization's todos the request's user can see.
+func (s *Server) hostedSession(ctx context.Context, store captainSessionStore, sessionID string) (captainSessionResolution, error) {
+	resolved, err := resolveCaptainSession(ctx, store, sessionID)
+	if err != nil {
+		return resolved, err
 	}
 	session := resolved.run
 	if session == nil {
 		session = resolved.transcript
 	}
 	if session == nil {
-		writeTodoError(w, http.StatusNotFound, fmt.Errorf("%w: session %s isn't a run of this organization's todos", native.ErrNotFound, sessionID))
-		return
+		return resolved, fmt.Errorf("%w: session %s isn't a run of this organization's todos", native.ErrNotFound, sessionID)
 	}
-	if err := s.requireSessionAccess(r.Context(), session.ID, false); err != nil {
-		writeTodoError(w, http.StatusNotFound, err)
-		return
-	}
-	writeCaptainSessionStats(w, r, store, sessionID, resolved)
+	return resolved, s.requireSessionAccess(ctx, session.ID, false)
+}
+
+// captainSessionRead reads or follows a Captain session through local, Captain's own handler. A
+// hosted dashboard reads it from the organization's database instead, for a run of one of its
+// todos the request's user can see.
+func (s *Server) captainSessionRead(local http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !s.hosted {
+			local.ServeHTTP(w, r)
+			return
+		}
+		if s.workspaces == nil {
+			writeTodoError(w, http.StatusNotFound, errNoHostedWorkspaces)
+			return
+		}
+		captain, err := captaindb.Use(s.orgDB)
+		if err != nil {
+			writeTodoError(w, http.StatusServiceUnavailable, fmt.Errorf("open the Captain store of organization %s: %w", s.orgID(), err))
+			return
+		}
+		if _, err := s.hostedSession(r.Context(), captain, r.PathValue("id")); err != nil {
+			writeTodoError(w, http.StatusInternalServerError, err)
+			return
+		}
+		http.StripPrefix("/api/captain/sessions", captaincli.SessionReader(captain)).ServeHTTP(w, r)
+	})
 }
 
 // writeCaptainSessionStats answers the stats of a session Captain knows, with its pending
@@ -261,14 +293,14 @@ func (s *Server) handleTodoSessionApprove(w http.ResponseWriter, r *http.Request
 		writeTodoError(w, http.StatusBadRequest, err)
 		return
 	}
-	if s.workspaces != nil {
+	if s.hosted {
 		request, err := store.GetTurnRequest(r.Context(), requestID)
 		if err != nil {
 			writeTodoError(w, http.StatusNotFound, err)
 			return
 		}
 		if err := s.requireSessionAccess(r.Context(), request.SessionID, true); err != nil {
-			writeTodoError(w, http.StatusNotFound, err)
+			writeTodoError(w, http.StatusInternalServerError, err)
 			return
 		}
 	}
@@ -334,7 +366,7 @@ func (s *Server) handleTodoSessionApprovals(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if err := s.requireSessionAccess(r.Context(), sessionID, false); err != nil {
-		writeTodoError(w, http.StatusNotFound, err)
+		writeTodoError(w, http.StatusInternalServerError, err)
 		return
 	}
 	pending, err := pendingApprovals(r.Context(), store, sessionID, promptRunID)

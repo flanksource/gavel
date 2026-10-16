@@ -603,7 +603,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/todos/commits/files", s.handleTodoCommitFiles)
 	// A run's transcript is Captain's to read and follow: its handler resolves
 	// the session through the pool Gavel shares with Captain's CLI registry.
-	mux.Handle("/api/captain/sessions/", http.StripPrefix("/api/captain/sessions", captaincli.SessionHandler()))
+	captainSessions := http.StripPrefix("/api/captain/sessions", captaincli.SessionHandler())
+	mux.Handle("/api/captain/sessions/", captainSessions)
+	mux.Handle("GET /api/captain/sessions/{id}", s.captainSessionRead(captainSessions))
 	// Prompt runs started through POST /api/v1/prompt/run are followed, stopped
 	// and messaged here; their transcript is the session above.
 	mux.Handle("/api/captain/prompt/runs/", http.StripPrefix("/api/captain/prompt/runs", captaincli.PromptRunHandler()))
