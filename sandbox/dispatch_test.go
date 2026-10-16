@@ -6,6 +6,7 @@ package sandbox
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"strings"
@@ -29,6 +30,7 @@ type memoryExecutor struct {
 	submitErr error
 	waitErr   error
 	submitted []Job
+	cancelled []string
 }
 
 func (e *memoryExecutor) Name() string { return "memory" }
@@ -52,8 +54,11 @@ func (h *memoryHandle) Logs(context.Context) (io.ReadCloser, error) {
 func (h *memoryHandle) Wait(context.Context) (Result, error) {
 	return Result{ExitCode: h.executor.exitCode}, h.executor.waitErr
 }
-func (h *memoryHandle) Cancel(context.Context) error { return nil }
-func (h *memoryHandle) Ref() string                  { return h.ref }
+func (h *memoryHandle) Cancel(context.Context) error {
+	h.executor.cancelled = append(h.executor.cancelled, h.ref)
+	return nil
+}
+func (h *memoryHandle) Ref() string { return h.ref }
 
 type sandboxRunRow struct {
 	Status     string
@@ -190,4 +195,29 @@ func TestDispatcherRejectsAnUnknownKind(t *testing.T) {
 	dispatcher, _, _, org := newDispatcher(t, &memoryExecutor{})
 	_, err := dispatcher.Start(context.Background(), tenant.Scope{OrgID: org}, RunSpec{Kind: "deploy"}, nil)
 	require.EqualError(t, err, `sandbox run kind "deploy" is not one of test, lint, push-check, agent`)
+}
+
+func TestDispatcherStartsAnAgentRunUnderTheCallersID(t *testing.T) {
+	executor := &memoryExecutor{output: "ok\n"}
+	dispatcher, _, _, org := newDispatcher(t, executor)
+	dispatcher.SecretEnv = map[string]string{"ANTHROPIC_API_KEY": "model-key"}
+	id, todo := uuid.New(), uuid.New()
+	job := json.RawMessage(`{"root":"/srv/repo"}`)
+
+	run, err := dispatcher.StartRun(context.Background(), id, tenant.Scope{OrgID: org}, RunSpec{Kind: "agent", TodoID: &todo, Step: "run", Agent: job}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, id, run.ID)
+	require.Len(t, executor.submitted, 1)
+	assert.Equal(t, "model-key", executor.submitted[0].SecretEnv["ANTHROPIC_API_KEY"])
+	assert.NotEmpty(t, executor.submitted[0].SecretEnv["GAVEL_RUN_TOKEN"])
+
+	record, err := LoadRun(context.Background(), dispatcher.DB, id)
+	require.NoError(t, err)
+	assert.JSONEq(t, string(job), string(record.Spec.Agent))
+	assert.Equal(t, "run", record.Spec.Step)
+
+	require.NoError(t, run.Cancel(context.Background()))
+	assert.Equal(t, []string{"memory-" + id.String()}, executor.cancelled)
+	_, err = run.Wait(context.Background())
+	require.NoError(t, err)
 }

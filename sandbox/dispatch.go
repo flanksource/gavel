@@ -32,6 +32,8 @@ type RunSpec struct {
 	SHA    string     `json:"sha,omitempty"`
 	TodoID *uuid.UUID `json:"todoId,omitempty"`
 	Step   string     `json:"step,omitempty"`
+	// Agent is an agent run's job: the step's prompt run, as todos/remote encodes it.
+	Agent json.RawMessage `json:"agent,omitempty"`
 }
 
 // Dispatcher starts sandbox runs on an Executor.
@@ -45,12 +47,15 @@ type Dispatcher struct {
 	Server   string
 	TokenKey []byte
 	Limits   Limits
+	// SecretEnv is added to every job's secrets: the model API keys agent runs use.
+	SecretEnv map[string]string
 }
 
 // Run is a dispatched run.
 type Run struct {
-	ID   uuid.UUID
-	done chan struct{}
+	ID     uuid.UUID
+	done   chan struct{}
+	handle Handle
 
 	result Result
 	err    error
@@ -66,10 +71,24 @@ func (r *Run) Wait(ctx context.Context) (Result, error) {
 	}
 }
 
+// Cancel stops the run's job.
+func (r *Run) Cancel(ctx context.Context) error {
+	if r.handle == nil {
+		return nil
+	}
+	return r.handle.Cancel(ctx)
+}
+
 // Start records a queued run, submits its job and follows it in the background. output, when
 // set, receives the run's log as it arrives. The returned Run is set even when submitting fails,
 // so the caller can name the failed record.
 func (d *Dispatcher) Start(ctx context.Context, scope tenant.Scope, spec RunSpec, output io.Writer) (*Run, error) {
+	return d.StartRun(ctx, uuid.New(), scope, spec, output)
+}
+
+// StartRun is Start for a run whose ID the caller chose, so it can be ready for the run's
+// messages before its job starts.
+func (d *Dispatcher) StartRun(ctx context.Context, id uuid.UUID, scope tenant.Scope, spec RunSpec, output io.Writer) (*Run, error) {
 	if !contains(runKinds, spec.Kind) {
 		return nil, fmt.Errorf("sandbox run kind %q is not one of %s", spec.Kind, strings.Join(runKinds, ", "))
 	}
@@ -77,7 +96,7 @@ func (d *Dispatcher) Start(ctx context.Context, scope tenant.Scope, spec RunSpec
 	if err != nil {
 		return nil, fmt.Errorf("encode the run spec: %w", err)
 	}
-	run := &Run{ID: uuid.New(), done: make(chan struct{})}
+	run := &Run{ID: id, done: make(chan struct{})}
 	var repo *uuid.UUID
 	if spec.RepoID != uuid.Nil {
 		repo = &spec.RepoID
@@ -98,11 +117,17 @@ func (d *Dispatcher) Start(ctx context.Context, scope tenant.Scope, spec RunSpec
 		SecretEnv: map[string]string{"GAVEL_RUN_TOKEN": SignRunToken(d.TokenKey, run.ID, scope.OrgID, time.Now().Add(limits.Timeout+15*time.Minute))},
 		Limits:    limits,
 	}
+	for key, value := range d.SecretEnv {
+		if key != "GAVEL_RUN_TOKEN" {
+			job.SecretEnv[key] = value
+		}
+	}
 	handle, err := d.Executor.Submit(ctx, job)
 	if err != nil {
 		d.finish(context.WithoutCancel(ctx), run.ID, "failed", nil)
 		return run, fmt.Errorf("start sandbox run %s: %w", run.ID, err)
 	}
+	run.handle = handle
 	logKey := "runs/" + run.ID.String() + "/log.txt"
 	if err := d.DB.WithContext(ctx).Exec(`UPDATE sandbox_runs SET status = 'running', backend_ref = ?, log_key = ?, started_at = now() WHERE id = ?`,
 		handle.Ref(), logKey, run.ID).Error; err != nil {
