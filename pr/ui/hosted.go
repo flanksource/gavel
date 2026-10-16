@@ -40,6 +40,7 @@ var hostedPassThrough = []string{
 	// Runs execute in sandbox jobs (see agent_runs.go).
 	"/api/todos/run", "POST /api/todos/plan/approve", "POST /api/todos/plan/revise", "POST /api/todos/plan/reject",
 	"POST /api/todos/answer", "POST /api/todos/session/stop",
+	"GET /api/todos/session/approvals", "POST /api/todos/session/approve",
 }
 
 // hostedAnswer is a fixed response a hosted dashboard gives instead of the handler.

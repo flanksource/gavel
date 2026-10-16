@@ -17,7 +17,9 @@ import (
 	"time"
 
 	captainai "github.com/flanksource/captain/pkg/ai"
+	"github.com/flanksource/captain/pkg/ai/approval"
 	"github.com/flanksource/captain/pkg/api"
+	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/gavel/blob"
 	"github.com/flanksource/gavel/sandbox"
 	"github.com/flanksource/gavel/todos/remote"
@@ -368,6 +370,81 @@ func TestHostedTriageNewRunsWithItsToolsOnServe(t *testing.T) {
 	assert.True(t, job.Approvals, "and asks serve for the person's approval of the proposal")
 
 	stop := map[string]any{"ref": todo, "promptRunId": started["promptRunId"]}
+	status, stopped := hostedCall(t, base, http.MethodPost, "/api/todos/session/stop?dir="+workspace, creator, "org:member", stop)
+	require.Equal(t, http.StatusAccepted, status, stopped)
+	var outcomes int64
+	require.Eventually(t, func() bool {
+		require.NoError(t, db.Raw(`SELECT count(*) FROM todo_issue_events WHERE issue_id = ? AND kind = 'lifecycle_outcome'`, todo).Scan(&outcomes).Error)
+		return outcomes == 1
+	}, 30*time.Second, 50*time.Millisecond, "the stopped run's outcome reached the todo")
+}
+
+func TestHostedApprovalsBelongToTheTodosOwner(t *testing.T) {
+	db, _, org := openOrgDB(t)
+	t.Setenv("HOME", t.TempDir())
+	creator, member := uuid.New(), uuid.New()
+	for name, id := range map[string]uuid.UUID{"ada": creator, "grace": member} {
+		require.NoError(t, db.Exec(`INSERT INTO users (id, issuer, clerk_user_id) VALUES (?, 'https://clerk.example', ?)`, id, "user_"+name).Error)
+	}
+	dataDir := t.TempDir()
+	repo := pushedRepo(t, db, org, dataDir, "app")
+	workspace := "repo:" + repo.String()
+	relay := &remote.Relay{}
+	logs := blob.Local(t.TempDir())
+	dispatcher := &sandbox.Dispatcher{
+		DB: db, Image: "runner", Server: "https://gavel.example", TokenKey: []byte(strings.Repeat("k", 32)),
+		Logs: func(uuid.UUID) blob.Store { return logs }, Limits: sandbox.Limits{Timeout: time.Minute},
+		Executor: &inProcessExecutor{db: db, relay: relay, agent: workingAgent{}, bareDir: func(id uuid.UUID) string {
+			return filepath.Join(dataDir, "repos", org.String(), id.String()+".git")
+		}},
+	}
+	srv := &Server{}
+	srv.SetOrg(org, db)
+	srv.SetHostedMode(true)
+	srv.SetHostedWorkspaces(HostedWorkspaces{DB: db, Sources: &sandbox.Sources{DataDir: dataDir}})
+	srv.SetAgentRuns(AgentRuns{Dispatcher: dispatcher, Relay: relay})
+	base := serveActingAs(t, srv, org)
+	_, created := hostedCall(t, base, http.MethodPost, "/api/todos", creator, "org:member", map[string]any{"dir": workspace, "title": "Shared", "visibility": "public"})
+	todo := created["id"].(string)
+	status, started := hostedCall(t, base, http.MethodPost, "/api/todos/run", creator, "org:member", map[string]any{"dir": workspace, "ref": todo, "step": "plan"})
+	require.Equal(t, http.StatusOK, status, started)
+	promptRun := uuid.MustParse(started["promptRunId"].(string))
+
+	// The running agent asks for an approval, as a sandboxed run's does through serve's broker.
+	captain, err := captaindb.Use(db)
+	require.NoError(t, err)
+	var stored *captaindb.PromptRun
+	require.Eventually(t, func() bool {
+		stored, err = captain.GetPromptRun(context.Background(), promptRun)
+		require.NoError(t, err)
+		return stored.State == captaindb.PromptRunStateRunning
+	}, 30*time.Second, 50*time.Millisecond, "the agent is working")
+	decided := make(chan api.ApprovalDecision, 1)
+	go func() {
+		broker := &approval.Broker{DB: captain, SessionID: stored.SessionID, PromptRunID: promptRun, RequestedBy: "gavel-dashboard", Timeout: time.Minute,
+			Notify: func(context.Context, api.Event) error { return nil }}
+		decision, err := broker.OnApproval(context.Background(), api.ApprovalRequest{Tool: "Bash", Kind: api.ApprovalKindTool, Input: map[string]any{"command": "make"}, ToolUseID: "call-1"})
+		assert.NoError(t, err)
+		decided <- decision
+	}()
+	approvals := "/api/todos/session/approvals?dir=" + workspace + "&sessionId=" + stored.SessionID.String()
+	var pending []any
+	require.Eventually(t, func() bool {
+		_, listed := hostedCall(t, base, http.MethodGet, approvals, creator, "org:member", nil)
+		pending, _ = listed["approvals"].([]any)
+		return len(pending) == 1
+	}, 30*time.Second, 50*time.Millisecond, "the creator sees the pending approval")
+	approvalID := pending[0].(map[string]any)["approvalId"].(string)
+
+	answer := map[string]any{"approvalId": approvalID, "action": "approve"}
+	status, refused := hostedCall(t, base, http.MethodPost, "/api/todos/session/approve?dir="+workspace, member, "org:member", answer)
+	assert.Equal(t, http.StatusForbidden, status, "another member can't answer it: %v", refused)
+
+	status, answered := hostedCall(t, base, http.MethodPost, "/api/todos/session/approve?dir="+workspace, creator, "org:member", answer)
+	require.Equal(t, http.StatusOK, status, answered)
+	assert.True(t, (<-decided).Allow, "the run gets the creator's approval")
+
+	stop := map[string]any{"ref": todo, "promptRunId": promptRun.String()}
 	status, stopped := hostedCall(t, base, http.MethodPost, "/api/todos/session/stop?dir="+workspace, creator, "org:member", stop)
 	require.Equal(t, http.StatusAccepted, status, stopped)
 	var outcomes int64

@@ -212,20 +212,26 @@ func (s *Server) handleTodoSessionApprove(w http.ResponseWriter, r *http.Request
 		writeTodoError(w, http.StatusBadRequest, err)
 		return
 	}
-	dir, err := s.resolveTodoDir(r.URL.Query().Get("dir"))
+	store, status, err := s.approvalStore(r.Context(), r.URL.Query().Get("dir"))
 	if err != nil {
-		writeTodoError(w, http.StatusBadRequest, err)
-		return
-	}
-	store, err := todoApprovalStore(r.Context(), dir)
-	if err != nil {
-		writeTodoError(w, http.StatusServiceUnavailable, err)
+		writeTodoError(w, status, err)
 		return
 	}
 	sessionID, err := approvalSessionID(strings.TrimSpace(r.URL.Query().Get("sessionId")))
 	if err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)
 		return
+	}
+	if s.workspaces != nil {
+		request, err := store.GetTurnRequest(r.Context(), requestID)
+		if err != nil {
+			writeTodoError(w, http.StatusNotFound, err)
+			return
+		}
+		if err := s.requireApprovalAccess(r.Context(), request.SessionID, true); err != nil {
+			writeTodoError(w, http.StatusNotFound, err)
+			return
+		}
 	}
 	resolvedRequest, err := resolveApproval(r.Context(), store, approvalAnswer{
 		SessionID: sessionID, RequestID: requestID, Action: action, Message: payload.Message,
@@ -283,14 +289,13 @@ func (s *Server) handleTodoSessionApprovals(w http.ResponseWriter, r *http.Reque
 		}
 		promptRunID = &parsed
 	}
-	dir, err := s.resolveTodoDir(r.URL.Query().Get("dir"))
+	store, status, err := s.approvalStore(r.Context(), r.URL.Query().Get("dir"))
 	if err != nil {
-		writeTodoError(w, http.StatusBadRequest, err)
+		writeTodoError(w, status, err)
 		return
 	}
-	store, err := todoApprovalStore(r.Context(), dir)
-	if err != nil {
-		writeTodoError(w, http.StatusServiceUnavailable, err)
+	if err := s.requireApprovalAccess(r.Context(), sessionID, false); err != nil {
+		writeTodoError(w, http.StatusNotFound, err)
 		return
 	}
 	pending, err := pendingApprovals(r.Context(), store, sessionID, promptRunID)
