@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { setAuthMode } from '../../query';
 import { CreateTodoDialog } from './CreateTodoDialog';
 
 vi.mock('./attachments', () => ({
@@ -26,6 +27,33 @@ vi.mock('./todoMutations', () => ({
 }));
 
 describe('CreateTodoDialog', () => {
+  afterEach(() => setAuthMode('none', vi.fn()));
+
+  it('lets a hosted org member share a todo, private by default', async () => {
+    setAuthMode('clerk', vi.fn());
+    createMutation.mutateAsync.mockReset();
+    createMutation.mutateAsync.mockResolvedValue({ todo: { ref: 'shared' } });
+    render(<CreateTodoDialog open onClose={vi.fn()} workspaces={[{ name: 'app', dir: 'repo:1', repos: [] }]} onCreated={vi.fn()} />);
+    const visibility = screen.getByLabelText<HTMLSelectElement>('Visibility');
+    expect(visibility.value).toBe('private');
+    fireEvent.change(visibility, { target: { value: 'public' } });
+    fireEvent.change(screen.getByPlaceholderText('What needs doing?'), { target: { value: 'Shared work' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add todo' }));
+    await waitFor(() => expect(createMutation.mutateAsync).toHaveBeenCalledOnce());
+    expect(JSON.parse(createMutation.mutateAsync.mock.calls[0][0].body)).toMatchObject({ title: 'Shared work', visibility: 'public' });
+  });
+
+  it('offers no visibility on a local dashboard, which shows every todo', async () => {
+    createMutation.mutateAsync.mockReset();
+    createMutation.mutateAsync.mockResolvedValue({ todo: { ref: 'local' } });
+    render(<CreateTodoDialog open onClose={vi.fn()} workspaces={[{ name: 'acme', dir: '/work/acme', repos: [] }]} onCreated={vi.fn()} />);
+    expect(screen.queryByLabelText('Visibility')).toBeNull();
+    fireEvent.change(screen.getByPlaceholderText('What needs doing?'), { target: { value: 'Local work' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add todo' }));
+    await waitFor(() => expect(createMutation.mutateAsync).toHaveBeenCalledOnce());
+    expect(JSON.parse(createMutation.mutateAsync.mock.calls[0][0].body)).not.toHaveProperty('visibility');
+  });
+
 	 it('keeps a saved todo open for triage recovery without creating it again', async () => {
 	   const onCreated = vi.fn();
 	   createMutation.mutateAsync.mockReset();

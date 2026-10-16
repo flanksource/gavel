@@ -27,3 +27,9 @@ export function githubScopeVisible(mode: AuthMode): boolean {
 export function hostControlsVisible(mode: AuthMode): boolean {
   return mode !== 'clerk';
 }
+
+// todoVisibilityVisible reports whether a todo's visibility (private to its creator, or
+// public to the org) is shown and chosen. A local dashboard shows every todo.
+export function todoVisibilityVisible(mode: AuthMode): boolean {
+  return mode === 'clerk';
+}

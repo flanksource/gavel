@@ -48,6 +48,8 @@ export interface TodoEvent {
 // them full (top-level) todos. The server refuses to choose for the person.
 export type TodoChildDisposition = 'archive' | 'detach';
 
+export type TodoVisibility = 'private' | 'public';
+
 export interface TodoItem {
   pr?: { number: number; url: string; head?: string; base?: string };
   ref: string;
@@ -63,6 +65,11 @@ export interface TodoItem {
   status: TodoStatus;
   priority: TodoPriority;
   cwd?: string;
+  // The user who created a hosted org's todo; absent locally.
+  createdBy?: string;
+  // Who in a hosted org sees the todo: only its creator (private, the default) or
+  // every member (public). Absent locally, where every todo is shown.
+  visibility?: TodoVisibility;
   // Raw label tokens. Their colour and icon are NOT here: presentation is
   // resolved against the separately-cached tag definitions (see tagQueries.ts),
   // so the dictionary is fetched once instead of repeated on every row.

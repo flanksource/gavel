@@ -1,12 +1,15 @@
 import { useState } from 'react';
 import { Modal, Field, Button, Select } from '@flanksource/clicky-ui/components';
-import type { Project, TodoItem, TodoPriority, TodoStatus } from '../../types';
+import type { Project, TodoItem, TodoPriority, TodoStatus, TodoVisibility } from '../../types';
+import { currentAuthMode } from '../../query';
+import { todoVisibilityVisible } from '../../hostedUI';
 import { ScreenshotPicker, todoFormData, useAttachments } from './attachments';
 import { inputClass, priorities, statuses, statusLabel } from './format';
 import { TodoBodyField } from './TodoBodyField';
 import { useCreateTodoMutation, type CreateTodoResponse } from './todoMutations';
 import { TriageAfterCreation, TriageCreationRecovery } from './TriageAfterCreation';
 import { TodoPRField, todoPRLink } from './TodoPRLink';
+import { TodoVisibilitySelect } from './TodoVisibility';
 
 // initialDir picks the workspace to preselect: the current todo's workspace when
 // it's a configured one, otherwise the first workspace.
@@ -52,6 +55,8 @@ function CreateTodoForm({ onClose, workspaces, parent, onCreated, defaultDir }: 
   const [status, setStatus] = useState<TodoStatus>('pending');
   const [error, setError] = useState('');
   const [triage, setTriage] = useState(true);
+  const showVisibility = todoVisibilityVisible(currentAuthMode());
+  const [visibility, setVisibility] = useState<TodoVisibility>('private');
   const [created, setCreated] = useState<CreateTodoResponse | null>(null);
   // The paste listener lives only while the form is mounted, i.e. while open.
   const { attachments, previews, add, remove } = useAttachments({ pasteAnywhere: true });
@@ -64,7 +69,11 @@ function CreateTodoForm({ onClose, workspaces, parent, onCreated, defaultDir }: 
     try {
       // /api/todos/new accepts both JSON and multipart; post the image bytes as
       // multipart when screenshots are attached, otherwise the lighter JSON path.
-      const fields = { title, body, priority, status, triage, pr: todoPRLink(prURL), ...(parent ? { parent: parent.ref } : {}) };
+      const fields = {
+        title, body, priority, status, triage, pr: todoPRLink(prURL),
+        ...(parent ? { parent: parent.ref } : {}),
+        ...(showVisibility ? { visibility } : {}),
+      };
       const result = await createTodo.mutateAsync(attachments.length
         ? { body: todoFormData(fields, attachments) }
         : {
@@ -129,6 +138,11 @@ function CreateTodoForm({ onClose, workspaces, parent, onCreated, defaultDir }: 
             </Field>
           </div>
         </div>
+        {showVisibility && (
+          <Field label="Visibility">
+            <TodoVisibilitySelect value={visibility} onChange={setVisibility} disabled={busy} />
+          </Field>
+        )}
         <TriageAfterCreation checked={triage} onChange={setTriage} disabled={busy} />
         <TodoPRField value={prURL} onChange={setPRURL} disabled={busy} />
         <TodoBodyField

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { githubScopeVisible, hostControlsVisible, tabFor, visibleTabs } from './hostedUI';
+import { githubScopeVisible, hostControlsVisible, tabFor, todoVisibilityVisible, visibleTabs } from './hostedUI';
 import type { Tab } from './routes';
 
 const allTabs: Tab[] = ['prs', 'projects', 'todos', 'sessions', 'tasks', 'prompts', 'activity'];
@@ -14,6 +14,11 @@ describe('hosted UI', () => {
   it('shows a hosted org only the PR tab and no host controls', () => {
     expect(visibleTabs('clerk', allTabs)).toEqual(['prs']);
     expect(hostControlsVisible('clerk')).toBe(false);
+  });
+
+  it('shows todo visibility only to a hosted org, whose members share its todos', () => {
+    expect(todoVisibilityVisible('clerk')).toBe(true);
+    expect(todoVisibilityVisible('none')).toBe(false);
   });
 
   it('shows the GitHub scope chooser only locally, where repos come from the user\'s token', () => {
