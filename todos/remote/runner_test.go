@@ -29,6 +29,9 @@ type inProcessJobs struct {
 	// skipResult ends the job before it reports a result, as a job that crashed does.
 	skipResult bool
 	dir        string
+	// admittedBeforeStart is whether the run was admitted when its job started.
+	admitted            *bool
+	admittedBeforeStart bool
 }
 
 type inProcessJob struct {
@@ -52,6 +55,9 @@ func (j *inProcessJob) Cancel(context.Context) error {
 }
 
 func (s *inProcessJobs) Start(ctx context.Context, id uuid.UUID, job Job) (Started, error) {
+	if s.admitted != nil {
+		s.admittedBeforeStart = *s.admitted
+	}
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	started := &inProcessJob{done: make(chan struct{}), cancel: cancel}
 	go func() {
@@ -130,13 +136,14 @@ func TestRunnerRecordsTheRunFromTheSandbox(t *testing.T) {
 		{Kind: api.EventResult, Success: true, CostUSD: 0.25},
 	}}}
 	run, events, admitted := remoteRun(record)
+	jobs.admitted = admitted
 
 	result, err := (&Runner{Jobs: jobs, Relay: relay}).Run(context.Background(), run)
 
 	require.NoError(t, err)
 	require.NotEqual(t, uuid.Nil, result.PromptRunID)
 	assert.Equal(t, "done", result.Response.Text)
-	assert.True(t, *admitted, "the host learned the run was admitted once it started")
+	assert.True(t, jobs.admittedBeforeStart, "the host learns the run was admitted before its job starts, as a local run's does before setup")
 	assert.NotEmpty(t, *events, "the host saw the run's events")
 	stored, err := record.DB.GetPromptRun(context.Background(), result.PromptRunID)
 	require.NoError(t, err)

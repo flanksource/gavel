@@ -24,8 +24,8 @@ type RemoteRun struct {
 	// files the run under Input.Record itself.
 	Input promptrun.Input
 	Hooks RunHooks
-	// Admitted is called once the run's setup has finished and before its first turn, as the
-	// hook a local recorded run carries is. Nil for an unrecorded run.
+	// Admitted is called once Captain has admitted the run and before it is set up, as the hook
+	// a local recorded run carries is. Nil for an unrecorded run.
 	Admitted func() error
 }
 

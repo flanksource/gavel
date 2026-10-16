@@ -33,8 +33,8 @@ type Runner struct {
 	Relay *Relay
 }
 
-// Run admits run, starts its sandbox job, and files what the job reports until it reports a
-// result, exits without one, or ctx ends, which cancels the job.
+// Run admits run, tells the host it was admitted, starts its sandbox job, and files what the job
+// reports until it reports a result, exits without one, or ctx ends, which cancels the job.
 func (r *Runner) Run(ctx context.Context, run lifecycle.RemoteRun) (promptrun.Result, error) {
 	id := uuid.New()
 	messages, stopListening := r.Relay.Listen(id)
@@ -64,6 +64,11 @@ func (r *Runner) Run(ctx context.Context, run lifecycle.RemoteRun) (promptrun.Re
 		return recorder.Complete(classify, result, runErr, stopped)
 	}
 
+	if run.Admitted != nil {
+		if err := run.Admitted(); err != nil {
+			return finish(promptrun.Result{}, err, false)
+		}
+	}
 	job, err := r.Jobs.Start(ctx, id, JobFor(run))
 	if err != nil {
 		return finish(promptrun.Result{}, fmt.Errorf("start the sandbox job of run %s: %w", id, err), false)
@@ -88,11 +93,6 @@ func (r *Runner) Run(ctx context.Context, run lifecycle.RemoteRun) (promptrun.Re
 		case message := <-messages:
 			switch message.Kind {
 			case KindStarted:
-				if run.Admitted != nil {
-					if err := run.Admitted(); err != nil {
-						return stop(err)
-					}
-				}
 				if recorder != nil && message.Spec != nil {
 					if err := recorder.Start(message.Spec); err != nil {
 						return stop(err)
