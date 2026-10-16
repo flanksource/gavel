@@ -1,7 +1,6 @@
 import { Button, Modal } from '@flanksource/clicky-ui/components';
 import { UiCheck, UiStop, UiWarningTriangle } from '@flanksource/clicky-ui/icons';
 import { useTestRun } from '@flanksource/gavel/testrunner/hooks';
-import { rebaseTraces } from '@flanksource/gavel/testrunner';
 import { openEventStream } from '../eventHub';
 import { Spinner } from '../icons/Spinner';
 import { TestRunResults } from './tests/TestRunResults';
@@ -55,7 +54,8 @@ export function ProjectActionRunDialog({
           {run.snapshot ? (
             <TestRunResults
               snapshot={run.snapshot as unknown as RunSnapshot}
-              traces={rebaseTraces((run.snapshot as unknown as RunSnapshot).status?.traces, `/api/project-runs/${encodeURIComponent(runId)}`)}
+              traces={(run.snapshot as unknown as RunSnapshot).status?.traces}
+              base={`/api/project-runs/${encodeURIComponent(runId)}`}
               done={run.done}
               runKey={runId}
               projectName={projectName}

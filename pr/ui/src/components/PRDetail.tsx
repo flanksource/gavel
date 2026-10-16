@@ -1,8 +1,8 @@
 import { useState, useMemo, useRef, useCallback, type ReactNode, type ComponentType } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import type { PRItem, PRDetail, PRComment, PRCommitInfo, PRFileInfo, GavelResultsSummary, Test, Project } from '../types';
+import type { PRItem, PRDetail, PRComment, PRCommitInfo, PRFileInfo, GavelResultsSummary, Project } from '../types';
 import { aggregateGavelShards, failedTestsLabel, timedOutNote, stateColor, reviewColor, severityIcon, extractCommentTitle, isDeploymentComment } from '../utils';
-import { DetailPanel, LintView, TestNode, groupLintByLinterRuleFile } from '@flanksource/gavel/testrunner';
+import { ShardLintFindings, ShardTestFailures } from './ShardFindings';
 import { CreateTodoFromPRDialog } from './todos/CreateTodoFromPRDialog';
 import { PRLinkedTodos } from './PRLinkedTodos';
 import { PRActions, type ExtraAction } from './PRActions';
@@ -1071,21 +1071,18 @@ function ShardError({ results, href }: { results: GavelResultsSummary; href?: st
   );
 }
 
-// ShardExtras renders the artifact's failing tests and lint findings with the
-// testrunner UI's own components, so a shard row in the PR dashboard looks like
-// the results page it links to instead of a parallel rendering of the same data.
+// ShardExtras renders the artifact's failing tests and lint findings with
+// clicky-ui's test runner and lint results, so a shard row in the PR dashboard
+// reads like the results page it links to instead of a parallel rendering of
+// the same data.
 function ShardExtras({ results }: { results: GavelResultsSummary }) {
   const failures = results.failures ?? [];
   const lint = results.lint ?? [];
-  // The tree rows carry identity only; the message, stdout/stderr and failure
-  // detail live in DetailPanel. Start on the first failure so triage sees the
-  // reason without a click.
-  const [selected, setSelected] = useState<Test | null>(failures[0] ?? null);
-  const lintTree = useMemo(() => groupLintByLinterRuleFile(lint), [lint]);
+  const violations = countViolations(lint);
   // A linter that crashed or timed out reports no violations, so it never
   // reaches the lint tree — surface it explicitly or the shard reads as clean.
   const brokenLinters = lint.filter(lr => lr.timed_out || (!lr.success && !!lr.error));
-  if (failures.length === 0 && lintTree.length === 0 && brokenLinters.length === 0) return null;
+  if (failures.length === 0 && violations === 0 && brokenLinters.length === 0) return null;
   return (
     <>
       {failures.length > 0 && (
@@ -1096,33 +1093,18 @@ function ShardExtras({ results }: { results: GavelResultsSummary }) {
           shown={failures.length}
           total={results.testsFailed}
         >
-          {failures.map((t, i) => (
-            <TestNode
-              key={i}
-              test={t}
-              depth={0}
-              expandAll={null}
-              selected={selected}
-              onSelect={setSelected}
-            />
-          ))}
+          <ShardTestFailures failures={failures} />
         </FailureList>
       )}
-      {lintTree.length > 0 && (
+      {violations > 0 && (
         <FailureList
           title="Lint violations"
           icon={UiWarningTriangle}
           iconColor="text-yellow-600"
-          shown={countViolations(lint)}
+          shown={violations}
           total={results.lintViolations}
         >
-          <LintView
-            lint={lint}
-            tree={lintTree}
-            expandAll={null}
-            selected={selected}
-            onSelect={setSelected}
-          />
+          <ShardLintFindings lint={lint} />
         </FailureList>
       )}
       {brokenLinters.length > 0 && (
@@ -1148,11 +1130,6 @@ function ShardExtras({ results }: { results: GavelResultsSummary }) {
             </div>
           ))}
         </FailureList>
-      )}
-      {selected && (
-        <div className="mt-2 border border-border rounded overflow-auto max-h-96">
-          <DetailPanel test={selected} lint={lint} />
-        </div>
       )}
     </>
   );
@@ -1259,7 +1236,7 @@ function FailureList({ title, icon: Icon, iconColor, shown, total, children }: {
   icon: ComponentType<IconProps>;
   iconColor: string;
   // shown is passed explicitly because a section may render its rows through a
-  // single child component (LintView) rather than one node per finding.
+  // single child component (ShardLintFindings) rather than one node per finding.
   shown: number;
   // total is the artifact's real count. Omit it (or pass the same number) when
   // nothing was dropped — "showing 2 of 2" is noise.

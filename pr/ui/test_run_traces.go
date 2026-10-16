@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	testui "github.com/flanksource/gavel/testrunner/ui"
+	"github.com/flanksource/gavel/traces"
 )
 
 // testRunTracesPrefix is where the Tests tab's runs have their trace stores
@@ -45,16 +46,19 @@ func (s *Server) closeTestRunTraces() error {
 }
 
 // status reopens run's store, or reuses the one open, and returns its traces
-// status with the mounts as the dashboard serves them. A store that is there
+// status with the mounts as the dashboard serves them. process is the capture
+// the run's snapshot names (nil when it was not watched); the status carries it
+// so the Processes view reads the tree and samples back from the reopened
+// store. A store that is there
 // but does not open is an error; a pruned one is served without, saying so.
-func (st *testRunTraceStores) status(run testui.TraceRun) (*testui.TracesStatus, error) {
+func (st *testRunTraceStores) status(run testui.TraceRun, process *traces.ProcessRefs) (*testui.TracesStatus, error) {
 	key := traceStoreKey(run)
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	srv, ok := st.runs.Get(key)
 	if !ok {
 		srv = testui.NewServer()
-		srv.LoadSnapshot(testui.Snapshot{Metadata: &testui.SnapshotMetadata{RunID: run.RunID}})
+		srv.LoadSnapshot(testui.Snapshot{Metadata: &testui.SnapshotMetadata{RunID: run.RunID, ProcessTrace: process}})
 		if err := srv.ReopenTraces(run); err != nil {
 			return nil, err
 		}
@@ -95,7 +99,7 @@ func (s *Server) withTestRunTraces(data []byte) ([]byte, error) {
 	if err != nil || run == nil {
 		return data, err
 	}
-	traces, err := s.testRunTraceStores().status(*run)
+	served, err := s.testRunTraceStores().status(*run, meta.ProcessTrace)
 	if err != nil {
 		return nil, err
 	}
@@ -105,7 +109,7 @@ func (s *Server) withTestRunTraces(data []byte) ([]byte, error) {
 			return nil, fmt.Errorf("decode run snapshot status: %w", err)
 		}
 	}
-	if status["traces"], err = json.Marshal(traces); err != nil {
+	if status["traces"], err = json.Marshal(served); err != nil {
 		return nil, err
 	}
 	if doc["status"], err = json.Marshal(status); err != nil {

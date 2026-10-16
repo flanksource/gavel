@@ -1,31 +1,36 @@
-import { useEffect, useMemo, useState, type ComponentType } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ComponentType } from 'react';
 import {
+  DEFAULT_LINT_GROUPING,
+  LintResults,
   TestRunner,
+  annotateRoutePaths,
+  emptyLintFilters,
   emptyTestFilters,
   filterTests,
+  findNodeByRoutePath,
+  totalLintViolations,
+  type LintFilters,
+  type LintGrouping,
   type Test,
   type TestFilters,
 } from '@flanksource/clicky-ui/data';
 import { Button } from '@flanksource/clicky-ui/components';
 import { UiAdd, UiBeaker, UiTerminal, UiWarningTriangle, type IconProps } from '@flanksource/clicky-ui/icons';
 import { CreateTodoFromRunDialog } from './CreateTodoFromRunDialog';
-import { LintResults } from './LintResults';
 import { buildRunFailureCandidates } from './RunFailureCandidates';
-import type { TracesStatus } from '@flanksource/gavel/testrunner';
-import { processMount } from '@flanksource/gavel/testrunner';
-import { RunProcesses, tracesAdapter } from './runTraces';
+import { RunProcesses, fetchProcessMetricsFromSamples, processLinksByPid } from '@flanksource/gavel/testrunner';
+import type { ProcessStepLink, Test as GavelTest, TracesStatus } from '@flanksource/gavel/testrunner';
+import { runRegistry, useRunProcesses } from './runTraces';
 import type { RunSnapshot } from './types';
 
-export function TestRunResults({
-  traces,
-  snapshot,
-  done,
-  runKey,
-  projectName,
-  projectDir,
-  onTodoCreated,
-  emptyMessage = 'This run has no tests or lint findings.',
-}: {
+type View = 'tests' | 'lint' | 'processes';
+
+/** The results of one run, remounted per run so no selection outlives the run it was made in. */
+export function TestRunResults(props: RunResultsProps) {
+  return <RunResults key={props.runKey} {...props} />;
+}
+
+interface RunResultsProps {
   snapshot: RunSnapshot;
   done: boolean;
   runKey: string;
@@ -33,41 +38,85 @@ export function TestRunResults({
   projectDir: string;
   onTodoCreated?: () => void;
   emptyMessage?: string;
-  // traces is the run's trace stores with their mounts as the dashboard serves them.
+  /** The run's trace stores exactly as the server that returned the snapshot reported them. */
   traces?: TracesStatus;
-}) {
-  const [selected, setSelected] = useState<Test | null>(null);
+  /**
+   * URL prefix of that server: '' when `traces` already carries the mounts as
+   * the dashboard serves them (the Tests tab), `/api/project-runs/<id>` for a
+   * run server whose mounts are relative to it.
+   */
+  base?: string;
+}
+
+function RunResults({
+  traces: reported,
+  base = '',
+  snapshot,
+  done,
+  runKey,
+  projectName,
+  projectDir,
+  onTodoCreated,
+  emptyMessage = 'This run has no tests or lint findings.',
+}: RunResultsProps) {
+  const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [filters, setFilters] = useState<TestFilters>(emptyTestFilters());
   const [expandAll, setExpandAll] = useState<boolean | null>(null);
-  const [view, setView] = useState<'tests' | 'lint' | 'processes'>('tests');
-  const adapters = useMemo(() => [tracesAdapter(traces)], [traces]);
-  const hasProcesses = Boolean(processMount(traces));
+  const [view, setView] = useState<View>('tests');
+  const [lintGrouping, setLintGrouping] = useState<LintGrouping>(DEFAULT_LINT_GROUPING);
+  const [lintFilters, setLintFilters] = useState<LintFilters>(emptyLintFilters());
+  const [lintSelected, setLintSelected] = useState<string | null>(null);
+  const [lintExpandAll, setLintExpandAll] = useState<boolean | null>(null);
   const [todoOpen, setTodoOpen] = useState(false);
+  const processes = useRunProcesses({ traces: reported, base, done, active: view === 'processes' });
   const tests = snapshot.tests ?? [];
   const lint = useMemo(() => (snapshot.lint ?? []).filter(result => !result.skipped), [snapshot.lint]);
   const hasTests = tests.length > 0;
   const hasLint = Boolean(snapshot.status?.lint_run) || lint.length > 0;
-  const lintCount = useMemo(() => lint.reduce((count, result) => count + (result.violations?.length ?? 0), 0), [lint]);
-  const visible = useMemo(() => filterTests(tests, filters.status, filters.framework), [tests, filters]);
+  const lintCount = useMemo(() => totalLintViolations(lint), [lint]);
+  const routedTests = useMemo(() => annotateRoutePaths(tests), [tests]);
+  const visible = useMemo(
+    () => annotateRoutePaths(filterTests(tests, filters.status, filters.framework)),
+    [tests, filters],
+  );
+  const selected = useMemo(() => findNodeByRoutePath(visible, selectedPath ?? ''), [visible, selectedPath]);
+  const stepLinks = useMemo(
+    () => (processes.available ? processLinksByPid(routedTests as GavelTest[]) : new Map<number, ProcessStepLink>()),
+    [processes.available, routedTests],
+  );
+  const { setSelectedKey } = processes;
+  const onOpenProcess = useCallback((key: string) => {
+    setSelectedKey(key);
+    setView('processes');
+  }, [setSelectedKey]);
+  const onOpenStep = useCallback((link: ProcessStepLink) => {
+    setFilters(emptyTestFilters());
+    setSelectedPath(link.routePath);
+    setView('tests');
+  }, []);
+  const registry = useMemo(
+    () => runRegistry({ traces: processes.traces, processes: processes.trace.nodes, onOpenProcess }),
+    [processes.traces, processes.trace.nodes, onOpenProcess],
+  );
+  const fetchProcessMetrics = useMemo(
+    () => fetchProcessMetricsFromSamples({ samples: processes.trace.samples, nodes: processes.trace.nodes }),
+    [processes.trace.samples, processes.trace.nodes],
+  );
   const failures = useMemo(() => buildRunFailureCandidates(snapshot), [snapshot]);
   const canCreateTodo = done && failures.length > 0;
 
   useEffect(() => {
-    setSelected(null);
-    setFilters(emptyTestFilters());
-    setExpandAll(null);
-    setTodoOpen(false);
     setView(hasTests ? 'tests' : 'lint');
-  }, [hasTests, runKey]);
+  }, [hasTests]);
 
   if (!hasTests && !hasLint) return <Centered>{emptyMessage}</Centered>;
 
   return (
     <>
       <div className="flex h-full flex-col">
-        {(hasTests && hasLint || hasProcesses || canCreateTodo) && (
+        {(hasTests && hasLint || processes.available || canCreateTodo) && (
           <div className="flex items-center gap-1 border-b border-border px-2 py-1.5">
-            {(hasTests && hasLint || hasProcesses) && (
+            {(hasTests && hasLint || processes.available) && (
               <>
                 {hasTests && (
                   <ToggleButton active={view === 'tests'} onClick={() => setView('tests')} icon={UiBeaker}>
@@ -79,7 +128,7 @@ export function TestRunResults({
                     Lint <Count>{lintCount}</Count>
                   </ToggleButton>
                 )}
-                {hasProcesses && (
+                {processes.available && (
                   <ToggleButton active={view === 'processes'} onClick={() => setView('processes')} icon={UiTerminal}>
                     Processes
                   </ToggleButton>
@@ -94,12 +143,23 @@ export function TestRunResults({
           </div>
         )}
         <div className="min-h-0 flex-1">
-          {view === 'processes' && traces ? (
-            <RunProcesses traces={traces} done={done} />
+          {view === 'processes' && processes.available ? (
+            <RunProcesses
+              trace={processes.trace}
+              selectedKey={processes.selectedKey}
+              onSelect={processes.setSelectedKey}
+              hideExited={processes.hideExited}
+              onHideExitedChange={processes.setHideExited}
+              expandAll={processes.expandAll}
+              onExpandAllChange={processes.setExpandAll}
+              stepLinks={stepLinks}
+              onOpenStep={onOpenStep}
+            />
           ) : view === 'tests' && hasTests ? (
             <TestRunner
-              adapters={adapters}
+              adapters={registry}
               tests={visible}
+              allTests={routedTests}
               selected={selected}
               filters={filters}
               expandAll={expandAll}
@@ -107,12 +167,24 @@ export function TestRunResults({
               runMeta={snapshot.metadata}
               status={snapshot.status}
               title={null}
-              onSelect={setSelected}
+              fetchProcessMetrics={fetchProcessMetrics}
+              onSelect={node => setSelectedPath(node?.route_path ?? null)}
               onFiltersChange={setFilters}
               onExpandAllChange={setExpandAll}
             />
           ) : (
-            <LintResults lint={lint} />
+            <LintResults
+              results={lint}
+              title={null}
+              grouping={lintGrouping}
+              onGroupingChange={setLintGrouping}
+              filters={lintFilters}
+              onFiltersChange={setLintFilters}
+              selected={lintSelected}
+              onSelect={setLintSelected}
+              expandAll={lintExpandAll}
+              onExpandAllChange={setLintExpandAll}
+            />
           )}
         </div>
       </div>

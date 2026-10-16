@@ -155,8 +155,6 @@ func resultsPageHTML(backTo, prefix string) string {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Gavel Results</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://code.iconify.design/iconify-icon/2.0.0/iconify-icon.min.js"></script>
     <script>window.__gavelBackTo = %s; window.__gavelBasePath = %s;</script>
 </head>
 <body>

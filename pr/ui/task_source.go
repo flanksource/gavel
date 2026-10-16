@@ -115,6 +115,11 @@ func (s *supervisorTaskSource) Runs(ctx context.Context, filter clickytask.RunFi
 	}
 	for _, root := range roots {
 		remote, err := procfile.TaskRuns(root, filter)
+		if errors.Is(err, procfile.ErrSupervisorNotRunning) {
+			// It stopped after the live set was cached; its runs are archived by the sweep.
+			s.invalidateRoots()
+			continue
+		}
 		if err != nil {
 			return nil, fmt.Errorf("list supervisor tasks for %s: %w", root, err)
 		}
@@ -145,6 +150,10 @@ func (s *supervisorTaskSource) Snapshot(ctx context.Context, id string) ([]click
 	}
 	for _, root := range roots {
 		snapshots, err := procfile.TaskSnapshot(root, id)
+		if errors.Is(err, procfile.ErrSupervisorNotRunning) {
+			s.invalidateRoots()
+			continue
+		}
 		if err != nil {
 			return nil, fmt.Errorf("load supervisor task %s from %s: %w", id, root, err)
 		}

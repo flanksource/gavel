@@ -129,8 +129,8 @@ describe('Gavel Results section', () => {
     expect(screen.getByText(/No test, lint, or bench data/)).toBeTruthy();
   });
 
-  // The shard detail must render through the testrunner UI's own TestNode /
-  // LintView, so a failing shard reads the same as the results page it links
+  // The shard detail must render through clicky-ui's TestRunner /
+  // LintResults, so a failing shard reads the same as the results page it links
   // to. Asserting on the rendered findings is what catches a regression back to
   // a parallel set of row components.
   it('renders failing tests and lint findings from the artifact shapes', () => {
@@ -170,9 +170,10 @@ describe('Gavel Results section', () => {
     );
 
     // The failing leaf appears in the tree row and again in the detail panel
-    // that carries its message — both come from the testrunner UI.
+    // that carries its message — both come from clicky-ui's test runner, with
+    // the first failure already selected.
     expect(screen.getAllByText('saves records').length).toBeGreaterThan(0);
-    expect(screen.getByText(/expected record to persist/)).toBeTruthy();
+    expect(screen.getAllByText(/expected record to persist/).length).toBeGreaterThan(0);
     // The lint tree groups linter → rule → file exactly as the results page does.
     expect(screen.getAllByText('golangci-lint').length).toBeGreaterThan(0);
     expect(screen.getAllByText('errcheck').length).toBeGreaterThan(0);

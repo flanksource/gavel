@@ -1,40 +1,86 @@
-import { useState } from 'react';
-import type { TestNodeAdapter } from '@flanksource/clicky-ui/data';
-import { ProcessesView, TracesSection, useProcessTrace } from '@flanksource/gavel/testrunner';
-import type { TraceResult, TracesStatus } from '@flanksource/gavel/testrunner';
+import { useEffect, useMemo, useState } from 'react';
+import { createTestRunnerRegistry, verificationAdapters, type TestNodeAdapterRegistry } from '@flanksource/clicky-ui/data';
+import {
+  detailAdapter,
+  processMount,
+  processesAdapter,
+  rebaseTraces,
+  resourcesAdapter,
+  tracesAdapter,
+  useProcessTrace,
+} from '@flanksource/gavel/testrunner';
+import type { ProcessTraceNode, ProcessTraceState, TracesStatus } from '@flanksource/gavel/testrunner';
 
-// fixtureTraces are the trace windows a fixture node armed, none for any other node.
-function fixtureTraces(node: unknown): TraceResult[] {
-  const fixture = node as { framework?: string; context?: { traces?: TraceResult[] } };
-  if (fixture.framework !== 'fixture') return [];
-  return fixture.context?.traces ?? [];
+export interface RunProcessesView {
+  /** The run's process capture, as the Processes view and the step Processes tabs read it. */
+  trace: ProcessTraceState;
+  /** True when the run kept a process capture that the dashboard serves. */
+  available: boolean;
+  /** status.traces rebased onto the server's base once, for the Traces tabs. */
+  traces: TracesStatus | undefined;
+  selectedKey: string | null;
+  setSelectedKey: (key: string) => void;
+  hideExited: boolean;
+  setHideExited: (hide: boolean) => void;
+  expandAll: boolean | null;
+  setExpandAll: (next: boolean | null) => void;
 }
 
 /**
- * The Traces tab of a fixture node: its windows, opened in the run stores the
- * dashboard serves (traces carries their mounts as the dashboard serves them).
+ * The state behind a run's Processes view. `traces` is status.traces exactly as
+ * the server that returned the snapshot reported it and `base` the URL prefix of
+ * that server ('' for the dashboard itself, `/api/project-runs/<id>` for a run
+ * server): the process trace rebases them itself, so the only rebase here is
+ * the one the Traces tabs need.
  */
-export function tracesAdapter(traces: TracesStatus | undefined): TestNodeAdapter {
+export function useRunProcesses({ traces: reported, base, done, active }: {
+  traces: TracesStatus | undefined;
+  base: string;
+  done: boolean;
+  /** Whether the Processes view is showing: the root process is selected on arrival. */
+  active: boolean;
+}): RunProcessesView {
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [hideExited, setHideExited] = useState(false);
+  const [expandAll, setExpandAll] = useState<boolean | null>(null);
+  const trace = useProcessTrace({ traces: reported, done, base, ...(selectedKey ? { selectedKey } : {}) });
+  const traces = useMemo(() => rebaseTraces(reported, base), [reported, base]);
+  const rootKey = trace.nodes.find(node => node.isRoot)?.key;
+
+  useEffect(() => {
+    if (active && selectedKey === null && rootKey) setSelectedKey(rootKey);
+  }, [active, selectedKey, rootKey]);
+
   return {
-    id: 'gavel-traces',
-    match: node => fixtureTraces(node).length > 0,
-    detailTabs: ({ node }) => [{
-      id: 'traces',
-      label: 'Traces',
-      render: () => <div className="p-3"><TracesSection windows={fixtureTraces(node)} traces={traces} /></div>,
-    }],
+    trace,
+    available: Boolean(processMount(reported)),
+    traces,
+    selectedKey,
+    setSelectedKey,
+    hideExited,
+    setHideExited,
+    expandAll,
+    setExpandAll,
   };
 }
 
-/** The run's process capture as a tree, read through its store's query mount. */
-export function RunProcesses({ traces, done }: { traces: TracesStatus; done: boolean }) {
-  const [selected, setSelected] = useState<string | null>(null);
-  const [hideExited, setHideExited] = useState(false);
-  const trace = useProcessTrace({ traces, done, selectedKey: selected ?? undefined });
-  return (
-    <div className="h-full overflow-auto">
-      <ProcessesView nodes={trace.nodes} selectedKey={selected} expandAll={null} hideExited={hideExited}
-        error={trace.error} onHideExitedChange={setHideExited} onSelect={setSelected} />
-    </div>
-  );
+/**
+ * The registry the Tests tab renders a run with: gavel's detail, Traces,
+ * Processes and Resources adapters, then clicky's verification adapters, which
+ * own fixture steps. `traces` is status.traces already rebased onto `base`.
+ * Source editing and export downloads are not wired: the dashboard serves
+ * neither for a stored run.
+ */
+export function runRegistry({ traces, processes, onOpenProcess }: {
+  traces: TracesStatus | undefined;
+  processes: ProcessTraceNode[];
+  onOpenProcess: (key: string) => void;
+}): TestNodeAdapterRegistry {
+  return createTestRunnerRegistry([
+    detailAdapter(),
+    tracesAdapter(traces),
+    processesAdapter({ processes, onOpenProcess }),
+    resourcesAdapter(),
+    ...verificationAdapters().adapters,
+  ]);
 }

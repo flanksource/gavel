@@ -6,16 +6,14 @@ export * from './types/todoRun';
 export * from './types/projectGit';
 export * from './types/agentSessions';
 
-import type { Test } from '@flanksource/clicky-ui/data';
-import type { LinterResult } from '@flanksource/gavel/testrunner';
+import type { LinterResult, Test } from '@flanksource/clicky-ui/data';
 
 // Gavel artifact details ride the wire in gavel's own shapes so the dashboard
-// renders them with the testrunner's TestNode / LintView rather than a parallel
-// set of row components. Test/TestSummary come from clicky-ui/data (the shared
-// test-runner model the Verification tab's VerificationResults also renders),
-// not gavel's own testrunner package, so both surfaces read one shape.
-export type { Test, TestSummary } from '@flanksource/clicky-ui/data';
-export type { LinterResult, Violation } from '@flanksource/gavel/testrunner';
+// renders them with clicky-ui's TestRunner / LintResults rather than a parallel
+// set of row components. Test, TestSummary and the lint model all come from
+// clicky-ui/data (the shared model the Tests tab and the Verification tab's
+// VerificationResults also render), so every surface reads one shape.
+export type { LinterResult, Test, TestSummary, Violation } from '@flanksource/clicky-ui/data';
 
 export interface FailedCheck {
   name: string;
