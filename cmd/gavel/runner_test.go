@@ -19,6 +19,7 @@ import (
 
 	captainai "github.com/flanksource/captain/pkg/ai"
 	"github.com/flanksource/captain/pkg/api"
+	"github.com/flanksource/commons-db/shell"
 	"github.com/flanksource/gavel/sandbox"
 	"github.com/flanksource/gavel/todos/remote"
 	"github.com/google/uuid"
@@ -33,6 +34,9 @@ type fakeRunAPI struct {
 	mu       sync.Mutex
 	results  []string
 	messages []remote.Message
+	commits  [][]byte
+	// pushedSHA is the commit the commits endpoint says it pushed.
+	pushedSHA string
 }
 
 func (f *fakeRunAPI) handler(run uuid.UUID) http.Handler {
@@ -56,6 +60,14 @@ func (f *fakeRunAPI) handler(run uuid.UUID) http.Handler {
 		f.mu.Unlock()
 		w.WriteHeader(http.StatusCreated)
 		_, _ = w.Write([]byte(`{"runId":"run-x"}`))
+	}))
+	mux.HandleFunc("POST "+prefix+"/commits", auth(func(w http.ResponseWriter, r *http.Request) {
+		data, _ := io.ReadAll(r.Body)
+		f.mu.Lock()
+		f.commits = append(f.commits, data)
+		f.mu.Unlock()
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"branch":"gavel/todo1234-run56789","sha":"` + f.pushedSHA + `"}`))
 	}))
 	mux.HandleFunc("POST "+prefix+"/messages", auth(func(w http.ResponseWriter, r *http.Request) {
 		var message remote.Message
@@ -229,4 +241,62 @@ func TestRunnerExecRunsAnAgentJobAndReportsIt(t *testing.T) {
 	require.Equal(t, remote.KindResult, last.Kind)
 	assert.Empty(t, last.Error)
 	assert.Equal(t, "done", last.Result.Unwrap().Response.Text)
+}
+
+// committingAgent writes a file in the run's directory and commits it, as an agent that commits
+// its own work does.
+type committingAgent struct{ t *testing.T }
+
+func (a committingAgent) GetModel() string        { return "claude-sonnet-5" }
+func (a committingAgent) GetRuntime() api.Runtime { return api.RuntimeOf(api.Anthropic, api.ModeAgent) }
+func (a committingAgent) Execute(context.Context, api.Spec) (*api.Response, error) {
+	return nil, fmt.Errorf("the committing agent only streams")
+}
+func (a committingAgent) ExecuteStream(_ context.Context, req api.Spec) (<-chan captainai.Event, error) {
+	dir := req.Cwd()
+	require.NoError(a.t, os.WriteFile(filepath.Join(dir, "fix.txt"), []byte("fixed"), 0o644))
+	gitIn(a.t, dir, "add", "fix.txt")
+	gitIn(a.t, dir, "commit", "-q", "-m", "fix the build")
+	ch := make(chan captainai.Event, 2)
+	ch <- captainai.Event{Kind: captainai.EventText, Text: "fixed"}
+	ch <- captainai.Event{Kind: captainai.EventResult, Success: true}
+	close(ch)
+	return ch, nil
+}
+
+func TestRunnerExecPushesTheCommitsAnAgentRunMade(t *testing.T) {
+	run := uuid.New()
+	bundle, first := sourceBundle(t, map[string]string{"README.md": "first"})
+	spec := api.Spec{Model: api.Model{Name: "claude-sonnet-5", Provider: api.Anthropic, Mode: api.ModeAgent}, Prompt: api.Prompt{User: "fix the build"}}
+	spec.Setup = &shell.Setup{Cwd: "/srv/gavel/workspaces/org/repo", Checkout: &shell.Checkout{Mode: shell.CheckoutLocal, Worktree: &shell.Worktree{Mode: shell.WorktreeNew}}}
+	job, err := json.Marshal(remote.Job{Resolved: api.ResolvedSpec{Spec: spec}, Config: remote.JobConfig{Model: spec.Model}, Timeout: time.Minute, Root: "/srv/gavel/workspaces/org/repo"})
+	require.NoError(t, err)
+	fake := &fakeRunAPI{spec: sandbox.RunSpec{Kind: "agent", Ref: "refs/heads/main", SHA: first, Agent: job}, bundle: bundle, token: "run-token", pushedSHA: "abc123"}
+	server := httptest.NewServer(fake.handler(run))
+	t.Cleanup(server.Close)
+	t.Setenv("GIT_AUTHOR_NAME", "t")
+	t.Setenv("GIT_AUTHOR_EMAIL", "t@example.com")
+	t.Setenv("GIT_COMMITTER_NAME", "t")
+	t.Setenv("GIT_COMMITTER_EMAIL", "t@example.com")
+
+	code, err := runnerExec(context.Background(), runnerOptions{
+		Run: run.String(), Workspace: t.TempDir(), Getenv: runnerEnv(server.URL, "run-token", run), Output: io.Discard,
+		Agent: committingAgent{t: t},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 0, code)
+
+	require.Len(t, fake.commits, 1, "the run's commits were uploaded")
+	pushed := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(pushed, "run.bundle"), fake.commits[0], 0o644))
+	heads := gitIn(t, pushed, "bundle", "list-heads", "run.bundle")
+	assert.Equal(t, 1, strings.Count(heads, "\n")+1, "one branch: %s", heads)
+
+	last := fake.messages[len(fake.messages)-1]
+	require.Equal(t, remote.KindResult, last.Kind)
+	result := last.Result.Unwrap()
+	require.NotNil(t, result.Response.Workspace)
+	require.NotNil(t, result.Response.Workspace.Worktree)
+	assert.Equal(t, "gavel/todo1234-run56789", result.Response.Workspace.Worktree.Branch, "the result names the branch serve pushed")
+	assert.Equal(t, "abc123", result.Response.Workspace.Worktree.Head)
 }

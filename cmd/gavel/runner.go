@@ -18,6 +18,7 @@ import (
 	"time"
 
 	captainai "github.com/flanksource/captain/pkg/ai"
+	"github.com/flanksource/captain/pkg/promptrun"
 	"github.com/flanksource/gavel/sandbox"
 	"github.com/flanksource/gavel/snapshots"
 	"github.com/flanksource/gavel/todos/remote"
@@ -169,7 +170,48 @@ func runAgentJob(ctx context.Context, api runAPI, spec sandbox.RunSpec, src stri
 	if err != nil {
 		return err
 	}
+	if err := pushRunCommits(ctx, api, finished.Result); err != nil {
+		finished.Err = errors.Join(finished.Err, err)
+	}
 	return send(remote.ResultMessage(finished.Result, finished.Err))
+}
+
+// pushRunCommits uploads the commits the run made on its worktree's branch, if it made any, and
+// points the result's worktree at the branch serve put them on.
+func pushRunCommits(ctx context.Context, api runAPI, result promptrun.Result) error {
+	if result.Response == nil || result.Response.Workspace == nil || result.Response.Workspace.Worktree == nil {
+		return nil
+	}
+	worktree := result.Response.Workspace.Worktree
+	if worktree.BranchDeleted || worktree.Head == "" || worktree.Head == worktree.Setup {
+		return nil
+	}
+	file, err := os.CreateTemp("", "gavel-run-*.bundle")
+	if err != nil {
+		return fmt.Errorf("bundle the run's commits: %w", err)
+	}
+	_ = file.Close()
+	defer os.Remove(file.Name())
+	if out, err := exec.CommandContext(ctx, "git", "-C", worktree.Repo, "bundle", "create", "--quiet", file.Name(),
+		"refs/heads/"+worktree.Branch, "^"+worktree.Setup).CombinedOutput(); err != nil {
+		return fmt.Errorf("bundle the run's commits on %s: %w: %s", worktree.Branch, err, strings.TrimSpace(string(out)))
+	}
+	data, err := os.Open(file.Name())
+	if err != nil {
+		return fmt.Errorf("read the bundle of the run's commits: %w", err)
+	}
+	defer data.Close()
+	resp, err := api.request(ctx, http.MethodPost, "commits", data)
+	if err != nil {
+		return fmt.Errorf("push the commits of run %s: %w", api.run, err)
+	}
+	defer resp.Body.Close()
+	var pushed struct{ Branch, SHA string }
+	if err := json.NewDecoder(resp.Body).Decode(&pushed); err != nil {
+		return fmt.Errorf("read where run %s's commits were pushed: %w", api.run, err)
+	}
+	worktree.Branch, worktree.Head = pushed.Branch, pushed.SHA
+	return nil
 }
 
 // runSnapshots lists the per-run snapshots in src's .gavel directory.

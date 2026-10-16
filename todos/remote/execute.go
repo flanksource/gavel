@@ -9,6 +9,7 @@ import (
 
 	captainai "github.com/flanksource/captain/pkg/ai"
 	"github.com/flanksource/captain/pkg/ai/agent"
+	capsetup "github.com/flanksource/captain/pkg/ai/agent/setup"
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/captain/pkg/promptrun"
 )
@@ -29,6 +30,11 @@ func Execute(ctx context.Context, job Job, dir string, agent captainai.Provider,
 	in := job.Input(dir)
 	in.Provider = agent
 	in.Hooks = append(job.Hooks.Build(), &startedHook{reporter: reporter})
+	if agent != nil {
+		// A supplied provider skips Captain's setup hook, so the run is set up here, as a local
+		// run with a supplied provider is.
+		in.Hooks = append(in.Hooks, &capsetup.Plugin{BaseDir: dir})
+	}
 	in.OnEvent = func(iteration int, event api.Event) {
 		reporter.report(EventMessage(iteration, event), "an event")
 	}
