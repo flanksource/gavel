@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TodoRunOptions } from '../../types';
 import { TodoRunActionButton } from './TodoRunActionButton';
 import type { RunContext } from './providers';
+import { setAuthMode } from '../../query';
 
 // TodoRunActionButton renders the primary Run/Plan button, its runtime chip,
 // and the advanced-options cog. It reasons only in terms of the fixed
@@ -113,6 +114,20 @@ describe('TodoRunActionButton', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Advanced plan options' }));
 
     expect(onAdvanced).toHaveBeenCalledWith('plan');
+  });
+
+  it('offers a hosted org no runtime or advanced options: its runs use the repository\'s runtime', () => {
+    setAuthMode('clerk', vi.fn());
+    try {
+      const onRun = vi.fn();
+      render(<TodoRunActionButton dir="repo:1" action="plan" onRun={onRun} onAdvanced={vi.fn()} />);
+      expect(screen.queryByRole('button', { name: 'Plan runtime' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Advanced plan options' })).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: 'Plan' }));
+      expect(onRun).toHaveBeenCalledOnce();
+    } finally {
+      setAuthMode('none', vi.fn());
+    }
   });
 
   it('surfaces a runtime change through onOptionsChange without running', () => {

@@ -7,6 +7,8 @@ import { todoQuery } from "./format";
 import { settingsRunContextQuery } from "../settings/queries";
 import { invalidateTodoCaches, todoMutationJSON, TodoMutationError } from "./todoMutations";
 import { setTodoLaunchProgress, todoMutationStream, updateTodoLaunchProgress } from './todoLaunch';
+import { currentAuthMode, type AuthMode } from "../../query";
+import { runtimeChoiceVisible } from "../../hostedUI";
 export { TodoRunEffortBadge, todoRunEffortPresentation } from "./TodoRunEffortBadge";
 import {
   actionFromRunOptions,
@@ -285,6 +287,19 @@ export function rememberTodoRunOptionsForMode(options: TodoRunOptions, advanced 
   return rememberTodoRunOptions(actionFromRunOptions(options), options, advanced);
 }
 
+// runtimeChoiceKeys are the spec fields that choose a run's runtime.
+const runtimeChoiceKeys = ["model", "id", "provider", "mode", "fallbacks"];
+
+// runRequestRuntime is a run request as mode lets it choose its runtime: a hosted org's runs use
+// the repository's runtime for each step, so they send no model, mode or presets.
+export function runRequestRuntime<T extends { presets?: string[]; spec?: object }>(body: T, mode: AuthMode): T {
+  if (runtimeChoiceVisible(mode)) return body;
+  const { presets: _presets, ...rest } = body;
+  if (!body.spec) return rest as T;
+  const spec = Object.fromEntries(Object.entries(body.spec).filter(([key]) => !runtimeChoiceKeys.includes(key)));
+  return { ...rest, spec } as T;
+}
+
 // useTodoRun POSTs a run for one native TODO in a workspace.
 export function useTodoRun(dir: string) {
   const client = useQueryClient();
@@ -301,7 +316,7 @@ export function useTodoRun(dir: string) {
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
+          body: JSON.stringify(runRequestRuntime({
             ref,
             step: requestStepFor(options),
             presets: options.presets,
@@ -310,7 +325,7 @@ export function useTodoRun(dir: string) {
             resume: options.resume,
             force: options.force,
             reuseBranch: options.reuseBranch,
-          }),
+          }, currentAuthMode())),
         },
         `Failed to run todo ${ref}`,
         resolved => updateTodoLaunchProgress(client, dir, ref, previous => ({ ...previous, status: 'resolved', step: resolved.step, spec: resolved.spec, specYaml: resolved.specYaml })),
@@ -371,7 +386,7 @@ export function useTodoRunPreview(dir: string) {
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
+        body: JSON.stringify(runRequestRuntime(body, currentAuthMode())),
         signal,
       },
       "Failed to preview todo run",

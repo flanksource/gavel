@@ -18,6 +18,8 @@ import {
 import { buildRunFamilies, type RunContext } from "./providers";
 import { effectiveTodoRuntime, unresolvedTodoRuntimePreset } from './runtimePresets';
 import { continueBranchLabel, NEW_BRANCH_LABEL, type RunBranchChoice } from './runBranchChoice';
+import { currentAuthMode } from '../../query';
+import { runtimeChoiceVisible } from '../../hostedUI';
 
 const CONTINUE = "continue";
 const NEW = "new";
@@ -100,6 +102,9 @@ export function TodoRunActionButton({
   const primaryTone = tone === "danger" ? "text-red-600 hover:bg-red-500/10 hover:text-red-700" : "text-foreground hover:bg-muted";
   const PrimaryIcon = loading ? Spinner : icon ?? config.icon;
 
+  // A hosted org's runs use the repository's runtime for each step.
+  const runtimeChoice = runtimeChoiceVisible(currentAuthMode());
+
   function selectOptions(options: TodoRunOptions) {
     const remembered = rememberTodoRunOptions(action, options);
     setSelectedOptions(remembered);
@@ -118,14 +123,16 @@ export function TodoRunActionButton({
           <PrimaryIcon className="text-xs" />
           <span>{label ?? config.label}</span>
         </Button>
-        {context && !contextError ? (
+        {runtimeChoice && (context && !contextError ? (
           <TodoRunRuntimeBar action={action} context={context} options={currentOptions} disabled={disabled || unavailable} onChange={selectOptions} />
         ) : (
           <Button variant="outline" size="sm" type="button" disabled title={`${config.label} runtime unavailable`} aria-label={`${config.label} runtime unavailable`} className="h-8 px-2 text-xs">Runtime</Button>
+        ))}
+        {runtimeChoice && (
+          <Button variant="outline" size="icon" type="button" disabled={disabled || unavailable} title={`Advanced ${config.label.toLowerCase()} options`} aria-label={`Advanced ${config.label.toLowerCase()} options`} onClick={() => onAdvanced(action)} className="h-8 w-8 shrink-0 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50">
+            <UiCog className="text-sm" />
+          </Button>
         )}
-        <Button variant="outline" size="icon" type="button" disabled={disabled || unavailable} title={`Advanced ${config.label.toLowerCase()} options`} aria-label={`Advanced ${config.label.toLowerCase()} options`} onClick={() => onAdvanced(action)} className="h-8 w-8 shrink-0 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50">
-          <UiCog className="text-sm" />
-        </Button>
       </div>
       {offersBranch && branchChoice && (
         <Select

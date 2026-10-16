@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { githubScopeVisible, hostControlsVisible, tabFor, todoVisibilityVisible, visibleTabs } from './hostedUI';
+import { githubScopeVisible, hostControlsVisible, runtimeChoiceVisible, tabFor, todoVisibilityVisible, visibleTabs } from './hostedUI';
 import type { Tab } from './routes';
 
 const allTabs: Tab[] = ['prs', 'projects', 'todos', 'sessions', 'tasks', 'prompts', 'activity'];
@@ -14,6 +14,11 @@ describe('hosted UI', () => {
   it('shows a hosted org only the PR tab and no host controls', () => {
     expect(visibleTabs('clerk', allTabs)).toEqual(['prs']);
     expect(hostControlsVisible('clerk')).toBe(false);
+  });
+
+  it('lets only a local dashboard choose a run\'s runtime; a hosted run uses the repository\'s', () => {
+    expect(runtimeChoiceVisible('none')).toBe(true);
+    expect(runtimeChoiceVisible('clerk')).toBe(false);
   });
 
   it('shows todo visibility only to a hosted org, whose members share its todos', () => {

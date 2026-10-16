@@ -19,6 +19,8 @@ import {
 } from './run';
 import { buildRunFamilies, type RunContext } from './providers';
 import { effectiveTodoRuntime } from './runtimePresets';
+import { currentAuthMode } from '../../query';
+import { runtimeChoiceVisible } from '../../hostedUI';
 
 export type PromptRunScope = 'approval' | 'verification';
 
@@ -259,24 +261,26 @@ export function PromptRunButton({
                     ))}
                   </div>
                 )}
-                <div className="border-t border-border p-1">
-                  <Button
-                    variant="ghost"
-                    type="button"
-                    aria-label="Advanced"
-                    onClick={() => {
-                      close();
-                      onAdvanced();
-                    }}
-                    className="flex h-auto w-full items-center justify-start gap-2 rounded px-2 py-1.5 text-left hover:bg-muted"
-                  >
-                    <UiCog className="text-sm text-muted-foreground" />
-                    <span>
-                      <span className="block text-xs font-medium text-foreground">Advanced</span>
-                      <span className="block text-[11px] text-muted-foreground">model, effort, timeout, permissions</span>
-                    </span>
-                  </Button>
-                </div>
+                {runtimeChoiceVisible(currentAuthMode()) && (
+                  <div className="border-t border-border p-1">
+                    <Button
+                      variant="ghost"
+                      type="button"
+                      aria-label="Advanced"
+                      onClick={() => {
+                        close();
+                        onAdvanced();
+                      }}
+                      className="flex h-auto w-full items-center justify-start gap-2 rounded px-2 py-1.5 text-left hover:bg-muted"
+                    >
+                      <UiCog className="text-sm text-muted-foreground" />
+                      <span>
+                        <span className="block text-xs font-medium text-foreground">Advanced</span>
+                        <span className="block text-[11px] text-muted-foreground">model, effort, timeout, permissions</span>
+                      </span>
+                    </Button>
+                  </div>
+                )}
               </div>
             )}
           </DropdownMenu>

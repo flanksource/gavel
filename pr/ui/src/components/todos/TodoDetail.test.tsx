@@ -1,5 +1,5 @@
 import type React from 'react';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RunContext } from './providers';
 import type { TodoItem } from '../../types';
@@ -552,5 +552,20 @@ describe('TodoDetail visibility', () => {
   it('shows no visibility on a local dashboard', async () => {
     await renderDetail(baseTodo);
     expect(screen.queryByRole('button', { name: 'Update todo visibility' })).toBeNull();
+  });
+});
+
+describe('TodoDetail hosted runs', () => {
+  afterEach(() => setAuthMode('none', vi.fn()));
+
+  it('offers a hosted org no model or advanced run options', async () => {
+    await renderDetail(baseTodo);
+    expect(screen.queryAllByRole('button', { name: /Advanced/ }).length).toBeGreaterThan(0);
+
+    cleanup();
+    setAuthMode('clerk', vi.fn());
+    await renderDetail(baseTodo);
+    expect(screen.queryAllByRole('button', { name: /Advanced/ })).toEqual([]);
+    expect(screen.queryByRole('button', { name: 'Model' })).toBeNull();
   });
 });

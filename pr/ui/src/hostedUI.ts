@@ -33,3 +33,9 @@ export function hostControlsVisible(mode: AuthMode): boolean {
 export function todoVisibilityVisible(mode: AuthMode): boolean {
   return mode === 'clerk';
 }
+
+// runtimeChoiceVisible reports whether a run's runtime, model and presets are chosen in the
+// dashboard. A hosted org's runs use the repository's runtime for each step.
+export function runtimeChoiceVisible(mode: AuthMode): boolean {
+  return mode !== 'clerk';
+}
