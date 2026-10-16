@@ -179,6 +179,7 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 		srv.SetBlobStore(blobs)
 		srv.SetHostedMode(true)
 		srv.SetHostedWorkspaces(ui.HostedWorkspaces{DB: db, Sources: sources})
+		srv.SetFixtureSchemaProvider(func() (any, error) { return fixturesSchemaDocument() })
 		if dispatcher != nil {
 			srv.SetAgentRuns(ui.AgentRuns{Dispatcher: dispatcher, Relay: relay})
 		}

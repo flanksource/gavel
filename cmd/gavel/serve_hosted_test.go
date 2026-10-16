@@ -134,6 +134,9 @@ func TestHostedDashboard(t *testing.T) {
 	assert.Equal(t, "alpha", me.Org.Slug)
 	assert.Len(t, me.Orgs, 2)
 
+	status, body = do(http.MethodGet, "/api/todos/verification/schema", "", cookie)
+	assert.Equal(t, http.StatusOK, status, "the verification fixture editor's schema: %s", body)
+
 	status, body = do(http.MethodGet, "/api/me", "", http.Header{
 		"Authorization": {"Bearer " + clerk.AccessToken(time.Now().Add(time.Hour))}, "X-Gavel-Org": {"beta"}})
 	require.Equal(t, http.StatusOK, status, body)

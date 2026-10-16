@@ -220,3 +220,31 @@ func TestHostedTodoFormCreatesTodosWithTheirVisibility(t *testing.T) {
 	require.Equal(t, http.StatusCreated, resp.StatusCode, multipartCreated)
 	assert.Equal(t, "public", multipartCreated["todo"].(map[string]any)["visibility"], "a multipart form keeps its visibility")
 }
+
+func TestHostedTodosMoveAndTakeFixturesForTheirOwner(t *testing.T) {
+	db, _, org := openOrgDB(t)
+	creator, member := uuid.New(), uuid.New()
+	for name, id := range map[string]uuid.UUID{"ada": creator, "grace": member} {
+		require.NoError(t, db.Exec(`INSERT INTO users (id, issuer, clerk_user_id) VALUES (?, 'https://clerk.example', ?)`, id, "user_"+name).Error)
+	}
+	dataDir := t.TempDir()
+	app := "repo:" + pushedRepo(t, db, org, dataDir, "app").String()
+	api := "repo:" + pushedRepo(t, db, org, dataDir, "api").String()
+	base := hostedTodosServer(t, db, org, dataDir)
+	_, shared := hostedCall(t, base, http.MethodPost, "/api/todos", creator, "org:member", map[string]any{"dir": app, "title": "Shared", "visibility": "public"})
+	ref := shared["id"].(string)
+
+	fixture := map[string]any{"dir": app, "ref": ref, "fixture": "```bash\nmake test\n```"}
+	status, refused := hostedCall(t, base, http.MethodPost, "/api/todos/verification/fixture", member, "org:member", fixture)
+	assert.Equal(t, http.StatusForbidden, status, "another member can't change its fixture: %v", refused)
+	status, saved := hostedCall(t, base, http.MethodPost, "/api/todos/verification/fixture", creator, "org:member", fixture)
+	require.Equal(t, http.StatusOK, status, saved)
+
+	move := map[string]any{"ref": ref, "fromDir": app, "toDir": api}
+	status, refused = hostedCall(t, base, http.MethodPost, "/api/todos/transfer", member, "org:member", move)
+	assert.Equal(t, http.StatusForbidden, status, "another member can't move it: %v", refused)
+	status, moved := hostedCall(t, base, http.MethodPost, "/api/todos/transfer", creator, "org:member", move)
+	require.Equal(t, http.StatusOK, status, moved)
+	_, list := hostedCall(t, base, http.MethodGet, "/api/todos?dir="+api, member, "org:member", nil)
+	assert.Equal(t, []string{"Shared"}, listedTitles(list), "it moved, still public")
+}
