@@ -31,8 +31,8 @@ type RemoteRun struct {
 }
 
 // remoteRunnable refuses a step a remote runner can't run yet: one whose tools read todos
-// through the provider while the agent works, one that works on a linked PR, and one that
-// resumes an agent session, whose transcript the sandbox doesn't have.
+// through the provider while the agent works, and one that resumes an agent session, whose
+// transcript the sandbox doesn't have.
 func (h *Host) remoteRunnable(step Step, todo *types.TODO, definition todoprompt.Definition, opts RunOptions) error {
 	if h.Remote == nil {
 		return nil
@@ -42,9 +42,6 @@ func (h *Host) remoteRunnable(step Step, todo *types.TODO, definition todoprompt
 	}
 	if definition.Envelope == todoprompt.EnvelopeTriageNew {
 		return fmt.Errorf("step %s reads todos while it runs, which a run executing elsewhere can't do yet", step.Name)
-	}
-	if todo.PR != nil && definition.Class != types.ModePlan {
-		return fmt.Errorf("step %s works on linked PR %s, which can't run elsewhere yet", step.Name, todo.PR.URL)
 	}
 	return nil
 }

@@ -1,6 +1,7 @@
 package lifecycle
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 
@@ -9,6 +10,7 @@ import (
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/commons-db/shell"
 	"github.com/flanksource/gavel/commit"
+	"github.com/flanksource/gavel/pr/provider"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/types"
 )
@@ -45,6 +47,19 @@ type RunHooks struct {
 	Meta    commit.AgentRunMetadata `json:"meta"`
 	Env     map[string]string       `json:"env,omitempty"`
 	Labels  map[string]string       `json:"labels,omitempty"`
+	// PR is the linked PR a step works on; nil for a todo linked to none.
+	PR *PRHooks `json:"pr,omitempty"`
+}
+
+// PRHooks is the data the hook for a step on a linked PR is rebuilt from: the PR, its source
+// branch at the head the step starts from, whether the step writes to it, and the checkout the
+// step works in.
+type PRHooks struct {
+	URL     string             `json:"url"`
+	Number  int                `json:"number"`
+	Target  provider.RunTarget `json:"target"`
+	Write   bool               `json:"write"`
+	WorkDir string             `json:"workDir"`
 }
 
 func (h *Host) runHooks(todo *types.TODO, req captainai.Request, opts HookOptions) RunHooks {
@@ -56,12 +71,27 @@ func (h *Host) runHooks(todo *types.TODO, req captainai.Request, opts HookOption
 		hooks.Commits = req.Workflow.Commits
 		hooks.Meta = commit.AgentRunMetadata{IssueID: todo.ID, SessionID: opts.Meta.SessionID}
 	}
+	if pr := opts.pr; pr != nil && todo.PR != nil {
+		hooks.PR = &PRHooks{URL: todo.PR.URL, Number: pr.number, Target: *pr.target, Write: pr.write, WorkDir: pr.workDir}
+	}
 	return hooks
 }
 
-// Build makes the hooks, in the order Hooks documents.
-func (r RunHooks) Build() []any {
-	return r.build(nil)
+// Build makes the hooks, in the order Hooks documents. A linked PR's client is resolved where
+// the hooks are built: inside a sandbox job, that is serve's run API.
+func (r RunHooks) Build() ([]any, error) {
+	if r.PR == nil {
+		return r.build(nil), nil
+	}
+	client, number, err := provider.ResolveURL(provider.Options{WorkDir: r.PR.WorkDir}, r.PR.URL)
+	if err != nil {
+		return nil, fmt.Errorf("resolve linked PR %s: %w", r.PR.URL, err)
+	}
+	if number != r.PR.Number {
+		return nil, fmt.Errorf("linked PR %s is #%d, not #%d", r.PR.URL, number, r.PR.Number)
+	}
+	target := r.PR.Target
+	return r.build(&prExecution{client: client, number: number, target: &target, workDir: r.PR.WorkDir, write: r.PR.Write}), nil
 }
 
 // build makes the hooks for a run, with pr's commit target and its own hook when the todo is

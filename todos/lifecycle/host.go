@@ -9,6 +9,7 @@ import (
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/captain/pkg/captainconfig"
 	"github.com/flanksource/captain/pkg/runtimeprofiles"
+	"github.com/flanksource/gavel/pr/provider"
 	"github.com/flanksource/gavel/todos"
 	todoprompt "github.com/flanksource/gavel/todos/prompt"
 	"github.com/flanksource/gavel/todos/types"
@@ -37,6 +38,9 @@ type Host struct {
 	// Remote, when set, runs each step's prompt somewhere else — a sandbox job —
 	// while this host admits, records and classifies the run. Nil runs it here.
 	Remote RemoteRunner
+	// PRs, when set, is the client a linked PR is read through, and its number: a
+	// hosted organization's GitHub App. Nil resolves it with this host's credentials.
+	PRs func(ctx context.Context, url string) (provider.Client, int, error)
 }
 
 // NewHost loads the project's configuration and lifecycle for a work dir.

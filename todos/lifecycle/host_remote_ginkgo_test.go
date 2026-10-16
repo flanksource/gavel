@@ -5,6 +5,7 @@ package lifecycle_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +14,8 @@ import (
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/captain/pkg/promptrun"
 	"github.com/flanksource/gavel/commit"
+	"github.com/flanksource/gavel/pr/model"
+	"github.com/flanksource/gavel/pr/provider"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/lifecycle"
 	"github.com/flanksource/gavel/todos/types"
@@ -33,9 +36,11 @@ func (l *loopbackRunner) Run(ctx context.Context, run lifecycle.RemoteRun) (prom
 	Expect(err).NotTo(HaveOccurred())
 	var hooks lifecycle.RunHooks
 	Expect(json.Unmarshal(data, &hooks)).To(Succeed(), "the hook data crosses to the sandbox as JSON")
+	built, err := hooks.Build()
+	Expect(err).NotTo(HaveOccurred())
 	in := promptrun.Input{
 		Resolved: run.Input.Resolved, Config: run.Input.Config, Provider: l.agent,
-		Hooks: hooks.Build(), CallerOwnsCommits: run.Input.CallerOwnsCommits,
+		Hooks: built, CallerOwnsCommits: run.Input.CallerOwnsCommits,
 		Verify: run.Input.Verify, Timeout: run.Input.Timeout, Repo: run.Input.Repo,
 		OnEvent: run.Input.OnEvent,
 	}
@@ -111,13 +116,6 @@ var _ = Describe("a host whose runs execute elsewhere", func() {
 		Expect(err).To(MatchError("step run runs in cmux, a terminal on this host, which a run executing elsewhere can't use: choose the agent or cli mode"))
 	})
 
-	It("refuses a step on a todo linked to a PR", func() {
-		host.Remote = &loopbackRunner{}
-		todo := hostTodo()
-		todo.PR = &types.PR{Number: 7, URL: "https://github.com/acme/app/pull/7"}
-		_, err := host.RunStep(ctx, todo, stepNamed(host.Def, "run"), lifecycle.RunOptions{})
-		Expect(err).To(MatchError(ContainSubstring("can't run elsewhere yet")))
-	})
 })
 
 var _ = Describe("a host for a hosted repository", func() {
@@ -133,5 +131,70 @@ var _ = Describe("a host for a hosted repository", func() {
 		Expect(host.Config.SSH.Cmd).To(Equal("make check"))
 		Expect(host.WorkDir).To(Equal(repo))
 		Expect(*host.Saved).To(BeZero(), "the serve host's Captain defaults don't apply")
+	})
+})
+
+// capturingRunner keeps the remote run it is handed and runs nothing.
+type capturingRunner struct{ runs []lifecycle.RemoteRun }
+
+func (c *capturingRunner) Run(_ context.Context, run lifecycle.RemoteRun) (promptrun.Result, error) {
+	c.runs = append(c.runs, run)
+	return promptrun.Result{}, errors.New("not run")
+}
+
+// linkedPR is GitHub for the one open PR a todo is linked to.
+type linkedPR struct{ provider.Client }
+
+const linkedPRHead = "0123456789abcdef0123456789abcdef01234567"
+
+func (linkedPR) Status(context.Context, int, model.StatusOptions) (*model.StatusSnapshot, error) {
+	return &model.StatusSnapshot{PR: &model.PRInfo{
+		Number: 7, URL: "https://github.com/acme/app/pull/7", State: "OPEN",
+		HeadRefOID: linkedPRHead, HeadRefName: "topic", HeadRepositoryURL: "https://github.com/acme/app",
+	}}, nil
+}
+
+var _ = Describe("a remote run on a linked PR", func() {
+	It("resolves the PR through the host's client and hands the sandbox the PR's data", func() {
+		GinkgoT().Setenv("HOME", GinkgoT().TempDir())
+		host := newHost(&fakeProvider{plan: todos.PlanState{Exists: true, Approved: true, Content: "# plan", Revision: 2}})
+		runner := &capturingRunner{}
+		host.Remote = runner
+		host.PRs = func(_ context.Context, url string) (provider.Client, int, error) {
+			Expect(url).To(Equal("https://github.com/acme/app/pull/7"))
+			return linkedPR{}, 7, nil
+		}
+		todo := hostTodo()
+		todo.PR = &types.PR{Number: 7, URL: "https://github.com/acme/app/pull/7"}
+
+		_, _ = host.RunStep(context.Background(), todo, stepNamed(host.Def, "run"), lifecycle.RunOptions{})
+
+		Expect(runner.runs).To(HaveLen(1))
+		pr := runner.runs[0].Hooks.PR
+		Expect(pr).NotTo(BeNil())
+		Expect(pr.URL).To(Equal("https://github.com/acme/app/pull/7"))
+		Expect(pr.Number).To(Equal(7))
+		Expect(pr.Target).To(Equal(provider.RunTarget{RepositoryURL: "https://github.com/acme/app", Branch: "topic", HeadSHA: linkedPRHead}))
+		Expect(pr.Write).To(BeTrue(), "a run step writes to the PR")
+		Expect(pr.WorkDir).To(Equal(host.WorkDir))
+	})
+
+	It("rebuilds the PR hook inside a sandbox job", func() {
+		GinkgoT().Setenv("GAVEL_SERVER", "https://gavel.example")
+		GinkgoT().Setenv("GAVEL_RUN_TOKEN", "run-token")
+		GinkgoT().Setenv("GAVEL_RUN_ID", "run-1")
+		hooks := lifecycle.RunHooks{PR: &lifecycle.PRHooks{
+			URL: "https://github.com/acme/app/pull/7", Number: 7, Write: true, WorkDir: "/workspace/src",
+			Target: provider.RunTarget{RepositoryURL: "https://github.com/acme/app", Branch: "topic", HeadSHA: linkedPRHead},
+		}}
+		built, err := hooks.Build()
+		Expect(err).NotTo(HaveOccurred())
+		var names []string
+		for _, hook := range built {
+			if named, ok := hook.(interface{ Name() string }); ok {
+				names = append(names, named.Name())
+			}
+		}
+		Expect(names).To(ContainElement("gavel-pr-turn"))
 	})
 })

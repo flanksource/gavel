@@ -29,7 +29,11 @@ func Execute(ctx context.Context, job Job, dir string, agent captainai.Provider,
 	reporter := &reporter{send: send}
 	in := job.Input(dir)
 	in.Provider = agent
-	in.Hooks = append(job.Hooks.Build(), &startedHook{reporter: reporter})
+	hooks, err := job.HooksIn(dir).Build()
+	if err != nil {
+		return Finished{}, err
+	}
+	in.Hooks = append(hooks, &startedHook{reporter: reporter})
 	if agent != nil {
 		// A supplied provider skips Captain's setup hook, so the run is set up here, as a local
 		// run with a supplied provider is.

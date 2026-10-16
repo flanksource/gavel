@@ -104,3 +104,10 @@ func TestMessagesCrossAsJSONWithoutBackendNativeValues(t *testing.T) {
 	failed := roundTrip(t, ResultMessage(promptrun.Result{}, errBoom))
 	assert.Equal(t, "boom", failed.Error)
 }
+
+func TestAJobsPRWorksInTheSandboxsCheckout(t *testing.T) {
+	job := Job{Root: "/srv/gavel/workspaces/org/repo", Hooks: lifecycle.RunHooks{PR: &lifecycle.PRHooks{URL: "https://github.com/acme/app/pull/7", Number: 7, WorkDir: "/srv/gavel/workspaces/org/repo"}}}
+	hooks := job.HooksIn("/workspace/src")
+	assert.Equal(t, "/workspace/src", hooks.PR.WorkDir)
+	assert.Equal(t, "/srv/gavel/workspaces/org/repo", job.Hooks.PR.WorkDir, "the job itself is unchanged")
+}

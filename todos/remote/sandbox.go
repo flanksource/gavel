@@ -29,9 +29,13 @@ func (s SandboxJobs) Start(ctx context.Context, id uuid.UUID, job Job) (Started,
 		return nil, fmt.Errorf("encode the job of run %s: %w", id, err)
 	}
 	todo := s.TodoID
-	run, err := s.Dispatcher.StartRun(ctx, id, s.Scope, sandbox.RunSpec{
-		Kind: "agent", RepoID: s.RepoID, Ref: "HEAD", SHA: s.SHA, TodoID: &todo, Agent: encoded,
-	}, nil)
+	spec := sandbox.RunSpec{Kind: "agent", RepoID: s.RepoID, Ref: "HEAD", SHA: s.SHA, TodoID: &todo, Agent: encoded}
+	if pr := job.Hooks.PR; pr != nil {
+		// A step on a linked PR starts from the PR's head, which the base repository has under
+		// the PR's own ref, and serve acts on that PR alone for it.
+		spec.Ref, spec.SHA, spec.PR = fmt.Sprintf("refs/pull/%d/head", pr.Number), pr.Target.HeadSHA, pr.URL
+	}
+	run, err := s.Dispatcher.StartRun(ctx, id, s.Scope, spec, nil)
 	if err != nil {
 		return nil, err
 	}

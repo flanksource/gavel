@@ -74,7 +74,13 @@ func (h *Host) resolvePR(ctx context.Context, todo *types.TODO, class types.RunM
 	if err := todo.PR.Validate(); err != nil {
 		return nil, err
 	}
-	client, number, err := provider.ResolveURL(provider.Options{WorkDir: workDir, Context: ctx}, todo.PR.URL)
+	resolve := func(ctx context.Context, url string) (provider.Client, int, error) {
+		return provider.ResolveURL(provider.Options{WorkDir: workDir, Context: ctx}, url)
+	}
+	if h.PRs != nil {
+		resolve = h.PRs
+	}
+	client, number, err := resolve(ctx, todo.PR.URL)
 	if err != nil {
 		return nil, err
 	}

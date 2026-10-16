@@ -73,6 +73,17 @@ func (j Job) Input(dir string) promptrun.Input {
 	}
 }
 
+// HooksIn is the job's hook data with its paths under dir, the sandbox's checkout.
+func (j Job) HooksIn(dir string) lifecycle.RunHooks {
+	hooks := j.Hooks
+	if hooks.PR != nil {
+		pr := *hooks.PR
+		pr.WorkDir = underRoot(j.Root, dir, pr.WorkDir)
+		hooks.PR = &pr
+	}
+	return hooks
+}
+
 // underRoot moves path from under root to under dir. A path outside root moves to dir itself.
 func underRoot(root, dir, path string) string {
 	rel, err := filepath.Rel(root, path)
