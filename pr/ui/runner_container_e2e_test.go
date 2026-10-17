@@ -18,6 +18,7 @@ import (
 	"github.com/flanksource/gavel/blob"
 	"github.com/flanksource/gavel/sandbox"
 	"github.com/flanksource/gavel/tenant"
+	"github.com/flanksource/gavel/todos/remote"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -34,25 +35,7 @@ func TestPushChecksRunInTheRunnerImage(t *testing.T) {
 	require.NoError(t, db.Exec(`INSERT INTO users (id, issuer, clerk_user_id) VALUES (?, 'https://clerk.example', 'user_ada')`, user).Error)
 	dataDir := t.TempDir()
 
-	// The jobs' network, and the run API on its gateway, where a job reaches serve.
-	network := "gavel-sandbox-e2e-" + uuid.NewString()[:8]
-	require.NoError(t, exec.Command("docker", "network", "create", network).Run())
-	t.Cleanup(func() { _ = exec.Command("docker", "network", "rm", network).Run() })
-	gateway, err := exec.Command("docker", "network", "inspect", "-f", "{{(index .IPAM.Config 0).Gateway}}", network).Output()
-	require.NoError(t, err)
-	listener, err := net.Listen("tcp", strings.TrimSpace(string(gateway))+":0")
-	require.NoError(t, err)
-	key := []byte(strings.Repeat("k", 32))
-	api := &http.Server{Handler: (&RunsAPI{DB: db, TokenKey: key, Cache: store, Sources: &sandbox.Sources{DataDir: dataDir}}).Handler()}
-	go func() { _ = api.Serve(listener) }()
-	t.Cleanup(func() { _ = api.Close() })
-
-	logs := blob.Local(t.TempDir())
-	dispatcher := &sandbox.Dispatcher{
-		DB: db, Image: image, Server: "http://" + listener.Addr().String(), TokenKey: key,
-		Logs: func(uuid.UUID) blob.Store { return logs }, Limits: sandbox.Limits{Timeout: 5 * time.Minute},
-		Executor: sandbox.NewContainer("docker", sandbox.ContainerOptions{Network: network}),
-	}
+	dispatcher := containerDispatcher(t, image, &RunsAPI{DB: db, Cache: store, Sources: &sandbox.Sources{DataDir: dataDir}}, nil)
 
 	for _, check := range []struct {
 		name     string
@@ -96,6 +79,82 @@ func TestPushChecksRunInTheRunnerImage(t *testing.T) {
 			require.NoError(t, db.Raw(`SELECT status FROM sandbox_runs WHERE id = ?`, run.ID).Scan(&status).Error)
 			assert.NotEqual(t, "running", status)
 		})
+	}
+}
+
+// containerDispatcher starts jobs of image in containers on a network of their own, which reach
+// api, served on the network's gateway, with secrets in their environment.
+func containerDispatcher(t *testing.T, image string, api *RunsAPI, secrets map[string]string) *sandbox.Dispatcher {
+	t.Helper()
+	network := "gavel-sandbox-e2e-" + uuid.NewString()[:8]
+	require.NoError(t, exec.Command("docker", "network", "create", network).Run())
+	t.Cleanup(func() { _ = exec.Command("docker", "network", "rm", network).Run() })
+	gateway, err := exec.Command("docker", "network", "inspect", "-f", "{{(index .IPAM.Config 0).Gateway}}", network).Output()
+	require.NoError(t, err)
+	listener, err := net.Listen("tcp", strings.TrimSpace(string(gateway))+":0")
+	require.NoError(t, err)
+	api.TokenKey = []byte(strings.Repeat("k", 32))
+	server := &http.Server{Handler: api.Handler()}
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(func() { _ = server.Close() })
+	logs := blob.Local(t.TempDir())
+	return &sandbox.Dispatcher{
+		DB: api.DB, Image: image, Server: "http://" + listener.Addr().String(), TokenKey: api.TokenKey,
+		Logs: func(uuid.UUID) blob.Store { return logs }, Limits: sandbox.Limits{Timeout: 10 * time.Minute},
+		Executor: sandbox.NewContainer("docker", sandbox.ContainerOptions{Network: network}), SecretEnv: secrets,
+	}
+}
+
+func TestHostedAgentRunsInTheRunnerImage(t *testing.T) {
+	image := os.Getenv("GAVEL_SANDBOX_RUNNER_IMAGE")
+	if image == "" {
+		t.Skip("set GAVEL_SANDBOX_RUNNER_IMAGE to a runner image to run agent runs in containers")
+	}
+	db, store, org := openOrgDB(t)
+	t.Setenv("HOME", t.TempDir())
+	creator := uuid.New()
+	require.NoError(t, db.Exec(`INSERT INTO users (id, issuer, clerk_user_id) VALUES (?, 'https://clerk.example', 'user_ada')`, creator).Error)
+	dataDir := t.TempDir()
+	workspace := "repo:" + pushedRepo(t, db, org, dataDir, "app").String()
+	relay := &remote.Relay{}
+	// With a key the agent plans; without one its run fails, which still has to reach the todo.
+	secrets := map[string]string{}
+	key := os.Getenv("ANTHROPIC_API_KEY")
+	if key != "" {
+		secrets["ANTHROPIC_API_KEY"] = key
+	}
+	sources := &sandbox.Sources{DataDir: dataDir}
+	dispatcher := containerDispatcher(t, image, &RunsAPI{DB: db, Cache: store, Sources: sources, Relay: relay}, secrets)
+	srv := &Server{githubCache: store}
+	srv.SetOrg(org, db)
+	srv.SetHostedMode(true)
+	srv.SetHostedWorkspaces(HostedWorkspaces{DB: db, Sources: sources})
+	srv.SetAgentRuns(AgentRuns{Dispatcher: dispatcher, Relay: relay})
+	base := serveActingAs(t, srv, org)
+
+	_, created := hostedCall(t, base, http.MethodPost, "/api/todos", creator, "org:member", map[string]any{"dir": workspace, "title": "Describe the README"})
+	todo := created["id"].(string)
+	status, started := hostedCall(t, base, http.MethodPost, "/api/todos/run", creator, "org:member", map[string]any{"dir": workspace, "ref": todo, "step": "plan"})
+	require.Equal(t, http.StatusOK, status, started)
+
+	var outcome struct {
+		RunState string
+		Error    string
+	}
+	require.Eventually(t, func() bool {
+		require.NoError(t, db.Raw(`SELECT payload->'run'->>'state' AS run_state, COALESCE(payload->'run'->>'error', '') AS error
+			FROM todo_issue_events WHERE issue_id = ? AND kind = 'lifecycle_outcome'`, todo).Scan(&outcome).Error)
+		return outcome.RunState != ""
+	}, 10*time.Minute, time.Second, "the containerized run's outcome reached the todo")
+	var job struct{ Status string }
+	require.NoError(t, db.Raw(`SELECT status FROM sandbox_runs WHERE todo_id = ?`, todo).Scan(&job).Error)
+	t.Logf("run %s, sandbox job %s, error %q", outcome.RunState, job.Status, outcome.Error)
+	if key != "" {
+		assert.Equal(t, "succeeded", outcome.RunState, "the agent planned in the container: %s", outcome.Error)
+	} else {
+		assert.Equal(t, "failed", outcome.RunState, "an agent with no credentials fails")
+		assert.NotContains(t, outcome.Error, "on PATH", "the image has every runtime the agent needs")
+		assert.NotEmpty(t, outcome.Error, "and says why it failed")
 	}
 }
 

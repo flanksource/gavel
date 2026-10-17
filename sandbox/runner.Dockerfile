@@ -17,6 +17,8 @@ ARG YQ_VERSION=v4.54.1
 ARG PNPM_VERSION=11.22.0
 ARG CLAUDE_CODE_VERSION=2.1.300
 ARG CODEX_VERSION=0.162.1
+# Captain's Claude agent mode runs its bridge under tsx.
+ARG TSX_VERSION=4.23.15
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends git ca-certificates curl make \
@@ -33,7 +35,7 @@ RUN arch="$(dpkg --print-architecture)" \
  && curl -fsSL -o /usr/local/bin/yq "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_${arch}" \
  && chmod 0755 /usr/local/bin/yq
 
-RUN npm install -g "pnpm@${PNPM_VERSION}" "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" "@openai/codex@${CODEX_VERSION}" \
+RUN npm install -g "pnpm@${PNPM_VERSION}" "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" "@openai/codex@${CODEX_VERSION}" "tsx@${TSX_VERSION}" \
  && npm cache clean --force
 
 COPY --from=build /out/gavel /usr/local/bin/gavel
