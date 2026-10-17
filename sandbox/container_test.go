@@ -32,14 +32,15 @@ func TestContainerRunArgs(t *testing.T) {
 		"run", "-d", "--name", "gavel-run-" + run.String(),
 		"--network", "gavel-sandbox",
 		"--user", "1000:1000", "--read-only",
-		"--tmpfs", "/tmp", "--tmpfs", "/workspace:exec,size=10g", "--tmpfs", "/home/gavel",
+		"--tmpfs", "/tmp:exec", "--tmpfs", "/workspace:exec,size=10g,uid=1000,gid=1000", "--tmpfs", "/home/gavel:exec,uid=1000,gid=1000",
 		"--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--pids-limit", "1024",
 		"--cpus", "0.5", "--memory", "4294967296",
 		"-e", "CI=1", "-e", "GAVEL_SERVER=https://gavel.example",
 		"--env-file", "/tmp/env-file",
 		"--label", "gavel.dev/run=" + run.String(), "--label", "gavel.dev/org=" + org.String(),
-		"ghcr.io/flanksource/gavel-runner:1", "gavel", "runner", "exec", "--run", run.String(),
-	}, args)
+		"--entrypoint", "gavel",
+		"ghcr.io/flanksource/gavel-runner:1", "runner", "exec", "--run", run.String(),
+	}, args, "the command is the whole argv, replacing the image's entrypoint as a Kubernetes container's command does")
 	assert.NotContains(t, strings.Join(args, " "), "secret-token", "secrets never reach the command line")
 }
 
@@ -56,9 +57,10 @@ func TestContainerRunArgsDefaultsAndErrors(t *testing.T) {
 		want string
 	}{
 		"no image":      {Job{RunID: uuid.New(), Command: []string{"true"}}, "sandbox job has no image"},
-		"bad cpu":       {Job{RunID: uuid.New(), Image: "x", Limits: Limits{CPU: "two"}}, `CPU limit "two"`},
-		"bad memory":    {Job{RunID: uuid.New(), Image: "x", Limits: Limits{Memory: "lots"}}, `memory limit "lots"`},
-		"env with an =": {Job{RunID: uuid.New(), Image: "x", Env: map[string]string{"A=B": "c"}}, `environment variable name "A=B"`},
+		"no command":    {Job{RunID: uuid.New(), Image: "busybox"}, "sandbox job has no command"},
+		"bad cpu":       {Job{RunID: uuid.New(), Image: "x", Command: []string{"true"}, Limits: Limits{CPU: "two"}}, `CPU limit "two"`},
+		"bad memory":    {Job{RunID: uuid.New(), Image: "x", Command: []string{"true"}, Limits: Limits{Memory: "lots"}}, `memory limit "lots"`},
+		"env with an =": {Job{RunID: uuid.New(), Image: "x", Command: []string{"true"}, Env: map[string]string{"A=B": "c"}}, `environment variable name "A=B"`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := containerRunArgs(tc.job, "net", "")

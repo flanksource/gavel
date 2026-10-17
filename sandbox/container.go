@@ -21,6 +21,9 @@ func containerRunArgs(job Job, network, envFile string) ([]string, error) {
 	if job.Image == "" {
 		return nil, fmt.Errorf("sandbox job has no image")
 	}
+	if len(job.Command) == 0 {
+		return nil, fmt.Errorf("sandbox job has no command")
+	}
 	limits := job.Limits.withDefaults()
 	cpus, err := cpuCores(limits.CPU)
 	if err != nil {
@@ -38,7 +41,10 @@ func containerRunArgs(job Job, network, envFile string) ([]string, error) {
 		"run", "-d", "--name", jobName(job.RunID),
 		"--network", network,
 		"--user", "1000:1000", "--read-only",
-		"--tmpfs", "/tmp", "--tmpfs", "/workspace:exec,size=10g", "--tmpfs", "/home/gavel",
+		// The job runs the repository's code: go test builds into /tmp and installed tools run
+		// from the home directory, so every tmpfs allows exec. A tmpfs given options is root's,
+		// mode 0755, so the job's own are made the job user's.
+		"--tmpfs", "/tmp:exec", "--tmpfs", "/workspace:exec,size=10g,uid=1000,gid=1000", "--tmpfs", "/home/gavel:exec,uid=1000,gid=1000",
 		"--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--pids-limit", "1024",
 		"--cpus", cpus, "--memory", strconv.FormatInt(memory, 10),
 	}
@@ -51,8 +57,11 @@ func containerRunArgs(job Job, network, envFile string) ([]string, error) {
 	args = append(args,
 		"--label", "gavel.dev/run="+job.RunID.String(),
 		"--label", "gavel.dev/org="+job.Scope.OrgID.String(),
+		// The command is the whole argv, replacing the image's entrypoint, as a Kubernetes
+		// container's command does.
+		"--entrypoint", job.Command[0],
 		job.Image)
-	return append(args, job.Command...), nil
+	return append(args, job.Command[1:]...), nil
 }
 
 // ContainerOptions configures the container executor.
