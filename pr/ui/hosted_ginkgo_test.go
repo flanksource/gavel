@@ -55,7 +55,7 @@ var _ = Describe("hosted mode routes", func() {
 			{http.MethodPost, "/api/chat"},
 			{http.MethodGet, "/api/settings/gavel"},
 			{http.MethodGet, "/api/settings/prompts"},
-			{http.MethodPost, "/api/todos/land"},
+			{http.MethodGet, "/api/todos/session/cmux"},
 			{http.MethodPost, "/todos/new"},
 			{http.MethodGet, "/debug/pprof/"},
 			{http.MethodGet, "/metrics"},
