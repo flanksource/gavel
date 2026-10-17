@@ -135,3 +135,52 @@ func TestHostedRunsLandAsPullRequests(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, status, refused)
 	assert.Equal(t, "repository tool was pushed to gavel, not linked from GitHub, so its runs can't land as pull requests", refused["error"])
 }
+
+func TestHostedPRLinksReadThroughTheOrgsApp(t *testing.T) {
+	db, store, org := openOrgDB(t)
+	creator, member := uuid.New(), uuid.New()
+	for name, id := range map[string]uuid.UUID{"ada": creator, "grace": member} {
+		require.NoError(t, db.Exec(`INSERT INTO users (id, issuer, clerk_user_id) VALUES (?, 'https://clerk.example', ?)`, id, "user_"+name).Error)
+	}
+	dataDir := t.TempDir()
+	workspace := "repo:" + pushedRepo(t, db, org, dataDir, "app").String()
+	t.Setenv("GITHUB_TOKEN", "serve-own-token")
+	var mu sync.Mutex
+	var tokens []string
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		tokens = append(tokens, r.Header.Get("Authorization"))
+		mu.Unlock()
+		http.Error(w, `{"message":"unavailable"}`, http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(api.Close)
+	t.Setenv("GITHUB_API_URL", api.URL)
+	srv := &Server{ghOpts: github.Options{TokenSource: func() (string, error) { return "ghs_app", nil }}, githubCache: store}
+	srv.SetOrg(org, db)
+	srv.SetHostedMode(true)
+	srv.SetHostedWorkspaces(HostedWorkspaces{DB: db, Sources: &sandbox.Sources{DataDir: dataDir}})
+	base := serveActingAs(t, srv, org)
+	const prURL = "https://github.com/acme/app/pull/7"
+	for title, visibility := range map[string]string{"Private": "private", "Shared": "public"} {
+		_, created := hostedCall(t, base, http.MethodPost, "/api/todos", creator, "org:member", map[string]any{"dir": workspace, "title": title, "visibility": visibility})
+		status, linked := hostedCall(t, base, http.MethodPost, "/api/todos/pr-links", creator, "org:member", map[string]any{"dir": workspace, "id": created["id"], "url": prURL})
+		require.Equal(t, http.StatusCreated, status, linked)
+	}
+
+	status, body := hostedRaw(t, base, http.MethodGet, "/api/prs/todos?dir="+workspace+"&url="+prURL, member)
+	require.Equal(t, http.StatusOK, status, body)
+	assert.Contains(t, body, "Shared")
+	assert.NotContains(t, body, "Private", "another member doesn't see a private todo linked to the PR")
+
+	status, body = hostedRaw(t, base, http.MethodGet, "/api/prs/search?q=fix", member)
+	require.Equal(t, http.StatusOK, status, body)
+
+	status, body = hostedRaw(t, base, http.MethodGet, "/api/prs/linked?url="+prURL, member)
+	assert.Equal(t, http.StatusBadGateway, status, body)
+	mu.Lock()
+	defer mu.Unlock()
+	require.NotEmpty(t, tokens, "the PR was read from GitHub")
+	for _, token := range tokens {
+		assert.Equal(t, "Bearer ghs_app", token, "through the organization's App, never serve's own token")
+	}
+}

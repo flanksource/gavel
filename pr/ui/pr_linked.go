@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 
@@ -28,6 +29,15 @@ func linkedPRRepository(ref string) (string, error) {
 	return repo, err
 }
 
+// linkedPRClient is the client a linked PR is read through: a hosted organization's GitHub App,
+// or this host's credentials.
+func (s *Server) linkedPRClient(ctx context.Context, url string) (provider.Client, int, error) {
+	if s.hosted {
+		return s.organizationPRs(ctx, url)
+	}
+	return provider.ResolveURL(provider.Options{WorkDir: s.ghOpts.WorkDir, Token: s.ghOpts.Token}, url)
+}
+
 func (s *Server) handleLinkedPR(w http.ResponseWriter, r *http.Request) {
 	link, err := types.PRFromURL(r.URL.Query().Get("url"))
 	if err != nil {
@@ -39,7 +49,7 @@ func (s *Server) handleLinkedPR(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, err)
 		return
 	}
-	client, number, err := provider.ResolveURL(provider.Options{WorkDir: s.ghOpts.WorkDir, Token: s.ghOpts.Token}, link.URL)
+	client, number, err := s.linkedPRClient(r.Context(), link.URL)
 	if err != nil {
 		writeJSONError(w, http.StatusBadRequest, err)
 		return
