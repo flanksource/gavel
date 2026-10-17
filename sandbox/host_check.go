@@ -1,5 +1,6 @@
 // Checks that a container host can run sandbox jobs safely: the bridge network exists and the
-// host firewall keeps jobs on it off private networks except gavel serve itself.
+// host firewall keeps jobs on it off private networks and the host's own services, except gavel
+// serve itself.
 package sandbox
 
 import (
@@ -57,7 +58,16 @@ func (c HostCheck) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("read the DOCKER-USER firewall chain (gavel serve needs to read iptables to check the sandbox network): %w", err)
 	}
-	return checkFirewall(rules, bridge, host, port)
+	if err := checkFirewall(rules, bridge, host, port); err != nil {
+		return err
+	}
+	// DOCKER-USER sees only what Docker forwards; a job connecting to this host itself, through
+	// the bridge, is delivered through INPUT.
+	input, err := run(ctx, "iptables", "-S", "INPUT")
+	if err != nil {
+		return fmt.Errorf("read the INPUT firewall chain (gavel serve needs to read iptables to check the sandbox network): %w", err)
+	}
+	return checkHostInput(input, bridge, host, port)
 }
 
 func (c HostCheck) bridge(ctx context.Context, run func(context.Context, string, ...string) (string, error)) (string, error) {
@@ -130,6 +140,72 @@ func checkFirewall(rules, bridge, host, port string) error {
 		return fmt.Errorf("the ACCEPT for gavel serve must come before the REJECT rules in DOCKER-USER, or jobs can't report results; as root, delete the gavel-sandbox rules and run:\n%s", firewallCommands(bridge, host, port))
 	}
 	return nil
+}
+
+// checkHostInput finds, in `iptables -S INPUT` output, gavel's ACCEPTs for established traffic
+// and for gavel serve and then its REJECT for everything else from bridge, with no other ACCEPT
+// that could match bridge before the REJECT.
+func checkHostInput(rules, bridge, host, port string) error {
+	lines := strings.Split(rules, "\n")
+	ours := func(line string, parts ...string) bool {
+		fields := " " + line + " "
+		for _, part := range append(parts, "-A INPUT", "-i "+bridge, "--comment "+firewallComment) {
+			if !strings.Contains(fields, " "+part+" ") {
+				return false
+			}
+		}
+		return true
+	}
+	established, serve, reject := -1, -1, -1
+	for i, line := range lines {
+		switch {
+		case established < 0 && ours(line, "--ctstate RELATED,ESTABLISHED", "-j ACCEPT"):
+			established = i
+		case serve < 0 && ours(line, "-d "+host+"/32", "--dport "+port, "-j ACCEPT"):
+			serve = i
+		case reject < 0 && ours(line, "-j REJECT") && !strings.Contains(line, " -d ") && !strings.Contains(line, " -p "):
+			reject = i
+		}
+	}
+	if established < 0 || serve < 0 || reject < 0 || established > reject || serve > reject {
+		return fmt.Errorf("the host firewall lets sandbox jobs on %s reach this host's own services; as root, run:\n%s", bridge, inputCommands(bridge, host, port))
+	}
+	for i, line := range lines[:reject] {
+		if i == established || i == serve || !strings.HasPrefix(line, "-A INPUT ") || !strings.Contains(line, "-j ACCEPT") {
+			continue
+		}
+		if acceptsFrom(line, bridge) {
+			return fmt.Errorf("the INPUT rule %q accepts traffic from sandbox jobs before gavel's REJECT, so they can reach this host's services; as root, delete the gavel-sandbox INPUT rules and run:\n%s", line, inputCommands(bridge, host, port))
+		}
+	}
+	return nil
+}
+
+// acceptsFrom reports whether an INPUT rule can match traffic arriving on bridge: it names no
+// interface, names bridge, or names a wildcard bridge matches.
+func acceptsFrom(rule, bridge string) bool {
+	fields := strings.Fields(rule)
+	for i, field := range fields {
+		if field != "-i" || i+1 == len(fields) {
+			continue
+		}
+		name := fields[i+1]
+		if prefix, wildcard := strings.CutSuffix(name, "+"); wildcard {
+			return strings.HasPrefix(bridge, prefix)
+		}
+		return name == bridge
+	}
+	return true
+}
+
+// inputCommands are the iptables commands that keep jobs on bridge off this host's services but
+// gavel serve, inserted at the top of INPUT so no other rule accepts their traffic first.
+func inputCommands(bridge, host, port string) string {
+	return strings.Join([]string{
+		fmt.Sprintf("  iptables -I INPUT 1 -i %s -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT -m comment --comment %s", bridge, firewallComment),
+		fmt.Sprintf("  iptables -I INPUT 2 -i %s -d %s -p tcp --dport %s -j ACCEPT -m comment --comment %s", bridge, host, port, firewallComment),
+		fmt.Sprintf("  iptables -I INPUT 3 -i %s -j REJECT -m comment --comment %s", bridge, firewallComment),
+	}, "\n")
 }
 
 // firewallCommands are the iptables commands that set up bridge: the ACCEPT for gavel serve

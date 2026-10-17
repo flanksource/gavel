@@ -44,15 +44,28 @@ commands to run, but never runs them itself, because they need root.
    iptables -A DOCKER-USER -i BRIDGE -d 127.0.0.0/8 -j REJECT -m comment --comment gavel-sandbox
    ```
 
+4. As root, keep jobs off this host's own services too. DOCKER-USER only sees traffic Docker
+   forwards; a job connecting to the host itself through the bridge (to a database listening on
+   it, say) is delivered through INPUT. Insert these at the top of INPUT, so no other rule
+   accepts the jobs' traffic first:
+
+   ```sh
+   iptables -I INPUT 1 -i BRIDGE -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT -m comment --comment gavel-sandbox
+   iptables -I INPUT 2 -i BRIDGE -d SERVE_IP -p tcp --dport SERVE_PORT -j ACCEPT -m comment --comment gavel-sandbox
+   iptables -I INPUT 3 -i BRIDGE -j REJECT -m comment --comment gavel-sandbox
+   ```
+
    The rules don't survive a reboot on their own; persist them with your distribution's iptables
    service.
 
-`gavel serve` reads the chain with `iptables -S DOCKER-USER`, so it needs to be able to read
-iptables. It finds the rules by their `gavel-sandbox` comment and checks that the ACCEPT comes
-before the REJECTs.
+`gavel serve` reads both chains with `iptables -S DOCKER-USER` and `iptables -S INPUT`, so it
+needs to be able to read iptables. It finds the rules by their `gavel-sandbox` comment and checks
+that each ACCEPT comes before its REJECTs, and that no other INPUT rule accepts traffic from the
+bridge before gavel's REJECT.
 
 The check was written against the format `iptables -S` prints for these rules. It hasn't yet
-been run against a live firewall.
+been run against a live firewall. To check a host from inside a job, run
+`GAVEL_SANDBOX_FIREWALL_TEST=1 go test -run TestTheSandboxFirewallConfinesJobs ./sandbox/`.
 
 ## The runner image
 
