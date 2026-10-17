@@ -964,11 +964,11 @@ func bindTestCommandFlags(cmd *cobra.Command, flags *testCommandFlags) {
 	cmd.Flags().DurationVar(&flags.IdleTimeout, "idle-timeout", 0,
 		"With --ui --detach, exit the detached UI server after this long with no HTTP requests (default 5m when --detach is set).")
 	cmd.Flags().DurationVar(&flags.Timeout, "timeout", 20*time.Minute,
-		"Global wall-clock deadline for the entire test+lint run. On timeout, diagnostics are captured and every subprocess is killed.")
+		"Global wall-clock deadline for the entire test+lint run (or test.timeout). On timeout, diagnostics are logged (and checkpointed into the run's stacks under --ui/--diagnostics) and every subprocess is killed.")
 	cmd.Flags().DurationVar(&flags.LintTimeout, "lint-timeout", 0,
 		"Per-linter subprocess deadline when --lint is set. Applies to each linter invocation.")
 	cmd.Flags().DurationVar(&flags.TestTimeout, "test-timeout", 0,
-		"Per-test-package subprocess deadline. Applies to each go test / ginkgo / vitest invocation.")
+		"Per-test-package subprocess deadline (or test.testTimeout; none by default). Applies to each go test / ginkgo / vitest invocation. A Go test binary past it is sent SIGQUIT and given 3s to dump its goroutines onto the attempt before the tree is killed.")
 	if failed := cmd.Flags().Lookup("failed"); failed != nil {
 		failed.NoOptDefVal = failedAutoSentinel
 		failed.Usage = "Path to previous results JSON; re-run only failed tests. Pass without a value to use --baseline when set, otherwise .gavel/last.json."

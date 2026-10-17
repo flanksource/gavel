@@ -359,7 +359,37 @@ func fixturesHelp(cmd *cobra.Command) api.Text {
 		Add(code("  cel: terminal.exit_code == 0 && terminal.duplicates.size() == 0")).NewLine().
 		Add(code("  cel: pg_proxy.by_op[\"INSERT\"] == 1 && pg_proxy.errors == 0")).NewLine().NewLine().
 		Append("  A trace's root exists only when it was armed; its result (kind, stream, window, count,", "text-muted").NewLine().
-		Append("  summary) rides on the fixture result under ", "text-muted").Add(code("traces")).Append(".", "text-muted").NewLine()
+		Append("  summary) rides on the fixture result under ", "text-muted").Add(code("traces")).Append(".", "text-muted").NewLine().NewLine().
+		Append("  The store also holds kinds gavel fills itself, which a fixture does not arm: ", "text-muted").Add(code("stacks")).NewLine().
+		Append("  (goroutine/native stack dumps) and ", "text-muted").Add(code("goprof")).Append(" (the ", "text-muted").Add(code("goProfiles:")).Append(" a command wrote under --profile,", "text-muted").NewLine().
+		Append("  listed with the fixture's traces but not a CEL root).", "text-muted").NewLine()
+
+	t = t.Add(h("PROFILING AND BENCHMARKS")).
+		Add(sh("--profile")).
+		Append("  Reads the fixture process tree's CPU, memory and disk I/O from the run's ").Add(code("process_tree")).Append(" and").NewLine().
+		Append("  ").Add(code("process_samples")).Append(": each step's peaks over its own time, its disk I/O as the delta of the counters.").NewLine().
+		Append("  It also hands each command the destinations its ").Add(code("goProfiles:")).Append(" declare and ingests what it wrote:").NewLine().NewLine().
+		Add(code("  goProfiles:")).NewLine().
+		Add(code("    cpu:")).NewLine().
+		Add(code("      file: cpu.pprof")).Add(dim("                # or directory: — every file written under it")).NewLine().
+		Add(code("      env: CPU_PROFILE")).Add(dim("               # and/or args: [\"-cpuprofile={{.path}}\"]")).NewLine().NewLine().
+		Append("    * ", "text-muted").Append("Paths are relative to a per-fixture dir under ").Add(code(".gavel/profiles/fixtures/")).Append(".").NewLine().
+		Append("    * ", "text-muted").Append("The name (cpu, heap, allocs, mutex, block, goroutine) says which profile it is; any").NewLine().
+		Append("      ", "text-muted").Append("other name is read from the profile's sample types. A file not written is logged and skipped;").NewLine().
+		Append("      ", "text-muted").Append("one that is not a Go pprof profile fails the fixture.").NewLine().
+		Append("    * ", "text-muted").Append("Each file is one ").Add(code("goprof")).Append(" window; download it as ").Add(code("pprof")).Append(" (.pb.gz) for ").Add(code("go tool pprof")).Append(".").NewLine().
+		Append("    * ", "text-muted").Add(code("SQL_PROFILE_FILE")).Append(" (also set by any --max-sql-* limit) is passed to every command for").NewLine().
+		Append("      ", "text-muted").Append("commons-db's GORM SQL logger to write one JSON line per statement.").NewLine().NewLine().
+		Add(sh("--benchmark")).
+		Append("  Records each fixture's and prerequisite's (setup, build, daemon) duration, with its profile and").NewLine().
+		Append("  SQL totals, into ").Add(code(".gavel/benchmarks/fixtures/run-<timestamp>.json")).Append(". Pass a saved report as").NewLine().
+		Append("  ").Add(code("--baseline")).Append(" to compare against it. Limits fail individual fixtures:").NewLine().NewLine().
+		Add(kv("--max-time", "Duration")).
+		Add(kv("--max-memory", "Peak RSS byte size (512MiB)")).
+		Add(kv("--max-io-read, --max-io-write", "Observed disk byte sizes")).
+		Add(kv("--max-sql-time, --max-sql-query", "Total SQL time, slowest statement")).
+		Add(kv("--max-sql-queries, --max-slow-sql", "Statement counts (zero allowed)")).
+		Add(kv("--max-deviation-pct", "Regression vs --baseline: time, peak RSS, disk I/O, SQL")).NewLine()
 
 	// CWD resolution
 	t = t.Add(h("CWD RESOLUTION")).
@@ -401,7 +431,8 @@ func fixturesHelp(cmd *cobra.Command) api.Text {
 		Add(code("  gavel fixtures --benchmark --baseline .gavel/benchmarks/fixtures/run-...json tests.md")).NewLine().
 		Add(code("  gavel fixtures --benchmark --max-time 2s --max-memory 512MiB tests.md")).NewLine().
 		Add(code("  gavel fixtures --benchmark --baseline base.json --max-deviation-pct 15 tests.md")).NewLine().
-		Add(code("  gavel fixtures --profile tests.md")).Add(dim("    # Save process metrics and declared Go pprof files")).NewLine().
+		Add(code("  gavel fixtures --profile --ui tests.md")).Add(dim("  # Process metrics and declared Go pprof files")).NewLine().
+		Add(code("  gavel fixtures --traces http_proxy tests.md")).Add(dim("  # Record every HTTP exchange; assert http_proxy.*")).NewLine().
 		Add(code("  gavel fixtures --no-progress tests.md")).Add(dim("    # Disable progress display")).NewLine().
 		Add(code("  gavel fixtures outline tests.md")).Add(dim("          # Parse and outline without running fixtures")).NewLine().
 		Add(code("  gavel fixtures --schema")).Add(dim("                  # Print the fixture/test JSON schemas and exit")).NewLine().
@@ -433,9 +464,9 @@ func init() {
 	fixturesCmd.Flags().BoolVar(&fixturesSchema, "schema", false, "Print fixture editor JSON schemas and exit")
 	fixturesCmd.Flags().StringVar(&fixturesTraces, "traces", "",
 		"Trace kinds armed, test-scoped with default params, for fixtures that declare no `traces:` of their own: http_proxy, pg_proxy, terminal, http, sql_statements, process_tree, process_samples (comma-separated)")
-	fixturesCmd.Flags().BoolVar(&fixturesBenchmark, "benchmark", false, "Record and show fixture and prerequisite durations in a JSON report")
-	fixturesCmd.Flags().StringVar(&fixturesBaseline, "baseline", "", "Compare benchmark durations with a saved fixture benchmark JSON report")
-	fixturesCmd.Flags().BoolVar(&fixturesProfile, "profile", false, "Record process CPU, memory, disk I/O, and declared Go pprof files")
+	fixturesCmd.Flags().BoolVar(&fixturesBenchmark, "benchmark", false, "Record and show fixture and prerequisite durations in .gavel/benchmarks/fixtures/run-<timestamp>.json")
+	fixturesCmd.Flags().StringVar(&fixturesBaseline, "baseline", "", "Compare benchmark metrics with a saved fixture benchmark JSON report (see --max-deviation-pct)")
+	fixturesCmd.Flags().BoolVar(&fixturesProfile, "profile", false, "Record the fixture process tree's CPU, memory and disk I/O, and ingest declared goProfiles pprof files into the run's goprof trace")
 	fixturesCmd.Flags().Float64Var(&fixturesMaxDeviationPct, "max-deviation-pct", 0, "Fail fixtures whose measured metrics regress beyond this percentage from --baseline")
 	fixturesCmd.Flags().DurationVar(&fixturesMaxTime, "max-time", 0, "Fail fixtures taking longer than this duration")
 	fixturesCmd.Flags().StringVar(&fixturesMaxMemory, "max-memory", "", "Fail fixtures exceeding this peak RSS byte size (for example 512MiB)")

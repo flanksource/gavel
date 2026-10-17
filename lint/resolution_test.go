@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	deps "github.com/flanksource/deps"
+	"github.com/flanksource/gavel/lint/shims"
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/linters/golangci"
 	"github.com/flanksource/gavel/linters/reactdoctor"
@@ -320,6 +321,30 @@ func TestResolveLinterExecutableReactDoctorWithoutLockUsesBinary(t *testing.T) {
 	}
 	if got != binary {
 		t.Fatalf("command = %q, want %q", got, binary)
+	}
+}
+
+func TestResolveLinterExecutableSkipsGavelShims(t *testing.T) {
+	repo := t.TempDir()
+	shimDir, realDir := t.TempDir(), t.TempDir()
+	real := writeExecutable(t, realDir, "golangci-lint")
+	t.Setenv("PATH", shimDir+string(os.PathListSeparator)+realDir)
+	if _, err := shims.Install(shims.InstallOptions{
+		Dir: shimDir, GavelPath: "/gavel", Tools: []string{"golangci-lint"},
+		Settings: shims.Settings{Timeout: "30s", CPU: 200},
+	}); err != nil {
+		t.Fatalf("install shims: %v", err)
+	}
+
+	got, reason, err := resolveLinterExecutable(context.Background(), golangci.NewGolangciLint(repo), repo, repo, false, false)
+	if err != nil {
+		t.Fatalf("resolveLinterExecutable: %v", err)
+	}
+	if reason != "" {
+		t.Fatalf("unexpected skip reason: %q", reason)
+	}
+	if got != real {
+		t.Fatalf("command = %q, want real binary %q behind the shim", got, real)
 	}
 }
 
