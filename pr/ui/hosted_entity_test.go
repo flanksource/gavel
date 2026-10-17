@@ -116,3 +116,29 @@ func TestHostedTodosOnAPushedRepositoryHaveNoGitHubIssues(t *testing.T) {
 	require.Len(t, outcome.Results, 1, body)
 	assert.Equal(t, noIssues, outcome.Results[0].Error)
 }
+
+func TestHostedTodoCatalogOffersOnlyServedActions(t *testing.T) {
+	h := newHostedRuns(t, nil)
+	status, body := hostedRaw(t, h.base, http.MethodGet, "/api/entities", h.ada)
+	require.Equal(t, http.StatusOK, status, body)
+	var entities []struct {
+		Name        string
+		Actions     []struct{ Name string } `json:"actions"`
+		BulkActions []struct{ Name string } `json:"bulk_actions"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(body), &entities))
+	var offered []string
+	for _, entity := range entities {
+		if entity.Name != "todo" {
+			continue
+		}
+		for _, action := range append(entity.Actions, entity.BulkActions...) {
+			offered = append(offered, action.Name)
+		}
+	}
+	assert.Contains(t, offered, "status")
+	assert.Contains(t, offered, "push")
+	for _, refused := range []string{"check", "merge", "sync", "import", "export"} {
+		assert.NotContains(t, offered, refused, "a hosted organization isn't offered %s", refused)
+	}
+}

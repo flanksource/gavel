@@ -3,6 +3,7 @@
 package ui
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -41,7 +42,7 @@ var hostedPassThrough = []string{
 	"/api/todos/run", "POST /api/todos/plan/approve", "POST /api/todos/plan/revise", "POST /api/todos/plan/reject",
 	"POST /api/todos/answer", "POST /api/todos/session/stop",
 	"GET /api/todos/session/approvals", "POST /api/todos/session/approve",
-	"GET /api/todos/session/detail", "GET /api/todos/session/plan", "/api/todos/session/stats",
+	"GET /api/todos/session/detail", "GET /api/todos/session/plan", "POST /api/todos/session/plan", "/api/todos/session/stats",
 	"GET /api/captain/sessions/{id}", "GET /api/todos/run/context", "/api/todos/run/preview",
 	// The todo entity acts for the organization's user (see todo_entity.go).
 	"GET /api/entities", "GET /api/v1/todo", "POST /api/v1/todo", "GET /api/v1/todo/{id}",
@@ -127,6 +128,10 @@ func (s *Server) hostedRoutes(mux *http.ServeMux) http.Handler {
 			return
 		}
 		page := pattern == "/" && (r.Method == http.MethodGet || r.Method == http.MethodHead) && !strings.HasPrefix(r.URL.Path, "/api/")
+		if pattern == "GET /api/entities" {
+			serveHostedCatalog(w, r, mux)
+			return
+		}
 		if allowed[pattern] || allowed[narrowed] || page {
 			mux.ServeHTTP(w, r.WithContext(withEntityServer(r.Context(), s)))
 			return
@@ -134,6 +139,74 @@ func (s *Server) hostedRoutes(mux *http.ServeMux) http.Handler {
 		writeJSONError(w, http.StatusNotFound, fmt.Errorf("%s %s is not available in hosted mode", r.Method, r.URL.Path))
 	})
 }
+
+// serveHostedCatalog serves the entity catalog without the actions a hosted dashboard answers
+// itself, so the selection toolbar offers only what it serves.
+func serveHostedCatalog(w http.ResponseWriter, r *http.Request, next http.Handler) {
+	buffered := &bufferedResponse{header: http.Header{}, status: http.StatusOK}
+	next.ServeHTTP(buffered, r)
+	body := buffered.body.Bytes()
+	if buffered.status == http.StatusOK {
+		filtered, err := withoutHostedAnswers(body)
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, err)
+			return
+		}
+		body = filtered
+	}
+	for name, values := range buffered.header {
+		w.Header()[name] = values
+	}
+	w.Header().Del("Content-Length")
+	w.WriteHeader(buffered.status)
+	_, _ = w.Write(body)
+}
+
+// withoutHostedAnswers drops from an entity catalog every action whose route hostedAnswers answers.
+func withoutHostedAnswers(catalog []byte) ([]byte, error) {
+	var entities []map[string]json.RawMessage
+	if err := json.Unmarshal(catalog, &entities); err != nil {
+		return nil, fmt.Errorf("read the entity catalog: %w", err)
+	}
+	for _, entity := range entities {
+		for _, field := range []string{"actions", "bulk_actions"} {
+			raw, ok := entity[field]
+			if !ok {
+				continue
+			}
+			var actions []map[string]json.RawMessage
+			if err := json.Unmarshal(raw, &actions); err != nil {
+				return nil, fmt.Errorf("read the entity catalog's %s: %w", field, err)
+			}
+			kept := make([]map[string]json.RawMessage, 0, len(actions))
+			for _, action := range actions {
+				var method, path string
+				_ = json.Unmarshal(action["method"], &method)
+				_ = json.Unmarshal(action["path"], &path)
+				if _, answered := hostedAnswers[strings.ToUpper(method)+" "+path]; !answered {
+					kept = append(kept, action)
+				}
+			}
+			encoded, err := json.Marshal(kept)
+			if err != nil {
+				return nil, err
+			}
+			entity[field] = encoded
+		}
+	}
+	return json.Marshal(entities)
+}
+
+// bufferedResponse holds a handler's response so it can be rewritten before it is sent.
+type bufferedResponse struct {
+	header http.Header
+	status int
+	body   bytes.Buffer
+}
+
+func (b *bufferedResponse) Header() http.Header         { return b.header }
+func (b *bufferedResponse) Write(p []byte) (int, error) { return b.body.Write(p) }
+func (b *bufferedResponse) WriteHeader(status int)      { b.status = status }
 
 // mustRegisterHostedRoutes panics unless every allowlist entry names a pattern mux
 // registers. A mistyped entry would otherwise turn its route off without a trace.

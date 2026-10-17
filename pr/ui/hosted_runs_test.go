@@ -512,3 +512,24 @@ func TestHostedRunPreviewsResolveAsTheRunWould(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, status, refused)
 	assert.Equal(t, "a hosted run uses the repository's runtime for each step; this one asks for model gpt-5", refused["error"])
 }
+
+func TestHostedPlansAreEditedByTheirOwner(t *testing.T) {
+	h := newHostedRuns(t, nil)
+	_, created := hostedCall(t, h.base, http.MethodPost, "/api/todos", h.ada, "org:member", map[string]any{"dir": h.workspace, "title": "Fix the build", "visibility": "public"})
+	todo := created["id"].(string)
+	status, started := hostedCall(t, h.base, http.MethodPost, "/api/todos/run", h.ada, "org:member", map[string]any{"dir": h.workspace, "ref": todo, "step": "plan"})
+	require.Equal(t, http.StatusOK, status, started)
+	var outcomes int64
+	require.Eventually(t, func() bool {
+		require.NoError(t, h.db.Raw(`SELECT count(*) FROM todo_issue_events WHERE issue_id = ? AND kind = 'lifecycle_outcome'`, todo).Scan(&outcomes).Error)
+		return outcomes == 1
+	}, 30*time.Second, 50*time.Millisecond, "the plan run finished")
+
+	edit := map[string]any{"dir": h.workspace, "ref": todo, "content": "# Plan\n\n1. Fix the build properly."}
+	status, refused := hostedCall(t, h.base, http.MethodPost, "/api/todos/session/plan", h.grace, "org:member", edit)
+	assert.Equal(t, http.StatusForbidden, status, "another member can't edit the plan: %v", refused)
+	status, saved := hostedCall(t, h.base, http.MethodPost, "/api/todos/session/plan", h.ada, "org:member", edit)
+	require.Equal(t, http.StatusOK, status, saved)
+	_, plan := hostedCall(t, h.base, http.MethodGet, "/api/todos/session/plan?dir="+h.workspace+"&ref="+todo, h.grace, "org:member", nil)
+	assert.Contains(t, plan["content"], "Fix the build properly.")
+}
