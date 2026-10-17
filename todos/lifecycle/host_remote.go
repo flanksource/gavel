@@ -48,3 +48,16 @@ func (h *Host) remoteRuntime(step Step, spec api.Spec) error {
 	}
 	return nil
 }
+
+// remoteSandbox turns off a remote run's native sandbox. The run executes in a sandbox job,
+// which isolates it, and where a native sandbox, such as Claude's bubblewrap, can't create the
+// namespaces it needs.
+func (h *Host) remoteSandbox(resolved *api.ResolvedSpec) {
+	if h.Remote == nil || resolved.Spec.Sandbox == nil || resolved.Spec.Sandbox.Mode != api.SandboxNative {
+		return
+	}
+	resolved.Spec.Sandbox = &api.SandboxRef{Mode: api.SandboxOff}
+	resolved.Provenance = recordRuntimeFields(resolved.Provenance, runtimeFields{
+		Name: "run executing in a sandbox job", Paths: []string{"/sandbox"}, Replace: true,
+	})
+}

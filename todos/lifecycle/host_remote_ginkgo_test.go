@@ -104,6 +104,21 @@ var _ = Describe("a host whose runs execute elsewhere", func() {
 		Expect(err).To(MatchError("step run resumes an agent session, which a run executing elsewhere can't do yet: start a fresh run"))
 	})
 
+	It("runs a step without its native sandbox, since the run's own sandbox isolates it", func() {
+		local, err := host.Resolve(ctx, hostTodo(), stepNamed(host.Def, "plan"), lifecycle.RunOptions{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(local.Spec.Sandbox).NotTo(BeNil())
+		Expect(local.Spec.Sandbox.Mode).To(Equal(api.SandboxNative), "the plan prompt asks for a read-only native sandbox")
+
+		host.Remote = &loopbackRunner{}
+		remote, err := host.Resolve(ctx, hostTodo(), stepNamed(host.Def, "plan"), lifecycle.RunOptions{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(remote.Spec.Sandbox).NotTo(BeNil())
+		Expect(remote.Spec.Sandbox.Mode).To(Equal(api.SandboxOff))
+		Expect(remote.Provenance).To(HaveKey("/sandbox"))
+		Expect(remote.Provenance["/sandbox"].Source.Name).To(Equal("run executing in a sandbox job"))
+	})
+
 	It("refuses a run in a terminal on this host", func() {
 		host.Remote = &loopbackRunner{}
 		_, err := host.RunStep(ctx, hostTodo(), stepNamed(host.Def, "run"), lifecycle.RunOptions{Request: api.Spec{Model: api.Model{Mode: api.ModeCmux}}})
