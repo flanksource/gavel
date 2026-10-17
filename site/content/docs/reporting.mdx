@@ -76,12 +76,24 @@ gavel ui serve .tmp/checks.json --addr localhost
 
 Use the printed server URL. The live UI streams changes and supports rerunning selected tests. Serving a saved snapshot makes completed evidence browsable without repeating the original execution.
 
+<figure className="my-8">
+  <img src="/media/test-timeout.png" alt="Timed-out Go test detail with its process metrics and captured goroutine stack" width={1053} height={1009} loading="lazy" className="w-full rounded-lg border border-border" />
+  <figcaption className="mt-2 text-sm text-muted-foreground">A saved run keeps the failed test, resource peaks, and stack trace together. <a href="/media/test-timeout.png">Open the full-size screenshot</a>.</figcaption>
+</figure>
+
+<figure className="my-8">
+  <video controls playsInline preload="metadata" className="w-full rounded-lg border border-border">
+    <source src="/media/test-timeout.webm" type="video/webm" />
+    <a href="/media/test-timeout.webm">Watch the test report screencast</a>.
+  </video>
+  <figcaption className="mt-2 text-sm text-muted-foreground">Screencast: open a timed-out test to inspect its captured diagnostics.</figcaption>
+</figure>
+
 | Endpoint | Purpose |
 | --- | --- |
 | `GET /api/tests` | Current JSON snapshot |
 | `GET /api/tests/stream` | Server-sent events with test updates |
 | `/query/` | The run's trace store, served by the commons-db query explorer (see below) |
-| `GET /api/process/metrics` | Process metrics |
 | `POST /api/rerun` | Request selected tests or frameworks in an execution-capable server |
 | `GET /api/rerun/stream` | Rerun updates |
 | `POST /api/stop` | Stop an in-flight run |
@@ -94,15 +106,18 @@ curl -N http://localhost:8080/api/tests/stream
 
 ### Traces
 
-Each run records its traces — the process tree and CPU/RSS samples of everything it started, and the HTTP, Postgres, and terminal traces fixtures arm — in a store under `.gavel/traces/<run_id>`. The UI mounts that store at `/query/`: the query explorer's UI, its profile API at `/query/api/v1`, and its sessions API. `status.traces` in `GET /api/tests` names the mount, the process-trace streams, and (while the run is live) the capture session a stack checkpoint goes to.
+Each run records its traces — the process tree, the CPU/RSS/disk samples and the stack dumps of everything it started, and the HTTP, Postgres, and terminal traces fixtures arm — in a store under `.gavel/traces/<run_id>`. The UI mounts that store at `/query/`: the query explorer's UI, its profile API at `/query/api/v1`, and its sessions API. `status.traces` in `GET /api/tests` names the mount, the process capture's `tree`, `samples` and `stacks` streams (`process`), and, while the run is live, their capture `sessions`.
 
-- The **Processes** tab reads the process tree and samples from the store. *Collect stack trace* checkpoints the running capture (`POST /query/api/v1/sessions/<session>/checkpoint`), which records the tree and dumps the run's goroutines onto its root.
+- The **Processes** tab reads the process tree, samples and stacks from the store. *Collect stack trace* checkpoints the stacks session (`POST /query/api/v1/sessions/<sessions.stacks>/checkpoint` with `{"key", "transport", "reason": "manual"}`): `inprocess` for gavel itself, `native` for any process, and `sigquit` (which kills it) for a Go test binary. A run watched in the UI also samples each process's open files, sockets, ports and connections and reads its environment; refreshing a process's facets checkpoints `sessions.samples` with `{"key"}`.
+- The watchdog's periodic, timeout and final readings, and the goroutines a timed-out Go test binary printed, are `stacks` checkpoints; a test attempt's `process_key`, peak CPU and RSS come from the samples over the attempt.
 - A fixture's detail panel lists its **Traces**: kind, record count, summary, and error. *Open in query* opens the explorer on exactly that fixture's window (`/query/traces/<kind>?stream=…&afterSeq=…&toSeq=…`). Each export format (NDJSON, HAR, cast, …) downloads from `/query/api/v1/traces/<kind>/export`, and *View* renders the window inline.
 
 ```bash
 # Every request one fixture's http_proxy trace saw, as HAR (stream and toSeq from the fixture's trace).
 curl -fsS "http://localhost:8080/query/api/v1/traces/http_proxy/export?stream=<stream>&toSeq=<seq>&format=har" | jq '.log.entries[].request.url'
 ```
+
+A plain `gavel test` has no process capture; pass `--diagnostics` (or `--ui`) to record one. What each kind records, the stack checkpoint reasons, `--profile`/`goProfiles` and fixture benchmark reports are covered in [Traces, profiling and benchmarks](/docs/traces-profiling-benchmarks).
 
 `gavel ui serve` on a saved snapshot reopens that run's store from `<work_dir>/.gavel/traces/<run_id>` read-only, so the same links work after the run. When the store is gone (pruned, or the snapshot was copied without it), the report is still served, without the mount, and `status.traces.unavailable` says why. A store that exists but fails to open is an error.
 

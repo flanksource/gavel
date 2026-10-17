@@ -67,7 +67,13 @@ gavel test --lint --lint-timeout 2m
 | `--lint-timeout` / `test.lintTimeout` | Each linter invocation during `--lint` |
 | `runtime.timeout` | Inherited subprocess deadline, refinable by category and framework |
 
-CLI settings override project defaults. A timeout is reported with the affected results; global timeouts also capture diagnostics before terminating child processes. Inspect `.gavel/` diagnostics or the report's diagnostics view before increasing a deadline.
+CLI settings override project defaults. `--timeout` defaults to `20m`; there is no per-package deadline unless `--test-timeout` or `test.testTimeout` sets one; each linter defaults to `5m`. A timeout is reported with the affected results, and Gavel logs a diagnostics block (its goroutines, active tasks and process tree) before killing child processes. A Go test package that passes its deadline is sent `SIGQUIT` first, and the goroutines it prints land on the timed-out attempt as `stack_trace` and `goroutine_count`.
+
+```bash
+gavel test --diagnostics --test-timeout 5m ./pkg/integration
+```
+
+`--diagnostics` (or `--ui`) records the run's process tree, CPU/RSS samples and stack dumps into its trace store, so a hang can be inspected after the run with `gavel ui serve`; `--process-facets` adds each process's open files, sockets, ports and environment. See [Traces, profiling and benchmarks](/docs/traces-profiling-benchmarks) before increasing a deadline.
 
 ## Configure native execution
 

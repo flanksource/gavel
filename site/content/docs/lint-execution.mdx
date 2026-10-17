@@ -80,6 +80,21 @@ Within a config layer, `runtime` precedes `lint.runtime`, which precedes `lint.l
 
 Secret-scanning rules stay in `.betterleaks.toml` or `.gitleaks.toml`. Gavel discovers and merges those files; `secrets.configs` names additional files, and `secrets.disabled` controls scanner activation.
 
+## Limit linters run outside gavel
+
+```bash
+gavel lint install-shims --timeout 30s --cpu-limit 200 --mem-limit 2GB
+export PATH="$HOME/.gavel/shims:$PATH"
+```
+
+`install-shims` writes PATH shims for `golangci-lint`, `eslint` and `tsc`, so editors and agents that call these tools directly get bounded runs. With a shim in place:
+
+- `golangci-lint run` gets `--fast-only` and `--concurrency`.
+- `eslint` gets a cache kept outside the repository.
+- Each shimmed linter's parallelism (`GOMAXPROCS`, `UV_THREADPOOL_SIZE`) and memory (`GOMEMLIMIT`, `--max-old-space-size`) are capped from the limits.
+
+Each linter is niced. It is killed with exit 124 after the timeout, and with exit 137 when it stays above the CPU limit or exceeds the memory limit. Explicit flags such as `--fast-only=false` or `--no-cache` are respected. `GAVEL_SHIMS=off` bypasses a shim. `gavel lint` always resolves the real binaries behind the shims.
+
 ## Report and combine with tests
 
 ```bash
