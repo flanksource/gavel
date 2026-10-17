@@ -128,3 +128,36 @@ func TestPushPRHeadFastForwardsTheSourceBranch(t *testing.T) {
 	assert.Contains(t, err.Error(), "push the PR's source branch topic")
 	assert.Equal(t, tip, git(t, remote, "rev-parse", "refs/heads/topic"))
 }
+
+func TestARunBranchIsFoundByItsTip(t *testing.T) {
+	dataDir := t.TempDir()
+	org, repo, todo, run := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	bare := filepath.Join(dataDir, "repos", org.String(), repo.String()+".git")
+	work := newWork(t)
+	base := commitFile(t, work, "README.md", "first")
+	git(t, work, "clone", "-q", "--bare", work, bare)
+	sources := &Sources{DataDir: dataDir}
+	pushed := Repo{ID: repo, Org: org, Source: "push", Name: "app"}
+
+	branch := RunBranch(todo, run)
+	assert.Equal(t, "gavel/"+todo.String()[:8]+"-"+run.String()[:8], branch)
+	bundle, tip := runCommits(t, bare, base, "worktree-run")
+	_, err := sources.PushRunCommits(context.Background(), pushed, base, branch, bytes.NewReader(bundle))
+	require.NoError(t, err)
+	other, _ := runCommits(t, bare, base, "other-run")
+	_, err = sources.PushRunCommits(context.Background(), pushed, base, RunBranch(todo, uuid.New()), bytes.NewReader(other))
+	require.NoError(t, err)
+
+	found, err := sources.RunBranchAt(context.Background(), pushed, todo, tip)
+	require.NoError(t, err)
+	assert.Equal(t, branch, found, "the run branch whose tip is the run's head")
+
+	_, err = sources.RunBranchAt(context.Background(), pushed, uuid.New(), tip)
+	require.ErrorIs(t, err, ErrNoRunBranch)
+
+	subjects, err := sources.CommitSubjects(context.Background(), pushed, base, tip)
+	require.NoError(t, err)
+	assert.Len(t, subjects, 1)
+	_, err = sources.CommitSubjects(context.Background(), pushed, "--output=/tmp/x", tip)
+	require.EqualError(t, err, `commit "--output=/tmp/x" can't start with "-"`)
+}

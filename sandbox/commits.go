@@ -19,6 +19,55 @@ const RunBranchPrefix = "gavel/"
 // ErrBranchExists is a run branch that is already there: a run's branch is created once.
 var ErrBranchExists = errors.New("the branch already exists")
 
+// ErrNoRunBranch is a run whose commits are on no run branch.
+var ErrNoRunBranch = errors.New("no run branch holds the run's commits")
+
+// RunBranch is the branch serve puts the commits of run, a sandbox run of todo, on.
+func RunBranch(todo, run uuid.UUID) string {
+	return RunBranchPrefix + todo.String()[:8] + "-" + run.String()[:8]
+}
+
+// RunBranchAt is the branch, of those todo's runs put their commits on in repo, whose tip is
+// head: a run's recorded head names its branch.
+func (s *Sources) RunBranchAt(ctx context.Context, repo Repo, todo uuid.UUID, head string) (string, error) {
+	dir, err := s.sourceDir(ctx, repo)
+	if err != nil {
+		return "", err
+	}
+	refs, err := runGit(ctx, nil, "-C", dir, "for-each-ref", "--format=%(objectname) %(refname:strip=2)",
+		"refs/heads/"+RunBranchPrefix+todo.String()[:8]+"-*")
+	if err != nil {
+		return "", fmt.Errorf("list the run branches of todo %s in %s: %w", todo, repo.label(), err)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(refs), "\n") {
+		if sha, branch, ok := strings.Cut(line, " "); ok && sha == head {
+			return branch, nil
+		}
+	}
+	return "", fmt.Errorf("%w: none of todo %s's branches in %s is at %s", ErrNoRunBranch, todo, repo.label(), head)
+}
+
+// CommitSubjects lists the subjects of the commits base..head in repo, oldest first.
+func (s *Sources) CommitSubjects(ctx context.Context, repo Repo, base, head string) ([]string, error) {
+	for _, commit := range []string{base, head} {
+		if strings.HasPrefix(commit, "-") {
+			return nil, fmt.Errorf("commit %q can't start with \"-\"", commit)
+		}
+	}
+	dir, err := s.sourceDir(ctx, repo)
+	if err != nil {
+		return nil, err
+	}
+	log, err := runGit(ctx, nil, "-C", dir, "log", "--reverse", "--format=%s", base+".."+head, "--")
+	if err != nil {
+		return nil, fmt.Errorf("list the commits %s..%s of %s: %w", base, head, repo.label(), err)
+	}
+	if strings.TrimSpace(log) == "" {
+		return nil, nil
+	}
+	return strings.Split(strings.TrimSpace(log), "\n"), nil
+}
+
 // PushRunCommits creates branch, which must start with RunBranchPrefix and not exist yet, at the
 // one branch bundle holds, after checking it continues from base, the commit the run started at.
 // It returns the branch's commit.

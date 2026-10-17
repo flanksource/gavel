@@ -194,7 +194,7 @@ func (a *RunsAPI) handleCommits(w http.ResponseWriter, r *http.Request, run sand
 	if !ok {
 		return
 	}
-	branch := sandbox.RunBranchPrefix + run.Spec.TodoID.String()[:8] + "-" + run.ID.String()[:8]
+	branch := sandbox.RunBranch(*run.Spec.TodoID, run.ID)
 	sha, err := a.Sources.PushRunCommits(r.Context(), repo, run.Spec.SHA, branch, http.MaxBytesReader(w, r.Body, maxRunCommitsBytes))
 	if err != nil {
 		status := http.StatusBadRequest
