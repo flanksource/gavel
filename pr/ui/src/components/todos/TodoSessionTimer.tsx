@@ -9,6 +9,8 @@ import { todoQuery } from './format';
 import { todoMutationJSON } from './todoMutations';
 import { sessionStatsQueryOptions, todoQueryKeys } from './todoQueries';
 import { VerificationFailureStatus } from './VerificationFailureStatus';
+import { currentAuthMode } from '../../query';
+import { hostControlsVisible } from '../../hostedUI';
 
 // useSessionStats polls /api/todos/session/stats for one agent session. The
 // server serves live runs from the cmux tailer's in-memory cache and reads
@@ -217,16 +219,24 @@ function useCmuxSurface(dir: string, agent: string | undefined, enabled: boolean
   return { surface: query.error ? null : query.data ?? null, loading: query.isFetching };
 }
 
-// CmuxSessionButton is the session header's cmux control: a dropdown that either
-// focuses the live cmux terminal for this session or resumes it in a fresh cmux
-// run, captioned with the resolved workspace/surface the session maps to.
-export function CmuxSessionButton({ dir, sessionId, agent, onResume, resumeDisabled }: {
+interface CmuxSessionButtonProps {
   dir: string;
   sessionId: string;
   agent?: string;
   onResume?: () => void;
   resumeDisabled?: boolean;
-}) {
+}
+
+// CmuxSessionButton is the session header's cmux control: a dropdown that either
+// focuses the live cmux terminal for this session or resumes it in a fresh cmux
+// run, captioned with the resolved workspace/surface the session maps to. The
+// terminal is the host's, so a hosted organization has none.
+export function CmuxSessionButton(props: CmuxSessionButtonProps) {
+  if (!hostControlsVisible(currentAuthMode())) return null;
+  return <CmuxSessionMenu {...props} />;
+}
+
+function CmuxSessionMenu({ dir, sessionId, agent, onResume, resumeDisabled }: CmuxSessionButtonProps) {
   const [open, setOpen] = useState(false);
   const { surface, loading } = useCmuxSurface(dir, agent, open);
   const focusMutation = useMutation({

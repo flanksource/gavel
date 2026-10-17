@@ -4,7 +4,7 @@ import type { AuthMode } from './query';
 import type { Tab } from './routes';
 
 // hostedTabs are the tabs whose routes the hosted allowlist serves.
-const hostedTabs: readonly Tab[] = ['prs'];
+const hostedTabs: readonly Tab[] = ['prs', 'todos'];
 
 export function visibleTabs<T extends Tab>(mode: AuthMode, tabs: readonly T[]): T[] {
   return mode === 'clerk' ? tabs.filter(tab => hostedTabs.includes(tab)) : [...tabs];

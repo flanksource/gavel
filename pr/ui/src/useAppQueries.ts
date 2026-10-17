@@ -26,8 +26,9 @@ export interface AppQueryState {
   refreshProjectsAndProcesses: () => Promise<void>;
 }
 
-// hostData turns on the host's projects, process statuses and git state, which a
-// hosted dashboard doesn't serve.
+// hostData turns on the host's process statuses and git state, which a hosted
+// dashboard doesn't serve. Projects load either way: a hosted dashboard serves its
+// organization's repositories as projects, its todo workspaces.
 export function useAppQueries({ enabled, hostData, initialConfig }: { enabled: boolean; hostData: boolean; initialConfig: SearchConfig }): AppQueryState {
   const queryClient = useQueryClient();
   const hostEnabled = enabled && hostData;
@@ -50,7 +51,7 @@ export function useAppQueries({ enabled, hostData, initialConfig }: { enabled: b
       return projects;
     },
     placeholderData: () => readLocalCache(PROJECTS_CACHE_KEY, parseProjects),
-    enabled: hostEnabled,
+    enabled,
     retry: true,
     retryDelay: attempt => Math.min(1000 * (2 ** attempt), 15_000),
     staleTime: bootstrapStaleTime,

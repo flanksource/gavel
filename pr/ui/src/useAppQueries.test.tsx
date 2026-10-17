@@ -272,13 +272,13 @@ describe('useAppQueries', () => {
     expect(screen.getByTestId('probe').dataset.prError).toBe('');
   });
 
-  // A hosted dashboard serves no projects, processes or git state, so asking for
-  // them would only surface 404s as a sync error.
-  it('reads only pull requests when host data is off', async () => {
+  // A hosted dashboard serves its organization's repositories as projects, but no
+  // processes or git state, so asking for those would only surface 404s.
+  it('reads pull requests and projects, but no host state, when host data is off', async () => {
     const calls: string[] = [];
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       calls.push(String(input));
-      return { ok: true, json: async () => snapshot } as Response;
+      return { ok: true, json: async () => (String(input) === '/api/projects' ? [] : snapshot) } as Response;
     }));
     vi.stubGlobal('EventSource', FakeEventSource);
 
@@ -289,7 +289,7 @@ describe('useAppQueries', () => {
     );
 
     await waitFor(() => expect(screen.getByTestId('hosted').textContent).toBe('1/0'));
-    expect(calls).toEqual(['/api/prs']);
+    await waitFor(() => expect([...calls].sort()).toEqual(['/api/projects', '/api/prs']));
     expect(FakeEventSource.instances.map(stream => stream.url)).toEqual(['/api/prs/stream']);
     expect(screen.getByTestId('hosted').dataset.error).toBe('');
   });

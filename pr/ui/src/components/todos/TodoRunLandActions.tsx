@@ -3,6 +3,8 @@ import { UiGitMerge, UiGitPr } from '@flanksource/clicky-ui/icons';
 import type { LatestRunWorkspace } from './runWorkspace';
 import { TodoRunLandingSummary } from './TodoRunLandingSummary';
 import { useTodoLandMutation, type TodoLandRequest } from './todoMutations';
+import { currentAuthMode } from '../../query';
+import { hostControlsVisible } from '../../hostedUI';
 
 /**
  * Why the run's branch cannot be landed yet, mirroring the server's refusals
@@ -45,17 +47,20 @@ export function TodoRunLandActions({ dir, todoRef, latest }: TodoRunLandActionsP
         <TodoRunLandingSummary landing={landing} />
       ) : (
         <span className="inline-flex items-center gap-1.5" title={blocked || undefined}>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={disabled}
-            loading={land.isPending && land.variables?.via === 'merge'}
-            title={blocked || 'Cherry-pick the run\'s commits onto the checked-out branch'}
-            onClick={() => submit({ via: 'merge' })}
-          >
-            <span className="flex items-center gap-1"><UiGitMerge />Merge into current branch</span>
-          </Button>
+          {/* A merge cherry-picks onto the host's checkout; a hosted run lands as a pull request. */}
+          {hostControlsVisible(currentAuthMode()) && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={disabled}
+              loading={land.isPending && land.variables?.via === 'merge'}
+              title={blocked || 'Cherry-pick the run\'s commits onto the checked-out branch'}
+              onClick={() => submit({ via: 'merge' })}
+            >
+              <span className="flex items-center gap-1"><UiGitMerge />Merge into current branch</span>
+            </Button>
+          )}
           <SplitButton
             variant="outline"
             size="sm"

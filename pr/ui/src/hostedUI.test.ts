@@ -11,8 +11,8 @@ describe('hosted UI', () => {
     expect(tabFor('none', 'sessions')).toBe('sessions');
   });
 
-  it('shows a hosted org only the PR tab and no host controls', () => {
-    expect(visibleTabs('clerk', allTabs)).toEqual(['prs']);
+  it('shows a hosted org only the PR and todo tabs and no host controls', () => {
+    expect(visibleTabs('clerk', allTabs)).toEqual(['prs', 'todos']);
     expect(hostControlsVisible('clerk')).toBe(false);
   });
 
@@ -32,8 +32,9 @@ describe('hosted UI', () => {
   });
 
   it('opens the PR tab for a hosted link to a host-only tab', () => {
-    for (const tab of allTabs) {
+    for (const tab of allTabs.filter(tab => tab !== 'todos')) {
       expect(tabFor('clerk', tab)).toBe('prs');
     }
+    expect(tabFor('clerk', 'todos')).toBe('todos');
   });
 });
