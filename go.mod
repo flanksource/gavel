@@ -6,7 +6,7 @@ require (
 	github.com/flanksource/captain v0.0.70-0.20261014132911-cc3d9c2d4798
 	github.com/flanksource/clicky v1.21.78-0.20261014132547-6063fb70846b
 	github.com/flanksource/commons v1.60.1
-	github.com/flanksource/commons-db v0.1.57
+	github.com/flanksource/commons-db v0.1.58
 	github.com/flanksource/gomplate/v3 v3.24.90
 	github.com/flanksource/is-healthy v1.0.92 // indirect
 	github.com/flanksource/kubectl-neat v1.0.4 // indirect

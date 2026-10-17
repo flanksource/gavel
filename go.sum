@@ -344,8 +344,8 @@ github.com/flanksource/clicky/aichat v1.21.77 h1:yOmj64B6YYomadg0CCov7IcvFRW1bGP
 github.com/flanksource/clicky/aichat v1.21.77/go.mod h1:L+PcyIRTUyz18sH8R6QUmmU+n/49EHmRZPSDuDs7dPU=
 github.com/flanksource/commons v1.60.1 h1:wSSZif0P7XvGLDq7/R4q5Ip3tgmBIg//eMo9drpNi7c=
 github.com/flanksource/commons v1.60.1/go.mod h1:S39cViO2i/cx6qufygtG4kGD8qLNvS6abBuzlty+mMk=
-github.com/flanksource/commons-db v0.1.57 h1:5EJ6bNF7MaBsKOkH2T0vr+683g9pWDzDPSm8Hytfjoc=
-github.com/flanksource/commons-db v0.1.57/go.mod h1:/vaQ8vYZAC4YxM47PxmexoINrBmhiBEonLlmRtJRb4Y=
+github.com/flanksource/commons-db v0.1.58 h1:BfNGJMfkR0xtYZ2mMEeHuKNt5D3k31aa0Ep1F2gRrsc=
+github.com/flanksource/commons-db v0.1.58/go.mod h1:/vaQ8vYZAC4YxM47PxmexoINrBmhiBEonLlmRtJRb4Y=
 github.com/flanksource/deps v1.0.46 h1:+JCAghe8ELLm+xnMAk4AuTkavcAxd4IyvYukyk/5ypc=
 github.com/flanksource/deps v1.0.46/go.mod h1:z7SozLaUD4TLemXxJytW67wGjCeQVLm2V10tdSg3pA4=
 github.com/flanksource/deps/start v0.0.0-20261009090519-f5045eccb6ab h1:WeErWUVMf6g0Rk87WjvHelWDofT4KCvCX1JPPnNQTDI=
