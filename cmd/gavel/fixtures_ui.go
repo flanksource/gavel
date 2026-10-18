@@ -13,6 +13,7 @@ type fixtureUIOptions struct {
 	UI          bool
 	Addr        string
 	Detach      bool
+	Dev         bool
 	AutoStop    time.Duration
 	IdleTimeout time.Duration
 }
@@ -27,6 +28,7 @@ func fixtureUIRunOptions(request fixtureUIRunRequest) (testrunner.RunOptions, bo
 		WorkDir:       request.Runner.WorkDir,
 		UI:            request.UI.UI,
 		Addr:          request.UI.Addr,
+		Dev:           request.UI.Dev,
 		Fixtures:      true,
 		FixtureFiles:  append([]string(nil), request.Runner.Paths...),
 		FixturesOnly:  true,
@@ -46,6 +48,7 @@ func fixtureUIRunOptions(request fixtureUIRunRequest) (testrunner.RunOptions, bo
 func init() {
 	fixturesCmd.Flags().BoolVar(&fixturesUI.UI, "ui", false, "Launch a browser with the live fixture execution tree")
 	fixturesCmd.Flags().StringVar(&fixturesUI.Addr, "addr", "0.0.0.0", "Interface to bind the fixture UI HTTP server")
+	fixturesCmd.Flags().BoolVar(&fixturesUI.Dev, "dev", false, "With --ui, serve the UI from the testrunner/ui Vite dev server, with clicky-ui from the sibling checkout's source (requires a source checkout)")
 	fixturesCmd.Flags().BoolVar(&fixturesUI.Detach, "detach", false, "With --ui, keep serving the completed fixture run in a detached process")
 	fixturesCmd.Flags().DurationVar(&fixturesUI.AutoStop, "auto-stop", 0, "With --ui --detach, hard deadline for the detached UI server")
 	fixturesCmd.Flags().DurationVar(&fixturesUI.IdleTimeout, "idle-timeout", 0, "With --ui --detach, stop serving after this long without HTTP requests")

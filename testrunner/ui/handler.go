@@ -40,6 +40,8 @@ type Server struct {
 	// processSessions are the running process capture's sessions, nil once
 	// the run ended.
 	processSessions *traces.ProcessSessions
+	// devProxy, when set, serves the page from a Vite dev server (SetDevProxy).
+	devProxy http.Handler
 
 	rerunMu       sync.Mutex
 	rerunFn       RerunFunc
@@ -340,6 +342,10 @@ func (s *Server) handleBenchJSON(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) handleRoute(w http.ResponseWriter, r *http.Request) {
+	if proxy := s.devProxyHandler(); proxy != nil {
+		s.serveDev(w, r, proxy)
+		return
+	}
 	req, ok := parseRouteRequest(r)
 	if !ok {
 		http.NotFound(w, r)

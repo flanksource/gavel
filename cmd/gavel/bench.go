@@ -97,7 +97,7 @@ func runBenchRun(cmd *cobra.Command, args []string) error {
 	}
 
 	if benchRunUI {
-		srv, _, err := startTestUI(benchRunUIAddr)
+		srv, _, err := startTestUI(testUIOptions{Addr: benchRunUIAddr})
 		if err != nil {
 			return err
 		}
@@ -190,7 +190,7 @@ func runBenchCompare(cmd *cobra.Command, args []string) error {
 	}
 
 	if benchCompareUI {
-		srv, _, err := startTestUI(benchCompareUIAddr)
+		srv, _, err := startTestUI(testUIOptions{Addr: benchCompareUIAddr})
 		if err != nil {
 			return err
 		}

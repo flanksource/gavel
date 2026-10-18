@@ -40,6 +40,7 @@ type UIServeOptions struct {
 	AutoStop     time.Duration `json:"-"`
 	IdleTimeout  time.Duration `json:"-"`
 	URLFile      string        `flag:"url-file" help:"Write the bound URL to this path atomically so shell scripts can read it back."`
+	Dev          bool          `flag:"dev" help:"Serve the page from the testrunner/ui Vite dev server, with clicky-ui from the sibling checkout's source (requires a source checkout)"`
 }
 
 // uiServeDurations holds the duration flags attached imperatively to the
@@ -98,6 +99,14 @@ func runUIServe(opts UIServeOptions) (any, error) {
 		}
 	} else {
 		srv.MarkDone()
+	}
+	if opts.Dev {
+		proxy, err := devProxy(testRunnerDev, "")
+		if err != nil {
+			listener.Close() //nolint:errcheck
+			return nil, err
+		}
+		srv.SetDevProxy(proxy)
 	}
 
 	addr := listener.Addr().(*net.TCPAddr)
