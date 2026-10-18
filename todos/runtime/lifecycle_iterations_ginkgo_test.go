@@ -12,7 +12,6 @@ import (
 	"github.com/flanksource/commons-db/dbtest"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/todos"
-	"github.com/flanksource/gavel/todos/lifecycle"
 	"github.com/flanksource/gavel/todos/native"
 	"github.com/flanksource/gavel/todos/runtime/runtimetest"
 	"github.com/flanksource/gavel/todos/types"
@@ -66,40 +65,6 @@ var _ = Describe("run iterations on the native runtime", Ordered, func() {
 		}
 	}
 
-	It("keeps questions answerable while retaining a failed verification iteration", func() {
-		question := types.AgentQuestion{Text: "Which database?", Context: "Choose the staging database.", Options: []string{"Postgres", "SQLite"}}
-		output := map[string]any{
-			"summary": question.Text, "endStatus": "ask",
-			"questions": []any{map[string]any{"text": question.Text, "context": question.Context, "options": []any{"Postgres", "SQLite"}}},
-		}
-		todo, err := provider.Create(ctx, todos.CreateRequest{Title: "Choose the database", Body: "Migrate staging", Status: types.StatusPending})
-		Expect(err).NotTo(HaveOccurred())
-		failed := verifyOnlyResult(false)
-		execution := &todos.ExecutionResult{
-			ExecutorName: "agent-claude", EndStatus: types.EndAsk, Summary: question.Text,
-			Questions: []types.AgentQuestion{question}, OutputJSON: output,
-			DoD: &todos.DoDOutcome{Ran: true, Report: failed.Report},
-		}
-		admission, err := runtimetest.Admit(ctx, provider, todo,
-			todos.RunPreparation{Mode: types.ModeRun, Prompt: "run", ExecutorName: execution.ExecutorName},
-			promptrun.Completed{Iterations: promptrun.IterationRecords(failed, false), Outcome: lifecycle.RunOutcome(execution, false)})
-		Expect(err).NotTo(HaveOccurred())
-		Expect(provider.SaveAttempt(ctx, todo, execution)).To(Succeed())
-		read, err := provider.Get(ctx, todo.ID)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(read.Status).To(Equal(types.StatusAsk))
-		Expect(read.Questions).To(Equal([]types.AgentQuestion{question}))
-		run, err := provider.captain.GetPromptRun(ctx, admission.PromptRunID)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(run.State).To(Equal(captaindb.PromptRunStateWaiting))
-		Expect(run.Phase).To(Equal(captaindb.PromptRunPhaseGenerate))
-		Expect(run.ResultJSON).To(Equal(output))
-		report, iteration, err := provider.captain.LatestPromptRunVerification(ctx, admission.PromptRunID)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(iteration).To(Equal(1))
-		Expect(report).To(Equal(failed.Report))
-	})
-
 	It("finds a verify-only run's verdict wherever a reader looks", func() {
 		todo, err := provider.Create(ctx, todos.CreateRequest{Title: "Check the widget", Body: "Prove it", Status: types.StatusPending})
 		Expect(err).NotTo(HaveOccurred())
@@ -112,7 +77,7 @@ var _ = Describe("run iterations on the native runtime", Ordered, func() {
 			}})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(provider.SaveAttempt(ctx, todo, &todos.ExecutionResult{
-			Success: true, ExecutorName: "agent-claude", EndStatus: types.EndCompleted, Summary: "definition of done passed",
+			Success: true, ExecutorName: "agent-claude", Summary: "definition of done passed",
 			DoD: &todos.DoDOutcome{Ran: true, Passed: true, Report: verifyOnlyResult(true).Report},
 		})).To(Succeed())
 

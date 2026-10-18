@@ -165,7 +165,7 @@ func TestProviderNativeLifecycleIntegration(t *testing.T) {
 	// The run as promptrun.Run leaves it: admitted, started on the provider's
 	// session, and filed succeeded before the attempt is applied.
 	runResult := &todos.ExecutionResult{
-		Success: true, ExecutorName: "codex", EndStatus: types.EndCompleted,
+		Success: true, ExecutorName: "codex",
 		Summary: "implementation finished without explicit verification",
 	}
 	preparation, err := runtimetest.Admit(t.Context(), provider, runTodo, todos.RunPreparation{
@@ -324,7 +324,7 @@ func TestProviderNativeLifecycleIntegration(t *testing.T) {
 	})
 	require.NoError(t, err)
 	failedPlanResult := &todos.ExecutionResult{
-		Success: false, ExecutorName: "claude", EndStatus: types.EndFailed, ErrorMessage: "planning failed",
+		Success: false, ExecutorName: "claude", ErrorMessage: "planning failed",
 		Plan: &types.PlanResult{Status: types.PlanNew, Content: "# Partial and invalid plan"},
 	}
 	preparation, err = runtimetest.Admit(t.Context(), provider, failedPlanTodo,
@@ -346,7 +346,7 @@ func TestProviderNativeLifecycleIntegration(t *testing.T) {
 	require.NoError(t, err)
 	planMarkdown := "# Native plan\n\n1. Persist Captain revisions.\n2. Project Gavel state."
 	planResult := &todos.ExecutionResult{
-		Success: true, ExecutorName: "claude", EndStatus: types.EndCompleted,
+		Success: true, ExecutorName: "claude",
 		Summary: "plan ready for review",
 		Plan:    &types.PlanResult{Status: types.PlanNew, Content: planMarkdown},
 	}
@@ -375,7 +375,7 @@ func TestProviderNativeLifecycleIntegration(t *testing.T) {
 	assert.Equal(t, types.StatusReview, planTodo.Status)
 	revisedMarkdown := planMarkdown + "\n3. Add rollback steps."
 	revisedResult := &todos.ExecutionResult{
-		Success: true, ExecutorName: "claude", EndStatus: types.EndCompleted,
+		Success: true, ExecutorName: "claude",
 		Summary: "plan revised",
 		Plan:    &types.PlanResult{Status: types.PlanUpdated, Content: revisedMarkdown},
 	}
@@ -412,7 +412,7 @@ func TestProviderNativeLifecycleIntegration(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, humanEditedMarkdown, approvedPlan)
 	implementResult := &todos.ExecutionResult{
-		Success: true, ExecutorName: "claude", EndStatus: types.EndCompleted,
+		Success: true, ExecutorName: "claude",
 		Summary: "implemented approved plan",
 	}
 	preparation, err = runtimetest.Admit(t.Context(), provider, planTodo, todos.RunPreparation{
