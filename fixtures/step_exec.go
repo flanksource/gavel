@@ -161,6 +161,9 @@ func executeStep(ctx context.Context, kind Kind, step *StepContext) FixtureResul
 	var waited *WaitReport
 	if policy != nil && isPassingStatus(result.Status) {
 		report, last := waitOn(ctx, kind.(Observer), step, outcome.Handle, *policy)
+		if causer, ok := kind.(FailureCauser); ok && report.Outcome != WaitSatisfied {
+			report.Cause = causer.FailureCause(report.Outputs)
+		}
 		waited = &report
 		if last != nil {
 			outputs = last
@@ -244,9 +247,16 @@ func applyWait(result FixtureResult, report WaitReport) FixtureResult {
 	if report.Outcome == WaitSatisfied {
 		return result
 	}
-	result.CELExpression = report.Policy.Until
-	result.CELTrace = report.Trace
+	result.CELExpression, result.CELTrace = report.Expression, report.Trace
 	result.TimedOut = report.Outcome == WaitTimeout
+	if report.celVars != nil {
+		// As in applyStepCEL: the fixture Env never reaches reports.
+		result.CELVars = maps.Clone(report.celVars)
+		delete(result.CELVars, "env")
+	}
+	if report.Cause != "" {
+		return result.Failf("%s\n(%s)", report.Cause, report.Error)
+	}
 	return result.Failf("%s", report.Error)
 }
 

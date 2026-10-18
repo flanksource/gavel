@@ -46,6 +46,14 @@ type DefaultWaiter interface {
 	DefaultWait(step StepSpec) *WaitPolicy
 }
 
+// FailureCauser is implemented by observing kinds that can name, from a wait's
+// last outputs, the domain reason it did not succeed (a todo run's recorded
+// error). The step's failure message leads with it, ahead of the wait's own
+// condition; an empty cause adds nothing.
+type FailureCauser interface {
+	FailureCause(outputs map[string]any) string
+}
+
 // BackgroundKind is implemented by kinds that can run for the rest of the
 // fixture (`background: true`) — a page watcher, a long-lived browser. Start
 // returns once the step is running; its verdict is collected at teardown.

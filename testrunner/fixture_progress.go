@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"time"
 
 	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/testrunner/parsers"
@@ -12,9 +13,12 @@ import (
 // mergeFixtureResultDetails enriches the progress tree's tests with what each
 // fixture's final result recorded: output, context, profiles and, merged
 // into the progress node's detail, the typed step record (step, attempts, …)
-// fixtures.ResultDetail projects for the verification report.
+// fixtures.ResultDetail projects for the verification report. A background
+// step has two results at its location — the one its start landed on the step
+// and the verdict its teardown attached to the file — and the teardown
+// verdict, which carries what the step observed (a watcher's events), is laid
+// over the start result.
 func mergeFixtureResultDetails(tests []parsers.Test, tree *fixtures.FixtureNode, workDir string) error {
-	byLocation := make(map[string][]parsers.Test)
 	location := func(test parsers.Test) string {
 		file := test.File
 		if !filepath.IsAbs(file) {
@@ -22,19 +26,15 @@ func mergeFixtureResultDetails(tests []parsers.Test, tree *fixtures.FixtureNode,
 		}
 		return fmt.Sprintf("%s:%d:%s", filepath.Clean(file), test.Line, test.Name)
 	}
-	var collect func([]parsers.Test)
-	collect = func(items []parsers.Test) {
-		for _, test := range items {
-			if len(test.Children) > 0 {
-				collect(test.Children)
-			} else if test.Context != nil {
-				key := location(test)
-				byLocation[key] = append(byLocation[key], test)
-			}
-		}
-	}
+	results, teardowns := map[string][]parsers.Test{}, map[string][]parsers.Test{}
 	for _, child := range tree.Children {
-		collect(fixtureNodeToTests(child))
+		collectFixtureResults(child, "", func(test parsers.Test, teardown bool) {
+			queue := results
+			if teardown {
+				queue = teardowns
+			}
+			queue[location(test)] = append(queue[location(test)], test)
+		})
 	}
 	var enrich func([]parsers.Test) error
 	enrich = func(items []parsers.Test) error {
@@ -42,14 +42,12 @@ func mergeFixtureResultDetails(tests []parsers.Test, tree *fixtures.FixtureNode,
 			test := &items[i]
 			if test.Fixture != nil && test.File != "" {
 				key := location(*test)
-				if matches := byLocation[key]; len(matches) > 0 {
-					result := matches[0]
-					byLocation[key] = matches[1:]
-					test.Stdout, test.Stderr, test.Context = result.Stdout, result.Stderr, result.Context
-					test.Message, test.FixtureProfile = result.Message, result.FixtureProfile
-					test.SQLProfile = result.SQLProfile
-					if err := mergeDetail(test, result.Detail); err != nil {
-						return err
+				for _, queue := range []map[string][]parsers.Test{results, teardowns} {
+					if matches := queue[key]; len(matches) > 0 {
+						queue[key] = matches[1:]
+						if err := applyFixtureResult(test, matches[0]); err != nil {
+							return err
+						}
 					}
 				}
 			}
@@ -60,6 +58,28 @@ func mergeFixtureResultDetails(tests []parsers.Test, tree *fixtures.FixtureNode,
 		return nil
 	}
 	return enrich(tests)
+}
+
+// collectFixtureResults visits every result node under node as
+// fixtureNodeToTests renders it, flagging the verdicts teardown attached
+// (fixtures marks them Metadata["teardown"]).
+func collectFixtureResults(node *fixtures.FixtureNode, inheritedFile string, visit func(test parsers.Test, teardown bool)) {
+	if node.Results != nil {
+		teardown, _ := node.Results.Metadata["teardown"].(bool)
+		visit(fixtureNodeToTestsWithFile(node, inheritedFile)[0], teardown)
+		return
+	}
+	file := fixtureNodeFile(node, inheritedFile)
+	for _, child := range node.Children {
+		collectFixtureResults(child, file, visit)
+	}
+}
+
+func applyFixtureResult(test *parsers.Test, result parsers.Test) error {
+	test.Stdout, test.Stderr, test.Context = result.Stdout, result.Stderr, result.Context
+	test.Message, test.FixtureProfile = result.Message, result.FixtureProfile
+	test.SQLProfile = result.SQLProfile
+	return mergeDetail(test, result.Detail)
 }
 
 // mergeDetail lays a result's detail (fixtures.ResultDetail) over the
@@ -149,6 +169,24 @@ func executionSnapshotToTests(snapshot fixtures.ExecutionSnapshot) []parsers.Tes
 	return tests
 }
 
+// executionDetail is an ExecutionNode as its test's display detail: everything
+// but its key, which is already the test's TaskID, and its children, which are
+// already the test's own.
+type executionDetail struct {
+	Name       string                  `json:"name"`
+	Kind       fixtures.ExecutionKind  `json:"kind"`
+	State      fixtures.ExecutionState `json:"state"`
+	Origin     *fixtures.FixtureOrigin `json:"origin,omitempty"`
+	StartedAt  *time.Time              `json:"started_at,omitempty"`
+	FinishedAt *time.Time              `json:"finished_at,omitempty"`
+	Duration   time.Duration           `json:"duration,omitempty"`
+	Done       int                     `json:"done,omitempty"`
+	Total      int                     `json:"total,omitempty"`
+	Error      string                  `json:"error,omitempty"`
+	PIDs       []int                   `json:"pids,omitempty"`
+	Traces     []parsers.TraceResult   `json:"traces,omitempty"`
+}
+
 func executionNodeToTest(node *fixtures.ExecutionNode) parsers.Test {
 	test := parsers.Test{
 		Name:      node.Name,
@@ -156,7 +194,11 @@ func executionNodeToTest(node *fixtures.ExecutionNode) parsers.Test {
 		TaskID:    node.Key,
 		Duration:  node.Duration,
 		Message:   node.Error,
-		Detail:    *node,
+		Detail: executionDetail{
+			Name: node.Name, Kind: node.Kind, State: node.State, Origin: node.Origin,
+			StartedAt: node.StartedAt, FinishedAt: node.FinishedAt, Duration: node.Duration,
+			Done: node.Done, Total: node.Total, Error: node.Error, PIDs: node.PIDs, Traces: node.Traces,
+		},
 	}
 	if node.Origin != nil {
 		test.File = node.Origin.File

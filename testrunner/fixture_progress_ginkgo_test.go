@@ -62,6 +62,31 @@ var _ = Describe("fixture progress adapter", func() {
 		Expect(executionSnapshotToTests(snapshot)[0].Context).To(Equal(parsers.FixtureContext{Traces: windows}))
 	})
 
+	It("keeps the internal progress key out of a node's detail; it is the TaskID", func() {
+		started, finished := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC), time.Date(2026, 1, 2, 3, 4, 7, 0, time.UTC)
+		key := "fixtures/codex.fixture.yaml||file|table:0|row:0|line:0|ordinal:0/codex.fixture.yaml|lifecycle|step|table:0|row:8|line:0|ordinal:7"
+		snapshot := fixtures.ExecutionSnapshot{Root: &fixtures.ExecutionNode{
+			Key: "fixtures", Kind: fixtures.ExecutionKindRoot, State: fixtures.ExecutionFailed,
+			Children: []*fixtures.ExecutionNode{{
+				Key: key, Name: "watch", Kind: fixtures.ExecutionKindCommand, State: fixtures.ExecutionFailed,
+				Origin:    &fixtures.FixtureOrigin{File: "codex.fixture.yaml", SectionPath: "lifecycle", Kind: "step", RowIndex: 8},
+				StartedAt: &started, FinishedAt: &finished, Duration: 2 * time.Second, Error: "watcher exited",
+			}},
+		}}
+
+		test := executionSnapshotToTests(snapshot)[0]
+		raw, err := json.Marshal(test.Detail)
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(test.TaskID).To(Equal(key))
+		Expect(raw).To(MatchJSON(`{
+			"name": "watch", "kind": "command", "state": "failed",
+			"origin": {"file": "codex.fixture.yaml", "section_path": "lifecycle", "kind": "step", "row_index": 8},
+			"started_at": "2026-01-02T03:04:05Z", "finished_at": "2026-01-02T03:04:07Z",
+			"duration": 2000000000, "error": "watcher exited"
+		}`))
+	})
+
 	It("projects a finished step's attempts into its detail, as the verification report does", func() {
 		file := filepath.Join(GinkgoT().TempDir(), "retry.fixture.yaml")
 		origin := &fixtures.FixtureOrigin{File: file, Line: 7}
@@ -83,12 +108,12 @@ var _ = Describe("fixture progress adapter", func() {
 		}}}
 
 		tests := executionSnapshotToTests(snapshot)
-		mergeFixtureResultDetails(tests, tree, "")
+		Expect(mergeFixtureResultDetails(tests, tree, "")).To(Succeed())
 
 		raw, err := json.Marshal(tests[0].Detail)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(raw).To(MatchJSON(`{
-			"key": "flaky", "name": "flaky", "kind": "command", "state": "passed",
+			"name": "flaky", "kind": "command", "state": "passed",
 			"origin": {"file": ` + strconv.Quote(file) + `, "line": 7},
 			"step": {"id": "flaky", "kind": "exec"},
 			"attempts": [
@@ -96,6 +121,46 @@ var _ = Describe("fixture progress adapter", func() {
 				 "result": {"name": "flaky", "framework": "fixture", "failed": true}},
 				{"attempt": 2, "status": "passed", "durationMs": 9}
 			]
+		}`))
+	})
+
+	It("lays a background step's teardown verdict, with its watcher events, over its start result", func() {
+		file := filepath.Join(GinkgoT().TempDir(), "codex.fixture.yaml")
+		stepOrigin := &fixtures.FixtureOrigin{File: file, SectionPath: "lifecycle", Kind: "step", RowIndex: 8}
+		snapshot := fixtures.ExecutionSnapshot{Root: &fixtures.ExecutionNode{
+			Key: "fixtures", Kind: fixtures.ExecutionKindRoot, State: fixtures.ExecutionPassed,
+			Children: []*fixtures.ExecutionNode{{
+				Key: "file", Name: "codex.fixture.yaml", Kind: fixtures.ExecutionKindFile, State: fixtures.ExecutionPassed,
+				Origin: &fixtures.FixtureOrigin{File: file},
+				Children: []*fixtures.ExecutionNode{{
+					Key: "watch-key", Name: "watch", Kind: fixtures.ExecutionKindCommand, State: fixtures.ExecutionPassed, Origin: stepOrigin,
+				}},
+			}},
+		}}
+		step := map[string]any{"id": "watch", "kind": "playwright"}
+		started := &fixtures.FixtureResult{Name: "watch", Status: task.StatusPASS, Metadata: map[string]any{
+			"step": step, "background": true, "outputs": map[string]any{}, "exports": map[string]any{},
+		}}
+		verdict := fixtures.FixtureResult{Name: "watch", Status: task.StatusPASS, Stdout: "watcher stdout", Metadata: map[string]any{
+			"step": step, "background": true, "outputs": map[string]any{}, "exports": map[string]any{}, "teardown": true,
+			"events": []map[string]any{{"type": "console", "text": "boom"}},
+		}}
+		fileNode := &fixtures.FixtureNode{Name: "codex.fixture.yaml", Type: fixtures.FileNode, Origin: &fixtures.FixtureOrigin{File: file}}
+		fileNode.AddChild(&fixtures.FixtureNode{Name: "watch", Type: fixtures.TestNode, Origin: stepOrigin, Results: started})
+		fileNode.AddChild(&fixtures.FixtureNode{Name: verdict.Name, Type: fixtures.TestNode, Results: &verdict})
+
+		tests := executionSnapshotToTests(snapshot)
+		Expect(mergeFixtureResultDetails(tests, &fixtures.FixtureNode{Children: []*fixtures.FixtureNode{fileNode}}, "")).To(Succeed())
+
+		watch := tests[0].Children[0]
+		raw, err := json.Marshal(watch.Detail)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(watch.Stdout).To(Equal("watcher stdout"))
+		Expect(raw).To(MatchJSON(`{
+			"name": "watch", "kind": "command", "state": "passed",
+			"origin": {"file": ` + strconv.Quote(file) + `, "section_path": "lifecycle", "kind": "step", "row_index": 8},
+			"step": {"id": "watch", "kind": "playwright"}, "background": true, "outputs": {}, "exports": {},
+			"events": [{"type": "console", "text": "boom"}]
 		}`))
 	})
 })

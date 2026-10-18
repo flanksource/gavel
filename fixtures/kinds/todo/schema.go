@@ -19,7 +19,7 @@ const todoSchema = `{
         "body": {"type": "string"},
         "labels": {"type": "array", "items": {"type": "string"}},
         "status": {"type": "string", "description": "Initial status; the server defaults to draft (pending with autoSave)."},
-        "triage": {"type": "boolean", "description": "Start a triage.new run after saving; the step then waits for it by default."},
+        "step": {"type": "string", "minLength": 1, "description": "Lifecycle step to start after saving, one GET /api/todos/new/steps lists for the new todo; the step then waits for its run by default."},
         "autoSave": {"type": "boolean"}
       }
     },

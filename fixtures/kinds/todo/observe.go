@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/url"
-	"strings"
 )
 
 // todoState is one observation of a TODO: the item as GET /api/todos/item
@@ -56,20 +55,18 @@ func (s todoState) outputs() map[string]any {
 	return map[string]any{
 		"id":       s.ID,
 		"todo":     s.Item,
-		"triage":   attemptSummary(s.latestAttempt(isTriageStep)),
+		"run":      attemptSummary(s.latestAttempt()),
 		"attempts": s.Attempts,
 	}
 }
 
-// latestAttempt is the newest attempt whose step matches.
-func (s todoState) latestAttempt(match func(step string) bool) map[string]any {
-	for _, raw := range s.Attempts {
-		attempt, ok := raw.(map[string]any)
-		if ok && match(stringField(attempt, "step")) {
-			return attempt
-		}
+// latestAttempt is the newest attempt, the run a create's step started.
+func (s todoState) latestAttempt() map[string]any {
+	if len(s.Attempts) == 0 {
+		return nil
 	}
-	return nil
+	attempt, _ := s.Attempts[0].(map[string]any)
+	return attempt
 }
 
 // attemptByRun is the attempt of one admitted prompt run.
@@ -82,13 +79,11 @@ func (s todoState) attemptByRun(promptRunID string) (map[string]any, error) {
 	return nil, fmt.Errorf("admitted prompt run %s is not among TODO %s's %d attempts", promptRunID, s.ID, len(s.Attempts))
 }
 
-func isTriageStep(step string) bool { return step == "triage" || strings.HasPrefix(step, "triage.") }
-
 // attemptSummary projects an attempt for CEL. `state` is captain's display
 // status (running, planning, ask, zombie, completed, failed, cancelled) — the
 // vocabulary the dashboard shows; `runState` is the prompt run's own state
 // (pending, running, waiting, succeeded, failed, cancelled). A missing attempt
-// is found=false with empty strings, so `triage.state == 'completed'` is false
+// is found=false with empty strings, so `run.state == 'completed'` is false
 // rather than a CEL error before the run is linked.
 func attemptSummary(attempt map[string]any) map[string]any {
 	return map[string]any{

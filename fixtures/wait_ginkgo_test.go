@@ -122,22 +122,34 @@ var _ = Describe("waiter", func() {
 			Backoff: &Backoff{Factor: 2}, Timeout: dur(time.Minute)}).run(context.Background())
 
 		Expect(report.Outcome).To(Equal(WaitSatisfied))
+		Expect(report.Expression).To(Equal("status == 'done'"))
 		Expect(report.DurationMs).To(Equal(int64(3000)))
 		Expect(report.Outputs).To(Equal(map[string]any{"status": "done"}))
 		Expect(clock.slept).To(Equal([]time.Duration{time.Second, 2 * time.Second}))
 		Expect(outputs).To(HaveKeyWithValue("status", "done"))
 	})
 
-	It("stops early when failWhen holds, with the CEL trace of the verdict", func() {
+	It("stops early when failWhen holds, naming failWhen as the deciding expression with its trace and variables", func() {
 		statuses = []string{"running", "failed", "done"}
 		report, _ := newWaiter(WaitPolicy{Until: "status == 'done'", FailWhen: "status == 'failed'",
 			Interval: dur(time.Second), Timeout: dur(time.Minute)}).run(context.Background())
 
 		Expect(report.Outcome).To(Equal(WaitFailed))
+		Expect(report.Expression).To(Equal("status == 'failed'"))
 		Expect(report.DurationMs).To(Equal(int64(1000)))
 		Expect(report.Outputs).To(Equal(map[string]any{"status": "failed"}))
 		Expect(report.Error).To(ContainSubstring("status == 'failed'"))
 		Expect(report.Trace).To(ContainSubstring("failed"))
+		Expect(report.celVars).To(Equal(map[string]any{"status": "failed"}))
+	})
+
+	It("names failWhen as the deciding expression when it cannot be evaluated", func() {
+		statuses = []string{"running"}
+		report, _ := newWaiter(WaitPolicy{Until: "status == 'done'", FailWhen: "missing.field == 'x'",
+			Interval: dur(time.Second), Timeout: dur(time.Minute)}).run(context.Background())
+
+		Expect([]string{report.Outcome, report.Expression}).To(Equal([]string{WaitFailed, "missing.field == 'x'"}))
+		Expect(report.Error).To(ContainSubstring("wait failWhen missing.field"))
 	})
 
 	It("times out at the deadline carrying the last observed outputs", func() {
@@ -146,6 +158,7 @@ var _ = Describe("waiter", func() {
 			Timeout: dur(3 * time.Second)}).run(context.Background())
 
 		Expect(report.Outcome).To(Equal(WaitTimeout))
+		Expect(report.Expression).To(Equal("status == 'done'"))
 		Expect(observed).To(Equal(4))
 		Expect(report.DurationMs).To(Equal(int64(3000)))
 		Expect(report.Outputs).To(HaveKeyWithValue("status", "running"))
@@ -186,7 +199,7 @@ var _ = Describe("waiter", func() {
 		report, _ := newWaiter(WaitPolicy{Until: "missing.field == 'x'", Interval: dur(time.Second),
 			Timeout: dur(time.Minute)}).run(context.Background())
 
-		Expect(report.Outcome).To(Equal(WaitFailed))
+		Expect([]string{report.Outcome, report.Expression}).To(Equal([]string{WaitFailed, "missing.field == 'x'"}))
 		Expect(report.Error).To(ContainSubstring("missing.field"))
 	})
 
@@ -312,6 +325,52 @@ var _ = Describe("Wait", func() {
 		invalid.Jitter = "150%"
 		_, err := Wait(context.Background(), WaitOptions{Policy: invalid, Probe: probe})
 		Expect(err).To(MatchError(ContainSubstring(`jitter "150%"`)))
+	})
+})
+
+// causingKind is an observing kind that names the domain cause of a wait
+// that did not succeed: the observed `reason`.
+type causingKind struct{ observingKind }
+
+func (causingKind) FailureCause(outputs map[string]any) string {
+	reason, _ := outputs["reason"].(string)
+	return reason
+}
+
+var _ = Describe("a step whose wait does not succeed", func() {
+	observing := func(observed map[string]any) causingKind {
+		return causingKind{observingKind{
+			fakeKind: fakeKind{name: "launcher", execute: passing(nil, nil)},
+			observe:  func(context.Context, *StepContext, any) (map[string]any, error) { return observed, nil },
+		}}
+	}
+	const until, failWhen = "state == 'done'", "state == 'failed'"
+	const cause = "aimock: no scenario rule matched this request"
+
+	It("leads its message with the kind's cause and records failWhen with its variables, minus env", func() {
+		useKind(observing(map[string]any{"state": "failed", "reason": cause}))
+
+		result := runSteps(StepSpec{ID: "triaged", Kind: "launcher",
+			Wait: &WaitPolicy{Until: until, FailWhen: failWhen, Interval: dur(time.Millisecond), Timeout: dur(time.Second)}})[0]
+
+		Expect(result.Status).To(Equal(task.StatusFAIL))
+		Expect(result.Error).To(Equal(cause + "\n(wait failWhen " + failWhen + " is true)"))
+		Expect(result.CELExpression).To(Equal(failWhen))
+		Expect(result.CELTrace).NotTo(BeEmpty())
+		Expect(result.CELVars).To(And(HaveKeyWithValue("state", "failed"), HaveKey("steps"), Not(HaveKey("env"))))
+		Expect(metadataJSON(result)["wait"]).To(And(HaveKeyWithValue("cause", cause), HaveKeyWithValue("expression", failWhen)))
+	})
+
+	It("names until as the deciding expression of a timeout and keeps the wait error when the kind names no cause", func() {
+		useKind(observing(map[string]any{"state": "running"}))
+
+		result := runSteps(StepSpec{ID: "triaged", Kind: "launcher",
+			Wait: &WaitPolicy{Until: until, FailWhen: failWhen, Interval: dur(time.Millisecond), Timeout: dur(20 * time.Millisecond)}})[0]
+
+		Expect(result.Error).To(HavePrefix("wait until " + until + " did not hold within"))
+		Expect(result.CELExpression).To(Equal(until))
+		Expect(result.TimedOut).To(BeTrue())
+		Expect(metadataJSON(result)["wait"]).To(And(HaveKeyWithValue("expression", until), Not(HaveKey("cause"))))
 	})
 })
 

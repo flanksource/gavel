@@ -73,14 +73,21 @@ type execStepConfig struct {
 	Args     []string       `json:"args,omitempty"`
 	Env      map[string]any `json:"env,omitempty"`
 	CWD      string         `json:"cwd,omitempty"`
-	Terminal string         `json:"terminal,omitempty"`
-	ExitCode *int           `json:"exitCode,omitempty"`
-	Stdout   string         `json:"stdout,omitempty"`
-	Stderr   string         `json:"stderr,omitempty"`
+	Terminal string              `json:"terminal,omitempty"`
+	Input    []fixtures.PTYInput `json:"input,omitempty"`
+	ExitCode *int                `json:"exitCode,omitempty"`
+	Stdout   string              `json:"stdout,omitempty"`
+	Stderr   string              `json:"stderr,omitempty"`
 }
 
 func (c execStepConfig) apply(test fixtures.FixtureTest) (fixtures.FixtureTest, error) {
-	base := fixtures.ExecFixtureBase{Exec: c.Exec, Args: c.Args, Env: c.Env, CWD: c.CWD, Terminal: c.Terminal}
+	base := fixtures.ExecFixtureBase{Exec: c.Exec, Args: c.Args, Env: c.Env, CWD: c.CWD, Terminal: c.Terminal, Input: c.Input}
+	if len(c.Input) > 0 && c.Terminal != "pty" {
+		return test, fmt.Errorf("input needs terminal: pty")
+	}
+	if err := fixtures.ValidatePTYInput(c.Input); err != nil {
+		return test, err
+	}
 	switch {
 	case c.Script != "":
 		if base.Exec == "" {
@@ -123,6 +130,20 @@ var execSchema = json.RawMessage(`{
     "env": {"type": "object", "additionalProperties": {"type": ["string", "number", "boolean"]}},
     "cwd": {"type": "string"},
     "terminal": {"type": "string", "enum": ["", "pty"]},
+    "input": {
+      "type": "array",
+      "description": "Script a terminal: pty session. Each item waits until expect appears in the output (ANSI stripped, after the previous match), then types send followed by keys.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["expect"],
+        "properties": {
+          "expect": {"type": "string"},
+          "send": {"type": "string", "description": "Literal text to type."},
+          "keys": {"type": "array", "items": {"type": "string", "enum": ["enter", "tab", "space", "esc", "backspace", "up", "down", "right", "left", "ctrl-c", "ctrl-d"]}}
+        }
+      }
+    },
     "exitCode": {"type": "integer", "description": "Expected exit code (default 0)."},
     "stdout": {"type": "string", "description": "Expected stdout, or @file for a golden file."},
     "stderr": {"type": "string", "description": "Expected stderr, or @file for a golden file."}

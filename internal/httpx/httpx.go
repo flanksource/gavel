@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/flanksource/commons-db/connection"
+	"github.com/flanksource/commons-db/observability"
 )
 
 // Feature is the commons-db HTTP observability feature gavel's clients are
@@ -25,5 +25,5 @@ var Shared = Client(0)
 // decided per request by whether an `http` trace observes Feature, so a client
 // built at init costs one lookup per request for the runs that trace nothing.
 func Client(timeout time.Duration) *http.Client {
-	return &http.Client{Timeout: timeout, Transport: connection.ApplyHTTPObservability(nil, Feature, http.DefaultTransport, nil)}
+	return &http.Client{Timeout: timeout, Transport: observability.ApplyHTTPObservability(nil, Feature, http.DefaultTransport, nil)}
 }

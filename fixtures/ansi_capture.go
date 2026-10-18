@@ -3,6 +3,7 @@ package fixtures
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -56,6 +57,10 @@ type CaptureOptions struct {
 	Snapshots bool
 	// MaxBytes caps the recorded event stream. Zero uses defaultCastBytes.
 	MaxBytes int64
+	// Input scripts the session: each item waits for its expectation and then
+	// types into the terminal. With a script the capture also answers the
+	// terminal queries a TUI sends, as a real terminal would.
+	Input []PTYInput
 }
 
 // Event is a single asciinema-v2 output event. It marshals to the canonical
@@ -117,6 +122,9 @@ func CaptureANSI(opts CaptureOptions) (*Capture, error) {
 	}
 	if opts.Width <= 0 || opts.Height <= 0 {
 		return nil, fmt.Errorf("ansi capture: width and height must be > 0 (got %dx%d)", opts.Width, opts.Height)
+	}
+	if err := ValidatePTYInput(opts.Input); err != nil {
+		return nil, fmt.Errorf("ansi capture: %w", err)
 	}
 	interval := opts.SnapshotInterval
 	if interval <= 0 {
@@ -219,12 +227,25 @@ func CaptureANSI(opts CaptureOptions) (*Capture, error) {
 	// the command is never stalled, and the capture then fails.
 	var outputErr error
 
+	var script *ptyScript
+	inputDone := make(chan error, 1)
+	if len(opts.Input) > 0 {
+		script = newPTYScript(opts.Input, ptmx)
+		go func() { inputDone <- script.Run() }()
+	} else {
+		inputDone <- nil
+	}
+	var queryErr error
+
 	buf := make([]byte, 4096)
 	for {
 		n, rerr := ptmx.Read(buf)
 		if n > 0 {
 			if opts.Output != nil && outputErr == nil {
 				_, outputErr = opts.Output.Write(buf[:n])
+			}
+			if script != nil && queryErr == nil {
+				queryErr = script.feed(buf[:n])
 			}
 			mu.Lock()
 			// raw is never capped: it is the fixture's stdout, and silently
@@ -248,6 +269,9 @@ func CaptureANSI(opts CaptureOptions) (*Capture, error) {
 			break
 		}
 	}
+	if script != nil {
+		script.close()
+	}
 	close(done)
 	wg.Wait()
 
@@ -263,6 +287,9 @@ func CaptureANSI(opts CaptureOptions) (*Capture, error) {
 	}
 	if outputErr != nil {
 		return nil, fmt.Errorf("ansi capture: output: %w", outputErr)
+	}
+	if err := errors.Join(<-inputDone, queryErr); err != nil {
+		return nil, fmt.Errorf("ansi capture: %w", err)
 	}
 
 	elapsedMs := time.Since(start).Milliseconds()

@@ -210,7 +210,16 @@ type WaitReport struct {
 	DurationMs int64          `json:"durationMs"`
 	Outputs    map[string]any `json:"outputs"`
 	Error      string         `json:"error,omitempty"`
-	Trace      string         `json:"trace,omitempty"`
+	// Expression is the CEL expression whose evaluation decided the outcome:
+	// failWhen when it held or could not be evaluated, otherwise until. Trace is
+	// always its trace.
+	Expression string `json:"expression,omitempty"`
+	Trace      string `json:"trace,omitempty"`
+	// Cause is the step kind's domain reason (FailureCauser) a wait that did not
+	// succeed ended as it did, read from its last outputs.
+	Cause string `json:"cause,omitempty"`
+	// celVars are the variables a held failWhen was evaluated against.
+	celVars map[string]any
 }
 
 // celCheck evaluates a boolean CEL expression, returning the trace of a false
@@ -373,7 +382,7 @@ func (w waiter) observeOnce(ctx context.Context, report *WaitReport) (waitObserv
 		obs.FailWhen = failed
 		if failed {
 			_, trace, _ := w.check("!("+w.policy.FailWhen+")", vars)
-			report.Outcome, report.Trace = WaitFailed, trace
+			report.Outcome, report.Expression, report.Trace, report.celVars = WaitFailed, w.policy.FailWhen, trace, vars
 			report.Error = fmt.Sprintf("wait failWhen %s is true", w.policy.FailWhen)
 			return obs, true
 		}
@@ -386,7 +395,7 @@ func (w waiter) observeOnce(ctx context.Context, report *WaitReport) (waitObserv
 	obs.Until = satisfied
 
 	if satisfied {
-		report.Outcome = WaitSatisfied
+		report.Outcome, report.Expression = WaitSatisfied, w.policy.Until
 	}
 	return obs, satisfied
 }
@@ -394,7 +403,7 @@ func (w waiter) observeOnce(ctx context.Context, report *WaitReport) (waitObserv
 func (w waiter) evalFailed(report *WaitReport, obs waitObservation, field, expression, trace string, err error) (waitObservation, bool) {
 	obs.Error = err.Error()
 
-	report.Outcome = WaitFailed
+	report.Outcome, report.Expression = WaitFailed, expression
 	report.Trace = trace
 	report.Error = fmt.Sprintf("wait %s %s: %v", field, expression, err)
 	return obs, true
@@ -407,6 +416,7 @@ func (w waiter) timedOut(report WaitReport, last waitObservation) WaitReport {
 		report.Error = fmt.Sprintf("not ready after %s: last probe: %s", w.policy.Timeout.Std(), lastProbe)
 		return report
 	}
+	report.Expression = w.policy.Until
 	report.Error = fmt.Sprintf("wait until %s did not hold within %s", w.policy.Until, w.policy.Timeout.Std())
 	if last.Outputs != nil && last.Error == "" {
 		_, report.Trace, _ = w.check(w.policy.Until, w.vars(last.Outputs))

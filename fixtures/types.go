@@ -231,6 +231,8 @@ type ExecFixtureBase struct {
 	CWD string `yaml:"cwd,omitempty" json:"cwd,omitempty"`
 	// Terminal mode: "pty" to allocate a pseudo-terminal, "" for piped (default)
 	Terminal string `yaml:"terminal,omitempty" json:"terminal,omitempty"`
+	// Input scripts a pty session: wait for each expectation, then type.
+	Input []PTYInput `yaml:"input,omitempty" json:"input,omitempty"`
 	// Traces declares the commons-db traces armed around this fixture — a
 	// recording proxy for its children, its terminal, its SQL. Nil declares
 	// none and leaves the run-wide --traces default in force; an empty list

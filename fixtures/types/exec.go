@@ -168,6 +168,9 @@ func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opt
 	// An armed terminal trace implies a PTY: there is no terminal to trace
 	// from a pipe.
 	terminalTrace := opts.Traces.Terminal()
+	if len(exec.Input) > 0 && exec.Terminal != "pty" && terminalTrace == nil {
+		return result.Errorf(fmt.Errorf("input needs terminal: pty"), "prepare terminal input")
+	}
 	var p *clickyExec.ExecResult
 	if exec.Terminal == "pty" || terminalTrace != nil {
 		p = runWithPTY(ctx, ptyRun{exec: exec, workDir: workDir, env: childEnv, terminal: terminalTrace, runtime: opts.ProcessRuntime})
@@ -315,7 +318,7 @@ func runWithPTY(ctx context.Context, run ptyRun) *clickyExec.ExecResult {
 	opts := fixtures.CaptureOptions{
 		Runtime: run.runtime, Context: ctx, Dir: run.workDir,
 		Command: append([]string{run.exec.Exec}, run.exec.Args...),
-		Width:   ptyWidth, Height: ptyHeight, BaseEnv: run.env,
+		Width:   ptyWidth, Height: ptyHeight, BaseEnv: run.env, Input: run.exec.Input,
 	}
 	for k, v := range run.exec.Env {
 		opts.Env = append(opts.Env, fmt.Sprintf("%s=%v", k, v))
