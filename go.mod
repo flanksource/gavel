@@ -28,7 +28,7 @@ require (
 	github.com/dustin/go-humanize v1.0.1
 	github.com/elazarl/goproxy v1.7.2
 	github.com/flanksource/clicky/aichat v1.21.77
-	github.com/flanksource/deps v1.0.45
+	github.com/flanksource/deps v1.0.46
 	github.com/flanksource/deps/start v0.0.0-20261009090519-f5045eccb6ab
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/ghodss/yaml v1.0.0
