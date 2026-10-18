@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { findBlogPost, findDoc, listBlogPosts, listDocs } from "./mdx";
 import { buildDocTree } from "./docs";
@@ -33,12 +33,15 @@ describe("mdx loader", () => {
     expect(findDoc("does-not-exist")).toBeUndefined();
   });
 
-  it("resolves every internal documentation link", () => {
+  it("resolves every internal documentation link and media asset", () => {
     for (const doc of listDocs()) {
       const path = resolve("content/docs", `${doc.slug}.mdx`);
       const content = readFileSync(path, "utf8");
       for (const match of content.matchAll(/\/docs\/([a-z0-9-]+)/g)) {
         expect(findDoc(match[1]!), `${path} links to ${match[1]}`).toBeDefined();
+      }
+      for (const match of content.matchAll(/\/media\/([a-z0-9-]+\.(?:png|webm))/g)) {
+        expect(existsSync(resolve("public/media", match[1]!)), `${path} links to ${match[1]}`).toBe(true);
       }
     }
   });

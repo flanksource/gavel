@@ -1,6 +1,6 @@
 import bundle from "@/data/fixtures.schema.json";
 import services from "../../../../fixtures/kinds/services/schema.json";
-import SchemaReference from "./SchemaReference";
+import { SchemaReference } from "@flanksource/clicky-ui/data";
 
 export default function FixtureKindReference({ kind }: { kind: string }) {
   const branch = bundle.document.properties.steps.items.oneOf.find((step) => step.properties.kind.const === kind);

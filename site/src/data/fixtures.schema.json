@@ -271,18 +271,46 @@
                         "anyOf": [
                           {
                             "enum": [
+                              "goprof",
                               "http",
                               "http_proxy",
                               "pg_proxy",
                               "process_samples",
                               "process_tree",
                               "sql_statements",
+                              "stacks",
                               "terminal"
                             ]
                           },
                           {
                             "additionalProperties": false,
                             "allOf": [
+                              {
+                                "if": {
+                                  "properties": {
+                                    "kind": {
+                                      "const": "goprof"
+                                    }
+                                  },
+                                  "required": [
+                                    "kind"
+                                  ]
+                                },
+                                "then": {
+                                  "properties": {
+                                    "params": {
+                                      "type": "object",
+                                      "properties": {
+                                        "rootPid": {
+                                          "type": "integer",
+                                          "title": "Root PID",
+                                          "format": "int32"
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              },
                               {
                                 "if": {
                                   "properties": {
@@ -440,6 +468,13 @@
                                     "params": {
                                       "type": "object",
                                       "properties": {
+                                        "facets": {
+                                          "type": "array",
+                                          "title": "Facets",
+                                          "items": {
+                                            "type": "string"
+                                          }
+                                        },
                                         "interval": {
                                           "type": "string",
                                           "title": "Interval"
@@ -470,6 +505,25 @@
                                     "params": {
                                       "type": "object",
                                       "properties": {
+                                        "environment": {
+                                          "type": "object",
+                                          "title": "Environment",
+                                          "properties": {
+                                            "keys": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "string"
+                                              }
+                                            },
+                                            "prefixes": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "string"
+                                              }
+                                            }
+                                          },
+                                          "nullable": true
+                                        },
                                         "interval": {
                                           "type": "string",
                                           "title": "Interval"
@@ -518,6 +572,32 @@
                                       "required": [
                                         "connections"
                                       ]
+                                    }
+                                  }
+                                }
+                              },
+                              {
+                                "if": {
+                                  "properties": {
+                                    "kind": {
+                                      "const": "stacks"
+                                    }
+                                  },
+                                  "required": [
+                                    "kind"
+                                  ]
+                                },
+                                "then": {
+                                  "properties": {
+                                    "params": {
+                                      "type": "object",
+                                      "properties": {
+                                        "rootPid": {
+                                          "type": "integer",
+                                          "title": "Root PID",
+                                          "format": "int32"
+                                        }
+                                      }
                                     }
                                   }
                                 }
@@ -577,12 +657,14 @@
                               "kind": {
                                 "description": "A trace kind the run's trace host serves.",
                                 "enum": [
+                                  "goprof",
                                   "http",
                                   "http_proxy",
                                   "pg_proxy",
                                   "process_samples",
                                   "process_tree",
                                   "sql_statements",
+                                  "stacks",
                                   "terminal"
                                 ]
                               },
@@ -830,18 +912,46 @@
                         "anyOf": [
                           {
                             "enum": [
+                              "goprof",
                               "http",
                               "http_proxy",
                               "pg_proxy",
                               "process_samples",
                               "process_tree",
                               "sql_statements",
+                              "stacks",
                               "terminal"
                             ]
                           },
                           {
                             "additionalProperties": false,
                             "allOf": [
+                              {
+                                "if": {
+                                  "properties": {
+                                    "kind": {
+                                      "const": "goprof"
+                                    }
+                                  },
+                                  "required": [
+                                    "kind"
+                                  ]
+                                },
+                                "then": {
+                                  "properties": {
+                                    "params": {
+                                      "type": "object",
+                                      "properties": {
+                                        "rootPid": {
+                                          "type": "integer",
+                                          "title": "Root PID",
+                                          "format": "int32"
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              },
                               {
                                 "if": {
                                   "properties": {
@@ -999,6 +1109,13 @@
                                     "params": {
                                       "type": "object",
                                       "properties": {
+                                        "facets": {
+                                          "type": "array",
+                                          "title": "Facets",
+                                          "items": {
+                                            "type": "string"
+                                          }
+                                        },
                                         "interval": {
                                           "type": "string",
                                           "title": "Interval"
@@ -1029,6 +1146,25 @@
                                     "params": {
                                       "type": "object",
                                       "properties": {
+                                        "environment": {
+                                          "type": "object",
+                                          "title": "Environment",
+                                          "properties": {
+                                            "keys": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "string"
+                                              }
+                                            },
+                                            "prefixes": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "string"
+                                              }
+                                            }
+                                          },
+                                          "nullable": true
+                                        },
                                         "interval": {
                                           "type": "string",
                                           "title": "Interval"
@@ -1077,6 +1213,32 @@
                                       "required": [
                                         "connections"
                                       ]
+                                    }
+                                  }
+                                }
+                              },
+                              {
+                                "if": {
+                                  "properties": {
+                                    "kind": {
+                                      "const": "stacks"
+                                    }
+                                  },
+                                  "required": [
+                                    "kind"
+                                  ]
+                                },
+                                "then": {
+                                  "properties": {
+                                    "params": {
+                                      "type": "object",
+                                      "properties": {
+                                        "rootPid": {
+                                          "type": "integer",
+                                          "title": "Root PID",
+                                          "format": "int32"
+                                        }
+                                      }
                                     }
                                   }
                                 }
@@ -1136,12 +1298,14 @@
                               "kind": {
                                 "description": "A trace kind the run's trace host serves.",
                                 "enum": [
+                                  "goprof",
                                   "http",
                                   "http_proxy",
                                   "pg_proxy",
                                   "process_samples",
                                   "process_tree",
                                   "sql_statements",
+                                  "stacks",
                                   "terminal"
                                 ]
                               },
@@ -1388,18 +1552,46 @@
                         "anyOf": [
                           {
                             "enum": [
+                              "goprof",
                               "http",
                               "http_proxy",
                               "pg_proxy",
                               "process_samples",
                               "process_tree",
                               "sql_statements",
+                              "stacks",
                               "terminal"
                             ]
                           },
                           {
                             "additionalProperties": false,
                             "allOf": [
+                              {
+                                "if": {
+                                  "properties": {
+                                    "kind": {
+                                      "const": "goprof"
+                                    }
+                                  },
+                                  "required": [
+                                    "kind"
+                                  ]
+                                },
+                                "then": {
+                                  "properties": {
+                                    "params": {
+                                      "type": "object",
+                                      "properties": {
+                                        "rootPid": {
+                                          "type": "integer",
+                                          "title": "Root PID",
+                                          "format": "int32"
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              },
                               {
                                 "if": {
                                   "properties": {
@@ -1557,6 +1749,13 @@
                                     "params": {
                                       "type": "object",
                                       "properties": {
+                                        "facets": {
+                                          "type": "array",
+                                          "title": "Facets",
+                                          "items": {
+                                            "type": "string"
+                                          }
+                                        },
                                         "interval": {
                                           "type": "string",
                                           "title": "Interval"
@@ -1587,6 +1786,25 @@
                                     "params": {
                                       "type": "object",
                                       "properties": {
+                                        "environment": {
+                                          "type": "object",
+                                          "title": "Environment",
+                                          "properties": {
+                                            "keys": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "string"
+                                              }
+                                            },
+                                            "prefixes": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "string"
+                                              }
+                                            }
+                                          },
+                                          "nullable": true
+                                        },
                                         "interval": {
                                           "type": "string",
                                           "title": "Interval"
@@ -1635,6 +1853,32 @@
                                       "required": [
                                         "connections"
                                       ]
+                                    }
+                                  }
+                                }
+                              },
+                              {
+                                "if": {
+                                  "properties": {
+                                    "kind": {
+                                      "const": "stacks"
+                                    }
+                                  },
+                                  "required": [
+                                    "kind"
+                                  ]
+                                },
+                                "then": {
+                                  "properties": {
+                                    "params": {
+                                      "type": "object",
+                                      "properties": {
+                                        "rootPid": {
+                                          "type": "integer",
+                                          "title": "Root PID",
+                                          "format": "int32"
+                                        }
+                                      }
                                     }
                                   }
                                 }
@@ -1694,12 +1938,14 @@
                               "kind": {
                                 "description": "A trace kind the run's trace host serves.",
                                 "enum": [
+                                  "goprof",
                                   "http",
                                   "http_proxy",
                                   "pg_proxy",
                                   "process_samples",
                                   "process_tree",
                                   "sql_statements",
+                                  "stacks",
                                   "terminal"
                                 ]
                               },
@@ -1861,6 +2107,45 @@
                   "description": "Step id; later steps read its outputs as steps.\u003cid\u003e.",
                   "type": "string"
                 },
+                "input": {
+                  "description": "Script a terminal: pty session. Each item waits until expect appears in the output (ANSI stripped, after the previous match), then types send followed by keys.",
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "expect": {
+                        "type": "string"
+                      },
+                      "keys": {
+                        "items": {
+                          "enum": [
+                            "enter",
+                            "tab",
+                            "space",
+                            "esc",
+                            "backspace",
+                            "up",
+                            "down",
+                            "right",
+                            "left",
+                            "ctrl-c",
+                            "ctrl-d"
+                          ],
+                          "type": "string"
+                        },
+                        "type": "array"
+                      },
+                      "send": {
+                        "description": "Literal text to type.",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "expect"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
                 "kind": {
                   "const": "exec"
                 },
@@ -1961,18 +2246,46 @@
                         "anyOf": [
                           {
                             "enum": [
+                              "goprof",
                               "http",
                               "http_proxy",
                               "pg_proxy",
                               "process_samples",
                               "process_tree",
                               "sql_statements",
+                              "stacks",
                               "terminal"
                             ]
                           },
                           {
                             "additionalProperties": false,
                             "allOf": [
+                              {
+                                "if": {
+                                  "properties": {
+                                    "kind": {
+                                      "const": "goprof"
+                                    }
+                                  },
+                                  "required": [
+                                    "kind"
+                                  ]
+                                },
+                                "then": {
+                                  "properties": {
+                                    "params": {
+                                      "type": "object",
+                                      "properties": {
+                                        "rootPid": {
+                                          "type": "integer",
+                                          "title": "Root PID",
+                                          "format": "int32"
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              },
                               {
                                 "if": {
                                   "properties": {
@@ -2130,6 +2443,13 @@
                                     "params": {
                                       "type": "object",
                                       "properties": {
+                                        "facets": {
+                                          "type": "array",
+                                          "title": "Facets",
+                                          "items": {
+                                            "type": "string"
+                                          }
+                                        },
                                         "interval": {
                                           "type": "string",
                                           "title": "Interval"
@@ -2160,6 +2480,25 @@
                                     "params": {
                                       "type": "object",
                                       "properties": {
+                                        "environment": {
+                                          "type": "object",
+                                          "title": "Environment",
+                                          "properties": {
+                                            "keys": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "string"
+                                              }
+                                            },
+                                            "prefixes": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "string"
+                                              }
+                                            }
+                                          },
+                                          "nullable": true
+                                        },
                                         "interval": {
                                           "type": "string",
                                           "title": "Interval"
@@ -2208,6 +2547,32 @@
                                       "required": [
                                         "connections"
                                       ]
+                                    }
+                                  }
+                                }
+                              },
+                              {
+                                "if": {
+                                  "properties": {
+                                    "kind": {
+                                      "const": "stacks"
+                                    }
+                                  },
+                                  "required": [
+                                    "kind"
+                                  ]
+                                },
+                                "then": {
+                                  "properties": {
+                                    "params": {
+                                      "type": "object",
+                                      "properties": {
+                                        "rootPid": {
+                                          "type": "integer",
+                                          "title": "Root PID",
+                                          "format": "int32"
+                                        }
+                                      }
                                     }
                                   }
                                 }
@@ -2267,12 +2632,14 @@
                               "kind": {
                                 "description": "A trace kind the run's trace host serves.",
                                 "enum": [
+                                  "goprof",
                                   "http",
                                   "http_proxy",
                                   "pg_proxy",
                                   "process_samples",
                                   "process_tree",
                                   "sql_statements",
+                                  "stacks",
                                   "terminal"
                                 ]
                               },
@@ -2639,18 +3006,46 @@
                         "anyOf": [
                           {
                             "enum": [
+                              "goprof",
                               "http",
                               "http_proxy",
                               "pg_proxy",
                               "process_samples",
                               "process_tree",
                               "sql_statements",
+                              "stacks",
                               "terminal"
                             ]
                           },
                           {
                             "additionalProperties": false,
                             "allOf": [
+                              {
+                                "if": {
+                                  "properties": {
+                                    "kind": {
+                                      "const": "goprof"
+                                    }
+                                  },
+                                  "required": [
+                                    "kind"
+                                  ]
+                                },
+                                "then": {
+                                  "properties": {
+                                    "params": {
+                                      "type": "object",
+                                      "properties": {
+                                        "rootPid": {
+                                          "type": "integer",
+                                          "title": "Root PID",
+                                          "format": "int32"
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              },
                               {
                                 "if": {
                                   "properties": {
@@ -2808,6 +3203,13 @@
                                     "params": {
                                       "type": "object",
                                       "properties": {
+                                        "facets": {
+                                          "type": "array",
+                                          "title": "Facets",
+                                          "items": {
+                                            "type": "string"
+                                          }
+                                        },
                                         "interval": {
                                           "type": "string",
                                           "title": "Interval"
@@ -2838,6 +3240,25 @@
                                     "params": {
                                       "type": "object",
                                       "properties": {
+                                        "environment": {
+                                          "type": "object",
+                                          "title": "Environment",
+                                          "properties": {
+                                            "keys": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "string"
+                                              }
+                                            },
+                                            "prefixes": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "string"
+                                              }
+                                            }
+                                          },
+                                          "nullable": true
+                                        },
                                         "interval": {
                                           "type": "string",
                                           "title": "Interval"
@@ -2886,6 +3307,32 @@
                                       "required": [
                                         "connections"
                                       ]
+                                    }
+                                  }
+                                }
+                              },
+                              {
+                                "if": {
+                                  "properties": {
+                                    "kind": {
+                                      "const": "stacks"
+                                    }
+                                  },
+                                  "required": [
+                                    "kind"
+                                  ]
+                                },
+                                "then": {
+                                  "properties": {
+                                    "params": {
+                                      "type": "object",
+                                      "properties": {
+                                        "rootPid": {
+                                          "type": "integer",
+                                          "title": "Root PID",
+                                          "format": "int32"
+                                        }
+                                      }
                                     }
                                   }
                                 }
@@ -2945,12 +3392,14 @@
                               "kind": {
                                 "description": "A trace kind the run's trace host serves.",
                                 "enum": [
+                                  "goprof",
                                   "http",
                                   "http_proxy",
                                   "pg_proxy",
                                   "process_samples",
                                   "process_tree",
                                   "sql_statements",
+                                  "stacks",
                                   "terminal"
                                 ]
                               },
@@ -3185,18 +3634,46 @@
                         "anyOf": [
                           {
                             "enum": [
+                              "goprof",
                               "http",
                               "http_proxy",
                               "pg_proxy",
                               "process_samples",
                               "process_tree",
                               "sql_statements",
+                              "stacks",
                               "terminal"
                             ]
                           },
                           {
                             "additionalProperties": false,
                             "allOf": [
+                              {
+                                "if": {
+                                  "properties": {
+                                    "kind": {
+                                      "const": "goprof"
+                                    }
+                                  },
+                                  "required": [
+                                    "kind"
+                                  ]
+                                },
+                                "then": {
+                                  "properties": {
+                                    "params": {
+                                      "type": "object",
+                                      "properties": {
+                                        "rootPid": {
+                                          "type": "integer",
+                                          "title": "Root PID",
+                                          "format": "int32"
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              },
                               {
                                 "if": {
                                   "properties": {
@@ -3354,6 +3831,13 @@
                                     "params": {
                                       "type": "object",
                                       "properties": {
+                                        "facets": {
+                                          "type": "array",
+                                          "title": "Facets",
+                                          "items": {
+                                            "type": "string"
+                                          }
+                                        },
                                         "interval": {
                                           "type": "string",
                                           "title": "Interval"
@@ -3384,6 +3868,25 @@
                                     "params": {
                                       "type": "object",
                                       "properties": {
+                                        "environment": {
+                                          "type": "object",
+                                          "title": "Environment",
+                                          "properties": {
+                                            "keys": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "string"
+                                              }
+                                            },
+                                            "prefixes": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "string"
+                                              }
+                                            }
+                                          },
+                                          "nullable": true
+                                        },
                                         "interval": {
                                           "type": "string",
                                           "title": "Interval"
@@ -3432,6 +3935,32 @@
                                       "required": [
                                         "connections"
                                       ]
+                                    }
+                                  }
+                                }
+                              },
+                              {
+                                "if": {
+                                  "properties": {
+                                    "kind": {
+                                      "const": "stacks"
+                                    }
+                                  },
+                                  "required": [
+                                    "kind"
+                                  ]
+                                },
+                                "then": {
+                                  "properties": {
+                                    "params": {
+                                      "type": "object",
+                                      "properties": {
+                                        "rootPid": {
+                                          "type": "integer",
+                                          "title": "Root PID",
+                                          "format": "int32"
+                                        }
+                                      }
                                     }
                                   }
                                 }
@@ -3491,12 +4020,14 @@
                               "kind": {
                                 "description": "A trace kind the run's trace host serves.",
                                 "enum": [
+                                  "goprof",
                                   "http",
                                   "http_proxy",
                                   "pg_proxy",
                                   "process_samples",
                                   "process_tree",
                                   "sql_statements",
+                                  "stacks",
                                   "terminal"
                                 ]
                               },
@@ -3753,18 +4284,46 @@
                         "anyOf": [
                           {
                             "enum": [
+                              "goprof",
                               "http",
                               "http_proxy",
                               "pg_proxy",
                               "process_samples",
                               "process_tree",
                               "sql_statements",
+                              "stacks",
                               "terminal"
                             ]
                           },
                           {
                             "additionalProperties": false,
                             "allOf": [
+                              {
+                                "if": {
+                                  "properties": {
+                                    "kind": {
+                                      "const": "goprof"
+                                    }
+                                  },
+                                  "required": [
+                                    "kind"
+                                  ]
+                                },
+                                "then": {
+                                  "properties": {
+                                    "params": {
+                                      "type": "object",
+                                      "properties": {
+                                        "rootPid": {
+                                          "type": "integer",
+                                          "title": "Root PID",
+                                          "format": "int32"
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              },
                               {
                                 "if": {
                                   "properties": {
@@ -3922,6 +4481,13 @@
                                     "params": {
                                       "type": "object",
                                       "properties": {
+                                        "facets": {
+                                          "type": "array",
+                                          "title": "Facets",
+                                          "items": {
+                                            "type": "string"
+                                          }
+                                        },
                                         "interval": {
                                           "type": "string",
                                           "title": "Interval"
@@ -3952,6 +4518,25 @@
                                     "params": {
                                       "type": "object",
                                       "properties": {
+                                        "environment": {
+                                          "type": "object",
+                                          "title": "Environment",
+                                          "properties": {
+                                            "keys": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "string"
+                                              }
+                                            },
+                                            "prefixes": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "string"
+                                              }
+                                            }
+                                          },
+                                          "nullable": true
+                                        },
                                         "interval": {
                                           "type": "string",
                                           "title": "Interval"
@@ -4000,6 +4585,32 @@
                                       "required": [
                                         "connections"
                                       ]
+                                    }
+                                  }
+                                }
+                              },
+                              {
+                                "if": {
+                                  "properties": {
+                                    "kind": {
+                                      "const": "stacks"
+                                    }
+                                  },
+                                  "required": [
+                                    "kind"
+                                  ]
+                                },
+                                "then": {
+                                  "properties": {
+                                    "params": {
+                                      "type": "object",
+                                      "properties": {
+                                        "rootPid": {
+                                          "type": "integer",
+                                          "title": "Root PID",
+                                          "format": "int32"
+                                        }
+                                      }
                                     }
                                   }
                                 }
@@ -4059,12 +4670,14 @@
                               "kind": {
                                 "description": "A trace kind the run's trace host serves.",
                                 "enum": [
+                                  "goprof",
                                   "http",
                                   "http_proxy",
                                   "pg_proxy",
                                   "process_samples",
                                   "process_tree",
                                   "sql_statements",
+                                  "stacks",
                                   "terminal"
                                 ]
                               },
@@ -4184,7 +4797,7 @@
                   }
                 },
                 "bench": {
-                  "description": "",
+                  "description": "Run Go benchmarks matching this regex (. runs all)",
                   "title": "Bench",
                   "type": "string"
                 },
@@ -4348,6 +4961,12 @@
                   "title": "Pr",
                   "type": "string"
                 },
+                "process-facets": {
+                  "default": false,
+                  "description": "Also record each process's open files, sockets, ports, connections and environment (needs --ui or --diagnostics)",
+                  "title": "Process Facets",
+                  "type": "boolean"
+                },
                 "recursive": {
                   "default": true,
                   "description": "",
@@ -4481,7 +5100,7 @@
                 },
                 "test-timeout": {
                   "default": "0s",
-                  "description": "Per-test-package subprocess deadline. Applies to each go test / ginkgo / vitest invocation.",
+                  "description": "Per-test-package subprocess deadline (or test.testTimeout; none by default). Applies to each go test / ginkgo / vitest invocation. A Go test binary past it is sent SIGQUIT and given 3s to dump its goroutines onto the attempt before the tree is killed.",
                   "examples": [
                     "30s",
                     "2m",
@@ -4498,7 +5117,7 @@
                 },
                 "timeout": {
                   "default": "20m0s",
-                  "description": "Global wall-clock deadline for the entire test+lint run. On timeout, diagnostics are captured and every subprocess is killed.",
+                  "description": "Global wall-clock deadline for the entire test+lint run (or test.timeout). On timeout, diagnostics are logged (and checkpointed into the run's stacks under --ui/--diagnostics) and every subprocess is killed.",
                   "examples": [
                     "30s",
                     "2m",
@@ -4528,18 +5147,46 @@
                         "anyOf": [
                           {
                             "enum": [
+                              "goprof",
                               "http",
                               "http_proxy",
                               "pg_proxy",
                               "process_samples",
                               "process_tree",
                               "sql_statements",
+                              "stacks",
                               "terminal"
                             ]
                           },
                           {
                             "additionalProperties": false,
                             "allOf": [
+                              {
+                                "if": {
+                                  "properties": {
+                                    "kind": {
+                                      "const": "goprof"
+                                    }
+                                  },
+                                  "required": [
+                                    "kind"
+                                  ]
+                                },
+                                "then": {
+                                  "properties": {
+                                    "params": {
+                                      "type": "object",
+                                      "properties": {
+                                        "rootPid": {
+                                          "type": "integer",
+                                          "title": "Root PID",
+                                          "format": "int32"
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              },
                               {
                                 "if": {
                                   "properties": {
@@ -4697,6 +5344,13 @@
                                     "params": {
                                       "type": "object",
                                       "properties": {
+                                        "facets": {
+                                          "type": "array",
+                                          "title": "Facets",
+                                          "items": {
+                                            "type": "string"
+                                          }
+                                        },
                                         "interval": {
                                           "type": "string",
                                           "title": "Interval"
@@ -4727,6 +5381,25 @@
                                     "params": {
                                       "type": "object",
                                       "properties": {
+                                        "environment": {
+                                          "type": "object",
+                                          "title": "Environment",
+                                          "properties": {
+                                            "keys": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "string"
+                                              }
+                                            },
+                                            "prefixes": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "string"
+                                              }
+                                            }
+                                          },
+                                          "nullable": true
+                                        },
                                         "interval": {
                                           "type": "string",
                                           "title": "Interval"
@@ -4775,6 +5448,32 @@
                                       "required": [
                                         "connections"
                                       ]
+                                    }
+                                  }
+                                }
+                              },
+                              {
+                                "if": {
+                                  "properties": {
+                                    "kind": {
+                                      "const": "stacks"
+                                    }
+                                  },
+                                  "required": [
+                                    "kind"
+                                  ]
+                                },
+                                "then": {
+                                  "properties": {
+                                    "params": {
+                                      "type": "object",
+                                      "properties": {
+                                        "rootPid": {
+                                          "type": "integer",
+                                          "title": "Root PID",
+                                          "format": "int32"
+                                        }
+                                      }
                                     }
                                   }
                                 }
@@ -4834,12 +5533,14 @@
                               "kind": {
                                 "description": "A trace kind the run's trace host serves.",
                                 "enum": [
+                                  "goprof",
                                   "http",
                                   "http_proxy",
                                   "pg_proxy",
                                   "process_samples",
                                   "process_tree",
                                   "sql_statements",
+                                  "stacks",
                                   "terminal"
                                 ]
                               },
@@ -4980,12 +5681,13 @@
                       "description": "Initial status; the server defaults to draft (pending with autoSave).",
                       "type": "string"
                     },
-                    "title": {
+                    "step": {
+                      "description": "Lifecycle step to start after saving, one GET /api/todos/new/steps lists for the new todo; the step then waits for its run by default.",
+                      "minLength": 1,
                       "type": "string"
                     },
-                    "triage": {
-                      "description": "Start a triage.new run after saving; the step then waits for it by default.",
-                      "type": "boolean"
+                    "title": {
+                      "type": "string"
                     }
                   },
                   "type": "object"
@@ -5102,18 +5804,46 @@
                         "anyOf": [
                           {
                             "enum": [
+                              "goprof",
                               "http",
                               "http_proxy",
                               "pg_proxy",
                               "process_samples",
                               "process_tree",
                               "sql_statements",
+                              "stacks",
                               "terminal"
                             ]
                           },
                           {
                             "additionalProperties": false,
                             "allOf": [
+                              {
+                                "if": {
+                                  "properties": {
+                                    "kind": {
+                                      "const": "goprof"
+                                    }
+                                  },
+                                  "required": [
+                                    "kind"
+                                  ]
+                                },
+                                "then": {
+                                  "properties": {
+                                    "params": {
+                                      "type": "object",
+                                      "properties": {
+                                        "rootPid": {
+                                          "type": "integer",
+                                          "title": "Root PID",
+                                          "format": "int32"
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              },
                               {
                                 "if": {
                                   "properties": {
@@ -5271,6 +6001,13 @@
                                     "params": {
                                       "type": "object",
                                       "properties": {
+                                        "facets": {
+                                          "type": "array",
+                                          "title": "Facets",
+                                          "items": {
+                                            "type": "string"
+                                          }
+                                        },
                                         "interval": {
                                           "type": "string",
                                           "title": "Interval"
@@ -5301,6 +6038,25 @@
                                     "params": {
                                       "type": "object",
                                       "properties": {
+                                        "environment": {
+                                          "type": "object",
+                                          "title": "Environment",
+                                          "properties": {
+                                            "keys": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "string"
+                                              }
+                                            },
+                                            "prefixes": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "string"
+                                              }
+                                            }
+                                          },
+                                          "nullable": true
+                                        },
                                         "interval": {
                                           "type": "string",
                                           "title": "Interval"
@@ -5349,6 +6105,32 @@
                                       "required": [
                                         "connections"
                                       ]
+                                    }
+                                  }
+                                }
+                              },
+                              {
+                                "if": {
+                                  "properties": {
+                                    "kind": {
+                                      "const": "stacks"
+                                    }
+                                  },
+                                  "required": [
+                                    "kind"
+                                  ]
+                                },
+                                "then": {
+                                  "properties": {
+                                    "params": {
+                                      "type": "object",
+                                      "properties": {
+                                        "rootPid": {
+                                          "type": "integer",
+                                          "title": "Root PID",
+                                          "format": "int32"
+                                        }
+                                      }
                                     }
                                   }
                                 }
@@ -5408,12 +6190,14 @@
                               "kind": {
                                 "description": "A trace kind the run's trace host serves.",
                                 "enum": [
+                                  "goprof",
                                   "http",
                                   "http_proxy",
                                   "pg_proxy",
                                   "process_samples",
                                   "process_tree",
                                   "sql_statements",
+                                  "stacks",
                                   "terminal"
                                 ]
                               },
@@ -5657,18 +6441,46 @@
                         "anyOf": [
                           {
                             "enum": [
+                              "goprof",
                               "http",
                               "http_proxy",
                               "pg_proxy",
                               "process_samples",
                               "process_tree",
                               "sql_statements",
+                              "stacks",
                               "terminal"
                             ]
                           },
                           {
                             "additionalProperties": false,
                             "allOf": [
+                              {
+                                "if": {
+                                  "properties": {
+                                    "kind": {
+                                      "const": "goprof"
+                                    }
+                                  },
+                                  "required": [
+                                    "kind"
+                                  ]
+                                },
+                                "then": {
+                                  "properties": {
+                                    "params": {
+                                      "type": "object",
+                                      "properties": {
+                                        "rootPid": {
+                                          "type": "integer",
+                                          "title": "Root PID",
+                                          "format": "int32"
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              },
                               {
                                 "if": {
                                   "properties": {
@@ -5826,6 +6638,13 @@
                                     "params": {
                                       "type": "object",
                                       "properties": {
+                                        "facets": {
+                                          "type": "array",
+                                          "title": "Facets",
+                                          "items": {
+                                            "type": "string"
+                                          }
+                                        },
                                         "interval": {
                                           "type": "string",
                                           "title": "Interval"
@@ -5856,6 +6675,25 @@
                                     "params": {
                                       "type": "object",
                                       "properties": {
+                                        "environment": {
+                                          "type": "object",
+                                          "title": "Environment",
+                                          "properties": {
+                                            "keys": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "string"
+                                              }
+                                            },
+                                            "prefixes": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "string"
+                                              }
+                                            }
+                                          },
+                                          "nullable": true
+                                        },
                                         "interval": {
                                           "type": "string",
                                           "title": "Interval"
@@ -5904,6 +6742,32 @@
                                       "required": [
                                         "connections"
                                       ]
+                                    }
+                                  }
+                                }
+                              },
+                              {
+                                "if": {
+                                  "properties": {
+                                    "kind": {
+                                      "const": "stacks"
+                                    }
+                                  },
+                                  "required": [
+                                    "kind"
+                                  ]
+                                },
+                                "then": {
+                                  "properties": {
+                                    "params": {
+                                      "type": "object",
+                                      "properties": {
+                                        "rootPid": {
+                                          "type": "integer",
+                                          "title": "Root PID",
+                                          "format": "int32"
+                                        }
+                                      }
                                     }
                                   }
                                 }
@@ -5963,12 +6827,14 @@
                               "kind": {
                                 "description": "A trace kind the run's trace host serves.",
                                 "enum": [
+                                  "goprof",
                                   "http",
                                   "http_proxy",
                                   "pg_proxy",
                                   "process_samples",
                                   "process_tree",
                                   "sql_statements",
+                                  "stacks",
                                   "terminal"
                                 ]
                               },
@@ -6089,18 +6955,46 @@
               "anyOf": [
                 {
                   "enum": [
+                    "goprof",
                     "http",
                     "http_proxy",
                     "pg_proxy",
                     "process_samples",
                     "process_tree",
                     "sql_statements",
+                    "stacks",
                     "terminal"
                   ]
                 },
                 {
                   "additionalProperties": false,
                   "allOf": [
+                    {
+                      "if": {
+                        "properties": {
+                          "kind": {
+                            "const": "goprof"
+                          }
+                        },
+                        "required": [
+                          "kind"
+                        ]
+                      },
+                      "then": {
+                        "properties": {
+                          "params": {
+                            "type": "object",
+                            "properties": {
+                              "rootPid": {
+                                "type": "integer",
+                                "title": "Root PID",
+                                "format": "int32"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
                     {
                       "if": {
                         "properties": {
@@ -6258,6 +7152,13 @@
                           "params": {
                             "type": "object",
                             "properties": {
+                              "facets": {
+                                "type": "array",
+                                "title": "Facets",
+                                "items": {
+                                  "type": "string"
+                                }
+                              },
                               "interval": {
                                 "type": "string",
                                 "title": "Interval"
@@ -6288,6 +7189,25 @@
                           "params": {
                             "type": "object",
                             "properties": {
+                              "environment": {
+                                "type": "object",
+                                "title": "Environment",
+                                "properties": {
+                                  "keys": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "prefixes": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  }
+                                },
+                                "nullable": true
+                              },
                               "interval": {
                                 "type": "string",
                                 "title": "Interval"
@@ -6336,6 +7256,32 @@
                             "required": [
                               "connections"
                             ]
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "if": {
+                        "properties": {
+                          "kind": {
+                            "const": "stacks"
+                          }
+                        },
+                        "required": [
+                          "kind"
+                        ]
+                      },
+                      "then": {
+                        "properties": {
+                          "params": {
+                            "type": "object",
+                            "properties": {
+                              "rootPid": {
+                                "type": "integer",
+                                "title": "Root PID",
+                                "format": "int32"
+                              }
+                            }
                           }
                         }
                       }
@@ -6395,12 +7341,14 @@
                     "kind": {
                       "description": "A trace kind the run's trace host serves.",
                       "enum": [
+                        "goprof",
                         "http",
                         "http_proxy",
                         "pg_proxy",
                         "process_samples",
                         "process_tree",
                         "sql_statements",
+                        "stacks",
                         "terminal"
                       ]
                     },
@@ -6610,7 +7558,7 @@
               },
               "type": "object"
             },
-            "description": "Named Go pprof outputs checked after each exec when --profile is enabled. Missing outputs are valid.",
+            "description": "Named Go pprof outputs ingested into the run's goprof trace after each exec when --profile is enabled, one window per file that downloads as pprof. The name (cpu, heap, allocs, mutex, block, goroutine) says which profile it is; another name is read from the profile. Missing outputs are valid.",
             "type": "object"
           },
           "output": {
@@ -6690,18 +7638,46 @@
                   "anyOf": [
                     {
                       "enum": [
+                        "goprof",
                         "http",
                         "http_proxy",
                         "pg_proxy",
                         "process_samples",
                         "process_tree",
                         "sql_statements",
+                        "stacks",
                         "terminal"
                       ]
                     },
                     {
                       "additionalProperties": false,
                       "allOf": [
+                        {
+                          "if": {
+                            "properties": {
+                              "kind": {
+                                "const": "goprof"
+                              }
+                            },
+                            "required": [
+                              "kind"
+                            ]
+                          },
+                          "then": {
+                            "properties": {
+                              "params": {
+                                "type": "object",
+                                "properties": {
+                                  "rootPid": {
+                                    "type": "integer",
+                                    "title": "Root PID",
+                                    "format": "int32"
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        },
                         {
                           "if": {
                             "properties": {
@@ -6859,6 +7835,13 @@
                               "params": {
                                 "type": "object",
                                 "properties": {
+                                  "facets": {
+                                    "type": "array",
+                                    "title": "Facets",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
                                   "interval": {
                                     "type": "string",
                                     "title": "Interval"
@@ -6889,6 +7872,25 @@
                               "params": {
                                 "type": "object",
                                 "properties": {
+                                  "environment": {
+                                    "type": "object",
+                                    "title": "Environment",
+                                    "properties": {
+                                      "keys": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "prefixes": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string"
+                                        }
+                                      }
+                                    },
+                                    "nullable": true
+                                  },
                                   "interval": {
                                     "type": "string",
                                     "title": "Interval"
@@ -6937,6 +7939,32 @@
                                 "required": [
                                   "connections"
                                 ]
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "if": {
+                            "properties": {
+                              "kind": {
+                                "const": "stacks"
+                              }
+                            },
+                            "required": [
+                              "kind"
+                            ]
+                          },
+                          "then": {
+                            "properties": {
+                              "params": {
+                                "type": "object",
+                                "properties": {
+                                  "rootPid": {
+                                    "type": "integer",
+                                    "title": "Root PID",
+                                    "format": "int32"
+                                  }
+                                }
                               }
                             }
                           }
@@ -6996,12 +8024,14 @@
                         "kind": {
                           "description": "A trace kind the run's trace host serves.",
                           "enum": [
+                            "goprof",
                             "http",
                             "http_proxy",
                             "pg_proxy",
                             "process_samples",
                             "process_tree",
                             "sql_statements",
+                            "stacks",
                             "terminal"
                           ]
                         },
@@ -7310,7 +8340,7 @@
             }
           },
           "bench": {
-            "description": "",
+            "description": "Run Go benchmarks matching this regex (. runs all)",
             "title": "Bench",
             "type": "string"
           },
@@ -7449,6 +8479,12 @@
             "title": "Pr",
             "type": "string"
           },
+          "process-facets": {
+            "default": false,
+            "description": "Also record each process's open files, sockets, ports, connections and environment (needs --ui or --diagnostics)",
+            "title": "Process Facets",
+            "type": "boolean"
+          },
           "recursive": {
             "default": true,
             "description": "",
@@ -7535,7 +8571,7 @@
           },
           "test-timeout": {
             "default": "0s",
-            "description": "Per-test-package subprocess deadline. Applies to each go test / ginkgo / vitest invocation.",
+            "description": "Per-test-package subprocess deadline (or test.testTimeout; none by default). Applies to each go test / ginkgo / vitest invocation. A Go test binary past it is sent SIGQUIT and given 3s to dump its goroutines onto the attempt before the tree is killed.",
             "examples": [
               "30s",
               "2m",
@@ -7552,7 +8588,7 @@
           },
           "timeout": {
             "default": "20m0s",
-            "description": "Global wall-clock deadline for the entire test+lint run. On timeout, diagnostics are captured and every subprocess is killed.",
+            "description": "Global wall-clock deadline for the entire test+lint run (or test.timeout). On timeout, diagnostics are logged (and checkpointed into the run's stacks under --ui/--diagnostics) and every subprocess is killed.",
             "examples": [
               "30s",
               "2m",
@@ -7596,6 +8632,7 @@
           "ignore",
           "nodes",
           "pr",
+          "process-facets",
           "recursive",
           "show-passed",
           "show-stderr",
@@ -9403,7 +10440,7 @@
           },
           "type": "object"
         },
-        "description": "Named Go pprof outputs checked after each exec when --profile is enabled. Missing outputs are valid.",
+        "description": "Named Go pprof outputs ingested into the run's goprof trace after each exec when --profile is enabled, one window per file that downloads as pprof. The name (cpu, heap, allocs, mutex, block, goroutine) says which profile it is; another name is read from the profile. Missing outputs are valid.",
         "type": "object"
       },
       "os": {
@@ -9827,18 +10864,46 @@
               "anyOf": [
                 {
                   "enum": [
+                    "goprof",
                     "http",
                     "http_proxy",
                     "pg_proxy",
                     "process_samples",
                     "process_tree",
                     "sql_statements",
+                    "stacks",
                     "terminal"
                   ]
                 },
                 {
                   "additionalProperties": false,
                   "allOf": [
+                    {
+                      "if": {
+                        "properties": {
+                          "kind": {
+                            "const": "goprof"
+                          }
+                        },
+                        "required": [
+                          "kind"
+                        ]
+                      },
+                      "then": {
+                        "properties": {
+                          "params": {
+                            "type": "object",
+                            "properties": {
+                              "rootPid": {
+                                "type": "integer",
+                                "title": "Root PID",
+                                "format": "int32"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
                     {
                       "if": {
                         "properties": {
@@ -9996,6 +11061,13 @@
                           "params": {
                             "type": "object",
                             "properties": {
+                              "facets": {
+                                "type": "array",
+                                "title": "Facets",
+                                "items": {
+                                  "type": "string"
+                                }
+                              },
                               "interval": {
                                 "type": "string",
                                 "title": "Interval"
@@ -10026,6 +11098,25 @@
                           "params": {
                             "type": "object",
                             "properties": {
+                              "environment": {
+                                "type": "object",
+                                "title": "Environment",
+                                "properties": {
+                                  "keys": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "prefixes": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  }
+                                },
+                                "nullable": true
+                              },
                               "interval": {
                                 "type": "string",
                                 "title": "Interval"
@@ -10074,6 +11165,32 @@
                             "required": [
                               "connections"
                             ]
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "if": {
+                        "properties": {
+                          "kind": {
+                            "const": "stacks"
+                          }
+                        },
+                        "required": [
+                          "kind"
+                        ]
+                      },
+                      "then": {
+                        "properties": {
+                          "params": {
+                            "type": "object",
+                            "properties": {
+                              "rootPid": {
+                                "type": "integer",
+                                "title": "Root PID",
+                                "format": "int32"
+                              }
+                            }
                           }
                         }
                       }
@@ -10133,12 +11250,14 @@
                     "kind": {
                       "description": "A trace kind the run's trace host serves.",
                       "enum": [
+                        "goprof",
                         "http",
                         "http_proxy",
                         "pg_proxy",
                         "process_samples",
                         "process_tree",
                         "sql_statements",
+                        "stacks",
                         "terminal"
                       ]
                     },
@@ -10364,7 +11483,7 @@
         "title": "Output options"
       }
     ],
-    "text": "Run fixture-based tests defined in markdown files.\n\nFixtures are markdown files that define test cases using tables or command blocks.\nEach file can have optional YAML front-matter for global configuration.\n\nUSAGE\n  gavel fixtures [flags] \u003cfixture-file-or-glob\u003e [fixture-file-or-glob...]\n  gavel fixtures --ui checks.fixture.md  # stream the typed execution tree in the test UI\n\nARGUMENTS\n    fixture-files  One or more markdown fixture files or doublestar glob patterns. At least one is required.\n    Quote globs when you want Gavel to expand them instead of your shell.\n\nFILE STRUCTURE\n  ---\n  build: go build -o myapp           # Shell command run once before all tests\n  daemon: go run ./server --port {{.port}}  # Background command run before tests; stopped after\n  exec: ./myapp                      # Default executable (default: bash)\n  args: [--verbose]                  # Default arguments for exec\n  env:                               # Environment variables for all tests\n    LOG_LEVEL: debug\n  cwd: ./testdir                     # Default working directory\n  terminal: pty                      # Use pseudo-terminal (merges stdout/stderr)\n  setup:                             # Environment prepared once per file (see SETUP)\n    dotenv: [.env.test]\n    checkout: {mode: local, worktree: {mode: new}}\n  traces: [http_proxy]               # Arm trace kinds around each fixture (see TRACES)\n  files: \"**/*.go\"                   # Glob pattern: replicate tests per matching file\n  codeBlocks: [bash, python]         # Languages to execute (default: [bash])\n  timeout: 30s                       # Total timeout for test execution\n  os: linux                          # Skip on other OSes (prefix ! to negate: !darwin)\n  arch: amd64                        # Skip on other architectures\n  skip: \"! command -v docker\"        # Skip if command exits 0\n  ai:                                # AI verification fixture config\n    model: \"provider/model\"\n    temperature: 0\n    maxTokens: 10000\n    maxConcurrent: 4\n    cacheTTL: 10m\n    noCache: false\n  verify:                            # AI verification scoring options\n    scope: diff\n    threshold: 80\n    disabled: [style]\n  ---\n\nFORMAT 1: MARKDOWN TABLES\n  Each row defines a test. Column headers map to fixture fields:\n\n  | Name | CLI        | Args     | Exit Code | CEL               |\n  |------|------------|----------|-----------|-------------------|\n  | test | ./myapp    | --help   | 0         | stdout.contains() |\n\n  Input columns\n    name, test name  Test name (required)\n    cli, command, exec  Executable to run\n    cli args, args, arguments  Arguments (space-separated)\n    cwd, dir, working directory  Working directory\n    terminal, term  Terminal mode (\"pty\" for pseudo-terminal)\n    os  OS constraint (e.g. \"linux\", \"!darwin\")\n    arch  Architecture constraint (e.g. \"amd64\")\n    skip  Bash command; exit 0 = skip test\n    traces, trace  Trace kinds for this row (comma-separated), or none\n    query  Query string\n\n  Expectation columns\n    exit code, exitcode  Expected exit code (default: 0, \"-\" to skip)\n    expected output, output, stdout  Expected stdout (literal or @file reference)\n    stderr  Expected stderr (literal or @file reference)\n    expected error, error  Expected stderr substring (implies non-zero exit)\n    expected format, format  Output format validation (json, yaml)\n    expected count, count  Expected result count for fixture types that expose counts\n    expected matches, matches  Expected output/result matcher value\n    expected results, results  Expected structured result value\n    expected files, files  Expected file result value\n    template output  Expected templated output value\n    cel, validation, expr  CEL validation expression\n\n  Unrecognized columns become Properties available in CEL.\n\nFORMAT 2: COMMAND BLOCKS\n  Use heading ### command: \u003ctest name\u003e followed by code blocks:\n\n  ### command: my test\n  ```yaml\n  cwd: ./testdir\n  exitCode: 0\n  terminal: pty\n  os: linux\n  env:\n    KEY: value\n  ```\n  ```bash\n  echo \"hello world\"\n  ```\n\n  YAML fields: cwd, exitCode, env, timeout, terminal, os, arch, skip, traces\n\n  Validations\n    * cel: stdout.contains(\"hello\")\n    * contains: hello\n    * regex: .*world.*\n    * not: contains: error\n\nFORMAT 3: AI VERIFICATION FIXTURES\n  Add ai: front-matter to turn the markdown document into one AI verification step.\n  The first ```prompt or ```ai block becomes reviewer instructions.\n  GitHub task-list items become scored acceptance criteria.\n\n  Example\n  ---\n  ai:\n    model: \"claude-code-sonnet\"\n  verify:\n    threshold: 80\n  ---\n\n  # Verify feature X\n\n  Some prose describing the expected change.\n\n  ```prompt\n  Focus on the new parser path and acceptance criteria.\n  ```\n\n  ## Acceptance Criteria\n  - [ ] Parser errors are actionable\n  - [ ] Existing fixture formats still pass\n\n  - cel: json.score \u003e= 80\n\n  AI options\n    model  Agent model name (falls back to the default model)\n    temperature  Sampling temperature\n    maxTokens  Maximum response tokens\n    maxConcurrent  Maximum concurrent AI checks\n    cacheTTL  Cache duration for AI calls\n    noCache  Disable AI response cache\n\n  Verify options\n    scope  Review scope, defaulting to the working-tree diff\n    threshold  Minimum passing score, defaulting to 80\n    disabled  Check IDs to disable for this fixture\n\n\nFORMAT 4: TEST / LINT STEPS\n  A ```yaml test or ```yaml lint fence (bare ```test / ```lint also work; the\n  leading yaml is optional and only there for editor highlighting) runs the test / lint\n  engine. The YAML body is unmarshalled directly onto the gavel test / gavel lint options, so\n  every CLI flag is available as a key (kebab-case). Each test / violation becomes a child node.\n\n  Example\n  ## Run the engine tests\n  ```yaml test\n  paths: [./testrunner/...]\n  framework: [go]\n  test-timeout: 2m\n  show-passed: true\n  ```\n\n  ## Lint the changed files\n  ```lint\n  linters: [golangci-lint, ruff]\n  changed: true\n  fix: false\n  ```\n\n  Common test keys\n    (full list: gavel test --help)\n    paths  Package paths to test (empty = discover all)\n    framework  Restrict to jest, vitest, playwright, go, ginkgo\n    changed, since, failed, baseline  Narrow to changed / prior-failed / new-vs-baseline packages\n    extra-args  Arguments forwarded to the underlying runner\n    test-timeout, timeout  Per-package / whole-run deadline (e.g. 2m)\n    lint  Also run linters in parallel with the tests\n\n  Common lint keys\n    (full list: gavel lint --help)\n    linters  Only run these linters (empty = every detected linter)\n    files  Target paths to lint\n    ignore  Glob patterns to exclude\n    fix  Apply auto-fixes\n    changed, since, baseline, failed  Only report new / prior violations\n    timeout  Per-linter timeout (e.g. 5m)\n\n  Rendering\n    show-passed  Add passing tests / clean linters as child nodes (default: only failures)\n    show-failed  Add failing tests / violations as child nodes (default: true)\n\n  UI / detach options (ui, addr, detach) are ignored, and a test step never\n  recurses into fixture discovery.\n\nSUPPORTED LANGUAGES\n    bash, sh, shell  bash -c \u003ccontent\u003e\n    python, py, python3  python -c \u003ccontent\u003e\n    typescript, ts  ts-node -e \u003ccontent\u003e\n    javascript, js  node -e \u003ccontent\u003e\n    pwsh, powershell  pwsh -Command \u003ccontent\u003e\n    go  go \u003ccontent\u003e\n    test, lint (or yaml test/yaml lint)  Run the test / lint engine (see FORMAT 4)\n\n  Non-executable labels (parsed as config): yaml, frontmatter, json\n\nINLINE CODE FENCE ATTRIBUTES\n  Attributes on the opening fence override YAML block values:\n\n    ```bash exitCode=1 timeout=30\n    exit 1\n    ```\n\n  Supported: exitCode=N (integer), timeout=N (seconds).\n\nVALIDATION SHORTHAND\n  Bullet lists after a code block define validations (joined with \u0026\u0026):\n\n    cel: \u003cexpr\u003e  Raw CEL expression\n    contains: \u003ctext\u003e  stdout.contains(\"\u003ctext\u003e\")\n    regex: \u003cpattern\u003e  stdout.matches(\"\u003cpattern\u003e\")\n    not: contains: \u003ctext\u003e  !stdout.contains(\"\u003ctext\u003e\")\n    not: \u003cexpr\u003e  !(\u003cexpr\u003e)\n\n\nCEL VALIDATION\n  Expressions must evaluate to true.\n\n  Variables\n    stdout  string    Process stdout\n    output  string    Alias for process stdout\n    stderr  string    Process stderr\n    exitCode  int       Process exit code\n    json  any       Auto-parsed JSON (when stdout starts with { or [)\n    name  string    Test name\n    sourceDir  string    Directory containing the fixture file\n    query  string    Query string\n    expectations  object    Expected values and custom table properties\n    workDir  string    Working directory\n    executablePath  string    Path to the gavel binary\n\n  Auto-injected variables (use as $VAR or {{.VAR}})\n    GIT_ROOT_DIR  string    Nearest parent with .git\n    GO_ROOT_DIR  string    Nearest parent with go.mod\n    ROOT_DIR  string    GIT_ROOT_DIR \u003e GO_ROOT_DIR \u003e workDir\n    CWD  string    Resolved working directory\n    GOOS  string    Go runtime OS (linux, darwin, ...)\n    GOARCH  string    Go runtime arch (amd64, arm64, ...)\n    GOPATH  string    Go workspace path\n\n  ANSI detection\n    ansi.has_color  bool   Output contains ANSI color codes\n    ansi.has_any  bool   Output contains any ANSI escape sequences\n    ansi.has_updates  bool   Output contains cursor movement codes\n\n    ansi.has_cursor_hide  bool   Output hides the cursor\n    ansi.has_cursor_show  bool   Output shows the cursor\n    ansi.has_reset  bool   Output contains an SGR reset\n    ansi.stray_controls  bool   Output contains unexpected control bytes\n    ansi.final_text  string Final settled terminal text\n    ansi.duplicate_lines  list   Duplicate settled terminal lines\n    ansi.has_duplicates  bool   Duplicate settled terminal lines were found\n\n  File expansion variables\n    file  string    Relative path to matched file\n    filename  string    Filename without extension\n    dir  string    Directory containing the file\n    absfile  string    Absolute file path\n    absdir  string    Absolute directory\n    basename  string    Full filename with extension\n    ext  string    File extension\n\n  Temp file variables\n  (when temp_files configured)\n    \u003cname\u003e.path  string    Path to temp file\n    \u003cname\u003e.content  string    File content\n    \u003cname\u003e.ext  string    File extension\n    \u003cname\u003e.detected  string    Detected type (text, json, xml, yaml)\n    \u003cname\u003e.json  any       Parsed JSON (if content is JSON)\n\n  Built-in CEL functions\n    string.contains(s)  startsWith(s)  endsWith(s)  matches(regex)\n    size(list)  list.all(x, pred)  list.exists(x, pred)  list.filter(x, pred)\n    has_color(s)  has_ansi(s)  has_cursor_updates(s)\n  Extended gomplate functions\n    strings.*  math.*  regexp.*  conv.*  coll.*  data.*  file.*  time.*\n\nTEMPLATE VARIABLES\n  The exec, daemon, build, args, and cwd fields support shell-style $VAR and Go template syntax:\n\n    exec: $executablePath\n    daemon: go run ./server --port {{.port}}\n    args: [--file, \"$file\"]\n    build: go build -o $workDir/myapp\n    cwd: $GIT_ROOT_DIR/testdata\n    port  Free TCP port available to daemon commands and fixture templates\n\n\nFILE EXPANSION\n  Set files in front-matter to replicate each test per matching file:\n\n  ---\n  files: \"**/*.go\"\n  exec: golint\n  args: [\"{{.file}}\"]\n  ---\n\nSETUP\n  setup: declares the environment a file's tests need — dotenv files, environment\n  variables, cloud/Kubernetes connections, and a git checkout or worktree to run in.\n\n  It is file-level front-matter only: prepared once, shared by every test in the file,\n  and torn down after the last one finishes. A per-test setup: is an error. Because the\n  file's tests still run concurrently in one group, a worktree isolates the file from the\n  rest of the repository — it does not isolate the file's tests from each other.\n\n  Example\n  ---\n  setup:\n    dotenv: [.env.test]\n    envVars:\n      - name: LOG_LEVEL\n        value: debug\n    checkout:\n      mode: local          # none | local | remote\n      worktree:\n        mode: new          # none | new | existing\n        base: HEAD         # commit-ish to branch from\n        uncommitted: clone # clone | skip — staged + unstaged + untracked\n        ignored: clone     # clone | skip — gitignored content\n        keep: false\n    connections:\n      aws: {connection: \"connection://aws/sandbox\", region: us-east-1}\n  build: go build -o ./bin/app\n  exec: ./bin/app\n  ---\n\n  Options\n    cwd  Where the file's commands run (default: the markdown file's directory)\n    baseDir  Where clones and worktrees land (default: a per-file dir under the user cache)\n    dotenv  Dotenv files to load, resolved relative to the markdown file\n    envVars  Explicit name/value (or valueFrom) environment entries\n    checkout  Git checkout: mode none|local|remote, url, ref, path, connection, since\n    checkout.worktree  Disposable worktree: mode none|new|existing, base, uncommitted, ignored, prefix, keep\n    connections  Named cloud/Kubernetes connections; connection:// refs need a database\n\n  Guarantees\n    * The source repository is never mutated — nothing is stashed, moved, or restored.\n    * Ordering is setup → build → daemon → tests → daemon stop → setup cleanup, so\n      build: compiles the same tree the tests exercise.\n    * worktree.uncommitted defaults to clone only when base is HEAD; branching\n      elsewhere degrades it to skip with a warning, because uncommitted work is a diff\n      against your HEAD. worktree.ignored defaults to clone so node_modules, .env and\n      build caches come along; set ignored: skip when that tree is large.\n    * $SETUP_DIR (template var and child env var) is the prepared directory, and\n      GIT_ROOT_DIR/ROOT_DIR are re-rooted onto it. {{.setup}} carries commit,\n      worktree, path and dirtyFiles.\n    * Golden @file expectations still resolve next to the markdown, never inside the\n      worktree — the commands move, their expectations do not.\n    * Environment precedence, highest first: fixture env: \u003e setup env \u003e injected roots \u003e\n      the inherited process environment. Setup env is additive, not hermetic.\n\nTRACES\n  traces: arms commons-db trace kinds around a fixture and keeps their records in the\n  run's store, .gavel/traces/\u003crun\u003e (the newest 20 runs are kept). Each kind's summary of the\n  fixture's window is the CEL root named by the kind. Nothing starts unless a fixture asks.\n\n  Surfaces\n  traces: http_proxy                  # one kind, default params, test scope\n  traces: [http_proxy, terminal]      # several\n  traces: []                          # opt out of a file-level or --traces default\n  traces:                             # full form\n    - kind: http_proxy\n      params: {mode: mitm, hosts: [\"*.github.com\"]}\n      scope: test                     # test (default) | file | run\n      require: count \u003e 0              # CEL over the summary; false fails a passing fixture\n\n  Also settable per test (command-block YAML, a Traces table column with the compact form or\n  none, a fixture document or one of its steps) and run-wide with --traces. A per-test value\n  replaces the file's outright. An unknown kind or params the kind refuses fail the parse.\n\n  Kinds\n    http_proxy  Recording proxy every child is pointed at (HTTP(S)_PROXY, CA trust vars under mitm)\n    pg_proxy  Postgres wire proxy in front of dsn (DATABASE_URL, PG* rewritten for children)\n    terminal  Runs the command under a PTY and records it; exports as an asciinema cast\n    http  gavel's own outbound HTTP (feature gavel)\n    sql_statements  gavel's own SQL (connections: [self])\n    process_tree, process_samples  Processes under a root and their CPU/memory\n\n  Scopes\n    * test starts a capture around the fixture; its window is the whole stream.\n    * file and run share one capture across the file or run; each fixture's window is\n      marked before and after it, so overlapping rows of one file see each other's records.\n    * Every process a fixture starts — exec, services, browser — inherits the exports; a\n      variable the setup, front matter or a step sets itself wins.\n\n  Asserting\n  cel: http_proxy.entries == 2 \u0026\u0026 http_proxy.errors == 0\n  cel: http_proxy.requests.filter(r, r.host == \"api.github.com\").size() == 2\n  cel: terminal.exit_code == 0 \u0026\u0026 terminal.duplicates.size() == 0\n  cel: pg_proxy.by_op[\"INSERT\"] == 1 \u0026\u0026 pg_proxy.errors == 0\n\n  A trace's root exists only when it was armed; its result (kind, stream, window, count,\n  summary) rides on the fixture result under traces.\n\nCWD RESOLUTION\n  Working directory is resolved with the following priority:\n\n    1. Test-level CWD (per-test frontmatter or table column)\n    2. File-level CWD (YAML front-matter at top of file)\n    3. Prepared setup (the checkout or worktree from setup:)\n    4. SourceDir (directory containing the fixture file)\n    5. --cwd flag or current working directory\n\n  Relative CWD paths are resolved from the prepared setup when the file declared one,\n  otherwise from SourceDir.\n\nEXECUTION\n  Tests run in parallel with a 2-minute default timeout per test\n  and 5-minute timeout for the build step. Each file's setup: is prepared\n  first, so the build command — which runs once before any tests —\n  compiles inside the prepared tree. A daemon command, when configured,\n  starts after build, waits for its free port to accept connections, and\n  is stopped after all fixtures finish; setups are torn down last.\n\nOUTPUT OPTIONS\n    -v  Show passed fixture results\n    -vv  Also show executed commands\n    -vvv  Also show CEL variables and stdout/stderr by default\n    --show-passed  Show passed fixture results without increasing log verbosity\n    --show-stdout  When to show stdout: Never, OnFailure, Always\n    --show-stderr  When to show stderr: Never, OnFailure, Always\n    --update-golden  Rewrite mismatched @file stdout/stderr expectations\n\n\nEXAMPLES\n  gavel fixtures tests.md                  # Run a single fixture file\n  gavel fixtures fixtures/**/*.md          # Run with glob\n  gavel fixtures -v tests.md               # Show passed fixtures\n  gavel fixtures -vv tests.md              # Also show commands\n  gavel fixtures -vvv tests.md             # Also show stdout/stderr\n  gavel fixtures --benchmark tests.md  # Save and show stage durations\n  gavel fixtures --benchmark --baseline .gavel/benchmarks/fixtures/run-...json tests.md\n  gavel fixtures --benchmark --max-time 2s --max-memory 512MiB tests.md\n  gavel fixtures --benchmark --baseline base.json --max-deviation-pct 15 tests.md\n  gavel fixtures --profile tests.md    # Save process metrics and declared Go pprof files\n  gavel fixtures --no-progress tests.md    # Disable progress display\n  gavel fixtures outline tests.md          # Parse and outline without running fixtures\n  gavel fixtures --schema                  # Print the fixture/test JSON schemas and exit\nFLAGS\n  --addr string  Interface to bind the fixture UI HTTP server (default 0.0.0.0)\n  --auto-stop duration  With --ui --detach, hard deadline for the detached UI server (default 0s)\n  --baseline string  Compare benchmark durations with a saved fixture benchmark JSON report\n  --benchmark  Record and show fixture and prerequisite durations in a JSON report\n  --detach  With --ui, keep serving the completed fixture run in a detached process\n  -h, --help  help for fixtures\n  --idle-timeout duration  With --ui --detach, stop serving after this long without HTTP requests (default 0s)\n  --max-deviation-pct float64  Fail fixtures whose measured metrics regress beyond this percentage from --baseline (default 0)\n  --max-io-read string  Fail fixtures exceeding this observed disk read byte size\n  --max-io-write string  Fail fixtures exceeding this observed disk write byte size\n  --max-memory string  Fail fixtures exceeding this peak RSS byte size (for example 512MiB)\n  --max-slow-sql int  Fail fixtures exceeding this slow SQL statement count (default 0)\n  --max-sql-queries int  Fail fixtures exceeding this SQL statement count (default 0)\n  --max-sql-query duration  Fail fixtures exceeding this longest SQL query duration (default 0s)\n  --max-sql-time duration  Fail fixtures exceeding this total SQL duration (default 0s)\n  --max-time duration  Fail fixtures taking longer than this duration (default 0s)\n  --profile  Record process CPU, memory, disk I/O, and declared Go pprof files\n  --schema  Print fixture editor JSON schemas and exit\n  --show-passed  Show passed fixture results in output\n  --show-stderr string  When to show stderr: Never, OnFailure, Always (default OnFailure)\n  --show-stdout string  When to show stdout: Never, OnFailure, Always (default OnFailure)\n  --traces string  Trace kinds armed, test-scoped with default params, for fixtures that declare no `traces:` of their own: http_proxy, pg_proxy, terminal, http, sql_statements, process_tree, process_samples (comma-separated)\n  --ui  Launch a browser with the live fixture execution tree\n  --update-golden  Rewrite @file stdout/stderr expectations with actual output instead of failing on mismatch\n\nGLOBAL FLAGS\n  --csv  Output in CSV format\n  --cwd string  Working directory\n  --db-url string  PostgreSQL database URL (overrides environment and db.json)\n  --dump-schema  Dump the schema to stderr for debugging\n  --filter string  CEL expression to filter output data\n  --format string  Output format. Either a single format (pretty|json|ndjson|toon|yaml|csv|html|markdown|llm|pdf|slack) rendered to stdout, or a comma-separated list of format=file sinks (e.g. 'json=out.json,markdown=summary.md') written to files. A bare format and format=file pairs may be mixed in one spec.\n  --graceful-timeout duration  Timeout for graceful shutdown on interrupt (default 10s)\n  --html  Output in HTML format\n  --json  Output in JSON format\n  --json-logs  Print logs in json format to stderr\n  --llm  Output up to 25 rows in Markdown with paging information\n  --log-level string  Set the default log level (default info)\n  --log-to-stderr  Log to stderr instead of stdout (default true)\n  -v, --loglevel count  Increase logging level (default 0)\n  --markdown  Output in Markdown format\n  --max-concurrent int  Maximum concurrent tasks (0 = unlimited) (default 4)\n  --max-retries int  Maximum retry attempts for failed tasks (default 3)\n  --no-color  Disable colored output\n  --no-progress  Disable progress display\n  --pdf  Output in PDF format\n  --pretty  Output in pretty format (default)\n  -P, --properties stringToString  System properties (default [])\n  --report-caller  Report log caller info\n  --retry-delay duration  Base delay between retry attempts (default 1s)\n  --table  Display in table structure (additive with format)\n  --tree  Display in tree structure (additive with format)\n  --yaml  Output in YAML format\n\n"
+    "text": "Run fixture-based tests defined in markdown files.\n\nFixtures are markdown files that define test cases using tables or command blocks.\nEach file can have optional YAML front-matter for global configuration.\n\nUSAGE\n  gavel fixtures [flags] \u003cfixture-file-or-glob\u003e [fixture-file-or-glob...]\n  gavel fixtures --ui checks.fixture.md  # stream the typed execution tree in the test UI\n\nARGUMENTS\n    fixture-files  One or more markdown fixture files or doublestar glob patterns. At least one is required.\n    Quote globs when you want Gavel to expand them instead of your shell.\n\nFILE STRUCTURE\n  ---\n  build: go build -o myapp           # Shell command run once before all tests\n  daemon: go run ./server --port {{.port}}  # Background command run before tests; stopped after\n  exec: ./myapp                      # Default executable (default: bash)\n  args: [--verbose]                  # Default arguments for exec\n  env:                               # Environment variables for all tests\n    LOG_LEVEL: debug\n  cwd: ./testdir                     # Default working directory\n  terminal: pty                      # Use pseudo-terminal (merges stdout/stderr)\n  setup:                             # Environment prepared once per file (see SETUP)\n    dotenv: [.env.test]\n    checkout: {mode: local, worktree: {mode: new}}\n  traces: [http_proxy]               # Arm trace kinds around each fixture (see TRACES)\n  files: \"**/*.go\"                   # Glob pattern: replicate tests per matching file\n  codeBlocks: [bash, python]         # Languages to execute (default: [bash])\n  timeout: 30s                       # Total timeout for test execution\n  os: linux                          # Skip on other OSes (prefix ! to negate: !darwin)\n  arch: amd64                        # Skip on other architectures\n  skip: \"! command -v docker\"        # Skip if command exits 0\n  ai:                                # AI verification fixture config\n    model: \"provider/model\"\n    temperature: 0\n    maxTokens: 10000\n    maxConcurrent: 4\n    cacheTTL: 10m\n    noCache: false\n  verify:                            # AI verification scoring options\n    scope: diff\n    threshold: 80\n    disabled: [style]\n  ---\n\nFORMAT 1: MARKDOWN TABLES\n  Each row defines a test. Column headers map to fixture fields:\n\n  | Name | CLI        | Args     | Exit Code | CEL               |\n  |------|------------|----------|-----------|-------------------|\n  | test | ./myapp    | --help   | 0         | stdout.contains() |\n\n  Input columns\n    name, test name  Test name (required)\n    cli, command, exec  Executable to run\n    cli args, args, arguments  Arguments (space-separated)\n    cwd, dir, working directory  Working directory\n    terminal, term  Terminal mode (\"pty\" for pseudo-terminal)\n    os  OS constraint (e.g. \"linux\", \"!darwin\")\n    arch  Architecture constraint (e.g. \"amd64\")\n    skip  Bash command; exit 0 = skip test\n    traces, trace  Trace kinds for this row (comma-separated), or none\n    query  Query string\n\n  Expectation columns\n    exit code, exitcode  Expected exit code (default: 0, \"-\" to skip)\n    expected output, output, stdout  Expected stdout (literal or @file reference)\n    stderr  Expected stderr (literal or @file reference)\n    expected error, error  Expected stderr substring (implies non-zero exit)\n    expected format, format  Output format validation (json, yaml)\n    expected count, count  Expected result count for fixture types that expose counts\n    expected matches, matches  Expected output/result matcher value\n    expected results, results  Expected structured result value\n    expected files, files  Expected file result value\n    template output  Expected templated output value\n    cel, validation, expr  CEL validation expression\n\n  Unrecognized columns become Properties available in CEL.\n\nFORMAT 2: COMMAND BLOCKS\n  Use heading ### command: \u003ctest name\u003e followed by code blocks:\n\n  ### command: my test\n  ```yaml\n  cwd: ./testdir\n  exitCode: 0\n  terminal: pty\n  os: linux\n  env:\n    KEY: value\n  ```\n  ```bash\n  echo \"hello world\"\n  ```\n\n  YAML fields: cwd, exitCode, env, timeout, terminal, os, arch, skip, traces\n\n  Validations\n    * cel: stdout.contains(\"hello\")\n    * contains: hello\n    * regex: .*world.*\n    * not: contains: error\n\nFORMAT 3: AI VERIFICATION FIXTURES\n  Add ai: front-matter to turn the markdown document into one AI verification step.\n  The first ```prompt or ```ai block becomes reviewer instructions.\n  GitHub task-list items become scored acceptance criteria.\n\n  Example\n  ---\n  ai:\n    model: \"claude-code-sonnet\"\n  verify:\n    threshold: 80\n  ---\n\n  # Verify feature X\n\n  Some prose describing the expected change.\n\n  ```prompt\n  Focus on the new parser path and acceptance criteria.\n  ```\n\n  ## Acceptance Criteria\n  - [ ] Parser errors are actionable\n  - [ ] Existing fixture formats still pass\n\n  - cel: json.score \u003e= 80\n\n  AI options\n    model  Agent model name (falls back to the default model)\n    temperature  Sampling temperature\n    maxTokens  Maximum response tokens\n    maxConcurrent  Maximum concurrent AI checks\n    cacheTTL  Cache duration for AI calls\n    noCache  Disable AI response cache\n\n  Verify options\n    scope  Review scope, defaulting to the working-tree diff\n    threshold  Minimum passing score, defaulting to 80\n    disabled  Check IDs to disable for this fixture\n\n\nFORMAT 4: TEST / LINT STEPS\n  A ```yaml test or ```yaml lint fence (bare ```test / ```lint also work; the\n  leading yaml is optional and only there for editor highlighting) runs the test / lint\n  engine. The YAML body is unmarshalled directly onto the gavel test / gavel lint options, so\n  every CLI flag is available as a key (kebab-case). Each test / violation becomes a child node.\n\n  Example\n  ## Run the engine tests\n  ```yaml test\n  paths: [./testrunner/...]\n  framework: [go]\n  test-timeout: 2m\n  show-passed: true\n  ```\n\n  ## Lint the changed files\n  ```lint\n  linters: [golangci-lint, ruff]\n  changed: true\n  fix: false\n  ```\n\n  Common test keys\n    (full list: gavel test --help)\n    paths  Package paths to test (empty = discover all)\n    framework  Restrict to jest, vitest, playwright, go, ginkgo\n    changed, since, failed, baseline  Narrow to changed / prior-failed / new-vs-baseline packages\n    extra-args  Arguments forwarded to the underlying runner\n    test-timeout, timeout  Per-package / whole-run deadline (e.g. 2m)\n    lint  Also run linters in parallel with the tests\n\n  Common lint keys\n    (full list: gavel lint --help)\n    linters  Only run these linters (empty = every detected linter)\n    files  Target paths to lint\n    ignore  Glob patterns to exclude\n    fix  Apply auto-fixes\n    changed, since, baseline, failed  Only report new / prior violations\n    timeout  Per-linter timeout (e.g. 5m)\n\n  Rendering\n    show-passed  Add passing tests / clean linters as child nodes (default: only failures)\n    show-failed  Add failing tests / violations as child nodes (default: true)\n\n  UI / detach options (ui, addr, detach) are ignored, and a test step never\n  recurses into fixture discovery.\n\nSUPPORTED LANGUAGES\n    bash, sh, shell  bash -c \u003ccontent\u003e\n    python, py, python3  python -c \u003ccontent\u003e\n    typescript, ts  ts-node -e \u003ccontent\u003e\n    javascript, js  node -e \u003ccontent\u003e\n    pwsh, powershell  pwsh -Command \u003ccontent\u003e\n    go  go \u003ccontent\u003e\n    test, lint (or yaml test/yaml lint)  Run the test / lint engine (see FORMAT 4)\n\n  Non-executable labels (parsed as config): yaml, frontmatter, json\n\nINLINE CODE FENCE ATTRIBUTES\n  Attributes on the opening fence override YAML block values:\n\n    ```bash exitCode=1 timeout=30\n    exit 1\n    ```\n\n  Supported: exitCode=N (integer), timeout=N (seconds).\n\nVALIDATION SHORTHAND\n  Bullet lists after a code block define validations (joined with \u0026\u0026):\n\n    cel: \u003cexpr\u003e  Raw CEL expression\n    contains: \u003ctext\u003e  stdout.contains(\"\u003ctext\u003e\")\n    regex: \u003cpattern\u003e  stdout.matches(\"\u003cpattern\u003e\")\n    not: contains: \u003ctext\u003e  !stdout.contains(\"\u003ctext\u003e\")\n    not: \u003cexpr\u003e  !(\u003cexpr\u003e)\n\n\nCEL VALIDATION\n  Expressions must evaluate to true.\n\n  Variables\n    stdout  string    Process stdout\n    output  string    Alias for process stdout\n    stderr  string    Process stderr\n    exitCode  int       Process exit code\n    json  any       Auto-parsed JSON (when stdout starts with { or [)\n    name  string    Test name\n    sourceDir  string    Directory containing the fixture file\n    query  string    Query string\n    expectations  object    Expected values and custom table properties\n    workDir  string    Working directory\n    executablePath  string    Path to the gavel binary\n\n  Auto-injected variables (use as $VAR or {{.VAR}})\n    GIT_ROOT_DIR  string    Nearest parent with .git\n    GO_ROOT_DIR  string    Nearest parent with go.mod\n    ROOT_DIR  string    GIT_ROOT_DIR \u003e GO_ROOT_DIR \u003e workDir\n    CWD  string    Resolved working directory\n    GOOS  string    Go runtime OS (linux, darwin, ...)\n    GOARCH  string    Go runtime arch (amd64, arm64, ...)\n    GOPATH  string    Go workspace path\n\n  ANSI detection\n    ansi.has_color  bool   Output contains ANSI color codes\n    ansi.has_any  bool   Output contains any ANSI escape sequences\n    ansi.has_updates  bool   Output contains cursor movement codes\n\n    ansi.has_cursor_hide  bool   Output hides the cursor\n    ansi.has_cursor_show  bool   Output shows the cursor\n    ansi.has_reset  bool   Output contains an SGR reset\n    ansi.stray_controls  bool   Output contains unexpected control bytes\n    ansi.final_text  string Final settled terminal text\n    ansi.duplicate_lines  list   Duplicate settled terminal lines\n    ansi.has_duplicates  bool   Duplicate settled terminal lines were found\n\n  File expansion variables\n    file  string    Relative path to matched file\n    filename  string    Filename without extension\n    dir  string    Directory containing the file\n    absfile  string    Absolute file path\n    absdir  string    Absolute directory\n    basename  string    Full filename with extension\n    ext  string    File extension\n\n  Temp file variables\n  (when temp_files configured)\n    \u003cname\u003e.path  string    Path to temp file\n    \u003cname\u003e.content  string    File content\n    \u003cname\u003e.ext  string    File extension\n    \u003cname\u003e.detected  string    Detected type (text, json, xml, yaml)\n    \u003cname\u003e.json  any       Parsed JSON (if content is JSON)\n\n  Built-in CEL functions\n    string.contains(s)  startsWith(s)  endsWith(s)  matches(regex)\n    size(list)  list.all(x, pred)  list.exists(x, pred)  list.filter(x, pred)\n    has_color(s)  has_ansi(s)  has_cursor_updates(s)\n  Extended gomplate functions\n    strings.*  math.*  regexp.*  conv.*  coll.*  data.*  file.*  time.*\n\nTEMPLATE VARIABLES\n  The exec, daemon, build, args, and cwd fields support shell-style $VAR and Go template syntax:\n\n    exec: $executablePath\n    daemon: go run ./server --port {{.port}}\n    args: [--file, \"$file\"]\n    build: go build -o $workDir/myapp\n    cwd: $GIT_ROOT_DIR/testdata\n    port  Free TCP port available to daemon commands and fixture templates\n\n\nFILE EXPANSION\n  Set files in front-matter to replicate each test per matching file:\n\n  ---\n  files: \"**/*.go\"\n  exec: golint\n  args: [\"{{.file}}\"]\n  ---\n\nSETUP\n  setup: declares the environment a file's tests need — dotenv files, environment\n  variables, cloud/Kubernetes connections, and a git checkout or worktree to run in.\n\n  It is file-level front-matter only: prepared once, shared by every test in the file,\n  and torn down after the last one finishes. A per-test setup: is an error. Because the\n  file's tests still run concurrently in one group, a worktree isolates the file from the\n  rest of the repository — it does not isolate the file's tests from each other.\n\n  Example\n  ---\n  setup:\n    dotenv: [.env.test]\n    envVars:\n      - name: LOG_LEVEL\n        value: debug\n    checkout:\n      mode: local          # none | local | remote\n      worktree:\n        mode: new          # none | new | existing\n        base: HEAD         # commit-ish to branch from\n        uncommitted: clone # clone | skip — staged + unstaged + untracked\n        ignored: clone     # clone | skip — gitignored content\n        keep: false\n    connections:\n      aws: {connection: \"connection://aws/sandbox\", region: us-east-1}\n  build: go build -o ./bin/app\n  exec: ./bin/app\n  ---\n\n  Options\n    cwd  Where the file's commands run (default: the markdown file's directory)\n    baseDir  Where clones and worktrees land (default: a per-file dir under the user cache)\n    dotenv  Dotenv files to load, resolved relative to the markdown file\n    envVars  Explicit name/value (or valueFrom) environment entries\n    checkout  Git checkout: mode none|local|remote, url, ref, path, connection, since\n    checkout.worktree  Disposable worktree: mode none|new|existing, base, uncommitted, ignored, prefix, keep\n    connections  Named cloud/Kubernetes connections; connection:// refs need a database\n\n  Guarantees\n    * The source repository is never mutated — nothing is stashed, moved, or restored.\n    * Ordering is setup → build → daemon → tests → daemon stop → setup cleanup, so\n      build: compiles the same tree the tests exercise.\n    * worktree.uncommitted defaults to clone only when base is HEAD; branching\n      elsewhere degrades it to skip with a warning, because uncommitted work is a diff\n      against your HEAD. worktree.ignored defaults to clone so node_modules, .env and\n      build caches come along; set ignored: skip when that tree is large.\n    * $SETUP_DIR (template var and child env var) is the prepared directory, and\n      GIT_ROOT_DIR/ROOT_DIR are re-rooted onto it. {{.setup}} carries commit,\n      worktree, path and dirtyFiles.\n    * Golden @file expectations still resolve next to the markdown, never inside the\n      worktree — the commands move, their expectations do not.\n    * Environment precedence, highest first: fixture env: \u003e setup env \u003e injected roots \u003e\n      the inherited process environment. Setup env is additive, not hermetic.\n\nTRACES\n  traces: arms commons-db trace kinds around a fixture and keeps their records in the\n  run's store, .gavel/traces/\u003crun\u003e (the newest 20 runs are kept). Each kind's summary of the\n  fixture's window is the CEL root named by the kind. Nothing starts unless a fixture asks.\n\n  Surfaces\n  traces: http_proxy                  # one kind, default params, test scope\n  traces: [http_proxy, terminal]      # several\n  traces: []                          # opt out of a file-level or --traces default\n  traces:                             # full form\n    - kind: http_proxy\n      params: {mode: mitm, hosts: [\"*.github.com\"]}\n      scope: test                     # test (default) | file | run\n      require: count \u003e 0              # CEL over the summary; false fails a passing fixture\n\n  Also settable per test (command-block YAML, a Traces table column with the compact form or\n  none, a fixture document or one of its steps) and run-wide with --traces. A per-test value\n  replaces the file's outright. An unknown kind or params the kind refuses fail the parse.\n\n  Kinds\n    http_proxy  Recording proxy every child is pointed at (HTTP(S)_PROXY, CA trust vars under mitm)\n    pg_proxy  Postgres wire proxy in front of dsn (DATABASE_URL, PG* rewritten for children)\n    terminal  Runs the command under a PTY and records it; exports as an asciinema cast\n    http  gavel's own outbound HTTP (feature gavel)\n    sql_statements  gavel's own SQL (connections: [self])\n    process_tree, process_samples  Processes under a root and their CPU/memory\n\n  Scopes\n    * test starts a capture around the fixture; its window is the whole stream.\n    * file and run share one capture across the file or run; each fixture's window is\n      marked before and after it, so overlapping rows of one file see each other's records.\n    * Every process a fixture starts — exec, services, browser — inherits the exports; a\n      variable the setup, front matter or a step sets itself wins.\n\n  Asserting\n  cel: http_proxy.entries == 2 \u0026\u0026 http_proxy.errors == 0\n  cel: http_proxy.requests.filter(r, r.host == \"api.github.com\").size() == 2\n  cel: terminal.exit_code == 0 \u0026\u0026 terminal.duplicates.size() == 0\n  cel: pg_proxy.by_op[\"INSERT\"] == 1 \u0026\u0026 pg_proxy.errors == 0\n\n  A trace's root exists only when it was armed; its result (kind, stream, window, count,\n  summary) rides on the fixture result under traces.\n\n  The store also holds kinds gavel fills itself, which a fixture does not arm: stacks\n  (goroutine/native stack dumps) and goprof (the goProfiles: a command wrote under --profile,\n  listed with the fixture's traces but not a CEL root).\n\nPROFILING AND BENCHMARKS\n  --profile\n  Reads the fixture process tree's CPU, memory and disk I/O from the run's process_tree and\n  process_samples: each step's peaks over its own time, its disk I/O as the delta of the counters.\n  It also hands each command the destinations its goProfiles: declare and ingests what it wrote:\n\n  goProfiles:\n    cpu:\n      file: cpu.pprof                # or directory: — every file written under it\n      env: CPU_PROFILE               # and/or args: [\"-cpuprofile={{.path}}\"]\n\n    * Paths are relative to a per-fixture dir under .gavel/profiles/fixtures/.\n    * The name (cpu, heap, allocs, mutex, block, goroutine) says which profile it is; any\n      other name is read from the profile's sample types. A file not written is logged and skipped;\n      one that is not a Go pprof profile fails the fixture.\n    * Each file is one goprof window; download it as pprof (.pb.gz) for go tool pprof.\n    * SQL_PROFILE_FILE (also set by any --max-sql-* limit) is passed to every command for\n      commons-db's GORM SQL logger to write one JSON line per statement.\n\n  --benchmark\n  Records each fixture's and prerequisite's (setup, build, daemon) duration, with its profile and\n  SQL totals, into .gavel/benchmarks/fixtures/run-\u003ctimestamp\u003e.json. Pass a saved report as\n  --baseline to compare against it. Limits fail individual fixtures:\n\n    --max-time  Duration\n    --max-memory  Peak RSS byte size (512MiB)\n    --max-io-read, --max-io-write  Observed disk byte sizes\n    --max-sql-time, --max-sql-query  Total SQL time, slowest statement\n    --max-sql-queries, --max-slow-sql  Statement counts (zero allowed)\n    --max-deviation-pct  Regression vs --baseline: time, peak RSS, disk I/O, SQL\n\n\nCWD RESOLUTION\n  Working directory is resolved with the following priority:\n\n    1. Test-level CWD (per-test frontmatter or table column)\n    2. File-level CWD (YAML front-matter at top of file)\n    3. Prepared setup (the checkout or worktree from setup:)\n    4. SourceDir (directory containing the fixture file)\n    5. --cwd flag or current working directory\n\n  Relative CWD paths are resolved from the prepared setup when the file declared one,\n  otherwise from SourceDir.\n\nEXECUTION\n  Tests run in parallel with a 2-minute default timeout per test\n  and 5-minute timeout for the build step. Each file's setup: is prepared\n  first, so the build command — which runs once before any tests —\n  compiles inside the prepared tree. A daemon command, when configured,\n  starts after build, waits for its free port to accept connections, and\n  is stopped after all fixtures finish; setups are torn down last.\n\nOUTPUT OPTIONS\n    -v  Show passed fixture results\n    -vv  Also show executed commands\n    -vvv  Also show CEL variables and stdout/stderr by default\n    --show-passed  Show passed fixture results without increasing log verbosity\n    --show-stdout  When to show stdout: Never, OnFailure, Always\n    --show-stderr  When to show stderr: Never, OnFailure, Always\n    --update-golden  Rewrite mismatched @file stdout/stderr expectations\n\n\nEXAMPLES\n  gavel fixtures tests.md                  # Run a single fixture file\n  gavel fixtures fixtures/**/*.md          # Run with glob\n  gavel fixtures -v tests.md               # Show passed fixtures\n  gavel fixtures -vv tests.md              # Also show commands\n  gavel fixtures -vvv tests.md             # Also show stdout/stderr\n  gavel fixtures --benchmark tests.md  # Save and show stage durations\n  gavel fixtures --benchmark --baseline .gavel/benchmarks/fixtures/run-...json tests.md\n  gavel fixtures --benchmark --max-time 2s --max-memory 512MiB tests.md\n  gavel fixtures --benchmark --baseline base.json --max-deviation-pct 15 tests.md\n  gavel fixtures --profile --ui tests.md  # Process metrics and declared Go pprof files\n  gavel fixtures --traces http_proxy tests.md  # Record every HTTP exchange; assert http_proxy.*\n  gavel fixtures --no-progress tests.md    # Disable progress display\n  gavel fixtures outline tests.md          # Parse and outline without running fixtures\n  gavel fixtures --schema                  # Print the fixture/test JSON schemas and exit\nFLAGS\n  --addr string  Interface to bind the fixture UI HTTP server (default 0.0.0.0)\n  --auto-stop duration  With --ui --detach, hard deadline for the detached UI server (default 0s)\n  --baseline string  Compare benchmark metrics with a saved fixture benchmark JSON report (see --max-deviation-pct)\n  --benchmark  Record and show fixture and prerequisite durations in .gavel/benchmarks/fixtures/run-\u003ctimestamp\u003e.json\n  --detach  With --ui, keep serving the completed fixture run in a detached process\n  -h, --help  help for fixtures\n  --idle-timeout duration  With --ui --detach, stop serving after this long without HTTP requests (default 0s)\n  --max-deviation-pct float64  Fail fixtures whose measured metrics regress beyond this percentage from --baseline (default 0)\n  --max-io-read string  Fail fixtures exceeding this observed disk read byte size\n  --max-io-write string  Fail fixtures exceeding this observed disk write byte size\n  --max-memory string  Fail fixtures exceeding this peak RSS byte size (for example 512MiB)\n  --max-slow-sql int  Fail fixtures exceeding this slow SQL statement count (default 0)\n  --max-sql-queries int  Fail fixtures exceeding this SQL statement count (default 0)\n  --max-sql-query duration  Fail fixtures exceeding this longest SQL query duration (default 0s)\n  --max-sql-time duration  Fail fixtures exceeding this total SQL duration (default 0s)\n  --max-time duration  Fail fixtures taking longer than this duration (default 0s)\n  --profile  Record the fixture process tree's CPU, memory and disk I/O, and ingest declared goProfiles pprof files into the run's goprof trace\n  --schema  Print fixture editor JSON schemas and exit\n  --show-passed  Show passed fixture results in output\n  --show-stderr string  When to show stderr: Never, OnFailure, Always (default OnFailure)\n  --show-stdout string  When to show stdout: Never, OnFailure, Always (default OnFailure)\n  --traces string  Trace kinds armed, test-scoped with default params, for fixtures that declare no `traces:` of their own: http_proxy, pg_proxy, terminal, http, sql_statements, process_tree, process_samples (comma-separated)\n  --ui  Launch a browser with the live fixture execution tree\n  --update-golden  Rewrite @file stdout/stderr expectations with actual output instead of failing on mismatch\n\nGLOBAL FLAGS\n  --csv  Output in CSV format\n  --cwd string  Working directory\n  --db-url string  PostgreSQL database URL (overrides environment and db.json)\n  --dump-schema  Dump the schema to stderr for debugging\n  --filter string  CEL expression to filter output data\n  --format string  Output format. Either a single format (pretty|json|ndjson|toon|yaml|csv|html|markdown|llm|pdf|slack) rendered to stdout, or a comma-separated list of format=file sinks (e.g. 'json=out.json,markdown=summary.md') written to files. A bare format and format=file pairs may be mixed in one spec.\n  --graceful-timeout duration  Timeout for graceful shutdown on interrupt (default 10s)\n  --html  Output in HTML format\n  --json  Output in JSON format\n  --json-logs  Print logs in json format to stderr\n  --llm  Output up to 25 rows in Markdown with paging information\n  --log-level string  Set the default log level (default info)\n  --log-to-stderr  Log to stderr instead of stdout (default true)\n  -v, --loglevel count  Increase logging level (default 0)\n  --markdown  Output in Markdown format\n  --max-concurrent int  Maximum concurrent tasks (0 = unlimited) (default 4)\n  --max-retries int  Maximum retry attempts for failed tasks (default 3)\n  --no-color  Disable colored output\n  --no-progress  Disable progress display\n  --pdf  Output in PDF format\n  --pretty  Output in pretty format (default)\n  -P, --properties stringToString  System properties (default [])\n  --report-caller  Report log caller info\n  --retry-delay duration  Base delay between retry attempts (default 1s)\n  --table  Display in table structure (additive with format)\n  --tree  Display in tree structure (additive with format)\n  --yaml  Output in YAML format\n\n"
   },
   "schemaVersion": 1,
   "source": "gavel fixtures --schema"
