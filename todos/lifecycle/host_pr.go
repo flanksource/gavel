@@ -11,6 +11,7 @@ import (
 	"github.com/flanksource/gavel/pr/provider"
 	"github.com/flanksource/gavel/todos"
 	todoprompt "github.com/flanksource/gavel/todos/prompt"
+	"github.com/flanksource/gavel/todos/tools"
 	"github.com/flanksource/gavel/todos/types"
 )
 
@@ -23,6 +24,21 @@ type prExecution struct {
 	target      *provider.RunTarget
 	workDir     string
 	write       bool
+	// events is the step's envelope vocabulary, which a turn's result is held to.
+	events []string
+	// tools is the run's tool state; pr_thread_addressed records into it.
+	tools *tools.Run
+}
+
+// forRun is the PR hook of one dispatch, reading the threads that run's tools
+// record. A nil execution has no hook.
+func (p *prExecution) forRun(run *tools.Run) *prExecution {
+	if p == nil {
+		return nil
+	}
+	bound := *p
+	bound.tools = run
+	return &bound
 }
 
 func (p *prExecution) configure(prepared *preparedStep) error {
@@ -48,11 +64,6 @@ func (p *prExecution) configure(prepared *preparedStep) error {
 	}
 	workflow.Commits = []api.Commit{{On: api.CommitOnTurn, Mode: api.CommitModeCommit, Stage: api.CommitStageWorktree, Gates: api.CommitGatesFull}}
 	spec.Workflow = &workflow
-	schema, err := api.SchemaJSON(&types.PRRunEnvelope{})
-	if err != nil {
-		return err
-	}
-	spec.Prompt.Schema, spec.Prompt.SchemaJSON = nil, schema
 	spec.Prompt.Metadata = maps.Clone(spec.Prompt.Metadata)
 	if spec.Prompt.Metadata == nil {
 		spec.Prompt.Metadata = map[string]string{}

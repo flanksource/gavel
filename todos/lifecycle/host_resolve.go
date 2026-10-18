@@ -83,7 +83,10 @@ func (h *Host) Resolve(ctx context.Context, todo *types.TODO, step Step, opts Ru
 	if exec == nil {
 		exec = todos.NewExecutorContext(ctx, logger.StandardLogger(), nil)
 	}
-	input := h.runInput(exec, todo, prepared, opts)
+	input, err := h.runInput(exec, todo, prepared, opts)
+	if err != nil {
+		return nil, fmt.Errorf("step %s: %w", step.Name, err)
+	}
 	warnings, err := promptrun.Preflight(input.input)
 	if err != nil {
 		return nil, fmt.Errorf("step %s preflight: %w", step.Name, err)

@@ -21,7 +21,7 @@ var _ = ginkgo.Describe("PR TODO lifecycle configuration", func() {
 		gomega.Expect(prepared.request.Setup.Checkout.Worktree.Base).To(gomega.Equal(strings.Repeat("a", 40)))
 		if writes {
 			gomega.Expect(prepared.request.Workflow.Commits).To(gomega.Equal([]api.Commit{{On: api.CommitOnTurn, Mode: api.CommitModeCommit, Stage: api.CommitStageWorktree, Gates: api.CommitGatesFull}}))
-			gomega.Expect(string(prepared.request.Prompt.SchemaJSON)).To(gomega.ContainSubstring("addressedThreadIds"))
+			gomega.Expect(prepared.request.Prompt.SchemaJSON).To(gomega.BeEmpty(), "the step's own envelope schema is kept")
 			gomega.Expect(prepared.request.Prompt.Metadata).To(gomega.HaveKeyWithValue(todoprompt.PRWriteMetadataKey, "true"))
 		} else {
 			gomega.Expect(prepared.request.Prompt.Metadata).NotTo(gomega.HaveKey(todoprompt.PRWriteMetadataKey))

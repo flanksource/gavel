@@ -30,13 +30,12 @@ var _ = ginkgo.Describe("PR turn thread resolution guards", func() {
 	})
 	ginkgo.DescribeTable("does not publish incomplete or failed turns", func(response *api.Response, failed bool, postErr error, allowed bool) {
 		hc := &agent.HookContext{Context: context.Background(), Phase: agent.PhaseTurn, Response: response, Failed: failed, PostErr: postErr}
-		publish, err := completedPRTurn(hc)
+		publish, err := (&prExecution{events: []string{"completed", "blocked"}}).completedTurn(hc)
 		gomega.Expect(err).NotTo(gomega.HaveOccurred())
 		gomega.Expect(publish).To(gomega.Equal(allowed))
 	},
-		ginkgo.Entry("completed", &api.Response{Text: `{"summary":"Fixed parser","endStatus":"completed","addressedThreadIds":["native"]}`}, false, nil, true),
-		ginkgo.Entry("ask", &api.Response{Text: `{"summary":"Need intent","endStatus":"ask","questions":[{"question":"Which behavior?"}]}`}, false, nil, false),
-		ginkgo.Entry("failed", &api.Response{Text: `{"summary":"Unable to fix","endStatus":"failed"}`}, false, nil, false),
+		ginkgo.Entry("succeeded", &api.Response{Text: `{"success":true,"event":"completed","comment":"Fixed parser"}`}, false, nil, true),
+		ginkgo.Entry("claims no success", &api.Response{Text: `{"success":false,"event":"blocked","comment":"Unable to fix"}`}, false, nil, false),
 		ginkgo.Entry("failed generation", (*api.Response)(nil), true, nil, false),
 		ginkgo.Entry("failed push", (*api.Response)(nil), false, errors.New("push failed"), false),
 	)

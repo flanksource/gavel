@@ -109,7 +109,7 @@ var _ = Describe("Host step selection", func() {
 			// A project step that escalates once two runs have happened, whatever
 			// they were, and never twice: it reads size(runs) and last.<itself>.
 			def, err := lifecycle.LoadWith(verify.LifecycleConfig{Steps: []map[string]any{{
-				"name": "escalate", "prompt": "file:prompts/escalate.prompt",
+				"name": "escalate", "prompt": "file:prompts/escalate.prompt", "events": []string{"escalated"},
 				"when":     "size(runs) >= 2 && !has(last.escalate)",
 				"outcomes": []map[string]any{{"status": "keep", "when": "true"}},
 			}}}, host.WorkDir)

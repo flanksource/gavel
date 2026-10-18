@@ -9,6 +9,7 @@ import (
 	"github.com/flanksource/commons-db/shell"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/todos"
+	"github.com/flanksource/gavel/todos/tools"
 	"github.com/flanksource/gavel/todos/types"
 	g "github.com/onsi/ginkgo/v2"
 	o "github.com/onsi/gomega"
@@ -29,7 +30,7 @@ var _ = g.Describe("lifecycle actual run input", func() {
 			provenance: map[string]api.FieldProvenance{"/prompt/user": {Source: api.FieldSource{Kind: api.FieldSourceLayer, Name: "request"}}},
 			warnings:   []string{"example warning"},
 		}
-		input := host.runInput(exec, todo, prepared, RunOptions{Approvals: true})
+		input := mustRunInput(host.runInput(exec, todo, prepared, RunOptions{Approvals: true}))
 		warnings, err := promptrun.Preflight(input.input)
 		o.Expect(err).NotTo(o.HaveOccurred())
 		o.Expect(warnings).To(o.BeEmpty())
@@ -49,4 +50,86 @@ var _ = g.Describe("lifecycle actual run input", func() {
 		input.start(exec, todo, prepared)
 		o.Expect(input.input.Config.OnApproval).To(o.BeNil(), "Captain binds the callback after admitting the run")
 	})
+
+	// The step's declared sets are the run's tools; one that raises approvals
+	// brings the broker with it, whatever the caller asked for.
+	g.It("attaches the step's tools and the broker an ask-policy tool needs", func() {
+		host := &Host{Provider: &inputProvider{}}
+		todo := &types.TODO{ID: "triage-example"}
+		exec := todos.NewExecutorContext(context.Background(), logger.StandardLogger(), nil)
+		prepared := &preparedStep{agent: "claude", class: types.ModePlan, timeout: time.Minute, tools: []string{tools.SetTodos},
+			request: api.Spec{Model: api.Model{Name: "claude-sonnet-5", Provider: api.Anthropic, Mode: api.ModeAgent}}}
+
+		input := mustRunInput(host.runInput(exec, todo, prepared, RunOptions{}))
+
+		names := make([]string, len(input.input.Config.Tools))
+		for i, def := range input.input.Config.Tools {
+			names[i] = def.Name
+		}
+		o.Expect(names).To(o.ContainElements("todo_get", "todo_update", "todo_merge", "todo_close"))
+		o.Expect(names).NotTo(o.ContainElement(tools.AskToolName), "the ask set was not declared")
+		o.Expect(input.tools).NotTo(o.BeNil())
+		o.Expect(input.input.Approvals).To(o.Equal(&promptrun.ApprovalOptions{RequestedBy: "gavel-dashboard"}))
+	})
+
+	// A run started from a terminal answers its own approvals there: the
+	// in-process callback replaces the durable broker the ask-policy tools would
+	// otherwise bring, and preflight admits it as the run's broker.
+	g.It("answers approvals through the caller's in-process callback instead of the durable broker", func() {
+		host := &Host{Provider: &inputProvider{}}
+		exec := todos.NewExecutorContext(context.Background(), logger.StandardLogger(), nil)
+		prepared := &preparedStep{agent: "claude", class: types.ModePlan, timeout: time.Minute, tools: []string{tools.SetTodos, tools.SetAsk},
+			request: api.Spec{Model: api.Model{Name: "claude-sonnet-5", Provider: api.Anthropic, Mode: api.ModeAgent}, Prompt: api.Prompt{User: "plan"}}}
+		var asked []api.ApprovalRequest
+		terminal := func(_ context.Context, req api.ApprovalRequest) (api.ApprovalDecision, error) {
+			asked = append(asked, req)
+			return api.ApprovalDecision{Allow: true}, nil
+		}
+
+		input := mustRunInput(host.runInput(exec, &types.TODO{ID: "plan-example"}, prepared, RunOptions{OnApproval: terminal}))
+
+		o.Expect(input.input.Approvals).To(o.BeNil())
+		o.Expect(input.input.Config.OnApproval).NotTo(o.BeNil())
+		_, err := promptrun.Preflight(input.input)
+		o.Expect(err).NotTo(o.HaveOccurred())
+		_, err = input.input.Config.OnApproval(context.Background(), api.ApprovalRequest{Tool: "todo_close", Kind: api.ApprovalKindTool})
+		o.Expect(err).NotTo(o.HaveOccurred())
+		o.Expect(asked).To(o.HaveLen(1))
+	})
+
+	g.It("refuses a run asking for both the in-process callback and the durable broker", func() {
+		host := &Host{}
+		exec := todos.NewExecutorContext(context.Background(), logger.StandardLogger(), nil)
+		prepared := &preparedStep{agent: "claude", class: types.ModeRun, timeout: time.Minute,
+			request: api.Spec{Model: api.Model{Name: "claude-sonnet-5", Provider: api.Anthropic, Mode: api.ModeAgent}}}
+		allow := func(context.Context, api.ApprovalRequest) (api.ApprovalDecision, error) {
+			return api.ApprovalDecision{Allow: true}, nil
+		}
+
+		_, err := host.runInput(exec, &types.TODO{ID: "run-example"}, prepared, RunOptions{Approvals: true, OnApproval: allow})
+
+		o.Expect(err).To(o.MatchError(o.ContainSubstring("one approval broker")))
+	})
+
+	g.It("leaves a run without tools and without an approval request unbrokered", func() {
+		host := &Host{}
+		exec := todos.NewExecutorContext(context.Background(), logger.StandardLogger(), nil)
+		prepared := &preparedStep{agent: "claude", class: types.ModeRun, timeout: time.Minute,
+			request: api.Spec{Model: api.Model{Name: "claude-sonnet-5", Provider: api.Anthropic, Mode: api.ModeAgent}}}
+
+		input := mustRunInput(host.runInput(exec, &types.TODO{ID: "run-example"}, prepared, RunOptions{}))
+
+		o.Expect(input.input.Config.Tools).To(o.BeEmpty())
+		o.Expect(input.input.Approvals).To(o.BeNil())
+	})
 })
+
+// inputProvider is a provider with no label store: the tool sets need one to
+// be built, and the taxonomy falls back to the built-in labels.
+type inputProvider struct{ todos.Provider }
+
+func mustRunInput(input *stepInput, err error) *stepInput {
+	g.GinkgoHelper()
+	o.Expect(err).NotTo(o.HaveOccurred())
+	return input
+}

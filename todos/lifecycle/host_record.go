@@ -11,13 +11,15 @@ import (
 	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/captain/pkg/promptrun"
 	"github.com/flanksource/gavel/todos"
+	"github.com/flanksource/gavel/todos/tools"
 	"github.com/flanksource/gavel/todos/types"
 )
 
 // RunOutcome is how Captain files a finished step run: the terminal state and
 // phase gavel's envelope maps to, and the summary, structured output and error
-// the run leaves on its row. An ask envelope parks the run waiting on its
-// answer; a failed verdict or a failed envelope fails it; a stop cancels it.
+// the run leaves on its row. A failed verdict, an envelope that does not claim
+// success, or an error fails it; a stop cancels it. A question never parks the
+// run: todo_ask blocks inside it until the answer arrives.
 func RunOutcome(result *todos.ExecutionResult, verifyStep bool) promptrun.Outcome {
 	if result == nil {
 		return promptrun.Outcome{
@@ -32,9 +34,7 @@ func RunOutcome(result *todos.ExecutionResult, verifyStep bool) promptrun.Outcom
 	switch {
 	case result.Cancelled:
 		out.State = captaindb.PromptRunStateCancelled
-	case result.EndStatus == types.EndAsk:
-		out.State, out.Phase = captaindb.PromptRunStateWaiting, captaindb.PromptRunPhaseGenerate
-	case failedVerification || !result.Success || result.EndStatus == types.EndFailed || out.Error != "":
+	case failedVerification || !result.Success || out.Error != "":
 		out.State, out.Phase = captaindb.PromptRunStateFailed, captaindb.PromptRunPhaseGenerate
 		if failedVerification || verifyStep {
 			out.Phase = captaindb.PromptRunPhaseVerify
@@ -110,26 +110,8 @@ func (h *Host) recordedOutcome(runCtx context.Context, step Step, prepared *prep
 		execution := *d.execution
 		d.execution = &execution
 		collected := h.collect(step, prepared, d, start)
-		if env := collected.Execution.TriageNew; env != nil && env.EndStatus == types.EndCompleted {
-			var validationErr error
-			if input.triageNew == nil {
-				validationErr = fmt.Errorf("triage.new result has no approval coordinator")
-			} else {
-				todo, getErr := h.Provider.Get(runCtx, input.triageNew.SourceID)
-				validationErr = getErr
-				if validationErr == nil {
-					validationErr = input.triageNew.Validate(runCtx, todo, env)
-				}
-			}
-			if validationErr != nil {
-				input.execution.ErrorMessage = validationErr.Error()
-				collected.Execution.Success = false
-				collected.Execution.EndStatus = types.EndFailed
-				collected.Execution.ErrorMessage = validationErr.Error()
-			}
-		}
 		mapped := RunOutcome(collected.Execution, prepared.class == types.ModeVerify)
-		if base.State != captaindb.PromptRunStateSucceeded && mapped.State != captaindb.PromptRunStateWaiting {
+		if base.State != captaindb.PromptRunStateSucceeded {
 			mapped.State, mapped.Phase = base.State, base.Phase
 			if mapped.Error == "" {
 				mapped.Error = base.Error
@@ -160,11 +142,13 @@ type dispatched struct {
 	cancelled bool
 	timedOut  bool
 	execution *todos.ExecutionResult
+	// tools is what the run's todo tools did; nil when the step declares none.
+	tools *tools.Run
 }
 
 func (in *stepInput) dispatched(runCtx context.Context, out promptrun.Result, err error) dispatched {
 	return dispatched{
-		out: out, err: err, execution: in.execution,
+		out: out, err: err, execution: in.execution, tools: in.tools,
 		cancelled: errors.Is(context.Cause(runCtx), todos.ErrExecutionCancelled),
 		timedOut:  errors.Is(runCtx.Err(), context.DeadlineExceeded) && !in.sawResult,
 	}

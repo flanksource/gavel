@@ -80,14 +80,14 @@ func (h *Host) externalOutcome(step Step, definition todoprompt.Definition, turn
 	switch turn.State {
 	case RunSucceeded:
 		if turn.Envelope == nil {
-			execution.Summary, execution.EndStatus = strings.TrimSpace(turn.Summary), types.EndCompleted
-			facts.Run.State = RunSucceeded
-			facts.Envelope = Envelope{Summary: execution.Summary, EndStatus: string(types.EndCompleted)}
+			execution.Summary = strings.TrimSpace(turn.Summary)
+			execution.ErrorMessage = fmt.Sprintf("the %s turn returned no result envelope", source)
+			facts.Run.State, facts.Run.Error = RunFailed, execution.ErrorMessage
 			break
 		}
 		prepared := &preparedStep{definition: definition, class: definition.Class}
 		result := promptrun.Result{Response: &api.Response{StructuredData: turn.Envelope}, StructuredData: turn.Envelope}
-		h.collectEnvelope(execution, &facts, prepared, result)
+		collectEnvelope(execution, &facts, step, prepared, result, nil)
 	case RunFailed, RunCancelled:
 		reason := firstNonEmpty(strings.TrimSpace(turn.Error), fmt.Sprintf("the %s turn ended %s", source, turn.State))
 		execution.ErrorMessage, execution.Cancelled = reason, turn.State == RunCancelled

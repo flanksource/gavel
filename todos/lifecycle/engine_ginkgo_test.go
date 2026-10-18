@@ -144,35 +144,34 @@ var _ = Describe("default outcomes", func() {
 		func(result lifecycle.StepResult, want string) {
 			Expect(outcome("run", result)).To(Equal(want))
 		},
-		Entry("asks", lifecycle.StepResult{Run: succeeded, Envelope: lifecycle.Envelope{EndStatus: "ask"}}, "ask"),
 		Entry("cancelled → pending", lifecycle.StepResult{Run: lifecycle.RunFacts{State: "cancelled"}}, "pending"),
 		Entry("run failed", lifecycle.StepResult{Run: lifecycle.RunFacts{State: "failed", Error: "boom"}}, "failed"),
-		Entry("agent reported failure", lifecycle.StepResult{Run: succeeded, Envelope: lifecycle.Envelope{EndStatus: "failed"}}, "failed"),
-		Entry("verifier passed", lifecycle.StepResult{Run: succeeded, Envelope: lifecycle.Envelope{EndStatus: "completed"}, Verify: passed}, "verified"),
-		Entry("verifier failed", lifecycle.StepResult{Run: succeeded, Envelope: lifecycle.Envelope{EndStatus: "completed"}, Verify: failedReport}, "unverified"),
-		Entry("no verifier → pending", lifecycle.StepResult{Run: succeeded, Envelope: lifecycle.Envelope{EndStatus: "completed"}}, "pending"),
+		Entry("agent claims no success", lifecycle.StepResult{Run: succeeded, Envelope: completedRun(false)}, "failed"),
+		Entry("verifier passed", lifecycle.StepResult{Run: succeeded, Envelope: completedRun(true), Verify: passed}, "verified"),
+		Entry("verifier failed", lifecycle.StepResult{Run: succeeded, Envelope: completedRun(true), Verify: failedReport}, "unverified"),
+		Entry("verifier passed over the agent's own doubt", lifecycle.StepResult{Run: succeeded, Envelope: completedRun(false), Verify: passed}, "verified"),
+		Entry("no verifier → pending", lifecycle.StepResult{Run: succeeded, Envelope: completedRun(true)}, "pending"),
 	)
 
 	DescribeTable("plan",
 		func(result lifecycle.StepResult, want string) {
 			Expect(outcome("plan", result)).To(Equal(want))
 		},
-		Entry("new plan → review", lifecycle.StepResult{Run: succeeded, Plan: &lifecycle.PlanFacts{Status: "new", Content: "# plan"}}, "review"),
-		Entry("updated plan → review", lifecycle.StepResult{Run: succeeded, Plan: &lifecycle.PlanFacts{Status: "updated"}}, "review"),
-		Entry("unchanged plan → pending", lifecycle.StepResult{Run: succeeded, Plan: &lifecycle.PlanFacts{Status: "unchanged"}}, "pending"),
-		Entry("questions → ask", lifecycle.StepResult{Run: succeeded, Plan: &lifecycle.PlanFacts{Status: "new"}, Questions: []any{map[string]any{"question": "which db?"}}}, "ask"),
+		Entry("new plan → review", lifecycle.StepResult{Run: succeeded, Envelope: lifecycle.Envelope{Success: true, Event: "new"}}, "review"),
+		Entry("updated plan → review", lifecycle.StepResult{Run: succeeded, Envelope: lifecycle.Envelope{Success: true, Event: "updated"}}, "review"),
+		Entry("unchanged plan → pending", lifecycle.StepResult{Run: succeeded, Envelope: lifecycle.Envelope{Success: true, Event: "unchanged"}}, "pending"),
 		Entry("run failed", lifecycle.StepResult{Run: lifecycle.RunFacts{State: "failed"}}, "failed"),
-		Entry("agent reported failure", lifecycle.StepResult{Run: succeeded, Envelope: lifecycle.Envelope{EndStatus: "failed"}}, "failed"),
+		Entry("agent claims no success", lifecycle.StepResult{Run: succeeded, Envelope: lifecycle.Envelope{Event: "new"}}, "failed"),
 	)
 
-	It("plan with no plan status is an unknown outcome", func() {
-		_, err := outcome("plan", lifecycle.StepResult{Run: succeeded})
+	It("plan with an event outside its vocabulary is an unknown outcome", func() {
+		_, err := outcome("plan", lifecycle.StepResult{Run: succeeded, Envelope: lifecycle.Envelope{Success: true, Event: "completed"}})
 		Expect(err).To(MatchError(ContainSubstring("no outcome matched")))
 	})
 
 	It("resolves the outcomes from the compiled definition, not the caller's step value", func() {
 		engine := defaultEngine()
-		result := lifecycle.StepResult{Run: succeeded, Envelope: lifecycle.Envelope{EndStatus: "completed"}, Verify: passed}
+		result := lifecycle.StepResult{Run: succeeded, Envelope: completedRun(true), Verify: passed}
 
 		status, err := engine.Outcome(lifecycle.Step{Name: "run"}, ctx, result)
 
@@ -193,11 +192,15 @@ var _ = Describe("default outcomes", func() {
 		func(result lifecycle.StepResult, want string) {
 			Expect(outcome("triage", result)).To(Equal(want))
 		},
-		Entry("done keeps the status", lifecycle.StepResult{Run: succeeded, Envelope: lifecycle.Envelope{EndStatus: "completed"}}, lifecycle.OutcomeKeep),
-		Entry("asks", lifecycle.StepResult{Run: succeeded, Envelope: lifecycle.Envelope{EndStatus: "ask"}}, "ask"),
+		Entry("done keeps the status", lifecycle.StepResult{Run: succeeded, Envelope: lifecycle.Envelope{Success: true, Event: "done"}}, lifecycle.OutcomeKeep),
+		Entry("a denied close fails the run", lifecycle.StepResult{Run: succeeded, Envelope: lifecycle.Envelope{Event: "duplicate"}}, "failed"),
 		Entry("run failed", lifecycle.StepResult{Run: lifecycle.RunFacts{State: "failed"}}, "failed"),
 	)
 })
+
+func completedRun(success bool) lifecycle.Envelope {
+	return lifecycle.Envelope{Success: success, Event: "completed", Comment: "Implemented it."}
+}
 
 var _ = Describe("strict predicates", func() {
 	base := func() lifecycle.Lifecycle {
@@ -229,12 +232,36 @@ var _ = Describe("strict predicates", func() {
 
 	It("rejects a predicate that does not evaluate to a bool", func() {
 		def := base()
-		def.Steps[3].Outcomes = []lifecycle.Outcome{{Status: "pending", When: "envelope.summary"}}
+		def.Steps[3].Outcomes = []lifecycle.Outcome{{Status: "pending", When: "envelope.comment"}}
 		engine, err := lifecycle.New(def)
 		Expect(err).NotTo(HaveOccurred())
 		_, err = engine.Outcome(stepNamed(engine, "run"), lifecycle.Context{Subject: subjectFor("pending", nil, nil)},
-			lifecycle.StepResult{Envelope: lifecycle.Envelope{Summary: "done"}})
+			lifecycle.StepResult{Envelope: lifecycle.Envelope{Comment: "done"}})
 		Expect(err).To(MatchError(ContainSubstring("did not return a bool")))
+	})
+
+	DescribeTable("rejects a step whose envelope vocabulary or tools are unusable",
+		func(mutate func(*lifecycle.Lifecycle), message string) {
+			def := base()
+			mutate(&def)
+			_, err := lifecycle.New(def)
+			Expect(err).To(MatchError(ContainSubstring(message)))
+		},
+		Entry("no events", func(def *lifecycle.Lifecycle) { def.Steps[3].Events = nil }, "step run: events is required"),
+		Entry("a repeated event", func(def *lifecycle.Lifecycle) { def.Steps[3].Events = []string{"completed", "completed"} }, `event "completed" is declared twice`),
+		Entry("an unknown tool set", func(def *lifecycle.Lifecycle) { def.Steps[0].Tools = []string{"deploy"} }, `tool set "deploy" is not one of ask, pr, todos`),
+		Entry("tools on the verify step", func(def *lifecycle.Lifecycle) { def.Steps[2].Tools = []string{"todos"} }, "takes no tools"),
+		Entry("verify events other than its verdicts", func(def *lifecycle.Lifecycle) { def.Steps[2].Events = []string{"ok"} }, "events must be [passed failed]"),
+	)
+
+	It("declares the plan's tool sets on the built-in steps, and no ask for triage", func() {
+		tools := map[string][]string{}
+		for _, step := range base().Steps {
+			tools[step.Name] = step.Tools
+		}
+		Expect(tools).To(Equal(map[string][]string{
+			"triage": {"todos"}, "plan": {"todos", "ask"}, "verify": nil, "run": {"todos", "ask", "pr"}, "triage.new": {"todos"},
+		}))
 	})
 
 	It("rejects a subject type the declaration language does not know", func() {

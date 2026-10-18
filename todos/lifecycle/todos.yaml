@@ -3,6 +3,11 @@
 # and which status its result lands the todo in (`outcomes`, ordered, first
 # true wins, none → error).
 #
+# Every step returns the same envelope, {success, event, comment}: `events` is
+# the vocabulary of its event, and the outcomes read `envelope.success` and
+# `envelope.event`. A step changes TODOs through the tool sets it declares
+# (`tools`), which write when they are called.
+#
 # Steps are listed in the order Next considers them. Verification comes before
 # implementation so a todo whose last run landed without being checked is
 # verified rather than re-implemented.
@@ -20,30 +25,31 @@ subject:
 steps:
   - name: triage
     prompt: todos.triage
-    envelope: triage
+    events: [ready, shape, investigate, done, retired, merged, duplicate]
+    tools: [todos]
     auxiliary: true
     spec:
       permissions:
         mode: plan
     outcomes:
-      - { status: ask, when: "envelope.endStatus == 'ask'" }
-      - { status: failed, when: "run.state == 'failed' || envelope.endStatus == 'failed'" }
-      - { status: keep, when: "true" } # the host applies the verdict; status is untouched unless the verdict set one
+      - { status: failed, when: "run.state == 'failed' || !envelope.success" }
+      - { status: keep, when: "true" } # the tools wrote what triage decided; status is untouched unless todo_update set one
 
   - name: plan
     prompt: todos.plan
-    envelope: plan
+    events: [new, updated, unchanged]
+    tools: [todos, ask]
     when: "subject.status in ['draft', 'pending', 'failed', 'unverified'] && !subject.plan.exists"
     inputs:
       existingPlan: subject.plan.content
     outcomes:
-      - { status: ask, when: "envelope.endStatus == 'ask' || size(questions) > 0" }
-      - { status: failed, when: "run.state != 'succeeded' || envelope.endStatus == 'failed'" }
-      - { status: review, when: "plan.status in ['new', 'updated']" }
-      - { status: pending, when: "plan.status == 'unchanged'" }
+      - { status: failed, when: "run.state != 'succeeded' || !envelope.success" }
+      - { status: review, when: "envelope.event in ['new', 'updated']" }
+      - { status: pending, when: "envelope.event == 'unchanged'" }
 
   - name: verify
     prompt: todos.verify # verify-only: the step runs the definition of done, not an agent turn
+    events: [passed, failed]
     # Applies when the last implementation landed and no verification has judged it since.
     when: >-
       subject.verification.exists && subject.status in ['pending', 'unverified']
@@ -61,7 +67,8 @@ steps:
 
   - name: run
     prompt: todos.run
-    envelope: result
+    events: [completed, blocked]
+    tools: [todos, ask, pr]
     # A verified or completed todo is finished: it is reopened by a person, not
     # re-implemented because a backlog pass reached it.
     when: "subject.status in ['pending', 'failed', 'unverified'] && (!subject.plan.exists || subject.plan.approved)"
@@ -83,18 +90,19 @@ steps:
             stage: worktree
             gates: full
     outcomes:
-      - { status: ask, when: "envelope.endStatus == 'ask'" }
+      # The definition of done is the verdict, ahead of the agent's own claim.
       - { status: pending, when: "run.state == 'cancelled'" }
-      - { status: failed, when: "run.state == 'failed' || envelope.endStatus == 'failed'" }
+      - { status: failed, when: "run.state == 'failed'" }
       - { status: verified, when: "verify.ran && verify.passed" }
       - { status: unverified, when: "verify.ran && !verify.passed" }
+      - { status: failed, when: "!envelope.success" }
       - { status: pending, when: "true" }
 
   - name: triage.new
     prompt: todos.triage.new
-    envelope: triage.new
+    events: [kept, duplicate, merged, child]
+    tools: [todos]
     auxiliary: true
     outcomes:
-      - { status: ask, when: "envelope.endStatus == 'ask'" }
-      - { status: failed, when: "run.state == 'failed' || envelope.endStatus == 'failed'" }
+      - { status: failed, when: "run.state == 'failed' || !envelope.success" }
       - { status: keep, when: "true" }

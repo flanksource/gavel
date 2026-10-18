@@ -58,7 +58,7 @@ var _ = g.Describe("lifecycle admission", func() {
 	})
 
 	g.It("asks the runtime for the step, its prompt and the requested runtime, and hands Captain its recording", func() {
-		input := host.runInput(exec, &types.TODO{ID: "example"}, prepared, RunOptions{Provider: suppliedProvider{}})
+		input := mustRunInput(host.runInput(exec, &types.TODO{ID: "example"}, prepared, RunOptions{Provider: suppliedProvider{}}))
 
 		admission, err := host.admit(exec, &types.TODO{ID: "example"}, Step{Name: "plan"}, prepared, input, RunOptions{})
 
@@ -79,7 +79,7 @@ var _ = g.Describe("lifecycle admission", func() {
 	g.It("tells the runtime and the dashboard of the run only once Captain has admitted it", func() {
 		var notified []todos.RunPreparationResult
 		exec.SetRunPreparedHook(func(result todos.RunPreparationResult) { notified = append(notified, result) })
-		input := host.runInput(exec, &types.TODO{ID: "example"}, prepared, RunOptions{})
+		input := mustRunInput(host.runInput(exec, &types.TODO{ID: "example"}, prepared, RunOptions{}))
 		_, err := host.admit(exec, &types.TODO{ID: "example"}, Step{Name: "plan"}, prepared, input, RunOptions{})
 		o.Expect(err).NotTo(o.HaveOccurred())
 		o.Expect([]int{len(provider.admitted), len(notified)}).To(o.Equal([]int{0, 0}))
@@ -105,7 +105,7 @@ var _ = g.Describe("lifecycle admission", func() {
 
 	g.It("refuses a runtime that cleared the run without a recording", func() {
 		provider.admission.Record = nil
-		input := host.runInput(exec, &types.TODO{ID: "example"}, prepared, RunOptions{})
+		input := mustRunInput(host.runInput(exec, &types.TODO{ID: "example"}, prepared, RunOptions{}))
 
 		_, err := host.admit(exec, &types.TODO{ID: "example"}, Step{Name: "plan"}, prepared, input, RunOptions{})
 

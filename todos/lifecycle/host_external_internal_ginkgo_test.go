@@ -13,57 +13,46 @@ import (
 // OnOutcome persists it exactly like one of gavel's own.
 var _ = ginkgo.Describe("an external turn's outcome", func() {
 	const (
-		source   = "captain"
-		summary  = "Migrated the staging database."
-		question = "Should the staging data be anonymised first?"
+		source  = "captain"
+		comment = "Migrated the staging database."
 	)
-	runDefinition := todoprompt.Definition{Name: "run", Class: types.ModeRun, Envelope: todoprompt.EnvelopeResult}
-	runStep := Step{Name: "run"}
+	runDefinition := todoprompt.Definition{Name: "run", Class: types.ModeRun}
+	runStep := Step{Name: "run", Events: []string{"completed", "blocked"}}
 	runID := uuid.MustParse("0199f0aa-0000-7000-8000-00000000c0de")
 
-	ginkgo.It("reads a plain-text success as a completed run", func() {
+	ginkgo.It("decodes the returned envelope like a dispatched run's", func() {
 		out, err := (&Host{}).externalOutcome(runStep, runDefinition, ExternalTurn{
-			Source: source, PromptRunID: runID, State: RunSucceeded, Summary: summary,
+			Source: source, PromptRunID: runID, State: RunSucceeded,
+			Envelope: map[string]any{"success": true, "event": "completed", "comment": comment},
 		})
 
 		gomega.Expect(err).NotTo(gomega.HaveOccurred())
 		gomega.Expect(out.Source).To(gomega.Equal(source))
 		gomega.Expect(out.Admission.PromptRunID).To(gomega.Equal(runID))
 		gomega.Expect(out.Result.Run.State).To(gomega.Equal(RunSucceeded))
-		gomega.Expect(out.Result.Envelope).To(gomega.Equal(Envelope{Summary: summary, EndStatus: string(types.EndCompleted)}))
+		gomega.Expect(out.Result.Envelope).To(gomega.Equal(Envelope{
+			Success: true, Event: "completed", Comment: comment,
+			Extra: map[string]any{"success": true, "event": "completed", "comment": comment},
+		}))
 		gomega.Expect(out.Execution.Success).To(gomega.BeTrue())
-		gomega.Expect(out.Execution.EndStatus).To(gomega.Equal(types.EndCompleted))
-		gomega.Expect(out.Execution.Summary).To(gomega.Equal(summary))
+		gomega.Expect(out.Execution.Summary).To(gomega.Equal(comment))
 		gomega.Expect(out.Execution.ExecutorName).To(gomega.Equal(source))
 	})
 
-	ginkgo.It("decodes a returned ask envelope into a waiting run with its questions", func() {
-		out, err := (&Host{}).externalOutcome(runStep, runDefinition, ExternalTurn{
-			Source: source, PromptRunID: runID, State: RunSucceeded,
-			Envelope: map[string]any{
-				"summary": "Waiting on one more answer.", "endStatus": "ask",
-				"questions": []any{map[string]any{"text": question}},
-			},
-		})
+	ginkgo.DescribeTable("fails a successful turn without a valid envelope",
+		func(envelope map[string]any, message string) {
+			out, err := (&Host{}).externalOutcome(runStep, runDefinition, ExternalTurn{
+				Source: source, PromptRunID: runID, State: RunSucceeded, Summary: comment, Envelope: envelope,
+			})
 
-		gomega.Expect(err).NotTo(gomega.HaveOccurred())
-		gomega.Expect(out.Result.Run.State).To(gomega.Equal(RunWaiting))
-		gomega.Expect(out.Result.Envelope.EndStatus).To(gomega.Equal(string(types.EndAsk)))
-		gomega.Expect(out.Execution.EndStatus).To(gomega.Equal(types.EndAsk))
-		gomega.Expect(out.Execution.Questions).To(gomega.Equal([]types.AgentQuestion{{Text: question}}))
-	})
-
-	ginkgo.It("fails a turn whose envelope does not decode", func() {
-		out, err := (&Host{}).externalOutcome(runStep, runDefinition, ExternalTurn{
-			Source: source, PromptRunID: runID, State: RunSucceeded,
-			Envelope: map[string]any{"endStatus": "ask"},
-		})
-
-		gomega.Expect(err).NotTo(gomega.HaveOccurred())
-		gomega.Expect(out.Result.Run.State).To(gomega.Equal(RunFailed))
-		gomega.Expect(out.Execution.Success).To(gomega.BeFalse())
-		gomega.Expect(out.Execution.ErrorMessage).To(gomega.ContainSubstring("summary"))
-	})
+			gomega.Expect(err).NotTo(gomega.HaveOccurred())
+			gomega.Expect(out.Result.Run.State).To(gomega.Equal(RunFailed))
+			gomega.Expect(out.Execution.Success).To(gomega.BeFalse())
+			gomega.Expect(out.Execution.ErrorMessage).To(gomega.ContainSubstring(message))
+		},
+		ginkgo.Entry("plain text only", nil, "returned no result envelope"),
+		ginkgo.Entry("an undeclared event", map[string]any{"success": true, "event": "ask", "comment": "Which?"}, `event "ask"`),
+	)
 
 	ginkgo.DescribeTable("carries a turn that did not succeed",
 		func(state, reported string, cancelled bool) {

@@ -74,6 +74,9 @@ var _ = Describe("RunStep through a scripted provider", func() {
 		// verified path proves.
 		def := host.Def.Definition()
 		for i := range def.Steps {
+			// A scripted provider owns its own tool wiring, so the step's tools,
+			// and the broker they bring, have nothing to attach to.
+			def.Steps[i].Tools = nil
 			if def.Steps[i].Name == "run" {
 				def.Steps[i].Spec = &api.Spec{Workflow: &api.Workflow{Verify: &api.Verify{
 					Fixture: "{{subject.verification.document}}", Scope: api.VerifyScopeAll,
@@ -87,7 +90,7 @@ var _ = Describe("RunStep through a scripted provider", func() {
 	})
 
 	It("lands a run whose definition of done passed as verified", func() {
-		agent := &scriptedProvider{events: scriptedTurn(`{"summary":"Built it.","endStatus":"completed"}`, true)}
+		agent := &scriptedProvider{events: scriptedTurn(`{"success":true,"event":"completed","comment":"Built it."}`, true)}
 		todo := hostTodo()
 
 		outcome, err := host.RunStep(ctx, todo, run, lifecycle.RunOptions{Provider: agent})
@@ -118,7 +121,7 @@ var _ = Describe("RunStep through a scripted provider", func() {
 	})
 
 	It("lands a run whose provider result was not a success as failed", func() {
-		agent := &scriptedProvider{events: scriptedTurn(`{"summary":"Built it.","endStatus":"completed"}`, false)}
+		agent := &scriptedProvider{events: scriptedTurn(`{"success":true,"event":"completed","comment":"Built it."}`, false)}
 		todo := hostTodo()
 
 		outcome, err := host.RunStep(ctx, todo, run, lifecycle.RunOptions{Provider: agent})
