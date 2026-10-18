@@ -1,6 +1,17 @@
 module github.com/flanksource/gavel
 
-go 1.27.0
+go 1.26.1
+
+require (
+	github.com/flanksource/captain v0.0.70-0.20261014132911-cc3d9c2d4798
+	github.com/flanksource/clicky v1.21.78-0.20261014132547-6063fb70846b
+	github.com/flanksource/commons v1.60.1
+	github.com/flanksource/commons-db v0.1.58
+	github.com/flanksource/gomplate/v3 v3.24.90
+	github.com/flanksource/is-healthy v1.0.92 // indirect
+	github.com/flanksource/kubectl-neat v1.0.4 // indirect
+	github.com/flanksource/repomap v0.4.1
+)
 
 require (
 	charm.land/bubbles/v2 v2.0.0
@@ -19,15 +30,9 @@ require (
 	github.com/dustin/go-humanize v1.0.1
 	github.com/eko/gocache/lib/v4 v4.2.3
 	github.com/elazarl/goproxy v1.7.2
-	github.com/flanksource/captain v0.0.70-0.20261014132911-cc3d9c2d4798
-	github.com/flanksource/clicky v1.21.78-0.20261014132547-6063fb70846b
 	github.com/flanksource/clicky/aichat v1.21.77
-	github.com/flanksource/commons v1.60.1
-	github.com/flanksource/commons-db v0.1.58
 	github.com/flanksource/deps v1.0.46
 	github.com/flanksource/deps/start v0.0.0-20261009090519-f5045eccb6ab
-	github.com/flanksource/gomplate/v3 v3.24.90
-	github.com/flanksource/repomap v0.4.1
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/ghodss/yaml v1.0.0
 	github.com/gliderlabs/ssh v0.3.8
@@ -194,8 +199,6 @@ require (
 	github.com/felixge/httpsnoop v1.1.0 // indirect
 	github.com/fergusstrange/embedded-postgres v1.34.0 // indirect
 	github.com/firebase/genkit/go v1.13.1 // indirect
-	github.com/flanksource/is-healthy v1.0.92 // indirect
-	github.com/flanksource/kubectl-neat v1.0.4 // indirect
 	github.com/flanksource/sandbox-runtime v1.0.2 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.0 // indirect
 	github.com/geoffgarside/ber v1.2.0 // indirect
