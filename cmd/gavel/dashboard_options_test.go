@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/flanksource/gavel/sandbox"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -170,4 +171,33 @@ func TestSandboxSecretsCopyServesEnvironment(t *testing.T) {
 
 	_, err = sandboxSecrets([]string{"ANTHROPIC_API_KEY", "OPENAI_API_KEY"}, getenv)
 	require.EqualError(t, err, "--sandbox-secret-env OPENAI_API_KEY is not set in gavel serve's environment")
+}
+
+func TestSubstrateCredentialsAreParsedFromFlags(t *testing.T) {
+	credentials, err := substrateCredentials([]string{
+		"host=api.anthropic.com,header=x-api-key,env=ANTHROPIC_API_KEY,uri=ate-secret://k8s.io/default/gavel/anthropic/key",
+		"host=api.openai.com,header=Authorization,prefix=Bearer ,env=OPENAI_API_KEY,uri=ate-secret://k8s.io/default/gavel/openai/key",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []sandbox.InjectedCredential{
+		{Host: "api.anthropic.com", Header: "x-api-key", Env: "ANTHROPIC_API_KEY", URI: "ate-secret://k8s.io/default/gavel/anthropic/key"},
+		{Host: "api.openai.com", Header: "Authorization", Prefix: "Bearer ", Env: "OPENAI_API_KEY", URI: "ate-secret://k8s.io/default/gavel/openai/key"},
+	}, credentials)
+
+	_, err = substrateCredentials([]string{"host=api.anthropic.com,header=x-api-key"})
+	require.EqualError(t, err, `--substrate-credential "host=api.anthropic.com,header=x-api-key" needs host, header, env and uri`)
+	_, err = substrateCredentials([]string{"host=api.anthropic.com,colour=blue,header=x,env=Y,uri=z"})
+	require.EqualError(t, err, `--substrate-credential "host=api.anthropic.com,colour=blue,header=x,env=Y,uri=z": unknown key "colour"; keys are host, header, prefix, env and uri`)
+}
+
+func TestSubstrateSandboxRefusesSecretsInItsJobs(t *testing.T) {
+	opts := DashboardOptions{Sandbox: "substrate", SandboxSecretEnv: []string{"ANTHROPIC_API_KEY"},
+		SubstrateEnvAPI: "ate-env-api.ate-env.svc:7777", SubstrateControl: "api.ate-system.svc:443"}
+	_, err := newSandboxDispatcher(t.Context(), opts, nil, nil, nil)
+	require.EqualError(t, err, "--sandbox substrate keeps secrets out of its jobs: drop --sandbox-secret-env and give model keys to substrate's egress gateway with --substrate-credential")
+
+	opts.SandboxSecretEnv = nil
+	dispatcher, err := newSandboxDispatcher(t.Context(), opts, nil, nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "substrate", dispatcher.Executor.Name())
 }

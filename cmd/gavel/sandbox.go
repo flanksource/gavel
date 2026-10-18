@@ -1,5 +1,6 @@
 // Builds the sandbox dispatcher for hosted gavel serve from its --sandbox flags, after checking
-// the backend can run jobs safely: the container host's firewall, or the Kubernetes NetworkPolicy.
+// the backend can run jobs safely: the container host's firewall, the Kubernetes NetworkPolicy,
+// or, on agent-substrate, its default-deny egress.
 package main
 
 import (
@@ -41,8 +42,26 @@ func newSandboxDispatcher(ctx context.Context, opts DashboardOptions, db *gorm.D
 			return nil, err
 		}
 		executor = kubernetes
+	case "substrate":
+		if len(opts.SandboxSecretEnv) > 0 {
+			return nil, fmt.Errorf("--sandbox substrate keeps secrets out of its jobs: drop --sandbox-secret-env and give model keys to substrate's egress gateway with --substrate-credential")
+		}
+		credentials, err := substrateCredentials(opts.SubstrateCredential)
+		if err != nil {
+			return nil, err
+		}
+		substrate, err := sandbox.NewSubstrate(sandbox.SubstrateOptions{
+			EnvAPI: opts.SubstrateEnvAPI, Control: opts.SubstrateControl,
+			ControlTokenFile: opts.SubstrateTokenFile, ControlCAFile: opts.SubstrateCAFile,
+			Atespace: opts.SubstrateAtespace, Template: opts.SubstrateTemplate,
+			Egress: opts.SubstrateEgress, Credentials: credentials, TrustBundle: opts.SubstrateTrustBundle,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("--sandbox substrate: %w", err)
+		}
+		executor = substrate
 	default:
-		return nil, fmt.Errorf("--sandbox must be docker, podman or kubernetes, got %q", opts.Sandbox)
+		return nil, fmt.Errorf("--sandbox must be docker, podman, kubernetes or substrate, got %q", opts.Sandbox)
 	}
 	secrets, err := sandboxSecrets(opts.SandboxSecretEnv, os.Getenv)
 	if err != nil {
@@ -56,6 +75,37 @@ func newSandboxDispatcher(ctx context.Context, opts DashboardOptions, db *gorm.D
 		dispatcher.Logs = cache.OrgBlobs
 	}
 	return dispatcher, nil
+}
+
+// substrateCredentials parses --substrate-credential values: host=,header=,env=,uri= and an
+// optional prefix=, the model keys substrate's egress gateway injects.
+func substrateCredentials(values []string) ([]sandbox.InjectedCredential, error) {
+	credentials := make([]sandbox.InjectedCredential, 0, len(values))
+	for _, value := range values {
+		var credential sandbox.InjectedCredential
+		for _, pair := range strings.Split(value, ",") {
+			key, field, _ := strings.Cut(pair, "=")
+			switch key {
+			case "host":
+				credential.Host = field
+			case "header":
+				credential.Header = field
+			case "prefix":
+				credential.Prefix = field
+			case "env":
+				credential.Env = field
+			case "uri":
+				credential.URI = field
+			default:
+				return nil, fmt.Errorf("--substrate-credential %q: unknown key %q; keys are host, header, prefix, env and uri", value, key)
+			}
+		}
+		if credential.Host == "" || credential.Header == "" || credential.Env == "" || credential.URI == "" {
+			return nil, fmt.Errorf("--substrate-credential %q needs host, header, env and uri", value)
+		}
+		credentials = append(credentials, credential)
+	}
+	return credentials, nil
 }
 
 // sandboxSecrets reads the --sandbox-secret-env variables from serve's environment. A variable

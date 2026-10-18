@@ -22,26 +22,35 @@ const (
 // only (withEnv), so they never appear in flags, shell history or process lists.
 type DashboardOptions struct {
 	PRListOptions
-	Auth                string   `flag:"auth" help:"Authentication: none (local, single user) or clerk (hosted, one dashboard per Clerk organization)" default:"none"`
-	PublicURL           string   `flag:"public-url" help:"Origin users reach the dashboard at, e.g. https://gavel.example.com (required with --auth clerk)"`
-	ClerkIssuer         string   `flag:"clerk-issuer" help:"Clerk Frontend API URL (or GAVEL_CLERK_ISSUER)"`
-	ClerkPublishableKey string   `flag:"clerk-publishable-key" help:"Clerk publishable key for the browser sign-in (or GAVEL_CLERK_PUBLISHABLE_KEY)"`
-	ClerkClientID       string   `flag:"clerk-client-id" help:"Clerk public OAuth client ID that gavel login uses (or GAVEL_CLERK_CLIENT_ID)"`
-	SSHAddr             string   `flag:"ssh-addr" help:"Address for the hosted git push server, e.g. :2222 (--auth clerk only; gavel ssh serve is the local one)"`
-	SSHHostKey          string   `flag:"ssh-host-key" help:"Push server host key file; created if missing (default <data-dir>/ssh_host_key)"`
-	DataDir             string   `flag:"data-dir" help:"Directory for hosted repositories" default:"/var/lib/gavel"`
-	GitHubAppID         string   `flag:"github-app-id" help:"ID of the GitHub App organizations install to show their pull requests (--auth clerk)"`
-	GitHubAppSlug       string   `flag:"github-app-slug" help:"URL name of the GitHub App, as in github.com/apps/<slug>"`
-	GitHubAppPrivateKey string   `flag:"github-app-private-key" help:"Path to the GitHub App's private key PEM (or GAVEL_GITHUB_APP_PRIVATE_KEY_FILE)"`
-	Sandbox             string   `flag:"sandbox" help:"Run hosted push checks in a sandbox: docker, podman or kubernetes (--auth clerk); empty runs none"`
-	SandboxImage        string   `flag:"sandbox-image" help:"Runner image sandbox jobs start from, e.g. ghcr.io/flanksource/gavel-runner:<version>"`
-	SandboxNetwork      string   `flag:"sandbox-network" help:"Bridge network sandbox containers join (docker, podman); see docs/sandbox.md" default:"gavel-sandbox"`
-	SandboxServeAddr    string   `flag:"sandbox-serve-addr" help:"IP:port sandbox containers reach gavel serve at, the one private address the firewall allows (docker, podman)"`
-	SandboxNamespace    string   `flag:"sandbox-namespace" help:"Namespace sandbox Jobs run in (kubernetes)" default:"gavel-sandbox"`
-	ServePodSelector    string   `flag:"serve-pod-selector" help:"Labels of gavel serve's pods, which sandbox Jobs may reach (kubernetes)" default:"app.kubernetes.io/name=gavel"`
-	SandboxSecretEnv    []string `flag:"sandbox-secret-env" help:"Environment variables copied from gavel serve into every sandbox job's secrets, such as ANTHROPIC_API_KEY for agent runs; repeat for each"`
-	SandboxExtraDeny    []string `flag:"sandbox-extra-deny" help:"More CIDRs sandbox Jobs may not reach, such as cluster pod and service ranges outside RFC 1918 (kubernetes)"`
-	PropertiesFile      string   `flag:"properties-file" help:"Properties file with retention.* windows such as retention.job_logs=60d (default /etc/gavel/gavel.properties when it exists)"`
+	Auth                 string   `flag:"auth" help:"Authentication: none (local, single user) or clerk (hosted, one dashboard per Clerk organization)" default:"none"`
+	PublicURL            string   `flag:"public-url" help:"Origin users reach the dashboard at, e.g. https://gavel.example.com (required with --auth clerk)"`
+	ClerkIssuer          string   `flag:"clerk-issuer" help:"Clerk Frontend API URL (or GAVEL_CLERK_ISSUER)"`
+	ClerkPublishableKey  string   `flag:"clerk-publishable-key" help:"Clerk publishable key for the browser sign-in (or GAVEL_CLERK_PUBLISHABLE_KEY)"`
+	ClerkClientID        string   `flag:"clerk-client-id" help:"Clerk public OAuth client ID that gavel login uses (or GAVEL_CLERK_CLIENT_ID)"`
+	SSHAddr              string   `flag:"ssh-addr" help:"Address for the hosted git push server, e.g. :2222 (--auth clerk only; gavel ssh serve is the local one)"`
+	SSHHostKey           string   `flag:"ssh-host-key" help:"Push server host key file; created if missing (default <data-dir>/ssh_host_key)"`
+	DataDir              string   `flag:"data-dir" help:"Directory for hosted repositories" default:"/var/lib/gavel"`
+	GitHubAppID          string   `flag:"github-app-id" help:"ID of the GitHub App organizations install to show their pull requests (--auth clerk)"`
+	GitHubAppSlug        string   `flag:"github-app-slug" help:"URL name of the GitHub App, as in github.com/apps/<slug>"`
+	GitHubAppPrivateKey  string   `flag:"github-app-private-key" help:"Path to the GitHub App's private key PEM (or GAVEL_GITHUB_APP_PRIVATE_KEY_FILE)"`
+	Sandbox              string   `flag:"sandbox" help:"Run hosted push checks and agent runs in a sandbox: docker, podman, kubernetes or substrate (--auth clerk); empty runs none"`
+	SandboxImage         string   `flag:"sandbox-image" help:"Runner image sandbox jobs start from, e.g. ghcr.io/flanksource/gavel-runner:<version>"`
+	SandboxNetwork       string   `flag:"sandbox-network" help:"Bridge network sandbox containers join (docker, podman); see docs/sandbox.md" default:"gavel-sandbox"`
+	SandboxServeAddr     string   `flag:"sandbox-serve-addr" help:"IP:port sandbox containers reach gavel serve at, the one private address the firewall allows (docker, podman)"`
+	SandboxNamespace     string   `flag:"sandbox-namespace" help:"Namespace sandbox Jobs run in (kubernetes)" default:"gavel-sandbox"`
+	ServePodSelector     string   `flag:"serve-pod-selector" help:"Labels of gavel serve's pods, which sandbox Jobs may reach (kubernetes)" default:"app.kubernetes.io/name=gavel"`
+	SandboxSecretEnv     []string `flag:"sandbox-secret-env" help:"Environment variables copied from gavel serve into every sandbox job's secrets, such as ANTHROPIC_API_KEY for agent runs; repeat for each"`
+	SandboxExtraDeny     []string `flag:"sandbox-extra-deny" help:"More CIDRs sandbox Jobs may not reach, such as cluster pod and service ranges outside RFC 1918 (kubernetes)"`
+	SubstrateEnvAPI      string   `flag:"substrate-env-api" help:"ate-env-api gRPC address sandbox environments are created through (substrate)" default:"ate-env-api.ate-env.svc.cluster.local:7777"`
+	SubstrateControl     string   `flag:"substrate-control" help:"ate-api-server gRPC address egress policies are set through (substrate)" default:"api.ate-system.svc.cluster.local:443"`
+	SubstrateTokenFile   string   `flag:"substrate-token-file" help:"Bearer token file for ate-api-server, such as a projected ServiceAccount token with the api.ate-system.svc audience (substrate)"`
+	SubstrateCAFile      string   `flag:"substrate-ca-file" help:"CA ate-api-server's certificate chains to; empty skips verification (substrate)"`
+	SubstrateAtespace    string   `flag:"substrate-atespace" help:"Atespace sandbox environments are created in (substrate)" default:"ate-env"`
+	SubstrateTemplate    string   `flag:"substrate-template" help:"ActorTemplate sandbox environments derive from; empty is env's default-template (substrate)"`
+	SubstrateEgress      []string `flag:"substrate-egress" help:"More hosts sandbox environments may reach besides gavel serve, the Go, npm and Python registries and GitHub; repeat for each (substrate)"`
+	SubstrateCredential  []string `flag:"substrate-credential" help:"A model key substrate's egress gateway injects, as host=,header=,env=,uri=[,prefix=]; repeat for each (substrate)"`
+	SubstrateTrustBundle string   `flag:"substrate-trust-bundle" help:"Path in the environment of the egress gateway's CA, which jobs trust for hosts with an injected credential (substrate)"`
+	PropertiesFile       string   `flag:"properties-file" help:"Properties file with retention.* windows such as retention.job_logs=60d (default /etc/gavel/gavel.properties when it exists)"`
 
 	clerkSecretKey string
 	secretKey      string
