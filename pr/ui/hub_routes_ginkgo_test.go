@@ -208,7 +208,7 @@ var _ = Describe("dashboard UI build identity", func() {
 
 	It("reports the dev build id in the hello frame when the UI is proxied to Vite", func() {
 		dev := &Server{}
-		Expect(dev.SetDevProxy("http://127.0.0.1:1")).To(Succeed())
+		dev.SetDevProxy(http.NotFoundHandler())
 		server := newDashboardTestServer(dev)
 
 		Expect(openDashboardEvents(server.URL).build).To(Equal(devUIBuildID))
