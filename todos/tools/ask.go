@@ -30,6 +30,7 @@ func askTool() api.ToolDefinition {
 		// question request through the run's broker.
 		DefaultPermission: api.ToolPolicyAllow,
 		Handler:           ask,
+		ReadOnlyHint:      workspaceReadOnly(),
 	}
 }
 

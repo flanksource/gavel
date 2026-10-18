@@ -44,6 +44,9 @@ var (
 )
 
 func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
+	if opts.Dev && !opts.UI {
+		return nil, fmt.Errorf("--dev serves the --ui dashboard from Vite; it needs --ui")
+	}
 	diagnostics := newRunDiagnosticsReporter(runDiagnosticsOptions{Output: logger.GetOutput()})
 	runCtx, cancelRun := newMonitoredStopContext(opts.Context, monitoredStopOptions{
 		Timeout:  opts.Timeout,
@@ -162,7 +165,7 @@ func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
 	)
 	if opts.UI {
 		var err error
-		if uiServer, uiListener, err = startTestUI(opts.Addr); err != nil {
+		if uiServer, uiListener, err = startTestUI(testUIOptions{Addr: opts.Addr, Dev: opts.Dev}); err != nil {
 			return nil, err
 		}
 		uiServer.SetVersion(version)
@@ -382,7 +385,7 @@ func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
 				logger.V(1).Infof("wrote per-run snapshot to %s", path)
 			}
 			if detach {
-				if handoffErr := handoffDetachedUI(uiListener, failedSnapshot, opts.AutoStop, opts.IdleTimeout); handoffErr != nil {
+				if handoffErr := handoffDetachedUI(uiListener, failedSnapshot, detachedUIOptions{AutoStop: opts.AutoStop, IdleTimeout: opts.IdleTimeout, Dev: opts.Dev}); handoffErr != nil {
 					logger.Warnf("Detached UI handoff failed: %v", handoffErr)
 				}
 			} else {
@@ -429,7 +432,7 @@ func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
 				// WaitForGlobalCompletion (not -Silent) so the final task
 				// pane prints before our details + summary below.
 				clicky.WaitForGlobalCompletion()
-				if err := handoffDetachedUI(uiListener, snapshot, opts.AutoStop, opts.IdleTimeout); err != nil {
+				if err := handoffDetachedUI(uiListener, snapshot, detachedUIOptions{AutoStop: opts.AutoStop, IdleTimeout: opts.IdleTimeout, Dev: opts.Dev}); err != nil {
 					logger.Warnf("Detached UI handoff failed: %v", err)
 				}
 				clicky.StopCapturingOutput()
@@ -804,13 +807,36 @@ func mergeHooksWithTests(batch []parsers.Test) []parsers.Test {
 	return merged
 }
 
+// detachedUIOptions are what the detached `ui serve` child is started with:
+// its wall-clock and idle deadlines, and whether it serves the dev UI.
+type detachedUIOptions struct {
+	AutoStop    time.Duration
+	IdleTimeout time.Duration
+	Dev         bool
+}
+
+// testUIOptions configures startTestUI: Addr is the interface to bind, and
+// Dev serves the page from the testrunner/ui Vite dev server.
+type testUIOptions struct {
+	Addr string
+	Dev  bool
+}
+
 // startTestUI binds an ephemeral TCP listener and starts serving the testui
 // on it. Returns the server and the listener so the caller can later
 // hand the listener off to a detached child process (fork path in
 // handoffDetachedUI) instead of tearing the connection down and rebinding.
 // --addr names an interface only; the port is always picked.
-func startTestUI(addr string) (*testui.Server, net.Listener, error) {
+func startTestUI(opts testUIOptions) (*testui.Server, net.Listener, error) {
 	srv := testui.NewServer()
+	if opts.Dev {
+		proxy, err := devProxy(testRunnerDev, "")
+		if err != nil {
+			return nil, nil, err
+		}
+		srv.SetDevProxy(proxy)
+	}
+	addr := opts.Addr
 	if addr == "" {
 		addr = "0.0.0.0"
 	}

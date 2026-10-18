@@ -17,7 +17,7 @@ func EnsurePRCommits(opts Options, pr *model.PRInfo) error {
 	if pr == nil || pr.HeadRefOID == "" || pr.BaseRefOID == "" {
 		return fmt.Errorf("PR does not report both its head and base commits")
 	}
-	remote, err := conflictRemote(opts)
+	remote, err := RepoRemote(opts)
 	if err != nil {
 		return err
 	}

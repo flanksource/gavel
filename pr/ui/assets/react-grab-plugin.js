@@ -528,6 +528,57 @@
 
   var plugin = {
     name: PLUGIN_NAME,
+    setup: function (api) {
+      var armed = false;
+      var selectionQueued = false;
+
+      function onKeyDown(event) {
+        if (event.key.toLowerCase() !== "g" || !event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || event.repeat) return;
+        if (!api.isEnabled()) return;
+        if (event.target instanceof Element && event.target.closest("input,textarea,select,[contenteditable]")) return;
+        if (document.querySelector("dialog.gavel-rg-dialog[open]")) return;
+
+        event.preventDefault();
+        event.stopPropagation();
+        if (armed) {
+          armed = false;
+          api.deactivate();
+          return;
+        }
+        if (api.isActive()) api.deactivate();
+        armed = true;
+        api.activate();
+      }
+
+      window.addEventListener("keydown", onKeyDown, true);
+      return {
+        hooks: {
+          onDeactivate: function () { armed = false; selectionQueued = false; },
+          onElementSelect: function (element) {
+            if (!armed) return;
+            if (!selectionQueued) {
+              selectionQueued = true;
+              queueMicrotask(function () {
+                if (!selectionQueued) return;
+                armed = false;
+                selectionQueued = false;
+                onAction({
+                  element: element,
+                  componentName: displayNameForElement(element),
+                  tagName: element.tagName.toLowerCase(),
+                  cleanup: function () { api.deactivate(); },
+                });
+              });
+            }
+            return true;
+          },
+        },
+        cleanup: function () {
+          window.removeEventListener("keydown", onKeyDown, true);
+          if (armed) api.deactivate();
+        },
+      };
+    },
     hooks: {
       transformCopyContent: onCopyContent,
       onOpenFile: onOpenFile,

@@ -99,6 +99,20 @@ var _ = Describe("todo tools on the native runtime", Ordered, func() {
 		Expect(tools.NeedsApprovals([]api.ToolDefinition{defs[tools.AskToolName]})).To(BeTrue(), "todo_ask raises its own question")
 	})
 
+	// The claude CLI refuses an MCP tool in plan mode unless it is read-only, and
+	// triage and plan run in plan mode: every tool, writers included, says so.
+	It("marks every tool read-only, so plan-mode steps can call it", func() {
+		defs, _ := toolsFor(&types.TODO{ID: "hint-subject"}, false)
+		var notReadOnly []string
+		for name, def := range defs {
+			if def.ReadOnlyHint == nil || !*def.ReadOnlyHint {
+				notReadOnly = append(notReadOnly, name)
+			}
+		}
+		Expect(defs).To(HaveLen(12))
+		Expect(notReadOnly).To(BeEmpty())
+	})
+
 	It("updates and labels the subject and records each write", func(ctx SpecContext) {
 		subject := create(ctx, todos.CreateRequest{Title: "Parser crashes", Body: "It crashes"})
 		defs, run := toolsFor(subject, false)

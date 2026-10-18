@@ -144,8 +144,17 @@ type toolset struct {
 func (t *toolset) def(name, description string, policy api.ToolPolicy, schema map[string]any, handler api.ToolHandler) api.ToolDefinition {
 	return api.ToolDefinition{
 		Name: name, Description: description, Group: Group, InputSchema: schema,
-		DefaultPermission: policy, Handler: handler,
+		DefaultPermission: policy, Handler: handler, ReadOnlyHint: workspaceReadOnly(),
 	}
+}
+
+// workspaceReadOnly is every todo tool's read-only hint. The tools write the
+// gavel database, never the workspace, and the steps that need them most —
+// triage and plan — run in plan mode, where the claude CLI refuses any MCP tool
+// not marked read-only. Approval still follows each tool's own policy.
+func workspaceReadOnly() *bool {
+	readOnly := true
+	return &readOnly
 }
 
 // resolve is the open TODO a ref names; an empty ref is the subject.

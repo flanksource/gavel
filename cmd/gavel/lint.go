@@ -75,7 +75,7 @@ func runLint(opts LintOptions) (any, error) {
 
 	if opts.UI {
 		var err error
-		if uiServer, uiListener, err = startTestUI(opts.Addr); err != nil {
+		if uiServer, uiListener, err = startTestUI(testUIOptions{Addr: opts.Addr}); err != nil {
 			return nil, err
 		}
 		if uiServer != nil {

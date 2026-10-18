@@ -60,7 +60,7 @@ tasks:
       - pr/ui/node_modules/.modules.yaml
 
   test-ui:
-    desc: Build the test UI frontend bundle (Preact + Vite)
+    desc: Build the test UI frontend bundle (React 19 + clicky-ui + Vite)
     dir: testrunner/ui
     deps:
       - ui-install
@@ -72,6 +72,7 @@ tasks:
       - testrunner/ui/pnpm-workspace.yaml
       - testrunner/ui/pnpm-lock.yaml
       - testrunner/ui/vite.config.ts
+      - testrunner/ui/tailwind.config.js
     generates:
       - testrunner/ui/dist/testui.js
 
@@ -281,6 +282,7 @@ tasks:
   lint:
     desc: Run linters
     cmds:
+      - go test ./internal/archtest -run '^TestArchitecture$' -ginkgo.focus='guarded recursive removal' -ginkgo.no-color
       - cmd: golangci-lint run
         ignore_error: true
       - go vet ./...

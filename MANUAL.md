@@ -143,6 +143,8 @@ UI-related tips:
 - `gavel test --ui --detach` and `gavel ui serve` support `--auto-stop` and `--idle-timeout` so the server cleans itself up.
 - `gavel ui serve` is the easiest way to inspect CI-produced JSON locally.
 - The test and lint UIs share the same underlying server, so lint results can appear alongside test results when you run `gavel test --lint --ui`.
+- `--dev` serves a UI from its Vite dev server instead of the bundle embedded in the binary, so source edits show up on a browser refresh. `gavel test --ui --dev`, `gavel fixtures --ui --dev` and `gavel ui serve --dev` start `pnpm dev` in `testrunner/ui` on port 5275, and `gavel pr list --ui --dev` / `gavel serve --dev` do the same in `pr/ui` on port 5273. A dev server already running on the port is reused. The Go server keeps every `/api/*` route and proxies everything else to Vite. It needs a source checkout of gavel, run from inside it, with the UI's `pnpm install` done.
+- In dev mode, `@flanksource/clicky-ui` resolves from the sibling checkout's source (`../clicky-ui/packages/ui/src`) when that checkout exists, so clicky-ui edits show up on a refresh too. The aliases follow the sibling's `package.json` exports. Its stylesheets come from the sibling's `dist/`, so build it once (`task clicky-ui:build`). `GAVEL_UI_WATCH_CLICKY=0` keeps resolving the sibling's source but stops watching it.
 
 ### TODO Flows
 

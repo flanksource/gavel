@@ -370,17 +370,11 @@ func runPRUI(opts PRListOptions, databaseMode serveDatabaseMode) error {
 	testRunSyncer.Start(ctx)
 
 	if opts.Dev {
-		devDir, err := resolveDevDir(opts.DevDir)
+		proxy, err := devProxy(prDashboardDev, opts.DevDir)
 		if err != nil {
 			return err
 		}
-		if err := ensureVite(devDir); err != nil {
-			return err
-		}
-		if err := srv.SetDevProxy(viteDevURL); err != nil {
-			return err
-		}
-		logger.Infof("dev mode: reverse-proxying UI to %s (HMR live)", viteDevURL)
+		srv.SetDevProxy(proxy)
 	}
 
 	var dashboardURL, networkURL string
