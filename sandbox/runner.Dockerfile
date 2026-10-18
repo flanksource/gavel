@@ -1,7 +1,7 @@
 # The image sandbox jobs run in: gavel, plus the toolchains the repositories it tests need,
 # running as an unprivileged user. Build it with `make runner-image`.
 
-FROM golang:1.26.9-bookworm AS build
+FROM golang:1.27.2-bookworm AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
