@@ -50,11 +50,13 @@ type Options struct {
 	// Prompt names the template to render. Empty means the default run prompt.
 	// It is independent of Mode: several prompts share one behaviour class.
 	Prompt string
-	// Envelope is the structured result the prompt returns. Empty derives it from
-	// Mode, so a caller that only knows the behaviour class still gets the right
-	// schema for the two prompts that predate named selection.
-	Envelope EnvelopeKind
-	Mode     types.RunMode // ModeRun or ModePlan
+	// Events is the vocabulary of the envelope's event: the lifecycle step's
+	// declared events, enumerated in the run's schema.
+	Events []string
+	// RawFixture renders each verification fixture verbatim, for a prompt that
+	// reviews it rather than runs it.
+	RawFixture bool
+	Mode       types.RunMode // ModeRun or ModePlan
 	// Spec is the canonical Captain run configuration. Render consumes
 	// Prompt.User as the TODO body override and preserves the resolved runtime.
 	Spec api.Spec
@@ -106,7 +108,7 @@ func TemplateData(todoList []*types.TODO, opts Options) map[string]any {
 	data := map[string]any{
 		"multiple":     len(todoList) > 1,
 		"count":        len(todoList),
-		"body":         Sections(todoList, opts.WorkDir, opts.Envelope == EnvelopeTriage || opts.Envelope == EnvelopeTriageNew),
+		"body":         Sections(todoList, opts.WorkDir, opts.RawFixture),
 		"existingPlan": opts.ExistingPlan,
 		"backlog":      opts.Backlog,
 		"labels":       opts.Labels,
@@ -163,7 +165,7 @@ func Render(todoList []*types.TODO, opts Options) (captainai.Request, captainai.
 	}
 	req := opts.Spec
 
-	schema, err := EnvelopeSchemaJSON(opts.envelope())
+	schema, err := EnvelopeSchemaJSON(opts.Events)
 	if err != nil {
 		return captainai.Request{}, captainai.Config{}, err
 	}
@@ -228,36 +230,31 @@ func templateSource(opts Options) (string, error) {
 	return Default(opts.promptName())
 }
 
-// envelope resolves which structured result this run expects, falling back to
-// the behaviour class for callers that predate named prompts.
-func (o Options) envelope() EnvelopeKind {
-	if o.Envelope != "" {
-		return o.Envelope
-	}
-	return envelopeFor(o.Mode)
-}
-
-// EnvelopeSchemaJSON is the JSON schema of a prompt's structured final result.
+// EnvelopeSchemaJSON is the JSON schema of a step's structured final result,
+// types.Envelope with `event` enumerating the step's events. It is flat — no
+// $ref, which some backends refuse to emit — and closed, so a field the
+// envelope does not carry is rejected rather than silently dropped.
+//
 // The executor computes it once per run session and threads the same bytes to
-// every turn (initial, retry, and feedback) so the claude-agent
-// provider's per-turn byte-equality guard holds by identity.
-func EnvelopeSchemaJSON(kind EnvelopeKind) (json.RawMessage, error) {
-	var v any
-	switch kind {
-	case EnvelopePlan:
-		v = &types.PlanEnvelope{}
-	case EnvelopeResult:
-		v = &types.ResultEnvelope{}
-	case EnvelopeTriage:
-		v = &types.TriageEnvelope{}
-	case EnvelopeTriageNew:
-		v = &types.TriageNewEnvelope{}
-	default:
-		return nil, fmt.Errorf("unknown envelope %q", kind)
+// every turn (initial, retry, and feedback) so the claude-agent provider's
+// per-turn byte-equality guard holds by identity.
+func EnvelopeSchemaJSON(events []string) (json.RawMessage, error) {
+	if len(events) == 0 {
+		return nil, fmt.Errorf("envelope schema: the step declares no events")
 	}
-	raw, err := api.SchemaJSON(v)
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"success": map[string]any{"type": "boolean", "description": "Whether the work this step asked for was done"},
+			"event":   map[string]any{"type": "string", "enum": events, "description": "What happened, from the step's events"},
+			"comment": map[string]any{"type": "string", "minLength": 1, "description": "Markdown account of the run, recorded as its history entry"},
+		},
+		"required":             []string{"success", "event", "comment"},
+		"additionalProperties": false,
+	}
+	raw, err := json.MarshalIndent(schema, "", "  ")
 	if err != nil {
-		return nil, fmt.Errorf("build %s envelope schema: %w", kind, err)
+		return nil, fmt.Errorf("build envelope schema: %w", err)
 	}
 	return raw, nil
 }
@@ -311,10 +308,7 @@ func Prompts() []prompts.Prompt {
 	defs := builtins()
 	registry := make([]prompts.Prompt, 0, len(defs))
 	for _, def := range defs {
-		configPath := "todos." + def.Name
-		if def.Name == "triage.new" {
-			configPath = prompts.TodosTriageNew
-		}
+		configPath := "todos." + def.ConfigKey
 		registry = append(registry, prompts.Prompt{
 			ID:          configPath,
 			Title:       def.Title,

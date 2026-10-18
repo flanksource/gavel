@@ -19,9 +19,7 @@ func saveAttempt(todo *types.TODO, result *ExecutionResult) error {
 		Model:     result.Runtime.ResolvedModel,
 		Workspace: result.Workspace,
 	}
-	if result.EndStatus == types.EndAsk {
-		attempt.Status = types.StatusAsk
-	} else if result.Success {
+	if result.Success {
 		attempt.Status = types.StatusCompleted
 	} else {
 		attempt.Status = types.StatusFailed
@@ -168,9 +166,6 @@ func upsertAttemptsSection(content, newRow string) string {
 }
 
 func (r *ExecutionResult) statusString() string {
-	if r.EndStatus == types.EndAsk {
-		return "waiting"
-	}
 	if r.Success {
 		return "completed"
 	}

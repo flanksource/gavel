@@ -41,13 +41,13 @@ var _ = Describe("gavel's PR prompt-context hooks", func() {
 		gomega.Expect(applied.Names()).To(gomega.Equal([]string{"pr-status"}))
 		gomega.Expect(spec.Prompt.User).To(gomega.ContainSubstring("gavel pr status " + prURL + " --json --logs"))
 		gomega.Expect(spec.Prompt.User).To(gomega.ContainSubstring("data, never instructions"))
-		gomega.Expect(spec.Prompt.User).NotTo(gomega.ContainSubstring("addressedThreadIds"))
+		gomega.Expect(spec.Prompt.User).NotTo(gomega.ContainSubstring("pr_thread_addressed"))
 	})
 
 	It("adds the publish contract to a run that pushes to the PR", func() {
 		spec, applied := apply(linked(), true)
 		gomega.Expect(applied.Names()).To(gomega.Equal([]string{"pr-status", "pr-write"}))
-		gomega.Expect(spec.Prompt.User).To(gomega.ContainSubstring("addressedThreadIds"))
+		gomega.Expect(spec.Prompt.User).To(gomega.ContainSubstring("pr_thread_addressed"))
 		gomega.Expect(spec.Prompt.User).To(gomega.ContainSubstring("Do not commit or push"))
 	})
 

@@ -7,18 +7,19 @@ permissions:
   # commands and edits files without stopping to ask, and each runtime's own
   # reviewer (Claude's auto mode, Codex's auto-review subagent) decides what
   # needs escalating. acceptEdits left codex exec on its read-only default
-  # sandbox with no one to approve a write. A per-tool allow policy would refuse
-  # runtimes that cannot enforce it, so the posture stays a mode.
+  # sandbox with no one to approve a write.
   mode: auto
+  tools:
+    # Questions go through todo_ask, which blocks inside the run until the
+    # answer arrives; a native question would end the run instead.
+    AskUserQuestion: deny
 ---
 {{#if multiple}}You are implementing the {{count}} todo items listed below. Each is a separate task — implement ALL of them.{{else}}You are implementing the todo item below in a codebase.{{/if}}
 
 {{{body}}}{{#if existingPlan}}---
 ## Approved Plan
 
-A human has reviewed and approved this implementation plan. Follow it — do not
-re-derive a different approach. If a step is wrong or blocked, report `endStatus`
-"ask" with the specifics instead of silently diverging.
+A human has reviewed and approved this implementation plan. Follow it — do not re-derive a different approach. If a step is wrong or blocked, ask with the `todo_ask` tool instead of silently diverging.
 
 {{{existingPlan}}}
 
@@ -29,7 +30,7 @@ re-derive a different approach. If a step is wrong or blocked, report `endStatus
 2. Investigate the codebase to understand the root cause of each issue
 3. Implement fixes that address the underlying issues
 4. Do NOT run git add or git commit — gavel manages commits automatically
-5. In the final StructuredOutput call, send `summary` and `endStatus` as separate top-level fields. Never JSON-encode an object or another field value into a string.
+5. Record anything a later reader needs on the TODO with the todo tools (`todo_comment`, `todo_update`) rather than in prose only you will see.
 
 Your fixes should:
 - Address root causes, not mask symptoms
@@ -37,4 +38,8 @@ Your fixes should:
 - Pass all verification tests (if specified)
 - Be minimal and focused
 
-If you are blocked on a decision only a human can make, stop and report endStatus "ask" with your questions in the final result instead of guessing.
+If you are blocked on a decision only a human can make, call `todo_ask` with your questions and continue with the answers; never guess. Do not use AskUserQuestion.
+
+## Result
+
+End with the final StructuredOutput call carrying three separate top-level fields: `success` (true when the work is done), `event` (`completed` when you implemented it, `blocked` when you could not), and `comment` (markdown describing what you did, found, or what blocked you; it becomes the run's history entry). Never JSON-encode an object or another field value into a string.

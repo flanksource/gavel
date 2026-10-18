@@ -20,16 +20,18 @@ func mustCatalog(t *testing.T, cfg verify.TodosConfig) *Catalog {
 	return catalog
 }
 
-func TestCatalogBuiltinsCarryClassAndEnvelope(t *testing.T) {
+func TestCatalogBuiltinsCarryClassConfigKeyAndBacklog(t *testing.T) {
 	catalog := mustCatalog(t, verify.TodosConfig{})
 	for _, tc := range []struct {
-		name         string
-		wantClass    types.RunMode
-		wantEnvelope EnvelopeKind
+		name        string
+		wantClass   types.RunMode
+		wantKey     string
+		wantBacklog bool
 	}{
-		{"run", types.ModeRun, EnvelopeResult},
-		{"plan", types.ModePlan, EnvelopePlan},
-		{"triage", types.ModePlan, EnvelopeTriage},
+		{"run", types.ModeRun, "run", false},
+		{"plan", types.ModePlan, "plan", false},
+		{"triage", types.ModePlan, "triage", true},
+		{"triage.new", types.ModePlan, "triageNew", true},
 	} {
 		def, err := catalog.Lookup(tc.name)
 		if err != nil {
@@ -38,8 +40,8 @@ func TestCatalogBuiltinsCarryClassAndEnvelope(t *testing.T) {
 		if def.Class != tc.wantClass {
 			t.Errorf("%s class = %q, want %q", tc.name, def.Class, tc.wantClass)
 		}
-		if def.Envelope != tc.wantEnvelope {
-			t.Errorf("%s envelope = %q, want %q", tc.name, def.Envelope, tc.wantEnvelope)
+		if def.ConfigKey != tc.wantKey || def.Backlog != tc.wantBacklog {
+			t.Errorf("%s configKey/backlog = %q/%v, want %q/%v", tc.name, def.ConfigKey, def.Backlog, tc.wantKey, tc.wantBacklog)
 		}
 		if def.Origin != "builtin" {
 			t.Errorf("%s origin = %q, want builtin", tc.name, def.Origin)
@@ -119,8 +121,8 @@ func TestCatalogTypedInlineOverrideReplacesTheBody(t *testing.T) {
 	if def.Origin != ".gavel.yaml todos.triage" {
 		t.Errorf("origin = %q, want .gavel.yaml todos.triage", def.Origin)
 	}
-	if def.Envelope != EnvelopeTriage || def.Class != types.ModePlan {
-		t.Errorf("class/envelope = %q/%q, want plan/triage", def.Class, def.Envelope)
+	if def.Class != types.ModePlan {
+		t.Errorf("class = %q, want plan", def.Class)
 	}
 }
 
@@ -146,10 +148,9 @@ func TestCatalogTypedOverrideReplacesBuiltinTemplate(t *testing.T) {
 	if def.Origin != path {
 		t.Errorf("origin = %q, want %q", def.Origin, path)
 	}
-	// The envelope is not configurable: a triage override still returns a triage
-	// envelope, or the run loop would parse the wrong type.
-	if def.Envelope != EnvelopeTriage {
-		t.Errorf("envelope = %q, want triage", def.Envelope)
+	// The class is not configurable: a triage override still runs read-only.
+	if def.Class != types.ModePlan {
+		t.Errorf("class = %q, want plan", def.Class)
 	}
 }
 
