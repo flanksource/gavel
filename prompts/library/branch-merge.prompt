@@ -61,6 +61,9 @@ workflow:
       # The branch now sits on top of the base.
       - |-
         git merge-base --is-ancestor {{shq base}} HEAD
+      # Rebased, not merged: no merge commit between the base and the branch.
+      - |-
+        merges=$(git rev-list --merges {{shq base}}..HEAD); [ -z "$merges" ] || { echo "merge commits on the branch — rebase instead of merging: $merges" >&2; exit 1; }
       # No conflict markers survived into the rebased commits.
       - |-
         git diff --check {{shq base}}...HEAD
