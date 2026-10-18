@@ -125,7 +125,7 @@ func (r *Runner) settleFixture(ctx context.Context, q queuedFixture, returned Fi
 	result := cutOffVerdict(base, taskErr, q.failedStep())
 	r.cutOff[node] = true
 	r.attachResult(node, result)
-	if node.Test.Step != nil && isFailureStatus(result.Status) {
+	if node.Test.Step != nil && isFailureStatus(result.Status) && !node.Test.Step.ContinueOnError {
 		q.scope.MarkFailed(stepID(*node.Test))
 	}
 	return node.Results, r.progress.Complete(ctx, node, result)

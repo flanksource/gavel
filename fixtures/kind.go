@@ -96,9 +96,12 @@ type StepSpec struct {
 	Export     map[string]string `yaml:"export,omitempty" json:"export,omitempty"`
 	Override   bool              `yaml:"override,omitempty" json:"override,omitempty"`
 	Background bool              `yaml:"background,omitempty" json:"background,omitempty"`
-	Wait       *WaitPolicy       `yaml:"wait,omitempty" json:"wait,omitempty"`
-	Retry      *RetryPolicy      `yaml:"retry,omitempty" json:"retry,omitempty"`
-	Timeout    *Duration         `yaml:"timeout,omitempty" json:"timeout,omitempty"`
+	// ContinueOnError reports the step's failure without skipping the steps
+	// after it: they do not depend on it.
+	ContinueOnError bool         `yaml:"continueOnError,omitempty" json:"continueOnError,omitempty"`
+	Wait            *WaitPolicy  `yaml:"wait,omitempty" json:"wait,omitempty"`
+	Retry           *RetryPolicy `yaml:"retry,omitempty" json:"retry,omitempty"`
+	Timeout         *Duration    `yaml:"timeout,omitempty" json:"timeout,omitempty"`
 	// Traces arms traces around this step, replacing the document's.
 	Traces *TraceSpecs     `yaml:"traces,omitempty" json:"traces,omitempty"`
 	Config json.RawMessage `yaml:"-" json:"config,omitempty"`
@@ -115,7 +118,7 @@ type StepDefaults struct {
 }
 
 // StepSpecKeys are the envelope keys; everything else on a step is Config.
-var StepSpecKeys = []string{"id", "name", "kind", "cel", "export", "override", "background", "wait", "retry", "timeout", "traces"}
+var StepSpecKeys = []string{"id", "name", "kind", "cel", "export", "override", "background", "continueOnError", "wait", "retry", "timeout", "traces"}
 
 // EffectiveTimeout is the step's hard cap: its own `timeout:`, else the
 // document default; nil when neither declares one.

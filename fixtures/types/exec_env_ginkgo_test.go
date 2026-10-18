@@ -54,6 +54,28 @@ steps:
 	})
 })
 
+var _ = Describe("step continueOnError", func() {
+	It("reports a continueOnError step's failure without skipping the steps after it", func() {
+		nodes := parseYAMLDocument(`
+kind: Fixture
+steps:
+  - {id: broken, kind: exec, script: 'exit 1', continueOnError: true}
+  - {id: independent, kind: exec, script: 'printf ok'}
+  - {id: required, kind: exec, script: 'exit 1'}
+  - {id: dependent, kind: exec, script: 'printf unreachable'}
+`)
+		results, _, err := fixtures.RunNodes(context.Background(), nodes, fixtures.RunOptions{WorkDir: GinkgoT().TempDir()})
+
+		Expect(err).ToNot(HaveOccurred())
+		var statuses []task.Status
+		for _, result := range results {
+			statuses = append(statuses, result.Status)
+		}
+		Expect(statuses).To(Equal([]task.Status{task.StatusFAIL, task.StatusPASS, task.StatusFAIL, task.StatusSKIP}))
+		Expect(results[3].Error).To(ContainSubstring("required"))
+	})
+})
+
 var _ = Describe("exec step goProfiles", func() {
 	It("appends the profile destination under --profile and ingests what the command wrote there", func() {
 		nodes := parseYAMLDocument(`

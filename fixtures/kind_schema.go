@@ -79,16 +79,17 @@ func RetryPolicySchema() map[string]any {
 // stepEnvelopeProperties are the schema properties every step accepts.
 func stepEnvelopeProperties(traces map[string]any) map[string]any {
 	return map[string]any{
-		"traces":     traces,
-		"id":         map[string]any{"type": "string", "description": "Step id; later steps read its outputs as steps.<id>."},
-		"name":       map[string]any{"type": "string"},
-		"cel":        map[string]any{"type": "string", "description": "CEL verdict over the step's outputs, env and steps."},
-		"export":     map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}, "description": `Env vars for later steps: NAME: "{{.outputs.x}}"; "*" exports a map; "" suppresses a kind default.`},
-		"override":   map[string]any{"type": "boolean", "description": "Allow re-exporting a name an earlier step exported."},
-		"background": map[string]any{"type": "boolean", "description": "Run for the rest of the fixture; the verdict is collected at teardown."},
-		"wait":       WaitPolicySchema(),
-		"retry":      RetryPolicySchema(),
-		"timeout":    durationSchema,
+		"traces":          traces,
+		"id":              map[string]any{"type": "string", "description": "Step id; later steps read its outputs as steps.<id>."},
+		"name":            map[string]any{"type": "string"},
+		"cel":             map[string]any{"type": "string", "description": "CEL verdict over the step's outputs, env and steps."},
+		"export":          map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}, "description": `Env vars for later steps: NAME: "{{.outputs.x}}"; "*" exports a map; "" suppresses a kind default.`},
+		"override":        map[string]any{"type": "boolean", "description": "Allow re-exporting a name an earlier step exported."},
+		"background":      map[string]any{"type": "boolean", "description": "Run for the rest of the fixture; the verdict is collected at teardown."},
+		"continueOnError": map[string]any{"type": "boolean", "description": "Report this step's failure without skipping the steps after it, which do not depend on it."},
+		"wait":            WaitPolicySchema(),
+		"retry":           RetryPolicySchema(),
+		"timeout":         durationSchema,
 	}
 }
 

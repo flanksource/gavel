@@ -19,6 +19,7 @@ Every typed step has a common envelope alongside its kind-specific fields. These
 | `export` | Environment names mapped to templates over outputs |
 | `override` | Explicitly permit replacing an earlier export |
 | `background` | Keep a supported kind running through fixture teardown |
+| `continueOnError` | Report the step's failure without skipping later steps. By default a failed step skips every step after it, because each may depend on it; set this on steps nothing later depends on, such as independent renders after a shared setup |
 | `timeout` | Execution deadline |
 | `wait` | Poll observable state until a verdict or deadline |
 | `retry` | Repeat execution when its configured failed-result predicate holds |

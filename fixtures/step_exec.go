@@ -52,7 +52,7 @@ func runStep(ctx context.Context, test FixtureTest, opts RunOptions) FixtureResu
 		return normalizeResult(FixtureResult{Type: spec.Kind, Status: task.StatusSKIP, Error: fmt.Sprintf("skipped: step %s failed", failed)}, step)
 	}
 	result := runKind(ctx, kind, step)
-	if result.Status == task.StatusFAIL || result.Status == task.StatusERR {
+	if (result.Status == task.StatusFAIL || result.Status == task.StatusERR) && !spec.ContinueOnError {
 		step.Scope.MarkFailed(stepLabel(step))
 	}
 	return result
