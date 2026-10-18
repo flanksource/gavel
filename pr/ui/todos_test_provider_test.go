@@ -360,9 +360,6 @@ func (p *uiTestTODOProvider) UpdateState(_ context.Context, todo *types.TODO, up
 	if update.RunMode != nil {
 		todo.RunMode = *update.RunMode
 	}
-	if update.Questions != nil {
-		todo.Questions = append([]types.AgentQuestion(nil), (*update.Questions)...)
-	}
 	return nil
 }
 
