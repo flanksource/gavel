@@ -28,11 +28,41 @@ Save the document as a `.fixture.yaml` file. Inspect it with `gavel fixtures out
 
 Use `exec` and `args` for an executable or `script` for a shell body. `cwd`, `env`, `terminal`, expected streams, and expected exit code configure the process. Commands run in the fixture's execution directory; required tools must be installed.
 
+`$VAR` and `${VAR}` in `exec` and `args` expand to what the command will see: template variables first, then the step's `env:`, earlier steps' exports, armed traces' exports (a `pg_proxy`'s rewritten DSN, say) and the process environment. A `script` body expands template variables only and leaves the rest to the shell, which may reassign them. Anything else — an unknown variable, `${VAR:-default}`, `${0#prefix}`, `$1` — is passed through exactly as written.
+
+`goProfiles` declares the Go pprof files the command writes, as in markdown front matter. Under `--profile` each entry's `args` (with `{{.path}}` as the destination) are appended to the command, or its `env` variable is set, and the file is ingested into the run's `goprof` trace:
+
+```yaml
+- id: render
+  kind: exec
+  exec: ./app
+  args: [render, --company, $COMPANY]
+  goProfiles:
+    cpu: {file: cpu.pprof, args: ["--cpuprofile={{.path}}"]}
+```
+
 ## Results and lifetime
 
 Outputs include `stdout`, `stderr`, and `exitCode`. A wait re-executes the command to observe fresh output, so polling commands must be safe to repeat. PTY mode merges stdout/stderr. Expected nonzero exits can be asserted explicitly.
 
 [Fixture formats](/docs/fixture-formats) covers Markdown command blocks, table cases, and golden files.
+
+## Scripted terminal input
+
+With `terminal: pty`, `input` answers an interactive command the way a person at the terminal would. Each item waits until its `expect` text appears in the output (escape sequences stripped, after the previous item's match), then types `send` followed by the named `keys`: `enter`, `tab`, `space`, `esc`, `backspace`, `up`, `down`, `left`, `right`, `ctrl-c`, `ctrl-d`. While a script runs, the terminal also answers the cursor-position and background-colour queries TUI libraries send.
+
+```yaml
+- id: pick
+  kind: exec
+  terminal: pty
+  script: gavel todos run "$TODO_ID" --step plan
+  input:
+    - { expect: "Question from the agent" }
+    - { expect: "Other (type an answer)", keys: [down, enter] }
+  cel: exitCode == 0
+```
+
+The step fails when the command exits before an expectation appears, and the error ends with the output the command did print. `input` without `terminal: pty` is an error.
 
 ## Complete step reference
 

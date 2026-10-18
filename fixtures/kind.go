@@ -73,6 +73,13 @@ type SelfTemplating interface {
 	TemplatesOwnConfig()
 }
 
+// RawConfigKeys is implemented by kinds with top-level config keys that are
+// left unrendered, because the kind templates them itself against variables
+// that only exist while it runs (exec's goProfiles args take `{{.path}}`).
+type RawConfigKeys interface {
+	RawConfigKeys() []string
+}
+
 // BackgroundHandle is a running background step. Stop ends it and returns its
 // verdict, which is reported as that step's result.
 type BackgroundHandle interface {

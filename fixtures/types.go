@@ -274,16 +274,28 @@ func (e ExecFixtureBase) IsEmpty() bool {
 	return e.Exec == "" && e.Build == "" && e.Daemon == "" && len(e.Args) == 0
 }
 
-func (e ExecFixtureBase) Template(data map[string]any) (ExecFixtureBase, error) {
+// Template renders the exec base against the fixture's template data. `$VAR`
+// in exec and args expands from data first, then env — the environment the
+// command will run with — and an unknown variable is left as written. A `-c`
+// script body expands from data only.
+func (e ExecFixtureBase) Template(data map[string]any, env map[string]string) (ExecFixtureBase, error) {
 	var err error
 
 	logger.V(5).Infof("Template data keys: %v", sortedKeys(data))
+
+	vars := make(map[string]any, len(env)+len(data))
+	for k, v := range env {
+		vars[k] = v
+	}
+	for k, v := range data {
+		vars[k] = v
+	}
 
 	orig := e
 	origArgs := make([]string, len(e.Args))
 	copy(origArgs, e.Args)
 
-	e.Exec = ExpandVars(e.Exec, data)
+	e.Exec = ExpandVars(e.Exec, vars)
 	if e.Exec, err = gomplate.RunTemplate(data, gomplate.Template{
 		Template: e.Exec,
 	}); err != nil {
@@ -312,7 +324,13 @@ func (e ExecFixtureBase) Template(data map[string]any) (ExecFixtureBase, error) 
 	e.Args = args
 
 	for i := range e.Args {
-		e.Args[i] = ExpandVars(e.Args[i], data)
+		// A `-c` script body is left to the shell: it may assign the variables
+		// it reads, which an expansion from the environment would pre-empt.
+		if i == 1 && e.Args[0] == "-c" {
+			e.Args[i] = ExpandVars(e.Args[i], data)
+		} else {
+			e.Args[i] = ExpandVars(e.Args[i], vars)
+		}
 		e.Args[i], err = gomplate.RunTemplate(data, gomplate.Template{
 			Template: e.Args[i],
 		})
@@ -402,8 +420,11 @@ func (e ExecFixtureBase) MergeInto(other ExecFixtureBase) ExecFixtureBase {
 	if len(other.Args) > 0 {
 		merged.Args = other.Args
 	}
-	if merged.Env == nil {
-		merged.Env = make(map[string]any)
+	// A copy: e.Env is the file's (or document's) env, shared by every test in
+	// it, and the merged map is filled per test.
+	merged.Env = make(map[string]any, len(e.Env)+len(other.Env))
+	for k, v := range e.Env {
+		merged.Env[k] = v
 	}
 	for k, v := range other.Env {
 		merged.Env[k] = v
@@ -411,6 +432,9 @@ func (e ExecFixtureBase) MergeInto(other ExecFixtureBase) ExecFixtureBase {
 
 	if other.Terminal != "" {
 		merged.Terminal = other.Terminal
+	}
+	if len(other.Input) > 0 {
+		merged.Input = other.Input
 	}
 
 	// A per-test `traces:` replaces the file's wholesale rather than unioning

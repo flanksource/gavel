@@ -27,6 +27,10 @@ func (execKind) Name() string { return "exec" }
 
 func (execKind) Schema() json.RawMessage { return execSchema }
 
+// RawConfigKeys keeps goProfiles args unrendered: their `{{.path}}` is the
+// profile destination, known only once the command is about to run.
+func (execKind) RawConfigKeys() []string { return []string{"goProfiles"} }
+
 func (k execKind) Execute(ctx context.Context, step *fixtures.StepContext) (fixtures.StepOutcome, error) {
 	result, err := k.run(ctx, step)
 	if err != nil {
@@ -68,20 +72,22 @@ func (execKind) run(ctx context.Context, step *fixtures.StepContext) (fixtures.F
 // and stderr are the same expectations a markdown fence declares; exitCode
 // defaults to 0.
 type execStepConfig struct {
-	Script   string         `json:"script,omitempty"`
-	Exec     string         `json:"exec,omitempty"`
-	Args     []string       `json:"args,omitempty"`
-	Env      map[string]any `json:"env,omitempty"`
-	CWD      string         `json:"cwd,omitempty"`
+	Script   string              `json:"script,omitempty"`
+	Exec     string              `json:"exec,omitempty"`
+	Args     []string            `json:"args,omitempty"`
+	Env      map[string]any      `json:"env,omitempty"`
+	CWD      string              `json:"cwd,omitempty"`
 	Terminal string              `json:"terminal,omitempty"`
 	Input    []fixtures.PTYInput `json:"input,omitempty"`
 	ExitCode *int                `json:"exitCode,omitempty"`
 	Stdout   string              `json:"stdout,omitempty"`
 	Stderr   string              `json:"stderr,omitempty"`
+
+	GoProfiles map[string]fixtures.GoProfileOutput `json:"goProfiles,omitempty"`
 }
 
 func (c execStepConfig) apply(test fixtures.FixtureTest) (fixtures.FixtureTest, error) {
-	base := fixtures.ExecFixtureBase{Exec: c.Exec, Args: c.Args, Env: c.Env, CWD: c.CWD, Terminal: c.Terminal, Input: c.Input}
+	base := fixtures.ExecFixtureBase{Exec: c.Exec, Args: c.Args, Env: c.Env, CWD: c.CWD, Terminal: c.Terminal, Input: c.Input, GoProfiles: c.GoProfiles}
 	if len(c.Input) > 0 && c.Terminal != "pty" {
 		return test, fmt.Errorf("input needs terminal: pty")
 	}
@@ -146,7 +152,21 @@ var execSchema = json.RawMessage(`{
     },
     "exitCode": {"type": "integer", "description": "Expected exit code (default 0)."},
     "stdout": {"type": "string", "description": "Expected stdout, or @file for a golden file."},
-    "stderr": {"type": "string", "description": "Expected stderr, or @file for a golden file."}
+    "stderr": {"type": "string", "description": "Expected stderr, or @file for a golden file."},
+    "goProfiles": {
+      "type": "object",
+      "description": "Named Go pprof outputs the command writes, ingested into the run's goprof trace under --profile. The name (cpu, heap, allocs, mutex, block, goroutine) says which profile it is.",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "file": {"type": "string", "description": "Relative pprof filename under the step's artifact directory."},
+          "directory": {"type": "string", "description": "Relative directory whose emitted files are Go pprof profiles."},
+          "args": {"type": "array", "items": {"type": "string"}, "description": "Arguments appended to the command only with --profile; {{.path}} is the absolute destination."},
+          "env": {"type": "string", "description": "Variable set to the absolute destination only with --profile."}
+        }
+      }
+    }
   }
 }`)
 

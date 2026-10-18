@@ -95,7 +95,22 @@ func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opt
 	result.Test = fixture
 	templateData = fixture.AsMap()
 
-	exec, err := fixture.ExecBase().Template(templateData)
+	// The child starts from the fixture's ChildEnv — the process environment,
+	// the armed traces' exports, front matter and the setup — and the rest is
+	// set over it. Precedence, highest first: the fixture's own `env:` >
+	// variables earlier steps exported into the fixture Env > the setup's
+	// environment > the auto-injected roots > ChildEnv.
+	childEnv, err := opts.ChildEnv()
+	if err != nil {
+		return result.Errorf(err, "child environment")
+	}
+	// `$VAR` in exec and args expands to what the child will see: its
+	// environment, then the fixture's own `env:`, under the template variables.
+	expandEnv := maps.Clone(childEnv)
+	for name, value := range fixture.ExecBase().Env {
+		expandEnv[name] = fmt.Sprint(value)
+	}
+	exec, err := fixture.ExecBase().Template(templateData, expandEnv)
 	if err != nil {
 		return result.Errorf(err, "failed to template exec base")
 	}
@@ -106,15 +121,6 @@ func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opt
 
 	if exec.Env == nil {
 		exec.Env = make(map[string]any)
-	}
-	// The child starts from the fixture's ChildEnv — the process environment,
-	// the armed traces' exports, front matter and the setup — and the rest is
-	// set over it. Precedence, highest first: the fixture's own `env:` >
-	// variables earlier steps exported into the fixture Env > the setup's
-	// environment > the auto-injected roots > ChildEnv.
-	childEnv, err := opts.ChildEnv()
-	if err != nil {
-		return result.Errorf(err, "child environment")
 	}
 	for name := range opts.Scope.Env.Exported() {
 		if _, ok := exec.Env[name]; !ok {

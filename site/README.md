@@ -18,7 +18,7 @@ npm run test:e2e     # playwright end-to-end
 
 ## Documentation references
 
-Documentation lives in `content/docs/*.mdx`; frontmatter `parent` creates the sidebar hierarchy and `order` sorts siblings. Parents must name an existing doc slug; missing parents, duplicates, and cycles fail validation. Parent pages list their children from the same metadata. Dedicated pages cover every framework, linter, and registered fixture kind. The configuration reference imports the canonical `../gavel.schema.json`, and fixture references use `src/data/fixtures.schema.json`; service-entry definitions come from the native `../fixtures/kinds/services/schema.json`. Vite emits schema downloads from the same imports. `SchemaReference` renders expandable objects, array items, maps, variants, constraints, and referenced types.
+Documentation lives in `content/docs/*.mdx`; frontmatter `parent` creates the sidebar hierarchy and `order` sorts siblings. Parents must name an existing doc slug; missing parents, duplicates, and cycles fail validation. Parent pages list their children from the same metadata. Dedicated pages cover every framework, linter, and registered fixture kind. The configuration reference imports the canonical `../gavel.schema.json`, and fixture references use `src/data/fixtures.schema.json`; service-entry definitions come from the native `../fixtures/kinds/services/schema.json`. Vite emits schema downloads from the same imports. `SchemaReference` from `@flanksource/clicky-ui/data` renders expandable objects, array items, maps, variants, constraints, and referenced types.
 
 When fixture kinds or command options change, regenerate the fixture bundle from the checked-out source. From the repository root:
 
@@ -35,6 +35,8 @@ gavel fixtures site/public/examples/smoke.fixture.md site/public/examples/smoke.
 ```
 
 From `site/`, run `npm run test` and `npm run build` to validate the documentation loader, schema rendering, TypeScript, and MDX compilation. Use `agent-browser` against the local development or preview server to check navigation, schema links/downloads, and table layout.
+
+Documentation screenshots and screencasts live in `public/media/`. Capture browser UI with `agent-browser`, use a replayed run for stable examples, and inspect the output for machine-specific paths or credentials before linking it from MDX.
 
 ## Environment variables
 

@@ -106,7 +106,11 @@ func (fixture FixtureTest) declaredTimeout() *time.Duration {
 func runKindUntimed(ctx context.Context, kind Kind, step *StepContext) FixtureResult {
 	spec := step.Spec
 	if _, raw := kind.(SelfTemplating); !raw && len(spec.Config) > 0 {
-		rendered, err := renderConfig(step)
+		var raw []string
+		if keys, ok := kind.(RawConfigKeys); ok {
+			raw = keys.RawConfigKeys()
+		}
+		rendered, err := renderConfig(step, raw)
 		if err != nil {
 			return stepError(step, fmt.Errorf("step %s: %w", stepLabel(step), err))
 		}

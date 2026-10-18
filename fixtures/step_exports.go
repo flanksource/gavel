@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -105,17 +106,33 @@ func exportOutputsMap(expr string, outputs map[string]any) (map[string]string, e
 // template against the step's variables (`{{.env.X}}`, `{{.steps.<id>.…}}`,
 // `{{.tmp}}`, `{{.fixture.dir}}`). `$X` is deliberately left alone here: a
 // shell script in a config spells its own variables that way, and the exported
-// Env already reaches the subprocess.
-func renderConfig(step *StepContext) (json.RawMessage, error) {
+// Env already reaches the subprocess. Top-level keys named in raw are kept as
+// written for the kind to template itself.
+func renderConfig(step *StepContext, raw []string) (json.RawMessage, error) {
 	config, err := decodeOrderedJSON(step.Spec.Config)
 	if err != nil {
 		return nil, fmt.Errorf("decode config: %w", err)
 	}
-	rendered, err := renderValue(config, step.vars())
-	if err != nil {
-		return nil, err
+	vars := step.vars()
+	object, ok := config.(orderedObject)
+	if !ok {
+		rendered, err := renderValue(config, vars)
+		if err != nil {
+			return nil, err
+		}
+		return encodeOrderedJSON(rendered)
 	}
-	return encodeOrderedJSON(rendered)
+	for i, member := range object {
+		if slices.Contains(raw, member.Key) {
+			continue
+		}
+		rendered, err := renderValue(member.Value, vars)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", member.Key, err)
+		}
+		object[i].Value = rendered
+	}
+	return encodeOrderedJSON(object)
 }
 
 func renderValue(value any, vars map[string]any) (any, error) {

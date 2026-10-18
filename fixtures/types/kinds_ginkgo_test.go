@@ -75,6 +75,33 @@ steps:
 		Expect(results[0].Status).To(Equal(task.StatusFAIL))
 		Expect(results[0].Error).To(ContainSubstring("expected exit code 0, got 3"))
 	})
+
+	It("answers a pty prompt from the step's input script and asserts over what the terminal showed", func() {
+		nodes := parseYAMLDocument(`
+kind: Fixture
+steps:
+  - id: ask
+    kind: exec
+    terminal: pty
+    script: 'printf "pick one: "; read choice; echo "picked $choice"'
+    input:
+      - { expect: "pick one:", send: sqlite, keys: [enter] }
+    cel: stdout.contains('picked sqlite')
+`)
+		results, _, err := fixtures.RunNodes(context.Background(), nodes, fixtures.RunOptions{WorkDir: GinkgoT().TempDir()})
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(results[0].Status).To(Equal(task.StatusPASS), results[0].Error+results[0].CELTrace)
+	})
+
+	It("fails a step that scripts input without a pty", func() {
+		nodes := parseYAMLDocument("kind: Fixture\nsteps:\n  - { id: x, kind: exec, script: 'read a', input: [{ expect: a, keys: [enter] }] }\n")
+		results, _, err := fixtures.RunNodes(context.Background(), nodes, fixtures.RunOptions{WorkDir: GinkgoT().TempDir()})
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(results[0].Status).ToNot(Equal(task.StatusPASS))
+		Expect(results[0].Error).To(ContainSubstring("input needs terminal: pty"))
+	})
 })
 
 var _ = Describe("exec kind in a markdown fixture", func() {
