@@ -94,11 +94,6 @@ const DESTRUCTIVE_CONFIRMATIONS: Record<string, { message: (count: number) => st
     message: count => `This starts implementation runs on ${todoCount(count)}. Runs edit the repository.`,
     confirmLabel: 'Run',
   },
-  triage: {
-    message: count =>
-      `This triages ${todoCount(count)}. A duplicate or merge-into verdict closes the todo it folds away.`,
-    confirmLabel: 'Triage',
-  },
 };
 
 /**
@@ -428,7 +423,7 @@ export function useTodoBulkToolbar({
     ...(openChildren ? { openChildren } : {}),
     onResult: (result, action) => {
       toast({
-        message: todoBulkResultMessage(result, todoBulkResultVerb(action.name)),
+        message: todoBulkResultMessage(result, todoBulkResultVerb(action)),
         tone: result.failed > 0 ? 'warning' : 'success',
         // A partial failure names each todo and why; that needs reading time.
         durationMs: result.failed > 0 ? 0 : undefined,
@@ -441,14 +436,13 @@ export function useTodoBulkToolbar({
   });
 }
 
-const RUN_SHAPED_ACTIONS = new Set(['run', 'plan', 'triage']);
-
 /** The toast's verb. "Started", not "ran": a run-shaped action dispatches agent
  *  sessions that land their edits later, so claiming the work is done would be
- *  a lie. */
-export function todoBulkResultVerb(action: string): string {
-  if (RUN_SHAPED_ACTIONS.has(action)) return 'Started';
-  if (action === 'push') return 'Pushed';
+ *  a lie. Run-shaped is what the server's catalog says — the "Run" tool group —
+ *  not a list of step names kept here. */
+export function todoBulkResultVerb(action: TodoBulkAction): string {
+  if (action.tool_hints?.group === 'Run') return 'Started';
+  if (action.name === 'push') return 'Pushed';
   return 'Updated';
 }
 

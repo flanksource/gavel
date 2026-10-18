@@ -25,27 +25,50 @@ vi.mock('./todoMutations', () => ({
   },
 }));
 
+const stepsByStatus = vi.hoisted(() => ({
+  statuses: [] as string[],
+  byStatus: {
+    pending: [{ name: 'run', label: 'Run', prompt: 'run', auxiliary: false }],
+    draft: [{ name: 'triage.new', label: 'Triage new', prompt: 'triage-new', auxiliary: true }],
+  } as Record<string, { name: string; label: string; prompt: string; auxiliary: boolean }[]>,
+}));
+
+vi.mock('./newTodoSteps', () => ({
+  useNewTodoSteps: ({ status }: { status: string }) => {
+    stepsByStatus.statuses.push(status);
+    return { data: stepsByStatus.byStatus[status] ?? [], isPending: false, error: null };
+  },
+}));
+
+beforeEach(() => {
+  localStorage.clear();
+  stepsByStatus.statuses.length = 0;
+});
+
 describe('CreateTodoDialog', () => {
-	 it('keeps a saved todo open for triage recovery without creating it again', async () => {
+	 it('keeps a saved todo open for recovery without creating it again', async () => {
 	   const onCreated = vi.fn();
 	   createMutation.mutateAsync.mockReset();
-	   createMutation.mutateAsync.mockResolvedValue({ todo: { ref: 'saved' }, triage: { status: 'failed', error: 'Admission unavailable' } });
+	   createMutation.mutateAsync.mockResolvedValue({ todo: { ref: 'saved' }, run: { status: 'failed', error: 'Admission unavailable' } });
 	   render(<CreateTodoDialog open onClose={vi.fn()} workspaces={[{ name: 'acme', dir: '/work/acme', repos: [] }]} onCreated={onCreated} />);
 	   fireEvent.change(screen.getByPlaceholderText('What needs doing?'), { target: { value: 'Repair parser' } });
+	   fireEvent.change(screen.getByLabelText('Run after creation'), { target: { value: 'run' } });
 	   fireEvent.click(screen.getByRole('button', { name: 'Add todo' }));
-	   expect(await screen.findByRole('button', { name: 'Retry triage' })).toBeTruthy();
+	   expect(await screen.findByRole('button', { name: 'Retry run' })).toBeTruthy();
 	   expect(screen.queryByRole('button', { name: 'Add todo' })).toBeNull();
 	   expect(onCreated).not.toHaveBeenCalled();
-	   fireEvent.click(screen.getByRole('button', { name: 'Continue without triage' }));
+	   fireEvent.click(screen.getByRole('button', { name: 'Continue without running' }));
 	   expect(onCreated).toHaveBeenCalledOnce();
 	   expect(createMutation.mutateAsync).toHaveBeenCalledOnce();
 	 });
-	 it('enables triage by default and allows opting out', () => {
+	 it('offers None plus the steps for the selected status, defaulting to None', () => {
 	   render(<CreateTodoDialog open onClose={vi.fn()} workspaces={[{ name: 'acme', dir: '/work/acme', repos: [] }]} onCreated={vi.fn()} />);
-	   const checkbox = screen.getByRole<HTMLInputElement>('checkbox', { name: 'Triage after creation' });
-	   expect(checkbox.checked).toBe(true);
-	   fireEvent.click(checkbox);
-	   expect(checkbox.checked).toBe(false);
+	   const select = screen.getByLabelText<HTMLSelectElement>('Run after creation');
+	   expect(select.value).toBe('');
+	   expect(Array.from(select.options, option => option.textContent)).toEqual(['None', 'Run']);
+	   fireEvent.change(screen.getByLabelText('Status'), { target: { value: 'draft' } });
+	   expect(Array.from(screen.getByLabelText<HTMLSelectElement>('Run after creation').options, option => option.textContent)).toEqual(['None', 'Triage new']);
+	   expect(stepsByStatus.statuses).toContain('draft');
 	 });
   it('uses the extra-large modal and the shared tall body editor', () => {
     render(
@@ -117,8 +140,22 @@ describe('CreateTodoDialog as a child of a todo', () => {
     await waitFor(() => expect(onCreated).toHaveBeenCalledWith(parent.dir, createdTodo));
     const request = createMutation.mutateAsync.mock.calls[0][0] as { body: string };
     expect(JSON.parse(request.body)).toEqual({
-      title: 'Backfill rows', body: '', priority: 'medium', status: 'pending', parent: parent.ref, triage: true,
+      title: 'Backfill rows', body: '', priority: 'medium', status: 'pending', parent: parent.ref,
     });
+  });
+
+  it('posts the chosen step, and no triage field, with the new todo', async () => {
+    render(<CreateTodoDialog open onClose={vi.fn()} parent={parent} onCreated={vi.fn()} />);
+
+    fireEvent.change(screen.getByPlaceholderText('What needs doing?'), { target: { value: 'Backfill rows' } });
+    fireEvent.change(screen.getByLabelText('Run after creation'), { target: { value: 'run' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add todo' }));
+
+    await waitFor(() => expect(createMutation.mutateAsync).toHaveBeenCalled());
+    const request = createMutation.mutateAsync.mock.calls[0][0] as { body: string };
+    const payload = JSON.parse(request.body);
+    expect(payload.step).toBe('run');
+    expect('triage' in payload).toBe(false);
   });
 
   it('sends no parent for an ordinary new todo', async () => {

@@ -130,7 +130,9 @@ describe('TodoRunActionButton RuntimeBar', () => {
       { wrapper: queryTestWrapper() },
     );
 
-    const primary = screen.getByRole('button', { name: 'Run' });
+    // The label comes from the run context's lifecycle catalog, so it appears
+    // once the context has loaded.
+    const primary = await screen.findByRole('button', { name: 'Run' });
     await waitFor(() => expect((primary as HTMLButtonElement).disabled).toBe(false));
 
     fireEvent.click(screen.getByRole('button', { name: 'Run runtime' }));

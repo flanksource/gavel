@@ -18,7 +18,7 @@ import {
   writeRunChoiceState,
   type TodoRunAction,
 } from "./runChoiceStorage";
-export { lastTodoRunOptions, normalizeRunOptions, runOptionsKey, requestStepFor, TODO_RUN_ACTIONS, withoutPromptContent, type TodoRunAction } from "./runChoiceStorage";
+export { lastTodoRunOptions, normalizeRunOptions, runOptionsKey, requestStepFor, withoutPromptContent, type TodoRunAction } from "./runChoiceStorage";
 import {
   agentForRuntime,
   PROVIDERS,
@@ -35,16 +35,17 @@ export type TodoRunRuntimeMode = "cmux" | "agent" | "cli" | "api";
 
 export const defaultRunOptions: TodoRunOptions = { step: "run", spec: {} };
 
-export const runActionConfig: Record<TodoRunAction, { label: string; detail: string; icon: ComponentType<IconProps>; title: string }> = {
-  run: { label: "Run", detail: "implement", icon: UiPlay, title: "Run todo" },
-  plan: { label: "Plan", detail: "plan only", icon: UiListDashes, title: "Plan todo" },
-  triage: {
-    label: "Triage",
-    detail: "compact + review fixture",
-    icon: UiListChecks,
-    title: "Compact the description and review the verification fixture",
-  },
-};
+// Glyphs for the two core steps; every other step the server declares gets the
+// generic checklist glyph. This is presentation only — which actions exist and
+// what they are called comes from the run context's lifecycle steps.
+const RUN_ACTION_ICONS: Record<string, ComponentType<IconProps>> = { run: UiPlay, plan: UiListDashes };
+
+// runActionPresentation labels a step from the server's lifecycle catalog. With
+// no catalog loaded yet the step name stands in, as TodoPhaseButton does.
+export function runActionPresentation(action: TodoRunAction, context?: RunContext | null): { label: string; icon: ComponentType<IconProps>; title: string } {
+  const label = context?.lifecycle.steps.find(step => step.name === action)?.label || action;
+  return { label, icon: RUN_ACTION_ICONS[action] ?? UiListChecks, title: `${label} todo` };
+}
 
 const RUNTIME_MODE_CONFIG: Record<TodoRunRuntimeMode, { label: string }> = {
   cmux: { label: "cmux" },
@@ -100,9 +101,9 @@ export function TodoRunContextError({ error }: { error: string }) {
 
 // promptDefaultFor is the runtime the server resolved for one action's prompt.
 // It outranks defaultMode because it already accounts for the prompt's own
-// frontmatter — todos-triage.prompt and todos-plan.prompt pin `model: claude`
-// and declare a per-tool policy only the Claude transports carry, so seeding
-// them from a codex account default produced a run Captain refuses.
+// frontmatter — a prompt that pins `model: claude` and declares a per-tool
+// policy only the Claude transports carry, seeded from a codex account default,
+// produced a run Captain refuses.
 function promptDefaultFor(context: RunContext, action: string): { mode?: string; model?: string } {
   return context.promptDefaults?.[action] ?? {};
 }
@@ -205,7 +206,7 @@ export function todoRunModeLabel(options: TodoRunOptions, context: RunContext): 
 }
 
 export function runButtonLabelForOptions(action: TodoRunAction, options: TodoRunOptions, context: RunContext): string {
-  return `${runActionConfig[action].label} ${runButtonQualifierForOptions(options, context)}`;
+  return `${runActionPresentation(action, context).label} ${runButtonQualifierForOptions(options, context)}`;
 }
 
 export function todoRunButtonPresentation(options: TodoRunOptions, context: RunContext) {

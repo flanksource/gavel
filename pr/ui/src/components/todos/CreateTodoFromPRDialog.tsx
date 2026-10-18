@@ -20,7 +20,7 @@ import { usePRTodoProjectWorkspace } from './usePRTodoProjectWorkspace';
 import { UiBeaker, UiComment, UiError, UiLinkExternal, UiPass, UiWarningTriangle, type IconProps } from '@flanksource/clicky-ui/icons';
 import { inputClass, priorities, statuses, statusLabel } from './format';
 import { useCreateTodoMutation, type CreateTodoResponse } from './todoMutations';
-import { TriageAfterCreation, TriageCreationRecovery } from './TriageAfterCreation';
+import { RunAfterCreation, RunCreationRecovery, useRunAfterCreation } from './RunAfterCreation';
 import {
   buildPRTodoBody,
   buildPRTodoCandidates,
@@ -201,8 +201,8 @@ export function CreateTodoFromPRDialog({
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [error, setError] = useState('');
   const [created, setCreated] = useState<TodoItem | null>(null);
-  const [triage, setTriage] = useState(true);
-  const [triageFailure, setTriageFailure] = useState<CreateTodoResponse | null>(null);
+  const [runFailure, setRunFailure] = useState<CreateTodoResponse | null>(null);
+  const runAfter = useRunAfterCreation({ dir, status, enabled: open });
   const createTodo = useCreateTodoMutation(dir);
   const busy = createTodo.isPending;
   const projectWorkspace = usePRTodoProjectWorkspace({
@@ -232,8 +232,7 @@ export function CreateTodoFromPRDialog({
       setError('');
       createTodo.reset();
       setCreated(null);
-      setTriage(true);
-      setTriageFailure(null);
+      setRunFailure(null);
     }
     if (!touched.current) {
       setSelectedKeys(defaultKeys);
@@ -280,17 +279,18 @@ export function CreateTodoFromPRDialog({
         priority: TodoPriority;
         status: TodoStatus;
         criteria: AcceptanceCriterion[];
-        triage: boolean;
+        step?: string;
         prVerification?: PRTodoVerificationPayload;
         pr: { number: number; url: string };
-      } = { title: title.trim(), body: buildPRTodoBody(pr, notes, selected), priority, status, criteria, triage, pr: { number: pr.number, url: pr.url } };
+      } = { title: title.trim(), body: buildPRTodoBody(pr, notes, selected), priority, status, criteria, pr: { number: pr.number, url: pr.url } };
+      if (runAfter.step) payload.step = runAfter.step;
       if (prVerification) payload.prVerification = prVerification;
       const data = await createTodo.mutateAsync({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
       setCreated(data.todo);
-      if (data.triage?.status === 'failed') setTriageFailure(data);
+      if (data.run?.status === 'failed') setRunFailure(data);
       onCreated?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create todo');
@@ -312,9 +312,9 @@ export function CreateTodoFromPRDialog({
       size="xl"
       className="max-w-6xl"
       footer={
-        triageFailure ? null : created ? (
+        runFailure ? null : created ? (
           <div className="flex justify-end gap-2">
-            <Button variant="outline" onClick={() => { setCreated(null); setTriageFailure(null); }}>Create another</Button>
+            <Button variant="outline" onClick={() => { setCreated(null); setRunFailure(null); }}>Create another</Button>
             <Button onClick={onClose}>Done</Button>
           </div>
         ) : (
@@ -332,7 +332,7 @@ export function CreateTodoFromPRDialog({
       }
     >
       {created ? (
-        triageFailure ? <TriageCreationRecovery result={triageFailure} dir={dir} onDone={() => setTriageFailure(null)} /> :
+        runFailure ? <RunCreationRecovery result={runFailure} dir={dir} step={runAfter.step} onDone={() => setRunFailure(null)} /> :
         <div className="space-y-3">
           <div className="flex items-start gap-2 rounded-md border border-green-200 bg-green-50 p-3 text-sm text-green-800">
             <UiPass className="mt-0.5 shrink-0 text-green-600" />
@@ -409,7 +409,7 @@ export function CreateTodoFromPRDialog({
             </div>
           </div>
 
-          <TriageAfterCreation checked={triage} onChange={setTriage} disabled={busy} />
+          <RunAfterCreation state={runAfter} disabled={busy} />
           <div>
             <div className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">PR signals</div>
             {candidates.length === 0 ? (

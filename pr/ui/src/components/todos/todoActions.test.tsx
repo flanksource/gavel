@@ -179,11 +179,14 @@ describe('todoBulkResultMessage', () => {
 });
 
 describe('todoBulkResultVerb', () => {
+  // Run-shaped is the catalog's "Run" group, so a step the client has never
+  // heard of is still reported as started.
   it.each([
-    ['triage', 'Started'],
-    ['push', 'Pushed'],
-    ['status', 'Updated'],
-  ])('reports a %s batch as %s', (action, verb) => {
+    ['an unknown Run-group action', 'Started', { ...triageAction, name: 'custom-review' }],
+    ['a Run-group action', 'Started', triageAction],
+    ['a push', 'Pushed', pushAction],
+    ['a status change', 'Updated', statusAction],
+  ])('reports %s as %s', (_label, verb, action) => {
     expect(todoBulkResultVerb(action)).toBe(verb);
   });
 });

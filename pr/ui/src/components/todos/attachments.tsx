@@ -63,7 +63,7 @@ export function imageAttachmentsFromFiles(files: FileList | null): Attachment[] 
 // server persists and embeds into the todo body. The browser sets the multipart
 // Content-Type (with boundary) for a FormData body.
 export function todoFormData(
-  fields: { title: string; body: string; priority: string; status: string; autoSave?: boolean; triage?: boolean; labels?: string[]; parent?: string; pr?: { number: number; url: string } },
+  fields: { title: string; body: string; priority: string; status: string; autoSave?: boolean; step?: string; labels?: string[]; parent?: string; pr?: { number: number; url: string } },
   attachments: Attachment[],
 ): FormData {
   const form = new FormData();
@@ -74,7 +74,7 @@ export function todoFormData(
   if (fields.parent) form.append('parent', fields.parent);
   if (fields.pr) form.append('pr', JSON.stringify(fields.pr));
   if (fields.autoSave !== undefined) form.append('autoSave', String(fields.autoSave));
-  if (fields.triage !== undefined) form.append('triage', String(fields.triage));
+  if (fields.step) form.append('step', fields.step);
   fields.labels?.forEach(label => form.append('labels', label));
   attachments.forEach(a => form.append('attachment', a.blob, a.name));
   return form;
