@@ -28,15 +28,19 @@ var _ = Describe("Profiles", func() {
 			Expect(got).To(Equal(want))
 		},
 		Entry("run gets fast-only and concurrency",
-			[]string{"run", "./..."}, []string{"run", "--fast-only", "--concurrency=2", "./..."}),
+			[]string{"run", "./..."}, []string{"run", "--fast-only", "--concurrency=2", "--allow-parallel-runners", "./..."}),
 		Entry("global flags before run are kept in place",
-			[]string{"--color=never", "run"}, []string{"--color=never", "run", "--fast-only", "--concurrency=2"}),
+			[]string{"--color=never", "run"}, []string{"--color=never", "run", "--fast-only", "--concurrency=2", "--allow-parallel-runners"}),
 		Entry("explicit --fast-only=false is preserved",
-			[]string{"run", "--fast-only=false"}, []string{"run", "--concurrency=2", "--fast-only=false"}),
+			[]string{"run", "--fast-only=false"}, []string{"run", "--concurrency=2", "--allow-parallel-runners", "--fast-only=false"}),
 		Entry("--enable-only suppresses fast-only",
-			[]string{"run", "--enable-only=govet"}, []string{"run", "--concurrency=2", "--enable-only=govet"}),
+			[]string{"run", "--enable-only=govet"}, []string{"run", "--concurrency=2", "--allow-parallel-runners", "--enable-only=govet"}),
 		Entry("explicit concurrency is preserved",
-			[]string{"run", "-j", "8"}, []string{"run", "--fast-only", "-j", "8"}),
+			[]string{"run", "-j", "8"}, []string{"run", "--fast-only", "--allow-parallel-runners", "-j", "8"}),
+		Entry("explicit --allow-parallel-runners=false is preserved",
+			[]string{"run", "--allow-parallel-runners=false"}, []string{"run", "--fast-only", "--concurrency=2", "--allow-parallel-runners=false"}),
+		Entry("--allow-serial-runners suppresses parallel runners",
+			[]string{"run", "--allow-serial-runners"}, []string{"run", "--fast-only", "--concurrency=2", "--allow-serial-runners"}),
 		Entry("other subcommands are untouched",
 			[]string{"version"}, []string{"version"}),
 		Entry("no subcommand is untouched",
@@ -46,7 +50,7 @@ var _ = Describe("Profiles", func() {
 	It("omits --concurrency when the CPU limit is disabled", func() {
 		got, err := Profiles["golangci-lint"].Inject([]string{"run"}, Limits{})
 		Expect(err).NotTo(HaveOccurred())
-		Expect(got).To(Equal([]string{"run", "--fast-only"}))
+		Expect(got).To(Equal([]string{"run", "--fast-only", "--allow-parallel-runners"}))
 	})
 
 	It("adds an eslint cache outside the repository", func() {

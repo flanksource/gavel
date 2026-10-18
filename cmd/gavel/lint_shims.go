@@ -35,16 +35,17 @@ func (LintInstallShimsOptions) Help() api.Textable {
 editors, agents or scripts.
 
 Each shim runs the real linter through gavel with:
-  golangci-lint  run gets --fast-only and --concurrency=<cores>; GOMAXPROCS and
-                 GOMEMLIMIT follow --cpu-limit / --mem-limit
+  golangci-lint  run gets --fast-only, --concurrency=<cores> and
+                 --allow-parallel-runners; GOMAXPROCS and GOMEMLIMIT follow
+                 --cpu-limit / --mem-limit
   eslint         --cache with the cache kept in the user cache dir;
                  UV_THREADPOOL_SIZE and --max-old-space-size follow the limits
   tsc            UV_THREADPOOL_SIZE and --max-old-space-size follow the limits
 
 Every linter is niced, killed after --timeout (exit 124), and killed when its
 process tree stays above --cpu-limit or exceeds --mem-limit (exit 137).
-Flags you pass explicitly (e.g. --fast-only=false, --concurrency, --no-cache)
-are left alone.
+Flags you pass explicitly (e.g. --fast-only=false, --concurrency,
+--allow-serial-runners, --no-cache) are left alone.
 
 Put the shim dir first on PATH; install-shims prints the export line when it
 is not. Set GAVEL_SHIMS=off to run the real linter unchanged. gavel lint

@@ -89,7 +89,7 @@ export PATH="$HOME/.gavel/shims:$PATH"
 
 `install-shims` writes PATH shims for `golangci-lint`, `eslint` and `tsc`, so editors and agents that call these tools directly get bounded runs. With a shim in place:
 
-- `golangci-lint run` gets `--fast-only` and `--concurrency`.
+- `golangci-lint run` gets `--fast-only`, `--concurrency` and `--allow-parallel-runners`, so concurrent runs don't queue on golangci-lint's per-user lock.
 - `eslint` gets a cache kept outside the repository.
 - Each shimmed linter's parallelism (`GOMAXPROCS`, `UV_THREADPOOL_SIZE`) and memory (`GOMEMLIMIT`, `--max-old-space-size`) are capped from the limits.
 

@@ -65,6 +65,11 @@ func injectGolangci(args []string, limits Limits) ([]string, error) {
 	if limits.Slots > 0 && !hasFlag(args, "--concurrency") && !hasFlag(args, "-j") {
 		extra = append(extra, fmt.Sprintf("--concurrency=%d", limits.Slots))
 	}
+	// golangci-lint serializes runs on a per-user lock; each shimmed run is
+	// already capped, so queueing behind other runs would only burn the timeout.
+	if !hasFlag(args, "--allow-parallel-runners") && !hasFlag(args, "--allow-serial-runners") {
+		extra = append(extra, "--allow-parallel-runners")
+	}
 	return slices.Concat(args[:run+1], extra, args[run+1:]), nil
 }
 

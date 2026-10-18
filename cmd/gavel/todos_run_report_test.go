@@ -47,43 +47,17 @@ func TestRenderRunResultReportsAKeptStatus(t *testing.T) {
 	}
 }
 
-// An ask used to print "finished — ask" and swallow the questions, leaving the
-// operator to go and read the TODO to find out what was being asked.
-func TestRenderRunResultPrintsQuestionsForAnAsk(t *testing.T) {
+// The tools wrote during the run, so the report prints what they wrote from the
+// execution rather than reading it back off a TODO.
+func TestRenderRunResultPrintsTheEventAndToolWrites(t *testing.T) {
 	execution := &todos.ExecutionResult{
 		ExecutorName: "cli-claude",
-		EndStatus:    types.EndAsk,
-		Questions: []types.AgentQuestion{{
-			Text:    "Which provider owns the write?",
-			Context: "todos/triage.go holds the lock",
-			Options: []string{"the native provider", "the lifecycle host"},
-		}},
-	}
-	report := renderRunResult("ref", "triage", triageOutcomeFor(execution), string(types.StatusAsk), nil)
-
-	for _, want := range []string{"Which provider owns the write?", "todos/triage.go holds the lock", "the lifecycle host"} {
-		if !strings.Contains(report, want) {
-			t.Errorf("report %q should contain %q", report, want)
-		}
-	}
-}
-
-// The verdict is a request the host applies afterwards, so it is printed from the
-// envelope rather than read back off a TODO the write may not have reached.
-func TestRenderRunResultPrintsTheTriageVerdict(t *testing.T) {
-	execution := &todos.ExecutionResult{
-		ExecutorName: "cli-claude",
-		EndStatus:    types.EndCompleted,
-		Triage: &types.TriageEnvelope{
-			Verdict: types.VerdictMergeInto,
-			Body:    "Combined description.",
-			Comment: "Same work as the two folded in.",
-			Merges:  []string{"ff0011aa", "cc3344bb"},
-		},
+		Envelope:     &types.Envelope{Success: true, Event: "merged", Comment: "Same work as the two folded in."},
+		ToolWrites:   []todos.ToolWrite{{Name: "todo_merge", Ref: "ff0011aa"}, {Name: "todo_merge", Ref: "cc3344bb"}},
 	}
 	report := renderRunResult("ref", "triage", triageOutcomeFor(execution), lifecycle.OutcomeKeep, nil)
 
-	for _, want := range []string{"merge-into", "body", "ff0011aa", "cc3344bb", "Same work as the two folded in."} {
+	for _, want := range []string{"merged", "todo_merge ff0011aa", "todo_merge cc3344bb"} {
 		if !strings.Contains(report, want) {
 			t.Errorf("report %q should contain %q", report, want)
 		}
@@ -114,16 +88,16 @@ func TestRenderRunResultPrintsAnUndecodedResponse(t *testing.T) {
 func TestRenderRunResultOmitsTheResponseWhenAnEnvelopeDecoded(t *testing.T) {
 	execution := &todos.ExecutionResult{
 		ExecutorName: "cli-claude",
-		EndStatus:    types.EndCompleted,
+		Envelope:     &types.Envelope{Success: true, Event: "ready", Comment: "Triaged it."},
 		Summary:      "Triaged it.",
-		ResponseText: `{"summary":"Triaged it.","endStatus":"completed"}`,
+		ResponseText: `{"success":true,"event":"ready","comment":"Triaged it."}`,
 	}
 	report := renderRunResult("ref", "triage", triageOutcomeFor(execution), lifecycle.OutcomeKeep, nil)
 
 	if strings.Contains(report, "did not match the step's schema") {
 		t.Errorf("report %q should not claim a schema mismatch", report)
 	}
-	if strings.Contains(report, `"endStatus"`) {
+	if strings.Contains(report, `"event"`) {
 		t.Errorf("report %q should not echo the raw envelope", report)
 	}
 }
@@ -131,7 +105,6 @@ func TestRenderRunResultOmitsTheResponseWhenAnEnvelopeDecoded(t *testing.T) {
 func TestRenderRunResultPrintsTheDefinitionOfDoneVerdict(t *testing.T) {
 	execution := &todos.ExecutionResult{
 		ExecutorName: "cli-claude",
-		EndStatus:    types.EndCompleted,
 		DoD:          &todos.DoDOutcome{Ran: true, Report: &captainapi.VerifyReport{Reason: "2 of 3 fixtures failed"}},
 	}
 	report := renderRunResult("ref", "verify", triageOutcomeFor(execution), string(types.StatusUnverified), nil)

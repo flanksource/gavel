@@ -43,7 +43,7 @@ var _ = Describe("lint shim-exec", func() {
 		code, stdout, stderr := run("golangci-lint", "run", "./...")
 
 		Expect(stderr).To(BeEmpty())
-		Expect(stdout).To(Equal("args=run --fast-only --concurrency=2 ./...\nGOMAXPROCS=2 GOMEMLIMIT=1800000000B\n"))
+		Expect(stdout).To(Equal("args=run --fast-only --concurrency=2 --allow-parallel-runners ./...\nGOMAXPROCS=2 GOMEMLIMIT=1800000000B\n"))
 		Expect(code).To(Equal(3))
 	})
 

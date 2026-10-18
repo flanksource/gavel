@@ -315,6 +315,12 @@ The UI path is worth calling out separately:
 - `gavel test --lint --ui` is the richest local feedback loop because the same UI can show both test and lint findings.
 - `gavel test --ui --detach` turns the live run into a handoff flow: the CLI starts the run, then a child UI server stays up until `--auto-stop` or `--idle-timeout` expires.
 
+Diagnosing hangs and timeouts:
+
+- `--timeout` (default `20m`) bounds the whole run; `--test-timeout` bounds each test package and has no default unless `test.testTimeout` sets one. When a package passes its deadline, each Go test binary under it is sent `SIGQUIT` and given 3s to print its goroutines before the tree is killed; the dump lands on the timed-out attempt as `stack_trace` and `goroutine_count`.
+- `--diagnostics` records the run's process tree, CPU/RSS/disk samples and stack dumps into `.gavel/traces/<run_id>` without a browser (`--ui` does the same). The watchdog checkpoints Gavel's goroutines there every 10 minutes (`periodic`), on `timeout`, on `package-timeout:<pkg>` and at the end (`final`). `--process-facets` adds each process's open files, sockets, ports and environment, and needs `--ui` or `--diagnostics`.
+- `gavel ui serve <snapshot>` reopens the run's trace store read-only, so the Processes tab and stack dumps are browsable after the run.
+
 Framework pinning is available in two forms:
 
 - `gavel test --framework go --framework ginkgo`
@@ -394,6 +400,23 @@ The linter subcommands are shortcuts for pinning `--linters`:
 
 Use those shortcuts when you want discoverability and stable command names in scripts.
 
+#### Cap linters run outside gavel (`gavel lint install-shims`)
+
+Editors, agents and scripts often call `golangci-lint`, `eslint` or `tsc` directly, running the full rule set with no bounds. `install-shims` writes PATH shims for them that run the real tool through gavel with cheap defaults and hard limits:
+
+```bash
+gavel lint install-shims --timeout 30s --cpu-limit 200 --mem-limit 2GB
+export PATH="$HOME/.gavel/shims:$PATH"   # printed when the dir is not yet first on PATH
+```
+
+- `golangci-lint run` gets `--fast-only`, `--concurrency=<cores>` and `--allow-parallel-runners`, with `GOMAXPROCS` and `GOMEMLIMIT` set from the limits. golangci-lint otherwise runs only one lint per user at a time, so concurrent agents would queue and use up their timeout; each shimmed run is already capped.
+- `eslint` gets `--cache`, with the cache kept in the user cache dir; `eslint` and `tsc` get `UV_THREADPOOL_SIZE` and `--max-old-space-size` set from the limits.
+- Every shimmed linter is niced (`--nice`, default 10). It is killed after `--timeout` (exit 124), and killed when its process tree stays above `--cpu-limit` percent or exceeds `--mem-limit` (exit 137).
+- Flags you pass explicitly (`--fast-only=false`, `--concurrency`, `--allow-serial-runners`, `--no-cache`, an existing `--max-old-space-size`) are left alone.
+- `GAVEL_SHIMS=off golangci-lint run` runs the real tool unchanged. `gavel lint` itself always resolves the real binaries behind the shims.
+
+Use `--tools` to choose which linters to shim, `--dir` to choose where the shims go, and `--dry-run` to preview. Re-run the command to change the limits.
+
 ### `gavel test outline`
 
 `test outline` provides one read-only inventory across Go test, Ginkgo, Jest, Vitest, Playwright, and Markdown fixtures. It uses native framework collection where available, statically parses Jest declarations, and parses fixture Markdown without running setup or commands.
@@ -434,7 +457,7 @@ test/lint runner steps, skip commands, or AI checks.
 
 If your repo enables fixture discovery in `.gavel.yaml`, `gavel test --fixtures` can run the same files as part of the broader test pass.
 
-`--profile` samples CPU, memory, and disk I/O for the fixture process tree. Save this example as `profile.fixture.md` in the Gavel repository, then run `gavel fixtures --profile --ui profile.fixture.md`:
+`--profile` reads CPU, memory, and disk I/O for the fixture process tree from the run's `process_tree` and `process_samples` traces: each step's peaks are its command's process tree over the step's time, and its disk I/O is the step's delta of the cumulative counters. Save this example as `profile.fixture.md` in the Gavel repository, then run `gavel fixtures --profile --ui profile.fixture.md`:
 
 ````markdown
 ---
@@ -452,9 +475,9 @@ go test ./internal/safefs -run TestSafeRemove -cpuprofile="$CPU_PROFILE"
 ```
 ````
 
-Gavel supplies profile destinations only with `--profile`, gives each fixture an isolated output directory, and checks any file the command emits. A missing file or empty directory is reported as *not emitted*. An emitted file must be nonempty and parse as a Go pprof profile. Commands that accept a filename argument can use `args: ["-cpuprofile={{.path}}"]` instead of `env:`; commands that emit several profiles can use `directory:` instead of `file:`. Captured profiles can be downloaded from the fixture detail in `--ui` or opened with `go tool pprof` at the path shown in the benchmark report.
+Gavel supplies profile destinations only with `--profile`, gives each fixture an isolated output directory, and ingests every file the command emits into the run's `goprof` trace, one window per file, listed with the fixture's traces. A missing file or empty directory is logged and skipped. An emitted file must parse as a Go pprof profile, and must stay inside the fixture's output directory. The entry's name (`cpu`, `heap`, `allocs`, `mutex`, `block`, `goroutine`) says which profile it is; another name is read from the profile's sample types. Commands that accept a filename argument can use `args: ["-cpuprofile={{.path}}"]` instead of `env:`; commands that emit several profiles can use `directory:` instead of `file:`. Each window downloads in the `pprof` export format (`.pb.gz`), which `go tool pprof` opens.
 
-Use `--benchmark` with limits to fail individual fixture tests when they exceed a budget. `--max-time`, `--max-sql-time`, and `--max-sql-query` accept Go durations; `--max-memory`, `--max-io-read`, and `--max-io-write` accept byte sizes. `--max-sql-queries` and `--max-slow-sql` cap statement counts, including zero. `--max-deviation-pct` requires `--baseline` and checks positive regressions against each matching fixture's measured time, peak RSS, disk I/O, and SQL timings and counts. Metrics absent from the baseline are skipped; a missing current measurement fails when an absolute limit or a previously measured baseline value requires it.
+`--benchmark` records each fixture's and each prerequisite's (setup, build, daemon) duration, with its profile and SQL totals when collected, and writes the report to `.gavel/benchmarks/fixtures/run-<timestamp>.json`; copy one somewhere stable to use it as a `--baseline`. Use `--benchmark` with limits to fail individual fixture tests when they exceed a budget. `--max-time`, `--max-sql-time`, and `--max-sql-query` accept Go durations; `--max-memory`, `--max-io-read`, and `--max-io-write` accept byte sizes. `--max-sql-queries` and `--max-slow-sql` cap statement counts, including zero. `--max-deviation-pct` requires `--baseline` and checks positive regressions against each matching fixture's measured time, peak RSS, disk I/O, and SQL timings and counts. Metrics absent from the baseline are skipped; a missing current measurement fails when an absolute limit or a previously measured baseline value requires it.
 
 ```bash
 gavel fixtures --benchmark --max-time 2s --max-memory 512MiB tests/performance.fixture.md
@@ -688,17 +711,31 @@ see [SCHEMA.md](SCHEMA.md#todoslifecycle)). Each step is:
 - a CEL **`when`** predicate over `subject` (the todo), `runs` (its run
   history), and `last` (the latest run per step) that decides whether the step
   currently applies,
+- the **`events`** its result may report, and the **`tools`** sets it runs with,
 - an ordered list of **`outcomes`** — `{status, when}` pairs evaluated in
   order, first true wins — that decide which status the finished run lands the
   todo in. No outcome matching is an error: a run the definition cannot
   classify must not silently keep the status it started under.
 
+Every step's agent ends with the same result envelope, `{success, event, comment}`: `success` says whether the step did its job, `event` is one of the step's declared `events` (the schema is built per step, so any other value is refused), and `comment` is the markdown that becomes the run's history entry. Outcomes read them as `envelope.success` and `envelope.event`, next to `run` (the run's own fate) and `verify` (the definition-of-done report). The `verify` step generates nothing; its envelope is synthesised from the report with the events `passed` and `failed`.
+
+A step changes TODOs only through the tools it declares, and each tool writes when it is called — gavel applies nothing from the result afterwards:
+
+| Set | Tools | Policy |
+| --- | --- | --- |
+| `todos` | `todo_search`, `todo_get`, `todo_update`, `todo_labels`, `todo_link`, `todo_link_pr`, `todo_set_parent`, `todo_comment`, `todo_plan` (plan steps only) | allow |
+| `todos` | `todo_merge`, `todo_close` | ask — a person approves each call |
+| `ask` | `todo_ask` | allow; it raises its own question through the run's approval broker |
+| `pr` | `pr_thread_addressed` (only on a run that pushes to the todo's PR) | allow |
+
+`gavel todos run --preview` runs the agent, but `todo_merge` and `todo_close` report what they would do and write nothing. Each finished run records one `lifecycle_outcome` event: its body is the comment plus a verification line, and its payload carries `envelope: {success, event}` and `tools: [{name, ref}]`, every write the run's tools made. Todo prompts deny the native `AskUserQuestion`; a question goes through `todo_ask`, which blocks inside the run until the answer arrives. `gavel todos run` from a terminal answers approvals and `todo_ask` questions at that terminal; with stdin redirected, or from the dashboard, they go to Captain's durable broker and are answered on the dashboard. Caller tools are exposed on the `agent`, `api`, `cli` and `cmux` runtimes (claude and codex); preflight refuses a step that declares tools on a runtime that cannot expose them.
+
 The built-in lifecycle's steps, in the order `gavel todos run` considers them,
 are `triage` (auxiliary — never picked automatically, only run by name),
 `plan`, `verify`, and `run`. `review` and `ask` are **human-facing statuses**,
 not steps: a todo in `review` is waiting for `gavel todos plan
-approve|reject|revise`, and one in `ask` is waiting for an answer to the
-agent's blocking questions — nothing in the lifecycle is "next" for either
+approve|reject|revise`, and one in `ask` has a run waiting on an approval
+or a `todo_ask` question — nothing in the lifecycle is "next" for either
 until a person acts.
 
 `gavel todos run [--step <name>]` runs one lifecycle step for each selected
