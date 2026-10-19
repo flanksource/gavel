@@ -126,10 +126,10 @@ func RunAfterAgent(ctx context.Context, run AgentRun) (*Result, error) {
 		// every turn.
 		Autosquash: false,
 	}
-	if _, merging, err := github.MergeInProgress(commitDir); err != nil {
+	if unresolved, rebasing, err := github.RebaseInProgress(commitDir); err != nil {
 		return nil, err
-	} else if merging {
-		return concludeAgentMerge(ctx, opts)
+	} else if rebasing {
+		return nil, rebaseInProgressErr(unresolved)
 	}
 	result, err := Run(ctx, opts)
 	if err != nil {

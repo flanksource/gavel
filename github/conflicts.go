@@ -44,7 +44,7 @@ func (r MergeConflictReport) ResolveCommands() []string {
 	return []string{
 		fmt.Sprintf("git fetch origin %s", r.BaseRefName),
 		fmt.Sprintf("git switch %s", r.HeadRefName),
-		fmt.Sprintf("git merge origin/%s", r.BaseRefName),
+		fmt.Sprintf("git rebase origin/%s", r.BaseRefName),
 	}
 }
 

@@ -120,7 +120,7 @@ var _ = Describe("DetectMergeConflicts", func() {
 			Expect(report.ResolveCommands()).To(Equal([]string{
 				"git fetch origin main",
 				"git switch feature",
-				"git merge origin/main",
+				"git rebase origin/main",
 			}))
 		})
 	})

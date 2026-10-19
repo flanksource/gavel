@@ -80,7 +80,7 @@ workflow:
         merges=$(git rev-list --merges {{shq baseSha}}..HEAD); [ -z "$merges" ] || { echo "merge commits on the branch — rebase instead of merging: $merges" >&2; exit 1; }
       # No conflict markers survived into the rebased commits.
       - |-
-        git diff --check {{shq baseSha}}...HEAD
+        ! git diff --check {{shq baseSha}}...HEAD | grep 'leftover conflict marker'
       # Every fix is committed: only commits are pushed.
       - test -z "$(git status --porcelain)"
   after:

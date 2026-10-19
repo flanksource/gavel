@@ -14,6 +14,10 @@ type RunTarget struct {
 	RepositoryURL string `json:"repositoryUrl"`
 	Branch        string `json:"branch"`
 	HeadSHA       string `json:"headSha"`
+	// Rebase lets PushHead rewrite the source branch: the run rebases it onto
+	// its base, so the new head no longer descends from HeadSHA. The push stays
+	// leased on HeadSHA either way.
+	Rebase bool `json:"rebase,omitempty"`
 }
 
 var commitSHA = regexp.MustCompile(`^[a-fA-F0-9]{40}([a-fA-F0-9]{24})?$`)
@@ -76,11 +80,14 @@ func (t *RunTarget) PushHead(ctx context.Context, dir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if _, err := targetGit(ctx, dir, "merge-base", "--is-ancestor", t.HeadSHA, head); err != nil {
+	if _, err := targetGit(ctx, dir, "merge-base", "--is-ancestor", t.HeadSHA, head); err != nil && !t.Rebase {
 		return "", fmt.Errorf("PR push must fast-forward the source branch: %w", err)
 	}
 	if head != t.HeadSHA {
-		if _, err := targetGit(ctx, dir, "push", "--porcelain", "--", t.RepositoryURL, "HEAD:refs/heads/"+t.Branch); err != nil {
+		// The lease closes the gap between FetchHead's check and the push: a
+		// push that lands in between is refused instead of overwritten.
+		lease := fmt.Sprintf("--force-with-lease=refs/heads/%s:%s", t.Branch, t.HeadSHA)
+		if _, err := targetGit(ctx, dir, "push", "--porcelain", lease, "--", t.RepositoryURL, "HEAD:refs/heads/"+t.Branch); err != nil {
 			return "", err
 		}
 	}

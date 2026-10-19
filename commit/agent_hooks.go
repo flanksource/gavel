@@ -87,9 +87,9 @@ func agentCommitter(opts AgentHooksOptions, keepSubject bool) func(*agent.HookCo
 		result, err := RunAfterAgent(hc.Context, run)
 		// A turn that edited nothing stageable is a normal outcome, not a
 		// failure: the hook records no commit and the run continues. So is a turn
-		// that left a merge half-resolved — the merge stays for the next turn,
-		// and the run's verify commands feed back which paths remain.
-		if errors.Is(err, ErrMergeUnresolved) {
+		// that left a rebase stopped — it stays for the next turn to continue,
+		// and the run's verify commands feed back what remains.
+		if errors.Is(err, ErrRebaseInProgress) {
 			hc.Notify("[post-%s] %v — not committing", plan.Phase, err)
 			return "", nil
 		}
