@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/flanksource/gavel/sandbox"
+	"github.com/spf13/pflag"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -190,6 +191,21 @@ func TestSubstrateCredentialsAreParsedFromFlags(t *testing.T) {
 	require.EqualError(t, err, `--substrate-credential "host=api.anthropic.com,header=x-api-key" needs host, header, env and uri`)
 	_, err = substrateCredentials([]string{"host=api.anthropic.com,colour=blue,header=x,env=Y,uri=z"})
 	require.EqualError(t, err, `--substrate-credential "host=api.anthropic.com,colour=blue,header=x,env=Y,uri=z": unknown key "colour"; keys are host, header, prefix, env and uri`)
+}
+
+func TestSubstrateCredentialFlagKeepsEachValueWhole(t *testing.T) {
+	serve := findCommand(rootCmd, "serve")
+	require.NotNil(t, serve)
+	flag := serve.Flags().Lookup("substrate-credential")
+	require.NotNil(t, flag)
+	values, ok := flag.Value.(pflag.SliceValue)
+	require.True(t, ok, "--substrate-credential repeats")
+	t.Cleanup(func() { _ = values.Replace(nil); flag.Changed = false })
+
+	anthropic := "host=api.anthropic.com,header=x-api-key,env=ANTHROPIC_API_KEY,uri=ate-secret://k8s.io/default/gavel/anthropic/key"
+	openai := "host=api.openai.com,header=Authorization,prefix=Bearer ,env=OPENAI_API_KEY,uri=ate-secret://k8s.io/default/gavel/openai/key"
+	require.NoError(t, serve.Flags().Parse([]string{"--substrate-credential", anthropic, "--substrate-credential", openai}))
+	assert.Equal(t, []string{anthropic, openai}, values.GetSlice(), "a credential's fields are separated by commas, so the flag can't split on them")
 }
 
 func TestSubstrateSandboxRefusesSecretsInItsJobs(t *testing.T) {
