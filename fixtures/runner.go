@@ -563,6 +563,7 @@ func progressStepKey(kind ExecutionKind) string {
 func (r *Runner) attachResult(node *FixtureNode, result FixtureResult) {
 	children := result.Children
 	result.Children = nil
+	stampSource(node, &result)
 	node.Results = &result
 	for _, child := range children {
 		node.AddChild(child)

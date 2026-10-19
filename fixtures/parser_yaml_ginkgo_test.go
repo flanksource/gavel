@@ -43,6 +43,35 @@ var _ = Describe("ParseFixtureFile (YAML/JSON documents)", func() {
 			observe: func(context.Context, *StepContext, any) (map[string]any, error) { return nil, nil }})
 	})
 
+	It("records the lines each step spans, leaving out the comments and separator that follow it", func() {
+		path := writeDocument("spans.fixture.yaml", `kind: Fixture
+steps:
+  - id: api
+    kind: probe
+    url: http://x
+
+  # the next one polls
+  - { id: poll, kind: probe, url: http://y }
+env: { GREETING: hello }
+---
+kind: Fixture
+steps:
+  - id: last
+    kind: probe
+    url: |
+      http://z
+`)
+		file, err := ParseFixtureFile(path)
+		Expect(err).ToNot(HaveOccurred())
+		var spans [][2]int
+		file.Walk(func(n *FixtureNode) {
+			if n.Test != nil {
+				spans = append(spans, [2]int{n.Origin.Line, n.Origin.EndLine})
+			}
+		})
+		Expect(spans).To(Equal([][2]int{{3, 5}, {8, 8}, {13, 16}}))
+	})
+
 	It("lowers each step of each document to a test node carrying its envelope, config and the document defaults", func() {
 		path := writeDocument("stack.fixture.yaml", `
 kind: Fixture

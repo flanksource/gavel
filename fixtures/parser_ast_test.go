@@ -6,6 +6,40 @@ import (
 )
 
 var _ = Describe("Parser AST", func() {
+	It("records the file path and lines each command block spans, counting the front matter", func() {
+		path := writeDocument("spans.md", "---\n"+
+			"codeBlocks: [bash]\n"+
+			"---\n"+
+			"# Checks\n"+
+			"\n"+
+			"## command: first\n"+
+			"\n"+
+			"```bash\n"+
+			"echo one\n"+
+			"```\n"+
+			"\n"+
+			"Validations:\n"+
+			"* cel: exitCode == 0\n"+
+			"\n"+
+			"## command: second\n"+
+			"\n"+
+			"```bash\n"+
+			"echo two\n"+
+			"```\n")
+		tree, err := ParseMarkdownFixturesWithTree(path)
+		Expect(err).NotTo(HaveOccurred())
+		var origins []FixtureOrigin
+		tree.Walk(func(n *FixtureNode) {
+			if n.Test != nil {
+				origins = append(origins, FixtureOrigin{File: n.Origin.File, Line: n.Origin.Line, EndLine: n.Origin.EndLine})
+			}
+		})
+		Expect(origins).To(Equal([]FixtureOrigin{
+			{File: path, Line: 6, EndLine: 13},
+			{File: path, Line: 15, EndLine: 19},
+		}))
+	})
+
 	Context("when parsing markdown with goldmark command blocks", func() {
 		DescribeTable("should parse different command block structures",
 			func(content string, expectedLen int, validateFunc func(fixtures []FixtureNode)) {

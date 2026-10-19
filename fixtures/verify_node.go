@@ -145,7 +145,7 @@ func contextFrom(result *FixtureResult) *api.VerifyNodeContext {
 // the CEL evaluation trace, the run artifact a `yaml test` / `yaml lint` step
 // points at, the changed files the node was scoped to, and a typed step's
 // step/outputs/exports/wait/attempts/background record plus a background
-// watcher's events. An unencodable detail is dropped rather than failing the
+// watcher's events, and a failed step's source lines. An unencodable detail is dropped rather than failing the
 // report — the verdict is what matters, and the trace is an aid.
 func ResultDetail(result *FixtureResult) json.RawMessage {
 	detail := map[string]any{}
@@ -164,7 +164,7 @@ func ResultDetail(result *FixtureResult) json.RawMessage {
 	// A typed (YAML/JSON) step's record: which step it was, what it produced and
 	// exported, how its wait went, every Execute attempt and what a background
 	// watcher saw.
-	for _, key := range []string{"step", "outputs", "exports", "wait", "attempts", "events", "background"} {
+	for _, key := range []string{"step", "outputs", "exports", "wait", "attempts", "events", "background", "source"} {
 		if value, ok := result.Metadata[key]; ok {
 			if key == "attempts" {
 				if attempts, typed := value.([]AttemptReport); typed {

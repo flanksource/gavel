@@ -223,8 +223,13 @@ func parseFrontMatter(file *os.File) (*FrontMatter, string, error) {
 		return nil, "", err
 	}
 
-	content := strings.Join(contentLines, "\n")
-	return &frontMatter, content, nil
+	if len(contentLines) == 0 {
+		return &frontMatter, "", nil
+	}
+	// Blank lines stand in for the front matter so that line numbers in the
+	// content are the file's own.
+	padding := strings.Repeat("\n", len(frontMatterLines)+2)
+	return &frontMatter, padding + strings.Join(contentLines, "\n"), nil
 }
 
 // parseMarkdownContentWithSourceDir parses markdown content with source directory context
@@ -378,6 +383,13 @@ func ParseMarkdownFixturesWithTree(filePath string) (*FixtureNode, error) {
 		return nil, fmt.Errorf("failed to expand fixtures for files: %w", err)
 	}
 	setOriginFile(fileTree, filePath)
+	fileTree.Walk(func(node *FixtureNode) {
+		// ParseMarkdownContentWithTree knew the file only by its base name.
+		if node.Origin.File == filepath.Base(filePath) {
+			node.Origin.File = filePath
+		}
+	})
+	setMarkdownEndLines(fileTree, content)
 	if fileTree.Origin != nil {
 		fileTree.Origin.File = filePath
 		fileTree.Origin.Kind = "file"

@@ -1118,6 +1118,9 @@ type FixtureOrigin struct {
 	TableIndex  int    `json:"table_index,omitempty"`
 	RowIndex    int    `json:"row_index,omitempty"`
 	Line        int    `json:"line,omitempty"`
+	// EndLine is the last source line of a test node: its YAML step, or its
+	// markdown block up to the next node. Zero when the extent is unknown.
+	EndLine int `json:"end_line,omitempty"`
 }
 
 // FixtureNode represents a node in the hierarchical fixture tree structure.
@@ -1136,7 +1139,7 @@ type FixtureNode struct {
 
 func (f FixtureNode) Pretty() api.Text {
 	if f.Results != nil {
-		return f.Results.Pretty()
+		return f.resultPretty()
 	}
 
 	s := clicky.Text("").Add(f.Type.Pretty()).Append(" ").Append(f.Name)
@@ -1146,6 +1149,33 @@ func (f FixtureNode) Pretty() api.Text {
 	}
 
 	return s
+}
+
+// resultPretty is the node's result, followed on a failure by the source lines
+// the node was written as.
+func (f FixtureNode) resultPretty() api.Text {
+	text := f.Results.Pretty()
+	if source, ok := f.Results.Metadata["source"].(parsers.SourceSnippet); ok {
+		text = text.NewLine().Append(fmt.Sprintf("  source %s:%d-%d", source.File, source.Line, source.EndLine), "text-muted").
+			NewLine().Add(source.Pretty())
+	}
+	return text
+}
+
+// stampSource records, on a failed result, the source lines its node was
+// written as, so every report of the failure can show them.
+func stampSource(node *FixtureNode, result *FixtureResult) {
+	if !isFailureStatus(result.Status) || node.Origin == nil {
+		return
+	}
+	source := parsers.SourceRange{File: node.Origin.File, Line: node.Origin.Line, EndLine: node.Origin.EndLine}
+	if !source.Valid() {
+		return
+	}
+	if result.Metadata == nil {
+		result.Metadata = map[string]any{}
+	}
+	result.Metadata["source"] = source.Read()
 }
 
 func (f FixtureNode) GetChildren() []api.TreeNode {
@@ -1258,7 +1288,7 @@ type FixtureTreeNode struct {
 
 func (ftn FixtureTreeNode) Pretty() api.Text {
 	if ftn.fixture.Results != nil {
-		return ftn.fixture.Results.Pretty()
+		return ftn.fixture.resultPretty()
 	}
 
 	// Get icon based on node type and status
