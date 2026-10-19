@@ -145,15 +145,15 @@ func (o DashboardOptions) Validate() error {
 		}
 		switch o.Sandbox {
 		case "":
-		case "docker", "podman", "kubernetes":
+		case "docker", "podman", "kubernetes", "substrate":
 			if o.SandboxImage == "" {
 				add("--sandbox requires --sandbox-image")
 			}
-			if o.Sandbox != "kubernetes" && o.SandboxServeAddr == "" {
+			if (o.Sandbox == "docker" || o.Sandbox == "podman") && o.SandboxServeAddr == "" {
 				add("--sandbox %s requires --sandbox-serve-addr, the IP:port sandbox containers reach gavel serve at", o.Sandbox)
 			}
 		default:
-			add("--sandbox must be docker, podman or kubernetes, got %q", o.Sandbox)
+			add("--sandbox must be docker, podman, kubernetes or substrate, got %q", o.Sandbox)
 		}
 		if len(o.SandboxSecretEnv) > 0 && o.Sandbox == "" {
 			add("--sandbox-secret-env copies secrets into sandbox jobs and needs --sandbox")

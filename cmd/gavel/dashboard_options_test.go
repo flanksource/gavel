@@ -57,8 +57,10 @@ func TestDashboardOptionsValidate(t *testing.T) {
 			o.Sandbox, o.SandboxImage, o.SandboxServeAddr = "docker", "ghcr.io/flanksource/gavel-runner:1", "10.0.0.5:9092"
 		}, nil},
 		{"kubernetes sandbox", func(o *DashboardOptions) { o.Sandbox, o.SandboxImage = "kubernetes", "runner:1" }, nil},
+		{"substrate sandbox", func(o *DashboardOptions) { o.Sandbox, o.SandboxImage = "substrate", "runner@sha256:1" }, nil},
+		{"substrate sandbox without an image", func(o *DashboardOptions) { o.Sandbox = "substrate" }, []string{"--sandbox requires --sandbox-image"}},
 		{"unknown sandbox", func(o *DashboardOptions) { o.Sandbox, o.SandboxImage = "firecracker", "runner:1" }, []string{
-			`--sandbox must be docker, podman or kubernetes, got "firecracker"`,
+			`--sandbox must be docker, podman, kubernetes or substrate, got "firecracker"`,
 		}},
 		{"sandbox without an image", func(o *DashboardOptions) { o.Sandbox = "kubernetes" }, []string{"--sandbox requires --sandbox-image"}},
 		{"model keys for sandbox jobs", func(o *DashboardOptions) {
