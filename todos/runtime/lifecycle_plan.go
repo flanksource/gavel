@@ -238,6 +238,17 @@ func (p *Provider) persistPlanResult(ctx context.Context, todo *types.TODO, acti
 // resolves from its session. A session with no plan is captaincli.ErrNoPlan;
 // any other resolver error is returned as the resolver's own.
 func (p *Provider) planResultContent(ctx context.Context, result *todos.ExecutionResult, sessionID string) (content, path string, err error) {
+	if p.sandboxedRuns {
+		// A path the run reports, and its session's transcript, come from the sandbox: reading
+		// what they name would read this host's files.
+		if result != nil && result.Plan != nil {
+			content = strings.TrimSpace(result.Plan.Content)
+		}
+		if content == "" {
+			return "", "", fmt.Errorf("%w: a run in a sandbox returns its plan as planContent, and this one returned none", captaincli.ErrNoPlan)
+		}
+		return normalizePlanResultMarkdown(content), "", nil
+	}
 	if result != nil && result.Plan != nil {
 		path = strings.TrimSpace(result.Plan.Path)
 	}

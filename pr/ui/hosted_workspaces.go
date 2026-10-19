@@ -81,7 +81,7 @@ func (w HostedWorkspaces) Resolve(ctx context.Context, org uuid.UUID, ref string
 		return HostedWorkspace{}, err
 	}
 	workspace := HostedWorkspace{
-		Options: todoruntime.WorkspaceOptions{Name: repo.Name, RootPath: checkout.Dir},
+		Options: todoruntime.WorkspaceOptions{Name: repo.Name, RootPath: checkout.Dir, SandboxedRuns: true},
 		Repo:    repo,
 		SHA:     checkout.SHA,
 	}

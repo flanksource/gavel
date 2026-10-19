@@ -40,6 +40,8 @@ type Provider struct {
 	// discoverPlanHooks runs Captain's plan.revision hook prompts on every plan
 	// save. See planHooks.
 	discoverPlanHooks bool
+	// sandboxedRuns says the workspace's runs execute in sandboxes. See WorkspaceOptions.
+	sandboxedRuns bool
 	// ownership drives the heartbeats that prove this process is still running
 	// the prompt runs it dispatched. See ownership.go.
 	ownership runOwnership
@@ -69,6 +71,9 @@ type WorkspaceOptions struct {
 	Name         string
 	RootPath     string
 	Repositories []string
+	// SandboxedRuns says the workspace's runs execute in sandboxes: their plans arrive as
+	// content, and nothing they name is read from this host's disk.
+	SandboxedRuns bool
 }
 
 // Open opens the process-owned PostgreSQL pool and initializes the configured
@@ -177,7 +182,9 @@ func NewForOrg(ctx context.Context, db *gorm.DB, options WorkspaceOptions, scope
 	if err != nil {
 		return nil, err
 	}
-	return global.withWorkspace(workspace, options.RootPath), nil
+	provider := global.withWorkspace(workspace, options.RootPath)
+	provider.sandboxedRuns = options.SandboxedRuns
+	return provider, nil
 }
 
 // withWorkspace returns a provider scoped to an already resolved workspace,

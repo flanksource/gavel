@@ -142,6 +142,17 @@ func TestHostedTodosLiveInTheOrgsRepositories(t *testing.T) {
 	assert.Contains(t, refused["error"], "is not one of this organization's repositories")
 }
 
+func TestHostedWorkspacesRunInSandboxes(t *testing.T) {
+	db, _, org := openOrgDB(t)
+	dataDir := t.TempDir()
+	repo := pushedRepo(t, db, org, dataDir, "app")
+
+	workspace, err := HostedWorkspaces{DB: db, Sources: &sandbox.Sources{DataDir: dataDir}}.Resolve(t.Context(), org, "repo:"+repo.String())
+
+	require.NoError(t, err)
+	assert.True(t, workspace.Options.SandboxedRuns, "a hosted workspace's runs execute in sandboxes")
+}
+
 func TestHostedTodoBatchListsTheOrgsWorkspaces(t *testing.T) {
 	db, _, org := openOrgDB(t)
 	creator, member := uuid.New(), uuid.New()
