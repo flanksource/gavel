@@ -123,8 +123,10 @@ job exits or is cancelled.
 
 ### Running the substrate e2e
 
-`TestSubstrateExecutorAgainstACluster` (`sandbox/substrate_e2e_test.go`) runs a job on a live
-cluster. It checks the job's output and exit code, that it reaches serve and proxy.golang.org but
+Two tests run on a live cluster. `TestPushChecksRunOnSubstrate` (`pr/ui`) runs a failing and a
+passing push check through the dispatcher: each job fetches the pushed source from a run API on
+the host and exits with the check's verdict. `TestSubstrateExecutorAgainstACluster`
+(`sandbox/substrate_e2e_test.go`) runs a job directly. It checks the job's output and exit code, that it reaches serve and proxy.golang.org but
 can't resolve example.com, that it holds only a placeholder for its model key while
 httpbin.org receives the real one, and that its environment is deleted afterwards. On a kind
 cluster with Substrate installed (`ate-setup deploy ate-system`):
@@ -154,7 +156,7 @@ Then run:
 
 ```sh
 GAVEL_SANDBOX_SUBSTRATE_TEST=1 GAVEL_SUBSTRATE_IMAGE=localhost:5001/gavel-runner@sha256:<digest> \
-  GAVEL_SUBSTRATE_TOKEN_FILE=gavel.token go test ./sandbox -run TestSubstrateExecutorAgainstACluster
+  GAVEL_SUBSTRATE_TOKEN_FILE=gavel.token go test ./sandbox ./pr/ui -run 'TestSubstrateExecutorAgainstACluster|TestPushChecksRunOnSubstrate'
 ```
 
 `GAVEL_SUBSTRATE_ENV_API`, `GAVEL_SUBSTRATE_CONTROL`, `GAVEL_SUBSTRATE_TEMPLATE`,

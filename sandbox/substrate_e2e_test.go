@@ -7,11 +7,11 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/flanksource/gavel/sandbox/internal/substrate/ateenvv1alpha"
+	"github.com/flanksource/gavel/sandbox/substratetest"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -20,24 +20,9 @@ import (
 )
 
 func TestSubstrateExecutorAgainstACluster(t *testing.T) {
-	if os.Getenv("GAVEL_SANDBOX_SUBSTRATE_TEST") != "1" {
-		t.Skip("set GAVEL_SANDBOX_SUBSTRATE_TEST=1 with a Substrate cluster set up as docs/sandbox.md describes to run the substrate executor e2e")
-	}
-	setting := func(name, fallback string) string {
-		if value := os.Getenv(name); value != "" {
-			return value
-		}
-		require.NotEmpty(t, fallback, "set %s", name)
-		return fallback
-	}
-	image := setting("GAVEL_SUBSTRATE_IMAGE", "")
-	tokenFile := setting("GAVEL_SUBSTRATE_TOKEN_FILE", "")
-	// The run API stands in for serve on the host; a Service in the cluster names it.
-	listen := setting("GAVEL_SUBSTRATE_SERVE_LISTEN", "172.18.0.1:18080")
-	server := setting("GAVEL_SUBSTRATE_SERVE_URL", "http://gavel-host.default.svc.cluster.local:18080")
-	credential := setting("GAVEL_SUBSTRATE_CREDENTIAL", "gavel-e2e-injected-credential")
-
-	listener, err := net.Listen("tcp", listen)
+	cluster := substratetest.FromEnv(t)
+	// A server on the host stands in for serve; a Service in the cluster names it.
+	listener, err := net.Listen("tcp", cluster.Listen)
 	require.NoError(t, err)
 	pinged := make(chan string, 1)
 	serve := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -51,15 +36,9 @@ func TestSubstrateExecutorAgainstACluster(t *testing.T) {
 	t.Cleanup(func() { _ = serve.Close() })
 
 	executor, err := NewSubstrate(SubstrateOptions{
-		EnvAPI:           setting("GAVEL_SUBSTRATE_ENV_API", "localhost:7777"),
-		Control:          setting("GAVEL_SUBSTRATE_CONTROL", "localhost:8443"),
-		ControlTokenFile: tokenFile,
-		Template:         setting("GAVEL_SUBSTRATE_TEMPLATE", "gavel-runner"),
-		TrustBundle:      "/run/ate/egress-trust-bundle/trust-bundle.pem",
-		Credentials: []InjectedCredential{{
-			Host: "httpbin.org", Header: "x-gavel-key", Env: "E2E_MODEL_KEY",
-			URI: setting("GAVEL_SUBSTRATE_CREDENTIAL_URI", "ate-secret://k8s.io/default/gavel-e2e/model/key"),
-		}},
+		EnvAPI: cluster.EnvAPI, Control: cluster.Control, ControlTokenFile: cluster.TokenFile,
+		Template: cluster.Template, TrustBundle: substratetest.TrustBundle,
+		Credentials: []InjectedCredential{{Host: "httpbin.org", Header: "x-gavel-key", Env: "E2E_MODEL_KEY", URI: cluster.CredentialURI}},
 	})
 	require.NoError(t, err)
 
@@ -67,7 +46,7 @@ func TestSubstrateExecutorAgainstACluster(t *testing.T) {
 	defer cancel()
 	handle, err := executor.Submit(ctx, Job{
 		RunID: uuid.New(),
-		Image: image,
+		Image: cluster.Image,
 		Command: []string{"sh", "-c", `echo hi
 echo "token=$GAVEL_RUN_TOKEN"
 echo "key=$E2E_MODEL_KEY"
@@ -76,7 +55,7 @@ echo "golang=$(curl -sS -m 20 -o /dev/null -w '%{http_code}' https://proxy.golan
 curl -sS -m 10 -o /dev/null https://example.com 2>/dev/null; echo "example=$?"
 curl -sS -m 20 --cacert "$NODE_EXTRA_CA_CERTS" -H "x-gavel-key: $E2E_MODEL_KEY" https://httpbin.org/headers
 exit 3`},
-		Env:       map[string]string{"GAVEL_SERVER": server},
+		Env:       map[string]string{"GAVEL_SERVER": cluster.ServeURL},
 		SecretEnv: map[string]string{"GAVEL_RUN_TOKEN": "secret-token"},
 		Limits:    Limits{Timeout: 5 * time.Minute},
 	})
@@ -91,12 +70,12 @@ exit 3`},
 	assert.Contains(t, out, "hi\n")
 	assert.Contains(t, out, "token=secret-token", "the run token reaches the job")
 	assert.Contains(t, out, "key="+substrateCredentialPlaceholder+"\n", "the job holds only a placeholder for its model key")
-	assert.NotContains(t, out, "key="+credential)
+	assert.NotContains(t, out, "key="+cluster.Credential)
 	assert.Contains(t, out, "serve=pong", "the job reaches serve")
 	assert.Equal(t, "/ping", <-pinged)
 	assert.Contains(t, out, "golang=200", "the job reaches the Go module proxy")
 	assert.Contains(t, out, "example=6", "the job can't even resolve a host its policy doesn't allow")
-	assert.Contains(t, out, `"X-Gavel-Key": "`+credential+`"`, "the gateway injects the model key")
+	assert.Contains(t, out, `"X-Gavel-Key": "`+cluster.Credential+`"`, "the gateway injects the model key")
 
 	result, err := handle.Wait(ctx)
 	require.NoError(t, err)

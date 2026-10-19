@@ -31,12 +31,17 @@ func TestPushChecksRunInTheRunnerImage(t *testing.T) {
 		t.Skip("set GAVEL_SANDBOX_RUNNER_IMAGE to a runner image to run push checks in containers")
 	}
 	db, store, org := openOrgDB(t)
+	dataDir := t.TempDir()
+	dispatcher := containerDispatcher(t, image, &RunsAPI{DB: db, Cache: store, Sources: &sandbox.Sources{DataDir: dataDir}}, nil)
+	assertPushChecks(t, dispatcher, db, org, dataDir)
+}
+
+// assertPushChecks pushes a failing and a passing Go repository of org and runs each one's push
+// check through dispatcher, whose run API serves dataDir: each exits with its check's verdict.
+func assertPushChecks(t *testing.T, dispatcher *sandbox.Dispatcher, db *gorm.DB, org uuid.UUID, dataDir string) {
+	t.Helper()
 	user := uuid.New()
 	require.NoError(t, db.Exec(`INSERT INTO users (id, issuer, clerk_user_id) VALUES (?, 'https://clerk.example', 'user_ada')`, user).Error)
-	dataDir := t.TempDir()
-
-	dispatcher := containerDispatcher(t, image, &RunsAPI{DB: db, Cache: store, Sources: &sandbox.Sources{DataDir: dataDir}}, nil)
-
 	for _, check := range []struct {
 		name     string
 		files    map[string]string
