@@ -2049,6 +2049,7 @@ func fixtureNodeToTestsWithFile(node *fixtures.FixtureNode, inheritedFile string
 			Framework: parsers.Fixture,
 			File:      fixtureFile,
 			Line:      fixtureNodeLine(node),
+			EndLine:   fixtureNodeEndLine(node),
 			Duration:  r.Duration,
 			Stdout:    r.Stdout,
 			Stderr:    r.Stderr,
@@ -2068,7 +2069,7 @@ func fixtureNodeToTestsWithFile(node *fixtures.FixtureNode, inheritedFile string
 			},
 		}
 		if detail := fixtures.ResultDetail(r); detail != nil {
-			t.Detail = detail
+			t.Detail = fixtureDetail(detail)
 		}
 		if r.Profile != nil {
 			t.FixtureProfile = &parsers.FixtureProfile{
@@ -2139,4 +2140,11 @@ func fixtureNodeLine(node *fixtures.FixtureNode) int {
 		return 0
 	}
 	return node.Origin.Line
+}
+
+func fixtureNodeEndLine(node *fixtures.FixtureNode) int {
+	if node == nil || node.Origin == nil {
+		return 0
+	}
+	return node.Origin.EndLine
 }

@@ -85,12 +85,12 @@ func applyFixtureResult(test *parsers.Test, result parsers.Test) error {
 // mergeDetail lays a result's detail (fixtures.ResultDetail) over the
 // progress node test.Detail holds, keeping the node's own fields.
 func mergeDetail(test *parsers.Test, detail any) error {
-	raw, ok := detail.(json.RawMessage)
+	raw, ok := detail.(fixtureDetail)
 	if detail == nil || ok && len(raw) == 0 {
 		return nil
 	}
 	if !ok {
-		return fmt.Errorf("fixture %s: result detail is %T, want json.RawMessage", test.Name, detail)
+		return fmt.Errorf("fixture %s: result detail is %T, want fixtureDetail", test.Name, detail)
 	}
 	merged := map[string]json.RawMessage{}
 	if test.Detail != nil {
@@ -109,7 +109,11 @@ func mergeDetail(test *parsers.Test, detail any) error {
 	for key, value := range fields {
 		merged[key] = value
 	}
-	test.Detail = merged
+	encoded, err := json.Marshal(merged)
+	if err != nil {
+		return fmt.Errorf("fixture %s: encode merged detail: %w", test.Name, err)
+	}
+	test.Detail = fixtureDetail(encoded)
 	return nil
 }
 
@@ -203,6 +207,7 @@ func executionNodeToTest(node *fixtures.ExecutionNode) parsers.Test {
 	if node.Origin != nil {
 		test.File = node.Origin.File
 		test.Line = node.Origin.Line
+		test.EndLine = node.Origin.EndLine
 	}
 	if len(node.Traces) > 0 {
 		test.Context = parsers.FixtureContext{Traces: node.Traces}

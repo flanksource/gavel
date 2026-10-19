@@ -72,7 +72,10 @@ type Test struct {
 	Message     string        `json:"message,omitempty"`
 	File        string        `json:"file,omitempty"`
 	Line        int           `json:"line,omitempty"`
-	Framework   Framework     `json:"framework,omitempty"`
+	// EndLine, when set, is the test's last source line: a failure then shows
+	// lines Line..EndLine of File.
+	EndLine   int           `json:"end_line,omitempty"`
+	Framework Framework     `json:"framework,omitempty"`
 	Duration    time.Duration `json:"duration,omitempty"`
 	Skipped     bool          `json:"skipped,omitempty"`
 	// Aborted marks a test that never ran because the run stopped after an earlier failure — distinct from an intentional Skipped.
@@ -392,6 +395,9 @@ func (t Test) Pretty() api.Text {
 			Label:   "stderr",
 			Content: clicky.Text(t.Stderr, "text-red-500 font-mono text-xs whitespace-pre-wrap"),
 		})
+	}
+	if source := (SourceRange{File: t.File, WorkDir: t.WorkDir, Line: t.Line, EndLine: t.EndLine}); t.Failed && source.Valid() {
+		s = s.NewLine().Add(api.Collapsed{Label: "source " + source.String(), Content: source.Read().Pretty()})
 	}
 
 	// Surface the provider-owned Detail inline beneath the summary line. On a

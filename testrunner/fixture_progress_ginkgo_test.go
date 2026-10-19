@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/flanksource/clicky/task"
@@ -162,5 +163,99 @@ var _ = Describe("fixture progress adapter", func() {
 			"step": {"id": "watch", "kind": "playwright"}, "background": true, "outputs": {}, "exports": {},
 			"events": [{"type": "console", "text": "boom"}]
 		}`))
+	})
+})
+
+var _ = Describe("fixture detail in the terminal", func() {
+	const stderr = "render failed: CALC_RATE target must be numeric"
+
+	// failedStep merges a failed typed step's result into its progress node, as
+	// `gavel fixtures` does before printing its failure section.
+	failedStep := func(result *fixtures.FixtureResult) parsers.Test {
+		file := filepath.Join(GinkgoT().TempDir(), "render.fixture.yaml")
+		origin := &fixtures.FixtureOrigin{File: file, Line: 3}
+		snapshot := fixtures.ExecutionSnapshot{Root: &fixtures.ExecutionNode{
+			Key: "fixtures", Kind: fixtures.ExecutionKindRoot, State: fixtures.ExecutionFailed,
+			Children: []*fixtures.ExecutionNode{{
+				Key: "render", Name: "render", Kind: fixtures.ExecutionKindCommand, State: fixtures.ExecutionFailed, Origin: origin,
+			}},
+		}}
+		result.Name, result.Status, result.Stderr = "render", task.StatusFAIL, stderr
+		tree := &fixtures.FixtureNode{Children: []*fixtures.FixtureNode{{Name: "render", Type: fixtures.TestNode, Origin: origin, Results: result}}}
+		tests := executionSnapshotToTests(snapshot)
+		Expect(mergeFixtureResultDetails(tests, tree, "")).To(Succeed())
+		return tests[0]
+	}
+
+	It("shows a failed step's CEL trace and its stderr once, without the step record as JSON", func() {
+		celLines := []string{"stdout.size() > 0", "└─ false"}
+		test := failedStep(&fixtures.FixtureResult{Error: "cel failed", CELTrace: strings.Join(celLines, "\n"), Metadata: map[string]any{
+			"step": map[string]any{"id": "render", "kind": "exec"}, "outputs": map[string]any{"stdout": ""},
+			"attempts": []fixtures.AttemptReport{{Attempt: 1, Status: fixtures.AttemptFailed, Error: "cel failed", DurationMs: 40,
+				Result: &fixtures.FixtureResult{Name: "render", Status: task.StatusFAIL, Stderr: stderr}}},
+		}})
+
+		rendered := test.Pretty().String()
+
+		Expect(rendered).To(ContainSubstring(celLines[0]))
+		Expect(rendered).To(ContainSubstring(celLines[1]))
+		Expect(strings.Count(rendered, stderr)).To(Equal(1), rendered)
+		Expect(rendered).NotTo(ContainSubstring(`"attempts"`))
+		Expect(rendered).NotTo(ContainSubstring(`"outputs"`))
+		Expect(rendered).NotTo(ContainSubstring("attempt 1"))
+		raw, err := json.Marshal(test.Detail)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(raw).To(ContainSubstring(`"step":`))
+		Expect(raw).To(ContainSubstring(`"outputs":`))
+		Expect(raw).To(ContainSubstring(`"attempts":`))
+		Expect(raw).To(ContainSubstring(`"cel_trace":`))
+	})
+
+	It("carries a failed step's source lines into the detail the UI reads", func() {
+		source := parsers.SourceSnippet{File: "render.fixture.yaml", Line: 3, EndLine: 4, Language: "yaml", Text: "  - id: render\n    kind: exec"}
+		test := failedStep(&fixtures.FixtureResult{Error: "exit 1", Metadata: map[string]any{"source": source}})
+
+		raw, err := json.Marshal(test.Detail)
+		Expect(err).NotTo(HaveOccurred())
+		var detail struct {
+			Name   string                `json:"name"`
+			Source parsers.SourceSnippet `json:"source"`
+		}
+		Expect(json.Unmarshal(raw, &detail)).To(Succeed())
+		Expect(detail.Name).To(Equal("render"))
+		Expect(detail.Source).To(Equal(source))
+	})
+
+	It("lists each attempt of a retried step on one line, with the first line of its error", func() {
+		test := failedStep(&fixtures.FixtureResult{Error: "exit 1", Metadata: map[string]any{
+			"attempts": []fixtures.AttemptReport{
+				{Attempt: 1, Status: fixtures.AttemptFailed, Error: "connection refused\nretrying", DurationMs: 12},
+				{Attempt: 2, Status: fixtures.AttemptFailed, Error: "exit 1", DurationMs: 9},
+			},
+		}})
+
+		rendered := test.Pretty().String()
+
+		Expect(rendered).To(ContainSubstring("attempt 1 failed (12ms): connection refused"))
+		Expect(rendered).NotTo(ContainSubstring("retrying"))
+		Expect(rendered).To(ContainSubstring("attempt 2 failed (9ms): exit 1"))
+	})
+
+	It("summarises a wait that did not succeed and each armed trace's scalar figures", func() {
+		summary := map[string]any{
+			"count": 4, "duration_ms": 714.3319999999999, "errors": 0,
+			"by_op":   map[string]any{"SELECT": 4},
+			"queries": []map[string]any{{"sql": "SELECT 1"}},
+		}
+		test := failedStep(&fixtures.FixtureResult{Error: "wait timed out",
+			Traces:   []parsers.TraceResult{{TraceRef: tracing.TraceRef{Kind: "pg_proxy", Stream: "s1", ToSeq: 4}, Count: 4, Summary: summary}},
+			Metadata: map[string]any{"wait": fixtures.WaitReport{Outcome: fixtures.WaitTimeout, DurationMs: 30000, Cause: "service not ready"}},
+		})
+
+		rendered := test.Pretty().String()
+
+		Expect(rendered).To(ContainSubstring("wait timeout after 30s: service not ready"))
+		Expect(rendered).To(ContainSubstring("pg_proxy: 4 records count=4 duration_ms=714.332 errors=0"))
+		Expect(rendered).NotTo(ContainSubstring("SELECT"))
 	})
 })
