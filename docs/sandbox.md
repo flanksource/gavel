@@ -118,4 +118,45 @@ job exits or is cancelled.
   `sandbox/internal/substrate`, refreshed by its `sync.sh`, rather than depending on their Go
   modules.
 
-The executor hasn't yet run against a live Substrate cluster.
+- **User.** env's guest starts the job as root, whatever user the image names; gVisor is what
+  isolates it.
+
+### Running the substrate e2e
+
+`TestSubstrateExecutorAgainstACluster` (`sandbox/substrate_e2e_test.go`) runs a job on a live
+cluster. It checks the job's output and exit code, that it reaches serve and proxy.golang.org but
+can't resolve example.com, that it holds only a placeholder for its model key while
+httpbin.org receives the real one, and that its environment is deleted afterwards. On a kind
+cluster with Substrate installed (`ate-setup deploy ate-system`):
+
+1. Deploy env (`ate-env manifest --worker-image <ateworker-gvisor@sha256:…> --api-image
+   <ate-env-api@sha256:…> | kubectl apply -f -`), and make its ServiceAccount
+   `system:serviceaccount:ate-env:default` a global `owner` in Substrate's access policy so it
+   can create its atespace.
+2. Register `default-template` (`ate-env manifest template`), then a `gavel-runner` template:
+   the same, plus a `systemInfo` volume holding the `egress-mitm.ate.dev` trust bundle as
+   `trust-bundle.pem`, mounted on the guest container at `/run/ate/egress-trust-bundle`. A
+   Substrate that no longer has `ActorTemplate.sandboxConfig` (removed in agent-substrate#2780)
+   rejects the field `ate-env manifest template` writes; delete it from the manifest.
+3. Create a Secret `model` with key `key` (value `gavel-e2e-injected-credential`) in namespace
+   `gavel-e2e`, and allow atespace `ate-env` that namespace in the
+   `k8s-credential-provider-namespace-policy` ConfigMap (restart the provider).
+4. Create ServiceAccount `gavel-e2e/gavel`, make it an `editor` of atespace `ate-env`, and mint its
+   token: `kubectl -n gavel-e2e create token gavel --audience api.ate-system.svc > gavel.token`.
+5. Point a Service at the host so jobs reach the test's stand-in for serve: Service
+   `default/gavel-host` on port 18080 with an EndpointSlice holding the kind network's gateway
+   (`172.18.0.1`).
+6. Push a runner image to the cluster's registry and port-forward the APIs:
+   `kubectl port-forward -n ate-env svc/ate-env-api 7777:7777` and
+   `kubectl port-forward -n ate-system svc/api 8443:443`.
+
+Then run:
+
+```sh
+GAVEL_SANDBOX_SUBSTRATE_TEST=1 GAVEL_SUBSTRATE_IMAGE=localhost:5001/gavel-runner@sha256:<digest> \
+  GAVEL_SUBSTRATE_TOKEN_FILE=gavel.token go test ./sandbox -run TestSubstrateExecutorAgainstACluster
+```
+
+`GAVEL_SUBSTRATE_ENV_API`, `GAVEL_SUBSTRATE_CONTROL`, `GAVEL_SUBSTRATE_TEMPLATE`,
+`GAVEL_SUBSTRATE_SERVE_LISTEN`, `GAVEL_SUBSTRATE_SERVE_URL`, `GAVEL_SUBSTRATE_CREDENTIAL` and
+`GAVEL_SUBSTRATE_CREDENTIAL_URI` override the defaults the steps above set up.
