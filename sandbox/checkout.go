@@ -37,11 +37,8 @@ func (s *Sources) Checkout(ctx context.Context, repo Repo) (Checkout, error) {
 		if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
 			return Checkout{}, fmt.Errorf("create the workspace directory for %s: %w", repo.label(), err)
 		}
-		if _, err := runGit(ctx, nil, "-c", "core.symlinks=false", "clone", "--quiet", "--no-checkout", source, dir); err != nil {
+		if err := cloneWhole(ctx, dir, "clone", "--quiet", "--no-checkout", "--config", "core.symlinks=false", source); err != nil {
 			return Checkout{}, fmt.Errorf("clone the workspace of %s: %w", repo.label(), err)
-		}
-		if _, err := runGit(ctx, nil, "-C", dir, "config", "core.symlinks", "false"); err != nil {
-			return Checkout{}, fmt.Errorf("configure the workspace of %s: %w", repo.label(), err)
 		}
 	} else if _, err := runGit(ctx, nil, "-C", dir, "fetch", "--quiet", "--prune", "origin", "+refs/heads/*:refs/remotes/origin/*"); err != nil {
 		return Checkout{}, fmt.Errorf("refresh the workspace of %s: %w", repo.label(), err)

@@ -5,11 +5,13 @@ package sandbox
 import (
 	"bytes"
 	"context"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -107,6 +109,35 @@ func TestBundleAGitHubRepositoryFromItsMirror(t *testing.T) {
 	config, err := os.ReadFile(filepath.Join(mirror, "config"))
 	require.NoError(t, err)
 	assert.NotContains(t, string(config), "installation-token", "the token is never written to the mirror's config")
+}
+
+func TestAnInterruptedMirrorCloneLeavesNoMirror(t *testing.T) {
+	dataDir, remotes := t.TempDir(), t.TempDir()
+	org := uuid.New()
+	work := newWork(t)
+	commitFile(t, work, "README.md", "first")
+	git(t, work, "clone", "-q", "--bare", work, filepath.Join(remotes, "acme", "app.git"))
+	// A remote that never answers, so the clone is killed partway, as a cancelled request kills it.
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "protocol.ext.allow")
+	t.Setenv("GIT_CONFIG_VALUE_0", "always")
+	sources := &Sources{
+		DataDir:   dataDir,
+		GitHubURL: "ext::sh -c sleep% 2;:",
+		Token:     func(context.Context, int64) (string, error) { return "installation-token", nil },
+	}
+	github := Repo{ID: uuid.New(), Org: org, Source: "github", Name: "acme/app", GitHubRepoID: 42, InstallationID: 7}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	_, err := sources.Bundle(ctx, github, "refs/heads/main", io.Discard)
+	require.Error(t, err)
+
+	sources.GitHubURL = "file://" + remotes
+	var bundle bytes.Buffer
+	_, err = sources.Bundle(context.Background(), github, "refs/heads/main", &bundle)
+	require.NoError(t, err, "the next request mirrors the repository whole")
+	assert.Equal(t, "first", unbundle(t, bundle.Bytes(), "README.md"))
 }
 
 func TestBundleRefusesOptionLikeRefsAndUnknownRefs(t *testing.T) {

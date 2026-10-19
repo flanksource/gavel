@@ -81,7 +81,7 @@ func (s *Sources) updateMirror(ctx context.Context, repo Repo) (string, error) {
 		if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
 			return "", fmt.Errorf("create the mirror directory for %s: %w", repo.Name, err)
 		}
-		if _, err := runGit(ctx, nil, "-c", header, "clone", "--quiet", "--mirror", s.githubURL(repo), dir); err != nil {
+		if err := cloneWhole(ctx, dir, "-c", header, "clone", "--quiet", "--mirror", s.githubURL(repo)); err != nil {
 			return "", fmt.Errorf("mirror %s: %w", repo.Name, err)
 		}
 		return dir, nil
@@ -113,6 +113,21 @@ func (s *Sources) authHeader(ctx context.Context, repo Repo) (string, error) {
 
 // runGit runs git, writing its output to stdout when set, or returning it otherwise. A failure
 // carries git's stderr, which never holds the token: it is only in a -c argument.
+// cloneWhole runs the git clone args name into dir by way of a directory beside it, which moves
+// into place once the clone completes: a clone cut off partway, as a cancelled request cuts it,
+// never leaves dir half made.
+func cloneWhole(ctx context.Context, dir string, args ...string) error {
+	clone, err := os.MkdirTemp(filepath.Dir(dir), filepath.Base(dir)+".clone-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(clone) //nolint:errcheck
+	if _, err := runGit(ctx, nil, append(args, clone)...); err != nil {
+		return err
+	}
+	return os.Rename(clone, dir)
+}
+
 func runGit(ctx context.Context, stdout io.Writer, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
