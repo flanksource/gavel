@@ -230,7 +230,7 @@ func substrateEgressPolicy(options SubstrateOptions, atespace, server string) (*
 		rules = append(rules, &ateapipb.EgressRule{Http: &ateapipb.HttpRule{Hostnames: []string{serve.Hostname()}, Ports: ports}})
 	}
 	hosts := append(append([]string{}, DefaultSubstrateEgress...), options.Egress...)
-	rules = append(rules, &ateapipb.EgressRule{TlsPassthrough: &ateapipb.TlsPassthroughRule{Hostnames: hosts}})
+	rules = append(rules, &ateapipb.EgressRule{TlsPassthrough: &ateapipb.TlsPassthroughRule{Hostnames: hosts, Ports: &ateapipb.Ports{Numbers: []int32{443}}}})
 	for _, credential := range options.Credentials {
 		rules = append(rules, &ateapipb.EgressRule{Https: &ateapipb.HttpsRule{
 			Hostnames: []string{credential.Host},

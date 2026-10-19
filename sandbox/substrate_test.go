@@ -32,6 +32,7 @@ func TestSubstrateEgressAllowsOnlyWhatJobsNeed(t *testing.T) {
 			serve = rule.GetHttp()
 		case rule.GetTlsPassthrough() != nil:
 			passthrough = append(passthrough, rule.GetTlsPassthrough().GetHostnames()...)
+			assert.Equal(t, []int32{443}, rule.GetTlsPassthrough().GetPorts().GetNumbers(), "Substrate requires a passed-through rule's ports")
 		case rule.GetHttps() != nil:
 			injected = rule.GetHttps()
 		}
