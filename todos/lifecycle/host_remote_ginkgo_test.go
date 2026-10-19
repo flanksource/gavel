@@ -98,6 +98,21 @@ var _ = Describe("a host whose runs execute elsewhere", func() {
 		Expect(runner.runs[0].Input.Resolved.Spec.Prompt.User).To(ContainSubstring("Implement the thing"))
 	})
 
+	It("keeps a plan's content but not its path, which names a file in the sandbox", func() {
+		// A file that exists on serve, which a run elsewhere must not get serve to read.
+		onServe := filepath.Join(GinkgoT().TempDir(), "secrets.md")
+		Expect(os.WriteFile(onServe, []byte("serve's own file"), 0o600)).To(Succeed())
+		host.Remote = &loopbackRunner{agent: &scriptedProvider{events: scriptedTurn(
+			`{"summary":"Planned it.","endStatus":"completed","planStatus":"new","planPath":"`+onServe+`","planContent":"# the plan"}`, true)}}
+
+		outcome, err := host.RunStep(ctx, hostTodo(), stepNamed(host.Def, "plan"), lifecycle.RunOptions{})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(outcome.Execution.Plan).NotTo(BeNil(), outcome.Execution.ErrorMessage)
+		Expect(outcome.Execution.Plan.Content).To(Equal("# the plan"))
+		Expect(outcome.Execution.Plan.Path).To(BeEmpty())
+	})
+
 	It("refuses to resume a session", func() {
 		host.Remote = &loopbackRunner{}
 		_, err := host.RunStep(ctx, hostTodo(), stepNamed(host.Def, "run"), lifecycle.RunOptions{Resume: true})

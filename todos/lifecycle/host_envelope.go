@@ -136,6 +136,11 @@ func (h *Host) collectEnvelope(execution *todos.ExecutionResult, facts *StepResu
 		}
 		execution.OutputJSON = *output
 	}
+	// A run executing elsewhere reports a plan path on its own machine, which this host must not
+	// read; its plan arrives as content.
+	if h.Remote != nil && env.Plan != nil {
+		env.Plan.Path = ""
+	}
 	execution.Summary = env.Summary
 	execution.EndStatus = env.EndStatus
 	execution.Questions = env.Questions
