@@ -16,6 +16,7 @@ import (
 )
 
 var svcBin string
+var dbClientBin string
 
 func TestServices(t *testing.T) {
 	RegisterFailHandler(Fail)
@@ -25,6 +26,8 @@ func TestServices(t *testing.T) {
 var _ = BeforeSuite(func() {
 	var err error
 	svcBin, err = gexec.Build("github.com/flanksource/gavel/fixtures/kinds/services/testdata/svc")
+	Expect(err).NotTo(HaveOccurred())
+	dbClientBin, err = gexec.Build("github.com/flanksource/gavel/fixtures/kinds/services/testdata/dbclient")
 	Expect(err).NotTo(HaveOccurred())
 })
 
@@ -50,6 +53,11 @@ func servicesKind() fixtures.Kind {
 // execute runs the step and registers its cleanup with Ginkgo so a failing
 // spec never leaks a service process.
 func execute(step *fixtures.StepContext) (fixtures.StepOutcome, error) {
+	specs := []fixtures.StepSpec{step.Spec}
+	if err := servicesKind().(fixtures.StepPlanner).PrepareSteps(specs); err != nil {
+		return fixtures.StepOutcome{}, err
+	}
+	step.Spec = specs[0]
 	outcome, err := servicesKind().Execute(context.Background(), step)
 	if err == nil && outcome.Cleanup != nil {
 		cleaned := false
