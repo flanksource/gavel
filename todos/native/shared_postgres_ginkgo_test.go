@@ -60,7 +60,7 @@ var _ = Describe("shared PostgreSQL test server", func() {
 
 		var binariesBefore map[string]time.Time
 		if os.Getenv(dbtest.EnvURL) == "" {
-			binariesBefore = postgresBinaryModificationTimes(before.Directory)
+			binariesBefore = postgresBinaryModificationTimes()
 		}
 		databaseNames := []string{before.Database}
 		for range 2 {
@@ -71,18 +71,32 @@ var _ = Describe("shared PostgreSQL test server", func() {
 				))
 				Expect(databaseNames).NotTo(ContainElement(identity.Database))
 				databaseNames = append(databaseNames, identity.Database)
-				Expect(observer.SQL().QueryRowContext(ctx,
-					`SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = $1)`, identity.Database,
-				).Scan(&exists)).To(Succeed())
-				Expect(exists).To(BeFalse(), "child-process consumer pools close and leases are released")
+				// dbtest drops a ForGinkgo database in the background, so an exited
+				// child can leave it for the next sweep; what it must release on
+				// exit is its connections and its lease lock on the name.
+				Eventually(func(g Gomega) {
+					var held bool
+					g.Expect(observer.SQL().QueryRowContext(ctx, leaseHeldOrConnectedSQL, identity.Database).Scan(&held)).To(Succeed())
+					g.Expect(held).To(BeFalse())
+				}).WithTimeout(10*time.Second).Should(Succeed(), "child-process consumer pools close and leases are released")
 			}
 		}
 		if os.Getenv(dbtest.EnvURL) == "" {
-			Expect(postgresBinaryModificationTimes(before.Directory)).To(Equal(binariesBefore),
+			Expect(postgresBinaryModificationTimes()).To(Equal(binariesBefore),
 				"warm test processes reuse the extracted binaries")
 		}
 	})
 })
+
+// leaseHeldOrConnectedSQL reports whether database $1 still has a client
+// connection or a held dbtest lease: the session advisory lock dbtest takes on
+// hashtextextended(name, 0), decoded the way pg_locks splits a bigint key.
+const leaseHeldOrConnectedSQL = `SELECT
+	EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname = $1)
+	OR EXISTS (SELECT 1 FROM pg_locks l
+		WHERE l.locktype = 'advisory' AND l.granted AND l.objsubid = 1
+		  AND l.classid::bigint = (hashtextextended($1, 0) >> 32) & 4294967295
+		  AND l.objid::bigint = hashtextextended($1, 0) & 4294967295)`
 
 func readTestServerIdentity(ctx context.Context, db *gorm.DB) testServerIdentity {
 	GinkgoHelper()
@@ -123,9 +137,16 @@ func runCoordinatorReuseProcess(ctx context.Context) []testServerIdentity {
 	return identities
 }
 
-func postgresBinaryModificationTimes(dataDirectory string) map[string]time.Time {
+// postgresBinaryModificationTimes reads the extracted postgres binaries where
+// dbtest keeps them: COMMONS_DB_BIN_DIR, else $TMPDIR/commons-db/bin, which a
+// RAM-backed COMMONS_DB_DATA_DIR does not move.
+func postgresBinaryModificationTimes() map[string]time.Time {
 	GinkgoHelper()
-	paths, err := filepath.Glob(filepath.Join(filepath.Dir(dataDirectory), "bin", "*", "bin", "postgres"))
+	binaries := os.Getenv(dbtest.EnvBinDir)
+	if binaries == "" {
+		binaries = filepath.Join(os.TempDir(), "commons-db", "bin")
+	}
+	paths, err := filepath.Glob(filepath.Join(binaries, "*", "bin", "postgres"))
 	Expect(err).NotTo(HaveOccurred())
 	Expect(paths).NotTo(BeEmpty())
 	modified := make(map[string]time.Time, len(paths))
