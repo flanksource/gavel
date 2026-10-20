@@ -162,7 +162,7 @@ commit:
     secrets: true
 
   tidy:
-    # Run `go mod tidy` in every Go module and stage go.mod/go.sum changes.
+    # Run `go mod tidy` in every Go module whose go.mod is staged and stage go.mod/go.sum changes.
     # Omit to run it only when pushing (`gavel commit -p`).
     enabled: true
 
