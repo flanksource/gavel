@@ -50,7 +50,11 @@ func RunTestStep(fixture fixtures.FixtureTest, opts fixtures.RunOptions) fixture
 	// back into fixture discovery (fixture → test → fixture).
 	ro.UI = false
 	ro.Context = opts.Context
-	ro.Runtime = opts.ProcessRuntime.Merge(ro.Runtime)
+	runtime, err := fixtureStepRuntime(opts)
+	if err != nil {
+		return result.Errorf(err, "fixture environment")
+	}
+	ro.Runtime = runtime.Merge(ro.Runtime)
 	ro.Fixtures = false
 	ro.OutputTee = nil
 	if ro.WorkDir == "" {
@@ -143,7 +147,11 @@ func RunLintStep(fixture fixtures.FixtureTest, opts fixtures.RunOptions) fixture
 		ctx = context.Background()
 	}
 	lo.Context = ctx
-	lo.Runtime = opts.ProcessRuntime.Merge(lo.Runtime)
+	runtime, err := fixtureStepRuntime(opts)
+	if err != nil {
+		return result.Errorf(err, "fixture environment")
+	}
+	lo.Runtime = runtime.Merge(lo.Runtime)
 
 	results, runErr := lint.Run(ctx, lo)
 
