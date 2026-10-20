@@ -32,6 +32,12 @@ type Kind interface {
 	Execute(ctx context.Context, step *StepContext) (StepOutcome, error)
 }
 
+// StepPlanner resolves kind-specific defaults across the whole fixture before execution.
+// Implementations may normalize their own Config fields without performing external work.
+type StepPlanner interface {
+	PrepareSteps([]StepSpec) error
+}
+
 // Observer is implemented by kinds whose state can be polled after Execute —
 // a todo's status, a service's readiness, a browser snapshot. Only kinds that
 // implement it may carry a `wait:` policy; validation rejects the rest.

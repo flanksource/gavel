@@ -153,6 +153,11 @@ func newExportSet(step *fixtures.StepContext) *exportSet {
 // the same name.
 func (s *exportSet) exportEntry(entry rawEntry, outputs map[string]any, started map[string]any) error {
 	values := map[string]string{}
+	if outputs["type"] == "dbtest" && outputs["default"] == true {
+		for name, value := range outputs["env"].(map[string]any) {
+			values[name] = value.(string)
+		}
+	}
 	prefix := upperSnake(entry.name)
 	if url, ok := outputs["url"].(string); ok && url != "" {
 		values[prefix+"_URL"] = url
