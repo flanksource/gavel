@@ -34,7 +34,7 @@ export default defineConfig(({ command }) => {
   return {
     plugins: [react(), tailwindcss()],
     resolve: {
-      dedupe: ['react', 'react-dom', '@tanstack/react-query'],
+      dedupe: ['react', 'react-dom', '@tanstack/react-query', '@flanksource/clicky-ui'],
       alias: [
         ...clicky.aliases,
         { find: '@flanksource/gavel/testrunner/hooks', replacement: gavelTestRunnerHooks },
