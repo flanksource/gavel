@@ -144,7 +144,7 @@ func Execute(opts Options) ([]*linters.LinterResult, error) {
 		skipReason := ""
 		var scheduledRoots []string
 		for _, inv := range invocations {
-			if len(opts.Files) == 0 && isProjectRootCovered(inv.projectRoot, scheduledRoots) {
+			if len(opts.Files) == 0 && isInvocationCovered(inv, scheduledRoots) {
 				logger.V(2).Infof("Skipping %s at %s: covered by scheduled ancestor", linter.Name(), inv.projectRoot)
 				continue
 			}
@@ -242,8 +242,13 @@ func applyPostLintFilters(results []*linters.LinterResult, workDir string, files
 	if len(results) == 0 {
 		return nil
 	}
-	if dropped := linters.FilterViolationsByUserScope(results, workDir, files); dropped > 0 {
-		logger.Infof("Filtered %d violations outside requested paths in %s", dropped, workDir)
+	for _, result := range results {
+		if result == nil {
+			continue
+		}
+		if dropped := linters.FilterViolationsByUserScope([]*linters.LinterResult{result}, workDir, resultScopes(result, workDir, files)); dropped > 0 {
+			logger.Infof("Filtered %d violations outside requested paths in %s", dropped, workDir)
+		}
 	}
 	filtered, err := linters.FilterViolationsByGitIgnoreInResults(results)
 	if err != nil {
@@ -376,7 +381,7 @@ func dryRunGroup(opts Options) error {
 
 		var scheduledRoots []string
 		for _, inv := range invocations {
-			if len(opts.Files) == 0 && isProjectRootCovered(inv.projectRoot, scheduledRoots) {
+			if len(opts.Files) == 0 && isInvocationCovered(inv, scheduledRoots) {
 				testrunner.PrintDryRunSkipped("lint", linter.Name()+" @ "+inv.projectRoot, "covered by scheduled ancestor")
 				continue
 			}

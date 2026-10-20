@@ -28,6 +28,7 @@ var lintSubcommands = []struct {
 	{"markdownlint", "markdownlint", "Run only markdownlint"},
 	{"vale", "vale", "Run only vale (prose)"},
 	{"jscpd", "jscpd", "Run only jscpd (duplicate-code detector)"},
+	{"uir", "uir", "Run SQL architecture rules from .uir.yaml"},
 	{"betterleaks", "betterleaks", "Run only betterleaks (secret scanner)"},
 	{"secrets", "betterleaks", "Alias for betterleaks"},
 }

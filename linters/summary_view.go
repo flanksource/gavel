@@ -332,6 +332,9 @@ type locationSummaryNode struct {
 }
 
 func (n *locationSummaryNode) Pretty() api.Text {
+	if n.violation.File == "" {
+		return api.Text{}.Append("Run diagnostics", "text-muted")
+	}
 	file := n.violation.File
 	if n.workDir != "" && filepath.IsAbs(file) {
 		if rel, err := filepath.Rel(n.workDir, file); err == nil {

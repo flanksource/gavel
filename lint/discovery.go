@@ -12,6 +12,7 @@ import (
 )
 
 var linterDirectConfigPatterns = map[string][]string{
+	"uir": {".uir.yaml"},
 	"betterleaks": {
 		".betterleaks.toml",
 		"betterleaks.toml",

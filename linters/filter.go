@@ -110,7 +110,7 @@ func FilterViolationsByUserScope(results []*LinterResult, workDir string, scopes
 // plausible base.
 func violationMatchesAnyScope(file, resultWorkDir, callerWorkDir string, scopes []string) bool {
 	if file == "" {
-		return false
+		return true
 	}
 	if filepath.IsAbs(file) {
 		return pathMatchesAnyScope(filepath.Clean(file), scopes)
