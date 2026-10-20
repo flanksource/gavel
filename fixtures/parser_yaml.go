@@ -145,7 +145,7 @@ func decodeFixtureDocuments(data []byte) ([]fixtureDocument, error) {
 // parsedStep is one step with the label validation errors name it by.
 type parsedStep struct {
 	label string
-	spec  StepSpec
+	spec  *StepSpec
 }
 
 func lowerDocument(doc fixtureDocument, docName, path, sourceDir string, parent *FixtureNode, spans []lineSpan) ([]parsedStep, error) {
@@ -168,7 +168,7 @@ func lowerDocument(doc fixtureDocument, docName, path, sourceDir string, parent 
 		parent.AddChild(&FixtureNode{Name: name, Type: TestNode, Test: test,
 			Origin: &FixtureOrigin{File: path, Kind: "step", SectionPath: docName, RowIndex: i + 1,
 				Line: spans[i].start, EndLine: spans[i].end}})
-		steps = append(steps, parsedStep{label: label, spec: spec})
+		steps = append(steps, parsedStep{label: label, spec: &spec})
 	}
 	return steps, nil
 }

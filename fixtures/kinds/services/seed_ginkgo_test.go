@@ -67,7 +67,7 @@ var _ = Describe("services kind: git entries and exports", func() {
 	It("rejects an entry that declares no service type", func() {
 		step := newStep("stack", `{"services": {"empty": {"env": {"A": "b"}}}}`)
 		_, err := execute(step)
-		Expect(err).To(MatchError(ContainSubstring(`entry "empty": exactly one of deps, exec or git is required`)))
+		Expect(err).To(MatchError(ContainSubstring(`entry "empty": exactly one of deps, exec, git or dbtest is required`)))
 	})
 })
 
