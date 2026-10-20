@@ -114,7 +114,7 @@ func commitSchema() map[string]any {
 				},
 			),
 			"tidy": object(
-				"Controls whether `gavel commit` runs `go mod tidy` in every Go module and stages the "+
+				"Controls whether `gavel commit` runs `go mod tidy` in every Go module whose go.mod is staged and stages the "+
 					"resulting go.mod/go.sum changes. CLI flag --tidy overrides per invocation.",
 				map[string]any{
 					"enabled": boolProp(
