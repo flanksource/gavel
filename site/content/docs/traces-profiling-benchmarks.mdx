@@ -31,11 +31,6 @@ gavel test --ui ./pkg/...                           # capture with facets, shown
 
 `--process-facets` reads each process's open files, sockets, listening ports, connections and environment every sample, as `--ui` does; it needs `--ui` or `--diagnostics` and fails otherwise.
 
-<figure className="my-8">
-  <img src="/media/process-resources.png" alt="Process resource tiles and charts for CPU, memory, disk reads, and disk writes" width={1021} height={266} loading="lazy" className="w-full rounded-lg border border-border" />
-  <figcaption className="mt-2 text-sm text-muted-foreground">The Processes tab shows current and peak resource use from the saved samples. <a href="/media/process-resources.png">Open the full-size screenshot</a>.</figcaption>
-</figure>
-
 The run's watchdog prints a `=== Gavel diagnostics: <reason> ===` block (Gavel's goroutines, its active tasks and the process tree) and, when a process capture exists, checkpoints Gavel's goroutines into `stacks` with that reason:
 
 | Reason | When |
@@ -78,14 +73,6 @@ curl -fsS -X POST "http://localhost:8080/query/api/v1/sessions/$SESSION/checkpoi
 ```
 
 The transport chooses how the stacks are read: `inprocess` for Gavel itself, `native` for any process, and `sigquit` for a Go test binary (which then exits). Checkpointing `sessions.samples` with `{"key": "<process key>"}` refreshes that process's facets.
-
-<figure className="my-8">
-  <video controls playsInline preload="metadata" className="w-full rounded-lg border border-border">
-    <source src="/media/process-stacks.webm" type="video/webm" />
-    <a href="/media/process-stacks.webm">Watch the process stacks screencast</a>.
-  </video>
-  <figcaption className="mt-2 text-sm text-muted-foreground">Screencast: choose a saved stack checkpoint and filter its goroutines.</figcaption>
-</figure>
 
 ## Fixtures: `--profile` and `goProfiles`
 

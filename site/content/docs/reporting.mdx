@@ -76,19 +76,6 @@ gavel ui serve .tmp/checks.json --addr localhost
 
 Use the printed server URL. The live UI streams changes and supports rerunning selected tests. Serving a saved snapshot makes completed evidence browsable without repeating the original execution.
 
-<figure className="my-8">
-  <img src="/media/test-timeout.png" alt="Timed-out Go test detail with its process metrics and captured goroutine stack" width={1053} height={1009} loading="lazy" className="w-full rounded-lg border border-border" />
-  <figcaption className="mt-2 text-sm text-muted-foreground">A saved run keeps the failed test, resource peaks, and stack trace together. <a href="/media/test-timeout.png">Open the full-size screenshot</a>.</figcaption>
-</figure>
-
-<figure className="my-8">
-  <video controls playsInline preload="metadata" className="w-full rounded-lg border border-border">
-    <source src="/media/test-timeout.webm" type="video/webm" />
-    <a href="/media/test-timeout.webm">Watch the test report screencast</a>.
-  </video>
-  <figcaption className="mt-2 text-sm text-muted-foreground">Screencast: open a timed-out test to inspect its captured diagnostics.</figcaption>
-</figure>
-
 | Endpoint | Purpose |
 | --- | --- |
 | `GET /api/tests` | Current JSON snapshot |
