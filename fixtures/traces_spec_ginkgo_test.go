@@ -90,6 +90,9 @@ traces:
 	})
 
 	It("lets a table row's traces column replace the file's, and none opt out", func() {
+		// pg_proxy resolves its upstream from the environment when declared
+		// without a dsn; pin one so the spec does not depend on the host's.
+		GinkgoT().Setenv("GAVEL_DB_DSN", "postgres://tester@127.0.0.1:5432/app")
 		found := parseMarkdown(`---
 traces: [pg_proxy]
 ---

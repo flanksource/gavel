@@ -70,6 +70,8 @@ var _ = Describe("lint shim-exec", func() {
 
 	It("passes arguments through unchanged when GAVEL_SHIMS=off", func() {
 		GinkgoT().Setenv(shims.EnvBypass, "off")
+		// The bypass must not inject GOMAXPROCS; clear the host's so it cannot leak in.
+		GinkgoT().Setenv("GOMAXPROCS", "")
 		fake("golangci-lint", `echo "args=$* GOMAXPROCS=$GOMAXPROCS"`)
 
 		code, stdout, _ := run("golangci-lint", "run")
