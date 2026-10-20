@@ -47,6 +47,7 @@ type fixtureDocument struct {
 	Defaults *StepDefaults     `json:"defaults,omitempty"`
 	Setup    *SetupSpec        `json:"setup,omitempty"`
 	Env      map[string]any    `json:"env,omitempty"`
+	Traces   *TraceSpecs       `json:"traces,omitempty"`
 	Steps    []json.RawMessage `json:"steps"`
 }
 
@@ -62,6 +63,13 @@ func ParseFixtureDocuments(path string, data []byte) (*FixtureNode, error) {
 	}
 	if len(docs) == 0 {
 		return nil, fmt.Errorf("%s: no fixture documents", path)
+	}
+	spans, err := stepSpans(data)
+	if err != nil {
+		return nil, fmt.Errorf("%s: locate steps: %w", path, err)
+	}
+	if len(spans) != len(docs) {
+		return nil, fmt.Errorf("%s: located steps in %d documents, decoded %d", path, len(spans), len(docs))
 	}
 	file := &FixtureNode{Name: filepath.Base(path), Type: FileNode, Origin: &FixtureOrigin{File: path, Kind: "file"}}
 	// Absolute: `{{.fixture.dir}}` is handed to processes that run in other
@@ -85,7 +93,10 @@ func ParseFixtureDocuments(path string, data []byte) (*FixtureNode, error) {
 			parent = &FixtureNode{Name: label, Type: SectionNode, Level: 1, Origin: &FixtureOrigin{File: path, Kind: "document"}}
 			file.AddChild(parent)
 		}
-		docSteps, err := lowerDocument(doc, label, path, sourceDir, parent)
+		if len(spans[i]) != len(doc.Steps) {
+			return nil, fmt.Errorf("%s: %s: located %d steps, decoded %d", path, label, len(spans[i]), len(doc.Steps))
+		}
+		docSteps, err := lowerDocument(doc, label, path, sourceDir, parent, spans[i])
 		if err != nil {
 			return nil, fmt.Errorf("%s: %s: %w", path, label, err)
 		}
@@ -134,10 +145,10 @@ func decodeFixtureDocuments(data []byte) ([]fixtureDocument, error) {
 // parsedStep is one step with the label validation errors name it by.
 type parsedStep struct {
 	label string
-	spec  StepSpec
+	spec  *StepSpec
 }
 
-func lowerDocument(doc fixtureDocument, docName, path, sourceDir string, parent *FixtureNode) ([]parsedStep, error) {
+func lowerDocument(doc fixtureDocument, docName, path, sourceDir string, parent *FixtureNode, spans []lineSpan) ([]parsedStep, error) {
 	if len(doc.Steps) == 0 {
 		return nil, fmt.Errorf("declares no steps")
 	}
@@ -154,8 +165,9 @@ func lowerDocument(doc fixtureDocument, docName, path, sourceDir string, parent 
 		test.FrontMatter.Env = doc.Env
 		test.Setup = doc.Setup
 		parent.AddChild(&FixtureNode{Name: name, Type: TestNode, Test: test,
-			Origin: &FixtureOrigin{File: path, Kind: "step", SectionPath: docName, RowIndex: i + 1}})
-		steps = append(steps, parsedStep{label: label, spec: spec})
+			Origin: &FixtureOrigin{File: path, Kind: "step", SectionPath: docName, RowIndex: i + 1,
+				Line: spans[i].start, EndLine: spans[i].end}})
+		steps = append(steps, parsedStep{label: label, spec: &spec})
 	}
 	return steps, nil
 }

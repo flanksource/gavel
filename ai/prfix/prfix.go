@@ -43,9 +43,11 @@ type PRContext struct {
 	UnresolvedComments int
 	// BaseBranch is the branch the PR merges into.
 	BaseBranch string
-	// Conflicts are the paths left conflicted by the merge of BaseBranch gavel
-	// started in the agent's tree before the first turn. Non-empty means that
-	// merge is in progress, and resolving it comes before any CI fix.
+	// BaseSHA is the BaseBranch commit the conflict rebase replays onto.
+	BaseSHA string
+	// Conflicts are the paths GitHub's merge of BaseBranch conflicts on. Non-empty
+	// means gavel started rebasing the agent's tree onto BaseSHA before the first
+	// turn, and finishing that rebase comes before any CI fix.
 	Conflicts []Conflict
 }
 
@@ -80,6 +82,7 @@ func Layers(options ResolveOptions) ([]api.SpecLayer, error) {
 			conflicts = append(conflicts, map[string]any{"path": c.Path, "kind": c.Kind})
 		}
 		data["conflicts"] = conflicts
+		data["baseSha"] = pr.BaseSHA
 	}
 	// Handlebars treats 0 as falsy, so an empty count simply drops its section.
 	if pr.UnresolvedComments > 0 {

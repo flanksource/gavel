@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 
 	rpchttp "github.com/flanksource/clicky/rpc/http"
 	"github.com/flanksource/commons/logger"
+	gavelctx "github.com/flanksource/gavel/context"
 	"github.com/flanksource/gavel/procfile"
 	"github.com/flanksource/gavel/todos/query"
 )
@@ -48,6 +50,10 @@ func newProjectInfo(ctx context.Context, p Project, counts todoCountsResult) (pr
 		Repos:       p.Repos,
 		HasProcfile: hasProcfile,
 		TodoBackend: "db",
+		Hidden:      p.Hidden,
+	}
+	if p.Hidden {
+		return info, nil
 	}
 	if counts.Err != nil {
 		return info, counts.Err
@@ -59,20 +65,28 @@ func newProjectInfo(ctx context.Context, p Project, counts todoCountsResult) (pr
 // loadProjectTodoCounts reads every project's TODO counts in one batch through
 // the projectsTodoCounts seam, and checks the batch answers each project: a
 // result that cannot be matched to its project is reported on every project
-// rather than risk showing one project another's counts.
+// rather than risk showing one project another's counts. Hidden projects are
+// not shown with counts, so they are not queried and get an empty result.
 func loadProjectTodoCounts(ctx context.Context, ps []Project) []todoCountsResult {
+	visible := slices.DeleteFunc(slices.Clone(ps), func(p Project) bool { return p.Hidden })
 	stopDB := rpchttp.Track(ctx, "db")
-	counts := projectsTodoCounts(ctx, ps)
+	counts := projectsTodoCounts(ctx, visible)
 	stopDB()
-	if len(counts) == len(ps) {
-		return counts
+	out := make([]todoCountsResult, len(ps))
+	if len(counts) != len(visible) {
+		err := fmt.Errorf("load native TODO counts: got %d results for %d projects", len(counts), len(visible))
+		for i := range out {
+			out[i].Err = err
+		}
+		return out
 	}
-	err := fmt.Errorf("load native TODO counts: got %d results for %d projects", len(counts), len(ps))
-	counts = make([]todoCountsResult, len(ps))
-	for i := range counts {
-		counts[i].Err = err
+	next := 0
+	for i, p := range ps {
+		if !p.Hidden {
+			out[i], next = counts[next], next+1
+		}
 	}
-	return counts
+	return out
 }
 
 // listProjectInfos resolves every project's wire shape in projects.json order,
@@ -179,6 +193,50 @@ func (s *Server) handleProjectByName(w http.ResponseWriter, r *http.Request) {
 	default:
 		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
+}
+
+// handleProjectHidden is POST /api/projects/{name}/hidden {"hidden": bool}. A
+// narrow endpoint so the full-record PUT never owns the flag. Hiding also
+// stops the git tracker scanning the project's directory; a process without a
+// tracker has nothing to stop.
+func (s *Server) handleProjectHidden(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Hidden *bool `json:"hidden"`
+	}
+	if err := decodeStrict(r, &body); err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if body.Hidden == nil {
+		respondError(w, http.StatusBadRequest, `"hidden" is required`)
+		return
+	}
+	p, err := SetProjectHidden(r.PathValue("name"), *body.Hidden)
+	if err != nil {
+		respondError(w, statusForProjectErr(err), err.Error())
+		return
+	}
+	if p.Hidden {
+		if err := s.untrackProjectGit(p); err != nil {
+			respondError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+	respondJSON(w, http.StatusOK, listProjectInfos(r.Context(), []Project{p})[0])
+}
+
+func (s *Server) untrackProjectGit(p Project) error {
+	tracker, err := s.context().GitTracker()
+	if errors.Is(err, gavelctx.ErrNoGitTracker) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if err := tracker.Untrack(p.ResolvedDir()); err != nil {
+		return fmt.Errorf("stop tracking git state of hidden project %q: %w", p.Name, err)
+	}
+	return nil
 }
 
 func decodeProject(r *http.Request) (Project, error) {

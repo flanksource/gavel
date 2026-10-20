@@ -66,6 +66,40 @@ var _ = Describe("archived run cache", func() {
 	})
 })
 
+var _ = Describe("a supervisor that stops while the live set is cached", func() {
+	It("drops the stopped root and still lists and snapshots archived runs", func() {
+		stopped := GinkgoT().TempDir()
+		archived := clickytask.RunMeta{ID: "archived-run", Name: "Archived", StartedAt: time.Now().Format(time.RFC3339Nano)}
+		source := &supervisorTaskSource{
+			runs: func(context.Context) ([]taskhistory.RunSummary, error) {
+				return []taskhistory.RunSummary{{Run: archived}}, nil
+			},
+			snapshot: func(context.Context, string) ([]clickytask.TaskSnapshot, error) {
+				return []clickytask.TaskSnapshot{{ID: archived.ID}}, nil
+			},
+			rootsCached: []string{stopped},
+			rootsAt:     time.Now(),
+		}
+		originalProjectsPath := projectsPath
+		projectsPath = filepath.Join(GinkgoT().TempDir(), "projects.json")
+		DeferCleanup(func() { projectsPath = originalProjectsPath })
+
+		runs, err := source.Runs(GinkgoT().Context(), clickytask.RunFilter{})
+		Expect(err).NotTo(HaveOccurred())
+		snapshots, err := source.Snapshot(GinkgoT().Context(), archived.ID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect([]any{runs, snapshots}).To(Equal([]any{
+			[]clickytask.RunMeta{archived}, []clickytask.TaskSnapshot{{ID: archived.ID}},
+		}))
+		Expect(source.rootsCached).NotTo(ContainElement(stopped))
+	})
+
+	It("reports a root with no control socket as having no supervisor", func() {
+		_, err := procfile.TaskRuns(GinkgoT().TempDir(), clickytask.RunFilter{})
+		Expect(err).To(MatchError(procfile.ErrSupervisorNotRunning))
+	})
+})
+
 var _ = Describe("task manager API", func() {
 	It("merges and controls task generations owned by detached process supervisors", func() {
 		root := GinkgoT().TempDir()

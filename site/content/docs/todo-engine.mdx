@@ -1,8 +1,10 @@
 ---
 title: Todo engine
 description: Store, list, create, run, and check PostgreSQL-backed work items, with explicit Markdown import and export.
-order: 6
+order: 10
 ---
+
+import DocChildren from "../../src/components/site/DocChildren";
 
 The todo engine is Gavel's task execution layer. It turns work items into structured agent runs, records status, persists session metadata, and connects acceptance criteria to verification.
 
@@ -19,6 +21,12 @@ Line 1 lists active work. Line 2 creates a native PostgreSQL issue. Line 3 print
 `gavel todo` is an alias for `gavel todos`.
 
 ## Storage and portable files
+
+<DocChildren parent="todo-engine" />
+
+TODO commands require a configured PostgreSQL workspace. Set `GAVEL_DB_DSN` to your development database connection string, use the global `--db-url` option, or configure managed local PostgreSQL with `gavel system install --embedded`. The install command writes local database/service configuration and starts a user-level background service; it can download PostgreSQL binaries on first use. Inspect `gavel system install --help` before choosing this setup.
+
+Run `gavel serve` once against that development database to apply schema migrations. Ordinary TODO commands open the workspace without migrating it. If a binary upgrade reports `database schema is behind this binary`, run the migration-serving command again before listing or editing TODOs. AI planning and implementation also require a configured Captain runtime, for example through `captain configure`.
 
 PostgreSQL is the only runtime TODO store. List, create, run, check, and UI/API
 operations always resolve the native database workspace; they do not inspect
@@ -104,7 +112,33 @@ Todos use these statuses:
 | `failed` | execution failed |
 | `skipped` | reproduction steps already pass |
 
-`gavel todos list` hides completed todos by default. Pass `--all` to include them.
+`gavel todos list` hides verified and completed TODOs by default. Pass `--done` to include them. `--all` lists every registered project; combine it with `--done` when you need completed work across projects. Child TODOs are shown beneath their parent unless `--children` or `--parent` is supplied.
+
+## Find and maintain work
+
+```bash
+gavel todos list --status pending
+gavel todos list --all --done
+gavel todos list --parent 90ec80f0
+gavel todos get 90ec80f0
+gavel todos criteria 90ec80f0
+gavel todos edit 90ec80f0 --priority high --label parser --label bug
+gavel todos edit 90ec80f0 --verification @verification.md
+gavel todos comment 90ec80f0 --body @checkpoint.md
+gavel todos reopen 90ec80f0
+```
+
+Replace example references with a TODO's short ID, full ID, title, or imported alias. `get` shows its body, lifecycle state, and children. `criteria` inspects the acceptance criteria. Edits and comments persist immediately; `reopen` makes finished work eligible for another lifecycle run. Supplying `--label` replaces the label set, and `--clear-labels` removes it.
+
+## Sync source comments
+
+```bash
+gavel todos sync --dry-run ./pkg
+gavel todos sync ./pkg
+gavel todos sync --markers TODO,FIXME --ignore "**/generated/**"
+```
+
+Sync turns source TODO/FIXME comments into native issues while retaining their source location. Inspect the dry-run before syncing a large repository. Explicit import/export remains the route for portable `.todos` Markdown; runtime listing and execution use PostgreSQL.
 
 ## Portable todo front matter
 
@@ -147,3 +181,61 @@ Each attempt exposes its evidence through four sub-tabs:
 - **Output** — every other step (`exec`, `bash`, `ai`) with its command, exit code, ANSI-rendered streams and, for a failing step, the CEL expression and the values it saw — plus the acceptance-criteria checklist.
 
 A failure that happens *before* execution starts — no verification fixture, no acceptance criteria, no configured checks — creates no prompt run, so it is reported inline on the tab instead of being listed as an attempt.
+
+## Write an executable definition of done
+
+Keep product outcomes in the task body and runnable evidence in the verification fixture. For example, create `todo.md` with the concrete error and acceptance criteria:
+
+```markdown
+# Fix parser error messages
+
+Invalid input currently produces an error without a source position.
+
+## Acceptance Criteria
+
+- [ ] Invalid input reports its line and column.
+- [ ] Valid input preserves its parsed result.
+```
+
+Create `verification.md` with test and lint gates appropriate to the repository:
+
+````markdown
+### Parser regressions
+
+```yaml test
+paths: [./pkg/parser]
+framework: [go]
+test-timeout: 2m
+```
+
+### Source checks
+
+```yaml lint
+files: [./pkg/parser]
+linters: [golangci-lint]
+timeout: 2m
+```
+````
+
+```bash
+gavel todos create --title "Fix parser error messages" --body @todo.md --verification @verification.md
+gavel todos check 90ec80f0
+```
+
+Use paths and tools that exist in your project. The fixture is persisted separately from the issue body and reused for standalone checks and implementation feedback. Acceptance-criteria grading is part of that definition of done and uses the verification runtime. A check can execute commands and a grader, but it does not start an implementation turn.
+
+## Plan, review, implement, and verify
+
+```bash
+gavel todos steps 90ec80f0
+gavel todos run 90ec80f0 --step plan --dry-run
+gavel todos run 90ec80f0 --step plan
+gavel todos plan show 90ec80f0
+gavel todos plan approve 90ec80f0
+gavel todos run 90ec80f0 --step run
+gavel todos check 90ec80f0
+```
+
+Planning creates a durable plan for review. Approval makes it eligible for implementation; `plan approve --run` also starts implementation immediately. Use `gavel todos plan revise 90ec80f0 --feedback "Add the invalid-input case"` to request changes, or `gavel todos plan reject 90ec80f0` to return it to pending. The built-in implementation step uses an isolated worktree and declares automatic commits. `--commit=false` is rejected for a step whose resolved workflow declares commits; inspect the workflow before dispatching.
+
+See [Todo run loop](/docs/todo-run-loop) for step selection, worktrees, resumable sessions, result envelopes, and feedback budgets. [Runtime presets](/docs/todo-runtime-profiles) covers model and permission defaults, and [Reporting](/docs/reporting) explains the run artifacts linked from verification results.

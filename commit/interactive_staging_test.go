@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"sort"
 
+	"github.com/flanksource/gavel/internal/safefs"
+
 	tea "github.com/charmbracelet/bubbletea"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -220,7 +222,7 @@ var _ = Describe("runInteractiveLoop", func() {
 		} else {
 			_ = os.Setenv(testEnvVar, prevEnv)
 		}
-		_ = os.RemoveAll(repo)
+		_ = safefs.SafeRemove(repo, safefs.RemoveContext{AllowedRoot: os.TempDir()})
 	})
 
 	It("commits each user-picked subset and exits when no candidates remain", func() {

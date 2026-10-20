@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/flanksource/gavel/internal/safefs"
+
 	"github.com/flanksource/gavel/models"
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
@@ -411,7 +413,9 @@ func (r *DefaultGitRepository) ensureCloned() error {
 		repo, err := git.PlainOpen(r.repoPath)
 		if err != nil {
 			// Repository corrupted, remove and re-clone
-			os.RemoveAll(r.repoPath)
+			if err := safefs.SafeRemove(r.repoPath, safefs.RemoveContext{AllowedRoot: filepath.Dir(r.repoPath)}); err != nil {
+				return fmt.Errorf("remove corrupt repository %s: %w", r.repoPath, err)
+			}
 		} else {
 			r.gitRepo = repo
 			return nil
@@ -421,7 +425,9 @@ func (r *DefaultGitRepository) ensureCloned() error {
 		repo, err := git.PlainOpen(r.repoPath)
 		if err != nil {
 			// Repository corrupted, remove and re-clone
-			os.RemoveAll(r.repoPath)
+			if err := safefs.SafeRemove(r.repoPath, safefs.RemoveContext{AllowedRoot: filepath.Dir(r.repoPath)}); err != nil {
+				return fmt.Errorf("remove corrupt repository %s: %w", r.repoPath, err)
+			}
 		} else {
 			r.gitRepo = repo
 			return nil

@@ -9,8 +9,7 @@ import (
 	"github.com/flanksource/gavel/fixtures"
 )
 
-// Entry is one service of a `kind: services` step. Exactly one of Deps, Exec
-// or Git selects its type.
+// Entry is one service of a `kind: services` step. Exactly one resource selects its type.
 type Entry struct {
 	Name string `json:"name,omitempty"`
 
@@ -27,7 +26,8 @@ type Entry struct {
 	Ready *Ready `json:"ready,omitempty"`
 
 	// Git seeds a temp git repository.
-	Git *GitSeed `json:"git,omitempty"`
+	Git    *GitSeed      `json:"git,omitempty"`
+	DBTest *DBTestConfig `json:"dbtest,omitempty"`
 
 	Env  map[string]string    `json:"env,omitempty"`
 	Wait *fixtures.WaitPolicy `json:"wait,omitempty"`
@@ -59,6 +59,8 @@ func (e Entry) typeName() string {
 		return "deps"
 	case e.Exec != "":
 		return "exec"
+	case e.DBTest != nil:
+		return "dbtest"
 	default:
 		return "git"
 	}
@@ -208,18 +210,25 @@ func decodeEntry(name string, body map[string]any) (Entry, error) {
 
 func (e Entry) validate() error {
 	types := 0
-	for _, set := range []bool{e.Deps != "", e.Exec != "", e.Git != nil} {
+	for _, set := range []bool{e.Deps != "", e.Exec != "", e.Git != nil, e.DBTest != nil} {
 		if set {
 			types++
 		}
 	}
 	if types != 1 {
-		return fmt.Errorf("entry %q: exactly one of deps, exec or git is required", e.Name)
+		return fmt.Errorf("entry %q: exactly one of deps, exec, git or dbtest is required", e.Name)
 	}
 	if e.Wait != nil && (e.Wait.Until != "" || e.Wait.FailWhen != "") {
 		return fmt.Errorf("entry %q: wait.until/failWhen are step-level; an entry's readiness is its ready probe", e.Name)
 	}
 	switch e.typeName() {
+	case "dbtest":
+		if e.Ready != nil || e.Wait != nil || e.Cwd != "" || len(e.Env) > 0 || e.Version != "" || e.Runtime != "" || len(e.Parameters) > 0 {
+			return fmt.Errorf("entry %q: a dbtest entry takes only dbtest and export settings", e.Name)
+		}
+		if e.DBTest.Migrations != nil && e.DBTest.Migrations.Dir == "" {
+			return fmt.Errorf("entry %q: dbtest migrations.dir is required", e.Name)
+		}
 	case "exec":
 		return e.validateExec()
 	case "deps":
@@ -258,6 +267,9 @@ func (e Entry) validateExec() error {
 	}
 	if e.Version != "" || e.Runtime != "" || len(e.Parameters) > 0 {
 		return fmt.Errorf("entry %q: version, runtime and parameters apply to deps entries", e.Name)
+	}
+	if err := readinessPolicy(e.Wait).ValidateTiming(); err != nil {
+		return fmt.Errorf("entry %q: %w", e.Name, err)
 	}
 	return nil
 }

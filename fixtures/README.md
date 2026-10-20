@@ -1,5 +1,7 @@
 # AI fixture runtime configuration
 
+For resource setup, see the [worked service guides](../docs/content/docs/fixture-kind-services.mdx): isolated `dbtest` databases with automatic connection environments, catalog services, supervised commands, and disposable git repositories.
+
 Command, test, and lint fixtures can run without AI configuration. For an executed AI checklist, the CLI lazily captures the verification profile's authored layers and the saved settings from `~/.captain.yaml`. The fixture's flat overrides and grading prompt are added before Captain resolves the final runtime. Saved provider defaults therefore follow the final model selected by the fixture.
 
 An authored review fixture can override selected settings while inheriting the verification profile:
@@ -54,3 +56,24 @@ The focused regression suites run without a model call or a real database:
 go test ./fixtures ./fixtures/types -run '^TestFixtures$|^TestFixtureTypes$' -ginkgo.focus='AI fixture|lazy fixture runtime spec|serialized TODO grader runtime' -count=1
 go test ./cmd/gavel -run '^TestGavelCLI$' -ginkgo.focus='standalone fixture runtime profiles' -count=1
 ```
+
+## Typed step result evidence
+
+Typed fixture steps store their identity, final outputs, exports and Execute attempts in result metadata. The verification report projects each stored attempt's `result` through the same `FixtureResult` to `VerifyNode` mapping as the overall step. The result excludes recursive attempts; test/lint run artifacts keep their `run_id` and file reference rather than inlining the full run snapshot.
+
+Fixture-result JSON decoding restores typed attempt records while preserving other metadata, so subprocess workers and direct execution produce the same verification detail.
+
+Retries apply to Execute only. Each failed launch retains its own outputs and execution evidence; the successful launch's subsequent wait, final CEL assertion, exports and step timeout determine that attempt's terminal result. Selecting an attempt in the shared result UI changes its evidence and Outputs without changing the overall step verdict or run totals.
+
+A wait stores only its terminal observation:
+
+```json
+{
+  "policy": { "until": "state == 'ready'", "interval": "1s", "timeout": "30s" },
+  "outcome": "satisfied",
+  "durationMs": 1250,
+  "outputs": { "state": "ready" }
+}
+```
+
+`durationMs` measures actual elapsed time, including probe execution. Failed and timed-out waits retain terminal `error` and CEL `trace` when available. Intermediate poll values are not persisted. Service-readiness waits use the same shape under the service's outputs, with timing policy and final readiness outputs; the Go probe supplies the verdict instead of a CEL condition. Existing saved reports are not rewritten.

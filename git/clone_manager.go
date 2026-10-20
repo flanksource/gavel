@@ -2,6 +2,7 @@ package git
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -10,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/flanksource/gavel/internal/safefs"
 
 	"log/slog"
 
@@ -160,7 +163,7 @@ func (cm *DefaultCloneManager) CreateClone(ctx context.Context, repoPath, versio
 
 	// Remove existing clone if it exists
 	if _, err := os.Stat(clonePath); err == nil {
-		if err := os.RemoveAll(clonePath); err != nil {
+		if err := safefs.SafeRemove(clonePath, safefs.RemoveContext{AllowedRoot: filepath.Dir(clonePath), Protected: []string{repoPath}}); err != nil {
 			return fmt.Errorf("failed to remove existing clone: %w", err)
 		}
 	}
@@ -199,9 +202,9 @@ func (cm *DefaultCloneManager) CreateClone(ctx context.Context, repoPath, versio
 
 		err = cmd.Run()
 		if err != nil {
-			_ = os.RemoveAll(clonePath)
+			cleanupErr := safefs.SafeRemove(clonePath, safefs.RemoveContext{AllowedRoot: filepath.Dir(clonePath), Protected: []string{repoPath}})
 			log.Errorf("Failed to clone %s: %v", repoName, err)
-			return fmt.Errorf("failed to clone repository %s: %w", repoName, err)
+			return errors.Join(fmt.Errorf("failed to clone repository %s: %w", repoName, err), cleanupErr)
 		}
 
 		// Now checkout the specific version
@@ -213,9 +216,9 @@ func (cm *DefaultCloneManager) CreateClone(ctx context.Context, repoPath, versio
 
 		err = checkoutCmd.Run()
 		if err != nil {
-			_ = os.RemoveAll(clonePath)
+			cleanupErr := safefs.SafeRemove(clonePath, safefs.RemoveContext{AllowedRoot: filepath.Dir(clonePath), Protected: []string{repoPath}})
 			log.Errorf("Failed to checkout version %s in %s: %v", version, repoName, err)
-			return fmt.Errorf("failed to checkout version %s: %w", version, err)
+			return errors.Join(fmt.Errorf("failed to checkout version %s: %w", version, err), cleanupErr)
 		}
 	}
 
@@ -235,12 +238,12 @@ func (cm *DefaultCloneManager) CreateClone(ctx context.Context, repoPath, versio
 func (cm *DefaultCloneManager) RemoveClone(ctx context.Context, clonePath string) error {
 	log := getLoggerFromContext(ctx)
 
-	cm.mu.Lock()
+	cm.mu.RLock()
 	repoPath, exists := cm.activeClones[clonePath]
-	if exists {
-		delete(cm.activeClones, clonePath)
+	cm.mu.RUnlock()
+	if !exists {
+		return fmt.Errorf("clone %s is not managed by this manager", clonePath)
 	}
-	cm.mu.Unlock()
 
 	if exists {
 		repoName := cm.extractRepoName(repoPath)
@@ -248,10 +251,13 @@ func (cm *DefaultCloneManager) RemoveClone(ctx context.Context, clonePath string
 	}
 
 	// Remove the directory
-	if err := os.RemoveAll(clonePath); err != nil {
+	if err := safefs.SafeRemove(clonePath, safefs.RemoveContext{AllowedRoot: filepath.Dir(clonePath), Protected: []string{repoPath}}); err != nil {
 		log.Errorf("Failed to remove clone directory %s: %v", clonePath, err)
 		return fmt.Errorf("failed to remove clone directory %s: %w", clonePath, err)
 	}
+	cm.mu.Lock()
+	delete(cm.activeClones, clonePath)
+	cm.mu.Unlock()
 
 	if exists {
 		log.Debugf("Clone removed: %s", clonePath)

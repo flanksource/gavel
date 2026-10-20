@@ -56,6 +56,7 @@ describe('ProjectsBar', () => {
         onChanged={() => {}}
         onAdd={() => {}}
         onSettings={() => {}}
+        onHide={() => {}}
       />,
     );
 
@@ -85,6 +86,7 @@ describe('ProjectsBar', () => {
         onChanged={() => {}}
         onAdd={() => {}}
         onSettings={onSettings}
+        onHide={() => {}}
       />,
     );
 
@@ -94,6 +96,41 @@ describe('ProjectsBar', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Edit gavel settings' }));
     expect(onSettings).toHaveBeenCalledWith(project);
     expect(onSelect).toHaveBeenCalledOnce();
+  });
+
+  it('hides a project from its row without selecting it or opening its settings', () => {
+    const projects: Project[] = [
+      { name: 'gavel', dir: '/work/gavel', repos: ['acme/gavel'] },
+      { name: 'clicky', dir: '/work/clicky', repos: [] },
+    ];
+    const onHide = vi.fn();
+    const onSelect = vi.fn();
+    const onSettings = vi.fn();
+
+    render(
+      <ProjectsBar
+        projects={projects}
+        runs={[]}
+        procStatus={{}}
+        gitSummary={noGitSummary}
+        selected=""
+        selectedRunId=""
+        historyEnabled={false}
+        onSelect={onSelect}
+        onSelectRun={() => {}}
+        onHistoryChange={() => {}}
+        onChanged={() => {}}
+        onAdd={() => {}}
+        onSettings={onSettings}
+        onHide={onHide}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Hide clicky project' }));
+
+    expect(onHide).toHaveBeenCalledExactlyOnceWith(projects[1]);
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(onSettings).not.toHaveBeenCalled();
   });
 
   it('auto-expands the selected project and selects its nested run', () => {
@@ -115,6 +152,7 @@ describe('ProjectsBar', () => {
         onChanged={() => {}}
         onAdd={() => {}}
         onSettings={() => {}}
+        onHide={() => {}}
       />,
     );
 
@@ -151,6 +189,7 @@ describe('ProjectsBar', () => {
         onChanged={() => {}}
         onAdd={() => {}}
         onSettings={() => {}}
+        onHide={() => {}}
       />,
     );
 
@@ -180,6 +219,7 @@ describe('ProjectsBar', () => {
         onChanged={() => {}}
         onAdd={() => {}}
         onSettings={() => {}}
+        onHide={() => {}}
       />,
     );
 

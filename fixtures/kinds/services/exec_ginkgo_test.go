@@ -103,11 +103,22 @@ var _ = Describe("services kind: exec entries", func() {
 			"wait": {"interval": "50ms", "timeout": "500ms"}
 		}}}`, svcBin))
 
-		_, err := execute(step)
+		outcome, err := execute(step)
 		Expect(err).To(MatchError(And(
 			ContainSubstring(`service "stuck" not ready after 500ms`),
 			ContainSubstring("stuck-widget booting"),
 		)))
+		stuck := entryOutputs(outcome, "stuck")
+		Expect(stuck).To(HaveKeyWithValue("ready", false))
+		readiness, ok := stuck["wait"].(map[string]any)
+		Expect(ok).To(BeTrue(), "outputs.stuck.wait must be plain data CEL can navigate, got %T", stuck["wait"])
+		Expect(readiness).To(HaveKeyWithValue("outcome", fixtures.WaitTimeout))
+		Expect(readiness).To(HaveKeyWithValue("error", ContainSubstring("not ready after 500ms")))
+		Expect(readiness["policy"]).To(HaveKeyWithValue("interval", "50ms"), "durations keep their Go duration strings")
+		Expect(readiness["policy"]).To(HaveKeyWithValue("timeout", "500ms"))
+		Expect(readiness).NotTo(HaveKey("observations"))
+		Expect(readiness["durationMs"]).To(BeNumerically(">=", 500))
+		Expect(readiness["outputs"]).To(HaveKeyWithValue("ready", false))
 		Eventually(func() string {
 			out, _ := os.ReadFile(filepath.Join(step.TmpDir, "services", "stuck.log"))
 			return string(out)
@@ -125,6 +136,25 @@ var _ = Describe("services kind: exec entries", func() {
 		_, err := execute(step)
 		Expect(err).To(MatchError(And(ContainSubstring("exited"), ContainSubstring("dying-loudly"))))
 		Expect(time.Since(start)).To(BeNumerically("<", 10*time.Second))
+	})
+
+	It("kills a service process group whose child ignores TERM", func() {
+		dir := GinkgoT().TempDir()
+		childPIDFile := filepath.Join(dir, "child.pid")
+		readyFile := filepath.Join(dir, "child-ready")
+		step := newStep("stack", fmt.Sprintf(`{"services": {"stubborn": {
+			"exec": "sh -c 'trap \"\" TERM; echo ready > %s; sleep 60' & echo $! > %s; wait",
+			"ready": {"exec": "test -s %s"},
+			"wait": {"interval": "50ms", "timeout": "5s"}
+		}}}`, readyFile, childPIDFile, readyFile))
+		outcome, err := execute(step)
+		Expect(err).NotTo(HaveOccurred())
+		pidText, err := os.ReadFile(childPIDFile)
+		Expect(err).NotTo(HaveOccurred())
+		childPID, err := strconv.Atoi(strings.TrimSpace(string(pidText)))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(outcome.Cleanup(context.Background())).To(MatchError(ContainSubstring("required SIGKILL")))
+		Eventually(func() bool { return processAlive(childPID) }, 5*time.Second).Should(BeFalse())
 	})
 
 	It("tears entries down in reverse declaration order", func() {

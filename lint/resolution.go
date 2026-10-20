@@ -12,6 +12,7 @@ import (
 
 	"github.com/flanksource/commons/logger"
 	deps "github.com/flanksource/deps"
+	"github.com/flanksource/gavel/lint/shims"
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/utils"
 )
@@ -111,7 +112,7 @@ func resolveLinterExecutable(ctx context.Context, linter linters.Linter, gitRoot
 	}
 
 	for _, candidate := range candidates {
-		if path, err := exec.LookPath(candidate); err == nil {
+		if path, err := shims.LookPath(candidate); err == nil {
 			return path, "", nil
 		}
 	}
@@ -156,6 +157,12 @@ func resolveLinterExecutable(ctx context.Context, linter linters.Linter, gitRoot
 	}
 
 	if len(candidates) == 1 {
+		if required, ok := linter.(linters.ExecutableRequired); ok && required.RequiresExecutable() {
+			if dryRun {
+				return candidates[0], "", nil
+			}
+			return "", "", fmt.Errorf("%s executable not found on PATH; install it before running this linter", linter.Name())
+		}
 		return "", "not found on PATH", nil
 	}
 	return "", fmt.Sprintf("none of %s found on PATH", strings.Join(candidates, ", ")), nil

@@ -75,6 +75,7 @@ type Server struct {
 	testRunSyncer  *TestRunSyncer
 	projectActions *projectActionRegistry
 	projectRuns    *testui.MultiServer
+	testRunStores  *testRunTraceStores
 	taskSource     *supervisorTaskSource
 	// prDeps overrides the GitHub PR and AI content calls of the project
 	// branch PR and squash-merge endpoints; nil uses prcreate.DefaultDeps.
@@ -516,10 +517,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/tests", s.handleTestRuns)
 	mux.HandleFunc("/api/tests/stream", s.handleTestRunsStream)
 	mux.HandleFunc("/api/tests/run", s.handleTestRun)
+	mux.Handle(testRunTracesPrefix+"/", s.testRunTraces())
 	mux.HandleFunc("/api/todos", s.handleTodos)
 	mux.HandleFunc("POST /api/todos/batch", s.handleTodoBatch)
 	mux.HandleFunc("POST /api/todos/new", s.handleTodoNew)
 	mux.HandleFunc("POST /todos/new", s.handleTodoNew)
+	mux.HandleFunc("GET /api/todos/new/steps", s.handleTodoNewSteps)
 	mux.HandleFunc("/api/todos/attachments", s.handleTodoAttachmentUpload)
 	mux.HandleFunc("GET /api/todos/attachments/{id}", s.handleTodoAttachment)
 	mux.HandleFunc("/api/todos/item", s.handleTodoItem)
@@ -585,6 +588,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/projects/{name}", s.handleProjectByName)
 	mux.HandleFunc("PUT /api/projects/{name}", s.handleProjectByName)
 	mux.HandleFunc("DELETE /api/projects/{name}", s.handleProjectByName)
+	mux.HandleFunc("POST /api/projects/{name}/hidden", s.handleProjectHidden)
 	mux.HandleFunc("GET /api/projects/{name}/status", s.handleProjectStatus)
 	mux.HandleFunc("POST /api/projects/{name}/actions", s.handleProjectAction)
 	mux.HandleFunc("GET /api/projects/{name}/actions/schema", s.handleProjectActionSchema)

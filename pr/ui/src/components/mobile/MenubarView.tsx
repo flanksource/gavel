@@ -32,6 +32,7 @@ export function MenubarView({
   config,
   projects,
   availableProjects,
+  onSetProjectHidden,
   projectsLoaded,
   projectError,
   projectsByRepo,
@@ -58,6 +59,7 @@ export function MenubarView({
   config: SearchConfig;
   projects: Project[];
   availableProjects: Project[];
+  onSetProjectHidden: (name: string, hidden: boolean) => void;
   projectsLoaded: boolean;
   projectError?: string;
   projectsByRepo: Record<string, Project>;
@@ -159,7 +161,7 @@ export function MenubarView({
             just renders empty. Surface it here, ahead of the PR poll's clock. */}
         <div className="flex min-w-0 items-center justify-end gap-2">
           <div className="min-w-0 max-w-40">
-            <OrgChooser config={config} projects={availableProjects} onChange={onScopeChange} />
+            <OrgChooser config={config} projects={availableProjects} onChange={onScopeChange} onSetProjectHidden={onSetProjectHidden} />
           </div>
           {projectError ? (
             <div role="alert" className="max-w-32 truncate text-[11px] text-destructive">{projectError}</div>

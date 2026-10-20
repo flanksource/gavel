@@ -58,7 +58,7 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	projects, err := LoadProjects()
+	projects, err := LoadProjects(LoadProjectsOptions{})
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err.Error())
 		return

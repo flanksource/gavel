@@ -1,0 +1,14 @@
+@import "tailwindcss";
+@config "../tailwind.config.js";
+
+/* clicky-ui's prebuilt styles: shadcn :root design tokens + component utilities. */
+@import "@flanksource/clicky-ui/styles.css";
+
+/* The page shell is `h-screen`; the html/body/#root height chain keeps the
+   panes' own `overflow-y-auto min-h-0` regions the scrollers instead of the
+   whole document. */
+html,
+body,
+#root {
+  height: 100%;
+}

@@ -2,6 +2,7 @@ package github
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	nethttp "net/http"
 	"net/http/httptest"
@@ -222,4 +223,59 @@ func TestCommentOnPullRequest_EmptyBodyFailsBeforeRequest(t *testing.T) {
 	err := CommentOnPullRequest(Options{Token: "tok"}, "PR_node_1", "   ")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "comment body is required")
+}
+
+func TestUpdatePullRequestBranch_RebasesAtTheSeenHead(t *testing.T) {
+	var gotVars map[string]any
+	var gotQuery string
+	srv := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
+		require.Equal(t, "/graphql", r.URL.Path)
+		body, _ := io.ReadAll(r.Body)
+		var payload struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		require.NoError(t, json.Unmarshal(body, &payload))
+		gotVars = payload.Variables
+		gotQuery = payload.Query
+		_, _ = w.Write([]byte(`{"data":{"updatePullRequestBranch":{"pullRequest":{"number":7,"headRefOid":"def"}}}}`))
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv("GITHUB_API_URL", srv.URL)
+
+	err := UpdatePullRequestBranch(Options{Token: "tok"}, UpdateBranchOptions{NodeID: "PR_node_1", HeadSHA: "abc"})
+	require.NoError(t, err)
+	assert.Contains(t, gotQuery, "updatePullRequestBranch")
+	assert.Contains(t, gotQuery, "updateMethod: REBASE")
+	assert.Equal(t, map[string]any{"prId": "PR_node_1", "head": "abc"}, gotVars)
+}
+
+func TestUpdatePullRequestBranch_ClassifiesRefusals(t *testing.T) {
+	for _, tc := range []struct {
+		message  string
+		conflict bool
+	}{
+		{message: "Cannot update PR branch due to conflicts", conflict: true},
+		{message: "merge conflict between base and head", conflict: true},
+		{message: "Expected head oid does not match", conflict: false},
+	} {
+		t.Run(tc.message, func(t *testing.T) {
+			srv := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
+				_ = json.NewEncoder(w).Encode(map[string]any{"errors": []map[string]string{{"message": tc.message}}})
+			}))
+			t.Cleanup(srv.Close)
+			t.Setenv("GITHUB_API_URL", srv.URL)
+
+			err := UpdatePullRequestBranch(Options{Token: "tok"}, UpdateBranchOptions{NodeID: "PR_node_1"})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.message)
+			assert.Equal(t, tc.conflict, errors.Is(err, ErrUpdateBranchConflict))
+		})
+	}
+}
+
+func TestUpdatePullRequestBranch_EmptyNodeIDFailsBeforeRequest(t *testing.T) {
+	err := UpdatePullRequestBranch(Options{Token: "tok"}, UpdateBranchOptions{NodeID: " "})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "node ID is required")
 }

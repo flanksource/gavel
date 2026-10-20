@@ -9,6 +9,7 @@ import (
 	"github.com/flanksource/commons-db/shell"
 	"github.com/flanksource/gavel/commit"
 	"github.com/flanksource/gavel/todos"
+	"github.com/flanksource/gavel/todos/tools"
 	"github.com/flanksource/gavel/todos/types"
 )
 
@@ -29,22 +30,26 @@ import (
 type HookOptions struct {
 	Meta todos.RunStartMetadata
 	pr   *prExecution
+	// tools is the run's tool state, where a PR turn reads the threads it
+	// reported addressed.
+	tools *tools.Run
 }
 
 func (h *Host) Hooks(todo *types.TODO, req captainai.Request, opts HookOptions) []any {
 	var hooks []any
+	pr := opts.pr.forRun(opts.tools)
 	if req.Workflow != nil && len(req.Workflow.Commits) > 0 {
 		options := commit.AgentHooksOptions{
 			Commits: req.Workflow.Commits,
 			Meta:    commit.AgentRunMetadata{IssueID: todo.ID, SessionID: opts.Meta.SessionID},
 		}
-		if opts.pr != nil && opts.pr.write {
-			options.PRTarget, options.ShouldCommit = opts.pr.target, completedPRTurn
+		if pr != nil && pr.write {
+			options.PRTarget, options.ShouldCommit = pr.target, pr.completedTurn
 		}
 		hooks = append(hooks, commit.AgentHooks(options)...)
 	}
-	if opts.pr != nil {
-		hooks = append(hooks, opts.pr)
+	if pr != nil {
+		hooks = append(hooks, pr)
 	}
 	if env := runEnvFor(todo, firstNonEmpty(req.SessionID, opts.Meta.SessionID)); len(env) > 0 {
 		hooks = append(hooks, &runEnv{env: env})

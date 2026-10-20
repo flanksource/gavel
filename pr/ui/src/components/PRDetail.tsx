@@ -1,8 +1,8 @@
 import { useState, useMemo, useRef, useCallback, type ReactNode, type ComponentType } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import type { PRItem, PRDetail, PRComment, PRCommitInfo, PRFileInfo, GavelResultsSummary, Test, Project } from '../types';
-import { aggregateGavelShards, stateColor, reviewColor, severityIcon, extractCommentTitle, isDeploymentComment } from '../utils';
-import { DetailPanel, LintView, TestNode, groupLintByLinterRuleFile } from '@flanksource/gavel/testrunner';
+import type { PRItem, PRDetail, PRComment, PRCommitInfo, PRFileInfo, GavelResultsSummary, Project } from '../types';
+import { aggregateGavelShards, failedTestsLabel, timedOutNote, stateColor, reviewColor, severityIcon, extractCommentTitle, isDeploymentComment } from '../utils';
+import { ShardLintFindings, ShardTestFailures } from './ShardFindings';
 import { CreateTodoFromPRDialog } from './todos/CreateTodoFromPRDialog';
 import { PRLinkedTodos } from './PRLinkedTodos';
 import { PRActions, type ExtraAction } from './PRActions';
@@ -77,7 +77,7 @@ function gavelLocation(file?: string, line?: number): string {
 function formatGavelText(g: GavelResultsSummary): string {
   const lines: string[] = [];
   if (g.testsTotal > 0) {
-    lines.push(`Tests: ${g.testsPassed} passed / ${g.testsFailed} failed / ${g.testsSkipped} skipped (total ${g.testsTotal})`);
+    lines.push(`Tests: ${g.testsPassed} passed / ${failedTestsLabel(g)} / ${g.testsSkipped} skipped (total ${g.testsTotal})`);
   }
   if (g.lintLinters > 0) {
     lines.push(`Lint: ${g.lintViolations} violations across ${g.lintLinters} linters`);
@@ -112,7 +112,7 @@ function formatGavelText(g: GavelResultsSummary): string {
 function formatGavelMarkdown(g: GavelResultsSummary): string {
   const lines: string[] = [];
   if (g.testsTotal > 0) {
-    lines.push(`- **Tests**: ✅ ${g.testsPassed} · ❌ ${g.testsFailed} · ⏭ ${g.testsSkipped} (total ${g.testsTotal})`);
+    lines.push(`- **Tests**: ✅ ${g.testsPassed} · ❌ ${g.testsFailed}${timedOutNote(g)} ·⏭ ${g.testsSkipped} (total ${g.testsTotal})`);
   }
   if (g.lintLinters > 0) {
     lines.push(`- **Lint**: ${g.lintViolations} violations across ${g.lintLinters} linters`);
@@ -987,7 +987,7 @@ function buildMetricCards(
       icon: UiError,
       label: 'Failed',
       value: results.testsFailed,
-      sub: results.testsFailed > 0 ? 'need triage' : 'none',
+      sub: results.testsFailed > 0 ? `need triage${timedOutNote(results)}` : 'none',
       tone: results.testsFailed > 0 ? 'fail' : 'neutral',
     });
     if (results.testsSkipped > 0) {
@@ -1071,21 +1071,18 @@ function ShardError({ results, href }: { results: GavelResultsSummary; href?: st
   );
 }
 
-// ShardExtras renders the artifact's failing tests and lint findings with the
-// testrunner UI's own components, so a shard row in the PR dashboard looks like
-// the results page it links to instead of a parallel rendering of the same data.
+// ShardExtras renders the artifact's failing tests and lint findings with
+// clicky-ui's test runner and lint results, so a shard row in the PR dashboard
+// reads like the results page it links to instead of a parallel rendering of
+// the same data.
 function ShardExtras({ results }: { results: GavelResultsSummary }) {
   const failures = results.failures ?? [];
   const lint = results.lint ?? [];
-  // The tree rows carry identity only; the message, stdout/stderr and failure
-  // detail live in DetailPanel. Start on the first failure so triage sees the
-  // reason without a click.
-  const [selected, setSelected] = useState<Test | null>(failures[0] ?? null);
-  const lintTree = useMemo(() => groupLintByLinterRuleFile(lint), [lint]);
+  const violations = countViolations(lint);
   // A linter that crashed or timed out reports no violations, so it never
   // reaches the lint tree — surface it explicitly or the shard reads as clean.
   const brokenLinters = lint.filter(lr => lr.timed_out || (!lr.success && !!lr.error));
-  if (failures.length === 0 && lintTree.length === 0 && brokenLinters.length === 0) return null;
+  if (failures.length === 0 && violations === 0 && brokenLinters.length === 0) return null;
   return (
     <>
       {failures.length > 0 && (
@@ -1096,33 +1093,18 @@ function ShardExtras({ results }: { results: GavelResultsSummary }) {
           shown={failures.length}
           total={results.testsFailed}
         >
-          {failures.map((t, i) => (
-            <TestNode
-              key={i}
-              test={t}
-              depth={0}
-              expandAll={null}
-              selected={selected}
-              onSelect={setSelected}
-            />
-          ))}
+          <ShardTestFailures failures={failures} />
         </FailureList>
       )}
-      {lintTree.length > 0 && (
+      {violations > 0 && (
         <FailureList
           title="Lint violations"
           icon={UiWarningTriangle}
           iconColor="text-yellow-600"
-          shown={countViolations(lint)}
+          shown={violations}
           total={results.lintViolations}
         >
-          <LintView
-            lint={lint}
-            tree={lintTree}
-            expandAll={null}
-            selected={selected}
-            onSelect={setSelected}
-          />
+          <ShardLintFindings lint={lint} />
         </FailureList>
       )}
       {brokenLinters.length > 0 && (
@@ -1149,11 +1131,6 @@ function ShardExtras({ results }: { results: GavelResultsSummary }) {
           ))}
         </FailureList>
       )}
-      {selected && (
-        <div className="mt-2 border border-border rounded overflow-auto max-h-96">
-          <DetailPanel test={selected} lint={lint} />
-        </div>
-      )}
     </>
   );
 }
@@ -1175,7 +1152,7 @@ function ShardSummaryBadges({ g }: { g: GavelResultsSummary }) {
     items.push({ icon: UiPass, color: 'text-green-600', count: g.testsPassed, title: `${g.testsPassed} passed` });
   }
   if (g.testsFailed > 0) {
-    items.push({ icon: UiError, color: 'text-red-600', count: g.testsFailed, title: `${g.testsFailed} failed` });
+    items.push({ icon: UiError, color: 'text-red-600', count: g.testsFailed, title: failedTestsLabel(g) });
   }
   if (g.testsSkipped > 0) {
     items.push({ icon: UiDebugStepOver, color: 'text-muted-foreground', count: g.testsSkipped, title: `${g.testsSkipped} skipped` });
@@ -1259,7 +1236,7 @@ function FailureList({ title, icon: Icon, iconColor, shown, total, children }: {
   icon: ComponentType<IconProps>;
   iconColor: string;
   // shown is passed explicitly because a section may render its rows through a
-  // single child component (LintView) rather than one node per finding.
+  // single child component (ShardLintFindings) rather than one node per finding.
   shown: number;
   // total is the artifact's real count. Omit it (or pass the same number) when
   // nothing was dropped — "showing 2 of 2" is noise.

@@ -1,0 +1,42 @@
+---
+title: TODO
+description: Inspect, create, and review tracked work through the dashboard API.
+parent: fixture-step-reference
+order: 9
+---
+
+import FixtureKindReference from "../../src/components/site/FixtureKindReference";
+
+Use the `todo` step to inspect, create, and review tracked work through the dashboard API.
+
+## Example
+
+```yaml
+kind: Fixture
+name: TODO example
+steps:
+  - id: item
+    kind: todo
+    server: http://localhost:8080
+    ref: $TODO_ID
+    get: true
+```
+
+Save the document as a `.fixture.yaml` file. Inspect it with `gavel fixtures outline <file>`, then execute it with `gavel fixtures <file>` once its prerequisites are available.
+
+## Configuration and prerequisites
+
+A configured dashboard and PostgreSQL workspace must be available. The example reads an existing issue; replace the server URL and set `TODO_ID`. `create`, `approve`, and `reject` are writes and should be chosen explicitly for the intended workflow.
+
+## Results and lifetime
+
+Outputs include the native issue ID, TODO state, triage summary, and attempt history. Observation rereads the issue. `server` defaults from `GAVEL_URL`, while `dir` selects the workspace when needed.
+
+[Todo engine](/docs/todo-engine) covers workspace setup and plan review. Use [TODO prompt](/docs/fixture-kind-todo-prompt) to dispatch a lifecycle step.
+
+## Complete step reference
+
+Expand objects and array items to inspect nested fields. This reference includes the common step envelope; its behavior is documented in [Step policies](/docs/fixture-step-policies).
+
+<FixtureKindReference kind="todo" />
+

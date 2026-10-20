@@ -92,14 +92,12 @@ type todoSummary struct {
 	// browser has no copy of, so a client re-deriving it would be guessing.
 	Lifecycle *todoLifecycleState `json:"lifecycle,omitempty"`
 	// Envelope-driven fields from the last agent run: the native plan file the
-	// agent reported (rendered by the Plan tab / review mode), its status, the
-	// final summary, and the questions blocking an ask todo. The step an answer
-	// resumes is not among them: Phases marks it, and `runMode` is a key the run
+	// agent reported (rendered by the Plan tab / review mode), its status, and the
+	// final comment. The step an answer resumes is not among them: Phases marks it, and `runMode` is a key the run
 	// endpoint rejects on input, so it is not one a response may hand out.
-	PlanPath       string                `json:"planPath,omitempty"`
-	PlanStatus     types.PlanStatus      `json:"planStatus,omitempty"`
-	LastRunSummary string                `json:"lastRunSummary,omitempty"`
-	Questions      []types.AgentQuestion `json:"questions,omitempty"`
+	PlanPath       string           `json:"planPath,omitempty"`
+	PlanStatus     types.PlanStatus `json:"planStatus,omitempty"`
+	LastRunSummary string           `json:"lastRunSummary,omitempty"`
 	// AnsweredFromCaptain marks a todo whose latest ask was answered from
 	// Captain's session page: the transcript still ends on the question while
 	// Captain's turn continues, and /api/todos/answer refuses a second answer.
@@ -174,7 +172,6 @@ func summarizeTodo(todo *types.TODO, detail bool) todoSummary {
 		out.PlanPath = todo.PlanPath
 		out.PlanStatus = todo.PlanStatus
 		out.LastRunSummary = todo.LastRunSummary
-		out.Questions = todo.Questions
 		out.AnsweredFromCaptain = answeredFromCaptain(todo)
 	}
 	return out

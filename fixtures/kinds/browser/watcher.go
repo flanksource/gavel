@@ -11,7 +11,6 @@ import (
 	"syscall"
 	"time"
 
-	cexec "github.com/flanksource/clicky/exec"
 	"github.com/flanksource/gavel/fixtures"
 )
 
@@ -32,13 +31,13 @@ func (Playwright) Start(ctx context.Context, step *fixtures.StepContext) (fixtur
 		stopTimeout = run.cfg.StopTimeout.Std()
 	}
 	h := &watcherHandle{step: step, run: run, start: time.Now(), stopTimeout: stopTimeout, ready: make(chan struct{})}
-	// Not bound to ctx: the watcher outlives the step that started it.
-	h.process = cexec.NewExec("node", run.script).WithCwd(run.cwd).WithExactEnv(run.env).WithProcessGroup().
-		Stream(&lineWriter{onLine: h.record}, nil)
-	go h.process.Run()
+	h.process, err = startManagedProcess(ctx, "node", []string{run.script}, run.cwd, run.env, &lineWriter{onLine: h.record})
+	if err != nil {
+		return nil, errors.Join(fmt.Errorf("playwright step %q: %w", step.Spec.ID, err), run.cleanup())
+	}
 
 	if err := h.awaitReady(ctx, readyTimeout); err != nil {
-		return nil, errors.Join(fmt.Errorf("playwright step %q: %w", step.Spec.ID, err), h.process.KillTree(), run.cleanup())
+		return nil, errors.Join(fmt.Errorf("playwright step %q: %w", step.Spec.ID, err), h.process.killTree(), h.process.waitWithin(10*time.Second), run.cleanup())
 	}
 	return h, nil
 }
@@ -47,7 +46,7 @@ func (Playwright) Start(ctx context.Context, step *fixtures.StepContext) (fixtur
 type watcherHandle struct {
 	step        *fixtures.StepContext
 	run         *playwrightRun
-	process     *cexec.Process
+	process     *managedProcess
 	start       time.Time
 	stopTimeout time.Duration
 
@@ -88,7 +87,7 @@ func (h *watcherHandle) eventTypes() []string {
 	return types
 }
 
-func (h *watcherHandle) exited() bool { return h.process.Result().Status != "pending" }
+func (h *watcherHandle) exited() bool { return h.process.exited() }
 
 func (h *watcherHandle) awaitReady(ctx context.Context, timeout time.Duration) error {
 	deadline := time.After(timeout)
@@ -99,10 +98,10 @@ func (h *watcherHandle) awaitReady(ctx context.Context, timeout time.Duration) e
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-deadline:
-			return fmt.Errorf("watcher %s emitted no ready event within %s: %s", h.run.script, timeout, strings.TrimSpace(h.process.GetStderr()))
+			return fmt.Errorf("watcher %s emitted no ready event within %s: %s", h.run.script, timeout, strings.TrimSpace(h.process.stderr.String()))
 		case <-time.After(50 * time.Millisecond):
 			if h.exited() {
-				return fmt.Errorf("watcher %s exited (code %d) before ready: %s", h.run.script, h.process.ExitCode(), strings.TrimSpace(h.process.GetStderr()))
+				return fmt.Errorf("watcher %s exited (code %d) before ready: %s", h.run.script, h.process.exitCode(), strings.TrimSpace(h.process.stderr.String()))
 			}
 		}
 	}
@@ -130,8 +129,8 @@ func (h *watcherHandle) Stop(context.Context) fixtures.FixtureResult {
 		}
 	}
 
-	result.Stdout, result.Stderr, result.ExitCode = h.process.GetStdout(), h.process.GetStderr(), h.process.ExitCode()
-	result.Metadata = map[string]any{"events": events}
+	result.Stdout, result.Stderr, result.ExitCode = h.process.stdout.String(), h.process.stderr.String(), h.process.exitCode()
+	result.Metadata = map[string]any{"events": reportedEvents(events)}
 	if len(problems) > 0 {
 		result = result.Failf("%s", strings.Join(problems, "\n\n"))
 	}
@@ -142,27 +141,24 @@ func (h *watcherHandle) Stop(context.Context) fixtures.FixtureResult {
 // exits non-zero is itself a failure (it stopped watching).
 func (h *watcherHandle) terminate() []string {
 	if h.exited() {
-		return []string{fmt.Sprintf("watcher exited before teardown (code %d): %s", h.process.ExitCode(), strings.TrimSpace(h.process.GetStderr()))}
+		return []string{fmt.Sprintf("watcher exited before teardown (code %d): %s", h.process.exitCode(), strings.TrimSpace(h.process.stderr.String()))}
 	}
-	if err := syscall.Kill(-h.process.Pid(), syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
+	if err := syscall.Kill(-h.process.pid(), syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
 		return []string{"signal watcher: " + err.Error()}
 	}
-	done := make(chan struct{})
-	go func() {
-		_ = h.process.Wait() // the exit code is checked below
-		close(done)
-	}()
 	select {
-	case <-done:
+	case <-h.process.done:
 	case <-time.After(h.stopTimeout):
-		if err := h.process.KillTree(); err != nil {
+		if err := h.process.killTree(); err != nil {
 			return []string{fmt.Sprintf("watcher ignored SIGTERM for %s and could not be killed: %v", h.stopTimeout, err)}
 		}
-		<-done
+		if err := h.process.waitWithin(10 * time.Second); err != nil {
+			return []string{err.Error()}
+		}
 		return []string{fmt.Sprintf("watcher ignored SIGTERM for %s and was killed", h.stopTimeout)}
 	}
-	if code := h.process.ExitCode(); code != 0 {
-		return []string{fmt.Sprintf("watcher exited %d on SIGTERM: %s", code, strings.TrimSpace(h.process.GetStderr()))}
+	if code := h.process.exitCode(); code != 0 {
+		return []string{fmt.Sprintf("watcher exited %d on SIGTERM: %s", code, strings.TrimSpace(h.process.stderr.String()))}
 	}
 	return nil
 }
@@ -188,6 +184,43 @@ func describeEvent(event map[string]any) string {
 	default:
 		return ""
 	}
+}
+
+// watcherEvent is a watcher event in the shape the verification UI renders
+// (Metadata["events"]): the page-reported fields folded onto text/url/status/detail.
+type watcherEvent struct {
+	Type   string `json:"type"`
+	Text   string `json:"text,omitempty"`
+	URL    string `json:"url,omitempty"`
+	Status int    `json:"status,omitempty"`
+	Detail string `json:"detail,omitempty"`
+}
+
+// reportedEvents folds the watcher's raw NDJSON events onto watcherEvent: an
+// alert's details and a page error's stack become detail, a page error's
+// message and a response's method become text.
+func reportedEvents(events []map[string]any) []watcherEvent {
+	reported := make([]watcherEvent, 0, len(events))
+	for _, event := range events {
+		text := func(key string) string {
+			if value, ok := event[key]; ok && value != nil {
+				return fmt.Sprint(value)
+			}
+			return ""
+		}
+		out := watcherEvent{Type: text("type"), Text: text("text"), URL: text("url"), Detail: text("details")}
+		switch out.Type {
+		case "pageerror":
+			out.Text, out.Detail = text("message"), text("stack")
+		case "response":
+			out.Text = text("method")
+		}
+		if status, ok := event["status"].(float64); ok {
+			out.Status = int(status)
+		}
+		reported = append(reported, out)
+	}
+	return reported
 }
 
 // lineWriter hands each complete line written to it to onLine.

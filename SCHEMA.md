@@ -71,7 +71,7 @@ field is left undocumented.
 
 Type settings live in `lint.linters.<name>` and `test.frameworks.<name>`. Test names are `go`, `ginkgo`, `jest`, `vitest`, `playwright`, and `fixture`. Each accepts `args` and `runtime`; nonempty argument lists replace inherited lists. Native arguments control tool concurrency and soft budgets, while runtime CPU/memory/deadline settings terminate processes that exceed caps. Sampling can permit short bursts beyond a cap.
 
-Fixtures run in process unless an explicit CPU, memory, or timeout cap is active. Capped invocations run in a supervised worker, including their setup, build, daemons, recordings, and profiling. Environment and niceness settings alone apply to child commands without changing the parent. Fixture native arguments append to each exec step's argv. Built-in per-test deadlines alone do not trigger worker isolation.
+Fixtures run in process unless an explicit CPU, memory, or timeout cap is active. Capped invocations run in a supervised worker, including their setup, build, daemons, traces, and profiling. Environment and niceness settings alone apply to child commands without changing the parent. Fixture native arguments append to each exec step's argv. Built-in per-test deadlines alone do not trigger worker isolation.
 
 ```yaml
 runtime:
@@ -265,7 +265,7 @@ See [MANUAL.md](MANUAL.md#gavel-todos) for the lifecycle model itself (steps,
 | `todos.run` | prompt spec | see below | field-wise override | AI spec for the `run` (implement) step. Overrides the `ai:` base field-wise. |
 | `todos.plan` | prompt spec | see below | field-wise override | AI spec for the `plan` step (read-only investigation that produces a reviewable plan). |
 | `todos.triage` | prompt spec | see below | field-wise override | AI spec for the `triage` step: a read-only pass that compacts a TODO's description and reviews its verification fixture. Auxiliary — never picked automatically, only run with `--step triage`. |
-| `todos.triageNew` | prompt spec | `api:luna:high` | field-wise override | AI spec for `triage.new` after creation. Requires a title and taxonomy labels; searches the workspace for duplicates and requests approval before duplicate closure, merge, or parenting. |
+| `todos.triageNew` | prompt spec | `api:luna:high` | field-wise override | AI spec for `triage.new` after creation. Gives the new TODO a specific title and taxonomy labels through the todo tools and searches the workspace for duplicates; closing it as a duplicate or merging it (`todo_close`, `todo_merge`) asks for approval, while relabelling, linking and parenting do not. |
 | `todos.merge` | prompt spec | see below | field-wise override | AI spec for the merge prompt behind `gavel todos merge`: a one-shot pass that folds several TODOs into one title, body, verification fixture and plan. It records no run, so it is not a lifecycle step. |
 | `todos.verify` | Captain `api.Spec` | `{model: {mode: agent}}`, no model name | field-wise override | Spec the `verify` step (and `gavel todos check`) grades the definition of done as. No `prompt:` field — the checklist is generated from the TODO's acceptance criteria, not a template. |
 | `todos.checkConcurrency` | int | `4` | last non-zero wins | How many TODOs `gavel todos check` (and the verification phase after a bulk triage) checks at once. |
@@ -296,7 +296,7 @@ definition. A step named like a built-in step (`plan`,
 | `todos.lifecycle.file` | string | Path to a lifecycle YAML document, relative to the project root. |
 | `todos.lifecycle.name` | string | Name of the lifecycle; defaults to the built-in `todos`. |
 | `todos.lifecycle.subject` | map[string]string | Extra subject declarations a custom step's predicates may read, field → CEL type (`string`, `bool`, `int`, `double`, `dyn`, `list<string>`, `list<dyn>`, `map<string,dyn>`). |
-| `todos.lifecycle.steps` | object[] | Steps to replace or add: `{name, prompt, envelope, when, inputs, spec, outcomes, auxiliary}`. `outcomes` is a list of `{status, when}` pairs evaluated in order — first true wins, none true is an error. |
+| `todos.lifecycle.steps` | object[] | Steps to replace or add: `{name, prompt, events, tools, when, inputs, spec, outcomes, auxiliary}`. `events` is the non-empty, unique vocabulary of the step's result event (`verify` must declare exactly `[passed, failed]`); `tools` names the todo tool sets the step runs with (`todos`, `ask`, `pr`; `verify` takes none). `outcomes` is a list of `{status, when}` pairs evaluated in order — first true wins, none true is an error. |
 
 A custom step carries its own run configuration inline under its `spec:` field
 in `todos.lifecycle.steps`; `todos.steps.<name>` (above) is the per-project

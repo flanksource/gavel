@@ -8,7 +8,7 @@ import {
   loadLastTodoRunOptions,
   reconcileTodoRunOptions,
   rememberTodoRunOptions,
-  runActionConfig,
+  runActionPresentation,
   runSpec,
   TodoRunContextError,
   todoRunOptionsForRuntimeChange,
@@ -48,7 +48,7 @@ export function TodoRunRuntimeBar({
         families={buildRunFamilies(context)}
         models={context.models ?? []}
         reasoningEfforts={context.efforts}
-        ariaLabel={`${runActionConfig[action].label} runtime`}
+        ariaLabel={`${runActionPresentation(action, context).label} runtime`}
         className="min-w-0"
         onChange={runtime => onChange(todoRunOptionsForRuntimeChange({ action, context, options, runtime }))}
       />
@@ -87,8 +87,8 @@ export function TodoRunActionButton({
   // starting a new branch, and the choice rides on the dispatched options.
   branchChoice?: RunBranchChoice | null;
 }) {
-  const config = runActionConfig[action];
   const { context, loading: contextLoading, error: contextError } = useTodoRunContext({ dir });
+  const config = runActionPresentation(action, context);
   const [selectedOptions, setSelectedOptions] = useState<TodoRunOptions | null>(null);
   useEffect(() => setSelectedOptions(null), [action, context]);
   const [reuseBranch, setReuseBranch] = useState(true);

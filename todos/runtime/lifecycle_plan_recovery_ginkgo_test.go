@@ -36,7 +36,7 @@ var _ = Describe("recovering the plan of a failed plan run", func() {
 		DeferCleanup(func() { resolveSessionPlan = original })
 	}
 
-	failedPlanRun := &todos.ExecutionResult{Success: false, EndStatus: types.EndFailed, ErrorMessage: "agent crashed"}
+	failedPlanRun := &todos.ExecutionResult{Success: false, ErrorMessage: "agent crashed"}
 
 	It("keeps the attempt when Captain reports the session has no plan", func(ctx SpecContext) {
 		resolveWith(fmt.Errorf("resolve plan of session: %w: session has no plan", captaincli.ErrNoPlan))

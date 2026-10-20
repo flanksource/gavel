@@ -1,4 +1,5 @@
-import type { Snapshot } from '@flanksource/clicky-ui/data';
+import type { LinterResult, Snapshot } from '@flanksource/clicky-ui/data';
+import type { TracesStatus } from '@flanksource/gavel/testrunner';
 import { queryOptions } from '@tanstack/react-query';
 
 // TestRunView mirrors the Go pr/ui.testRunView served by /api/tests.
@@ -29,35 +30,13 @@ export interface TestRunsResponse {
   projects: ProjectRuns[];
 }
 
-// LintViolation / LinterResult mirror gavel's models.Violation and
-// linters.LinterResult JSON, which /api/tests/run returns under `lint`.
-export interface LintViolation {
-  file?: string;
-  line?: number;
-  column?: number;
-  message?: string;
-  code?: string;
-  source?: string;
-  rule?: { pattern?: string; package?: string; method?: string } | null;
-  Severity?: string;
-}
-
-export interface LinterResult {
-  linter: string;
-  work_dir?: string;
-  success?: boolean;
-  skipped?: boolean;
-  // null when the linter errored before producing findings (Go marshals a nil slice as null).
-  violations: LintViolation[] | null;
-  error?: string;
-  file_count?: number;
-  rule_count?: number;
-}
-
 // RunSnapshot is the clicky test-runner Snapshot plus gavel's lint section,
-// which the clicky type omits.
+// which the clicky type omits. `lint` is gavel's linters.LinterResult JSON, as
+// /api/tests/run returns it, in the shape clicky's LintResults renders.
 export interface RunSnapshot extends Omit<Snapshot, 'status' | 'tests'> {
-  status: Snapshot['status'] & { lint_run?: boolean };
+  // traces carries the run's trace stores with their mounts as the server that
+  // returned the snapshot serves them (relative to a run server, under /api/project-runs/<id>).
+  status: Snapshot['status'] & { lint_run?: boolean; traces?: TracesStatus };
   // Go marshals a nil tests slice as null for lint-only runs.
   tests: Snapshot['tests'] | null;
   lint?: LinterResult[];

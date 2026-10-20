@@ -109,14 +109,14 @@ steps:
 
   - id: chrome
     kind: browser
-    profile: { fresh: true }
+    profile: {}
 
   - id: todo
     kind: todo
     dir: $WORKSPACE
     create:
       title: greeting thing
-      triage: true
+      step: triage.new
       body: |
         add a greeting helper
 
@@ -139,8 +139,8 @@ steps:
     dir: $WORKSPACE
     # Wait for the applied outcome (the rename), not just the run state.
     wait:
-      until: "triage.state == 'completed' && todo.title != 'greeting thing'"
-      failWhen: "triage.state in ['failed', 'cancelled'] || todo.status == 'ask'"
+      until: "run.state == 'completed' && todo.title != 'greeting thing'"
+      failWhen: "run.state in ['failed', 'cancelled']"
       timeout: 90s
     cel: todo.title == 'Add Greeting helper to greet package' && 'api' in todo.labels
 

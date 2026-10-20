@@ -32,6 +32,12 @@ type Kind interface {
 	Execute(ctx context.Context, step *StepContext) (StepOutcome, error)
 }
 
+// StepPlanner resolves kind-specific defaults across the whole fixture before execution.
+// Implementations may normalize their own Config fields without performing external work.
+type StepPlanner interface {
+	PrepareSteps([]StepSpec) error
+}
+
 // Observer is implemented by kinds whose state can be polled after Execute —
 // a todo's status, a service's readiness, a browser snapshot. Only kinds that
 // implement it may carry a `wait:` policy; validation rejects the rest.
@@ -44,6 +50,14 @@ type Observer interface {
 // Fixture-declared fields override it field by field.
 type DefaultWaiter interface {
 	DefaultWait(step StepSpec) *WaitPolicy
+}
+
+// FailureCauser is implemented by observing kinds that can name, from a wait's
+// last outputs, the domain reason it did not succeed (a todo run's recorded
+// error). The step's failure message leads with it, ahead of the wait's own
+// condition; an empty cause adds nothing.
+type FailureCauser interface {
+	FailureCause(outputs map[string]any) string
 }
 
 // BackgroundKind is implemented by kinds that can run for the rest of the
@@ -65,6 +79,13 @@ type SelfTemplating interface {
 	TemplatesOwnConfig()
 }
 
+// RawConfigKeys is implemented by kinds with top-level config keys that are
+// left unrendered, because the kind templates them itself against variables
+// that only exist while it runs (exec's goProfiles args take `{{.path}}`).
+type RawConfigKeys interface {
+	RawConfigKeys() []string
+}
+
 // BackgroundHandle is a running background step. Stop ends it and returns its
 // verdict, which is reported as that step's result.
 type BackgroundHandle interface {
@@ -81,10 +102,15 @@ type StepSpec struct {
 	Export     map[string]string `yaml:"export,omitempty" json:"export,omitempty"`
 	Override   bool              `yaml:"override,omitempty" json:"override,omitempty"`
 	Background bool              `yaml:"background,omitempty" json:"background,omitempty"`
-	Wait       *WaitPolicy       `yaml:"wait,omitempty" json:"wait,omitempty"`
-	Retry      *RetryPolicy      `yaml:"retry,omitempty" json:"retry,omitempty"`
-	Timeout    *Duration         `yaml:"timeout,omitempty" json:"timeout,omitempty"`
-	Config     json.RawMessage   `yaml:"-" json:"config,omitempty"`
+	// ContinueOnError reports the step's failure without skipping the steps
+	// after it: they do not depend on it.
+	ContinueOnError bool         `yaml:"continueOnError,omitempty" json:"continueOnError,omitempty"`
+	Wait            *WaitPolicy  `yaml:"wait,omitempty" json:"wait,omitempty"`
+	Retry           *RetryPolicy `yaml:"retry,omitempty" json:"retry,omitempty"`
+	Timeout         *Duration    `yaml:"timeout,omitempty" json:"timeout,omitempty"`
+	// Traces arms traces around this step, replacing the document's.
+	Traces *TraceSpecs     `yaml:"traces,omitempty" json:"traces,omitempty"`
+	Config json.RawMessage `yaml:"-" json:"config,omitempty"`
 	// Defaults are the document's `defaults:`, merged under Wait/Retry/Timeout
 	// field by field when the step runs. Set by the parser, never by a step.
 	Defaults *StepDefaults `yaml:"-" json:"defaults,omitempty"`
@@ -98,7 +124,7 @@ type StepDefaults struct {
 }
 
 // StepSpecKeys are the envelope keys; everything else on a step is Config.
-var StepSpecKeys = []string{"id", "name", "kind", "cel", "export", "override", "background", "wait", "retry", "timeout"}
+var StepSpecKeys = []string{"id", "name", "kind", "cel", "export", "override", "background", "continueOnError", "wait", "retry", "timeout", "traces"}
 
 // EffectiveTimeout is the step's hard cap: its own `timeout:`, else the
 // document default; nil when neither declares one.
@@ -153,8 +179,20 @@ func (s *StepContext) Expand(text string) (string, error) {
 	return s.Scope.Expand(text, s.vars())
 }
 
-// Environ is the subprocess environment for this step: the fixture Env.
-func (s *StepContext) Environ() []string { return s.Scope.Env.Environ() }
+// ChildEnv is the environment a process this step starts inherits: the
+// fixture Env with its armed traces' exports (RunOptions.ChildEnv).
+func (s *StepContext) ChildEnv() map[string]string { return childEnv(s.Scope, s.Opts.Traces) }
+
+// Environ is ChildEnv as sorted KEY=VALUE pairs, for os/exec.
+func (s *StepContext) Environ() []string {
+	env := s.ChildEnv()
+	pairs := make([]string, 0, len(env))
+	for key, value := range env {
+		pairs = append(pairs, key+"="+value)
+	}
+	sort.Strings(pairs)
+	return pairs
+}
 
 func (s *StepContext) vars() map[string]any {
 	vars := map[string]any{}

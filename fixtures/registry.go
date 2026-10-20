@@ -2,12 +2,34 @@ package fixtures
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/flanksource/captain/pkg/api"
 
-	"github.com/flanksource/gavel/fixtures/record"
 	"github.com/flanksource/gavel/processruntime"
 )
+
+// ChildEnv is the environment every process a fixture starts inherits: the
+// fixture scope's Env (process, trace exports of file- and run-scope traces,
+// setup, front matter, step exports), with the fixture's test-scope trace
+// exports over every variable no step exported. Every kind that launches a
+// child builds its environment here, so an armed trace observes it.
+func (o RunOptions) ChildEnv() (map[string]string, error) {
+	if o.Scope == nil {
+		return nil, fmt.Errorf("fixtures: no fixture scope to build a child environment from")
+	}
+	return childEnv(o.Scope, o.Traces), nil
+}
+
+func childEnv(scope *StepScope, armed *FixtureTraces) map[string]string {
+	env := scope.Env.Map()
+	for key, value := range armed.Env() {
+		if scope.Env.Origin(key) == "" {
+			env[key] = value
+		}
+	}
+	return env
+}
 
 // RunOptions provides configuration options for executing fixture tests.
 // It controls execution behavior including working directory, verbosity, and caching.
@@ -36,16 +58,10 @@ type RunOptions struct {
 	// credentials.
 	Setup *PreparedSetup
 
-	// Recorder is the runtime state a fixture type needs to run under the
-	// recorders watching its file — nil when nothing is recording it. Here for
-	// the same reason as Setup: a proxy address is runtime state, not part of the
-	// fixture's declaration.
-	Recorder *RecorderContext `json:"-" yaml:"-"`
-
-	// Record is the recorder declaration in force for this fixture — its own
-	// `record:` or the run-wide default — so RunNode can refuse a recorder that
-	// has no implementation before the fixture runs. Nil records nothing.
-	Record *record.Spec
+	// Traces are the traces armed for this fixture — nil when it traces
+	// nothing. Here for the same reason as Setup: a proxy address is runtime
+	// state, not part of the fixture's declaration.
+	Traces *FixtureTraces `json:"-" yaml:"-"`
 
 	// DaemonPort is the port the file's `daemon:` was started on, exposed to
 	// exec fixtures as the `{{.port}}` template variable. Zero means no daemon.

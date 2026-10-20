@@ -21,6 +21,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -49,11 +50,13 @@ type Options struct {
 	// Prompt names the template to render. Empty means the default run prompt.
 	// It is independent of Mode: several prompts share one behaviour class.
 	Prompt string
-	// Envelope is the structured result the prompt returns. Empty derives it from
-	// Mode, so a caller that only knows the behaviour class still gets the right
-	// schema for the two prompts that predate named selection.
-	Envelope EnvelopeKind
-	Mode     types.RunMode // ModeRun or ModePlan
+	// Events is the vocabulary of the envelope's event: the lifecycle step's
+	// declared events, enumerated in the run's schema.
+	Events []string
+	// RawFixture renders each verification fixture verbatim, for a prompt that
+	// reviews it rather than runs it.
+	RawFixture bool
+	Mode       types.RunMode // ModeRun or ModePlan
 	// Spec is the canonical Captain run configuration. Render consumes
 	// Prompt.User as the TODO body override and preserves the resolved runtime.
 	Spec api.Spec
@@ -105,7 +108,7 @@ func TemplateData(todoList []*types.TODO, opts Options) map[string]any {
 	data := map[string]any{
 		"multiple":     len(todoList) > 1,
 		"count":        len(todoList),
-		"body":         Sections(todoList, opts.WorkDir, opts.Envelope == EnvelopeTriage || opts.Envelope == EnvelopeTriageNew),
+		"body":         Sections(todoList, opts.WorkDir, opts.RawFixture),
 		"existingPlan": opts.ExistingPlan,
 		"backlog":      opts.Backlog,
 		"labels":       opts.Labels,
@@ -162,7 +165,7 @@ func Render(todoList []*types.TODO, opts Options) (captainai.Request, captainai.
 	}
 	req := opts.Spec
 
-	schema, err := EnvelopeSchemaJSON(opts.envelope())
+	schema, err := EnvelopeSchemaJSON(opts.Events)
 	if err != nil {
 		return captainai.Request{}, captainai.Config{}, err
 	}
@@ -171,9 +174,20 @@ func Render(todoList []*types.TODO, opts Options) (captainai.Request, captainai.
 	// template/body override cannot touch a separate field. It is set identically
 	// on every turn of the run session (see the executor), which is what the
 	// claude-agent per-turn byte-equality guard requires.
+	prURL, err := linkedPRURL(todoList)
+	if err != nil {
+		return captainai.Request{}, captainai.Config{}, err
+	}
 	req.Prompt.User = user
 	req.Prompt.SchemaJSON = schema
 	req.Prompt.Source = "todos." + opts.promptName()
+	if prURL != "" {
+		req.Prompt.Metadata = maps.Clone(req.Prompt.Metadata)
+		if req.Prompt.Metadata == nil {
+			req.Prompt.Metadata = map[string]string{}
+		}
+		req.Prompt.Metadata[PRURLMetadataKey] = prURL
+	}
 	if err := req.Validate(); err != nil {
 		return captainai.Request{}, captainai.Config{}, fmt.Errorf("validate todos %s spec: %w", opts.promptName(), err)
 	}
@@ -183,6 +197,32 @@ func Render(todoList []*types.TODO, opts Options) (captainai.Request, captainai.
 	return req, captainai.Config{Model: req.Model, Budget: req.Budget}, nil
 }
 
+// PRURLMetadataKey is the prompt metadata key carrying the URL of the PR the
+// rendered todos are linked to. Prompt-context hooks match on it rather than on
+// the rendered prose, which a template override is free to reword.
+const PRURLMetadataKey = "gavel.pr.url"
+
+// PRWriteMetadataKey is set to "true" on a run that commits and pushes each
+// completed turn to its linked PR, so the PR context hook can tell the agent how
+// its work is published and which threads it may report addressed.
+const PRWriteMetadataKey = "gavel.pr.write"
+
+// linkedPRURL is the one PR the todos are linked to, or "" when none is. Todos
+// linked to different PRs cannot share a run: it works on one source branch.
+func linkedPRURL(todoList []*types.TODO) (string, error) {
+	url := ""
+	for _, todo := range todoList {
+		if todo.PR == nil || todo.PR.URL == "" {
+			continue
+		}
+		if url != "" && url != todo.PR.URL {
+			return "", fmt.Errorf("todos are linked to different PRs: %s and %s", url, todo.PR.URL)
+		}
+		url = todo.PR.URL
+	}
+	return url, nil
+}
+
 func templateSource(opts Options) (string, error) {
 	if strings.TrimSpace(opts.Template) != "" {
 		return opts.Template, nil
@@ -190,36 +230,31 @@ func templateSource(opts Options) (string, error) {
 	return Default(opts.promptName())
 }
 
-// envelope resolves which structured result this run expects, falling back to
-// the behaviour class for callers that predate named prompts.
-func (o Options) envelope() EnvelopeKind {
-	if o.Envelope != "" {
-		return o.Envelope
-	}
-	return envelopeFor(o.Mode)
-}
-
-// EnvelopeSchemaJSON is the JSON schema of a prompt's structured final result.
+// EnvelopeSchemaJSON is the JSON schema of a step's structured final result,
+// types.Envelope with `event` enumerating the step's events. It is flat — no
+// $ref, which some backends refuse to emit — and closed, so a field the
+// envelope does not carry is rejected rather than silently dropped.
+//
 // The executor computes it once per run session and threads the same bytes to
-// every turn (initial, retry, and feedback) so the claude-agent
-// provider's per-turn byte-equality guard holds by identity.
-func EnvelopeSchemaJSON(kind EnvelopeKind) (json.RawMessage, error) {
-	var v any
-	switch kind {
-	case EnvelopePlan:
-		v = &types.PlanEnvelope{}
-	case EnvelopeResult:
-		v = &types.ResultEnvelope{}
-	case EnvelopeTriage:
-		v = &types.TriageEnvelope{}
-	case EnvelopeTriageNew:
-		v = &types.TriageNewEnvelope{}
-	default:
-		return nil, fmt.Errorf("unknown envelope %q", kind)
+// every turn (initial, retry, and feedback) so the claude-agent provider's
+// per-turn byte-equality guard holds by identity.
+func EnvelopeSchemaJSON(events []string) (json.RawMessage, error) {
+	if len(events) == 0 {
+		return nil, fmt.Errorf("envelope schema: the step declares no events")
 	}
-	raw, err := api.SchemaJSON(v)
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"success": map[string]any{"type": "boolean", "description": "Whether the work this step asked for was done"},
+			"event":   map[string]any{"type": "string", "enum": events, "description": "What happened, from the step's events"},
+			"comment": map[string]any{"type": "string", "minLength": 1, "description": "Markdown account of the run, recorded as its history entry"},
+		},
+		"required":             []string{"success", "event", "comment"},
+		"additionalProperties": false,
+	}
+	raw, err := json.MarshalIndent(schema, "", "  ")
 	if err != nil {
-		return nil, fmt.Errorf("build %s envelope schema: %w", kind, err)
+		return nil, fmt.Errorf("build envelope schema: %w", err)
 	}
 	return raw, nil
 }
@@ -273,10 +308,7 @@ func Prompts() []prompts.Prompt {
 	defs := builtins()
 	registry := make([]prompts.Prompt, 0, len(defs))
 	for _, def := range defs {
-		configPath := "todos." + def.Name
-		if def.Name == "triage.new" {
-			configPath = prompts.TodosTriageNew
-		}
+		configPath := "todos." + def.ConfigKey
 		registry = append(registry, prompts.Prompt{
 			ID:          configPath,
 			Title:       def.Title,

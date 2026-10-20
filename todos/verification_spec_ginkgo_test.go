@@ -123,7 +123,7 @@ var _ = Describe("TODO verification runtime spec", func() {
 			Expect(dod.Declared()).To(BeTrue(), "the rest of the verification still defines the run's done")
 		},
 		Entry("setup", "setup:\n  checkout:\n    worktree:\n      mode: new", "setup"),
-		Entry("record", "record:\n  http:\n    mode: mitm", "record"),
+		Entry("traces", "traces:\n  - kind: http_proxy\n    params: {mode: mitm}", "traces"),
 		Entry("build", "build: make build", "build"),
 		Entry("daemon", "daemon: ./serve", "daemon"),
 		Entry("files", "files: '**/*.fixture.md'", "files"),

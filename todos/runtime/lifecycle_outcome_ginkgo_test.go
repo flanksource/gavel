@@ -60,8 +60,13 @@ var _ = Describe("lifecycle outcomes on the native runtime", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred())
 		return admission
 	}
-	// completed is a triage run that returned its verdict.
-	completed := &todos.ExecutionResult{Success: true, EndStatus: types.EndCompleted, Summary: "Triaged."}
+	// succeeded is a run that returned a successful envelope with one event.
+	succeeded := func(event, comment string, verify *api.VerifyReport) lifecycle.StepResult {
+		return lifecycle.StepResult{
+			Run: lifecycle.RunFacts{State: lifecycle.RunSucceeded}, Verify: verify,
+			Envelope: lifecycle.Envelope{Success: true, Event: event, Comment: comment},
+		}
+	}
 
 	// outcomeOf classifies a synthetic result the way RunStep does.
 	outcomeOf := func(todo *types.TODO, step lifecycle.Step, execution *todos.ExecutionResult, facts lifecycle.StepResult) (*lifecycle.StepOutcome, string) {
@@ -71,22 +76,6 @@ var _ = Describe("lifecycle outcomes on the native runtime", Ordered, func() {
 		status, err := host.Def.Outcome(step, lc, facts)
 		Expect(err).NotTo(HaveOccurred())
 		return &lifecycle.StepOutcome{Step: step, Status: status, Result: facts, Execution: execution}, status
-	}
-
-	// triageOutcome is a finished triage run carrying one verdict. Triage's own
-	// outcome is always `keep` — the host applies the verdict, and any status it
-	// writes comes from there.
-	triageOutcome := func(todo *types.TODO, envelope *types.TriageEnvelope) (*lifecycle.StepOutcome, string) {
-		GinkgoHelper()
-		execution := &todos.ExecutionResult{
-			Success: true, ExecutorName: "headless-claude", EndStatus: types.EndCompleted,
-			Summary: envelope.Summary, Triage: envelope,
-		}
-		facts := lifecycle.StepResult{
-			Run:      lifecycle.RunFacts{State: lifecycle.RunSucceeded},
-			Envelope: lifecycle.Envelope{Summary: envelope.Summary, EndStatus: "completed"},
-		}
-		return outcomeOf(todo, stepNamed("triage"), execution, facts)
 	}
 
 	lifecycleEvents := func(todo *types.TODO) []native.Event {
@@ -143,16 +132,11 @@ var _ = Describe("lifecycle outcomes on the native runtime", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred())
 		const markdown = "# Plan\n\n1. Build the widget."
 		execution := &todos.ExecutionResult{
-			Success: true, ExecutorName: "headless-claude", EndStatus: types.EndCompleted,
+			Success: true, ExecutorName: "headless-claude",
 			Summary: "The agent created a plan.", Plan: &types.PlanResult{Status: types.PlanNew, Content: markdown},
 		}
 		admit(todo, "plan", types.ModePlan, "sess-plan-new", execution)
-		facts := lifecycle.StepResult{
-			Run:      lifecycle.RunFacts{State: lifecycle.RunSucceeded},
-			Envelope: lifecycle.Envelope{Summary: execution.Summary, EndStatus: "completed"},
-			Plan:     &lifecycle.PlanFacts{Status: "new", Content: markdown},
-		}
-		outcome, status := outcomeOf(todo, stepNamed("plan"), execution, facts)
+		outcome, status := outcomeOf(todo, stepNamed("plan"), execution, succeeded("new", execution.Summary, nil))
 		Expect(status).To(Equal(string(types.StatusReview)))
 
 		Expect(host.OnOutcome(ctx, todo, stepNamed("plan"), outcome, status)).To(Succeed())
@@ -176,16 +160,11 @@ var _ = Describe("lifecycle outcomes on the native runtime", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(approved.Status).To(Equal(types.StatusPending))
 		execution := &todos.ExecutionResult{
-			Success: true, ExecutorName: "headless-claude", EndStatus: types.EndCompleted,
+			Success: true, ExecutorName: "headless-claude",
 			Summary: "The existing plan is unchanged.", Plan: &types.PlanResult{Status: types.PlanUnchanged},
 		}
 		admit(approved, "plan", types.ModePlan, "sess-plan-unchanged", execution)
-		facts := lifecycle.StepResult{
-			Run:      lifecycle.RunFacts{State: lifecycle.RunSucceeded},
-			Envelope: lifecycle.Envelope{Summary: execution.Summary, EndStatus: "completed"},
-			Plan:     &lifecycle.PlanFacts{Status: "unchanged"},
-		}
-		outcome, status := outcomeOf(approved, stepNamed("plan"), execution, facts)
+		outcome, status := outcomeOf(approved, stepNamed("plan"), execution, succeeded("unchanged", execution.Summary, nil))
 		Expect(status).To(Equal(string(types.StatusPending)))
 
 		Expect(host.OnOutcome(ctx, approved, stepNamed("plan"), outcome, status)).To(Succeed())
@@ -197,49 +176,6 @@ var _ = Describe("lifecycle outcomes on the native runtime", Ordered, func() {
 		Expect(lifecycleEvents(approved)).To(HaveLen(2))
 	})
 
-	It("parks a run that asks questions, and a failed resume leaves it parked", func() {
-		todo, err := provider.Create(ctx, todos.CreateRequest{Title: "Ask about the database", Body: "Migrate it", Status: types.StatusPending})
-		Expect(err).NotTo(HaveOccurred())
-		execution := &todos.ExecutionResult{
-			Success: true, ExecutorName: "headless-claude", EndStatus: types.EndAsk,
-			Summary:   "Which database should the migration target?",
-			Questions: []types.AgentQuestion{{Text: "Which database should the migration target?"}},
-			// The envelope the agent returned: the run row is where the todo reads
-			// its open questions back from.
-			OutputJSON: map[string]any{
-				"summary": "Which database should the migration target?", "endStatus": "ask",
-				"questions": []any{map[string]any{"text": "Which database should the migration target?"}},
-			},
-		}
-		admit(todo, "plan", types.ModePlan, "sess-ask", execution)
-		facts := lifecycle.StepResult{
-			Run:       lifecycle.RunFacts{State: lifecycle.RunWaiting},
-			Envelope:  lifecycle.Envelope{Summary: execution.Summary, EndStatus: "ask"},
-			Questions: []any{map[string]any{"text": execution.Questions[0].Text}},
-		}
-		outcome, status := outcomeOf(todo, stepNamed("plan"), execution, facts)
-		Expect(status).To(Equal(string(types.StatusAsk)))
-
-		Expect(host.OnOutcome(ctx, todo, stepNamed("plan"), outcome, status)).To(Succeed())
-
-		Expect(todo.Status).To(Equal(types.StatusAsk))
-		Expect(todo.Questions).To(HaveLen(1))
-		run, err := provider.captain.GetPromptRun(ctx, *issueOf(todo).ActivePromptRunID)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(run.State).To(Equal(captaindb.PromptRunStateWaiting))
-
-		// Admission is the seam a resume fails at before anything is dispatched:
-		// a mismatched continuation is refused, and the todo stays parked rather
-		// than being marked failed for a run that never started (55fa405b).
-		_, err = provider.PrepareRun(ctx, todo, todos.RunPreparation{
-			Mode: types.ModeRun, Prompt: "run", ExecutorName: "headless-claude", Resume: true,
-		})
-		Expect(err).To(MatchError(todos.ErrRunResumeModeMismatch))
-		Expect(provider.reloadTODO(ctx, todo, todo.CWD)).To(Succeed())
-		Expect(todo.Status).To(Equal(types.StatusAsk))
-		Expect(lifecycleEvents(todo)).To(HaveLen(1))
-	})
-
 	It("verifies a run whose definition of done passed", func() {
 		todo, err := provider.Create(ctx, todos.CreateRequest{
 			Title: "Ship the widget", Body: "Build it\n\n## Verification\n\n```bash\ntrue\n```\n", Status: types.StatusPending,
@@ -247,15 +183,11 @@ var _ = Describe("lifecycle outcomes on the native runtime", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred())
 		report := &api.VerifyReport{Ran: true, Passed: true}
 		execution := &todos.ExecutionResult{
-			Success: true, ExecutorName: "headless-claude", EndStatus: types.EndCompleted, Summary: "Built the widget.",
+			Success: true, ExecutorName: "headless-claude", Summary: "Built the widget.",
 			DoD: &todos.DoDOutcome{Ran: true, Passed: true, Report: report},
 		}
 		admit(todo, "run", types.ModeRun, "sess-run-pass", execution)
-		facts := lifecycle.StepResult{
-			Run:      lifecycle.RunFacts{State: lifecycle.RunSucceeded},
-			Envelope: lifecycle.Envelope{Summary: execution.Summary, EndStatus: "completed"},
-			Verify:   report,
-		}
+		facts := succeeded("completed", execution.Summary, report)
 		outcome, status := outcomeOf(todo, stepNamed("run"), execution, facts)
 		Expect(status).To(Equal(string(types.StatusVerified)))
 
@@ -273,15 +205,11 @@ var _ = Describe("lifecycle outcomes on the native runtime", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred())
 		report := &api.VerifyReport{Ran: true, Passed: false, Reason: "1 check failed"}
 		execution := &todos.ExecutionResult{
-			Success: true, ExecutorName: "headless-claude", EndStatus: types.EndCompleted, Summary: "Built the gadget.",
+			Success: true, ExecutorName: "headless-claude", Summary: "Built the gadget.",
 			DoD: &todos.DoDOutcome{Ran: true, Passed: false, Report: report},
 		}
 		admit(todo, "run", types.ModeRun, "sess-run-fail", execution)
-		facts := lifecycle.StepResult{
-			Run:      lifecycle.RunFacts{State: lifecycle.RunSucceeded},
-			Envelope: lifecycle.Envelope{Summary: execution.Summary, EndStatus: "completed"},
-			Verify:   report,
-		}
+		facts := succeeded("completed", execution.Summary, report)
 		outcome, status := outcomeOf(todo, stepNamed("run"), execution, facts)
 		Expect(status).To(Equal(string(types.StatusUnverified)))
 
@@ -293,111 +221,35 @@ var _ = Describe("lifecycle outcomes on the native runtime", Ordered, func() {
 		Expect(issue.ExecutionState).To(Equal(native.ExecutionVerificationFailed))
 	})
 
-	It("never writes a status for a triage verdict of done", func() {
+	// Triage writes through its tools during the run; its outcome is keep, and
+	// the one lifecycle_outcome event records the event it reported and every
+	// write its tools made.
+	It("keeps the status for a triage event and records the run's tool writes", func() {
 		todo, err := provider.Create(ctx, todos.CreateRequest{Title: "Triage me", Body: "Already shipped", Status: types.StatusPending})
 		Expect(err).NotTo(HaveOccurred())
+		const comment = "This already landed; labelled it."
 		execution := &todos.ExecutionResult{
-			Success: true, ExecutorName: "headless-claude", EndStatus: types.EndCompleted, Summary: "This already landed.",
-			Triage: &types.TriageEnvelope{
-				ResultEnvelope: types.ResultEnvelope{Summary: "This already landed.", EndStatus: types.EndCompleted},
-				Verdict:        types.VerdictDone, Status: string(types.StatusCompleted),
-			},
+			Success: true, ExecutorName: "headless-claude", Summary: comment,
+			Envelope:   &types.Envelope{Success: true, Event: "done", Comment: comment},
+			ToolWrites: []todos.ToolWrite{{Name: "todo_labels", Ref: todo.ShortID}},
 		}
 		admit(todo, "triage", types.ModePlan, "sess-triage", execution)
-		facts := lifecycle.StepResult{
-			Run:      lifecycle.RunFacts{State: lifecycle.RunSucceeded},
-			Envelope: lifecycle.Envelope{Summary: execution.Summary, EndStatus: "completed"},
-		}
-		outcome, status := outcomeOf(todo, stepNamed("triage"), execution, facts)
+		outcome, status := outcomeOf(todo, stepNamed("triage"), execution, succeeded("done", comment, nil))
 		Expect(status).To(Equal(lifecycle.OutcomeKeep))
 
 		Expect(host.OnOutcome(ctx, todo, stepNamed("triage"), outcome, status)).To(Succeed())
 
-		Expect(todo.Status).To(Equal(types.StatusPending), "a done verdict is a claim the definition of done must prove")
+		Expect(todo.Status).To(Equal(types.StatusPending), "a done event is a claim the definition of done must prove")
 		Expect(issueOf(todo).Status).To(Equal(native.StatusOpen))
 		events := lifecycleEvents(todo)
 		Expect(events).To(HaveLen(1))
-		Expect(payloadOf(events[0])).To(HaveKeyWithValue("status", lifecycle.OutcomeKeep))
-	})
-
-	// duplicate-of is one of the two verdicts that close a TODO, and the close is a
-	// soft delete so the history survives.
-	It("closes a duplicate into its survivor", func() {
-		survivor, err := provider.Create(ctx, todos.CreateRequest{Title: "Fix the parser", Body: "Real one", Status: types.StatusPending})
-		Expect(err).NotTo(HaveOccurred())
-		duplicate, err := provider.Create(ctx, todos.CreateRequest{Title: "Parser is broken", Body: "Same thing", Status: types.StatusPending})
-		Expect(err).NotTo(HaveOccurred())
-		admit(duplicate, "triage", types.ModePlan, "sess-triage-duplicate", completed)
-
-		outcome, status := triageOutcome(duplicate, &types.TriageEnvelope{
-			ResultEnvelope: types.ResultEnvelope{Summary: "Already covered.", EndStatus: types.EndCompleted},
-			Verdict:        types.VerdictDuplicateOf,
-			DuplicateOf:    survivor.ShortID,
-			Comment:        survivor.ShortID + " has the fixture",
-		})
-		Expect(host.OnOutcome(ctx, duplicate, stepNamed("triage"), outcome, status)).To(Succeed())
-
-		Expect(issueOf(duplicate).Status).To(Equal(native.StatusCancelled), "a duplicate is soft-deleted, keeping its history")
-		Expect(issueOf(survivor).Status).To(Equal(native.StatusOpen), "the survivor is untouched")
-	})
-
-	// A retire closes the TODO too, with no survivor to hand the work to. Before
-	// this the verdict recorded its rationale and left the TODO open in the
-	// backlog, so a triaged-and-retired item came back round on the next pass.
-	It("retires an obsolete TODO, keeping the rationale", func() {
-		todo, err := provider.Create(ctx, todos.CreateRequest{Title: "Fix /todos/new", Body: "Route is gone", Status: types.StatusPending})
-		Expect(err).NotTo(HaveOccurred())
-		admit(todo, "triage", types.ModePlan, "sess-triage-retire", completed)
-
-		rationale := "The /todos/new route was deleted in 1060a1b0; nothing left to fix."
-		outcome, status := triageOutcome(todo, &types.TriageEnvelope{
-			ResultEnvelope: types.ResultEnvelope{Summary: "Obsolete.", EndStatus: types.EndCompleted},
-			Verdict:        types.VerdictRetire,
-			Comment:        rationale,
-		})
-		Expect(status).To(Equal(lifecycle.OutcomeKeep), "the host applies the verdict; the step writes no status")
-
-		Expect(host.OnOutcome(ctx, todo, stepNamed("triage"), outcome, status)).To(Succeed())
-
-		Expect(issueOf(todo).Status).To(Equal(native.StatusCancelled), "a retired TODO is soft-deleted, keeping its history")
-		events, err := provider.repository.ListEvents(ctx, issueOf(todo).ID)
-		Expect(err).NotTo(HaveOccurred())
-		var comments []string
-		for _, event := range events {
-			if event.Kind == "comment" {
-				comments = append(comments, event.Body)
-			}
-		}
-		Expect(comments).To(ContainElement(ContainSubstring(rationale)), "a close with no rationale is indistinguishable from a lost TODO")
-	})
-
-	// The tier between trusting an agent's duplicate call and finding out after two
-	// TODOs have closed: the agent still runs and its verdict is recorded, but
-	// nothing is written.
-	It("holds a closing verdict back when the host previews retirements", func() {
-		survivor, err := provider.Create(ctx, todos.CreateRequest{Title: "Fix the parser", Body: "Real one", Status: types.StatusPending})
-		Expect(err).NotTo(HaveOccurred())
-		folded, err := provider.Create(ctx, todos.CreateRequest{Title: "Parser is broken", Body: "Same thing", Status: types.StatusPending})
-		Expect(err).NotTo(HaveOccurred())
-		admit(survivor, "triage", types.ModePlan, "sess-triage-preview", completed)
-
-		host.Preview = true
-		DeferCleanup(func() { host.Preview = false })
-
-		outcome, status := triageOutcome(survivor, &types.TriageEnvelope{
-			ResultEnvelope: types.ResultEnvelope{Summary: "One piece of work.", EndStatus: types.EndCompleted},
-			Verdict:        types.VerdictMergeInto,
-			Merges:         []string{folded.ShortID},
-			Body:           "Combined problem statement.\n\n## Acceptance Criteria\n\n- [ ] parses",
-			Priority:       string(types.PriorityHigh),
-		})
-		Expect(host.OnOutcome(ctx, survivor, stepNamed("triage"), outcome, status)).To(Succeed())
-
-		Expect(issueOf(folded).Status).To(Equal(native.StatusOpen), "a previewed fold closes nothing")
-		Expect(issueOf(survivor).Body).To(Equal("Real one"), "the merged body is held back with the fold")
-		Expect(issueOf(survivor).Priority).NotTo(Equal(string(types.PriorityHigh)), "the whole verdict is held, not just the close")
-		// The attempt still lands, so the verdict it reported is reviewable.
-		Expect(lifecycleEvents(survivor)).To(HaveLen(1))
+		Expect(events[0].Body).To(ContainSubstring(comment))
+		payload := payloadOf(events[0])
+		Expect([]any{payload["status"], payload["envelope"], payload["tools"]}).To(Equal([]any{
+			lifecycle.OutcomeKeep,
+			map[string]any{"success": true, "event": "done"},
+			[]any{map[string]any{"name": "todo_labels", "ref": todo.ShortID}},
+		}))
 	})
 
 	It("lists the run history oldest first, each run under its step with the status it landed", func() {
@@ -406,15 +258,11 @@ var _ = Describe("lifecycle outcomes on the native runtime", Ordered, func() {
 		})
 		Expect(err).NotTo(HaveOccurred())
 		planExecution := &todos.ExecutionResult{
-			Success: true, ExecutorName: "headless-claude", EndStatus: types.EndCompleted,
+			Success: true, ExecutorName: "headless-claude",
 			Summary: "The agent created a plan.", Plan: &types.PlanResult{Status: types.PlanNew, Content: "# Plan\n\n1. Trace it."},
 		}
 		planAdmission := admit(todo, "plan", types.ModePlan, "sess-history-plan", planExecution)
-		planOutcome, status := outcomeOf(todo, stepNamed("plan"), planExecution, lifecycle.StepResult{
-			Run:      lifecycle.RunFacts{State: lifecycle.RunSucceeded},
-			Envelope: lifecycle.Envelope{Summary: planExecution.Summary, EndStatus: "completed"},
-			Plan:     &lifecycle.PlanFacts{Status: "new", Content: "# Plan\n\n1. Trace it."},
-		})
+		planOutcome, status := outcomeOf(todo, stepNamed("plan"), planExecution, succeeded("new", planExecution.Summary, nil))
 		planOutcome.Admission = planAdmission
 		Expect(host.OnOutcome(ctx, todo, stepNamed("plan"), planOutcome, status)).To(Succeed())
 		Expect(todo.Status).To(Equal(types.StatusReview))
@@ -423,15 +271,11 @@ var _ = Describe("lifecycle outcomes on the native runtime", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred())
 		report := &api.VerifyReport{Ran: true, Passed: true}
 		runExecution := &todos.ExecutionResult{
-			Success: true, ExecutorName: "headless-claude", EndStatus: types.EndCompleted, Summary: "Traced it.",
+			Success: true, ExecutorName: "headless-claude", Summary: "Traced it.",
 			DoD: &todos.DoDOutcome{Ran: true, Passed: true, Report: report},
 		}
 		runAdmission := admit(approved, "run", types.ModeRun, "sess-history-run", runExecution)
-		runOutcome, status := outcomeOf(approved, stepNamed("run"), runExecution, lifecycle.StepResult{
-			Run:      lifecycle.RunFacts{State: lifecycle.RunSucceeded},
-			Envelope: lifecycle.Envelope{Summary: runExecution.Summary, EndStatus: "completed"},
-			Verify:   report,
-		})
+		runOutcome, status := outcomeOf(approved, stepNamed("run"), runExecution, succeeded("completed", runExecution.Summary, report))
 		runOutcome.Admission = runAdmission
 		Expect(host.OnOutcome(ctx, approved, stepNamed("run"), runOutcome, status)).To(Succeed())
 		Expect(approved.Status).To(Equal(types.StatusVerified))

@@ -129,8 +129,8 @@ describe('Gavel Results section', () => {
     expect(screen.getByText(/No test, lint, or bench data/)).toBeTruthy();
   });
 
-  // The shard detail must render through the testrunner UI's own TestNode /
-  // LintView, so a failing shard reads the same as the results page it links
+  // The shard detail must render through clicky-ui's TestRunner /
+  // LintResults, so a failing shard reads the same as the results page it links
   // to. Asserting on the rendered findings is what catches a regression back to
   // a parallel set of row components.
   it('renders failing tests and lint findings from the artifact shapes', () => {
@@ -170,9 +170,10 @@ describe('Gavel Results section', () => {
     );
 
     // The failing leaf appears in the tree row and again in the detail panel
-    // that carries its message — both come from the testrunner UI.
+    // that carries its message — both come from clicky-ui's test runner, with
+    // the first failure already selected.
     expect(screen.getAllByText('saves records').length).toBeGreaterThan(0);
-    expect(screen.getByText(/expected record to persist/)).toBeTruthy();
+    expect(screen.getAllByText(/expected record to persist/).length).toBeGreaterThan(0);
     // The lint tree groups linter → rule → file exactly as the results page does.
     expect(screen.getAllByText('golangci-lint').length).toBeGreaterThan(0);
     expect(screen.getAllByText('errcheck').length).toBeGreaterThan(0);
@@ -228,6 +229,54 @@ describe('Gavel Results section', () => {
     expect(screen.getByText('Reproduce locally')).toBeTruthy();
     expect(screen.getByText('gavel test --pr 57')).toBeTruthy();
     expect(screen.getByText('gavel lint --pr 57')).toBeTruthy();
+  });
+
+  // Timed-out tests are already inside the failed count, so they annotate the
+  // failed figure rather than adding a separate total.
+  it('annotates the failed count with timed-out tests only when there are some', () => {
+    const { unmount } = renderPRDetail(
+      <PRDetailPanel
+        pr={makePR()}
+        detail={{ gavelResults: [makeGavelShard({ testsTotal: 12, testsPassed: 9, testsFailed: 3, testsTimedOut: 1 })] }}
+        loading={false}
+      />,
+    );
+
+    expect(screen.getByText('need triage (1 timed out)')).toBeTruthy();
+    unmount();
+
+    renderPRDetail(
+      <PRDetailPanel
+        pr={makePR()}
+        detail={{ gavelResults: [makeGavelShard({ testsTotal: 12, testsPassed: 9, testsFailed: 3 })] }}
+        loading={false}
+      />,
+    );
+
+    expect(screen.getByText('need triage')).toBeTruthy();
+    expect(screen.queryByText(/timed out/)).toBeNull();
+  });
+
+  it('sums timed-out tests across shards and annotates each shard badge', () => {
+    renderPRDetail(
+      <PRDetailPanel
+        pr={makePR()}
+        detail={{
+          gavelResults: [
+            makeGavelShard({ artifactId: 1, stickyId: 'gavel-test-pg15', testsTotal: 6, testsFailed: 3, testsTimedOut: 1 }),
+            makeGavelShard({ artifactId: 2, stickyId: 'gavel-test-pg16', testsTotal: 6, testsFailed: 2 }),
+          ],
+        }}
+        loading={false}
+      />,
+    );
+
+    expect(screen.getByText('need triage (1 timed out)')).toBeTruthy();
+
+    fireEvent.click(screen.getByText('Per-shard breakdown'));
+
+    expect(screen.getByTitle('3 failed (1 timed out)')).toBeTruthy();
+    expect(screen.getByTitle('2 failed')).toBeTruthy();
   });
 
   it('omits the reproduce block for a shard with nothing to re-run', () => {

@@ -183,3 +183,5 @@ func (promptKind) DefaultWait(fixtures.StepSpec) *fixtures.WaitPolicy {
 		FailWhen: "launch.failed || size(session.errors) > 0",
 	}
 }
+
+func (promptKind) FailureCause(outputs map[string]any) string { return runFailureCause(outputs) }

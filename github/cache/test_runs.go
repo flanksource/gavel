@@ -111,9 +111,8 @@ func (s *Store) GetTestRun(ctx context.Context, dir, runID string) (*TestRunCach
 }
 
 // UpsertTestRuns writes the run summaries and advances the workspace cursor in
-// one transaction. SyncedAt is stamped now on every call so the read-path TTL
-// resets even when a scan found no new runs (rows empty). lastRunTS is the new
-// high-watermark the caller computed (max of the prior cursor and any new runs).
+// one transaction, stamping SyncedAt now. lastRunTS is the new high-watermark
+// the caller computed (max of the prior cursor and any new runs).
 func (s *Store) UpsertTestRuns(ctx context.Context, dir string, rows []TestRunCache, lastRunTS int64) error {
 	if s.Disabled() {
 		return nil

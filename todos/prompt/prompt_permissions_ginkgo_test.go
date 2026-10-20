@@ -15,13 +15,23 @@ func TestPromptPermissions(t *testing.T) {
 }
 
 var _ = Describe("the run prompt permission posture", func() {
-	It("declares native edit approval without a preset or an explicit tool policy", func() {
+	It("declares auto approval with AskUserQuestion as its only tool policy", func() {
 		req, _, err := renderResolvedForTest([]*types.TODO{newTestTODO("edit-parser", "Update the parser")}, Options{Mode: types.ModeRun})
 		gomega.Expect(err).NotTo(gomega.HaveOccurred())
-		gomega.Expect(req.Permissions).To(gomega.Equal(api.Permissions{Mode: api.PermissionAcceptEdits}))
+		gomega.Expect(req.Permissions).To(gomega.Equal(api.Permissions{Mode: api.PermissionAuto, Tools: api.Tools{"AskUserQuestion": api.ToolPolicyDeny}}))
 	})
 
 	for _, runtime := range api.AllRuntimes() {
+		// API runtimes honour no posture at all, so they never ran todos; every
+		// runtime that honoured the former acceptEdits posture must honour this one.
+		It("is honoured by "+runtime.String()+" wherever acceptEdits was", func() {
+			req, _, err := renderResolvedForTest([]*types.TODO{newTestTODO("edit-parser", "Update the parser")}, Options{Mode: types.ModeRun})
+			gomega.Expect(err).NotTo(gomega.HaveOccurred())
+			capabilities := api.PermissionCapabilitiesFor(runtime)
+			support := capabilities.ModeSupport(req.Permissions.Mode)
+			gomega.Expect(support.Honoured()).To(gomega.Equal(capabilities.ModeSupport(api.PermissionAcceptEdits).Honoured()), "%s: %+v", runtime, support)
+		})
+
 		It("passes the tool-policy guard for "+runtime.String(), func() {
 			req, _, err := renderResolvedForTest([]*types.TODO{newTestTODO("edit-parser", "Update the parser")}, Options{Mode: types.ModeRun})
 			gomega.Expect(err).NotTo(gomega.HaveOccurred())
@@ -32,17 +42,15 @@ var _ = Describe("the run prompt permission posture", func() {
 	}
 })
 
-// Triage proposes and gavel writes, so the agent stays read-only — but deciding
-// two TODOs are the same work needs the other one's body, and the backlog index
-// carries only an excerpt. The two lookups are scoped to their subcommands: an
-// allow on `gavel todos:*` would also cover edit, delete and run.
+// Triage stays read-only on the code; every TODO read and write goes through
+// the todo tools, which validate and record it, never through the gavel CLI.
 var _ = Describe("the triage prompt permission posture", func() {
 	var permissions api.Permissions
 
 	BeforeEach(func() {
 		req, _, err := renderResolvedForTest(
 			[]*types.TODO{newTestTODO("triage-parser", "Triage the parser")},
-			Options{Prompt: "triage", Envelope: EnvelopeTriage},
+			Options{Prompt: "triage", RawFixture: true},
 		)
 		gomega.Expect(err).NotTo(gomega.HaveOccurred())
 		permissions = req.Permissions
@@ -52,9 +60,10 @@ var _ = Describe("the triage prompt permission posture", func() {
 		gomega.Expect(permissions.Mode).To(gomega.Equal(api.PermissionPlan))
 	})
 
-	It("allows reading a backlog candidate in full", func() {
-		gomega.Expect(permissions.Tools.AllowList()).To(gomega.ContainElements(
-			"Bash(gavel todos get:*)", "Bash(gavel todos list:*)"))
+	It("reads backlog candidates through the todo tools, not the gavel CLI", func() {
+		for _, allowed := range permissions.Tools.AllowList() {
+			gomega.Expect(allowed).NotTo(gomega.ContainSubstring("gavel todos"))
+		}
 	})
 
 	// PR candidates come from the persisted PR index, which `gavel pr search`
@@ -79,3 +88,14 @@ var _ = Describe("the triage prompt permission posture", func() {
 		}
 	})
 })
+
+// todo prompts ask a human through todo_ask, which parks the question on the
+// dashboard; the native AskUserQuestion has no answer path on a todo run.
+var _ = DescribeTable("every todo prompt denies the native AskUserQuestion",
+	func(name string) {
+		req, _, err := renderResolvedForTest([]*types.TODO{newTestTODO("ask-parser", "Ask about the parser")}, Options{Prompt: name, RawFixture: true})
+		gomega.Expect(err).NotTo(gomega.HaveOccurred())
+		gomega.Expect(req.Permissions.Tools.DenyList()).To(gomega.ContainElement("AskUserQuestion"))
+	},
+	Entry("run", "run"), Entry("plan", "plan"), Entry("triage", "triage"), Entry("triage.new", "triage.new"),
+)

@@ -2,7 +2,10 @@ package fixtures
 
 import (
 	"context"
+	"fmt"
 	"time"
+
+	"github.com/flanksource/gavel/testrunner/parsers"
 )
 
 const ExecutionSnapshotVersion = 1
@@ -48,18 +51,23 @@ type ExecutionStep struct {
 }
 
 type ExecutionNode struct {
-	Key        string           `json:"key"`
-	Name       string           `json:"name"`
-	Kind       ExecutionKind    `json:"kind"`
-	State      ExecutionState   `json:"state"`
-	Origin     *FixtureOrigin   `json:"origin,omitempty"`
-	StartedAt  *time.Time       `json:"started_at,omitempty"`
-	FinishedAt *time.Time       `json:"finished_at,omitempty"`
-	Duration   time.Duration    `json:"duration,omitempty"`
-	Done       int              `json:"done,omitempty"`
-	Total      int              `json:"total,omitempty"`
-	Error      string           `json:"error,omitempty"`
-	Children   []*ExecutionNode `json:"children,omitempty"`
+	Key        string         `json:"key"`
+	Name       string         `json:"name"`
+	Kind       ExecutionKind  `json:"kind"`
+	State      ExecutionState `json:"state"`
+	Origin     *FixtureOrigin `json:"origin,omitempty"`
+	StartedAt  *time.Time     `json:"started_at,omitempty"`
+	FinishedAt *time.Time     `json:"finished_at,omitempty"`
+	Duration   time.Duration  `json:"duration,omitempty"`
+	Done       int            `json:"done,omitempty"`
+	Total      int            `json:"total,omitempty"`
+	Error      string         `json:"error,omitempty"`
+	// PIDs are the processes the fixture started: its services as they launch,
+	// its commands once they exit.
+	PIDs []int `json:"pids,omitempty"`
+	// Traces are the windows of the traces the fixture armed, once it finished.
+	Traces   []parsers.TraceResult `json:"traces,omitempty"`
+	Children []*ExecutionNode      `json:"children,omitempty"`
 }
 
 type ExecutionSummary struct {
@@ -96,4 +104,24 @@ func withFixtureProgress(ctx context.Context, progress func(done, total int) err
 func fixtureProgressFromContext(ctx context.Context) func(done, total int) error {
 	progress, _ := ctx.Value(fixtureProgressKey{}).(func(done, total int) error)
 	return progress
+}
+
+type fixtureProcessKey struct{}
+
+func withFixtureProcess(ctx context.Context, report func(pid int) error) context.Context {
+	return context.WithValue(ctx, fixtureProcessKey{}, report)
+}
+
+// ReportProcess records pid on the progress node of the fixture ctx runs, so
+// a process trace can link the process to it. A fixture run with no progress
+// tracker has no node to record it on.
+func ReportProcess(ctx context.Context, pid int) error {
+	if pid <= 0 {
+		return fmt.Errorf("report process: invalid pid %d", pid)
+	}
+	report, _ := ctx.Value(fixtureProcessKey{}).(func(pid int) error)
+	if report == nil {
+		return nil
+	}
+	return report(pid)
 }

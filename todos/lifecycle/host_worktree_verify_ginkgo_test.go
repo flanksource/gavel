@@ -32,6 +32,9 @@ var _ = Describe("RunStep in-loop verification in a worktree", func() {
 		// scripted agent edits nothing, so there is nothing to commit.
 		def := host.Def.Definition()
 		for i := range def.Steps {
+			// A scripted provider owns its own tool wiring, so the step's tools,
+			// and the broker they bring, have nothing to attach to.
+			def.Steps[i].Tools = nil
 			if def.Steps[i].Name == "run" {
 				def.Steps[i].Spec = &api.Spec{
 					Setup: &shell.Setup{Checkout: &shell.Checkout{
@@ -48,7 +51,7 @@ var _ = Describe("RunStep in-loop verification in a worktree", func() {
 		host.Def = engine
 		todo := hostTodo()
 		todo.VerificationMarkdown = inLinkedWorktree
-		agent := &scriptedProvider{events: scriptedTurn(`{"summary":"Built it.","endStatus":"completed"}`, true)}
+		agent := &scriptedProvider{events: scriptedTurn(`{"success":true,"event":"completed","comment":"Built it."}`, true)}
 
 		outcome, err := host.RunStep(context.Background(), todo, stepNamed(engine, "run"), lifecycle.RunOptions{Provider: agent})
 

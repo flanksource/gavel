@@ -18,7 +18,7 @@ var (
 	fixturesShowStdout      string
 	fixturesShowStderr      string
 	fixturesSchema          bool
-	fixturesRecord          string
+	fixturesTraces          string
 	fixturesBenchmark       bool
 	fixturesBaseline        string
 	fixturesProfile         bool
@@ -83,7 +83,7 @@ func fixturesHelp(cmd *cobra.Command) api.Text {
 		Add(code("  setup:")).Add(dim("                             # Environment prepared once per file (see SETUP)")).NewLine().
 		Add(code("    dotenv: [.env.test]")).NewLine().
 		Add(code("    checkout: {mode: local, worktree: {mode: new}}")).NewLine().
-		Add(code("  record: [ansi, http]")).Add(dim("               # Capture diagnostic artifacts (see RECORDING)")).NewLine().
+		Add(code("  traces: [http_proxy]")).Add(dim("               # Arm trace kinds around each fixture (see TRACES)")).NewLine().
 		Add(code("  files: \"**/*.go\"")).Add(dim("                   # Glob pattern: replicate tests per matching file")).NewLine().
 		Add(code("  codeBlocks: [bash, python]")).Add(dim("         # Languages to execute (default: [bash])")).NewLine().
 		Add(code("  timeout: 30s")).Add(dim("                       # Total timeout for test execution")).NewLine().
@@ -118,7 +118,7 @@ func fixturesHelp(cmd *cobra.Command) api.Text {
 		Add(kv("os", "OS constraint (e.g. \"linux\", \"!darwin\")")).
 		Add(kv("arch", "Architecture constraint (e.g. \"amd64\")")).
 		Add(kv("skip", "Bash command; exit 0 = skip test")).
-		Add(kv("record, recording", "Recorders for this row: ansi, http, sql, clients, all, none")).
+		Add(kv("traces, trace", "Trace kinds for this row (comma-separated), or none")).
 		Add(kv("query", "Query string")).NewLine().
 		Add(sh("Expectation columns")).
 		Add(kv("exit code, exitcode", "Expected exit code (default: 0, \"-\" to skip)")).
@@ -138,7 +138,7 @@ func fixturesHelp(cmd *cobra.Command) api.Text {
 	t = t.Add(h("FORMAT 2: COMMAND BLOCKS")).
 		Append("  Use heading ").Add(code("### command: <test name>")).Append(" followed by code blocks:").NewLine().NewLine().
 		Add(code("  ### command: my test\n  ```yaml\n  cwd: ./testdir\n  exitCode: 0\n  terminal: pty\n  os: linux\n  env:\n    KEY: value\n  ```\n  ```bash\n  echo \"hello world\"\n  ```")).NewLine().NewLine().
-		Append("  YAML fields: ", "text-muted").Add(code("cwd, exitCode, env, timeout, terminal, os, arch, skip, record")).NewLine().NewLine().
+		Append("  YAML fields: ", "text-muted").Add(code("cwd, exitCode, env, timeout, terminal, os, arch, skip, traces")).NewLine().NewLine().
 		Add(sh("Validations")).
 		Append("    ").Add(code("* cel: stdout.contains(\"hello\")")).NewLine().
 		Append("    ").Add(code("* contains: hello")).NewLine().
@@ -323,85 +323,73 @@ func fixturesHelp(cmd *cobra.Command) api.Text {
 		Append("    * ", "text-muted").Append("Environment precedence, highest first: fixture ").Add(code("env:")).Append(" > setup env > injected roots >").NewLine().
 		Append("      ", "text-muted").Append("the inherited process environment. Setup env is additive, not hermetic.").NewLine()
 
-	// Recording
-	t = t.Add(h("RECORDING")).
-		Append("  ").Add(code("record:")).Append(" captures the evidence a failing fixture would otherwise not have: how the").NewLine().
-		Append("  terminal rendered, what HTTP calls the child made, what SQL it issued. Artifacts land").NewLine().
-		Append("  in ").Add(code(".gavel/recordings/")).Append(" and their contents become CEL roots the fixture can assert on.").NewLine().NewLine().
-		Append("  Nothing starts unless a fixture asks for it — no ", "text-muted").Add(code("record:")).Append(", no listeners, no files.", "text-muted").NewLine().NewLine().
+	// Traces
+	t = t.Add(h("TRACES")).
+		Append("  ").Add(code("traces:")).Append(" arms commons-db trace kinds around a fixture and keeps their records in the").NewLine().
+		Append("  run's store, ").Add(code(".gavel/traces/<run>")).Append(" (the newest 20 runs are kept). Each kind's summary of the").NewLine().
+		Append("  fixture's window is the CEL root named by the kind. Nothing starts unless a fixture asks.").NewLine().NewLine().
 		Add(sh("Surfaces")).
-		Add(code("  record: http")).Add(dim("                        # one recorder")).NewLine().
-		Add(code("  record: [ansi, http]")).Add(dim("                # several")).NewLine().
-		Add(code("  record: none")).Add(dim("                        # opt out of a file-level or --record default")).NewLine().
-		Add(code("  record:")).Add(dim("                             # full form")).NewLine().
-		Add(code("    http: {mode: connect, hosts: [\"*.github.com\"], bodies: 64KiB, requireEntries: 1}")).NewLine().
-		Add(code("    ansi: {width: 120, height: 40}")).NewLine().
-		Add(code("    sql:  {mode: proxy, params: false}")).NewLine().NewLine().
-		Append("  Also settable per test (front-matter or a ", "text-muted").Add(code("Record")).Append(" table column) and run-wide with", "text-muted").NewLine().
-		Append("  ", "text-muted").Add(code("--record")).Append(". A per-test value replaces the file's outright. ", "text-muted").Add(code("record: none")).Append(" is how a single", "text-muted").NewLine().
-		Append("  test escapes both.", "text-muted").NewLine().NewLine().
-		Add(sh("Recorders")).
-		Add(kv("http", "Proxies the child through HTTP_PROXY and writes a HAR 1.2 document")).
-		Add(kv("ansi", "Runs the fixture under a PTY and records an asciinema v2 cast")).
-		Add(kv("sql", "Proxies postgres and records every statement as JSONL")).
-		Add(kv("clients", "HAR of gavel's own outbound HTTP calls, which no proxy can see")).NewLine().
-		Append("  A recorder with no implementation ", "text-muted").Append("fails the fixture", "font-bold").Append(" rather than silently recording nothing.", "text-muted").NewLine().NewLine().
-		Add(sh("ANSI")).
-		Append("    * ", "text-muted").Append("Implies ").Add(code("terminal: pty")).Append(" — there is no ANSI to record from a pipe. The cast plays").NewLine().
-		Append("      ", "text-muted").Append("with ").Add(code("asciinema play")).Append("; gavel's extras ride in the header's ").Add(code("_gavel")).Append(" key.").NewLine().
-		Append("    * ", "text-muted").Append("Recording also tracks the settled screen, so ").Add(code("cast.final")).Append(" is what a terminal would").NewLine().
-		Append("      ", "text-muted").Append("show at the end and ").Add(code("cast.duplicates")).Append(" names the lines a redraw left behind twice.").NewLine().
-		Append("    * ", "text-muted").Add(code("maxBytes")).Append(" (4MiB default) caps the recorded event stream, never the fixture's").NewLine().
-		Append("      ", "text-muted").Append("stdout — assertions always see every byte. A cap hit sets ").Add(code("cast.truncated")).Append(".").NewLine().NewLine().
-		Add(sh("HTTP")).
-		Append("    * ", "text-muted").Add(code("mode: connect")).Append(" (default) records one entry per TLS tunnel — host, duration, bytes —").NewLine().
-		Append("      ", "text-muted").Append("without decrypting it. Plain HTTP is always recorded in full. ").Add(code("mode: mitm")).Append(" terminates").NewLine().
-		Append("      ", "text-muted").Append("TLS with an ephemeral CA and is opt-in, because whether a given runtime trusts").NewLine().
-		Append("      ", "text-muted").Append("that CA is best-effort. The CA is never installed into a system trust store.").NewLine().
-		Append("    * ", "text-muted").Add(code("requireEntries: N")).Append(" turns \"recorded nothing\" into a red test, which is the only").NewLine().
-		Append("      ", "text-muted").Append("defence against a child that silently failed to trust the CA.").NewLine().
-		Append("    * ", "text-muted").Add(code("paths: [\"/api/*\"]")).Append(" records only exchanges whose URL path matches a glob, so a").NewLine().
-		Append("      ", "text-muted").Append("page's static assets cannot push the calls under test past the 200-request cap.").NewLine().
-		Append("    * ", "text-muted").Append("Each request carries ").Add(code("query")).Append(" (first value per name), ").Add(code("response_size")).Append(" (bytes) and, with").NewLine().
-		Append("      ", "text-muted").Add(code("bodies:")).Append(", its ").Add(code("body")).Append(", ").Add(code("response_body")).Append(" and — for a whole JSON body — ").Add(code("response_json")).Append(".").NewLine().
-		Append("    * ", "text-muted").Append("A ").Add(code("text/event-stream")).Append(" body is teed as it passes, never held back: the recording has").NewLine().
-		Append("      ", "text-muted").Append("every byte that streamed before it was read, e.g.").NewLine().
-		Append("      ", "text-muted").Add(code("regexp.FindAll([r'event: entry', r.response_body]).size() == 5")).Append(".").NewLine().
-		Append("    * ", "text-muted").Append("Sensitive headers (authorization, cookie, set-cookie, x-api-key, …) are blanked").NewLine().
-		Append("      ", "text-muted").Append("in the artifact itself. That denylist cannot be disabled; ").Add(code("redact:")).Append(" extends it.").NewLine().
-		Append("    * ", "text-muted").Add(code("scope: file")).Append(" (default) shares one proxy across the file, so attributing an entry").NewLine().
-		Append("      ", "text-muted").Append("to one test is a time-slice heuristic — the file's tests overlap. ").Add(code("scope: test")).NewLine().
-		Append("      ", "text-muted").Append("gives each test its own proxy.").NewLine().NewLine().
-		Add(sh("SQL")).
-		Append("    * ", "text-muted").Add(code("mode: proxy")).Append(" (default) points the child at a local postgres proxy and reads a copy").NewLine().
-		Append("      ", "text-muted").Append("of the wire. The DSN comes from ").Add(code("dsn:")).Append(", else ").Add(code("GAVEL_DB_DSN")).Append(" or ").Add(code("DATABASE_URL")).Append(";").NewLine().
-		Append("      ", "text-muted").Append("both are rewritten for the child, along with ").Add(code("PGHOST")).Append("/").Add(code("PGPORT")).Append("/").Add(code("PGDATABASE")).Append(".").NewLine().
-		Append("    * ", "text-muted").Append("The proxy refuses TLS, so the upstream must accept unencrypted connections —").NewLine().
-		Append("      ", "text-muted").Append("true of an embedded or local postgres, not of a managed cloud database.").NewLine().
-		Append("    * ", "text-muted").Add(code("mode: inprocess")).Append(" records ").Append("gavel's own", "font-bold").Append(" queries instead of the child's, through the").NewLine().
-		Append("      ", "text-muted").Append("gorm logger. It is the only way to see a fixture step that runs inside gavel,").NewLine().
-		Append("      ", "text-muted").Append("and it sees nothing a child process does. Bind values follow the database").NewLine().
-		Append("      ", "text-muted").Append("logger's own policy there, not ").Add(code("params:")).Append(".").NewLine().
-		Append("    * ", "text-muted").Add(code("params: true")).Append(" keeps bind values in the artifact. Off by default — bind values carry").NewLine().
-		Append("      ", "text-muted").Append("the row data, which is the likeliest place in a capture for a secret.").NewLine().NewLine().
-		Add(sh("CLIENTS")).
-		Append("    * ", "text-muted").Append("Records the calls ").Append("gavel itself", "font-bold").Append(" makes — GitHub, favicons, a running daemon —").NewLine().
-		Append("      ", "text-muted").Append("as a HAR under the ").Add(code("clients")).Append(" root. A child process's traffic is never in it;").NewLine().
-		Append("      ", "text-muted").Append("that is what ").Add(code("http")).Append(" is for. The two roots have the same shape.").NewLine().
-		Append("    * ", "text-muted").Append("Like ").Add(code("sql: {mode: inprocess}")).Append(" it watches one process, so only one file per run").NewLine().
-		Append("      ", "text-muted").Append("may declare it — a second would capture the first's traffic into its artifact.").NewLine().
-		Append("    * ", "text-muted").Append("Bodies are off unless ").Add(code("bodies:")).Append(" asks for them; the header denylist applies here too.").NewLine().NewLine().
+		Add(code("  traces: http_proxy")).Add(dim("                  # one kind, default params, test scope")).NewLine().
+		Add(code("  traces: [http_proxy, terminal]")).Add(dim("      # several")).NewLine().
+		Add(code("  traces: []")).Add(dim("                          # opt out of a file-level or --traces default")).NewLine().
+		Add(code("  traces:")).Add(dim("                             # full form")).NewLine().
+		Add(code("    - kind: http_proxy")).NewLine().
+		Add(code("      params: {mode: mitm, hosts: [\"*.github.com\"]}")).NewLine().
+		Add(code("      scope: test")).Add(dim("                     # test (default) | file | run")).NewLine().
+		Add(code("      require: count > 0")).Add(dim("              # CEL over the summary; false fails a passing fixture")).NewLine().NewLine().
+		Append("  Also settable per test (command-block YAML, a ", "text-muted").Add(code("Traces")).Append(" table column with the compact form or", "text-muted").NewLine().
+		Append("  ", "text-muted").Add(code("none")).Append(", a fixture document or one of its steps) and run-wide with ", "text-muted").Add(code("--traces")).Append(". A per-test value", "text-muted").NewLine().
+		Append("  replaces the file's outright. An unknown kind or params the kind refuses fail the parse.", "text-muted").NewLine().NewLine().
+		Add(sh("Kinds")).
+		Add(kv("http_proxy", "Recording proxy every child is pointed at (HTTP(S)_PROXY, CA trust vars under mitm)")).
+		Add(kv("pg_proxy", "Postgres wire proxy in front of dsn (DATABASE_URL, PG* rewritten for children)")).
+		Add(kv("terminal", "Runs the command under a PTY and records it; exports as an asciinema cast")).
+		Add(kv("http", "gavel's own outbound HTTP (feature gavel)")).
+		Add(kv("sql_statements", "gavel's own SQL (connections: [self])")).
+		Add(kv("process_tree, process_samples", "Processes under a root and their CPU/memory")).NewLine().
+		Add(sh("Scopes")).
+		Append("    * ", "text-muted").Add(code("test")).Append(" starts a capture around the fixture; its window is the whole stream.").NewLine().
+		Append("    * ", "text-muted").Add(code("file")).Append(" and ").Add(code("run")).Append(" share one capture across the file or run; each fixture's window is").NewLine().
+		Append("      ", "text-muted").Append("marked before and after it, so overlapping rows of one file see each other's records.").NewLine().
+		Append("    * ", "text-muted").Append("Every process a fixture starts — exec, services, browser — inherits the exports; a").NewLine().
+		Append("      ", "text-muted").Append("variable the setup, front matter or a step sets itself wins.").NewLine().NewLine().
 		Add(sh("Asserting")).
-		Add(code("  cel: http.entries == 2 && http.errors == 0")).NewLine().
-		Add(code("  cel: http.requests.filter(r, r.host == \"api.github.com\").size() == 2")).NewLine().
-		Add(code("  cel: http.statuses[\"404\"] == 1 && http.methods[\"GET\"] == 2")).NewLine().
-		Add(code("  cel: cast.duplicates.size() == 0 && cast.duration_ms < 2000")).NewLine().
-		Add(code("  cel: sql.by_op[\"INSERT\"] == 1 && sql.errors == 0")).NewLine().
-		Add(code("  cel: clients.hosts.exists(h, h == \"api.github.com\")")).NewLine().NewLine().
-		Append("  The ", "text-muted").Add(code("http")).Append(" root exists only when the recorder ran, so asserting on a recording that", "text-muted").NewLine().
-		Append("  never happened fails on the missing variable rather than on a zero that looks like", "text-muted").NewLine().
-		Append("  an answer. When it did run every key is present, so ", "text-muted").Add(code("http.errors == 0")).Append(" is legal for a", "text-muted").NewLine().
-		Append("  fixture that made no calls. Per-request detail is capped at 200; the counts are exact.", "text-muted").NewLine()
+		Add(code("  cel: http_proxy.entries == 2 && http_proxy.errors == 0")).NewLine().
+		Add(code("  cel: http_proxy.requests.filter(r, r.host == \"api.github.com\").size() == 2")).NewLine().
+		Add(code("  cel: terminal.exit_code == 0 && terminal.duplicates.size() == 0")).NewLine().
+		Add(code("  cel: pg_proxy.by_op[\"INSERT\"] == 1 && pg_proxy.errors == 0")).NewLine().NewLine().
+		Append("  A trace's root exists only when it was armed; its result (kind, stream, window, count,", "text-muted").NewLine().
+		Append("  summary) rides on the fixture result under ", "text-muted").Add(code("traces")).Append(".", "text-muted").NewLine().NewLine().
+		Append("  The store also holds kinds gavel fills itself, which a fixture does not arm: ", "text-muted").Add(code("stacks")).NewLine().
+		Append("  (goroutine/native stack dumps) and ", "text-muted").Add(code("goprof")).Append(" (the ", "text-muted").Add(code("goProfiles:")).Append(" a command wrote under --profile,", "text-muted").NewLine().
+		Append("  listed with the fixture's traces but not a CEL root).", "text-muted").NewLine()
+
+	t = t.Add(h("PROFILING AND BENCHMARKS")).
+		Add(sh("--profile")).
+		Append("  Reads the fixture process tree's CPU, memory and disk I/O from the run's ").Add(code("process_tree")).Append(" and").NewLine().
+		Append("  ").Add(code("process_samples")).Append(": each step's peaks over its own time, its disk I/O as the delta of the counters.").NewLine().
+		Append("  It also hands each command the destinations its ").Add(code("goProfiles:")).Append(" declare and ingests what it wrote:").NewLine().NewLine().
+		Add(code("  goProfiles:")).NewLine().
+		Add(code("    cpu:")).NewLine().
+		Add(code("      file: cpu.pprof")).Add(dim("                # or directory: — every file written under it")).NewLine().
+		Add(code("      env: CPU_PROFILE")).Add(dim("               # and/or args: [\"-cpuprofile={{.path}}\"]")).NewLine().NewLine().
+		Append("    * ", "text-muted").Append("Paths are relative to a per-fixture dir under ").Add(code(".gavel/profiles/fixtures/")).Append(".").NewLine().
+		Append("    * ", "text-muted").Append("The name (cpu, heap, allocs, mutex, block, goroutine) says which profile it is; any").NewLine().
+		Append("      ", "text-muted").Append("other name is read from the profile's sample types. A file not written is logged and skipped;").NewLine().
+		Append("      ", "text-muted").Append("one that is not a Go pprof profile fails the fixture.").NewLine().
+		Append("    * ", "text-muted").Append("Each file is one ").Add(code("goprof")).Append(" window; download it as ").Add(code("pprof")).Append(" (.pb.gz) for ").Add(code("go tool pprof")).Append(".").NewLine().
+		Append("    * ", "text-muted").Add(code("SQL_PROFILE_FILE")).Append(" (also set by any --max-sql-* limit) is passed to every command for").NewLine().
+		Append("      ", "text-muted").Append("commons-db's GORM SQL logger to write one JSON line per statement.").NewLine().NewLine().
+		Add(sh("--benchmark")).
+		Append("  Records each fixture's and prerequisite's (setup, build, daemon) duration, with its profile and").NewLine().
+		Append("  SQL totals, into ").Add(code(".gavel/benchmarks/fixtures/run-<timestamp>.json")).Append(". Pass a saved report as").NewLine().
+		Append("  ").Add(code("--baseline")).Append(" to compare against it. Limits fail individual fixtures:").NewLine().NewLine().
+		Add(kv("--max-time", "Duration")).
+		Add(kv("--max-memory", "Peak RSS byte size (512MiB)")).
+		Add(kv("--max-io-read, --max-io-write", "Observed disk byte sizes")).
+		Add(kv("--max-sql-time, --max-sql-query", "Total SQL time, slowest statement")).
+		Add(kv("--max-sql-queries, --max-slow-sql", "Statement counts (zero allowed)")).
+		Add(kv("--max-deviation-pct", "Regression vs --baseline: time, peak RSS, disk I/O, SQL")).NewLine()
 
 	// CWD resolution
 	t = t.Add(h("CWD RESOLUTION")).
@@ -443,7 +431,8 @@ func fixturesHelp(cmd *cobra.Command) api.Text {
 		Add(code("  gavel fixtures --benchmark --baseline .gavel/benchmarks/fixtures/run-...json tests.md")).NewLine().
 		Add(code("  gavel fixtures --benchmark --max-time 2s --max-memory 512MiB tests.md")).NewLine().
 		Add(code("  gavel fixtures --benchmark --baseline base.json --max-deviation-pct 15 tests.md")).NewLine().
-		Add(code("  gavel fixtures --profile tests.md")).Add(dim("    # Save process metrics and declared Go pprof files")).NewLine().
+		Add(code("  gavel fixtures --profile --ui tests.md")).Add(dim("  # Process metrics and declared Go pprof files")).NewLine().
+		Add(code("  gavel fixtures --traces http_proxy tests.md")).Add(dim("  # Record every HTTP exchange; assert http_proxy.*")).NewLine().
 		Add(code("  gavel fixtures --no-progress tests.md")).Add(dim("    # Disable progress display")).NewLine().
 		Add(code("  gavel fixtures outline tests.md")).Add(dim("          # Parse and outline without running fixtures")).NewLine().
 		Add(code("  gavel fixtures --schema")).Add(dim("                  # Print the fixture/test JSON schemas and exit")).NewLine().
@@ -473,11 +462,11 @@ func init() {
 	fixturesCmd.Flags().StringVar(&fixturesShowStderr, "show-stderr", string(fixtures.OutputOnFailure),
 		"When to show stderr: Never, OnFailure, Always")
 	fixturesCmd.Flags().BoolVar(&fixturesSchema, "schema", false, "Print fixture editor JSON schemas and exit")
-	fixturesCmd.Flags().StringVar(&fixturesRecord, "record", "",
-		"Record diagnostics for fixtures that declare no `record:` of their own: ansi, http, sql, clients, all (comma-separated)")
-	fixturesCmd.Flags().BoolVar(&fixturesBenchmark, "benchmark", false, "Record and show fixture and prerequisite durations in a JSON report")
-	fixturesCmd.Flags().StringVar(&fixturesBaseline, "baseline", "", "Compare benchmark durations with a saved fixture benchmark JSON report")
-	fixturesCmd.Flags().BoolVar(&fixturesProfile, "profile", false, "Record process CPU, memory, disk I/O, and declared Go pprof files")
+	fixturesCmd.Flags().StringVar(&fixturesTraces, "traces", "",
+		"Trace kinds armed, test-scoped with default params, for fixtures that declare no `traces:` of their own: http_proxy, pg_proxy, terminal, http, sql_statements, process_tree, process_samples (comma-separated)")
+	fixturesCmd.Flags().BoolVar(&fixturesBenchmark, "benchmark", false, "Record and show fixture and prerequisite durations in .gavel/benchmarks/fixtures/run-<timestamp>.json")
+	fixturesCmd.Flags().StringVar(&fixturesBaseline, "baseline", "", "Compare benchmark metrics with a saved fixture benchmark JSON report (see --max-deviation-pct)")
+	fixturesCmd.Flags().BoolVar(&fixturesProfile, "profile", false, "Record the fixture process tree's CPU, memory and disk I/O, and ingest declared goProfiles pprof files into the run's goprof trace")
 	fixturesCmd.Flags().Float64Var(&fixturesMaxDeviationPct, "max-deviation-pct", 0, "Fail fixtures whose measured metrics regress beyond this percentage from --baseline")
 	fixturesCmd.Flags().DurationVar(&fixturesMaxTime, "max-time", 0, "Fail fixtures taking longer than this duration")
 	fixturesCmd.Flags().StringVar(&fixturesMaxMemory, "max-memory", "", "Fail fixtures exceeding this peak RSS byte size (for example 512MiB)")

@@ -18,6 +18,8 @@ import (
 	fixtureverifier "github.com/flanksource/gavel/fixtures/verifier"
 	"github.com/flanksource/gavel/pr/model"
 	"github.com/flanksource/gavel/pr/provider"
+	"github.com/flanksource/gavel/todos"
+	"github.com/flanksource/gavel/todos/tools"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/onsi/ginkgo/v2"
 	"github.com/onsi/gomega"
@@ -69,7 +71,11 @@ func (p *localPRClient) ResolveThread(ctx context.Context, _ int, id string) err
 	return fmt.Errorf("unexpected thread %s", id)
 }
 
-type prLoopProvider struct{ requests []api.Spec }
+type prLoopProvider struct {
+	requests []api.Spec
+	// addressed is the pr_thread_addressed tool the turn reports its threads through.
+	addressed api.ToolDefinition
+}
 
 func (p *prLoopProvider) GetModel() string        { return "fixture-model" }
 func (p *prLoopProvider) GetRuntime() api.Runtime { return api.RuntimeOf(api.OpenAI, api.ModeAgent) }
@@ -85,9 +91,12 @@ func (p *prLoopProvider) ExecuteStream(_ context.Context, req api.Spec) (<-chan 
 	if err := os.WriteFile(filepath.Join(req.Setup.Cwd, "status.json"), []byte(fmt.Sprintf(`{"check":"parser-test","conclusion":"%s","threadId":"remaining"}`, conclusion)), 0600); err != nil {
 		return nil, err
 	}
+	if _, err := p.addressed.Handler(context.Background(), map[string]any{"threadId": thread}); err != nil {
+		return nil, err
+	}
 	ch := make(chan captainai.Event, 3)
 	ch <- captainai.Event{Kind: captainai.EventSystem, SessionID: "pr-loop-session"}
-	ch <- captainai.Event{Kind: captainai.EventText, Text: fmt.Sprintf(`{"summary":"Addressed parser feedback","endStatus":"completed","addressedThreadIds":["%s"]}`, thread)}
+	ch <- captainai.Event{Kind: captainai.EventText, Text: `{"success":true,"event":"completed","comment":"Addressed parser feedback"}`}
 	ch <- captainai.Event{Kind: captainai.EventResult, Success: true}
 	close(ch)
 	return ch, nil
@@ -116,7 +125,9 @@ var _ = ginkgo.Describe("PR turns through Captain", func() {
 		client := &localPRClient{remote: remote, info: model.PRInfo{Number: 27, State: "OPEN", URL: "https://github.com/acme/service/pull/27", HeadRepositoryURL: remote, HeadRefName: "topic", HeadRefOID: initial, ReviewThreads: []model.PRComment{{ThreadID: "addressed", CanResolve: true}, {ThreadID: "remaining", CanResolve: true}}}}
 		target, err := provider.TargetOf(&client.info)
 		gomega.Expect(err).NotTo(gomega.HaveOccurred())
-		state := &prExecution{client: client, number: 27, target: target, snapshot: &model.StatusSnapshot{PR: &client.info}, workDir: work, write: true}
+		state := &prExecution{client: client, number: 27, target: target, snapshot: &model.StatusSnapshot{PR: &client.info}, openThreads: openThreads(&model.StatusSnapshot{PR: &client.info}), workDir: work, write: true, events: []string{"completed", "blocked"}, tools: &tools.Run{}}
+		prTools, err := tools.For([]string{tools.SetPR}, tools.Options{Provider: struct{ todos.Provider }{}, Subject: &types.TODO{ID: "pr-loop-issue"}, Run: state.tools, PRWrite: true})
+		gomega.Expect(err).NotTo(gomega.HaveOccurred())
 		prepared := &preparedStep{class: types.ModeRun, request: api.Spec{Prompt: api.Prompt{User: "Fix the parser."}}}
 		gomega.Expect(state.configure(prepared)).To(gomega.Succeed())
 		prepared.request.Setup.Checkout.Worktree.Path = filepath.Join(root, "run")
@@ -124,9 +135,9 @@ var _ = ginkgo.Describe("PR turns through Captain", func() {
 		fixture, err := fixtureverifier.NewVerifier("| Name | Command | Exit Code | CEL Validation |\n|---|---|---|---|\n| PR CI feedback at pushed head | git --git-dir='" + remote + "' show refs/heads/topic:status.json | 0 | !stdout.contains('FAILURE') |")
 		gomega.Expect(err).NotTo(gomega.HaveOccurred())
 		fixture.Timeout = 10 * time.Second
-		hooks := commit.AgentHooks(commit.AgentHooksOptions{Commits: prepared.request.Workflow.Commits, Meta: commit.AgentRunMetadata{IssueID: "pr-loop-issue", SessionID: "pr-loop-session"}, PRTarget: target, ShouldCommit: completedPRTurn})
+		hooks := commit.AgentHooks(commit.AgentHooksOptions{Commits: prepared.request.Workflow.Commits, Meta: commit.AgentRunMetadata{IssueID: "pr-loop-issue", SessionID: "pr-loop-session"}, PRTarget: target, ShouldCommit: state.completedTurn})
 		hooks = append(hooks, state, &capsetup.Plugin{BaseDir: work}, capverify.New("fixture", fixture))
-		modelProvider := &prLoopProvider{}
+		modelProvider := &prLoopProvider{addressed: toolNamed(prTools, "pr_thread_addressed")}
 		runner := agent.Runner[any]{Provider: modelProvider, Request: prepared.request, Hooks: hooks, MaxIterations: 2, Repo: work, Cwd: work}
 		result, err := runner.Run(ctx)
 		gomega.Expect(err).NotTo(gomega.HaveOccurred())
@@ -134,8 +145,10 @@ var _ = ginkgo.Describe("PR turns through Captain", func() {
 		gomega.Expect(result.Verdicts).To(gomega.HaveLen(2))
 		gomega.Expect(result.Verdicts[0].Report.Passed).To(gomega.BeFalse())
 		gomega.Expect(modelProvider.requests).To(gomega.HaveLen(2))
-		gomega.Expect(modelProvider.requests[1].Prompt.User).To(gomega.ContainSubstring(`"conclusion":"FAILURE"`))
-		gomega.Expect(modelProvider.requests[1].Prompt.User).To(gomega.ContainSubstring(client.resolvedHeads[0]))
+		first, second := modelProvider.requests[0].Prompt.User, modelProvider.requests[1].Prompt.User
+		gomega.Expect(second).To(gomega.HavePrefix(first), "a retry extends the turn-1 prompt with feedback only; nothing rewrites it")
+		gomega.Expect(strings.TrimPrefix(second, first)).To(gomega.ContainSubstring(`"conclusion":"FAILURE"`))
+		gomega.Expect(second).NotTo(gomega.ContainSubstring(`"reviewThreads"`))
 		gomega.Expect(client.resolved).To(gomega.Equal([]string{"addressed", "remaining"}))
 		gomega.Expect(client.resolvedHeads[0]).NotTo(gomega.Equal(initial))
 		gomega.Expect(client.resolvedHeads[1]).NotTo(gomega.Equal(client.resolvedHeads[0]))

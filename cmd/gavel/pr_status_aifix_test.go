@@ -19,6 +19,7 @@ import (
 	"github.com/flanksource/gavel/ai/prfix"
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/pr/model"
+	"github.com/flanksource/gavel/pr/provider"
 	"github.com/flanksource/gavel/prwatch"
 )
 
@@ -135,22 +136,23 @@ func conflictingResult() *prwatch.PRWatchResult {
 		},
 		Conflicts: &github.MergeConflictReport{
 			BaseRefName: "main", HeadRefName: "feat/thing",
-			Files: []github.MergeConflict{{Path: "go.mod", Kind: "content"}},
+			BaseOID: "fedcba9876543210fedcba9876543210fedcba98",
+			Files:   []github.MergeConflict{{Path: "go.mod", Kind: "content"}},
 		},
 	}
 }
 
 func TestPRContextOf_ProjectsTheMergeConflicts(t *testing.T) {
 	got := prContextOf(conflictingResult(), "status")
-	if got.BaseBranch != "main" {
-		t.Errorf("BaseBranch = %q, want main", got.BaseBranch)
+	if got.BaseBranch != "main" || got.BaseSHA != "fedcba9876543210fedcba9876543210fedcba98" {
+		t.Errorf("BaseBranch, BaseSHA = %q, %q; want main and the base commit the rebase replays onto", got.BaseBranch, got.BaseSHA)
 	}
 	if len(got.Conflicts) != 1 || got.Conflicts[0] != (prfix.Conflict{Path: "go.mod", Kind: "content"}) {
 		t.Errorf("Conflicts = %+v, want go.mod (content)", got.Conflicts)
 	}
 
 	// A CONFLICTING verdict git could not reproduce (stale, or no local checkout)
-	// has no files to resolve, so there is no merge to start and nothing to list.
+	// has no files to resolve, so there is no rebase to start and nothing to list.
 	stale := conflictingResult()
 	stale.Conflicts.Files, stale.Conflicts.Unavailable = nil, "GitHub's CONFLICTING verdict looks stale"
 	if got := prContextOf(stale, "status"); len(got.Conflicts) != 0 {
@@ -207,10 +209,11 @@ func hookNames(hooks []any) []string {
 	return names
 }
 
-// Order is load-bearing: setup relocates the run before the merge starts, so the
-// merge lands in the worktree; the commit hooks cut (and conclude the merge)
-// before the verifiers judge the turn.
-func TestPRFixHooks_SetupThenMergeThenCommitThenVerify(t *testing.T) {
+// Order is load-bearing: setup relocates the run before the rebase starts (the
+// commit hooks have no PreRun), so the rebase lands in the worktree; the rebase
+// hook's post-turn push follows the commit pipeline's, and both precede the
+// verifiers judging the turn.
+func TestPRFixHooks_SetupThenCommitThenRebaseThenVerify(t *testing.T) {
 	wf := &api.Workflow{
 		Verify:  &api.Verify{Commands: []string{"true"}},
 		Commits: []api.Commit{{On: api.CommitOnTurn, Mode: api.CommitModeCommit}},
@@ -220,8 +223,14 @@ func TestPRFixHooks_SetupThenMergeThenCommitThenVerify(t *testing.T) {
 		t.Fatal(err)
 	}
 	names := hookNames(hooks)
-	if len(names) != 4 || names[0] != "setup" || names[1] != prFixMergeHookName || names[2] != "commit:turn" {
-		t.Fatalf("hook order = %q, want setup, %s, commit:turn, then the verifier", names, prFixMergeHookName)
+	if len(names) != 4 || names[0] != "setup" || names[1] != "commit:turn" || names[2] != prFixRebaseHookName {
+		t.Fatalf("hook order = %q, want setup, commit:turn, %s, then the verifier", names, prFixRebaseHookName)
+	}
+	if _, ok := hooks[1].(agent.PreRun); ok {
+		t.Errorf("%T has a PreRun that would run before the rebase starts", hooks[1])
+	}
+	if !hooks[2].(*prFixRebaseHook).target.Rebase {
+		t.Error("a conflicting PR's push target must allow the rebase to rewrite the branch")
 	}
 	if _, ok := hooks[3].(*capverify.Plugin); !ok {
 		t.Errorf("last hook = %T, want the workflow's verifier", hooks[3])
@@ -234,8 +243,8 @@ func TestPRFixHooks_SetupThenMergeThenCommitThenVerify(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, name := range hookNames(hooks) {
-		if name == prFixMergeHookName {
-			t.Errorf("a PR with no conflicts must not start a merge; hooks = %q", hookNames(hooks))
+		if name == prFixRebaseHookName {
+			t.Errorf("a PR with no conflicts must not start a rebase; hooks = %q", hookNames(hooks))
 		}
 	}
 }
@@ -281,20 +290,98 @@ func conflictingCheckout(t *testing.T) (string, *github.MergeConflictReport) {
 	}
 }
 
-// The merge is reported on the run's own stream — in order with the agent's
+// The rebase is reported on the run's own stream — in order with the agent's
 // events and kept with the run's notices — not as a detached log line.
-func TestPRFixMergeHook_ReportsTheMergeItStartsOnTheRunStream(t *testing.T) {
+func TestPRFixRebaseHook_ReportsTheRebaseItStartsOnTheRunStream(t *testing.T) {
 	dir, report := conflictingCheckout(t)
 	hc := &agent.HookContext{Context: context.Background(), Response: &captainai.Response{Workspace: &api.Workspace{Cwd: dir}}}
 
-	if err := (&prFixMergeHook{report: report}).PreRun(hc); err != nil {
+	if err := (&prFixRebaseHook{report: report}).PreRun(hc); err != nil {
 		t.Fatalf("PreRun: %v", err)
 	}
 
 	notices := hc.Workspace().Notices
-	want := "[pre-run] merging origin/main into feat/thing: 1 conflicted — go.mod"
+	want := "[pre-run] rebasing feat/thing onto origin/main: stopped with 1 conflicted — go.mod"
 	if len(notices) != 1 || notices[0].Text != want {
 		t.Fatalf("notices = %+v, want exactly %q", notices, want)
+	}
+}
+
+// publishedCheckout publishes the conflicting checkout's PR branch to a bare
+// remote and returns the push target the run would hold for it.
+func publishedCheckout(t *testing.T) (dir, remote string, report *github.MergeConflictReport, target *provider.RunTarget) {
+	t.Helper()
+	dir, report = conflictingCheckout(t)
+	remote = filepath.Join(t.TempDir(), "source.git")
+	runGit(t, dir, "init", "--bare", remote)
+	runGit(t, dir, "push", remote, "feat/thing")
+	return dir, remote, report, &provider.RunTarget{RepositoryURL: remote, Branch: "feat/thing", HeadSHA: report.HeadOID, Rebase: true}
+}
+
+// A rebase that finished in a turn leaves a clean tree, so the commit pipeline
+// has nothing to push it with; the rebase hook's post-turn push publishes it,
+// and pushes nothing while the rebase is still stopped.
+func TestPRFixRebaseHook_PushesTheRebasedBranchOnceTheRebaseFinishes(t *testing.T) {
+	dir, remote, report, target := publishedCheckout(t)
+	hook := &prFixRebaseHook{report: report, target: target}
+	hc := &agent.HookContext{Context: context.Background(), Response: &captainai.Response{Workspace: &api.Workspace{Cwd: dir}}}
+	if err := hook.PreRun(hc); err != nil {
+		t.Fatalf("PreRun: %v", err)
+	}
+
+	if err := hook.Post(hc, agent.PhaseTurn); err != nil {
+		t.Fatalf("Post while stopped: %v", err)
+	}
+	if got := runGit(t, remote, "rev-parse", "feat/thing"); got != report.HeadOID {
+		t.Fatalf("remote moved to %s while the rebase was still stopped", got)
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("require xz v0.5.20\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, dir, "add", "go.mod")
+	runGit(t, dir, "-c", "core.editor=true", "rebase", "--continue")
+	rebased := runGit(t, dir, "rev-parse", "HEAD")
+
+	if err := hook.Post(hc, agent.PhaseTurn); err != nil {
+		t.Fatalf("Post after the rebase: %v", err)
+	}
+	if got := runGit(t, remote, "rev-parse", "feat/thing"); got != rebased {
+		t.Errorf("remote feat/thing = %s, want the rebased head %s", got, rebased)
+	}
+	if target.HeadSHA != rebased {
+		t.Errorf("target.HeadSHA = %s, want the lease moved to %s", target.HeadSHA, rebased)
+	}
+}
+
+// The push is pinned to the head the run started from (checked, then leased): a push someone made to
+// the PR branch meanwhile fails the turn instead of being overwritten.
+func TestPRFixRebaseHook_RefusesToOverwriteAConcurrentPush(t *testing.T) {
+	dir, remote, report, target := publishedCheckout(t)
+	hook := &prFixRebaseHook{report: report, target: target}
+	hc := &agent.HookContext{Context: context.Background(), Response: &captainai.Response{Workspace: &api.Workspace{Cwd: dir}}}
+	other := filepath.Join(t.TempDir(), "other")
+	runGit(t, dir, "clone", "--branch", "feat/thing", remote, other)
+	runGit(t, other, "-c", "user.email=other@example.com", "-c", "user.name=Other", "commit", "--allow-empty", "-m", "someone else's push")
+	runGit(t, other, "push", "origin", "feat/thing")
+	theirs := runGit(t, other, "rev-parse", "HEAD")
+
+	if err := hook.PreRun(hc); err != nil {
+		t.Fatalf("PreRun: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("require xz v0.5.20\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, dir, "add", "go.mod")
+	runGit(t, dir, "-c", "core.editor=true", "rebase", "--continue")
+
+	err := hook.Post(hc, agent.PhaseTurn)
+
+	if err == nil || !strings.Contains(err.Error(), "advanced") {
+		t.Fatalf("Post err = %v, want the advanced-branch refusal", err)
+	}
+	if got := runGit(t, remote, "rev-parse", "feat/thing"); got != theirs {
+		t.Errorf("remote feat/thing = %s, want their push %s kept", got, theirs)
 	}
 }
 

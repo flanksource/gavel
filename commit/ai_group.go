@@ -12,7 +12,6 @@ import (
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/commons/logger"
 	clickyai "github.com/flanksource/gavel/ai"
-	"github.com/flanksource/gavel/internal/prompting"
 )
 
 //go:embed commit-grouping.prompt
@@ -145,7 +144,6 @@ func groupChangesByAI(ctx context.Context, opts Options, source stagedSource) (g
 	}
 	defer closeAgent(agent, &err)
 
-	prompting.Prepare()
 	resp, err := agent.ExecutePrompt(ctx, clickyai.PromptRequest{
 		Name: "commit grouping", Spec: prepared.Request,
 	})

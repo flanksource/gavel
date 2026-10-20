@@ -11,6 +11,12 @@ import (
 	"github.com/google/uuid"
 )
 
+// scannedAtColumn is a worktree's last status scan. An unchanged scan stamps
+// only the UNLOGGED overview row (o); the logged row (w) keeps the last scan
+// that changed something, the true answer while crash recovery has emptied the
+// overview. GREATEST ignores the NULL of a missing overview row.
+const scannedAtColumn = `GREATEST(o.status_scanned_at, w.status_scanned_at)`
+
 type repoRow struct {
 	ID             uuid.UUID
 	RootDir        string
@@ -65,16 +71,26 @@ func (s *Store) Load(ctx context.Context, repoIDs []uuid.UUID) (map[uuid.UUID]St
 	}
 	db := s.db.WithContext(ctx)
 	var repos []repoRow
+	// Every repo has an overview row (schema/171 inserts it with the repo, and
+	// the tracker's start rebuilds the table after crash recovery), so a
+	// generation of 0 can only be read between a crash and that rebuild, whose
+	// announcement then makes every client reload.
 	if err := db.Raw(`
-		SELECT id, root_dir, base_branch, base_sha, current_branch, base_checked_out, refs_scanned_at, generation, error
-		FROM git_repos WHERE id IN ? AND (refs_scanned_at IS NOT NULL OR error IS NOT NULL)`, repoIDs).Scan(&repos).Error; err != nil {
+		SELECT r.id, r.root_dir, r.base_branch, r.base_sha, r.current_branch, r.base_checked_out,
+			GREATEST(o.refs_scanned_at, r.refs_scanned_at) AS refs_scanned_at, COALESCE(o.generation, 0) AS generation, r.error
+		FROM git_repos r
+		LEFT JOIN git_repo_overview o ON o.repo_id = r.id
+		WHERE r.id IN ? AND (r.refs_scanned_at IS NOT NULL OR r.error IS NOT NULL)`, repoIDs).Scan(&repos).Error; err != nil {
 		return nil, fmt.Errorf("load git repos: %w", err)
 	}
 	var worktrees []worktreeRow
 	if err := db.Raw(`
-		SELECT repo_id, path, branch, head_sha, is_primary, detached, prunable, last_commit_at,
-			staged, unstaged, "both", untracked, conflict, adds, dels, touched_at, status_scanned_at, status_error
-		FROM git_worktrees WHERE repo_id IN ? AND removed_at IS NULL ORDER BY repo_id, ordinal`, repoIDs).Scan(&worktrees).Error; err != nil {
+		SELECT w.repo_id, w.path, w.branch, w.head_sha, w.is_primary, w.detached, w.prunable, w.last_commit_at,
+			w.staged, w.unstaged, w."both", w.untracked, w.conflict, w.adds, w.dels, w.touched_at,
+			`+scannedAtColumn+` AS status_scanned_at, w.status_error
+		FROM git_worktrees w
+		LEFT JOIN git_worktree_overview o ON o.repo_id = w.repo_id AND o.path = w.path
+		WHERE w.repo_id IN ? AND w.removed_at IS NULL ORDER BY w.repo_id, w.ordinal`, repoIDs).Scan(&worktrees).Error; err != nil {
 		return nil, fmt.Errorf("load git worktrees: %w", err)
 	}
 	var branches []branchRow
@@ -151,7 +167,7 @@ func (s *Store) Generations(ctx context.Context) (map[uuid.UUID]int64, error) {
 		ID         uuid.UUID
 		Generation int64
 	}
-	if err := s.db.WithContext(ctx).Raw(`SELECT id, generation FROM git_repos`).Scan(&rows).Error; err != nil {
+	if err := s.db.WithContext(ctx).Raw(`SELECT repo_id AS id, generation FROM git_repo_overview`).Scan(&rows).Error; err != nil {
 		return nil, fmt.Errorf("load git repo generations: %w", err)
 	}
 	generations := make(map[uuid.UUID]int64, len(rows))
@@ -168,7 +184,11 @@ func (s *Store) WorktreeFiles(ctx context.Context, repoID uuid.UUID, path string
 		Files           string
 		StatusScannedAt *time.Time
 	}
-	result := s.db.WithContext(ctx).Raw(`SELECT files::text AS files, status_scanned_at FROM git_worktrees WHERE repo_id = ? AND path = ? AND removed_at IS NULL`,
+	result := s.db.WithContext(ctx).Raw(`
+		SELECT w.files::text AS files, `+scannedAtColumn+` AS status_scanned_at
+		FROM git_worktrees w
+		LEFT JOIN git_worktree_overview o ON o.repo_id = w.repo_id AND o.path = w.path
+		WHERE w.repo_id = ? AND w.path = ? AND w.removed_at IS NULL`,
 		repoID, path).Scan(&row)
 	if result.Error != nil {
 		return nil, false, fmt.Errorf("load files of worktree %s: %w", path, result.Error)

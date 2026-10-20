@@ -88,7 +88,7 @@ func (p *Provider) PlanState(ctx context.Context, todo *types.TODO) (todos.PlanS
 }
 
 func successfulPlanAttempt(result *todos.ExecutionResult) bool {
-	if result == nil || !result.Success || result.EndStatus == types.EndFailed || result.EndStatus == types.EndAsk {
+	if result == nil || !result.Success {
 		return false
 	}
 	return strings.TrimSpace(result.ErrorMessage) == ""

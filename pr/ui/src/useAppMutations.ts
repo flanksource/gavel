@@ -1,5 +1,6 @@
 import { useCallback, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { projectApiUrl } from './components/projectApiUrl';
 import { mutationJSON, queryKeys } from './query';
 import type { PRItem, SearchConfig, Snapshot } from './types';
 import { prKey } from './utils';
@@ -12,6 +13,7 @@ export interface AppMutations {
   saveConfig: (config: SearchConfig) => void;
   setIncludeBots: (include: boolean) => void;
   setShowClosed: (show: boolean) => void;
+  setProjectHidden: (change: { name: string; hidden: boolean }) => void;
 }
 
 export function useAppMutations(): AppMutations {
@@ -119,6 +121,22 @@ export function useAppMutations(): AppMutations {
     onSuccess: showClosed => setSnapshot(current => ({ ...current, showClosed })),
     onError: reportError,
   });
+  const projectHiddenMutation = useMutation({
+    mutationFn: ({ name, hidden }: { name: string; hidden: boolean }) => mutationJSON({
+      url: projectApiUrl({ projectName: name, resource: 'hidden' }),
+      method: 'POST',
+      body: { hidden },
+      context: 'Update project visibility',
+    }),
+    onMutate: clearError,
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.projects(), exact: true }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.projectGitSummary(), exact: true }),
+      ]);
+    },
+    onError: reportError,
+  });
 
   return {
     error,
@@ -128,6 +146,7 @@ export function useAppMutations(): AppMutations {
     saveConfig: configMutation.mutate,
     setIncludeBots: botsMutation.mutate,
     setShowClosed: closedMutation.mutate,
+    setProjectHidden: projectHiddenMutation.mutate,
   };
 }
 

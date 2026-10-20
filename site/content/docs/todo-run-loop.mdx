@@ -1,7 +1,8 @@
 ---
 title: Todo run loop
 description: The lifecycle engine, steps, outcomes, sessions, and fixture-backed definitions of done.
-order: 7
+order: 11
+parent: todo-engine
 ---
 
 `gavel todos run` drives an AI coding agent through the project's **todo lifecycle** — an ordered list of steps, each a captain prompt plus the CEL predicates that decide when it applies and what its result means.
@@ -10,11 +11,11 @@ order: 7
 gavel todos run 90ec80f0
 gavel todos steps 90ec80f0 # [!code highlight] [!code note:where this todo stands]
 gavel todos run --step plan 90ec80f0 # [!code highlight] [!code note:reviewable plan]
-gavel todos run --commit 90ec80f0 # [!code focus] [!code note:full loop]
+gavel todos run --step run --commit 90ec80f0 # [!code focus] [!code note:implementation step]
 gavel todos check 90ec80f0 # [!code info] [!code note:manual definition of done]
 ```
 
-Line 1 runs whichever lifecycle step applies next. Line 2 reports that without dispatching anything. Line 3 asks for a named step — here, a reviewable plan. Line 4 runs implementation, fixture-backed checks, and auto-commit as one workflow. Line 5 re-runs the same definition of done without an implementation agent.
+Line 1 runs whichever lifecycle step applies next. Line 2 reports that without dispatching anything. Line 3 asks for a reviewable plan. Line 4 explicitly selects implementation after any plan is approved; its workflow includes fixture-backed checks and commits. `--commit` alone does not select an implementation step. Line 5 reruns the definition of done without an implementation agent.
 
 ## The lifecycle
 
@@ -34,9 +35,10 @@ The built-in lifecycle's steps, in the order `Next` considers them:
 | Step | Prompt | Auxiliary | Applies when |
 |------|--------|-----------|--------------|
 | `triage` | `todos.triage` | yes | only when named with `--step triage` |
-| `plan` | `todos.plan` | no | status is draft/pending/failed/unverified and there is no unapproved plan |
-| `verify` | `todos.verify` | no | the last `run` succeeded and hasn't been verified since |
-| `run` | `todos.run` | no | status is pending/failed/unverified/verified/completed and any plan is approved |
+| `plan` | `todos.plan` | no | status is draft/pending/failed/unverified and no plan exists |
+| `verify` | `todos.verify` | no | a definition of done exists, status is pending/unverified, and the last successful run has not been verified since |
+| `run` | `todos.run` | no | status is pending/failed/unverified and any existing plan is approved |
+| `triage.new` | `todos.triage.new` | yes | only when explicitly dispatched, including creation-time triage |
 
 ## Steps and sessions
 
@@ -50,7 +52,7 @@ Line 1 names a step explicitly and pins the model (compact `mode:model:effort` f
 
 Gavel records session IDs on the todo so later runs can resume or focus the same work. A todo in `ask` stores the agent's blocking questions; answering resumes the prior session and applies the same outcome mapping.
 
-Use `--runtime-profile <name-or-id>` to select reusable Captain defaults for a step. See [Todo runtime profiles](/docs/todo-runtime-profiles) for repository profile files, selection and layer precedence, and retired settings.
+Use repeatable `--preset <name-or-id>` to select reusable Captain defaults for a step, or `--no-presets` to clear prompt and project preset defaults. See [Runtime presets](/docs/todo-runtime-profiles) for catalog sources, selection, layer precedence, and migration from retired profiles.
 
 ## Result envelopes
 
@@ -142,3 +144,25 @@ gavel todos check 90ec80f0 # [!code warning]
 The first command feeds failing checks back into the implementation loop before
 committing successful work. The second command can be run later without starting
 an implementation agent.
+
+## Worktrees and continuations
+
+The built-in implementation step prepares a new worktree through Captain's `setup.checkout.worktree` configuration. Planning and verification have their own execution posture. Use `--dirty` to carry uncommitted and ignored files into a new implementation worktree, and `--reuse-branch` to continue on the previous run's branch for one TODO. `--resume` continues its recorded agent session.
+
+```bash
+gavel todos run 90ec80f0 --step run --dry-run
+gavel todos run 90ec80f0 --resume --reuse-branch
+gavel todos run 90ec80f0 --step triage --preview
+```
+
+`--preview` runs triage and reports a closure verdict without applying it. It is different from `--dry-run`, which never dispatches an agent. `--force` bypasses live-run ownership checks, so use it only after inspecting the existing run; it does not resolve competing edits.
+
+`--commit=false` does not clear a declared workflow commit policy. Gavel rejects that combination before dispatch, including for the built-in implementation step. Review the resolved workflow in dry-run output when commit behavior matters.
+
+A verified or completed TODO is finished. Reopen it explicitly before dispatching another implementation step. The default lifecycle returns a run without a verification verdict to pending; an agent's completion message alone does not establish verified state.
+
+## Configure and inspect the loop
+
+Use `todos.lifecycle` to replace or add steps, and `todos.steps.<name>` to configure a custom step's Captain spec. Built-in steps keep their typed `todos.run`, `todos.plan`, `todos.triage`, and `todos.verify` blocks. `when` and ordered `outcomes` are CEL predicates; a result that matches no outcome fails rather than retaining a misleading status.
+
+`gavel todos steps` shows the lifecycle definition, and `gavel todos steps <ref>` evaluates it against a particular issue. `gavel config --resolve` shows configured prompt specs; the run's `--dry-run` output shows its resolved layer trace. The [Configuration reference](/docs/configuration-reference) contains every lifecycle field, and [Prompt overrides](/docs/prompt-overrides) includes a custom-step example.

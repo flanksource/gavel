@@ -76,7 +76,7 @@ func (s *Server) gitGenerations(ctx context.Context) (map[string]int64, error) {
 	if err != nil {
 		return nil, err
 	}
-	projects, err := LoadProjects()
+	projects, err := LoadProjects(LoadProjectsOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -150,7 +150,7 @@ func (s *Server) handleGitFocus(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	project, err := GetProject(request.Project)
+	project, err := getVisibleProject(request.Project)
 	if err != nil {
 		respondError(w, statusForProjectErr(err), err.Error())
 		return

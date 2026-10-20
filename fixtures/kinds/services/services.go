@@ -41,7 +41,9 @@ func (Kind) Schema() json.RawMessage { return schema }
 
 // Execute starts every entry in order, rendering each against the outputs of
 // the entries before it, and fails fast — stopping what it already started —
-// on the first entry that cannot start or become ready.
+// on the first entry that cannot start or become ready. The failed outcome
+// still carries the outputs recorded so far, including the failing entry's
+// readiness probes.
 func (Kind) Execute(ctx context.Context, step *fixtures.StepContext) (fixtures.StepOutcome, error) {
 	began := time.Now()
 	if step.Spec.ID == "" {
@@ -56,13 +58,16 @@ func (Kind) Execute(ctx context.Context, step *fixtures.StepContext) (fixtures.S
 	started := map[string]any{}
 	for _, raw := range raws {
 		svc, err := startEntry(ctx, step, raw, started)
-		if err == nil {
+		if svc != nil {
 			run.entries = append(run.entries, svc)
+		}
+		if err == nil {
 			started[raw.name] = svc.outputs
 			err = exports.exportEntry(raw, svc.outputs, started)
 		}
 		if err != nil {
-			return fixtures.StepOutcome{}, errors.Join(fmt.Errorf("services step %q: %w", step.Spec.ID, err), run.stop(context.WithoutCancel(ctx)))
+			return fixtures.StepOutcome{Outputs: run.outputs(nil)},
+				errors.Join(fmt.Errorf("services step %q: %w", step.Spec.ID, err), run.stop(context.WithoutCancel(ctx)))
 		}
 	}
 	name := step.Spec.Name
@@ -104,13 +109,20 @@ func startEntry(ctx context.Context, step *fixtures.StepContext, raw rawEntry, s
 		svc.exec, svc.outputs, err = startExec(ctx, step, entry, port)
 	case "deps":
 		svc.deps, svc.outputs, err = startDeps(ctx, step, entry)
+	case "dbtest":
+		svc.database, svc.outputs, err = startDBTest(ctx, step, entry)
+		if svc.outputs != nil {
+			svc.outputs["default"] = entry.DBTest.Default != nil && *entry.DBTest.Default
+		}
 	default:
 		svc.outputs, err = seedGit(ctx, step, entry)
 	}
-	if err != nil {
+	// An entry that failed after recording outputs (its readiness probes) is
+	// returned with them; it holds no process, so stopping it is a no-op.
+	if err != nil && svc.outputs == nil {
 		return nil, err
 	}
-	return svc, nil
+	return svc, err
 }
 
 // running is the Handle and Cleanup owner of an executed services step.
@@ -119,10 +131,11 @@ type running struct {
 }
 
 type startedEntry struct {
-	name    string
-	exec    *execService
-	deps    *depsService
-	outputs map[string]any
+	name     string
+	exec     *execService
+	deps     *depsService
+	database *databaseService
+	outputs  map[string]any
 }
 
 // outputs is `{services: {<name>: outputs}, <name>: outputs, ready}`, with
@@ -166,6 +179,8 @@ func (s *startedEntry) stop(ctx context.Context) error {
 		return s.exec.stop()
 	case s.deps != nil:
 		return s.deps.stop(ctx)
+	case s.database != nil:
+		return s.database.stop()
 	default:
 		return nil
 	}
@@ -177,6 +192,8 @@ func (s *startedEntry) observe(ctx context.Context) map[string]any {
 		return s.exec.observe(ctx)
 	case s.deps != nil:
 		return s.deps.observe(ctx)
+	case s.database != nil:
+		return s.database.observe(ctx)
 	default:
 		return map[string]any{"ready": true}
 	}

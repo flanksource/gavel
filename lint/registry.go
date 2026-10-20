@@ -19,6 +19,7 @@ import (
 	"github.com/flanksource/gavel/linters/reactdoctor"
 	"github.com/flanksource/gavel/linters/ruff"
 	"github.com/flanksource/gavel/linters/tsc"
+	"github.com/flanksource/gavel/linters/uir"
 	"github.com/flanksource/gavel/linters/vale"
 	"github.com/flanksource/gavel/utils"
 	"github.com/flanksource/gavel/verify"
@@ -39,6 +40,7 @@ func buildLinterRegistry(workDir string) *linters.Registry {
 	registry.Register(vale.NewVale(workDir))
 	registry.Register(jscpd.NewJSCPD(workDir))
 	registry.Register(betterleaks.NewBetterleaks(workDir))
+	registry.Register(uir.New(workDir))
 	return registry
 }
 
@@ -81,6 +83,16 @@ type linterInvocation struct {
 // discovered via the input files (or by scanning opts.WorkDir when no files
 // were passed) and files are bucketed + relativized per root.
 func resolveLinterInvocations(linter linters.Linter, opts Options) []linterInvocation {
+	invocations := discoverLinterInvocations(linter, opts)
+	if factory, ok := linter.(linters.ProjectFactory); ok {
+		for i := range invocations {
+			invocations[i].linter = factory.NewProject(invocations[i].projectRoot)
+		}
+	}
+	return invocations
+}
+
+func discoverLinterInvocations(linter linters.Linter, opts Options) []linterInvocation {
 	rooted, ok := linter.(linters.ProjectRooted)
 	if !ok {
 		return []linterInvocation{{linter: linter, projectRoot: opts.WorkDir, files: opts.Files}}
@@ -138,6 +150,13 @@ func isProjectRootCovered(projectRoot string, scheduledRoots []string) bool {
 		}
 	}
 	return false
+}
+
+func isInvocationCovered(invocation linterInvocation, scheduledRoots []string) bool {
+	if independent, ok := invocation.linter.(interface{ IndependentProjects() bool }); ok && independent.IndependentProjects() {
+		return false
+	}
+	return isProjectRootCovered(invocation.projectRoot, scheduledRoots)
 }
 
 // linterAliases maps CLI-friendly aliases onto registered linter names.

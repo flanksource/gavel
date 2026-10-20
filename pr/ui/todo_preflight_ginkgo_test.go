@@ -92,7 +92,10 @@ var _ = Describe("todo preview preflight", func() {
 		}
 		Expect(json.Unmarshal(recorder.Body.Bytes(), &response)).To(Succeed())
 		Expect(response.Spec.Permissions.Tools).To(HaveKeyWithValue("Read", api.ToolPolicyAllow))
-		Expect(response.Warnings).NotTo(ContainElement(ContainSubstring("tool")))
+		// The one tool warning is the AskUserQuestion deny every todo prompt states:
+		// the API mode ships no such tool, so the deny is vacuous there.
+		Expect(response.Warnings).To(ContainElement(`permissions.tools "AskUserQuestion" deny is ignored: openai api has no tool it names`))
+		Expect(response.Warnings).NotTo(ContainElement(And(ContainSubstring("tool"), Not(ContainSubstring("AskUserQuestion")))))
 		// The plan's read-only sandbox stays stated; the API mode runs no
 		// provider process, so captain reports it as already satisfied.
 		Expect(response.Spec.Sandbox.Policy.Filesystem.Access).To(Equal(api.SandboxFilesystemReadOnly))

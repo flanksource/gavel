@@ -68,12 +68,21 @@ type ExecutableCandidateProvider interface {
 	ExecutableCandidates(workDir string) []string
 }
 
+type ExecutableRequired interface {
+	RequiresExecutable() bool
+}
+
 // ProjectRooted is implemented by linters that must run from their own project
 // root (go.mod, package.json, tsconfig.json, pyproject.toml, ...) rather than
 // the enclosing git root. The lint driver resolves the root per input file via
 // utils.FindNearestProjectRoot; first marker found walking up wins.
 type ProjectRooted interface {
 	ProjectRootMarkers() []string
+}
+
+// ProjectFactory gives each scheduled project its own mutable linter options and counters.
+type ProjectFactory interface {
+	NewProject(workDir string) Linter
 }
 
 // DirectConfigDetector is implemented by linters whose "has config" test needs
@@ -316,6 +325,9 @@ type fileViolationNode struct {
 }
 
 func (f *fileViolationNode) Pretty() api.Text {
+	if f.file == "" {
+		return api.Text{}.Append("Run diagnostics", "text-blue-500")
+	}
 	rel := f.file
 	if f.workDir != "" {
 		if r, err := filepath.Rel(f.workDir, f.file); err == nil {

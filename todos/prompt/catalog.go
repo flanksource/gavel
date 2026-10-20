@@ -2,34 +2,18 @@ package prompt
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/flanksource/gavel/verify"
 )
 
-// EnvelopeKind names the structured result a prompt returns. It is a separate
-// axis from the behaviour class because two prompts can behave identically —
-// read-only, no commits — while reporting entirely different things: a plan run
-// reports a plan file, a triage run reports edits to apply.
-type EnvelopeKind string
-
-const (
-	// EnvelopeResult is types.ResultEnvelope: summary, endStatus, questions.
-	EnvelopeResult EnvelopeKind = "result"
-	// EnvelopePlan is types.PlanEnvelope.
-	EnvelopePlan EnvelopeKind = "plan"
-	// EnvelopeTriage is types.TriageEnvelope.
-	EnvelopeTriage    EnvelopeKind = "triage"
-	EnvelopeTriageNew EnvelopeKind = "triage.new"
-)
-
 // DefaultName is the prompt a run uses when none is named.
 const DefaultName = "run"
 
-// Definition is one runnable named prompt: which template it renders, which
-// behaviour class it executes as, and which envelope it returns.
+// Definition is one runnable named prompt: which template it renders and which
+// behaviour class it executes as. The structured result is the same envelope
+// for every prompt; the lifecycle step that runs it declares the events.
 //
 // Separating Name from Class is the point of this type. Before it, template
 // selection was keyed off types.RunMode, so a third prompt could not exist
@@ -37,11 +21,16 @@ const DefaultName = "run"
 // database CHECK constraint. Now RunMode means only "how does this run treat
 // commits and verification", and any number of prompts can share one.
 type Definition struct {
-	Name        string
-	Class       types.RunMode
-	Envelope    EnvelopeKind
+	Name  string
+	Class types.RunMode
+	// ConfigKey is the `.gavel.yaml todos.<key>` block that overrides this prompt.
+	ConfigKey   string
 	Title       string
 	Description string
+	// Backlog renders the workspace backlog and label taxonomy into the prompt,
+	// and the verification fixture verbatim, for a prompt that reviews the TODO
+	// against the rest of the backlog.
+	Backlog bool
 	// Builtin is the embedded default template, empty for a prompt that exists
 	// only in configuration.
 	Builtin string
@@ -60,10 +49,10 @@ type Definition struct {
 func (d Definition) Template(workDir string) (string, error) {
 	source, err := d.Override.TemplateSource(workDir, d.Builtin)
 	if err != nil {
-		return "", fmt.Errorf("resolve todos.%s template: %w", d.Name, err)
+		return "", fmt.Errorf("resolve %s template: %w", d.Name, err)
 	}
 	if strings.TrimSpace(source) == "" {
-		return "", fmt.Errorf("prompt %q has no template: declare a `file:` under todos.%s", d.Name, d.Name)
+		return "", fmt.Errorf("prompt %q has no template: declare a `file:` for it", d.Name)
 	}
 	return source, nil
 }
@@ -71,63 +60,72 @@ func (d Definition) Template(workDir string) (string, error) {
 // Catalog resolves a prompt name to its definition.
 type Catalog struct {
 	byName map[string]Definition
+	names  []string
 }
 
-// builtins returns the compiled-in prompts. Each pairs its template with the
-// class it runs as and the envelope it returns.
+// builtins returns the compiled-in prompts, in the order listings show them.
 func builtins() []Definition {
 	return []Definition{
 		{
-			Name:        "run",
-			Class:       types.ModeRun,
-			Envelope:    EnvelopeResult,
-			Title:       "Todo run prompt",
+			Name: "run", ConfigKey: "run", Class: types.ModeRun, Title: "Todo run prompt",
 			Description: "The agent prompt for `gavel todos run`: framing, the TODO items, and instructions.",
 			Builtin:     runTemplate,
 		},
 		{
-			Name:        "plan",
-			Class:       types.ModePlan,
-			Envelope:    EnvelopePlan,
-			Title:       "Todo plan prompt",
+			Name: "plan", ConfigKey: "plan", Class: types.ModePlan, Title: "Todo plan prompt",
 			Description: "The agent prompt for plan-mode runs: read-only investigation that produces a reviewable implementation plan.",
 			Builtin:     planTemplate,
 		},
 		{
-			Name:     "triage",
-			Class:    types.ModePlan,
-			Envelope: EnvelopeTriage,
-			Title:    "Todo triage prompt",
-			Description: "The agent prompt for triage runs: a read-only pass that compacts the description, reviews the " +
-				"verification fixture, and reports the edits for gavel to apply.",
+			Name: "triage", ConfigKey: "triage", Class: types.ModePlan, Backlog: true, Title: "Todo triage prompt",
+			Description: "The agent prompt for triage runs: compacts the description, reviews the verification fixture, " +
+				"and records its edits through the todo tools.",
 			Builtin: triageTemplate,
 		},
-		{Name: "triage.new", Class: types.ModePlan, Envelope: EnvelopeTriageNew, Title: "New todo triage prompt", Description: "Name and label newly created work and propose reviewed backlog relationships.", Builtin: triageNewTemplate},
+		{
+			Name: "triage.new", ConfigKey: "triageNew", Class: types.ModePlan, Backlog: true, Title: "New todo triage prompt",
+			Description: "Name and label newly created work and relate it to the backlog through the todo tools.",
+			Builtin:     triageNewTemplate,
+		},
 	}
+}
+
+// BuiltinClass is the behaviour class a built-in prompt runs as. Overrides
+// re-point a built-in's template but never its class.
+func BuiltinClass(name string) (types.RunMode, bool) {
+	for _, def := range builtins() {
+		if def.Name == name {
+			return def.Class, true
+		}
+	}
+	return "", false
 }
 
 // NewCatalog assembles the runnable prompts from the built-ins and the project's
 // configuration. Layering, lowest precedence first:
 //
-//	builtin  <  .gavel.yaml todos.<name>
+//	builtin  <  .gavel.yaml todos.<configKey>
 //
-// The typed fields (todos.run, todos.plan, todos.triage, todos.triageNew) are how a built-in is
-// overridden. The set of prompts is a code contract — each pairs a behaviour
-// class with the envelope the run loop parses its result against — so it is
-// exactly these four and configuration re-points them rather than extending them.
+// The set of prompts is a code contract — each pairs a template with the
+// behaviour class it runs as — so configuration re-points them rather than
+// extending them.
 func NewCatalog(cfg verify.TodosConfig) (*Catalog, error) {
 	catalog := &Catalog{byName: map[string]Definition{}}
 	typed := map[string]verify.PromptSpec{
-		"run":        cfg.Run,
-		"plan":       cfg.Plan,
-		"triage":     cfg.Triage,
-		"triage.new": cfg.TriageNew,
+		"run":       cfg.Run,
+		"plan":      cfg.Plan,
+		"triage":    cfg.Triage,
+		"triageNew": cfg.TriageNew,
 	}
-
 	for _, def := range builtins() {
-		def.Override = typed[def.Name]
-		def.Origin = originFor(def.Name, def.Override)
+		override, ok := typed[def.ConfigKey]
+		if !ok {
+			return nil, fmt.Errorf("prompt %q has no todos.%s configuration block", def.Name, def.ConfigKey)
+		}
+		def.Override = override
+		def.Origin = originFor(def)
 		catalog.byName[def.Name] = def
+		catalog.names = append(catalog.names, def.Name)
 	}
 	return catalog, nil
 }
@@ -147,55 +145,24 @@ func (c *Catalog) Lookup(name string) (Definition, error) {
 	return def, nil
 }
 
-// List returns every prompt, ordered with the built-ins first and the rest
-// alphabetically, so CLI and dashboard listings agree.
+// List returns every prompt in built-in order, so CLI and dashboard listings agree.
 func (c *Catalog) List() []Definition {
-	defs := make([]Definition, 0, len(c.byName))
-	for _, name := range c.Names() {
+	defs := make([]Definition, 0, len(c.names))
+	for _, name := range c.names {
 		defs = append(defs, c.byName[name])
 	}
 	return defs
 }
 
 // Names returns every prompt name in List order.
-func (c *Catalog) Names() []string {
-	rank := map[string]int{"run": 0, "plan": 1, "triage": 2, "triage.new": 3}
-	names := make([]string, 0, len(c.byName))
-	for name := range c.byName {
-		names = append(names, name)
-	}
-	sort.Slice(names, func(i, j int) bool {
-		ri, iOK := rank[names[i]]
-		rj, jOK := rank[names[j]]
-		if iOK != jOK {
-			return iOK
-		}
-		if iOK && jOK {
-			return ri < rj
-		}
-		return names[i] < names[j]
-	})
-	return names
-}
+func (c *Catalog) Names() []string { return append([]string(nil), c.names...) }
 
-// envelopeFor is the envelope a behaviour class returns, for the callers that
-// know only the class.
-func envelopeFor(class types.RunMode) EnvelopeKind {
-	if class == types.ModePlan {
-		return EnvelopePlan
-	}
-	return EnvelopeResult
-}
-
-func originFor(name string, override verify.PromptSpec) string {
-	if name == "triage.new" {
-		name = "triageNew"
-	}
+func originFor(def Definition) string {
 	switch {
-	case override.File != "":
-		return override.ResolvedFilePath("")
-	case strings.TrimSpace(override.Spec.Prompt.User) != "":
-		return ".gavel.yaml todos." + name
+	case def.Override.File != "":
+		return def.Override.ResolvedFilePath("")
+	case strings.TrimSpace(def.Override.Spec.Prompt.User) != "":
+		return ".gavel.yaml todos." + def.ConfigKey
 	default:
 		return "builtin"
 	}

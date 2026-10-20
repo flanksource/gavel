@@ -11,6 +11,7 @@ import (
 
 	"github.com/flanksource/captain/pkg/api"
 	captaindb "github.com/flanksource/captain/pkg/database"
+	"github.com/flanksource/captain/pkg/promptrun"
 	"github.com/flanksource/gavel/todos/lifecycle"
 	"github.com/flanksource/gavel/todos/native"
 	"github.com/flanksource/gavel/todos/types"
@@ -122,6 +123,11 @@ func listTodoAttempts(ctx context.Context, provider sessionDetailProvider, issue
 	overviews, err := provider.Captain().ListPromptRunOverviews(ctx, captaindb.PromptRunOverviewFilter{IDs: ids})
 	if err != nil {
 		return nil, err
+	}
+	for index := range overviews {
+		if err := promptrun.ReconcileWorkspace(ctx, provider.Captain(), &overviews[index].PromptRun); err != nil {
+			return nil, err
+		}
 	}
 	verifications, err := provider.Captain().LatestPromptRunVerifications(ctx, ids)
 	if err != nil {

@@ -77,17 +77,19 @@ func RetryPolicySchema() map[string]any {
 }
 
 // stepEnvelopeProperties are the schema properties every step accepts.
-func stepEnvelopeProperties() map[string]any {
+func stepEnvelopeProperties(traces map[string]any) map[string]any {
 	return map[string]any{
-		"id":         map[string]any{"type": "string", "description": "Step id; later steps read its outputs as steps.<id>."},
-		"name":       map[string]any{"type": "string"},
-		"cel":        map[string]any{"type": "string", "description": "CEL verdict over the step's outputs, env and steps."},
-		"export":     map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}, "description": `Env vars for later steps: NAME: "{{.outputs.x}}"; "*" exports a map; "" suppresses a kind default.`},
-		"override":   map[string]any{"type": "boolean", "description": "Allow re-exporting a name an earlier step exported."},
-		"background": map[string]any{"type": "boolean", "description": "Run for the rest of the fixture; the verdict is collected at teardown."},
-		"wait":       WaitPolicySchema(),
-		"retry":      RetryPolicySchema(),
-		"timeout":    durationSchema,
+		"traces":          traces,
+		"id":              map[string]any{"type": "string", "description": "Step id; later steps read its outputs as steps.<id>."},
+		"name":            map[string]any{"type": "string"},
+		"cel":             map[string]any{"type": "string", "description": "CEL verdict over the step's outputs, env and steps."},
+		"export":          map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}, "description": `Env vars for later steps: NAME: "{{.outputs.x}}"; "*" exports a map; "" suppresses a kind default.`},
+		"override":        map[string]any{"type": "boolean", "description": "Allow re-exporting a name an earlier step exported."},
+		"background":      map[string]any{"type": "boolean", "description": "Run for the rest of the fixture; the verdict is collected at teardown."},
+		"continueOnError": map[string]any{"type": "boolean", "description": "Report this step's failure without skipping the steps after it, which do not depend on it."},
+		"wait":            WaitPolicySchema(),
+		"retry":           RetryPolicySchema(),
+		"timeout":         durationSchema,
 	}
 }
 
@@ -95,6 +97,10 @@ func stepEnvelopeProperties() map[string]any {
 // step oneOf over every registered kind. overrides replace a kind's config
 // schema (the CLI derives the test/lint option sets from its own flags).
 func DocumentSchema(overrides map[string]json.RawMessage) (map[string]any, error) {
+	traces, err := TracesSchema()
+	if err != nil {
+		return nil, err
+	}
 	var branches []any
 	for _, name := range DefaultKinds.Names() {
 		kind, err := DefaultKinds.Lookup(name)
@@ -105,7 +111,7 @@ func DocumentSchema(overrides map[string]json.RawMessage) (map[string]any, error
 		if override, ok := overrides[name]; ok {
 			raw = override
 		}
-		branch, err := stepBranchSchema(name, raw)
+		branch, err := stepBranchSchema(name, raw, traces)
 		if err != nil {
 			return nil, err
 		}
@@ -123,6 +129,7 @@ func DocumentSchema(overrides map[string]json.RawMessage) (map[string]any, error
 			"defaults": defaults,
 			"setup":    map[string]any{"type": "object", "description": "Same as the markdown front-matter setup:."},
 			"env":      map[string]any{"type": "object", "additionalProperties": map[string]any{"type": []string{"string", "number", "boolean"}}},
+			"traces":   traces,
 			"steps":    map[string]any{"type": "array", "minItems": 1, "items": map[string]any{"oneOf": branches}},
 		},
 	}, nil
@@ -131,12 +138,12 @@ func DocumentSchema(overrides map[string]json.RawMessage) (map[string]any, error
 // stepBranchSchema merges the envelope with one kind's config schema: the
 // kind's properties next to the envelope's, `kind` pinned to its name, and the
 // kind's required/anyOf/additionalProperties carried over.
-func stepBranchSchema(name string, raw json.RawMessage) (map[string]any, error) {
+func stepBranchSchema(name string, raw json.RawMessage, traces map[string]any) (map[string]any, error) {
 	var config map[string]any
 	if err := json.Unmarshal(raw, &config); err != nil {
 		return nil, fmt.Errorf("kind %q: schema is not a JSON object: %w", name, err)
 	}
-	properties := stepEnvelopeProperties()
+	properties := stepEnvelopeProperties(traces)
 	if kindProps, ok := config["properties"].(map[string]any); ok {
 		maps.Copy(properties, kindProps)
 	}
@@ -147,10 +154,13 @@ func stepBranchSchema(name string, raw json.RawMessage) (map[string]any, error) 
 		required = append(required, kindRequired...)
 	}
 	branch["required"] = required
-	for _, key := range []string{"description", "anyOf", "additionalProperties"} {
+	for _, key := range []string{"description", "anyOf", "oneOf", "allOf", "additionalProperties", "definitions", "$defs"} {
 		if value, ok := config[key]; ok {
 			branch[key] = value
 		}
+	}
+	if branch["definitions"] != nil || branch["$defs"] != nil {
+		branch["$id"] = "kind://" + name + ".json"
 	}
 	return branch, nil
 }

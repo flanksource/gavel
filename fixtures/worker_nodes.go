@@ -7,8 +7,8 @@ import (
 )
 
 func runNodesIsolated(ctx context.Context, nodes []*FixtureNode, opts RunOptions) ([]FixtureResult, *ExecutionSnapshot, error) {
-	if opts.Evaluator != nil || opts.Progress != nil || opts.Recorder != nil || opts.Scope != nil {
-		return nil, nil, fmt.Errorf("fixture isolation cannot serialize an evaluator, progress callback, active recorder, or fixture scope")
+	if opts.Evaluator != nil || opts.Progress != nil || opts.Traces != nil || opts.Scope != nil {
+		return nil, nil, fmt.Errorf("fixture isolation cannot serialize an evaluator, progress callback, armed traces, or fixture scope")
 	}
 	if opts.Runtime != nil {
 		runtime := *opts.Runtime

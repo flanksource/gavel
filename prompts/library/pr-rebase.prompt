@@ -1,0 +1,108 @@
+---
+name: pr-rebase
+description: Rebase a pull request's branch onto its base in a fresh worktree, resolve the conflicts, then force-push it — never a merge commit.
+model: claude
+effort: high
+budget:
+  maxTurns: 40
+  timeout: 30m
+setup:
+  # A throwaway worktree of the local checkout at the PR head. The caller
+  # fetched both {{head}} and {{baseSha}} into {{repo}} before starting the run;
+  # uncommitted work in {{repo}} belongs to whatever is checked out there and
+  # stays behind, while ignored content is copied so the agent can build.
+  checkout:
+    path: "{{repo}}"
+    worktree:
+      mode: new
+      prefix: "gavel/pr-{{number}}-rebase"
+      base: "{{head}}"
+      uncommitted: skip
+      ignored: clone
+prompt:
+  system: >-
+    You are running inside a fresh git worktree of {{repo}} whose HEAD is the
+    tip of pull request #{{number}} ({{url}}), branch {{branch}}. Rebase it onto
+    {{baseSha}}, the current tip of {{base}}, and resolve every conflict the
+    rebase stops on, keeping each commit's own intent on top of what {{base}}
+    already contains. Rebase — never merge: the branch must end up linear on
+    top of {{base}} with no merge commits. Do not push and do not abort the
+    rebase: once your work verifies, gavel force-pushes the result to the PR.
+permissions:
+  # Edits stay in the worktree; git is limited to inspecting, staging and
+  # driving the rebase forward. Patterned Bash rules only bind on Claude,
+  # which is why the model is pinned above.
+  mode: acceptEdits
+  tools:
+    Read: allow
+    Glob: allow
+    Grep: allow
+    Edit: allow
+    Write: allow
+    Bash(git status:*): allow
+    Bash(git diff:*): allow
+    Bash(git log:*): allow
+    Bash(git show:*): allow
+    Bash(git add:*): allow
+    Bash(git rm:*): allow
+    Bash(git commit:*): allow
+    Bash(git commit --amend:*): deny
+    Bash(git rebase:*): allow
+    Bash(git -c core.editor=true rebase:*): allow
+    Bash(gavel test:*): allow
+    Bash(gavel lint:*): allow
+    Bash(make build:*): allow
+    Bash(git rebase --abort:*): deny
+    Bash(git rebase -i:*): deny
+    Bash(git rebase --interactive:*): deny
+    Bash(git rebase --rebase-merges:*): deny
+    Bash(git push:*): deny
+    Bash(git pull:*): deny
+    Bash(git reset:*): deny
+    Bash(git merge:*): deny
+    Bash(git checkout:*): deny
+    Bash(git switch:*): deny
+    Bash(git branch:*): deny
+    Bash(git worktree:*): deny
+workflow:
+  verify:
+    maxIterations: 3
+    # Run in the worktree, after each turn. A failing check is fed back to the
+    # agent with its output tail.
+    commands:
+      # No rebase is still stopped on a commit.
+      - test ! -d "$(git rev-parse --git-path rebase-merge)" && test ! -d "$(git rev-parse --git-path rebase-apply)"
+      # The branch now sits on top of the base.
+      - |-
+        git merge-base --is-ancestor {{shq baseSha}} HEAD
+      # Rebased, not merged: no merge commit between the base and the new head.
+      - |-
+        merges=$(git rev-list --merges {{shq baseSha}}..HEAD); [ -z "$merges" ] || { echo "merge commits on the branch — rebase instead of merging: $merges" >&2; exit 1; }
+      # No conflict markers survived into the rebased commits.
+      - |-
+        ! git diff --check {{shq baseSha}}...HEAD | grep 'leftover conflict marker'
+      # Every fix is committed: only commits are pushed.
+      - test -z "$(git status --porcelain)"
+  after:
+    # Runs once, in the worktree, only after verify passed. The lease pins the
+    # remote branch to the head the rebase started from, so a push someone made
+    # meanwhile fails the run instead of being overwritten. Commands carrying
+    # user values are block scalars so the frontmatter stays valid YAML.
+    - when: onVerify
+      commands:
+        - |-
+          git push --force-with-lease=refs/heads/{{shq branch}}:{{shq head}} {{shq remote}} HEAD:refs/heads/{{shq branch}}
+---
+## Rebase PR #{{number}} (`{{branch}}`) onto `{{base}}`
+
+GitHub could not update this branch with a rebase because its commits conflict with `{{base}}`.
+
+1. Run `git rebase {{baseSha}}` (the current tip of `{{base}}`).
+2. Each time the rebase stops on a conflict:
+   - Resolve every `<<<<<<<` / `=======` / `>>>>>>>` hunk so the commit keeps its own intent on top of `{{base}}`. Leave no markers behind.
+   - `git add` (or `git rm`) each resolved file.
+   - Continue with `git -c core.editor=true rebase --continue`.
+   - Use `git rebase --skip` only when the commit became empty because `{{base}}` already contains its change.
+3. Never resolve by merging `{{base}}` into the branch: a merge commit fails verification.
+4. When the rebase has finished, run the project's build and tests. Fix any breakage the rebase introduced and commit the fix as a new commit with `git commit` — no amending, no squashing.
+5. Finish with a clean worktree. Do not push, merge, reset, or switch branches.

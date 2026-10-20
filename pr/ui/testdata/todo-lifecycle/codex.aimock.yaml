@@ -16,23 +16,69 @@ anthropic:
       stop_reason: end_turn
 
 openai:
-  # triage.new (agent mode, codex app-server): name and label the new TODO. The
-  # app-server carries the prompt's system text in the user turn.
+  # triage.new (agent mode, codex app-server): rename and label the new TODO
+  # through the todo tools, which codex reaches on captain's loopback MCP server
+  # (namespace mcp__captain), then report the envelope. The app-server carries
+  # the prompt's system text in the user turn.
   - match:
       prompt_contains: "Triage this newly created TODO"
     respond:
-      text: '{"summary":"Named the greeting helper work and labelled it as API surface.","endStatus":"completed","title":"Add Greeting helper to greet package","labels":["api"],"action":"keep"}'
+      function_call:
+        namespace: mcp__captain
+        name: todo_update
+        call_id: call_triage_title
+        arguments: { title: Add Greeting helper to greet package }
+      finish_reason: tool_calls
+
+  - match:
+      tool_result_for: mcp__captain__todo_update
+    respond:
+      function_call:
+        namespace: mcp__captain
+        name: todo_labels
+        call_id: call_triage_labels
+        arguments: { add: [api] }
+      finish_reason: tool_calls
+
+  - match:
+      tool_result_for: mcp__captain__todo_labels
+    respond:
+      text: '{"success":true,"event":"kept","comment":"Named the greeting helper work and labelled it as API surface."}'
       finish_reason: stop
 
-  # plan: read-only investigation ending in a new plan.
+  # plan: read-only investigation; the plan is saved through todo_plan.
   - match:
       prompt_contains: "You are planning the implementation"
     respond:
-      text: '{"summary":"Planned a one-function greet package satisfying the existing test.","endStatus":"completed","planStatus":"new","planContent":"## Plan\n\n1. Add `greet/greet.go` with `func Greeting(name string) string` returning `\"hello \" + name`.\n2. Run `go test ./greet/...`; `greet/greet_test.go` already covers it.\n"}'
+      function_call:
+        namespace: mcp__captain
+        name: todo_plan
+        call_id: call_plan_save
+        arguments:
+          content: "## Plan\n\n1. Add `greet/greet.go` with `func Greeting(name string) string` returning `\"hello \" + name`.\n2. Run `go test ./greet/...`; `greet/greet_test.go` already covers it.\n"
+      finish_reason: tool_calls
+
+  - match:
+      tool_result_for: mcp__captain__todo_plan
+    respond:
+      text: '{"success":true,"event":"new","comment":"Planned a one-function greet package satisfying the existing test."}'
+      finish_reason: stop
+
+  # run's auto-review: `permissions.mode: auto` hands the escalation request
+  # below to codex's auto-review subagent (model codex-auto-review), which asks
+  # for a strict-JSON verdict. First, because its transcript quotes the run
+  # prompt the next rule matches on.
+  - match:
+      prompt_contains: "whose request action you are assessing"
+    respond:
+      text: '{"outcome":"allow"}'
       finish_reason: stop
 
   # run, turn 1: write the file the plan names, in the run worktree. codex's
-  # command tool is exec_command ({cmd}); it runs in the turn's cwd.
+  # command tool is exec_command ({cmd}); it runs in the turn's cwd. The run
+  # prompt's `permissions.mode: auto` leaves `codex exec` on its read-only
+  # sandbox with on-request approvals reviewed by codex's auto-review
+  # subagent, so a write has to ask for escalation, as a real model does.
   - match:
       prompt_contains: "You are implementing the todo item"
     respond:
@@ -42,13 +88,15 @@ openai:
         arguments:
           cmd: "mkdir -p greet && printf 'package greet\\n\\n// Greeting greets name.\\nfunc Greeting(name string) string { return \"hello \" + name }\\n' > greet/greet.go"
           login: false
+          sandbox_permissions: require_escalated
+          justification: "Write greet/greet.go, the file the approved plan adds."
       finish_reason: tool_calls
 
   # run, turn 2: the command's result came back; report completion.
   - match:
       tool_result_for: exec_command
     respond:
-      text: '{"summary":"Added greet.Greeting; go test ./greet/... covers it.","endStatus":"completed"}'
+      text: '{"success":true,"event":"completed","comment":"Added greet.Greeting; go test ./greet/... covers it."}'
       finish_reason: stop
 
   # run's commit:run hook: gavel's commit message generator.

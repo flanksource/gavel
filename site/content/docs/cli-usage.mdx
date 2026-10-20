@@ -1,0 +1,93 @@
+---
+title: CLI usage
+description: Choose commands, scope work to a repository, pass native runner options, and automate Gavel.
+order: 2
+---
+
+Run Gavel from the repository you want to inspect. Use the global `--cwd` flag when invoking it from another directory; relative command paths resolve from that selected working directory.
+
+```bash
+gavel version
+gavel --help
+gavel --cwd ../service test
+gavel --cwd ../service config --json
+```
+
+## Command map
+
+| Command | Purpose |
+| --- | --- |
+| `gavel test` | Discover and execute Go, Ginkgo, Jest, Vitest, Playwright, and configured fixtures |
+| `gavel lint` | Discover native linter configurations and combine their findings |
+| `gavel fixtures` | Execute named Markdown, YAML, or JSON fixture files |
+| `gavel config [path]` | Inspect merged project settings and their sources |
+| `gavel configure` | Write AI model selections to project configuration |
+| `gavel test outline` / `history` | Inspect test structure and previous execution statistics |
+| `gavel summary` | Produce a compact Markdown summary from test JSON |
+| `gavel ui serve` | Browse a saved test report |
+| `gavel todos` | Create, inspect, plan, implement, and verify tracked work |
+| `gavel pr` | Inspect pull requests, checks, logs, and review state; create PRs |
+| `gavel commit` | Generate commit content and run configured commit gates |
+| `gavel git` | Inspect and analyze repository changes |
+| `gavel bench` | Compare Go benchmark results between refs |
+| `gavel proc` | Start, restart, inspect, and stop Procfile processes |
+| `gavel serve` / `projects` | Serve the development dashboard and manage its projects |
+| `gavel repomap` | Inspect repository mapping configuration |
+| `gavel ssh` / `system` | Configure the push backend and background service |
+| `gavel mcp` | Manage MCP server integration |
+| `gavel completion` | Generate shell completion scripts |
+
+Use the installed command's help for its complete flag list:
+
+```bash
+gavel test --help
+gavel lint --help
+gavel todos run --help
+gavel fixtures --schema
+```
+
+## Select a framework or tool
+
+Framework and linter subcommands make the selected engine explicit. A comma-separated or repeated filter selects several engines:
+
+```bash
+gavel test go ./pkg/parser
+gavel test vitest ./web
+gavel test --framework go,ginkgo ./pkg
+gavel lint eslint ./web
+gavel lint --linters golangci-lint,ruff
+```
+
+Arguments after `--` are runner arguments. Select one framework when using its native options so flags cannot be interpreted by another engine. Go-style name focus is translated where the selected engine supports it:
+
+```bash
+gavel test go ./pkg/parser -- -run TestParser -count=1
+gavel test ginkgo ./pkg/parser -- --focus Parser
+gavel test vitest ./web -- --testNamePattern parser
+```
+
+## Global output options
+
+`--json`, `--yaml`, `--markdown`, and `--html` choose a representation. `--format` also writes several artifacts from one invocation. `--no-progress` disables the live progress display, and `--no-color` removes terminal colors. Logging goes to stderr by default.
+
+```bash
+mkdir -p .tmp
+gavel test --no-progress --format "json=.tmp/tests.json,html=.tmp/tests.html,markdown=.tmp/tests.md"
+gavel config --yaml
+```
+
+`-v`, `-vv`, and `-vvv` increase verbosity; test and fixture commands also provide `--show-passed`, `--show-stdout`, and `--show-stderr`. See [Reporting](/docs/reporting) for output shapes, snapshots, and live reports.
+
+## A local development cycle
+
+```bash
+gavel test --dry-run
+gavel lint --dry-run
+gavel test --changed --lint
+gavel test --failed
+gavel lint --failed
+```
+
+Dry-run inspects planned commands. Changed runs reduce feedback to the affected scope. Failed runs need a previous report; start with a normal run if `.gavel/last.json` does not exist. These commands do not create commits. `gavel commit`, `gavel pr create`, and TODO implementation runs have their own write behavior; [Todo run loop](/docs/todo-run-loop) documents automatic commits.
+
+Continue with [Test execution](/docs/test-execution), [Lint execution](/docs/lint-execution), and the [Configuration reference](/docs/configuration-reference).

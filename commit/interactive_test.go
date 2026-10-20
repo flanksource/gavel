@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/flanksource/gavel/internal/safefs"
+
 	clickytask "github.com/flanksource/clicky/task"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -89,7 +91,7 @@ var _ = Describe("validateInteractiveOptions", func() {
 var _ = Describe("startCandidateSummaries", func() {
 	It("streams summaries and restores renderer state when stopped", func() {
 		workDir := initCommitRepoForGinkgo()
-		defer os.RemoveAll(workDir)
+		defer safefs.SafeRemove(workDir, safefs.RemoveContext{AllowedRoot: os.TempDir()})
 		Expect(os.WriteFile(filepath.Join(workDir, "new.go"), []byte("package new\n"), 0o644)).To(Succeed())
 
 		agent := &candidateSummaryAgent{}

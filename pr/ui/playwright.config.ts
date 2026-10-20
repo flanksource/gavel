@@ -1,7 +1,7 @@
 import { defineConfig } from '@playwright/test';
 
 // Browser specs drive a real `gavel serve` that a harness (hack/*_e2e.go)
-// starts and names through env. Inside a gavel fixture with `record: http`,
+// starts and names through env. Inside a gavel fixture with an `http_proxy` trace,
 // HTTP_PROXY is the recording proxy: Chromium ignores the env variable, so it
 // is passed explicitly, and `<-loopback>` stops Chromium bypassing it for the
 // loopback dashboard.

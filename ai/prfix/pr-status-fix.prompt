@@ -11,9 +11,11 @@ prompt:
     Read the `gavel pr status` snapshot the user pastes, identify the failing
     GitHub Actions jobs and unresolved review comments, and edit files in place
     to fix them. Prefer minimal, targeted edits over rewrites.
-    A merge conflict with the base branch comes first: CI results for a
-    conflicting head are stale, so resolve the conflict before any CI fix.
-    Do not run any commit-related commands and do not push: each turn's changes
+    A conflict with the base branch comes first: CI results for a
+    conflicting head are stale, so finish rebasing onto the base before any
+    CI fix. Rebase — never merge the base in.
+    Beyond `git add` and `git rebase --continue`/`--skip` while finishing that
+    rebase, do not run any commit-related commands and do not push: each turn's changes
     are committed and pushed for you, after which the PR status is re-polled and
     any remaining failures are fed back to you.
 workflow:
@@ -35,13 +37,20 @@ workflow:
     # The PR is named by URL, not resolved from the current branch: under
     # --worktree the agent works on a scratch branch no PR is open for.
     #
-    # With a merge in progress, two sub-second git checks run first so an
-    # unresolved conflict fails the turn with the offending files as feedback:
-    # unmerged index entries, then conflict markers left in resolved files.
+    # With a conflict rebase started, sub-second git checks run first so an
+    # unfinished rebase fails the turn with what is left as feedback: no rebase
+    # still stopped (listing its unmerged paths), the branch on top of the base,
+    # no merge commits, and no conflict markers in the rebased commits.
     commands:
 {{#if conflicts}}
-      - git diff --name-only --diff-filter=U --exit-code
-      - git diff --check HEAD
+      - |-
+        test ! -d "$(git rev-parse --git-path rebase-merge)" && test ! -d "$(git rev-parse --git-path rebase-apply)" || { echo "the rebase is still in progress; resolve, git add, then git -c core.editor=true rebase --continue. Unmerged:" >&2; git diff --name-only --diff-filter=U >&2; exit 1; }
+      - |-
+        git merge-base --is-ancestor {{shq baseSha}} HEAD
+      - |-
+        merges=$(git rev-list --merges {{shq baseSha}}..HEAD); [ -z "$merges" ] || { echo "merge commits on the branch — rebase instead of merging: $merges" >&2; exit 1; }
+      - |-
+        ! git diff --check {{shq baseSha}}...HEAD | grep 'leftover conflict marker'
 {{/if}}
       - gavel pr status {{url}} --follow --fail-fast --logs --tail-logs 40
   commits:
@@ -55,16 +64,23 @@ workflow:
 ## Merge conflicts — resolve these first
 
 `{{branch}}` conflicts with `{{baseBranch}}`. gavel has already started
-`git merge origin/{{baseBranch}}` in this tree, and these files are left conflicted:
+`git rebase origin/{{baseBranch}}` (commit `{{baseSha}}`) in this tree, and it
+stopped on the first conflicting commit. GitHub's merge conflicts on:
 
 {{#each conflicts}}
 - `{{path}}`{{#if kind}} ({{kind}}){{/if}}
 {{/each}}
 
-Resolve every `<<<<<<<` / `=======` / `>>>>>>>` hunk so the result keeps the
-intent of both sides, leave no conflict markers behind, then `git add` each
-resolved file. Do not run `git merge --abort`, `git commit` or `git rebase`: the
-merge commit is concluded and pushed for you once no conflicted path remains.
+Each time the rebase stops, `git status` lists the conflicted files for that
+commit. Resolve every `<<<<<<<` / `=======` / `>>>>>>>` hunk so the commit keeps
+its own intent on top of `{{baseBranch}}`, leave no conflict markers behind,
+`git add` each resolved file, then run `git -c core.editor=true rebase --continue`.
+Use `git rebase --skip` only when a commit became empty because `{{baseBranch}}`
+already contains its change. Repeat until the rebase finishes.
+
+Never merge `{{baseBranch}}` into the branch, and do not run `git rebase --abort`
+or `git push`: a merge commit fails verification, and the rebased branch is
+force-pushed for you once the rebase has finished.
 
 {{/if}}
 Fix the failures and unresolved comments visible in this PR status snapshot:

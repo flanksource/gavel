@@ -7,6 +7,7 @@ import (
 	"reflect"
 
 	"github.com/flanksource/captain/pkg/api"
+	"github.com/flanksource/gavel/todos/types"
 )
 
 func addTodoNewOpenAPI(document map[string]any) error {
@@ -23,17 +24,17 @@ func addTodoNewOpenAPI(document map[string]any) error {
 	properties := requestSchema["properties"].(map[string]any)
 	formProperties := map[string]any{}
 	parameters := []any{}
-	for _, field := range []string{"dir", "title", "body", "priority", "status", "parent", "labels", "autoSave", "triage"} {
+	for _, field := range []string{"dir", "title", "body", "priority", "status", "parent", "labels", "autoSave", "step"} {
 		formProperties[field] = properties[field]
 		parameters = append(parameters, map[string]any{"name": field, "in": "query", "required": false, "schema": properties[field]})
 	}
 	form := map[string]any{"type": "object", "properties": formProperties, "required": []string{"title"}}
 	fileProperties := withEntries(map[string]any{}, formProperties)
-	fileProperties["attachment"] = map[string]any{"type": "string", "format": "binary", "description": "Screenshot or other attachment saved before triage starts"}
+	fileProperties["attachment"] = map[string]any{"type": "string", "format": "binary", "description": "Screenshot or other attachment saved before the step starts"}
 	multipart := map[string]any{"type": "object", "properties": fileProperties, "required": []string{"title"}}
 	document["paths"].(map[string]any)["/api/todos/new"] = map[string]any{"post": map[string]any{
-		"operationId": "todos_new", "summary": "Create a TODO and optionally triage it after saving", "tags": []string{"todo"},
-		"description": "Omitted triage is false. Explicit body values take precedence over query values. Closing the form does not cancel an admitted run.",
+		"operationId": "todos_new", "summary": "Create a TODO and optionally start a lifecycle step on it after saving", "tags": []string{"todo"},
+		"description": "Omitted step starts nothing. A named step must apply to the new TODO's status (see GET /api/todos/new/steps). Explicit body values take precedence over query values. Closing the form does not cancel an admitted run.",
 		"parameters":  parameters,
 		"requestBody": map[string]any{"required": false, "content": map[string]any{
 			"application/json":                  map[string]any{"schema": map[string]any{"$ref": "#/components/schemas/" + request}},
@@ -41,9 +42,34 @@ func addTodoNewOpenAPI(document map[string]any) error {
 			"multipart/form-data":               map[string]any{"schema": multipart},
 		}},
 		"responses": map[string]any{
-			"201": map[string]any{"description": "TODO saved, including when triage admission fails. Retry triage on the returned TODO instead of creating it again.", "content": map[string]any{"application/json": map[string]any{"schema": map[string]any{"$ref": "#/components/schemas/" + response}}}},
-			"400": map[string]any{"description": "Invalid creation input"},
+			"201": map[string]any{"description": "TODO saved, including when step admission fails. Retry the step on the returned TODO instead of creating it again.", "content": map[string]any{"application/json": map[string]any{"schema": map[string]any{"$ref": "#/components/schemas/" + response}}}},
+			"400": map[string]any{"description": "Invalid creation input, or a step that does not apply to the new TODO; nothing is saved"},
 			"500": map[string]any{"description": "Storage or response failure"},
+		},
+	}}
+	return addTodoNewStepsOpenAPI(document, schemas)
+}
+
+func addTodoNewStepsOpenAPI(document map[string]any, schemas map[string]any) error {
+	response, err := todoOpenAPISchema(&todoCreateStepsResponse{}, schemas)
+	if err != nil {
+		return err
+	}
+	statuses := []string{}
+	for _, status := range types.AssignableStatuses() {
+		statuses = append(statuses, string(status))
+	}
+	document["paths"].(map[string]any)["/api/todos/new/steps"] = map[string]any{"get": map[string]any{
+		"operationId": "todos_new_steps", "summary": "List the lifecycle steps a new TODO can start", "tags": []string{"todo"},
+		"description": "Evaluates the workspace lifecycle for a TODO not yet created: the given status, medium priority, no labels, empty body, no plan, no verification and no runs. Steps are in definition order, auxiliary steps included.",
+		"parameters": []any{
+			map[string]any{"name": "dir", "in": "query", "required": false, "schema": map[string]any{"type": "string"}},
+			map[string]any{"name": "status", "in": "query", "required": false, "schema": map[string]any{"type": "string", "enum": statuses, "default": string(types.StatusDraft)}},
+		},
+		"responses": map[string]any{
+			"200": map[string]any{"description": "Applicable steps", "content": map[string]any{"application/json": map[string]any{"schema": map[string]any{"$ref": "#/components/schemas/" + response}}}},
+			"400": map[string]any{"description": "Status cannot be assigned, or the workspace cannot be resolved"},
+			"500": map[string]any{"description": "Lifecycle could not be loaded or evaluated"},
 		},
 	}}
 	return nil

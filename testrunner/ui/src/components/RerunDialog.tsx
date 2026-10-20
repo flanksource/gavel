@@ -1,62 +1,106 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
-import { AnsiHtml } from './AnsiHtml';
-import { apiUrl } from '../config';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { AnsiHtml, Badge } from '@flanksource/clicky-ui/data';
+import { Modal } from '@flanksource/clicky-ui/components';
 
 interface OutputLine {
   text: string;
   stream: 'stdout' | 'stderr';
 }
 
+export type RerunStatus = 'running' | 'success' | 'failed' | 'canceled';
+
 interface StreamSnapshot {
   lines: OutputLine[];
-  status: 'running' | 'success' | 'failed' | 'canceled';
+  status: RerunStatus;
   command: string;
+}
+
+const MAX_CONNECT_ATTEMPTS = 20;
+const RETRY_MS = 250;
+
+const STATUS_TONE ={ running: 'info', success: 'success', failed: 'danger', canceled: 'warning' } as const;
+
+// A stderr write is tinted red; the text keeps its own ANSI styling inside.
+function lineText(line: OutputLine): string {
+  return line.stream === 'stderr' ? `\x1b[31m${line.text}\x1b[0m` : line.text;
 }
 
 interface Props {
   open: boolean;
   onClose: () => void;
+  /** URL of the rerun's SSE stream (/api/rerun/stream under the run's base). */
+  streamUrl: string;
 }
 
-export function RerunDialog({ open, onClose }: Props) {
+/**
+ * The output of the rerun in progress, streamed from the server. The server
+ * sends each write once, and replays them all to a client that reconnects, so
+ * every (re)connection starts the output over.
+ */
+export function RerunDialog({ open, onClose, streamUrl }: Props) {
   const [lines, setLines] = useState<OutputLine[]>([]);
-  const [status, setStatus] = useState<'running' | 'success' | 'failed' | 'canceled'>('running');
+  const [status, setStatus] = useState<RerunStatus>('running');
   const [command, setCommand] = useState('');
+  const [error, setError] = useState<string | undefined>(undefined);
   const scrollRef = useRef<HTMLPreElement>(null);
   const autoScrollRef = useRef(true);
+  // The status the stream last reported, which the error handler of the open
+  // connection must read: its closure would otherwise keep the first render's.
+  const statusRef = useRef<RerunStatus>('running');
 
   const handleScroll = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
-    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
-    autoScrollRef.current = atBottom;
+    autoScrollRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
   }, []);
+
+  // attempt counts the connections tried for this rerun: the dialog opens as
+  // the rerun is requested, so the server may not have started the output yet.
+  const [attempt, setAttempt] = useState(0);
+  const retryTimer = useRef<number | null>(null);
 
   useEffect(() => {
     if (!open) return;
-    setLines([]);
     setStatus('running');
+    statusRef.current = 'running';
     setCommand('');
+    setError(undefined);
+    setAttempt(0);
     autoScrollRef.current = true;
+  }, [open, streamUrl]);
 
-    const es = new EventSource(apiUrl('/api/rerun/stream'));
-
-    es.addEventListener('message', (e: MessageEvent) => {
-      const snap: StreamSnapshot = JSON.parse(e.data);
+  useEffect(() => {
+    if (!open) return;
+    const es = new EventSource(streamUrl);
+    es.addEventListener('open', () => setLines([]));
+    es.addEventListener('message', (e: Event) => {
+      const snap = JSON.parse((e as MessageEvent<string>).data) as StreamSnapshot;
       if (snap.command) setCommand(snap.command);
+      statusRef.current = snap.status;
       setStatus(snap.status);
-      if (snap.lines?.length) {
-        setLines(prev => [...prev, ...snap.lines]);
-      }
+      if (snap.lines?.length) setLines(prev => [...prev, ...snap.lines]);
     });
-
     es.addEventListener('done', () => es.close());
     es.onerror = () => {
-      if (status === 'running') es.close();
+      if (statusRef.current !== 'running') {
+        es.close();
+        return;
+      }
+      // A closed source will not reconnect on its own: the server refused the
+      // stream because it has no rerun output yet, so ask again shortly.
+      if (es.readyState !== EventSource.CLOSED) return;
+      if (attempt >= MAX_CONNECT_ATTEMPTS) {
+        setError('The rerun output is not available');
+        return;
+      }
+      retryTimer.current = window.setTimeout(() => setAttempt(n => n + 1), RETRY_MS);
     };
 
-    return () => es.close();
-  }, [open]);
+    return () => {
+      es.close();
+      if (retryTimer.current !== null) window.clearTimeout(retryTimer.current);
+    };
+  }, [open, streamUrl, attempt]);
 
   useEffect(() => {
     if (autoScrollRef.current && scrollRef.current) {
@@ -64,65 +108,27 @@ export function RerunDialog({ open, onClose }: Props) {
     }
   }, [lines]);
 
-  if (!open) return null;
-
-  const statusIcon = status === 'running'
-    ? 'line-md:loading-loop'
-    : status === 'canceled'
-      ? 'codicon:debug-stop'
-    : status === 'success'
-      ? 'mdi:check-circle'
-      : 'mdi:close-circle';
-  const statusColor = status === 'running'
-    ? 'text-blue-400'
-    : status === 'canceled'
-      ? 'text-orange-400'
-    : status === 'success'
-      ? 'text-green-400'
-      : 'text-red-400';
-
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
-      <div
-        className="bg-gray-900 rounded-lg shadow-2xl flex flex-col w-[90vw] max-w-5xl h-[80vh]"
-        onClick={(e) => e.stopPropagation()}
+    <Modal
+      open={open}
+      onClose={onClose}
+      size="xl"
+      closeOnBackdrop
+      scrollBody={false}
+      title={<span className="truncate font-mono text-sm" title={command || 'rerun'}>{command || 'rerun'}</span>}
+      headerSlot={<span data-rerun-status={status}><Badge tone={STATUS_TONE[status]} variant="soft" size="xs">{status}</Badge></span>}
+    >
+      <pre
+        ref={scrollRef}
+        onScroll={handleScroll}
+        className="h-[70vh] overflow-auto bg-zinc-950 p-4 font-mono text-sm leading-relaxed text-zinc-100"
+        data-rerun-output=""
       >
-        {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-700">
-          <div className="flex items-center gap-2 min-w-0">
-            <iconify-icon icon={statusIcon} className={`text-xl ${statusColor}`} />
-            <span className="text-sm font-mono text-gray-300 truncate">{command || 'rerun'}</span>
-            {status !== 'running' && (
-              <span className={`text-xs px-2 py-0.5 rounded ${status === 'success' ? 'bg-green-900 text-green-300' : status === 'canceled' ? 'bg-orange-900 text-orange-300' : 'bg-red-900 text-red-300'}`}>
-                {status}
-              </span>
-            )}
-          </div>
-          <button
-            onClick={onClose}
-            className="text-gray-400 hover:text-gray-200 p-1"
-            title="Close (rerun continues in background)"
-          >
-            <iconify-icon icon="mdi:close" className="text-xl" />
-          </button>
-        </div>
-
-        {/* Output */}
-        <pre
-          ref={scrollRef}
-          onScroll={handleScroll}
-          className="flex-1 overflow-auto p-4 text-sm font-mono text-gray-200 leading-relaxed"
-        >
-          {lines.length === 0 && status === 'running' && (
-            <span className="text-gray-500">Waiting for output...</span>
-          )}
-          {lines.map((line, i) => (
-            <div key={i} className={line.stream === 'stderr' ? 'bg-red-950/30' : ''}>
-              <AnsiHtml text={line.text} />
-            </div>
-          ))}
-        </pre>
-      </div>
-    </div>
+        {lines.length === 0 && status === 'running' && !error && <span className="text-zinc-500">Waiting for output...</span>}
+        {lines.length === 0 && status !== 'running' && !error && <span className="text-zinc-500">The rerun wrote no output.</span>}
+        {error && <span className="text-red-400">{error}</span>}
+        <AnsiHtml as="span" text={lines.map(lineText).join('')} />
+      </pre>
+    </Modal>
   );
 }

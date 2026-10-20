@@ -104,7 +104,7 @@ body fixture`,
 		Expect(err).NotTo(HaveOccurred())
 
 		result := &todos.ExecutionResult{
-			Success: true, ExecutorName: "claude", EndStatus: types.EndCompleted,
+			Success: true, ExecutorName: "claude",
 			Plan: &types.PlanResult{Status: types.PlanNew, Content: planMarkdown},
 		}
 		preparation, err := runtimetest.Admit(ctx, provider, created, todos.RunPreparation{

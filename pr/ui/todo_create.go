@@ -44,8 +44,8 @@ type TodoCreatePayload struct {
 
 type todoNewPayload struct {
 	TodoCreatePayload
-	AutoSave *bool `json:"autoSave,omitempty"`
-	Triage   *bool `json:"triage,omitempty" jsonschema_description:"Start a managed triage.new run after saving; omitted is false"`
+	AutoSave *bool  `json:"autoSave,omitempty"`
+	Step     string `json:"step,omitempty" jsonschema_description:"Lifecycle step to start on the saved TODO; must be one GET /api/todos/new/steps lists for its status. Omitted starts nothing"`
 }
 
 type todoAttachmentSummary struct {
@@ -62,7 +62,7 @@ type todoNewResponse struct {
 	Todo        todoSummary             `json:"todo"`
 	AutoSave    bool                    `json:"autoSave"`
 	Attachments []todoAttachmentSummary `json:"attachments,omitempty"`
-	Triage      *todoNewTriageResponse  `json:"triage,omitempty"`
+	Run         *todoNewRunResponse     `json:"run,omitempty"`
 }
 
 // todoTransferPayload moves the todo at Ref from one native workspace to another.
@@ -199,6 +199,12 @@ func (s *Server) handleTodoNew(w http.ResponseWriter, r *http.Request) {
 		writeTodoError(w, http.StatusBadRequest, err)
 		return
 	}
+	if payload.Step != "" {
+		if err := validateTodoCreateStep(provider, source.Dir, payload.Status, payload.Step); err != nil {
+			writeTodoError(w, http.StatusBadRequest, err)
+			return
+		}
+	}
 	todo, err := provider.Create(r.Context(), todos.CreateRequest{
 		Title:    payload.Title,
 		Body:     bodyWithCreateSections(todoBodyWithAttachments(payload.Body, attachments), payload.Criteria, payload.PRVerification),
@@ -219,8 +225,8 @@ func (s *Server) handleTodoNew(w http.ResponseWriter, r *http.Request) {
 		AutoSave:    autoSave,
 		Attachments: attachments,
 	}
-	if payload.Triage != nil && *payload.Triage {
-		response.Triage = s.startNewTodoTriage(r, provider, source, todo)
+	if payload.Step != "" {
+		response.Run = s.startNewTodoStep(r, provider, source, todo, payload.Step)
 	}
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(response) //nolint:errcheck

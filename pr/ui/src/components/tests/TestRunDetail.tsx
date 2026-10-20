@@ -20,6 +20,7 @@ export function TestRunDetail({ project, projectDir, runId, onTodoCreated }: {
   return (
     <TestRunResults
       snapshot={query.data}
+      traces={query.data.status?.traces}
       done
       runKey={runId}
       projectName={project}

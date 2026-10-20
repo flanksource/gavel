@@ -370,30 +370,22 @@ func runPRUI(opts PRListOptions, databaseMode serveDatabaseMode) error {
 	testRunSyncer.Start(ctx)
 
 	if opts.Dev {
-		devDir, err := resolveDevDir(opts.DevDir)
+		proxy, err := devProxy(prDashboardDev, opts.DevDir)
 		if err != nil {
 			return err
 		}
-		if err := ensureVite(devDir); err != nil {
-			return err
-		}
-		if err := srv.SetDevProxy(viteDevURL); err != nil {
-			return err
-		}
-		logger.Infof("dev mode: reverse-proxying UI to %s (HMR live)", viteDevURL)
+		srv.SetDevProxy(proxy)
 	}
 
-	var dashboardURL, menubarURL string
+	var dashboardURL, networkURL string
 	if opts.UI || opts.MenuBar {
 		port, listener, err := bindUIListener(opts.Addr, opts.Port)
 		if err != nil {
 			return err
 		}
-		dashboardURL = fmt.Sprintf("http://%s", net.JoinHostPort(announceHost(opts.Addr), strconv.Itoa(port)))
-		// The menu-bar webview dials loopback regardless of the bind interface —
-		// see menubarHost. Using the announced LAN IP here renders a blank
-		// popover (WKWebView App Transport Security blocks cleartext non-loopback).
-		menubarURL = fmt.Sprintf("http://%s", net.JoinHostPort(menubarHost(opts.Addr), strconv.Itoa(port)))
+		// dashboardURL is loopback for wildcard binds — see localHost; the
+		// menu-bar webview renders a blank popover on a private IP.
+		dashboardURL, networkURL = uiURLs(opts.Addr, port)
 		if opts.PersistPort {
 			// Only the managed daemon (launchd/systemd) writes to the port
 			// file — foreground `pr list --ui` runs skip this to avoid
@@ -407,7 +399,7 @@ func runPRUI(opts PRListOptions, databaseMode serveDatabaseMode) error {
 
 		go http.Serve(listener, srv.Handler()) //nolint:errcheck
 
-		logger.Infof("PR Dashboard at %s", dashboardURL)
+		logger.Infof("%s", uiBanner("PR Dashboard", dashboardURL, networkURL))
 		logger.Infof("React Grab → todo: install the bookmarklet at %s/react-grab", dashboardURL)
 		if opts.UI {
 			openBrowser(dashboardURL)
@@ -415,7 +407,7 @@ func runPRUI(opts PRListOptions, databaseMode serveDatabaseMode) error {
 	}
 
 	if opts.MenuBar {
-		return runMenuBar(srv, menubarURL)
+		return runMenuBar(srv, dashboardURL)
 	}
 
 	sig := make(chan os.Signal, 1)

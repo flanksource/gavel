@@ -27,38 +27,65 @@ anthropic:
       text: Result recorded.
       stop_reason: end_turn
 
-  # triage.new (agent mode): name and label the new TODO. Matched on the
-  # prompt's system text, which only the real turn carries.
+  # triage.new (agent mode): rename and label the new TODO through the todo
+  # tools, which write as they are called, then report the envelope. Caller
+  # tools reach the CLI through captain's loopback MCP server ("captain").
+  # Matched on the prompt's system text, which only the real turn carries.
   - match:
       system_contains: "Triage this newly created TODO"
+    respond:
+      tool_use:
+        name: mcp__captain__todo_update
+        id: toolu_triage_title
+        input: { title: Add Greeting helper to greet package }
+      stop_reason: tool_use
+
+  - match:
+      tool_result_for: mcp__captain__todo_update
+    respond:
+      tool_use:
+        name: mcp__captain__todo_labels
+        id: toolu_triage_labels
+        input: { add: [api] }
+      stop_reason: tool_use
+
+  - match:
+      tool_result_for: mcp__captain__todo_labels
     respond:
       tool_use:
         name: StructuredOutput
         id: toolu_triage_new
         input:
-          summary: Named the greeting helper work and labelled it as API surface.
-          endStatus: completed
-          title: Add Greeting helper to greet package
-          labels: [api]
-          action: keep
+          success: true
+          event: kept
+          comment: Named the greeting helper work and labelled it as API surface.
       stop_reason: tool_use
 
-  # plan: read-only investigation ending in a new plan.
+  # plan: read-only investigation; the plan is saved through todo_plan.
   - match:
       prompt_contains: "You are planning the implementation"
+    respond:
+      tool_use:
+        name: mcp__captain__todo_plan
+        id: toolu_plan_save
+        input:
+          content: |
+            ## Plan
+
+            1. Add `greet/greet.go` with `func Greeting(name string) string` returning `"hello " + name`.
+            2. Run `go test ./greet/...`; `greet/greet_test.go` already covers it.
+      stop_reason: tool_use
+
+  - match:
+      tool_result_for: mcp__captain__todo_plan
     respond:
       tool_use:
         name: StructuredOutput
         id: toolu_plan
         input:
-          summary: Planned a one-function greet package satisfying the existing test.
-          endStatus: completed
-          planStatus: new
-          planContent: |
-            ## Plan
-
-            1. Add `greet/greet.go` with `func Greeting(name string) string` returning `"hello " + name`.
-            2. Run `go test ./greet/...`; `greet/greet_test.go` already covers it.
+          success: true
+          event: new
+          comment: Planned a one-function greet package satisfying the existing test.
       stop_reason: tool_use
 
   # captain's plan-tldr hook (api mode, haiku) summarises the saved plan; its
@@ -103,6 +130,7 @@ anthropic:
         name: StructuredOutput
         id: toolu_run_done
         input:
-          summary: Added greet.Greeting; go test ./greet/... covers it.
-          endStatus: completed
+          success: true
+          event: completed
+          comment: Added greet.Greeting; go test ./greet/... covers it.
       stop_reason: tool_use

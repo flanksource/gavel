@@ -3,11 +3,12 @@ package git
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/flanksource/gavel/internal/safefs"
 
 	"github.com/flanksource/gavel/models"
 )
@@ -161,7 +162,9 @@ func (gm *DefaultGitRepositoryManager) CleanupUnused(maxAge time.Duration) error
 
 			// Remove repository directory
 			repoPath := entry.repository.GetRepoPath()
-			_ = os.RemoveAll(repoPath)
+			if err := safefs.SafeRemove(repoPath, safefs.RemoveContext{AllowedRoot: gm.cacheDir}); err != nil {
+				return fmt.Errorf("remove unused repository %s: %w", repoPath, err)
+			}
 
 			delete(gm.repositories, url)
 		}
@@ -219,10 +222,6 @@ func (gm *DefaultGitRepositoryManager) Close() error {
 	// Clear the repository and cache maps
 	gm.repositories = make(map[string]*repositoryEntry)
 	gm.versionCache = make(map[string]*models.CacheEntry)
-
-	// Optionally clean up the entire cache directory if it's temporary
-	// This is commented out as it might be too aggressive
-	// os.RemoveAll(gm.cacheDir)
 
 	return nil
 }

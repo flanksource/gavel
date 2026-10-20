@@ -11,8 +11,8 @@ import (
 	"github.com/flanksource/gavel/fixtures"
 )
 
-// todoKind is `kind: todo`: create a TODO (optionally starting its triage.new
-// run), approve or reject its reviewed plan, or read it. Every action ends with
+// todoKind is `kind: todo`: create a TODO (optionally starting one
+// lifecycle step on it), approve or reject its reviewed plan, or read it. Every action ends with
 // an observation, so its outputs are the todo as the dashboard now sees it.
 type todoKind struct{}
 
@@ -21,7 +21,7 @@ type createConfig struct {
 	Body     string   `json:"body"`
 	Labels   []string `json:"labels,omitempty"`
 	Status   string   `json:"status,omitempty"`
-	Triage   bool     `json:"triage,omitempty"`
+	Step     string   `json:"step,omitempty"`
 	AutoSave *bool    `json:"autoSave,omitempty"`
 }
 
@@ -134,7 +134,7 @@ func runTodoAction(ctx context.Context, step *fixtures.StepContext) (*todoHandle
 }
 
 // createTodo is POST /api/todos/new (pr/ui todoNewPayload) and returns the new
-// todo's id. A requested triage that the server could not start fails the step:
+// todo's id. A requested step that the server could not start fails the step:
 // the todo exists, but the run the fixture is about to wait on never will.
 func createTodo(ctx context.Context, client *apiClient, cfg createConfig, dir string) (string, error) {
 	if strings.TrimSpace(cfg.Body) == "" && strings.TrimSpace(cfg.Title) == "" {
@@ -149,18 +149,18 @@ func createTodo(ctx context.Context, client *apiClient, cfg createConfig, dir st
 	if len(cfg.Labels) > 0 {
 		payload["labels"] = cfg.Labels
 	}
-	if cfg.Triage {
-		payload["triage"] = true
+	if cfg.Step != "" {
+		payload["step"] = cfg.Step
 	}
 	if cfg.AutoSave != nil {
 		payload["autoSave"] = *cfg.AutoSave
 	}
 	var resp struct {
-		Todo   map[string]any `json:"todo"`
-		Triage *struct {
+		Todo map[string]any `json:"todo"`
+		Run  *struct {
 			Status string `json:"status"`
 			Error  string `json:"error"`
-		} `json:"triage"`
+		} `json:"run"`
 	}
 	if err := client.postJSON(ctx, "/api/todos/new", payload, &resp); err != nil {
 		return "", err
@@ -169,14 +169,14 @@ func createTodo(ctx context.Context, client *apiClient, cfg createConfig, dir st
 	if id == "" {
 		return "", fmt.Errorf("POST /api/todos/new: response todo has no id")
 	}
-	if !cfg.Triage {
+	if cfg.Step == "" {
 		return id, nil
 	}
-	if resp.Triage == nil {
-		return "", fmt.Errorf("POST /api/todos/new: triage was requested for %s but the response carries no triage", id)
+	if resp.Run == nil {
+		return "", fmt.Errorf("POST /api/todos/new: step %s was requested for %s but the response carries no run", cfg.Step, id)
 	}
-	if resp.Triage.Status == "failed" {
-		return "", fmt.Errorf("created %s but its triage.new run failed to start: %s", id, resp.Triage.Error)
+	if resp.Run.Status == "failed" {
+		return "", fmt.Errorf("created %s but its %s run failed to start: %s", id, cfg.Step, resp.Run.Error)
 	}
 	return id, nil
 }
@@ -193,18 +193,38 @@ func (todoKind) Observe(ctx context.Context, _ *fixtures.StepContext, handle any
 	return state.outputs(), nil
 }
 
-// DefaultWait: a create that starts triage waits for that attempt to settle,
+// DefaultWait: a create that starts a step waits for that attempt to settle,
 // failing loudly when it fails; every other action is done when it returns.
 // A config that does not decode is reported by Execute, which decodes it again.
 func (todoKind) DefaultWait(spec fixtures.StepSpec) *fixtures.WaitPolicy {
 	var cfg todoConfig
-	if len(spec.Config) == 0 || json.Unmarshal(spec.Config, &cfg) != nil || cfg.Create == nil || !cfg.Create.Triage {
+	if len(spec.Config) == 0 || json.Unmarshal(spec.Config, &cfg) != nil || cfg.Create == nil || cfg.Create.Step == "" {
 		return nil
 	}
 	return &fixtures.WaitPolicy{
-		Until:    "triage.state in ['completed', 'failed', 'cancelled']",
-		FailWhen: "triage.state in ['failed', 'cancelled']",
+		Until:    "run.state in ['completed', 'failed', 'cancelled']",
+		FailWhen: "run.state in ['failed', 'cancelled']",
 	}
+}
+
+func (todoKind) FailureCause(outputs map[string]any) string { return runFailureCause(outputs) }
+
+// runFailureCause is why a todo's run did not succeed, from an observation's
+// outputs: the latest run's recorded error, else the newest attempt (attempts
+// are newest first) that recorded one.
+func runFailureCause(outputs map[string]any) string {
+	run, _ := outputs["run"].(map[string]any)
+	if cause := stringField(run, "error"); cause != "" {
+		return cause
+	}
+	attempts, _ := outputs["attempts"].([]any)
+	for _, raw := range attempts {
+		attempt, _ := raw.(map[string]any)
+		if cause := stringField(attempt, "error"); cause != "" {
+			return cause
+		}
+	}
+	return ""
 }
 
 // stepResult is the step's own verdict: whether its action ran. A `cel:` or

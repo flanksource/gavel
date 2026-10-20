@@ -11,9 +11,11 @@ package lifecycle
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/flanksource/captain/pkg/api"
+	"github.com/flanksource/gavel/todos/tools"
 	"github.com/flanksource/gavel/todos/types"
 )
 
@@ -34,10 +36,11 @@ type Step struct {
 	// Prompt is the captain prompt reference the step renders: a built-in name
 	// such as `todos.run`, or `file:<path>` for a project-owned template.
 	Prompt string `yaml:"prompt" json:"prompt"`
-	// Envelope is the structured result the prompt returns — result, plan or
-	// triage — which decides the schema the run is asked for and how the host
-	// applies the result. Empty means result.
-	Envelope EnvelopeKind `yaml:"envelope,omitempty" json:"envelope,omitempty"`
+	// Events is the vocabulary of the envelope's `event` field: the run's
+	// schema enumerates exactly these, and the outcomes read the one it chose.
+	Events []string `yaml:"events" json:"events"`
+	// Tools names the todo tool sets (todos/tools.Sets) the run is given.
+	Tools []string `yaml:"tools,omitempty" json:"tools,omitempty"`
 	// When is the applicability predicate over {subject, runs, last}. Empty means
 	// the step always applies.
 	When string `yaml:"when,omitempty" json:"when,omitempty"`
@@ -61,18 +64,8 @@ type Outcome struct {
 	When   string `yaml:"when" json:"when"`
 }
 
-// EnvelopeKind names the structured result a prompt returns.
-type EnvelopeKind string
-
-const (
-	EnvelopeResult    EnvelopeKind = "result"
-	EnvelopePlan      EnvelopeKind = "plan"
-	EnvelopeTriage    EnvelopeKind = "triage"
-	EnvelopeTriageNew EnvelopeKind = "triage.new"
-)
-
 // OutcomeKeep is the status an outcome names when the run itself decided the
-// todo's status — triage assigns one through its verdict, or deliberately
+// todo's status — triage assigns one through todo_update, or deliberately
 // leaves it alone — so the host must not write one.
 const OutcomeKeep = "keep"
 
@@ -85,7 +78,7 @@ var SubjectTypes = []string{"string", "bool", "int", "double", "dyn", "list<stri
 
 var validStatuses = map[string]bool{
 	string(types.StatusDraft): true, string(types.StatusPending): true, string(types.StatusInProgress): true,
-	string(types.StatusReview): true, string(types.StatusAsk): true, string(types.StatusVerified): true,
+	string(types.StatusReview): true, string(types.StatusVerified): true,
 	string(types.StatusUnverified): true, string(types.StatusCompleted): true, string(types.StatusFailed): true,
 	OutcomeKeep: true,
 }
@@ -141,10 +134,11 @@ func (s Step) validate() error {
 		return fmt.Errorf("step %s: prompt %q is not supported; the verify step runs the definition of done and must reference %s",
 			name, s.Prompt, promptRefPrefix+StepVerify)
 	}
-	switch s.Envelope {
-	case "", EnvelopeResult, EnvelopePlan, EnvelopeTriage, EnvelopeTriageNew:
-	default:
-		return fmt.Errorf("step %s: envelope %q is not one of result, plan, triage", name, s.Envelope)
+	if err := s.validateEvents(name); err != nil {
+		return err
+	}
+	if err := s.validateTools(name); err != nil {
+		return err
 	}
 	if len(s.Outcomes) == 0 {
 		return fmt.Errorf("step %s: at least one outcome is required", name)
@@ -180,10 +174,38 @@ func (l Lifecycle) Step(name string) (Step, bool) {
 	return Step{}, false
 }
 
-// EnvelopeOrDefault is the step's envelope with the default applied.
-func (s Step) EnvelopeOrDefault() EnvelopeKind {
-	if s.Envelope == "" {
-		return EnvelopeResult
+// VerifyEvents are the events the verify step's synthesised envelope reports.
+var VerifyEvents = []string{"passed", "failed"}
+
+func (s Step) validateEvents(name string) error {
+	if len(s.Events) == 0 {
+		return fmt.Errorf("step %s: events is required; it is the vocabulary of the envelope's event", name)
 	}
-	return s.Envelope
+	seen := map[string]bool{}
+	for _, event := range s.Events {
+		if strings.TrimSpace(event) == "" || event != strings.TrimSpace(event) {
+			return fmt.Errorf("step %s: event %q is blank or padded", name, event)
+		}
+		if seen[event] {
+			return fmt.Errorf("step %s: event %q is declared twice", name, event)
+		}
+		seen[event] = true
+	}
+	if name == StepVerify && !slices.Equal(s.Events, VerifyEvents) {
+		return fmt.Errorf("step %s: events must be %v, the verdicts the definition of done reports", name, VerifyEvents)
+	}
+	return nil
+}
+
+func (s Step) validateTools(name string) error {
+	sets := tools.Sets()
+	for _, set := range s.Tools {
+		if _, ok := sets[set]; !ok {
+			return fmt.Errorf("step %s: tool set %q is not one of %s", name, set, strings.Join(tools.SetNames(), ", "))
+		}
+	}
+	if name == StepVerify && len(s.Tools) > 0 {
+		return fmt.Errorf("step %s: the verify step runs no agent, so it takes no tools", name)
+	}
+	return nil
 }

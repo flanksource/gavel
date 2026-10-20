@@ -18,8 +18,8 @@ import (
 	flanksourceContext "github.com/flanksource/commons/context"
 	"github.com/flanksource/commons/logger"
 
-	"github.com/flanksource/gavel/fixtures/record"
 	"github.com/flanksource/gavel/processruntime"
+	"github.com/flanksource/gavel/traces"
 )
 
 // RunnerOptions configures the fixture runner
@@ -44,15 +44,21 @@ type RunnerOptions struct {
 	Display        *DisplayOptions                                       // Optional result visibility controls for CLI rendering
 	Spec           *api.Spec                                             // Runtime options for embedded AI prompts
 	ResolveSpec    func(context.Context) (api.ResolveSpecOptions, error) `json:"-" yaml:"-"` // Lazy authored layers and saved snapshot; Spec takes precedence
-	// Record is the run-wide `--record` default, applied only to fixtures that
-	// declared no `record:` of their own. An explicit `record: none` parses to an
-	// empty (non-nil) Spec precisely so it outranks this.
-	Record     *record.Spec
-	Benchmark  bool
-	Baseline   string
-	Profile    bool
-	SQLProfile bool
-	Limits     BenchmarkLimits
+	// DefaultTraces is the run-wide `--traces` default, armed only for fixtures
+	// that declared no `traces:` of their own. An explicit `traces: []` is a
+	// non-nil empty declaration precisely so it outranks this.
+	DefaultTraces *TraceSpecs
+	// TraceHost is the run's trace store, shared with the run that owns it
+	// (gavel test); nil opens one under WorkDir once a fixture arms a trace.
+	TraceHost *traces.Host `json:"-" yaml:"-"`
+	// ProcessTrace is the run's process capture, which --profile reads; nil
+	// starts one on the trace host for --profile.
+	ProcessTrace *traces.ProcessTrace `json:"-" yaml:"-"`
+	Benchmark    bool
+	Baseline     string
+	Profile      bool
+	SQLProfile   bool
+	Limits       BenchmarkLimits
 }
 
 // Runner manages fixture test execution using typed tasks
@@ -67,16 +73,31 @@ type Runner struct {
 	// keyed on FixtureNode.Origin.File. Keyed on the file rather than the source
 	// directory because two fixture files in one directory are independent.
 	setups map[string]*PreparedSetup
-	// recorders holds the diagnostics recorders per markdown file, keyed the
-	// same way. nil when nothing in the run declared `record:` — no goroutine,
-	// no listener, no file.
-	recorders      map[string]*recorderSet
-	store          *record.Store
-	progress       *executionTracker
-	resultMu       sync.Mutex
-	benchmark      *BenchmarkReport
-	workerSnapshot *ExecutionSnapshot
-	baseline       *BenchmarkReport
+	// traceHost is the store the run's traces commit to, nil while no fixture
+	// arms one; ownsTraceHost when the runner opened it. sharedTraces are the
+	// running file- and run-scope captures, by sharedTraceKey.
+	traceHost     *traces.Host
+	ownsTraceHost bool
+	sharedTraces  map[string]*traces.Capture
+	// profileTrace is the process capture --profile reads from profileMark
+	// on, ownsProfileTrace when the runner started it; profile is what it
+	// read once the run ended.
+	profileTrace     *traces.ProcessTrace
+	ownsProfileTrace bool
+	profileMark      traces.ProcessMark
+	profile          *ProfileReport
+	progress         *executionTracker
+	resultMu         sync.Mutex
+	benchmark        *BenchmarkReport
+	workerSnapshot   *ExecutionSnapshot
+	baseline         *BenchmarkReport
+	// backstopGrace is how long a fixture task's deadline outlasts a declared
+	// timeout (declaredTimeoutGrace outside tests).
+	backstopGrace time.Duration
+	// cutOff holds the fixtures whose task was cut off by its backstop deadline
+	// or failed outright: their verdict is final, and a run function that
+	// returns late must not overwrite it.
+	cutOff map[*FixtureNode]bool
 }
 
 // NewRunner creates a new fixture runner
@@ -143,10 +164,11 @@ func NewRunner(opts RunnerOptions) (*Runner, error) {
 	}
 
 	return &Runner{
-		options:   opts,
-		baseline:  baseline,
-		fixtures:  []FixtureTest{},
-		evaluator: evaluator,
+		options:       opts,
+		baseline:      baseline,
+		fixtures:      []FixtureTest{},
+		evaluator:     evaluator,
+		backstopGrace: declaredTimeoutGrace,
 		tree: &FixtureNode{
 			Name: "Fixtures",
 			Type: SectionNode,
@@ -170,23 +192,20 @@ func (r *Runner) Run() (*FixtureNode, error) {
 		return nil, fmt.Errorf("publish queued fixture progress: %w", err)
 	}
 
-	var sampler *profileSampler
-	if r.options.Profile {
-		sampler = startProfileSampler()
+	r.profile = nil
+	if err := r.startProfile(); err != nil {
+		return nil, errors.Join(err, r.closeTraces())
 	}
 	results, err := r.executeFixtures()
+	// executeFixtures closes the traces it prepared; one that returned before
+	// preparing them leaves the profile's for here.
+	err = errors.Join(err, r.closeTraces())
 
 	if err == nil {
 		clicky.WaitForGlobalCompletion()
 	}
 	if r.options.Benchmark || r.options.Profile {
-		var profile *ProfileReport
-		if sampler != nil {
-			var profileErr error
-			profile, profileErr = sampler.Stop()
-			err = errors.Join(err, profileErr)
-		}
-		if reportErr := r.saveBenchmarkReport(started, time.Now(), profile, err); reportErr != nil {
+		if reportErr := r.saveBenchmarkReport(started, time.Now(), r.profile, err); reportErr != nil {
 			err = errors.Join(err, reportErr)
 		}
 	}
@@ -421,45 +440,27 @@ func (r *Runner) executeFixtures() (results *FixtureGroup, runErr error) {
 		}
 	}
 
-	// Recorders start after the daemon so its port can be excluded from the
-	// proxy, and their defer is registered after the daemon's so LIFO closes
-	// them first — a daemon shutting down can still emit requests worth
-	// recording.
-	if err := r.prepareRecorders(); err != nil {
-		return nil, err
+	// Traces start after the daemon, which runs untraced, and stop once every
+	// file's scope is torn down, so a service a step started is traced until
+	// it stops.
+	if err := r.prepareTraces(); err != nil {
+		return nil, errors.Join(err, r.closeTraces())
 	}
-	defer r.closeRecorders()
+	defer func() { runErr = errors.Join(runErr, r.closeTraces()) }()
 
 	// Create typed task group for fixture execution. The group's own semaphore
 	// is the only thing that bounds a row's concurrency — the manager's worker
 	// pool is process-wide and already sized — so MaxWorkers has to arrive here
 	// as WithConcurrency or it bounds nothing at all.
 	fixtureGroup := task.StartGroup[FixtureResult]("Fixture Tests", task.WithConcurrency(r.maxWorkers()))
-	scopes := r.addFixtureTasks(fixtureGroup, parent)
+	r.cutOff = map[*FixtureNode]bool{}
+	scopes, queued := r.addFixtureTasks(fixtureGroup, parent)
 
-	// Wait for all fixture tasks to complete and collect results
-	groupResult := fixtureGroup.WaitFor()
+	// Wait on each task rather than the group: a task's own wait is what cuts it
+	// off at its deadline when its run function ignores the context.
+	tests, collectErr := r.collectFixtureResults(ctx, queued)
+	results.Tests = tests
 	r.attachTeardownResults(ctx, scopes)
-	if groupResult.Error != nil {
-		logger.Warnf("Some fixture tests failed: %v", groupResult.Error)
-	}
-
-	// Process results
-	fixtureResults, err := fixtureGroup.GetResults()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get fixture results: %w", err)
-	}
-
-	for _, result := range fixtureResults {
-		// Create a FixtureNode for the result
-		resultNode := FixtureNode{
-			Name:    result.Name,
-			Type:    TestNode,
-			Results: &result,
-		}
-		results.Tests = append(results.Tests, resultNode)
-
-	}
 
 	r.tree.UpdateStatsRecursive()
 	results.Summary = *r.tree.Stats
@@ -471,18 +472,18 @@ func (r *Runner) executeFixtures() (results *FixtureGroup, runErr error) {
 	// Prune empty sections from the tree
 	r.tree.PruneEmptySections()
 
-	return results, nil
+	return results, collectErr
 }
 
-func fixtureTimeout(fixture FixtureTest) time.Duration {
+// fixtureTimeout is a fixture's task deadline. A declared timeout is enforced by
+// runKind, which reports it as a timeout; the task deadline only backstops it,
+// so it fires after the declared one.
+func fixtureTimeout(fixture FixtureTest, grace time.Duration) time.Duration {
+	if timeout := fixture.declaredTimeout(); timeout != nil {
+		return *timeout + grace
+	}
 	if fixture.Step != nil {
 		return stepTaskTimeout(*fixture.Step)
-	}
-	if fixture.Expected.Timeout != nil {
-		return *fixture.Expected.Timeout
-	}
-	if fixture.Timeout != nil {
-		return *fixture.Timeout
 	}
 	return defaultFixtureTimeout
 }
@@ -558,22 +559,22 @@ func progressStepKey(kind ExecutionKind) string {
 	}
 }
 
+// attachResult puts a result on its node; the caller holds resultMu.
 func (r *Runner) attachResult(node *FixtureNode, result FixtureResult) {
-	r.resultMu.Lock()
-	defer r.resultMu.Unlock()
-	if len(result.Children) == 0 {
-		node.Results = &result
-		return
-	}
-	for _, child := range result.Children {
+	children := result.Children
+	result.Children = nil
+	stampSource(node, &result)
+	node.Results = &result
+	for _, child := range children {
 		node.AddChild(child)
 	}
 }
 
 // executeFixture runs a single fixture test in the environment prepared for the
-// file that declared it (zero-valued when that file declared neither `setup:`
-// nor `record:`). The dispatch itself is RunNode's: this only assembles the
-// run's environment around it and stamps the runner's own presentation.
+// file that declared it (zero-valued when that file declared no `setup:`),
+// under the traces it arms. The dispatch itself is RunNode's: this only
+// assembles the run's environment around it, lands its traces and stamps the
+// runner's own presentation.
 func (r *Runner) executeFixture(ctx flanksourceContext.Context, fixture FixtureTest, env fixtureEnv) (FixtureResult, error) {
 	if r.options.WorkDir == "" {
 		r.options.WorkDir, _ = os.Getwd()
@@ -595,8 +596,6 @@ func (r *Runner) executeFixture(ctx flanksourceContext.Context, fixture FixtureT
 		SQLProfile:     r.options.SQLProfile,
 		Setup:          env.setup,
 		Scope:          env.scope,
-		Recorder:       r.recorderContext(env.file),
-		Record:         r.effectiveRecord(fixture),
 		DaemonPort:     r.daemonPort,
 		Progress:       fixtureProgressFromContext(ctx),
 		ExtraArgs: map[string]interface{}{
@@ -605,7 +604,12 @@ func (r *Runner) executeFixture(ctx flanksourceContext.Context, fixture FixtureT
 	}
 
 	start := time.Now()
-	result := RunNode(ctx, fixture, opts)
+	armed, err := r.armTraces(ctx, fixture, env)
+	if err != nil {
+		return nodeError(fixture, fmt.Sprintf("arm traces: %v", err)), nil
+	}
+	opts.Traces = armed
+	result := applyTraces(RunNode(ctx, fixture, opts), armed.Collect(ctx))
 	result.Duration = time.Since(start)
 	if r.options.Display != nil {
 		result.Display = r.options.Display

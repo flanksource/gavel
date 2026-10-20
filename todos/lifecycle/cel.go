@@ -12,14 +12,12 @@ import (
 
 // Variables every predicate can read.
 const (
-	VarSubject   = "subject"
-	VarRuns      = "runs"
-	VarLast      = "last"
-	VarRun       = "run"
-	VarVerify    = "verify"
-	VarEnvelope  = "envelope"
-	VarPlan      = "plan"
-	VarQuestions = "questions"
+	VarSubject  = "subject"
+	VarRuns     = "runs"
+	VarLast     = "last"
+	VarRun      = "run"
+	VarVerify   = "verify"
+	VarEnvelope = "envelope"
 )
 
 // Env compiles the lifecycle's predicates. It is strict on purpose: a name no
@@ -55,8 +53,6 @@ func NewEnv(subject map[string]string) (*Env, error) {
 		cel.Variable(VarRun, dynMap),
 		cel.Variable(VarVerify, dynMap),
 		cel.Variable(VarEnvelope, dynMap),
-		cel.Variable(VarPlan, dynMap),
-		cel.Variable(VarQuestions, cel.ListType(cel.DynType)),
 	)...)
 	if err != nil {
 		return nil, fmt.Errorf("lifecycle outcome env: %w", err)

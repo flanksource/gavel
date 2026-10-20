@@ -1,13 +1,18 @@
-import type { Test } from './types';
-import type { Filters } from './components/FilterBar';
-import type { LintFilters, LintGrouping } from './components/LintFilterBar';
-import { decodeFilterState, encodeFilterState } from './filterState';
-import type { FilterState } from './filterState';
+import {
+  DEFAULT_LINT_GROUPING,
+  LINT_GROUPINGS,
+  decodeFilterState,
+  encodeFilterState,
+  type FilterState,
+  type LintFilters,
+  type LintGrouping,
+  type LintSeverity,
+  type TestFilters,
+} from '@flanksource/clicky-ui/data';
 import { basePath } from './config';
 
 const DEFAULT_STATUS_FILTER_TOKENS = ['!passed', '!skipped'];
 const STATUS_FILTER_ALL_SENTINEL = 'all';
-const DEFAULT_LINT_GROUPING: LintGrouping = 'linter-rule-file';
 
 export function defaultStatusFilter(): FilterState<string> {
   return decodeFilterState(DEFAULT_STATUS_FILTER_TOKENS);
@@ -21,15 +26,18 @@ function isDefaultStatusFilter(state: FilterState<string>): boolean {
   return want.every((token, i) => token === got[i]);
 }
 
-export type TabKey = 'tests' | 'lint' | 'bench' | 'diagnostics';
+export type TabKey = 'tests' | 'lint' | 'bench' | 'processes';
+
+const TAB_KEYS: readonly TabKey[] = ['tests', 'lint', 'bench', 'processes'];
 
 export interface RouteState {
   tab: TabKey;
   selectedPath: string;
-  filters: Filters;
+  filters: TestFilters;
   lintGrouping: LintGrouping;
   lintFilters: LintFilters;
   sampleIndex?: number;
+  hideExited?: boolean;
 }
 
 export type ExportFormat = 'json' | 'md' | 'pdf';
@@ -39,7 +47,7 @@ function splitCSV(value: string | null): string[] {
   return value.split(',').map(v => v.trim()).filter(Boolean);
 }
 
-export function parseRoute(location: Location): RouteState {
+export function parseRoute(location: Pick<Location, 'pathname' | 'search'>): RouteState {
   let pathname = location.pathname;
   if (basePath && pathname.startsWith(basePath)) {
     pathname = pathname.slice(basePath.length);
@@ -49,13 +57,14 @@ export function parseRoute(location: Location): RouteState {
   let tab: TabKey = 'tests';
   let selectedPath = '';
 
-  if (segments[0] === 'tests' || segments[0] === 'lint' || segments[0] === 'bench' || segments[0] === 'diagnostics') {
-    tab = segments[0];
+  const first = segments[0] as TabKey | undefined;
+  if (first && TAB_KEYS.includes(first)) {
+    tab = first;
     selectedPath = segments.slice(1).join('/');
   }
 
   const params = new URLSearchParams(location.search);
-	const sample = params.get('sample');
+  const sample = params.get('sample');
   const rawStatus = params.get('status');
   let status: FilterState<string>;
   if (rawStatus === null) {
@@ -74,10 +83,11 @@ export function parseRoute(location: Location): RouteState {
     },
     lintGrouping: parseLintGrouping(params.get('grouping')),
     lintFilters: {
-      severity: decodeFilterState(splitCSV(params.get('severity')) as any[]),
+      severity: decodeFilterState<LintSeverity>(splitCSV(params.get('severity'))),
       linter: decodeFilterState(splitCSV(params.get('linter'))),
     },
-		sampleIndex: sample !== null && /^\d+$/.test(sample) ? Number(sample) : undefined,
+    sampleIndex: sample !== null && /^\d+$/.test(sample) ? Number(sample) : undefined,
+    hideExited: params.get('hideExited') === '1',
   };
 }
 
@@ -102,7 +112,8 @@ export function buildRoute(state: RouteState): string {
     if (state.lintFilters.severity.size > 0) params.set('severity', encodeFilterState(state.lintFilters.severity).join(','));
     if (state.lintFilters.linter.size > 0) params.set('linter', encodeFilterState(state.lintFilters.linter).join(','));
   }
-	if (state.tab === 'bench' && state.sampleIndex !== undefined) params.set('sample', String(state.sampleIndex));
+  if (state.tab === 'bench' && state.sampleIndex !== undefined) params.set('sample', String(state.sampleIndex));
+  if (state.tab === 'processes' && state.hideExited) params.set('hideExited', '1');
 
   const query = params.toString();
   return `${basePath}/${segments.join('/')}${query ? `?${query}` : ''}`;
@@ -115,65 +126,6 @@ export function buildExportRoute(state: RouteState, format: ExportFormat): strin
 }
 
 function parseLintGrouping(value: string | null): LintGrouping {
-  if (value === 'linter-file' || value === 'file-linter-rule' || value === 'linter-rule-file' || value === 'summary') {
-    return value;
-  }
-  return DEFAULT_LINT_GROUPING;
-}
-
-function slugify(value: string): string {
-  const slug = (value || '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
-  return slug || 'node';
-}
-
-function displayLabel(test: Test): string {
-  if (test.framework !== 'go test') return test.name || '';
-  if (test.name.endsWith('/')) return test.name;
-  const parts = test.name.split('/');
-  return parts.map((part, index) => {
-    if (index === 0) {
-      return part
-        .replace(/^Test/, '')
-        .replace(/([a-z0-9])([A-Z])/g, '$1 $2');
-    }
-    return part.replace(/_/g, ' ');
-  }).join(' / ');
-}
-
-export function annotateRoutePaths(nodes: Test[], parentSegments: string[] = []): Test[] {
-  const counts = new Map<string, number>();
-  const slugs = nodes.map(node => {
-    const slug = slugify(displayLabel(node));
-    counts.set(slug, (counts.get(slug) || 0) + 1);
-    return slug;
-  });
-  const seen = new Map<string, number>();
-
-  return nodes.map((node, index) => {
-    const slug = slugs[index];
-    const ordinal = (seen.get(slug) || 0) + 1;
-    seen.set(slug, ordinal);
-    const finalSlug = (counts.get(slug) || 0) > 1 ? `${slug}~${ordinal}` : slug;
-    const routePath = [...parentSegments, finalSlug].join('/');
-    return {
-      ...node,
-      route_path: routePath,
-      children: node.children ? annotateRoutePaths(node.children, [...parentSegments, finalSlug]) : undefined,
-    };
-  });
-}
-
-export function findNodeByRoutePath(nodes: Test[], target: string): Test | null {
-  if (!target) return null;
-  for (const node of nodes) {
-    if (node.route_path === target) return node;
-    if (node.children) {
-      const child = findNodeByRoutePath(node.children, target);
-      if (child) return child;
-    }
-  }
-  return null;
+  const grouping = LINT_GROUPINGS.find(candidate => candidate === value);
+  return grouping ?? DEFAULT_LINT_GROUPING;
 }

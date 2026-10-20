@@ -160,6 +160,7 @@ func gavelMCPTestIgnoredParams() []string {
 		"bench",
 		"detach",
 		"diagnostics",
+		"process-facets",
 		"fixture-files",
 		"fixtures",
 		"idle-timeout",

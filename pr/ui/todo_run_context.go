@@ -198,7 +198,7 @@ func todoRunLifecycleFor(definition lifecycle.Lifecycle) todoRunLifecycle {
 
 // stepLabel is a step name as a picker shows it: `shape-it` → `Shape it`.
 func stepLabel(name string) string {
-	words := strings.Fields(strings.NewReplacer("-", " ", "_", " ").Replace(name))
+	words := strings.Fields(strings.NewReplacer("-", " ", "_", " ", ".", " ").Replace(name))
 	if len(words) == 0 {
 		return name
 	}

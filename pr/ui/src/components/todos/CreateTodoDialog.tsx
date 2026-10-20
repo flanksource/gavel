@@ -5,7 +5,7 @@ import { ScreenshotPicker, todoFormData, useAttachments } from './attachments';
 import { inputClass, priorities, statuses, statusLabel } from './format';
 import { TodoBodyField } from './TodoBodyField';
 import { useCreateTodoMutation, type CreateTodoResponse } from './todoMutations';
-import { TriageAfterCreation, TriageCreationRecovery } from './TriageAfterCreation';
+import { RunAfterCreation, RunCreationRecovery, useRunAfterCreation } from './RunAfterCreation';
 import { TodoPRField, todoPRLink } from './TodoPRLink';
 
 // initialDir picks the workspace to preselect: the current todo's workspace when
@@ -51,8 +51,8 @@ function CreateTodoForm({ onClose, workspaces, parent, onCreated, defaultDir }: 
   const [priority, setPriority] = useState<TodoPriority>('medium');
   const [status, setStatus] = useState<TodoStatus>('pending');
   const [error, setError] = useState('');
-  const [triage, setTriage] = useState(true);
   const [created, setCreated] = useState<CreateTodoResponse | null>(null);
+  const runAfter = useRunAfterCreation({ dir, status });
   // The paste listener lives only while the form is mounted, i.e. while open.
   const { attachments, previews, add, remove } = useAttachments({ pasteAnywhere: true });
   const createTodo = useCreateTodoMutation(dir);
@@ -64,14 +64,14 @@ function CreateTodoForm({ onClose, workspaces, parent, onCreated, defaultDir }: 
     try {
       // /api/todos/new accepts both JSON and multipart; post the image bytes as
       // multipart when screenshots are attached, otherwise the lighter JSON path.
-      const fields = { title, body, priority, status, triage, pr: todoPRLink(prURL), ...(parent ? { parent: parent.ref } : {}) };
+      const fields = { title, body, priority, status, ...(runAfter.step ? { step: runAfter.step } : {}), pr: todoPRLink(prURL), ...(parent ? { parent: parent.ref } : {}) };
       const result = await createTodo.mutateAsync(attachments.length
         ? { body: todoFormData(fields, attachments) }
         : {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(fields),
           });
-      if (result.triage?.status === 'failed') setCreated(result);
+      if (result.run?.status === 'failed') setCreated(result);
       else onCreated(dir, result.todo);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create todo');
@@ -91,7 +91,7 @@ function CreateTodoForm({ onClose, workspaces, parent, onCreated, defaultDir }: 
         </div>
       }
     >
-      {created ? <TriageCreationRecovery result={created} dir={dir} onDone={() => onCreated(dir, created.todo)} /> : <div className="space-y-3">
+      {created ? <RunCreationRecovery result={created} dir={dir} step={runAfter.step} onDone={() => onCreated(dir, created.todo)} /> : <div className="space-y-3">
         {error && <div className="text-sm text-destructive">{error}</div>}
         {parent ? (
           <Field label="Child of">
@@ -129,7 +129,7 @@ function CreateTodoForm({ onClose, workspaces, parent, onCreated, defaultDir }: 
             </Field>
           </div>
         </div>
-        <TriageAfterCreation checked={triage} onChange={setTriage} disabled={busy} />
+        <RunAfterCreation state={runAfter} disabled={busy} />
         <TodoPRField value={prURL} onChange={setPRURL} disabled={busy} />
         <TodoBodyField
           label="Body"

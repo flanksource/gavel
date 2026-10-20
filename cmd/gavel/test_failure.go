@@ -11,7 +11,7 @@ import (
 
 // testRunFailure is the error a failed run returns for serialized output
 // formats. Clicky's command runner drops the result value whenever the command
-// returns an error, so a run that dies before finishing — a pre-build failure,
+// returns an error, so a run that dies before finishing — a setup failure,
 // a timeout, a crashed runner — would otherwise write no `--format json=FILE`
 // document at all, leaving CI to guess. Embedding testui.Snapshot gives this
 // error the Pretty/GetChildren interfaces clicky's renderableError looks for,
@@ -28,7 +28,7 @@ func (f testRunFailure) Error() string { return f.err.Error() }
 func (f testRunFailure) Unwrap() error { return f.err }
 
 // newTestRunFailure builds the crash envelope from whatever the runner managed
-// to produce. tests and lint may be empty — a pre-build failure yields neither,
+// to produce. tests and lint may be empty — a setup failure yields neither,
 // and the Error field is then the only useful output.
 func newTestRunFailure(
 	opts testrunner.RunOptions,

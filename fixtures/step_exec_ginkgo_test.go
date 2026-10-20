@@ -158,7 +158,7 @@ var _ = Describe("generic step execution", func() {
 		Expect(executed).To(BeZero())
 	})
 
-	It("waits on an Observer until its CEL verdict, recording each observation", func() {
+	It("waits on an Observer until its CEL verdict, recording only final outputs", func() {
 		calls := 0
 		useKind(observingKind{
 			fakeKind: fakeKind{name: "poller", execute: passing(map[string]any{"state": "starting"}, nil)},
@@ -178,7 +178,8 @@ var _ = Describe("generic step execution", func() {
 		Expect(results[0].Status).To(Equal(task.StatusPASS), results[0].Error)
 		wait := metadataJSON(results[0])["wait"].(map[string]any)
 		Expect(wait["outcome"]).To(Equal(WaitSatisfied))
-		Expect(wait["observations"]).To(HaveLen(2))
+		Expect(wait).NotTo(HaveKey("observations"))
+		Expect(wait["outputs"]).To(Equal(map[string]any{"state": "ready"}))
 		Expect(wait["policy"]).To(HaveKeyWithValue("until", "state == 'ready'"))
 		Expect(metadataJSON(results[0])["outputs"]).To(Equal(map[string]any{"state": "ready"}))
 	})
@@ -237,6 +238,10 @@ var _ = Describe("generic step execution", func() {
 		Expect(results[0].Status).To(Equal(task.StatusFAIL))
 		Expect(results[0].CELExpression).To(Equal("count == 3"))
 		Expect(results[0].CELTrace).ToNot(BeEmpty())
+		attempts := results[0].Metadata["attempts"].([]AttemptReport)
+		Expect(attempts[0].Status).To(Equal(AttemptFailed))
+		Expect(attempts[0].Result.CELTrace).To(Equal(results[0].CELTrace))
+		Expect(attempts[0].Result.Metadata).NotTo(HaveKey("attempts"))
 	})
 
 	It("renders config templates before Execute, unless the kind templates its own", func() {
@@ -260,7 +265,7 @@ var _ = Describe("generic step execution", func() {
 		Expect(configs).To(Equal([]string{`{"value":"{{.port}}"}`, `{"z":"seen","a":[1,{"y":2,"x":"$KEEP"}]}`}))
 	})
 
-	It("enforces the step timeout over Execute", func() {
+	It("fails a step killed by its own timeout as timed out", func() {
 		useKind(fakeKind{name: "slow", execute: func(ctx context.Context, _ *StepContext) (StepOutcome, error) {
 			<-ctx.Done()
 			return StepOutcome{}, ctx.Err()
@@ -268,8 +273,28 @@ var _ = Describe("generic step execution", func() {
 
 		results := runSteps(StepSpec{ID: "x", Kind: "slow", Timeout: dur(20 * time.Millisecond)})
 
-		Expect(results[0].Status).To(Equal(task.StatusERR))
-		Expect(results[0].Error).To(ContainSubstring("deadline exceeded"))
+		Expect([]any{results[0].Status, results[0].TimedOut, results[0].Error}).To(Equal([]any{
+			task.StatusFAIL, true, "step x timed out after 20ms: context deadline exceeded",
+		}))
+		attempts := results[0].Metadata["attempts"].([]AttemptReport)
+		Expect(attempts[0].Status).To(Equal(AttemptFailed))
+		Expect(attempts[0].Result.TimedOut).To(BeTrue())
+		Expect(attempts[0].Result.Error).To(Equal(results[0].Error))
+	})
+
+	It("does not report a step cancelled with its run as timed out", func() {
+		ctx, cancel := context.WithCancel(context.Background())
+		useKind(fakeKind{name: "slow", execute: func(ctx context.Context, _ *StepContext) (StepOutcome, error) {
+			cancel()
+			<-ctx.Done()
+			return StepOutcome{}, ctx.Err()
+		}})
+
+		results, _, err := RunNodes(ctx, []*FixtureNode{stepNode(StepSpec{ID: "x", Kind: "slow", Timeout: dur(time.Minute)})},
+			RunOptions{WorkDir: GinkgoT().TempDir()})
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect([]any{results[0].Status, results[0].TimedOut}).To(Equal([]any{task.StatusERR, false}))
 	})
 
 	It("reports an unknown kind as an errored result", func() {

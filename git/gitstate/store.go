@@ -15,12 +15,12 @@ import (
 
 // ChangeChannel is the NOTIFY channel a repo's id is sent on whenever its rows
 // change, so every gavel process sharing the database can push the change to
-// its UI.
+// its UI. The triggers of schema/171 send it, not this package.
 const ChangeChannel = "gavel_git_change"
 
-// Store reads and writes the git_* tables. Writes that change what a reader
-// sees advance the repo's generation and NOTIFY ChangeChannel in the same
-// transaction.
+// Store reads and writes the git_* tables. Triggers on those tables (schema/171)
+// advance the repo's generation and NOTIFY ChangeChannel in the same
+// transaction whenever a write changes what a reader sees.
 type Store struct {
 	db *gorm.DB
 }
@@ -110,26 +110,19 @@ func (s *Store) Locked(ctx context.Context, key string, wait bool, fn func(tx *S
 	return err == nil, err
 }
 
-// RefsFingerprint is the fingerprint the last ref scan stored, "" when the
-// repo was never scanned or its last scan failed.
-func (s *Store) RefsFingerprint(ctx context.Context, repoID uuid.UUID) (string, error) {
-	var fingerprint *string
-	err := s.db.WithContext(ctx).Raw(`SELECT refs_fingerprint FROM git_repos WHERE id = ? AND error IS NULL`, repoID).Scan(&fingerprint).Error
-	if err != nil {
-		return "", fmt.Errorf("read refs fingerprint of git repo %s: %w", repoID, err)
+// MarkRefsUnchanged records a ref scan whose fingerprint equals the one the
+// repo's last good scan stored, and reports whether it did. Like
+// MarkStatusUnchanged it writes only the UNLOGGED git_repo_overview row
+// (schema/171); false means the refs changed, the last scan failed, or the
+// overview has no row, and the caller applies the scan instead.
+func (s *Store) MarkRefsUnchanged(ctx context.Context, repoID uuid.UUID, fingerprint string) (bool, error) {
+	result := s.db.WithContext(ctx).Exec(`
+		UPDATE git_repo_overview SET refs_scanned_at = now()
+		WHERE repo_id = ? AND refs_fingerprint = ?`, repoID, fingerprint)
+	if result.Error != nil {
+		return false, fmt.Errorf("mark refs of git repo %s scanned: %w", repoID, result.Error)
 	}
-	if fingerprint == nil {
-		return "", nil
-	}
-	return *fingerprint, nil
-}
-
-// MarkRefsScanned records an unchanged ref scan.
-func (s *Store) MarkRefsScanned(ctx context.Context, repoID uuid.UUID) error {
-	if err := s.db.WithContext(ctx).Exec(`UPDATE git_repos SET refs_scanned_at = now() WHERE id = ?`, repoID).Error; err != nil {
-		return fmt.Errorf("mark refs of git repo %s scanned: %w", repoID, err)
-	}
-	return nil
+	return result.RowsAffected == 1, nil
 }
 
 // ApplyRefs replaces the repo's ref-level rows with update: worktrees missing
@@ -177,7 +170,7 @@ func (s *Store) ApplyRefs(ctx context.Context, repoID uuid.UUID, update RefsUpda
 			return fmt.Errorf("insert branch %s: %w", branch.Name, err)
 		}
 	}
-	return s.bump(ctx, repoID)
+	return nil
 }
 
 // MissingRanges returns the keys with no cached comparison yet.
@@ -225,27 +218,30 @@ func (s *Store) SaveRanges(ctx context.Context, repoID uuid.UUID, ranges []Range
 	return nil
 }
 
-// StatusFingerprint is the fingerprint the last status scan of the worktree
-// stored, "" when it was never scanned.
-func (s *Store) StatusFingerprint(ctx context.Context, repoID uuid.UUID, path string) (string, error) {
-	var fingerprint *string
-	err := s.db.WithContext(ctx).Raw(`SELECT status_fingerprint FROM git_worktrees WHERE repo_id = ? AND path = ? AND status_error IS NULL`,
-		repoID, path).Scan(&fingerprint).Error
-	if err != nil {
-		return "", fmt.Errorf("read status fingerprint of worktree %s: %w", path, err)
+// MarkStatusUnchanged records a status scan whose fingerprint equals the one
+// the worktree's last good scan stored, and reports whether it did. It writes
+// only the UNLOGGED git_worktree_overview row (schema/170); false means the
+// status changed, the last scan failed, or the overview has no row for the
+// worktree, and the caller applies a full scan instead.
+func (s *Store) MarkStatusUnchanged(ctx context.Context, repoID uuid.UUID, path, fingerprint string) (bool, error) {
+	result := s.db.WithContext(ctx).Exec(`
+		UPDATE git_worktree_overview SET status_scanned_at = now()
+		WHERE repo_id = ? AND path = ? AND status_fingerprint = ?`, repoID, path, fingerprint)
+	if result.Error != nil {
+		return false, fmt.Errorf("mark worktree %s scanned: %w", path, result.Error)
 	}
-	if fingerprint == nil {
-		return "", nil
-	}
-	return *fingerprint, nil
+	return result.RowsAffected == 1, nil
 }
 
-// MarkStatusScanned records an unchanged status scan.
-func (s *Store) MarkStatusScanned(ctx context.Context, repoID uuid.UUID, path string) error {
-	if err := s.db.WithContext(ctx).Exec(`UPDATE git_worktrees SET status_scanned_at = now() WHERE repo_id = ? AND path = ?`, repoID, path).Error; err != nil {
-		return fmt.Errorf("mark worktree %s scanned: %w", path, err)
+// EnsureOverview rebuilds git_worktree_overview and git_repo_overview when
+// crash recovery left them empty, announcing every repo so listeners reload,
+// and reports whether it did.
+func (s *Store) EnsureOverview(ctx context.Context) (bool, error) {
+	var rebuilt bool
+	if err := s.db.WithContext(ctx).Raw(`SELECT public.gavel_git_overview_ensure()`).Scan(&rebuilt).Error; err != nil {
+		return false, fmt.Errorf("ensure git overviews: %w", err)
 	}
-	return nil
+	return rebuilt, nil
 }
 
 // ApplyStatus replaces the worktree's uncommitted state.
@@ -258,10 +254,11 @@ func (s *Store) ApplyStatus(ctx context.Context, repoID uuid.UUID, path string, 
 	if err != nil {
 		return fmt.Errorf("encode files of worktree %s: %w", path, err)
 	}
-	// Advance the generation first: ApplyRefs locks the repo row before its
-	// worktree rows, so a status write taking them the other way round
-	// deadlocks with the refs scan a commit triggers alongside it.
-	if err := s.bump(ctx, repoID); err != nil {
+	// Lock the repo row first: ApplyRefs locks it (and, through the schema/171
+	// triggers, the overview row) before its worktree rows, so a status write
+	// taking them the other way round deadlocks with the refs scan a commit
+	// triggers alongside it. Callers run this inside Locked's transaction.
+	if err := s.lockRepo(ctx, repoID); err != nil {
 		return err
 	}
 	c := update.Changes
@@ -283,13 +280,25 @@ func (s *Store) ApplyStatus(ctx context.Context, repoID uuid.UUID, path string, 
 // RecordStatusError records a failed status scan of the worktree, keeping
 // its last good state.
 func (s *Store) RecordStatusError(ctx context.Context, repoID uuid.UUID, path string, scanErr error) error {
-	// Repo row before worktree row, as in ApplyStatus.
-	if err := s.bump(ctx, repoID); err != nil {
-		return err
-	}
-	if err := s.db.WithContext(ctx).Exec(`UPDATE git_worktrees SET status_error = ?, status_scanned_at = now() WHERE repo_id = ? AND path = ?`,
-		scanErr.Error(), repoID, path).Error; err != nil {
-		return fmt.Errorf("record status error of worktree %s: %w", path, err)
+	// Repo row before worktree row, as in ApplyStatus, held until the update
+	// commits.
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := (&Store{db: tx}).lockRepo(ctx, repoID); err != nil {
+			return err
+		}
+		if err := tx.Exec(`UPDATE git_worktrees SET status_error = ?, status_scanned_at = now() WHERE repo_id = ? AND path = ?`,
+			scanErr.Error(), repoID, path).Error; err != nil {
+			return fmt.Errorf("record status error of worktree %s: %w", path, err)
+		}
+		return nil
+	})
+}
+
+// lockRepo takes the repo row lock ApplyRefs' update takes, without writing
+// the row, so status writes order their locks the same way.
+func (s *Store) lockRepo(ctx context.Context, repoID uuid.UUID) error {
+	if err := s.db.WithContext(ctx).Exec(`SELECT 1 FROM git_repos WHERE id = ? FOR NO KEY UPDATE`, repoID).Error; err != nil {
+		return fmt.Errorf("lock git repo %s: %w", repoID, err)
 	}
 	return nil
 }
@@ -299,17 +308,6 @@ func (s *Store) RecordStatusError(ctx context.Context, repoID uuid.UUID, path st
 func (s *Store) RecordError(ctx context.Context, repoID uuid.UUID, scanErr error) error {
 	if err := s.db.WithContext(ctx).Exec(`UPDATE git_repos SET error = ?, error_at = now() WHERE id = ?`, scanErr.Error(), repoID).Error; err != nil {
 		return fmt.Errorf("record error of git repo %s: %w", repoID, err)
-	}
-	return s.bump(ctx, repoID)
-}
-
-func (s *Store) bump(ctx context.Context, repoID uuid.UUID) error {
-	db := s.db.WithContext(ctx)
-	if err := db.Exec(`UPDATE git_repos SET generation = generation + 1 WHERE id = ?`, repoID).Error; err != nil {
-		return fmt.Errorf("advance generation of git repo %s: %w", repoID, err)
-	}
-	if err := db.Exec(`SELECT pg_notify(?, ?)`, ChangeChannel, repoID.String()).Error; err != nil {
-		return fmt.Errorf("notify change of git repo %s: %w", repoID, err)
 	}
 	return nil
 }

@@ -5,7 +5,6 @@ import (
 	"os/exec"
 	"strings"
 
-	captainai "github.com/flanksource/captain/pkg/ai"
 	"github.com/flanksource/captain/pkg/ai/agent"
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/gavel/pr/model"
@@ -29,12 +28,13 @@ func (p *prExecution) PreRun(hc *agent.HookContext) error {
 	return p.target.FetchHead(hc.Context, p.workDir)
 }
 
-func prTurnEnvelope(hc *agent.HookContext) (*types.PRRunEnvelope, error) {
+// turnEnvelope is the envelope a PR turn ended with, held to the step's events.
+func (p *prExecution) turnEnvelope(hc *agent.HookContext) (*types.Envelope, error) {
 	if hc.Response == nil {
 		return nil, fmt.Errorf("PR turn has no response")
 	}
 	if hc.Response.TerminalOutcome != nil && hc.Response.TerminalOutcome.Kind == api.TerminalOutcomeQuestions {
-		return nil, nil
+		return nil, fmt.Errorf("%s", errAskThroughTool)
 	}
 	raw := hc.Response.Text
 	if hc.Response.StructuredData != nil {
@@ -44,23 +44,30 @@ func prTurnEnvelope(hc *agent.HookContext) (*types.PRRunEnvelope, error) {
 			return nil, err
 		}
 	}
-	return captainai.ParseStructured(raw, (*types.PRRunEnvelope).Validate)
+	return ParseEnvelope(p.events, raw)
 }
 
-func completedPRTurn(hc *agent.HookContext) (bool, error) {
+// completedTurn is the commit pipeline's ShouldCommit: only a turn whose
+// envelope claims success is committed and pushed.
+func (p *prExecution) completedTurn(hc *agent.HookContext) (bool, error) {
 	if hc.Failed || hc.PostErr != nil || hc.Phase != agent.PhaseTurn {
 		return false, nil
 	}
-	env, err := prTurnEnvelope(hc)
-	return env != nil && env.EndStatus == types.EndCompleted, err
+	env, err := p.turnEnvelope(hc)
+	return env != nil && env.Success, err
 }
 
 func (p *prExecution) Post(hc *agent.HookContext, phase agent.Phase) error {
 	if !p.write || phase != agent.PhaseTurn {
 		return nil
 	}
-	completed, err := completedPRTurn(hc)
+	completed, err := p.completedTurn(hc)
 	if err != nil || !completed {
+		// A turn that is not pushed addressed nothing: its threads are not
+		// carried into the next turn's push.
+		if p.tools != nil {
+			p.tools.TakeThreads()
+		}
 		return err
 	}
 	if hc.Request == nil || hc.Request.Setup == nil || hc.Request.Setup.Cwd == "" {
@@ -80,38 +87,38 @@ func (p *prExecution) Post(hc *agent.HookContext, phase agent.Phase) error {
 	if err != nil {
 		return err
 	}
-	env, err := prTurnEnvelope(hc)
-	if err != nil {
-		return err
+	var addressed []string
+	if p.tools != nil {
+		addressed = p.tools.TakeThreads()
 	}
 	snapshot, err := p.client.Status(hc.Context, p.number, model.StatusOptions{Threads: true})
 	if err != nil {
 		return err
 	}
-	if err := validateAddressedThreads(snapshot, head, env.AddressedThreadIDs); err != nil {
+	if err := validateAddressedThreads(snapshot, head, addressed, p.openThreads); err != nil {
 		return err
 	}
-	for _, id := range env.AddressedThreadIDs {
+	for _, id := range addressed {
 		if err := p.client.ResolveThread(hc.Context, p.number, id); err != nil {
 			return fmt.Errorf("resolve addressed PR thread %s: %w", id, err)
 		}
+		delete(p.openThreads, id)
 	}
-	snapshot, err = p.client.Status(hc.Context, p.number, model.StatusOptions{Threads: true, Logs: true, TailLogs: 40})
+	snapshot, err = p.client.Status(hc.Context, p.number, model.StatusOptions{Threads: true})
 	if err != nil {
 		return err
 	}
-	if err := validateAddressedThreads(snapshot, head, nil); err != nil {
+	if err := validateAddressedThreads(snapshot, head, nil, p.openThreads); err != nil {
 		return err
 	}
-	p.snapshot = snapshot
-	if err := setPRStatusContext(&hc.Request.Prompt, snapshot); err != nil {
-		return err
-	}
-	hc.Notify("PR #%d pushed revision %s; addressed threads: %s. The fixture will verify the entire PR at this revision.", p.number, head, strings.Join(env.AddressedThreadIDs, ", "))
+	hc.Notify("PR #%d pushed revision %s; addressed threads: %s. The fixture will verify the entire PR at this revision.", p.number, head, strings.Join(addressed, ", "))
 	return nil
 }
 
-func validateAddressedThreads(snapshot *model.StatusSnapshot, head string, ids []string) error {
+// validateAddressedThreads refuses to resolve anything unless the PR is open at
+// the pushed head, and every ID is a resolvable thread of this PR that was open
+// when the run was prepared (see openThreads).
+func validateAddressedThreads(snapshot *model.StatusSnapshot, head string, ids []string, open map[string]bool) error {
 	if snapshot == nil || snapshot.PR == nil || snapshot.PR.State != "OPEN" || snapshot.PR.HeadRefOID != head {
 		return fmt.Errorf("PR status does not match the pushed open PR head %s", head)
 	}
@@ -126,6 +133,9 @@ func validateAddressedThreads(snapshot *model.StatusSnapshot, head string, ids [
 		}
 		if !thread.IsResolved && !thread.CanResolve {
 			return fmt.Errorf("addressed thread %q cannot be resolved by the current user", id)
+		}
+		if !open[id] {
+			return fmt.Errorf("addressed thread %q was not open when this run was prepared", id)
 		}
 	}
 	return nil
