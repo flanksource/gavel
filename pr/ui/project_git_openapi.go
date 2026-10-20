@@ -51,6 +51,13 @@ func projectGitOpenAPIPaths() map[string]any {
 		"/api/projects/{name}/branch/pr": map[string]any{
 			"post": projectLifecycleOp("projects_branch_pr", "Open a pull request carrying a branch's commits", "200", "ProjectBranchPRResponse", jsonRequestBody("ProjectBranchPRRequest")),
 		},
+		"/api/projects/{name}/branch/rebase": map[string]any{
+			"get":  projectLifecycleOp("projects_branch_rebase_context", "Get rebase targets and a worktree's recoverable operation", "200", "ProjectRebaseContext", map[string]any{"parameters": append(nameParam()["parameters"].([]any), worktreeParam())}),
+			"post": projectLifecycleOp("projects_branch_rebase", "Rebase a checked-out branch and restore its saved local edits", "200", "ProjectRebaseOperation", jsonRequestBody("ProjectRebaseRequest")),
+		},
+		"/api/projects/{name}/branch/rebase/abort": map[string]any{
+			"post": projectLifecycleOp("projects_branch_rebase_abort", "Abort an owned rebase and restore its saved local edits", "200", "ProjectRebaseOperation", jsonRequestBody("ProjectRebaseRequest")),
+		},
 		"/api/git/stream": map[string]any{"get": map[string]any{
 			"operationId": "git_stream",
 			"summary":     "Stream {project: generation} for every tracked project whenever a repository's git state changes",
@@ -99,7 +106,7 @@ func projectGitOpenAPISchemas() map[string]any {
 		"worktrees": map[string]any{"type": "integer", "description": "Linked worktrees, the primary checkout excluded"},
 		"branches":  typed("integer"), "error": typed("string"),
 	})
-	return map[string]any{
+	schemas := map[string]any{
 		"ProjectGitSummaries": map[string]any{"type": "array", "items": summary},
 		"ProjectGit": objectSchema([]string{"base", "baseSha", "currentBranch", "baseCheckedOut", "worktrees", "branches", "computedAt", "generation"}, map[string]any{
 			"base": typed("string"), "baseSha": typed("string"), "currentBranch": typed("string"), "baseCheckedOut": typed("boolean"),
@@ -136,4 +143,8 @@ func projectGitOpenAPISchemas() map[string]any {
 			"number": typed("integer"), "url": typed("string"), "topicBranch": typed("string"),
 		}),
 	}
+	for name, schema := range projectRebaseOpenAPISchemas() {
+		schemas[name] = schema
+	}
+	return schemas
 }

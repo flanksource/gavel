@@ -8,6 +8,7 @@ import { GIT_HOT_REFRESH_MS, useGitFocus } from '../useGitFocus';
 import { useNow } from '../useNow';
 import { ProjectBranchChanges } from './ProjectBranchChanges';
 import { ProjectStatusView } from './ProjectStatusView';
+import { ProjectRebase } from './ProjectRebase';
 import { dirtyFileCount, gitStateAge, gitStateScannedAt, projectRefAges, projectRefEntries, type ProjectRefEntry } from './projectGitView';
 
 type WorktreeView = 'work' | 'branch';
@@ -84,6 +85,7 @@ export function ProjectRefPane({ project, projectRef, diffPath, showResults, onR
   return (
     <div className="flex h-full min-h-0 flex-col">
       <RefBar git={git} scannedAt={git ? gitStateScannedAt(git.computedAt, shownWorktree) : ''} loading={gitQuery.isPending} error={gitQuery.error?.message ?? ''} notices={notices} value={projectRef} onChange={onRefChange} />
+      <ProjectRebase key={`${project.name}:${shownWorktree?.path ?? projectRef}`} projectName={project.name} worktree={shownWorktree?.path} branch={shownWorktree?.branch} generation={git?.generation} />
       {landed && <LandedBanner landed={landed} onDismiss={() => setLanded(null)} />}
       <div className="min-h-0 flex-1">{body}</div>
     </div>
