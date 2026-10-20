@@ -729,11 +729,18 @@
           },
           "type": "array"
         },
+        "inputSchemaJSON": true,
+        "inputSchemaType": {
+          "type": "string"
+        },
         "metadata": {
           "additionalProperties": {
             "type": "string"
           },
           "type": "object"
+        },
+        "outputSchemaType": {
+          "type": "string"
         },
         "schemaJSON": true,
         "schemaStrictness": {
@@ -745,6 +752,7 @@
         "system": {
           "type": "string"
         },
+        "typeSafeQuestions": true,
         "user": {
           "type": "string"
         }

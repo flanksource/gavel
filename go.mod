@@ -3,10 +3,10 @@ module github.com/flanksource/gavel
 go 1.26.1
 
 require (
-	github.com/flanksource/captain v0.0.70-0.20261014132911-cc3d9c2d4798
-	github.com/flanksource/clicky v1.21.78-0.20261014132547-6063fb70846b
+	github.com/flanksource/captain v0.0.71
+	github.com/flanksource/clicky v1.21.82
 	github.com/flanksource/commons v1.60.1
-	github.com/flanksource/commons-db v0.1.58
+	github.com/flanksource/commons-db v0.1.61
 	github.com/flanksource/gomplate/v3 v3.24.90
 	github.com/flanksource/is-healthy v1.0.92 // indirect
 	github.com/flanksource/kubectl-neat v1.0.4 // indirect
@@ -30,7 +30,7 @@ require (
 	github.com/dustin/go-humanize v1.0.1
 	github.com/eko/gocache/lib/v4 v4.2.3
 	github.com/elazarl/goproxy v1.7.2
-	github.com/flanksource/clicky/aichat v1.21.77
+	github.com/flanksource/clicky/aichat v1.21.82
 	github.com/flanksource/deps v1.0.46
 	github.com/flanksource/deps/start v0.0.0-20261009090519-f5045eccb6ab
 	github.com/fsnotify/fsnotify v1.10.1
@@ -202,6 +202,7 @@ require (
 	github.com/fergusstrange/embedded-postgres v1.34.0 // indirect
 	github.com/firebase/genkit/go v1.13.1 // indirect
 	github.com/flanksource/sandbox-runtime v1.0.2 // indirect
+	github.com/flanksource/sqlglot-go v1.0.3 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.0 // indirect
 	github.com/geoffgarside/ber v1.2.0 // indirect
 	github.com/glebarez/sqlite v1.11.0 // indirect
@@ -424,6 +425,7 @@ require (
 	gopkg.in/warnings.v0 v0.1.2 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gorm.io/driver/postgres v1.6.0 // indirect
+	gorm.io/driver/sqlserver v1.6.4 // indirect
 	k8s.io/apiextensions-apiserver v0.36.2 // indirect
 	k8s.io/klog/v2 v2.140.0 // indirect
 	k8s.io/kube-openapi v0.0.0-20260317180543-43fb72c5454a // indirect
