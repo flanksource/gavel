@@ -254,10 +254,11 @@ func (s *Store) ApplyStatus(ctx context.Context, repoID uuid.UUID, path string, 
 	if err != nil {
 		return fmt.Errorf("encode files of worktree %s: %w", path, err)
 	}
-	// Advance the generation first: ApplyRefs locks the repo row before its
-	// worktree rows, so a status write taking them the other way round
-	// deadlocks with the refs scan a commit triggers alongside it.
-	if err := s.bump(ctx, repoID); err != nil {
+	// Lock the repo row first: ApplyRefs locks it (and, through the schema/171
+	// triggers, the overview row) before its worktree rows, so a status write
+	// taking them the other way round deadlocks with the refs scan a commit
+	// triggers alongside it. Callers run this inside Locked's transaction.
+	if err := s.lockRepo(ctx, repoID); err != nil {
 		return err
 	}
 	c := update.Changes
@@ -279,13 +280,25 @@ func (s *Store) ApplyStatus(ctx context.Context, repoID uuid.UUID, path string, 
 // RecordStatusError records a failed status scan of the worktree, keeping
 // its last good state.
 func (s *Store) RecordStatusError(ctx context.Context, repoID uuid.UUID, path string, scanErr error) error {
-	// Repo row before worktree row, as in ApplyStatus.
-	if err := s.bump(ctx, repoID); err != nil {
-		return err
-	}
-	if err := s.db.WithContext(ctx).Exec(`UPDATE git_worktrees SET status_error = ?, status_scanned_at = now() WHERE repo_id = ? AND path = ?`,
-		scanErr.Error(), repoID, path).Error; err != nil {
-		return fmt.Errorf("record status error of worktree %s: %w", path, err)
+	// Repo row before worktree row, as in ApplyStatus, held until the update
+	// commits.
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := (&Store{db: tx}).lockRepo(ctx, repoID); err != nil {
+			return err
+		}
+		if err := tx.Exec(`UPDATE git_worktrees SET status_error = ?, status_scanned_at = now() WHERE repo_id = ? AND path = ?`,
+			scanErr.Error(), repoID, path).Error; err != nil {
+			return fmt.Errorf("record status error of worktree %s: %w", path, err)
+		}
+		return nil
+	})
+}
+
+// lockRepo takes the repo row lock ApplyRefs' update takes, without writing
+// the row, so status writes order their locks the same way.
+func (s *Store) lockRepo(ctx context.Context, repoID uuid.UUID) error {
+	if err := s.db.WithContext(ctx).Exec(`SELECT 1 FROM git_repos WHERE id = ? FOR NO KEY UPDATE`, repoID).Error; err != nil {
+		return fmt.Errorf("lock git repo %s: %w", repoID, err)
 	}
 	return nil
 }

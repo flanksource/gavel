@@ -56,8 +56,19 @@ const committed: TodoRunWorkspace = {
   commits: [{ sha: HEAD, message: 'feat(todos): record the workspace\n\nGavel-Issue-Id: 42' }],
 };
 
-function stubAttempts(attempts: TodoSessionAttempt[]) {
-  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ attempts }), {
+function stubAttempts(attempts: TodoSessionAttempt[], changes = { staged: 0, unstaged: 0, both: 0, untracked: 0, conflict: 0, adds: 0, dels: 0 }) {
+  vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => new Response(JSON.stringify(String(input) === '/api/projects'
+    ? [{ name: 'repo', dir: '/repo', repos: [] }]
+    : String(input) === '/api/projects/repo/git'
+      ? {
+        base: 'main', currentBranch: 'main', baseCheckedOut: true, branches: [],
+        computedAt: '2026-10-20T08:00:00Z', generation: 1,
+        worktrees: attempts.flatMap(run => run.workspace?.worktree?.path ? [{
+          ...run.workspace.worktree, head: HEAD, primary: false, detached: false, prunable: false,
+          changes, ahead: 0, lastCommitAt: '2026-10-20T08:00:00Z', statusScannedAt: '2026-10-20T08:00:00Z',
+        }] : []),
+      }
+      : { attempts }), {
     status: 200,
     headers: { 'Content-Type': 'application/json' },
   })));
@@ -85,6 +96,35 @@ describe('latestRunWorkspace', () => {
 });
 
 describe('TodoRunBranch', () => {
+  it.each(['running', 'failed', 'cancelled'])('shows a %s attempt’s worktree and live changes before any commit', async status => {
+    const path = '/repo/.worktrees/active';
+    stubAttempts([attempt(1, { status, workspace: { worktree: { repo: '/repo', path, branch: 'feature/active' } } })], {
+      staged: 2, unstaged: 1, both: 0, untracked: 1, conflict: 0, adds: 36, dels: 1,
+    });
+    render(<TodoRunBranch dir="/repo" todoRef="todo-1" />, { wrapper: queryTestWrapper() });
+    expect(await screen.findByText(path)).toBeTruthy();
+    expect(await screen.findByText('2 staged')).toBeTruthy();
+    expect(screen.getByText('1 unstaged')).toBeTruthy();
+    expect(screen.getByText('1 untracked')).toBeTruthy();
+    expect(screen.getByText('+36')).toBeTruthy();
+    expect(screen.getByText('−1')).toBeTruthy();
+  });
+
+  it('shows a clean active worktree with zero commits', async () => {
+    stubAttempts([attempt(1, { status: 'running', workspace: { worktree: { path: '/repo/.worktrees/clean', branch: 'feature/clean' } } })]);
+    render(<TodoRunBranch dir="/repo" todoRef="todo-1" />, { wrapper: queryTestWrapper() });
+    expect(await screen.findByText('Working tree clean')).toBeTruthy();
+    expect(screen.getByText('0 commits')).toBeTruthy();
+  });
+
+  it('retains the path and removed status without requesting live Git state', async () => {
+    stubAttempts([attempt(1, { workspace: { worktree: { path: '/repo/.worktrees/removed', branch: 'feature/removed', removed: true } } })]);
+    render(<TodoRunBranch dir="/repo" todoRef="todo-1" />, { wrapper: queryTestWrapper() });
+    expect(await screen.findByText('Worktree removed')).toBeTruthy();
+    expect(screen.getByText('/repo/.worktrees/removed')).toBeTruthy();
+    expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).startsWith('/api/projects'))).toBe(false);
+  });
+
   it('shows the branch chip, setup…head and hands the range, commits and landing to the changes viewer', async () => {
     stubAttempts([attempt(2, {
       workspace: committed,
