@@ -40,7 +40,7 @@ jobs:
           task test-ui
           task pr-ui
 
-      - uses: flanksource/deps@v1.0.23
+      - uses: flanksource/deps@v1.0.46
         with:
           tools: |
             svu
