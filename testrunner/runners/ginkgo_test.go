@@ -483,7 +483,9 @@ import "github.com/onsi/gomega"
 
 func TestGinkgoBuildCommandArgs(t *testing.T) {
 	workDir, err := filepath.Abs("../..")
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	runner := NewGinkgo(workDir)
 
 	testRun, err := runner.BuildCommand("./testrunner/runners/testdata/overlayfixture", "--focus", "reports metadata", "--label-filter=leaf")

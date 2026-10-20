@@ -143,14 +143,7 @@ func runLint(opts LintOptions) (any, error) {
 	if uiServer != nil {
 		uiServer.SetLintResults(allResults)
 		uiServer.MarkDone()
-		var violations int
-		for _, lr := range allResults {
-			if lr.Skipped {
-				continue
-			}
-			violations += len(lr.Violations)
-		}
-		if violations > 0 {
+		if linters.HasFailures(allResults) {
 			exitCode = 1
 		}
 		sig := make(chan os.Signal, 1)
@@ -209,6 +202,9 @@ func runLint(opts LintOptions) (any, error) {
 		logger.V(1).Infof("wrote per-run snapshot to %s", path)
 	}
 
+	if linters.HasFailures(allResults) {
+		return lintRunReturnValue(snap, opts), fmt.Errorf("lint failed")
+	}
 	return lintRunReturnValue(snap, opts), nil
 }
 

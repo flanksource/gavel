@@ -1311,7 +1311,6 @@ func (o *TestOrchestrator) runPackageTest(
 		return packageResult{}, err
 	}
 	runStart := time.Now()
-	stopSampler, peakPtr := startProcessMetricsSampler(process)
 	result := clearOrphanedPipeError(process.WithContext(pkgCtx).Run().Result(), pkgPath)
 	runDuration := time.Since(runStart)
 	cancelPkg()
@@ -1427,63 +1426,6 @@ func (o *TestOrchestrator) runPackageTest(
 	}, nil
 }
 
-// stampAttempts appends one TestAttempt per leaf Test capturing the command,
-// PID, framework, and final state of the subprocess run. The Attempts slice
-// is additive: existing entries (from earlier runs or reruns merged via the
-// streamer) are preserved. Called after the parser produces final results
-// so each attempt records the observed outcome accurately.
-// processMetricsSample holds peak CPU% + RSS observed while a subprocess
-// was alive. Zero values mean the sampler never got a reading (fast exit).
-type processMetricsSample struct {
-	CPUPercent float64
-	RSS        uint64
-}
-
-func stampAttempts(results parsers.TestSuiteResults, runKind string, runStart, runEnd time.Time, pid int, exitCode int, metrics processMetricsSample) {
-	for ri := range results {
-		tr := &results[ri]
-		cmd := tr.Command
-		for ti := range tr.Tests {
-			stampAttemptSubtree(&tr.Tests[ti], runKind, runStart, runEnd, pid, exitCode, cmd, tr.Framework, metrics)
-		}
-	}
-}
-
-func stampAttemptSubtree(t *parsers.Test, runKind string, runStart, runEnd time.Time, pid int, exitCode int, cmd string, framework parsers.Framework, metrics processMetricsSample) {
-	for i := range t.Children {
-		stampAttemptSubtree(&t.Children[i], runKind, runStart, runEnd, pid, exitCode, cmd, framework, metrics)
-	}
-	code := exitCode
-	attempt := parsers.TestAttempt{
-		Sequence:   len(t.Attempts) + 1,
-		RunKind:    runKind,
-		Started:    runStart,
-		Ended:      runEnd,
-		Duration:   t.Duration,
-		PID:        pid,
-		Command:    cmd,
-		Framework:  framework,
-		ExitCode:   &code,
-		Passed:     t.Passed,
-		Failed:     t.Failed,
-		Skipped:    t.Skipped,
-		Pending:    t.Pending,
-		TimedOut:   t.TimedOut,
-		Message:    t.Message,
-		Stdout:     t.Stdout,
-		Stderr:     t.Stderr,
-		CPUPercent: metrics.CPUPercent,
-		RSS:        metrics.RSS,
-	}
-	// Extract a goroutine / panic dump from captured streams when the test
-	// timed out — Go's -timeout flag and ginkgo's --poll-progress-after
-	// both emit the thread dump to stdout or stderr before SIGKILL.
-	if t.TimedOut {
-		attempt.StackTrace = extractStackTrace(t.Stdout, t.Stderr)
-	}
-	t.Attempts = append(t.Attempts, attempt)
-}
-
 // clearOrphanedPipeError keeps a test package that exited 0 from failing only
 // because something it spawned (a Go toolchain helper, a grandchild) still held
 // its stdout when clicky's WaitDelay force-closed the pipes. The output that
@@ -1494,75 +1436,6 @@ func clearOrphanedPipeError(result *exec.ExecResult, pkgPath string) *exec.ExecR
 		result.Error = nil
 	}
 	return result
-}
-
-// startProcessMetricsSampler spawns a background goroutine that polls the
-// subprocess's CPU% and RSS via gopsutil every second and remembers the
-// peak observed values. Returns a stop function (must be called once the
-// process exits) and a pointer to the sample so the caller can read the
-// final value. Safe to call even when the PID isn't yet known — the
-// sampler retries until the process becomes visible or stop() fires.
-func startProcessMetricsSampler(process *exec.Process) (func(), *processMetricsSample) {
-	peak := &processMetricsSample{}
-	stop := make(chan struct{})
-	done := make(chan struct{})
-
-	go func() {
-		defer close(done)
-		ticker := time.NewTicker(time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-stop:
-				return
-			case <-ticker.C:
-				pid := process.Pid()
-				if pid <= 0 {
-					continue
-				}
-				proc, err := gopsutilProcess.NewProcess(int32(pid))
-				if err != nil {
-					continue
-				}
-				if cpu, err := proc.CPUPercent(); err == nil && cpu > peak.CPUPercent {
-					peak.CPUPercent = cpu
-				}
-				if mem, err := proc.MemoryInfo(); err == nil && mem != nil && mem.RSS > peak.RSS {
-					peak.RSS = mem.RSS
-				}
-			}
-		}
-	}()
-
-	stopFn := func() {
-		close(stop)
-		<-done
-	}
-	return stopFn, peak
-}
-
-// extractStackTrace scans captured streams for the start of a Go panic /
-// goroutine-dump block ("panic: test timed out" or "goroutine 1 [running]:")
-// and returns from that marker to EOF. Returns "" when no recognizable
-// dump is present — better to leave the field empty than invent noise.
-func extractStackTrace(stdout, stderr string) string {
-	for _, src := range []string{stderr, stdout} {
-		if src == "" {
-			continue
-		}
-		markers := []string{
-			"panic: test timed out",
-			"\ngoroutine 1 [",
-			"\nSIGQUIT: quit",
-			"\nruntime: goroutine stack exceeds",
-		}
-		for _, m := range markers {
-			if idx := strings.Index(src, m); idx >= 0 {
-				return strings.TrimSpace(src[idx:])
-			}
-		}
-	}
-	return ""
 }
 
 // markTimedOutTests walks the parsed results from a package whose subprocess

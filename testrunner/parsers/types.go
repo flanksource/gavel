@@ -63,21 +63,21 @@ func ParseFramework(name string) (Framework, error) {
 
 // Test represents a single test failure.
 type Test struct {
-	Name        string        `json:"name,omitempty"`
-	Package     string        `json:"package,omitempty"`
-	PackagePath string        `json:"package_path,omitempty"` // Relative path to the package (e.g., "./pkg/testrunner")
-	WorkDir     string        `json:"work_dir,omitempty"`
-	Command     string        `json:"command,omitempty"` // Command used to run this test
-	Suite       []string      `json:"suite,omitempty"`   // Hierarchical suite path (e.g., ["Outer Describe", "Inner Context"])
-	Message     string        `json:"message,omitempty"`
-	File        string        `json:"file,omitempty"`
-	Line        int           `json:"line,omitempty"`
+	Name        string   `json:"name,omitempty"`
+	Package     string   `json:"package,omitempty"`
+	PackagePath string   `json:"package_path,omitempty"` // Relative path to the package (e.g., "./pkg/testrunner")
+	WorkDir     string   `json:"work_dir,omitempty"`
+	Command     string   `json:"command,omitempty"` // Command used to run this test
+	Suite       []string `json:"suite,omitempty"`   // Hierarchical suite path (e.g., ["Outer Describe", "Inner Context"])
+	Message     string   `json:"message,omitempty"`
+	File        string   `json:"file,omitempty"`
+	Line        int      `json:"line,omitempty"`
 	// EndLine, when set, is the test's last source line: a failure then shows
 	// lines Line..EndLine of File.
 	EndLine   int           `json:"end_line,omitempty"`
 	Framework Framework     `json:"framework,omitempty"`
-	Duration    time.Duration `json:"duration,omitempty"`
-	Skipped     bool          `json:"skipped,omitempty"`
+	Duration  time.Duration `json:"duration,omitempty"`
+	Skipped   bool          `json:"skipped,omitempty"`
 	// Aborted marks a test that never ran because the run stopped after an earlier failure — distinct from an intentional Skipped.
 	Aborted bool `json:"aborted,omitempty"`
 	Failed  bool `json:"failed,omitempty"`
