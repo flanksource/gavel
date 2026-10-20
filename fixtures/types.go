@@ -283,7 +283,7 @@ func (e ExecFixtureBase) Template(data map[string]any, env map[string]string) (E
 
 	logger.V(5).Infof("Template data keys: %v", sortedKeys(data))
 
-	vars := make(map[string]any, len(env)+len(data))
+	vars := make(map[string]any)
 	for k, v := range env {
 		vars[k] = v
 	}
@@ -422,7 +422,7 @@ func (e ExecFixtureBase) MergeInto(other ExecFixtureBase) ExecFixtureBase {
 	}
 	// A copy: e.Env is the file's (or document's) env, shared by every test in
 	// it, and the merged map is filled per test.
-	merged.Env = make(map[string]any, len(e.Env)+len(other.Env))
+	merged.Env = make(map[string]any)
 	for k, v := range e.Env {
 		merged.Env[k] = v
 	}

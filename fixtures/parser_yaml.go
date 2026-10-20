@@ -163,6 +163,7 @@ func lowerDocument(doc fixtureDocument, docName, path, sourceDir string, parent 
 		name := firstNonEmpty(spec.Name, spec.ID, spec.Kind)
 		test := &FixtureTest{Name: name, SourceDir: sourceDir, Step: &spec}
 		test.FrontMatter.Env = doc.Env
+		test.FrontMatter.Traces = doc.Traces
 		test.Setup = doc.Setup
 		parent.AddChild(&FixtureNode{Name: name, Type: TestNode, Test: test,
 			Origin: &FixtureOrigin{File: path, Kind: "step", SectionPath: docName, RowIndex: i + 1,
