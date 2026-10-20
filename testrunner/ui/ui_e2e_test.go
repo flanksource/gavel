@@ -57,7 +57,12 @@ func clickWithTimeout(sel string) chromedp.ActionFunc {
 		tctx, cancel := context.WithTimeout(ctx, clickTimeout)
 		defer cancel()
 		if err := chromedp.Click(sel, chromedp.BySearch).Do(tctx); err != nil {
-			return fmt.Errorf("click %q: %w", sel, err)
+			// Name what the page showed instead, so a CI-only miss is diagnosable.
+			var text string
+			if textErr := chromedp.Evaluate(`document.body ? document.body.innerText.slice(0, 1500) : "<no body>"`, &text).Do(ctx); textErr != nil {
+				text = "<page text unavailable: " + textErr.Error() + ">"
+			}
+			return fmt.Errorf("click %q: %w\npage text:\n%s", sel, err, text)
 		}
 		return nil
 	}

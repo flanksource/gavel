@@ -1,7 +1,6 @@
 package testui
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -205,9 +204,4 @@ func tracesNotServed(runID string, served *servedTraces) string {
 		return "name a run: " + QueryMount + "/<run id>/..."
 	}
 	return fmt.Sprintf("the trace store of run %s is not served", runID)
-}
-
-func writeJSON(w http.ResponseWriter, value any) {
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(value) //nolint:errcheck
 }
