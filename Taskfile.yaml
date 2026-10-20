@@ -175,6 +175,7 @@ tasks:
   build:prod:
     desc: Build the production binary with optional native integrations
     deps:
+      - test-ui
       - pr-ui
     vars:
       VERSION:
