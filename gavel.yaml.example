@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/flanksource/gavel/main/gavel.schema.json
 # Example `.gavel.yaml` for Gavel.
-# See SCHEMA.md and gavel.schema.json for the full field reference.
+# See docs/content/docs/configuration-reference.mdx and gavel.schema.json for the full field reference.
 #
 # You can place `.gavel.yaml` in any of these locations:
 #   1. ~/.gavel.yaml
