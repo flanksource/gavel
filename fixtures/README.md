@@ -1,5 +1,7 @@
 # AI fixture runtime configuration
 
+For resource setup, see the [worked service guides](../docs/content/docs/fixture-kind-services.mdx): isolated `dbtest` databases with automatic connection environments, catalog services, supervised commands, and disposable git repositories.
+
 Command, test, and lint fixtures can run without AI configuration. For an executed AI checklist, the CLI lazily captures the verification profile's authored layers and the saved settings from `~/.captain.yaml`. The fixture's flat overrides and grading prompt are added before Captain resolves the final runtime. Saved provider defaults therefore follow the final model selected by the fixture.
 
 An authored review fixture can override selected settings while inheriting the verification profile:

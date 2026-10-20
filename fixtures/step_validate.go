@@ -23,14 +23,34 @@ var stepRefPatterns = []*regexp.Regexp{
 // later one sets override.
 func validateSteps(steps []parsedStep) error {
 	seen := map[string]bool{}
+	kinds := map[string]bool{}
 	exporters := map[string]string{}
 	for _, step := range steps {
+		kinds[step.spec.Kind] = true
 		if err := validateStep(step, seen, exporters); err != nil {
 			return fmt.Errorf("%s: %w", step.label, err)
 		}
 		if step.spec.ID != "" {
 			seen[step.spec.ID] = true
 		}
+	}
+	specs := make([]StepSpec, len(steps))
+	for i, step := range steps {
+		specs[i] = *step.spec
+	}
+	for _, name := range slices.Sorted(maps.Keys(kinds)) {
+		kind, err := DefaultKinds.Lookup(name)
+		if err != nil {
+			return err
+		}
+		if planner, ok := kind.(StepPlanner); ok {
+			if err := planner.PrepareSteps(specs); err != nil {
+				return fmt.Errorf("%s: %w", name, err)
+			}
+		}
+	}
+	for i, step := range steps {
+		*step.spec = specs[i]
 	}
 	return nil
 }
@@ -58,7 +78,7 @@ func validateStep(step parsedStep, seen map[string]bool, exporters map[string]st
 	if _, ok := kind.(BackgroundKind); spec.Background && !ok {
 		return fmt.Errorf("kind %q cannot run in the background: it does not implement Start", spec.Kind)
 	}
-	for _, ref := range stepReferences(spec) {
+	for _, ref := range stepReferences(*spec) {
 		if !seen[ref] {
 			return fmt.Errorf("references steps.%s, which no earlier step defines", ref)
 		}
