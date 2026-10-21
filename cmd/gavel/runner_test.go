@@ -157,6 +157,11 @@ func TestRunnerExecRunsTheJobAndPostsItsResults(t *testing.T) {
 }
 
 func TestRunnerExecPushCheckRunsTheRepositorysSSHCommand(t *testing.T) {
+	// A clone of the bundle, which has no HEAD, makes a local branch only for the default branch
+	// name git guesses; one other than the ref's leaves the ref only under refs/remotes.
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "init.defaultBranch")
+	t.Setenv("GIT_CONFIG_VALUE_0", "trunk")
 	run := uuid.New()
 	bundle, _ := sourceBundle(t, map[string]string{"README.md": "first", ".gavel.yaml": "ssh:\n  cmd: make check\n"})
 	api := &fakeRunAPI{spec: sandbox.RunSpec{Kind: "push-check", Ref: "refs/heads/main"}, bundle: bundle, token: "run-token"}

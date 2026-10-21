@@ -6,13 +6,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
+	"io/fs"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/blob"
+	"github.com/flanksource/gavel/internal/safefs"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
@@ -238,7 +239,9 @@ func deleteSandboxRuns(ctx context.Context, db *gorm.DB, stores Stores, cutoff t
 			}
 			if stores.Transcripts != "" {
 				dir := filepath.Join(stores.Transcripts, row.OrgID.String(), row.ID.String())
-				if err := os.RemoveAll(dir); err != nil {
+				// A run that uploaded no transcripts has no directory, nor maybe its org.
+				err := safefs.SafeRemove(dir, safefs.RemoveContext{AllowedRoot: stores.Transcripts})
+				if err != nil && !errors.Is(err, fs.ErrNotExist) {
 					return deleted, fmt.Errorf("delete the transcripts of sandbox run %s: %w", row.ID, err)
 				}
 			}

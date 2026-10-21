@@ -134,10 +134,16 @@ func TestRunDeletesWhatOutlivedItsWindow(t *testing.T) {
 	require.NoError(t, os.Chtimes(filepath.Join(recordingsRoot, filepath.FromSlash(oldRecording)), old, old))
 	require.NoError(t, os.Chtimes(filepath.Join(recordingsRoot, "workspaces", "abc", "run-old.json"), old, old))
 
+	// An old finished run of an org with no transcripts at all: neither its directory nor its
+	// org's exists.
+	untranscribed := uuid.New()
+	require.NoError(t, db.Exec(`INSERT INTO sandbox_runs (id, org_id, kind, status, backend, log_key, created_at, finished_at) VALUES (?, ?, 'test', 'succeeded', 'container', '', ?, ?)`,
+		untranscribed, local, old, old).Error)
+
 	report, err := Run(ctx, db, Stores{Org: orgStore, Workspace: workspace, Recordings: recordings, Transcripts: transcripts}, now)
 	require.NoError(t, err)
 
-	assert.Equal(t, Report{JobLogs: 3, TestRuns: 3, LintRuns: 1, Recordings: 1, LinterExecutions: 1, SandboxRuns: 1}, report)
+	assert.Equal(t, Report{JobLogs: 3, TestRuns: 3, LintRuns: 1, Recordings: 1, LinterExecutions: 1, SandboxRuns: 2}, report)
 
 	assert.Equal(t, 1, countRows(t, db, `SELECT count(*) FROM job_log_caches`))
 	assert.False(t, hasBlob(t, orgStore(local), "joblogs/1.log.gz"))

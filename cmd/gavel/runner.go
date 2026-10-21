@@ -124,13 +124,18 @@ func checkout(ctx context.Context, api runAPI, spec sandbox.RunSpec, workspace s
 	if out, err := exec.CommandContext(ctx, "git", "clone", "--quiet", bundle, src).CombinedOutput(); err != nil {
 		return "", fmt.Errorf("clone the source bundle: %w: %s", err, strings.TrimSpace(string(out)))
 	}
-	target := spec.SHA
-	if target == "" {
-		target = spec.Ref
+	target, name := spec.SHA, spec.SHA
+	if target == "" && spec.Ref != "" {
+		// The clone has a local branch only for the default branch name git guesses, so the
+		// ref is fetched from the bundle by its own name.
+		if out, err := exec.CommandContext(ctx, "git", "-C", src, "fetch", "--quiet", bundle, spec.Ref).CombinedOutput(); err != nil {
+			return "", fmt.Errorf("fetch %s from the source bundle: %w: %s", spec.Ref, err, strings.TrimSpace(string(out)))
+		}
+		target, name = "FETCH_HEAD", spec.Ref
 	}
 	if target != "" {
 		if out, err := exec.CommandContext(ctx, "git", "-C", src, "checkout", "--quiet", "--detach", target).CombinedOutput(); err != nil {
-			return "", fmt.Errorf("check out %s: %w: %s", target, err, strings.TrimSpace(string(out)))
+			return "", fmt.Errorf("check out %s: %w: %s", name, err, strings.TrimSpace(string(out)))
 		}
 	}
 	return src, nil

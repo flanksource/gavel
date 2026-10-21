@@ -21,6 +21,7 @@ import (
 	"github.com/flanksource/captain/pkg/api"
 	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/gavel/blob"
+	"github.com/flanksource/gavel/internal/safefs"
 	"github.com/flanksource/gavel/sandbox"
 	"github.com/flanksource/gavel/todos/remote"
 	"github.com/flanksource/gavel/todos/run"
@@ -93,7 +94,7 @@ func (e *inProcessExecutor) run(ctx context.Context, id uuid.UUID) error {
 		return err
 	}
 	dir := filepath.Join(os.TempDir(), "gavel-hosted-run-"+id.String())
-	defer os.RemoveAll(dir)
+	defer safefs.SafeRemove(dir, safefs.RemoveContext{AllowedRoot: os.TempDir()}) //nolint:errcheck
 	if out, err := exec.Command("git", "clone", "-q", e.bareDir(record.Spec.RepoID), dir).CombinedOutput(); err != nil {
 		return errors.New(string(out))
 	}

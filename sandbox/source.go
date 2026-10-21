@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/flanksource/gavel/internal/safefs"
 	"github.com/google/uuid"
 )
 
@@ -121,7 +122,7 @@ func cloneWhole(ctx context.Context, dir string, args ...string) error {
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(clone) //nolint:errcheck
+	defer safefs.SafeRemove(clone, safefs.RemoveContext{AllowedRoot: filepath.Dir(dir), Protected: []string{dir}}) //nolint:errcheck
 	if _, err := runGit(ctx, nil, append(args, clone)...); err != nil {
 		return err
 	}
