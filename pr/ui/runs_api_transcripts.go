@@ -33,7 +33,14 @@ func (a *RunsAPI) handleTranscript(w http.ResponseWriter, r *http.Request, run s
 		return
 	}
 	source, name := r.URL.Query().Get("source"), r.URL.Query().Get("name")
-	if source != "claude" && source != "codex" {
+	// The source names a directory, so it becomes one of the two fixed names rather than the
+	// request's own string.
+	switch source {
+	case "claude":
+		source = "claude"
+	case "codex":
+		source = "codex"
+	default:
 		writeCIError(w, http.StatusBadRequest, fmt.Sprintf("transcript source %q is not claude or codex", source))
 		return
 	}

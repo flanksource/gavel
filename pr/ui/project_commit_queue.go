@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 
@@ -166,10 +167,7 @@ func (s *Server) commitQueueArgs(workDir string, request projectActionRequest) (
 	}
 	if action == projectActionOpenPR {
 		position := len(args) - len(files)
-		withPush := make([]string, 0, len(args)+1)
-		withPush = append(withPush, args[:position]...)
-		withPush = append(withPush, "--push")
-		args = append(withPush, args[position:]...)
+		args = slices.Concat(args[:position], []string{"--push"}, args[position:])
 	}
 	return commitQueueRequest{action: action, files: files, args: args, options: request.Options}, nil
 }
