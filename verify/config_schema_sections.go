@@ -481,7 +481,7 @@ func storageSchema() map[string]any {
 	storageType := stringWithDefault("Where gavel serve stores blobs: local disk, an S3 or S3-compatible bucket, or GCS.", "local")
 	storageType["enum"] = []any{"local", "s3", "gcs"}
 	return object(
-		"Where gavel serve keeps run results, attachments, recordings and logs. Read from ~/.gavel.yaml "+
+		"Where gavel serve keeps run results, attachments, trace stores and logs. Read from ~/.gavel.yaml "+
 			"only: a repository's .gavel.yaml can't redirect storage. Unset, each kind of data stays in "+
 			"its usual local directory.",
 		map[string]any{

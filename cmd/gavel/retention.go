@@ -51,11 +51,11 @@ func startRetention(ctx context.Context, db *gorm.DB, cache *ghcache.Store, tran
 	if err != nil {
 		return err
 	}
-	recordings, err := verify.OpenGlobalStorage(ctx)
+	traces, err := verify.OpenGlobalStorage(ctx)
 	if err != nil {
 		return err
 	}
-	stores := retention.Stores{Recordings: recordings, Transcripts: transcripts}
+	stores := retention.Stores{Traces: traces, Transcripts: transcripts}
 	if cache != nil {
 		stores.Org = cache.OrgBlobs
 	}

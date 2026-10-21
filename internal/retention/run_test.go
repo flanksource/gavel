@@ -63,8 +63,8 @@ func TestRunDeletesWhatOutlivedItsWindow(t *testing.T) {
 	workspace := func(_ uuid.UUID, dir string) (blob.Store, error) {
 		return blob.Local(filepath.Join(dir, ".gavel")), nil
 	}
-	recordingsRoot := t.TempDir()
-	recordings := blob.Local(recordingsRoot)
+	tracesRoot := t.TempDir()
+	traceArchive := blob.Local(tracesRoot)
 
 	// Job logs: two old ones in different orgs, a fresh one, and an old legacy row with no blob.
 	for _, row := range []struct {
@@ -126,13 +126,20 @@ func TestRunDeletesWhatOutlivedItsWindow(t *testing.T) {
 		require.NoError(t, os.WriteFile(transcript, []byte("{}\n"), 0o644))
 	}
 
-	// Recordings, aged by modification time.
-	const oldRecording, freshRecording = "workspaces/abc/recordings/rec-old.har", "workspaces/abc/recordings/rec-fresh.har"
-	putBlob(t, recordings, oldRecording)
-	putBlob(t, recordings, freshRecording)
-	putBlob(t, recordings, "workspaces/abc/run-old.json")
-	require.NoError(t, os.Chtimes(filepath.Join(recordingsRoot, filepath.FromSlash(oldRecording)), old, old))
-	require.NoError(t, os.Chtimes(filepath.Join(recordingsRoot, "workspaces", "abc", "run-old.json"), old, old))
+	// Archived trace stores, aged by run: an old one, a fresh one, and one whose files span the
+	// cutoff, which stays whole. Other keys are not traces.
+	traceFiles := map[string]time.Time{
+		"workspaces/abc/traces/run-old/records.sqlite":      old,
+		"workspaces/abc/traces/run-old/locks/probe.lock":    old,
+		"workspaces/abc/traces/run-fresh/records.sqlite":    fresh,
+		"workspaces/abc/traces/run-spanning/records.sqlite": old,
+		"workspaces/abc/traces/run-spanning/index.sqlite":   fresh,
+		"workspaces/abc/run-old.json":                       old,
+	}
+	for key, modified := range traceFiles {
+		putBlob(t, traceArchive, key)
+		require.NoError(t, os.Chtimes(filepath.Join(tracesRoot, filepath.FromSlash(key)), modified, modified))
+	}
 
 	// An old finished run of an org with no transcripts at all: neither its directory nor its
 	// org's exists.
@@ -140,10 +147,10 @@ func TestRunDeletesWhatOutlivedItsWindow(t *testing.T) {
 	require.NoError(t, db.Exec(`INSERT INTO sandbox_runs (id, org_id, kind, status, backend, log_key, created_at, finished_at) VALUES (?, ?, 'test', 'succeeded', 'container', '', ?, ?)`,
 		untranscribed, local, old, old).Error)
 
-	report, err := Run(ctx, db, Stores{Org: orgStore, Workspace: workspace, Recordings: recordings, Transcripts: transcripts}, now)
+	report, err := Run(ctx, db, Stores{Org: orgStore, Workspace: workspace, Traces: traceArchive, Transcripts: transcripts}, now)
 	require.NoError(t, err)
 
-	assert.Equal(t, Report{JobLogs: 3, TestRuns: 3, LintRuns: 1, Recordings: 1, LinterExecutions: 1, SandboxRuns: 2}, report)
+	assert.Equal(t, Report{JobLogs: 3, TestRuns: 3, LintRuns: 1, Traces: 1, LinterExecutions: 1, SandboxRuns: 2}, report)
 
 	assert.Equal(t, 1, countRows(t, db, `SELECT count(*) FROM job_log_caches`))
 	assert.False(t, hasBlob(t, orgStore(local), "joblogs/1.log.gz"))
@@ -170,9 +177,12 @@ func TestRunDeletesWhatOutlivedItsWindow(t *testing.T) {
 	assert.NoDirExists(t, filepath.Join(transcripts, other.String(), oldRun.String()), "a deleted run's transcripts go with it")
 	assert.DirExists(t, filepath.Join(transcripts, other.String(), freshRun.String()))
 
-	assert.False(t, hasBlob(t, recordings, oldRecording))
-	assert.True(t, hasBlob(t, recordings, freshRecording))
-	assert.True(t, hasBlob(t, recordings, "workspaces/abc/run-old.json"), "only recordings are aged by modification time")
+	assert.False(t, hasBlob(t, traceArchive, "workspaces/abc/traces/run-old/records.sqlite"))
+	assert.False(t, hasBlob(t, traceArchive, "workspaces/abc/traces/run-old/locks/probe.lock"), "an old run's store goes whole")
+	assert.True(t, hasBlob(t, traceArchive, "workspaces/abc/traces/run-fresh/records.sqlite"))
+	assert.True(t, hasBlob(t, traceArchive, "workspaces/abc/traces/run-spanning/records.sqlite"), "a run newer than the cutoff anywhere stays whole")
+	assert.True(t, hasBlob(t, traceArchive, "workspaces/abc/traces/run-spanning/index.sqlite"))
+	assert.True(t, hasBlob(t, traceArchive, "workspaces/abc/run-old.json"), "only trace stores are aged here")
 }
 
 func TestRunReportsAnInvalidWindow(t *testing.T) {

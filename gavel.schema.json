@@ -2619,7 +2619,7 @@
     },
     "storage": {
       "additionalProperties": false,
-      "description": "Where gavel serve keeps run results, attachments, recordings and logs. Read from ~/.gavel.yaml only: a repository's .gavel.yaml can't redirect storage. Unset, each kind of data stays in its usual local directory.",
+      "description": "Where gavel serve keeps run results, attachments, trace stores and logs. Read from ~/.gavel.yaml only: a repository's .gavel.yaml can't redirect storage. Unset, each kind of data stays in its usual local directory.",
       "properties": {
         "bucket": {
           "description": "Bucket name. Required for s3 and gcs.",

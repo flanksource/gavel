@@ -325,7 +325,7 @@ type GavelConfig struct {
 	Status StatusConfig            `yaml:"status,omitempty" json:"status,omitempty"`
 	Test   TestConfig              `yaml:"test,omitempty" json:"test,omitempty"`
 	PR     PRConfig                `yaml:"pr,omitempty" json:"pr,omitempty"`
-	// Storage is where gavel serve keeps run results, attachments, recordings and logs. Only the
+	// Storage is where gavel serve keeps run results, attachments, trace stores and logs. Only the
 	// home config's is read (see LoadGlobalGavelConfig), so a repository can't redirect it.
 	Storage blob.Config `yaml:"storage,omitempty" json:"storage,omitempty"`
 }

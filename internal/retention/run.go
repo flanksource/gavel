@@ -1,5 +1,5 @@
 // Deletes run data older than its window across every organization: job logs, test and lint
-// runs, recordings, linter executions and sandbox runs, each blob before the row naming it.
+// runs, archived trace stores, linter executions and sandbox runs, each blob before the row naming it.
 package retention
 
 import (
@@ -31,9 +31,9 @@ type Stores struct {
 	// Workspace is the store holding the run snapshots of org's workspace workDir, as named in
 	// test_run_caches.workspace_dir.
 	Workspace func(org uuid.UUID, workDir string) (blob.Store, error)
-	// Recordings is the configured blob store, holding workspaces/*/recordings/; nil when
-	// recordings are only on local disk.
-	Recordings blob.Store
+	// Traces is the configured blob store, holding the trace stores runs archived under
+	// workspaces/*/traces/<run>/; nil when trace stores are only on local disk.
+	Traces blob.Store
 	// Transcripts is the directory holding the transcripts agent runs uploaded, under
 	// <org>/<run>/; empty when there is none.
 	Transcripts string
@@ -44,7 +44,7 @@ type Report struct {
 	JobLogs          int
 	TestRuns         int
 	LintRuns         int
-	Recordings       int
+	Traces           int
 	LinterExecutions int
 	SandboxRuns      int
 }
@@ -53,7 +53,7 @@ type Report struct {
 func Run(ctx context.Context, db *gorm.DB, stores Stores, now time.Time) (Report, error) {
 	var report Report
 	windows := map[string]time.Duration{}
-	for _, key := range []string{"job_logs", "test_runs", "lint_runs", "recordings", "linter_executions", "sandbox_runs"} {
+	for _, key := range []string{"job_logs", "test_runs", "lint_runs", "traces", "linter_executions", "sandbox_runs"} {
 		window, err := Window("retention."+key, defaultWindow)
 		if err != nil {
 			return report, err
@@ -73,7 +73,7 @@ func Run(ctx context.Context, db *gorm.DB, stores Stores, now time.Time) (Report
 	if report.LintRuns, err = deleteRuns(ctx, db, stores, []string{"lint"}, cutoff("lint_runs")); err != nil {
 		return report, err
 	}
-	if report.Recordings, err = deleteRecordings(ctx, stores.Recordings, cutoff("recordings")); err != nil {
+	if report.Traces, err = deleteTraces(ctx, stores.Traces, cutoff("traces")); err != nil {
 		return report, err
 	}
 	if report.LinterExecutions, err = deleteLinterExecutions(db, cutoff("linter_executions")); err != nil {
@@ -82,8 +82,8 @@ func Run(ctx context.Context, db *gorm.DB, stores Stores, now time.Time) (Report
 	if report.SandboxRuns, err = deleteSandboxRuns(ctx, db, stores, cutoff("sandbox_runs")); err != nil {
 		return report, err
 	}
-	logger.Infof("retention: deleted %d job logs, %d test runs, %d lint runs, %d recordings, %d linter executions, %d sandbox runs",
-		report.JobLogs, report.TestRuns, report.LintRuns, report.Recordings, report.LinterExecutions, report.SandboxRuns)
+	logger.Infof("retention: deleted %d job logs, %d test runs, %d lint runs, %d trace stores, %d linter executions, %d sandbox runs",
+		report.JobLogs, report.TestRuns, report.LintRuns, report.Traces, report.LinterExecutions, report.SandboxRuns)
 	return report, nil
 }
 
@@ -185,26 +185,48 @@ func workspaceStore(stores Stores, opened map[string]blob.Store, org uuid.UUID, 
 	return store, nil
 }
 
-// deleteRecordings deletes recordings last modified before cutoff from the configured store.
-func deleteRecordings(ctx context.Context, store blob.Store, cutoff time.Time) (int, error) {
+// deleteTraces deletes the archived trace stores whose files were all last modified before
+// cutoff. A store is a run's directory of files, so it goes whole or not at all.
+func deleteTraces(ctx context.Context, store blob.Store, cutoff time.Time) (int, error) {
 	if store == nil {
 		return 0, nil
 	}
 	objects, err := store.List(ctx, "workspaces/")
 	if err != nil {
-		return 0, fmt.Errorf("list recordings: %w", err)
+		return 0, fmt.Errorf("list trace stores: %w", err)
 	}
-	deleted := 0
+	runs := map[string][]string{}
+	var fresh []string
 	for _, object := range objects {
-		if !strings.Contains(object.Key, "/recordings/") || !object.ModTime.Before(cutoff) {
+		run, ok := traceRun(object.Key)
+		if !ok {
 			continue
 		}
-		if err := store.Delete(ctx, object.Key); err != nil && !errors.Is(err, blob.ErrNotFound) {
-			return deleted, fmt.Errorf("delete recording %s: %w", object.Key, err)
+		runs[run] = append(runs[run], object.Key)
+		if !object.ModTime.Before(cutoff) {
+			fresh = append(fresh, run)
 		}
-		deleted++
 	}
-	return deleted, nil
+	for _, run := range fresh {
+		delete(runs, run)
+	}
+	for run, keys := range runs {
+		for _, key := range keys {
+			if err := store.Delete(ctx, key); err != nil && !errors.Is(err, blob.ErrNotFound) {
+				return 0, fmt.Errorf("delete trace store %s: %w", run, err)
+			}
+		}
+	}
+	return len(runs), nil
+}
+
+// traceRun is the run directory, workspaces/<workspace>/traces/<run>/, that key is a file of.
+func traceRun(key string) (string, bool) {
+	parts := strings.SplitN(key, "/", 5)
+	if len(parts) < 5 || parts[0] != "workspaces" || parts[2] != "traces" {
+		return "", false
+	}
+	return strings.Join(parts[:4], "/") + "/", true
 }
 
 func deleteLinterExecutions(db *gorm.DB, cutoff time.Time) (int, error) {

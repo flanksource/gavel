@@ -372,7 +372,7 @@ the TOML files themselves; Gavel only discovers and merges them.
 
 ## `storage`
 
-Where `gavel serve` keeps run results, attachments, recordings and logs. It is
+Where `gavel serve` keeps run results, attachments, trace stores and logs. It is
 read from `~/.gavel.yaml` only: a repository's `.gavel.yaml` can't redirect
 storage. Unset, each kind of data stays in its usual local directory.
 

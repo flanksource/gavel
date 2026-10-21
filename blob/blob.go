@@ -1,4 +1,4 @@
-// Package blob stores run results, attachments, recordings and logs on local disk or object storage.
+// Package blob stores run results, attachments, trace stores and logs on local disk or object storage.
 // Keys are slash-separated and never absolute.
 package blob
 
