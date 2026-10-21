@@ -63,10 +63,11 @@ func (s traceStore) checkpoint(session, body string) int {
 	return response.StatusCode
 }
 
-// hangBinary is the tree node of the hang package's Go test binary.
+// hangBinary is the tree node of the hang package's Go test binary: the process named hang.test,
+// not one whose command only mentions it, as the linker's `-o .../hang.test` does.
 func (s traceStore) hangBinary(trace *traces.ProcessTrace) map[string]any {
 	for _, node := range s.records(trace.Refs().Tree) {
-		if strings.Contains(node["command"].(string), "hang.test") {
+		if node["name"] == "hang.test" {
 			return node
 		}
 	}
