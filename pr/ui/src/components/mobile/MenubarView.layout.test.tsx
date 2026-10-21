@@ -31,6 +31,7 @@ function renderShell(overrides: Partial<Parameters<typeof MenubarView>[0]> = {})
       config={{} as never}
       projects={[]}
       availableProjects={[]}
+      onSetProjectHidden={vi.fn()}
       projectsLoaded
       projectsByRepo={{}}
       syncStatus={{}}

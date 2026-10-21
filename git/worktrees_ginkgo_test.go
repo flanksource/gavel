@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flanksource/gavel/internal/safefs"
+
 	gavelgit "github.com/flanksource/gavel/git"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -80,7 +82,7 @@ func newWorktreeRepo() worktreeRepo {
 
 	runGit(r.root, "worktree", "add", "-q", "--detach", r.detachedWT, r.base)
 	runGit(r.root, "worktree", "add", "-q", "--detach", r.prunableWT, r.base)
-	Expect(os.RemoveAll(r.prunableWT)).To(Succeed())
+	Expect(safefs.SafeRemove(r.prunableWT, safefs.RemoveContext{AllowedRoot: filepath.Dir(r.prunableWT)})).To(Succeed())
 	return r
 }
 

@@ -1,0 +1,149 @@
+---
+title: Traces, profiling and benchmarks
+description: Where a run's process tree, stack dumps, HTTP/SQL traces, Go profiles and benchmark reports are recorded, and how to read them.
+order: 1
+parent: reporting
+---
+
+Every piece of runtime evidence Gavel collects — process trees and CPU/RSS samples, goroutine dumps, the HTTP, Postgres and terminal traces fixtures arm, and Go pprof profiles — lands in one place: the run's **trace store** at `.gavel/traces/<run_id>` (`run_id` is `run-<UTC start>`, for example `run-2026-10-16T09-12-03Z`). The newest 20 stores are kept; older ones are pruned when a run closes. Fixture benchmark reports are separate JSON files under `.gavel/benchmarks/fixtures/`.
+
+## Trace kinds
+
+| Kind | Recorded by | Summary (CEL root) keys |
+| --- | --- | --- |
+| `process_tree` | `gavel test --ui` / `--diagnostics`, `--profile`, or a fixture's `traces:` | `live`, `exited`, `peak_cpu_percent`, `peak_rss_bytes` |
+| `process_samples` | the same, beside `process_tree` | CPU, memory and disk counters per process per tick |
+| `stacks` | Checkpoints of the process capture: the watchdog, package timeouts, *Collect stack trace* | `checkpoints`, `goroutines`, `byState` |
+| `goprof` | `goProfiles:` under `--profile`, one window per profile file | `checkpoints`, `totals` (`<sample type>/<unit>`) |
+| `http_proxy`, `pg_proxy`, `terminal`, `http`, `sql_statements` | A fixture's `traces:` or `--traces` | See [Fixture formats](/docs/fixture-formats#traces-and-profiling) |
+
+Every summary also has `count`. `stacks` and `goprof` are filled by Gavel itself; a fixture does not arm them. A `goprof` window is listed with the fixture's traces but is not a CEL root. Each kind downloads in its own export format: `stacks` as `text`, `goprof` as `pprof` (`.pb.gz`, opened by `go tool pprof`), `http_proxy` as HAR, `terminal` as an asciinema cast, all as NDJSON.
+
+## Test runs: process capture and diagnostics
+
+A plain `gavel test` opens a trace store only when it runs fixtures. `--ui` or `--diagnostics` also starts a **process capture** rooted at Gavel itself: the tree of every process the run starts, their samples, and their stacks.
+
+```bash
+gavel test --diagnostics ./pkg/...                  # capture without a browser
+gavel test --diagnostics --process-facets ./pkg/... # also open files, sockets, ports, environment
+gavel test --ui ./pkg/...                           # capture with facets, shown in the Processes tab
+```
+
+`--process-facets` reads each process's open files, sockets, listening ports, connections and environment every sample, as `--ui` does; it needs `--ui` or `--diagnostics` and fails otherwise.
+
+The run's watchdog prints a `=== Gavel diagnostics: <reason> ===` block (Gavel's goroutines, its active tasks and the process tree) and, when a process capture exists, checkpoints Gavel's goroutines into `stacks` with that reason:
+
+| Reason | When |
+| --- | --- |
+| `periodic` | Every 10 minutes while the run is going |
+| `timeout` | `--timeout` (default `20m`, or `test.timeout`) fired; every subprocess is then killed |
+| `package-timeout:<pkg>` | A test package passed `--test-timeout` (`test.testTimeout`; no per-package deadline when unset) or the global deadline |
+| `final` | The run is closing; the tree is re-observed too |
+
+Without a process capture the block ends with `not checkpointed: the run has no process trace (it needs --ui or --diagnostics)`, so run with `--diagnostics` when a hang must be investigated after the fact.
+
+### Goroutine dumps of timed-out Go tests
+
+When a package's deadline fires, Gavel sends `SIGQUIT` to each Go test binary under that `go test` process, waits up to 3 seconds for it to print its goroutines, then kills the tree. A stop (`POST /api/stop`, Ctrl-C) kills without waiting. The dump is attached to the timed-out test's attempt:
+
+| Attempt field | Meaning |
+| --- | --- |
+| `timed_out` | The attempt was killed by a deadline |
+| `stack_trace` | The goroutines the binary printed |
+| `goroutine_count` | The goroutines in that dump (with a capture, the checkpoint's record count) |
+| `process_key` | The process in `process_tree` whose samples the peaks come from |
+| `cpu_percent`, `rss` | Peak CPU and RSS over the attempt |
+| `shared_process` | The PID and peaks belong to a `go test` batch that ran several packages |
+
+With a process capture the dump is also stored as `stacks` records on the binary's process key, with reason `package-timeout:<pkg>`.
+
+```bash
+jq '.tests[] | .. | objects | select(.timed_out?) | {sequence, command, goroutine_count}' "$(jq -r .path .gavel/last.json)"
+```
+
+### Collecting stacks on demand
+
+While a run is live, *Collect stack trace* in the Processes tab, or a direct checkpoint, dumps one process's stacks:
+
+```bash
+# status.traces.sessions.stacks names the live stacks session.
+SESSION=$(curl -fsS http://localhost:8080/api/tests | jq -r .status.traces.sessions.stacks)
+curl -fsS -X POST "http://localhost:8080/query/api/v1/sessions/$SESSION/checkpoint" \
+  -H 'content-type: application/json' -d '{"pid": 12345, "transport": "native", "reason": "manual"}'
+```
+
+The transport chooses how the stacks are read: `inprocess` for Gavel itself, `native` for any process, and `sigquit` for a Go test binary (which then exits). Checkpointing `sessions.samples` with `{"key": "<process key>"}` refreshes that process's facets.
+
+## Fixtures: `--profile` and `goProfiles`
+
+```bash
+gavel fixtures --profile --ui profile.fixture.md
+```
+
+`--profile` records CPU, memory and disk I/O of the fixture process tree. Standalone `gavel fixtures` starts its own process capture at a 500ms interval; inside `gavel test --fixtures` the run's capture is reused. Each step's peaks are its command's process tree over the step's time, and its disk I/O is the step's delta of the cumulative counters. These appear in the fixture's resources view and in the benchmark report.
+
+`goProfiles:` declares the Go pprof files a command writes. Gavel supplies destinations only under `--profile`, inside a per-fixture directory under `.gavel/profiles/fixtures/`, and ingests each emitted file into the fixture's `goprof` trace:
+
+````markdown
+---
+exec: sh
+goProfiles:
+  cpu:
+    file: cpu.pprof
+    env: CPU_PROFILE              # or args: ["-cpuprofile={{.path}}"]
+  heap:
+    directory: heap               # every file the command writes there
+    env: HEAP_PROFILE_DIR
+---
+
+# Go CPU profile
+
+```sh
+go test ./internal/safefs -run TestSafeRemove -cpuprofile="$CPU_PROFILE"
+```
+````
+
+Each entry takes exactly one of `file` or `directory`, relative to the fixture's profile directory, and is delivered by `env`, by `args` containing `{{.path}}`, or both. The entry name (`cpu`, `heap`, `allocs`, `mutex`, `block`, `goroutine`) says which profile it is; another name is read from the profile's sample types. A file that was not written is logged and skipped; one that is not a Go pprof profile, or that escapes the directory, fails the fixture. Download a window with the `pprof` format and open it with `go tool pprof`.
+
+When profiling or a SQL limit is active, Gavel also passes `SQL_PROFILE_FILE` to every command. Applications using commons-db's GORM `NewSqlLogger` write one JSON line per statement there (SQL, rendered parameters, duration, rows, slow/error flags); Gavel totals them per fixture and shows them in the fixture benchmark view. These files can contain query data.
+
+## Fixtures: `--benchmark`, limits and baselines
+
+```bash
+gavel fixtures --benchmark tests/performance.fixture.md
+gavel fixtures --benchmark --max-time 2s --max-memory 512MiB tests/performance.fixture.md
+gavel fixtures --benchmark --max-sql-time 500ms --max-sql-query 100ms --max-slow-sql 0 tests/database.fixture.md
+gavel fixtures --benchmark --baseline .gavel/benchmarks/fixtures/run-<timestamp>.json --max-deviation-pct 15 tests/performance.fixture.md
+```
+
+`--benchmark` records each fixture's and prerequisite's (setup, build, daemon) duration, plus its profile and SQL totals when collected, and writes the report to `.gavel/benchmarks/fixtures/run-<timestamp>.json`. Keep a report as a baseline by copying it somewhere stable.
+
+| Flag | Fails a fixture when |
+| --- | --- |
+| `--max-time` | Its duration exceeds the limit |
+| `--max-memory` | Its peak RSS exceeds the byte size (`512MiB`) |
+| `--max-io-read`, `--max-io-write` | Its observed disk reads or writes exceed the byte size |
+| `--max-sql-time`, `--max-sql-query` | Its total SQL time, or its slowest statement, exceeds the duration |
+| `--max-sql-queries`, `--max-slow-sql` | Its statement count, or slow statement count, exceeds the limit (zero allowed) |
+| `--max-deviation-pct` | A measured metric regresses beyond this percentage of `--baseline` |
+
+`--max-deviation-pct` requires `--baseline` and compares time, peak RSS, disk I/O and SQL timings and counts against each matching fixture in the baseline. Metrics the baseline lacks are skipped; a missing current measurement fails when a limit or a measured baseline value needs it. A fixture with a SQL limit fails if its command never creates `SQL_PROFILE_FILE`.
+
+## Go benchmarks
+
+```bash
+gavel test --bench . ./pkg/...                       # run benchmarks with the tests
+gavel bench run ./pkg/... --out .tmp/base.json
+gavel bench run ./pkg/... --out .tmp/head.json --count 10
+gavel bench compare --base .tmp/base.json --head .tmp/head.json --threshold 15 --ui
+```
+
+`gavel test --bench <regex>` runs Go benchmarks alongside tests. `gavel bench run` writes a structured JSON artifact for one run, and `gavel bench compare` fails when a benchmark regresses past `--threshold` percent; `--ui` opens the comparison in the browser.
+
+## Reading traces after the run
+
+```bash
+gavel ui serve "$(jq -r .path .gavel/last.json)" --addr localhost
+```
+
+Serving a saved snapshot reopens its trace store read-only at `/query/`, so the Processes tab, fixture Traces and exports keep working. A pruned store leaves the report served without traces, with `status.traces.unavailable` saying why. See [Reporting](/docs/reporting#traces) for the endpoints and the query explorer.

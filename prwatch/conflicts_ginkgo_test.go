@@ -76,7 +76,7 @@ var _ = Describe("a PR that conflicts with its base", func() {
 
 		It("shows the commands that resolve it locally", func() {
 			Expect(rendered).To(ContainSubstring("Resolve locally"))
-			Expect(rendered).To(ContainSubstring("git merge origin/main"))
+			Expect(rendered).To(ContainSubstring("git rebase origin/main"))
 		})
 
 		It("keeps rendering the checks below the conflict", func() {

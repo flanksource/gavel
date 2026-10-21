@@ -4,10 +4,13 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 
 	"github.com/flanksource/clicky/task"
+
+	"github.com/flanksource/gavel/testrunner/parsers"
 )
 
 type executionTracker struct {
@@ -77,7 +80,8 @@ func (t *executionTracker) Complete(ctx context.Context, fixture *FixtureNode, r
 		if !ok {
 			return fmt.Errorf("fixture progress node not found: %q", fixture.Name)
 		}
-		completeNode(node, executionState(result.Status), result.Error, result.Duration, now)
+		completeNode(node, executionState(result), result.Error, result.Duration, now)
+		node.Traces = slices.Clone(result.Traces)
 		return nil
 	})
 }
@@ -93,6 +97,19 @@ func (t *executionTracker) Update(ctx context.Context, fixture *FixtureNode, don
 		}
 		node.Done = done
 		node.Total = total
+		return nil
+	})
+}
+
+func (t *executionTracker) AddProcess(ctx context.Context, fixture *FixtureNode, pid int) error {
+	return t.mutateAndPublish(ctx, func(time.Time) error {
+		node, ok := t.fixture[fixture]
+		if !ok {
+			return fmt.Errorf("fixture progress node not found: %q", fixture.Name)
+		}
+		if !slices.Contains(node.PIDs, pid) {
+			node.PIDs = append(node.PIDs, pid)
+		}
 		return nil
 	})
 }
@@ -124,6 +141,11 @@ func (t *executionTracker) UpdateStep(ctx context.Context, key string, done, tot
 }
 
 func (t *executionTracker) CompleteStep(ctx context.Context, key string, state ExecutionState, stepErr error) error {
+	return t.completeStep(ctx, key, state, stepErr, nil)
+}
+
+// completeStep ends step key, with the windows of the traces it armed.
+func (t *executionTracker) completeStep(ctx context.Context, key string, state ExecutionState, stepErr error, traces []parsers.TraceResult) error {
 	return t.mutateAndPublish(ctx, func(now time.Time) error {
 		node, ok := t.byKey[key]
 		if !ok {
@@ -134,6 +156,7 @@ func (t *executionTracker) CompleteStep(ctx context.Context, key string, state E
 			message = stepErr.Error()
 		}
 		completeNode(node, state, message, 0, now)
+		node.Traces = slices.Clone(traces)
 		return nil
 	})
 }
@@ -200,7 +223,17 @@ func completeNode(node *ExecutionNode, state ExecutionState, message string, dur
 	}
 }
 
-func executionState(status task.Status) ExecutionState {
+// executionState maps a finished result onto its progress state. A failed or
+// errored result killed by a deadline is timed out, as the final report says.
+func executionState(result FixtureResult) ExecutionState {
+	state := statusExecutionState(result.Status)
+	if result.TimedOut && (state == ExecutionFailed || state == ExecutionErrored) {
+		return ExecutionTimedOut
+	}
+	return state
+}
+
+func statusExecutionState(status task.Status) ExecutionState {
 	switch status {
 	case task.StatusPASS, task.StatusSuccess:
 		return ExecutionPassed
@@ -394,6 +427,8 @@ func cloneExecutionNode(node *ExecutionNode) *ExecutionNode {
 	clone.Origin = cloneOrigin(node.Origin)
 	clone.StartedAt = cloneTime(node.StartedAt)
 	clone.FinishedAt = cloneTime(node.FinishedAt)
+	clone.PIDs = slices.Clone(node.PIDs)
+	clone.Traces = slices.Clone(node.Traces)
 	clone.Children = make([]*ExecutionNode, len(node.Children))
 	for i, child := range node.Children {
 		clone.Children[i] = cloneExecutionNode(child)

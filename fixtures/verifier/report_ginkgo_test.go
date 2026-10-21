@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/flanksource/captain/pkg/api"
+	"github.com/flanksource/clicky/task"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
@@ -76,6 +77,41 @@ var _ = Describe("verifier.RunningReport", func() {
 		Expect(live).To(BeTrue())
 		Expect(report.State).To(Equal(api.VerifyStateRunning))
 		Expect(report.Passed).To(BeFalse())
+		Expect(report.Validate()).To(Succeed())
+	})
+
+	It("labels a counting leaf's progress with its phase", func() {
+		const done, total = 3, 10
+		busy := &fixtures.ExecutionNode{Key: "suite", Name: "suite", Kind: fixtures.ExecutionKindTest,
+			State: fixtures.ExecutionRunning, Done: done, Total: total}
+
+		report, _ := verifier.RunningReport(snapshotOf(busy))
+
+		Expect(report.Tests).To(Equal([]api.VerifyNode{{Name: "suite", Framework: "test", Running: true,
+			Progress: &api.VerifyNodeProgress{Phase: "test", Done: done, Total: total}}}))
+	})
+
+	// A wait or step deadline marks the result TimedOut on top of a failed
+	// status; the live snapshot must say so, not just "failed", so the reader
+	// sees the same verdict mid-run as the final report gives.
+	It("reports a finished timed-out step as failed and timed out while the run is live", func() {
+		reporter := fixtures.NewExecutionReporter(nil, "", []fixtures.ExecutionStep{
+			{Key: "wait", Name: "wait for ready", Kind: fixtures.ExecutionKindCommand},
+			{Key: "next", Name: "next step", Kind: fixtures.ExecutionKindCommand},
+		}, nil)
+		ctx := context.Background()
+		Expect(reporter.CompleteStep(ctx, "wait", fixtures.FixtureResult{
+			Status: task.StatusFAIL, TimedOut: true, Error: "wait timed out after 1s",
+		})).To(Succeed())
+		Expect(reporter.StartStep(ctx, "next")).To(Succeed())
+
+		report, live := verifier.RunningReport(reporter.Snapshot())
+
+		Expect(live).To(BeTrue())
+		Expect(report.Tests).To(Equal([]api.VerifyNode{
+			{Name: "wait for ready", Framework: "command", Failed: true, TimedOut: true},
+			{Name: "next step", Framework: "command", Running: true},
+		}))
 		Expect(report.Validate()).To(Succeed())
 	})
 

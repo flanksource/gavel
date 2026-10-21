@@ -9,6 +9,11 @@ import (
 	"github.com/flanksource/gavel/status"
 )
 
+// projectTestWatchArgs make a project's test run a run watched in a UI: its
+// store keeps the process capture, with every facet and environment, that the
+// run's Processes view reads back.
+var projectTestWatchArgs = []string{"--diagnostics", "--process-facets"}
+
 // projectActionArgs builds the gavel command for request, run in dir.
 func (s *Server) projectActionArgs(dir string, request projectActionRequest) ([]string, error) {
 	if request.Options != nil {
@@ -48,8 +53,11 @@ func (s *Server) projectActionArgs(dir string, request projectActionRequest) ([]
 			return nil, err
 		}
 		base := []string{string(request.Action), "--work-dir", dir}
-		if request.Action == projectActionCommit {
+		switch request.Action {
+		case projectActionCommit:
 			base = append(base, "--precommit=fail")
+		case projectActionTest:
+			base = append(base, projectTestWatchArgs...)
 		}
 		return append(base, advanced...), nil
 	}
@@ -73,7 +81,7 @@ func (s *Server) projectActionArgs(dir string, request projectActionRequest) ([]
 		if len(request.Files) > 0 {
 			return nil, errors.New("test action derives its scope from current changes; files must be empty")
 		}
-		return []string{"test", "--work-dir", dir, "--changed"}, nil
+		return append([]string{"test", "--work-dir", dir, "--changed"}, projectTestWatchArgs...), nil
 	default:
 		return nil, fmt.Errorf("unknown project action %q", request.Action)
 	}

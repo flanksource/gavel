@@ -6,12 +6,17 @@ import (
 	"fmt"
 	"os"
 	"runtime"
-	"sync"
+	"sort"
 	"time"
 
 	"github.com/flanksource/clicky/process"
+	tracedprocess "github.com/flanksource/commons-db/tracing/process"
+
+	"github.com/flanksource/gavel/traces"
 )
 
+// profileInterval is how often a run the fixture runner traces for --profile
+// samples its tree.
 const profileInterval = 500 * time.Millisecond
 
 type ProfileSample struct {
@@ -31,94 +36,109 @@ type ProfileReport struct {
 	DiskIO            *ProfileDiskIO  `json:"disk_io,omitempty"`
 }
 
-type profileSampler struct {
-	ctx    context.Context
-	cancel context.CancelFunc
-	done   chan struct{}
-	mu     sync.Mutex
-	report ProfileReport
-	err    error
-}
-
-func startProfileSampler() *profileSampler {
-	ctx, cancel := context.WithCancel(context.Background())
-	sampler := &profileSampler{ctx: ctx, cancel: cancel, done: make(chan struct{}),
-		report: ProfileReport{IntervalMS: profileInterval.Milliseconds(), Samples: []ProfileSample{}}}
-	sampler.sample()
-	go sampler.run()
-	return sampler
-}
-
-func (s *profileSampler) run() {
-	defer close(s.done)
-	ticker := time.NewTicker(profileInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-s.ctx.Done():
-			return
-		case <-ticker.C:
-			s.sample()
-		}
+// startProfile has --profile read the run's process_tree and process_samples:
+// the run's own process capture when the caller handed one in, else one the
+// runner starts on its trace host. Its readings from here on are the report.
+func (r *Runner) startProfile() error {
+	if !r.options.Profile {
+		return nil
 	}
+	r.profileTrace = r.options.ProcessTrace
+	if r.profileTrace == nil {
+		if err := r.openTraceHost(); err != nil {
+			return err
+		}
+		trace, err := r.traceHost.StartProcessTrace(traces.ProcessTraceOptions{RootPID: os.Getpid(), Interval: profileInterval})
+		if err != nil {
+			return fmt.Errorf("--profile: %w", err)
+		}
+		r.profileTrace, r.ownsProfileTrace = trace, true
+	}
+	var err error
+	if r.profileMark, err = r.profileTrace.Mark(context.Background()); err != nil {
+		return fmt.Errorf("--profile: %w", err)
+	}
+	return nil
 }
 
-func (s *profileSampler) sample() {
-	ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
-	defer cancel()
-	snapshot, err := process.Discover(ctx, process.SnapshotOptions{})
+// finishProfile reads the profile's samples into r.profile and stops a
+// capture the runner started; a later call does nothing.
+func (r *Runner) finishProfile(ctx context.Context) error {
+	if r.profileTrace == nil {
+		return nil
+	}
+	trace := r.profileTrace
+	r.profileTrace = nil
+	readings, err := trace.Readings(ctx, r.profileMark)
+	if err == nil {
+		r.profile = profileReport(readings, trace.Interval())
+	}
+	if r.ownsProfileTrace {
+		err = errors.Join(err, trace.Stop(ctx))
+		r.ownsProfileTrace = false
+	}
 	if err != nil {
-		if s.ctx.Err() == nil && !errors.Is(err, context.Canceled) {
-			s.mu.Lock()
-			s.err = fmt.Errorf("sample process tree: %w", err)
-			s.mu.Unlock()
-			s.cancel()
-		}
-		return
+		return fmt.Errorf("--profile: %w", err)
 	}
-	processes := snapshot.Subtree(os.Getpid())
-	if len(processes) == 0 {
-		s.mu.Lock()
-		s.err = fmt.Errorf("gavel process %d missing from Clicky process snapshot", os.Getpid())
-		s.mu.Unlock()
-		s.cancel()
-		return
-	}
-	pids := make([]int, 0, len(processes))
-	for _, child := range processes {
-		pids = append(pids, child.PID)
-	}
-	if err := snapshot.PopulateIO(ctx, pids); err != nil {
-		s.mu.Lock()
-		s.err = fmt.Errorf("sample process disk I/O: %w", err)
-		s.mu.Unlock()
-		s.cancel()
-		return
-	}
-	processes = snapshot.Subtree(os.Getpid())
-	sample := ProfileSample{SampledAt: time.Now().UTC(), Processes: processes}
-	for _, child := range processes {
-		sample.CPUPercent += child.CPUPercent
-		sample.MemoryPercent += child.MemoryPercent
-		sample.RSSBytes += child.RSSBytes
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.report.Samples = append(s.report.Samples, sample)
-	s.report.PeakCPUPercent = max(s.report.PeakCPUPercent, sample.CPUPercent)
-	s.report.PeakMemoryPercent = max(s.report.PeakMemoryPercent, sample.MemoryPercent)
-	s.report.PeakRSSBytes = max(s.report.PeakRSSBytes, sample.RSSBytes)
+	return nil
 }
 
-func (s *profileSampler) Stop() (*ProfileReport, error) {
-	s.cancel()
-	<-s.done
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if len(s.report.Samples) > 0 {
-		started := s.report.Samples[0].SampledAt
-		finished := s.report.Samples[len(s.report.Samples)-1].SampledAt
-		s.report.DiskIO = profileDiskIO(s.report.Samples, &ExecutionNode{StartedAt: &started, FinishedAt: &finished}, 0, runtime.GOOS)
+// profileReport is the run's samples by tick: each tick one ProfileSample of
+// every process it sampled, with the parent and command its tree node holds.
+func profileReport(readings traces.ProcessReadings, interval time.Duration) *ProfileReport {
+	nodes := make(map[string]tracedprocess.Node, len(readings.Nodes))
+	for _, node := range readings.Nodes {
+		nodes[node.Key] = node
 	}
-	return &s.report, s.err
+	report := &ProfileReport{IntervalMS: interval.Milliseconds(), Samples: []ProfileSample{}}
+	byTick := map[int64]*ProfileSample{}
+	for _, sample := range readings.Samples {
+		tick, ok := byTick[sample.Tick]
+		if !ok {
+			tick = &ProfileSample{SampledAt: sample.SampledAt}
+			byTick[sample.Tick] = tick
+		}
+		member := sampledProcess(sample, nodes[sample.Key])
+		tick.Processes = append(tick.Processes, member)
+		tick.CPUPercent += member.CPUPercent
+		tick.MemoryPercent += member.MemoryPercent
+		tick.RSSBytes += member.RSSBytes
+	}
+	ticks := make([]int64, 0, len(byTick))
+	for tick := range byTick {
+		ticks = append(ticks, tick)
+	}
+	sort.Slice(ticks, func(i, j int) bool { return ticks[i] < ticks[j] })
+	for _, tick := range ticks {
+		sample := *byTick[tick]
+		report.Samples = append(report.Samples, sample)
+		report.PeakCPUPercent = max(report.PeakCPUPercent, sample.CPUPercent)
+		report.PeakMemoryPercent = max(report.PeakMemoryPercent, sample.MemoryPercent)
+		report.PeakRSSBytes = max(report.PeakRSSBytes, sample.RSSBytes)
+	}
+	if len(report.Samples) > 0 {
+		started, finished := report.Samples[0].SampledAt, report.Samples[len(report.Samples)-1].SampledAt
+		report.DiskIO = profileDiskIO(report.Samples, &ExecutionNode{StartedAt: &started, FinishedAt: &finished}, 0, runtime.GOOS)
+	}
+	return report
+}
+
+// sampledProcess is one process at one tick, as a sample and its node hold
+// it. A CPU% not yet known counts as idle.
+func sampledProcess(sample tracedprocess.Sample, node tracedprocess.Node) process.Process {
+	member := process.Process{
+		PID: sample.PID, PPID: node.PPID, Command: node.Command, Status: node.Status,
+		MemoryPercent: sample.MemoryPercent, RSSBytes: sample.RSSBytes,
+	}
+	if sample.CPUPercent != nil {
+		member.CPUPercent = *sample.CPUPercent
+	}
+	if !node.StartedAt.IsZero() {
+		started := node.StartedAt
+		member.StartedAt = &started
+	}
+	if sample.DiskReadBytes != nil && sample.DiskWriteBytes != nil {
+		member.IO = &process.ProcessIO{DiskReadBytes: *sample.DiskReadBytes, DiskWriteBytes: *sample.DiskWriteBytes}
+	}
+	return member
 }

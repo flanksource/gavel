@@ -55,7 +55,7 @@ func RunNodes(ctx context.Context, nodes []*FixtureNode, opts RunOptions) ([]Fix
 	}
 	ownScope := opts.Scope == nil
 	if ownScope {
-		opts.Scope = NewStepScope(scopeSeed(opts.Setup, firstFrontMatter(nodes)))
+		opts.Scope = NewStepScope(scopeSeed(opts.Setup, firstFrontMatter(nodes), nil))
 	}
 	previous := append([]FixtureResult(nil), opts.PreviousResults...)
 	results, err := runNodeTree(ctx, nodes, opts, reporter, &previous)
@@ -99,8 +99,8 @@ func runNodeTree(ctx context.Context, nodes []*FixtureNode, opts RunOptions, rep
 
 // RunNode runs one fixture test through the dispatch every caller shares —
 // `gavel fixtures run` and RunNodes alike, so a kind registered once runs
-// everywhere: a recorder the fixture declares but nothing implements is
-// refused, a skip declaration honoured, then the node runs through its Kind
+// everywhere: a fixture that declares traces but runs without a
+// trace host is refused, a skip declaration honoured, then the node runs through its Kind
 // (DefaultKinds) — markdown fences and rows lower to exec/test/lint/ai, a
 // YAML/JSON step names its kind.
 //
@@ -110,7 +110,7 @@ func runNodeTree(ctx context.Context, nodes []*FixtureNode, opts RunOptions, rep
 func RunNode(ctx context.Context, test FixtureTest, opts RunOptions) FixtureResult {
 	var result FixtureResult
 	if opts.Scope == nil {
-		opts.Scope = NewStepScope(scopeSeed(opts.Setup, test.FrontMatter))
+		opts.Scope = NewStepScope(scopeSeed(opts.Setup, test.FrontMatter, nil))
 		result = foldTeardown(dispatchNode(ctx, test, opts), teardownResults(ctx, opts.Scope))
 	} else {
 		result = dispatchNode(ctx, test, opts)
@@ -125,8 +125,8 @@ func RunNode(ctx context.Context, test FixtureTest, opts RunOptions) FixtureResu
 }
 
 func dispatchNode(ctx context.Context, test FixtureTest, opts RunOptions) FixtureResult {
-	if missing := opts.Record.Missing(); len(missing) > 0 {
-		return nodeError(test, fmt.Sprintf("record: %v is not implemented yet", missing))
+	if declared := test.DeclaredTraces(); declared != nil && len(*declared) > 0 && opts.Traces == nil {
+		return nodeError(test, "declares traces: but runs without a trace host; run it through a fixture runner (gavel fixtures, gavel test)")
 	}
 	reason, skipErr := test.ShouldSkip(opts)
 	if skipErr != nil {

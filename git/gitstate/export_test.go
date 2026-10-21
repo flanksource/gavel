@@ -3,6 +3,7 @@ package gitstate
 import (
 	"context"
 	"path/filepath"
+	"sort"
 	"time"
 )
 
@@ -16,6 +17,20 @@ func (t *Tracker) Rescan(ctx context.Context, dir string) error {
 	repo := t.byDir[filepath.Clean(dir)]
 	t.mu.Unlock()
 	return t.scanRepo(ctx, repo)
+}
+
+// HotWorktrees lists, sorted, the worktrees the cadence rescans at the hot
+// interval right now.
+func (t *Tracker) HotWorktrees() []string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	hot := t.hotLocked(time.Now())
+	paths := make([]string, 0, len(hot))
+	for path := range hot {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	return paths
 }
 
 // HoldSlot takes one of the tracker's concurrency slots until release is
@@ -47,4 +62,19 @@ var (
 
 func PollGitArgs() []string {
 	return currentPollConfig().gitArgs()
+}
+
+// DueRoots lists, sorted and deduplicated, the repository roots the cadence
+// would scan at now.
+func (t *Tracker) DueRoots(now time.Time) []string {
+	seen := map[string]bool{}
+	var roots []string
+	for _, key := range t.due(now) {
+		if !seen[key.root] {
+			seen[key.root] = true
+			roots = append(roots, key.root)
+		}
+	}
+	sort.Strings(roots)
+	return roots
 }

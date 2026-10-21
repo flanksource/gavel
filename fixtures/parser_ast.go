@@ -13,8 +13,6 @@ import (
 	extast "github.com/yuin/goldmark/extension/ast"
 	"github.com/yuin/goldmark/parser"
 	"github.com/yuin/goldmark/text"
-
-	"github.com/flanksource/gavel/fixtures/record"
 )
 
 // commandBlockBuilder helps build a command fixture from markdown AST
@@ -34,7 +32,7 @@ type executableFenceConfig struct {
 	CWD        string                     `yaml:"cwd"`
 	Env        map[string]any             `yaml:"env"`
 	Terminal   string                     `yaml:"terminal"`
-	Record     *record.Spec               `yaml:"record"`
+	Traces     *TraceSpecs                `yaml:"traces"`
 	GoProfiles map[string]GoProfileOutput `yaml:"goProfiles"`
 	OS         string                     `yaml:"os"`
 	Arch       string                     `yaml:"arch"`
@@ -501,17 +499,17 @@ func buildFixtureFromCommand(cmd *commandBlockBuilder, frontMatter *FrontMatter,
 			Setup map[string]any `yaml:"setup"`
 		}
 
-		// `record:` is decoded on its own, ahead of the tolerant decode below that
-		// drops every key when any one of them fails: a mistyped recorder must be a
-		// red parse, not a fixture that silently records nothing.
-		var recordOnly struct {
-			Record *record.Spec `yaml:"record"`
+		// `traces:` is decoded on its own, ahead of the tolerant decode below that
+		// drops every key when any one of them fails: a mistyped trace must be a
+		// red parse, not a fixture that silently traces nothing.
+		var tracesOnly struct {
+			Traces *TraceSpecs `yaml:"traces"`
 		}
-		if err := yaml.Unmarshal([]byte(cmd.frontmatter), &recordOnly); err != nil {
+		if err := yaml.Unmarshal([]byte(cmd.frontmatter), &tracesOnly); err != nil {
 			return nil, fmt.Errorf("%s: %w", cmd.name, err)
 		}
-		if recordOnly.Record != nil {
-			fixture.Record = recordOnly.Record
+		if tracesOnly.Traces != nil {
+			fixture.Traces = tracesOnly.Traces
 		}
 		var profilesOnly struct {
 			GoProfiles map[string]GoProfileOutput `yaml:"goProfiles"`
@@ -632,8 +630,8 @@ func applyExecutableFenceConfig(fixture *FixtureTest, cfg executableFenceConfig)
 	if cfg.Terminal != "" {
 		fixture.Terminal = cfg.Terminal
 	}
-	if cfg.Record != nil {
-		fixture.Record = cfg.Record
+	if cfg.Traces != nil {
+		fixture.Traces = cfg.Traces
 	}
 	if cfg.GoProfiles != nil {
 		fixture.GoProfiles = cfg.GoProfiles

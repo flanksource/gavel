@@ -61,15 +61,11 @@ table "git_repos" {
     null = true
     type = text
   }
+  // The last ref scan that changed something; an unchanged scan stamps only
+  // git_repo_overview (schema/171), which also carries the generation.
   column "refs_scanned_at" {
     null = true
     type = timestamptz
-  }
-  // Advances on every change to the repo's rows; pushed to the UI.
-  column "generation" {
-    null    = false
-    type    = bigint
-    default = 0
   }
   column "error" {
     null = true

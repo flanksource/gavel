@@ -2,15 +2,16 @@ package lifecycle
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"strings"
+	"maps"
 
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/commons-db/shell"
 	"github.com/flanksource/gavel/pr/model"
 	"github.com/flanksource/gavel/pr/provider"
 	"github.com/flanksource/gavel/todos"
+	todoprompt "github.com/flanksource/gavel/todos/prompt"
+	"github.com/flanksource/gavel/todos/tools"
 	"github.com/flanksource/gavel/todos/types"
 )
 
@@ -18,9 +19,26 @@ type prExecution struct {
 	client   provider.Client
 	number   int
 	snapshot *model.StatusSnapshot
-	target   *provider.RunTarget
-	workDir  string
-	write    bool
+	// openThreads are the thread IDs a turn may report addressed; see openThreads.
+	openThreads map[string]bool
+	target      *provider.RunTarget
+	workDir     string
+	write       bool
+	// events is the step's envelope vocabulary, which a turn's result is held to.
+	events []string
+	// tools is the run's tool state; pr_thread_addressed records into it.
+	tools *tools.Run
+}
+
+// forRun is the PR hook of one dispatch, reading the threads that run's tools
+// record. A nil execution has no hook.
+func (p *prExecution) forRun(run *tools.Run) *prExecution {
+	if p == nil {
+		return nil
+	}
+	bound := *p
+	bound.tools = run
+	return &bound
 }
 
 func (p *prExecution) configure(prepared *preparedStep) error {
@@ -46,25 +64,25 @@ func (p *prExecution) configure(prepared *preparedStep) error {
 	}
 	workflow.Commits = []api.Commit{{On: api.CommitOnTurn, Mode: api.CommitModeCommit, Stage: api.CommitStageWorktree, Gates: api.CommitGatesFull}}
 	spec.Workflow = &workflow
-	schema, err := api.SchemaJSON(&types.PRRunEnvelope{})
-	if err != nil {
-		return err
+	spec.Prompt.Metadata = maps.Clone(spec.Prompt.Metadata)
+	if spec.Prompt.Metadata == nil {
+		spec.Prompt.Metadata = map[string]string{}
 	}
-	spec.Prompt.Schema, spec.Prompt.SchemaJSON = nil, schema
-	spec.Prompt.User += "\n\nThis TODO is linked to the PR below. Work on its source branch. Do not commit or push: Gavel commits each completed turn and pushes it to this PR before fixture verification. Never merge, approve, force-push, or resolve unrelated feedback. Emit addressedThreadIds containing only native thread IDs whose feedback your completed turn addressed. Gavel resolves those threads after a successful push. CI, merge readiness, and unresolved feedback from the entire PR must pass at the pushed revision; failures from the fixture are feedback for your next turn. After a fixture failure, refresh gavel pr status for this URL with --json --logs to inspect new reviews and full failure details. Ask when human decisions or credentials are required."
-	return setPRStatusContext(&spec.Prompt, p.snapshot)
+	spec.Prompt.Metadata[todoprompt.PRWriteMetadataKey] = "true"
+	return nil
 }
 
-const prStatusContextMarker = "\n\nCurrent PR status and native review thread IDs:\n"
-
-func setPRStatusContext(prompt *api.Prompt, snapshot *model.StatusSnapshot) error {
-	status, err := json.MarshalIndent(snapshot, "", "  ")
-	if err != nil {
-		return err
+// openThreads are the review threads a run may report addressed: unresolved and
+// resolvable when the run was prepared. A thread opened mid-run — by anyone who
+// can comment on the PR — is outside the TODO the run was asked to do.
+func openThreads(snapshot *model.StatusSnapshot) map[string]bool {
+	open := map[string]bool{}
+	for _, thread := range snapshot.PR.ReviewThreads {
+		if thread.ThreadID != "" && !thread.IsResolved && thread.CanResolve {
+			open[thread.ThreadID] = true
+		}
 	}
-	prefix, _, _ := strings.Cut(prompt.User, prStatusContextMarker)
-	prompt.User = prefix + prStatusContextMarker + "```json\n" + string(status) + "\n```"
-	return nil
+	return open
 }
 
 func (h *Host) resolvePR(ctx context.Context, todo *types.TODO, class types.RunMode, workDir string) (*prExecution, error) {
@@ -95,7 +113,7 @@ func (h *Host) resolvePR(ctx context.Context, todo *types.TODO, class types.RunM
 	if err != nil {
 		return nil, err
 	}
-	return &prExecution{client: client, number: number, snapshot: snapshot, target: target, workDir: workDir, write: class == types.ModeRun}, nil
+	return &prExecution{client: client, number: number, snapshot: snapshot, openThreads: openThreads(snapshot), target: target, workDir: workDir, write: class == types.ModeRun}, nil
 }
 
 func requirePRFixture(todo *types.TODO, spec *api.Spec) error {

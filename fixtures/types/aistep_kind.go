@@ -60,7 +60,7 @@ func (k AIKind) Execute(ctx context.Context, step *fixtures.StepContext) (fixtur
 	result := k.grade(test, opts)
 	outputs := map[string]any{"passed": result.Status == task.StatusPASS}
 	if checklist, ok := result.Metadata["checklist"]; ok {
-		plain, err := plainValue(checklist)
+		plain, err := fixtures.PlainValue(checklist)
 		if err != nil {
 			return fixtures.StepOutcome{Result: result}, err
 		}
@@ -120,26 +120,13 @@ func runAIPrompt(ctx context.Context, test fixtures.FixtureTest, opts fixtures.R
 	}
 	output := map[string]any{"text": resp.Text}
 	if resp.StructuredData != nil {
-		if output["data"], err = plainValue(resp.StructuredData); err != nil {
+		if output["data"], err = fixtures.PlainValue(resp.StructuredData); err != nil {
 			return fixtures.StepOutcome{}, err
 		}
 	}
 	result := fixtures.FixtureResult{Name: test.Name, Type: aiKindName, Status: task.StatusPASS, Start: &now,
 		Duration: time.Since(now), Stdout: resp.Text, Test: test}
 	return fixtures.StepOutcome{Result: result, Outputs: map[string]any{"output": output}}, nil
-}
-
-// plainValue converts a typed value to the maps and slices CEL navigates.
-func plainValue(value any) (any, error) {
-	raw, err := json.Marshal(value)
-	if err != nil {
-		return nil, fmt.Errorf("encode %T for CEL: %w", value, err)
-	}
-	var plain any
-	if err := json.Unmarshal(raw, &plain); err != nil {
-		return nil, fmt.Errorf("decode %T for CEL: %w", value, err)
-	}
-	return plain, nil
 }
 
 var aiSchema = json.RawMessage(`{

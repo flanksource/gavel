@@ -12,6 +12,7 @@ import (
 
 	"github.com/flanksource/gavel/blob"
 	testui "github.com/flanksource/gavel/testrunner/ui"
+	"github.com/flanksource/gavel/traces"
 )
 
 // RunningName is the in-flight pointer file written periodically while a
@@ -22,11 +23,11 @@ const RunningName = "running.json"
 
 // PerRunPrefix is the stem of the per-run timestamped snapshot. The full
 // filename includes a UTC timestamp, e.g. run-2026-04-27T10-43-42Z.json.
-const PerRunPrefix = "run-"
+const PerRunPrefix = traces.RunPrefix
 
 // PerRunTimestampLayout is filesystem-safe (no colons) but still
 // chronologically sortable.
-const PerRunTimestampLayout = "2006-01-02T15-04-05Z"
+const PerRunTimestampLayout = traces.RunTimestampLayout
 
 // Recorder writes periodic snapshots of an in-flight `gavel test` run to
 // .gavel/running.json. A 3-second ticker drives writes; ticks where nothing
@@ -193,7 +194,7 @@ func SavePerRun(workDir string, snap *testui.Snapshot, started time.Time, label 
 	if err != nil {
 		return "", err
 	}
-	stem := PerRunPrefix + started.UTC().Format(PerRunTimestampLayout)
+	stem := traces.RunID(started)
 	if label = slugifyLabel(label); label != "" {
 		stem += "-" + label
 	}

@@ -8,12 +8,14 @@ import {
 	rememberTodoRunOptions,
 	runButtonLabelForOptions,
 	reconcileTodoRunOptions,
+	runActionPresentation,
 	runSpec,
 	shortTodoRunModelName,
 	todoRunOptionsForRuntimeChange,
 	todoRunButtonPresentation,
 	todoRunEffortPresentation,
 } from './run';
+import { actionFromRunOptions } from './runChoiceStorage';
 
 const RUN_CHOICE_STORAGE_KEY_V2 = 'gavel.pr-ui.todoRunChoices.v2';
 const RUN_CHOICE_STORAGE_KEY_V3 = 'gavel.pr-ui.todoRunChoices.v3';
@@ -145,7 +147,7 @@ describe('todo run runtime adapter', () => {
     })).not.toHaveProperty('driver');
   });
 
-  it('names triage by its own prompt rather than collapsing it into plan/run', () => {
+  it('names a server-declared step by its own name rather than collapsing it into plan/run', () => {
     expect(buildTodoRunPayload({
       ref: 'todo-123',
       driver: 'cmux',
@@ -156,6 +158,25 @@ describe('todo run runtime adapter', () => {
       promptDraft: '',
       promptDirty: false,
     }).step).toBe('triage');
+  });
+
+  describe('runActionPresentation', () => {
+    it("labels a step from the run context's lifecycle catalog", () => {
+      const custom: RunContext = { ...context, lifecycle: { steps: [{ name: 'audit', label: 'Audit the diff', prompt: 'audit', readOnly: false }] } };
+      expect(runActionPresentation('audit', custom).label).toBe('Audit the diff');
+      expect(runActionPresentation('audit', custom).title).toBe('Audit the diff todo');
+    });
+
+    it('uses the step name until the catalog has loaded', () => {
+      expect(runActionPresentation('audit', null).label).toBe('audit');
+    });
+  });
+
+  it('resolves the action of options naming any prompt without a built-in list of prompt names', () => {
+    expect(actionFromRunOptions({ prompt: 'custom-review' })).toBe('custom-review');
+    expect(actionFromRunOptions({ step: 'audit', prompt: 'custom-review' })).toBe('audit');
+    expect(actionFromRunOptions({ runMode: 'plan' })).toBe('plan');
+    expect(actionFromRunOptions({})).toBe('run');
   });
 
   describe('requestStepFor', () => {

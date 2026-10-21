@@ -18,17 +18,31 @@ import (
 // request. The source is local files (cheap, no rate limit) so the loop just
 // rescans every workspace each tick — ListRuns' `since` watermark keeps each
 // rescan to only the runs added since the last sync.
+//
+// A tick that finds nothing new touches no database row: each workspace's
+// cursor is read once and then advanced in memory alongside every upsert, and
+// the run .gavel/last.json names is looked up in the cache only when the
+// pointer moves. Measured before this, idle ticks across 27 workspaces cost
+// 766k cursor SELECTs, 766k cursor upserts and 505k cache lookups in nine
+// days. Another process syncing the same workspace only leaves this one's
+// cursor behind, which re-offers runs it already cached; the upsert is
+// idempotent.
 type TestRunSyncer struct {
 	srv      *Server
 	interval time.Duration
 	notify   chan struct{}
+	// cursors and cachedPointers are owned by the loop goroutine.
+	cursors        map[string]int64  // workspace → run start watermark
+	cachedPointers map[string]string // workspace → run id last.json named, known cached
 }
 
 func NewTestRunSyncer(srv *Server) *TestRunSyncer {
 	return &TestRunSyncer{
-		srv:      srv,
-		interval: 30 * time.Second,
-		notify:   make(chan struct{}, 1),
+		srv:            srv,
+		interval:       30 * time.Second,
+		notify:         make(chan struct{}, 1),
+		cursors:        map[string]int64{},
+		cachedPointers: map[string]string{},
 	}
 }
 
@@ -67,7 +81,7 @@ func (trs *TestRunSyncer) syncAll(ctx context.Context) {
 		return
 	}
 	changed := false
-	projects, err := LoadProjects()
+	projects, err := LoadProjects(LoadProjectsOptions{})
 	if err != nil {
 		logger.Errorf("sync test runs: %v", err)
 		return
@@ -89,10 +103,14 @@ func (trs *TestRunSyncer) syncAll(ctx context.Context) {
 // syncWorkspace scans one workspace and upserts any runs newer than its cursor.
 // Returns true when new runs were written.
 func (trs *TestRunSyncer) syncWorkspace(ctx context.Context, store *cache.Store, dir string) bool {
-	sinceNanos, _, err := store.LoadTestRunCursor(ctx, dir)
-	if err != nil {
-		logger.Warnf("test run cursor %s: %v", dir, err)
-		return false
+	sinceNanos, known := trs.cursors[dir]
+	if !known {
+		var err error
+		if sinceNanos, _, err = store.LoadTestRunCursor(ctx, dir); err != nil {
+			logger.Warnf("test run cursor %s: %v", dir, err)
+			return false
+		}
+		trs.cursors[dir] = sinceNanos
 	}
 	since := time.Time{}
 	if sinceNanos > 0 {
@@ -118,14 +136,11 @@ func (trs *TestRunSyncer) syncWorkspace(ctx context.Context, store *cache.Store,
 	// request, so it is summarized here too. Without it that view decodes the
 	// full snapshot per project per request — 61% of this server's CPU with the
 	// tab open.
-	if row, ok := lastPointerRow(ctx, store, dir); ok {
-		rows = append(rows, row)
+	pointerRun, pointerRow, hasPointerRow := trs.lastPointerRow(ctx, store, dir)
+	if hasPointerRow {
+		rows = append(rows, pointerRow)
 	}
 	if len(rows) == 0 {
-		// Nothing new, but stamp the cursor so SyncedAt still advances.
-		if err := store.UpsertTestRuns(ctx, dir, nil, highWater); err != nil {
-			logger.Warnf("refresh test run cursor %s: %v", dir, err)
-		}
 		return false
 	}
 
@@ -133,33 +148,40 @@ func (trs *TestRunSyncer) syncWorkspace(ctx context.Context, store *cache.Store,
 		logger.Warnf("upsert test runs %s: %v", dir, err)
 		return false
 	}
+	trs.cursors[dir] = highWater
+	if hasPointerRow {
+		trs.cachedPointers[dir] = pointerRun
+	}
 	return true
 }
 
 // lastPointerRow summarizes the snapshot .gavel/last.json names, unless the
 // cache already holds it. Run snapshots are immutable, so an existing row is
-// never stale and re-decoding would defeat the point.
-func lastPointerRow(ctx context.Context, store *cache.Store, dir string) (cache.TestRunCache, bool) {
+// never stale and re-decoding would defeat the point; a pointer still naming
+// the run last confirmed cached is not looked up again. It returns the run id
+// the pointer names alongside the row to upsert.
+func (trs *TestRunSyncer) lastPointerRow(ctx context.Context, store *cache.Store, dir string) (string, cache.TestRunCache, bool) {
 	pointer, err := snapshots.LoadPointer(dir, snapshots.PointerLast)
 	if err != nil || pointer == nil {
-		return cache.TestRunCache{}, false
+		return "", cache.TestRunCache{}, false
 	}
 	runID := pointerRunID(pointer)
-	if runID == "" {
-		return cache.TestRunCache{}, false
+	if runID == "" || trs.cachedPointers[dir] == runID {
+		return runID, cache.TestRunCache{}, false
 	}
 	if existing, err := store.GetTestRun(ctx, dir, runID); err == nil && existing != nil {
-		return cache.TestRunCache{}, false
+		trs.cachedPointers[dir] = runID
+		return runID, cache.TestRunCache{}, false
 	}
 	run, err := snapshots.LastRun(dir)
 	if err != nil || run == nil {
-		return cache.TestRunCache{}, false
+		return runID, cache.TestRunCache{}, false
 	}
 	row := testRunRow(dir, *run)
 	// LastRun reports the pointer's own name as the run id; key the row by the
 	// file it resolved to so the reader finds it from the pointer alone.
 	row.RunID = runID
-	return row, true
+	return runID, row, true
 }
 
 func testRunRow(dir string, r snapshots.RunInfo) cache.TestRunCache {

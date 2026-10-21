@@ -38,7 +38,7 @@ var _ = Describe("Host defaults structural composition", func() {
 		defaults, err := host.StepDefaults(context.Background(), step)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(defaults.Spec.Name).To(Equal("gpt-5.6-sol"))
-		Expect(defaults.Spec.Permissions.Tools).To(Equal(api.ToolsFromLists(nil, []string{"Bash"})))
+		Expect(defaults.Spec.Permissions.Tools).To(Equal(api.ToolsFromLists(nil, []string{"AskUserQuestion", "Bash"})))
 
 		_, err = host.Resolve(context.Background(), hostTodo(), step, lifecycle.RunOptions{})
 		Expect(err).To(HaveOccurred())

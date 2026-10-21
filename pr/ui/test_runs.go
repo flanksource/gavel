@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -126,6 +127,11 @@ func (s *Server) handleTestRun(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "failed to read run")
 		return
 	}
+	if data, err = s.withTestRunTraces(data); err != nil {
+		logger.Errorf("serve the trace store of test run %s in %s: %v", runID, workDir, err)
+		respondError(w, http.StatusInternalServerError, fmt.Sprintf("serve the run's trace store: %v", err))
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write(data)
 }
@@ -141,7 +147,7 @@ func (s *Server) handleTestRun(w http.ResponseWriter, r *http.Request) {
 // pointer file is a few hundred bytes, but the run it names carries the whole
 // test tree and lint violation set, and there is one per project per request.
 func collectTestRuns(ctx context.Context) ([]projectRuns, error) {
-	projects, err := LoadProjects()
+	projects, err := LoadProjects(LoadProjectsOptions{})
 	if err != nil {
 		return nil, err
 	}

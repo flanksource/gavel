@@ -5,10 +5,8 @@ package main
 import (
 	"fmt"
 	"net"
-	"time"
 
-	"github.com/flanksource/gavel/linters"
-	"github.com/flanksource/gavel/testrunner/parsers"
+	testui "github.com/flanksource/gavel/testrunner/ui"
 )
 
 // handoffDetachedUI is not supported on non-Unix platforms. The inherited-FD
@@ -16,13 +14,6 @@ import (
 // golang.org/x/sys/unix flock wrappers, none of which have Windows
 // equivalents we want to pull in right now. Return an error so the caller
 // falls back to the SIGINT-block behavior.
-func handoffDetachedUI(
-	_ net.Listener,
-	_ []parsers.Test,
-	_ []*linters.LinterResult,
-	_ string,
-	_ time.Duration,
-	_ time.Duration,
-) error {
+func handoffDetachedUI(_ net.Listener, _ testui.Snapshot, _ detachedUIOptions) error {
 	return fmt.Errorf("detached UI handoff is not supported on this platform")
 }

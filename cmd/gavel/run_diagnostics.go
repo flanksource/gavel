@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -11,23 +12,43 @@ import (
 	"time"
 
 	"github.com/flanksource/clicky/task"
+	tracedprocess "github.com/flanksource/commons-db/tracing/process"
+	"github.com/flanksource/commons-db/tracing/stacks"
 	"github.com/flanksource/commons/logger"
-	testui "github.com/flanksource/gavel/testrunner/ui"
 )
 
 const defaultDiagnosticsProbeTimeout = 2 * time.Second
 
 type runDiagnosticsOptions struct {
-	Output           io.Writer
-	CaptureStack     func(io.Writer) error
-	CaptureTasks     func() []task.TaskSnapshot
-	CaptureProcesses func() (*testui.DiagnosticsSnapshot, error)
-	ProbeTimeout     time.Duration
+	Output       io.Writer
+	CaptureStack func(io.Writer) error
+	CaptureTasks func() []task.TaskSnapshot
+	ProbeTimeout time.Duration
 }
+
+// diagnosticsTrace is the run's process trace (traces.ProcessTrace): each
+// capture dumps gavel's goroutines into its stacks and re-observes its tree,
+// whose records the capture's process tree is printed from.
+type diagnosticsTrace interface {
+	CheckpointStacks(ctx context.Context, params stacks.CheckpointParams) error
+	CheckpointTree(ctx context.Context) error
+	Nodes(ctx context.Context) ([]tracedprocess.Node, error)
+}
+
+const diagnosticsCheckpointTimeout = 10 * time.Second
 
 type runDiagnosticsReporter struct {
 	options runDiagnosticsOptions
 	mu      sync.Mutex
+	trace   diagnosticsTrace
+}
+
+// recordOn checkpoints every later capture into trace, the run's process
+// capture, tagged with the capture's reason; the capture is still logged.
+func (r *runDiagnosticsReporter) recordOn(trace diagnosticsTrace) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.trace = trace
 }
 
 func newRunDiagnosticsReporter(options runDiagnosticsOptions) *runDiagnosticsReporter {
@@ -41,9 +62,6 @@ func newRunDiagnosticsReporter(options runDiagnosticsOptions) *runDiagnosticsRep
 	}
 	if options.CaptureTasks == nil {
 		options.CaptureTasks = func() []task.TaskSnapshot { return task.SnapshotAll() }
-	}
-	if options.CaptureProcesses == nil {
-		options.CaptureProcesses = testui.NewDiagnosticsManager(os.Getpid(), nil).Snapshot
 	}
 	if options.ProbeTimeout <= 0 {
 		options.ProbeTimeout = defaultDiagnosticsProbeTimeout
@@ -63,10 +81,33 @@ func (r *runDiagnosticsReporter) Capture(reason string) {
 
 	tasks, tasksReady := boundedProbe(r.options.ProbeTimeout, r.options.CaptureTasks)
 	printActiveTasks(r.options.Output, tasks, tasksReady, r.options.ProbeTimeout)
-
-	processes, processesReady := boundedProbe(r.options.ProbeTimeout, r.options.captureProcessesResult)
-	printDiagnosticsProcesses(r.options.Output, processes, processesReady, r.options.ProbeTimeout)
+	r.record(reason)
 	fmt.Fprintln(r.options.Output, "=== end Gavel diagnostics ===")
+}
+
+// record checkpoints the capture into the run's process trace — gavel's
+// goroutines into its stacks, a re-observed tree — and prints the tree its
+// records hold. A run without one, or a checkpoint that fails, is reported in
+// the log, never failing the run the watchdog is watching.
+func (r *runDiagnosticsReporter) record(reason string) {
+	fmt.Fprintln(r.options.Output, "-- process trace --")
+	if r.trace == nil {
+		fmt.Fprintln(r.options.Output, "not checkpointed: the run has no process trace (it needs --ui or --diagnostics)")
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), diagnosticsCheckpointTimeout)
+	defer cancel()
+	err := errors.Join(
+		r.trace.CheckpointStacks(ctx, stacks.CheckpointParams{PID: os.Getpid(), Transport: stacks.TransportInProcess, Reason: reason}),
+		r.trace.CheckpointTree(ctx),
+	)
+	if err != nil {
+		fmt.Fprintf(r.options.Output, "checkpoint failed: %v\n", err)
+	} else {
+		fmt.Fprintf(r.options.Output, "checkpointed gavel's goroutines into the run's stacks (reason %q)\n", reason)
+	}
+	nodes, err := r.trace.Nodes(ctx)
+	printDiagnosticsProcesses(r.options.Output, nodes, err)
 }
 
 func printActiveTasks(w io.Writer, snapshots []task.TaskSnapshot, ready bool, timeout time.Duration) {
@@ -95,31 +136,30 @@ func printActiveTasks(w io.Writer, snapshots []task.TaskSnapshot, ready bool, ti
 	}
 }
 
-type processProbeResult struct {
-	snapshot *testui.DiagnosticsSnapshot
-	err      error
-}
-
-func (o runDiagnosticsOptions) captureProcessesResult() processProbeResult {
-	snapshot, err := o.CaptureProcesses()
-	return processProbeResult{snapshot: snapshot, err: err}
-}
-
-func printDiagnosticsProcesses(w io.Writer, result processProbeResult, ready bool, timeout time.Duration) {
+// printDiagnosticsProcesses prints the run's process tree as its
+// process_tree records hold it, each process indented under its parent.
+func printDiagnosticsProcesses(w io.Writer, nodes []tracedprocess.Node, err error) {
 	fmt.Fprintln(w, "-- process tree --")
-	if !ready {
-		fmt.Fprintf(w, "process snapshot timed out after %s\n", timeout)
+	if err != nil {
+		fmt.Fprintf(w, "process tree unavailable: %v\n", err)
 		return
 	}
-	if result.err != nil {
-		fmt.Fprintf(w, "process snapshot failed: %v\n", result.err)
+	children := map[string][]tracedprocess.Node{}
+	var roots []tracedprocess.Node
+	for _, node := range nodes {
+		if node.IsRoot {
+			roots = append(roots, node)
+		} else {
+			children[node.ParentKey] = append(children[node.ParentKey], node)
+		}
+	}
+	if len(roots) == 0 {
+		fmt.Fprintln(w, "unavailable: the trace has recorded no root yet")
 		return
 	}
-	if result.snapshot == nil || result.snapshot.Root == nil {
-		fmt.Fprintln(w, "unavailable")
-		return
+	for _, root := range roots {
+		printDiagnosticsProcess(w, children, root, 0)
 	}
-	printDiagnosticsProcess(w, result.snapshot.Root, 0)
 }
 
 func boundedProbe[T any](timeout time.Duration, probe func() T) (T, bool) {
@@ -136,13 +176,11 @@ func boundedProbe[T any](timeout time.Duration, probe func() T) (T, bool) {
 	}
 }
 
-func printDiagnosticsProcess(w io.Writer, node *testui.ProcessNode, depth int) {
-	if node == nil {
-		return
-	}
+// printDiagnosticsProcess prints node and, indented beneath it, its children.
+func printDiagnosticsProcess(w io.Writer, children map[string][]tracedprocess.Node, node tracedprocess.Node, depth int) {
 	fmt.Fprintf(w, "%s- pid=%d ppid=%d status=%s command=%s\n", strings.Repeat("  ", depth), node.PID, node.PPID, node.Status, node.Command)
-	for _, child := range node.Children {
-		printDiagnosticsProcess(w, child, depth+1)
+	for _, child := range children[node.Key] {
+		printDiagnosticsProcess(w, children, child, depth+1)
 	}
 }
 

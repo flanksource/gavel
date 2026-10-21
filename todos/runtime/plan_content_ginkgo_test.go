@@ -77,7 +77,7 @@ var _ = Describe("plan protocol normalization", func() {
 			}
 			_, _, err := sandboxed.planResultContent(context.Background(), nil, "plan-session")
 			Expect(err).To(MatchError(captaincli.ErrNoPlan))
-			Expect(err).To(MatchError(ContainSubstring("a run in a sandbox returns its plan as planContent, and this one returned none")))
+			Expect(err).To(MatchError(ContainSubstring("a run in a sandbox returns its plan as content, through todo_plan or its native plan, and this one returned none")))
 		})
 	})
 })

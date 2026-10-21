@@ -16,7 +16,7 @@ import (
 // writes nothing and downstream readers (gavel summary, the PR dashboard) have
 // no way to explain the empty artifact.
 func TestNewTestRunFailure_SerializesCrashEnvelope(t *testing.T) {
-	const wantMsg = "pre-build: compiling Go test binaries failed (exit 1)"
+	const wantMsg = "test setup: Go package discovery failed (exit 1)"
 	cause := errors.New(wantMsg)
 
 	failure := newTestRunFailure(

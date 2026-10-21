@@ -29,11 +29,9 @@ type StepRun struct {
 // predicates. Every field is normalised into a map with all keys present, so a
 // predicate reads an absent fact as its zero value rather than as an error.
 type StepResult struct {
-	Run       RunFacts
-	Verify    *api.VerifyReport
-	Envelope  Envelope
-	Plan      *PlanFacts
-	Questions []any
+	Run      RunFacts
+	Verify   *api.VerifyReport
+	Envelope Envelope
 }
 
 // RunFacts is the run's own fate, independent of what it produced.
@@ -45,20 +43,13 @@ type RunFacts struct {
 	CostUSD    float64
 }
 
-// Envelope is the structured result the prompt returned, reduced to the fields
-// every prompt's envelope shares. Extra is the raw structured output for a
-// custom prompt whose outcomes read its own fields.
+// Envelope is the structured result the prompt returned. Extra is the raw
+// structured output, so a custom prompt's outcomes can read a field of its own.
 type Envelope struct {
-	Summary   string
-	EndStatus string
-	Extra     map[string]any
-}
-
-// PlanFacts is a plan-envelope result.
-type PlanFacts struct {
-	Status  string
-	Path    string
-	Content string
+	Success bool
+	Event   string
+	Comment string
+	Extra   map[string]any
 }
 
 // Engine is a compiled lifecycle.
@@ -203,8 +194,8 @@ func (e *Engine) applies(step Step, vars map[string]any) (bool, error) {
 //
 // The predicates evaluate against the PRE-RUN Context: `subject`, `runs` and
 // `last` are the todo as it was when the step was chosen, not as the run left
-// it. What the run produced arrives only through result — `run`, `verify`,
-// `envelope`, `plan` and `questions` — so an outcome that needs a fact the run
+// it. What the run produced arrives only through result — `run`, `verify` and
+// `envelope` — so an outcome that needs a fact the run
 // changed reads it from there, never from the subject.
 //
 // Only the step's name is read from the caller: its outcomes are the compiled
@@ -229,8 +220,8 @@ func (e *Engine) Outcome(step Step, c Context, result StepResult) (string, error
 			return declared.Outcomes[i].Status, nil
 		}
 	}
-	return "", fmt.Errorf("step %s: no outcome matched run state %q, envelope endStatus %q, verify ran=%v passed=%v",
-		step.Name, result.Run.State, result.Envelope.EndStatus, result.Verify != nil && result.Verify.Ran,
+	return "", fmt.Errorf("step %s: no outcome matched run state %q, envelope success=%v event %q, verify ran=%v passed=%v",
+		step.Name, result.Run.State, result.Envelope.Success, result.Envelope.Event, result.Verify != nil && result.Verify.Ran,
 		result.Verify != nil && result.Verify.Passed)
 }
 
@@ -295,22 +286,12 @@ func (e *Engine) outcomeVars(c Context, result StepResult) (map[string]any, erro
 	if err != nil {
 		return nil, fmt.Errorf("verify report: %w", err)
 	}
-	plan := PlanFacts{}
-	if result.Plan != nil {
-		plan = *result.Plan
-	}
-	questions := result.Questions
-	if questions == nil {
-		questions = []any{}
-	}
 	vars[VarRun] = map[string]any{
 		"state": result.Run.State, "error": result.Run.Error, "stop_reason": result.Run.StopReason,
 		"iterations": result.Run.Iterations, "cost_usd": result.Run.CostUSD,
 	}
 	vars[VarVerify] = verifyVars
 	vars[VarEnvelope] = result.Envelope.vars()
-	vars[VarPlan] = map[string]any{"status": plan.Status, "path": plan.Path, "content": plan.Content}
-	vars[VarQuestions] = questions
 	return vars, nil
 }
 
@@ -319,7 +300,8 @@ func (env Envelope) vars() map[string]any {
 	for key, value := range env.Extra {
 		out[key] = value
 	}
-	out["summary"] = env.Summary
-	out["endStatus"] = env.EndStatus
+	out["success"] = env.Success
+	out["event"] = env.Event
+	out["comment"] = env.Comment
 	return out
 }

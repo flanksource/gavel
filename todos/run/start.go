@@ -88,6 +88,7 @@ func runOptions(req Request, exec *todos.ExecutorContext) lifecycle.RunOptions {
 		ReuseBranch:    req.Options.ReuseBranch,
 		Batch:          append([]string(nil), req.Options.Batch...),
 		Approvals:      req.Approvals,
+		OnApproval:     req.OnApproval,
 	}
 }
 

@@ -51,18 +51,17 @@ type ExecutionResult struct {
 	// It is display state, not part of the persisted attempt.
 	ResponseText string
 	OutputJSON   map[string]any
-	// Envelope fields — the agent's structured final result. EndStatus is empty
-	// when no envelope was captured.
-	Summary   string
-	EndStatus types.EndStatus
-	Questions []types.AgentQuestion
-	Plan      *types.PlanResult
-	// Triage is a triage run's verdict and the edits it wants applied. The agent
-	// is read-only, so this is a request, not a record of something that
-	// happened; the host's OnOutcome performs the writes.
-	Triage           *types.TriageEnvelope
-	TriageNew        *types.TriageNewEnvelope
-	TriageNewApplier TriageNewApplier `json:"-"`
+	// Envelope is the agent's structured final result, nil when none was
+	// captured. Summary is its comment, the account the run's history entry and
+	// the dashboard show.
+	Envelope *types.Envelope
+	Summary  string
+	// Plan is the plan a plan-mode run produced: its native plan file or the
+	// content its todo_plan call saved, with the envelope's event as its status.
+	Plan *types.PlanResult
+	// ToolWrites are the writes the run's todo tools made, in call order. They
+	// landed when the tool was called; this is the record, not a request.
+	ToolWrites []ToolWrite
 	// DoD is the definition-of-done verdict: nil when the step declared no
 	// verifiers, else Ran is true and Passed reports whether every verifier
 	// passed within the iteration budget.

@@ -4,6 +4,8 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 
 	"github.com/flanksource/clicky/task"
 	. "github.com/onsi/ginkgo/v2"
@@ -142,5 +144,37 @@ var _ = Describe("fixture execution progress", func() {
 		})
 		Expect(result).NotTo(BeNil())
 		Expect(result.Status).To(Equal(task.StatusPASS))
+	})
+
+	It("records the pid of a fixture's command on its progress node", func() {
+		workDir := GinkgoT().TempDir()
+		path := filepath.Join(workDir, "pid.fixture.md")
+		content := "# Pid\n\n## prints its pid\n\n```bash\nprintf $$\n```\n"
+		Expect(os.WriteFile(path, []byte(content), 0o644)).To(Succeed())
+
+		var last ExecutionSnapshot
+		runner, err := NewRunner(RunnerOptions{
+			Paths: []string{path}, WorkDir: workDir,
+			ProgressSink: func(_ context.Context, snapshot ExecutionSnapshot) error {
+				last = snapshot
+				return nil
+			},
+		})
+		Expect(err).NotTo(HaveOccurred())
+		tree, runErr := runner.Run()
+		Expect(runErr).NotTo(HaveOccurred())
+
+		var stdout string
+		tree.Walk(func(node *FixtureNode) {
+			if node.Test != nil {
+				stdout = node.Results.Stdout
+			}
+		})
+		var pids []int
+		walkExecution(last.Root, func(node *ExecutionNode) {
+			pids = append(pids, node.PIDs...)
+		})
+		Expect(pids).To(HaveLen(1))
+		Expect(strconv.Itoa(pids[0])).To(Equal(strings.TrimSpace(stdout)), "the pid the shell printed for itself")
 	})
 })

@@ -46,13 +46,17 @@ var _ = Describe("Shared test runtime", func() {
 		GinkgoT().Setenv("HOME", GinkgoT().TempDir())
 		invalidCPU := -1.0
 		o := &TestOrchestrator{RunOptions: RunOptions{WorkDir: dir, Runtime: processruntime.Options{CPU: &invalidCPU}}, registry: DefaultRegistry(dir)}
-		_, err := o.displayDryRun(map[Framework][]string{parsers.GoTest: {"."}}, nil)
+		_, err := o.displayDryRun(map[Framework][]string{parsers.GoTest: {"."}}, nil, false)
 		Expect(err).To(MatchError(ContainSubstring("runtime cpu")))
 	})
 	DescribeTable("applies runtime after every adapter builds its command", func(framework parsers.Framework) {
 		workDir := GinkgoT().TempDir()
 		GinkgoT().Setenv("HOME", GinkgoT().TempDir())
 		Expect(os.WriteFile(filepath.Join(workDir, ".gavel.yaml"), []byte("runtime: {env: {RUNTIME_KEY: inherited}, nice: 10, timeout: 7s}\n"), 0o600)).To(Succeed())
+		if framework == parsers.Ginkgo {
+			code := "package sample\nimport \"github.com/onsi/ginkgo/v2\"\nvar _ = ginkgo.Describe(\"runtime\", func() {})\n"
+			Expect(os.WriteFile(filepath.Join(workDir, "sample_test.go"), []byte(code), 0o600)).To(Succeed())
+		}
 		registry := DefaultRegistry(workDir)
 		runner, ok := registry.Get(framework)
 		Expect(ok).To(BeTrue())

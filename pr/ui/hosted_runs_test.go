@@ -31,7 +31,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// planAgent answers every turn with a new plan, in place of an agent CLI.
+// planAgent ends every turn by presenting a new plan, in place of an agent CLI.
 type planAgent struct{}
 
 func (planAgent) GetModel() string        { return "claude-sonnet-5" }
@@ -42,7 +42,7 @@ func (planAgent) Execute(context.Context, api.Spec) (*api.Response, error) {
 func (planAgent) ExecuteStream(context.Context, api.Spec) (<-chan captainai.Event, error) {
 	ch := make(chan captainai.Event, 3)
 	ch <- captainai.Event{Kind: captainai.EventSystem, SessionID: uuid.NewString()}
-	ch <- captainai.Event{Kind: captainai.EventText, Text: `{"summary":"Planned it.","endStatus":"completed","planStatus":"new","planContent":"# Plan\n\n1. Fix the build."}`}
+	ch <- captainai.Event{Kind: captainai.EventToolUse, Tool: "ExitPlanMode", Input: map[string]any{"plan": "# Plan\n\n1. Fix the build."}}
 	ch <- captainai.Event{Kind: captainai.EventResult, Success: true}
 	close(ch)
 	return ch, nil
@@ -217,13 +217,16 @@ func TestHostedTodoRunsInASandboxJob(t *testing.T) {
 		return outcomes == 1
 	}, 30*time.Second, 50*time.Millisecond, "the run's outcome reached the todo")
 	var outcome struct {
-		RunState  string
-		EndStatus string
+		RunState string
+		Success  bool
+		Event    string
 	}
-	require.NoError(t, db.Raw(`SELECT payload->'run'->>'state' AS run_state, payload->'envelope'->>'endStatus' AS end_status
+	require.NoError(t, db.Raw(`SELECT payload->'run'->>'state' AS run_state, (payload->'envelope'->>'success')::boolean AS success,
+		payload->'envelope'->>'event' AS event
 		FROM todo_issue_events WHERE issue_id = ? AND kind = 'lifecycle_outcome'`, todo).Scan(&outcome).Error)
 	assert.Equal(t, "succeeded", outcome.RunState, "the plan the sandboxed agent wrote was accepted")
-	assert.Equal(t, "completed", outcome.EndStatus)
+	assert.True(t, outcome.Success)
+	assert.Equal(t, "new", outcome.Event)
 }
 
 func TestHostedTodoRunsNeedASandbox(t *testing.T) {
@@ -341,8 +344,8 @@ func TestHostedTriageNewRunsWithItsToolsOnServe(t *testing.T) {
 	for _, tool := range job.Tools {
 		tools = append(tools, tool.Name)
 	}
-	assert.ElementsMatch(t, []string{"todo_search", "todo_get", "triage_prepare", "triage_review"}, tools, "the job calls serve for triage.new's tools")
-	assert.True(t, job.Approvals, "and asks serve for the person's approval of the proposal")
+	assert.Subset(t, tools, []string{"todo_search", "todo_get", "todo_update", "todo_link", "todo_merge"}, "the job calls serve for triage.new's todo tools")
+	assert.True(t, job.Approvals, "and asks serve for the person's approval of a merge")
 
 	stop := map[string]any{"ref": todo, "promptRunId": started["promptRunId"]}
 	status, stopped := hostedCall(t, base, http.MethodPost, "/api/todos/session/stop?dir="+workspace, creator, "org:member", stop)

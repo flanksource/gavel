@@ -1,971 +1,513 @@
-import { useState, useEffect, useRef, useMemo, useCallback, type MutableRefObject } from 'react';
-import type { Test, Snapshot, SnapshotStatus, LinterResult, BenchComparison, FixturePerformance, DiagnosticsSnapshot, ProcessNode, ProcessDetails, RunMeta, TestEditAction, TestEditScope } from './types';
-import { Summary } from './components/Summary';
-import { TestNode } from './components/TestNode';
-import { DetailPanel, type IgnoreRequest } from './components/DetailPanel';
-import { DiagnosticsView } from './components/DiagnosticsView';
-import { DiagnosticsDetailPanel } from './components/DiagnosticsDetailPanel';
-import { FilterBar, type Filters } from './components/FilterBar';
-import { LintFilterBar, type LintGrouping, type LintFilters } from './components/LintFilterBar';
-import { LintView } from './components/LintView';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Icon,
+  LintResults,
+  TestRunner,
+  aggregateStatusCounts,
+  annotateRoutePaths,
+  buildLintTree,
+  collapseSingleChildChains,
+  filterTests,
+  findLintNode,
+  findNodeByRoutePath,
+  isProcessExited,
+  totalLintViolations,
+  type LintAction,
+  type LintFilters,
+  type LintGrouping,
+  type Test as ClickyTest,
+  type TestFilters,
+} from '@flanksource/clicky-ui/data';
+import { Button, Tabs } from '@flanksource/clicky-ui/components';
+import {
+  UiArrowLeft,
+  UiBeaker,
+  UiChartLineUp,
+  UiListChecks,
+  UiLoader,
+  UiRefresh,
+  UiServerProcess,
+} from '@flanksource/clicky-ui/icons';
+import { gavelRegistry } from './adapters';
 import { BenchView } from './components/BenchView';
 import { FixtureBenchView } from './components/FixtureBenchView';
 import { RerunDialog } from './components/RerunDialog';
-import { SplitPane } from './components/SplitPane';
-import { copyCurrentViewForAgent } from './export';
-import { decodeFilterState } from './filterState';
-import { DownloadMenu } from './components/DownloadMenu';
+import { RunActions } from './components/RunActions';
+import { RunProcesses } from './components/RunProcesses';
+import { apiBase, apiUrl } from './config';
+import { fetchProcessMetricsFromSamples } from './processMetrics';
+import { useProcessTrace } from './hooks/use-process-trace';
+import { useTestRun } from './hooks/use-test-run';
+import { buildLintRerunBody } from './lintRerun';
 import {
-  sumNonTaskTests,
-  collectFrameworks,
-  collapseSingleChildChains,
-  collapseLintSingleChildChains,
-  filterTests,
-  totalLintViolations,
-  groupLintByLinterRuleFile,
-  groupLintByLinterFile,
-  groupLintByFileLinterRule,
-  groupLintBySummary,
-  countProcesses,
-  findProcessByPID,
-  isLintNode,
-  isLintOnlyPhase,
-  stripTestTaskGroup,
-  relPath,
-} from './utils';
-import { annotateRoutePaths, buildExportRoute, buildRoute, defaultStatusFilter, findNodeByRoutePath, parseRoute, type RouteState, type TabKey } from './routes';
-import { apiUrl, basePath } from './config';
-import { useCopyFeedback } from './hooks/use-copy-feedback';
+
+  buildRoute,
+  parseRoute,
+  type RouteState,
+  type TabKey,
+} from './routes';
+import { rebaseTraces, processMount } from './traces';
+import type { RerunRequest, Test, TestEditAction, TestEditScope } from './types';
+import { withExportPaths } from './exportPaths';
+import { isLintOnlyPhase, processLinksByPid, stripTestTaskGroup, type ProcessStepLink } from './utils';
 
 function countFixtureWork(tests: Test[]): number {
   return tests.reduce((count, test) => count + (test.fixture ? 1 : 0) + countFixtureWork(test.children || []), 0);
 }
 
-function applySnapshot(
-  snap: Snapshot,
-  startTime: MutableRefObject<number | null>,
-  endTime: MutableRefObject<number | null>,
-  doneRef: MutableRefObject<boolean>,
-  setTests: (t: Test[]) => void,
-  setLint: (l: LinterResult[] | undefined) => void,
-  setLintRun: (r: boolean) => void,
-  setBench: (b: BenchComparison | undefined) => void,
-  setPerformance: (b: FixturePerformance | undefined) => void,
-  setRunError: (error: string | undefined) => void,
-  setDiagnosticsAvailable: (v: boolean) => void,
-  setDiagnostics: (d: DiagnosticsSnapshot | undefined) => void,
-  setSnapshotStatus: (s: SnapshotStatus) => void,
-  setRunMeta: (r: RunMeta | undefined) => void,
-  setDone: (d: boolean) => void,
-  setStatus: (s: string) => void,
-) {
-  const meta = snap.metadata;
-  const status = snap.status || { running: false };
+const asGavel = (tests: ClickyTest[]): Test[] => tests as Test[];
 
-  if (meta?.started) {
-    const started = Date.parse(meta.started);
-    if (!Number.isNaN(started)) startTime.current = started;
-  } else if (!startTime.current) {
-    startTime.current = Date.now();
-  }
-  if (meta?.ended) {
-    const finished = Date.parse(meta.ended);
-    if (!Number.isNaN(finished)) endTime.current = finished;
-  } else if (status.running) {
-    endTime.current = null;
-  }
-  const incomingTests = snap.tests || [];
-  setTests(incomingTests);
-  setLint(snap.lint);
-  setLintRun(!!status.lint_run);
-  setBench(snap.bench);
-  setPerformance(snap.performance);
-  setRunError(snap.error);
-  setDiagnosticsAvailable(!!status.diagnostics_available);
-  if (snap.diagnostics) setDiagnostics(snap.diagnostics);
-  setSnapshotStatus(status);
-  setRunMeta(meta);
-  if (!status.running) {
-    doneRef.current = true;
-    setDone(true);
-    if (status.stopped) {
-      setStatus(status.stop_message || 'Stopped by user');
-    } else {
-      setStatus(meta?.kind === 'rerun' ? 'Rerun complete' : 'Test run complete');
-    }
-  } else {
-    setDone(false);
-    doneRef.current = false;
-    if (meta?.kind === 'rerun') {
-      setStatus(`Running rerun #${meta.sequence || 1}...`);
-    } else if (isLintOnlyPhase(incomingTests, status.running, !!status.lint_run)) {
-      setStatus('Running linters...');
-    } else {
-      setStatus('Running tests...');
-    }
-  }
+// withOwnNames records every node's own name, which collapsing a single-child
+// chain into it ("pkg/ > TestFoo") would otherwise lose and which a rerun of
+// that test is addressed by.
+function withOwnNames(tests: Test[]): Test[] {
+  return tests.map(test => ({ ...test, own_name: test.name, ...(test.children ? { children: withOwnNames(test.children) } : {}) }));
 }
 
-function currentRouteState(
-  tab: TabKey,
-  selectedPath: string,
-  filters: Filters,
-  lintGrouping: LintGrouping,
-  lintFilters: LintFilters,
-  sampleIndex: number | undefined,
-): RouteState {
-  return { tab, selectedPath, filters, lintGrouping, lintFilters, sampleIndex };
-}
-
-function mergeProcessDetails(root: ProcessNode | undefined, details: ProcessDetails): ProcessNode | undefined {
-  if (!root) return root;
-  if (root.pid === details.pid) {
-    return {
-      ...root,
-      ...details,
-      children: root.children,
-    };
-  }
+// rerunBody is the rerun request for a test node: every package beneath it, its
+// module root, and — for a leaf — the test itself. `error` explains a node whose
+// packages span several module roots, which the server cannot rerun as one.
+function rerunBody(node: Test): { body: RerunRequest } | { error: string } {
+  const paths = new Set<string>();
+  const workDirs = new Set<string>();
+  const collect = (n: Test) => {
+    if (n.package_path) paths.add(n.package_path);
+    if (n.work_dir) workDirs.add(n.work_dir);
+    (n.children || []).forEach(collect);
+  };
+  collect(node);
+  if (workDirs.size > 1) return { error: 'Rerun across multiple module roots is not supported' };
+  const isLeaf = !node.children || node.children.length === 0;
   return {
-    ...root,
-    children: (root.children || []).map(child => mergeProcessDetails(child, details) || child),
-  };
-}
-
-export function App() {
-  const initialRoute = typeof window !== 'undefined' ? parseRoute(window.location) : {
-    tab: 'tests' as TabKey,
-    selectedPath: '',
-    filters: { status: defaultStatusFilter(), framework: new Map() },
-    lintGrouping: 'linter-rule-file' as LintGrouping,
-    lintFilters: { severity: new Map(), linter: new Map() },
-    sampleIndex: undefined as number | undefined,
-  };
-
-  const [tests, setTests] = useState<Test[]>([]);
-  const [lint, setLint] = useState<LinterResult[] | undefined>(undefined);
-  const [lintRun, setLintRun] = useState(false);
-  const [bench, setBench] = useState<BenchComparison | undefined>(undefined);
-  const [performance, setPerformance] = useState<FixturePerformance | undefined>(undefined);
-  const [runError, setRunError] = useState<string | undefined>(undefined);
-  const [diagnosticsAvailable, setDiagnosticsAvailable] = useState(false);
-  const [diagnostics, setDiagnostics] = useState<DiagnosticsSnapshot | undefined>(undefined);
-  const [runMeta, setRunMeta] = useState<RunMeta | undefined>(undefined);
-  const [snapshotStatus, setSnapshotStatus] = useState<SnapshotStatus>({ running: false });
-  const [done, setDone] = useState(false);
-  const [status, setStatus] = useState('Loading...');
-  const [expandAll, setExpandAll] = useState<boolean | null>(null);
-  const [filters, setFilters] = useState<Filters>(initialRoute.filters);
-  const [activeTab, setActiveTab] = useState<TabKey>(initialRoute.tab);
-  const [lintGrouping, setLintGrouping] = useState<LintGrouping>(initialRoute.lintGrouping);
-  const [lintFilters, setLintFilters] = useState<LintFilters>(initialRoute.lintFilters);
-  const [selectedPath, setSelectedPath] = useState(initialRoute.selectedPath);
-  const [sampleIndex, setSampleIndex] = useState(initialRoute.sampleIndex);
-  const [rerunBusy, setRerunBusy] = useState(false);
-  const [rerunDialogOpen, setRerunDialogOpen] = useState(false);
-  const [ignoreBusy, setIgnoreBusy] = useState(false);
-  const [testEditBusy, setTestEditBusy] = useState(false);
-  const [stackBusyPID, setStackBusyPID] = useState<number | null>(null);
-  const { copyState, copyError, beginCopy, resetCopyFeedback } = useCopyFeedback();
-  const [streamToken, setStreamToken] = useState(0);
-  const [stopBusyKey, setStopBusyKey] = useState<string | null>(null);
-  const startTime = useRef<number | null>(null);
-  const endTime = useRef<number | null>(null);
-  const [, tick] = useState(0);
-  const doneRef = useRef(false);
-
-  const routeState = useMemo(
-    () => currentRouteState(activeTab, selectedPath, filters, lintGrouping, lintFilters, sampleIndex),
-    [activeTab, selectedPath, filters, lintGrouping, lintFilters, sampleIndex],
-  );
-
-  const commitRoute = useCallback((next: RouteState, mode: 'push' | 'replace' = 'push') => {
-    setActiveTab(next.tab);
-    setSelectedPath(next.selectedPath);
-    setFilters(next.filters);
-    setLintGrouping(next.lintGrouping);
-    setLintFilters(next.lintFilters);
-    setSampleIndex(next.sampleIndex);
-    const url = buildRoute(next);
-    const current = `${window.location.pathname}${window.location.search}`;
-    if (url !== current) {
-      if (mode === 'replace') window.history.replaceState({}, '', url);
-      else window.history.pushState({}, '', url);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (performance && activeTab === 'tests' && window.location.pathname === `${basePath}/`) {
-      commitRoute({ ...routeState, tab: 'bench', selectedPath: '' }, 'replace');
-    }
-  }, [performance, activeTab, routeState, commitRoute]);
-
-  const refreshSnapshot = useCallback(async () => {
-    const res = await fetch(apiUrl('/api/tests'));
-    if (!res.ok) throw new Error(`Snapshot request failed (${res.status})`);
-    const snap: Snapshot = await res.json();
-    applySnapshot(snap, startTime, endTime, doneRef, setTests, setLint, setLintRun, setBench, setPerformance, setRunError, setDiagnosticsAvailable, setDiagnostics, setSnapshotStatus, setRunMeta, setDone, setStatus);
-  }, []);
-
-  useEffect(() => {
-    const onPopState = () => {
-      const next = parseRoute(window.location);
-      setActiveTab(next.tab);
-      setSelectedPath(next.selectedPath);
-      setFilters(next.filters);
-      setLintGrouping(next.lintGrouping);
-      setLintFilters(next.lintFilters);
-      setSampleIndex(next.sampleIndex);
-    };
-
-    window.addEventListener('popstate', onPopState);
-    return () => {
-      window.removeEventListener('popstate', onPopState);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (streamToken === 0) {
-      fetch(apiUrl('/api/tests'))
-        .then(r => r.json())
-        .then((snap: Snapshot) => {
-          applySnapshot(snap, startTime, endTime, doneRef, setTests, setLint, setLintRun, setBench, setPerformance, setRunError, setDiagnosticsAvailable, setDiagnostics, setSnapshotStatus, setRunMeta, setDone, setStatus);
-        })
-        .catch(() => {});
-    }
-
-    const es = new EventSource(apiUrl('/api/tests/stream'));
-
-    es.addEventListener('message', (e: MessageEvent) => {
-      const snap: Snapshot = JSON.parse(e.data);
-      applySnapshot(snap, startTime, endTime, doneRef, setTests, setLint, setLintRun, setBench, setPerformance, setRunError, setDiagnosticsAvailable, setDiagnostics, setSnapshotStatus, setRunMeta, setDone, setStatus);
-		if (!snap.status?.running) es.close();
-	});
-
-    es.addEventListener('done', () => {
-      if (endTime.current === null) endTime.current = Date.now();
-      doneRef.current = true;
-      setDone(true);
-      setSnapshotStatus(prev => ({ ...prev, running: false }));
-      es.close();
-    });
-
-    es.onerror = () => {
-      if (!doneRef.current) setStatus('Connection lost — retrying...');
-    };
-
-    const timer = setInterval(() => {
-      if (startTime.current && !doneRef.current) tick(n => n + 1);
-    }, 1000);
-
-    return () => { es.close(); clearInterval(timer); };
-  }, [streamToken]);
-
-  useEffect(() => {
-    if (!snapshotStatus.running) {
-      setStopBusyKey(null);
-    }
-  }, [snapshotStatus.running]);
-
-  const fetchDiagnostics = useCallback(async () => {
-    const res = await fetch(apiUrl('/api/diagnostics'));
-    if (!res.ok) throw new Error(`Diagnostics request failed (${res.status})`);
-    const next: DiagnosticsSnapshot = await res.json();
-    setDiagnostics(next);
-  }, []);
-
-  useEffect(() => {
-    if (!diagnosticsAvailable) return;
-
-    fetchDiagnostics().catch(() => {});
-    const timer = window.setInterval(() => {
-      fetchDiagnostics().catch(() => {});
-    }, 1000);
-    return () => {
-      window.clearInterval(timer);
-    };
-  }, [diagnosticsAvailable, fetchDiagnostics]);
-
-  // While linters are still running but the test phase has settled, drop the
-  // "Running tests across packages" virtual task group so the UI's only
-  // pending row is "Running linters". Real parsed test results stay visible.
-  const displayedTests = useMemo(() => {
-    if (isLintOnlyPhase(tests, !!snapshotStatus.running, lintRun)) {
-      return stripTestTaskGroup(tests);
-    }
-    return tests;
-  }, [tests, snapshotStatus.running, lintRun]);
-
-  const totals = useMemo(() => {
-    const t = { total: 0, passed: 0, failed: 0, warned: 0, aborted: 0, skipped: 0, pending: 0, running: 0, timedout: 0 };
-    for (const test of displayedTests) {
-      const s = sumNonTaskTests(test);
-      t.total += s.total;
-      t.passed += s.passed;
-      t.failed += s.failed;
-      t.warned += s.warned;
-      t.aborted += s.aborted;
-      t.skipped += s.skipped;
-      t.pending += s.pending;
-      t.running += s.running;
-      t.timedout += s.timedout;
-    }
-    return t;
-  }, [displayedTests]);
-
-  const frameworks = useMemo(() => collectFrameworks(displayedTests), [displayedTests]);
-  const filteredTests = useMemo(
-    () => annotateRoutePaths(collapseSingleChildChains(filterTests(displayedTests, filters.status, filters.framework))),
-    [displayedTests, filters],
-  );
-  const lintTree = useMemo(() => {
-    let grouped: Test[];
-    switch (lintGrouping) {
-      case 'summary':
-        grouped = groupLintBySummary(lint, lintFilters);
-        break;
-      case 'file-linter-rule':
-        grouped = groupLintByFileLinterRule(lint, lintFilters);
-        break;
-      case 'linter-file':
-        grouped = groupLintByLinterFile(lint, lintFilters);
-        break;
-      default:
-        grouped = groupLintByLinterRuleFile(lint, lintFilters);
-    }
-    // Summary mode is pre-collapsed and intentionally keeps its single-child
-    // branches (linter -> rule -> file) separate; skip the chain-collapser.
-    const collapsed = lintGrouping === 'summary' ? grouped : collapseLintSingleChildChains(grouped);
-    return annotateRoutePaths(collapsed);
-  }, [lint, lintFilters, lintGrouping]);
-  const lintTotal = useMemo(() => totalLintViolations(lint), [lint]);
-  const processCount = useMemo(() => countProcesses(diagnostics?.root), [diagnostics]);
-
-  const selected = useMemo(() => {
-    if (!selectedPath) return null;
-    if (activeTab === 'tests') return findNodeByRoutePath(filteredTests, selectedPath);
-    if (activeTab === 'lint') return findNodeByRoutePath(lintTree, selectedPath);
-    return null;
-  }, [activeTab, filteredTests, lintTree, selectedPath]);
-
-  const selectedProcess = useMemo(() => {
-    if (activeTab !== 'diagnostics' || !selectedPath || !diagnostics?.root) return null;
-    const pid = Number(selectedPath);
-    if (!Number.isFinite(pid)) return null;
-    return findProcessByPID(diagnostics.root, pid);
-  }, [activeTab, selectedPath, diagnostics]);
-
-  useEffect(() => {
-    if (activeTab !== 'diagnostics' || selectedPath || !diagnostics?.root) return;
-    commitRoute({ ...routeState, selectedPath: String(diagnostics.root.pid) }, 'replace');
-  }, [activeTab, selectedPath, diagnostics, routeState, commitRoute]);
-
-  useEffect(() => {
-    if (!selectedPath) return;
-    const ready = activeTab === 'tests'
-      ? (tests.length > 0 || done)
-      : activeTab === 'lint'
-        ? (lintRun || done || !!lint)
-        : activeTab === 'diagnostics'
-          ? !!diagnostics?.root
-        : true;
-    const currentSelected = activeTab === 'diagnostics' ? selectedProcess : selected;
-    if (!ready || currentSelected) return;
-    commitRoute({
-      ...routeState,
-      selectedPath: activeTab === 'diagnostics' && diagnostics?.root ? String(diagnostics.root.pid) : '',
-    }, 'replace');
-  }, [selectedPath, selected, selectedProcess, activeTab, tests.length, done, lintRun, lint, diagnostics, routeState, commitRoute]);
-
-  const onTabChange = useCallback((tab: TabKey) => {
-    commitRoute({
-      ...routeState,
-      tab,
-      selectedPath: '',
-    });
-  }, [routeState, commitRoute]);
-
-  const onSelect = useCallback((test: Test) => {
-    const nextPath = test.route_path === selectedPath ? '' : (test.route_path || '');
-    commitRoute({
-      ...routeState,
-      selectedPath: nextPath,
-    });
-  }, [routeState, selectedPath, commitRoute]);
-
-  const onProcessSelect = useCallback((pid: number) => {
-    const nextPath = selectedPath === String(pid) ? '' : String(pid);
-    commitRoute({
-      ...routeState,
-      tab: 'diagnostics',
-      selectedPath: nextPath,
-    });
-  }, [routeState, selectedPath, commitRoute]);
-
-  const onTestFiltersChange = useCallback((nextFilters: Filters) => {
-    commitRoute({
-      ...routeState,
-      tab: 'tests',
-      filters: nextFilters,
-      selectedPath: '',
-    });
-  }, [routeState, commitRoute]);
-
-  const onLintFiltersChange = useCallback((nextFilters: LintFilters) => {
-    commitRoute({
-      ...routeState,
-      tab: 'lint',
-      lintFilters: nextFilters,
-      selectedPath: '',
-    });
-  }, [routeState, commitRoute]);
-
-  const onLintGroupingChange = useCallback((nextGrouping: LintGrouping) => {
-    commitRoute({
-      ...routeState,
-      tab: 'lint',
-      lintGrouping: nextGrouping,
-      selectedPath: '',
-    });
-  }, [routeState, commitRoute]);
-
-  const onRerun = useCallback(async (t: Test) => {
-    if (t.kind === 'violation' || t.framework === 'task') return;
-    if (rerunBusy) return;
-
-    const buildLintRerunBody = (node: Test) => {
-      const workDirs = new Set<string>();
-      const linters = new Set<string>();
-      const files = new Set<string>();
-
-      const addLintMatches = (targetPath: string | undefined, source?: string, rule?: string) => {
-        for (const lr of lint || []) {
-          if (node.work_dir && lr.work_dir && lr.work_dir !== node.work_dir) continue;
-          if (source && lr.linter !== source) continue;
-          let matched = false;
-          for (const violation of lr.violations || []) {
-            const rawFile = relPath(violation.file, lr.work_dir);
-            if (rule && (violation.rule?.method || '(no rule)') !== rule) continue;
-            if (!rawFile) {
-              matched = rule !== undefined && targetPath === undefined;
-              continue;
-            }
-            const fileMatch = !targetPath || targetPath === '' || rawFile === targetPath || rawFile.startsWith(`${targetPath}/`);
-            if (!fileMatch) continue;
-            matched = true;
-            files.add(rawFile);
-          }
-          if (matched) {
-            if (lr.work_dir) workDirs.add(lr.work_dir);
-            linters.add(lr.linter);
-          }
-        }
-      };
-
-      if (node.kind === 'linter') {
-        if (node.linterName) linters.add(node.linterName);
-        const collectWorkDirs = (n: Test) => {
-          if (n.work_dir) workDirs.add(n.work_dir);
-          (n.children || []).forEach(collectWorkDirs);
-        };
-        collectWorkDirs(node);
-      } else if (node.kind === 'lint-rule' || node.kind === 'lint-rule-group') {
-        if (node.linterName) linters.add(node.linterName);
-        addLintMatches(node.target_path, node.linterName, node.ruleName);
-      } else if (node.kind === 'lint-file' || node.kind === 'lint-folder') {
-        addLintMatches(node.target_path, node.linterName, node.ruleName);
-      }
-
-      if (node.work_dir) workDirs.add(node.work_dir);
-      return {
-        lint: true,
-        work_dir: workDirs.size === 1 ? Array.from(workDirs)[0] : '',
-        lint_linters: Array.from(linters),
-        lint_files: Array.from(files),
-      };
-    };
-
-    if (isLintNode(t)) {
-      const body = buildLintRerunBody(t);
-      if (!body.work_dir) {
-        setStatus('Rerun across multiple lint roots is not supported');
-        return;
-      }
-      setRerunBusy(true);
-      setRerunDialogOpen(true);
-      setStatus(`Rerunning ${t.name}...`);
-      doneRef.current = false;
-      endTime.current = null;
-      setDone(false);
-      try {
-        const res = await fetch(apiUrl('/api/rerun'), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-        });
-        if (res.status === 409) {
-          setStatus('Another rerun is in progress');
-        } else if (!res.ok) {
-          const text = await res.text();
-          setStatus(`Rerun failed: ${text.trim()}`);
-        }
-      } catch (e: any) {
-        setStatus(`Rerun error: ${e?.message || e}`);
-      } finally {
-        setRerunBusy(false);
-      }
-      return;
-    }
-
-    const collectPaths = (n: Test, out: Set<string>, workDirs: Set<string>) => {
-      if (n.package_path) out.add(n.package_path);
-      if (n.work_dir) workDirs.add(n.work_dir);
-      (n.children || []).forEach(c => collectPaths(c, out, workDirs));
-    };
-    const paths = new Set<string>();
-    const workDirs = new Set<string>();
-    collectPaths(t, paths, workDirs);
-    if (workDirs.size > 1) {
-      setStatus('Rerun across multiple module roots is not supported');
-      return;
-    }
-    const isLeaf = !t.children || t.children.length === 0;
-    const body = {
+    body: {
       package_paths: Array.from(paths),
       work_dir: workDirs.size === 1 ? Array.from(workDirs)[0] : '',
-      test_name: isLeaf ? t.name : '',
-      suite: t.suite || [],
-      framework: t.framework || '',
-    };
-    setRerunBusy(true);
-    setRerunDialogOpen(true);
-    setStatus(`Rerunning ${t.name}...`);
-    doneRef.current = false;
-    startTime.current = null;
-    endTime.current = null;
-    setDone(false);
-    // Keep existing tests in place; the backend merges rerun results into
-    // the tree by appending new TestAttempts rather than replacing prior
-    // outcomes.
-    setStreamToken(n => n + 1);
-    try {
-      const res = await fetch(apiUrl('/api/rerun'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      if (res.status === 409) {
-        setStatus('Another rerun is in progress');
-      } else if (!res.ok) {
-        const text = await res.text();
-        setStatus(`Rerun failed: ${text.trim()}`);
-      }
-    } catch (e: any) {
-      setStatus(`Rerun error: ${e?.message || e}`);
-    } finally {
-      setRerunBusy(false);
-    }
-  }, [rerunBusy, lint]);
+      test_name: isLeaf ? node.own_name ?? node.name : '',
+      suite: node.suite || [],
+      framework: node.framework || '',
+    },
+  };
+}
 
-  const onStop = useCallback(async (t: Test) => {
-    if (stopBusyKey || !t.task_id) return;
-    setStopBusyKey(t.task_id);
-    setStatus(`Stopping ${t.name}...`);
-    try {
-      const res = await fetch(apiUrl('/api/stop'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ scope: 'task', task_id: t.task_id }),
-      });
-      if (!res.ok) {
-        const text = await res.text();
-        setStatus(`Stop failed: ${text.trim()}`);
-      }
-    } catch (e: any) {
-      setStatus(`Stop error: ${e?.message || e}`);
-    } finally {
-      setStopBusyKey(null);
-    }
-  }, [stopBusyKey]);
-
-  const onStopAll = useCallback(async () => {
-    if (stopBusyKey || !snapshotStatus.stop_supported || !snapshotStatus.running) return;
-    setStopBusyKey('__global__');
-    setStatus('Stopping...');
-    try {
-      const res = await fetch(apiUrl('/api/stop'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ scope: 'global' }),
-      });
-      if (!res.ok) {
-        const text = await res.text();
-        setStatus(`Stop failed: ${text.trim()}`);
-      }
-    } catch (e: any) {
-      setStatus(`Stop error: ${e?.message || e}`);
-    } finally {
-      setStopBusyKey(null);
-    }
-  }, [snapshotStatus, stopBusyKey]);
-
-  const onIgnore = useCallback(async (req: IgnoreRequest) => {
-    if (ignoreBusy) return;
-    setIgnoreBusy(true);
-    try {
-      const res = await fetch(apiUrl('/api/lint/ignore'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(req),
-      });
-      if (!res.ok) {
-        const text = await res.text();
-        setStatus(`Ignore failed: ${text.trim()}`);
-      } else {
-        setStatus('Ignore rule saved to .gavel.yaml');
-        commitRoute({ ...routeState, selectedPath: '' }, 'replace');
-      }
-    } catch (e: any) {
-      setStatus(`Ignore error: ${e?.message || e}`);
-    } finally {
-      setIgnoreBusy(false);
-    }
-  }, [ignoreBusy, routeState, commitRoute]);
-
-  const onTestEdit = useCallback(async (t: Test, action: TestEditAction, scope: TestEditScope) => {
-    if (testEditBusy || !snapshotStatus.test_edit_supported) return;
-    const target = scope === 'file' ? (t.file || 'file') : (t.name || 'test');
-    const verb = action === 'skip' ? 'Skip' : 'Delete';
-    const scopeLabel = scope === 'file' ? 'file' : 'test';
-
-    setTestEditBusy(true);
-    setStatus(action === 'skip' ? `Skipping ${target}...` : `Deleting ${target}...`);
-    try {
-      const res = await fetch(apiUrl('/api/tests/edit'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action,
-          scope,
-          framework: t.framework || '',
-          work_dir: t.work_dir || '',
-          package_path: t.package_path || '',
-          file: t.file || '',
-          line: t.line || 0,
-          test_name: t.name || '',
-          suite: t.suite || [],
-        }),
-      });
-      if (!res.ok) {
-        const text = await res.text();
-        setStatus(`Test edit failed: ${text.trim()}`);
-        return;
-      }
-      const result = await res.json();
-      setStatus(result?.message || `${verb} ${scopeLabel} saved`);
-      if (action === 'delete') {
-        commitRoute({ ...routeState, selectedPath: '' }, 'replace');
-      }
-      await refreshSnapshot();
-    } catch (e: any) {
-      setStatus(`Test edit error: ${e?.message || e}`);
-    } finally {
-      setTestEditBusy(false);
-    }
-  }, [testEditBusy, snapshotStatus.test_edit_supported, routeState, commitRoute, refreshSnapshot]);
-
-  const onCollectStack = useCallback(async (pid: number) => {
-    if (stackBusyPID !== null) return;
-    setStackBusyPID(pid);
-    setStatus(`Collecting stack trace for pid ${pid}...`);
-    try {
-      const res = await fetch(apiUrl('/api/diagnostics/collect'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pid }),
-      });
-      if (!res.ok) {
-        const text = await res.text();
-        setStatus(`Stack capture failed: ${text.trim()}`);
-        return;
-      }
-      const details: ProcessDetails = await res.json();
-      setDiagnostics(prev => prev?.root
-        ? { ...prev, root: mergeProcessDetails(prev.root, details) }
-        : prev);
-      setStatus(`Collected stack trace for pid ${pid}`);
-    } catch (e: any) {
-      setStatus(`Stack capture error: ${e?.message || e}`);
-    } finally {
-      setStackBusyPID(null);
-    }
-  }, [stackBusyPID]);
-
-  const showLintTab = lintRun;
-  const showBenchTab = !!bench || !!performance;
-  const showDiagnosticsTab = diagnosticsAvailable;
-  const showTabs = showLintTab || showBenchTab || showDiagnosticsTab;
-  const benchRegressions = bench?.deltas?.filter(d => d.significant && d.delta_pct > bench.threshold).length || 0;
-  const hasContent = activeTab === 'tests'
-    ? displayedTests.length > 0
-    : activeTab === 'lint'
-      ? lintTree.length > 0
-      : activeTab === 'diagnostics'
-        ? processCount > 0
-        : !!bench || !!performance;
-  const canExportCurrentView = (activeTab === 'tests' && displayedTests.length > 0)
-    || (activeTab === 'lint' && lintRun)
-    || (activeTab === 'bench' && (!!bench || !!performance));
-  const canGlobalStop = snapshotStatus.running && !!snapshotStatus.stop_supported;
-  const wholeResultRouteState = useMemo<RouteState>(
-    () => ({ ...routeState, selectedPath: '' }),
-    [routeState],
-  );
-  const nodeRouteState = useMemo<RouteState | undefined>(
-    () => selected?.route_path ? { ...routeState, selectedPath: selected.route_path } : undefined,
-    [routeState, selected?.route_path],
-  );
-  const failingOnlyRouteState = useMemo<RouteState | undefined>(
-    () => nodeRouteState
-      ? { ...nodeRouteState, filters: { ...nodeRouteState.filters, status: decodeFilterState(['failed', 'timed_out']) } }
-      : undefined,
-    [nodeRouteState],
-  );
-  const wholeResultMarkdownURL = useMemo(() => buildExportRoute(wholeResultRouteState, 'md'), [wholeResultRouteState]);
-
-  const onCopyForAgent = useCallback(async () => {
-    if (copyState === 'copying') return;
-    beginCopy();
-    try {
-      await copyCurrentViewForAgent(wholeResultRouteState);
-      resetCopyFeedback('copied');
-    } catch (e: any) {
-      resetCopyFeedback('error', e?.message || 'Copy failed');
-    }
-  }, [copyState, wholeResultRouteState, beginCopy, resetCopyFeedback]);
-
-  const backTo = typeof window !== 'undefined' ? (window as any).__gavelBackTo as string | undefined : undefined;
-
+function PageHeader({ icon, title, status, actions }: { icon: typeof UiBeaker; title: string; status?: string; actions?: React.ReactNode }) {
   return (
-    <div className="bg-gray-100 h-screen flex flex-col">
-      {backTo && (
-        <div className="bg-gray-800 text-white px-4 py-1.5 flex items-center gap-2 text-sm shrink-0">
-          <a href={backTo} className="text-blue-300 hover:text-white flex items-center gap-1 no-underline">
-            <iconify-icon icon="codicon:arrow-left" />
-            Back to PR
-          </a>
-        </div>
-      )}
-      <div className="border-b bg-white px-6 py-3">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <h1 className="text-xl font-bold text-gray-900">
-              <iconify-icon icon="codicon:beaker" className="mr-1.5 text-blue-600" />
-              {activeTab === 'lint'
-                ? 'Lint Results'
-                : activeTab === 'bench'
-                  ? performance ? 'Fixture Benchmark' : 'Benchmark Comparison'
-                  : activeTab === 'diagnostics'
-                    ? 'Diagnostics'
-                    : 'Test Results'}
-            </h1>
-            {hasContent && (
-              <div className="flex gap-1">
-                <button
-                  className="text-xs px-2 py-1 rounded border border-gray-300 text-gray-600 hover:bg-gray-200 transition-colors"
-                  onClick={() => setExpandAll(true)}
-                  title="Expand all"
-                >
-                  <iconify-icon icon="codicon:expand-all" className="mr-0.5" />
-                  Expand
-                </button>
-                <button
-                  className="text-xs px-2 py-1 rounded border border-gray-300 text-gray-600 hover:bg-gray-200 transition-colors"
-                  onClick={() => setExpandAll(false)}
-                  title="Collapse all"
-                >
-                  <iconify-icon icon="codicon:collapse-all" className="mr-0.5" />
-                  Collapse
-                </button>
-              </div>
-            )}
-            {canGlobalStop && (
-              <button
-                className="text-xs px-2 py-1 rounded border border-orange-300 text-orange-700 bg-orange-50 hover:bg-orange-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                onClick={onStopAll}
-                disabled={stopBusyKey !== null}
-                title="Stop the active run"
-              >
-                <iconify-icon icon="codicon:debug-stop" className="mr-0.5" />
-                {stopBusyKey === '__global__' ? 'Stopping...' : 'Stop'}
-              </button>
-            )}
-            <span className="text-sm text-gray-400">{status}</span>
-          </div>
-          <div className="flex items-center gap-3">
-            {canExportCurrentView && (
-              <div className="flex gap-1">
-                <DownloadMenu routeState={wholeResultRouteState} align="right" title="Download the whole result as JSON or Markdown" />
-                <button
-                  className={`text-xs px-2 py-1 rounded border transition-colors flex items-center gap-1 ${
-                    copyState === 'error'
-                      ? 'border-red-300 text-red-700 bg-red-50 hover:bg-red-100'
-                      : copyState === 'copied'
-                        ? 'border-green-300 text-green-700 bg-green-50 hover:bg-green-100'
-                        : 'border-gray-300 text-gray-600 hover:bg-gray-200'
-                  }`}
-                  onClick={onCopyForAgent}
-                  title={copyError || wholeResultMarkdownURL}
-                >
-                  <iconify-icon icon={copyState === 'copied' ? 'codicon:check' : copyState === 'copying' ? 'svg-spinners:ring-resize' : 'codicon:copy'} />
-                  {copyState === 'copying' ? 'Copying...' : copyState === 'copied' ? 'Copied' : copyState === 'error' ? 'Copy failed' : 'Copy AI Prompt'}
-                </button>
-              </div>
-            )}
-            <Summary tests={displayedTests} startTime={startTime.current} endTime={endTime.current} done={done} runMeta={runMeta} />
-          </div>
-        </div>
-
-        {showTabs && (
-          <div className="mt-2 flex items-center gap-1 border-b border-gray-200 -mx-6 px-6">
-            <TabButton
-              active={activeTab === 'tests'}
-              onClick={() => onTabChange('tests')}
-              icon="codicon:beaker"
-              label="Tests"
-              count={totals.failed > 0 ? totals.failed : totals.total}
-              countColor={totals.failed > 0 ? 'bg-red-500' : 'bg-gray-400'}
-            />
-            {showLintTab && (
-              <TabButton
-                active={activeTab === 'lint'}
-                onClick={() => onTabChange('lint')}
-                icon="codicon:lightbulb"
-                label="Lint"
-                count={lintTotal}
-                countColor={lintTotal > 0 ? 'bg-yellow-500' : 'bg-gray-400'}
-              />
-            )}
-            {showBenchTab && (
-              <TabButton
-                active={activeTab === 'bench'}
-                onClick={() => onTabChange('bench')}
-                icon="codicon:graph"
-                label="Bench"
-                count={performance ? countFixtureWork(tests) : benchRegressions > 0 ? benchRegressions : (bench?.deltas?.length || 0)}
-                countColor={benchRegressions > 0 ? 'bg-red-500' : 'bg-gray-400'}
-              />
-            )}
-            {showDiagnosticsTab && (
-              <TabButton
-                active={activeTab === 'diagnostics'}
-                onClick={() => onTabChange('diagnostics')}
-                icon="codicon:server-process"
-                label="Diagnostics"
-                count={processCount}
-                countColor="bg-blue-500"
-              />
-            )}
-          </div>
-        )}
-
-        {activeTab === 'tests' && displayedTests.length > 0 && (
-          <div className="mt-2">
-            <FilterBar filters={filters} onChange={onTestFiltersChange} counts={totals} frameworks={frameworks} />
-          </div>
-        )}
-        {activeTab === 'lint' && lintRun && (
-          <div className="mt-2">
-            <LintFilterBar
-              lint={lint}
-              grouping={lintGrouping}
-              filters={lintFilters}
-              onFiltersChange={onLintFiltersChange}
-              onGroupingChange={onLintGroupingChange}
-            />
-          </div>
-        )}
-      </div>
-
-      {activeTab === 'bench' && performance ? (
-        <div className="flex-1 overflow-auto">
-          <FixtureBenchView performance={performance} tests={tests} error={runError} sampleIndex={sampleIndex} onSampleChange={index => commitRoute({ ...routeState, sampleIndex: index })} />
-        </div>
-      ) : <SplitPane
-        defaultSplit={50}
-        left={
-          <>
-            {activeTab === 'tests' && (
-              <>
-                {filteredTests.map((t, i) => (
-                  <TestNode key={i} test={t} depth={0} expandAll={expandAll} selected={selected} onSelect={onSelect} onRerun={onRerun} onStop={onStop} rerunBusy={rerunBusy} stopBusy={stopBusyKey !== null} />
-                ))}
-                {displayedTests.length === 0 && !done && (
-                  <div className="p-8 text-center text-gray-400">
-                    <iconify-icon icon="svg-spinners:ring-resize" className="text-3xl text-blue-500" />
-                    <p className="mt-2">Waiting for test results...</p>
-                  </div>
-                )}
-                {filteredTests.length === 0 && displayedTests.length > 0 && (
-                  <div className="p-8 text-center text-gray-400 text-sm">
-                    No tests match the current filters
-                  </div>
-                )}
-              </>
-            )}
-            {activeTab === 'lint' && (
-              <LintView
-                lint={lint}
-                tree={lintTree}
-                expandAll={expandAll}
-                selected={selected}
-                onSelect={onSelect}
-              />
-            )}
-            {activeTab === 'bench' && <BenchView bench={bench} />}
-            {activeTab === 'diagnostics' && (
-              <DiagnosticsView
-                root={diagnostics?.root}
-                selectedPid={selectedProcess?.pid}
-                expandAll={expandAll}
-                onSelect={onProcessSelect}
-              />
-            )}
-          </>
-        }
-        right={activeTab === 'diagnostics'
-          ? <DiagnosticsDetailPanel process={selectedProcess} onCollectStack={onCollectStack} collectBusy={stackBusyPID === selectedProcess?.pid} runMeta={runMeta} />
-          : <DetailPanel test={selected} lint={lint} onRerun={onRerun} rerunBusy={rerunBusy} onStop={onStop} stopBusy={stopBusyKey !== null} onIgnore={onIgnore} ignoreBusy={ignoreBusy} onTestEdit={onTestEdit} testEditBusy={testEditBusy} testEditSupported={snapshotStatus.test_edit_supported !== false} runMeta={runMeta} nodeRouteState={nodeRouteState} failingOnlyRouteState={failingOnlyRouteState} />}
-      />}
-      <RerunDialog open={rerunDialogOpen} onClose={() => setRerunDialogOpen(false)} />
+    <div className="flex min-w-0 items-center gap-3 border-b border-border bg-card px-density-4 py-density-2" data-page-header="">
+      <h1 className="inline-flex shrink-0 items-center gap-1.5 text-base font-bold">
+        <Icon icon={icon} className="text-primary" />
+        {title}
+      </h1>
+      {status && <span className="truncate text-sm text-muted-foreground">{status}</span>}
+      {actions && <div className="ml-auto flex shrink-0 items-center gap-1">{actions}</div>}
     </div>
   );
 }
 
-function TabButton({ active, onClick, icon, label, count, countColor }: {
-  active: boolean;
-  onClick: () => void;
-  icon: string;
-  label: string;
-  count: number;
-  countColor: string;
-}) {
+function Waiting({ done }: { done: boolean }) {
   return (
-    <button
-      className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-sm border-b-2 -mb-px transition-colors ${
-        active
-          ? 'border-blue-500 text-blue-700 font-semibold'
-          : 'border-transparent text-gray-500 hover:text-gray-800'
-      }`}
-      onClick={onClick}
-    >
-      <iconify-icon icon={icon} className="text-base" />
-      {label}
-      {count > 0 && (
-        <span className={`inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-bold text-white ${countColor}`}>
-          {count}
-        </span>
+    <div className="flex h-full items-center justify-center p-8 text-center text-sm text-muted-foreground">
+      {done ? 'No tests were run' : (
+        <div>
+          <Icon icon={UiLoader} className="animate-spin text-3xl text-blue-500" />
+          <p className="mt-2">Waiting for test results...</p>
+        </div>
       )}
-    </button>
+    </div>
   );
 }
+
+const NOTICE_MS = 8000;
+const GLOBAL_STOP_KEY = '__global__';
+
+export interface AppProps {
+  /** Scopes every request to one run of a MultiServer (`${base}/${runId}/api/...`). */
+  runId?: string;
+}
+
+export function App({ runId }: AppProps = {}) {
+  const scope = useMemo(() => (runId ? { runId } : {}), [runId]);
+  const base = apiBase(scope);
+  const run = useTestRun(scope.runId ? { runId: scope.runId } : {});
+  const { snapshot, tests, lint, status: snapshotStatus, runMeta, done, statusText, error: streamError } = run;
+  const performance = snapshot?.performance;
+  const runError = snapshot?.error;
+  const lintRun = !!snapshotStatus.lint_run;
+
+  const [route, setRoute] = useState<RouteState>(() => parseRoute(window.location));
+  const [expandAll, setExpandAll] = useState<boolean | null>(null);
+  const [rerunBusy, setRerunBusy] = useState(false);
+  const [rerunDialogOpen, setRerunDialogOpen] = useState(false);
+  const [ignoreBusy, setIgnoreBusy] = useState(false);
+  const [testEditBusy, setTestEditBusy] = useState(false);
+  const [stopBusyKey, setStopBusyKey] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | undefined>(undefined);
+  const noticeTimer = useRef<number | null>(null);
+  const firstSeen = useRef(Date.now());
+  const [now, setNow] = useState(Date.now());
+
+  const say = useCallback((message: string) => {
+    setNotice(message);
+    if (noticeTimer.current !== null) window.clearTimeout(noticeTimer.current);
+    noticeTimer.current = window.setTimeout(() => setNotice(undefined), NOTICE_MS);
+  }, []);
+  useEffect(() => () => { if (noticeTimer.current !== null) window.clearTimeout(noticeTimer.current); }, []);
+
+  useEffect(() => {
+    if (done) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [done]);
+
+  const startTime = runMeta?.started ? Date.parse(runMeta.started) : firstSeen.current;
+  const endTime = runMeta?.ended ? Date.parse(runMeta.ended) : null;
+
+  const commitRoute = useCallback((next: RouteState, mode: 'push' | 'replace' = 'push') => {
+    setRoute(next);
+    const url = buildRoute(next);
+    const current = `${window.location.pathname}${window.location.search}`;
+    if (url === current) return;
+    if (mode === 'replace') window.history.replaceState({}, '', url);
+    else window.history.pushState({}, '', url);
+  }, []);
+
+  useEffect(() => {
+    const onPopState = () => setRoute(parseRoute(window.location));
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
+
+  // A fixture benchmark or profile run opens on its Bench tab.
+  useEffect(() => {
+    if (performance && route.tab === 'tests' && window.location.pathname === `${apiBase()}/`) {
+      commitRoute({ ...route, tab: 'bench', selectedPath: '' }, 'replace');
+    }
+  }, [performance, route, commitRoute]);
+
+  // While linters are still running but the test phase has settled, drop the
+  // "Running tests across packages" virtual task group so the only pending row
+  // is "Running linters". Real parsed test results stay visible.
+  const displayedTests = useMemo(
+    () => (isLintOnlyPhase(tests, !!snapshotStatus.running, lintRun) ? stripTestTaskGroup(tests) : tests),
+    [tests, snapshotStatus.running, lintRun],
+  );
+  const totals = useMemo(() => aggregateStatusCounts(displayedTests), [displayedTests]);
+  const filteredTests = useMemo(
+    () => annotateRoutePaths(collapseSingleChildChains(withExportPaths(filterTests(withOwnNames(displayedTests), route.filters.status, route.filters.framework)))),
+    [displayedTests, route.filters],
+  );
+  const selectedTest = useMemo(
+    () => (route.tab === 'tests' && route.selectedPath ? findNodeByRoutePath(filteredTests, route.selectedPath) : null),
+    [route.tab, route.selectedPath, filteredTests],
+  );
+
+  const lintTree = useMemo(
+    () => buildLintTree({ results: lint ?? [], grouping: route.lintGrouping, filters: route.lintFilters }),
+    [lint, route.lintGrouping, route.lintFilters],
+  );
+  const selectedLint = route.tab === 'lint' && route.selectedPath ? findLintNode(lintTree, route.selectedPath) : null;
+  const lintTotal = useMemo(() => totalLintViolations(lint ?? []), [lint]);
+
+  const traces = useMemo(() => rebaseTraces(snapshotStatus.traces, base), [snapshotStatus.traces, base]);
+  const processTraceAvailable = !!processMount(snapshotStatus.traces);
+  const trace = useProcessTrace({
+    traces: snapshotStatus.traces,
+    done,
+    base,
+    ...(route.tab === 'processes' && route.selectedPath ? { selectedKey: route.selectedPath } : {}),
+  });
+  const processCount = useMemo(() => trace.nodes.filter(node => !isProcessExited(node)).length, [trace.nodes]);
+  const rootProcess = useMemo(() => trace.nodes.find(node => node.isRoot) ?? null, [trace.nodes]);
+  const selectedProcess = route.tab === 'processes' ? trace.nodes.find(node => node.key === route.selectedPath) ?? null : null;
+
+  // Route paths for step links come from the unfiltered tree so a link never
+  // lands on a test the active status filter would hide.
+  const processLinks = useMemo(
+    () => (processTraceAvailable ? processLinksByPid(asGavel(annotateRoutePaths(collapseSingleChildChains(displayedTests)))) : new Map<number, ProcessStepLink>()),
+    [processTraceAvailable, displayedTests],
+  );
+
+  useEffect(() => {
+    if (route.tab !== 'processes' || route.selectedPath || !rootProcess) return;
+    commitRoute({ ...route, selectedPath: rootProcess.key }, 'replace');
+  }, [route, rootProcess, commitRoute]);
+
+  // A selection the data no longer has (a stale URL, a filtered-out or deleted
+  // node) is cleared once the data it would be found in has arrived.
+  useEffect(() => {
+    if (!route.selectedPath) return;
+    const ready = route.tab === 'tests' ? tests.length > 0 || done
+      : route.tab === 'lint' ? lintRun || done || !!lint
+        : route.tab === 'processes' ? trace.nodes.length > 0
+          : true;
+    const found = route.tab === 'tests' ? selectedTest : route.tab === 'lint' ? selectedLint : route.tab === 'processes' ? selectedProcess : true;
+    if (!ready || found) return;
+    commitRoute({ ...route, selectedPath: route.tab === 'processes' && rootProcess ? rootProcess.key : '' }, 'replace');
+  }, [route, selectedTest, selectedLint, selectedProcess, tests.length, done, lintRun, lint, trace.nodes.length, rootProcess, commitRoute]);
+
+  const onTabChange = useCallback((tab: string) => commitRoute({ ...route, tab: tab as TabKey, selectedPath: '' }), [route, commitRoute]);
+  const onSelectTest = useCallback((node: ClickyTest | null) => commitRoute({ ...route, selectedPath: node?.route_path ?? '' }), [route, commitRoute]);
+  const onFiltersChange = useCallback((filters: TestFilters) => commitRoute({ ...route, tab: 'tests', filters, selectedPath: '' }), [route, commitRoute]);
+  const onLintFiltersChange = useCallback((lintFilters: LintFilters) => commitRoute({ ...route, tab: 'lint', lintFilters, selectedPath: '' }), [route, commitRoute]);
+  const onLintGroupingChange = useCallback((lintGrouping: LintGrouping) => commitRoute({ ...route, tab: 'lint', lintGrouping, selectedPath: '' }), [route, commitRoute]);
+  const onSelectLint = useCallback((selectedPath: string | null) => commitRoute({ ...route, selectedPath: selectedPath ?? '' }), [route, commitRoute]);
+  const onSelectProcess = useCallback((key: string) => commitRoute({ ...route, tab: 'processes', selectedPath: key }), [route, commitRoute]);
+  const onHideExitedChange = useCallback((hideExited: boolean) => commitRoute({ ...route, tab: 'processes', hideExited }, 'replace'), [route, commitRoute]);
+  const onSampleChange = useCallback((sampleIndex: number) => commitRoute({ ...route, sampleIndex }), [route, commitRoute]);
+  const onOpenStep = useCallback((link: ProcessStepLink) => {
+    commitRoute({ ...route, tab: 'tests', filters: { status: new Map(), framework: new Map() }, selectedPath: link.routePath });
+  }, [route, commitRoute]);
+
+  const startRerun = useCallback(async (body: RerunRequest, label: string) => {
+    if (rerunBusy) return;
+    setRerunBusy(true);
+    setRerunDialogOpen(true);
+    say(`Rerunning ${label}...`);
+    try {
+      const result = await run.rerun(body);
+      if (result.conflict) say('Another rerun is in progress');
+      else if (!result.ok) say(`Rerun failed: ${result.message ?? result.status}`);
+    } catch (e: unknown) {
+      say(`Rerun error: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setRerunBusy(false);
+    }
+  }, [rerunBusy, run, say]);
+
+  const onRerun = useCallback((node: ClickyTest) => {
+    if (node.framework === 'task') return;
+    const request = rerunBody(node as Test);
+    if ('error' in request) say(request.error);
+    else void startRerun(request.body, node.name);
+  }, [startRerun, say]);
+
+  const onRerunLint = useCallback(() => {
+    const body = buildLintRerunBody(selectedLint, lint ?? []);
+    if (!body.work_dir) say('Rerun across multiple lint roots is not supported');
+    else void startRerun(body, selectedLint?.name ?? 'lint');
+  }, [selectedLint, lint, startRerun, say]);
+
+  // stop stops one task, or the whole run when no task is named.
+  const stop = useCallback(async ({ taskId, label }: { taskId?: string; label: string }) => {
+    if (stopBusyKey) return;
+    setStopBusyKey(taskId ?? GLOBAL_STOP_KEY);
+    say(`Stopping ${label}...`);
+    try {
+      const result = await run.stop(taskId);
+      if (!result.ok) say(`Stop failed: ${result.message ?? result.status}`);
+    } catch (e: unknown) {
+      say(`Stop error: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setStopBusyKey(null);
+    }
+  }, [stopBusyKey, run, say]);
+  const onStop = useCallback((node: ClickyTest) => { if (node.task_id) void stop({ taskId: node.task_id, label: node.name }); }, [stop]);
+  const onStopAll = useCallback(() => { void stop({ label: 'the run' }); }, [stop]);
+
+  const onIgnore = useCallback(async (action: LintAction) => {
+    if (ignoreBusy) return;
+    setIgnoreBusy(true);
+    try {
+      const res = await fetch(apiUrl('/api/lint/ignore', scope), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(action.req),
+      });
+      if (!res.ok) {
+        say(`Ignore failed: ${(await res.text()).trim()}`);
+        return;
+      }
+      say('Ignore rule saved to .gavel.yaml');
+      commitRoute({ ...route, selectedPath: '' }, 'replace');
+    } catch (e: unknown) {
+      say(`Ignore error: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setIgnoreBusy(false);
+    }
+  }, [ignoreBusy, scope, route, commitRoute, say]);
+
+  const onTestEdit = useCallback(async (node: Test, action: TestEditAction, editScope: TestEditScope) => {
+    if (testEditBusy || snapshotStatus.test_edit_supported !== true) return;
+    const target = editScope === 'file' ? (node.file || 'file') : (node.name || 'test');
+    setTestEditBusy(true);
+    say(action === 'skip' ? `Skipping ${target}...` : `Deleting ${target}...`);
+    try {
+      const result = await run.editTest({
+        action,
+        scope: editScope,
+        framework: node.framework || '',
+        work_dir: node.work_dir || '',
+        package_path: node.package_path || '',
+        file: node.file || '',
+        line: node.line || 0,
+        test_name: node.name || '',
+        suite: node.suite || [],
+      });
+      if (!result.ok) {
+        say(`Test edit failed: ${result.message ?? result.status}`);
+        return;
+      }
+      say(result.message || `${action === 'skip' ? 'Skip' : 'Delete'} ${editScope === 'file' ? 'file' : 'test'} saved`);
+      if (action === 'delete') commitRoute({ ...route, selectedPath: '' }, 'replace');
+    } catch (e: unknown) {
+      say(`Test edit error: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setTestEditBusy(false);
+    }
+  }, [testEditBusy, snapshotStatus.test_edit_supported, run, route, commitRoute, say]);
+
+  const wholeResultRoute = useMemo<RouteState>(() => ({ ...route, selectedPath: '' }), [route]);
+  const actions = useMemo(() => ({
+    nodeRouteState: (node: Test) => (node.export_path ? { ...route, tab: 'tests' as const, selectedPath: node.export_path } : undefined),
+    failingOnlyRouteState: (node: Test) => (node.export_path
+      ? { ...route, tab: 'tests' as const, selectedPath: node.export_path, filters: { ...route.filters, status: new Map([['failed', 'include' as const], ['timedout', 'include' as const]]) } }
+      : undefined),
+    testEditSupported: snapshotStatus.test_edit_supported === true,
+    onTestEdit,
+    testEditBusy,
+  }), [route, snapshotStatus.test_edit_supported, onTestEdit, testEditBusy]);
+
+  const registry = useMemo(
+    () => gavelRegistry({ traces, processes: trace.nodes, onOpenProcess: onSelectProcess, actions }),
+    [traces, trace.nodes, onSelectProcess, actions],
+  );
+  const fetchProcessMetrics = useMemo(
+    () => fetchProcessMetricsFromSamples({ samples: trace.samples, nodes: trace.nodes }),
+    [trace.samples, trace.nodes],
+  );
+
+  const showLintTab = lintRun;
+  const showBenchTab = !!run.bench || !!performance;
+  const showProcessesTab = processTraceAvailable;
+  const benchRegressions = run.bench?.deltas?.filter(d => d.significant && d.delta_pct > run.bench!.threshold).length || 0;
+  const canExport = (route.tab === 'tests' && displayedTests.length > 0) || (route.tab === 'lint' && lintRun) || (route.tab === 'bench' && showBenchTab);
+  const canGlobalStop = snapshotStatus.running && !!snapshotStatus.stop_supported;
+  const runActions = (
+    <RunActions
+      runMeta={runMeta}
+      canStop={canGlobalStop}
+      stopping={stopBusyKey === GLOBAL_STOP_KEY}
+      onStop={onStopAll}
+      exportState={canExport ? wholeResultRoute : undefined}
+    />
+  );
+  const status = notice ?? streamError ?? statusText;
+  const backTo = (window as unknown as { __gavelBackTo?: string }).__gavelBackTo;
+
+  const tabs = [
+    { id: 'tests', label: 'Tests', icon: UiBeaker, count: totals.failed > 0 ? totals.failed : totals.total, countColor: totals.failed > 0 ? 'bg-red-500' : 'bg-muted-foreground' },
+    ...(showLintTab ? [{ id: 'lint', label: 'Lint', icon: UiListChecks, count: lintTotal, countColor: lintTotal > 0 ? 'bg-yellow-500' : 'bg-muted-foreground' }] : []),
+    ...(showBenchTab ? [{
+      id: 'bench', label: 'Bench', icon: UiChartLineUp,
+      count: performance ? countFixtureWork(tests) : benchRegressions > 0 ? benchRegressions : (run.bench?.deltas?.length || 0),
+      countColor: benchRegressions > 0 ? 'bg-red-500' : 'bg-muted-foreground',
+    }] : []),
+    ...(showProcessesTab ? [{ id: 'processes', label: 'Processes', icon: UiServerProcess, count: processCount, countColor: 'bg-blue-500' }] : []),
+  ];
+
+  return (
+    <div className="flex h-screen flex-col bg-background text-foreground">
+      {backTo && (
+        <div className="flex shrink-0 items-center gap-2 border-b border-border bg-card px-4 py-1.5 text-sm">
+          <a href={backTo} className="inline-flex items-center gap-1 text-primary no-underline hover:underline">
+            <UiArrowLeft />
+            Back to PR
+          </a>
+        </div>
+      )}
+      {tabs.length > 1 && <Tabs tabs={tabs} value={route.tab} onChange={onTabChange} className="shrink-0 px-density-4" />}
+
+      <div className="min-h-0 flex-1">
+        {route.tab === 'tests' && (displayedTests.length === 0 ? (
+          <div className="flex h-full flex-col">
+            <PageHeader icon={UiBeaker} title="Test Results" status={status} actions={runActions} />
+            <div className="min-h-0 flex-1"><Waiting done={done} /></div>
+          </div>
+        ) : (
+          <TestRunner
+            tests={filteredTests}
+            allTests={displayedTests}
+            selected={selectedTest}
+            filters={route.filters}
+            expandAll={expandAll}
+            done={done}
+            {...(runMeta ? { runMeta } : {})}
+            status={snapshotStatus}
+            statusText={filteredTests.length === 0 ? `${status} · No tests match the current filters` : status}
+            now={now}
+            startTime={startTime}
+            endTime={endTime}
+            busy={{ rerun: rerunBusy, stop: stopBusyKey !== null }}
+            onSelect={onSelectTest}
+            onFiltersChange={onFiltersChange}
+            onExpandAllChange={setExpandAll}
+            onRerun={onRerun}
+            onStop={onStop}
+            fetchProcessMetrics={fetchProcessMetrics}
+            adapters={registry}
+            headerSlot={runActions}
+          />
+        ))}
+
+        {route.tab === 'lint' && (
+          <LintResults
+            results={lint ?? []}
+            grouping={route.lintGrouping}
+            onGroupingChange={onLintGroupingChange}
+            filters={route.lintFilters}
+            onFiltersChange={onLintFiltersChange}
+            selected={selectedLint ? route.selectedPath : null}
+            onSelect={onSelectLint}
+            expandAll={expandAll}
+            onExpandAllChange={setExpandAll}
+            onIgnore={onIgnore}
+            ignoreBusy={ignoreBusy}
+            headerSlot={(
+              <>
+                <span className="truncate text-sm text-muted-foreground">{status}</span>
+                <Button type="button" size="sm" disabled={rerunBusy} onClick={onRerunLint} title={selectedLint ? 'Rerun the linters for this selection' : 'Rerun the linters'}>
+                  <UiRefresh className="mr-1" />
+                  {rerunBusy ? 'Running...' : 'Rerun'}
+                </Button>
+                {runActions}
+              </>
+            )}
+          />
+        )}
+
+        {route.tab === 'bench' && (
+          <div className="flex h-full flex-col">
+            <PageHeader icon={UiChartLineUp} title={performance ? 'Fixture Benchmark' : 'Benchmark Comparison'} status={status} actions={runActions} />
+            <div className="min-h-0 flex-1 overflow-auto">
+              {performance
+                ? <FixtureBenchView performance={performance} tests={tests} error={runError} sampleIndex={route.sampleIndex} onSampleChange={onSampleChange} />
+                : <BenchView bench={run.bench} />}
+            </div>
+          </div>
+        )}
+
+        {route.tab === 'processes' && (
+          <div className="flex h-full flex-col">
+            <PageHeader icon={UiServerProcess} title="Processes" status={status} actions={runActions} />
+            <div className="min-h-0 flex-1">
+              <RunProcesses
+                trace={trace}
+                selectedKey={selectedProcess?.key ?? null}
+                onSelect={onSelectProcess}
+                hideExited={!!route.hideExited}
+                onHideExitedChange={onHideExitedChange}
+                expandAll={expandAll}
+                onExpandAllChange={setExpandAll}
+                stepLinks={processLinks}
+                onOpenStep={onOpenStep}
+              />
+            </div>
+          </div>
+        )}
+      </div>
+
+      <RerunDialog open={rerunDialogOpen} onClose={() => setRerunDialogOpen(false)} streamUrl={apiUrl('/api/rerun/stream', scope)} />
+    </div>
+  );
+}
+
+
+

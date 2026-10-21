@@ -25,6 +25,7 @@ type LintOptions = lint.Options
 func init() {
 	lintCmd := clicky.AddNamedCommand("lint", rootCmd, LintOptions{}, runLint)
 	registerLintLinterSubcommands(lintCmd)
+	registerLintShimCommands(lintCmd)
 	if f := lintCmd.Flags().Lookup("failed"); f != nil {
 		f.NoOptDefVal = failedAutoSentinel
 		f.Usage = "Path to previous results JSON; re-run only linters/files that had violations. Pass without a value to use .gavel/last.json."
@@ -73,7 +74,10 @@ func runLint(opts LintOptions) (any, error) {
 	}
 
 	if opts.UI {
-		uiServer, uiListener = startTestUI(opts.Addr)
+		var err error
+		if uiServer, uiListener, err = startTestUI(testUIOptions{Addr: opts.Addr}); err != nil {
+			return nil, err
+		}
 		if uiServer != nil {
 			uiServer.SetStopFunc(standaloneUIStop(cancelRun))
 			uiServer.BeginRun("initial")

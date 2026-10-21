@@ -14,7 +14,6 @@ import (
 	"runtime"
 	"sort"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/bmatcuk/doublestar/v4"
@@ -26,14 +25,15 @@ import (
 	commonsCtx "github.com/flanksource/commons/context"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/baseline"
+	"github.com/flanksource/gavel/blob"
 	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/processruntime"
 	"github.com/flanksource/gavel/testrunner/parsers"
 	"github.com/flanksource/gavel/testrunner/runners"
+	"github.com/flanksource/gavel/traces"
 	"github.com/flanksource/gavel/utils"
 	"github.com/flanksource/gavel/verify"
 	"github.com/samber/lo"
-	gopsutilProcess "github.com/shirou/gopsutil/v4/process"
 )
 
 var (
@@ -117,39 +117,43 @@ type TestOrchestrator struct {
 type RunOptions struct {
 	runtimeConfigDir         string
 	Runtime                  processruntime.Options           `json:"runtime,omitempty" yaml:"runtime,omitempty" flag:"-"`
-	StartingPaths            []string                         `json:"starting_paths,omitempty" yaml:"paths,omitempty" args:"true"`                               // Package paths to test (e.g., ["./pkg/testrunner"]). If empty, all packages are discovered.
-	ExtraArgs                []string                         `json:"extra_args,omitempty" yaml:"extra-args,omitempty" flag:"extra-args"`                        // Additional arguments broadcast to every selected test runner.
-	Tags                     []string                         `json:"tags,omitempty" yaml:"tags,omitempty" flag:"tags"`                                          // Go build tags mapped to each supported framework.
-	ShowPassed               bool                             `json:"show_passed,omitempty" yaml:"show-passed,omitempty" flag:"show-passed"`                     // Whether to show passed tests in output
-	Ignore                   []string                         `json:"ignore,omitempty" yaml:"ignore,omitempty" flag:"ignore"`                                    // Glob patterns for test packages/paths to exclude from discovery.
-	ShowStdout               OutputMode                       `json:"show_stdout,omitempty" yaml:"show-stdout,omitempty" flag:"show-stdout" default:"OnFailure"` // When to show stdout: false|Never, OnFailure (default), true|Always
-	ShowStderr               OutputMode                       `json:"show_stderr,omitempty" yaml:"show-stderr,omitempty" flag:"show-stderr" default:"OnFailure"` // When to show stderr: false|Never, OnFailure (default), true|Always
-	WorkDir                  string                           `json:"work_dir,omitempty" yaml:"work-dir,omitempty" flag:"work-dir"`                              // Working directory to run tests in
-	DryRun                   bool                             `json:"dry_run,omitempty" yaml:"dry-run,omitempty" flag:"dry-run"`                                 // Show what tests would be executed without running them
-	Recursive                bool                             `json:"recursive,omitempty" yaml:"recursive,omitempty" flag:"recursive" default:"true"`            // Recursively discover test packages in subdirectories
-	PreBuild                 bool                             `json:"pre_build,omitempty" yaml:"pre-build,omitempty" flag:"pre-build" default:"true"`            // Compile all Go test binaries once before the timed run so per-package timeouts cover execution, not cold compilation. Disable with --pre-build=false.
-	Nodes                    int                              `json:"nodes,omitempty" yaml:"nodes,omitempty" flag:"nodes" short:"p"`                             // Number of parallel ginkgo nodes (0 = default, -1 = auto)
-	Concurrency              int                              `json:"concurrency,omitempty" yaml:"concurrency,omitempty" flag:"concurrency"`                     // Max test package subprocesses to run at once. 0 = auto-bounded default.
-	UI                       bool                             `json:"ui,omitempty" yaml:"-" flag:"ui"`                                                           // Launch browser with real-time task progress dashboard
-	Addr                     string                           `json:"addr,omitempty" yaml:"-" flag:"addr" default:"0.0.0.0"`                                     // Interface to bind --ui HTTP server. Defaults to 0.0.0.0 (all interfaces); set localhost to restrict to this machine.
-	Diagnostics              bool                             `json:"diagnostics,omitempty" yaml:"diagnostics,omitempty" flag:"diagnostics"`                     // Capture a final diagnostics snapshot and embed it in JSON results / detached UI handoff artifacts.
-	SkipHooks                bool                             `json:"skip_hooks,omitempty" yaml:"skip-hooks,omitempty" flag:"skip-hooks"`                        // When true, .gavel.yaml pre/post hooks do not run. Default is computed in runTests from $CI: skip when unset, run when set.
-	AutoStop                 time.Duration                    `json:"auto_stop,omitempty" yaml:"-"`                                                              // Hard wall-clock deadline for the detached UI child. Passed through when --detach is set. 0 = use default (30m). Flag wired imperatively from cmd/gavel/test.go because clicky doesn't bind time.Duration.
-	IdleTimeout              time.Duration                    `json:"idle_timeout,omitempty" yaml:"-"`                                                           // Idle deadline for the detached UI child; resets on every HTTP request. 0 = use default (10m). Only meaningful with --detach.
-	Timeout                  time.Duration                    `json:"timeout,omitempty" yaml:"timeout,omitempty"`                                                // Global wall-clock deadline for the entire test+lint run. 0 = default 20m. Cancels every in-flight subprocess when it fires.
-	LintTimeout              time.Duration                    `json:"lint_timeout,omitempty" yaml:"lint-timeout,omitempty"`                                      // Per-linter subprocess deadline. 0 = default 10m. Forwarded to executeLinters when --lint is set.
-	TestTimeout              time.Duration                    `json:"test_timeout,omitempty" yaml:"test-timeout,omitempty"`                                      // Per-test-package subprocess deadline. 0 = default 10m.
-	Context                  context.Context                  `json:"-" yaml:"-"`                                                                                // Parent context for the run. Nil = context.Background(). Global --timeout is applied on top.
-	Lint                     bool                             `json:"lint,omitempty" yaml:"lint,omitempty" flag:"lint"`                                          // Run linters in parallel with tests
-	Cache                    bool                             `json:"cache,omitempty" yaml:"cache,omitempty" flag:"cache"`                                       // Skip packages whose content fingerprint matches the last passing run
-	Changed                  bool                             `json:"changed,omitempty" yaml:"changed,omitempty" flag:"changed"`                                 // Only run packages affected by staged/unstaged/untracked changes and the diff against origin/main
-	Since                    string                           `json:"since,omitempty" yaml:"since,omitempty" flag:"since"`                                       // Only run packages affected by the diff since <ref> (merge-base(HEAD,ref)..HEAD) plus the working tree
-	ChangedFiles             []string                         `json:"changed_files,omitempty" yaml:"changed-files,omitempty" flag:"changed-files"`               // Only run packages affected by these workdir-relative files (no git query); unions with --changed/--since when either is set
-	Bench                    string                           `json:"bench,omitempty" yaml:"bench,omitempty" flag:"bench"`                                       // Run Go benchmarks matching this regex ("." or "true" runs all). Auto-enabled for packages containing only Benchmark* funcs.
-	Fixtures                 bool                             `json:"fixtures,omitempty" yaml:"fixtures,omitempty" flag:"fixtures"`                              // Discover and run fixture files. Off by default; can also be enabled via .gavel.yaml fixtures.enabled
-	FixtureFiles             []string                         `json:"fixture_files,omitempty" yaml:"fixture-files,omitempty" flag:"fixture-files"`               // Globs for fixture discovery. Overrides .gavel.yaml fixtures.files. Default: **/*.fixture.{md,yaml,yml,json}
-	FixturesOnly             bool                             `json:"-" yaml:"-"`                                                                                // Run only the supplied fixture runner without discovering ordinary test frameworks.
-	FixtureRunner            *fixtureOptions                  `json:"-" yaml:"-"`                                                                                // Direct fixture command options; nil uses normal fixture discovery.
+	StartingPaths            []string                         `json:"starting_paths,omitempty" yaml:"paths,omitempty" args:"true"`                                                                                                                                            // Package paths to test (e.g., ["./pkg/testrunner"]). If empty, all packages are discovered.
+	ExtraArgs                []string                         `json:"extra_args,omitempty" yaml:"extra-args,omitempty" flag:"extra-args"`                                                                                                                                     // Additional arguments broadcast to every selected test runner.
+	Tags                     []string                         `json:"tags,omitempty" yaml:"tags,omitempty" flag:"tags"`                                                                                                                                                       // Go build tags mapped to each supported framework.
+	ShowPassed               bool                             `json:"show_passed,omitempty" yaml:"show-passed,omitempty" flag:"show-passed"`                                                                                                                                  // Whether to show passed tests in output
+	Ignore                   []string                         `json:"ignore,omitempty" yaml:"ignore,omitempty" flag:"ignore"`                                                                                                                                                 // Glob patterns for test packages/paths to exclude from discovery.
+	ShowStdout               OutputMode                       `json:"show_stdout,omitempty" yaml:"show-stdout,omitempty" flag:"show-stdout" default:"OnFailure"`                                                                                                              // When to show stdout: false|Never, OnFailure (default), true|Always
+	ShowStderr               OutputMode                       `json:"show_stderr,omitempty" yaml:"show-stderr,omitempty" flag:"show-stderr" default:"OnFailure"`                                                                                                              // When to show stderr: false|Never, OnFailure (default), true|Always
+	WorkDir                  string                           `json:"work_dir,omitempty" yaml:"work-dir,omitempty" flag:"work-dir"`                                                                                                                                           // Working directory to run tests in
+	DryRun                   bool                             `json:"dry_run,omitempty" yaml:"dry-run,omitempty" flag:"dry-run"`                                                                                                                                              // Show what tests would be executed without running them
+	Recursive                bool                             `json:"recursive,omitempty" yaml:"recursive,omitempty" flag:"recursive" default:"true"`                                                                                                                         // Recursively discover test packages in subdirectories
+	Nodes                    int                              `json:"nodes,omitempty" yaml:"nodes,omitempty" flag:"nodes" short:"p"`                                                                                                                                          // Number of parallel ginkgo nodes (0 = default, -1 = auto)
+	Concurrency              int                              `json:"concurrency,omitempty" yaml:"concurrency,omitempty" flag:"concurrency"`                                                                                                                                  // Max test package subprocesses to run at once. 0 = auto-bounded default.
+	UI                       bool                             `json:"ui,omitempty" yaml:"-" flag:"ui" help:"Launch a live browser dashboard; also records the run's process tree, samples, stacks and facets into .gavel/traces/<run>"`                                       // Launch browser with real-time task progress dashboard
+	Addr                     string                           `json:"addr,omitempty" yaml:"-" flag:"addr" default:"0.0.0.0"`                                                                                                                                                  // Interface to bind --ui HTTP server. Defaults to 0.0.0.0 (all interfaces); set localhost to restrict to this machine.
+	Dev                      bool                             `json:"dev,omitempty" yaml:"-" flag:"dev" help:"With --ui, serve the dashboard from the testrunner/ui Vite dev server, with clicky-ui from the sibling checkout's source (requires a source checkout)"`         // Serve the --ui page through the testrunner/ui Vite dev server instead of the embedded bundle.
+	Diagnostics              bool                             `json:"diagnostics,omitempty" yaml:"diagnostics,omitempty" flag:"diagnostics" help:"Record the run's process tree, CPU/RSS samples and stack dumps into .gavel/traces/<run> without --ui"`                      // Capture the run's process tree, samples and stacks into its trace store (.gavel/traces/<run>) without --ui; the periodic, timeout, package-timeout and final goroutine dumps are stacks checkpoints of it.
+	ProcessFacets            bool                             `json:"process_facets,omitempty" yaml:"process-facets,omitempty" flag:"process-facets" help:"Also record each process's open files, sockets, ports, connections and environment (needs --ui or --diagnostics)"` // Read every process's open files, sockets, ports and connections each sample, and its environment, into the run's process capture, as --ui does. Needs --ui or --diagnostics.
+	SkipHooks                bool                             `json:"skip_hooks,omitempty" yaml:"skip-hooks,omitempty" flag:"skip-hooks"`                                                                                                                                     // When true, .gavel.yaml pre/post hooks do not run. Default is computed in runTests from $CI: skip when unset, run when set.
+	AutoStop                 time.Duration                    `json:"auto_stop,omitempty" yaml:"-"`                                                                                                                                                                           // Hard wall-clock deadline for the detached UI child. Passed through when --detach is set. 0 = use default (30m). Flag wired imperatively from cmd/gavel/test.go because clicky doesn't bind time.Duration.
+	IdleTimeout              time.Duration                    `json:"idle_timeout,omitempty" yaml:"-"`                                                                                                                                                                        // Idle deadline for the detached UI child; resets on every HTTP request. 0 = use default (10m). Only meaningful with --detach.
+	Timeout                  time.Duration                    `json:"timeout,omitempty" yaml:"timeout,omitempty"`                                                                                                                                                             // Global wall-clock deadline for the entire test+lint run. 0 = default 20m. Cancels every in-flight subprocess when it fires.
+	LintTimeout              time.Duration                    `json:"lint_timeout,omitempty" yaml:"lint-timeout,omitempty"`                                                                                                                                                   // Per-linter subprocess deadline. 0 = the linter default (5m). Forwarded to executeLinters when --lint is set.
+	TestTimeout              time.Duration                    `json:"test_timeout,omitempty" yaml:"test-timeout,omitempty"`                                                                                                                                                   // Per-test-package subprocess deadline. 0 = none (test.testTimeout still reaches each package through its runtime).
+	Context                  context.Context                  `json:"-" yaml:"-"`                                                                                                                                                                                             // Parent context for the run. Nil = context.Background(). Global --timeout is applied on top.
+	Lint                     bool                             `json:"lint,omitempty" yaml:"lint,omitempty" flag:"lint"`                                                                                                                                                       // Run linters in parallel with tests
+	Cache                    bool                             `json:"cache,omitempty" yaml:"cache,omitempty" flag:"cache"`                                                                                                                                                    // Skip packages whose content fingerprint matches the last passing run
+	Changed                  bool                             `json:"changed,omitempty" yaml:"changed,omitempty" flag:"changed"`                                                                                                                                              // Only run packages affected by staged/unstaged/untracked changes and the diff against origin/main
+	Since                    string                           `json:"since,omitempty" yaml:"since,omitempty" flag:"since"`                                                                                                                                                    // Only run packages affected by the diff since <ref> (merge-base(HEAD,ref)..HEAD) plus the working tree
+	ChangedFiles             []string                         `json:"changed_files,omitempty" yaml:"changed-files,omitempty" flag:"changed-files"`                                                                                                                            // Only run packages affected by these workdir-relative files (no git query); unions with --changed/--since when either is set
+	Bench                    string                           `json:"bench,omitempty" yaml:"bench,omitempty" flag:"bench" help:"Run Go benchmarks matching this regex (. runs all)"`                                                                                          // Run Go benchmarks matching this regex ("." or "true" runs all). Auto-enabled for packages containing only Benchmark* funcs.
+	Fixtures                 bool                             `json:"fixtures,omitempty" yaml:"fixtures,omitempty" flag:"fixtures"`                                                                                                                                           // Discover and run fixture files. Off by default; can also be enabled via .gavel.yaml fixtures.enabled
+	FixtureFiles             []string                         `json:"fixture_files,omitempty" yaml:"fixture-files,omitempty" flag:"fixture-files"`                                                                                                                            // Globs for fixture discovery. Overrides .gavel.yaml fixtures.files. Default: **/*.fixture.{md,yaml,yml,json}
+	FixturesOnly             bool                             `json:"-" yaml:"-"`                                                                                                                                                                                             // Run only the supplied fixture runner without discovering ordinary test frameworks.
+	FixtureRunner            *fixtureOptions                  `json:"-" yaml:"-"`                                                                                                                                                                                             // Direct fixture command options; nil uses normal fixture discovery.
+	TraceHost                *traces.Host                     `json:"-" yaml:"-"`                                                                                                                                                                                             // The run's trace store, shared by the fixtures it runs; nil lets a fixture runner open its own when a fixture arms a trace.
+	ProcessTrace             *traces.ProcessTrace             `json:"-" yaml:"-"`                                                                                                                                                                                             // The run's process capture: attempts read their process's peaks from its samples, and a package that times out gets its Go test binary's goroutine dump checkpointed into its stacks. Nil records the dumps on the attempts only.
+	SigquitDumper            *SigquitDumper                   `json:"-" yaml:"-"`                                                                                                                                                                                             // The process capture's sigquit stack transport, which watches the go test batches for the Go test binaries it can dump. Nil watches none.
 	FixtureBenchmarkProgress func(fixtures.ExecutionSnapshot) `json:"-" yaml:"-"`
 	FixtureBenchmarkResult   func(*fixtures.BenchmarkReport)  `json:"-" yaml:"-"`
 	Frameworks               []string                         `json:"frameworks,omitempty" yaml:"framework,omitempty" flag:"framework"` // Restrict execution to these frameworks (e.g. jest, vitest, playwright, go, ginkgo). Empty = run every detected framework. Unknown names hard-fail.
@@ -213,6 +217,9 @@ func (opts RunOptions) Pretty() api.Text {
 	}
 	if opts.Diagnostics {
 		text = text.Space().Append("Diagnostics: ", "text-muted").Append(icons.Check, "text-green-500")
+	}
+	if opts.ProcessFacets {
+		text = text.Space().Append("ProcessFacets: ", "text-muted").Append(icons.Check, "text-green-500")
 	}
 	if len(opts.FixtureFiles) > 0 {
 		text = text.Space().Append("FixtureFiles: ", "text-muted").Append(clicky.CompactList(opts.FixtureFiles), "text-blue-500")
@@ -660,6 +667,8 @@ func runSingleRootWithUpdateOwnership(opts RunOptions, closeUpdates bool) (any, 
 	var fixtureErr error
 	if opts.FixtureRunner != nil {
 		opts.FixtureRunner.Context = opts.Context
+		opts.FixtureRunner.TraceHost = opts.TraceHost
+		opts.FixtureRunner.ProcessTrace = opts.ProcessTrace
 		opts.FixtureRunner.ProcessRuntime = opts.FixtureRunner.ProcessRuntime.Merge(opts.fixtureRuntime())
 		fixtureTests, err := t.runFixtureRunner(*opts.FixtureRunner)
 		if err != nil {
@@ -968,6 +977,9 @@ func (o *TestOrchestrator) detectAndRun(frameworks []Framework, startingPaths []
 	if err != nil {
 		return nil, err
 	}
+	if o.Nodes != 0 && o.Nodes != 1 {
+		return nil, fmt.Errorf("--nodes=%d is unsupported by the unified go test runner", o.Nodes)
+	}
 	// Validate that starting paths exist
 	if len(startingPaths) > 0 {
 		for _, path := range startingPaths {
@@ -1060,6 +1072,9 @@ func (o *TestOrchestrator) detectAndRun(frameworks []Framework, startingPaths []
 	cachedByFramework := map[Framework][]cacheHit{}
 	if o.Cache && o.selector != nil {
 		for fw, pkgs := range packagesByFramework {
+			if fw == parsers.GoTest || fw == parsers.Ginkgo {
+				continue
+			}
 			need, hits, err := o.selector.filterByRunCache(fw, pkgs)
 			if err != nil {
 				return nil, fmt.Errorf("run-cache filter for %s: %w", fw, err)
@@ -1094,16 +1109,7 @@ func (o *TestOrchestrator) detectAndRun(frameworks []Framework, startingPaths []
 
 	// If dry-run mode, display what would be executed and return early
 	if o.DryRun {
-		return o.displayDryRun(packagesByFramework, argsByFramework)
-	}
-
-	// Compile all Go test binaries up front so the per-package timeout below
-	// covers execution only. Heavy packages otherwise compile from a cold
-	// cache under concurrency and blow their deadline before any test runs.
-	if o.PreBuild {
-		if err := o.preBuildFrameworks(packagesByFramework); err != nil {
-			return nil, err
-		}
+		return o.displayDryRun(packagesByFramework, argsByFramework, o.unfocusedGoRun(startingPaths))
 	}
 
 	// Send pending package outline to UI before execution
@@ -1126,9 +1132,22 @@ func (o *TestOrchestrator) detectAndRun(frameworks []Framework, startingPaths []
 	// Keep package fanout bounded; CI runners can OOM when every package starts
 	// a Go/Ginkgo subprocess at once.
 	group := task.StartGroup[packageResult]("Running tests across packages", task.WithConcurrency(o.packageConcurrency()))
+	goBatches, err := o.planGoBatches(packagesByFramework, argsByFramework, o.unfocusedGoRun(startingPaths))
+	if err != nil {
+		return nil, err
+	}
+	for _, batch := range goBatches {
+		batch := batch
+		group.Add("go test", func(ctx commonsCtx.Context, t *task.Task) (packageResult, error) {
+			return o.runGoBatch(ctx, t, batch)
+		})
+	}
 
 	// Launch a task for each package per framework
 	for _, fw := range frameworks {
+		if fw == parsers.GoTest || fw == parsers.Ginkgo {
+			continue
+		}
 		packages := packagesByFramework[fw]
 		runner, ok := o.registry.Get(fw)
 		if !ok {
@@ -1233,91 +1252,6 @@ func subprocessTimeoutArgs(framework Framework, subTimeout time.Duration) []stri
 	}
 }
 
-// supervisePackage wraps the package's parent context with the per-package
-// timeout (and the global --timeout) and starts a goroutine that kills the
-// running process when either deadline fires. Returns the derived context,
-// a cancel func, and an atomic timedOut flag that the supervisor sets when it
-// had to kill the subprocess (atomic because the supervisor goroutine writes
-// it while the caller reads it).
-func (o *TestOrchestrator) supervisePackage(parent commonsCtx.Context, process *exec.Process, pkgPath string) (commonsCtx.Context, context.CancelFunc, *atomic.Bool) {
-	timedOut := new(atomic.Bool)
-	if o.TestTimeout > 0 {
-		process.WithTimeout(o.TestTimeout)
-	}
-
-	// Compose: parent (clicky task ctx) ∧ o.Context (global --timeout) ∧ per-package deadline.
-	base := context.Context(parent)
-	if o.Context != nil {
-		merged, cancelMerge := mergeParentContext(base, o.Context)
-		base = merged
-		go func() {
-			<-merged.Done()
-			cancelMerge()
-		}()
-	}
-	var (
-		pkgCtx    context.Context
-		cancelPkg context.CancelFunc
-	)
-	if process.Timeout > 0 {
-		pkgCtx, cancelPkg = context.WithTimeout(base, process.Timeout)
-	} else {
-		pkgCtx, cancelPkg = context.WithCancel(base)
-	}
-
-	go func() {
-		<-pkgCtx.Done()
-		if !errors.Is(pkgCtx.Err(), context.DeadlineExceeded) && !errors.Is(pkgCtx.Err(), context.Canceled) {
-			return
-		}
-		// Only act when the process is still running (i.e. we cancelled, not
-		// the process finished first).
-		if !process.IsRunning() {
-			return
-		}
-		timedOut.Store(true)
-		logger.Warnf("test package %s exceeded deadline — capturing diagnostics before killing tree", pkgPath)
-		captureGlobalDiagnostics()
-		if err := process.KillTree(); err != nil {
-			logger.Warnf("kill-tree failed for %s: %v", pkgPath, err)
-		}
-	}()
-
-	return commonsCtx.NewContext(pkgCtx), cancelPkg, timedOut
-}
-
-// mergeParentContext returns a child context that is cancelled when either
-// primary or parent is cancelled. Cancelling child never cancels the parents.
-func mergeParentContext(primary, parent context.Context) (context.Context, context.CancelFunc) {
-	child, cancel := context.WithCancel(primary)
-	if parent == nil {
-		return child, cancel
-	}
-	go func() {
-		select {
-		case <-parent.Done():
-			cancel()
-		case <-child.Done():
-		}
-	}()
-	return child, cancel
-}
-
-// captureGlobalDiagnostics is set by the CLI layer. It is called before each
-// subprocess kill so timeout output captures live goroutine, task, and process state.
-var captureGlobalDiagnostics = func() {}
-
-// SetCaptureGlobalDiagnostics installs the diagnostics hook invoked by the
-// per-package supervisor before it kills a timed-out subprocess. The caller
-// is responsible for ensuring the hook itself is safe to run concurrently.
-func SetCaptureGlobalDiagnostics(fn func()) {
-	if fn == nil {
-		captureGlobalDiagnostics = func() {}
-		return
-	}
-	captureGlobalDiagnostics = fn
-}
-
 func (o *TestOrchestrator) runPackageTest(
 	ctx commonsCtx.Context,
 	pkgPath string,
@@ -1369,21 +1303,27 @@ func (o *TestOrchestrator) runPackageTest(
 	// task group dumps dirty tasks before the package finishes.
 	t.SetName(formatRunningCommand(testRun.Process.Cmd, testRun.Process.Args))
 
-	pkgCtx, cancelPkg, timedOutPtr := o.supervisePackage(ctx, process, pkgPath)
+	pkgCtx, cancelPkg, supervision := o.supervisePackage(ctx, process, pkgPath)
 	defer cancelPkg()
 	process.WithContext(pkgCtx)
 
+	span, err := o.beginProcessSpan()
+	if err != nil {
+		return packageResult{}, err
+	}
 	runStart := time.Now()
-	stopSampler, peakPtr := startProcessMetricsSampler(process)
 	result := clearOrphanedPipeError(process.WithContext(pkgCtx).Run().Result(), pkgPath)
 	runDuration := time.Since(runStart)
-	stopSampler()
 	cancelPkg()
-	timedOut := timedOutPtr != nil && timedOutPtr.Load()
+	timedOut := supervision.TimedOut()
 	if ginkgoStream != nil {
 		ginkgoStream.Flush()
 	}
-	peakMetrics := *peakPtr
+	usage, err := span.usage(process.Pid())
+	if err != nil {
+		return packageResult{}, err
+	}
+	stamp := attemptStamp{RunKind: o.RunKind, Started: runStart, Ended: runStart.Add(runDuration), PID: process.Pid(), ExitCode: result.ExitCode, Usage: usage}
 
 	// Always attempt to parse test results first, even if there was an execution error
 	// This handles cases like `go test -json` which outputs valid JSON even when tests fail
@@ -1423,11 +1363,7 @@ func (o *TestOrchestrator) runPackageTest(
 			ExitCode:  result.ExitCode,
 			Tests:     parsers.Tests{fallback},
 		}}
-		runKind := o.RunKind
-		if runKind == "" {
-			runKind = "initial"
-		}
-		stampAttempts(testResults, runKind, runStart, runStart.Add(runDuration), process.Pid(), result.ExitCode, peakMetrics)
+		stampAttempts(testResults, stamp)
 
 		// Fold the parse/execution failure reason into the compact task
 		// label so the single line in the CI step log is self-explanatory.
@@ -1455,11 +1391,7 @@ func (o *TestOrchestrator) runPackageTest(
 		markTimedOutTests(testResults, runDuration, result.Stdout, result.Stderr, framework)
 	}
 
-	runKind := o.RunKind
-	if runKind == "" {
-		runKind = "initial"
-	}
-	stampAttempts(testResults, runKind, runStart, runStart.Add(runDuration), process.Pid(), result.ExitCode, peakMetrics)
+	stampAttempts(testResults, stamp)
 
 	// Update task status based on results. Build a compact, no-ANSI label
 	// that fits in the one-line-per-task CI budget. On failure the label
@@ -1495,63 +1427,6 @@ func (o *TestOrchestrator) runPackageTest(
 	}, nil
 }
 
-// stampAttempts appends one TestAttempt per leaf Test capturing the command,
-// PID, framework, and final state of the subprocess run. The Attempts slice
-// is additive: existing entries (from earlier runs or reruns merged via the
-// streamer) are preserved. Called after the parser produces final results
-// so each attempt records the observed outcome accurately.
-// processMetricsSample holds peak CPU% + RSS observed while a subprocess
-// was alive. Zero values mean the sampler never got a reading (fast exit).
-type processMetricsSample struct {
-	CPUPercent float64
-	RSS        uint64
-}
-
-func stampAttempts(results parsers.TestSuiteResults, runKind string, runStart, runEnd time.Time, pid int, exitCode int, metrics processMetricsSample) {
-	for ri := range results {
-		tr := &results[ri]
-		cmd := tr.Command
-		for ti := range tr.Tests {
-			stampAttemptSubtree(&tr.Tests[ti], runKind, runStart, runEnd, pid, exitCode, cmd, tr.Framework, metrics)
-		}
-	}
-}
-
-func stampAttemptSubtree(t *parsers.Test, runKind string, runStart, runEnd time.Time, pid int, exitCode int, cmd string, framework parsers.Framework, metrics processMetricsSample) {
-	for i := range t.Children {
-		stampAttemptSubtree(&t.Children[i], runKind, runStart, runEnd, pid, exitCode, cmd, framework, metrics)
-	}
-	code := exitCode
-	attempt := parsers.TestAttempt{
-		Sequence:   len(t.Attempts) + 1,
-		RunKind:    runKind,
-		Started:    runStart,
-		Ended:      runEnd,
-		Duration:   t.Duration,
-		PID:        pid,
-		Command:    cmd,
-		Framework:  framework,
-		ExitCode:   &code,
-		Passed:     t.Passed,
-		Failed:     t.Failed,
-		Skipped:    t.Skipped,
-		Pending:    t.Pending,
-		TimedOut:   t.TimedOut,
-		Message:    t.Message,
-		Stdout:     t.Stdout,
-		Stderr:     t.Stderr,
-		CPUPercent: metrics.CPUPercent,
-		RSS:        metrics.RSS,
-	}
-	// Extract a goroutine / panic dump from captured streams when the test
-	// timed out — Go's -timeout flag and ginkgo's --poll-progress-after
-	// both emit the thread dump to stdout or stderr before SIGKILL.
-	if t.TimedOut {
-		attempt.StackTrace = extractStackTrace(t.Stdout, t.Stderr)
-	}
-	t.Attempts = append(t.Attempts, attempt)
-}
-
 // clearOrphanedPipeError keeps a test package that exited 0 from failing only
 // because something it spawned (a Go toolchain helper, a grandchild) still held
 // its stdout when clicky's WaitDelay force-closed the pipes. The output that
@@ -1562,75 +1437,6 @@ func clearOrphanedPipeError(result *exec.ExecResult, pkgPath string) *exec.ExecR
 		result.Error = nil
 	}
 	return result
-}
-
-// startProcessMetricsSampler spawns a background goroutine that polls the
-// subprocess's CPU% and RSS via gopsutil every second and remembers the
-// peak observed values. Returns a stop function (must be called once the
-// process exits) and a pointer to the sample so the caller can read the
-// final value. Safe to call even when the PID isn't yet known — the
-// sampler retries until the process becomes visible or stop() fires.
-func startProcessMetricsSampler(process *exec.Process) (func(), *processMetricsSample) {
-	peak := &processMetricsSample{}
-	stop := make(chan struct{})
-	done := make(chan struct{})
-
-	go func() {
-		defer close(done)
-		ticker := time.NewTicker(time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-stop:
-				return
-			case <-ticker.C:
-				pid := process.Pid()
-				if pid <= 0 {
-					continue
-				}
-				proc, err := gopsutilProcess.NewProcess(int32(pid))
-				if err != nil {
-					continue
-				}
-				if cpu, err := proc.CPUPercent(); err == nil && cpu > peak.CPUPercent {
-					peak.CPUPercent = cpu
-				}
-				if mem, err := proc.MemoryInfo(); err == nil && mem != nil && mem.RSS > peak.RSS {
-					peak.RSS = mem.RSS
-				}
-			}
-		}
-	}()
-
-	stopFn := func() {
-		close(stop)
-		<-done
-	}
-	return stopFn, peak
-}
-
-// extractStackTrace scans captured streams for the start of a Go panic /
-// goroutine-dump block ("panic: test timed out" or "goroutine 1 [running]:")
-// and returns from that marker to EOF. Returns "" when no recognizable
-// dump is present — better to leave the field empty than invent noise.
-func extractStackTrace(stdout, stderr string) string {
-	for _, src := range []string{stderr, stdout} {
-		if src == "" {
-			continue
-		}
-		markers := []string{
-			"panic: test timed out",
-			"\ngoroutine 1 [",
-			"\nSIGQUIT: quit",
-			"\nruntime: goroutine stack exceeds",
-		}
-		for _, m := range markers {
-			if idx := strings.Index(src, m); idx >= 0 {
-				return strings.TrimSpace(src[idx:])
-			}
-		}
-	}
-	return ""
 }
 
 // markTimedOutTests walks the parsed results from a package whose subprocess
@@ -1861,7 +1667,7 @@ func (o *TestOrchestrator) parseReportFile(testRun *runners.TestRun) (parsers.Te
 }
 
 // displayDryRun shows what tests would be executed without running them.
-func (o *TestOrchestrator) displayDryRun(packagesByFramework map[Framework][]string, argsByFramework map[Framework][]string) (parsers.TestSuiteResults, error) {
+func (o *TestOrchestrator) displayDryRun(packagesByFramework map[Framework][]string, argsByFramework map[Framework][]string, unfocused bool) (parsers.TestSuiteResults, error) {
 	logger.Infof("🔍 Dry-run mode: showing what would be executed\n")
 
 	var totalPackages int
@@ -1871,8 +1677,22 @@ func (o *TestOrchestrator) displayDryRun(packagesByFramework map[Framework][]str
 
 	logger.Infof("Detected Frameworks: %s", clicky.CompactList(lo.Keys(packagesByFramework)).ANSI())
 	logger.Infof("Total Packages: %d\n", totalPackages)
+	goBatches, err := o.planGoBatches(packagesByFramework, argsByFramework, unfocused)
+	if err != nil {
+		return nil, err
+	}
+	for _, batch := range goBatches {
+		process, err := o.buildGoBatchCommand(batch)
+		if err != nil {
+			return nil, err
+		}
+		PrintDryRunCommand("test:go", fmt.Sprintf("%d packages", len(batch.packages)), process.Cmd, process.Args, process.Cwd)
+	}
 
 	for framework, packages := range packagesByFramework {
+		if framework == parsers.GoTest || framework == parsers.Ginkgo {
+			continue
+		}
 		runner, ok := o.registry.Get(framework)
 		if !ok {
 			continue
@@ -2023,15 +1843,18 @@ func (t *TestOrchestrator) runDiscoveredFixtures(globs []string) ([]parsers.Test
 	if err != nil {
 		return nil, err
 	}
-	ctx := opts.Context
-	if ctx == nil {
-		ctx = context.Background()
+	// A run sharing its caller's trace host leaves archiving the store to that caller.
+	var archive blob.Store
+	if opts.TraceHost == nil {
+		ctx := opts.Context
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		if archive, err = verify.OpenWorkspaceStorage(ctx, opts.WorkDir); err != nil {
+			return nil, err
+		}
 	}
-	recordings, err := verify.OpenWorkspaceStorage(ctx, opts.WorkDir)
-	if err != nil {
-		return nil, err
-	}
-	return t.runFixtureRunner(fixtures.RunnerOptions{Context: opts.Context, ProcessRuntime: opts.fixtureRuntime(), Paths: fixtureFiles, WorkDir: opts.WorkDir, Logger: logger.StandardLogger(), ExecutablePath: execPath, Recordings: recordings})
+	return t.runFixtureRunner(fixtures.RunnerOptions{Context: opts.Context, ProcessRuntime: opts.fixtureRuntime(), Paths: fixtureFiles, WorkDir: opts.WorkDir, Logger: logger.StandardLogger(), ExecutablePath: execPath, TraceHost: opts.TraceHost, ProcessTrace: opts.ProcessTrace, TraceArchive: archive})
 
 }
 
@@ -2088,7 +1911,9 @@ func (t *TestOrchestrator) runFixtureRunner(runnerOpts fixtures.RunnerOptions) (
 		return nil, err
 	}
 	tests := executionSnapshotToTests(runner.ExecutionSnapshot())
-	mergeFixtureResultDetails(tests, result, runnerOpts.WorkDir)
+	if mergeErr := mergeFixtureResultDetails(tests, result, runnerOpts.WorkDir); mergeErr != nil {
+		return tests, errors.Join(err, mergeErr)
+	}
 	mergeFixtureMeasurements(tests, runner.BenchmarkReport())
 	if streamer != nil {
 		streamer.UpdateFixtures(tests)
@@ -2109,6 +1934,7 @@ func fixtureNodeToTestsWithFile(node *fixtures.FixtureNode, inheritedFile string
 			Framework: parsers.Fixture,
 			File:      fixtureFile,
 			Line:      fixtureNodeLine(node),
+			EndLine:   fixtureNodeEndLine(node),
 			Duration:  r.Duration,
 			Stdout:    r.Stdout,
 			Stderr:    r.Stderr,
@@ -2124,7 +1950,11 @@ func fixtureNodeToTestsWithFile(node *fixtures.FixtureNode, inheritedFile string
 				CELVars:       r.CELVars,
 				Expected:      r.Expected,
 				Actual:        r.Actual,
+				Traces:        r.Traces,
 			},
+		}
+		if detail := fixtures.ResultDetail(r); detail != nil {
+			t.Detail = fixtureDetail(detail)
 		}
 		if r.Profile != nil {
 			t.FixtureProfile = &parsers.FixtureProfile{
@@ -2138,12 +1968,6 @@ func fixtureNodeToTestsWithFile(node *fixtures.FixtureNode, inheritedFile string
 					SampleCount: r.Profile.DiskIO.SampleCount, MissingProcesses: r.Profile.DiskIO.MissingProcesses,
 				}
 			}
-		}
-		for _, artifact := range r.GoProfiles {
-			t.GoProfiles = append(t.GoProfiles, parsers.GoProfileArtifact{
-				Name: artifact.Name, ID: artifact.ID, Path: artifact.Path, Status: artifact.Status,
-				Bytes: artifact.Bytes, SampleTypes: artifact.SampleTypes, Error: artifact.Error,
-			})
 		}
 		if r.SQLProfile != nil {
 			t.SQLProfile = &parsers.SQLProfile{
@@ -2201,4 +2025,11 @@ func fixtureNodeLine(node *fixtures.FixtureNode) int {
 		return 0
 	}
 	return node.Origin.Line
+}
+
+func fixtureNodeEndLine(node *fixtures.FixtureNode) int {
+	if node == nil || node.Origin == nil {
+		return 0
+	}
+	return node.Origin.EndLine
 }

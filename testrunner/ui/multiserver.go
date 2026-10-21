@@ -1,10 +1,13 @@
 package testui
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/flanksource/commons/logger"
 )
 
 // DefaultMaxRuns caps how many per-run Servers a MultiServer holds at once.
@@ -79,6 +82,30 @@ func (m *MultiServer) BeginRun(runID, kind string) *Server {
 	return entry.server
 }
 
+// Put hosts srv, a run already loaded (such as a replayed snapshot), as runID,
+// and reclaims idle finished runs as BeginRun does.
+func (m *MultiServer) Put(runID string, srv *Server) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if previous, ok := m.runs[runID]; ok && previous.server != srv {
+		m.evictLocked(runID)
+	}
+	m.runs[runID] = &runEntry{server: srv, lastAccess: m.timeNow()}
+	m.reclaimLocked()
+}
+
+// CloseTraces closes the trace stores of every run it hosts and drops the runs.
+func (m *MultiServer) CloseTraces() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var errs []error
+	for id, entry := range m.runs {
+		errs = append(errs, entry.server.CloseTraces())
+		delete(m.runs, id)
+	}
+	return errors.Join(errs...)
+}
+
 // Get returns the Server for runID, if it exists, and bumps its last-access time.
 func (m *MultiServer) Get(runID string) (*Server, bool) {
 	m.mu.Lock()
@@ -99,7 +126,7 @@ func (m *MultiServer) reclaimLocked() {
 	now := m.timeNow()
 	for id, entry := range m.runs {
 		if entry.server.Done() && now.Sub(entry.lastAccess) > m.idleTTL {
-			delete(m.runs, id)
+			m.evictLocked(id)
 		}
 	}
 	for len(m.runs) > m.max {
@@ -115,8 +142,17 @@ func (m *MultiServer) reclaimLocked() {
 		if oldestID == "" {
 			return // all remaining runs are live; keep them
 		}
-		delete(m.runs, oldestID)
+		m.evictLocked(oldestID)
 	}
+}
+
+// evictLocked drops a run and closes the trace stores it reopened, so a
+// long-lived host holds no store handle past the runs it still serves.
+func (m *MultiServer) evictLocked(runID string) {
+	if err := m.runs[runID].server.CloseTraces(); err != nil {
+		logger.Errorf("close the trace stores of evicted run %s: %v", runID, err)
+	}
+	delete(m.runs, runID)
 }
 
 // Handler routes /{runID}/<rest> to that run's Server.Handler() serving

@@ -12,7 +12,7 @@ import { useTodoTagCounts, useTodoTagIndex } from './tagQueries';
 import { TagListField } from './TodoTag';
 import { TodoBodyField } from './TodoBodyField';
 import { useCreateTodoMutation, useUpdateTodoMutation, type CreateTodoResponse } from './todoMutations';
-import { TriageAfterCreation, TriageCreationRecovery } from './TriageAfterCreation';
+import { RunAfterCreation, RunCreationRecovery, useRunAfterCreation } from './RunAfterCreation';
 import { TodoPRField, todoPRLink } from './TodoPRLink';
 import {
   closedStatuses, compareRecentTodos, detectProjectDir, firstParam, listParam, modeFromParams,
@@ -82,12 +82,12 @@ export function TodoNewPage({ projects, projectError = '' }: { projects: Project
   const [todoSearch, setTodoSearch] = useState('');
   const [selectedRef, setSelectedRef] = useState(queryRef);
   const [error, setError] = useState('');
-  const [triage, setTriage] = useState(true);
   const [created, setCreated] = useState<CreateTodoResponse | null>(null);
   const [completeMessage, setCompleteMessage] = useState('');
   const recentForDir = useMemo(() => recent.filter(entry => entry.dir === dir), [recent, dir]);
   const { attachments, previews, add, remove } = useAttachments({ pasteAnywhere: true });
   const workspaceMissing = workspaceRequired && !dir;
+  const runAfter = useRunAfterCreation({ dir, status, enabled: mode === 'new' && !workspaceMissing });
   const tagIndex = useTodoTagIndex(dir, mode === 'new' && !workspaceMissing);
   const tagCounts = useTodoTagCounts(dir, mode === 'new' && !workspaceMissing);
   // The list also backs the recent chips, so it loads whenever there are chips
@@ -196,7 +196,7 @@ export function TodoNewPage({ projects, projectError = '' }: { projects: Project
     try {
       // With attachments, post multipart so the image bytes ride along and the
       // server persists them; otherwise keep the lighter JSON path.
-      const fields = { title, body, priority, status, labels, triage, pr: todoPRLink(prURL) };
+      const fields = { title, body, priority, status, labels, ...(runAfter.step ? { step: runAfter.step } : {}), pr: todoPRLink(prURL) };
       const data = await createTodo.mutateAsync(attachments.length
         ? { body: todoFormData(fields, attachments) }
         : {
@@ -205,7 +205,7 @@ export function TodoNewPage({ projects, projectError = '' }: { projects: Project
           });
       const todo = data.todo as TodoItem | undefined;
       if (todo?.ref) remember(todo);
-      if (data.triage?.status === 'failed') { setCreated(data); return; }
+      if (data.run?.status === 'failed') { setCreated(data); return; }
       if (embed) {
         setCompleteMessage('Todo created');
         finish('todo-created', todo?.ref);
@@ -258,7 +258,7 @@ export function TodoNewPage({ projects, projectError = '' }: { projects: Project
     );
   }
 
-  if (created) return <main className="mx-auto max-w-4xl p-4"><TriageCreationRecovery result={created} dir={dir} onDone={() => {
+  if (created) return <main className="mx-auto max-w-4xl p-4"><RunCreationRecovery result={created} dir={dir} step={runAfter.step} onDone={() => {
     if (embed) { setCompleteMessage('Todo created'); finish('todo-created', created.todo.ref); }
     else leave(back ?? `/todos/${encodeURIComponent(created.todo.ref)}`);
   }} /></main>;
@@ -385,7 +385,7 @@ export function TodoNewPage({ projects, projectError = '' }: { projects: Project
               <Field label="Labels">
                 <TagListField labels={labels} index={tagIndex} counts={tagCounts} disabled={busy} onChange={setLabels} />
               </Field>
-              <TriageAfterCreation checked={triage} onChange={setTriage} disabled={busy} />
+              <RunAfterCreation state={runAfter} disabled={busy} />
               <TodoPRField value={prURL} onChange={setPRURL} disabled={busy} />
               <TodoBodyField
                 label="Body"

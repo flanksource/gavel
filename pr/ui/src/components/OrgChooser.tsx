@@ -8,8 +8,11 @@ import { orgsQuery } from './oneShotQueries';
 
 interface Props {
   config: SearchConfig;
+  // Every configured project, hidden ones included: the picker is the one place
+  // a hidden project can be shown again.
   projects: Project[];
   onChange: (partial: Partial<SearchConfig>) => void;
+  onSetProjectHidden: (name: string, hidden: boolean) => void;
 }
 
 // OrgChooser is the dashboard-wide scope switcher. Projects bind their repos
@@ -22,9 +25,10 @@ interface Props {
 // render an inline "Manage hidden" section so users can unhide without
 // juggling a second endpoint.
 
-export function OrgChooser({ config, projects, onChange }: Props) {
+export function OrgChooser({ config, projects: allProjects, onChange, onSetProjectHidden }: Props) {
   const [open, setOpen] = useState(false);
   const [showHidden, setShowHidden] = useState(false);
+  const [showHiddenProjects, setShowHiddenProjects] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const orgsResult = useQuery({ ...orgsQuery(), enabled: open });
   const orgs: Org[] = orgsResult.data ?? [];
@@ -49,6 +53,8 @@ export function OrgChooser({ config, projects, onChange }: Props) {
   const visibleOrgs = orgs.filter(o => !ignoredSet.has(o.login));
   const hiddenOrgs = orgs.filter(o => ignoredSet.has(o.login));
 
+  const projects = allProjects.filter(project => !project.hidden);
+  const hiddenProjects = allProjects.filter(project => project.hidden);
   const activeProject = config.project || '';
   const projectRepos = Array.from(new Set(projects.flatMap(project => project.repos)));
   const allProjectsSelected = projects.length > 0
@@ -121,7 +127,13 @@ export function OrgChooser({ config, projects, onChange }: Props) {
     onChange({ ignoredOrgs: ignoredOrgs.filter(o => o !== login) });
   }
 
+  function setProjectHidden(name: string, hidden: boolean, e: ReactMouseEvent) {
+    e.stopPropagation(); // don't also select it
+    onSetProjectHidden(name, hidden);
+  }
+
   const HiddenChevron = showHidden ? UiChevronDown : UiChevronRight;
+  const HiddenProjectsChevron = showHiddenProjects ? UiChevronDown : UiChevronRight;
 
   return (
     <div className="relative min-w-0" ref={rootRef}>
@@ -144,41 +156,86 @@ export function OrgChooser({ config, projects, onChange }: Props) {
 
       {open && (
         <div className="absolute top-full right-0 mt-1 max-h-[min(32rem,calc(100vh-4rem))] w-72 overflow-y-auto bg-popover rounded-lg shadow-lg border border-border z-50 py-1 text-sm">
-          {projects.length > 0 && (
+          {allProjects.length > 0 && (
             <>
               <div className="px-3 pb-1 pt-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
                 Projects
               </div>
-              <Button
-                variant="ghost"
-                className={`w-full flex items-center justify-start gap-2 h-auto px-3 py-1.5 text-left transition-colors ${
-                  allProjectsSelected ? 'bg-primary/10 text-primary' : 'hover:bg-muted text-foreground'
-                }`}
-                aria-label="Filter by all projects"
-                onClick={chooseAllProjects}
-              >
-                <UiFolder className="shrink-0 text-base" />
-                <span className="min-w-0 flex-1 truncate">All projects</span>
-                {allProjectsSelected && <UiCheck className="text-xs" />}
-              </Button>
+              {projects.length > 0 && (
+                <Button
+                  variant="ghost"
+                  className={`w-full flex items-center justify-start gap-2 h-auto px-3 py-1.5 text-left transition-colors ${
+                    allProjectsSelected ? 'bg-primary/10 text-primary' : 'hover:bg-muted text-foreground'
+                  }`}
+                  aria-label="Filter by all projects"
+                  onClick={chooseAllProjects}
+                >
+                  <UiFolder className="shrink-0 text-base" />
+                  <span className="min-w-0 flex-1 truncate">All projects</span>
+                  {allProjectsSelected && <UiCheck className="text-xs" />}
+                </Button>
+              )}
               {projects.map(project => {
                 const selected = activeProject === project.name;
                 return (
-                  <Button
+                  <div
                     key={project.name}
-                    variant="ghost"
-                    className={`w-full flex items-center justify-start gap-2 h-auto px-3 py-1.5 text-left transition-colors ${
+                    className={`group flex items-center gap-2 pr-3 transition-colors ${
                       selected ? 'bg-primary/10 text-primary' : 'hover:bg-muted text-foreground'
                     }`}
-                    aria-label={`Filter by ${project.name} project`}
-                    onClick={() => chooseProject(project)}
                   >
-                    <UiFolder className="shrink-0 text-base" />
-                    <span className="min-w-0 flex-1 truncate">{project.name}</span>
-                    {selected && <UiCheck className="text-xs" />}
-                  </Button>
+                    <Button
+                      variant="ghost"
+                      className="flex-1 min-w-0 flex items-center justify-start gap-2 h-auto pl-3 pr-0 py-1.5 text-left"
+                      aria-label={`Filter by ${project.name} project`}
+                      onClick={() => chooseProject(project)}
+                    >
+                      <UiFolder className="shrink-0 text-base" />
+                      <span className="min-w-0 flex-1 truncate">{project.name}</span>
+                      {selected && <UiCheck className="text-xs" />}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      className="h-auto p-0 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-red-500 transition-opacity"
+                      title={`Hide ${project.name} from project lists`}
+                      aria-label={`Hide ${project.name} project`}
+                      onClick={(e: ReactMouseEvent) => setProjectHidden(project.name, true, e)}
+                    >
+                      <UiEyeClosed className="text-xs" />
+                    </Button>
+                  </div>
                 );
               })}
+              {hiddenProjects.length > 0 && (
+                <>
+                  <Button
+                    variant="ghost"
+                    className="w-full flex items-center justify-start gap-2 h-auto px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted"
+                    onClick={() => setShowHiddenProjects(v => !v)}
+                  >
+                    <HiddenProjectsChevron className="text-[10px]" />
+                    <span className="flex-1 text-left">Manage hidden ({hiddenProjects.length})</span>
+                  </Button>
+                  {showHiddenProjects && hiddenProjects.map(project => (
+                    <div
+                      key={project.name}
+                      className="group flex items-center gap-2 px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted"
+                    >
+                      <UiFolder className="shrink-0 text-base opacity-60" />
+                      <span className="flex-1 truncate">{project.name}</span>
+                      <Button
+                        variant="ghost"
+                        className="h-auto p-0 text-muted-foreground hover:text-primary transition-colors"
+                        title={`Unhide ${project.name}`}
+                        aria-label={`Unhide ${project.name} project`}
+                        onClick={(e: ReactMouseEvent) => setProjectHidden(project.name, false, e)}
+                      >
+                        <UiEye className="text-xs" />
+                      </Button>
+                    </div>
+                  ))}
+                </>
+              )}
               <div className="border-t border-border my-1" />
             </>
           )}

@@ -39,15 +39,6 @@ func withStubbedTidyRecording(t *testing.T, sideEffect func(modDir string) error
 	return &calls
 }
 
-// withFindGoModRoots stubs the directory walker so tests don't depend on
-// .gitignore traversal correctness. Pass the absolute dirs to return.
-func withFindGoModRoots(t *testing.T, dirs []string) {
-	t.Helper()
-	prev := findGoModRoots
-	findGoModRoots = func(string) []string { return dirs }
-	t.Cleanup(func() { findGoModRoots = prev })
-}
-
 // captureLogger redirects the global logger to a buffer for the duration of
 // the test. Returns the buffer so tests can match on emitted lines.
 func captureLogger(t *testing.T) *strings.Builder {
@@ -64,6 +55,20 @@ func writeGoMod(t *testing.T, dir, module string) {
 	require.NoError(t, os.MkdirAll(dir, 0o755))
 	contents := fmt.Sprintf("module %s\n\ngo 1.22\n", module)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte(contents), 0o644))
+}
+
+// stageGoModEdit commits go.mod at relDir, then edits and stages it so the
+// module is part of the in-flight commit.
+func stageGoModEdit(t *testing.T, repo, relDir, module string) {
+	t.Helper()
+	dir := filepath.Join(repo, relDir)
+	modRel := filepath.Join(relDir, "go.mod")
+	writeGoMod(t, dir, module)
+	gitRun(t, repo, "add", modRel)
+	gitRun(t, repo, "commit", "-m", "add "+modRel)
+	contents := fmt.Sprintf("module %s\n\ngo 1.23\n", module)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte(contents), 0o644))
+	gitRun(t, repo, "add", modRel)
 }
 
 func ptrBool(b bool) *bool { return &b }
@@ -99,10 +104,9 @@ func TestTidyEnabled(t *testing.T) {
 func TestApplyGoModTidy_OffByDefault(t *testing.T) {
 	repo := initCommitRepo(t)
 	writeGoMod(t, repo, "example.com/app")
-	withFindGoModRoots(t, []string{repo})
 	calls := withStubbedTidyRecording(t, nil)
 
-	src := stagedSource{Files: []string{"README.md"}}
+	src := stagedSource{Files: []string{"go.mod"}}
 	got, err := applyGoModTidy(context.Background(), Options{WorkDir: repo}, src)
 	require.NoError(t, err)
 	assert.Empty(t, *calls, "no --tidy, no config, no --push -> runGoModTidy never called")
@@ -112,10 +116,9 @@ func TestApplyGoModTidy_OffByDefault(t *testing.T) {
 func TestApplyGoModTidy_OnByDefaultWhenPushing(t *testing.T) {
 	repo := initCommitRepo(t)
 	writeGoMod(t, repo, "example.com/app")
-	withFindGoModRoots(t, []string{repo})
 	calls := withStubbedTidyRecording(t, nil)
 
-	src := stagedSource{Files: []string{"README.md"}}
+	src := stagedSource{Files: []string{"go.mod"}}
 	got, err := applyGoModTidy(context.Background(), Options{WorkDir: repo, Push: true}, src)
 	require.NoError(t, err)
 	assert.Equal(t, []string{repo}, *calls)
@@ -125,14 +128,13 @@ func TestApplyGoModTidy_OnByDefaultWhenPushing(t *testing.T) {
 func TestApplyGoModTidy_DisabledByConfig(t *testing.T) {
 	repo := initCommitRepo(t)
 	writeGoMod(t, repo, "example.com/app")
-	withFindGoModRoots(t, []string{repo})
 	calls := withStubbedTidyRecording(t, nil)
 
 	opts := Options{
 		WorkDir: repo,
 		Config:  verify.CommitConfig{Tidy: verify.CommitTidyConfig{Enabled: ptrBool(false)}},
 	}
-	_, err := applyGoModTidy(context.Background(), opts, stagedSource{})
+	_, err := applyGoModTidy(context.Background(), opts, stagedSource{Files: []string{"go.mod"}})
 	require.NoError(t, err)
 	assert.Empty(t, *calls, "tidy disabled -> runGoModTidy never called")
 }
@@ -140,7 +142,6 @@ func TestApplyGoModTidy_DisabledByConfig(t *testing.T) {
 func TestApplyGoModTidy_FlagOverridesConfig(t *testing.T) {
 	repo := initCommitRepo(t)
 	writeGoMod(t, repo, "example.com/app")
-	withFindGoModRoots(t, []string{repo})
 	calls := withStubbedTidyRecording(t, nil)
 
 	opts := Options{
@@ -148,49 +149,76 @@ func TestApplyGoModTidy_FlagOverridesConfig(t *testing.T) {
 		TidyFlag: "false",
 		Config:   verify.CommitConfig{Tidy: verify.CommitTidyConfig{Enabled: ptrBool(true)}},
 	}
-	_, err := applyGoModTidy(context.Background(), opts, stagedSource{})
+	_, err := applyGoModTidy(context.Background(), opts, stagedSource{Files: []string{"go.mod"}})
 	require.NoError(t, err)
 	assert.Empty(t, *calls, "--tidy=false beats config.enabled=true")
 }
 
-func TestApplyGoModTidy_SingleModuleChanged(t *testing.T) {
+func TestApplyGoModTidy_SkipsWhenGoModNotStaged(t *testing.T) {
 	repo := initCommitRepo(t)
 	writeGoMod(t, repo, "example.com/app")
 	gitRun(t, repo, "add", "go.mod")
 	gitRun(t, repo, "commit", "-m", "add go.mod")
-	withFindGoModRoots(t, []string{repo})
-	logBuf := captureLogger(t)
-
-	calls := withStubbedTidyRecording(t, func(modDir string) error {
-		// Simulate `go mod tidy` adding a require line.
-		path := filepath.Join(modDir, "go.mod")
-		return os.WriteFile(path, []byte("module example.com/app\n\ngo 1.22\n\nrequire example.com/dep v1.0.0\n"), 0o644)
+	calls := withStubbedTidyRecording(t, func(string) error {
+		return fmt.Errorf("unknown revision tracing/v0.1.45")
 	})
 
-	// Stage something unrelated so readStagedSource has a populated set.
 	writeFile(t, repo, "main.go", "package main\n")
 	gitRun(t, repo, "add", "main.go")
 	source, err := readStagedSource(repo)
 	require.NoError(t, err)
 
 	got, err := applyGoModTidy(context.Background(), Options{WorkDir: repo, TidyFlag: "true"}, source)
+	require.NoError(t, err, "unresolvable modules must not block a commit that doesn't touch go.mod")
+	assert.Empty(t, *calls)
+	assert.Equal(t, source.Files, got.Files)
+}
+
+func TestApplyGoModTidy_SkipsDeletedGoMod(t *testing.T) {
+	repo := initCommitRepo(t)
+	writeGoMod(t, repo, "example.com/app")
+	gitRun(t, repo, "add", "go.mod")
+	gitRun(t, repo, "commit", "-m", "add go.mod")
+	gitRun(t, repo, "rm", "go.mod")
+	calls := withStubbedTidyRecording(t, nil)
+
+	source, err := readStagedSource(repo)
 	require.NoError(t, err)
-	assert.Len(t, *calls, 1)
-	assert.Contains(t, got.Files, "go.mod", "tidied go.mod should be staged into refreshed source")
+	require.Contains(t, source.Files, "go.mod")
+
+	_, err = applyGoModTidy(context.Background(), Options{WorkDir: repo, TidyFlag: "true"}, source)
+	require.NoError(t, err)
+	assert.Empty(t, *calls, "staged go.mod deletion -> nothing to tidy")
+}
+
+func TestApplyGoModTidy_SingleModuleChanged(t *testing.T) {
+	repo := initCommitRepo(t)
+	stageGoModEdit(t, repo, ".", "example.com/app")
+	logBuf := captureLogger(t)
+
+	calls := withStubbedTidyRecording(t, func(modDir string) error {
+		// Simulate `go mod tidy` adding a require line.
+		path := filepath.Join(modDir, "go.mod")
+		return os.WriteFile(path, []byte("module example.com/app\n\ngo 1.23\n\nrequire example.com/dep v1.0.0\n"), 0o644)
+	})
+
+	source, err := readStagedSource(repo)
+	require.NoError(t, err)
+
+	got, err := applyGoModTidy(context.Background(), Options{WorkDir: repo, TidyFlag: "true"}, source)
+	require.NoError(t, err)
+	assert.Equal(t, []string{repo}, *calls)
+	assert.Contains(t, got.Files, "go.mod")
+	assert.Contains(t, got.Diff, "+require example.com/dep v1.0.0", "tidied go.mod should be staged into refreshed source")
 	assert.Contains(t, logBuf.String(), "go mod tidy: updated ./go.mod")
 }
 
 func TestApplyGoModTidy_NoChange(t *testing.T) {
 	repo := initCommitRepo(t)
-	writeGoMod(t, repo, "example.com/app")
-	gitRun(t, repo, "add", "go.mod")
-	gitRun(t, repo, "commit", "-m", "add go.mod")
-	withFindGoModRoots(t, []string{repo})
+	stageGoModEdit(t, repo, ".", "example.com/app")
 	logBuf := captureLogger(t)
 	calls := withStubbedTidyRecording(t, nil) // no-op stub
 
-	writeFile(t, repo, "main.go", "package main\n")
-	gitRun(t, repo, "add", "main.go")
 	source, err := readStagedSource(repo)
 	require.NoError(t, err)
 	originalFiles := append([]string(nil), source.Files...)
@@ -202,21 +230,17 @@ func TestApplyGoModTidy_NoChange(t *testing.T) {
 	assert.NotContains(t, logBuf.String(), "go mod tidy: updated", "no log line when nothing changed")
 }
 
-func TestApplyGoModTidy_NestedModules(t *testing.T) {
+func TestApplyGoModTidy_OnlyStagedNestedModule(t *testing.T) {
 	repo := initCommitRepo(t)
 	writeGoMod(t, repo, "example.com/app")
+	gitRun(t, repo, "add", "go.mod")
+	gitRun(t, repo, "commit", "-m", "add root go.mod")
 	nested := filepath.Join(repo, "services", "api")
-	writeGoMod(t, nested, "example.com/app/services/api")
-	gitRun(t, repo, "add", "go.mod", "services/api/go.mod")
-	gitRun(t, repo, "commit", "-m", "add go mods")
-	withFindGoModRoots(t, []string{repo, nested})
+	stageGoModEdit(t, repo, "services/api", "example.com/app/services/api")
 	logBuf := captureLogger(t)
 
 	calls := withStubbedTidyRecording(t, func(modDir string) error {
-		if modDir != nested {
-			return nil
-		}
-		return os.WriteFile(filepath.Join(modDir, "go.mod"), []byte("module example.com/app/services/api\n\ngo 1.22\n\nrequire example.com/dep v1.0.0\n"), 0o644)
+		return os.WriteFile(filepath.Join(modDir, "go.mod"), []byte("module example.com/app/services/api\n\ngo 1.23\n\nrequire example.com/dep v1.0.0\n"), 0o644)
 	})
 
 	writeFile(t, repo, "main.go", "package main\n")
@@ -226,10 +250,8 @@ func TestApplyGoModTidy_NestedModules(t *testing.T) {
 
 	got, err := applyGoModTidy(context.Background(), Options{WorkDir: repo, TidyFlag: "true"}, source)
 	require.NoError(t, err)
-	assert.Equal(t, []string{repo, nested}, *calls)
-	log := logBuf.String()
-	assert.Contains(t, log, "go mod tidy: updated services/api/go.mod")
-	assert.NotContains(t, log, "go mod tidy: updated ./go.mod", "root go.mod unchanged -> no log line")
+	assert.Equal(t, []string{nested}, *calls, "root go.mod not staged -> only the nested module is tidied")
+	assert.Contains(t, logBuf.String(), "go mod tidy: updated services/api/go.mod")
 	assert.Contains(t, got.Files, "services/api/go.mod")
 	assert.NotContains(t, got.Files, "go.mod")
 }
@@ -237,37 +259,19 @@ func TestApplyGoModTidy_NestedModules(t *testing.T) {
 func TestApplyGoModTidy_FailsLoudly(t *testing.T) {
 	repo := initCommitRepo(t)
 	writeGoMod(t, repo, "example.com/app")
-	withFindGoModRoots(t, []string{repo})
 	_ = withStubbedTidyRecording(t, func(modDir string) error {
 		return fmt.Errorf("network unreachable")
 	})
 
-	_, err := applyGoModTidy(context.Background(), Options{WorkDir: repo, TidyFlag: "true"}, stagedSource{})
+	_, err := applyGoModTidy(context.Background(), Options{WorkDir: repo, TidyFlag: "true"}, stagedSource{Files: []string{"go.mod"}})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "go mod tidy in .")
 	assert.Contains(t, err.Error(), "network unreachable")
 }
 
-func TestApplyGoModTidy_NoGoModFiles(t *testing.T) {
-	repo := initCommitRepo(t)
-	withFindGoModRoots(t, []string{}) // empty
-	calls := withStubbedTidyRecording(t, nil)
-	logBuf := captureLogger(t)
-
-	src := stagedSource{Files: []string{"README.md"}}
-	got, err := applyGoModTidy(context.Background(), Options{WorkDir: repo, TidyFlag: "true"}, src)
-	require.NoError(t, err)
-	assert.Empty(t, *calls, "no go.mod -> stub never called")
-	assert.Equal(t, src.Files, got.Files)
-	assert.Empty(t, logBuf.String())
-}
-
 func TestApplyGoModTidy_GoSumCreated(t *testing.T) {
 	repo := initCommitRepo(t)
-	writeGoMod(t, repo, "example.com/app")
-	gitRun(t, repo, "add", "go.mod")
-	gitRun(t, repo, "commit", "-m", "add go.mod")
-	withFindGoModRoots(t, []string{repo})
+	stageGoModEdit(t, repo, ".", "example.com/app")
 	logBuf := captureLogger(t)
 
 	withStubbedTidyRecording(t, func(modDir string) error {
@@ -275,8 +279,6 @@ func TestApplyGoModTidy_GoSumCreated(t *testing.T) {
 		return os.WriteFile(filepath.Join(modDir, "go.sum"), []byte("example.com/dep v1.0.0 h1:abc=\n"), 0o644)
 	})
 
-	writeFile(t, repo, "main.go", "package main\n")
-	gitRun(t, repo, "add", "main.go")
 	source, err := readStagedSource(repo)
 	require.NoError(t, err)
 

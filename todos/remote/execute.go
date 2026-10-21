@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 
 	captainai "github.com/flanksource/captain/pkg/ai"
@@ -22,10 +23,15 @@ type Serve struct {
 	Call func(Message) (Reply, error)
 }
 
-// callServe gives in the job's tools, each run by serve, and, when the run asks for approvals, an
-// approval callback that asks serve.
-func callServe(in *promptrun.Input, job Job, serve Serve) {
+// callServe gives in the job's tools, each run by serve unless local has a tool of its name, which
+// runs in the job instead, and, when the run asks for approvals, an approval callback that asks
+// serve.
+func callServe(in *promptrun.Input, job Job, serve Serve, local []api.ToolDefinition) {
 	for _, tool := range job.Tools {
+		if i := slices.IndexFunc(local, func(def api.ToolDefinition) bool { return def.Name == tool.Name }); i >= 0 {
+			in.Config.Tools = append(in.Config.Tools, local[i])
+			continue
+		}
 		name := tool.Name
 		tool.Handler = func(_ context.Context, input map[string]any) (any, error) {
 			reply, err := serve.Call(ToolCallMessage(name, input))
@@ -74,12 +80,12 @@ type Finished struct {
 func Execute(ctx context.Context, job Job, dir string, agent captainai.Provider, serve Serve) (Finished, error) {
 	reporter := &reporter{send: serve.Send}
 	in := job.Input(dir)
-	callServe(&in, job, serve)
-	in.Provider = agent
-	hooks, err := job.HooksIn(dir).Build()
+	hooks, local, err := job.HooksIn(dir).Build()
 	if err != nil {
 		return Finished{}, err
 	}
+	callServe(&in, job, serve, local)
+	in.Provider = agent
 	in.Hooks = append(hooks, &startedHook{reporter: reporter})
 	if agent != nil {
 		// A supplied provider skips Captain's setup hook, so the run is set up here, as a local

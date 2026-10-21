@@ -381,9 +381,6 @@ func applyCompatibilityState(todo *types.TODO, update todos.StateUpdate) {
 	if update.LastRunSummary != nil {
 		todo.LastRunSummary = *update.LastRunSummary
 	}
-	if update.Questions != nil {
-		todo.Questions = append([]types.AgentQuestion(nil), (*update.Questions)...)
-	}
 }
 
 func renderAttempt(todo *types.TODO, result *todos.ExecutionResult) string {
@@ -423,9 +420,6 @@ func renderAttempt(todo *types.TODO, result *todos.ExecutionResult) string {
 }
 
 func attemptStatus(result *todos.ExecutionResult) string {
-	if result.EndStatus == types.EndAsk {
-		return "waiting"
-	}
 	if result.Success {
 		return "completed"
 	}

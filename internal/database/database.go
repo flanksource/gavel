@@ -14,7 +14,6 @@ import (
 	commonsdb "github.com/flanksource/commons-db/db"
 	"github.com/flanksource/commons-db/migrate"
 	"github.com/flanksource/commons/logger"
-	"github.com/flanksource/gavel/fixtures/record"
 	"github.com/flanksource/gavel/service"
 	"github.com/spf13/pflag"
 	"gorm.io/gorm"
@@ -126,11 +125,10 @@ func open(ctx context.Context, deps openDependencies, optionFns ...Option) (*DB,
 		}
 	}
 
-	// The handle is built once, long before any fixture declares `record: sql`,
-	// so the recording logger is always installed. It costs one atomic load per
-	// query until a fixture actually starts a recording.
+	// commonsdb.NewGorm installs its SQL statement plugin, which publishes each
+	// statement as the own database's (connection.OwnDatabase) while an
+	// `sql_statements` trace observes it — how a fixture traces gavel's queries.
 	config := commonsdb.DefaultGormConfig()
-	config.Logger = record.WrapGorm(config.Logger)
 	// Name columns instead of SELECT *: Captain and Gavel migrate this shared
 	// database while other pools stay open, and an added column would otherwise
 	// change the result type of statements those pools already prepared.
@@ -190,6 +188,10 @@ var schemaExclusions = []string{
 	"git_repos.git_repos_org_id_fkey",
 	"todo_issue_plan_revision_details",
 	"todo_issue_runtime",
+	// Installed by 170_git_worktree_overview.sql and 171_git_repo_overview.sql.
+	"git_repo_generation_seq",
+	"git_repo_overview",
+	"git_worktree_overview",
 }
 
 func applyGavelSchema(ctx context.Context, dsn string) error {

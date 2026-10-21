@@ -39,11 +39,11 @@ var _ = Describe("todo kind", func() {
 
 	It("creates through /api/todos/new and exports TODO_ID and TODO_URL", func() {
 		stub.set(func(s *stubGavel) {
-			s.createResponse["triage"] = map[string]any{"status": "started", "sessionId": session.String(), "promptRunId": triage.String()}
+			s.createResponse["run"] = map[string]any{"status": "started", "sessionId": session.String(), "promptRunId": triage.String()}
 			s.attempts = []attemptDetail{newAttempt(triage, session, "triage.new", captaindb.PromptRunStatusRunning, captaindb.PromptRunStateRunning)}
 		})
 		step := newStep("todo", "todo", []string{"GAVEL_URL=" + stub.URL()},
-			`{"create":{"body":"add a greeting helper","labels":["enhancement"],"triage":true}}`)
+			`{"create":{"body":"add a greeting helper","labels":["enhancement"],"step":"triage.new"}}`)
 
 		outcome, err := kind.Execute(ctx, step)
 		Expect(err).NotTo(HaveOccurred())
@@ -51,7 +51,7 @@ var _ = Describe("todo kind", func() {
 		created := stub.recorded(http.MethodPost, "/api/todos/new")
 		Expect(created).To(HaveLen(1))
 		Expect(created[0].Body).To(Equal(map[string]any{
-			"body": "add a greeting helper", "labels": []any{"enhancement"}, "triage": true,
+			"body": "add a greeting helper", "labels": []any{"enhancement"}, "step": "triage.new",
 		}))
 		Expect(outcome.Exports).To(Equal(map[string]string{
 			"TODO_ID":  stubTodoID,
@@ -59,29 +59,29 @@ var _ = Describe("todo kind", func() {
 		}))
 		Expect(outcome.Outputs).To(HaveKeyWithValue("id", stubTodoID))
 		Expect(outcome.Outputs["todo"]).To(HaveKeyWithValue("title", "Add greeting helper"))
-		Expect(outcome.Outputs["triage"]).To(Equal(map[string]any{
+		Expect(outcome.Outputs["run"]).To(Equal(map[string]any{
 			"found": true, "state": "running", "runState": "running", "error": "",
 			"step": "triage.new", "promptRunId": triage.String(), "sessionId": session.String(),
 		}))
 		Expect(outcome.Outputs["attempts"]).To(HaveLen(1))
 	})
 
-	It("fails the create when the triage run did not start", func() {
+	It("fails the create when the requested step did not start", func() {
 		stub.set(func(s *stubGavel) {
-			s.createResponse["triage"] = map[string]any{"status": "failed", "error": "no model configured for triage.new"}
+			s.createResponse["run"] = map[string]any{"status": "failed", "error": "no model configured for triage.new"}
 		})
-		step := newStep("todo", "todo", []string{"GAVEL_URL=" + stub.URL()}, `{"create":{"body":"x","triage":true}}`)
+		step := newStep("todo", "todo", []string{"GAVEL_URL=" + stub.URL()}, `{"create":{"body":"x","step":"triage.new"}}`)
 
 		_, err := kind.Execute(ctx, step)
 		Expect(err).To(MatchError(ContainSubstring("no model configured for triage.new")))
 	})
 
-	It("observes the triage attempt reaching a terminal state", func() {
+	It("observes the started attempt reaching a terminal state", func() {
 		stub.set(func(s *stubGavel) {
-			s.createResponse["triage"] = map[string]any{"status": "started", "sessionId": session.String(), "promptRunId": triage.String()}
+			s.createResponse["run"] = map[string]any{"status": "started", "sessionId": session.String(), "promptRunId": triage.String()}
 			s.attempts = []attemptDetail{newAttempt(triage, session, "triage.new", captaindb.PromptRunStatusRunning, captaindb.PromptRunStateRunning)}
 		})
-		step := newStep("todo", "todo", []string{"GAVEL_URL=" + stub.URL()}, `{"create":{"body":"x","triage":true}}`)
+		step := newStep("todo", "todo", []string{"GAVEL_URL=" + stub.URL()}, `{"create":{"body":"x","step":"triage.new"}}`)
 		outcome, err := kind.Execute(ctx, step)
 		Expect(err).NotTo(HaveOccurred())
 
@@ -93,20 +93,39 @@ var _ = Describe("todo kind", func() {
 		})
 		observed, err := kind.(fixtures.Observer).Observe(ctx, step, outcome.Handle)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(observed["triage"]).To(HaveKeyWithValue("state", "completed"))
+		Expect(observed["run"]).To(HaveKeyWithValue("state", "completed"))
 		Expect(observed["todo"]).To(HaveKeyWithValue("labels", []any{"enhancement"}))
 		Expect(observed["todo"]).To(HaveKeyWithValue("status", "pending"))
 	})
 
-	It("defaults to waiting for triage only when create asks for it", func() {
+	It("defaults to waiting for the run only when create starts a step", func() {
 		waiter := kind.(fixtures.DefaultWaiter)
-		Expect(waiter.DefaultWait(fixtures.StepSpec{Kind: "todo", Config: json.RawMessage(`{"create":{"body":"x","triage":true}}`)})).
+		Expect(waiter.DefaultWait(fixtures.StepSpec{Kind: "todo", Config: json.RawMessage(`{"create":{"body":"x","step":"triage.new"}}`)})).
 			To(Equal(&fixtures.WaitPolicy{
-				Until:    "triage.state in ['completed', 'failed', 'cancelled']",
-				FailWhen: "triage.state in ['failed', 'cancelled']",
+				Until:    "run.state in ['completed', 'failed', 'cancelled']",
+				FailWhen: "run.state in ['failed', 'cancelled']",
 			}))
 		Expect(waiter.DefaultWait(fixtures.StepSpec{Kind: "todo", Config: json.RawMessage(`{"create":{"body":"x"}}`)})).To(BeNil())
 		Expect(waiter.DefaultWait(fixtures.StepSpec{Kind: "todo", Config: json.RawMessage(`{"approve":true}`)})).To(BeNil())
+	})
+
+	It("names the run's error, else the newest attempt error, as the cause of a wait that did not succeed", func() {
+		const runError = "aimock: no scenario rule matched this request"
+		const newest, older = "codex exited 1", "rate limited"
+		for _, name := range []string{"todo", "todo_prompt"} {
+			causer := lookupKind(name).(fixtures.FailureCauser)
+			Expect(causer.FailureCause(map[string]any{
+				"run":      map[string]any{"state": "failed", "error": runError},
+				"attempts": []any{map[string]any{"error": newest}},
+			})).To(Equal(runError), name)
+			Expect(causer.FailureCause(map[string]any{
+				"run":      map[string]any{"state": "failed", "error": ""},
+				"attempts": []any{map[string]any{"error": ""}, map[string]any{"error": newest}, map[string]any{"error": older}},
+			})).To(Equal(newest), name)
+			Expect(causer.FailureCause(map[string]any{
+				"run": map[string]any{"found": false, "error": ""}, "attempts": []any{},
+			})).To(BeEmpty(), name)
+		}
 	})
 
 	It("gets $TODO_ID by default and normalises absent labels to an empty list", func() {
@@ -117,7 +136,7 @@ var _ = Describe("todo kind", func() {
 		Expect(stub.recorded(http.MethodGet, "/api/todos/item")[0].Query).To(Equal(map[string]string{"ref": stubTodoID}))
 		Expect(outcome.Exports).To(BeEmpty())
 		Expect(outcome.Outputs["todo"]).To(HaveKeyWithValue("labels", []any{}))
-		Expect(outcome.Outputs["triage"]).To(HaveKeyWithValue("found", false))
+		Expect(outcome.Outputs["run"]).To(HaveKeyWithValue("found", false))
 	})
 
 	It("approves the plan of the todo named by $TODO_ID", func() {

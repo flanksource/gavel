@@ -242,7 +242,7 @@ type CommitConfig struct {
 }
 
 // CommitTidyConfig controls whether `gavel commit` runs `go mod tidy` in every
-// Go module in the repo before committing and stages any go.mod / go.sum
+// Go module whose go.mod is staged before committing and stages any go.mod / go.sum
 // updates into the in-flight commit. Enabled nil = run only when pushing
 // (`gavel commit -p`); true/false forces it on/off. CLI flag --tidy overrides
 // per-invocation.

@@ -1,6 +1,6 @@
 import type { ComponentType, ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PRActions, type ExtraAction } from './PRActions';
 import { queryKeys } from '../query';
@@ -28,6 +28,24 @@ vi.mock('@flanksource/clicky-ui/components', async (importOriginal) => {
   ),
   };
 });
+
+// SessionTail is clicky-ui's (tested there); the double records which session it follows.
+vi.mock('@flanksource/clicky-ui/ai', () => ({
+  SessionTail: ({ src }: { src: string }) => <span data-testid="session-tail">{src}</span>,
+}));
+
+// The AI rebase run stream is the tab's event hub; this double lets a test play Captain's frames.
+const streams = vi.hoisted(() => [] as { url: string; listeners: Map<string, (event: Event) => void> }[]);
+vi.mock('../eventHub', () => ({
+  openEventStream: (url: string) => {
+    const stream = { url, listeners: new Map<string, (event: Event) => void>() };
+    streams.push(stream);
+    return {
+      addEventListener: (name: string, listener: (event: Event) => void) => stream.listeners.set(name, listener),
+      close: () => {},
+    };
+  },
+}));
 
 function makePR(overrides: Partial<PRItem> = {}): PRItem {
   return {
@@ -175,5 +193,67 @@ describe('PRActions responsive collapse', () => {
     expect(await screen.findByText('Merge pull request: branch protection denied the merge')).toBeTruthy();
     expect(screen.getByRole('dialog', { name: 'Merge pull request' })).toBeTruthy();
     expect(onChanged).not.toHaveBeenCalled();
+  });
+});
+
+describe('PRActions update branch', () => {
+  const behindPR = makePR({ behind: 2 });
+  const headDetail = { pr: { nodeId: 'PR_node_7', state: 'OPEN', headRefOid: 'abc123' } } as PRDetail;
+  const rebaseVars = {
+    repo: '/src/widget', remote: 'origin', number: 7, url: 'https://github.com/acme/widget/pull/7',
+    branch: 'feature', base: 'main', baseSha: 'def456', head: 'abc123',
+  };
+  const conflictBody = (extra: Record<string, unknown>) => new Response(JSON.stringify({
+    error: 'update branch (rebase): the branch does not rebase cleanly onto its base', conflict: true, ...extra,
+  }), { status: 409, headers: { 'Content-Type': 'application/json' } });
+
+  function updateBranch(fetchMock: ReturnType<typeof vi.fn>, props: Partial<React.ComponentProps<typeof PRActions>> = {}) {
+    vi.stubGlobal('fetch', fetchMock);
+    renderActions({ pr: behindPR, detail: headDetail, ...props });
+    fireEvent.click(screen.getByRole('button', { name: 'Update' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Update branch' }).at(-1)!);
+  }
+
+  it('rebases at the head the UI saw', async () => {
+    const fetchMock = vi.fn(async () => new Response('{"status":"ok"}'));
+    updateBranch(fetchMock);
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    expect(fetchMock).toHaveBeenCalledWith('/api/prs/update-branch', expect.objectContaining({
+      body: JSON.stringify({ repo: 'acme/widget', number: 7, nodeId: 'PR_node_7', headSha: 'abc123' }),
+    }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+
+  it('offers the AI rebase on a conflict and runs the pr-rebase prompt with the server variables', async () => {
+    const fetchMock = vi.fn(async (url: string) => url === '/api/prs/update-branch'
+      ? conflictBody({ rebase: rebaseVars })
+      : new Response(JSON.stringify({ runId: 'run-1' })));
+    const onChanged = vi.fn();
+    updateBranch(fetchMock, { onChanged });
+
+    expect((await screen.findByRole('alert')).textContent).toContain('does not rebase cleanly');
+    fireEvent.click(screen.getByRole('button', { name: /Rebase with AI/ }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    const [url, init] = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
+    expect(url).toBe('/api/v1/prompt/run?args=pr-rebase');
+    expect(JSON.parse(String(init.body))).toEqual({ variables: rebaseVars });
+    await waitFor(() => expect(streams.at(-1)?.url).toBe('/api/captain/prompt/runs/run-1/stream'));
+
+    act(() => streams.at(-1)!.listeners.get('run')?.(new MessageEvent('run', { data: JSON.stringify({ sessionId: 's-1' }) })));
+    expect(screen.getByTestId('session-tail').textContent).toBe('/api/captain/sessions/s-1');
+
+    act(() => streams.at(-1)!.listeners.get('done')?.(new MessageEvent('done', { data: JSON.stringify({ success: true }) })));
+    expect(onChanged).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+
+  it('says why the AI rebase cannot run instead of offering it', async () => {
+    updateBranch(vi.fn(async () => conflictBody({ rebaseBlocked: 'no project has a local checkout of acme/widget' })));
+
+    expect((await screen.findByRole('alert')).textContent).toContain('AI rebase unavailable: no project has a local checkout of acme/widget');
+    expect(screen.queryByRole('button', { name: /Rebase with AI/ })).toBeNull();
+    expect((screen.getAllByRole('button', { name: 'Update branch' }).at(-1) as HTMLButtonElement).disabled).toBe(true);
   });
 });

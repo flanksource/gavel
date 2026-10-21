@@ -120,10 +120,10 @@ describe('TodoRunActionButton', () => {
     setAuthMode('clerk', vi.fn());
     try {
       const onRun = vi.fn();
-      render(<TodoRunActionButton dir="repo:1" action="plan" onRun={onRun} onAdvanced={vi.fn()} />);
-      expect(screen.queryByRole('button', { name: 'Plan runtime' })).toBeNull();
-      expect(screen.queryByRole('button', { name: 'Advanced plan options' })).toBeNull();
-      fireEvent.click(screen.getByRole('button', { name: 'Plan' }));
+      render(<TodoRunActionButton dir="repo:1" action="run" onRun={onRun} onAdvanced={vi.fn()} />);
+      expect(screen.queryByRole('button', { name: 'Run runtime' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Advanced run options' })).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: 'Run' }));
       expect(onRun).toHaveBeenCalledOnce();
     } finally {
       setAuthMode('none', vi.fn());

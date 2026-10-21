@@ -274,7 +274,7 @@ var _ = Describe("project status lifecycle", func() {
 		}
 
 		Expect(<-commands).To(Equal([]string{"lint", "--work-dir", "/work/gavel"}))
-		Expect(<-commands).To(Equal([]string{"test", "--work-dir", "/work/gavel", "--changed"}))
+		Expect(<-commands).To(Equal([]string{"test", "--work-dir", "/work/gavel", "--changed", "--diagnostics", "--process-facets"}))
 	})
 
 	It("validates project action files without loading historical results", func() {

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/clicky/task"
 	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/lint"
@@ -22,6 +23,9 @@ import (
 type stepDisplay struct {
 	ShowPassed *bool `yaml:"show-passed"`
 	ShowFailed *bool `yaml:"show-failed"`
+	// skippedAreFindings shows skipped leaves as findings (a lint step's info
+	// violations) instead of eliding them with the passes.
+	skippedAreFindings bool
 }
 
 func (d stepDisplay) showPassed() bool { return d.ShowPassed != nil && *d.ShowPassed }
@@ -84,7 +88,7 @@ func RunTestStep(fixture fixtures.FixtureTest, opts fixtures.RunOptions) fixture
 	result.CWD = ro.WorkDir
 	result.Duration = time.Since(now)
 	result.Metadata = map[string]interface{}{"summary": summary}
-	result.Children = testChildNodes(tests, disp)
+	result.Children, result.Summary = runnerStepChildren(tests, disp)
 	if progressErr != nil {
 		return result.Errorf(progressErr, "report test progress")
 	}
@@ -105,18 +109,14 @@ func RunTestStep(fixture fixtures.FixtureTest, opts fixtures.RunOptions) fixture
 	if runErr != nil && summary.Total == 0 {
 		return result.Errorf(runErr, "test run failed")
 	}
-	if summary.Failed > 0 {
-		result.Status = task.StatusFAIL
-		result.Error = fmt.Sprintf("%d/%d tests failed", summary.Failed, summary.Total)
-	} else {
-		result.Status = task.StatusPASS
-	}
+	applyStepVerdict(&result, *result.Summary, "tests")
 	return result
 }
 
 // RunLintStep runs a `yaml lint` fixture step: the YAML body is unmarshalled
-// onto lint.Options and the lint engine runs. Each violation becomes a child
-// node (shown by default), clean linters appear when show-passed is set.
+// onto lint.Options and the lint engine runs. Each violation, of any severity,
+// becomes a child node shown by default, as does a linter that failed to run;
+// clean linters appear when show-passed is set.
 func RunLintStep(fixture fixtures.FixtureTest, opts fixtures.RunOptions) fixtures.FixtureResult {
 	now := time.Now()
 	result := fixtures.FixtureResult{Name: fixture.Name, Type: "lint", Start: &now, Test: fixture}
@@ -149,7 +149,7 @@ func RunLintStep(fixture fixtures.FixtureTest, opts fixtures.RunOptions) fixture
 
 	result.CWD = lo.WorkDir
 	result.Duration = time.Since(now)
-	result.Children = lintChildNodes(results, disp)
+	applyLintResults(&result, results, disp)
 
 	artifact, err := saveRunArtifact(runArtifactOptions{
 		WorkDir: lo.WorkDir,
@@ -167,25 +167,24 @@ func RunLintStep(fixture fixtures.FixtureTest, opts fixtures.RunOptions) fixture
 	if runErr != nil {
 		return result.Errorf(runErr, "lint run failed")
 	}
+	return result
+}
 
+// applyLintResults records every linter that ran as the step's children,
+// summary and verdict. Findings of every severity are shown; a linter that
+// crashed or timed out is a failed row of its own, which fails the step without
+// hiding the other linters' results.
+func applyLintResults(result *fixtures.FixtureResult, results []*linters.LinterResult, disp stepDisplay) {
+	disp.skippedAreFindings = true
+	result.Children, result.Summary = runnerStepChildren(lintTests(results), disp)
 	var violations int
 	for _, lr := range results {
-		if lr.Skipped {
-			continue
+		if !lr.Skipped {
+			violations += len(lr.Violations)
 		}
-		if !lr.Success {
-			return result.Errorf(fmt.Errorf("%s: %s", lr.Linter, lr.Error), "lint execution failed")
-		}
-		violations += len(lr.Violations)
 	}
 	result.Metadata = map[string]interface{}{"violations": violations}
-	if violations > 0 {
-		result.Status = task.StatusFAIL
-		result.Error = fmt.Sprintf("%d lint violations", violations)
-	} else {
-		result.Status = task.StatusPASS
-	}
-	return result
+	applyStepVerdict(result, *result.Summary, "lint results")
 }
 
 // resolveStepWorkDir defaults a runner step to the git root of the fixture, so
@@ -203,43 +202,49 @@ func resolveStepWorkDir(fixture fixtures.FixtureTest, opts fixtures.RunOptions) 
 	return dir
 }
 
-func testChildNodes(tests parsers.Tests, disp stepDisplay) []*fixtures.FixtureNode {
+// runnerStepChildren maps the engine's leaf results onto child nodes that keep
+// each leaf's framework, and tallies every leaf — shown or elided — into the
+// step's summary. Passed leaves, and skipped ones unless they are findings, are
+// shown only with show-passed; every other state with show-failed. A leaf with no state flag is a
+// placeholder row: neither shown nor counted, exactly as parsers.Test.Sum and
+// captain's SummarizeNodes treat it.
+func runnerStepChildren(tests parsers.Tests, disp stepDisplay) ([]*fixtures.FixtureNode, *api.VerifySummary) {
 	var out []*fixtures.FixtureNode
+	summary := &api.VerifySummary{}
 	for _, t := range flattenTests(tests) {
-		status := testStatus(t)
-		switch status {
-		case task.StatusFAIL, task.StatusERR:
-			if !disp.showFailed() {
-				continue
-			}
-		default:
-			if !disp.showPassed() {
-				continue
-			}
+		status, counts := testStatus(t)
+		if counts.Total == 0 {
+			continue
 		}
-		name := t.Name
-		if len(t.Suite) > 0 {
-			name = strings.Join(t.Suite, " > ") + " > " + t.Name
+		*summary = api.AddSummaries(*summary, counts)
+		quiet := status == task.StatusPASS || (status == task.StatusSKIP && !disp.skippedAreFindings)
+		if (quiet && !disp.showPassed()) || (!quiet && !disp.showFailed()) {
+			continue
 		}
-		child := &fixtures.FixtureNode{
-			Name: name,
-			Type: fixtures.TestNode,
-			Results: &fixtures.FixtureResult{
-				Name:     name,
-				Type:     "test",
-				Status:   status,
-				Duration: t.Duration,
-				Stdout:   t.Stdout,
-				Stderr:   t.Stderr,
-				Test:     fixtures.FixtureTest{Name: name},
-			},
-		}
-		if status == task.StatusFAIL && t.Message != "" {
-			child.Results.Error = t.Message
-		}
-		out = append(out, child)
+		out = append(out, testChildNode(t, status, counts.TimedOut > 0))
 	}
-	return out
+	return out, summary
+}
+
+func testChildNode(t parsers.Test, status task.Status, timedOut bool) *fixtures.FixtureNode {
+	name := t.Name
+	if len(t.Suite) > 0 {
+		name = strings.Join(t.Suite, " > ") + " > " + t.Name
+	}
+	result := &fixtures.FixtureResult{
+		Name:     name,
+		Type:     string(t.Framework),
+		Status:   status,
+		TimedOut: timedOut,
+		Duration: t.Duration,
+		Stdout:   t.Stdout,
+		Stderr:   t.Stderr,
+		Test:     fixtures.FixtureTest{Name: name},
+	}
+	if status != task.StatusPASS {
+		result.Error = t.Message
+	}
+	return &fixtures.FixtureNode{Name: name, Type: fixtures.TestNode, Results: result}
 }
 
 // flattenTests returns the leaf tests of a possibly-nested result set.
@@ -255,56 +260,58 @@ func flattenTests(tests parsers.Tests) []parsers.Test {
 	return out
 }
 
-func testStatus(t parsers.Test) task.Status {
+// testStatus maps a leaf's state flags onto the child's task status and the
+// one summary bucket it counts in, with parsers.Test.Sum's precedence and a
+// timeout ahead of everything: a timed-out test fails and counts as timed out.
+// A flagless leaf yields an empty summary.
+func testStatus(t parsers.Test) (task.Status, api.VerifySummary) {
 	switch {
+	case t.TimedOut:
+		return task.StatusFAIL, api.VerifySummary{Total: 1, TimedOut: 1}
 	case t.Failed:
-		return task.StatusFAIL
-	case t.Skipped:
-		return task.StatusSKIP
+		return task.StatusFAIL, api.VerifySummary{Total: 1, Failed: 1}
 	case t.Warned:
-		return task.StatusWarning
+		return task.StatusWarning, api.VerifySummary{Total: 1, Warned: 1}
+	case t.Aborted, t.Skipped:
+		return task.StatusSKIP, api.VerifySummary{Total: 1, Skipped: 1}
+	case t.Passed:
+		return task.StatusPASS, api.VerifySummary{Total: 1, Passed: 1}
+	case t.Running:
+		return task.StatusRunning, api.VerifySummary{Total: 1, Running: 1}
+	case t.Pending:
+		return task.StatusPending, api.VerifySummary{Total: 1, Pending: 1}
 	default:
-		return task.StatusPASS
+		return "", api.VerifySummary{}
 	}
 }
 
-func lintChildNodes(results []*linters.LinterResult, disp stepDisplay) []*fixtures.FixtureNode {
-	var out []*fixtures.FixtureNode
+// lintTests converts every linter that ran into its test group; a skipped
+// linter did not apply to the change and is left out.
+func lintTests(results []*linters.LinterResult) parsers.Tests {
+	var tests parsers.Tests
 	for _, lr := range results {
-		if lr.Skipped {
-			continue
-		}
-		if len(lr.Violations) == 0 {
-			if disp.showPassed() {
-				out = append(out, leafResult(lr.Linter, task.StatusPASS, ""))
-			}
-			continue
-		}
-		if !disp.showFailed() {
-			continue
-		}
-		for _, v := range lr.Violations {
-			name := fmt.Sprintf("%s %s:%d", lr.Linter, v.File, v.Line)
-			msg := lr.Linter
-			if v.Message != nil {
-				msg = *v.Message
-			}
-			out = append(out, leafResult(name, task.StatusFAIL, msg))
+		if !lr.Skipped {
+			tests = append(tests, lr.Test())
 		}
 	}
-	return out
+	return tests
 }
 
-func leafResult(name string, status task.Status, errMsg string) *fixtures.FixtureNode {
-	return &fixtures.FixtureNode{
-		Name: name,
-		Type: fixtures.TestNode,
-		Results: &fixtures.FixtureResult{
-			Name:   name,
-			Type:   "lint",
-			Status: status,
-			Error:  errMsg,
-			Test:   fixtures.FixtureTest{Name: name},
-		},
+// applyStepVerdict stamps a runner step's status from its children's summary:
+// a failure or timeout fails it, as does a result that never finished; a
+// warning alone warns.
+func applyStepVerdict(result *fixtures.FixtureResult, s api.VerifySummary, noun string) {
+	switch {
+	case s.Failed+s.TimedOut > 0:
+		result.Status = task.StatusFAIL
+		result.Error = fmt.Sprintf("%d/%d %s failed", s.Failed+s.TimedOut, s.Total, noun)
+	case s.Pending+s.Running > 0:
+		result.Status = task.StatusFAIL
+		result.Error = fmt.Sprintf("%d/%d %s did not finish", s.Pending+s.Running, s.Total, noun)
+	case s.Warned > 0:
+		result.Status = task.StatusWarning
+		result.Error = fmt.Sprintf("%d/%d %s warned", s.Warned, s.Total, noun)
+	default:
+		result.Status = task.StatusPASS
 	}
 }

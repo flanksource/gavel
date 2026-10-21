@@ -1,0 +1,45 @@
+---
+title: Services
+description: Prepare ordered dependencies, supervised commands, and seeded repositories.
+parent: fixture-step-reference
+order: 5
+---
+
+import FixtureKindReference from "../../src/components/site/FixtureKindReference";
+
+Use the `services` step to prepare ordered dependencies, supervised commands, and seeded repositories.
+
+## Example
+
+```yaml
+kind: Fixture
+name: Services example
+steps:
+  - id: resources
+    kind: services
+    services:
+      repository:
+        git:
+          files:
+            README.md: Fixture repository
+          commit: true
+```
+
+Save the document as a `.fixture.yaml` file. Inspect it with `gavel fixtures outline <file>`, then execute it with `gavel fixtures <file>` once its prerequisites are available.
+
+## Configuration and prerequisites
+
+`services` accepts a name-to-entry mapping or a named-entry list. Each entry selects exactly one of `deps`, `exec`, or `git`. Mapping order is retained; entries start in declaration order and can use earlier exports. The example seeds a disposable repository and requires Git.
+
+## Results and lifetime
+
+`exec` entries require one readiness probe: `ready.http`, `ready.tcp`, or `ready.exec`. A deps entry uses its catalog health check. Entry waits configure readiness timing; step-level `wait.until` judges aggregate outputs. Resources are cleaned up after the fixture.
+
+The entry definitions below come from the native services schema, including deps parameters, command probes, Git seeds, and exports.
+
+## Complete step reference
+
+Expand objects and array items to inspect nested fields. This reference includes the common step envelope; its behavior is documented in [Step policies](/docs/fixture-step-policies).
+
+<FixtureKindReference kind="services" />
+

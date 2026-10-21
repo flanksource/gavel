@@ -97,6 +97,16 @@ describe('useTestRun (SSE transport)', () => {
     expect(result.current.done).toBe(false);
   });
 
+  it('says a fixture benchmark or profile run is running fixtures, not linters', async () => {
+    const { result } = renderHook(() => useTestRun());
+    await waitFor(() => expect(FakeEventSource.instances.length).toBe(1));
+    act(() => FakeEventSource.last().emit('message', snapshot({
+      status: { running: true },
+      performance: { mode: 'benchmark', status: 'running', duration_ms: 0 },
+    })));
+    await waitFor(() => expect(result.current.statusText).toBe('Running fixtures...'));
+  });
+
   it('marks done and closes the stream on a non-running snapshot', async () => {
     const { result } = renderHook(() => useTestRun());
     await waitFor(() => expect(FakeEventSource.instances.length).toBe(1));

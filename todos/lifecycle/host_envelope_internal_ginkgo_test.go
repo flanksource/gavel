@@ -12,6 +12,7 @@ import (
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/todos"
 	todoprompt "github.com/flanksource/gavel/todos/prompt"
+	"github.com/flanksource/gavel/todos/tools"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/onsi/ginkgo/v2"
 	"github.com/onsi/gomega"
@@ -21,7 +22,8 @@ import (
 // specs pin the one invariant that matters there: the run state the lifecycle
 // classifies agrees with the state the runtime records for the prompt run.
 var _ = ginkgo.Describe("collecting a finished run", func() {
-	const completed = `{"summary":"Built it.","endStatus":"completed"}`
+	const completed = `{"success":true,"event":"completed","comment":"Built it."}`
+	runStep := Step{Name: "run", Events: []string{"completed", "blocked"}}
 
 	var (
 		host      *Host
@@ -33,14 +35,14 @@ var _ = ginkgo.Describe("collecting a finished run", func() {
 		host = &Host{}
 		exec = todos.NewExecutorContext(context.Background(), logger.StandardLogger(), nil)
 		prepared = &preparedStep{
-			definition: todoprompt.Definition{Name: "run", Class: types.ModeRun, Envelope: todoprompt.EnvelopeResult},
+			definition: todoprompt.Definition{Name: "run", Class: types.ModeRun},
 			class:      types.ModeRun, timeout: time.Minute,
 		}
 		execution = &todos.ExecutionResult{ExecutorName: "scripted"}
 	})
 
 	collect := func(out promptrun.Result) *StepOutcome {
-		return host.collect(Step{Name: "run"}, prepared, dispatched{out: out, execution: execution}, time.Now())
+		return host.collect(runStep, prepared, dispatched{out: out, execution: execution}, time.Now())
 	}
 
 	ginkgo.It("reports a decoded envelope as a succeeded run with the loop's stop reason", func() {
@@ -51,8 +53,9 @@ var _ = ginkgo.Describe("collecting a finished run", func() {
 
 		gomega.Expect(out.Result.Run.State).To(gomega.Equal(RunSucceeded))
 		gomega.Expect(out.Result.Run.StopReason).To(gomega.Equal("condition-met"))
-		gomega.Expect(out.Result.Envelope.EndStatus).To(gomega.Equal("completed"))
-		gomega.Expect(out.Execution.OutputJSON).To(gomega.Equal(map[string]any{"summary": "Built it.", "endStatus": "completed"}))
+		gomega.Expect(out.Result.Envelope).To(gomega.Equal(Envelope{Success: true, Event: "completed", Comment: "Built it."}))
+		gomega.Expect(out.Execution.Summary).To(gomega.Equal("Built it."))
+		gomega.Expect(out.Execution.OutputJSON).To(gomega.Equal(map[string]any{"success": true, "event": "completed", "comment": "Built it."}))
 		gomega.Expect(out.Execution.Success).To(gomega.BeTrue())
 	})
 
@@ -125,7 +128,7 @@ var _ = ginkgo.Describe("collecting a finished run", func() {
 	})
 
 	ginkgo.It("preserves Captain's cancellation classification in the recording callback", func() {
-		classify := host.recordedOutcome(context.Background(), Step{Name: "run"}, prepared,
+		classify := host.recordedOutcome(context.Background(), runStep, prepared,
 			&stepInput{execution: execution}, time.Now())
 		outcome, err := classify(promptrun.Result{Response: &api.Response{Text: completed}}, context.Canceled, true)
 		gomega.Expect(err).NotTo(gomega.HaveOccurred())
@@ -133,15 +136,34 @@ var _ = ginkgo.Describe("collecting a finished run", func() {
 		gomega.Expect(outcome.Phase).To(gomega.Equal(captaindb.PromptRunPhaseFinished))
 	})
 
-	ginkgo.It("maps a completed ask envelope after Captain's generic outcome", func() {
-		classify := host.recordedOutcome(context.Background(), Step{Name: "run"}, prepared,
+	// The agent's claim is half the verdict: an envelope that does not claim
+	// success fails the prompt run even though the run itself produced it.
+	ginkgo.It("files an envelope that claims no success as a failed run carrying its comment", func() {
+		classify := host.recordedOutcome(context.Background(), runStep, prepared,
 			&stepInput{execution: execution}, time.Now())
-		outcome, err := classify(promptrun.Result{Passed: true, Response: &api.Response{
-			Text: `{"summary":"Which database?","endStatus":"ask","questions":[{"text":"Which database?"}]}`,
+		outcome, err := classify(promptrun.Result{Response: &api.Response{
+			Text: `{"success":false,"event":"blocked","comment":"The schema migration needs a DBA."}`,
 		}}, nil, false)
 		gomega.Expect(err).NotTo(gomega.HaveOccurred())
-		gomega.Expect(outcome.State).To(gomega.Equal(captaindb.PromptRunStateWaiting))
-		gomega.Expect(outcome.Phase).To(gomega.Equal(captaindb.PromptRunPhaseGenerate))
+		gomega.Expect(outcome.State).To(gomega.Equal(captaindb.PromptRunStateFailed))
+		gomega.Expect(outcome.Error).To(gomega.Equal("The schema migration needs a DBA."))
+	})
+
+	ginkgo.It("fails a run whose agent asked natively instead of through todo_ask", func() {
+		out := collect(promptrun.Result{Response: &api.Response{TerminalOutcome: &api.TerminalOutcome{
+			Kind: api.TerminalOutcomeQuestions, Questions: []api.TerminalQuestion{{Text: "Which database?"}},
+		}}})
+
+		gomega.Expect(out.Result.Run.State).To(gomega.Equal(RunFailed))
+		gomega.Expect(out.Result.Run.Error).To(gomega.ContainSubstring("todo prompts ask through todo_ask"))
+		gomega.Expect(out.Execution.Success).To(gomega.BeFalse())
+	})
+
+	ginkgo.It("fails a run whose event is not one the step declares", func() {
+		out := collect(promptrun.Result{Response: &api.Response{Text: `{"success":true,"event":"ask","comment":"Which database?"}`}})
+
+		gomega.Expect(out.Result.Run.State).To(gomega.Equal(RunFailed))
+		gomega.Expect(out.Result.Run.Error).To(gomega.ContainSubstring(`event "ask" is not one of completed, blocked`))
 	})
 
 	ginkgo.It("fails a run whose provider result was not a success, even with an envelope", func() {
@@ -153,35 +175,7 @@ var _ = ginkgo.Describe("collecting a finished run", func() {
 		gomega.Expect(out.Result.Run.State).To(gomega.Equal(RunFailed))
 		gomega.Expect(out.Result.Run.Error).To(gomega.Equal("agent reported an unsuccessful result"))
 		gomega.Expect(out.Execution.Success).To(gomega.BeFalse())
-		gomega.Expect(out.Result.Envelope.EndStatus).To(gomega.Equal("completed"), "the envelope still travels for the outcomes to read")
-	})
-
-	ginkgo.It("fails a run whose provider reported an error event", func() {
-		saw := false
-		host.handleEvent(exec, captainai.Event{Kind: captainai.EventError, Error: "socket closed"}, execution, &types.TODO{}, &saw, todos.RunStartMetadata{})
-
-		out := collect(promptrun.Result{Response: &api.Response{Text: completed}})
-
-		gomega.Expect(out.Result.Run.State).To(gomega.Equal(RunFailed))
-		gomega.Expect(out.Result.Run.Error).To(gomega.Equal("socket closed"))
-	})
-
-	ginkgo.It("fails a run whose envelope says it failed", func() {
-		out := collect(promptrun.Result{Response: &api.Response{Text: `{"summary":"Could not build it.","endStatus":"failed"}`}})
-
-		gomega.Expect(out.Result.Run.State).To(gomega.Equal(RunFailed))
-		gomega.Expect(out.Result.Run.Error).To(gomega.Equal("Could not build it."))
-		gomega.Expect(out.Result.Envelope.EndStatus).To(gomega.Equal("failed"))
-		gomega.Expect(out.Execution.Success).To(gomega.BeFalse())
-	})
-
-	ginkgo.It("keeps a waiting run waiting", func() {
-		out := collect(promptrun.Result{Response: &api.Response{
-			Text: `{"summary":"Which database?","endStatus":"ask","questions":[{"text":"Which database?"}]}`,
-		}})
-
-		gomega.Expect(out.Result.Run.State).To(gomega.Equal(RunWaiting))
-		gomega.Expect(out.Execution.Success).To(gomega.BeFalse())
+		gomega.Expect(out.Result.Envelope.Event).To(gomega.Equal("completed"), "the envelope still travels for the outcomes to read")
 	})
 
 	// A reply that answered the question in the wrong shape used to leave nothing
@@ -192,21 +186,43 @@ var _ = ginkgo.Describe("collecting a finished run", func() {
 		out := collect(promptrun.Result{Response: &api.Response{Text: prose}})
 
 		gomega.Expect(out.Execution.ResponseText).To(gomega.Equal(prose))
-		gomega.Expect(out.Execution.EndStatus).To(gomega.BeEmpty(), "no envelope was captured")
-		gomega.Expect(out.Execution.ErrorMessage).NotTo(gomega.BeEmpty())
+		gomega.Expect(out.Execution.Envelope).To(gomega.BeNil(), "no envelope was captured")
 		gomega.Expect(out.Result.Run.State).To(gomega.Equal(RunFailed))
 		gomega.Expect(out.Result.Run.Error).To(gomega.Equal(out.Execution.ErrorMessage))
 	})
 
-	ginkgo.It("keeps the response of a run that did decode, from the structured payload", func() {
-		out := collect(promptrun.Result{Response: &api.Response{
-			Text:           completed,
-			StructuredData: map[string]any{"summary": "Built it.", "endStatus": "completed"},
-		}})
+	ginkgo.Describe("a plan-mode run", func() {
+		planStep := Step{Name: "plan", Events: []string{"new", "updated", "unchanged"}}
+		ginkgo.BeforeEach(func() {
+			prepared.class, prepared.existingPlan = types.ModePlan, "1. Old plan"
+		})
 
-		gomega.Expect(out.Execution.ResponseText).To(gomega.ContainSubstring("Built it."))
-		gomega.Expect(out.Execution.EndStatus).To(gomega.Equal(types.EndCompleted))
-		gomega.Expect(out.Execution.OutputJSON).To(gomega.Equal(map[string]any{"summary": "Built it.", "endStatus": "completed"}))
+		ginkgo.It("takes the plan todo_plan recorded, with the envelope's event as its status", func() {
+			run := &tools.Run{}
+			defs, err := tools.For([]string{tools.SetTodos}, tools.Options{
+				Provider: struct{ todos.Provider }{}, Subject: &types.TODO{ID: "t1"}, Run: run, PlanStep: true,
+			})
+			gomega.Expect(err).NotTo(gomega.HaveOccurred())
+			_, err = toolNamed(defs, "todo_plan").Handler(context.Background(), map[string]any{"content": "1. New plan"})
+			gomega.Expect(err).NotTo(gomega.HaveOccurred())
+
+			out := host.collect(planStep, prepared, dispatched{out: promptrun.Result{Response: &api.Response{
+				Text: `{"success":true,"event":"updated","comment":"Revised the plan."}`,
+			}}, execution: execution, tools: run}, time.Now())
+
+			gomega.Expect(out.Execution.Plan).To(gomega.Equal(&types.PlanResult{Status: types.PlanUpdated, Content: "1. New plan"}))
+			gomega.Expect(out.Execution.ToolWrites).To(gomega.Equal([]todos.ToolWrite{{Name: "todo_plan", Ref: "t1"}}))
+		})
+
+		ginkgo.It("maps a native plan outcome onto the plan events", func() {
+			out := host.collect(planStep, prepared, dispatched{out: promptrun.Result{Response: &api.Response{
+				TerminalOutcome: &api.TerminalOutcome{Kind: api.TerminalOutcomePlan, Plan: &api.TerminalPlan{Content: "1. Old plan"}},
+			}}, execution: execution}, time.Now())
+
+			gomega.Expect(out.Result.Envelope.Event).To(gomega.Equal("unchanged"))
+			gomega.Expect(out.Execution.Plan.Status).To(gomega.Equal(types.PlanUnchanged))
+			gomega.Expect(out.Execution.Success).To(gomega.BeTrue())
+		})
 	})
 
 	ginkgo.Describe("the definition-of-done record", func() {
@@ -234,4 +250,27 @@ var _ = ginkgo.Describe("collecting a finished run", func() {
 			gomega.Expect(out.Result.Verify).To(gomega.Equal(report))
 		})
 	})
+
+	ginkgo.It("synthesises the verify step's envelope from the report", func() {
+		prepared.class = types.ModeVerify
+		passed := true
+		report := &api.VerifyReport{Ran: true, Passed: false, Reason: "1 of 2 criteria failed",
+			Checklist: []api.VerifyChecklistItem{{Item: "Greets", Passed: &passed}, {Item: "Formats"}}}
+		out := host.collect(Step{Name: StepVerify, Events: VerifyEvents}, prepared,
+			dispatched{out: promptrun.Result{Report: report}, execution: execution}, time.Now())
+
+		gomega.Expect(out.Result.Envelope).To(gomega.Equal(Envelope{
+			Success: false, Event: "failed", Comment: "1 of 2 criteria failed\n\n- [x] Greets\n- [ ] Formats",
+		}))
+	})
 })
+
+func toolNamed(defs []api.ToolDefinition, name string) api.ToolDefinition {
+	for _, def := range defs {
+		if def.Name == name {
+			return def
+		}
+	}
+	ginkgo.Fail("no tool named " + name)
+	return api.ToolDefinition{}
+}

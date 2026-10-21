@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/flanksource/gavel/internal/safefs"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -119,7 +121,7 @@ var _ = Describe("ensureBareRepo", func() {
 	It("initializes a bare git repo", func() {
 		tmpDir, err := os.MkdirTemp("", "gavel-bare-*")
 		Expect(err).NotTo(HaveOccurred())
-		defer os.RemoveAll(tmpDir)
+		defer safefs.SafeRemove(tmpDir, safefs.RemoveContext{AllowedRoot: os.TempDir()})
 
 		repoPath := filepath.Join(tmpDir, "test.git")
 		err = ensureBareRepo(repoPath)
@@ -133,7 +135,7 @@ var _ = Describe("ensureBareRepo", func() {
 	It("is idempotent", func() {
 		tmpDir, err := os.MkdirTemp("", "gavel-bare-*")
 		Expect(err).NotTo(HaveOccurred())
-		defer os.RemoveAll(tmpDir)
+		defer safefs.SafeRemove(tmpDir, safefs.RemoveContext{AllowedRoot: os.TempDir()})
 
 		repoPath := filepath.Join(tmpDir, "test.git")
 		Expect(ensureBareRepo(repoPath)).To(Succeed())
@@ -145,7 +147,7 @@ var _ = Describe("loadOrGenerateHostKey", func() {
 	It("generates and persists a host key", func() {
 		tmpDir, err := os.MkdirTemp("", "gavel-key-*")
 		Expect(err).NotTo(HaveOccurred())
-		defer os.RemoveAll(tmpDir)
+		defer safefs.SafeRemove(tmpDir, safefs.RemoveContext{AllowedRoot: os.TempDir()})
 
 		keyPath := filepath.Join(tmpDir, "host_key")
 		signer, err := loadOrGenerateHostKey(keyPath)

@@ -25,13 +25,12 @@ func Sections(todoList []*types.TODO, workDir string, rawFixture bool) string {
 		if len(todoList) > 1 {
 			number = i + 1
 		}
-		body.WriteString(buildTODOSection(todo, workDir, true, number, rawFixture))
+		body.WriteString(buildTODOSection(todo, workDir, number, rawFixture))
 	}
 	return body.String()
 }
 
-// buildTODOSection renders one TODO. grouped omits the per-todo PR context (the
-// group framing carries it instead); number, when > 0, prefixes the heading with
+// buildTODOSection renders one TODO. number, when > 0, prefixes the heading with
 // its position in the list so multi-todo runs read as a numbered checklist.
 //
 // rawFixture renders the verification section as its literal fixture source
@@ -40,30 +39,11 @@ func Sections(todoList []*types.TODO, workDir string, rawFixture bool) string {
 // what it cannot see: the frontmatter, the CEL predicate, and the yaml step
 // structure are exactly what is being assessed, and the command projection
 // discards all three.
-func buildTODOSection(todo *types.TODO, workDir string, grouped bool, number int, rawFixture bool) string {
+func buildTODOSection(todo *types.TODO, workDir string, number int, rawFixture bool) string {
 	var section string
 
 	if todo.Prompt != "" {
 		section += fmt.Sprintf("## Prompt\n\n%s\n\n", todo.Prompt)
-	}
-
-	if !grouped && todo.PR != nil {
-		section += "## PR Context\n\n"
-		if todo.PR.URL != "" {
-			section += fmt.Sprintf("- **PR:** [#%d](%s)\n", todo.PR.Number, todo.PR.URL)
-		} else if todo.PR.Number > 0 {
-			section += fmt.Sprintf("- **PR:** #%d\n", todo.PR.Number)
-		}
-		if todo.PR.Head != "" {
-			section += fmt.Sprintf("- **Branch:** `%s` → `%s`\n", todo.PR.Head, todo.PR.Base)
-		}
-		if todo.PR.CommentAuthor != "" {
-			section += fmt.Sprintf("- **Reviewer:** %s\n", todo.PR.CommentAuthor)
-		}
-		if todo.PR.CommentURL != "" {
-			section += fmt.Sprintf("- **Comment:** %s\n", todo.PR.CommentURL)
-		}
-		section += "\n"
 	}
 
 	heading := todo.Title
@@ -77,6 +57,8 @@ func buildTODOSection(todo *types.TODO, workDir string, grouped bool, number int
 			section += fmt.Sprintf("## %s\n\n", heading)
 		}
 	}
+
+	section += buildLinkedPRSection(todo.PR)
 
 	if rawFixture {
 		section += buildCurrentStateSection(todo)
@@ -116,6 +98,35 @@ func buildTODOSection(todo *types.TODO, workDir string, grouped bool, number int
 	section += buildVerificationSection(todo, rawFixture)
 
 	return section
+}
+
+// buildLinkedPRSection renders the PR a TODO is linked to, for every prompt
+// class: a run works on its branch, and a plan or triage run must see the link
+// it is told to preserve. The origin review comment, when the TODO came from
+// one, names the feedback this TODO is scoped to among everything on the PR.
+// Live PR status is not rendered here; the prompt.context hook points the agent
+// at `gavel pr status` instead.
+func buildLinkedPRSection(pr *types.PR) string {
+	if pr == nil {
+		return ""
+	}
+	section := "## Linked PR\n\n"
+	if pr.URL != "" {
+		section += fmt.Sprintf("- **PR:** [#%d](%s)\n", pr.Number, pr.URL)
+	} else {
+		section += fmt.Sprintf("- **PR:** #%d\n", pr.Number)
+	}
+	if pr.Head != "" {
+		section += fmt.Sprintf("- **Branch:** `%s` → `%s`\n", pr.Head, pr.Base)
+	}
+	if pr.CommentURL != "" {
+		author := pr.CommentAuthor
+		if author == "" {
+			author = "unknown"
+		}
+		section += fmt.Sprintf("- This TODO addresses the review comment by %s: %s\n", author, pr.CommentURL)
+	}
+	return section + "\n"
 }
 
 // buildCurrentStateSection renders the state a triage or merge run is asked to

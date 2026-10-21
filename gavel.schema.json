@@ -1959,7 +1959,7 @@
         },
         "tidy": {
           "additionalProperties": false,
-          "description": "Controls whether `gavel commit` runs `go mod tidy` in every Go module and stages the resulting go.mod/go.sum changes. CLI flag --tidy overrides per invocation.",
+          "description": "Controls whether `gavel commit` runs `go mod tidy` in every Go module whose go.mod is staged and stages the resulting go.mod/go.sum changes. CLI flag --tidy overrides per invocation.",
           "properties": {
             "enabled": {
               "description": "Toggle the tidy step. Omit to run it only when pushing (`gavel commit -p`).",

@@ -36,12 +36,7 @@ import (
 //
 // Any error at steps 1–3 aborts the handoff; the caller logs the warning and
 // returns normally so the test exit code is still the real signal.
-func handoffDetachedUI(
-	listener net.Listener,
-	snapshot testui.Snapshot,
-	autoStop time.Duration,
-	idleTimeout time.Duration,
-) error {
+func handoffDetachedUI(listener net.Listener, snapshot testui.Snapshot, opts detachedUIOptions) error {
 	if listener == nil {
 		return fmt.Errorf("no UI listener to hand off")
 	}
@@ -92,12 +87,15 @@ func handoffDetachedUI(
 		return fmt.Errorf("open serve log: %w", err)
 	}
 
-	cmd := exec.Command(self, "ui", "serve",
+	args := []string{"ui", "serve",
 		fmt.Sprintf("--listener-fd=%d", childListenerFD),
-		fmt.Sprintf("--auto-stop=%s", durationOrDefault(autoStop, 30*time.Minute)),
-		fmt.Sprintf("--idle-timeout=%s", durationOrDefault(idleTimeout, 5*time.Minute)),
-		resultsPath,
-	)
+		fmt.Sprintf("--auto-stop=%s", durationOrDefault(opts.AutoStop, 30*time.Minute)),
+		fmt.Sprintf("--idle-timeout=%s", durationOrDefault(opts.IdleTimeout, 5*time.Minute)),
+	}
+	if opts.Dev {
+		args = append(args, "--dev")
+	}
+	cmd := exec.Command(self, append(args, resultsPath)...)
 	cmd.ExtraFiles = []*os.File{listenerFile}
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile

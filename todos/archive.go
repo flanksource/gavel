@@ -60,12 +60,12 @@ func (o ChildrenOutcome) String() string {
 	}
 	refs := make([]string, 0, len(o.Children))
 	for _, child := range o.Children {
-		refs = append(refs, triageRef(child))
+		refs = append(refs, RefOf(child))
 	}
 	what := "made top-level TODOs"
 	switch {
 	case o.Adopter != nil:
-		what = "moved to " + triageRef(o.Adopter)
+		what = "moved to " + RefOf(o.Adopter)
 	case o.Disposition == ChildrenArchive:
 		what = "archived too"
 	}
@@ -103,13 +103,13 @@ func SettleChildren(ctx context.Context, provider Provider, todo *types.TODO, op
 	}
 	// An empty ParentID filters nothing, which would settle the whole backlog.
 	if strings.TrimSpace(todo.ID) == "" {
-		return ChildrenOutcome{}, fmt.Errorf("%s has no id to look its children up by", triageRef(todo))
+		return ChildrenOutcome{}, fmt.Errorf("%s has no id to look its children up by", RefOf(todo))
 	}
 	children, err := provider.List(ctx, DiscoveryFilters{
 		ParentID: todo.ID, ExcludeStatuses: []types.Status{types.StatusCompleted},
 	})
 	if err != nil {
-		return ChildrenOutcome{}, fmt.Errorf("list the open children of %s: %w", triageRef(todo), err)
+		return ChildrenOutcome{}, fmt.Errorf("list the open children of %s: %w", RefOf(todo), err)
 	}
 	if len(children) == 0 {
 		return ChildrenOutcome{}, nil
@@ -124,7 +124,7 @@ func SettleChildren(ctx context.Context, provider Provider, todo *types.TODO, op
 			continue
 		}
 		if err := settleChild(ctx, provider, child, outcome); err != nil {
-			return outcome, fmt.Errorf("settle child %s of %s: %w", triageRef(child), triageRef(todo), err)
+			return outcome, fmt.Errorf("settle child %s of %s: %w", RefOf(child), RefOf(todo), err)
 		}
 		outcome.Children = append(outcome.Children, child)
 	}
@@ -146,7 +146,7 @@ func childrenAdopter(ctx context.Context, provider Provider, retired, survivor *
 	if survivor.ParentID != "" && survivor.ParentID != retired.ID {
 		parent, err := provider.Get(ctx, survivor.ParentID)
 		if err != nil {
-			return nil, fmt.Errorf("resolve the parent of %s: %w", triageRef(survivor), err)
+			return nil, fmt.Errorf("resolve the parent of %s: %w", RefOf(survivor), err)
 		}
 		adopter = parent
 	}
@@ -158,7 +158,7 @@ func childrenAdopter(ctx context.Context, provider Provider, retired, survivor *
 	}
 	if err := setParent(ctx, provider, survivor, ""); err != nil {
 		return nil, fmt.Errorf("make %s top-level so it can take the children of %s: %w",
-			triageRef(survivor), triageRef(retired), err)
+			RefOf(survivor), RefOf(retired), err)
 	}
 	return survivor, nil
 }
@@ -179,7 +179,7 @@ func settleChild(ctx context.Context, provider Provider, child *types.TODO, outc
 func setParent(ctx context.Context, provider Provider, todo *types.TODO, parentRef string) error {
 	parents, ok := provider.(ParentProvider)
 	if !ok {
-		return fmt.Errorf("this TODO provider has no hierarchy to move %s in", triageRef(todo))
+		return fmt.Errorf("this TODO provider has no hierarchy to move %s in", RefOf(todo))
 	}
 	return parents.SetParent(ctx, todo, parentRef)
 }

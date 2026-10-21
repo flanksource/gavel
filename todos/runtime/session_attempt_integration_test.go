@@ -8,7 +8,6 @@ import (
 	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/captain/pkg/promptrun"
 	"github.com/flanksource/gavel/todos"
-	"github.com/flanksource/gavel/todos/lifecycle"
 	"github.com/flanksource/gavel/todos/native"
 	"github.com/flanksource/gavel/todos/run"
 	"github.com/flanksource/gavel/todos/runtime/runtimetest"
@@ -17,7 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// A run step that verified its own work and then asked is listed by the phase
+// A run step that verified its own work and then waited on a todo_ask is listed by the phase
 // index under both run and verify: one waiting run, two phases. Resolving the
 // asking session must name the run step that link was dispatched for, which is
 // the step an answer in that session resumes.
@@ -32,10 +31,6 @@ func TestSessionAttemptResolvesRunStepThatReachedVerification(t *testing.T) {
 	node := api.VerifyNode{Name: "go test ./...", Failed: true}
 	report := api.NewNodeReport(api.VerifyKindFixture, "fixture", node)
 	report.Ran, report.Iteration = true, 1
-	asked := &todos.ExecutionResult{
-		Success: true, ExecutorName: "headless-codex", EndStatus: types.EndAsk, Summary: "which fixture should pass?",
-		OutputJSON: map[string]any{"summary": "which fixture should pass?", "endStatus": "ask"},
-	}
 	preparation, err := runtimetest.Admit(t.Context(), provider, todo, todos.RunPreparation{
 		Mode: types.ModeRun, ExecutorName: "headless-codex",
 		Requested: captaindb.PromptRunRuntimeSelection{Provider: "openai", Mode: "agent", Model: "gpt-5.6-sol", Effort: "high"},
@@ -44,12 +39,10 @@ func TestSessionAttemptResolvesRunStepThatReachedVerification(t *testing.T) {
 		Iterations: promptrun.IterationRecords(promptrun.Result{
 			Verdicts: []agent.VerifyResult{{Iteration: 1, Report: &report}}, Report: &report,
 		}, false),
-		Outcome: lifecycle.RunOutcome(asked, false),
+		Outcome: promptrun.Outcome{State: captaindb.PromptRunStateWaiting, Phase: captaindb.PromptRunPhaseGenerate},
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() { provider.ownership.stop(preparation.PromptRunID) })
-	todo.Attempts = 1
-	require.NoError(t, provider.SaveAttempt(t.Context(), todo, asked))
 
 	issueID := mustUUID(t, todo.ID)
 	phaseRuns, err := provider.Repository().ListIssuePhaseRuns(t.Context(), provider.workspace.ID)

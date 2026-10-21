@@ -114,8 +114,8 @@ func TestDashboardRunToolPreferences(t *testing.T) {
 		// permissions.mode runs what todos-run.prompt declares. Only a mode picked in
 		// the run dialog overrides it (see "valid prefs and permission mode are
 		// threaded"). Whatever that mode still asks about goes to the broker.
-		if policy := spec.Permissions.Tools.Policies()["Bash"]; policy != "" || spec.Permissions.Mode != api.PermissionAcceptEdits {
-			t.Fatalf("want an unpoliced Bash and the prompt's acceptEdits posture, got %v / %q", spec.Permissions.Tools, spec.Permissions.Mode)
+		if policy := spec.Permissions.Tools.Policies()["Bash"]; policy != "" || spec.Permissions.Mode != api.PermissionAuto {
+			t.Fatalf("want an unpoliced Bash and the prompt's auto posture, got %v / %q", spec.Permissions.Tools, spec.Permissions.Mode)
 		}
 	})
 

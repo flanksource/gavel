@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/flanksource/gavel/internal/safefs"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
@@ -132,7 +134,7 @@ var _ = Describe("runInteractiveBatch", func() {
 	DescribeTable("collects every batch before generating messages or committing",
 		func(dryRun bool, expectedCommitCount string) {
 			repo := initCommitRepoForGinkgo()
-			DeferCleanup(func() { Expect(os.RemoveAll(repo)).To(Succeed()) })
+			DeferCleanup(func() { Expect(safefs.SafeRemove(repo, safefs.RemoveContext{AllowedRoot: os.TempDir()})).To(Succeed()) })
 			writeRepoFile(repo, "one.go", "package one\n")
 			writeRepoFile(repo, "two.go", "package two\n")
 
@@ -190,7 +192,7 @@ var _ = Describe("runInteractiveBatch", func() {
 	It("does not push or hide a later empty batch after an earlier commit", func() {
 		repo := initCommitRepoForGinkgo()
 		gitOutputForGinkgo(repo, "remote", "add", "origin", "https://github.com/acme/service.git")
-		DeferCleanup(func() { Expect(os.RemoveAll(repo)).To(Succeed()) })
+		DeferCleanup(func() { Expect(safefs.SafeRemove(repo, safefs.RemoveContext{AllowedRoot: os.TempDir()})).To(Succeed()) })
 		writeRepoFile(repo, "one.go", "package one\n")
 
 		restore := installOrchestratorStubs()
@@ -238,7 +240,7 @@ var _ = Describe("runInteractiveBatch", func() {
 
 	It("fails rather than AI-regrouping an authoritative batch", func() {
 		repo := initCommitRepoForGinkgo()
-		DeferCleanup(func() { Expect(os.RemoveAll(repo)).To(Succeed()) })
+		DeferCleanup(func() { Expect(safefs.SafeRemove(repo, safefs.RemoveContext{AllowedRoot: os.TempDir()})).To(Succeed()) })
 		writeRepoFile(repo, "one.go", "package one\n")
 		writeRepoFile(repo, "two.go", "package two\n")
 		gitOutputForGinkgo(repo, "add", "one.go", "two.go")

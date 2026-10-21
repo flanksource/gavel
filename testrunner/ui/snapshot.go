@@ -8,6 +8,7 @@ import (
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/testrunner/bench"
 	"github.com/flanksource/gavel/testrunner/parsers"
+	"github.com/flanksource/gavel/traces"
 )
 
 type SnapshotMetadata struct {
@@ -22,6 +23,10 @@ type SnapshotMetadata struct {
 	Frameworks []string       `json:"frameworks,omitempty"` // test frameworks scheduled for the run (go test, ginkgo, …)
 	ExitCode   *int           `json:"exit_code,omitempty"`  // final exit code once the run completes; nil while running
 	TimedOut   bool           `json:"timed_out,omitempty"`  // true when the global --timeout fired during the run
+	RunID      string         `json:"run_id,omitempty"`     // the run's trace store, .gavel/traces/<run_id>; empty when the run opened none
+	// ProcessTrace names the run's process capture in its trace store; nil
+	// when the run was not watched.
+	ProcessTrace *traces.ProcessRefs `json:"process_trace,omitempty"`
 }
 
 type SnapshotGit struct {
@@ -31,13 +36,15 @@ type SnapshotGit struct {
 }
 
 type SnapshotStatus struct {
-	Running              bool   `json:"running"`
-	LintRun              bool   `json:"lint_run,omitempty"`
-	DiagnosticsAvailable bool   `json:"diagnostics_available,omitempty"`
-	StopSupported        bool   `json:"stop_supported,omitempty"`
-	TestEditSupported    bool   `json:"test_edit_supported"`
-	Stopped              bool   `json:"stopped,omitempty"`
-	StopMessage          string `json:"stop_message,omitempty"`
+	Running bool `json:"running"`
+	LintRun bool `json:"lint_run,omitempty"`
+	// Traces is the run's trace store as the UI reaches it; nil when the run
+	// kept none.
+	Traces            *TracesStatus `json:"traces,omitempty"`
+	StopSupported     bool          `json:"stop_supported,omitempty"`
+	TestEditSupported bool          `json:"test_edit_supported"`
+	Stopped           bool          `json:"stopped,omitempty"`
+	StopMessage       string        `json:"stop_message,omitempty"`
 }
 
 type Snapshot struct {
@@ -49,10 +56,9 @@ type Snapshot struct {
 	Bench            *bench.BenchComparison         `json:"bench,omitempty"`
 	FixtureBenchmark *FixtureBenchmarkState         `json:"fixture_benchmark,omitempty"`
 	Performance      *fixtures.BenchmarkPerformance `json:"performance,omitempty"`
-	Diagnostics      *DiagnosticsSnapshot           `json:"diagnostics,omitempty"`
 
 	// Error explains why the run produced no (or only partial) results — a
-	// pre-build failure, a timeout, a crashed runner. Consumers treat a
+	// setup failure, a timeout, a crashed runner. Consumers treat a
 	// snapshot with Error and no Tests/Lint as a crash envelope rather than
 	// an empty run. LogTail carries the captured stderr tail when the
 	// producer has one; gavel itself leaves it empty (it uploads gavel.log
@@ -91,6 +97,10 @@ func cloneSnapshotMetadata(meta *SnapshotMetadata) *SnapshotMetadata {
 	}
 	if meta.Frameworks != nil {
 		cloned.Frameworks = append([]string(nil), meta.Frameworks...)
+	}
+	if meta.ProcessTrace != nil {
+		process := *meta.ProcessTrace
+		cloned.ProcessTrace = &process
 	}
 	if meta.ExitCode != nil {
 		code := *meta.ExitCode

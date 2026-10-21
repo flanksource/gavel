@@ -1,0 +1,52 @@
+---
+title: Vale
+description: Prose and documentation style rules.
+parent: lint-execution
+order: 9
+---
+
+import { SchemaReference } from "@flanksource/clicky-ui/data";
+import schema from "../../../gavel.schema.json";
+
+## Detection and native configuration
+
+Detection input: `.vale.ini`. Explicit selection pins this tool; matching source files and an available executable are still required. Inspect planned commands before execution:
+
+```bash
+gavel lint vale --dry-run
+gavel lint vale
+gavel lint vale --changed
+```
+
+Vocabulary, styles, and per-format rules belong in Vale configuration. Vale findings identify the file and rule; the adapter does not provide native fixes.
+
+## Configure execution
+
+```yaml
+lint:
+  linters:
+    vale:
+      enabled: true
+      runtime:
+        timeout: 2m
+        mem: 1GiB
+```
+
+`lint.linters.vale.args` supplies native tool arguments. Process settings inherit from `runtime` and `lint.runtime`; explicit invocation settings take precedence. Native rule configuration is separate from these Gavel orchestration fields.
+
+## Findings and reruns
+
+```bash
+mkdir -p .tmp
+gavel lint vale --format "json=.tmp/vale.json,markdown=.tmp/vale.md"
+gavel lint vale --failed
+```
+
+Standalone lint JSON is an array of tool results. For an explicit rerun or baseline, save the snapshot named by `.gavel/last.json`, as shown in [Reporting](/docs/reporting). Changed and baseline filters affect which findings are reported, and do not necessarily narrow native analysis to the same files. See [Lint execution](/docs/lint-execution) for common filters and repair behavior.
+
+## Linter configuration reference
+
+These fields configure `lint.linters.vale`; rule names and native options are owned by the tool. The [adapter source](https://github.com/flanksource/gavel/blob/main/linters/vale/vale.go) defines Gavel's integration.
+
+<SchemaReference schema={schema.properties.lint.properties.linters.additionalProperties} id="linter-vale" />
+

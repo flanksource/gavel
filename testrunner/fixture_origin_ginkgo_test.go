@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 
 	"github.com/flanksource/clicky/task"
+	"github.com/flanksource/commons-db/tracing"
 	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/testrunner/parsers"
 	. "github.com/onsi/ginkgo/v2"
@@ -55,6 +56,19 @@ var _ = Describe("fixture test projection", func() {
 			CELExpression: "actual == expected",
 			CELTrace:      trace,
 		}))
+	})
+
+	It("projects the fixture's trace windows into its context", func() {
+		windows := []parsers.TraceResult{{
+			TraceRef: tracing.TraceRef{Kind: "http_proxy", Stream: "s1", AfterSeq: 3, ToSeq: 7},
+			Count:    4, Summary: map[string]any{"count": 4},
+		}}
+		node := &fixtures.FixtureNode{
+			Name: "traced", Type: fixtures.TestNode,
+			Results: &fixtures.FixtureResult{Status: task.StatusPASS, Traces: windows},
+		}
+
+		Expect(fixtureNodeToTests(node)[0].Context).To(Equal(parsers.FixtureContext{Traces: windows}))
 	})
 
 	It("projects recorded fixture resource peaks onto the test", func() {

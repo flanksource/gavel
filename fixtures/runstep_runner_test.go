@@ -28,7 +28,7 @@ func TestFails(t *testing.T) { t.Fatal("intentional failure") }
 `)
 	fixturePath := filepath.Join(dir, "steps.md")
 	writeFile(t, fixturePath, "# Steps\n\n## Run sample\n\n"+
-		"```yaml test\npaths: [.]\nframework: [go]\nshow-passed: true\npre-build: false\ntest-timeout: 60s\n```\n")
+		"```yaml test\npaths: [.]\nframework: [go]\nshow-passed: true\ntest-timeout: 60s\n```\n")
 
 	runner, err := fixtures.NewRunner(fixtures.RunnerOptions{
 		Paths:   []string{fixturePath},
@@ -78,7 +78,7 @@ func TestFails(t *testing.T) { t.Fatal("intentional failure") }
 `)
 	fixturePath := filepath.Join(dir, "steps.md")
 	writeFile(t, fixturePath, "# Steps\n\n## Run sample\n\n"+
-		"```yaml test\npaths: [.]\nframework: [go]\npre-build: false\ntest-timeout: 60s\n```\n")
+		"```yaml test\npaths: [.]\nframework: [go]\ntest-timeout: 60s\n```\n")
 
 	runner, err := fixtures.NewRunner(fixtures.RunnerOptions{Paths: []string{fixturePath}, WorkDir: dir})
 	if err != nil {

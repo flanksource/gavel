@@ -4,9 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
-	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -17,7 +14,7 @@ import (
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/testrunner/bench"
 	"github.com/flanksource/gavel/testrunner/parsers"
-	gopsutilProcess "github.com/shirou/gopsutil/v4/process"
+	"github.com/flanksource/gavel/traces"
 )
 
 type Server struct {
@@ -34,14 +31,17 @@ type Server struct {
 	// replayed marks a server hydrated from a static JSON snapshot
 	// (LoadSnapshot). Its results are fixed, so snapshot() must not consult
 	// the process-global clicky task registry — there is no live run behind it.
-	replayed            bool
-	metadata            *SnapshotMetadata
-	git                 *SnapshotGit
-	embeddedDiagnostics *DiagnosticsSnapshot
-	updated             chan struct{}
-	gitRoot             string
-	profileRoot         string
-	diag                *DiagnosticsManager
+	replayed  bool
+	metadata  *SnapshotMetadata
+	git       *SnapshotGit
+	updated   chan struct{}
+	gitRoot   string
+	traceRuns map[string]*servedTraces
+	// processSessions are the running process capture's sessions, nil once
+	// the run ended.
+	processSessions *traces.ProcessSessions
+	// devProxy, when set, serves the page from a Vite dev server (SetDevProxy).
+	devProxy http.Handler
 
 	rerunMu       sync.Mutex
 	rerunFn       RerunFunc
@@ -55,12 +55,6 @@ func NewServer() *Server {
 	return &Server{
 		updated: make(chan struct{}, 1),
 	}
-}
-
-func (s *Server) SetProfileRoot(root string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.profileRoot = filepath.Clean(root)
 }
 
 func (s *Server) BeginRun(kind string) {
@@ -154,12 +148,6 @@ func (s *Server) SetGitInfo(git *SnapshotGit) {
 	}
 }
 
-func (s *Server) SetEmbeddedDiagnostics(snapshot *DiagnosticsSnapshot) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.embeddedDiagnostics = cloneDiagnosticsSnapshot(snapshot)
-}
-
 func (s *Server) LoadSnapshot(snapshot Snapshot) {
 	s.mu.Lock()
 	s.tests = snapshot.Tests
@@ -172,7 +160,6 @@ func (s *Server) LoadSnapshot(snapshot Snapshot) {
 	s.logTail = snapshot.LogTail
 	s.metadata = cloneSnapshotMetadata(snapshot.Metadata)
 	s.git = cloneSnapshotGit(snapshot.Git)
-	s.embeddedDiagnostics = cloneDiagnosticsSnapshot(snapshot.Diagnostics)
 	s.done = !snapshot.Status.Running
 	s.replayed = true
 	s.stopRequested = snapshot.Status.Stopped
@@ -330,11 +317,9 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleRoute)
 	mux.HandleFunc("/api/tests", s.handleJSON)
-	mux.HandleFunc("/api/tests/fixture-profile", s.handleFixtureProfile)
 	mux.HandleFunc("/api/tests/stream", s.handleSSE)
-	mux.HandleFunc("/api/diagnostics", s.handleDiagnosticsJSON)
-	mux.HandleFunc("/api/diagnostics/collect", s.handleDiagnosticsCollect)
-	mux.HandleFunc("/api/process/metrics", s.handleProcessMetrics)
+	mux.HandleFunc(QueryMount, s.handleTraces)
+	mux.HandleFunc(QueryMount+"/", s.handleTraces)
 	mux.HandleFunc("/api/rerun", s.handleRerun)
 	mux.HandleFunc("/api/rerun/stream", s.handleRerunStream)
 	mux.HandleFunc("/api/stop", s.handleStop)
@@ -342,67 +327,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/tests/edit", s.handleTestEdit)
 	mux.HandleFunc("/api/benchmarks", s.handleBenchJSON)
 	return mux
-}
-
-func (s *Server) handleFixtureProfile(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "GET required", http.StatusMethodNotAllowed)
-		return
-	}
-	id := r.URL.Query().Get("id")
-	rel := filepath.FromSlash(id)
-	if !filepath.IsLocal(rel) || id == "." {
-		http.Error(w, "invalid profile ID", http.StatusBadRequest)
-		return
-	}
-	s.mu.RLock()
-	root := s.profileRoot
-	path := filepath.Join(root, ".gavel", "profiles", "fixtures", rel)
-	known := false
-	var visit func([]parsers.Test)
-	visit = func(tests []parsers.Test) {
-		for _, test := range tests {
-			for _, artifact := range test.GoProfiles {
-				known = known || artifact.Status == "captured" && artifact.ID == id && filepath.Clean(artifact.Path) == path
-			}
-			visit(test.Children)
-		}
-	}
-	visit(s.tests)
-	if s.fixtureBenchmark != nil && s.fixtureBenchmark.Report != nil {
-		for _, entry := range s.fixtureBenchmark.Report.Fixtures {
-			for _, artifact := range entry.GoProfiles {
-				known = known || artifact.Status == "captured" && artifact.ID == id && filepath.Clean(artifact.Path) == path
-			}
-		}
-	}
-	s.mu.RUnlock()
-	if root == "" || !known {
-		http.NotFound(w, r)
-		return
-	}
-	base, err := filepath.EvalSymlinks(filepath.Join(root, ".gavel", "profiles", "fixtures"))
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
-	resolved, err := filepath.EvalSymlinks(path)
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
-	if rel, err := filepath.Rel(base, resolved); err != nil || !filepath.IsLocal(rel) || rel == "." {
-		http.Error(w, "profile path escapes artifact store", http.StatusBadRequest)
-		return
-	}
-	info, err := os.Lstat(path)
-	if err != nil || !info.Mode().IsRegular() {
-		http.NotFound(w, r)
-		return
-	}
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filepath.Base(path)))
-	w.Header().Set("Content-Type", "application/octet-stream")
-	http.ServeFile(w, r, path)
 }
 
 func (s *Server) handleBenchJSON(w http.ResponseWriter, _ *http.Request) {
@@ -418,13 +342,17 @@ func (s *Server) handleBenchJSON(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) handleRoute(w http.ResponseWriter, r *http.Request) {
+	if proxy := s.devProxyHandler(); proxy != nil {
+		s.serveDev(w, r, proxy)
+		return
+	}
 	req, ok := parseRouteRequest(r)
 	if !ok {
 		http.NotFound(w, r)
 		return
 	}
 	if req.IsExport {
-		if req.Tab == viewTabDiagnostics {
+		if req.Tab == viewTabProcesses {
 			http.NotFound(w, r)
 			return
 		}
@@ -463,8 +391,6 @@ func pageHTML() string {
 						api.HtmlElement{Tag: "meta", Attributes: map[string]string{"charset": "UTF-8"}},
 						api.HtmlElement{Tag: "meta", Attributes: map[string]string{"name": "viewport", "content": "width=device-width, initial-scale=1.0"}},
 						api.HtmlElement{Tag: "title", Content: "Test Results"},
-						api.HtmlElement{Tag: "script", Attributes: map[string]string{"src": "https://cdn.tailwindcss.com"}},
-						api.HtmlElement{Tag: "script", Attributes: map[string]string{"src": "https://code.iconify.design/iconify-icon/2.0.0/iconify-icon.min.js"}},
 					),
 				},
 				api.HtmlElement{
@@ -547,13 +473,13 @@ func (s *Server) snapshot() Snapshot {
 		Metadata: cloneSnapshotMetadata(s.metadata),
 		Git:      cloneSnapshotGit(s.git),
 		Status: SnapshotStatus{
-			Running:              running,
-			LintRun:              s.lintRun,
-			DiagnosticsAvailable: s.diag != nil || s.embeddedDiagnostics != nil,
-			StopSupported:        s.stopFn != nil,
-			TestEditSupported:    s.testEditSupportedLocked(),
-			Stopped:              stopped,
-			StopMessage:          stopMessage,
+			Running:           running,
+			LintRun:           s.lintRun,
+			Traces:            s.tracesStatusLocked(),
+			StopSupported:     s.stopFn != nil,
+			TestEditSupported: s.testEditSupportedLocked(),
+			Stopped:           stopped,
+			StopMessage:       stopMessage,
 		},
 		Tests:            tests,
 		Lint:             s.lint,
@@ -562,7 +488,6 @@ func (s *Server) snapshot() Snapshot {
 		Performance:      s.performance,
 		Error:            s.runError,
 		LogTail:          s.logTail,
-		Diagnostics:      cloneDiagnosticsSnapshot(s.embeddedDiagnostics),
 	}
 }
 
@@ -707,116 +632,4 @@ func tasksDone() bool {
 	}
 
 	return true
-}
-
-func (s *Server) EnableDiagnostics(rootPID int) {
-	s.mu.Lock()
-	s.diag = NewDiagnosticsManager(rootPID, nil)
-	s.mu.Unlock()
-	s.notify()
-}
-
-func (s *Server) SetDiagnosticsManager(manager *DiagnosticsManager) {
-	s.mu.Lock()
-	s.diag = manager
-	s.mu.Unlock()
-	s.notify()
-}
-
-func (s *Server) diagnosticsManager() *DiagnosticsManager {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.diag
-}
-
-func (s *Server) handleDiagnosticsJSON(w http.ResponseWriter, _ *http.Request) {
-	manager := s.diagnosticsManager()
-	if manager == nil {
-		s.mu.RLock()
-		embedded := cloneDiagnosticsSnapshot(s.embeddedDiagnostics)
-		s.mu.RUnlock()
-		if embedded != nil {
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(embedded) //nolint:errcheck
-			return
-		}
-		http.Error(w, "diagnostics unavailable", http.StatusNotFound)
-		return
-	}
-	snapshot, err := manager.Snapshot()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(snapshot) //nolint:errcheck
-}
-
-func (s *Server) handleDiagnosticsCollect(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	manager := s.diagnosticsManager()
-	if manager == nil {
-		http.NotFound(w, r)
-		return
-	}
-
-	var req StackCaptureRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid json: "+err.Error(), http.StatusBadRequest)
-		return
-	}
-	if req.PID == 0 {
-		http.Error(w, "pid is required", http.StatusBadRequest)
-		return
-	}
-
-	details, err := manager.CollectStack(req.PID)
-	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
-			http.Error(w, err.Error(), http.StatusNotFound)
-			return
-		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	s.notify()
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(details) //nolint:errcheck
-}
-
-// handleProcessMetrics returns live CPU/memory/file-descriptor stats for a
-// given PID so the UI can render metrics next to a running test when the
-// user clicks it. Returns 404 when the process has already exited so the
-// frontend can distinguish "still alive" from "gone".
-func (s *Server) handleProcessMetrics(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	pidStr := r.URL.Query().Get("pid")
-	pid, err := strconv.ParseInt(pidStr, 10, 32)
-	if err != nil || pid <= 0 {
-		http.Error(w, "pid query param required and must be a positive 32-bit integer", http.StatusBadRequest)
-		return
-	}
-	proc, err := gopsutilProcess.NewProcess(int32(pid))
-	if err != nil {
-		http.Error(w, "process not found", http.StatusNotFound)
-		return
-	}
-	running, _ := proc.IsRunning()
-	if !running {
-		http.Error(w, "process not running", http.StatusNotFound)
-		return
-	}
-	node, err := snapshotProcess(proc, false)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(node) //nolint:errcheck
 }

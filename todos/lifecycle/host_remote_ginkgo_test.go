@@ -36,7 +36,7 @@ func (l *loopbackRunner) Run(ctx context.Context, run lifecycle.RemoteRun) (prom
 	Expect(err).NotTo(HaveOccurred())
 	var hooks lifecycle.RunHooks
 	Expect(json.Unmarshal(data, &hooks)).To(Succeed(), "the hook data crosses to the sandbox as JSON")
-	built, err := hooks.Build()
+	built, _, err := hooks.Build()
 	Expect(err).NotTo(HaveOccurred())
 	in := promptrun.Input{
 		Resolved: run.Input.Resolved, Config: run.Input.Config, Provider: l.agent,
@@ -79,7 +79,7 @@ var _ = Describe("a host whose runs execute elsewhere", func() {
 	})
 
 	It("hands the run and its hook data to the runner and classifies the result", func() {
-		runner := &loopbackRunner{agent: &scriptedProvider{events: scriptedTurn(`{"summary":"Built it.","endStatus":"completed"}`, true)}}
+		runner := &loopbackRunner{agent: &scriptedProvider{events: scriptedTurn(`{"success":true,"event":"completed","comment":"Built it."}`, true)}}
 		host.Remote = runner
 		todo := hostTodo()
 
@@ -102,8 +102,11 @@ var _ = Describe("a host whose runs execute elsewhere", func() {
 		// A file that exists on serve, which a run elsewhere must not get serve to read.
 		onServe := filepath.Join(GinkgoT().TempDir(), "secrets.md")
 		Expect(os.WriteFile(onServe, []byte("serve's own file"), 0o600)).To(Succeed())
-		host.Remote = &loopbackRunner{agent: &scriptedProvider{events: scriptedTurn(
-			`{"summary":"Planned it.","endStatus":"completed","planStatus":"new","planPath":"`+onServe+`","planContent":"# the plan"}`, true)}}
+		host.Remote = &loopbackRunner{agent: &scriptedProvider{events: []captainai.Event{
+			{Kind: captainai.EventSystem, SessionID: "sess-scripted"},
+			{Kind: captainai.EventToolUse, Tool: "ExitPlanMode", Input: map[string]any{"plan": "# the plan", "planFilePath": onServe}},
+			{Kind: captainai.EventResult, Success: true, Usage: &api.Usage{InputTokens: 7, OutputTokens: 3}, CostUSD: 0.25},
+		}}}
 
 		outcome, err := host.RunStep(ctx, hostTodo(), stepNamed(host.Def, "plan"), lifecycle.RunOptions{})
 
@@ -175,6 +178,7 @@ func (linkedPR) Status(context.Context, int, model.StatusOptions) (*model.Status
 	return &model.StatusSnapshot{PR: &model.PRInfo{
 		Number: 7, URL: "https://github.com/acme/app/pull/7", State: "OPEN",
 		HeadRefOID: linkedPRHead, HeadRefName: "topic", HeadRepositoryURL: "https://github.com/acme/app",
+		ReviewThreads: []model.PRComment{{ThreadID: "open-b", CanResolve: true}, {ThreadID: "open-a", CanResolve: true}, {ThreadID: "resolved", CanResolve: true, IsResolved: true}},
 	}}, nil
 }
 
@@ -201,6 +205,8 @@ var _ = Describe("a remote run on a linked PR", func() {
 		Expect(pr.Target).To(Equal(provider.RunTarget{RepositoryURL: "https://github.com/acme/app", Branch: "topic", HeadSHA: linkedPRHead}))
 		Expect(pr.Write).To(BeTrue(), "a run step writes to the PR")
 		Expect(pr.WorkDir).To(Equal(host.WorkDir))
+		Expect(pr.Events).To(Equal(stepNamed(host.Def, "run").Events), "a turn's result is held to the step's events in the sandbox too")
+		Expect(pr.OpenThreads).To(Equal([]string{"open-a", "open-b"}), "only threads open when the run was prepared may be resolved")
 	})
 
 	It("rebuilds the PR hook inside a sandbox job", func() {
@@ -211,8 +217,10 @@ var _ = Describe("a remote run on a linked PR", func() {
 			URL: "https://github.com/acme/app/pull/7", Number: 7, Write: true, WorkDir: "/workspace/src",
 			Target: provider.RunTarget{RepositoryURL: "https://github.com/acme/app", Branch: "topic", HeadSHA: linkedPRHead},
 		}}
-		built, err := hooks.Build()
+		built, local, err := hooks.Build()
 		Expect(err).NotTo(HaveOccurred())
+		Expect(local).To(HaveLen(1))
+		Expect(local[0].Name).To(Equal("pr_thread_addressed"), "the hook reads the threads this tool records, so it runs in the job beside it")
 		var names []string
 		for _, hook := range built {
 			if named, ok := hook.(interface{ Name() string }); ok {

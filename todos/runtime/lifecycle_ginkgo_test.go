@@ -36,10 +36,8 @@ var _ = Describe("plan review status projection", func() {
 })
 
 var _ = Describe("waiting plan attempt", func() {
-	It("makes a draft answerable and records the attempt as waiting", func() {
-		result := &todos.ExecutionResult{EndStatus: types.EndAsk, Success: false}
+	It("projects a draft waiting on an approval as ask", func() {
 		Expect(todoStatus(native.StatusDraft, native.ExecutionWaiting)).To(Equal(types.StatusAsk))
-		Expect(attemptStatus(result)).To(Equal("waiting"))
 	})
 
 	It("keeps a draft running state as draft", func() {

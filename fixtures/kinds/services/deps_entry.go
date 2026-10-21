@@ -2,6 +2,8 @@ package services
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -29,7 +31,23 @@ func startDeps(ctx context.Context, step *fixtures.StepContext, entry Entry) (*d
 		return nil, nil, fmt.Errorf("entry %q: allocate port: %w", entry.Name, err)
 	}
 	svc := &depsService{catalog: entry.Deps, stateDir: filepath.Join(step.TmpDir, "deps", entry.Name)}
-	opts := []start.Option{start.WithStateDir(svc.stateDir), start.WithPort(port), start.WithBindAddress("127.0.0.1")}
+	instance, err := start.Start(ctx, entry.Deps, depsOptions(step, entry, svc.stateDir, port)...)
+	if err != nil {
+		return nil, nil, errors.Join(fmt.Errorf("entry %q: deps start %s: %w", entry.Name, entry.Deps, err), svc.stopIfStarted(ctx))
+	}
+	return svc, depsOutputs(entry, instance, port), nil
+}
+
+// depsOptions are the deps/start options of an entry. A service deps runs as a
+// host process starts from the step's ChildEnv — the fixture Env with its armed
+// traces' exports — like every other child a fixture starts; the catalog's env
+// and the entry's own env override it, and a container never sees it.
+func depsOptions(step *fixtures.StepContext, entry Entry, stateDir string, port int) []start.Option {
+	digest := sha256.Sum256([]byte(stateDir))
+	opts := []start.Option{
+		start.WithStateDir(stateDir), start.WithInstanceID(hex.EncodeToString(digest[:8])), start.WithPort(port),
+		start.WithBindAddress("127.0.0.1"), start.WithHostEnv(step.ChildEnv()),
+	}
 	if entry.Version != "" {
 		opts = append(opts, start.WithVersion(entry.Version))
 	}
@@ -49,11 +67,7 @@ func startDeps(ctx context.Context, step *fixtures.StepContext, entry Entry) (*d
 	if entry.Wait != nil && entry.Wait.Timeout != nil {
 		opts = append(opts, start.WithWaitTimeout(entry.Wait.Timeout.Std()))
 	}
-	instance, err := start.Start(ctx, entry.Deps, opts...)
-	if err != nil {
-		return nil, nil, errors.Join(fmt.Errorf("entry %q: deps start %s: %w", entry.Name, entry.Deps, err), svc.stopIfStarted(ctx))
-	}
-	return svc, depsOutputs(entry, instance, port), nil
+	return opts
 }
 
 func depsOutputs(entry Entry, instance *start.Instance, port int) map[string]any {

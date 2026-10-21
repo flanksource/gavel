@@ -90,6 +90,19 @@ func (h *Host) Subject(ctx context.Context, todo *types.TODO) (map[string]any, e
 	if err != nil {
 		return nil, err
 	}
+	return h.subject(todo, plan)
+}
+
+// UnsavedSubject is Subject for a todo that does not exist yet, such as one a
+// create dialog is about to save: it has no plan, so none is read.
+func (h *Host) UnsavedSubject(todo *types.TODO) (map[string]any, error) {
+	if todo == nil {
+		return nil, fmt.Errorf("lifecycle subject: todo is nil")
+	}
+	return h.subject(todo, todos.PlanState{})
+}
+
+func (h *Host) subject(todo *types.TODO, plan todos.PlanState) (map[string]any, error) {
 	dod, err := todos.BuildDefinitionOfDone(todos.DefinitionOfDoneOptions{
 		WorkDir: h.WorkDir, Todos: []*types.TODO{todo},
 	})
@@ -247,14 +260,19 @@ func (h *Host) graderSpec(ctx context.Context, todo *types.TODO) (api.Spec, erro
 
 // classOf is the behaviour class a step runs as — what captain's mode axis and
 // the run's commit/verify invariants key on. The verify step grades without an
-// agent turn; a plan or triage envelope is a read-only pass; everything else
-// implements.
+// agent turn; a built-in prompt runs as the class it is compiled with; a
+// project prompt is a read-only pass when the step asks for plan permissions,
+// and otherwise implements.
 func classOf(step Step) types.RunMode {
 	if step.Name == StepVerify || step.Prompt == promptRefPrefix+StepVerify {
 		return types.ModeVerify
 	}
-	switch step.EnvelopeOrDefault() {
-	case EnvelopePlan, EnvelopeTriage, EnvelopeTriageNew:
+	if name, ok := strings.CutPrefix(strings.TrimSpace(step.Prompt), promptRefPrefix); ok {
+		if class, ok := todoprompt.BuiltinClass(name); ok {
+			return class
+		}
+	}
+	if step.Spec != nil && step.Spec.Permissions.Mode == api.PermissionPlan {
 		return types.ModePlan
 	}
 	return types.ModeRun
@@ -267,14 +285,13 @@ const (
 
 // promptFor resolves a step's prompt reference: `todos.<name>` names a built-in
 // prompt (overridable through `.gavel.yaml todos.<name>`), `file:<path>` a
-// project-owned template rendered with the step's envelope.
+// project-owned template.
 //
 // A verify-class step has no prompt to resolve — it runs the definition of
 // done — and Lifecycle.Validate has already refused a `verify` step that
 // references anything but todos.verify.
 func (h *Host) promptFor(step Step) (todoprompt.Definition, error) {
 	ref := strings.TrimSpace(step.Prompt)
-	envelope := todoprompt.EnvelopeKind(step.EnvelopeOrDefault())
 	switch {
 	case classOf(step) == types.ModeVerify:
 		return todoprompt.Definition{Name: StepVerify, Class: types.ModeVerify}, nil
@@ -287,16 +304,11 @@ func (h *Host) promptFor(step Step) (todoprompt.Definition, error) {
 		if err != nil {
 			return todoprompt.Definition{}, fmt.Errorf("step %s: %w", step.Name, err)
 		}
-		if step.Envelope != "" && definition.Envelope != envelope {
-			return todoprompt.Definition{}, fmt.Errorf("step %s: prompt %s returns a %s envelope, the step declares %s",
-				step.Name, ref, definition.Envelope, envelope)
-		}
 		return definition, nil
 	case strings.HasPrefix(ref, promptFilePrefix):
 		return todoprompt.Definition{
 			Name:     step.Name,
 			Class:    classOf(step),
-			Envelope: envelope,
 			Title:    step.Name,
 			Override: verify.PromptSpec{File: strings.TrimPrefix(ref, promptFilePrefix)},
 			Origin:   ref,

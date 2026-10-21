@@ -171,12 +171,6 @@ func benchmarkEntryToTest(entry BenchmarkEntry) parsers.Test {
 				DiskWriteBytes: disk.DiskWriteBytes, SampleCount: disk.SampleCount, MissingProcesses: disk.MissingProcesses}
 		}
 	}
-	for _, artifact := range entry.GoProfiles {
-		test.GoProfiles = append(test.GoProfiles, parsers.GoProfileArtifact{
-			Name: artifact.Name, ID: artifact.ID, Path: artifact.Path, Status: artifact.Status,
-			Bytes: artifact.Bytes, SampleTypes: artifact.SampleTypes, Error: artifact.Error,
-		})
-	}
 	if entry.SQLProfile != nil {
 		profile := entry.SQLProfile
 		test.SQLProfile = &parsers.SQLProfile{Path: profile.Path, QueryCount: profile.QueryCount,

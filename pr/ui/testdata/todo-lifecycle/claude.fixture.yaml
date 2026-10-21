@@ -61,7 +61,7 @@ steps:
               		t.Fatalf("Greeting(x) = %q, want %q", got, "hello x")
               	}
               }
-            # triage.new gives the agent caller tools (todo_search, triage_review…),
+            # triage.new gives the agent caller tools (todo_search, todo_update, todo_labels…),
             # which only captain's agent mode can expose; it still drives the
             # real claude binary, through the Agent SDK protocol.
             # ai.model is the base runtime for prompts outside the lifecycle steps,
@@ -103,7 +103,7 @@ steps:
 
   - id: chrome
     kind: browser
-    profile: { fresh: true }
+    profile: {}
     # default exports: BROWSER_CDP_URL, BROWSER_WS_URL, BROWSER_SESSION, BROWSER_PROFILE_DIR
 
   - id: todo
@@ -112,7 +112,7 @@ steps:
     create:
       # A rough title, as the New todo dialog requires; triage.new renames it.
       title: greeting thing
-      triage: true
+      step: triage.new
       body: |
         add a greeting helper
 
@@ -135,11 +135,11 @@ steps:
     kind: todo
     get: true
     dir: $WORKSPACE
-    # The attempt reports completed (Captain's run state) a moment before gavel
-    # applies the triage outcome, so wait for the outcome itself: the rename.
+    # The rename lands through todo_update while the run is going; wait for it
+    # and for the run itself to complete.
     wait:
-      until: "triage.state == 'completed' && todo.title != 'greeting thing'"
-      failWhen: "triage.state in ['failed', 'cancelled'] || todo.status == 'ask'"
+      until: "run.state == 'completed' && todo.title != 'greeting thing'"
+      failWhen: "run.state in ['failed', 'cancelled']"
       timeout: 90s
     cel: todo.title == 'Add Greeting helper to greet package' && 'api' in todo.labels
 

@@ -1,441 +1,83 @@
-import { describe, it, expect } from 'vitest';
-import {
-  collapseLintSingleChildChains,
-  collapseSingleChildChains,
-  formatCount,
-  groupLintByLinterRuleFile,
-  isLintOnlyPhase,
-  statusColor,
-  statusIcon,
-  stripTestTaskGroup,
-  sum,
-  testStatus,
-  TEST_TASK_GROUP_NAME,
-  LINT_TASK_GROUP_NAME,
-} from './utils';
-import type { LinterResult, Test } from './types';
+import { describe, expect, it } from 'vitest';
+import { isLintOnlyPhase, processLinksByPid, stripTestTaskGroup, timeoutArgValue, TEST_TASK_GROUP_NAME, LINT_TASK_GROUP_NAME } from './utils';
+import type { Test } from './types';
 
-describe('aborted verdict', () => {
-  const abortedLeaf = { name: 'after-failure', aborted: true, skipped: true } as Test;
-
-  it('statusIcon, statusColor and testStatus treat an aborted+skipped leaf as aborted', () => {
-    expect(statusIcon(abortedLeaf)).toBe('codicon:debug-stop');
-    expect(statusColor(abortedLeaf)).toBe('text-red-400');
-    expect(testStatus(abortedLeaf)).toBe('aborted');
-  });
-
-  it('sum counts an aborted+skipped child once as aborted, distinct from an intentional skip', () => {
-    const s = sum({
-      name: 'plan',
-      children: [
-        { name: 'setup', passed: true },
-        abortedLeaf,
-        { name: 'gated', skipped: true },
-      ],
-    } as Test);
-    expect(s).toEqual({ total: 3, passed: 1, failed: 0, warned: 0, aborted: 1, skipped: 1, pending: 0, running: 0, timedout: 0 });
-  });
-
-  it('sum reads Aborted from a server summary', () => {
-    const s = sum({
-      name: 'plan',
-      summary: { Total: 2, Passed: 0, Failed: 1, Aborted: 1, Skipped: 0, Pending: 0, Duration: 0 },
-    } as Test);
-    expect(s.aborted).toBe(1);
-  });
-});
-
-describe('warned verdict', () => {
-  it('sum tallies a warned leaf in total + warned, not passed or failed', () => {
-    const s = sum({ name: 'trace', warned: true } as Test);
-    expect(s.total).toBe(1);
-    expect(s.warned).toBe(1);
-    expect(s.passed).toBe(0);
-    expect(s.failed).toBe(0);
-  });
-
-  it('sum rolls a warned child up to the parent without failing it', () => {
-    const s = sum({
-      name: 'step',
-      children: [
-        { name: 'activity', passed: true },
-        { name: 'trace', warned: true },
-      ],
-    } as Test);
-    expect(s.warned).toBe(1);
-    expect(s.passed).toBe(1);
-    expect(s.failed).toBe(0);
-  });
-
-  it('statusIcon + statusColor render amber for a warned leaf', () => {
-    const t = { name: 'trace', warned: true } as Test;
-    expect(statusIcon(t)).toBe('codicon:warning');
-    expect(statusColor(t)).toBe('text-amber-600');
-  });
-
-  it('statusColor renders amber for a container whose only non-pass child is warned', () => {
-    const t = {
-      name: 'step',
-      children: [
-        { name: 'activity', passed: true },
-        { name: 'trace', warned: true },
-      ],
-    } as Test;
-    expect(statusColor(t)).toBe('text-amber-600');
-  });
-
-  it('a failed+warned leaf still reads as failed — a warning never masks a failure', () => {
-    const t = { name: 'x', failed: true, warned: true } as Test;
-    expect(statusIcon(t)).toBe('codicon:error');
-    expect(statusColor(t)).toBe('text-red-600');
-    expect(testStatus(t)).toBe('failed');
-  });
-});
-
-describe('formatCount', () => {
-  const cases: Array<[number, string]> = [
-    [0, '0'],
-    [1, '1'],
-    [42, '42'],
-    [999, '999'],
-    [1000, '1k'],
-    [1500, '1.5k'],
-    [1550, '1.6k'],
-    [9999, '10k'],
-    [10_000, '10k'],
-    [12_345, '12k'],
-    [99_999, '100k'],
-    [100_000, '100k'],
-    [999_999, '1000k'],
-    [1_000_000, '1M'],
-    [1_234_567, '1.2M'],
-    [12_345_678, '12M'],
-  ];
-
-  for (const [n, want] of cases) {
-    it(`formats ${n} as ${want}`, () => {
-      expect(formatCount(n)).toBe(want);
-    });
-  }
-});
-
-describe('collapseSingleChildChains', () => {
-  it('compresses a three-deep single-child chain into one node', () => {
-    const tree: Test[] = [{
-      name: 'pkg',
-      children: [{
-        name: 'sub',
-        children: [{
-          name: 'Describe',
-          children: [{ name: 'It', passed: true }],
-        }],
-      }],
-    }];
-
-    const [merged] = collapseSingleChildChains(tree);
-    expect(merged.name).toBe('pkg > sub > Describe > It');
-    expect(merged.passed).toBe(true);
-    expect(merged.children ?? []).toHaveLength(0);
-  });
-
-  it('stops merging at the branch point when a node has siblings', () => {
-    const tree: Test[] = [{
-      name: 'pkg',
-      children: [{
-        name: 'Describe',
-        children: [
-          { name: 'ItA', passed: true },
-          { name: 'ItB', failed: true },
-        ],
-      }],
-    }];
-
-    const [merged] = collapseSingleChildChains(tree);
-    expect(merged.name).toBe('pkg > Describe');
-    expect(merged.children).toHaveLength(2);
-    expect(merged.children![0].name).toBe('ItA');
-    expect(merged.children![1].name).toBe('ItB');
-  });
-
-  it('does not swallow a leaf that already carries a status into its parent', () => {
-    // Here the "parent" is a passed leaf with one failed child — the
-    // parent itself is a test result, not a container, so we must not
-    // merge it with the child.
-    const tree: Test[] = [{
-      name: 'ParentTest',
-      passed: true,
-      children: [{ name: 'HelperTest', failed: true }],
-    }];
-
-    const [out] = collapseSingleChildChains(tree);
-    expect(out.name).toBe('ParentTest');
-    expect(out.children).toHaveLength(1);
-    expect(out.children![0].name).toBe('HelperTest');
-  });
-
-  it('preserves the deepest node kind, file, and target_path', () => {
-    const tree: Test[] = [{
-      name: 'linter',
-      kind: 'linter',
-      children: [{
-        name: 'src',
-        kind: 'lint-folder',
-        children: [{
-          name: 'foo.ts',
-          kind: 'lint-file',
-          file: 'src/foo.ts',
-          target_path: '/repo/src/foo.ts',
-          violations: [{ severity: 'error', message: 'boom' }],
-        }],
-      }],
-    }];
-
-    const [merged] = collapseSingleChildChains(tree);
-    expect(merged.name).toBe('linter > src > foo.ts');
-    expect(merged.kind).toBe('lint-file');
-    expect(merged.file).toBe('src/foo.ts');
-    expect(merged.target_path).toBe('/repo/src/foo.ts');
-    expect(merged.violations).toHaveLength(1);
-  });
-
-  it('keeps multi-root trees independent', () => {
-    const tree: Test[] = [
-      { name: 'alpha', children: [{ name: 'one', passed: true }] },
-      { name: 'beta', children: [{ name: 'two', failed: true }] },
-    ];
-
-    const out = collapseSingleChildChains(tree);
-    expect(out).toHaveLength(2);
-    expect(out[0].name).toBe('alpha > one');
-    expect(out[1].name).toBe('beta > two');
-  });
-
-  it('recurses into deeper subtrees after a branch', () => {
-    // pkg has two children. The first is itself a single-leaf chain that
-    // should collapse; the second has a sibling and must not.
-    const tree: Test[] = [{
-      name: 'pkg',
-      children: [
-        {
-          name: 'groupA',
-          children: [{ name: 'Describe', children: [{ name: 'It', passed: true }] }],
-        },
-        {
-          name: 'groupB',
-          children: [
-            { name: 'ItX', passed: true },
-            { name: 'ItY', failed: true },
-          ],
-        },
-      ],
-    }];
-
-    const [pkg] = collapseSingleChildChains(tree);
-    expect(pkg.name).toBe('pkg');
-    expect(pkg.children).toHaveLength(2);
-    expect(pkg.children![0].name).toBe('groupA > Describe > It');
-    expect(pkg.children![1].name).toBe('groupB');
-    expect(pkg.children![1].children).toHaveLength(2);
-  });
-
-  it('preserves linter and rule grouping while still collapsing folder chains', () => {
-    const tree: Test[] = [{
-      name: 'golangci-lint',
-      kind: 'linter',
-      children: [{
-        name: 'errcheck',
-        kind: 'lint-rule-group',
-        linterName: 'golangci-lint',
-        ruleName: 'errcheck',
-        children: [{
-          name: 'src',
-          kind: 'lint-folder',
-          children: [{
-            name: 'foo.go',
-            kind: 'lint-file',
-            file: 'src/foo.go',
-            target_path: 'src/foo.go',
-            linterName: 'golangci-lint',
-            ruleName: 'errcheck',
-            violations: [{ severity: 'error', message: 'boom' }],
-          }],
-        }],
-      }],
-    }];
-
-    const [linter] = collapseLintSingleChildChains(tree);
-    expect(linter.name).toBe('golangci-lint');
-    expect(linter.kind).toBe('linter');
-    expect(linter.children).toHaveLength(1);
-    expect(linter.children![0].name).toBe('errcheck');
-    expect(linter.children![0].kind).toBe('lint-rule-group');
-    expect(linter.children![0].children).toHaveLength(1);
-    expect(linter.children![0].children![0].name).toBe('src > foo.go');
-    expect(linter.children![0].children![0].kind).toBe('lint-file');
-    expect(linter.children![0].children![0].ruleName).toBe('errcheck');
-  });
-});
-
-describe('groupLintByLinterRuleFile', () => {
-  const filters = { severity: new Map(), linter: new Map() };
-
-  it('groups results by linter, then rule, then folder/file', () => {
-    const lint: LinterResult[] = [{
-      linter: 'golangci-lint',
-      success: false,
-      duration: 0,
-      violations: [
-        {
-          file: 'pkg/foo.go',
-          line: 4,
-          severity: 'error',
-          rule: { method: 'errcheck' },
-          message: 'check error',
-        },
-        {
-          file: 'pkg/foo.go',
-          line: 8,
-          severity: 'error',
-          rule: { method: 'errcheck' },
-          message: 'check error again',
-        },
-        {
-          file: 'pkg/sub/bar.go',
-          line: 3,
-          severity: 'warning',
-          rule: { method: 'unused' },
-          message: 'unused value',
-        },
-      ],
-    }];
-
-    const [linter] = groupLintByLinterRuleFile(lint, filters);
-    expect(linter.kind).toBe('linter');
-    expect(linter.children).toHaveLength(2);
-
-    const errcheck = linter.children!.find(child => child.ruleName === 'errcheck');
-    expect(errcheck?.kind).toBe('lint-rule-group');
-    expect(errcheck?.children).toHaveLength(1);
-    expect(errcheck?.children![0].name).toBe('pkg');
-    expect(errcheck?.children![0].kind).toBe('lint-folder');
-    expect(errcheck?.children![0].children).toHaveLength(1);
-    expect(errcheck?.children![0].children![0].name).toBe('foo.go');
-    expect(errcheck?.children![0].children![0].kind).toBe('lint-file');
-    expect(errcheck?.children![0].children![0].linterName).toBe('golangci-lint');
-    expect(errcheck?.children![0].children![0].ruleName).toBe('errcheck');
-    expect(errcheck?.children![0].children![0].violations).toHaveLength(2);
-
-    const unused = linter.children!.find(child => child.ruleName === 'unused');
-    expect(unused?.children).toHaveLength(1);
-    expect(unused?.children![0].name).toBe('pkg');
-  });
-
-  it('keeps fileless violations on the rule group', () => {
-    const lint: LinterResult[] = [{
-      linter: 'betterleaks',
-      success: false,
-      duration: 0,
-      violations: [
-        {
-          line: 1,
-          severity: 'error',
-          rule: { method: 'global-rule' },
-          message: 'secret found',
-        },
-      ],
-    }];
-
-    const [linter] = groupLintByLinterRuleFile(lint, filters);
-    expect(linter.children).toHaveLength(1);
-    expect(linter.children![0].kind).toBe('lint-rule-group');
-    expect(linter.children![0].ruleName).toBe('global-rule');
-    expect(linter.children![0].children ?? []).toHaveLength(0);
-    expect(linter.children![0].noFileViolations).toHaveLength(1);
-  });
-});
-
-function virtualGroup(name: string, status: 'running' | 'pending' | 'success' | 'failed'): Test {
-  return {
-    name,
-    framework: 'task',
-    context: { status, type: 'group' },
-  };
-}
-
-function realTest(name: string, opts: Partial<Test> = {}): Test {
-  return {
-    name,
-    framework: 'go test',
-    passed: true,
-    ...opts,
-  };
-}
+const testGroup = (status: string): Test => ({ name: TEST_TASK_GROUP_NAME, framework: 'task', context: { status } });
+const lintGroup: Test = { name: LINT_TASK_GROUP_NAME, framework: 'task', context: { status: 'running' } };
 
 describe('stripTestTaskGroup', () => {
-  it('removes the test task group while keeping real tests and lint group', () => {
-    const tests: Test[] = [
-      virtualGroup(TEST_TASK_GROUP_NAME, 'success'),
-      virtualGroup(LINT_TASK_GROUP_NAME, 'running'),
-      realTest('TestFoo'),
-    ];
-    const stripped = stripTestTaskGroup(tests);
-    expect(stripped).toHaveLength(2);
-    expect(stripped.map(t => t.name)).toEqual([LINT_TASK_GROUP_NAME, 'TestFoo']);
-  });
+  it('removes the test task group while keeping real tests and the lint group', () => {
+    const real: Test = { name: 'TestFoo', framework: 'go test', passed: true };
 
-  it('is a no-op when the test task group is absent', () => {
-    const tests: Test[] = [realTest('TestFoo'), virtualGroup(LINT_TASK_GROUP_NAME, 'running')];
-    expect(stripTestTaskGroup(tests)).toEqual(tests);
+    expect(stripTestTaskGroup([testGroup('running'), real, lintGroup])).toEqual([real, lintGroup]);
   });
 
   it('only matches the task framework, not real tests sharing the name', () => {
-    const tests: Test[] = [
-      { name: TEST_TASK_GROUP_NAME, framework: 'go test', passed: true },
-      virtualGroup(TEST_TASK_GROUP_NAME, 'running'),
-    ];
-    const stripped = stripTestTaskGroup(tests);
-    expect(stripped).toHaveLength(1);
-    expect(stripped[0].framework).toBe('go test');
+    const lookalike: Test = { name: TEST_TASK_GROUP_NAME, framework: 'go test', passed: true };
+
+    expect(stripTestTaskGroup([lookalike])).toEqual([lookalike]);
   });
 });
 
 describe('isLintOnlyPhase', () => {
-  it('returns false when the run has finished', () => {
-    expect(isLintOnlyPhase([], false, true)).toBe(false);
+  it('is false once the run has finished or lint already reported', () => {
     expect(isLintOnlyPhase([], false, false)).toBe(false);
+    expect(isLintOnlyPhase([], true, true)).toBe(false);
   });
 
-  it('returns false when lint already reported results', () => {
-    const tests: Test[] = [realTest('TestFoo')];
-    expect(isLintOnlyPhase(tests, true, true)).toBe(false);
+  it('is false while the test task group is still running or pending', () => {
+    expect(isLintOnlyPhase([testGroup('running')], true, false)).toBe(false);
+    expect(isLintOnlyPhase([testGroup('pending')], true, false)).toBe(false);
   });
 
-  it('returns false while the test task group is still running', () => {
-    const tests: Test[] = [
-      virtualGroup(TEST_TASK_GROUP_NAME, 'running'),
-      realTest('TestFoo', { passed: true }),
-    ];
-    expect(isLintOnlyPhase(tests, true, false)).toBe(false);
+  it('is true when the test task group is gone or settled but the run is still active', () => {
+    expect(isLintOnlyPhase([], true, false)).toBe(true);
+    expect(isLintOnlyPhase([testGroup('success')], true, false)).toBe(true);
+  });
+});
+
+describe('timeoutArgValue', () => {
+  it('reads a set knob, trimmed, and reports an unset, blank or non-string one as absent', () => {
+    const args = { timeout: ' 30m ', test_timeout: '', lint_timeout: 5 };
+
+    expect(timeoutArgValue(args, 'timeout')).toBe('30m');
+    expect(timeoutArgValue(args, 'test_timeout')).toBeNull();
+    expect(timeoutArgValue(args, 'lint_timeout')).toBeNull();
+    expect(timeoutArgValue(undefined, 'timeout')).toBeNull();
+  });
+});
+
+describe('processLinksByPid', () => {
+  it('returns an empty map for no tests', () => {
+    expect(processLinksByPid([]).size).toBe(0);
   });
 
-  it('returns false while the test task group is still pending', () => {
-    const tests: Test[] = [virtualGroup(TEST_TASK_GROUP_NAME, 'pending')];
-    expect(isLintOnlyPhase(tests, true, false)).toBe(false);
+  it('maps pids from nested fixture steps to the step that started them', () => {
+    const tests = [
+      {
+        name: 'suite',
+        route_path: 'suite',
+        children: [
+          { name: 'start db', route_path: 'suite/start-db', fixture: { key: 'a', kind: 'service', state: 'running', pids: [4243, 4244] } },
+          { name: 'no processes', route_path: 'suite/none', fixture: { key: 'b', kind: 'cel', state: 'passed' } },
+          { name: 'go test', route_path: 'suite/go-test', fixture: { key: 'c', kind: 'exec', state: 'passed', pids: [4250] } },
+        ],
+      },
+    ] as Test[];
+
+    expect(Object.fromEntries(processLinksByPid(tests))).toEqual({
+      4243: { pid: 4243, routePath: 'suite/start-db', name: 'start db' },
+      4244: { pid: 4244, routePath: 'suite/start-db', name: 'start db' },
+      4250: { pid: 4250, routePath: 'suite/go-test', name: 'go test' },
+    });
   });
 
-  it('returns true when test task group is gone but run is still active', () => {
-    const tests: Test[] = [
-      virtualGroup(LINT_TASK_GROUP_NAME, 'running'),
-      realTest('TestFoo', { passed: true }),
-    ];
-    expect(isLintOnlyPhase(tests, true, false)).toBe(true);
-  });
+  it('keeps the first step when two steps report the same pid', () => {
+    const tests = [
+      { name: 'one', route_path: 'one', fixture: { key: 'a', kind: 'exec', state: 'passed', pids: [7] } },
+      { name: 'two', route_path: 'two', fixture: { key: 'b', kind: 'exec', state: 'passed', pids: [7] } },
+    ] as Test[];
 
-  it('returns true when test task group has finished but is still in the snapshot', () => {
-    const tests: Test[] = [
-      virtualGroup(TEST_TASK_GROUP_NAME, 'success'),
-      virtualGroup(LINT_TASK_GROUP_NAME, 'running'),
-    ];
-    expect(isLintOnlyPhase(tests, true, false)).toBe(true);
+    expect(processLinksByPid(tests).get(7)?.routePath).toBe('one');
   });
 });

@@ -20,6 +20,24 @@ func TestParseRouteRequestDefaultsLintGroupingToLinterRuleFile(t *testing.T) {
 	}
 }
 
+// TestParseTestFiltersMatchesTheUIStatusParam mirrors src/routes.ts: no
+// status param is the failing-only default, `all` is no status filter.
+func TestParseTestFiltersMatchesTheUIStatusParam(t *testing.T) {
+	for _, tc := range []struct {
+		query string
+		want  []string
+	}{
+		{query: "", want: []string{"!passed", "!skipped"}},
+		{query: "?status=all", want: nil},
+		{query: "?status=failed,!skipped", want: []string{"failed", "!skipped"}},
+	} {
+		got := parseTestFilters(httptest.NewRequest("GET", "/tests.json"+tc.query, nil)).Status
+		if strings.Join(got, ",") != strings.Join(tc.want, ",") || (got == nil) != (tc.want == nil) {
+			t.Errorf("status for %q = %#v, want %#v", tc.query, got, tc.want)
+		}
+	}
+}
+
 func TestBuildLintByLinterRuleFileGroupsRulesBeforeFolders(t *testing.T) {
 	results := []*linters.LinterResult{{
 		Linter:  "golangci-lint",

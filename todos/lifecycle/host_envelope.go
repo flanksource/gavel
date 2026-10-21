@@ -10,7 +10,7 @@ import (
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/captain/pkg/promptrun"
 	"github.com/flanksource/gavel/todos"
-	todoprompt "github.com/flanksource/gavel/todos/prompt"
+	"github.com/flanksource/gavel/todos/tools"
 	"github.com/flanksource/gavel/todos/types"
 )
 
@@ -21,6 +21,11 @@ const (
 	RunCancelled = "cancelled"
 	RunWaiting   = "waiting"
 )
+
+// errAskThroughTool is why a run whose agent asked natively fails: every todo
+// prompt denies AskUserQuestion, so a native question means the run escaped its
+// own permissions rather than that it is waiting on an answer.
+const errAskThroughTool = "todo prompts ask through todo_ask; the agent asked natively instead"
 
 // collect folds what came back from captain into the two records a finished
 // step needs: the facts the outcome predicates read, and the execution result
@@ -44,6 +49,9 @@ func (h *Host) collect(step Step, prepared *preparedStep, d dispatched, start ti
 		ran := out.Report != nil && out.Report.Ran
 		execution.DoD = &todos.DoDOutcome{Ran: ran, Passed: ran && out.Passed && len(out.Verdicts) > 0, Report: out.Report}
 	}
+	if d.tools != nil {
+		execution.ToolWrites = d.tools.Writes()
+	}
 	facts := StepResult{
 		Run:    RunFacts{Iterations: execution.NumTurns, CostUSD: execution.CostUSD, StopReason: stopReason(out.Loop)},
 		Verify: out.Report,
@@ -61,9 +69,14 @@ func (h *Host) collect(step Step, prepared *preparedStep, d dispatched, start ti
 		execution.ErrorMessage = fmt.Sprintf("%s run did not complete within %s", execution.ExecutorName, prepared.timeout)
 		facts.Run.State, facts.Run.Error = RunFailed, execution.ErrorMessage
 	case prepared.class == types.ModeVerify:
-		h.collectVerify(execution, &facts, out.Report, out.Passed)
+		collectVerify(execution, &facts, out.Report, out.Passed)
 	default:
-		h.collectEnvelope(execution, &facts, prepared, out)
+		collectEnvelope(execution, &facts, step, prepared, out, d.tools)
+		// A run executing elsewhere reports a plan path on its own machine, which this host
+		// must not read; its plan arrives as content.
+		if h.Remote != nil && execution.Plan != nil {
+			execution.Plan.Path = ""
+		}
 	}
 	settleRunFacts(execution, &facts)
 	return &StepOutcome{Step: step, Result: facts, Execution: execution}
@@ -73,15 +86,15 @@ func (h *Host) collect(step Step, prepared *preparedStep, d dispatched, start ti
 // are collected.
 //
 // The runtime records a prompt run as failed whenever the run reported an
-// error — a provider result that was not a success, an error event, an
-// envelope that says failed — even when an envelope was still decoded. The
-// facts the outcomes read must say the same, or a run captain stores as
-// failed could land the todo in pending.
+// error — a provider result that was not a success, an error event — even when
+// an envelope was still decoded. The facts the outcomes read must say the
+// same, or a run captain stores as failed could land the todo in pending. The
+// attempt succeeded only when the run did and the agent claimed success.
 func settleRunFacts(execution *todos.ExecutionResult, facts *StepResult) {
 	if facts.Run.State == RunSucceeded && execution.ErrorMessage != "" {
 		facts.Run.State, facts.Run.Error = RunFailed, execution.ErrorMessage
 	}
-	execution.Success = facts.Run.State == RunSucceeded && execution.EndStatus != types.EndFailed
+	execution.Success = facts.Run.State == RunSucceeded && execution.Envelope != nil && execution.Envelope.Success
 }
 
 // stopReason is why captain's generate loop ended — condition-met,
@@ -93,81 +106,113 @@ func stopReason(loop *captainai.LoopResult) string {
 	return loop.StopReason
 }
 
-// collectVerify is a verify-only step's result: the report is the verdict.
-func (h *Host) collectVerify(execution *todos.ExecutionResult, facts *StepResult, report *api.VerifyReport, passed bool) {
+// collectVerify is a verify-only step's result: the report is the verdict, and
+// it is shaped into the same envelope an agent step returns, so its history
+// entry reads like every other run's.
+func collectVerify(execution *todos.ExecutionResult, facts *StepResult, report *api.VerifyReport, passed bool) {
 	if report == nil {
 		execution.ErrorMessage = "verification produced no report"
 		facts.Run.State, facts.Run.Error = RunFailed, execution.ErrorMessage
 		return
 	}
 	facts.Run.State = RunSucceeded
-	execution.Summary = report.Reason
-	execution.EndStatus = types.EndCompleted
+	env := types.Envelope{Success: passed, Event: VerifyEvents[0], Comment: verifyComment(report, passed)}
 	if !passed {
-		execution.Summary = firstNonEmpty(report.Reason, "definition of done failed")
+		env.Event = VerifyEvents[1]
 	}
-	facts.Envelope = Envelope{Summary: execution.Summary, EndStatus: string(execution.EndStatus)}
+	setEnvelope(execution, facts, env, nil)
 }
 
-// collectEnvelope decodes the agent's structured result into the envelope its
-// prompt promised and lifts it onto both records.
-func (h *Host) collectEnvelope(execution *todos.ExecutionResult, facts *StepResult, prepared *preparedStep, out promptrun.Result) {
+func verifyComment(report *api.VerifyReport, passed bool) string {
+	reason := strings.TrimSpace(report.Reason)
+	if reason == "" {
+		reason = "Definition of done passed."
+		if !passed {
+			reason = "Definition of done failed."
+		}
+	}
+	var lines []string
+	for _, item := range report.Checklist {
+		mark := "[ ]"
+		if item.Passed != nil && *item.Passed {
+			mark = "[x]"
+		}
+		lines = append(lines, fmt.Sprintf("- %s %s", mark, strings.TrimSpace(item.Item)))
+	}
+	if len(lines) == 0 {
+		return reason
+	}
+	return reason + "\n\n" + strings.Join(lines, "\n")
+}
+
+func setEnvelope(execution *todos.ExecutionResult, facts *StepResult, env types.Envelope, extra map[string]any) {
+	execution.Envelope = &env
+	execution.Summary = strings.TrimSpace(env.Comment)
+	facts.Envelope = Envelope{Success: env.Success, Event: env.Event, Comment: env.Comment, Extra: extra}
+}
+
+// collectEnvelope decodes the agent's structured result and lifts it onto both
+// records, with the plan a plan-mode run produced.
+func collectEnvelope(execution *todos.ExecutionResult, facts *StepResult, step Step, prepared *preparedStep, out promptrun.Result, run *tools.Run) {
 	// Captured before the decode, because the decode is what loses it: an agent
 	// that answered well in the wrong shape would otherwise leave nothing but
 	// "failed" for a reader to go on.
 	execution.ResponseText = responseText(out.Response)
-	env, err := decodeEnvelope(prepared, out.Response)
+	result, err := decodeEnvelope(step, prepared, out.Response)
 	if err != nil {
 		execution.ErrorMessage = err.Error()
 		facts.Run.State, facts.Run.Error = RunFailed, execution.ErrorMessage
 		return
 	}
-	if out.Response != nil && out.Response.TerminalOutcome == nil {
-		output, parseErr := captainai.ParseStructured(execution.ResponseText, func(value *map[string]any) error {
-			if (*value)["endStatus"] != string(env.EndStatus) {
-				return fmt.Errorf("output endStatus does not match the validated envelope")
+	if out.Response.TerminalOutcome == nil {
+		output, err := captainai.ParseStructured(execution.ResponseText, func(value *map[string]any) error {
+			if (*value)["event"] != result.envelope.Event {
+				return fmt.Errorf("output event does not match the validated envelope")
 			}
 			return nil
 		})
-		if parseErr != nil {
-			execution.ErrorMessage = fmt.Sprintf("decode emitted structured output: %v", parseErr)
+		if err != nil {
+			execution.ErrorMessage = fmt.Sprintf("decode emitted structured output: %v", err)
 			facts.Run.State, facts.Run.Error = RunFailed, execution.ErrorMessage
 			return
 		}
 		execution.OutputJSON = *output
 	}
-	// A run executing elsewhere reports a plan path on its own machine, which this host must not
-	// read; its plan arrives as content.
-	if h.Remote != nil && env.Plan != nil {
-		env.Plan.Path = ""
-	}
-	execution.Summary = env.Summary
-	execution.EndStatus = env.EndStatus
-	execution.Questions = env.Questions
-	execution.Plan = env.Plan
-	execution.Triage = env.Triage
-	execution.TriageNew = env.TriageNew
-	facts.Envelope = Envelope{Summary: env.Summary, EndStatus: string(env.EndStatus), Extra: structuredFields(out.StructuredData)}
-	facts.Questions = questionVars(env.Questions)
-	if env.Plan != nil {
-		facts.Plan = &PlanFacts{Status: string(env.Plan.Status), Path: env.Plan.Path, Content: env.Plan.Content}
-	}
-	switch env.EndStatus {
-	case types.EndAsk:
-		facts.Run.State = RunWaiting
-	case types.EndFailed:
-		facts.Run.State = RunSucceeded
-		execution.ErrorMessage = firstNonEmpty(execution.ErrorMessage, env.Summary)
-	default:
-		facts.Run.State = RunSucceeded
+	facts.Run.State = RunSucceeded
+	setEnvelope(execution, facts, result.envelope, structuredFields(out.StructuredData))
+	if prepared.class == types.ModePlan {
+		execution.Plan = planResult(result, run, prepared.existingPlan)
 	}
 }
 
-type envelope struct {
-	types.ResultEnvelope
-	Plan      *types.PlanResult
-	Triage    *types.TriageEnvelope
-	TriageNew *types.TriageNewEnvelope
+// decoded is a run's envelope with the native plan outcome it came from, when
+// the agent ended by presenting a plan rather than with structured output.
+type decoded struct {
+	envelope types.Envelope
+	plan     *api.TerminalPlan
+}
+
+// planResult is the plan a plan-mode run produced: the native plan outcome's,
+// else the content todo_plan recorded. Its status is the envelope's event when
+// the step speaks the plan vocabulary, and otherwise what comparing the content
+// with the existing plan shows. A run that produced no content and no plan
+// status produced no plan.
+func planResult(d decoded, run *tools.Run, existing string) *types.PlanResult {
+	plan := &types.PlanResult{}
+	if d.plan != nil {
+		plan.Path, plan.Content = d.plan.Path, d.plan.Content
+	} else if run != nil {
+		plan.Content = run.Plan()
+	}
+	switch {
+	case types.KnownPlanStatus(d.envelope.Event):
+		plan.Status = types.PlanStatus(d.envelope.Event)
+	case strings.TrimSpace(plan.Content) != "":
+		plan.Status = nativePlanStatus(existing, plan.Content)
+	default:
+		return nil
+	}
+	return plan
 }
 
 // responseText is whatever the agent actually returned, in the same precedence
@@ -188,94 +233,62 @@ func responseText(response *api.Response) string {
 
 // decodeEnvelope resolves the response contract in precedence order: native
 // terminal outcome, structured data, response text.
-func decodeEnvelope(prepared *preparedStep, response *api.Response) (*envelope, error) {
+func decodeEnvelope(step Step, prepared *preparedStep, response *api.Response) (decoded, error) {
 	if response == nil {
-		return nil, fmt.Errorf("no result envelope: agent response is missing")
+		return decoded{}, fmt.Errorf("no result envelope: agent response is missing")
 	}
 	if response.TerminalOutcome != nil {
-		return envelopeFromTerminalOutcome(prepared, response.TerminalOutcome)
+		return envelopeFromTerminalOutcome(step, prepared, response.TerminalOutcome)
 	}
 	if response.StructuredData != nil {
 		text, err := structuredDataText(response.StructuredData)
 		if err != nil {
-			return nil, fmt.Errorf("result envelope structured data: %w", err)
+			return decoded{}, fmt.Errorf("result envelope structured data: %w", err)
 		}
-		env, err := parseEnvelope(prepared.definition.Envelope, text)
+		env, err := ParseEnvelope(step.Events, text)
 		if err != nil {
-			return nil, fmt.Errorf("result envelope structured data: %w", err)
+			return decoded{}, fmt.Errorf("result envelope structured data: %w", err)
 		}
-		return env, nil
+		return decoded{envelope: *env}, nil
 	}
 	if strings.TrimSpace(response.Text) != "" {
-		env, err := parseEnvelope(prepared.definition.Envelope, response.Text)
+		env, err := ParseEnvelope(step.Events, response.Text)
 		if err != nil {
-			return nil, fmt.Errorf("result envelope response text: %w", err)
+			return decoded{}, fmt.Errorf("result envelope response text: %w", err)
 		}
-		return env, nil
+		return decoded{envelope: *env}, nil
 	}
-	return nil, fmt.Errorf("no result envelope: terminal outcome, structured data, and response text are empty")
+	return decoded{}, fmt.Errorf("no result envelope: terminal outcome, structured data, and response text are empty")
 }
 
-func envelopeFromTerminalOutcome(prepared *preparedStep, outcome *api.TerminalOutcome) (*envelope, error) {
+// ParseEnvelope decodes a run's final result and holds its event to the step's
+// declared vocabulary.
+func ParseEnvelope(events []string, text string) (*types.Envelope, error) {
+	return captainai.ParseStructured(text, func(env *types.Envelope) error { return env.Validate(events) })
+}
+
+// envelopeFromTerminalOutcome maps a native outcome onto the envelope. A
+// native plan is a plan run's result; a native question is a failure, because
+// every todo prompt asks through todo_ask.
+func envelopeFromTerminalOutcome(step Step, prepared *preparedStep, outcome *api.TerminalOutcome) (decoded, error) {
 	if err := outcome.Validate(); err != nil {
-		return nil, fmt.Errorf("invalid terminal outcome: %w", err)
+		return decoded{}, fmt.Errorf("invalid terminal outcome: %w", err)
 	}
 	switch outcome.Kind {
 	case api.TerminalOutcomePlan:
 		if prepared.class != types.ModePlan {
-			return nil, fmt.Errorf("native plan outcome is invalid in %s mode", prepared.class)
+			return decoded{}, fmt.Errorf("native plan outcome is invalid in %s mode", prepared.class)
 		}
 		status := nativePlanStatus(prepared.existingPlan, outcome.Plan.Content)
-		return &envelope{
-			ResultEnvelope: types.ResultEnvelope{Summary: nativePlanSummary(status), EndStatus: types.EndCompleted},
-			Plan:           &types.PlanResult{Status: status, Path: outcome.Plan.Path, Content: outcome.Plan.Content},
-		}, nil
+		env := types.Envelope{Success: true, Event: string(status), Comment: nativePlanSummary(status)}
+		if err := env.Validate(step.Events); err != nil {
+			return decoded{}, fmt.Errorf("native plan outcome: %w", err)
+		}
+		return decoded{envelope: env, plan: outcome.Plan}, nil
 	case api.TerminalOutcomeQuestions:
-		questions := make([]types.AgentQuestion, len(outcome.Questions))
-		for i, question := range outcome.Questions {
-			questions[i] = types.AgentQuestion{
-				Text: question.Text, Context: question.Context, Options: append([]string(nil), question.Options...),
-			}
-		}
-		return &envelope{ResultEnvelope: types.ResultEnvelope{
-			Summary: "The agent is waiting for answers.", EndStatus: types.EndAsk, Questions: questions,
-		}}, nil
+		return decoded{}, fmt.Errorf("%s", errAskThroughTool)
 	default:
-		return nil, fmt.Errorf("unsupported terminal outcome kind %q", outcome.Kind)
-	}
-}
-
-// parseEnvelope decodes the agent's final result into the shape its prompt
-// promised. It switches on the envelope kind rather than the class: triage is
-// plan-class but returns something entirely unlike a plan.
-func parseEnvelope(kind todoprompt.EnvelopeKind, text string) (*envelope, error) {
-	switch kind {
-	case todoprompt.EnvelopePlan:
-		parsed, err := captainai.ParseStructured(text, (*types.PlanEnvelope).Validate)
-		if err != nil {
-			return nil, err
-		}
-		return &envelope{ResultEnvelope: parsed.ResultEnvelope, Plan: &types.PlanResult{
-			Status: parsed.PlanStatus, Path: parsed.PlanPath, Content: parsed.PlanContent,
-		}}, nil
-	case todoprompt.EnvelopeTriage:
-		parsed, err := captainai.ParseStructured(text, (*types.TriageEnvelope).Validate)
-		if err != nil {
-			return nil, err
-		}
-		return &envelope{ResultEnvelope: parsed.ResultEnvelope, Triage: parsed}, nil
-	case todoprompt.EnvelopeTriageNew:
-		parsed, err := captainai.ParseStructured(text, (*types.TriageNewEnvelope).Validate)
-		if err != nil {
-			return nil, err
-		}
-		return &envelope{ResultEnvelope: parsed.ResultEnvelope, TriageNew: parsed}, nil
-	default:
-		parsed, err := captainai.ParseStructured(text, (*types.ResultEnvelope).Validate)
-		if err != nil {
-			return nil, err
-		}
-		return &envelope{ResultEnvelope: *parsed}, nil
+		return decoded{}, fmt.Errorf("unsupported terminal outcome kind %q", outcome.Kind)
 	}
 }
 
@@ -296,10 +309,8 @@ func nativePlanSummary(status types.PlanStatus) string {
 		return "The agent created a plan."
 	case types.PlanUpdated:
 		return "The agent updated the plan."
-	case types.PlanUnchanged:
-		return "The existing plan is unchanged."
 	default:
-		return "The agent completed planning."
+		return "The existing plan is unchanged."
 	}
 }
 
@@ -332,7 +343,7 @@ func structuredDataText(value any) (string, error) {
 }
 
 // structuredFields is the raw structured output as a map, so a custom prompt's
-// outcomes can read fields the built-in envelopes do not name.
+// outcomes can read fields the envelope does not name.
 func structuredFields(value any) map[string]any {
 	if value == nil {
 		return nil
@@ -346,103 +357,4 @@ func structuredFields(value any) map[string]any {
 		return nil
 	}
 	return fields
-}
-
-func questionVars(questions []types.AgentQuestion) []any {
-	out := make([]any, 0, len(questions))
-	for _, question := range questions {
-		out = append(out, map[string]any{
-			"text": question.Text, "context": question.Context, "options": question.Options,
-		})
-	}
-	return out
-}
-
-// declaresVerify reports whether a workflow gives captain's verify registry
-// anything to run. A bare `verify: {}` declares nothing.
-func declaresVerify(workflow *api.Workflow) bool {
-	if workflow == nil || workflow.Verify == nil {
-		return false
-	}
-	v := workflow.Verify
-	return strings.TrimSpace(v.Fixture) != "" || len(v.Commands) > 0 || len(v.Prompts) > 0
-}
-
-// handleEvent narrates the run into the transcript and the notification sink,
-// and accounts the result event's usage.
-func (h *Host) handleEvent(exec *todos.ExecutorContext, ev captainai.Event, execution *todos.ExecutionResult, todo *types.TODO, sawResult *bool, meta todos.RunStartMetadata) {
-	transcript := exec.GetTranscript()
-	switch ev.Kind {
-	case captainai.EventText:
-		if ev.Text == "" {
-			return
-		}
-		transcript.AddExecutorMessage(truncate(ev.Text, 200), todos.EntryText, nil)
-		exec.Notify(todos.Notification{Type: todos.NotifyProgress, Message: truncate(ev.Text, 100)})
-	case captainai.EventThinking:
-		transcript.AddExecutorMessage(ev.Text, todos.EntryThinking, nil)
-		exec.Notify(todos.Notification{Type: todos.NotifyThinking, Message: truncate(ev.Text, 100)})
-	case captainai.EventToolUse:
-		action := toolSummary(ev)
-		transcript.AddExecutorMessage(action, todos.EntryAction, map[string]any{"tool": ev.Tool})
-		exec.Notify(todos.Notification{Type: todos.NotifyAction, Message: action})
-	case captainai.EventPermission:
-		message := "awaiting approval: " + toolSummary(ev)
-		detail := map[string]any{"tool": ev.Tool}
-		if ev.ApprovalID != "" {
-			detail["approvalId"] = ev.ApprovalID
-			detail["input"] = ev.Input
-		}
-		if ev.Request != nil {
-			detail["kind"] = ev.Request.Kind
-		}
-		if ev.Reason != "" {
-			message = "approval " + ev.Reason + ": " + ev.Tool
-			detail["reason"] = ev.Reason
-		}
-		transcript.AddExecutorMessage(message, todos.EntryAction, detail)
-		exec.Notify(todos.Notification{Type: todos.NotifyApproval, Message: message, Data: detail})
-	case captainai.EventSystem:
-		if ev.SessionID != "" {
-			setSessionID(todo, ev.SessionID)
-			exec.RecordSessionID(ev.SessionID)
-			meta.SessionID = ev.SessionID
-			execution.Runtime.SessionID = ev.SessionID
-			exec.RecordRunStart(meta)
-		}
-		if ev.Text != "" {
-			transcript.AddExecutorMessage(ev.Text, todos.EntryAction, map[string]any{"role": "system"})
-			exec.Notify(todos.Notification{Type: todos.NotifyAction, Message: ev.Text})
-		}
-	case captainai.EventResult:
-		*sawResult = true
-		if !ev.Success {
-			// A result that is not a success is an error even when the provider
-			// attached no text: collect turns the message into a failed run, and a
-			// blank one would have let the run read as succeeded.
-			execution.ErrorMessage = firstNonEmpty(ev.Error, "agent reported an unsuccessful result")
-		}
-	case captainai.EventError:
-		execution.ErrorMessage = ev.Error
-		exec.Notify(todos.Notification{Type: todos.NotifyError, Message: ev.Error})
-	}
-}
-
-func toolSummary(ev captainai.Event) string {
-	for _, key := range []string{"command", "file_path", "path", "pattern", "query"} {
-		if v, ok := ev.Input[key]; ok {
-			if s, ok := v.(string); ok && s != "" {
-				return ev.Tool + ": " + truncate(s, 120)
-			}
-		}
-	}
-	return ev.Tool
-}
-
-func truncate(s string, max int) string {
-	s = strings.TrimSpace(s)
-	if len(s) <= max {
-		return s
-	}
-	return s[:max] + "…"
 }

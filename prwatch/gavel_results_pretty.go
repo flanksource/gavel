@@ -89,6 +89,7 @@ func (s GavelResultsSummary) testSummary() parsers.TestSummary {
 		Total:    s.TestsTotal,
 		Passed:   s.TestsPassed,
 		Failed:   s.TestsFailed,
+		TimedOut: s.TestsTimedOut,
 		Skipped:  s.TestsSkipped,
 		Duration: s.Duration,
 	}

@@ -11,9 +11,14 @@ import (
 )
 
 // scopeSeed is the initial fixture Env: the process environment, then the
-// file's prepared setup environment, then its front-matter `env:`.
-func scopeSeed(setup *PreparedSetup, frontMatter FrontMatter) []string {
+// exports of the file- and run-scope traces the file arms, then the file's
+// prepared setup environment, then its front-matter `env:` — so a variable the
+// file sets itself wins over a trace's.
+func scopeSeed(setup *PreparedSetup, frontMatter FrontMatter, traceEnv map[string]string) []string {
 	seed := os.Environ()
+	for _, k := range slices.Sorted(maps.Keys(traceEnv)) {
+		seed = append(seed, k+"="+traceEnv[k])
+	}
 	if setup != nil {
 		for _, k := range slices.Sorted(maps.Keys(setup.Env)) {
 			seed = append(seed, k+"="+setup.Env[k])

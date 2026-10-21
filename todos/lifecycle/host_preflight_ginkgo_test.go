@@ -43,6 +43,9 @@ var _ = Describe("Host full-input preflight", func() {
 		provider = &preflightLifecycleProvider{fakeProvider: &fakeProvider{}}
 		host = newHost(provider.fakeProvider)
 		host.Provider = provider
+		// A supplied provider owns its own tool wiring; the steps' tools would only
+		// bring a broker that seam refuses.
+		host.Def = withoutTools(host.Def)
 	})
 
 	DescribeTable("rejects invalid runs during resolution before admission",

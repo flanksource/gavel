@@ -54,6 +54,8 @@ export function ProjectActionRunDialog({
           {run.snapshot ? (
             <TestRunResults
               snapshot={run.snapshot as unknown as RunSnapshot}
+              traces={(run.snapshot as unknown as RunSnapshot).status?.traces}
+              base={`/api/project-runs/${encodeURIComponent(runId)}`}
               done={run.done}
               runKey={runId}
               projectName={projectName}

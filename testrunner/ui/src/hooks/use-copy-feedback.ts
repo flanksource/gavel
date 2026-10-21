@@ -44,3 +44,19 @@ export function useCopyFeedback({ copiedMs = 2000, errorMs = 3000 }: CopyFeedbac
 
   return { copyState, copyError, beginCopy, resetCopyFeedback };
 }
+
+/** Runs an async copy with the idle → copying → copied/error feedback; ignores a click while one is in flight. */
+export function useCopyAction(action: () => Promise<void>) {
+  const { copyState, copyError, beginCopy, resetCopyFeedback } = useCopyFeedback();
+  const run = useCallback(async () => {
+    if (copyState === 'copying') return;
+    beginCopy();
+    try {
+      await action();
+      resetCopyFeedback('copied');
+    } catch (e: unknown) {
+      resetCopyFeedback('error', e instanceof Error ? e.message : 'Copy failed');
+    }
+  }, [action, copyState, beginCopy, resetCopyFeedback]);
+  return { copyState, copyError, run };
+}

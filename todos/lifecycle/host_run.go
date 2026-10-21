@@ -8,6 +8,8 @@ import (
 
 	captainai "github.com/flanksource/captain/pkg/ai"
 	"github.com/flanksource/captain/pkg/api"
+	"github.com/flanksource/captain/pkg/captainconfig"
+	"github.com/flanksource/captain/pkg/promptcontext"
 	"github.com/flanksource/captain/pkg/promptrun"
 	"github.com/flanksource/captain/pkg/runtimeprofiles"
 	"github.com/flanksource/commons-db/shell"
@@ -48,8 +50,11 @@ type RunOptions struct {
 	// triage render can mark the backlog entries whose verdicts are being decided
 	// alongside this one. Empty for a single-todo run.
 	Batch []string
-	// Approvals enables Captain's broker when an attended host can answer requests.
+	// Approvals enables Captain's durable broker, which the dashboard answers.
 	Approvals bool
+	// OnApproval answers the run's approvals and todo_ask questions in-process —
+	// the terminal broker of a run started from a TTY. It excludes Approvals.
+	OnApproval api.ApprovalFunc
 	// Provider, when set, replaces the one promptrun would build: the seam a test
 	// drives a scripted event stream through. promptrun then adds no setup plugin,
 	// so the host adds one itself.
@@ -75,6 +80,9 @@ type StepOutcome struct {
 	Source string
 	// VerifyTarget is the commit a verify step checked; nil for any other step.
 	VerifyTarget *types.VerifyTarget
+	// StartStatus is the todo's status when the run was dispatched, so an
+	// outcome that keeps the status can still record one a tool wrote.
+	StartStatus types.Status
 }
 
 // preparedStep is a step resolved down to one dispatchable request.
@@ -89,6 +97,8 @@ type preparedStep struct {
 	template       string
 	existingPlan   string
 	agent          string
+	// tools are the tool sets the step declares.
+	tools []string
 	// batch are the refs of every todo in the same request, so a triage render can
 	// mark which backlog entries are being decided alongside this one.
 	batch []string
@@ -99,6 +109,9 @@ type preparedStep struct {
 	// verifyTarget is the commit a verify step checks; nil for any other step.
 	verifyTarget *types.VerifyTarget
 	pr           *prExecution
+	// contextSources are the prompt.context hook sources Captain applies to the
+	// rendered prompt at dispatch; a preview applies the same ones.
+	contextSources []promptcontext.Source
 }
 
 // RunStep runs one step of the lifecycle for a todo: the prompt rendered, the
@@ -131,7 +144,10 @@ func (h *Host) Dispatch(ctx context.Context, todo *types.TODO, resolution *Resol
 		exec = todos.NewExecutorContext(ctx, logger.StandardLogger(), nil)
 	}
 	step, prepared := resolution.Step, resolution.prepared
-	input := h.runInput(exec, todo, prepared, opts)
+	input, err := h.runInput(exec, todo, prepared, opts)
+	if err != nil {
+		return nil, fmt.Errorf("step %s: %w", step.Name, err)
+	}
 	warnings, err := promptrun.Preflight(input.input)
 	if err != nil {
 		return nil, fmt.Errorf("step %s preflight: %w", step.Name, err)
@@ -141,6 +157,7 @@ func (h *Host) Dispatch(ctx context.Context, todo *types.TODO, resolution *Resol
 	if err != nil {
 		return nil, err
 	}
+	startStatus := todo.Status
 	d := h.dispatch(exec, todo, step, prepared, input, start)
 	if input.input.Record != nil && d.out.PromptRunID == uuid.Nil {
 		// Captain names every run it admitted on the result. A recorded run
@@ -150,9 +167,7 @@ func (h *Host) Dispatch(ctx context.Context, todo *types.TODO, resolution *Resol
 		return nil, fmt.Errorf("step %s: run %s was not admitted: %w", step.Name, admission.PromptRunID, d.err)
 	}
 	outcome := h.collect(step, prepared, d, start)
-	if input.triageNew != nil {
-		outcome.Execution.TriageNewApplier = input.triageNew
-	}
+	outcome.StartStatus = startStatus
 	outcome.Admission = admission
 	outcome.Request = prepared.request
 	outcome.VerifyTarget = prepared.verifyTarget
@@ -266,12 +281,15 @@ func (h *Host) prepare(ctx context.Context, todo *types.TODO, step Step, lc Cont
 		runtimePresets: resolved.Presets,
 		runtimeProfile: resolved.Profile,
 		provenance:     resolved.Resolved.Provenance, warnings: resolved.Resolved.Warnings,
-		batch: opts.Batch,
+		batch: opts.Batch, tools: step.Tools,
 	}
 	prepared.agent, _ = claude.ResolveAgent(spec.Name)
 	prepared.pr, err = h.resolvePR(ctx, todo, class, workDir)
 	if err != nil {
 		return nil, err
+	}
+	if prepared.pr != nil {
+		prepared.pr.events = step.Events
 	}
 	if opts.ReuseBranch {
 		if prepared.pr != nil {
@@ -284,6 +302,13 @@ func (h *Host) prepare(ctx context.Context, todo *types.TODO, step Step, lc Cont
 	if class != types.ModeVerify {
 		if err := h.render(ctx, todo, step, lc, prepared); err != nil {
 			return nil, err
+		}
+		cfg, _, err := captainconfig.Load()
+		if err != nil {
+			return nil, fmt.Errorf("load Captain configuration for prompt context hooks: %w", err)
+		}
+		if prepared.contextSources, err = todoprompt.ContextSources(cfg, workDir); err != nil {
+			return nil, fmt.Errorf("step %s: %w", step.Name, err)
 		}
 	}
 	if message := strings.TrimSpace(opts.Message); message != "" {
@@ -315,7 +340,7 @@ func (h *Host) prepare(ctx context.Context, todo *types.TODO, step Step, lc Cont
 		if err := prepared.pr.configure(prepared); err != nil {
 			return nil, err
 		}
-		prepared.provenance = recordRuntimeFields(prepared.provenance, runtimeFields{Name: "linked PR execution", Paths: []string{"/setup", "/workflow", "/prompt/user", "/prompt/schemaJSON"}, Replace: true})
+		prepared.provenance = recordRuntimeFields(prepared.provenance, runtimeFields{Name: "linked PR execution", Paths: []string{"/setup", "/workflow", "/prompt/user"}, Replace: true})
 	}
 	return prepared, nil
 }
@@ -331,32 +356,17 @@ func (h *Host) render(ctx context.Context, todo *types.TODO, step Step, lc Conte
 		prepared.existingPlan = existing
 	}
 	backlog, labelTaxonomy := "", ""
-	if prepared.definition.Envelope == todoprompt.EnvelopeTriage {
-		backlog = h.backlog(ctx, todo, prepared.batch)
-		labelTaxonomy = h.labelTaxonomy(ctx)
-	}
-	if prepared.definition.Envelope == todoprompt.EnvelopeTriageNew {
-		candidates, err := h.Provider.List(ctx, todos.DiscoveryFilters{})
-		if err != nil {
-			return fmt.Errorf("triage.new backlog: %w", err)
+	if prepared.definition.Backlog {
+		if backlog, err = h.backlog(ctx, todo, prepared.batch); err != nil {
+			return fmt.Errorf("step %s: %w", step.Name, err)
 		}
-		backlog = todos.BuildBacklogIndex(candidates, []*types.TODO{todo}, nil)
-		definitions, ok := h.Provider.(todos.LabelDefinitionProvider)
-		if !ok {
-			return fmt.Errorf("triage.new requires a workspace label taxonomy")
-		}
-		resolved, err := definitions.LabelDefinitions(ctx)
-		if err != nil {
-			return fmt.Errorf("triage.new taxonomy: %w", err)
-		}
-		for _, label := range resolved {
-			labelTaxonomy += fmt.Sprintf("- `%s` — %s\n", label.Name, label.Description)
-		}
+		labelTaxonomy = todos.LabelTaxonomySection(ctx, h.Provider)
 	}
 	req, _, err := todoprompt.Render([]*types.TODO{todo}, todoprompt.Options{
 		WorkDir:      prepared.workDir,
 		Prompt:       prepared.definition.Name,
-		Envelope:     prepared.definition.Envelope,
+		Events:       step.Events,
+		RawFixture:   prepared.definition.Backlog,
 		Mode:         prepared.class,
 		Spec:         prepared.request,
 		Template:     prepared.template,
@@ -380,32 +390,16 @@ func (h *Host) render(ctx context.Context, todo *types.TODO, step Step, lc Conte
 	return nil
 }
 
-// backlog is the duplicate-detection index a triage run compares against. A
-// backlog that cannot be listed degrades the duplicate and merge verdicts but not
-// the rest, so it is logged rather than fatal.
-func (h *Host) backlog(ctx context.Context, todo *types.TODO, batch []string) string {
-	if h.Provider == nil {
-		return ""
-	}
+// backlog is the duplicate-detection index a backlog-reviewing prompt compares
+// against.
+func (h *Host) backlog(ctx context.Context, todo *types.TODO, batch []string) (string, error) {
 	candidates, err := h.Provider.List(ctx, todos.DiscoveryFilters{
 		ExcludeStatuses: []types.Status{types.StatusCompleted},
 	})
 	if err != nil {
-		logger.Warnf("triage duplicate detection is degraded: could not list the backlog: %v", err)
-		return ""
+		return "", fmt.Errorf("list the backlog: %w", err)
 	}
-	return todos.BuildBacklogIndex(candidates, []*types.TODO{todo}, batch)
-}
-
-// labelTaxonomy is the closed vocabulary a triage run may propose labels from.
-// It comes from the same resolver todos.ApplyTriage validates against, so the list
-// the agent is shown is exactly the list it is held to — a second source here is
-// how an agent gets rejected for a label the prompt offered it.
-func (h *Host) labelTaxonomy(ctx context.Context) string {
-	if h.Provider == nil {
-		return ""
-	}
-	return todos.LabelTaxonomySection(ctx, h.Provider)
+	return todos.BuildBacklogIndex(candidates, []*types.TODO{todo}, batch), nil
 }
 
 func (h *Host) executorName(prepared *preparedStep) string {

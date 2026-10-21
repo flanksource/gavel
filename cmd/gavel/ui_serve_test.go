@@ -12,9 +12,11 @@ import (
 
 	"github.com/flanksource/clicky"
 	clickytask "github.com/flanksource/clicky/task"
+	"github.com/flanksource/commons-db/tracing"
 	commonsContext "github.com/flanksource/commons/context"
 	"github.com/flanksource/gavel/testrunner/parsers"
 	testui "github.com/flanksource/gavel/testrunner/ui"
+	"github.com/flanksource/gavel/traces"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -87,14 +89,15 @@ func TestLoadResults_MergesMultipleSnapshots(t *testing.T) {
 		Status:   testui.SnapshotStatus{Running: false, LintRun: true},
 		Tests:    []parsers.Test{{Name: "TestA", Passed: true, Framework: parsers.GoTest}},
 	}
+	processRefs := traces.ProcessRefs{
+		Tree:    tracing.TraceRef{Kind: "process_tree", Stream: "tree-1"},
+		Samples: tracing.TraceRef{Kind: "process_samples", Stream: "samples-1"},
+	}
 	secondPayload := testui.Snapshot{
-		Metadata: &testui.SnapshotMetadata{Version: "v2", Sequence: 2},
+		Metadata: &testui.SnapshotMetadata{Version: "v2", Sequence: 2, RunID: "run-2", ProcessTrace: &processRefs, Args: map[string]any{"work_dir": dir}},
 		Git:      &testui.SnapshotGit{SHA: "222"},
-		Status:   testui.SnapshotStatus{Running: false, DiagnosticsAvailable: true},
+		Status:   testui.SnapshotStatus{Running: false},
 		Tests:    []parsers.Test{{Name: "TestB", Failed: true, Framework: parsers.GoTest}},
-		Diagnostics: &testui.DiagnosticsSnapshot{
-			Root: &testui.ProcessNode{PID: 42, Name: "gavel"},
-		},
 	}
 
 	data, err := json.Marshal(firstPayload)
@@ -122,9 +125,11 @@ func TestLoadResults_MergesMultipleSnapshots(t *testing.T) {
 	assert.Equal(t, "/tmp/repo", got.Git.Root)
 	assert.Equal(t, "222", got.Git.SHA)
 	assert.True(t, got.Status.LintRun)
-	assert.True(t, got.Status.DiagnosticsAvailable)
-	require.NotNil(t, got.Diagnostics)
-	assert.Equal(t, 42, got.Diagnostics.Root.PID)
+	assert.Equal(t, "run-2", got.Metadata.RunID)
+	assert.Equal(t, &processRefs, got.Metadata.ProcessTrace)
+	assert.Equal(t, &testui.TracesStatus{Runs: map[string]testui.RunTraces{"run-2": {
+		Unavailable: "trace store " + traces.StoreDir(dir, "run-2") + " is gone: pruned, or not copied with the snapshot",
+	}}}, got.Status.Traces, "a replayed run whose store is gone is served without it, saying why")
 }
 
 // TestLoadResults_IgnoresGlobalTaskPollution pins the contract that a replayed
@@ -303,88 +308,71 @@ func TestRunUIServe_ReplaysSnapshotAndExits(t *testing.T) {
 	}
 }
 
-func TestAnnounceHost(t *testing.T) {
-	external := firstNonLoopbackIPv4()
-
+func TestUIURLs(t *testing.T) {
+	const port = 9092
 	cases := []struct {
-		name      string
-		requested string
-		want      string
+		name, host, local string
+		wildcard          bool
 	}{
-		{"empty", "", "localhost"},
-		{"localhost", "localhost", "localhost"},
-		{"loopback v4", "127.0.0.1", "localhost"},
-		{"loopback v6", "::1", "localhost"},
-		{"explicit ip", "192.168.42.7", "192.168.42.7"},
-		{"explicit hostname", "buildhost.lan", "buildhost.lan"},
+		{"empty", "", "http://localhost:9092", false},
+		{"localhost", "localhost", "http://localhost:9092", false},
+		{"loopback v4", "127.0.0.1", "http://localhost:9092", false},
+		{"loopback v6", "::1", "http://localhost:9092", false},
+		{"explicit ip", "192.168.42.7", "http://192.168.42.7:9092", false},
+		{"explicit hostname", "buildhost.lan", "http://buildhost.lan:9092", false},
+		{"wildcard v4", "0.0.0.0", "http://localhost:9092", true},
+		{"wildcard v6", "::", "http://localhost:9092", true},
 	}
+	private := firstNonLoopbackIPv4()
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, announceHost(tc.requested))
+			local, network := uiURLs(tc.host, port)
+			assert.Equal(t, tc.local, local)
+			// Only a wildcard bind answers on the private IP; a concrete or
+			// loopback bind has no second reachable address to announce.
+			wantNetwork := ""
+			if tc.wildcard && private != "" {
+				wantNetwork = "http://" + private + ":9092"
+			}
+			assert.Equal(t, wantNetwork, network)
 		})
 	}
+}
 
-	t.Run("wildcard 0.0.0.0", func(t *testing.T) {
-		got := announceHost("0.0.0.0")
-		if external == "" {
-			assert.Equal(t, "localhost", got, "no non-loopback iface; expect fallback")
-		} else {
-			assert.Equal(t, external, got, "expected first non-loopback ipv4")
-		}
-	})
-
-	t.Run("wildcard ::", func(t *testing.T) {
-		got := announceHost("::")
-		if external == "" {
-			assert.Equal(t, "localhost", got)
-		} else {
-			assert.Equal(t, external, got)
-		}
-	})
+func TestUIBanner(t *testing.T) {
+	assert.Equal(t, "UI at http://localhost:1 (network: http://10.0.0.5:1)", uiBanner("UI", "http://localhost:1", "http://10.0.0.5:1"))
+	assert.Equal(t, "UI at http://localhost:1", uiBanner("UI", "http://localhost:1", ""))
 }
 
 // TestBoundHost covers the inherited-listener case: `gavel test --ui --detach`
 // binds the socket in the parent and hands it over on fd 3, so --addr keeps its
-// 0.0.0.0 default while the socket answers only on loopback. Announcing the LAN
-// IP there produces a URL that is refused.
+// 0.0.0.0 default while the socket answers only on loopback. Announcing the
+// private IP there produces a URL that is refused.
 func TestBoundHost(t *testing.T) {
-	external := firstNonLoopbackIPv4()
-
 	cases := []struct {
 		name      string
 		bound     *net.TCPAddr
 		requested string
 		want      string
 	}{
-		{"inherited loopback ignores --addr", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)}, "0.0.0.0", "localhost"},
-		{"loopback v6", &net.TCPAddr{IP: net.IPv6loopback}, "0.0.0.0", "localhost"},
+		{"inherited loopback ignores --addr", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)}, "0.0.0.0", "127.0.0.1"},
+		{"loopback v6", &net.TCPAddr{IP: net.IPv6loopback}, "0.0.0.0", "::1"},
 		{"concrete iface wins over --addr", &net.TCPAddr{IP: net.IPv4(192, 168, 42, 7)}, "localhost", "192.168.42.7"},
 		{"nil addr defers to --addr", nil, "buildhost.lan", "buildhost.lan"},
+		{"wildcard bind defers to --addr", &net.TCPAddr{IP: net.IPv4zero}, "0.0.0.0", "0.0.0.0"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, tc.want, boundHost(tc.bound, tc.requested))
 		})
 	}
-
-	// A wildcard bind is the one case where the socket does not name an
-	// interface, so --addr still decides.
-	t.Run("wildcard bind defers to --addr", func(t *testing.T) {
-		got := boundHost(&net.TCPAddr{IP: net.IPv4zero}, "0.0.0.0")
-		if external == "" {
-			assert.Equal(t, "localhost", got, "no non-loopback iface; expect fallback")
-		} else {
-			assert.Equal(t, external, got)
-		}
-	})
 }
 
-func TestMenubarHost(t *testing.T) {
-	// The native menu-bar webview always runs on the same machine, so it must
-	// dial a loopback host: macOS WKWebView blocks cleartext HTTP to non-loopback
-	// hosts under App Transport Security, and a LAN IP is fragile (VPN/offline).
-	// Unlike announceHost, the wildcard cases resolve to localhost rather than
-	// the externally-reachable LAN IP.
+func TestLocalHost(t *testing.T) {
+	// The browser and the native menu-bar webview run on this machine, so they
+	// dial loopback for every loopback/wildcard bind: macOS WKWebView blocks
+	// cleartext HTTP to non-loopback hosts under App Transport Security, and a
+	// private IP is fragile (VPN/offline).
 	cases := []struct {
 		name      string
 		requested string
@@ -401,7 +389,7 @@ func TestMenubarHost(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, menubarHost(tc.requested))
+			assert.Equal(t, tc.want, localHost(tc.requested))
 		})
 	}
 }

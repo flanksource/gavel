@@ -21,7 +21,7 @@ type Violation struct {
 	Message          *string           `json:"message,omitempty"`
 	Source           string            `json:"source,omitempty"`
 	Rule             *Rule             `json:"rule,omitempty"`
-	Severity         ViolationSeverity `yaml:"severity,omitempty"`
+	Severity         ViolationSeverity `json:"severity,omitempty" yaml:"severity,omitempty"`
 	Fixable          bool              `json:"fixable,omitempty"`
 	FixApplicability string            `json:"fix_applicability,omitempty"`
 	Code             *string           `json:"code,omitempty"`

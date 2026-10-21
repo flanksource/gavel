@@ -84,8 +84,9 @@ func requireEnv(step *fixtures.StepContext, name, hint string) (string, error) {
 	return value, nil
 }
 
-// environ is the fixture Env as a map, for clicky exec's WithExactEnv.
-func environ(step *fixtures.StepContext) map[string]string { return step.Scope.Env.Map() }
+// environ is the step's child environment (the fixture Env and its armed
+// traces' exports), for clicky exec's WithExactEnv.
+func environ(step *fixtures.StepContext) map[string]string { return step.ChildEnv() }
 
 func stepName(step *fixtures.StepContext) string {
 	if step.Spec.Name != "" {

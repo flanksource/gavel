@@ -41,7 +41,9 @@ func (Kind) Schema() json.RawMessage { return schema }
 
 // Execute starts every entry in order, rendering each against the outputs of
 // the entries before it, and fails fast — stopping what it already started —
-// on the first entry that cannot start or become ready.
+// on the first entry that cannot start or become ready. The failed outcome
+// still carries the outputs recorded so far, including the failing entry's
+// readiness probes.
 func (Kind) Execute(ctx context.Context, step *fixtures.StepContext) (fixtures.StepOutcome, error) {
 	began := time.Now()
 	if step.Spec.ID == "" {
@@ -56,13 +58,16 @@ func (Kind) Execute(ctx context.Context, step *fixtures.StepContext) (fixtures.S
 	started := map[string]any{}
 	for _, raw := range raws {
 		svc, err := startEntry(ctx, step, raw, started)
-		if err == nil {
+		if svc != nil {
 			run.entries = append(run.entries, svc)
+		}
+		if err == nil {
 			started[raw.name] = svc.outputs
 			err = exports.exportEntry(raw, svc.outputs, started)
 		}
 		if err != nil {
-			return fixtures.StepOutcome{}, errors.Join(fmt.Errorf("services step %q: %w", step.Spec.ID, err), run.stop(context.WithoutCancel(ctx)))
+			return fixtures.StepOutcome{Outputs: run.outputs(nil)},
+				errors.Join(fmt.Errorf("services step %q: %w", step.Spec.ID, err), run.stop(context.WithoutCancel(ctx)))
 		}
 	}
 	name := step.Spec.Name
@@ -107,10 +112,12 @@ func startEntry(ctx context.Context, step *fixtures.StepContext, raw rawEntry, s
 	default:
 		svc.outputs, err = seedGit(ctx, step, entry)
 	}
-	if err != nil {
+	// An entry that failed after recording outputs (its readiness probes) is
+	// returned with them; it holds no process, so stopping it is a no-op.
+	if err != nil && svc.outputs == nil {
 		return nil, err
 	}
-	return svc, nil
+	return svc, err
 }
 
 // running is the Handle and Cleanup owner of an executed services step.

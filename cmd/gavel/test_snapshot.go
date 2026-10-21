@@ -20,7 +20,7 @@ func buildTestSnapshot(
 	lint []*linters.LinterResult,
 	started time.Time,
 	ended time.Time,
-	diagnostics *testui.DiagnosticsSnapshot,
+	trace *runTrace,
 ) testui.Snapshot {
 	if started.IsZero() {
 		started = time.Now().UTC()
@@ -28,46 +28,29 @@ func buildTestSnapshot(
 	if ended.IsZero() {
 		ended = time.Now().UTC()
 	}
-
 	return testui.Snapshot{
 		Metadata: &testui.SnapshotMetadata{
-			Version:  version,
-			Started:  started.UTC(),
-			Ended:    ended.UTC(),
-			Kind:     "initial",
-			Sequence: 1,
-			Args:     snapshotArgs(opts),
+			Version:      version,
+			Started:      started.UTC(),
+			Ended:        ended.UTC(),
+			Kind:         "initial",
+			Sequence:     1,
+			Args:         snapshotArgs(opts),
+			RunID:        trace.runID(),
+			ProcessTrace: trace.processRefs(),
 		},
 		Git: snapshotGitInfo(opts.WorkDir),
 		Status: testui.SnapshotStatus{
-			Running:              false,
-			LintRun:              opts.Lint,
-			DiagnosticsAvailable: diagnostics != nil,
+			Running: false,
+			LintRun: opts.Lint,
 		},
-		Tests:       tests,
-		Lint:        lint,
-		Diagnostics: diagnostics,
+		Tests: tests,
+		Lint:  lint,
 	}
-}
-
-func captureFinalDiagnostics(enabled bool, rootPID int) *testui.DiagnosticsSnapshot {
-	if !enabled {
-		return nil
-	}
-	manager := testui.NewDiagnosticsManager(rootPID, nil)
-	if _, err := manager.CollectStack(rootPID); err != nil {
-		logger.Warnf("Diagnostics stack capture failed: %v", err)
-	}
-	snapshot, err := manager.Snapshot()
-	if err != nil {
-		logger.Warnf("Diagnostics capture failed: %v", err)
-		return nil
-	}
-	return snapshot
 }
 
 func installTimeoutDiagnosticsHook(reporter *runDiagnosticsReporter) {
-	testrunner.SetCaptureGlobalDiagnostics(func() { reporter.Capture("test package timeout") })
+	testrunner.SetCaptureGlobalDiagnostics(reporter.Capture)
 }
 
 func snapshotArgs(opts testrunner.RunOptions) map[string]any {
@@ -88,6 +71,7 @@ func snapshotArgs(opts testrunner.RunOptions) map[string]any {
 		"ui":             opts.UI,
 		"addr":           opts.Addr,
 		"diagnostics":    opts.Diagnostics,
+		"process_facets": opts.ProcessFacets,
 		"skip_hooks":     opts.SkipHooks,
 		"auto_stop":      durationString(opts.AutoStop),
 		"idle_timeout":   durationString(opts.IdleTimeout),

@@ -116,7 +116,7 @@ func TestAJobsToolsAndApprovalsCallServe(t *testing.T) {
 		},
 	}
 	in := job.Input(t.TempDir())
-	callServe(&in, job, serve)
+	callServe(&in, job, serve, nil)
 
 	require.Len(t, in.Config.Tools, 1)
 	assert.Equal(t, "Search the backlog.", in.Config.Tools[0].Description)
@@ -135,7 +135,32 @@ func TestAJobsToolsAndApprovalsCallServe(t *testing.T) {
 
 	refused := Serve{Call: func(Message) (Reply, error) { return Reply{Error: "the run has no tool \"todo_search\""}, nil }}
 	in = job.Input(t.TempDir())
-	callServe(&in, job, refused)
+	callServe(&in, job, refused, nil)
 	_, err = in.Config.Tools[0].Handler(context.Background(), nil)
 	require.EqualError(t, err, `tool todo_search: the run has no tool "todo_search"`)
+}
+
+func TestAJobRunsItsOwnToolsInPlaceOfServes(t *testing.T) {
+	job := scriptedJob("/srv/repo")
+	job.Tools = []api.ToolDefinition{
+		{Name: "todo_search", Description: "Search the backlog."},
+		{Name: "pr_thread_addressed", Description: "Report a thread addressed."},
+	}
+	serve := Serve{Call: func(message Message) (Reply, error) {
+		return Reply{Output: json.RawMessage(`"from serve"`)}, nil
+	}}
+	local := []api.ToolDefinition{
+		{Name: "pr_thread_addressed", Description: "Report a thread addressed.", Handler: func(context.Context, map[string]any) (any, error) { return "in the job", nil }},
+		{Name: "undeclared", Handler: func(context.Context, map[string]any) (any, error) { return nil, nil }},
+	}
+	in := job.Input(t.TempDir())
+	callServe(&in, job, serve, local)
+
+	require.Len(t, in.Config.Tools, 2, "a job tool the run did not declare is not added")
+	output, err := in.Config.Tools[0].Handler(context.Background(), nil)
+	require.NoError(t, err)
+	assert.Equal(t, "from serve", output)
+	output, err = in.Config.Tools[1].Handler(context.Background(), nil)
+	require.NoError(t, err)
+	assert.Equal(t, "in the job", output)
 }

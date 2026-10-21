@@ -10,17 +10,28 @@ import (
 	"strings"
 
 	"github.com/flanksource/commons/logger"
-	"github.com/flanksource/gavel/utils"
 )
 
-// findGoModRoots is swappable so tests can skip the .gitignore-respecting
-// filesystem walk and feed a fixed list of module directories.
-var findGoModRoots = func(root string) []string {
-	return utils.FindAllProjectRoots(root, []string{"go.mod"})
+// stagedGoModDirs returns the absolute directories of every go.mod staged in
+// source that still exists on disk (a staged deletion has nothing to tidy).
+func stagedGoModDirs(workDir string, source stagedSource) []string {
+	var dirs []string
+	for _, f := range source.Files {
+		if filepath.Base(f) != "go.mod" {
+			continue
+		}
+		modDir := filepath.Join(workDir, filepath.Dir(f))
+		if _, err := os.Stat(filepath.Join(modDir, "go.mod")); err == nil {
+			dirs = append(dirs, modDir)
+		}
+	}
+	return dirs
 }
 
-// applyGoModTidy runs `go mod tidy` in every Go module in the repo and stages
-// any go.mod / go.sum updates into the in-flight commit. Off by default unless
+// applyGoModTidy runs `go mod tidy` in every Go module whose go.mod is part of
+// the commit and stages any go.mod / go.sum updates into the in-flight commit.
+// Modules whose go.mod is not staged are left alone, so a commit that doesn't
+// touch dependencies never depends on module resolution. Off by default unless
 // pushing; override via opts.TidyFlag ("true"/"false") or opts.Config.Tidy.Enabled. Hard
 // failure aborts the commit so a broken go.sum can't slip through. ctx is
 // kept for signature parity with the other apply* helpers.
@@ -30,7 +41,7 @@ func applyGoModTidy(ctx context.Context, opts Options, source stagedSource) (sta
 		return source, nil
 	}
 
-	roots := findGoModRoots(opts.WorkDir)
+	roots := stagedGoModDirs(opts.WorkDir, source)
 	if len(roots) == 0 {
 		return source, nil
 	}

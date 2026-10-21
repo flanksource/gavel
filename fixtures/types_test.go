@@ -100,7 +100,7 @@ func TestAsMapTemplatesCustomColumns(t *testing.T) {
 		},
 	}
 
-	exec, err := fixture.ExecBase().Template(fixture.AsMap())
+	exec, err := fixture.ExecBase().Template(fixture.AsMap(), nil)
 	assert.NoError(t, err)
 	assert.Equal(t, "curl", exec.Exec)
 	assert.Equal(t, []string{"https://example.com/api", "--header", "X-Token: abc123"}, exec.Args)

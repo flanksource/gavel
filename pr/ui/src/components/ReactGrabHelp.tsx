@@ -38,12 +38,11 @@ export function ReactGrabHelp() {
         >
           <div className="space-y-4 text-sm">
             <p className="text-muted-foreground">
-              Capture any UI element into a gavel todo. Grab an element with{' '}
+              Capture any UI element into a gavel todo. Press <strong>Command+G</strong>, then click an element to open a prefilled todo form. You can also grab an element with{' '}
               <a className="underline" href="https://github.com/aidenybai/react-grab" target="_blank" rel="noreferrer">
                 React Grab
               </a>{' '}
-              and run the <strong>Add to gavel todo</strong> action — a dialog opens with this gavel's
-              todo form prefilled from the component and its source, with options for a new or existing issue.
+              and run the <strong>Add to gavel todo</strong> action. The form includes the component and its source, with options for a new or existing issue.
             </p>
 
             <div>
@@ -71,7 +70,7 @@ export function ReactGrabHelp() {
             </div>
 
             <p className="text-muted-foreground">
-              Developing with <code>gavel pr list --dev</code>? It's already loaded — just grab and run the action.
+              Developing with <code>gavel pr list --dev</code>? It's already loaded — press <strong>Command+G</strong> and click an element.
             </p>
           </div>
         </Modal>

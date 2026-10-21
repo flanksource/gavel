@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/flanksource/gavel/internal/safefs"
+
 	"github.com/flanksource/gavel/linters/jscpd"
 )
 
@@ -38,12 +40,14 @@ func applyDuplication(ctx context.Context, report *Report, workDir string) error
 	return nil
 }
 
-func runJscpd(ctx context.Context, workDir string) (*jscpd.JscpdReport, error) {
+func runJscpd(ctx context.Context, workDir string) (report *jscpd.JscpdReport, runErr error) {
 	tempDir, err := os.MkdirTemp("", "gavel-outline-jscpd-*")
 	if err != nil {
 		return nil, fmt.Errorf("create jscpd temp dir: %w", err)
 	}
-	defer os.RemoveAll(tempDir)
+	defer func() {
+		runErr = errors.Join(runErr, safefs.SafeRemove(tempDir, safefs.RemoveContext{AllowedRoot: os.TempDir()}))
+	}()
 
 	args := []string{
 		"--reporters", "json",

@@ -1,0 +1,48 @@
+---
+title: Ginkgo
+description: Go suites with Ginkgo imports.
+parent: test-execution
+order: 2
+---
+
+import { SchemaReference } from "@flanksource/clicky-ui/data";
+import schema from "../../../gavel.schema.json";
+
+## Discovery and prerequisites
+
+Gavel scans `_test.go` imports to identify Ginkgo v2 suites and injects a report hook through Go's overlay build flag. Ginkgo v1 suites are rejected with an upgrade error.
+
+## Execute and focus
+
+```bash
+gavel test ginkgo --dry-run .
+gavel test ginkgo .
+gavel test ginkgo ./pkg/parser -- --focus Parser
+gavel test ginkgo ./pkg/parser -- --label-filter=unit
+```
+
+Replace example paths, labels, and test names with your project. Arguments after `--` go to the selected framework. Gavel maps `--focus` and `--label-filter` to the corresponding Ginkgo test-binary flags. These filters cause a fresh Go test execution. Ginkgo `--nodes > 1` is unsupported by the unified runner.
+
+## Configure the adapter
+
+```yaml
+test:
+  frameworks:
+    ginkgo:
+      runtime:
+        timeout: 5m
+        mem: 2GiB
+```
+
+`test.frameworks.ginkgo.args` supplies native runner arguments; nonempty lists replace inherited lists. Global execution and reporting options are covered by [Test execution](/docs/test-execution) and [Reporting](/docs/reporting).
+
+## Results
+
+The adapter executes `go test -json -v` and emits a versioned, chunked Ginkgo report into the test binary's stdout. Gavel reconstructs each report from Go's JSON events, including cached replay, and shows hierarchy, labels, source locations, durations, failures, attempts, and report entries. Cached metadata describes the original execution. Go's package pass/fail events remain authoritative. Use `--failed <snapshot>` to verify a repair, and `--show-passed` to expose successful tests.
+
+## Framework configuration reference
+
+The fields below are the configuration for `test.frameworks.ginkgo`. Native framework configuration remains in its own project files.
+
+<SchemaReference schema={schema.properties.test.properties.frameworks.additionalProperties} id="framework-ginkgo" />
+

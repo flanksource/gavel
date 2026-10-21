@@ -44,8 +44,11 @@ type Request struct {
 	// Options is what the caller decided; everything else comes from the
 	// lifecycle definition.
 	Options Options
-	// Approvals enables Captain's broker for an attended run.
+	// Approvals enables Captain's durable broker, which the dashboard answers.
 	Approvals bool
+	// OnApproval answers approvals in-process instead, e.g. at the terminal the
+	// run was started from. It excludes Approvals.
+	OnApproval api.ApprovalFunc
 	// OnComplete reports the finished run to the caller before its outcome is
 	// persisted, so a terminal can print what the agent said even when the write
 	// that follows fails. The status is the one the lifecycle decided, not the
@@ -111,12 +114,12 @@ type Options struct {
 	// decided alongside this one and a fold naming an already-closed TODO is
 	// refused. Empty for a single-todo run.
 	Batch []string
-	// Preview holds back a triage verdict that would close a TODO and reports what
-	// it would have done. Every other verdict, and every other step, is unaffected.
+	// Preview makes todo_merge and todo_close report what they would do and write
+	// nothing. Every other tool, and every other step, is unaffected.
 	//
 	// It is not DryRun's sibling despite the name: DryRun stops before the agent
-	// runs at all, so it can never show a verdict. This runs the agent and stops
-	// before the one write a later run cannot undo.
+	// runs at all. This runs the agent and holds back only the writes a later run
+	// cannot undo.
 	Preview bool
 	// Host is the entrypoint the run was started from. It contributes no spec
 	// layer; see lifecycle.HostKind.

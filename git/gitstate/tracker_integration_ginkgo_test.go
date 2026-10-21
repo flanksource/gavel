@@ -23,6 +23,7 @@ import (
 type trackedRepo struct {
 	root, feature string
 	base          string
+	dsn           string
 	db            *gorm.DB
 	tracker       *gitstate.Tracker
 }
@@ -62,7 +63,7 @@ func newTrackedRepo(ctx context.Context, opts gitstate.Options) *trackedRepo {
 
 	tmp, err := filepath.EvalSymlinks(GinkgoT().TempDir())
 	Expect(err).NotTo(HaveOccurred())
-	r := &trackedRepo{root: filepath.Join(tmp, "repo"), feature: filepath.Join(tmp, "wt-feature"), db: opened.Gorm()}
+	r := &trackedRepo{root: filepath.Join(tmp, "repo"), feature: filepath.Join(tmp, "wt-feature"), db: opened.Gorm(), dsn: handle.DSN()}
 	Expect(os.MkdirAll(r.root, 0o755)).To(Succeed())
 	git(r.root, "init", "-q", "-b", "main")
 	git(r.root, "config", "user.email", "test@example.com")
@@ -88,7 +89,7 @@ func (r *trackedRepo) count(query string, args ...any) int64 {
 
 func (r *trackedRepo) generation() int64 {
 	GinkgoHelper()
-	return r.count(`SELECT generation FROM git_repos WHERE root_dir = ?`, r.root)
+	return r.count(`SELECT o.generation FROM git_repo_overview o JOIN git_repos r ON r.id = o.repo_id WHERE r.root_dir = ?`, r.root)
 }
 
 var _ = Describe("Tracker", func() {
@@ -203,6 +204,7 @@ var _ = Describe("Tracker", func() {
 		_, err := r.tracker.State(ctx, r.root)
 		Expect(err).NotTo(HaveOccurred())
 		staleStatus := time.Now().Add(-time.Hour)
+		Expect(r.db.Exec(`UPDATE git_worktree_overview SET status_scanned_at = ? WHERE path = ?`, staleStatus, r.feature).Error).To(Succeed())
 		Expect(r.db.Exec(`UPDATE git_worktrees SET status_scanned_at = ? WHERE path = ?`, staleStatus, r.feature).Error).To(Succeed())
 
 		state, err := r.tracker.State(ctx, r.root)

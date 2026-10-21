@@ -252,44 +252,55 @@ $$;
 
 -- Map any monitored session or descendant back through its root provider
 -- identity to the admission root and active Gavel issue.
+--
+-- The projection calls this for every captain_sessions write, and nearly all
+-- of those sessions were never admitted by Gavel. The admission is therefore
+-- resolved first, through the provider-identity index, and a session without
+-- one returns before the issue join: as one query the planner drove that join
+-- from every issue with an active run (measured: 439 index probes and 13.6 ms
+-- per call, 176k calls in nine days).
 CREATE OR REPLACE FUNCTION public.gavel_project_todo_session(p_session_id uuid)
 RETURNS integer
 LANGUAGE plpgsql
 SET search_path = pg_catalog, public
 AS $$
 DECLARE
+  identity record;
+  admission_ids uuid[];
   linked record;
   changed_count integer := 0;
 BEGIN
+  SELECT COALESCE(root.provider_session_id, target.provider_session_id) AS provider_session_id,
+         GREATEST(
+           COALESCE(target.last_activity_at, '-infinity'::timestamptz),
+           COALESCE(target.state_observed_at, '-infinity'::timestamptz),
+           COALESCE(target.started_at, '-infinity'::timestamptz),
+           COALESCE(target.ended_at, '-infinity'::timestamptz),
+           target.updated_at
+         ) AS activity_at
+    INTO identity
+    FROM public.captain_sessions target
+    LEFT JOIN public.captain_sessions root ON root.id = COALESCE(target.root_session_id, target.id)
+   WHERE target.id = p_session_id;
+  IF NOT FOUND OR identity.provider_session_id IS NULL THEN
+    RETURN 0;
+  END IF;
+  SELECT array_agg(admission.id) INTO admission_ids
+    FROM public.captain_sessions admission
+   WHERE admission.provider_session_id = identity.provider_session_id
+     AND admission.source = 'gavel';
+  IF admission_ids IS NULL THEN
+    RETURN 0;
+  END IF;
   FOR linked IN
-    WITH target AS (
-      SELECT session.*,
-             COALESCE(session.root_session_id, session.id) AS family_root_id
-      FROM public.captain_sessions session WHERE session.id = p_session_id
-    ), identity AS (
-      SELECT COALESCE(root.provider_session_id, target.provider_session_id) AS provider_session_id,
-             GREATEST(
-               COALESCE(target.last_activity_at, '-infinity'::timestamptz),
-               COALESCE(target.state_observed_at, '-infinity'::timestamptz),
-               COALESCE(target.started_at, '-infinity'::timestamptz),
-               COALESCE(target.ended_at, '-infinity'::timestamptz),
-               target.updated_at
-             ) AS activity_at
-      FROM target
-      LEFT JOIN public.captain_sessions root ON root.id = target.family_root_id
-    )
-    SELECT DISTINCT issue.id AS issue_id, identity.activity_at
-    FROM identity
-    JOIN public.captain_sessions admission
-      ON identity.provider_session_id IS NOT NULL
-     AND admission.provider_session_id = identity.provider_session_id
-     AND admission.source = 'gavel'
-    JOIN public.captain_prompt_runs run ON run.root_session_id = admission.id
+    SELECT DISTINCT issue.id AS issue_id
+    FROM public.captain_prompt_runs run
     JOIN public.todo_issue_prompt_runs link ON link.prompt_run_id = run.id
     JOIN public.todo_issues issue
       ON issue.id = link.issue_id AND issue.active_prompt_run_id = run.id
+    WHERE run.root_session_id = ANY (admission_ids)
   LOOP
-    IF public.gavel_touch_todo_issue(linked.issue_id, linked.activity_at) THEN
+    IF public.gavel_touch_todo_issue(linked.issue_id, identity.activity_at) THEN
       changed_count := changed_count + 1;
     END IF;
   END LOOP;

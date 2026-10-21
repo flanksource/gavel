@@ -26,8 +26,13 @@ const emptyRuns: TestRunsResponse = { projects: [] };
 // `enabled` keeps that stream off while another tab is showing: the sidebar is
 // only mounted on the projects tab, and an idle EventSource per tab would hold a
 // connection open for a list nobody is looking at.
-export function useProjectCatalog({ configured, selectedName, enabled }: {
+//
+// `configured` excludes hidden projects, so a hidden project that still has runs
+// in the history would reappear as a history-only entry; `hiddenDirs` lists the
+// directories of hidden projects to keep it out.
+export function useProjectCatalog({ configured, hiddenDirs, selectedName, enabled }: {
   configured: Project[];
+  hiddenDirs: string[];
   selectedName: string;
   enabled: boolean;
 }): ProjectCatalog {
@@ -47,8 +52,9 @@ export function useProjectCatalog({ configured, selectedName, enabled }: {
 
   const projects = useMemo(() => {
     const merged = new Map(configured.map(project => [project.name, project]));
+    const hidden = new Set(hiddenDirs);
     for (const project of latestRuns.projects) {
-      if (merged.has(project.name)) continue;
+      if (merged.has(project.name) || hidden.has(project.dir)) continue;
       merged.set(project.name, {
         name: project.name,
         dir: project.dir,
@@ -56,7 +62,7 @@ export function useProjectCatalog({ configured, selectedName, enabled }: {
       });
     }
     return [...merged.values()];
-  }, [latestRuns.projects, configured]);
+  }, [latestRuns.projects, configured, hiddenDirs]);
 
   useEffect(() => {
     if (queryEnabled) return;

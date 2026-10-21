@@ -25,7 +25,7 @@ describe('OrgChooser', () => {
     const config = { all: false, org: '', repos: [], ignoredOrgs: [] } as SearchConfig;
     render(
       <QueryClientProvider client={queryClient}>
-        <OrgChooser config={config} projects={projects} onChange={vi.fn()} />
+        <OrgChooser config={config} projects={projects} onChange={vi.fn()} onSetProjectHidden={vi.fn()} />
       </QueryClientProvider>,
     );
 
@@ -52,6 +52,7 @@ describe('OrgChooser', () => {
           config={{ all: true, org: 'acme', repos: [] }}
           projects={projects}
           onChange={onChange}
+          onSetProjectHidden={vi.fn()}
         />
       </QueryClientProvider>,
     );
@@ -77,6 +78,7 @@ describe('OrgChooser', () => {
           config={{ project: 'gavel', repos: ['acme/gavel'] }}
           projects={projects}
           onChange={onChange}
+          onSetProjectHidden={vi.fn()}
         />
       </QueryClientProvider>,
     );
@@ -101,6 +103,7 @@ describe('OrgChooser', () => {
           config={{ project: '', repos: ['acme/clicky', 'acme/gavel'], all: false }}
           projects={projects}
           onChange={vi.fn()}
+          onSetProjectHidden={vi.fn()}
         />
       </QueryClientProvider>,
     );
@@ -117,6 +120,7 @@ describe('OrgChooser', () => {
           config={{ project: '', repos: [], all: false }}
           projects={[]}
           onChange={vi.fn()}
+          onSetProjectHidden={vi.fn()}
         />
       </QueryClientProvider>,
     );
@@ -134,6 +138,7 @@ describe('OrgChooser', () => {
           config={{ repos: [], project: 'gavel' }}
           projects={projects}
           onChange={onChange}
+          onSetProjectHidden={vi.fn()}
         />
       </QueryClientProvider>,
     );
@@ -163,6 +168,7 @@ describe('OrgChooser', () => {
           config={{ repos: ['acme/gavel'], project: 'gavel' }}
           projects={projects}
           onChange={onChange}
+          onSetProjectHidden={vi.fn()}
         />
       </QueryClientProvider>,
     );
@@ -171,5 +177,75 @@ describe('OrgChooser', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Select acme organization' }));
 
     expect(onChange).toHaveBeenCalledWith({ project: '', org: 'acme', all: true, repos: [] });
+  });
+});
+
+describe('OrgChooser hidden projects', () => {
+  const withHidden: Project[] = [
+    ...projects,
+    { name: 'archive', dir: '/work/archive', repos: ['acme/archive'], hidden: true },
+  ];
+
+  function renderChooser({ config, onChange = vi.fn(), onSetProjectHidden = vi.fn() }: {
+    config: SearchConfig;
+    onChange?: (partial: Partial<SearchConfig>) => void;
+    onSetProjectHidden?: (name: string, hidden: boolean) => void;
+  }) {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => [] }));
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <OrgChooser config={config} projects={withHidden} onChange={onChange} onSetProjectHidden={onSetProjectHidden} />
+      </QueryClientProvider>,
+    );
+    fireEvent.click(screen.getByTitle('Switch project / GitHub scope'));
+  }
+
+  it('lists a hidden project only after expanding Manage hidden', () => {
+    renderChooser({ config: { repos: [] } });
+
+    expect(screen.queryByRole('button', { name: 'Filter by archive project' })).toBeNull();
+    expect(screen.queryByText('archive')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: /Manage hidden \(1\)/ }));
+
+    expect(screen.getByText('archive')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Filter by archive project' })).toBeNull();
+  });
+
+  it('hides a visible project through the callback without selecting it', () => {
+    const onChange = vi.fn();
+    const onSetProjectHidden = vi.fn();
+    renderChooser({ config: { repos: [] }, onChange, onSetProjectHidden });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Hide clicky project' }));
+
+    expect(onSetProjectHidden).toHaveBeenCalledExactlyOnceWith('clicky', true);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('unhides a hidden project through the callback', () => {
+    const onSetProjectHidden = vi.fn();
+    renderChooser({ config: { repos: [] }, onSetProjectHidden });
+
+    fireEvent.click(screen.getByRole('button', { name: /Manage hidden \(1\)/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Unhide archive project' }));
+
+    expect(onSetProjectHidden).toHaveBeenCalledExactlyOnceWith('archive', false);
+  });
+
+  it('computes all-projects scope from visible projects only', () => {
+    const onChange = vi.fn();
+    renderChooser({ config: { project: '', repos: ['acme/gavel', 'acme/clicky'], all: false }, onChange });
+
+    expect(screen.getByTitle('Switch project / GitHub scope').textContent).toContain('All projects');
+    fireEvent.click(screen.getByRole('button', { name: 'Filter by all projects' }));
+
+    expect(onChange).toHaveBeenCalledWith({
+      project: '',
+      repos: ['acme/gavel', 'acme/clicky'],
+      org: '',
+      all: false,
+    });
   });
 });

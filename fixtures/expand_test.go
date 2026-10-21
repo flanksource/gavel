@@ -28,6 +28,10 @@ func TestExpandVars(t *testing.T) {
 		{"no vars", "plain text", "plain text"},
 		{"numeric value", "$count items", "42 items"},
 		{"multiple same var", "$GOOS-$GOOS", "linux-linux"},
+		{"unknown braced var keeps its braces", "${HOME}/files", "${HOME}/files"},
+		{"shell parameter expansion passthrough", `"${0#--cpuprofile=}" ${PORT:-8080}`, `"${0#--cpuprofile=}" ${PORT:-8080}`},
+		{"shell specials passthrough", "$1 $@ $? $$ $#", "$1 $@ $? $$ $#"},
+		{"known name followed by text", "${GOOS}x $GOOSx", "linuxx $GOOSx"},
 	}
 
 	for _, tt := range tests {

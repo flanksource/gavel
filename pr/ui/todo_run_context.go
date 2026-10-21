@@ -213,7 +213,7 @@ func (s *Server) hostedRunContext(ctx context.Context, dir string) (todoRunConte
 	for step, resolved := range promptDefaults {
 		model, err := api.ResolveModel(resolved.Spec.Model)
 		if err != nil {
-			return todoRunContextResponse{}, fmt.Errorf("resolve the %s step's model %q: %w", step, resolved.Spec.Model.Name, err)
+			return todoRunContextResponse{}, fmt.Errorf("resolve the %s step's model %q: %w", step, resolved.Spec.Name, err)
 		}
 		if model.Name != "" {
 			resolved.Model, resolved.Mode = model.Name, string(model.Mode)
@@ -320,7 +320,7 @@ func todoRunLifecycleFor(definition lifecycle.Lifecycle) todoRunLifecycle {
 
 // stepLabel is a step name as a picker shows it: `shape-it` → `Shape it`.
 func stepLabel(name string) string {
-	words := strings.Fields(strings.NewReplacer("-", " ", "_", " ").Replace(name))
+	words := strings.Fields(strings.NewReplacer("-", " ", "_", " ", ".", " ").Replace(name))
 	if len(words) == 0 {
 		return name
 	}

@@ -219,6 +219,7 @@ func applyTodoNewValues(payload *todoNewPayload, values map[string][]string, ove
 	assignStatus(&payload.Status, "status")
 	assignString(&payload.Parent, "parent")
 	assignString(&payload.Visibility, "visibility")
+	assignString(&payload.Step, "step")
 	if raw := firstTodoNewValue(values, "pr"); raw != "" && (overwrite || payload.PR == nil) {
 		pr, err := todoPRFormValue(raw)
 		if err != nil {
@@ -231,23 +232,15 @@ func applyTodoNewValues(payload *todoNewPayload, values map[string][]string, ove
 			payload.Labels = labels
 		}
 	}
-	for _, field := range []struct {
-		target **bool
-		keys   []string
-	}{
-		{&payload.AutoSave, []string{"autoSave", "autosave", "auto_save"}},
-		{&payload.Triage, []string{"triage"}},
-	} {
-		if !overwrite && *field.target != nil {
-			continue
+	if !overwrite && payload.AutoSave != nil {
+		return nil
+	}
+	if raw, exists := firstTodoUpdateValue(values, "autoSave", "autosave", "auto_save"); exists {
+		parsed, err := strconv.ParseBool(strings.TrimSpace(raw))
+		if err != nil {
+			return fmt.Errorf("invalid autoSave %q", raw)
 		}
-		if raw, exists := firstTodoUpdateValue(values, field.keys...); exists {
-			parsed, err := strconv.ParseBool(strings.TrimSpace(raw))
-			if err != nil {
-				return fmt.Errorf("invalid %s %q", field.keys[0], raw)
-			}
-			*field.target = &parsed
-		}
+		payload.AutoSave = &parsed
 	}
 	return nil
 }

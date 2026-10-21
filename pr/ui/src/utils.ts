@@ -235,6 +235,19 @@ export function isBotAuthor(author: string): boolean {
 // failure/lint detail, so the aggregate keeps the same bound.
 const MAX_GAVEL_DETAIL = 5;
 
+type FailedCounts = Pick<GavelResultsSummary, 'testsFailed' | 'testsTimedOut'>;
+
+// timedOutNote annotates a failed-test count with how many of those failures
+// were timeouts. Timed-out is a subset of failed, so it is never a separate
+// total; the note is empty when nothing timed out.
+export function timedOutNote({ testsTimedOut }: Pick<GavelResultsSummary, 'testsTimedOut'>): string {
+  return testsTimedOut ? ` (${testsTimedOut} timed out)` : '';
+}
+
+export function failedTestsLabel(counts: FailedCounts): string {
+  return `${counts.testsFailed} failed${timedOutNote(counts)}`;
+}
+
 // aggregateGavelShards rolls per-shard artifact summaries into one. Used by the
 // sidebar badge and by the detail card header; artifactId/artifactUrl are left
 // empty because an aggregate has no single artifact to deep-link to — that
@@ -247,6 +260,7 @@ export function aggregateGavelShards(shards: GavelResultsSummary[]): GavelResult
     artifactUrl: '',
     testsPassed: 0,
     testsFailed: 0,
+    testsTimedOut: 0,
     testsSkipped: 0,
     testsTotal: 0,
     lintViolations: 0,
@@ -261,6 +275,7 @@ export function aggregateGavelShards(shards: GavelResultsSummary[]): GavelResult
   for (const s of shards) {
     agg.testsPassed += s.testsPassed;
     agg.testsFailed += s.testsFailed;
+    agg.testsTimedOut = (agg.testsTimedOut ?? 0) + (s.testsTimedOut ?? 0);
     agg.testsSkipped += s.testsSkipped;
     agg.testsTotal += s.testsTotal;
     agg.lintViolations += s.lintViolations;

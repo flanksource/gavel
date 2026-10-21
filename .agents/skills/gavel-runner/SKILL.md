@@ -154,9 +154,7 @@ Endpoints (from `testrunner/ui/handler.go`):
 | --- | --- | --- |
 | GET | `/api/tests` | Current snapshot as JSON (same shape as `--format json`) |
 | GET | `/api/tests/stream` | SSE stream of live test updates |
-| GET | `/api/diagnostics` | Timeout artifacts + resource stats |
-| GET | `/api/diagnostics/collect` | Trigger an on-demand diagnostics capture |
-| GET | `/api/process/metrics` | Process CPU/memory metrics |
+| GET | `/query/<run id>/...` | The run's trace store (`process_tree`, `process_samples`, `stacks`, fixture traces); `POST /query/<run id>/api/v1/sessions/<status.traces.sessions.stacks>/checkpoint` with `{key or pid, transport?, reason?}` dumps a process's stacks (`inprocess` for gavel, `native` for any process, `sigquit` — which kills it — for a Go test binary); the same on `sessions.samples` with `{key}` reads its facets (open files, sockets, ports, connections; armed under `--ui`/`--process-facets`) |
 | POST | `/api/rerun` | Trigger a rerun with filters (test names / frameworks) |
 | GET | `/api/rerun/stream` | SSE stream of rerun updates |
 | POST | `/api/stop` | Stop the in-flight run |
@@ -200,10 +198,12 @@ Gavel layers four wall-clock deadlines on `gavel test`. Each kills its subproces
 
 | Flag | Default | Scope |
 | --- | --- | --- |
-| `--timeout` | `10m` | Global, for the entire `gavel test` run (test + lint). On hit, diagnostics are captured and **every** subprocess is killed. |
-| `--test-timeout` | `5m` | Per-test-package subprocess (one go-test/ginkgo/vitest invocation). |
+| `--timeout` | `20m` (or `test.timeout`) | Global, for the entire `gavel test` run (test + lint). On hit, diagnostics are captured (logged, and gavel's goroutines checkpointed into the run's `stacks` with reason `timeout`; also every 10m as `periodic`) and **every** subprocess is killed. |
+| `--test-timeout` | none (or `test.testTimeout`) | Per-test-package subprocess (one go-test/ginkgo/vitest invocation). Before the kill, each running Go test binary is SIGQUIT and given up to 3s to print its goroutines: the dump lands on the timed-out test's attempt (`stack_trace`, `goroutine_count`) and, with `--ui`/`--diagnostics`, as `stacks` records on the binary's process key (`reason: package-timeout:<pkg>`); `goroutine_count` is that checkpoint's record count. |
 | `--lint-timeout` | `5m` | Per-linter subprocess when `--lint` is set. |
 | `gavel lint --timeout` | `5m` | Per-linter when running `gavel lint` standalone. Duration string (`30s`, `2m`, …). |
+
+The `stacks` checkpoints need a process capture: pass `--diagnostics` (no browser) or `--ui`; without one the log says `not checkpointed`. `--process-facets` (needs one of those) also records open files, sockets, ports and environment. Details: `site/content/docs/traces-profiling-benchmarks.mdx`.
 
 Two more deadlines apply only to the detached UI (`gavel test --ui --detach`):
 

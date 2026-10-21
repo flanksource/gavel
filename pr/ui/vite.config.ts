@@ -1,11 +1,11 @@
 import { execSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
+import { localClicky } from '../../testrunner/ui/vite.clicky';
 
 const require = createRequire(import.meta.url);
 const here = dirname(fileURLToPath(import.meta.url));
@@ -25,49 +25,18 @@ const uiVersion = git('describe --tags --always', 'dev');
 const uiCommit = git('rev-parse --short HEAD', 'unknown');
 const uiDate = new Date().toISOString();
 
-// `pr list --ui --dev` uses sibling source and generated CSS through Vite;
-// package installs and production builds use the published dependency.
-const clickyPackage = resolve(here, '../../../clicky-ui/packages/ui');
-const clickySrc = resolve(clickyPackage, 'src');
 const gavelTestRunnerHooks = resolve(here, '../../testrunner/ui/src/hooks.ts');
-const clickySubpaths = ['components', 'data', 'icons', 'hooks', 'ai', 'chat', 'rpc', 'mdx-editor'];
 
 export default defineConfig(({ command }) => {
-  // Gated to `serve` + sibling-present so `vite build` and CI (no sibling) keep
-  // resolving the installed/published package — nothing local-path is committed
-  // into the dependency graph.
-  const localClicky = command === 'serve' && existsSync(clickySrc);
-  if (localClicky) {
-    console.log(`[pr/ui] dev: resolving @flanksource/clicky-ui from local source (${clickySrc})`);
-  }
-  // Every module Vite resolves outside `root` is handed to chokidar individually,
-  // and its FSEvents backend opens a stream per parent directory (consolidating
-  // only once 10 pile up under one ancestor) — the clicky-ui source spans ~50 of
-  // them, all charged to fseventsd. Set GAVEL_UI_WATCH_CLICKY=0 to keep resolving
-  // sibling source while dropping those streams; the cost is losing file
-  // invalidation on clicky-ui edits, so only do it when this session isn't touching clicky-ui.
-  const watchClicky = process.env.GAVEL_UI_WATCH_CLICKY !== '0';
-  if (localClicky && !watchClicky) {
-    console.log('[pr/ui] dev: GAVEL_UI_WATCH_CLICKY=0 — clicky-ui source is not watched');
-  }
-  const clickyAliases = localClicky
-    ? [
-        ...clickySubpaths.map(sub => ({
-          find: `@flanksource/clicky-ui/${sub}`,
-          replacement: resolve(clickySrc, `${sub}.ts`),
-        })),
-        { find: /^@flanksource\/clicky-ui$/, replacement: resolve(clickySrc, 'index.ts') },
-        { find: '@flanksource/clicky-ui/styles.css', replacement: resolve(clickyPackage, 'dist/styles.css') },
-        { find: '@flanksource/clicky-ui/mdx-editor.css', replacement: resolve(clickyPackage, 'dist/mdx-editor.css') },
-      ]
-    : [];
+  // `pr list --ui --dev` resolves clicky-ui from the sibling checkout's source.
+  const clicky = localClicky(resolve(here, '../..'), command, 'pr/ui');
 
   return {
     plugins: [react(), tailwindcss()],
     resolve: {
-      dedupe: ['react', 'react-dom', '@tanstack/react-query'],
+      dedupe: ['react', 'react-dom', '@tanstack/react-query', '@flanksource/clicky-ui'],
       alias: [
-        ...clickyAliases,
+        ...clicky.aliases,
         { find: '@flanksource/gavel/testrunner/hooks', replacement: gavelTestRunnerHooks },
         { find: /^react$/, replacement: require.resolve('react') },
         { find: /^react-dom$/, replacement: require.resolve('react-dom') },
@@ -94,12 +63,7 @@ export default defineConfig(({ command }) => {
       strictPort: true,
       // Keep watching source while requiring a browser refresh to see changes.
       hmr: false,
-      // The local clicky-ui source lives outside this project root; allow Vite to
-      // serve it (and its hoisted deps) when the dev alias above is active.
-      ...(localClicky ? { fs: { allow: [resolve(here, '../../..')] } } : {}),
-      // Additive — Vite keeps its own defaults (.git, node_modules, test-results,
-      // cacheDir, outDir) and appends this.
-      ...(localClicky && !watchClicky ? { watch: { ignored: [`${clickySrc}/**`] } } : {}),
+      ...clicky.server,
     },
     build: {
       // ES-module library build: the stable `prui.js` entry is loaded as

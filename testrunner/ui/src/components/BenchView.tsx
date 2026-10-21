@@ -1,12 +1,9 @@
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
+import { Badge, DataTable, type DataTableColumn } from '@flanksource/clicky-ui/data';
+import { cn } from '@flanksource/clicky-ui/utils';
 import type { BenchComparison, BenchDelta } from '../types';
-import { BenchDeltaBar } from './BenchDeltaBar';
 
-interface Props {
-  bench: BenchComparison | undefined;
-}
-
-type SortKey = 'name' | 'delta' | 'base' | 'head' | 'p';
+type Category = 'regression' | 'improvement' | 'neutral' | 'only';
 
 function formatNs(ns: number): string {
   if (ns >= 1e9) return `${(ns / 1e9).toFixed(2)}s`;
@@ -15,174 +12,156 @@ function formatNs(ns: number): string {
   return `${ns.toFixed(2)}ns`;
 }
 
-function categorize(d: BenchDelta, threshold: number): 'regression' | 'improvement' | 'neutral' | 'only' {
+function categorize(d: BenchDelta, threshold: number): Category {
   if (d.only_in) return 'only';
   if (d.significant && d.delta_pct > threshold) return 'regression';
   if (d.significant && d.delta_pct < -threshold) return 'improvement';
   return 'neutral';
 }
 
-export function BenchView({ bench }: Props) {
-  const [sortKey, setSortKey] = useState<SortKey>('delta');
-  const [sortDesc, setSortDesc] = useState(true);
+// BenchRow is a DataTable row: the comparison's delta with the figures a column reads.
+type BenchRow = {
+  name: string;
+  base: number | null;
+  head: number | null;
+  baseSpread: string;
+  headSpread: string;
+  delta: number | null;
+  pValue: number | null;
+  samples: number | null;
+  category: Category;
+  onlyIn: string | null;
+  threshold: number;
+  significant: boolean;
+};
 
-  if (!bench) {
-    return (
-      <div className="p-8 text-center text-gray-400 text-sm">
-        No benchmark comparison loaded. Run <code className="px-1 bg-gray-200 rounded">gavel bench compare --ui</code>.
-      </div>
-    );
-  }
-
-  const sorted = useMemo(() => {
-    const deltas = [...(bench.deltas || [])];
-    const cmp = (a: BenchDelta, b: BenchDelta) => {
-      switch (sortKey) {
-        case 'name': return a.name.localeCompare(b.name);
-        case 'delta': return (a.delta_pct || 0) - (b.delta_pct || 0);
-        case 'base': return (a.base_mean || 0) - (b.base_mean || 0);
-        case 'head': return (a.head_mean || 0) - (b.head_mean || 0);
-        case 'p': return (a.p_value || 1) - (b.p_value || 1);
-      }
-    };
-    deltas.sort((a, b) => {
-      const v = cmp(a, b);
-      return sortDesc ? -v : v;
-    });
-    return deltas;
-  }, [bench, sortKey, sortDesc]);
-
-  const summary = useMemo(() => {
-    let regressions = 0, improvements = 0, neutral = 0, only = 0;
-    for (const d of bench.deltas || []) {
-      const c = categorize(d, bench.threshold);
-      if (c === 'regression') regressions++;
-      else if (c === 'improvement') improvements++;
-      else if (c === 'only') only++;
-      else neutral++;
-    }
-    return { regressions, improvements, neutral, only };
-  }, [bench]);
-
-  const onSort = (key: SortKey) => {
-    if (sortKey === key) setSortDesc(!sortDesc);
-    else { setSortKey(key); setSortDesc(true); }
+function toRow(delta: BenchDelta, threshold: number): BenchRow {
+  const only = !!delta.only_in;
+  return {
+    name: delta.name,
+    base: only ? null : delta.base_mean,
+    head: only ? null : delta.head_mean,
+    baseSpread: delta.base_stddev ? `±${delta.base_stddev.toFixed(1)}%` : '',
+    headSpread: delta.head_stddev ? `±${delta.head_stddev.toFixed(1)}%` : '',
+    delta: only ? null : delta.delta_pct,
+    pValue: delta.p_value !== undefined && delta.p_value > 0 ? delta.p_value : null,
+    samples: delta.samples ?? null,
+    category: categorize(delta, threshold),
+    onlyIn: delta.only_in ?? null,
+    threshold,
+    significant: !!delta.significant,
   };
+}
 
-  const sortIcon = (key: SortKey) => {
-    if (sortKey !== key) return <iconify-icon icon="codicon:chevron-down" className="opacity-20" />;
-    return <iconify-icon icon={sortDesc ? 'codicon:chevron-down' : 'codicon:chevron-up'} />;
-  };
+const CATEGORY_TEXT: Record<Category, string> = {
+  regression: 'text-red-600 dark:text-red-400',
+  improvement: 'text-green-600 dark:text-green-400',
+  neutral: 'text-muted-foreground',
+  only: 'text-muted-foreground',
+};
 
+const CATEGORY_BAR: Record<Category, string> = {
+  regression: 'bg-red-500',
+  improvement: 'bg-green-500',
+  neutral: 'bg-muted-foreground/40',
+  only: 'bg-muted-foreground/40',
+};
+
+// DeltaBar draws the signed delta: right of centre is a regression, left an
+// improvement; its length is |delta| clamped at 50%.
+function DeltaBar({ row }: { row: BenchRow }) {
+  if (row.delta === null) return <span className="text-xs italic text-muted-foreground">only in {row.onlyIn}</span>;
+  const clamped = Math.max(-50, Math.min(50, row.delta));
+  const width = Math.abs(clamped);
   return (
-    <div className="p-4">
-      <div className="mb-3 flex items-center gap-4 text-sm">
-        <div className="text-gray-600">
-          <span className="font-mono">{bench.base_label || 'base'}</span>
-          <span className="mx-2 text-gray-400">→</span>
-          <span className="font-mono">{bench.head_label || 'head'}</span>
-        </div>
-        <div className="text-gray-500 text-xs">threshold ±{bench.threshold.toFixed(1)}%</div>
-        {summary.regressions > 0 && (
-          <span className="px-2 py-0.5 bg-red-100 text-red-700 text-xs rounded font-semibold">
-            {summary.regressions} regression{summary.regressions > 1 ? 's' : ''}
-          </span>
-        )}
-        {summary.improvements > 0 && (
-          <span className="px-2 py-0.5 bg-green-100 text-green-700 text-xs rounded font-semibold">
-            {summary.improvements} improvement{summary.improvements > 1 ? 's' : ''}
-          </span>
-        )}
-        {summary.neutral > 0 && (
-          <span className="px-2 py-0.5 bg-gray-100 text-gray-600 text-xs rounded">
-            {summary.neutral} unchanged
-          </span>
-        )}
-        <div className={`ml-auto text-sm font-mono ${
-          bench.geomean_delta > bench.threshold ? 'text-red-600 font-bold' :
-          bench.geomean_delta < -bench.threshold ? 'text-green-600 font-bold' :
-          'text-gray-500'
-        }`}>
-          geomean: {bench.geomean_delta >= 0 ? '+' : ''}{bench.geomean_delta.toFixed(2)}%
-        </div>
+    <div className="flex w-full min-w-48 items-center gap-2">
+      <div className="relative h-4 min-w-20 flex-1 overflow-hidden rounded bg-muted">
+        <div className="absolute inset-y-0 left-1/2 w-px bg-muted-foreground/60" />
+        <div
+          className={cn('absolute inset-y-0', CATEGORY_BAR[row.category])}
+          style={row.delta >= 0 ? { left: '50%', width: `${width}%` } : { right: '50%', width: `${width}%` }}
+        />
       </div>
-
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="border-b border-gray-200 text-left text-xs text-gray-500 uppercase">
-            <SortHeader onClick={() => onSort('name')} icon={sortIcon('name')}>Benchmark</SortHeader>
-            <SortHeader onClick={() => onSort('base')} icon={sortIcon('base')} align="right">Base</SortHeader>
-            <SortHeader onClick={() => onSort('head')} icon={sortIcon('head')} align="right">Head</SortHeader>
-            <SortHeader onClick={() => onSort('delta')} icon={sortIcon('delta')}>Δ</SortHeader>
-            <SortHeader onClick={() => onSort('p')} icon={sortIcon('p')} align="right">p-value</SortHeader>
-          </tr>
-        </thead>
-        <tbody>
-          {sorted.map(d => <BenchRow key={d.name} delta={d} threshold={bench.threshold} />)}
-        </tbody>
-      </table>
+      <span className={cn('w-16 text-right text-xs tabular-nums', CATEGORY_TEXT[row.category], row.significant && 'font-semibold')}>
+        {row.delta >= 0 ? '+' : ''}{row.delta.toFixed(2)}%
+      </span>
     </div>
   );
 }
 
-function SortHeader({ children, onClick, icon, align }: {
-  children: any;
-  onClick: () => void;
-  icon: any;
-  align?: 'right';
-}) {
-  return (
-    <th
-      className={`py-2 px-2 font-semibold cursor-pointer hover:bg-gray-50 select-none ${align === 'right' ? 'text-right' : ''}`}
-      onClick={onClick}
-    >
-      <span className="inline-flex items-center gap-1">{children}{icon}</span>
-    </th>
-  );
-}
+const COLUMNS: Array<DataTableColumn<BenchRow>> = [
+  { key: 'name', label: 'Benchmark', sortable: true, grow: true, cellClassName: 'font-mono text-xs' },
+  {
+    key: 'base', label: 'Base', sortable: true, align: 'right',
+    render: (_value, row) => row.base === null ? '' : (
+      <div className="text-xs tabular-nums">{formatNs(row.base)}{row.baseSpread && <div className="text-[10px] text-muted-foreground">{row.baseSpread}</div>}</div>
+    ),
+  },
+  {
+    key: 'head', label: 'Head', sortable: true, align: 'right',
+    render: (_value, row) => row.head === null ? '' : (
+      <div className="text-xs tabular-nums">{formatNs(row.head)}{row.headSpread && <div className="text-[10px] text-muted-foreground">{row.headSpread}</div>}</div>
+    ),
+  },
+  { key: 'delta', label: 'Δ', sortable: true, render: (_value, row) => <DeltaBar row={row} /> },
+  {
+    key: 'pValue', label: 'p-value', sortable: true, align: 'right',
+    render: (_value, row) => (
+      <span className="text-xs tabular-nums text-muted-foreground">
+        {row.pValue !== null ? row.pValue.toPrecision(2) : '—'}
+        {row.samples !== null && <span className="ml-1">n={row.samples}</span>}
+      </span>
+    ),
+  },
+];
 
-function BenchRow({ delta, threshold }: { delta: BenchDelta; threshold: number }) {
-  const cat = categorize(delta, threshold);
-  const rowBg = cat === 'regression' ? 'bg-red-50' : cat === 'improvement' ? 'bg-green-50' : '';
+/** A benchmark comparison (`gavel bench compare --ui`): per-benchmark base and head means, delta bar and significance. */
+export function BenchView({ bench }: { bench: BenchComparison | undefined }) {
+  const rows = useMemo(() => (bench?.deltas ?? []).map(delta => toRow(delta, bench!.threshold)), [bench]);
+  const summary = useMemo(() => {
+    const counts: Record<Category, number> = { regression: 0, improvement: 0, neutral: 0, only: 0 };
+    rows.forEach(row => { counts[row.category] += 1; });
+    return counts;
+  }, [rows]);
 
-  if (delta.only_in) {
+  if (!bench) {
     return (
-      <tr className="border-b border-gray-100 text-gray-500">
-        <td className="py-1.5 px-2 font-mono text-xs">{delta.name}</td>
-        <td className="py-1.5 px-2 text-right text-xs italic" colSpan={4}>
-          only in {delta.only_in}
-        </td>
-      </tr>
+      <div className="p-8 text-center text-sm text-muted-foreground">
+        No benchmark comparison loaded. Run <code className="rounded bg-muted px-1">gavel bench compare --ui</code>.
+      </div>
     );
   }
 
-  const stddevBase = delta.base_stddev ? `±${delta.base_stddev.toFixed(1)}%` : '';
-  const stddevHead = delta.head_stddev ? `±${delta.head_stddev.toFixed(1)}%` : '';
-
   return (
-    <tr className={`border-b border-gray-100 hover:bg-gray-50 ${rowBg}`}>
-      <td className="py-1.5 px-2 font-mono text-xs truncate max-w-[24rem]" title={delta.name}>
-        {delta.name}
-      </td>
-      <td className="py-1.5 px-2 text-right tabular-nums text-xs">
-        <div>{formatNs(delta.base_mean)}</div>
-        {stddevBase && <div className="text-gray-400 text-[10px]">{stddevBase}</div>}
-      </td>
-      <td className="py-1.5 px-2 text-right tabular-nums text-xs">
-        <div>{formatNs(delta.head_mean)}</div>
-        {stddevHead && <div className="text-gray-400 text-[10px]">{stddevHead}</div>}
-      </td>
-      <td className="py-1.5 px-2 w-64">
-        <BenchDeltaBar delta={delta} threshold={threshold} />
-      </td>
-      <td className="py-1.5 px-2 text-right tabular-nums text-xs text-gray-500">
-        {delta.p_value !== undefined && delta.p_value > 0
-          ? delta.p_value.toPrecision(2)
-          : <span className="text-gray-300">—</span>}
-        {delta.samples !== undefined && (
-          <span className="ml-1 text-gray-400">n={delta.samples}</span>
-        )}
-      </td>
-    </tr>
+    <div className="flex h-full min-h-0 flex-col gap-density-2 p-density-4">
+      <div className="flex flex-wrap items-center gap-4 text-sm">
+        <div>
+          <span className="font-mono">{bench.base_label || 'base'}</span>
+          <span className="mx-2 text-muted-foreground">→</span>
+          <span className="font-mono">{bench.head_label || 'head'}</span>
+        </div>
+        <div className="text-xs text-muted-foreground">threshold ±{bench.threshold.toFixed(1)}%</div>
+        {summary.regression > 0 && <Badge tone="danger" variant="soft" size="xs">{summary.regression} regression{summary.regression > 1 ? 's' : ''}</Badge>}
+        {summary.improvement > 0 && <Badge tone="success" variant="soft" size="xs">{summary.improvement} improvement{summary.improvement > 1 ? 's' : ''}</Badge>}
+        {summary.neutral > 0 && <Badge tone="neutral" variant="soft" size="xs">{summary.neutral} unchanged</Badge>}
+        <div
+          className={cn(
+            'ml-auto font-mono text-sm',
+            bench.geomean_delta > bench.threshold ? 'font-bold text-red-600 dark:text-red-400'
+              : bench.geomean_delta < -bench.threshold ? 'font-bold text-green-600 dark:text-green-400'
+                : 'text-muted-foreground',
+          )}
+        >
+          geomean: {bench.geomean_delta >= 0 ? '+' : ''}{bench.geomean_delta.toFixed(2)}%
+        </div>
+      </div>
+      <DataTable<BenchRow>
+        data={rows}
+        columns={COLUMNS}
+        defaultSort={{ key: 'delta', dir: 'desc' }}
+        emptyMessage="No benchmarks were compared"
+        className="min-h-0 flex-1"
+      />
+    </div>
   );
 }

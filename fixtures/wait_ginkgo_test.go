@@ -2,6 +2,7 @@ package fixtures
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -25,6 +26,15 @@ func (c *fakeClock) Sleep(ctx context.Context, d time.Duration) error {
 
 func newFakeClock() *fakeClock {
 	return &fakeClock{now: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)}
+}
+
+// sleepUntilCancelled never finishes a delay on its own: only a cancelled
+// context ends its Sleep.
+type sleepUntilCancelled struct{ *fakeClock }
+
+func (sleepUntilCancelled) Sleep(ctx context.Context, _ time.Duration) error {
+	<-ctx.Done()
+	return ctx.Err()
 }
 
 func fixedRand(value float64) func() float64 { return func() float64 { return value } }
@@ -90,30 +100,56 @@ var _ = Describe("waiter", func() {
 		clock, observed = newFakeClock(), 0
 	})
 
+	It("persists only terminal outputs and elapsed time including probe execution", func() {
+		w := newWaiter(WaitPolicy{Until: "status == 'done'", Interval: dur(time.Second), Timeout: dur(time.Minute)})
+		w.observe = func(context.Context) (map[string]any, error) {
+			observed++
+			clock.now = clock.now.Add(250 * time.Millisecond)
+			if observed == 1 {
+				return map[string]any{"status": "intermediate-secret"}, nil
+			}
+			return map[string]any{"status": "done"}, nil
+		}
+		report, _ := w.run(context.Background())
+		raw, err := json.Marshal(report)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(raw)).To(And(ContainSubstring(`"durationMs":1500`), ContainSubstring(`"outputs":{"status":"done"}`), Not(ContainSubstring("observations")), Not(ContainSubstring("intermediate-secret"))))
+	})
+
 	It("succeeds on the first observation the until expression holds", func() {
 		statuses = []string{"pending", "running", "done"}
 		report, outputs := newWaiter(WaitPolicy{Until: "status == 'done'", Interval: dur(time.Second),
 			Backoff: &Backoff{Factor: 2}, Timeout: dur(time.Minute)}).run(context.Background())
 
 		Expect(report.Outcome).To(Equal(WaitSatisfied))
-		Expect(report.Observations).To(HaveLen(3))
-		Expect(report.Observations[2].Until).To(BeTrue())
-		Expect(report.Observations[1].DelayMs).To(Equal(int64(1000)))
-		Expect(report.Observations[2].DelayMs).To(Equal(int64(2000)))
+		Expect(report.Expression).To(Equal("status == 'done'"))
+		Expect(report.DurationMs).To(Equal(int64(3000)))
+		Expect(report.Outputs).To(Equal(map[string]any{"status": "done"}))
 		Expect(clock.slept).To(Equal([]time.Duration{time.Second, 2 * time.Second}))
 		Expect(outputs).To(HaveKeyWithValue("status", "done"))
 	})
 
-	It("stops early when failWhen holds, with the CEL trace of the verdict", func() {
+	It("stops early when failWhen holds, naming failWhen as the deciding expression with its trace and variables", func() {
 		statuses = []string{"running", "failed", "done"}
 		report, _ := newWaiter(WaitPolicy{Until: "status == 'done'", FailWhen: "status == 'failed'",
 			Interval: dur(time.Second), Timeout: dur(time.Minute)}).run(context.Background())
 
 		Expect(report.Outcome).To(Equal(WaitFailed))
-		Expect(report.Observations).To(HaveLen(2))
-		Expect(report.Observations[1].FailWhen).To(BeTrue())
+		Expect(report.Expression).To(Equal("status == 'failed'"))
+		Expect(report.DurationMs).To(Equal(int64(1000)))
+		Expect(report.Outputs).To(Equal(map[string]any{"status": "failed"}))
 		Expect(report.Error).To(ContainSubstring("status == 'failed'"))
 		Expect(report.Trace).To(ContainSubstring("failed"))
+		Expect(report.celVars).To(Equal(map[string]any{"status": "failed"}))
+	})
+
+	It("names failWhen as the deciding expression when it cannot be evaluated", func() {
+		statuses = []string{"running"}
+		report, _ := newWaiter(WaitPolicy{Until: "status == 'done'", FailWhen: "missing.field == 'x'",
+			Interval: dur(time.Second), Timeout: dur(time.Minute)}).run(context.Background())
+
+		Expect([]string{report.Outcome, report.Expression}).To(Equal([]string{WaitFailed, "missing.field == 'x'"}))
+		Expect(report.Error).To(ContainSubstring("wait failWhen missing.field"))
 	})
 
 	It("times out at the deadline carrying the last observed outputs", func() {
@@ -122,8 +158,10 @@ var _ = Describe("waiter", func() {
 			Timeout: dur(3 * time.Second)}).run(context.Background())
 
 		Expect(report.Outcome).To(Equal(WaitTimeout))
-		Expect(report.Observations).To(HaveLen(4))
-		Expect(report.Observations[3].Outputs).To(HaveKeyWithValue("status", "running"))
+		Expect(report.Expression).To(Equal("status == 'done'"))
+		Expect(observed).To(Equal(4))
+		Expect(report.DurationMs).To(Equal(int64(3000)))
+		Expect(report.Outputs).To(HaveKeyWithValue("status", "running"))
 		Expect(outputs).To(HaveKeyWithValue("status", "running"))
 		Expect(report.Error).To(ContainSubstring("status == 'done'"))
 		Expect(report.Trace).ToNot(BeEmpty())
@@ -151,7 +189,9 @@ var _ = Describe("waiter", func() {
 		report, _ := w.run(context.Background())
 
 		Expect(report.Outcome).To(Equal(WaitSatisfied))
-		Expect(report.Observations[0].Error).To(Equal("connection refused"))
+		Expect(calls).To(Equal(2))
+		Expect(report.Error).To(BeEmpty())
+		Expect(report.Outputs).To(Equal(map[string]any{"status": "up"}))
 	})
 
 	It("fails loudly when the until expression cannot be evaluated", func() {
@@ -159,8 +199,178 @@ var _ = Describe("waiter", func() {
 		report, _ := newWaiter(WaitPolicy{Until: "missing.field == 'x'", Interval: dur(time.Second),
 			Timeout: dur(time.Minute)}).run(context.Background())
 
-		Expect(report.Outcome).To(Equal(WaitFailed))
+		Expect([]string{report.Outcome, report.Expression}).To(Equal([]string{WaitFailed, "missing.field == 'x'"}))
 		Expect(report.Error).To(ContainSubstring("missing.field"))
+	})
+
+	It("retains the terminal trace when the CEL evaluator supplies one with an error", func() {
+		statuses = []string{"running"}
+		w := newWaiter(WaitPolicy{Until: "status == 'done'", Interval: dur(time.Second), Timeout: dur(time.Minute)})
+		w.check = func(string, map[string]any) (bool, string, error) {
+			return false, "status == 'done' -> evaluation failed", errors.New("evaluation failed")
+		}
+		report, _ := w.run(context.Background())
+		Expect(report.Trace).To(Equal("status == 'done' -> evaluation failed"))
+		Expect(report.Error).To(ContainSubstring("evaluation failed"))
+		Expect(report.Outcome).To(Equal(WaitFailed))
+	})
+
+	It("keeps an empty terminal observation rather than earlier outputs after a probe error", func() {
+		w := newWaiter(WaitPolicy{Until: "status == 'done'", Interval: dur(time.Second), Timeout: dur(time.Second)})
+		w.observe = func(context.Context) (map[string]any, error) {
+			observed++
+			if observed == 1 {
+				return map[string]any{"status": "earlier-value"}, nil
+			}
+			return nil, errors.New("connection lost")
+		}
+		report, outputs := w.run(context.Background())
+		Expect(outputs).To(BeEmpty())
+		Expect(report.Outputs).To(BeEmpty())
+		Expect(report.Error).To(ContainSubstring("connection lost"))
+		Expect(report.DurationMs).To(Equal(int64(1000)))
+	})
+
+	It("records elapsed time and final output when cancelled during a delay", func() {
+		ctx, cancel := context.WithCancel(context.Background())
+		w := newWaiter(WaitPolicy{Until: "status == 'done'", Interval: dur(time.Second), Timeout: dur(time.Minute)})
+		w.observe = func(context.Context) (map[string]any, error) {
+			clock.now = clock.now.Add(250 * time.Millisecond)
+			cancel()
+			return map[string]any{"status": "running"}, nil
+		}
+		report, _ := w.run(ctx)
+		Expect(report.Outcome).To(Equal(WaitTimeout))
+		Expect(report.Error).To(ContainSubstring("context canceled"))
+		Expect(report.DurationMs).To(Equal(int64(1250)))
+		Expect(report.Outputs).To(Equal(map[string]any{"status": "running"}))
+	})
+})
+
+var _ = Describe("waiter with a Go probe", func() {
+	var clock *fakeClock
+	policy := WaitPolicy{Interval: dur(time.Second), Backoff: &Backoff{Factor: 2, Max: dur(3 * time.Second)}, Timeout: dur(10 * time.Second)}
+
+	BeforeEach(func() { clock = newFakeClock() })
+
+	probeWaiter := func(probes ...WaitProbe) (waiter, *int) {
+		calls := 0
+		return waiter{policy: policy, clock: clock, rand: fixedRand(0.5), probe: func(context.Context) WaitProbe {
+			calls++
+			return probes[min(calls, len(probes))-1]
+		}}, &calls
+	}
+	refused := WaitProbe{Outputs: map[string]any{"ready": false}, Error: errors.New("connection refused")}
+
+	It("records only the final probe and elapsed backoff time", func() {
+		w, _ := probeWaiter(refused, WaitProbe{Outputs: map[string]any{"ready": false}, Error: errors.New("http status 503")},
+			WaitProbe{Outputs: map[string]any{"ready": true}, Until: true})
+		report, outputs := w.run(context.Background())
+
+		Expect(report).To(Equal(WaitReport{Policy: policy, Outcome: WaitSatisfied, DurationMs: 3000, Outputs: map[string]any{"ready": true}}))
+		Expect(outputs).To(Equal(map[string]any{"ready": true}))
+	})
+
+	It("fails fast on a failWhen probe, naming its error", func() {
+		w, calls := probeWaiter(refused, WaitProbe{Outputs: map[string]any{"ready": false}, FailWhen: true, Error: errors.New("exited before it was ready")})
+		report, _ := w.run(context.Background())
+
+		Expect(*calls).To(Equal(2))
+		Expect(report.Outcome).To(Equal(WaitFailed))
+		Expect(report.Error).To(Equal("exited before it was ready"))
+		Expect(report.Outputs).To(Equal(map[string]any{"ready": false}))
+	})
+
+	It("names the broken probe contract when a failWhen probe gives no error", func() {
+		w, _ := probeWaiter(WaitProbe{Outputs: map[string]any{"ready": false}, FailWhen: true})
+		report, _ := w.run(context.Background())
+
+		Expect([]string{report.Outcome, report.Error}).To(Equal([]string{WaitFailed, "wait probe set FailWhen without an Error; a failing probe must say why"}))
+	})
+
+	It("times out at the deadline naming the last probe", func() {
+		w, _ := probeWaiter(refused)
+		report, _ := w.run(context.Background())
+
+		Expect(report.Outcome).To(Equal(WaitTimeout))
+		Expect(report.Error).To(Equal("not ready after 10s: last probe: connection refused"))
+		Expect(clock.slept).To(Equal([]time.Duration{time.Second, 2 * time.Second, 3 * time.Second, 3 * time.Second, time.Second}))
+	})
+
+	It("cuts the current delay short when wake closes, so the next probe runs at once", func() {
+		wake := make(chan struct{})
+		close(wake)
+		w, calls := probeWaiter(refused, WaitProbe{Outputs: map[string]any{"ready": false}, FailWhen: true, Error: errors.New("exited")})
+		w.wake, w.clock = wake, sleepUntilCancelled{clock}
+		report, _ := w.run(context.Background())
+
+		Expect(*calls).To(Equal(2))
+		Expect(report.Outcome).To(Equal(WaitFailed))
+	})
+})
+
+var _ = Describe("Wait", func() {
+	probe := func(context.Context) WaitProbe { return WaitProbe{Until: true} }
+	timing := WaitPolicy{Interval: dur(time.Second), Timeout: dur(time.Second)}
+
+	It("rejects a CEL until or failWhen, which a Go probe cannot honour", func() {
+		withUntil := timing
+		withUntil.Until = "ready"
+		_, err := Wait(context.Background(), WaitOptions{Policy: withUntil, Probe: probe})
+		Expect(err).To(MatchError(ContainSubstring("until/failWhen")))
+	})
+
+	It("rejects an invalid timing policy before probing", func() {
+		invalid := timing
+		invalid.Jitter = "150%"
+		_, err := Wait(context.Background(), WaitOptions{Policy: invalid, Probe: probe})
+		Expect(err).To(MatchError(ContainSubstring(`jitter "150%"`)))
+	})
+})
+
+// causingKind is an observing kind that names the domain cause of a wait
+// that did not succeed: the observed `reason`.
+type causingKind struct{ observingKind }
+
+func (causingKind) FailureCause(outputs map[string]any) string {
+	reason, _ := outputs["reason"].(string)
+	return reason
+}
+
+var _ = Describe("a step whose wait does not succeed", func() {
+	observing := func(observed map[string]any) causingKind {
+		return causingKind{observingKind{
+			fakeKind: fakeKind{name: "launcher", execute: passing(nil, nil)},
+			observe:  func(context.Context, *StepContext, any) (map[string]any, error) { return observed, nil },
+		}}
+	}
+	const until, failWhen = "state == 'done'", "state == 'failed'"
+	const cause = "aimock: no scenario rule matched this request"
+
+	It("leads its message with the kind's cause and records failWhen with its variables, minus env", func() {
+		useKind(observing(map[string]any{"state": "failed", "reason": cause}))
+
+		result := runSteps(StepSpec{ID: "triaged", Kind: "launcher",
+			Wait: &WaitPolicy{Until: until, FailWhen: failWhen, Interval: dur(time.Millisecond), Timeout: dur(time.Second)}})[0]
+
+		Expect(result.Status).To(Equal(task.StatusFAIL))
+		Expect(result.Error).To(Equal(cause + "\n(wait failWhen " + failWhen + " is true)"))
+		Expect(result.CELExpression).To(Equal(failWhen))
+		Expect(result.CELTrace).NotTo(BeEmpty())
+		Expect(result.CELVars).To(And(HaveKeyWithValue("state", "failed"), HaveKey("steps"), Not(HaveKey("env"))))
+		Expect(metadataJSON(result)["wait"]).To(And(HaveKeyWithValue("cause", cause), HaveKeyWithValue("expression", failWhen)))
+	})
+
+	It("names until as the deciding expression of a timeout and keeps the wait error when the kind names no cause", func() {
+		useKind(observing(map[string]any{"state": "running"}))
+
+		result := runSteps(StepSpec{ID: "triaged", Kind: "launcher",
+			Wait: &WaitPolicy{Until: until, FailWhen: failWhen, Interval: dur(time.Millisecond), Timeout: dur(20 * time.Millisecond)}})[0]
+
+		Expect(result.Error).To(HavePrefix("wait until " + until + " did not hold within"))
+		Expect(result.CELExpression).To(Equal(until))
+		Expect(result.TimedOut).To(BeTrue())
+		Expect(metadataJSON(result)["wait"]).To(And(HaveKeyWithValue("expression", until), Not(HaveKey("cause"))))
 	})
 })
 
@@ -194,6 +404,27 @@ var _ = Describe("retrier", func() {
 	var clock *fakeClock
 
 	BeforeEach(func() { clock = newFakeClock() })
+
+	It("keeps independent attempt evidence when the kind reuses its output map", func() {
+		calls := 0
+		shared := map[string]any{"phase": "failed-launch"}
+		r := retrier{policy: RetryPolicy{Attempts: 2, When: "true"}, check: evalStepCEL, clock: clock, rand: fixedRand(0.5), vars: retryVarsFor}
+		_, attempts := r.run(context.Background(), func(context.Context) (StepOutcome, error) {
+			calls++
+			if calls == 2 {
+				shared["phase"] = "launched"
+				return StepOutcome{Result: FixtureResult{Status: task.StatusPASS, Stdout: "second"}, Outputs: shared}, nil
+			}
+			return StepOutcome{Result: FixtureResult{Status: task.StatusFAIL, Stdout: "first"}, Outputs: shared}, nil
+		})
+		raw, err := json.Marshal(attempts)
+		Expect(err).NotTo(HaveOccurred())
+		var stored []map[string]any
+		Expect(json.Unmarshal(raw, &stored)).To(Succeed())
+		Expect(stored[0]).To(HaveKeyWithValue("result", HaveKeyWithValue("stdout", "first")))
+		Expect(string(raw)).To(ContainSubstring("failed-launch"))
+		Expect(stored[1]).To(HaveKeyWithValue("result", HaveKeyWithValue("stdout", "second")))
+	})
 
 	failing := func(calls *int) func(context.Context) (StepOutcome, error) {
 		return func(context.Context) (StepOutcome, error) {
@@ -267,5 +498,30 @@ var _ = Describe("retrier", func() {
 
 		Expect(calls).To(Equal(2))
 		Expect(attempts[1].Status).To(Equal(AttemptPassed))
+	})
+
+	It("cleans a failed attempt before starting its retry", func() {
+		calls, cleaned := 0, false
+		r := retrier{policy: RetryPolicy{Attempts: 2, When: "true"}, check: evalStepCEL, clock: clock, rand: fixedRand(0.5), vars: retryVarsFor}
+		_, attempts := r.run(context.Background(), func(context.Context) (StepOutcome, error) {
+			calls++
+			if calls == 2 {
+				Expect(cleaned).To(BeTrue())
+				return StepOutcome{Result: FixtureResult{Status: task.StatusPASS}}, nil
+			}
+			return StepOutcome{Result: FixtureResult{Status: task.StatusFAIL}, Cleanup: func(context.Context) error { cleaned = true; return nil }}, nil
+		})
+		Expect(attempts).To(HaveLen(2))
+	})
+
+	It("stops retrying when the failed attempt cannot be cleaned", func() {
+		calls := 0
+		r := retrier{policy: RetryPolicy{Attempts: 2, When: "true"}, check: evalStepCEL, clock: clock, rand: fixedRand(0.5), vars: retryVarsFor}
+		outcome, _ := r.run(context.Background(), func(context.Context) (StepOutcome, error) {
+			calls++
+			return StepOutcome{Result: FixtureResult{Status: task.StatusFAIL}, Cleanup: func(context.Context) error { return errors.New("cleanup refused") }}, nil
+		})
+		Expect(calls).To(Equal(1))
+		Expect(outcome.Result.Error).To(ContainSubstring("cleanup refused"))
 	})
 })

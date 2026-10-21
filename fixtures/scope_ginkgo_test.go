@@ -1,6 +1,9 @@
 package fixtures
 
 import (
+	"context"
+	"errors"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -34,5 +37,18 @@ var _ = Describe("StepContext rendering", func() {
 	It("fails a template that references a value that is not set", func() {
 		_, err := step.Template(`{{.env.NOPE}}`)
 		Expect(err).To(MatchError(ContainSubstring("not set")))
+	})
+})
+
+var _ = Describe("StepScope teardown", func() {
+	It("runs cleanup registered after teardown and rejects a late temp dir", func() {
+		scope := NewStepScope(nil)
+		_, err := scope.Teardown(context.Background())
+		Expect(err).ToNot(HaveOccurred())
+		called := false
+		Expect(scope.AddCleanup("late", func(context.Context) error { called = true; return errors.New("late cleanup failed") })).To(MatchError("late cleanup failed"))
+		Expect(called).To(BeTrue())
+		_, err = scope.TempDir()
+		Expect(err).To(HaveOccurred())
 	})
 })

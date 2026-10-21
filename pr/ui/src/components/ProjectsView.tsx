@@ -12,7 +12,7 @@ import { TestRunDetail } from './tests/TestRunDetail';
 // bodySidebar, ProjectDetailPane into children — so both take the shared
 // catalog rather than owning the /api/tests state between them.
 
-export function ProjectsSidebar({ catalog, gitSummary, selectedName, selectedRunId, historyEnabled, onHistoryChange, onSelect, onSelectRun, onChanged, onAdd, onSettings }: {
+export function ProjectsSidebar({ catalog, gitSummary, selectedName, selectedRunId, historyEnabled, onHistoryChange, onSelect, onSelectRun, onChanged, onAdd, onSettings, onHide }: {
   catalog: ProjectCatalog;
   gitSummary: ProjectGitSummaryView;
   selectedName: string;
@@ -24,6 +24,7 @@ export function ProjectsSidebar({ catalog, gitSummary, selectedName, selectedRun
   onChanged: () => void;
   onAdd: () => void;
   onSettings: (project: Project) => void;
+  onHide: (project: Project) => void;
 }) {
   const procStatus = useProcStatus();
   return (
@@ -43,6 +44,7 @@ export function ProjectsSidebar({ catalog, gitSummary, selectedName, selectedRun
       onChanged={onChanged}
       onAdd={onAdd}
       onSettings={onSettings}
+      onHide={onHide}
     />
   );
 }

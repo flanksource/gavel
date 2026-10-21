@@ -3,12 +3,9 @@ package services
 import (
 	"context"
 	"fmt"
-	"math"
-	"math/rand/v2"
 	"net"
 	"net/http"
 	"os/exec"
-	"strconv"
 	"strings"
 	"time"
 
@@ -24,74 +21,32 @@ const (
 	probeTimeout    = 5 * time.Second
 )
 
-// schedule is the probe cadence an entry's `wait:` describes: interval grown
-// by factor up to max, ± jitter, within timeout.
-//
-// It reads fixtures.WaitPolicy's fields directly. Once the generic CEL waiter
-// lands in package fixtures, the delay computation should move onto it.
-type schedule struct {
-	interval, max, timeout time.Duration
-	factor                 float64
-	jitterFraction         float64
-	jitterAbsolute         time.Duration
-}
-
-func scheduleFor(policy *fixtures.WaitPolicy) (schedule, error) {
-	s := schedule{interval: defaultInterval, max: defaultMax, timeout: defaultTimeout, factor: defaultFactor}
-	if policy == nil {
-		return s, nil
+// readinessPolicy layers an entry's `wait:` over the readiness defaults, field
+// by field — backoff.factor and backoff.max included. A readiness probe is not
+// a CEL expression, so until stays empty.
+func readinessPolicy(wait *fixtures.WaitPolicy) fixtures.WaitPolicy {
+	interval, ceiling, timeout := fixtures.Duration(defaultInterval), fixtures.Duration(defaultMax), fixtures.Duration(defaultTimeout)
+	policy := fixtures.WaitPolicy{Interval: &interval, Timeout: &timeout,
+		Backoff: &fixtures.Backoff{Factor: defaultFactor, Max: &ceiling}}
+	if wait == nil {
+		return policy
 	}
-	if policy.Interval != nil {
-		s.interval = policy.Interval.Std()
+	policy.Jitter = wait.Jitter
+	if wait.Interval != nil {
+		policy.Interval = wait.Interval
 	}
-	if policy.Timeout != nil {
-		s.timeout = policy.Timeout.Std()
+	if wait.Timeout != nil {
+		policy.Timeout = wait.Timeout
 	}
-	if b := policy.Backoff; b != nil {
+	if b := wait.Backoff; b != nil {
 		if b.Factor != 0 {
-			s.factor = b.Factor
+			policy.Backoff.Factor = b.Factor
 		}
 		if b.Max != nil {
-			s.max = b.Max.Std()
+			policy.Backoff.Max = b.Max
 		}
 	}
-	if s.interval <= 0 || s.timeout <= 0 || s.factor < 1 {
-		return s, fmt.Errorf("wait: interval and timeout must be positive and backoff.factor >= 1 (got interval=%s timeout=%s factor=%v)", s.interval, s.timeout, s.factor)
-	}
-	return s, s.parseJitter(policy.Jitter)
-}
-
-func (s *schedule) parseJitter(jitter string) error {
-	if jitter == "" {
-		return nil
-	}
-	if pct, ok := strings.CutSuffix(jitter, "%"); ok {
-		value, err := strconv.ParseFloat(pct, 64)
-		if err != nil || value < 0 || value > 100 {
-			return fmt.Errorf("wait.jitter %q: a percentage must be between 0%% and 100%%", jitter)
-		}
-		s.jitterFraction = value / 100
-		return nil
-	}
-	value, err := time.ParseDuration(jitter)
-	if err != nil || value < 0 {
-		return fmt.Errorf("wait.jitter %q must be a percentage (\"20%%\") or a duration (\"500ms\")", jitter)
-	}
-	s.jitterAbsolute = value
-	return nil
-}
-
-// delay is the wait before observation attempt+1; random returns [0,1).
-func (s schedule) delay(attempt int, random func() float64) time.Duration {
-	d := float64(s.interval) * math.Pow(s.factor, float64(attempt))
-	if s.max > 0 && d > float64(s.max) {
-		d = float64(s.max)
-	}
-	spread := float64(s.jitterAbsolute)
-	if s.jitterFraction > 0 {
-		spread = d * s.jitterFraction
-	}
-	return time.Duration(max(0, d+(random()*2-1)*spread))
+	return policy
 }
 
 // probeResult is one readiness observation.
@@ -101,14 +56,18 @@ type probeResult struct {
 	err    error
 }
 
-func (r probeResult) String() string {
+// failure is why the probe does not hold: its error, else the http status it
+// got, else nil once ready.
+func (r probeResult) failure() error {
 	switch {
 	case r.err != nil:
-		return r.err.Error()
+		return r.err
+	case r.ready:
+		return nil
 	case r.status != 0:
-		return fmt.Sprintf("http status %d", r.status)
+		return fmt.Errorf("http status %d", r.status)
 	default:
-		return "not ready"
+		return fmt.Errorf("not ready")
 	}
 }
 
@@ -151,34 +110,12 @@ func httpProbe(ctx context.Context, url string, want int) probeResult {
 	return probeResult{ready: resp.StatusCode == want, status: resp.StatusCode}
 }
 
-// awaitReady probes on the schedule until the probe passes, the process
-// exits (done closes), ctx ends or the timeout expires. Every failure names
-// the last observation.
-func awaitReady(ctx context.Context, sched schedule, probe func(context.Context) probeResult, done <-chan struct{}) (probeResult, error) {
-	deadline := time.Now().Add(sched.timeout)
-	var last probeResult
-	for attempt := 0; ; attempt++ {
-		select {
-		case <-done:
-			return last, errExited
-		default:
-		}
-		if last = probe(ctx); last.ready {
-			return last, nil
-		}
-		remaining := time.Until(deadline)
-		if remaining <= 0 {
-			return last, fmt.Errorf("not ready after %s: last probe: %s", sched.timeout, last)
-		}
-		timer := time.NewTimer(min(sched.delay(attempt, rand.Float64), remaining))
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return last, ctx.Err()
-		case <-done:
-			timer.Stop()
-			return last, errExited
-		case <-timer.C:
-		}
+// outputs is the observable readiness state: `ready`, plus `http.status` for
+// an http probe.
+func (r probeResult) outputs() map[string]any {
+	observed := map[string]any{"ready": r.ready}
+	if r.status != 0 {
+		observed["http"] = map[string]any{"status": r.status}
 	}
+	return observed
 }

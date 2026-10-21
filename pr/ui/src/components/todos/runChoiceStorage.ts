@@ -8,11 +8,33 @@ import type { TodoRunOptions } from "../../types";
 // through run.tsx's own re-exports, so nothing outside these two files needs
 // to know the split exists.
 
-// TodoRunAction is the prompt the dialog runs. Triage shares plan's behaviour
-// class but is a different prompt, which is why action and mode are separate
-// types: several prompts map onto one class.
-export type TodoRunAction = "run" | "plan" | "triage";
-export const TODO_RUN_ACTIONS: readonly TodoRunAction[] = ["run", "plan", "triage"] as const;
+// TodoRunAction is the name of the lifecycle step the dialog runs. The set of
+// steps is declared by the server (todo.lifecycle.steps and the run context's
+// lifecycle.steps), so no step name is enumerated here.
+export type TodoRunAction = string;
+
+const CREATE_STEP_STORAGE_KEY = "gavel.pr-ui.todoCreateStep.v1";
+
+// readCreateStepChoice is the lifecycle step last picked in a create dialog's
+// "run after creation" control. An empty string is None, which is also what a
+// browser with no stored choice (or unavailable storage) starts from.
+export function readCreateStepChoice(): string {
+  try {
+    if (typeof localStorage === "undefined") return "";
+    return localStorage.getItem(CREATE_STEP_STORAGE_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+export function writeCreateStepChoice(step: string): void {
+  try {
+    if (typeof localStorage === "undefined") return;
+    localStorage.setItem(CREATE_STEP_STORAGE_KEY, step);
+  } catch {
+    // Persistence is best-effort; unavailable storage should not block creating a todo.
+  }
+}
 
 type RunChoiceState = {
   last: Partial<Record<string, TodoRunOptions>>;
@@ -124,9 +146,7 @@ export function runOptionsKey(options: TodoRunOptions): string {
 }
 
 export function actionFromRunOptions(options: TodoRunOptions): string {
-  if (options.step) return options.step;
-  if (options.prompt === "triage") return "triage";
-  return options.plan || options.runMode === "plan" ? "plan" : "run";
+  return requestStepFor(options);
 }
 
 // requestStepFor is the lifecycle step name a request actually dispatches.

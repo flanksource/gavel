@@ -1,0 +1,120 @@
+# `gavel todos run` at a real terminal: the plan step's agent (the real
+# `claude` CLI, against captain's scripted Anthropic mock) calls todo_ask, the
+# CLI's terminal broker puts the question as a huh Select on the pty, and the
+# fixture answers it by keystroke. The run then saves its plan through
+# todo_plan and lands the todo in review.
+#
+#   gavel fixtures cmd/gavel/testdata/todos-run-terminal/terminal-ask.fixture.yaml
+#
+# `gavel serve` is only here to migrate the embedded Postgres and to create the
+# todo the way the dashboard does; the run under test is the CLI's.
+kind: Fixture
+name: todos run answers todo_ask at the terminal (claude cli, aimock)
+defaults:
+  wait: { interval: 1s, backoff: { factor: 1.5, max: 5s }, jitter: 20%, timeout: 2m }
+  timeout: 6m
+steps:
+  - id: shims
+    kind: exec
+    script: |
+      mkdir -p {{.tmp}}/bin {{.tmp}}/home
+      for name in open xdg-open; do printf '#!/bin/sh\nexit 0\n' > {{.tmp}}/bin/$name; chmod +x {{.tmp}}/bin/$name; done
+    export:
+      PATH: "{{.tmp}}/bin:{{.env.PATH}}"
+      FAKE_HOME: "{{.tmp}}/home"
+      REPO: "{{.fixture.dir}}/../../../.."
+      JOURNAL: "{{.fixture.dir}}/../../../../.tmp/todos-run-terminal.aimock.jsonl"
+    override: true
+
+  - id: stack
+    kind: services
+    timeout: 8m
+    services:
+      postgres:
+        deps: postgres
+      aimock:
+        # The journal outlives the fixture's tmp dir: it is the first thing to
+        # read when a step misses a scripted reply.
+        exec: captain ai mock --only anthropic --addr 127.0.0.1:{{.port}} --scenario {{.fixture.dir}}/terminal-ask.aimock.yaml --journal $JOURNAL
+        ready: { tcp: "127.0.0.1:{{.port}}" }
+      workspace:
+        git:
+          commit: true
+          files:
+            go.mod: |
+              module example.com/acme
+
+              go 1.24
+            .gitignore: |
+              .tmp/
+            # The plan step runs the claude CLI, which reaches todo_ask and
+            # todo_plan through captain's loopback MCP bridge.
+            .gavel.yaml: |
+              ai: { model: "cli:sonnet" }
+              todos:
+                plan: { model: "cli:sonnet" }
+        export:
+          WORKSPACE: "{{.outputs.dir}}"
+      gavel:
+        exec: go run ./cmd/gavel serve --addr 127.0.0.1 --port {{.port}} acme/todos-run-terminal
+        cwd: $REPO
+        env:
+          GAVEL_DB_DSN: "{{.services.postgres.url}}"
+          HOME: $FAKE_HOME
+        ready: { http: "http://127.0.0.1:{{.port}}/todos", status: 200 }
+        wait: { timeout: 5m }
+        # default export: GAVEL_URL
+    # default exports: POSTGRES_URL, AIMOCK_URL, WORKSPACE, GAVEL_URL
+
+  - id: project
+    kind: exec
+    script: |
+      curl -fsS -X POST "$GAVEL_URL/api/projects" -H 'Content-Type: application/json' \
+        -d "{\"name\":\"acme\",\"dir\":\"$WORKSPACE\",\"repos\":[]}"
+    cel: json.dir == env.WORKSPACE
+
+  - id: todo
+    kind: todo
+    dir: $WORKSPACE
+    create:
+      title: Add a persistent store
+      status: draft
+      body: |
+        Persist greetings between runs. Which database is still open.
+    # default exports: TODO_ID, TODO_URL
+
+  # The run under test. stdin is the pty, so `todos run` attaches captain's
+  # terminal broker rather than the dashboard's; the agent's todo_ask question
+  # is a Select of [postgres, sqlite] plus "Other": Down, Enter picks sqlite.
+  - id: ask
+    kind: exec
+    terminal: pty
+    timeout: 8m
+    cwd: "{{.fixture.dir}}/../../../.."
+    script: go run ./cmd/gavel --cwd "$WORKSPACE" todos run "$TODO_ID" --step plan
+    env:
+      HOME: "{{.env.FAKE_HOME}}"
+      GAVEL_DB_DSN: "{{.env.POSTGRES_URL}}"
+      ANTHROPIC_BASE_URL: "{{.env.AIMOCK_URL}}"
+      ANTHROPIC_API_KEY: captain-mock
+      ANTHROPIC_AUTH_TOKEN: captain-mock
+    input:
+      - { expect: "Question from the agent" }
+      - { expect: "Other (type an answer)", keys: [down, enter] }
+    cel: exitCode == 0 && stdout.contains('Which database should the store use?')
+
+  # The answer reached the model: the todo_ask tool result the mock received
+  # carries the chosen option. The question's own options also say sqlite, so
+  # the match is on the result's answer field (JSON-escaped in the journal).
+  - id: answer
+    kind: exec
+    script: rg --fixed-strings --count '{\"answer\":[\"sqlite\"]' "$JOURNAL"
+    cel: int(stdout.trim()) > 0
+
+  - id: planned
+    kind: todo
+    get: true
+    dir: $WORKSPACE
+    cel: >-
+      todo.status == 'review' && todo.hasPlan &&
+      todo.lastRunSummary.contains('Planned the sqlite store after asking which database to use.')

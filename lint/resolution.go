@@ -12,6 +12,7 @@ import (
 
 	"github.com/flanksource/commons/logger"
 	deps "github.com/flanksource/deps"
+	"github.com/flanksource/gavel/lint/shims"
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/utils"
 )
@@ -111,7 +112,7 @@ func resolveLinterExecutable(ctx context.Context, linter linters.Linter, gitRoot
 	}
 
 	for _, candidate := range candidates {
-		if path, err := exec.LookPath(candidate); err == nil {
+		if path, err := shims.LookPath(candidate); err == nil {
 			return path, "", nil
 		}
 	}

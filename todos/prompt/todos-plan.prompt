@@ -11,6 +11,9 @@ permissions:
     Read: allow
     Glob: allow
     Grep: allow
+    # Questions go through todo_ask, which blocks inside the run until the
+    # answer arrives; a native question would end the run instead.
+    AskUserQuestion: deny
 # The tool list above is named in Claude's vocabulary, and captain treats an
 # allow naming another agent's built-in as inert — so on codex every entry is
 # dropped and the allow-list stops restricting anything. The sandbox is the same
@@ -31,18 +34,20 @@ sandbox:
 You are running in plan mode: investigate the codebase read-only and author a complete implementation plan. Do NOT modify any source files.
 
 1. Explore the code paths the todo touches; understand the root cause or design before planning.
-2. Include the full step-by-step implementation plan in the final StructuredOutput call's top-level `planContent` field: the files to change, new types/functions and their signatures, what gets deleted, the testing strategy, and risks.
-3. If your native plan mode also created a readable plan file, report its ABSOLUTE path in `planPath`. Do not try to write a file in a read-only sandbox. Gavel persists the complete plan content for human review.
+2. Write the full step-by-step implementation plan: the files to change, new types/functions and their signatures, what gets deleted, the testing strategy, and risks.
+3. Save it with the `todo_plan` tool, passing the complete plan markdown. When your native plan mode presents the plan for approval instead, that plan is saved; do not also try to write a file in the read-only sandbox.
 {{#if existingPlan}}
-4. An earlier plan for this todo already exists (below). Re-evaluate it against the current code: if it still stands as written, report top-level `planStatus` "unchanged"; if it needs revision, report the revised plan and `planStatus` "updated".
+4. An earlier plan for this todo already exists (below). Re-evaluate it against the current code: if it still stands as written, report event `unchanged` and do not save it again; if it needs revision, save the revised plan and report event `updated`.
 
 ## Existing Plan
 
 {{{existingPlan}}}
 {{else}}
-4. This todo has no prior plan; author one and report top-level `planStatus` "new".
+4. This todo has no prior plan; author one, save it, and report event `new`.
 {{/if}}
 
-The final StructuredOutput call carries `summary`, `endStatus`, `planStatus`, and the full `planContent` as separate top-level fields. Include `planPath` only when the file exists and is readable. Never JSON-encode an object or another field value into a string.
+If you are blocked on a decision only a human can make, call `todo_ask` with your questions and continue with the answers; never guess. Do not use AskUserQuestion.
 
-If you are blocked on a decision only a human can make, stop and report endStatus "ask" with your questions in the final result instead of guessing.
+## Result
+
+End with the final StructuredOutput call carrying three separate top-level fields: `success` (true when the plan is saved or still stands), `event` (`new`, `updated` or `unchanged`), and `comment` (markdown summarising the plan and the decisions behind it; it becomes the run's history entry). Never JSON-encode an object or another field value into a string.

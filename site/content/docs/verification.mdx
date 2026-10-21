@@ -1,7 +1,8 @@
 ---
 title: Verification
 description: The external fixture-runner contract captain dispatches workflow.verify.fixture through.
-order: 8
+order: 12
+parent: fixtures-overview
 ---
 
 `gavel fixtures run --format captain-verify-report` is Gavel's half of captain's external fixture-runner contract: the mechanism a `workflow.verify.fixture` declaration on a lifecycle step (or any other captain-driven run) actually executes through. Captain reads the runner command from `~/.captain.yaml` `verify.fixtureRunner`; Gavel is the implementation registered there.

@@ -247,6 +247,7 @@ func (s *Server) startProjectAction(project Project, action projectAction, args 
 			close(stopSnapshots)
 			<-snapshotsStopped
 			loadCompletedProjectActionSnapshot(project.ResolvedDir(), current.StartedAt, run)
+			serveProjectActionTraces(run)
 			run.SetRunExitCode(exitCode, errors.Is(group.Group.Context().Err(), context.DeadlineExceeded))
 			run.SetStopFunc(nil)
 			run.MarkDone()

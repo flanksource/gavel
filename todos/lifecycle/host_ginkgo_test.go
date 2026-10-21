@@ -93,6 +93,22 @@ func hostTodo() *types.TODO {
 	}
 }
 
+// withoutTools is the engine with every step's tool sets dropped, for specs
+// that drive a scripted provider: that seam owns its own tool wiring.
+func withoutTools(engine *lifecycle.Engine) *lifecycle.Engine {
+	GinkgoHelper()
+	def := engine.Definition()
+	steps := make([]lifecycle.Step, len(def.Steps))
+	for i, step := range def.Steps {
+		step.Tools = nil
+		steps[i] = step
+	}
+	def.Steps = steps
+	stripped, err := lifecycle.New(def)
+	Expect(err).NotTo(HaveOccurred())
+	return stripped
+}
+
 func newHost(provider *fakeProvider) *lifecycle.Host {
 	GinkgoHelper()
 	engine := defaultEngine()
@@ -340,17 +356,22 @@ var _ = Describe("Host", func() {
 			todo = hostTodo()
 			run = stepNamed(host.Def, "run")
 			outcome = &lifecycle.StepOutcome{
-				Step:   run,
-				Result: lifecycle.StepResult{Run: lifecycle.RunFacts{State: lifecycle.RunSucceeded, Iterations: 2, CostUSD: 0.5}},
+				Step:        run,
+				StartStatus: todo.Status,
+				Result: lifecycle.StepResult{
+					Run:    lifecycle.RunFacts{State: lifecycle.RunSucceeded, Iterations: 2, CostUSD: 0.5},
+					Verify: &api.VerifyReport{Ran: true, Passed: true},
+				},
 				Execution: &todos.ExecutionResult{
-					Success: true, Summary: "Built it.", EndStatus: types.EndCompleted, TokensUsed: 10, CostUSD: 0.5,
-					Runtime:   todos.RunStartMetadata{ResolvedModel: "claude-sonnet"},
-					Questions: []types.AgentQuestion{{Text: "stale question from an earlier ask"}},
+					Success: true, Summary: "Built it.", TokensUsed: 10, CostUSD: 0.5,
+					Envelope:   &types.Envelope{Success: true, Event: "completed", Comment: "Built it."},
+					Runtime:    todos.RunStartMetadata{ResolvedModel: "claude-sonnet"},
+					ToolWrites: []todos.ToolWrite{{Name: "todo_comment", Ref: "ab12cd"}},
 				},
 			}
 		})
 
-		It("persists the attempt, then writes the status once, then records one event", func() {
+		It("persists the attempt, writes the status once, and records one entry carrying the comment", func() {
 			Expect(host.OnOutcome(ctx, todo, run, outcome, "verified")).To(Succeed())
 
 			Expect(provider.attempts).To(HaveLen(1))
@@ -360,12 +381,16 @@ var _ = Describe("Host", func() {
 			Expect(*update.Attempts).To(Equal(3), "the attempt count is the todo's plus one, not whatever SaveAttempt reloaded")
 			Expect(*update.RunMode).To(Equal(types.ModeRun))
 			Expect(*update.LastRunSummary).To(Equal("Built it."))
-			Expect(*update.Questions).To(BeEmpty(), "questions persist only for an ask outcome")
 			Expect(todo.Status).To(Equal(types.StatusVerified))
 			Expect(todo.LLM.Model).To(Equal("claude-sonnet"))
 			Expect(provider.events).To(HaveLen(1))
 			Expect(provider.events[0].Kind).To(Equal(lifecycle.EventLifecycleOutcome))
-			Expect(provider.events[0].Payload).To(HaveKeyWithValue("status", "verified"))
+			Expect(provider.events[0].Body).To(Equal("**Lifecycle:** `run` → `verified`\n\nBuilt it.\n\n**Verification:** passed"))
+			Expect(provider.events[0].Payload).To(SatisfyAll(
+				HaveKeyWithValue("status", "verified"),
+				HaveKeyWithValue("envelope", map[string]any{"success": true, "event": "completed"}),
+				HaveKeyWithValue("tools", []todos.ToolWrite{{Name: "todo_comment", Ref: "ab12cd"}}),
+			))
 		})
 
 		It("writes no status when the step keeps it", func() {
@@ -377,30 +402,14 @@ var _ = Describe("Host", func() {
 			Expect(provider.events[0].Payload).To(HaveKeyWithValue("status", lifecycle.OutcomeKeep))
 		})
 
-		It("records the status a triage verdict assigned when the step kept it", func() {
-			outcome.Execution.Triage = &types.TriageEnvelope{
-				ResultEnvelope: types.ResultEnvelope{Summary: "Shelve it.", EndStatus: types.EndCompleted},
-				Verdict:        types.VerdictReady, Status: string(types.StatusDraft), Comment: "not ready to queue",
-			}
+		It("records the status a tool wrote when the step kept it", func() {
+			todo.Status = types.StatusDraft
 
 			Expect(host.OnOutcome(ctx, todo, stepNamed(host.Def, "triage"), outcome, lifecycle.OutcomeKeep)).To(Succeed())
 
-			Expect(todo.Status).To(Equal(types.StatusDraft))
-			Expect(provider.states).To(HaveLen(2), "the triage write, then the attempt's own update")
-			Expect(*provider.states[0].Status).To(Equal(types.StatusDraft))
-			Expect(provider.states[1].Status).To(BeNil(), "the step kept the status; only the verdict wrote one")
-			Expect(provider.events).To(HaveLen(1))
+			Expect(provider.states[0].Status).To(BeNil(), "the step kept the status; only the tool wrote one")
 			Expect(provider.events[0].Payload).To(HaveKeyWithValue("status", "draft"), "the event names the status actually written")
-			Expect(provider.events[0].Body).To(ContainSubstring("`triage` → `draft`"))
-		})
-
-		It("keeps the questions of a run that asks", func() {
-			outcome.Execution.EndStatus = types.EndAsk
-
-			Expect(host.OnOutcome(ctx, todo, run, outcome, "ask")).To(Succeed())
-
-			Expect(*provider.states[0].Questions).To(HaveLen(1))
-			Expect(todo.Status).To(Equal(types.StatusAsk))
+			Expect(provider.events[0].Body).To(HavePrefix("**Lifecycle:** `triage` → `draft`"))
 		})
 
 		It("refuses a status the lifecycle does not know", func() {
@@ -426,18 +435,6 @@ var _ = Describe("Host", func() {
 			_, err = host.RunStep(ctx, hostTodo(), def.Steps[3], lifecycle.RunOptions{})
 
 			Expect(err).To(MatchError(ContainSubstring(`prompt "run" is neither todos.<name> nor file:<path>`)))
-		})
-
-		It("refuses a built-in prompt whose envelope disagrees with the step", func() {
-			def := host.Def.Definition()
-			def.Steps[3].Prompt = "todos.plan"
-			engine, err := lifecycle.New(def)
-			Expect(err).NotTo(HaveOccurred())
-			host.Def = engine
-
-			_, err = host.RunStep(ctx, hostTodo(), def.Steps[3], lifecycle.RunOptions{})
-
-			Expect(err).To(MatchError(ContainSubstring("returns a plan envelope, the step declares result")))
 		})
 	})
 })

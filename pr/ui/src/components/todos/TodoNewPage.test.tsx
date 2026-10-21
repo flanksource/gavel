@@ -17,6 +17,10 @@ vi.mock('@tanstack/react-query', async importOriginal => ({
 
 vi.mock('../../procStatusQuery', () => ({ useProcStatus: () => ({}) }));
 
+vi.mock('./newTodoSteps', () => ({
+  useNewTodoSteps: () => ({ data: [{ name: 'triage.new', label: 'Triage new', prompt: 'triage-new', auxiliary: true }], isPending: false, error: null }),
+}));
+
 vi.mock('@flanksource/clicky-ui/icons', async importOriginal => ({
   ...await importOriginal<typeof import('@flanksource/clicky-ui/icons')>(),
   UiClose: () => <span />,
@@ -61,21 +65,24 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe('TodoNewPage', () => {
-	 it('keeps the saved issue available after triage admission fails', async () => {
-	   mocks.create.mockResolvedValue({ todo: todo('saved', 'Repair parser'), triage: { status: 'failed', error: 'Admission unavailable' } });
+	 it('keeps the saved issue available after the chosen step fails to start', async () => {
+	   mocks.create.mockResolvedValue({ todo: todo('saved', 'Repair parser'), run: { status: 'failed', error: 'Admission unavailable' } });
 	   render(<TodoNewPage projects={[workspace]} />);
 	   chooseWorkspace();
 	   fireEvent.change(screen.getByPlaceholderText('What needs doing?'), { target: { value: 'Repair parser' } });
+	   fireEvent.change(screen.getByLabelText('Run after creation'), { target: { value: 'triage.new' } });
 	   fireEvent.click(screen.getByRole('button', { name: 'Add todo' }));
-	   expect(await screen.findByRole('button', { name: 'Retry triage' })).toBeTruthy();
+	   expect(await screen.findByRole('button', { name: 'Retry triage.new' })).toBeTruthy();
 	   expect(screen.queryByRole('button', { name: 'Add todo' })).toBeNull();
 	   expect(mocks.create).toHaveBeenCalledOnce();
 	 });
-	 it('enables triage for new issues and hides it for comments', () => {
+	 it('offers run after creation for new issues, defaulting to None, and hides it for comments', () => {
 	   render(<TodoNewPage projects={[workspace]} />);
-	   expect(screen.getByRole<HTMLInputElement>('checkbox', { name: 'Triage after creation' }).checked).toBe(true);
+	   const select = screen.getByLabelText<HTMLSelectElement>('Run after creation');
+	   expect(select.value).toBe('');
+	   expect(Array.from(select.options, option => option.textContent)).toEqual(['None', 'Triage new']);
 	   fireEvent.click(screen.getByRole('button', { name: 'Existing issue' }));
-	   expect(screen.queryByRole('checkbox', { name: 'Triage after creation' })).toBeNull();
+	   expect(screen.queryByLabelText('Run after creation')).toBeNull();
 	 });
   it('uses the wider page and shared tall editor for new bodies and existing comments', () => {
     const { container } = render(

@@ -20,7 +20,7 @@ func TestSupervisePackageKillsOnTimeout(t *testing.T) {
 	prev := captureGlobalDiagnostics
 	defer SetCaptureGlobalDiagnostics(prev)
 	var captured atomic.Int32
-	SetCaptureGlobalDiagnostics(func() { captured.Add(1) })
+	SetCaptureGlobalDiagnostics(func(string) { captured.Add(1) })
 
 	process := exec.NewExec("sleep", "30")
 
@@ -38,7 +38,7 @@ func TestSupervisePackageKillsOnTimeout(t *testing.T) {
 
 	assert.NotNil(t, result)
 	require.NotNil(t, timedOutPtr)
-	assert.True(t, timedOutPtr.Load(), "supervisor must mark timedOut=true")
+	assert.True(t, timedOutPtr.TimedOut(), "supervisor must mark timedOut=true")
 	assert.NotEqual(t, 0, int(captured.Load()), "captureGlobalDiagnostics must be called before kill")
 	_ = ctx
 }
@@ -52,13 +52,13 @@ func TestSupervisePackageLetsFastCommandsFinish(t *testing.T) {
 	defer cancel()
 
 	_ = process.Run().Result()
-	assert.False(t, timedOutPtr.Load())
+	assert.False(t, timedOutPtr.TimedOut())
 }
 
 func TestSupervisePackageRespectsGlobalContext(t *testing.T) {
 	prev := captureGlobalDiagnostics
 	defer SetCaptureGlobalDiagnostics(prev)
-	SetCaptureGlobalDiagnostics(func() {})
+	SetCaptureGlobalDiagnostics(func(string) {})
 
 	globalCtx, cancelGlobal := context.WithCancel(context.Background())
 
@@ -81,7 +81,7 @@ func TestSupervisePackageRespectsGlobalContext(t *testing.T) {
 
 	_ = process.Run().Result()
 	time.Sleep(50 * time.Millisecond)
-	assert.True(t, timedOutPtr.Load(), "global cancellation must trip per-package supervisor")
+	assert.True(t, timedOutPtr.TimedOut(), "global cancellation must trip per-package supervisor")
 }
 
 // TestSupervisePackageForceKillsSignalTrappingProcess drives a subprocess
@@ -96,7 +96,7 @@ func TestSupervisePackageForceKillsSignalTrappingProcess(t *testing.T) {
 
 	prev := captureGlobalDiagnostics
 	defer SetCaptureGlobalDiagnostics(prev)
-	SetCaptureGlobalDiagnostics(func() {})
+	SetCaptureGlobalDiagnostics(func(string) {})
 
 	process := exec.NewExec("sh", "-c", "trap '' INT TERM; sleep 60").WithProcessGroup()
 
@@ -121,7 +121,7 @@ func TestSupervisePackageForceKillsSignalTrappingProcess(t *testing.T) {
 	require.NoError(t, waitUntil(func() bool { return !pidAlive(pid) }, 5*time.Second, 25*time.Millisecond),
 		"subprocess pid %d should be reaped via pgid SIGKILL", pid)
 
-	assert.True(t, timedOutPtr.Load(), "supervisor must mark timedOut=true after kill")
+	assert.True(t, timedOutPtr.TimedOut(), "supervisor must mark timedOut=true after kill")
 
 	select {
 	case <-runDone:
@@ -140,7 +140,7 @@ func TestSupervisePackageReapsGrandchildren(t *testing.T) {
 
 	prev := captureGlobalDiagnostics
 	defer SetCaptureGlobalDiagnostics(prev)
-	SetCaptureGlobalDiagnostics(func() {})
+	SetCaptureGlobalDiagnostics(func(string) {})
 
 	script := `trap '' INT TERM; (trap '' INT TERM; sleep 60 & echo $! > /tmp/gavel_supervise_child.pid; wait) & wait`
 	process := exec.NewExec("sh", "-c", script).WithProcessGroup()
@@ -184,7 +184,7 @@ func TestSupervisePackageReapsGrandchildren(t *testing.T) {
 			"grandchild %d must die via pgid SIGKILL", childPID)
 	}
 
-	assert.True(t, timedOutPtr.Load())
+	assert.True(t, timedOutPtr.TimedOut())
 
 	select {
 	case <-runDone:

@@ -36,7 +36,7 @@ func TestProjectsStoreSortsCaseInsensitively(t *testing.T) {
 	if err := os.WriteFile(projectsPath, []byte(raw), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got, err := LoadProjects()
+	got, err := LoadProjects(LoadProjectsOptions{})
 	if err != nil {
 		t.Fatalf("LoadProjects() = %v", err)
 	}
@@ -70,7 +70,7 @@ func TestProjectsRoundTrip(t *testing.T) {
 	defer func() { projectsPath = orig }()
 
 	// A missing file is the empty state, not an error.
-	got, err := LoadProjects()
+	got, err := LoadProjects(LoadProjectsOptions{})
 	if err != nil {
 		t.Fatalf("LoadProjects() on missing file = %v", err)
 	}
@@ -86,7 +86,7 @@ func TestProjectsRoundTrip(t *testing.T) {
 		t.Fatalf("SaveProjects() = %v", err)
 	}
 
-	got, err = LoadProjects()
+	got, err = LoadProjects(LoadProjectsOptions{})
 	if err != nil {
 		t.Fatalf("LoadProjects() = %v", err)
 	}

@@ -88,7 +88,7 @@ func (p *Provider) PlanState(ctx context.Context, todo *types.TODO) (todos.PlanS
 }
 
 func successfulPlanAttempt(result *todos.ExecutionResult) bool {
-	if result == nil || !result.Success || result.EndStatus == types.EndFailed || result.EndStatus == types.EndAsk {
+	if result == nil || !result.Success {
 		return false
 	}
 	return strings.TrimSpace(result.ErrorMessage) == ""
@@ -245,7 +245,7 @@ func (p *Provider) planResultContent(ctx context.Context, result *todos.Executio
 			content = strings.TrimSpace(result.Plan.Content)
 		}
 		if content == "" {
-			return "", "", fmt.Errorf("%w: a run in a sandbox returns its plan as planContent, and this one returned none", captaincli.ErrNoPlan)
+			return "", "", fmt.Errorf("%w: a run in a sandbox returns its plan as content, through todo_plan or its native plan, and this one returned none", captaincli.ErrNoPlan)
 		}
 		return normalizePlanResultMarkdown(content), "", nil
 	}

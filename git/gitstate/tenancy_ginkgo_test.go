@@ -22,7 +22,15 @@ var _ = Describe("Store organizations", func() {
 		key := gitstate.RangeKey{Base: r.base, Head: state.Branches[0].Head}
 		local := r.tracker.Store()
 		Expect(local.SaveRangeFiles(ctx, id, key, []gavelgit.CommitFile{{Path: "a.txt"}})).To(Succeed())
-		generation := r.generation()
+		generationOf := func() int64 {
+			return r.count(`SELECT generation FROM git_repo_overview WHERE repo_id = ?`, id)
+		}
+		generation := generationOf()
+		var refsFingerprint, statusFingerprint string
+		Expect(r.db.Raw(`SELECT refs_fingerprint FROM git_repo_overview WHERE repo_id = ?`, id).Scan(&refsFingerprint).Error).To(Succeed())
+		Expect(r.db.Raw(`SELECT status_fingerprint FROM git_worktree_overview WHERE repo_id = ? AND path = ?`, id, r.feature).Scan(&statusFingerprint).Error).To(Succeed())
+		Expect(refsFingerprint).NotTo(BeEmpty())
+		Expect(statusFingerprint).NotTo(BeEmpty())
 
 		otherOrg := uuid.New()
 		Expect(r.db.Exec(`INSERT INTO orgs (id, issuer, clerk_org_id, name) VALUES (?, 'https://clerk.example', ?, 'Other')`, otherOrg, otherOrg.String()).Error).To(Succeed())
@@ -44,12 +52,15 @@ var _ = Describe("Store organizations", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(generations).To(HaveKey(otherID))
 		Expect(generations).NotTo(HaveKey(id))
-		fingerprint, err := other.RefsFingerprint(ctx, id)
+		unchanged, err := other.MarkRefsUnchanged(ctx, id, refsFingerprint)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(fingerprint).To(BeEmpty())
-		fingerprint, err = other.StatusFingerprint(ctx, id, r.feature)
+		Expect(unchanged).To(BeFalse(), "another org's scan confirms nothing of this repository")
+		unchanged, err = other.MarkStatusUnchanged(ctx, id, r.feature, statusFingerprint)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(fingerprint).To(BeEmpty())
+		Expect(unchanged).To(BeFalse())
+		unchanged, err = local.MarkRefsUnchanged(ctx, id, refsFingerprint)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(unchanged).To(BeTrue(), "the owning org confirms the same fingerprint")
 		_, found, err := other.WorktreeFiles(ctx, id, r.feature)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(found).To(BeFalse())
@@ -83,11 +94,9 @@ var _ = Describe("Store organizations", func() {
 		} {
 			Expect(write()).To(MatchError(gitstate.ErrNotFound), name)
 		}
-		Expect(other.MarkRefsScanned(ctx, id)).To(Succeed())
-		Expect(other.MarkStatusScanned(ctx, id, r.feature)).To(Succeed())
 		Expect(other.SaveRangeFiles(ctx, id, key, []gavelgit.CommitFile{{Path: "hijacked.txt"}})).To(Succeed())
 
-		Expect(r.generation()).To(Equal(generation))
+		Expect(generationOf()).To(Equal(generation))
 		Expect(r.count(`SELECT count(*) FROM git_repos WHERE id = ? AND (error IS NOT NULL OR refs_fingerprint = 'hijacked')`, id)).To(BeZero())
 		Expect(r.count(`SELECT count(*) FROM git_worktrees WHERE repo_id = ? AND (status_error IS NOT NULL OR status_fingerprint = 'hijacked')`, id)).To(BeZero())
 		Expect(r.count(`SELECT count(*) FROM git_range_stats WHERE base_sha = 'b'`)).To(BeZero())
