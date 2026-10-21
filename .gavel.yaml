@@ -22,6 +22,10 @@ pre:
   run: make tidy
 ssh:
   cmd: make all
+test:
+  # The repository's Go and Ginkgo packages run as one go test batch, whose default 10m deadline
+  # covers compiling and running all of them; CI's runs reach it.
+  testTimeout: 15m
 todos:
   triage:
     mode: api
