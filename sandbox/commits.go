@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"strings"
 
 	"github.com/google/uuid"
@@ -118,12 +119,18 @@ func (s *Sources) PushRunCommits(ctx context.Context, repo Repo, base, branch st
 	return sha, nil
 }
 
+// commitSHA is a full SHA-1 or SHA-256 commit id, which is all a PR's base can be.
+var commitSHA = regexp.MustCompile(`^([0-9a-f]{40}|[0-9a-f]{64})$`)
+
 // PushPRHead fast-forwards the PR's source branch, branch of the repository at headURL, from base,
 // the head the run started its turn at, to the one branch bundle holds. The push fails if the
 // branch has moved since. It returns the branch's new commit.
 func (s *Sources) PushPRHead(ctx context.Context, repo Repo, headURL, branch, base string, bundle io.Reader) (string, error) {
 	if _, err := runGit(ctx, nil, "check-ref-format", "refs/heads/"+branch); err != nil || strings.HasPrefix(branch, "-") {
 		return "", fmt.Errorf("%q is not a branch name: %v", branch, err)
+	}
+	if !commitSHA.MatchString(base) {
+		return "", fmt.Errorf("the PR's base %q is not a commit SHA", base)
 	}
 	if repo.Source != "github" {
 		return "", fmt.Errorf("repository %s has source %q; only GitHub repositories have PRs", repo.label(), repo.Source)

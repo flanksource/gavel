@@ -37,11 +37,12 @@ func (a *RunsAPI) handleTranscript(w http.ResponseWriter, r *http.Request, run s
 		writeCIError(w, http.StatusBadRequest, fmt.Sprintf("transcript source %q is not claude or codex", source))
 		return
 	}
-	clean := filepath.Clean(name)
-	if name == "" || filepath.IsAbs(name) || clean == ".." || strings.HasPrefix(clean, "../") || filepath.Ext(clean) != ".jsonl" {
+	// No ".." at all, even one that cleans away: the name is joined under the run's directory.
+	if name == "" || filepath.IsAbs(name) || strings.Contains(name, "..") || filepath.Ext(name) != ".jsonl" {
 		writeCIError(w, http.StatusBadRequest, fmt.Sprintf("transcript name %q must be a relative .jsonl path inside the run's transcripts", name))
 		return
 	}
+	clean := filepath.Clean(name)
 	path := filepath.Join(TranscriptsDir(a.Sources.DataDir), run.Org.String(), run.ID.String(), source, clean)
 	if err := writeFileAtomically(path, http.MaxBytesReader(w, r.Body, maxTranscriptBytes)); err != nil {
 		logger.Warnf("store a transcript of sandbox run %s: %v", run.ID, err)

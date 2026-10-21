@@ -86,6 +86,7 @@ func TestRunsAPIIngestsAnAgentRunsTranscripts(t *testing.T) {
 		"source=gemini&name=a.jsonl":            `transcript source "gemini" is not claude or codex`,
 		"source=claude&name=../../escape.jsonl": `transcript name "../../escape.jsonl" must be a relative .jsonl path inside the run's transcripts`,
 		"source=claude&name=/etc/passwd":        `transcript name "/etc/passwd" must be a relative .jsonl path inside the run's transcripts`,
+		"source=claude&name=sub/../a.jsonl":     `transcript name "sub/../a.jsonl" must be a relative .jsonl path inside the run's transcripts`,
 		"source=claude&name=notes.txt":          `transcript name "notes.txt" must be a relative .jsonl path inside the run's transcripts`,
 	} {
 		status, body := post(agentRun, query, sandboxTranscript)

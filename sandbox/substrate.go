@@ -213,16 +213,18 @@ func substrateEgressPolicy(options SubstrateOptions, atespace, server string) (*
 	if net.ParseIP(serve.Hostname()) != nil {
 		return nil, fmt.Errorf("substrate egress names hosts: GAVEL_SERVER %q must name serve by DNS name, not an IP address", server)
 	}
-	port := 80
+	port := uint64(80)
 	if serve.Scheme == "https" {
 		port = 443
 	}
 	if serve.Port() != "" {
-		if port, err = strconv.Atoi(serve.Port()); err != nil {
-			return nil, fmt.Errorf("substrate egress: GAVEL_SERVER %q has port %q: %w", server, serve.Port(), err)
+		// url.Parse checks a port is digits, not that it is a port.
+		port, err = strconv.ParseUint(serve.Port(), 10, 16)
+		if err != nil || port == 0 {
+			return nil, fmt.Errorf("substrate egress: GAVEL_SERVER %q has port %s, outside 1-65535", server, serve.Port())
 		}
 	}
-	ports := &ateapipb.Ports{Numbers: []int32{int32(port)}} //nolint:gosec // a URL port fits
+	ports := &ateapipb.Ports{Numbers: []int32{int32(port)}} //nolint:gosec // at most 65535
 	rules := []*ateapipb.EgressRule{}
 	if serve.Scheme == "https" {
 		rules = append(rules, &ateapipb.EgressRule{TlsPassthrough: &ateapipb.TlsPassthroughRule{Hostnames: []string{serve.Hostname()}, Ports: ports}})

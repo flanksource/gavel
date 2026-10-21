@@ -6,8 +6,10 @@ package sandbox
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -127,6 +129,15 @@ func TestPushPRHeadFastForwardsTheSourceBranch(t *testing.T) {
 	require.Error(t, err, "a branch that moved since the job saw it isn't pushed over")
 	assert.Contains(t, err.Error(), "push the PR's source branch topic")
 	assert.Equal(t, tip, git(t, remote, "rev-parse", "refs/heads/topic"))
+}
+
+func TestPushPRHeadRefusesABaseThatIsNotACommitSHA(t *testing.T) {
+	sources := &Sources{DataDir: t.TempDir()}
+	github := Repo{ID: uuid.New(), Org: uuid.New(), Source: "github", Name: "acme/app"}
+	for _, base := range []string{"", "main", "HEAD~1", "--upload-pack=touch /tmp/pwned", strings.Repeat("g", 40)} {
+		_, err := sources.PushPRHead(context.Background(), github, "https://github.com/acme/app", "topic", base, strings.NewReader(""))
+		require.EqualError(t, err, fmt.Sprintf("the PR's base %q is not a commit SHA", base))
+	}
 }
 
 func TestARunBranchIsFoundByItsTip(t *testing.T) {

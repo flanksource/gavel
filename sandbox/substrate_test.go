@@ -100,3 +100,11 @@ func strings64(c string) string {
 	}
 	return out
 }
+
+func TestSubstrateEgressRefusesAPortOutOfRange(t *testing.T) {
+	for _, port := range []string{"0", "65536", "4294967297"} {
+		server := "http://gavel.example.com:" + port
+		_, err := substrateEgressPolicy(SubstrateOptions{}, "ate-env", server)
+		require.EqualError(t, err, `substrate egress: GAVEL_SERVER "`+server+`" has port `+port+`, outside 1-65535`)
+	}
+}
