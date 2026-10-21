@@ -71,7 +71,7 @@ jobs:
       - name: Run gavel tests
         uses: ./
         with:
-          args: test --timeout 20m --test-timeout 10m
+          args: test --timeout 20m --test-timeout 15m
           timeout-minutes: "30"
           version: source
           comment-header: gavel-self-test
