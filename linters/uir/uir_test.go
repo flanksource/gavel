@@ -37,7 +37,7 @@ var _ = Describe("UIR adapter protocol", func() {
 		adapter.SetOptions(linters.RunOptions{WorkDir: root, Executable: binary, Files: []string{"sample.go"}})
 		command, args := adapter.DryRunCommand()
 		Expect(command).To(Equal(binary))
-		Expect(args).To(Equal([]string{"lint", "--config", filepath.Join(root, ".uir.yaml"), "--format", "json", "--no-progress"}))
+		Expect(args).To(Equal([]string{"lint", "--format", "json", "--no-progress"}))
 		findings, err := adapter.Run(commonsContext.NewContext(context.Background()), nil)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(findings).To(HaveLen(1))

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
-	"path/filepath"
 
 	"github.com/flanksource/clicky"
 	commonsContext "github.com/flanksource/commons/context"
@@ -24,10 +23,10 @@ func (u *UIR) Name() string                             { return "uir" }
 func (u *UIR) IndependentProjects() bool                { return true }
 func (u *UIR) NewProject(workDir string) linters.Linter { return New(workDir) }
 func (u *UIR) SetOptions(options linters.RunOptions)    { u.RunOptions = options }
-func (u *UIR) ProjectRootMarkers() []string             { return []string{".uir.yaml"} }
+func (u *UIR) ProjectRootMarkers() []string             { return []string{".uir.yaml", ".uir.d/"} }
 func (u *UIR) RequiresExecutable() bool                 { return true }
 func (u *UIR) DefaultIncludes() []string {
-	return []string{".uir.yaml", "**/*.go", "**/go.mod", "**/go.sum", "**/go.work"}
+	return []string{".uir.yaml", "**/.uir.d/*.yaml", "**/.uir.d/*.yml", "**/*.go", "**/go.mod", "**/go.sum", "**/go.work"}
 }
 func (u *UIR) DefaultExcludes() []string { return []string{"vendor/**", "node_modules/**"} }
 func (u *UIR) SupportsJSON() bool        { return true }
@@ -48,7 +47,7 @@ func (u *UIR) DryRunCommand() (string, []string) {
 	if binary == "" {
 		binary = "uir"
 	}
-	args := []string{"lint", "--config", filepath.Join(u.WorkDir, ".uir.yaml")}
+	args := []string{"lint"}
 	if u.Config != nil {
 		args = append(args, u.Config.Args...)
 	}
@@ -57,7 +56,14 @@ func (u *UIR) DryRunCommand() (string, []string) {
 	return binary, args
 }
 
-func (u *UIR) Run(ctx commonsContext.Context, _ *clicky.Task) ([]models.Violation, error) {
+func (u *UIR) Run(ctx commonsContext.Context, _ *clicky.Task) (violations []models.Violation, err error) {
+	fragment, err := u.writeFragment(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if fragment != "" {
+		defer func() { err = errors.Join(err, removeFragment(fragment)) }()
+	}
 	binary, args := u.DryRunCommand()
 	command := u.CommandContext(ctx, u.Name(), binary, args...)
 	var stdout, stderr bytes.Buffer

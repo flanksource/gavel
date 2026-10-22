@@ -2132,6 +2132,11 @@
                 },
                 "type": "array"
               },
+              "config": {
+                "additionalProperties": true,
+                "description": "Native UIR configuration document, passed to the executable through a temporary project .uir.d fragment. UIR validates its contents.",
+                "type": "object"
+              },
               "enabled": {
                 "description": "Force the linter on (true) or off (false). Omit to keep the linter's built-in default.",
                 "type": "boolean"
