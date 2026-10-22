@@ -136,6 +136,7 @@ type RunOptions struct {
 	Ignores         []string
 	ExtraArgs       []string
 	OutputTee       io.Writer
+	Scopes          []string
 }
 
 // WrapWriter returns w wrapped with OutputTee via io.MultiWriter when OutputTee
@@ -507,6 +508,9 @@ func RunLinterWithTask(ctx context.Context, task *clicky.Task, linter Linter, op
 
 	start := time.Now()
 	violations, err := linter.Run(commonsContext.NewContext(ctx), task)
+	scoped := &LinterResult{WorkDir: opts.WorkDir, Violations: violations}
+	FilterViolationsByUserScope([]*LinterResult{scoped}, opts.WorkDir, opts.Scopes)
+	violations = scoped.Violations
 	timedOut := ctx.Err() == context.DeadlineExceeded
 	statusErr := err
 	if timedOut && statusErr == nil {

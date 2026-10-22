@@ -16,6 +16,7 @@ import (
 	captaincli "github.com/flanksource/captain/pkg/cli"
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
+	"github.com/flanksource/gavel/git/changeset"
 	"github.com/flanksource/gavel/processruntime"
 )
 
@@ -29,8 +30,9 @@ type Options struct {
 	NoCache      bool                   `flag:"no-lint-cache" yaml:"no-lint-cache,omitempty" help:"Disable linter result caching/debounce"`
 	Timeout      string                 `flag:"timeout" yaml:"timeout,omitempty" help:"Timeout per linter; overrides runtime.timeout (default 5m)"`
 	WorkDir      string                 `flag:"work-dir" yaml:"work-dir,omitempty" help:"Working directory"`
-	Changed      bool                   `flag:"changed" yaml:"changed,omitempty" help:"Only report new issues vs origin/main (or $GAVEL_CHANGED_BASE)"`
-	Since        string                 `flag:"since" yaml:"since,omitempty" help:"Only report new issues since <ref> (merge-base with HEAD)"`
+	Changed      bool                   `flag:"changed" yaml:"changed,omitempty" help:"Lint local staged/unstaged/untracked files, or the runner changeset in CI"`
+	Since        string                 `flag:"since" yaml:"since,omitempty" help:"Select changes since a ref's merge-base plus local edits; HEAD = local edits, staged = staged files"`
+	ChangedFiles []string               `flag:"changed-files" yaml:"changed-files,omitempty" help:"Explicit changed files, unioned with --changed or --since when supplied"`
 	UI           bool                   `flag:"ui" yaml:"ui,omitempty" help:"Launch browser UI to view violations"`
 	Addr         string                 `flag:"addr" yaml:"addr,omitempty" help:"Interface to bind --ui HTTP server. Defaults to 0.0.0.0 (all interfaces); set localhost to restrict to this machine." default:"0.0.0.0"`
 	DryRun       bool                   `flag:"dry-run" yaml:"dry-run,omitempty" help:"Print the linter commands that would run without executing them"`
@@ -54,6 +56,7 @@ type Options struct {
 	// Explicit flags override lint.fix; Captain supplies any remaining runtime
 	// defaults.
 	captaincli.AIRuntimeOptions
+	Selection *changeset.Selection `flag:"-" json:"-" yaml:"-"`
 }
 
 func (o Options) Pretty() api.Text {

@@ -136,6 +136,7 @@ func runTests(opts testrunner.RunOptions, detach bool) (value any, runErr error)
 	// Dry-run: print hooks and delegate to testrunner (which has its own
 	// dry-run early-return), then exit without starting the UI, lint, or
 	// push-hook execution.
+	opts.Selection = opts.ChangeSelection()
 	if opts.DryRun {
 		if !opts.SkipHooks {
 			printDryRunHooks(opts.WorkDir, gavelCfg.Pre, "pre-hook")
@@ -145,7 +146,7 @@ func runTests(opts testrunner.RunOptions, detach bool) (value any, runErr error)
 		}
 		if opts.Lint {
 			for _, workDir := range lintWorkDirs(opts.WorkDir, opts.StartingPaths) {
-				if err := lint.DryRun(LintOptions{WorkDir: workDir, Runtime: opts.Runtime, ConfigDir: opts.WorkDir, Timeout: configuredLintTimeout(opts)}); err != nil {
+				if err := lint.DryRun(LintOptions{WorkDir: workDir, Selection: opts.Selection, Runtime: opts.Runtime, ConfigDir: opts.WorkDir, Timeout: configuredLintTimeout(opts)}); err != nil {
 					return nil, err
 				}
 			}
@@ -226,7 +227,7 @@ func runTests(opts testrunner.RunOptions, detach bool) (value any, runErr error)
 			}
 			if req.Lint {
 				results, err := executeLintRerun(LintOptions{
-					WorkDir: opts.WorkDir,
+					WorkDir: opts.WorkDir, Selection: opts.Selection,
 					Timeout: configuredLintTimeout(opts),
 					Runtime: opts.Runtime, ConfigDir: opts.WorkDir,
 					Context:   rerunCtx,
@@ -294,7 +295,7 @@ func runTests(opts testrunner.RunOptions, detach bool) (value any, runErr error)
 			}
 			for _, dir := range lintWorkDirs(workDir, opts.StartingPaths) {
 				results, err := lint.Execute(LintOptions{
-					WorkDir: dir,
+					WorkDir: dir, Selection: opts.Selection,
 					Timeout: lintTimeoutValue, Runtime: opts.Runtime, ConfigDir: opts.WorkDir,
 					Context: opts.Context,
 				})
@@ -330,7 +331,7 @@ func runTests(opts testrunner.RunOptions, detach bool) (value any, runErr error)
 	wg.Wait()
 
 	if lintErr != nil {
-		logger.Warnf("Linting failed: %v", lintErr)
+		err = errors.Join(err, fmt.Errorf("lint: %w", lintErr))
 	}
 
 	// Apply baseline filtering to lint results when --baseline is set.
@@ -342,15 +343,7 @@ func runTests(opts testrunner.RunOptions, detach bool) (value any, runErr error)
 		baseline.FilterNewViolations(lintResults, baseline.ExtractViolationKeys(baselineSnap.Lint))
 	}
 
-	// Count lint violations
-	var lintViolations int
-	for _, lr := range lintResults {
-		if lr.Skipped {
-			continue
-		}
-		lintViolations += len(lr.Violations)
-	}
-	if lintViolations > 0 {
+	if linters.HasFailures(lintResults) {
 		exitCode = 1
 	}
 
@@ -944,6 +937,7 @@ func buildRerunArgs(req testui.RerunRequest) []string {
 
 func prepareRerunOptions(base testrunner.RunOptions, req testui.RerunRequest, updates chan []parsers.Test) testrunner.RunOptions {
 	rerunOpts := base
+	rerunOpts.Selection = base.Selection.Fresh()
 	rerunOpts.Lint = false
 	rerunOpts.Updates = updates
 	rerunOpts.RunKind = "rerun"
