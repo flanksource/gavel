@@ -46,9 +46,9 @@ jobs:
             svu
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # The tag must carry the embedded UI bundles (testui.js / prui.js):
-      # without them a downstream `go get` by tag fails with
-      # `//go:embed dist/*.js`: "no matching files found". The bundles are
+      # The tag must carry the embedded UI bundles (testui.js / prui.js /
+      # prui.css): without them a downstream `go get` by tag fails with
+      # `//go:embed dist/...`: "no matching files found". The bundles are
       # committed on a release-only commit and only the tag is pushed, because
       # main's ruleset requires status checks and rejects a direct bot push.
       # That commit is never on main, so svu must count tags on every branch.
@@ -63,7 +63,7 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -f testrunner/ui/dist/testui.js pr/ui/dist/prui.js
+          git add -f testrunner/ui/dist/testui.js pr/ui/dist/prui.js pr/ui/dist/prui.css
           if ! git diff --cached --quiet; then
             git commit -m "chore(embed): rebuild UI bundles for $next"
           fi
