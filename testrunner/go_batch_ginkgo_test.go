@@ -10,6 +10,47 @@ import (
 )
 
 var _ = Describe("unified Go runner", func() {
+	DescribeTable("keeps selected Ginkgo suites runnable alongside benchmarks", func(bench string) {
+		workDir, err := filepath.Abs("..")
+		Expect(err).NotTo(HaveOccurred())
+		pkg := "./testrunner/runners/testdata/overlaylabels"
+		o := &TestOrchestrator{RunOptions: RunOptions{WorkDir: workDir, Bench: bench}}
+		plans, err := o.planGoBatches(map[Framework][]string{parsers.GoTest: {pkg}, parsers.Ginkgo: {pkg}}, nil, false)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(plans).To(HaveLen(1))
+		Expect(plans[0].ginkgo).To(Equal([]string{pkg}))
+		Expect(plans[0].args).NotTo(ContainElement("-run=^$"))
+		if bench == "" {
+			Expect(plans[0].args).To(BeEmpty())
+		} else {
+			Expect(plans[0].args).To(Equal([]string{"-bench=" + bench}))
+		}
+	}, Entry("automatic benchmark selection", ""), Entry("disabled benchmarks", "^$"), Entry("selected benchmarks", "BenchmarkLabels"))
+
+	It("runs Ginkgo specs when benchmarks are disabled", func() {
+		workDir, err := filepath.Abs("..")
+		Expect(err).NotTo(HaveOccurred())
+		pkg := "./testrunner/runners/testdata/overlaylabels"
+		o := &TestOrchestrator{RunOptions: RunOptions{WorkDir: workDir, Bench: "^$"}, registry: DefaultRegistry(workDir)}
+		results, err := o.detectAndRun([]Framework{parsers.GoTest, parsers.Ginkgo}, []string{pkg}, nil)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(results.All().Sum().Passed).To(Equal(1))
+	})
+
+	It("executes a Ginkgo suite once before an unfocused benchmark follow-up", func() {
+		workDir, err := filepath.Abs("..")
+		Expect(err).NotTo(HaveOccurred())
+		pkg := "./testrunner/runners/testdata/overlaylabels"
+		o := &TestOrchestrator{RunOptions: RunOptions{WorkDir: workDir, Bench: "^$", Recursive: true}}
+		plans, err := o.planGoBatches(map[Framework][]string{parsers.GoTest: {pkg}, parsers.Ginkgo: {pkg}}, nil, true)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(plans).To(HaveLen(2))
+		Expect(plans[0].ginkgo).To(Equal([]string{pkg}))
+		Expect(plans[0].args).To(BeEmpty())
+		Expect(plans[1].ginkgo).To(BeEmpty())
+		Expect(plans[1].args).To(Equal([]string{"-bench=^$", "-run=^$"}))
+	})
+
 	It("uses a recursive selector for an unfocused mixed run", func() {
 		o := &TestOrchestrator{RunOptions: RunOptions{WorkDir: ".", Recursive: true}}
 		plans, err := o.planGoBatches(map[Framework][]string{

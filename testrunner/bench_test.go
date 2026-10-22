@@ -124,7 +124,7 @@ func TestX(t *testing.T) {}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			o := newOrchestrator(tt.bench)
-			got := o.augmentBenchArgs(runner, tt.pkg, tt.extraArgs)
+			got := o.augmentBenchArgs(runner, tt.pkg, benchmarkOptions{args: tt.extraArgs})
 			if !slices.Equal(got, tt.want) {
 				t.Errorf("augmentBenchArgs(%q, bench=%q, extra=%v) = %v, want %v",
 					tt.pkg, tt.bench, tt.extraArgs, got, tt.want)
@@ -134,7 +134,7 @@ func TestX(t *testing.T) {}
 
 	t.Run("bench-only package produces args compatible with go test", func(t *testing.T) {
 		o := newOrchestrator("")
-		got := o.augmentBenchArgs(runner, "./benchonly", nil)
+		got := o.augmentBenchArgs(runner, "./benchonly", benchmarkOptions{args: nil})
 		joined := strings.Join(got, " ")
 		if !strings.Contains(joined, "-bench=") {
 			t.Errorf("expected -bench= in args, got %q", joined)
