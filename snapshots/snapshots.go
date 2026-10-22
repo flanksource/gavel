@@ -273,8 +273,32 @@ func writeJSON(path string, v any) error {
 	if err != nil {
 		return fmt.Errorf("marshal %s: %w", path, err)
 	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	mode := os.FileMode(0o644)
+	if existing, err := os.Stat(path); err == nil {
+		mode = existing.Mode().Perm()
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("stat %s: %w", path, err)
+	}
+	file, err := os.CreateTemp(filepath.Dir(path), ".snapshot-*.json")
+	if err != nil {
+		return fmt.Errorf("create temporary snapshot for %s: %w", path, err)
+	}
+	defer os.Remove(file.Name())
+	defer file.Close()
+	if err := file.Chmod(mode); err != nil {
+		return fmt.Errorf("set permissions for %s: %w", path, err)
+	}
+	if _, err := file.Write(data); err != nil {
 		return fmt.Errorf("write %s: %w", path, err)
+	}
+	if err := file.Sync(); err != nil {
+		return fmt.Errorf("sync %s: %w", path, err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("close %s: %w", path, err)
+	}
+	if err := os.Rename(file.Name(), path); err != nil {
+		return fmt.Errorf("publish %s: %w", path, err)
 	}
 	return nil
 }

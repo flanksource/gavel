@@ -7,13 +7,13 @@ import (
 )
 
 type TestStreamer struct {
-	mu             sync.Mutex
-	completedTests []parsers.Test
-	pendingPkgs    []parsers.Test
-	fixtureTests   []parsers.Test
-	updates        chan<- []parsers.Test
-	closeUpdates   bool
-	closed         bool
+	mu               sync.Mutex
+	completedResults parsers.TestSuiteResults
+	pendingPkgs      []parsers.Test
+	fixtureTests     []parsers.Test
+	updates          chan<- []parsers.Test
+	closeUpdates     bool
+	closed           bool
 }
 
 func NewTestStreamer(updates chan<- []parsers.Test) *TestStreamer {
@@ -90,9 +90,7 @@ func (s *TestStreamer) CompletePackage(pkgPath string, framework parsers.Framewo
 	s.pendingPkgs = filtered
 
 	// Add all completed test results (UI always shows everything)
-	for _, tr := range results {
-		s.completedTests = append(s.completedTests, tr.Tests...)
-	}
+	s.completedResults = append(s.completedResults, results...)
 
 	s.buildAndSendLocked()
 }
@@ -118,7 +116,7 @@ func (s *TestStreamer) UpdateFixtures(tests []parsers.Test) {
 }
 
 func (s *TestStreamer) buildAndSendLocked() {
-	tree := parsers.BuildTestTree(s.completedTests)
+	tree := s.completedResults.Tree()
 	tree = append(tree, s.pendingPkgs...)
 	tree = append(tree, s.fixtureTests...)
 	s.sendLocked(tree)

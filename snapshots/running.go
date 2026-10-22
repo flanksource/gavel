@@ -42,9 +42,13 @@ type Recorder struct {
 	workDir  string
 	interval time.Duration
 
-	mu      sync.Mutex
-	pending *testui.Snapshot
-	dirty   bool
+	mu         sync.Mutex
+	pending    *testui.Snapshot
+	dirty      bool
+	err        error
+	startOnce  sync.Once
+	stopOnce   sync.Once
+	finishOnce sync.Once
 
 	stop   chan struct{}
 	doneCh chan struct{}
@@ -77,10 +81,10 @@ func (r *Recorder) Update(snap *testui.Snapshot) {
 // Start launches the background ticker. Calling Start more than once is a
 // no-op after the first call.
 func (r *Recorder) Start() {
-	if r == nil || r.workDir == "" {
+	if r == nil {
 		return
 	}
-	go r.loop()
+	r.startOnce.Do(func() { go r.loop() })
 }
 
 func (r *Recorder) loop() {
@@ -98,8 +102,7 @@ func (r *Recorder) loop() {
 }
 
 // flush writes running.json if Update has been called since the last flush.
-// Errors are non-fatal: the in-flight run continues even when the disk is
-// full or read-only.
+// Failed writes remain dirty for retry and are returned by Stop.
 func (r *Recorder) flush() {
 	r.mu.Lock()
 	if !r.dirty || r.pending == nil {
@@ -111,9 +114,12 @@ func (r *Recorder) flush() {
 	r.mu.Unlock()
 
 	if err := writeRunningJSON(r.workDir, snap); err != nil {
-		// Logged at the call site only on the first failure; flushes don't
-		// have a logger handy and shouldn't spam every 3s.
-		_ = err
+		r.mu.Lock()
+		r.dirty = true
+		if r.err == nil {
+			r.err = err
+		}
+		r.mu.Unlock()
 	}
 }
 
@@ -123,34 +129,27 @@ func (r *Recorder) flush() {
 // running.json is left in place as a forensic record of what was in flight.
 //
 // Stop is idempotent and safe to call from defer.
-func (r *Recorder) Stop(success bool) {
+func (r *Recorder) Stop(success bool) error {
 	if r == nil {
-		return
+		return nil
 	}
-	select {
-	case <-r.stop:
-		return
-	default:
-		close(r.stop)
-	}
+	r.Start()
+	r.stopOnce.Do(func() { close(r.stop) })
 	<-r.doneCh
-
-	if success {
-		path := filepath.Join(r.workDir, Dir, RunningName)
-		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-			_ = err
+	r.finishOnce.Do(func() {
+		r.flush()
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		if success && r.err == nil {
+			path := filepath.Join(r.workDir, Dir, RunningName)
+			if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+				r.err = fmt.Errorf("remove %s: %w", path, err)
+			}
 		}
-		return
-	}
-	// Best-effort final flush so the file on disk reflects the latest state
-	// at the moment of failure.
+	})
 	r.mu.Lock()
-	snap := r.pending
-	r.dirty = false
-	r.mu.Unlock()
-	if snap != nil {
-		_ = writeRunningJSON(r.workDir, snap)
-	}
+	defer r.mu.Unlock()
+	return r.err
 }
 
 func writeRunningJSON(workDir string, snap *testui.Snapshot) error {

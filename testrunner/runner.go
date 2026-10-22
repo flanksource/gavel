@@ -652,13 +652,7 @@ func runSingleRootWithUpdateOwnership(opts RunOptions, closeUpdates bool) (any, 
 	// --show-stderr are presentation concerns applied at pretty-print time
 	// (cmd/gavel/test.go), never here — filtering or clearing stdout/stderr at
 	// the runner level would make the JSON/UI snapshot lossy.
-	tests := []parsers.Test{}
-	for _, result := range results {
-		tests = append(tests, result.Tests...)
-	}
-
-	// Build hierarchical tree from flat test results
-	tree := parsers.BuildTestTree(tests)
+	tree := results.Tree()
 
 	// Discover and run fixture tests, gated on the --fixtures flag or
 	// fixtures.enabled in .gavel.yaml. Keep the partial tree and return direct
@@ -1604,14 +1598,10 @@ func (o *TestOrchestrator) parseTestResults(testRun *runners.TestRun, result *ex
 		}
 	}
 
-	// Set package path and stderr on each test
-	processStderr := stripExitStatus(strings.TrimSpace(result.Stderr))
+	// Command output belongs to the package; parsers own individual test output.
 	for i := range tests {
 		tests[i].PackagePath = pkgPath
 		tests[i].Command = testRun.Process.Cmd + " " + strings.Join(testRun.Process.Args, " ")
-		if tests[i].Stderr == "" {
-			tests[i].Stderr = processStderr
-		}
 	}
 
 	// Parsers own file-path normalization — see parsers.GinkgoJSON.relToWorkDir,
