@@ -76,7 +76,7 @@ func (o *TestOrchestrator) planGoBatches(packagesByFramework map[Framework][]str
 	var plans []goBatchPlan
 	for _, base := range bases {
 		for _, pkg := range base.packages {
-			args := o.augmentBenchArgs(runner, pkg, base.args)
+			args := o.augmentBenchArgs(runner, pkg, benchmarkOptions{args: base.args, ginkgo: slices.Contains(base.ginkgo, pkg)})
 			index := -1
 			for i := range plans {
 				if plans[i].framework == base.framework && slices.Equal(plans[i].args, args) {
@@ -107,9 +107,12 @@ func (o *TestOrchestrator) planUnfocusedGoBatch(base goBatchPlan) []goBatchPlan 
 	plans := []goBatchPlan{base}
 	runner := runners.NewGoTest(o.WorkDir)
 	for _, pkg := range base.packages {
-		args := o.augmentBenchArgs(runner, pkg, base.args)
+		args := o.augmentBenchArgs(runner, pkg, benchmarkOptions{args: base.args, ginkgo: slices.Contains(base.ginkgo, pkg)})
 		if slices.Equal(args, base.args) {
 			continue
+		}
+		if slices.Contains(base.ginkgo, pkg) {
+			args = append(args, "-run=^$")
 		}
 		plans[0].skipEmpty = append(plans[0].skipEmpty, pkg)
 		index := -1
@@ -125,9 +128,6 @@ func (o *TestOrchestrator) planUnfocusedGoBatch(base goBatchPlan) []goBatchPlan 
 		}
 		plans[index].packages = append(plans[index].packages, pkg)
 		plans[index].targets = append(plans[index].targets, pkg)
-		if slices.Contains(base.ginkgo, pkg) {
-			plans[index].ginkgo = append(plans[index].ginkgo, pkg)
-		}
 	}
 	return plans
 }

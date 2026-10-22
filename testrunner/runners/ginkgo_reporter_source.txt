@@ -4,13 +4,13 @@ import (
 	"fmt"
 	"os"
 
-	. "github.com/onsi/ginkgo/v2"
+	"github.com/onsi/ginkgo/v2"
 	"github.com/onsi/ginkgo/v2/types"
 )
 
-var _ = ReportAfterSuite("gavel structured metadata", func(report types.Report) {
-	PauseOutputInterception()
-	defer ResumeOutputInterception()
+var _ = ginkgo.ReportAfterSuite("gavel structured metadata", func(report types.Report) {
+	ginkgo.PauseOutputInterception()
+	defer ginkgo.ResumeOutputInterception()
 
 	payload, err := json.Marshal([]types.Report{report})
 	if err != nil {
