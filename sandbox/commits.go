@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/google/uuid"
@@ -117,6 +119,91 @@ func (s *Sources) PushRunCommits(ctx context.Context, repo Repo, base, branch st
 		}
 	}
 	return sha, nil
+}
+
+// LeaveOut adds a commit to branch, a GitHub repository's run branch at head, that puts paths
+// back as they were at base, the commit the run started at, so a landing from branch leaves them
+// out. Each path must be one the run changed, and at least one changed file must stay. It returns
+// the branch's new tip.
+func (s *Sources) LeaveOut(ctx context.Context, repo Repo, branch, base, head string, paths []string) (string, error) {
+	for _, arg := range append([]string{branch, base, head}, paths...) {
+		if strings.HasPrefix(arg, "-") {
+			return "", fmt.Errorf("%q can't start with \"-\"", arg)
+		}
+	}
+	if repo.Source != "github" {
+		return "", fmt.Errorf("repository %s has source %q; only a GitHub repository's runs land", repo.label(), repo.Source)
+	}
+	dir, err := s.sourceDir(ctx, repo)
+	if err != nil {
+		return "", err
+	}
+	diff, err := runGit(ctx, nil, "-C", dir, "diff", "--name-only", "-z", "--no-renames", base, head, "--")
+	if err != nil {
+		return "", fmt.Errorf("list the files run %s..%s of %s changed: %w", base, head, repo.label(), err)
+	}
+	changed := strings.Split(strings.TrimSuffix(diff, "\x00"), "\x00")
+	leftOut := map[string]bool{}
+	for _, path := range paths {
+		if !slices.Contains(changed, path) {
+			return "", fmt.Errorf("the run didn't change %s, so it can't be left out", path)
+		}
+		leftOut[path] = true
+	}
+	if len(leftOut) == len(changed) {
+		return "", errors.New("leaving out every file the run changed leaves nothing to land")
+	}
+
+	index, err := os.MkdirTemp("", "gavel-leave-out-")
+	if err != nil {
+		return "", fmt.Errorf("make an index to leave out files: %w", err)
+	}
+	defer os.RemoveAll(index)
+	// update-index refuses to run without a work tree; an empty one is never read.
+	env := []string{"GIT_INDEX_FILE=" + filepath.Join(index, "index"), "GIT_WORK_TREE=" + index}
+	git := func(args ...string) (string, error) {
+		out, err := runGitEnv(ctx, env, nil, append([]string{"-C", dir}, args...)...)
+		return strings.TrimSpace(out), err
+	}
+	if _, err := git("read-tree", head); err != nil {
+		return "", fmt.Errorf("read the tree of %s: %w", head, err)
+	}
+	for _, path := range paths {
+		entry, err := git("ls-tree", base, "--", path)
+		if err != nil {
+			return "", fmt.Errorf("read %s at %s: %w", path, base, err)
+		}
+		if entry == "" {
+			_, err = git("update-index", "--force-remove", "--", path)
+		} else {
+			// "<mode> blob <object>\t<path>"
+			fields := strings.Fields(entry)
+			_, err = git("update-index", "--add", "--cacheinfo", fields[0]+","+fields[2]+","+path)
+		}
+		if err != nil {
+			return "", fmt.Errorf("put %s back as it was at %s: %w", path, base, err)
+		}
+	}
+	tree, err := git("write-tree")
+	if err != nil {
+		return "", fmt.Errorf("write the tree leaving out %s: %w", strings.Join(paths, ", "), err)
+	}
+	tip, err := git("-c", "user.name=gavel", "-c", "user.email=gavel@gavel.invalid",
+		"commit-tree", tree, "-p", head, "-m", "Leave out "+strings.Join(paths, ", "))
+	if err != nil {
+		return "", fmt.Errorf("commit leaving out %s: %w", strings.Join(paths, ", "), err)
+	}
+
+	header, err := s.authHeader(ctx, repo)
+	if err != nil {
+		return "", err
+	}
+	// The lease refuses a branch that moved past head.
+	if _, err := git("-c", header, "push", "--quiet", "--force-with-lease=refs/heads/"+branch+":"+head,
+		"--", s.githubURL(repo), tip+":refs/heads/"+branch); err != nil {
+		return "", fmt.Errorf("leave out files on branch %s of %s: %w", branch, repo.label(), err)
+	}
+	return tip, nil
 }
 
 // commitSHA is a full SHA-1 or SHA-256 commit id, which is all a PR's base can be.
