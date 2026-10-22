@@ -6,9 +6,11 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/flanksource/clicky/api"
+	clickyexec "github.com/flanksource/clicky/exec"
 	clickytask "github.com/flanksource/clicky/task"
 	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/linters"
@@ -19,6 +21,8 @@ import (
 
 type Server struct {
 	mu               sync.RWMutex
+	revision         atomic.Uint64
+	encoding         snapshotEncodingCache
 	tests            []parsers.Test
 	lint             []*linters.LinterResult
 	lintRun          bool
@@ -94,6 +98,7 @@ func (s *Server) ensureMetadataLocked() *SnapshotMetadata {
 }
 
 func (s *Server) SetVersion(version string) {
+	defer s.notify()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.ensureMetadataLocked().Version = version
@@ -102,6 +107,7 @@ func (s *Server) SetVersion(version string) {
 // SetRunProcess records the parent gavel process identity (PID + command
 // line). Intended to be called once per run from BeginRun's caller.
 func (s *Server) SetRunProcess(pid int, command string) {
+	defer s.notify()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	meta := s.ensureMetadataLocked()
@@ -111,6 +117,7 @@ func (s *Server) SetRunProcess(pid int, command string) {
 
 // SetRunFrameworks records which test frameworks the run scheduled.
 func (s *Server) SetRunFrameworks(frameworks []string) {
+	defer s.notify()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.ensureMetadataLocked().Frameworks = append([]string(nil), frameworks...)
@@ -118,6 +125,7 @@ func (s *Server) SetRunFrameworks(frameworks []string) {
 
 // SetRunExitCode records the final exit code once the run completes.
 func (s *Server) SetRunExitCode(code int, timedOut bool) {
+	defer s.notify()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	meta := s.ensureMetadataLocked()
@@ -126,6 +134,7 @@ func (s *Server) SetRunExitCode(code int, timedOut bool) {
 }
 
 func (s *Server) SetRunArgs(args map[string]any) {
+	defer s.notify()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if args == nil {
@@ -140,6 +149,7 @@ func (s *Server) SetRunArgs(args map[string]any) {
 }
 
 func (s *Server) SetGitInfo(git *SnapshotGit) {
+	defer s.notify()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.git = cloneSnapshotGit(git)
@@ -243,6 +253,7 @@ func (s *Server) Snapshot() Snapshot {
 // SetGitRoot records the git root used for resolving relative paths and
 // locating the .gavel.yaml written by the ignore endpoint.
 func (s *Server) SetGitRoot(root string) {
+	defer s.notify()
 	s.mu.Lock()
 	s.gitRoot = root
 	s.mu.Unlock()
@@ -307,6 +318,7 @@ func (s *Server) streamFrom(ch <-chan []parsers.Test, mergeAttempts bool) {
 }
 
 func (s *Server) notify() {
+	s.revision.Add(1)
 	select {
 	case s.updated <- struct{}{}:
 	default:
@@ -414,32 +426,27 @@ func renderHTML(elements ...api.Textable) string {
 }
 
 func (s *Server) handleJSON(w http.ResponseWriter, _ *http.Request) {
-	s.mu.RLock()
-	data := s.snapshot()
-	s.mu.RUnlock()
-
-	b, err := json.Marshal(data)
+	b, _, err := s.encodedSnapshot()
 	if err != nil {
 		http.Error(w, "encode test snapshot: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	w.Write(b) //nolint:errcheck
+	fmt.Fprint(w, b)
 }
 
 // writeSSESnapshot sends data as one SSE frame unless it equals the last one
 // sent. An unencodable snapshot goes out as an error event and ok is false, so
 // the stream ends instead of reporting a run it could not serialise as done.
-func writeSSESnapshot(w http.ResponseWriter, flusher http.Flusher, data Snapshot, last *string) bool {
-	b, err := json.Marshal(data)
+func writeSSESnapshot(w http.ResponseWriter, flusher http.Flusher, payload string, err error, last *string) bool {
 	if err != nil {
 		message, _ := json.Marshal(map[string]string{"error": "encode test snapshot: " + err.Error()})
 		fmt.Fprintf(w, "event: error\ndata: %s\n\n", message)
 		flusher.Flush()
 		return false
 	}
-	if payload := string(b); payload != *last {
-		fmt.Fprintf(w, "data: %s\n\n", b)
+	if payload != *last {
+		fmt.Fprintf(w, "data: %s\n\n", payload)
 		flusher.Flush()
 		*last = payload
 	}
@@ -447,6 +454,14 @@ func writeSSESnapshot(w http.ResponseWriter, flusher http.Flusher, data Snapshot
 }
 
 func (s *Server) snapshot() Snapshot {
+	var taskTests []parsers.Test
+	if !s.replayed {
+		taskTests = virtualTaskTests()
+	}
+	return s.snapshotWithTasks(taskTests)
+}
+
+func (s *Server) snapshotWithTasks(taskTests []parsers.Test) Snapshot {
 	tests := s.tests
 	// Virtual task tests surface live (running/pending) clicky tasks while a
 	// run is in progress. A server replayed from a JSON snapshot has its
@@ -455,7 +470,6 @@ func (s *Server) snapshot() Snapshot {
 	// replay tests that share that registry).
 	running := !s.done
 	if !s.replayed {
-		taskTests := virtualTaskTests()
 		if len(taskTests) > 0 {
 			merged := make([]parsers.Test, 0, len(taskTests)+len(s.tests))
 			merged = append(merged, taskTests...)
@@ -552,13 +566,29 @@ func taskSnapshotToTest(snap clickytask.TaskSnapshot) parsers.Test {
 		t.Stderr = strings.Join(lines, "\n")
 	}
 	t.Context = map[string]any{
-		"duration": snap.Duration,
-		"status":   snap.Status,
-		"type":     snap.Type,
+		"status": snap.Status,
+		"type":   snap.Type,
+	}
+	if snap.Status != "running" && snap.Status != "pending" {
+		t.Context.(map[string]any)["duration"] = snap.Duration
+	}
+	if details, ok := snap.Details.(clickyexec.ExecTaskDetails); ok && details.PID > 0 && details.Started != nil {
+		t.Command = strings.TrimSpace(details.Command + " " + strings.Join(details.Args, " "))
+		attempt := parsers.TestAttempt{Sequence: 1, PID: details.PID, Started: *details.Started, Command: t.Command}
+		if details.Status != "running" && details.Status != "pending" {
+			attempt.Duration = details.Duration
+			attempt.ExitCode = &details.ExitCode
+			attempt.Passed = details.Status == "success"
+			attempt.Failed = !attempt.Passed
+			attempt.TimedOut = details.Status == "timeout"
+		}
+		t.Attempts = []parsers.TestAttempt{attempt}
 	}
 
 	switch snap.Status {
-	case "running", "pending":
+	case "running":
+		t.Running = true
+	case "pending":
 		t.Pending = true
 	case "success", "PASS":
 		t.Passed = true
@@ -583,11 +613,9 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Connection", "keep-alive")
 
 	// Send initial snapshot immediately
-	s.mu.RLock()
-	initial := s.snapshot()
-	s.mu.RUnlock()
+	initial, _, err := s.encodedSnapshot()
 	lastPayload := ""
-	if !writeSSESnapshot(w, flusher, initial, &lastPayload) {
+	if !writeSSESnapshot(w, flusher, initial, err, &lastPayload) {
 		return
 	}
 
@@ -602,15 +630,13 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 		case <-ticker.C:
 		}
 
-		s.mu.RLock()
-		data := s.snapshot()
-		s.mu.RUnlock()
+		payload, running, err := s.encodedSnapshot()
 
-		if !writeSSESnapshot(w, flusher, data, &lastPayload) {
+		if !writeSSESnapshot(w, flusher, payload, err, &lastPayload) {
 			return
 		}
 
-		if !data.Status.Running {
+		if !running {
 			fmt.Fprintf(w, "event: done\ndata: {}\n\n")
 			flusher.Flush()
 			return

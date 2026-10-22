@@ -653,13 +653,7 @@ func runSingleRootWithUpdateOwnership(opts RunOptions, closeUpdates bool) (any, 
 	// --show-stderr are presentation concerns applied at pretty-print time
 	// (cmd/gavel/test.go), never here — filtering or clearing stdout/stderr at
 	// the runner level would make the JSON/UI snapshot lossy.
-	tests := []parsers.Test{}
-	for _, result := range results {
-		tests = append(tests, result.Tests...)
-	}
-
-	// Build hierarchical tree from flat test results
-	tree := attachFailedPackageStderr(parsers.BuildTestTree(tests), results)
+	tree := attachFailedPackageStderr(results.Tree(), results)
 
 	// Discover and run fixture tests, gated on the --fixtures flag or
 	// fixtures.enabled in .gavel.yaml. Keep the partial tree and return direct

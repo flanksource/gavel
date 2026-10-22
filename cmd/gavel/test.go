@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -43,7 +44,7 @@ var (
 	hookTests   []parsers.Test
 )
 
-func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
+func runTests(opts testrunner.RunOptions, detach bool) (value any, runErr error) {
 	if opts.Dev && !opts.UI {
 		return nil, fmt.Errorf("--dev serves the --ui dashboard from Vite; it needs --ui")
 	}
@@ -121,7 +122,7 @@ func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
 	recorder.Start()
 	runSucceeded := false
 	defer func() {
-		recorder.Stop(runSucceeded)
+		runErr = errors.Join(runErr, recorder.Stop(runSucceeded))
 	}()
 
 	// Load .gavel.yaml once at the top — previously the lint path loaded it
