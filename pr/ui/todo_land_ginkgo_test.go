@@ -107,7 +107,10 @@ var _ = Describe("todo land API", func() {
 	},
 		Entry("unknown via", `,"via":"rebase"`, `via \"rebase\"`),
 		Entry("missing via", ``, `via \"\"`),
-		Entry("base on a merge", `,"via":"merge","base":"main"`, "base and draft only apply to a pr landing"),
+		Entry("base on a merge", `,"via":"merge","base":"main"`, "base, draft, title and leaveOut only apply to a pr landing"),
+		Entry("files left out of a merge", `,"via":"merge","leaveOut":["notes.md"]`, "base, draft, title and leaveOut only apply to a pr landing"),
+		Entry("a PR title outside hosted mode", `,"via":"pr","title":"Fix it"`, "a PR title and files to leave out apply to hosted landings only"),
+		Entry("files left out outside hosted mode", `,"via":"pr","leaveOut":["notes.md"]`, "a PR title and files to leave out apply to hosted landings only"),
 	)
 
 	It("rejects a request without a ref", func() {
