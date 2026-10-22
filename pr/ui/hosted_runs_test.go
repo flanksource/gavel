@@ -345,7 +345,10 @@ func TestHostedTriageNewRunsWithItsToolsOnServe(t *testing.T) {
 	for _, tool := range job.Tools {
 		tools = append(tools, tool.Name)
 	}
-	assert.Subset(t, tools, []string{"todo_search", "todo_get", "todo_update", "todo_link", "todo_merge"}, "the job calls serve for triage.new's todo tools")
+	assert.ElementsMatch(t, []string{
+		"todo_search", "todo_get", "todo_update", "todo_labels", "todo_link", "todo_link_pr",
+		"todo_set_parent", "todo_comment", "todo_plan", "todo_merge", "todo_close",
+	}, tools, "the job calls serve for triage.new's todo tools, and only those")
 	assert.True(t, job.Approvals, "and asks serve for the person's approval of a merge")
 
 	stop := map[string]any{"ref": todo, "promptRunId": started["promptRunId"]}
