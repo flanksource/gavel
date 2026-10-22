@@ -65,6 +65,7 @@ func runLint(opts LintOptions) (any, error) {
 	runCtx, cancelRun := newStopContext(opts.Context, 0)
 	defer cancelRun()
 	opts.Context = runCtx
+	opts.Selection = opts.ChangeSelection()
 
 	if opts.DryRun {
 		if err := lint.DryRun(opts); err != nil {
@@ -181,6 +182,7 @@ func runLint(opts LintOptions) (any, error) {
 			Started: runStarted,
 			Ended:   time.Now().UTC(),
 			Kind:    "lint",
+			Changes: opts.Selection.Snapshot(),
 		},
 		Git: snapshotGitInfo(opts.WorkDir),
 		Status: testui.SnapshotStatus{
@@ -225,10 +227,14 @@ func executeLintRerun(base LintOptions, req testui.RerunRequest) ([]*linters.Lin
 	}
 
 	rerunOpts := LintOptions{
-		WorkDir:   workDir,
-		Timeout:   base.Timeout,
-		Files:     append([]string(nil), req.LintFiles...),
-		OutputTee: base.OutputTee,
+		Changed:      base.Changed,
+		Since:        base.Since,
+		ChangedFiles: append([]string(nil), base.ChangedFiles...),
+		Selection:    base.Selection.Fresh(),
+		WorkDir:      workDir,
+		Timeout:      base.Timeout,
+		Files:        append([]string(nil), req.LintFiles...),
+		OutputTee:    base.OutputTee,
 	}
 	if len(req.LintLinters) > 0 {
 		rerunOpts.Linters = append([]string(nil), req.LintLinters...)

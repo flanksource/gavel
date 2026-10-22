@@ -34,6 +34,7 @@ func Run(ctx context.Context, opts Options) ([]*linters.LinterResult, error) {
 	if opts.Context == nil {
 		opts.Context = ctx
 	}
+	opts.Selection = opts.ChangeSelection()
 	if opts.Failed != "" {
 		opts, err = NarrowToFailed(opts)
 		if err != nil {
@@ -107,15 +108,9 @@ func Execute(opts Options) ([]*linters.LinterResult, error) {
 		return nil, err
 	}
 
-	// Resolve the merge-base once per git-root so every per-module golangci
-	// invocation shares the same --new-from-rev target.
-	var golangciExtraArgs []string
-	if ref := lintBaseRef(opts); ref != "" {
-		if base, mbErr := resolveMergeBase(opts.WorkDir, ref); mbErr != nil {
-			logger.Warnf("golangci-lint --new-from-rev: %v", mbErr)
-		} else {
-			golangciExtraArgs = []string{"--new-from-rev=" + base}
-		}
+	opts, skip, err := opts.withChanges()
+	if err != nil || skip {
+		return nil, err
 	}
 
 	group := clicky.StartGroup[*linters.LinterResult](testui.LintTaskGroupName, clickytask.WithConcurrency(1))
@@ -175,8 +170,16 @@ func Execute(opts Options) ([]*linters.LinterResult, error) {
 				}
 				continue
 			}
+			inv, scopes, err := scopeInvocation(inv, opts)
+			if err != nil {
+				return nil, err
+			}
+			if inv.skip {
+				continue
+			}
 
 			runOpts := linters.RunOptions{
+				Scopes:  scopes,
 				WorkDir: inv.projectRoot, ConfigDir: opts.ConfigDir,
 				Executable: executable,
 				Files:      inv.files,
@@ -186,9 +189,6 @@ func Execute(opts Options) ([]*linters.LinterResult, error) {
 				Timeout:    timeout, Runtime: opts.Runtime,
 				ForceJSON: true,
 				OutputTee: opts.OutputTee,
-			}
-			if linter.Name() == "golangci-lint" && len(golangciExtraArgs) > 0 {
-				runOpts.ExtraArgs = append(runOpts.ExtraArgs, golangciExtraArgs...)
 			}
 
 			invCopy := inv
@@ -212,6 +212,9 @@ func Execute(opts Options) ([]*linters.LinterResult, error) {
 		}
 	}
 
+	if len(lintTasks) == 0 && len(allResults) == 0 && opts.Selection.Active() {
+		logger.Infof("Change selection: no applicable lint work")
+	}
 	// Wait for the entire group (handles dynamically queued tasks and the
 	// concurrency semaphore correctly) before harvesting individual results.
 	group.WaitFor()
@@ -225,7 +228,11 @@ func Execute(opts Options) ([]*linters.LinterResult, error) {
 		}
 	}
 
-	if err := applyPostLintFilters(allResults, opts.WorkDir, opts.Files); err != nil {
+	scopeFiles := opts.Files
+	if opts.Selection.Active() {
+		scopeFiles = nil
+	}
+	if err := applyPostLintFilters(allResults, opts.WorkDir, scopeFiles); err != nil {
 		return nil, err
 	}
 	return allResults, nil
@@ -327,6 +334,7 @@ func DryRun(opts Options) error {
 	if err := opts.captureConfigDir(); err != nil {
 		return err
 	}
+	opts.Selection = opts.ChangeSelection()
 	for _, g := range GroupFilesByGitRoot(opts) {
 		groupOpts := opts
 		groupOpts.WorkDir = g.GitRoot
@@ -351,6 +359,10 @@ func dryRunGroup(opts Options) error {
 	}
 	timeout, err := parseTimeout(opts.Timeout)
 	if err != nil {
+		return err
+	}
+	opts, skip, err := opts.withChanges()
+	if err != nil || skip {
 		return err
 	}
 
@@ -402,8 +414,16 @@ func dryRunGroup(opts Options) error {
 				testrunner.PrintDryRunSkipped("lint", linter.Name()+" @ "+inv.projectRoot, reason)
 				continue
 			}
+			inv, scopes, err := scopeInvocation(inv, opts)
+			if err != nil {
+				return err
+			}
+			if inv.skip {
+				continue
+			}
 
 			runOpts := linters.RunOptions{
+				Scopes:  scopes,
 				WorkDir: inv.projectRoot, ConfigDir: opts.ConfigDir,
 				Executable: executable,
 				Files:      inv.files,
@@ -412,14 +432,6 @@ func dryRunGroup(opts Options) error {
 				NoCache:    opts.NoCache,
 				Timeout:    timeout, Runtime: opts.Runtime,
 				ForceJSON: true,
-			}
-			if linter.Name() == "golangci-lint" {
-				if ref := lintBaseRef(opts); ref != "" {
-					// Dry-run deliberately does not invoke `git merge-base` —
-					// show the literal ref as a placeholder so users see the
-					// intent without side effects.
-					runOpts.ExtraArgs = append(runOpts.ExtraArgs, "--new-from-rev=<merge-base HEAD "+ref+">")
-				}
 			}
 			cmdName, args, err := linters.PrepareCommand(linter, runOpts)
 			if err != nil {

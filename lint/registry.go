@@ -3,7 +3,6 @@ package lint
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -73,6 +72,7 @@ func shouldRunLinter(workDir string, cfg verify.GavelConfig, linterName string, 
 // project root (go.mod / package.json / tsconfig.json / ...). A linter may
 // produce multiple invocations when the input spans several project roots.
 type linterInvocation struct {
+	skip        bool
 	linter      linters.Linter
 	projectRoot string   // absolute; WorkDir the linter runs from
 	files       []string // relative to projectRoot (may be empty = whole root)
@@ -218,33 +218,4 @@ func resolveRequestedLinters(registry *linters.Registry, requested []string) ([]
 // the first match.
 func hasMatchingFiles(workDir string, patterns, extraIgnore []string) bool {
 	return utils.AnyGlobMatchGitIgnored(workDir, patterns, extraIgnore)
-}
-
-// lintBaseRef returns the git ref to use for --new-from-rev computation, or
-// "" when neither --since nor --changed was set. --since wins if both are
-// present.
-func lintBaseRef(opts Options) string {
-	if opts.Since != "" {
-		return opts.Since
-	}
-	if opts.Changed {
-		if v := os.Getenv("GAVEL_CHANGED_BASE"); v != "" {
-			return v
-		}
-		return "origin/main"
-	}
-	return ""
-}
-
-// resolveMergeBase returns the merge-base commit between HEAD and ref.
-// Mirrors golangci-lint's own --new-from-rev semantics: issues present at
-// merge-base are ignored, only regressions relative to it are reported.
-func resolveMergeBase(workDir, ref string) (string, error) {
-	cmd := exec.Command("git", "merge-base", "HEAD", ref)
-	cmd.Dir = workDir
-	out, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("git merge-base HEAD %s: %w", ref, err)
-	}
-	return strings.TrimSpace(string(out)), nil
 }
