@@ -172,3 +172,54 @@ func TestARunBranchIsFoundByItsTip(t *testing.T) {
 	_, err = sources.CommitSubjects(context.Background(), pushed, "--output=/tmp/x", tip)
 	require.EqualError(t, err, `commit "--output=/tmp/x" can't start with "-"`)
 }
+
+func TestLeaveOutPutsFilesBackAsTheRunFoundThem(t *testing.T) {
+	dataDir, remotes := t.TempDir(), t.TempDir()
+	org, repo := uuid.New(), uuid.New()
+	work := newWork(t)
+	commitFile(t, work, "README.md", "first")
+	base := commitFile(t, work, "go.mod", "module app")
+	remote := filepath.Join(remotes, "acme", "app.git")
+	git(t, work, "clone", "-q", "--bare", work, remote)
+	sources := &Sources{
+		DataDir:   dataDir,
+		GitHubURL: "file://" + remotes,
+		Token:     func(context.Context, int64) (string, error) { return "installation-token", nil },
+	}
+	github := Repo{ID: repo, Org: org, Source: "github", Name: "acme/app", GitHubRepoID: 42, InstallationID: 7}
+	_, err := sources.Checkout(context.Background(), github)
+	require.NoError(t, err)
+
+	// The run edits go.mod, adds fix.go and notes.md, and deletes README.md.
+	run := t.TempDir()
+	git(t, run, "clone", "-q", remote, ".")
+	git(t, run, "checkout", "-q", "-b", "run")
+	commitFile(t, run, "go.mod", "module app\n\ngo 1.25")
+	commitFile(t, run, "fix.go", "package app")
+	commitFile(t, run, "notes.md", "scratch")
+	commitFile(t, run, "my notes.md", "more scratch")
+	git(t, run, "rm", "-q", "README.md")
+	git(t, run, "commit", "-q", "-m", "drop the readme")
+	head := git(t, run, "rev-parse", "HEAD")
+	git(t, run, "push", "-q", "origin", "HEAD:refs/heads/gavel/todo-run")
+
+	pushed := Repo{ID: uuid.New(), Org: org, Source: "push", Name: "tool"}
+	_, err = sources.LeaveOut(context.Background(), pushed, "gavel/todo-run", base, head, []string{"notes.md"})
+	require.EqualError(t, err, `repository tool has source "push"; only a GitHub repository's runs land`)
+	_, err = sources.LeaveOut(context.Background(), github, "gavel/todo-run", base, head, []string{"main.go"})
+	require.EqualError(t, err, `the run didn't change main.go, so it can't be left out`)
+	_, err = sources.LeaveOut(context.Background(), github, "gavel/todo-run", base, head, []string{"go.mod", "fix.go", "notes.md", "my notes.md", "README.md"})
+	require.EqualError(t, err, "leaving out every file the run changed leaves nothing to land")
+
+	tip, err := sources.LeaveOut(context.Background(), github, "gavel/todo-run", base, head, []string{"notes.md", "my notes.md", "README.md", "go.mod"})
+	require.NoError(t, err)
+	assert.Equal(t, tip, git(t, remote, "rev-parse", "refs/heads/gavel/todo-run"), "the branch on GitHub carries it")
+	assert.Equal(t, head, git(t, remote, "rev-parse", tip+"^"), "on top of the run's commits")
+	assert.Equal(t, "Leave out notes.md, my notes.md, README.md, go.mod", git(t, remote, "log", "-1", "--format=%s", tip))
+	assert.Equal(t, "fix.go", git(t, remote, "diff", "--name-only", base, tip), "only the kept file differs from where the run started")
+
+	_, err = sources.LeaveOut(context.Background(), github, "gavel/todo-run", base, head, []string{"notes.md"})
+	require.Error(t, err, "a branch that moved past head isn't pushed over")
+	assert.Contains(t, err.Error(), "leave out files on branch gavel/todo-run of acme/app")
+	assert.Equal(t, tip, git(t, remote, "rev-parse", "refs/heads/gavel/todo-run"))
+}

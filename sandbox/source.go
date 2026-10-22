@@ -130,8 +130,13 @@ func cloneWhole(ctx context.Context, dir string, args ...string) error {
 }
 
 func runGit(ctx context.Context, stdout io.Writer, args ...string) (string, error) {
+	return runGitEnv(ctx, nil, stdout, args...)
+}
+
+// runGitEnv is runGit with env added to git's environment.
+func runGitEnv(ctx context.Context, env []string, stdout io.Writer, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	cmd.Env = append(append(os.Environ(), "GIT_TERMINAL_PROMPT=0"), env...)
 	var out, stderr bytes.Buffer
 	cmd.Stdout = &out
 	if stdout != nil {
