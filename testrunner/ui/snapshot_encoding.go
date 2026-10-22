@@ -3,8 +3,6 @@ package testui
 import (
 	"encoding/json"
 	"sync"
-
-	"github.com/flanksource/gavel/testrunner/parsers"
 )
 
 type snapshotEncodingCache struct {
@@ -18,10 +16,7 @@ type snapshotEncodingCache struct {
 func (s *Server) encodedSnapshot() (string, bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	var tasks []parsers.Test
-	if !s.replayed {
-		tasks = virtualTaskTests()
-	}
+	tasks, tasksRunning := s.liveTaskTestsLocked()
 	key, err := json.Marshal(tasks)
 	if err != nil {
 		return "", false, err
@@ -32,7 +27,7 @@ func (s *Server) encodedSnapshot() (string, bool, error) {
 	if s.encoding.payload != "" && s.encoding.revision == revision && s.encoding.tasks == string(key) {
 		return s.encoding.payload, s.encoding.running, nil
 	}
-	snapshot := s.snapshotWithTasks(tasks)
+	snapshot := s.snapshotWithTasks(tasks, tasksRunning)
 	payload, err := json.Marshal(snapshot)
 	if err != nil {
 		return "", false, err
