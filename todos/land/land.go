@@ -48,6 +48,10 @@ type Options struct {
 	// branch, so it takes no base.
 	Base  string
 	Draft bool
+	// Title and LeaveOut apply to a hosted landing: the PR's title, empty for
+	// the todo's, and the files the run changed that the PR leaves out.
+	Title    string
+	LeaveOut []string
 	// Flags and Deps drive the PR's AI content and GitHub calls.
 	Flags aiflags.ModelFlags
 	Deps  prcreate.Deps
@@ -59,8 +63,8 @@ func (o Options) Validate() error {
 	case native.LandingPR:
 		return nil
 	case native.LandingMerge:
-		if strings.TrimSpace(o.Base) != "" || o.Draft {
-			return fmt.Errorf("%w: base and draft only apply to a pr landing", ErrInvalidOptions)
+		if strings.TrimSpace(o.Base) != "" || o.Draft || strings.TrimSpace(o.Title) != "" || len(o.LeaveOut) > 0 {
+			return fmt.Errorf("%w: base, draft, title and leaveOut only apply to a pr landing", ErrInvalidOptions)
 		}
 		return nil
 	default:

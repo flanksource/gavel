@@ -8,6 +8,7 @@ import (
 
 	"github.com/flanksource/gavel/git/branchmerge"
 	prcreate "github.com/flanksource/gavel/pr/create"
+	"github.com/flanksource/gavel/sandbox"
 	"github.com/flanksource/gavel/todos/land"
 	"github.com/flanksource/gavel/todos/native"
 )
@@ -22,6 +23,9 @@ type todoLandPayload struct {
 	Via   native.LandingVia `json:"via"`
 	Base  string            `json:"base,omitempty"`
 	Draft bool              `json:"draft,omitempty"`
+	// Title and LeaveOut shape a hosted landing's PR.
+	Title    string   `json:"title,omitempty"`
+	LeaveOut []string `json:"leaveOut,omitempty"`
 }
 
 // todoLandResponse carries the recorded landing. Error is set only alongside a
@@ -43,7 +47,7 @@ func (s *Server) handleTodoLand(w http.ResponseWriter, r *http.Request) {
 		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("ref is required"))
 		return
 	}
-	opts := land.Options{Via: payload.Via, Base: payload.Base, Draft: payload.Draft}
+	opts := land.Options{Via: payload.Via, Base: payload.Base, Draft: payload.Draft, Title: payload.Title, LeaveOut: payload.LeaveOut}
 	if err := opts.Validate(); err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)
 		return
@@ -64,6 +68,9 @@ func (s *Server) handleTodoLand(w http.ResponseWriter, r *http.Request) {
 	var landing *native.RunLanding
 	if source.Hosted != nil {
 		landing, err = s.landHostedRun(r.Context(), backed, source, todo, opts)
+	} else if strings.TrimSpace(opts.Title) != "" || len(opts.LeaveOut) > 0 {
+		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("%w: a PR title and files to leave out apply to hosted landings only", land.ErrInvalidOptions))
+		return
 	} else {
 		landing, err = landTodoRun(r.Context(), backed, todo, opts)
 	}
@@ -88,7 +95,7 @@ func todoLandStatus(err error) int {
 	var prConflict *prcreate.ConflictError
 	var hostedRefusal hostedLandingRefusal
 	switch {
-	case errors.Is(err, land.ErrInvalidOptions), errors.As(err, &hostedRefusal):
+	case errors.Is(err, land.ErrInvalidOptions), errors.As(err, &hostedRefusal), errors.Is(err, sandbox.ErrInvalidLeaveOut):
 		return http.StatusBadRequest
 	case errors.Is(err, land.ErrNotNative):
 		return http.StatusNotImplemented

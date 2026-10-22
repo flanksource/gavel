@@ -4,6 +4,7 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -22,8 +23,10 @@ type hostedLandingRefusal string
 func (r hostedLandingRefusal) Error() string { return string(r) }
 
 // landHostedRun lands todo's newest run step as a pull request from the branch serve put its
-// commits on, through the organization's GitHub App, titled from the todo and described from the
-// run's commits, so no model runs on serve. A hosted run lands no other way.
+// commits on, through the organization's GitHub App, titled as the user asks (the todo's title by
+// default) and described from the run's commits, so no model runs on serve. Files the user leaves
+// out are put back by a commit on the branch, which is taken off again if the PR isn't opened. A
+// hosted run lands no other way.
 func (s *Server) landHostedRun(ctx context.Context, provider land.Provider, source todoSource, todo *types.TODO, opts land.Options) (*native.RunLanding, error) {
 	if opts.Via != native.LandingPR {
 		return nil, hostedLandingRefusal("a hosted run lands as a pull request; land it with via pr")
@@ -54,13 +57,6 @@ func (s *Server) landHostedRun(ctx context.Context, provider land.Provider, sour
 	if err != nil {
 		return nil, fmt.Errorf("land run %s: %w", run.PromptRunID, err)
 	}
-	subjects, err := sources.CommitSubjects(ctx, repo, wt.Setup, wt.Head)
-	if err != nil {
-		return nil, err
-	}
-	if len(subjects) == 0 {
-		return nil, fmt.Errorf("%w: run %s has nothing past its setup", land.ErrNoCommits, run.PromptRunID)
-	}
 	base := strings.TrimSpace(opts.Base)
 	if base == "" {
 		cfg, err := verify.LoadRepositoryGavelConfig(source.Dir)
@@ -69,15 +65,35 @@ func (s *Server) landHostedRun(ctx context.Context, provider land.Provider, sour
 		}
 		base = strings.TrimSpace(cfg.PR.Base)
 	}
-	pr, err := github.CreatePR(account, model.CreatePRInput{
-		Title: todo.Title, Body: hostedLandingBody(todo, subjects), Head: branch, Base: base, Draft: opts.Draft,
-	})
+	tip := wt.Head
+	if len(opts.LeaveOut) > 0 {
+		if tip, err = sources.LeaveOut(ctx, repo, branch, wt.Setup, wt.Head, opts.LeaveOut); err != nil {
+			return nil, err
+		}
+	}
+	subjects, err := sources.CommitSubjects(ctx, repo, wt.Setup, tip)
+	if err == nil && len(subjects) == 0 {
+		err = fmt.Errorf("%w: run %s has nothing past its setup", land.ErrNoCommits, run.PromptRunID)
+	}
+	var pr *model.CreatePRResult
+	if err == nil {
+		title := strings.TrimSpace(opts.Title)
+		if title == "" {
+			title = todo.Title
+		}
+		pr, err = github.CreatePR(account, model.CreatePRInput{
+			Title: title, Body: hostedLandingBody(todo, subjects, opts.LeaveOut), Head: branch, Base: base, Draft: opts.Draft,
+		})
+	}
 	if err != nil {
+		if tip != wt.Head {
+			err = errors.Join(err, sources.ResetRunBranch(context.WithoutCancel(ctx), repo, branch, tip, wt.Head))
+		}
 		return nil, err
 	}
 	number := pr.Number
 	recorded, err := provider.Repository().RecordLanding(ctx, issueID, native.RunLanding{
-		PromptRunID: run.PromptRunID, Via: native.LandingPR, TargetBranch: pr.Base, LandedSHA: wt.Head,
+		PromptRunID: run.PromptRunID, Via: native.LandingPR, TargetBranch: pr.Base, LandedSHA: tip,
 		PRNumber: &number, PRURL: pr.URL, CommitCount: len(subjects),
 	}, "gavel")
 	if err != nil {
@@ -86,12 +102,19 @@ func (s *Server) landHostedRun(ctx context.Context, provider land.Provider, sour
 	return recorded, nil
 }
 
-// hostedLandingBody describes a landing's pull request: the todo it carries and its commits.
-func hostedLandingBody(todo *types.TODO, subjects []string) string {
+// hostedLandingBody describes a landing's pull request: the todo it carries, its commits and
+// the files the user left out of it.
+func hostedLandingBody(todo *types.TODO, subjects, leftOut []string) string {
 	var body strings.Builder
 	fmt.Fprintf(&body, "Lands todo %s: %s\n\n## Commits\n\n", todo.DisplayID(), todo.Title)
 	for _, subject := range subjects {
 		fmt.Fprintf(&body, "- %s\n", subject)
+	}
+	if len(leftOut) > 0 {
+		body.WriteString("\n## Left out\n\n")
+		for _, path := range leftOut {
+			fmt.Fprintf(&body, "- %s\n", path)
+		}
 	}
 	return body.String()
 }
