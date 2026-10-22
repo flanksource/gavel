@@ -1,0 +1,2 @@
+# Files helm leaves out of the packaged chart: the chart's Go render tests.
+*.go

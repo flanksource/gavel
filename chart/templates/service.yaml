@@ -1,0 +1,38 @@
+{{- /*
+Services for the dashboard's HTTP port and, when enabled, the git push server's SSH port.
+*/ -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "gavel.fullname" . }}
+  labels:
+    {{- include "gavel.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    {{- include "gavel.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: http
+{{- if .Values.ssh.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "gavel.fullname" . }}-ssh
+  labels:
+    {{- include "gavel.labels" . | nindent 4 }}
+  {{- with .Values.ssh.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.ssh.service.type }}
+  selector:
+    {{- include "gavel.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: ssh
+      port: {{ .Values.ssh.service.port }}
+      targetPort: ssh
+{{- end }}

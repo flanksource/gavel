@@ -1,0 +1,51 @@
+{{- /*
+The server's ~/.gavel.yaml, whose storage section says where blobs go, and its properties file.
+*/ -}}
+{{- if not .Values.storage.existingSecret }}
+{{- $storage := dict "type" .Values.storage.type }}
+{{- with .Values.storage }}
+{{- if eq .type "local" }}
+{{- $_ := set $storage "path" .path }}
+{{- else }}
+{{- $_ := set $storage "bucket" .bucket }}
+{{- end }}
+{{- if .prefix }}
+{{- $_ := set $storage "prefix" .prefix }}
+{{- end }}
+{{- if eq .type "s3" }}
+{{- $s3 := dict }}
+{{- if .s3.region }}{{ $_ := set $s3 "region" .s3.region }}{{ end }}
+{{- if .s3.endpoint }}{{ $_ := set $s3 "endpoint" .s3.endpoint }}{{ end }}
+{{- if .s3.usePathStyle }}{{ $_ := set $s3 "usePathStyle" true }}{{ end }}
+{{- if $s3 }}{{ $_ := set $storage "s3" $s3 }}{{ end }}
+{{- end }}
+{{- if eq .type "gcs" }}
+{{- $gcs := dict "credentials" .gcs.credentials }}
+{{- if .gcs.endpoint }}{{ $_ := set $gcs "endpoint" .gcs.endpoint }}{{ end }}
+{{- $_ := set $storage "gcs" $gcs }}
+{{- end }}
+{{- end }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "gavel.configSecretName" . }}
+  labels:
+    {{- include "gavel.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  .gavel.yaml: |
+    {{- toYaml (dict "storage" $storage) | nindent 4 }}
+{{- end }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "gavel.fullname" . }}
+  labels:
+    {{- include "gavel.labels" . | nindent 4 }}
+{{- $properties := "" }}
+{{- range $key, $value := .Values.properties }}
+{{- $properties = printf "%s%s=%v\n" $properties $key $value }}
+{{- end }}
+data:
+  gavel.properties: {{ $properties | quote }}

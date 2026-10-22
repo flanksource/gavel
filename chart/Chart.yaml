@@ -1,0 +1,9 @@
+apiVersion: v2
+name: gavel
+description: Hosted gavel, the multi-tenant dashboard behind Clerk sign-in, with an optional bundled Postgres
+type: application
+version: 0.1.0
+appVersion: "v0.0.57"
+icon: https://github.com/flanksource.png
+maintainers:
+  - name: Flanksource
