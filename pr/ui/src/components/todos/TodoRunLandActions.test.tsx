@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { TodoRunLanding, TodoRunWorkspace, TodoSessionAttempt } from '../../types';
+import type { TodoCommitFile, TodoRunLanding, TodoRunWorkspace, TodoSessionAttempt } from '../../types';
 import type { LatestRunWorkspace } from './runWorkspace';
 import { todoQueryKeys } from './todoQueries';
 import { TodoRunLandActions } from './TodoRunLandActions';
@@ -14,6 +14,9 @@ import { setAuthMode } from '../../query';
    real SplitButton mounts floating-ui, which crashes under vitest. The SplitButton
    double renders its menu items inline so the draft-PR entry is reachable. */
 vi.mock('@flanksource/clicky-ui/components', () => ({
+  InputField: ({ value, onChange, className: _className, ...props }: Omit<React.InputHTMLAttributes<HTMLInputElement>, 'onChange'> & { onChange: (value: string) => void }) => (
+    <input value={value} onChange={event => onChange(event.currentTarget.value)} {...props} />
+  ),
   Button: ({ children, variant: _variant, size: _size, loading, disabled, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement> & { variant?: string; size?: string; loading?: boolean }) => (
     <button type="button" disabled={disabled || loading} {...props}>{children}</button>
   ),
@@ -60,7 +63,7 @@ function renderActions(latest: LatestRunWorkspace) {
   const invalidate = vi.spyOn(client, 'invalidateQueries');
   render(
     <QueryClientProvider client={client}>
-      <TodoRunLandActions dir={DIR} todoRef={REF} latest={latest} />
+      <TodoRunLandActions dir={DIR} todoRef={REF} todoTitle="Rate limit /login" latest={latest} />
     </QueryClientProvider>,
   );
   return { invalidate };
@@ -71,6 +74,47 @@ function stubLand(status: number, body: unknown) {
   vi.stubGlobal('fetch', fetchMock);
   return fetchMock;
 }
+
+const runFiles: TodoCommitFile[] = [
+  { path: 'middleware/ratelimit.go', status: 'added', adds: 80, dels: 0 },
+  { path: 'handlers/login.go', previousPath: 'handlers/auth.go', status: 'renamed', adds: 4, dels: 1 },
+  { path: 'scratch/notes.md', status: 'added', adds: 25, dels: 0 },
+];
+
+// stubHostedLand answers the run's file list and the landing.
+function stubHostedLand(files: TodoCommitFile[] | { status: number; error: string }, landing: unknown) {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.startsWith('/api/todos/commits/files?')) {
+      const params = new URLSearchParams(url.split('?')[1]);
+      expect([params.get('dir'), params.get('base'), params.get('hash')]).toEqual([DIR, SETUP, HEAD]);
+      if (!Array.isArray(files)) return new Response(JSON.stringify({ error: files.error }), { status: files.status });
+      return new Response(JSON.stringify({ hash: HEAD, files }), { status: 200 });
+    }
+    return new Response(JSON.stringify(landing), { status: 200 });
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  return fetchMock;
+}
+
+function landedBody(fetchMock: ReturnType<typeof vi.fn>) {
+  const call = fetchMock.mock.calls.find(([url]) => url === '/api/todos/land') as unknown as [string, RequestInit] | undefined;
+  expect(call, 'POST /api/todos/land').toBeTruthy();
+  return JSON.parse(String(call![1].body));
+}
+
+function inHostedMode(test: () => Promise<void>) {
+  return async () => {
+    setAuthMode('clerk', vi.fn());
+    try {
+      await test();
+    } finally {
+      setAuthMode('none', vi.fn());
+    }
+  };
+}
+
+const prLanding = { landing: { promptRunId: 'run-2', targetBranch: 'main', landedSha: LANDED, commitCount: 1, landedAt: '2026-09-14T11:00:00Z', via: 'pr', prNumber: 7, prUrl: 'https://github.com/acme/widgets/pull/7' } };
 
 function postedBody(fetchMock: ReturnType<typeof stubLand>) {
   const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
@@ -103,19 +147,59 @@ describe('TodoRunLandActions', () => {
     expect(screen.queryByRole('button', { name: /Merge into current branch/ })).toBeNull();
   });
 
-  it('lands a hosted run only as a pull request', async () => {
-    setAuthMode('clerk', vi.fn());
-    try {
-      const fetchMock = stubLand(200, { landing: { ...mergeLanding, via: 'pr', prNumber: 7, prUrl: 'https://github.com/acme/widgets/pull/7' } });
-      renderActions(latestRun(committed));
-      expect(screen.queryByRole('button', { name: /Merge into current branch/ })).toBeNull();
-      fireEvent.click(screen.getByRole('button', { name: /Create PR/ }));
-      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-      expect(postedBody(fetchMock)).toEqual({ ref: REF, dir: DIR, via: 'pr', draft: false });
-    } finally {
-      setAuthMode('none', vi.fn());
-    }
-  });
+  it('lands a hosted run only as a pull request, titled from the todo, carrying every file', inHostedMode(async () => {
+    const fetchMock = stubHostedLand(runFiles, prLanding);
+    renderActions(latestRun(committed));
+    expect(screen.queryByRole('button', { name: /Merge into current branch/ })).toBeNull();
+    expect((screen.getByRole('textbox', { name: 'PR title' }) as HTMLInputElement).value).toBe('Rate limit /login');
+    expect((await screen.findByRole('checkbox', { name: 'scratch/notes.md' }) as HTMLInputElement).checked).toBe(true);
+
+    fireEvent.click(screen.getByRole('button', { name: /^Create PR$/ }));
+
+    await waitFor(() => expect(landedBody(fetchMock)).toEqual({ ref: REF, dir: DIR, via: 'pr', draft: false, title: 'Rate limit /login' }));
+  }));
+
+  it('opens a hosted PR with the title the user wrote, leaving out the files they unticked', inHostedMode(async () => {
+    const fetchMock = stubHostedLand(runFiles, prLanding);
+    renderActions(latestRun(committed));
+    fireEvent.change(screen.getByRole('textbox', { name: 'PR title' }), { target: { value: '  Limit login attempts ' } });
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'scratch/notes.md' }));
+    // A rename is one entry: leaving it out leaves out both of its paths.
+    fireEvent.click(screen.getByRole('checkbox', { name: 'handlers/auth.go → handlers/login.go' }));
+
+    fireEvent.click(screen.getByRole('button', { name: /Create draft PR/ }));
+
+    await waitFor(() => expect(landedBody(fetchMock)).toEqual({
+      ref: REF, dir: DIR, via: 'pr', draft: true, title: 'Limit login attempts',
+      leaveOut: ['handlers/auth.go', 'handlers/login.go', 'scratch/notes.md'],
+    }));
+  }));
+
+  it.each([
+    ['a blank title', () => fireEvent.change(screen.getByRole('textbox', { name: 'PR title' }), { target: { value: '  ' } }), 'A PR needs a title.'],
+    ['every file unticked', () => {
+      for (const box of screen.getAllByRole('checkbox')) fireEvent.click(box);
+    }, 'Tick at least one file to land.'],
+  ])('refuses a hosted PR with %s, saying why', (_case, act, reason) => inHostedMode(async () => {
+    const fetchMock = stubHostedLand(runFiles, prLanding);
+    renderActions(latestRun(committed));
+    await screen.findByRole('checkbox', { name: 'scratch/notes.md' });
+
+    act();
+
+    const create = screen.getByRole('button', { name: /^Create PR$/ }) as HTMLButtonElement;
+    expect(create.disabled).toBe(true);
+    expect(create.closest('[title]')?.getAttribute('title')).toBe(reason);
+    expect(fetchMock.mock.calls.some(([url]) => url === '/api/todos/land')).toBe(false);
+  })());
+
+  it('says why a hosted run can\'t land while its files fail to load', inHostedMode(async () => {
+    stubHostedLand({ status: 500, error: 'list the files of the run: git failed' }, prLanding);
+    renderActions(latestRun(committed));
+
+    expect((await screen.findByRole('alert')).textContent).toContain('list the files of the run: git failed');
+    expect((screen.getByRole('button', { name: /^Create PR$/ }) as HTMLButtonElement).disabled).toBe(true);
+  }));
 
   it('posts a draft PR landing from the Create PR menu', async () => {
     const fetchMock = stubLand(200, {

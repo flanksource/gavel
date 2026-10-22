@@ -464,7 +464,7 @@ export function TodoDetail(props: TodoDetailProps) {
                 <TodoRunBranch
                   dir={dir}
                   todoRef={todo.ref}
-                  renderActions={todo.pr ? undefined : latest => <TodoRunLandActions dir={dir} todoRef={todo.ref} latest={latest} />}
+                  renderActions={todo.pr ? undefined : latest => <TodoRunLandActions dir={dir} todoRef={todo.ref} todoTitle={todo.title} latest={latest} />}
                   events={events}
                   onPatch={patch}
                 />
