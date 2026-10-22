@@ -8,12 +8,13 @@ import { todoQueryKeys } from './todoQueries';
 
 const ALL_CHANGES = 'all';
 
-interface ChangeRange {
+export interface ChangeRange {
   hash: string;
   base: string;
 }
 
-function changeParams(dir: string, { hash, base }: ChangeRange) {
+/** The query of the todo commit endpoints for range's files or diffs. */
+export function changeParams(dir: string, { hash, base }: ChangeRange) {
   const params = new URLSearchParams(todoQuery(dir));
   params.set('hash', hash);
   if (base) params.set('base', base);

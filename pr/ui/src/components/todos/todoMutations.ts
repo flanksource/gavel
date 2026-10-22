@@ -249,6 +249,10 @@ export interface TodoLandRequest {
   via: TodoRunLanding['via'];
   /** Opens the pull request as a draft; only meaningful with via 'pr'. */
   draft?: boolean;
+  /** A hosted PR's title; the server uses the todo's when it is absent. */
+  title?: string;
+  /** The files the run changed that a hosted PR leaves out. */
+  leaveOut?: string[];
 }
 
 /**
@@ -263,12 +267,17 @@ export function useTodoLandMutation(dir: string, ref: string) {
   const client = useQueryClient();
   return useMutation({
     mutationKey: ['todos', 'land', { dir: dir.trim(), ref }],
-    mutationFn: ({ via, draft }: TodoLandRequest) => todoMutationJSON<TodoLandResponse>(
+    mutationFn: ({ via, draft, title, leaveOut }: TodoLandRequest) => todoMutationJSON<TodoLandResponse>(
       '/api/todos/land',
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ref, dir, via, ...(via === 'pr' ? { draft: !!draft } : {}) }),
+        body: JSON.stringify({
+          ref, dir, via,
+          ...(via === 'pr' ? { draft: !!draft } : {}),
+          ...(title ? { title } : {}),
+          ...(leaveOut?.length ? { leaveOut } : {}),
+        }),
       },
       via === 'merge' ? `Could not merge the run of todo ${ref}` : `Could not open a PR for the run of todo ${ref}`,
     ),
