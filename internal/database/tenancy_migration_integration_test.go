@@ -89,6 +89,10 @@ func TestTenancyMigrationFromMainSchema(t *testing.T) {
 		require.EqualValues(t, 1, orgFKs, "%s has one org foreign key", table)
 	}
 
+	var deletedAt string
+	require.NoError(t, gdb.Raw(`SELECT is_nullable FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'deleted_at'`).Scan(&deletedAt).Error)
+	require.Equal(t, "YES", deletedAt, "users are soft-deleted through a nullable deleted_at")
+
 	dbtest.RequireConstraintViolation(t,
 		dbtest.Quiet(gdb).Exec(`INSERT INTO seen_prs (org_id, repo, number, seen_at) VALUES (?, 'a/b', 2, now())`, uuid.New()).Error,
 		"seen_prs_org_id_fkey")

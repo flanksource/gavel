@@ -45,6 +45,11 @@ table "users" {
     type = timestamptz
     default = sql("now()")
   }
+  # Users are soft-deleted: their row stays so what they created keeps its creator.
+  column "deleted_at" {
+    null = true
+    type = timestamptz
+  }
   primary_key { columns = [column.id] }
   index "users_clerk_identity_key" {
     unique = true
