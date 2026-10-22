@@ -25,6 +25,9 @@ var ErrBranchExists = errors.New("the branch already exists")
 // ErrNoRunBranch is a run whose commits are on no run branch.
 var ErrNoRunBranch = errors.New("no run branch holds the run's commits")
 
+// ErrInvalidLeaveOut is a choice of files to leave out of a landing that can't be made.
+var ErrInvalidLeaveOut = errors.New("can't leave those files out")
+
 // RunBranch is the branch serve puts the commits of run, a sandbox run of todo, on.
 func RunBranch(todo, run uuid.UUID) string {
 	return RunBranchPrefix + todo.String()[:8] + "-" + run.String()[:8]
@@ -146,12 +149,12 @@ func (s *Sources) LeaveOut(ctx context.Context, repo Repo, branch, base, head st
 	leftOut := map[string]bool{}
 	for _, path := range paths {
 		if !slices.Contains(changed, path) {
-			return "", fmt.Errorf("the run didn't change %s, so it can't be left out", path)
+			return "", fmt.Errorf("%w: the run didn't change %s", ErrInvalidLeaveOut, path)
 		}
 		leftOut[path] = true
 	}
 	if len(leftOut) == len(changed) {
-		return "", errors.New("leaving out every file the run changed leaves nothing to land")
+		return "", fmt.Errorf("%w: that is every file the run changed, leaving nothing to land", ErrInvalidLeaveOut)
 	}
 
 	index, err := os.MkdirTemp("", "gavel-leave-out-")
@@ -194,16 +197,40 @@ func (s *Sources) LeaveOut(ctx context.Context, repo Repo, branch, base, head st
 		return "", fmt.Errorf("commit leaving out %s: %w", strings.Join(paths, ", "), err)
 	}
 
-	header, err := s.authHeader(ctx, repo)
-	if err != nil {
-		return "", err
-	}
-	// The lease refuses a branch that moved past head.
-	if _, err := git("-c", header, "push", "--quiet", "--force-with-lease=refs/heads/"+branch+":"+head,
-		"--", s.githubURL(repo), tip+":refs/heads/"+branch); err != nil {
+	if err := s.moveBranch(ctx, repo, dir, branch, head, tip); err != nil {
 		return "", fmt.Errorf("leave out files on branch %s of %s: %w", branch, repo.label(), err)
 	}
 	return tip, nil
+}
+
+// ResetRunBranch moves branch, a GitHub repository's run branch at tip, back to head, undoing
+// a LeaveOut whose landing failed.
+func (s *Sources) ResetRunBranch(ctx context.Context, repo Repo, branch, tip, head string) error {
+	for _, arg := range []string{branch, tip, head} {
+		if strings.HasPrefix(arg, "-") {
+			return fmt.Errorf("%q can't start with \"-\"", arg)
+		}
+	}
+	dir, err := s.sourceDir(ctx, repo)
+	if err != nil {
+		return err
+	}
+	if err := s.moveBranch(ctx, repo, dir, branch, tip, head); err != nil {
+		return fmt.Errorf("move branch %s of %s back to %s: %w", branch, repo.label(), head, err)
+	}
+	return nil
+}
+
+// moveBranch pushes branch of repo on GitHub from one commit to another, from dir, the
+// repository's mirror. The lease refuses a branch that isn't at from.
+func (s *Sources) moveBranch(ctx context.Context, repo Repo, dir, branch, from, to string) error {
+	header, err := s.authHeader(ctx, repo)
+	if err != nil {
+		return err
+	}
+	_, err = runGit(ctx, nil, "-c", header, "-C", dir, "push", "--quiet", "--force-with-lease=refs/heads/"+branch+":"+from,
+		"--", s.githubURL(repo), to+":refs/heads/"+branch)
+	return err
 }
 
 // commitSHA is a full SHA-1 or SHA-256 commit id, which is all a PR's base can be.
