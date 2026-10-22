@@ -55,6 +55,7 @@ func runAIFix(opts LintOptions, initial []*linters.LinterResult) ([]*linters.Lin
 		BuildRequest:   runtime.BuildRequest,
 		ReLint: func(rctx context.Context) ([]*linters.LinterResult, error) {
 			rerunOpts := opts
+			rerunOpts.Selection = opts.Selection.Fresh()
 			rerunOpts.Context = rctx
 			rerunOpts.AIFix = false
 			return lint.Execute(rerunOpts)

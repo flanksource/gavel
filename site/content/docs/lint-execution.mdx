@@ -43,7 +43,7 @@ gavel lint --pr 12
 gavel lint --ignore "**/generated/**"
 ```
 
-`--changed` reports new issues relative to `origin/main`, or `$GAVEL_CHANGED_BASE` when set. `--since` chooses another merge-base reference. These are reporting filters; a native tool may still analyze the wider project.
+`--changed` selects staged, unstaged and nonignored untracked files locally, or the runner's changeset in CI. `--since HEAD` selects local edits; `--since staged` selects staged files while inspecting current contents; another ref selects its merge-base diff plus local edits. Lint reports all findings in selected files. See [Changed code](/docs/change-selection) for CI setup, explicit files and comparison rules.
 
 `--baseline` removes findings already represented in a saved report. Baseline matching uses linter, file, and rule, so moving a line does not make the same finding new. It also means multiple findings of the same rule in one file share that identity.
 

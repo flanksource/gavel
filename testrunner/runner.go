@@ -26,6 +26,7 @@ import (
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/baseline"
 	"github.com/flanksource/gavel/fixtures"
+	"github.com/flanksource/gavel/git/changeset"
 	"github.com/flanksource/gavel/processruntime"
 	"github.com/flanksource/gavel/testrunner/parsers"
 	"github.com/flanksource/gavel/testrunner/runners"
@@ -142,8 +143,8 @@ type RunOptions struct {
 	Context                  context.Context                  `json:"-" yaml:"-"`                                                                                                                                                                                             // Parent context for the run. Nil = context.Background(). Global --timeout is applied on top.
 	Lint                     bool                             `json:"lint,omitempty" yaml:"lint,omitempty" flag:"lint"`                                                                                                                                                       // Run linters in parallel with tests
 	Cache                    bool                             `json:"cache,omitempty" yaml:"cache,omitempty" flag:"cache"`                                                                                                                                                    // Skip packages whose content fingerprint matches the last passing run
-	Changed                  bool                             `json:"changed,omitempty" yaml:"changed,omitempty" flag:"changed"`                                                                                                                                              // Only run packages affected by staged/unstaged/untracked changes and the diff against origin/main
-	Since                    string                           `json:"since,omitempty" yaml:"since,omitempty" flag:"since"`                                                                                                                                                    // Only run packages affected by the diff since <ref> (merge-base(HEAD,ref)..HEAD) plus the working tree
+	Changed                  bool                             `json:"changed,omitempty" yaml:"changed,omitempty" flag:"changed" help:"Run tests affected by local edits, or by the runner changeset in CI"`
+	Since                    string                           `json:"since,omitempty" yaml:"since,omitempty" flag:"since" help:"Select changes since a ref merge-base plus local edits; HEAD = local edits, staged = staged files"`
 	ChangedFiles             []string                         `json:"changed_files,omitempty" yaml:"changed-files,omitempty" flag:"changed-files"`                                                                                                                            // Only run packages affected by these workdir-relative files (no git query); unions with --changed/--since when either is set
 	Bench                    string                           `json:"bench,omitempty" yaml:"bench,omitempty" flag:"bench" help:"Run Go benchmarks matching this regex (. runs all)"`                                                                                          // Run Go benchmarks matching this regex ("." or "true" runs all). Auto-enabled for packages containing only Benchmark* funcs.
 	Fixtures                 bool                             `json:"fixtures,omitempty" yaml:"fixtures,omitempty" flag:"fixtures"`                                                                                                                                           // Discover and run fixture files. Off by default; can also be enabled via .gavel.yaml fixtures.enabled
@@ -166,6 +167,7 @@ type RunOptions struct {
 
 	PassThroughArgs []string `json:"pass_through_args,omitempty" yaml:"-"` // CLI-only arguments supplied after --. Focus aliases are normalized; remaining args require one selected framework.
 
+	Selection *changeset.Selection `flag:"-" json:"-" yaml:"-"`
 }
 
 type fixtureOptions = fixtures.RunnerOptions
@@ -241,7 +243,7 @@ func (opts RunOptions) Pretty() api.Text {
 // hasChangeSelector reports whether any flag in opts narrows execution to a
 // subset of packages via the change graph.
 func (opts RunOptions) hasChangeSelector() bool {
-	return opts.Changed || opts.Since != "" || len(opts.ChangedFiles) > 0
+	return opts.ChangeOptions().Active() || opts.Selection.Active()
 }
 
 func (r RunOptions) Help() string {
@@ -435,10 +437,11 @@ func Run(opts RunOptions) (any, error) {
 	if configDirErr != nil {
 		return nil, configDirErr
 	}
+	opts.Selection = opts.ChangeSelection()
 	if opts.FixturesOnly {
 		opts.WorkDir, _ = filepath.Abs(opts.WorkDir)
 		result, err := runSingleRoot(opts)
-		return requireExecutedTests(result, err, opts.DryRun)
+		return requireExecutedTests(result, err, opts.DryRun || opts.hasChangeSelector())
 	}
 
 	// Split starting paths by execution root so each group runs with the
@@ -458,11 +461,11 @@ func Run(opts RunOptions) (any, error) {
 		opts.StartingPaths = groups[0].paths
 		result, err = runSingleRoot(opts)
 	}
-	return requireExecutedTests(result, err, opts.DryRun)
+	return requireExecutedTests(result, err, opts.DryRun || opts.hasChangeSelector())
 }
 
-func requireExecutedTests(result any, err error, dryRun bool) (any, error) {
-	if err != nil || dryRun {
+func requireExecutedTests(result any, err error, allowEmpty bool) (any, error) {
+	if err != nil || allowEmpty {
 		return result, err
 	}
 	tests, ok := result.([]parsers.Test)
@@ -615,6 +618,19 @@ func runSingleRoot(opts RunOptions) (any, error) {
 }
 
 func runSingleRootWithUpdateOwnership(opts RunOptions, closeUpdates bool) (any, error) {
+	opts.Selection = opts.ChangeSelection()
+	ctx := opts.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	selected, selectionErr := opts.Selection.Resolve(ctx, opts.WorkDir)
+	if selectionErr != nil {
+		return nil, selectionErr
+	}
+	if selected != nil && len(selected.Changes) == 0 {
+		logger.Infof("%s; no applicable test work", selected.Summary())
+		return []parsers.Test{}, nil
+	}
 	if _, err := verify.LoadGavelConfig(opts.runtimeWorkDir()); err != nil {
 		return nil, err
 	}
@@ -1038,28 +1054,8 @@ func (o *TestOrchestrator) detectAndRun(frameworks []Framework, startingPaths []
 		return nil, nil
 	}
 
-	// Narrow via change graph and/or run cache. Both selectors share a
-	// single lazily-loaded graph/hasher instance via selectorContext.
-	if o.hasChangeSelector() || o.Cache {
-		var err error
-		o.selector, err = newSelectorContext(o.WorkDir, o.Tags)
-		if err != nil {
-			return nil, fmt.Errorf("initialize selector: %w", err)
-		}
-	}
-
-	if o.hasChangeSelector() && o.selector != nil {
-		diff := diffOptionsFromRunOptions(o.RunOptions)
-		for fw, pkgs := range packagesByFramework {
-			kept, err := o.selector.filterByChangeGraph(pkgs, diff)
-			if err != nil {
-				return nil, fmt.Errorf("change-graph filter for %s: %w", fw, err)
-			}
-			if len(kept) != len(pkgs) {
-				logger.Infof("[%s] change-graph: %d → %d packages", fw, len(pkgs), len(kept))
-			}
-			packagesByFramework[fw] = kept
-		}
+	if err := o.selectChanges(packagesByFramework); err != nil {
+		return nil, err
 	}
 
 	cachedByFramework := map[Framework][]cacheHit{}
