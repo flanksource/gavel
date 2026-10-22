@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sync"
 	"time"
 
@@ -13,7 +12,6 @@ import (
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/service"
 	"github.com/flanksource/gavel/tenant"
-	"github.com/flanksource/gavel/verify"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
@@ -81,7 +79,7 @@ func Open() (*Store, error) {
 
 	logger.Debugf("github cache ready (postgres, source=%s)", db.DSNSource())
 	s := newStore(db)
-	if s.blobs, err = openJobLogBlobs(); err != nil {
+	if s.blobs, err = database.OpenBlobs(context.Background()); err != nil {
 		return nil, err
 	}
 	s.pruneOnOpen()
@@ -260,17 +258,4 @@ func (s *Store) pruneOnOpen() {
 	if res.RowsAffected > 0 {
 		logger.Debugf("github cache pruned %d stale http entries", res.RowsAffected)
 	}
-}
-
-// openJobLogBlobs is the blob store ~/.gavel.yaml configures, or <user cache dir>/gavel/blobs.
-func openJobLogBlobs() (blob.Store, error) {
-	store, err := verify.OpenGlobalStorage(context.Background())
-	if err != nil || store != nil {
-		return store, err
-	}
-	dir, err := os.UserCacheDir()
-	if err != nil {
-		return nil, fmt.Errorf("find the cache directory for job logs: %w", err)
-	}
-	return blob.Local(filepath.Join(dir, "gavel", "blobs")), nil
 }

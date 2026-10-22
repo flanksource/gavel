@@ -150,6 +150,10 @@ func migrateDatabase(ctx context.Context, dsn string) error {
 		if err := captaindb.Migrate(ctx, dsn); err != nil {
 			return err
 		}
+		// Before the schema drops job_log_caches.logs_gz.
+		if err := moveInlineJobLogs(ctx, dsn); err != nil {
+			return err
+		}
 		if err := applyGavelSchema(ctx, dsn); err != nil {
 			return err
 		}

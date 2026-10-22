@@ -53,12 +53,10 @@ type WorkflowRunCache struct {
 // terminal conclusion. Logs can be 10–50MB, so they are stored gzipped in the
 // organization's blob store under LogKey; callers see plain strings.
 type JobLogCache struct {
-	OrgID  uuid.UUID  `gorm:"primaryKey;type:uuid"`
-	UserID *uuid.UUID `gorm:"type:uuid"`
-	JobID  int64      `gorm:"primaryKey"`
-	Repo   string     `gorm:"size:255"`
-	// LogsGz holds the gzipped logs of a row written before LogKey existed.
-	LogsGz    []byte
+	OrgID     uuid.UUID  `gorm:"primaryKey;type:uuid"`
+	UserID    *uuid.UUID `gorm:"type:uuid"`
+	JobID     int64      `gorm:"primaryKey"`
+	Repo      string     `gorm:"size:255"`
 	LogKey    string
 	FetchedAt time.Time
 }
