@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/flanksource/commons/logger"
@@ -104,6 +105,9 @@ func discoverLinterInvocations(linter linters.Linter, opts Options) []linterInvo
 
 	if len(opts.Files) == 0 {
 		roots := utils.FindAllProjectRoots(opts.WorkDir, markers)
+		if linter.Name() == "uir" && (len(roots) == 0 || linterHasDefaultActivation(opts.WorkDir, linter)) && !slices.Contains(roots, opts.WorkDir) {
+			roots = append([]string{opts.WorkDir}, roots...)
+		}
 		if len(roots) == 0 {
 			return nil
 		}
@@ -123,6 +127,17 @@ func discoverLinterInvocations(linter linters.Linter, opts Options) []linterInvo
 			dir = filepath.Dir(abs)
 		}
 		root := utils.FindNearestProjectRoot(dir, markers)
+		if linter.Name() == "uir" && root != opts.WorkDir {
+			if home, err := os.UserHomeDir(); err == nil && root == home {
+				root = ""
+			}
+		}
+		if root == "" && linter.Name() == "uir" {
+			root = utils.FindNearestGoModRoot(dir)
+			if root == "" {
+				root = opts.WorkDir
+			}
+		}
 		if root == "" {
 			logger.V(2).Infof("Skipping %s for %s: no %v found", linter.Name(), f, markers)
 			continue

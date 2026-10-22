@@ -27,7 +27,7 @@ var _ = Describe("UIR native configuration", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(binary).To(Equal("uir"))
 	})
-	It("schedules nested configs independently without inheriting their parent's rules", func() {
+	It("schedules nested configs as independent invocations", func() {
 		root := GinkgoT().TempDir()
 		nested := filepath.Join(root, "nested")
 		Expect(os.MkdirAll(nested, 0o700)).To(Succeed())
@@ -42,6 +42,7 @@ var _ = Describe("UIR native configuration", func() {
 		}
 	})
 	It("activates only with configuration and registers the adapter", func() {
+		GinkgoT().Setenv("HOME", GinkgoT().TempDir())
 		root := GinkgoT().TempDir()
 		adapter := uir.New(root)
 		selected, _ := shouldSelectLinter(root, verify.GavelConfig{}, adapter, false)
@@ -50,6 +51,45 @@ var _ = Describe("UIR native configuration", func() {
 		selected, _ = shouldSelectLinter(root, verify.GavelConfig{}, adapter, false)
 		Expect(selected).To(BeTrue())
 		Expect(buildLinterRegistry(root).Has("uir")).To(BeTrue())
+	})
+
+	It("schedules the requested project with only global directory configuration", func() {
+		home, root := GinkgoT().TempDir(), GinkgoT().TempDir()
+		GinkgoT().Setenv("HOME", home)
+		Expect(os.Mkdir(filepath.Join(home, ".uir.d"), 0o700)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(home, ".uir.d", "rules.yaml"), []byte("version: 1\n"), 0o600)).To(Succeed())
+		adapter := uir.New(root)
+		invocations := resolveLinterInvocations(adapter, Options{WorkDir: root})
+		Expect(invocations).To(HaveLen(1))
+		Expect(invocations[0].projectRoot).To(Equal(root))
+		selected, _ := shouldSelectLinter(root, verify.GavelConfig{}, adapter, false)
+		Expect(selected).To(BeTrue())
+	})
+
+	It("discovers directory-only project configs and expands fragment scopes", func() {
+		root := GinkgoT().TempDir()
+		GinkgoT().Setenv("HOME", GinkgoT().TempDir())
+		directory := filepath.Join(root, ".uir.d")
+		Expect(os.Mkdir(directory, 0o700)).To(Succeed())
+		path := filepath.Join(directory, "rules.yaml")
+		Expect(os.WriteFile(path, []byte("version: 1\n"), 0o600)).To(Succeed())
+		invocations := resolveLinterInvocations(uir.New(root), Options{WorkDir: root, Files: []string{path}})
+		Expect(invocations).To(HaveLen(1))
+		Expect(invocations[0].projectRoot).To(Equal(root))
+		result := &linters.LinterResult{Linter: "uir", WorkDir: root}
+		Expect(resultScopes(result, root, []string{path})).To(ContainElement(root))
+	})
+
+	It("keeps file-scoped runs inside a module beneath globally configured home", func() {
+		home := GinkgoT().TempDir()
+		GinkgoT().Setenv("HOME", home)
+		root := filepath.Join(home, "project")
+		Expect(os.Mkdir(root, 0o700)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(home, ".uir.yaml"), []byte("version: 1\n"), 0o600)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.org/project\n"), 0o600)).To(Succeed())
+		invocations := resolveLinterInvocations(uir.New(root), Options{WorkDir: root, Files: []string{"sample.go"}})
+		Expect(invocations).To(HaveLen(1))
+		Expect(invocations[0].projectRoot).To(Equal(root))
 	})
 	It("expands config changes to the project but filters ordinary file scopes after analysis", func() {
 		root := GinkgoT().TempDir()

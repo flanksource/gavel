@@ -38,6 +38,7 @@ func lintSchema() map[string]any {
 					"Override for one linter.",
 					map[string]any{
 						"runtime": runtimeSchema(),
+						"config":  map[string]any{"type": "object", "description": "Native UIR configuration document, passed to the executable through a temporary project .uir.d fragment. UIR validates its contents.", "additionalProperties": true},
 						"args":    stringArray("Native linter arguments. Nonempty lists replace inherited arguments."),
 						"enabled": boolProp(
 							"Force the linter on (true) or off (false). Omit to keep the linter's built-in " +
