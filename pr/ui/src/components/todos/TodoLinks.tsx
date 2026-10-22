@@ -1,7 +1,7 @@
 import type { ComponentType, ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Button } from '@flanksource/clicky-ui/components';
-import { UiClose, UiCopy, UiGitPr, UiLink, type IconProps } from '@flanksource/clicky-ui/icons';
+import { UiClose, UiCopy, UiGitPr, UiLink, UiLock, type IconProps } from '@flanksource/clicky-ui/icons';
 import type { TodoLink, TodoPRLinkItem } from '../../types';
 import { StatusIcon } from './format';
 import { TodoRouteLink } from './TodoChildren';
@@ -63,6 +63,7 @@ function TodoLinkRow({ link, disabled, pending, onOpenTodo, onUnlink }: {
   onOpenTodo?: (ref: string) => void;
   onUnlink: () => void;
 }) {
+  if (link.target_private) return <PrivateTodoLinkRow link={link} />;
   const title = link.target_title || link.target_short_id || link.target_id;
   return (
     <li className="flex flex-wrap items-center gap-x-2 gap-y-1 px-3 py-2 text-xs">
@@ -81,10 +82,22 @@ function TodoLinkRow({ link, disabled, pending, onOpenTodo, onUnlink }: {
   );
 }
 
+// A link to another member's private todo, which the viewer can't open or unlink: it says whose
+// it is and nothing more.
+function PrivateTodoLinkRow({ link }: { link: TodoLink }) {
+  const shortID = link.target_short_id || link.target_id;
+  return (
+    <li className="flex items-center gap-2 px-3 py-2 text-xs text-muted-foreground">
+      <UiLock className="shrink-0 text-xs" />
+      <span className="min-w-0 flex-1 truncate text-sm">Private todo #{shortID} of {link.target_owner || 'another member'}</span>
+    </li>
+  );
+}
+
 // What this todo is linked to: the pull requests that implement or touch it, the
-// todos it duplicates, and the todos it merely relates to. A group with no
-// entries is not drawn, and a todo with none at all draws nothing. Dependencies
-// are not shown here — they have their own surface.
+// todos that block it, the todos it duplicates, and the todos it merely relates
+// to. A group with no entries is not drawn, and a todo with none at all draws
+// nothing. A blocker that is another member's private todo is named, not shown.
 export function TodoLinks({ todoRef, dir, disabled, onOpenTodo }: {
   todoRef: string;
   dir: string;
@@ -96,6 +109,7 @@ export function TodoLinks({ todoRef, dir, disabled, onOpenTodo }: {
   const unlinkTodo = useUnlinkTodo({ dir, todoRef });
   const unlinkPR = useUnlinkTodoPR({ dir, todoRef });
 
+  const blockers = (todoLinks.data ?? []).filter(link => link.relation === 'depends_on');
   const duplicates = (todoLinks.data ?? []).filter(link => link.relation === 'duplicates');
   const related = (todoLinks.data ?? []).filter(link => link.relation === 'related_to');
   const pullRequests = prLinks.data ?? [];
@@ -113,6 +127,20 @@ export function TodoLinks({ todoRef, dir, disabled, onOpenTodo }: {
               disabled={disabled}
               pending={unlinkPR.isPending}
               onUnlink={() => unlinkPR.mutate({ url: link.url })}
+            />
+          ))}
+        </LinkGroup>
+      )}
+      {blockers.length > 0 && (
+        <LinkGroup title="Blocked by" icon={UiLink}>
+          {blockers.map(link => (
+            <TodoLinkRow
+              key={link.target_id}
+              link={link}
+              disabled={disabled}
+              pending={unlinkTodo.isPending}
+              onOpenTodo={onOpenTodo}
+              onUnlink={() => unlinkTodo.mutate({ target: link.target_id, relation: link.relation })}
             />
           ))}
         </LinkGroup>

@@ -71,3 +71,22 @@ func RequireChangeable(ctx context.Context, id uuid.UUID, createdBy *uuid.UUID) 
 	}
 	return fmt.Errorf("%w: issue %s belongs to another user; only its creator or an org admin can change it", ErrForbidden, id)
 }
+
+// PrivateIssueCreator returns the name of the user who created issue id, one of the org's issues
+// that the context's user can't see, so a link to it can say whose it is without revealing it.
+// The name falls back to the creator's email, and is empty for an issue with no creator. It
+// fails with ErrNotFound when the org has no such issue.
+func (r *Repository) PrivateIssueCreator(ctx context.Context, id uuid.UUID) (string, error) {
+	var rows []struct{ Creator string }
+	if err := r.db.WithContext(ctx).Raw(`
+		SELECT COALESCE(NULLIF(u.name, ''), u.email, '') AS creator
+		FROM todo_issues AS issue
+		LEFT JOIN users AS u ON u.id = issue.created_by_user_id
+		WHERE issue.id = ? AND `+inOrgWorkspace("issue.workspace_id"), id, r.org).Scan(&rows).Error; err != nil {
+		return "", fmt.Errorf("look up the creator of todo %s: %w", id, err)
+	}
+	if len(rows) == 0 {
+		return "", fmt.Errorf("%w: todo %s", ErrNotFound, id)
+	}
+	return rows[0].Creator, nil
+}

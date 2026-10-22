@@ -258,7 +258,11 @@ type Link struct {
 	TargetShortID string             `json:"target_short_id,omitempty"`
 	TargetTitle   string             `json:"target_title,omitempty"`
 	TargetStatus  types.Status       `json:"target_status,omitempty"`
-	CreatedAt     time.Time          `json:"created_at,omitempty"`
+	// TargetPrivate marks a target that is another member's private todo: only its short ID
+	// and TargetOwner, its creator's name, are given, never its title or status.
+	TargetPrivate bool      `json:"target_private,omitempty"`
+	TargetOwner   string    `json:"target_owner,omitempty"`
+	CreatedAt     time.Time `json:"created_at,omitempty"`
 }
 
 // RelationshipProvider exposes issue-to-issue links: depends_on for blocking

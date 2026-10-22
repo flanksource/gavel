@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -68,14 +69,35 @@ func (p *Provider) Links(ctx context.Context, todo *types.TODO) ([]todos.Link, e
 	}
 	links := make([]todos.Link, 0, len(relationships))
 	for _, relationship := range relationships {
+		relation := types.RelationKind(relationship.Relation)
 		target, err := p.repository.GetIssue(ctx, relationship.TargetIssueID)
+		if errors.Is(err, native.ErrNotFound) {
+			link, err := p.privateLink(ctx, relation, relationship.TargetIssueID, relationship.CreatedAt)
+			if err != nil {
+				return nil, err
+			}
+			links = append(links, link)
+			continue
+		}
 		if err != nil {
 			return nil, fmt.Errorf("resolve linked TODO %s: %w", relationship.TargetIssueID, err)
 		}
-		links = append(links, linkFromIssue(
-			types.RelationKind(relationship.Relation), target, relationship.CreatedAt))
+		links = append(links, linkFromIssue(relation, target, relationship.CreatedAt))
 	}
 	return links, nil
+}
+
+// privateLink is a link to another member's private todo, which the caller can't read: it names
+// the todo's short ID and its creator, and nothing else.
+func (p *Provider) privateLink(ctx context.Context, relation types.RelationKind, id uuid.UUID, createdAt time.Time) (todos.Link, error) {
+	owner, err := p.repository.PrivateIssueCreator(ctx, id)
+	if err != nil {
+		return todos.Link{}, fmt.Errorf("resolve linked TODO %s: %w", id, err)
+	}
+	return todos.Link{
+		Relation: relation, TargetID: id.String(), TargetShortID: id.String()[:8],
+		TargetPrivate: true, TargetOwner: owner, CreatedAt: createdAt,
+	}, nil
 }
 
 // relationshipOperands validates the writable relation and resolves both ends,
