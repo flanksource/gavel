@@ -49,6 +49,9 @@ type Server struct {
 	stopFn        func()
 	stopMessage   string
 	stopRequested bool
+	taskSource    func() []clickytask.TaskSnapshot
+	frozenTasks   []clickytask.TaskSnapshot
+	tasksFrozen   bool
 }
 
 func NewServer() *Server {
@@ -76,10 +79,15 @@ func (s *Server) BeginRun(kind string) {
 	s.logTail = ""
 	s.stopRequested = false
 	s.stopMessage = ""
+	s.frozenTasks, s.tasksFrozen = nil, false
 	s.notify()
 }
 
 func (s *Server) finishRunLocked() {
+	if s.taskSource != nil && !s.tasksFrozen {
+		s.frozenTasks = append([]clickytask.TaskSnapshot(nil), s.taskSource()...)
+		s.tasksFrozen = true
+	}
 	if s.metadata == nil || !s.metadata.Ended.IsZero() {
 		return
 	}
@@ -273,8 +281,8 @@ func (s *Server) Done() bool {
 	return s.done
 }
 
-func (s *Server) StreamFrom(ch <-chan []parsers.Test) {
-	s.streamFrom(ch, false)
+func (s *Server) StreamFrom(ch <-chan []parsers.Test) <-chan struct{} {
+	return s.streamFrom(ch, false)
 }
 
 // StreamRerunFrom consumes a rerun's update channel and merges each snapshot
@@ -285,8 +293,10 @@ func (s *Server) StreamRerunFrom(ch <-chan []parsers.Test) {
 	s.streamFrom(ch, true)
 }
 
-func (s *Server) streamFrom(ch <-chan []parsers.Test, mergeAttempts bool) {
+func (s *Server) streamFrom(ch <-chan []parsers.Test, mergeAttempts bool) <-chan struct{} {
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		for tests := range ch {
 			s.mu.Lock()
 			if mergeAttempts {
@@ -304,6 +314,7 @@ func (s *Server) streamFrom(ch <-chan []parsers.Test, mergeAttempts bool) {
 		s.mu.Unlock()
 		s.notify()
 	}()
+	return done
 }
 
 func (s *Server) notify() {
@@ -455,14 +466,25 @@ func (s *Server) snapshot() Snapshot {
 	// replay tests that share that registry).
 	running := !s.done
 	if !s.replayed {
-		taskTests := virtualTaskTests()
+		var taskTests []parsers.Test
+		var taskRunning bool
+		if s.taskSource != nil {
+			snapshots := s.frozenTasks
+			if !s.tasksFrozen {
+				snapshots = s.taskSource()
+			}
+			taskTests = scopedTaskTests(snapshots)
+			taskRunning = taskSnapshotsRunning(snapshots)
+		} else {
+			taskTests, taskRunning = virtualTaskTests(), !tasksDone()
+		}
 		if len(taskTests) > 0 {
 			merged := make([]parsers.Test, 0, len(taskTests)+len(s.tests))
 			merged = append(merged, taskTests...)
 			merged = append(merged, s.tests...)
 			tests = merged
 		}
-		running = running || !tasksDone()
+		running = running || taskRunning
 	}
 	stopped := s.stopRequested && !running
 	stopMessage := ""
