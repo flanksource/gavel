@@ -207,9 +207,11 @@ func TestLeaveOutPutsFilesBackAsTheRunFoundThem(t *testing.T) {
 	_, err = sources.LeaveOut(context.Background(), pushed, "gavel/todo-run", base, head, []string{"notes.md"})
 	require.EqualError(t, err, `repository tool has source "push"; only a GitHub repository's runs land`)
 	_, err = sources.LeaveOut(context.Background(), github, "gavel/todo-run", base, head, []string{"main.go"})
-	require.EqualError(t, err, `the run didn't change main.go, so it can't be left out`)
+	require.ErrorIs(t, err, ErrInvalidLeaveOut)
+	require.EqualError(t, err, `can't leave those files out: the run didn't change main.go`)
 	_, err = sources.LeaveOut(context.Background(), github, "gavel/todo-run", base, head, []string{"go.mod", "fix.go", "notes.md", "my notes.md", "README.md"})
-	require.EqualError(t, err, "leaving out every file the run changed leaves nothing to land")
+	require.ErrorIs(t, err, ErrInvalidLeaveOut)
+	require.EqualError(t, err, "can't leave those files out: that is every file the run changed, leaving nothing to land")
 
 	tip, err := sources.LeaveOut(context.Background(), github, "gavel/todo-run", base, head, []string{"notes.md", "my notes.md", "README.md", "go.mod"})
 	require.NoError(t, err)
@@ -222,4 +224,8 @@ func TestLeaveOutPutsFilesBackAsTheRunFoundThem(t *testing.T) {
 	require.Error(t, err, "a branch that moved past head isn't pushed over")
 	assert.Contains(t, err.Error(), "leave out files on branch gavel/todo-run of acme/app")
 	assert.Equal(t, tip, git(t, remote, "rev-parse", "refs/heads/gavel/todo-run"))
+
+	require.Error(t, sources.ResetRunBranch(context.Background(), github, "gavel/todo-run", head, base), "a branch not at the given tip isn't moved")
+	require.NoError(t, sources.ResetRunBranch(context.Background(), github, "gavel/todo-run", tip, head))
+	assert.Equal(t, head, git(t, remote, "rev-parse", "refs/heads/gavel/todo-run"), "back at the run's head")
 }
