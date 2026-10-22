@@ -145,8 +145,10 @@ func (h *inProcessHandle) Ref() string { return "in-process" }
 type hostedRuns struct {
 	db              *gorm.DB
 	workspace, base string
-	ada, grace      uuid.UUID
+	org, ada, grace uuid.UUID
 	executor        *inProcessExecutor
+	// logs is the store the dispatcher keeps the organization's run logs in.
+	logs blob.Store
 }
 
 // newHostedRuns serves a hosted dashboard whose runs' turns agent answers; nil is planAgent.
@@ -154,7 +156,7 @@ func newHostedRuns(t *testing.T, agent captainai.Provider) hostedRuns {
 	t.Helper()
 	db, _, org := openOrgDB(t)
 	t.Setenv("HOME", t.TempDir())
-	h := hostedRuns{db: db, ada: uuid.New(), grace: uuid.New()}
+	h := hostedRuns{db: db, org: org, ada: uuid.New(), grace: uuid.New()}
 	for name, id := range map[string]uuid.UUID{"ada": h.ada, "grace": h.grace} {
 		require.NoError(t, db.Exec(`INSERT INTO users (id, issuer, clerk_user_id) VALUES (?, 'https://clerk.example', ?)`, id, "user_"+name).Error)
 	}
@@ -162,6 +164,7 @@ func newHostedRuns(t *testing.T, agent captainai.Provider) hostedRuns {
 	h.workspace = "repo:" + pushedRepo(t, db, org, dataDir, "app").String()
 	relay := &remote.Relay{}
 	logs := blob.Local(t.TempDir())
+	h.logs = logs
 	h.executor = &inProcessExecutor{db: db, relay: relay, agent: agent, bareDir: func(id uuid.UUID) string {
 		return filepath.Join(dataDir, "repos", org.String(), id.String()+".git")
 	}}

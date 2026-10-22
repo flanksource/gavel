@@ -4,16 +4,23 @@ import type { AuthMode } from './query';
 import type { Tab } from './routes';
 
 // hostedTabs are the tabs whose routes the hosted allowlist serves.
-const hostedTabs: readonly Tab[] = ['prs', 'todos'];
+const hostedTabs: readonly Tab[] = ['prs', 'todos', 'runs'];
 
-export function visibleTabs<T extends Tab>(mode: AuthMode, tabs: readonly T[]): T[] {
-  return mode === 'clerk' ? tabs.filter(tab => hostedTabs.includes(tab)) : [...tabs];
+// hostedOnlyTabs exist only in hosted mode: a local dashboard runs nothing in a sandbox.
+const hostedOnlyTabs: readonly Tab[] = ['runs'];
+
+function tabShown(mode: AuthMode, tab: Tab): boolean {
+  return mode === 'clerk' ? hostedTabs.includes(tab) : !hostedOnlyTabs.includes(tab);
 }
 
-// tabFor maps a requested tab to one the mode can show, so a hosted link to a
-// host-only tab opens the PR tab instead of a page of errors.
+export function visibleTabs<T extends Tab>(mode: AuthMode, tabs: readonly T[]): T[] {
+  return tabs.filter(tab => tabShown(mode, tab));
+}
+
+// tabFor maps a requested tab to one the mode can show, so a link to a tab the mode
+// doesn't have opens the PR tab instead of a page of errors.
 export function tabFor(mode: AuthMode, tab: Tab): Tab {
-  return mode === 'clerk' && !hostedTabs.includes(tab) ? 'prs' : tab;
+  return tabShown(mode, tab) ? tab : 'prs';
 }
 
 // githubScopeVisible reports whether the GitHub org/project scope chooser is shown. A

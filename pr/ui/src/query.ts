@@ -1,6 +1,8 @@
 export const queryKeys = {
   me: () => ['me'] as const,
   sshKeys: () => ['ssh-keys'] as const,
+  sandboxRuns: () => ['sandbox-runs'] as const,
+  sandboxRunLog: (id: string) => ['sandbox-runs', id, 'log'] as const,
   githubInstallations: () => ['github', 'installations'] as const,
   prSnapshot: () => ['prs', 'snapshot'] as const,
   prDetail: (repo: string, number: number) => ['prs', repo, number, 'detail'] as const,
@@ -178,7 +180,7 @@ async function request({ url, signal, context }: QueryRequest): Promise<Response
 
 // responseError reads {"error": ...}, adding the server's "message" (why it failed)
 // when it sends one alongside a stable error code.
-function responseError(payload: unknown, status: number): string {
+export function responseError(payload: unknown, status: number): string {
   if (typeof payload === 'object' && payload !== null && 'error' in payload && typeof payload.error === 'string' && payload.error.trim()) {
     const message = 'message' in payload && typeof payload.message === 'string' ? payload.message.trim() : '';
     return message ? `${payload.error}: ${message}` : payload.error;

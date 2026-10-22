@@ -635,6 +635,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/ssh-keys", s.handleSSHKeyList)
 	mux.HandleFunc("POST /api/ssh-keys", s.handleSSHKeyAdd)
 	mux.HandleFunc("DELETE /api/ssh-keys/{id}", s.handleSSHKeyDelete)
+	mux.HandleFunc("GET /api/sandbox-runs", s.handleSandboxRuns)
+	mux.HandleFunc("GET /api/sandbox-runs/{id}/log", s.handleSandboxRunLog)
 	mux.HandleFunc("/favicon.svg", handleFavicon)
 	mux.HandleFunc("/react-grab-plugin.js", handleReactGrabPlugin)
 	mux.HandleFunc("/react-grab", handleReactGrabInstall)
