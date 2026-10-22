@@ -1,0 +1,152 @@
+# Values for hosted gavel: `gavel serve --auth clerk`, one dashboard per Clerk organization.
+# Required: publicURL, clerk.issuer, clerk.publishableKey, clerk.clientId and clerk.secretKey.
+
+image:
+  repository: ghcr.io/flanksource/gavel
+  # Defaults to the chart's appVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# Origin users reach the dashboard at, such as https://gavel.example.com. Clerk sessions must be
+# issued for it, GitHub Actions OIDC tokens name it as their audience, and sandbox jobs call it.
+publicURL: ""
+
+clerk:
+  # Clerk Frontend API URL, such as https://clerk.example.com.
+  issuer: ""
+  # Publishable key (pk_...) the browser signs in with.
+  publishableKey: ""
+  # Public OAuth client ID `gavel login` uses (Device Authorization Grant).
+  clientId: ""
+  # Secret key (sk_...) for Clerk's Backend API; written into the Secret below when it is created.
+  secretKey: ""
+
+secret:
+  # Create the Secret holding CLERK_SECRET_KEY and GAVEL_SECRET_KEY. GAVEL_SECRET_KEY signs run
+  # tokens and GitHub install state; it is generated once and kept across upgrades. Set false to
+  # bring a Secret with both keys under the name below.
+  create: true
+  # Defaults to the release's full name.
+  name: ""
+
+# Settings gavel serve reads from /etc/gavel/gavel.properties, such as retention windows:
+#   retention.job_logs: 30d
+properties: {}
+
+service:
+  type: ClusterIP
+  port: 9092
+
+ssh:
+  # Serve git pushes to hosted repositories (git-receive-pack only), authenticated by the
+  # members' registered SSH keys.
+  enabled: false
+  port: 2222
+  service:
+    type: ClusterIP
+    port: 22
+    annotations: {}
+
+githubApp:
+  # The GitHub App organizations install to show their pull requests. Set id, slug and the
+  # private key together, or leave id empty to run without it.
+  id: ""
+  slug: ""
+  privateKeySecretRef:
+    name: ""
+    key: private-key.pem
+
+sandbox:
+  # Run push checks and agent runs as agent-substrate environments.
+  enabled: false
+  # Runner image pinned by digest, as repo@sha256:<digest> (see sandbox/runner.Dockerfile).
+  image: ""
+  substrate:
+    envAPI: ate-env-api.ate-env.svc.cluster.local:7777
+    control: api.ate-system.svc.cluster.local:443
+    atespace: ate-env
+    # ActorTemplate environments derive from; empty is env's default-template.
+    template: ""
+    # Hosts environments may reach besides gavel serve, the Go, npm and Python registries and GitHub.
+    egress: []
+    # Model keys substrate's egress gateway injects, as host=,header=,env=,uri=[,prefix=].
+    credentials: []
+    # Path in the environment of the egress gateway's CA, for hosts with an injected credential.
+    trustBundle: ""
+    # Audience of the ServiceAccount token gavel serve authenticates to ate-api-server with.
+    # Substrate's access policy must let this ServiceAccount manage actors in the atespace.
+    tokenAudience: api.ate-system.svc
+    # Secret holding the CA ate-api-server's certificate chains to; unset skips verification.
+    ca:
+      secretName: ""
+      key: ca.crt
+
+# Blob storage for run and job logs, attachments, test runs and traces: local, s3 or gcs.
+storage:
+  type: local
+  # Directory local storage writes to, on the data volume.
+  path: /var/lib/gavel/blobs
+  bucket: ""
+  prefix: ""
+  s3:
+    region: ""
+    endpoint: ""
+    usePathStyle: false
+    # Secret with AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY; unset uses the AWS default
+    # credential chain, such as IRSA through serviceAccount.annotations.
+    credentialsSecret: ""
+  gcs:
+    endpoint: ""
+    # Service-account key JSON.
+    credentials: ""
+  # Secret with a `.gavel.yaml` key holding the whole `storage:` section, used instead of the
+  # settings above.
+  existingSecret: ""
+
+persistence:
+  # Repositories, GitHub mirrors, workspaces, transcripts and the SSH host key.
+  size: 20Gi
+  storageClass: ""
+  existingClaim: ""
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+podAnnotations: {}
+resources: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+extraEnv: []
+extraArgs: []
+
+db:
+  # Run Postgres as a StatefulSet in the release. Set false to bring your own: the Secret below
+  # must then hold the connection URL under its key.
+  create: true
+  secretKeyRef:
+    name: gavel-postgres
+    key: DB_URL
+  image: ghcr.io/flanksource/postgres:17.6-497383c
+  database: gavel
+  conf:
+    listen_addresses: "*"
+    max_connections: 200
+    shared_buffers: 256MB
+    effective_cache_size: 768MB
+    maintenance_work_mem: 64MB
+    work_mem: 4MB
+    max_wal_size: 1GB
+    password_encryption: scram-sha-256
+    ssl: "off"
+    timezone: UTC
+    log_timezone: UTC
+  storageClass: ""
+  storage: 20Gi
+  shmVolume: 256Mi
+  resources:
+    requests:
+      memory: 1Gi

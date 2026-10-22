@@ -1,0 +1,21 @@
+gavel serves the hosted dashboard for {{ .Values.publicURL }} on Service {{ include "gavel.fullname" . }}:{{ .Values.service.port }}.
+Route {{ .Values.publicURL }} to that Service with your own Ingress or Gateway.
+
+Outside this chart:
+- Clerk: enable Organizations, and give the public OAuth client ({{ .Values.clerk.clientId }}) the
+  Device Authorization Grant with scopes openid profile email offline_access for `gavel login`.
+{{- if .Values.githubApp.id }}
+- GitHub App {{ .Values.githubApp.slug }}: set its Setup URL to {{ .Values.publicURL }}/github/setup.
+{{- end }}
+{{- if .Values.ssh.enabled }}
+- Git pushes: expose Service {{ include "gavel.fullname" . }}-ssh (port {{ .Values.ssh.service.port }}) to your users.
+{{- end }}
+{{- if .Values.sandbox.enabled }}
+- Substrate: let ServiceAccount {{ .Release.Namespace }}/{{ include "gavel.serviceAccountName" . }} manage actors in
+  atespace {{ .Values.sandbox.substrate.atespace }} in Substrate's access policy, and make sure
+  environments can resolve and reach {{ .Values.publicURL }}.
+{{- end }}
+{{- if not .Values.db.create }}
+- Postgres: Secret {{ .Values.db.secretKeyRef.name }} must hold the connection URL under {{ .Values.db.secretKeyRef.key }};
+  gavel runs its migrations at startup, so the user needs DDL rights.
+{{- end }}

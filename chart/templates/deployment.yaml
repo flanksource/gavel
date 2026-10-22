@@ -1,0 +1,259 @@
+{{- /*
+The hosted gavel server: one pod, since agent-run relays, pollers and the token cache live in
+its process, with its repositories on a ReadWriteOnce volume.
+*/ -}}
+{{- include "gavel.validate" . }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "gavel.fullname" . }}
+  labels:
+    {{- include "gavel.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "gavel.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "gavel.selectorLabels" . | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/config.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "gavel.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+      containers:
+        - name: gavel
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - serve
+            - --auth
+            - clerk
+            - --public-url
+            - {{ .Values.publicURL | quote }}
+            - --addr
+            - 0.0.0.0
+            - --port
+            - {{ .Values.service.port | quote }}
+            - --data-dir
+            - /var/lib/gavel
+            - --properties-file
+            - /etc/gavel/gavel.properties
+            {{- if .Values.ssh.enabled }}
+            - --ssh-addr
+            - {{ printf ":%v" .Values.ssh.port | quote }}
+            {{- end }}
+            {{- if .Values.githubApp.id }}
+            - --github-app-id
+            - {{ .Values.githubApp.id | quote }}
+            - --github-app-slug
+            - {{ .Values.githubApp.slug | quote }}
+            {{- end }}
+            {{- if .Values.sandbox.enabled }}
+            {{- with .Values.sandbox.substrate }}
+            - --sandbox
+            - substrate
+            - --sandbox-image
+            - {{ $.Values.sandbox.image | quote }}
+            - --substrate-env-api
+            - {{ .envAPI | quote }}
+            - --substrate-control
+            - {{ .control | quote }}
+            - --substrate-token-file
+            - /var/run/secrets/substrate/token
+            - --substrate-atespace
+            - {{ .atespace | quote }}
+            {{- if .template }}
+            - --substrate-template
+            - {{ .template | quote }}
+            {{- end }}
+            {{- range .egress }}
+            - --substrate-egress
+            - {{ . | quote }}
+            {{- end }}
+            {{- range .credentials }}
+            - --substrate-credential
+            - {{ . | quote }}
+            {{- end }}
+            {{- if .trustBundle }}
+            - --substrate-trust-bundle
+            - {{ .trustBundle | quote }}
+            {{- end }}
+            {{- if .ca.secretName }}
+            - --substrate-ca-file
+            - {{ printf "/etc/gavel/substrate-ca/%s" .ca.key | quote }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
+            {{- with .Values.extraArgs }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          env:
+            - name: HOME
+              value: /home/gavel
+            - name: GAVEL_CLERK_ISSUER
+              value: {{ .Values.clerk.issuer | quote }}
+            - name: GAVEL_CLERK_PUBLISHABLE_KEY
+              value: {{ .Values.clerk.publishableKey | quote }}
+            - name: GAVEL_CLERK_CLIENT_ID
+              value: {{ .Values.clerk.clientId | quote }}
+            - name: CLERK_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "gavel.secretName" . }}
+                  key: CLERK_SECRET_KEY
+            - name: GAVEL_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "gavel.secretName" . }}
+                  key: GAVEL_SECRET_KEY
+            - name: GAVEL_DB_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.db.secretKeyRef.name }}
+                  key: {{ .Values.db.secretKeyRef.key }}
+            {{- if .Values.githubApp.id }}
+            - name: GAVEL_GITHUB_APP_PRIVATE_KEY_FILE
+              value: /etc/gavel/github-app/private-key.pem
+            {{- end }}
+            {{- if and (eq .Values.storage.type "s3") .Values.storage.s3.credentialsSecret }}
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.storage.s3.credentialsSecret }}
+                  key: AWS_ACCESS_KEY_ID
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.storage.s3.credentialsSecret }}
+                  key: AWS_SECRET_ACCESS_KEY
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+            {{- if .Values.ssh.enabled }}
+            - name: ssh
+              containerPort: {{ .Values.ssh.port }}
+            {{- end }}
+          # Migrations run before the listener binds, so the first start can be slow.
+          startupProbe:
+            httpGet:
+              path: /api/auth/config
+              port: http
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /api/auth/config
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/auth/config
+              port: http
+            periodSeconds: 30
+            failureThreshold: 5
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/gavel
+            - name: home
+              mountPath: /home/gavel
+            - name: tmp
+              mountPath: /tmp
+            - name: config
+              mountPath: /home/gavel/.gavel.yaml
+              subPath: .gavel.yaml
+              readOnly: true
+            - name: properties
+              mountPath: /etc/gavel/gavel.properties
+              subPath: gavel.properties
+              readOnly: true
+            {{- if .Values.githubApp.id }}
+            - name: github-app
+              mountPath: /etc/gavel/github-app
+              readOnly: true
+            {{- end }}
+            {{- if .Values.sandbox.enabled }}
+            - name: substrate-token
+              mountPath: /var/run/secrets/substrate
+              readOnly: true
+            {{- if .Values.sandbox.substrate.ca.secretName }}
+            - name: substrate-ca
+              mountPath: /etc/gavel/substrate-ca
+              readOnly: true
+            {{- end }}
+            {{- end }}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.existingClaim | default (include "gavel.fullname" .) }}
+        - name: home
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+        - name: config
+          secret:
+            secretName: {{ include "gavel.configSecretName" . }}
+        - name: properties
+          configMap:
+            name: {{ include "gavel.fullname" . }}
+        {{- if .Values.githubApp.id }}
+        - name: github-app
+          secret:
+            secretName: {{ .Values.githubApp.privateKeySecretRef.name }}
+            items:
+              - key: {{ .Values.githubApp.privateKeySecretRef.key }}
+                path: private-key.pem
+        {{- end }}
+        {{- if .Values.sandbox.enabled }}
+        - name: substrate-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  audience: {{ .Values.sandbox.substrate.tokenAudience }}
+                  path: token
+        {{- if .Values.sandbox.substrate.ca.secretName }}
+        - name: substrate-ca
+          secret:
+            secretName: {{ .Values.sandbox.substrate.ca.secretName }}
+        {{- end }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

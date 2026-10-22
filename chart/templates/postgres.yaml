@@ -1,0 +1,145 @@
+{{- /*
+The bundled Postgres (db.create): a StatefulSet, its Service and the Secret holding its password
+and the DB_URL gavel serve connects with. The password is read back from the live Secret on upgrades.
+*/ -}}
+{{- if .Values.db.create }}
+{{- $name := include "gavel.postgresName" . }}
+{{- $existing := (lookup "v1" "Secret" .Release.Namespace .Values.db.secretKeyRef.name) | default dict }}
+{{- $data := (get $existing "data") | default dict }}
+{{- $user := (get $data "POSTGRES_USER" | b64dec) | default "postgres" }}
+{{- $password := (get $data "POSTGRES_PASSWORD" | b64dec) | default (randAlphaNum 32) }}
+{{- $host := printf "%s.%s.svc.cluster.local" $name .Release.Namespace }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Values.db.secretKeyRef.name }}
+  labels:
+    {{- include "gavel.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  POSTGRES_USER: {{ $user | quote }}
+  POSTGRES_PASSWORD: {{ $password | quote }}
+  POSTGRES_HOST: {{ $host | quote }}
+  POSTGRES_PORT: "5432"
+  DATABASE: {{ .Values.db.database | quote }}
+  {{ .Values.db.secretKeyRef.key }}: {{ printf "postgres://%s:%s@%s:5432/%s?sslmode=disable" $user $password $host .Values.db.database | quote }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}-scripts
+  labels:
+    {{- include "gavel.labels" . | nindent 4 }}
+data:
+  # Keeps the server's password in step with the Secret, which initdb only reads on first start.
+  post-startup.sh: |
+    #!/bin/bash
+    psql -U "${POSTGRES_USER}" -c "ALTER USER ${POSTGRES_USER} PASSWORD '${POSTGRES_PASSWORD}';"
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "gavel.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ $name }}
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgresql
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: postgresql
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      volumes:
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: {{ .Values.db.shmVolume | quote }}
+        - name: scripts
+          configMap:
+            name: {{ $name }}-scripts
+            defaultMode: 0755
+      initContainers:
+        - name: postgres-perms
+          image: busybox
+          command:
+            - sh
+            - -c
+            - mkdir -p /pv-root/postgres && chmod -R 0750 /pv-root/postgres && chown 999:999 -R /pv-root/postgres && chmod -R 777 /dev/shm
+          volumeMounts:
+            - name: postgresql
+              mountPath: /pv-root
+            - name: dshm
+              mountPath: /dev/shm
+      containers:
+        - name: postgresql
+          image: {{ .Values.db.image }}
+          command:
+            - /usr/local/bin/docker-entrypoint.sh
+          args:
+            - -D
+            - /var/lib/postgresql/data
+            {{- range $key, $value := .Values.db.conf }}
+            - {{ printf "--%s=%v" $key $value | quote }}
+            {{- end }}
+          env:
+            - name: PGDATA
+              value: /var/lib/postgresql/data
+            - name: POSTGRES_DB
+              value: {{ .Values.db.database | quote }}
+          envFrom:
+            - secretRef:
+                name: {{ .Values.db.secretKeyRef.name }}
+          ports:
+            - name: postgres
+              containerPort: 5432
+          startupProbe:
+            initialDelaySeconds: 30
+            exec:
+              command:
+                - /post-startup.sh
+          {{- with .Values.db.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: dshm
+              mountPath: /dev/shm
+            - name: postgresql
+              mountPath: /var/lib/postgresql/data
+              subPath: postgres
+            - name: scripts
+              mountPath: /post-startup.sh
+              subPath: post-startup.sh
+  volumeClaimTemplates:
+    - metadata:
+        name: postgresql
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with .Values.db.storageClass }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.db.storage }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "gavel.labels" . | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/name: postgresql
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+{{- end }}
