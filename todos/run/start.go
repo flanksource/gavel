@@ -108,7 +108,7 @@ func defaultStart(req Request) (StartResult, error) {
 	}
 	prepared := req.Prepared
 	if prepared == nil {
-		resolved, err := Resolve(context.Background(), req)
+		resolved, err := Resolve(req.scopedContext(), req)
 		if err != nil {
 			return StartResult{}, err
 		}
@@ -116,7 +116,7 @@ func defaultStart(req Request) (StartResult, error) {
 	}
 	// The run outlives the call, so it gets its own context rather than the
 	// caller's — a request finishing must not cancel the agent it started.
-	ctx, timeoutCancel := context.WithTimeout(context.Background(), prepared.Resolution.Timeout)
+	ctx, timeoutCancel := context.WithTimeout(req.scopedContext(), prepared.Resolution.Timeout)
 	runCtx, stop := context.WithCancelCause(ctx)
 	handle, err := req.Registry.Register(RegisterOptions{
 		IssueIDs:   IssueIDs([]*types.TODO{req.Todo}),

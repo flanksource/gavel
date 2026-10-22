@@ -361,6 +361,47 @@ func TestHostedTriageNewRunsWithItsToolsOnServe(t *testing.T) {
 	}, 30*time.Second, 50*time.Millisecond, "the stopped run's outcome reached the todo")
 }
 
+func TestHostedRunToolsSeeOnlyWhatTheRunsUserSees(t *testing.T) {
+	h := newHostedRuns(t, workingAgent{})
+	db, base, workspace, creator, member := h.db, h.base, h.workspace, h.ada, h.grace
+	_, private := hostedCall(t, base, http.MethodPost, "/api/todos", member, "org:member", map[string]any{"dir": workspace, "title": "Grace's private todo"})
+	privateRef := private["id"].(string)
+	_, created := hostedCall(t, base, http.MethodPost, "/api/todos", creator, "org:member", map[string]any{"dir": workspace, "title": "Fix the build"})
+	todo := created["id"].(string)
+
+	status, started := hostedCall(t, base, http.MethodPost, "/api/todos/run", creator, "org:member", map[string]any{"dir": workspace, "ref": todo, "step": "triage.new"})
+	require.Equal(t, http.StatusOK, status, started)
+	var run struct{ ID uuid.UUID }
+	require.Eventually(t, func() bool {
+		require.NoError(t, db.Raw(`SELECT id FROM sandbox_runs WHERE todo_id = ?`, todo).Scan(&run).Error)
+		return run.ID != uuid.Nil
+	}, 30*time.Second, 50*time.Millisecond)
+	runID := run.ID
+	// The run's job calls its tools on serve, as remote.Execute does.
+	call := func(tool string, input map[string]any) remote.Reply {
+		var reply remote.Reply
+		require.Eventually(t, func() bool {
+			var err error
+			reply, err = h.executor.relay.Call(context.Background(), runID, remote.ToolCallMessage(tool, input))
+			return !errors.Is(err, remote.ErrNoListener)
+		}, 30*time.Second, 50*time.Millisecond, "serve listens for the run's calls")
+		return reply
+	}
+
+	searched := call("todo_search", map[string]any{"query": ""})
+	require.Empty(t, searched.Error)
+	assert.NotContains(t, string(searched.Output), "Grace's private todo", "the run's search doesn't list another member's private todo")
+	assert.NotEmpty(t, call("todo_get", map[string]any{"ref": privateRef}).Error, "the run can't read another member's private todo")
+	assert.NotEmpty(t, call("todo_update", map[string]any{"ref": privateRef, "title": "Renamed by ada's run"}).Error, "nor change it")
+	var title string
+	require.NoError(t, db.Raw(`SELECT title FROM todo_issues WHERE id = ?`, privateRef).Scan(&title).Error)
+	assert.Equal(t, "Grace's private todo", title)
+
+	stop := map[string]any{"ref": todo, "promptRunId": started["promptRunId"]}
+	status, stopped := hostedCall(t, base, http.MethodPost, "/api/todos/session/stop?dir="+workspace, creator, "org:member", stop)
+	require.Equal(t, http.StatusAccepted, status, stopped)
+}
+
 func TestHostedApprovalsBelongToTheTodosOwner(t *testing.T) {
 	h := newHostedRuns(t, workingAgent{})
 	db, base, workspace, creator, member := h.db, h.base, h.workspace, h.ada, h.grace

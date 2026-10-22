@@ -7,6 +7,7 @@ import (
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/commons-db/shell"
 	"github.com/flanksource/gavel/pr/provider"
+	"github.com/flanksource/gavel/tenant"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/lifecycle"
 	"github.com/flanksource/gavel/todos/types"
@@ -67,6 +68,10 @@ type Request struct {
 	Remote lifecycle.RemoteRunner
 	// PRs, with Remote, is the client a linked PR is read through: the organization's.
 	PRs func(ctx context.Context, url string) (provider.Client, int, error)
+	// Scope is who the run acts for. Its tools and writes see and change only what Scope's
+	// user may, such as none of another member's private todos. The zero Scope acts for the
+	// local organization with no user.
+	Scope tenant.Scope
 }
 
 // Options is what a caller decides about one step run. Everything else — which
@@ -217,4 +222,13 @@ func PriorSessionID(todo *types.TODO) string {
 		return todo.LLM.SessionId
 	}
 	return ""
+}
+
+// scopedContext is a context carrying only the run's Scope: the run outlives its caller, so it
+// takes none of the caller's cancellation, only who it acts for.
+func (r Request) scopedContext() context.Context {
+	if r.Scope.OrgID == uuid.Nil {
+		return context.Background()
+	}
+	return tenant.WithScope(context.Background(), r.Scope)
 }
