@@ -166,6 +166,7 @@ type LintLinterConfig struct {
 	Enabled *bool                  `yaml:"enabled,omitempty" json:"enabled,omitempty"`
 	Args    []string               `yaml:"args,omitempty" json:"args,omitempty"`
 	Runtime processruntime.Options `yaml:"runtime,omitempty" json:"runtime,omitempty"`
+	Config  map[string]any         `yaml:"config,omitempty" json:"config,omitempty"`
 }
 
 func (c LintConfig) IsLinterEnabled(name string, defaultEnabled bool) bool {

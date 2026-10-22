@@ -81,6 +81,9 @@ func (c GavelConfig) validateRuntime() error {
 		if !slices.Contains(BuiltinLinterNames, name) {
 			return fmt.Errorf("unknown linter %q in lint.linters", name)
 		}
+		if len(config.Config) > 0 && name != "uir" {
+			return fmt.Errorf("lint.linters.%s.config: native config documents are supported only for uir", name)
+		}
 		if err := config.Runtime.Validate(); err != nil {
 			return fmt.Errorf("lint.linters.%s: %w", name, err)
 		}
@@ -102,7 +105,7 @@ func (c GavelConfig) validateRuntime() error {
 	return nil
 }
 
-var BuiltinLinterNames = []string{"golangci-lint", "ruff", "eslint", "oxlint", "react-doctor", "pyright", "tsc", "markdownlint", "vale", "jscpd", "betterleaks"}
+var BuiltinLinterNames = []string{"golangci-lint", "ruff", "eslint", "oxlint", "react-doctor", "pyright", "tsc", "markdownlint", "vale", "jscpd", "betterleaks", "uir"}
 
 func RuntimeConfigDirectory(executionDir, invocationDir string) string {
 	if invocationDir == "" {
