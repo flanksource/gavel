@@ -14,7 +14,6 @@ import (
 	commonsdb "github.com/flanksource/commons-db/db"
 	"github.com/flanksource/commons-db/migrate"
 	"github.com/flanksource/commons/logger"
-	"github.com/flanksource/gavel/fixtures/record"
 	"github.com/flanksource/gavel/service"
 	"github.com/spf13/pflag"
 	"gorm.io/gorm"
@@ -126,11 +125,10 @@ func open(ctx context.Context, deps openDependencies, optionFns ...Option) (*DB,
 		}
 	}
 
-	// The handle is built once, long before any fixture declares `record: sql`,
-	// so the recording logger is always installed. It costs one atomic load per
-	// query until a fixture actually starts a recording.
+	// commonsdb.NewGorm installs its SQL statement plugin, which publishes each
+	// statement as the own database's (connection.OwnDatabase) while an
+	// `sql_statements` trace observes it — how a fixture traces gavel's queries.
 	config := commonsdb.DefaultGormConfig()
-	config.Logger = record.WrapGorm(config.Logger)
 	// Name columns instead of SELECT *: Captain and Gavel migrate this shared
 	// database while other pools stay open, and an added column would otherwise
 	// change the result type of statements those pools already prepared.
@@ -155,19 +153,52 @@ func migrateDatabase(ctx context.Context, dsn string) error {
 		if err := applyGavelSchema(ctx, dsn); err != nil {
 			return err
 		}
-		return registerCaptainDeleteGuards(ctx, dsn)
+		if err := registerCaptainDeleteGuards(ctx, dsn); err != nil {
+			return err
+		}
+		return sweepOwnershipOrphans(ctx, dsn)
 	})
+}
+
+// schemaExclusions are objects Atlas must not inspect: Captain's tables, and
+// constraints and views installed by the SQL scripts instead of the HCL.
+var schemaExclusions = []string{
+	"captain_*",
+	// Installed by 151_tenancy_local_org.sql.
+	"todo_workspaces.todo_workspaces_org_id_fkey",
+	"todo_labels.todo_labels_org_id_fkey",
+	"session_owners.session_owners_org_id_fkey",
+	"api_token_owners.api_token_owners_org_id_fkey",
+	"runtime_profile_owners.runtime_profile_owners_org_id_fkey",
+	"runtime_preset_owners.runtime_preset_owners_org_id_fkey",
+	"git_agent_task_owners.git_agent_task_owners_org_id_fkey",
+	"http_cache_entries.http_cache_entries_org_id_fkey",
+	"workflow_run_caches.workflow_run_caches_org_id_fkey",
+	"job_log_caches.job_log_caches_org_id_fkey",
+	"workflow_def_caches.workflow_def_caches_org_id_fkey",
+	"seen_prs.seen_prs_org_id_fkey",
+	"pull_requests.pull_requests_org_id_fkey",
+	"test_run_caches.test_run_caches_org_id_fkey",
+	"test_run_cursors.test_run_cursors_org_id_fkey",
+	"file_scans.file_scans_org_id_fkey",
+	"violations.violations_org_id_fkey",
+	"linter_executions.linter_executions_org_id_fkey",
+	"debounce_metadata.debounce_metadata_org_id_fkey",
+	"task_run_history.task_run_history_org_id_fkey",
+	"git_repos.git_repos_org_id_fkey",
+	"todo_issue_plan_revision_details",
+	"todo_issue_runtime",
+	// Installed by 170_git_worktree_overview.sql and 171_git_repo_overview.sql.
+	"git_repo_generation_seq",
+	"git_repo_overview",
+	"git_worktree_overview",
 }
 
 func applyGavelSchema(ctx context.Context, dsn string) error {
 	if err := migrate.Apply(ctx, dsn, schemaFS,
 		migrate.WithDir("schema"),
 		migrate.WithName("gavel"),
-		migrate.WithExclude(
-			"captain_*",
-			"todo_issue_plan_revision_details",
-			"todo_issue_runtime",
-		),
+		migrate.WithExclude(schemaExclusions...),
 	); err != nil {
 		return fmt.Errorf("migrate gavel database: %w", err)
 	}
@@ -198,6 +229,45 @@ func registerCaptainDeleteGuards(ctx context.Context, dsn string) (returnErr err
 	for _, guard := range captainDeleteGuards {
 		if err := captain.RegisterDeleteGuard(ctx, guard); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// ownershipSweep names a Gavel ownership sidecar, its Captain ID column, and the
+// Captain table that column points into.
+type ownershipSweep struct {
+	Sidecar, Column, Resource string
+}
+
+// ownershipSweeps are the sidecars that hold Captain IDs without foreign keys,
+// because Gavel installs no DDL on Captain's tables.
+var ownershipSweeps = []ownershipSweep{
+	{Sidecar: "session_owners", Column: "session_id", Resource: "captain_sessions"},
+	{Sidecar: "api_token_owners", Column: "token_id", Resource: "captain_api_tokens"},
+	{Sidecar: "git_agent_task_owners", Column: "task_id", Resource: "captain_git_agent_tasks"},
+	{Sidecar: "runtime_profile_owners", Column: "profile_id", Resource: "captain_runtime_profiles"},
+	{Sidecar: "runtime_preset_owners", Column: "preset_id", Resource: "captain_runtime_presets"},
+}
+
+// sweepOwnershipOrphans deletes sidecar rows whose Captain resource was deleted:
+// such a row owns nothing. It runs on every migration, after the schema exists.
+func sweepOwnershipOrphans(ctx context.Context, dsn string) (returnErr error) {
+	pool, err := commonsdb.NewDB(dsn)
+	if err != nil {
+		return fmt.Errorf("open Gavel database to sweep ownership rows: %w", err)
+	}
+	defer func() {
+		if err := pool.Close(); err != nil {
+			returnErr = errors.Join(returnErr, err)
+		}
+	}()
+	for _, sweep := range ownershipSweeps {
+		if _, err := pool.ExecContext(ctx, fmt.Sprintf(
+			`DELETE FROM public.%[1]s AS o WHERE NOT EXISTS (SELECT 1 FROM public.%[3]s AS r WHERE r.id = o.%[2]s)`,
+			sweep.Sidecar, sweep.Column, sweep.Resource,
+		)); err != nil {
+			return fmt.Errorf("sweep orphaned %s rows: %w", sweep.Sidecar, err)
 		}
 	}
 	return nil

@@ -168,7 +168,7 @@ func TestExecFixtureTemplatesCWDBeforeResolvingWorkDir(t *testing.T) {
 			CWD:  "$GIT_ROOT_DIR",
 		},
 		Expected: fixtures.Expectations{ExitCode: &expectedExit},
-	}, fixtures.RunOptions{WorkDir: root})
+	}, fixtures.RunOptions{WorkDir: root, Scope: fixtures.NewStepScope(os.Environ())})
 
 	expectedPWD, err := filepath.EvalSymlinks(root)
 	if err != nil {
@@ -210,6 +210,7 @@ func TestExecFixtureRerootsOntoThePreparedSetup(t *testing.T) {
 		Expected: fixtures.Expectations{ExitCode: &expectedExit},
 	}, fixtures.RunOptions{
 		WorkDir: root,
+		Scope:   fixtures.NewStepScope(os.Environ()),
 		Setup: &fixtures.PreparedSetup{
 			Cwd:   worktree,
 			Extra: map[string]any{"commit": "deadbeef"},
@@ -242,6 +243,7 @@ func TestExecFixtureEnvPrecedence(t *testing.T) {
 		Expected: fixtures.Expectations{ExitCode: &expectedExit},
 	}, fixtures.RunOptions{
 		WorkDir: dir,
+		Scope:   fixtures.NewStepScope(os.Environ()),
 		Setup: &fixtures.PreparedSetup{
 			Cwd: dir,
 			Env: map[string]string{"CONTESTED": "from-setup", "FROM_SETUP": "setup"},
@@ -268,6 +270,7 @@ func TestExecFixtureSetupOverridesAutoInjectedRoots(t *testing.T) {
 		Expected: fixtures.Expectations{ExitCode: &expectedExit},
 	}, fixtures.RunOptions{
 		WorkDir: dir,
+		Scope:   fixtures.NewStepScope(os.Environ()),
 		Setup: &fixtures.PreparedSetup{
 			Cwd: dir,
 			Env: map[string]string{"GIT_ROOT_DIR": "/from/setup"},

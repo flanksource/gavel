@@ -23,8 +23,8 @@ import { isLintOnlyPhase } from '../utils';
 // six-connections-per-origin cap HTTP/1.1 imposes) can inject a factory that
 // returns anything satisfying this — never the full `EventSource` interface.
 // This type is deliberately local rather than imported from clicky-ui: this
-// package is a Preact library consumed by both React 18 and 19 hosts, and
-// must not pull in clicky-ui's React context.
+// package is consumed by both React 18 and 19 hosts, and must not pull in
+// clicky-ui's React context.
 export interface EventSourceLike {
   addEventListener(type: string, listener: EventListenerOrEventListenerObject): void;
   close(): void;
@@ -66,11 +66,26 @@ export interface UseTestRunResult {
   runMeta: RunMeta | undefined;
   done: boolean;
   error: string | undefined;
-  rerun: (body?: RerunRequest) => Promise<void>;
-  stop: (taskId?: string) => Promise<void>;
-  editTest: (body: TestEditRequest) => Promise<void>;
+  rerun: (body?: RerunRequest) => Promise<ActionResult>;
+  stop: (taskId?: string) => Promise<ActionResult>;
+  editTest: (body: TestEditRequest) => Promise<ActionResult>;
   /** Reconnect the stream / restart polling. */
   refetch: () => void;
+}
+
+/**
+ * How a POSTed action ended. A failed one is also reported in `error`; the
+ * result lets the caller tell a rerun refused because another is in progress
+ * (`conflict`) from one that failed.
+ */
+export interface ActionResult {
+  ok: boolean;
+  /** The server's HTTP status. */
+  status: number;
+  /** Another rerun is in progress (409). */
+  conflict: boolean;
+  /** The server's own message: the failure text, or a test edit's summary. */
+  message?: string;
 }
 
 const DEFAULT_POLL_MS = 2_000;
@@ -100,6 +115,8 @@ function deriveStatusText(snap: Snapshot): string {
   if (snap.metadata?.kind === 'rerun') {
     return `Running rerun #${snap.metadata.sequence || 1}...`;
   }
+  // A fixture benchmark or profile run has no lint phase.
+  if (snap.performance) return 'Running fixtures...';
   if (isLintOnlyPhase(snap.tests || [], status.running, !!status.lint_run)) {
     return 'Running linters...';
   }
@@ -201,7 +218,7 @@ export function useTestRun(options: UseTestRunOptions = {}): UseTestRunResult {
   }, [base, enabled, pollMs, forcePoll, streamToken, apply]);
 
   const rerun = useCallback(
-    async (body: RerunRequest = {}) => {
+    async (body: RerunRequest = {}): Promise<ActionResult> => {
       doneRef.current = false;
       setDone(false);
       setStreamToken((n) => n + 1);
@@ -210,38 +227,50 @@ export function useTestRun(options: UseTestRunOptions = {}): UseTestRunResult {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
-      if (!res.ok && res.status !== 409) {
-        setError(`Rerun failed: ${(await res.text()).trim()}`);
+      if (res.status === 409) return { ok: false, status: 409, conflict: true, message: 'Another rerun is in progress' };
+      if (!res.ok) {
+        const message = (await res.text()).trim();
+        setError(`Rerun failed: ${message}`);
+        return { ok: false, status: res.status, conflict: false, message };
       }
+      return { ok: true, status: res.status, conflict: false };
     },
     [base],
   );
 
   const stop = useCallback(
-    async (taskId?: string) => {
+    async (taskId?: string): Promise<ActionResult> => {
       const payload = taskId ? { scope: 'task', task_id: taskId } : { scope: 'global' };
       const res = await fetch(`${base}/api/stop`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
-      if (!res.ok) setError(`Stop failed: ${(await res.text()).trim()}`);
+      if (!res.ok) {
+        const message = (await res.text()).trim();
+        setError(`Stop failed: ${message}`);
+        return { ok: false, status: res.status, conflict: false, message };
+      }
+      return { ok: true, status: res.status, conflict: false };
     },
     [base],
   );
 
   const editTest = useCallback(
-    async (body: TestEditRequest) => {
+    async (body: TestEditRequest): Promise<ActionResult> => {
       const res = await fetch(`${base}/api/tests/edit`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
       if (!res.ok) {
-        setError(`Test edit failed: ${(await res.text()).trim()}`);
-        return;
+        const message = (await res.text()).trim();
+        setError(`Test edit failed: ${message}`);
+        return { ok: false, status: res.status, conflict: false, message };
       }
+      const edited = (await res.json()) as { message?: string };
       setStreamToken((n) => n + 1);
+      return { ok: true, status: res.status, conflict: false, ...(edited.message ? { message: edited.message } : {}) };
     },
     [base],
   );

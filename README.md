@@ -81,6 +81,7 @@ If you disable PR commenting (`comment: "false"`), `contents: read` is sufficien
 | `comment-header` | `gavel` | Unique marker for the sticky comment (allows multiple comments per PR) |
 | `github-token` | `${{ github.token }}` | Token used to post PR comments |
 | `fail-on-error` | `true` | Fail the step when gavel exits non-zero (artifacts are still uploaded) |
+| `gavel-server` | — | Upload the results to this hosted gavel with `gavel ci upload`. Needs `permissions: id-token: write` and a repository linked through the gavel GitHub App |
 
 ### Outputs
 
@@ -115,6 +116,22 @@ Status shows current-revision pipeline jobs, steps, failed-step logs, and merge 
 PR creation preserves the isolated worktree, ordered cherry-picks, AI-generated title/body/branch, and conflict recovery. `pr create` uses the explicit base, then `.gavel.yaml` `pr.base`, then `origin/main`; commit-push uses the repository default branch.
 
 Azure review threads, dashboard listing, close/merge actions, AI repair, auto-merge, and Azure DevOps Server are outside this support. Azure rejects `pr status --comments`, `--ai-fix`, `--worktree`, and `commit -p --auto-merge` before side effects.
+
+### Hosted authentication (Clerk)
+
+Configure a Clerk public OAuth application with Device Authorization Grant:
+
+```bash
+export GAVEL_CLERK_ISSUER=https://your-instance.clerk.accounts.dev
+export GAVEL_CLERK_CLIENT_ID=your_public_oauth_client_id
+gavel login
+gavel whoami --json
+gavel logout
+```
+
+Use `gavel login --no-browser` for SSH/headless terminals. See
+[Clerk authentication setup](api/README.md) for configuration, credential storage,
+and current limitations. Local tests and linting do not require login.
 
 ### Testing & Linting
 
@@ -162,6 +179,11 @@ one selected framework, using a framework subcommand or a single
 | `--show-stderr` | When to show stderr: `Never`, `OnFailure` (default), `Always` |
 | `--skip-hooks` | Skip `.gavel.yaml` pre/post hooks (default: skip locally, run in CI) |
 | `--dry-run` | Print test commands without executing |
+| `--timeout` | Wall-clock deadline for the whole test + lint run (default: `20m`) |
+| `--test-timeout` | Deadline per test package; a Go test binary that passes it is `SIGQUIT` for a goroutine dump before it is killed |
+| `--lint-timeout` | Deadline per linter with `--lint` |
+| `--diagnostics` | Record the run's process tree, samples and stack dumps into `.gavel/traces/<run_id>` without `--ui` |
+| `--process-facets` | Also record each process's open files, sockets, ports and environment (needs `--ui` or `--diagnostics`) |
 | `--auto-stop` | With `--ui`, fork a detached UI server that exits after this duration |
 | `--idle-timeout` | With `--ui --auto-stop`, exit the detached UI after no HTTP requests |
 | `--extra-args` | Additional arguments broadcast to every selected test runner |
@@ -237,7 +259,12 @@ gavel fixtures -v tests.md                  # verbose (stderr on pass, stdout+st
 gavel fixtures -vv tests.md                 # more verbose
 gavel fixtures --no-progress tests.md       # disable progress display
 gavel fixtures outline fixtures/**/*.md     # parse and summarize without executing
+gavel fixtures --traces http_proxy tests.md # record every HTTP exchange; assert on http_proxy.* in CEL
+gavel fixtures --profile tests.md           # CPU/RSS/disk per step, plus declared goProfiles pprof files
+gavel fixtures --benchmark --max-time 2s tests.md  # write .gavel/benchmarks/fixtures/run-*.json, enforce limits
 ```
+
+Traces, process samples, stack dumps and Go profiles are stored per run under `.gavel/traces/<run_id>` (newest 20 kept) and browsable in `--ui` or `gavel ui serve`. See [Traces, profiling and benchmarks](site/content/docs/traces-profiling-benchmarks.mdx).
 
 Use `gavel fixtures outline` when you want to inspect fixture files, sections,
 tables, runner steps, AI checks, and source locations without running any build,

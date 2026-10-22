@@ -9,6 +9,8 @@ import { TodoTagRow } from './TodoTag';
 import type { TagIndex } from './tagResolve';
 import { LinkPRDialog } from './LinkPRDialog';
 import { MoveSubmenu, SetParentSubmenu, UnlinkPRSubmenu } from './TodoActionSubmenus';
+import { currentAuthMode } from '../../query';
+import { runtimeChoiceVisible } from '../../hostedUI';
 
 export function HeaderActionsMenu({
   todo,
@@ -172,16 +174,18 @@ export function HeaderActionsMenu({
                   onPlan();
                 }}
               />
-              <MobileMenuItem
-                icon={UiCog}
-                label="Advanced run"
-                detail={awaitingHumanAction ? 'Resolve the pending plan review or question first' : undefined}
-                disabled={busy || runBusy || awaitingHumanAction}
-                onClick={() => {
-                  close();
-                  onAdvanced('run');
-                }}
-              />
+              {runtimeChoiceVisible(currentAuthMode()) && (
+                <MobileMenuItem
+                  icon={UiCog}
+                  label="Advanced run"
+                  detail={awaitingHumanAction ? 'Resolve the pending plan review or question first' : undefined}
+                  disabled={busy || runBusy || awaitingHumanAction}
+                  onClick={() => {
+                    close();
+                    onAdvanced('run');
+                  }}
+                />
+              )}
             </MobileMenuSection>
           )}
 

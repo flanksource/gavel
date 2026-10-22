@@ -34,17 +34,17 @@ func (r *Repository) LinkPromptRun(
 
 	var link PromptRunLink
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		locked, err := lockIssue(tx, issueID, expectedVersion)
+		locked, err := lockIssue(tx, r.org, issueID, expectedVersion)
 		if err != nil {
 			return err
 		}
 		result := tx.Raw(`
 			INSERT INTO todo_issue_prompt_runs
-				(issue_id, prompt_run_id, step_kind, ordinal, created_at)
-			VALUES (?, ?, ?, ?, now())
+				(issue_id, prompt_run_id, step_kind, ordinal, requested_by_user_id, created_at)
+			VALUES (?, ?, ?, ?, ?, now())
 			RETURNING issue_id, prompt_run_id, step_kind, ordinal, created_at,
 			          owner_host_id, owner_pid, owner_started_at, owner_token, owner_heartbeat_at`,
-			issueID, promptRunID, stepKind, ordinal,
+			issueID, promptRunID, stepKind, ordinal, requestUser(tx),
 		).Scan(&link)
 		if result.Error != nil {
 			return mapUniqueError(result.Error, ErrLinkConflict, "prompt run %s", promptRunID)
@@ -74,7 +74,7 @@ func (r *Repository) SetActivePromptRun(
 	actor string,
 ) (*Issue, error) {
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		locked, err := lockIssue(tx, issueID, expectedVersion)
+		locked, err := lockIssue(tx, r.org, issueID, expectedVersion)
 		if err != nil {
 			return err
 		}
@@ -138,7 +138,7 @@ func (r *Repository) UnlinkPromptRun(
 	actor string,
 ) (*Issue, error) {
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		locked, err := lockIssue(tx, issueID, expectedVersion)
+		locked, err := lockIssue(tx, r.org, issueID, expectedVersion)
 		if err != nil {
 			return err
 		}
@@ -177,7 +177,7 @@ func (r *Repository) ListPromptRuns(ctx context.Context, issueID uuid.UUID) ([]P
 	var links []PromptRunLink
 	result := r.db.WithContext(ctx).Raw(promptRunLinkSelect+`
 		FROM todo_issue_prompt_runs
-		WHERE issue_id = ? ORDER BY step_kind, ordinal, created_at`, issueID,
+		WHERE issue_id = ? AND `+inOrgIssue("issue_id")+` ORDER BY step_kind, ordinal, created_at`, issueID, r.org,
 	).Scan(&links)
 	return links, result.Error
 }
@@ -194,8 +194,9 @@ func (r *Repository) ListPromptRunLinks(ctx context.Context, workspaceID uuid.UU
 		WHERE EXISTS (
 			SELECT 1 FROM todo_issues AS issue
 			WHERE issue.id = link.issue_id AND issue.workspace_id = ?
+			  AND `+inOrgWorkspace("issue.workspace_id")+`
 		)
-		ORDER BY issue_id, step_kind, ordinal, created_at`, workspaceID,
+		ORDER BY issue_id, step_kind, ordinal, created_at`, workspaceID, r.org,
 	).Scan(&links)
 	if result.Error != nil {
 		return nil, result.Error
@@ -223,16 +224,16 @@ func (r *Repository) LinkPlan(
 
 	var link PlanLink
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		locked, err := lockIssue(tx, issueID, expectedVersion)
+		locked, err := lockIssue(tx, r.org, issueID, expectedVersion)
 		if err != nil {
 			return err
 		}
 		result := tx.Raw(`
 			INSERT INTO todo_issue_plans
-				(issue_id, plan_id, ordinal, created_at)
-			VALUES (?, ?, ?, now())
+				(issue_id, plan_id, ordinal, created_by_user_id, created_at)
+			VALUES (?, ?, ?, ?, now())
 			RETURNING issue_id, plan_id, ordinal, created_at`,
-			issueID, planID, ordinal,
+			issueID, planID, ordinal, requestUser(tx),
 		).Scan(&link)
 		if result.Error != nil {
 			return mapUniqueError(result.Error, ErrLinkConflict, "plan %s", planID)
@@ -261,7 +262,7 @@ func (r *Repository) SelectPlan(
 	actor string,
 ) (*Issue, error) {
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		locked, err := lockIssue(tx, issueID, expectedVersion)
+		locked, err := lockIssue(tx, r.org, issueID, expectedVersion)
 		if err != nil {
 			return err
 		}
@@ -316,7 +317,7 @@ func (r *Repository) UnlinkPlan(
 	actor string,
 ) (*Issue, error) {
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		locked, err := lockIssue(tx, issueID, expectedVersion)
+		locked, err := lockIssue(tx, r.org, issueID, expectedVersion)
 		if err != nil {
 			return err
 		}
@@ -356,7 +357,7 @@ func (r *Repository) ListPlans(ctx context.Context, issueID uuid.UUID) ([]PlanLi
 	result := r.db.WithContext(ctx).Raw(`
 		SELECT issue_id, plan_id, ordinal, created_at
 		FROM todo_issue_plans
-		WHERE issue_id = ? ORDER BY ordinal, created_at`, issueID,
+		WHERE issue_id = ? AND `+inOrgIssue("issue_id")+` ORDER BY ordinal, created_at`, issueID, r.org,
 	).Scan(&links)
 	return links, result.Error
 }

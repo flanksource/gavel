@@ -1,11 +1,27 @@
 package fixtures
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
 	"github.com/flanksource/gomplate/v3"
 )
+
+// PlainValue converts a typed value to the maps and slices CEL navigates. Step
+// outputs must hold only such plain values: a struct left in them is rewritten
+// by CEL evaluation, dropping its own JSON encoding (durations become integers).
+func PlainValue(value any) (any, error) {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return nil, fmt.Errorf("encode %T for CEL: %w", value, err)
+	}
+	var plain any
+	if err := json.Unmarshal(raw, &plain); err != nil {
+		return nil, fmt.Errorf("decode %T for CEL: %w", value, err)
+	}
+	return plain, nil
+}
 
 // evalStepCEL evaluates a boolean CEL expression of a step — its `cel:`, a
 // wait's until/failWhen, a retry's when — through the same gomplate CEL

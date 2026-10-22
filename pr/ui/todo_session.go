@@ -11,7 +11,9 @@ import (
 	"github.com/flanksource/captain/pkg/ai/approval"
 	cmuxprov "github.com/flanksource/captain/pkg/ai/provider/cmux"
 	"github.com/flanksource/captain/pkg/api"
+	captaincli "github.com/flanksource/captain/pkg/cli"
 	captaindb "github.com/flanksource/captain/pkg/database"
+	"github.com/flanksource/gavel/todos/native"
 	"github.com/google/uuid"
 )
 
@@ -99,6 +101,10 @@ func (s *Server) handleTodoSessionStats(w http.ResponseWriter, r *http.Request) 
 		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("sessionId is required"))
 		return
 	}
+	if s.hosted {
+		s.writeHostedSessionStats(w, r, sessionID)
+		return
+	}
 	dir, err := s.resolveTodoDir(r.URL.Query().Get("dir"))
 	if err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)
@@ -111,16 +117,7 @@ func (s *Server) handleTodoSessionStats(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		if resolved.known {
-			resp, err := captainSessionStats(r.Context(), store, sessionID, resolved)
-			if err != nil {
-				writeTodoError(w, http.StatusInternalServerError, err)
-				return
-			}
-			if err := attachPendingApproval(r.Context(), store, resolved, &resp); err != nil {
-				writeTodoError(w, http.StatusInternalServerError, err)
-				return
-			}
-			json.NewEncoder(w).Encode(resp) //nolint:errcheck
+			writeCaptainSessionStats(w, r, store, sessionID, resolved)
 			return
 		}
 	}
@@ -137,6 +134,80 @@ func (s *Server) handleTodoSessionStats(w http.ResponseWriter, r *http.Request) 
 	// A session with no Captain row has no durable approval table behind it, and
 	// therefore nothing that could be awaiting a decision.
 	json.NewEncoder(w).Encode(todoSessionStatsResponse{SessionStats: stats}) //nolint:errcheck
+}
+
+// writeHostedSessionStats answers the stats of a hosted run's session, which Captain records,
+// when it is a run of one of the organization's todos the request's user can see.
+func (s *Server) writeHostedSessionStats(w http.ResponseWriter, r *http.Request, sessionID string) {
+	store, status, err := s.approvalStore(r.Context(), r.URL.Query().Get("dir"))
+	if err != nil {
+		writeTodoError(w, status, err)
+		return
+	}
+	resolved, err := s.hostedSession(r.Context(), store, sessionID)
+	if err != nil {
+		writeTodoError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeCaptainSessionStats(w, r, store, sessionID, resolved)
+}
+
+// hostedSession resolves sessionID, a run's admission or agent session, failing unless it is a
+// run of one of the organization's todos the request's user can see.
+func (s *Server) hostedSession(ctx context.Context, store captainSessionStore, sessionID string) (captainSessionResolution, error) {
+	resolved, err := resolveCaptainSession(ctx, store, sessionID)
+	if err != nil {
+		return resolved, err
+	}
+	session := resolved.run
+	if session == nil {
+		session = resolved.transcript
+	}
+	if session == nil {
+		return resolved, fmt.Errorf("%w: session %s isn't a run of this organization's todos", native.ErrNotFound, sessionID)
+	}
+	return resolved, s.requireSessionAccess(ctx, session.ID, false)
+}
+
+// captainSessionRead reads or follows a Captain session through local, Captain's own handler. A
+// hosted dashboard reads it from the organization's database instead, for a run of one of its
+// todos the request's user can see.
+func (s *Server) captainSessionRead(local http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !s.hosted {
+			local.ServeHTTP(w, r)
+			return
+		}
+		if s.workspaces == nil {
+			writeTodoError(w, http.StatusNotFound, errNoHostedWorkspaces)
+			return
+		}
+		captain, err := captaindb.Use(s.orgDB)
+		if err != nil {
+			writeTodoError(w, http.StatusServiceUnavailable, fmt.Errorf("open the Captain store of organization %s: %w", s.orgID(), err))
+			return
+		}
+		if _, err := s.hostedSession(r.Context(), captain, r.PathValue("id")); err != nil {
+			writeTodoError(w, http.StatusInternalServerError, err)
+			return
+		}
+		http.StripPrefix("/api/captain/sessions", captaincli.SessionReader(captain)).ServeHTTP(w, r)
+	})
+}
+
+// writeCaptainSessionStats answers the stats of a session Captain knows, with its pending
+// approval.
+func writeCaptainSessionStats(w http.ResponseWriter, r *http.Request, store captainSessionStore, sessionID string, resolved captainSessionResolution) {
+	resp, err := captainSessionStats(r.Context(), store, sessionID, resolved)
+	if err != nil {
+		writeTodoError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if err := attachPendingApproval(r.Context(), store, resolved, &resp); err != nil {
+		writeTodoError(w, http.StatusInternalServerError, err)
+		return
+	}
+	json.NewEncoder(w).Encode(resp) //nolint:errcheck
 }
 
 // attachPendingApproval overrides the derived state when a tool request is
@@ -212,20 +283,26 @@ func (s *Server) handleTodoSessionApprove(w http.ResponseWriter, r *http.Request
 		writeTodoError(w, http.StatusBadRequest, err)
 		return
 	}
-	dir, err := s.resolveTodoDir(r.URL.Query().Get("dir"))
+	store, status, err := s.approvalStore(r.Context(), r.URL.Query().Get("dir"))
 	if err != nil {
-		writeTodoError(w, http.StatusBadRequest, err)
-		return
-	}
-	store, err := todoApprovalStore(r.Context(), dir)
-	if err != nil {
-		writeTodoError(w, http.StatusServiceUnavailable, err)
+		writeTodoError(w, status, err)
 		return
 	}
 	sessionID, err := approvalSessionID(strings.TrimSpace(r.URL.Query().Get("sessionId")))
 	if err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)
 		return
+	}
+	if s.hosted {
+		request, err := store.GetTurnRequest(r.Context(), requestID)
+		if err != nil {
+			writeTodoError(w, http.StatusNotFound, err)
+			return
+		}
+		if err := s.requireSessionAccess(r.Context(), request.SessionID, true); err != nil {
+			writeTodoError(w, http.StatusInternalServerError, err)
+			return
+		}
 	}
 	resolvedRequest, err := resolveApproval(r.Context(), store, approvalAnswer{
 		SessionID: sessionID, RequestID: requestID, Action: action, Message: payload.Message,
@@ -283,14 +360,13 @@ func (s *Server) handleTodoSessionApprovals(w http.ResponseWriter, r *http.Reque
 		}
 		promptRunID = &parsed
 	}
-	dir, err := s.resolveTodoDir(r.URL.Query().Get("dir"))
+	store, status, err := s.approvalStore(r.Context(), r.URL.Query().Get("dir"))
 	if err != nil {
-		writeTodoError(w, http.StatusBadRequest, err)
+		writeTodoError(w, status, err)
 		return
 	}
-	store, err := todoApprovalStore(r.Context(), dir)
-	if err != nil {
-		writeTodoError(w, http.StatusServiceUnavailable, err)
+	if err := s.requireSessionAccess(r.Context(), sessionID, false); err != nil {
+		writeTodoError(w, http.StatusInternalServerError, err)
 		return
 	}
 	pending, err := pendingApprovals(r.Context(), store, sessionID, promptRunID)

@@ -247,6 +247,7 @@ func (s *Server) startProjectAction(project Project, action projectAction, args 
 			close(stopSnapshots)
 			<-snapshotsStopped
 			loadCompletedProjectActionSnapshot(project.ResolvedDir(), current.StartedAt, run)
+			serveProjectActionTraces(run)
 			run.SetRunExitCode(exitCode, errors.Is(group.Group.Context().Err(), context.DeadlineExceeded))
 			run.SetStopFunc(nil)
 			run.MarkDone()
@@ -387,6 +388,10 @@ func projectStatusFiles(files []status.FileStatus) []projectFileStatus {
 }
 
 func (s *Server) handleProjectAction(w http.ResponseWriter, r *http.Request) {
+	if s.hosted {
+		answerHostedProjectAction(w, r)
+		return
+	}
 	project, err := GetProject(r.PathValue("name"))
 	if err != nil {
 		respondError(w, statusForProjectErr(err), err.Error())

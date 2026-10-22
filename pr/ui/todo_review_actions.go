@@ -120,7 +120,7 @@ func (s *Server) handleTodoAnswer(w http.ResponseWriter, r *http.Request) {
 	// that turn was dispatched with and the runtime it actually resolved —
 	// without which the payload defaults would hand a codex session to
 	// claude --resume.
-	req, err := s.continuationRequest(run.Continuation{
+	req, err := s.continuationRequest(r.Context(), source, run.Continuation{
 		Dir: source.Dir, Provider: provider, Todo: todo, Prior: activeRun,
 		Override: override, Step: attempt.Step, Resume: true, Message: answer,
 	})

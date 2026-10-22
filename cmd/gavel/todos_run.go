@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/flanksource/captain/pkg/ai/approval"
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/commons-db/shell"
@@ -20,6 +21,7 @@ import (
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/ghodss/yaml"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 type TodosRunOptions struct {
@@ -37,7 +39,7 @@ type TodosRunOptions struct {
 	ReuseBranch    bool     `flag:"reuse-branch" help:"Continue on the branch the TODO's previous run left behind instead of a fresh worktree (one TODO only)"`
 	Dirty          bool     `flag:"dirty" help:"Carry uncommitted and ignored files into a new worktree"`
 	DryRun         bool     `flag:"dry-run" help:"Print the prompt and resolved spec without dispatching"`
-	Preview        bool     `flag:"preview" help:"Run the agent, but report a triage verdict that would close a TODO instead of applying it (unlike --dry-run, which never runs the agent)"`
+	Preview        bool     `flag:"preview" help:"Run the agent, but have todo_merge and todo_close report what they would do instead of writing it (unlike --dry-run, which never runs the agent)"`
 	Commit         bool     `flag:"commit" default:"true" help:"Allow committing lifecycle steps"`
 }
 
@@ -223,8 +225,8 @@ func todosRunOptions(opts TodosRunOptions) run.Options {
 		Concurrent:     opts.Force,
 		ReuseBranch:    opts.ReuseBranch,
 		Preview:        opts.Preview,
-		// The CLI drains no approval queue: a run that asked for one would block
-		// until its timeout, so it contributes no approval-brokering posture.
+		// The terminal answers no approval itself: runTodoStep brokers them durably
+		// for the dashboard to answer, so the CLI host adds no posture of its own.
 		Host: lifecycle.HostCLI,
 	}
 }
@@ -292,6 +294,9 @@ type runStepPolicy struct {
 
 func runTodoStep(ctx context.Context, workDir string, provider todos.Provider, todo *types.TODO, opts run.Options, policy runStepPolicy) error {
 	req := run.Request{Provider: provider, Registry: run.Shared(), Todo: todo, Dir: workDir, Options: opts}
+	if err := attachApprovals(&req); err != nil {
+		return err
+	}
 	prepared, err := run.Resolve(ctx, req)
 	if err != nil {
 		return err
@@ -332,6 +337,23 @@ func runTodoStep(ctx context.Context, workDir string, provider todos.Provider, t
 	// No closing line here: OnComplete already reported the step, its status and
 	// what the agent said, and a second line reading off todo.Status would only
 	// repeat it — differently, whenever the two disagree.
+	return nil
+}
+
+// attachApprovals picks who answers the run's ask-policy tool calls and
+// todo_ask questions: the operator at this terminal when stdin is one, and
+// otherwise Captain's durable broker, which the dashboard answers.
+func attachApprovals(req *run.Request) error {
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		req.Approvals = true
+		fmt.Println(clicky.Text("approvals: answered on the dashboard (stdin is not a terminal)", "text-gray-500").ANSI())
+		return nil
+	}
+	terminal, err := approval.NewTerminal(approval.TerminalOptions{In: os.Stdin, Out: os.Stdout})
+	if err != nil {
+		return fmt.Errorf("attach terminal approvals: %w", err)
+	}
+	req.OnApproval = terminal.OnApproval
 	return nil
 }
 

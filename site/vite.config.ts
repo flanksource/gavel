@@ -1,4 +1,4 @@
-import { defineConfig } from "vite";
+import { defineConfig, searchForWorkspaceRoot } from "vite";
 import react from "@vitejs/plugin-react";
 import mdx from "@mdx-js/rollup";
 import tailwindcss from "@tailwindcss/vite";
@@ -303,6 +303,9 @@ const prettyCodeOptions = {
 export default defineConfig({
   server: {
     hmr: false,
+    fs: {
+      allow: [searchForWorkspaceRoot(__dirname), path.resolve(__dirname, "..")],
+    },
   },
   plugins: [
     {

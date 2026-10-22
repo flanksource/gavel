@@ -200,7 +200,7 @@ func renderDefinitionOfDone(front dodFrontMatter, sections []string) (string, er
 // it had to drop.
 //
 // A key the generated document cannot honour is dropped with a warning rather
-// than refused. `setup:`, `record:`, `build:`, `daemon:` and `files:` are
+// than refused. `setup:`, `traces:`, `build:`, `daemon:` and `files:` are
 // prepared by the whole-file fixture runner and never by the node runner this
 // document executes under, so a todo that set one has steps running in an
 // environment it did not describe; `ai:` and `verify:` belong to the generated
@@ -261,7 +261,7 @@ func unhonouredVerificationKeys(parsed *fixtures.FrontMatter) []string {
 		set  bool
 	}{
 		{"setup", parsed.Setup != nil},
-		{"record", parsed.Record != nil},
+		{"traces", parsed.Traces != nil},
 		{"build", parsed.Build != ""},
 		{"daemon", parsed.Daemon != ""},
 		{"files", parsed.Files != ""},

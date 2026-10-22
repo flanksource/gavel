@@ -25,19 +25,32 @@ func (PushFlags) ClickyActionFlags() {}
 // batch can span workspaces with different configs.
 type PushBaseURL func(dir, requested string) (string, error)
 
+// PushAccount is the GitHub account and repository a TODO is pushed through.
+type PushAccount func(ctx context.Context, todo *types.TODO) (github.Options, error)
+
 // Push opens — or with Update rewrites — a GitHub issue per TODO, targeting the
-// repo of the workspace that owns it.
-func Push(flags PushFlags, resolveBaseURL PushBaseURL) (ItemFunc, error) {
+// repo of the workspace that owns it, through account; nil is this host's
+// credentials and the workspace's origin.
+func Push(flags PushFlags, resolveBaseURL PushBaseURL, account PushAccount) (ItemFunc, error) {
 	if resolveBaseURL == nil {
 		return nil, fmt.Errorf("push: a base URL resolver is required")
+	}
+	if account == nil {
+		account = func(_ context.Context, todo *types.TODO) (github.Options, error) {
+			return github.Options{WorkDir: todo.CWD}, nil
+		}
 	}
 	return func(ctx context.Context, provider todos.Provider, todo *types.TODO) (ItemResult, error) {
 		baseURL, err := resolveBaseURL(todo.CWD, flags.BaseURL)
 		if err != nil {
 			return ItemResult{}, err
 		}
+		gh, err := account(ctx, todo)
+		if err != nil {
+			return ItemResult{}, err
+		}
 		result, err := githubpush.Push(ctx, provider, todo.ID, githubpush.Options{
-			GitHub:  github.Options{WorkDir: todo.CWD},
+			GitHub:  gh,
 			BaseURL: baseURL,
 			Update:  flags.Update,
 			Labels:  true,

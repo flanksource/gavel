@@ -44,7 +44,7 @@ func (r MergeConflictReport) ResolveCommands() []string {
 	return []string{
 		fmt.Sprintf("git fetch origin %s", r.BaseRefName),
 		fmt.Sprintf("git switch %s", r.HeadRefName),
-		fmt.Sprintf("git merge origin/%s", r.BaseRefName),
+		fmt.Sprintf("git rebase origin/%s", r.BaseRefName),
 	}
 }
 
@@ -68,7 +68,7 @@ func DetectMergeConflicts(opts Options, pr *model.PRInfo) *MergeConflictReport {
 		return report
 	}
 
-	remote, err := conflictRemote(opts)
+	remote, err := RepoRemote(opts)
 	if err != nil {
 		report.Unavailable = err.Error()
 		return report
@@ -96,11 +96,11 @@ func DetectMergeConflicts(opts Options, pr *model.PRInfo) *MergeConflictReport {
 	return report
 }
 
-// conflictRemote finds the remote that actually points at the PR's repository.
+// RepoRemote finds the remote that actually points at the PR's repository.
 // Falling back to origin would be worse than reporting nothing: run from an
 // unrelated checkout, `refs/pull/<n>/head` resolves to a different project's
 // PR and the conflict list would be confidently wrong.
-func conflictRemote(opts Options) (string, error) {
+func RepoRemote(opts Options) (string, error) {
 	repo, err := opts.resolveRepo()
 	if err != nil {
 		return "", fmt.Errorf("no local checkout to replay the merge in: %w", err)

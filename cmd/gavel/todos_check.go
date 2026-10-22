@@ -79,7 +79,7 @@ func runTodosList(opts TodosListOptions) (any, error) {
 func listTodos(ctx context.Context, workDir string, opts TodosListOptions, filters todos.DiscoveryFilters) (types.TODOS, error) {
 	parentRef := strings.TrimSpace(opts.Parent)
 	if opts.All && parentRef == "" {
-		projects, err := loadTodoProjects()
+		projects, err := loadTodoProjects(ui.LoadProjectsOptions{})
 		if err != nil {
 			return nil, err
 		}

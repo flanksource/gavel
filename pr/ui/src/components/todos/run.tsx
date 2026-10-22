@@ -7,6 +7,8 @@ import { todoQuery } from "./format";
 import { settingsRunContextQuery } from "../settings/queries";
 import { invalidateTodoCaches, todoMutationJSON, TodoMutationError } from "./todoMutations";
 import { setTodoLaunchProgress, todoMutationStream, updateTodoLaunchProgress } from './todoLaunch';
+import { currentAuthMode, type AuthMode } from "../../query";
+import { runtimeChoiceVisible } from "../../hostedUI";
 export { TodoRunEffortBadge, todoRunEffortPresentation } from "./TodoRunEffortBadge";
 import {
   actionFromRunOptions,
@@ -18,7 +20,7 @@ import {
   writeRunChoiceState,
   type TodoRunAction,
 } from "./runChoiceStorage";
-export { lastTodoRunOptions, normalizeRunOptions, runOptionsKey, requestStepFor, TODO_RUN_ACTIONS, withoutPromptContent, type TodoRunAction } from "./runChoiceStorage";
+export { lastTodoRunOptions, normalizeRunOptions, runOptionsKey, requestStepFor, withoutPromptContent, type TodoRunAction } from "./runChoiceStorage";
 import {
   agentForRuntime,
   PROVIDERS,
@@ -35,16 +37,17 @@ export type TodoRunRuntimeMode = "cmux" | "agent" | "cli" | "api";
 
 export const defaultRunOptions: TodoRunOptions = { step: "run", spec: {} };
 
-export const runActionConfig: Record<TodoRunAction, { label: string; detail: string; icon: ComponentType<IconProps>; title: string }> = {
-  run: { label: "Run", detail: "implement", icon: UiPlay, title: "Run todo" },
-  plan: { label: "Plan", detail: "plan only", icon: UiListDashes, title: "Plan todo" },
-  triage: {
-    label: "Triage",
-    detail: "compact + review fixture",
-    icon: UiListChecks,
-    title: "Compact the description and review the verification fixture",
-  },
-};
+// Glyphs for the two core steps; every other step the server declares gets the
+// generic checklist glyph. This is presentation only — which actions exist and
+// what they are called comes from the run context's lifecycle steps.
+const RUN_ACTION_ICONS: Record<string, ComponentType<IconProps>> = { run: UiPlay, plan: UiListDashes };
+
+// runActionPresentation labels a step from the server's lifecycle catalog. With
+// no catalog loaded yet the step name stands in, as TodoPhaseButton does.
+export function runActionPresentation(action: TodoRunAction, context?: RunContext | null): { label: string; icon: ComponentType<IconProps>; title: string } {
+  const label = context?.lifecycle.steps.find(step => step.name === action)?.label || action;
+  return { label, icon: RUN_ACTION_ICONS[action] ?? UiListChecks, title: `${label} todo` };
+}
 
 const RUNTIME_MODE_CONFIG: Record<TodoRunRuntimeMode, { label: string }> = {
   cmux: { label: "cmux" },
@@ -100,9 +103,9 @@ export function TodoRunContextError({ error }: { error: string }) {
 
 // promptDefaultFor is the runtime the server resolved for one action's prompt.
 // It outranks defaultMode because it already accounts for the prompt's own
-// frontmatter — todos-triage.prompt and todos-plan.prompt pin `model: claude`
-// and declare a per-tool policy only the Claude transports carry, so seeding
-// them from a codex account default produced a run Captain refuses.
+// frontmatter — a prompt that pins `model: claude` and declares a per-tool
+// policy only the Claude transports carry, seeded from a codex account default,
+// produced a run Captain refuses.
 function promptDefaultFor(context: RunContext, action: string): { mode?: string; model?: string } {
   return context.promptDefaults?.[action] ?? {};
 }
@@ -205,7 +208,7 @@ export function todoRunModeLabel(options: TodoRunOptions, context: RunContext): 
 }
 
 export function runButtonLabelForOptions(action: TodoRunAction, options: TodoRunOptions, context: RunContext): string {
-  return `${runActionConfig[action].label} ${runButtonQualifierForOptions(options, context)}`;
+  return `${runActionPresentation(action, context).label} ${runButtonQualifierForOptions(options, context)}`;
 }
 
 export function todoRunButtonPresentation(options: TodoRunOptions, context: RunContext) {
@@ -285,6 +288,19 @@ export function rememberTodoRunOptionsForMode(options: TodoRunOptions, advanced 
   return rememberTodoRunOptions(actionFromRunOptions(options), options, advanced);
 }
 
+// runtimeChoiceKeys are the spec fields that choose a run's runtime.
+const runtimeChoiceKeys = ["model", "id", "provider", "mode", "fallbacks"];
+
+// runRequestRuntime is a run request as mode lets it choose its runtime: a hosted org's runs use
+// the repository's runtime for each step, so they send no model, mode or presets.
+export function runRequestRuntime<T extends { presets?: string[]; spec?: object }>(body: T, mode: AuthMode): T {
+  if (runtimeChoiceVisible(mode)) return body;
+  const { presets: _presets, ...rest } = body;
+  if (!body.spec) return rest as T;
+  const spec = Object.fromEntries(Object.entries(body.spec).filter(([key]) => !runtimeChoiceKeys.includes(key)));
+  return { ...rest, spec } as T;
+}
+
 // useTodoRun POSTs a run for one native TODO in a workspace.
 export function useTodoRun(dir: string) {
   const client = useQueryClient();
@@ -301,7 +317,7 @@ export function useTodoRun(dir: string) {
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
+          body: JSON.stringify(runRequestRuntime({
             ref,
             step: requestStepFor(options),
             presets: options.presets,
@@ -310,7 +326,7 @@ export function useTodoRun(dir: string) {
             resume: options.resume,
             force: options.force,
             reuseBranch: options.reuseBranch,
-          }),
+          }, currentAuthMode())),
         },
         `Failed to run todo ${ref}`,
         resolved => updateTodoLaunchProgress(client, dir, ref, previous => ({ ...previous, status: 'resolved', step: resolved.step, spec: resolved.spec, specYaml: resolved.specYaml })),
@@ -371,7 +387,7 @@ export function useTodoRunPreview(dir: string) {
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
+        body: JSON.stringify(runRequestRuntime(body, currentAuthMode())),
         signal,
       },
       "Failed to preview todo run",

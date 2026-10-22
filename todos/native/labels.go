@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/flanksource/gavel/tenant"
+
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
@@ -56,8 +58,8 @@ func (r *Repository) ListLabelDefinitions(ctx context.Context, workspaceID uuid.
 	err := r.db.WithContext(ctx).Raw(`
 		SELECT `+labelColumns+`
 		FROM todo_labels
-		WHERE workspace_id = ? OR workspace_id IS NULL
-		ORDER BY workspace_id NULLS FIRST, name`, workspaceID).Scan(&rows).Error
+		WHERE org_id = ? AND (workspace_id = ? OR workspace_id IS NULL)
+		ORDER BY workspace_id NULLS FIRST, name`, r.org, workspaceID).Scan(&rows).Error
 	if err != nil {
 		return nil, err
 	}
@@ -68,10 +70,10 @@ func (r *Repository) ListLabelDefinitions(ctx context.Context, workspaceID uuid.
 func (r *Repository) ListGlobalLabelDefinitions(ctx context.Context) ([]LabelDefinition, error) {
 	var rows []LabelDefinition
 	err := r.db.WithContext(ctx).Raw(`
-		SELECT ` + labelColumns + `
+		SELECT `+labelColumns+`
 		FROM todo_labels
-		WHERE workspace_id IS NULL
-		ORDER BY name`).Scan(&rows).Error
+		WHERE org_id = ? AND workspace_id IS NULL
+		ORDER BY name`, r.org).Scan(&rows).Error
 	if err != nil {
 		return nil, err
 	}
@@ -97,30 +99,43 @@ func (r *Repository) SetLabelDefinition(ctx context.Context, input LabelDefiniti
 		return nil, fmt.Errorf("%w: workspace ID cannot be the nil UUID", ErrInvalidInput)
 	}
 
+	// A label takes its organization from the repository; a workspace label's
+	// workspace is checked to belong to that organization first.
 	query := `
-		INSERT INTO todo_labels (workspace_id, name, color, icon, description, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, now(), now())
+		INSERT INTO todo_labels (org_id, workspace_id, name, color, icon, description, updated_by_user_id, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, now(), now())
 		ON CONFLICT (workspace_id, name) WHERE workspace_id IS NOT NULL
 		DO UPDATE SET color = EXCLUDED.color, icon = EXCLUDED.icon,
-		              description = EXCLUDED.description, updated_at = now()
+		              description = EXCLUDED.description, updated_by_user_id = EXCLUDED.updated_by_user_id,
+		              updated_at = now()
 		RETURNING ` + labelColumns
 	if input.WorkspaceID == nil {
 		query = `
-		INSERT INTO todo_labels (workspace_id, name, color, icon, description, created_at, updated_at)
-		VALUES (NULL, ?, ?, ?, ?, now(), now())
-		ON CONFLICT (name) WHERE workspace_id IS NULL
+		INSERT INTO todo_labels (org_id, workspace_id, name, color, icon, description, updated_by_user_id, created_at, updated_at)
+		VALUES (?, NULL, ?, ?, ?, ?, ?, now(), now())
+		ON CONFLICT (org_id, name) WHERE workspace_id IS NULL
 		DO UPDATE SET color = EXCLUDED.color, icon = EXCLUDED.icon,
-		              description = EXCLUDED.description, updated_at = now()
+		              description = EXCLUDED.description, updated_by_user_id = EXCLUDED.updated_by_user_id,
+		              updated_at = now()
 		RETURNING ` + labelColumns
 	}
 
-	args := []any{definition.Name, string(definition.Color), definition.Icon, definition.Description}
+	args := []any{definition.Name, string(definition.Color), definition.Icon, definition.Description, tenant.FromContext(ctx).UserID}
 	if input.WorkspaceID != nil {
 		args = append([]any{*input.WorkspaceID}, args...)
 	}
+	args = append([]any{r.org}, args...)
 
 	var row LabelDefinition
-	if err := r.db.WithContext(ctx).Raw(query, args...).Scan(&row).Error; err != nil {
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if input.WorkspaceID != nil {
+			if err := requireWorkspace(tx, r.org, *input.WorkspaceID); err != nil {
+				return err
+			}
+		}
+		return tx.Raw(query, args...).Scan(&row).Error
+	})
+	if err != nil {
 		return nil, err
 	}
 	return &row, nil
@@ -150,11 +165,13 @@ func (r *Repository) DeleteLabelDefinition(ctx context.Context, workspaceID *uui
 	removal := labels.Removal{Name: normalized}
 
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		query := `DELETE FROM todo_labels WHERE workspace_id = ? AND name = ?`
-		args := []any{workspaceID, normalized}
+		query := `DELETE FROM todo_labels WHERE org_id = ? AND workspace_id = ? AND name = ?`
+		args := []any{r.org, workspaceID, normalized}
 		if workspaceID == nil {
-			query = `DELETE FROM todo_labels WHERE workspace_id IS NULL AND name = ?`
-			args = []any{normalized}
+			query = `DELETE FROM todo_labels WHERE org_id = ? AND workspace_id IS NULL AND name = ?`
+			args = []any{r.org, normalized}
+		} else if err := requireWorkspace(tx, r.org, *workspaceID); err != nil {
+			return err
 		}
 		deleted := tx.Exec(query, args...)
 		if deleted.Error != nil {
@@ -208,7 +225,7 @@ func stripLabelFromIssues(tx *gorm.DB, workspaceID uuid.UUID, label string) (int
 			   AND labels @> ARRAY[?]::text[]
 			RETURNING id, labels
 		)
-		INSERT INTO todo_issue_events (issue_id, sequence, kind, payload, source, created_at)
+		INSERT INTO todo_issue_events (issue_id, sequence, kind, actor_user_id, payload, source, created_at)
 		SELECT stripped.id,
 		       COALESCE((
 		           SELECT MAX(event.sequence)
@@ -216,10 +233,11 @@ func stripLabelFromIssues(tx *gorm.DB, workspaceID uuid.UUID, label string) (int
 		           WHERE event.issue_id = stripped.id
 		       ), 0) + 1,
 		       'updated',
+		       ?,
 		       jsonb_build_object('labels', to_jsonb(stripped.labels)),
 		       'gavel',
 		       now()
-		FROM stripped`, label, workspaceID, label)
+		FROM stripped`, label, workspaceID, label, requestUser(tx))
 	if result.Error != nil {
 		return 0, result.Error
 	}
@@ -235,12 +253,13 @@ func (r *Repository) CountIssuesByLabel(ctx context.Context, workspaceID uuid.UU
 		Label string `gorm:"column:label"`
 		Count int    `gorm:"column:count"`
 	}
+	visible, visibleArgs := visibleIssue(ctx, "issue")
 	err := r.db.WithContext(ctx).Raw(`
 		SELECT label, COUNT(*) AS count
 		FROM todo_issues AS issue, unnest(issue.labels) AS label
-		WHERE issue.workspace_id = ?
+		WHERE issue.workspace_id = ? AND `+inOrgWorkspace("issue.workspace_id")+` AND `+visible+`
 		GROUP BY label
-		ORDER BY label`, workspaceID).Scan(&rows).Error
+		ORDER BY label`, append([]any{workspaceID, r.org}, visibleArgs...)...).Scan(&rows).Error
 	if err != nil {
 		return nil, err
 	}

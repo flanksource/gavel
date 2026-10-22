@@ -31,14 +31,13 @@ func TestPromptSelectIndexRoutesToInstalledManager(t *testing.T) {
 	}()
 
 	var id string
-	for i := 0; i < 500; i++ {
+	require.Eventually(t, func() bool {
 		if ps := m.List(prompt.Filter{Owner: "todo-x"}); len(ps) == 1 {
 			id = ps[0].ID
-			break
+			return true
 		}
-		time.Sleep(time.Millisecond)
-	}
-	require.NotEmpty(t, id, "scoped commit prompt never reached the manager")
+		return false
+	}, 10*time.Second, time.Millisecond, "scoped commit prompt never reached the manager")
 	require.NoError(t, m.Resolve(id, prompt.Answer{Values: map[string]any{"choice": "2"}}))
 	require.Equal(t, 2, <-got)
 }

@@ -138,6 +138,13 @@ func (t *Tracker) Store() *Store {
 // Start begins watching .git metadata and the hot/idle cadence. Repos are
 // added as callers Track them. It stops when the tracker's context ends.
 func (t *Tracker) Start() error {
+	rebuilt, err := t.store.EnsureOverview(t.ctx)
+	if err != nil {
+		return err
+	}
+	if rebuilt {
+		logger.Infof("git state: rebuilt the worktree overview after crash recovery emptied it")
+	}
 	watcher, err := newMetadataWatcher(t)
 	if err != nil {
 		return err
@@ -487,6 +494,7 @@ func (t *Tracker) due(now time.Time) []jobKey {
 	defer t.mu.Unlock()
 	var keys []jobKey
 	counts := map[string]int{cadenceHot: 0, cadenceIdle: 0, cadenceBackoff: 0}
+	hot := t.hotLocked(now)
 	for _, repo := range t.repos {
 		refsDue := !now.Before(repo.refs.next)
 		if t.focusedLocked(repo, now) {
@@ -502,7 +510,7 @@ func (t *Tracker) due(now time.Time) []jobKey {
 			}
 			var due bool
 			switch {
-			case t.hotLocked(path, now):
+			case hot[path]:
 				counts[cadenceHot]++
 				due = now.Sub(schedule.last) >= t.hot
 			case schedule.streak > 0:
@@ -523,16 +531,32 @@ func (t *Tracker) due(now time.Time) []jobKey {
 	return keys
 }
 
-func (t *Tracker) hotLocked(worktree string, now time.Time) bool {
-	if t.focus[worktree].After(now) {
-		return true
-	}
-	for _, dir := range t.active {
-		if pathWithin(dir, worktree) {
-			return true
+// hotLocked is the set of worktrees rescanned at the hot cadence: the focused
+// ones, and for each directory an agent works in, the deepest live worktree
+// containing it. A session in a worktree nested inside another checkout (say
+// repo/.claude/worktrees/x) heats only that worktree, not the checkout around
+// it, whose status the session does not change.
+func (t *Tracker) hotLocked(now time.Time) map[string]bool {
+	hot := map[string]bool{}
+	for path, until := range t.focus {
+		if until.After(now) {
+			hot[path] = true
 		}
 	}
-	return false
+	for _, dir := range t.active {
+		var deepest string
+		for _, repo := range t.repos {
+			for _, wt := range repo.worktrees {
+				if pathWithin(dir, wt) && len(wt) > len(deepest) {
+					deepest = wt
+				}
+			}
+		}
+		if deepest != "" {
+			hot[deepest] = true
+		}
+	}
+	return hot
 }
 
 // focusedLocked reports whether someone is looking at one of repo's worktrees.

@@ -7,13 +7,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/types"
 )
 
 // EventLifecycleOutcome is the history event kind OnOutcome records: which
-// step ran and which status its outcome chose.
+// step ran, which status its outcome chose, and the run's comment.
 const EventLifecycleOutcome = "lifecycle_outcome"
 
 // OutcomeErrorKey is the lifecycle_outcome payload key naming why a finished
@@ -23,11 +23,11 @@ const OutcomeErrorKey = "error"
 // OnOutcome applies a finished step to the todo. It is the single place a run
 // writes a status: the attempt is persisted (which, for a plan step, is where
 // the plan revision lands), the outcome's status is written unless the step
-// kept it, and one lifecycle_outcome event records the decision.
+// kept it, and one lifecycle_outcome event records the run — its comment is the
+// envelope's, and its payload lists the writes the run's tools made.
 //
-// A triage verdict is applied first — the agent ran read-only, so this is where
-// its edits take effect — and its own status assignment, if any, survives
-// because the triage step's outcome is `keep`.
+// The tools wrote while the run was going, so nothing is applied here. A step
+// that keeps the status still records the one its tools left the todo in.
 func (h *Host) OnOutcome(ctx context.Context, todo *types.TODO, step Step, outcome *StepOutcome, status string) error {
 	if h.Provider == nil {
 		return fmt.Errorf("lifecycle outcome: host has no provider")
@@ -46,34 +46,9 @@ func (h *Host) OnOutcome(ctx context.Context, todo *types.TODO, step Step, outco
 	persistCtx, cancel := todos.PersistenceContext(ctx)
 	defer cancel()
 
-	// recorded is the status the event names: the outcome's, or — when the step
-	// kept it and the triage verdict assigned one — the status actually written.
-	// An event that said `keep` while the todo moved to completed would record a
-	// transition that never happened.
 	recorded := status
-	var triageErr error
-	if execution.Success && execution.TriageNew != nil && execution.EndStatus == types.EndCompleted {
-		if execution.TriageNewApplier == nil {
-			return fmt.Errorf("triage.new result has no approval coordinator")
-		}
-		if err := execution.TriageNewApplier.Apply(ctx, todo, execution.TriageNew); err != nil {
-			triageErr = err
-			execution.Success, execution.EndStatus, execution.ErrorMessage = false, types.EndFailed, err.Error()
-			status, recorded = string(types.StatusFailed), string(types.StatusFailed)
-		}
-		if status == OutcomeKeep {
-			recorded = string(todo.Status)
-		}
-	}
-	if execution.Triage != nil {
-		before := todo.Status
-		applied, err := h.applyTriage(persistCtx, todo, execution.Triage)
-		if err != nil {
-			return h.unpersistedOutcome(persistCtx, events, todo, step, outcome, fmt.Errorf("apply triage verdict: %w", err))
-		}
-		if applied && status == OutcomeKeep && todo.Status != before {
-			recorded = string(todo.Status)
-		}
+	if status == OutcomeKeep && outcome.StartStatus != "" && todo.Status != outcome.StartStatus {
+		recorded = string(todo.Status)
 	}
 	update := h.stateUpdate(todo, step, execution, status)
 	if err := h.Provider.SaveAttempt(persistCtx, todo, execution); err != nil {
@@ -85,7 +60,7 @@ func (h *Host) OnOutcome(ctx context.Context, todo *types.TODO, step Step, outco
 	if err := events.AppendEvent(persistCtx, todo, outcomeEvent(step, outcome, recorded, nil)); err != nil {
 		return fmt.Errorf("record lifecycle outcome: %w", err)
 	}
-	return triageErr
+	return nil
 }
 
 // unpersistedOutcome records a finished run whose outcome could not be
@@ -108,35 +83,9 @@ func (h *Host) unpersistedOutcome(ctx context.Context, events todos.EventProvide
 	return persistErr
 }
 
-// applyTriage writes the verdict, or — when the host is previewing and the
-// verdict would close a TODO — reports what it would have written and writes
-// nothing. It returns whether anything was applied.
-//
-// The preview is all-or-nothing on purpose. Applying a merge-into's combined body
-// while leaving the folded TODOs open would duplicate exactly the content the
-// verdict existed to combine, so a held verdict holds every field.
-func (h *Host) applyTriage(ctx context.Context, todo *types.TODO, env *types.TriageEnvelope) (bool, error) {
-	opts := todos.TriageOptions{WorkDir: h.WorkDir}
-	if h.Preview && env.RetiresTODOs() {
-		preview, err := todos.PreviewTriage(ctx, h.Provider, todo, env, opts)
-		if err != nil {
-			return false, err
-		}
-		if preview != nil {
-			logger.Infof("%s", preview)
-		}
-		return false, nil
-	}
-	if err := todos.ApplyTriage(ctx, h.Provider, todo, env, opts); err != nil {
-		return false, err
-	}
-	logger.Infof("%s", todos.RenderTriageApplied(todo, env))
-	return true, nil
-}
-
 // stateUpdate is everything the run changes about the todo besides the
-// attempt itself: the LLM metrics, the summary and questions the dashboard
-// shows, the plan bookkeeping, and — unless the step kept it — the status.
+// attempt itself: the LLM metrics, the summary the dashboard shows, the plan
+// bookkeeping, and — unless the step kept it — the status.
 func (h *Host) stateUpdate(todo *types.TODO, step Step, execution *todos.ExecutionResult, status string) todos.StateUpdate {
 	if todo.LLM == nil {
 		todo.LLM = &types.LLM{}
@@ -158,12 +107,6 @@ func (h *Host) stateUpdate(todo *types.TODO, step Step, execution *todos.Executi
 	if execution.Summary != "" {
 		update.LastRunSummary = &execution.Summary
 	}
-	// Questions persist only for an ask outcome; any other outcome clears stale ones.
-	questions := execution.Questions
-	if execution.EndStatus != types.EndAsk {
-		questions = nil
-	}
-	update.Questions = &questions
 	if execution.Plan != nil && status != OutcomeKeep {
 		planStatus := execution.Plan.Status
 		update.PlanStatus = &planStatus
@@ -180,19 +123,40 @@ func (h *Host) stateUpdate(todo *types.TODO, step Step, execution *todos.Executi
 	return update
 }
 
-// outcomeEvent is the lifecycle_outcome event for a finished run. persistErr,
-// when set, is why the run's outcome could not be persisted.
+// outcomeEvent is the run's single history entry: the step and the status it
+// chose, the run's comment, the definition-of-done line when verification ran,
+// and any error. persistErr, when set, is why the outcome was not persisted.
 func outcomeEvent(step Step, outcome *StepOutcome, status string, persistErr error) todos.Event {
 	execution := outcome.Execution
 	body := fmt.Sprintf("**Lifecycle:** `%s` → `%s`", step.Name, status)
 	if summary := strings.TrimSpace(execution.Summary); summary != "" {
 		body += "\n\n" + summary
 	}
+	if line := verifyLine(outcome.Result.Verify); line != "" && classOf(step) != types.ModeVerify {
+		body += "\n\n" + line
+	}
 	if execution.ErrorMessage != "" && outcome.Result.Run.State != RunSucceeded {
 		body += "\n\n```text\n" + strings.TrimSpace(execution.ErrorMessage) + "\n```"
 	}
 	if persistErr != nil {
 		body += "\n\n**Outcome not persisted:**\n\n```text\n" + strings.TrimSpace(persistErr.Error()) + "\n```"
+	}
+	payload := outcomePayload(step, outcome, status)
+	if persistErr != nil {
+		payload[OutcomeErrorKey] = persistErr.Error()
+	}
+	return todos.Event{Kind: EventLifecycleOutcome, Body: body, Payload: payload}
+}
+
+func outcomePayload(step Step, outcome *StepOutcome, status string) map[string]any {
+	execution := outcome.Execution
+	envelope := map[string]any{"success": false, "event": ""}
+	if execution.Envelope != nil {
+		envelope = map[string]any{"success": execution.Envelope.Success, "event": execution.Envelope.Event}
+	}
+	writes := execution.ToolWrites
+	if writes == nil {
+		writes = []todos.ToolWrite{}
 	}
 	payload := map[string]any{
 		"step":   step.Name,
@@ -201,11 +165,12 @@ func outcomeEvent(step Step, outcome *StepOutcome, status string, persistErr err
 			"state": outcome.Result.Run.State, "error": outcome.Result.Run.Error,
 			"iterations": outcome.Result.Run.Iterations, "costUsd": outcome.Result.Run.CostUSD,
 		},
-		"envelope": map[string]any{"endStatus": string(execution.EndStatus)},
+		"envelope": envelope,
 		"verify": map[string]any{
 			"ran":    outcome.Result.Verify != nil && outcome.Result.Verify.Ran,
 			"passed": outcome.Result.Verify != nil && outcome.Result.Verify.Passed,
 		},
+		"tools": writes,
 	}
 	if outcome.Admission.PromptRunID.String() != "00000000-0000-0000-0000-000000000000" {
 		payload["promptRunId"] = outcome.Admission.PromptRunID.String()
@@ -216,8 +181,28 @@ func outcomeEvent(step Step, outcome *StepOutcome, status string, persistErr err
 	if execution.Plan != nil {
 		payload["plan"] = map[string]any{"status": string(execution.Plan.Status), "path": execution.Plan.Path}
 	}
-	if persistErr != nil {
-		payload[OutcomeErrorKey] = persistErr.Error()
+	return payload
+}
+
+// verifyLine is the definition-of-done verdict a run's history entry carries
+// when verification ran: passed or failed, and how much of the checklist held.
+func verifyLine(report *api.VerifyReport) string {
+	if report == nil || !report.Ran {
+		return ""
 	}
-	return todos.Event{Kind: EventLifecycleOutcome, Body: body, Payload: payload}
+	verdict := "failed"
+	if report.Passed {
+		verdict = "passed"
+	}
+	line := "**Verification:** " + verdict
+	if len(report.Checklist) == 0 {
+		return line
+	}
+	held := 0
+	for _, item := range report.Checklist {
+		if item.Passed != nil && *item.Passed {
+			held++
+		}
+	}
+	return fmt.Sprintf("%s, checklist %d/%d", line, held, len(report.Checklist))
 }

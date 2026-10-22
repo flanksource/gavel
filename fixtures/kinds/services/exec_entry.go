@@ -35,32 +35,37 @@ type execService struct {
 	waitErr error
 }
 
-// startExec starts the entry and blocks until its ready probe passes. On any
-// failure the process is stopped and the error carries the log tail.
+// startExec starts the entry and blocks until its ready probe passes. Its
+// outputs record the readiness probes under `wait`, also when it never became
+// ready. On any failure the process is stopped and the error carries the log
+// tail.
 func startExec(ctx context.Context, step *fixtures.StepContext, entry Entry, port int) (*execService, map[string]any, error) {
-	sched, err := scheduleFor(entry.Wait)
-	if err != nil {
-		return nil, nil, fmt.Errorf("entry %q: %w", entry.Name, err)
-	}
 	svc, err := launch(step, entry)
 	if err != nil {
 		return nil, nil, fmt.Errorf("entry %q: %w", entry.Name, err)
 	}
-	probe := func(ctx context.Context) probeResult { return svc.ready.probe(ctx, svc.cmd.Env, svc.cmd.Dir) }
-	if _, err := awaitReady(ctx, sched, probe, svc.done); err != nil {
-		if errors.Is(err, errExited) {
-			err = fmt.Errorf("%w (%v)", err, svc.waitErr)
-		}
+	if err := fixtures.ReportProcess(ctx, svc.cmd.Process.Pid); err != nil {
+		return nil, nil, errors.Join(fmt.Errorf("entry %q: %w", entry.Name, err), svc.stop())
+	}
+	report, err := fixtures.Wait(ctx, fixtures.WaitOptions{Policy: readinessPolicy(entry.Wait), Probe: svc.readiness, Wake: svc.done})
+	if err != nil {
+		return nil, nil, errors.Join(fmt.Errorf("entry %q: %w", entry.Name, err), svc.stop())
+	}
+	readiness, err := fixtures.PlainValue(report)
+	if err != nil {
+		return nil, nil, errors.Join(fmt.Errorf("entry %q readiness report: %w", entry.Name, err), svc.stop())
+	}
+	if report.Outcome != fixtures.WaitSatisfied {
 		stopErr := svc.stop()
-		if errors.Is(err, errExited) {
+		if report.Outcome == fixtures.WaitFailed {
 			stopErr = nil // the exit is already the reported failure
 		}
-		return nil, nil, errors.Join(fmt.Errorf("service %q %w\n--- %s (last %d lines) ---\n%s",
-			entry.Name, err, svc.logPath, logTailLines, svc.logTail()), stopErr)
+		return nil, map[string]any{"type": "exec", "ready": false, "wait": readiness}, errors.Join(fmt.Errorf("service %q %s\n--- %s (last %d lines) ---\n%s",
+			entry.Name, report.Error, svc.logPath, logTailLines, svc.logTail()), stopErr)
 	}
 
 	outputs := map[string]any{
-		"type": "exec", "pid": svc.cmd.Process.Pid, "log": svc.logPath, "ready": true, "env": stringMap(entry.Env),
+		"type": "exec", "pid": svc.cmd.Process.Pid, "log": svc.logPath, "ready": true, "env": stringMap(entry.Env), "wait": readiness,
 	}
 	if port != 0 {
 		outputs["port"] = port
@@ -86,7 +91,7 @@ func launch(step *fixtures.StepContext, entry Entry) (*execService, error) {
 	if !filepath.IsAbs(dir) {
 		dir = filepath.Join(step.WorkDir, dir)
 	}
-	process := cexec.NewExec("sh", "-c", entry.Exec).WithCwd(dir).WithProcessGroup().WithExactEnv(step.Scope.Env.Map())
+	process := cexec.NewExec("sh", "-c", entry.Exec).WithCwd(dir).WithProcessGroup().WithExactEnv(step.ChildEnv())
 	if err := step.Opts.ProcessRuntime.Apply(process); err != nil {
 		return nil, err
 	}
@@ -106,6 +111,18 @@ func launch(step *fixtures.StepContext, entry Entry) (*execService, error) {
 	return svc, nil
 }
 
+// readiness probes once for the readiness wait; a process that exited fails
+// the wait at once.
+func (s *execService) readiness(ctx context.Context) fixtures.WaitProbe {
+	select {
+	case <-s.done:
+		return fixtures.WaitProbe{Outputs: map[string]any{"ready": false}, FailWhen: true, Error: fmt.Errorf("%w (%v)", errExited, s.waitErr)}
+	default:
+	}
+	result := s.ready.probe(ctx, s.cmd.Env, s.cmd.Dir)
+	return fixtures.WaitProbe{Outputs: result.outputs(), Until: result.ready, Error: result.failure()}
+}
+
 // observe re-probes readiness for Observer.Observe.
 func (s *execService) observe(ctx context.Context) map[string]any {
 	select {
@@ -114,10 +131,7 @@ func (s *execService) observe(ctx context.Context) map[string]any {
 	default:
 	}
 	result := s.ready.probe(ctx, s.cmd.Env, s.cmd.Dir)
-	observed := map[string]any{"ready": result.ready}
-	if result.status != 0 {
-		observed["http"] = map[string]any{"status": result.status}
-	}
+	observed := result.outputs()
 	if result.err != nil {
 		observed["error"] = result.err.Error()
 	}
@@ -131,15 +145,17 @@ func (s *execService) stop() error {
 	pgid := -s.cmd.Process.Pid
 	signalErr := signalGroup(pgid, syscall.SIGTERM)
 	var forced error
+	deadline := time.Now().Add(stopGrace)
+	for groupAlive(pgid) && time.Now().Before(deadline) {
+		time.Sleep(25 * time.Millisecond)
+	}
+	if groupAlive(pgid) {
+		forced = errors.Join(fmt.Errorf("service %q required SIGKILL after %s", s.name, stopGrace), signalGroup(pgid, syscall.SIGKILL))
+	}
 	select {
 	case <-s.done:
 	case <-time.After(stopGrace):
-		forced = errors.Join(fmt.Errorf("service %q required SIGKILL after %s", s.name, stopGrace), signalGroup(pgid, syscall.SIGKILL))
-		select {
-		case <-s.done:
-		case <-time.After(stopGrace):
-			return errors.Join(signalErr, forced, fmt.Errorf("service %q (pid %d) did not exit after SIGKILL", s.name, s.cmd.Process.Pid))
-		}
+		return errors.Join(signalErr, forced, fmt.Errorf("service %q (pid %d) did not exit after teardown", s.name, s.cmd.Process.Pid))
 	}
 	// The leader is the `sh -c` wrapper: it can exit while the service it
 	// started is still handling SIGTERM, so teardown waits for the whole group.
@@ -162,6 +178,11 @@ func (s *execService) stop() error {
 		waitErr = fmt.Errorf("service %q: %w\n%s", s.name, waitErr, s.logTail())
 	}
 	return errors.Join(signalErr, forced, waitErr)
+}
+
+func groupAlive(pgid int) bool {
+	err := syscall.Kill(pgid, 0)
+	return err == nil
 }
 
 // signalGroup signals a process group; a group that no longer exists is not

@@ -1,10 +1,8 @@
 package history
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -137,62 +135,17 @@ func Load(opts Options) (*Report, error) {
 	return report, nil
 }
 
+// loadRunSnapshots returns workDir's per-run snapshots, oldest first.
 func loadRunSnapshots(workDir string) ([]runSnapshot, error) {
-	dir := filepath.Join(workDir, snapshots.Dir)
-	entries, err := os.ReadDir(dir)
+	loaded, err := snapshots.LoadRuns(workDir)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("read %s: %w", dir, err)
+		return nil, err
 	}
-
-	var runs []runSnapshot
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		name := entry.Name()
-		if !strings.HasPrefix(name, snapshots.PerRunPrefix) || !strings.HasSuffix(name, ".json") {
-			continue
-		}
-		path := filepath.Join(dir, name)
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return nil, fmt.Errorf("read history snapshot %s: %w", path, err)
-		}
-		var snap testui.Snapshot
-		if err := json.Unmarshal(data, &snap); err != nil {
-			return nil, fmt.Errorf("decode history snapshot %s: %w", path, err)
-		}
-		started := snapshotTime(snap, name, path, entry)
-		runs = append(runs, runSnapshot{path: path, started: started, snap: snap})
+	runs := make([]runSnapshot, 0, len(loaded))
+	for i := len(loaded) - 1; i >= 0; i-- {
+		runs = append(runs, runSnapshot{path: loaded[i].Info.Path, started: loaded[i].Info.Started, snap: loaded[i].Snapshot})
 	}
-
-	sort.Slice(runs, func(i, j int) bool {
-		if runs[i].started.Equal(runs[j].started) {
-			return runs[i].path < runs[j].path
-		}
-		return runs[i].started.Before(runs[j].started)
-	})
 	return runs, nil
-}
-
-func snapshotTime(snap testui.Snapshot, name, path string, entry os.DirEntry) time.Time {
-	if snap.Metadata != nil && !snap.Metadata.Started.IsZero() {
-		return snap.Metadata.Started.UTC()
-	}
-	stem := strings.TrimSuffix(strings.TrimPrefix(name, snapshots.PerRunPrefix), ".json")
-	if ts, err := time.Parse(snapshots.PerRunTimestampLayout, stem); err == nil {
-		return ts.UTC()
-	}
-	if info, err := entry.Info(); err == nil {
-		return info.ModTime().UTC()
-	}
-	if info, err := os.Stat(path); err == nil {
-		return info.ModTime().UTC()
-	}
-	return time.Time{}
 }
 
 func leafTests(tests []parsers.Test) []parsers.Test {

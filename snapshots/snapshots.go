@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	rpchttp "github.com/flanksource/clicky/rpc/http"
+	"github.com/flanksource/gavel/blob"
 	testui "github.com/flanksource/gavel/testrunner/ui"
 )
 
@@ -27,10 +28,9 @@ type Pointer struct {
 	Uncommitted string `json:"uncommitted,omitempty"`
 }
 
-// Save writes snap to .gavel/sha-<id>.json where <id> is the current HEAD sha,
-// optionally suffixed with an uncommitted-state checksum. It also refreshes
-// .gavel/last.json and .gavel/<branch>.json pointer files. Returns the absolute
-// path to the written snapshot.
+// Save writes snap as sha-<id>.json in workDir's snapshot store, where <id> is the current HEAD
+// sha, optionally suffixed with an uncommitted-state checksum. It also refreshes the last.json and
+// <branch>.json pointers. It returns where the snapshot was written (see Location).
 func Save(workDir string, snap *testui.Snapshot) (string, error) {
 	if snap == nil {
 		return "", errors.New("snapshots.Save: snapshot is nil")
@@ -47,14 +47,12 @@ func Save(workDir string, snap *testui.Snapshot) (string, error) {
 		return "", errors.New("snapshots.Save: git HEAD sha unavailable")
 	}
 
-	dir := filepath.Join(workDir, Dir)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", fmt.Errorf("create %s: %w", dir, err)
+	store, err := OpenStore(workDir)
+	if err != nil {
+		return "", err
 	}
-
 	fileName := snapshotFileName(sha, uncommitted)
-	snapPath := filepath.Join(dir, fileName)
-	if err := writeJSON(snapPath, snap); err != nil {
+	if err := putJSON(store, fileName, snap); err != nil {
 		return "", err
 	}
 
@@ -63,78 +61,104 @@ func Save(workDir string, snap *testui.Snapshot) (string, error) {
 		SHA:         sha,
 		Uncommitted: uncommitted,
 	}
-	if err := writePointer(workDir, PointerLast, pointer); err != nil {
+	if err := putJSON(store, PointerLast+".json", pointer); err != nil {
 		return "", err
 	}
 	if branch := branchPointerName(workDir); branch != "" {
-		if err := writePointer(workDir, branch, pointer); err != nil {
+		if err := putJSON(store, branch+".json", pointer); err != nil {
 			return "", err
 		}
 	}
-	return snapPath, nil
+	return Location(workDir, fileName), nil
 }
 
-// LoadPointer reads .gavel/<name>.json and returns the pointer. Missing
-// pointer (no .gavel/ or no pointer file) returns (nil, nil) — not an error.
+// LoadPointer reads the <name>.json pointer from workDir's snapshot store. A missing pointer
+// returns (nil, nil) — not an error.
 func LoadPointer(workDir, name string) (*Pointer, error) {
-	path := filepath.Join(workDir, Dir, name+".json")
-	data, err := os.ReadFile(path)
+	store, err := OpenStore(workDir)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("read pointer %s: %w", path, err)
+		return nil, err
+	}
+	return loadPointer(store, name)
+}
+
+func loadPointer(store blob.Store, name string) (*Pointer, error) {
+	data, err := readKey(store, name+".json")
+	if errors.Is(err, blob.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read pointer %s.json: %w", name, err)
 	}
 	var p Pointer
 	if err := json.Unmarshal(data, &p); err != nil {
-		return nil, fmt.Errorf("decode pointer %s: %w", path, err)
+		return nil, fmt.Errorf("decode pointer %s.json: %w", name, err)
 	}
 	return &p, nil
 }
 
 // LoadByPointer reads and decodes the snapshot referenced by p. A missing
-// target file is treated as an error since the pointer exists but the
-// referenced data is gone — signals a corrupt cache.
+// target is an error since the pointer exists but the referenced data is
+// gone — signals a corrupt cache.
 func LoadByPointer(workDir string, p *Pointer) (*testui.Snapshot, error) {
 	if p == nil {
 		return nil, errors.New("snapshots.LoadByPointer: pointer is nil")
 	}
-	path := p.Path
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(workDir, path)
-	}
-	data, err := os.ReadFile(path)
+	key, err := pointerKey(p)
 	if err != nil {
-		return nil, fmt.Errorf("read snapshot %s: %w", path, err)
+		return nil, err
+	}
+	store, err := OpenStore(workDir)
+	if err != nil {
+		return nil, err
+	}
+	data, err := readKey(store, key)
+	if err != nil {
+		return nil, err
 	}
 	var snap testui.Snapshot
 	if err := json.Unmarshal(data, &snap); err != nil {
-		return nil, fmt.Errorf("decode snapshot %s: %w", path, err)
+		return nil, fmt.Errorf("decode snapshot %s: %w", Location(workDir, key), err)
 	}
 	return &snap, nil
 }
 
-// ResolveLast returns the absolute filesystem path of the snapshot referenced
-// by .gavel/last.json. It errors loudly when no pointer exists so callers
-// (e.g. `gavel test --failed`) fail fast instead of silently widening to a
-// full run.
+// ResolveLast returns a local file holding the snapshot last.json points at. It errors loudly
+// when no pointer exists so callers (e.g. `gavel test --failed`) fail fast instead of silently
+// widening to a full run. When snapshots live in a bucket, the snapshot is copied to the path
+// it would have under workDir's .gavel directory.
 func ResolveLast(workDir string) (string, error) {
 	if workDir == "" {
 		return "", errors.New("snapshots.ResolveLast: workDir is required")
 	}
-	ptr, err := LoadPointer(workDir, PointerLast)
+	store, err := OpenStore(workDir)
+	if err != nil {
+		return "", err
+	}
+	ptr, err := loadPointer(store, PointerLast)
 	if err != nil {
 		return "", err
 	}
 	if ptr == nil {
-		return "", fmt.Errorf("no previous run found at %s — run `gavel test` once to create it", filepath.Join(Dir, PointerLast+".json"))
+		return "", fmt.Errorf("no previous run found at %s — run `gavel test` once to create it", Location(workDir, PointerLast+".json"))
 	}
-	path := ptr.Path
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(workDir, path)
+	key, err := pointerKey(ptr)
+	if err != nil {
+		return "", err
 	}
-	if _, err := os.Stat(path); err != nil {
-		return "", fmt.Errorf("last-run snapshot missing at %s: %w", path, err)
+	data, err := readKey(store, key)
+	if err != nil {
+		return "", fmt.Errorf("last-run snapshot missing at %s: %w", Location(workDir, key), err)
+	}
+	path := filepath.Join(workDir, Dir, key)
+	if _, err := os.Stat(path); err == nil {
+		return path, nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return "", fmt.Errorf("create %s: %w", filepath.Dir(path), err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return "", fmt.Errorf("copy the last-run snapshot to %s: %w", path, err)
 	}
 	return path, nil
 }
@@ -251,11 +275,6 @@ func SanitiseBranch(name string) string {
 		return "detached"
 	}
 	return name
-}
-
-func writePointer(workDir, name string, p *Pointer) error {
-	path := filepath.Join(workDir, Dir, name+".json")
-	return writeJSON(path, p)
 }
 
 // WriteSnapshot writes snap to an explicit path, without the git-sha naming

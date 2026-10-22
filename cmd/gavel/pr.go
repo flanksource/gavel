@@ -176,7 +176,10 @@ func runPRStatus(opts PRStatusOptions) (any, error) {
 		return nil, err
 	}
 	if client.Kind() == "azuredevops" {
-		return runAzurePRStatus(opts, target, client, workDir)
+		return runClientPRStatus(opts, target, client, workDir, "Azure DevOps")
+	}
+	if provider.InJob() {
+		return runClientPRStatus(opts, target, client, workDir, "a sandbox job")
 	}
 
 	ghOpts, err := prGitHubOptions(target.Repo, opts.Repo)

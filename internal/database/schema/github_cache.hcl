@@ -1,6 +1,23 @@
 table "http_cache_entries" {
   schema = schema.public
 
+  column "user_id" {
+    null = true
+    type = uuid
+  }
+  column "org_id" {
+    null    = false
+    type    = uuid
+    default = sql("'00000000-0000-0000-0000-000000000001'::uuid")
+  }
+  foreign_key "http_cache_entries_user_id_fkey" {
+    columns = [column.user_id]
+    ref_columns = [table.users.column.id]
+    on_delete = SET_NULL
+    on_update = NO_ACTION
+  }
+  index "http_cache_entries_owner_idx" { columns = [column.org_id, column.user_id] }
+
   column "url" {
     null = false
     type = varchar(1024)
@@ -38,12 +55,29 @@ table "http_cache_entries" {
     type = timestamptz
   }
 
-  primary_key { columns = [column.url, column.method] }
+  primary_key { columns = [column.org_id, column.url, column.method] }
   index "idx_http_cache_entries_fetched_at" { columns = [column.fetched_at] }
 }
 
 table "workflow_run_caches" {
   schema = schema.public
+
+  column "user_id" {
+    null = true
+    type = uuid
+  }
+  column "org_id" {
+    null    = false
+    type    = uuid
+    default = sql("'00000000-0000-0000-0000-000000000001'::uuid")
+  }
+  foreign_key "workflow_run_caches_user_id_fkey" {
+    columns = [column.user_id]
+    ref_columns = [table.users.column.id]
+    on_delete = SET_NULL
+    on_update = NO_ACTION
+  }
+  index "workflow_run_caches_owner_idx" { columns = [column.org_id, column.user_id] }
 
   column "run_id" {
     null = false
@@ -70,12 +104,29 @@ table "workflow_run_caches" {
     type = timestamptz
   }
 
-  primary_key { columns = [column.run_id] }
+  primary_key { columns = [column.org_id, column.run_id] }
   index "idx_workflow_run_caches_repo" { columns = [column.repo] }
 }
 
 table "job_log_caches" {
   schema = schema.public
+
+  column "user_id" {
+    null = true
+    type = uuid
+  }
+  column "org_id" {
+    null    = false
+    type    = uuid
+    default = sql("'00000000-0000-0000-0000-000000000001'::uuid")
+  }
+  foreign_key "job_log_caches_user_id_fkey" {
+    columns = [column.user_id]
+    ref_columns = [table.users.column.id]
+    on_delete = SET_NULL
+    on_update = NO_ACTION
+  }
+  index "job_log_caches_owner_idx" { columns = [column.org_id, column.user_id] }
 
   column "job_id" {
     null = false
@@ -85,20 +136,46 @@ table "job_log_caches" {
     null = true
     type = varchar(255)
   }
+  # Inline logs from before job logs moved to the blob store; GetJobLogs moves a row's logs
+  # to the store on first read.
   column "logs_gz" {
     null = true
     type = bytea
+  }
+  # Key of the gzipped logs in the organization's blob store; empty for a row whose logs are
+  # still inline.
+  column "log_key" {
+    null    = false
+    type    = text
+    default = ""
   }
   column "fetched_at" {
     null = true
     type = timestamptz
   }
 
-  primary_key { columns = [column.job_id] }
+  primary_key { columns = [column.org_id, column.job_id] }
 }
 
 table "workflow_def_caches" {
   schema = schema.public
+
+  column "user_id" {
+    null = true
+    type = uuid
+  }
+  column "org_id" {
+    null    = false
+    type    = uuid
+    default = sql("'00000000-0000-0000-0000-000000000001'::uuid")
+  }
+  foreign_key "workflow_def_caches_user_id_fkey" {
+    columns = [column.user_id]
+    ref_columns = [table.users.column.id]
+    on_delete = SET_NULL
+    on_update = NO_ACTION
+  }
+  index "workflow_def_caches_owner_idx" { columns = [column.org_id, column.user_id] }
 
   column "repo" {
     null = false
@@ -125,11 +202,28 @@ table "workflow_def_caches" {
     type = timestamptz
   }
 
-  primary_key { columns = [column.repo, column.workflow_id, column.sha] }
+  primary_key { columns = [column.org_id, column.repo, column.workflow_id, column.sha] }
 }
 
 table "seen_prs" {
   schema = schema.public
+
+  column "user_id" {
+    null = true
+    type = uuid
+  }
+  column "org_id" {
+    null    = false
+    type    = uuid
+    default = sql("'00000000-0000-0000-0000-000000000001'::uuid")
+  }
+  foreign_key "seen_prs_user_id_fkey" {
+    columns = [column.user_id]
+    ref_columns = [table.users.column.id]
+    on_delete = SET_NULL
+    on_update = NO_ACTION
+  }
+  index "seen_prs_owner_idx" { columns = [column.org_id, column.user_id] }
 
   column "repo" {
     null = false
@@ -148,7 +242,7 @@ table "seen_prs" {
     type = timestamptz
   }
 
-  primary_key { columns = [column.repo, column.number] }
+  primary_key { columns = [column.org_id, column.repo, column.number] }
 }
 
 # The PR dashboard poller's results, persisted so triage and the TODO pages can
@@ -156,6 +250,23 @@ table "seen_prs" {
 # lookups compare it case-insensitively against todo_pr_links' lower-cased key.
 table "pull_requests" {
   schema = schema.public
+
+  column "user_id" {
+    null = true
+    type = uuid
+  }
+  column "org_id" {
+    null    = false
+    type    = uuid
+    default = sql("'00000000-0000-0000-0000-000000000001'::uuid")
+  }
+  foreign_key "pull_requests_user_id_fkey" {
+    columns = [column.user_id]
+    ref_columns = [table.users.column.id]
+    on_delete = SET_NULL
+    on_update = NO_ACTION
+  }
+  index "pull_requests_owner_idx" { columns = [column.org_id, column.user_id] }
 
   column "provider" {
     null = false
@@ -207,8 +318,8 @@ table "pull_requests" {
     type = timestamptz
   }
 
-  primary_key { columns = [column.provider, column.repo, column.number] }
-  index "idx_pull_requests_updated_at" { columns = [column.updated_at] }
+  primary_key { columns = [column.org_id, column.provider, column.repo, column.number] }
+  index "idx_pull_requests_updated_at" { columns = [column.org_id, column.updated_at] }
   index "idx_pull_requests_title_search" {
     type = GIN
     on {
@@ -256,6 +367,23 @@ table "favicon_caches" {
 
 table "test_run_caches" {
   schema = schema.public
+
+  column "user_id" {
+    null = true
+    type = uuid
+  }
+  column "org_id" {
+    null    = false
+    type    = uuid
+    default = sql("'00000000-0000-0000-0000-000000000001'::uuid")
+  }
+  foreign_key "test_run_caches_user_id_fkey" {
+    columns = [column.user_id]
+    ref_columns = [table.users.column.id]
+    on_delete = SET_NULL
+    on_update = NO_ACTION
+  }
+  index "test_run_caches_owner_idx" { columns = [column.org_id, column.user_id] }
 
   column "workspace_dir" {
     null = false
@@ -326,13 +454,30 @@ table "test_run_caches" {
     type = timestamptz
   }
 
-  primary_key { columns = [column.workspace_dir, column.run_id] }
+  primary_key { columns = [column.org_id, column.workspace_dir, column.run_id] }
   index "idx_test_run_caches_kind" { columns = [column.kind] }
   index "idx_test_run_caches_started_ts" { columns = [column.started_ts] }
 }
 
 table "test_run_cursors" {
   schema = schema.public
+
+  column "user_id" {
+    null = true
+    type = uuid
+  }
+  column "org_id" {
+    null    = false
+    type    = uuid
+    default = sql("'00000000-0000-0000-0000-000000000001'::uuid")
+  }
+  foreign_key "test_run_cursors_user_id_fkey" {
+    columns = [column.user_id]
+    ref_columns = [table.users.column.id]
+    on_delete = SET_NULL
+    on_update = NO_ACTION
+  }
+  index "test_run_cursors_owner_idx" { columns = [column.org_id, column.user_id] }
 
   column "workspace_dir" {
     null = false
@@ -347,5 +492,5 @@ table "test_run_cursors" {
     type = timestamptz
   }
 
-  primary_key { columns = [column.workspace_dir] }
+  primary_key { columns = [column.org_id, column.workspace_dir] }
 }

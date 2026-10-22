@@ -79,18 +79,39 @@ export default function Page() {
 }
 ```
 
-Lower-level pieces are also exported for composing your own layout: `Summary`, `TestNode`,
-`DetailPanel`, `FilterBar`, `ProgressBar`, `LintView`, `BenchView`, `DiagnosticsView`, `SplitPane`,
-`JsonView`, `AnsiHtml`.
+The tree, detail panel, lint view and process tree are clicky-ui's `TestRunner`; gavel plugs its
+domain rendering in through node adapters. To compose your own layout, render clicky-ui's
+`TestRunner` with `gavelRegistry({ traces, processes, onOpenProcess, actions })` (or pick from
+`gavelAdapters`, `detailAdapter`, `tracesAdapter`, `processesAdapter`, `resourcesAdapter`,
+`nodeActionsAdapter`). Components gavel adds on top: `RunProcesses`, `TracesPanel`,
+`StepProcesses`, `ResourcesPanel`, `BenchView`, `FixtureBenchView`, `RerunDialog`, `RunActions`,
+`TimeoutPills`, `DownloadMenu`, `CopyAIPromptButton`.
+
+## Traces
+
+A run's traces live in its trace store, which the gavel server mounts at `status.traces.mount`
+(`/query`): the commons-db query explorer and its profile and sessions APIs. Nothing here reads a
+gavel-specific trace route.
+
+- `useProcessTrace({ traces: status.traces, done, selectedKey })` reads the process tree, samples
+  and stacks streams named by `status.traces.process` from the store's NDJSON export, plus the
+  selected process's stack dumps and Go profiles. `RunProcesses` renders it.
+  `checkpointSession` checkpoints `status.traces.sessions.stacks` to collect a stack
+  (`sessions.samples` to refresh a process's facets) while the run is live.
+- `TracesPanel` (the fixture node's *Traces* tab via `tracesAdapter`) renders a fixture's
+  `context.traces` (`TraceResult[]`: kind, stream, seq window, count, summary, error) with an
+  *Open in query* deep link (`openInQueryUrl`), a download per export format (`traceExportUrl`),
+  and an inline clicky-ui `TraceView`.
+- `fetchProcessMetricsFromSamples` reads a live attempt's CPU and RSS from `process_samples`.
 
 ## Types
 
-All result and progress types (`Test`, `Snapshot`, `SnapshotStatus`, `LinterResult`, `Violation`,
-`RunMeta`, `BenchComparison`, `ProcessNode`, `DiagnosticsSnapshot`, `RerunRequest`, …) are exported
-from `@flanksource/gavel/testrunner/types`. They mirror the JSON gavel's handlers emit.
+All result and progress types (`Test`, `Snapshot`, `SnapshotStatus`, `TracesStatus`, `TraceResult`,
+`LinterResult`, `Violation`, `RunMeta`, `BenchComparison`, `ProcessTraceNode`, `ProcessSample`,
+`RerunRequest`, …) are exported from `@flanksource/gavel/testrunner/types`. They mirror the JSON
+gavel's handlers emit.
 
 ## Styling
 
-The components are styled with Tailwind utility classes and use Iconify web components
-(`<iconify-icon>`) for icons. Include Tailwind (or the clicky-ui stylesheet) and register the
-Iconify element in your host page, exactly as gavel's embedded page does.
+The components are styled with Tailwind utility classes on clicky-ui's theme tokens. Import
+`@flanksource/clicky-ui/styles.css` in your host page, as gavel's embedded page does.

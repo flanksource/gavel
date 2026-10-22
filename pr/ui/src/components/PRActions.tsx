@@ -1,13 +1,35 @@
 import { useRef, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { SessionTail } from '@flanksource/clicky-ui/ai';
 import { Button, SplitButton, DropdownMenu, Modal, type DropdownMenuItem } from '@flanksource/clicky-ui/components';
-import { UiCheck, UiEllipsis, UiGitGraph, UiGitMerge, UiGitPr, UiRocket, UiSync } from '@flanksource/clicky-ui/icons';
+import { UiCheck, UiEllipsis, UiGitGraph, UiGitMerge, UiGitPr, UiRocket, UiSparkles, UiSync } from '@flanksource/clicky-ui/icons';
 import type { IconProps } from '@flanksource/clicky-ui/icons';
 import type { ComponentType } from 'react';
 import type { PRItem, PRDetail } from '../types';
-import { mutationJSON, queryKeys } from '../query';
+import { HttpError, mutationJSON, queryKeys } from '../query';
+import { usePromptRun } from './promptRun';
 
 type MergeMethod = 'rebase' | 'squash' | 'merge';
+
+/** The runtime-discovered prompt (prompts/library/pr-rebase.prompt) that rebases a PR, resolves conflicts and force-pushes. */
+export const PR_REBASE_PROMPT = 'pr-rebase';
+
+/**
+ * The 409 body of an update-branch GitHub refused over conflicts: the
+ * pr-rebase prompt's variables when it can run, otherwise why it cannot.
+ */
+export interface UpdateBranchConflict {
+  error: string;
+  rebase?: Record<string, unknown>;
+  rebaseBlocked?: string;
+}
+
+/** The conflict a refused update-branch reported, null for any other failure. */
+export function updateBranchConflict(error: unknown): UpdateBranchConflict | null {
+  if (!(error instanceof HttpError) || error.status !== 409 || typeof error.body !== 'object' || error.body === null) return null;
+  const body = error.body as Partial<UpdateBranchConflict> & { conflict?: boolean };
+  return body.conflict ? { error: body.error ?? error.message, rebase: body.rebase, rebaseBlocked: body.rebaseBlocked } : null;
+}
 
 // ExtraAction is a caller-supplied button (e.g. "New todo") folded into the PR
 // action cluster so it collapses together with the GitHub actions: an outline
@@ -79,20 +101,28 @@ export function PRActions({
   // Only OPEN PRs are actionable; merged/closed ones have nothing to merge or
   // approve, but callers may still pass extras (e.g. New todo) to render.
   const isOpen = state === 'OPEN';
+  const refreshPR = () => Promise.all([
+    queryClient.invalidateQueries({ queryKey: queryKeys.prSnapshot(), exact: true }),
+    queryClient.invalidateQueries({ queryKey: queryKeys.prDetail(pr.repo, pr.number), exact: true }),
+  ]);
   const actionMutation = useMutation({
     mutationFn: (request: { pending: Pending; comment: string }) => submitAction(pr, nodeId, info?.headRefOid, request),
     onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: queryKeys.prSnapshot(), exact: true }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.prDetail(pr.repo, pr.number), exact: true }),
-      ]);
+      await refreshPR();
       setPending(null);
       onChanged?.();
     },
     onSettled: () => { submittingRef.current = false; },
   });
-  const busy = actionMutation.isPending;
-  const error = actionMutation.error instanceof Error ? actionMutation.error.message : '';
+  const conflict = updateBranchConflict(actionMutation.error);
+  const rebase = usePromptRun({
+    prompt: PR_REBASE_PROMPT,
+    label: 'AI rebase',
+    onSuccess: () => { setPending(null); onChanged?.(); },
+    onSettled: () => void refreshPR(),
+  });
+  const busy = actionMutation.isPending || rebase.active;
+  const error = conflict ? '' : actionMutation.error instanceof Error ? actionMutation.error.message : '';
 
   // The node ID arrives with the first detail SSE frame; gate actions until then.
   const loading = disabled || actionMutation.isPending || !info || (!azure && !nodeId) || (azure && !info.headRefOid);
@@ -129,7 +159,7 @@ export function PRActions({
     },
     {
       label: menuLabel(UiSync, 'Update branch'),
-      title: `Merge ${base} into this PR's branch to bring it up to date`,
+      title: `Rebase this PR's branch onto ${base} to bring it up to date`,
       onSelect: () => open({ type: 'update-branch' }),
     }] : []),
   ];
@@ -180,9 +210,16 @@ export function PRActions({
     setPending(p);
   }
 
+  // An AI rebase keeps running in Captain when the dialog closes; the inline
+  // indicator reopens it.
   function cancel() {
-    if (busy) return;
+    if (actionMutation.isPending) return;
     setPending(null);
+  }
+
+  function rebaseWithAI() {
+    if (!conflict?.rebase || rebase.active) return;
+    void rebase.start(conflict.rebase);
   }
 
   function confirm() {
@@ -196,6 +233,19 @@ export function PRActions({
   // Nothing to render for a merged/closed PR with no extra actions.
   if (menuItems.length === 0) return null;
 
+  const rebaseIndicator = rebase.active && !pending && (
+    <Button
+      variant="outline"
+      size="sm"
+      className="h-7 shrink-0 gap-1 px-2 text-xs"
+      onClick={() => setPending({ type: 'update-branch' })}
+      title="Show the AI rebase"
+    >
+      <UiSparkles className="text-xs" />
+      Rebasing…
+    </Button>
+  );
+
   const modal = pending && (
     <Modal
       open
@@ -204,13 +254,42 @@ export function PRActions({
       size="sm"
       footer={
         <div className="flex justify-end gap-2">
-          <Button variant="outline" onClick={cancel} disabled={busy}>Cancel</Button>
-          <Button onClick={confirm} loading={busy} disabled={disabled}>{copy.confirmLabel}</Button>
+          <Button variant="outline" onClick={cancel} disabled={actionMutation.isPending}>{rebase.active ? 'Close' : 'Cancel'}</Button>
+          {conflict?.rebase && !rebase.active ? (
+            <Button onClick={rebaseWithAI} disabled={disabled} title={`Rebase onto ${base} in a worktree, resolve the conflicts with an agent, then force-push`}>
+              <UiSparkles />Rebase with AI
+            </Button>
+          ) : (
+            <Button onClick={confirm} loading={busy} disabled={disabled || !!conflict}>{copy.confirmLabel}</Button>
+          )}
         </div>
       }
     >
       <div className="space-y-3 text-sm text-foreground">
         <p>{copy.description}</p>
+        {conflict && (
+          <div role="alert" className="space-y-1 text-sm text-destructive">
+            <p>{conflict.error}</p>
+            <p className="text-muted-foreground">
+              {conflict.rebase
+                ? 'An agent can rebase the branch in a fresh worktree, resolve the conflicts, verify there are no merge commits, then force-push it.'
+                : `AI rebase unavailable: ${conflict.rebaseBlocked || 'the server did not say why'}`}
+            </p>
+          </div>
+        )}
+        {rebase.active && (
+          <div className="flex items-center gap-2 text-xs">
+            {rebase.state.status === 'running' && rebase.state.sessionId
+              ? <SessionTail src={`/api/captain/sessions/${encodeURIComponent(rebase.state.sessionId)}`} className="min-w-0 flex-1" />
+              : <span className="min-w-0 flex-1 text-muted-foreground">Starting the AI rebase…</span>}
+            {rebase.state.status === 'running' && (
+              <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={() => { void rebase.stop(); }}>Stop</Button>
+            )}
+          </div>
+        )}
+        {rebase.state.status === 'failed' && (
+          <div role="alert" className="whitespace-pre-wrap text-sm text-destructive">AI rebase failed: {rebase.state.error}</div>
+        )}
         {pending.type === 'approve' && (
           <textarea
             className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm h-20 resize-none"
@@ -246,6 +325,7 @@ export function PRActions({
           }
           items={menuItems}
         />
+        {rebaseIndicator}
         {modal}
       </>
     );
@@ -313,6 +393,7 @@ export function PRActions({
         );
       })}
 
+      {rebaseIndicator}
       {modal}
     </>
   );
@@ -329,10 +410,11 @@ function submitAction(pr: PRItem, nodeId: string | undefined, headSha: string | 
     });
   }
   if (request.pending.type === 'update-branch') {
+    if (!nodeId) throw new Error('Update pull request branch: missing pull request node ID');
     return mutationJSON({
       url: '/api/prs/update-branch',
       method: 'POST',
-      body: { repo: pr.repo, number: pr.number },
+      body: { repo: pr.repo, number: pr.number, nodeId, headSha },
       context: 'Update pull request branch',
     });
   }
@@ -375,7 +457,7 @@ function modalCopy(pending: Pending | null, pr: PRItem, base: string): { title: 
       return {
         title: 'Update branch',
         confirmLabel: 'Update branch',
-        description: `Merge ${base} into the head branch of ${ref} to bring it up to date. This adds a merge commit to the PR.`,
+        description: `Rebase the head branch of ${ref} onto ${base} to bring it up to date. This rewrites the PR's commits without adding a merge commit.`,
       };
   }
 }

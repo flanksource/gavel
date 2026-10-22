@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/flanksource/gavel/internal/safefs"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -17,7 +19,7 @@ var _ = Describe("Git Repository Worktree", func() {
 			// Create temp directory for git cache
 			tempDir, err := os.MkdirTemp("", "worktree-test-*")
 			Expect(err).NotTo(HaveOccurred())
-			defer os.RemoveAll(tempDir)
+			defer safefs.SafeRemove(tempDir, safefs.RemoveContext{AllowedRoot: os.TempDir()})
 
 			GinkgoWriter.Printf("Using temp cache directory: %s\n", tempDir)
 
@@ -119,7 +121,7 @@ var _ = Describe("Git Repository Worktree", func() {
 			// Create temp directory for git cache
 			tempDir, err := os.MkdirTemp("", "worktree-path-test-*")
 			Expect(err).NotTo(HaveOccurred())
-			defer os.RemoveAll(tempDir)
+			defer safefs.SafeRemove(tempDir, safefs.RemoveContext{AllowedRoot: os.TempDir()})
 
 			// Create git manager
 			gitManager := NewGitRepositoryManager(tempDir)

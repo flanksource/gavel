@@ -10,8 +10,6 @@ import (
 	"time"
 
 	"github.com/goccy/go-yaml"
-
-	"github.com/flanksource/gavel/fixtures/record"
 )
 
 // ParseMarkdownFixtures parses markdown files containing test fixtures
@@ -74,7 +72,7 @@ func ParseMarkdownFixtures(fixtureFilePath string) ([]FixtureNode, error) {
 
 // parseTableRow converts a table row into a FixtureTest. It returns a nil node
 // for a row that declares no test, and an error for a row that declares one
-// badly — a mistyped recorder is a red parse, not a silently absent recording.
+// badly — a mistyped trace kind is a red parse, not a silently absent trace.
 func parseTableRow(headers, values []string) (*FixtureNode, error) {
 	if len(headers) != len(values) {
 		return nil, nil
@@ -99,12 +97,12 @@ func parseTableRow(headers, values []string) (*FixtureNode, error) {
 			fixture.Exec = value
 		case "terminal", "term":
 			fixture.Terminal = value
-		case "record", "recording":
-			spec, err := record.Parse(value)
+		case "traces", "trace":
+			specs, err := ParseTraces(value)
 			if err != nil {
 				return nil, err
 			}
-			fixture.Record = spec
+			fixture.Traces = specs
 		case "os":
 			fixture.TestOS = value
 		case "arch":
@@ -225,8 +223,13 @@ func parseFrontMatter(file *os.File) (*FrontMatter, string, error) {
 		return nil, "", err
 	}
 
-	content := strings.Join(contentLines, "\n")
-	return &frontMatter, content, nil
+	if len(contentLines) == 0 {
+		return &frontMatter, "", nil
+	}
+	// Blank lines stand in for the front matter so that line numbers in the
+	// content are the file's own.
+	padding := strings.Repeat("\n", len(frontMatterLines)+2)
+	return &frontMatter, padding + strings.Join(contentLines, "\n"), nil
 }
 
 // parseMarkdownContentWithSourceDir parses markdown content with source directory context
@@ -380,6 +383,13 @@ func ParseMarkdownFixturesWithTree(filePath string) (*FixtureNode, error) {
 		return nil, fmt.Errorf("failed to expand fixtures for files: %w", err)
 	}
 	setOriginFile(fileTree, filePath)
+	fileTree.Walk(func(node *FixtureNode) {
+		// ParseMarkdownContentWithTree knew the file only by its base name.
+		if node.Origin.File == filepath.Base(filePath) {
+			node.Origin.File = filePath
+		}
+	})
+	setMarkdownEndLines(fileTree, content)
 	if fileTree.Origin != nil {
 		fileTree.Origin.File = filePath
 		fileTree.Origin.Kind = "file"

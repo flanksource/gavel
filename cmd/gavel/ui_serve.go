@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -39,6 +40,7 @@ type UIServeOptions struct {
 	AutoStop     time.Duration `json:"-"`
 	IdleTimeout  time.Duration `json:"-"`
 	URLFile      string        `flag:"url-file" help:"Write the bound URL to this path atomically so shell scripts can read it back."`
+	Dev          bool          `flag:"dev" help:"Serve the page from the testrunner/ui Vite dev server, with clicky-ui from the sibling checkout's source (requires a source checkout)"`
 }
 
 // uiServeDurations holds the duration flags attached imperatively to the
@@ -91,14 +93,6 @@ func runUIServe(opts UIServeOptions) (any, error) {
 
 	srv := testui.NewServer()
 	if len(opts.ResultsFiles) > 0 {
-		if path, err := filepath.Abs(opts.ResultsFiles[0]); err == nil {
-			for dir := filepath.Dir(path); dir != filepath.Dir(dir); dir = filepath.Dir(dir) {
-				if filepath.Base(dir) == ".gavel" {
-					srv.SetProfileRoot(filepath.Dir(dir))
-					break
-				}
-			}
-		}
 		if err := loadResults(srv, opts.ResultsFiles...); err != nil {
 			listener.Close() //nolint:errcheck
 			return nil, fmt.Errorf("load results %v: %w", opts.ResultsFiles, err)
@@ -106,9 +100,17 @@ func runUIServe(opts UIServeOptions) (any, error) {
 	} else {
 		srv.MarkDone()
 	}
+	if opts.Dev {
+		proxy, err := devProxy(testRunnerDev, "")
+		if err != nil {
+			listener.Close() //nolint:errcheck
+			return nil, err
+		}
+		srv.SetDevProxy(proxy)
+	}
 
 	addr := listener.Addr().(*net.TCPAddr)
-	url := fmt.Sprintf("http://%s", net.JoinHostPort(boundHost(addr, opts.Addr), strconv.Itoa(addr.Port)))
+	url, networkURL := uiURLs(boundHost(addr, opts.Addr), addr.Port)
 
 	if opts.URLFile != "" {
 		if err := writeURLFile(opts.URLFile, url); err != nil {
@@ -118,7 +120,7 @@ func runUIServe(opts UIServeOptions) (any, error) {
 
 	// Print the URL on the first line of stdout so a wrapping script can
 	// `head -n1` it regardless of how many log lines come after.
-	fmt.Printf("UI at %s\n", url)
+	fmt.Println(uiBanner("UI", url, networkURL))
 
 	// Notify the fork parent that we're ready. On Unix with a lockfile set in
 	// the environment, this writes our PID into the JSON lockfile and releases
@@ -132,7 +134,7 @@ func runUIServe(opts UIServeOptions) (any, error) {
 	handler := withIdleTimer(srv.Handler(), idleCh)
 	go http.Serve(listener, handler) //nolint:errcheck
 
-	return nil, serveUntilTimeout(opts.AutoStop, opts.IdleTimeout, idleCh)
+	return nil, errors.Join(serveUntilTimeout(opts.AutoStop, opts.IdleTimeout, idleCh), srv.CloseTraces())
 }
 
 // serveUntilTimeout blocks until either hardTimeout fires or idleTimeout has
@@ -195,6 +197,7 @@ func loadResults(srv *testui.Server, paths ...string) error {
 	}
 
 	var merged testui.Snapshot
+	var runs []testui.TraceRun
 	for _, path := range paths {
 		data, err := os.ReadFile(path)
 		if err != nil {
@@ -228,10 +231,17 @@ func loadResults(srv *testui.Server, paths ...string) error {
 		} else if err := json.Unmarshal(data, &payload); err != nil {
 			return fmt.Errorf("parse snapshot %s: %w", path, err)
 		}
+		run, err := testui.TraceRunOf(payload.Metadata)
+		if err != nil {
+			return fmt.Errorf("%s: %w", path, err)
+		}
+		if run != nil {
+			runs = append(runs, *run)
+		}
 		merged = mergeSnapshots(merged, payload)
 	}
 	srv.LoadSnapshot(merged)
-	return nil
+	return srv.ReopenTraces(runs...)
 }
 
 func mergeSnapshots(dst, src testui.Snapshot) testui.Snapshot {
@@ -252,12 +262,8 @@ func mergeSnapshots(dst, src testui.Snapshot) testui.Snapshot {
 	if src.LogTail != "" {
 		dst.LogTail = src.LogTail
 	}
-	if src.Diagnostics != nil {
-		dst.Diagnostics = src.Diagnostics
-	}
 	dst.Status.Running = dst.Status.Running || src.Status.Running
 	dst.Status.LintRun = dst.Status.LintRun || src.Status.LintRun
-	dst.Status.DiagnosticsAvailable = dst.Status.DiagnosticsAvailable || src.Status.DiagnosticsAvailable || src.Diagnostics != nil
 	dst.Metadata = mergeSnapshotMetadata(dst.Metadata, src.Metadata)
 	dst.Git = mergeSnapshotGit(dst.Git, src.Git)
 	return dst
@@ -292,6 +298,9 @@ func mergeSnapshotMetadata(dst, src *testui.SnapshotMetadata) *testui.SnapshotMe
 	if src.Sequence > dst.Sequence {
 		dst.Sequence = src.Sequence
 	}
+	if src.RunID != "" {
+		dst.RunID, dst.ProcessTrace = src.RunID, src.ProcessTrace
+	}
 	if src.Args != nil {
 		dst.Args = make(map[string]any, len(src.Args))
 		for k, v := range src.Args {
@@ -321,54 +330,55 @@ func mergeSnapshotGit(dst, src *testui.SnapshotGit) *testui.SnapshotGit {
 	return dst
 }
 
-// boundHost picks the hostname to announce for a listener that is already open.
-// The socket is authoritative: whenever it is bound to a concrete address, that
-// address is the only one it answers on, so --addr cannot override it.
+// boundHost returns the host a listener that is already open actually answers
+// on. The socket is authoritative: whenever it is bound to a concrete address,
+// that address is the only one it answers on, so --addr cannot override it.
 //
 // This matters for the inherited-socket path (`gavel test --ui --detach` passes
 // an already-bound listener on fd 3): the parent chose the bind address, --addr
-// keeps its 0.0.0.0 default, and announceHost would advertise a LAN IP for a
-// socket listening only on loopback — a URL that is refused. Only a wildcard
-// bind leaves the interface an open question, and that is where --addr decides.
+// keeps its 0.0.0.0 default, and announcing a private IP for a socket listening
+// only on loopback gives a URL that is refused. Only a wildcard bind leaves the
+// interface an open question, and that is where --addr decides.
 func boundHost(addr *net.TCPAddr, requested string) string {
 	if addr == nil || addr.IP == nil || addr.IP.IsUnspecified() {
-		return announceHost(requested)
-	}
-	if addr.IP.IsLoopback() {
-		return "localhost"
+		return requested
 	}
 	return addr.IP.String()
 }
 
-// announceHost picks the hostname to print in the "UI at ..." banner given
-// the user's --addr choice. When the user bound to a wildcard (0.0.0.0 or ::)
-// it walks net.InterfaceAddrs() and returns the first non-loopback IPv4 so
-// the printed URL is reachable from another host. Falls back to "localhost"
-// if no external interface is found (e.g. sandboxed CI).
-func announceHost(requested string) string {
-	switch requested {
-	case "", "localhost", "127.0.0.1", "::1":
-		return "localhost"
-	case "0.0.0.0", "::":
-		if ip := firstNonLoopbackIPv4(); ip != "" {
-			return ip
-		}
-		logger.Warnf("--addr=%s but no non-loopback IPv4 interface found; printing localhost", requested)
-		return "localhost"
-	default:
-		return requested
+// uiURLs returns the URL to open on this machine and, when host is a wildcard
+// bind, the private-IP URL other hosts can reach (empty when there is none).
+func uiURLs(host string, port int) (local, network string) {
+	p := strconv.Itoa(port)
+	local = "http://" + net.JoinHostPort(localHost(host), p)
+	if host != "0.0.0.0" && host != "::" {
+		return local, ""
 	}
+	ip := firstNonLoopbackIPv4()
+	if ip == "" {
+		logger.Warnf("--addr=%s but no non-loopback IPv4 interface found; announcing localhost only", host)
+		return local, ""
+	}
+	return local, "http://" + net.JoinHostPort(ip, p)
 }
 
-// menubarHost picks the hostname the native macOS menu-bar webview should load
-// from. The webview always runs on the same machine, so it must reach gavel over
-// loopback: WKWebView blocks cleartext HTTP to non-loopback hosts under App
-// Transport Security (which would render a blank popover), and a LAN IP is
-// fragile across VPN/offline state. So unlike announceHost — which prints an
-// externally-reachable LAN IP for the wildcard binds — every loopback/wildcard
-// bind resolves to "localhost". An explicit interface (the user pinned --addr to
-// one NIC) is kept as-is since that is the only address the server listens on.
-func menubarHost(requested string) string {
+// uiBanner formats the "<label> at <url>" line, appending the network URL when
+// the server is reachable from other hosts.
+func uiBanner(label, local, network string) string {
+	if network == "" {
+		return label + " at " + local
+	}
+	return fmt.Sprintf("%s at %s (network: %s)", label, local, network)
+}
+
+// localHost picks the hostname a browser or the native macOS menu-bar webview
+// on this machine should load from. It must reach gavel over loopback:
+// WKWebView blocks cleartext HTTP to non-loopback hosts under App Transport
+// Security (which would render a blank popover), and a private IP is fragile
+// across VPN/offline state. So every loopback/wildcard bind resolves to
+// "localhost". An explicit interface (the user pinned --addr to one NIC) is
+// kept as-is since that is the only address the server listens on.
+func localHost(requested string) string {
 	switch requested {
 	case "", "0.0.0.0", "::", "localhost", "127.0.0.1", "::1":
 		return "localhost"

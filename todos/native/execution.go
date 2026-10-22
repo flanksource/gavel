@@ -81,7 +81,7 @@ func (s *ExecutionIntegration) activatePromptRun(ctx context.Context, input Prom
 
 	dispatchOwned := false
 	err := s.repository.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		issue, err := lockExecutionIssue(tx, input.IssueID)
+		issue, err := lockExecutionIssue(tx, s.repository.org, input.IssueID)
 		if err != nil {
 			return err
 		}
@@ -114,10 +114,10 @@ func (s *ExecutionIntegration) activatePromptRun(ctx context.Context, input Prom
 			}
 			insert := tx.Exec(`
 				INSERT INTO todo_issue_prompt_runs
-					(issue_id, prompt_run_id, step_kind, ordinal, created_at,
+					(issue_id, prompt_run_id, step_kind, ordinal, requested_by_user_id, created_at,
 					 owner_host_id, owner_pid, owner_started_at, owner_token, owner_heartbeat_at)
-				VALUES (?, ?, ?, ?, now(), ?, ?, ?, ?, now())`,
-				input.IssueID, input.PromptRunID, input.StepKind, input.Ordinal,
+				VALUES (?, ?, ?, ?, ?, now(), ?, ?, ?, ?, now())`,
+				input.IssueID, input.PromptRunID, input.StepKind, input.Ordinal, requestUser(tx),
 				owner.HostID, owner.PID, owner.StartedAt.UTC(), owner.Token,
 			)
 			if insert.Error != nil {
@@ -166,7 +166,7 @@ func (s *ExecutionIntegration) SelectPlan(ctx context.Context, input PlanAttachm
 	}
 
 	err := s.repository.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		issue, err := lockExecutionIssue(tx, input.IssueID)
+		issue, err := lockExecutionIssue(tx, s.repository.org, input.IssueID)
 		if err != nil {
 			return err
 		}
@@ -222,8 +222,8 @@ func selectPlanLocked(tx *gorm.DB, issue *executionIssue, input PlanAttachment, 
 
 	if result.RowsAffected == 0 {
 		insert := tx.Exec(`
-			INSERT INTO todo_issue_plans (issue_id, plan_id, ordinal, created_at)
-			VALUES (?, ?, ?, now())`, input.IssueID, input.PlanID, input.Ordinal,
+			INSERT INTO todo_issue_plans (issue_id, plan_id, ordinal, created_by_user_id, created_at)
+			VALUES (?, ?, ?, ?, now())`, input.IssueID, input.PlanID, input.Ordinal, requestUser(tx),
 		)
 		if insert.Error != nil {
 			return mapUniqueError(insert.Error, ErrLinkConflict, "plan %s", input.PlanID)
@@ -328,19 +328,26 @@ type executionIssue struct {
 	Version           int64
 	ActivePromptRunID *uuid.UUID
 	SelectedPlanID    *uuid.UUID
+	CreatedByUserID   *uuid.UUID
 }
 
-func lockExecutionIssue(tx *gorm.DB, id uuid.UUID) (*executionIssue, error) {
+// lockExecutionIssue locks an issue of org for update, with lockIssue's
+// visibility and ownership rules.
+func lockExecutionIssue(tx *gorm.DB, org, id uuid.UUID) (*executionIssue, error) {
 	var issue executionIssue
+	visible, visibleArgs := visibleIssue(tx.Statement.Context, "todo_issues")
 	result := tx.Raw(`
-		SELECT id, workspace_id, status, version, active_prompt_run_id, selected_plan_id
-		FROM todo_issues WHERE id = ? FOR UPDATE`, id,
+		SELECT id, workspace_id, status, version, active_prompt_run_id, selected_plan_id, created_by_user_id
+		FROM todo_issues WHERE id = ? AND `+inOrgWorkspace("workspace_id")+` AND `+visible+` FOR UPDATE`, append([]any{id, org}, visibleArgs...)...,
 	).Scan(&issue)
 	if result.Error != nil {
 		return nil, result.Error
 	}
 	if result.RowsAffected == 0 {
 		return nil, fmt.Errorf("%w: issue %s", ErrNotFound, id)
+	}
+	if err := requireChangeable(tx, id, issue.CreatedByUserID); err != nil {
+		return nil, err
 	}
 	return &issue, nil
 }

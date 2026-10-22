@@ -1,0 +1,45 @@
+---
+title: AI
+description: Evaluate a prompt and acceptance checklist with a configured grader.
+parent: fixture-step-reference
+order: 4
+---
+
+import FixtureKindReference from "../../src/components/site/FixtureKindReference";
+
+Use the `ai` step to evaluate a prompt and acceptance checklist with a configured grader.
+
+## Example
+
+```yaml
+kind: Fixture
+name: AI example
+steps:
+  - id: review
+    kind: ai
+    prompt: Inspect parser changes and cite evidence for each criterion.
+    criteria:
+      - Invalid input identifies its source position.
+      - Valid input preserves its parsed result.
+```
+
+Save the document as a `.fixture.yaml` file. Inspect it with `gavel fixtures outline <file>`, then execute it with `gavel fixtures <file>` once its prerequisites are available.
+
+## Configuration and prerequisites
+
+Configure the grader through project `ai` and `todos.verify` settings or this step's `model`/`spec`. The runtime must be available and configured. `prompt`, `description`, `criteria`, and `checklist` supply the review contract.
+
+## Results and lifetime
+
+With a nonempty `criteria` or `checklist`, the step runs acceptance grading and exposes `passed` and checklist evidence. An AI check executes a grader and can consume its configured budget; it should have concrete criteria rather than an unexplained assertion that it passed.
+
+With no checklist items, the step executes a prompt-only model call. That mode exposes `output.text` and, when the runtime supplies structured output, `output.data`. Write CEL against those outputs, such as `output.text != ""`; prompt-only mode does not supply grading roots like `passed`.
+
+[AI review fixtures](/docs/fixture-ai-review) covers Markdown review documents and grader snapshots.
+
+## Complete step reference
+
+Expand objects and array items to inspect nested fields. This reference includes the common step envelope; its behavior is documented in [Step policies](/docs/fixture-step-policies).
+
+<FixtureKindReference kind="ai" />
+

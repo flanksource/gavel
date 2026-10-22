@@ -45,7 +45,7 @@ func FetchCommitDiff(opts Options, sha string) (DiffPayload, error) {
 	}
 
 	path := fmt.Sprintf("/repos/%s/commits/%s", repoPath, url.PathEscape(sha))
-	result, err := cachedGet(context.Background(), token, path, map[string]string{
+	result, err := cachedGet(context.Background(), opts.cacheStore(), token, path, map[string]string{
 		"Accept": "application/vnd.github.diff",
 	})
 	if err != nil {
@@ -78,7 +78,7 @@ func FetchPRFilePatch(opts Options, number int, filename string) (DiffPayload, e
 
 	for page := 1; page <= 30; page++ {
 		path := fmt.Sprintf("/repos/%s/pulls/%d/files?per_page=100&page=%d", repoPath, number, page)
-		result, err := cachedGet(context.Background(), token, path, nil)
+		result, err := cachedGet(context.Background(), opts.cacheStore(), token, path, nil)
 		if err != nil {
 			return DiffPayload{}, err
 		}

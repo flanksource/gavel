@@ -60,8 +60,8 @@ class FakeEventSource {
   }
 }
 
-function Probe({ name, enabled, onRender }: { name: string; enabled: boolean; onRender?: () => void }) {
-  const state = useAppQueries({ enabled, initialConfig: { repos: [] } });
+function Probe({ name, enabled, hostData = true, onRender }: { name: string; enabled: boolean; hostData?: boolean; onRender?: () => void }) {
+  const state = useAppQueries({ enabled, hostData, initialConfig: { repos: [] } });
   onRender?.();
   return (
     <div data-testid={name} data-error={state.processError} data-project-error={state.projectError} data-pr-error={state.snapshot.error ?? ''}>
@@ -270,6 +270,28 @@ describe('useAppQueries', () => {
     act(() => stream?.emit('message', snapshot));
     await waitFor(() => expect(screen.getByTestId('probe').textContent).toBe('1/0'));
     expect(screen.getByTestId('probe').dataset.prError).toBe('');
+  });
+
+  // A hosted dashboard serves its organization's repositories as projects, but no
+  // processes or git state, so asking for those would only surface 404s.
+  it('reads pull requests and projects, but no host state, when host data is off', async () => {
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      calls.push(String(input));
+      return { ok: true, json: async () => (String(input) === '/api/projects' ? [] : snapshot) } as Response;
+    }));
+    vi.stubGlobal('EventSource', FakeEventSource);
+
+    render(
+      <Provider client={createClient()}>
+        <Probe name="hosted" enabled hostData={false} />
+      </Provider>,
+    );
+
+    await waitFor(() => expect(screen.getByTestId('hosted').textContent).toBe('1/0'));
+    await waitFor(() => expect([...calls].sort()).toEqual(['/api/projects', '/api/prs']));
+    expect(FakeEventSource.instances.map(stream => stream.url)).toEqual(['/api/prs/stream']);
+    expect(screen.getByTestId('hosted').dataset.error).toBe('');
   });
 
   it('aborts in-flight bootstrap reads and closes streams when disabled', async () => {

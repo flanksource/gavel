@@ -25,7 +25,7 @@ func DefaultBranch(opts Options) (string, error) {
 		return "", err
 	}
 
-	resp, err := cachedGet(context.Background(), token, fmt.Sprintf("/repos/%s", repo), nil)
+	resp, err := cachedGet(context.Background(), opts.cacheStore(), token, fmt.Sprintf("/repos/%s", repo), nil)
 	if err != nil {
 		return "", fmt.Errorf("fetch repo %s: %w", repo, err)
 	}

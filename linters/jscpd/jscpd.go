@@ -2,11 +2,14 @@ package jscpd
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/flanksource/gavel/internal/safefs"
 
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/flanksource/clicky"
@@ -116,12 +119,14 @@ func (j *JSCPD) DryRunCommand() (string, []string) {
 	return "jscpd", j.buildArgs("<jscpd-report-tmpdir>")
 }
 
-func (j *JSCPD) Run(ctx commonsContext.Context, task *clicky.Task) ([]models.Violation, error) {
+func (j *JSCPD) Run(ctx commonsContext.Context, task *clicky.Task) (violations []models.Violation, runErr error) {
 	tempDir, err := os.MkdirTemp("", "jscpd-report-*")
 	if err != nil {
 		return nil, fmt.Errorf("failed to create temp dir: %w", err)
 	}
-	defer os.RemoveAll(tempDir)
+	defer func() {
+		runErr = errors.Join(runErr, safefs.SafeRemove(tempDir, safefs.RemoveContext{AllowedRoot: os.TempDir()}))
+	}()
 
 	args := j.buildArgs(tempDir)
 
@@ -154,7 +159,7 @@ func (j *JSCPD) Run(ctx commonsContext.Context, task *clicky.Task) ([]models.Vio
 		return nil, fmt.Errorf("failed to read jscpd report: %w", err)
 	}
 
-	violations, err := j.parseViolations(reportData, j.buildExcludes())
+	violations, err = j.parseViolations(reportData, j.buildExcludes())
 	if err != nil {
 		return nil, err
 	}

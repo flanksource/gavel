@@ -1,6 +1,7 @@
 package snapshots
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -9,7 +10,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/flanksource/gavel/blob"
 	testui "github.com/flanksource/gavel/testrunner/ui"
+	"github.com/flanksource/gavel/traces"
 )
 
 // RunningName is the in-flight pointer file written periodically while a
@@ -20,11 +23,11 @@ const RunningName = "running.json"
 
 // PerRunPrefix is the stem of the per-run timestamped snapshot. The full
 // filename includes a UTC timestamp, e.g. run-2026-04-27T10-43-42Z.json.
-const PerRunPrefix = "run-"
+const PerRunPrefix = traces.RunPrefix
 
 // PerRunTimestampLayout is filesystem-safe (no colons) but still
 // chronologically sortable.
-const PerRunTimestampLayout = "2006-01-02T15-04-05Z"
+const PerRunTimestampLayout = traces.RunTimestampLayout
 
 // Recorder writes periodic snapshots of an in-flight `gavel test` run to
 // .gavel/running.json. A 3-second ticker drives writes; ticks where nothing
@@ -163,10 +166,10 @@ func writeRunningJSON(workDir string, snap *testui.Snapshot) error {
 	return writeJSON(filepath.Join(dir, RunningName), snap)
 }
 
-// SavePerRun writes a per-run timestamped snapshot to .gavel/run-<ts>.json
-// alongside the existing sha-keyed snapshot from Save(). The timestamp uses
-// the run's start time (UTC) so reruns triggered in the same git state still
-// land in distinct files. Returns the absolute path written.
+// SavePerRun writes a per-run timestamped snapshot, run-<ts>.json, to workDir's snapshot store
+// alongside the sha-keyed snapshot from Save(). The timestamp uses the run's start time (UTC) so
+// reruns triggered in the same git state still land under distinct keys. It returns where the
+// snapshot was written (see Location).
 //
 // label distinguishes runs that start within the same second — several fixture
 // verification steps in one document, for instance — and is appended to the
@@ -187,42 +190,42 @@ func SavePerRun(workDir string, snap *testui.Snapshot, started time.Time, label 
 	if started.IsZero() {
 		started = time.Now().UTC()
 	}
-	dir := filepath.Join(workDir, Dir)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", fmt.Errorf("create %s: %w", dir, err)
-	}
-	stem := PerRunPrefix + started.UTC().Format(PerRunTimestampLayout)
-	if label = slugifyLabel(label); label != "" {
-		stem += "-" + label
-	}
-	path, err := uniqueRunPath(dir, stem)
+	store, err := OpenStore(workDir)
 	if err != nil {
 		return "", err
 	}
-	if err := writeJSON(path, snap); err != nil {
+	stem := traces.RunID(started)
+	if label = slugifyLabel(label); label != "" {
+		stem += "-" + label
+	}
+	key, err := uniqueRunKey(store, stem)
+	if err != nil {
 		return "", err
 	}
-	return path, nil
+	if err := putJSON(store, key, snap); err != nil {
+		return "", err
+	}
+	return Location(workDir, key), nil
 }
 
-// uniqueRunPath returns <dir>/<stem>.json, suffixing -2, -3, … when that name
-// is taken. The per-run history is append-only: a second run in the same second
-// must not silently overwrite the first.
-func uniqueRunPath(dir, stem string) (string, error) {
+// uniqueRunKey returns <stem>.json, suffixing -2, -3, … when that key is taken. The per-run
+// history is append-only: a second run in the same second must not silently overwrite the first.
+func uniqueRunKey(store blob.Store, stem string) (string, error) {
 	for i := 1; i < 1000; i++ {
 		name := stem
 		if i > 1 {
 			name = fmt.Sprintf("%s-%d", stem, i)
 		}
-		path := filepath.Join(dir, name+".json")
-		if _, err := os.Stat(path); err != nil {
-			if os.IsNotExist(err) {
-				return path, nil
-			}
-			return "", fmt.Errorf("stat %s: %w", path, err)
+		key := name + ".json"
+		exists, err := store.Exists(context.Background(), key)
+		if err != nil {
+			return "", err
+		}
+		if !exists {
+			return key, nil
 		}
 	}
-	return "", fmt.Errorf("snapshots.SavePerRun: no free filename for %s in %s", stem, dir)
+	return "", fmt.Errorf("snapshots.SavePerRun: no free name for %s", stem)
 }
 
 // slugifyLabel reduces a label to lowercase alphanumerics and dashes so it is

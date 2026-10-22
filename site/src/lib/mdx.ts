@@ -6,6 +6,7 @@ export interface MdxFrontmatter {
   date?: string;
   tags?: string[];
   order?: number;
+  parent?: string;
 }
 
 export interface MdxEntry {

@@ -60,18 +60,6 @@ func (o *TestOrchestrator) runtimeFor(framework parsers.Framework) (processrunti
 	return config.RuntimeFor("test", string(framework), caller)
 }
 
-func (o *TestOrchestrator) preBuildFrameworks(packages map[parsers.Framework][]string) error {
-	for _, framework := range []parsers.Framework{parsers.GoTest, parsers.Ginkgo} {
-		if len(packages[framework]) == 0 {
-			continue
-		}
-		if err := o.preBuildGoPackages(packages[framework], framework); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func (o RunOptions) fixtureRuntime() processruntime.Options {
 	runtime := o.Runtime
 	if o.TestTimeout > 0 {

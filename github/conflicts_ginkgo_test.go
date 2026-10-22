@@ -13,7 +13,7 @@ import (
 // conflictRepo is a throwaway git repository whose `main` and `feature`
 // branches diverge exactly the way a stale PR does, so DetectMergeConflicts can
 // replay a real merge without reaching GitHub. The remote URL is what
-// conflictRemote matches on; nothing is ever fetched from it.
+// RepoRemote matches on; nothing is ever fetched from it.
 type conflictRepo struct {
 	dir string
 }
@@ -120,7 +120,7 @@ var _ = Describe("DetectMergeConflicts", func() {
 			Expect(report.ResolveCommands()).To(Equal([]string{
 				"git fetch origin main",
 				"git switch feature",
-				"git merge origin/main",
+				"git rebase origin/main",
 			}))
 		})
 	})

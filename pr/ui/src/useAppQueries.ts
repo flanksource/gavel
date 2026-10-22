@@ -26,8 +26,12 @@ export interface AppQueryState {
   refreshProjectsAndProcesses: () => Promise<void>;
 }
 
-export function useAppQueries({ enabled, initialConfig }: { enabled: boolean; initialConfig: SearchConfig }): AppQueryState {
+// hostData turns on the host's process statuses and git state, which a hosted
+// dashboard doesn't serve. Projects load either way: a hosted dashboard serves its
+// organization's repositories as projects, its todo workspaces.
+export function useAppQueries({ enabled, hostData, initialConfig }: { enabled: boolean; hostData: boolean; initialConfig: SearchConfig }): AppQueryState {
   const queryClient = useQueryClient();
+  const hostEnabled = enabled && hostData;
   const [processStreamError, setProcessStreamError] = useState('');
   const initialSnapshot = useRef(emptySnapshot(initialConfig)).current;
   const prQuery = useQuery({
@@ -58,7 +62,7 @@ export function useAppQueries({ enabled, initialConfig }: { enabled: boolean; in
   // subscribe through useProcStatus instead.
   const procQuery = useQuery({
     ...procStatusQueryOptions,
-    enabled,
+    enabled: hostEnabled,
     staleTime: bootstrapStaleTime,
     notifyOnChangeProps: ['error'],
   });
@@ -94,7 +98,7 @@ export function useAppQueries({ enabled, initialConfig }: { enabled: boolean; in
   }, [enabled, initialSnapshot, queryClient]);
 
   useEffect(() => {
-    if (!enabled) return;
+    if (!hostEnabled) return;
     const stream = openEventStream('/api/proc/status/stream');
     stream.addEventListener('message', event => {
       try {
@@ -106,11 +110,11 @@ export function useAppQueries({ enabled, initialConfig }: { enabled: boolean; in
     });
     stream.onerror = () => setProcessStreamError(current => current || 'Process status stream disconnected; reconnecting…');
     return () => stream.close();
-  }, [enabled, queryClient]);
+  }, [hostEnabled, queryClient]);
 
   // Git state is pushed, not polled: a generation change invalidates the
   // project git queries wherever they are mounted.
-  const gitStream = useGitStream({ enabled });
+  const gitStream = useGitStream({ enabled: hostEnabled });
 
   const updateSnapshot = useCallback((updater: SnapshotUpdater) => {
     queryClient.setQueryData<Snapshot>(queryKeys.prSnapshot(), current => updater(current ?? initialSnapshot));

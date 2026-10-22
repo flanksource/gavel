@@ -1,7 +1,8 @@
 ---
 title: Prompt overrides
 description: Override Gavel's built-in AI prompts from .gavel.yaml, and the input/output contract each one must honor.
-order: 9
+order: 13
+parent: configuration-reference
 ---
 
 Every AI prompt Gavel ships is overridable from `.gavel.yaml`. Each override is inline `.prompt` text, a structured Captain spec, or a file reference, and layers merge home → git-root → target directory (last write wins):
@@ -24,7 +25,7 @@ todos:
 An override is a [dotprompt](https://google.github.io/dotprompt/) template. A configured-but-missing file is a hard error — Gavel never silently falls back to the built-in default.
 In a structured inline object, `prompt.user` is converted to the template body and the remaining Captain fields become `.prompt` frontmatter. Run `gavel config --resolve` to inspect the resulting source, declared spec, and effective runtime model/backend.
 
-TODO prompt specs also accept `runtimeProfile` beside their flat Captain fields. A `.prompt` frontmatter pin overrides the project's default profile; an explicit run selection overrides the pin. See [Todo runtime profiles](/docs/todo-runtime-profiles) for examples and the full precedence rules.
+TODO prompt specs also accept an ordered `presets` list beside their flat Captain fields. A `.prompt` frontmatter preset pin overrides project defaults; an explicit run selection overrides the pin. See [Runtime presets](/docs/todo-runtime-profiles) for examples and the selection rules. `runtimeProfile` is deprecated and contributes no runtime layers.
 
 ## The contract
 

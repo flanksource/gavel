@@ -79,7 +79,7 @@ var _ = Describe("review comments in the run prompt", func() {
 			{ID: "c-bad", Kind: types.EventKindComment, Body: "broken", Payload: json.RawMessage(`{"anchor":{"line":"x"}}`)},
 		}
 
-		_, _, err := Render([]*types.TODO{todo}, Options{Mode: types.ModeRun})
+		_, _, err := Render([]*types.TODO{todo}, Options{Mode: types.ModeRun, Events: stepEvents["run"]})
 
 		gomega.Expect(err).To(gomega.MatchError(gomega.ContainSubstring("c-bad")))
 	})

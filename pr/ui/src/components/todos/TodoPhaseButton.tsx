@@ -10,6 +10,8 @@ import { TodoRuntimeSummary } from './TodoRuntimeSummary';
 import type { RunContext } from './providers';
 import { runSpec } from './run';
 import { continueBranchLabel, type RunBranchChoice } from './runBranchChoice';
+import { currentAuthMode } from '../../query';
+import { runtimeChoiceVisible } from '../../hostedUI';
 
 /**
  * The todo header's single lifecycle control.
@@ -158,19 +160,19 @@ function stepItems({
       { label: `${entry.label} now`, icon: glyph.icon, onSelect: () => onRunStep(entry.name) },
     ];
     if (context && stepOptions) {
+      if (runtimeChoiceVisible(currentAuthMode())) children.push({
+        label: 'Model',
+        group: 'Runtime',
+        // Required by the type even though a parent with `children` never
+        // fires it — the submenu opens instead.
+        onSelect: () => {},
+        children: models.map(model => ({
+          label: model.id === spec.model ? `✓ ${model.label}` : model.label,
+          title: model.id,
+          onSelect: () => onOptionsChange(entry.name, { ...stepOptions, spec: { ...spec, model: model.id } }),
+        })),
+      });
       children.push(
-        {
-          label: 'Model',
-          group: 'Runtime',
-          // Required by the type even though a parent with `children` never
-          // fires it — the submenu opens instead.
-          onSelect: () => {},
-          children: models.map(model => ({
-            label: model.id === spec.model ? `✓ ${model.label}` : model.label,
-            title: model.id,
-            onSelect: () => onOptionsChange(entry.name, { ...stepOptions, spec: { ...spec, model: model.id } }),
-          })),
-        },
         {
           label: 'Effort',
           group: 'Runtime',
@@ -265,12 +267,12 @@ export function TodoPhaseButton({
   const items: DropdownMenuItem[] = [
     ...(sessionInProgress ? [] : runBranchItems(todo, branchChoice, onRunStep)),
     ...stepItems({ todo, primary, context, options, onRunStep, onOptionsChange }),
-    {
+    ...(runtimeChoiceVisible(currentAuthMode()) ? [{
       label: 'Advanced…',
       icon: UiCog,
       group: 'Configure',
       onSelect: () => onAdvanced(primary.kind === 'step' ? primary.name : 'run'),
-    },
+    }] : []),
   ];
 
   const label = primary.kind === 'step'

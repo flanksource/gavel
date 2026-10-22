@@ -1,17 +1,53 @@
 package fixtures_test
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
+
+	"github.com/flanksource/commons-db/tracing/goprof"
+	"github.com/google/pprof/profile"
 
 	"github.com/flanksource/gavel/fixtures"
 	_ "github.com/flanksource/gavel/fixtures/types"
+	"github.com/flanksource/gavel/testrunner/parsers"
 	testui "github.com/flanksource/gavel/testrunner/ui"
+	"github.com/flanksource/gavel/traces"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
+
+// peakSubtreeRSS is the highest RSS, summed per tick, that pid and the
+// processes under it held in the samples.
+func peakSubtreeRSS(readings traces.ProcessReadings, pid int) uint64 {
+	parents := map[int]int{}
+	for _, node := range readings.Nodes {
+		parents[node.PID] = node.PPID
+	}
+	under := func(member int) bool {
+		for ; member > 1; member = parents[member] {
+			if member == pid {
+				return true
+			}
+		}
+		return false
+	}
+	byTick := map[int64]uint64{}
+	for _, sample := range readings.Samples {
+		if under(sample.PID) {
+			byTick[sample.Tick] += sample.RSSBytes
+		}
+	}
+	var peak uint64
+	for _, rss := range byTick {
+		peak = max(peak, rss)
+	}
+	return peak
+}
 
 var _ = Describe("fixture benchmarking", func() {
 	It("marks a fixture failed and persists its exceeded time limit", func() {
@@ -68,7 +104,9 @@ var _ = Describe("fixture benchmarking", func() {
 		Expect(err).NotTo(HaveOccurred())
 		_, err = baseline.Run()
 		Expect(err).NotTo(HaveOccurred())
-		Expect(os.WriteFile(path, []byte("# Deviation\n\n```bash\nsleep 0.1\n```\n"), 0o600)).To(Succeed())
+		// Far slower than the baseline even when a loaded machine inflates the
+		// baseline's run time well past its 10ms sleep.
+		Expect(os.WriteFile(path, []byte("# Deviation\n\n```bash\nsleep 2\n```\n"), 0o600)).To(Succeed())
 		zero := 0.0
 		current, err := fixtures.NewRunner(fixtures.RunnerOptions{Paths: []string{path}, WorkDir: workDir, Benchmark: true,
 			Baseline: baseline.BenchmarkReport().Path, Limits: fixtures.BenchmarkLimits{MaxDeviationPct: &zero}})
@@ -148,16 +186,27 @@ var _ = Describe("fixture benchmarking", func() {
 		Expect(saved.Performance.Comparison.Deltas).To(HaveLen(1))
 	})
 
-	It("records Clicky process samples for a running child", func() {
+	It("derives each step's peaks from the run's process samples, windowed by its process tree", func() {
 		workDir := GinkgoT().TempDir()
 		path := filepath.Join(workDir, "profile.fixture.md")
-		Expect(os.WriteFile(path, []byte("# Profile\n\n```bash\nsleep 0.8\n```\n"), 0o600)).To(Succeed())
+		Expect(os.WriteFile(path, []byte("# Profile\n\n```bash\nsleep 1.2\n```\n"), 0o600)).To(Succeed())
 		for _, benchmark := range []bool{false, true} {
-			runner, err := fixtures.NewRunner(fixtures.RunnerOptions{Paths: []string{path}, WorkDir: workDir, Benchmark: benchmark, Profile: true})
+			host, err := traces.Open(workDir, traces.RunID(time.Now()))
+			Expect(err).NotTo(HaveOccurred())
+			trace, err := host.StartProcessTrace(traces.ProcessTraceOptions{RootPID: os.Getpid(), Interval: 500 * time.Millisecond})
+			Expect(err).NotTo(HaveOccurred())
+			runner, err := fixtures.NewRunner(fixtures.RunnerOptions{Paths: []string{path}, WorkDir: workDir, Benchmark: benchmark, Profile: true,
+				TraceHost: host, ProcessTrace: trace})
 			Expect(err).NotTo(HaveOccurred())
 			tree, err := runner.Run()
 			Expect(err).NotTo(HaveOccurred())
 			report := runner.BenchmarkReport()
+			readings, err := trace.Readings(context.Background(), traces.ProcessMark{})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(trace.Stop(context.Background())).To(Succeed())
+			Expect(host.Close(context.Background())).To(Succeed())
+			Expect(report.Fixtures[0].Profile.PeakRSSBytes).To(Equal(peakSubtreeRSS(readings, report.Fixtures[0].Profile.PID)),
+				"the step's peak RSS is its command's process tree's highest tick in the samples")
 			Expect(report.Profile).NotTo(BeNil())
 			Expect(report.Path).To(BeAnExistingFile())
 			Expect(report.Profile.Samples).NotTo(BeEmpty())
@@ -180,7 +229,7 @@ var _ = Describe("fixture benchmarking", func() {
 			var sawChild bool
 			for _, sample := range report.Profile.Samples {
 				for _, child := range sample.Processes {
-					sawChild = sawChild || strings.Contains(child.Command, "sleep 0.8")
+					sawChild = sawChild || strings.Contains(child.Command, "sleep 1.2")
 				}
 			}
 			Expect(sawChild).To(BeTrue(), "profile should include the fixture child process")
@@ -193,6 +242,36 @@ var _ = Describe("fixture benchmarking", func() {
 			Expect(saved.Tests[0].Children[0].FixtureProfile.PeakRSSBytes).To(Equal(report.Fixtures[0].Profile.PeakRSSBytes))
 			Expect(string(data)).NotTo(ContainSubstring("\"environment\""))
 		}
+	})
+
+	It("ingests a command's goProfiles into a goprof window that exports as pprof", func() {
+		gavelRoot, err := filepath.Abs("..")
+		Expect(err).NotTo(HaveOccurred())
+		workDir := GinkgoT().TempDir()
+		path := filepath.Join(workDir, "goprof.fixture.md")
+		command := `go -C ` + gavelRoot + ` test ./internal/safefs -count=1 -run TestSafeRemove -memprofilerate=1 -memprofile "$HEAP_PROFILE" -o "$(dirname "$HEAP_PROFILE")/safefs.test"`
+		Expect(os.WriteFile(path, []byte("---\ngoProfiles:\n  heap:\n    file: heap.pprof\n    env: HEAP_PROFILE\n---\n# Heap\n\n```bash\n"+command+"\n```\n"), 0o600)).To(Succeed())
+		host, err := traces.Open(workDir, traces.RunID(time.Now()))
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func() { Expect(host.Close(context.Background())).To(Succeed()) })
+		runner, err := fixtures.NewRunner(fixtures.RunnerOptions{Paths: []string{path}, WorkDir: workDir, Profile: true, TraceHost: host})
+		Expect(err).NotTo(HaveOccurred())
+		tree, runErr := runner.Run()
+		var windows []parsers.TraceResult
+		var failures []string
+		tree.Walk(func(node *fixtures.FixtureNode) {
+			if node.Results != nil {
+				windows = append(windows, node.Results.Traces...)
+				failures = append(failures, node.Results.Error)
+			}
+		})
+		Expect(runErr).NotTo(HaveOccurred(), strings.Join(failures, "\n"))
+		Expect(windows).To(ConsistOf(And(HaveField("Kind", goprof.Kind), HaveField("Count", BeNumerically(">", 0)), HaveField("Error", BeEmpty()))))
+		var exported bytes.Buffer
+		Expect(host.Runtime().Export(context.Background(), windows[0].TraceRef, goprof.PProf.Name, &exported)).To(Succeed())
+		parsed, err := profile.ParseData(exported.Bytes())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(parsed.SampleType).To(ContainElement(HaveField("Type", "inuse_space")))
 	})
 
 	It("saves timings and failure state when a prerequisite fails", func() {

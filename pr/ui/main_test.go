@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/flanksource/gavel/internal/safefs"
 )
 
 // TestMain redirects HOME for the whole package.
@@ -20,6 +22,7 @@ import (
 // it — a test added later inherits the isolation instead of having to remember
 // it.
 func TestMain(m *testing.M) {
+	previousHome, hadHome := os.LookupEnv("HOME")
 	home, err := os.MkdirTemp("", "gavel-prui-home")
 	if err != nil {
 		panic(err)
@@ -42,7 +45,14 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	code := m.Run()
-	os.RemoveAll(home)
+	if hadHome {
+		os.Setenv("HOME", previousHome)
+	} else {
+		os.Unsetenv("HOME")
+	}
+	if err := safefs.SafeRemove(home, safefs.RemoveContext{AllowedRoot: os.TempDir()}); err != nil {
+		panic(err)
+	}
 	os.Exit(code)
 }
 

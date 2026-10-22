@@ -6,10 +6,24 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ConfigEnv } from 'vite';
 import config from '../vite.config';
 
-vi.mock('node:fs', async importOriginal => ({
-  ...await importOriginal<typeof import('node:fs')>(),
-  existsSync: vi.fn(() => true),
-}));
+// The sibling checkout's package.json, so the spec runs without one (CI).
+const siblingExports = {
+  '.': { import: './dist/index.js' },
+  './components': './dist/components.js',
+  './styles.css': './dist/styles.css',
+};
+
+vi.mock('node:fs', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return {
+    ...actual,
+    existsSync: vi.fn(() => true),
+    readFileSync: vi.fn((path: Parameters<typeof actual.readFileSync>[0], ...rest: unknown[]) =>
+      String(path).endsWith('clicky-ui/packages/ui/package.json')
+        ? JSON.stringify({ exports: siblingExports })
+        : (actual.readFileSync as (...args: unknown[]) => unknown)(path, ...rest)),
+  };
+});
 
 async function aliases(command: ConfigEnv['command']) {
   if (typeof config !== 'function') throw new Error('Expected a Vite config factory');
@@ -24,9 +38,8 @@ describe('Clicky UI dependency resolution', () => {
     const localPackage = resolve(dirname(fileURLToPath(import.meta.url)), '../../../../clicky-ui/packages/ui');
     expect(await aliases('serve')).toEqual(expect.arrayContaining([
       { find: /^@flanksource\/clicky-ui$/, replacement: resolve(localPackage, 'src/index.ts') },
-      { find: '@flanksource/clicky-ui/components', replacement: resolve(localPackage, 'src/components.ts') },
-      { find: '@flanksource/clicky-ui/styles.css', replacement: resolve(localPackage, 'dist/styles.css') },
-      { find: '@flanksource/clicky-ui/mdx-editor.css', replacement: resolve(localPackage, 'dist/mdx-editor.css') },
+      { find: /^@flanksource\/clicky-ui\/components$/, replacement: resolve(localPackage, 'src/components.ts') },
+      { find: /^@flanksource\/clicky-ui\/styles\.css$/, replacement: resolve(localPackage, 'dist/styles.css') },
     ]));
   });
 

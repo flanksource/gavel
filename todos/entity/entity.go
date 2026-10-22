@@ -20,9 +20,11 @@ import (
 
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/entity"
+	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/bulk"
 	"github.com/flanksource/gavel/todos/githubpush"
+	"github.com/flanksource/gavel/todos/lifecycle"
 	"github.com/flanksource/gavel/todos/merge"
 	"github.com/flanksource/gavel/todos/query"
 	"github.com/flanksource/gavel/todos/run"
@@ -80,6 +82,44 @@ type Deps struct {
 	// Required by transfer, which names its destination the way the projects
 	// list displays it. Optional: transfer is registered only when it is set.
 	ProjectDir func(ctx context.Context, name string) (string, error)
+	// AttachRun, when set, readies each run's request for where it runs before it resolves:
+	// a hosted organization's run goes to a sandbox.
+	AttachRun func(ctx context.Context, req *run.Request) error
+	// LifecycleHost, when set, loads the lifecycle a TODO in dir runs through. Unset, it is
+	// lifecycle.NewHost: this host's own configuration.
+	LifecycleHost func(ctx context.Context, provider todos.Provider, dir string, kind lifecycle.HostKind) (*lifecycle.Host, error)
+	// LiteralContent, when set, reports whether ctx's operation takes body, plan and
+	// verification text literally, never reading a file: a hosted organization may not read
+	// this host's files.
+	LiteralContent func(ctx context.Context) bool
+	// GitHub, when set, is the account and repository todo, in dir, is pushed to through, repo
+	// naming the repository explicitly. Unset, it is this host's credentials and dir's origin.
+	GitHub func(ctx context.Context, todo *types.TODO, dir, repo string) (github.Options, error)
+}
+
+// literal reports whether ctx's operation takes content text literally.
+func (d Deps) literal(ctx context.Context) bool {
+	return d.LiteralContent != nil && d.LiteralContent(ctx)
+}
+
+// github is the account and repository a TODO in dir is pushed to through.
+func (d Deps) github(ctx context.Context, todo *types.TODO, dir, repo string) (github.Options, error) {
+	if d.GitHub != nil {
+		return d.GitHub(ctx, todo, dir, repo)
+	}
+	return github.Options{WorkDir: dir, Repo: repo}, nil
+}
+
+// ErrNoDefaultWorkspace is returned by a DefaultDir with no workspace to offer, such as a
+// hosted organization's: an action that needs one names it, and a run uses its TODO's own.
+var ErrNoDefaultWorkspace = errors.New("there is no default workspace; name one")
+
+// lifecycleHost loads the lifecycle a TODO in dir runs through.
+func (d Deps) lifecycleHost(ctx context.Context, provider todos.Provider, dir string) (*lifecycle.Host, error) {
+	if d.LifecycleHost != nil {
+		return d.LifecycleHost(ctx, provider, dir, d.hostKind(ctx))
+	}
+	return lifecycle.NewHost(provider, dir, d.hostKind(ctx))
 }
 
 func (d Deps) pushBaseURL() bulk.PushBaseURL {
@@ -331,7 +371,9 @@ func (d Deps) bulkActions() []clicky.EntityBulkAction {
 		action(d, "push", "Push many TODOs to GitHub issues",
 			entity.MCPToolHints{Icon: "github", Group: "GitHub", DefaultPermission: entity.ToolPermissionAsk},
 			bulk.PushFlags{}, func(_ context.Context, flags bulk.PushFlags, _ []string) (bulk.ItemFunc, error) {
-				return bulk.Push(flags, d.pushBaseURL())
+				return bulk.Push(flags, d.pushBaseURL(), func(ctx context.Context, todo *types.TODO) (github.Options, error) {
+					return d.github(ctx, todo, todo.CWD, "")
+				})
 			}),
 
 		// The verify step, which is the only thing that decides whether a TODO
@@ -374,14 +416,15 @@ func (d Deps) bulkActions() []clicky.EntityBulkAction {
 		name := prompt.name
 		actions = append(actions, action(d, name, prompt.short, prompt.hints, bulk.RunFlags{},
 			func(ctx context.Context, flags bulk.RunFlags, batch []string) (bulk.ItemFunc, error) {
+				// The batch's workspace is only a fallback for a TODO whose own isn't absolute.
 				dir, err := d.dir(ctx, query.ListOpts{})
-				if err != nil {
+				if err != nil && !errors.Is(err, ErrNoDefaultWorkspace) {
 					return nil, err
 				}
 				resolve, approvals := d.runtime(ctx)
 				return bulk.StartRun(bulk.RunSpec{
 					Step: name, Flags: flags, Batch: batch, Registry: d.Registry,
-					Dir: dir, Resolve: resolve, Approvals: approvals,
+					Dir: dir, Resolve: resolve, Approvals: approvals, Attach: d.AttachRun,
 				})
 			}))
 	}

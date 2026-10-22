@@ -9,6 +9,7 @@ import (
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/captain/pkg/captainconfig"
 	"github.com/flanksource/captain/pkg/runtimeprofiles"
+	"github.com/flanksource/gavel/pr/provider"
 	"github.com/flanksource/gavel/todos"
 	todoprompt "github.com/flanksource/gavel/todos/prompt"
 	"github.com/flanksource/gavel/todos/types"
@@ -34,6 +35,12 @@ type Host struct {
 	// other step is affected. What it buys is the tier between trusting an agent's
 	// duplicate call and finding out after two TODOs have closed.
 	Preview bool
+	// Remote, when set, runs each step's prompt somewhere else — a sandbox job —
+	// while this host admits, records and classifies the run. Nil runs it here.
+	Remote RemoteRunner
+	// PRs, when set, is the client a linked PR is read through, and its number: a
+	// hosted organization's GitHub App. Nil resolves it with this host's credentials.
+	PRs func(ctx context.Context, url string) (provider.Client, int, error)
 }
 
 // NewHost loads the project's configuration and lifecycle for a work dir.
@@ -42,6 +49,25 @@ func NewHost(provider todos.Provider, workDir string, kind HostKind) (*Host, err
 	if err != nil {
 		return nil, &ConfigurationError{Err: fmt.Errorf("load .gavel.yaml: %w", err)}
 	}
+	saved, _, err := captainconfig.Load()
+	if err != nil {
+		return nil, &ConfigurationError{Err: fmt.Errorf("load Captain defaults: %w", err)}
+	}
+	return newHost(provider, workDir, kind, cfg, &saved)
+}
+
+// NewRepositoryHost is NewHost for a hosted repository checked out at workDir: its
+// configuration is the repository's own .gavel.yaml alone, and none of this host's
+// configuration or Captain defaults apply.
+func NewRepositoryHost(provider todos.Provider, workDir string, kind HostKind) (*Host, error) {
+	cfg, err := verify.LoadRepositoryGavelConfig(workDir)
+	if err != nil {
+		return nil, &ConfigurationError{Err: fmt.Errorf("load .gavel.yaml: %w", err)}
+	}
+	return newHost(provider, workDir, kind, cfg, &captainconfig.Config{})
+}
+
+func newHost(provider todos.Provider, workDir string, kind HostKind, cfg verify.GavelConfig, saved *captainconfig.Config) (*Host, error) {
 	def, err := LoadWith(cfg.Todos.Lifecycle, workDir)
 	if err != nil {
 		return nil, &ConfigurationError{Err: err}
@@ -50,11 +76,7 @@ func NewHost(provider todos.Provider, workDir string, kind HostKind) (*Host, err
 	if err != nil {
 		return nil, &ConfigurationError{Err: err}
 	}
-	saved, _, err := captainconfig.Load()
-	if err != nil {
-		return nil, &ConfigurationError{Err: fmt.Errorf("load Captain defaults: %w", err)}
-	}
-	return &Host{Provider: provider, Def: engine, Config: cfg, WorkDir: workDir, Kind: kind, Saved: &saved}, nil
+	return &Host{Provider: provider, Def: engine, Config: cfg, WorkDir: workDir, Kind: kind, Saved: saved}, nil
 }
 
 // Subject projects the todo onto the variables the lifecycle declares. Every
@@ -68,6 +90,19 @@ func (h *Host) Subject(ctx context.Context, todo *types.TODO) (map[string]any, e
 	if err != nil {
 		return nil, err
 	}
+	return h.subject(todo, plan)
+}
+
+// UnsavedSubject is Subject for a todo that does not exist yet, such as one a
+// create dialog is about to save: it has no plan, so none is read.
+func (h *Host) UnsavedSubject(todo *types.TODO) (map[string]any, error) {
+	if todo == nil {
+		return nil, fmt.Errorf("lifecycle subject: todo is nil")
+	}
+	return h.subject(todo, todos.PlanState{})
+}
+
+func (h *Host) subject(todo *types.TODO, plan todos.PlanState) (map[string]any, error) {
 	dod, err := todos.BuildDefinitionOfDone(todos.DefinitionOfDoneOptions{
 		WorkDir: h.WorkDir, Todos: []*types.TODO{todo},
 	})
@@ -225,14 +260,19 @@ func (h *Host) graderSpec(ctx context.Context, todo *types.TODO) (api.Spec, erro
 
 // classOf is the behaviour class a step runs as — what captain's mode axis and
 // the run's commit/verify invariants key on. The verify step grades without an
-// agent turn; a plan or triage envelope is a read-only pass; everything else
-// implements.
+// agent turn; a built-in prompt runs as the class it is compiled with; a
+// project prompt is a read-only pass when the step asks for plan permissions,
+// and otherwise implements.
 func classOf(step Step) types.RunMode {
 	if step.Name == StepVerify || step.Prompt == promptRefPrefix+StepVerify {
 		return types.ModeVerify
 	}
-	switch step.EnvelopeOrDefault() {
-	case EnvelopePlan, EnvelopeTriage, EnvelopeTriageNew:
+	if name, ok := strings.CutPrefix(strings.TrimSpace(step.Prompt), promptRefPrefix); ok {
+		if class, ok := todoprompt.BuiltinClass(name); ok {
+			return class
+		}
+	}
+	if step.Spec != nil && step.Spec.Permissions.Mode == api.PermissionPlan {
 		return types.ModePlan
 	}
 	return types.ModeRun
@@ -245,14 +285,13 @@ const (
 
 // promptFor resolves a step's prompt reference: `todos.<name>` names a built-in
 // prompt (overridable through `.gavel.yaml todos.<name>`), `file:<path>` a
-// project-owned template rendered with the step's envelope.
+// project-owned template.
 //
 // A verify-class step has no prompt to resolve — it runs the definition of
 // done — and Lifecycle.Validate has already refused a `verify` step that
 // references anything but todos.verify.
 func (h *Host) promptFor(step Step) (todoprompt.Definition, error) {
 	ref := strings.TrimSpace(step.Prompt)
-	envelope := todoprompt.EnvelopeKind(step.EnvelopeOrDefault())
 	switch {
 	case classOf(step) == types.ModeVerify:
 		return todoprompt.Definition{Name: StepVerify, Class: types.ModeVerify}, nil
@@ -265,16 +304,11 @@ func (h *Host) promptFor(step Step) (todoprompt.Definition, error) {
 		if err != nil {
 			return todoprompt.Definition{}, fmt.Errorf("step %s: %w", step.Name, err)
 		}
-		if step.Envelope != "" && definition.Envelope != envelope {
-			return todoprompt.Definition{}, fmt.Errorf("step %s: prompt %s returns a %s envelope, the step declares %s",
-				step.Name, ref, definition.Envelope, envelope)
-		}
 		return definition, nil
 	case strings.HasPrefix(ref, promptFilePrefix):
 		return todoprompt.Definition{
 			Name:     step.Name,
 			Class:    classOf(step),
-			Envelope: envelope,
 			Title:    step.Name,
 			Override: verify.PromptSpec{File: strings.TrimPrefix(ref, promptFilePrefix)},
 			Origin:   ref,

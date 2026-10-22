@@ -46,23 +46,26 @@ func (s *Server) handleTodoBatch(w http.ResponseWriter, r *http.Request) {
 		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("dirs is required and must be an array"))
 		return
 	}
-	if err := validateTodoBatchDirs(*payload.Dirs); err != nil {
+	if err := validateTodoBatchDirs(*payload.Dirs, !s.hosted); err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)
 		return
 	}
 	json.NewEncoder(w).Encode(todoBatchResponse{Results: s.loadTodoBatch(r.Context(), *payload.Dirs)}) //nolint:errcheck
 }
 
-func validateTodoBatchDirs(dirs []string) error {
+// validateTodoBatchDirs checks dirs are distinct, non-blank workspaces and, when paths is set,
+// normalized absolute paths. A hosted dashboard's workspaces are repo:<id> names, which each
+// workspace's load checks against the organization's repositories.
+func validateTodoBatchDirs(dirs []string, paths bool) error {
 	seen := make(map[string]int, len(dirs))
 	for i, dir := range dirs {
 		if dir == "" || strings.TrimSpace(dir) != dir {
 			return fmt.Errorf("dirs[%d] must be a non-blank normalized workspace path", i)
 		}
-		if !filepath.IsAbs(dir) {
+		if paths && !filepath.IsAbs(dir) {
 			return fmt.Errorf("dirs[%d] must be absolute: %q", i, dir)
 		}
-		if filepath.Clean(dir) != dir {
+		if paths && filepath.Clean(dir) != dir {
 			return fmt.Errorf("dirs[%d] must be normalized: %q", i, dir)
 		}
 		if first, ok := seen[dir]; ok {

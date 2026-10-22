@@ -2,12 +2,10 @@ package runners
 
 import (
 	"errors"
-	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/flanksource/clicky/exec"
 	"github.com/flanksource/gavel/testrunner/parsers"
@@ -16,7 +14,7 @@ import (
 
 var errGinkgoDetected = errors.New("ginkgo detected")
 
-// Ginkgo implements the test runner for Ginkgo with --json-report.
+// Ginkgo discovers Ginkgo packages and runs them through go test.
 type Ginkgo struct {
 	workDir   string
 	parser    parsers.ResultParser
@@ -27,7 +25,7 @@ type Ginkgo struct {
 func NewGinkgo(workDir string) *Ginkgo {
 	return &Ginkgo{
 		workDir: workDir,
-		parser:  parsers.NewGinkgoJSON(workDir),
+		parser:  parsers.NewGinkgoGoJSON(workDir),
 	}
 }
 
@@ -141,37 +139,39 @@ func (r *Ginkgo) PackageHasTests(packagePath string) (bool, error) {
 	return r.dirHasGinkgoTests(dir)
 }
 
-// BuildCommand builds the ginkgo command for a package.
+// BuildCommand builds a go test command with an injected Ginkgo reporter.
 func (r *Ginkgo) BuildCommand(packagePath string, extraArgs ...string) (*TestRun, error) {
-	reportPath := filepath.Join(".ginkgo", fmt.Sprintf("ginkgo-report-%s-%d.json", strings.ReplaceAll(packagePath, "/", "-"), time.Now().UnixNano()))
-	if err := os.MkdirAll(filepath.Dir(reportPath), 0755); err != nil {
-		return nil, fmt.Errorf("failed to create report directory: %w", err)
+	overlay, err := BuildGinkgoOverlay(r.workDir, []string{packagePath}, r.buildTags)
+	if err != nil {
+		return nil, err
 	}
-
-	// Build command args: standard flags, then extra args, then package path.
-	// -v enables parseable per-spec lines on stdout so the streaming parser
-	// can surface "in progress" events to the UI in realtime. Node-entered /
-	// exited events (surfaced via the default --show-node-events=true) also
-	// flow through the final JSON report, giving richer post-run timelines.
-	args := []string{
-		"run",
-		"github.com/onsi/ginkgo/v2/ginkgo",
-		fmt.Sprintf("--json-report=%s", reportPath),
-		"-v",
+	mapped, err := GinkgoGoTestArgs(extraArgs)
+	if err != nil {
+		return nil, err
 	}
-	args = append(args, extraArgs...)
+	args := []string{"test", "-json", "-v", "-overlay=" + overlay}
+	var ginkgoArgs []string
+	for _, arg := range mapped {
+		if strings.HasPrefix(arg, "-ginkgo.") {
+			ginkgoArgs = append(ginkgoArgs, arg)
+		} else {
+			args = append(args, arg)
+		}
+	}
 	args = append(args, packagePath)
+	if len(ginkgoArgs) > 0 {
+		args = append(args, "-args")
+		args = append(args, ginkgoArgs...)
+	}
 
-	// Build command using exec.Process (but don't execute)
 	process := exec.NewExec("go", args...).WithCwd(r.workDir).WithProcessGroup()
-	process.SucceedOnNonZero = true // ginkgo returns non-zero on test failures
+	process.SucceedOnNonZero = true
 
 	return &TestRun{
-		Framework:  parsers.Ginkgo,
-		Package:    Package(packagePath),
-		Parser:     r.parser,
-		Process:    process,
-		ReportPath: reportPath,
+		Framework: parsers.Ginkgo,
+		Package:   Package(packagePath),
+		Parser:    r.parser,
+		Process:   process,
 	}, nil
 }
 

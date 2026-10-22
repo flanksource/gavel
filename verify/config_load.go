@@ -2,6 +2,7 @@ package verify
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -61,6 +62,40 @@ func LoadGavelConfig(cwd string) (GavelConfig, error) {
 	}
 	storeGavelConfig(absCwd, layers, cfg)
 	return cloneGavelConfig(cfg)
+}
+
+// LoadGlobalGavelConfig merges the built-in defaults with the user's home config only. Settings the
+// serve host alone may choose, such as storage, read it, so pushed code can't change them through
+// a repository's .gavel.yaml. A missing home config is the defaults.
+func LoadGlobalGavelConfig() (GavelConfig, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return GavelConfig{}, fmt.Errorf("find the home directory for %s: %w", GavelConfigFileName, err)
+	}
+	cfg := DefaultGavelConfig()
+	parsed, err := LoadSingleGavelConfig(filepath.Join(home, GavelConfigFileName))
+	if errors.Is(err, os.ErrNotExist) {
+		return cfg, nil
+	}
+	if err != nil {
+		return GavelConfig{}, err
+	}
+	return MergeGavelConfig(cfg, parsed), nil
+}
+
+// LoadRepositoryGavelConfig is the defaults overlaid with root's own .gavel.yaml and nothing
+// else: a hosted repository's settings, which neither the serve host's home config nor any
+// parent directory may change.
+func LoadRepositoryGavelConfig(root string) (GavelConfig, error) {
+	cfg := DefaultGavelConfig()
+	parsed, err := LoadSingleGavelConfig(filepath.Join(root, GavelConfigFileName))
+	if errors.Is(err, os.ErrNotExist) {
+		return cfg, nil
+	}
+	if err != nil {
+		return GavelConfig{}, err
+	}
+	return MergeGavelConfig(cfg, parsed), nil
 }
 
 // gavelConfigDirs lists the directories whose .gavel.yaml LoadGavelConfig

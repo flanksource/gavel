@@ -1,0 +1,5 @@
+# Keep dependencies, caches and VCS data out of image build contexts.
+**/node_modules
+.git
+.gavel
+**/.gavel

@@ -3,6 +3,8 @@ package ui
 import (
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -18,8 +20,10 @@ func newDevHandler(t *testing.T) http.Handler {
 	}))
 	t.Cleanup(upstream.Close)
 
+	target, err := url.Parse(upstream.URL)
+	require.NoError(t, err)
 	s := &Server{}
-	require.NoError(t, s.SetDevProxy(upstream.URL))
+	s.SetDevProxy(httputil.NewSingleHostReverseProxy(target))
 	return s.Handler()
 }
 
@@ -93,12 +97,4 @@ func TestDevProxyServesEmbeddedProductionAssets(t *testing.T) {
 		assert.NotContains(t, rec.Header().Get("Content-Type"), "text/html")
 		assert.NotContains(t, rec.Body.String(), viteUpstreamMarker)
 	})
-}
-
-func TestSetDevProxyRejectsRelativeURL(t *testing.T) {
-	s := &Server{}
-	err := s.SetDevProxy("localhost:5173")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "absolute")
-	assert.Nil(t, s.devProxy)
 }

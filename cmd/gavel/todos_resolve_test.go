@@ -50,16 +50,18 @@ func TestTodosRunResolvesModelFallbacks(t *testing.T) {
 
 // TestTodosRunMergesAIBaseIntoTodosRun proves the documented `ai:` base reaches
 // todo runs and that todos.run overrides it field-wise rather than replacing
-// the block. The model deliberately does NOT come from `ai:` here: the run
-// prompt's frontmatter declares one, and a prompt's frontmatter outranks the
-// base; the base supplies what the frontmatter leaves unsaid.
+// the block. The model and permissions.mode deliberately do NOT come from `ai:`
+// here: the run prompt's frontmatter declares both, and a prompt's frontmatter
+// outranks the base; the base supplies what the frontmatter leaves unsaid.
 func TestTodosRunMergesAIBaseIntoTodosRun(t *testing.T) {
+	const baseMode, baseApprovalTimeout = api.PermissionAcceptEdits, "45m"
 	dir := isolatedTodosRun(t, `ai:
   budget:
     cost: 4.5
     maxTurns: 3
   permissions:
-    mode: acceptEdits
+    mode: `+string(baseMode)+`
+    approvalTimeout: `+baseApprovalTimeout+`
 todos:
   run:
     budget:
@@ -70,8 +72,20 @@ todos:
 	if resolution.Spec.Budget.Cost != 4.5 {
 		t.Errorf("budget.cost = %v, want the ai: base 4.5", resolution.Spec.Budget.Cost)
 	}
-	if resolution.Spec.Permissions.Mode != api.PermissionAcceptEdits {
-		t.Errorf("permissions.mode = %q, want the ai: base acceptEdits", resolution.Spec.Permissions.Mode)
+	if resolution.Spec.Permissions.ApprovalTimeout != baseApprovalTimeout {
+		t.Errorf("permissions.approvalTimeout = %q, want the ai: base %s", resolution.Spec.Permissions.ApprovalTimeout, baseApprovalTimeout)
+	}
+	var frontmatterMode api.PermissionMode
+	for _, layer := range resolution.Trace {
+		if layer.Name == "todos-run.prompt" {
+			frontmatterMode = layer.Spec.Permissions.Mode
+		}
+	}
+	if frontmatterMode == "" || frontmatterMode == baseMode {
+		t.Fatalf("todos-run.prompt permissions.mode = %q, want one that differs from the ai: base %s", frontmatterMode, baseMode)
+	}
+	if resolution.Spec.Permissions.Mode != frontmatterMode {
+		t.Errorf("permissions.mode = %q, want the prompt frontmatter's %q over the ai: base", resolution.Spec.Permissions.Mode, frontmatterMode)
 	}
 	if resolution.Spec.Budget.MaxTurns != 12 {
 		t.Errorf("budget.maxTurns = %d, want the todos.run override 12", resolution.Spec.Budget.MaxTurns)

@@ -1,0 +1,45 @@
+---
+title: Agent-browser
+description: Execute browser commands using a fixture's session and CDP connection.
+parent: fixture-step-reference
+order: 7
+---
+
+import FixtureKindReference from "../../src/components/site/FixtureKindReference";
+
+Use the `agent-browser` step to execute browser commands using a fixture's session and CDP connection.
+
+## Example
+
+```yaml
+kind: Fixture
+name: Agent-browser example
+steps:
+  - kind: browser
+    id: chrome
+  - id: inspect
+    kind: agent-browser
+    commands:
+      - open http://localhost:8080
+      - snapshot
+    cel: stdout != ""
+```
+
+Save the document as a `.fixture.yaml` file. Inspect it with `gavel fixtures outline <file>`, then execute it with `gavel fixtures <file>` once its prerequisites are available.
+
+## Configuration and prerequisites
+
+Install agent-browser and start your local application before running this fixture. Commands omit the executable name. `session` and `cdp` inherit the browser step's exports; `binary` can choose an explicit executable.
+
+## Results and lifetime
+
+Outputs include command stdout, a snapshot when captured, and per-command results. `observe` specifies the command repeated on wait ticks; use a read-only command such as `snapshot` for polling. `$NAME` values expand from fixture environment variables.
+
+[Browser](/docs/fixture-kind-browser) covers session startup. [Step policies](/docs/fixture-step-policies) covers waiting on observed state.
+
+## Complete step reference
+
+Expand objects and array items to inspect nested fields. This reference includes the common step envelope; its behavior is documented in [Step policies](/docs/fixture-step-policies).
+
+<FixtureKindReference kind="agent-browser" />
+

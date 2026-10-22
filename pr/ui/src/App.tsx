@@ -19,6 +19,9 @@ import { SettingsPage, type SettingsScope } from './components/settings/Settings
 import { ProjectDetailPane, ProjectsSidebar } from './components/ProjectsView';
 import { ProcessManager } from './components/ProcessManager';
 import { ThemeToggle } from './components/ThemeToggle';
+import { UserMenu } from './components/UserMenu';
+import { githubScopeVisible, hostControlsVisible, tabFor, visibleTabs } from './hostedUI';
+import { currentAuthMode } from './query';
 import { ReactGrabHelp } from './components/ReactGrabHelp';
 import { CommandPalette, SearchTrigger } from './components/CommandPalette';
 import { flattenTodos, type TodoEntry } from './components/todos/todoGroup';
@@ -126,7 +129,9 @@ export function App() {
   const [projectResults, setProjectResults] = useState(initialRoute.projectResults);
   const [projectRef, setProjectRef] = useState(initialRoute.projectRef);
   const [todoView, setTodoView] = useState(initialRoute.todoView);
-  const [activeTab, setActiveTab] = useState<Tab>(initialRoute.tab);
+  const authMode = currentAuthMode();
+  const hostControls = hostControlsVisible(authMode);
+  const [activeTab, setActiveTab] = useState<Tab>(() => tabFor(authMode, initialRoute.tab));
   const [menubarTab, setMenubarTab] = useState<MobileTab>('prs');
   const [menubarSessionId, setMenubarSessionId] = useState('');
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -139,12 +144,13 @@ export function App() {
 
   const pathname = typeof window !== 'undefined' ? window.location.pathname : '';
   const isMenubar = pathname === '/menubar';
-  const isProcessesPage = pathname === '/processes';
+  // The processes and new-todo pages act on the host, so a hosted org gets the dashboard.
+  const isProcessesPage = hostControls && pathname === '/processes';
   // The focused /todos/new form is a standalone page (like /menubar, /processes)
   // rather than a view inside the Todos tab, so it can be linked to and returns
   // to its referer. parseRoute reads it as the todos tab with selectedPath="new";
   // the early return below renders the form before any of that matters.
-  const isTodoNewPage = pathname === '/todos/new';
+  const isTodoNewPage = hostControls && pathname === '/todos/new';
   // On mobile the desktop AppShell (split panes, sidebar, toolbars) has no room,
   // so the dashboard falls back to the same compact, single-column menubar
   // dropdown layout the native menubar webview uses. The standalone /processes
@@ -162,14 +168,14 @@ export function App() {
 
   const {
     snapshot,
-    projects,
+    projects: allProjects,
     projectsLoaded,
     projectError,
     processError,
     updateSnapshot,
     refreshProjects,
     refreshProjectsAndProcesses,
-  } = useAppQueries({ enabled: streamsActive, initialConfig });
+  } = useAppQueries({ enabled: streamsActive, hostData: hostControls, initialConfig });
   const {
     error: mutationError,
     markSeen,
@@ -178,6 +184,7 @@ export function App() {
     saveConfig,
     setIncludeBots,
     setShowClosed,
+    setProjectHidden,
   } = useAppMutations();
   const { detail, loading: detailLoading, refresh: refreshDetail } = usePRDetailStream(selected);
   const rawPrs = snapshot.prs;
@@ -208,9 +215,14 @@ export function App() {
   }, [isMenubar]);
 
   const prs = useMemo(() => annotateRoutePaths(rawPrs), [rawPrs]);
+  // /api/projects also returns hidden projects; only the project picker lists
+  // them (so they can be shown again). Everything else sees visible ones.
+  const visibleProjects = useMemo(() => allProjects.filter(project => !project.hidden), [allProjects]);
+  const hiddenDirs = useMemo(() => allProjects.filter(project => project.hidden).map(project => project.dir), [allProjects]);
+  const scopeProjectHidden = allProjects.some(project => project.hidden && project.name === scopeProject);
   const projectScope = useMemo(
-    () => applyProjectScope(projects, prs, scopeProject),
-    [projects, prs, scopeProject],
+    () => applyProjectScope(visibleProjects, prs, scopeProject),
+    [visibleProjects, prs, scopeProject],
   );
   const scopedProjects = projectScope.projects;
   const scopedPRs = projectScope.prs;
@@ -221,7 +233,7 @@ export function App() {
   );
 
   const commitRoute = useCallback((next: RouteState, mode: 'push' | 'replace' = 'push') => {
-    setActiveTab(next.tab);
+    setActiveTab(tabFor(currentAuthMode(), next.tab));
     setSelectedPath(next.selectedPath);
     setScopeProject(next.scopeProject);
     setProjectDiffPath(next.projectDiffPath);
@@ -347,7 +359,7 @@ export function App() {
   useEffect(() => {
     const onPopState = () => {
       const next = parseRoute(window.location);
-      setActiveTab(next.tab);
+      setActiveTab(tabFor(currentAuthMode(), next.tab));
       setSelectedPath(next.selectedPath);
       setScopeProject(next.scopeProject);
       setProjectDiffPath(next.projectDiffPath);
@@ -374,11 +386,18 @@ export function App() {
       saveConfig({ ...config, project: '', repos: [], org: '', all: true });
       return;
     }
-    const project = projects.find(candidate => candidate.name === scopeProject);
+    const project = visibleProjects.find(candidate => candidate.name === scopeProject);
     if (!project) return;
     syncedScopeProject.current = project.name;
     saveConfig({ ...config, project: project.name, repos: project.repos, org: '', all: false });
-  }, [config, projects, projectsLoaded, saveConfig, scopeProject]);
+  }, [config, visibleProjects, projectsLoaded, saveConfig, scopeProject]);
+
+  // A project hidden while it is the scope (from the picker, the Projects
+  // sidebar, or a deep link to one) drops back to All projects, like hideOrg.
+  useEffect(() => {
+    if (!scopeProjectHidden) return;
+    updateScopeConfig({ project: '', repos: Array.from(new Set(visibleProjects.flatMap(project => project.repos))), org: '', all: false });
+  }, [scopeProjectHidden]);
 
   // When PRs arrive (or the URL selection changes), reconcile `selected` with
   // the route's selectedPath. Fetches detail automatically for deep-linked PRs.
@@ -479,6 +498,10 @@ export function App() {
     saveConfig({ ...config, ...partial });
   }
 
+  function hideProject(name: string, hidden: boolean) {
+    setProjectHidden({ name, hidden });
+  }
+
   function updateScopeConfig(partial: Partial<SearchConfig>) {
     if (partial.project !== undefined && partial.project !== scopeProject) {
       syncedScopeProject.current = partial.project;
@@ -550,7 +573,7 @@ export function App() {
 
   // Both halves of the projects tab (the AppShell body sidebar and the detail
   // pane) read one catalog, so it is loaded here rather than inside either one.
-  const projectCatalog = useProjectCatalog({ configured: scopedProjects, selectedName: selectedPath, enabled: activeTab === 'projects' && projectHistory });
+  const projectCatalog = useProjectCatalog({ configured: scopedProjects, hiddenDirs, selectedName: selectedPath, enabled: activeTab === 'projects' && projectHistory });
   // The git work summary shown on every project row refreshes slowly and only
   // matters while the Projects tab is on screen.
   const projectGitSummary = useProjectGitSummary({ enabled: activeTab === 'projects' && visible });
@@ -596,7 +619,8 @@ export function App() {
         unread={unread}
         config={{ ...config, project: scopeProject }}
         projects={scopedProjects}
-        availableProjects={projects}
+        availableProjects={allProjects}
+        onSetProjectHidden={hideProject}
         projectsLoaded={projectsLoaded}
         projectError={projectError}
         projectsByRepo={projectsByRepo}
@@ -630,7 +654,7 @@ export function App() {
   }
 
   if (isTodoNewPage) {
-    return <TodoNewPage projects={projects} projectError={projectError} />;
+    return <TodoNewPage projects={visibleProjects} projectError={projectError} />;
   }
 
   return (
@@ -646,10 +670,12 @@ export function App() {
             {activeTab === 'todos' && <TodoNavbarDensityPicker todos={todos} />}
             {activeTab === 'todos' && <ReactGrabHelp />}
             {activeTab === 'todos' && <TodoNewButton todos={todos} />}
-            <ChatButton label="Open Gavel assistant" />
-            <TaskManagerButton basePath="/api/v1" />
-            <ProcessManager projects={scopedProjects} onProcChanged={onProcChanged} />
-            <OrgChooser config={{ ...config, project: scopeProject }} projects={projects} onChange={updateScopeConfig} />
+            {hostControls && <ChatButton label="Open Gavel assistant" />}
+            {hostControls && <TaskManagerButton basePath="/api/v1" />}
+            {hostControls && <ProcessManager projects={scopedProjects} onProcChanged={onProcChanged} />}
+            {githubScopeVisible(authMode) && (
+              <OrgChooser config={{ ...config, project: scopeProject }} projects={allProjects} onChange={updateScopeConfig} onSetProjectHidden={hideProject} />
+            )}
             <StatusIndicator
               fetchedAt={fetchedAt}
               error={error}
@@ -660,17 +686,20 @@ export function App() {
               onPause={handlePause}
               networkBusy={detailLoading}
             />
-            <Button
-              variant="ghost"
-              size="icon"
-              type="button"
-              onClick={openGlobalSettings}
-              title="Global settings (~/.gavel.yaml)"
-              aria-label="Global settings"
-              className="text-muted-foreground hover:text-foreground"
-            >
-              <UiCog />
-            </Button>
+            {hostControls && (
+              <Button
+                variant="ghost"
+                size="icon"
+                type="button"
+                onClick={openGlobalSettings}
+                title="Global settings (~/.gavel.yaml)"
+                aria-label="Global settings"
+                className="text-muted-foreground hover:text-foreground"
+              >
+                <UiCog />
+              </Button>
+            )}
+            <UserMenu />
             <ThemeToggle />
           </>
         }
@@ -713,6 +742,7 @@ export function App() {
               onChanged={onProcChanged}
               onAdd={openAdd}
               onSettings={openProjectSettings}
+              onHide={project => hideProject(project.name, true)}
             />
           ) : activeTab === 'todos' && !todosFullWidth ? (
             <TodoWorkspaceList todos={todos} projectsLoaded={projectsLoaded} projectError={projectError} />
@@ -796,7 +826,7 @@ export function App() {
         onOpenUUID={openUUIDFromPalette}
       />
 
-      <CreateTodoDialog open={todos.showCreate} onClose={() => todos.setShowCreate(false)} workspaces={projects.filter(project => !!project.dir)} onCreated={todos.created} defaultDir={todos.selected?.dir ?? scopedProjects[0]?.dir} />
+      <CreateTodoDialog open={todos.showCreate} onClose={() => todos.setShowCreate(false)} workspaces={visibleProjects.filter(project => !!project.dir)} onCreated={todos.created} defaultDir={todos.selected?.dir ?? scopedProjects[0]?.dir} />
       <AddProjectDialog open={addOpen} onClose={() => setAddOpen(false)} onSaved={onProcChanged} repoOptions={reposList} />
       {settingsScope && (
         <SettingsPage
@@ -811,7 +841,7 @@ export function App() {
 }
 
 function TabBar({ active, onChange }: { active: Tab; onChange: (t: Tab) => void }) {
-  const tabs: { id: Tab; label: string; icon: ComponentType<IconProps> }[] = [
+  const allTabs: { id: Tab; label: string; icon: ComponentType<IconProps> }[] = [
     { id: 'prs', label: 'PRs', icon: UiGitPr },
     { id: 'projects', label: 'Projects', icon: UiFolderGit },
     { id: 'todos', label: 'Todos', icon: UiCheck },
@@ -820,6 +850,8 @@ function TabBar({ active, onChange }: { active: Tab; onChange: (t: Tab) => void 
     { id: 'prompts', label: 'Prompts', icon: UiRobotAi },
     { id: 'activity', label: 'Activity', icon: UiActivity },
   ];
+  const shown = new Set(visibleTabs(currentAuthMode(), allTabs.map(t => t.id)));
+  const tabs = allTabs.filter(t => shown.has(t.id));
   return (
     <div className="flex gap-1 border-b border-transparent">
       {tabs.map(t => {

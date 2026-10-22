@@ -46,6 +46,7 @@ func gavelConfigSchema() map[string]any {
 			"status":   statusSchema(),
 			"test":     testSchema(),
 			"pr":       prSchema(),
+			"storage":  storageSchema(),
 		},
 	)
 	schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"

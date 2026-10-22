@@ -42,8 +42,7 @@ func renderRunResult(todoRef, step string, outcome *lifecycle.StepOutcome, statu
 	if runErr != nil && strings.TrimSpace(runErr.Error()) != strings.TrimSpace(execution.ErrorMessage) {
 		add(clicky.Text(runErr.Error(), "text-red-600"))
 	}
-	lines = append(lines, renderRunQuestions(execution)...)
-	lines = append(lines, renderRunVerdict(execution)...)
+	lines = append(lines, renderRunEvent(execution)...)
 	if execution.Plan != nil {
 		add(clicky.Text("plan: ", "text-gray-500").Append(string(execution.Plan.Status), "text-blue-600"))
 	}
@@ -98,50 +97,22 @@ func runStatusText(step, status string) clickyapi.Text {
 	return prefix.Add(types.Status(status).Pretty())
 }
 
-// renderRunQuestions prints what an ask outcome is blocked on. An ask used to
-// print "finished — ask" and swallow the questions themselves, leaving the
-// operator to go and read the TODO to find out what was being asked.
-func renderRunQuestions(execution *todos.ExecutionResult) []string {
-	if execution.EndStatus != types.EndAsk || len(execution.Questions) == 0 {
+// renderRunEvent prints the event the run reported and the writes its todo
+// tools made — the run's changes landed as it went, so this is the record of
+// what changed, not a request.
+func renderRunEvent(execution *todos.ExecutionResult) []string {
+	if execution.Envelope == nil {
 		return nil
 	}
-	lines := []string{clicky.Text("Questions blocking progress:", "text-purple-600 font-bold").ANSI()}
-	for i, question := range execution.Questions {
-		lines = append(lines, clicky.Text(fmt.Sprintf("  %d. ", i+1), "text-gray-500").
-			Append(strings.TrimSpace(question.Text), "text-purple-600").ANSI())
-		if context := strings.TrimSpace(question.Context); context != "" {
-			lines = append(lines, clicky.Text("     "+context, "text-gray-500").ANSI())
+	line := clicky.Text("event: ", "text-gray-500").Append(execution.Envelope.Event, "text-blue-600 font-bold")
+	if len(execution.ToolWrites) > 0 {
+		writes := make([]string, len(execution.ToolWrites))
+		for i, write := range execution.ToolWrites {
+			writes[i] = fmt.Sprintf("%s %s", write.Name, write.Ref)
 		}
-		for _, option := range question.Options {
-			lines = append(lines, clicky.Text("     - "+strings.TrimSpace(option), "text-gray-600").ANSI())
-		}
+		line = line.Append("  writes: "+strings.Join(writes, ", "), "text-gray-500")
 	}
-	return lines
-}
-
-// renderRunVerdict prints a triage run's verdict and the edits it asked gavel to
-// make. The envelope is a request, not a record: this is printed whether or not
-// the writes that follow it land, which is the point.
-func renderRunVerdict(execution *todos.ExecutionResult) []string {
-	env := execution.Triage
-	if env == nil {
-		return nil
-	}
-	line := clicky.Text("triage verdict: ", "text-gray-500").Append(string(env.Verdict), "text-blue-600 font-bold")
-	if fields := todos.TriageEnvelopeFields(env); len(fields) > 0 {
-		line = line.Append("  writes: "+strings.Join(fields, ", "), "text-gray-500")
-	}
-	if folds := env.RetirementTargets(); len(folds) > 0 {
-		line = line.Append("  folds: "+strings.Join(folds, ", "), "text-gray-500")
-	}
-	if duplicate := strings.TrimSpace(env.DuplicateOf); duplicate != "" {
-		line = line.Append("  duplicate of: "+duplicate, "text-gray-500")
-	}
-	lines := []string{line.ANSI()}
-	if comment := strings.TrimSpace(env.Comment); comment != "" {
-		lines = append(lines, clicky.Text("  "+comment, "text-gray-600").ANSI())
-	}
-	return lines
+	return []string{line.ANSI()}
 }
 
 // renderRunDoD prints the definition-of-done verdict, with the reason the last
@@ -171,7 +142,7 @@ func renderRunDoD(execution *todos.ExecutionResult) []string {
 // word "failed".
 func renderUndecodedResponse(execution *todos.ExecutionResult) []string {
 	response := strings.TrimSpace(execution.ResponseText)
-	if execution.EndStatus != "" || response == "" {
+	if execution.Envelope != nil || response == "" {
 		return nil
 	}
 	return []string{

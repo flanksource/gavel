@@ -1,14 +1,20 @@
 package lifecycle
 
 import (
+	"fmt"
+	"maps"
+	"slices"
 	"sort"
 	"strings"
 
 	captainai "github.com/flanksource/captain/pkg/ai"
 	"github.com/flanksource/captain/pkg/ai/agent"
+	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/commons-db/shell"
 	"github.com/flanksource/gavel/commit"
+	"github.com/flanksource/gavel/pr/provider"
 	"github.com/flanksource/gavel/todos"
+	"github.com/flanksource/gavel/todos/tools"
 	"github.com/flanksource/gavel/todos/types"
 )
 
@@ -29,28 +35,107 @@ import (
 type HookOptions struct {
 	Meta todos.RunStartMetadata
 	pr   *prExecution
+	// tools is the run's tool state, where a PR turn reads the threads it
+	// reported addressed.
+	tools *tools.Run
 }
 
 func (h *Host) Hooks(todo *types.TODO, req captainai.Request, opts HookOptions) []any {
-	var hooks []any
+	return h.runHooks(todo, req, opts).build(opts.pr.forRun(opts.tools))
+}
+
+// RunHooks is the data gavel's hooks for one run are built from, so a run that executes in a
+// sandbox rebuilds the same hooks there. It crosses to the sandbox as JSON.
+type RunHooks struct {
+	// Commits are the commit policies the resolved spec declares, and Meta the trailers the
+	// commits carry.
+	Commits []api.Commit            `json:"commits,omitempty"`
+	Meta    commit.AgentRunMetadata `json:"meta"`
+	Env     map[string]string       `json:"env,omitempty"`
+	Labels  map[string]string       `json:"labels,omitempty"`
+	// PR is the linked PR a step works on; nil for a todo linked to none.
+	PR *PRHooks `json:"pr,omitempty"`
+}
+
+// PRHooks is the data the hook for a step on a linked PR is rebuilt from: the PR, its source
+// branch at the head the step starts from, whether the step writes to it, the checkout the
+// step works in, the step's envelope events a turn's result is held to, and the review threads
+// a turn may report addressed.
+type PRHooks struct {
+	URL         string             `json:"url"`
+	Number      int                `json:"number"`
+	Target      provider.RunTarget `json:"target"`
+	Write       bool               `json:"write"`
+	WorkDir     string             `json:"workDir"`
+	Events      []string           `json:"events,omitempty"`
+	OpenThreads []string           `json:"openThreads,omitempty"`
+}
+
+func (h *Host) runHooks(todo *types.TODO, req captainai.Request, opts HookOptions) RunHooks {
+	hooks := RunHooks{
+		Env:    runEnvFor(todo, firstNonEmpty(req.SessionID, opts.Meta.SessionID)),
+		Labels: runLabelsFor(todo, opts.Meta, h.WorkDir),
+	}
 	if req.Workflow != nil && len(req.Workflow.Commits) > 0 {
-		options := commit.AgentHooksOptions{
-			Commits: req.Workflow.Commits,
-			Meta:    commit.AgentRunMetadata{IssueID: todo.ID, SessionID: opts.Meta.SessionID},
+		hooks.Commits = req.Workflow.Commits
+		hooks.Meta = commit.AgentRunMetadata{IssueID: todo.ID, SessionID: opts.Meta.SessionID}
+	}
+	if pr := opts.pr; pr != nil && todo.PR != nil {
+		hooks.PR = &PRHooks{
+			URL: todo.PR.URL, Number: pr.number, Target: *pr.target, Write: pr.write, WorkDir: pr.workDir,
+			Events: pr.events, OpenThreads: slices.Sorted(maps.Keys(pr.openThreads)),
 		}
-		if opts.pr != nil && opts.pr.write {
-			options.PRTarget, options.ShouldCommit = opts.pr.target, completedPRTurn
+	}
+	return hooks
+}
+
+// Build makes the hooks, in the order Hooks documents, and the tools that must run beside them
+// rather than where the run's other tools do: pr_thread_addressed records the threads the PR
+// hook resolves after each turn's push, so in a sandbox job it runs in the job. A linked PR's
+// client is resolved where the hooks are built: inside a sandbox job, that is serve's run API.
+func (r RunHooks) Build() ([]any, []api.ToolDefinition, error) {
+	if r.PR == nil {
+		return r.build(nil), nil, nil
+	}
+	client, number, err := provider.ResolveURL(provider.Options{WorkDir: r.PR.WorkDir}, r.PR.URL)
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolve linked PR %s: %w", r.PR.URL, err)
+	}
+	if number != r.PR.Number {
+		return nil, nil, fmt.Errorf("linked PR %s is #%d, not #%d", r.PR.URL, number, r.PR.Number)
+	}
+	target := r.PR.Target
+	open := make(map[string]bool, len(r.PR.OpenThreads))
+	for _, id := range r.PR.OpenThreads {
+		open[id] = true
+	}
+	run := &tools.Run{}
+	pr := &prExecution{
+		client: client, number: number, target: &target, workDir: r.PR.WorkDir, write: r.PR.Write,
+		events: r.PR.Events, openThreads: open, tools: run,
+	}
+	return r.build(pr), tools.Sets()[tools.SetPR](tools.Options{Run: run, PRWrite: r.PR.Write}), nil
+}
+
+// build makes the hooks for a run, with pr's commit target and its own hook when the todo is
+// linked to a PR.
+func (r RunHooks) build(pr *prExecution) []any {
+	var hooks []any
+	if len(r.Commits) > 0 {
+		options := commit.AgentHooksOptions{Commits: r.Commits, Meta: r.Meta}
+		if pr != nil && pr.write {
+			options.PRTarget, options.ShouldCommit = pr.target, pr.completedTurn
 		}
 		hooks = append(hooks, commit.AgentHooks(options)...)
 	}
-	if opts.pr != nil {
-		hooks = append(hooks, opts.pr)
+	if pr != nil {
+		hooks = append(hooks, pr)
 	}
-	if env := runEnvFor(todo, firstNonEmpty(req.SessionID, opts.Meta.SessionID)); len(env) > 0 {
-		hooks = append(hooks, &runEnv{env: env})
+	if len(r.Env) > 0 {
+		hooks = append(hooks, &runEnv{env: r.Env})
 	}
-	if labels := runLabelsFor(todo, opts.Meta, h.WorkDir); len(labels) > 0 {
-		hooks = append(hooks, &runLabels{labels: labels})
+	if len(r.Labels) > 0 {
+		hooks = append(hooks, &runLabels{labels: r.Labels})
 	}
 	return hooks
 }

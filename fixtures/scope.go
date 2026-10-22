@@ -8,6 +8,9 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
+
+	"github.com/flanksource/gavel/internal/safefs"
 
 	"github.com/flanksource/gomplate/v3"
 )
@@ -27,6 +30,7 @@ type StepScope struct {
 	background []namedBackground
 	tmpDir     string
 	failed     string
+	closed     bool
 }
 
 // MarkFailed records the first typed step that failed; later steps are skipped.
@@ -71,6 +75,9 @@ func (s *StepScope) Context() context.Context { return s.ctx }
 func (s *StepScope) TempDir() (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return "", fmt.Errorf("fixture scope is closed")
+	}
 	if s.tmpDir != "" {
 		return s.tmpDir, nil
 	}
@@ -79,7 +86,9 @@ func (s *StepScope) TempDir() (string, error) {
 		return "", fmt.Errorf("create fixture temp dir: %w", err)
 	}
 	s.tmpDir = dir
-	s.cleanups = append([]namedCleanup{{step: "tmp", fn: func(context.Context) error { return os.RemoveAll(dir) }}}, s.cleanups...)
+	s.cleanups = append([]namedCleanup{{step: "tmp", fn: func(context.Context) error {
+		return safefs.SafeRemove(dir, safefs.RemoveContext{AllowedRoot: os.TempDir()})
+	}}}, s.cleanups...)
 	return dir, nil
 }
 
@@ -109,17 +118,33 @@ func (s *StepScope) StepOutputs() map[string]any {
 }
 
 // AddCleanup registers fn to run at teardown, after every later one.
-func (s *StepScope) AddCleanup(step string, fn func(context.Context) error) {
+func (s *StepScope) AddCleanup(step string, fn func(context.Context) error) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.cleanups = append(s.cleanups, namedCleanup{step: step, fn: fn})
+	if !s.closed {
+		s.cleanups = append(s.cleanups, namedCleanup{step: step, fn: fn})
+		s.mu.Unlock()
+		return nil
+	}
+	s.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return fn(ctx)
 }
 
-// AddBackground registers a running background step.
-func (s *StepScope) AddBackground(step string, handle BackgroundHandle) {
+// AddBackground registers a running background step, or stops it immediately
+// if teardown has already begun.
+func (s *StepScope) AddBackground(step string, handle BackgroundHandle) *FixtureResult {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.background = append(s.background, namedBackground{step: step, handle: handle})
+	if !s.closed {
+		s.background = append(s.background, namedBackground{step: step, handle: handle})
+		s.mu.Unlock()
+		return nil
+	}
+	s.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	result := handle.Stop(ctx)
+	return &result
 }
 
 // Teardown stops background steps (newest first) and returns their verdicts,
@@ -127,6 +152,11 @@ func (s *StepScope) AddBackground(step string, handle BackgroundHandle) {
 // when an earlier one fails; their errors are joined.
 func (s *StepScope) Teardown(ctx context.Context) ([]FixtureResult, error) {
 	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil, nil
+	}
+	s.closed = true
 	background, cleanups := s.background, s.cleanups
 	s.background, s.cleanups = nil, nil
 	s.mu.Unlock()

@@ -28,6 +28,9 @@ import { TodoPRStatus } from './TodoPRStatus';
 import { TodoLinks } from './TodoLinks';
 import { useTodoDetail } from './useTodoDetail';
 import { EditPencil, ExternalIssueLink, PriorityMenu, StatusMenu, TodoSection } from './TodoDetailFields';
+import { VisibilityMenu } from './TodoVisibility';
+import { currentAuthMode } from '../../query';
+import { todoVisibilityVisible } from '../../hostedUI';
 import { HeaderActionsMenu } from './TodoDetailActions';
 import type { TodoDetailView } from '../../routes';
 
@@ -306,6 +309,13 @@ export function TodoDetail(props: TodoDetailProps) {
                 compact
                 onSelect={priority => patch({ priority })}
               />
+              {todoVisibilityVisible(currentAuthMode()) && (
+                <VisibilityMenu
+                  value={todo.visibility ?? 'private'}
+                  disabled={busy}
+                  onSelect={visibility => patch({ visibility })}
+                />
+              )}
               <Button
                 variant="ghost"
                 type="button"

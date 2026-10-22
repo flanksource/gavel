@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { TodoChildDisposition, TodoItem, TodoPriority, TodoRunOptions, TodoStatus } from '../../types';
+import type { TodoChildDisposition, TodoItem, TodoPriority, TodoRunOptions, TodoStatus, TodoVisibility } from '../../types';
 import { openChildrenOf } from './todoFamily';
 import type { TodoDetailProps } from './TodoDetail';
 import { useSessionStats } from './TodoSessionTimer';
@@ -141,6 +141,7 @@ export function useTodoDetail({ todo, dir, onChanged, onDeleted, workspaces = []
     parent?: string;
     pr?: TodoItem['pr'];
     clearPR?: boolean;
+    visibility?: TodoVisibility;
   } & LineCommentPatch): Promise<boolean> {
     if (!todo || busy) return false;
     setError('');

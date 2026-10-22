@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
+	captaincli "github.com/flanksource/captain/pkg/cli"
 	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/types"
@@ -51,5 +52,32 @@ var _ = Describe("plan protocol normalization", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(path).To(BeEmpty())
 		Expect(content).To(Equal("# Recovered plan"))
+	})
+
+	Context("for a workspace whose runs execute in sandboxes", func() {
+		sandboxed := &Provider{sandboxedRuns: true}
+
+		It("takes the plan the run returned, never a file the run named on this host", func() {
+			onServe := filepath.Join(GinkgoT().TempDir(), "secrets.md")
+			Expect(os.WriteFile(onServe, []byte("serve's own file"), 0o600)).To(Succeed())
+			content, path, err := sandboxed.planResultContent(context.Background(), &todos.ExecutionResult{
+				Plan: &types.PlanResult{Path: onServe, Content: "# Returned plan"},
+			}, "")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(path).To(BeEmpty())
+			Expect(content).To(Equal("# Returned plan"))
+		})
+
+		It("recovers no plan from the run's session, whose transcript the run wrote", func() {
+			original := resolveSessionPlan
+			DeferCleanup(func() { resolveSessionPlan = original })
+			resolveSessionPlan = func(context.Context, *captaindb.DB, string) (string, string, error) {
+				Fail("a sandboxed run's plan is never recovered from its session")
+				return "", "", nil
+			}
+			_, _, err := sandboxed.planResultContent(context.Background(), nil, "plan-session")
+			Expect(err).To(MatchError(captaincli.ErrNoPlan))
+			Expect(err).To(MatchError(ContainSubstring("a run in a sandbox returns its plan as content, through todo_plan or its native plan, and this one returned none")))
+		})
 	})
 })

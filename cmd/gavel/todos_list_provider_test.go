@@ -87,7 +87,7 @@ func TestRunTodosListAllAggregatesRegisteredProjects(t *testing.T) {
 	firstDir := seedProjectTodos(t, "First pending", "First done")
 	secondDir := seedProjectTodos(t, "Second pending", "Second done")
 	oldLoad := loadTodoProjects
-	loadTodoProjects = func() ([]ui.Project, error) {
+	loadTodoProjects = func(ui.LoadProjectsOptions) ([]ui.Project, error) {
 		return []ui.Project{
 			{Name: "first", Dir: firstDir},
 			{Name: "second", Dir: secondDir},
@@ -143,7 +143,7 @@ func TestRunTodosListAllReturnsEveryDatabaseOpenAndListFailure(t *testing.T) {
 			return nil, nil
 		}
 	}
-	loadTodoProjects = func() ([]ui.Project, error) {
+	loadTodoProjects = func(ui.LoadProjectsOptions) ([]ui.Project, error) {
 		return []ui.Project{
 			{Name: "open project", Dir: openDir},
 			{Name: "list project", Dir: listDir},

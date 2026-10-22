@@ -10,7 +10,6 @@ import (
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/commons/properties"
 	"github.com/flanksource/gavel/fixtures"
-	"github.com/flanksource/gavel/fixtures/record"
 	"github.com/flanksource/gavel/processruntime"
 	"github.com/flanksource/gavel/verify"
 	"github.com/samber/lo"
@@ -37,9 +36,9 @@ func runFixtures(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("load .gavel.yaml: %w", err)
 	}
 
-	recordSpec, err := record.Parse(fixturesRecord)
+	defaultTraces, err := fixtures.ParseTraces(fixturesTraces)
 	if err != nil {
-		return fmt.Errorf("--record: %w", err)
+		return fmt.Errorf("--traces: %w", err)
 	}
 	limits := fixtures.BenchmarkLimits{MaxDurationMS: float64(fixturesMaxTime) / 1e6,
 		MaxSQLDurationMS: float64(fixturesMaxSQLTime) / 1e6, MaxSQLQueryMS: float64(fixturesMaxSQLQuery) / 1e6}
@@ -79,7 +78,12 @@ func runFixtures(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	archive, err := verify.OpenWorkspaceStorage(cmd.Context(), wd)
+	if err != nil {
+		return err
+	}
 	runnerOpts := fixtures.RunnerOptions{
+		TraceArchive:   archive,
 		ProcessRuntime: runtime,
 		Args:           runtimeArgs,
 		Context:        cmd.Context(),
@@ -92,7 +96,7 @@ func runFixtures(cmd *cobra.Command, args []string) error {
 		Logger:         logger.StandardLogger(),
 		ExecutablePath: executablePath,
 		UpdateGolden:   fixturesUpdateGolden,
-		Record:         recordSpec,
+		DefaultTraces:  defaultTraces,
 		Benchmark:      fixturesBenchmark,
 		Baseline:       fixturesBaseline,
 		Profile:        fixturesProfile,

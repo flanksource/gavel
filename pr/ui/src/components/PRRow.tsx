@@ -16,7 +16,7 @@ import {
   UiGitBranch,
 } from '@flanksource/clicky-ui/icons';
 import type { PRItem, PRSyncStatus, GavelResultsSummary } from '../types';
-import { reviewColor, checkSummaryText } from '../utils';
+import { reviewColor, checkSummaryText, timedOutNote } from '../utils';
 import { SyncIndicator } from './SyncIndicator';
 import { Avatar } from './Avatar';
 import { RelativeTime } from './RelativeTime';
@@ -35,7 +35,7 @@ function prStatusIcon(pr: PRItem, gavel?: GavelResultsSummary): { icon: Componen
   // test suite still shows up as a red PR row.
   if (gavel) {
     if (gavel.testsFailed > 0) {
-      return { icon: UiCircleXFilled, color: 'text-red-600', title: `${gavel.testsFailed} gavel test${gavel.testsFailed !== 1 ? 's' : ''} failed` };
+      return { icon: UiCircleXFilled, color: 'text-red-600', title: `${gavel.testsFailed} gavel test${gavel.testsFailed !== 1 ? 's' : ''} failed${timedOutNote(gavel)}` };
     }
     if (gavel.lintViolations > 0) {
       return { icon: UiWarningTriangle, color: 'text-yellow-600', title: `${gavel.lintViolations} lint violation${gavel.lintViolations !== 1 ? 's' : ''}` };
@@ -86,7 +86,7 @@ function GavelBadges({ g }: { g: GavelResultsSummary }) {
       icon: UiError,
       color: 'text-red-600',
       count: g.testsFailed,
-      title: `${g.testsFailed} test${g.testsFailed !== 1 ? 's' : ''} failed`,
+      title: `${g.testsFailed} test${g.testsFailed !== 1 ? 's' : ''} failed${timedOutNote(g)}`,
     });
   }
   if (g.testsSkipped > 0) {

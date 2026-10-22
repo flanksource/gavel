@@ -1,5 +1,5 @@
 import type React from 'react';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RunContext } from './providers';
 import type { TodoItem } from '../../types';
@@ -7,6 +7,7 @@ import { LIFECYCLE_MOCK_DRAFT } from './lifecycleMock';
 import { StatefulTodoDetail } from './todoDetailTestHarness';
 import { useSessionStats } from './TodoSessionTimer';
 import { queryTestWrapper } from './queryTestWrapper';
+import { setAuthMode } from '../../query';
 
 // This test targets only the review/ask guard on Resume/Run/Plan — not full
 // TodoDetail coverage — so every tab-gated or unconditionally-rendered sibling
@@ -530,5 +531,41 @@ describe('TodoDetail verification badge', () => {
     const sessionTab = () => screen.getByText('Session').closest('button')!;
     await waitFor(() => expect(sessionTab().querySelector('span:last-of-type')?.textContent).toBe('3'));
     expect(sessionTab().getAttribute('title')).toBe('3 attempts');
+  });
+});
+
+describe('TodoDetail visibility', () => {
+  afterEach(() => setAuthMode('none', vi.fn()));
+
+  it('lets a hosted org member share a private todo with the organization', async () => {
+    setAuthMode('clerk', vi.fn());
+    await renderDetail({ ...baseTodo, visibility: 'private' });
+    expect(screen.getByRole('button', { name: 'Update todo visibility' }).textContent).toMatch(/private/i);
+    fireEvent.click(screen.getByRole('button', { name: /Public: everyone in the organization/ }));
+    await waitFor(() => {
+      const patched = vi.mocked(fetch).mock.calls.find(([input, init]) => String(input).startsWith('/api/todos/item') && init?.method === 'PATCH');
+      expect(patched).toBeTruthy();
+      expect(JSON.parse(String(patched![1]!.body))).toMatchObject({ ref: baseTodo.ref, visibility: 'public' });
+    });
+  });
+
+  it('shows no visibility on a local dashboard', async () => {
+    await renderDetail(baseTodo);
+    expect(screen.queryByRole('button', { name: 'Update todo visibility' })).toBeNull();
+  });
+});
+
+describe('TodoDetail hosted runs', () => {
+  afterEach(() => setAuthMode('none', vi.fn()));
+
+  it('offers a hosted org no model or advanced run options', async () => {
+    await renderDetail(baseTodo);
+    expect(screen.queryAllByRole('button', { name: /Advanced/ }).length).toBeGreaterThan(0);
+
+    cleanup();
+    setAuthMode('clerk', vi.fn());
+    await renderDetail(baseTodo);
+    expect(screen.queryAllByRole('button', { name: /Advanced/ })).toEqual([]);
+    expect(screen.queryByRole('button', { name: 'Model' })).toBeNull();
   });
 });

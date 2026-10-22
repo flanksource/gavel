@@ -12,7 +12,7 @@ const require = createRequire(import.meta.url);
 export default defineConfig({
   plugins: [react()],
   resolve: {
-    dedupe: ['react', 'react-dom', '@tanstack/react-query'],
+    dedupe: ['react', 'react-dom', '@tanstack/react-query', '@flanksource/clicky-ui'],
     alias: [
       { find: '@flanksource/gavel/testrunner/hooks', replacement: resolve(here, '../../testrunner/ui/src/hooks.ts') },
       { find: /^react$/, replacement: require.resolve('react') },

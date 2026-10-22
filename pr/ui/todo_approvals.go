@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/flanksource/captain/pkg/ai/approval"
 	"github.com/flanksource/captain/pkg/api"
 	captaindb "github.com/flanksource/captain/pkg/database"
+	"github.com/flanksource/gavel/tenant"
+	"github.com/flanksource/gavel/todos/native"
 	"github.com/google/uuid"
 )
 
@@ -213,4 +216,69 @@ func isQuestionRequest(request captaindb.TurnRequest) (bool, error) {
 		return request.Request["tool"] == "AskUserQuestion", nil
 	}
 	return kind == api.ApprovalKindQuestion, nil
+}
+
+// approvalStore is the Captain store dir's runs, and their approvals, are recorded in, with the
+// status to answer when there is none.
+func (s *Server) approvalStore(ctx context.Context, dir string) (*captaindb.DB, int, error) {
+	if !s.hosted {
+		resolved, err := s.resolveTodoDir(dir)
+		if err != nil {
+			return nil, http.StatusBadRequest, err
+		}
+		store, err := todoApprovalStore(ctx, resolved)
+		if err != nil {
+			return nil, http.StatusServiceUnavailable, err
+		}
+		return store, 0, nil
+	}
+	provider, _, err := s.todoProviderContext(ctx, todoSource{Dir: dir})
+	if err != nil {
+		return nil, todoErrorStatus(http.StatusBadRequest, err), err
+	}
+	native, ok := provider.(captainSessionProvider)
+	if !ok || native.Captain() == nil {
+		return nil, http.StatusServiceUnavailable, fmt.Errorf("%w: the TODO runtime for %s cannot record tool approvals", errNoCaptainDatabase, dir)
+	}
+	return native.Captain(), 0, nil
+}
+
+// requireSessionAccess fails unless session, a run's admission session or its agent's session,
+// belongs to one of this organization's todos, which the request's user may see or, with change,
+// change. A dashboard serving the host's projects reaches every session.
+func (s *Server) requireSessionAccess(ctx context.Context, session uuid.UUID, change bool) error {
+	if !s.hosted {
+		return nil
+	}
+	if s.workspaces == nil {
+		return errNoHostedWorkspaces
+	}
+	var issue struct {
+		ID              uuid.UUID
+		CreatedByUserID *uuid.UUID
+		Visibility      string
+	}
+	result := s.orgDB.WithContext(ctx).Raw(`
+		SELECT issue.id, issue.created_by_user_id, issue.visibility
+		FROM captain_prompt_runs AS run
+		JOIN todo_issue_prompt_runs AS link ON link.prompt_run_id = run.id
+		JOIN todo_issues AS issue ON issue.id = link.issue_id
+		JOIN todo_workspaces AS workspace ON workspace.id = issue.workspace_id
+		WHERE (run.session_id = ? OR run.execution_session_id = ?) AND workspace.org_id = ?
+		LIMIT 1`, session, session, s.orgID()).Scan(&issue)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return fmt.Errorf("%w: session %s isn't a run of this organization's todos", native.ErrNotFound, session)
+	}
+	if change {
+		return native.RequireChangeable(ctx, issue.ID, issue.CreatedByUserID)
+	}
+	scope := tenant.FromContext(ctx)
+	if scope.UserID != nil && issue.Visibility != string(native.VisibilityPublic) &&
+		(issue.CreatedByUserID == nil || *issue.CreatedByUserID != *scope.UserID) {
+		return fmt.Errorf("%w: session %s isn't a run of this organization's todos", native.ErrNotFound, session)
+	}
+	return nil
 }

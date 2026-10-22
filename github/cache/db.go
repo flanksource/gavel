@@ -4,12 +4,17 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/blob"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/service"
+	"github.com/flanksource/gavel/tenant"
+	"github.com/flanksource/gavel/verify"
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
@@ -30,11 +35,30 @@ const (
 // Store wraps the underlying postgres connection. A nil Store (or a Store
 // returned in disabled mode) is safe to call — every operation becomes a
 // pass-through, so callers don't need to branch on whether caching is
-// configured.
+// configured. Every read and write is scoped to one organization: the local
+// org unless the Store came from ForOrg.
 type Store struct {
 	db       *database.DB
 	disabled bool
-	writeMu  sync.Mutex
+	writeMu  *sync.Mutex
+	org      uuid.UUID
+	// blobs holds job logs, each organization's under orgs/<org>/.
+	blobs blob.Store
+}
+
+func newStore(db *database.DB) *Store {
+	return &Store{db: db, writeMu: &sync.Mutex{}, org: tenant.LocalOrgID}
+}
+
+// ForOrg returns a Store that reads and writes org's rows. It shares the
+// connection and the write lock with s.
+func (s *Store) ForOrg(org uuid.UUID) *Store {
+	if s == nil {
+		return nil
+	}
+	scoped := *s
+	scoped.org = org
+	return &scoped
 }
 
 // Open initializes the GitHub cache store through the shared Gavel database.
@@ -56,7 +80,10 @@ func Open() (*Store, error) {
 	}
 
 	logger.Debugf("github cache ready (postgres, source=%s)", db.DSNSource())
-	s := &Store{db: db}
+	s := newStore(db)
+	if s.blobs, err = openJobLogBlobs(); err != nil {
+		return nil, err
+	}
 	s.pruneOnOpen()
 	return s, nil
 }
@@ -69,7 +96,7 @@ func openShared() (*Store, error) {
 	if db.Disabled() {
 		return &Store{db: db, disabled: true}, nil
 	}
-	s := &Store{db: db}
+	s := newStore(db)
 	s.pruneOnOpen()
 	return s, nil
 }
@@ -144,13 +171,20 @@ type Status struct {
 }
 
 // Status returns a point-in-time snapshot of cache config and row counts.
-// Safe to call on a disabled store.
+// Safe to call on a disabled store. Another organization than the local one
+// sees only whether the cache works: the DSN and the counts describe the host.
 func (s *Store) Status() Status {
 	st := Status{
 		Enabled:      !s.Disabled(),
 		Driver:       "postgres",
 		RetentionSec: int64(retention().Seconds()),
 		Counts:       map[string]int64{},
+	}
+	if s != nil && s.org != uuid.Nil && s.org != tenant.LocalOrgID {
+		if !st.Enabled {
+			st.Error = "the cache database is unavailable"
+		}
+		return st
 	}
 
 	// Prefer the DSN we actually opened with (env var OR db.json — including
@@ -210,6 +244,7 @@ func (s *Store) Status() Status {
 }
 
 // pruneOnOpen drops http_cache_entries older than the retention horizon.
+// It is global maintenance and deliberately prunes every organization's rows.
 // We don't prune the immutable caches (workflow runs, job logs, workflow
 // definitions) — those are addressable by ID/SHA forever and represent
 // data that may have been GC'd from GitHub itself.
@@ -225,4 +260,17 @@ func (s *Store) pruneOnOpen() {
 	if res.RowsAffected > 0 {
 		logger.Debugf("github cache pruned %d stale http entries", res.RowsAffected)
 	}
+}
+
+// openJobLogBlobs is the blob store ~/.gavel.yaml configures, or <user cache dir>/gavel/blobs.
+func openJobLogBlobs() (blob.Store, error) {
+	store, err := verify.OpenGlobalStorage(context.Background())
+	if err != nil || store != nil {
+		return store, err
+	}
+	dir, err := os.UserCacheDir()
+	if err != nil {
+		return nil, fmt.Errorf("find the cache directory for job logs: %w", err)
+	}
+	return blob.Local(filepath.Join(dir, "gavel", "blobs")), nil
 }

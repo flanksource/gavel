@@ -22,10 +22,13 @@ type todoUpdatePayload struct {
 	Priority types.Priority `json:"priority,omitempty"`
 	// Title/Body edit the TODO's content; a nil pointer leaves the field
 	// unchanged (an explicit empty body is allowed, an empty title is not).
-	Title   *string   `json:"title,omitempty"`
-	Body    *string   `json:"body,omitempty"`
-	PR      *types.PR `json:"pr,omitempty"`
-	ClearPR bool      `json:"clearPR,omitempty"`
+	Title *string `json:"title,omitempty"`
+	Body  *string `json:"body,omitempty"`
+	// Visibility makes the todo private (only its creator sees it) or public
+	// (the whole organization sees it). Local mode shows every todo.
+	Visibility *string   `json:"visibility,omitempty"`
+	PR         *types.PR `json:"pr,omitempty"`
+	ClearPR    bool      `json:"clearPR,omitempty"`
 	// Comment, when set, appends a comment. Combined with status it reopens (or
 	// closes) the TODO with a comment in one request.
 	Comment string `json:"comment,omitempty"`
@@ -124,6 +127,7 @@ func todoUpdateChanges(payload todoUpdatePayload, attachments []todoAttachmentSu
 		}
 		changes.State.Priority = &payload.Priority
 	}
+	changes.Content.Visibility = payload.Visibility
 	if payload.Title != nil {
 		title := strings.TrimSpace(*payload.Title)
 		if title == "" {
@@ -152,7 +156,7 @@ func todoUpdateChanges(payload todoUpdatePayload, attachments []todoAttachmentSu
 }
 
 func (s *Server) handleTodoPatch(w http.ResponseWriter, r *http.Request) {
-	payload, attachments, err := parseTodoUpdatePayload(r)
+	payload, attachments, err := s.parseTodoUpdatePayload(r)
 	if err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)
 		return

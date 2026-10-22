@@ -36,7 +36,7 @@ func (a provenanceAgent) Execute(context.Context, api.Spec) (*api.Response, erro
 func (a provenanceAgent) ExecuteStream(context.Context, api.Spec) (<-chan captainai.Event, error) {
 	events := []captainai.Event{
 		{Kind: captainai.EventSystem, SessionID: a.sessionID},
-		{Kind: captainai.EventText, Text: `{"summary":"Persisted it.","endStatus":"completed"}`},
+		{Kind: captainai.EventText, Text: `{"success":true,"event":"completed","comment":"Persisted it."}`},
 		{Kind: captainai.EventResult, Success: true, Usage: &api.Usage{InputTokens: 7, OutputTokens: 3}},
 	}
 	ch := make(chan captainai.Event, len(events))
@@ -76,6 +76,9 @@ var _ = Describe("todo run provenance", func() {
 		Expect(err).NotTo(HaveOccurred())
 		for i := range def.Steps {
 			if def.Steps[i].Name == "run" {
+				// The scripted agent calls no tools, and an ask-policy tool needs the
+				// approval broker only a Captain-constructed provider gets.
+				def.Steps[i].Tools = nil
 				def.Steps[i].Spec = &api.Spec{Workflow: &api.Workflow{Verify: &api.Verify{
 					Fixture: "{{subject.verification.document}}", Scope: api.VerifyScopeAll,
 				}}}

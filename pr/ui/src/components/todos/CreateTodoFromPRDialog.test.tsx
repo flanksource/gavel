@@ -98,6 +98,10 @@ vi.mock('../Avatar', () => ({
   Avatar: () => <span />,
 }));
 
+vi.mock('./newTodoSteps', () => ({
+  useNewTodoSteps: () => ({ data: [{ name: 'triage.new', label: 'Triage new', prompt: 'triage-new', auxiliary: true }], isPending: false, error: null }),
+}));
+
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -190,23 +194,31 @@ function createdResponse() {
 }
 
 describe('CreateTodoFromPRDialog', () => {
-  it('offers triage recovery for the saved PR todo without another create', async () => {
+  it('offers recovery for the saved PR todo without another create', async () => {
     const onCreated = vi.fn();
-    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({ todo: { ref: 'saved-pr', title: 'Repair parser' }, triage: { status: 'failed', error: 'Admission unavailable' } }) }));
+    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({ todo: { ref: 'saved-pr', title: 'Repair parser' }, run: { status: 'failed', error: 'Admission unavailable' } }) }));
     vi.stubGlobal('fetch', fetchMock);
     render(<CreateTodoFromPRDialog open onClose={vi.fn()} pr={pr} detail={detail} workspaces={workspaces} onCreated={onCreated} />);
+    fireEvent.change(screen.getByLabelText('Run after creation'), { target: { value: 'triage.new' } });
     fireEvent.click(screen.getByRole('button', { name: 'Add todo' }));
-    expect(await screen.findByRole('button', { name: 'Retry triage' })).toBeTruthy();
+    expect(await screen.findByRole('button', { name: 'Retry triage.new' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Create another' })).toBeNull();
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(onCreated).toHaveBeenCalledOnce();
   });
-  it('enables triage by default and allows opting out', () => {
+  it('defaults run after creation to None and posts the chosen step instead of a triage flag', async () => {
+    const fetchMock = vi.fn(async () => createdResponse());
+    vi.stubGlobal('fetch', fetchMock);
     render(<CreateTodoFromPRDialog open onClose={vi.fn()} pr={pr} detail={detail} workspaces={workspaces} />);
-    const checkbox = screen.getByRole<HTMLInputElement>('checkbox', { name: 'Triage after creation' });
-    expect(checkbox.checked).toBe(true);
-    fireEvent.click(checkbox);
-    expect(checkbox.checked).toBe(false);
+    const select = screen.getByLabelText<HTMLSelectElement>('Run after creation');
+    expect(select.value).toBe('');
+    expect(Array.from(select.options, option => option.textContent)).toEqual(['None', 'Triage new']);
+    fireEvent.change(select, { target: { value: 'triage.new' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add todo' }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    const body = JSON.parse((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body as string);
+    expect(body.step).toBe('triage.new');
+    expect('triage' in body).toBe(false);
   });
   it('creates and selects a project without losing the todo draft', async () => {
     const onProjectsChanged = vi.fn();

@@ -61,7 +61,12 @@ func (s *Server) handleTodoLand(w http.ResponseWriter, r *http.Request) {
 		writeTodoError(w, http.StatusNotImplemented, land.ErrNotNative)
 		return
 	}
-	landing, err := landTodoRun(r.Context(), backed, todo, opts)
+	var landing *native.RunLanding
+	if source.Hosted != nil {
+		landing, err = s.landHostedRun(r.Context(), backed, source, todo, opts)
+	} else {
+		landing, err = landTodoRun(r.Context(), backed, todo, opts)
+	}
 	// Even a failed landing may have moved the checkout or removed the worktree.
 	s.touchGit(source.Dir)
 	if landing != nil {
@@ -81,8 +86,9 @@ func (s *Server) handleTodoLand(w http.ResponseWriter, r *http.Request) {
 func todoLandStatus(err error) int {
 	var conflict *branchmerge.ConflictError
 	var prConflict *prcreate.ConflictError
+	var hostedRefusal hostedLandingRefusal
 	switch {
-	case errors.Is(err, land.ErrInvalidOptions):
+	case errors.Is(err, land.ErrInvalidOptions), errors.As(err, &hostedRefusal):
 		return http.StatusBadRequest
 	case errors.Is(err, land.ErrNotNative):
 		return http.StatusNotImplemented

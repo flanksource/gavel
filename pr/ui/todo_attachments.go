@@ -1,7 +1,9 @@
 package ui
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -14,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/blob"
 	"github.com/flanksource/gavel/todos"
 	"github.com/google/uuid"
 )
@@ -25,7 +28,7 @@ import (
 var attachmentsDir = filepath.Join(os.Getenv("HOME"), ".config", "gavel", "attachments")
 
 // attachmentURLPrefix is the path the dashboard loads stored attachments from; the
-// markdown body embeds <prefix>/<id> and handler.go serves it from attachmentsDir.
+// markdown body embeds <prefix>/<id> and handler.go serves it from attachmentStore.
 // The rewriting helpers live in package todos so the CLI shares them.
 const attachmentURLPrefix = todos.AttachmentURLPrefix
 
@@ -33,24 +36,40 @@ type todoAttachmentUploadResponse struct {
 	Attachments []todoAttachmentSummary `json:"attachments"`
 }
 
-// persistMultipartAttachments writes every uploaded file in the form to
-// attachmentsDir under a random id (keeping the original extension) and returns a
-// summary per file carrying the served URL. Unlike a metadata-only summary this
+// attachmentStore holds the Server's attachments: attachmentsDir, or attachments/ in the
+// configured store. A Server scoped to an organization keeps them under orgs/<org>/, so
+// another organization's attachment id is not found.
+func (s *Server) attachmentStore() blob.Store {
+	if s.blobs == nil {
+		store := blob.Local(attachmentsDir)
+		if s.org != uuid.Nil {
+			store = blob.WithPrefix(store, "orgs/"+s.org.String()+"/")
+		}
+		return store
+	}
+	store := s.blobs
+	if s.org != uuid.Nil {
+		store = blob.WithPrefix(store, "orgs/"+s.org.String()+"/")
+	}
+	return blob.WithPrefix(store, "attachments/")
+}
+
+// persistMultipartAttachments writes every uploaded file in the form to the
+// attachment store under a random id (keeping the original extension) and returns
+// a summary per file carrying the served URL. Unlike a metadata-only summary this
 // actually stores the bytes so the todo can reference and render them.
-func persistMultipartAttachments(form *multipart.Form) ([]todoAttachmentSummary, error) {
+func (s *Server) persistMultipartAttachments(ctx context.Context, form *multipart.Form) ([]todoAttachmentSummary, error) {
 	if form == nil || len(form.File) == 0 {
 		return nil, nil
 	}
-	if err := os.MkdirAll(attachmentsDir, 0o755); err != nil {
-		return nil, fmt.Errorf("create attachments dir: %w", err)
-	}
+	store := s.attachmentStore()
 	var attachments []todoAttachmentSummary
 	for field, headers := range form.File {
 		for _, header := range headers {
 			if header == nil || strings.TrimSpace(header.Filename) == "" {
 				continue
 			}
-			summary, err := storeAttachment(field, header)
+			summary, err := storeAttachment(ctx, store, field, header)
 			if err != nil {
 				return nil, err
 			}
@@ -66,7 +85,7 @@ func persistMultipartAttachments(form *multipart.Form) ([]todoAttachmentSummary,
 	return attachments, nil
 }
 
-func storeAttachment(field string, header *multipart.FileHeader) (todoAttachmentSummary, error) {
+func storeAttachment(ctx context.Context, store blob.Store, field string, header *multipart.FileHeader) (todoAttachmentSummary, error) {
 	src, err := header.Open()
 	if err != nil {
 		return todoAttachmentSummary{}, fmt.Errorf("open attachment %q: %w", header.Filename, err)
@@ -75,17 +94,11 @@ func storeAttachment(field string, header *multipart.FileHeader) (todoAttachment
 
 	contentType := header.Header.Get("Content-Type")
 	id := uuid.NewString() + attachmentExt(header.Filename, contentType)
-	dst, err := os.Create(filepath.Join(attachmentsDir, id))
-	if err != nil {
-		return todoAttachmentSummary{}, fmt.Errorf("create attachment file: %w", err)
-	}
-	written, err := io.Copy(dst, src)
-	if closeErr := dst.Close(); err == nil {
-		err = closeErr
-	}
-	if err != nil {
+	counted := &countingReader{r: src}
+	if err := store.Write(ctx, id, counted); err != nil {
 		return todoAttachmentSummary{}, fmt.Errorf("write attachment %q: %w", header.Filename, err)
 	}
+	written := counted.n
 	return todoAttachmentSummary{
 		Field:       field,
 		Filename:    header.Filename,
@@ -111,17 +124,28 @@ func attachmentExt(filename, contentType string) string {
 
 // handleTodoAttachment serves a previously stored attachment by id. The id must be
 // a bare filename — any path separator or traversal segment is rejected so a
-// request can't escape attachmentsDir.
+// request can't escape the attachment store.
 func (s *Server) handleTodoAttachment(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if id == "" || id != path.Base(id) || strings.ContainsAny(id, `/\`) || strings.Contains(id, "..") {
 		http.Error(w, "invalid attachment id", http.StatusBadRequest)
 		return
 	}
-	full := filepath.Join(attachmentsDir, id)
-	data, err := os.ReadFile(full)
-	if err != nil {
+	reader, err := s.attachmentStore().Read(r.Context(), id)
+	if errors.Is(err, blob.ErrNotFound) {
 		http.Error(w, "attachment not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		logger.Warnf("read attachment %s: %v", id, err)
+		http.Error(w, "attachment could not be read", http.StatusInternalServerError)
+		return
+	}
+	defer reader.Close() //nolint:errcheck
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		logger.Warnf("read attachment %s: %v", id, err)
+		http.Error(w, "attachment could not be read", http.StatusInternalServerError)
 		return
 	}
 	if ct := mime.TypeByExtension(filepath.Ext(id)); ct != "" {
@@ -159,7 +183,7 @@ func (s *Server) handleTodoAttachmentUpload(w http.ResponseWriter, r *http.Reque
 		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("invalid multipart form: %w", err))
 		return
 	}
-	attachments, err := persistMultipartAttachments(r.MultipartForm)
+	attachments, err := s.persistMultipartAttachments(r.Context(), r.MultipartForm)
 	if err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)
 		return
@@ -194,4 +218,16 @@ func todoBodyWithAttachments(body string, attachments []todoAttachmentSummary) s
 		}
 	}
 	return strings.TrimSpace(sb.String())
+}
+
+// countingReader counts the bytes read through it.
+type countingReader struct {
+	r io.Reader
+	n int64
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += int64(n)
+	return n, err
 }

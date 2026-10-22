@@ -77,7 +77,7 @@ var _ = Describe("run iterations on the native runtime", Ordered, func() {
 			}})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(provider.SaveAttempt(ctx, todo, &todos.ExecutionResult{
-			Success: true, ExecutorName: "agent-claude", EndStatus: types.EndCompleted, Summary: "definition of done passed",
+			Success: true, ExecutorName: "agent-claude", Summary: "definition of done passed",
 			DoD: &todos.DoDOutcome{Ran: true, Passed: true, Report: verifyOnlyResult(true).Report},
 		})).To(Succeed())
 

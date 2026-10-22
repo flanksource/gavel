@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/flanksource/gavel/tenant"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
@@ -32,32 +33,88 @@ var (
 	ErrOpenChildren          = errors.New("native todo issue has open children")
 	ErrLinkConflict          = errors.New("native todo Captain link conflict")
 	ErrEventConflict         = errors.New("native todo event source already exists")
+	ErrForbidden             = errors.New("native todo change forbidden")
 )
 
 // Repository persists native TODO state. It deliberately accepts an injected
-// GORM pool and does not migrate or auto-create tables.
+// GORM pool and does not migrate or auto-create tables. Every read and write is
+// scoped to one organization: the local org unless built by ForOrg.
 type Repository struct {
-	db *gorm.DB
+	db  *gorm.DB
+	org uuid.UUID
 }
 
 func NewRepository(db *gorm.DB) (*Repository, error) {
 	if db == nil {
 		return nil, fmt.Errorf("%w: database is nil", ErrInvalidInput)
 	}
-	return &Repository{db: db}, nil
+	return &Repository{db: db, org: tenant.LocalOrgID}, nil
+}
+
+// inTx returns a Repository for the same organization over db, typically an
+// open transaction.
+func (r *Repository) inTx(db *gorm.DB) *Repository {
+	scoped := *r
+	scoped.db = db
+	return &scoped
+}
+
+// ForOrg returns a Repository over org's todos, sharing the connection.
+func (r *Repository) ForOrg(org uuid.UUID) *Repository {
+	scoped := *r
+	scoped.org = org
+	return &scoped
+}
+
+// inOrgWorkspace limits a workspace_id column to the organization's workspaces.
+// The returned condition takes the org ID as its one argument.
+func inOrgWorkspace(column string) string {
+	return column + ` IN (SELECT id FROM todo_workspaces WHERE org_id = ?)`
+}
+
+// inOrgIssue limits an issue_id column to issues in the organization's
+// workspaces. The returned condition takes the org ID as its one argument.
+func inOrgIssue(column string) string {
+	return column + ` IN (SELECT id FROM todo_issues WHERE ` + inOrgWorkspace("workspace_id") + `)`
+}
+
+// requestUser returns the user a transaction acts for, taken from its context.
+// It is nil in local mode and for system jobs, which leaves attribution NULL.
+func requestUser(tx *gorm.DB) *uuid.UUID {
+	if tx.Statement.Context == nil {
+		return nil
+	}
+	return tenant.FromContext(tx.Statement.Context).UserID
+}
+
+// requireWorkspace fails with ErrNotFound unless the workspace belongs to org.
+func requireWorkspace(tx *gorm.DB, org, workspaceID uuid.UUID) error {
+	var exists bool
+	if err := tx.Raw(`SELECT EXISTS(SELECT 1 FROM todo_workspaces WHERE org_id = ? AND id = ?)`, org, workspaceID).Scan(&exists).Error; err != nil {
+		return err
+	}
+	if !exists {
+		return fmt.Errorf("%w: workspace %s", ErrNotFound, workspaceID)
+	}
+	return nil
 }
 
 type lockedIssue struct {
-	ID          uuid.UUID
-	WorkspaceID uuid.UUID
-	Version     int64
+	ID              uuid.UUID
+	WorkspaceID     uuid.UUID
+	Version         int64
+	CreatedByUserID *uuid.UUID
 }
 
-func lockIssue(tx *gorm.DB, id uuid.UUID, expectedVersion int64) (*lockedIssue, error) {
+// lockIssue locks an issue of org for update. Another org's issue, and one the
+// transaction's user can't see, is ErrNotFound; one they can see but didn't
+// create is ErrForbidden unless they are an org admin.
+func lockIssue(tx *gorm.DB, org, id uuid.UUID, expectedVersion int64) (*lockedIssue, error) {
 	var issue lockedIssue
+	visible, visibleArgs := visibleIssue(tx.Statement.Context, "todo_issues")
 	result := tx.Raw(`
-		SELECT id, workspace_id, version FROM todo_issues
-		WHERE id = ? FOR UPDATE`, id,
+		SELECT id, workspace_id, version, created_by_user_id FROM todo_issues
+		WHERE id = ? AND `+inOrgWorkspace("workspace_id")+` AND `+visible+` FOR UPDATE`, append([]any{id, org}, visibleArgs...)...,
 	).Scan(&issue)
 	if result.Error != nil {
 		return nil, result.Error
@@ -65,15 +122,23 @@ func lockIssue(tx *gorm.DB, id uuid.UUID, expectedVersion int64) (*lockedIssue, 
 	if result.RowsAffected == 0 {
 		return nil, fmt.Errorf("%w: issue %s", ErrNotFound, id)
 	}
+	if err := requireChangeable(tx, id, issue.CreatedByUserID); err != nil {
+		return nil, err
+	}
 	if issue.Version != expectedVersion {
 		return nil, fmt.Errorf("%w: issue %s expected version %d, current version %d", ErrVersionConflict, id, expectedVersion, issue.Version)
 	}
 	return &issue, nil
 }
 
-func getIssue(db *gorm.DB, condition string, args ...any) (*Issue, error) {
+// getIssue reads one issue of org matching condition. Another org's issue, and
+// one the context's user can't see, is ErrNotFound.
+func getIssue(db *gorm.DB, org uuid.UUID, condition string, args ...any) (*Issue, error) {
 	var record issueRecord
-	result := db.Raw(`SELECT `+issueColumns+` FROM `+issueFrom+` WHERE `+condition, args...).Scan(&record)
+	visible, visibleArgs := visibleIssue(db.Statement.Context, "issue")
+	query := append(append([]any{org}, visibleArgs...), args...)
+	result := db.Raw(`SELECT `+issueColumns+` FROM `+issueFrom+` WHERE `+inOrgWorkspace("issue.workspace_id")+` AND `+visible+` AND (`+condition+`)`,
+		query...).Scan(&record)
 	if result.Error != nil {
 		return nil, result.Error
 	}

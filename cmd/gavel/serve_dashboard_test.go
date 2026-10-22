@@ -49,3 +49,15 @@ func TestServeMenuBarDoesNotForceUI(t *testing.T) {
 	assert.False(t, got.UI, "--menu-bar mode should not also force the web UI")
 	assert.True(t, got.All, "menu-bar serve with no repos should still default to org-wide")
 }
+
+func TestServeRunsRetentionButPRListUIDoesNot(t *testing.T) {
+	assert.True(t, applyServeDefaults(PRListOptions{}).retention, "gavel serve runs retention")
+	assert.False(t, PRListOptions{UI: true}.retention, "gavel pr list --ui does not")
+}
+
+func TestServeHasAPropertiesFileFlag(t *testing.T) {
+	serve, _, err := rootCmd.Find([]string{"serve"})
+	require.NoError(t, err)
+	flag := serve.Flags().Lookup("properties-file")
+	require.NotNil(t, flag, "--properties-file sets the retention windows")
+}

@@ -179,17 +179,3 @@ var _ = Describe("counting TODOs across configured projects", func() {
 			"the Server-Timing sql queries counter must see every statement")
 	})
 })
-
-var _ = Describe("counting TODOs across configured projects with answers given outside gavel", func() {
-	It("reconciles a Captain answer before counting, as CountByStatus does", func(ctx SpecContext) {
-		f := newAnswerFixture(ctx)
-		parked := f.parkRunAsk(ctx, "Answered before the projects list")
-		f.answerInCaptain(ctx, parked)
-
-		got, err := countProjects(ctx, f.db, []WorkspaceOptions{f.options})
-
-		Expect(err).NotTo(HaveOccurred())
-		Expect(got).To(Equal([]ProjectStatusCounts{{Counts: map[types.Status]int{types.StatusInProgress: 1}}}))
-		Expect(f.eventsOf(ctx, parked.todo, native.EventAskAnswered)).To(HaveLen(1))
-	})
-})

@@ -7,6 +7,7 @@ import type { TodoRunLanding, TodoRunWorkspace, TodoSessionAttempt } from '../..
 import type { LatestRunWorkspace } from './runWorkspace';
 import { todoQueryKeys } from './todoQueries';
 import { TodoRunLandActions } from './TodoRunLandActions';
+import { setAuthMode } from '../../query';
 
 /* oxlint-disable clicky-ui/prefer-clicky-components --
    These raw <button>s ARE the test doubles for clicky-ui's Button/SplitButton: the
@@ -100,6 +101,20 @@ describe('TodoRunLandActions', () => {
     expect(invalidate).toHaveBeenCalledWith({ queryKey: todoQueryKeys.list(DIR), exact: true });
     expect(await screen.findByText(/Merged into/)).toBeTruthy();
     expect(screen.queryByRole('button', { name: /Merge into current branch/ })).toBeNull();
+  });
+
+  it('lands a hosted run only as a pull request', async () => {
+    setAuthMode('clerk', vi.fn());
+    try {
+      const fetchMock = stubLand(200, { landing: { ...mergeLanding, via: 'pr', prNumber: 7, prUrl: 'https://github.com/acme/widgets/pull/7' } });
+      renderActions(latestRun(committed));
+      expect(screen.queryByRole('button', { name: /Merge into current branch/ })).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: /Create PR/ }));
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+      expect(postedBody(fetchMock)).toEqual({ ref: REF, dir: DIR, via: 'pr', draft: false });
+    } finally {
+      setAuthMode('none', vi.fn());
+    }
   });
 
   it('posts a draft PR landing from the Create PR menu', async () => {

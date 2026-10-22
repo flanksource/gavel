@@ -22,16 +22,16 @@ func TestHCLMigrationFromExistingGitHubSchema(t *testing.T) {
 	legacy, err := commonsdb.NewGorm(dsn, commonsdb.DefaultGormConfig())
 	require.NoError(t, err)
 	require.NoError(t, legacy.AutoMigrate(
-		&githubcache.HTTPCacheEntry{},
-		&githubcache.WorkflowRunCache{},
-		&githubcache.JobLogCache{},
-		&githubcache.WorkflowDefCache{},
-		&githubcache.SeenPR{},
+		&legacyHTTPCacheEntry{},
+		&legacyWorkflowRunCache{},
+		&legacyJobLogCache{},
+		&legacyWorkflowDefCache{},
+		&legacySeenPR{},
 		&githubcache.FaviconCache{},
-		&githubcache.TestRunCache{},
-		&githubcache.TestRunCursor{},
+		&legacyTestRunCache{},
+		&legacyTestRunCursor{},
 	))
-	require.NoError(t, legacy.Create(&githubcache.HTTPCacheEntry{URL: "https://example.test", Method: "GET", StatusCode: 200}).Error)
+	require.NoError(t, legacy.Create(&legacyHTTPCacheEntry{URL: "https://example.test", Method: "GET", StatusCode: 200}).Error)
 	require.NoError(t, legacy.Exec(`
 		CREATE TABLE migration_unmanaged (id integer PRIMARY KEY, value text NOT NULL);
 		INSERT INTO migration_unmanaged (id, value) VALUES (1, 'preserve me')

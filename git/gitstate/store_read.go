@@ -11,6 +11,12 @@ import (
 	"github.com/google/uuid"
 )
 
+// scannedAtColumn is a worktree's last status scan. An unchanged scan stamps
+// only the UNLOGGED overview row (o); the logged row (w) keeps the last scan
+// that changed something, the true answer while crash recovery has emptied the
+// overview. GREATEST ignores the NULL of a missing overview row.
+const scannedAtColumn = `GREATEST(o.status_scanned_at, w.status_scanned_at)`
+
 type repoRow struct {
 	ID             uuid.UUID
 	RootDir        string
@@ -65,16 +71,26 @@ func (s *Store) Load(ctx context.Context, repoIDs []uuid.UUID) (map[uuid.UUID]St
 	}
 	db := s.db.WithContext(ctx)
 	var repos []repoRow
+	// Every repo has an overview row (schema/171 inserts it with the repo, and
+	// the tracker's start rebuilds the table after crash recovery), so a
+	// generation of 0 can only be read between a crash and that rebuild, whose
+	// announcement then makes every client reload.
 	if err := db.Raw(`
-		SELECT id, root_dir, base_branch, base_sha, current_branch, base_checked_out, refs_scanned_at, generation, error
-		FROM git_repos WHERE id IN ? AND (refs_scanned_at IS NOT NULL OR error IS NOT NULL)`, repoIDs).Scan(&repos).Error; err != nil {
+		SELECT r.id, r.root_dir, r.base_branch, r.base_sha, r.current_branch, r.base_checked_out,
+			GREATEST(o.refs_scanned_at, r.refs_scanned_at) AS refs_scanned_at, COALESCE(o.generation, 0) AS generation, r.error
+		FROM git_repos r
+		LEFT JOIN git_repo_overview o ON o.repo_id = r.id
+		WHERE r.id IN ? AND r.org_id = ? AND (r.refs_scanned_at IS NOT NULL OR r.error IS NOT NULL)`, repoIDs, s.org).Scan(&repos).Error; err != nil {
 		return nil, fmt.Errorf("load git repos: %w", err)
 	}
 	var worktrees []worktreeRow
 	if err := db.Raw(`
-		SELECT repo_id, path, branch, head_sha, is_primary, detached, prunable, last_commit_at,
-			staged, unstaged, "both", untracked, conflict, adds, dels, touched_at, status_scanned_at, status_error
-		FROM git_worktrees WHERE repo_id IN ? AND removed_at IS NULL ORDER BY repo_id, ordinal`, repoIDs).Scan(&worktrees).Error; err != nil {
+		SELECT w.repo_id, w.path, w.branch, w.head_sha, w.is_primary, w.detached, w.prunable, w.last_commit_at,
+			w.staged, w.unstaged, w."both", w.untracked, w.conflict, w.adds, w.dels, w.touched_at,
+			`+scannedAtColumn+` AS status_scanned_at, w.status_error
+		FROM git_worktrees w
+		LEFT JOIN git_worktree_overview o ON o.repo_id = w.repo_id AND o.path = w.path
+		WHERE w.repo_id IN ? AND w.removed_at IS NULL AND `+inOrgRepo("w.repo_id")+` ORDER BY w.repo_id, w.ordinal`, repoIDs, s.org).Scan(&worktrees).Error; err != nil {
 		return nil, fmt.Errorf("load git worktrees: %w", err)
 	}
 	var branches []branchRow
@@ -84,8 +100,8 @@ func (s *Store) Load(ctx context.Context, repoIDs []uuid.UUID) (map[uuid.UUID]St
 		FROM git_branches b
 		JOIN git_repos g ON g.id = b.repo_id
 		JOIN git_range_stats r ON r.repo_id = b.repo_id AND r.base_sha = g.base_sha AND r.head_sha = b.head_sha
-		WHERE b.repo_id IN ? AND b.name <> g.base_branch AND r.ahead > 0
-		ORDER BY b.repo_id, b.name`, repoIDs).Scan(&branches).Error; err != nil {
+		WHERE b.repo_id IN ? AND g.org_id = ? AND b.name <> g.base_branch AND r.ahead > 0
+		ORDER BY b.repo_id, b.name`, repoIDs, s.org).Scan(&branches).Error; err != nil {
 		return nil, fmt.Errorf("load git branches: %w", err)
 	}
 
@@ -145,13 +161,13 @@ func (s *Store) Load(ctx context.Context, repoIDs []uuid.UUID) (map[uuid.UUID]St
 	return states, nil
 }
 
-// Generations returns every repo's generation.
+// Generations returns the generation of each of the org's repos.
 func (s *Store) Generations(ctx context.Context) (map[uuid.UUID]int64, error) {
 	var rows []struct {
 		ID         uuid.UUID
 		Generation int64
 	}
-	if err := s.db.WithContext(ctx).Raw(`SELECT id, generation FROM git_repos`).Scan(&rows).Error; err != nil {
+	if err := s.db.WithContext(ctx).Raw(`SELECT repo_id AS id, generation FROM git_repo_overview WHERE `+inOrgRepo("repo_id"), s.org).Scan(&rows).Error; err != nil {
 		return nil, fmt.Errorf("load git repo generations: %w", err)
 	}
 	generations := make(map[uuid.UUID]int64, len(rows))
@@ -168,8 +184,12 @@ func (s *Store) WorktreeFiles(ctx context.Context, repoID uuid.UUID, path string
 		Files           string
 		StatusScannedAt *time.Time
 	}
-	result := s.db.WithContext(ctx).Raw(`SELECT files::text AS files, status_scanned_at FROM git_worktrees WHERE repo_id = ? AND path = ? AND removed_at IS NULL`,
-		repoID, path).Scan(&row)
+	result := s.db.WithContext(ctx).Raw(`
+		SELECT w.files::text AS files, `+scannedAtColumn+` AS status_scanned_at
+		FROM git_worktrees w
+		LEFT JOIN git_worktree_overview o ON o.repo_id = w.repo_id AND o.path = w.path
+		WHERE w.repo_id = ? AND w.path = ? AND w.removed_at IS NULL AND `+inOrgRepo("w.repo_id"),
+		repoID, path, s.org).Scan(&row)
 	if result.Error != nil {
 		return nil, false, fmt.Errorf("load files of worktree %s: %w", path, result.Error)
 	}
@@ -187,8 +207,8 @@ func (s *Store) WorktreeFiles(ctx context.Context, repoID uuid.UUID, path string
 // recorded it, and whether the repo has such a branch.
 func (s *Store) BranchHead(ctx context.Context, repoID uuid.UUID, name string) (string, bool, error) {
 	var heads []string
-	if err := s.db.WithContext(ctx).Raw(`SELECT head_sha FROM git_branches WHERE repo_id = ? AND name = ?`,
-		repoID, name).Scan(&heads).Error; err != nil {
+	if err := s.db.WithContext(ctx).Raw(`SELECT head_sha FROM git_branches WHERE repo_id = ? AND name = ? AND `+inOrgRepo("repo_id"),
+		repoID, name, s.org).Scan(&heads).Error; err != nil {
 		return "", false, fmt.Errorf("load head of branch %s: %w", name, err)
 	}
 	if len(heads) == 0 {
@@ -216,7 +236,7 @@ func (s *Store) Ranges(ctx context.Context, repoID uuid.UUID, keys []RangeKey) (
 	}
 	if err := s.db.WithContext(ctx).Raw(`
 		SELECT base_sha, head_sha, merge_base, ahead, behind, commits, files, adds, dels FROM git_range_stats
-		WHERE repo_id = ? AND head_sha IN ?`, repoID, heads).Scan(&rows).Error; err != nil {
+		WHERE repo_id = ? AND head_sha IN ? AND `+inOrgRepo("repo_id"), repoID, heads, s.org).Scan(&rows).Error; err != nil {
 		return nil, fmt.Errorf("load cached ranges of git repo %s: %w", repoID, err)
 	}
 	for _, row := range rows {
@@ -241,7 +261,7 @@ func (s *Store) Range(ctx context.Context, repoID uuid.UUID, key RangeKey) (*Ran
 	}
 	result := s.db.WithContext(ctx).Raw(`
 		SELECT merge_base, ahead, behind, commits, files, adds, dels FROM git_range_stats
-		WHERE repo_id = ? AND base_sha = ? AND head_sha = ?`, repoID, key.Base, key.Head).Scan(&row)
+		WHERE repo_id = ? AND base_sha = ? AND head_sha = ? AND `+inOrgRepo("repo_id"), repoID, key.Base, key.Head, s.org).Scan(&row)
 	if result.Error != nil {
 		return nil, fmt.Errorf("load range %s..%s: %w", key.Base, key.Head, result.Error)
 	}
@@ -259,8 +279,8 @@ func (s *Store) Range(ctx context.Context, repoID uuid.UUID, key RangeKey) (*Ran
 func (s *Store) RangeFiles(ctx context.Context, repoID uuid.UUID, key RangeKey) ([]gavelgit.CommitFile, bool, error) {
 	var blob *string
 	if err := s.db.WithContext(ctx).Raw(`
-		SELECT file_list::text FROM git_range_stats WHERE repo_id = ? AND base_sha = ? AND head_sha = ?`,
-		repoID, key.Base, key.Head).Scan(&blob).Error; err != nil {
+		SELECT file_list::text FROM git_range_stats WHERE repo_id = ? AND base_sha = ? AND head_sha = ? AND `+inOrgRepo("repo_id"),
+		repoID, key.Base, key.Head, s.org).Scan(&blob).Error; err != nil {
 		return nil, false, fmt.Errorf("load files of range %s..%s: %w", key.Base, key.Head, err)
 	}
 	if blob == nil {
@@ -280,8 +300,8 @@ func (s *Store) SaveRangeFiles(ctx context.Context, repoID uuid.UUID, key RangeK
 		return fmt.Errorf("encode files of range %s..%s: %w", key.Base, key.Head, err)
 	}
 	result := s.db.WithContext(ctx).Exec(`
-		UPDATE git_range_stats SET file_list = ?::jsonb WHERE repo_id = ? AND base_sha = ? AND head_sha = ? AND file_list IS NULL`,
-		string(blob), repoID, key.Base, key.Head)
+		UPDATE git_range_stats SET file_list = ?::jsonb WHERE repo_id = ? AND base_sha = ? AND head_sha = ? AND file_list IS NULL AND `+inOrgRepo("repo_id"),
+		string(blob), repoID, key.Base, key.Head, s.org)
 	if result.Error != nil {
 		return fmt.Errorf("save files of range %s..%s: %w", key.Base, key.Head, result.Error)
 	}

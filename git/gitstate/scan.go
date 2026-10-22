@@ -105,12 +105,12 @@ func scanRefs(ctx context.Context, store *Store, repoID uuid.UUID, root string) 
 		return refsResult{}, err
 	}
 	fingerprint := refsFingerprint(base, worktrees, branches)
-	stored, err := store.RefsFingerprint(ctx, repoID)
+	unchanged, err := store.MarkRefsUnchanged(ctx, repoID, fingerprint)
 	if err != nil {
 		return refsResult{}, err
 	}
-	if fingerprint == stored {
-		return refsResult{Worktrees: worktrees}, store.MarkRefsScanned(ctx, repoID)
+	if unchanged {
+		return refsResult{Worktrees: worktrees}, nil
 	}
 
 	update := RefsUpdate{
@@ -192,12 +192,9 @@ func scanStatus(ctx context.Context, store *Store, repoID uuid.UUID, path string
 	if err != nil {
 		return false, err
 	}
-	stored, err := store.StatusFingerprint(ctx, repoID, path)
-	if err != nil {
+	unchanged, err := store.MarkStatusUnchanged(ctx, repoID, path, fingerprint)
+	if err != nil || unchanged {
 		return false, err
-	}
-	if fingerprint == stored {
-		return false, store.MarkStatusScanned(ctx, repoID, path)
 	}
 	changes, touched, files, err := WorktreeChanges(ctx, path, gitArgs...)
 	if err != nil {

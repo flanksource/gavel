@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -190,36 +191,41 @@ var _ = Describe("pr/ui security hardening", func() {
 			Expect(os.MkdirAll(filepath.Join(dir, ".gavel"), 0o755)).To(Succeed())
 			return dir
 		}
+		readRun := func(dir, runID string) *httptest.ResponseRecorder {
+			w := httptest.NewRecorder()
+			(&Server{}).handleTestRun(w, httptest.NewRequest(http.MethodGet,
+				"/api/tests/run?dir="+url.QueryEscape(dir)+"&runId="+url.QueryEscape(runID), nil))
+			return w
+		}
 
 		It("reads a contained run snapshot", func() {
 			dir := newWorkspace()
 			path := filepath.Join(dir, ".gavel", "run-2026-01-01T00-00-00Z.json")
 			Expect(os.WriteFile(path, []byte(`{"ok":true}`), 0o644)).To(Succeed())
 
-			data, err := readRunSnapshot(dir, path)
-			Expect(err).ToNot(HaveOccurred())
-			Expect(string(data)).To(Equal(`{"ok":true}`))
+			w := readRun(dir, "run-2026-01-01T00-00-00Z")
+			Expect(w.Code).To(Equal(http.StatusOK))
+			Expect(w.Body.String()).To(Equal(`{"ok":true}`))
 		})
 
-		It("rejects a path outside the workspace .gavel directory", func() {
+		It("rejects a run id naming a file outside the workspace .gavel directory", func() {
 			dir := newWorkspace()
-			outside := filepath.Join(GinkgoT().TempDir(), "secret.json")
-			Expect(os.WriteFile(outside, []byte(`{"secret":true}`), 0o644)).To(Succeed())
+			Expect(os.WriteFile(filepath.Join(dir, "secret.json"), []byte(`{"secret":true}`), 0o644)).To(Succeed())
 
-			_, err := readRunSnapshot(dir, outside)
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring(outside))
+			w := readRun(dir, "run-x/../../secret")
+			Expect(w.Code).To(Equal(http.StatusBadRequest))
+			Expect(w.Body.String()).NotTo(ContainSubstring(`"secret":true`))
 		})
 
 		It("rejects a symlink inside .gavel that escapes it", func() {
 			dir := newWorkspace()
 			outside := filepath.Join(GinkgoT().TempDir(), "secret.json")
 			Expect(os.WriteFile(outside, []byte(`{"secret":true}`), 0o644)).To(Succeed())
-			link := filepath.Join(dir, ".gavel", "run-link.json")
-			Expect(os.Symlink(outside, link)).To(Succeed())
+			Expect(os.Symlink(outside, filepath.Join(dir, ".gavel", "run-link.json"))).To(Succeed())
 
-			_, err := readRunSnapshot(dir, link)
-			Expect(err).To(HaveOccurred())
+			w := readRun(dir, "run-link")
+			Expect(w.Code).NotTo(Equal(http.StatusOK))
+			Expect(w.Body.String()).NotTo(ContainSubstring(`"secret":true`))
 		})
 	})
 })

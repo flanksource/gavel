@@ -5,10 +5,12 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/flanksource/clicky/metrics"
@@ -193,14 +195,20 @@ func (s *Supervisor) targets(names []string) ([]*managed, error) {
 	return out, nil
 }
 
+// ErrSupervisorNotRunning is a control request to a root whose socket is gone
+// or refuses connections: no supervisor is running there.
+var ErrSupervisorNotRunning = errors.New("no supervisor is running")
+
 // sendControl dials the supervisor's control socket for root and performs req.
-// A failure to connect means no supervisor is running for that root.
 func sendControl(root string, req ctrlRequest) (ctrlResponse, error) {
 	return sendControlAt(ControlSocketPath(root), req, 10*time.Second)
 }
 
 func sendControlAt(path string, req ctrlRequest, timeout time.Duration) (ctrlResponse, error) {
 	conn, err := net.DialTimeout("unix", path, timeout)
+	if errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.ECONNREFUSED) {
+		return ctrlResponse{}, fmt.Errorf("connect to supervisor at %s: %w: %w", path, ErrSupervisorNotRunning, err)
+	}
 	if err != nil {
 		return ctrlResponse{}, fmt.Errorf("connect to supervisor: %w", err)
 	}

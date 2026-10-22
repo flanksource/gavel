@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -193,7 +192,7 @@ func TestParseRouteRequestTabs(t *testing.T) {
 }
 
 func TestHandleRouteTabsServeShell(t *testing.T) {
-	s := NewServer(gavelctx.New(context.Background()), 0, github.Options{}, SearchConfig{})
+	s := NewServer(gavelctx.New(t.Context()), 0, github.Options{}, SearchConfig{})
 	for _, path := range []string{"/prs", "/projects/gavel/runs/run-2026-07-21T10-59-33Z", "/todos", "/activity", "/prompts/commit.message", "/sessions/0199f0aa-0000-7000-8000-00000000c0de"} {
 		t.Run(path, func(t *testing.T) {
 			rec := httptest.NewRecorder()
@@ -211,7 +210,7 @@ func TestHandleRouteTabsServeShell(t *testing.T) {
 // The ES-module bundle is served from /_assets/ (entry + code-split chunks) and
 // the page loads it as a module — not inlined — so the lazy editor chunk can load.
 func TestServesESModuleBundle(t *testing.T) {
-	s := NewServer(gavelctx.New(context.Background()), 0, github.Options{}, SearchConfig{})
+	s := NewServer(gavelctx.New(t.Context()), 0, github.Options{}, SearchConfig{})
 
 	rec := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/_assets/prui.js", nil))
@@ -237,7 +236,7 @@ func TestServesESModuleBundle(t *testing.T) {
 // the GET through to the "/" catch-all. Routed through the full Handler so the
 // method/path coexistence is exercised, not just handleRoute.
 func TestHandleRouteTodosNewServesShell(t *testing.T) {
-	s := NewServer(gavelctx.New(context.Background()), 0, github.Options{}, SearchConfig{})
+	s := NewServer(gavelctx.New(t.Context()), 0, github.Options{}, SearchConfig{})
 	rec := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/todos/new", nil))
 	if rec.Code != http.StatusOK {
@@ -252,7 +251,7 @@ func TestHandleRouteTodosNewServesShell(t *testing.T) {
 }
 
 func TestHandleRouteMenubar(t *testing.T) {
-	s := NewServer(gavelctx.New(context.Background()), 0, github.Options{}, SearchConfig{})
+	s := NewServer(gavelctx.New(t.Context()), 0, github.Options{}, SearchConfig{})
 	for _, path := range []string{"/menubar", "/processes"} {
 		t.Run(path, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, path, nil)

@@ -28,7 +28,7 @@ var _ = Describe("LastRun", func() {
 			Tests:    []parsers.Test{{Name: "current", Passed: true}},
 		}
 		Expect(writeJSON(currentPath, current)).To(Succeed())
-		Expect(writePointer(workDir, PointerLast, &Pointer{
+		Expect(writeJSON(filepath.Join(workDir, Dir, PointerLast+".json"), &Pointer{
 			Path: filepath.Join(Dir, filepath.Base(currentPath)),
 			SHA:  "current",
 		})).To(Succeed())
@@ -59,7 +59,7 @@ var _ = Describe("LastRun", func() {
 		workDir := GinkgoT().TempDir()
 		const escaping = "../../../etc/passwd"
 		Expect(os.Mkdir(filepath.Join(workDir, Dir), 0o755)).To(Succeed())
-		Expect(writePointer(workDir, PointerLast, &Pointer{Path: escaping, SHA: "current"})).To(Succeed())
+		Expect(writeJSON(filepath.Join(workDir, Dir, PointerLast+".json"), &Pointer{Path: escaping, SHA: "current"})).To(Succeed())
 
 		run, err := LastRun(workDir)
 

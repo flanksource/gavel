@@ -25,6 +25,9 @@ type TodoCreatePayload struct {
 	Priority types.Priority `json:"priority,omitempty"`
 	Status   types.Status   `json:"status,omitempty"`
 	PR       *types.PR      `json:"pr,omitempty"`
+	// Visibility is private (the default: only the creator sees it) or public
+	// (the whole organization sees it). Local mode shows every todo.
+	Visibility string `json:"visibility,omitempty"`
 	// Criteria, when set, are folded into the body as a "## Acceptance Criteria"
 	// checklist on create — used by the dashboard's "create todo from PR" flow to
 	// seed a todo with the PR's failing tests and lint violations as criteria.
@@ -44,8 +47,8 @@ type TodoCreatePayload struct {
 
 type todoNewPayload struct {
 	TodoCreatePayload
-	AutoSave *bool `json:"autoSave,omitempty"`
-	Triage   *bool `json:"triage,omitempty" jsonschema_description:"Start a managed triage.new run after saving; omitted is false"`
+	AutoSave *bool  `json:"autoSave,omitempty"`
+	Step     string `json:"step,omitempty" jsonschema_description:"Lifecycle step to start on the saved TODO; must be one GET /api/todos/new/steps lists for its status. Omitted starts nothing"`
 }
 
 type todoAttachmentSummary struct {
@@ -62,7 +65,7 @@ type todoNewResponse struct {
 	Todo        todoSummary             `json:"todo"`
 	AutoSave    bool                    `json:"autoSave"`
 	Attachments []todoAttachmentSummary `json:"attachments,omitempty"`
-	Triage      *todoNewTriageResponse  `json:"triage,omitempty"`
+	Run         *todoNewRunResponse     `json:"run,omitempty"`
 }
 
 // todoTransferPayload moves the todo at Ref from one native workspace to another.
@@ -113,6 +116,7 @@ func (s *Server) handleTodoCreate(w http.ResponseWriter, r *http.Request) {
 		Body:     bodyWithCreateSections(payload.Body, payload.Criteria, payload.PRVerification),
 		Priority: payload.Priority, Status: payload.Status,
 		Labels: payload.Labels, Parent: payload.Parent, PR: payload.PR,
+		Visibility: payload.Visibility,
 	})
 	if err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)
@@ -157,7 +161,7 @@ func (s *Server) handleTodoNew(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	payload, attachments, err := parseTodoNewPayload(r)
+	payload, attachments, err := s.parseTodoNewPayload(r)
 	if err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)
 		return
@@ -199,11 +203,18 @@ func (s *Server) handleTodoNew(w http.ResponseWriter, r *http.Request) {
 		writeTodoError(w, http.StatusBadRequest, err)
 		return
 	}
+	if payload.Step != "" {
+		if err := validateTodoCreateStep(provider, source.Dir, payload.Status, payload.Step); err != nil {
+			writeTodoError(w, http.StatusBadRequest, err)
+			return
+		}
+	}
 	todo, err := provider.Create(r.Context(), todos.CreateRequest{
 		Title:    payload.Title,
 		Body:     bodyWithCreateSections(todoBodyWithAttachments(payload.Body, attachments), payload.Criteria, payload.PRVerification),
 		Priority: payload.Priority, Status: payload.Status,
 		Labels: payload.Labels, Parent: payload.Parent, PR: payload.PR,
+		Visibility: payload.Visibility,
 	})
 	if err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)
@@ -219,8 +230,8 @@ func (s *Server) handleTodoNew(w http.ResponseWriter, r *http.Request) {
 		AutoSave:    autoSave,
 		Attachments: attachments,
 	}
-	if payload.Triage != nil && *payload.Triage {
-		response.Triage = s.startNewTodoTriage(r, provider, source, todo)
+	if payload.Step != "" {
+		response.Run = s.startNewTodoStep(r, provider, source, todo, payload.Step)
 	}
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(response) //nolint:errcheck

@@ -1,6 +1,23 @@
 table "todo_workspaces" {
   schema = schema.public
 
+  column "user_id" {
+    null = true
+    type = uuid
+  }
+  column "org_id" {
+    null    = false
+    type    = uuid
+    default = sql("'00000000-0000-0000-0000-000000000001'::uuid")
+  }
+  foreign_key "todo_workspaces_user_id_fkey" {
+    columns = [column.user_id]
+    ref_columns = [table.users.column.id]
+    on_delete = SET_NULL
+    on_update = NO_ACTION
+  }
+  index "todo_workspaces_owner_idx" { columns = [column.org_id, column.user_id] }
+
   column "id" {
     null    = false
     type    = uuid
@@ -31,7 +48,7 @@ table "todo_workspaces" {
 
   index "todo_workspaces_repo_key_key" {
     unique  = true
-    columns = [column.repo_key]
+    columns = [column.org_id, column.repo_key]
   }
 
   check "todo_workspaces_repo_key_normalized" {
@@ -100,6 +117,25 @@ table "todo_workspace_paths" {
 table "todo_labels" {
   schema = schema.public
 
+  # Workspace labels inherit org ownership. Global editable definitions may
+  # belong to an org directly; NULL preserves existing local/global definitions.
+  column "org_id" {
+    null    = false
+    type    = uuid
+    default = sql("'00000000-0000-0000-0000-000000000001'::uuid")
+  }
+  column "updated_by_user_id" {
+    null = true
+    type = uuid
+  }
+  foreign_key "todo_labels_updated_by_user_id_fkey" {
+    columns = [column.updated_by_user_id]
+    ref_columns = [table.users.column.id]
+    on_delete = SET_NULL
+    on_update = NO_ACTION
+  }
+  index "todo_labels_org_id_idx" { columns = [column.org_id] }
+
   column "id" {
     null    = false
     type    = uuid
@@ -159,7 +195,7 @@ table "todo_labels" {
   }
   index "todo_labels_global_name_key" {
     unique  = true
-    columns = [column.name]
+    columns = [column.org_id, column.name]
     where   = "workspace_id IS NULL"
   }
 
@@ -179,6 +215,19 @@ table "todo_labels" {
 
 table "todo_issues" {
   schema = schema.public
+
+  # Organization ownership is inherited from workspace_id.
+  column "created_by_user_id" {
+    null = true
+    type = uuid
+  }
+  foreign_key "todo_issues_created_by_user_id_fkey" {
+    columns = [column.created_by_user_id]
+    ref_columns = [table.users.column.id]
+    on_delete = SET_NULL
+    on_update = NO_ACTION
+  }
+  index "todo_issues_created_by_user_id_idx" { columns = [column.created_by_user_id] }
 
   column "id" {
     null    = false
@@ -216,6 +265,12 @@ table "todo_issues" {
     null    = false
     type    = text
     default = "medium"
+  }
+  # Hosted todos are private to their creator unless made public to the org.
+  column "visibility" {
+    null    = false
+    type    = text
+    default = "private"
   }
   column "status" {
     null    = false
@@ -306,6 +361,9 @@ table "todo_issues" {
 
   check "todo_issues_title_not_empty" {
     expr = "btrim(title) <> ''"
+  }
+  check "todo_issues_visibility_check" {
+    expr = "visibility = ANY (ARRAY['private'::text, 'public'::text])"
   }
   check "todo_issues_priority_check" {
     expr = "priority = ANY (ARRAY['low'::text, 'medium'::text, 'high'::text, 'critical'::text])"
@@ -517,6 +575,19 @@ table "todo_pr_links" {
 table "todo_issue_events" {
   schema = schema.public
 
+  # Keep the existing free-form actor for system/agent events.
+  column "actor_user_id" {
+    null = true
+    type = uuid
+  }
+  foreign_key "todo_issue_events_actor_user_id_fkey" {
+    columns = [column.actor_user_id]
+    ref_columns = [table.users.column.id]
+    on_delete = SET_NULL
+    on_update = NO_ACTION
+  }
+  index "todo_issue_events_actor_user_id_idx" { columns = [column.actor_user_id] }
+
   column "id" {
     null    = false
     type    = uuid
@@ -603,6 +674,18 @@ table "todo_issue_events" {
 table "todo_issue_prompt_runs" {
   schema = schema.public
 
+  column "requested_by_user_id" {
+    null = true
+    type = uuid
+  }
+  foreign_key "todo_issue_prompt_runs_requested_by_user_id_fkey" {
+    columns = [column.requested_by_user_id]
+    ref_columns = [table.users.column.id]
+    on_delete = SET_NULL
+    on_update = NO_ACTION
+  }
+  index "todo_issue_prompt_runs_requested_by_user_id_idx" { columns = [column.requested_by_user_id] }
+
   column "issue_id" {
     null = false
     type = uuid
@@ -688,6 +771,18 @@ table "todo_issue_prompt_runs" {
 
 table "todo_issue_plans" {
   schema = schema.public
+
+  column "created_by_user_id" {
+    null = true
+    type = uuid
+  }
+  foreign_key "todo_issue_plans_created_by_user_id_fkey" {
+    columns = [column.created_by_user_id]
+    ref_columns = [table.users.column.id]
+    on_delete = SET_NULL
+    on_update = NO_ACTION
+  }
+  index "todo_issue_plans_created_by_user_id_idx" { columns = [column.created_by_user_id] }
 
   column "issue_id" {
     null = false

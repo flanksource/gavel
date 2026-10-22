@@ -27,7 +27,7 @@ var benchmarkResultRe = regexp.MustCompile(
 // commons logger) so captured package output renders cleanly in the UI.
 var ansiRe = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
-// GoTestJSON parses go test -json output format (shared by go test and Ginkgo with --gojson-report).
+// GoTestJSON parses go test -json output from Go test binaries.
 type GoTestJSON struct {
 	LocationMap map[string]TestLocation
 }
@@ -83,6 +83,7 @@ func (p *GoTestJSON) ParseStream(output io.Reader, stdout io.Writer, t *task.Tas
 	failureCount := 0
 
 	scanner := bufio.NewScanner(output)
+	scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
 	for scanner.Scan() {
 		line := scanner.Text()
 
@@ -183,6 +184,9 @@ func (p *GoTestJSON) Parse(output io.Reader) ([]Test, error) {
 	packageOutputs := make(map[string]*strings.Builder)
 	packagesWithTests := make(map[string]bool)
 	scanner := bufio.NewScanner(output)
+	scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
+
+	timeoutPanics := make(map[string]string)
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -190,6 +194,9 @@ func (p *GoTestJSON) Parse(output io.Reader) ([]Test, error) {
 
 		if err := json.Unmarshal([]byte(line), &event); err != nil {
 			return nil, fmt.Errorf("failed to parse go test json line: %w", err)
+		}
+		if event.Action == "output" && strings.HasPrefix(event.Output, goTimeoutPanicPrefix) {
+			timeoutPanics[event.getPackage()] = strings.TrimSpace(event.Output)
 		}
 
 		// Handle package-level events (no test name)
@@ -375,6 +382,7 @@ func (p *GoTestJSON) Parse(output io.Reader) ([]Test, error) {
 	if err := scanner.Err(); err != nil {
 		return nil, err
 	}
+	markGoTimeoutPanics(tests, timeoutPanics)
 
 	// Convert map to slice and attach individual test output and locations.
 	// Ginkgo bootstrap tests (functions whose body calls RunSpecs) are kept here
@@ -406,6 +414,26 @@ func (p *GoTestJSON) Parse(output io.Reader) ([]Test, error) {
 	}
 
 	return results, nil
+}
+
+// goTimeoutPanicPrefix starts the output line the testing package's alarm
+// emits when `go test -timeout` fires: "panic: test timed out after 1s".
+const goTimeoutPanicPrefix = "panic: test timed out after "
+
+// markGoTimeoutPanics flags every test still running in a package whose
+// binary hit its own -timeout as Failed + TimedOut. go test -json emits no
+// terminal event for those tests: the panic arrives as output on the last
+// running test, followed only by the package-level fail.
+func markGoTimeoutPanics(tests map[string]*Test, timeoutPanics map[string]string) {
+	for _, test := range tests {
+		panicLine, timedOut := timeoutPanics[test.Package]
+		if !timedOut || test.Passed || test.Failed || test.Skipped {
+			continue
+		}
+		test.Failed = true
+		test.TimedOut = true
+		test.Message = panicLine
+	}
 }
 
 // isGinkgoBootstrap checks if the test is a Ginkgo bootstrap function.

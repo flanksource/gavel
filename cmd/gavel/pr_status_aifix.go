@@ -174,10 +174,13 @@ type prFixRun struct {
 // prFixHooks assembles the run's hooks, in an order each later hook relies on:
 //  1. captain's setup plugin, which realises the spec's `setup:` (--worktree, or
 //     one declared in the prompt/override) and moves the run into it;
-//  2. the conflict merge, started in whatever tree setup left the run in;
-//  3. the commit pipeline, which concludes that merge once it is resolved and
-//     pushes each turn to the PR branch — pushing per turn is what makes the
-//     verify command meaningful, since CI only re-runs on what the remote sees;
+//  2. the commit pipeline, which pushes each turn to the PR branch — pushing per
+//     turn is what makes the verify command meaningful, since CI only re-runs
+//     on what the remote sees — and commits nothing while a rebase is stopped;
+//  3. the conflict rebase: its PreRun starts the rebase in whatever tree setup
+//     left the run in (no earlier hook has a PreRun), and its post-turn push,
+//     after the commit pipeline's, publishes a finished rebase that left no
+//     new commit for the pipeline to push;
 //  4. the workflow's checks, teed to the terminal so a multi-minute check is
 //     visibly moving.
 func prFixHooks(ctx context.Context, run prFixRun) ([]any, error) {
@@ -185,14 +188,16 @@ func prFixHooks(ctx context.Context, run prFixRun) ([]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	report := prConflicts(run.Result)
+	target.Rebase = report != nil
 	hooks := []any{&capsetup.Plugin{BaseDir: run.RepoRoot}}
-	if report := prConflicts(run.Result); report != nil {
-		hooks = append(hooks, &prFixMergeHook{report: report})
-	}
 	hooks = append(hooks, commitpkg.AgentHooks(commitpkg.AgentHooksOptions{
 		Commits:  run.Workflow.Commits,
 		PRTarget: target,
 	})...)
+	if report != nil {
+		hooks = append(hooks, &prFixRebaseHook{report: report, target: target})
+	}
 	verifyHooks, err := capverify.HooksFor(ctx, run.Workflow, capverify.Options{Provider: run.Provider, Output: run.Tee})
 	if err != nil {
 		return nil, err
@@ -258,21 +263,27 @@ func prFixWorktreeSetup(w prFixWorktree) *shell.Setup {
 	}}
 }
 
-const prFixMergeHookName = "pr-fix-merge"
+const prFixRebaseHookName = "pr-fix-rebase"
 
-// prFixMergeHook starts merging the PR's base into the run's tree before the
-// first turn, leaving the conflicted paths for the agent. It is a PreRun hook,
-// registered after captain's setup plugin, so under --worktree the merge happens
-// in the worktree and the caller's checkout is never touched.
-type prFixMergeHook struct {
+// prFixRebaseHook rebases the PR's branch onto its base — never merges it. Its
+// PreRun starts the rebase before the first turn and leaves the first
+// conflicting commit for the agent; it runs after captain's setup plugin, so
+// under --worktree the rebase happens in the worktree and the caller's checkout
+// is never touched. The agent continues the rebase itself, and once it has
+// finished, the post-turn push publishes the rewritten branch, leased on the
+// head the run started from.
+type prFixRebaseHook struct {
 	report *github.MergeConflictReport
+	// target is shared with the commit pipeline, so a push either side makes
+	// moves the lease the other pushes against.
+	target *provider.RunTarget
 }
 
-func (h *prFixMergeHook) Name() string { return prFixMergeHookName }
+func (h *prFixRebaseHook) Name() string { return prFixRebaseHookName }
 
-func (h *prFixMergeHook) PreRun(hc *agent.HookContext) error {
+func (h *prFixRebaseHook) PreRun(hc *agent.HookContext) error {
 	dir := hc.Workspace().Cwd
-	files, err := github.BeginConflictMerge(dir, h.report)
+	files, err := github.BeginConflictRebase(dir, h.report)
 	if err != nil {
 		return err
 	}
@@ -280,14 +291,35 @@ func (h *prFixMergeHook) PreRun(hc *agent.HookContext) error {
 	for _, f := range files {
 		paths = append(paths, f.Path)
 	}
-	hc.Notify("[pre-run] merging origin/%s into %s: %d conflicted — %s",
-		h.report.BaseRefName, h.report.HeadRefName, len(files), strings.Join(paths, ", "))
+	hc.Notify("[pre-run] rebasing %s onto origin/%s: stopped with %d conflicted — %s",
+		h.report.HeadRefName, h.report.BaseRefName, len(files), strings.Join(paths, ", "))
+	return nil
+}
+
+func (h *prFixRebaseHook) Phases() []agent.Phase { return []agent.Phase{agent.PhaseTurn} }
+
+// Post pushes a finished rebase the commit pipeline had no new commit to push
+// with. A rebase still stopped is left for the next turn; the verify commands
+// say what remains.
+func (h *prFixRebaseHook) Post(hc *agent.HookContext, _ agent.Phase) error {
+	dir := hc.Workspace().Cwd
+	if _, rebasing, err := github.RebaseInProgress(dir); err != nil || rebasing {
+		return err
+	}
+	head, err := provider.Revision(hc.Context, dir, "HEAD")
+	if err != nil || head == h.target.HeadSHA {
+		return err
+	}
+	if _, err := h.target.PushHead(hc.Context, dir); err != nil {
+		return fmt.Errorf("push rebased PR branch: %w", err)
+	}
+	hc.Notify("[post-turn] pushed the rebased %s at %s", h.target.Branch, head)
 	return nil
 }
 
 // prConflicts returns the watch result's conflict report when it lists files to
 // resolve. A CONFLICTING verdict git could not reproduce has none, so there is
-// no merge to start.
+// no rebase to start.
 func prConflicts(result *prwatch.PRWatchResult) *github.MergeConflictReport {
 	if result == nil || result.Conflicts == nil || len(result.Conflicts.Files) == 0 {
 		return nil
@@ -322,6 +354,7 @@ func prContextOf(result *prwatch.PRWatchResult, statusText string) prfix.PRConte
 		UnresolvedComments: result.UnresolvedComments(),
 	}
 	if report := prConflicts(result); report != nil {
+		pr.BaseSHA = report.BaseOID
 		for _, f := range report.Files {
 			pr.Conflicts = append(pr.Conflicts, prfix.Conflict{Path: f.Path, Kind: f.Kind})
 		}

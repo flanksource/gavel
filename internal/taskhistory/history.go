@@ -11,9 +11,14 @@ import (
 	"time"
 
 	clickytask "github.com/flanksource/clicky/task"
+	"github.com/flanksource/gavel/internal/retention"
 )
 
-const Retention = 30 * 24 * time.Hour
+// Retention is how long archived runs are kept: the retention.task_history property, 30 days
+// by default.
+func Retention() (time.Duration, error) {
+	return retention.Window("retention.task_history", 30*24*time.Hour)
+}
 
 type Record struct {
 	Run        clickytask.RunMeta        `json:"run"`
@@ -79,7 +84,7 @@ func validateRecord(record Record) error {
 
 // LoadOptions controls which spool files LoadRoots parses.
 type LoadOptions struct {
-	// Now bounds retention: records archived more than Retention ago are dropped.
+	// Now bounds retention: records archived more than Retention() ago are dropped.
 	Now time.Time
 	// Skip, when set, is consulted for every spool file before it is read. A
 	// sweep that already folded a file into the database uses it to avoid
@@ -91,13 +96,17 @@ func LoadRoots(roots []string, opts LoadOptions) ([]Record, error) {
 	if opts.Now.IsZero() {
 		return nil, errors.New("task history load requires a reference time")
 	}
+	keep, err := Retention()
+	if err != nil {
+		return nil, err
+	}
 	seen := map[string]struct{}{}
 	var records []Record
 	for _, root := range roots {
 		if strings.TrimSpace(root) == "" {
 			continue
 		}
-		loaded, err := loadDir(spoolDir(root), opts)
+		loaded, err := loadDir(spoolDir(root), opts, keep)
 		if err != nil {
 			return nil, err
 		}
@@ -115,7 +124,7 @@ func LoadRoots(roots []string, opts LoadOptions) ([]Record, error) {
 	return records, nil
 }
 
-func loadDir(dir string, opts LoadOptions) ([]Record, error) {
+func loadDir(dir string, opts LoadOptions, keep time.Duration) ([]Record, error) {
 	entries, err := os.ReadDir(dir)
 	if os.IsNotExist(err) {
 		return nil, nil
@@ -149,7 +158,7 @@ func loadDir(dir string, opts LoadOptions) ([]Record, error) {
 		if err := validateRunID(record.Run.ID); err != nil {
 			return nil, fmt.Errorf("parse task history %s: %w", path, err)
 		}
-		if record.ArchivedAt.Add(Retention).After(opts.Now) {
+		if record.ArchivedAt.Add(keep).After(opts.Now) {
 			records = append(records, record)
 		}
 	}
@@ -157,6 +166,10 @@ func loadDir(dir string, opts LoadOptions) ([]Record, error) {
 }
 
 func prune(dir string, now time.Time) error {
+	keep, err := Retention()
+	if err != nil {
+		return err
+	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return err
@@ -174,7 +187,7 @@ func prune(dir string, now time.Time) error {
 		if err := json.Unmarshal(data, &record); err != nil {
 			return err
 		}
-		if !record.ArchivedAt.Add(Retention).After(now) {
+		if !record.ArchivedAt.Add(keep).After(now) {
 			if err := os.Remove(path); err != nil {
 				return err
 			}

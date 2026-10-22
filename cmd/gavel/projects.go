@@ -26,10 +26,11 @@ type projectListRow struct {
 	Dir         string   `json:"dir"`
 	Repos       []string `json:"repos"`
 	TodoBackend string   `json:"todoBackend"`
+	Hidden      bool     `json:"hidden"`
 }
 
 func runProjectsList(_ ProjectsListOptions) ([]projectListRow, error) {
-	ps, err := ui.LoadProjects()
+	ps, err := ui.LoadProjects(ui.LoadProjectsOptions{IncludeHidden: true})
 	if err != nil {
 		return nil, err
 	}
@@ -40,6 +41,7 @@ func runProjectsList(_ ProjectsListOptions) ([]projectListRow, error) {
 			Dir:         p.Dir,
 			Repos:       p.Repos,
 			TodoBackend: "db",
+			Hidden:      p.Hidden,
 		})
 	}
 	return rows, nil
@@ -118,6 +120,20 @@ func runProjectsDelete(opts ProjectsDeleteOptions) (string, error) {
 	return fmt.Sprintf("deleted project %q", opts.Args[0]), nil
 }
 
+type ProjectsHiddenOptions struct {
+	Args []string `args:"true"`
+}
+
+// setProjectHidden backs `projects hide` and `projects unhide`.
+func setProjectHidden(hidden bool) func(ProjectsHiddenOptions) (ui.Project, error) {
+	return func(opts ProjectsHiddenOptions) (ui.Project, error) {
+		if len(opts.Args) != 1 {
+			return ui.Project{}, fmt.Errorf("expected exactly one project name, got %d", len(opts.Args))
+		}
+		return ui.SetProjectHidden(opts.Args[0], hidden)
+	}
+}
+
 func init() {
 	rootCmd.AddCommand(projectsCmd)
 	clicky.AddNamedCommand("list", projectsCmd, ProjectsListOptions{}, runProjectsList).Aliases = []string{"ls"}
@@ -125,4 +141,8 @@ func init() {
 	clicky.AddNamedCommand("add", projectsCmd, ProjectsAddOptions{}, runProjectsAdd).Aliases = []string{"create"}
 	clicky.AddNamedCommand("update", projectsCmd, ProjectsUpdateOptions{}, runProjectsUpdate)
 	clicky.AddNamedCommand("delete", projectsCmd, ProjectsDeleteOptions{}, runProjectsDelete).Aliases = []string{"rm"}
+	clicky.AddNamedCommand("hide", projectsCmd, ProjectsHiddenOptions{}, setProjectHidden(true)).Short =
+		"Hide a project from the dashboard's lists and git tracking"
+	clicky.AddNamedCommand("unhide", projectsCmd, ProjectsHiddenOptions{}, setProjectHidden(false)).Short =
+		"Show a hidden project again"
 }

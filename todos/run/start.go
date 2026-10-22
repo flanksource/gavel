@@ -40,7 +40,7 @@ func defaultResolve(ctx context.Context, req Request) (*Prepared, error) {
 	if req.Options.ReuseBranch && len(req.Options.Batch) > 1 {
 		return nil, fmt.Errorf("reuse-branch continues one todo's branch; this request runs %d todos", len(req.Options.Batch))
 	}
-	host, err := lifecycle.NewHost(req.Provider, req.Dir, req.Options.Host)
+	host, err := NewHost(req)
 	if err != nil {
 		return nil, err
 	}
@@ -56,6 +56,20 @@ func defaultResolve(ctx context.Context, req Request) (*Prepared, error) {
 	sessionID := SessionIDFor(resolution.Spec, req.Todo, req.Options.Resume)
 	resolution.UseSession(sessionID)
 	return &Prepared{Host: host, Step: step, Reason: reason, Resolution: resolution, SessionID: sessionID}, nil
+}
+
+// NewHost is the lifecycle host req runs through: a hosted repository's, running the prompt
+// through req.Remote, when it is set, and a local one otherwise.
+func NewHost(req Request) (*lifecycle.Host, error) {
+	if req.Remote == nil {
+		return lifecycle.NewHost(req.Provider, req.Dir, req.Options.Host)
+	}
+	host, err := lifecycle.NewRepositoryHost(req.Provider, req.Dir, req.Options.Host)
+	if err != nil {
+		return nil, err
+	}
+	host.Remote, host.PRs = req.Remote, req.PRs
+	return host, nil
 }
 
 // runOptions is the caller's decisions in the host's own vocabulary. exec is nil
@@ -74,6 +88,7 @@ func runOptions(req Request, exec *todos.ExecutorContext) lifecycle.RunOptions {
 		ReuseBranch:    req.Options.ReuseBranch,
 		Batch:          append([]string(nil), req.Options.Batch...),
 		Approvals:      req.Approvals,
+		OnApproval:     req.OnApproval,
 	}
 }
 

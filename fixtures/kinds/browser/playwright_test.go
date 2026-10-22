@@ -34,6 +34,25 @@ func generatedSpecs() []string {
 	return matches
 }
 
+var _ = Describe("watcher events", func() {
+	It("folds each raw watcher event onto the type/text/url/status/detail shape the UI renders", func() {
+		const page, api = "http://127.0.0.1:1/todos", "http://127.0.0.1:1/api/todos"
+		raw := []map[string]any{
+			{"type": "alert", "text": "Session error", "details": "boom", "url": page, "transient": true},
+			{"type": "console", "text": "Uncaught", "url": page},
+			{"type": "pageerror", "message": "x is undefined", "stack": "at main.js:1"},
+			{"type": "response", "method": "GET", "url": api, "status": float64(502)},
+		}
+
+		Expect(reportedEvents(raw)).To(Equal([]watcherEvent{
+			{Type: "alert", Text: "Session error", URL: page, Detail: "boom"},
+			{Type: "console", Text: "Uncaught", URL: page},
+			{Type: "pageerror", Text: "x is undefined", Detail: "at main.js:1"},
+			{Type: "response", Text: "GET", URL: api, Status: 502},
+		}))
+	})
+})
+
 var _ = Describe("playwright kind", func() {
 	It("rejects a step with both or neither of file and script", func() {
 		scope := fixtures.NewStepScope(os.Environ())

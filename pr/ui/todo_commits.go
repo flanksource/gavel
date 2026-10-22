@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -71,7 +72,7 @@ func (s *Server) handleTodoCommitFiles(w http.ResponseWriter, r *http.Request) {
 	}
 	var files []gavelgit.CommitFile
 	var err error
-	if opts.Base != "" && opts.File == "" {
+	if opts.Base != "" && opts.File == "" && !s.hosted {
 		tracker, trackerErr := s.context().GitTracker()
 		if trackerErr != nil {
 			writeTodoError(w, gitErrorStatus(trackerErr), trackerErr)
@@ -111,12 +112,24 @@ func (s *Server) todoCommitDiffRequest(w http.ResponseWriter, r *http.Request) (
 		writeTodoError(w, http.StatusBadRequest, err)
 		return "", opts, false
 	}
-	dir, err := s.resolveTodoDir(query.Get("dir"))
+	dir, err := s.todoCommitDir(r.Context(), query.Get("dir"))
 	if err != nil {
-		writeTodoError(w, http.StatusBadRequest, err)
+		writeTodoError(w, todoErrorStatus(http.StatusBadRequest, err), err)
 		return "", opts, false
 	}
 	return dir, opts, true
+}
+
+// todoCommitDir is the git directory a todo's run commits are read in: the workspace itself, or
+// a hosted organization's repository on serve, which its runs' commits are uploaded to.
+func (s *Server) todoCommitDir(ctx context.Context, dir string) (string, error) {
+	if !s.hosted {
+		return s.resolveTodoDir(dir)
+	}
+	if s.workspaces == nil {
+		return "", errNoHostedWorkspaces
+	}
+	return s.workspaces.GitDir(ctx, s.orgID(), dir)
 }
 
 // todoCommitDiffErrorStatus answers 410 Gone for a commit that is no longer in

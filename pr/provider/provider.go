@@ -8,12 +8,19 @@ import (
 
 	"github.com/flanksource/gavel/azuredevops"
 	"github.com/flanksource/gavel/github"
+	"github.com/flanksource/gavel/github/cache"
 	"github.com/flanksource/gavel/pr/model"
 )
 
 type Options struct {
 	WorkDir, Repo, Token string
 	Context              context.Context
+	// TokenSource, when set, is the GitHub client's only credential, as a hosted
+	// organization's App installation is.
+	TokenSource func() (string, error)
+	// Cache keeps the GitHub client's responses: a hosted organization's own, so no
+	// other organization is served them. Nil is the shared cache.
+	Cache *cache.Store
 }
 
 type Client interface {
@@ -27,7 +34,12 @@ type Client interface {
 	MergePR(context.Context, int, model.MergeInput) error
 }
 
+// Resolve is the PR client for opts' repository. Inside a sandbox job, it is the job's: serve
+// answers for the job's PR.
 func Resolve(opts Options) (Client, error) {
+	if api := inJob(); api != nil {
+		return jobClient{api: api}, nil
+	}
 	repo := opts.Repo
 	if repo == "" {
 		remote, err := Origin(opts.WorkDir)
@@ -55,7 +67,7 @@ func Resolve(opts Options) (Client, error) {
 	if len(strings.Split(repo, "/")) != 2 {
 		return nil, fmt.Errorf("unsupported PR repository %q", repo)
 	}
-	return gitHubClient{opts: github.Options{WorkDir: opts.WorkDir, Repo: repo, Token: opts.Token}}, nil
+	return gitHubClient{opts: github.Options{WorkDir: opts.WorkDir, Repo: repo, Token: opts.Token, TokenSource: opts.TokenSource, Cache: opts.Cache}}, nil
 }
 
 func IsAzure(ref string) bool {

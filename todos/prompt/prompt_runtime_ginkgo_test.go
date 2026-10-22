@@ -15,7 +15,7 @@ var _ = Describe("resolved TODO prompt runtime", func() {
 			Model:    api.Model{Name: "claude-sonnet-5", Mode: api.ModeAgent, Effort: api.EffortHigh},
 			Workflow: &api.Workflow{Verify: &api.Verify{Commands: []string{"true"}}},
 		}.WithExplicit("/prompt/user")
-		_, _, err := Render([]*types.TODO{newTestTODO("parser", "Review the parser")}, Options{Mode: types.ModeRun, Spec: spec})
+		_, _, err := Render([]*types.TODO{newTestTODO("parser", "Review the parser")}, Options{Mode: types.ModeRun, Events: stepEvents["run"], Spec: spec})
 		gomega.Expect(err).To(gomega.HaveOccurred())
 	})
 
@@ -23,7 +23,7 @@ var _ = Describe("resolved TODO prompt runtime", func() {
 		func(prompt string) {
 			var spec api.Spec
 			gomega.Expect(json.Unmarshal([]byte(`{"model":"claude-sonnet-5","mode":"agent","prompt":`+prompt+`}`), &spec)).To(gomega.Succeed())
-			_, _, err := Render([]*types.TODO{newTestTODO("parser", "Review the parser")}, Options{Mode: types.ModeRun, Spec: spec})
+			_, _, err := Render([]*types.TODO{newTestTODO("parser", "Review the parser")}, Options{Mode: types.ModeRun, Events: stepEvents["run"], Spec: spec})
 			gomega.Expect(err).To(gomega.HaveOccurred())
 		},
 		Entry("empty user", `{"user":""}`),
@@ -40,7 +40,7 @@ var _ = Describe("resolved TODO prompt runtime", func() {
 				Model:  api.Model{Name: "claude-sonnet-5", Mode: api.ModeAgent, Effort: effort},
 				Prompt: api.Prompt{User: override + body},
 			}
-			request, _, err := Render([]*types.TODO{newTestTODO("other", "Unrelated todo")}, Options{Mode: types.ModePlan, Spec: spec})
+			request, _, err := Render([]*types.TODO{newTestTODO("other", "Unrelated todo")}, Options{Mode: types.ModePlan, Events: stepEvents["plan"], Spec: spec})
 			gomega.Expect(err).NotTo(gomega.HaveOccurred())
 			gomega.Expect(request.Prompt.User).To(gomega.Equal(EffortDirective(string(effort)) + "\n\n" + body))
 		},
@@ -54,7 +54,7 @@ var _ = Describe("resolved TODO prompt runtime", func() {
 	It("renders conversation without reapplying template runtime fields", func() {
 		spec := api.Spec{Model: api.Model{Name: "claude-sonnet-5", Mode: api.ModeAgent}}
 		request, config, err := Render([]*types.TODO{newTestTODO("parser", "Review the parser")}, Options{
-			Mode: types.ModeRun, Spec: spec,
+			Mode: types.ModeRun, Events: stepEvents["run"], Spec: spec,
 			Template: "---\nbudget:\n  cost: 99\npermissions:\n  mode: bypassPermissions\nmemory:\n  skipUser: true\n---\nReview {{count}} item",
 		})
 		gomega.Expect(err).NotTo(gomega.HaveOccurred())

@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/flanksource/commons/logger"
 	"github.com/gliderlabs/ssh"
@@ -15,6 +16,12 @@ import (
 func HandleGitReceive(sess ssh.Session, repoPath, repoDir string, hookWriter func(string, string) error) int {
 	bareRepo := filepath.Join(repoDir, repoPath+".git")
 	logger.V(2).Infof("Bare repo path: %s", bareRepo)
+	// cleanRepoPath already refuses "..", but the bare repository must stay inside
+	// repoDir whatever the caller passed.
+	if rel, err := filepath.Rel(repoDir, bareRepo); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		fmt.Fprintf(sess.Stderr(), "repository path %q is outside the repository directory\n", repoPath)
+		return 1
+	}
 
 	if err := ensureBareRepo(bareRepo); err != nil {
 		fmt.Fprintf(sess.Stderr(), "failed to init repo: %v\n", err)

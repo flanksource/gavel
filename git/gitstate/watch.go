@@ -37,6 +37,35 @@ func newMetadataWatcher(t *Tracker) (*metadataWatcher, error) {
 }
 
 func (w *metadataWatcher) add(repo *trackedRepo) error {
+	dirs, err := metadataDirs(repo)
+	if err != nil {
+		return err
+	}
+	for _, dir := range dirs {
+		if err := w.fs.Add(dir); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("watch %s: %w", dir, err)
+		}
+	}
+	return nil
+}
+
+// remove stops watching the directories add watched for repo. A directory add
+// skipped because it did not exist was never watched, so it is not an error.
+func (w *metadataWatcher) remove(repo *trackedRepo) error {
+	dirs, err := metadataDirs(repo)
+	if err != nil {
+		return err
+	}
+	for _, dir := range dirs {
+		if err := w.fs.Remove(dir); err != nil && !errors.Is(err, fsnotify.ErrNonExistentWatch) {
+			return fmt.Errorf("unwatch %s: %w", dir, err)
+		}
+	}
+	return nil
+}
+
+// metadataDirs lists the .git metadata directories watched for repo.
+func metadataDirs(repo *trackedRepo) ([]string, error) {
 	dirs := []string{repo.commonDir, filepath.Join(repo.commonDir, "worktrees")}
 	err := filepath.WalkDir(filepath.Join(repo.commonDir, "refs", "heads"), func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -48,7 +77,7 @@ func (w *metadataWatcher) add(repo *trackedRepo) error {
 		return nil
 	})
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("list refs of %s: %w", repo.root, err)
+		return nil, fmt.Errorf("list refs of %s: %w", repo.root, err)
 	}
 	if entries, err := os.ReadDir(filepath.Join(repo.commonDir, "worktrees")); err == nil {
 		for _, entry := range entries {
@@ -57,12 +86,7 @@ func (w *metadataWatcher) add(repo *trackedRepo) error {
 			}
 		}
 	}
-	for _, dir := range dirs {
-		if err := w.fs.Add(dir); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return fmt.Errorf("watch %s: %w", dir, err)
-		}
-	}
-	return nil
+	return dirs, nil
 }
 
 func (w *metadataWatcher) run(ctx context.Context) {

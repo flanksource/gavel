@@ -37,6 +37,7 @@ type GavelResultsSummary struct {
 	ArtifactURL      string        `json:"artifactUrl"`
 	TestsPassed      int           `json:"testsPassed"`
 	TestsFailed      int           `json:"testsFailed"`
+	TestsTimedOut    int           `json:"testsTimedOut,omitempty"` // subset of TestsFailed
 	TestsSkipped     int           `json:"testsSkipped"`
 	TestsTotal       int           `json:"testsTotal"`
 	LintViolations   int           `json:"lintViolations"`
@@ -145,6 +146,9 @@ func walkTestCounts(test parsers.Test, summary *GavelResultsSummary) {
 	switch {
 	case test.Failed:
 		summary.TestsFailed++
+		if test.TimedOut {
+			summary.TestsTimedOut++
+		}
 		if len(summary.Failures) < maxDetailItems {
 			summary.Failures = append(summary.Failures, detailTest(test))
 		}
@@ -197,6 +201,7 @@ func AggregateGavelSummaries(shards []*GavelResultsSummary) *GavelResultsSummary
 func aggregateGavelSummary(aggregate, shard *GavelResultsSummary) {
 	aggregate.TestsPassed += shard.TestsPassed
 	aggregate.TestsFailed += shard.TestsFailed
+	aggregate.TestsTimedOut += shard.TestsTimedOut
 	aggregate.TestsSkipped += shard.TestsSkipped
 	aggregate.TestsTotal += shard.TestsTotal
 	aggregate.LintViolations += shard.LintViolations

@@ -1,3 +1,16 @@
+import type { ProcessDescriptor as ClickyProcessDescriptor, ProcessNodeRow, ProcessSampleRow } from '@flanksource/clicky-ui/data';
+
+export interface FixtureExecution {
+  key: string;
+  kind: string;
+  state: string;
+  command_ms?: number;
+  violations?: string[];
+  // pids of processes this fixture step started: services as they launch,
+  // commands once they exit.
+  pids?: number[];
+}
+
 export interface Test {
   name: string;
   package?: string;
@@ -11,9 +24,8 @@ export interface Test {
   framework?: string;
   duration?: number; // nanoseconds
   fixture_profile?: FixtureProfile;
-  go_profiles?: GoProfileArtifact[];
   sql_profile?: FixtureSQLProfile;
-  fixture?: { key: string; kind: string; state: string; command_ms?: number; violations?: string[] };
+  fixture?: FixtureExecution;
   skipped?: boolean;
   // aborted marks a test that never ran because the run stopped after an
   // earlier failure — distinct from an intentional skip.
@@ -30,6 +42,7 @@ export interface Test {
   // an active spinner and pending with a static hollow icon.
   running?: boolean;
   timed_out?: boolean;
+  cached?: boolean;
   task_id?: string;
   can_stop?: boolean;
   stdout?: string;
@@ -46,16 +59,14 @@ export interface Test {
   // intake step being consumed). Cleared on completion.
   progress?: { phase?: string; done: number; total: number };
 
-  // Synthetic node markers (frontend-only). Used to render lint results as tree nodes.
-  kind?: 'lint-root' | 'lint-folder' | 'linter' | 'violation' | 'lint-file' | 'lint-rule' | 'lint-rule-group';
-  violation?: Violation;
-  violations?: Violation[];
-  noFileViolations?: Violation[];
-  linter?: LinterResult;
-  linterName?: string;
-  ruleName?: string;
-  target_path?: string;
+  // route_path is the host-assigned stable path used for selection and the URL.
   route_path?: string;
+  // own_name is the node's name before single-child chains were joined into it
+  // ("pkg/ > TestFoo" is TestFoo's row); frontend-only, set by the host.
+  own_name?: string;
+  // export_path is the path the server's export of this node is requested at
+  // (its uncollapsed ancestry); frontend-only, set by the host.
+  export_path?: string;
 }
 
 export type Severity = 'error' | 'warning' | 'info';
@@ -95,6 +106,9 @@ export interface TestAttempt {
   ended?: string;
   duration?: number;
   pid?: number;
+  // process_key names the attempt's process in the run's process_tree
+  // (`<pid>@<startUnix>`); its live metrics are that key's process_samples.
+  process_key?: string;
   command?: string;
   framework?: string;
   exit_code?: number;
@@ -110,6 +124,9 @@ export interface TestAttempt {
   cpu_percent?: number;
   rss?: number;
   goroutine_count?: number;
+  // shared_process marks a pid, CPU and RSS that belong to the go test batch
+  // the package ran in, not to the package alone.
+  shared_process?: boolean;
 }
 
 export interface TestSummary {
@@ -134,7 +151,6 @@ export interface Snapshot {
   fixture_benchmark?: FixtureBenchmarkState;
   performance?: FixturePerformance;
   error?: string;
-  diagnostics?: DiagnosticsSnapshot;
 }
 
 export interface FixtureExecutionNode {
@@ -162,7 +178,6 @@ export interface FixtureBenchmarkEntry {
   command_ms?: number;
   profile_samples?: number;
   profile?: FixtureProfile;
-  go_profiles?: GoProfileArtifact[];
   sql_profile?: FixtureSQLProfile;
   violations?: string[];
 }
@@ -190,16 +205,6 @@ export interface ProfileDiskIO {
   disk_write_bytes: number;
   sample_count: number;
   missing_processes?: number;
-}
-
-export interface GoProfileArtifact {
-  name: string;
-  id?: string;
-  path?: string;
-  status: 'captured' | 'not_emitted' | 'invalid';
-  bytes?: number;
-  sample_types?: string[];
-  error?: string;
 }
 
 export interface FixtureProfile {
@@ -314,6 +319,10 @@ export interface RunMeta {
   frameworks?: string[];
   exit_code?: number;
   timed_out?: boolean;
+  // run_id names the run's trace store, .gavel/traces/<run_id>.
+  run_id?: string;
+  // process_trace names the run's process capture in that store.
+  process_trace?: ProcessTraceRefs;
 }
 
 export interface SnapshotGit {
@@ -325,53 +334,85 @@ export interface SnapshotGit {
 export interface SnapshotStatus {
   running: boolean;
   lint_run?: boolean;
-  diagnostics_available?: boolean;
+  // traces is the run's trace store as the UI reaches it; absent when the run kept none.
+  traces?: TracesStatus;
   stop_supported?: boolean;
   test_edit_supported?: boolean;
   stopped?: boolean;
   stop_message?: string;
 }
 
-export interface DiagnosticsSnapshot {
-  root?: ProcessNode;
-  generated_at?: string;
+// ProcessTraceNode is one process_tree record (commons-db tracing/process):
+// cpuPercent and peakCpuPercent are absent until a full sampling window has
+// been observed, and stackTransports lists the ways a stack of the process can
+// be collected.
+export type ProcessTraceNode = ProcessNodeRow;
+
+// ProcessDescriptor is one file or socket a process holds open
+// (clicky process.Descriptor), as process_samples stores it.
+export type ProcessDescriptor = ClickyProcessDescriptor;
+
+// ProcessSample is one process_samples record: a process's usage at one tick.
+export type ProcessSample = ProcessSampleRow;
+
+// TraceRef names a window of a trace stream: the records after seq afterSeq
+// through seq toSeq (0 = unbounded) of kind's stream (commons-db tracing.TraceRef).
+export interface TraceRef {
+  kind: string;
+  stream: string;
+  afterSeq?: number;
+  toSeq?: number;
 }
 
-export interface ProcessNode {
-  pid: number;
-  ppid?: number;
-  name?: string;
-  command?: string;
-  status?: string;
-  cpu_percent?: number;
-  rss?: number;
-  vms?: number;
-  open_files?: number;
-  is_root?: boolean;
-  children?: ProcessNode[];
-  stack_capture?: StackCapture;
-}
-
-export interface ProcessDetails {
-  pid: number;
-  ppid?: number;
-  name?: string;
-  command?: string;
-  status?: string;
-  cpu_percent?: number;
-  rss?: number;
-  vms?: number;
-  open_files?: number;
-  is_root?: boolean;
-  stack_capture?: StackCapture;
-}
-
-export interface StackCapture {
-  status: 'ready' | 'unsupported' | 'error';
-  supported: boolean;
-  text?: string;
+// TraceResult is one armed trace's window of a fixture, with its record count,
+// the kind's summary of it, or the error that kept it from being read.
+export interface TraceResult extends TraceRef {
+  // run_id names the run whose store holds the window, .gavel/traces/<run_id>.
+  run_id: string;
+  count: number;
+  summary?: Record<string, unknown>;
   error?: string;
-  collected_at?: string;
+}
+
+// ProcessTraceRefs are the windows of the run's process capture: the process
+// tree, the per-tick samples (resources, disk IO, facet counts and lists), the
+// stack dumps and, when the run ingests Go profiles, goprof.
+export interface ProcessTraceRefs {
+  tree: TraceRef;
+  samples: TraceRef;
+  stacks: TraceRef;
+  goprof?: TraceRef;
+}
+
+// ProcessTraceSessions are the session ids of the same four streams while the
+// capture runs: a checkpoint of stacks takes a stack dump, one of samples
+// forces a full facet reading.
+export interface ProcessTraceSessions {
+  tree: string;
+  samples: string;
+  stacks: string;
+  goprof?: string;
+}
+
+// RunTraces is one run's store as the UI reaches it.
+export interface RunTraces {
+  // mount is where the store is served through query ("/query/<run id>"); absent when it is not.
+  mount?: string;
+  // unavailable says why a run that kept a store is not serving it (pruned since).
+  unavailable?: string;
+}
+
+// TracesStatus is the stores of the runs the server shows: a replay of several
+// snapshots shows several runs, and each trace window names its run.
+export interface TracesStatus {
+  runs: Record<string, RunTraces>;
+  // process_run is the run whose process capture (process) the Processes tab reads.
+  process_run?: string;
+  process?: ProcessTraceRefs;
+  // sessions are the running capture's session ids, which a checkpoint names;
+  // absent once the run has ended (and for a stored run), when nothing can be
+  // checkpointed any more.
+  sessions?: ProcessTraceSessions;
 }
 
 export interface BenchDelta {
@@ -406,6 +447,18 @@ export interface GinkgoContext {
   suite_description?: string;
   suite_path?: string;
   failure_location?: string;
+  labels?: string[];
+  num_attempts?: number;
+  parallel_process?: number;
+  report_entries?: GinkgoReportEntry[];
+}
+
+export interface GinkgoReportEntry {
+  name: string;
+  value?: unknown;
+  representation?: string;
+  file?: string;
+  line?: number;
 }
 
 // TaskContext mirrors the shape emitted by the Go server for virtual
@@ -425,6 +478,8 @@ export interface FixtureContext {
   cel_vars?: Record<string, any>;
   expected?: any;
   actual?: any;
+  // traces are the windows of the traces the fixture armed.
+  traces?: TraceResult[];
 }
 
 export type FailureKind = 'gomega' | 'panic' | 'go_test' | 'raw';

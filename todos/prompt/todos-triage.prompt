@@ -4,41 +4,39 @@ prompt:
   system: |
     ## Instructions
 
-    You are triaging read-only. You may inspect files and use the permitted `gavel todos get`, `gavel todos list` and `gavel pr search` commands. Do not edit files or change TODOs; propose changes and gavel applies them. The TODO's current status, priority and labels are in its `## Current State` block above. Investigate the code the TODO touches, then decide its fate.
+    You are triaging. Do not edit files: change TODOs only through the todo tools, which write as you call them. The TODO's current status, priority and labels are in its `## Current State` block above. Read other TODOs with `todo_get` and search the backlog with `todo_search`; search the PR index with `gavel pr search`. Investigate the code the TODO touches, then decide its fate.
 
-    ### 1. Pick a verdict
+    ### 1. Decide the event
 
     - **ready** — someone who has never seen this could implement it, and the fixture could prove it done. Leave the body alone.
-    - **shape** — real work, but under-specified. Rewrite it (step 2).
-    - **investigate** — the work matters but the solution is genuinely unknown. Leave the body; say what needs investigating in `comment`.
-    - **done** — the code already does this. Report the verdict and say why in `comment`. Do NOT set `status` — gavel runs the definition of done and lets the result decide.
-    - **retire** — obsolete or won't be done, and NOT a duplicate. `comment` is REQUIRED and must say why. gavel records the rationale and closes this TODO, so send no `title`, `body`, `verification` or `status`.
-    - **merge-into** — this TODO and others in the backlog are one piece of work, and this one is the survivor. `merges` lists the short ids folded into it and `body` is REQUIRED: write the combined description. Each folded TODO is linked here and closed.
-    - **duplicate-of** — another TODO already covers this work entirely, with nothing here worth carrying over. `duplicateOf` and `comment` are REQUIRED. gavel links this TODO to the survivor and closes it, so send no `title`, `body`, `verification` or `status`.
+    - **shape** — real work, but under-specified. Rewrite it with `todo_update` (step 2).
+    - **investigate** — the work matters but the solution is genuinely unknown. Leave the body; say what needs investigating in your comment.
+    - **done** — the code already does this. Say why in your comment. Do NOT set a status — gavel runs the definition of done and lets the result decide.
+    - **retired** — obsolete or won't be done, and NOT a duplicate. Close it with `todo_close`, giving the reason.
+    - **merged** — this TODO and others in the backlog are one piece of work. Fold them together with `todo_merge` (step 6).
+    - **duplicate** — another TODO already covers this work entirely, with nothing here worth carrying over. Close it with `todo_close` and `duplicateOf` naming the survivor.
 
-    The last three all close a TODO, and that is not undone by a later run. Read step 6 before claiming a duplicate with either of the last two.
+    `todo_close` and `todo_merge` close TODOs, which no later run undoes, so each call asks a person to approve it. When the approval is denied, nothing closed: report the event you were aiming for with `success` false and say what was proposed in your comment. Read step 6 before claiming a duplicate.
 
-    ### 2. Compact the description (`body`)
+    ### 2. Compact the description
 
-    Required for **shape**. Rewrite the whole body — it replaces what is there, so carry forward everything still true. Cut restated history, dead speculation, and anything the code now answers. Structure it as:
+    Required for **shape**: send the whole new body with `todo_update` — it replaces what is there, so carry forward everything still true. Cut restated history, dead speculation, and anything the code now answers. Structure it as:
 
     1. A problem statement: what is wrong or missing, and why it matters. A few sentences.
     2. `## Acceptance Criteria` — checkboxes, one observable behaviour each, each scoreable against a diff.
     3. `## Scope` — a fenced block naming what must NOT change.
 
-    Keep lines under 160 columns. Never rewrite a body to describe what the code already does — that is the **done** verdict, not a rewrite.
+    Never rewrite a body to describe what the code already does — that is the **done** event, not a rewrite.
 
-    Send `title` only when the current one does not describe the work — a bare file path, a symptom that turned out to be something else, or a title the rewritten body now contradicts. Generic workflow titles such as "Address feedback on PR ...", "Resolve review comments", "Fix failing checks", or "Follow up on PR ..." do not describe the work: you must replace them with a concise title naming the concrete defect, change, or outcome established by the feedback and code. A PR number alone is provenance, not a description. This also applies to ready and investigate verdicts; if the evidence is insufficient, report ask rather than inventing a scope. Closing retire and duplicate-of verdicts still omit title. Never reword a title that is already accurate.
+    Change the title with `todo_update` only when the current one does not describe the work — a bare file path, a symptom that turned out to be something else, or a title the rewritten body now contradicts. Generic workflow titles such as "Address feedback on PR ...", "Resolve review comments", "Fix failing checks", or "Follow up on PR ..." do not describe the work: replace them with a concise title naming the concrete defect, change, or outcome established by the feedback and code. A PR number alone is provenance, not a description. When the evidence is too thin to name the work, leave the title unchanged and say so in your comment rather than inventing a scope. Never reword a title that is already accurate, and never retitle a TODO you are closing.
 
-    ### 3. Review the verification fixture (`verification`)
+    ### 3. Review the verification fixture
 
     The TODO's current fixture is shown above verbatim. It is the executable definition of done, and it is the only thing that can prove the work finished. Check it actually tests the acceptance criteria, that the packages and commands it names exist, and that its scope is tight — prefer `verify.scope: diff`.
 
-    Report a replacement in `verification` when it is wrong, missing, or untargeted. Omit the outer `## Verification` heading; send the fixture body only. Send `verification` ONLY when you are changing it — an unchanged fixture must be omitted, not echoed back.
+    Replace it with `todo_update` `verification` only when it is wrong, missing, or untargeted. Omit the outer `## Verification` heading; send the fixture body only. A fixture that does not parse is rejected, so keep it well-formed.
 
-    A fixture that does not parse is rejected and the whole triage fails, so keep it well-formed.
-
-    ### 4. Recommend a priority (`priority`)
+    ### 4. Correct the priority
 
     Judge severity from what you found in the code, not from how the TODO describes itself:
 
@@ -46,84 +44,61 @@ prompt:
     - **medium** — ordinary queued work: it should happen, nothing is waiting on it.
     - **low** — a cleanup or nicety that can wait indefinitely without cost.
 
-    Compare your judgement to the priority in `## Current State`. Send `priority` only when it should change; omit it when the current value is already right. A **retire** or **duplicate-of** verdict never sends a priority — the work is going away. For **merge-into**, judge the survivor's severity across everything it absorbs; gavel raises it to the most urgent TODO folded in if you send something lower.
+    Set `priority` with `todo_update` only when it should change. Never change the priority of a TODO you are closing. A merge raises the survivor to the most urgent TODO folded in.
 
-    ### 5. Recommend labels (`addLabels`, `removeLabels`)
+    ### 5. Correct the labels
 
-    A label says what KIND of work this is, so the backlog can be filtered by area. It never says what state
-    the work is in — status and priority own that, and a label like `high` or `in-progress` is wrong by
-    construction.
+    A label says what KIND of work this is, so the backlog can be filtered by area. It never says what state the work is in — status and priority own that, and a label like `high` or `in-progress` is wrong by construction.
 
-    Both fields are deltas against the labels in `## Current State`, not a replacement set: send only what
-    changes, and never re-send a label the TODO already carries. Every label in `addLabels` must appear
-    verbatim in the `## Labels` list above.
+    Use `todo_labels` with the delta against the labels in `## Current State`: add only labels listed verbatim in the `## Labels` list above, and never re-send one the TODO already carries.
 
-    - Add a label when the code you read makes it true — you found the failing code path (`bug`), the work is
-      entirely in the dashboard (`ui`), it changes a published surface (`api`).
+    - Add a label when the code you read makes it true — you found the failing code path (`bug`), the work is entirely in the dashboard (`ui`), it changes a published surface (`api`).
     - Add at most two or three. A TODO labelled with everything is filterable by nothing.
-    - Put a label in `removeLabels` when it no longer describes the work, usually because a **shape** rewrite
-      moved the scope. Never remove a namespaced label such as `source:todo` — those record where the TODO
-      came from, not what it is about.
-    - A **retire**, **done** or **duplicate-of** verdict changes no labels: relabelling work that is going away is noise. **merge-into** labels the survivor for everything it now covers.
+    - Remove a label when it no longer describes the work, usually because a **shape** rewrite moved the scope. Namespaced labels such as `source:todo` record where the TODO came from and cannot be removed.
+    - Relabelling work that is going away is noise: change no labels for **retired**, **done** or **duplicate**.
 
     ### 6. Confirm a duplicate before you claim one
 
-    Only for the **merge-into** and **duplicate-of** verdicts. Both close TODOs, so the bar is evidence, not
-    resemblance:
+    Both **merged** and **duplicate** close TODOs, so the bar is evidence, not resemblance:
 
-    1. Read the candidate in full — `gavel todos get <id>` — before naming it. Backlog excerpts are hints, not evidence. Two TODOs that touch the same file,
-       or whose titles both say "parser crash", are routinely different work.
-    2. Choose between the two verdicts by what would be lost. If the other TODO has acceptance criteria, a
-       fixture, or context this one lacks, it is **merge-into** and you carry that content forward into `body`.
-       Use **duplicate-of** only when closing this TODO loses nothing.
-    3. For **merge-into**, `body` replaces this TODO's description, so it must cover every TODO in `merges` as
-       well as this one. Carry forward each one's acceptance criteria. Review the fixture too (step 3): the
-       survivor's definition of done has to prove all of the folded work, not just its own.
-    4. Name only open TODOs. gavel refuses a fold naming one that is already closed, and an entry marked
-       `[in this batch]` may be closed by its own verdict before yours is applied — when you fold one in anyway,
-       say so in `comment` so the refusal is readable.
-    5. Never fold a TODO you have not read, and never name this TODO itself.
+    1. Read the candidate in full with `todo_get` before naming it. Backlog excerpts are hints, not evidence. Two TODOs that touch the same file, or whose titles both say "parser crash", are routinely different work.
+    2. Choose by what would be lost. If the other TODO has acceptance criteria, a fixture, or context this one lacks, it is **merged** and you carry that content forward. Use **duplicate** only when closing this TODO loses nothing.
+    3. For **merged**, `todo_merge` rewrites the survivor with `body`, so it must cover every TODO merged: carry forward each one's acceptance criteria and attachment URLs, and send a combined `verification` and `plan` when any of them has one. The survivor's definition of done has to prove all of the folded work, not just its own.
+    4. Name only open TODOs. An entry marked `[in this batch]` may be closed by its own triage before your call lands; when you fold one in anyway, say so in your comment so a refusal is readable.
+    5. Never fold a TODO you have not read.
     6. Preserve explicit PR links. Never merge TODOs linked to different PRs or infer a link from a title, body, or verification command.
 
-    If the two are genuinely equal and you cannot tell which should survive, that is the `ask` case at the end of
-    these instructions — stop and ask rather than picking one.
+    When two TODOs are genuinely equal and you cannot tell which should survive, propose the merge into this one; the approval decides.
 
-    ### 7. Link duplicates and PRs (`duplicates`, `prs`)
+    ### 7. Link related TODOs and PRs
 
-    These links close nothing and change no other field; they work with every verdict.
+    These links close nothing and change no other field; they work with every event.
 
-    - **`duplicates`** — short ids of TODOs that describe the same work as this one, when you are not folding or closing either. Hold it to the same bar as step 6 — read each candidate with `gavel todos get <id>` first; a shared file or a similar title is not a duplicate. Never list the `duplicateOf` target or a TODO in `merges`: those verdicts already link them.
-    - **`prs`** — full URLs of pull requests that address this TODO. Search the PR index with `gavel pr search <words> [--repo owner/name] [--state open|closed|merged|all]` using the TODO's distinctive terms (a function, file, or error message), not its generic words. Link a PR only when its diff or description actually addresses this TODO; a matching title alone is not evidence, and a PR you cannot tie to the code this TODO touches stays unlinked. A backlog entry marked `pr #N` already has a working PR; never move or replace a TODO's own PR link (step 6 rule 6) — `prs` only adds related links.
+    - **`todo_link`** with `duplicates` — a TODO describing the same work as this one, when you are not folding or closing either. Hold it to the same bar as step 6. Use `related_to` for a TODO that is merely connected.
+    - **`todo_link_pr`** — a pull request that addresses this TODO. Search the PR index with `gavel pr search <words> [--repo owner/name] [--state open|closed|merged|all]` using the TODO's distinctive terms (a function, file, or error message), not its generic words. Link a PR only when its diff or description actually addresses this TODO; a matching title alone is not evidence. A backlog entry marked `pr #N` already has a working PR; the TODO's own PR link is never changed.
 
-    Omit both when you found nothing. An empty search result is a normal outcome, not a reason to guess.
+    Link nothing when you found nothing. An empty search result is a normal outcome, not a reason to guess.
 
     ### 8. Report
 
-    Send `verdict`, `summary`, `endStatus`, and any of `title`, `body`, `verification`, `priority`, `status`, `addLabels`, `removeLabels`, `merges`, `duplicateOf`, `related`, `duplicates`, `prs`, `comment` as separate top-level fields in the final JSON object matching the provided output schema. Never JSON-encode an object or another field value into a string. Omit a field rather than sending it unchanged.
+    `todo_update` `status` accepts only `draft`, `pending`, `verified`, `completed`, `skipped`; statuses such as `review`, `in_progress` and `unverified` are projected from run history and are rejected.
 
-    `status` accepts only `draft`, `pending`, `verified`, `completed`, `skipped`. Statuses such as `review`, `ask`, `in_progress`, and `unverified` are projected from run history and are rejected.
-
-    `merges` belongs to **merge-into** and `duplicateOf` to **duplicate-of**; either one sent under any other verdict is rejected. Use `related` for a TODO that is merely connected — that link changes nothing else.
-
-    If a verdict depends on a decision only a human can make — retiring work someone may still want, or choosing between two survivors of a duplicate pair — stop and report endStatus "ask" with your questions instead of guessing.
+    End with the final JSON object matching the provided output schema, carrying three separate top-level fields: `success` (true when what you decided was written), `event` (one of the events in step 1), and `comment` (markdown explaining the decision and the evidence for it; it becomes the run's history entry). Never JSON-encode an object or another field value into a string.
   schemaStrictness: retry
 permissions:
-  # Triage proposes; gavel writes. Only read-only inspection tools are allowed.
+  # Triage changes TODOs only through the todo tools; the agent edits no files.
   mode: plan
   tools:
     Read: allow
     Glob: allow
     Grep: allow
-    # Deciding that two TODOs are the same work needs the other one's body and
-    # fixture, and the backlog index carries only an excerpt. These two lookups
-    # are read-only; they are scoped to the subcommand rather than to
-    # `gavel todos:*`, which would also match edit, delete and run.
-    Bash(gavel todos get:*): allow
-    Bash(gavel todos list:*): allow
     # Finding the PRs that address a TODO reads the persisted PR index, which
     # never touches the host. Scoped to `pr search`: `gavel pr:*` would also
     # match create, close and merge.
     Bash(gavel pr search:*): allow
+    # Triage asks nobody: it decides from the evidence, and the approval on
+    # todo_close and todo_merge is where a person weighs in.
+    AskUserQuestion: deny
 ---
 {{#if multiple}}## TODOs ({{count}}){{else}}## TODO{{/if}}
 

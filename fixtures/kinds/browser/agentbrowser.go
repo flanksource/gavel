@@ -40,6 +40,8 @@ type agentBrowserSession struct {
 	binary, session, cdp string
 	env                  map[string]string
 	observe              string
+	scope                *fixtures.StepScope
+	used                 bool
 }
 
 // commandRun is one executed agent-browser command.
@@ -60,6 +62,11 @@ func (AgentBrowser) Execute(ctx context.Context, step *fixtures.StepContext) (fi
 	if err != nil {
 		return fixtures.StepOutcome{}, err
 	}
+	owner, loaded := openSessions.LoadOrStore(session.session, step.Scope)
+	if loaded && owner != step.Scope {
+		return fixtures.StepOutcome{}, fmt.Errorf("agent-browser session %q is owned by another fixture scope", session.session)
+	}
+	owns := !loaded
 	result := newResult(step, start)
 	var stdout strings.Builder
 	var snapshot string
@@ -67,6 +74,12 @@ func (AgentBrowser) Execute(ctx context.Context, step *fixtures.StepContext) (fi
 	for _, command := range cfg.Commands {
 		run, err := session.run(ctx, step, command)
 		if err != nil {
+			if owns {
+				if session.used {
+					return fixtures.StepOutcome{}, errors.Join(err, session.close(ctx))
+				}
+				openSessions.CompareAndDelete(session.session, step.Scope)
+			}
 			return fixtures.StepOutcome{}, err
 		}
 		results = append(results, run.asMap())
@@ -88,7 +101,7 @@ func (AgentBrowser) Execute(ctx context.Context, step *fixtures.StepContext) (fi
 	}
 	// The first step to use a session owns its daemon's teardown; later steps
 	// in the same session reuse it.
-	if _, loaded := openSessions.LoadOrStore(session.session, true); !loaded {
+	if owns {
 		outcome.Cleanup = session.close
 	}
 	return outcome, nil
@@ -100,12 +113,14 @@ var openSessions sync.Map
 // close ends the agent-browser session daemon. Attached over CDP, agent-browser
 // does not own the Chrome, so this disconnects without closing the browser.
 func (s *agentBrowserSession) close(ctx context.Context) error {
-	defer openSessions.Delete(s.session)
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
 	args := []string{"--engine", "chrome", "--session", s.session, "close"}
-	execution := cexec.NewExec(s.binary, args...).WithExactEnv(s.env).WithContext(ctx).Run().Result()
+	execution := cexec.NewExec(s.binary, args...).WithExactEnv(s.env).WithContext(cleanupCtx).Run().Result()
 	if execution.ExitCode != 0 {
 		return fmt.Errorf("agent-browser %s exited %d: %s", strings.Join(args, " "), execution.ExitCode, strings.TrimSpace(execution.Stderr+"\n"+execution.Stdout))
 	}
+	openSessions.CompareAndDelete(s.session, s.scope)
 	return nil
 }
 
@@ -164,7 +179,7 @@ func agentBrowserSetup(step *fixtures.StepContext) (AgentBrowserConfig, *agentBr
 	if err != nil {
 		return cfg, nil, fmt.Errorf("agent-browser step %q: %w", step.Spec.ID, err)
 	}
-	return cfg, &agentBrowserSession{binary: binary, session: cfg.Session, cdp: cfg.CDP, env: environ(step), observe: cfg.Observe}, nil
+	return cfg, &agentBrowserSession{binary: binary, session: cfg.Session, cdp: cfg.CDP, env: environ(step), observe: cfg.Observe, scope: step.Scope}, nil
 }
 
 func (s *agentBrowserSession) run(ctx context.Context, step *fixtures.StepContext, command string) (commandRun, error) {
@@ -182,6 +197,7 @@ func (s *agentBrowserSession) run(ctx context.Context, step *fixtures.StepContex
 	// --engine is always explicit: the CLI default is chrome, and a session
 	// must keep one engine for its whole life.
 	args := append([]string{"--engine", "chrome", "--session", s.session, "--cdp", s.cdp}, words...)
+	s.used = true
 	execution := cexec.NewExec(s.binary, args...).WithExactEnv(s.env).WithContext(ctx).Run().Result()
 	if execution.ExitCode < 0 {
 		return commandRun{}, fmt.Errorf("agent-browser step %q: run %s: %w", step.Spec.ID, rendered, execution.Error)

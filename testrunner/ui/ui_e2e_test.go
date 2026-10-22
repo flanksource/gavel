@@ -3,6 +3,7 @@ package testui_test
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -11,9 +12,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/flanksource/gavel/internal/safefs"
+
 	"github.com/chromedp/chromedp"
+	"github.com/flanksource/commons-db/cmd/query/traceserve"
 	"github.com/flanksource/gavel/testrunner/parsers"
 	testui "github.com/flanksource/gavel/testrunner/ui"
+	"github.com/flanksource/gavel/traces"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -52,7 +57,12 @@ func clickWithTimeout(sel string) chromedp.ActionFunc {
 		tctx, cancel := context.WithTimeout(ctx, clickTimeout)
 		defer cancel()
 		if err := chromedp.Click(sel, chromedp.BySearch).Do(tctx); err != nil {
-			return fmt.Errorf("click %q: %w", sel, err)
+			// Name what the page showed instead, so a CI-only miss is diagnosable.
+			var text string
+			if textErr := chromedp.Evaluate(`document.body ? document.body.innerText.slice(0, 1500) : "<no body>"`, &text).Do(ctx); textErr != nil {
+				text = "<page text unavailable: " + textErr.Error() + ">"
+			}
+			return fmt.Errorf("click %q: %w\npage text:\n%s", sel, err, text)
 		}
 		return nil
 	}
@@ -251,7 +261,7 @@ var _ = BeforeSuite(func() {
 // after the grace period.
 func removeChromeUserDataDir(dir string) {
 	for i := 0; i < 20; i++ {
-		if err := os.RemoveAll(dir); err == nil {
+		if err := safefs.SafeRemove(dir, safefs.RemoveContext{AllowedRoot: os.TempDir()}); err == nil {
 			return
 		}
 		time.Sleep(100 * time.Millisecond)
@@ -270,7 +280,6 @@ var _ = Describe("Test UI E2E", func() {
 		srv = suiteSrv
 		url = suiteURL
 		srv.SetResults(sampleTests())
-		srv.SetDiagnosticsManager(nil)
 
 		// New tab per test, sharing the suite-wide browser process. The tab
 		// context is a backstop against a spec wedging until the go test panic
@@ -324,16 +333,18 @@ var _ = Describe("Test UI E2E", func() {
 	})
 
 	It("shows summary counts for all frameworks", func() {
-		var text string
+		var text, chips string
 		err := chromedp.Run(ctx,
 			chromedp.Navigate(url),
 			chromedp.Sleep(2*time.Second),
 			chromedp.Text(`body`, &text, chromedp.ByQuery),
+			// The summary chips show counts; their words live in the aria-label.
+			chromedp.Evaluate(`Array.from(document.querySelectorAll('[aria-label]')).map(e => e.getAttribute('aria-label')).join('|')`, &chips),
 		)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(text).To(ContainSubstring("passed"))
-		Expect(text).To(ContainSubstring("failed"))
-		Expect(text).To(ContainSubstring("skipped"))
+		Expect(chips).To(MatchRegexp(`\d+ passed`))
+		Expect(chips).To(MatchRegexp(`\d+ failed`))
+		Expect(chips).To(MatchRegexp(`\d+ skipped`))
 		Expect(text).To(ContainSubstring("9 tests"))
 	})
 
@@ -351,24 +362,55 @@ var _ = Describe("Test UI E2E", func() {
 		Expect(detailText).To(ContainSubstring("expected 3 but got 5"))
 	})
 
-	It("shows diagnostics tab and captures a stack trace", func() {
-		srv.SetDiagnosticsManager(testui.NewDiagnosticsManager(4242, newFakeDiagnosticsCollector()))
+	It("shows the processes tab and collects the root's stack at a checkpoint", func() {
+		host, err := traces.Open(GinkgoT().TempDir(), traces.RunID(time.Now()))
+		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(func() { Expect(host.Close(context.Background())).To(Succeed()) })
+		trace, err := host.StartProcessTrace(traces.ProcessTraceOptions{RootPID: os.Getpid(), Facets: true})
+		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(func() { Expect(trace.Stop(context.Background())).To(Succeed()) })
+		handler, err := traceserve.Handler(traceserve.Options{Runtime: host.Runtime(), Authorize: traceserve.ReadOnly})
+		Expect(err).ToNot(HaveOccurred())
+		refs, sessions := trace.Refs(), trace.Sessions()
+		srv.SetTraceRun(host.RunID(), &refs)
+		srv.ServeTraces(host.RunID(), handler, &sessions)
+		// A capture takes checkpoints only while its run is live: the UI offers
+		// collect and refresh for a running run, never for a finished one.
+		srv.BeginRun("initial")
+		DeferCleanup(func() {
+			srv.MarkDone()
+			srv.TracesUnavailable(host.RunID(), "spec ended")
+			srv.SetTraceRun("", nil)
+		})
+		// Wait until the capture's periodic commit (which, unlike a checkpoint,
+		// collects no stack) has put this process in the stream — a 200 alone can
+		// still be an empty export.
+		Eventually(func() string {
+			resp, err := http.Get(url + "/query/" + host.RunID() + "/api/v1/traces/process_tree/export?format=ndjson&stream=" + refs.Tree.Stream)
+			Expect(err).ToNot(HaveOccurred())
+			defer resp.Body.Close()
+			body, err := io.ReadAll(resp.Body)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(http.StatusOK), string(body))
+			return string(body)
+		}).WithTimeout(10 * time.Second).Should(ContainSubstring(fmt.Sprintf(`"pid":%d`, os.Getpid())))
 
 		var detailText string
-		err := chromedp.Run(ctx,
+		err = chromedp.Run(ctx,
 			chromedp.Navigate(url),
 			chromedp.Sleep(2*time.Second),
-			clickWithTimeout(`//button[contains(text(), "Diagnostics")]`),
+			clickWithTimeout(`//button[@role="tab"][contains(., "Processes")]`),
 			chromedp.Sleep(500*time.Millisecond),
-			clickWithTimeout(`//button[contains(text(), "Collect stack trace")]`),
-			chromedp.Sleep(500*time.Millisecond),
+			// "Collect stack trace", or "Refresh stack trace" once a commit carried one.
+			clickWithTimeout(`//button[contains(., "stack trace")]`),
+			chromedp.Sleep(2*time.Second),
 			chromedp.Text(`body`, &detailText, chromedp.ByQuery),
 		)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(detailText).To(ContainSubstring("Diagnostics"))
-		Expect(detailText).To(ContainSubstring("gavel test --ui ./testrunner/ui"))
-		Expect(detailText).To(ContainSubstring("pid 4242"))
-		Expect(detailText).To(ContainSubstring("main.first"))
+		Expect(detailText).To(ContainSubstring(fmt.Sprintf("pid %d", os.Getpid())))
+		Expect(detailText).To(ContainSubstring(filepath.Base(os.Args[0])))
+		Expect(detailText).To(And(ContainSubstring("goroutines"), Not(ContainSubstring("No stack trace collected yet"))),
+			"the checkpoint dumped this process's goroutines onto its root")
 	})
 
 	It("shows fixture context in detail panel", func() {
@@ -550,7 +592,7 @@ var _ = Describe("Test UI E2E", func() {
 			chromedp.Navigate(url),
 			chromedp.Sleep(2*time.Second),
 			// Click collapse
-			clickWithTimeout(`//button[contains(text(), "Collapse")]`),
+			clickWithTimeout(`//button[@aria-label="Collapse all"]`),
 			chromedp.Sleep(500*time.Millisecond),
 			chromedp.Text(`body`, &collapsed, chromedp.ByQuery),
 		)
@@ -560,7 +602,7 @@ var _ = Describe("Test UI E2E", func() {
 
 		err = chromedp.Run(ctx,
 			// Click expand
-			clickWithTimeout(`//button[contains(text(), "Expand")]`),
+			clickWithTimeout(`//button[@aria-label="Expand all"]`),
 			chromedp.Sleep(500*time.Millisecond),
 			chromedp.Text(`body`, &expanded, chromedp.ByQuery),
 		)

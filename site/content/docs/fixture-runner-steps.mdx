@@ -1,7 +1,8 @@
 ---
 title: Runner steps
 description: Use fixture files to orchestrate gavel test, gavel lint, output visibility, and Go or Ginkgo integration.
-order: 4
+order: 8
+parent: fixtures-overview
 ---
 
 Runner steps let a fixture call Gavel's own test and lint engines. This is useful for pre-commit checks, release gates, and todo verification because failures become fixture children that can be rendered, summarized, or fed back to an agent.
@@ -23,7 +24,7 @@ show-passed: true # [!code info] [!code note:visible pass nodes]
 
 Line 3 chooses the `gavel test` runner instead of a shell. Line 4 scopes the run to one package path. Line 5 restricts discovery to Go tests. Line 6 sets the package timeout. Line 7 keeps passing tests visible as child nodes, which is useful when this fixture is used as a release gate.
 
-The YAML body is unmarshaled onto the same option shape as `gavel test`, so CLI options can be expressed as keys. Common keys include:
+The YAML body is unmarshaled onto the same option shape as `gavel test`, with UI-only and combined-lint options excluded from the embedded contract. Common keys include:
 
 - `paths`
 - `framework`
@@ -34,7 +35,6 @@ The YAML body is unmarshaled onto the same option shape as `gavel test`, so CLI 
 - `extra-args`
 - `test-timeout`
 - `timeout`
-- `lint`
 
 ## Lint steps
 
@@ -66,6 +66,8 @@ Common lint keys include:
 - `group-by`
 
 UI and detach options such as `ui`, `addr`, and `detach` are ignored inside fixture runner steps. A test step also does not recurse into fixture discovery.
+
+Use a separate `yaml lint` step when the definition of done needs both tests and lint. Runner failures and findings become child results under the fixture step, with a run artifact linking to `.gavel/run-*.json`. This keeps the compact fixture verdict and the full engine report connected. The complete allowed keys are in [Fixture file reference](/docs/fixture-reference).
 
 ## Output visibility
 

@@ -3,9 +3,9 @@ package fixtures
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	cexec "github.com/flanksource/clicky/exec"
-	"github.com/flanksource/gavel/processruntime"
+	"io"
 	"os"
 	osExec "os/exec"
 	"strings"
@@ -13,8 +13,9 @@ import (
 	"time"
 
 	"github.com/creack/pty"
+	cexec "github.com/flanksource/clicky/exec"
 
-	"github.com/flanksource/gavel/fixtures/record"
+	"github.com/flanksource/gavel/processruntime"
 )
 
 // defaultCastBytes and maxCastEvents bound a capture. A command in a redraw
@@ -38,7 +39,13 @@ type CaptureOptions struct {
 	Width, Height    int
 	SnapshotInterval time.Duration
 	Command          []string
-	Env              []string // extra env appended to os.Environ()
+	// BaseEnv is the command's exact environment, before the runtime's env
+	// and Env are set over it; nil inherits gavel's own.
+	BaseEnv map[string]string
+	Env     []string // extra env, set over BaseEnv and the runtime's env
+	// Output, when set, receives every byte the command writes to the PTY as
+	// it is read, such as a terminal trace's writer.
+	Output io.Writer
 	// Dir is the working directory of the command. Empty inherits gavel's,
 	// which is almost never what a fixture wants.
 	Dir string
@@ -50,6 +57,10 @@ type CaptureOptions struct {
 	Snapshots bool
 	// MaxBytes caps the recorded event stream. Zero uses defaultCastBytes.
 	MaxBytes int64
+	// Input scripts the session: each item waits for its expectation and then
+	// types into the terminal. With a script the capture also answers the
+	// terminal queries a TUI sends, as a real terminal would.
+	Input []PTYInput
 }
 
 // Event is a single asciinema-v2 output event. It marshals to the canonical
@@ -101,37 +112,6 @@ func (c *Capture) MaxLineWidth() int { return c.maxLineWidth }
 // because it is what a fixture's assertions run against.
 func (c *Capture) Raw() string { return c.raw }
 
-// Cast converts a capture into the artifact form record knows how to write.
-// The conversion lives here rather than in record because record deliberately
-// imports nothing from gavel.
-func (c *Capture) Cast() record.Cast {
-	cast := record.Cast{
-		Width:     c.Width,
-		Height:    c.Height,
-		Command:   c.Command,
-		ExitCode:  c.ExitCode,
-		Duration:  time.Duration(c.DurationMs) * time.Millisecond,
-		Final:     c.Final.Screen,
-		Truncated: c.Truncated,
-	}
-	for _, event := range c.Events {
-		cast.Events = append(cast.Events, record.CastEvent{
-			Offset: time.Duration(event.Time * float64(time.Second)),
-			Data:   event.Data,
-		})
-	}
-	for _, snapshot := range c.Snapshots {
-		cast.Snapshots = append(cast.Snapshots, record.CastSnapshot{
-			Offset: time.Duration(snapshot.TMs) * time.Millisecond,
-			Screen: snapshot.Screen,
-		})
-	}
-	for _, duplicate := range c.Final.Duplicates {
-		cast.Duplicates = append(cast.Duplicates, record.CastDuplicate{Text: duplicate.Text, Count: duplicate.Count})
-	}
-	return cast
-}
-
 // CaptureANSI runs opts.Command under a PTY of the given size, recording every
 // output chunk as a timed asciinema event and settling the screen on a fixed
 // interval. Stdout and stderr are merged onto the single PTY exactly as a real
@@ -142,6 +122,9 @@ func CaptureANSI(opts CaptureOptions) (*Capture, error) {
 	}
 	if opts.Width <= 0 || opts.Height <= 0 {
 		return nil, fmt.Errorf("ansi capture: width and height must be > 0 (got %dx%d)", opts.Width, opts.Height)
+	}
+	if err := ValidatePTYInput(opts.Input); err != nil {
+		return nil, fmt.Errorf("ansi capture: %w", err)
 	}
 	interval := opts.SnapshotInterval
 	if interval <= 0 {
@@ -156,6 +139,9 @@ func CaptureANSI(opts CaptureOptions) (*Capture, error) {
 		return nil, fmt.Errorf("ansi capture: %w", err)
 	}
 	process := cexec.NewExec(opts.Command[0], opts.Command[1:]...)
+	if opts.BaseEnv != nil {
+		process.WithExactEnv(opts.BaseEnv)
+	}
 	if err := opts.Runtime.Apply(process); err != nil {
 		return nil, err
 	}
@@ -237,11 +223,30 @@ func CaptureANSI(opts CaptureOptions) (*Capture, error) {
 		maxBytes = defaultCastBytes
 	}
 	var truncated bool
+	// outputErr is the first write Output refused; the read loop goes on, so
+	// the command is never stalled, and the capture then fails.
+	var outputErr error
+
+	var script *ptyScript
+	inputDone := make(chan error, 1)
+	if len(opts.Input) > 0 {
+		script = newPTYScript(opts.Input, ptmx)
+		go func() { inputDone <- script.Run() }()
+	} else {
+		inputDone <- nil
+	}
+	var queryErr error
 
 	buf := make([]byte, 4096)
 	for {
 		n, rerr := ptmx.Read(buf)
 		if n > 0 {
+			if opts.Output != nil && outputErr == nil {
+				_, outputErr = opts.Output.Write(buf[:n])
+			}
+			if script != nil && queryErr == nil {
+				queryErr = script.feed(buf[:n])
+			}
 			mu.Lock()
 			// raw is never capped: it is the fixture's stdout, and silently
 			// dropping bytes an assertion is written against would be worse than
@@ -264,6 +269,9 @@ func CaptureANSI(opts CaptureOptions) (*Capture, error) {
 			break
 		}
 	}
+	if script != nil {
+		script.close()
+	}
 	close(done)
 	wg.Wait()
 
@@ -276,6 +284,12 @@ func CaptureANSI(opts CaptureOptions) (*Capture, error) {
 			return nil, fmt.Errorf("ansi capture: wait for %q: %w", opts.Command[0], werr)
 		}
 		exitCode = ee.ExitCode()
+	}
+	if outputErr != nil {
+		return nil, fmt.Errorf("ansi capture: output: %w", outputErr)
+	}
+	if err := errors.Join(<-inputDone, queryErr); err != nil {
+		return nil, fmt.Errorf("ansi capture: %w", err)
 	}
 
 	elapsedMs := time.Since(start).Milliseconds()

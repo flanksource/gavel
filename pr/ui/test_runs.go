@@ -6,13 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/flanksource/clicky/sse"
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/blob"
 	cache "github.com/flanksource/gavel/github/cache"
 	"github.com/flanksource/gavel/snapshots"
 )
@@ -84,11 +84,11 @@ func (s *Server) handleTestRunsStream(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleTestRun streams a single run's snapshot JSON, read from disk on demand.
-// The file is resolved from (project|dir, runId) — never from a client-supplied
-// path — and validated to live inside the workspace's .gavel directory. The
-// Tests tab addresses workspaces by project name; every todo surface is
-// dir-keyed, so both spellings resolve here.
+// handleTestRun streams a single run's snapshot JSON, read on demand from the
+// workspace's snapshot store. The snapshot is named by (project|dir, runId) —
+// never by a client-supplied path — and snapshots.ReadRun accepts only the last
+// pointer or a run-* id. The Tests tab addresses workspaces by project name;
+// every todo surface is dir-keyed, so both spellings resolve here.
 func (s *Server) handleTestRun(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 	project := strings.TrimSpace(query.Get("project"))
@@ -114,23 +114,22 @@ func (s *Server) handleTestRun(w http.ResponseWriter, r *http.Request) {
 		workDir = p.ResolvedDir()
 	}
 
-	path, err := resolveRunPath(workDir, runID)
-	if err != nil {
+	data, err := snapshots.ReadRun(workDir, runID)
+	switch {
+	case errors.Is(err, snapshots.ErrInvalidRunID):
 		respondError(w, http.StatusBadRequest, err.Error())
 		return
-	}
-	if path == "" {
+	case errors.Is(err, blob.ErrNotFound):
 		respondError(w, http.StatusNotFound, "run not found")
 		return
-	}
-	data, err := readRunSnapshot(workDir, path)
-	if err != nil {
-		if errors.Is(err, errRunPathEscapes) {
-			respondError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		logger.Warnf("read test run %s: %v", path, err)
+	case err != nil:
+		logger.Warnf("read test run %s in %s: %v", runID, workDir, err)
 		respondError(w, http.StatusInternalServerError, "failed to read run")
+		return
+	}
+	if data, err = s.withTestRunTraces(data); err != nil {
+		logger.Errorf("serve the trace store of test run %s in %s: %v", runID, workDir, err)
+		respondError(w, http.StatusInternalServerError, fmt.Sprintf("serve the run's trace store: %v", err))
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -148,7 +147,7 @@ func (s *Server) handleTestRun(w http.ResponseWriter, r *http.Request) {
 // pointer file is a few hundred bytes, but the run it names carries the whole
 // test tree and lint violation set, and there is one per project per request.
 func collectTestRuns(ctx context.Context) ([]projectRuns, error) {
-	projects, err := LoadProjects()
+	projects, err := LoadProjects(LoadProjectsOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -277,72 +276,6 @@ func groupRuns(projects []Project, byDir map[string][]testRunView) []projectRuns
 		out = append(out, projectRuns{Name: p.Name, Dir: dir, Runs: runs})
 	}
 	return out
-}
-
-// resolveRunPath maps (workspace dir, runId) to .gavel/last.json or a
-// run-*.json snapshot. Timestamped run IDs must be bare file stems so the
-// result always lands inside <dir>/.gavel.
-func resolveRunPath(dir, runID string) (string, error) {
-	if dir == "" {
-		return "", fmt.Errorf("workspace has no directory")
-	}
-	if runID == "" {
-		return "", fmt.Errorf("runId required")
-	}
-	if runID == snapshots.PointerLast {
-		run, err := snapshots.LastRun(dir)
-		if err != nil || run == nil {
-			return "", err
-		}
-		return run.Path, nil
-	}
-	if strings.ContainsAny(runID, `/\`) || strings.Contains(runID, "..") || !strings.HasPrefix(runID, snapshots.PerRunPrefix) {
-		return "", fmt.Errorf("invalid runId")
-	}
-	gavelDir := filepath.Clean(filepath.Join(dir, snapshots.Dir))
-	path := filepath.Join(gavelDir, runID+".json")
-	if !strings.HasPrefix(path, gavelDir+string(os.PathSeparator)) {
-		return "", fmt.Errorf("invalid runId")
-	}
-	if _, err := os.Stat(path); err != nil {
-		return "", nil
-	}
-	return path, nil
-}
-
-// errRunPathEscapes marks a snapshot path that does not resolve inside the
-// workspace's .gavel directory, so the handler can answer 400 (the request named
-// a path it may not read) rather than 500.
-var errRunPathEscapes = errors.New("run snapshot escapes the workspace")
-
-// readRunSnapshot reads a resolved snapshot, re-checking containment at the point
-// of use. Both halves of the path are request-supplied — `dir`/`project` picks the
-// workspace and `runId` the file — so the read is confined to <dir>/.gavel: the
-// path must resolve to a local path under that directory, and os.Root performs
-// the open so a symlink planted inside .gavel cannot redirect it either.
-func readRunSnapshot(dir, path string) ([]byte, error) {
-	gavelDir, err := filepath.Abs(filepath.Join(dir, snapshots.Dir))
-	if err != nil {
-		return nil, fmt.Errorf("resolve snapshot directory for %q: %w", dir, err)
-	}
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		return nil, fmt.Errorf("resolve snapshot path %q: %w", path, err)
-	}
-	rel, err := filepath.Rel(gavelDir, abs)
-	if err != nil || !filepath.IsLocal(rel) {
-		return nil, fmt.Errorf("%w: %q is not inside %s", errRunPathEscapes, path, gavelDir)
-	}
-	root, err := os.OpenRoot(gavelDir)
-	if err != nil {
-		return nil, fmt.Errorf("open snapshot directory %s: %w", gavelDir, err)
-	}
-	defer func() { _ = root.Close() }()
-	data, err := root.ReadFile(rel)
-	if err != nil {
-		return nil, fmt.Errorf("read run snapshot %q under %s: %w", rel, gavelDir, err)
-	}
-	return data, nil
 }
 
 func viewFromInfo(run snapshots.RunInfo) testRunView {

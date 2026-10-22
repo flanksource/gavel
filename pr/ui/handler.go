@@ -23,6 +23,7 @@ import (
 	"github.com/flanksource/clicky/sse"
 	clickytask "github.com/flanksource/clicky/task"
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/blob"
 	gavelctx "github.com/flanksource/gavel/context"
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/github/cache"
@@ -30,7 +31,10 @@ import (
 	"github.com/flanksource/gavel/pr/model"
 	promptlibrary "github.com/flanksource/gavel/prompts/library"
 	"github.com/flanksource/gavel/prwatch"
+	"github.com/flanksource/gavel/tenant"
 	testui "github.com/flanksource/gavel/testrunner/ui"
+	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 type SearchConfig struct {
@@ -75,6 +79,7 @@ type Server struct {
 	testRunSyncer  *TestRunSyncer
 	projectActions *projectActionRegistry
 	projectRuns    *testui.MultiServer
+	testRunStores  *testRunTraceStores
 	taskSource     *supervisorTaskSource
 	// prDeps overrides the GitHub PR and AI content calls of the project
 	// branch PR and squash-merge endpoints; nil uses prcreate.DefaultDeps.
@@ -149,6 +154,64 @@ type Server struct {
 	// gitChanges wakes /api/git/stream on every git_* row change any process
 	// sharing the database NOTIFYs (see GitChangeListener).
 	gitChanges sse.Notifier
+
+	// hosted restricts Handler to the hosted route allowlist (see hosted.go).
+	hosted bool
+
+	// org owns every row this Server reads and writes; uuid.Nil is the local
+	// org. orgDB holds an organization's settings. githubCache is the GitHub
+	// cache those rows live in; nil is the shared cache.
+	org         uuid.UUID
+	orgDB       *gorm.DB
+	githubCache *cache.Store
+
+	// blobs is the storage: store from ~/.gavel.yaml; nil keeps attachments in
+	// attachmentsDir.
+	blobs blob.Store
+
+	// authConfig is what /api/auth/config reports (see me.go).
+	authConfig AuthConfigResponse
+
+	// workspaces are a hosted organization's repositories as todo workspaces;
+	// nil serves todos from the host's projects.
+	workspaces *HostedWorkspaces
+	// agentRuns runs hosted todos' steps in sandbox jobs; nil without a sandbox.
+	agentRuns *AgentRuns
+}
+
+// SetOrg scopes the Server's stores to org, whose settings live in db. Call it
+// before serving.
+func (s *Server) SetOrg(org uuid.UUID, db *gorm.DB) {
+	s.org, s.orgDB = org, db
+}
+
+// SetHostedWorkspaces serves the organization's repositories as its todo workspaces.
+// Call it before serving.
+func (s *Server) SetHostedWorkspaces(workspaces HostedWorkspaces) {
+	s.workspaces = &workspaces
+}
+
+// SetBlobStore makes store, the configured storage: store, hold the Server's attachments. Call it
+// before serving.
+func (s *Server) SetBlobStore(store blob.Store) {
+	s.blobs = store
+}
+
+// orgID is the organization the Server serves.
+func (s *Server) orgID() uuid.UUID {
+	if s.org == uuid.Nil {
+		return tenant.LocalOrgID
+	}
+	return s.org
+}
+
+// cacheStore is the Server organization's view of the GitHub cache.
+func (s *Server) cacheStore() *cache.Store {
+	store := s.githubCache
+	if store == nil {
+		store = cache.Shared()
+	}
+	return store.ForOrg(s.orgID())
 }
 
 const orgsCacheTTL = 5 * time.Minute
@@ -230,8 +293,13 @@ func NewServer(ctx gavelctx.Context, interval time.Duration, ghOpts github.Optio
 func (s *Server) authProbeLoop() {
 	t := time.NewTicker(authProbeInterval)
 	defer t.Stop()
-	for range t.C {
-		s.refreshAuthProbe()
+	for {
+		select {
+		case <-s.context().Done():
+			return
+		case <-t.C:
+			s.refreshAuthProbe()
+		}
 	}
 }
 
@@ -402,7 +470,7 @@ func (s *Server) SetResults(prs github.PRSearchResults, incremental bool) error 
 	for i, pr := range prs {
 		rows[i] = prIndexRow(pr)
 	}
-	if err := prIndexStore().UpsertPRs(rows); err != nil {
+	if err := s.cacheStore().UpsertPRs(rows); err != nil {
 		return fmt.Errorf("persist PR index: %w", err)
 	}
 	return nil
@@ -516,10 +584,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/tests", s.handleTestRuns)
 	mux.HandleFunc("/api/tests/stream", s.handleTestRunsStream)
 	mux.HandleFunc("/api/tests/run", s.handleTestRun)
+	mux.Handle(testRunTracesPrefix+"/", s.testRunTraces())
 	mux.HandleFunc("/api/todos", s.handleTodos)
 	mux.HandleFunc("POST /api/todos/batch", s.handleTodoBatch)
 	mux.HandleFunc("POST /api/todos/new", s.handleTodoNew)
 	mux.HandleFunc("POST /todos/new", s.handleTodoNew)
+	mux.HandleFunc("GET /api/todos/new/steps", s.handleTodoNewSteps)
 	mux.HandleFunc("/api/todos/attachments", s.handleTodoAttachmentUpload)
 	mux.HandleFunc("GET /api/todos/attachments/{id}", s.handleTodoAttachment)
 	mux.HandleFunc("/api/todos/item", s.handleTodoItem)
@@ -536,7 +606,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/todos/commits/files", s.handleTodoCommitFiles)
 	// A run's transcript is Captain's to read and follow: its handler resolves
 	// the session through the pool Gavel shares with Captain's CLI registry.
-	mux.Handle("/api/captain/sessions/", http.StripPrefix("/api/captain/sessions", captaincli.SessionHandler()))
+	captainSessions := http.StripPrefix("/api/captain/sessions", captaincli.SessionHandler())
+	mux.Handle("/api/captain/sessions/", captainSessions)
+	mux.Handle("GET /api/captain/sessions/{id}", s.captainSessionRead(captainSessions))
 	// Prompt runs started through POST /api/v1/prompt/run are followed, stopped
 	// and messaged here; their transcript is the session above.
 	mux.Handle("/api/captain/prompt/runs/", http.StripPrefix("/api/captain/prompt/runs", captaincli.PromptRunHandler()))
@@ -558,6 +630,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/todos/github", s.handleTodoGitHubPush)
 	mux.HandleFunc("POST /api/todos/land", s.handleTodoLand)
 	mux.HandleFunc("/api/status", s.handleStatus)
+	mux.HandleFunc("GET /api/auth/config", s.handleAuthConfig)
+	mux.HandleFunc("GET /api/me", s.handleMe)
+	mux.HandleFunc("GET /api/ssh-keys", s.handleSSHKeyList)
+	mux.HandleFunc("POST /api/ssh-keys", s.handleSSHKeyAdd)
+	mux.HandleFunc("DELETE /api/ssh-keys/{id}", s.handleSSHKeyDelete)
 	mux.HandleFunc("/favicon.svg", handleFavicon)
 	mux.HandleFunc("/react-grab-plugin.js", handleReactGrabPlugin)
 	mux.HandleFunc("/react-grab", handleReactGrabInstall)
@@ -585,6 +662,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/projects/{name}", s.handleProjectByName)
 	mux.HandleFunc("PUT /api/projects/{name}", s.handleProjectByName)
 	mux.HandleFunc("DELETE /api/projects/{name}", s.handleProjectByName)
+	mux.HandleFunc("POST /api/projects/{name}/hidden", s.handleProjectHidden)
 	mux.HandleFunc("GET /api/projects/{name}/status", s.handleProjectStatus)
 	mux.HandleFunc("POST /api/projects/{name}/actions", s.handleProjectAction)
 	mux.HandleFunc("GET /api/projects/{name}/actions/schema", s.handleProjectActionSchema)
@@ -632,8 +710,16 @@ func (s *Server) Handler() http.Handler {
 	// gavel's own prompts (prompts/library) resolve by bare name for every
 	// Captain prompt operation, alongside Captain's configured sources.
 	prompts := captaincli.PromptSources{FS: []captaincli.PromptFS{{Label: promptlibrary.Label, FS: promptlibrary.FS}}}
-	root := hub.Guard(rpchttp.TimingMiddleware(captaincli.PromptSourcesMiddleware(mux, prompts)))
+	var served http.Handler = mux
+	if s.hosted {
+		// Inside the hub, so a sub can't reach a route hosted mode turns off.
+		served = s.hostedRoutes(mux)
+	}
+	root := hub.Guard(rpchttp.TimingMiddleware(captaincli.PromptSourcesMiddleware(served, prompts)))
 	hub.Register(mux, root)
+	if s.hosted {
+		mustRegisterHostedRoutes(mux)
+	}
 	return root
 }
 
@@ -757,6 +843,12 @@ func (s *Server) handleRoute(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, pageHTML())
 		return
 	}
+	// GitHub returns a hosted dashboard's user here after they install the App.
+	if s.hosted && r.URL.Path == "/github/setup" {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, pageHTML())
+		return
+	}
 	req, ok := parseRouteRequest(r)
 	if !ok {
 		http.NotFound(w, r)
@@ -781,6 +873,15 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request, req routeR
 		return
 	}
 	writeExportResponse(w, r, report, req.Format)
+}
+
+// withViewer makes the requesting member the snapshot's viewer in an organization's
+// dashboard: its PRs are fetched with an App token, which has no user of its own.
+func withViewer(snap snapshot, r *http.Request) snapshot {
+	if scope := tenant.FromContext(r.Context()); !scope.IsLocal() {
+		snap.Viewer = scope.GitHubLogin
+	}
+	return snap
 }
 
 // snapshotLocked builds a snapshot using the already-held RLock. It does
@@ -868,7 +969,7 @@ func (s *Server) UnreadMap(prs github.PRSearchResults) map[string]bool {
 	if len(prs) == 0 {
 		return nil
 	}
-	store := cache.Shared()
+	store := s.cacheStore()
 	keys := make([]cache.SeenKey, len(prs))
 	for i, pr := range prs {
 		keys[i] = cache.SeenKey{Repo: pr.Repo, Number: pr.Number}
@@ -900,7 +1001,7 @@ func (s *Server) UnreadCount() int {
 // MarkSeen delegates to the shared cache store and triggers a snapshot
 // push so the UI and menubar update without waiting for the next poll.
 func (s *Server) MarkSeen(repo string, number int) error {
-	if err := cache.Shared().MarkSeen(repo, number); err != nil {
+	if err := s.cacheStore().MarkSeen(repo, number); err != nil {
 		return err
 	}
 	s.notify()
@@ -919,7 +1020,7 @@ func (s *Server) MarkAllSeen() error {
 	for i, pr := range prs {
 		keys[i] = cache.SeenKey{Repo: pr.Repo, Number: pr.Number}
 	}
-	if err := cache.Shared().MarkManySeen(keys); err != nil {
+	if err := s.cacheStore().MarkManySeen(keys); err != nil {
 		return err
 	}
 	s.notify()
@@ -935,12 +1036,13 @@ func (s *Server) withSyncStatus(snap snapshot) snapshot {
 	return snap
 }
 
-func (s *Server) handleJSON(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleJSON(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
 	data := s.snapshotLocked()
 	s.mu.RUnlock()
 	data = s.withUnread(data)
 	data = s.withSyncStatus(data)
+	data = withViewer(data, r)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(data) //nolint:errcheck
@@ -965,7 +1067,7 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 			s.mu.RLock()
 			data := s.snapshotLocked()
 			s.mu.RUnlock()
-			return s.withSyncStatus(s.withUnread(data)), nil
+			return withViewer(s.withSyncStatus(s.withUnread(data)), r), nil
 		},
 	})
 	if err != nil {
@@ -1087,12 +1189,20 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
 			return
 		}
-		s.SetConfig(cfg)
-		go SaveSettings(UISettings{
-			Repos:       cfg.Repos,
-			Project:     cfg.Project,
-			IgnoredOrgs: cfg.IgnoredOrgs,
-		})
+		if s.orgID() != tenant.LocalOrgID {
+			if err := SaveOrgSearchConfig(r.Context(), s.orgDB, s.orgID(), cfg); err != nil {
+				writeJSONError(w, http.StatusInternalServerError, err)
+				return
+			}
+			s.SetConfig(cfg)
+		} else {
+			s.SetConfig(cfg)
+			go SaveSettings(UISettings{
+				Repos:       cfg.Repos,
+				Project:     cfg.Project,
+				IgnoredOrgs: cfg.IgnoredOrgs,
+			})
+		}
 		select {
 		case s.refreshCh <- struct{}{}:
 		default:

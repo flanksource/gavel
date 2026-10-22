@@ -182,9 +182,6 @@ func (p *Provider) decorateExecution(ctx context.Context, issue *native.Issue, t
 		}
 		todo.LastRun = &lastRun
 		todo.LastRunSummary = strings.TrimSpace(run.ResultText)
-		if questions, ok := run.ResultJSON["questions"]; ok {
-			todo.Questions = decodeQuestions(questions)
-		}
 		links, err := p.promptRunLinks(ctx, issue.WorkspaceID, issue.ID)
 		if err != nil {
 			return err
@@ -246,16 +243,4 @@ func todoStatusWithPlan(
 	default:
 		return projected
 	}
-}
-
-func decodeQuestions(value any) []types.AgentQuestion {
-	data, err := json.Marshal(value)
-	if err != nil {
-		return nil
-	}
-	var questions []types.AgentQuestion
-	if json.Unmarshal(data, &questions) != nil {
-		return nil
-	}
-	return questions
 }

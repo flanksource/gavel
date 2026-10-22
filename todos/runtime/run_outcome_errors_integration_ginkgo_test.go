@@ -44,7 +44,7 @@ func (a editingAgent) ExecuteStream(_ context.Context, req api.Spec) (<-chan cap
 	}
 	events := []captainai.Event{
 		{Kind: captainai.EventSystem, SessionID: a.sessionID},
-		{Kind: captainai.EventText, Text: `{"summary":"Built it.","endStatus":"completed"}`},
+		{Kind: captainai.EventText, Text: `{"success":true,"event":"completed","comment":"Built it."}`},
 		{Kind: captainai.EventResult, Success: true, Usage: &api.Usage{InputTokens: 7, OutputTokens: 3}},
 	}
 	ch := make(chan captainai.Event, len(events))
@@ -104,7 +104,7 @@ var _ = Describe("a run whose outcome could not be persisted", func() {
 		Expect(err).NotTo(HaveOccurred())
 		missingPlan := filepath.Join(workDir, "missing-plan.md")
 		execution := &todos.ExecutionResult{
-			Success: true, ExecutorName: "headless-claude", EndStatus: types.EndCompleted,
+			Success: true, ExecutorName: "headless-claude",
 			Summary: "The agent created a plan.", Plan: &types.PlanResult{Status: types.PlanNew, Path: missingPlan},
 		}
 		admission, err := runtimetest.Admit(ctx, provider, todo, todos.RunPreparation{Mode: types.ModePlan, Prompt: "plan", ExecutorName: "headless-claude"},
@@ -119,8 +119,7 @@ var _ = Describe("a run whose outcome could not be persisted", func() {
 			Step: plan, Status: string(types.StatusReview), Execution: execution, Admission: admission,
 			Result: lifecycle.StepResult{
 				Run:      lifecycle.RunFacts{State: lifecycle.RunSucceeded},
-				Envelope: lifecycle.Envelope{Summary: execution.Summary, EndStatus: "completed"},
-				Plan:     &lifecycle.PlanFacts{Status: "new", Path: missingPlan},
+				Envelope: lifecycle.Envelope{Success: true, Event: "new", Comment: execution.Summary},
 			},
 		}
 
@@ -168,6 +167,9 @@ var _ = Describe("a run that fails after its definition of done passed", func() 
 		Expect(err).NotTo(HaveOccurred())
 		for i := range def.Steps {
 			if def.Steps[i].Name == "run" {
+				// The scripted agent calls no tools, and an ask-policy tool needs the
+				// approval broker only a Captain-constructed provider gets.
+				def.Steps[i].Tools = nil
 				def.Steps[i].Spec = &api.Spec{Workflow: &api.Workflow{
 					Verify:  &api.Verify{Fixture: "{{subject.verification.document}}", Scope: api.VerifyScopeAll},
 					Commits: []api.Commit{{On: api.CommitOnRun}},

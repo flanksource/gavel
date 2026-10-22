@@ -15,6 +15,7 @@ import (
 
 	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/gavel/internal/database"
+	"github.com/flanksource/gavel/tenant"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/githubpush"
 	"github.com/flanksource/gavel/todos/labels"
@@ -39,6 +40,8 @@ type Provider struct {
 	// discoverPlanHooks runs Captain's plan.revision hook prompts on every plan
 	// save. See planHooks.
 	discoverPlanHooks bool
+	// sandboxedRuns says the workspace's runs execute in sandboxes. See WorkspaceOptions.
+	sandboxedRuns bool
 	// ownership drives the heartbeats that prove this process is still running
 	// the prompt runs it dispatched. See ownership.go.
 	ownership runOwnership
@@ -68,16 +71,26 @@ type WorkspaceOptions struct {
 	Name         string
 	RootPath     string
 	Repositories []string
+	// SandboxedRuns says the workspace's runs execute in sandboxes: their plans arrive as
+	// content, and nothing they name is read from this host's disk.
+	SandboxedRuns bool
 }
 
 // Open opens the process-owned PostgreSQL pool and initializes the configured
-// project's native workspace when it does not already exist.
+// project's native workspace when it does not already exist. It acts for the
+// local organization.
 func Open(ctx context.Context, options WorkspaceOptions) (*Provider, error) {
+	return OpenForOrg(ctx, options, tenant.Local())
+}
+
+// OpenForOrg is Open for scope's organization: the workspace and every todo the
+// provider reads or writes belong to that organization.
+func OpenForOrg(ctx context.Context, options WorkspaceOptions, scope tenant.Scope) (*Provider, error) {
 	db, err := database.Require(ctx, "native TODO storage")
 	if err != nil {
 		return nil, err
 	}
-	provider, err := New(ctx, db, options)
+	provider, err := NewForOrg(ctx, db, options, scope)
 	if err != nil {
 		return nil, err
 	}
@@ -106,12 +119,23 @@ func OpenGlobal(ctx context.Context) (*Provider, error) {
 }
 
 // NewGlobal constructs the workspace-less provider OpenGlobal returns over an
-// already migrated GORM pool.
+// already migrated GORM pool. It acts for the local organization.
 func NewGlobal(db *gorm.DB) (*Provider, error) {
+	return newGlobal(db, tenant.LocalOrgID)
+}
+
+// NewGlobalForOrg is NewGlobal for org's todos.
+func NewGlobalForOrg(db *gorm.DB, org uuid.UUID) (*Provider, error) {
+	return newGlobal(db, org)
+}
+
+// newGlobal constructs a workspace-less provider over org's todos.
+func newGlobal(db *gorm.DB, org uuid.UUID) (*Provider, error) {
 	repository, err := native.NewRepository(db)
 	if err != nil {
 		return nil, err
 	}
+	repository = repository.ForOrg(org)
 	captain, err := captaindb.Use(db)
 	if err != nil {
 		return nil, err
@@ -129,6 +153,11 @@ func NewGlobal(db *gorm.DB) (*Provider, error) {
 // New constructs a workspace provider over a GORM pool the caller owns. It is
 // what Open, the portable import/export and tests all construct through.
 func New(ctx context.Context, db *gorm.DB, options WorkspaceOptions) (*Provider, error) {
+	return NewForOrg(ctx, db, options, tenant.Local())
+}
+
+// NewForOrg is New for scope's organization.
+func NewForOrg(ctx context.Context, db *gorm.DB, options WorkspaceOptions, scope tenant.Scope) (*Provider, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -136,7 +165,7 @@ func New(ctx context.Context, db *gorm.DB, options WorkspaceOptions) (*Provider,
 	if err != nil {
 		return nil, err
 	}
-	global, err := NewGlobal(db)
+	global, err := newGlobal(db, scope.OrgID)
 	if err != nil {
 		return nil, err
 	}
@@ -153,7 +182,9 @@ func New(ctx context.Context, db *gorm.DB, options WorkspaceOptions) (*Provider,
 	if err != nil {
 		return nil, err
 	}
-	return global.withWorkspace(workspace, options.RootPath), nil
+	provider := global.withWorkspace(workspace, options.RootPath)
+	provider.sandboxedRuns = options.SandboxedRuns
+	return provider, nil
 }
 
 // withWorkspace returns a provider scoped to an already resolved workspace,
@@ -449,6 +480,7 @@ func (p *Provider) Create(ctx context.Context, request todos.CreateRequest) (*ty
 		Priority:     priority,
 		Status:       status,
 		Actor:        mutationActor,
+		Visibility:   native.Visibility(request.Visibility),
 	}
 	if err := p.applyLineage(ctx, request, &issueInput); err != nil {
 		return nil, err

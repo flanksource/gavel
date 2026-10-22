@@ -8,6 +8,7 @@ import {
   UiCog,
   UiDebugStepOver,
   UiError,
+  UiEyeClosed,
   UiFolder,
   UiPass,
   UiWarningTriangle,
@@ -37,6 +38,7 @@ interface Props {
   onChanged: () => void;
   onAdd: () => void;
   onSettings: (project: Project) => void;
+  onHide: (project: Project) => void;
 }
 
 const KIND_LABEL: Record<TestRunView['kind'], string> = {
@@ -109,7 +111,7 @@ export function ProjectsBar(props: Props) {
   );
 }
 
-function ProjectBranch({ project, projectRuns, open, selected, selectedRunId, procStatus, gitSummary, runsLoading, historyEnabled, onToggle, onOpen, onSelectRun, onChanged, onSettings }: Props & {
+function ProjectBranch({ project, projectRuns, open, selected, selectedRunId, procStatus, gitSummary, runsLoading, historyEnabled, onToggle, onOpen, onSelectRun, onChanged, onSettings, onHide }: Props & {
   project: Project;
   projectRuns: TestRunView[];
   open: boolean;
@@ -137,6 +139,9 @@ function ProjectBranch({ project, projectRuns, open, selected, selectedRunId, pr
         <GitChangesBadge count={procStatus[project.name]?.gitChanges} />
         <Button variant="ghost" size="icon" type="button" onClick={() => onSettings(project)} title={`Edit ${project.name} .gavel.yaml`} aria-label={`Edit ${project.name} settings`} className="h-6 w-6 shrink-0 text-muted-foreground hover:text-foreground">
           <UiCog />
+        </Button>
+        <Button variant="ghost" size="icon" type="button" onClick={() => onHide(project)} title={`Hide ${project.name} from project lists`} aria-label={`Hide ${project.name} project`} className="h-6 w-6 shrink-0 text-muted-foreground hover:text-foreground">
+          <UiEyeClosed />
         </Button>
         <ProcControl repo={key} project={project} status={procStatus[project.name]} onChanged={onChanged} />
       </div>

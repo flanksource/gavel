@@ -9,6 +9,7 @@ import (
 	"github.com/flanksource/commons-db/shell"
 	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/todos/types"
+	"github.com/stretchr/testify/require"
 )
 
 func newTestTODO(name, impl string) *types.TODO {
@@ -68,8 +69,8 @@ func TestRenderRunGroup(t *testing.T) {
 
 	// The envelope schema rides on SchemaJSON as a native field, not appended to
 	// the prompt text — so the driver, not gavel, decides how to deliver it.
-	if !strings.Contains(string(req.Prompt.SchemaJSON), `"endStatus"`) {
-		t.Errorf("run envelope schema missing endStatus: %s", req.Prompt.SchemaJSON)
+	if !strings.Contains(string(req.Prompt.SchemaJSON), `"event"`) {
+		t.Errorf("run envelope schema missing event: %s", req.Prompt.SchemaJSON)
 	}
 	if req.Prompt.SchemaStrictness != api.SchemaStrictnessRetry {
 		t.Errorf("run schema strictness = %q, want retry", req.Prompt.SchemaStrictness)
@@ -110,8 +111,8 @@ func TestRenderFoldsFrontmatter(t *testing.T) {
 		t.Errorf("plan template Model = %q on %v, want a resolved anthropic model",
 			req.Model.Name, req.Model.Provider)
 	}
-	if !strings.Contains(string(req.Prompt.SchemaJSON), `"planStatus"`) || !strings.Contains(string(req.Prompt.SchemaJSON), `"planPath"`) {
-		t.Errorf("plan envelope schema missing planStatus/planPath: %s", req.Prompt.SchemaJSON)
+	if !strings.Contains(string(req.Prompt.SchemaJSON), `"updated"`) {
+		t.Errorf("plan envelope schema does not enumerate the plan events: %s", req.Prompt.SchemaJSON)
 	}
 	if req.Prompt.SchemaStrictness != api.SchemaStrictnessRetry {
 		t.Errorf("plan schema strictness = %q, want retry", req.Prompt.SchemaStrictness)
@@ -127,7 +128,7 @@ func TestRenderPlanExistingPlan(t *testing.T) {
 	if !strings.Contains(with, "## Existing Plan") || !strings.Contains(with, existing) {
 		t.Error("existing plan content should be embedded")
 	}
-	if !strings.Contains(with, `"unchanged"`) {
+	if !strings.Contains(with, "report event `unchanged`") {
 		t.Error("existing-plan framing should explain the unchanged status")
 	}
 
@@ -135,7 +136,7 @@ func TestRenderPlanExistingPlan(t *testing.T) {
 	if strings.Contains(without, "## Existing Plan") {
 		t.Error("no existing plan → no Existing Plan section")
 	}
-	if !strings.Contains(without, `"new"`) {
+	if !strings.Contains(without, "report event `new`") {
 		t.Error("fresh-plan framing should name the new status")
 	}
 }
@@ -180,7 +181,7 @@ func TestRenderOverridesKeepSchema(t *testing.T) {
 	if strings.Contains(tmpl, "## Instructions") {
 		t.Error("override should replace the default instructions block")
 	}
-	if !strings.Contains(string(tmplReq.Prompt.SchemaJSON), `"endStatus"`) {
+	if !strings.Contains(string(tmplReq.Prompt.SchemaJSON), `"event"`) {
 		t.Error("template override must not affect the native envelope schema")
 	}
 
@@ -195,7 +196,7 @@ func TestRenderOverridesKeepSchema(t *testing.T) {
 	if strings.Contains(body, "## solo") {
 		t.Error("body override should replace the rendered body")
 	}
-	if !strings.Contains(string(bodyReq.Prompt.SchemaJSON), `"endStatus"`) {
+	if !strings.Contains(string(bodyReq.Prompt.SchemaJSON), `"event"`) {
 		t.Error("body override must not affect the native envelope schema")
 	}
 }
@@ -227,8 +228,9 @@ func TestRenderPreservesCanonicalSpecWithoutDroppingRuntimeFields(t *testing.T) 
 	}
 
 	req, _, err := Render([]*types.TODO{newTestTODO("solo", "task")}, Options{
-		Mode: types.ModeRun,
-		Spec: spec,
+		Mode:   types.ModeRun,
+		Events: stepEvents["run"],
+		Spec:   spec,
 	})
 	if err != nil {
 		t.Fatalf("Render: %v", err)
@@ -240,7 +242,7 @@ func TestRenderPreservesCanonicalSpecWithoutDroppingRuntimeFields(t *testing.T) 
 	if !strings.HasPrefix(req.Prompt.User, EffortDirective("high")) {
 		t.Fatalf("rendered body omitted the resolved effort directive: %q", req.Prompt.User)
 	}
-	if !strings.Contains(string(req.Prompt.SchemaJSON), `"endStatus"`) {
+	if !strings.Contains(string(req.Prompt.SchemaJSON), `"event"`) {
 		t.Fatalf("rendered request lost the TODO envelope schema: %s", req.Prompt.SchemaJSON)
 	}
 
@@ -267,7 +269,7 @@ func TestRenderTriageIncludesRawVerificationFixture(t *testing.T) {
 	todo := newTestTODO("solo", "task")
 	todo.VerificationMarkdown = "---\nverify:\n  scope: diff\n---\n```yaml test\npackages: ./todos\n```"
 
-	user := renderUser(t, []*types.TODO{todo}, Options{Prompt: "triage", Envelope: EnvelopeTriage})
+	user := renderUser(t, []*types.TODO{todo}, Options{Prompt: "triage", RawFixture: true})
 	for _, want := range []string{"verify:", "scope: diff", "```yaml test", "packages: ./todos"} {
 		if !strings.Contains(user, want) {
 			t.Errorf("triage prompt omitted %q from the fixture source:\n%s", want, user)
@@ -278,7 +280,7 @@ func TestRenderTriageIncludesRawVerificationFixture(t *testing.T) {
 // A TODO with no fixture is the most important case for triage to act on, so the
 // absence must be stated rather than rendered as an empty section.
 func TestRenderTriageStatesAMissingFixture(t *testing.T) {
-	user := renderUser(t, []*types.TODO{newTestTODO("solo", "task")}, Options{Prompt: "triage", Envelope: EnvelopeTriage})
+	user := renderUser(t, []*types.TODO{newTestTODO("solo", "task")}, Options{Prompt: "triage", RawFixture: true})
 	if !strings.Contains(user, "NO verification fixture") {
 		t.Errorf("triage prompt did not flag the missing fixture:\n%s", user)
 	}
@@ -287,13 +289,13 @@ func TestRenderTriageStatesAMissingFixture(t *testing.T) {
 func TestRenderTriageIncludesBacklogForDedupe(t *testing.T) {
 	backlog := "- ab12cd Fix the parser panic (pending, high)"
 	user := renderUser(t, []*types.TODO{newTestTODO("solo", "task")}, Options{
-		Prompt: "triage", Envelope: EnvelopeTriage, Backlog: backlog,
+		Prompt: "triage", RawFixture: true, Backlog: backlog,
 	})
 	if !strings.Contains(user, backlog) {
 		t.Errorf("triage prompt omitted the backlog index:\n%s", user)
 	}
 
-	without := renderUser(t, []*types.TODO{newTestTODO("solo", "task")}, Options{Prompt: "triage", Envelope: EnvelopeTriage})
+	without := renderUser(t, []*types.TODO{newTestTODO("solo", "task")}, Options{Prompt: "triage", RawFixture: true})
 	if strings.Contains(without, "## Backlog") {
 		t.Errorf("empty backlog should omit the section entirely:\n%s", without)
 	}
@@ -303,12 +305,12 @@ func TestRenderTriageIncludesBacklogForDedupe(t *testing.T) {
 // not carry — so the prompt has to say where to get it and must be allowed to.
 func TestRenderTriageDirectsTheAgentToReadCandidatesInFull(t *testing.T) {
 	req, _, err := renderResolvedForTest([]*types.TODO{newTestTODO("solo", "task")}, Options{
-		Prompt: "triage", Envelope: EnvelopeTriage, Backlog: "- ab12cd  Other  (pending, high)",
+		Prompt: "triage", RawFixture: true, Backlog: "- ab12cd  Other  (pending, high)",
 	})
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
-	for _, want := range []string{"gavel todos get", "[in this batch]", "merges", "duplicateOf"} {
+	for _, want := range []string{"todo_get", "[in this batch]", "todo_merge", "duplicateOf"} {
 		if !strings.Contains(req.Prompt.System, want) {
 			t.Errorf("triage system prompt omitted %q:\n%s", want, req.Prompt.System)
 		}
@@ -323,7 +325,7 @@ func TestRenderTriageShowsCurrentStatusPriorityAndLabels(t *testing.T) {
 	todo.Priority = types.PriorityLow
 	todo.Labels = []string{"docs", "source:todo"}
 
-	user := renderUser(t, []*types.TODO{todo}, Options{Prompt: "triage", Envelope: EnvelopeTriage})
+	user := renderUser(t, []*types.TODO{todo}, Options{Prompt: "triage", RawFixture: true})
 	for _, want := range []string{"## Current State", "**Status:** pending", "**Priority:** low", "**Labels:** docs, source:todo"} {
 		if !strings.Contains(user, want) {
 			t.Errorf("triage prompt omitted %q:\n%s", want, user)
@@ -334,7 +336,7 @@ func TestRenderTriageShowsCurrentStatusPriorityAndLabels(t *testing.T) {
 // A TODO with no priority and no labels is the one triage most needs to fix, so
 // the absence is spelled out rather than rendered as a missing line.
 func TestRenderTriageStatesUnsetPriorityAndLabels(t *testing.T) {
-	user := renderUser(t, []*types.TODO{newTestTODO("solo", "task")}, Options{Prompt: "triage", Envelope: EnvelopeTriage})
+	user := renderUser(t, []*types.TODO{newTestTODO("solo", "task")}, Options{Prompt: "triage", RawFixture: true})
 	for _, want := range []string{"**Priority:** unset", "**Labels:** none"} {
 		if !strings.Contains(user, want) {
 			t.Errorf("triage prompt omitted %q:\n%s", want, user)
@@ -342,11 +344,10 @@ func TestRenderTriageStatesUnsetPriorityAndLabels(t *testing.T) {
 	}
 }
 
-// `title` was always applied by ApplyTriage and never asked for: it appeared only
-// in the schema description and the field list, so an inaccurate title survived
-// every rewrite of the body under it.
+// An inaccurate title survives every rewrite of the body under it unless the
+// body step asks for a new one.
 func TestRenderTriageAsksForATitleOnlyWhenItIsWrong(t *testing.T) {
-	req, _, err := renderResolvedForTest([]*types.TODO{newTestTODO("solo", "task")}, Options{Prompt: "triage", Envelope: EnvelopeTriage})
+	req, _, err := renderResolvedForTest([]*types.TODO{newTestTODO("solo", "task")}, Options{Prompt: "triage", RawFixture: true})
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
@@ -358,7 +359,7 @@ func TestRenderTriageAsksForATitleOnlyWhenItIsWrong(t *testing.T) {
 	if !found {
 		t.Fatalf("triage system prompt has no step 2:\n%s", req.Prompt.System)
 	}
-	for _, want := range []string{"Send `title` only when", "Never reword a title that is already accurate"} {
+	for _, want := range []string{"Change the title with `todo_update` only when", "Never reword a title that is already accurate"} {
 		if !strings.Contains(bodyStep, want) {
 			t.Errorf("the body step omitted %q:\n%s", want, bodyStep)
 		}
@@ -366,18 +367,18 @@ func TestRenderTriageAsksForATitleOnlyWhenItIsWrong(t *testing.T) {
 }
 
 func TestRenderTriageSeparatesInstructionsFromInput(t *testing.T) {
-	req, _, err := renderResolvedForTest([]*types.TODO{newTestTODO("solo", "task")}, Options{Prompt: "triage", Envelope: EnvelopeTriage})
+	req, _, err := renderResolvedForTest([]*types.TODO{newTestTODO("solo", "task")}, Options{Prompt: "triage", RawFixture: true})
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
-	if !strings.Contains(req.Prompt.System, "### 1. Pick a verdict") || !strings.Contains(req.Prompt.System, "final JSON object") {
+	if !strings.Contains(req.Prompt.System, "### 1. Decide the event") || !strings.Contains(req.Prompt.System, "final JSON object") {
 		t.Fatalf("triage instructions missing from system prompt: %q", req.Prompt.System)
 	}
-	if strings.Contains(req.Prompt.User, "### 1. Pick a verdict") || !strings.Contains(req.Prompt.User, "## solo") {
+	if strings.Contains(req.Prompt.User, "### 1. Decide the event") || !strings.Contains(req.Prompt.User, "## solo") {
 		t.Fatalf("triage user prompt must contain task data without static instructions: %q", req.Prompt.User)
 	}
-	if !strings.Contains(string(req.Prompt.SchemaJSON), `"verdict"`) {
-		t.Fatalf("triage output schema missing verdict: %s", req.Prompt.SchemaJSON)
+	if !strings.Contains(string(req.Prompt.SchemaJSON), `"duplicate"`) {
+		t.Fatalf("triage output schema does not enumerate the triage events: %s", req.Prompt.SchemaJSON)
 	}
 }
 
@@ -399,7 +400,7 @@ func TestRenderRunOmitsTheCurrentStateBlock(t *testing.T) {
 func TestRenderTriageIncludesTheLabelTaxonomy(t *testing.T) {
 	taxonomy := "- `bug` — Something is broken.\n- `api` — API surface."
 	user := renderUser(t, []*types.TODO{newTestTODO("solo", "task")}, Options{
-		Prompt: "triage", Envelope: EnvelopeTriage, Labels: taxonomy,
+		Prompt: "triage", RawFixture: true, Labels: taxonomy,
 	})
 	if !strings.Contains(user, taxonomy) {
 		t.Errorf("triage prompt omitted the label taxonomy:\n%s", user)
@@ -409,7 +410,7 @@ func TestRenderTriageIncludesTheLabelTaxonomy(t *testing.T) {
 		t.Errorf("triage prompt omitted the Labels heading:\n%s", user)
 	}
 
-	without := renderUser(t, []*types.TODO{newTestTODO("solo", "task")}, Options{Prompt: "triage", Envelope: EnvelopeTriage})
+	without := renderUser(t, []*types.TODO{newTestTODO("solo", "task")}, Options{Prompt: "triage", RawFixture: true})
 	if strings.Contains(without, "\n## Labels\n") {
 		t.Errorf("an empty taxonomy should omit the section entirely:\n%s", without)
 	}
@@ -476,24 +477,56 @@ func TestRenderIncludesComments(t *testing.T) {
 	}
 }
 
-func TestRenderExcludesPRButIncludesSource(t *testing.T) {
+func TestRenderIncludesLinkedPRAndSource(t *testing.T) {
+	const (
+		prURL      = "https://example.com/acme/service/pull/42"
+		commentURL = "https://example.com/acme/service/pull/42#discussion_r7"
+		reviewer   = "reviewer-a"
+	)
 	dir := t.TempDir()
 	writeTestFile(t, dir, "pkg/auth.go", 50)
 
-	todo := newTestTODO("fix-auth", "Fix the auth handler")
-	todo.PR = &types.PR{Number: 42, URL: "https://example.com/pull/42", Head: "feat/x", Base: "main"}
-	todo.Path = types.StringOrSlice{"pkg/auth.go:25"}
+	for _, opts := range []Options{
+		{WorkDir: dir, Mode: types.ModeRun},
+		{WorkDir: dir, Mode: types.ModePlan},
+		{WorkDir: dir, Prompt: "triage", Mode: types.ModePlan, RawFixture: true},
+	} {
+		t.Run(opts.promptName(), func(t *testing.T) {
+			todo := newTestTODO("fix-auth", "Fix the auth handler")
+			todo.PR = &types.PR{Number: 42, URL: prURL, Head: "feat/x", Base: "main", CommentAuthor: reviewer, CommentURL: commentURL}
+			todo.Path = types.StringOrSlice{"pkg/auth.go:25"}
 
-	prompt := renderUser(t, []*types.TODO{todo}, Options{WorkDir: dir})
-	if strings.Contains(prompt, "## PR Context") {
-		t.Error("grouped prompt should not contain PR Context section")
+			req, _, err := renderResolvedForTest([]*types.TODO{todo}, opts)
+			require.NoError(t, err)
+			prompt := req.Prompt.User
+			for _, want := range []string{
+				"## Linked PR",
+				"[#42](" + prURL + ")",
+				"`feat/x` → `main`",
+				"review comment by " + reviewer + ": " + commentURL,
+				"```go file=pkg/auth.go:25",
+				"line 25 content",
+			} {
+				require.Contains(t, prompt, want)
+			}
+			require.Equal(t, prURL, req.Prompt.Metadata[PRURLMetadataKey])
+		})
 	}
-	if !strings.Contains(prompt, "```go file=pkg/auth.go:25") {
-		t.Error("grouped prompt should contain annotated code block")
-	}
-	if !strings.Contains(prompt, "line 25 content") {
-		t.Error("should contain actual source code lines")
-	}
+}
+
+func TestRenderOmitsLinkedPRWithoutPR(t *testing.T) {
+	req, _, err := renderResolvedForTest([]*types.TODO{newTestTODO("plain", "Fix it")}, Options{Mode: types.ModeRun})
+	require.NoError(t, err)
+	require.NotContains(t, req.Prompt.User, "## Linked PR")
+	require.NotContains(t, req.Prompt.Metadata, PRURLMetadataKey)
+}
+
+func TestRenderRejectsTodosLinkedToDifferentPRs(t *testing.T) {
+	first, second := newTestTODO("first", "a"), newTestTODO("second", "b")
+	first.PR = &types.PR{Number: 1, URL: "https://example.com/acme/service/pull/1"}
+	second.PR = &types.PR{Number: 2, URL: "https://example.com/acme/service/pull/2"}
+	_, _, err := renderResolvedForTest([]*types.TODO{first, second}, Options{Mode: types.ModeRun})
+	require.ErrorContains(t, err, "different PRs")
 }
 
 func TestPromptsRegistered(t *testing.T) {

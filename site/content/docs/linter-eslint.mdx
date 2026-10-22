@@ -1,0 +1,52 @@
+---
+title: ESLint
+description: JavaScript and TypeScript lint rules.
+parent: lint-execution
+order: 3
+---
+
+import { SchemaReference } from "@flanksource/clicky-ui/data";
+import schema from "../../../gavel.schema.json";
+
+## Detection and native configuration
+
+Detection input: `eslint.config.*`, `.eslintrc`, `.eslintrc.*`, or other recognized `eslint.*` files. Explicit selection pins this tool; matching source files and an available executable are still required. Inspect planned commands before execution:
+
+```bash
+gavel lint eslint --dry-run
+gavel lint eslint
+gavel lint eslint --changed
+```
+
+Keep plugins, language options, and rules in the native config. Gavel recognizing a config does not make it compatible with a different ESLint major version. `--fix` requests native source fixes.
+
+## Configure execution
+
+```yaml
+lint:
+  linters:
+    eslint:
+      enabled: true
+      runtime:
+        timeout: 2m
+        mem: 1GiB
+```
+
+`lint.linters.eslint.args` supplies native tool arguments. Process settings inherit from `runtime` and `lint.runtime`; explicit invocation settings take precedence. Native rule configuration is separate from these Gavel orchestration fields.
+
+## Findings and reruns
+
+```bash
+mkdir -p .tmp
+gavel lint eslint --format "json=.tmp/eslint.json,markdown=.tmp/eslint.md"
+gavel lint eslint --failed
+```
+
+Standalone lint JSON is an array of tool results. For an explicit rerun or baseline, save the snapshot named by `.gavel/last.json`, as shown in [Reporting](/docs/reporting). Changed and baseline filters affect which findings are reported, and do not necessarily narrow native analysis to the same files. See [Lint execution](/docs/lint-execution) for common filters and repair behavior.
+
+## Linter configuration reference
+
+These fields configure `lint.linters.eslint`; rule names and native options are owned by the tool. The [adapter source](https://github.com/flanksource/gavel/blob/main/linters/eslint/eslint.go) defines Gavel's integration.
+
+<SchemaReference schema={schema.properties.lint.properties.linters.additionalProperties} id="linter-eslint" />
+

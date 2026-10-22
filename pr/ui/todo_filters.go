@@ -25,7 +25,7 @@ func todoFiltersFromRequest(r *http.Request) (todos.DiscoveryFilters, error) {
 	return todos.DiscoveryFilters{IncludeStatuses: []types.Status{status}}, nil
 }
 
-func parseTodoNewPayload(r *http.Request) (todoNewPayload, []todoAttachmentSummary, error) {
+func (s *Server) parseTodoNewPayload(r *http.Request) (todoNewPayload, []todoAttachmentSummary, error) {
 	var payload todoNewPayload
 	var attachments []todoAttachmentSummary
 	contentType := strings.ToLower(r.Header.Get("Content-Type"))
@@ -39,7 +39,7 @@ func parseTodoNewPayload(r *http.Request) (todoNewPayload, []todoAttachmentSumma
 			if err := applyTodoNewValues(&payload, r.MultipartForm.Value, true); err != nil {
 				return payload, nil, err
 			}
-			stored, err := persistMultipartAttachments(r.MultipartForm)
+			stored, err := s.persistMultipartAttachments(r.Context(), r.MultipartForm)
 			if err != nil {
 				return payload, nil, err
 			}
@@ -70,7 +70,7 @@ func parseTodoNewPayload(r *http.Request) (todoNewPayload, []todoAttachmentSumma
 	return payload, attachments, nil
 }
 
-func parseTodoUpdatePayload(r *http.Request) (todoUpdatePayload, []todoAttachmentSummary, error) {
+func (s *Server) parseTodoUpdatePayload(r *http.Request) (todoUpdatePayload, []todoAttachmentSummary, error) {
 	var payload todoUpdatePayload
 	var attachments []todoAttachmentSummary
 	contentType := strings.ToLower(r.Header.Get("Content-Type"))
@@ -84,7 +84,7 @@ func parseTodoUpdatePayload(r *http.Request) (todoUpdatePayload, []todoAttachmen
 			if err := applyTodoUpdateValues(&payload, r.MultipartForm.Value); err != nil {
 				return payload, nil, err
 			}
-			stored, err := persistMultipartAttachments(r.MultipartForm)
+			stored, err := s.persistMultipartAttachments(r.Context(), r.MultipartForm)
 			if err != nil {
 				return payload, nil, err
 			}
@@ -218,6 +218,8 @@ func applyTodoNewValues(payload *todoNewPayload, values map[string][]string, ove
 	assignPriority(&payload.Priority, "priority", "severity")
 	assignStatus(&payload.Status, "status")
 	assignString(&payload.Parent, "parent")
+	assignString(&payload.Visibility, "visibility")
+	assignString(&payload.Step, "step")
 	if raw := firstTodoNewValue(values, "pr"); raw != "" && (overwrite || payload.PR == nil) {
 		pr, err := todoPRFormValue(raw)
 		if err != nil {
@@ -230,23 +232,15 @@ func applyTodoNewValues(payload *todoNewPayload, values map[string][]string, ove
 			payload.Labels = labels
 		}
 	}
-	for _, field := range []struct {
-		target **bool
-		keys   []string
-	}{
-		{&payload.AutoSave, []string{"autoSave", "autosave", "auto_save"}},
-		{&payload.Triage, []string{"triage"}},
-	} {
-		if !overwrite && *field.target != nil {
-			continue
+	if !overwrite && payload.AutoSave != nil {
+		return nil
+	}
+	if raw, exists := firstTodoUpdateValue(values, "autoSave", "autosave", "auto_save"); exists {
+		parsed, err := strconv.ParseBool(strings.TrimSpace(raw))
+		if err != nil {
+			return fmt.Errorf("invalid autoSave %q", raw)
 		}
-		if raw, exists := firstTodoUpdateValue(values, field.keys...); exists {
-			parsed, err := strconv.ParseBool(strings.TrimSpace(raw))
-			if err != nil {
-				return fmt.Errorf("invalid %s %q", field.keys[0], raw)
-			}
-			*field.target = &parsed
-		}
+		payload.AutoSave = &parsed
 	}
 	return nil
 }

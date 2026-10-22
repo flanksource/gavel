@@ -3,6 +3,7 @@ import { act, fireEvent, render, renderHook, screen, waitFor } from '@testing-li
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CmuxSessionButton, cmuxSurfaceLabel, useSessionStats } from './TodoSessionTimer';
 import { queryTestWrapper } from './queryTestWrapper';
+import { setAuthMode } from '../../query';
 
 // DropdownMenu is mocked to render its trigger and menu content inline and to
 // report itself open (so the lazy cmux-surface fetch runs), letting the test
@@ -154,6 +155,19 @@ describe('cmuxSurfaceLabel', () => {
 });
 
 describe('CmuxSessionButton', () => {
+  it('offers a hosted org no cmux terminal, which is the host\'s', () => {
+    setAuthMode('clerk', vi.fn());
+    try {
+      const fetchMock = vi.fn();
+      vi.stubGlobal('fetch', fetchMock);
+      const { container } = render(<CmuxSessionButton dir="repo:1" sessionId="sess-1" agent="claude" />, { wrapper: queryTestWrapper() });
+      expect(container.textContent).toBe('');
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      setAuthMode('none', vi.fn());
+    }
+  });
+
   it('captions the resolved workspace/surface for the session and focuses on demand', async () => {
     const fetchMock = mockFetch({
       '/session/cmux': () => ({ found: true, workspace: 'workspace:2', surface: 'surface:1' }),

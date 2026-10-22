@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -8,7 +9,9 @@ import (
 	"strings"
 
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/todos/githubpush"
+	"github.com/flanksource/gavel/todos/types"
 	"github.com/flanksource/gavel/verify"
 )
 
@@ -34,6 +37,29 @@ type todoGitHubPushResponse struct {
 }
 
 // handleTodoGitHubPush opens a GitHub issue for one TODO and links the two.
+// todoGitHub is the GitHub account and repository todo, in source, is pushed to issues through:
+// this host's credentials and the workspace's origin, or for a hosted organization, its GitHub
+// App on the workspace's own repository, and only for the todo's owner, since the issue is
+// opened before the todo records it.
+func (s *Server) todoGitHub(ctx context.Context, source todoSource, todo *types.TODO) (github.Options, error) {
+	// The dashboard's own Repo is the PR-search target, which is unrelated to the workspace
+	// this todo lives in.
+	opts := s.ghOpts
+	opts.WorkDir, opts.Repo = source.Dir, ""
+	if source.Hosted == nil {
+		return opts, nil
+	}
+	if err := requireTodoChangeable(ctx, todo); err != nil {
+		return github.Options{}, err
+	}
+	repo := source.Hosted.Repo
+	if repo.Source != "github" {
+		return github.Options{}, fmt.Errorf("repository %s was pushed to gavel, not linked from GitHub, so its todos have no GitHub issues", repo.Name)
+	}
+	opts.Repo = repo.Name
+	return opts, nil
+}
+
 func (s *Server) handleTodoGitHubPush(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if r.Method != http.MethodPost {
@@ -61,12 +87,11 @@ func (s *Server) handleTodoGitHubPush(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The dashboard's own Repo is the PR-search target, which is unrelated to
-	// the workspace this todo lives in. Clearing it lets the push resolve the
-	// repo from that workspace's own origin remote.
-	ghOpts := s.ghOpts
-	ghOpts.WorkDir = src.Dir
-	ghOpts.Repo = ""
+	ghOpts, err := s.todoGitHub(r.Context(), src, todo)
+	if err != nil {
+		writeTodoError(w, http.StatusBadRequest, err)
+		return
+	}
 
 	result, err := githubpush.Push(r.Context(), provider, todo.ID, githubpush.Options{
 		GitHub:  ghOpts,

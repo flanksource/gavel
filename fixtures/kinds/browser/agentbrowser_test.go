@@ -48,6 +48,11 @@ var _ = Describe("agent-browser kind", func() {
 		Expect(again.Result.Status).To(Equal(task.StatusPASS), again.Result.Error)
 		Expect(again.Outputs["stdout"]).To(ContainSubstring("gavel fixture page"), "a later step reuses the session's open page")
 		Expect(again.Cleanup).To(BeNil(), "only the first step in a session tears it down")
+		otherScope := fixtures.NewStepScope(os.Environ())
+		_, err = AgentBrowser{}.Execute(context.Background(), newStep(otherScope, "other", "agent-browser", map[string]any{
+			"session": chrome.Outputs["session"], "cdp": chrome.Exports["BROWSER_CDP_URL"], "commands": []string{"snapshot"},
+		}))
+		Expect(err).To(MatchError(ContainSubstring("owned by another fixture scope")))
 
 		Expect(outcome.Cleanup(context.Background())).To(Succeed())
 		Expect(probeError(chrome.Exports["BROWSER_CDP_URL"])).To(Succeed(), "closing the session must not close the fixture's Chrome")

@@ -1,6 +1,7 @@
 package parsers
 
 import (
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -10,6 +11,7 @@ import (
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/clicky/api/icons"
+	"github.com/flanksource/commons-db/tracing"
 	"github.com/flanksource/commons/logger"
 	"github.com/samber/lo"
 )
@@ -61,18 +63,21 @@ func ParseFramework(name string) (Framework, error) {
 
 // Test represents a single test failure.
 type Test struct {
-	Name        string        `json:"name,omitempty"`
-	Package     string        `json:"package,omitempty"`
-	PackagePath string        `json:"package_path,omitempty"` // Relative path to the package (e.g., "./pkg/testrunner")
-	WorkDir     string        `json:"work_dir,omitempty"`
-	Command     string        `json:"command,omitempty"` // Command used to run this test
-	Suite       []string      `json:"suite,omitempty"`   // Hierarchical suite path (e.g., ["Outer Describe", "Inner Context"])
-	Message     string        `json:"message,omitempty"`
-	File        string        `json:"file,omitempty"`
-	Line        int           `json:"line,omitempty"`
-	Framework   Framework     `json:"framework,omitempty"`
-	Duration    time.Duration `json:"duration,omitempty"`
-	Skipped     bool          `json:"skipped,omitempty"`
+	Name        string   `json:"name,omitempty"`
+	Package     string   `json:"package,omitempty"`
+	PackagePath string   `json:"package_path,omitempty"` // Relative path to the package (e.g., "./pkg/testrunner")
+	WorkDir     string   `json:"work_dir,omitempty"`
+	Command     string   `json:"command,omitempty"` // Command used to run this test
+	Suite       []string `json:"suite,omitempty"`   // Hierarchical suite path (e.g., ["Outer Describe", "Inner Context"])
+	Message     string   `json:"message,omitempty"`
+	File        string   `json:"file,omitempty"`
+	Line        int      `json:"line,omitempty"`
+	// EndLine, when set, is the test's last source line: a failure then shows
+	// lines Line..EndLine of File.
+	EndLine   int           `json:"end_line,omitempty"`
+	Framework Framework     `json:"framework,omitempty"`
+	Duration  time.Duration `json:"duration,omitempty"`
+	Skipped   bool          `json:"skipped,omitempty"`
 	// Aborted marks a test that never ran because the run stopped after an earlier failure — distinct from an intentional Skipped.
 	Aborted bool `json:"aborted,omitempty"`
 	Failed  bool `json:"failed,omitempty"`
@@ -106,12 +111,11 @@ type Test struct {
 	// Detail is provider-owned structured detail for a test. Providers should
 	// assign a JSON-marshallable value here; values may also implement api.Pretty
 	// for rich terminal/clicky rendering.
-	Detail         any                 `json:"detail,omitempty"`
-	Benchmark      *BenchmarkResult    `json:"benchmark,omitempty"`
-	FixtureProfile *FixtureProfile     `json:"fixture_profile,omitempty"`
-	GoProfiles     []GoProfileArtifact `json:"go_profiles,omitempty"`
-	SQLProfile     *SQLProfile         `json:"sql_profile,omitempty"`
-	Fixture        *FixtureExecution   `json:"fixture,omitempty"`
+	Detail         any               `json:"detail,omitempty"`
+	Benchmark      *BenchmarkResult  `json:"benchmark,omitempty"`
+	FixtureProfile *FixtureProfile   `json:"fixture_profile,omitempty"`
+	SQLProfile     *SQLProfile       `json:"sql_profile,omitempty"`
+	Fixture        *FixtureExecution `json:"fixture,omitempty"`
 	// Attempts is the per-run execution history for this test. A fresh run
 	// appends a TestAttempt to the tail; reruns (via the UI) append further
 	// attempts without discarding earlier ones. The Test's top-level
@@ -135,6 +139,9 @@ type FixtureExecution struct {
 	State      string   `json:"state"`
 	CommandMS  *float64 `json:"command_ms,omitempty"`
 	Violations []string `json:"violations,omitempty"`
+	// PIDs are the processes the fixture started, which the UI links to the
+	// process trace by pid.
+	PIDs []int `json:"pids,omitempty"`
 }
 
 type FixtureProfile struct {
@@ -152,16 +159,6 @@ type ProfileDiskIO struct {
 	DiskWriteBytes   uint64 `json:"disk_write_bytes"`
 	SampleCount      int    `json:"sample_count"`
 	MissingProcesses int    `json:"missing_processes,omitempty"`
-}
-
-type GoProfileArtifact struct {
-	Name        string   `json:"name"`
-	ID          string   `json:"id,omitempty"`
-	Path        string   `json:"path,omitempty"`
-	Status      string   `json:"status"`
-	Bytes       int64    `json:"bytes,omitempty"`
-	SampleTypes []string `json:"sample_types,omitempty"`
-	Error       string   `json:"error,omitempty"`
 }
 
 type SQLProfile struct {
@@ -194,27 +191,33 @@ type TestProgress struct {
 // the command invoked, and the final state. Populated by the runner on
 // completion and extended by the UI on rerun.
 type TestAttempt struct {
-	Sequence    int           `json:"sequence"`
-	RunKind     string        `json:"run_kind,omitempty"` // "initial", "rerun"
-	Started     time.Time     `json:"started,omitempty"`
-	Ended       time.Time     `json:"ended,omitempty"`
-	Duration    time.Duration `json:"duration,omitempty"`
-	PID         int           `json:"pid,omitempty"`
-	Command     string        `json:"command,omitempty"`
-	Framework   Framework     `json:"framework,omitempty"`
-	ExitCode    *int          `json:"exit_code,omitempty"`
-	Passed      bool          `json:"passed,omitempty"`
-	Failed      bool          `json:"failed,omitempty"`
-	Skipped     bool          `json:"skipped,omitempty"`
-	Pending     bool          `json:"pending,omitempty"`
-	TimedOut    bool          `json:"timed_out,omitempty"`
-	Message     string        `json:"message,omitempty"`
-	Stdout      string        `json:"stdout,omitempty"`
-	Stderr      string        `json:"stderr,omitempty"`
-	StackTrace  string        `json:"stack_trace,omitempty"`
-	CPUPercent  float64       `json:"cpu_percent,omitempty"`
-	RSS         uint64        `json:"rss,omitempty"`
-	GoroutineCt int           `json:"goroutine_count,omitempty"`
+	Sequence int           `json:"sequence"`
+	RunKind  string        `json:"run_kind,omitempty"` // "initial", "rerun"
+	Started  time.Time     `json:"started,omitempty"`
+	Ended    time.Time     `json:"ended,omitempty"`
+	Duration time.Duration `json:"duration,omitempty"`
+	PID      int           `json:"pid,omitempty"`
+	// ProcessKey is the process's key in the run's process_tree, whose
+	// process_samples the CPU and RSS peaks were read from.
+	ProcessKey  string    `json:"process_key,omitempty"`
+	Command     string    `json:"command,omitempty"`
+	Framework   Framework `json:"framework,omitempty"`
+	ExitCode    *int      `json:"exit_code,omitempty"`
+	Passed      bool      `json:"passed,omitempty"`
+	Failed      bool      `json:"failed,omitempty"`
+	Skipped     bool      `json:"skipped,omitempty"`
+	Pending     bool      `json:"pending,omitempty"`
+	TimedOut    bool      `json:"timed_out,omitempty"`
+	Message     string    `json:"message,omitempty"`
+	Stdout      string    `json:"stdout,omitempty"`
+	Stderr      string    `json:"stderr,omitempty"`
+	StackTrace  string    `json:"stack_trace,omitempty"`
+	CPUPercent  float64   `json:"cpu_percent,omitempty"`
+	RSS         uint64    `json:"rss,omitempty"`
+	GoroutineCt int       `json:"goroutine_count,omitempty"`
+	// SharedProcess marks an attempt whose PID, CPU and RSS belong to a go test
+	// batch that ran several packages in one process, not to this test alone.
+	SharedProcess bool `json:"shared_process,omitempty"`
 }
 
 type GoTestContext struct {
@@ -223,9 +226,21 @@ type GoTestContext struct {
 }
 
 type GinkgoContext struct {
-	SuiteDescription string `json:"suite_description,omitempty"`
-	SuitePath        string `json:"suite_path,omitempty"`
-	FailureLocation  string `json:"failure_location,omitempty"`
+	SuiteDescription string              `json:"suite_description,omitempty"`
+	SuitePath        string              `json:"suite_path,omitempty"`
+	FailureLocation  string              `json:"failure_location,omitempty"`
+	Labels           []string            `json:"labels,omitempty"`
+	NumAttempts      int                 `json:"num_attempts,omitempty"`
+	ParallelProcess  int                 `json:"parallel_process,omitempty"`
+	ReportEntries    []GinkgoReportEntry `json:"report_entries,omitempty"`
+}
+
+type GinkgoReportEntry struct {
+	Name           string          `json:"name"`
+	Value          json.RawMessage `json:"value,omitempty"`
+	Representation string          `json:"representation,omitempty"`
+	File           string          `json:"file,omitempty"`
+	Line           int             `json:"line,omitempty"`
 }
 
 type BenchmarkResult struct {
@@ -263,6 +278,22 @@ type FixtureContext struct {
 	CELVars       map[string]any `json:"cel_vars,omitempty"`
 	Expected      any            `json:"expected,omitempty"`
 	Actual        any            `json:"actual,omitempty"`
+	// Traces are the windows of the traces the fixture armed, read from the
+	// run's trace store through the UI's query mount.
+	Traces []TraceResult `json:"traces,omitempty"`
+}
+
+// TraceResult is one armed trace's window of a fixture: the TraceRef that
+// reads it from the run's store, its record count and the kind's summary of
+// it, or the error that kept it from being read.
+type TraceResult struct {
+	tracing.TraceRef
+	// RunID names the run whose store holds the window, .gavel/traces/<run_id>,
+	// so a UI showing several runs opens it in the right one.
+	RunID   string         `json:"run_id"`
+	Count   int            `json:"count"`
+	Summary map[string]any `json:"summary,omitempty"`
+	Error   string         `json:"error,omitempty"`
 }
 
 func (t Test) IsFolder() bool {
@@ -364,6 +395,9 @@ func (t Test) Pretty() api.Text {
 			Label:   "stderr",
 			Content: clicky.Text(t.Stderr, "text-red-500 font-mono text-xs whitespace-pre-wrap"),
 		})
+	}
+	if source := (SourceRange{File: t.File, WorkDir: t.WorkDir, Line: t.Line, EndLine: t.EndLine}); t.Failed && source.Valid() {
+		s = s.NewLine().Add(api.Collapsed{Label: "source " + source.String(), Content: source.Read().Pretty()})
 	}
 
 	// Surface the provider-owned Detail inline beneath the summary line. On a
@@ -544,6 +578,11 @@ func (tr Test) Sum() TestSummary {
 	} else {
 		summary.Total = 0
 	}
+	// A parent is flagged TimedOut by propagation from its leaves; count only
+	// the leaves so one timeout is not counted twice.
+	if tr.TimedOut && len(tr.Children) == 0 {
+		summary.TimedOut = 1
+	}
 
 	for _, child := range tr.Children {
 		childSummary := child.Sum()
@@ -555,6 +594,7 @@ func (tr Test) Sum() TestSummary {
 		summary.Skipped += childSummary.Skipped
 		summary.Pending += childSummary.Pending
 		summary.Running += childSummary.Running
+		summary.TimedOut += childSummary.TimedOut
 		summary.Duration += childSummary.Duration
 	}
 
@@ -673,6 +713,8 @@ func (results TestSuiteResults) Sort() {
 	})
 }
 
+// TestSummary counts tests per outcome. TimedOut is a subset of Failed (a
+// timed-out leaf is also failed), not a separate bucket of Total.
 type TestSummary struct {
 	Total    int
 	Passed   int
@@ -682,6 +724,7 @@ type TestSummary struct {
 	Skipped  int
 	Pending  int
 	Running  int
+	TimedOut int
 	Duration time.Duration
 }
 
@@ -693,6 +736,9 @@ func (s TestSummary) Pretty() api.Text {
 	}
 	if s.Failed > 0 {
 		t = t.Add(clicky.KeyValue(" failed", s.Failed, "text-red-500")).Append(" ")
+	}
+	if s.TimedOut > 0 {
+		t = t.Add(clicky.KeyValue(" timed out", s.TimedOut, "text-amber-600")).Append(" ")
 	}
 	if s.Warned > 0 {
 		t = t.Add(clicky.KeyValue(" warned", s.Warned, "text-amber-500")).Append(" ")
@@ -724,6 +770,7 @@ func (tr TestSummary) Add(other TestSummary) TestSummary {
 		Skipped:  tr.Skipped + other.Skipped,
 		Pending:  tr.Pending + other.Pending,
 		Running:  tr.Running + other.Running,
+		TimedOut: tr.TimedOut + other.TimedOut,
 		Duration: tr.Duration + other.Duration,
 	}
 }
@@ -774,10 +821,16 @@ func (tr Test) Filter(filter TestFilter) Test {
 		Aborted:           tr.Aborted,
 		Skipped:           tr.Skipped,
 		Passed:            tr.Passed,
+		Cached:            tr.Cached,
+		TimedOut:          tr.TimedOut,
 		Stdout:            tr.Stdout,
 		Stderr:            tr.Stderr,
 		Framework:         tr.Framework,
+		Context:           tr.Context,
+		Detail:            tr.Detail,
 		Benchmark:         tr.Benchmark,
+		FailureDetail:     tr.FailureDetail,
+		Attempts:          tr.Attempts,
 		IsGinkgoBootstrap: tr.IsGinkgoBootstrap,
 		// Set summary before filtering to maintain summary even if child tests are filtered out
 		Summary: lo.ToPtr(tr.Sum()),

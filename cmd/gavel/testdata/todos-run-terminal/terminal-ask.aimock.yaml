@@ -1,0 +1,63 @@
+name: todos-run-terminal-ask
+description: >
+  Scripted Anthropic replies for `gavel todos run --step plan` at a terminal,
+  served to the real `claude` CLI. The plan turn asks which database to use
+  through todo_ask, saves a plan through todo_plan once the answer comes back,
+  and ends with the unified envelope. Caller tools reach the CLI through
+  captain's loopback MCP server, named "captain", hence the mcp__captain__
+  prefix. There is deliberately no catch-all: an unexpected request is a 400
+  miss that fails the run loudly.
+
+anthropic:
+  - match:
+      system_contains: "You are naming a coding session"
+    repeat: -1
+    respond:
+      text: Todo plan step
+      stop_reason: end_turn
+
+  - match:
+      prompt_contains: "You are planning the implementation"
+    respond:
+      tool_use:
+        name: mcp__captain__todo_ask
+        id: toolu_ask
+        input:
+          questions:
+            - text: Which database should the store use?
+              context: The TODO leaves the database open.
+              options: [postgres, sqlite]
+      stop_reason: tool_use
+
+  - match:
+      tool_result_for: mcp__captain__todo_ask
+    respond:
+      tool_use:
+        name: mcp__captain__todo_plan
+        id: toolu_plan
+        input:
+          content: |
+            ## Plan
+
+            1. Add `store/store.go` backed by sqlite, as answered at the terminal.
+            2. Cover it with `go test ./store/...`.
+      stop_reason: tool_use
+
+  - match:
+      tool_result_for: mcp__captain__todo_plan
+    respond:
+      tool_use:
+        name: StructuredOutput
+        id: toolu_envelope
+        input:
+          success: true
+          event: new
+          comment: Planned the sqlite store after asking which database to use.
+      stop_reason: tool_use
+
+  # captain's plan-tldr hook (api mode, haiku) summarises the saved plan.
+  - match:
+      system_contains: "You write TL;DRs for software implementation plans"
+    respond:
+      text: '{"tldr":"- **TL;DR** Adds a sqlite-backed `store` package, verified by `go test ./store/...`."}'
+      stop_reason: end_turn

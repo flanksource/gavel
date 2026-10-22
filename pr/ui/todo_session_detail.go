@@ -59,14 +59,9 @@ func (s *Server) handleTodoSessionDetail(w http.ResponseWriter, r *http.Request)
 		writeTodoError(w, http.StatusBadRequest, errors.New("ref is required"))
 		return
 	}
-	dir, err := s.resolveTodoDir(r.URL.Query().Get("dir"))
+	provider, _, err := s.todoProviderContext(r.Context(), todoSource{Dir: r.URL.Query().Get("dir")})
 	if err != nil {
-		writeTodoError(w, http.StatusBadRequest, err)
-		return
-	}
-	provider, err := openTodoProvider(r.Context(), dir)
-	if err != nil {
-		writeTodoError(w, http.StatusInternalServerError, err)
+		writeTodoError(w, todoErrorStatus(http.StatusBadRequest, err), err)
 		return
 	}
 	detailProvider, ok := provider.(sessionDetailProvider)

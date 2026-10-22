@@ -13,12 +13,13 @@ import (
 	"strings"
 	"time"
 
+	captainapi "github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/clicky/task"
 	"github.com/flanksource/commons/logger"
-	"github.com/flanksource/gavel/fixtures/record"
 	"github.com/flanksource/gavel/processruntime"
+	"github.com/flanksource/gavel/testrunner/parsers"
 	"github.com/flanksource/gomplate/v3"
 )
 
@@ -230,11 +231,13 @@ type ExecFixtureBase struct {
 	CWD string `yaml:"cwd,omitempty" json:"cwd,omitempty"`
 	// Terminal mode: "pty" to allocate a pseudo-terminal, "" for piped (default)
 	Terminal string `yaml:"terminal,omitempty" json:"terminal,omitempty"`
-	// Record declares which diagnostic recorders run for this fixture — the
-	// terminal's ANSI stream, the child's HTTP calls, its SQL. Nil means none
-	// start: every fixture in a run shares one parallel task group, so an
-	// always-on recorder would multiply listeners across the whole run.
-	Record     *record.Spec               `yaml:"record,omitempty" json:"record,omitempty"`
+	// Input scripts a pty session: wait for each expectation, then type.
+	Input []PTYInput `yaml:"input,omitempty" json:"input,omitempty"`
+	// Traces declares the commons-db traces armed around this fixture — a
+	// recording proxy for its children, its terminal, its SQL. Nil declares
+	// none and leaves the run-wide --traces default in force; an empty list
+	// opts out of it.
+	Traces     *TraceSpecs                `yaml:"traces,omitempty" json:"traces,omitempty"`
 	GoProfiles map[string]GoProfileOutput `yaml:"goProfiles,omitempty" json:"go_profiles,omitempty"`
 }
 
@@ -243,16 +246,6 @@ type GoProfileOutput struct {
 	Directory string   `yaml:"directory,omitempty" json:"directory,omitempty"`
 	Args      []string `yaml:"args,omitempty" json:"args,omitempty"`
 	Env       string   `yaml:"env,omitempty" json:"env,omitempty"`
-}
-
-type GoProfileArtifact struct {
-	Name        string   `json:"name"`
-	ID          string   `json:"id,omitempty"`
-	Path        string   `json:"path,omitempty"`
-	Status      string   `json:"status"`
-	Bytes       int64    `json:"bytes,omitempty"`
-	SampleTypes []string `json:"sample_types,omitempty"`
-	Error       string   `json:"error,omitempty"`
 }
 
 func relativePath(path string) string {
@@ -281,16 +274,28 @@ func (e ExecFixtureBase) IsEmpty() bool {
 	return e.Exec == "" && e.Build == "" && e.Daemon == "" && len(e.Args) == 0
 }
 
-func (e ExecFixtureBase) Template(data map[string]any) (ExecFixtureBase, error) {
+// Template renders the exec base against the fixture's template data. `$VAR`
+// in exec and args expands from data first, then env — the environment the
+// command will run with — and an unknown variable is left as written. A `-c`
+// script body expands from data only.
+func (e ExecFixtureBase) Template(data map[string]any, env map[string]string) (ExecFixtureBase, error) {
 	var err error
 
 	logger.V(5).Infof("Template data keys: %v", sortedKeys(data))
+
+	vars := make(map[string]any)
+	for k, v := range env {
+		vars[k] = v
+	}
+	for k, v := range data {
+		vars[k] = v
+	}
 
 	orig := e
 	origArgs := make([]string, len(e.Args))
 	copy(origArgs, e.Args)
 
-	e.Exec = ExpandVars(e.Exec, data)
+	e.Exec = ExpandVars(e.Exec, vars)
 	if e.Exec, err = gomplate.RunTemplate(data, gomplate.Template{
 		Template: e.Exec,
 	}); err != nil {
@@ -319,7 +324,13 @@ func (e ExecFixtureBase) Template(data map[string]any) (ExecFixtureBase, error) 
 	e.Args = args
 
 	for i := range e.Args {
-		e.Args[i] = ExpandVars(e.Args[i], data)
+		// A `-c` script body is left to the shell: it may assign the variables
+		// it reads, which an expansion from the environment would pre-empt.
+		if i == 1 && e.Args[0] == "-c" {
+			e.Args[i] = ExpandVars(e.Args[i], data)
+		} else {
+			e.Args[i] = ExpandVars(e.Args[i], vars)
+		}
 		e.Args[i], err = gomplate.RunTemplate(data, gomplate.Template{
 			Template: e.Args[i],
 		})
@@ -409,8 +420,11 @@ func (e ExecFixtureBase) MergeInto(other ExecFixtureBase) ExecFixtureBase {
 	if len(other.Args) > 0 {
 		merged.Args = other.Args
 	}
-	if merged.Env == nil {
-		merged.Env = make(map[string]any)
+	// A copy: e.Env is the file's (or document's) env, shared by every test in
+	// it, and the merged map is filled per test.
+	merged.Env = make(map[string]any)
+	for k, v := range e.Env {
+		merged.Env[k] = v
 	}
 	for k, v := range other.Env {
 		merged.Env[k] = v
@@ -419,13 +433,15 @@ func (e ExecFixtureBase) MergeInto(other ExecFixtureBase) ExecFixtureBase {
 	if other.Terminal != "" {
 		merged.Terminal = other.Terminal
 	}
+	if len(other.Input) > 0 {
+		merged.Input = other.Input
+	}
 
-	// A per-test `record:` replaces the file's wholesale rather than unioning
-	// with it, matching args/exec above — otherwise a test that names one
-	// recorder would silently inherit the file's other three, and `record: none`
-	// would have no way to opt out.
-	if other.Record != nil {
-		merged.Record = other.Record
+	// A per-test `traces:` replaces the file's wholesale rather than unioning
+	// with it, matching args/exec above — otherwise `traces: []` would have no
+	// way to opt one test out.
+	if other.Traces != nil {
+		merged.Traces = other.Traces
 	}
 	if other.GoProfiles != nil {
 		merged.GoProfiles = other.GoProfiles
@@ -496,7 +512,7 @@ func (f *FrontMatter) CleanMetadata() {
 	delete(f.Metadata, "env")
 	delete(f.Metadata, "cwd")
 	delete(f.Metadata, "terminal")
-	delete(f.Metadata, "record")
+	delete(f.Metadata, "traces")
 	// Keys from FrontMatter itself
 	delete(f.Metadata, "files")
 	delete(f.Metadata, "codeBlocks")
@@ -577,15 +593,14 @@ func (nt NodeType) Pretty() api.Text {
 // It contains core information, execution results, and metadata about the test run.
 type FixtureResult struct {
 	// Core fields
-	Name            string              `json:"name" pretty:"label=Test Name,style=text-blue-600"`
-	Type            string              `json:"type,omitempty" pretty:"label=Type,style=text-gray-500"`
-	Status          task.Status         `json:"status,omitempty" `
-	Duration        time.Duration       `json:"duration,omitempty" pretty:"label=Duration,style=text-yellow-600,omitempty"`
-	CommandDuration time.Duration       `json:"command_duration,omitempty"`
-	Profile         *FixtureProfile     `json:"profile,omitempty"`
-	SQLProfile      *SQLProfile         `json:"sql_profile,omitempty"`
-	GoProfiles      []GoProfileArtifact `json:"go_profiles,omitempty" pretty:"hide"`
-	Test            FixtureTest         `json:"-"` // Only populated for Test nodes
+	Name            string          `json:"name" pretty:"label=Test Name,style=text-blue-600"`
+	Type            string          `json:"type,omitempty" pretty:"label=Type,style=text-gray-500"`
+	Status          task.Status     `json:"status,omitempty" `
+	Duration        time.Duration   `json:"duration,omitempty" pretty:"label=Duration,style=text-yellow-600,omitempty"`
+	CommandDuration time.Duration   `json:"command_duration,omitempty"`
+	Profile         *FixtureProfile `json:"profile,omitempty"`
+	SQLProfile      *SQLProfile     `json:"sql_profile,omitempty"`
+	Test            FixtureTest     `json:"-"` // Only populated for Test nodes
 
 	// Result data
 	Error     string      `json:"error,omitempty" pretty:"label=Error,style=text-red-600,omitempty"`
@@ -617,16 +632,20 @@ type FixtureResult struct {
 	// steps, which carry their evidence in Command/Stdout/Stderr.
 	Run *RunArtifact `json:"run,omitempty" pretty:"hide"`
 
-	// Recordings reference the diagnostic artifacts the fixture's `record:`
-	// produced — one fixture can emit a cast, a HAR and a SQL log at once. Like
-	// Run, they carry counts inline and leave the payload on disk.
-	Recordings []Recording `json:"recordings,omitempty" pretty:"hide"`
-}
+	// TimedOut marks a failed result whose test was killed by a timeout; a
+	// verify node counts it in its own bucket rather than as failed.
+	TimedOut bool `json:"timed_out,omitempty"`
 
-// Recording is one diagnostic artifact produced for a fixture. Aliased rather
-// than mirrored because package record is a leaf that imports nothing from
-// gavel, so embedding it here costs no dependency.
-type Recording = record.Result
+	// Summary is a runner step's tally of every engine result, including the
+	// children it elided from Children; it wins over counting Children.
+	Summary *captainapi.VerifySummary `json:"summary,omitempty" pretty:"hide"`
+
+	// Traces are the windows of the traces the fixture armed — one per
+	// `traces:` entry — referenced by stream and seq, with the count and
+	// summary its assertions read inline and the records left in the run's
+	// trace store.
+	Traces []parsers.TraceResult `json:"traces,omitempty" pretty:"hide"`
+}
 
 // RunArtifact is a runner step's engine output recorded by reference: the counts
 // and top failures needed to render a verdict inline, plus the .gavel snapshot
@@ -877,23 +896,36 @@ type Visitor interface {
 }
 
 // Stats provides summary statistics for fixture test execution.
-// It tracks the total number of tests and their outcomes.
+// It tracks the total number of tests and their outcomes. TimedOut is the part
+// of Failed that was killed by a timeout; Warned is a soft failure counted in
+// Total only.
 type Stats struct {
-	Total   int `json:"total,omitempty"`
-	Passed  int `json:"passed,omitempty"`
-	Failed  int `json:"failed,omitempty"`
-	Skipped int `json:"skipped,omitempty"`
-	Error   int `json:"error,omitempty"`
+	Total    int `json:"total,omitempty"`
+	Passed   int `json:"passed,omitempty"`
+	Failed   int `json:"failed,omitempty"`
+	TimedOut int `json:"timed_out,omitempty"`
+	Warned   int `json:"warned,omitempty"`
+	Skipped  int `json:"skipped,omitempty"`
+	Error    int `json:"error,omitempty"`
 }
 
 func (s Stats) Merge(o Stats) Stats {
 	return Stats{
-		Total:   s.Total + o.Total,
-		Passed:  s.Passed + o.Passed,
-		Failed:  s.Failed + o.Failed,
-		Skipped: s.Skipped + o.Skipped,
-		Error:   s.Error + o.Error,
+		Total:    s.Total + o.Total,
+		Passed:   s.Passed + o.Passed,
+		Failed:   s.Failed + o.Failed,
+		TimedOut: s.TimedOut + o.TimedOut,
+		Warned:   s.Warned + o.Warned,
+		Skipped:  s.Skipped + o.Skipped,
+		Error:    s.Error + o.Error,
 	}
+}
+
+// statsFromSummary maps a runner step's tally onto Stats. A timeout is a
+// failure here; running and pending tests only reach a summary when the step
+// never finished, which its own failed verdict already reports.
+func statsFromSummary(s captainapi.VerifySummary) Stats {
+	return Stats{Total: s.Total, Passed: s.Passed, Failed: s.Failed + s.TimedOut, TimedOut: s.TimedOut, Warned: s.Warned, Skipped: s.Skipped}
 }
 
 func (s Stats) Add(result *FixtureResult) Stats {
@@ -904,6 +936,11 @@ func (s Stats) Add(result *FixtureResult) Stats {
 	switch result.Status {
 	case task.StatusFailed, task.StatusFAIL:
 		s.Failed++
+		if result.TimedOut {
+			s.TimedOut++
+		}
+	case task.StatusWarning:
+		s.Warned++
 	case task.StatusPASS, task.StatusSuccess:
 		s.Passed++
 	case task.StatusSKIP:
@@ -914,12 +951,26 @@ func (s Stats) Add(result *FixtureResult) Stats {
 	return s
 }
 
+// GetStats counts a node whose result carries a runner step's summary from that
+// summary (its visible children are a subset of it), a leaf by its own result,
+// and any other node by its children. A node whose own result failed or errored
+// while those counts show no failure counts that verdict once more, so a failed
+// step never reads as passed.
 func (f FixtureNode) GetStats() Stats {
-	s := Stats{}
-
-	s = s.Add(f.Results)
-	for _, child := range f.Children {
-		s = s.Merge(child.GetStats())
+	own := Stats{}.Add(f.Results)
+	var s Stats
+	switch {
+	case f.Results != nil && f.Results.Summary != nil:
+		s = statsFromSummary(*f.Results.Summary)
+	case len(f.Children) == 0:
+		return own
+	default:
+		for _, child := range f.Children {
+			s = s.Merge(child.GetStats())
+		}
+	}
+	if own.HasFailures() && !s.HasFailures() {
+		s = s.Merge(own)
 	}
 	return s
 }
@@ -973,6 +1024,12 @@ func (s Stats) Pretty() api.Text {
 		t = t.Append(strconv.Itoa(s.Failed), "text-red-500")
 
 	}
+	if s.TimedOut > 0 {
+		t = t.Append(fmt.Sprintf(" %d timed out", s.TimedOut), "text-red-500")
+	}
+	if s.Warned > 0 {
+		t = t.Append(fmt.Sprintf(" %d warned", s.Warned), "text-amber-500")
+	}
 	if s.Skipped > 0 {
 		t = t.Append(fmt.Sprintf(" %d skipped", s.Skipped), "text-yellow-500")
 	}
@@ -990,6 +1047,14 @@ func (s Stats) String() string {
 		return "-"
 	}
 	str := fmt.Sprintf("%d/%d", s.Passed, s.Failed+s.Passed)
+
+	if s.TimedOut > 0 {
+		str += fmt.Sprintf(" %d timed out", s.TimedOut)
+	}
+
+	if s.Warned > 0 {
+		str += fmt.Sprintf(" %d warned", s.Warned)
+	}
 
 	if s.Skipped > 0 {
 		str += fmt.Sprintf(" %d skipped", s.Skipped)
@@ -1023,7 +1088,7 @@ func (s *Stats) Health() task.Health {
 	if s.Failed+s.Error > 0 {
 		return task.HealthError
 	}
-	if s.Total == 0 || s.Skipped > 0 {
+	if s.Total == 0 || s.Skipped > 0 || s.Warned > 0 {
 		return task.HealthWarning
 	}
 	return task.HealthOK
@@ -1053,6 +1118,9 @@ type FixtureOrigin struct {
 	TableIndex  int    `json:"table_index,omitempty"`
 	RowIndex    int    `json:"row_index,omitempty"`
 	Line        int    `json:"line,omitempty"`
+	// EndLine is the last source line of a test node: its YAML step, or its
+	// markdown block up to the next node. Zero when the extent is unknown.
+	EndLine int `json:"end_line,omitempty"`
 }
 
 // FixtureNode represents a node in the hierarchical fixture tree structure.
@@ -1071,7 +1139,7 @@ type FixtureNode struct {
 
 func (f FixtureNode) Pretty() api.Text {
 	if f.Results != nil {
-		return f.Results.Pretty()
+		return f.resultPretty()
 	}
 
 	s := clicky.Text("").Add(f.Type.Pretty()).Append(" ").Append(f.Name)
@@ -1081,6 +1149,33 @@ func (f FixtureNode) Pretty() api.Text {
 	}
 
 	return s
+}
+
+// resultPretty is the node's result, followed on a failure by the source lines
+// the node was written as.
+func (f FixtureNode) resultPretty() api.Text {
+	text := f.Results.Pretty()
+	if source, ok := f.Results.Metadata["source"].(parsers.SourceSnippet); ok {
+		text = text.NewLine().Append(fmt.Sprintf("  source %s:%d-%d", source.File, source.Line, source.EndLine), "text-muted").
+			NewLine().Add(source.Pretty())
+	}
+	return text
+}
+
+// stampSource records, on a failed result, the source lines its node was
+// written as, so every report of the failure can show them.
+func stampSource(node *FixtureNode, result *FixtureResult) {
+	if !isFailureStatus(result.Status) || node.Origin == nil {
+		return
+	}
+	source := parsers.SourceRange{File: node.Origin.File, Line: node.Origin.Line, EndLine: node.Origin.EndLine}
+	if !source.Valid() {
+		return
+	}
+	if result.Metadata == nil {
+		result.Metadata = map[string]any{}
+	}
+	result.Metadata["source"] = source.Read()
 }
 
 func (f FixtureNode) GetChildren() []api.TreeNode {
@@ -1107,7 +1202,7 @@ func (fn *FixtureNode) ApplyDisplayOptions(opts DisplayOptions) {
 	for _, child := range fn.Children {
 		child.ApplyDisplayOptions(opts)
 		if child.Results != nil {
-			if !opts.ShowPassed && isPassingStatus(child.Results.Status) {
+			if !opts.ShowPassed && isPassingStatus(child.Results.Status) && !child.GetStats().HasFailures() {
 				continue
 			}
 			child.Results.Display = &opts
@@ -1193,7 +1288,7 @@ type FixtureTreeNode struct {
 
 func (ftn FixtureTreeNode) Pretty() api.Text {
 	if ftn.fixture.Results != nil {
-		return ftn.fixture.Results.Pretty()
+		return ftn.fixture.resultPretty()
 	}
 
 	// Get icon based on node type and status

@@ -1,18 +1,17 @@
 package snapshots
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/flanksource/gavel/blob"
 	"github.com/flanksource/gavel/testrunner/parsers"
 	testui "github.com/flanksource/gavel/testrunner/ui"
-	"github.com/flanksource/gavel/utils"
 )
 
 // Run kinds reported by ListRuns, derived from a snapshot's tests/lint content.
@@ -23,11 +22,11 @@ const (
 )
 
 // RunInfo is the per-run summary ListRuns derives from a single
-// .gavel/run-<timestamp>.json file. It carries enough to render a run list row
-// and locate the snapshot on disk (Path) without re-reading the file.
+// run-<timestamp>.json snapshot. It carries enough to render a run list row;
+// ReadRun(workDir, RunID) reads the snapshot itself.
 type RunInfo struct {
 	RunID      string    `json:"runId"`             // file stem, e.g. run-2026-06-28T10-43-42Z
-	Path       string    `json:"path"`              // absolute path to the run-*.json
+	Path       string    `json:"path"`              // where the snapshot is stored (see Location)
 	Started    time.Time `json:"started,omitempty"` // run start (UTC)
 	Ended      time.Time `json:"ended,omitempty"`   // run end (UTC)
 	Kind       string    `json:"kind"`              // test | lint | test+lint
@@ -45,105 +44,129 @@ type RunInfo struct {
 	LintLinters    int `json:"lintLinters"`
 }
 
-// LastRun returns the summary of the snapshot referenced by
-// .gavel/last.json. A missing pointer is the normal "never run" state and
-// returns nil without an error.
+// LastRun returns the summary of the snapshot last.json points at. A missing pointer is the
+// normal "never run" state and returns nil without an error.
 func LastRun(workDir string) (*RunInfo, error) {
 	if workDir == "" {
 		return nil, errors.New("snapshots.LastRun: workDir is required")
 	}
-	pointer, err := LoadPointer(workDir, PointerLast)
+	store, err := OpenStore(workDir)
+	if err != nil {
+		return nil, err
+	}
+	pointer, err := loadPointer(store, PointerLast)
 	if err != nil || pointer == nil {
 		return nil, err
 	}
-	// Save records a workDir-relative `.gavel/<name>.json`. A pointer naming
-	// anything else is corrupt or hand-edited, so it is rejected before the
-	// snapshot behind it is stat'd or decoded.
-	path, err := utils.ResolveWithin(workDir, pointer.Path)
+	// Save records `.gavel/<name>.json`. A pointer naming anything else is
+	// corrupt or hand-edited, so it is rejected before the snapshot behind it
+	// is read.
+	key, err := pointerKey(pointer)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", filepath.Join(Dir, PointerLast+".json"), err)
+		return nil, fmt.Errorf("%s: %w", Location(workDir, PointerLast+".json"), err)
 	}
-	snap, err := LoadByPointer(workDir, pointer)
+	snap, err := loadRun(store, workDir, key)
 	if err != nil {
 		return nil, err
 	}
-	info := runInfo(*snap, PointerLast+".json", path, runStartTime(*snap, PointerLast+".json", path, nil))
+	var modTime time.Time
+	if objects, err := store.List(context.Background(), key); err == nil && len(objects) > 0 {
+		modTime = objects[0].ModTime
+	}
+	info := runInfo(*snap, PointerLast+".json", Location(workDir, key), runStartTime(*snap, PointerLast+".json", modTime))
 	return &info, nil
 }
 
-// ListRuns enumerates the per-run snapshots in workDir/.gavel (run-*.json),
-// returning one RunInfo per run sorted newest-first. When since is non-zero,
-// runs whose start time is at or before since are skipped — run-*.json files
-// are immutable once written, so the start time is a sound incremental
-// watermark. A missing .gavel directory yields (nil, nil): the normal "never
-// run here" state, mirroring history.loadRunSnapshots.
+// ListRuns enumerates workDir's per-run snapshots (run-*.json), returning one RunInfo per run
+// sorted newest-first. When since is non-zero, runs whose start time is at or before since are
+// skipped — run-*.json snapshots are immutable once written, so the start time is a sound
+// incremental watermark. A workspace that never ran yields no runs.
 func ListRuns(workDir string, since time.Time) ([]RunInfo, error) {
+	runs, err := scanRuns(workDir, since)
+	if err != nil {
+		return nil, err
+	}
+	var infos []RunInfo
+	for _, run := range runs {
+		infos = append(infos, run.Info)
+	}
+	return infos, nil
+}
+
+// Run is one per-run snapshot and its summary.
+type Run struct {
+	Info     RunInfo
+	Snapshot testui.Snapshot
+}
+
+// LoadRuns returns every per-run snapshot of workDir with its summary, newest first, in
+// ListRuns' order.
+func LoadRuns(workDir string) ([]Run, error) {
+	return scanRuns(workDir, time.Time{})
+}
+
+func scanRuns(workDir string, since time.Time) ([]Run, error) {
 	if workDir == "" {
 		return nil, errors.New("snapshots.ListRuns: workDir is required")
 	}
-	dir := filepath.Join(workDir, Dir)
-	entries, err := os.ReadDir(dir)
+	store, err := OpenStore(workDir)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("read %s: %w", dir, err)
+		return nil, err
+	}
+	objects, err := store.List(context.Background(), PerRunPrefix)
+	if err != nil {
+		return nil, err
 	}
 
-	var runs []RunInfo
-	for _, entry := range entries {
-		if entry.IsDir() {
+	var runs []Run
+	for _, object := range objects {
+		name := object.Key
+		if strings.Contains(name, "/") || !strings.HasSuffix(name, ".json") {
 			continue
 		}
-		name := entry.Name()
-		if !strings.HasPrefix(name, PerRunPrefix) || !strings.HasSuffix(name, ".json") {
-			continue
-		}
-		path := filepath.Join(dir, name)
-		// Decide the cutoff from the dirent before opening the file. A run
+		// Decide the cutoff from the listing before reading the snapshot. A run
 		// snapshot carries the whole test tree and lint violation set — the
 		// workspaces on one developer machine total 320MB across 1171 files — so
 		// parsing every run only to discard it by start time made an incremental
 		// sweep cost the same as a full one.
 		//
-		// Only the mtime can gate this. Filesystems may round mtimes down to the
-		// nearest second, so files from the watermark's second still need their
-		// recorded start time checked below. Older files can be skipped safely.
-		// The filename timestamp is NOT usable here even though runStartTime
+		// Only the modification time can gate this. Stores may round it down to
+		// the nearest second, so snapshots from the watermark's second still need
+		// their recorded start time checked below. Older ones can be skipped safely.
+		// The name's timestamp is NOT usable here even though runStartTime
 		// prefers it: PerRunTimestampLayout has the same second precision.
-		if !since.IsZero() {
-			if modTime := runFileModTime(path, entry); !modTime.IsZero() && !modTime.Add(time.Second).After(since) {
-				continue
-			}
+		if !since.IsZero() && !object.ModTime.IsZero() && !object.ModTime.UTC().Add(time.Second).After(since) {
+			continue
 		}
-		snap, err := loadSnapshot(path)
+		snap, err := loadRun(store, workDir, name)
 		if err != nil {
 			return nil, err
 		}
-		started := runStartTime(*snap, name, path, entry)
+		started := runStartTime(*snap, name, object.ModTime)
 		if !since.IsZero() && !started.After(since) {
 			continue
 		}
-		runs = append(runs, runInfo(*snap, name, path, started))
+		runs = append(runs, Run{Info: runInfo(*snap, name, Location(workDir, name), started), Snapshot: *snap})
 	}
 
 	sort.Slice(runs, func(i, j int) bool {
-		if runs[i].Started.Equal(runs[j].Started) {
-			return runs[i].Path > runs[j].Path
+		a, b := runs[i].Info, runs[j].Info
+		if a.Started.Equal(b.Started) {
+			return a.Path > b.Path
 		}
-		return runs[i].Started.After(runs[j].Started)
+		return a.Started.After(b.Started)
 	})
 	return runs, nil
 }
 
-func loadSnapshot(path string) (*testui.Snapshot, error) {
-	data, err := os.ReadFile(path)
+func loadRun(store blob.Store, workDir, key string) (*testui.Snapshot, error) {
+	data, err := readKey(store, key)
 	if err != nil {
-		return nil, fmt.Errorf("read run snapshot %s: %w", path, err)
+		return nil, fmt.Errorf("read run snapshot %s: %w", Location(workDir, key), err)
 	}
 	var snap testui.Snapshot
 	if err := json.Unmarshal(data, &snap); err != nil {
-		return nil, fmt.Errorf("decode run snapshot %s: %w", path, err)
+		return nil, fmt.Errorf("decode run snapshot %s: %w", Location(workDir, key), err)
 	}
 	return &snap, nil
 }
@@ -199,9 +222,9 @@ func runKind(testTotal, lintLinters int, lintRun bool) string {
 }
 
 // runStartTime resolves a run's start time, preferring the recorded metadata,
-// then the filename timestamp, then the file mtime — the same precedence
-// history.snapshotTime uses.
-func runStartTime(snap testui.Snapshot, name, path string, entry os.DirEntry) time.Time {
+// then the name's timestamp, then the snapshot's modification time — the same
+// precedence history.snapshotTime uses.
+func runStartTime(snap testui.Snapshot, name string, modTime time.Time) time.Time {
 	if snap.Metadata != nil && !snap.Metadata.Started.IsZero() {
 		return snap.Metadata.Started.UTC()
 	}
@@ -209,21 +232,11 @@ func runStartTime(snap testui.Snapshot, name, path string, entry os.DirEntry) ti
 	if ts, err := time.Parse(PerRunTimestampLayout, stem); err == nil {
 		return ts.UTC()
 	}
-	return runFileModTime(path, entry)
+	return modTime.UTC()
 }
 
-// runFileModTime reads a run file's mtime without opening it, preferring the
-// dirent os.ReadDir already stat'd. Run files are written once and never
-// rewritten, so this is an upper bound on the run's start time — which is what
-// lets ListRuns skip a file without decoding it.
-func runFileModTime(path string, entry os.DirEntry) time.Time {
-	if entry != nil {
-		if info, err := entry.Info(); err == nil {
-			return info.ModTime().UTC()
-		}
-	}
-	if info, err := os.Stat(path); err == nil {
-		return info.ModTime().UTC()
-	}
-	return time.Time{}
+// Summarize is the RunInfo of snap, stored under key at location: its counts, kind and start
+// time, which falls back to key's timestamp and then modTime.
+func Summarize(snap testui.Snapshot, key, location string, modTime time.Time) RunInfo {
+	return runInfo(snap, key, location, runStartTime(snap, key, modTime))
 }
