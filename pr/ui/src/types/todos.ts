@@ -333,6 +333,9 @@ export interface TodoLink {
   target_short_id?: string;
   target_title?: string;
   target_status?: TodoStatus;
+  // Another member's private todo: only its short ID and creator's name are given.
+  target_private?: boolean;
+  target_owner?: string;
   created_at?: string;
 }
 

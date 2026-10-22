@@ -63,11 +63,11 @@ async function renderLinks(props: Partial<React.ComponentProps<typeof TodoLinks>
 const group = (name: string) => screen.getByRole('heading', { name }).closest('section')!;
 
 describe('TodoLinks', () => {
-  it('renders Pull requests, Duplicates and Related as separate groups, in that order', async () => {
+  it('renders Pull requests, Blocked by, Duplicates and Related as separate groups, in that order', async () => {
     await renderLinks();
 
     const headings = screen.getAllByRole('heading').map(heading => heading.textContent);
-    expect(headings).toEqual(['Pull requests', 'Duplicates', 'Related']);
+    expect(headings).toEqual(['Pull requests', 'Blocked by', 'Duplicates', 'Related']);
 
     const prs = within(group('Pull requests'));
     expect(prs.getByText('implements')).toBeTruthy();
@@ -81,10 +81,32 @@ describe('TodoLinks', () => {
     const related = within(group('Related'));
     expect(related.getByRole('link', { name: 'Audit ledger precision' }).getAttribute('href')).toBe('/todos/rel1');
     expect(related.queryByText('Upgrade decimal library')).toBeNull();
+    expect(within(group('Blocked by')).getByRole('link', { name: 'Upgrade decimal library' }).getAttribute('href')).toBe('/todos/dep1');
+  });
+
+  it("names a blocker that is another member's private todo without revealing it", async () => {
+    backend.links = [
+      ...links,
+      { relation: 'depends_on', target_id: 'private-full-id', target_short_id: 'priv1', target_private: true, target_owner: 'Grace Hopper' },
+    ];
+    await renderLinks();
+
+    const blockedBy = within(group('Blocked by'));
+    expect(blockedBy.getByText('Private todo #priv1 of Grace Hopper')).toBeTruthy();
+    expect(blockedBy.getAllByRole('link').map(link => link.textContent)).toEqual(['Upgrade decimal library']);
+    expect(blockedBy.queryByRole('button', { name: /priv1/ })).toBeNull();
+  });
+
+  it('names a private blocker whose creator is unknown as another member\'s', async () => {
+    backend.links = [{ relation: 'depends_on', target_id: 'private-full-id', target_short_id: 'priv1', target_private: true }];
+    await renderLinks();
+
+    expect(within(group('Blocked by')).getByText("Private todo #priv1 of another member")).toBeTruthy();
   });
 
   it.each([
     ['Pull requests', { prLinks: [] }],
+    ['Blocked by', { links: links.filter(link => link.relation !== 'depends_on') }],
     ['Duplicates', { links: links.filter(link => link.relation !== 'duplicates') }],
     ['Related', { links: links.filter(link => link.relation !== 'related_to') }],
   ] as const)('omits the %s group when it has no entries', async (name, override) => {
@@ -92,7 +114,7 @@ describe('TodoLinks', () => {
     await renderLinks();
 
     expect(screen.queryByRole('heading', { name })).toBeNull();
-    expect(screen.getAllByRole('heading')).toHaveLength(2);
+    expect(screen.getAllByRole('heading')).toHaveLength(3);
   });
 
   it('renders nothing when the todo has no links at all', async () => {
