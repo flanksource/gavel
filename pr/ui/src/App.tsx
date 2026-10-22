@@ -18,6 +18,7 @@ import { AddProjectDialog } from './components/AddProjectDialog';
 import { SettingsPage, type SettingsScope } from './components/settings/SettingsPage';
 import { ProjectDetailPane, ProjectsSidebar } from './components/ProjectsView';
 import { ProcessManager } from './components/ProcessManager';
+import { RunsView } from './components/RunsView';
 import { ThemeToggle } from './components/ThemeToggle';
 import { UserMenu } from './components/UserMenu';
 import { githubScopeVisible, hostControlsVisible, tabFor, visibleTabs } from './hostedUI';
@@ -45,7 +46,7 @@ import { useAppQueries } from './useAppQueries';
 import { useAppMutations } from './useAppMutations';
 import { usePRDetailStream } from './usePRDetailStream';
 import { useIsMobile } from './useIsMobile';
-import { UiActivity, UiCheck, UiCog, UiCopy, UiFolderGit, UiGitPr, UiJson, UiListChecks, UiMarkdown, UiRobotAi, UiTerminal } from '@flanksource/clicky-ui/icons';
+import { UiActivity, UiCheck, UiCog, UiCopy, UiFolderGit, UiGitPr, UiJson, UiListChecks, UiMarkdown, UiPlay, UiRobotAi, UiTerminal } from '@flanksource/clicky-ui/icons';
 import { SessionsDetailPane, SessionsSidebar } from './components/sessions/SessionsView';
 import { MenubarView } from './components/mobile/MenubarView';
 import { ProcessesPage } from './components/ProcessesPage';
@@ -283,6 +284,10 @@ export function App() {
 
   const navigateTask = useCallback((id: string | null) => {
     commitRoute({ tab: 'tasks', selectedPath: id ?? '', scopeProject, projectDiffPath: '', projectRunId: '', projectHistory: false, projectResults: false, projectRef: '', todoView: {}, filters });
+  }, [commitRoute, filters, scopeProject]);
+
+  const navigateRun = useCallback((id: string) => {
+    commitRoute({ tab: 'runs', selectedPath: id, scopeProject, projectDiffPath: '', projectRunId: '', projectHistory: false, projectResults: false, projectRef: '', todoView: {}, filters });
   }, [commitRoute, filters, scopeProject]);
 
   const navigateProject = useCallback((name: string) => {
@@ -803,6 +808,8 @@ export function App() {
           <div className="h-full overflow-y-auto p-4">
             <TaskManager basePath="/api/v1" selectedId={selectedPath || undefined} onSelectRun={navigateTask} />
           </div>
+        ) : activeTab === 'runs' ? (
+          <RunsView selectedId={selectedPath} onSelect={navigateRun} />
         ) : activeTab === 'prompts' ? (
           <PromptsView
             projects={scopedProjects}
@@ -845,6 +852,7 @@ function TabBar({ active, onChange }: { active: Tab; onChange: (t: Tab) => void 
     { id: 'prs', label: 'PRs', icon: UiGitPr },
     { id: 'projects', label: 'Projects', icon: UiFolderGit },
     { id: 'todos', label: 'Todos', icon: UiCheck },
+    { id: 'runs', label: 'Runs', icon: UiPlay },
     { id: 'sessions', label: 'Sessions', icon: UiTerminal },
     { id: 'tasks', label: 'Tasks', icon: UiListChecks },
     { id: 'prompts', label: 'Prompts', icon: UiRobotAi },

@@ -90,3 +90,9 @@ func (r *Repository) PrivateIssueCreator(ctx context.Context, id uuid.UUID) (str
 	}
 	return rows[0].Creator, nil
 }
+
+// VisibleIssue is the condition, and its arguments, that limits an issue alias to the issues
+// the context's user can see, for queries outside this package that join todo_issues.
+func VisibleIssue(ctx context.Context, alias string) (string, []any) {
+	return visibleIssue(ctx, alias)
+}
