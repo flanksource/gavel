@@ -13,6 +13,20 @@ import (
 )
 
 var _ = Describe("Ginkgo overlay", func() {
+	It("reports metadata without importing Ginkgo names into the target package", func() {
+		workDir, err := filepath.Abs("../..")
+		Expect(err).NotTo(HaveOccurred())
+		pkg := "./testrunner/runners/testdata/overlaylabels"
+		overlay, err := BuildGinkgoOverlay(workDir, []string{pkg}, nil)
+		Expect(err).NotTo(HaveOccurred())
+		defer os.Remove(overlay)
+		cmd := exec.Command("go", "test", "-json", "-v", "-overlay="+overlay, pkg)
+		cmd.Dir = workDir
+		output, err := cmd.CombinedOutput()
+		Expect(err).NotTo(HaveOccurred(), string(output))
+		Expect(string(output)).To(ContainSubstring("GAVEL_GINKGO_V1:"))
+	})
+
 	It("replays structured suite metadata through the Go test cache", func() {
 		workDir, err := filepath.Abs("../..")
 		Expect(err).NotTo(HaveOccurred())
