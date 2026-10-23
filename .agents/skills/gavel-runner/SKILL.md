@@ -203,7 +203,7 @@ Gavel layers four wall-clock deadlines on `gavel test`. Each kills its subproces
 | `--lint-timeout` | `5m` | Per-linter subprocess when `--lint` is set. |
 | `gavel lint --timeout` | `5m` | Per-linter when running `gavel lint` standalone. Duration string (`30s`, `2m`, …). |
 
-The `stacks` checkpoints need a process capture: pass `--diagnostics` (no browser) or `--ui`; without one the log says `not checkpointed`. `--process-facets` (needs one of those) also records open files, sockets, ports and environment. Details: `site/content/docs/traces-profiling-benchmarks.mdx`.
+The `stacks` checkpoints need a process capture: pass `--diagnostics` (no browser) or `--ui`; without one the log says `not checkpointed`. `--process-facets` (needs one of those) also records open files, sockets, ports and environment. Details: `docs/content/docs/traces-profiling-benchmarks.mdx`.
 
 Two more deadlines apply only to the detached UI (`gavel test --ui --detach`):
 
