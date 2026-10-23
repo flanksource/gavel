@@ -94,23 +94,25 @@ func (c TodosConfig) Validate() error {
 // inline Name/Subject/Steps. Steps are kept as generic YAML here — the
 // lifecycle package decodes them strictly, so verify does not depend on it.
 type LifecycleConfig struct {
-	File    string            `yaml:"file,omitempty" json:"file,omitempty"`
-	Name    string            `yaml:"name,omitempty" json:"name,omitempty"`
-	Subject map[string]string `yaml:"subject,omitempty" json:"subject,omitempty"`
-	Steps   []map[string]any  `yaml:"steps,omitempty" json:"steps,omitempty"`
+	File     string            `yaml:"file,omitempty" json:"file,omitempty"`
+	Name     string            `yaml:"name,omitempty" json:"name,omitempty"`
+	Subject  map[string]string `yaml:"subject,omitempty" json:"subject,omitempty"`
+	Steps    []map[string]any  `yaml:"steps,omitempty" json:"steps,omitempty"`
+	Order    *[]string         `yaml:"order,omitempty" json:"order,omitempty"`
+	Disabled *[]string         `yaml:"disabled,omitempty" json:"disabled,omitempty"`
 }
 
 // IsZero reports whether no override is configured.
 func (c LifecycleConfig) IsZero() bool {
-	return c.File == "" && c.Name == "" && len(c.Subject) == 0 && len(c.Steps) == 0
+	return c.File == "" && c.Name == "" && len(c.Subject) == 0 && len(c.Steps) == 0 && c.Order == nil && c.Disabled == nil
 }
 
 // Validate rejects an override that is both a file and an inline definition.
 // The file form used to win silently, so steps declared next to it were a
 // definition nobody ran.
 func (c LifecycleConfig) Validate() error {
-	if c.File != "" && (c.Name != "" || len(c.Subject) > 0 || len(c.Steps) > 0) {
-		return fmt.Errorf("todos.lifecycle: file (%s) and the inline name/subject/steps are mutually exclusive; move the inline definition into the file or drop file", c.File)
+	if c.File != "" && (c.Name != "" || len(c.Subject) > 0 || len(c.Steps) > 0 || c.Order != nil || c.Disabled != nil) {
+		return fmt.Errorf("lifecycle: file (%s) and inline fields are mutually exclusive; move the inline definition into the file or drop file", c.File)
 	}
 	return nil
 }

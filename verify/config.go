@@ -329,6 +329,9 @@ type GavelConfig struct {
 
 // PRConfig configures `gavel pr`.
 type PRConfig struct {
+	Lifecycle LifecycleConfig       `yaml:"lifecycle,omitempty" json:"lifecycle,omitempty"`
+	Steps     map[string]PromptSpec `yaml:"steps,omitempty" json:"steps,omitempty"`
+	Review    PromptSpec            `yaml:"review,omitempty" json:"review,omitempty"`
 	// Content is the AI spec for generating the PR title, body, and branch name.
 	Content PromptSpec `yaml:"content,omitempty" json:"content,omitempty"`
 	// Fix is the AI spec driving `gavel pr status --ai-fix`. Its
