@@ -26,9 +26,9 @@ function isDefaultStatusFilter(state: FilterState<string>): boolean {
   return want.every((token, i) => token === got[i]);
 }
 
-export type TabKey = 'tests' | 'lint' | 'bench' | 'processes';
+export type TabKey = 'tests' | 'lint' | 'bench' | 'processes' | 'history';
 
-const TAB_KEYS: readonly TabKey[] = ['tests', 'lint', 'bench', 'processes'];
+const TAB_KEYS: readonly TabKey[] = ['tests', 'lint', 'bench', 'processes', 'history'];
 
 export interface RouteState {
   tab: TabKey;
