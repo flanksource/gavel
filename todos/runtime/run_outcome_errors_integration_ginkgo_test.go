@@ -13,9 +13,11 @@ import (
 	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/captain/pkg/promptrun"
 	"github.com/flanksource/commons-db/dbtest"
+	_ "github.com/flanksource/gavel/fixtures/verifier"
 	"github.com/flanksource/gavel/internal/database"
+	"github.com/flanksource/gavel/lifecycle"
 	"github.com/flanksource/gavel/todos"
-	"github.com/flanksource/gavel/todos/lifecycle"
+	lifecycle1 "github.com/flanksource/gavel/todos/lifecycle"
 	"github.com/flanksource/gavel/todos/native"
 	"github.com/flanksource/gavel/todos/runtime/runtimetest"
 	"github.com/flanksource/gavel/todos/types"
@@ -23,8 +25,6 @@ import (
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-
-	_ "github.com/flanksource/gavel/fixtures/verifier"
 )
 
 // editingAgent is one completed turn that leaves an edit in the run's working
@@ -95,11 +95,11 @@ var _ = Describe("a run whose outcome could not be persisted", func() {
 	It("records the failure as the attempt's outcome and lands the todo failed", func(ctx SpecContext) {
 		workDir := GinkgoT().TempDir()
 		provider := outcomeProvider(ctx, "outcome_not_persisted", workDir)
-		def, err := lifecycle.Default()
+		def, err := lifecycle1.Default()
 		Expect(err).NotTo(HaveOccurred())
 		engine, err := lifecycle.New(def)
 		Expect(err).NotTo(HaveOccurred())
-		host := &lifecycle.Host{Provider: provider, Def: engine, Config: verify.DefaultGavelConfig(), WorkDir: workDir, Kind: lifecycle.HostCLI}
+		host := &lifecycle1.Host{Provider: provider, Def: engine, Config: verify.DefaultGavelConfig(), WorkDir: workDir, Kind: lifecycle1.HostCLI}
 		todo, err := provider.Create(ctx, todos.CreateRequest{Title: "Plan the widget", Body: "Design it", Status: types.StatusDraft})
 		Expect(err).NotTo(HaveOccurred())
 		missingPlan := filepath.Join(workDir, "missing-plan.md")
@@ -110,15 +110,15 @@ var _ = Describe("a run whose outcome could not be persisted", func() {
 		admission, err := runtimetest.Admit(ctx, provider, todo, todos.RunPreparation{Mode: types.ModePlan, Prompt: "plan", ExecutorName: "headless-claude"},
 			promptrun.Completed{
 				Runtime: runtimetest.ClaudeCLI, Model: "claude-sonnet", ProviderSessionID: "sess-plan-unpersisted",
-				Outcome: lifecycle.RunOutcome(execution, false),
+				Outcome: lifecycle1.RunOutcome(execution, false),
 			})
 		Expect(err).NotTo(HaveOccurred())
 		plan, ok := engine.Definition().Step("plan")
 		Expect(ok).To(BeTrue())
-		outcome := &lifecycle.StepOutcome{
+		outcome := &lifecycle1.StepOutcome{
 			Step: plan, Status: string(types.StatusReview), Execution: execution, Admission: admission,
 			Result: lifecycle.StepResult{
-				Run:      lifecycle.RunFacts{State: lifecycle.RunSucceeded},
+				Run:      lifecycle.RunFacts{State: lifecycle1.RunSucceeded},
 				Envelope: lifecycle.Envelope{Success: true, Event: "new", Comment: execution.Summary},
 			},
 		}
@@ -137,7 +137,7 @@ var _ = Describe("a run whose outcome could not be persisted", func() {
 		Expect(getErr).NotTo(HaveOccurred())
 		var outcomes []map[string]any
 		for _, event := range events {
-			if event.Kind == lifecycle.EventLifecycleOutcome {
+			if event.Kind == lifecycle1.EventLifecycleOutcome {
 				var payload map[string]any
 				Expect(json.Unmarshal(event.Payload, &payload)).To(Succeed())
 				outcomes = append(outcomes, payload)
@@ -163,7 +163,7 @@ var _ = Describe("a run that fails after its definition of done passed", func() 
 		// The run commits in place: no worktree, but the commit policy the
 		// built-in step declares, which generates its message with a model this
 		// environment has none of.
-		def, err := lifecycle.Default()
+		def, err := lifecycle1.Default()
 		Expect(err).NotTo(HaveOccurred())
 		for i := range def.Steps {
 			if def.Steps[i].Name == "run" {
@@ -178,7 +178,7 @@ var _ = Describe("a run that fails after its definition of done passed", func() 
 		}
 		engine, err := lifecycle.New(def)
 		Expect(err).NotTo(HaveOccurred())
-		host := &lifecycle.Host{Provider: provider, Def: engine, Config: verify.DefaultGavelConfig(), WorkDir: workDir, Kind: lifecycle.HostCLI}
+		host := &lifecycle1.Host{Provider: provider, Def: engine, Config: verify.DefaultGavelConfig(), WorkDir: workDir, Kind: lifecycle1.HostCLI}
 		todo, err := provider.Create(ctx, todos.CreateRequest{
 			Title: "Build the widget", Body: "Build it", Status: types.StatusPending, Verification: "```bash\ntrue\n```",
 		})
@@ -186,7 +186,7 @@ var _ = Describe("a run that fails after its definition of done passed", func() 
 		run, ok := host.Def.Definition().Step("run")
 		Expect(ok).To(BeTrue())
 
-		outcome, err := host.RunStep(ctx, todo, run, lifecycle.RunOptions{Provider: editingAgent{sessionID: uuid.NewString()}})
+		outcome, err := host.RunStep(ctx, todo, run, lifecycle1.RunOptions{Provider: editingAgent{sessionID: uuid.NewString()}})
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(outcome.Result.Verify).To(HaveField("Passed", true), "the definition of done passed before the commit failed")

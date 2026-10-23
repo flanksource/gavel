@@ -8,17 +8,17 @@ import (
 	"github.com/flanksource/captain/pkg/api"
 	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/commons-db/dbtest"
+	_ "github.com/flanksource/gavel/fixtures/verifier"
 	"github.com/flanksource/gavel/internal/database"
+	"github.com/flanksource/gavel/lifecycle"
 	"github.com/flanksource/gavel/todos"
-	"github.com/flanksource/gavel/todos/lifecycle"
+	lifecycle1 "github.com/flanksource/gavel/todos/lifecycle"
 	"github.com/flanksource/gavel/todos/native"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/flanksource/gavel/verify"
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-
-	_ "github.com/flanksource/gavel/fixtures/verifier"
 )
 
 // provenanceAgent is the streaming provider a step is dispatched through in
@@ -53,7 +53,7 @@ func (a provenanceAgent) ExecuteStream(context.Context, api.Spec) (<-chan captai
 var _ = Describe("todo run provenance", func() {
 	var (
 		provider *Provider
-		host     *lifecycle.Host
+		host     *lifecycle1.Host
 	)
 	BeforeEach(func(ctx SpecContext) {
 		db := dbtest.ForGinkgo(dbtest.Options{Name: "gavel_run_provenance"})
@@ -72,7 +72,7 @@ var _ = Describe("todo run provenance", func() {
 
 		// The built-in run step checks out a worktree and commits; there is no
 		// repository here to act on. Its definition of done stays.
-		def, err := lifecycle.Default()
+		def, err := lifecycle1.Default()
 		Expect(err).NotTo(HaveOccurred())
 		for i := range def.Steps {
 			if def.Steps[i].Name == "run" {
@@ -86,7 +86,7 @@ var _ = Describe("todo run provenance", func() {
 		}
 		engine, err := lifecycle.New(def)
 		Expect(err).NotTo(HaveOccurred())
-		host = &lifecycle.Host{Provider: provider, Def: engine, Config: verify.DefaultGavelConfig(), WorkDir: workDir, Kind: lifecycle.HostCLI}
+		host = &lifecycle1.Host{Provider: provider, Def: engine, Config: verify.DefaultGavelConfig(), WorkDir: workDir, Kind: lifecycle1.HostCLI}
 	})
 
 	It("files the run with its spec trace and links it to the todo", func(ctx SpecContext) {
@@ -98,10 +98,10 @@ var _ = Describe("todo run provenance", func() {
 		run, ok := host.Def.Definition().Step("run")
 		Expect(ok).To(BeTrue())
 
-		outcome, err := host.RunStep(ctx, todo, run, lifecycle.RunOptions{Provider: provenanceAgent{sessionID: uuid.NewString()}})
+		outcome, err := host.RunStep(ctx, todo, run, lifecycle1.RunOptions{Provider: provenanceAgent{sessionID: uuid.NewString()}})
 
 		Expect(err).NotTo(HaveOccurred())
-		Expect(outcome.Result.Run.State).To(Equal(lifecycle.RunSucceeded))
+		Expect(outcome.Result.Run.State).To(Equal(lifecycle1.RunSucceeded))
 		runID := outcome.Admission.PromptRunID
 		Expect(runID).NotTo(Equal(uuid.Nil))
 		filed, err := provider.Captain().GetPromptRun(ctx, runID)

@@ -124,7 +124,7 @@ func (h *handler) server(runID, prefix string) (*testui.Server, error) {
 	if srv, ok := h.servers.Get(runID); ok {
 		return srv, nil
 	}
-	snap, err := snapshots.LoadRunFile(filepath.Join(h.opts.WorkDir, snapshots.Dir, runID+".json"))
+	snap, err := snapshots.LoadRun(h.opts.WorkDir, runID)
 	if err != nil {
 		return nil, err
 	}
