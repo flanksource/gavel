@@ -5,14 +5,6 @@ import (
 	"testing"
 )
 
-type capturingSink struct {
-	updates []Test
-}
-
-func (c *capturingSink) UpdateGinkgoProgress(progress Test) {
-	c.updates = append(c.updates, progress)
-}
-
 func TestGinkgoStreamWriterDetectsSpecCompletions(t *testing.T) {
 	sink := &capturingSink{}
 	w := NewGinkgoStreamWriter("pkg/foo", sink)
