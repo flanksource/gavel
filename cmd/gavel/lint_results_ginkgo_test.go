@@ -2,8 +2,10 @@ package main
 
 import (
 	"encoding/json"
+	"time"
 
 	"github.com/flanksource/gavel/linters"
+	"github.com/flanksource/gavel/models"
 	"github.com/flanksource/gavel/report"
 	testui "github.com/flanksource/gavel/testrunner/ui"
 	. "github.com/onsi/ginkgo/v2"
@@ -11,6 +13,21 @@ import (
 )
 
 var _ = Describe("Standalone lint output", func() {
+	DescribeTable("reports lint failures through the exit status without a redundant command error", func(result *linters.LinterResult, wantExit int) {
+		previousExit := exitCode
+		DeferCleanup(func() { exitCode = previousExit })
+		exitCode = 0
+		withFormat("json", func() {
+			value, err := finishLint(LintOptions{WorkDir: GinkgoT().TempDir()}, []*linters.LinterResult{result}, time.Now())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(value).To(BeAssignableToTypeOf(&testui.Snapshot{}))
+			Expect(exitCode).To(Equal(wantExit))
+		})
+	},
+		Entry("error finding", &linters.LinterResult{Linter: "uir", Success: true, Violations: []models.Violation{{Severity: models.SeverityError}}}, 1),
+		Entry("execution failure", &linters.LinterResult{Linter: "uir", Error: "analysis failed"}, 1),
+		Entry("clean", &linters.LinterResult{Linter: "uir", Success: true}, 0),
+	)
 	DescribeTable("serializes complete lint snapshots for artifact consumers",
 		func(format string, summary bool) {
 			snap := &testui.Snapshot{
