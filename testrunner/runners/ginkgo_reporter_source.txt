@@ -1,35 +1,37 @@
+// Aliased imports: this file joins the user's package, so an unaliased or dot
+// import would redeclare any package-level name it shares (e.g. Labels, types).
 import (
-	"encoding/base64"
-	"encoding/json"
-	"fmt"
-	"os"
+	gavelReporterBase64 "encoding/base64"
+	gavelReporterJSON "encoding/json"
+	gavelReporterFmt "fmt"
+	gavelReporterOS "os"
 
-	. "github.com/onsi/ginkgo/v2"
-	"github.com/onsi/ginkgo/v2/types"
+	gavelReporterGinkgo "github.com/onsi/ginkgo/v2"
+	gavelReporterTypes "github.com/onsi/ginkgo/v2/types"
 )
 
-var _ = ReportAfterSuite("gavel structured metadata", func(report types.Report) {
-	PauseOutputInterception()
-	defer ResumeOutputInterception()
+var _ = gavelReporterGinkgo.ReportAfterSuite("gavel structured metadata", func(report gavelReporterTypes.Report) {
+	gavelReporterGinkgo.PauseOutputInterception()
+	defer gavelReporterGinkgo.ResumeOutputInterception()
 
-	payload, err := json.Marshal([]types.Report{report})
+	payload, err := gavelReporterJSON.Marshal([]gavelReporterTypes.Report{report})
 	if err != nil {
-		panic(fmt.Errorf("marshal Ginkgo report: %w", err))
+		panic(gavelReporterFmt.Errorf("marshal Ginkgo report: %w", err))
 	}
-	encoded := base64.StdEncoding.EncodeToString(payload)
+	encoded := gavelReporterBase64.StdEncoding.EncodeToString(payload)
 	const chunkSize = 512
 	count := (len(encoded) + chunkSize - 1) / chunkSize
 	// Succinct Ginkgo output leaves the cursor mid-line ("•"); frames must start a line.
-	if _, err := fmt.Fprintln(os.Stdout); err != nil {
-		panic(fmt.Errorf("write Ginkgo report: %w", err))
+	if _, err := gavelReporterFmt.Fprintln(gavelReporterOS.Stdout); err != nil {
+		panic(gavelReporterFmt.Errorf("write Ginkgo report: %w", err))
 	}
 	for i := 0; i < count; i++ {
 		end := (i + 1) * chunkSize
 		if end > len(encoded) {
 			end = len(encoded)
 		}
-		if _, err := fmt.Fprintf(os.Stdout, "GAVEL_GINKGO_V1:%d/%d:%s\n", i, count, encoded[i*chunkSize:end]); err != nil {
-			panic(fmt.Errorf("write Ginkgo report: %w", err))
+		if _, err := gavelReporterFmt.Fprintf(gavelReporterOS.Stdout, "GAVEL_GINKGO_V1:%d/%d:%s\n", i, count, encoded[i*chunkSize:end]); err != nil {
+			panic(gavelReporterFmt.Errorf("write Ginkgo report: %w", err))
 		}
 	}
 })

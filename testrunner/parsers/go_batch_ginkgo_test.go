@@ -31,4 +31,36 @@ var _ = Describe("Go test batch metadata", func() {
 		_, err := ParseGoTestBatch(strings.NewReader(input.String()), "", map[string]bool{"example.com/suite": true})
 		Expect(err).To(MatchError(ContainSubstring("incomplete Ginkgo metadata")))
 	})
+
+	DescribeTable("attributes a test-variant build failure to the package under test",
+		func(variant string) {
+			const pkg = "example.com/suite"
+			const compileError = "labels.go:28:6: Labels already declared through dot-import\n"
+			lines := []goTestEvent{
+				{Action: "build-output", ImportPath: variant, Output: "# " + variant + "\n"},
+				{Action: "build-output", ImportPath: variant, Output: compileError},
+				{Action: "build-fail", ImportPath: variant},
+				{Action: "start", Package: pkg},
+				{Action: "output", Package: pkg, Output: "FAIL\t" + pkg + " [build failed]\n"},
+				{Action: "fail", Package: pkg},
+			}
+			var input strings.Builder
+			for _, event := range lines {
+				data, err := json.Marshal(event)
+				Expect(err).NotTo(HaveOccurred())
+				input.Write(data)
+				input.WriteByte('\n')
+			}
+			results, err := ParseGoTestBatch(strings.NewReader(input.String()), "", map[string]bool{pkg: true})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(results).To(HaveLen(1))
+			Expect(results[pkg].All()).To(ContainElement(SatisfyAll(
+				HaveField("Name", "Build Failed"),
+				HaveField("Failed", true),
+				HaveField("Message", ContainSubstring(compileError)),
+			)))
+		},
+		Entry("internal test package", "example.com/suite [example.com/suite.test]"),
+		Entry("external test package", "example.com/suite_test [example.com/suite.test]"),
+	)
 })
