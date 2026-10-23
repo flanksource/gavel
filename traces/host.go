@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
@@ -87,7 +88,11 @@ func Open(workDir, runID string) (*Host, error) {
 	if err != nil {
 		return nil, err
 	}
-	runtime, _, err := openStore(dir, dumpers)
+	kinds, err := kindsWith(dumpers)
+	if err != nil {
+		return nil, err
+	}
+	runtime, _, err := traceserve.Open(traceserve.OpenOptions{Dir: dir, Kinds: kinds, Retention: retention})
 	if err != nil {
 		return nil, err
 	}
@@ -109,32 +114,15 @@ func StoreDir(workDir, runID string) string {
 	return filepath.Join(workDir, Dir, runID)
 }
 
-// Reopen opens the store a finished run left in dir, such as for a saved
-// snapshot to serve, with the close that stops using it. A store Prune
-// removed is os.ErrNotExist.
-func Reopen(dir string) (*tracing.Runtime, func() error, error) {
-	info, err := os.Stat(dir)
-	if err != nil {
-		return nil, nil, fmt.Errorf("reopen trace store: %w", err)
-	}
-	if !info.IsDir() {
-		return nil, nil, fmt.Errorf("reopen trace store: %s is not a directory", dir)
-	}
-	dumpers, err := NewDumpers()
+// Reopen serves the store a finished run left in dir read-only, such as for a
+// saved snapshot, with the close that stops using it. A store Prune removed is
+// os.ErrNotExist.
+func Reopen(dir string) (http.Handler, func() error, error) {
+	kinds, err := Kinds()
 	if err != nil {
 		return nil, nil, err
 	}
-	return openStore(dir, dumpers)
-}
-
-// openStore opens the store in dir with every kind of the gavel catalog, the
-// way query serves a store.
-func openStore(dir string, dumpers *stacks.Dumpers) (*tracing.Runtime, func() error, error) {
-	kinds, err := kindsWith(dumpers)
-	if err != nil {
-		return nil, nil, err
-	}
-	return traceserve.Open(traceserve.OpenOptions{Dir: dir, Kinds: kinds, Retention: retention})
+	return traceserve.Reopen(traceserve.ReopenOptions{Dir: dir, Kinds: kinds})
 }
 
 // claimRunDir creates root/runID, or the first free suffixed name.
@@ -245,9 +233,15 @@ func (h *Host) Dir() string { return h.dir }
 // Kinds is the catalog the host serves.
 func (h *Host) Kinds() *tracing.Kinds { return h.runtime.Kinds }
 
-// Runtime serves the run's store and its running captures, such as through
-// traceserve for the test UI.
+// Runtime serves the run's store and its running captures.
 func (h *Host) Runtime() *tracing.Runtime { return h.runtime }
+
+// Handler serves the run's store API read-only, as the test UI mounts it: a
+// caller reads, exports and checkpoints its captures but cannot start or stop
+// one.
+func (h *Host) Handler() (http.Handler, error) {
+	return traceserve.Handler(traceserve.Options{Runtime: h.runtime, Authorize: traceserve.ReadOnly})
+}
 
 // Start starts a capture of kind with params into a new stream of the store.
 func (h *Host) Start(kind string, params json.RawMessage) (*Capture, error) {

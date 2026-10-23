@@ -42,6 +42,9 @@ type Server struct {
 	processSessions *traces.ProcessSessions
 	// devProxy, when set, serves the page from a Vite dev server (SetDevProxy).
 	devProxy http.Handler
+	// queryApp, when set, serves the query app over the trace stores
+	// (SetQueryApp).
+	queryApp http.Handler
 
 	rerunMu       sync.Mutex
 	rerunFn       RerunFunc
