@@ -16,9 +16,9 @@ import (
 	"time"
 )
 
-func TestRuntimeAdapters(t *testing.T) {
+func TestLint(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "Linter runtime adapters")
+	RunSpecs(t, "Lint")
 }
 
 func TestMain(m *testing.M) {
