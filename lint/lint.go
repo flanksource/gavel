@@ -90,6 +90,10 @@ func NarrowToFailed(opts Options) (Options, error) {
 // Execute runs all applicable linters and returns their results. Reusable by
 // both the lint command and the test --lint flag.
 func Execute(opts Options) ([]*linters.LinterResult, error) {
+	exclusions, err := ParseRuleExclusions(opts.Exclude)
+	if err != nil {
+		return nil, err
+	}
 	if err := opts.captureConfigDir(); err != nil {
 		return nil, err
 	}
@@ -108,7 +112,7 @@ func Execute(opts Options) ([]*linters.LinterResult, error) {
 		return nil, err
 	}
 
-	opts, skip, err := opts.withChanges()
+	opts, skip, err := opts.WithChanges()
 	if err != nil || skip {
 		return nil, err
 	}
@@ -179,8 +183,10 @@ func Execute(opts Options) ([]*linters.LinterResult, error) {
 			}
 
 			runOpts := linters.RunOptions{
-				Scopes:  scopes,
-				WorkDir: inv.projectRoot, ConfigDir: opts.ConfigDir,
+				Scopes:               scopes,
+				RuleExclusions:       exclusions,
+				NativeRuleExclusions: exclusions.NativeFor(linter.Name(), len(requestedLinters) == 1),
+				WorkDir:              inv.projectRoot, ConfigDir: opts.ConfigDir,
 				Executable: executable,
 				Files:      inv.files,
 				Ignores:    opts.Ignore,
@@ -331,6 +337,9 @@ func GroupFilesByGitRoot(opts Options) []Group {
 // executing anything. It loops over every git root discovered from opts.Files
 // so multi-repo inputs each print their own plan.
 func DryRun(opts Options) error {
+	if _, err := ParseRuleExclusions(opts.Exclude); err != nil {
+		return err
+	}
 	if err := opts.captureConfigDir(); err != nil {
 		return err
 	}
@@ -351,6 +360,10 @@ func DryRun(opts Options) error {
 // PATH) are printed with a skipped reason so users see the full picture.
 // Project-rooted linters print one line per discovered project root.
 func dryRunGroup(opts Options) error {
+	exclusions, err := ParseRuleExclusions(opts.Exclude)
+	if err != nil {
+		return err
+	}
 	logger.Infof("🔍 Dry-run mode: showing what would be executed")
 	logger.Infof("")
 
@@ -361,7 +374,7 @@ func dryRunGroup(opts Options) error {
 	if err != nil {
 		return err
 	}
-	opts, skip, err := opts.withChanges()
+	opts, skip, err := opts.WithChanges()
 	if err != nil || skip {
 		return err
 	}
@@ -423,8 +436,10 @@ func dryRunGroup(opts Options) error {
 			}
 
 			runOpts := linters.RunOptions{
-				Scopes:  scopes,
-				WorkDir: inv.projectRoot, ConfigDir: opts.ConfigDir,
+				Scopes:               scopes,
+				RuleExclusions:       exclusions,
+				NativeRuleExclusions: exclusions.NativeFor(linter.Name(), len(requestedLinters) == 1),
+				WorkDir:              inv.projectRoot, ConfigDir: opts.ConfigDir,
 				Executable: executable,
 				Files:      inv.files,
 				Ignores:    opts.Ignore,

@@ -18,6 +18,30 @@ import (
 func TestUIRLint(t *testing.T) { RegisterFailHandler(Fail); RunSpecs(t, "UIR lint integration") }
 
 var _ = Describe("UIR native configuration", func() {
+	DescribeTable("keeps testdata projects out of automatic discovery and allows explicit targets", func(target string) {
+		root := GinkgoT().TempDir()
+		fixture := filepath.Join(root, "lint", "testdata", "project")
+		for _, directory := range []string{root, fixture} {
+			Expect(os.MkdirAll(directory, 0o700)).To(Succeed())
+			Expect(os.WriteFile(filepath.Join(directory, ".uir.yaml"), []byte("version: 1\n"), 0o600)).To(Succeed())
+		}
+		Expect(os.WriteFile(filepath.Join(fixture, "sample.go"), []byte("package sample\n"), 0o600)).To(Succeed())
+		opts := Options{WorkDir: root}
+		expected := root
+		switch target {
+		case "directory":
+			opts.Files = []string{fixture}
+			expected = fixture
+		case "file":
+			opts.Files = []string{filepath.Join(fixture, "sample.go")}
+			expected = fixture
+		case "working directory":
+			opts.WorkDir = fixture
+			expected = fixture
+		}
+		Expect(resolveLinterInvocations(uir.New(root), opts)).To(HaveExactElements(WithTransform(func(inv linterInvocation) string { return inv.projectRoot }, Equal(expected))))
+	}, Entry("automatic", "automatic"), Entry("explicit directory", "directory"), Entry("explicit file", "file"), Entry("explicit working directory", "working directory"))
+
 	It("fails when the required UIR binary is missing and still previews a dry run", func() {
 		root := GinkgoT().TempDir()
 		GinkgoT().Setenv("PATH", "")
