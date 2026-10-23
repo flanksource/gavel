@@ -7,14 +7,14 @@ import (
 	"os"
 	"strings"
 
-	"github.com/flanksource/commons-db/cmd/query/traceserve"
 	"github.com/flanksource/gavel/traces"
 )
 
 // QueryMount is where the test UI serves its runs' trace stores through
 // query, each at QueryMount/<run id>: the traces/<kind> result profiles, the
-// trace exports, the checkpoint of a running capture and the query app
-// (traceserve.Handler).
+// trace exports and the checkpoint of a running capture under /api/
+// (traceserve.Handler), and the query app over them when a host sets one
+// (SetQueryApp).
 const QueryMount = "/query"
 
 // TracesStatus is the trace stores of the runs the server shows, as the UI
@@ -125,18 +125,25 @@ func (s *Server) ReopenTraces(runs ...TraceRun) error {
 
 func reopenTraces(run TraceRun) (*servedTraces, error) {
 	dir := traces.StoreDir(run.WorkDir, run.RunID)
-	runtime, closeStore, err := traces.Reopen(dir)
+	handler, closeStore, err := traces.Reopen(dir)
 	if errors.Is(err, os.ErrNotExist) {
 		return &servedTraces{unavailable: fmt.Sprintf("trace store %s is gone: pruned, or not copied with the snapshot", dir)}, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("reopen the trace store of run %s: %w", run.RunID, err)
 	}
-	handler, err := traceserve.Handler(traceserve.Options{Runtime: runtime, Authorize: traceserve.ReadOnly})
-	if err != nil {
-		return nil, errors.Join(err, closeStore())
-	}
 	return &servedTraces{handler: handler, close: closeStore}, nil
+}
+
+// SetQueryApp serves app, the query app (commons-db www.Handler), at
+// QueryMount/<run id>/ over each served store, for every path but /api/...,
+// which the store answers. Without it a store serves its API only. The test
+// UI's "Open in query" links (/traces/<kind>) need it; this package does not
+// link the app itself, so a host that never opens it does not embed it.
+func (s *Server) SetQueryApp(app http.Handler) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.queryApp = app
 }
 
 // CloseTraces closes the stores ReopenTraces opened and stops serving them;
@@ -186,7 +193,7 @@ func (s *Server) tracesStatusLocked() *TracesStatus {
 func (s *Server) handleTraces(w http.ResponseWriter, r *http.Request) {
 	runID, rest, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, QueryMount+"/"), "/")
 	s.mu.RLock()
-	served := s.traceRuns[runID]
+	served, app := s.traceRuns[runID], s.queryApp
 	s.mu.RUnlock()
 	if runID == "" || served == nil || served.handler == nil {
 		http.Error(w, tracesNotServed(runID, served), http.StatusNotFound)
@@ -198,7 +205,11 @@ func (s *Server) handleTraces(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMovedPermanently)
 		return
 	}
-	http.StripPrefix(QueryMount+"/"+runID, served.handler).ServeHTTP(w, r)
+	handler := served.handler
+	if app != nil && !strings.HasPrefix(rest, "api/") {
+		handler = app
+	}
+	http.StripPrefix(QueryMount+"/"+runID, handler).ServeHTTP(w, r)
 }
 
 func tracesNotServed(runID string, served *servedTraces) string {

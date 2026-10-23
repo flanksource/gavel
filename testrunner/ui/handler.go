@@ -52,6 +52,9 @@ type Server struct {
 	// basePath is the URL prefix the page resolves its API and routes under
 	// (SetBasePath).
 	basePath string
+	// queryApp, when set, serves the query app over the trace stores
+	// (SetQueryApp).
+	queryApp http.Handler
 
 	rerunMu       sync.Mutex
 	rerunFn       RerunFunc

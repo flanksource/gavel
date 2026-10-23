@@ -15,7 +15,6 @@ import (
 	"github.com/flanksource/gavel/internal/safefs"
 
 	"github.com/chromedp/chromedp"
-	"github.com/flanksource/commons-db/cmd/query/traceserve"
 	"github.com/flanksource/gavel/testrunner/parsers"
 	testui "github.com/flanksource/gavel/testrunner/ui"
 	"github.com/flanksource/gavel/traces"
@@ -369,7 +368,7 @@ var _ = Describe("Test UI E2E", func() {
 		trace, err := host.StartProcessTrace(traces.ProcessTraceOptions{RootPID: os.Getpid(), Facets: true})
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(func() { Expect(trace.Stop(context.Background())).To(Succeed()) })
-		handler, err := traceserve.Handler(traceserve.Options{Runtime: host.Runtime(), Authorize: traceserve.ReadOnly})
+		handler, err := host.Handler()
 		Expect(err).ToNot(HaveOccurred())
 		refs, sessions := trace.Refs(), trace.Sessions()
 		srv.SetTraceRun(host.RunID(), &refs)

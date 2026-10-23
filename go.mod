@@ -5,7 +5,7 @@ go 1.26.1
 require (
 	github.com/flanksource/captain v0.0.71
 	github.com/flanksource/clicky v1.21.83-0.20261023035132-78910d3a489c
-	github.com/flanksource/commons v1.60.1
+	github.com/flanksource/commons v1.60.2-0.20261023035157-e894a9b2a6db
 	github.com/flanksource/commons-db v0.1.61
 	github.com/flanksource/gomplate/v3 v3.24.90
 	github.com/flanksource/is-healthy v1.0.92 // indirect
@@ -30,7 +30,7 @@ require (
 	github.com/dustin/go-humanize v1.0.1
 	github.com/eko/gocache/lib/v4 v4.2.3
 	github.com/flanksource/clicky/aichat v1.21.83-0.20261023035132-78910d3a489c
-	github.com/flanksource/commons-db/cmd/query v0.1.61
+	github.com/flanksource/commons-db/cmd/query v0.1.61-0.20261023061911-26664ada83d4
 	github.com/flanksource/commons-db/recordstore v0.1.61
 	github.com/flanksource/commons-db/tracing v0.1.61
 	github.com/flanksource/deps v1.0.46
@@ -213,7 +213,7 @@ require (
 	github.com/fergusstrange/embedded-postgres v1.34.0 // indirect
 	github.com/firebase/genkit/go v1.13.1 // indirect
 	github.com/flanksource/sandbox-runtime v1.0.2 // indirect
-	github.com/flanksource/sqlglot-go v1.0.3 // indirect
+	github.com/flanksource/sqlglot-go v1.0.4-0.20261022123344-3264e440e925 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.0 // indirect
 	github.com/geoffgarside/ber v1.2.0 // indirect
 	github.com/glebarez/sqlite v1.11.0 // indirect

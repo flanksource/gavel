@@ -1,8 +1,9 @@
 import type { RunTraces, TraceRef, TracesStatus } from './types';
 
-// The run's trace store is served through commons-db query at status.traces.mount
-// (traceserve.Handler): its result profiles, trace exports, session checkpoints
-// and the query app, all under that mount. A mount is a URL path as the browser
+// The run's trace store is served through commons-db query at status.traces.mount:
+// its result profiles, trace exports and session checkpoints under /api/
+// (traceserve.Handler), and the query app over them where gavel's serve wiring
+// mounts it (queryapp.Serve), all under that mount. A mount is a URL path as the browser
 // reaches it: rebaseTraces puts the page's base path (and a MultiServer run id)
 // in front of what the server reports relative to itself.
 
