@@ -121,22 +121,24 @@ type LinterWithLanguageSupport interface {
 
 // RunOptions provides configuration for linter execution
 type RunOptions struct {
-	ConfigDir       string
-	Runtime         processruntime.Options
-	runtimeResolved bool
-	WorkDir         string
-	Executable      string
-	Files           []string
-	Config          *models.LinterConfig
-	ArchConfig      *models.Config // Full arch-unit config for all_language_excludes macro
-	ForceJSON       bool
-	Fix             bool // Enable auto-fixing mode
-	NoCache         bool // Disable caching
-	Timeout         time.Duration
-	Ignores         []string
-	ExtraArgs       []string
-	OutputTee       io.Writer
-	Scopes          []string
+	ConfigDir            string
+	Runtime              processruntime.Options
+	runtimeResolved      bool
+	WorkDir              string
+	Executable           string
+	Files                []string
+	Config               *models.LinterConfig
+	ArchConfig           *models.Config // Full arch-unit config for all_language_excludes macro
+	ForceJSON            bool
+	Fix                  bool // Enable auto-fixing mode
+	NoCache              bool // Disable caching
+	Timeout              time.Duration
+	Ignores              []string
+	RuleExclusions       RuleExclusions
+	NativeRuleExclusions []string
+	ExtraArgs            []string
+	OutputTee            io.Writer
+	Scopes               []string
 }
 
 // WrapWriter returns w wrapped with OutputTee via io.MultiWriter when OutputTee
@@ -436,6 +438,13 @@ func PrepareCommand(linter Linter, opts RunOptions) (string, []string, error) {
 	if err != nil {
 		return "", nil, err
 	}
+	if excluder, ok := linter.(RuleExcluder); ok && len(opts.NativeRuleExclusions) > 0 {
+		excluded, err := excluder.RuleExclusionArgs(opts.NativeRuleExclusions)
+		if err != nil {
+			return "", nil, fmt.Errorf("%s rule exclusions: %w", linter.Name(), err)
+		}
+		opts.ExtraArgs = append(append([]string(nil), opts.ExtraArgs...), excluded...)
+	}
 	if mixin, ok := linter.(OptionsMixin); ok {
 		mixin.SetOptions(opts)
 	}
@@ -508,6 +517,7 @@ func RunLinterWithTask(ctx context.Context, task *clicky.Task, linter Linter, op
 
 	start := time.Now()
 	violations, err := linter.Run(commonsContext.NewContext(ctx), task)
+	violations = opts.RuleExclusions.Filter(linter.Name(), violations)
 	scoped := &LinterResult{WorkDir: opts.WorkDir, Violations: violations}
 	FilterViolationsByUserScope([]*LinterResult{scoped}, opts.WorkDir, opts.Scopes)
 	violations = scoped.Violations

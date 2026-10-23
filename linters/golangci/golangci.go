@@ -132,6 +132,7 @@ func (g *GolangciLint) buildArgs() []string {
 	}
 
 	args = append(args, g.ExtraArgs...)
+	args = g.excludeEnabledOnly(args)
 
 	if len(g.Files) > 0 {
 		args = append(args, g.Files...)
