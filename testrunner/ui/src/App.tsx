@@ -23,6 +23,7 @@ import {
   UiArrowLeft,
   UiBeaker,
   UiChartLineUp,
+  UiHistory,
   UiListChecks,
   UiLoader,
   UiRefresh,
@@ -33,10 +34,13 @@ import { BenchView } from './components/BenchView';
 import { FixtureBenchView } from './components/FixtureBenchView';
 import { RerunDialog } from './components/RerunDialog';
 import { RunActions } from './components/RunActions';
+import { RunHistory } from './components/RunHistory';
 import { RunProcesses } from './components/RunProcesses';
+import { RunSwitcher } from './components/RunSwitcher';
 import { apiBase, apiUrl } from './config';
 import { fetchProcessMetricsFromSamples } from './processMetrics';
 import { useProcessTrace } from './hooks/use-process-trace';
+import { useRunHistory } from './hooks/use-run-history';
 import { useTestRun } from './hooks/use-test-run';
 import { buildLintRerunBody } from './lintRerun';
 import {
@@ -121,9 +125,13 @@ const GLOBAL_STOP_KEY = '__global__';
 export interface AppProps {
   /** Scopes every request to one run of a MultiServer (`${base}/${runId}/api/...`). */
   runId?: string;
+  /** Opens another run's page; each run is served under its own base path, so this is a full page load. */
+  navigate?: (href: string) => void;
 }
 
-export function App({ runId }: AppProps = {}) {
+const loadPage = (href: string) => window.location.assign(href);
+
+export function App({ runId, navigate = loadPage }: AppProps = {}) {
   const scope = useMemo(() => (runId ? { runId } : {}), [runId]);
   const base = apiBase(scope);
   const run = useTestRun(scope.runId ? { runId: scope.runId } : {});
@@ -131,6 +139,7 @@ export function App({ runId }: AppProps = {}) {
   const performance = snapshot?.performance;
   const runError = snapshot?.error;
   const lintRun = !!snapshotStatus.lint_run;
+  const history = useRunHistory();
 
   const [route, setRoute] = useState<RouteState>(() => parseRoute(window.location));
   const [expandAll, setExpandAll] = useState<boolean | null>(null);
@@ -401,6 +410,7 @@ export function App({ runId }: AppProps = {}) {
       countColor: benchRegressions > 0 ? 'bg-red-500' : 'bg-muted-foreground',
     }] : []),
     ...(showProcessesTab ? [{ id: 'processes', label: 'Processes', icon: UiServerProcess, count: processCount, countColor: 'bg-blue-500' }] : []),
+    ...(history.available ? [{ id: 'history', label: 'History', icon: UiHistory }] : []),
   ];
 
   return (
@@ -413,7 +423,12 @@ export function App({ runId }: AppProps = {}) {
           </a>
         </div>
       )}
-      {tabs.length > 1 && <Tabs tabs={tabs} value={route.tab} onChange={onTabChange} className="shrink-0 px-density-4" />}
+      {(tabs.length > 1 || history.available) && (
+        <div className="flex shrink-0 items-center gap-2 pr-density-4">
+          <Tabs tabs={tabs} value={route.tab} onChange={onTabChange} className="min-w-0 flex-1 px-density-4" />
+          {history.available && <RunSwitcher history={history} navigate={navigate} />}
+        </div>
+      )}
 
       <div className="min-h-0 flex-1">
         {route.tab === 'tests' && (displayedTests.length === 0 ? (
@@ -480,6 +495,15 @@ export function App({ runId }: AppProps = {}) {
               {performance
                 ? <FixtureBenchView performance={performance} tests={tests} error={runError} sampleIndex={route.sampleIndex} onSampleChange={onSampleChange} />
                 : <BenchView bench={run.bench} />}
+            </div>
+          </div>
+        )}
+
+        {route.tab === 'history' && (
+          <div className="flex h-full flex-col">
+            <PageHeader icon={UiHistory} title="Run History" status={history.current ? `Viewing ${history.current}` : 'Viewing the latest results'} />
+            <div className="flex min-h-0 flex-1 flex-col p-density-2">
+              <RunHistory history={history} navigate={navigate} />
             </div>
           </div>
         )}

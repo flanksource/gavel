@@ -194,4 +194,62 @@ describe('App', () => {
     await waitFor(() => expect(screen.getByText('Ignore rule saved to .gavel.yaml')).toBeTruthy());
     expect(JSON.parse(calls.find(call => call.url === '/api/lint/ignore')!.init!.body as string)).toEqual({ source: 'eslint', work_dir: '/repo' });
   });
+
+  describe('run history', () => {
+    const lintRun = {
+      runId: 'run-2026-01-02T00-00-00Z', path: '/repo/.gavel/run-2026-01-02T00-00-00Z.json', kind: 'lint' as const,
+      started: '2026-01-02T00:00:00Z', ended: '2026-01-02T00:00:10Z',
+      passed: 0, failed: 0, skipped: 0, warned: 0, total: 0, lintViolations: 4, lintLinters: 1,
+      href: '/runs/run-2026-01-02T00-00-00Z/',
+    };
+    const testRun = {
+      ...lintRun, runId: 'run-2026-01-01T00-00-00Z', path: '/repo/.gavel/run-2026-01-01T00-00-00Z.json', kind: 'test' as const,
+      started: '2026-01-01T00:00:00Z', ended: '2026-01-01T00:00:03Z',
+      passed: 1, failed: 1, total: 2, lintViolations: 0, lintLinters: 0, href: '/runs/run-2026-01-01T00-00-00Z/',
+    };
+    const page = { latest: [lintRun.runId], latestHref: '/', runs: [lintRun, testRun] };
+    const withHistory = { 'GET /api/runs': () => new Response(JSON.stringify(page)) };
+
+    function openWithNavigate(url: string) {
+      const navigate = vi.fn();
+      window.history.replaceState({}, '', url);
+      render(<App navigate={navigate} />);
+      return navigate;
+    }
+
+    it('offers no History tab or switcher when the host serves no history', async () => {
+      serve(snapshot(), { 'GET /api/runs': () => new Response('404 page not found', { status: 404 }) });
+      open('/');
+
+      expect(await screen.findByText(/> TestParse/)).toBeTruthy();
+      expect(screen.queryByRole('tab', { name: /History/ })).toBeNull();
+      expect(document.querySelector('[data-run-switcher]')).toBeNull();
+    });
+
+    it('switches to a recorded run on the tab holding its results', async () => {
+      serve(snapshot(), withHistory);
+      const navigate = openWithNavigate('/');
+
+      const switcher = await waitFor(() => {
+        const select = document.querySelector<HTMLSelectElement>('[data-run-switcher] select');
+        if (!select || select.options.length < 3) throw new Error('history not loaded');
+        return select;
+      });
+      expect(switcher.value).toBe('');
+      fireEvent.change(switcher, { target: { value: lintRun.runId } });
+
+      expect(navigate).toHaveBeenCalledWith('/runs/run-2026-01-02T00-00-00Z/lint');
+    });
+
+    it('lists recorded runs on the History tab and opens the one picked', async () => {
+      serve(snapshot(), withHistory);
+      const navigate = openWithNavigate('/history');
+
+      const link = await screen.findByRole('link', { name: new Date(testRun.started).toLocaleString() });
+      expect(link.getAttribute('href')).toBe(testRun.href);
+      fireEvent.click(link.closest('tr')!);
+
+      expect(navigate).toHaveBeenCalledWith(testRun.href);
+    });
+  });
 });
