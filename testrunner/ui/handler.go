@@ -621,6 +621,10 @@ func taskSnapshotToTest(snap clickytask.TaskSnapshot) parsers.Test {
 	return t
 }
 
+// snapshotStreamInterval is the minimum gap between test-tree frames on the
+// SSE stream while a run is in progress.
+const snapshotStreamInterval = time.Second
+
 func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -638,6 +642,7 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 	if !writeSSESnapshot(w, flusher, initial, err, &lastPayload) {
 		return
 	}
+	lastSent := time.Now()
 
 	ticker := time.NewTicker(200 * time.Millisecond)
 	defer ticker.Stop()
@@ -650,10 +655,21 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 		case <-ticker.C:
 		}
 
+		// Live progress notifies per test; coalesce bursts so the UI re-renders
+		// at most once per interval. The ticker delivers the trailing frame, and
+		// a finished run is never held back.
+		if !s.Done() && time.Since(lastSent) < snapshotStreamInterval {
+			continue
+		}
+
 		payload, running, err := s.encodedSnapshot()
 
+		previous := lastPayload
 		if !writeSSESnapshot(w, flusher, payload, err, &lastPayload) {
 			return
+		}
+		if lastPayload != previous {
+			lastSent = time.Now()
 		}
 
 		if !running {
