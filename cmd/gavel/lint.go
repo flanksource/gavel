@@ -18,13 +18,21 @@ import (
 	testui "github.com/flanksource/gavel/testrunner/ui"
 	"github.com/flanksource/gavel/verify"
 	"github.com/flanksource/repomap"
+	"github.com/spf13/cobra"
 )
 
 // LintOptions is the CLI-facing alias for the reusable lint.Options struct.
 type LintOptions = lint.Options
 
 func init() {
-	lintCmd := clicky.AddNamedCommand("lint", rootCmd, LintOptions{}, runLint)
+	var lintCmd *cobra.Command
+	lintCmd = clicky.AddNamedCommand("lint", rootCmd, LintOptions{}, func(opts LintOptions) (any, error) {
+		opts, err := splitLintPassThroughArgs(lintCmd, opts)
+		if err != nil {
+			return nil, err
+		}
+		return runLint(opts)
+	})
 	registerLintLinterSubcommands(lintCmd)
 	registerLintShimCommands(lintCmd)
 	registerLintPromptCommand(lintCmd)
@@ -32,6 +40,17 @@ func init() {
 		f.NoOptDefVal = failedAutoSentinel
 		f.Usage = "Path to previous results JSON; re-run only linters/files that had violations. Pass without a value to use .gavel/last.json."
 	}
+}
+
+// splitLintPassThroughArgs moves the arguments after -- from Files to the
+// selected linter's native command line.
+func splitLintPassThroughArgs(cmd *cobra.Command, opts LintOptions) (LintOptions, error) {
+	files, through, err := splitAtDash(cmd, opts.Files)
+	if err != nil {
+		return opts, err
+	}
+	opts.Files, opts.PassThroughArgs = files, through
+	return opts, nil
 }
 
 // resolveAIFix reports whether the AI fix loop should run: either --ai-fix was

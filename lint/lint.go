@@ -111,6 +111,9 @@ func Execute(opts Options) ([]*linters.LinterResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := checkPassThrough(requestedLinters, opts.PassThroughArgs); err != nil {
+		return nil, err
+	}
 
 	opts, skip, err := opts.WithChanges()
 	if err != nil || skip {
@@ -194,6 +197,7 @@ func Execute(opts Options) ([]*linters.LinterResult, error) {
 				NoCache:    opts.NoCache,
 				Timeout:    timeout, Runtime: opts.Runtime,
 				ForceJSON: true,
+				ExtraArgs: opts.PassThroughArgs,
 				OutputTee: opts.OutputTee,
 			}
 
@@ -384,6 +388,9 @@ func dryRunGroup(opts Options) error {
 	if err != nil {
 		return err
 	}
+	if err := checkPassThrough(requestedLinters, opts.PassThroughArgs); err != nil {
+		return err
+	}
 
 	for _, name := range requestedLinters {
 		linter, ok := registry.Get(name)
@@ -447,6 +454,7 @@ func dryRunGroup(opts Options) error {
 				NoCache:    opts.NoCache,
 				Timeout:    timeout, Runtime: opts.Runtime,
 				ForceJSON: true,
+				ExtraArgs: opts.PassThroughArgs,
 			}
 			cmdName, args, err := linters.PrepareCommand(linter, runOpts)
 			if err != nil {

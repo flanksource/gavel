@@ -43,8 +43,11 @@ type Options struct {
 	Summary      bool                   `flag:"summary" yaml:"summary,omitempty" help:"Collapse output: group by linter -> rule, show count and the first --summary-limit locations"`
 	SummaryLimit int                    `flag:"summary-limit" yaml:"summary-limit,omitempty" help:"Max example locations shown per rule in --summary mode" default:"5"`
 	Files        []string               `args:"true" yaml:"files,omitempty"`
-	OutputTee    io.Writer              `json:"-" yaml:"-"`
-	Context      context.Context        `json:"-" yaml:"-"`
+	// PassThroughArgs are the CLI arguments after --, appended to the single
+	// selected linter's native command.
+	PassThroughArgs []string        `flag:"-" json:"-" yaml:"-"`
+	OutputTee       io.Writer       `json:"-" yaml:"-"`
+	Context         context.Context `json:"-" yaml:"-"`
 
 	AIFix         bool `flag:"ai-fix" yaml:"ai-fix,omitempty" help:"Use lint.fix from Gavel config to repair violations and re-lint until clean; --model/--budget override it"`
 	AIFixMaxIters int  `flag:"ai-fix-max-iterations" yaml:"ai-fix-max-iterations,omitempty" help:"Max AI→re-lint cycles" default:"3"`

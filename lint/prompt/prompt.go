@@ -20,17 +20,20 @@ import (
 )
 
 type Options struct {
-	captaincli.AIPromptOptions
-	DryRun        bool      `flag:"dry-run" help:"Render the prompt and lint schema without calling a model"`
-	Exclude       []string  `flag:"exclude" help:"Exclude rule IDs or * patterns, optionally source:rule (repeat or comma-separate)"`
-	Summary       bool      `flag:"summary" help:"Group findings by rule"`
-	SummaryLimit  int       `flag:"summary-limit" default:"5" help:"Maximum example locations per rule"`
-	Changed       bool      `flag:"changed" help:"Review local staged/unstaged/untracked files, or the runner changeset in CI"`
-	Since         string    `flag:"since" help:"Select changes since a ref's merge-base plus local edits; HEAD = local edits, staged = staged files"`
-	ChangedFiles  []string  `flag:"changed-files" help:"Explicit changed files, unioned with --changed or --since when supplied"`
-	AIFix         bool      `flag:"ai-fix" help:"Use lint.fix from Gavel config to repair findings and re-run the prompt until clean"`
-	AIFixMaxIters int       `flag:"ai-fix-max-iterations" default:"3" help:"Max AI→re-lint cycles"`
-	Stdin         io.Reader `flag:"-" json:"-" yaml:"-"`
+	// AIRuntimeOptions configure the --ai-fix fixer. The reviewing prompt's
+	// runtime lives in Prompt, parsed from the arguments after --.
+	captaincli.AIRuntimeOptions
+	Prompt        captaincli.AIPromptOptions `flag:"-" json:"-" yaml:"-"`
+	DryRun        bool                       `flag:"dry-run" help:"Render the prompt and lint schema without calling a model"`
+	Exclude       []string                   `flag:"exclude" help:"Exclude rule IDs or * patterns, optionally source:rule (repeat or comma-separate)"`
+	Summary       bool                       `flag:"summary" help:"Group findings by rule"`
+	SummaryLimit  int                        `flag:"summary-limit" default:"5" help:"Maximum example locations per rule"`
+	Changed       bool                       `flag:"changed" help:"Review local staged/unstaged/untracked files, or the runner changeset in CI"`
+	Since         string                     `flag:"since" help:"Select changes since a ref's merge-base plus local edits; HEAD = local edits, staged = staged files"`
+	ChangedFiles  []string                   `flag:"changed-files" help:"Explicit changed files, unioned with --changed or --since when supplied"`
+	AIFix         bool                       `flag:"ai-fix" help:"Use lint.fix from Gavel config to repair findings and re-run the prompt until clean"`
+	AIFixMaxIters int                        `flag:"ai-fix-max-iterations" default:"3" help:"Max AI→re-lint cycles"`
+	Stdin         io.Reader                  `flag:"-" json:"-" yaml:"-"`
 	// Paths are the files and directories under review, passed to the prompt
 	// as the files template variable.
 	Paths     []string             `flag:"-" json:"-" yaml:"-"`
@@ -72,19 +75,19 @@ func (opts Options) scoped(ctx context.Context, workDir string) (Options, bool, 
 	if len(paths) == 0 {
 		return opts, false, nil
 	}
-	if slices.ContainsFunc(opts.Var, func(v string) bool { return strings.HasPrefix(v, "files=") }) {
+	if slices.ContainsFunc(opts.Prompt.Var, func(v string) bool { return strings.HasPrefix(v, "files=") }) {
 		return opts, false, fmt.Errorf("--var files conflicts with the path arguments and change selection")
 	}
-	if opts.Vars != "" {
+	if opts.Prompt.Vars != "" {
 		var vars map[string]any
-		if err := json.Unmarshal([]byte(opts.Vars), &vars); err != nil {
+		if err := json.Unmarshal([]byte(opts.Prompt.Vars), &vars); err != nil {
 			return opts, false, fmt.Errorf("decode --vars: %w", err)
 		}
 		if _, ok := vars["files"]; ok {
 			return opts, false, fmt.Errorf("--vars files conflicts with the path arguments and change selection")
 		}
 	}
-	opts.Var = append(slices.Clone(opts.Var), "files="+strings.Join(paths, " "))
+	opts.Prompt.Var = append(slices.Clone(opts.Prompt.Var), "files="+strings.Join(paths, " "))
 	return opts, false, nil
 }
 
@@ -124,14 +127,14 @@ func Render(ctx context.Context, opts Options) (captaincli.PromptRenderResult, e
 }
 
 func invocation(opts Options) captaincli.PromptInvocation {
-	opts.RequiredPresets = append(append([]string(nil), opts.RequiredPresets...), "lint")
-	return captaincli.PromptInvocation{Reference: opts.File, Options: opts.AIPromptOptions, Stdin: opts.Stdin}
+	opts.Prompt.RequiredPresets = append(append([]string(nil), opts.Prompt.RequiredPresets...), "lint")
+	return captaincli.PromptInvocation{Reference: opts.Prompt.File, Options: opts.Prompt, Stdin: opts.Stdin}
 }
 
 func (opts Options) name() string {
-	ref := opts.File
-	if ref == "" && strings.HasPrefix(opts.PromptRef, "@") {
-		ref = strings.TrimPrefix(opts.PromptRef, "@")
+	ref := opts.Prompt.File
+	if ref == "" && strings.HasPrefix(opts.Prompt.PromptRef, "@") {
+		ref = strings.TrimPrefix(opts.Prompt.PromptRef, "@")
 	}
 	if ref == "" || ref == "-" {
 		return "prompt"
