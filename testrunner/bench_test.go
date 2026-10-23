@@ -61,6 +61,31 @@ func TestX(t *testing.T) {}
 		t.Fatal(err)
 	}
 
+	ginkgoSuite := filepath.Join(tmpDir, "ginkgosuite")
+	if err := os.MkdirAll(ginkgoSuite, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ginkgoSuite, "suite_test.go"), []byte(`package ginkgosuite_test
+
+import (
+	"testing"
+
+	. "github.com/onsi/ginkgo/v2"
+)
+
+func TestSuite(t *testing.T) { RunSpecs(t, "suite") }
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ginkgoSuite, "bench_test.go"), []byte(`package ginkgosuite_test
+
+import "testing"
+
+func BenchmarkZ(b *testing.B) {}
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
 	runner := runners.NewGoTest(tmpDir)
 	newOrchestrator := func(bench string) *TestOrchestrator {
 		return &TestOrchestrator{
@@ -104,6 +129,18 @@ func TestX(t *testing.T) {}
 			bench: "BenchmarkY",
 			pkg:   "./mixed",
 			want:  []string{"-bench=BenchmarkY"},
+		},
+		{
+			name:  "Ginkgo suite with benchmarks keeps its specs runnable under an explicit pattern",
+			bench: "^$",
+			pkg:   "./ginkgosuite",
+			want:  []string{"-bench=^$"},
+		},
+		{
+			name:  "Ginkgo suite with benchmarks is not treated as bench-only",
+			bench: "",
+			pkg:   "./ginkgosuite",
+			want:  nil,
 		},
 		{
 			name:      "user-supplied -bench in extraArgs is preserved as-is",

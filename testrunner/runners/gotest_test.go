@@ -513,7 +513,7 @@ func TestGoTestBenchmarkDetection(t *testing.T) {
 		if runner.PackageHasBenchmarks(".") {
 			t.Error("empty package should not report benchmarks")
 		}
-		if runner.PackageHasGoTests(".") {
+		if runner.PackageHasRunnableTests(".") {
 			t.Error("empty package should not report tests")
 		}
 	})
@@ -537,7 +537,7 @@ func BenchmarkFoo(b *testing.B) {
 		if !runner.PackageHasBenchmarks(".") {
 			t.Error("expected benchmarks to be detected")
 		}
-		if runner.PackageHasGoTests(".") {
+		if runner.PackageHasRunnableTests(".") {
 			t.Error("TestMain alone must not count as runnable tests")
 		}
 	})
@@ -552,7 +552,7 @@ func TestReal(t *testing.T) {}
 		if !runner.PackageHasBenchmarks(".") {
 			t.Error("expected benchmarks to still be detected")
 		}
-		if !runner.PackageHasGoTests(".") {
+		if !runner.PackageHasRunnableTests(".") {
 			t.Error("expected real Test* func to count")
 		}
 	})
