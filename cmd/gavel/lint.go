@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/signal"
@@ -26,6 +27,7 @@ func init() {
 	lintCmd := clicky.AddNamedCommand("lint", rootCmd, LintOptions{}, runLint)
 	registerLintLinterSubcommands(lintCmd)
 	registerLintShimCommands(lintCmd)
+	registerLintPromptCommand(lintCmd)
 	if f := lintCmd.Flags().Lookup("failed"); f != nil {
 		f.NoOptDefVal = failedAutoSentinel
 		f.Usage = "Path to previous results JSON; re-run only linters/files that had violations. Pass without a value to use .gavel/last.json."
@@ -134,7 +136,20 @@ func runLint(opts LintOptions) (any, error) {
 	}
 
 	if resolveAIFix(opts) {
-		fixed, fixErr := runAIFix(opts, allResults)
+		fixed, fixErr := runAIFix(aiFixOptions{
+			Context:       opts.Context,
+			WorkDir:       opts.WorkDir,
+			Linters:       opts.Linters,
+			Runtime:       opts.AIRuntimeOptions,
+			MaxIterations: opts.AIFixMaxIters,
+			ReLint: func(rctx context.Context) ([]*linters.LinterResult, error) {
+				rerunOpts := opts
+				rerunOpts.Selection = opts.Selection.Fresh()
+				rerunOpts.Context = rctx
+				rerunOpts.AIFix = false
+				return lint.Execute(rerunOpts)
+			},
+		}, allResults)
 		if fixErr != nil {
 			return nil, fmt.Errorf("ai-fix: %w", fixErr)
 		}
@@ -176,6 +191,10 @@ func runLint(opts LintOptions) (any, error) {
 		}
 	}
 
+	return finishLint(opts, allResults, runStarted)
+}
+
+func finishLint(opts LintOptions, allResults []*linters.LinterResult, runStarted time.Time) (any, error) {
 	snap := &testui.Snapshot{
 		Metadata: &testui.SnapshotMetadata{
 			Version: version,
@@ -205,7 +224,7 @@ func runLint(opts LintOptions) (any, error) {
 	}
 
 	if linters.HasFailures(allResults) {
-		return lintRunReturnValue(snap, opts), fmt.Errorf("lint failed")
+		exitCode = 1
 	}
 	return lintRunReturnValue(snap, opts), nil
 }
@@ -233,6 +252,7 @@ func executeLintRerun(base LintOptions, req testui.RerunRequest) ([]*linters.Lin
 		Selection:    base.Selection.Fresh(),
 		WorkDir:      workDir,
 		Timeout:      base.Timeout,
+		Exclude:      append([]string(nil), base.Exclude...),
 		Files:        append([]string(nil), req.LintFiles...),
 		OutputTee:    base.OutputTee,
 	}

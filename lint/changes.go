@@ -21,7 +21,7 @@ func (o Options) ChangeSelection() *changeset.Selection {
 	return changeset.NewSelection(changeset.Options{Dir: o.WorkDir, Changed: o.Changed, Since: o.Since, Files: o.ChangedFiles})
 }
 
-func (o Options) withChanges() (Options, bool, error) {
+func (o Options) WithChanges() (Options, bool, error) {
 	o.Selection = o.ChangeSelection()
 	ctx := o.Context
 	if ctx == nil {
