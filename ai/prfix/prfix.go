@@ -6,6 +6,7 @@ package prfix
 
 import (
 	_ "embed"
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -17,6 +18,9 @@ import (
 //go:embed pr-status-fix.prompt
 var prStatusFixPrompt string
 
+//go:embed pr-review.prompt
+var prReviewPrompt string
+
 // Prompts returns the configurable pr.fix prompt descriptor.
 func Prompts() []prompts.Prompt {
 	return []prompts.Prompt{{
@@ -26,7 +30,7 @@ func Prompts() []prompts.Prompt {
 		ConfigPath:  prompts.PRFix,
 		Default:     prStatusFixPrompt,
 		UsedBy:      []string{"gavel pr status --ai-fix"},
-	}}
+	}, {ID: prompts.PRReview, Title: "PR review", Description: "Reviews a PR from a manually selected lifecycle context.", ConfigPath: prompts.PRReview, Default: prReviewPrompt, UsedBy: []string{"PR lifecycle"}}}
 }
 
 // PRContext is the pull request identity the prompt renders. The caller builds it
@@ -58,14 +62,31 @@ type Conflict struct {
 }
 
 type ResolveOptions struct {
-	Base   api.Spec
-	Prompt verify.PromptSpec
-	Dir    string
-	PR     PRContext
+	Base      api.Spec
+	Context   *api.Spec
+	Prompt    verify.PromptSpec
+	Dir       string
+	PR        PRContext
+	Reference string
+	Inputs    map[string]any
 }
 
 // Layers renders the operation before CLI flags and saved defaults are resolved.
 func Layers(options ResolveOptions) ([]api.SpecLayer, error) {
+	reference := options.Reference
+	if reference == "" {
+		reference = prompts.PRFix
+	}
+	defaultPrompt := prStatusFixPrompt
+	switch {
+	case reference == prompts.PRFix:
+	case reference == prompts.PRReview:
+		defaultPrompt = prReviewPrompt
+	case strings.HasPrefix(reference, "file:"):
+		options.Prompt.File = strings.TrimPrefix(reference, "file:")
+	default:
+		return nil, fmt.Errorf("unknown PR prompt reference %q", reference)
+	}
 	pr := options.PR
 	data := map[string]any{
 		"workDir":    options.Dir,
@@ -75,6 +96,9 @@ func Layers(options ResolveOptions) ([]api.SpecLayer, error) {
 		"branch":     pr.Branch,
 		"baseBranch": pr.BaseBranch,
 		"statusText": strings.TrimRight(pr.StatusText, "\n"),
+	}
+	for key, value := range options.Inputs {
+		data[key] = value
 	}
 	if len(pr.Conflicts) > 0 {
 		conflicts := make([]map[string]any, 0, len(pr.Conflicts))
@@ -88,5 +112,5 @@ func Layers(options ResolveOptions) ([]api.SpecLayer, error) {
 	if pr.UnresolvedComments > 0 {
 		data["unresolvedComments"] = strconv.Itoa(pr.UnresolvedComments)
 	}
-	return options.Prompt.Layers(verify.PromptResolveOptions{Base: options.Base, DefaultPrompt: prStatusFixPrompt, Data: data, Dir: options.Dir, Name: prompts.PRFix})
+	return options.Prompt.Layers(verify.PromptResolveOptions{Base: options.Base, Context: options.Context, DefaultPrompt: defaultPrompt, Data: data, Dir: options.Dir, Name: reference})
 }
