@@ -35,10 +35,16 @@ var lintSubcommands = []struct {
 
 func registerLintLinterSubcommands(parent *cobra.Command) {
 	for _, entry := range lintSubcommands {
-		sub := clicky.AddNamedCommand(entry.subcmd, parent, LintOptions{}, func(opts LintOptions) (any, error) {
+		var sub *cobra.Command
+		sub = clicky.AddNamedCommand(entry.subcmd, parent, LintOptions{}, func(opts LintOptions) (any, error) {
+			opts, err := splitLintPassThroughArgs(sub, opts)
+			if err != nil {
+				return nil, err
+			}
 			opts.Linters = []string{entry.linterName}
 			return runLint(opts)
 		})
+		sub.Use = entry.subcmd + " [path...] [-- native args]"
 		sub.Short = entry.short
 		if err := sub.Flags().MarkHidden("linters"); err != nil {
 			panic(fmt.Sprintf("hide --linters on %s: %v", entry.subcmd, err))

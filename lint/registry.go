@@ -211,6 +211,15 @@ func resolveRequestedLinters(registry *linters.Registry, requested []string) ([]
 	return out, true, nil
 }
 
+// checkPassThrough rejects -- arguments unless exactly one linter is selected:
+// native flags only make sense for a single tool.
+func checkPassThrough(requested, passThrough []string) error {
+	if len(passThrough) > 0 && len(requested) != 1 {
+		return fmt.Errorf("arguments after -- require exactly one linter (got %s); use gavel lint <linter> -- %s", strings.Join(requested, ", "), strings.Join(passThrough, " "))
+	}
+	return nil
+}
+
 // hasMatchingFiles checks if any files in workDir match at least one of the glob
 // patterns, skipping anything excluded by .gitignore or the .gavel.yaml gitignore
 // list (extraIgnore). Gitignored directories are pruned, never descended, so a

@@ -19,6 +19,30 @@ func newTestLinterRegistry(t *testing.T) *linters.Registry {
 	return r
 }
 
+func TestCheckPassThrough(t *testing.T) {
+	tests := []struct {
+		name        string
+		requested   []string
+		passThrough []string
+		wantErr     string
+	}{
+		{name: "no args with many linters", requested: []string{"eslint", "golangci-lint"}},
+		{name: "args with one linter", requested: []string{"golangci-lint"}, passThrough: []string{"--enable", "gosec"}},
+		{name: "args with many linters", requested: []string{"eslint", "golangci-lint"}, passThrough: []string{"--fix"}, wantErr: "require exactly one linter (got eslint, golangci-lint)"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := checkPassThrough(tt.requested, tt.passThrough)
+			if tt.wantErr == "" && err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if tt.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErr)) {
+				t.Fatalf("error = %v, want containing %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestResolveRequestedLinters(t *testing.T) {
 	r := newTestLinterRegistry(t)
 

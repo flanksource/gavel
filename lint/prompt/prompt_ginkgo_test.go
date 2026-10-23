@@ -21,7 +21,7 @@ func TestPrompt(t *testing.T) {
 
 var _ = Describe("Prompt lint results", func() {
 	DescribeTable("uses the prompt reference as the lint name", func(file, ref, want string) {
-		opts := Options{AIPromptOptions: captaincli.AIPromptOptions{File: file, PromptRef: ref}}
+		opts := Options{Prompt: captaincli.AIPromptOptions{File: file, PromptRef: ref}}
 		Expect(opts.name()).To(Equal(want))
 	},
 		Entry("named prompt", "proposal-review", "", "proposal-review"),
@@ -90,11 +90,11 @@ var _ = Describe("Prompt lint results", func() {
 		for _, path := range paths {
 			Expect(os.MkdirAll(filepath.Join(dir, path), 0o755)).To(Succeed())
 		}
-		opts := Options{Paths: paths, AIPromptOptions: captaincli.AIPromptOptions{Var: vars, Vars: jsonVars}}
+		opts := Options{Paths: paths, Prompt: captaincli.AIPromptOptions{Var: vars, Vars: jsonVars}}
 		scoped, skip, err := opts.scoped(context.Background(), dir)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(skip).To(BeFalse())
-		Expect(scoped.Var).To(Equal(want))
+		Expect(scoped.Prompt.Var).To(Equal(want))
 	},
 		Entry("no scope", nil, []string{"focus=errors"}, "", []string{"focus=errors"}),
 		Entry("paths", []string{"pkg", "cmd/x"}, []string{"focus=errors"}, `{"rfp":"a.md"}`, []string{"focus=errors", "files=pkg cmd/x"}),
@@ -102,7 +102,7 @@ var _ = Describe("Prompt lint results", func() {
 
 	DescribeTable("rejects a files variable that conflicts with path arguments", func(vars []string, jsonVars string) {
 		dir := GinkgoT().TempDir()
-		opts := Options{Paths: []string{dir}, AIPromptOptions: captaincli.AIPromptOptions{Var: vars, Vars: jsonVars}}
+		opts := Options{Paths: []string{dir}, Prompt: captaincli.AIPromptOptions{Var: vars, Vars: jsonVars}}
 		_, _, err := opts.scoped(context.Background(), dir)
 		Expect(err).To(MatchError(ContainSubstring("files")))
 	},
@@ -143,7 +143,7 @@ var _ = Describe("Prompt lint results", func() {
 			scoped, skip, err := (Options{Changed: true, Paths: []string{"pkg"}}).scoped(context.Background(), dir)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(skip).To(BeFalse())
-			Expect(scoped.Var).To(Equal([]string{"files=pkg/a.go"}))
+			Expect(scoped.Prompt.Var).To(Equal([]string{"files=pkg/a.go"}))
 		})
 
 		It("skips the prompt when nothing changed", func() {
