@@ -56,9 +56,16 @@ type goTestEvent struct {
 }
 
 // getPackage returns the package name from either Package or ImportPath field.
+// Build events name the test variant ("p [p.test]", "p_test [p.test]"); they
+// belong to the package under test, p.
 func (e *goTestEvent) getPackage() string {
 	if e.Package != "" {
 		return e.Package
+	}
+	if _, variant, ok := strings.Cut(e.ImportPath, " ["); ok {
+		if pkg, ok := strings.CutSuffix(variant, ".test]"); ok {
+			return pkg
+		}
 	}
 	return e.ImportPath
 }

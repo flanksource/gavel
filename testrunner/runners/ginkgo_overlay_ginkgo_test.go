@@ -71,6 +71,21 @@ var _ = Describe("Ginkgo overlay", func() {
 		}
 	})
 
+	It("compiles the reporter into a package declaring names its imports would redeclare", func() {
+		workDir, err := filepath.Abs("../..")
+		Expect(err).NotTo(HaveOccurred())
+		pkg := "./testrunner/runners/testdata/overlaycollision"
+		overlay, err := BuildGinkgoOverlay(workDir, []string{pkg}, nil)
+		Expect(err).NotTo(HaveOccurred())
+		defer os.Remove(overlay)
+
+		cmd := exec.Command("go", "test", "-v", "-overlay="+overlay, pkg)
+		cmd.Dir = workDir
+		output, err := cmd.CombinedOutput()
+		Expect(err).NotTo(HaveOccurred(), string(output))
+		Expect(string(output)).To(ContainSubstring("GAVEL_GINKGO_V1:"))
+	})
+
 	It("rejects Ginkgo v1 before creating an overlay", func() {
 		workDir, err := filepath.Abs("../..")
 		Expect(err).NotTo(HaveOccurred())
