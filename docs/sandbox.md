@@ -72,7 +72,8 @@ been run against a live firewall. To check a host from inside a job, run
 Sandbox jobs start from the image `--sandbox-image` names. `make runner-image` builds it from
 `sandbox/runner.Dockerfile` (set `RUNNER_IMAGE` to tag it). It holds gavel, Go, Node with pnpm,
 Python, git, yq and the Claude Code and Codex CLIs, all at pinned versions, and runs as uid 1000
-with `GAVEL_DB=off`.
+with `GAVEL_DB=off`. Each release publishes it as `ghcr.io/flanksource/gavel-runner:<tag>`, and the
+release's Helm chart (`chart/`) pins it by digest as `sandbox.image`.
 
 ## Podman
 
