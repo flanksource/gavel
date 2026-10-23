@@ -1,29 +1,29 @@
 {{- /*
-The server's ~/.gavel.yaml, whose storage section says where blobs go, and its properties file.
+The server's ~/.gavel.yaml, whose storage section says where blobs go, with each setting rendered
+as a template, and its properties file.
 */ -}}
 {{- if not .Values.storage.existingSecret }}
-{{- $storage := dict "type" .Values.storage.type }}
-{{- with .Values.storage }}
-{{- if eq .type "local" }}
-{{- $_ := set $storage "path" .path }}
+{{- $s := .Values.storage }}
+{{- $storage := dict "type" $s.type }}
+{{- if eq $s.type "local" }}
+{{- $_ := set $storage "path" (tpl $s.path .) }}
 {{- else }}
-{{- $_ := set $storage "bucket" .bucket }}
+{{- $_ := set $storage "bucket" (tpl $s.bucket .) }}
 {{- end }}
-{{- if .prefix }}
-{{- $_ := set $storage "prefix" .prefix }}
+{{- if $s.prefix }}
+{{- $_ := set $storage "prefix" (tpl $s.prefix .) }}
 {{- end }}
-{{- if eq .type "s3" }}
+{{- if eq $s.type "s3" }}
 {{- $s3 := dict }}
-{{- if .s3.region }}{{ $_ := set $s3 "region" .s3.region }}{{ end }}
-{{- if .s3.endpoint }}{{ $_ := set $s3 "endpoint" .s3.endpoint }}{{ end }}
-{{- if .s3.usePathStyle }}{{ $_ := set $s3 "usePathStyle" true }}{{ end }}
+{{- if $s.s3.region }}{{ $_ := set $s3 "region" (tpl $s.s3.region .) }}{{ end }}
+{{- if $s.s3.endpoint }}{{ $_ := set $s3 "endpoint" (tpl $s.s3.endpoint .) }}{{ end }}
+{{- if $s.s3.usePathStyle }}{{ $_ := set $s3 "usePathStyle" true }}{{ end }}
 {{- if $s3 }}{{ $_ := set $storage "s3" $s3 }}{{ end }}
 {{- end }}
-{{- if eq .type "gcs" }}
-{{- $gcs := dict "credentials" .gcs.credentials }}
-{{- if .gcs.endpoint }}{{ $_ := set $gcs "endpoint" .gcs.endpoint }}{{ end }}
+{{- if eq $s.type "gcs" }}
+{{- $gcs := dict "credentials" (tpl $s.gcs.credentials .) }}
+{{- if $s.gcs.endpoint }}{{ $_ := set $gcs "endpoint" (tpl $s.gcs.endpoint .) }}{{ end }}
 {{- $_ := set $storage "gcs" $gcs }}
-{{- end }}
 {{- end }}
 apiVersion: v1
 kind: Secret

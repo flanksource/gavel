@@ -5,6 +5,7 @@ package chart
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/json"
 	"os/exec"
 	"strings"
 	"testing"
@@ -313,6 +314,33 @@ func TestChartStoresBlobsInAGCSBucket(t *testing.T) {
 	_, err := helmTemplate(t, append(append([]string{}, clerkValues...), "storage.type=gcs", "storage.bucket=gavel-blobs")...)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "storage.gcs.credentials is required")
+}
+
+// setJSON sets key to the string value through --set-json, which leaves template braces alone.
+func setJSON(key, value string) string {
+	data, _ := json.Marshal(value)
+	return "--set-json=" + key + "=" + string(data)
+}
+
+func TestChartTemplatesTheStorageSettings(t *testing.T) {
+	requireHelm(t)
+	m := render(t,
+		"storage.type=s3", setJSON("storage.bucket", "{{ .Release.Name }}-blobs"), setJSON("storage.prefix", "{{ .Release.Namespace }}"),
+		setJSON("storage.s3.region", "{{ .Values.awsRegion }}"), "awsRegion=eu-west-1",
+		setJSON("storage.s3.endpoint", "https://{{ .Release.Name }}-minio:9000"),
+	)
+	assert.Equal(t, map[string]any{"storage": map[string]any{
+		"type": "s3", "bucket": "gavel-blobs", "prefix": "gavel",
+		"s3": map[string]any{"region": "eu-west-1", "endpoint": "https://gavel-minio:9000"},
+	}}, gavelYAML(t, m))
+
+	m = render(t, setJSON("storage.path", "/var/lib/gavel/{{ .Release.Name }}"))
+	assert.Equal(t, "/var/lib/gavel/gavel", gavelYAML(t, m)["storage"].(map[string]any)["path"])
+
+	m = render(t, "storage.type=gcs", "storage.bucket=b", setJSON("storage.gcs.endpoint", "http://{{ .Release.Name }}-gcs"),
+		setJSON("storage.gcs.credentials", "{{ .Values.gcsKey }}"), setJSON("gcsKey", `{"type":"service_account"}`))
+	assert.Equal(t, map[string]any{"endpoint": "http://gavel-gcs", "credentials": `{"type":"service_account"}`},
+		gavelYAML(t, m)["storage"].(map[string]any)["gcs"])
 }
 
 func TestChartReadsBlobStorageFromABroughtSecret(t *testing.T) {
