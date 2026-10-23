@@ -4,7 +4,7 @@ go 1.26.1
 
 require (
 	github.com/flanksource/captain v0.0.71
-	github.com/flanksource/clicky v1.21.82
+	github.com/flanksource/clicky v1.21.83-0.20261023035132-78910d3a489c
 	github.com/flanksource/commons v1.60.1
 	github.com/flanksource/commons-db v0.1.61
 	github.com/flanksource/gomplate/v3 v3.24.90
@@ -29,7 +29,7 @@ require (
 	github.com/creack/pty v1.1.24
 	github.com/dustin/go-humanize v1.0.1
 	github.com/eko/gocache/lib/v4 v4.2.3
-	github.com/flanksource/clicky/aichat v1.21.82
+	github.com/flanksource/clicky/aichat v1.21.83-0.20261023035132-78910d3a489c
 	github.com/flanksource/commons-db/cmd/query v0.1.61
 	github.com/flanksource/commons-db/recordstore v0.1.61
 	github.com/flanksource/commons-db/tracing v0.1.61
