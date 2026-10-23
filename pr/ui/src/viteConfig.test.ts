@@ -11,6 +11,7 @@ const siblingExports = {
   '.': { import: './dist/index.js' },
   './components': './dist/components.js',
   './styles.css': './dist/styles.css',
+  './mdx-editor.css': './dist/mdx-editor.css',
 };
 
 vi.mock('node:fs', async importOriginal => {
@@ -40,6 +41,7 @@ describe('Clicky UI dependency resolution', () => {
       { find: /^@flanksource\/clicky-ui$/, replacement: resolve(localPackage, 'src/index.ts') },
       { find: /^@flanksource\/clicky-ui\/components$/, replacement: resolve(localPackage, 'src/components.ts') },
       { find: /^@flanksource\/clicky-ui\/styles\.css$/, replacement: resolve(localPackage, 'dist/styles.css') },
+      { find: /^@flanksource\/clicky-ui\/mdx-editor\.css$/, replacement: resolve(localPackage, 'dist/mdx-editor.css') },
     ]));
   });
 

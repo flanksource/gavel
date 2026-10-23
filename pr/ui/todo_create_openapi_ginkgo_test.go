@@ -34,6 +34,12 @@ var _ = Describe("Create TODO API documentation", func() {
 		Expect(request["required"]).To(ContainElement("title"))
 		Expect(request["required"]).NotTo(ContainElement("step"))
 		Expect(request["properties"].(map[string]any)["step"]).To(HaveKeyWithValue("type", "string"))
+		Expect(request["properties"]).To(And(HaveKey("spec"), HaveKey("presets")))
+		for _, mediaType := range []string{"multipart/form-data", "application/x-www-form-urlencoded"} {
+			properties := content[mediaType].(map[string]any)["schema"].(map[string]any)["properties"].(map[string]any)
+			Expect(properties["spec"]).To(HaveKeyWithValue("type", "string"))
+			Expect(properties["presets"]).To(HaveKeyWithValue("type", "string"))
+		}
 		created := operation["responses"].(map[string]any)["201"].(map[string]any)
 		Expect(schemaFor(created["content"].(map[string]any))["properties"]).To(HaveKey("run"))
 	})

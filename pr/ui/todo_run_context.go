@@ -12,7 +12,8 @@ import (
 	"github.com/flanksource/captain/pkg/api/registry"
 	captaincli "github.com/flanksource/captain/pkg/cli"
 	"github.com/flanksource/captain/pkg/runtimeprofiles"
-	"github.com/flanksource/gavel/todos/lifecycle"
+	"github.com/flanksource/gavel/lifecycle"
+	lifecycle1 "github.com/flanksource/gavel/todos/lifecycle"
 	"github.com/flanksource/gavel/todos/types"
 )
 
@@ -158,7 +159,7 @@ func todoRunContext(ctx context.Context, workDir string) (todoRunContextResponse
 	if err != nil {
 		return todoRunContextResponse{}, fmt.Errorf("open runtime profile provider: %w", err)
 	}
-	host, err := lifecycle.NewHost(provider, workDir, lifecycle.HostDashboard)
+	host, err := lifecycle1.NewHost(provider, workDir, lifecycle1.HostDashboard)
 	if err != nil {
 		return todoRunContextResponse{}, err
 	}
@@ -311,7 +312,7 @@ func todoRunLifecycleFor(definition lifecycle.Lifecycle) todoRunLifecycle {
 			Name:      step.Name,
 			Label:     stepLabel(step.Name),
 			Prompt:    step.Prompt,
-			ReadOnly:  lifecycle.Class(step) != types.ModeRun,
+			ReadOnly:  lifecycle1.Class(step) != types.ModeRun,
 			Auxiliary: step.Auxiliary,
 		})
 	}
@@ -335,7 +336,7 @@ func stepLabel(name string) string {
 // A step that fails to resolve is reported rather than skipped: it would fail
 // the same way when run, and a silently absent default sends the operator back
 // to the account default — the exact substitution this exists to prevent.
-func todoRunPromptDefaults(ctx context.Context, host *lifecycle.Host) (map[string]todoRunPromptDefault, error) {
+func todoRunPromptDefaults(ctx context.Context, host *lifecycle1.Host) (map[string]todoRunPromptDefault, error) {
 	steps := host.Def.Definition().Steps
 	defaults := make(map[string]todoRunPromptDefault, len(steps))
 	for _, step := range steps {

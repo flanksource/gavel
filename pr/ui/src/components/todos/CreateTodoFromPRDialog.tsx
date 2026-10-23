@@ -264,7 +264,7 @@ export function CreateTodoFromPRDialog({
   }
 
   async function submit() {
-    if (!title.trim() || !dir || busy) return;
+    if (!title.trim() || !dir || busy || runAfter.blocked) return;
     setError('');
     try {
       const sel = new Set(selectedKeys);
@@ -279,15 +279,13 @@ export function CreateTodoFromPRDialog({
         priority: TodoPriority;
         status: TodoStatus;
         criteria: AcceptanceCriterion[];
-        step?: string;
         prVerification?: PRTodoVerificationPayload;
         pr: { number: number; url: string };
       } = { title: title.trim(), body: buildPRTodoBody(pr, notes, selected), priority, status, criteria, pr: { number: pr.number, url: pr.url } };
-      if (runAfter.step) payload.step = runAfter.step;
       if (prVerification) payload.prVerification = prVerification;
       const data = await createTodo.mutateAsync({
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({ ...payload, ...runAfter.capture() }),
       });
       setCreated(data.todo);
       if (data.run?.status === 'failed') setRunFailure(data);
@@ -325,14 +323,14 @@ export function CreateTodoFromPRDialog({
             </span>
             <div className="flex gap-2">
               <Button variant="outline" onClick={onClose}>Cancel</Button>
-              <Button onClick={submit} loading={busy} disabled={!title.trim() || !dir}>Add todo</Button>
+              <Button onClick={submit} loading={busy} disabled={!title.trim() || !dir || runAfter.blocked}>Add todo</Button>
             </div>
           </div>
         )
       }
     >
       {created ? (
-        runFailure ? <RunCreationRecovery result={runFailure} dir={dir} step={runAfter.step} onDone={() => setRunFailure(null)} /> :
+        runFailure ? <RunCreationRecovery result={runFailure} request={runAfter.submitted} onDone={() => setRunFailure(null)} /> :
         <div className="space-y-3">
           <div className="flex items-start gap-2 rounded-md border border-green-200 bg-green-50 p-3 text-sm text-green-800">
             <UiPass className="mt-0.5 shrink-0 text-green-600" />

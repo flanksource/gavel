@@ -658,6 +658,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/settings/runtime-presets/{id}", s.handleSettingsRuntimePresets)
 	mux.HandleFunc("DELETE /api/settings/runtime-presets/{id}", s.handleSettingsRuntimePresets)
 	mux.HandleFunc("POST /api/settings/runtime-presets/resolve", s.handleSettingsRuntimePresetResolve)
+	mux.HandleFunc("/api/settings/lifecycles", s.handleSettingsLifecycles)
+	mux.HandleFunc("/api/pr/lifecycle", s.handlePRLifecycle)
 	mux.HandleFunc("/api/settings/gavel", s.handleSettingsGavel)
 	mux.HandleFunc("/api/settings/gavel/trace", s.handleSettingsGavelTrace)
 	mux.HandleFunc("/api/projects", s.handleProjects)

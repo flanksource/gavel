@@ -1,5 +1,5 @@
 import { useEffect, useState, type ComponentType } from 'react';
-import { OrderedPresetSelect, SpecRuntimeEditor, promptRuntimeValueToPayload, type AISpecRuntimeValue } from '@flanksource/clicky-ui/ai';
+import { OrderedPresetSelect, RuntimeBar, runtimeSpecFields, SpecRuntimeEditor, promptRuntimeValueToPayload, type AISpecRuntimeValue } from '@flanksource/clicky-ui/ai';
 import { Button, DropdownMenu, Modal } from '@flanksource/clicky-ui/components';
 import { UiChevronDown, UiCog, UiHistory, UiPlay, type IconProps } from '@flanksource/clicky-ui/icons';
 import type { TodoRunOptions } from '../../types';
@@ -335,6 +335,15 @@ export function PromptRunAdvancedDialog({
   const lastUsed = lastPromptRunOptions(scope);
   const lastUsedKey = lastUsed ? optionsKey(lastUsed) : undefined;
   const recent = loadRecentPromptRunOptions(scope).filter(item => optionsKey(item) !== lastUsedKey);
+  const runtimeBarOptions = {
+    value,
+    onChange: setValue,
+    models,
+    families: context ? buildRunFamilies(context) : [],
+    effectiveMode: inherited?.mode,
+    effectiveModel: inherited?.model,
+    inheritedCommits: verification ? undefined : context?.promptDefaults?.[step]?.spec?.workflow?.commits,
+  };
 
   function restore(options: TodoRunOptions) {
     setValue(verification ? verificationSpec(runSpec(options)) : cloneSpec(runSpec(options)));
@@ -357,6 +366,12 @@ export function PromptRunAdvancedDialog({
         sections={verification ? VERIFICATION_SPEC_SECTIONS : APPROVAL_SPEC_SECTIONS}
         beforeSections={
           <div className="space-y-2">
+            <RuntimeBar
+              {...runtimeBarOptions}
+              showTimeout
+              showCost
+              actions={{ fields: runtimeSpecFields(runtimeBarOptions).filter(field => !verification || field.id === 'permissions.mode') }}
+            />
             {(lastUsed || recent.length > 0) && (
               <div className="space-y-1">
                 {lastUsed && (
