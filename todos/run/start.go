@@ -7,8 +7,9 @@ import (
 	"sync"
 
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/lifecycle"
 	"github.com/flanksource/gavel/todos"
-	"github.com/flanksource/gavel/todos/lifecycle"
+	lifecycle1 "github.com/flanksource/gavel/todos/lifecycle"
 	"github.com/flanksource/gavel/todos/types"
 )
 
@@ -18,12 +19,12 @@ import (
 // entrypoint runs, and Start itself all read it — one fold, so a preview can
 // never describe a different run from the one that follows it.
 type Prepared struct {
-	Host *lifecycle.Host
+	Host *lifecycle1.Host
 	Step lifecycle.Step
 	// Reason is why this step was chosen: named by the caller, or picked by the
 	// lifecycle's own predicates.
 	Reason     string
-	Resolution *lifecycle.Resolution
+	Resolution *lifecycle1.Resolution
 	// SessionID is the agent session the run will use.
 	SessionID string
 }
@@ -40,7 +41,7 @@ func defaultResolve(ctx context.Context, req Request) (*Prepared, error) {
 	if req.Options.ReuseBranch && len(req.Options.Batch) > 1 {
 		return nil, fmt.Errorf("reuse-branch continues one todo's branch; this request runs %d todos", len(req.Options.Batch))
 	}
-	host, err := lifecycle.NewHost(req.Provider, req.Dir, req.Options.Host)
+	host, err := lifecycle1.NewHost(req.Provider, req.Dir, req.Options.Host)
 	if err != nil {
 		return nil, err
 	}
@@ -60,8 +61,8 @@ func defaultResolve(ctx context.Context, req Request) (*Prepared, error) {
 
 // runOptions is the caller's decisions in the host's own vocabulary. exec is nil
 // for a resolution, and the run's context for a dispatch.
-func runOptions(req Request, exec *todos.ExecutorContext) lifecycle.RunOptions {
-	return lifecycle.RunOptions{
+func runOptions(req Request, exec *todos.ExecutorContext) lifecycle1.RunOptions {
+	return lifecycle1.RunOptions{
 		Presets:        append([]string(nil), req.Options.Presets...),
 		PresetsSet:     req.Options.PresetsSet,
 		RuntimeProfile: req.Options.RuntimeProfile,
@@ -166,7 +167,7 @@ func runStep(execCtx *todos.ExecutorContext, req Request, prepared *Prepared) er
 		logger.Warnf("todo run %s failed: %v", Label(req.Todo), err)
 		return err
 	}
-	err = settleOutcome(outcome, err, req.OnComplete, func(outcome *lifecycle.StepOutcome, status string) error {
+	err = settleOutcome(outcome, err, req.OnComplete, func(outcome *lifecycle1.StepOutcome, status string) error {
 		return prepared.Host.OnOutcome(execCtx, req.Todo, prepared.Step, outcome, status)
 	})
 	if err != nil && !outcome.Execution.Cancelled {
@@ -185,10 +186,10 @@ func runStep(execCtx *todos.ExecutorContext, req Request, prepared *Prepared) er
 // the transcript of a run that failed to map onto a status is exactly the run
 // whose record is worth most.
 func settleOutcome(
-	outcome *lifecycle.StepOutcome,
+	outcome *lifecycle1.StepOutcome,
 	runErr error,
-	report func(*lifecycle.StepOutcome, string, error),
-	persist func(*lifecycle.StepOutcome, string) error,
+	report func(*lifecycle1.StepOutcome, string, error),
+	persist func(*lifecycle1.StepOutcome, string) error,
 ) error {
 	status := outcome.Status
 	if runErr != nil && status == "" {

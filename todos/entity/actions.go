@@ -9,11 +9,12 @@ import (
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/entity"
 	"github.com/flanksource/gavel/github"
+	"github.com/flanksource/gavel/lifecycle"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/bulk"
 	"github.com/flanksource/gavel/todos/content"
 	"github.com/flanksource/gavel/todos/githubpush"
-	"github.com/flanksource/gavel/todos/lifecycle"
+	lifecycle1 "github.com/flanksource/gavel/todos/lifecycle"
 	"github.com/flanksource/gavel/todos/ops"
 	"github.com/flanksource/gavel/todos/portable"
 	"github.com/flanksource/gavel/todos/query"
@@ -381,9 +382,9 @@ func (StepsFlags) ClickyActionFlags() {}
 // given. They share a type because a typed action has exactly one result shape:
 // Steps is populated for a TODO, Lifecycle for the workspace.
 type StepsResult struct {
-	Todo      string                `json:"todo,omitempty"`
-	Lifecycle *lifecycle.Lifecycle  `json:"lifecycle,omitempty"`
-	Steps     []lifecycle.StepState `json:"steps,omitempty"`
+	Todo      string                 `json:"todo,omitempty"`
+	Lifecycle *lifecycle.Lifecycle   `json:"lifecycle,omitempty"`
+	Steps     []lifecycle1.StepState `json:"steps,omitempty"`
 }
 
 func (d Deps) steps(ctx context.Context, ref string, flags StepsFlags) (StepsResult, error) {
@@ -392,7 +393,7 @@ func (d Deps) steps(ctx context.Context, ref string, flags StepsFlags) (StepsRes
 		if err != nil {
 			return StepsResult{}, rejected(err)
 		}
-		host, err := lifecycle.NewHost(nil, dir, d.hostKind(ctx))
+		host, err := lifecycle1.NewHost(nil, dir, d.hostKind(ctx))
 		if err != nil {
 			return StepsResult{}, err
 		}
@@ -407,7 +408,7 @@ func (d Deps) steps(ctx context.Context, ref string, flags StepsFlags) (StepsRes
 	if err != nil {
 		return StepsResult{}, rejected(err)
 	}
-	host, err := lifecycle.NewHost(provider, dir, d.hostKind(ctx))
+	host, err := lifecycle1.NewHost(provider, dir, d.hostKind(ctx))
 	if err != nil {
 		return StepsResult{}, err
 	}
@@ -421,11 +422,11 @@ func (d Deps) steps(ctx context.Context, ref string, flags StepsFlags) (StepsRes
 // hostKind picks the lifecycle host for this invocation's surface, for the same
 // reason runtime picks the broker: only an attended caller serves the approval
 // endpoints the dashboard host's layers assume exist.
-func (d Deps) hostKind(ctx context.Context) lifecycle.HostKind {
+func (d Deps) hostKind(ctx context.Context) lifecycle1.HostKind {
 	if attended(ctx) {
-		return lifecycle.HostDashboard
+		return lifecycle1.HostDashboard
 	}
-	return lifecycle.HostCLI
+	return lifecycle1.HostCLI
 }
 
 // TransferFlags are the parameters of `transfer`.

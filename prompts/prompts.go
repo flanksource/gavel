@@ -22,6 +22,7 @@ const (
 	LintFix            = "lint.fix"
 	PRContent          = "pr.content"
 	PRFix              = "pr.fix"
+	PRReview           = "pr.review"
 	TodosRun           = "todos.run"
 	TodosPlan          = "todos.plan"
 	TodosTriage        = "todos.triage"

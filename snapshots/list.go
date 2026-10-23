@@ -71,13 +71,25 @@ func LastRun(workDir string) (*RunInfo, error) {
 	return &info, nil
 }
 
+// ListRunsOptions narrows ListRuns.
+type ListRunsOptions struct {
+	// Since skips runs whose start time is at or before it — run-*.json files
+	// are immutable once written, so the start time is a sound incremental
+	// watermark.
+	Since time.Time
+	// Before skips runs whose RunID sorts at or after it: the cursor for the
+	// next page is the oldest RunID of the previous one.
+	Before string
+	// Limit stops after this many runs, taken newest-first by RunID (the start
+	// timestamp), so only the files of one page are read. 0 means no limit.
+	Limit int
+}
+
 // ListRuns enumerates the per-run snapshots in workDir/.gavel (run-*.json),
-// returning one RunInfo per run sorted newest-first. When since is non-zero,
-// runs whose start time is at or before since are skipped — run-*.json files
-// are immutable once written, so the start time is a sound incremental
-// watermark. A missing .gavel directory yields (nil, nil): the normal "never
-// run here" state, mirroring history.loadRunSnapshots.
-func ListRuns(workDir string, since time.Time) ([]RunInfo, error) {
+// returning one RunInfo per run sorted newest-first. A missing .gavel
+// directory yields (nil, nil): the normal "never run here" state, mirroring
+// history.loadRunSnapshots.
+func ListRuns(workDir string, opts ListRunsOptions) ([]RunInfo, error) {
 	if workDir == "" {
 		return nil, errors.New("snapshots.ListRuns: workDir is required")
 	}
@@ -89,14 +101,24 @@ func ListRuns(workDir string, since time.Time) ([]RunInfo, error) {
 		}
 		return nil, fmt.Errorf("read %s: %w", dir, err)
 	}
+	since := opts.Since
+	index, err := loadIndex(dir)
+	if err != nil {
+		return nil, err
+	}
 
 	var runs []RunInfo
-	for _, entry := range entries {
+	// os.ReadDir sorts by name, so walking it backwards visits runs newest-first.
+	for i := len(entries) - 1; i >= 0 && (opts.Limit <= 0 || len(runs) < opts.Limit); i-- {
+		entry := entries[i]
 		if entry.IsDir() {
 			continue
 		}
 		name := entry.Name()
 		if !strings.HasPrefix(name, PerRunPrefix) || !strings.HasSuffix(name, ".json") {
+			continue
+		}
+		if opts.Before != "" && strings.TrimSuffix(name, ".json") >= opts.Before {
 			continue
 		}
 		path := filepath.Join(dir, name)
@@ -116,15 +138,17 @@ func ListRuns(workDir string, since time.Time) ([]RunInfo, error) {
 				continue
 			}
 		}
-		snap, err := loadSnapshot(path)
+		info, err := summarizeRun(index, entry, path)
 		if err != nil {
 			return nil, err
 		}
-		started := runStartTime(*snap, name, path, entry)
-		if !since.IsZero() && !started.After(since) {
+		if !since.IsZero() && !info.Started.After(since) {
 			continue
 		}
-		runs = append(runs, runInfo(*snap, name, path, started))
+		runs = append(runs, info)
+	}
+	if err := index.save(dir); err != nil {
+		return nil, err
 	}
 
 	sort.Slice(runs, func(i, j int) bool {
@@ -136,7 +160,93 @@ func ListRuns(workDir string, since time.Time) ([]RunInfo, error) {
 	return runs, nil
 }
 
-func loadSnapshot(path string) (*testui.Snapshot, error) {
+// summarizeRun returns a run's RunInfo from the index, decoding the run file
+// only when the index has no entry for it at its current size and mtime.
+func summarizeRun(index *runIndex, entry os.DirEntry, path string) (RunInfo, error) {
+	stat, err := entry.Info()
+	if err != nil {
+		return RunInfo{}, fmt.Errorf("stat run snapshot %s: %w", path, err)
+	}
+	if info, ok := index.lookup(entry.Name(), path, stat); ok {
+		return info, nil
+	}
+	snap, err := LoadRunFile(path)
+	if err != nil {
+		return RunInfo{}, err
+	}
+	info := runInfo(*snap, entry.Name(), path, runStartTime(*snap, entry.Name(), path, entry))
+	index.store(entry.Name(), stat, info)
+	return info, nil
+}
+
+// LatestRuns returns the absolute paths of the newest run-*.json that ran tests
+// and the newest that ran linters, newest first — a single path when one run
+// did both. Runs are visited newest-first by filename (the start timestamp) and
+// the scan stops once both are found, so the long tail of older multi-MB runs
+// is never read. A missing .gavel directory yields (nil, nil).
+func LatestRuns(workDir string) ([]string, error) {
+	if workDir == "" {
+		return nil, errors.New("snapshots.LatestRuns: workDir is required")
+	}
+	dir := filepath.Join(workDir, Dir)
+	names, err := filepath.Glob(filepath.Join(dir, PerRunPrefix+"*.json"))
+	if err != nil {
+		return nil, fmt.Errorf("list %s: %w", dir, err)
+	}
+	sort.Sort(sort.Reverse(sort.StringSlice(names)))
+
+	var testPath, lintPath string
+	var paths []string
+	for _, path := range names {
+		hasTests, hasLint, err := runContents(path)
+		if err != nil {
+			return nil, err
+		}
+		if (hasTests && testPath == "") || (hasLint && lintPath == "") {
+			paths = append(paths, path)
+		}
+		if hasTests && testPath == "" {
+			testPath = path
+		}
+		if hasLint && lintPath == "" {
+			lintPath = path
+		}
+		if testPath != "" && lintPath != "" {
+			break
+		}
+	}
+	return paths, nil
+}
+
+// runContents reports whether a run snapshot holds tests and lint results,
+// decoding into empty element types so the test tree and violations are
+// skipped rather than materialised.
+func runContents(path string) (hasTests, hasLint bool, err error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false, false, fmt.Errorf("read run snapshot %s: %w", path, err)
+	}
+	var shape struct {
+		Status struct {
+			LintRun bool `json:"lint_run"`
+		} `json:"status"`
+		Tests []struct{} `json:"tests"`
+		Lint  []struct {
+			Skipped bool `json:"skipped"`
+		} `json:"lint"`
+	}
+	if err := json.Unmarshal(data, &shape); err != nil {
+		return false, false, fmt.Errorf("decode run snapshot %s: %w", path, err)
+	}
+	hasLint = shape.Status.LintRun
+	for _, l := range shape.Lint {
+		hasLint = hasLint || !l.Skipped
+	}
+	return len(shape.Tests) > 0, hasLint, nil
+}
+
+// LoadRunFile reads and decodes one run snapshot file.
+func LoadRunFile(path string) (*testui.Snapshot, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read run snapshot %s: %w", path, err)
@@ -149,9 +259,9 @@ func loadSnapshot(path string) (*testui.Snapshot, error) {
 }
 
 // runInfo builds a RunInfo from a decoded snapshot. Counts come from the leaf
-// roll-up (Tests.Sum); lint counts skip linters that did not run.
+// tests; lint counts skip linters that did not run.
 func runInfo(snap testui.Snapshot, name, path string, started time.Time) RunInfo {
-	sum := parsers.Tests(snap.Tests).Sum()
+	sum := leafSum(snap.Tests)
 
 	info := RunInfo{
 		RunID:   strings.TrimSuffix(name, ".json"),
@@ -180,6 +290,20 @@ func runInfo(snap testui.Snapshot, name, path string, started time.Time) RunInfo
 	}
 	info.Kind = runKind(sum.Total, info.LintLinters, snap.Status.LintRun)
 	return info
+}
+
+// leafSum totals the leaf tests only. Tests.Sum also counts a package or suite
+// whose status rolled up from its children, so one failing test read as five.
+func leafSum(tests []parsers.Test) parsers.TestSummary {
+	var sum parsers.TestSummary
+	for _, test := range tests {
+		if len(test.Children) == 0 {
+			sum = sum.Add(test.Sum())
+			continue
+		}
+		sum = sum.Add(leafSum(test.Children))
+	}
+	return sum
 }
 
 // runKind classifies a run from its leaf-test count, the number of linters that
