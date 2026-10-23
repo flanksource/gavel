@@ -28,6 +28,15 @@ import { provenanceForPath, type GavelTrace } from "./provenance";
 // generic array control (large, order-insensitive, append-and-dedupe lists).
 const CHIP_PATHS = new Set(["commit.gitignore", "commit.allow"]);
 
+function lifecyclePost(scopeQuery: string): PostExtension {
+  return (field, nodes) => {
+    const path = pathOf(field.schema);
+    if (path !== 'todos.lifecycle' && path !== 'pr.lifecycle') return nodes;
+    const kind = path.split('.')[0];
+    return { label: nodes.label, value: <a className="text-sm text-primary underline" href={`/prompts/lifecycles/${kind}?${scopeQuery}`}>Edit {kind === 'pr' ? 'PR' : 'TODO'} lifecycle in Prompts → Lifecycles</a> };
+  };
+}
+
 // sectionIconPre adds each top-level section's glyph to its form heading. It keys
 // off the field name, so nested fields that reuse a section name inherit it too.
 export const sectionIconPre: PreExtension = (field) => {
@@ -142,6 +151,7 @@ export function buildPost(
     aiDefaultsPost(models, families),
     promptPost(registry, scopeQuery, models, families),
     chipsPost,
+    lifecyclePost(scopeQuery),
     layerBadgePost(trace),
   ];
 }

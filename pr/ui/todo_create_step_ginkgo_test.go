@@ -1,9 +1,11 @@
 package ui
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -73,6 +75,48 @@ var _ = Describe("Create TODO steps", func() {
 		Entry("query alone", "", "", "?step=run", "run"),
 	)
 
+	DescribeTable("decodes runtime settings with body precedence over query", func(contentType, body, query, model string) {
+		request := httptest.NewRequest(http.MethodPost, "/api/todos/new"+query, strings.NewReader(body))
+		request.Header.Set("Content-Type", contentType)
+		payload, _, err := parseTodoNewPayload(request)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(payload.Spec).NotTo(BeNil())
+		Expect(payload.Spec.Name).To(Equal(model))
+		Expect(payload.Presets).To(Equal([]string{}))
+	},
+		Entry("JSON over query", "application/json", `{"spec":{"model":"body-model"},"presets":[]}`, "?spec=%7B%22model%22%3A%22query-model%22%7D&presets=%5B%22query-preset%22%5D", "body-model"),
+		Entry("form over query", "application/x-www-form-urlencoded", "spec=%7B%22model%22%3A%22body-model%22%7D&presets=%5B%5D", "?spec=%7B%22model%22%3A%22query-model%22%7D", "body-model"),
+		Entry("explicit empty spec over query", "application/json", `{"spec":{},"presets":[]}`, "?spec=%7B%22model%22%3A%22query-model%22%7D", ""),
+		Entry("query alone", "", "", "?spec=%7B%22model%22%3A%22query-model%22%7D&presets=%5B%5D", "query-model"),
+	)
+
+	It("decodes JSON runtime settings in multipart form fields", func() {
+		var body bytes.Buffer
+		writer := multipart.NewWriter(&body)
+		Expect(writer.WriteField("spec", `{"model":"acme-model","mode":"api","effort":"high"}`)).To(Succeed())
+		Expect(writer.WriteField("presets", `["reviewer","economical"]`)).To(Succeed())
+		Expect(writer.Close()).To(Succeed())
+		request := httptest.NewRequest(http.MethodPost, "/api/todos/new", &body)
+		request.Header.Set("Content-Type", writer.FormDataContentType())
+		payload, _, err := parseTodoNewPayload(request)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(payload.Spec).NotTo(BeNil())
+		Expect(payload.Spec.Name).To(Equal("acme-model"))
+		Expect(string(payload.Spec.Mode)).To(Equal("api"))
+		Expect(string(payload.Spec.Effort)).To(Equal("high"))
+		Expect(payload.Presets).To(Equal([]string{"reviewer", "economical"}))
+	})
+
+	DescribeTable("rejects malformed runtime form values", func(body string) {
+		request := httptest.NewRequest(http.MethodPost, "/api/todos/new", strings.NewReader(body))
+		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		_, _, err := parseTodoNewPayload(request)
+		Expect(err).To(HaveOccurred())
+	},
+		Entry("malformed spec", "spec=not-json"),
+		Entry("non-array presets", "presets=%7B%7D"),
+	)
+
 	It("rejects a status a caller cannot assign", func() {
 		recorder, _ := getSteps("&status=review")
 		Expect(recorder.Code).To(Equal(http.StatusBadRequest), recorder.Body.String())
@@ -122,6 +166,25 @@ var _ = Describe("Create TODO steps", func() {
 			Expect(recorder.Code).To(Equal(http.StatusCreated), recorder.Body.String())
 			Expect(started).To(BeEmpty())
 			Expect(response).NotTo(HaveKey("run"))
+		})
+
+		It("forwards the selected runtime and ordered presets to the new todo's step", func() {
+			recorder, _ := post(`,"step":"plan","presets":["reviewer","economical"],"spec":{"model":"acme-model","mode":"api","effort":"high"}`)
+			Expect(recorder.Code).To(Equal(http.StatusCreated), recorder.Body.String())
+			Expect(started).To(HaveLen(1))
+			Expect(started[0].Options.Request.Name).To(Equal("acme-model"))
+			Expect(string(started[0].Options.Request.Mode)).To(Equal("api"))
+			Expect(string(started[0].Options.Request.Effort)).To(Equal("high"))
+			Expect(started[0].Options.Presets).To(Equal([]string{"reviewer", "economical"}))
+			Expect(started[0].Options.PresetsSet).To(BeTrue())
+		})
+
+		It("rejects an invalid runtime before saving the todo", func() {
+			recorder, response := post(`,"step":"plan","spec":{"effort":"invalid"}`)
+			Expect(recorder.Code).To(Equal(http.StatusBadRequest), recorder.Body.String())
+			Expect(response["error"]).To(ContainSubstring("invalid effort"))
+			Expect(response).NotTo(HaveKey("todo"))
+			Expect(started).To(BeEmpty())
 		})
 
 		It("rejects a step that does not apply to the new todo's status, naming the applicable ones", func() {

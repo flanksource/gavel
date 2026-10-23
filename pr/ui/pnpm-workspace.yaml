@@ -86,12 +86,14 @@ catalog:
   streamdown: ^2.5.0
   strip-ansi: ^7.2.0
   tailwind-merge: ^2.6.0
-  tailwindcss: ^3.4.17
+  tailwindcss: ^4.3.3
   typescript: ^5.7.2
-  vite: ^6.0.3
+  vite: ^8.3.5
   vite-plugin-dts: ^4.3.0
-  vitest: ^3.0.5
+  vitest: ^5.0.5
   yaml: ^2.8.3
+  '@tailwindcss/vite': ^4.3.3
+  '@vitejs/plugin-react': ^6.1.2
 catalogMode: prefer
 
 linkWorkspacePackages: true

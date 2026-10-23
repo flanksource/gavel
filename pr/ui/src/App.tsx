@@ -150,7 +150,8 @@ export function App() {
   // dropdown layout the native menubar webview uses. The standalone /processes
   // and /todos/new pages already lay out fine on narrow screens, so they keep
   // their own views.
-  const useMenubarLayout = isMenubar || (isMobile && !isProcessesPage && !isTodoNewPage);
+  const isLifecyclePage = activeTab === 'prompts' && (selectedPath === 'lifecycles' || selectedPath.startsWith('lifecycles/'));
+  const useMenubarLayout = isMenubar || (isMobile && !isProcessesPage && !isTodoNewPage && !isLifecyclePage);
 
   // The native menu-bar webview stays resident when the popover is dismissed and
   // reports its page hidden even while it is on screen (see useDocumentVisible),
@@ -601,6 +602,13 @@ export function App() {
     // Todo UUIDs directly and Captain/provider session UUIDs through durable
     // prompt-run links, so reload/back navigation preserves the same lookup.
     commitRoute({ tab: 'todos', selectedPath: uuid, scopeProject, projectDiffPath: '', projectRunId: '', projectHistory: false, projectResults: false, projectRef: '', todoView: {}, filters });
+  }
+
+  if (isMobile && isLifecyclePage) {
+    return <div className="flex h-dvh min-w-0 flex-col bg-background text-foreground">
+      <a className="shrink-0 border-b border-border px-4 py-3 text-sm text-primary" href="/prs">Back to dashboard</a>
+      <PromptsView projects={scopedProjects} scopeProject={scopeProject} selectedId={selectedPath} onNavigate={navigatePrompt} />
+    </div>;
   }
 
   if (useMenubarLayout) {

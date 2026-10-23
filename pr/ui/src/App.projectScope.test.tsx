@@ -223,6 +223,15 @@ describe('hidden projects', () => {
 });
 
 describe('compact project scope', () => {
+  it('keeps the lifecycle editor route visible on a compact screen', () => {
+    isMobileMock.mockReturnValue(true);
+    window.history.replaceState({}, '', '/prompts/lifecycles/todos?project=gavel');
+    renderApp();
+    expect(screen.getByRole('link', { name: 'Back to dashboard' })).toBeTruthy();
+    expect(screen.getByRole('tab', { name: 'Lifecycles' })).toBeTruthy();
+    expect(window.location.pathname).toBe('/prompts/lifecycles/todos');
+  });
+
   it('shows the active project picker in the mobile layout', () => {
     isMobileMock.mockReturnValue(true);
     window.history.replaceState({}, '', '/prs?project=gavel');

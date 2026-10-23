@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button } from '@flanksource/clicky-ui/components';
 import { UiClose, UiImage } from '@flanksource/clicky-ui/icons';
+import type { CreateTodoRunFields } from './RunAfterCreation';
 
 // Attachment is one image picked for a new todo: the raw bytes plus a filename
 // the server stores and embeds into the todo body.
@@ -63,7 +64,7 @@ export function imageAttachmentsFromFiles(files: FileList | null): Attachment[] 
 // server persists and embeds into the todo body. The browser sets the multipart
 // Content-Type (with boundary) for a FormData body.
 export function todoFormData(
-  fields: { title: string; body: string; priority: string; status: string; autoSave?: boolean; step?: string; labels?: string[]; parent?: string; pr?: { number: number; url: string } },
+  fields: CreateTodoRunFields & { title: string; body: string; priority: string; status: string; autoSave?: boolean; labels?: string[]; parent?: string; pr?: { number: number; url: string } },
   attachments: Attachment[],
 ): FormData {
   const form = new FormData();
@@ -75,6 +76,8 @@ export function todoFormData(
   if (fields.pr) form.append('pr', JSON.stringify(fields.pr));
   if (fields.autoSave !== undefined) form.append('autoSave', String(fields.autoSave));
   if (fields.step) form.append('step', fields.step);
+  if (fields.spec !== undefined) form.append('spec', JSON.stringify(fields.spec));
+  if (fields.presets !== undefined) form.append('presets', JSON.stringify(fields.presets));
   fields.labels?.forEach(label => form.append('labels', label));
   attachments.forEach(a => form.append('attachment', a.blob, a.name));
   return form;

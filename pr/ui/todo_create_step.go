@@ -21,8 +21,10 @@ type todoNewRunResponse struct {
 // startNewTodoStep starts the named lifecycle step on a todo the request just
 // saved. A failure is reported in the response rather than failing the create:
 // the todo exists, and the caller retries the step on it.
-func (s *Server) startNewTodoStep(r *http.Request, provider todos.Provider, source todoSource, todo *types.TODO, step string) *todoNewRunResponse {
-	req := run.Request{Provider: provider, Registry: todoRuns(), Todo: todo, Dir: source.Dir, Options: run.Options{Step: step, Host: lifecycle.HostDashboard}, Approvals: true}
+func (s *Server) startNewTodoStep(r *http.Request, provider todos.Provider, source todoSource, todo *types.TODO, options run.Options) *todoNewRunResponse {
+	options.Host = lifecycle.HostDashboard
+	req := run.Request{Provider: provider, Registry: todoRuns(), Todo: todo, Dir: source.Dir, Options: options, Approvals: true}
+
 	todo.MarkdownBody = todos.AbsolutizeAttachmentURLs(todo.MarkdownBody, requestOrigin(r))
 	prepared, err := run.Resolve(r.Context(), req)
 	if err == nil {

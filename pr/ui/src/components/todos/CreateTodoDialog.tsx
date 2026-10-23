@@ -59,12 +59,12 @@ function CreateTodoForm({ onClose, workspaces, parent, onCreated, defaultDir }: 
   const busy = createTodo.isPending;
 
   async function submit() {
-    if (!title.trim() || !dir || busy || created) return;
+    if (!title.trim() || !dir || busy || created || runAfter.blocked) return;
     setError('');
     try {
       // /api/todos/new accepts both JSON and multipart; post the image bytes as
       // multipart when screenshots are attached, otherwise the lighter JSON path.
-      const fields = { title, body, priority, status, ...(runAfter.step ? { step: runAfter.step } : {}), pr: todoPRLink(prURL), ...(parent ? { parent: parent.ref } : {}) };
+      const fields = { title, body, priority, status, ...runAfter.capture(), pr: todoPRLink(prURL), ...(parent ? { parent: parent.ref } : {}) };
       const result = await createTodo.mutateAsync(attachments.length
         ? { body: todoFormData(fields, attachments) }
         : {
@@ -87,11 +87,11 @@ function CreateTodoForm({ onClose, workspaces, parent, onCreated, defaultDir }: 
       footer={created ? undefined :
         <div className="flex justify-end gap-2">
           <Button variant="outline" onClick={onClose}>Cancel</Button>
-          <Button onClick={submit} loading={busy} disabled={!title.trim() || !dir}>Add todo</Button>
+          <Button onClick={submit} loading={busy} disabled={!title.trim() || !dir || runAfter.blocked}>Add todo</Button>
         </div>
       }
     >
-      {created ? <RunCreationRecovery result={created} dir={dir} step={runAfter.step} onDone={() => onCreated(dir, created.todo)} /> : <div className="space-y-3">
+      {created ? <RunCreationRecovery result={created} request={runAfter.submitted} onDone={() => onCreated(dir, created.todo)} /> : <div className="space-y-3">
         {error && <div className="text-sm text-destructive">{error}</div>}
         {parent ? (
           <Field label="Child of">

@@ -1,6 +1,13 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CreateTodoDialog } from './CreateTodoDialog';
+import { CREATE_RUNTIME, CREATE_RUNTIME_CONTEXT } from './createRuntimeTestHelpers';
+
+vi.mock('./run', async importOriginal => ({
+  ...await importOriginal<typeof import('./run')>(),
+  useTodoRunContext: () => ({ context: CREATE_RUNTIME_CONTEXT, loading: false, error: '' }),
+}));
+vi.mock('./TodoRunActionButton', async () => ({ TodoRunRuntimeBar: (await import('./createRuntimeTestHelpers')).CreateRuntimeBarStub }));
 
 vi.mock('./attachments', () => ({
   ScreenshotPicker: () => <div />,
@@ -149,12 +156,14 @@ describe('CreateTodoDialog as a child of a todo', () => {
 
     fireEvent.change(screen.getByPlaceholderText('What needs doing?'), { target: { value: 'Backfill rows' } });
     fireEvent.change(screen.getByLabelText('Run after creation'), { target: { value: 'run' } });
+    fireEvent.click(screen.getByRole('button', { name: 'run runtime' }));
     fireEvent.click(screen.getByRole('button', { name: 'Add todo' }));
 
     await waitFor(() => expect(createMutation.mutateAsync).toHaveBeenCalled());
     const request = createMutation.mutateAsync.mock.calls[0][0] as { body: string };
     const payload = JSON.parse(request.body);
     expect(payload.step).toBe('run');
+    expect(payload.spec).toEqual(CREATE_RUNTIME);
     expect('triage' in payload).toBe(false);
   });
 
