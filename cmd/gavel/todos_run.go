@@ -377,7 +377,10 @@ func awaitRun(started run.StartResult) error {
 		}
 		fmt.Println(clicky.Text("Interrupted - cleaning up...", "text-yellow-600 font-bold").ANSI())
 		select {
-		case <-started.Done:
+		case err := <-started.Done:
+			if err != nil && !errors.Is(err, todos.ErrExecutionCancelled) {
+				return errors.Join(errRunInterrupted, err)
+			}
 		case <-time.After(5 * time.Second):
 			logger.Warnf("Timeout waiting for graceful shutdown")
 		}
