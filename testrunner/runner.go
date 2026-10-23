@@ -1522,7 +1522,7 @@ func (o *TestOrchestrator) augmentBenchArgs(r runners.Runner, pkgPath string, ex
 		return extraArgs
 	case "":
 		// Auto-enable only when the package has benchmarks but no runnable tests.
-		if gt.PackageHasBenchmarks(pkgPath) && !gt.PackageHasGoTests(pkgPath) {
+		if gt.PackageHasBenchmarks(pkgPath) && !gt.PackageHasRunnableTests(pkgPath) {
 			pattern = "."
 		} else {
 			return extraArgs
@@ -1537,7 +1537,7 @@ func (o *TestOrchestrator) augmentBenchArgs(r runners.Runner, pkgPath string, ex
 
 	args := append([]string{}, extraArgs...)
 	args = append(args, "-bench="+pattern)
-	if !gt.PackageHasGoTests(pkgPath) {
+	if !gt.PackageHasRunnableTests(pkgPath) {
 		hasRun := false
 		for _, a := range extraArgs {
 			if a == "-run" || strings.HasPrefix(a, "-run=") {

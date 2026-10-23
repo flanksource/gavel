@@ -14,7 +14,6 @@ import (
 )
 
 var (
-	goTestFuncRe      = regexp.MustCompile(`(?m)^func\s+Test[A-Z_]\w*\s*\(`)
 	goBenchFuncRe     = regexp.MustCompile(`(?m)^func\s+Benchmark[A-Z_]\w*\s*\(`)
 	errGoTestDetected = errors.New("go test detected")
 )
@@ -114,40 +113,6 @@ func (r *GoTest) packageHasNonGinkgoTests(pkgDir string) (bool, error) {
 	return false, nil
 }
 
-// inspectPackage scans a package directory and reports whether it contains
-// non-Ginkgo Test* functions and whether it contains Benchmark* functions.
-// A file that imports Ginkgo is ignored entirely (those are Ginkgo's responsibility).
-func (r *GoTest) inspectPackage(pkgDir string) (hasTests bool, hasBench bool) {
-	entries, err := os.ReadDir(pkgDir)
-	if err != nil {
-		return false, false
-	}
-
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), "_test.go") {
-			continue
-		}
-		path := filepath.Join(pkgDir, entry.Name())
-		if hasGinkgoImports(path) {
-			continue
-		}
-		content, err := os.ReadFile(path)
-		if err != nil {
-			continue
-		}
-		if !hasTests && goTestFuncRe.Match(content) {
-			hasTests = true
-		}
-		if !hasBench && goBenchFuncRe.Match(content) {
-			hasBench = true
-		}
-		if hasTests && hasBench {
-			return
-		}
-	}
-	return
-}
-
 // PackageHasBenchmarks reports whether packagePath (relative to workDir or absolute)
 // contains any Benchmark* funcs in non-Ginkgo test files.
 func (r *GoTest) PackageHasBenchmarks(packagePath string) bool {
@@ -155,29 +120,38 @@ func (r *GoTest) PackageHasBenchmarks(packagePath string) bool {
 	if !filepath.IsAbs(dir) {
 		dir = filepath.Join(r.workDir, packagePath)
 	}
-	_, hasBench := r.inspectPackage(dir)
-	return hasBench
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), "_test.go") {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		if hasGinkgoImports(path) {
+			continue
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		if goBenchFuncRe.Match(content) {
+			return true
+		}
+	}
+	return false
 }
 
-// PackageHasGoTests reports whether packagePath contains any non-Ginkgo Test* funcs.
-// Note: TestMain does not count (matches `Test[A-Z_]` — TestMain has an 'M' next which
-// is uppercase and therefore matches; we explicitly exclude it here).
-func (r *GoTest) PackageHasGoTests(packagePath string) bool {
+// PackageHasRunnableTests reports whether packagePath contains a runnable Test* func,
+// including the one hosting a Ginkgo suite's RunSpecs. TestMain alone does not
+// produce runnable tests, so it does not count.
+func (r *GoTest) PackageHasRunnableTests(packagePath string) bool {
 	dir := packagePath
 	if !filepath.IsAbs(dir) {
 		dir = filepath.Join(r.workDir, packagePath)
 	}
-	hasTests, _ := r.inspectPackage(dir)
-	if !hasTests {
-		return false
-	}
-	return r.hasTestsBeyondTestMain(dir)
-}
-
-// hasTestsBeyondTestMain returns true if there's at least one Test* function
-// other than TestMain. TestMain alone does not produce runnable tests.
-func (r *GoTest) hasTestsBeyondTestMain(pkgDir string) bool {
-	entries, err := os.ReadDir(pkgDir)
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return false
 	}
@@ -186,11 +160,7 @@ func (r *GoTest) hasTestsBeyondTestMain(pkgDir string) bool {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), "_test.go") {
 			continue
 		}
-		path := filepath.Join(pkgDir, entry.Name())
-		if hasGinkgoImports(path) {
-			continue
-		}
-		content, err := os.ReadFile(path)
+		content, err := os.ReadFile(filepath.Join(dir, entry.Name()))
 		if err != nil {
 			continue
 		}
