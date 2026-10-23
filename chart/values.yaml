@@ -82,7 +82,8 @@ sandbox:
       secretName: ""
       key: ca.crt
 
-# Blob storage for run and job logs, attachments, test runs and traces: local, s3 or gcs.
+# Blob storage for run and job logs, attachments, test runs and traces: local, s3 or gcs. String
+# settings are templates, such as bucket: "{{ .Release.Name }}-blobs" or credentials: "{{ .Values.gcsKey }}".
 storage:
   type: local
   # Directory local storage writes to, on the data volume.
