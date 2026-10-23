@@ -6,11 +6,14 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"reflect"
 	"slices"
 	"time"
 
 	"github.com/flanksource/captain/pkg/claude"
+	captaincli "github.com/flanksource/captain/pkg/cli"
 	"github.com/flanksource/clicky"
+	"github.com/flanksource/clicky/flags"
 	lintprompt "github.com/flanksource/gavel/lint/prompt"
 	"github.com/flanksource/gavel/linters"
 	"github.com/spf13/cobra"
@@ -19,10 +22,17 @@ import (
 func registerLintPromptCommand(parent *cobra.Command) *cobra.Command {
 	var cmd *cobra.Command
 	cmd = clicky.AddNamedCommandWithContext("prompt", parent, lintprompt.Options{}, func(ctx context.Context, opts lintprompt.Options) (any, error) {
-		opts.AIRuntimeOptions = opts.AIRuntimeOptions.WithChangedFlags(cmd.Flags())
-		opts.PresetsSet = cmd.Flags().Changed("preset") || cmd.Flags().Changed("no-presets")
-		opts.PromptRef = cmd.Flags().Lookup("prompt").Value.String()
-		opts.File, opts.Paths = splitPromptArgs(cmd.Flags().Args(), cmd.Flags().Changed("prompt"))
+		opts.AIRuntimeOptions = opts.WithChangedFlags(cmd.Flags())
+		positional, through, err := splitAtDash(cmd, cmd.Flags().Args())
+		if err != nil {
+			return nil, err
+		}
+		prompt, promptArgs, err := parsePromptArgs(through)
+		if err != nil {
+			return nil, err
+		}
+		opts.Prompt = prompt
+		opts.Prompt.File, opts.Paths = splitPromptArgs(append(positional, promptArgs...), prompt.Prompt != "")
 		dir, err := os.Getwd()
 		if err != nil {
 			return nil, err
@@ -57,9 +67,7 @@ func registerLintPromptCommand(parent *cobra.Command) *cobra.Command {
 					names = append(names, result.Linter)
 				}
 			}
-			// --model and friends configure the reviewing prompt; the fixer runs
-			// lint.fix from Gavel config.
-			results, err = runAIFix(aiFixOptions{Context: ctx, WorkDir: dir, Linters: names, Runtime: defaultAIRuntimeOptions(), MaxIterations: opts.AIFixMaxIters, ReLint: func(rctx context.Context) ([]*linters.LinterResult, error) {
+			results, err = runAIFix(aiFixOptions{Context: ctx, WorkDir: dir, Linters: names, Runtime: opts.AIRuntimeOptions, MaxIterations: opts.AIFixMaxIters, ReLint: func(rctx context.Context) ([]*linters.LinterResult, error) {
 				rerun := opts
 				rerun.Selection = opts.Selection.Fresh()
 				return run(rctx, rerun)
@@ -70,12 +78,42 @@ func registerLintPromptCommand(parent *cobra.Command) *cobra.Command {
 		}
 		return finishLint(LintOptions{WorkDir: dir, Summary: opts.Summary, SummaryLimit: opts.SummaryLimit, Selection: opts.Selection}, results, started)
 	})
-	cmd.Use = "prompt [name|id|file] [path...]"
+	cmd.Use = "prompt [name|id|file] [path...] [-- prompt flags]"
 	cmd.Short = "Run a Captain prompt with the lint output preset"
-	cmd.Long = "Run a Captain prompt with the lint output preset.\n\nThe first argument is the prompt; remaining arguments (all of them with -p) are files or directories passed to the prompt as the files variable. --changed, --since and --changed-files narrow that scope to changed files, as in gavel lint. --ai-fix repairs findings with lint.fix from Gavel config and re-runs the prompt until clean."
-	cmd.Example = "  gavel lint prompt review.prompt\n  gavel lint prompt review.prompt ./pkg cmd/main.go\n  gavel lint prompt review.prompt --changed --ai-fix\n  git diff | gavel lint prompt review.prompt -V change=-\n  gavel lint prompt -p 'Review the current change' --since main ./pkg --model agent:sonnet"
+	cmd.Long = "Run a Captain prompt with the lint output preset.\n\nThe first argument is the prompt; remaining arguments (all of them with -p) are files or directories passed to the prompt as the files variable. --changed, --since and --changed-files narrow that scope to changed files, as in gavel lint. --ai-fix repairs findings with lint.fix from Gavel config and re-runs the prompt until clean.\n\nFlags before -- configure gavel: scope, reporting and --ai-fix, with --model and the other runtime flags selecting the fixer. Arguments after -- go to the Captain prompt: --model, -p, -V, --preset and friends configure the reviewing prompt, and positional arguments there are the prompt and paths."
+	cmd.Example = "  gavel lint prompt review.prompt\n  gavel lint prompt review.prompt ./pkg cmd/main.go\n  gavel lint prompt --changed --ai-fix --model agent:opus -- --model agent:sonnet review.prompt\n  git diff | gavel lint prompt review.prompt -- -V change=-\n  gavel lint prompt --since main ./pkg -- -p 'Review the current change' --model agent:sonnet"
 	cmd.Args = cobra.ArbitraryArgs
 	return cmd
+}
+
+// parsePromptArgs parses the arguments after -- with the Captain prompt flag
+// set, returning the prompt options and the remaining positional arguments.
+func parsePromptArgs(args []string) (captaincli.AIPromptOptions, []string, error) {
+	var opts captaincli.AIPromptOptions
+	fields, err := flags.ParseStructFields(reflect.TypeOf(opts))
+	if err != nil {
+		return opts, nil, err
+	}
+	scratch := &cobra.Command{Use: "prompt"}
+	var values []*flags.FlagValue
+	for _, info := range fields {
+		if fv := flags.BindFlag(scratch, info); fv != nil {
+			values = append(values, fv)
+		}
+	}
+	if err := scratch.Flags().Parse(args); err != nil {
+		return opts, nil, fmt.Errorf("prompt arguments after --: %w", err)
+	}
+	value := reflect.ValueOf(&opts).Elem()
+	for _, fv := range values {
+		if err := flags.AssignFieldValue(value, fv, nil, false); err != nil {
+			return opts, nil, fmt.Errorf("prompt arguments after --: %w", err)
+		}
+	}
+	opts.AIRuntimeOptions = opts.WithChangedFlags(scratch.Flags())
+	opts.PresetsSet = scratch.Flags().Changed("preset") || scratch.Flags().Changed("no-presets")
+	opts.PromptRef = scratch.Flags().Lookup("prompt").Value.String()
+	return opts, scratch.Flags().Args(), nil
 }
 
 // splitPromptArgs separates the prompt reference from the paths under review.

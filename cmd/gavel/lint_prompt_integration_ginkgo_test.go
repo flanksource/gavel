@@ -52,7 +52,7 @@ var _ = Describe("Lint prompt CLI integration", Ordered, func() {
 		DeferCleanup(server.Close)
 		bin, err := os.Executable()
 		Expect(err).NotTo(HaveOccurred())
-		cmd := exec.Command(bin, "-test.run=^TestLintPromptCLIChild$", "--", "lint", "prompt", "proposal-review.prompt", "--model", "api:sonnet", "--api-key", aimock.DummyKey, "--api-url", server.APIURL(), "--no-cache", "--bare", "--json", "--no-progress", "--exclude", "prompt:excluded")
+		cmd := exec.Command(bin, "-test.run=^TestLintPromptCLIChild$", "--", "lint", "prompt", "--json", "--no-progress", "--exclude", "prompt:excluded", "--", "proposal-review.prompt", "--model", "api:sonnet", "--api-key", aimock.DummyKey, "--api-url", server.APIURL(), "--no-cache", "--bare")
 		cmd.Dir = GinkgoT().TempDir()
 		Expect(os.WriteFile(filepath.Join(cmd.Dir, "proposal-review.prompt"), []byte("Review the change"), 0o600)).To(Succeed())
 		cmd.Env = append(os.Environ(), "GAVEL_LINT_PROMPT_CHILD=1", "GAVEL_DB_DSN="+dsn, "CAPTAIN_SESSION_DB_URL="+dsn, "CAPTAIN_DB_CONTEXT=", "CAPTAIN_DB_CONTEXTS=", "GAVEL_ISSUE_ID=")
@@ -86,7 +86,7 @@ var _ = Describe("Lint prompt CLI integration", Ordered, func() {
 		Entry("invalid schema", `{"unrelated":true}`, 1, 0, false),
 	)
 
-	runChild := func(replies []string, files map[string]string, args ...string) (*anthropicmock.Server, testui.Snapshot, string) {
+	runChild := func(replies []string, files map[string]string, args []string, paths ...string) (*anthropicmock.Server, testui.Snapshot, string) {
 		var scenario bytes.Buffer
 		scenario.WriteString("anthropic:\n")
 		for _, reply := range replies {
@@ -101,8 +101,9 @@ var _ = Describe("Lint prompt CLI integration", Ordered, func() {
 		DeferCleanup(server.Close)
 		bin, err := os.Executable()
 		Expect(err).NotTo(HaveOccurred())
-		base := []string{"-test.run=^TestLintPromptCLIChild$", "--", "lint", "prompt", "review.prompt", "--model", "api:sonnet", "--api-key", aimock.DummyKey, "--api-url", server.APIURL(), "--no-cache", "--bare", "--json", "--no-progress"}
-		cmd := exec.Command(bin, append(base, args...)...)
+		base := append([]string{"-test.run=^TestLintPromptCLIChild$", "--", "lint", "prompt", "--json", "--no-progress"}, args...)
+		base = append(base, "--", "review.prompt", "--model", "api:sonnet", "--api-key", aimock.DummyKey, "--api-url", server.APIURL(), "--no-cache", "--bare")
+		cmd := exec.Command(bin, append(base, paths...)...)
 		cmd.Dir = GinkgoT().TempDir()
 		files["review.prompt"] = "Review {{files}}"
 		for path, content := range files {
@@ -121,7 +122,7 @@ var _ = Describe("Lint prompt CLI integration", Ordered, func() {
 	}
 
 	It("passes path arguments to the prompt as the files variable", func() {
-		_, snapshot, requests := runChild([]string{`{"violations":[]}`}, map[string]string{"pkg/service.go": "package pkg\n", "cmd/main.go": "package main\n"}, "pkg", "cmd/main.go")
+		_, snapshot, requests := runChild([]string{`{"violations":[]}`}, map[string]string{"pkg/service.go": "package pkg\n", "cmd/main.go": "package main\n"}, nil, "pkg", "cmd/main.go")
 		Expect(snapshot.Lint).To(HaveExactElements(HaveField("Success", true)))
 		Expect(requests).To(ContainSubstring("Review pkg cmd/main.go"))
 	})
@@ -130,7 +131,7 @@ var _ = Describe("Lint prompt CLI integration", Ordered, func() {
 		server, snapshot, requests := runChild(
 			[]string{`{"violations":[{"file":"pkg/service.go","line":1,"message":"Return the failure","severity":"error"}]}`, "Fixed pkg/service.go", `{"violations":[]}`},
 			map[string]string{"pkg/service.go": "package pkg\n", ".gavel.yaml": "lint:\n  fix:\n    model: api:sonnet\n"},
-			"pkg", "--ai-fix", "--ai-fix-max-iterations", "1",
+			[]string{"--ai-fix", "--ai-fix-max-iterations", "1"}, "pkg",
 		)
 		Expect(server.Remaining()).To(BeEmpty())
 		Expect(snapshot.Lint).To(HaveExactElements(SatisfyAll(HaveField("Success", true), HaveField("Violations", BeEmpty()))))

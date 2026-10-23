@@ -1000,18 +1000,14 @@ func bindTestCommandFlags(cmd *cobra.Command, flags *testCommandFlags) {
 }
 
 // splitTestPassThroughArgs separates positional package paths from the raw
-// runner arguments supplied after --. Clicky binds every positional token to
-// StartingPaths, while pflag preserves the separator index for us here.
+// runner arguments supplied after --.
 func splitTestPassThroughArgs(cmd *cobra.Command, opts *testrunner.RunOptions) error {
-	dash := cmd.Flags().ArgsLenAtDash()
-	if dash < 0 {
-		return nil
+	paths, through, err := splitAtDash(cmd, opts.StartingPaths)
+	if err != nil {
+		return err
 	}
-	if dash > len(opts.StartingPaths) {
-		return fmt.Errorf("invalid -- separator index %d for %d test arguments", dash, len(opts.StartingPaths))
-	}
-	opts.PassThroughArgs = append(opts.PassThroughArgs, opts.StartingPaths[dash:]...)
-	opts.StartingPaths = append([]string(nil), opts.StartingPaths[:dash]...)
+	opts.StartingPaths = paths
+	opts.PassThroughArgs = append(opts.PassThroughArgs, through...)
 	return nil
 }
 

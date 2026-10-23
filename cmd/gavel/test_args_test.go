@@ -41,6 +41,34 @@ func TestSplitTestPassThroughArgs(t *testing.T) {
 	}
 }
 
+func TestSplitLintPassThroughArgs(t *testing.T) {
+	tests := []struct {
+		name        string
+		args        []string
+		wantFiles   []string
+		wantThrough []string
+	}{
+		{name: "no separator", args: []string{"./pkg"}, wantFiles: []string{"./pkg"}},
+		{name: "native args only", args: []string{"--", "--enable", "gosec"}, wantThrough: []string{"--enable", "gosec"}},
+		{name: "files and native args", args: []string{"./pkg", "--", "--fast"}, wantFiles: []string{"./pkg"}, wantThrough: []string{"--fast"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := &cobra.Command{Use: "lint"}
+			if err := cmd.Flags().Parse(tt.args); err != nil {
+				t.Fatalf("parse args: %v", err)
+			}
+			opts, err := splitLintPassThroughArgs(cmd, LintOptions{Files: cmd.Flags().Args()})
+			if err != nil {
+				t.Fatalf("splitLintPassThroughArgs: %v", err)
+			}
+			if !reflect.DeepEqual(opts.Files, tt.wantFiles) || !reflect.DeepEqual(opts.PassThroughArgs, tt.wantThrough) {
+				t.Fatalf("Files = %v PassThroughArgs = %v, want %v %v", opts.Files, opts.PassThroughArgs, tt.wantFiles, tt.wantThrough)
+			}
+		})
+	}
+}
+
 func TestFrameworkSubcommandsAreRegistered(t *testing.T) {
 	for _, name := range []string{"go", "ginkgo", "jest", "vitest", "playwright"} {
 		cmd, _, err := testCmd.Find([]string{name})
