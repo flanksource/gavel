@@ -75,6 +75,7 @@ tasks:
       - testrunner/ui/tailwind.config.js
     generates:
       - testrunner/ui/dist/testui.js
+      - testrunner/ui/dist/chunks/*.js
 
   gavel-lib:
     desc: |
@@ -109,6 +110,8 @@ tasks:
       - pr/ui/vite.config.ts
     generates:
       - pr/ui/dist/prui.js
+      - pr/ui/dist/prui.css
+      - pr/ui/dist/chunks/*.js
 
   ui:publish:
     desc: |
