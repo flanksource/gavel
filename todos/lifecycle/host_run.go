@@ -14,6 +14,7 @@ import (
 	"github.com/flanksource/captain/pkg/runtimeprofiles"
 	"github.com/flanksource/commons-db/shell"
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/lifecycle"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/claude"
 	todoprompt "github.com/flanksource/gavel/todos/prompt"
@@ -64,10 +65,10 @@ type RunOptions struct {
 // StepOutcome is one finished step run: the facts the outcome predicates saw,
 // the status they chose, and the execution record the provider persists.
 type StepOutcome struct {
-	Step Step
+	Step lifecycle.Step
 	// Status is the status the lifecycle's outcomes chose, or OutcomeKeep.
 	Status string
-	Result StepResult
+	Result lifecycle.StepResult
 	// Execution is the run as the provider records it: the attempt, the
 	// transcript, the envelope, and the definition-of-done verdict.
 	Execution *todos.ExecutionResult
@@ -119,7 +120,7 @@ type preparedStep struct {
 // and its result classified by the step's outcomes. It writes no status — that
 // is OnOutcome's — so a caller can decide what to persist when the run itself
 // could not be classified.
-func (h *Host) RunStep(ctx context.Context, todo *types.TODO, step Step, opts RunOptions) (*StepOutcome, error) {
+func (h *Host) RunStep(ctx context.Context, todo *types.TODO, step lifecycle.Step, opts RunOptions) (*StepOutcome, error) {
 	resolution, err := h.Resolve(ctx, todo, step, opts)
 	if err != nil {
 		return nil, err
@@ -182,20 +183,20 @@ func (h *Host) Dispatch(ctx context.Context, todo *types.TODO, resolution *Resol
 // resolveStep is the shared front half of a run: the todo projected onto the
 // lifecycle's variables, and the step prepared into a dispatchable request.
 // RunStep dispatches what it returns; Resolve reports it.
-func (h *Host) resolveStep(ctx context.Context, todo *types.TODO, step Step, opts RunOptions) (Context, *preparedStep, error) {
+func (h *Host) resolveStep(ctx context.Context, todo *types.TODO, step lifecycle.Step, opts RunOptions) (lifecycle.Context, *preparedStep, error) {
 	if h.Def == nil {
-		return Context{}, nil, fmt.Errorf("lifecycle host: no lifecycle loaded")
+		return lifecycle.Context{}, nil, fmt.Errorf("lifecycle host: no lifecycle loaded")
 	}
 	if _, ok := h.Def.Definition().Step(step.Name); !ok {
-		return Context{}, nil, fmt.Errorf("step %q is not part of lifecycle %s", step.Name, h.Def.Definition().Name)
+		return lifecycle.Context{}, nil, fmt.Errorf("step %q is not part of lifecycle %s", step.Name, h.Def.Definition().Name)
 	}
 	lc, err := h.Context(ctx, todo)
 	if err != nil {
-		return Context{}, nil, err
+		return lifecycle.Context{}, nil, err
 	}
 	prepared, err := h.prepare(ctx, todo, step, lc, opts)
 	if err != nil {
-		return Context{}, nil, err
+		return lifecycle.Context{}, nil, err
 	}
 	return lc, prepared, nil
 }
@@ -203,7 +204,7 @@ func (h *Host) resolveStep(ctx context.Context, todo *types.TODO, step Step, opt
 // prepare resolves the step to the request captain will run: the prompt
 // reference, the step's spec with its placeholders expanded, every spec layer
 // folded, and the template rendered with the step's inputs.
-func (h *Host) prepare(ctx context.Context, todo *types.TODO, step Step, lc Context, opts RunOptions) (*preparedStep, error) {
+func (h *Host) prepare(ctx context.Context, todo *types.TODO, step lifecycle.Step, lc lifecycle.Context, opts RunOptions) (*preparedStep, error) {
 	if err := validateRequestEffort(opts.Request.Model); err != nil {
 		return nil, err
 	}
@@ -216,7 +217,7 @@ func (h *Host) prepare(ctx context.Context, todo *types.TODO, step Step, lc Cont
 	if err := h.remoteRunnable(step, opts); err != nil {
 		return nil, err
 	}
-	stepSpec, err := expandSpec(step.Spec, map[string]any{VarSubject: lc.Subject})
+	stepSpec, err := expandSpec(step.Spec, map[string]any{lifecycle.VarSubject: lc.Subject})
 	if err != nil {
 		return nil, &ConfigurationError{Err: fmt.Errorf("step %s: %w", step.Name, err)}
 	}
@@ -347,7 +348,7 @@ func (h *Host) prepare(ctx context.Context, todo *types.TODO, step Step, lc Cont
 
 // render fills the prompt template with the todo and the step's declared
 // inputs. A verify-only step renders nothing: it runs the definition of done.
-func (h *Host) render(ctx context.Context, todo *types.TODO, step Step, lc Context, prepared *preparedStep) error {
+func (h *Host) render(ctx context.Context, todo *types.TODO, step lifecycle.Step, lc lifecycle.Context, prepared *preparedStep) error {
 	inputs, err := h.Def.Inputs(step, lc)
 	if err != nil {
 		return err
@@ -445,7 +446,7 @@ func (h *Host) updateState(exec *todos.ExecutorContext, todo *types.TODO, update
 // checks, the setup plugin and the generate→verify loop. What stays here is
 // what is gavel's: the todo's identity on the run, the commit pipeline, the
 // transcript, and the classification of its envelope.
-func (h *Host) dispatch(exec *todos.ExecutorContext, todo *types.TODO, step Step, prepared *preparedStep, input *stepInput, start time.Time) dispatched {
+func (h *Host) dispatch(exec *todos.ExecutorContext, todo *types.TODO, step lifecycle.Step, prepared *preparedStep, input *stepInput, start time.Time) dispatched {
 	input.start(exec, todo, prepared)
 	runCtx, cancel := context.WithTimeout(exec, prepared.timeout)
 	defer cancel()

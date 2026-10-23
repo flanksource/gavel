@@ -4,7 +4,8 @@ import (
 	"time"
 
 	"github.com/flanksource/captain/pkg/api"
-	"github.com/flanksource/gavel/todos/lifecycle"
+	"github.com/flanksource/gavel/lifecycle"
+	lifecycle1 "github.com/flanksource/gavel/todos/lifecycle"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -37,7 +38,7 @@ var (
 )
 
 func defaultEngine() *lifecycle.Engine {
-	def, err := lifecycle.Default()
+	def, err := lifecycle1.Default()
 	Expect(err).NotTo(HaveOccurred())
 	engine, err := lifecycle.New(def)
 	Expect(err).NotTo(HaveOccurred())
@@ -59,7 +60,7 @@ var _ = Describe("default lifecycle", func() {
 		}
 		Expect(names).To(Equal([]string{"triage", "plan", "verify", "run", "triage.new"}))
 		Expect(engine.Definition().Name).To(Equal("todos"))
-		_, hasVerify := engine.Definition().Step(lifecycle.StepVerify)
+		_, hasVerify := engine.Definition().Step(lifecycle1.StepVerify)
 		Expect(hasVerify).To(BeTrue())
 	})
 
@@ -204,7 +205,7 @@ func completedRun(success bool) lifecycle.Envelope {
 
 var _ = Describe("strict predicates", func() {
 	base := func() lifecycle.Lifecycle {
-		def, err := lifecycle.Default()
+		def, err := lifecycle1.Default()
 		Expect(err).NotTo(HaveOccurred())
 		return def
 	}
@@ -244,7 +245,7 @@ var _ = Describe("strict predicates", func() {
 		func(mutate func(*lifecycle.Lifecycle), message string) {
 			def := base()
 			mutate(&def)
-			_, err := lifecycle.New(def)
+			err := lifecycle1.Validate(def)
 			Expect(err).To(MatchError(ContainSubstring(message)))
 		},
 		Entry("no events", func(def *lifecycle.Lifecycle) { def.Steps[3].Events = nil }, "step run: events is required"),
@@ -274,14 +275,14 @@ var _ = Describe("strict predicates", func() {
 	It("rejects an outcome naming a status that is not a todo status", func() {
 		def := base()
 		def.Steps[3].Outcomes = append(def.Steps[3].Outcomes, lifecycle.Outcome{Status: "done", When: "true"})
-		_, err := lifecycle.New(def)
+		err := lifecycle1.Validate(def)
 		Expect(err).To(MatchError(ContainSubstring(`status "done" is not a todo status`)))
 	})
 
 	It("rejects a verify step that names a prompt other than the definition of done", func() {
 		def := base()
 		def.Steps[2].Prompt = "file:prompts/custom-verify.prompt"
-		_, err := lifecycle.New(def)
+		err := lifecycle1.Validate(def)
 		Expect(err).To(MatchError(ContainSubstring(`step verify: prompt "file:prompts/custom-verify.prompt"`)))
 		Expect(err).To(MatchError(ContainSubstring("todos.verify")))
 	})
