@@ -3,6 +3,7 @@ package testui
 import (
 	"encoding/json"
 	"fmt"
+	"html"
 	"net/http"
 	"strings"
 	"sync"
@@ -46,6 +47,9 @@ type Server struct {
 	processSessions *traces.ProcessSessions
 	// devProxy, when set, serves the page from a Vite dev server (SetDevProxy).
 	devProxy http.Handler
+	// basePath is the URL prefix the page resolves its API and routes under
+	// (SetBasePath).
+	basePath string
 
 	rerunMu       sync.Mutex
 	rerunFn       RerunFunc
@@ -338,6 +342,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/lint/ignore", s.handleLintIgnore)
 	mux.HandleFunc("/api/tests/edit", s.handleTestEdit)
 	mux.HandleFunc("/api/benchmarks", s.handleBenchJSON)
+	mux.HandleFunc(AssetsMount+"/", handleAssets)
 	return mux
 }
 
@@ -364,15 +369,27 @@ func (s *Server) handleRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.IsExport {
-		if req.Tab == viewTabProcesses {
+		if !exportableTab(req.Tab) {
 			http.NotFound(w, r)
 			return
 		}
 		s.handleExport(w, r, req)
 		return
 	}
+	s.mu.RLock()
+	basePath := s.basePath
+	s.mu.RUnlock()
 	w.Header().Set("Content-Type", "text/html")
-	fmt.Fprint(w, pageHTML())
+	fmt.Fprint(w, pageHTML(basePath))
+}
+
+// SetBasePath declares the URL prefix this server is mounted under (stripped
+// before its handler sees the request), so the page resolves its API and route
+// URLs under it.
+func (s *Server) SetBasePath(basePath string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.basePath = basePath
 }
 
 func (s *Server) handleExport(w http.ResponseWriter, r *http.Request, req routeRequest) {
@@ -390,7 +407,9 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request, req routeR
 	writeExportResponse(w, r, report, req.Format)
 }
 
-func pageHTML() string {
+func pageHTML(basePath string) string {
+	// json.Marshal escapes <, > and & so the value cannot close the script.
+	encodedBase, _ := json.Marshal(basePath)
 	return renderHTML(
 		api.HtmlElement{Tag: "", Content: "<!DOCTYPE html>\n"},
 		api.HtmlElement{
@@ -403,13 +422,14 @@ func pageHTML() string {
 						api.HtmlElement{Tag: "meta", Attributes: map[string]string{"charset": "UTF-8"}},
 						api.HtmlElement{Tag: "meta", Attributes: map[string]string{"name": "viewport", "content": "width=device-width, initial-scale=1.0"}},
 						api.HtmlElement{Tag: "title", Content: "Test Results"},
+						api.HtmlElement{Tag: "script", Content: "window.__gavelBasePath = " + string(encodedBase) + ";"},
 					),
 				},
 				api.HtmlElement{
 					Tag: "body",
 					Content: renderHTML(
 						api.HtmlElement{Tag: "div", Attributes: map[string]string{"id": "root"}},
-						api.HtmlElement{Tag: "script", Content: bundleJS},
+						api.HtmlElement{Tag: "script", Attributes: map[string]string{"type": "module", "src": html.EscapeString(basePath + BundlePath)}},
 					),
 				},
 			),

@@ -20,6 +20,21 @@ func TestParseRouteRequestDefaultsLintGroupingToLinterRuleFile(t *testing.T) {
 	}
 }
 
+// The history tab is a page route (reloading it must serve the page) with no
+// export rendering.
+func TestHistoryTabIsPageOnly(t *testing.T) {
+	handler := NewServer().Handler()
+	for path, want := range map[string]int{"/history": 200, "/history.json": 404} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("GET", path, nil)
+		req.Header.Set("Accept", "text/html")
+		handler.ServeHTTP(rec, req)
+		if rec.Code != want {
+			t.Errorf("GET %s = %d, want %d", path, rec.Code, want)
+		}
+	}
+}
+
 // TestParseTestFiltersMatchesTheUIStatusParam mirrors src/routes.ts: no
 // status param is the failing-only default, `all` is no status filter.
 func TestParseTestFiltersMatchesTheUIStatusParam(t *testing.T) {

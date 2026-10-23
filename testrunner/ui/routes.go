@@ -26,7 +26,14 @@ const (
 	viewTabLint      = "lint"
 	viewTabBench     = "bench"
 	viewTabProcesses = "processes"
+	viewTabHistory   = "history"
 )
+
+// exportableTab reports whether a tab has an export rendering; the processes
+// and history tabs are page-only.
+func exportableTab(tab string) bool {
+	return tab != viewTabProcesses && tab != viewTabHistory
+}
 
 type routeRequest struct {
 	Tab         string
@@ -279,7 +286,7 @@ func parseRouteRequest(r *http.Request) (routeRequest, bool) {
 	}
 
 	switch tabSeg {
-	case viewTabTests, viewTabLint, viewTabBench, viewTabProcesses:
+	case viewTabTests, viewTabLint, viewTabBench, viewTabProcesses, viewTabHistory:
 		req.Tab = tabSeg
 	default:
 		return routeRequest{}, false
