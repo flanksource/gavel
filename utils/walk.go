@@ -80,7 +80,7 @@ func hasProjectMarker(directory, marker string) bool {
 
 // FindAllProjectRoots returns every directory under root that contains one of
 // the given markers (a trailing slash denotes a directory). Nested projects are included, while dependency
-// trees and nested git repositories are pruned. Respects gitignore via
+// trees, testdata and nested git repositories are pruned. Respects gitignore via
 // WalkGitIgnored. Results are absolute paths in shallowest-first walk order.
 func FindAllProjectRoots(root string, markers []string) []string {
 	if len(markers) == 0 {
@@ -93,7 +93,7 @@ func FindAllProjectRoots(root string, markers []string) []string {
 			return nil
 		}
 		if path != root {
-			if d.Name() == "node_modules" {
+			if d.Name() == "node_modules" || d.Name() == "testdata" {
 				return fs.SkipDir
 			}
 			if _, err := os.Stat(filepath.Join(path, ".git")); err == nil {

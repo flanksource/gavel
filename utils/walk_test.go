@@ -370,6 +370,28 @@ var _ = Describe("FindAllProjectRoots", func() {
 		setupGitRepo(root)
 	})
 
+	DescribeTable("excludes fixture projects while keeping ordinary nested projects", func(marker string) {
+		for _, directory := range []string{".", "app", "testdata/example", "app/testdata/example", "testdata-tools"} {
+			project := filepath.Join(root, directory)
+			Expect(os.MkdirAll(project, 0o755)).To(Succeed())
+			if marker == ".uir.d/" {
+				Expect(os.Mkdir(filepath.Join(project, marker), 0o755)).To(Succeed())
+			} else {
+				Expect(os.WriteFile(filepath.Join(project, marker), nil, 0o644)).To(Succeed())
+			}
+		}
+		Expect(FindAllProjectRoots(root, []string{marker})).To(ConsistOf(root, filepath.Join(root, "app"), filepath.Join(root, "testdata-tools")))
+	}, Entry("UIR file", ".uir.yaml"), Entry("UIR directory", ".uir.d/"), Entry("Go", "go.mod"), Entry("JavaScript", "package.json"))
+
+	It("discovers projects when testdata itself is explicitly selected as the root", func() {
+		fixture := filepath.Join(root, "testdata")
+		Expect(os.MkdirAll(filepath.Join(fixture, "example"), 0o755)).To(Succeed())
+		for _, directory := range []string{fixture, filepath.Join(fixture, "example")} {
+			Expect(os.WriteFile(filepath.Join(directory, ".uir.yaml"), nil, 0o644)).To(Succeed())
+		}
+		Expect(FindAllProjectRoots(fixture, []string{".uir.yaml"})).To(ConsistOf(fixture, filepath.Join(fixture, "example")))
+	})
+
 	It("finds every outermost package.json under the tree", func() {
 		Expect(os.MkdirAll(filepath.Join(root, "frontend"), 0o755)).To(Succeed())
 		Expect(os.WriteFile(filepath.Join(root, "frontend", "package.json"), []byte("{}"), 0o644)).To(Succeed())

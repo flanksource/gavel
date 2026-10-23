@@ -83,14 +83,17 @@ var _ = Describe("LoadGavelConfig cache", func() {
 			"repo", 1),
 	)
 
+	// leaf's new git root has sub as its git-root-parent, so repo leaves the chain.
 	It("re-parses when a new git root moves the chain", func() {
+		leaf := filepath.Join(sub, "leaf")
+		Expect(os.Mkdir(leaf, 0o755)).To(Succeed())
 		writeConfig(repo, "procfile: {profile: repo}\n")
-		writeConfig(sub, "procfile: {mem: 2g}\n")
-		cfg, _ := loadCounting(sub)
+		writeConfig(leaf, "procfile: {mem: 2g}\n")
+		cfg, _ := loadCounting(leaf)
 		Expect(cfg.Procfile).To(Equal(ProcfileConfig{Profile: "repo", Mem: "2g"}))
 
-		Expect(os.Mkdir(filepath.Join(sub, ".git"), 0o755)).To(Succeed())
-		cfg, parses := loadCounting(sub)
+		Expect(os.Mkdir(filepath.Join(leaf, ".git"), 0o755)).To(Succeed())
+		cfg, parses := loadCounting(leaf)
 		Expect(cfg.Procfile).To(Equal(ProcfileConfig{Mem: "2g"}))
 		Expect(parses).To(BeEquivalentTo(1))
 	})
