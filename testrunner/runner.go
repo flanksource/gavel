@@ -1278,14 +1278,12 @@ func (o *TestOrchestrator) runPackageTest(
 	if o.OutputTee != nil {
 		testRun.Process.Stream(o.OutputTee, o.OutputTee)
 	}
-	// For ginkgo, tap stdout into a streaming parser so the UI reflects
-	// per-spec progress while the subprocess is still running. The final
-	// authoritative result still comes from the --json-report file once the
-	// run finishes.
-	var ginkgoStream *parsers.GinkgoStreamWriter
-	if framework == parsers.Ginkgo && o.streamer != nil {
-		ginkgoStream = parsers.NewGinkgoStreamWriter(pkgPath, o.streamer)
-		testRun.Process.Stream(ginkgoStream, io.Discard)
+	// Tap stdout into a streaming parser so the UI reflects per-test progress
+	// while the subprocess is still running. The final authoritative result
+	// still comes from the framework's report once the run finishes.
+	progressStream := o.newProgressStream(framework, pkgPath)
+	if progressStream != nil {
+		testRun.Process.Stream(progressStream, io.Discard)
 	}
 	// Execute the test process in the orchestrator
 	process := testRun.Process.WithTask(t)
@@ -1306,8 +1304,8 @@ func (o *TestOrchestrator) runPackageTest(
 	runDuration := time.Since(runStart)
 	cancelPkg()
 	timedOut := supervision.TimedOut()
-	if ginkgoStream != nil {
-		ginkgoStream.Flush()
+	if progressStream != nil {
+		progressStream.Flush()
 	}
 	usage, err := span.usage(process.Pid())
 	if err != nil {

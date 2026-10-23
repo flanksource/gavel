@@ -1,6 +1,9 @@
 package runners
 
 import (
+	"crypto/sha256"
+	_ "embed"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,8 +13,12 @@ import (
 	"github.com/flanksource/gavel/testrunner/parsers"
 )
 
-// Vitest runs vitest tests via `vitest run --reporter=json --outputFile=...`.
-// The JSON reporter output is Jest-compatible so we reuse the Jest parser.
+//go:embed vitest_reporter.mjs
+var vitestReporterSource []byte
+
+// Vitest runs vitest tests via `vitest run --reporter=json --outputFile.json=...`.
+// The JSON reporter output is Jest-compatible so we reuse the Jest parser; a
+// second gavel reporter streams per-test progress frames on stdout.
 type Vitest struct {
 	workDir string
 	parser  parsers.ResultParser
@@ -67,9 +74,14 @@ func (r *Vitest) BuildCommand(packagePath string, extraArgs ...string) (*TestRun
 		return nil, fmt.Errorf("create vitest report dir: %w", err)
 	}
 
+	reporterPath, err := r.writeReporter()
+	if err != nil {
+		return nil, err
+	}
+
 	cmd, pre := DetectPackageManager(cwd)
 	args := append([]string{}, pre...)
-	args = append(args, "vitest", "run", "--reporter=json", "--outputFile="+reportPath)
+	args = append(args, "vitest", "run", "--reporter=json", "--outputFile.json="+reportPath, "--reporter="+reporterPath)
 	args = append(args, extraArgs...)
 
 	process := exec.NewExec(cmd, args...).WithCwd(cwd).WithProcessGroup()
@@ -82,4 +94,18 @@ func (r *Vitest) BuildCommand(packagePath string, extraArgs ...string) (*TestRun
 		Process:    process,
 		ReportPath: reportPath,
 	}, nil
+}
+
+// writeReporter materializes the embedded live-progress reporter under
+// .vitest/, content-addressed so concurrent package runs share one file.
+func (r *Vitest) writeReporter() (string, error) {
+	digest := sha256.Sum256(vitestReporterSource)
+	path, err := filepath.Abs(filepath.Join(r.workDir, ".vitest", "gavel-reporter-"+hex.EncodeToString(digest[:8])+".mjs"))
+	if err != nil {
+		return "", err
+	}
+	if err := writeOverlayFile(path, vitestReporterSource); err != nil {
+		return "", fmt.Errorf("write vitest progress reporter: %w", err)
+	}
+	return path, nil
 }
