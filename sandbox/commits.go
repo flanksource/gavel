@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/flanksource/gavel/internal/safefs"
 	"github.com/google/uuid"
 )
 
@@ -161,7 +162,7 @@ func (s *Sources) LeaveOut(ctx context.Context, repo Repo, branch, base, head st
 	if err != nil {
 		return "", fmt.Errorf("make an index to leave out files: %w", err)
 	}
-	defer os.RemoveAll(index)
+	defer safefs.SafeRemove(index, safefs.RemoveContext{AllowedRoot: os.TempDir()}) //nolint:errcheck
 	// update-index refuses to run without a work tree; an empty one is never read.
 	env := []string{"GIT_INDEX_FILE=" + filepath.Join(index, "index"), "GIT_WORK_TREE=" + index}
 	git := func(args ...string) (string, error) {
