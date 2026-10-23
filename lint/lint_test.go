@@ -636,6 +636,7 @@ func TestExecuteRunsNestedOxlintWithWorkspaceLocalBinary(t *testing.T) {
 		}
 	}
 	t.Setenv("PATH", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 
 	results, err := Execute(Options{WorkDir: repo, Timeout: "5s"})
 	if err != nil {
