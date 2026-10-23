@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/flanksource/gavel/lifecycle"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/google/uuid"
 )
@@ -39,7 +40,7 @@ func IdentityFor(seed string) Identity {
 }
 
 // Identity is the identity a step run of this todo would be admitted under.
-func (h *Host) Identity(todo *types.TODO, step Step) (Identity, error) {
+func (h *Host) Identity(todo *types.TODO, step lifecycle.Step) (Identity, error) {
 	if todo == nil {
 		return Identity{}, fmt.Errorf("lifecycle identity: todo is nil")
 	}

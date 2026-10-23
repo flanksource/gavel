@@ -9,6 +9,7 @@ import (
 
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/commons-db/shell"
+	"github.com/flanksource/gavel/lifecycle"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/native"
 	"github.com/flanksource/gavel/todos/types"
@@ -69,7 +70,7 @@ func reusedBranchNotice(previous api.WorktreeState) string {
 // prompt is told which commits the branch already holds. The notice is run
 // framing, not task text, so it rides the appended system prompt — which a
 // project's `todos.run.prompt.user` override never replaces.
-func (h *Host) applyReusedBranch(ctx context.Context, todo *types.TODO, step Step, prepared *preparedStep) error {
+func (h *Host) applyReusedBranch(ctx context.Context, todo *types.TODO, step lifecycle.Step, prepared *preparedStep) error {
 	if prepared.class != types.ModeRun {
 		return fmt.Errorf("step %s: reusing a run's branch applies to a run step, not a %s step", step.Name, prepared.class)
 	}

@@ -6,8 +6,9 @@ import (
 
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/commons-db/shell"
+	"github.com/flanksource/gavel/lifecycle"
 	"github.com/flanksource/gavel/todos"
-	"github.com/flanksource/gavel/todos/lifecycle"
+	lifecycle1 "github.com/flanksource/gavel/todos/lifecycle"
 	"github.com/flanksource/gavel/todos/native"
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
@@ -22,7 +23,7 @@ var _ = Describe("Host Resolve with a reused branch", func() {
 	)
 	var (
 		provider *fakeProvider
-		host     *lifecycle.Host
+		host     *lifecycle1.Host
 		ctx      context.Context
 		run      lifecycle.Step
 		// request sets the worktree keep and ignored settings a reuse preserves.
@@ -44,8 +45,8 @@ var _ = Describe("Host Resolve with a reused branch", func() {
 		}}
 	})
 
-	resolve := func() (*lifecycle.Resolution, error) {
-		return host.Resolve(ctx, hostTodo(), run, lifecycle.RunOptions{ReuseBranch: true, Request: request})
+	resolve := func() (*lifecycle1.Resolution, error) {
+		return host.Resolve(ctx, hostTodo(), run, lifecycle1.RunOptions{ReuseBranch: true, Request: request})
 	}
 	checkoutOf := func(worktree *shell.Worktree) *shell.Checkout {
 		return &shell.Checkout{Mode: shell.CheckoutLocal, Worktree: worktree}
@@ -114,13 +115,13 @@ var _ = Describe("Host Resolve with a reused branch", func() {
 	)
 
 	It("refuses to reuse a branch for a step that is not a run", func() {
-		_, err := host.Resolve(ctx, hostTodo(), stepNamed(host.Def, "plan"), lifecycle.RunOptions{ReuseBranch: true})
+		_, err := host.Resolve(ctx, hostTodo(), stepNamed(host.Def, "plan"), lifecycle1.RunOptions{ReuseBranch: true})
 
 		Expect(err).To(MatchError(ContainSubstring("reusing a run's branch applies to a run step")))
 	})
 
 	It("leaves a run that does not reuse a branch on a fresh worktree", func() {
-		resolution, err := host.Resolve(ctx, hostTodo(), run, lifecycle.RunOptions{Request: request})
+		resolution, err := host.Resolve(ctx, hostTodo(), run, lifecycle1.RunOptions{Request: request})
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(resolution.Spec.Setup.Checkout.Worktree.Mode).To(Equal(shell.WorktreeNew))

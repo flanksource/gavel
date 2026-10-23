@@ -5,8 +5,9 @@ import (
 
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/commons-db/shell"
+	"github.com/flanksource/gavel/lifecycle"
 	"github.com/flanksource/gavel/todos"
-	"github.com/flanksource/gavel/todos/lifecycle"
+	lifecycle1 "github.com/flanksource/gavel/todos/lifecycle"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -53,7 +54,7 @@ var _ = Describe("RunStep in-loop verification in a worktree", func() {
 		todo.VerificationMarkdown = inLinkedWorktree
 		agent := &scriptedProvider{events: scriptedTurn(`{"success":true,"event":"completed","comment":"Built it."}`, true)}
 
-		outcome, err := host.RunStep(context.Background(), todo, stepNamed(engine, "run"), lifecycle.RunOptions{Provider: agent})
+		outcome, err := host.RunStep(context.Background(), todo, stepNamed(engine, "run"), lifecycle1.RunOptions{Provider: agent})
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(outcome.Result.Verify).NotTo(BeNil())
