@@ -13,7 +13,7 @@ permissions:
 env:
   GO_VERSION: "1.26"
   NODE_VERSION: "22"
-  REGISTRY_IMAGE: ghcr.io/${{ github.repository_owner }}/gavel
+  REGISTRY: ghcr.io/${{ github.repository_owner }}
 
 jobs:
   tag:
@@ -127,8 +127,10 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  # gavel is the CLI and hosted serve image, built from the release binary; gavel-runner is the
+  # image sandbox jobs run in, built from source by sandbox/runner.Dockerfile.
   build-docker:
-    name: Build image ${{ matrix.platform }}
+    name: Build ${{ matrix.image }} ${{ matrix.platform }}
     needs: [tag, build-binaries]
     if: needs.tag.outputs.created == 'true'
     runs-on: ${{ matrix.runner }}
@@ -136,20 +138,24 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { platform: linux/amd64, runner: ubuntu-latest,    goarch: amd64, pair: linux-amd64 }
-          - { platform: linux/arm64, runner: ubuntu-24.04-arm, goarch: arm64, pair: linux-arm64 }
+          - { image: gavel,        dockerfile: Dockerfile,                platform: linux/amd64, runner: ubuntu-latest,    goarch: amd64, pair: linux-amd64 }
+          - { image: gavel,        dockerfile: Dockerfile,                platform: linux/arm64, runner: ubuntu-24.04-arm, goarch: arm64, pair: linux-arm64 }
+          - { image: gavel-runner, dockerfile: sandbox/runner.Dockerfile, platform: linux/amd64, runner: ubuntu-latest,    goarch: amd64, pair: linux-amd64 }
+          - { image: gavel-runner, dockerfile: sandbox/runner.Dockerfile, platform: linux/arm64, runner: ubuntu-24.04-arm, goarch: arm64, pair: linux-arm64 }
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.tag.outputs.tag }}
 
       - name: Download linux binary
+        if: matrix.image == 'gavel'
         uses: actions/download-artifact@v4
         with:
           name: binary-linux-${{ matrix.goarch }}
           path: .
 
       - name: Extract binary
+        if: matrix.image == 'gavel'
         run: |
           tar -xzf "gavel_linux_${{ matrix.goarch }}.tar.gz"
           chmod +x gavel
@@ -167,16 +173,17 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY_IMAGE }}
+          images: ${{ env.REGISTRY }}/${{ matrix.image }}
 
       - name: Build and push by digest
         id: build
         uses: docker/build-push-action@v6
         with:
           context: .
+          file: ${{ matrix.dockerfile }}
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
-          outputs: type=image,name=${{ env.REGISTRY_IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
 
       - name: Export digest
         run: |
@@ -186,22 +193,25 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: digests-${{ matrix.pair }}
+          name: digests-${{ matrix.pair }}-${{ matrix.image }}
           path: ${{ runner.temp }}/digests/*
           if-no-files-found: error
           retention-days: 1
 
   merge-docker:
-    name: Merge multi-arch manifest
+    name: Merge ${{ matrix.image }} multi-arch manifest
     needs: [tag, build-docker]
     if: needs.tag.outputs.created == 'true'
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        image: [gavel, gavel-runner]
     steps:
       - name: Download digests
         uses: actions/download-artifact@v4
         with:
           path: ${{ runner.temp }}/digests
-          pattern: digests-*
+          pattern: digests-*-${{ matrix.image }}
           merge-multiple: true
 
       - uses: docker/setup-buildx-action@v3
@@ -216,7 +226,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY_IMAGE }}
+          images: ${{ env.REGISTRY }}/${{ matrix.image }}
           tags: |
             type=raw,value=${{ needs.tag.outputs.tag }}
             type=raw,value=latest
@@ -229,11 +239,61 @@ jobs:
           # shellcheck disable=SC2046 # word-splitting is required to pass -t tags and digest refs as separate args
           docker buildx imagetools create \
             $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
-            $(printf '${{ env.REGISTRY_IMAGE }}@sha256:%s ' *)
+            $(printf '${{ env.REGISTRY }}/${{ matrix.image }}@sha256:%s ' *)
 
       - name: Inspect image
         run: |
-          docker buildx imagetools inspect "${{ env.REGISTRY_IMAGE }}:${{ needs.tag.outputs.tag }}"
+          docker buildx imagetools inspect "${{ env.REGISTRY }}/${{ matrix.image }}:${{ needs.tag.outputs.tag }}"
+
+  # Packages chart/ at the release's version, with the release's images: gavel by tag and the
+  # sandbox runner by digest, since substrate runs images only by digest.
+  helm:
+    name: Package Helm chart
+    needs: [tag, merge-docker]
+    if: needs.tag.outputs.created == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.tag.outputs.tag }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Set up Helm
+        uses: azure/setup-helm@b9e51907a09c216f16ebe8536097933489208112 # v4.3.0
+
+      - name: Set chart versions and runner image
+        env:
+          TAG: ${{ needs.tag.outputs.tag }}
+        run: |
+          digest=$(docker buildx imagetools inspect "${{ env.REGISTRY }}/gavel-runner:$TAG" --format '{{json .Manifest}}' | jq -r .digest)
+          export VERSION="${TAG#v}" APP_VERSION="$TAG" RUNNER="${{ env.REGISTRY }}/gavel-runner@$digest"
+          yq -i '.version = strenv(VERSION) | .appVersion = strenv(APP_VERSION)' chart/Chart.yaml
+          yq -i '.sandbox.image = strenv(RUNNER)' chart/values.yaml
+
+      - name: Package chart
+        run: helm package chart
+
+      - name: Upload helm chart artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: helm-chart
+          path: gavel-*.tgz
+          if-no-files-found: error
+
+  push-helm-chart:
+    needs: [tag, helm]
+    if: needs.tag.outputs.created == 'true'
+    permissions:
+      actions: read
+      contents: read
+    uses: flanksource/action-workflows/.github/workflows/push-helm-chart.yml@5d7f5f3616936fd703e58c5ee7e4527dc9f6adcc # main
+    with:
+      filename_regex: "gavel-*.tgz"
+      version: ${{ needs.tag.outputs.tag }}
+      pr_title: "Release ${{ needs.tag.outputs.tag }} of ${{ github.repository }}"
+    secrets:
+      token: ${{ secrets.FLANKBOT }}
 
   release:
     name: Create GitHub release
