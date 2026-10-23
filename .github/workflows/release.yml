@@ -128,7 +128,8 @@ jobs:
           retention-days: 1
 
   # gavel is the CLI and hosted serve image, built from the release binary; gavel-runner is the
-  # image sandbox jobs run in, built from source by sandbox/runner.Dockerfile.
+  # image sandbox jobs run in, built from source by sandbox/runner.Dockerfile for amd64 only, the
+  # architecture hosted clusters run.
   build-docker:
     name: Build ${{ matrix.image }} ${{ matrix.platform }}
     needs: [tag, build-binaries]
@@ -141,7 +142,6 @@ jobs:
           - { image: gavel,        dockerfile: Dockerfile,                platform: linux/amd64, runner: ubuntu-latest,    goarch: amd64, pair: linux-amd64 }
           - { image: gavel,        dockerfile: Dockerfile,                platform: linux/arm64, runner: ubuntu-24.04-arm, goarch: arm64, pair: linux-arm64 }
           - { image: gavel-runner, dockerfile: sandbox/runner.Dockerfile, platform: linux/amd64, runner: ubuntu-latest,    goarch: amd64, pair: linux-amd64 }
-          - { image: gavel-runner, dockerfile: sandbox/runner.Dockerfile, platform: linux/arm64, runner: ubuntu-24.04-arm, goarch: arm64, pair: linux-arm64 }
     steps:
       - uses: actions/checkout@v4
         with:
