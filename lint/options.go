@@ -25,6 +25,7 @@ type Options struct {
 	Runtime      processruntime.Options `flag:"-" yaml:"runtime,omitempty" json:"runtime,omitempty"`
 	Linters      []string               `flag:"linters" yaml:"linters,omitempty" help:"Only run the named linters (comma-separated or repeated). Empty = run every detected linter. Unknown names hard-fail."`
 	Ignore       []string               `flag:"ignore" yaml:"ignore,omitempty" help:"Glob patterns to exclude from linting"`
+	Exclude      []string               `flag:"exclude" yaml:"exclude,omitempty" help:"Exclude rule IDs or * patterns, optionally source:rule (repeat or comma-separate); disable native rules where supported"`
 	Triage       bool                   `flag:"triage" yaml:"triage,omitempty" help:"Interactive mode to select violation types to ignore"`
 	Fix          bool                   `flag:"fix" yaml:"fix,omitempty" help:"Enable auto-fixing"`
 	NoCache      bool                   `flag:"no-lint-cache" yaml:"no-lint-cache,omitempty" help:"Disable linter result caching/debounce"`
@@ -67,6 +68,9 @@ func (o Options) Pretty() api.Text {
 	if len(o.Linters) > 0 {
 		t = t.Append("Linters: ", "text-muted").Append(strings.Join(o.Linters, ","), "text-blue-500").Space()
 	}
+	if len(o.Exclude) > 0 {
+		t = t.Append("Exclude: ", "text-muted").Append(strings.Join(o.Exclude, ","), "text-blue-500").Space()
+	}
 	if o.Fix {
 		t = t.Append("Fix: on", "text-green-500").Space()
 	}
@@ -98,6 +102,8 @@ Examples:
   gavel lint jscpd eslint
   gavel lint react-doctor
   gavel lint uir                     # SQL rules from .uir.yaml
+  gavel lint uir --exclude 'small-*'
+  gavel lint --exclude 'ruff:F401,eslint:no-debugger'
   gavel lint secrets                 # alias for betterleaks
   gavel lint --linters=golangci-lint
   gavel lint --linters=golangci-lint,ruff
