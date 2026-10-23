@@ -171,15 +171,7 @@ func (p *JestJSON) Parse(output io.Reader) ([]Test, error) {
 		// synthetic failing test so the UI has somewhere to show the
 		// error instead of silently swallowing it.
 		if len(file.AssertionResults) == 0 && file.Status == "failed" {
-			tests = append(tests, Test{
-				Name:      filepath.Base(relFile),
-				File:      relFile,
-				Failed:    true,
-				Framework: p.framework,
-				Message:   setupMessage,
-				Stderr:    strings.TrimSpace(file.Message), // keep ANSI for AnsiHtml render
-				Stdout:    consoleText,
-			})
+			tests = append(tests, p.collectionError(relFile, file.Message, consoleText))
 			continue
 		}
 		for _, a := range file.AssertionResults {
@@ -187,6 +179,18 @@ func (p *JestJSON) Parse(output io.Reader) ([]Test, error) {
 		}
 	}
 	return tests, nil
+}
+
+func (p *JestJSON) collectionError(relFile, rawMessage, consoleText string) Test {
+	return Test{
+		Name:      filepath.Base(relFile),
+		File:      relFile,
+		Failed:    true,
+		Framework: p.framework,
+		Message:   StripANSI(strings.TrimSpace(rawMessage)),
+		Stderr:    strings.TrimSpace(rawMessage), // keep ANSI for AnsiHtml render
+		Stdout:    consoleText,
+	}
 }
 
 func (p *JestJSON) toTest(a jestAssertion, relFile, setupMessage, consoleText, rawFileMessage string) Test {
