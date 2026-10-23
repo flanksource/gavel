@@ -2402,6 +2402,389 @@
             "object"
           ],
           "x-prompt-id": "pr.fix"
+        },
+        "lifecycle": {
+          "additionalProperties": false,
+          "description": "Overrides the built-in lifecycle: ordered steps with a Captain prompt reference, a CEL `when` over subject/event/runs/last, and ordered `outcomes` mapping the finished run onto a status. Either `file` (a lifecycle YAML relative to the project) or an inline `name`/`subject`/`steps`. A step named like an inherited step replaces it wholesale; a new name is appended. TODO verification must remain enabled.",
+          "properties": {
+            "disabled": {
+              "description": "Inherited step names to disable. An explicit empty list re-enables inherited steps. TODO verification cannot be disabled.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "file": {
+              "description": "Path to a lifecycle YAML document, relative to the project root. Mutually exclusive with the inline form.",
+              "type": "string"
+            },
+            "name": {
+              "description": "Name of the lifecycle; inherits the built-in name.",
+              "type": "string"
+            },
+            "order": {
+              "description": "Step names in priority order. Unlisted steps retain their inherited relative order.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "steps": {
+              "description": "Steps to replace or add: {name, prompt, events, when, inputs, spec, outcomes, auxiliary}. Outcomes are `{status, when}` pairs evaluated in order; the first true wins and none true is an error.",
+              "items": {
+                "additionalProperties": false,
+                "description": "One lifecycle step.",
+                "properties": {
+                  "auxiliary": {
+                    "description": "Offer for explicit selection without making it the default next step.",
+                    "type": "boolean"
+                  },
+                  "events": {
+                    "description": "Allowed events in the prompt's result envelope.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "inputs": {
+                    "additionalProperties": {
+                      "description": "CEL expression.",
+                      "type": "string"
+                    },
+                    "description": "Prompt inputs, mapped to CEL expressions.",
+                    "type": "object"
+                  },
+                  "name": {
+                    "description": "Unique lower-case step name.",
+                    "type": "string"
+                  },
+                  "outcomes": {
+                    "items": {
+                      "additionalProperties": false,
+                      "description": "First matching outcome wins.",
+                      "properties": {
+                        "status": {
+                          "description": "Outcome name; TODO workflows require a supported TODO status.",
+                          "type": "string"
+                        },
+                        "when": {
+                          "description": "CEL predicate over the completed run.",
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "prompt": {
+                    "description": "Built-in prompt ID or file:\u003cproject prompt path\u003e.",
+                    "type": "string"
+                  },
+                  "spec": {
+                    "additionalProperties": false,
+                    "description": "Captain execution settings for this step.",
+                    "properties": {
+                      "budget": {
+                        "$ref": "#/$defs/Budget"
+                      },
+                      "callerTools": {
+                        "type": "boolean"
+                      },
+                      "cliArgs": {
+                        "type": "object"
+                      },
+                      "effort": {
+                        "enum": [
+                          "",
+                          "low",
+                          "medium",
+                          "high",
+                          "xhigh",
+                          "max",
+                          "ultra"
+                        ],
+                        "type": "string"
+                      },
+                      "fallbacks": {
+                        "$ref": "#/$defs/ModelList"
+                      },
+                      "id": {
+                        "type": "string"
+                      },
+                      "interrupt": {
+                        "type": "boolean"
+                      },
+                      "labels": {
+                        "additionalProperties": {
+                          "type": "string"
+                        },
+                        "type": "object"
+                      },
+                      "mediaTypes": {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      },
+                      "memory": {
+                        "$ref": "#/$defs/Memory"
+                      },
+                      "messages": {
+                        "items": {
+                          "$ref": "#/$defs/Message"
+                        },
+                        "type": "array"
+                      },
+                      "mode": {
+                        "enum": [
+                          "api",
+                          "agent",
+                          "cli",
+                          "cmux"
+                        ],
+                        "type": "string"
+                      },
+                      "model": {
+                        "description": "",
+                        "type": "string"
+                      },
+                      "noCache": {
+                        "type": "boolean"
+                      },
+                      "permissions": {
+                        "$ref": "#/$defs/Permissions"
+                      },
+                      "prompt": {
+                        "$ref": "#/$defs/Prompt"
+                      },
+                      "resume": {
+                        "type": "boolean"
+                      },
+                      "sandbox": {
+                        "$ref": "#/$defs/SandboxRef"
+                      },
+                      "sessionId": {
+                        "type": "string"
+                      },
+                      "setup": {
+                        "$ref": "#/$defs/Setup"
+                      },
+                      "steer": {
+                        "type": "boolean"
+                      },
+                      "streaming": {
+                        "type": "boolean"
+                      },
+                      "temperature": {
+                        "type": "number"
+                      },
+                      "toolApproval": {
+                        "$ref": "#/$defs/ToolApprovalResume"
+                      },
+                      "toolPolicy": {
+                        "$ref": "#/$defs/PermissionPolicy"
+                      },
+                      "toolPreferences": {
+                        "$ref": "#/$defs/ToolPreferences"
+                      },
+                      "workflow": {
+                        "$ref": "#/$defs/Workflow"
+                      }
+                    },
+                    "required": [
+                      "model"
+                    ],
+                    "type": "object"
+                  },
+                  "tools": {
+                    "description": "Tool sets available to this step.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "when": {
+                    "description": "CEL applicability over subject, event, runs and last.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name",
+                  "prompt",
+                  "events",
+                  "outcomes"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "subject": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "Extra subject declarations a custom step's predicates may read, field → CEL type (string, bool, int, double, dyn, list\u003cstring\u003e, list\u003cdyn\u003e, map\u003cstring,dyn\u003e).",
+              "type": "object"
+            }
+          },
+          "type": "object"
+        },
+        "review": {
+          "additionalProperties": false,
+          "description": "Read-only review of a PR creation or update.",
+          "properties": {
+            "budget": {
+              "additionalProperties": false,
+              "description": "Resource ceilings for the run. Zero/unset means unbounded.",
+              "properties": {
+                "cost": {
+                  "description": "Maximum spend in USD; 0 = no ceiling.",
+                  "type": "number"
+                },
+                "maxTokens": {
+                  "description": "Cap on output tokens per model call; 0 = backend default.",
+                  "type": "integer"
+                },
+                "maxTurns": {
+                  "description": "Cap on agent turns; 0 = backend default.",
+                  "type": "integer"
+                }
+              },
+              "type": "object"
+            },
+            "effort": {
+              "description": "Reasoning effort for thinking-capable models.",
+              "enum": [
+                "",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max",
+                "ultra"
+              ],
+              "type": "string"
+            },
+            "fallbacks": {
+              "description": "Alternative model slugs tried in order when the primary is unavailable or its provider cannot be constructed.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "file": {
+              "description": "Path to a .prompt file whose frontmatter/body supply this operation's spec. Relative paths resolve against the .gavel.yaml directory.",
+              "type": "string"
+            },
+            "model": {
+              "description": "Catalog model slug for this operation (e.g. claude-haiku-4-5). Overrides the base ai.model.",
+              "type": "string"
+            },
+            "prompt": {
+              "additionalProperties": false,
+              "description": "The prompt body. A bare string in place of the whole spec is shorthand for prompt.user.",
+              "properties": {
+                "system": {
+                  "description": "Optional system-prompt framing.",
+                  "type": "string"
+                },
+                "user": {
+                  "description": "The user prompt / template body (Handlebars).",
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "workflow": {
+              "$ref": "#/$defs/Workflow",
+              "description": "Loop shape for operations that run one: verify commands (the definition of done, whose exit code gates a re-run and whose output tail becomes the feedback) and the commit policy. Overriding it replaces the operation's declared workflow field-wise."
+            }
+          },
+          "type": [
+            "string",
+            "object"
+          ],
+          "x-prompt-id": "pr.review"
+        },
+        "steps": {
+          "additionalProperties": {
+            "additionalProperties": false,
+            "description": "Spec overrides for this PR lifecycle step.",
+            "properties": {
+              "budget": {
+                "additionalProperties": false,
+                "description": "Resource ceilings for the run. Zero/unset means unbounded.",
+                "properties": {
+                  "cost": {
+                    "description": "Maximum spend in USD; 0 = no ceiling.",
+                    "type": "number"
+                  },
+                  "maxTokens": {
+                    "description": "Cap on output tokens per model call; 0 = backend default.",
+                    "type": "integer"
+                  },
+                  "maxTurns": {
+                    "description": "Cap on agent turns; 0 = backend default.",
+                    "type": "integer"
+                  }
+                },
+                "type": "object"
+              },
+              "effort": {
+                "description": "Reasoning effort for thinking-capable models.",
+                "enum": [
+                  "",
+                  "low",
+                  "medium",
+                  "high",
+                  "xhigh",
+                  "max",
+                  "ultra"
+                ],
+                "type": "string"
+              },
+              "fallbacks": {
+                "description": "Alternative model slugs tried in order when the primary is unavailable or its provider cannot be constructed.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "file": {
+                "description": "Path to a .prompt file whose frontmatter/body supply this operation's spec. Relative paths resolve against the .gavel.yaml directory.",
+                "type": "string"
+              },
+              "model": {
+                "description": "Catalog model slug for this operation (e.g. claude-haiku-4-5). Overrides the base ai.model.",
+                "type": "string"
+              },
+              "prompt": {
+                "additionalProperties": false,
+                "description": "The prompt body. A bare string in place of the whole spec is shorthand for prompt.user.",
+                "properties": {
+                  "system": {
+                    "description": "Optional system-prompt framing.",
+                    "type": "string"
+                  },
+                  "user": {
+                    "description": "The user prompt / template body (Handlebars).",
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "workflow": {
+                "$ref": "#/$defs/Workflow",
+                "description": "Loop shape for operations that run one: verify commands (the definition of done, whose exit code gates a re-run and whose output tail becomes the feedback) and the commit policy. Overriding it replaces the operation's declared workflow field-wise."
+              }
+            },
+            "type": [
+              "string",
+              "object"
+            ],
+            "x-prompt-id": ""
+          },
+          "description": "Captain spec overrides for named PR lifecycle steps.",
+          "type": "object"
         }
       },
       "type": "object"
@@ -3106,19 +3489,215 @@
         },
         "lifecycle": {
           "additionalProperties": false,
-          "description": "Overrides the built-in todo lifecycle: the ordered steps (a captain prompt reference, a CEL `when` over subject/runs/last, and ordered `outcomes` mapping the finished run onto a status). Either `file` (a lifecycle YAML relative to the project) or an inline `name`/`subject`/`steps`. A step named like a built-in step replaces it wholesale; a new name is appended. A `verify` step must remain.",
+          "description": "Overrides the built-in lifecycle: ordered steps with a Captain prompt reference, a CEL `when` over subject/event/runs/last, and ordered `outcomes` mapping the finished run onto a status. Either `file` (a lifecycle YAML relative to the project) or an inline `name`/`subject`/`steps`. A step named like an inherited step replaces it wholesale; a new name is appended. TODO verification must remain enabled.",
           "properties": {
+            "disabled": {
+              "description": "Inherited step names to disable. An explicit empty list re-enables inherited steps. TODO verification cannot be disabled.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
             "file": {
               "description": "Path to a lifecycle YAML document, relative to the project root. Mutually exclusive with the inline form.",
               "type": "string"
             },
             "name": {
-              "description": "Name of the lifecycle; defaults to the built-in `todos`.",
+              "description": "Name of the lifecycle; inherits the built-in name.",
               "type": "string"
             },
-            "steps": {
-              "description": "Steps to replace or add: {name, prompt, envelope, when, inputs, spec, outcomes, auxiliary}. Outcomes are `{status, when}` pairs evaluated in order; the first true wins and none true is an error.",
+            "order": {
+              "description": "Step names in priority order. Unlisted steps retain their inherited relative order.",
               "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "steps": {
+              "description": "Steps to replace or add: {name, prompt, events, when, inputs, spec, outcomes, auxiliary}. Outcomes are `{status, when}` pairs evaluated in order; the first true wins and none true is an error.",
+              "items": {
+                "additionalProperties": false,
+                "description": "One lifecycle step.",
+                "properties": {
+                  "auxiliary": {
+                    "description": "Offer for explicit selection without making it the default next step.",
+                    "type": "boolean"
+                  },
+                  "events": {
+                    "description": "Allowed events in the prompt's result envelope.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "inputs": {
+                    "additionalProperties": {
+                      "description": "CEL expression.",
+                      "type": "string"
+                    },
+                    "description": "Prompt inputs, mapped to CEL expressions.",
+                    "type": "object"
+                  },
+                  "name": {
+                    "description": "Unique lower-case step name.",
+                    "type": "string"
+                  },
+                  "outcomes": {
+                    "items": {
+                      "additionalProperties": false,
+                      "description": "First matching outcome wins.",
+                      "properties": {
+                        "status": {
+                          "description": "Outcome name; TODO workflows require a supported TODO status.",
+                          "type": "string"
+                        },
+                        "when": {
+                          "description": "CEL predicate over the completed run.",
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "prompt": {
+                    "description": "Built-in prompt ID or file:\u003cproject prompt path\u003e.",
+                    "type": "string"
+                  },
+                  "spec": {
+                    "additionalProperties": false,
+                    "description": "Captain execution settings for this step.",
+                    "properties": {
+                      "budget": {
+                        "$ref": "#/$defs/Budget"
+                      },
+                      "callerTools": {
+                        "type": "boolean"
+                      },
+                      "cliArgs": {
+                        "type": "object"
+                      },
+                      "effort": {
+                        "enum": [
+                          "",
+                          "low",
+                          "medium",
+                          "high",
+                          "xhigh",
+                          "max",
+                          "ultra"
+                        ],
+                        "type": "string"
+                      },
+                      "fallbacks": {
+                        "$ref": "#/$defs/ModelList"
+                      },
+                      "id": {
+                        "type": "string"
+                      },
+                      "interrupt": {
+                        "type": "boolean"
+                      },
+                      "labels": {
+                        "additionalProperties": {
+                          "type": "string"
+                        },
+                        "type": "object"
+                      },
+                      "mediaTypes": {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      },
+                      "memory": {
+                        "$ref": "#/$defs/Memory"
+                      },
+                      "messages": {
+                        "items": {
+                          "$ref": "#/$defs/Message"
+                        },
+                        "type": "array"
+                      },
+                      "mode": {
+                        "enum": [
+                          "api",
+                          "agent",
+                          "cli",
+                          "cmux"
+                        ],
+                        "type": "string"
+                      },
+                      "model": {
+                        "description": "",
+                        "type": "string"
+                      },
+                      "noCache": {
+                        "type": "boolean"
+                      },
+                      "permissions": {
+                        "$ref": "#/$defs/Permissions"
+                      },
+                      "prompt": {
+                        "$ref": "#/$defs/Prompt"
+                      },
+                      "resume": {
+                        "type": "boolean"
+                      },
+                      "sandbox": {
+                        "$ref": "#/$defs/SandboxRef"
+                      },
+                      "sessionId": {
+                        "type": "string"
+                      },
+                      "setup": {
+                        "$ref": "#/$defs/Setup"
+                      },
+                      "steer": {
+                        "type": "boolean"
+                      },
+                      "streaming": {
+                        "type": "boolean"
+                      },
+                      "temperature": {
+                        "type": "number"
+                      },
+                      "toolApproval": {
+                        "$ref": "#/$defs/ToolApprovalResume"
+                      },
+                      "toolPolicy": {
+                        "$ref": "#/$defs/PermissionPolicy"
+                      },
+                      "toolPreferences": {
+                        "$ref": "#/$defs/ToolPreferences"
+                      },
+                      "workflow": {
+                        "$ref": "#/$defs/Workflow"
+                      }
+                    },
+                    "required": [
+                      "model"
+                    ],
+                    "type": "object"
+                  },
+                  "tools": {
+                    "description": "Tool sets available to this step.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "when": {
+                    "description": "CEL applicability over subject, event, runs and last.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name",
+                  "prompt",
+                  "events",
+                  "outcomes"
+                ],
                 "type": "object"
               },
               "type": "array"

@@ -4,8 +4,9 @@
 #
 # You can place `.gavel.yaml` in any of these locations:
 #   1. ~/.gavel.yaml
-#   2. <git-root>/.gavel.yaml
-#   3. <target-dir>/.gavel.yaml
+#   2. <git-root>/../.gavel.yaml (the git root's immediate parent only; shared by sibling checkouts)
+#   3. <git-root>/.gavel.yaml
+#   4. <target-dir>/.gavel.yaml
 #
 # Merge order is exactly the list above, with later layers overriding earlier ones.
 # Use `gavel config [path]` to inspect the merged result for a specific file or directory.

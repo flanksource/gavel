@@ -38,7 +38,7 @@ jobs:
 
       - name: Install site dependencies
         run: npm ci
-        working-directory: site
+        working-directory: docs
 
       - name: Install golangci-lint
         shell: bash
