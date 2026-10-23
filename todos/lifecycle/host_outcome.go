@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/flanksource/captain/pkg/api"
+	"github.com/flanksource/gavel/lifecycle"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/types"
 )
@@ -28,7 +29,7 @@ const OutcomeErrorKey = "error"
 //
 // The tools wrote while the run was going, so nothing is applied here. A step
 // that keeps the status still records the one its tools left the todo in.
-func (h *Host) OnOutcome(ctx context.Context, todo *types.TODO, step Step, outcome *StepOutcome, status string) error {
+func (h *Host) OnOutcome(ctx context.Context, todo *types.TODO, step lifecycle.Step, outcome *StepOutcome, status string) error {
 	if h.Provider == nil {
 		return fmt.Errorf("lifecycle outcome: host has no provider")
 	}
@@ -39,7 +40,7 @@ func (h *Host) OnOutcome(ctx context.Context, todo *types.TODO, step Step, outco
 	if !ok {
 		return fmt.Errorf("lifecycle outcome: provider %T cannot record events", h.Provider)
 	}
-	if status != OutcomeKeep && !validStatuses[status] {
+	if status != lifecycle.OutcomeKeep && !validStatuses[status] {
 		return fmt.Errorf("lifecycle outcome for step %s: %q is not a todo status", step.Name, status)
 	}
 	execution := outcome.Execution
@@ -47,7 +48,7 @@ func (h *Host) OnOutcome(ctx context.Context, todo *types.TODO, step Step, outco
 	defer cancel()
 
 	recorded := status
-	if status == OutcomeKeep && outcome.StartStatus != "" && todo.Status != outcome.StartStatus {
+	if status == lifecycle.OutcomeKeep && outcome.StartStatus != "" && todo.Status != outcome.StartStatus {
 		recorded = string(todo.Status)
 	}
 	update := h.stateUpdate(todo, step, execution, status)
@@ -71,7 +72,7 @@ func (h *Host) OnOutcome(ctx context.Context, todo *types.TODO, step Step, outco
 //
 // The todo is reloaded first: the write that failed may have left it at a
 // version the store has moved past, or with a status it never reached.
-func (h *Host) unpersistedOutcome(ctx context.Context, events todos.EventProvider, todo *types.TODO, step Step, outcome *StepOutcome, persistErr error) error {
+func (h *Host) unpersistedOutcome(ctx context.Context, events todos.EventProvider, todo *types.TODO, step lifecycle.Step, outcome *StepOutcome, persistErr error) error {
 	current, err := h.Provider.Get(ctx, todo.ID)
 	if err != nil {
 		return errors.Join(persistErr, fmt.Errorf("reload TODO to record its unpersisted outcome: %w", err))
@@ -86,7 +87,7 @@ func (h *Host) unpersistedOutcome(ctx context.Context, events todos.EventProvide
 // stateUpdate is everything the run changes about the todo besides the
 // attempt itself: the LLM metrics, the summary the dashboard shows, the plan
 // bookkeeping, and — unless the step kept it — the status.
-func (h *Host) stateUpdate(todo *types.TODO, step Step, execution *todos.ExecutionResult, status string) todos.StateUpdate {
+func (h *Host) stateUpdate(todo *types.TODO, step lifecycle.Step, execution *todos.ExecutionResult, status string) todos.StateUpdate {
 	if todo.LLM == nil {
 		todo.LLM = &types.LLM{}
 	}
@@ -107,7 +108,7 @@ func (h *Host) stateUpdate(todo *types.TODO, step Step, execution *todos.Executi
 	if execution.Summary != "" {
 		update.LastRunSummary = &execution.Summary
 	}
-	if execution.Plan != nil && status != OutcomeKeep {
+	if execution.Plan != nil && status != lifecycle.OutcomeKeep {
 		planStatus := execution.Plan.Status
 		update.PlanStatus = &planStatus
 		if status == string(types.StatusReview) {
@@ -115,7 +116,7 @@ func (h *Host) stateUpdate(todo *types.TODO, step Step, execution *todos.Executi
 			update.PlanPath = &path
 		}
 	}
-	if status != OutcomeKeep {
+	if status != lifecycle.OutcomeKeep {
 		next := types.Status(status)
 		todo.Status = next
 		update.Status = &next
@@ -126,7 +127,7 @@ func (h *Host) stateUpdate(todo *types.TODO, step Step, execution *todos.Executi
 // outcomeEvent is the run's single history entry: the step and the status it
 // chose, the run's comment, the definition-of-done line when verification ran,
 // and any error. persistErr, when set, is why the outcome was not persisted.
-func outcomeEvent(step Step, outcome *StepOutcome, status string, persistErr error) todos.Event {
+func outcomeEvent(step lifecycle.Step, outcome *StepOutcome, status string, persistErr error) todos.Event {
 	execution := outcome.Execution
 	body := fmt.Sprintf("**Lifecycle:** `%s` → `%s`", step.Name, status)
 	if summary := strings.TrimSpace(execution.Summary); summary != "" {
@@ -148,7 +149,7 @@ func outcomeEvent(step Step, outcome *StepOutcome, status string, persistErr err
 	return todos.Event{Kind: EventLifecycleOutcome, Body: body, Payload: payload}
 }
 
-func outcomePayload(step Step, outcome *StepOutcome, status string) map[string]any {
+func outcomePayload(step lifecycle.Step, outcome *StepOutcome, status string) map[string]any {
 	execution := outcome.Execution
 	envelope := map[string]any{"success": false, "event": ""}
 	if execution.Envelope != nil {

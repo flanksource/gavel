@@ -10,6 +10,7 @@ import (
 	"github.com/flanksource/captain/pkg/api"
 	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/captain/pkg/promptrun"
+	"github.com/flanksource/gavel/lifecycle"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/tools"
 	"github.com/flanksource/gavel/todos/types"
@@ -54,7 +55,7 @@ func RunOutcome(result *todos.ExecutionResult, verifyStep bool) promptrun.Outcom
 // execution now, so the approval broker built before dispatch addresses the run
 // Captain is about to admit; the dashboard hears of it only once the admission
 // is committed.
-func (h *Host) admit(exec *todos.ExecutorContext, todo *types.TODO, step Step, prepared *preparedStep, input *stepInput, opts RunOptions) (todos.RunPreparationResult, error) {
+func (h *Host) admit(exec *todos.ExecutorContext, todo *types.TODO, step lifecycle.Step, prepared *preparedStep, input *stepInput, opts RunOptions) (todos.RunPreparationResult, error) {
 	lifecycleProvider, ok := h.Provider.(todos.RunLifecycleProvider)
 	if !ok {
 		return todos.RunPreparationResult{}, nil
@@ -100,7 +101,7 @@ func (h *Host) admit(exec *todos.ExecutorContext, todo *types.TODO, step Step, p
 // its envelope, its definition of done, a stop — so Captain files the terminal
 // state gavel's outcomes act on. It collects a copy of the execution record: the
 // one the host keeps is collected once the run has returned.
-func (h *Host) recordedOutcome(runCtx context.Context, step Step, prepared *preparedStep, input *stepInput, start time.Time) func(promptrun.Result, error, bool) (promptrun.Outcome, error) {
+func (h *Host) recordedOutcome(runCtx context.Context, step lifecycle.Step, prepared *preparedStep, input *stepInput, start time.Time) func(promptrun.Result, error, bool) (promptrun.Outcome, error) {
 	return func(out promptrun.Result, runErr error, stopped bool) (promptrun.Outcome, error) {
 		base, err := promptrun.DefaultOutcome(out, runErr, stopped)
 		if err != nil || stopped || runErr != nil {

@@ -9,6 +9,7 @@ import (
 	captainai "github.com/flanksource/captain/pkg/ai"
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/captain/pkg/promptrun"
+	"github.com/flanksource/gavel/lifecycle"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/tools"
 	"github.com/flanksource/gavel/todos/types"
@@ -30,7 +31,7 @@ const errAskThroughTool = "todo prompts ask through todo_ask; the agent asked na
 // collect folds what came back from captain into the two records a finished
 // step needs: the facts the outcome predicates read, and the execution result
 // the provider persists as the attempt.
-func (h *Host) collect(step Step, prepared *preparedStep, d dispatched, start time.Time) *StepOutcome {
+func (h *Host) collect(step lifecycle.Step, prepared *preparedStep, d dispatched, start time.Time) *StepOutcome {
 	execution := d.execution
 	execution.Duration = time.Since(start)
 	out := d.out
@@ -52,8 +53,8 @@ func (h *Host) collect(step Step, prepared *preparedStep, d dispatched, start ti
 	if d.tools != nil {
 		execution.ToolWrites = d.tools.Writes()
 	}
-	facts := StepResult{
-		Run:    RunFacts{Iterations: execution.NumTurns, CostUSD: execution.CostUSD, StopReason: stopReason(out.Loop)},
+	facts := lifecycle.StepResult{
+		Run:    lifecycle.RunFacts{Iterations: execution.NumTurns, CostUSD: execution.CostUSD, StopReason: stopReason(out.Loop)},
 		Verify: out.Report,
 	}
 	switch {
@@ -85,7 +86,7 @@ func (h *Host) collect(step Step, prepared *preparedStep, d dispatched, start ti
 // an envelope was still decoded. The facts the outcomes read must say the
 // same, or a run captain stores as failed could land the todo in pending. The
 // attempt succeeded only when the run did and the agent claimed success.
-func settleRunFacts(execution *todos.ExecutionResult, facts *StepResult) {
+func settleRunFacts(execution *todos.ExecutionResult, facts *lifecycle.StepResult) {
 	if facts.Run.State == RunSucceeded && execution.ErrorMessage != "" {
 		facts.Run.State, facts.Run.Error = RunFailed, execution.ErrorMessage
 	}
@@ -104,7 +105,7 @@ func stopReason(loop *captainai.LoopResult) string {
 // collectVerify is a verify-only step's result: the report is the verdict, and
 // it is shaped into the same envelope an agent step returns, so its history
 // entry reads like every other run's.
-func collectVerify(execution *todos.ExecutionResult, facts *StepResult, report *api.VerifyReport, passed bool) {
+func collectVerify(execution *todos.ExecutionResult, facts *lifecycle.StepResult, report *api.VerifyReport, passed bool) {
 	if report == nil {
 		execution.ErrorMessage = "verification produced no report"
 		facts.Run.State, facts.Run.Error = RunFailed, execution.ErrorMessage
@@ -140,15 +141,15 @@ func verifyComment(report *api.VerifyReport, passed bool) string {
 	return reason + "\n\n" + strings.Join(lines, "\n")
 }
 
-func setEnvelope(execution *todos.ExecutionResult, facts *StepResult, env types.Envelope, extra map[string]any) {
+func setEnvelope(execution *todos.ExecutionResult, facts *lifecycle.StepResult, env types.Envelope, extra map[string]any) {
 	execution.Envelope = &env
 	execution.Summary = strings.TrimSpace(env.Comment)
-	facts.Envelope = Envelope{Success: env.Success, Event: env.Event, Comment: env.Comment, Extra: extra}
+	facts.Envelope = lifecycle.Envelope{Success: env.Success, Event: env.Event, Comment: env.Comment, Extra: extra}
 }
 
 // collectEnvelope decodes the agent's structured result and lifts it onto both
 // records, with the plan a plan-mode run produced.
-func collectEnvelope(execution *todos.ExecutionResult, facts *StepResult, step Step, prepared *preparedStep, out promptrun.Result, run *tools.Run) {
+func collectEnvelope(execution *todos.ExecutionResult, facts *lifecycle.StepResult, step lifecycle.Step, prepared *preparedStep, out promptrun.Result, run *tools.Run) {
 	// Captured before the decode, because the decode is what loses it: an agent
 	// that answered well in the wrong shape would otherwise leave nothing but
 	// "failed" for a reader to go on.
@@ -228,7 +229,7 @@ func responseText(response *api.Response) string {
 
 // decodeEnvelope resolves the response contract in precedence order: native
 // terminal outcome, structured data, response text.
-func decodeEnvelope(step Step, prepared *preparedStep, response *api.Response) (decoded, error) {
+func decodeEnvelope(step lifecycle.Step, prepared *preparedStep, response *api.Response) (decoded, error) {
 	if response == nil {
 		return decoded{}, fmt.Errorf("no result envelope: agent response is missing")
 	}
@@ -265,7 +266,7 @@ func ParseEnvelope(events []string, text string) (*types.Envelope, error) {
 // envelopeFromTerminalOutcome maps a native outcome onto the envelope. A
 // native plan is a plan run's result; a native question is a failure, because
 // every todo prompt asks through todo_ask.
-func envelopeFromTerminalOutcome(step Step, prepared *preparedStep, outcome *api.TerminalOutcome) (decoded, error) {
+func envelopeFromTerminalOutcome(step lifecycle.Step, prepared *preparedStep, outcome *api.TerminalOutcome) (decoded, error) {
 	if err := outcome.Validate(); err != nil {
 		return decoded{}, fmt.Errorf("invalid terminal outcome: %w", err)
 	}
