@@ -3,6 +3,7 @@ package ui
 import (
 	"encoding/json"
 	"fmt"
+	"html"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -132,8 +133,8 @@ func (s *Server) handleGavelResults(w http.ResponseWriter, r *http.Request) {
 
 	prefix := fmt.Sprintf("/results/%s/%d", repo, artifactID)
 
-	// API and export routes: strip prefix and delegate to testui handler
-	if strings.HasPrefix(rest, "/api/") || strings.HasPrefix(rest, testui.QueryMount+"/") || isExportPath(rest) {
+	// API, bundle and export routes: strip prefix and delegate to testui handler
+	if strings.HasPrefix(rest, "/api/") || strings.HasPrefix(rest, testui.QueryMount+"/") || strings.HasPrefix(rest, testui.AssetsMount+"/") || isExportPath(rest) {
 		http.StripPrefix(prefix, entry.handler).ServeHTTP(w, r)
 		return
 	}
@@ -159,9 +160,9 @@ func resultsPageHTML(backTo, prefix string) string {
 </head>
 <body>
     <div id="root"></div>
-    <script>%s</script>
+    <script type="module" src="%s"></script>
 </body>
-</html>`, jsonString(backTo), jsonString(prefix), testui.BundleJS())
+</html>`, jsonString(backTo), jsonString(prefix), html.EscapeString(prefix+testui.BundlePath))
 }
 
 func jsonString(s string) string {

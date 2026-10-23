@@ -117,7 +117,7 @@ func (trs *TestRunSyncer) syncWorkspace(ctx context.Context, store *cache.Store,
 		since = time.Unix(0, sinceNanos).UTC()
 	}
 
-	runs, err := snapshots.ListRuns(dir, since)
+	runs, err := snapshots.ListRuns(dir, snapshots.ListRunsOptions{Since: since})
 	if err != nil {
 		logger.Warnf("scan test runs %s: %v", dir, err)
 		return false

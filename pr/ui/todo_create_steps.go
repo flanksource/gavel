@@ -7,8 +7,9 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/flanksource/gavel/lifecycle"
 	"github.com/flanksource/gavel/todos"
-	"github.com/flanksource/gavel/todos/lifecycle"
+	lifecycle1 "github.com/flanksource/gavel/todos/lifecycle"
 	"github.com/flanksource/gavel/todos/types"
 )
 
@@ -59,7 +60,7 @@ func (s *Server) handleTodoNewSteps(w http.ResponseWriter, r *http.Request) {
 // not exist yet: the given status, medium priority, no labels, body, attempts,
 // plan, verification or runs, projected the way the lifecycle projects a saved one.
 func todoCreateSteps(provider todos.Provider, dir string, status types.Status) ([]lifecycle.Step, error) {
-	host, err := lifecycle.NewHost(provider, dir, lifecycle.HostDashboard)
+	host, err := lifecycle1.NewHost(provider, dir, lifecycle1.HostDashboard)
 	if err != nil {
 		return nil, err
 	}

@@ -80,7 +80,7 @@ export default defineConfig(({ command }) => {
       // Keep all CSS in one prui.css so the Go server can inline it as today
       // (only the JS is split).
       cssCodeSplit: false,
-      rollupOptions: {
+      rolldownOptions: {
         output: {
           chunkFileNames: 'chunks/[name]-[hash].js',
           // Stable CSS filename so the Go server can go:embed it.

@@ -36,7 +36,7 @@ func loadRunningProjectActionSnapshot(workDir string, started time.Time, run *te
 }
 
 func loadCompletedProjectActionSnapshot(workDir string, started time.Time, run *testui.Server) {
-	runs, err := snapshots.ListRuns(workDir, started.Add(-time.Nanosecond))
+	runs, err := snapshots.ListRuns(workDir, snapshots.ListRunsOptions{Since: started.Add(-time.Nanosecond)})
 	if err != nil || len(runs) == 0 {
 		return
 	}

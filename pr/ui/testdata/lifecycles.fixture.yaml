@@ -1,0 +1,44 @@
+kind: Fixture
+name: Editable lifecycle browser smoke
+defaults:
+  timeout: 5m
+steps:
+  - id: application
+    kind: services
+    services:
+      database:
+        dbtest: {}
+      dashboard:
+        exec: .bin/gavel serve --addr 127.0.0.1 --port {{.port}} acme/lifecycle-fixture
+        cwd: "{{.fixture.dir}}/../../.."
+        ready: {http: "http://127.0.0.1:{{.port}}/api/settings/schema", status: 200}
+        wait: {timeout: 2m}
+  - id: chrome
+    kind: browser
+    engine: chrome
+    headless: true
+    session: lifecycle_fixture
+  - id: todo-editor
+    kind: agent-browser
+    commands:
+      - open $DASHBOARD_URL/prompts/lifecycles/todos
+      - set viewport 1440 1000
+      - wait --text "Preview lifecycle"
+      - find role button click --name "Edit plan" --exact
+      - find role button click --name "Preview lifecycle" --exact
+      - wait --text "Resolved lifecycle"
+      - screenshot --screenshot-dir "{{.fixture.dir}}/../../../.tmp/lifecycle-browser"
+      - snapshot -i
+    observe: snapshot
+    cel: snapshot.contains('Resolved lifecycle') && snapshot.contains('Reset plan')
+  - id: compact-editor
+    kind: agent-browser
+    commands:
+      - open $DASHBOARD_URL/prompts/lifecycles/pr
+      - set viewport 390 844
+      - wait --text "Back to dashboard"
+      - wait --text "Preview lifecycle"
+      - screenshot --screenshot-dir "{{.fixture.dir}}/../../../.tmp/lifecycle-browser"
+      - snapshot -i
+    observe: snapshot
+    cel: snapshot.contains('PR lifecycle') && snapshot.contains('Back to dashboard') && snapshot.contains('Edit conflicts')
