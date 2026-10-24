@@ -545,7 +545,8 @@ func (s *Server) liveTaskTestsLocked() ([]parsers.Test, bool) {
 	if !s.tasksFrozen {
 		snapshots = s.taskSource()
 	}
-	return scopedTaskTests(snapshots), taskSnapshotsRunning(snapshots)
+	// Frozen snapshots are the finished run's record, not live activity.
+	return scopedTaskTests(snapshots), !s.tasksFrozen && taskSnapshotsRunning(snapshots)
 }
 
 func (s *Server) snapshotWithTasks(taskTests []parsers.Test, taskRunning bool) Snapshot {
