@@ -14,7 +14,7 @@ const ConfigSchemaID = "https://raw.githubusercontent.com/flanksource/gavel/main
 
 // ConfigJSONSchema renders the documented JSON Schema for the .gavel.yaml
 // (a.k.a. .gavel.yml) configuration file. It is the single source of truth for
-// the committed gavel.schema.json artifact and SCHEMA.md; regenerate the JSON
+// the committed gavel.schema.json artifact and the documentation configuration reference; regenerate the JSON
 // with `go generate .` after changing GavelConfig.
 func ConfigJSONSchema() (string, error) {
 	b, err := json.MarshalIndent(gavelConfigSchema(), "", "  ")

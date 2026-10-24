@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	testui "github.com/flanksource/gavel/testrunner/ui"
+	"github.com/flanksource/gavel/testrunner/ui/queryapp"
 	"github.com/flanksource/gavel/traces"
 )
 
@@ -59,6 +60,9 @@ func (st *testRunTraceStores) status(run testui.TraceRun, process *traces.Proces
 	if !ok {
 		srv = testui.NewServer()
 		srv.LoadSnapshot(testui.Snapshot{Metadata: &testui.SnapshotMetadata{RunID: run.RunID, ProcessTrace: process}})
+		if err := queryapp.Serve(srv); err != nil {
+			return nil, err
+		}
 		if err := srv.ReopenTraces(run); err != nil {
 			return nil, err
 		}

@@ -5,6 +5,7 @@ package database
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -40,9 +41,14 @@ func JobLogKey(jobID int64) string {
 	return fmt.Sprintf("joblogs/%d.log.gz", jobID)
 }
 
+type inlineJob struct {
+	org uuid.UUID
+	id  int64
+}
+
 // moveInlineJobLogs writes the logs of every job_log_caches row that still holds them inline
-// to the blob store and records their key, so the schema can drop logs_gz without losing
-// any. A failed write fails the migration, leaving the column and its logs in place.
+// to the blob store and records their key, then drops logs_gz. A failed write fails the
+// migration, leaving the column and its logs in place.
 func moveInlineJobLogs(ctx context.Context, dsn string) (returnErr error) {
 	pool, err := commonsdb.NewDB(dsn)
 	if err != nil {
@@ -77,17 +83,13 @@ func moveInlineJobLogs(ctx context.Context, dsn string) (returnErr error) {
 	if _, err := pool.ExecContext(ctx, `ALTER TABLE public.job_log_caches ADD COLUMN IF NOT EXISTS log_key text NOT NULL DEFAULT ''`); err != nil {
 		return fmt.Errorf("add job_log_caches.log_key: %w", err)
 	}
-	type job struct {
-		org uuid.UUID
-		id  int64
-	}
 	rows, err := pool.QueryContext(ctx, `SELECT `+orgColumn+`, job_id FROM public.job_log_caches WHERE logs_gz IS NOT NULL`)
 	if err != nil {
 		return fmt.Errorf("list inline job logs: %w", err)
 	}
-	var jobs []job
+	var jobs []inlineJob
 	for rows.Next() {
-		var j job
+		var j inlineJob
 		if err := rows.Scan(&j.org, &j.id); err != nil {
 			_ = rows.Close()
 			return fmt.Errorf("list inline job logs: %w", err)
@@ -97,9 +99,19 @@ func moveInlineJobLogs(ctx context.Context, dsn string) (returnErr error) {
 	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 		return fmt.Errorf("list inline job logs: %w", err)
 	}
-	if len(jobs) == 0 {
-		return nil
+	if len(jobs) > 0 {
+		if err := writeInlineJobLogs(ctx, pool, orgColumn, jobs); err != nil {
+			return err
+		}
 	}
+	// The schema migration keeps columns it no longer declares, so the emptied column is dropped here.
+	if _, err := pool.ExecContext(ctx, `ALTER TABLE public.job_log_caches DROP COLUMN IF EXISTS logs_gz`); err != nil {
+		return fmt.Errorf("drop job_log_caches.logs_gz: %w", err)
+	}
+	return nil
+}
+
+func writeInlineJobLogs(ctx context.Context, pool *sql.DB, orgColumn string, jobs []inlineJob) error {
 	store, err := OpenBlobs(ctx)
 	if err != nil {
 		return fmt.Errorf("move inline job logs: %w", err)

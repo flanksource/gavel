@@ -7,7 +7,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/flanksource/commons-db/cmd/query/traceserve"
 	"github.com/flanksource/commons-db/tracing/stacks"
 	"github.com/flanksource/gavel/blob"
 	"github.com/flanksource/gavel/testrunner"
@@ -75,7 +74,7 @@ func startRunTrace(opts testrunner.RunOptions, started time.Time) (*runTrace, er
 // serveOn mounts the run's store on the test UI at testui.QueryMount, with the
 // process capture the Processes tab reads and checkpoints.
 func (t *runTrace) serveOn(srv *testui.Server) error {
-	handler, err := traceserve.Handler(traceserve.Options{Runtime: t.host.Runtime(), Authorize: traceserve.ReadOnly})
+	handler, err := t.host.Handler()
 	if err != nil {
 		return fmt.Errorf("serve run traces: %w", err)
 	}

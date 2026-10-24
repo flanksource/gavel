@@ -16,6 +16,7 @@ import (
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/fixtures"
 	testui "github.com/flanksource/gavel/testrunner/ui"
+	"github.com/flanksource/gavel/testrunner/ui/queryapp"
 )
 
 // UIServeOptions configures the `gavel ui serve` subcommand.
@@ -92,6 +93,10 @@ func runUIServe(opts UIServeOptions) (any, error) {
 	}
 
 	srv := testui.NewServer()
+	if err := queryapp.Serve(srv); err != nil {
+		listener.Close() //nolint:errcheck
+		return nil, err
+	}
 	if len(opts.ResultsFiles) > 0 {
 		if err := loadResults(srv, opts.ResultsFiles...); err != nil {
 			listener.Close() //nolint:errcheck

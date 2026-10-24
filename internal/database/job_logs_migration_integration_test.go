@@ -23,8 +23,10 @@ func TestMigrationMovesInlineJobLogsToTheBlobStore(t *testing.T) {
 	t.Setenv(database.LegacyEnvDSN, "")
 	t.Setenv(database.LegacyEnvDisable, "")
 	t.Setenv("HOME", t.TempDir())
-	cacheDir := t.TempDir()
-	t.Setenv("XDG_CACHE_HOME", cacheDir)
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	// macOS ignores XDG_CACHE_HOME and uses $HOME/Library/Caches.
+	cacheDir, err := os.UserCacheDir()
+	require.NoError(t, err)
 	ctx := t.Context()
 
 	migrated, err := database.Open(ctx, database.WithMigrations())

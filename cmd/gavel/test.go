@@ -27,6 +27,7 @@ import (
 	"github.com/flanksource/gavel/testrunner"
 	"github.com/flanksource/gavel/testrunner/parsers"
 	testui "github.com/flanksource/gavel/testrunner/ui"
+	"github.com/flanksource/gavel/testrunner/ui/queryapp"
 	"github.com/flanksource/gavel/verify"
 	"github.com/spf13/cobra"
 )
@@ -829,6 +830,9 @@ type testUIOptions struct {
 // --addr names an interface only; the port is always picked.
 func startTestUI(opts testUIOptions) (*testui.Server, net.Listener, error) {
 	srv := testui.NewServer()
+	if err := queryapp.Serve(srv); err != nil {
+		return nil, nil, err
+	}
 	if opts.Dev {
 		proxy, err := devProxy(testRunnerDev, "")
 		if err != nil {
