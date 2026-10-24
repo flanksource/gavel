@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import type { TodoItem, TodoListResponse } from '../../types';
 import { childCountsById, childrenOf, parentCandidates, parentOf, parentTitlesById, type ChildCount, type TodoFamilyStatus } from './todoFamily';
 import type { WorkspaceTodos } from './useWorkspaceTodos';
@@ -49,8 +49,11 @@ function sameEntries<V>(a: Map<string, V>, b: Map<string, V>, same: (x: V, y: V)
 // every poll.
 function useStableMap<V>(next: Map<string, V>, same: (x: V, y: V) => boolean): Map<string, V> {
   const kept = useRef(next);
-  if (!sameEntries(kept.current, next, same)) kept.current = next;
-  return kept.current;
+  const stable = sameEntries(kept.current, next, same) ? kept.current : next;
+  useEffect(() => {
+    kept.current = stable;
+  }, [stable]);
+  return stable;
 }
 
 // Titles of every todo that has children.

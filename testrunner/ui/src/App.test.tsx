@@ -15,6 +15,7 @@ class FakeEventSource {
   onerror: (() => void) | null = null;
   constructor(readonly url: string) {}
   addEventListener() {}
+  removeEventListener() {}
   close() {}
 }
 

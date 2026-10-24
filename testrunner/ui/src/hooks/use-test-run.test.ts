@@ -19,6 +19,9 @@ class FakeEventSource {
   addEventListener(type: string, fn: (ev: MessageEvent) => void) {
     (this.listeners[type] ??= []).push(fn);
   }
+  removeEventListener(type: string, fn: (ev: MessageEvent) => void) {
+    this.listeners[type] = (this.listeners[type] ?? []).filter((listener) => listener !== fn);
+  }
   emit(type: string, data?: unknown) {
     const ev = { data: data === undefined ? undefined : JSON.stringify(data) } as MessageEvent;
     for (const fn of this.listeners[type] ?? []) fn(ev);
@@ -169,6 +172,7 @@ describe('useTestRun (SSE transport)', () => {
     const closeSpy = vi.fn();
     const injected = {
       addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
       close: closeSpy,
       onerror: null,
     };

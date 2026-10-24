@@ -6,7 +6,7 @@ import type { Project } from './types';
 import { useProjectCatalog } from './useProjectCatalog';
 
 vi.mock('./eventHub', () => ({
-  openEventStream: () => ({ addEventListener: () => undefined, close: () => undefined, onerror: null }),
+  openEventStream: () => ({ addEventListener: () => undefined, removeEventListener: () => undefined, close: () => undefined, onerror: null }),
 }));
 
 const run = { runId: 'run-1', kind: 'test', passed: 1, failed: 0, skipped: 0, warned: 0, total: 1, lintViolations: 0, lintLinters: 0 };

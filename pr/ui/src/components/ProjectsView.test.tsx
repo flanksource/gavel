@@ -109,6 +109,9 @@ function stubRunHistory(payload: unknown) {
   vi.stubGlobal('EventSource', vi.fn(function () {
     return {
       addEventListener: (type: string, listener: EventListener) => streamListeners.set(type, listener),
+      removeEventListener: (type: string, listener: EventListener) => {
+        if (streamListeners.get(type) === listener) streamListeners.delete(type);
+      },
       close: vi.fn(),
       onerror: null,
     };
@@ -226,7 +229,7 @@ describe('projects tab', () => {
       signal = init?.signal ?? undefined;
       return new Promise<Response>(() => {});
     }));
-    vi.stubGlobal('EventSource', vi.fn(function () { return { addEventListener: vi.fn(), close: vi.fn(), onerror: null }; }));
+    vi.stubGlobal('EventSource', vi.fn(function () { return { addEventListener: vi.fn(), removeEventListener: vi.fn(), close: vi.fn(), onerror: null }; }));
     const client = createClient();
     const view = renderWithClient(<CatalogProbe name="probe" />, client);
     await waitFor(() => expect(signal).toBeDefined());
