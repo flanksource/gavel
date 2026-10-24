@@ -97,29 +97,15 @@ func runLint(opts LintOptions) (any, error) {
 
 	if opts.UI {
 		var err error
-		if uiServer, uiListener, err = startTestUI(testUIOptions{Addr: opts.Addr}); err != nil {
-			return nil, err
-		}
-		if uiServer != nil {
-			uiServer.SetStopFunc(standaloneUIStop(cancelRun))
-			uiServer.BeginRun("initial")
-			uiServer.SetRerunFunc(func(req testui.RerunRequest, output *testui.RerunOutputBuffer) error {
-				clicky.ClearGlobalTasks()
-				rerunCtx, cancelRerun := newStopContext(opts.Context, 0)
-				defer cancelRerun()
-				uiServer.SetStopFunc(standaloneUIStop(cancelRerun))
-				uiServer.BeginRun("rerun")
+		uiServer, err = startLintUI(lintUIOptions{Addr: opts.Addr, Context: opts.Context, Cancel: cancelRun,
+			Rerun: func(rctx context.Context, req testui.RerunRequest, output *testui.RerunOutputBuffer) ([]*linters.LinterResult, error) {
 				rerunOpts := opts
-				rerunOpts.Context = rerunCtx
+				rerunOpts.Context = rctx
 				rerunOpts.OutputTee = output.StdoutWriter()
-				results, err := executeLintRerun(rerunOpts, req)
-				if err != nil {
-					return err
-				}
-				uiServer.SetLintResults(results)
-				uiServer.MarkDone()
-				return nil
-			})
+				return executeLintRerun(rerunOpts, req)
+			}})
+		if err != nil {
+			return nil, err
 		}
 	}
 
@@ -176,14 +162,7 @@ func runLint(opts LintOptions) (any, error) {
 	}
 
 	if uiServer != nil {
-		uiServer.SetLintResults(allResults)
-		uiServer.MarkDone()
-		if linters.HasFailures(allResults) {
-			exitCode = 1
-		}
-		sig := make(chan os.Signal, 1)
-		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-		<-sig
+		serveLintResults(uiServer, allResults)
 		return nil, nil
 	}
 
@@ -211,6 +190,53 @@ func runLint(opts LintOptions) (any, error) {
 	}
 
 	return finishLint(opts, allResults, runStarted)
+}
+
+type lintUIOptions struct {
+	Addr    string
+	Context context.Context
+	Cancel  context.CancelFunc
+	// Rerun re-runs the lint for a rerun request from the UI.
+	Rerun func(context.Context, testui.RerunRequest, *testui.RerunOutputBuffer) ([]*linters.LinterResult, error)
+}
+
+// startLintUI starts the browser UI for a lint run, marking the initial run in
+// progress and wiring the UI's stop and rerun controls.
+func startLintUI(opts lintUIOptions) (*testui.Server, error) {
+	srv, _, err := startTestUI(testUIOptions{Addr: opts.Addr})
+	if err != nil {
+		return nil, err
+	}
+	srv.SetStopFunc(standaloneUIStop(opts.Cancel))
+	srv.BeginRun("initial")
+	srv.SetRerunFunc(func(req testui.RerunRequest, output *testui.RerunOutputBuffer) error {
+		clicky.ClearGlobalTasks()
+		rerunCtx, cancelRerun := newStopContext(opts.Context, 0)
+		defer cancelRerun()
+		srv.SetStopFunc(standaloneUIStop(cancelRerun))
+		srv.BeginRun("rerun")
+		results, err := opts.Rerun(rerunCtx, req, output)
+		if err != nil {
+			return err
+		}
+		srv.SetLintResults(results)
+		srv.MarkDone()
+		return nil
+	})
+	return srv, nil
+}
+
+// serveLintResults publishes results to the UI and keeps serving until the
+// process is interrupted.
+func serveLintResults(srv *testui.Server, results []*linters.LinterResult) {
+	srv.SetLintResults(results)
+	srv.MarkDone()
+	if linters.HasFailures(results) {
+		exitCode = 1
+	}
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+	<-sig
 }
 
 func finishLint(opts LintOptions, allResults []*linters.LinterResult, runStarted time.Time) (any, error) {

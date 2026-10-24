@@ -1,6 +1,7 @@
 package main
 
 import (
+	captaincli "github.com/flanksource/captain/pkg/cli"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/spf13/cobra"
@@ -31,7 +32,7 @@ var _ = Describe("Lint prompt command", func() {
 		Expect(cmd.ParseFlags(args)).To(Succeed())
 		positional, through, err := splitAtDash(cmd, cmd.Flags().Args())
 		Expect(err).NotTo(HaveOccurred())
-		prompt, promptArgs, err := parsePromptArgs(through)
+		prompt, promptArgs, err := captaincli.ParsePromptArgs(through)
 		Expect(err).NotTo(HaveOccurred())
 		gotFile, gotPaths := splitPromptArgs(append(positional, promptArgs...), prompt.Prompt != "")
 		Expect(cmd.Flags().GetString("model")).To(Equal(fixerModel))
@@ -51,20 +52,18 @@ var _ = Describe("Lint prompt command", func() {
 		Entry("no --", []string{"review.prompt", "pkg"}, "", "", "review.prompt", []string{"pkg"}),
 	)
 
-	It("binds Captain prompt inputs after --", func() {
-		prompt, rest, err := parsePromptArgs([]string{"--preset", "review", "--var", "change=-", "--vars", `{"language":"go"}`, "--no-presets", "-p", "Review"})
-		Expect(err).NotTo(HaveOccurred())
-		Expect(rest).To(BeEmpty())
-		Expect(prompt.Presets).To(Equal([]string{"review"}))
-		Expect(prompt.Var).To(Equal([]string{"change=-"}))
-		Expect(prompt.Vars).To(Equal(`{"language":"go"}`))
-		Expect(prompt.PresetsSet).To(BeTrue())
-		Expect(prompt.PromptRef).To(Equal("Review"))
+	It("fails on an unknown prompt flag after --", func() {
+		cmd := registerLintPromptCommand(&cobra.Command{Use: "lint"})
+		Expect(cmd.ParseFlags([]string{"--", "--not-a-flag"})).To(Succeed())
+		err := cmd.RunE(cmd, cmd.Flags().Args())
+		Expect(err).To(MatchError(ContainSubstring("prompt arguments after --")))
 	})
 
-	It("fails on an unknown prompt flag after --", func() {
-		_, _, err := parsePromptArgs([]string{"--not-a-flag"})
-		Expect(err).To(MatchError(ContainSubstring("prompt arguments after --")))
+	It("binds --ui and --addr before --", func() {
+		cmd := registerLintPromptCommand(&cobra.Command{Use: "lint"})
+		Expect(cmd.ParseFlags([]string{"--ui", "--addr", "localhost"})).To(Succeed())
+		Expect(cmd.Flags().GetBool("ui")).To(BeTrue())
+		Expect(cmd.Flags().GetString("addr")).To(Equal("localhost"))
 	})
 
 	DescribeTable("splits the prompt reference from the paths under review", func(args []string, inline bool, file string, paths []string) {

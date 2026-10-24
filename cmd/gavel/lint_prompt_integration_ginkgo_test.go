@@ -121,10 +121,15 @@ var _ = Describe("Lint prompt CLI integration", Ordered, func() {
 		return server, snapshot, string(requests)
 	}
 
-	It("passes path arguments to the prompt as the files variable", func() {
-		_, snapshot, requests := runChild([]string{`{"violations":[]}`}, map[string]string{"pkg/service.go": "package pkg\n", "cmd/main.go": "package main\n"}, nil, "pkg", "cmd/main.go")
-		Expect(snapshot.Lint).To(HaveExactElements(HaveField("Success", true)))
-		Expect(requests).To(ContainSubstring("Review pkg cmd/main.go"))
+	It("reviews each path argument in its own run with that path as the files variable", func() {
+		server, snapshot, requests := runChild([]string{`{"violations":[]}`, `{"violations":[]}`}, map[string]string{"pkg/service.go": "package pkg\n", "cmd/main.go": "package main\n"}, nil, "pkg", "cmd/main.go")
+		Expect(server.Remaining()).To(BeEmpty())
+		Expect(snapshot.Lint).To(ConsistOf(
+			SatisfyAll(HaveField("Linter", "review:pkg"), HaveField("Success", true), HaveField("RunID", Not(BeEmpty()))),
+			SatisfyAll(HaveField("Linter", "review:cmd/main.go"), HaveField("Success", true), HaveField("RunID", Not(BeEmpty()))),
+		))
+		Expect(requests).To(SatisfyAll(ContainSubstring("Review pkg"), ContainSubstring("Review cmd/main.go"), Not(ContainSubstring("Review pkg cmd/main.go"))))
+		Expect(requests).To(SatisfyAll(ContainSubstring(`"read_file"`), ContainSubstring("report_violation")), "the reviewing agent is offered gavel's tools")
 	})
 
 	It("repairs findings with lint.fix and re-runs the prompt until clean", func() {
