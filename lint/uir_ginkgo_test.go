@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"testing"
 
 	"github.com/flanksource/gavel/baseline"
 	"github.com/flanksource/gavel/linters"
@@ -14,8 +13,6 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
-
-func TestUIRLint(t *testing.T) { RegisterFailHandler(Fail); RunSpecs(t, "UIR lint integration") }
 
 var _ = Describe("UIR native configuration", func() {
 	It("fails when the required UIR binary is missing and still previews a dry run", func() {
