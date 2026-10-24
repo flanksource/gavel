@@ -477,7 +477,8 @@ func (s *Server) snapshot() Snapshot {
 				snapshots = s.taskSource()
 			}
 			taskTests = scopedTaskTests(snapshots)
-			taskRunning = taskSnapshotsRunning(snapshots)
+			// Frozen snapshots are the finished run's record, not live activity.
+			taskRunning = !s.tasksFrozen && taskSnapshotsRunning(snapshots)
 		} else {
 			taskTests, taskRunning = virtualTaskTests(), !tasksDone()
 		}
