@@ -140,6 +140,13 @@ var _ = Describe("project branch landing", func() {
 })
 
 var _ = Describe("project git OpenAPI", func() {
+	It("requires and describes the dirty branch count in summary responses", func() {
+		schema := projectGitOpenAPISchemas()["ProjectGitSummaries"].(map[string]any)["items"].(map[string]any)
+
+		Expect(schema["required"]).To(ContainElement("uncommittedBranches"))
+		Expect(schema["properties"].(map[string]any)["uncommittedBranches"]).To(HaveKeyWithValue("type", "integer"))
+	})
+
 	It("documents the git summary, branch review and landing routes", func() {
 		paths := projectsOpenAPI()["paths"].(map[string]any)
 		for path, method := range map[string]string{
