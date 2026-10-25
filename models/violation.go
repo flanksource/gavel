@@ -18,6 +18,8 @@ type Violation struct {
 	File             string            `json:"file,omitempty"`
 	Line             int               `json:"line,omitempty"`
 	Column           int               `json:"column,omitempty"`
+	EndLine          int               `json:"end_line,omitempty"`
+	EndColumn        int               `json:"end_column,omitempty"`
 	Message          *string           `json:"message,omitempty"`
 	Source           string            `json:"source,omitempty"`
 	Rule             *Rule             `json:"rule,omitempty"`

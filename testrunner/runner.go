@@ -1489,7 +1489,8 @@ func markSubtreeTimedOut(t *parsers.Test, marker string) bool {
 
 // augmentBenchArgs decides whether benchmarks should run for a specific Go test package
 // and returns the adjusted extraArgs with `-bench=<pattern>` (and `-run=^$` when the
-// package has no regular Test* funcs) appended. It is a no-op when:
+// package has no runnable tests: no plain Test* funcs and no Ginkgo suite)
+// appended. It is a no-op when:
 //   - any of the incoming extraArgs already contain `-bench` (user override)
 //   - bench is neither requested via RunOptions.Bench nor auto-enabled for this package
 func (o *TestOrchestrator) augmentBenchArgs(r runners.Runner, pkgPath string, extraArgs []string) []string {

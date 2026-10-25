@@ -21,6 +21,7 @@ export interface Test {
   message?: string;
   file?: string;
   line?: number;
+  end_line?: number;
   framework?: string;
   duration?: number; // nanoseconds
   fixture_profile?: FixtureProfile;
@@ -76,6 +77,8 @@ export interface Violation {
   raw_file?: string;
   line?: number;
   column?: number;
+  end_line?: number;
+  end_column?: number;
   message?: string;
   source?: string;
   rule?: { method?: string; description?: string };

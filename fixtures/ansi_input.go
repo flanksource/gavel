@@ -99,16 +99,22 @@ func (s *ptyScript) feed(chunk []byte) error {
 	s.mu.Lock()
 	s.raw.Write(chunk)
 	s.pending += string(chunk)
+	// Replies go in the order the queries were asked: termenv reads its OSC
+	// reply before the cursor position, and gives up on the first reply
+	// that is not the one it expects.
 	var replies []string
-	for query, reply := range terminalQueryReplies {
-		for {
-			i := strings.Index(s.pending, query)
-			if i < 0 {
-				break
+	for {
+		at, query := -1, ""
+		for q := range terminalQueryReplies {
+			if i := strings.Index(s.pending, q); i >= 0 && (at < 0 || i < at) {
+				at, query = i, q
 			}
-			replies = append(replies, reply)
-			s.pending = s.pending[:i] + s.pending[i+len(query):]
 		}
+		if at < 0 {
+			break
+		}
+		replies = append(replies, terminalQueryReplies[query])
+		s.pending = s.pending[:at] + s.pending[at+len(query):]
 	}
 	if len(s.pending) > 64 {
 		s.pending = s.pending[len(s.pending)-64:]

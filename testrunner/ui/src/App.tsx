@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Icon,
   LintResults,
@@ -12,17 +12,23 @@ import {
   findNodeByRoutePath,
   isProcessExited,
   totalLintViolations,
+  violationIgnoreAction,
   type LintAction,
   type LintFilters,
   type LintGrouping,
+  type LinterResult,
+  type OpenFileTarget,
   type Test as ClickyTest,
   type TestFilters,
+  type Violation,
 } from '@flanksource/clicky-ui/data';
+import { lintFindings, testFindings, type FileFinding, type FileRef, type FindingsViewMode } from '@flanksource/clicky-ui/file-findings';
 import { Button, Tabs } from '@flanksource/clicky-ui/components';
 import {
   UiArrowLeft,
   UiBeaker,
   UiChartLineUp,
+  UiFileCode,
   UiHistory,
   UiListChecks,
   UiLoader,
@@ -60,6 +66,57 @@ function countFixtureWork(tests: Test[]): number {
 }
 
 const asGavel = (tests: ClickyTest[]): Test[] => tests as Test[];
+
+// The Files tab (and with it Monaco and its worker) is a separate chunk, loaded
+// the first time the tab is shown.
+const FilesTab = lazy(() => import('./FilesTab'));
+// A prompt lint result's live session pulls in the AI bundle, so it too loads
+// on first use.
+const PromptRunView = lazy(() => import('./PromptRunView'));
+
+function renderPromptRun(result: LinterResult) {
+  if (!result.run_id) return null;
+  return (
+    <Suspense fallback={<p role="status" className="text-sm text-muted-foreground">Loading the prompt run…</p>}>
+      <PromptRunView result={result} baseUrl={apiBase()} />
+    </Suspense>
+  );
+}
+
+function FilesLoading() {
+  return (
+    <div className="flex h-full items-center justify-center text-sm text-muted-foreground" role="status">
+      <Icon icon={UiLoader} className="mr-2 animate-spin text-blue-500" />
+      Loading files...
+    </div>
+  );
+}
+
+// withWorkDir fills a test's missing work dir with the run's git root, so a test
+// that recorded only an absolute file still resolves to a path under a root the
+// file endpoint accepts.
+function withWorkDir(tests: ClickyTest[], root: string | undefined): ClickyTest[] {
+  if (!root) return tests;
+  return tests.map(test => ({
+    ...test,
+    work_dir: test.work_dir || root,
+    ...(test.children ? { children: withWorkDir(test.children, root) } : {}),
+  }));
+}
+
+function findingKey(finding: FileFinding): string {
+  return [finding.workDir, finding.file, finding.line, finding.rule, finding.message].join('\0');
+}
+
+async function fetchFile(ref: FileRef, scope: { runId?: string }): Promise<string> {
+  const params = new URLSearchParams();
+  if (ref.workDir) params.set('work_dir', ref.workDir);
+  params.set('path', ref.file);
+  const res = await fetch(apiUrl(`/api/file?${params}`, scope));
+  const body = await res.text();
+  if (!res.ok) throw new Error(`${res.status} ${body.trim() || res.statusText}`);
+  return body;
+}
 
 // withOwnNames records every node's own name, which collapsing a single-child
 // chain into it ("pkg/ > TestFoo") would otherwise lose and which a rerun of
@@ -215,6 +272,25 @@ export function App({ runId, navigate = loadPage }: AppProps = {}) {
   const selectedLint = route.tab === 'lint' && route.selectedPath ? findLintNode(lintTree, route.selectedPath) : null;
   const lintTotal = useMemo(() => totalLintViolations(lint ?? []), [lint]);
 
+  // The Files tab's findings: every lint violation and failed test that names a
+  // file, rooted at the work dir it ran in (the git root when it recorded none).
+  const gitRoot = snapshot?.git?.root;
+  const { findings, linterByFinding } = useMemo(() => {
+    const linterByFinding = new Map<string, string>();
+    const lintEntries = (lint ?? []).flatMap(result => {
+      const workDir = result.work_dir || gitRoot;
+      return lintFindings([{ ...result, ...(workDir ? { work_dir: workDir } : {}) }]).map(finding => {
+        linterByFinding.set(findingKey(finding), result.linter);
+        return finding;
+      });
+    });
+    return { findings: [...lintEntries, ...testFindings(withWorkDir(tests, gitRoot))], linterByFinding };
+  }, [lint, tests, gitRoot]);
+  const selectedFile = useMemo<FileRef | null>(
+    () => (route.tab === 'files' && route.selectedPath ? { file: route.selectedPath, ...(route.workDir ? { workDir: route.workDir } : {}) } : null),
+    [route.tab, route.selectedPath, route.workDir],
+  );
+
   const traces = useMemo(() => rebaseTraces(snapshotStatus.traces, base), [snapshotStatus.traces, base]);
   const processTraceAvailable = !!processMount(snapshotStatus.traces);
   const trace = useProcessTrace({
@@ -252,7 +328,10 @@ export function App({ runId, navigate = loadPage }: AppProps = {}) {
     commitRoute({ ...route, selectedPath: route.tab === 'processes' && rootProcess ? rootProcess.key : '' }, 'replace');
   }, [route, selectedTest, selectedLint, selectedProcess, tests.length, done, lintRun, lint, trace.nodes.length, rootProcess, commitRoute]);
 
-  const onTabChange = useCallback((tab: string) => commitRoute({ ...route, tab: tab as TabKey, selectedPath: '' }), [route, commitRoute]);
+  const onTabChange = useCallback((tab: string) => {
+    const { workDir: _workDir, line: _line, ...rest } = route;
+    commitRoute({ ...rest, tab: tab as TabKey, selectedPath: '' });
+  }, [route, commitRoute]);
   const onSelectTest = useCallback((node: ClickyTest | null) => commitRoute({ ...route, selectedPath: node?.route_path ?? '' }), [route, commitRoute]);
   const onFiltersChange = useCallback((filters: TestFilters) => commitRoute({ ...route, tab: 'tests', filters, selectedPath: '' }), [route, commitRoute]);
   const onLintFiltersChange = useCallback((lintFilters: LintFilters) => commitRoute({ ...route, tab: 'lint', lintFilters, selectedPath: '' }), [route, commitRoute]);
@@ -260,6 +339,21 @@ export function App({ runId, navigate = loadPage }: AppProps = {}) {
   const onSelectLint = useCallback((selectedPath: string | null) => commitRoute({ ...route, selectedPath: selectedPath ?? '' }), [route, commitRoute]);
   const onSelectProcess = useCallback((key: string) => commitRoute({ ...route, tab: 'processes', selectedPath: key }), [route, commitRoute]);
   const onHideExitedChange = useCallback((hideExited: boolean) => commitRoute({ ...route, tab: 'processes', hideExited }, 'replace'), [route, commitRoute]);
+  const openFile = useCallback((ref: FileRef, line?: number) => {
+    const { workDir: _workDir, line: _line, ...rest } = route;
+    commitRoute({ ...rest, tab: 'files', selectedPath: ref.file, ...(ref.workDir ? { workDir: ref.workDir } : {}), ...(line ? { line } : {}) });
+  }, [route, commitRoute]);
+  const onOpenFile = useCallback(
+    (target: OpenFileTarget) => openFile({ file: target.file, ...(target.workDir || gitRoot ? { workDir: target.workDir || gitRoot } : {}) }, target.line),
+    [openFile, gitRoot],
+  );
+  const onSelectFile = useCallback((ref: FileRef) => openFile(ref), [openFile]);
+  const onLineChange = useCallback((line: number | undefined) => {
+    const { line: _line, ...rest } = route;
+    commitRoute({ ...rest, ...(line ? { line } : {}) }, 'replace');
+  }, [route, commitRoute]);
+  const onViewChange = useCallback((view: FindingsViewMode) => commitRoute({ ...route, view }, 'replace'), [route, commitRoute]);
+  const loadFile = useCallback((ref: FileRef) => fetchFile(ref, scope), [scope]);
   const onSampleChange = useCallback((sampleIndex: number) => commitRoute({ ...route, sampleIndex }), [route, commitRoute]);
   const onOpenStep = useCallback((link: ProcessStepLink) => {
     commitRoute({ ...route, tab: 'tests', filters: { status: new Map(), framework: new Map() }, selectedPath: link.routePath });
@@ -325,13 +419,27 @@ export function App({ runId, navigate = loadPage }: AppProps = {}) {
         return;
       }
       say('Ignore rule saved to .gavel.yaml');
-      commitRoute({ ...route, selectedPath: '' }, 'replace');
+      if (route.tab !== 'files') commitRoute({ ...route, selectedPath: '' }, 'replace');
     } catch (e: unknown) {
       say(`Ignore error: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setIgnoreBusy(false);
     }
   }, [ignoreBusy, scope, route, commitRoute, say]);
+
+  const renderFindingActions = useCallback((finding: FileFinding) => {
+    if (finding.kind !== 'lint') return null;
+    const linter = linterByFinding.get(findingKey(finding));
+    if (!linter) throw new Error(`no linter recorded for the finding at ${finding.file}:${finding.line}`);
+    const violation: Violation = finding.rule ? { rule: { method: finding.rule } } : {};
+    const action = violationIgnoreAction({ violation, linter, file: finding.file, workDir: finding.workDir ?? '' });
+    if (!action) return null;
+    return (
+      <Button type="button" size="sm" variant="outline" className="h-6 gap-1 px-2 text-xs text-muted-foreground" title={action.title} disabled={ignoreBusy} onClick={() => void onIgnore(action)}>
+        {action.label}
+      </Button>
+    );
+  }, [linterByFinding, ignoreBusy, onIgnore]);
 
   const onTestEdit = useCallback(async (node: Test, action: TestEditAction, editScope: TestEditScope) => {
     if (testEditBusy || snapshotStatus.test_edit_supported !== true) return;
@@ -384,6 +492,7 @@ export function App({ runId, navigate = loadPage }: AppProps = {}) {
   );
 
   const showLintTab = lintRun;
+  const showFilesTab = findings.length > 0 || route.tab === 'files';
   const showBenchTab = !!run.bench || !!performance;
   const showProcessesTab = processTraceAvailable;
   const benchRegressions = run.bench?.deltas?.filter(d => d.significant && d.delta_pct > run.bench!.threshold).length || 0;
@@ -404,6 +513,7 @@ export function App({ runId, navigate = loadPage }: AppProps = {}) {
   const tabs = [
     { id: 'tests', label: 'Tests', icon: UiBeaker, count: totals.failed > 0 ? totals.failed : totals.total, countColor: totals.failed > 0 ? 'bg-red-500' : 'bg-muted-foreground' },
     ...(showLintTab ? [{ id: 'lint', label: 'Lint', icon: UiListChecks, count: lintTotal, countColor: lintTotal > 0 ? 'bg-yellow-500' : 'bg-muted-foreground' }] : []),
+    ...(showFilesTab ? [{ id: 'files', label: 'Files', icon: UiFileCode, count: findings.length, countColor: findings.length > 0 ? 'bg-yellow-500' : 'bg-muted-foreground' }] : []),
     ...(showBenchTab ? [{
       id: 'bench', label: 'Bench', icon: UiChartLineUp,
       count: performance ? countFixtureWork(tests) : benchRegressions > 0 ? benchRegressions : (run.bench?.deltas?.length || 0),
@@ -458,6 +568,7 @@ export function App({ runId, navigate = loadPage }: AppProps = {}) {
             onStop={onStop}
             fetchProcessMetrics={fetchProcessMetrics}
             adapters={registry}
+            onOpenFile={onOpenFile}
             headerSlot={runActions}
           />
         ))}
@@ -475,6 +586,8 @@ export function App({ runId, navigate = loadPage }: AppProps = {}) {
             onExpandAllChange={setExpandAll}
             onIgnore={onIgnore}
             ignoreBusy={ignoreBusy}
+            onOpenFile={onOpenFile}
+            renderRun={renderPromptRun}
             headerSlot={(
               <>
                 <span className="truncate text-sm text-muted-foreground">{status}</span>
@@ -486,6 +599,27 @@ export function App({ runId, navigate = loadPage }: AppProps = {}) {
               </>
             )}
           />
+        )}
+
+        {route.tab === 'files' && (
+          <div className="flex h-full flex-col">
+            <PageHeader icon={UiFileCode} title="Files" status={status} actions={runActions} />
+            <div className="min-h-0 flex-1">
+              <Suspense fallback={<FilesLoading />}>
+                <FilesTab
+                  findings={findings}
+                  selectedFile={selectedFile}
+                  onSelectFile={onSelectFile}
+                  line={route.line}
+                  onLineChange={onLineChange}
+                  view={route.view ?? 'rendered'}
+                  onViewChange={onViewChange}
+                  loadFile={loadFile}
+                  renderFindingActions={renderFindingActions}
+                />
+              </Suspense>
+            </div>
+          </div>
         )}
 
         {route.tab === 'bench' && (

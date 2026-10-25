@@ -28,6 +28,8 @@ func TestParseFindings(t *testing.T) {
 	require.Equal(t, filepath.Join("/workspace", "config/prod.env"), first.File)
 	require.Equal(t, 12, first.Line)
 	require.Equal(t, 20, first.Column)
+	require.Equal(t, 12, first.EndLine)
+	require.Equal(t, 40, first.EndColumn)
 	require.Equal(t, models.SeverityError, first.Severity)
 	require.Equal(t, "betterleaks", first.Source)
 	require.NotNil(t, first.Rule)

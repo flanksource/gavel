@@ -7,12 +7,41 @@ import (
 	"time"
 
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/linters"
+	"github.com/flanksource/gavel/snapshots"
 	"github.com/flanksource/gavel/testrunner"
 	"github.com/flanksource/gavel/testrunner/parsers"
 	testui "github.com/flanksource/gavel/testrunner/ui"
 	"github.com/flanksource/gavel/utils"
 )
+
+// failedRun is a run the runner returned an error for, with what completed.
+type failedRun struct {
+	Opts        testrunner.RunOptions
+	Tests       []parsers.Test
+	Lint        []*linters.LinterResult
+	Started     time.Time
+	Trace       *runTrace
+	Performance *fixtures.BenchmarkPerformance
+	Err         error
+}
+
+// saveFailedRun writes run's per-run snapshot, carrying its error and exit
+// code 1, and returns it.
+func saveFailedRun(run failedRun) testui.Snapshot {
+	snapshot := buildTestSnapshot(run.Opts, run.Tests, run.Lint, run.Started, time.Now().UTC(), run.Trace)
+	snapshot.Performance = run.Performance
+	snapshot.Error = run.Err.Error()
+	failed := 1
+	snapshot.Metadata.ExitCode = &failed
+	if path, err := snapshots.SavePerRun(run.Opts.WorkDir, &snapshot, run.Started, ""); err != nil {
+		logger.Warnf("persist per-run snapshot: %v", err)
+	} else {
+		logger.V(1).Infof("wrote per-run snapshot to %s", path)
+	}
+	return snapshot
+}
 
 func buildTestSnapshot(
 	opts testrunner.RunOptions,

@@ -5,14 +5,14 @@ import { fileURLToPath } from 'node:url';
 import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
-import { localClicky } from './vite.clicky';
+import { localClicky } from './vite.clicky.ts';
 
 const require = createRequire(import.meta.url);
 const here = dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig(({ command }) => {
-  // `gavel test --ui --dev` resolves clicky-ui from the sibling checkout's source.
-  const clicky = localClicky(resolve(here, '../..'), command, 'testrunner/ui');
+  // Resolves clicky-ui from the sibling checkout's source when it is present.
+  const clicky = localClicky(resolve(here, '../..'), 'testrunner/ui');
   return {
     // Dev server for `gavel test|fixtures --ui --dev`, which reverse-proxies the
     // page here. 5273 is pr/ui's and 5274 the clicky-ui playground's; strictPort
