@@ -4,7 +4,7 @@ import type { AuthMode } from './query';
 import type { Tab } from './routes';
 
 // hostedTabs are the tabs whose routes the hosted allowlist serves.
-const hostedTabs: readonly Tab[] = ['prs', 'todos', 'runs'];
+const hostedTabs: readonly Tab[] = ['prs', 'projects', 'todos', 'runs'];
 
 // hostedOnlyTabs exist only in hosted mode: a local dashboard runs nothing in a sandbox.
 const hostedOnlyTabs: readonly Tab[] = ['runs'];

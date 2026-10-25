@@ -13,6 +13,7 @@ export const queryKeys = {
   prLinkedTodos: (url: string) => ['prs', 'todos', url] as const,
   prSearch: (query: string, repo: string) => ['prs', 'search', { query, repo }] as const,
   projects: () => ['projects'] as const,
+  projectBranches: (projectName: string) => ['projects', projectName, 'branches'] as const,
   projectStatusScope: (projectName: string) => ['projects', projectName, 'status'] as const,
   // worktree is the absolute path of a linked worktree; the main checkout
   // omits it, so its keys are unchanged.
