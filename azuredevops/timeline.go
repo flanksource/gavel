@@ -56,7 +56,7 @@ func (c *Client) loadTimeline(ctx context.Context, run *model.WorkflowRun, opts 
 				return fmt.Errorf("task %s: %w", task.ID, err)
 			}
 			step := model.Step{Name: task.Name, Number: task.Order, Status: status, Conclusion: conclusion}
-			if opts.Logs && model.IsFailureConclusion(conclusion) && task.Log != nil {
+			if opts.Logs && model.NeedsJobLogs(conclusion) && task.Log != nil {
 				step.Logs, err = c.logTail(ctx, path, task.Log.ID, opts.TailLogs)
 				if err != nil {
 					return err
@@ -64,7 +64,7 @@ func (c *Client) loadTimeline(ctx context.Context, run *model.WorkflowRun, opts 
 			}
 			job.Steps = append(job.Steps, step)
 		}
-		if opts.Logs && model.IsFailureConclusion(job.Conclusion) && len(job.Steps) == 0 && record.Log != nil {
+		if opts.Logs && model.NeedsJobLogs(job.Conclusion) && len(job.Steps) == 0 && record.Log != nil {
 			job.Logs, err = c.logTail(ctx, path, record.Log.ID, opts.TailLogs)
 			if err != nil {
 				return err

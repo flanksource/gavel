@@ -37,7 +37,7 @@ Subcommands:
 
 Examples:
   gavel pr status                 # current branch's PR + checks
-  gavel pr status 123 --logs      # PR #123 with failing-job logs
+  gavel pr status 123 --logs      # PR #123 with failed and cancelled job logs
   gavel pr status --follow        # block until what you filtered on settles
   gavel pr status <actions job URL>   # the job's PR, narrowed to that job
   gavel pr create <SHA>           # open a PR from one commit
@@ -53,7 +53,7 @@ type PRStatusOptions struct {
 	Follow   bool            `flag:"follow" help:"Keep watching until the checks and comments you filtered on are settled"`
 	FailFast bool            `flag:"fail-fast" help:"With --follow, stop as soon as any check or job fails definitively instead of waiting for the rest"`
 	Interval string          `flag:"interval" help:"Poll interval (e.g. 30s, 1m)" default:"30s"`
-	Logs     bool            `flag:"logs" help:"Fetch and include failed job logs (uses extra API quota)"`
+	Logs     bool            `flag:"logs" help:"Fetch and include the logs of failed, timed out and cancelled jobs (uses extra API quota)"`
 	TailLogs int             `flag:"tail-logs" help:"Number of failed log lines to show per step (only applies with --logs)" default:"100"`
 	Comments []string        `flag:"comments" help:"Filter review comments by MatchItem patterns over comment ID and @author/@bot tokens, e.g. '1,2,!3,*,!@coderabbit'"`
 	Actions  []string        `flag:"actions" help:"Filter workflow actions by MatchItem patterns over run ID, workflow ID, workflow YAML path, workflow name, job ID, and job/check name"`
@@ -105,7 +105,7 @@ Key flags:
                     whole rollup (--interval sets the cadence, default 30s)
   --fail-fast       With --follow, return at the first definitive failure (FAILURE,
                     TIMED_OUT, STARTUP_FAILURE) instead of waiting for the rest
-  --logs            Also fetch failing-job logs (--tail-logs lines per step; extra API quota)
+  --logs            Also fetch failed, timed out and cancelled job logs (--tail-logs lines per step; extra API quota)
   --comments LIST   Filter comments by MatchItem patterns over IDs and @author/@bot tokens
   --actions LIST    Filter actions by MatchItem patterns over run/workflow IDs, YAML path, workflow name, or job/check name
   --ai-fix          Fix failures/comments with AI, committing and pushing each turn, then
@@ -126,7 +126,7 @@ Examples:
   gavel pr status --follow                   # block until every check settles
   gavel pr status --follow --actions 'CI / Test' --fail-fast   # stop the moment Test goes red
   gavel pr status --follow --comments '@coderabbit'            # wait until those threads resolve
-  gavel pr status 123 --logs                   # include failing-job logs
+  gavel pr status 123 --logs                   # include failed and cancelled job logs
   gavel pr status --comments '1,2,!3,*,!@coderabbit'
   gavel pr status --actions '.github/workflows/ci.yml,!deploy'
   gavel pr status --actions 'lint,Install Tests - windows-amd64'   # by job/check name
@@ -223,8 +223,8 @@ func runPRStatus(opts PRStatusOptions) (any, error) {
 	if result == nil {
 		return nil, nil
 	}
-	if opts.Logs && !result.HasFailedRun() {
-		logger.Infof("--logs had no effect: no failed jobs found (logs are only shown for failed jobs)")
+	if opts.Logs && !result.HasRunNeedingLogs() {
+		logger.Infof("--logs had no effect: no failed, timed out or cancelled jobs found")
 	}
 	if opts.AIFix {
 		// Print the status block first so the user sees the input the AI is

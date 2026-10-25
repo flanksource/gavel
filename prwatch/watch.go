@@ -319,7 +319,7 @@ func fetchRuns(opts WatchOptions, pr *model.PRInfo) (map[int64]*model.WorkflowRu
 			return nil, fmt.Errorf("workflow %d reports head %s, expected %s", runID, run.HeadSHA, pr.HeadRefOID)
 		}
 
-		if model.RunHasFailedJob(run) || newResultFilters(nil, opts.Actions).hasActionFilters() {
+		if model.RunNeedsJobLogs(run) || newResultFilters(nil, opts.Actions).hasActionFilters() {
 			if _, err := github.FetchWorkflowDefinition(opts.Options, run); err != nil {
 				logger.Warnf("failed to fetch workflow definition for run %d: %v", runID, err)
 			}

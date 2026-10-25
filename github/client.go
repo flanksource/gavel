@@ -316,9 +316,10 @@ func FetchRunJobs(opts Options, runID int64, logOpts RunLogOptions) (*model.Work
 		runResp.FromCache && jobsResp.FromCache)
 
 	// Attach logs BEFORE persisting so the cached payload always reflects the
-	// logs-requested intent of this call. Gate on failed JOBS, not the run
-	// conclusion — an in-progress run can already have failed jobs worth logs.
-	if logOpts.FetchLogs && model.RunHasFailedJob(result) {
+	// logs-requested intent of this call. Gate on the JOBS, not the run
+	// conclusion — an in-progress run can already have failed or cancelled
+	// jobs worth logs.
+	if logOpts.FetchLogs && model.RunNeedsJobLogs(result) {
 		FetchAndAttachLogs(opts, result, logOpts.TailLines)
 	}
 
@@ -344,7 +345,7 @@ func persistCompletedRun(store *cache.Store, repo string, runID int64, run *mode
 func FetchAndAttachLogs(opts Options, run *model.WorkflowRun, tailLines int) {
 	for i := range run.Jobs {
 		job := &run.Jobs[i]
-		if !model.IsFailureConclusion(job.Conclusion) {
+		if !model.NeedsJobLogs(job.Conclusion) {
 			continue
 		}
 		if err := FetchJobLogs(opts, job, tailLines); err != nil {
@@ -353,13 +354,13 @@ func FetchAndAttachLogs(opts Options, run *model.WorkflowRun, tailLines int) {
 	}
 }
 
-// runHasFailureLogs reports whether any failed job in the run already carries
+// runHasFailureLogs reports whether any failed or cancelled job in the run already carries
 // attached log output. Used to decide whether a cached run satisfies a
 // logs-requested fetch or must be enriched.
 func runHasFailureLogs(run *model.WorkflowRun) bool {
 	for i := range run.Jobs {
 		job := &run.Jobs[i]
-		if !model.IsFailureConclusion(job.Conclusion) {
+		if !model.NeedsJobLogs(job.Conclusion) {
 			continue
 		}
 		if job.Logs != "" {
@@ -499,7 +500,7 @@ func attachLogsToSteps(job *model.Job, rawLog string, tailLines int) {
 	sections := parseLogSections(rawLog)
 	for i := range job.Steps {
 		step := &job.Steps[i]
-		if !strings.EqualFold(step.Conclusion, "failure") {
+		if !strings.EqualFold(step.Conclusion, "failure") && !strings.EqualFold(step.Conclusion, "cancelled") {
 			continue
 		}
 		if logs, ok := sections[step.Name]; ok {

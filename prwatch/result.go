@@ -46,6 +46,17 @@ func (r PRWatchResult) HasFailedRun() bool {
 	return false
 }
 
+// HasRunNeedingLogs reports whether any workflow run has a failed, timed out
+// or cancelled job, the jobs --logs fetches logs for.
+func (r PRWatchResult) HasRunNeedingLogs() bool {
+	for _, run := range r.Runs {
+		if run != nil && model.RunNeedsJobLogs(run) {
+			return true
+		}
+	}
+	return false
+}
+
 // UnresolvedComments counts the review threads that still need a reply.
 //
 // Only a review-thread comment can be resolved on GitHub, so an issue comment, a

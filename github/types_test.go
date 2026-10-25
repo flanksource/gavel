@@ -83,6 +83,65 @@ func TestRunHasFailedJob(t *testing.T) {
 	assert.False(t, model.RunHasFailedJob(cancelledNotFailure))
 }
 
+// A cancelled job's logs are kept: a runner shut down mid-step or a job killed
+// by its deadline leaves its only evidence there.
+func TestNeedsJobLogs(t *testing.T) {
+	cases := []struct {
+		conclusion string
+		want       bool
+	}{
+		{"failure", true},
+		{"timed_out", true},
+		{"STARTUP_FAILURE", true},
+		{"cancelled", true},
+		{"CANCELLED", true},
+		{"success", false},
+		{"skipped", false},
+		{"neutral", false},
+		{"", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.conclusion, func(t *testing.T) {
+			assert.Equal(t, tc.want, model.NeedsJobLogs(tc.conclusion))
+		})
+	}
+}
+
+func TestRunNeedsJobLogs(t *testing.T) {
+	cancelled := &model.WorkflowRun{
+		Status:     "completed",
+		Conclusion: "cancelled",
+		Jobs:       []model.Job{{Name: "build", Conclusion: "success"}, {Name: "test", Conclusion: "cancelled"}},
+	}
+	assert.True(t, model.RunNeedsJobLogs(cancelled))
+
+	passing := &model.WorkflowRun{
+		Status:     "completed",
+		Conclusion: "success",
+		Jobs:       []model.Job{{Name: "build", Conclusion: "success"}, {Name: "lint", Conclusion: "skipped"}},
+	}
+	assert.False(t, model.RunNeedsJobLogs(passing))
+}
+
+func TestJobPrettyRendersLogsForCancelledJob(t *testing.T) {
+	job := model.Job{
+		Name:       "test",
+		Status:     "completed",
+		Conclusion: "cancelled",
+		Steps: []model.Step{
+			{
+				Name:       "Gavel tests",
+				Status:     "completed",
+				Conclusion: "failure",
+				Logs:       "##[error]The runner has received a shutdown signal.",
+			},
+		},
+	}
+	out := job.Pretty().String()
+	assert.Contains(t, out, "Gavel tests")
+	assert.Contains(t, out, "The runner has received a shutdown signal.")
+}
+
 // A timed_out job with attached logs must render its step logs — the previous
 // failure-only guard returned before any step was emitted.
 func TestJobPrettyRendersLogsForTimedOutJob(t *testing.T) {

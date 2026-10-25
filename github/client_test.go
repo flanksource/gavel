@@ -640,6 +640,28 @@ func TestAttachLogsToSteps(t *testing.T) {
 	assert.Equal(t, expected, job.Logs, "job-level logs retain the same bounded tail")
 }
 
+// A step stopped by a cancellation or a timeout concludes "cancelled", and the
+// lines it printed before the stop are why the job ended.
+func TestAttachLogsToStepsKeepsACancelledStep(t *testing.T) {
+	job := &model.Job{
+		Name: "test", Conclusion: "cancelled",
+		Steps: []model.Step{
+			{Name: "Set up job", Status: "completed", Conclusion: "success", Number: 1},
+			{Name: "Gavel tests", Status: "completed", Conclusion: "cancelled", Number: 2},
+		},
+	}
+	raw := "2024-01-15T10:00:00.0000000Z ##[group]Set up job\n" +
+		"2024-01-15T10:00:01.0000000Z OK\n" +
+		"2024-01-15T10:00:02.0000000Z ##[endgroup]\n" +
+		"2024-01-15T10:00:03.0000000Z ##[group]Gavel tests\n" +
+		"2024-01-15T10:00:04.0000000Z vitest ./apps/storybook running\n" +
+		"2024-01-15T10:00:05.0000000Z ##[endgroup]"
+
+	attachLogsToSteps(job, raw, 100)
+	assert.Empty(t, job.Steps[0].Logs)
+	assert.Equal(t, "vitest ./apps/storybook running", job.Steps[1].Logs)
+}
+
 func TestAttachLogsToStepsFallback(t *testing.T) {
 	job := &model.Job{
 		Name: "test", Conclusion: "failure",
