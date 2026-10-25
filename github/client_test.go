@@ -1,6 +1,7 @@
 package github
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -628,10 +629,11 @@ func TestAttachLogsToSteps(t *testing.T) {
 		"2024-01-15T10:00:01.0000000Z OK\n" +
 		"2024-01-15T10:00:02.0000000Z ##[endgroup]\n" +
 		"2024-01-15T10:00:03.0000000Z ##[group]Run tests\n" +
-		"2024-01-15T10:00:04.0000000Z \x1b[31mFAIL: oldest\x1b[0m\n" +
-		"2024-01-15T10:00:05.0000000Z \x1b[33mFAIL: penultimate\x1b[0m\n" +
-		"2024-01-15T10:00:06.0000000Z \x1b[32mFAIL: newest\x1b[0m\n" +
-		"2024-01-15T10:00:07.0000000Z ##[endgroup]"
+		"2024-01-15T10:00:04.0000000Z go test ./...\n" +
+		"2024-01-15T10:00:05.0000000Z ##[endgroup]\n" +
+		"2024-01-15T10:00:06.0000000Z \x1b[31mFAIL: oldest\x1b[0m\n" +
+		"2024-01-15T10:00:07.0000000Z \x1b[33mFAIL: penultimate\x1b[0m\n" +
+		"2024-01-15T10:00:08.0000000Z \x1b[32mFAIL: newest\x1b[0m"
 
 	attachLogsToSteps(job, raw, 2)
 	assert.Empty(t, job.Steps[0].Logs)
@@ -678,13 +680,58 @@ func TestAttachLogsToStepsFallback(t *testing.T) {
 
 func TestCleanRawLog(t *testing.T) {
 	raw := "2024-01-15T10:00:00.0000000Z \x1b[35m##[group]Run tests\x1b[0m\n" +
-		"2024-01-15T10:00:01.0000000Z \x1b[2K\x1b[31mFAIL\x1b[0m: TestFoo\n" +
-		"2024-01-15T10:00:02.0000000Z \x1b[1m##[error]Process completed with exit code 1\x1b[0m\n" +
-		"2024-01-15T10:00:03.0000000Z \x1b[35m##[endgroup]\x1b[0m"
+		"2024-01-15T10:00:01.0000000Z \x1b[36;1mgo test ./...\x1b[0m\n" +
+		"2024-01-15T10:00:02.0000000Z \x1b[35m##[endgroup]\x1b[0m\n" +
+		"2024-01-15T10:00:03.0000000Z \x1b[2K\x1b[31mFAIL\x1b[0m: TestFoo\n" +
+		"2024-01-15T10:00:04.0000000Z \x1b[1m##[error]Process completed with exit code 1\x1b[0m"
 
 	result := cleanRawLog(raw)
 	assert.Equal(t, "\x1b[31mFAIL\x1b[0m: TestFoo\n\x1b[1mProcess completed with exit code 1\x1b[0m", result)
 	assert.NotContains(t, result, "\x1b[2K", "unsupported cursor controls stripped")
+}
+
+// A composite action echoes each run step's script, shell and env inside a
+// "Run ..." group and wraps its steps in start-action/end-action markers. None
+// of that is output, and a long script can fill the whole tail.
+func TestCleanRawLogDropsTheActionShellWrapper(t *testing.T) {
+	lines := []string{
+		"##[group]Run flanksource/gavel@43a9189b",
+		"with:",
+		"  args: test --framework vitest",
+		"##[endgroup]",
+		"##[start-action display=Run gavel;id=__flanksource_gavel.run]",
+		"##[group]Run set +e",
+		"set +e",
+		`gavel action-watchdog --timeout "${GAVEL_TIMEOUT_MINUTES}m" -- \`,
+		"  $GAVEL_ARGS",
+		"shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}",
+		"env:",
+		"  GAVEL_TIMEOUT_MINUTES: 20",
+		"##[endgroup]",
+		"09:18:48.014 INF Test run completed. 2 total failures.",
+		"##[error]Process completed with exit code 143.",
+		"##[error]The runner has received a shutdown signal.",
+		"##[end-action id=__flanksource_gavel.run;outcome=failure;conclusion=failure;duration_ms=419989]",
+		"##[start-action display=Upload artifacts;id=__flanksource_gavel.upload]",
+		"##[end-action id=__flanksource_gavel.upload;outcome=skipped;conclusion=skipped;duration_ms=0]",
+	}
+	for i := range lines {
+		lines[i] = "2026-10-25T09:18:48.0000000Z " + lines[i]
+	}
+
+	assert.Equal(t, strings.Join([]string{
+		"09:18:48.014 INF Test run completed. 2 total failures.",
+		"Process completed with exit code 143.",
+		"The runner has received a shutdown signal.",
+	}, "\n"), cleanRawLog(strings.Join(lines, "\n")))
+}
+
+// A group a step prints itself (::group::) is output, and is kept.
+func TestCleanRawLogKeepsAStepsOwnGroups(t *testing.T) {
+	raw := "2026-10-25T09:00:00.0000000Z ##[group]Vitest summary\n" +
+		"2026-10-25T09:00:01.0000000Z 980 passed\n" +
+		"2026-10-25T09:00:02.0000000Z ##[endgroup]"
+	assert.Equal(t, "980 passed", cleanRawLog(raw))
 }
 
 func TestAttachLogsToStepsCleansFallback(t *testing.T) {

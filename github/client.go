@@ -477,12 +477,24 @@ func FetchWorkflowDefinition(opts Options, run *model.WorkflowRun) (string, erro
 	return yaml, nil
 }
 
+// cleanRawLog is a job log's output: timestamps, group markers and
+// annotations stripped, and without the runner's echo of each step. A "Run
+// ..." group holds the step's command, shell and env (its output follows the
+// group), and start-action/end-action mark a composite action's steps.
 func cleanRawLog(s string) string {
 	var sb strings.Builder
 	wroteLine := false
+	inStepEcho := false
 	for _, line := range strings.Split(s, "\n") {
 		display, control := prepareLogLine(line)
-		if strings.HasPrefix(control, "##[group]") || strings.HasPrefix(control, "##[endgroup]") {
+		switch {
+		case strings.HasPrefix(control, "##[group]"):
+			inStepEcho = strings.HasPrefix(control, "##[group]Run ")
+			continue
+		case strings.HasPrefix(control, "##[endgroup]"):
+			inStepEcho = false
+			continue
+		case inStepEcho, strings.HasPrefix(control, "##[start-action "), strings.HasPrefix(control, "##[end-action "):
 			continue
 		}
 		display = actionsAnnotation.ReplaceAllString(display, "")
