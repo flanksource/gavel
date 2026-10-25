@@ -45,6 +45,9 @@ catalogs:
     ai:
       specifier: ^6.0.199
       version: 6.0.206
+    monaco-editor:
+      specifier: 0.48.0
+      version: 0.48.0
     oxlint:
       specifier: ^1.71.0
       version: 1.71.0
@@ -117,6 +120,9 @@ importers:
       marked:
         specifier: ^15.0.12
         version: 15.0.12
+      monaco-editor:
+        specifier: 'catalog:'
+        version: 0.48.0
       react:
         specifier: ^19.2.7
         version: 19.2.7
@@ -200,6 +206,9 @@ importers:
       jsdom:
         specifier: ^25.0.1
         version: 25.0.1(supports-color@8.1.1)
+      monaco-editor:
+        specifier: 'catalog:'
+        version: 0.48.0
       react:
         specifier: ^19.2.7
         version: 19.2.7

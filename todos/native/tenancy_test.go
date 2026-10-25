@@ -197,8 +197,10 @@ func TestRepositoryIsolatesOrganizations(t *testing.T) {
 		assert.Empty(t, byRun, "ListLandingsForRuns")
 		prLinks, err := other.ListIssuePRLinks(ctx, issue.ID)
 		requireHidden(t, prLinks, err, "ListIssuePRLinks")
-		linkedIssues, err := other.ListPRLinkedIssues(ctx, workspace.ID, prURL)
+		linkedIssues, err := other.ListPRLinkedIssues(ctx, native.PRLinkedIssuesQuery{URL: prURL, WorkspaceID: workspace.ID})
 		requireHidden(t, linkedIssues, err, "ListPRLinkedIssues")
+		allLinkedIssues, err := other.ListPRLinkedIssues(ctx, native.PRLinkedIssuesQuery{URL: prURL})
+		requireHidden(t, allLinkedIssues, err, "ListPRLinkedIssues across workspaces")
 	})
 
 	t.Run("writes", func(t *testing.T) {

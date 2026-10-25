@@ -1,4 +1,11 @@
-import { afterEach } from 'vitest';
+import { afterEach, vi } from 'vitest';
+
+// The gavel test-runner library (imported for its run views) mounts the Files
+// tab, which pulls in Monaco and an inline Vite worker; neither runs in jsdom,
+// and no spec here exercises the editor.
+vi.mock('monaco-editor', () => ({}));
+vi.mock('@monaco-editor/react', () => ({ loader: { config: () => undefined }, default: () => null }));
+vi.mock('monaco-editor/esm/vs/editor/editor.worker?worker&inline', () => ({ default: class FakeWorker {} }));
 
 // jsdom implements no media-query engine, so window.matchMedia is simply
 // absent. Any component that sizes itself from a breakpoint therefore throws

@@ -65,6 +65,7 @@ vi.mock('@flanksource/clicky-ui/ai', () => ({
   }],
   promptRuntimeValueToPayload: (value: unknown) => ({ spec: value }),
   reconcileModelCapabilities: (value: unknown) => value,
+  runtimeSpecFields: () => [],
   RuntimeBar: ({ ariaLabel }: { ariaLabel?: string }) => <Button type="button" aria-label={ariaLabel}>Runtime</Button>,
   SpecRuntimeEditor: () => <div>Verification runtime editor</div>,
   OrderedPresetSelect: () => null,
