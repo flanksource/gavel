@@ -12,8 +12,8 @@ import {
 import type { ProjectGit, ProjectGitSummary } from './types';
 
 const summaries: ProjectGitSummary[] = [
-  { name: 'gavel', base: 'main', adds: 12, dels: 3, worktrees: 2, branches: 1 },
-  { name: 'broken', base: '', adds: 0, dels: 0, worktrees: 0, branches: 0, error: 'not a git repository' },
+  { name: 'gavel', base: 'main', adds: 12, dels: 3, worktrees: 2, branches: 1, uncommittedBranches: 2 },
+  { name: 'broken', base: '', adds: 0, dels: 0, worktrees: 0, branches: 0, uncommittedBranches: 0, error: 'not a git repository' },
 ];
 
 const git: ProjectGit = {
@@ -58,6 +58,11 @@ describe('parseProjectGitSummaries', () => {
     ['a non-array payload', { projects: [] }],
     ['an entry without a name', [{ ...summaries[0], name: undefined }]],
     ['a non-numeric count', [{ ...summaries[0], adds: '12' }]],
+    ['a missing uncommitted branch count', [{ ...summaries[0], uncommittedBranches: undefined }]],
+    ['a non-numeric uncommitted branch count', [{ ...summaries[0], uncommittedBranches: '2' }]],
+    ['a negative uncommitted branch count', [{ ...summaries[0], uncommittedBranches: -1 }]],
+    ['a fractional uncommitted branch count', [{ ...summaries[0], uncommittedBranches: 1.5 }]],
+    ['an infinite uncommitted branch count', [{ ...summaries[0], uncommittedBranches: Infinity }]],
     ['a non-string error', [{ ...summaries[0], error: 7 }]],
   ])('rejects %s', (_label, payload) => {
     expect(() => parseProjectGitSummaries(payload)).toThrow(/git summary/i);

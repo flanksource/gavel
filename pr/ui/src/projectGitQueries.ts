@@ -80,7 +80,8 @@ export function parseProjectGitSummaries(payload: unknown): ProjectGitSummary[] 
     if (!isRecord(entry)
       || typeof entry.name !== 'string'
       || typeof entry.base !== 'string'
-      || !hasNumbers(entry, ['adds', 'dels', 'worktrees', 'branches'])
+      || !hasNumbers(entry, ['adds', 'dels', 'worktrees', 'branches', 'uncommittedBranches'])
+      || !Number.isSafeInteger(entry.uncommittedBranches) || Number(entry.uncommittedBranches) < 0
       || (entry.error !== undefined && typeof entry.error !== 'string')) {
       throw new Error(`Load project git summary: invalid entry ${JSON.stringify(entry)}`);
     }

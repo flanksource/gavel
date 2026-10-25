@@ -4,7 +4,7 @@ import type { ProjectGitSummaryView } from '../projectGitQueries';
 import type { ProjectGitSummary } from '../types';
 import { ProjectGitBadges, projectGitBadgesState } from './ProjectGitBadges';
 
-const summary: ProjectGitSummary = { name: 'gavel', base: 'main', adds: 120, dels: 34, worktrees: 3, branches: 2 };
+const summary: ProjectGitSummary = { name: 'gavel', base: 'main', adds: 120, dels: 34, worktrees: 3, branches: 2, uncommittedBranches: 0 };
 
 const view = (overrides: Partial<ProjectGitSummaryView> = {}, summaries: ProjectGitSummary[] = []): ProjectGitSummaryView => ({
   byProject: new Map(summaries.map(entry => [entry.name, entry])),
@@ -25,6 +25,15 @@ describe('projectGitBadgesState', () => {
 });
 
 describe('ProjectGitBadges', () => {
+  it.each([1, 2])('shows %i branches with uncommitted changes even without unmerged commits or line changes', count => {
+    render(<ProjectGitBadges state={{ status: 'ready', summary: { ...summary, adds: 0, dels: 0, worktrees: 0, branches: 0, uncommittedBranches: count } }} />);
+
+    const label = `${count} ${count === 1 ? 'branch' : 'branches'} with uncommitted changes`;
+    expect(screen.getByLabelText(label).getAttribute('title')).toBe(label);
+    expect(screen.getByLabelText(label).textContent).toBe(String(count));
+    expect(screen.queryByLabelText(/unmerged branch/)).toBeNull();
+  });
+
   it('renders nothing while the summary is loading', () => {
     const { container } = render(<ProjectGitBadges state={{ status: 'loading' }} />);
 

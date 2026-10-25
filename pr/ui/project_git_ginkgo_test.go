@@ -132,6 +132,20 @@ var _ = Describe("project git", func() {
 	})
 
 	Describe("GET /api/projects/git-summary", func() {
+		It("counts dirty branches in both the primary and linked checkouts, regardless of file count", func() {
+			Expect(os.WriteFile(filepath.Join(f.repo, "new.txt"), []byte("new\n"), 0o644)).To(Succeed())
+			Expect(os.WriteFile(filepath.Join(f.worktree, "other.txt"), []byte("other\n"), 0o644)).To(Succeed())
+
+			recorder := serveProjectGit(server, http.MethodGet, "/api/projects/git-summary", nil)
+
+			Expect(recorder.Code).To(Equal(http.StatusOK), recorder.Body.String())
+			summaries := decodeProjectGit[[]gitstate.Summary](recorder)
+			Expect(summaries).To(HaveLen(1))
+			Expect(summaries[0].Error).To(BeEmpty())
+			Expect(summaries[0].Branches).To(Equal(2))
+			Expect(summaries[0].UncommittedBranches).To(Equal(2))
+		})
+
 		It("sums unmerged branch diffs and uncommitted worktree lines, isolating a failing project", func() {
 			Expect(SaveProjects([]Project{{Name: "acme", Dir: f.repo}, {Name: "broken", Dir: GinkgoT().TempDir()}})).To(Succeed())
 
@@ -141,7 +155,7 @@ var _ = Describe("project git", func() {
 			summaries := decodeProjectGit[[]gitstate.Summary](recorder)
 			Expect(summaries).To(HaveLen(2))
 			// feature/a: a.txt +2, b.txt +1; solo: README +1 -1; worktree: b.txt +1.
-			Expect(summaries[0]).To(Equal(gitstate.Summary{Name: "acme", Base: "main", Adds: 5, Dels: 1, Worktrees: 1, Branches: 2}))
+			Expect(summaries[0]).To(Equal(gitstate.Summary{Name: "acme", Base: "main", Adds: 5, Dels: 1, Worktrees: 1, Branches: 2, UncommittedBranches: 1}))
 			Expect(summaries[1].Name).To(Equal("broken"))
 			Expect(summaries[1].Error).To(ContainSubstring("worktree list"))
 			Expect(summaries[1]).To(Equal(gitstate.Summary{Name: "broken", Error: summaries[1].Error}))
