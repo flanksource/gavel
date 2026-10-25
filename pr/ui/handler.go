@@ -668,6 +668,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/projects/{name}/status", s.handleProjectStatus)
 	mux.HandleFunc("POST /api/projects/{name}/actions", s.handleProjectAction)
 	mux.HandleFunc("GET /api/projects/{name}/actions/schema", s.handleProjectActionSchema)
+	mux.HandleFunc("GET /api/projects/{name}/branches", s.handleProjectBranches)
 	mux.HandleFunc("POST /api/projects/{name}/commit-queue", s.handleCommitQueue)
 	mux.HandleFunc("POST /api/projects/{name}/commit-queue/{runId}/retry", s.handleCommitQueueRetry)
 	mux.Handle("/api/project-runs/", http.StripPrefix("/api/project-runs", s.projectRunServer().Handler()))

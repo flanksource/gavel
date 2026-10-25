@@ -29,11 +29,16 @@ type HostedWorkspaces struct {
 	Sources *sandbox.Sources
 }
 
-// repos reads org's repositories, or the one id names, shaped as the sandbox reads them.
-func (w HostedWorkspaces) repos(ctx context.Context, org uuid.UUID, id *uuid.UUID) ([]sandbox.Repo, error) {
-	query := w.DB.WithContext(ctx).Table("repos").
+// repoQuery selects org's repositories, shaped as the sandbox reads them.
+func (w HostedWorkspaces) repoQuery(ctx context.Context, org uuid.UUID) *gorm.DB {
+	return w.DB.WithContext(ctx).Table("repos").
 		Select("id, org_id AS org, source, name, COALESCE(github_repo_id, 0) AS git_hub_repo_id, COALESCE(installation_id, 0) AS installation_id").
 		Where("org_id = ?", org)
+}
+
+// repos reads org's repositories, or the one id names.
+func (w HostedWorkspaces) repos(ctx context.Context, org uuid.UUID, id *uuid.UUID) ([]sandbox.Repo, error) {
+	query := w.repoQuery(ctx, org)
 	if id != nil {
 		query = query.Where("id = ?", *id)
 	}
