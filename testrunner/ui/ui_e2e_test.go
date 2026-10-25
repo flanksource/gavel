@@ -239,6 +239,8 @@ var _ = BeforeSuite(func() {
 			chromedp.Flag("disable-dev-shm-usage", true),
 			chromedp.WindowSize(1440, 900),
 			chromedp.UserDataDir(tmpDir),
+			// The default 20s is not enough for Chrome to start beside the rest of the test run on CI.
+			chromedp.WSURLReadTimeout(time.Minute),
 		)...,
 	)
 	// Warm up the browser so the first tab is ready.
