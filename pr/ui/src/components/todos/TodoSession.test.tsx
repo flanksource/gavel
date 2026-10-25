@@ -234,7 +234,7 @@ describe('session errors', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Copy error details' }));
 
     await waitFor(() => expect(execCommand).toHaveBeenCalledWith('copy'));
-    expect(screen.getByRole('button', { name: 'Copy error details' }).textContent).toContain('Copied');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Copy error details' }).textContent).toContain('Copied'));
   });
 });
 
