@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -56,6 +57,11 @@ var _ = Describe("TODO PR links over HTTP", Ordered, func() {
 		previous := openTodoProvider
 		openTodoProvider = func(context.Context, string) (todos.Provider, error) { return provider, nil }
 		DeferCleanup(func() { openTodoProvider = previous })
+		global, err := todoruntime.NewGlobal(opened.Gorm())
+		Expect(err).NotTo(HaveOccurred())
+		previousGlobal := openGlobalTodoProvider
+		openGlobalTodoProvider = func(context.Context) (todos.GlobalReferenceProvider, error) { return global, nil }
+		DeferCleanup(func() { openGlobalTodoProvider = previousGlobal })
 
 		todo, err = provider.Create(ctx, todos.CreateRequest{Title: "Fix the parser", PR: &types.PR{Number: 12, URL: primaryURL}})
 		Expect(err).NotTo(HaveOccurred())
@@ -121,6 +127,25 @@ var _ = Describe("TODO PR links over HTTP", Ordered, func() {
 		Expect(linked[0].ID).To(Equal(todo.ID))
 		Expect(linked[0].Title).To(Equal("Fix the parser"))
 		Expect(linked[0].Relation).To(Equal(types.PRRelationRelated))
+	})
+
+	It("finds the TODOs linking a PR without a dir, whatever directory the server runs in", func() {
+		// The PR page asks with the URL alone. A server started outside every
+		// configured project cannot open a workspace for its own directory, so
+		// the lookup must not depend on one.
+		previous := openTodoProvider
+		openTodoProvider = func(_ context.Context, dir string) (todos.Provider, error) {
+			return nil, fmt.Errorf("%w: project for directory %q was not found", ErrProjectNotFound, dir)
+		}
+		DeferCleanup(func() { openTodoProvider = previous })
+
+		recorder := do(http.MethodGet, "/api/prs/todos?url="+url.QueryEscape(primaryURL), "")
+		Expect(recorder.Code).To(Equal(http.StatusOK), recorder.Body.String())
+		var linked []todos.PRLinkedTODO
+		Expect(json.Unmarshal(recorder.Body.Bytes(), &linked)).To(Succeed())
+		Expect(linked).To(HaveLen(1))
+		Expect(linked[0].ID).To(Equal(todo.ID))
+		Expect(linked[0].Relation).To(Equal(types.PRRelationImplements))
 	})
 
 	It("refuses bad input with 4xx JSON errors", func() {

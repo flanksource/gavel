@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
-import { localClicky } from '../../testrunner/ui/vite.clicky';
+import { localClicky } from '../../testrunner/ui/vite.clicky.ts';
 
 const require = createRequire(import.meta.url);
 const here = dirname(fileURLToPath(import.meta.url));
@@ -28,8 +28,8 @@ const uiDate = new Date().toISOString();
 const gavelTestRunnerHooks = resolve(here, '../../testrunner/ui/src/hooks.ts');
 
 export default defineConfig(({ command }) => {
-  // `pr list --ui --dev` resolves clicky-ui from the sibling checkout's source.
-  const clicky = localClicky(resolve(here, '../..'), command, 'pr/ui');
+  // Resolves clicky-ui from the sibling checkout's source when it is present.
+  const clicky = localClicky(resolve(here, '../..'), 'pr/ui');
 
   return {
     plugins: [react(), tailwindcss()],
