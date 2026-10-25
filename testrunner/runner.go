@@ -1488,7 +1488,8 @@ func markSubtreeTimedOut(t *parsers.Test, marker string) bool {
 
 // augmentBenchArgs decides whether benchmarks should run for a specific Go test package
 // and returns the adjusted extraArgs with `-bench=<pattern>` (and `-run=^$` when the
-// package has no regular Test* funcs) appended. It is a no-op when:
+// package has no runnable tests: no plain Test* funcs and no Ginkgo suite)
+// appended. It is a no-op when:
 //   - any of the incoming extraArgs already contain `-bench` (user override)
 //   - bench is neither requested via RunOptions.Bench nor auto-enabled for this package
 func (o *TestOrchestrator) augmentBenchArgs(r runners.Runner, pkgPath string, extraArgs []string) []string {
@@ -1509,7 +1510,7 @@ func (o *TestOrchestrator) augmentBenchArgs(r runners.Runner, pkgPath string, ex
 		return extraArgs
 	case "":
 		// Auto-enable only when the package has benchmarks but no runnable tests.
-		if gt.PackageHasBenchmarks(pkgPath) && !gt.PackageHasGoTests(pkgPath) {
+		if gt.PackageHasBenchmarks(pkgPath) && !gt.PackageHasRunnableTests(pkgPath) {
 			pattern = "."
 		} else {
 			return extraArgs
@@ -1524,7 +1525,7 @@ func (o *TestOrchestrator) augmentBenchArgs(r runners.Runner, pkgPath string, ex
 
 	args := append([]string{}, extraArgs...)
 	args = append(args, "-bench="+pattern)
-	if !gt.PackageHasGoTests(pkgPath) {
+	if !gt.PackageHasRunnableTests(pkgPath) {
 		hasRun := false
 		for _, a := range extraArgs {
 			if a == "-run" || strings.HasPrefix(a, "-run=") {

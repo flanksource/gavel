@@ -8,6 +8,7 @@ import (
 	"runtime"
 
 	"github.com/flanksource/clicky"
+	"github.com/flanksource/clicky/extensions"
 	"github.com/flanksource/clicky/formatters"
 	"github.com/flanksource/clicky/mcp"
 	"github.com/flanksource/clicky/shutdown"
@@ -244,6 +245,9 @@ func main() {
 
 func execute() int {
 	defer shutdown.RecoverAndShutdown()
+	// Commands register in init() across files, so the tree is only complete
+	// here: wire --interactive (argument forms) over all of it.
+	extensions.CobraExtensions(rootCmd).Interactive()
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1

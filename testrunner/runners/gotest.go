@@ -174,6 +174,29 @@ func (r *GoTest) PackageHasGoTests(packagePath string) bool {
 	return r.hasTestsBeyondTestMain(dir)
 }
 
+// PackageHasRunnableTests reports whether packagePath has tests a plain `go test`
+// run executes: non-Ginkgo Test* funcs, or a Ginkgo suite (whose bootstrap
+// Test* func lives in a Ginkgo-importing file PackageHasGoTests ignores).
+func (r *GoTest) PackageHasRunnableTests(packagePath string) bool {
+	if r.PackageHasGoTests(packagePath) {
+		return true
+	}
+	dir := packagePath
+	if !filepath.IsAbs(dir) {
+		dir = filepath.Join(r.workDir, packagePath)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), "_test.go") && hasGinkgoImports(filepath.Join(dir, entry.Name())) {
+			return true
+		}
+	}
+	return false
+}
+
 // hasTestsBeyondTestMain returns true if there's at least one Test* function
 // other than TestMain. TestMain alone does not produce runnable tests.
 func (r *GoTest) hasTestsBeyondTestMain(pkgDir string) bool {

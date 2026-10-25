@@ -61,6 +61,33 @@ func TestX(t *testing.T) {}
 		t.Fatal(err)
 	}
 
+	// A Ginkgo suite beside a plain-testing benchmark: the suite's bootstrap is
+	// the package's runnable test, so benchmarks are opt-in and never displace it.
+	ginkgoBench := filepath.Join(tmpDir, "ginkgobench")
+	if err := os.MkdirAll(ginkgoBench, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ginkgoBench, "suite_test.go"), []byte(`package ginkgobench_test
+
+import (
+	"testing"
+
+	. "github.com/onsi/ginkgo/v2"
+)
+
+func TestSuite(t *testing.T) { RunSpecs(t, "suite") }
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ginkgoBench, "bench_test.go"), []byte(`package ginkgobench_test
+
+import "testing"
+
+func BenchmarkCodec(b *testing.B) {}
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
 	runner := runners.NewGoTest(tmpDir)
 	newOrchestrator := func(bench string) *TestOrchestrator {
 		return &TestOrchestrator{
@@ -104,6 +131,18 @@ func TestX(t *testing.T) {}
 			bench: "BenchmarkY",
 			pkg:   "./mixed",
 			want:  []string{"-bench=BenchmarkY"},
+		},
+		{
+			name:  "ginkgo suite with a benchmark runs its specs, not the benchmark",
+			bench: "",
+			pkg:   "./ginkgobench",
+			want:  nil,
+		},
+		{
+			name:  "ginkgo suite with bench=true runs the benchmark beside its specs",
+			bench: "true",
+			pkg:   "./ginkgobench",
+			want:  []string{"-bench=."},
 		},
 		{
 			name:      "user-supplied -bench in extraArgs is preserved as-is",

@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"html"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	captaincli "github.com/flanksource/captain/pkg/cli"
 	"github.com/flanksource/clicky/api"
 	clickyexec "github.com/flanksource/clicky/exec"
 	clickytask "github.com/flanksource/clicky/task"
@@ -202,6 +204,38 @@ func (s *Server) SetLintResults(results []*linters.LinterResult) {
 	s.notify()
 }
 
+// UpsertLintResult replaces the lint result with the same linter and work dir,
+// or appends it, so a result can appear while it is still pending or running.
+func (s *Server) UpsertLintResult(result *linters.LinterResult) {
+	s.mu.Lock()
+	i := slices.IndexFunc(s.lint, func(r *linters.LinterResult) bool {
+		return r.Linter == result.Linter && r.WorkDir == result.WorkDir
+	})
+	if i < 0 {
+		s.lint = append(s.lint, result)
+	} else {
+		s.lint[i] = result
+	}
+	s.lintRun = true
+	s.mu.Unlock()
+	s.notify()
+}
+
+// RemoveLintResult drops the lint result with this linter and work dir, as when
+// a pending entry is replaced by per-model results.
+func (s *Server) RemoveLintResult(linter, workDir string) {
+	s.mu.Lock()
+	s.lint = slices.DeleteFunc(s.lint, func(r *linters.LinterResult) bool {
+		return r.Linter == linter && r.WorkDir == workDir
+	})
+	s.mu.Unlock()
+	s.notify()
+}
+
+func (s *Server) lintInFlightLocked() bool {
+	return slices.ContainsFunc(s.lint, (*linters.LinterResult).InFlight)
+}
+
 // SetBenchComparison stores a benchmark comparison so it appears in the next snapshot.
 func (s *Server) SetBenchComparison(cmp *bench.BenchComparison) {
 	s.mu.Lock()
@@ -341,7 +375,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/stop", s.handleStop)
 	mux.HandleFunc("/api/lint/ignore", s.handleLintIgnore)
 	mux.HandleFunc("/api/tests/edit", s.handleTestEdit)
+	mux.HandleFunc("/api/file", s.handleFileSource)
 	mux.HandleFunc("/api/benchmarks", s.handleBenchJSON)
+	// Prompt lint results name the Captain prompt run producing them; the run and
+	// its transcript are Captain's to serve and follow.
+	mux.Handle("/api/captain/sessions/", http.StripPrefix("/api/captain/sessions", captaincli.SessionHandler()))
+	mux.Handle("/api/captain/prompt/runs/", http.StripPrefix("/api/captain/prompt/runs", captaincli.PromptRunHandler()))
 	mux.HandleFunc(AssetsMount+"/", handleAssets)
 	return mux
 }
@@ -488,7 +527,7 @@ func (s *Server) snapshotWithTasks(taskTests []parsers.Test) Snapshot {
 	// results fixed in s.tests with no live run behind it, so consulting the
 	// process-global task registry would only leak phantom tasks (and pollute
 	// replay tests that share that registry).
-	running := !s.done
+	running := !s.done || s.lintInFlightLocked()
 	if !s.replayed {
 		if len(taskTests) > 0 {
 			merged := make([]parsers.Test, 0, len(taskTests)+len(s.tests))
