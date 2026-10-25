@@ -1605,12 +1605,13 @@ func (o *TestOrchestrator) parseTestResults(testRun *runners.TestRun, result *ex
 		}
 	}
 
-	// Set package path and stderr on each test
+	// The package stderr stays once on the suite result; only a failed test
+	// without stderr of its own gets a copy, as it may explain the failure.
 	processStderr := stripExitStatus(strings.TrimSpace(result.Stderr))
 	for i := range tests {
 		tests[i].PackagePath = pkgPath
 		tests[i].Command = testRun.Process.Cmd + " " + strings.Join(testRun.Process.Args, " ")
-		if tests[i].Stderr == "" {
+		if tests[i].Failed && tests[i].Stderr == "" {
 			tests[i].Stderr = processStderr
 		}
 	}
