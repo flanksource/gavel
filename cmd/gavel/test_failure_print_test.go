@@ -7,6 +7,32 @@ import (
 	"github.com/flanksource/gavel/testrunner/parsers"
 )
 
+func TestFailedPackageStderrKeepsTheLastLinesOfEachFailedPackage(t *testing.T) {
+	const keep = 2
+	tree := []parsers.Test{{
+		Name: "apps/", PackagePath: "apps", Failed: true,
+		Children: []parsers.Test{{
+			Name: "storybook/", PackagePath: "apps/storybook", Failed: true,
+			Stderr:   "scan done\n[vite] Failed to resolve import \"@opentelemetry/api\"\nError: Failed to import test file Chat.stories.tsx",
+			Children: []parsers.Test{{Name: "Chat.stories.tsx", Failed: true, Stderr: "Failed to import test file Chat.stories.tsx"}},
+		}, {
+			Name: "playground/", PackagePath: "apps/playground", Stderr: "passing noise",
+			Children: []parsers.Test{{Name: "sum.test.ts", Passed: true}},
+		}},
+	}}
+
+	got := failedPackageStderr(tree, keep)
+
+	want := []packageStderr{{
+		Package: "apps/storybook",
+		Tail:    "[vite] Failed to resolve import \"@opentelemetry/api\"\nError: Failed to import test file Chat.stories.tsx",
+		Omitted: 1,
+	}}
+	if len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("failedPackageStderr = %+v, want %+v", got, want)
+	}
+}
+
 func TestCollectLeavesReturnsLeafFailuresOnly(t *testing.T) {
 	tree := []parsers.Test{{
 		Name: "pkg",

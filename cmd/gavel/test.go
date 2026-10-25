@@ -665,6 +665,57 @@ func printTestRunDetails(tests []parsers.Test, showStdout, showStderr testrunner
 	printSection("Test failures", "text-red-600", failed, true)
 	printSection("Test timeouts", "text-amber-600", timedOut, true)
 	printSection("Skipped tests", "text-yellow-500", skipped, false)
+	if showStderr.ShouldShow(true) {
+		printPackageStderr(failedPackageStderr(tests, packageStderrTailLines))
+	}
+}
+
+// packageStderrTailLines bounds the package stderr printed per failed package;
+// the JSON report keeps all of it.
+const packageStderrTailLines = 40
+
+type packageStderr struct {
+	Package string
+	Tail    string
+	Omitted int
+}
+
+// failedPackageStderr returns the last maxLines lines of the process stderr
+// the runner kept on each failed package's node — the explanation a failed test
+// reporting stderr of its own (an import failure) does not carry.
+func failedPackageStderr(tests []parsers.Test, maxLines int) []packageStderr {
+	var out []packageStderr
+	var walk func(nodes []parsers.Test)
+	walk = func(nodes []parsers.Test) {
+		for _, node := range nodes {
+			if len(node.Children) == 0 {
+				continue
+			}
+			if node.Failed && node.Stderr != "" {
+				lines := strings.Split(node.Stderr, "\n")
+				omitted := max(len(lines)-maxLines, 0)
+				out = append(out, packageStderr{Package: node.PackagePath, Tail: strings.Join(lines[omitted:], "\n"), Omitted: omitted})
+			}
+			walk(node.Children)
+		}
+	}
+	walk(tests)
+	return out
+}
+
+func printPackageStderr(packages []packageStderr) {
+	if len(packages) == 0 {
+		return
+	}
+	fmt.Println(clicky.MustFormat(clicky.Text(fmt.Sprintf("Package stderr (%d)", len(packages)), "bold text-red-600")))
+	for _, pkg := range packages {
+		header := clicky.Text(pkg.Package, "bold")
+		if pkg.Omitted > 0 {
+			header = header.Append(fmt.Sprintf(" (last %d lines; %d earlier lines in the JSON report)", packageStderrTailLines, pkg.Omitted), "text-muted")
+		}
+		fmt.Println(clicky.MustFormat(header))
+		fmt.Println(pkg.Tail)
+	}
 }
 
 // passingLeavesForDisplay returns the passing leaf tests to render under

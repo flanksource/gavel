@@ -659,7 +659,7 @@ func runSingleRootWithUpdateOwnership(opts RunOptions, closeUpdates bool) (any, 
 	}
 
 	// Build hierarchical tree from flat test results
-	tree := parsers.BuildTestTree(tests)
+	tree := attachFailedPackageStderr(parsers.BuildTestTree(tests), results)
 
 	// Discover and run fixture tests, gated on the --fixtures flag or
 	// fixtures.enabled in .gavel.yaml. Keep the partial tree and return direct
