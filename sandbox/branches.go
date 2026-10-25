@@ -4,9 +4,13 @@ package sandbox
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 )
+
+// ErrUnknownBranch is a branch name that doesn't name one of the repository's branches.
+var ErrUnknownBranch = errors.New("unknown branch")
 
 // Branches are a repository's branch names, sorted, and its default branch.
 type Branches struct {
@@ -34,7 +38,7 @@ func (s *Sources) Branches(ctx context.Context, repo Repo) (Branches, error) {
 // BranchCommit is the commit repo's branch is at.
 func (s *Sources) BranchCommit(ctx context.Context, repo Repo, branch string) (string, error) {
 	if _, err := runGit(ctx, nil, "check-ref-format", "--branch", branch); err != nil || strings.HasPrefix(branch, "-") {
-		return "", fmt.Errorf("%q is not a valid branch name", branch)
+		return "", fmt.Errorf("%w %q: not a valid branch name", ErrUnknownBranch, branch)
 	}
 	dir, err := s.sourceDir(ctx, repo)
 	if err != nil {
@@ -42,7 +46,7 @@ func (s *Sources) BranchCommit(ctx context.Context, repo Repo, branch string) (s
 	}
 	sha, err := runGit(ctx, nil, "-C", dir, "rev-parse", "--verify", "--quiet", "--end-of-options", "refs/heads/"+branch+"^{commit}")
 	if err != nil {
-		return "", fmt.Errorf("branch %q is not a branch of %s", branch, repo.label())
+		return "", fmt.Errorf("%w %q: %s has no such branch", ErrUnknownBranch, branch, repo.label())
 	}
 	return strings.TrimSpace(sha), nil
 }

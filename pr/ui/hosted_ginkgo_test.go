@@ -105,8 +105,8 @@ var _ = Describe("hosted mode routes", func() {
 			status     int
 			message    string
 		}{
-			{"/api/projects/app/actions", `{"action":"test"}`, http.StatusNotImplemented, "project actions are not available in hosted mode yet"},
-			{"/api/projects/app/actions", `{"action":"lint"}`, http.StatusNotImplemented, "project actions are not available in hosted mode yet"},
+			{"/api/projects/app/actions", `{"action":"test","branch":"main"}`, http.StatusNotImplemented, "project actions need a sandbox: start gavel serve with --sandbox"},
+			{"/api/projects/app/actions", `{"action":"lint","branch":"main"}`, http.StatusNotImplemented, "project actions need a sandbox: start gavel serve with --sandbox"},
 			{"/api/projects/app/actions", `{"action":"commit"}`, http.StatusBadRequest, "commits come from agent runs in hosted mode"},
 			{"/api/projects/app/commit-queue", `{}`, http.StatusBadRequest, "commits come from agent runs in hosted mode"},
 			{"/api/projects/app/branch/pr", `{}`, http.StatusBadRequest, "commits come from agent runs in hosted mode"},

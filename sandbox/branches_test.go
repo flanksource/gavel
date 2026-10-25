@@ -34,9 +34,10 @@ func TestBranchesListTheRepositorysBranches(t *testing.T) {
 	assert.Equal(t, git(t, work, "rev-parse", "feat/x"), sha)
 
 	_, err = sources.BranchCommit(context.Background(), target, "nope")
-	require.EqualError(t, err, `branch "nope" is not a branch of app`)
+	require.EqualError(t, err, `unknown branch "nope": app has no such branch`)
+	require.ErrorIs(t, err, ErrUnknownBranch)
 	_, err = sources.BranchCommit(context.Background(), target, "--upload-pack=x")
-	require.EqualError(t, err, `"--upload-pack=x" is not a valid branch name`)
+	require.EqualError(t, err, `unknown branch "--upload-pack=x": not a valid branch name`)
 	_, err = sources.BranchCommit(context.Background(), target, "")
-	require.EqualError(t, err, `"" is not a valid branch name`)
+	require.EqualError(t, err, `unknown branch "": not a valid branch name`)
 }

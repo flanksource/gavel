@@ -40,6 +40,8 @@ type projectActionRequest struct {
 	// Worktree scopes a queued commit to one of the project's linked
 	// worktrees; empty is the project's own directory.
 	Worktree string `json:"worktree,omitempty"`
+	// Branch is the branch a hosted project's test or lint runs on.
+	Branch string `json:"branch,omitempty"`
 }
 
 type ProjectActionSchema struct {
@@ -389,7 +391,7 @@ func projectStatusFiles(files []status.FileStatus) []projectFileStatus {
 
 func (s *Server) handleProjectAction(w http.ResponseWriter, r *http.Request) {
 	if s.hosted {
-		answerHostedProjectAction(w, r)
+		s.startHostedProjectAction(w, r)
 		return
 	}
 	project, err := GetProject(r.PathValue("name"))

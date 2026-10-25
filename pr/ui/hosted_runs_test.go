@@ -49,8 +49,9 @@ func (planAgent) ExecuteStream(context.Context, api.Spec) (<-chan captainai.Even
 	return ch, nil
 }
 
-// inProcessExecutor runs each agent job's sandbox side in this process: the job's checkout of
-// the pushed repository, its messages sent to the relay as JSON, as the run API receives them.
+// inProcessExecutor runs each job's sandbox side in this process: the job's checkout of the
+// pushed repository, then an agent job's messages sent to the relay as JSON, as the run API
+// receives them.
 type inProcessExecutor struct {
 	db      *gorm.DB
 	relay   *remote.Relay
@@ -89,10 +90,6 @@ func (e *inProcessExecutor) run(ctx context.Context, id uuid.UUID) error {
 	if err != nil {
 		return err
 	}
-	var job remote.Job
-	if err := json.Unmarshal(record.Spec.Agent, &job); err != nil {
-		return err
-	}
 	dir := filepath.Join(os.TempDir(), "gavel-hosted-run-"+id.String())
 	defer safefs.SafeRemove(dir, safefs.RemoveContext{AllowedRoot: os.TempDir()}) //nolint:errcheck
 	if out, err := exec.Command("git", "clone", "-q", e.bareDir(record.Spec.RepoID), dir).CombinedOutput(); err != nil {
@@ -100,6 +97,14 @@ func (e *inProcessExecutor) run(ctx context.Context, id uuid.UUID) error {
 	}
 	if out, err := exec.Command("git", "-C", dir, "checkout", "-q", "--detach", record.Spec.SHA).CombinedOutput(); err != nil {
 		return errors.New(string(out))
+	}
+	// A test or lint job's work is the runner's, which these tests don't run; it ends checked out.
+	if record.Spec.Kind != "agent" {
+		return nil
+	}
+	var job remote.Job
+	if err := json.Unmarshal(record.Spec.Agent, &job); err != nil {
+		return err
 	}
 	send := func(message remote.Message) error {
 		data, err := json.Marshal(message)

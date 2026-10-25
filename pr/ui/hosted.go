@@ -34,8 +34,9 @@ var hostedPassThrough = []string{
 	"/api/config", "/api/repos", "/api/repos/favicon", "/api/orgs",
 
 	"/api/settings/schema",
-	// Answered by answerHostedProjectAction before the host's projects are read.
-	"POST /api/projects/{name}/actions",
+	// Hosted project actions run in sandbox jobs of the organization's repositories (see
+	// hosted_project_actions.go), before the host's projects are read.
+	"POST /api/projects/{name}/actions", "GET /api/projects/{name}/branches",
 
 	"GET /api/projects", "/api/todos", "POST /api/todos/batch", "POST /api/todos/new", "/api/todos/item", "/api/todos/labels", "/api/todos/links",
 	"/api/todos/pr-links", "POST /api/todos/criteria", "/api/todos/attachments", "GET /api/todos/attachments/{id}",
@@ -69,7 +70,6 @@ var (
 	readsHostFiles       = hostedAnswer{http.StatusNotImplemented, "this action reads or writes the host's files, which hosted mode doesn't allow"}
 	projectsAreRepos     = hostedAnswer{http.StatusBadRequest, "projects are repos in hosted mode"}
 	commitsFromAgentRuns = hostedAnswer{http.StatusBadRequest, "commits come from agent runs in hosted mode"}
-	actionsUnavailable   = hostedAnswer{http.StatusNotImplemented, "project actions are not available in hosted mode yet"}
 )
 
 // hostedAnswers lists the routes a hosted dashboard answers itself, keyed like
@@ -86,21 +86,6 @@ var hostedAnswers = map[string]hostedAnswer{
 	"DELETE /api/projects/{name}":            projectsAreRepos,
 	"POST /api/projects/{name}/commit-queue": commitsFromAgentRuns,
 	"POST /api/projects/{name}/branch/pr":    commitsFromAgentRuns,
-}
-
-// answerHostedProjectAction answers a project action in hosted mode: commits only
-// come from agent runs, and test and lint wait for sandboxed execution (M9.5).
-func answerHostedProjectAction(w http.ResponseWriter, r *http.Request) {
-	var request projectActionRequest
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		respondError(w, http.StatusBadRequest, "invalid json")
-		return
-	}
-	answer := actionsUnavailable
-	if request.Action == projectActionCommit {
-		answer = commitsFromAgentRuns
-	}
-	writeJSONError(w, answer.status, errors.New(answer.message))
 }
 
 // SetHostedMode restricts the dashboard to the hosted route allowlist. Call it
