@@ -32,7 +32,7 @@ func jsonRequestBody(schema string) map[string]any {
 }
 
 func projectGitOpenAPIPaths() map[string]any {
-	summary := projectLifecycleOp("projects_git_summary", "Get every project's unmerged line counts, worktree and branch counts", "200", "ProjectGitSummaries")
+	summary := projectLifecycleOp("projects_git_summary", "Get every project's unmerged line counts, worktrees, unmerged branches and branches with uncommitted files", "200", "ProjectGitSummaries")
 	delete(summary, "parameters")
 	return map[string]any{
 		"/api/projects/git-summary": map[string]any{"get": summary},
@@ -101,10 +101,11 @@ func projectGitOpenAPISchemas() map[string]any {
 		"name": typed("string"), "head": typed("string"), "ahead": typed("integer"), "behind": typed("integer"),
 		"worktree": typed("string"), "diff": diffStat, "lastCommitAt": dateTime,
 	})
-	summary := objectSchema([]string{"name", "base", "adds", "dels", "worktrees", "branches"}, map[string]any{
+	summary := objectSchema([]string{"name", "base", "adds", "dels", "worktrees", "branches", "uncommittedBranches"}, map[string]any{
 		"name": typed("string"), "base": typed("string"), "adds": typed("integer"), "dels": typed("integer"),
 		"worktrees": map[string]any{"type": "integer", "description": "Linked worktrees, the primary checkout excluded"},
 		"branches":  typed("integer"), "error": typed("string"),
+		"uncommittedBranches": map[string]any{"type": "integer", "minimum": 0, "description": "Distinct named branches with uncommitted files in live worktrees, including the primary checkout and base branch; detached and prunable worktrees excluded"},
 	})
 	schemas := map[string]any{
 		"ProjectGitSummaries": map[string]any{"type": "array", "items": summary},
