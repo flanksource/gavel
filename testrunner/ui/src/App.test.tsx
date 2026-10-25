@@ -1,7 +1,13 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { App } from './App';
 import type { Snapshot, Test } from './types';
+
+// The Files tab pulls in Monaco, which needs a real browser; the specs here only
+// exercise the tab's data flow, so the editor, its loader and its inline worker are stubs.
+vi.mock('monaco-editor', () => ({}));
+vi.mock('@monaco-editor/react', () => ({ loader: { config: () => undefined }, default: () => null }));
+vi.mock('monaco-editor/esm/vs/editor/editor.worker?worker&inline', () => ({ default: class FakeWorker {} }));
 
 class FakeEventSource {
   static CLOSED = 2;
@@ -193,6 +199,67 @@ describe('App', () => {
 
     await waitFor(() => expect(screen.getByText('Ignore rule saved to .gavel.yaml')).toBeTruthy());
     expect(JSON.parse(calls.find(call => call.url === '/api/lint/ignore')!.init!.body as string)).toEqual({ source: 'eslint', work_dir: '/repo' });
+  });
+
+  describe('files tab', () => {
+    // App loads the tab with React.lazy; transforming it (and clicky-ui's file-findings
+    // view) the first time takes longer than testing-library's 1s find timeout.
+    beforeAll(() => import('./FilesTab'), 30_000);
+
+    const lintSnapshot = () => snapshot({
+      git: { root: '/repo' },
+      status: { running: false, lint_run: true },
+      lint: [{ linter: 'eslint', work_dir: '/repo', success: false, duration: 1, violations: [{ file: '/repo/src/a.ts', line: 4, message: 'no-var', rule: { method: 'no-var' } }] }],
+    });
+
+    it('offers a Files tab only when a finding names a file', async () => {
+      serve(snapshot({ tests: [{ name: 'pkg/', framework: 'go test', children: [{ name: 'TestNoFile', framework: 'go test', failed: true, work_dir: '/repo' }] }] }));
+      open('/');
+      expect(await screen.findByText(/> TestNoFile/)).toBeTruthy();
+      expect(screen.queryByRole('tab', { name: /Files/ })).toBeNull();
+      cleanup();
+
+      serve(snapshot());
+      open('/');
+      expect(await screen.findByRole('tab', { name: /Files/ })).toBeTruthy();
+    });
+
+    it('requests a deep-linked file by its work dir and relative path and shows the server error in full', async () => {
+      const calls = serve(snapshot(), {
+        'GET /api/file?work_dir=%2Frepo&path=parse_test.go': () => new Response('file not found: parse_test.go', { status: 404 }),
+      });
+      open('/files/parse_test.go?dir=%2Frepo&line=12');
+
+      const alert = await screen.findByRole('alert');
+      expect(alert.textContent).toContain('file not found: parse_test.go');
+      expect(calls.some(call => call.url === '/api/file?work_dir=%2Frepo&path=parse_test.go')).toBe(true);
+    });
+
+    it('lists a failed test that has no work dir under the snapshot git root and opens it with that root', async () => {
+      const failingNoDir: Test = { name: 'TestParse', framework: 'go test', failed: true, file: '/repo/pkg/parse_test.go', line: 12, message: 'boom' };
+      const calls = serve(snapshot({ git: { root: '/repo' }, tests: [{ name: 'pkg/', framework: 'go test', children: [failingNoDir] }] }), {
+        'GET /api/file?work_dir=%2Frepo&path=pkg%2Fparse_test.go': () => new Response('missing', { status: 404 }),
+      });
+      open('/files');
+
+      fireEvent.click(await screen.findByText(/parse_test\.go/));
+
+      await waitFor(() => expect(calls.some(call => call.url === '/api/file?work_dir=%2Frepo&path=pkg%2Fparse_test.go')).toBe(true));
+      expect(window.location.pathname).toBe('/files/pkg/parse_test.go');
+      expect(window.location.search).toBe('?dir=%2Frepo');
+    });
+
+    it('opens a lint violation in the Files tab at its line from the Lint tab', async () => {
+      serve(lintSnapshot(), { 'GET /api/file?work_dir=%2Frepo&path=src%2Fa.ts': () => new Response('missing', { status: 404 }) });
+      open('/lint?grouping=linter-file');
+
+      fireEvent.click(await screen.findByRole('button', { name: /Expand all/ }));
+      fireEvent.click(await screen.findByText(/a\.ts/));
+      fireEvent.click(await screen.findByRole('button', { name: /Open in Files/ }));
+
+      await waitFor(() => expect(window.location.pathname).toBe('/files/src/a.ts'));
+      expect(window.location.search).toBe('?dir=%2Frepo&line=4');
+    });
   });
 
   describe('run history', () => {

@@ -53,4 +53,18 @@ var _ = Describe("PTY input script", func() {
 
 		Expect(term.String()).To(Equal("\x1b[1;1R"))
 	})
+
+	// termenv asks for the background (OSC 11) and then the cursor position,
+	// and takes a first reply that is not OSC to mean the terminal has none:
+	// it stops reading, and the OSC reply is left for the program's input.
+	It("answers queries in the order they were asked", func() {
+		for range 20 {
+			var term bytes.Buffer
+			script := newPTYScript(nil, &term)
+
+			Expect(script.feed([]byte("\x1b]11;?\x1b\\\x1b[6n"))).To(Succeed())
+
+			Expect(term.String()).To(Equal("\x1b]11;rgb:0000/0000/0000\x1b\\\x1b[1;1R"))
+		}
+	})
 })

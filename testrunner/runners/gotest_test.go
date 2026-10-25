@@ -579,6 +579,53 @@ func BenchmarkIgnored(b *testing.B) {}
 			t.Error("Ginkgo-tagged file should be ignored for bench detection")
 		}
 	})
+
+	t.Run("a ginkgo suite is runnable though it has no plain Test* func", func(t *testing.T) {
+		suiteDir := filepath.Join(tmpDir, "ginkgo_suite")
+		if err := os.MkdirAll(suiteDir, 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(suiteDir, "suite_test.go"), []byte(`package ginkgo_suite_test
+
+import (
+	"testing"
+	. "github.com/onsi/ginkgo/v2"
+)
+
+func TestSuite(t *testing.T) { RunSpecs(t, "suite") }
+`), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(suiteDir, "bench_test.go"), []byte(`package ginkgo_suite_test
+
+import "testing"
+
+func BenchmarkCodec(b *testing.B) {}
+`), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if !runner.PackageHasRunnableTests("./ginkgo_suite") {
+			t.Error("a Ginkgo suite must count as runnable tests")
+		}
+	})
+
+	t.Run("a bench-only package has no runnable tests", func(t *testing.T) {
+		benchDir := filepath.Join(tmpDir, "bench_only")
+		if err := os.MkdirAll(benchDir, 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(benchDir, "bench_test.go"), []byte(`package bench_only
+
+import "testing"
+
+func BenchmarkCodec(b *testing.B) {}
+`), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if runner.PackageHasRunnableTests("./bench_only") {
+			t.Error("benchmarks alone are not runnable tests")
+		}
+	})
 }
 
 func TestGoTestBuildCommandHonoursTimeoutFlag(t *testing.T) {

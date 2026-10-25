@@ -365,19 +365,14 @@ func runTests(opts testrunner.RunOptions, detach bool) (value any, runErr error)
 		}
 		// Serialized formats get the partial tree plus the failure reason as
 		// a crash envelope, so `--format json=FILE` always produces a file.
+		// Persisted on every runner failure so `gavel ui serve` still lists
+		// the tests that completed and why the run failed.
+		failedSnapshot := saveFailedRun(failedRun{
+			Opts: opts, Tests: tests, Lint: lintResults, Started: runStarted, Trace: trace, Performance: fixturePerformance, Err: err,
+		})
 		if uiServer != nil && fixtureBenchmarkMode(opts) != "" {
 			uiServer.SetRunError(err)
 			uiServer.MarkDone()
-			failedSnapshot := buildTestSnapshot(opts, tests, lintResults, runStarted, time.Now().UTC(), trace)
-			failedSnapshot.Performance = fixturePerformance
-			failedSnapshot.Error = err.Error()
-			failed := 1
-			failedSnapshot.Metadata.ExitCode = &failed
-			if path, saveErr := snapshots.SavePerRun(opts.WorkDir, &failedSnapshot, runStarted, ""); saveErr != nil {
-				logger.Warnf("persist per-run snapshot: %v", saveErr)
-			} else {
-				logger.V(1).Infof("wrote per-run snapshot to %s", path)
-			}
 			if detach {
 				if handoffErr := handoffDetachedUI(uiListener, failedSnapshot, detachedUIOptions{AutoStop: opts.AutoStop, IdleTimeout: opts.IdleTimeout, Dev: opts.Dev}); handoffErr != nil {
 					logger.Warnf("Detached UI handoff failed: %v", handoffErr)

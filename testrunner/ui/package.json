@@ -66,6 +66,7 @@
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "catalog:",
     "jsdom": "^25.0.1",
+    "monaco-editor": "catalog:",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "tailwindcss": "catalog:",

@@ -214,7 +214,23 @@ type LinterResult struct {
 	DebounceUsed time.Duration      `json:"debounce_used,omitempty"`
 	FileCount    int                `json:"file_count,omitempty"`
 	RuleCount    int                `json:"rule_count,omitempty"`
+	// Status is pending or running while the result is still in flight, and
+	// empty once it is final.
+	Status LinterStatus `json:"status,omitempty"`
+	// RunID is the Captain prompt run producing this result, followable at
+	// /api/captain/prompt/runs/{run_id}.
+	RunID string `json:"run_id,omitempty"`
 }
+
+type LinterStatus string
+
+const (
+	LinterStatusPending LinterStatus = "pending"
+	LinterStatusRunning LinterStatus = "running"
+)
+
+// InFlight reports whether the result is still pending or running.
+func (r *LinterResult) InFlight() bool { return r.Status != "" }
 
 // CommandLine returns the shell-style command (including args) that the
 // linter would execute, or "" when the argv isn't captured.

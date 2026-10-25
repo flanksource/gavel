@@ -73,6 +73,42 @@ describe('fixture profile sample route', () => {
   });
 });
 
+describe('files route', () => {
+  const workDir = '/Users/dev/my repo';
+  const file = 'docs/getting started/intro.md';
+  // URLSearchParams form-encodes: "/" as %2F and a space as "+".
+  const DIR_PARAM = '%2FUsers%2Fdev%2Fmy+repo';
+
+  it('round trips the work dir, a relative file with spaces, the view and the line', () => {
+    const url = `/files/docs/getting%20started/intro.md?dir=${DIR_PARAM}&view=source&line=42`;
+    const route = at(url);
+    expect(route.tab).toBe('files');
+    expect(route.selectedPath).toBe(file);
+    expect(route.workDir).toBe(workDir);
+    expect(route.view).toBe('source');
+    expect(route.line).toBe(42);
+    expect(buildRoute(route)).toBe(url);
+  });
+
+  it('defaults to the rendered view and omits it and an absent line from the URL', () => {
+    const route = at(`/files/a.go?dir=${DIR_PARAM}`);
+    expect(route.view).toBe('rendered');
+    expect(route.line).toBeUndefined();
+    expect(buildRoute(route)).toBe(`/files/a.go?dir=${DIR_PARAM}`);
+  });
+
+  it('ignores a line that is not a positive integer and a view that is not one', () => {
+    expect(at('/files/a.go?line=0').line).toBeUndefined();
+    expect(at('/files/a.go?line=x').line).toBeUndefined();
+    expect(at('/files/a.go?view=nonsense').view).toBe('rendered');
+  });
+
+  it('does not carry the file query onto other tabs', () => {
+    const route = { ...at(`/files/a.go?dir=${DIR_PARAM}&line=3`), tab: 'lint' as const, selectedPath: '' };
+    expect(buildRoute(route)).toBe('/lint');
+  });
+});
+
 describe('processes route', () => {
   it('round trips the processes tab, an encoded node key and the hide-exited filter', () => {
     const route = at('/processes/4242%401?hideExited=1');
