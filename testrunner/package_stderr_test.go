@@ -58,3 +58,54 @@ func TestParseTestResultsKeepsPackageStderrOffPassingTests(t *testing.T) {
 		t.Fatalf("test stderr = %q, want %q", byName, want)
 	}
 }
+
+// A test that fails with stderr of its own ("Failed to import test file …")
+// never got the package stderr, and the tree was built from tests alone, so
+// the process's own explanation (Vite's reload, a crash) was lost. A failed
+// package keeps it on its own node, once.
+func TestAttachFailedPackageStderrKeepsTheProcessStderrOnTheFailedPackage(t *testing.T) {
+	const (
+		failedPkg     = "./apps/storybook"
+		passedPkg     = "./packages/ui"
+		copiedPkg     = "./apps/playground"
+		importFailure = "Failed to import test file src/Chat.stories.tsx"
+		viteReload    = "[vite] new dependencies optimized: react-rnd\n[vite] ✨ optimized dependencies changed. reloading"
+		passingNoise  = "Warning: An update to App inside a test was not wrapped in act(...)."
+		copiedStderr  = "Error: Cannot find module './missing'"
+	)
+	results := parsers.TestSuiteResults{
+		{Stderr: viteReload + "\nexit status 1", Tests: parsers.Tests{
+			{Name: "Chat.stories.tsx", PackagePath: failedPkg, Failed: true, Stderr: importFailure},
+			{Name: "Button.stories.tsx", PackagePath: failedPkg, Passed: true},
+		}},
+		{Stderr: passingNoise, Tests: parsers.Tests{
+			{Name: "sum.test.ts", PackagePath: passedPkg, Passed: true},
+		}},
+		{Stderr: copiedStderr, Tests: parsers.Tests{
+			{Name: "setup.test.ts", PackagePath: copiedPkg, Failed: true, Stderr: copiedStderr},
+		}},
+	}
+
+	tree := attachFailedPackageStderr(parsers.BuildTestTree(results.All()), results)
+
+	got := map[string]string{}
+	var walk func(nodes []parsers.Test)
+	walk = func(nodes []parsers.Test) {
+		for _, node := range nodes {
+			if len(node.Children) > 0 {
+				got[node.PackagePath] = node.Stderr
+				walk(node.Children)
+			}
+		}
+	}
+	walk(tree)
+	want := map[string]string{
+		"apps": "", "apps/storybook": viteReload, "apps/playground": "",
+		"packages": "", "packages/ui": "",
+	}
+	for pkg, stderr := range want {
+		if got[pkg] != stderr {
+			t.Errorf("package %s stderr = %q, want %q", pkg, got[pkg], stderr)
+		}
+	}
+}
