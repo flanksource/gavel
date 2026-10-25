@@ -23,7 +23,7 @@ export interface SandboxRun {
   finishedAt?: string;
 }
 
-const kindLabels: Record<string, string> = { 'push-check': 'Push check', agent: 'Agent run', test: 'Test', lint: 'Lint' };
+export const kindLabels: Record<string, string> = { 'push-check': 'Push check', agent: 'Agent run', test: 'Test', lint: 'Lint' };
 
 const statusClass: Record<string, string> = {
   succeeded: 'text-green-600',
@@ -35,7 +35,7 @@ const statusClass: Record<string, string> = {
 // While a run is queued or running the list refreshes, so its status and log follow it.
 const activeRefreshMs = 5000;
 
-function runStatus(run: SandboxRun): string {
+export function runStatus(run: SandboxRun): string {
   return run.status === 'failed' && run.exitCode !== undefined ? `failed (exit ${run.exitCode})` : run.status;
 }
 
@@ -52,12 +52,17 @@ async function fetchRunLog(id: string, signal: AbortSignal): Promise<string> {
   throw new Error(responseError(payload, response.status));
 }
 
-export function RunsView({ selectedId, onSelect }: { selectedId: string; onSelect: (id: string) => void }) {
-  const runs = useQuery({
+// useSandboxRuns loads the organization's runs, refreshing while any is queued or running.
+export function useSandboxRuns() {
+  return useQuery({
     queryKey: queryKeys.sandboxRuns(),
     queryFn: ({ signal }) => fetchJSON<SandboxRun[]>({ url: '/api/sandbox-runs', signal, context: 'load sandbox runs' }),
     refetchInterval: query => (query.state.data ?? []).some(run => run.status === 'queued' || run.status === 'running') ? activeRefreshMs : false,
   });
+}
+
+export function RunsView({ selectedId, onSelect }: { selectedId: string; onSelect: (id: string) => void }) {
+  const runs = useSandboxRuns();
   const selected = (runs.data ?? []).find(run => run.id === selectedId);
   const log = useQuery({
     queryKey: queryKeys.sandboxRunLog(selectedId),

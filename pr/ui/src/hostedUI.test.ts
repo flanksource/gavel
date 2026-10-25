@@ -12,8 +12,9 @@ describe('hosted UI', () => {
     expect(tabFor('none', 'runs'), 'a local dashboard runs nothing in a sandbox').toBe('prs');
   });
 
-  it('shows a hosted org only the PR, todo and sandbox run tabs and no host controls', () => {
-    expect(visibleTabs('clerk', allTabs)).toEqual(['prs', 'todos', 'runs']);
+  it('shows a hosted org only the PR, project, todo and sandbox run tabs and no host controls', () => {
+    expect(visibleTabs('clerk', allTabs)).toEqual(['prs', 'projects', 'todos', 'runs']);
+    expect(tabFor('clerk', 'projects')).toBe('projects');
     expect(tabFor('clerk', 'runs')).toBe('runs');
     expect(hostControlsVisible('clerk')).toBe(false);
   });
@@ -34,7 +35,7 @@ describe('hosted UI', () => {
   });
 
   it('opens the PR tab for a hosted link to a host-only tab', () => {
-    for (const tab of allTabs.filter(tab => tab !== 'todos' && tab !== 'runs')) {
+    for (const tab of allTabs.filter(tab => tab !== 'projects' && tab !== 'todos' && tab !== 'runs')) {
       expect(tabFor('clerk', tab)).toBe('prs');
     }
     expect(tabFor('clerk', 'todos')).toBe('todos');

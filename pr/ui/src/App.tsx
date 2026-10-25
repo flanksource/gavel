@@ -17,6 +17,7 @@ import { OrgChooser } from './components/OrgChooser';
 import { AddProjectDialog } from './components/AddProjectDialog';
 import { SettingsPage, type SettingsScope } from './components/settings/SettingsPage';
 import { ProjectDetailPane, ProjectsSidebar } from './components/ProjectsView';
+import { HostedProjectPane, HostedProjectsSidebar } from './components/HostedProjectsView';
 import { ProcessManager } from './components/ProcessManager';
 import { RunsView } from './components/RunsView';
 import { ThemeToggle } from './components/ThemeToggle';
@@ -578,10 +579,12 @@ export function App() {
 
   // Both halves of the projects tab (the AppShell body sidebar and the detail
   // pane) read one catalog, so it is loaded here rather than inside either one.
-  const projectCatalog = useProjectCatalog({ configured: scopedProjects, hiddenDirs, selectedName: selectedPath, enabled: activeTab === 'projects' && projectHistory });
+  // A hosted org's projects tab lists its repositories instead, so neither the
+  // catalog nor the git summary loads there.
+  const projectCatalog = useProjectCatalog({ configured: scopedProjects, hiddenDirs, selectedName: selectedPath, enabled: hostControls && activeTab === 'projects' && projectHistory });
   // The git work summary shown on every project row refreshes slowly and only
   // matters while the Projects tab is on screen.
-  const projectGitSummary = useProjectGitSummary({ enabled: activeTab === 'projects' && visible });
+  const projectGitSummary = useProjectGitSummary({ enabled: hostControls && activeTab === 'projects' && visible });
   // The compact layout (mobile or the native menubar) keeps its tab and open
   // session in the URL on mobile, and in local state in the menubar webview,
   // which must stay on /menubar.
@@ -734,6 +737,8 @@ export function App() {
         bodySidebar={
           activeTab === 'prs' ? (
             <PRList prs={filtered} selected={selected} onSelect={handleSelect} unread={unread} syncStatus={syncStatus} gavelResults={gavelResultsMap} projectsByRepo={projectsByRepo} onProcChanged={onProcChanged} />
+          ) : activeTab === 'projects' && !hostControls ? (
+            <HostedProjectsSidebar projects={visibleProjects} selectedName={selectedPath} onSelect={navigateProject} />
           ) : activeTab === 'projects' ? (
             <ProjectsSidebar
               catalog={projectCatalog}
@@ -774,6 +779,8 @@ export function App() {
               </div>
             </div>
           )
+        ) : activeTab === 'projects' && !hostControls ? (
+          <HostedProjectPane project={visibleProjects.find(project => project.name === selectedPath)} onSelectRun={navigateRun} />
         ) : activeTab === 'projects' ? (
           <ProjectDetailPane
             catalog={projectCatalog}
