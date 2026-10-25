@@ -309,6 +309,12 @@ type PRLinkProvider interface {
 	TodosForPR(ctx context.Context, url string) ([]PRLinkedTODO, error)
 }
 
+// GlobalPRLinkProvider lists the TODOs that link a PR across every workspace,
+// for callers that know the PR but not which workspace tracks it.
+type GlobalPRLinkProvider interface {
+	TodosForPR(ctx context.Context, url string) ([]PRLinkedTODO, error)
+}
+
 // PlanRevisionProvider appends a human-edited immutable Captain revision and
 // keeps it selected on the native issue. Implementations must not rewrite an
 // agent-owned plan file.

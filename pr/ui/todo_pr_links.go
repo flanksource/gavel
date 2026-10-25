@@ -160,6 +160,25 @@ func (s *Server) todoPRLinkProvider(ctx context.Context, dir string) (todos.Prov
 	return provider, linker, nil
 }
 
+// prTodosLinker scopes a PR's reverse lookup to dir when one is given. Without
+// one it spans every workspace: a PR belongs to no workspace, and the server's
+// own directory need not be a configured project.
+func (s *Server) prTodosLinker(ctx context.Context, dir string) (todos.GlobalPRLinkProvider, error) {
+	if strings.TrimSpace(dir) != "" {
+		_, linker, err := s.todoPRLinkProvider(ctx, dir)
+		return linker, err
+	}
+	global, err := openGlobalTodoProvider(ctx)
+	if err != nil {
+		return nil, err
+	}
+	linker, ok := global.(todos.GlobalPRLinkProvider)
+	if !ok {
+		return nil, fmt.Errorf("global TODO provider %T does not support PR links; native PostgreSQL storage is required", global)
+	}
+	return linker, nil
+}
+
 // withIndexedPRs joins each link to the PR index for its title and state.
 func withIndexedPRs(links []todos.PRLink) ([]todoPRLinkItem, error) {
 	items := make([]todoPRLinkItem, len(links))
@@ -192,7 +211,7 @@ func (s *Server) handlePRTodos(w http.ResponseWriter, r *http.Request) {
 		writeTodoError(w, http.StatusBadRequest, err)
 		return
 	}
-	_, linker, err := s.todoPRLinkProvider(r.Context(), query.Get("dir"))
+	linker, err := s.prTodosLinker(r.Context(), query.Get("dir"))
 	if err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)
 		return

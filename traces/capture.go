@@ -3,6 +3,7 @@ package traces
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 
@@ -42,6 +43,9 @@ func (c *Capture) Exports() map[string]string {
 func (c *Capture) Mark(ctx context.Context) (int64, error) {
 	seq, err := c.host.runtime.Mark(ctx, c.managed)
 	if err != nil {
+		if ended := c.managed.Session().Snapshot().Error; errors.Is(err, query.ErrSessionEnded) && ended != "" {
+			return 0, fmt.Errorf("mark %s trace: %w, by: %s", c.kind, err, ended)
+		}
 		return 0, fmt.Errorf("mark %s trace: %w", c.kind, err)
 	}
 	return seq, nil

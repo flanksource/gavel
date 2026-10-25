@@ -152,19 +152,30 @@ func (r *Repository) ListIssuePRLinks(ctx context.Context, issueID uuid.UUID) ([
 	return links, err
 }
 
-// ListPRLinkedIssues returns the workspace's issues that link the PR at url.
-func (r *Repository) ListPRLinkedIssues(ctx context.Context, workspaceID uuid.UUID, url string) ([]PRLinkedIssue, error) {
-	ref, err := types.PRRefFromURL(url)
+// PRLinkedIssuesQuery selects the issues that link one PR. A zero WorkspaceID
+// spans every workspace, since a PR is not owned by any one of them.
+type PRLinkedIssuesQuery struct {
+	URL         string
+	WorkspaceID uuid.UUID
+}
+
+// ListPRLinkedIssues returns the issues that link the PR at query.URL.
+func (r *Repository) ListPRLinkedIssues(ctx context.Context, query PRLinkedIssuesQuery) ([]PRLinkedIssue, error) {
+	ref, err := types.PRRefFromURL(query.URL)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidInput, err)
 	}
 	db := r.db.WithContext(ctx)
+	where, args := `provider = ? AND repo = ? AND number = ?`, []any{ref.Provider, ref.Repo, ref.Number}
+	if query.WorkspaceID != uuid.Nil {
+		where, args = where+` AND workspace_id = ?`, append(args, query.WorkspaceID)
+	}
 	var links []PRLink
 	if err := db.Raw(`
 		SELECT `+prLinkColumns+` FROM todo_pr_links
-		WHERE workspace_id = ? AND provider = ? AND repo = ? AND number = ?
+		WHERE `+where+`
 		ORDER BY relation = 'implements' DESC, created_at DESC, issue_id`,
-		workspaceID, ref.Provider, ref.Repo, ref.Number,
+		args...,
 	).Scan(&links).Error; err != nil {
 		return nil, err
 	}

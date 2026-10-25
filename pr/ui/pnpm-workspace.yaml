@@ -11,6 +11,7 @@ catalog:
   "@codemirror/commands": ^6.10.4
   "@codemirror/lang-json": ^6.0.2
   "@codemirror/lang-sql": ^6.10.0
+  "@codemirror/language": ^6.12.4
   "@codemirror/state": ^6.7.0
   "@codemirror/view": ^6.43.4
   # Published tarball, never a git ref: a git-hosted install runs clicky-ui's
@@ -98,6 +99,9 @@ catalogMode: prefer
 
 linkWorkspacePackages: true
 preferWorkspacePackages: true
+# Link through the global virtual store, like testrunner/ui and clicky-ui, so
+# both workspaces resolve testrunner/ui and clicky-ui to the same package copies.
+enableGlobalVirtualStore: true
 
 minimumReleaseAgeExclude:
   - '@flanksource/clicky-ui'
