@@ -240,11 +240,10 @@ func (sc StatusChecks) HasFailure() bool {
 	return false
 }
 
-// IsFailureConclusion reports whether a GitHub Actions conclusion should be
-// treated as a failure for the purposes of fetching and rendering job logs.
-// GitHub returns lowercase conclusions on the REST API and uppercase on the
-// GraphQL StatusCheckRollup, so the match is case-insensitive. "cancelled" is
-// deliberately excluded — a cancelled run rarely has actionable failure logs.
+// IsFailureConclusion reports whether a GitHub Actions conclusion is a
+// failure. GitHub returns lowercase conclusions on the REST API and uppercase
+// on the GraphQL StatusCheckRollup, so the match is case-insensitive.
+// "cancelled" is not a failure; NeedsJobLogs still fetches its logs.
 func IsFailureConclusion(conclusion string) bool {
 	switch strings.ToUpper(conclusion) {
 	case "FAILURE", "TIMED_OUT", "STARTUP_FAILURE":
@@ -252,6 +251,23 @@ func IsFailureConclusion(conclusion string) bool {
 	default:
 		return false
 	}
+}
+
+// NeedsJobLogs reports whether a job with this conclusion has its logs fetched
+// and rendered: a failure, or a cancellation, whose log is the only record of
+// a runner shutdown or of what was running when the job was stopped.
+func NeedsJobLogs(conclusion string) bool {
+	return IsFailureConclusion(conclusion) || strings.EqualFold(conclusion, "CANCELLED")
+}
+
+// RunNeedsJobLogs reports whether any job in the run needs its logs.
+func RunNeedsJobLogs(run *WorkflowRun) bool {
+	for i := range run.Jobs {
+		if NeedsJobLogs(run.Jobs[i].Conclusion) {
+			return true
+		}
+	}
+	return false
 }
 
 // RunHasFailedJob reports whether any job in the run has a failure conclusion.
@@ -309,7 +325,7 @@ func (j Job) Pretty() api.Text {
 		text = text.Append(" "+duration, "text-gray-500")
 	}
 
-	if !IsFailureConclusion(j.Conclusion) {
+	if !NeedsJobLogs(j.Conclusion) {
 		return text
 	}
 
