@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { Button, Combobox, SegmentedControl, type ComboboxOption } from '@flanksource/clicky-ui/components';
-import { UiCheck, UiEdit, UiFolderGit, UiGitBranch, UiGitCommit, UiHome, UiWarningTriangle } from '@flanksource/clicky-ui/icons';
+import { UiArrowDown, UiArrowUp, UiCheck, UiEdit, UiFolderGit, UiGitBranch, UiGitCommit, UiHome, UiWarningTriangle } from '@flanksource/clicky-ui/icons';
 import { useProjectGit } from '../projectGitQueries';
 import { parseProjectRef } from '../projectRef';
 import type { BranchMergeResult, GitBranchInfo, GitWorktree, Project, ProjectGit } from '../types';
@@ -177,12 +177,20 @@ const GROUP_NOUNS: Record<ProjectRefEntry['group'], string> = { Checkout: 'Check
 
 const plural = (n: number, noun: string) => `${n} ${noun}${n === 1 ? '' : 's'}`;
 
-/** One line: commits · uncommitted · +adds −dels, then the commit and touched ages. */
+/** One line: ↑ahead ↓behind upstream · commits · uncommitted · +adds −dels, then the commit and touched ages. */
 function RefSummary({ entry: { stats, lastCommitAt, touchedAt } }: { entry: ProjectRefEntry }) {
   useNow();
   const { committed, touched } = projectRefAges({ lastCommitAt, touchedAt });
+  const upstream = stats.upstream;
+  const upstreamLabel = upstream && `${plural(upstream.ahead, 'commit')} ahead of ${upstream.name}, ${upstream.behind} behind`;
   return (
     <span className="flex shrink-0 items-center gap-2 whitespace-nowrap text-xs tabular-nums text-muted-foreground">
+      {upstream && (upstream.ahead > 0 || upstream.behind > 0) && (
+        <span className="flex items-center gap-1" title={upstreamLabel} aria-label={upstreamLabel}>
+          {upstream.ahead > 0 && <span className="flex items-center"><UiArrowUp />{upstream.ahead}</span>}
+          {upstream.behind > 0 && <span className="flex items-center"><UiArrowDown />{upstream.behind}</span>}
+        </span>
+      )}
       {stats.commits > 0 && <span>{plural(stats.commits, 'commit')}</span>}
       {stats.uncommitted > 0 && <span>{stats.uncommitted} uncommitted</span>}
       {stats.lines && (

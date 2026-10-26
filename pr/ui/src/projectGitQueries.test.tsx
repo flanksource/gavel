@@ -20,6 +20,9 @@ const git: ProjectGit = {
   base: 'main',
   currentBranch: 'main',
   baseCheckedOut: true,
+  upstream: 'origin/main',
+  upstreamAhead: 1,
+  upstreamBehind: 0,
   worktrees: [{
     path: '/work/gavel', branch: 'main', head: 'a1b2c3d', primary: true, detached: false, prunable: false,
     changes: { staged: 0, unstaged: 1, both: 0, untracked: 0, conflict: 0, adds: 2, dels: 1 }, ahead: 0,
@@ -88,6 +91,8 @@ describe('parseProjectGit', () => {
     ['a worktree without change counts', { ...git, worktrees: [{ ...git.worktrees[0], changes: undefined }] }],
     ['a branch without a diff', { ...git, branches: [{ ...git.branches[0], diff: undefined }] }],
     ['a non-boolean baseCheckedOut', { ...git, baseCheckedOut: 'yes' }],
+    ['a non-string upstream', { ...git, upstream: 1 }],
+    ['a missing upstreamBehind', { ...git, upstreamBehind: undefined }],
     ['a worktree without a last commit time', { ...git, worktrees: [{ ...git.worktrees[0], lastCommitAt: undefined }] }],
     ['a worktree with a non-string touched time', { ...git, worktrees: [{ ...git.worktrees[0], touchedAt: 7 }] }],
     ['a branch without a last commit time', { ...git, branches: [{ ...git.branches[0], lastCommitAt: undefined }] }],

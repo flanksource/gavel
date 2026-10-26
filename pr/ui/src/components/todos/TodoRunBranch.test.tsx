@@ -61,7 +61,7 @@ function stubAttempts(attempts: TodoSessionAttempt[], changes = { staged: 0, uns
     ? [{ name: 'repo', dir: '/repo', repos: [] }]
     : String(input) === '/api/projects/repo/git'
       ? {
-        base: 'main', currentBranch: 'main', baseCheckedOut: true, branches: [],
+        base: 'main', currentBranch: 'main', baseCheckedOut: true, upstreamAhead: 0, upstreamBehind: 0, branches: [],
         computedAt: '2026-10-20T08:00:00Z', generation: 1,
         worktrees: attempts.flatMap(run => run.workspace?.worktree?.path ? [{
           ...run.workspace.worktree, head: HEAD, primary: false, detached: false, prunable: false,

@@ -130,21 +130,22 @@ function ProjectBranch({ project, projectRuns, open, selected, selectedRunId, pr
               <Chevron />
             </Button>
           ) : <span className="h-7 w-7 shrink-0" />}
-          <Button variant="ghost" type="button" onClick={onOpen} aria-label={`Open ${project.name} project`} className="h-auto min-w-0 flex-1 justify-start gap-2 rounded-none py-1.5 pr-2 text-left">
+          <Button variant="ghost" type="button" onClick={onOpen} aria-label={`Open ${project.name} project`} className="h-auto min-w-[6rem] flex-1 justify-start gap-2 rounded-none py-1.5 pr-2 text-left">
             <UiFolder className="shrink-0 text-muted-foreground" />
             <span className="truncate text-sm font-medium text-foreground" title={project.dir}>{project.name}</span>
             {historyEnabled && <span className="text-[10px] tabular-nums text-muted-foreground" title={`${projectRuns.length} test and lint runs`}>{projectRuns.length}</span>}
           </Button>
+          {/* The name keeps its minimum width; the badges clip rather than squeeze it out. */}
+          <div className="flex min-w-0 shrink items-center gap-1 overflow-hidden">
+            <ProjectGitBadges state={projectGitBadgesState(gitSummary, project.name)} />
+            <ProcControl repo={key} project={project} status={procStatus[project.name]} onChanged={onChanged} />
+          </div>
           <Button variant="ghost" size="icon" type="button" onClick={() => onSettings(project)} title={`Edit ${project.name} .gavel.yaml`} aria-label={`Edit ${project.name} settings`} className="h-6 w-6 shrink-0 text-muted-foreground hover:text-foreground">
             <UiCog />
           </Button>
           <Button variant="ghost" size="icon" type="button" onClick={() => onHide(project)} title={`Hide ${project.name} from project lists`} aria-label={`Hide ${project.name} project`} className="h-6 w-6 shrink-0 text-muted-foreground hover:text-foreground">
             <UiEyeClosed />
           </Button>
-        </div>
-        <div className="flex flex-wrap items-center gap-1 pl-14 pr-3">
-          <ProjectGitBadges state={projectGitBadgesState(gitSummary, project.name)} />
-          <ProcControl repo={key} project={project} status={procStatus[project.name]} onChanged={onChanged} />
         </div>
       </div>
       {historyEnabled && open && (

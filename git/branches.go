@@ -24,17 +24,20 @@ type BranchInfo struct {
 
 // BranchRef is one local branch as `git for-each-ref refs/heads` lists it:
 // everything about a branch that is read from its ref alone, without
-// comparing it to another commit.
+// comparing it to another commit. Upstream is the full ref the branch is
+// configured to track (e.g. refs/remotes/origin/main), empty when none; the
+// ref itself may no longer exist.
 type BranchRef struct {
 	Name         string
 	Head         string
 	Worktree     string
+	Upstream     string
 	LastCommitAt time.Time
 }
 
 // ListBranches lists every local branch of repo, sorted by name.
 func ListBranches(repo string) ([]BranchRef, error) {
-	out, err := gitOutput(repo, "for-each-ref", "--format=%(refname:short)%00%(objectname)%00%(worktreepath)%00%(committerdate:iso-strict)", "refs/heads")
+	out, err := gitOutput(repo, "for-each-ref", "--format=%(refname:short)%00%(objectname)%00%(worktreepath)%00%(upstream)%00%(committerdate:iso-strict)", "refs/heads")
 	if err != nil {
 		return nil, err
 	}
@@ -44,11 +47,11 @@ func ListBranches(repo string) ([]BranchRef, error) {
 			continue
 		}
 		fields := strings.Split(line, "\x00")
-		if len(fields) != 4 {
+		if len(fields) != 5 {
 			return nil, fmt.Errorf("git for-each-ref in %s: unexpected line %q", repo, line)
 		}
-		branch := BranchRef{Name: fields[0], Head: fields[1], Worktree: fields[2]}
-		if branch.LastCommitAt, err = parseCommitTime(fields[3]); err != nil {
+		branch := BranchRef{Name: fields[0], Head: fields[1], Worktree: fields[2], Upstream: fields[3]}
+		if branch.LastCommitAt, err = parseCommitTime(fields[4]); err != nil {
 			return nil, fmt.Errorf("branch %s in %s: %w", branch.Name, repo, err)
 		}
 		branches = append(branches, branch)

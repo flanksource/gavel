@@ -114,6 +114,32 @@ var _ = Describe("Tracker", func() {
 		Expect(state.Branches[0].Name).To(Equal("feature"))
 		Expect(state.Branches[0].Worktree).To(Equal(r.feature))
 		Expect(state.Branches[0].Diff).To(Equal(gavelgit.DiffStat{Commits: 1, Files: 1, Adds: 2}))
+		Expect(state.Upstream).To(BeEmpty(), "main tracks no upstream")
+	})
+
+	It("counts the primary checkout's commits ahead of and behind its upstream, rescanning when only the remote ref moves", func(ctx SpecContext) {
+		r := newTrackedRepo(ctx, gitstate.Options{})
+		bare := filepath.Join(filepath.Dir(r.root), "origin.git")
+		git(filepath.Dir(r.root), "init", "-q", "--bare", "-b", "main", bare)
+		git(r.root, "remote", "add", "origin", bare)
+		git(r.root, "push", "-q", "-u", "origin", "main")
+		commit(r.root, "local.txt", "l\n", "feat: local")
+		git(r.feature, "push", "-q", "origin", "HEAD:main")
+		git(r.root, "fetch", "-q", "origin")
+
+		state, err := r.tracker.State(ctx, r.root)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect([]any{state.Upstream, state.UpstreamAhead, state.UpstreamBehind}).To(Equal([]any{"origin/main", 1, 1}))
+
+		commit(r.feature, "remote.txt", "r\n", "feat: remote")
+		git(r.feature, "push", "-q", "origin", "HEAD:main")
+		git(r.root, "fetch", "-q", "origin")
+		Expect(r.tracker.Rescan(ctx, r.root)).To(Succeed())
+
+		state, err = r.tracker.State(ctx, r.root)
+		Expect(err).NotTo(HaveOccurred())
+		Expect([]any{state.Upstream, state.UpstreamAhead, state.UpstreamBehind}).To(Equal([]any{"origin/main", 1, 2}))
 	})
 
 	It("computes no comparison and changes nothing when refs and worktrees are unchanged", func(ctx SpecContext) {

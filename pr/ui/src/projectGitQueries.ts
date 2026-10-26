@@ -96,6 +96,8 @@ export function parseProjectGit(payload: unknown): ProjectGit {
     || typeof payload.base !== 'string'
     || typeof payload.currentBranch !== 'string'
     || typeof payload.baseCheckedOut !== 'boolean'
+    || (payload.upstream !== undefined && typeof payload.upstream !== 'string')
+    || !hasNumbers(payload, ['upstreamAhead', 'upstreamBehind'])
     || !Array.isArray(payload.worktrees)
     || !Array.isArray(payload.branches)
     || typeof payload.computedAt !== 'string'
