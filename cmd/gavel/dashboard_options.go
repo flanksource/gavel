@@ -44,7 +44,9 @@ type DashboardOptions struct {
 	SubstrateEnvAPI      string   `flag:"substrate-env-api" help:"ate-env-api gRPC address sandbox environments are created through (substrate)" default:"ate-env-api.ate-env.svc.cluster.local:7777"`
 	SubstrateControl     string   `flag:"substrate-control" help:"ate-api-server gRPC address egress policies are set through (substrate)" default:"api.ate-system.svc.cluster.local:443"`
 	SubstrateTokenFile   string   `flag:"substrate-token-file" help:"Bearer token file for ate-api-server, such as a projected ServiceAccount token with the api.ate-system.svc audience (substrate)"`
-	SubstrateCAFile      string   `flag:"substrate-ca-file" help:"CA ate-api-server's certificate chains to; empty skips verification (substrate)"`
+	SubstrateCAFile      string   `flag:"substrate-ca-file" help:"CA substrate's certificates chain to; without it or a client certificate, ate-api-server's isn't verified (substrate)"`
+	SubstrateClientCert  string   `flag:"substrate-client-cert" help:"Client certificate the ingress in front of a substrate in another cluster requires; with it both APIs are reached over verified TLS (substrate)"`
+	SubstrateClientKey   string   `flag:"substrate-client-key" help:"Key of --substrate-client-cert (substrate)"`
 	SubstrateAtespace    string   `flag:"substrate-atespace" help:"Atespace sandbox environments are created in (substrate)" default:"ate-env"`
 	SubstrateTemplate    string   `flag:"substrate-template" help:"ActorTemplate sandbox environments derive from; empty is env's default-template (substrate)"`
 	SubstrateEgress      []string `flag:"substrate-egress" help:"More hosts sandbox environments may reach besides gavel serve, the Go, npm and Python registries and GitHub; repeat for each (substrate)"`

@@ -52,7 +52,8 @@ func newSandboxDispatcher(ctx context.Context, opts DashboardOptions, db *gorm.D
 		}
 		substrate, err := sandbox.NewSubstrate(sandbox.SubstrateOptions{
 			EnvAPI: opts.SubstrateEnvAPI, Control: opts.SubstrateControl,
-			ControlTokenFile: opts.SubstrateTokenFile, ControlCAFile: opts.SubstrateCAFile,
+			ControlTokenFile: opts.SubstrateTokenFile, CAFile: opts.SubstrateCAFile,
+			ClientCertFile: opts.SubstrateClientCert, ClientKeyFile: opts.SubstrateClientKey,
 			Atespace: opts.SubstrateAtespace, Template: opts.SubstrateTemplate,
 			Egress: opts.SubstrateEgress, Credentials: credentials, TrustBundle: opts.SubstrateTrustBundle,
 		})

@@ -63,9 +63,15 @@ type SubstrateOptions struct {
 	// ControlTokenFile holds the bearer token the control plane accepts, such as a projected
 	// ServiceAccount token with the api.ate-system.svc audience. It is read on every call.
 	ControlTokenFile string
-	// ControlCAFile holds the CA the control plane's certificate chains to; empty skips
-	// verification, as a port-forwarded control plane needs.
-	ControlCAFile string
+	// CAFile holds the CA substrate's certificates chain to. Without it or a client certificate,
+	// the control plane's certificate isn't verified, as a port-forwarded control plane needs.
+	CAFile string
+	// ClientCertFile and ClientKeyFile hold the client certificate the ingress in front of a
+	// substrate in another cluster requires. With them, both APIs are reached over TLS verified
+	// against the system roots, or CAFile. They are read on every handshake, so a renewed
+	// certificate is picked up without a restart.
+	ClientCertFile string
+	ClientKeyFile  string
 	// Atespace is the atespace environments are created in; empty is ate-env.
 	Atespace string
 	// Template is the ActorTemplate environments derive from, its container replaced by the job's
@@ -95,22 +101,37 @@ func NewSubstrate(options SubstrateOptions) (Executor, error) {
 	if options.Atespace == "" {
 		options.Atespace = "ate-env"
 	}
-	// ate-env-api serves cleartext gRPC inside the cluster.
-	envConn, err := grpc.NewClient(options.EnvAPI, grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if err != nil {
-		return nil, fmt.Errorf("connect to ate-env-api %s: %w", options.EnvAPI, err)
+	if (options.ClientCertFile == "") != (options.ClientKeyFile == "") {
+		return nil, errors.New("the substrate client certificate needs both its certificate and key files")
 	}
-	tlsConfig := &tls.Config{InsecureSkipVerify: options.ControlCAFile == ""} //nolint:gosec // a port-forwarded control plane serves a cluster-internal certificate
-	if options.ControlCAFile != "" {
-		pem, err := os.ReadFile(options.ControlCAFile)
+	remote := options.ClientCertFile != ""
+	tlsConfig := &tls.Config{InsecureSkipVerify: options.CAFile == "" && !remote} //nolint:gosec // a port-forwarded control plane serves a cluster-internal certificate
+	if options.CAFile != "" {
+		pem, err := os.ReadFile(options.CAFile)
 		if err != nil {
-			return nil, fmt.Errorf("read the control plane's CA: %w", err)
+			return nil, fmt.Errorf("read substrate's CA: %w", err)
 		}
 		pool := x509.NewCertPool()
 		if !pool.AppendCertsFromPEM(pem) {
-			return nil, fmt.Errorf("the control plane's CA file %s holds no certificate", options.ControlCAFile)
+			return nil, fmt.Errorf("substrate's CA file %s holds no certificate", options.CAFile)
 		}
 		tlsConfig.RootCAs = pool
+	}
+	// ate-env-api serves cleartext gRPC inside the cluster; from another cluster it is behind the
+	// ingress's TLS.
+	envCredentials := insecure.NewCredentials()
+	if remote {
+		if _, err := clientCertificate(options); err != nil {
+			return nil, err
+		}
+		tlsConfig.GetClientCertificate = func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
+			return clientCertificate(options)
+		}
+		envCredentials = credentials.NewTLS(tlsConfig)
+	}
+	envConn, err := grpc.NewClient(options.EnvAPI, grpc.WithTransportCredentials(envCredentials))
+	if err != nil {
+		return nil, fmt.Errorf("connect to ate-env-api %s: %w", options.EnvAPI, err)
 	}
 	dial := []grpc.DialOption{grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig))}
 	if options.ControlTokenFile != "" {
@@ -350,6 +371,15 @@ func (h *substrateHandle) remove(ctx context.Context) error {
 }
 
 // tokenFile sends the bearer token in a file, read on every call so a rotated token is used.
+// clientCertificate loads the client certificate a substrate in another cluster requires.
+func clientCertificate(options SubstrateOptions) (*tls.Certificate, error) {
+	cert, err := tls.LoadX509KeyPair(options.ClientCertFile, options.ClientKeyFile)
+	if err != nil {
+		return nil, fmt.Errorf("load the substrate client certificate %s: %w", options.ClientCertFile, err)
+	}
+	return &cert, nil
+}
+
 type tokenFile string
 
 func (t tokenFile) GetRequestMetadata(context.Context, ...string) (map[string]string, error) {
