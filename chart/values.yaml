@@ -77,10 +77,20 @@ sandbox:
     # Audience of the ServiceAccount token gavel serve authenticates to ate-api-server with.
     # Substrate's access policy must let this ServiceAccount manage actors in the atespace.
     tokenAudience: api.ate-system.svc
+    # Secret holding a token for ate-api-server minted in substrate's own cluster, used instead of
+    # this ServiceAccount's projected token when substrate runs in another cluster.
+    token:
+      secretName: ""
+      key: token
     # Secret holding the CA ate-api-server's certificate chains to; unset skips verification.
     ca:
       secretName: ""
       key: ca.crt
+    # kubernetes.io/tls Secret with the client certificate substrate's ingress requires when it
+    # runs in another cluster. With it, both APIs are reached over TLS verified against the system
+    # roots, or ca when set.
+    clientCert:
+      secretName: ""
 
 # Blob storage for run and job logs, attachments, test runs and traces: local, s3 or gcs. String
 # settings are templates, such as bucket: "{{ .Release.Name }}-blobs" or credentials: "{{ .Values.gcsKey }}".
