@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { ProjectsBar } from './ProjectsBar';
 import type { ProjectGitSummaryView } from '../projectGitQueries';
@@ -59,7 +59,9 @@ describe('ProjectsBar', () => {
       />,
     );
 
-    expect(screen.getByText('+40')).toBeTruthy();
+    const nameRow = screen.getByRole('button', { name: 'Open gavel project' }).parentElement!;
+    expect(nameRow.contains(screen.getByText('+40'))).toBe(true);
+    expect(within(nameRow).getByText('process')).toBeTruthy();
     expect(screen.getByText('−7')).toBeTruthy();
     expect(screen.getByLabelText('2 linked worktrees')).toBeTruthy();
     expect(screen.getByLabelText('1 unmerged branch')).toBeTruthy();

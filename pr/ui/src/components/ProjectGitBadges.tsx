@@ -19,10 +19,9 @@ export function projectGitBadgesState(summaries: ProjectGitSummaryView, projectN
 
 const plural = (count: number, noun: string, many = `${noun}s`) => `${count} ${count === 1 ? noun : many}`;
 
-// ProjectGitBadges summarises a project's work that is not yet in its base
-// branch: lines added and removed (uncommitted plus unmerged commits across all
-// worktrees and branches), linked worktrees, unmerged branches and branches
-// with uncommitted files.
+// ProjectGitBadges summarises a project's work: lines added and removed by the
+// main checkout's uncommitted changes, linked worktrees, unmerged branches and
+// branches with uncommitted files.
 // Loading renders nothing, a failure renders a warning with the reason, and a
 // project with no work renders only the counts that are non-zero.
 export function ProjectGitBadges({ state }: { state: ProjectGitBadgesState }) {
@@ -39,9 +38,9 @@ export function ProjectGitBadges({ state }: { state: ProjectGitBadgesState }) {
   const { adds, dels, worktrees, branches, uncommittedBranches, base } = state.summary;
   if (adds === 0 && dels === 0 && worktrees === 0 && branches === 0 && uncommittedBranches === 0) return null;
   return (
-    <span className="inline-flex max-w-full flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[10px] tabular-nums">
-      {adds > 0 && <span className="font-medium text-green-600 dark:text-green-400" title={`${plural(adds, 'line')} added vs ${base}`}>+{adds}</span>}
-      {dels > 0 && <span className="font-medium text-red-600 dark:text-red-400" title={`${plural(dels, 'line')} removed vs ${base}`}>−{dels}</span>}
+    <span className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap text-[10px] tabular-nums">
+      {adds > 0 && <span className="font-medium text-green-600 dark:text-green-400" title={`${plural(adds, 'line')} added by uncommitted changes in the checkout`}>+{adds}</span>}
+      {dels > 0 && <span className="font-medium text-red-600 dark:text-red-400" title={`${plural(dels, 'line')} removed by uncommitted changes in the checkout`}>−{dels}</span>}
       {worktrees > 0 && (
         <span className="inline-flex items-center gap-0.5 text-muted-foreground" aria-label={plural(worktrees, 'linked worktree')} title={plural(worktrees, 'linked worktree')}>
           <UiFolderGit />{worktrees}

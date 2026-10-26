@@ -36,6 +36,9 @@ const git: ProjectGit = {
   base: 'main',
   currentBranch: 'main',
   baseCheckedOut: true,
+  upstream: 'origin/main',
+  upstreamAhead: 1,
+  upstreamBehind: 4,
   worktrees: [primary, linked, clean, detached],
   branches: [branch('feat/x', linked.path, 2, 5, 1), branch('spike', '', 1, 7, 0)],
   computedAt: '2026-10-05T08:00:00Z',
@@ -49,9 +52,9 @@ describe('dirtyFileCount', () => {
 });
 
 describe('projectRefEntries', () => {
-  it('groups the main checkout, linked worktrees and worktree-less branches with commits, uncommitted files and lines (only when there are any)', () => {
+  it('groups the main checkout (with its upstream ahead/behind), linked worktrees and worktree-less branches with commits, uncommitted files and lines (only when there are any)', () => {
     expect(projectRefEntries(git)).toEqual([
-      { value: '', group: 'Checkout', label: 'main', title: '/work/gavel', stats: { commits: 0, uncommitted: 4, lines: { adds: 9, dels: 9 } }, lastCommitAt: DAYS_AGO_2, touchedAt: MINUTES_AGO_5 },
+      { value: '', group: 'Checkout', label: 'main', title: '/work/gavel', stats: { commits: 0, uncommitted: 4, lines: { adds: 9, dels: 9 }, upstream: { name: 'origin/main', ahead: 1, behind: 4 } }, lastCommitAt: DAYS_AGO_2, touchedAt: MINUTES_AGO_5 },
       { value: 'wt:/work/gavel-feat', group: 'Worktrees', label: 'feat/x', title: '/work/gavel-feat', stats: { commits: 2, uncommitted: 8, lines: { adds: 10, dels: 4 } }, lastCommitAt: HOURS_AGO_3, touchedAt: MINUTES_AGO_5 },
       { value: 'wt:/work/gavel-clean', group: 'Worktrees', label: 'chore/y', title: '/work/gavel-clean', stats: { commits: 1, uncommitted: 0 }, lastCommitAt: DAYS_AGO_2, touchedAt: undefined },
       { value: 'wt:/work/gavel-det', group: 'Worktrees', label: '(detached) gavel-det', title: '/work/gavel-det', stats: { commits: 0, uncommitted: 0 }, lastCommitAt: DAYS_AGO_2, touchedAt: undefined },
@@ -61,6 +64,11 @@ describe('projectRefEntries', () => {
 
   it('omits branches that are checked out in a worktree', () => {
     expect(projectRefEntries(git).some(entry => entry.value === 'br:feat/x')).toBe(false);
+  });
+
+  it('gives the main checkout no upstream stats when it tracks none', () => {
+    const [main] = projectRefEntries({ ...git, upstream: undefined, upstreamAhead: 0, upstreamBehind: 0 });
+    expect(main.stats.upstream).toBeUndefined();
   });
 
   it('labels a detached main checkout', () => {

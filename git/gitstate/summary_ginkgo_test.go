@@ -24,8 +24,7 @@ var _ = Describe("Project git summary", func() {
 		}
 
 		Expect(state.Summary("acme")).To(Equal(gitstate.Summary{
-			Name: "acme", Base: "main", Branches: 2, Worktrees: 3,
-			Adds: 4, Dels: 1, UncommittedBranches: 2,
+			Name: "acme", Base: "main", Branches: 2, Worktrees: 3, UncommittedBranches: 2,
 		}))
 	},
 		Entry("staged files", gitstate.Changes{Staged: 3}),
@@ -43,6 +42,21 @@ var _ = Describe("Project git summary", func() {
 		}}
 
 		Expect(state.Summary("acme").UncommittedBranches).To(BeZero())
+	})
+
+	It("counts lines of the primary checkout's uncommitted changes only, not of linked worktrees or unmerged branches", func() {
+		state := gitstate.State{
+			Base:     "main",
+			Branches: []gavelgit.BranchInfo{{Name: "feature", Ahead: 2, Diff: gavelgit.DiffStat{Adds: 40, Dels: 10}}},
+			Worktrees: []gitstate.Worktree{
+				{Worktree: gavelgit.Worktree{Branch: "main", Primary: true}, Changes: gitstate.Changes{Unstaged: 1, Adds: 7, Dels: 2}},
+				{Worktree: gavelgit.Worktree{Branch: "feature"}, Changes: gitstate.Changes{Unstaged: 1, Adds: 300, Dels: 100}},
+			},
+		}
+
+		Expect(state.Summary("acme")).To(Equal(gitstate.Summary{
+			Name: "acme", Base: "main", Adds: 7, Dels: 2, Worktrees: 1, Branches: 1, UncommittedBranches: 2,
+		}))
 	})
 
 	It("preserves line totals while counting a dirty branch once", func() {
