@@ -1,0 +1,152 @@
+---
+name: branch-triage
+description: Audit a checkout's pull requests, branches and worktrees and classify each as ready to merge, needing a rebase, or safe to close, delete or archive.
+model: claude
+mode: agent
+effort: medium
+budget:
+  maxTurns: 40
+  timeout: 20m
+setup:
+  cwd: "{{repo}}"
+prompt:
+  schemaStrictness: retry
+  system: >-
+    You are auditing the git checkout {{repo}}: its pull requests, local and
+    remote branches, and linked worktrees. Classify every item and report the
+    evidence behind each verdict. This is a read-only review: never edit files,
+    commit, fetch, rebase, push, close a PR, or delete a branch or worktree.
+    Suggest the command that would act on a verdict instead of running it.
+permissions:
+  # Read-only by tool list rather than permissions.access: read-only, which
+  # denies the shell alias and would block the git inspection this needs.
+  # Patterned Bash rules only bind on Claude, which is why the model is pinned.
+  tools:
+    Read: allow
+    Glob: allow
+    Grep: allow
+    Edit: deny
+    Write: deny
+    Bash(git status:*): allow
+    Bash(git log:*): allow
+    Bash(git show:*): allow
+    Bash(git diff:*): allow
+    Bash(git rev-parse:*): allow
+    Bash(git rev-list:*): allow
+    Bash(git merge-base:*): allow
+    Bash(git cherry:*): allow
+    Bash(git range-diff:*): allow
+    Bash(git for-each-ref:*): allow
+    Bash(git branch --list:*): allow
+    Bash(git branch -vv:*): allow
+    Bash(git worktree list:*): allow
+    Bash(git ls-remote:*): allow
+    # `git -C` is not allowed: it prefixes every subcommand, push included.
+    Bash(cd:*): allow
+    Bash(gavel pr list:*): allow
+    Bash(gavel pr status:*): allow
+    Bash(gavel pr status --ai-fix:*): deny
+    Bash(gavel pr close:*): deny
+    Bash(gh:*): deny
+    Bash(git fetch:*): deny
+    Bash(git pull:*): deny
+    Bash(git push:*): deny
+    Bash(git merge:*): deny
+    Bash(git rebase:*): deny
+    Bash(git reset:*): deny
+    Bash(git checkout:*): deny
+    Bash(git switch:*): deny
+    Bash(git commit:*): deny
+    Bash(git stash:*): deny
+    Bash(git clean:*): deny
+    Bash(git tag:*): deny
+    Bash(git update-ref:*): deny
+    Bash(git branch -d:*): deny
+    Bash(git branch -D:*): deny
+    Bash(git branch -m:*): deny
+    Bash(git worktree add:*): deny
+    Bash(git worktree remove:*): deny
+    Bash(git worktree prune:*): deny
+output:
+  schema:
+    type: object
+    additionalProperties: false
+    required: [base, items]
+    properties:
+      base:
+        type: string
+        description: "the base ref every branch was compared against, e.g. origin/main"
+      items:
+        type: array
+        description: "one entry per pull request, branch and worktree; a branch with an open PR and a worktree is listed once per kind"
+        items:
+          type: object
+          additionalProperties: false
+          required: [kind, name, verdict, reason, evidence]
+          properties:
+            kind:
+              type: string
+              enum: [pr, branch, worktree]
+            name:
+              type: string
+              description: "PR title, branch name, or worktree path"
+            ref:
+              type: string
+              description: "the branch the item points at"
+            path:
+              type: string
+              description: "worktree path, for worktrees"
+            pr:
+              type: integer
+              description: "pull request number, when one exists for the branch"
+            verdict:
+              type: string
+              enum: [ready-to-merge, needs-rebase, close, delete, archive, active, needs-attention]
+            reason:
+              type: string
+              description: "one sentence explaining the verdict"
+            evidence:
+              type: array
+              description: "the command output fragments the verdict rests on"
+              items:
+                type: string
+            command:
+              type: string
+              description: "the command that would act on the verdict; suggested, never run"
+---
+# Triage pull requests, branches and worktrees in `{{repo}}`
+
+{{#if base}}
+Base: `{{base}}`.
+{{else}}
+Base: resolve it with `git rev-parse --abbrev-ref {{#if remote}}{{remote}}{{else}}origin{{/if}}/HEAD`.
+{{/if}}
+Remote: `{{#if remote}}{{remote}}{{else}}origin{{/if}}`. Stale means the last commit is older than {{#if staleDays}}{{staleDays}}{{else}}30{{/if}} days.
+
+Do not fetch. Remote-tracking refs may be out of date; when a verdict depends on them, say so in `reason`.
+
+## 1. Inventory
+
+- Worktrees: `git worktree list --porcelain`, then `cd <path> && git status --porcelain` for each to find uncommitted work.
+- Branches: `git for-each-ref --format='%(refname:short) %(upstream:short) %(upstream:track) %(committerdate:iso8601)' refs/heads refs/remotes/<remote>`.
+- Ahead/behind: `git rev-list --left-right --count <base>...<branch>` (left = behind, right = ahead).
+- Pull requests: `gavel pr list --any --state all --since 365d --status --format json` (the default `--since 7d` would hide the stale PRs this audit is looking for), then `gavel pr status <number>` for a PR whose mergeability, checks or reviews you need in detail. Never pass `--ai-fix`, and never use `gh`.
+
+## 2. Classify each item
+
+| Verdict | When |
+| --- | --- |
+| `delete` | A branch or worktree whose work is already in the base: `git merge-base --is-ancestor <branch> <base>` succeeds, every line of `git cherry <base> <branch>` starts with `-` (squash or rebase merge), or its PR is merged. A branch with nothing ahead of the base. A finished `gavel/` worktree. |
+| `ready-to-merge` | An open PR with passing checks, no changes requested, no unresolved review threads, and no conflicts with the base. |
+| `needs-rebase` | An open PR or unmerged branch that conflicts with the base, or that the base has moved past far enough for GitHub to report it as not mergeable. Suggest the `pr-rebase` prompt for a PR and `git rebase <base>` for a local branch. |
+| `close` | An open PR that is superseded by merged work, duplicates another PR, or has had no activity while stale. |
+| `archive` | An unmerged branch with no open PR whose last commit is stale. Suggest `git tag archive/<branch> <branch>` followed by `git branch -D <branch>`. |
+| `active` | Recent unmerged work. Leave it alone. |
+| `needs-attention` | A worktree with uncommitted changes, a PR with failing checks or changes requested, or anything the evidence does not settle. |
+
+Rules:
+
+- A worktree with uncommitted changes is never `delete`, even when its branch is merged; report it as `needs-attention`.
+- Never mark the base, or the branch checked out in `{{repo}}`, as `delete` or `archive`.
+- Every verdict cites the command output it rests on in `evidence`. When evidence conflicts, choose `needs-attention` and explain the conflict.
+- Put the acting command in `command` (`git worktree remove <path>`, `git branch -D <branch>`, `git push <remote> --delete <branch>`, `gavel pr close <number>`), but do not run it.

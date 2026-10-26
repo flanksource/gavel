@@ -16,8 +16,8 @@ type TodosMergeOptions struct {
 	TodoTargetOptions
 	Into   string `flag:"into" help:"Short id of the TODO to merge into; defaults to the first id given"`
 	DryRun bool   `flag:"dry-run" help:"Print the proposed merge without writing anything"`
-	Model  string `flag:"model" help:"Override the model for this merge, as the compact mode:model:effort form"`
-	Effort string `flag:"effort" help:"Reasoning effort" enum:"low,medium,high,xhigh"`
+	Model  string `flag:"model" help:"Override the model for this merge, as the compact mode:model:effort form" category:"Model selection"`
+	Effort string `flag:"effort" help:"Reasoning effort" enum:"low,medium,high,xhigh" category:"Model selection"`
 }
 
 var todosMergeCmd *cobra.Command
