@@ -79,8 +79,16 @@ var _ = Describe("review tools", func() {
 	})
 
 	Describe(reportViolationTool, func() {
+		report := func(violations ...map[string]any) (any, error) {
+			items := make([]any, len(violations))
+			for i, v := range violations {
+				items[i] = v
+			}
+			return call(reportViolationTool, map[string]any{"violations": items})
+		}
+
 		It("records a violation with the file resolved against the work dir", func() {
-			_, err := call(reportViolationTool, map[string]any{"file": "pkg/a.go", "line": 3, "severity": "warning", "message": "shadowed err"})
+			_, err := report(map[string]any{"file": "pkg/a.go", "line": 3, "severity": "warning", "message": "shadowed err"})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(run.Reported()).To(Equal([]models.Violation{{
 				File: filepath.Join(workDir, "pkg/a.go"), Line: 3, Severity: models.SeverityWarning,
@@ -88,16 +96,72 @@ var _ = Describe("review tools", func() {
 			}}))
 		})
 
+		It("records several violations in one call", func() {
+			out, err := report(
+				map[string]any{"file": "pkg/a.go", "line": 1, "message": "first"},
+				map[string]any{"file": "pkg/a.go", "line": 2, "message": "second"},
+			)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(out).To(Equal(reportOutput{Recorded: 2, Reported: 2}))
+			Expect(run.Reported()).To(HaveLen(2))
+		})
+
+		It("keeps the quoted code and fills the columns from where it sits on the line", func() {
+			_, err := report(map[string]any{"file": "pkg/a.go", "line": 3, "message": "typo", "code": "hre"})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(run.Reported()).To(Equal([]models.Violation{{
+				File: filepath.Join(workDir, "pkg/a.go"), Line: 3, Column: 2, EndColumn: 5,
+				Message: models.StringPtr("typo"), Code: models.StringPtr("hre"), Source: "prompt",
+			}}))
+		})
+
+		It("keeps the columns the model gave", func() {
+			_, err := report(map[string]any{"file": "pkg/a.go", "line": 3, "column": 1, "end_column": 6, "message": "word", "code": "hre"})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(run.Reported()[0].Column).To(Equal(1))
+			Expect(run.Reported()[0].EndColumn).To(Equal(6))
+		})
+
+		It("accepts code spanning line to end_line", func() {
+			_, err := report(map[string]any{"file": "pkg/a.go", "line": 2, "end_line": 3, "message": "pair", "code": "two\nthree"})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(run.Reported()).To(HaveLen(1))
+		})
+
+		It("rejects code that is not on the stated line and says where it is", func() {
+			out, err := report(
+				map[string]any{"file": "pkg/a.go", "line": 1, "message": "misplaced", "code": "four"},
+				map[string]any{"file": "pkg/a.go", "line": 2, "message": "ok", "code": "two"},
+			)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(out).To(Equal(reportOutput{Recorded: 1, Reported: 1, Rejected: []rejectedViolation{{
+				Index: 0, Error: `code "four" is not on line 1 of pkg/a.go; it appears on line 4`,
+			}}}))
+			Expect(*run.Reported()[0].Message).To(Equal("ok"))
+		})
+
+		It("fails the call when every violation is rejected", func() {
+			_, err := report(map[string]any{"file": "pkg/a.go", "line": 1, "message": "invented", "code": "nowhere"})
+			Expect(err).To(MatchError(ContainSubstring(`code "nowhere" does not appear in pkg/a.go`)))
+			Expect(run.Reported()).To(BeEmpty())
+		})
+
 		DescribeTable("rejects an invalid violation",
 			func(input map[string]any, wantErr string) {
-				_, err := call(reportViolationTool, input)
+				_, err := report(input)
 				Expect(err).To(MatchError(ContainSubstring(wantErr)))
 				Expect(run.Reported()).To(BeEmpty())
 			},
 			Entry("blank message", map[string]any{"file": "pkg/a.go", "message": " "}, "nonempty message"),
 			Entry("bad severity", map[string]any{"message": "x", "severity": "fatal"}, "invalid severity"),
 			Entry("negative line", map[string]any{"message": "x", "line": -1}, "negative location"),
+			Entry("code without a file and line", map[string]any{"message": "x", "code": "two"}, "code requires file and line"),
 		)
+
+		It("requires at least one violation", func() {
+			_, err := call(reportViolationTool, map[string]any{"violations": []any{}})
+			Expect(err).To(MatchError(ContainSubstring("at least one violation")))
+		})
 	})
 })
 
@@ -115,6 +179,37 @@ var _ = Describe("mergeViolations", func() {
 			{File: "/r/a.go", Line: 1, Message: msg("a"), Rule: rule},
 			{File: "/r/a.go", Line: 2, Message: msg("b")},
 		}))
+	})
+
+	It("keeps the tool-reported copy of a duplicate, which carries the checked location", func() {
+		structured := []models.Violation{{File: "/r/a.go", Line: 3, Message: msg("typo"), Code: msg("hre")}}
+		reported := []models.Violation{{File: "/r/a.go", Line: 3, Column: 2, EndColumn: 5, Message: msg("typo"), Code: msg("hre")}}
+		Expect(mergeViolations(structured, reported)).To(Equal(reported))
+	})
+})
+
+var _ = Describe("decodeViolations", func() {
+	var workDir string
+
+	BeforeEach(func() {
+		workDir = GinkgoT().TempDir()
+		Expect(os.WriteFile(filepath.Join(workDir, "a.md"), []byte("one\ntwo three\n"), 0o644)).To(Succeed())
+	})
+
+	answer := func(code string) map[string]any {
+		return map[string]any{"violations": []any{map[string]any{"file": "a.md", "line": 2, "message": "m", "code": code}}}
+	}
+
+	It("fills the columns of a final-answer violation from its quoted code", func() {
+		violations, err := decodeViolations(answer("three"), workDir)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(violations).To(HaveLen(1))
+		Expect([]int{violations[0].Column, violations[0].EndColumn}).To(Equal([]int{5, 10}))
+	})
+
+	It("fails a final answer whose quoted code is not in the file", func() {
+		_, err := decodeViolations(answer("four"), workDir)
+		Expect(err).To(MatchError(ContainSubstring(`prompt lint violation 1: code "four" does not appear in a.md`)))
 	})
 })
 
