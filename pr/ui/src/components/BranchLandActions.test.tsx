@@ -65,7 +65,7 @@ const WORKTREE = '/src/gavel/.worktrees/git-panel';
 
 const changes = { staged: 0, unstaged: 0, both: 0, untracked: 0, conflict: 0, adds: 0, dels: 0 };
 const projectGit = {
-  base: 'main', currentBranch: 'main', baseCheckedOut: true, computedAt: '2026-10-13T00:00:00Z', generation: 1, branches: [],
+  base: 'main', currentBranch: 'main', baseCheckedOut: true, upstreamAhead: 0, upstreamBehind: 0, computedAt: '2026-10-13T00:00:00Z', generation: 1, branches: [],
   worktrees: [
     { path: REPO, branch: 'main', head: 'aaa', primary: true, detached: false, prunable: false, changes, ahead: 0, lastCommitAt: '2026-10-13T00:00:00Z' },
     { path: WORKTREE, branch: BRANCH, head: 'bbb', primary: false, detached: false, prunable: false, changes, ahead: 3, lastCommitAt: '2026-10-13T00:00:00Z' },

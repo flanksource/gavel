@@ -36,13 +36,16 @@ type WorktreeRef struct {
 }
 
 // RefsUpdate is the ref-level state of a repository: its base, worktrees and
-// branches.
+// branches. Upstream and UpstreamSHA are the primary checkout's upstream,
+// empty when it has none.
 type RefsUpdate struct {
 	Fingerprint    string
 	BaseBranch     string
 	BaseSHA        string
 	CurrentBranch  string
 	BaseCheckedOut bool
+	Upstream       string
+	UpstreamSHA    string
 	Worktrees      []WorktreeRef
 	Branches       []gavelgit.BranchRef
 }
@@ -131,9 +134,11 @@ func (s *Store) ApplyRefs(ctx context.Context, repoID uuid.UUID, update RefsUpda
 	db := s.db.WithContext(ctx)
 	if err := db.Exec(`
 		UPDATE git_repos SET refs_fingerprint = ?, refs_scanned_at = now(), base_branch = ?, base_sha = ?,
-			current_branch = ?, base_checked_out = ?, error = NULL, error_at = NULL
+			current_branch = ?, base_checked_out = ?, upstream_branch = NULLIF(?, ''), upstream_sha = NULLIF(?, ''),
+			error = NULL, error_at = NULL
 		WHERE id = ?`,
-		update.Fingerprint, update.BaseBranch, update.BaseSHA, update.CurrentBranch, update.BaseCheckedOut, repoID).Error; err != nil {
+		update.Fingerprint, update.BaseBranch, update.BaseSHA, update.CurrentBranch, update.BaseCheckedOut,
+		update.Upstream, update.UpstreamSHA, repoID).Error; err != nil {
 		return fmt.Errorf("update refs of git repo %s: %w", repoID, err)
 	}
 	paths := make([]string, 0, len(update.Worktrees))

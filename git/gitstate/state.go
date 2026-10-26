@@ -61,9 +61,15 @@ type Worktree struct {
 type State struct {
 	Base string `json:"base"`
 	// BaseSHA is the tip of Base the branches were compared against.
-	BaseSHA        string                `json:"baseSha"`
-	CurrentBranch  string                `json:"currentBranch"`
-	BaseCheckedOut bool                  `json:"baseCheckedOut"`
+	BaseSHA        string `json:"baseSha"`
+	CurrentBranch  string `json:"currentBranch"`
+	BaseCheckedOut bool   `json:"baseCheckedOut"`
+	// Upstream is the ref the primary checkout tracks (e.g. origin/main), empty
+	// when it tracks none or that ref is gone; UpstreamAhead and UpstreamBehind
+	// count the checkout's commits not in it and its commits not in the checkout.
+	Upstream       string                `json:"upstream,omitempty"`
+	UpstreamAhead  int                   `json:"upstreamAhead"`
+	UpstreamBehind int                   `json:"upstreamBehind"`
 	Worktrees      []Worktree            `json:"worktrees"`
 	Branches       []gavelgit.BranchInfo `json:"branches"`
 	ComputedAt     time.Time             `json:"computedAt"`
@@ -71,9 +77,10 @@ type State struct {
 	Error          string                `json:"error,omitempty"`
 }
 
-// Summary is one project's row of /api/projects/git-summary: the unmerged and
-// uncommitted line counts plus the linked worktree count (the primary checkout
-// excluded), unmerged branches and branches with uncommitted files.
+// Summary is one project's row of /api/projects/git-summary: the line counts
+// of the primary checkout's uncommitted changes plus the linked worktree count
+// (the primary checkout excluded), unmerged branches and branches with
+// uncommitted files.
 // Error is set, with the numbers left at 0,
 // when the project could not be inspected.
 type Summary struct {
@@ -98,18 +105,14 @@ func (state State) Summary(name string) Summary {
 		if !wt.Prunable && wt.StatusError != "" {
 			return Summary{Name: name, Base: state.Base, Error: fmt.Sprintf("worktree %s: %s", wt.Path, wt.StatusError)}
 		}
-		if !wt.Primary {
+		if wt.Primary {
+			summary.Adds, summary.Dels = wt.Changes.Adds, wt.Changes.Dels
+		} else {
 			summary.Worktrees++
 		}
 		if !wt.Prunable && !wt.Detached && wt.Branch != "" && wt.Changes.Files() > 0 {
 			dirtyBranches[wt.Branch] = struct{}{}
 		}
-		summary.Adds += wt.Changes.Adds
-		summary.Dels += wt.Changes.Dels
-	}
-	for _, branch := range state.Branches {
-		summary.Adds += branch.Diff.Adds
-		summary.Dels += branch.Diff.Dels
 	}
 	summary.UncommittedBranches = len(dirtyBranches)
 	return summary
