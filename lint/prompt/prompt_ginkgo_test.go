@@ -80,7 +80,7 @@ var _ = Describe("Prompt lint results", func() {
 
 	It("keeps violations reported through the tool when the run fails", func() {
 		run := &reviewRun{WorkDir: "/workspace"}
-		_, err := run.reportViolation(context.Background(), map[string]any{"file": "a.go", "line": 1, "message": "leak"})
+		_, err := run.reportViolation(context.Background(), map[string]any{"violations": []any{map[string]any{"file": "a.go", "line": 1, "message": "leak"}}})
 		Expect(err).NotTo(HaveOccurred())
 		got := run.result(summaryInput{Err: errors.New("provider unavailable")})
 		Expect(got.Success).To(BeFalse())
@@ -293,7 +293,7 @@ var _ = Describe("runReviews", func() {
 			mu.Unlock()
 			for _, tool := range tools {
 				if tool.Name == reportViolationTool {
-					_, err := tool.Handler(context.Background(), map[string]any{"file": "b.go", "line": 2, "message": "early"})
+					_, err := tool.Handler(context.Background(), map[string]any{"violations": []any{map[string]any{"file": "b.go", "line": 2, "message": "early"}}})
 					Expect(err).NotTo(HaveOccurred())
 				}
 			}
