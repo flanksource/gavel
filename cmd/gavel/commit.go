@@ -36,7 +36,7 @@ type CommitOptions struct {
 	// provider. It replaces a bare --model string, which could not.
 	aiflags.ModelFlags
 
-	GroupModel   string `flag:"group-model" help:"Override LLM model for AI commit grouping (-A) from .gavel.yaml commit.grouping.model; falls back to --model"`
+	GroupModel   string `flag:"group-model" help:"Override LLM model for AI commit grouping (-A) from .gavel.yaml commit.grouping.model; falls back to --model" category:"Model selection"`
 	DryRun       bool   `flag:"dry-run" help:"Print the generated message without committing"`
 	Force        bool   `flag:"force" help:"Skip pre-commit hooks"`
 	Push         bool   `flag:"push" short:"p" help:"Push to a matching open PR or open a new PR. Skips the commit step when nothing is staged so existing local commits can be pushed."`

@@ -8,6 +8,7 @@ import (
 
 	"github.com/flanksource/captain/pkg/aiflags"
 	"github.com/flanksource/clicky"
+	"github.com/flanksource/clicky/flags"
 	commitpkg "github.com/flanksource/gavel/commit"
 	prcreate "github.com/flanksource/gavel/pr/create"
 	"github.com/flanksource/gavel/pr/model"
@@ -59,6 +60,8 @@ func init() {
 	prCreateCmd.Flags().StringVarP(&prCreateRepo, "repo", "R", "", "GitHub owner/repo or hosted Azure DevOps repository URL (must match origin)")
 	prCreateCmd.Flags().StringVar(&prCreateModel, "model", "", "Override the LLM model used for PR title/body/branch")
 	prCreateCmd.Flags().BoolVar(&prCreateNoCache, "no-cache", false, "Disable LLM response cache")
+	flags.SetCategory(prCreateCmd.Flags().Lookup("model"), flags.CategoryModelSelection)
+	flags.SetCategory(prCreateCmd.Flags().Lookup("no-cache"), flags.CategoryModelSelection)
 }
 
 func runPRCreate(cmd *cobra.Command, args []string) error {
