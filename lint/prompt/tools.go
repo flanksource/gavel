@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/gavel/internal/fileread"
@@ -70,21 +71,30 @@ func (r *reviewRun) tools() []api.ToolDefinition {
 			Handler: r.lint,
 		},
 		{
-			Name:        reportViolationTool,
-			Description: "Report one violation as soon as you find it. Reported violations are part of the review's result even if the final answer omits them.",
+			Name: reportViolationTool,
+			Description: "Report one or more violations as soon as you find them; batch the findings you have instead of one call each. " +
+				"Give code (the offending text, verbatim) whenever the finding quotes the file: it is checked against file and line, and a quote that is not there is rejected with where it actually appears. " +
+				"Each rejected entry is returned with its index and reason; the others are recorded. Reported violations are part of the review's result even if the final answer omits them.",
 			InputSchema: objectSchema(map[string]any{
-				"file":       map[string]any{"type": "string", "description": "Path relative to the work dir"},
-				"line":       map[string]any{"type": "integer", "minimum": 0},
-				"column":     map[string]any{"type": "integer", "minimum": 0},
-				"end_line":   map[string]any{"type": "integer", "minimum": 0},
-				"end_column": map[string]any{"type": "integer", "minimum": 0},
-				"severity":   map[string]any{"type": "string", "enum": []string{"error", "warning", "info"}},
-				"message":    map[string]any{"type": "string", "minLength": 1},
-				"rule": objectSchema(map[string]any{
-					"method":  map[string]any{"type": "string"},
-					"package": map[string]any{"type": "string"},
-				}),
-			}, "message"),
+				"violations": map[string]any{
+					"type":     "array",
+					"minItems": 1,
+					"items": objectSchema(map[string]any{
+						"file":       map[string]any{"type": "string", "description": "Path relative to the work dir"},
+						"line":       map[string]any{"type": "integer", "minimum": 0, "description": "1-based line of the offending text"},
+						"column":     map[string]any{"type": "integer", "minimum": 0, "description": "1-based column; derived from code when omitted"},
+						"end_line":   map[string]any{"type": "integer", "minimum": 0, "description": "Last line when code spans several lines"},
+						"end_column": map[string]any{"type": "integer", "minimum": 0, "description": "Column just past the offending text; derived from code when omitted"},
+						"severity":   map[string]any{"type": "string", "enum": []string{"error", "warning", "info"}},
+						"message":    map[string]any{"type": "string", "minLength": 1},
+						"code":       map[string]any{"type": "string", "minLength": 1, "description": "The offending text exactly as it appears in the file; requires file and line"},
+						"rule": objectSchema(map[string]any{
+							"method":  map[string]any{"type": "string"},
+							"package": map[string]any{"type": "string"},
+						}),
+					}, "message"),
+				},
+			}, "violations"),
 			ReadOnlyHint: &writes, DefaultPermission: api.ToolPolicyAllow,
 			Handler: r.reportViolation,
 		},
@@ -167,28 +177,109 @@ func (r *reviewRun) lint(ctx context.Context, raw map[string]any) (any, error) {
 	return map[string]any{"violations": violations, "linter_errors": failures}, nil
 }
 
+type reportInput struct {
+	Violations []models.Violation `json:"violations"`
+}
+
+// rejectedViolation names an entry of a report_violation call that was not
+// recorded, so the agent can correct and resend just that one.
+type rejectedViolation struct {
+	Index int    `json:"index"`
+	Error string `json:"error"`
+}
+
+type reportOutput struct {
+	Recorded int                 `json:"recorded"`
+	Reported int                 `json:"reported"`
+	Rejected []rejectedViolation `json:"rejected,omitempty"`
+}
+
 func (r *reviewRun) reportViolation(_ context.Context, raw map[string]any) (any, error) {
-	v, err := decodeToolInput[models.Violation](raw)
+	input, err := decodeToolInput[reportInput](raw)
 	if err != nil {
 		return nil, err
 	}
-	if err := validateViolation(&v, r.WorkDir); err != nil {
-		return nil, err
+	if len(input.Violations) == 0 {
+		return nil, fmt.Errorf("report_violation requires at least one violation")
+	}
+	var accepted []models.Violation
+	var rejected []rejectedViolation
+	for i, v := range input.Violations {
+		err := locateCode(r.WorkDir, &v)
+		if err == nil {
+			err = validateViolation(&v, r.WorkDir)
+		}
+		if err != nil {
+			rejected = append(rejected, rejectedViolation{Index: i, Error: err.Error()})
+			continue
+		}
+		accepted = append(accepted, v)
+	}
+	if len(accepted) == 0 {
+		reasons := make([]string, len(rejected))
+		for i, entry := range rejected {
+			reasons[i] = fmt.Sprintf("violation %d: %s", entry.Index, entry.Error)
+		}
+		return nil, fmt.Errorf("no violation recorded: %s", strings.Join(reasons, "; "))
 	}
 	r.mu.Lock()
-	r.reported = append(r.reported, v)
+	r.reported = append(r.reported, accepted...)
 	reported, onReport := slices.Clone(r.reported), r.onReport
 	r.mu.Unlock()
 	if onReport != nil {
 		onReport(reported)
 	}
-	return map[string]any{"recorded": true, "reported": len(reported)}, nil
+	return reportOutput{Recorded: len(accepted), Reported: len(reported), Rejected: rejected}, nil
+}
+
+// locateCode checks a violation's quoted code against its file under dir: the
+// text must sit within line..end_line. Missing columns are filled from the match.
+func locateCode(dir string, v *models.Violation) error {
+	if v.Code == nil || *v.Code == "" {
+		return nil
+	}
+	code := *v.Code
+	if v.File == "" || v.Line <= 0 {
+		return fmt.Errorf("code requires file and line")
+	}
+	path := v.File
+	if filepath.IsAbs(path) {
+		rel, err := filepath.Rel(dir, path)
+		if err != nil {
+			return fmt.Errorf("file %s is not under the work dir: %w", v.File, err)
+		}
+		path = rel
+	}
+	data, err := fileread.Read(dir, path)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", v.File, err)
+	}
+	lines := strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
+	last := max(v.EndLine, v.Line+strings.Count(code, "\n"))
+	if v.Line <= len(lines) {
+		window := strings.Join(lines[v.Line-1:min(last, len(lines))], "\n")
+		if index := strings.Index(window, code); index >= 0 {
+			if v.Column == 0 && !strings.Contains(window[:index], "\n") {
+				v.Column = utf8.RuneCountInString(window[:index]) + 1
+				if v.EndColumn == 0 && !strings.Contains(code, "\n") {
+					v.EndColumn = v.Column + utf8.RuneCountInString(code)
+				}
+			}
+			return nil
+		}
+	}
+	for i := range lines {
+		if strings.HasPrefix(strings.Join(lines[i:], "\n"), code) || strings.Contains(lines[i], code) {
+			return fmt.Errorf("code %q is not on line %d of %s; it appears on line %d", code, v.Line, v.File, i+1)
+		}
+	}
+	return fmt.Errorf("code %q does not appear in %s", code, v.File)
 }
 
 // mergeViolations is the run's final finding list: the structured answer, plus
-// any violation reported through the tool that the answer left out.
+// any violation reported through the tool that the answer left out. Where both
+// carry the same finding, the reported copy wins: report_violation checked it.
 func mergeViolations(structured, reported []models.Violation) []models.Violation {
-	merged := slices.Clone(structured)
 	key := func(v models.Violation) string {
 		var rule, message string
 		if v.Rule != nil {
@@ -199,9 +290,22 @@ func mergeViolations(structured, reported []models.Violation) []models.Violation
 		}
 		return fmt.Sprintf("%s:%d:%s:%s", v.File, v.Line, rule, message)
 	}
+	byKey := map[string]models.Violation{}
+	for _, v := range reported {
+		if _, dup := byKey[key(v)]; !dup {
+			byKey[key(v)] = v
+		}
+	}
 	seen := map[string]bool{}
-	for _, v := range merged {
-		seen[key(v)] = true
+	merged := make([]models.Violation, 0, len(structured)+len(reported))
+	for _, v := range structured {
+		if checked, ok := byKey[key(v)]; ok {
+			v = checked
+		}
+		if !seen[key(v)] {
+			seen[key(v)] = true
+			merged = append(merged, v)
+		}
 	}
 	for _, v := range reported {
 		if !seen[key(v)] {

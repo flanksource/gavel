@@ -188,7 +188,11 @@ func decodeViolations(data map[string]any, dir string) ([]models.Violation, erro
 		return nil, fmt.Errorf("prompt lint output requires a violations array")
 	}
 	for i := range output.Violations {
-		if err := validateViolation(&output.Violations[i], dir); err != nil {
+		err := locateCode(dir, &output.Violations[i])
+		if err == nil {
+			err = validateViolation(&output.Violations[i], dir)
+		}
+		if err != nil {
 			return nil, fmt.Errorf("prompt lint violation %d: %w", i+1, err)
 		}
 	}
