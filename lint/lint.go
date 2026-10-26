@@ -250,8 +250,9 @@ func Execute(opts Options) ([]*linters.LinterResult, error) {
 
 // applyPostLintFilters runs the three post-filters every caller of Execute
 // wants in the same order: user-supplied scope (drops violations outside the
-// requested file set), gitignore (drops violations on gitignored paths), then
-// .gavel.yaml lint.ignore rules. workDir is used to resolve relative scope
+// requested file set), gitignore (drops violations on gitignored paths, except
+// in files named explicitly in files), then .gavel.yaml lint.ignore rules.
+// workDir is used to resolve relative scope
 // entries and to locate the layered .gavel.yaml; each result's own WorkDir is
 // used for gitignore discovery and absolute-path relativization inside
 // FilterIgnoredViolations.
@@ -267,7 +268,11 @@ func applyPostLintFilters(results []*linters.LinterResult, workDir string, files
 			logger.Infof("Filtered %d violations outside requested paths in %s", dropped, workDir)
 		}
 	}
-	filtered, err := linters.FilterViolationsByGitIgnoreInResults(results)
+	named := make(map[string]struct{}, len(files))
+	for _, file := range files {
+		named[resolveLintPath(workDir, file)] = struct{}{}
+	}
+	filtered, err := linters.FilterViolationsByGitIgnoreInResults(results, named)
 	if err != nil {
 		return fmt.Errorf("filter gitignored lint violations: %w", err)
 	}

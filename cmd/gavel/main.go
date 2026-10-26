@@ -62,7 +62,7 @@ func getWorkingDir() (string, error) {
 }
 
 func init() {
-	clicky.BindAllFlags(rootCmd.PersistentFlags(), "format", "tasks")
+	clicky.BindAllFlagsToCommand(rootCmd, "format", "tasks")
 	properties.BindFlags(rootCmd.PersistentFlags())
 	database.BindDatabaseURLFlag(rootCmd.PersistentFlags())
 	// A fixture's `setup:` resolves `connection://…` references against the

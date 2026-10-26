@@ -7,93 +7,76 @@ import (
 	"strings"
 
 	"github.com/flanksource/gavel/linters"
-	"github.com/flanksource/gavel/models"
 )
 
-// GenerateValeConfig generates a .vale.ini configuration file in gavel's
-// scratch dir (outside workDir) that respects the all_language_excludes macro
-func GenerateValeConfig(workDir string, config *models.Config, language string, linterDefaults []string) (string, error) {
-	tempDir, err := linters.ScratchDir(workDir, "vale")
+// valeConfigNames are the project config files vale itself looks for in the
+// directory it runs from and every parent.
+var valeConfigNames = []string{".vale.ini", "_vale.ini"}
+
+// GenerateValeConfig writes the .vale.ini gavel uses for a project that has
+// none: Vale's built-in style (spelling, repetition, terms) for prose files.
+// It lives in gavel's scratch dir, outside workDir, with an empty styles
+// directory beside it because vale refuses a StylesPath that does not exist.
+func GenerateValeConfig(workDir string) (string, error) {
+	dir, err := linters.ScratchDir(workDir, "vale")
 	if err != nil {
 		return "", err
 	}
-
-	configPath := filepath.Join(tempDir, ".vale.ini")
-
-	// Get effective excludes using the all_language_excludes macro
-	var excludes []string
-	if config != nil {
-		excludes = config.GetAllLanguageExcludes(language, linterDefaults)
-	} else {
-		// Fallback to built-in excludes
-		excludes = append(models.GetBuiltinExcludePatterns(), linterDefaults...)
+	stylesPath := filepath.Join(dir, "styles")
+	if err := os.MkdirAll(stylesPath, 0o755); err != nil {
+		return "", fmt.Errorf("create Vale styles dir: %w", err)
 	}
 
-	// Build Vale configuration content
-	var configContent strings.Builder
-	configContent.WriteString("# Auto-generated Vale configuration by arch-unit\n")
-	configContent.WriteString("# This file respects the all_language_excludes macro\n\n")
+	content := fmt.Sprintf(`StylesPath = %s
+MinAlertLevel = suggestion
 
-	// Basic Vale settings - use built-in styles if no custom styles installed
-	configContent.WriteString("# Vale requires at least minimal configuration\n")
-	configContent.WriteString("StylesPath = .vale-styles\n")
-	configContent.WriteString("MinAlertLevel = suggestion\n\n")
+[*.{md,mdx,markdown,txt,rst,adoc}]
+BasedOnStyles = Vale
+`, stylesPath)
 
-	// Format-specific settings
-	configContent.WriteString("[*.md]\n")
-	configContent.WriteString("# Markdown-specific settings\n")
-	configContent.WriteString("BasedOnStyles = Vale\n\n")
-
-	// Add exclusions as glob patterns
-	if len(excludes) > 0 {
-		configContent.WriteString("# Exclusion patterns from all_language_excludes macro\n")
-		configContent.WriteString("[*]\n")
-		configContent.WriteString("SkippedScopes = code, tt\n")
-		configContent.WriteString("IgnoredScopes = code, tt\n\n")
-
-		// Vale uses BlockIgnores for file patterns
-		configContent.WriteString("BlockIgnores = ")
-		for i, pattern := range excludes {
-			if i > 0 {
-				configContent.WriteString(", ")
-			}
-			// Convert patterns to Vale format
-			valePattern := convertToValePattern(pattern)
-			configContent.WriteString(valePattern)
-		}
-		configContent.WriteString("\n\n")
+	configPath := filepath.Join(dir, ".vale.ini")
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		return "", fmt.Errorf("write Vale config: %w", err)
 	}
-
-	// Add formats section
-	configContent.WriteString("[formats]\n")
-	configContent.WriteString("md = md\n")
-	configContent.WriteString("markdown = md\n")
-	configContent.WriteString("mdx = md\n")
-	configContent.WriteString("txt = md\n")
-	configContent.WriteString("rst = rst\n")
-	configContent.WriteString("adoc = asciidoc\n")
-	configContent.WriteString("html = html\n")
-	configContent.WriteString("xml = xml\n")
-
-	// Write config file
-	if err := os.WriteFile(configPath, []byte(configContent.String()), 0644); err != nil {
-		return "", fmt.Errorf("failed to write Vale config: %w", err)
-	}
-
 	return configPath, nil
 }
 
-// convertToValePattern converts arch-unit patterns to Vale glob patterns
-func convertToValePattern(pattern string) string {
-	// Vale uses standard glob patterns but with some differences
-	// Convert ** patterns to single * for Vale
-	pattern = strings.ReplaceAll(pattern, "**", "*")
+// hasProjectValeConfig reports whether vale would find a config of its own for
+// a run in workDir: VALE_CONFIG_PATH, or a config file in workDir or a parent.
+func hasProjectValeConfig(workDir string) (bool, error) {
+	if os.Getenv("VALE_CONFIG_PATH") != "" {
+		return true, nil
+	}
+	dir, err := filepath.Abs(workDir)
+	if err != nil {
+		return false, fmt.Errorf("resolve Vale work dir %q: %w", workDir, err)
+	}
+	for {
+		for _, name := range valeConfigNames {
+			if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
+				return true, nil
+			} else if !os.IsNotExist(err) {
+				return false, fmt.Errorf("check Vale config %s: %w", filepath.Join(dir, name), err)
+			}
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return false, nil
+		}
+		dir = parent
+	}
+}
 
-	// Remove trailing slash patterns
-	pattern = strings.TrimSuffix(pattern, "/")
-
-	// Vale patterns are relative to the working directory
-	pattern = strings.TrimPrefix(pattern, "/")
-
-	return pattern
+// walkExcludeGlob is vale's --glob for a directory walk: every exclude as one
+// negated alternation, each matched at the root and at any depth.
+func walkExcludeGlob(excludes []string) string {
+	patterns := make([]string, 0, len(excludes)*2)
+	for _, exclude := range excludes {
+		exclude = strings.TrimPrefix(exclude, "/")
+		patterns = append(patterns, exclude)
+		if !strings.HasPrefix(exclude, "**/") {
+			patterns = append(patterns, "**/"+exclude)
+		}
+	}
+	return "--glob=!{" + strings.Join(patterns, ",") + "}"
 }
