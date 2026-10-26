@@ -98,6 +98,12 @@ spec:
             - --substrate-ca-file
             - {{ printf "/etc/gavel/substrate-ca/%s" .ca.key | quote }}
             {{- end }}
+            {{- if .clientCert.secretName }}
+            - --substrate-client-cert
+            - /etc/gavel/substrate-client/tls.crt
+            - --substrate-client-key
+            - /etc/gavel/substrate-client/tls.key
+            {{- end }}
             {{- end }}
             {{- end }}
             {{- with .Values.extraArgs }}
@@ -209,6 +215,11 @@ spec:
               mountPath: /etc/gavel/substrate-ca
               readOnly: true
             {{- end }}
+            {{- if .Values.sandbox.substrate.clientCert.secretName }}
+            - name: substrate-client
+              mountPath: /etc/gavel/substrate-client
+              readOnly: true
+            {{- end }}
             {{- end }}
       volumes:
         - name: data
@@ -234,15 +245,30 @@ spec:
         {{- end }}
         {{- if .Values.sandbox.enabled }}
         - name: substrate-token
+          {{- with .Values.sandbox.substrate.token }}
+          {{- if .secretName }}
+          secret:
+            secretName: {{ .secretName }}
+            items:
+              - key: {{ .key }}
+                path: token
+          {{- else }}
           projected:
             sources:
               - serviceAccountToken:
-                  audience: {{ .Values.sandbox.substrate.tokenAudience }}
+                  audience: {{ $.Values.sandbox.substrate.tokenAudience }}
                   path: token
+          {{- end }}
+          {{- end }}
         {{- if .Values.sandbox.substrate.ca.secretName }}
         - name: substrate-ca
           secret:
             secretName: {{ .Values.sandbox.substrate.ca.secretName }}
+        {{- end }}
+        {{- if .Values.sandbox.substrate.clientCert.secretName }}
+        - name: substrate-client
+          secret:
+            secretName: {{ .Values.sandbox.substrate.clientCert.secretName }}
         {{- end }}
         {{- end }}
       {{- with .Values.nodeSelector }}

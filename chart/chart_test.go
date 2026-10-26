@@ -394,6 +394,36 @@ func TestChartRunsSandboxJobsOnSubstrate(t *testing.T) {
 	assert.NotContains(t, strings.Join(serveContainer(t, render(t)).Args, " "), "--sandbox", "the sandbox is off unless enabled")
 }
 
+func TestChartReachesSubstrateInAnotherCluster(t *testing.T) {
+	requireHelm(t)
+	m := render(t, "sandbox.enabled=true",
+		"sandbox.image=ghcr.io/flanksource/gavel-runner@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		"sandbox.substrate.envAPI=substrate-env.flanksource.com:443", "sandbox.substrate.control=substrate-api.flanksource.com:443",
+		"sandbox.substrate.clientCert.secretName=substrate-client",
+		"sandbox.substrate.token.secretName=substrate-token", "sandbox.substrate.token.key=token")
+	container := serveContainer(t, m)
+	args := strings.Join(container.Args, " ")
+	assert.Contains(t, args, " --substrate-env-api substrate-env.flanksource.com:443 --substrate-control substrate-api.flanksource.com:443")
+	assert.Contains(t, args, " --substrate-token-file /var/run/secrets/substrate/token")
+	assert.Contains(t, args, " --substrate-client-cert /etc/gavel/substrate-client/tls.crt --substrate-client-key /etc/gavel/substrate-client/tls.key")
+
+	mount, ok := mountAt(container, "/var/run/secrets/substrate")
+	require.True(t, ok)
+	tokenVolume := volume(t, m, mount.Name)
+	assert.Nil(t, tokenVolume.Projected, "a token from substrate's cluster replaces this cluster's projected token")
+	require.NotNil(t, tokenVolume.Secret)
+	assert.Equal(t, "substrate-token", tokenVolume.Secret.SecretName)
+	assert.Equal(t, []corev1.KeyToPath{{Key: "token", Path: "token"}}, tokenVolume.Secret.Items)
+
+	mount, ok = mountAt(container, "/etc/gavel/substrate-client")
+	require.True(t, ok)
+	assert.Equal(t, "substrate-client", volume(t, m, mount.Name).Secret.SecretName)
+
+	assert.NotContains(t, strings.Join(serveContainer(t, render(t, "sandbox.enabled=true",
+		"sandbox.image=ghcr.io/flanksource/gavel-runner@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")).Args, " "),
+		"--substrate-client-cert", "an unset client certificate is not passed")
+}
+
 func TestChartRefusesASandboxWithoutAPinnedRunnerImage(t *testing.T) {
 	requireHelm(t)
 	for _, image := range []string{"", "ghcr.io/flanksource/gavel-runner:v1"} {
