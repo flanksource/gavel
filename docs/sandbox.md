@@ -115,6 +115,13 @@ job exits or is cancelled.
   (`--substrate-control`), authenticating with `--substrate-token-file`, such as a projected
   ServiceAccount token with the `api.ate-system.svc` audience, which Substrate's access policy must
   allow to manage actors in the atespace. `--substrate-ca-file` verifies its certificate.
+- **Substrate in another cluster.** When gavel serve runs outside Substrate's cluster, both APIs sit
+  behind an ingress that requires a client certificate. `--substrate-client-cert` and
+  `--substrate-client-key` present it, and both APIs are then reached over TLS verified against the
+  system roots, or `--substrate-ca-file`. The certificate and `--substrate-token-file` are read on
+  every connection and call, so renewed ones are picked up without a restart. The token is then
+  minted in Substrate's cluster for a ServiceAccount there, since this cluster's tokens aren't
+  trusted by it.
 - **API.** gavel carries copies of Substrate's and env's generated gRPC packages in
   `sandbox/internal/substrate`, refreshed by its `sync.sh`, rather than depending on their Go
   modules.
