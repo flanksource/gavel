@@ -119,8 +119,10 @@ func (opts Options) scope(ctx context.Context, workDir string) ([]string, bool, 
 // review is one prompt run: one path under review, or the whole prompt when
 // there is no path scope.
 type review struct {
-	Name   string
-	Prompt captaincli.AIPromptOptions
+	Name     string
+	Prompt   captaincli.AIPromptOptions
+	Prepared *captaincli.PreparedPrompt
+	Run      *reviewRun
 }
 
 func (opts Options) reviews(paths []string) []review {

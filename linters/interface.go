@@ -226,7 +226,8 @@ type LinterResult struct {
 	RunID string `json:"run_id,omitempty"`
 	// SessionID is the Captain session of that run; it outlives the run, so a
 	// persisted or replayed result still names its transcript.
-	SessionID string `json:"session_id,omitempty"`
+	SessionID       string `json:"session_id,omitempty"`
+	ConfigurationID string `json:"configuration_id,omitempty"`
 }
 
 type LinterStatus string

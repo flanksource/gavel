@@ -78,6 +78,12 @@ func (s *Server) handleOpenAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	document := projectsOpenAPI()
+	if s.launchService != nil {
+		if err := s.launchService.AddOpenAPI(document); err != nil {
+			respondError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
 	if err := addLifecycleOpenAPI(document); err != nil {
 		respondError(w, http.StatusInternalServerError, err.Error())
 		return
