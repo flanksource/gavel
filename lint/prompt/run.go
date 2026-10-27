@@ -74,11 +74,16 @@ func (input reviewsInput) publish(result *linters.LinterResult) {
 // prompt launches one run per model, each reported on its own.
 func (input reviewsInput) launch(ctx context.Context, review review, group *clickytask.Group) func() []*linters.LinterResult {
 	run := &reviewRun{WorkDir: input.WorkDir, Name: review.Name, Publisher: input.Publisher}
+	if review.Run != nil {
+		run = review.Run
+	}
 	start := time.Now()
-	launched, err := launchPrompt(ctx, invocation(invocationInput{
+	request := invocation(invocationInput{
 		File: input.File, Prompt: review.Prompt, Stdin: stdinReader(input.Stdin), Tools: run.tools(),
 		Group: group, Name: review.Name, OnEvent: input.OnEvent,
-	}))
+	})
+	request.Prepared = review.Prepared
+	launched, err := launchPrompt(ctx, request)
 	if err != nil {
 		result := run.result(summaryInput{Name: review.Name, Err: err, Elapsed: time.Since(start)})
 		input.finish(result)

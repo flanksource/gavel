@@ -27,28 +27,31 @@ import (
 )
 
 type PRListOptions struct {
-	Author      string   `flag:"author" help:"GitHub username (default: @me)"`
-	Since       string   `flag:"since" help:"Show PRs updated since (e.g. 7d, now-30d, 2024-01-01)" default:"7d"`
-	State       string   `flag:"state" help:"PR state: open, closed, merged, all" default:"open"`
-	All         bool     `flag:"all" help:"List PRs across all repos in the org"`
-	Any         bool     `flag:"any" help:"Show PRs from all authors (remove @me filter)"`
-	Bots        bool     `flag:"bots" help:"Include bot-authored PRs" default:"false"`
-	Org         string   `flag:"org" help:"GitHub org for --all (auto-detected from git remote)"`
-	Limit       int      `flag:"limit" help:"Maximum PRs to return" default:"50"`
-	Status      bool     `flag:"status" help:"Show GitHub Actions check status counts"`
-	CI          bool     `flag:"ci" help:"List default-branch (main) CI status across the org's repos pushed within --since (incl. private; needs repo scope)"`
-	FailedOnly  bool     `flag:"failed-only" help:"With --ci, show only repos whose default branch is currently failing"`
-	Logs        bool     `flag:"logs" help:"Fetch failed job log tails (requires --status -v, uses extra API quota)"`
-	URL         bool     `flag:"url" help:"Show PR URL instead of number"`
-	UI          bool     `flag:"ui" help:"Open PR dashboard in browser with live updates"`
-	MenuBar     bool     `flag:"menu-bar" help:"Show macOS menu bar status indicator"`
-	Interval    string   `flag:"interval" help:"Poll interval for --ui/--menu-bar (e.g. 30s, 1m, 5m)" default:"60s"`
-	Addr        string   `flag:"addr" help:"Interface to bind the --ui/--menu-bar HTTP server. Defaults to 0.0.0.0 (all interfaces); set localhost to restrict to this machine." default:"0.0.0.0"`
-	Port        int      `flag:"port" help:"UI port (default 9092, use 0 to auto-scan from 9092 upward for the first free port)" default:"9092"`
-	PersistPort bool     `flag:"persist-port" help:"Write the bound port to ~/.config/gavel/pr-ui.port so gavel system status and WaitForReady can find it — set automatically by the launchd/systemd service files"`
-	Dev         bool     `flag:"dev" help:"Dev mode: spawn the Vite dev server and reverse-proxy to it for hot-module-reload (requires a source checkout)"`
-	DevDir      string   `flag:"dev-dir" help:"pr/ui source directory for the Vite dev server" default:"pr/ui"`
-	Repos       []string `args:"true"`
+	Author           string   `flag:"author" help:"GitHub username (default: @me)"`
+	Since            string   `flag:"since" help:"Show PRs updated since (e.g. 7d, now-30d, 2024-01-01)" default:"7d"`
+	State            string   `flag:"state" help:"PR state: open, closed, merged, all" default:"open"`
+	All              bool     `flag:"all" help:"List PRs across all repos in the org"`
+	Any              bool     `flag:"any" help:"Show PRs from all authors (remove @me filter)"`
+	Bots             bool     `flag:"bots" help:"Include bot-authored PRs" default:"false"`
+	Org              string   `flag:"org" help:"GitHub org for --all (auto-detected from git remote)"`
+	Limit            int      `flag:"limit" help:"Maximum PRs to return" default:"50"`
+	Status           bool     `flag:"status" help:"Show GitHub Actions check status counts"`
+	CI               bool     `flag:"ci" help:"List default-branch (main) CI status across the org's repos pushed within --since (incl. private; needs repo scope)"`
+	FailedOnly       bool     `flag:"failed-only" help:"With --ci, show only repos whose default branch is currently failing"`
+	Logs             bool     `flag:"logs" help:"Fetch failed job log tails (requires --status -v, uses extra API quota)"`
+	URL              bool     `flag:"url" help:"Show PR URL instead of number"`
+	UI               bool     `flag:"ui" help:"Open PR dashboard in browser with live updates"`
+	MenuBar          bool     `flag:"menu-bar" help:"Show macOS menu bar status indicator"`
+	Interval         string   `flag:"interval" help:"Poll interval for --ui/--menu-bar (e.g. 30s, 1m, 5m)" default:"60s"`
+	Addr             string   `flag:"addr" help:"Interface to bind the --ui/--menu-bar HTTP server. Defaults to 0.0.0.0 (all interfaces); set localhost to restrict to this machine." default:"0.0.0.0"`
+	Port             int      `flag:"port" help:"UI port (default 9092, use 0 to auto-scan from 9092 upward for the first free port)" default:"9092"`
+	PersistPort      bool     `flag:"persist-port" help:"Write the bound port to ~/.config/gavel/pr-ui.port so gavel system status and WaitForReady can find it — set automatically by the launchd/systemd service files"`
+	Dev              bool     `flag:"dev" help:"Dev mode: spawn the Vite dev server and reverse-proxy to it for hot-module-reload (requires a source checkout)"`
+	DevDir           string   `flag:"dev-dir" help:"pr/ui source directory for the Vite dev server" default:"pr/ui"`
+	Repos            []string `args:"true"`
+	LaunchRoot       string   `flag:"launch-root" help:"Launch storage root" default:"."`
+	LaunchLocalRoots []string `flag:"launch-local-root" help:"Enable local launch workspaces under these roots"`
+	LaunchStore      string   `flag:"launch-store" help:"Result store: json or sqlite" default:"json"`
 
 	// retention runs the retention cleanup alongside the dashboard; gavel serve sets it.
 	retention bool
@@ -315,6 +318,16 @@ func runPRUI(opts PRListOptions, databaseMode serveDatabaseMode) error {
 		return fixturesSchemaDocument()
 	})
 	srv.SetProjectActionOptionsProvider(projectActionCommandProvider{})
+	launchService, err := newLaunchService(ctx, opts.LaunchRoot, opts.LaunchStore, opts.LaunchLocalRoots)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := launchService.Close(); err != nil {
+			logger.Errorf("close launch service: %v", err)
+		}
+	}()
+	srv.SetLaunchService(launchService)
 
 	// Surface the backend build metadata to the dashboard (window.__GAVEL__).
 	ui.Build = ui.BuildInfo{Version: version, Commit: commit, Date: date}
