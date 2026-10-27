@@ -18,7 +18,7 @@ prompt:
     `todo_close` and `todo_merge` ask a person to approve the call. When the approval is denied, nothing closed: report the event you were aiming for with `success` false and leave the TODO separate.
 
     End with the flat JSON result matching the schema: `success` (true when what you decided was written), `event` (kept, duplicate, merged or child), and `comment` (markdown explaining the decision and the evidence; it becomes the run's history entry). Preserve Markdown paragraphs without hard wrapping.
-  schemaStrictness: retry
+  schemaStrictness: repair
 permissions:
   mode: plan
   tools:

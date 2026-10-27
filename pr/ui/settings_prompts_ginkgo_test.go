@@ -88,7 +88,7 @@ var _ = Describe("settings prompt override repair and round-trip", func() {
 		Expect(got.Spec).NotTo(BeNil())
 		promptSpec, ok := (*got.Spec)["prompt"].(map[string]any)
 		Expect(ok).To(BeTrue())
-		Expect(promptSpec["schemaStrictness"]).To(Equal("retry"))
+		Expect(promptSpec["schemaStrictness"]).To(Equal("repair"))
 		Expect(got.Body).NotTo(BeNil())
 		Expect(*got.Body).To(ContainSubstring("{{table}}"))
 		Expect(*got.Body).To(ContainSubstring("{{#if maxCommits}}"))

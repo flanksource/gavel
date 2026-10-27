@@ -100,7 +100,7 @@ var _ = Describe("commit prompt runtime preservation", func() {
 		Expect(agent.request.Spec.CLIArgs).To(HaveKeyWithValue("verbose", true))
 		Expect(agent.request.Spec.Prompt.User).To(ContainSubstring("main.go"))
 		Expect(agent.request.Spec.Prompt.SchemaJSON).NotTo(BeEmpty())
-		Expect(agent.request.Spec.Prompt.SchemaStrictness).To(Equal(api.SchemaStrictnessRetry))
+		Expect(agent.request.Spec.Prompt.SchemaStrictness).To(Equal(api.SchemaStrictnessRepair))
 	})
 
 	It("keeps explicit false and zero PR settings above saved defaults in request and provider", func() {
@@ -122,7 +122,7 @@ var _ = Describe("commit prompt runtime preservation", func() {
 		Expect(agent.request.Spec.Memory.SkipUser).To(BeFalse())
 		Expect(agent.request.Spec.Prompt.System).To(Equal("Keep the rationale"))
 		Expect(agent.request.Spec.Prompt.User).To(Equal("Summarize fix: explicit settings"))
-		Expect(agent.request.Spec.Prompt.SchemaStrictness).To(Equal(api.SchemaStrictnessRetry))
+		Expect(agent.request.Spec.Prompt.SchemaStrictness).To(Equal(api.SchemaStrictnessRepair))
 	})
 
 	It("rejects an invalid operation setting before constructing a provider", func() {
