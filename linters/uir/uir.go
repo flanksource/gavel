@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"strings"
 
 	"github.com/flanksource/clicky"
 	commonsContext "github.com/flanksource/commons/context"
@@ -33,6 +34,9 @@ func (u *UIR) SupportsJSON() bool        { return true }
 func (u *UIR) JSONArgs() []string        { return []string{"--format", "json"} }
 func (u *UIR) SupportsFix() bool         { return false }
 func (u *UIR) FixArgs() []string         { return nil }
+func (u *UIR) TagsArgs(tags []string) []string {
+	return []string{"--tags=" + strings.Join(tags, ",")}
+}
 func (u *UIR) ValidateConfig(config *models.LinterConfig) error {
 	if config == nil {
 		return errors.New("config cannot be nil")

@@ -46,3 +46,5 @@ Gavel writes a unique `.uir.d/gavel-*.yaml` fragment before launching UIR, with 
 ## Findings and filtering
 
 Gavel applies its usual file scopes, Git ignores and baselines after UIR analyzes the project. Selecting a `.uir.yaml` file or `.uir.d/` fragment reports its owning project. Fileless coverage warnings remain visible. Error findings and execution errors fail the command; warning-only runs succeed. Dry-run does not write fragments.
+
+`gavel lint uir --generated=false --tags integration,feature` suppresses generated-file findings in Gavel and passes `--tags=integration,feature` to UIR. Use a UIR binary supporting `uir lint --tags`. The tags control syntax selection and typed loading and participate in analysis freshness checks. Generated sources remain available for resolving types. Omitting `--generated` preserves existing behavior. See [Generated sources and build tags](/docs/lint-source-options) for the shared controls and defaults.
