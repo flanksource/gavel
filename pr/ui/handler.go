@@ -26,6 +26,7 @@ import (
 	gavelctx "github.com/flanksource/gavel/context"
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/github/cache"
+	"github.com/flanksource/gavel/launch"
 	prcreate "github.com/flanksource/gavel/pr/create"
 	"github.com/flanksource/gavel/pr/model"
 	promptlibrary "github.com/flanksource/gavel/prompts/library"
@@ -149,7 +150,8 @@ type Server struct {
 
 	// gitChanges wakes /api/git/stream on every git_* row change any process
 	// sharing the database NOTIFYs (see GitChangeListener).
-	gitChanges sse.Notifier
+	gitChanges    sse.Notifier
+	launchService *launch.Service
 }
 
 const orgsCacheTTL = 5 * time.Minute
@@ -481,6 +483,11 @@ func (s *Server) RefreshCh() chan struct{} {
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	if s.launchService != nil {
+		for _, path := range []string{"/api/launch", "/api/launch/", "/api/runs", "/api/runs/"} {
+			mux.Handle(path, s.launchService.Handler())
+		}
+	}
 	router := route.NewRouter(mux)
 	if s.devProxy != nil {
 		mux.HandleFunc("/", s.handleDevRoute)
