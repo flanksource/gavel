@@ -18,6 +18,7 @@ import (
 	lintprompt "github.com/flanksource/gavel/lint/prompt"
 	"github.com/flanksource/gavel/linters"
 	testui "github.com/flanksource/gavel/testrunner/ui"
+	"github.com/flanksource/gavel/workspace"
 	"github.com/spf13/cobra"
 )
 
@@ -35,10 +36,10 @@ func registerLintPromptCommand(parent *cobra.Command) *cobra.Command {
 		}
 		opts.Prompt = prompt
 		opts.Prompt.File, opts.Paths = splitPromptArgs(append(positional, promptArgs...), prompt.Prompt != "")
-		dir, err := os.Getwd()
-		if err != nil {
+		if opts.Dirs, err = workspace.From(ctx); err != nil {
 			return nil, err
 		}
+		dir := opts.Dirs.Invocation
 		opts.Selection = opts.LintScope(ctx, dir).ChangeSelection()
 		if opts.DryRun {
 			return lintprompt.Render(ctx, opts)
@@ -113,7 +114,7 @@ func registerLintPromptCommand(parent *cobra.Command) *cobra.Command {
 			serveLintResults(uiServer, results)
 			return nil, nil
 		}
-		return finishLint(LintOptions{WorkDir: dir, Summary: opts.Summary, SummaryLimit: opts.SummaryLimit, Selection: opts.Selection}, results, started)
+		return finishLint(LintOptions{WorkDir: dir, Dirs: opts.Dirs, Summary: opts.Summary, SummaryLimit: opts.SummaryLimit, Selection: opts.Selection}, results, started)
 	})
 	cmd.Use = "prompt [name|id|file] [path...] [-- prompt flags]"
 	cmd.Short = "Run a Captain prompt with the lint output preset"

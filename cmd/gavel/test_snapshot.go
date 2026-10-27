@@ -35,7 +35,7 @@ func saveFailedRun(run failedRun) testui.Snapshot {
 	snapshot.Error = run.Err.Error()
 	failed := 1
 	snapshot.Metadata.ExitCode = &failed
-	if path, err := snapshots.SavePerRun(run.Opts.WorkDir, &snapshot, run.Started, ""); err != nil {
+	if path, err := snapshots.SavePerRun(run.Opts.Dirs.StateRoot, &snapshot, run.Started, ""); err != nil {
 		logger.Warnf("persist per-run snapshot: %v", err)
 	} else {
 		logger.V(1).Infof("wrote per-run snapshot to %s", path)
@@ -67,6 +67,7 @@ func buildTestSnapshot(
 			Args:         snapshotArgs(opts),
 			Changes:      opts.Selection.Snapshot(),
 			RunID:        trace.runID(),
+			StateRoot:    opts.Dirs.StateRoot,
 			ProcessTrace: trace.processRefs(),
 		},
 		Git: snapshotGitInfo(opts.WorkDir),

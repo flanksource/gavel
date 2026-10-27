@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,6 +20,7 @@ import (
 	"github.com/flanksource/gavel/snapshots"
 	testui "github.com/flanksource/gavel/testrunner/ui"
 	"github.com/flanksource/gavel/testrunner/ui/runs"
+	"github.com/flanksource/gavel/workspace"
 )
 
 // UIServeOptions configures the `gavel ui serve` subcommand.
@@ -63,7 +65,8 @@ Standalone replay of a JSON snapshot:
   gavel ui serve run-1.json run-2.json --auto-stop=10m
 
 Without snapshot files it serves the most recent test run and lint run
-recorded under .gavel/run-*.json in the working directory. The History tab
+recorded under .gavel/run-*.json, in the nearest .gavel directory at or above
+the working directory within its git repository (else the git root). The History tab
 lists every recorded run, and each one opens at /runs/<run-id>/.
 
 The server prints its URL on the first line of stdout so a wrapping script can
@@ -73,7 +76,7 @@ first. A zero duration disables the corresponding timer.`)
 }
 
 func init() {
-	serveCmd := clicky.AddNamedCommand("serve", uiCmd, UIServeOptions{}, runUIServe)
+	serveCmd := clicky.AddNamedCommandWithContext("serve", uiCmd, UIServeOptions{}, runUIServe)
 	// clicky cannot bind time.Duration fields directly; register them
 	// imperatively so the flags show up in `gavel ui serve --help`.
 	serveCmd.Flags().DurationVar(&uiServeDurations.AutoStop, "auto-stop", 30*time.Minute,
@@ -82,7 +85,8 @@ func init() {
 		"Exit after this long with no HTTP requests. 0 disables.")
 }
 
-func runUIServe(opts UIServeOptions) (any, error) {
+func runUIServe(ctx context.Context, opts UIServeOptions) (any, error) {
+	defer keepTasksOffTerminal()()
 	// Pull duration values from the imperative flag shim when opts don't
 	// already supply them. In-process tests can set opts.AutoStop/IdleTimeout
 	// directly to avoid touching the global flag state.
@@ -98,13 +102,13 @@ func runUIServe(opts UIServeOptions) (any, error) {
 		return nil, err
 	}
 
-	workDir, err := getWorkingDir()
+	dirs, err := workspace.From(ctx)
 	if err != nil {
 		listener.Close() //nolint:errcheck
 		return nil, err
 	}
 	if len(opts.ResultsFiles) == 0 {
-		if opts.ResultsFiles, err = latestRunFiles(workDir); err != nil {
+		if opts.ResultsFiles, err = latestRunFiles(dirs.StateRoot); err != nil {
 			listener.Close() //nolint:errcheck
 			return nil, err
 		}
@@ -144,7 +148,7 @@ func runUIServe(opts UIServeOptions) (any, error) {
 		logger.Warnf("Handoff notify failed (parent may time out): %v", err)
 	}
 
-	history := runs.Handler(runs.Options{WorkDir: workDir, Latest: srv.Handler(), LatestRunIDs: runIDsOf(opts.ResultsFiles)})
+	history := runs.Handler(runs.Options{WorkDir: dirs.StateRoot, Latest: srv.Handler(), LatestRunIDs: runIDsOf(opts.ResultsFiles)})
 	idleCh := make(chan struct{}, 1)
 	go http.Serve(listener, withIdleTimer(history, idleCh)) //nolint:errcheck
 
@@ -218,13 +222,13 @@ func withIdleTimer(next http.Handler, idleCh chan<- struct{}) http.Handler {
 
 // latestRunFiles resolves the newest test and lint runs recorded under
 // <cwd>/.gavel, used when `gavel ui serve` is given no snapshot files.
-func latestRunFiles(workDir string) ([]string, error) {
-	paths, err := snapshots.LatestRuns(workDir)
+func latestRunFiles(stateRoot string) ([]string, error) {
+	paths, err := snapshots.LatestRuns(stateRoot)
 	if err != nil {
-		return nil, fmt.Errorf("find previous runs in %s: %w", filepath.Join(workDir, snapshots.Dir), err)
+		return nil, fmt.Errorf("find previous runs in %s: %w", filepath.Join(stateRoot, snapshots.Dir), err)
 	}
 	if len(paths) == 0 {
-		logger.Infof("No previous test or lint runs in %s", filepath.Join(workDir, snapshots.Dir))
+		logger.Infof("No previous test or lint runs in %s", filepath.Join(stateRoot, snapshots.Dir))
 	}
 	for _, path := range paths {
 		logger.Infof("Loading previous run %s", path)

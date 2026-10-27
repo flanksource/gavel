@@ -36,7 +36,7 @@ var _ = Describe("test framework command flags", func() {
 
 	It("applies values and explicit skip-hooks state from the invoked command", func() {
 		GinkgoT().Setenv("CI", "")
-		command := &cobra.Command{Use: "go"}
+		command := withRootContext(&cobra.Command{Use: "go"})
 		command.Flags().Bool("skip-hooks", false, "")
 		command.Flags().Duration("lint-timeout", 0, "")
 		command.Flags().Duration("test-timeout", 0, "")
@@ -63,7 +63,7 @@ var _ = Describe("test framework command flags", func() {
 
 	It("uses the local skip-hooks default when the invoked command did not set it", func() {
 		GinkgoT().Setenv("CI", "")
-		command := &cobra.Command{Use: "go"}
+		command := withRootContext(&cobra.Command{Use: "go"})
 		command.Flags().Bool("skip-hooks", false, "")
 
 		opts, _, err := finalizeTestCommandOptions(command, testrunner.RunOptions{}, testCommandFlags{})
@@ -73,7 +73,7 @@ var _ = Describe("test framework command flags", func() {
 
 	It("uses the CLI baseline as the source for bare --failed", func() {
 		const baselinePath = ".gavel/baseline.json"
-		command := &cobra.Command{Use: "test"}
+		command := withRootContext(&cobra.Command{Use: "test"})
 		command.Flags().Bool("skip-hooks", false, "")
 
 		opts, _, err := finalizeTestCommandOptions(command, testrunner.RunOptions{

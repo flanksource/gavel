@@ -13,6 +13,7 @@ import (
 	"github.com/flanksource/gavel/prwatch"
 	"github.com/flanksource/gavel/snapshots"
 	testui "github.com/flanksource/gavel/testrunner/ui"
+	"github.com/flanksource/gavel/workspace"
 )
 
 // parsePRRef parses the PR references every gavel command accepts: a bare
@@ -61,7 +62,7 @@ const (
 // the linter already know how to narrow with. It fails loudly rather than
 // running everything when the PR has nothing to re-run, and rejects the
 // combination with the other narrowing flags instead of silently picking one.
-func resolvePRFailed(ref, workDir, failedPath, baselinePath string, target prNarrowTarget) (string, error) {
+func resolvePRFailed(ref string, dirs workspace.Dirs, failedPath, baselinePath string, target prNarrowTarget) (string, error) {
 	if failedPath != "" {
 		return "", fmt.Errorf("--pr and --failed both narrow the run; pass only one")
 	}
@@ -69,7 +70,7 @@ func resolvePRFailed(ref, workDir, failedPath, baselinePath string, target prNar
 		return "", fmt.Errorf("--pr and --baseline both read a previous run; pass only one")
 	}
 
-	path, snap, err := resolvePRSnapshot(ref, workDir)
+	path, snap, err := resolvePRSnapshot(ref, dirs)
 	if err != nil {
 		return "", fmt.Errorf("--pr %s: %w", ref, err)
 	}
@@ -90,22 +91,15 @@ func resolvePRFailed(ref, workDir, failedPath, baselinePath string, target prNar
 // resolvePRSnapshot downloads every gavel artifact published on the referenced
 // PR, merges them, and caches the result at .gavel/pr-<n>.json so `--pr` can
 // hand a plain path to the same `--failed` narrowing a local re-run uses.
-func resolvePRSnapshot(ref, workDir string) (path string, snap *testui.Snapshot, err error) {
+func resolvePRSnapshot(ref string, dirs workspace.Dirs) (path string, snap *testui.Snapshot, err error) {
 	repo, number, err := parsePRRef(ref)
 	if err != nil {
 		return "", nil, err
 	}
 
-	if workDir == "" {
-		workDir, err = getWorkingDir()
-		if err != nil {
-			return "", nil, fmt.Errorf("failed to get working directory: %w", err)
-		}
-	}
-
 	ghOpts := github.Options{Repo: repo}
 	if repo == "" {
-		ghOpts.WorkDir = workDir
+		ghOpts.WorkDir = dirs.Invocation
 	}
 
 	snap, err = prwatch.DownloadPRSnapshot(ghOpts, number)
@@ -113,7 +107,7 @@ func resolvePRSnapshot(ref, workDir string) (path string, snap *testui.Snapshot,
 		return "", nil, err
 	}
 
-	dir := filepath.Join(workDir, snapshots.Dir)
+	dir := dirs.State()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", nil, fmt.Errorf("create %s: %w", dir, err)
 	}

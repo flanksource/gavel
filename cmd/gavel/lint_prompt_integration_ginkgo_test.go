@@ -15,6 +15,7 @@ import (
 	"github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/commons-db/dbtest"
 	testui "github.com/flanksource/gavel/testrunner/ui"
+	"github.com/flanksource/gavel/workspace"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -86,10 +87,24 @@ var _ = Describe("Lint prompt CLI integration", Ordered, func() {
 		Entry("invalid schema", `{"unrelated":true}`, 1, 0, false),
 	)
 
-	runChild := func(replies []string, files map[string]string, args []string, paths ...string) (*anthropicmock.Server, testui.Snapshot, string) {
+	// childRun runs `gavel lint prompt` in a child process over Files written
+	// under Root (a fresh temp dir when empty). Dir is the directory the process
+	// runs in, relative to Root unless absolute; Global are gavel flags placed
+	// before the subcommand.
+	type childRun struct {
+		Replies []string
+		Files   map[string]string
+		Args    []string
+		Paths   []string
+		Global  []string
+		Dir     string
+		Root    string
+		Prompt  string
+	}
+	runChild := func(run childRun) (*anthropicmock.Server, testui.Snapshot, string) {
 		var scenario bytes.Buffer
 		scenario.WriteString("anthropic:\n")
-		for _, reply := range replies {
+		for _, reply := range run.Replies {
 			quoted, err := json.Marshal(reply)
 			Expect(err).NotTo(HaveOccurred())
 			fmt.Fprintf(&scenario, "  - respond: {text: %s}\n", quoted)
@@ -101,16 +116,25 @@ var _ = Describe("Lint prompt CLI integration", Ordered, func() {
 		DeferCleanup(server.Close)
 		bin, err := os.Executable()
 		Expect(err).NotTo(HaveOccurred())
-		base := append([]string{"-test.run=^TestLintPromptCLIChild$", "--", "lint", "prompt", "--json", "--no-progress"}, args...)
-		base = append(base, "--", "review.prompt", "--model", "api:sonnet", "--api-key", aimock.DummyKey, "--api-url", server.APIURL(), "--no-cache", "--bare")
-		cmd := exec.Command(bin, append(base, paths...)...)
-		cmd.Dir = GinkgoT().TempDir()
-		files["review.prompt"] = "Review {{files}}"
-		for path, content := range files {
-			Expect(os.MkdirAll(filepath.Dir(filepath.Join(cmd.Dir, path)), 0o755)).To(Succeed())
-			Expect(os.WriteFile(filepath.Join(cmd.Dir, path), []byte(content), 0o600)).To(Succeed())
+		if run.Root == "" {
+			run.Root = GinkgoT().TempDir()
 		}
-		cmd.Env = append(append(os.Environ(), server.Env()...), "HOME="+cmd.Dir, "GAVEL_LINT_PROMPT_CHILD=1", "GAVEL_DB_DSN="+dsn, "CAPTAIN_SESSION_DB_URL="+dsn, "CAPTAIN_DB_CONTEXT=", "CAPTAIN_DB_CONTEXTS=", "GAVEL_ISSUE_ID=")
+		if run.Prompt == "" {
+			run.Prompt = "review.prompt"
+		}
+		base := append(append([]string{"-test.run=^TestLintPromptCLIChild$", "--"}, run.Global...), "lint", "prompt", "--json", "--no-progress")
+		base = append(append(base, run.Args...), "--", run.Prompt, "--model", "api:sonnet", "--api-key", aimock.DummyKey, "--api-url", server.APIURL(), "--no-cache", "--bare")
+		cmd := exec.Command(bin, append(base, run.Paths...)...)
+		cmd.Dir = run.Dir
+		if !filepath.IsAbs(cmd.Dir) {
+			cmd.Dir = filepath.Join(run.Root, run.Dir)
+		}
+		run.Files["review.prompt"] = "Review {{files}}"
+		for path, content := range run.Files {
+			Expect(os.MkdirAll(filepath.Dir(filepath.Join(run.Root, path)), 0o755)).To(Succeed())
+			Expect(os.WriteFile(filepath.Join(run.Root, path), []byte(content), 0o600)).To(Succeed())
+		}
+		cmd.Env = append(append(os.Environ(), server.Env()...), "HOME="+run.Root, "GAVEL_LINT_PROMPT_CHILD=1", "GAVEL_DB_DSN="+dsn, "CAPTAIN_SESSION_DB_URL="+dsn, "CAPTAIN_DB_CONTEXT=", "CAPTAIN_DB_CONTEXTS=", "GAVEL_ISSUE_ID=")
 		var stdout, stderr bytes.Buffer
 		cmd.Stdout, cmd.Stderr = &stdout, &stderr
 		Expect(cmd.Run()).To(Succeed(), stdout.String()+stderr.String())
@@ -122,7 +146,11 @@ var _ = Describe("Lint prompt CLI integration", Ordered, func() {
 	}
 
 	It("reviews each path argument in its own run with that path as the files variable", func() {
-		server, snapshot, requests := runChild([]string{`{"violations":[]}`, `{"violations":[]}`}, map[string]string{"pkg/service.go": "package pkg\n", "cmd/main.go": "package main\n"}, nil, "pkg", "cmd/main.go")
+		server, snapshot, requests := runChild(childRun{
+			Replies: []string{`{"violations":[]}`, `{"violations":[]}`},
+			Files:   map[string]string{"pkg/service.go": "package pkg\n", "cmd/main.go": "package main\n"},
+			Paths:   []string{"pkg", "cmd/main.go"},
+		})
 		Expect(server.Remaining()).To(BeEmpty())
 		Expect(snapshot.Lint).To(ConsistOf(
 			SatisfyAll(HaveField("Linter", "review:pkg"), HaveField("Success", true), HaveField("RunID", Not(BeEmpty()))),
@@ -133,13 +161,58 @@ var _ = Describe("Lint prompt CLI integration", Ordered, func() {
 	})
 
 	It("repairs findings with lint.fix and re-runs the prompt until clean", func() {
-		server, snapshot, requests := runChild(
-			[]string{`{"violations":[{"file":"pkg/service.go","line":1,"message":"Return the failure","severity":"error"}]}`, "Fixed pkg/service.go", `{"violations":[]}`},
-			map[string]string{"pkg/service.go": "package pkg\n", ".gavel.yaml": "lint:\n  fix:\n    model: api:sonnet\n"},
-			[]string{"--ai-fix", "--ai-fix-max-iterations", "1"}, "pkg",
-		)
+		server, snapshot, requests := runChild(childRun{
+			Replies: []string{`{"violations":[{"file":"pkg/service.go","line":1,"message":"Return the failure","severity":"error"}]}`, "Fixed pkg/service.go", `{"violations":[]}`},
+			Files:   map[string]string{"pkg/service.go": "package pkg\n", ".gavel.yaml": "lint:\n  fix:\n    model: api:sonnet\n"},
+			Args:    []string{"--ai-fix", "--ai-fix-max-iterations", "1"},
+			Paths:   []string{"pkg"},
+		})
 		Expect(server.Remaining()).To(BeEmpty())
 		Expect(snapshot.Lint).To(HaveExactElements(SatisfyAll(HaveField("Success", true), HaveField("Violations", BeEmpty()))))
 		Expect(requests).To(ContainSubstring("Return the failure"))
+	})
+
+	// gitRepo is a fresh git working tree with a pkg/ subdirectory and no .gavel.
+	gitRepo := func() string {
+		root, err := filepath.EvalSymlinks(GinkgoT().TempDir())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(exec.Command("git", "init", "-q", root).Run()).To(Succeed())
+		return root
+	}
+	expectRunUnderRoot := func(root string) {
+		runs, err := filepath.Glob(filepath.Join(root, ".gavel", "run-*.json"))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(runs).To(HaveLen(1), "the run is recorded in the git root's .gavel")
+		Expect(filepath.Join(root, "pkg", ".gavel")).NotTo(BeADirectory(), "no .gavel is created in the subdirectory")
+		dirs, err := workspace.Resolve(root)
+		Expect(err).NotTo(HaveOccurred())
+		latest, err := latestRunFiles(dirs.StateRoot)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(latest).To(Equal(runs), "gavel ui serve from the root finds the run")
+	}
+
+	It("records a run started in a repo subdirectory under the git root's .gavel", func() {
+		root := gitRepo()
+		runChild(childRun{
+			Root: root, Dir: "pkg",
+			Replies: []string{`{"violations":[]}`},
+			Files:   map[string]string{"pkg/service.go": "package pkg\n", "pkg/review.prompt": "Review {{files}}"},
+			Paths:   []string{"service.go"},
+		})
+		expectRunUnderRoot(root)
+	})
+
+	It("resolves --cwd for the run's directories, not the process working directory", func() {
+		root := gitRepo()
+		outside := GinkgoT().TempDir()
+		runChild(childRun{
+			Root: root, Dir: outside, Global: []string{"--cwd", filepath.Join(root, "pkg")},
+			Replies: []string{`{"violations":[]}`},
+			Files:   map[string]string{"pkg/service.go": "package pkg\n"},
+			Prompt:  filepath.Join(root, "review.prompt"),
+			Paths:   []string{"service.go"},
+		})
+		Expect(filepath.Join(outside, ".gavel")).NotTo(BeADirectory())
+		expectRunUnderRoot(root)
 	})
 })

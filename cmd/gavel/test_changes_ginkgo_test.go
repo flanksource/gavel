@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/flanksource/gavel/testrunner"
+	"github.com/flanksource/gavel/workspace"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -34,7 +35,9 @@ var _ = Describe("Changed combined lint verdict", func() {
 		previousExit := exitCode
 		DeferCleanup(func() { exitCode = previousExit })
 		exitCode = 0
-		_, err = runTests(testrunner.RunOptions{WorkDir: root, Frameworks: []string{"go"}, ChangedFiles: []string{"selected.go"}, Lint: true, SkipHooks: true}, false)
+		dirs, err := workspace.Resolve(root)
+		Expect(err).NotTo(HaveOccurred())
+		_, err = runTests(testrunner.RunOptions{WorkDir: root, Dirs: dirs, Frameworks: []string{"go"}, ChangedFiles: []string{"selected.go"}, Lint: true, SkipHooks: true}, false)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(exitCode).To(Equal(wantExit))
 	},

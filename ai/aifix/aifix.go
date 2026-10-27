@@ -32,6 +32,10 @@ func Prompts() []prompts.Prompt {
 		ConfigPath:  prompts.LintFix,
 		Default:     lintAIFixPrompt,
 		UsedBy:      []string{"gavel lint --ai-fix", "gavel commit (lint gate)"},
+	}, {
+		ID: prompts.CommitFix, ConfigPath: prompts.CommitFix,
+		Title: "Commit AI fix", Description: "Repairs commit lint findings, inheriting ai and lint.fix settings.",
+		Default: lintAIFixPrompt, UsedBy: []string{"gavel commit"},
 	}}
 }
 
@@ -68,6 +72,9 @@ type Result struct {
 
 // Run executes the AI-fix loop and returns the post-fix lint results.
 func Run(ctx context.Context, req Request) (*Result, error) {
+	if err := lintResultError(req.Initial); err != nil {
+		return nil, err
+	}
 	if len(req.Initial) == 0 || !hasViolations(req.Initial) {
 		return &Result{FinalResults: req.Initial, StopReason: "condition-met"}, nil
 	}
@@ -112,6 +119,9 @@ func Run(ctx context.Context, req Request) (*Result, error) {
 				return req.AIRequestProto, true
 			}
 			next, e := req.ReLint(ctx)
+			if e == nil {
+				e = lintResultError(next)
+			}
 			if e != nil {
 				loopErr = fmt.Errorf("re-lint between iterations failed: %w", e)
 				loopStopReason = "relint-error"
@@ -190,6 +200,7 @@ func hasViolations(results []*linters.LinterResult) bool {
 }
 
 type ResolveOptions struct {
+	Name    string
 	Base    api.Spec
 	Prompt  verify.PromptSpec
 	Dir     string
@@ -198,11 +209,23 @@ type ResolveOptions struct {
 }
 
 func Layers(options ResolveOptions) ([]api.SpecLayer, error) {
+	if options.Name == "" {
+		options.Name = prompts.LintFix
+	}
 	return options.Prompt.Layers(verify.PromptResolveOptions{Base: options.Base, DefaultPrompt: lintAIFixPrompt, Data: map[string]any{
 		"workDir":    options.Dir,
 		"linters":    strings.Join(options.Linters, ", "),
 		"violations": formatViolations(options.Results),
-	}, Dir: options.Dir, Name: prompts.LintFix})
+	}, Dir: options.Dir, Name: options.Name})
+}
+
+func lintResultError(results []*linters.LinterResult) error {
+	for _, result := range results {
+		if result != nil && !result.Skipped && result.Error != "" {
+			return fmt.Errorf("%s lint failed: %s", result.Linter, result.Error)
+		}
+	}
+	return nil
 }
 
 func formatViolations(results []*linters.LinterResult) string {
