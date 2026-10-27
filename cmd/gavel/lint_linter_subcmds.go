@@ -42,7 +42,7 @@ func registerLintLinterSubcommands(parent *cobra.Command) {
 				return nil, err
 			}
 			opts.Linters = []string{entry.linterName}
-			return runLint(opts)
+			return runLint(sub.Context(), opts)
 		})
 		sub.Use = entry.subcmd + " [path...] [-- native args]"
 		bindLintSourceFlags(sub)

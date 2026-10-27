@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
+
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/gavel/testrunner/outline"
 	"github.com/flanksource/gavel/testrunner/parsers"
+	"github.com/flanksource/gavel/workspace"
 )
 
 type testOutlineOptions struct {
@@ -28,8 +31,8 @@ Optionally pass package or file paths to limit the outline. Paths are matched
 relative to --cwd.`)
 }
 
-func runTestOutline(opts testOutlineOptions) (any, error) {
-	workDir, err := getWorkingDir()
+func runTestOutline(ctx context.Context, opts testOutlineOptions) (any, error) {
+	dirs, err := workspace.From(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -42,7 +45,8 @@ func runTestOutline(opts testOutlineOptions) (any, error) {
 		frameworks = append(frameworks, framework)
 	}
 	return outline.Build(outline.Options{
-		WorkDir:      workDir,
+		WorkDir:      dirs.Invocation,
+		StateRoot:    dirs.StateRoot,
 		Paths:        opts.Paths,
 		Frameworks:   frameworks,
 		FixtureFiles: opts.FixtureFiles,
@@ -57,7 +61,7 @@ func normalizeOutlineFramework(name string) (parsers.Framework, error) {
 }
 
 func init() {
-	cmd := clicky.AddNamedCommand("outline", testCmd, testOutlineOptions{}, runTestOutline)
+	cmd := clicky.AddNamedCommandWithContext("outline", testCmd, testOutlineOptions{}, runTestOutline)
 	cmd.Short = "Static outline of tests with size, complexity, duplication, and run history"
 	cmd.Flags().SetInterspersed(true)
 }

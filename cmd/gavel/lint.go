@@ -13,6 +13,7 @@ import (
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/lint"
 	"github.com/flanksource/gavel/linters"
+	"github.com/flanksource/gavel/runconfig"
 	"github.com/flanksource/gavel/snapshots"
 	"github.com/flanksource/gavel/testrunner"
 	testui "github.com/flanksource/gavel/testrunner/ui"
@@ -31,7 +32,7 @@ func init() {
 		if err != nil {
 			return nil, err
 		}
-		return runLint(opts)
+		return runLint(lintCmd.Context(), opts)
 	})
 	bindLintSourceFlags(lintCmd)
 	registerLintLinterSubcommands(lintCmd)
@@ -46,6 +47,7 @@ func init() {
 // splitLintPassThroughArgs moves the arguments after -- from Files to the
 // selected linter's native command line.
 func splitLintPassThroughArgs(cmd *cobra.Command, opts LintOptions) (LintOptions, error) {
+	opts.OptionFields = configuredFlagFields(cmd)
 	if cmd.Flags().Changed("generated") {
 		generated, err := cmd.Flags().GetBool("generated")
 		if err != nil {
@@ -65,25 +67,36 @@ func splitLintPassThroughArgs(cmd *cobra.Command, opts LintOptions) (LintOptions
 // passed explicitly, or -y/--yes opted into auto-fixing lint violations.
 func resolveAIFix(o LintOptions) bool { return o.AIFix || o.Yes }
 
-func runLint(opts LintOptions) (any, error) {
-	var err error
+func runLint(ctx context.Context, opts LintOptions) (any, error) {
+	if opts.OptionFields == nil {
+		opts.OptionFields = runconfig.Present(opts)
+	}
+	dirs, err := commandDirs(ctx, opts.WorkDir)
+	if err != nil {
+		return nil, err
+	}
+	opts.WorkDir = dirs.Invocation
+	if err := opts.Configure(); err != nil {
+		return nil, err
+	}
 	opts, err = lint.NormalizeRootArg(opts)
 	if err != nil {
 		return nil, fmt.Errorf("normalize lint root: %w", err)
 	}
-	if opts.WorkDir == "" {
-		opts.WorkDir, _ = os.Getwd()
+	if opts.Dirs, err = commandDirs(ctx, opts.WorkDir); err != nil {
+		return nil, err
 	}
+	opts.WorkDir = opts.Dirs.Invocation
 	runStarted := time.Now().UTC()
 	if opts.Failed == failedAutoSentinel {
-		resolved, err := snapshots.ResolveLast(opts.WorkDir)
+		resolved, err := snapshots.ResolveLast(opts.Dirs.StateRoot)
 		if err != nil {
 			return nil, fmt.Errorf("--failed: %w", err)
 		}
 		opts.Failed = resolved
 	}
 	if opts.PR != "" {
-		resolved, err := resolvePRFailed(opts.PR, opts.WorkDir, opts.Failed, opts.Baseline, prNarrowLint)
+		resolved, err := resolvePRFailed(opts.PR, opts.Dirs, opts.Failed, opts.Baseline, prNarrowLint)
 		if err != nil {
 			return nil, err
 		}
@@ -262,7 +275,7 @@ func finishLint(opts LintOptions, allResults []*linters.LinterResult, runStarted
 		},
 		Lint: allResults,
 	}
-	if path, err := snapshots.Save(opts.WorkDir, snap); err != nil {
+	if path, err := snapshots.Save(opts.Dirs.StateRoot, snap); err != nil {
 		logger.Warnf("persist snapshot: %v", err)
 	} else {
 		logger.V(1).Infof("wrote snapshot to %s", path)
@@ -270,7 +283,7 @@ func finishLint(opts LintOptions, allResults []*linters.LinterResult, runStarted
 	// Per-run snapshot so lint-only runs appear in the .gavel run history
 	// (the Tests dashboard scans run-*.json); Save() above only writes the
 	// sha-keyed latest.
-	if path, err := snapshots.SavePerRun(opts.WorkDir, snap, runStarted, ""); err != nil {
+	if path, err := snapshots.SavePerRun(opts.Dirs.StateRoot, snap, runStarted, ""); err != nil {
 		logger.Warnf("persist per-run snapshot: %v", err)
 	} else {
 		logger.V(1).Infof("wrote per-run snapshot to %s", path)
