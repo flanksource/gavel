@@ -3,12 +3,15 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"slices"
+	"strings"
 	"time"
 
+	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/captain/pkg/claude"
 	captaincli "github.com/flanksource/captain/pkg/cli"
 	"github.com/flanksource/clicky"
@@ -52,7 +55,14 @@ func registerLintPromptCommand(parent *cobra.Command) *cobra.Command {
 			if stdin != nil {
 				o.Stdin = bytes.NewReader(stdin)
 			}
-			return lintprompt.Run(rctx, o)
+			renderer := captaincli.NewEventRenderer(os.Stderr)
+			o.OnEvent = func(iteration int, event api.Event) {
+				if event.Rejected || event.Kind == api.EventError || (event.Kind == api.EventSystem && strings.HasPrefix(event.Text, "schema validation failed")) {
+					renderer.Handle(iteration, event)
+				}
+			}
+			results, err := lintprompt.Run(rctx, o)
+			return results, errors.Join(err, renderer.Flush())
 		}
 		var uiServer *testui.Server
 		if opts.UI {

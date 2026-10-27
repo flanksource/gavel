@@ -43,7 +43,8 @@ type Options struct {
 	Selection *changeset.Selection `flag:"-" json:"-" yaml:"-"`
 	// Publisher, when set, sees every run's result as it changes: pending before
 	// any prompt starts, running once launched, then final.
-	Publisher Publisher `flag:"-" json:"-" yaml:"-"`
+	Publisher Publisher            `flag:"-" json:"-" yaml:"-"`
+	OnEvent   func(int, api.Event) `flag:"-" json:"-" yaml:"-"`
 }
 
 // Publisher receives in-flight lint results. testui.Server implements it.
@@ -146,7 +147,7 @@ func Run(ctx context.Context, opts Options) ([]*linters.LinterResult, error) {
 	}
 	results := runReviews(ctx, reviewsInput{
 		Reviews: opts.reviews(paths), WorkDir: workDir, Stdin: stdin, File: opts.Prompt.File,
-		Concurrency: opts.Concurrency, Publisher: opts.Publisher,
+		Concurrency: opts.Concurrency, Publisher: opts.Publisher, OnEvent: opts.OnEvent,
 	})
 	exclusions.FilterResults(results)
 	return results, nil

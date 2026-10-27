@@ -12,6 +12,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/flanksource/captain/pkg/api"
 	captaincli "github.com/flanksource/captain/pkg/cli"
 	"github.com/flanksource/gavel/linters"
 	. "github.com/onsi/ginkgo/v2"
@@ -261,6 +262,26 @@ var _ = Describe("runReviews", func() {
 
 		Expect(stopped).To(Equal([]string{"run-a.go"}))
 		Expect(results).To(HaveExactElements(SatisfyAll(HaveField("Success", false), HaveField("Error", context.Canceled.Error()))))
+	})
+
+	It("forwards rejected response events and keeps the terminal schema failure", func() {
+		rejected := api.Event{Kind: api.EventText, Text: "# Findings\n\n- Define a baseline.", Rejected: true}
+		failure := api.Event{Kind: api.EventError, Error: "schema validation failed: expected JSON"}
+		var observed []api.Event
+		launch := launchPrompt
+		launchPrompt = func(ctx context.Context, inv captaincli.PromptInvocation) (captaincli.PromptRunResult, error) {
+			inv.OnEvent(0, rejected)
+			inv.OnEvent(0, failure)
+			return launch(ctx, inv)
+		}
+		awaitPromptRun = func(context.Context, string) (captaincli.PromptRunSummary, error) {
+			return captaincli.PromptRunSummary{Text: rejected.Text, Error: failure.Error}, errors.New(failure.Error)
+		}
+		results := runReviews(context.Background(), reviewsInput{Reviews: reviewsFor("a.go"), WorkDir: "/w", Concurrency: 1,
+			OnEvent: func(_ int, event api.Event) { observed = append(observed, event) },
+		})
+		Expect(observed).To(Equal([]api.Event{rejected, failure}))
+		Expect(results).To(HaveExactElements(And(HaveField("Success", false), HaveField("Error", failure.Error))))
 	})
 
 	It("reports a launch failure as that run's error", func() {

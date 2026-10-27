@@ -10,7 +10,7 @@ budget:
 setup:
   cwd: "{{repo}}"
 prompt:
-  schemaStrictness: retry
+  schemaStrictness: repair
   system: >-
     You are auditing the git checkout {{repo}}: its pull requests, local and
     remote branches, and linked worktrees. Classify every item and report the
