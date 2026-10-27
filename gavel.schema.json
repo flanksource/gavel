@@ -2141,6 +2141,154 @@
                 "description": "Force the linter on (true) or off (false). Omit to keep the linter's built-in default.",
                 "type": "boolean"
               },
+              "options": {
+                "additionalProperties": false,
+                "properties": {
+                  "addr": {
+                    "description": "Dashboard listen address.",
+                    "not": {},
+                    "type": "string"
+                  },
+                  "ai-fix": {
+                    "description": "Repair findings with lint.fix.",
+                    "not": {},
+                    "type": "boolean"
+                  },
+                  "ai-fix-max-iterations": {
+                    "description": "Maximum repair iterations.",
+                    "minimum": 1,
+                    "not": {},
+                    "type": "integer"
+                  },
+                  "baseline": {
+                    "description": "Baseline snapshot.",
+                    "not": {},
+                    "type": "string"
+                  },
+                  "changed": {
+                    "description": "Select changed files.",
+                    "not": {},
+                    "type": "boolean"
+                  },
+                  "changed-files": {
+                    "description": "Explicit changed paths.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "not": {},
+                    "type": "array"
+                  },
+                  "dry-run": {
+                    "description": "Preview commands without executing.",
+                    "not": {},
+                    "type": "boolean"
+                  },
+                  "exclude": {
+                    "description": "Excluded native rule identifiers.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "failed": {
+                    "description": "Snapshot used to select failed lint.",
+                    "not": {},
+                    "type": "string"
+                  },
+                  "files": {
+                    "description": "Selected file paths.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "not": {},
+                    "type": "array"
+                  },
+                  "fix": {
+                    "description": "Enable native fixes.",
+                    "type": "boolean"
+                  },
+                  "generated": {
+                    "description": "Include generated files.",
+                    "type": "boolean"
+                  },
+                  "ignore": {
+                    "description": "Excluded file globs.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "linters": {
+                    "description": "Selected linters.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "not": {},
+                    "type": "array"
+                  },
+                  "no-lint-cache": {
+                    "description": "Disable lint result caching.",
+                    "type": "boolean"
+                  },
+                  "pr": {
+                    "description": "Pull request whose failed lint is selected.",
+                    "not": {},
+                    "type": "string"
+                  },
+                  "schema": {
+                    "description": "JSON Schema path or HTTP(S) URL; defaults to document schema declarations.",
+                    "type": "string"
+                  },
+                  "since": {
+                    "description": "Select changes since a Git reference.",
+                    "not": {},
+                    "type": "string"
+                  },
+                  "summary": {
+                    "description": "Summarize findings by rule.",
+                    "not": {},
+                    "type": "boolean"
+                  },
+                  "summary-limit": {
+                    "description": "Maximum examples per rule.",
+                    "minimum": 0,
+                    "not": {},
+                    "type": "integer"
+                  },
+                  "tags": {
+                    "description": "Build tags.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "timeout": {
+                    "description": "Per-linter deadline.",
+                    "type": "string"
+                  },
+                  "triage": {
+                    "description": "Interactively triage findings.",
+                    "not": {},
+                    "type": "boolean"
+                  },
+                  "ui": {
+                    "description": "Open the lint dashboard.",
+                    "not": {},
+                    "type": "boolean"
+                  },
+                  "work-dir": {
+                    "description": "Execution working directory.",
+                    "not": {},
+                    "type": "string"
+                  },
+                  "yes": {
+                    "description": "Accept AI repair without prompting.",
+                    "not": {},
+                    "type": "boolean"
+                  }
+                },
+                "type": "object"
+              },
               "runtime": {
                 "additionalProperties": false,
                 "description": "Process settings inherited by all linter and test types. Within each config file, global defaults precede category and type overrides; later files and explicit caller options win.",
@@ -2179,6 +2327,136 @@
             "type": "object"
           },
           "description": "Per-linter overrides keyed by linter name. Useful for opt-in linters like jscpd or disabling a single tool.",
+          "type": "object"
+        },
+        "options": {
+          "additionalProperties": false,
+          "properties": {
+            "addr": {
+              "description": "Dashboard listen address.",
+              "type": "string"
+            },
+            "ai-fix": {
+              "description": "Repair findings with lint.fix.",
+              "type": "boolean"
+            },
+            "ai-fix-max-iterations": {
+              "description": "Maximum repair iterations.",
+              "minimum": 1,
+              "type": "integer"
+            },
+            "baseline": {
+              "description": "Baseline snapshot.",
+              "type": "string"
+            },
+            "changed": {
+              "description": "Select changed files.",
+              "type": "boolean"
+            },
+            "changed-files": {
+              "description": "Explicit changed paths.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "dry-run": {
+              "description": "Preview commands without executing.",
+              "type": "boolean"
+            },
+            "exclude": {
+              "description": "Excluded native rule identifiers.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "failed": {
+              "description": "Snapshot used to select failed lint.",
+              "type": "string"
+            },
+            "files": {
+              "description": "Selected file paths.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "fix": {
+              "description": "Enable native fixes.",
+              "type": "boolean"
+            },
+            "generated": {
+              "description": "Include generated files.",
+              "type": "boolean"
+            },
+            "ignore": {
+              "description": "Excluded file globs.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "linters": {
+              "description": "Selected linters.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "no-lint-cache": {
+              "description": "Disable lint result caching.",
+              "type": "boolean"
+            },
+            "pr": {
+              "description": "Pull request whose failed lint is selected.",
+              "type": "string"
+            },
+            "schema": {
+              "description": "JSON Schema path or HTTP(S) URL; defaults to document schema declarations.",
+              "type": "string"
+            },
+            "since": {
+              "description": "Select changes since a Git reference.",
+              "type": "string"
+            },
+            "summary": {
+              "description": "Summarize findings by rule.",
+              "type": "boolean"
+            },
+            "summary-limit": {
+              "description": "Maximum examples per rule.",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "tags": {
+              "description": "Build tags.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "timeout": {
+              "description": "Per-linter deadline.",
+              "type": "string"
+            },
+            "triage": {
+              "description": "Interactively triage findings.",
+              "type": "boolean"
+            },
+            "ui": {
+              "description": "Open the lint dashboard.",
+              "type": "boolean"
+            },
+            "work-dir": {
+              "description": "Execution working directory.",
+              "type": "string"
+            },
+            "yes": {
+              "description": "Accept AI repair without prompting.",
+              "type": "boolean"
+            }
+          },
           "type": "object"
         },
         "runtime": {

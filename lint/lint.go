@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/bmatcuk/doublestar/v4"
 	"github.com/flanksource/clicky"
 	clickytask "github.com/flanksource/clicky/task"
 	commonsContext "github.com/flanksource/commons/context"
@@ -192,7 +193,7 @@ func Execute(opts Options) ([]*linters.LinterResult, error) {
 				anyScheduled = true
 				continue
 			}
-			if executable == "" {
+			if reason != "" {
 				logger.V(2).Infof("Skipping %s at %s: %s", linter.Name(), inv.projectRoot, reason)
 				if skipReason == "" {
 					skipReason = reason
@@ -200,7 +201,7 @@ func Execute(opts Options) ([]*linters.LinterResult, error) {
 				continue
 			}
 
-			runOpts := linters.RunOptions{
+			runOpts := linters.RunOptions{Schema: opts.Schema,
 				Scopes:               scopes,
 				RuleExclusions:       exclusions,
 				NativeRuleExclusions: exclusions.NativeFor(linter.Name(), len(requestedLinters) == 1),
@@ -323,8 +324,9 @@ func GroupFilesByGitRoot(opts Options) []Group {
 		abs := resolveLintPath(opts.WorkDir, f)
 
 		dir := abs
-		if info, err := os.Stat(abs); err == nil && !info.IsDir() {
-			dir = filepath.Dir(abs)
+		if info, err := os.Stat(abs); err != nil || !info.IsDir() {
+			base, _ := doublestar.SplitPattern(filepath.ToSlash(abs))
+			dir = filepath.FromSlash(base)
 		}
 
 		gitRoot := utils.FindGitRoot(dir)
@@ -463,12 +465,12 @@ func dryRunGroup(opts Options) error {
 			if err != nil {
 				return err
 			}
-			if executable == "" {
+			if reason != "" {
 				testrunner.PrintDryRunSkipped("lint", linter.Name()+" @ "+inv.projectRoot, reason)
 				continue
 			}
 
-			runOpts := linters.RunOptions{
+			runOpts := linters.RunOptions{Schema: opts.Schema,
 				Scopes:               scopes,
 				RuleExclusions:       exclusions,
 				NativeRuleExclusions: exclusions.NativeFor(linter.Name(), len(requestedLinters) == 1),
