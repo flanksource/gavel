@@ -70,12 +70,12 @@ export function MenubarTodos({ projects, projectsLoaded, projectError }: {
         </div>
       )}
 
+      {error && (
+        <div role="alert" className="shrink-0 border-b border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+          {error}
+        </div>
+      )}
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {error && (
-          <div role="alert" className="border-b border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
-            {error}
-          </div>
-        )}
         {workspaces.length === 0 ? (
           projectError ? (
             <div role="alert" className="px-3 py-6 text-center text-xs text-destructive">{projectError}</div>
@@ -87,7 +87,7 @@ export function MenubarTodos({ projects, projectsLoaded, projectError }: {
           )
         ) : buckets ? (
           buckets.length > 0 ? (
-            <ListMenu>
+            <ListMenu virtualize={{ estimateRowHeight: 64 }}>
               {buckets.map(bucket => (
                 <TodoBucketGroup
                   key={bucket.key}
@@ -96,7 +96,7 @@ export function MenubarTodos({ projects, projectsLoaded, projectError }: {
                   onSelect={select}
                   filters={filters}
                   selection={selection}
-            tagsByDir={tagsByDir}
+                  tagsByDir={tagsByDir}
                 />
               ))}
             </ListMenu>
@@ -104,7 +104,7 @@ export function MenubarTodos({ projects, projectsLoaded, projectError }: {
             <div className="px-3 py-6 text-center text-xs text-muted-foreground">No todos</div>
           )
         ) : (
-          <ListMenu>
+          <ListMenu virtualize={{ estimateRowHeight: 64 }}>
             {workspaces.filter(ws => isWorkspaceShown(filters, ws.dir)).map(ws => (
               <WorkspaceTodoGroup
                 key={ws.dir}
@@ -115,7 +115,7 @@ export function MenubarTodos({ projects, projectsLoaded, projectError }: {
                 selectedRef=""
                 onSelect={select}
                 selection={selection}
-            tags={tagsByDir?.get(ws.dir)}
+                tags={tagsByDir?.get(ws.dir)}
               />
             ))}
           </ListMenu>
