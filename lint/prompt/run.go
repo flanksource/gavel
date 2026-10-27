@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flanksource/captain/pkg/api"
 	captaincli "github.com/flanksource/captain/pkg/cli"
 	"github.com/flanksource/clicky"
 	clickytask "github.com/flanksource/clicky/task"
@@ -31,6 +32,7 @@ type reviewsInput struct {
 	Stdin       []byte
 	Concurrency int
 	Publisher   Publisher
+	OnEvent     func(int, api.Event)
 }
 
 // runReviews runs each review in a clicky group, at most Concurrency at once.
@@ -75,7 +77,9 @@ func (input reviewsInput) publish(result *linters.LinterResult) {
 func (input reviewsInput) run(ctx context.Context, review review) []*linters.LinterResult {
 	run := &reviewRun{WorkDir: input.WorkDir}
 	start := time.Now()
-	launched, err := launchPrompt(ctx, invocation(input.File, review.Prompt, stdinReader(input.Stdin), run.tools()))
+	inv := invocation(input.File, review.Prompt, stdinReader(input.Stdin), run.tools())
+	inv.OnEvent = input.OnEvent
+	launched, err := launchPrompt(ctx, inv)
 	if err != nil {
 		result := run.result(summaryInput{Name: review.Name, Err: err, Elapsed: time.Since(start)})
 		input.publish(result)
