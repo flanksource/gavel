@@ -66,6 +66,7 @@ type Options struct {
 	captaincli.AIRuntimeOptions
 	Selection    *changeset.Selection `flag:"-" json:"-" yaml:"-"`
 	OptionFields map[string]bool      `json:"-" yaml:"-" flag:"-"`
+	Schema       string               `flag:"schema" json:"schema,omitempty" yaml:"schema,omitempty" help:"JSON Schema path or HTTP(S) URL; defaults to document schema declarations"`
 }
 
 func (o Options) Pretty() api.Text {
@@ -102,7 +103,7 @@ func (o Options) Help() string {
 	return `Run linters on the project.
 
 Automatically detects which linters are available and runs them.
-Supports: golangci-lint, ruff, eslint, oxlint, react-doctor, pyright, tsc, markdownlint, vale, jscpd, betterleaks, uir.
+Supports: golangci-lint, ruff, eslint, oxlint, react-doctor, pyright, tsc, markdownlint, vale, jscpd, betterleaks, uir, json.
 
 Examples:
   gavel lint
@@ -111,6 +112,7 @@ Examples:
   gavel lint react-doctor
   gavel lint uir                     # SQL rules from .uir.yaml
   gavel lint uir --exclude 'small-*'
+  gavel lint json config.yaml --schema schema.json
   gavel lint --exclude 'ruff:F401,eslint:no-debugger'
   gavel lint secrets                 # alias for betterleaks
   gavel lint --linters=golangci-lint

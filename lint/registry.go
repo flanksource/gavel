@@ -13,6 +13,7 @@ import (
 	"github.com/flanksource/gavel/linters/eslint"
 	"github.com/flanksource/gavel/linters/golangci"
 	"github.com/flanksource/gavel/linters/jscpd"
+	jsonlint "github.com/flanksource/gavel/linters/json"
 	"github.com/flanksource/gavel/linters/markdownlint"
 	"github.com/flanksource/gavel/linters/oxlint"
 	"github.com/flanksource/gavel/linters/pyright"
@@ -41,6 +42,7 @@ func buildLinterRegistry(workDir string) *linters.Registry {
 	registry.Register(jscpd.NewJSCPD(workDir))
 	registry.Register(betterleaks.NewBetterleaks(workDir))
 	registry.Register(uir.New(workDir))
+	registry.Register(jsonlint.New(workDir))
 	return registry
 }
 
