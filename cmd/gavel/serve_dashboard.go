@@ -1,6 +1,9 @@
 package main
 
-import "github.com/flanksource/clicky"
+import (
+	"github.com/flanksource/clicky"
+	clickytask "github.com/flanksource/clicky/task"
+)
 
 // applyServeDefaults adapts PRListOptions for `gavel serve`: the command always
 // serves the dashboard (UI mode, unless --menu-bar) and defaults to an org-wide
@@ -20,7 +23,18 @@ func applyServeDefaults(opts PRListOptions) PRListOptions {
 // PRListOptions + runPRUI (same path as `pr list --ui`) and forces UI mode so
 // the command serves the dashboard rather than printing a PR list.
 func runServeDashboard(opts PRListOptions) (any, error) {
+	defer keepTasksOffTerminal()()
 	return nil, runPRUI(applyServeDefaults(opts), serveDatabaseWithMigrations)
+}
+
+// keepTasksOffTerminal stops clicky drawing task progress for a long-running
+// server, as captain serve does: prompt runs started through the mounted
+// captain handlers are followed in the browser, and live frames would draw over
+// the server log. It returns the restore for the previous setting.
+func keepTasksOffTerminal() func() {
+	previous := clickytask.IsNoRender()
+	clickytask.SetNoRender(true)
+	return func() { clickytask.SetNoRender(previous) }
 }
 
 func init() {

@@ -16,6 +16,7 @@ import (
 	"github.com/flanksource/commons/properties"
 	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/internal/database"
+	"github.com/flanksource/gavel/workspace"
 	"github.com/spf13/cobra"
 	"gorm.io/gorm"
 )
@@ -31,8 +32,18 @@ var (
 var rootCmd = &cobra.Command{
 	Use:   "gavel",
 	Short: "Gavel CLI",
-	PersistentPreRun: func(cmd *cobra.Command, args []string) {
+	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		clicky.Flags.UseFlags()
+		dir, err := getWorkingDir()
+		if err != nil {
+			return err
+		}
+		dirs, err := workspace.Resolve(dir)
+		if err != nil {
+			return err
+		}
+		cmd.SetContext(workspace.With(cmd.Context(), dirs))
+		return nil
 	},
 }
 
@@ -59,6 +70,15 @@ func getWorkingDir() (string, error) {
 		return absPath, nil
 	}
 	return os.Getwd()
+}
+
+// commandDirs is the command's resolved Dirs: re-resolved from its own
+// --work-dir when set, else the ones the root command resolved from --cwd.
+func commandDirs(ctx context.Context, workDir string) (workspace.Dirs, error) {
+	if workDir != "" {
+		return workspace.Resolve(workDir)
+	}
+	return workspace.From(ctx)
 }
 
 func init() {

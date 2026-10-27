@@ -8,6 +8,7 @@ import (
 	"github.com/flanksource/gavel/models"
 	"github.com/flanksource/gavel/report"
 	testui "github.com/flanksource/gavel/testrunner/ui"
+	"github.com/flanksource/gavel/workspace"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -18,7 +19,8 @@ var _ = Describe("Standalone lint output", func() {
 		DeferCleanup(func() { exitCode = previousExit })
 		exitCode = 0
 		withFormat("json", func() {
-			value, err := finishLint(LintOptions{WorkDir: GinkgoT().TempDir()}, []*linters.LinterResult{result}, time.Now())
+			dir := GinkgoT().TempDir()
+			value, err := finishLint(LintOptions{WorkDir: dir, Dirs: workspace.Dirs{Invocation: dir, StateRoot: dir}}, []*linters.LinterResult{result}, time.Now())
 			Expect(err).NotTo(HaveOccurred())
 			Expect(value).To(BeAssignableToTypeOf(&testui.Snapshot{}))
 			Expect(exitCode).To(Equal(wantExit))

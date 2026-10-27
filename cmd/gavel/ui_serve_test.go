@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net"
@@ -17,6 +18,7 @@ import (
 	"github.com/flanksource/gavel/testrunner/parsers"
 	testui "github.com/flanksource/gavel/testrunner/ui"
 	"github.com/flanksource/gavel/traces"
+	"github.com/flanksource/gavel/workspace"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -268,7 +270,7 @@ func TestRunUIServe_ReplaysSnapshotAndExits(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := runUIServe(opts)
+		_, err := runUIServe(workspace.With(context.Background(), workspace.Dirs{Invocation: dir, StateRoot: dir}), opts)
 		done <- err
 	}()
 

@@ -11,31 +11,37 @@ import (
 	"github.com/flanksource/gavel/ai/aifix"
 	commitpkg "github.com/flanksource/gavel/commit"
 	"github.com/flanksource/gavel/linters"
+	"github.com/flanksource/gavel/prompts"
 	"github.com/flanksource/gavel/verify"
 )
 
 // runCommitAIFix is the lintActionAIFix branch of handleCommitLintFindings.
-// It resolves lint.fix independently from commit.message to repair the
-// findings in result.Lint and re-runs the commit lint pass with the SAME gate
-// configuration the original commit used. On clean it returns
-// lintFindingsAIFixed; on residual violations it re-prompts the user (so
-// they can pick AI Fix again, triage, bypass, or cancel).
-func runCommitAIFix(workDir string, result *commitpkg.Result, assumeYes bool) lintFindingsOutcome {
+// It resolves commit.fix independently from commit.message and checks the
+// original scope and gates after each repair. Residual findings block the commit.
+func runCommitAIFix(workDir string, result *commitpkg.Result) lintFindingsOutcome {
 	if result == nil || result.Lint == nil {
 		fmt.Fprintln(os.Stderr, "ai-fix: no lint result to operate on")
 		return lintFindingsBlocked
 	}
 
-	files := uniqueViolationFiles(result.Lint.Results)
-	if len(files) == 0 {
+	if len(uniqueViolationFiles(result.Lint.Results)) == 0 {
 		fmt.Fprintln(os.Stderr, "ai-fix: no files reported violations")
+		return lintFindingsBlocked
+	}
+	files := result.Lint.Files
+	if len(files) == 0 {
+		fmt.Fprintln(os.Stderr, "ai-fix: original commit lint scope is missing")
 		return lintFindingsBlocked
 	}
 
 	requested := commitGateRequest(result.Lint.Gates)
 	ctx := context.Background()
 
-	gavelCfg, err := verify.LoadGavelConfig(workDir)
+	configDir := result.Lint.ConfigDir
+	if configDir == "" {
+		configDir = workDir
+	}
+	gavelCfg, err := verify.LoadGavelConfig(configDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ai-fix: %v\n", err)
 		return lintFindingsBlocked
@@ -45,7 +51,7 @@ func runCommitAIFix(workDir string, result *commitpkg.Result, assumeYes bool) li
 		fmt.Fprintf(os.Stderr, "ai-fix: %v\n", err)
 		return lintFindingsBlocked
 	}
-	runtime := lintFixRuntime{Prompt: aifix.ResolveOptions{Base: gavelCfg.AI, Prompt: gavelCfg.Lint.Fix, Dir: workDir, Linters: requested}, Runtime: defaultAIRuntimeOptions(), Saved: saved}
+	runtime := lintFixRuntime{Prompt: aifix.ResolveOptions{Name: prompts.CommitFix, Base: gavelCfg.AI, Prompt: gavelCfg.CommitFixSpec(), Dir: workDir, Linters: requested}, Runtime: defaultAIRuntimeOptions(), Saved: saved}
 	resolved, err := runtime.Resolve(result.Lint.Results)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ai-fix: %v\n", err)
@@ -56,7 +62,12 @@ func runCommitAIFix(workDir string, result *commitpkg.Result, assumeYes bool) li
 	}
 
 	renderer := newAIFixRenderer()
+	maxIterations := 3
+	if result.Lint.Repair.AIFixMaxIterations != nil {
+		maxIterations = *result.Lint.Repair.AIFixMaxIterations
+	}
 	fixRes, err := aifix.Run(ctx, aifix.Request{
+		MaxIterations:  maxIterations,
 		Initial:        result.Lint.Results,
 		AIConfig:       resolved.Config,
 		AIRequestProto: resolved.Request,
@@ -89,19 +100,7 @@ func runCommitAIFix(workDir string, result *commitpkg.Result, assumeYes bool) li
 		}
 	}
 
-	// Under -y the AI fix already ran once; recursing would re-trigger AI fix
-	// indefinitely with no human to break the loop. Block instead so the
-	// caller exits non-zero with the residual violations printed above.
-	if assumeYes {
-		return lintFindingsBlocked
-	}
-
-	stub := &commitpkg.Result{Lint: &commitpkg.LintGateResult{
-		Results:    fixRes.FinalResults,
-		Violations: residual,
-		Gates:      result.Lint.Gates,
-	}}
-	return handleCommitLintFindings(workDir, stub, false)
+	return lintFindingsBlocked
 }
 
 func uniqueViolationFiles(results []*linters.LinterResult) []string {

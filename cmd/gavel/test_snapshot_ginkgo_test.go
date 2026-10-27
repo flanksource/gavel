@@ -10,6 +10,7 @@ import (
 	"github.com/flanksource/gavel/snapshots"
 	"github.com/flanksource/gavel/testrunner"
 	"github.com/flanksource/gavel/testrunner/parsers"
+	"github.com/flanksource/gavel/workspace"
 )
 
 var _ = Describe("saving a run the runner failed", func() {
@@ -20,7 +21,7 @@ var _ = Describe("saving a run the runner failed", func() {
 		runErr := errors.New("test execution failed: read the process samples of pid 3916: session ended")
 
 		saved := saveFailedRun(failedRun{
-			Opts: testrunner.RunOptions{WorkDir: workDir}, Tests: []parsers.Test{completed},
+			Opts: testrunner.RunOptions{WorkDir: workDir, Dirs: workspace.Dirs{Invocation: workDir, StateRoot: workDir}}, Tests: []parsers.Test{completed},
 			Started: started, Err: runErr,
 		})
 

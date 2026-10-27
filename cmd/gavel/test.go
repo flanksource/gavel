@@ -70,22 +70,18 @@ func runTests(opts testrunner.RunOptions, detach bool) (value any, runErr error)
 
 	clicky.ClearGlobalTasks()
 
-	if opts.WorkDir == "" {
-		wd, err := getWorkingDir()
-		if err != nil {
-			return nil, err
-		}
-		opts.WorkDir = wd
+	if opts.Dirs.StateRoot == "" {
+		return nil, errors.New("runTests: the run's workspace directories were not resolved")
 	}
 	if opts.Failed == failedAutoSentinel {
-		resolved, err := snapshots.ResolveLast(opts.WorkDir)
+		resolved, err := snapshots.ResolveLast(opts.Dirs.StateRoot)
 		if err != nil {
 			return nil, fmt.Errorf("--failed: %w", err)
 		}
 		opts.Failed = resolved
 	}
 	if opts.PR != "" {
-		resolved, err := resolvePRFailed(opts.PR, opts.WorkDir, opts.Failed, opts.Baseline, prNarrowTests)
+		resolved, err := resolvePRFailed(opts.PR, opts.Dirs, opts.Failed, opts.Baseline, prNarrowTests)
 		if err != nil {
 			return nil, err
 		}
@@ -107,7 +103,7 @@ func runTests(opts testrunner.RunOptions, detach bool) (value any, runErr error)
 			diagnostics.recordOn(trace.process)
 		}
 		defer func() {
-			if err := trace.close(opts.WorkDir); err != nil {
+			if err := trace.close(opts.Dirs.StateRoot); err != nil {
 				logger.Warnf("close run traces: %v", err)
 			}
 		}()
@@ -118,7 +114,7 @@ func runTests(opts testrunner.RunOptions, detach bool) (value any, runErr error)
 	// interrupt / timeout / non-zero exit so callers can inspect what was
 	// in-flight when the run died. Per-run timestamped snapshots are written
 	// at end-of-run alongside the existing sha-keyed snapshot.
-	recorder := snapshots.NewRecorder(opts.WorkDir)
+	recorder := snapshots.NewRecorder(opts.Dirs.StateRoot)
 	recorder.Start()
 	runSucceeded := false
 	defer func() {
@@ -406,12 +402,12 @@ func runTests(opts testrunner.RunOptions, detach bool) (value any, runErr error)
 			if detach {
 				snapshot := buildTestSnapshot(opts, tests, lintResults, runStarted, time.Now().UTC(), trace)
 				snapshot.Performance = fixturePerformance
-				if path, err := snapshots.Save(opts.WorkDir, &snapshot); err != nil {
+				if path, err := snapshots.Save(opts.Dirs.StateRoot, &snapshot); err != nil {
 					logger.Warnf("persist snapshot: %v", err)
 				} else {
 					logger.V(1).Infof("wrote snapshot to %s", path)
 				}
-				if path, err := snapshots.SavePerRun(opts.WorkDir, &snapshot, runStarted, ""); err != nil {
+				if path, err := snapshots.SavePerRun(opts.Dirs.StateRoot, &snapshot, runStarted, ""); err != nil {
 					logger.Warnf("persist per-run snapshot: %v", err)
 				} else {
 					logger.V(1).Infof("wrote per-run snapshot to %s", path)
@@ -443,7 +439,7 @@ func runTests(opts testrunner.RunOptions, detach bool) (value any, runErr error)
 			printTestRunResults(tests, opts, fullSummary, lintResults)
 			snapshot := buildTestSnapshot(opts, tests, lintResults, runStarted, time.Now().UTC(), trace)
 			snapshot.Performance = fixturePerformance
-			if path, err := snapshots.SavePerRun(opts.WorkDir, &snapshot, runStarted, ""); err != nil {
+			if path, err := snapshots.SavePerRun(opts.Dirs.StateRoot, &snapshot, runStarted, ""); err != nil {
 				logger.Warnf("persist per-run snapshot: %v", err)
 			} else {
 				logger.V(1).Infof("wrote per-run snapshot to %s", path)
@@ -456,12 +452,12 @@ func runTests(opts testrunner.RunOptions, detach bool) (value any, runErr error)
 		}
 		snapshot := buildTestSnapshot(opts, tests, lintResults, runStarted, time.Now().UTC(), trace)
 		snapshot.Performance = fixturePerformance
-		if path, err := snapshots.Save(opts.WorkDir, &snapshot); err != nil {
+		if path, err := snapshots.Save(opts.Dirs.StateRoot, &snapshot); err != nil {
 			logger.Warnf("persist snapshot: %v", err)
 		} else {
 			logger.V(1).Infof("wrote snapshot to %s", path)
 		}
-		if path, err := snapshots.SavePerRun(opts.WorkDir, &snapshot, runStarted, ""); err != nil {
+		if path, err := snapshots.SavePerRun(opts.Dirs.StateRoot, &snapshot, runStarted, ""); err != nil {
 			logger.Warnf("persist per-run snapshot: %v", err)
 		} else {
 			logger.V(1).Infof("wrote per-run snapshot to %s", path)
@@ -911,6 +907,12 @@ type testCommandFlags struct {
 }
 
 func finalizeTestCommandOptions(cmd *cobra.Command, opts testrunner.RunOptions, flags testCommandFlags) (testrunner.RunOptions, bool, error) {
+	opts.OptionFields = configuredFlagFields(cmd)
+	dirs, err := commandDirs(cmd.Context(), opts.WorkDir)
+	if err != nil {
+		return opts, false, err
+	}
+	opts.WorkDir = dirs.Invocation
 	if err := splitTestPassThroughArgs(cmd, &opts); err != nil {
 		return opts, false, err
 	}
@@ -934,6 +936,14 @@ func finalizeTestCommandOptions(cmd *cobra.Command, opts testrunner.RunOptions, 
 	if !cmd.Flags().Changed("skip-hooks") {
 		opts.SkipHooks = os.Getenv("CI") == ""
 	}
+	if err := opts.Configure(); err != nil {
+		return opts, false, err
+	}
+	dirs, err = commandDirs(cmd.Context(), opts.WorkDir)
+	if err != nil {
+		return opts, false, err
+	}
+	opts.Dirs, opts.WorkDir = dirs, dirs.Invocation
 	return opts, flags.Detach, nil
 }
 
@@ -943,9 +953,13 @@ func finalizeTestCommandOptions(cmd *cobra.Command, opts testrunner.RunOptions, 
 // actually typed still wins — cmd.Flags().Changed separates that from the
 // default cobra always supplies.
 func applyConfiguredTimeouts(cmd *cobra.Command, opts *testrunner.RunOptions) error {
-	dir, err := getWorkingDir()
-	if err != nil {
-		return err
+	dir := opts.WorkDir
+	if dir == "" {
+		var err error
+		dir, err = getWorkingDir()
+		if err != nil {
+			return err
+		}
 	}
 	cfg, err := verify.LoadGavelConfig(dir)
 	if err != nil {

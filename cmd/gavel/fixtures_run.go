@@ -12,6 +12,7 @@ import (
 	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/processruntime"
 	"github.com/flanksource/gavel/verify"
+	"github.com/flanksource/gavel/workspace"
 	"github.com/samber/lo"
 	"github.com/spf13/cobra"
 )
@@ -104,7 +105,10 @@ func runFixtures(cmd *cobra.Command, args []string) error {
 	}
 	if fixturesUI.UI {
 		opts, detach := fixtureUIRunOptions(fixtureUIRunRequest{Runner: &runnerOpts, UI: fixturesUI})
-		_, err := runTests(opts, detach)
+		if opts.Dirs, err = workspace.From(cmd.Context()); err != nil {
+			return err
+		}
+		_, err = runTests(opts, detach)
 		return err
 	}
 

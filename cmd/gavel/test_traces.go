@@ -40,7 +40,7 @@ func startRunTrace(opts testrunner.RunOptions, started time.Time) (*runTrace, er
 	if opts.ProcessFacets && !opts.UI && !opts.Diagnostics {
 		return nil, errors.New("--process-facets needs a process trace: pass --ui or --diagnostics")
 	}
-	host, err := traces.Open(opts.WorkDir, traces.RunID(started))
+	host, err := traces.Open(opts.Dirs.StateRoot, traces.RunID(started))
 	if err != nil {
 		return nil, err
 	}
@@ -80,7 +80,7 @@ func (t *runTrace) serveOn(srv *testui.Server) error {
 // goroutines into its stacks, a re-observed tree — stops the run's captures
 // and closes its store, which stays on disk for the saved snapshot; the
 // oldest runs' stores beyond traces.KeepRuns go.
-func (t *runTrace) close(workDir string) error {
+func (t *runTrace) close(stateRoot string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	var processErr error
@@ -91,7 +91,7 @@ func (t *runTrace) close(workDir string) error {
 			t.process.Stop(ctx),
 		)
 	}
-	return errors.Join(processErr, t.host.Close(ctx), traces.Prune(workDir, traces.KeepRuns))
+	return errors.Join(processErr, t.host.Close(ctx), traces.Prune(stateRoot, traces.KeepRuns))
 }
 
 // runID names the run's store, empty for a run that opened none.
