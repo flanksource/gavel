@@ -3,6 +3,7 @@ package linters
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -134,6 +135,8 @@ type RunOptions struct {
 	NoCache              bool // Disable caching
 	Timeout              time.Duration
 	Ignores              []string
+	Generated            *bool
+	Tags                 []string
 	RuleExclusions       RuleExclusions
 	NativeRuleExclusions []string
 	ExtraArgs            []string
@@ -465,6 +468,9 @@ func PrepareCommand(linter Linter, opts RunOptions) (string, []string, error) {
 		mixin.SetOptions(opts)
 	}
 
+		if mapper, ok := linter.(TagsMapper); ok && len(opts.Tags) > 0 {
+			opts.ExtraArgs = append(append([]string(nil), opts.ExtraArgs...), mapper.TagsArgs(opts.Tags)...)
+		}
 	cmd := linter.Name()
 	var args []string
 	if dryRunner, ok := linter.(DryRunner); ok {
@@ -540,6 +546,8 @@ func RunLinterWithTask(ctx context.Context, task *clicky.Task, linter Linter, op
 	timedOut := ctx.Err() == context.DeadlineExceeded
 	statusErr := err
 	if timedOut && statusErr == nil {
+	violations, filterErr := filterGeneratedViolations(opts, violations)
+	err = errors.Join(err, filterErr)
 		statusErr = ctx.Err()
 	}
 

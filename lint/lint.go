@@ -114,6 +114,9 @@ func Execute(opts Options) ([]*linters.LinterResult, error) {
 	if err := checkPassThrough(requestedLinters, opts.PassThroughArgs); err != nil {
 		return nil, err
 	}
+	if err := validateTags(registry, requestedLinters, opts.Tags); err != nil {
+		return nil, err
+	}
 
 	opts, skip, err := opts.WithChanges()
 	if err != nil || skip {
@@ -192,10 +195,10 @@ func Execute(opts Options) ([]*linters.LinterResult, error) {
 				WorkDir:              inv.projectRoot, ConfigDir: opts.ConfigDir,
 				Executable: executable,
 				Files:      inv.files,
-				Ignores:    opts.Ignore,
-				Fix:        opts.Fix,
-				NoCache:    opts.NoCache,
-				Timeout:    timeout, Runtime: opts.Runtime,
+				Ignores:    opts.Ignore, Generated: opts.Generated, Tags: opts.Tags,
+				Fix:     opts.Fix,
+				NoCache: opts.NoCache,
+				Timeout: timeout, Runtime: opts.Runtime,
 				ForceJSON: true,
 				ExtraArgs: opts.PassThroughArgs,
 				OutputTee: opts.OutputTee,
@@ -399,6 +402,9 @@ func dryRunGroup(opts Options) error {
 
 	for _, name := range requestedLinters {
 		linter, ok := registry.Get(name)
+	if err := validateTags(registry, requestedLinters, opts.Tags); err != nil {
+		return err
+	}
 		if !ok {
 			testrunner.PrintDryRunSkipped("lint", name, "unknown linter")
 			continue
@@ -454,10 +460,10 @@ func dryRunGroup(opts Options) error {
 				WorkDir:              inv.projectRoot, ConfigDir: opts.ConfigDir,
 				Executable: executable,
 				Files:      inv.files,
-				Ignores:    opts.Ignore,
-				Fix:        opts.Fix,
-				NoCache:    opts.NoCache,
-				Timeout:    timeout, Runtime: opts.Runtime,
+				Ignores:    opts.Ignore, Generated: opts.Generated, Tags: opts.Tags,
+				Fix:     opts.Fix,
+				NoCache: opts.NoCache,
+				Timeout: timeout, Runtime: opts.Runtime,
 				ForceJSON: true,
 				ExtraArgs: opts.PassThroughArgs,
 			}
