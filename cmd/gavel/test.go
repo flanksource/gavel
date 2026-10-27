@@ -146,7 +146,7 @@ func runTests(opts testrunner.RunOptions, detach bool) (value any, runErr error)
 		}
 		if opts.Lint {
 			for _, workDir := range lintWorkDirs(opts.WorkDir, opts.StartingPaths) {
-				if err := lint.DryRun(LintOptions{WorkDir: workDir, Selection: opts.Selection, Runtime: opts.Runtime, ConfigDir: opts.WorkDir, Timeout: configuredLintTimeout(opts)}); err != nil {
+				if err := lint.DryRun(LintOptions{WorkDir: workDir, Selection: opts.Selection, Tags: opts.Tags, Runtime: opts.Runtime, ConfigDir: opts.WorkDir, Timeout: configuredLintTimeout(opts)}); err != nil {
 					return nil, err
 				}
 			}
@@ -227,7 +227,7 @@ func runTests(opts testrunner.RunOptions, detach bool) (value any, runErr error)
 			}
 			if req.Lint {
 				results, err := executeLintRerun(LintOptions{
-					WorkDir: opts.WorkDir, Selection: opts.Selection,
+					WorkDir: opts.WorkDir, Selection: opts.Selection, Tags: opts.Tags,
 					Timeout: configuredLintTimeout(opts),
 					Runtime: opts.Runtime, ConfigDir: opts.WorkDir,
 					Context:   rerunCtx,
@@ -295,7 +295,7 @@ func runTests(opts testrunner.RunOptions, detach bool) (value any, runErr error)
 			}
 			for _, dir := range lintWorkDirs(workDir, opts.StartingPaths) {
 				results, err := lint.Execute(LintOptions{
-					WorkDir: dir, Selection: opts.Selection,
+					WorkDir: dir, Selection: opts.Selection, Tags: opts.Tags,
 					Timeout: lintTimeoutValue, Runtime: opts.Runtime, ConfigDir: opts.WorkDir,
 					Context: opts.Context,
 				})

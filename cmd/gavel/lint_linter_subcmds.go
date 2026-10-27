@@ -45,6 +45,7 @@ func registerLintLinterSubcommands(parent *cobra.Command) {
 			return runLint(opts)
 		})
 		sub.Use = entry.subcmd + " [path...] [-- native args]"
+		bindLintSourceFlags(sub)
 		sub.Short = entry.short
 		if err := sub.Flags().MarkHidden("linters"); err != nil {
 			panic(fmt.Sprintf("hide --linters on %s: %v", entry.subcmd, err))

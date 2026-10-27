@@ -33,6 +33,7 @@ func init() {
 		}
 		return runLint(opts)
 	})
+	bindLintSourceFlags(lintCmd)
 	registerLintLinterSubcommands(lintCmd)
 	registerLintShimCommands(lintCmd)
 	registerLintPromptCommand(lintCmd)
@@ -45,6 +46,13 @@ func init() {
 // splitLintPassThroughArgs moves the arguments after -- from Files to the
 // selected linter's native command line.
 func splitLintPassThroughArgs(cmd *cobra.Command, opts LintOptions) (LintOptions, error) {
+	if cmd.Flags().Changed("generated") {
+		generated, err := cmd.Flags().GetBool("generated")
+		if err != nil {
+			return opts, err
+		}
+		opts.Generated = &generated
+	}
 	files, through, err := splitAtDash(cmd, opts.Files)
 	if err != nil {
 		return opts, err
@@ -299,6 +307,8 @@ func executeLintRerun(base LintOptions, req testui.RerunRequest) ([]*linters.Lin
 		Timeout:      base.Timeout,
 		Exclude:      append([]string(nil), base.Exclude...),
 		Files:        append([]string(nil), req.LintFiles...),
+		Generated:    base.Generated,
+		Tags:         append([]string(nil), base.Tags...),
 		OutputTee:    base.OutputTee,
 	}
 	if len(req.LintLinters) > 0 {

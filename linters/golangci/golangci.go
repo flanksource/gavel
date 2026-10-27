@@ -38,6 +38,10 @@ func (g *GolangciLint) Name() string {
 	return "golangci-lint"
 }
 
+func (g *GolangciLint) TagsArgs(tags []string) []string {
+	return []string{"--build-tags=" + strings.Join(tags, ",")}
+}
+
 // ProjectRootMarkers identifies the file(s) that anchor a Go module. The lint
 // driver runs golangci-lint once per discovered module with WorkDir set to the
 // module directory.
