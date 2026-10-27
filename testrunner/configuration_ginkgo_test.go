@@ -29,4 +29,14 @@ var _ = Describe("Nested test configuration", func() {
 			Expect(command.Env["PACKAGE_ENV"]).To(Equal(filepath.Base(plan.packages[0])))
 		}
 	})
+	It("disables a package timeout with an explicit zero duration", func() {
+		repo := GinkgoT().TempDir()
+		GinkgoT().Setenv("HOME", GinkgoT().TempDir())
+		Expect(os.Mkdir(filepath.Join(repo, ".git"), 0o755)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(repo, ".gavel.yaml"), []byte("test:\n  options: {test-timeout: 0s}\n"), 0o600)).To(Succeed())
+		o := &TestOrchestrator{RunOptions: RunOptions{WorkDir: repo}}
+		runtime, _, err := o.runtimeFor(parsers.GoTest, repo)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(runtime.Timeout).To(HaveValue(Equal("")))
+	})
 })
