@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from 'react';
-import { Button, ListMenuHeader, ListMenuSection } from '@flanksource/clicky-ui/components';
+import { Button, ListMenuHeader, ListMenuItems, ListMenuSection } from '@flanksource/clicky-ui/components';
 import type { TodoDensity } from '../../types';
 import { UiChevronDown, UiChevronRight } from '@flanksource/clicky-ui/icons';
 import { MetaDueDate, SeverityHigh, SeverityLow, SeverityMedium } from '../../icons/issues';
@@ -84,11 +84,8 @@ export function TodoBucketGroup({ bucket, selected, onSelect, filters, range, de
         </Button>
         <TodoCountsBar counts={counts} />
       </ListMenuHeader>
-      {/* Siblings, not ternary branches — see WorkspaceTodoGroup: swapping the
-          subtree when the first rows arrive remounts the whole group. */}
-      {open && visible.map(entry => (
+      {open && <ListMenuItems items={visible} getItemKey={entry => `${entry.workspace.dir}\t${entry.todo.ref}`}>{entry => (
         <TodoRow
-          key={`${entry.workspace.dir}\t${entry.todo.ref}`}
           todo={entry.todo}
           active={selected?.dir === entry.workspace.dir && selected?.ref === entry.todo.ref}
           onSelect={onSelect}
@@ -100,7 +97,7 @@ export function TodoBucketGroup({ bucket, selected, onSelect, filters, range, de
           onToggleSelect={handleToggleSelect}
           tags={tagsByDir?.get(entry.workspace.dir)}
         />
-      ))}
+      )}</ListMenuItems>}
       {open && visible.length === 0 && (
         <div className="px-3 py-2 text-xs text-muted-foreground">
           {hiddenCount > 0 ? `${hiddenCount} todo${hiddenCount === 1 ? '' : 's'} hidden by filter` : 'No todos'}
