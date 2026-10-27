@@ -166,7 +166,7 @@ func saveMissingRanges(ctx context.Context, store *Store, repoID uuid.UUID, root
 			return err
 		}
 		ranges = append(ranges, Range{RangeKey: key, RangeCompare: compare})
-		rangesComputed.Inc()
+		rangesComputed.WithLabelValues().Inc()
 	}
 	return store.SaveRanges(ctx, repoID, ranges)
 }
