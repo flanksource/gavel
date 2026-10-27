@@ -188,6 +188,25 @@ describe('App', () => {
     expect(within(pills.closest('[data-timeout-pills]') as HTMLElement).getByText(/per-test 5m/)).toBeTruthy();
   });
 
+  it('shows the live prompt tasks above the lint tree and counts the linters in the header', async () => {
+    serve(snapshot({
+      status: { running: true, lint_run: true },
+      tests: [{
+        name: 'lint prompt', framework: 'task', context: { status: 'running', type: 'group' },
+        children: [{ name: 'messaging-review:report.mdx', framework: 'task', context: { status: 'running', type: 'task' }, message: 'tool: read_file' }],
+      }],
+      lint: [
+        { linter: 'messaging-review:report.mdx', work_dir: '/repo', success: false, duration: 0, violations: [], status: 'running', run_id: 'run-1' },
+        { linter: 'markdownlint', work_dir: '/repo', success: false, duration: 0, violations: [], status: 'pending' },
+      ],
+    }));
+    open('/lint');
+
+    const strip = await screen.findByRole('region', { name: 'Tasks' });
+    expect(within(strip).getByText('tool: read_file')).toBeTruthy();
+    expect((await screen.findAllByText('Running linters... (2 running · 0 done · 0 failed)')).length).toBeGreaterThan(0);
+  });
+
   it('ignores a lint finding through the server and says it was saved', async () => {
     const calls = serve(snapshot({
       status: { running: false, lint_run: true },

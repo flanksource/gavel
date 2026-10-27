@@ -33,6 +33,7 @@ import (
 	"github.com/flanksource/gavel/traces"
 	"github.com/flanksource/gavel/utils"
 	"github.com/flanksource/gavel/verify"
+	"github.com/flanksource/gavel/workspace"
 	"github.com/samber/lo"
 )
 
@@ -105,6 +106,7 @@ func (o OutputMode) ShouldShow(failed bool) bool {
 // TestOrchestrator orchestrates test execution.
 type TestOrchestrator struct {
 	RunOptions
+	configurationScoped bool
 	registry *Registry
 	streamer *TestStreamer
 	selector *selectorContext
@@ -140,20 +142,21 @@ type RunOptions struct {
 	Timeout                  time.Duration                    `json:"timeout,omitempty" yaml:"timeout,omitempty"`                                                                                                                                                             // Global wall-clock deadline for the entire test+lint run. 0 = default 20m. Cancels every in-flight subprocess when it fires.
 	LintTimeout              time.Duration                    `json:"lint_timeout,omitempty" yaml:"lint-timeout,omitempty"`                                                                                                                                                   // Per-linter subprocess deadline. 0 = the linter default (5m). Forwarded to executeLinters when --lint is set.
 	TestTimeout              time.Duration                    `json:"test_timeout,omitempty" yaml:"test-timeout,omitempty"`                                                                                                                                                   // Per-test-package subprocess deadline. 0 = none (test.testTimeout still reaches each package through its runtime).
+	Dirs                     workspace.Dirs                   `json:"-" yaml:"-"`                                                                                                                                                                                             // The run's resolved directories; .gavel state lives under Dirs.StateRoot.
 	Context                  context.Context                  `json:"-" yaml:"-"`                                                                                                                                                                                             // Parent context for the run. Nil = context.Background(). Global --timeout is applied on top.
 	Lint                     bool                             `json:"lint,omitempty" yaml:"lint,omitempty" flag:"lint"`                                                                                                                                                       // Run linters in parallel with tests
 	Cache                    bool                             `json:"cache,omitempty" yaml:"cache,omitempty" flag:"cache"`                                                                                                                                                    // Skip packages whose content fingerprint matches the last passing run
 	Changed                  bool                             `json:"changed,omitempty" yaml:"changed,omitempty" flag:"changed" help:"Run tests affected by local edits, or by the runner changeset in CI"`
 	Since                    string                           `json:"since,omitempty" yaml:"since,omitempty" flag:"since" help:"Select changes since a ref merge-base plus local edits; HEAD = local edits, staged = staged files"`
-	ChangedFiles             []string                         `json:"changed_files,omitempty" yaml:"changed-files,omitempty" flag:"changed-files"`                                                                                                                            // Only run packages affected by these workdir-relative files (no git query); unions with --changed/--since when either is set
-	Bench                    string                           `json:"bench,omitempty" yaml:"bench,omitempty" flag:"bench" help:"Run Go benchmarks matching this regex (. runs all)"`                                                                                          // Run Go benchmarks matching this regex ("." or "true" runs all). Auto-enabled for packages containing only Benchmark* funcs.
-	Fixtures                 bool                             `json:"fixtures,omitempty" yaml:"fixtures,omitempty" flag:"fixtures"`                                                                                                                                           // Discover and run fixture files. Off by default; can also be enabled via .gavel.yaml fixtures.enabled
-	FixtureFiles             []string                         `json:"fixture_files,omitempty" yaml:"fixture-files,omitempty" flag:"fixture-files"`                                                                                                                            // Globs for fixture discovery. Overrides .gavel.yaml fixtures.files. Default: **/*.fixture.{md,yaml,yml,json}
-	FixturesOnly             bool                             `json:"-" yaml:"-"`                                                                                                                                                                                             // Run only the supplied fixture runner without discovering ordinary test frameworks.
-	FixtureRunner            *fixtureOptions                  `json:"-" yaml:"-"`                                                                                                                                                                                             // Direct fixture command options; nil uses normal fixture discovery.
-	TraceHost                *traces.Host                     `json:"-" yaml:"-"`                                                                                                                                                                                             // The run's trace store, shared by the fixtures it runs; nil lets a fixture runner open its own when a fixture arms a trace.
-	ProcessTrace             *traces.ProcessTrace             `json:"-" yaml:"-"`                                                                                                                                                                                             // The run's process capture: attempts read their process's peaks from its samples, and a package that times out gets its Go test binary's goroutine dump checkpointed into its stacks. Nil records the dumps on the attempts only.
-	SigquitDumper            *SigquitDumper                   `json:"-" yaml:"-"`                                                                                                                                                                                             // The process capture's sigquit stack transport, which watches the go test batches for the Go test binaries it can dump. Nil watches none.
+	ChangedFiles             []string                         `json:"changed_files,omitempty" yaml:"changed-files,omitempty" flag:"changed-files"`                                   // Only run packages affected by these workdir-relative files (no git query); unions with --changed/--since when either is set
+	Bench                    string                           `json:"bench,omitempty" yaml:"bench,omitempty" flag:"bench" help:"Run Go benchmarks matching this regex (. runs all)"` // Run Go benchmarks matching this regex ("." or "true" runs all). Auto-enabled for packages containing only Benchmark* funcs.
+	Fixtures                 bool                             `json:"fixtures,omitempty" yaml:"fixtures,omitempty" flag:"fixtures"`                                                  // Discover and run fixture files. Off by default; can also be enabled via .gavel.yaml fixtures.enabled
+	FixtureFiles             []string                         `json:"fixture_files,omitempty" yaml:"fixture-files,omitempty" flag:"fixture-files"`                                   // Globs for fixture discovery. Overrides .gavel.yaml fixtures.files. Default: **/*.fixture.{md,yaml,yml,json}
+	FixturesOnly             bool                             `json:"-" yaml:"-"`                                                                                                    // Run only the supplied fixture runner without discovering ordinary test frameworks.
+	FixtureRunner            *fixtureOptions                  `json:"-" yaml:"-"`                                                                                                    // Direct fixture command options; nil uses normal fixture discovery.
+	TraceHost                *traces.Host                     `json:"-" yaml:"-"`                                                                                                    // The run's trace store, shared by the fixtures it runs; nil lets a fixture runner open its own when a fixture arms a trace.
+	ProcessTrace             *traces.ProcessTrace             `json:"-" yaml:"-"`                                                                                                    // The run's process capture: attempts read their process's peaks from its samples, and a package that times out gets its Go test binary's goroutine dump checkpointed into its stacks. Nil records the dumps on the attempts only.
+	SigquitDumper            *SigquitDumper                   `json:"-" yaml:"-"`                                                                                                    // The process capture's sigquit stack transport, which watches the go test batches for the Go test binaries it can dump. Nil watches none.
 	FixtureBenchmarkProgress func(fixtures.ExecutionSnapshot) `json:"-" yaml:"-"`
 	FixtureBenchmarkResult   func(*fixtures.BenchmarkReport)  `json:"-" yaml:"-"`
 	Frameworks               []string                         `json:"frameworks,omitempty" yaml:"framework,omitempty" flag:"framework"` // Restrict execution to these frameworks (e.g. jest, vitest, playwright, go, ginkgo). Empty = run every detected framework. Unknown names hard-fail.
@@ -167,7 +170,8 @@ type RunOptions struct {
 
 	PassThroughArgs []string `json:"pass_through_args,omitempty" yaml:"-"` // CLI-only arguments supplied after --. Focus aliases are normalized; remaining args require one selected framework.
 
-	Selection *changeset.Selection `flag:"-" json:"-" yaml:"-"`
+	Selection    *changeset.Selection `flag:"-" json:"-" yaml:"-"`
+	OptionFields map[string]bool      `json:"-" yaml:"-" flag:"-"`
 }
 
 type fixtureOptions = fixtures.RunnerOptions
@@ -429,6 +433,9 @@ func findNearestGoModRoot(dir string) string {
 }
 
 func Run(opts RunOptions) (any, error) {
+	if err := opts.Configure(); err != nil {
+		return nil, err
+	}
 	if opts.WorkDir == "" {
 		opts.WorkDir, _ = os.Getwd()
 	}
@@ -679,7 +686,7 @@ func runSingleRootWithUpdateOwnership(opts RunOptions, closeUpdates bool) (any, 
 		opts.FixtureRunner.TraceHost = opts.TraceHost
 		opts.FixtureRunner.ProcessTrace = opts.ProcessTrace
 		opts.FixtureRunner.ProcessRuntime = opts.FixtureRunner.ProcessRuntime.Merge(opts.fixtureRuntime())
-		fixtureTests, err := t.runFixtureRunner(*opts.FixtureRunner)
+		fixtureTests, err := t.runFixtureRunner(*opts.FixtureRunner, opts.runtimeWorkDir())
 		if err != nil {
 			fixtureErr = err
 		}
@@ -1032,7 +1039,8 @@ func (o *TestOrchestrator) detectAndRun(frameworks []Framework, startingPaths []
 			return nil, fmt.Errorf("failed to discover packages for %s: %w", fw, err)
 		}
 
-		packagesByFramework[fw] = filterIgnoredPackages(packages, o.Ignore)
+		packagesByFramework[fw], err = o.configuredPackages(fw, packages)
+		if err != nil { return nil, err }
 	}
 
 	for framework, items := range packagesByFramework {
@@ -1701,7 +1709,7 @@ func (o *TestOrchestrator) displayDryRun(packagesByFramework map[Framework][]str
 				testRun.Process.Args,
 				testRun.Process.Cwd,
 			)
-			runtime, _, runtimeErr := o.runtimeFor(framework)
+			runtime, _, runtimeErr := o.runtimeFor(framework, "")
 			if runtimeErr != nil {
 				return nil, runtimeErr
 			}
@@ -1827,17 +1835,24 @@ func (t *TestOrchestrator) runDiscoveredFixtures(globs []string) ([]parsers.Test
 	if err != nil {
 		return nil, err
 	}
-	return t.runFixtureRunner(fixtures.RunnerOptions{Context: opts.Context, ProcessRuntime: opts.fixtureRuntime(), Paths: fixtureFiles, WorkDir: opts.WorkDir, Logger: logger.StandardLogger(), ExecutablePath: execPath, TraceHost: opts.TraceHost, ProcessTrace: opts.ProcessTrace})
+	var tests []parsers.Test
+	for _, file := range fixtureFiles {
+		fixtureTests, err := t.runFixtureRunner(fixtures.RunnerOptions{Context: opts.Context, ProcessRuntime: opts.fixtureRuntime(), Paths: []string{file}, WorkDir: opts.WorkDir, Logger: logger.StandardLogger(), ExecutablePath: execPath, TraceHost: opts.TraceHost, ProcessTrace: opts.ProcessTrace}, filepath.Dir(file))
+		tests = append(tests, fixtureTests...)
+		if err != nil { return tests, err }
+	}
+	return tests, nil
 
 }
 
-func (t *TestOrchestrator) runFixtureRunner(runnerOpts fixtures.RunnerOptions) ([]parsers.Test, error) {
+func (t *TestOrchestrator) runFixtureRunner(runnerOpts fixtures.RunnerOptions, configDir string) ([]parsers.Test, error) {
 	streamer := t.streamer
 	onProgress, onReport := t.FixtureBenchmarkProgress, t.FixtureBenchmarkResult
-	config, err := verify.LoadGavelConfig(t.runtimeWorkDir())
+	config, err := verify.LoadGavelConfig(configDir)
 	if err != nil {
 		return nil, err
 	}
+	if framework := config.Test.Frameworks["fixture"]; framework.Enabled != nil && !*framework.Enabled { return nil, nil }
 	var runtimeArgs []string
 	runnerOpts.ProcessRuntime, runtimeArgs, err = config.RuntimeFor("test", "fixture", runnerOpts.ProcessRuntime)
 	if err != nil {
