@@ -25,10 +25,10 @@ type Options struct {
 	Runtime      processruntime.Options `flag:"-" yaml:"runtime,omitempty" json:"runtime,omitempty"`
 	Linters      []string               `flag:"linters" yaml:"linters,omitempty" help:"Only run the named linters (comma-separated or repeated). Empty = run every detected linter. Unknown names hard-fail."`
 	Ignore       []string               `flag:"ignore" yaml:"ignore,omitempty" help:"Glob patterns to exclude from linting"`
-	Exclude      []string               `flag:"exclude" yaml:"exclude,omitempty" help:"Exclude rule IDs or * patterns, optionally source:rule (repeat or comma-separate); disable native rules where supported"`
-	Triage       bool                   `flag:"triage" yaml:"triage,omitempty" help:"Interactive mode to select violation types to ignore"`
 	Generated    *bool                  `flag:"-" yaml:"generated,omitempty" json:"generated,omitempty"`
 	Tags         []string               `flag:"tags" yaml:"tags,omitempty" json:"tags,omitempty" help:"Build tags for supported linters (comma-separated or repeated)"`
+	Exclude      []string               `flag:"exclude" yaml:"exclude,omitempty" help:"Exclude rule IDs or * patterns, optionally source:rule (repeat or comma-separate); disable native rules where supported"`
+	Triage       bool                   `flag:"triage" yaml:"triage,omitempty" help:"Interactive mode to select violation types to ignore"`
 	Fix          bool                   `flag:"fix" yaml:"fix,omitempty" help:"Enable auto-fixing"`
 	NoCache      bool                   `flag:"no-lint-cache" yaml:"no-lint-cache,omitempty" help:"Disable linter result caching/debounce"`
 	Timeout      string                 `flag:"timeout" yaml:"timeout,omitempty" help:"Timeout per linter; overrides runtime.timeout (default 5m)"`
