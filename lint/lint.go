@@ -399,12 +399,12 @@ func dryRunGroup(opts Options) error {
 	if err := checkPassThrough(requestedLinters, opts.PassThroughArgs); err != nil {
 		return err
 	}
-
-	for _, name := range requestedLinters {
-		linter, ok := registry.Get(name)
 	if err := validateTags(registry, requestedLinters, opts.Tags); err != nil {
 		return err
 	}
+
+	for _, name := range requestedLinters {
+		linter, ok := registry.Get(name)
 		if !ok {
 			testrunner.PrintDryRunSkipped("lint", name, "unknown linter")
 			continue

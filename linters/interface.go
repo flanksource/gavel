@@ -465,12 +465,12 @@ func PrepareCommand(linter Linter, opts RunOptions) (string, []string, error) {
 		opts.ExtraArgs = append(append([]string(nil), opts.ExtraArgs...), excluded...)
 	}
 	if mixin, ok := linter.(OptionsMixin); ok {
-		mixin.SetOptions(opts)
-	}
-
 		if mapper, ok := linter.(TagsMapper); ok && len(opts.Tags) > 0 {
 			opts.ExtraArgs = append(append([]string(nil), opts.ExtraArgs...), mapper.TagsArgs(opts.Tags)...)
 		}
+		mixin.SetOptions(opts)
+	}
+
 	cmd := linter.Name()
 	var args []string
 	if dryRunner, ok := linter.(DryRunner); ok {
@@ -543,11 +543,11 @@ func RunLinterWithTask(ctx context.Context, task *clicky.Task, linter Linter, op
 	scoped := &LinterResult{WorkDir: opts.WorkDir, Violations: violations}
 	FilterViolationsByUserScope([]*LinterResult{scoped}, opts.WorkDir, opts.Scopes)
 	violations = scoped.Violations
+	violations, filterErr := filterGeneratedViolations(opts, violations)
+	err = errors.Join(err, filterErr)
 	timedOut := ctx.Err() == context.DeadlineExceeded
 	statusErr := err
 	if timedOut && statusErr == nil {
-	violations, filterErr := filterGeneratedViolations(opts, violations)
-	err = errors.Join(err, filterErr)
 		statusErr = ctx.Err()
 	}
 
