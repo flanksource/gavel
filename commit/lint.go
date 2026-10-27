@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/flanksource/clicky/api"
@@ -131,9 +132,12 @@ func applyLintGate(ctx context.Context, workDir string, files []string, gates Li
 		if r == nil || r.Skipped {
 			continue
 		}
+		if r.Error != "" {
+			return nil, fmt.Errorf("commit lint %s: %s", r.Linter, r.Error)
+		}
 		violationCount += len(r.Violations)
 	}
-	out := &LintGateResult{Results: results, Violations: violationCount, Gates: gates}
+	out := &LintGateResult{Results: results, Violations: violationCount, Gates: gates, Files: slices.Clone(files)}
 	if violationCount == 0 {
 		return out, nil
 	}
@@ -144,6 +148,9 @@ func applyLintGate(ctx context.Context, workDir string, files []string, gates Li
 // pre-commit lint pass produces findings (or runs cleanly). The CLI uses
 // Results to render output and feed the existing triage flow.
 type LintGateResult struct {
+	Files      []string
+	ConfigDir  string
+	Repair     verify.CommitLintConfig
 	Results    []*linters.LinterResult
 	Violations int
 	Gates      LintGates

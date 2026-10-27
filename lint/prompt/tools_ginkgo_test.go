@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/flanksource/captain/pkg/api"
+	"github.com/flanksource/clicky"
 	"github.com/flanksource/gavel/models"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -75,6 +76,39 @@ var _ = Describe("review tools", func() {
 		It("requires at least one path", func() {
 			_, err := call(lintTool, map[string]any{})
 			Expect(err).To(MatchError(ContainSubstring("paths")))
+		})
+
+		It("publishes each linter it runs as <review>/<linter>, running and then final", func() {
+			clicky.ClearGlobalTasks()
+			DeferCleanup(clicky.ClearGlobalTasks)
+			Expect(os.Mkdir(filepath.Join(workDir, ".git"), 0o755)).To(Succeed())
+			GinkgoT().Setenv("PATH", GinkgoT().TempDir())
+			GinkgoT().Setenv("HOME", GinkgoT().TempDir())
+			GinkgoT().Setenv("CI", "false")
+			writeFiles(workDir, map[string]string{
+				".uir.yaml":                "version: 1\n",
+				"package.json":             "{}\n",
+				".oxlintrc.json":           "{}\n",
+				"src/index.ts":             "export const value = 1;\n",
+				"node_modules/.bin/oxlint": "#!/bin/sh\nprintf '%s\\n' '{\"diagnostics\":[],\"number_of_files\":1,\"number_of_rules\":1}'\n",
+			})
+			publisher := &recordingPublisher{}
+			run = &reviewRun{WorkDir: workDir, Name: "review:src", Publisher: publisher}
+			run.setRun("run-1", "session-1")
+
+			out, err := call(lintTool, map[string]any{"paths": []any{"."}, "linters": []any{"uir", "oxlint"}})
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(out).To(HaveKeyWithValue("linter_errors", ContainElement(ContainSubstring("uir executable not found"))))
+			events := publisher.Events()
+			Expect(events[:2]).To(Equal([]string{"review:src/lint=running", "review:src/lint=removed"}))
+			Expect(events[2:]).To(ConsistOf("review:src/uir=final", "review:src/oxlint=final"))
+			identity := SatisfyAll(HaveField("RunID", "run-1"), HaveField("SessionID", "session-1"), HaveField("Violations", Not(BeNil())))
+			Expect(publisher.latest).To(SatisfyAll(
+				HaveKeyWithValue("review:src/uir", SatisfyAll(identity, HaveField("Success", false), HaveField("Error", ContainSubstring("uir executable not found")))),
+				HaveKeyWithValue("review:src/oxlint", SatisfyAll(identity, HaveField("Success", true))),
+			))
+			Expect(run.linted("")).To(ConsistOf(HaveField("Linter", "review:src/uir"), HaveField("Linter", "review:src/oxlint")))
 		})
 	})
 
@@ -164,6 +198,14 @@ var _ = Describe("review tools", func() {
 		})
 	})
 })
+
+func writeFiles(root string, files map[string]string) {
+	for path, contents := range files {
+		absolute := filepath.Join(root, path)
+		Expect(os.MkdirAll(filepath.Dir(absolute), 0o755)).To(Succeed())
+		Expect(os.WriteFile(absolute, []byte(contents), 0o755)).To(Succeed())
+	}
+}
 
 var _ = Describe("mergeViolations", func() {
 	msg := func(s string) *string { return &s }

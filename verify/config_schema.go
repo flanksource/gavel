@@ -27,8 +27,8 @@ func ConfigJSONSchema() (string, error) {
 func gavelConfigSchema() map[string]any {
 	specSchema := captainSpecSchema()
 	schema := object(
-		"Root configuration for Gavel. Place .gavel.yaml (or .gavel.yml) in ~/, the git root, "+
-			"or the target directory; layers merge in that order with later layers overriding earlier ones. "+
+		"Root configuration for Gavel. Place .gavel.yaml in ~/, the git root's parent, the git root, "+
+			"or any directory through the target; layers merge in that order with nearer layers overriding earlier ones. "+
 			"Run `gavel config [path]` to inspect the merged result.",
 		map[string]any{
 			"runtime":  runtimeSchema(),

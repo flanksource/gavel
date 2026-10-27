@@ -1,10 +1,12 @@
 package verify
 
 import (
+	"slices"
+
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/commons/merge"
 	"github.com/flanksource/gavel/processruntime"
-	"slices"
+	"github.com/flanksource/gavel/runconfig"
 )
 
 // Merge layers one .gavel.yaml config value over another: the override's set
@@ -44,5 +46,5 @@ func MergeGavelConfig(base, override GavelConfig) GavelConfig {
 // The lists that accumulate across layers instead of being replaced say so on the
 // field, with a `merge:"append"` tag.
 func configPolicy() merge.Policy {
-	return api.MergePolicy().With(merge.Policy{Merger: []any{PromptSpec{}, processruntime.Options{}}})
+	return api.MergePolicy().With(merge.Policy{Merger: []any{PromptSpec{}, processruntime.Options{}, runconfig.Test{}, runconfig.Lint{}}})
 }

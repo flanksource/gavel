@@ -15,6 +15,7 @@ import (
 	"github.com/flanksource/gavel/lint/shims"
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/utils"
+	"github.com/flanksource/gavel/workspace"
 )
 
 func resolveLintPath(workDir, value string) string {
@@ -86,8 +87,10 @@ func lintGitRoot(workDir string) string {
 	return workDir
 }
 
+// lintToolBinDir is <gitRoot>/.gavel: lint groups fan out per git root, and
+// a state-root walk started at a git root always stops there.
 func lintToolBinDir(gitRoot string) string {
-	return filepath.Join(gitRoot, ".gavel")
+	return filepath.Join(gitRoot, workspace.StateDirName)
 }
 
 func executableFileName(name string) string {

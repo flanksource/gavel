@@ -145,18 +145,20 @@ describe('ActivityView queries', () => {
     expect(FakeEventSource.instances).toHaveLength(0);
   });
 
-  it('resets the activity cache through a mutation and surfaces contextual failures', async () => {
+  it('clears activity and refreshes git metrics and cache status only after a successful reset', async () => {
     let resetFails = true;
+    const resetGitMetrics: GitMetrics = { ...gitMetrics, statusScans: null };
+    const refreshedCache: CacheStatus = { ...cacheStatus, counts: { pull_requests: 6 } };
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url === '/api/activity') {
         return new Response(JSON.stringify(firstSnapshot), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
       if (url === '/api/activity/cache') {
-        return new Response(JSON.stringify(cacheStatus), { status: 200, headers: { 'Content-Type': 'application/json' } });
+        return new Response(JSON.stringify(resetFails ? cacheStatus : refreshedCache), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
       if (url === '/api/git/metrics') {
-        return new Response(JSON.stringify(gitMetrics), { status: 200, headers: { 'Content-Type': 'application/json' } });
+        return new Response(JSON.stringify(resetFails ? gitMetrics : resetGitMetrics), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
       if (resetFails) {
         return new Response(JSON.stringify({ error: 'recorder unavailable' }), { status: 503, headers: { 'Content-Type': 'application/json' } });
@@ -169,8 +171,10 @@ describe('ActivityView queries', () => {
     await screen.findByText('13', { selector: '.text-2xl' });
 
     fireEvent.click(screen.getByRole('button', { name: 'Reset' }));
-    expect((await screen.findByRole('alert')).textContent).toContain('Reset HTTP activity: recorder unavailable');
+    expect((await screen.findByRole('alert')).textContent).toContain('Reset activity: recorder unavailable');
     expect(client.getQueryData(queryKeys.activity())).toEqual(firstSnapshot);
+    expect(client.getQueryData(queryKeys.gitMetrics())).toEqual(gitMetrics);
+    expect(client.getQueryData(queryKeys.activityCache())).toEqual(cacheStatus);
 
     resetFails = false;
     fireEvent.click(screen.getByRole('button', { name: 'Reset' }));
@@ -179,5 +183,8 @@ describe('ActivityView queries', () => {
       entries: [],
       stats: { total: 0, cacheHits: 0, errors: 0, totalBytes: 0, totalNs: 0, byKind: {} },
     });
+    await screen.findByText('No scans recorded yet.');
+    expect(client.getQueryData(queryKeys.gitMetrics())).toEqual(resetGitMetrics);
+    expect(client.getQueryData(queryKeys.activityCache())).toEqual(refreshedCache);
   });
 });
