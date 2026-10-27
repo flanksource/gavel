@@ -30,7 +30,7 @@ func FilterIgnoredViolations(results []*LinterResult, rules []verify.LintIgnoreR
 			}
 			match := false
 			for _, rule := range rules {
-				if rule.MatchesViolation(v) {
+				if rule.MatchesViolation(v, result.WorkDir) {
 					match = true
 					break
 				}

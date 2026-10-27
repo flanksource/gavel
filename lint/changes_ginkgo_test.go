@@ -9,6 +9,7 @@ import (
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/linters/golangci"
 	"github.com/flanksource/gavel/linters/ruff"
+	"github.com/flanksource/gavel/linters/uir"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -45,12 +46,32 @@ var _ = Describe("Changed lint execution", func() {
 		Expect(results[0].Violations).To(HaveExactElements(SatisfyAll(HaveField("File", "selected.go"), HaveField("Line", 42))))
 		Expect(linters.HasFailures(results)).To(BeFalse())
 	})
-	It("expands a changed native configuration to its whole project", func() {
+	It("analyses the whole project for a changed native configuration but reports only changed files", func() {
+		Expect(os.WriteFile(filepath.Join(root, ".uir.yaml"), []byte("version: 1\n# changed rules\n"), 0o600)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(root, "selected.go"), []byte("// changed comment\npackage sample\n"), 0o600)).To(Succeed())
+		results, err := Execute(Options{WorkDir: root, Linters: []string{"uir"}, Since: "HEAD"})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(results).To(HaveLen(1))
+		Expect(results[0].Violations).To(HaveExactElements(HaveField("File", "selected.go")))
+		Expect(linters.HasFailures(results)).To(BeFalse())
+	})
+	It("reports no violations when only the native configuration changed", func() {
 		Expect(os.WriteFile(filepath.Join(root, ".uir.yaml"), []byte("version: 1\n# changed rules\n"), 0o600)).To(Succeed())
 		results, err := Execute(Options{WorkDir: root, Linters: []string{"uir"}, Since: "HEAD"})
 		Expect(err).NotTo(HaveOccurred())
-		Expect(results[0].Violations).To(HaveLen(2))
-		Expect(linters.HasFailures(results)).To(BeTrue())
+		Expect(results).To(HaveLen(1))
+		Expect(results[0].Success).To(BeTrue())
+		Expect(results[0].Violations).To(BeEmpty())
+	})
+	It("widens Go analysis for module changes without widening the report scope", func() {
+		opts := Options{WorkDir: root, Files: []string{"go.work.sum", "selected.go"}, Selection: changeset.NewSelection(changeset.Options{Changed: true})}
+		for _, linter := range []linters.Linter{golangci.NewGolangciLint(root), uir.New(root)} {
+			inv, scopes, err := scopeInvocation(linterInvocation{linter: linter, projectRoot: root, files: opts.Files}, opts)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(inv.skip).To(BeFalse(), linter.Name())
+			Expect(inv.files).To(BeEmpty(), linter.Name())
+			Expect(scopes).To(Equal(opts.Files), linter.Name())
+		}
 	})
 	It("skips an empty selection before resolving linter executables", func() {
 		results, err := Execute(Options{WorkDir: root, Linters: []string{"uir"}, Since: "HEAD"})

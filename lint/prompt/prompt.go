@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -14,9 +15,11 @@ import (
 
 	"github.com/flanksource/captain/pkg/api"
 	captaincli "github.com/flanksource/captain/pkg/cli"
+	clickytask "github.com/flanksource/clicky/task"
 	"github.com/flanksource/gavel/git/changeset"
 	"github.com/flanksource/gavel/lint"
 	"github.com/flanksource/gavel/linters"
+	"github.com/flanksource/gavel/workspace"
 )
 
 type Options struct {
@@ -41,6 +44,9 @@ type Options struct {
 	// run, passed to the prompt as the files template variable.
 	Paths     []string             `flag:"-" json:"-" yaml:"-"`
 	Selection *changeset.Selection `flag:"-" json:"-" yaml:"-"`
+	// Dirs are the invocation's resolved directories; paths are relative to
+	// Dirs.Invocation.
+	Dirs workspace.Dirs `flag:"-" json:"-" yaml:"-"`
 	// Publisher, when set, sees every run's result as it changes: pending before
 	// any prompt starts, running once launched, then final.
 	Publisher Publisher            `flag:"-" json:"-" yaml:"-"`
@@ -51,6 +57,13 @@ type Options struct {
 type Publisher interface {
 	UpsertLintResult(*linters.LinterResult)
 	RemoveLintResult(linter, workDir string)
+}
+
+func (opts Options) workDir() (string, error) {
+	if opts.Dirs.Invocation == "" {
+		return "", errors.New("lint prompt: the invocation's workspace directories were not resolved")
+	}
+	return opts.Dirs.Invocation, nil
 }
 
 // LintScope maps the prompt's paths and change selection onto lint.Options so
@@ -130,7 +143,7 @@ func Run(ctx context.Context, opts Options) ([]*linters.LinterResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	workDir, err := os.Getwd()
+	workDir, err := opts.workDir()
 	if err != nil {
 		return nil, err
 	}
@@ -157,7 +170,7 @@ func Render(ctx context.Context, opts Options) ([]captaincli.PromptRenderResult,
 	if _, err := lint.ParseRuleExclusions(opts.Exclude); err != nil {
 		return nil, err
 	}
-	workDir, err := os.Getwd()
+	workDir, err := opts.workDir()
 	if err != nil {
 		return nil, err
 	}
@@ -174,7 +187,7 @@ func Render(ctx context.Context, opts Options) ([]captaincli.PromptRenderResult,
 	var rendered []captaincli.PromptRenderResult
 	for _, review := range opts.reviews(paths) {
 		run := &reviewRun{WorkDir: workDir}
-		result, err := captaincli.RenderPrompt(ctx, invocation(opts.Prompt.File, review.Prompt, stdinReader(stdin), run.tools()))
+		result, err := captaincli.RenderPrompt(ctx, invocation(invocationInput{File: opts.Prompt.File, Prompt: review.Prompt, Stdin: stdinReader(stdin), Tools: run.tools()}))
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", review.Name, err)
 		}
@@ -183,9 +196,24 @@ func Render(ctx context.Context, opts Options) ([]captaincli.PromptRenderResult,
 	return rendered, nil
 }
 
-func invocation(file string, prompt captaincli.AIPromptOptions, stdin io.Reader, tools []api.ToolDefinition) captaincli.PromptInvocation {
+type invocationInput struct {
+	File   string
+	Prompt captaincli.AIPromptOptions
+	Stdin  io.Reader
+	Tools  []api.ToolDefinition
+	// Group and Name place a launched run's task in the caller's group.
+	Group   *clickytask.Group
+	Name    string
+	OnEvent func(int, api.Event)
+}
+
+func invocation(input invocationInput) captaincli.PromptInvocation {
+	prompt := input.Prompt
 	prompt.RequiredPresets = append(append([]string(nil), prompt.RequiredPresets...), "lint")
-	return captaincli.PromptInvocation{Reference: file, Options: prompt, Stdin: stdin, Tools: tools}
+	return captaincli.PromptInvocation{
+		Reference: input.File, Options: prompt, Stdin: input.Stdin, Tools: input.Tools,
+		Group: input.Group, Name: input.Name, OnEvent: input.OnEvent,
+	}
 }
 
 func stdinReader(stdin []byte) io.Reader {

@@ -47,16 +47,12 @@ func LoadGavelConfig(cwd string) (GavelConfig, error) {
 	if cached, ok := cachedGavelConfig(absCwd, layers); ok {
 		return cloneGavelConfig(cached)
 	}
-
+	configs, err := loadConfigLayers(absCwd, layers)
+	if err != nil {
+		return GavelConfig{}, err
+	}
 	cfg := DefaultGavelConfig()
-	for _, layer := range layers {
-		if !layer.exists {
-			continue
-		}
-		parsed, err := parseGavelConfig(layer.path, layer.data)
-		if err != nil {
-			return GavelConfig{}, err
-		}
+	for _, parsed := range configs {
 		cfg = MergeGavelConfig(cfg, parsed)
 	}
 	storeGavelConfig(absCwd, layers, cfg)
@@ -105,6 +101,13 @@ func GavelConfigDirs(absTarget string) []GavelConfigDir {
 			add(originGitRootParent, parent)
 		}
 		add(originGitRoot, gitRoot)
+		var nested []string
+		for dir := filepath.Dir(absTarget); absTarget != gitRoot && dir != gitRoot && dir != filepath.Dir(dir); dir = filepath.Dir(dir) {
+			nested = append(nested, dir)
+		}
+		for i := len(nested) - 1; i >= 0; i-- {
+			add(originParentDirectory, nested[i])
+		}
 	}
 	add(originTargetDirectory, absTarget)
 	return dirs
@@ -134,7 +137,7 @@ func LoadGavelConfigTrace(path string) (GavelConfigTrace, error) {
 		if candidate.Origin == originTargetDirectory && targetPath != targetDir {
 			candidate.Origin = originParentDirectory
 		}
-		cfg, raw, err := loadSingleGavelConfig(candidate.Path)
+		data, err := readFileInDir(dir.Dir, GavelConfigFileName)
 		if err != nil {
 			if os.IsNotExist(err) {
 				continue
@@ -142,7 +145,11 @@ func LoadGavelConfigTrace(path string) (GavelConfigTrace, error) {
 			return GavelConfigTrace{}, err
 		}
 
-		candidate.Raw = raw
+		cfg, err := parseGavelConfig(candidate.Path, data)
+		if err != nil {
+			return GavelConfigTrace{}, err
+		}
+		candidate.Raw = string(data)
 		candidate.Config = cfg
 		trace.Sources = append(trace.Sources, candidate)
 		trace.Merged = MergeGavelConfig(trace.Merged, cfg)
@@ -196,6 +203,10 @@ func parseGavelConfig(path string, data []byte) (GavelConfig, error) {
 	if err != nil {
 		return GavelConfig{}, fmt.Errorf("parse %s: %w", path, err)
 	}
+	return decodeGavelConfig(path, encoded)
+}
+
+func decodeGavelConfig(path string, encoded []byte) (GavelConfig, error) {
 	var gc GavelConfig
 	if err := DecodeJSON(encoded, &gc, DecodeOptions{Source: path, Renames: legacyFieldHints}); err != nil {
 		return GavelConfig{}, err
@@ -213,6 +224,12 @@ func parseGavelConfig(path string, data []byte) (GavelConfig, error) {
 		return GavelConfig{}, err
 	}
 	setPromptSpecBaseDirs(&gc, filepath.Dir(path))
+	gc.resolveOptionPaths(filepath.Dir(path))
+	for i := range gc.Lint.Ignore {
+		if gc.Lint.Ignore[i].File != "" {
+			gc.Lint.Ignore[i].baseDir = filepath.Dir(path)
+		}
+	}
 	return gc, nil
 }
 

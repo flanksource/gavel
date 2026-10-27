@@ -3,21 +3,26 @@ package verify
 import (
 	"fmt"
 	"github.com/flanksource/gavel/processruntime"
+	"github.com/flanksource/gavel/runconfig"
 	"path/filepath"
 	"slices"
 )
 
 type TestFrameworkConfig struct {
+	Enabled *bool                  `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	Options runconfig.Test         `yaml:"options,omitempty" json:"options,omitempty"`
 	Args    []string               `yaml:"args,omitempty" json:"args,omitempty"`
 	Runtime processruntime.Options `yaml:"runtime,omitempty" json:"runtime,omitempty"`
 }
 
 type RuntimeLayer struct {
-	Global     processruntime.Options
-	Lint       processruntime.Options
-	Test       processruntime.Options
-	Linters    map[string]LintLinterConfig
-	Frameworks map[string]TestFrameworkConfig
+	Global      processruntime.Options
+	Lint        processruntime.Options
+	Test        processruntime.Options
+	Linters     map[string]LintLinterConfig
+	Frameworks  map[string]TestFrameworkConfig
+	LintOptions runconfig.Lint
+	TestOptions runconfig.Test
 }
 
 func (c GavelConfig) RuntimeFor(category, name string, caller processruntime.Options) (processruntime.Options, []string, error) {
@@ -34,12 +39,12 @@ func (c GavelConfig) RuntimeFor(category, name string, caller processruntime.Opt
 		runtime = runtime.Merge(layer.Global)
 		if category == "lint" {
 			runtime = runtime.Merge(layer.Lint).Merge(layer.Linters[name].Runtime)
-			if len(layer.Linters[name].Args) > 0 {
+			if layer.Linters[name].Args != nil {
 				args = slices.Clone(layer.Linters[name].Args)
 			}
 		} else {
 			runtime = runtime.Merge(layer.Test).Merge(layer.Frameworks[frameworkKey(name)].Runtime)
-			if len(layer.Frameworks[frameworkKey(name)].Args) > 0 {
+			if layer.Frameworks[frameworkKey(name)].Args != nil {
 				args = slices.Clone(layer.Frameworks[frameworkKey(name)].Args)
 			}
 		}
@@ -60,7 +65,7 @@ func (c GavelConfig) runtimeLayer() RuntimeLayer {
 	if c.Test.TestTimeout != "" && test.Timeout == nil {
 		test.Timeout = &c.Test.TestTimeout
 	}
-	return RuntimeLayer{Global: c.Runtime, Lint: lint, Test: test, Linters: c.Lint.Linters, Frameworks: frameworks}
+	return RuntimeLayer{Global: c.Runtime, Lint: lint, Test: test, Linters: c.Lint.Linters, Frameworks: frameworks, LintOptions: c.Lint.Options, TestOptions: c.Test.Options}
 }
 
 func frameworkKey(name string) string {
@@ -72,12 +77,24 @@ func frameworkKey(name string) string {
 }
 
 func (c GavelConfig) validateRuntime() error {
+	if err := runconfig.Validate(c.Lint.Options, false); err != nil {
+		return fmt.Errorf("lint.options: %w", err)
+	}
+	if err := runconfig.Validate(c.Test.Options, false); err != nil {
+		return fmt.Errorf("test.options: %w", err)
+	}
+	if n := c.Commit.Lint.AIFixMaxIterations; n != nil && *n < 1 {
+		return fmt.Errorf("commit.lint.aiFixMaxIterations must be positive")
+	}
 	for _, options := range []processruntime.Options{c.Runtime, c.Lint.Runtime, c.Test.Runtime} {
 		if err := options.Validate(); err != nil {
 			return err
 		}
 	}
 	for name, config := range c.Lint.Linters {
+		if err := runconfig.Validate(config.Options, true); err != nil {
+			return fmt.Errorf("lint.linters.%s.options: %w", name, err)
+		}
 		if !slices.Contains(BuiltinLinterNames, name) {
 			return fmt.Errorf("unknown linter %q in lint.linters", name)
 		}
@@ -90,6 +107,9 @@ func (c GavelConfig) validateRuntime() error {
 	}
 	frameworks := make(map[string]bool)
 	for name, config := range c.Test.Frameworks {
+		if err := runconfig.Validate(config.Options, true); err != nil {
+			return fmt.Errorf("test.frameworks.%s.options: %w", name, err)
+		}
 		key := frameworkKey(name)
 		if !slices.Contains([]string{"go", "ginkgo", "jest", "vitest", "playwright", "fixture"}, key) {
 			return fmt.Errorf("unknown framework %q in test.frameworks", name)

@@ -5,17 +5,19 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/flanksource/captain/pkg/api"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
-	"github.com/flanksource/captain/pkg/api"
 	captaincli "github.com/flanksource/captain/pkg/cli"
 	"github.com/flanksource/clicky"
 	clickytask "github.com/flanksource/clicky/task"
-	flanksourceContext "github.com/flanksource/commons/context"
+	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/models"
+	testui "github.com/flanksource/gavel/testrunner/ui"
 )
 
 // Captain's async prompt-run seam, swapped out by specs.
@@ -35,32 +37,27 @@ type reviewsInput struct {
 	OnEvent     func(int, api.Event)
 }
 
-// runReviews runs each review in a clicky group, at most Concurrency at once.
-// Every review is published as pending before the group starts.
+// runReviews launches every review's Captain run into one clicky group, which
+// runs at most Concurrency of them at once, then awaits them all. Every review
+// is published as pending before the first launch; results keep review order.
 func runReviews(ctx context.Context, input reviewsInput) []*linters.LinterResult {
 	for _, review := range input.Reviews {
 		input.publish(&linters.LinterResult{Linter: review.Name, WorkDir: input.WorkDir, Status: linters.LinterStatusPending, Violations: []models.Violation{}})
 	}
-	group := clicky.StartGroup[[]*linters.LinterResult]("lint prompt", clickytask.WithConcurrency(max(input.Concurrency, 1)))
-	tasks := make([]clickytask.TypedTask[[]*linters.LinterResult], 0, len(input.Reviews))
-	for _, review := range input.Reviews {
-		tasks = append(tasks, group.Add(review.Name, func(_ flanksourceContext.Context, t *clickytask.Task) ([]*linters.LinterResult, error) {
-			results := input.run(ctx, review)
-			for _, result := range results {
-				if !result.Success {
-					t.Warnf("%s: %s", result.Linter, result.Error)
-				}
-			}
-			return results, nil
-		}))
+	group := clicky.StartGroup[captaincli.PromptRunSummary](testui.PromptLintTaskGroupName, clickytask.WithConcurrency(max(input.Concurrency, 1)))
+	awaits := make([]func() []*linters.LinterResult, len(input.Reviews))
+	for i, review := range input.Reviews {
+		awaits[i] = input.launch(ctx, review, group.Group)
 	}
+	perReview := make([][]*linters.LinterResult, len(input.Reviews))
+	var wg sync.WaitGroup
+	for i, await := range awaits {
+		wg.Go(func() { perReview[i] = await() })
+	}
+	wg.Wait()
 	group.WaitFor()
 	var results []*linters.LinterResult
-	for i, task := range tasks {
-		got, err := task.GetResult()
-		if err != nil {
-			got = []*linters.LinterResult{{Linter: input.Reviews[i].Name, WorkDir: input.WorkDir, Error: err.Error()}}
-		}
+	for _, got := range perReview {
 		results = append(results, got...)
 	}
 	return results
@@ -72,43 +69,56 @@ func (input reviewsInput) publish(result *linters.LinterResult) {
 	}
 }
 
-// run launches one review and awaits it. A multi-model prompt launches one run
-// per model, each reported on its own.
-func (input reviewsInput) run(ctx context.Context, review review) []*linters.LinterResult {
-	run := &reviewRun{WorkDir: input.WorkDir}
+// launch starts one review's run as a task of group and returns the await for
+// its results: the run's own, then the linters its agent ran. A multi-model
+// prompt launches one run per model, each reported on its own.
+func (input reviewsInput) launch(ctx context.Context, review review, group *clickytask.Group) func() []*linters.LinterResult {
+	run := &reviewRun{WorkDir: input.WorkDir, Name: review.Name, Publisher: input.Publisher}
 	start := time.Now()
-	inv := invocation(input.File, review.Prompt, stdinReader(input.Stdin), run.tools())
-	inv.OnEvent = input.OnEvent
-	launched, err := launchPrompt(ctx, inv)
+	launched, err := launchPrompt(ctx, invocation(invocationInput{
+		File: input.File, Prompt: review.Prompt, Stdin: stdinReader(input.Stdin), Tools: run.tools(),
+		Group: group, Name: review.Name, OnEvent: input.OnEvent,
+	}))
 	if err != nil {
 		result := run.result(summaryInput{Name: review.Name, Err: err, Elapsed: time.Since(start)})
-		input.publish(result)
-		return []*linters.LinterResult{result}
+		input.finish(result)
+		return func() []*linters.LinterResult { return []*linters.LinterResult{result} }
 	}
+	run.setRun(launched.RunID, launched.SessionID)
 	if len(launched.Runs) == 0 {
 		running := func(violations []models.Violation) {
-			input.publish(&linters.LinterResult{Linter: review.Name, WorkDir: input.WorkDir, Status: linters.LinterStatusRunning, RunID: launched.RunID, Violations: violations})
+			input.publish(&linters.LinterResult{Linter: review.Name, WorkDir: input.WorkDir, Status: linters.LinterStatusRunning, RunID: launched.RunID, SessionID: launched.SessionID, Violations: violations})
 		}
 		running(run.Reported())
 		run.setOnReport(running)
-		return []*linters.LinterResult{input.await(ctx, run, review.Name, launched.RunID, start)}
+		return func() []*linters.LinterResult {
+			result := input.await(ctx, run, review.Name, launched.RunID, start)
+			return append([]*linters.LinterResult{result}, run.linted(result.SessionID)...)
+		}
 	}
 	if input.Publisher != nil {
 		input.Publisher.RemoveLintResult(review.Name, input.WorkDir)
 	}
-	results := make([]*linters.LinterResult, len(launched.Runs))
-	done := make(chan struct{})
-	for i, variant := range launched.Runs {
-		input.publish(&linters.LinterResult{Linter: review.Name + ":" + variant.Selector, WorkDir: input.WorkDir, Status: linters.LinterStatusRunning, RunID: variant.RunID, Violations: []models.Violation{}})
-		go func() {
-			defer func() { done <- struct{}{} }()
-			results[i] = input.await(ctx, run, review.Name+":"+variant.Selector, variant.RunID, start)
-		}()
+	for _, variant := range launched.Runs {
+		input.publish(&linters.LinterResult{Linter: review.Name + ":" + variant.Selector, WorkDir: input.WorkDir, Status: linters.LinterStatusRunning, RunID: variant.RunID, SessionID: variant.SessionID, Violations: []models.Violation{}})
 	}
-	for range launched.Runs {
-		<-done
+	return func() []*linters.LinterResult {
+		results := make([]*linters.LinterResult, len(launched.Runs))
+		var wg sync.WaitGroup
+		for i, variant := range launched.Runs {
+			wg.Go(func() { results[i] = input.await(ctx, run, review.Name+":"+variant.Selector, variant.RunID, start) })
+		}
+		wg.Wait()
+		return append(results, run.linted("")...)
 	}
-	return results
+}
+
+// finish publishes a run's final result and warns when it failed.
+func (input reviewsInput) finish(result *linters.LinterResult) {
+	if !result.Success {
+		logger.Warnf("%s: %s", result.Linter, result.Error)
+	}
+	input.publish(result)
 }
 
 func (input reviewsInput) await(ctx context.Context, run *reviewRun, name, runID string, start time.Time) *linters.LinterResult {
@@ -121,7 +131,7 @@ func (input reviewsInput) await(ctx context.Context, run *reviewRun, name, runID
 		}
 	}
 	result := run.result(summaryInput{Name: name, RunID: runID, Summary: summary, Err: err, Elapsed: time.Since(start)})
-	input.publish(result)
+	input.finish(result)
 	return result
 }
 
@@ -143,6 +153,7 @@ func (r *reviewRun) result(input summaryInput) *linters.LinterResult {
 	}
 	result := output.result()
 	result.RunID = input.RunID
+	result.SessionID = firstNonEmpty(input.Summary.SessionID, r.identity().SessionID)
 	result.Violations = mergeViolations(result.Violations, r.Reported())
 	if result.Violations == nil {
 		result.Violations = []models.Violation{}

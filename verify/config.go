@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/commons/collections"
 	"github.com/flanksource/gavel/models"
 	"github.com/flanksource/gavel/processruntime"
+	"github.com/flanksource/gavel/runconfig"
 	"github.com/flanksource/gavel/todos/types"
 	yamlv3 "gopkg.in/yaml.v3"
 )
@@ -120,12 +122,13 @@ func (p *RestartPolicy) UnmarshalYAML(node *yamlv3.Node) error {
 // globs so directory traversal patterns ("pkg/**/*.go") behave as expected.
 // At least one of Rule/Source/File must be set; an empty rule never matches.
 type LintIgnoreRule struct {
-	Rule   string `yaml:"rule,omitempty" json:"rule,omitempty"`
-	Source string `yaml:"source,omitempty" json:"source,omitempty"`
-	File   string `yaml:"file,omitempty" json:"file,omitempty"`
+	baseDir string
+	Rule    string `yaml:"rule,omitempty" json:"rule,omitempty"`
+	Source  string `yaml:"source,omitempty" json:"source,omitempty"`
+	File    string `yaml:"file,omitempty" json:"file,omitempty"`
 }
 
-func (r LintIgnoreRule) MatchesViolation(v models.Violation) bool {
+func (r LintIgnoreRule) MatchesViolation(v models.Violation, workDir string) bool {
 	if r.Source != "" {
 		matched, negated := collections.MatchItem(v.Source, r.Source)
 		if negated || !matched {
@@ -142,6 +145,16 @@ func (r LintIgnoreRule) MatchesViolation(v models.Violation) bool {
 		}
 	}
 	if r.File != "" {
+		if r.baseDir != "" {
+			if !filepath.IsAbs(v.File) {
+				v.File = filepath.Join(workDir, v.File)
+			}
+			rel, err := filepath.Rel(r.baseDir, v.File)
+			if err != nil {
+				return false
+			}
+			v.File = filepath.ToSlash(rel)
+		}
 		matched, _ := doublestar.Match(r.File, v.File)
 		if !matched {
 			return false
@@ -151,6 +164,7 @@ func (r LintIgnoreRule) MatchesViolation(v models.Violation) bool {
 }
 
 type LintConfig struct {
+	Options runconfig.Lint         `yaml:"options,omitempty" json:"options,omitempty"`
 	Runtime processruntime.Options `yaml:"runtime,omitempty" json:"runtime,omitempty"`
 	// AIFix is the AI spec used to repair lint violations. It is independent of
 	// commit.message because source repair needs an editing-capable agent while
@@ -163,6 +177,7 @@ type LintConfig struct {
 }
 
 type LintLinterConfig struct {
+	Options runconfig.Lint         `yaml:"options,omitempty" json:"options,omitempty"`
 	Enabled *bool                  `yaml:"enabled,omitempty" json:"enabled,omitempty"`
 	Args    []string               `yaml:"args,omitempty" json:"args,omitempty"`
 	Runtime processruntime.Options `yaml:"runtime,omitempty" json:"runtime,omitempty"`
@@ -229,6 +244,7 @@ type CommitConfig struct {
 	// commit-group summaries (`gavel git analyze --summary`). Each overrides the
 	// base ai: spec field-wise; empty uses the built-in default.
 	Message  PromptSpec `yaml:"message,omitempty" json:"message,omitempty"`
+	Fix      PromptSpec `yaml:"fix,omitempty" json:"fix,omitempty"`
 	Grouping PromptSpec `yaml:"grouping,omitempty" json:"grouping,omitempty"`
 	Summary  PromptSpec `yaml:"summary,omitempty" json:"summary,omitempty"`
 	// MaxCommits caps the number of commits AI grouping may produce (0 = default).
@@ -259,8 +275,10 @@ type CommitTidyConfig struct {
 //
 // CLI flags --lint and --lint-secrets override these per-invocation.
 type CommitLintConfig struct {
-	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
-	Secrets *bool `yaml:"secrets,omitempty" json:"secrets,omitempty"`
+	AIFix              *bool `yaml:"aiFix,omitempty" json:"aiFix,omitempty"`
+	AIFixMaxIterations *int  `yaml:"aiFixMaxIterations,omitempty" json:"aiFixMaxIterations,omitempty"`
+	Enabled            *bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	Secrets            *bool `yaml:"secrets,omitempty" json:"secrets,omitempty"`
 }
 
 // PrecommitConfig configures the combined pre-commit gate for commit.gitignore
@@ -354,6 +372,7 @@ type StatusConfig struct {
 
 // TestConfig configures `gavel test`.
 type TestConfig struct {
+	Options    runconfig.Test                 `yaml:"options,omitempty" json:"options,omitempty"`
 	Runtime    processruntime.Options         `yaml:"runtime,omitempty" json:"runtime,omitempty"`
 	Frameworks map[string]TestFrameworkConfig `yaml:"frameworks,omitempty" json:"frameworks,omitempty"`
 	// OutlineSummary is the AI spec for the per-test summary used by

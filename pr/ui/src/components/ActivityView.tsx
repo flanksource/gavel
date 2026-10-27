@@ -67,9 +67,16 @@ export function ActivityView() {
     mutationFn: () => mutationJSON({
       url: '/api/activity/reset',
       method: 'POST',
-      context: 'Reset HTTP activity',
+      context: 'Reset activity',
     }),
-    onSuccess: () => queryClient.setQueryData(queryKeys.activity(), emptyActivity),
+    onSuccess: async () => {
+      await queryClient.cancelQueries({ queryKey: ['activity'] });
+      queryClient.setQueryData(queryKeys.activity(), emptyActivity);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.activityCache(), exact: true }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.gitMetrics(), exact: true }),
+      ]);
+    },
   });
 
   useEffect(() => {

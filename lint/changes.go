@@ -2,6 +2,7 @@ package lint
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -53,44 +54,39 @@ func (o Options) WithChanges() (Options, bool, error) {
 }
 
 func scopeInvocation(inv linterInvocation, opts Options) (linterInvocation, []string, error) {
-	scopes := resultScopes(&linters.LinterResult{Linter: inv.linter.Name(), WorkDir: inv.projectRoot}, opts.WorkDir, opts.Files)
 	if opts.Selection.Active() {
-		for _, file := range opts.Files {
-			absolute := resolveLintPath(opts.WorkDir, file)
-			if rooted, ok := inv.linter.(linters.ProjectRooted); ok && filepath.Dir(absolute) == inv.projectRoot && slices.Contains(rooted.ProjectRootMarkers(), filepath.Base(absolute)) {
-				scopes = append(scopes, inv.projectRoot)
+		if trigger := projectWideChange(inv, opts); trigger != "" {
+			logger.Infof("%s: %s changed; analysing %s, reporting changed files only", inv.linter.Name(), trigger, inv.projectRoot)
+			if inv.configDir == "" {
+				inv.files = nil
 			}
-			if (inv.linter.Name() == "golangci-lint" || inv.linter.Name() == "uir") && utils.IsWithin(inv.projectRoot, filepath.Dir(absolute)) {
-				switch filepath.Base(absolute) {
-				case "go.mod", "go.sum", "go.work", "go.work.sum":
-					scopes = append(scopes, inv.projectRoot)
-				}
-			}
+			return inv, slices.Clone(opts.Files), nil
 		}
 	}
+	scopes := resultScopes(&linters.LinterResult{Linter: inv.linter.Name(), WorkDir: inv.projectRoot}, opts.WorkDir, opts.Files)
 	if slices.Contains(scopes, inv.projectRoot) {
-		inv.files = nil
+		if inv.configDir == "" {
+			inv.files = nil
+		}
 		return inv, scopes, nil
 	}
 	if !opts.Selection.Active() {
-		return inv, scopes, nil
+		applicable, err := anyRequestedFileApplies(inv)
+		inv.skip = !applicable
+		return inv, scopes, err
 	}
 	files := make([]string, 0, len(inv.files))
 	applicable := false
 	for _, file := range inv.files {
-		matches := len(inv.linter.DefaultIncludes()) == 0
-		for _, pattern := range inv.linter.DefaultIncludes() {
-			match, err := doublestar.Match(pattern, filepath.ToSlash(file))
-			if err != nil {
-				return inv, nil, err
-			}
-			matches = matches || match
+		matches, err := matchesLinterIncludes(inv.linter, file)
+		if err != nil {
+			return inv, nil, err
 		}
 		if !matches {
 			continue
 		}
 		applicable = true
-		_, err := os.Lstat(resolveLintPath(inv.projectRoot, file))
+		_, err = os.Lstat(resolveLintPath(inv.projectRoot, file))
 		if os.IsNotExist(err) {
 			continue
 		}
@@ -101,8 +97,70 @@ func scopeInvocation(inv linterInvocation, opts Options) (linterInvocation, []st
 	}
 	inv.files = files
 	inv.skip = !applicable
-	if inv.linter.Name() == "golangci-lint" {
+	if inv.linter.Name() == "golangci-lint" && inv.configDir == "" {
 		inv.files = nil
 	}
 	return inv, scopes, nil
+}
+
+// projectWideChange returns the changed file (config, root marker or Go
+// module file) that requires the linter to analyse its whole project. The
+// reported violations stay limited to the changed files.
+func projectWideChange(inv linterInvocation, opts Options) string {
+	probe := &linters.LinterResult{Linter: inv.linter.Name(), WorkDir: inv.projectRoot}
+	for _, file := range opts.Files {
+		absolute := resolveLintPath(opts.WorkDir, file)
+		if slices.Contains(resultScopes(probe, opts.WorkDir, []string{file}), inv.projectRoot) {
+			return file
+		}
+		if rooted, ok := inv.linter.(linters.ProjectRooted); ok && filepath.Dir(absolute) == inv.projectRoot && slices.Contains(rooted.ProjectRootMarkers(), filepath.Base(absolute)) {
+			return file
+		}
+		if (inv.linter.Name() == "golangci-lint" || inv.linter.Name() == "uir") && utils.IsWithin(inv.projectRoot, filepath.Dir(absolute)) {
+			switch filepath.Base(absolute) {
+			case "go.mod", "go.sum", "go.work", "go.work.sum":
+				return file
+			}
+		}
+	}
+	return ""
+}
+
+// anyRequestedFileApplies reports whether an explicit file list gives the
+// linter something to lint: a directory, or a file matching its includes.
+func anyRequestedFileApplies(inv linterInvocation) (bool, error) {
+	if len(inv.files) == 0 {
+		return true, nil
+	}
+	for _, file := range inv.files {
+		absolute := resolveLintPath(inv.projectRoot, file)
+		if info, err := os.Stat(absolute); err == nil && info.IsDir() {
+			return true, nil
+		}
+		if rel, err := filepath.Rel(inv.projectRoot, absolute); err == nil {
+			file = rel
+		}
+		matches, err := matchesLinterIncludes(inv.linter, file)
+		if err != nil || matches {
+			return matches, err
+		}
+	}
+	return false, nil
+}
+
+func matchesLinterIncludes(linter linters.Linter, file string) (bool, error) {
+	includes := linter.DefaultIncludes()
+	if len(includes) == 0 {
+		return true, nil
+	}
+	for _, pattern := range includes {
+		match, err := doublestar.Match(pattern, filepath.ToSlash(file))
+		if err != nil {
+			return false, fmt.Errorf("match %s include %q against %s: %w", linter.Name(), pattern, file, err)
+		}
+		if match {
+			return true, nil
+		}
+	}
+	return false, nil
 }

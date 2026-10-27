@@ -147,6 +147,9 @@ func ParsePromptSource(raw string) (api.Spec, string, map[string]any, error) {
 // override field (e.g. "commit.message" → GavelConfig.Commit.Message), failing
 // loud on a bad path or a non-PromptSpec target.
 func promptSpecAt(cfg verify.GavelConfig, dotted string) (verify.PromptSpec, error) {
+	if dotted == prompts.CommitFix {
+		return cfg.CommitFixSpec(), nil
+	}
 	v := reflect.ValueOf(cfg)
 	for _, segment := range strings.Split(dotted, ".") {
 		if v.Kind() != reflect.Struct {
