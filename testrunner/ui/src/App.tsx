@@ -38,6 +38,7 @@ import {
 import { gavelRegistry } from './adapters';
 import { BenchView } from './components/BenchView';
 import { FixtureBenchView } from './components/FixtureBenchView';
+import { LintTasks } from './components/LintTasks';
 import { RerunDialog } from './components/RerunDialog';
 import { RunActions } from './components/RunActions';
 import { RunHistory } from './components/RunHistory';
@@ -252,8 +253,8 @@ export function App({ runId, navigate = loadPage }: AppProps = {}) {
   // "Running tests across packages" virtual task group so the only pending row
   // is "Running linters". Real parsed test results stay visible.
   const displayedTests = useMemo(
-    () => (isLintOnlyPhase(tests, !!snapshotStatus.running, lintRun) ? stripTestTaskGroup(tests) : tests),
-    [tests, snapshotStatus.running, lintRun],
+    () => (isLintOnlyPhase(tests, !!snapshotStatus.running) ? stripTestTaskGroup(tests) : tests),
+    [tests, snapshotStatus.running],
   );
   const totals = useMemo(() => aggregateStatusCounts(displayedTests), [displayedTests]);
   const filteredTests = useMemo(
@@ -574,31 +575,36 @@ export function App({ runId, navigate = loadPage }: AppProps = {}) {
         ))}
 
         {route.tab === 'lint' && (
-          <LintResults
-            results={lint ?? []}
-            grouping={route.lintGrouping}
-            onGroupingChange={onLintGroupingChange}
-            filters={route.lintFilters}
-            onFiltersChange={onLintFiltersChange}
-            selected={selectedLint ? route.selectedPath : null}
-            onSelect={onSelectLint}
-            expandAll={expandAll}
-            onExpandAllChange={setExpandAll}
-            onIgnore={onIgnore}
-            ignoreBusy={ignoreBusy}
-            onOpenFile={onOpenFile}
-            renderRun={renderPromptRun}
-            headerSlot={(
-              <>
-                <span className="truncate text-sm text-muted-foreground">{status}</span>
-                <Button type="button" size="sm" disabled={rerunBusy} onClick={onRerunLint} title={selectedLint ? 'Rerun the linters for this selection' : 'Rerun the linters'}>
-                  <UiRefresh className="mr-1" />
-                  {rerunBusy ? 'Running...' : 'Rerun'}
-                </Button>
-                {runActions}
-              </>
-            )}
-          />
+          <div className="flex h-full flex-col">
+            <LintTasks tests={tests} />
+            <div className="min-h-0 flex-1">
+              <LintResults
+                results={lint ?? []}
+                grouping={route.lintGrouping}
+                onGroupingChange={onLintGroupingChange}
+                filters={route.lintFilters}
+                onFiltersChange={onLintFiltersChange}
+                selected={selectedLint ? route.selectedPath : null}
+                onSelect={onSelectLint}
+                expandAll={expandAll}
+                onExpandAllChange={setExpandAll}
+                onIgnore={onIgnore}
+                ignoreBusy={ignoreBusy}
+                onOpenFile={onOpenFile}
+                renderRun={renderPromptRun}
+                headerSlot={(
+                  <>
+                    <span className="truncate text-sm text-muted-foreground">{status}</span>
+                    <Button type="button" size="sm" disabled={rerunBusy} onClick={onRerunLint} title={selectedLint ? 'Rerun the linters for this selection' : 'Rerun the linters'}>
+                      <UiRefresh className="mr-1" />
+                      {rerunBusy ? 'Running...' : 'Rerun'}
+                    </Button>
+                    {runActions}
+                  </>
+                )}
+              />
+            </div>
+          </div>
         )}
 
         {route.tab === 'files' && (
