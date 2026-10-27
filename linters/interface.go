@@ -223,6 +223,9 @@ type LinterResult struct {
 	// RunID is the Captain prompt run producing this result, followable at
 	// /api/captain/prompt/runs/{run_id}.
 	RunID string `json:"run_id,omitempty"`
+	// SessionID is the Captain session of that run; it outlives the run, so a
+	// persisted or replayed result still names its transcript.
+	SessionID string `json:"session_id,omitempty"`
 }
 
 type LinterStatus string

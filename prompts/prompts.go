@@ -20,6 +20,7 @@ const (
 	CommitSummary      = "commit.summary"
 	CommitGrouping     = "commit.grouping"
 	LintFix            = "lint.fix"
+	CommitFix          = "commit.fix"
 	PRContent          = "pr.content"
 	PRFix              = "pr.fix"
 	PRReview           = "pr.review"

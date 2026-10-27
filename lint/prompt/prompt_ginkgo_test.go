@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/flanksource/captain/pkg/api"
 	captaincli "github.com/flanksource/captain/pkg/cli"
@@ -231,24 +232,38 @@ var _ = Describe("runReviews", func() {
 		return (Options{Prompt: captaincli.AIPromptOptions{File: "review.prompt"}}).reviews(paths)
 	}
 
-	It("publishes every run as pending before any launches, then running and final per run", func() {
-		results := runReviews(context.Background(), reviewsInput{Reviews: reviewsFor("a.go", "b.go"), WorkDir: "/w", Concurrency: 1, Publisher: publisher})
+	DescribeTable("launches every review into the lint prompt group and keeps results in review order", func(concurrency int) {
+		awaitPromptRun = func(_ context.Context, runID string) (captaincli.PromptRunSummary, error) {
+			// a.go finishes only after b.go's final result, yet stays first.
+			for deadline := time.Now().Add(5 * time.Second); runID == "run-a.go" && !slices.Contains(publisher.Events(), "review:b.go=final"); time.Sleep(time.Millisecond) {
+				if time.Now().After(deadline) {
+					return captaincli.PromptRunSummary{}, errors.New("b.go never finished")
+				}
+			}
+			return captaincli.PromptRunSummary{RunID: runID, SessionID: "session-" + runID, Success: true, StructuredOutput: map[string]any{"violations": []any{
+				map[string]any{"file": "a.go", "message": "from " + runID},
+			}}}, nil
+		}
 
-		Expect(publisher.Events()).To(Equal([]string{
-			"review:a.go=pending", "review:b.go=pending",
-			"review:a.go=running", "review:a.go=final",
-			"review:b.go=running", "review:b.go=final",
-		}))
+		results := runReviews(context.Background(), reviewsInput{Reviews: reviewsFor("a.go", "b.go"), WorkDir: "/w", Concurrency: concurrency, Publisher: publisher})
+
+		Expect(publisher.Events()).To(HaveExactElements(
+			"review:a.go=pending", "review:b.go=pending", "review:a.go=running", "review:b.go=running",
+			"review:b.go=final", "review:a.go=final",
+		))
 		Expect(results).To(HaveExactElements(
-			SatisfyAll(HaveField("Linter", "review:a.go"), HaveField("RunID", "run-a.go"), HaveField("Success", true), HaveField("Violations", HaveExactElements(HaveField("File", "/w/a.go")))),
-			SatisfyAll(HaveField("Linter", "review:b.go"), HaveField("RunID", "run-b.go"), HaveField("Success", true)),
+			SatisfyAll(HaveField("Linter", "review:a.go"), HaveField("RunID", "run-a.go"), HaveField("SessionID", "session-run-a.go"), HaveField("Success", true), HaveField("Violations", HaveExactElements(HaveField("File", "/w/a.go")))),
+			SatisfyAll(HaveField("Linter", "review:b.go"), HaveField("RunID", "run-b.go"), HaveField("SessionID", "session-run-b.go"), HaveField("Success", true)),
 		))
 		Expect(launched).To(HaveLen(2))
-		for _, inv := range launched {
+		for i, inv := range launched {
+			Expect(inv.Group).NotTo(BeNil())
+			Expect(inv.Group).To(BeIdenticalTo(launched[0].Group), "every review joins the same group")
+			Expect(inv.Name).To(Equal([]string{"review:a.go", "review:b.go"}[i]))
 			Expect(inv.Options.RequiredPresets).To(ContainElement("lint"))
 			Expect(inv.Tools).To(HaveLen(3))
 		}
-	})
+	}, Entry("one at a time", 1), Entry("in parallel", 4))
 
 	It("stops the Captain run when the caller is cancelled", func() {
 		ctx, cancel := context.WithCancel(context.Background())

@@ -72,6 +72,7 @@ func shouldRunLinter(workDir string, cfg verify.GavelConfig, linterName string, 
 // project root (go.mod / package.json / tsconfig.json / ...). A linter may
 // produce multiple invocations when the input spans several project roots.
 type linterInvocation struct {
+	configDir   string
 	skip        bool
 	linter      linters.Linter
 	projectRoot string   // absolute; WorkDir the linter runs from
@@ -168,6 +169,9 @@ func isProjectRootCovered(projectRoot string, scheduledRoots []string) bool {
 }
 
 func isInvocationCovered(invocation linterInvocation, scheduledRoots []string) bool {
+	if invocation.configDir != "" {
+		return false
+	}
 	if independent, ok := invocation.linter.(interface{ IndependentProjects() bool }); ok && independent.IndependentProjects() {
 		return false
 	}

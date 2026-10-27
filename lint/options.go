@@ -18,10 +18,12 @@ import (
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/gavel/git/changeset"
 	"github.com/flanksource/gavel/processruntime"
+	"github.com/flanksource/gavel/workspace"
 )
 
 type Options struct {
 	ConfigDir    string                 `flag:"-" yaml:"-" json:"-"`
+	Dirs         workspace.Dirs         `flag:"-" yaml:"-" json:"-"`
 	Runtime      processruntime.Options `flag:"-" yaml:"runtime,omitempty" json:"runtime,omitempty"`
 	Linters      []string               `flag:"linters" yaml:"linters,omitempty" help:"Only run the named linters (comma-separated or repeated). Empty = run every detected linter. Unknown names hard-fail."`
 	Ignore       []string               `flag:"ignore" yaml:"ignore,omitempty" help:"Glob patterns to exclude from linting"`
@@ -62,7 +64,8 @@ type Options struct {
 	// Explicit flags override lint.fix; Captain supplies any remaining runtime
 	// defaults.
 	captaincli.AIRuntimeOptions
-	Selection *changeset.Selection `flag:"-" json:"-" yaml:"-"`
+	Selection    *changeset.Selection `flag:"-" json:"-" yaml:"-"`
+	OptionFields map[string]bool      `json:"-" yaml:"-" flag:"-"`
 }
 
 func (o Options) Pretty() api.Text {

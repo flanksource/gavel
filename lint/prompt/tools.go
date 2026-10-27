@@ -8,11 +8,13 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 	"unicode/utf8"
 
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/gavel/internal/fileread"
 	"github.com/flanksource/gavel/lint"
+	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/models"
 )
 
@@ -26,10 +28,72 @@ const (
 // its work dir, and the violations it reports through them collect here.
 type reviewRun struct {
 	WorkDir string
+	// Name prefixes the "<review>/<linter>" results the lint tool publishes.
+	Name      string
+	Publisher Publisher
 
-	mu       sync.Mutex
-	reported []models.Violation
-	onReport func([]models.Violation)
+	mu          sync.Mutex
+	reported    []models.Violation
+	onReport    func([]models.Violation)
+	identityOf  runIdentity
+	lintResults []*linters.LinterResult
+}
+
+type runIdentity struct{ RunID, SessionID string }
+
+// setRun records the launched run, which the lint tool's results name. It is
+// set once launchPrompt returns, before the agent can call a tool.
+func (r *reviewRun) setRun(runID, sessionID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.identityOf = runIdentity{RunID: runID, SessionID: sessionID}
+}
+
+func (r *reviewRun) identity() runIdentity {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.identityOf
+}
+
+// linted returns the final results of the linters the agent ran, each naming
+// sessionID when it was published before the session was known.
+func (r *reviewRun) linted(sessionID string) []*linters.LinterResult {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]*linters.LinterResult, len(r.lintResults))
+	for i, result := range r.lintResults {
+		copied := *result
+		copied.SessionID = firstNonEmpty(copied.SessionID, sessionID)
+		out[i] = &copied
+	}
+	return out
+}
+
+// record publishes a linter result and keeps it, replacing an earlier result
+// for the same linter and work dir, as the publisher does.
+func (r *reviewRun) record(result *linters.LinterResult) {
+	r.mu.Lock()
+	r.lintResults = slices.DeleteFunc(r.lintResults, func(old *linters.LinterResult) bool {
+		return old.Linter == result.Linter && old.WorkDir == result.WorkDir
+	})
+	if !result.InFlight() {
+		r.lintResults = append(r.lintResults, result)
+	}
+	r.mu.Unlock()
+	if r.Publisher != nil {
+		r.Publisher.UpsertLintResult(result)
+	}
+}
+
+func (r *reviewRun) remove(linter, workDir string) {
+	r.mu.Lock()
+	r.lintResults = slices.DeleteFunc(r.lintResults, func(old *linters.LinterResult) bool {
+		return old.Linter == linter && old.WorkDir == workDir
+	})
+	r.mu.Unlock()
+	if r.Publisher != nil {
+		r.Publisher.RemoveLintResult(linter, workDir)
+	}
 }
 
 // setOnReport registers fn to see the reported violations after each report.
@@ -157,7 +221,7 @@ func (r *reviewRun) lint(ctx context.Context, raw map[string]any) (any, error) {
 			return nil, fmt.Errorf("lint path %q must be relative and stay inside the work dir", path)
 		}
 	}
-	results, err := lint.Execute(lint.Options{WorkDir: r.WorkDir, Context: ctx, Files: input.Paths, Linters: input.Linters})
+	results, err := r.executeLint(ctx, input)
 	if err != nil {
 		return nil, err
 	}
@@ -175,6 +239,39 @@ func (r *reviewRun) lint(ctx context.Context, raw map[string]any) (any, error) {
 		}
 	}
 	return map[string]any{"violations": violations, "linter_errors": failures}, nil
+}
+
+// executeLint runs the agent's lint call and publishes it as "<review>/lint"
+// while running, then as one final "<review>/<linter>" result per linter run.
+// A failed call stays published as a failed "<review>/lint" result.
+func (r *reviewRun) executeLint(ctx context.Context, input lintInput) ([]*linters.LinterResult, error) {
+	id := r.identity()
+	row := func(linter string) *linters.LinterResult {
+		return &linters.LinterResult{Linter: r.Name + "/" + linter, WorkDir: r.WorkDir, RunID: id.RunID, SessionID: id.SessionID, Violations: []models.Violation{}}
+	}
+	running := row("lint")
+	running.Status = linters.LinterStatusRunning
+	r.record(running)
+	start := time.Now()
+	results, err := lint.Execute(lint.Options{WorkDir: r.WorkDir, Context: ctx, Files: input.Paths, Linters: input.Linters})
+	if err != nil {
+		failed := row("lint")
+		failed.Duration, failed.Error = time.Since(start), err.Error()
+		r.record(failed)
+		return nil, err
+	}
+	r.remove(running.Linter, running.WorkDir)
+	for _, result := range results {
+		published := *result
+		published.Linter = r.Name + "/" + result.Linter
+		published.WorkDir = firstNonEmpty(result.WorkDir, r.WorkDir)
+		published.RunID, published.SessionID = id.RunID, id.SessionID
+		if published.Violations == nil {
+			published.Violations = []models.Violation{}
+		}
+		r.record(&published)
+	}
+	return results, nil
 }
 
 type reportInput struct {
