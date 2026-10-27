@@ -3,6 +3,7 @@ package runconfig
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -101,6 +102,11 @@ func ResolvePaths(options any, base string) {
 		resolve := func(path string) string {
 			if path == "" || filepath.IsAbs(path) {
 				return path
+			}
+			if value.Type().Field(i).Tag.Get("path") == "uri" {
+				if parsed, err := url.Parse(path); err == nil && parsed.IsAbs() {
+					return path
+				}
 			}
 			return filepath.Join(base, path)
 		}

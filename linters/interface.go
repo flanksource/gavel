@@ -142,6 +142,7 @@ type RunOptions struct {
 	ExtraArgs            []string
 	OutputTee            io.Writer
 	Scopes               []string
+	Schema               string
 }
 
 // WrapWriter returns w wrapped with OutputTee via io.MultiWriter when OutputTee

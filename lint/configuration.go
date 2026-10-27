@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 
+	jsonlint "github.com/flanksource/gavel/linters/json"
 	"github.com/flanksource/gavel/runconfig"
 	"github.com/flanksource/gavel/verify"
 )
@@ -28,7 +29,13 @@ func (o *Options) Configure() error {
 	if err != nil {
 		return err
 	}
-	return runconfig.Apply(o, cfg.LintOptionsFor(""), o.OptionFields)
+	if err := runconfig.Apply(o, cfg.LintOptionsFor(""), o.OptionFields); err != nil {
+		return err
+	}
+	if o.Schema != "" {
+		o.Schema, err = jsonlint.ResolveSchema(o.Schema, o.WorkDir)
+	}
+	return err
 }
 
 func (o Options) forLinter(name, dir string) (Options, error) {
