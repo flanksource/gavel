@@ -123,11 +123,13 @@ var _ = Describe("replayed runs' trace stores", func() {
 	})
 
 	It("reads the run a snapshot names from its metadata", func() {
+		Expect(testui.TraceRunOf(&testui.SnapshotMetadata{RunID: "run-a", StateRoot: "/repo", Args: map[string]any{"work_dir": "/repo/pkg"}})).
+			To(Equal(&testui.TraceRun{RunID: "run-a", WorkDir: "/repo"}), "state_root locates the store, not the run's work_dir")
 		Expect(testui.TraceRunOf(&testui.SnapshotMetadata{RunID: "run-a", Args: map[string]any{"work_dir": "/w"}})).
-			To(Equal(&testui.TraceRun{RunID: "run-a", WorkDir: "/w"}))
+			To(Equal(&testui.TraceRun{RunID: "run-a", WorkDir: "/w"}), "snapshots saved before state_root fall back to work_dir")
 		Expect(testui.TraceRunOf(&testui.SnapshotMetadata{})).To(BeNil())
 		_, err := testui.TraceRunOf(&testui.SnapshotMetadata{RunID: "run-a"})
-		Expect(err).To(MatchError(ContainSubstring("records no work_dir")))
+		Expect(err).To(MatchError(ContainSubstring("records neither state_root nor work_dir")))
 	})
 })
 

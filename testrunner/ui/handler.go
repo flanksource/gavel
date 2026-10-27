@@ -565,7 +565,7 @@ func (s *Server) snapshotWithTasks(taskTests []parsers.Test) Snapshot {
 }
 
 func virtualTaskTests() []parsers.Test {
-	snapshots := clickytask.SnapshotAll(TestTaskGroupName, LintTaskGroupName)
+	snapshots := clickytask.SnapshotAll(liveTaskGroupNames...)
 	if len(snapshots) == 0 {
 		return nil
 	}
@@ -720,7 +720,7 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 }
 
 func tasksDone() bool {
-	snapshots := clickytask.SnapshotAll(TestTaskGroupName, LintTaskGroupName)
+	snapshots := clickytask.SnapshotAll(liveTaskGroupNames...)
 	if len(snapshots) == 0 {
 		return true
 	}

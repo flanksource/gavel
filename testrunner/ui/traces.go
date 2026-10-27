@@ -63,9 +63,14 @@ func TraceRunOf(meta *SnapshotMetadata) (*TraceRun, error) {
 	if meta == nil || meta.RunID == "" {
 		return nil, nil
 	}
+	if meta.StateRoot != "" {
+		return &TraceRun{RunID: meta.RunID, WorkDir: meta.StateRoot}, nil
+	}
+	// Snapshots saved before state_root existed opened their trace store
+	// under the run's work_dir.
 	workDir, ok := meta.Args["work_dir"].(string)
 	if !ok || workDir == "" {
-		return nil, fmt.Errorf("snapshot of run %s records no work_dir to find its trace store under", meta.RunID)
+		return nil, fmt.Errorf("snapshot of run %s records neither state_root nor work_dir to find its trace store under", meta.RunID)
 	}
 	return &TraceRun{RunID: meta.RunID, WorkDir: workDir}, nil
 }

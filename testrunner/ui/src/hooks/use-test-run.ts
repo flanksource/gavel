@@ -9,7 +9,7 @@ import type {
   Test,
   TestEditRequest,
 } from '../types';
-import { isLintOnlyPhase } from '../utils';
+import { isLintOnlyPhase, isLintOnlyRun, lintStatusCounts } from '../utils';
 
 // useTestRun is the reusable client for gavel's testrunner HTTP handlers. It is
 // SSE-first: it subscribes to /api/tests/stream (event: message / event: done)
@@ -106,19 +106,27 @@ function hasEventSource(): boolean {
   return typeof globalThis !== 'undefined' && typeof globalThis.EventSource !== 'undefined';
 }
 
-function deriveStatusText(snap: Snapshot): string {
+export function deriveStatusText(snap: Snapshot): string {
   const status = snap.status || IDLE_STATUS;
+  const tests = snap.tests || [];
   if (!status.running) {
     if (status.stopped) return status.stop_message || 'Stopped by user';
-    return snap.metadata?.kind === 'rerun' ? 'Rerun complete' : 'Test run complete';
+    if (snap.metadata?.kind === 'rerun') return 'Rerun complete';
+    if (isLintOnlyRun(tests, !!status.lint_run)) {
+      const { done, failed } = lintStatusCounts(snap.lint);
+      return `Lint run complete (${done} done · ${failed} failed)`;
+    }
+    return 'Test run complete';
   }
   if (snap.metadata?.kind === 'rerun') {
     return `Running rerun #${snap.metadata.sequence || 1}...`;
   }
   // A fixture benchmark or profile run has no lint phase.
   if (snap.performance) return 'Running fixtures...';
-  if (isLintOnlyPhase(snap.tests || [], status.running, !!status.lint_run)) {
-    return 'Running linters...';
+  if (isLintOnlyPhase(tests, status.running)) {
+    if (!snap.lint?.length) return 'Running linters...';
+    const { running, done, failed } = lintStatusCounts(snap.lint);
+    return `Running linters... (${running} running · ${done} done · ${failed} failed)`;
   }
   return 'Running tests...';
 }

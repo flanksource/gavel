@@ -2,15 +2,19 @@ package testrunner
 
 import (
 	"fmt"
+	"time"
+
 	"github.com/flanksource/gavel/processruntime"
+	"github.com/flanksource/gavel/runconfig"
 	"github.com/flanksource/gavel/testrunner/parsers"
 	"github.com/flanksource/gavel/testrunner/runners"
 	"github.com/flanksource/gavel/verify"
-	"time"
+	"os"
+	"path/filepath"
 )
 
 func (o *TestOrchestrator) buildCommand(runner runners.Runner, pkg string, extraArgs []string) (*runners.TestRun, error) {
-	runtime, args, err := o.runtimeFor(runner.Name())
+	runtime, args, err := o.runtimeFor(runner.Name(), pkg)
 	if err != nil {
 		return nil, err
 	}
@@ -43,8 +47,14 @@ func (o *TestOrchestrator) buildCommand(runner runners.Runner, pkg string, extra
 	return run, nil
 }
 
-func (o *TestOrchestrator) runtimeFor(framework parsers.Framework) (processruntime.Options, []string, error) {
+func (o *TestOrchestrator) runtimeFor(framework parsers.Framework, pkg string) (processruntime.Options, []string, error) {
 	workDir := o.runtimeWorkDir()
+	if pkg != "" {
+		workDir = pkg
+		if !filepath.IsAbs(workDir) { workDir = filepath.Join(o.WorkDir, pkg) }
+		if info, err := os.Stat(workDir); err != nil { return processruntime.Options{}, nil, err } else if !info.IsDir() { workDir = filepath.Dir(workDir) }
+		workDir = verify.RuntimeConfigDirectory(workDir, o.runtimeConfigDir)
+	}
 	if workDir == "" {
 		workDir = "."
 	}
@@ -52,12 +62,33 @@ func (o *TestOrchestrator) runtimeFor(framework parsers.Framework) (processrunti
 	if err != nil {
 		return processruntime.Options{}, nil, err
 	}
-	caller := o.Runtime
-	if o.TestTimeout > 0 {
-		timeout := o.TestTimeout.String()
+	options := o.RunOptions
+	fields := options.OptionFields
+	if fields == nil { fields = runconfig.Present(options) }
+	configured := config.TestOptionsFor(string(framework))
+	if err := runconfig.Apply(&options, configured, fields); err != nil { return processruntime.Options{}, nil, err }
+	caller := options.Runtime
+	if fields["test-timeout"] || configured.TestTimeout != nil {
+		timeout := options.TestTimeout.String()
 		caller.Timeout = &timeout
 	}
-	return config.RuntimeFor("test", string(framework), caller)
+	runtime, args, err := config.RuntimeFor("test", string(framework), caller)
+	if err != nil { return runtime, nil, err }
+	if !fields["extra-args"] { args = append(args, configured.ExtraArgs...) }
+	if !fields["tags"] && configured.Tags != nil {
+		if runner, ok := o.registryRunner(framework); ok {
+			if mapper, ok := runner.(runners.BuildTagsMapper); ok { args = append(args, mapper.BuildTagsArgs(options.Tags)...) } else if len(options.Tags) > 0 { return runtime, nil, fmt.Errorf("tags unsupported by %s", framework) }
+		}
+	}
+	if framework == parsers.Ginkgo && configured.Nodes != nil && !fields["nodes"] && options.Nodes != 0 { args = append(args, fmt.Sprintf("--nodes=%d", options.Nodes)) }
+	if configured.Bench != nil && !fields["bench"] && options.Bench != "" && (framework == parsers.GoTest || framework == parsers.Ginkgo) { args = append(args, "-bench="+options.Bench) }
+	return runtime, args, nil
+}
+
+func (o *TestOrchestrator) registryRunner(framework parsers.Framework) (runners.Runner, bool) {
+	registry := o.registry
+	if registry == nil { registry = DefaultRegistry(o.WorkDir) }
+	return registry.Get(framework)
 }
 
 func (o RunOptions) fixtureRuntime() processruntime.Options {

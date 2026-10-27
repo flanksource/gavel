@@ -26,6 +26,7 @@ type SnapshotMetadata struct {
 	ExitCode   *int                   `json:"exit_code,omitempty"`  // final exit code once the run completes; nil while running
 	TimedOut   bool                   `json:"timed_out,omitempty"`  // true when the global --timeout fired during the run
 	RunID      string                 `json:"run_id,omitempty"`     // the run's trace store, .gavel/traces/<run_id>; empty when the run opened none
+	StateRoot  string                 `json:"state_root,omitempty"` // the directory whose .gavel holds the run's trace store
 	// ProcessTrace names the run's process capture in its trace store; nil
 	// when the run was not watched.
 	ProcessTrace *traces.ProcessRefs `json:"process_trace,omitempty"`
