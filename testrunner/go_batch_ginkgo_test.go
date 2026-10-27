@@ -11,7 +11,10 @@ import (
 
 var _ = Describe("unified Go runner", func() {
 	It("uses a recursive selector for an unfocused mixed run", func() {
-		o := &TestOrchestrator{RunOptions: RunOptions{WorkDir: ".", Recursive: true}}
+		root := GinkgoT().TempDir()
+		Expect(os.Mkdir(filepath.Join(root, "plain"), 0o755)).To(Succeed())
+		Expect(os.Mkdir(filepath.Join(root, "specs"), 0o755)).To(Succeed())
+		o := &TestOrchestrator{RunOptions: RunOptions{WorkDir: root, Recursive: true}}
 		plans, err := o.planGoBatches(map[Framework][]string{
 			parsers.GoTest: {"./plain"},
 			parsers.Ginkgo: {"./specs"},
@@ -23,7 +26,10 @@ var _ = Describe("unified Go runner", func() {
 	})
 
 	It("uses explicit packages for a focused run", func() {
-		o := &TestOrchestrator{RunOptions: RunOptions{WorkDir: ".", Recursive: true}}
+		root := GinkgoT().TempDir()
+		Expect(os.Mkdir(filepath.Join(root, "plain"), 0o755)).To(Succeed())
+		Expect(os.Mkdir(filepath.Join(root, "specs"), 0o755)).To(Succeed())
+		o := &TestOrchestrator{RunOptions: RunOptions{WorkDir: root, Recursive: true}}
 		plans, err := o.planGoBatches(map[Framework][]string{
 			parsers.GoTest: {"./plain"},
 			parsers.Ginkgo: {"./specs"},
