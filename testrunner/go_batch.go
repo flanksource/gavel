@@ -18,14 +18,14 @@ import (
 )
 
 type goBatchPlan struct {
-	runtime processruntime.Options
+	runtime     processruntime.Options
 	runtimeArgs []string
-	packages  []string
-	ginkgo    []string
-	args      []string
-	targets   []string
-	skipEmpty []string
-	framework Framework
+	packages    []string
+	ginkgo      []string
+	args        []string
+	targets     []string
+	skipEmpty   []string
+	framework   Framework
 }
 
 func (o *TestOrchestrator) unfocusedGoRun(startingPaths []string) bool {
@@ -42,21 +42,38 @@ func (o *TestOrchestrator) planGoBatches(packagesByFramework map[Framework][]str
 	for _, framework := range []Framework{parsers.GoTest, parsers.Ginkgo} {
 		for _, pkg := range packagesByFramework[framework] {
 			runtime, runtimeArgs, err := o.runtimeFor(framework, pkg)
-			if err != nil { return nil, err }
+			if err != nil {
+				return nil, err
+			}
 			args := slices.Clone(argsByFramework[framework])
 			if framework == parsers.Ginkgo {
 				args, err = runners.GinkgoGoTestArgs(args)
-				if err != nil { return nil, err }
+				if err != nil {
+					return nil, err
+				}
 				runtimeArgs, err = runners.GinkgoGoTestArgs(runtimeArgs)
-				if err != nil { return nil, err }
+				if err != nil {
+					return nil, err
+				}
 			}
 			index := -1
 			for i := range bases {
-				if reflect.DeepEqual(bases[i].runtime, runtime) && slices.Equal(bases[i].runtimeArgs, runtimeArgs) && slices.Equal(bases[i].args, args) { index = i; break }
+				if reflect.DeepEqual(bases[i].runtime, runtime) && slices.Equal(bases[i].runtimeArgs, runtimeArgs) && slices.Equal(bases[i].args, args) {
+					index = i
+					break
+				}
 			}
-			if index < 0 { bases = append(bases, goBatchPlan{runtime: runtime, runtimeArgs: runtimeArgs, args: args, framework: framework}); index = len(bases)-1 }
-			if !slices.Contains(bases[index].packages, pkg) { bases[index].packages = append(bases[index].packages, pkg); bases[index].targets = append(bases[index].targets, pkg) }
-			if framework == parsers.Ginkgo { bases[index].ginkgo = append(bases[index].ginkgo, pkg) }
+			if index < 0 {
+				bases = append(bases, goBatchPlan{runtime: runtime, runtimeArgs: runtimeArgs, args: args, framework: framework})
+				index = len(bases) - 1
+			}
+			if !slices.Contains(bases[index].packages, pkg) {
+				bases[index].packages = append(bases[index].packages, pkg)
+				bases[index].targets = append(bases[index].targets, pkg)
+			}
+			if framework == parsers.Ginkgo {
+				bases[index].ginkgo = append(bases[index].ginkgo, pkg)
+			}
 		}
 	}
 	if unfocused && len(bases) == 1 {

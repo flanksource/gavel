@@ -107,9 +107,9 @@ func (o OutputMode) ShouldShow(failed bool) bool {
 type TestOrchestrator struct {
 	RunOptions
 	configurationScoped bool
-	registry *Registry
-	streamer *TestStreamer
-	selector *selectorContext
+	registry            *Registry
+	streamer            *TestStreamer
+	selector            *selectorContext
 }
 
 // RunOptions configures test execution behavior.
@@ -749,27 +749,6 @@ func (o *TestOrchestrator) Run() (parsers.TestSuiteResults, error) {
 	return results, nil
 }
 
-// filterFrameworks narrows detected frameworks to the set the user asked for
-// via --framework. Each requested name must resolve to a known framework
-// (parsers.ParseFramework handles aliases and errors on typos). A requested
-// framework that exists but wasn't detected in this workdir is also an error,
-// so `gavel test --framework jest` in a repo without jest fails loudly instead
-// of silently running nothing.
-func filterIgnoredPackages(packages []string, ignore []string) []string {
-	if len(ignore) == 0 {
-		return packages
-	}
-	out := make([]string, 0, len(packages))
-	for _, pkg := range packages {
-		if packageIgnored(pkg, ignore) {
-			logger.V(1).Infof("Ignoring test package %s", pkg)
-			continue
-		}
-		out = append(out, pkg)
-	}
-	return out
-}
-
 func packageIgnored(pkg string, ignore []string) bool {
 	pkg = filepath.ToSlash(strings.TrimPrefix(pkg, "./"))
 	for _, pattern := range ignore {
@@ -799,6 +778,7 @@ func (o *TestOrchestrator) packageConcurrency() int {
 	return 4
 }
 
+// filterFrameworks rejects unknown or undetected frameworks before execution.
 func filterFrameworks(detected []Framework, requested []string) ([]Framework, error) {
 	detectedSet := make(map[Framework]bool, len(detected))
 	for _, fw := range detected {
@@ -1040,7 +1020,9 @@ func (o *TestOrchestrator) detectAndRun(frameworks []Framework, startingPaths []
 		}
 
 		packagesByFramework[fw], err = o.configuredPackages(fw, packages)
-		if err != nil { return nil, err }
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	for framework, items := range packagesByFramework {
@@ -1770,11 +1752,17 @@ type Runner = TestOrchestrator
 // .gavel.yaml fixtures.enabled is set). Flag-supplied globs take precedence
 // over config; config takes precedence over the default glob.
 func resolveFixtureGlobs(opts RunOptions) []string {
+	if opts.OptionFields["fixtures"] && !opts.Fixtures {
+		return nil
+	}
 	cfg, err := verify.LoadGavelConfig(opts.runtimeWorkDir())
 	if err != nil {
 		logger.Warnf("failed to load .gavel.yaml for fixture config: %v", err)
 	}
 	if !opts.Fixtures && !cfg.Fixtures.Enabled {
+		return nil
+	}
+	if configured := cfg.TestOptionsFor("").Fixtures; configured != nil && !*configured && !opts.OptionFields["fixtures"] {
 		return nil
 	}
 	if len(opts.FixtureFiles) > 0 {
@@ -1839,7 +1827,9 @@ func (t *TestOrchestrator) runDiscoveredFixtures(globs []string) ([]parsers.Test
 	for _, file := range fixtureFiles {
 		fixtureTests, err := t.runFixtureRunner(fixtures.RunnerOptions{Context: opts.Context, ProcessRuntime: opts.fixtureRuntime(), Paths: []string{file}, WorkDir: opts.WorkDir, Logger: logger.StandardLogger(), ExecutablePath: execPath, TraceHost: opts.TraceHost, ProcessTrace: opts.ProcessTrace}, filepath.Dir(file))
 		tests = append(tests, fixtureTests...)
-		if err != nil { return tests, err }
+		if err != nil {
+			return tests, err
+		}
 	}
 	return tests, nil
 
@@ -1852,9 +1842,13 @@ func (t *TestOrchestrator) runFixtureRunner(runnerOpts fixtures.RunnerOptions, c
 	if err != nil {
 		return nil, err
 	}
-	if framework := config.Test.Frameworks["fixture"]; framework.Enabled != nil && !*framework.Enabled { return nil, nil }
+	if framework := config.Test.Frameworks["fixture"]; framework.Enabled != nil && !*framework.Enabled {
+		return nil, nil
+	}
 	var runtimeArgs []string
-	runnerOpts.ProcessRuntime, runtimeArgs, err = config.RuntimeFor("test", "fixture", runnerOpts.ProcessRuntime)
+	configured := *t
+	configured.Runtime = runnerOpts.ProcessRuntime
+	runnerOpts.ProcessRuntime, runtimeArgs, err = configured.configuredRuntime(config, parsers.Fixture)
 	if err != nil {
 		return nil, err
 	}
