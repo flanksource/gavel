@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from 'react';
-import { Button, ListMenuHeader, ListMenuSection } from '@flanksource/clicky-ui/components';
+import { Button, ListMenuHeader, ListMenuItems, ListMenuSection } from '@flanksource/clicky-ui/components';
 import { UiChevronDown, UiChevronRight, UiFolder } from '@flanksource/clicky-ui/icons';
 import type { Project, TodoDensity, TodoListResponse, TodoStatus } from '../../types';
 import { RepoIcon } from '../RepoIcon';
@@ -104,15 +104,8 @@ export function WorkspaceTodoGroup({ workspace, data, selectedRef, onSelect, fil
         </Button>
         <TodoCountsBar counts={counts} statusFilter={active.statuses} onToggle={onToggleStatus} />
       </ListMenuHeader>
-      {/* Rows and the empty-state note are siblings rather than two branches of
-          a ternary. As a ternary, a workspace going from "no rows yet" to "rows
-          loaded" swapped one subtree for another, so React unmounted and
-          remounted the whole group instead of reconciling it — the source of
-          both the mount churn during load and the layout shift as late data
-          landed. */}
-      {open && items.map(item => (
+      {open && <ListMenuItems items={items} getItemKey={item => item.ref}>{item => (
         <TodoRow
-          key={item.ref}
           todo={item}
           active={item.ref === selectedRef}
           onSelect={onSelect}
@@ -125,7 +118,7 @@ export function WorkspaceTodoGroup({ workspace, data, selectedRef, onSelect, fil
           childDone={item.id ? childCounts.get(item.id)?.done : undefined}
           childTotal={item.id ? childCounts.get(item.id)?.total : undefined}
         />
-      ))}
+      )}</ListMenuItems>}
       {open && items.length === 0 && (
         <div className="px-3 py-2 text-xs text-muted-foreground">
           {hiddenCount > 0 ? `${hiddenCount} todo${hiddenCount === 1 ? '' : 's'} hidden by filter` : 'No todos'}

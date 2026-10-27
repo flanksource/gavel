@@ -1,5 +1,6 @@
-import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { Button } from '@flanksource/clicky-ui/components';
 import type { Project, SessionStats, TodoItem, TodoListResponse } from '../types';
 import { emptyCounts } from './todos/format';
 import { defaultTodoFilters, type TodoFilters } from './todos/todoFilter';
@@ -18,6 +19,12 @@ vi.mock('./todos/TodoSessionTimer', async (importOriginal) => ({
   ...(await importOriginal<object>()),
   useSessionStats,
 }));
+const workspaceHook = vi.hoisted(() => vi.fn());
+vi.mock('./todos/useWorkspaceTodos', async importOriginal => ({
+  ...(await importOriginal<object>()),
+  useWorkspaceTodos: workspaceHook,
+}));
+vi.mock('./todos/CreateTodoDialog', () => ({ CreateTodoDialog: () => null }));
 
 // The full-width pane's two halves are stubbed: DataTable and the detail's
 // tabs both pull in @floating-ui/react, and what is under test here is which of
@@ -29,19 +36,50 @@ vi.mock('./todos/TodoTable', () => ({
 vi.mock('./todos/TodoDetail', () => ({
   TodoDetail: ({ navigation }: { navigation?: { position: number; total: number; onNext: () => void } }) => (
     <div data-testid="todo-detail" data-navigation={navigation ? `${navigation.position}/${navigation.total}` : ''}>
-      {navigation && <button type="button" onClick={navigation.onNext}>Next todo</button>}
+      {navigation && <Button type="button" onClick={navigation.onNext}>Next todo</Button>}
     </div>
   ),
 }));
 
 const { TodoFullPane, TodoWorkspaceList } = await import('./TodoView');
+const { MenubarTodos } = await import('./MenubarTodos');
 
 const gavel: Project = { name: 'gavel', dir: '/repos/gavel', repos: [] } as Project;
 const captain: Project = { name: 'captain', dir: '/repos/captain', repos: [] } as Project;
 
+afterEach(() => vi.restoreAllMocks());
+
 function todo(ref: string): TodoItem {
   return { ref, title: `todo ${ref}`, status: 'pending', priority: 'medium' };
 }
+
+describe.each(['desktop', 'compact'])('%s TODO list virtualization', variant => {
+  it.each(['workspace', 'severity', 'age'] as const)('mounts only nearby rows when grouped by %s', async groupBy => {
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      const height = this.dataset.slot === 'list-menu-scroll' ? 480 : 64;
+      return { width: 400, height, top: 0, left: 0, bottom: height, right: 400, x: 0, y: 0, toJSON: () => ({}) };
+    });
+    vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(64);
+    vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(400);
+    const todos = listProps(defaultTodoFilters());
+    const items = Array.from({ length: 200 }, (_, index) => ({ ...todo(`item-${index}`), sessionId: `session-${index}` }));
+    todos.workspaces = [gavel];
+    todos.byDir[gavel.dir].items = items;
+    todos.groupBy = groupBy;
+    useSessionStats.mockClear();
+    workspaceHook.mockReturnValue(todos);
+    render(variant === 'desktop'
+      ? <TodoWorkspaceList todos={todos} projectsLoaded />
+      : <MenubarTodos projects={todos.workspaces} projectsLoaded />);
+
+    await waitFor(() => {
+      const mounted = screen.getAllByRole('button').filter(button => button.textContent?.includes('todo item-'));
+      expect(mounted.length).toBeGreaterThan(0);
+      expect(mounted.length).toBeLessThan(30);
+    });
+    expect(useSessionStats.mock.calls.length).toBeLessThan(30);
+  });
+});
 
 function listProps(filters: TodoFilters): WorkspaceTodos {
   const loaded: [Project, TodoItem[]][] = [[gavel, [todo('g1')]], [captain, [todo('c1')]]];
