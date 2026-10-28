@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -183,7 +184,7 @@ func LoadRuns(workDir string) ([]Run, error) {
 }
 
 // runObjects lists the store's run-*.json snapshots newest-first by key (the
-// start timestamp).
+// start timestamp), and by collision suffix within one timestamp.
 func runObjects(store blob.Store) ([]blob.Object, error) {
 	objects, err := store.List(context.Background(), PerRunPrefix)
 	if err != nil {
@@ -196,7 +197,14 @@ func runObjects(store blob.Store) ([]blob.Object, error) {
 		}
 		runs = append(runs, object)
 	}
-	sort.Slice(runs, func(i, j int) bool { return runs[i].Key > runs[j].Key })
+	sort.Slice(runs, func(i, j int) bool {
+		left, leftSequence := runFilenameOrder(runs[i].Key)
+		right, rightSequence := runFilenameOrder(runs[j].Key)
+		if left == right {
+			return leftSequence > rightSequence
+		}
+		return left > right
+	})
 	return runs, nil
 }
 
@@ -262,6 +270,16 @@ func LatestRuns(workDir string) ([]string, error) {
 		}
 	}
 	return paths, nil
+}
+
+func runFilenameOrder(path string) (string, int) {
+	stem := strings.TrimSuffix(path, ".json")
+	separator := strings.LastIndexByte(stem, '-')
+	sequence, err := strconv.Atoi(stem[separator+1:])
+	if err != nil {
+		return stem, 1
+	}
+	return stem[:separator], sequence
 }
 
 // runContents reports whether a run snapshot holds tests and lint results,
