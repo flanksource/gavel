@@ -854,8 +854,9 @@ type detachedUIOptions struct {
 // testUIOptions configures startTestUI: Addr is the interface to bind, and
 // Dev serves the page from the testrunner/ui Vite dev server.
 type testUIOptions struct {
-	Addr string
-	Dev  bool
+	Addr   string
+	Dev    bool
+	Writer io.Writer
 }
 
 // startTestUI binds an ephemeral TCP listener and starts serving the testui
@@ -886,7 +887,13 @@ func startTestUI(opts testUIOptions) (*testui.Server, net.Listener, error) {
 	go http.Serve(listener, srv.Handler()) //nolint:errcheck
 
 	time.Sleep(100 * time.Millisecond)
-	fmt.Println(uiBanner("Test UI", url, networkURL))
+	if opts.Writer == nil {
+		opts.Writer = os.Stdout
+	}
+	if _, err := fmt.Fprintln(opts.Writer, uiBanner("Test UI", url, networkURL)); err != nil {
+		listener.Close()
+		return nil, nil, fmt.Errorf("announce test UI: %w", err)
+	}
 	openBrowser(url)
 	return srv, listener, nil
 }

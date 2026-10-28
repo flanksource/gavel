@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -119,6 +120,7 @@ func runLint(ctx context.Context, opts LintOptions) (any, error) {
 	if opts.UI {
 		var err error
 		uiServer, err = startLintUI(lintUIOptions{Addr: opts.Addr, Context: opts.Context, Cancel: cancelRun,
+			PersistRerun: func(snapshot *testui.Snapshot) error { return saveLintSnapshot(opts.Dirs.StateRoot, snapshot) },
 			Rerun: func(rctx context.Context, req testui.RerunRequest, output *testui.RerunOutputBuffer) ([]*linters.LinterResult, error) {
 				rerunOpts := opts
 				rerunOpts.Context = rctx
@@ -183,8 +185,7 @@ func runLint(ctx context.Context, opts LintOptions) (any, error) {
 	}
 
 	if uiServer != nil {
-		serveLintResults(uiServer, allResults)
-		return nil, nil
+		return serveLintResults(lintUIResultOptions{Server: uiServer, Options: opts, Results: allResults, Started: runStarted})
 	}
 
 	if opts.Triage {
@@ -214,9 +215,11 @@ func runLint(ctx context.Context, opts LintOptions) (any, error) {
 }
 
 type lintUIOptions struct {
-	Addr    string
-	Context context.Context
-	Cancel  context.CancelFunc
+	Addr         string
+	Context      context.Context
+	Cancel       context.CancelFunc
+	Writer       io.Writer
+	PersistRerun func(*testui.Snapshot) error
 	// Rerun re-runs the lint for a rerun request from the UI.
 	Rerun func(context.Context, testui.RerunRequest, *testui.RerunOutputBuffer) ([]*linters.LinterResult, error)
 }
@@ -224,40 +227,70 @@ type lintUIOptions struct {
 // startLintUI starts the browser UI for a lint run, marking the initial run in
 // progress and wiring the UI's stop and rerun controls.
 func startLintUI(opts lintUIOptions) (*testui.Server, error) {
-	srv, _, err := startTestUI(testUIOptions{Addr: opts.Addr})
+	srv, _, err := startTestUI(testUIOptions{Addr: opts.Addr, Writer: opts.Writer})
 	if err != nil {
 		return nil, err
 	}
 	srv.SetStopFunc(standaloneUIStop(opts.Cancel))
-	srv.BeginRun("initial")
+	srv.BeginRun("lint")
 	srv.SetRerunFunc(func(req testui.RerunRequest, output *testui.RerunOutputBuffer) error {
 		clicky.ClearGlobalTasks()
 		rerunCtx, cancelRerun := newStopContext(opts.Context, 0)
 		defer cancelRerun()
 		srv.SetStopFunc(standaloneUIStop(cancelRerun))
-		srv.BeginRun("rerun")
+		srv.BeginRun("lint")
+		srv.SetLintResults(nil)
 		results, err := opts.Rerun(rerunCtx, req, output)
 		if err != nil {
+			srv.SetRunError(err)
+			srv.MarkDone()
 			return err
 		}
 		srv.SetLintResults(results)
+		snapshot := srv.Snapshot()
+		snapshot.Tests = nil
+		snapshot.Status.Running = false
+		snapshot.Metadata.Kind = "lint"
+		snapshot.Metadata.Ended = time.Now().UTC()
+		snapshot.Git = snapshotGitInfo(srv.GitRoot())
+		if opts.PersistRerun != nil {
+			if err := opts.PersistRerun(&snapshot); err != nil {
+				srv.SetRunError(err)
+				srv.MarkDone()
+				return err
+			}
+		}
 		srv.MarkDone()
 		return nil
 	})
 	return srv, nil
 }
 
-// serveLintResults publishes results to the UI and keeps serving until the
-// process is interrupted.
-func serveLintResults(srv *testui.Server, results []*linters.LinterResult) {
-	srv.SetLintResults(results)
-	srv.MarkDone()
-	if linters.HasFailures(results) {
-		exitCode = 1
-	}
+type lintUIResultOptions struct {
+	Server  *testui.Server
+	Options LintOptions
+	Results []*linters.LinterResult
+	Started time.Time
+}
+
+// serveLintResults saves the completed run before waiting for shutdown, then
+// returns the latest UI results for terminal rendering.
+func serveLintResults(opts lintUIResultOptions) (any, error) {
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(sig)
+	if _, err := finishLint(opts.Options, opts.Results, opts.Started); err != nil {
+		return nil, err
+	}
+	opts.Server.SetLintResults(opts.Results)
+	opts.Server.MarkDone()
 	<-sig
+	snapshot := opts.Server.Snapshot()
+	exitCode = 0
+	if linters.HasFailures(snapshot.Lint) || snapshot.Error != "" {
+		exitCode = 1
+	}
+	return lintRunReturnValue(&snapshot, opts.Options), nil
 }
 
 func finishLint(opts LintOptions, allResults []*linters.LinterResult, runStarted time.Time) (any, error) {
@@ -275,24 +308,30 @@ func finishLint(opts LintOptions, allResults []*linters.LinterResult, runStarted
 		},
 		Lint: allResults,
 	}
-	if path, err := snapshots.Save(opts.Dirs.StateRoot, snap); err != nil {
-		logger.Warnf("persist snapshot: %v", err)
-	} else {
-		logger.V(1).Infof("wrote snapshot to %s", path)
-	}
-	// Per-run snapshot so lint-only runs appear in the .gavel run history
-	// (the Tests dashboard scans run-*.json); Save() above only writes the
-	// sha-keyed latest.
-	if path, err := snapshots.SavePerRun(opts.Dirs.StateRoot, snap, runStarted, ""); err != nil {
-		logger.Warnf("persist per-run snapshot: %v", err)
-	} else {
-		logger.V(1).Infof("wrote per-run snapshot to %s", path)
+	if err := saveLintSnapshot(opts.Dirs.StateRoot, snap); err != nil {
+		return nil, err
 	}
 
 	if linters.HasFailures(allResults) {
 		exitCode = 1
 	}
 	return lintRunReturnValue(snap, opts), nil
+}
+
+func saveLintSnapshot(stateRoot string, snapshot *testui.Snapshot) error {
+	if snapshot.Git != nil && snapshot.Git.SHA != "" {
+		if path, err := snapshots.Save(stateRoot, snapshot); err != nil {
+			return fmt.Errorf("persist lint snapshot: %w", err)
+		} else {
+			logger.V(1).Infof("wrote snapshot to %s", path)
+		}
+	}
+	if path, err := snapshots.SavePerRun(stateRoot, snapshot, snapshot.Metadata.Started, ""); err != nil {
+		return fmt.Errorf("persist per-run lint snapshot: %w", err)
+	} else {
+		logger.V(1).Infof("wrote per-run snapshot to %s", path)
+	}
+	return nil
 }
 
 func lintRunReturnValue(snap *testui.Snapshot, opts LintOptions) any {
