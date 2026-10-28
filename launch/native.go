@@ -104,7 +104,7 @@ func (executor NativeExecutor) Prepare(ctx context.Context, ws PreparedWorkspace
 			job.prompt, err = promptlint.Prepare(ctx, promptlint.PrepareOptions{
 				Directory: ws.Directory, Reference: options.Prompt, Version: options.PromptVersion,
 				Variables: options.Variables, Presets: options.Presets, Spec: options.Spec,
-				Paths: scope.Files, Concurrency: options.Concurrency, Env: ws.Env,
+				Paths: scope.Files, Env: ws.Env,
 			})
 			if err != nil {
 				return nil, err

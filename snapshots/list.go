@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -193,7 +194,14 @@ func LatestRuns(workDir string) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list %s: %w", dir, err)
 	}
-	sort.Sort(sort.Reverse(sort.StringSlice(names)))
+	sort.Slice(names, func(i, j int) bool {
+		left, leftSequence := runFilenameOrder(names[i])
+		right, rightSequence := runFilenameOrder(names[j])
+		if left == right {
+			return leftSequence > rightSequence
+		}
+		return left > right
+	})
 
 	var testPath, lintPath string
 	var paths []string
@@ -216,6 +224,16 @@ func LatestRuns(workDir string) ([]string, error) {
 		}
 	}
 	return paths, nil
+}
+
+func runFilenameOrder(path string) (string, int) {
+	stem := strings.TrimSuffix(path, ".json")
+	separator := strings.LastIndexByte(stem, '-')
+	sequence, err := strconv.Atoi(stem[separator+1:])
+	if err != nil {
+		return stem, 1
+	}
+	return stem[:separator], sequence
 }
 
 // runContents reports whether a run snapshot holds tests and lint results,
