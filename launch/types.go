@@ -39,7 +39,6 @@ type PromptConfig struct {
 	Variables     map[string]any `json:"variables,omitempty"`
 	Presets       []string       `json:"presets,omitempty"`
 	Spec          *api.Spec      `json:"spec,omitempty"`
-	Concurrency   int            `json:"concurrency,omitempty"`
 }
 
 type SchemaProvider interface {
