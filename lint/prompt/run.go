@@ -94,9 +94,10 @@ func (input reviewsInput) launch(ctx context.Context, review review, group *clic
 		running := func(violations []models.Violation) {
 			input.publish(&linters.LinterResult{Linter: review.Name, WorkDir: input.WorkDir, Status: linters.LinterStatusRunning, RunID: launched.RunID, SessionID: launched.SessionID, Violations: violations})
 		}
-		running(run.Reported())
 		run.setOnReport(running)
+		running(run.Reported())
 		return func() []*linters.LinterResult {
+			defer run.setOnReport(nil)
 			result := input.await(ctx, run, review.Name, launched.RunID, start)
 			return append([]*linters.LinterResult{result}, run.linted(result.SessionID)...)
 		}
@@ -107,13 +108,24 @@ func (input reviewsInput) launch(ctx context.Context, review review, group *clic
 	for _, variant := range launched.Runs {
 		input.publish(&linters.LinterResult{Linter: review.Name + ":" + variant.Selector, WorkDir: input.WorkDir, Status: linters.LinterStatusRunning, RunID: variant.RunID, SessionID: variant.SessionID, Violations: []models.Violation{}})
 	}
+	reported := func(violations []models.Violation) {
+		if len(violations) > 0 {
+			input.publish(&linters.LinterResult{Linter: review.Name, WorkDir: input.WorkDir, Status: linters.LinterStatusRunning, RunID: launched.RunID, SessionID: launched.SessionID, Violations: violations})
+		}
+	}
+	run.setOnReport(reported)
+	reported(run.Reported())
 	return func() []*linters.LinterResult {
+		defer run.setOnReport(nil)
 		results := make([]*linters.LinterResult, len(launched.Runs))
 		var wg sync.WaitGroup
 		for i, variant := range launched.Runs {
 			wg.Go(func() { results[i] = input.await(ctx, run, review.Name+":"+variant.Selector, variant.RunID, start) })
 		}
 		wg.Wait()
+		if input.Publisher != nil {
+			input.Publisher.RemoveLintResult(review.Name, input.WorkDir)
+		}
 		return append(results, run.linted("")...)
 	}
 }
@@ -128,7 +140,6 @@ func (input reviewsInput) finish(result *linters.LinterResult) {
 
 func (input reviewsInput) await(ctx context.Context, run *reviewRun, name, runID string, start time.Time) *linters.LinterResult {
 	summary, err := awaitPromptRun(ctx, runID)
-	run.setOnReport(nil)
 	if ctx.Err() != nil {
 		// Awaiting stops with the caller, the run does not: stop it too.
 		if stopErr := stopPromptRun(runID); stopErr != nil && !errors.Is(stopErr, captaincli.ErrPromptRunTerminal) {

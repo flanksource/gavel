@@ -344,4 +344,34 @@ var _ = Describe("runReviews", func() {
 
 		Expect(results).To(HaveExactElements(HaveField("Violations", HaveExactElements(HaveField("File", "/w/b.go")))))
 	})
+
+	It("keeps publishing shared tool findings until every model variant has finished", func() {
+		originalLaunch := launchPrompt
+		launchPrompt = func(ctx context.Context, input captaincli.PromptInvocation) (captaincli.PromptRunResult, error) {
+			result, err := originalLaunch(ctx, input)
+			result.Runs = []captaincli.PromptRunItem{{RunID: "r1", Selector: "api:sonnet"}, {RunID: "r2", Selector: "api:haiku"}}
+			return result, err
+		}
+		awaitPromptRun = func(_ context.Context, runID string) (captaincli.PromptRunSummary, error) {
+			defer GinkgoRecover()
+			if runID == "r2" {
+				Eventually(publisher.Events).Should(ContainElement("review:a.go:api:sonnet=final"))
+				for _, tool := range launched[0].Tools {
+					if tool.Name == reportViolationTool {
+						_, err := tool.Handler(context.Background(), map[string]any{"violations": []any{map[string]any{"file": "a.go", "line": 2, "message": "early"}}})
+						Expect(err).NotTo(HaveOccurred())
+					}
+				}
+				publisher.mu.Lock()
+				live := publisher.latest["review:a.go"]
+				publisher.mu.Unlock()
+				Expect(live).NotTo(BeNil())
+				Expect(live.Violations).To(HaveExactElements(HaveField("File", "/w/a.go")))
+			}
+			return captaincli.PromptRunSummary{RunID: runID, Success: true, StructuredOutput: map[string]any{"violations": []any{}}}, nil
+		}
+		reviews := reviewsFor("a.go")
+		runReviews(context.Background(), reviewsInput{Reviews: reviews, WorkDir: "/w", Publisher: publisher})
+		Expect(publisher.latest).To(HaveLen(2), "the shared live row is replaced by final model results")
+	})
 })

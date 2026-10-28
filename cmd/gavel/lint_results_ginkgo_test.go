@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/flanksource/gavel/linters"
@@ -14,6 +16,13 @@ import (
 )
 
 var _ = Describe("Standalone lint output", func() {
+	It("returns a persistence error when the history directory cannot be created", func() {
+		dir := GinkgoT().TempDir()
+		Expect(os.WriteFile(filepath.Join(dir, ".gavel"), []byte("blocked"), 0o600)).To(Succeed())
+		_, err := finishLint(LintOptions{WorkDir: dir, Dirs: workspace.Dirs{Invocation: dir, StateRoot: dir}}, nil, time.Now())
+		Expect(err).To(MatchError(ContainSubstring("persist per-run lint snapshot")))
+	})
+
 	DescribeTable("reports lint failures through the exit status without a redundant command error", func(result *linters.LinterResult, wantExit int) {
 		previousExit := exitCode
 		DeferCleanup(func() { exitCode = previousExit })
