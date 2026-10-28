@@ -191,7 +191,11 @@ func (o *TestOrchestrator) runGoBatch(ctx commonsCtx.Context, t *task.Task, plan
 				hasReport = hasReport || suite.Framework == parsers.Ginkgo
 			}
 			if !hasReport && packageSuites.All().Sum().Failed == 0 {
-				return packageResult{}, fmt.Errorf("package %s passed without Ginkgo metadata", pkgPath)
+				packageSuites = append(packageSuites, parsers.TestResults{
+					Framework: parsers.Ginkgo, ExitCode: 1,
+					Tests: parsers.Tests{{Name: "Ginkgo metadata", Package: importPath, Framework: parsers.Ginkgo, Failed: true,
+						Message: fmt.Sprintf("package %s passed without Ginkgo metadata", pkgPath)}},
+				})
 			}
 		}
 		if (len(plan.targets) == 1 && plan.targets[0] == "./..." && !slices.Contains(plan.packages, pkgPath) || slices.Contains(plan.skipEmpty, pkgPath)) && emptyGoPackage(packageSuites) {
