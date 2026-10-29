@@ -24,15 +24,16 @@ import (
 const (
 	viewTabTests     = "tests"
 	viewTabLint      = "lint"
+	viewTabFiles     = "files"
 	viewTabBench     = "bench"
 	viewTabProcesses = "processes"
 	viewTabHistory   = "history"
 )
 
-// exportableTab reports whether a tab has an export rendering; the processes
-// and history tabs are page-only.
+// exportableTab reports whether a tab has an export rendering; the files,
+// processes and history tabs are page-only.
 func exportableTab(tab string) bool {
-	return tab != viewTabProcesses && tab != viewTabHistory
+	return tab != viewTabFiles && tab != viewTabProcesses && tab != viewTabHistory
 }
 
 type routeRequest struct {
@@ -286,7 +287,7 @@ func parseRouteRequest(r *http.Request) (routeRequest, bool) {
 	}
 
 	switch tabSeg {
-	case viewTabTests, viewTabLint, viewTabBench, viewTabProcesses, viewTabHistory:
+	case viewTabTests, viewTabLint, viewTabFiles, viewTabBench, viewTabProcesses, viewTabHistory:
 		req.Tab = tabSeg
 	default:
 		return routeRequest{}, false
@@ -294,6 +295,11 @@ func parseRouteRequest(r *http.Request) (routeRequest, bool) {
 
 	if len(segments) > 1 {
 		req.NodePath = append(req.NodePath, segments[1:]...)
+	}
+	// A files path names a file, whose extension is not an export format.
+	if req.Tab == viewTabFiles {
+		req.IsExport = pathFormat != ""
+		return req, true
 	}
 	if len(req.NodePath) > 0 {
 		last := req.NodePath[len(req.NodePath)-1]

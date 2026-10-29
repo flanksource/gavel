@@ -201,6 +201,14 @@ func (r *Registry) Count() int {
 // Global registry instance
 var DefaultRegistry = NewRegistry()
 
+// SourceFile is a linted file a reader cannot open from the work dir: its
+// Content, which the UI shows with the findings overlaid, and a URL to browse
+// it at its origin, to which the UI appends `line=<n>` unless it names a line.
+type SourceFile struct {
+	URL     string `json:"url,omitempty"`
+	Content string `json:"content,omitempty"`
+}
+
 // LinterResult represents the result of running a linter
 type LinterResult struct {
 	Linter       string             `json:"linter"`
@@ -218,6 +226,10 @@ type LinterResult struct {
 	DebounceUsed time.Duration      `json:"debounce_used,omitempty"`
 	FileCount    int                `json:"file_count,omitempty"`
 	RuleCount    int                `json:"rule_count,omitempty"`
+	// Sources maps a violation's File to where it can be read when it is not
+	// a file under WorkDir: a linter over database rows or other virtual
+	// sources names each with its content and a URL to browse it.
+	Sources map[string]SourceFile `json:"sources,omitempty"`
 	// Status is pending or running while the result is still in flight, and
 	// empty once it is final.
 	Status LinterStatus `json:"status,omitempty"`

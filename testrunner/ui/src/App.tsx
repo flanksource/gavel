@@ -22,7 +22,7 @@ import {
   type TestFilters,
   type Violation,
 } from '@flanksource/clicky-ui/data';
-import { lintFindings, testFindings, type FileFinding, type FileRef, type FindingsViewMode } from '@flanksource/clicky-ui/file-findings';
+import { lintFindings, testFindings, type FileFinding, type FileRef, type FileReviewView } from '@flanksource/clicky-ui/file-findings';
 import { Button, Tabs } from '@flanksource/clicky-ui/components';
 import {
   UiArrowLeft,
@@ -68,7 +68,7 @@ function countFixtureWork(tests: Test[]): number {
 
 const asGavel = (tests: ClickyTest[]): Test[] => tests as Test[];
 
-// The Files tab (and with it Monaco and its worker) is a separate chunk, loaded
+// The Files tab (and with it the file viewer and its highlighter) is a separate chunk, loaded
 // the first time the tab is shown.
 const FilesTab = lazy(() => import('./FilesTab'));
 // A prompt lint result's live session pulls in the AI bundle, so it too loads
@@ -107,6 +107,16 @@ function withWorkDir(tests: ClickyTest[], root: string | undefined): ClickyTest[
 
 function findingKey(finding: FileFinding): string {
   return [finding.workDir, finding.file, finding.line, finding.rule, finding.message].join('\0');
+}
+
+// sourceUrl is where a mapped source is browsed at a finding's line: the
+// source's URL with line=<n> added, unless it already names a line.
+export function sourceUrl(url: string | undefined, line: number | undefined): string | undefined {
+  if (!url) return undefined;
+  if (!line) return url;
+  const parsed = new URL(url);
+  if (!parsed.searchParams.has('line')) parsed.searchParams.set('line', String(line));
+  return parsed.toString();
 }
 
 async function fetchFile(ref: FileRef, scope: { runId?: string }): Promise<string> {
@@ -276,16 +286,19 @@ export function App({ runId, navigate = loadPage }: AppProps = {}) {
   // The Files tab's findings: every lint violation and failed test that names a
   // file, rooted at the work dir it ran in (the git root when it recorded none).
   const gitRoot = snapshot?.git?.root;
-  const { findings, linterByFinding } = useMemo(() => {
+  const { findings, linterByFinding, sourceUrlByFinding } = useMemo(() => {
     const linterByFinding = new Map<string, string>();
+    const sourceUrlByFinding = new Map<string, string>();
     const lintEntries = (lint ?? []).flatMap(result => {
       const workDir = result.work_dir || gitRoot;
       return lintFindings([{ ...result, ...(workDir ? { work_dir: workDir } : {}) }]).map(finding => {
         linterByFinding.set(findingKey(finding), result.linter);
+        const url = sourceUrl(result.sources?.[finding.file]?.url, finding.line);
+        if (url) sourceUrlByFinding.set(findingKey(finding), url);
         return finding;
       });
     });
-    return { findings: [...lintEntries, ...testFindings(withWorkDir(tests, gitRoot))], linterByFinding };
+    return { findings: [...lintEntries, ...testFindings(withWorkDir(tests, gitRoot))], linterByFinding, sourceUrlByFinding };
   }, [lint, tests, gitRoot]);
   const selectedFile = useMemo<FileRef | null>(
     () => (route.tab === 'files' && route.selectedPath ? { file: route.selectedPath, ...(route.workDir ? { workDir: route.workDir } : {}) } : null),
@@ -353,7 +366,7 @@ export function App({ runId, navigate = loadPage }: AppProps = {}) {
     const { line: _line, ...rest } = route;
     commitRoute({ ...rest, ...(line ? { line } : {}) }, 'replace');
   }, [route, commitRoute]);
-  const onViewChange = useCallback((view: FindingsViewMode) => commitRoute({ ...route, view }, 'replace'), [route, commitRoute]);
+  const onViewChange = useCallback((view: FileReviewView) => commitRoute({ ...route, view }, 'replace'), [route, commitRoute]);
   const loadFile = useCallback((ref: FileRef) => fetchFile(ref, scope), [scope]);
   const onSampleChange = useCallback((sampleIndex: number) => commitRoute({ ...route, sampleIndex }), [route, commitRoute]);
   const onOpenStep = useCallback((link: ProcessStepLink) => {
@@ -434,13 +447,23 @@ export function App({ runId, navigate = loadPage }: AppProps = {}) {
     if (!linter) throw new Error(`no linter recorded for the finding at ${finding.file}:${finding.line}`);
     const violation: Violation = finding.rule ? { rule: { method: finding.rule } } : {};
     const action = violationIgnoreAction({ violation, linter, file: finding.file, workDir: finding.workDir ?? '' });
-    if (!action) return null;
+    const source = sourceUrlByFinding.get(findingKey(finding));
+    if (!action && !source) return null;
     return (
-      <Button type="button" size="sm" variant="outline" className="h-6 gap-1 px-2 text-xs text-muted-foreground" title={action.title} disabled={ignoreBusy} onClick={() => void onIgnore(action)}>
-        {action.label}
-      </Button>
+      <>
+        {source && (
+          <Button asChild size="sm" variant="outline" className="h-6 gap-1 px-2 text-xs text-muted-foreground">
+            <a href={source} target="_blank" rel="noreferrer" title={`Open ${finding.file}:${finding.line ?? ''} at its source`}>Open source</a>
+          </Button>
+        )}
+        {action && (
+          <Button type="button" size="sm" variant="outline" className="h-6 gap-1 px-2 text-xs text-muted-foreground" title={action.title} disabled={ignoreBusy} onClick={() => void onIgnore(action)}>
+            {action.label}
+          </Button>
+        )}
+      </>
     );
-  }, [linterByFinding, ignoreBusy, onIgnore]);
+  }, [linterByFinding, sourceUrlByFinding, ignoreBusy, onIgnore]);
 
   const onTestEdit = useCallback(async (node: Test, action: TestEditAction, editScope: TestEditScope) => {
     if (testEditBusy || snapshotStatus.test_edit_supported !== true) return;
@@ -618,7 +641,7 @@ export function App({ runId, navigate = loadPage }: AppProps = {}) {
                   onSelectFile={onSelectFile}
                   line={route.line}
                   onLineChange={onLineChange}
-                  view={route.view ?? 'rendered'}
+                  view={route.view ?? 'preview'}
                   onViewChange={onViewChange}
                   loadFile={loadFile}
                   renderFindingActions={renderFindingActions}

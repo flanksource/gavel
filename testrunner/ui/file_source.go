@@ -28,9 +28,15 @@ func (s *Server) handleFileSource(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Lock()
 	root := s.resolveWorkDirLocked(workDir)
+	mapped, ok := s.mappedSourceLocked(root, path)
 	s.mu.Unlock()
 	if root == "" {
 		http.Error(w, fmt.Sprintf("work_dir %q is not a work dir of this run", workDir), http.StatusBadRequest)
+		return
+	}
+	if ok {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = w.Write([]byte(mapped))
 		return
 	}
 	data, err := fileread.Read(root, path)
@@ -40,6 +46,26 @@ func (s *Server) handleFileSource(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	_, _ = w.Write(data)
+}
+
+// mappedSourceLocked is the content a lint result run from root maps path to
+// (linters.LinterResult.Sources), which wins over a file of that name.
+func (s *Server) mappedSourceLocked(root, path string) (string, bool) {
+	if root == "" {
+		return "", false
+	}
+	for _, result := range s.lint {
+		if result == nil || result.WorkDir == "" {
+			continue
+		}
+		if abs, err := filepath.Abs(result.WorkDir); err != nil || filepath.Clean(abs) != root {
+			continue
+		}
+		if source, ok := result.Sources[filepath.ToSlash(path)]; ok && source.Content != "" {
+			return source.Content, true
+		}
+	}
+	return "", false
 }
 
 // resolveWorkDirLocked returns the absolute form of workDir when the run

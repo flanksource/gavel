@@ -35,6 +35,27 @@ func TestHistoryTabIsPageOnly(t *testing.T) {
 	}
 }
 
+// The files tab is a page route for any file path, including one whose
+// extension reads as an export format, and has no export rendering.
+func TestFilesTabIsPageOnly(t *testing.T) {
+	handler := NewServer().Handler()
+	for path, want := range map[string]int{
+		"/files":                                    200,
+		"/files/rules/br/CopyBook-Fees/XMLData.xml": 200,
+		"/files/docs/README.md":                     200,
+		"/files/testdata/report.json":               200,
+		"/files.json":                               404,
+	} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("GET", path+"?dir=/work", nil)
+		req.Header.Set("Accept", "text/html")
+		handler.ServeHTTP(rec, req)
+		if rec.Code != want {
+			t.Errorf("GET %s = %d, want %d", path, rec.Code, want)
+		}
+	}
+}
+
 // TestParseTestFiltersMatchesTheUIStatusParam mirrors src/routes.ts: no
 // status param is the failing-only default, `all` is no status filter.
 func TestParseTestFiltersMatchesTheUIStatusParam(t *testing.T) {
