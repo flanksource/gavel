@@ -101,7 +101,7 @@ func (r *Runner) Run(ctx context.Context, run lifecycle.RemoteRun) (promptrun.Re
 			switch message.Kind {
 			case KindStarted:
 				if recorder != nil && message.Spec != nil {
-					if err := recorder.Start(message.Spec); err != nil {
+					if err := recorder.Start(message.Spec, message.Workspace); err != nil {
 						return stop(err)
 					}
 				}

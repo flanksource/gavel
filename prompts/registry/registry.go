@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
-	"regexp"
 	"strings"
 
 	"github.com/flanksource/captain/pkg/ai/prompt"
@@ -15,9 +14,6 @@ import (
 	"github.com/flanksource/gavel/prompts"
 	"github.com/flanksource/gavel/verify"
 )
-
-var promptSourcePattern = regexp.MustCompile(
-	`^(?:(?:#[^\n]*|[ \t]*)\n)*---\s*(?:\r\n|\r|\n)([\s\S]*?)(?:\r\n|\r|\n)---\s*(?:\r\n|\r|\n)([\s\S]*)$`)
 
 // ResolvedPrompt is the config-time view of one registered prompt.
 type ResolvedPrompt struct {
@@ -112,35 +108,14 @@ func ResolveOne(opts ResolveOptions, desc prompts.Prompt) (ResolvedPrompt, error
 }
 
 // ParsePromptSource returns a prompt's config-time spec, original unrendered
-// body, and frontmatter. Prompts with templated frontmatter are rendered once
-// with empty config-time data before parsing, matching Resolve while retaining
-// the source body the settings editor must round-trip.
+// body, and frontmatter. A templated frontmatter is read as declared, before
+// any runtime data (prompt.Parse).
 func ParsePromptSource(raw string) (api.Spec, string, map[string]any, error) {
 	doc, err := prompt.Parse(raw)
-	if err == nil {
-		return doc.Spec, doc.Body, doc.Frontmatter, nil
-	}
-
-	match := promptSourcePattern.FindStringSubmatch(raw)
-	if match == nil || !strings.Contains(match[1], "{{") {
+	if err != nil {
 		return api.Spec{}, "", nil, err
 	}
-
-	// Some built-ins template their YAML frontmatter (for example a conditional
-	// maxItems constraint). Parse cannot decode that source before templating, so
-	// render once with empty config-time data to fold the declared spec while
-	// retaining the original, unrendered body for inspection.
-	req, cfg, renderErr := prompt.Load(raw).Render(prompt.RenderOptions{Data: map[string]any{}, Declared: true})
-	if renderErr != nil {
-		return api.Spec{}, "", nil, err
-	}
-	declared := api.Spec(req)
-	if declared.Name == "" {
-		declared.Model = cfg.Model
-	}
-	body := match[2]
-	declared.Prompt.User = body
-	return declared, body, nil, nil
+	return doc.Spec, doc.Body, doc.Frontmatter, nil
 }
 
 // promptSpecAt walks cfg by the descriptor's dotted json path to the PromptSpec

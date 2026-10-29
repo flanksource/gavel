@@ -78,7 +78,7 @@ var _ = Describe("Create TODO steps", func() {
 	DescribeTable("decodes runtime settings with body precedence over query", func(contentType, body, query, model string) {
 		request := httptest.NewRequest(http.MethodPost, "/api/todos/new"+query, strings.NewReader(body))
 		request.Header.Set("Content-Type", contentType)
-		payload, _, err := parseTodoNewPayload(request)
+		payload, _, err := (&Server{}).parseTodoNewPayload(request)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(payload.Spec).NotTo(BeNil())
 		Expect(payload.Spec.Name).To(Equal(model))
@@ -98,7 +98,7 @@ var _ = Describe("Create TODO steps", func() {
 		Expect(writer.Close()).To(Succeed())
 		request := httptest.NewRequest(http.MethodPost, "/api/todos/new", &body)
 		request.Header.Set("Content-Type", writer.FormDataContentType())
-		payload, _, err := parseTodoNewPayload(request)
+		payload, _, err := (&Server{}).parseTodoNewPayload(request)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(payload.Spec).NotTo(BeNil())
 		Expect(payload.Spec.Name).To(Equal("acme-model"))
@@ -110,7 +110,7 @@ var _ = Describe("Create TODO steps", func() {
 	DescribeTable("rejects malformed runtime form values", func(body string) {
 		request := httptest.NewRequest(http.MethodPost, "/api/todos/new", strings.NewReader(body))
 		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		_, _, err := parseTodoNewPayload(request)
+		_, _, err := (&Server{}).parseTodoNewPayload(request)
 		Expect(err).To(HaveOccurred())
 	},
 		Entry("malformed spec", "spec=not-json"),

@@ -221,7 +221,7 @@ func TestLoadReadsRunsFromTheSnapshotStore(t *testing.T) {
 	require.NoError(t, err)
 	require.NoDirExists(t, filepath.Join(workDir, snapshots.Dir), "the run lives only in the store")
 
-	report, err := Load(Options{WorkDir: workDir})
+	report, err := Load(Options{WorkDir: workDir, StateRoot: workDir})
 	require.NoError(t, err)
 	assert.Equal(t, 1, report.RunCount)
 	require.Len(t, report.Tests, 1)
