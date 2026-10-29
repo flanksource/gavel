@@ -44,7 +44,7 @@ var _ = Describe("Nested lint configuration", func() {
 	})
 	It("keeps files owned by a different linter's nested project", func() {
 		Expect(os.WriteFile(filepath.Join(child, ".gavel.yaml"), []byte("lint: {options: {fix: false}}\n"), 0o600)).To(Succeed())
-		other, exists := buildLinterRegistry(child).Get("ruff")
+		other, exists := builtinLinterRegistry(child).Get("ruff")
 		Expect(exists).To(BeTrue())
 		invocations, err := partitionInvocations([]linterInvocation{
 			{linter: markdownlint.NewMarkdownlint(root), projectRoot: root},

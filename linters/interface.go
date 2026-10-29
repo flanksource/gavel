@@ -262,6 +262,16 @@ func (lr *LinterResult) HasViolations() bool {
 	return len(lr.Violations) > 0
 }
 
+// hasActionableViolations reports whether any violation is above info severity.
+func (lr *LinterResult) hasActionableViolations() bool {
+	for _, v := range lr.Violations {
+		if v.Severity != models.SeverityInfo {
+			return true
+		}
+	}
+	return false
+}
+
 // IsSuccessWithViolations returns true if the linter ran successfully but found violations
 func (lr *LinterResult) IsSuccessWithViolations() bool {
 	return lr.Success && lr.HasViolations()
@@ -279,7 +289,7 @@ func (lr *LinterResult) Pretty() api.Text {
 	case lr.TimedOut:
 		status = "⏳"
 		style = "text-amber-600"
-	case lr.Success && lr.HasViolations():
+	case lr.Success && lr.hasActionableViolations():
 		status = "⚠"
 		style = "text-yellow-600"
 	case lr.Success:
@@ -385,6 +395,8 @@ func (vn *violationNode) Pretty() api.Text {
 	switch vn.v.Severity {
 	case models.SeverityError:
 		t = t.Append("✗ ", "text-red-500")
+	case models.SeverityInfo:
+		t = t.Append("ℹ ", "text-blue-500")
 	default:
 		t = t.Append("⚠ ", "text-yellow-500")
 	}

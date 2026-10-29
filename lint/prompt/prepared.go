@@ -14,15 +14,14 @@ import (
 )
 
 type PrepareOptions struct {
-	Directory   string
-	Reference   string
-	Version     string
-	Variables   map[string]any
-	Presets     []string
-	Spec        *api.Spec
-	Paths       []string
-	Concurrency int
-	Env         []string
+	Directory string
+	Reference string
+	Version   string
+	Variables map[string]any
+	Presets   []string
+	Spec      *api.Spec
+	Paths     []string
+	Env       []string
 }
 
 type Prepared struct{ input reviewsInput }
@@ -43,9 +42,9 @@ func Prepare(ctx context.Context, options PrepareOptions) (*Prepared, error) {
 			return nil, errors.New("path scope conflicts with variables.files")
 		}
 	}
-	paths := options.Paths
-	if len(paths) == 0 {
-		paths = []string{""}
+	scope, err := newFileScope(options.Directory, options.Paths)
+	if err != nil {
+		return nil, err
 	}
 	presets := slices.Clone(options.Presets)
 	if options.Presets == nil {
@@ -62,38 +61,24 @@ func Prepare(ctx context.Context, options PrepareOptions) (*Prepared, error) {
 		return nil, errors.New("prompt configuration must use the prepared launch workspace; configure setup on workspace")
 	}
 	spec.Setup = &shell.Setup{Cwd: options.Directory, Env: options.Env}
-	prepared := &Prepared{input: reviewsInput{WorkDir: options.Directory, Concurrency: options.Concurrency}}
-	if prepared.input.Concurrency == 0 {
-		prepared.input.Concurrency = 4
+	prepared := &Prepared{input: reviewsInput{WorkDir: options.Directory}}
+	variables := maps.Clone(options.Variables)
+	if variables == nil {
+		variables = map[string]any{}
 	}
-	for _, path := range paths {
-		variables := maps.Clone(options.Variables)
-		if variables == nil {
-			variables = map[string]any{}
-		}
-		if path != "" {
-			variables["files"] = typedFile(detail.InputSchema, path)
-		}
-		run := &reviewRun{WorkDir: options.Directory, Name: detail.Name + ":" + path}
-		invocation, err := captaincli.PreparePrompt(ctx, captaincli.PreparePromptOptions{
-			Reference: detail.ID, Version: options.Version, Directory: options.Directory, Tools: run.tools(),
-			Request: captaincli.PromptRenderRequest{Variables: variables, Presets: presets, Spec: &spec},
-		})
-		if err != nil {
-			return nil, fmt.Errorf("prepare %s: %w", path, err)
-		}
-		prepared.input.Reviews = append(prepared.input.Reviews, review{Name: run.Name, Prepared: invocation, Run: run})
+	if len(options.Paths) > 0 {
+		variables["files"] = options.Paths
 	}
+	run := &reviewRun{WorkDir: options.Directory, Scope: scope, Name: detail.Name}
+	invocation, err := captaincli.PreparePrompt(ctx, captaincli.PreparePromptOptions{
+		Reference: detail.ID, Version: options.Version, Directory: options.Directory, Tools: run.tools(),
+		Request: captaincli.PromptRenderRequest{Variables: variables, Presets: presets, Spec: &spec},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("prepare %s: %w", detail.Name, err)
+	}
+	prepared.input.Reviews = []review{{Name: run.Name, Scope: scope, Prepared: invocation, Run: run}}
 	return prepared, nil
-}
-
-func typedFile(schema map[string]any, path string) any {
-	properties, _ := schema["properties"].(map[string]any)
-	property, _ := properties["files"].(map[string]any)
-	if property["type"] == "array" {
-		return []string{path}
-	}
-	return path
 }
 
 func (p *Prepared) Run(ctx context.Context, publisher Publisher) []*linters.LinterResult {

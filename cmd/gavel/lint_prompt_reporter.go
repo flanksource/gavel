@@ -59,7 +59,7 @@ func newPromptLintReporter(options promptLintReportOptions) (*promptLintReporter
 		seen: map[promptFindingKey]bool{}, errors: map[string]string{},
 		snapshot: testui.Snapshot{
 			Metadata: &testui.SnapshotMetadata{Version: version, Started: time.Now().UTC(), Kind: "lint"},
-			Git:      snapshotGitInfo(options.Options.WorkDir),
+			Git:      snapshots.GitInfo(options.Options.WorkDir),
 			Status:   testui.SnapshotStatus{Running: true, LintRun: true},
 			Lint:     []*linters.LinterResult{},
 		},

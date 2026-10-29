@@ -41,7 +41,7 @@ var _ = Describe("JSON lint integration", func() {
 		Expect(os.WriteFile(filepath.Join(root, "data.yaml"), []byte("enabled: true\n"), 0o600)).To(Succeed())
 		selected, _ = shouldSelectLinter(root, verify.GavelConfig{}, adapter, false)
 		Expect(selected).To(BeTrue())
-		Expect(buildLinterRegistry(root).Has("json")).To(BeTrue())
+		Expect(builtinLinterRegistry(root).Has("json")).To(BeTrue())
 	})
 
 	It("activates for matching files in a nested directory", func() {

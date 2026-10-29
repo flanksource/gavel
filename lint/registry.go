@@ -10,6 +10,7 @@ import (
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/linters/betterleaks"
+	"github.com/flanksource/gavel/linters/command"
 	"github.com/flanksource/gavel/linters/eslint"
 	"github.com/flanksource/gavel/linters/golangci"
 	"github.com/flanksource/gavel/linters/jscpd"
@@ -26,9 +27,24 @@ import (
 	"github.com/flanksource/gavel/verify"
 )
 
-// buildLinterRegistry registers every available linter rooted at workDir.
-// Shared between the execute path and the dry-run path so both stay in sync.
-func buildLinterRegistry(workDir string) *linters.Registry {
+// loadLinterRegistry registers every available linter rooted at workDir: the
+// built-ins and each command the .gavel.yaml in force there (for an
+// invocation from configDir) declares — which its validation keeps off the
+// built-ins' names. Shared between the execute path and the dry-run path so
+// both stay in sync.
+func loadLinterRegistry(workDir, configDir string) (*linters.Registry, error) {
+	cfg, err := verify.LoadGavelConfig(verify.RuntimeConfigDirectory(workDir, configDir))
+	if err != nil {
+		return nil, err
+	}
+	registry := builtinLinterRegistry(workDir)
+	for _, declared := range command.Declared(workDir, cfg.Lint) {
+		registry.Register(declared)
+	}
+	return registry, nil
+}
+
+func builtinLinterRegistry(workDir string) *linters.Registry {
 	registry := linters.NewRegistry()
 	registry.Register(golangci.NewGolangciLint(workDir))
 	registry.Register(ruff.NewRuff(workDir))

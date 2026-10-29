@@ -6,7 +6,11 @@ func Validate(opts Options) error {
 	if opts.WorkDir == "" {
 		return fmt.Errorf("lint workspace is required")
 	}
-	names, _, err := resolveRequestedLinters(buildLinterRegistry(opts.WorkDir), opts.Linters)
+	registry, err := loadLinterRegistry(opts.WorkDir, opts.ConfigDir)
+	if err != nil {
+		return err
+	}
+	names, _, err := resolveRequestedLinters(registry, opts.Linters)
 	if err != nil {
 		return err
 	}

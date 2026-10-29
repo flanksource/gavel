@@ -71,7 +71,7 @@ var _ = Describe("UIR native configuration", func() {
 		Expect(os.WriteFile(filepath.Join(root, ".uir.yaml"), []byte("version: 1\n"), 0o600)).To(Succeed())
 		selected, _ = shouldSelectLinter(root, verify.GavelConfig{}, adapter, false)
 		Expect(selected).To(BeTrue())
-		Expect(buildLinterRegistry(root).Has("uir")).To(BeTrue())
+		Expect(builtinLinterRegistry(root).Has("uir")).To(BeTrue())
 	})
 
 	It("schedules the requested project with only global directory configuration", func() {

@@ -34,14 +34,13 @@ type Options struct {
 	Changed       bool                       `flag:"changed" help:"Review local staged/unstaged/untracked files, or the runner changeset in CI"`
 	Since         string                     `flag:"since" help:"Select changes since a ref's merge-base plus local edits; HEAD = local edits, staged = staged files"`
 	ChangedFiles  []string                   `flag:"changed-files" help:"Explicit changed files, unioned with --changed or --since when supplied"`
-	Concurrency   int                        `flag:"concurrency" default:"4" help:"Maximum prompt runs in flight; each file or directory is its own run"`
 	AIFix         bool                       `flag:"ai-fix" help:"Use lint.fix from Gavel config to repair findings and re-run the prompt until clean"`
 	AIFixMaxIters int                        `flag:"ai-fix-max-iterations" default:"3" help:"Max AI→re-lint cycles"`
 	UI            bool                       `flag:"ui" help:"Launch browser UI to view violations"`
 	Addr          string                     `flag:"addr" help:"Interface to bind --ui HTTP server. Defaults to 0.0.0.0 (all interfaces); set localhost to restrict to this machine." default:"0.0.0.0"`
 	Stdin         io.Reader                  `flag:"-" json:"-" yaml:"-"`
-	// Paths are the files and directories under review; each is its own prompt
-	// run, passed to the prompt as the files template variable.
+	// Paths are the files and directories under review, all in one prompt run,
+	// passed to the prompt as the files list.
 	Paths     []string             `flag:"-" json:"-" yaml:"-"`
 	Selection *changeset.Selection `flag:"-" json:"-" yaml:"-"`
 	// Dirs are the invocation's resolved directories; paths are relative to
@@ -101,7 +100,7 @@ func (opts Options) scope(ctx context.Context, workDir string) ([]string, bool, 
 	if len(paths) == 0 {
 		return nil, false, nil
 	}
-	if slices.ContainsFunc(opts.Prompt.Var, func(v string) bool { return strings.HasPrefix(v, "files=") }) {
+	if slices.ContainsFunc(opts.Prompt.Var, func(v string) bool { return varKey(v) == "files" }) {
 		return nil, false, fmt.Errorf("--var files conflicts with the path arguments and change selection")
 	}
 	if opts.Prompt.Vars != "" {
@@ -116,30 +115,43 @@ func (opts Options) scope(ctx context.Context, workDir string) ([]string, bool, 
 	return paths, false, nil
 }
 
-// review is one prompt run: one path under review, or the whole prompt when
+// varKey is the template variable a --var pair sets: key=, key:= and key[]=
+// all set key.
+func varKey(pair string) string {
+	key, _, _ := strings.Cut(pair, "=")
+	key, _, _ = strings.Cut(strings.TrimSuffix(key, ":"), "[")
+	return key
+}
+
+// review is one prompt run over every path in scope, or the bare prompt when
 // there is no path scope.
 type review struct {
 	Name     string
 	Prompt   captaincli.AIPromptOptions
+	Scope    fileScope
 	Prepared *captaincli.PreparedPrompt
 	Run      *reviewRun
 }
 
-func (opts Options) reviews(paths []string) []review {
-	if len(paths) == 0 {
-		return []review{{Name: opts.name(), Prompt: opts.Prompt}}
+// review passes every path to the prompt as the files list, a typed --var.
+func (opts Options) review(workDir string, paths []string) (review, error) {
+	scope, err := newFileScope(workDir, paths)
+	if err != nil {
+		return review{}, err
 	}
-	reviews := make([]review, 0, len(paths))
-	for _, path := range paths {
-		prompt := opts.Prompt
-		prompt.Var = append(slices.Clone(opts.Prompt.Var), "files="+path)
-		reviews = append(reviews, review{Name: opts.name() + ":" + path, Prompt: prompt})
+	prompt := opts.Prompt
+	if len(paths) > 0 {
+		files, err := json.Marshal(paths)
+		if err != nil {
+			return review{}, fmt.Errorf("encode files: %w", err)
+		}
+		prompt.Var = append(slices.Clone(opts.Prompt.Var), "files:="+string(files))
 	}
-	return reviews
+	return review{Name: opts.name(), Prompt: prompt, Scope: scope}, nil
 }
 
-// Run reviews each path in scope as its own Captain prompt run. Every run is
-// published as pending before the first one launches.
+// Run reviews every path in scope in one Captain prompt run, published as
+// pending before it launches.
 func Run(ctx context.Context, opts Options) ([]*linters.LinterResult, error) {
 	exclusions, err := lint.ParseRuleExclusions(opts.Exclude)
 	if err != nil {
@@ -153,16 +165,20 @@ func Run(ctx context.Context, opts Options) ([]*linters.LinterResult, error) {
 	if err != nil || skip {
 		return nil, err
 	}
+	scoped, err := opts.review(workDir, paths)
+	if err != nil {
+		return nil, err
+	}
 	var stdin []byte
 	if opts.Stdin != nil {
-		// Every run renders the prompt, so piped input is read once and replayed.
+		// Each model variant renders the prompt, so piped input is read once and replayed.
 		if stdin, err = io.ReadAll(opts.Stdin); err != nil {
 			return nil, fmt.Errorf("read prompt stdin: %w", err)
 		}
 	}
 	results := runReviews(ctx, reviewsInput{
-		Reviews: opts.reviews(paths), WorkDir: workDir, Stdin: stdin, File: opts.Prompt.File,
-		Concurrency: opts.Concurrency, Publisher: opts.Publisher, OnEvent: opts.OnEvent,
+		Reviews: []review{scoped}, WorkDir: workDir, Stdin: stdin, File: opts.Prompt.File,
+		Publisher: opts.Publisher, OnEvent: opts.OnEvent,
 	})
 	exclusions.FilterResults(results)
 	return results, nil
@@ -180,22 +196,16 @@ func Render(ctx context.Context, opts Options) ([]captaincli.PromptRenderResult,
 	if err != nil || skip {
 		return nil, err
 	}
-	var stdin []byte
-	if opts.Stdin != nil {
-		if stdin, err = io.ReadAll(opts.Stdin); err != nil {
-			return nil, fmt.Errorf("read prompt stdin: %w", err)
-		}
+	scoped, err := opts.review(workDir, paths)
+	if err != nil {
+		return nil, err
 	}
-	var rendered []captaincli.PromptRenderResult
-	for _, review := range opts.reviews(paths) {
-		run := &reviewRun{WorkDir: workDir}
-		result, err := captaincli.RenderPrompt(ctx, invocation(invocationInput{File: opts.Prompt.File, Prompt: review.Prompt, Stdin: stdinReader(stdin), Tools: run.tools()}))
-		if err != nil {
-			return nil, fmt.Errorf("%s: %w", review.Name, err)
-		}
-		rendered = append(rendered, result)
+	run := &reviewRun{WorkDir: workDir, Scope: scoped.Scope}
+	result, err := captaincli.RenderPrompt(ctx, invocation(invocationInput{File: opts.Prompt.File, Prompt: scoped.Prompt, Stdin: opts.Stdin, Tools: run.tools()}))
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", scoped.Name, err)
 	}
-	return rendered, nil
+	return []captaincli.PromptRenderResult{result}, nil
 }
 
 type invocationInput struct {
