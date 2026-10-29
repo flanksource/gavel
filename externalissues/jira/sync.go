@@ -181,7 +181,7 @@ func (c *Client) syncIssue(ctx context.Context, options syncIssueOptions) (resul
 		}
 		doc.Metadata.Source.CloudID = c.credentials.CloudID
 		var extracted string
-		if options.Attachments || options.Extract {
+		if !issue.attachmentsIgnored && (options.Attachments || options.Extract) {
 			progress.SetDescription(fmt.Sprintf("Processing %d attachments", len(issue.Attachments)))
 			extracted, err = c.syncAttachments(ctx, syncAttachmentOptions{Issue: &issue, Stage: stage, Result: &result, Extract: options.Extract, Root: root, Document: doc, Force: options.Force})
 			if err != nil {

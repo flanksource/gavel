@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/flanksource/clicky"
+	"github.com/flanksource/gavel/workspace"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/spf13/cobra"
@@ -42,6 +44,9 @@ func commandRoot() *cobra.Command {
 	clicky.Flags.FormatOptions = clicky.FormatOptions{}
 	clicky.UseFormatter(clicky.FormatOptions{})
 	root := &cobra.Command{Use: "gavel", SilenceErrors: true, SilenceUsage: true}
+	dirs, err := workspace.Resolve(GinkgoT().TempDir())
+	Expect(err).NotTo(HaveOccurred())
+	root.SetContext(workspace.With(context.Background(), dirs))
 	clicky.BindAllFlagsToCommand(root, "format", "tasks")
 	root.PersistentPreRun = func(*cobra.Command, []string) { clicky.Flags.UseFlags() }
 	Register(root)

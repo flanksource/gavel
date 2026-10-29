@@ -48,37 +48,52 @@ func (c *Client) Get(ctx context.Context, options GetOptions) (Issue, error) {
 			return Issue{}, err
 		}
 		progress.SetProgress(2, 4)
-		progress.SetDescription("Loading comments")
-		comments, err := c.Comments(ctx, issue.Key)
-		if err != nil {
-			return Issue{}, err
+		filter := ParseOptions{Catalog: fields, IgnoreFields: c.ignoreFields}
+		if !filter.ignores("comment") {
+			progress.SetDescription("Loading comments")
+			comments, err := c.Comments(ctx, issue.Key)
+			if err != nil {
+				return Issue{}, err
+			}
+			issue.Comments = comments
+			count := len(comments)
+			issue.CommentCount = &count
 		}
-		issue.Comments = comments
-		count := len(comments)
-		issue.CommentCount = &count
 		progress.SetProgress(3, 4)
-		progress.SetDescription("Loading remote links")
-		var links []json.RawMessage
-		if err := c.json(ctx, requestOptions{Path: "/issue/" + url.PathEscape(issue.Key) + "/remotelink"}, &links); err != nil {
-			return Issue{}, err
+		if !filter.ignores("remoteLinks") {
+			progress.SetDescription("Loading remote links")
+			if err := c.loadRemoteLinks(ctx, &issue); err != nil {
+				return Issue{}, err
+			}
 		}
-		if links == nil {
-			return Issue{}, fmt.Errorf("Jira remote links response requires an array")
-		}
-		value, err := json.Marshal(links)
-		if err != nil {
-			return Issue{}, err
-		}
-		mapped, err := MapFields(map[string]json.RawMessage{"remoteLinks": value}, map[string]FieldDefinition{"remoteLinks": {ID: "remoteLinks", Name: "Remote links"}})
-		if err != nil {
-			return Issue{}, err
-		}
-		issue.Fields["remoteLinks"] = mapped["remoteLinks"]
 		issue.Full = options.Full
 		progress.SetProgress(4, 4)
-		progress.SetDescription(fmt.Sprintf("Loaded %s with %d comments", issue.Key, count))
+		progress.SetDescription("Loaded " + issue.Key)
+		if issue.CommentCount != nil {
+			progress.SetDescription(fmt.Sprintf("Loaded %s with %d comments", issue.Key, *issue.CommentCount))
+		}
 		return issue, nil
 	})
+}
+
+func (c *Client) loadRemoteLinks(ctx context.Context, issue *Issue) error {
+	var links []json.RawMessage
+	if err := c.json(ctx, requestOptions{Path: "/issue/" + url.PathEscape(issue.Key) + "/remotelink"}, &links); err != nil {
+		return err
+	}
+	if links == nil {
+		return fmt.Errorf("Jira remote links response requires an array")
+	}
+	value, err := json.Marshal(links)
+	if err != nil {
+		return err
+	}
+	mapped, err := MapFields(map[string]json.RawMessage{"remoteLinks": value}, map[string]FieldDefinition{"remoteLinks": {ID: "remoteLinks", Name: remoteLinksName}})
+	if err != nil {
+		return err
+	}
+	issue.Fields["remoteLinks"] = mapped["remoteLinks"]
+	return nil
 }
 
 func (c *Client) List(ctx context.Context, options SearchOptions) ([]Issue, error) {
@@ -155,5 +170,5 @@ func (c *Client) parseIssue(raw json.RawMessage, catalog map[string]FieldDefinit
 	if err != nil {
 		return Issue{}, err
 	}
-	return ParseIssue(flat, ParseOptions{Site: c.Site, Catalog: catalog})
+	return ParseIssue(flat, ParseOptions{Site: c.Site, Catalog: catalog, IgnoreFields: c.ignoreFields})
 }

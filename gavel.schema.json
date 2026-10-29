@@ -1994,6 +1994,27 @@
       },
       "type": "object"
     },
+    "externalIssues": {
+      "additionalProperties": false,
+      "description": "External issue provider settings.",
+      "properties": {
+        "jira": {
+          "additionalProperties": false,
+          "description": "Jira issue settings.",
+          "properties": {
+            "ignoreFields": {
+              "description": "Field IDs or Jira display names omitted from issue get, list and sync outputs. Matches either value using commons MatchItems: case-insensitive exact, prefix*, *suffix or *contains*. Patterns accumulate uniquely across configuration layers. Empty leaves all fields unchanged. Identity fields id, key, summary, url and project are always retained. Exclusions override list --fields; comment and attachment exclusions omit their counts, and attachment exclusions disable sync downloads and extraction. Explicit comment and attachment operations are unaffected.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
     "fixtures": {
       "additionalProperties": false,
       "description": "Fixture-test discovery for `gavel test`.",

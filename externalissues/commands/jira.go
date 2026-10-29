@@ -76,7 +76,7 @@ func Register(rootCmd *cobra.Command) {
 	provider.PersistentFlags().StringVar(&profile, "profile", "", "TWG credential profile")
 	provider.PersistentFlags().BoolVar(&noCache, "no-cache", false, "Rebuild the Jira field metadata cache")
 	client := func(ctx context.Context) (*jira.Client, error) {
-		return jira.NewClient(ctx, jira.ClientOptions{Site: site, Profile: profile})
+		return newJiraClient(ctx, jira.ClientOptions{Site: site, Profile: profile})
 	}
 	store := func() jira.CatalogStore { return jira.CatalogStore{Dir: os.Getenv("GAVEL_JIRA_CACHE_DIR")} }
 	syncCmd := clicky.AddNamedCommandWithContext("sync", provider, externalIssueSync{}, func(ctx context.Context, opts externalIssueSync) (jira.SyncResults, error) {
@@ -98,7 +98,7 @@ func Register(rootCmd *cobra.Command) {
 		if err := options.Validate(); err != nil {
 			return nil, err
 		}
-		c, err := jira.NewClient(ctx, jira.ClientOptions{Site: selectedSite, Profile: profile, Credentials: jira.Credentials{CloudID: options.CloudID}})
+		c, err := newJiraClient(ctx, jira.ClientOptions{Site: selectedSite, Profile: profile, Credentials: jira.Credentials{CloudID: options.CloudID}})
 		if err != nil {
 			return nil, err
 		}
