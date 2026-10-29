@@ -1,13 +1,8 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { App } from './App';
+import { App, sourceUrl } from './App';
 import type { Snapshot, Test } from './types';
 
-// The Files tab pulls in Monaco, which needs a real browser; the specs here only
-// exercise the tab's data flow, so the editor, its loader and its inline worker are stubs.
-vi.mock('monaco-editor', () => ({}));
-vi.mock('@monaco-editor/react', () => ({ loader: { config: () => undefined }, default: () => null }));
-vi.mock('monaco-editor/esm/vs/editor/editor.worker?worker&inline', () => ({ default: class FakeWorker {} }));
 
 class FakeEventSource {
   static CLOSED = 2;
@@ -62,6 +57,19 @@ function open(url: string) {
   window.history.replaceState({}, '', url);
   return render(<App />);
 }
+
+describe('sourceUrl', () => {
+  const browse = 'https://mc.example.com/entity/transaction/tx-1/xml';
+  it.each([
+    ['adds the finding\'s line', browse, 3, `${browse}?line=3`],
+    ['keeps a line the source already names', `${browse}?line=9`, 3, `${browse}?line=9`],
+    ['keeps other query params', `${browse}?doc=Math`, 3, `${browse}?doc=Math&line=3`],
+    ['opens the file when the finding has no line', browse, undefined, browse],
+    ['offers nothing without a URL', undefined, 3, undefined],
+  ])('%s', (_name, url, line, want) => {
+    expect(sourceUrl(url, line)).toBe(want);
+  });
+});
 
 describe('App', () => {
   beforeEach(() => {

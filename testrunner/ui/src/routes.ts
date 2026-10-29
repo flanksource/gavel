@@ -9,7 +9,7 @@ import {
   type LintSeverity,
   type TestFilters,
 } from '@flanksource/clicky-ui/data';
-import type { FindingsViewMode } from '@flanksource/clicky-ui/file-findings';
+import type { FileReviewView } from '@flanksource/clicky-ui/file-findings';
 import { basePath } from './config';
 
 const DEFAULT_STATUS_FILTER_TOKENS = ['!passed', '!skipped'];
@@ -37,8 +37,8 @@ export interface RouteState {
   selectedPath: string;
   // Files tab: the root `selectedPath` is relative to (`?dir=`), the same relative path can exist under several.
   workDir?: string;
-  // Files tab: how a markdown file is shown (`?view=`); rendered unless it says source.
-  view?: FindingsViewMode;
+  // Files tab: the open file's tab (`?view=`): preview (Source for code) unless it says source or problems.
+  view?: FileReviewView;
   // Files tab: 1-based line to reveal (`?line=`).
   line?: number;
   filters: TestFilters;
@@ -53,6 +53,10 @@ export type ExportFormat = 'json' | 'md' | 'pdf';
 function splitCSV(value: string | null): string[] {
   if (!value) return [];
   return value.split(',').map(v => v.trim()).filter(Boolean);
+}
+
+function parseView(value: string | null): FileReviewView {
+  return value === 'source' || value === 'problems' ? value : 'preview';
 }
 
 export function parseRoute(location: Pick<Location, 'pathname' | 'search'>): RouteState {
@@ -99,7 +103,7 @@ export function parseRoute(location: Pick<Location, 'pathname' | 'search'>): Rou
     sampleIndex: sample !== null && /^\d+$/.test(sample) ? Number(sample) : undefined,
     hideExited: params.get('hideExited') === '1',
     ...(dir ? { workDir: dir } : {}),
-    view: params.get('view') === 'source' ? 'source' : 'rendered',
+    view: parseView(params.get('view')),
     line: line !== null && /^\d+$/.test(line) && Number(line) > 0 ? Number(line) : undefined,
   };
 }
@@ -127,7 +131,7 @@ export function buildRoute(state: RouteState): string {
   }
   if (state.tab === 'files') {
     if (state.workDir) params.set('dir', state.workDir);
-    if (state.view === 'source') params.set('view', 'source');
+    if (state.view && state.view !== 'preview') params.set('view', state.view);
     if (state.line !== undefined) params.set('line', String(state.line));
   }
   if (state.tab === 'bench' && state.sampleIndex !== undefined) params.set('sample', String(state.sampleIndex));

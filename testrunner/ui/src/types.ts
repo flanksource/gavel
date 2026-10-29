@@ -86,6 +86,11 @@ export interface Violation {
   code?: string;
 }
 
+export interface SourceFile {
+  url?: string;
+  content?: string;
+}
+
 export interface LinterResult {
   linter: string;
   work_dir?: string;
@@ -100,6 +105,9 @@ export interface LinterResult {
   error?: string;
   file_count?: number;
   rule_count?: number;
+  // sources maps a violation's file the work dir does not hold to its
+  // content (served by /api/file) and a URL to browse it at its origin.
+  sources?: Record<string, SourceFile>;
   // status is set only while the linter is in flight; a final result omits it.
   status?: 'pending' | 'running';
   // run_id is the Captain prompt run producing the result; session_id is the

@@ -46,6 +46,19 @@ var _ = Describe("GET /api/file", func() {
 		Expect([]any{code, contentType, body}).To(Equal([]any{http.StatusOK, "text/plain; charset=utf-8", source}))
 	})
 
+	It("serves a virtual file from its lint result's source map, and still misses an unmapped one", func() {
+		const xml = "<Transaction>\n  <Math/>\n</Transaction>\n"
+		srv := testui.NewServer()
+		srv.SetLintResults([]*linters.LinterResult{{Linter: "oipa-transaction", WorkDir: workDir, Sources: map[string]linters.SourceFile{
+			"rules/pc/Acme/pl/Gold/tr/Fee/XMLData.xml": {URL: "https://mc.example.com/entity/transaction/tx-1/xml", Content: xml},
+		}}})
+
+		code, contentType, body := fetch(srv, workDir, "rules/pc/Acme/pl/Gold/tr/Fee/XMLData.xml")
+		Expect([]any{code, contentType, body}).To(Equal([]any{http.StatusOK, "text/plain; charset=utf-8", xml}))
+		code, _, _ = fetch(srv, workDir, "rules/pc/Acme/pl/Gold/tr/Other/XMLData.xml")
+		Expect(code).To(Equal(http.StatusNotFound))
+	})
+
 	It("serves a file under a replayed snapshot's test work dir", func() {
 		srv := testui.NewServer()
 		srv.LoadSnapshot(testui.Snapshot{Tests: []parsers.Test{{Name: "TestMain", WorkDir: workDir, File: "cmd/main.go"}}})

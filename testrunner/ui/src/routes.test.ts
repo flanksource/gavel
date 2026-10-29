@@ -90,9 +90,9 @@ describe('files route', () => {
     expect(buildRoute(route)).toBe(url);
   });
 
-  it('defaults to the rendered view and omits it and an absent line from the URL', () => {
+  it('defaults to the preview and omits it and an absent line from the URL', () => {
     const route = at(`/files/a.go?dir=${DIR_PARAM}`);
-    expect(route.view).toBe('rendered');
+    expect(route.view).toBe('preview');
     expect(route.line).toBeUndefined();
     expect(buildRoute(route)).toBe(`/files/a.go?dir=${DIR_PARAM}`);
   });
@@ -100,7 +100,8 @@ describe('files route', () => {
   it('ignores a line that is not a positive integer and a view that is not one', () => {
     expect(at('/files/a.go?line=0').line).toBeUndefined();
     expect(at('/files/a.go?line=x').line).toBeUndefined();
-    expect(at('/files/a.go?view=nonsense').view).toBe('rendered');
+    expect(at('/files/a.go?view=nonsense').view).toBe('preview');
+    expect(at('/files/a.go?view=problems').view).toBe('problems');
   });
 
   it('does not carry the file query onto other tabs', () => {
