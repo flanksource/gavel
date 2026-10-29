@@ -2,6 +2,7 @@ package jira
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -22,6 +23,15 @@ type Credentials struct {
 
 var twgVariable = regexp.MustCompile(`^TWG_[A-Z0-9_]+$`)
 
+type partialCredentialsError struct {
+	Set     string
+	Missing []string
+}
+
+func (e partialCredentialsError) Error() string {
+	return fmt.Sprintf("%s is set but none of %s are set", e.Set, strings.Join(e.Missing, ", "))
+}
+
 func credentialsFromEnv(getenv func(string) string) (Credentials, bool, error) {
 	cloudID := firstEnv(getenv, "JIRA_CLOUD_ID", "ATLASSIAN_CLOUD_ID")
 	for _, group := range []struct{ oauth, token, user []string }{
@@ -32,15 +42,15 @@ func credentialsFromEnv(getenv func(string) string) (Credentials, bool, error) {
 		if token := firstEnv(getenv, group.oauth...); token != "" {
 			return Credentials{AccessToken: token, CloudID: cloudID}, true, nil
 		}
-		if token := firstEnv(getenv, group.token...); token != "" {
+		if tokenKey := firstEnvKey(getenv, group.token...); tokenKey != "" {
 			user := firstEnv(getenv, group.user...)
 			if user == "" {
-				return Credentials{}, true, fmt.Errorf("%s requires %s", group.token[0], strings.Join(group.user, " or "))
+				return Credentials{}, true, partialCredentialsError{Set: tokenKey, Missing: group.user}
 			}
-			return Credentials{Username: user, APIToken: token, CloudID: cloudID}, true, nil
+			return Credentials{Username: user, APIToken: firstEnv(getenv, tokenKey), CloudID: cloudID}, true, nil
 		}
-		if firstEnv(getenv, group.user...) != "" {
-			return Credentials{}, true, fmt.Errorf("%s requires %s", group.user[0], group.token[0])
+		if userKey := firstEnvKey(getenv, group.user...); userKey != "" {
+			return Credentials{}, true, partialCredentialsError{Set: userKey, Missing: append(append([]string{}, group.token...), group.oauth...)}
 		}
 	}
 	return Credentials{}, false, nil
@@ -102,9 +112,16 @@ func decodeTWGLiteral(literal string) (string, error) {
 }
 
 func firstEnv(getenv func(string) string, keys ...string) string {
+	if key := firstEnvKey(getenv, keys...); key != "" {
+		return strings.TrimSpace(getenv(key))
+	}
+	return ""
+}
+
+func firstEnvKey(getenv func(string) string, keys ...string) string {
 	for _, key := range keys {
-		if value := strings.TrimSpace(getenv(key)); value != "" {
-			return value
+		if strings.TrimSpace(getenv(key)) != "" {
+			return key
 		}
 	}
 	return ""
@@ -120,6 +137,10 @@ func discoverCredentials(ctx context.Context, options ClientOptions) (Credential
 	}
 	if options.Profile == "" {
 		credentials, found, err := credentialsFromEnv(os.Getenv)
+		var partial partialCredentialsError
+		if errors.As(err, &partial) {
+			return Credentials{}, "", fmt.Errorf("incomplete Jira credentials in the environment: %w; export one of %s, or unset %s to use twg credentials", err, strings.Join(partial.Missing, ", "), partial.Set)
+		}
 		if found || err != nil {
 			return credentials, site, err
 		}
@@ -130,7 +151,7 @@ func discoverCredentials(ctx context.Context, options ClientOptions) (Credential
 	}
 	credentials, found, err := credentialsFromEnv(func(key string) string { return values[key] })
 	if err != nil {
-		return Credentials{}, "", err
+		return Credentials{}, "", fmt.Errorf("incomplete Jira credentials exported by twg: %w; run twg login", err)
 	}
 	if !found {
 		return Credentials{}, "", fmt.Errorf("TWG exported no Jira credentials; configure JIRA_API_TOKEN and JIRA_EMAIL or run twg login")

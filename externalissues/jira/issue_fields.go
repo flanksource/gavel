@@ -105,6 +105,10 @@ func (i Issue) renderField(field externalissues.Field, id string, options Render
 	if checklist {
 		doc.Root = checklistDocument(doc.Root)
 	}
+	doc.Root, err = resolveDocumentMedia(doc.Root, i.Attachments)
+	if err != nil {
+		return nil, false, err
+	}
 	doc.Root, err = resolveDocumentLinks(doc.Root, options.ResolveIssueURL)
 	return doc, hasChecklist(doc.Root), err
 }

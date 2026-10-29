@@ -6,15 +6,24 @@ import (
 
 	"github.com/flanksource/clicky/markdown"
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/externalissues"
 )
 
-func renderADF(raw json.RawMessage, path string) markdown.Node {
+type adfRenderOptions struct {
+	Path        string
+	Attachments []externalissues.Attachment
+}
+
+func renderADF(raw json.RawMessage, options adfRenderOptions) (markdown.Node, error) {
 	var doc ADFNode
 	if err := json.Unmarshal(raw, &doc); err != nil {
-		logger.Warnf("ADF %s: decode ADF: %v; retaining raw JSON", path, err)
-		return markdown.Node{Kind: "code_block", Language: "json", Source: string(raw)}
+		logger.Warnf("ADF %s: decode ADF: %v; retaining raw JSON", options.Path, err)
+		return markdown.Node{Kind: "code_block", Language: "json", Source: string(raw)}, nil
 	}
-	return doc.toNode(path)
+	if err := resolveADFMedia(&doc, options.Attachments); err != nil {
+		return markdown.Node{}, fmt.Errorf("ADF %s: %w", options.Path, err)
+	}
+	return doc.toNode(options.Path), nil
 }
 
 func (n ADFNode) toNode(path string) markdown.Node {

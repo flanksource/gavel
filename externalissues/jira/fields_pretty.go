@@ -9,6 +9,9 @@ import (
 	"github.com/flanksource/clicky/api"
 )
 
+// fieldLabelKeys are the properties that name a Jira user, option, version or component, in precedence order.
+var fieldLabelKeys = []string{"displayName", "name", "value"}
+
 type fieldView struct {
 	short api.Textable
 	full  api.Textable
@@ -88,11 +91,9 @@ func fieldObject(values map[string]any) (fieldView, error) {
 		return view, err
 	}
 	if address, ok := values["self"].(string); ok && address != "" {
-		for _, key := range []string{"votes", "watchCount"} {
-			if count, ok := values[key].(json.Number); ok {
-				link := clicky.Link(address).AddText(string(count))
-				return fieldView{short: link, full: link}, nil
-			}
+		if count, ok := fieldCount(values); ok {
+			link := clicky.Link(address).AddText(string(count))
+			return fieldView{short: link, full: link}, nil
 		}
 	}
 	short := make(map[string]api.Textable, len(values))
@@ -111,7 +112,7 @@ func fieldObject(values map[string]any) (fieldView, error) {
 		return fieldView{}, nil
 	}
 	var summary api.Textable = clicky.KeyMap(short)
-	for _, key := range []string{"displayName", "name", "value"} {
+	for _, key := range fieldLabelKeys {
 		label, ok := values[key].(string)
 		if !ok || label == "" {
 			continue
@@ -127,22 +128,36 @@ func fieldObject(values map[string]any) (fieldView, error) {
 }
 
 func fieldOption(values map[string]any, label string) (fieldView, error) {
-	parent, err := fieldValueText(label)
-	if err != nil || values["child"] == nil {
-		return parent, err
-	}
-	child, ok := values["child"].(map[string]any)
-	if !ok {
-		return fieldView{}, fmt.Errorf("Jira option child must be an object, received %T", values["child"])
-	}
-	childLabel, ok := child["value"].(string)
-	if !ok {
-		return fieldView{}, fmt.Errorf("Jira option child value must be a string, received %T", child["value"])
-	}
-	descendant, err := fieldOption(child, childLabel)
+	label, err := optionLabel(values, label)
 	if err != nil {
 		return fieldView{}, err
 	}
-	text := api.Text{}.Add(parent.PrettyShort()).AddText(" / ").Add(descendant.PrettyShort())
-	return fieldView{short: text, full: text}, nil
+	return fieldValueText(label)
+}
+
+// optionLabel joins a cascading Jira option's values, parent first: "Region / East".
+func optionLabel(values map[string]any, label string) (string, error) {
+	if values["child"] == nil {
+		return label, nil
+	}
+	child, ok := values["child"].(map[string]any)
+	if !ok {
+		return "", fmt.Errorf("Jira option child must be an object, received %T", values["child"])
+	}
+	childLabel, ok := child["value"].(string)
+	if !ok {
+		return "", fmt.Errorf("Jira option child value must be a string, received %T", child["value"])
+	}
+	descendant, err := optionLabel(child, childLabel)
+	return label + " / " + descendant, err
+}
+
+// fieldCount is the count a Jira votes or watchers object stands for.
+func fieldCount(values map[string]any) (json.Number, bool) {
+	for _, key := range []string{"votes", "watchCount"} {
+		if count, ok := values[key].(json.Number); ok {
+			return count, true
+		}
+	}
+	return "", false
 }

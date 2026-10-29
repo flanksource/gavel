@@ -50,9 +50,9 @@ Resolution shows its name, with the description included in full output. Parent 
 
 In full output, rich checklist fields render in their own sections instead of inside the field table. Group labels and item order are preserved. A cross or check marker at the beginning of a checklist line becomes an unchecked or checked task item; ordinary inline emoji and scalar progress fields retain their meaning. Native ADF task lists also render as task checkboxes. These presentation changes do not replace the structured resolution or relationship values in JSON/YAML.
 
-`--full` includes the complete description, expanded field properties, an attachment table, and the comment thread with linked authors, IDs, and created/updated timestamps. Rich content uses Clicky's semantic nodes across terminal, Markdown, and HTML, including inline code, tables, links, and nested lists. Text colors are preserved in Markdown and HTML. Malformed ADF and unsupported nodes or marks produce warnings identifying the issue or comment and content location. Rendering keeps readable text and supported formatting; content without readable text is retained as JSON.
+`--full` includes the complete description, expanded field properties, an attachment table, and a `## Comments` section. Each comment starts with a bold `Author commented YYYY-MM-DD HH:MM ±HH:MM` line, followed by its body and an `<hr/>` separator. The date is the comment's creation time in its original timezone. IDs and updated timestamps remain available in JSON/YAML. Rich content uses Clicky's semantic nodes across terminal, Markdown, and HTML, including inline code, tables, links, and nested lists. Text colors are preserved in Markdown and HTML. Malformed ADF and unsupported nodes or marks produce warnings identifying the issue or comment and content location. Rendering keeps readable text and supported formatting; content without readable text is retained as JSON.
 
-ADF link cards render as hyperlinks, inline media as file references, date nodes as UTC dates in `YYYY-MM-DD` format, rules as horizontal rules, and panels as labelled blockquotes. Underline, subscript, superscript and media borders are preserved in Markdown and HTML. Media references without a direct URL retain their Atlassian media identifier; converting those identifiers into attachment download URLs is not part of rendering.
+ADF link cards render as hyperlinks, date nodes as UTC dates in `YYYY-MM-DD` format, rules as horizontal rules, and panels as labelled blockquotes. Media references resolve against the issue's attachments by native attachment ID or an exact, unique filename. Images render inline; other files remain links. Synced documents use local attachment paths when downloads are enabled. Underline, subscript, superscript and media borders are preserved in Markdown and HTML. Unresolved media retain their Atlassian identifier with a warning; ambiguous filenames return an error rather than selecting an attachment.
 
 ```bash
 gavel external-issues jira get EXAMPLE-42 --full --format html=issue.html
@@ -84,6 +84,8 @@ externalIssues:
 Gavel matches each field's ID and Jira catalog display name using commons `MatchItems`. Matching is case-insensitive and supports exact values, `prefix*`, `*suffix`, and `*contains*` patterns. These are the shared matcher's patterns rather than filesystem globs; an interior wildcard such as `custom*53` does not expand. Fields without catalog names still match by ID. Exported snake_case keys are not additional matching names. Patterns accumulate across configuration layers with duplicates removed; an absent or empty list adds no exclusions. Configuration uses the invocation directory, including `--cwd`, rather than the sync output directory.
 
 Exclusions apply to issue `get`, `list`, and `sync` in every output format, including JSON/YAML and synced Markdown, and override `list --fields`. Optional built-ins such as `description`, `priority`, and `labels` can be excluded. The identity fields `id`, `key`, `summary`, `url`, and `project` are always retained. A display-name match excludes every field with that name; use an ID to exclude only one of several fields sharing a name.
+
+After adding a field to `ignoreFields`, sync that issue again by key or with `sync --from` to remove its previously generated field names and values. The current exclusions apply even when Jira data has not changed and the field catalog is cached; neither `--force` nor `--no-cache` is required. Only the issues selected by the sync command are regenerated.
 
 Ignoring `comment` omits comments and their count and skips comment requests. Ignoring `remoteLinks` or `Remote links` skips remote links. Ignoring `attachment` omits attachments and their count and skips sync downloads and extraction, even with `--attachments`, `--extract`, or saved settings. Resync removes historical attachment records and extracted content from the generated document while leaving local files on disk. Explicit `comment` and `attachment` commands and the cached field catalog are unaffected.
 
@@ -171,7 +173,7 @@ Issues sync in input order using one Jira client. `--no-cache` refreshes field m
 
 Sync displays a task group with the current issue and a saved/total issue count. Its steps show field catalog loading, comment pagination, attachment downloads, document conversion, image extraction, and Markdown publication. Downloads show received bytes and a percentage when Jira supplies a content length. An issue counts as saved after its files have been published; a failed batch retains the completed count and identifies the issue where it stopped. Standalone `get`, `list`, comment listing, and attachment downloads also expose task status. Task output goes to stderr, leaving JSON and Markdown results on stdout. Use `--no-progress` for plain task output without the live display.
 
-`--attachments` downloads the originals into `<project-id>/<issue-key>.attachments/<attachment-id>/<filename>`. Filename links in the issue Markdown point to these relative local paths. Attachment IDs keep duplicate filenames separate. Without this flag, links continue to point to Jira. Running sync again refreshes the issue and requested attachments; it does not delete older local files.
+`--attachments` downloads the originals into `<project-id>/<issue-key>.attachments/<attachment-id>/<filename>`. Filename links in the issue Markdown point to these relative local paths. Attachment IDs keep duplicate filenames separate. Without this flag, links continue to point to Jira. Running sync again refreshes the issue and reuses verified originals, downloading new or damaged files as needed; it does not delete older local files.
 
 `--extract` implies `--attachments` and appends extracted PDF and DOCX content to the issue Markdown. Images use Markdown image syntax pointing to `attachments/cas/<sha256>.<extension>`, relative to the issue file. Image files live under `<project-id>/attachments/cas`, and repeated image content shares the same file. Keep this folder alongside the issue Markdown when moving or sharing it. Other attachment types are downloaded without document extraction.
 
@@ -183,6 +185,41 @@ Extraction requires [`uvx`, provided by uv](https://docs.astral.sh/uv/getting-st
 
 Every synced document starts with YAML frontmatter under `gavel`, with schema `version: 1`. It records the Jira site, cloud and issue identities, project, source update time, effective sync settings, and successful sync time. Attachment records are keyed by native attachment ID and retain original URLs separately from local paths. Download and extraction records include SHA-256 hashes, converter versions, pipeline fingerprints, timestamps, and associated image paths. Credentials are never stored.
 
+#### Issue fields
+
+`gavel.issue` holds the issue's own fields as typed data, so reports and scripts read status, dates and custom fields from frontmatter instead of parsing the rendered body. Every sync, including `--from`, rewrites the whole block from the current Jira issue. Empty values are omitted, so an unresolved issue has no `resolved` or `resolution`.
+
+```yaml
+gavel:
+  issue:
+    type: Defect
+    status: Analysis
+    status_category: in_progress # todo | in_progress | done
+    priority: High
+    assignee: Alex Example
+    reporter: Sam Example
+    project: Example Testing
+    created: 2026-01-13T16:52:35+02:00
+    updated: 2026-10-28T16:31:47+02:00
+    resolved: 2026-03-01T10:00:00+02:00
+    resolution: Done
+    due: "2026-04-01"
+    labels: [Group_Life, benefitcoverage]
+    components: [Billing]
+    fields:
+      Severities: Sev 2 - Major
+      Countries Impacted:
+        - Kenya
+      Status Category Changed: "2026-03-03T09:31:51.458+02:00"
+      Story Points: 5
+      Watchers: 3
+      Parent: EXAMPLE-1
+      Linked Issues:
+        - relates to EXAMPLE-2
+```
+
+`created`, `updated` and `resolved` are RFC 3339 timestamps to the second. `labels` keep their raw Jira values. `fields` holds every other field that has a value, keyed by its Jira display name; a name shared by two fields gets its field ID appended, as in the body table. Values are typed: strings, numbers, booleans, and lists for multi-value fields. Users, options, versions, components and sprints become their display name, a cascading option becomes `Parent / Child`, a watchers or votes object becomes its count, a parent becomes its issue key, and an issue link becomes its relationship and key. Datetime fields are normalised to RFC 3339 with their original precision; date fields stay `YYYY-MM-DD`. Objects with no display name keep their properties as a map. Rich-text fields are copied as Markdown only when they are a single line of at most 200 characters; longer ones appear only in the body. Fields promoted to their own key (resolution, resolution date, due date, components and status category) are not repeated under `fields`.
+
 Resync a saved document in place, including after moving it together with its attachment directories:
 
 ```bash
@@ -193,7 +230,9 @@ gavel external-issues jira sync --from ./issues/EXAMPLE-42.md --force
 
 `--from` cannot be combined with positional issue IDs or `--sync-dir`. Saved settings apply unless `--attachments` or `--extract` is explicitly supplied; `false` overrides a saved `true`. Extraction requires attachments. An explicit `--site` must match the saved site. Authentication still uses the current environment or `--profile`.
 
-Resync always loads current Jira issue data. A verified local download can be reused after Jira confirms its strong ETag with HTTP 304. Without that validator, Gavel downloads the source again. Extraction is reused when the source hash, pipeline fingerprint, cached Markdown, and images all verify. Extracted Markdown is stored in `attachments/extracted`, with image links relative to its own location. `--force` refreshes downloads and extraction; `--no-cache` only refreshes the field catalog.
+Resync always loads current Jira issue data and its attachment inventory. Originals are matched by Jira site, issue and attachment ID. Gavel reuses a local original when its saved SHA-256 verifies and its byte count matches any positive size reported by Jira, without requesting attachment content or requiring an ETag. New attachments, missing files, missing or mismatched hashes, and size changes trigger a download. Local hashes verify local integrity; use `--force` to fetch fresh bytes for an existing attachment ID even when its size is unchanged. Filesystem permission and unsafe-path errors stop sync.
+
+`--extract` ensures every attachment has a local original, including images, spreadsheets and other types without an extractor. Only supported PDF/DOCX files enter document conversion. Extraction is reused when the source hash, pipeline fingerprint, cached Markdown, and images all verify. Missing or stale extraction artifacts regenerate from the verified original without downloading it again. Extracted Markdown is stored in `attachments/extracted`, with image links relative to its own location. `--force` refreshes downloads and extraction; `--no-cache` only refreshes the field catalog.
 
 Custom frontmatter and attachment `enrichments` records survive resync. Each enrichment can contain `source_sha256`, an inline `result`, artifact references with `path` and `sha256`, and tool-specific fields. Gavel marks unverified, changed-source, and removed-attachment enrichments `stale: true` while retaining their results. It does not run enrichment jobs or preserve edits to the generated Markdown body. Legacy files gain metadata on their next sync by issue key; `--from` requires valid metadata. Malformed metadata, source mismatches, or edits made during a sync stop publication.
 

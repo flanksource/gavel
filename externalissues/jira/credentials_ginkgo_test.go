@@ -23,8 +23,22 @@ var _ = Describe("Jira credential discovery", func() {
 		_, _, err := credentialsFromEnv(func(key string) string {
 			return map[string]string{"JIRA_API_TOKEN": "never-print-this-token", "TWG_USER": "different@example.test", "TWG_TOKEN": "other-token"}[key]
 		})
-		Expect(err).To(MatchError(ContainSubstring("JIRA_EMAIL")))
+		Expect(err).To(MatchError("JIRA_API_TOKEN is set but none of JIRA_EMAIL, JIRA_USER, JIRA_USERNAME are set"))
 		Expect(err.Error()).NotTo(ContainSubstring("never-print-this-token"))
+	})
+
+	It("names the user variable and every accepted token variable when only a user is set", func() {
+		_, _, err := credentialsFromEnv(func(key string) string { return map[string]string{"JIRA_USERNAME": "api@example.test"}[key] })
+		Expect(err).To(MatchError("JIRA_USERNAME is set but none of JIRA_API_TOKEN, JIRA_TOKEN, JIRA_OAUTH_ACCESS_TOKEN are set"))
+	})
+
+	It("explains how to complete or drop partial shell credentials before twg discovery", func() {
+		for _, key := range []string{"JIRA_OAUTH_ACCESS_TOKEN", "JIRA_API_TOKEN", "JIRA_EMAIL", "JIRA_USER", "JIRA_USERNAME", "ATLASSIAN_OAUTH_ACCESS_TOKEN", "ATLASSIAN_API_TOKEN", "ATLASSIAN_EMAIL", "ATLASSIAN_USER", "TWG_OAUTH_ACCESS_TOKEN", "TWG_TOKEN", "TWG_USER"} {
+			GinkgoT().Setenv(key, "")
+		}
+		GinkgoT().Setenv("JIRA_TOKEN", "never-print-this-token")
+		_, _, err := discoverCredentials(GinkgoT().Context(), ClientOptions{Site: "example.atlassian.net"})
+		Expect(err).To(MatchError("incomplete Jira credentials in the environment: JIRA_TOKEN is set but none of JIRA_EMAIL, JIRA_USER, JIRA_USERNAME are set; export one of JIRA_EMAIL, JIRA_USER, JIRA_USERNAME, or unset JIRA_TOKEN to use twg credentials"))
 	})
 
 	It("parses literal TWG exports without evaluating shell syntax", func() {

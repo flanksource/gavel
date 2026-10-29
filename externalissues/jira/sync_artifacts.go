@@ -2,6 +2,7 @@ package jira
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -25,35 +26,40 @@ type syncDownloadOptions struct {
 }
 
 func (c *Client) syncDownload(ctx context.Context, o syncDownloadOptions) error {
-	var cached []byte
-	var etag string
-	if !o.Force && o.Record.Local != nil {
-		var err error
-		cached, err = syncdoc.ReadArtifact(o.Root, *o.Record.Local)
-		if err != nil && !os.IsNotExist(err) {
-			logger.Warnf("attachment %s cache: %v; refreshing", o.Attachment.ID, err)
-		}
-		if err == nil && strings.HasPrefix(o.Record.Local.ETag, `"`) {
-			etag = o.Record.Local.ETag
-		}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	result, err := c.DownloadAttachment(ctx, DownloadOptions{ID: o.Attachment.ID, Output: filepath.Join(o.Stage, o.Relative), ETag: etag})
+	if !o.Force && o.Record.Local != nil {
+		cached, err := syncdoc.ReadArtifact(o.Root, *o.Record.Local)
+		if err != nil && !errors.Is(err, os.ErrNotExist) && !errors.Is(err, syncdoc.ErrArtifactHashMismatch) {
+			return fmt.Errorf("read cached attachment %s: %w", o.Attachment.ID, err)
+		}
+		if err == nil && o.Attachment.Size > 0 && int64(len(cached)) != o.Attachment.Size {
+			err = fmt.Errorf("expected %d bytes, cached %d", o.Attachment.Size, len(cached))
+		}
+		if err == nil {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if err := os.WriteFile(filepath.Join(o.Stage, o.Relative), cached, 0600); err != nil {
+				return err
+			}
+			copy := *o.Record.Local
+			copy.Path = filepath.ToSlash(o.Relative)
+			o.Record.Local = &copy
+			logger.Infof("Reusing verified attachment %s (%s)", o.Attachment.ID, o.Attachment.Name)
+			return nil
+		}
+		logger.Warnf("attachment %s cache: %v; refreshing", o.Attachment.ID, err)
+	}
+	result, err := c.DownloadAttachment(ctx, DownloadOptions{ID: o.Attachment.ID, Output: filepath.Join(o.Stage, o.Relative)})
 	if err != nil {
 		return err
 	}
-	if result.NotModified {
-		if err := os.WriteFile(filepath.Join(o.Stage, o.Relative), cached, 0600); err != nil {
-			return err
-		}
-		copy := *o.Record.Local
-		copy.Path = filepath.ToSlash(o.Relative)
-		o.Record.Local = &copy
-	} else {
-		previous := o.Record.Local
-		o.Record.Local = &syncdoc.Artifact{Path: filepath.ToSlash(o.Relative), SHA256: result.SHA256, ETag: result.ETag, DownloadedAt: time.Now().UTC()}
-		if previous != nil {
-			o.Record.Local.Extra = previous.Extra
-		}
+	previous := o.Record.Local
+	o.Record.Local = &syncdoc.Artifact{Path: filepath.ToSlash(o.Relative), SHA256: result.SHA256, ETag: result.ETag, DownloadedAt: time.Now().UTC()}
+	if previous != nil {
+		o.Record.Local.Extra = previous.Extra
 	}
 	return nil
 }

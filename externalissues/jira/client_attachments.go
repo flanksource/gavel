@@ -70,15 +70,13 @@ func (c *Client) UploadAttachments(ctx context.Context, options UploadOptions) (
 }
 
 type DownloadOptions struct {
-	ETag   string
 	ID     string
 	Output string
 }
 
 type DownloadResult struct {
-	SHA256      string
-	ETag        string
-	NotModified bool
+	SHA256 string
+	ETag   string
 }
 
 func (c *Client) DownloadAttachment(ctx context.Context, options DownloadOptions) (DownloadResult, error) {
@@ -87,19 +85,11 @@ func (c *Client) DownloadAttachment(ctx context.Context, options DownloadOptions
 	}
 	return runJiraTask(ctx, "Download Jira attachment "+options.ID, func(ctx context.Context, progress *task.Task) (_ DownloadResult, returnErr error) {
 		progress.SetDescription("Downloading " + filepath.Base(options.Output))
-		headers := map[string]string{}
-		if options.ETag != "" {
-			headers["If-None-Match"] = options.ETag
-		}
-		response, err := c.request(ctx, requestOptions{Path: "/attachment/content/" + url.PathEscape(options.ID), Query: url.Values{"redirect": {"false"}}, Headers: headers, AllowNotModified: options.ETag != ""})
+		response, err := c.request(ctx, requestOptions{Path: "/attachment/content/" + url.PathEscape(options.ID), Query: url.Values{"redirect": {"false"}}})
 		if err != nil {
 			return DownloadResult{}, err
 		}
 		defer func() { returnErr = errors.Join(returnErr, response.Body.Close()) }()
-		if response.StatusCode == 304 {
-			progress.SetDescription("Reusing verified attachment " + options.ID)
-			return DownloadResult{ETag: options.ETag, NotModified: true}, nil
-		}
 		file, err := os.OpenFile(options.Output, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 		if err != nil {
 			return DownloadResult{}, err

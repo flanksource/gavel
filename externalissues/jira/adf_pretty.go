@@ -100,7 +100,11 @@ func (n ADFNode) nodeValue(path string, attrs adfAttrs) (markdown.Node, error) {
 	case "mediaSingle", "mediaGroup":
 		node.Kind = "document"
 	case "media", "mediaInline":
-		return mediaNode(attrs, path)
+		node, err := mediaNode(attrs, path)
+		if err != nil || n.media == nil {
+			return node, err
+		}
+		return attachmentMediaNode(node, *n.media), nil
 	case "codeBlock":
 		return n.codeNode(attrs, path)
 	case "tableRow":

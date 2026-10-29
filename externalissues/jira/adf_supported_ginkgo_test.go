@@ -45,7 +45,8 @@ var _ = Describe("ADF supported content", func() {
 	)
 
 	DescribeTable("retains content and warns for invalid attributes", func(source string) {
-		view := renderADF(json.RawMessage(source), "issue EXAMPLE-1 description $")
+		view, err := renderADF(json.RawMessage(source), adfRenderOptions{Path: "issue EXAMPLE-1 description $"})
+		Expect(err).NotTo(HaveOccurred())
 		Expect(view.Markdown()).NotTo(BeEmpty())
 		Expect(warnings.String()).To(ContainSubstring("issue EXAMPLE-1 description $"))
 	},

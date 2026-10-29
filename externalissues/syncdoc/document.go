@@ -11,8 +11,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flanksource/gavel/externalissues"
 	"gopkg.in/yaml.v3"
 )
+
+var ErrArtifactHashMismatch = errors.New("artifact hash mismatch")
 
 type Artifact struct {
 	Extra        map[string]yaml.Node `yaml:",inline"`
@@ -69,9 +72,29 @@ type Attachment struct {
 	Enrichments map[string]Enrichment `yaml:"enrichments,omitempty"`
 	Extra       map[string]yaml.Node  `yaml:",inline"`
 }
+
+// Issue is the issue's own fields as structured data, rewritten from the provider on every sync.
+type Issue struct {
+	Type           string                        `yaml:"type,omitempty"`
+	Status         string                        `yaml:"status,omitempty"`
+	StatusCategory externalissues.StatusCategory `yaml:"status_category,omitempty"`
+	Priority       string                        `yaml:"priority,omitempty"`
+	Assignee       string                        `yaml:"assignee,omitempty"`
+	Reporter       string                        `yaml:"reporter,omitempty"`
+	Project        string                        `yaml:"project,omitempty"`
+	Created        *time.Time                    `yaml:"created,omitempty"`
+	Updated        *time.Time                    `yaml:"updated,omitempty"`
+	Resolved       *time.Time                    `yaml:"resolved,omitempty"`
+	Resolution     string                        `yaml:"resolution,omitempty"`
+	Due            string                        `yaml:"due,omitempty"`
+	Labels         []string                      `yaml:"labels,omitempty,flow"`
+	Components     []string                      `yaml:"components,omitempty,flow"`
+	Fields         map[string]any                `yaml:"fields,omitempty"`
+}
 type Metadata struct {
 	Version     int                    `yaml:"version"`
 	Source      Source                 `yaml:"source"`
+	Issue       *Issue                 `yaml:"issue,omitempty"`
 	Sync        Settings               `yaml:"sync"`
 	Attachments map[string]*Attachment `yaml:"attachments"`
 	Extra       map[string]yaml.Node   `yaml:",inline"`
@@ -160,7 +183,7 @@ func ReadArtifact(root *os.Root, artifact Artifact) ([]byte, error) {
 		return nil, err
 	}
 	if Hash(data) != artifact.SHA256 {
-		return nil, fmt.Errorf("artifact hash mismatch: %s", artifact.Path)
+		return nil, fmt.Errorf("%w: %s", ErrArtifactHashMismatch, artifact.Path)
 	}
 	return data, nil
 }

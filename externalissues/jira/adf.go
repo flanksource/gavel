@@ -1,8 +1,13 @@
 package jira
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"github.com/flanksource/gavel/externalissues"
+)
 
 type ADFNode struct {
+	media   *externalissues.Attachment
 	Type    string          `json:"type"`
 	Version int             `json:"version,omitempty"`
 	Text    string          `json:"text,omitempty"`

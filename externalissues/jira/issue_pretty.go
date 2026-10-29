@@ -53,7 +53,7 @@ func (i Issue) Render(options RenderOptions) (api.Textable, error) {
 		text = text.NewLine().NewLine().Add(i.PrettyMetadata())
 	}
 	if i.Description != nil {
-		body, err := renderDocument(i.Description, documentRenderOptions{Preview: !full, Context: "issue " + i.Key + " description", ResolveIssueURL: options.ResolveIssueURL})
+		body, err := renderDocument(i.Description, documentRenderOptions{Preview: !full, Context: "issue " + i.Key + " description", ResolveIssueURL: options.ResolveIssueURL, Attachments: i.Attachments})
 		if err != nil {
 			return nil, fmt.Errorf("issue %s description: %w", i.Key, err)
 		}
@@ -91,11 +91,11 @@ func (i Issue) Render(options RenderOptions) (api.Textable, error) {
 		text = text.Add(api.NewTableFrom(items))
 	}
 	if len(i.Comments) > 0 {
-		comments, err := renderComments(i.Comments, documentRenderOptions{Context: "issue " + i.Key, ResolveIssueURL: options.ResolveIssueURL})
+		comments, err := renderComments(i.Comments, documentRenderOptions{Context: "issue " + i.Key, ResolveIssueURL: options.ResolveIssueURL, Attachments: i.Attachments})
 		if err != nil {
 			return nil, fmt.Errorf("issue %s: %w", i.Key, err)
 		}
-		text = text.NewLine().NewLine().Add(clicky.Heading(2, clicky.Text("Comments"))).NewLine().NewLine().Add(comments)
+		text = text.NewLine().NewLine().Add(comments)
 	}
 	return text, nil
 }

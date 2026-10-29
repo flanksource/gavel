@@ -16,6 +16,11 @@ func prepareSyncMetadata(doc *syncdoc.Document, issue Issue, options SyncOptions
 	doc.Metadata.Version = 1
 	doc.Metadata.Source = syncdoc.Source{Provider: "jira", Site: issue.Site, ID: issue.ID, Key: issue.Key, URL: issue.URL, Title: issue.Title, ProjectID: issue.Project.ID, ProjectKey: issue.Project.Key, UpdatedAt: issue.Updated}
 	doc.Metadata.Source.Extra = previous.Extra
+	block, err := issue.syncMetadata()
+	if err != nil {
+		return err
+	}
+	doc.Metadata.Issue = block
 	extra := doc.Metadata.Sync.Extra
 	doc.Metadata.Sync = syncdoc.Settings{SyncedAt: time.Now().UTC(), Attachments: options.Attachments || options.Extract, Extract: options.Extract}
 	doc.Metadata.Sync.Extra = extra

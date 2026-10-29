@@ -14,6 +14,7 @@ import (
 const previewRunes = 240
 
 type documentRenderOptions struct {
+	Attachments     []externalissues.Attachment
 	Preview         bool
 	Context         string
 	ResolveIssueURL func(string) (string, error)
@@ -24,6 +25,7 @@ func renderDocument(document *externalissues.Document, options documentRenderOpt
 		return clicky.Text(""), nil
 	}
 	var node markdown.Node
+	var err error
 	switch document.Format {
 	case "text":
 		var text string
@@ -32,7 +34,10 @@ func renderDocument(document *externalissues.Document, options documentRenderOpt
 		}
 		node = markdown.Node{Kind: "text", Text: text}
 	case "adf":
-		node = renderADF(document.Content, strings.TrimSpace(options.Context+" $"))
+		node, err = renderADF(document.Content, adfRenderOptions{Path: strings.TrimSpace(options.Context + " $"), Attachments: options.Attachments})
+		if err != nil {
+			return nil, err
+		}
 	default:
 		return nil, fmt.Errorf("unsupported document format %q", document.Format)
 	}
@@ -70,7 +75,10 @@ func documentPreview(node markdown.Node) string {
 }
 
 func renderComments(comments []externalissues.Comment, options documentRenderOptions) (api.Textable, error) {
-	var text api.Text
+	if len(comments) == 0 {
+		return api.Text{}, nil
+	}
+	text := api.Text{}.Add(clicky.Heading(2, clicky.Text("Comments"))).NewLine().NewLine()
 	for _, comment := range comments {
 		bodyOptions := options
 		bodyOptions.Context = fmt.Sprintf("%s comment %s by %s", options.Context, comment.ID, comment.Author.Name)
@@ -78,25 +86,19 @@ func renderComments(comments []externalissues.Comment, options documentRenderOpt
 		if err != nil {
 			return nil, fmt.Errorf("comment %s by %s: %w", comment.ID, comment.Author.Name, err)
 		}
-		heading := comment.Author.PrettyShort()
-		if comment.Author.Name == "" && comment.Author.ID == "" {
-			heading = clicky.Text("Comment " + comment.ID)
+		author := comment.Author.Name
+		if author == "" {
+			author = comment.Author.ID
 		}
-		metadata := map[string]any{}
-		if comment.ID != "" {
-			metadata["ID"] = comment.ID
+		if author == "" {
+			author = "Unknown author"
 		}
+		heading := author + " commented"
 		if comment.Created != nil {
-			metadata["Created"] = clicky.Human(*comment.Created)
+			heading += " " + comment.Created.Format("2006-01-02 15:04 -07:00")
 		}
-		if comment.Updated != nil && (comment.Created == nil || !comment.Updated.Equal(*comment.Created)) {
-			metadata["Updated"] = clicky.Human(*comment.Updated)
-		}
-		text = text.Add(clicky.Heading(3, heading)).NewLine().NewLine()
-		if len(metadata) > 0 {
-			text = text.Add(clicky.KeyMap(metadata)).NewLine().NewLine()
-		}
-		text = text.Add(body).NewLine().NewLine()
+		text = text.Add(clicky.Text(heading, "font-bold")).NewLine().NewLine().Add(body).NewLine().NewLine()
+		text = text.Add(markdown.Node{Kind: "raw-html", Source: "<hr/>", RawHTML: "<hr/>"}).NewLine().NewLine()
 	}
 	return text, nil
 }
