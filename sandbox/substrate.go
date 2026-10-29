@@ -49,7 +49,7 @@ type InjectedCredential struct {
 	Header string
 	Prefix string
 	// URI names the credential for Substrate's credential provider, such as
-	// ate-secret://k8s.io/default/<namespace>/<secret>/<key>.
+	// ate-secret://gavel/<gavel name>/<run id>/<provider>.
 	URI string
 	Env string
 }
@@ -79,8 +79,6 @@ type SubstrateOptions struct {
 	Template string
 	// Egress are hosts jobs may reach besides DefaultSubstrateEgress.
 	Egress []string
-	// Credentials are the model API keys the egress gateway injects.
-	Credentials []InjectedCredential
 	// TrustBundle is the path, inside the environment, of the egress gateway's CA, which a job
 	// must trust to reach a host whose requests carry an injected credential.
 	TrustBundle string
@@ -159,7 +157,7 @@ func (e *substrateExecutor) Submit(ctx context.Context, job Job) (Handle, error)
 	if err != nil {
 		return nil, err
 	}
-	policy, err := substrateEgressPolicy(e.options, e.options.Atespace, job.Env["GAVEL_SERVER"])
+	policy, err := substrateEgressPolicy(e.options, e.options.Atespace, job.Env["GAVEL_SERVER"], job.Credentials)
 	if err != nil {
 		return nil, err
 	}
@@ -196,7 +194,7 @@ func substrateImage(image string) error {
 }
 
 // substrateProcess is the job's process: its command and settings, its run token, and a
-// placeholder for each injected credential. Any other secret would enter the environment, so it
+// placeholder for each of the job's injected credentials. Any other secret would enter the environment, so it
 // is refused.
 func substrateProcess(job Job, options SubstrateOptions) (*ateenvv1alpha.StartProcessRequest, error) {
 	env := map[string]string{}
@@ -209,12 +207,12 @@ func substrateProcess(job Job, options SubstrateOptions) (*ateenvv1alpha.StartPr
 		}
 		env[key] = value
 	}
-	for _, credential := range options.Credentials {
+	for _, credential := range job.Credentials {
 		if credential.Env != "" {
 			env[credential.Env] = substrateCredentialPlaceholder
 		}
 	}
-	if options.TrustBundle != "" && len(options.Credentials) > 0 {
+	if options.TrustBundle != "" && len(job.Credentials) > 0 {
 		env["NODE_EXTRA_CA_CERTS"] = options.TrustBundle
 	}
 	return &ateenvv1alpha.StartProcessRequest{
@@ -225,8 +223,8 @@ func substrateProcess(job Job, options SubstrateOptions) (*ateenvv1alpha.StartPr
 }
 
 // substrateEgressPolicy allows a job to reach gavel serve at server, the hosts it needs, and the
-// model APIs, whose credentials the gateway injects. Everything else is denied.
-func substrateEgressPolicy(options SubstrateOptions, atespace, server string) (*ateapipb.EgressPolicy, error) {
+// model APIs of its credentials, which the gateway injects. Everything else is denied.
+func substrateEgressPolicy(options SubstrateOptions, atespace, server string, credentials []InjectedCredential) (*ateapipb.EgressPolicy, error) {
 	serve, err := url.Parse(server)
 	if err != nil || serve.Hostname() == "" {
 		return nil, fmt.Errorf("substrate egress names hosts: GAVEL_SERVER %q isn't a URL", server)
@@ -254,7 +252,7 @@ func substrateEgressPolicy(options SubstrateOptions, atespace, server string) (*
 	}
 	hosts := append(append([]string{}, DefaultSubstrateEgress...), options.Egress...)
 	rules = append(rules, &ateapipb.EgressRule{TlsPassthrough: &ateapipb.TlsPassthroughRule{Hostnames: hosts, Ports: &ateapipb.Ports{Numbers: []int32{443}}}})
-	for _, credential := range options.Credentials {
+	for _, credential := range credentials {
 		rules = append(rules, &ateapipb.EgressRule{Https: &ateapipb.HttpsRule{
 			Hostnames: []string{credential.Host},
 			Effects: &ateapipb.HttpRuleEffects{ReplaceHeaders: []*ateapipb.CredentialHeader{{

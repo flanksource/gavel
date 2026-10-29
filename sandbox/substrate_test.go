@@ -13,12 +13,12 @@ import (
 )
 
 var testCredential = InjectedCredential{
-	Host: "api.anthropic.com", Header: "x-api-key", URI: "ate-secret://k8s.io/default/gavel/anthropic/key", Env: "ANTHROPIC_API_KEY",
+	Host: "api.anthropic.com", Header: "x-api-key", URI: "ate-secret://gavel/beta/6f1c2d3e-4a5b-6c7d-8e9f-0a1b2c3d4e5f/anthropic", Env: "ANTHROPIC_API_KEY",
 }
 
 func TestSubstrateEgressAllowsOnlyWhatJobsNeed(t *testing.T) {
-	opts := SubstrateOptions{Egress: []string{"goproxy.example.com"}, Credentials: []InjectedCredential{testCredential}}
-	policy, err := substrateEgressPolicy(opts, "ate-env", "http://gavel.gavel.svc.cluster.local:8080")
+	opts := SubstrateOptions{Egress: []string{"goproxy.example.com"}}
+	policy, err := substrateEgressPolicy(opts, "ate-env", "http://gavel.gavel.svc.cluster.local:8080", []InjectedCredential{testCredential})
 	require.NoError(t, err)
 	assert.Equal(t, "ate-env", policy.GetMetadata().GetAtespace())
 	assert.Equal(t, "default", policy.GetMetadata().GetName())
@@ -48,27 +48,28 @@ func TestSubstrateEgressAllowsOnlyWhatJobsNeed(t *testing.T) {
 	assert.Equal(t, "x-api-key", header.GetHeader())
 	assert.Equal(t, testCredential.URI, header.GetCredentialUri())
 
-	tls, err := substrateEgressPolicy(SubstrateOptions{}, "ate-env", "https://gavel.example.com")
+	tls, err := substrateEgressPolicy(SubstrateOptions{}, "ate-env", "https://gavel.example.com", nil)
 	require.NoError(t, err)
 	assert.Contains(t, tls.GetRules(), &ateapipb.EgressRule{TlsPassthrough: &ateapipb.TlsPassthroughRule{
 		Hostnames: []string{"gavel.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{443}},
 	}}, "an HTTPS serve is passed through")
 
-	_, err = substrateEgressPolicy(SubstrateOptions{}, "ate-env", "http://10.0.0.5:8080")
+	_, err = substrateEgressPolicy(SubstrateOptions{}, "ate-env", "http://10.0.0.5:8080", nil)
 	require.EqualError(t, err, `substrate egress names hosts: GAVEL_SERVER "http://10.0.0.5:8080" must name serve by DNS name, not an IP address`)
 }
 
 func TestSubstrateProcessRunsTheJobWithItsRunTokenOnly(t *testing.T) {
 	run := uuid.New()
 	job := Job{
-		RunID:     run,
-		Image:     "ghcr.io/flanksource/gavel-runner@sha256:" + strings64("a"),
-		Command:   []string{"gavel", "runner", "exec", "--run", run.String()},
-		Env:       map[string]string{"GAVEL_SERVER": "http://gavel.gavel.svc.cluster.local:8080", "CI": "1"},
-		SecretEnv: map[string]string{"GAVEL_RUN_TOKEN": "run-token"},
-		Limits:    Limits{Timeout: 20 * time.Minute},
+		RunID:       run,
+		Image:       "ghcr.io/flanksource/gavel-runner@sha256:" + strings64("a"),
+		Command:     []string{"gavel", "runner", "exec", "--run", run.String()},
+		Env:         map[string]string{"GAVEL_SERVER": "http://gavel.gavel.svc.cluster.local:8080", "CI": "1"},
+		SecretEnv:   map[string]string{"GAVEL_RUN_TOKEN": "run-token"},
+		Credentials: []InjectedCredential{testCredential},
+		Limits:      Limits{Timeout: 20 * time.Minute},
 	}
-	opts := SubstrateOptions{Credentials: []InjectedCredential{testCredential}, TrustBundle: "/ate/trust/egress-mitm.pem"}
+	opts := SubstrateOptions{TrustBundle: "/ate/trust/egress-mitm.pem"}
 	process, err := substrateProcess(job, opts)
 	require.NoError(t, err)
 	assert.Equal(t, job.Command, process.GetCommand())
@@ -80,6 +81,13 @@ func TestSubstrateProcessRunsTheJobWithItsRunTokenOnly(t *testing.T) {
 		"ANTHROPIC_API_KEY":   substrateCredentialPlaceholder,
 		"NODE_EXTRA_CA_CERTS": "/ate/trust/egress-mitm.pem",
 	}, process.GetEnv())
+
+	keyless := job
+	keyless.Credentials = nil
+	process, err = substrateProcess(keyless, opts)
+	require.NoError(t, err)
+	assert.NotContains(t, process.GetEnv(), "ANTHROPIC_API_KEY", "a run without keys gets no placeholder")
+	assert.NotContains(t, process.GetEnv(), "NODE_EXTRA_CA_CERTS", "nor the gateway's CA")
 
 	job.SecretEnv["ANTHROPIC_API_KEY"] = "sk-ant-secret"
 	_, err = substrateProcess(job, opts)
@@ -104,7 +112,7 @@ func strings64(c string) string {
 func TestSubstrateEgressRefusesAPortOutOfRange(t *testing.T) {
 	for _, port := range []string{"0", "65536", "4294967297"} {
 		server := "http://gavel.example.com:" + port
-		_, err := substrateEgressPolicy(SubstrateOptions{}, "ate-env", server)
+		_, err := substrateEgressPolicy(SubstrateOptions{}, "ate-env", server, nil)
 		require.EqualError(t, err, `substrate egress: GAVEL_SERVER "`+server+`" has port `+port+`, outside 1-65535`)
 	}
 }

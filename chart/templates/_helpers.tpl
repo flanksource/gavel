@@ -57,6 +57,10 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- $_ := required "githubApp.slug is required with githubApp.id: the App's URL name, as in github.com/apps/<slug>" .Values.githubApp.slug }}
 {{- $_ := required "githubApp.privateKeySecretRef.name is required with githubApp.id: the Secret holding the App's private key PEM" .Values.githubApp.privateKeySecretRef.name }}
 {{- end }}
+{{- if .Values.sandbox.enabled }}
+{{- $_ := required "sandbox.substrate.gavelName is required with sandbox.enabled: the name substrate's credential provider knows this gavel by, e.g. beta" .Values.sandbox.substrate.gavelName }}
+{{- $_ := required "sandbox.substrate.credentialProviderToken.secretName is required with sandbox.enabled: the Secret holding the token substrate's credential provider fetches model keys with" .Values.sandbox.substrate.credentialProviderToken.secretName }}
+{{- end }}
 {{- if and .Values.sandbox.enabled (not (regexMatch "@sha256:[0-9a-f]{64}$" .Values.sandbox.image)) }}
 {{- fail (printf "sandbox.image must be pinned by digest, as repo@sha256:<digest>; substrate runs images only by digest, got %q" .Values.sandbox.image) }}
 {{- end }}
