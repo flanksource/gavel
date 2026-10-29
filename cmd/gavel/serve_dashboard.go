@@ -4,7 +4,6 @@ import (
 	"os"
 
 	"github.com/flanksource/clicky"
-	"github.com/spf13/pflag"
 )
 
 // applyServeDefaults adapts PRListOptions for `gavel serve`: the command always
@@ -49,24 +48,4 @@ func init() {
 	if f := cmd.Flags().Lookup("ui"); f != nil {
 		_ = cmd.Flags().MarkHidden("ui")
 	}
-	// A credential's fields are separated by commas, which clicky's list flags split on.
-	if f := cmd.Flags().Lookup("substrate-credential"); f != nil {
-		f.Value = &wholeValues{Value: f.Value, SliceValue: f.Value.(pflag.SliceValue), flag: f}
-	}
 }
-
-// wholeValues makes a repeated list flag keep each value whole instead of splitting it on commas.
-type wholeValues struct {
-	pflag.Value
-	pflag.SliceValue
-	flag *pflag.Flag
-}
-
-func (v *wholeValues) Set(value string) error {
-	if !v.flag.Changed {
-		return v.Replace([]string{value})
-	}
-	return v.Append(value)
-}
-
-func (v *wholeValues) Type() string { return "stringArray" }

@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/flanksource/gavel/sandbox"
-	"github.com/spf13/pflag"
+	"github.com/flanksource/gavel/internal/logtest"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -58,8 +58,19 @@ func TestDashboardOptionsValidate(t *testing.T) {
 			o.Sandbox, o.SandboxImage, o.SandboxServeAddr = "docker", "ghcr.io/flanksource/gavel-runner:1", "10.0.0.5:9092"
 		}, nil},
 		{"kubernetes sandbox", func(o *DashboardOptions) { o.Sandbox, o.SandboxImage = "kubernetes", "runner:1" }, nil},
-		{"substrate sandbox", func(o *DashboardOptions) { o.Sandbox, o.SandboxImage = "substrate", "runner@sha256:1" }, nil},
-		{"substrate sandbox without an image", func(o *DashboardOptions) { o.Sandbox = "substrate" }, []string{"--sandbox requires --sandbox-image"}},
+		{"substrate sandbox", func(o *DashboardOptions) {
+			o.Sandbox, o.SandboxImage, o.SubstrateGavelName, o.credentialProviderToken = "substrate", "runner@sha256:1", "beta", "provider-token"
+		}, nil},
+		{"substrate sandbox without an image", func(o *DashboardOptions) {
+			o.Sandbox, o.SubstrateGavelName, o.credentialProviderToken = "substrate", "beta", "provider-token"
+		}, []string{"--sandbox requires --sandbox-image"}},
+		{"substrate sandbox without a gavel name or provider token", func(o *DashboardOptions) { o.Sandbox, o.SandboxImage = "substrate", "runner@sha256:1" }, []string{
+			"--sandbox substrate requires --substrate-gavel-name, the name substrate's credential provider knows this gavel by",
+			"--sandbox substrate requires the GAVEL_CREDENTIAL_PROVIDER_TOKEN environment variable, the token substrate's credential provider fetches model keys with",
+		}},
+		{"substrate gavel name that isn't a DNS label", func(o *DashboardOptions) {
+			o.Sandbox, o.SandboxImage, o.SubstrateGavelName, o.credentialProviderToken = "substrate", "runner@sha256:1", "Beta/1", "provider-token"
+		}, []string{`--substrate-gavel-name must be a DNS label like beta, got "Beta/1"`}},
 		{"unknown sandbox", func(o *DashboardOptions) { o.Sandbox, o.SandboxImage = "firecracker", "runner:1" }, []string{
 			`--sandbox must be docker, podman, kubernetes or substrate, got "firecracker"`,
 		}},
@@ -176,46 +187,41 @@ func TestSandboxSecretsCopyServesEnvironment(t *testing.T) {
 	require.EqualError(t, err, "--sandbox-secret-env OPENAI_API_KEY is not set in gavel serve's environment")
 }
 
-func TestSubstrateCredentialsAreParsedFromFlags(t *testing.T) {
-	credentials, err := substrateCredentials([]string{
-		"host=api.anthropic.com,header=x-api-key,env=ANTHROPIC_API_KEY,uri=ate-secret://k8s.io/default/gavel/anthropic/key",
-		"host=api.openai.com,header=Authorization,prefix=Bearer ,env=OPENAI_API_KEY,uri=ate-secret://k8s.io/default/gavel/openai/key",
-	})
-	require.NoError(t, err)
-	assert.Equal(t, []sandbox.InjectedCredential{
-		{Host: "api.anthropic.com", Header: "x-api-key", Env: "ANTHROPIC_API_KEY", URI: "ate-secret://k8s.io/default/gavel/anthropic/key"},
-		{Host: "api.openai.com", Header: "Authorization", Prefix: "Bearer ", Env: "OPENAI_API_KEY", URI: "ate-secret://k8s.io/default/gavel/openai/key"},
-	}, credentials)
-
-	_, err = substrateCredentials([]string{"host=api.anthropic.com,header=x-api-key"})
-	require.EqualError(t, err, `--substrate-credential "host=api.anthropic.com,header=x-api-key" needs host, header, env and uri`)
-	_, err = substrateCredentials([]string{"host=api.anthropic.com,colour=blue,header=x,env=Y,uri=z"})
-	require.EqualError(t, err, `--substrate-credential "host=api.anthropic.com,colour=blue,header=x,env=Y,uri=z": unknown key "colour"; keys are host, header, prefix, env and uri`)
-}
-
-func TestSubstrateCredentialFlagKeepsEachValueWhole(t *testing.T) {
-	serve := findCommand(rootCmd, "serve")
-	require.NotNil(t, serve)
-	flag := serve.Flags().Lookup("substrate-credential")
-	require.NotNil(t, flag)
-	values, ok := flag.Value.(pflag.SliceValue)
-	require.True(t, ok, "--substrate-credential repeats")
-	t.Cleanup(func() { _ = values.Replace(nil); flag.Changed = false })
-
-	anthropic := "host=api.anthropic.com,header=x-api-key,env=ANTHROPIC_API_KEY,uri=ate-secret://k8s.io/default/gavel/anthropic/key"
-	openai := "host=api.openai.com,header=Authorization,prefix=Bearer ,env=OPENAI_API_KEY,uri=ate-secret://k8s.io/default/gavel/openai/key"
-	require.NoError(t, serve.Flags().Parse([]string{"--substrate-credential", anthropic, "--substrate-credential", openai}))
-	assert.Equal(t, []string{anthropic, openai}, values.GetSlice(), "a credential's fields are separated by commas, so the flag can't split on them")
-}
-
 func TestSubstrateSandboxRefusesSecretsInItsJobs(t *testing.T) {
 	opts := DashboardOptions{Sandbox: "substrate", SandboxSecretEnv: []string{"ANTHROPIC_API_KEY"},
 		SubstrateEnvAPI: "ate-env-api.ate-env.svc:7777", SubstrateControl: "api.ate-system.svc:443"}
 	_, err := newSandboxDispatcher(t.Context(), opts, nil, nil, nil)
-	require.EqualError(t, err, "--sandbox substrate keeps secrets out of its jobs: drop --sandbox-secret-env and give model keys to substrate's egress gateway with --substrate-credential")
+	require.EqualError(t, err, "--sandbox substrate keeps secrets out of its jobs: drop --sandbox-secret-env; organizations set their own model keys, which substrate's egress gateway injects")
 
 	opts.SandboxSecretEnv = nil
+	opts.SubstrateGavelName = "beta"
 	dispatcher, err := newSandboxDispatcher(t.Context(), opts, nil, nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, "substrate", dispatcher.Executor.Name())
+	run := uuid.MustParse("6f1c2d3e-4a5b-6c7d-8e9f-0a1b2c3d4e5f")
+	require.NotNil(t, dispatcher.CredentialURI, "substrate jobs get their organization's keys")
+	assert.Equal(t, "ate-secret://gavel/beta/6f1c2d3e-4a5b-6c7d-8e9f-0a1b2c3d4e5f/anthropic", dispatcher.CredentialURI(run, "anthropic"))
+}
+
+func TestContainerAndKubernetesSandboxesWarnTheyUseServesKeys(t *testing.T) {
+	for _, test := range []struct {
+		opts DashboardOptions
+		want string
+	}{
+		{DashboardOptions{Sandbox: "kubernetes", SandboxSecretEnv: []string{"ANTHROPIC_API_KEY", "OPENAI_API_KEY"}},
+			"--sandbox kubernetes: every organization's runs use serve's --sandbox-secret-env keys (ANTHROPIC_API_KEY, OPENAI_API_KEY), not their own; organization model keys need --sandbox substrate"},
+		{DashboardOptions{Sandbox: "docker"},
+			"--sandbox docker: runs get no model keys, since --sandbox-secret-env is unset; organization model keys need --sandbox substrate"},
+		{DashboardOptions{Sandbox: "substrate"}, ""},
+	} {
+		assert.Equal(t, test.want, sandboxKeysWarning(test.opts), test.opts.Sandbox)
+	}
+
+	logged := logtest.Capture(t)
+	_, err := newSandboxDispatcher(t.Context(), DashboardOptions{
+		Sandbox: "docker", SandboxImage: "runner:1", SandboxServeAddr: "10.0.0.5:9092",
+		SandboxNetwork: "gavel-sandbox-missing-" + uuid.NewString()[:8],
+	}, nil, nil, nil)
+	require.Error(t, err, "the network doesn't exist")
+	assert.Contains(t, logged.String(), "--sandbox docker: runs get no model keys", "logged at startup, before the executor is checked")
 }

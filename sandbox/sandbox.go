@@ -26,7 +26,10 @@ type Job struct {
 	// SecretEnv holds credentials, GAVEL_RUN_TOKEN and model API keys, which never appear on a
 	// command line or in a pod spec.
 	SecretEnv map[string]string
-	Limits    Limits
+	// Credentials are the organization's model keys substrate's egress gateway injects into the
+	// job's requests; other executors ignore them.
+	Credentials []InjectedCredential
+	Limits      Limits
 }
 
 // Limits bounds a job. CPU and Memory are Kubernetes quantities ("2", "500m", "4Gi").

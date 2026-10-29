@@ -14,8 +14,10 @@ import (
 	"time"
 
 	commonsdbtest "github.com/flanksource/commons-db/dbtest"
+	"github.com/flanksource/commons-db/secret"
 	"github.com/flanksource/gavel/blob"
 	"github.com/flanksource/gavel/internal/database"
+	"github.com/flanksource/gavel/modelkeys"
 	"github.com/flanksource/gavel/tenant"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -164,6 +166,71 @@ func TestDispatcherRunsAJobToItsOutcome(t *testing.T) {
 func TestDispatcherRunLifetimeIsTheTimeoutPlusTheRunTokensGrace(t *testing.T) {
 	assert.Equal(t, 45*time.Minute, (&Dispatcher{Limits: Limits{Timeout: 30 * time.Minute}}).RunLifetime())
 	assert.Equal(t, 75*time.Minute, (&Dispatcher{}).RunLifetime(), "the default 60m timeout")
+}
+
+// withModelKeys gives the dispatcher org keys and per-run credential URIs, as --sandbox
+// substrate does, with commons-db's local secret keeper.
+func withModelKeys(t *testing.T, dispatcher *Dispatcher) {
+	t.Helper()
+	previous := secret.KMSConnection
+	secret.KMSConnection = modelkeys.KeeperConnection([]byte(strings.Repeat("s", 32)))
+	secret.InvalidateKeeper()
+	t.Cleanup(func() { secret.KMSConnection = previous; secret.InvalidateKeeper() })
+	dispatcher.Keys = modelkeys.Store{DB: dispatcher.DB}
+	dispatcher.CredentialURI = func(run uuid.UUID, provider string) string {
+		return "ate-secret://gavel/beta/" + run.String() + "/" + provider
+	}
+}
+
+func TestDispatcherGivesEachRunItsOrganizationsKeys(t *testing.T) {
+	executor := &memoryExecutor{output: "ok\n"}
+	dispatcher, db, _, org := newDispatcher(t, executor)
+	withModelKeys(t, dispatcher)
+	require.NoError(t, dispatcher.Keys.Set(t.Context(), org, nil, "claude-code-oauth-token", "sk-ant-oat01-dispatch-test"))
+
+	run, err := dispatcher.Start(t.Context(), tenant.Scope{OrgID: org}, RunSpec{Kind: "agent"}, nil)
+	require.NoError(t, err)
+	_, err = run.Wait(t.Context())
+	require.NoError(t, err)
+	require.Len(t, executor.submitted, 1)
+	assert.Equal(t, []InjectedCredential{{
+		Host: "api.anthropic.com", Header: "Authorization", Prefix: "Bearer ", Env: "CLAUDE_CODE_OAUTH_TOKEN",
+		URI: "ate-secret://gavel/beta/" + run.ID.String() + "/anthropic",
+	}}, executor.submitted[0].Credentials)
+	assert.NotContains(t, executor.submitted[0].SecretEnv, "CLAUDE_CODE_OAUTH_TOKEN", "the key itself never reaches the job")
+
+	other := uuid.New()
+	require.NoError(t, db.Exec(`INSERT INTO orgs (id, issuer, clerk_org_id, name) VALUES (?, 'https://clerk.example', ?, 'Other')`, other, other.String()).Error)
+	run, err = dispatcher.Start(t.Context(), tenant.Scope{OrgID: other}, RunSpec{Kind: "test"}, nil)
+	require.NoError(t, err, "a test run starts without a model key")
+	_, err = run.Wait(t.Context())
+	require.NoError(t, err)
+	require.Len(t, executor.submitted, 2)
+	assert.Empty(t, executor.submitted[1].Credentials, "another org's keys aren't used")
+}
+
+func TestDispatcherRefusesAnAgentRunWithoutAModelKey(t *testing.T) {
+	executor := &memoryExecutor{output: "ok\n"}
+	dispatcher, db, _, org := newDispatcher(t, executor)
+	withModelKeys(t, dispatcher)
+
+	_, err := dispatcher.Start(t.Context(), tenant.Scope{OrgID: org}, RunSpec{Kind: "agent"}, nil)
+	require.ErrorIs(t, err, ErrNoModelKey)
+	assert.EqualError(t, err, "this organization has no model key: an organization admin adds one under Model keys in the organization's settings")
+	assert.Empty(t, executor.submitted)
+	var runs int64
+	require.NoError(t, db.Raw(`SELECT count(*) FROM sandbox_runs WHERE org_id = ?`, org).Scan(&runs).Error)
+	assert.Zero(t, runs, "a refused run isn't recorded")
+}
+
+func TestDispatcherWithoutCredentialURIsUsesNoOrganizationKeys(t *testing.T) {
+	executor := &memoryExecutor{output: "ok\n"}
+	dispatcher, _, _, org := newDispatcher(t, executor)
+	run, err := dispatcher.Start(t.Context(), tenant.Scope{OrgID: org}, RunSpec{Kind: "agent"}, nil)
+	require.NoError(t, err, "only substrate needs organization keys")
+	_, err = run.Wait(t.Context())
+	require.NoError(t, err)
+	assert.Empty(t, executor.submitted[0].Credentials)
 }
 
 func TestDispatcherRecordsASuccess(t *testing.T) {

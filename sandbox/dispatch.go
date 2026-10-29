@@ -15,6 +15,7 @@ import (
 	commonscontext "github.com/flanksource/commons/context"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/blob"
+	"github.com/flanksource/gavel/modelkeys"
 	"github.com/flanksource/gavel/tenant"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -51,6 +52,40 @@ type Dispatcher struct {
 	Limits   Limits
 	// SecretEnv is added to every job's secrets: the model API keys agent runs use.
 	SecretEnv map[string]string
+	// Keys are organizations' model keys. With CredentialURI set, each job is given its
+	// organization's keys as credentials the gateway injects, which CredentialURI names for the
+	// run, and an agent run without one is refused.
+	Keys          modelkeys.Store
+	CredentialURI func(run uuid.UUID, provider string) string
+}
+
+// ErrNoModelKey refuses an agent run whose organization has no model key.
+var ErrNoModelKey = errors.New("this organization has no model key")
+
+// credentials are the injected credentials of run, one per model key of org; none unless
+// CredentialURI is set. An agent run needs at least one.
+func (d *Dispatcher) credentials(ctx context.Context, run, org uuid.UUID, kind string) ([]InjectedCredential, error) {
+	if d.CredentialURI == nil {
+		return nil, nil
+	}
+	keys, err := d.Keys.List(ctx, org)
+	if err != nil {
+		return nil, err
+	}
+	if kind == "agent" && len(keys) == 0 {
+		return nil, fmt.Errorf("%w: an organization admin adds one under Model keys in the organization's settings", ErrNoModelKey)
+	}
+	credentials := make([]InjectedCredential, 0, len(keys))
+	for _, key := range keys {
+		k, ok := modelkeys.KindNamed(key.Kind)
+		if !ok {
+			return nil, fmt.Errorf("organization %s's %s key is of kind %q, which gavel no longer knows; an organization admin must set it again", org, key.Provider, key.Kind)
+		}
+		credentials = append(credentials, InjectedCredential{
+			Host: k.Host, Header: k.Header, Prefix: k.Prefix, Env: k.Env, URI: d.CredentialURI(run, k.Provider),
+		})
+	}
+	return credentials, nil
 }
 
 // RunLifetime is how long a run's token, and so the run, may last: its timeout plus 15 minutes
@@ -100,6 +135,10 @@ func (d *Dispatcher) StartRun(ctx context.Context, id uuid.UUID, scope tenant.Sc
 	if !contains(runKinds, spec.Kind) {
 		return nil, fmt.Errorf("sandbox run kind %q is not one of %s", spec.Kind, strings.Join(runKinds, ", "))
 	}
+	credentials, err := d.credentials(ctx, id, scope.OrgID, spec.Kind)
+	if err != nil {
+		return nil, err
+	}
 	encoded, err := json.Marshal(spec)
 	if err != nil {
 		return nil, fmt.Errorf("encode the run spec: %w", err)
@@ -117,13 +156,14 @@ func (d *Dispatcher) StartRun(ctx context.Context, id uuid.UUID, scope tenant.Sc
 
 	limits := d.Limits.withDefaults()
 	job := Job{
-		RunID:     run.ID,
-		Scope:     scope,
-		Image:     d.Image,
-		Command:   []string{"gavel", "runner", "exec", "--run", run.ID.String()},
-		Env:       map[string]string{"GAVEL_SERVER": d.Server, "GAVEL_RUN_ID": run.ID.String(), "GAVEL_DB": "off", "CI": "1"},
-		SecretEnv: map[string]string{"GAVEL_RUN_TOKEN": SignRunToken(d.TokenKey, run.ID, scope.OrgID, time.Now().Add(d.RunLifetime()))},
-		Limits:    limits,
+		RunID:       run.ID,
+		Scope:       scope,
+		Image:       d.Image,
+		Command:     []string{"gavel", "runner", "exec", "--run", run.ID.String()},
+		Env:         map[string]string{"GAVEL_SERVER": d.Server, "GAVEL_RUN_ID": run.ID.String(), "GAVEL_DB": "off", "CI": "1"},
+		SecretEnv:   map[string]string{"GAVEL_RUN_TOKEN": SignRunToken(d.TokenKey, run.ID, scope.OrgID, time.Now().Add(d.RunLifetime()))},
+		Credentials: credentials,
+		Limits:      limits,
 	}
 	for key, value := range d.SecretEnv {
 		if key != "GAVEL_RUN_TOKEN" {
