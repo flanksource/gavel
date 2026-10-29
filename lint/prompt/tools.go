@@ -24,10 +24,11 @@ const (
 	reportViolationTool = "report_violation"
 )
 
-// reviewRun is one path's prompt run: the tools its agent calls are bound to
-// its work dir, and the violations it reports through them collect here.
+// reviewRun is one review's prompt run: the tools its agent calls are bound to
+// its work dir and file scope, and the violations it reports collect here.
 type reviewRun struct {
 	WorkDir string
+	Scope   fileScope
 	// Name prefixes the "<review>/<linter>" results the lint tool publishes.
 	Name      string
 	Publisher Publisher
@@ -112,6 +113,10 @@ func (r *reviewRun) Reported() []models.Violation {
 
 func (r *reviewRun) tools() []api.ToolDefinition {
 	readOnly, writes := true, false
+	required := []string{"message"}
+	if r.Scope.Exact {
+		required = append(required, "file")
+	}
 	return []api.ToolDefinition{
 		{
 			Name:        readFileTool,
@@ -144,7 +149,7 @@ func (r *reviewRun) tools() []api.ToolDefinition {
 					"type":     "array",
 					"minItems": 1,
 					"items": objectSchema(map[string]any{
-						"file":       map[string]any{"type": "string", "description": "Path relative to the work dir"},
+						"file":       r.Scope.fileProperty(),
 						"line":       map[string]any{"type": "integer", "minimum": 0, "description": "1-based line of the offending text"},
 						"column":     map[string]any{"type": "integer", "minimum": 0, "description": "1-based column; derived from code when omitted"},
 						"end_line":   map[string]any{"type": "integer", "minimum": 0, "description": "Last line when code spans several lines"},
@@ -156,7 +161,7 @@ func (r *reviewRun) tools() []api.ToolDefinition {
 							"method":  map[string]any{"type": "string"},
 							"package": map[string]any{"type": "string"},
 						}),
-					}, "message"),
+					}, required...),
 				},
 			}, "violations"),
 			ReadOnlyHint: &writes, DefaultPermission: api.ToolPolicyAllow,
@@ -305,6 +310,9 @@ func (r *reviewRun) reportViolation(_ context.Context, raw map[string]any) (any,
 		err := locateCode(r.WorkDir, &v)
 		if err == nil {
 			err = validateViolation(&v, r.WorkDir)
+		}
+		if err == nil {
+			err = r.Scope.check(r.WorkDir, v.File)
 		}
 		if err != nil {
 			rejected = append(rejected, rejectedViolation{Index: i, Error: err.Error()})

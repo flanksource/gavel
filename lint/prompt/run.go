@@ -28,23 +28,22 @@ var (
 )
 
 type reviewsInput struct {
-	Reviews     []review
-	WorkDir     string
-	File        string
-	Stdin       []byte
-	Concurrency int
-	Publisher   Publisher
-	OnEvent     func(int, api.Event)
+	Reviews   []review
+	WorkDir   string
+	File      string
+	Stdin     []byte
+	Publisher Publisher
+	OnEvent   func(int, api.Event)
 }
 
-// runReviews launches every review's Captain run into one clicky group, which
-// runs at most Concurrency of them at once, then awaits them all. Every review
-// is published as pending before the first launch; results keep review order.
+// runReviews launches every review's Captain run into one clicky group, then
+// awaits them all. Every review is published as pending before the first
+// launch; results keep review order.
 func runReviews(ctx context.Context, input reviewsInput) []*linters.LinterResult {
 	for _, review := range input.Reviews {
 		input.publish(&linters.LinterResult{Linter: review.Name, WorkDir: input.WorkDir, Status: linters.LinterStatusPending, Violations: []models.Violation{}})
 	}
-	group := clicky.StartGroup[captaincli.PromptRunSummary](testui.PromptLintTaskGroupName, clickytask.WithConcurrency(max(input.Concurrency, 1)))
+	group := clicky.StartGroup[captaincli.PromptRunSummary](testui.PromptLintTaskGroupName)
 	awaits := make([]func() []*linters.LinterResult, len(input.Reviews))
 	for i, review := range input.Reviews {
 		awaits[i] = input.launch(ctx, review, group.Group)
@@ -73,7 +72,7 @@ func (input reviewsInput) publish(result *linters.LinterResult) {
 // its results: the run's own, then the linters its agent ran. A multi-model
 // prompt launches one run per model, each reported on its own.
 func (input reviewsInput) launch(ctx context.Context, review review, group *clickytask.Group) func() []*linters.LinterResult {
-	run := &reviewRun{WorkDir: input.WorkDir, Name: review.Name, Publisher: input.Publisher}
+	run := &reviewRun{WorkDir: input.WorkDir, Scope: review.Scope, Name: review.Name, Publisher: input.Publisher}
 	if review.Run != nil {
 		run = review.Run
 	}
@@ -161,7 +160,7 @@ type summaryInput struct {
 // result is the run's lint result: its structured violations unioned with the
 // ones reported through report_violation, which survive even a failed run.
 func (r *reviewRun) result(input summaryInput) *linters.LinterResult {
-	output := runOutput{Name: input.Name, WorkDir: r.WorkDir, Data: input.Summary.StructuredOutput, Duration: input.Summary.Duration, Elapsed: input.Elapsed}
+	output := runOutput{Name: input.Name, WorkDir: r.WorkDir, Scope: r.Scope, Data: input.Summary.StructuredOutput, Duration: input.Summary.Duration, Elapsed: input.Elapsed}
 	if input.Err != nil {
 		output.Error = input.Err.Error()
 	} else if !input.Summary.Success {
@@ -179,6 +178,7 @@ func (r *reviewRun) result(input summaryInput) *linters.LinterResult {
 
 type runOutput struct {
 	Name, WorkDir, Duration, Error string
+	Scope                          fileScope
 	Data                           map[string]any
 	Elapsed                        time.Duration
 }
@@ -196,6 +196,11 @@ func (output runOutput) result() *linters.LinterResult {
 		return result
 	}
 	violations, err := decodeViolations(output.Data, output.WorkDir)
+	for i := 0; err == nil && i < len(violations); i++ {
+		if err = output.Scope.check(output.WorkDir, violations[i].File); err != nil {
+			err = fmt.Errorf("prompt lint violation %d: %w", i+1, err)
+		}
+	}
 	if err != nil {
 		result.Error = err.Error()
 		return result

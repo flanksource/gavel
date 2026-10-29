@@ -112,7 +112,10 @@ func Execute(opts Options) ([]*linters.LinterResult, error) {
 		return nil, err
 	}
 
-	registry := buildLinterRegistry(opts.WorkDir)
+	registry, err := loadLinterRegistry(opts.WorkDir, opts.ConfigDir)
+	if err != nil {
+		return nil, err
+	}
 	requestedLinters, explicit, err := resolveRequestedLinters(registry, opts.Linters)
 	if err != nil {
 		return nil, err
@@ -403,7 +406,10 @@ func dryRunGroup(opts Options) error {
 		return err
 	}
 
-	registry := buildLinterRegistry(opts.WorkDir)
+	registry, err := loadLinterRegistry(opts.WorkDir, opts.ConfigDir)
+	if err != nil {
+		return err
+	}
 	requestedLinters, explicit, err := resolveRequestedLinters(registry, opts.Linters)
 	if err != nil {
 		return err

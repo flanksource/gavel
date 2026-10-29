@@ -129,7 +129,7 @@ var _ = Describe("Lint prompt CLI integration", Ordered, func() {
 		if !filepath.IsAbs(cmd.Dir) {
 			cmd.Dir = filepath.Join(run.Root, run.Dir)
 		}
-		run.Files["review.prompt"] = "Review {{files}}"
+		run.Files["review.prompt"] = `Review {{join files " "}}`
 		for path, content := range run.Files {
 			Expect(os.MkdirAll(filepath.Dir(filepath.Join(run.Root, path)), 0o755)).To(Succeed())
 			Expect(os.WriteFile(filepath.Join(run.Root, path), []byte(content), 0o600)).To(Succeed())
@@ -145,20 +145,28 @@ var _ = Describe("Lint prompt CLI integration", Ordered, func() {
 		return server, snapshot, string(requests)
 	}
 
-	It("reviews each path argument in its own run with that path as the files variable", func() {
+	DescribeTable("reviews every path argument in one run with the paths as the files list", func(paths []string, rendered string, enum bool) {
 		server, snapshot, requests := runChild(childRun{
-			Replies: []string{`{"violations":[]}`, `{"violations":[]}`},
+			Replies: []string{`{"violations":[]}`},
 			Files:   map[string]string{"pkg/service.go": "package pkg\n", "cmd/main.go": "package main\n"},
-			Paths:   []string{"pkg", "cmd/main.go"},
+			Paths:   paths,
 		})
 		Expect(server.Remaining()).To(BeEmpty())
-		Expect(snapshot.Lint).To(ConsistOf(
-			SatisfyAll(HaveField("Linter", "review:pkg"), HaveField("Success", true), HaveField("RunID", Not(BeEmpty()))),
-			SatisfyAll(HaveField("Linter", "review:cmd/main.go"), HaveField("Success", true), HaveField("RunID", Not(BeEmpty()))),
-		))
-		Expect(requests).To(SatisfyAll(ContainSubstring("Review pkg"), ContainSubstring("Review cmd/main.go"), Not(ContainSubstring("Review pkg cmd/main.go"))))
+		Expect(snapshot.Lint).To(HaveExactElements(SatisfyAll(HaveField("Linter", "review"), HaveField("Success", true), HaveField("RunID", Not(BeEmpty())))))
+		Expect(server.Requests()).To(HaveLen(1))
+		Expect(requests).To(ContainSubstring(rendered))
 		Expect(requests).To(SatisfyAll(ContainSubstring(`"read_file"`), ContainSubstring("report_violation")), "the reviewing agent is offered gavel's tools")
-	})
+		enumOf, err := json.Marshal(map[string]any{"enum": paths})
+		Expect(err).NotTo(HaveOccurred())
+		if enum {
+			Expect(requests).To(ContainSubstring(string(enumOf[1:len(enumOf)-1])), "report_violation's file is one of the files under review")
+		} else {
+			Expect(requests).NotTo(ContainSubstring(`"enum":["pkg"`))
+		}
+	},
+		Entry("files", []string{"pkg/service.go", "cmd/main.go"}, "Review pkg/service.go cmd/main.go", true),
+		Entry("a directory", []string{"pkg", "cmd/main.go"}, "Review pkg cmd/main.go", false),
+	)
 
 	It("repairs findings with lint.fix and re-runs the prompt until clean", func() {
 		server, snapshot, requests := runChild(childRun{
@@ -196,7 +204,7 @@ var _ = Describe("Lint prompt CLI integration", Ordered, func() {
 		runChild(childRun{
 			Root: root, Dir: "pkg",
 			Replies: []string{`{"violations":[]}`},
-			Files:   map[string]string{"pkg/service.go": "package pkg\n", "pkg/review.prompt": "Review {{files}}"},
+			Files:   map[string]string{"pkg/service.go": "package pkg\n", "pkg/review.prompt": `Review {{join files " "}}`},
 			Paths:   []string{"service.go"},
 		})
 		expectRunUnderRoot(root)

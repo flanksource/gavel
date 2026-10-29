@@ -274,7 +274,11 @@ func ApplyLinterTaskStatus(task *clicky.Task, linterName string, success bool, v
 	if success {
 		if len(violations) > 0 {
 			task.SetName(buildLinterLabel(linterName, len(violations), true, firstViolationSnippet(violations), ""))
-			task.Warning()
+			if (&LinterResult{Violations: violations}).hasActionableViolations() {
+				task.Warning()
+			} else {
+				task.Success()
+			}
 		} else {
 			task.SetName(linterName)
 			task.Success()

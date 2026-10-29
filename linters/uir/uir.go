@@ -1,11 +1,8 @@
 package uir
 
 import (
-	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"os/exec"
 	"strings"
 
 	"github.com/flanksource/clicky"
@@ -69,44 +66,22 @@ func (u *UIR) Run(ctx commonsContext.Context, _ *clicky.Task) (violations []mode
 		defer func() { err = errors.Join(err, removeFragment(fragment)) }()
 	}
 	binary, args := u.DryRunCommand()
-	command := u.CommandContext(ctx, u.Name(), binary, args...)
-	var stdout, stderr bytes.Buffer
-	command.Stdout = u.WrapWriter(&stdout)
-	command.Stderr = u.WrapWriter(&stderr)
-	runErr := command.Run()
-	exitCode := 0
-	if runErr != nil {
-		var exited *exec.ExitError
-		if !errors.As(runErr, &exited) {
-			return nil, fmt.Errorf("uir execution: %w: %s", runErr, stderr.String())
-		}
-		exitCode = exited.ExitCode()
-	}
-	found, err := u.parse(stdout.Bytes(), exitCode)
-	if err != nil {
-		return found, fmt.Errorf("uir: %w; stderr: %s", err, stderr.String())
-	}
-	return found, nil
+	result, err := u.RunReport(ctx, u.Name(), binary, args...)
+	return u.found(result, err)
 }
 
 func (u *UIR) parse(output []byte, exitCode int) ([]models.Violation, error) {
-	var results []*linters.LinterResult
-	if err := json.Unmarshal(output, &results); err != nil {
-		return nil, fmt.Errorf("decode lint report: %w", err)
+	return u.found(linters.ParseReport(output, exitCode))
+}
+
+// found keeps a uir report's findings and counts, refusing another linter's.
+func (u *UIR) found(result *linters.LinterResult, err error) ([]models.Violation, error) {
+	if result == nil {
+		return nil, err
 	}
-	if len(results) != 1 || results[0] == nil || results[0].Linter != "uir" {
-		return nil, errors.New("expected one uir linter result")
+	if result.Linter != "uir" {
+		return nil, fmt.Errorf("expected one uir linter result, got %q", result.Linter)
 	}
-	result := results[0]
 	u.fileCount, u.ruleCount = result.FileCount, result.RuleCount
-	if exitCode != 0 && exitCode != 1 {
-		return result.Violations, fmt.Errorf("unexpected exit status %d", exitCode)
-	}
-	if result.Skipped || result.TimedOut || !result.Success || result.Error != "" {
-		return result.Violations, fmt.Errorf("lint execution failed: %s", result.Error)
-	}
-	if (exitCode == 1) != linters.HasFailures(results) {
-		return result.Violations, errors.New("lint report disagrees with exit status")
-	}
-	return result.Violations, nil
+	return result.Violations, err
 }

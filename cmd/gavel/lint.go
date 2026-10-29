@@ -5,9 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/signal"
 	"path/filepath"
-	"syscall"
 	"time"
 
 	"github.com/flanksource/clicky"
@@ -120,7 +118,10 @@ func runLint(ctx context.Context, opts LintOptions) (any, error) {
 	if opts.UI {
 		var err error
 		uiServer, err = startLintUI(lintUIOptions{Addr: opts.Addr, Context: opts.Context, Cancel: cancelRun,
-			PersistRerun: func(snapshot *testui.Snapshot) error { return saveLintSnapshot(opts.Dirs.StateRoot, snapshot) },
+			PersistRerun: func(snapshot *testui.Snapshot) error {
+				_, err := lint.SaveSnapshot(opts.Dirs.StateRoot, snapshot)
+				return err
+			},
 			Rerun: func(rctx context.Context, req testui.RerunRequest, output *testui.RerunOutputBuffer) ([]*linters.LinterResult, error) {
 				rerunOpts := opts
 				rerunOpts.Context = rctx
@@ -252,7 +253,7 @@ func startLintUI(opts lintUIOptions) (*testui.Server, error) {
 		snapshot.Status.Running = false
 		snapshot.Metadata.Kind = "lint"
 		snapshot.Metadata.Ended = time.Now().UTC()
-		snapshot.Git = snapshotGitInfo(srv.GitRoot())
+		snapshot.Git = snapshots.GitInfo(srv.GitRoot())
 		if opts.PersistRerun != nil {
 			if err := opts.PersistRerun(&snapshot); err != nil {
 				srv.SetRunError(err)
@@ -276,16 +277,14 @@ type lintUIResultOptions struct {
 // serveLintResults saves the completed run before waiting for shutdown, then
 // returns the latest UI results for terminal rendering.
 func serveLintResults(opts lintUIResultOptions) (any, error) {
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-	defer signal.Stop(sig)
 	if _, err := finishLint(opts.Options, opts.Results, opts.Started); err != nil {
 		return nil, err
 	}
-	opts.Server.SetLintResults(opts.Results)
-	opts.Server.MarkDone()
-	<-sig
-	snapshot := opts.Server.Snapshot()
+	// The run's context ends on the UI's Stop button; only a signal ends the UI.
+	snapshot, err := lint.Serve(context.Background(), lint.ServeOptions{Server: opts.Server, Results: opts.Results})
+	if err != nil {
+		return nil, err
+	}
 	exitCode = 0
 	if linters.HasFailures(snapshot.Lint) || snapshot.Error != "" {
 		exitCode = 1
@@ -294,44 +293,17 @@ func serveLintResults(opts lintUIResultOptions) (any, error) {
 }
 
 func finishLint(opts LintOptions, allResults []*linters.LinterResult, runStarted time.Time) (any, error) {
-	snap := &testui.Snapshot{
-		Metadata: &testui.SnapshotMetadata{
-			Version: version,
-			Started: runStarted,
-			Ended:   time.Now().UTC(),
-			Kind:    "lint",
-			Changes: opts.Selection.Snapshot(),
-		},
-		Git: snapshotGitInfo(opts.WorkDir),
-		Status: testui.SnapshotStatus{
-			LintRun: true,
-		},
-		Lint: allResults,
-	}
-	if err := saveLintSnapshot(opts.Dirs.StateRoot, snap); err != nil {
+	snap := lint.Snapshot(lint.SnapshotOptions{
+		WorkDir: opts.WorkDir, Version: version, Started: runStarted,
+		Changes: opts.Selection.Snapshot(), Results: allResults,
+	})
+	if _, err := lint.SaveSnapshot(opts.Dirs.StateRoot, snap); err != nil {
 		return nil, err
 	}
-
 	if linters.HasFailures(allResults) {
 		exitCode = 1
 	}
 	return lintRunReturnValue(snap, opts), nil
-}
-
-func saveLintSnapshot(stateRoot string, snapshot *testui.Snapshot) error {
-	if snapshot.Git != nil && snapshot.Git.SHA != "" {
-		if path, err := snapshots.Save(stateRoot, snapshot); err != nil {
-			return fmt.Errorf("persist lint snapshot: %w", err)
-		} else {
-			logger.V(1).Infof("wrote snapshot to %s", path)
-		}
-	}
-	if path, err := snapshots.SavePerRun(stateRoot, snapshot, snapshot.Metadata.Started, ""); err != nil {
-		return fmt.Errorf("persist per-run lint snapshot: %w", err)
-	} else {
-		logger.V(1).Infof("wrote per-run snapshot to %s", path)
-	}
-	return nil
 }
 
 func lintRunReturnValue(snap *testui.Snapshot, opts LintOptions) any {

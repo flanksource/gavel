@@ -15,6 +15,7 @@ import (
 	"github.com/flanksource/clicky"
 	lintprompt "github.com/flanksource/gavel/lint/prompt"
 	"github.com/flanksource/gavel/linters"
+	"github.com/flanksource/gavel/snapshots"
 	testui "github.com/flanksource/gavel/testrunner/ui"
 	"github.com/flanksource/gavel/workspace"
 	"github.com/spf13/cobra"
@@ -83,7 +84,7 @@ func registerLintPromptCommand(parent *cobra.Command) *cobra.Command {
 			}
 			uiServer.SetGitRoot(dir)
 			uiServer.SetVersion(version)
-			uiServer.SetGitInfo(snapshotGitInfo(dir))
+			uiServer.SetGitInfo(snapshots.GitInfo(dir))
 			opts.Publisher = uiServer
 		}
 		snapshot, err := run(ctx, opts)
@@ -123,7 +124,7 @@ func registerLintPromptCommand(parent *cobra.Command) *cobra.Command {
 	})
 	cmd.Use = "prompt [name|id|file] [path...] [-- prompt flags]"
 	cmd.Short = "Run a Captain prompt with the lint output preset"
-	cmd.Long = "Run a Captain prompt with the lint output preset.\n\nThe first argument is the prompt; remaining arguments (all of them with -p) are files or directories. Each one is reviewed by its own prompt run, with that path as the files variable, at most --concurrency at once. --changed, --since and --changed-files narrow that scope to changed files, as in gavel lint, one run per changed file.\n\nThe reviewing agent gets three tools: read_file reads a file under the work dir, lint runs the project's configured linters on paths, and report_violation records findings as soon as they are found, several per call, checking each quoted code snippet against its file and line. Reported findings are merged with the prompt's final violations. --ai-fix repairs findings with lint.fix from Gavel config and re-runs the prompt until clean. --ui shows the findings in the browser UI, where they can be re-run.\n\nFlags before -- configure gavel: scope, reporting and --ai-fix, with --model and the other runtime flags selecting the fixer. Arguments after -- go to the Captain prompt: --model, -p, -V, --preset and friends configure the reviewing prompt, and positional arguments there are the prompt and paths."
+	cmd.Long = "Run a Captain prompt with the lint output preset.\n\nThe first argument is the prompt; remaining arguments (all of them with -p) are files or directories. They are all reviewed by one prompt run, which gets them as the files list. --changed, --since and --changed-files narrow that scope to changed files, as in gavel lint.\n\nThe reviewing agent gets three tools: read_file reads a file under the work dir, lint runs the project's configured linters on paths, and report_violation records findings as soon as they are found, several per call, checking each quoted code snippet against its file and line. When every path is a file, report_violation's file must be one of them; with a directory in scope it must be under one. Findings for any other file are rejected. Reported findings are merged with the prompt's final violations. --ai-fix repairs findings with lint.fix from Gavel config and re-runs the prompt until clean. --ui shows the findings in the browser UI, where they can be re-run.\n\nFlags before -- configure gavel: scope, reporting and --ai-fix, with --model and the other runtime flags selecting the fixer. Arguments after -- go to the Captain prompt: --model, -p, -V, --preset and friends configure the reviewing prompt, and positional arguments there are the prompt and paths."
 	cmd.Example = "  gavel lint prompt review.prompt\n  gavel lint prompt review.prompt ./pkg cmd/main.go\n  gavel lint prompt --changed --ai-fix --model agent:opus -- --model agent:sonnet review.prompt\n  gavel lint prompt --ui --changed review.prompt\n  git diff | gavel lint prompt review.prompt -- -V change=-\n  gavel lint prompt --since main ./pkg -- -p 'Review the current change' --model agent:sonnet"
 	cmd.Long += "\n\nAccepted findings are printed to stderr and saved to a per-run .gavel snapshot as they become available, with or without --ui. Each review pass updates the same snapshot until it finishes; reruns create a new history entry. Structured output remains on stdout."
 	cmd.Args = cobra.ArbitraryArgs

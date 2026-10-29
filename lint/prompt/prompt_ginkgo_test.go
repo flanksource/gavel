@@ -89,20 +89,20 @@ var _ = Describe("Prompt lint results", func() {
 		Expect(got.Violations).To(HaveExactElements(HaveField("File", "/workspace/a.go")))
 	})
 
-	DescribeTable("gives each path its own run with that path as the files variable", func(paths, vars []string, wantNames []string, wantVars [][]string) {
+	DescribeTable("reviews every path in one run with the paths as the files list", func(paths, vars []string, wantVars []string, wantScope fileScope) {
+		dir := GinkgoT().TempDir()
+		writeFiles(dir, map[string]string{"pkg/a.go": "", "cmd/x/main.go": ""})
 		opts := Options{Prompt: captaincli.AIPromptOptions{File: "review.prompt", Var: vars}}
-		reviews := opts.reviews(paths)
-		names, gotVars := []string{}, [][]string{}
-		for _, review := range reviews {
-			names, gotVars = append(names, review.Name), append(gotVars, review.Prompt.Var)
-		}
-		Expect(names).To(Equal(wantNames))
-		Expect(gotVars).To(Equal(wantVars))
+		got, err := opts.review(dir, paths)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(got).To(SatisfyAll(HaveField("Name", "review"), HaveField("Prompt.Var", wantVars), HaveField("Scope", wantScope)))
 		Expect(opts.Prompt.Var).To(Equal(vars), "the shared options are not mutated")
 	},
-		Entry("no scope", nil, []string{"focus=errors"}, []string{"review"}, [][]string{{"focus=errors"}}),
-		Entry("paths", []string{"pkg", "cmd/x"}, []string{"focus=errors"}, []string{"review:pkg", "review:cmd/x"},
-			[][]string{{"focus=errors", "files=pkg"}, {"focus=errors", "files=cmd/x"}}),
+		Entry("no scope", nil, []string{"focus=errors"}, []string{"focus=errors"}, fileScope{}),
+		Entry("files", []string{"pkg/a.go", "cmd/x/main.go"}, []string{"focus=errors"},
+			[]string{"focus=errors", `files:=["pkg/a.go","cmd/x/main.go"]`}, fileScope{Paths: []string{"pkg/a.go", "cmd/x/main.go"}, Exact: true}),
+		Entry("a directory", []string{"pkg/a.go", "cmd/x"}, nil,
+			[]string{`files:=["pkg/a.go","cmd/x"]`}, fileScope{Paths: []string{"pkg/a.go", "cmd/x"}}),
 	)
 
 	DescribeTable("rejects a files variable that conflicts with path arguments", func(vars []string, jsonVars string) {
@@ -112,6 +112,8 @@ var _ = Describe("Prompt lint results", func() {
 		Expect(err).To(MatchError(ContainSubstring("files")))
 	},
 		Entry("--var", []string{"files=other.md"}, ""),
+		Entry("--var json", []string{`files:=["other.md"]`}, ""),
+		Entry("--var list", []string{"files[]=@list.txt"}, ""),
 		Entry("--vars", nil, `{"files":"other.md"}`),
 	)
 
@@ -212,8 +214,7 @@ var _ = Describe("runReviews", func() {
 			mu.Lock()
 			defer mu.Unlock()
 			launched = append(launched, inv)
-			files := inv.Options.Var[len(inv.Options.Var)-1]
-			return captaincli.PromptRunResult{RunID: "run-" + strings.TrimPrefix(files, "files=")}, nil
+			return captaincli.PromptRunResult{RunID: "run-" + strings.TrimPrefix(inv.Name, "review:")}, nil
 		}
 		awaitPromptRun = func(_ context.Context, runID string) (captaincli.PromptRunSummary, error) {
 			return captaincli.PromptRunSummary{RunID: runID, Success: true, StructuredOutput: map[string]any{"violations": []any{
@@ -228,11 +229,16 @@ var _ = Describe("runReviews", func() {
 		}
 	})
 
+	// reviewsFor is one review per path; runReviews keeps them in order.
 	reviewsFor := func(paths ...string) []review {
-		return (Options{Prompt: captaincli.AIPromptOptions{File: "review.prompt"}}).reviews(paths)
+		reviews := []review{}
+		for _, path := range paths {
+			reviews = append(reviews, review{Name: "review:" + path, Prompt: captaincli.AIPromptOptions{File: "review.prompt"}, Scope: fileScope{Paths: []string{path}, Exact: true}})
+		}
+		return reviews
 	}
 
-	DescribeTable("launches every review into the lint prompt group and keeps results in review order", func(concurrency int) {
+	It("launches every review into the lint prompt group and keeps results in review order", func() {
 		awaitPromptRun = func(_ context.Context, runID string) (captaincli.PromptRunSummary, error) {
 			// a.go finishes only after b.go's final result, yet stays first.
 			for deadline := time.Now().Add(5 * time.Second); runID == "run-a.go" && !slices.Contains(publisher.Events(), "review:b.go=final"); time.Sleep(time.Millisecond) {
@@ -241,11 +247,11 @@ var _ = Describe("runReviews", func() {
 				}
 			}
 			return captaincli.PromptRunSummary{RunID: runID, SessionID: "session-" + runID, Success: true, StructuredOutput: map[string]any{"violations": []any{
-				map[string]any{"file": "a.go", "message": "from " + runID},
+				map[string]any{"file": strings.TrimPrefix(runID, "run-"), "message": "from " + runID},
 			}}}, nil
 		}
 
-		results := runReviews(context.Background(), reviewsInput{Reviews: reviewsFor("a.go", "b.go"), WorkDir: "/w", Concurrency: concurrency, Publisher: publisher})
+		results := runReviews(context.Background(), reviewsInput{Reviews: reviewsFor("a.go", "b.go"), WorkDir: "/w", Publisher: publisher})
 
 		Expect(publisher.Events()).To(HaveExactElements(
 			"review:a.go=pending", "review:b.go=pending", "review:a.go=running", "review:b.go=running",
@@ -263,7 +269,7 @@ var _ = Describe("runReviews", func() {
 			Expect(inv.Options.RequiredPresets).To(ContainElement("lint"))
 			Expect(inv.Tools).To(HaveLen(3))
 		}
-	}, Entry("one at a time", 1), Entry("in parallel", 4))
+	})
 
 	It("stops the Captain run when the caller is cancelled", func() {
 		ctx, cancel := context.WithCancel(context.Background())
@@ -273,7 +279,7 @@ var _ = Describe("runReviews", func() {
 			return captaincli.PromptRunSummary{}, ctx.Err()
 		}
 
-		results := runReviews(ctx, reviewsInput{Reviews: reviewsFor("a.go"), WorkDir: "/w", Concurrency: 1})
+		results := runReviews(ctx, reviewsInput{Reviews: reviewsFor("a.go"), WorkDir: "/w"})
 
 		Expect(stopped).To(Equal([]string{"run-a.go"}))
 		Expect(results).To(HaveExactElements(SatisfyAll(HaveField("Success", false), HaveField("Error", context.Canceled.Error()))))
@@ -292,7 +298,7 @@ var _ = Describe("runReviews", func() {
 		awaitPromptRun = func(context.Context, string) (captaincli.PromptRunSummary, error) {
 			return captaincli.PromptRunSummary{Text: rejected.Text, Error: failure.Error}, errors.New(failure.Error)
 		}
-		results := runReviews(context.Background(), reviewsInput{Reviews: reviewsFor("a.go"), WorkDir: "/w", Concurrency: 1,
+		results := runReviews(context.Background(), reviewsInput{Reviews: reviewsFor("a.go"), WorkDir: "/w",
 			OnEvent: func(_ int, event api.Event) { observed = append(observed, event) },
 		})
 		Expect(observed).To(Equal([]api.Event{rejected, failure}))
@@ -304,7 +310,7 @@ var _ = Describe("runReviews", func() {
 			return captaincli.PromptRunResult{}, fmt.Errorf("runtime cannot expose caller tools")
 		}
 
-		results := runReviews(context.Background(), reviewsInput{Reviews: reviewsFor("a.go"), WorkDir: "/w", Concurrency: 1, Publisher: publisher})
+		results := runReviews(context.Background(), reviewsInput{Reviews: reviewsFor("a.go"), WorkDir: "/w", Publisher: publisher})
 
 		Expect(results).To(HaveExactElements(HaveField("Error", "runtime cannot expose caller tools")))
 		Expect(publisher.Events()).To(Equal([]string{"review:a.go=pending", "review:a.go=final"}))
@@ -315,7 +321,7 @@ var _ = Describe("runReviews", func() {
 			return captaincli.PromptRunResult{Runs: []captaincli.PromptRunItem{{RunID: "r1", Selector: "api:sonnet"}, {RunID: "r2", Selector: "api:haiku"}}}, nil
 		}
 
-		results := runReviews(context.Background(), reviewsInput{Reviews: reviewsFor("a.go"), WorkDir: "/w", Concurrency: 1, Publisher: publisher})
+		results := runReviews(context.Background(), reviewsInput{Reviews: reviewsFor("a.go"), WorkDir: "/w", Publisher: publisher})
 
 		Expect(results).To(HaveExactElements(HaveField("Linter", "review:a.go:api:sonnet"), HaveField("Linter", "review:a.go:api:haiku")))
 		Expect(publisher.Events()[:4]).To(Equal([]string{"review:a.go=pending", "review:a.go=removed", "review:a.go:api:sonnet=running", "review:a.go:api:haiku=running"}))
@@ -340,7 +346,9 @@ var _ = Describe("runReviews", func() {
 			return captaincli.PromptRunSummary{RunID: runID, Success: true, StructuredOutput: map[string]any{"violations": []any{}}}, nil
 		}
 
-		results := runReviews(context.Background(), reviewsInput{Reviews: reviewsFor("a.go"), WorkDir: "/w", Concurrency: 1, Publisher: publisher})
+		reviews := reviewsFor("a.go")
+		reviews[0].Scope.Paths = []string{"a.go", "b.go"}
+		results := runReviews(context.Background(), reviewsInput{Reviews: reviews, WorkDir: "/w", Publisher: publisher})
 
 		Expect(results).To(HaveExactElements(HaveField("Violations", HaveExactElements(HaveField("File", "/w/b.go")))))
 	})
