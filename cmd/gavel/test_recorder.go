@@ -59,7 +59,7 @@ func buildRunningSnapshot(
 			Sequence: 1,
 			Args:     snapshotArgs(opts),
 		},
-		Git: snapshotGitInfo(opts.WorkDir),
+		Git: snapshots.GitInfo(opts.WorkDir),
 		Status: testui.SnapshotStatus{
 			Running: true,
 			LintRun: false,

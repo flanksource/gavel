@@ -207,19 +207,14 @@ func runTodosPlanRevise(target TodosPlanReviseOptions) error {
 		return err
 	}
 	// Revise re-enters the plan step, continuing the plan run's own
-	// configuration and the runtime it resolved. With a recorded session it
-	// resumes that session with the feedback as the next turn, so the agent
-	// updates its plan and the step's outcome lands the todo back in review;
-	// without one it plans afresh with the feedback in the todo's own prompt.
-	c := run.Continuation{
+	// configuration and the runtime it resolved. When that runtime can continue
+	// the recorded session it resumes it with the feedback as the next turn, so
+	// the agent updates its plan and the step's outcome lands the todo back in
+	// review; otherwise it plans afresh with the feedback in the todo's own prompt.
+	opts, err := run.Revise(ctx, run.Continuation{
 		Dir: workDir, Provider: provider, Todo: todo, Prior: planRun,
 		Override: run.Options{Host: lifecycle.HostCLI}, Step: string(types.PlanPhase),
-	}
-	resume := run.PriorSessionID(todo) != ""
-	if resume {
-		c.Resume, c.Message = true, feedback
-	}
-	opts, err := run.Continue(c)
+	}, feedback)
 	if err != nil {
 		return err
 	}
@@ -227,8 +222,8 @@ func runTodosPlanRevise(target TodosPlanReviseOptions) error {
 	if err != nil {
 		return err
 	}
-	if !resume {
-		todo.Prompt = "Revise the existing plan using this reviewer feedback:\n\n" + feedback
+	if !opts.Resume {
+		todo.Prompt = run.RevisionPrompt(feedback)
 	}
 	if err := runTodoStep(ctx, workDir, provider, todo, opts, runStepPolicy{AllowCommit: true}); err != nil {
 		return fmt.Errorf("revise plan: %w", err)

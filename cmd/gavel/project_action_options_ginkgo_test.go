@@ -71,8 +71,8 @@ var _ = Describe("project action command options", func() {
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(args).To(Equal([]string{
-			"--lint=true",
 			"--message=fix: selected files",
+			"--lint=true",
 			"--precommit=fail",
 			"one.go",
 			"two.go",

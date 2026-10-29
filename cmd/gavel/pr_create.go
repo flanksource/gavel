@@ -12,6 +12,7 @@ import (
 	commitpkg "github.com/flanksource/gavel/commit"
 	prcreate "github.com/flanksource/gavel/pr/create"
 	"github.com/flanksource/gavel/pr/model"
+	testui "github.com/flanksource/gavel/testrunner/ui"
 	"github.com/spf13/cobra"
 )
 
@@ -90,7 +91,7 @@ func runPRCreate(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	printPRCreateSummary(res.PR, res.Content)
-	openBrowser(res.PR.URL)
+	testui.OpenBrowser(res.PR.URL)
 	return nil
 }
 
