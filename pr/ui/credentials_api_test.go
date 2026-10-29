@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/internal/logtest"
 	"github.com/flanksource/gavel/modelkeys"
 	"github.com/flanksource/gavel/sandbox"
 	"github.com/google/uuid"
@@ -33,7 +33,7 @@ func TestCredentialFetch(t *testing.T) {
 	finished, abandoned := run(org, "succeeded", time.Minute), run(org, "running", 76*time.Minute)
 	noKey := run(keyless, "running", time.Minute)
 
-	logged := captureLogger(t)
+	logged := logtest.Capture(t)
 	api := &CredentialsAPI{DB: db, Keys: modelkeys.Store{DB: db}, Atespace: "ate-env", RunLifetime: 75 * time.Minute, Token: "provider-token"}
 	handler := api.Handler()
 	fetch := func(token string, run uuid.UUID, provider, actor string) (int, string) {
@@ -87,15 +87,4 @@ func TestCredentialFetch(t *testing.T) {
 	assert.Contains(t, logged.String(), "credential fetch for run "+running.String()+": organization "+org.String()+"'s anthropic key")
 	assert.Contains(t, logged.String(), "credential fetch for run "+finished.String()+"'s anthropic key refused: run "+finished.String()+" is succeeded, not active")
 	assert.NotContains(t, logged.String(), "route-test-key", "the key is never logged")
-}
-
-// captureLogger sends the global logger to a buffer for the rest of t, so the lines a test
-// expects are asserted instead of printed.
-func captureLogger(t *testing.T) *strings.Builder {
-	t.Helper()
-	var buf strings.Builder
-	previous := logger.StandardLogger()
-	logger.Use(&buf)
-	t.Cleanup(func() { logger.SetLogger(previous) })
-	return &buf
 }
