@@ -1,0 +1,237 @@
+---
+title: "External issues"
+description: "Read Jira issues as normalized JSON, compact summaries, or complete Markdown documents."
+parent: cli-usage
+order: 35
+---
+
+`gavel external-issues jira` uses a direct Jira REST client backed by `commons/http`. Credentials come from environment variables or an authenticated `twg` installation. Jira requests do not pass through TWG.
+
+## Authentication
+
+For an API token, set `JIRA_URL`, `JIRA_EMAIL`, and `JIRA_API_TOKEN`:
+
+```bash
+export JIRA_URL=https://example.atlassian.net
+export JIRA_EMAIL=api@example.test
+export JIRA_API_TOKEN='<api-token>'
+gavel external-issues jira get EXAMPLE-42 --markdown
+```
+
+Gavel checks complete credential groups in this order:
+
+| Source | API token | Username or email | OAuth access token |
+| --- | --- | --- | --- |
+| Jira | `JIRA_API_TOKEN` or `JIRA_TOKEN` | `JIRA_EMAIL`, `JIRA_USER`, or `JIRA_USERNAME` | `JIRA_OAUTH_ACCESS_TOKEN` |
+| Atlassian | `ATLASSIAN_API_TOKEN` | `ATLASSIAN_EMAIL` or `ATLASSIAN_USER` | `ATLASSIAN_OAUTH_ACCESS_TOKEN` |
+| TWG environment | `TWG_TOKEN` | `TWG_USER` | `TWG_OAUTH_ACCESS_TOKEN` |
+
+An OAuth token takes precedence over an API token within its group. Incomplete API credentials produce an error. Without environment credentials, Gavel asks TWG to refresh and export the selected credentials in memory. `--profile` explicitly selects a TWG profile; credentials are never evaluated as shell code or written to disk.
+
+`--site` overrides the site environment variables: `JIRA_URL`, `JIRA_BASE_URL`, `JIRA_SITE`, `ATLASSIAN_SITE`, `ATLASSIAN_URL`, `TWG_SITE`, and `TWG_DOMAIN`, checked in that order. A site can be a full URL, hostname, or Atlassian site prefix. With TWG discovery, its selected site is used when no site was supplied. OAuth discovers the cloud ID and uses Atlassian's API gateway; multiple accessible sites require a site selection. For scoped API tokens that require the gateway, also set `JIRA_CLOUD_ID` or `ATLASSIAN_CLOUD_ID`.
+
+```bash
+gavel external-issues jira get EXAMPLE-42 --site example --profile work --markdown
+```
+
+## Compact and full documents
+
+The default view shows the issue link and title, status, priority, assignee, project, a description preview of up to 240 characters, labels, populated extension fields in a Field/Value table, a filename link for every attachment, and known comment and attachment counts. Unknown fields use their native IDs; duplicate table labels include the field ID. Nulls and empty arrays are omitted recursively from both compact and full human-readable output. Zero and false remain visible. JSON and YAML retain the complete field values. Unloaded collections are not reported as empty. Thread bodies are omitted from this view.
+
+```bash
+gavel external-issues jira get EXAMPLE-42
+gavel external-issues jira get EXAMPLE-42 --format markdown
+gavel external-issues jira get EXAMPLE-42 --full --format markdown=issue.md
+```
+
+Named field objects show their display name in compact output, with a link when available. Jira status categories and statuses with category metadata render as colored HTML badges in both compact and full views, including Markdown exports. Creator and other Jira user fields show an avatar capped at 24 × 24 pixels and a name rather than account metadata. Jira option objects show their value, such as `Not Received`, in both views; cascading options show `Region / East`. Their IDs and API URLs remain available in JSON and YAML.
+
+Resolution shows its name, with the description included in full output. Parent and linked issues show linked issue keys, titles and statuses without expanding REST metadata. Linked issues retain Jira's directional relationship labels, such as `depends on` and `is required for`. Epic Link fields also link to the referenced issue.
+
+In full output, rich checklist fields render in their own sections instead of inside the field table. Group labels and item order are preserved. A cross or check marker at the beginning of a checklist line becomes an unchecked or checked task item; ordinary inline emoji and scalar progress fields retain their meaning. Native ADF task lists also render as task checkboxes. These presentation changes do not replace the structured resolution or relationship values in JSON/YAML.
+
+`--full` includes the complete description, expanded field properties, an attachment table, and the comment thread with linked authors, IDs, and created/updated timestamps. Rich content uses Clicky's semantic nodes across terminal, Markdown, and HTML, including inline code, tables, links, and nested lists. Text colors are preserved in Markdown and HTML. Malformed ADF and unsupported nodes or marks produce warnings identifying the issue or comment and content location. Rendering keeps readable text and supported formatting; content without readable text is retained as JSON.
+
+ADF link cards render as hyperlinks, inline media as file references, date nodes as UTC dates in `YYYY-MM-DD` format, rules as horizontal rules, and panels as labelled blockquotes. Underline, subscript, superscript and media borders are preserved in Markdown and HTML. Media references without a direct URL retain their Atlassian media identifier; converting those identifiers into attachment download URLs is not part of rendering.
+
+```bash
+gavel external-issues jira get EXAMPLE-42 --full --format html=issue.html
+```
+
+List output is a compact table:
+
+```bash
+gavel external-issues jira list --jql 'project = EXAMPLE' --limit 20 --format markdown
+gavel external-issues jira list --jql 'project = EXAMPLE' --fields customfield_10053 --json
+```
+
+`--fields` selects native Jira field IDs. Gavel also requests the summary, project, and issue type needed to normalize the result.
+
+## Sync to local Markdown
+
+`sync` writes a complete issue, including its fields, attachments and all comments, to `.gavel/jira/<project-id>/<issue-key>.md`. The project directory uses Jira's native project ID. Pass `--sync-dir` to choose a different root directory:
+
+```bash
+gavel external-issues jira sync EXAMPLE-42
+gavel external-issues jira sync EXAMPLE-42 EXAMPLE-43
+gavel external-issues jira sync EXAMPLE-42 --sync-dir ./issues --attachments
+gavel external-issues jira sync EXAMPLE-42 --extract
+```
+
+### Sync from Excel columns
+
+Use `@file.xlsx:Column` to read issue keys or IDs from a named column in the first worksheet. `Column` is the header text in the first row, such as `Issue Key`, rather than an Excel column letter such as `A`.
+
+For example, save this table in `issues.xlsx` with `Issue Key` and `Summary` as the first-row headers:
+
+| Issue Key | Summary |
+| --- | --- |
+| EXAMPLE-42 | Update the onboarding guide |
+| EXAMPLE-43 | Review the release checklist |
+
+```bash
+gavel external-issues jira sync '@issues.xlsx:Issue Key'
+```
+
+This syncs `EXAMPLE-42` and `EXAMPLE-43` using their current Jira data. The spreadsheet supplies the issue identifiers; the `Summary` column is not imported into Jira or used to replace the issue title.
+
+Select a worksheet by name, or by its position counting from one:
+
+```bash
+# Read the Issue Key column from Sheet2
+gavel external-issues jira sync '@issues.xlsx:Sheet2!Issue Key'
+
+# Read from a worksheet whose name contains spaces
+gavel external-issues jira sync '@issues.xlsx:Sprint Backlog!Issue Key'
+
+# Read from the second worksheet, regardless of its name
+gavel external-issues jira sync '@issues.xlsx:#2!Issue Key'
+```
+
+Quote the entire argument so spaces and `!` reach Gavel unchanged. Paths and column headers can contain spaces:
+
+```bash
+# Use a workbook exported to a directory with a space in its name
+gavel external-issues jira sync '@./Jira exports/Sprint issues.xlsx:Issue Key' --attachments
+
+# Use a different column header and extract PDF/DOCX attachments
+gavel external-issues jira sync '@issues.xlsx:Sprint Backlog!Jira ID' --extract --sync-dir ./issues
+
+# Combine columns from two workbooks with an explicit issue key
+gavel external-issues jira sync '@issues.xlsx:Issue Key' '@follow-up.xlsx:Issue Key' EXAMPLE-99
+```
+
+The `Jira ID` example requires a column with that header containing Jira issue keys or IDs. Sheet names and headers are case-insensitive, and empty cells are skipped. Invalid selectors and missing sheets or columns return errors. File expansion applies to CLI input only.
+
+Excel-style single-quoted worksheet names are also supported. Use inner single quotes when the worksheet name contains `!`, and double any apostrophes within the name. These examples use `\'` shell escapes to include the inner quotes within a shell single-quoted argument:
+
+```bash
+# Select a worksheet literally named Sprint!Backlog
+gavel external-issues jira sync '@issues.xlsx:'\''Sprint!Backlog'\''!Issue Key'
+
+# Select a worksheet named O'Brien
+gavel external-issues jira sync '@issues.xlsx:'\''O'\'''\''Brien'\''!Issue Key'
+
+# Select a worksheet literally named #2, rather than the second worksheet
+gavel external-issues jira sync '@issues.xlsx:'\''#2'\''!Issue Key'
+```
+
+CSV column inputs and one-ID-per-line text files are also supported:
+
+```bash
+gavel external-issues jira sync '@issues.csv:Issue Key' --attachments
+gavel external-issues jira sync '@issues.txt'
+```
+
+### Sync progress and attachments
+
+During sync, parent, linked and epic references prefer existing issue Markdown files under the selected sync directory, including other project directories. For example, an issue in `10001` can link to `../10002/EXAMPLE-43.md`. Same-site Jira links inside descriptions, comments and rich fields use the same lookup. Missing local files link to Jira; references are not fetched or synced recursively. The index includes existing files and is updated as issues are saved, so a target written later in the batch becomes available on the next sync. Duplicate local files for the same issue key produce an error. Standalone `get` and `list` output uses Jira links.
+
+Issues sync in input order using one Jira client. `--no-cache` refreshes field metadata once for the batch. ADF parsing and rendering warnings do not stop sync. Other errors stop sync and report the failed issue and its position; files already written remain available.
+
+Sync displays a task group with the current issue and a saved/total issue count. Its steps show field catalog loading, comment pagination, attachment downloads, document conversion, image extraction, and Markdown publication. Downloads show received bytes and a percentage when Jira supplies a content length. An issue counts as saved after its files have been published; a failed batch retains the completed count and identifies the issue where it stopped. Standalone `get`, `list`, comment listing, and attachment downloads also expose task status. Task output goes to stderr, leaving JSON and Markdown results on stdout. Use `--no-progress` for plain task output without the live display.
+
+`--attachments` downloads the originals into `<project-id>/<issue-key>.attachments/<attachment-id>/<filename>`. Filename links in the issue Markdown point to these relative local paths. Attachment IDs keep duplicate filenames separate. Without this flag, links continue to point to Jira. Running sync again refreshes the issue and requested attachments; it does not delete older local files.
+
+`--extract` implies `--attachments` and appends extracted PDF and DOCX content to the issue Markdown. Images use Markdown image syntax pointing to `attachments/cas/<sha256>.<extension>`, relative to the issue file. Image files live under `<project-id>/attachments/cas`, and repeated image content shares the same file. Keep this folder alongside the issue Markdown when moving or sharing it. Other attachment types are downloaded without document extraction.
+
+Extraction requires [`uvx`, provided by uv](https://docs.astral.sh/uv/getting-started/installation/). Gavel runs an adapter around `docx2md==1.0.5` for DOCX files and PyMuPDF 2.0 through `uvx` for PDFs; uv downloads the Python dependencies on first use. DOCX files containing EMF or WMF images additionally require Node.js and npm. Gavel runs `npm exec --yes --package=emf-converter@4.24.0` to convert those images to SVG; npm downloads the pinned converter on first use. SVGs preserve vector elements and text, with embedded bitmaps where present in the source. Fonts available on the machine affect text appearance. Conversion runs locally. Unsupported images, invalid documents, missing tools and download failures return an error. The previous issue Markdown is replaced only after every requested download and extraction succeeds.
+
+`--site`, `--profile`, `--no-cache` and the shared HTTP logging/HAR options also apply to sync. `--json` returns an array of results, each containing the issue key, Markdown path, downloaded attachment paths, extracted image paths and IDs of extracted attachments.
+
+### Saved metadata and resync
+
+Every synced document starts with YAML frontmatter under `gavel`, with schema `version: 1`. It records the Jira site, cloud and issue identities, project, source update time, effective sync settings, and successful sync time. Attachment records are keyed by native attachment ID and retain original URLs separately from local paths. Download and extraction records include SHA-256 hashes, converter versions, pipeline fingerprints, timestamps, and associated image paths. Credentials are never stored.
+
+Resync a saved document in place, including after moving it together with its attachment directories:
+
+```bash
+gavel external-issues jira sync --from ./issues/EXAMPLE-42.md
+gavel external-issues jira sync --from ./issues/EXAMPLE-42.md --extract=false
+gavel external-issues jira sync --from ./issues/EXAMPLE-42.md --force
+```
+
+`--from` cannot be combined with positional issue IDs or `--sync-dir`. Saved settings apply unless `--attachments` or `--extract` is explicitly supplied; `false` overrides a saved `true`. Extraction requires attachments. An explicit `--site` must match the saved site. Authentication still uses the current environment or `--profile`.
+
+Resync always loads current Jira issue data. A verified local download can be reused after Jira confirms its strong ETag with HTTP 304. Without that validator, Gavel downloads the source again. Extraction is reused when the source hash, pipeline fingerprint, cached Markdown, and images all verify. Extracted Markdown is stored in `attachments/extracted`, with image links relative to its own location. `--force` refreshes downloads and extraction; `--no-cache` only refreshes the field catalog.
+
+Custom frontmatter and attachment `enrichments` records survive resync. Each enrichment can contain `source_sha256`, an inline `result`, artifact references with `path` and `sha256`, and tool-specific fields. Gavel marks unverified, changed-source, and removed-attachment enrichments `stale: true` while retaining their results. It does not run enrichment jobs or preserve edits to the generated Markdown body. Legacy files gain metadata on their next sync by issue key; `--from` requires valid metadata. Malformed metadata, source mismatches, or edits made during a sync stop publication.
+
+## Normalized data
+
+JSON and YAML expose the same typed issue model for both `get` and `list`:
+
+```bash
+gavel external-issues jira get EXAMPLE-42 --json
+gavel external-issues jira get EXAMPLE-42 --format json=issue.json
+```
+
+The model includes provider and resolved site, issue ID and key, title and URL, project, issue type, priority, status, people, timestamps, description, comments, attachments, labels, and extension fields. Missing optional values remain absent. Status preserves the native ID and name; Jira's status category maps to `todo`, `in_progress`, or `done` when supplied. This category is independent of Gavel's TODO execution lifecycle.
+
+Extension fields contain direct values keyed by the field's name in snake_case. Duplicate names receive numbered suffixes, such as `team_1` and `team_2`, in native-ID order. Suffixes skip names already occupied by another field, so values are never overwritten. Unresolved fields retain their native ID as the key. A field rename changes its exported key:
+
+```json
+{
+  "fields": {
+    "team": { "id": "team-1", "name": "Platform" },
+    "business_benefits_case_status": { "value": "Not Received" },
+    "customfield_unknown": false
+  }
+}
+```
+
+Custom-field documents are converted from ADF to Markdown strings directly under their field key, including in JSON and YAML exports. Documents nested inside field arrays or objects are also converted. ADF parsing and rendering problems produce warnings with the field ID and content location while retaining the available content.
+
+Descriptions and comment bodies are documents with `format` and `content`: `adf` preserves the Atlassian document, and `text` preserves a string. Issue, comment, and attachment exports omit duplicated `native` payloads. Field exports omit catalog metadata and schema wrappers. Description and comment documents remain exportable even when their content cannot be rendered. `--full` changes human-readable output only.
+
+Field metadata comes from Jira's site-wide `/rest/api/3/field` catalog and is cached per site and account for 24 hours. It includes readable fields that are absent from create and edit forms. Use `--no-cache` on `get` or `list` to rebuild the catalog from Jira. A field with unresolved metadata retains its ID and value without inventing a display name.
+
+```bash
+gavel external-issues jira get EXAMPLE-42 --no-cache --markdown
+```
+
+## HTTP logging and HAR capture
+
+Jira requests use the shared `commons/http` logging ladder: `-v` shows access lines, `-vv` adds headers, `-vvv` adds request bodies, and `-vvvv` adds response bodies. Failed requests are logged at the default level. Logging goes to stderr so Markdown and JSON on stdout remain usable. `-Phttp.jira.log=all` enables explicit Jira tracing; `http.log` applies globally. Named logger levels can be set with `-Plog.level.http` or `-Plog.level.http.jira`.
+
+Use `http.jira.har` to capture Jira traffic, or `http.har` as the global output path. The shared HAR registry writes the archive during shutdown, including when the command fails. `http.jira.har.level` overrides `http.har.level`: `full` is the default, `metadata` captures headers and timings without bodies, and `off` disables capture. Credentials are redacted by default. OAuth site discovery, catalog requests, comments, and attachments all use the same configured client. Requests also feed Gavel's shared HTTP traffic observer.
+
+```bash
+gavel external-issues jira get EXAMPLE-42 --markdown -Phttp.jira.har=jira.har -Phttp.jira.har.level=metadata
+gavel external-issues jira get EXAMPLE-42 --markdown -vv
+```
+
+## Comments and attachments
+
+`get` loads all comment pages. Comments can also be listed separately or created from Markdown; headings, paragraphs, emphasis, links, code blocks, lists, and tables are converted to ADF. Unsupported Markdown constructs produce an error before posting.
+
+```bash
+gavel external-issues jira comment list EXAMPLE-42 --markdown
+gavel external-issues jira comment create EXAMPLE-42 --body 'Ready for **review**.'
+gavel external-issues jira attachment list EXAMPLE-42 --json
+gavel external-issues jira attachment upload EXAMPLE-42 --file report.pdf
+gavel external-issues jira attachment download 10001 --output report.pdf
+gavel external-issues jira attachment delete 10001 --yes
+```
+
+Attachment downloads require a new output file and never overwrite an existing file.
