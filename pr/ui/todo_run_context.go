@@ -201,7 +201,7 @@ func (s *Server) hostedRunContext(ctx context.Context, dir string) (todoRunConte
 	if err != nil {
 		return todoRunContextResponse{}, err
 	}
-	host, err := lifecycle.NewRepositoryHost(provider, source.Dir, lifecycle.HostDashboard)
+	host, err := lifecycle1.NewRepositoryHost(provider, source.Dir, lifecycle1.HostDashboard)
 	if err != nil {
 		return todoRunContextResponse{}, err
 	}
@@ -235,7 +235,7 @@ func (s *Server) hostedRunContext(ctx context.Context, dir string) (todoRunConte
 		Models:          models,
 		Efforts:         todoRunEfforts(),
 		DefaultMode:     promptDefaults["run"].Mode,
-		DefaultProvider: providerKey(promptDefaults["run"].Spec.Model),
+		DefaultProvider: run.ProviderKey(promptDefaults["run"].Spec.Model),
 		Tools:           todoRunToolCatalog(),
 		Lifecycle:       todoRunLifecycleFor(definition),
 		InputSchemas:    inputSchemas,
@@ -254,7 +254,7 @@ func stepDefaultRuntimes(defaults map[string]todoRunPromptDefault) ([]todoRunMod
 	modes, models := []todoRunModeOption{}, []todoRunModelOption{}
 	for _, step := range steps {
 		resolved := defaults[step]
-		provider, ok := api.ProviderByName(providerKey(api.Model{Name: resolved.Model}))
+		provider, ok := api.ProviderByName(run.ProviderKey(api.Model{Name: resolved.Model}))
 		if !ok || resolved.Mode == "" || resolved.Model == "" {
 			continue
 		}

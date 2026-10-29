@@ -8,13 +8,12 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 
+	"github.com/flanksource/gavel/blob"
 	"github.com/flanksource/gavel/snapshots"
 	testui "github.com/flanksource/gavel/testrunner/ui"
 )
@@ -105,7 +104,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	srv, err := h.server(runID, prefix)
-	if errors.Is(err, os.ErrNotExist) {
+	if errors.Is(err, blob.ErrNotFound) {
 		http.NotFound(w, r)
 		return
 	}

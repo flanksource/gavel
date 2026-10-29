@@ -8,6 +8,7 @@ import (
 
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/captain/pkg/promptrun"
+	"github.com/flanksource/gavel/lifecycle"
 )
 
 // RemoteRunner runs a step's prompt somewhere else and returns its result, as promptrun.Run
@@ -30,7 +31,7 @@ type RemoteRun struct {
 
 // remoteRunnable refuses a step a remote runner can't run: one that resumes an agent session,
 // whose transcript the sandbox doesn't have.
-func (h *Host) remoteRunnable(step Step, opts RunOptions) error {
+func (h *Host) remoteRunnable(step lifecycle.Step, opts RunOptions) error {
 	if h.Remote == nil {
 		return nil
 	}
@@ -42,7 +43,7 @@ func (h *Host) remoteRunnable(step Step, opts RunOptions) error {
 
 // remoteRuntime refuses a runtime a remote runner can't provide: cmux, whose agent runs in a
 // terminal on this host.
-func (h *Host) remoteRuntime(step Step, spec api.Spec) error {
+func (h *Host) remoteRuntime(step lifecycle.Step, spec api.Spec) error {
 	if h.Remote != nil && spec.Mode == api.ModeCmux {
 		return fmt.Errorf("step %s runs in cmux, a terminal on this host, which a run executing elsewhere can't use: choose the agent or cli mode", step.Name)
 	}
