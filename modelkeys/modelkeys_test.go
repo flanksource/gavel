@@ -3,11 +3,13 @@
 package modelkeys_test
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"strings"
 	"testing"
 
 	commonsdbtest "github.com/flanksource/commons-db/dbtest"
+	"github.com/flanksource/commons-db/secret"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/modelkeys"
 	"github.com/google/uuid"
@@ -42,8 +44,21 @@ func newFixture(t *testing.T) fixture {
 		require.NoError(t, db.Exec(`INSERT INTO orgs (id, issuer, clerk_org_id, name) VALUES (?, 'https://clerk.example', ?, 'Org')`, org, org.String()).Error)
 	}
 	require.NoError(t, db.Exec(`INSERT INTO users (id, issuer, clerk_user_id) VALUES (?, 'https://clerk.example', 'user_ada')`, f.ada).Error)
-	f.store = modelkeys.Store{DB: db, Key: modelkeys.EncryptionKey([]byte("a secret of at least thirty-two bytes"))}
+	useKeeper(t, modelkeys.KeeperConnection([]byte("a secret of at least thirty-two bytes")))
+	f.store = modelkeys.Store{DB: db}
 	return f
+}
+
+// useKeeper points commons-db's secret keeper at connection for the rest of t.
+func useKeeper(t *testing.T, connection string) {
+	t.Helper()
+	previous := secret.KMSConnection
+	secret.KMSConnection = connection
+	secret.InvalidateKeeper()
+	t.Cleanup(func() {
+		secret.KMSConnection = previous
+		secret.InvalidateKeeper()
+	})
 }
 
 func TestSetKeyIsReadBackAndListedWithoutItsValue(t *testing.T) {
@@ -97,22 +112,23 @@ func TestSetAnotherKindOfTheSameProviderReplacesTheKey(t *testing.T) {
 func TestValueRefusesAKeyCopiedToAnotherOrg(t *testing.T) {
 	f := newFixture(t)
 	require.NoError(t, f.store.Set(t.Context(), f.acme, nil, "anthropic-api-key", apiKey))
-	require.NoError(t, f.db.Exec(`INSERT INTO org_model_keys (org_id, provider, kind, ciphertext, nonce, hint)
-		SELECT ?, provider, kind, ciphertext, nonce, hint FROM org_model_keys WHERE org_id = ?`, f.other, f.acme).Error)
+	require.NoError(t, f.db.Exec(`INSERT INTO org_model_keys (org_id, provider, kind, ciphertext, hint)
+		SELECT ?, provider, kind, ciphertext, hint FROM org_model_keys WHERE org_id = ?`, f.other, f.acme).Error)
 
 	_, err := f.store.Value(t.Context(), f.other, "anthropic")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "can't decrypt organization "+f.other.String()+"'s anthropic key")
+	assert.Equal(t, "organization "+f.other.String()+"'s anthropic key was encrypted for another organization or provider; an organization admin must set it again", err.Error())
+	assert.NotContains(t, err.Error(), "abcdefghijklmnop")
 }
 
-func TestValueAfterGavelSecretKeyChangedSaysSo(t *testing.T) {
+func TestValueAfterTheKeeperChangedSaysSo(t *testing.T) {
 	f := newFixture(t)
 	require.NoError(t, f.store.Set(t.Context(), f.acme, nil, "anthropic-api-key", apiKey))
 
-	rotated := modelkeys.Store{DB: f.db, Key: modelkeys.EncryptionKey([]byte("another secret of at least thirty-two bytes"))}
-	_, err := rotated.Value(t.Context(), f.acme, "anthropic")
+	useKeeper(t, modelkeys.KeeperConnection([]byte("another secret of at least thirty-two bytes")))
+	_, err := f.store.Value(t.Context(), f.acme, "anthropic")
 	require.Error(t, err)
-	assert.Equal(t, "can't decrypt organization "+f.acme.String()+"'s anthropic key: GAVEL_SECRET_KEY changed since it was set, or the row was altered; an organization admin must set it again", err.Error())
+	assert.Contains(t, err.Error(), "can't decrypt organization "+f.acme.String()+"'s anthropic key; the secret keeper (GAVEL_SECRET_KEEPER, or GAVEL_SECRET_KEY by default) changed since it was set, so an organization admin must set it again: ")
 }
 
 func TestSetRejectsKeysTheGatewayCantInject(t *testing.T) {
@@ -156,11 +172,16 @@ func TestDeleteRemovesTheProvidersKey(t *testing.T) {
 	assert.ErrorIs(t, f.store.Delete(t.Context(), f.acme, "anthropic"), modelkeys.ErrNotFound)
 }
 
-func TestEncryptionKeyIsDerivedPerSecret(t *testing.T) {
-	first := modelkeys.EncryptionKey([]byte("a secret of at least thirty-two bytes"))
-	assert.Len(t, first, 32)
-	assert.Equal(t, first, modelkeys.EncryptionKey([]byte("a secret of at least thirty-two bytes")))
-	assert.NotEqual(t, first, modelkeys.EncryptionKey([]byte("another secret of at least thirty-two bytes")))
+func TestKeeperConnectionIsALocalKeyDerivedPerSecret(t *testing.T) {
+	first := modelkeys.KeeperConnection([]byte("a secret of at least thirty-two bytes"))
+	encoded, ok := strings.CutPrefix(first, "local_kms://")
+	require.True(t, ok, first)
+	key, err := base64.URLEncoding.DecodeString(encoded)
+	require.NoError(t, err)
+	assert.Len(t, key, 32)
+	assert.NotContains(t, first, base64.URLEncoding.EncodeToString([]byte("a secret of at least thirty-two bytes")))
+	assert.Equal(t, first, modelkeys.KeeperConnection([]byte("a secret of at least thirty-two bytes")))
+	assert.NotEqual(t, first, modelkeys.KeeperConnection([]byte("another secret of at least thirty-two bytes")))
 }
 
 func TestKindsDescribeHowTheGatewayInjectsEachKey(t *testing.T) {

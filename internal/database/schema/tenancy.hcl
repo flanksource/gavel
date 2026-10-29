@@ -230,7 +230,8 @@ table "org_settings" {
   }
 }
 
-# Each org's model API keys, one per provider, encrypted with AES-GCM (package modelkeys).
+# Each org's model API keys, one per provider, encrypted by commons-db's secret keeper (package
+# modelkeys).
 table "org_model_keys" {
   schema = schema.public
   column "org_id" {
@@ -248,10 +249,6 @@ table "org_model_keys" {
     type = text
   }
   column "ciphertext" {
-    null = false
-    type = bytea
-  }
-  column "nonce" {
     null = false
     type = bytea
   }

@@ -1,20 +1,20 @@
-// Package modelkeys stores each organization's model API keys, encrypted, and describes how a
-// sandbox job's requests carry them: the host, header and environment variable of each kind.
+// Package modelkeys stores each organization's model API keys, encrypted by commons-db's secret
+// keeper, and describes how a sandbox job's requests carry them: the host, header and env of each kind.
 package modelkeys
 
 import (
 	"context"
-	"crypto/aes"
-	"crypto/cipher"
 	"crypto/hmac"
-	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
 	"unicode"
 
+	dbcontext "github.com/flanksource/commons-db/context"
+	"github.com/flanksource/commons-db/secret"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
@@ -71,18 +71,18 @@ type Summary struct {
 	UpdatedBy *uuid.UUID `json:"updatedBy"`
 }
 
-// EncryptionKey derives the key model keys are encrypted with from GAVEL_SECRET_KEY, so it can't
-// be mistaken for another value derived from the secret.
-func EncryptionKey(secret []byte) []byte {
-	mac := hmac.New(sha256.New, secret)
+// KeeperConnection is the secret keeper used when GAVEL_SECRET_KEEPER is unset: a local key
+// derived from GAVEL_SECRET_KEY, so it can't be mistaken for another value derived from it.
+func KeeperConnection(gavelSecret []byte) string {
+	mac := hmac.New(sha256.New, gavelSecret)
 	mac.Write([]byte("gavel-model-keys"))
-	return mac.Sum(nil)
+	return "local_kms://" + base64.URLEncoding.EncodeToString(mac.Sum(nil))
 }
 
-// Store reads and writes org_model_keys. Key is the EncryptionKey.
+// Store reads and writes org_model_keys, encrypting with commons-db's secret keeper, which
+// secret.KMSConnection configures.
 type Store struct {
-	DB  *gorm.DB
-	Key []byte
+	DB *gorm.DB
 }
 
 // Set validates value as a key of kind and stores it encrypted as org's key for the kind's
@@ -100,21 +100,16 @@ func (s Store) Set(ctx context.Context, org uuid.UUID, user *uuid.UUID, kind, va
 	if err := validate(k, value); err != nil {
 		return err
 	}
-	aead, err := s.aead()
+	ciphertext, err := secret.Encrypt(dbcontext.NewContext(ctx), secret.Sensitive(owner(org, k.Provider)+value))
 	if err != nil {
-		return err
+		return fmt.Errorf("encrypt organization %s's %s key: %w", org, k.Provider, err)
 	}
-	nonce := make([]byte, aead.NonceSize())
-	if _, err := rand.Read(nonce); err != nil {
-		return fmt.Errorf("generate a nonce for the model key: %w", err)
-	}
-	ciphertext := aead.Seal(nil, nonce, []byte(value), additionalData(org, k.Provider))
 	if err := s.DB.WithContext(ctx).Exec(`
-		INSERT INTO org_model_keys (org_id, provider, kind, ciphertext, nonce, hint, updated_by, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, now())
+		INSERT INTO org_model_keys (org_id, provider, kind, ciphertext, hint, updated_by, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, now())
 		ON CONFLICT (org_id, provider) DO UPDATE SET kind = excluded.kind, ciphertext = excluded.ciphertext,
-			nonce = excluded.nonce, hint = excluded.hint, updated_by = excluded.updated_by, updated_at = now()`,
-		org, k.Provider, k.Name, ciphertext, nonce, value[len(value)-4:], user).Error; err != nil {
+			hint = excluded.hint, updated_by = excluded.updated_by, updated_at = now()`,
+		org, k.Provider, k.Name, []byte(ciphertext), value[len(value)-4:], user).Error; err != nil {
 		return fmt.Errorf("save organization %s's %s key: %w", org, k.Provider, err)
 	}
 	return nil
@@ -167,35 +162,28 @@ func (s Store) List(ctx context.Context, org uuid.UUID) ([]Summary, error) {
 
 // Value decrypts org's key for provider.
 func (s Store) Value(ctx context.Context, org uuid.UUID, provider string) (string, error) {
-	var rows []struct{ Ciphertext, Nonce []byte }
-	if err := s.DB.WithContext(ctx).Raw(`SELECT ciphertext, nonce FROM org_model_keys WHERE org_id = ? AND provider = ?`, org, provider).
+	var rows []struct{ Ciphertext []byte }
+	if err := s.DB.WithContext(ctx).Raw(`SELECT ciphertext FROM org_model_keys WHERE org_id = ? AND provider = ?`, org, provider).
 		Scan(&rows).Error; err != nil {
 		return "", fmt.Errorf("read organization %s's %s key: %w", org, provider, err)
 	}
 	if len(rows) == 0 {
 		return "", fmt.Errorf("%w: organization %s has no %s key", ErrNotFound, org, provider)
 	}
-	aead, err := s.aead()
+	decrypted, err := secret.Decrypt(dbcontext.NewContext(ctx), secret.Ciphertext(rows[0].Ciphertext))
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("can't decrypt organization %s's %s key; the secret keeper (GAVEL_SECRET_KEEPER, or GAVEL_SECRET_KEY by default) changed since it was set, so an organization admin must set it again: %w", org, provider, err)
 	}
-	value, err := aead.Open(nil, rows[0].Nonce, rows[0].Ciphertext, additionalData(org, provider))
-	if err != nil {
-		return "", fmt.Errorf("can't decrypt organization %s's %s key: GAVEL_SECRET_KEY changed since it was set, or the row was altered; an organization admin must set it again", org, provider)
+	value, ok := strings.CutPrefix(decrypted.PlainText(), owner(org, provider))
+	decrypted.Clear()
+	if !ok {
+		return "", fmt.Errorf("organization %s's %s key was encrypted for another organization or provider; an organization admin must set it again", org, provider)
 	}
-	return string(value), nil
+	return value, nil
 }
 
-func (s Store) aead() (cipher.AEAD, error) {
-	block, err := aes.NewCipher(s.Key)
-	if err != nil {
-		return nil, fmt.Errorf("model key encryption needs a 32-byte key from EncryptionKey: %w", err)
-	}
-	return cipher.NewGCM(block)
-}
-
-// additionalData binds a ciphertext to its org and provider, so it can't be opened in another
-// org's row or another provider's.
-func additionalData(org uuid.UUID, provider string) []byte {
-	return []byte(org.String() + "/" + provider)
+// owner is encrypted in front of a key and checked on decrypting, so a ciphertext copied into
+// another org's row or another provider's isn't used there.
+func owner(org uuid.UUID, provider string) string {
+	return org.String() + "/" + provider + "\x00"
 }
