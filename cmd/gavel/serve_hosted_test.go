@@ -23,11 +23,13 @@ import (
 	"time"
 
 	commonsdbtest "github.com/flanksource/commons-db/dbtest"
+	"github.com/flanksource/commons-db/secret"
 	"github.com/flanksource/gavel/api/clerktest"
 	"github.com/flanksource/gavel/github"
 	ghcache "github.com/flanksource/gavel/github/cache"
 	"github.com/flanksource/gavel/github/githubtest"
 	"github.com/flanksource/gavel/internal/database"
+	"github.com/flanksource/gavel/modelkeys"
 	"github.com/flanksource/gavel/pr/ui"
 	"github.com/flanksource/gavel/sshkeys"
 	"github.com/google/uuid"
@@ -330,6 +332,14 @@ func TestRunTokenKeyIsDerivedFromTheSecret(t *testing.T) {
 	assert.Len(t, key, 32)
 	assert.NotEqual(t, secret, key, "not the secret itself")
 	assert.Equal(t, key, runTokenKey(secret))
+}
+
+func TestHostedDashboardEncryptsModelKeysWithTheSecret(t *testing.T) {
+	previous := secret.KMSConnection
+	t.Cleanup(func() { secret.KMSConnection = previous; secret.InvalidateKeeper() })
+	secret.KMSConnection = ""
+	newHostedFixture(t)
+	assert.Equal(t, modelkeys.KeeperConnection([]byte(strings.Repeat("k", 32))), secret.KMSConnection)
 }
 
 func TestHostedDashboardWithoutASandboxHasNoDispatcher(t *testing.T) {

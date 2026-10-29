@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	commonssecret "github.com/flanksource/commons-db/secret"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/commons/properties"
 	"github.com/flanksource/gavel/api"
@@ -26,6 +27,7 @@ import (
 	ghcache "github.com/flanksource/gavel/github/cache"
 	"github.com/flanksource/gavel/github/installations"
 	shared "github.com/flanksource/gavel/internal/database"
+	"github.com/flanksource/gavel/modelkeys"
 	"github.com/flanksource/gavel/pr/provider"
 	"github.com/flanksource/gavel/pr/ui"
 	"github.com/flanksource/gavel/sandbox"
@@ -157,6 +159,9 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 	if err != nil {
 		return hostedStack{}, fmt.Errorf("decode GAVEL_SECRET_KEY: %w", err)
 	}
+	// Organizations' model keys are encrypted with a local key derived from the secret.
+	commonssecret.KMSConnection = modelkeys.KeeperConnection(secret)
+	commonssecret.InvalidateKeeper()
 	dispatcher, err := newSandboxDispatcher(ctx, opts, db, cache, secret)
 	if err != nil {
 		return hostedStack{}, err
