@@ -102,7 +102,7 @@ var _ = Describe("Ginkgo overlay", func() {
 		Expect(err).NotTo(HaveOccurred())
 		defer os.Remove(overlay)
 
-		cmd := exec.Command("go", "test", "-v", "-overlay="+overlay, pkg)
+		cmd := exec.Command("go", "test", "-count=1", "-v", "-overlay="+overlay, pkg)
 		cmd.Dir = workDir
 		output, err := cmd.CombinedOutput()
 		Expect(err).NotTo(HaveOccurred(), string(output))

@@ -22,6 +22,7 @@ import (
 	ghcache "github.com/flanksource/gavel/github/cache"
 	"github.com/flanksource/gavel/pr/ui"
 	"github.com/flanksource/gavel/service"
+	testui "github.com/flanksource/gavel/testrunner/ui"
 	"github.com/flanksource/gavel/verify"
 	"github.com/timberio/go-datemath"
 )
@@ -413,7 +414,7 @@ func runPRUI(opts PRListOptions, databaseMode serveDatabaseMode) error {
 		}
 		// dashboardURL is loopback for wildcard binds — see localHost; the
 		// menu-bar webview renders a blank popover on a private IP.
-		dashboardURL, networkURL = uiURLs(opts.Addr, port)
+		dashboardURL, networkURL = testui.URLs(opts.Addr, port)
 		if opts.PersistPort {
 			// Only the managed daemon (launchd/systemd) writes to the port
 			// file — foreground `pr list --ui` runs skip this to avoid
@@ -427,10 +428,10 @@ func runPRUI(opts PRListOptions, databaseMode serveDatabaseMode) error {
 
 		go http.Serve(listener, srv.Handler()) //nolint:errcheck
 
-		logger.Infof("%s", uiBanner("PR Dashboard", dashboardURL, networkURL))
+		logger.Infof("%s", testui.Banner("PR Dashboard", dashboardURL, networkURL))
 		logger.Infof("React Grab → todo: install the bookmarklet at %s/react-grab", dashboardURL)
 		if opts.UI {
-			openBrowser(dashboardURL)
+			testui.OpenBrowser(dashboardURL)
 		}
 	}
 

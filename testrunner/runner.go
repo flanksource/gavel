@@ -1843,6 +1843,12 @@ func (t *TestOrchestrator) runDiscoveredFixtures(globs []string) ([]parsers.Test
 	var tests []parsers.Test
 	for _, file := range fixtureFiles {
 		fixtureTests, err := t.runFixtureRunner(fixtures.RunnerOptions{Context: opts.Context, ProcessRuntime: opts.fixtureRuntime(), Paths: []string{file}, WorkDir: opts.WorkDir, Logger: logger.StandardLogger(), ExecutablePath: execPath, TraceHost: opts.TraceHost, ProcessTrace: opts.ProcessTrace, TraceArchive: archive}, filepath.Dir(file))
+		// A broad discovery glob also matches markdown that only supports
+		// fixtures (shared templates, notes); such a file is not a fixture file.
+		if errors.Is(err, fixtures.ErrNoFixtures) {
+			logger.Debugf("fixture discovery: %s declares no fixtures, skipping", file)
+			continue
+		}
 		tests = append(tests, fixtureTests...)
 		if err != nil {
 			return tests, err

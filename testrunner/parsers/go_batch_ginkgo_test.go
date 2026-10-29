@@ -16,6 +16,30 @@ var _ = Describe("Go test batch metadata", func() {
 		Expect(filtered.Context).To(Equal(original.Context))
 	})
 
+	DescribeTable("files test-binary build events under the package they test", func(variant string) {
+		const pkg = "example.com/store/models"
+		lines := []goTestEvent{
+			{Action: "build-output", ImportPath: variant, Output: "# " + variant + "\n"},
+			{Action: "run", Package: pkg, Test: "TestModels"},
+			{Action: "pass", Package: pkg, Test: "TestModels"},
+			{Action: "pass", Package: pkg},
+		}
+		var input strings.Builder
+		for _, event := range lines {
+			data, err := json.Marshal(event)
+			Expect(err).NotTo(HaveOccurred())
+			input.Write(data)
+			input.WriteByte('\n')
+		}
+		results, err := ParseGoTestBatch(strings.NewReader(input.String()), "", nil)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(results).To(HaveLen(1))
+		Expect(results[pkg].All()).To(ContainElement(And(HaveField("Name", "TestModels"), HaveField("Passed", true))))
+	},
+		Entry("in-package test variant", "example.com/store/models [example.com/store/models.test]"),
+		Entry("external test package", "example.com/store/models_test [example.com/store/models.test]"),
+	)
+
 	DescribeTable("keeps metadata errors on their package and retains passing results", func(frames []string, message string) {
 		const badPackage = "example.com/suite"
 		const goodPackage = "example.com/plain"

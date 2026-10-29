@@ -6,12 +6,10 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -89,7 +87,7 @@ func runTests(opts testrunner.RunOptions, detach bool) (value any, runErr error)
 		opts.PR = ""
 	}
 	runStarted := time.Now().UTC()
-	gitInfo := snapshotGitInfo(opts.WorkDir)
+	gitInfo := snapshots.GitInfo(opts.WorkDir)
 
 	var trace *runTrace
 	if wantsRunTrace(opts) && !opts.DryRun {
@@ -859,59 +857,19 @@ type testUIOptions struct {
 	Writer io.Writer
 }
 
-// startTestUI binds an ephemeral TCP listener and starts serving the testui
-// on it. Returns the server and the listener so the caller can later
-// hand the listener off to a detached child process (fork path in
-// handoffDetachedUI) instead of tearing the connection down and rebinding.
-// --addr names an interface only; the port is always picked.
+// startTestUI serves the test UI (testui.Listen) and opens it, returning the
+// listener so handoffDetachedUI can pass it to a detached child process.
 func startTestUI(opts testUIOptions) (*testui.Server, net.Listener, error) {
-	srv := testui.NewServer()
+	listen := testui.ListenOptions{Addr: opts.Addr, Title: "Test UI", Writer: opts.Writer, Open: true}
 	if opts.Dev {
 		proxy, err := devProxy(testRunnerDev, "")
 		if err != nil {
 			return nil, nil, err
 		}
-		srv.SetDevProxy(proxy)
+		listen.DevProxy = proxy
 	}
-	addr := opts.Addr
-	if addr == "" {
-		addr = "0.0.0.0"
-	}
-	listener, err := net.Listen("tcp", net.JoinHostPort(addr, "0"))
-	if err != nil {
-		return nil, nil, fmt.Errorf("start test UI on --addr %q (an interface, without a port): %w", addr, err)
-	}
-	bound := listener.Addr().(*net.TCPAddr)
-	url, networkURL := uiURLs(addr, bound.Port)
-
-	go http.Serve(listener, srv.Handler()) //nolint:errcheck
-
-	time.Sleep(100 * time.Millisecond)
-	if opts.Writer == nil {
-		opts.Writer = os.Stdout
-	}
-	if _, err := fmt.Fprintln(opts.Writer, uiBanner("Test UI", url, networkURL)); err != nil {
-		listener.Close()
-		return nil, nil, fmt.Errorf("announce test UI: %w", err)
-	}
-	openBrowser(url)
-	return srv, listener, nil
-}
-
-func openBrowser(url string) {
-	var cmd string
-	var args []string
-	switch runtime.GOOS {
-	case "windows":
-		cmd = "cmd"
-		args = []string{"/c", "start"}
-	case "darwin":
-		cmd = "open"
-	default:
-		cmd = "xdg-open"
-	}
-	args = append(args, url)
-	_ = exec.Command(cmd, args...).Start()
+	srv, listener, _, err := testui.Listen(listen)
+	return srv, listener, err
 }
 
 // buildRerunArgs translates a UI rerun request into framework-specific flags.

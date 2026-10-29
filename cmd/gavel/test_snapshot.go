@@ -1,9 +1,6 @@
 package main
 
 import (
-	"os/exec"
-	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/flanksource/commons/logger"
@@ -13,7 +10,6 @@ import (
 	"github.com/flanksource/gavel/testrunner"
 	"github.com/flanksource/gavel/testrunner/parsers"
 	testui "github.com/flanksource/gavel/testrunner/ui"
-	"github.com/flanksource/gavel/utils"
 )
 
 // failedRun is a run the runner returned an error for, with what completed.
@@ -70,7 +66,7 @@ func buildTestSnapshot(
 			StateRoot:    opts.Dirs.StateRoot,
 			ProcessTrace: trace.processRefs(),
 		},
-		Git: snapshotGitInfo(opts.WorkDir),
+		Git: snapshots.GitInfo(opts.WorkDir),
 		Status: testui.SnapshotStatus{
 			Running: false,
 			LintRun: opts.Lint,
@@ -144,40 +140,4 @@ func durationString(d time.Duration) string {
 		return ""
 	}
 	return d.String()
-}
-
-func snapshotGitInfo(workDir string) *testui.SnapshotGit {
-	if workDir == "" {
-		return nil
-	}
-
-	root := utils.FindGitRoot(workDir)
-	if root == "" {
-		abs, err := filepath.Abs(workDir)
-		if err == nil {
-			root = abs
-		} else {
-			root = workDir
-		}
-	}
-
-	git := &testui.SnapshotGit{
-		Repo: filepath.Base(root),
-		Root: root,
-	}
-	if utils.FindGitRoot(workDir) != "" {
-		git.SHA = gitHeadSHA(root)
-	}
-	return git
-}
-
-func gitHeadSHA(workDir string) string {
-	cmd := exec.Command("git", "rev-parse", "HEAD")
-	cmd.Dir = workDir
-	out, err := cmd.Output()
-	if err != nil {
-		logger.V(2).Infof("git rev-parse HEAD in %s failed: %v", workDir, err)
-		return ""
-	}
-	return strings.TrimSpace(string(out))
 }
