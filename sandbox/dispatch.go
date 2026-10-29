@@ -53,6 +53,12 @@ type Dispatcher struct {
 	SecretEnv map[string]string
 }
 
+// RunLifetime is how long a run's token, and so the run, may last: its timeout plus 15 minutes
+// to report how it ended.
+func (d *Dispatcher) RunLifetime() time.Duration {
+	return d.Limits.withDefaults().Timeout + 15*time.Minute
+}
+
 // Run is a dispatched run.
 type Run struct {
 	ID     uuid.UUID
@@ -116,7 +122,7 @@ func (d *Dispatcher) StartRun(ctx context.Context, id uuid.UUID, scope tenant.Sc
 		Image:     d.Image,
 		Command:   []string{"gavel", "runner", "exec", "--run", run.ID.String()},
 		Env:       map[string]string{"GAVEL_SERVER": d.Server, "GAVEL_RUN_ID": run.ID.String(), "GAVEL_DB": "off", "CI": "1"},
-		SecretEnv: map[string]string{"GAVEL_RUN_TOKEN": SignRunToken(d.TokenKey, run.ID, scope.OrgID, time.Now().Add(limits.Timeout+15*time.Minute))},
+		SecretEnv: map[string]string{"GAVEL_RUN_TOKEN": SignRunToken(d.TokenKey, run.ID, scope.OrgID, time.Now().Add(d.RunLifetime()))},
 		Limits:    limits,
 	}
 	for key, value := range d.SecretEnv {
@@ -192,17 +198,22 @@ type RunRecord struct {
 	ID   uuid.UUID
 	Org  uuid.UUID
 	User *uuid.UUID
-	Spec RunSpec
+	// Status is queued, running, succeeded or failed.
+	Status    string
+	CreatedAt time.Time
+	Spec      RunSpec
 }
 
-// LoadRun reads run id's organization and spec.
+// LoadRun reads run id's organization, status and spec.
 func LoadRun(ctx context.Context, db *gorm.DB, id uuid.UUID) (RunRecord, error) {
 	var row struct {
-		OrgID  uuid.UUID
-		UserID *uuid.UUID
-		Spec   string
+		OrgID     uuid.UUID
+		UserID    *uuid.UUID
+		Status    string
+		CreatedAt time.Time
+		Spec      string
 	}
-	result := db.WithContext(ctx).Raw(`SELECT org_id, user_id, spec::text AS spec FROM sandbox_runs WHERE id = ?`, id).Scan(&row)
+	result := db.WithContext(ctx).Raw(`SELECT org_id, user_id, status, created_at, spec::text AS spec FROM sandbox_runs WHERE id = ?`, id).Scan(&row)
 	if result.Error != nil {
 		return RunRecord{}, fmt.Errorf("read sandbox run %s: %w", id, result.Error)
 	}
@@ -213,7 +224,7 @@ func LoadRun(ctx context.Context, db *gorm.DB, id uuid.UUID) (RunRecord, error) 
 	if err := json.Unmarshal([]byte(row.Spec), &spec); err != nil {
 		return RunRecord{}, fmt.Errorf("decode the spec of sandbox run %s: %w", id, err)
 	}
-	return RunRecord{ID: id, Org: row.OrgID, User: row.UserID, Spec: spec}, nil
+	return RunRecord{ID: id, Org: row.OrgID, User: row.UserID, Status: row.Status, CreatedAt: row.CreatedAt, Spec: spec}, nil
 }
 
 // ErrRunNotFound reports a run ID with no sandbox_runs record.

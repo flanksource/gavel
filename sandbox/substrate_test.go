@@ -108,3 +108,8 @@ func TestSubstrateEgressRefusesAPortOutOfRange(t *testing.T) {
 		require.EqualError(t, err, `substrate egress: GAVEL_SERVER "`+server+`" has port `+port+`, outside 1-65535`)
 	}
 }
+
+func TestSubstrateActorIsTheSPIFFEIDOfTheRunsEnvironment(t *testing.T) {
+	run := uuid.MustParse("6f1c2d3e-4a5b-6c7d-8e9f-0a1b2c3d4e5f")
+	assert.Equal(t, "spiffe://substrate-actor.local/actor/ate-env/gavel-run-6f1c2d3e-4a5b-6c7d-8e9f-0a1b2c3d4e5f", SubstrateActor("ate-env", run))
+}

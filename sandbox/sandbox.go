@@ -79,6 +79,12 @@ func jobName(run uuid.UUID) string {
 	return "gavel-run-" + run.String()
 }
 
+// SubstrateActor is the SPIFFE ID substrate's egress gateway reports for run's environment in
+// atespace, the actor named after the run.
+func SubstrateActor(atespace string, run uuid.UUID) string {
+	return "spiffe://substrate-actor.local/actor/" + atespace + "/" + jobName(run)
+}
+
 // sortedEnv lists env as KEY=VALUE, sorted, rejecting a name that would split differently.
 func sortedEnv(env map[string]string) ([]string, error) {
 	pairs := make([]string, 0, len(env))

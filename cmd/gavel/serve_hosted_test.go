@@ -326,6 +326,35 @@ func TestHostedDashboardServesTheRunAPIWithoutClerk(t *testing.T) {
 	assert.Contains(t, string(body), "run token", "answered by the run API, not the Clerk middleware")
 }
 
+func TestHostedDashboardServesTheCredentialFetchWithoutClerk(t *testing.T) {
+	fetch := func(f hostedFixture) (int, string) {
+		t.Helper()
+		resp, err := http.Post(f.server.URL+"/api/credentials/fetch", "application/json", strings.NewReader(`{}`))
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(body)
+	}
+	substrate := newHostedFixture(t, func(o *DashboardOptions) {
+		o.Sandbox, o.SandboxImage = "substrate", "runner@sha256:"+strings.Repeat("a", 64)
+		o.SubstrateEnvAPI, o.SubstrateControl = "ate-env-api.example:443", "substrate-api.example:443"
+		o.credentialProviderToken = "provider-token"
+	})
+	status, body := fetch(substrate)
+	assert.Equal(t, http.StatusUnauthorized, status)
+	assert.Contains(t, body, "credential provider's token", "answered by the credential fetch, not the Clerk middleware")
+
+	status, body = fetch(newHostedFixture(t))
+	assert.NotContains(t, body, "credential provider", "not served without substrate and a provider token (%d)", status)
+}
+
+func TestCredentialProviderTokenComesFromTheEnvironment(t *testing.T) {
+	opts := DashboardOptions{}.withEnv(func(name string) string {
+		return map[string]string{"GAVEL_CREDENTIAL_PROVIDER_TOKEN": "provider-token"}[name]
+	})
+	assert.Equal(t, "provider-token", opts.credentialProviderToken)
+}
+
 func TestRunTokenKeyIsDerivedFromTheSecret(t *testing.T) {
 	secret := []byte(strings.Repeat("k", 32))
 	key := runTokenKey(secret)
