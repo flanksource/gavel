@@ -21,8 +21,6 @@ const (
 	VisibilityPublic Visibility = "public"
 )
 
-const orgAdminRole = "org:admin"
-
 func normalizeVisibility(value Visibility) (Visibility, error) {
 	switch value {
 	case "":
@@ -66,7 +64,7 @@ func requireChangeable(tx *gorm.DB, id uuid.UUID, createdBy *uuid.UUID) error {
 // createdBy names, or is an org admin. Local mode and system jobs may change any issue.
 func RequireChangeable(ctx context.Context, id uuid.UUID, createdBy *uuid.UUID) error {
 	scope := viewer(ctx)
-	if scope == nil || scope.Role == orgAdminRole || (createdBy != nil && *createdBy == *scope.UserID) {
+	if scope == nil || scope.IsAdmin() || (createdBy != nil && *createdBy == *scope.UserID) {
 		return nil
 	}
 	return fmt.Errorf("%w: issue %s belongs to another user; only its creator or an org admin can change it", ErrForbidden, id)
