@@ -16,6 +16,7 @@ import {
 } from './planActions';
 import { loadLastTodoRunOptions } from './run';
 import { PlanTldr } from './PlanTldr';
+import { ReviseRuntimePicker } from './ReviseRuntimePicker';
 import { statusClass, statusLabel } from './format';
 
 // Plan Review mode: a queue over the todos waiting for a human — approve their
@@ -120,6 +121,7 @@ export function PlanReviewBar({ review, todos }: { review: ReviewMode; todos: Wo
   const [questionSelections, setQuestionSelections] = useState<TodoQuestionSelections>({});
   const [changesText, setChangesText] = useState('');
   const [showChanges, setShowChanges] = useState(false);
+  const [reviseOptions, setReviseOptions] = useState<TodoRunOptions | undefined>(undefined);
   const answerRef = useRef<HTMLTextAreaElement | null>(null);
   const changesRef = useRef<HTMLTextAreaElement | null>(null);
 
@@ -129,6 +131,7 @@ export function PlanReviewBar({ review, todos }: { review: ReviewMode; todos: Wo
     setQuestionSelections({});
     setChangesText('');
     setShowChanges(false);
+    setReviseOptions(undefined);
     reset();
   }, [sel?.ref, sel?.dir, reset]);
 
@@ -171,14 +174,15 @@ export function PlanReviewBar({ review, todos }: { review: ReviewMode; todos: Wo
 
   const onRevise = useCallback(async () => {
     if (!ref || !changesText.trim()) return;
-    const result = await revise(ref, changesText);
+    const result = await revise(ref, changesText, reviseOptions);
     if (!result) return;
     todos.updateItem(result.todo);
     setChangesText('');
     setShowChanges(false);
+    setReviseOptions(undefined);
     review.advanceAfterAction();
     todos.refresh();
-  }, [ref, changesText, revise, todos, review]);
+  }, [ref, changesText, reviseOptions, revise, todos, review]);
 
   // Keyboard shortcuts while review mode is active. Editable targets keep their
   // own keys (the answer textarea handles Cmd/Ctrl+Enter itself); only Escape is
@@ -297,7 +301,7 @@ export function PlanReviewBar({ review, todos }: { review: ReviewMode; todos: Wo
       </div>
       {total === 0 && <div className="text-xs text-muted-foreground">All caught up — no plans or questions waiting.</div>}
       {status === 'review' && sel && <PlanTldr dir={sel.dir} refId={sel.ref} />}
-      {status === 'review' && showChanges && (
+      {status === 'review' && sel && showChanges && (
         <AnswerBox
           value={changesText}
           onChange={setChangesText}
@@ -306,6 +310,7 @@ export function PlanReviewBar({ review, todos }: { review: ReviewMode; todos: Wo
           label="Send changes & re-plan"
           placeholder="Describe what to change in the plan… (Cmd/Ctrl+Enter to send)"
           inputRef={el => (changesRef.current = el)}
+          accessory={<ReviseRuntimePicker key={`${sel.dir}:${sel.ref}`} dir={sel.dir} value={reviseOptions} onChange={setReviseOptions} disabled={busy} />}
         />
       )}
       {status === 'ask' && current && (

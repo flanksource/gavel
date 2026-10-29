@@ -14,6 +14,7 @@ import (
 	"github.com/flanksource/captain/pkg/runtimeprofiles"
 	"github.com/flanksource/gavel/lifecycle"
 	lifecycle1 "github.com/flanksource/gavel/todos/lifecycle"
+	"github.com/flanksource/gavel/todos/run"
 	"github.com/flanksource/gavel/todos/types"
 )
 
@@ -184,7 +185,7 @@ func todoRunContext(ctx context.Context, workDir string) (todoRunContextResponse
 		Models:          models,
 		Efforts:         todoRunEfforts(),
 		DefaultMode:     promptDefaults["run"].Mode,
-		DefaultProvider: providerKey(promptDefaults["run"].Spec.Model),
+		DefaultProvider: run.ProviderKey(promptDefaults["run"].Spec.Model),
 		Tools:           todoRunToolCatalog(),
 		Lifecycle:       todoRunLifecycleFor(definition),
 		InputSchemas:    inputSchemas,
@@ -505,21 +506,6 @@ func todoRunEfforts() []string {
 
 func validTodoRunEffort(effort string) bool {
 	return api.Effort(effort).Valid() && effort != ""
-}
-
-// providerKey names the family a spec's model belongs to. It reads the resolved
-// descriptor when there is one and derives it from the name otherwise — the
-// provider is a resolution result, never something the spec authored, so there
-// is no field to read it from directly.
-func providerKey(model api.Model) string {
-	if model.Provider != nil {
-		return model.Provider.Name
-	}
-	provider, err := api.ProviderFor(model.Name)
-	if err != nil {
-		return ""
-	}
-	return provider.Name
 }
 
 func mechanismLabel(mechanism string) string {
