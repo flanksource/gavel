@@ -320,8 +320,9 @@ func (f FixturesConfig) ResolvedFiles() []string {
 }
 
 type GavelConfig struct {
-	Runtime       processruntime.Options `yaml:"runtime,omitempty" json:"runtime,omitempty"`
-	RuntimeLayers []RuntimeLayer         `yaml:"-" json:"-"`
+	ExternalIssues ExternalIssuesConfig   `yaml:"externalIssues,omitempty" json:"externalIssues,omitempty"`
+	Runtime        processruntime.Options `yaml:"runtime,omitempty" json:"runtime,omitempty"`
+	RuntimeLayers  []RuntimeLayer         `yaml:"-" json:"-"`
 	// AI is the base spec (model/fallbacks/budget/effort defaults) that every AI
 	// operation inherits and overrides field-wise. See DefaultAIConfig.
 	AI       api.Spec       `yaml:"ai,omitempty" json:"ai,omitempty"`

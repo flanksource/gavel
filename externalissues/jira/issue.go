@@ -10,12 +10,14 @@ import (
 
 type Issue struct {
 	externalissues.Issue
-	Full bool `json:"-"`
+	Full               bool `json:"-"`
+	attachmentsIgnored bool
 }
 
 type ParseOptions struct {
-	Site    string
-	Catalog map[string]FieldDefinition
+	Site         string
+	Catalog      map[string]FieldDefinition
+	IgnoreFields []string
 }
 
 type issuePayload struct {
@@ -48,6 +50,10 @@ type statusPayload struct {
 }
 
 func ParseIssue(raw json.RawMessage, options ParseOptions) (Issue, error) {
+	raw, err := options.filter(raw)
+	if err != nil {
+		return Issue{}, err
+	}
 	var payload issuePayload
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return Issue{}, fmt.Errorf("decode Jira issue: %w", err)
@@ -60,7 +66,7 @@ func ParseIssue(raw json.RawMessage, options ParseOptions) (Issue, error) {
 		Title: payload.Summary, URL: payload.URL, Project: payload.Project,
 		Type: payload.IssueType, Priority: payload.Priority, Labels: payload.Labels,
 		Assignee: payload.Assignee.person(), Reporter: payload.Reporter.person(),
-	}}
+	}, attachmentsIgnored: options.ignores("attachment")}
 	if err := issue.decodeContent(payload); err != nil {
 		return Issue{}, fmt.Errorf("issue %s: %w", issue.Key, err)
 	}

@@ -24,8 +24,9 @@ func (i Issue) Row() map[string]any {
 }
 
 type ListOptions struct {
-	Site     string
-	Catalogs map[string]map[string]FieldDefinition
+	Site         string
+	Catalogs     map[string]map[string]FieldDefinition
+	IgnoreFields []string
 }
 
 func ParseList(raw json.RawMessage, options ListOptions) ([]Issue, error) {
@@ -46,7 +47,7 @@ func ParseList(raw json.RawMessage, options ListOptions) ([]Issue, error) {
 		if err := json.Unmarshal(rawIssue, &ref); err != nil {
 			return nil, fmt.Errorf("decode Jira issue row: %w", err)
 		}
-		issue, err := ParseIssue(rawIssue, ParseOptions{Site: options.Site, Catalog: options.Catalogs[ref.Key]})
+		issue, err := ParseIssue(rawIssue, ParseOptions{Site: options.Site, Catalog: options.Catalogs[ref.Key], IgnoreFields: options.IgnoreFields})
 		if err != nil {
 			return nil, err
 		}

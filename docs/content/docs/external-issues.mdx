@@ -67,6 +67,26 @@ gavel external-issues jira list --jql 'project = EXAMPLE' --fields customfield_1
 
 `--fields` selects native Jira field IDs. Gavel also requests the summary, project, and issue type needed to normalize the result.
 
+## Ignore fields
+
+Configure field exclusions in `.gavel.yaml` using native Jira field IDs, display names, or patterns:
+
+```yaml
+externalIssues:
+  jira:
+    ignoreFields:
+      - customfield_10053
+      - customfield_20*
+      - "*Internal*"
+      - Description
+```
+
+Gavel matches each field's ID and Jira catalog display name using commons `MatchItems`. Matching is case-insensitive and supports exact values, `prefix*`, `*suffix`, and `*contains*` patterns. These are the shared matcher's patterns rather than filesystem globs; an interior wildcard such as `custom*53` does not expand. Fields without catalog names still match by ID. Exported snake_case keys are not additional matching names. Patterns accumulate across configuration layers with duplicates removed; an absent or empty list adds no exclusions. Configuration uses the invocation directory, including `--cwd`, rather than the sync output directory.
+
+Exclusions apply to issue `get`, `list`, and `sync` in every output format, including JSON/YAML and synced Markdown, and override `list --fields`. Optional built-ins such as `description`, `priority`, and `labels` can be excluded. The identity fields `id`, `key`, `summary`, `url`, and `project` are always retained. A display-name match excludes every field with that name; use an ID to exclude only one of several fields sharing a name.
+
+Ignoring `comment` omits comments and their count and skips comment requests. Ignoring `remoteLinks` or `Remote links` skips remote links. Ignoring `attachment` omits attachments and their count and skips sync downloads and extraction, even with `--attachments`, `--extract`, or saved settings. Resync removes historical attachment records and extracted content from the generated document while leaving local files on disk. Explicit `comment` and `attachment` commands and the cached field catalog are unaffected.
+
 ## Sync to local Markdown
 
 `sync` writes a complete issue, including its fields, attachments and all comments, to `.gavel/jira/<project-id>/<issue-key>.md`. The project directory uses Jira's native project ID. Pass `--sync-dir` to choose a different root directory:

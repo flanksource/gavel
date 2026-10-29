@@ -19,6 +19,10 @@ func prepareSyncMetadata(doc *syncdoc.Document, issue Issue, options SyncOptions
 	extra := doc.Metadata.Sync.Extra
 	doc.Metadata.Sync = syncdoc.Settings{SyncedAt: time.Now().UTC(), Attachments: options.Attachments || options.Extract, Extract: options.Extract}
 	doc.Metadata.Sync.Extra = extra
+	if issue.attachmentsIgnored {
+		doc.Metadata.Attachments = nil
+		return nil
+	}
 	if doc.Metadata.Attachments == nil {
 		doc.Metadata.Attachments = map[string]*syncdoc.Attachment{}
 	}

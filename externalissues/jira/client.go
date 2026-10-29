@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -16,18 +17,20 @@ import (
 )
 
 type ClientOptions struct {
-	Site        string
-	Profile     string
-	Credentials Credentials
-	HTTP        *httpclient.Client
+	Site         string
+	Profile      string
+	Credentials  Credentials
+	HTTP         *httpclient.Client
+	IgnoreFields []string
 }
 
 type Client struct {
-	Site        string
-	baseURL     string
-	http        *httpclient.Client
-	credentials Credentials
-	account     string
+	Site         string
+	baseURL      string
+	http         *httpclient.Client
+	credentials  Credentials
+	account      string
+	ignoreFields []string
 }
 
 func NewClient(ctx context.Context, options ClientOptions) (*Client, error) {
@@ -58,7 +61,7 @@ func NewClient(ctx context.Context, options ClientOptions) (*Client, error) {
 	if err := httpx.Configure(ctx, "jira", client); err != nil {
 		return nil, err
 	}
-	result := &Client{http: client, credentials: credentials}
+	result := &Client{http: client, credentials: credentials, ignoreFields: slices.Clone(options.IgnoreFields)}
 	if credentials.AccessToken != "" {
 		if err := result.resolveOAuthSite(ctx, site); err != nil {
 			return nil, err
