@@ -8,33 +8,49 @@ import (
 	"github.com/flanksource/clicky/api"
 )
 
-type NamedValue struct {
-	Name        string `json:"name"`
-	DisplayName string `json:"displayName"`
+func (i Issue) Columns() []api.ColumnDef {
+	return []api.ColumnDef{clicky.Column("key").Label("Key").Build(), clicky.Column("title").Label("Title").Build(), clicky.Column("status").Label("Status").Build(), clicky.Column("assignee").Label("Assignee").Build()}
 }
 
-type IssueRow struct {
-	Key      string     `json:"key"`
-	Summary  string     `json:"summary"`
-	URL      string     `json:"url"`
-	Status   NamedValue `json:"status"`
-	Assignee NamedValue `json:"assignee"`
+func (i Issue) Row() map[string]any {
+	row := map[string]any{"key": clicky.Link(i.URL).AddText(i.Key), "title": i.Title, "status": "", "assignee": ""}
+	if i.Status != nil {
+		row["status"] = i.Status.Name
+	}
+	if i.Assignee != nil {
+		row["assignee"] = i.Assignee.PrettyShort()
+	}
+	return row
 }
 
-func (r IssueRow) Columns() []api.ColumnDef {
-	return []api.ColumnDef{clicky.Column("key").Label("Key").Build(), clicky.Column("summary").Label("Summary").Build(), clicky.Column("status").Label("Status").Build(), clicky.Column("assignee").Label("Assignee").Build()}
+type ListOptions struct {
+	Site     string
+	Catalogs map[string]map[string]FieldDefinition
 }
 
-func (r IssueRow) Row() map[string]any {
-	return map[string]any{"key": clicky.Link(r.URL).AddText(r.Key), "summary": r.Summary, "status": r.Status.Name, "assignee": r.Assignee.DisplayName}
-}
-
-func ParseList(raw json.RawMessage) ([]IssueRow, error) {
+func ParseList(raw json.RawMessage, options ListOptions) ([]Issue, error) {
 	var response struct {
-		Issues []IssueRow `json:"issues"`
+		Issues *[]json.RawMessage `json:"issues"`
 	}
 	if err := json.Unmarshal(raw, &response); err != nil {
 		return nil, fmt.Errorf("decode Jira issue list: %w", err)
 	}
-	return response.Issues, nil
+	if response.Issues == nil {
+		return nil, fmt.Errorf("Jira issue list has no issues array")
+	}
+	issues := make([]Issue, 0, len(*response.Issues))
+	for _, rawIssue := range *response.Issues {
+		var ref struct {
+			Key string `json:"key"`
+		}
+		if err := json.Unmarshal(rawIssue, &ref); err != nil {
+			return nil, fmt.Errorf("decode Jira issue row: %w", err)
+		}
+		issue, err := ParseIssue(rawIssue, ParseOptions{Site: options.Site, Catalog: options.Catalogs[ref.Key]})
+		if err != nil {
+			return nil, err
+		}
+		issues = append(issues, issue)
+	}
+	return issues, nil
 }

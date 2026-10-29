@@ -17,14 +17,20 @@ type ADFMark struct {
 }
 
 type adfAttrs struct {
-	ID         string `json:"id"`
-	Type       string `json:"type"`
-	Text       string `json:"text"`
-	Alt        string `json:"alt"`
-	URL        string `json:"url"`
-	Href       string `json:"href"`
-	Collection string `json:"collection"`
-	Language   string `json:"language"`
-	ShortName  string `json:"shortName"`
-	Level      int    `json:"level"`
+	ID         string          `json:"id"`
+	Type       string          `json:"type"`
+	Text       string          `json:"text"`
+	Alt        string          `json:"alt"`
+	URL        string          `json:"url"`
+	Href       string          `json:"href"`
+	Collection string          `json:"collection"`
+	Language   string          `json:"language"`
+	ShortName  string          `json:"shortName"`
+	Timestamp  string          `json:"timestamp"`
+	PanelType  string          `json:"panelType"`
+	State      string          `json:"state"`
+	Data       json.RawMessage `json:"data"`
+	Level      int             `json:"level"`
+	Colspan    int             `json:"colspan"`
+	Rowspan    int             `json:"rowspan"`
 }

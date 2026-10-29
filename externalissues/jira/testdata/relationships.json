@@ -1,0 +1,34 @@
+{
+  "key": "EXAMPLE-1",
+  "summary": "Refund dates",
+  "url": "https://example.test/browse/EXAMPLE-1",
+  "description": {"type": "doc", "version": 1, "content": [{"type": "paragraph", "content": [{"type": "inlineCard", "attrs": {"url": "https://example.test/browse/EXAMPLE-2"}}]}]},
+  "comments": [{"id": "comment-1", "body": {"type": "doc", "version": 1, "content": [{"type": "paragraph", "content": [{"type": "inlineCard", "attrs": {"url": "https://example.test/browse/EXAMPLE-3"}}]}]}}],
+  "customfield_links": {"type": "doc", "version": 1, "content": [{"type": "paragraph", "content": [{"type": "inlineCard", "attrs": {"url": "https://example.test/browse/EXAMPLE-4"}}]}]},
+  "resolution": {"id": "resolution-1", "name": "Cancelled", "description": "No work performed", "self": "https://example.test/rest/api/3/resolution/1"},
+  "parent": {
+    "key": "EXAMPLE-2",
+    "fields": {"summary": "Refunds", "status": {"name": "Open"}, "issuetype": {"name": "Feature", "avatarId": 1}}
+  },
+  "issuelinks": [
+    {"type": {"inward": "is required for", "outward": "depends on"}, "inwardIssue": {"key": "EXAMPLE-3", "fields": {"summary": "Loan top up", "status": {"name": "In Progress"}}}},
+    {"type": {"inward": "is required for", "outward": "depends on"}, "outwardIssue": {"key": "EXAMPLE-4", "fields": {"summary": "Collections", "status": {"name": "Done"}}}}
+  ],
+  "customfield_epic": "EXAMPLE-2",
+  "customfield_ready": {
+    "type": "doc",
+    "version": 1,
+    "content": [
+      {"type": "paragraph", "content": [{"type": "text", "text": "Ready for analysis", "marks": [{"type": "strong"}]}]},
+      {"type": "paragraph", "content": [
+        {"type": "emoji", "attrs": {"id": "atlassian-cross_mark", "shortName": ":cross_mark:", "text": ":cross_mark:"}},
+        {"type": "text", "text": " Contacts identified"},
+        {"type": "hardBreak"},
+        {"type": "emoji", "attrs": {"shortName": ":white_check_mark:", "text": "✅"}},
+        {"type": "text", "text": " "},
+        {"type": "text", "text": "Wireframes", "marks": [{"type": "strong"}]},
+        {"type": "text", "text": " linked"}
+      ]}
+    ]
+  }
+}
