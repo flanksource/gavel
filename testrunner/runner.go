@@ -1855,7 +1855,14 @@ func (t *TestOrchestrator) runDiscoveredFixtures(globs []string) ([]parsers.Test
 			return nil, err
 		}
 	}
-	return t.runFixtureRunner(fixtures.RunnerOptions{Context: opts.Context, ProcessRuntime: opts.fixtureRuntime(), Paths: fixtureFiles, WorkDir: opts.WorkDir, Logger: logger.StandardLogger(), ExecutablePath: execPath, TraceHost: opts.TraceHost, ProcessTrace: opts.ProcessTrace, TraceArchive: archive})
+	tests, err := t.runFixtureRunner(fixtures.RunnerOptions{Context: opts.Context, ProcessRuntime: opts.fixtureRuntime(), Paths: fixtureFiles, WorkDir: opts.WorkDir, Logger: logger.StandardLogger(), ExecutablePath: execPath, TraceHost: opts.TraceHost, ProcessTrace: opts.ProcessTrace, TraceArchive: archive})
+	// A broad discovery glob also matches markdown that only supports
+	// fixtures (shared templates, notes); finding only those is not a failure.
+	if errors.Is(err, fixtures.ErrNoFixtures) {
+		logger.Debugf("fixture discovery: %d files declare no fixtures, skipping", len(fixtureFiles))
+		return nil, nil
+	}
+	return tests, err
 
 }
 

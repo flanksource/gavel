@@ -42,6 +42,31 @@ type workerEvent struct {
 	BenchmarkPath string             `json:"benchmark_path,omitempty"`
 	Results       []FixtureResult    `json:"results,omitempty"`
 	Error         string             `json:"error,omitempty"`
+	// ErrorCode carries the identity of a sentinel error across the process
+	// boundary, which Error's text alone loses.
+	ErrorCode string `json:"error_code,omitempty"`
+}
+
+const workerErrorNoFixtures = "no_fixtures"
+
+func (e *workerEvent) setError(err error) {
+	if err == nil {
+		return
+	}
+	e.Error = err.Error()
+	if errors.Is(err, ErrNoFixtures) {
+		e.ErrorCode = workerErrorNoFixtures
+	}
+}
+
+func (e *workerEvent) err() error {
+	switch {
+	case e.ErrorCode == workerErrorNoFixtures:
+		return ErrNoFixtures
+	case e.Error != "":
+		return errors.New(e.Error)
+	}
+	return nil
 }
 
 func RunWorker(input io.Reader, output io.Writer) error {
@@ -84,9 +109,7 @@ func RunWorker(input io.Reader, output io.Writer) error {
 		ctx = WithProgressSink(ctx, request.Options.ProgressSink)
 		results, snapshot, runErr := RunNodes(ctx, request.Nodes, opts)
 		event := workerEvent{Version: 1, Kind: "result", Results: results, Snapshot: snapshot}
-		if runErr != nil {
-			event.Error = runErr.Error()
-		}
+		event.setError(runErr)
 		return encoder.Encode(event)
 	}
 	runner, err := NewRunner(request.Options)
@@ -102,9 +125,7 @@ func RunWorker(input io.Reader, output io.Writer) error {
 		snapshot := runner.ExecutionSnapshot()
 		event.Snapshot = &snapshot
 	}
-	if runErr != nil {
-		event.Error = runErr.Error()
-	}
+	event.setError(runErr)
 	return encoder.Encode(event)
 }
 
@@ -170,10 +191,7 @@ func (r *Runner) runWorkerRequest(request workerRequest) (*workerEvent, error) {
 	if result == nil {
 		return nil, fmt.Errorf("fixture worker exited without a result")
 	}
-	if result.Error != "" {
-		return result, errors.New(result.Error)
-	}
-	return result, nil
+	return result, result.err()
 }
 
 func (r *Runner) readWorkerEvents(ctx context.Context, reader io.Reader, result **workerEvent, process *cexec.Process) error {
