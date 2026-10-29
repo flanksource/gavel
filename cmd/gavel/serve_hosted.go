@@ -229,6 +229,14 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 	root := http.NewServeMux()
 	root.Handle("/api/ci/", ciResults.Handler())
 	root.Handle("/api/runs/", runs.Handler())
+	// Substrate's credential provider fetches organizations' model keys for their runs.
+	if dispatcher != nil && opts.Sandbox == "substrate" && opts.credentialProviderToken != "" {
+		credentials := &ui.CredentialsAPI{
+			DB: db, Keys: modelkeys.Store{DB: db}, Atespace: opts.SubstrateAtespace,
+			RunLifetime: dispatcher.RunLifetime(), Token: opts.credentialProviderToken,
+		}
+		root.Handle("/api/credentials/", credentials.Handler())
+	}
 	root.Handle("/", auth.Middleware(next, shell.Handler()))
 	return hostedStack{handler: root, members: auth.Members, stop: stop, dispatcher: dispatcher}, nil
 }

@@ -56,6 +56,8 @@ type DashboardOptions struct {
 
 	clerkSecretKey string
 	secretKey      string
+	// credentialProviderToken authenticates the credential provider in substrate's cluster.
+	credentialProviderToken string
 }
 
 // withEnv fills settings left empty by flags from getenv, and reads the secrets.
@@ -75,6 +77,7 @@ func (o DashboardOptions) withEnv(getenv func(string) string) DashboardOptions {
 	}
 	o.clerkSecretKey = getenv("CLERK_SECRET_KEY")
 	o.secretKey = getenv("GAVEL_SECRET_KEY")
+	o.credentialProviderToken = getenv("GAVEL_CREDENTIAL_PROVIDER_TOKEN")
 	return o
 }
 

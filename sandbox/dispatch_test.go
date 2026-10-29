@@ -140,7 +140,9 @@ func TestDispatcherRunsAJobToItsOutcome(t *testing.T) {
 
 	record, err := LoadRun(ctx, db, run.ID)
 	require.NoError(t, err)
-	assert.Equal(t, RunRecord{ID: run.ID, Org: org, Spec: RunSpec{Kind: "test", Args: []string{"./..."}, RepoID: repo, Ref: "refs/heads/main", SHA: "abc123"}}, record)
+	assert.WithinDuration(t, time.Now(), record.CreatedAt, time.Minute)
+	record.CreatedAt = time.Time{}
+	assert.Equal(t, RunRecord{ID: run.ID, Org: org, Status: "failed", Spec: RunSpec{Kind: "test", Args: []string{"./..."}, RepoID: repo, Ref: "refs/heads/main", SHA: "abc123"}}, record)
 	_, err = LoadRun(ctx, db, uuid.New())
 	assert.ErrorIs(t, err, ErrRunNotFound)
 
@@ -157,6 +159,11 @@ func TestDispatcherRunsAJobToItsOutcome(t *testing.T) {
 	assert.Equal(t, org, tokenOrg)
 	_, _, err = VerifyRunToken(dispatcher.TokenKey, job.SecretEnv["GAVEL_RUN_TOKEN"], time.Now().Add(46*time.Minute))
 	assert.Error(t, err, "and no longer")
+}
+
+func TestDispatcherRunLifetimeIsTheTimeoutPlusTheRunTokensGrace(t *testing.T) {
+	assert.Equal(t, 45*time.Minute, (&Dispatcher{Limits: Limits{Timeout: 30 * time.Minute}}).RunLifetime())
+	assert.Equal(t, 75*time.Minute, (&Dispatcher{}).RunLifetime(), "the default 60m timeout")
 }
 
 func TestDispatcherRecordsASuccess(t *testing.T) {
