@@ -3,17 +3,21 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
+import { localClicky } from '../../testrunner/ui/vite.clicky';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
+const clicky = localClicky(resolve(here, '../..'), 'pr/ui:test');
 
 // Component tests run against real React in jsdom so the settings prompt row and
 // its nested spec-editor dialog are exercised as the app renders them.
 export default defineConfig({
   plugins: [react()],
+  server: clicky.server,
   resolve: {
     dedupe: ['react', 'react-dom', '@tanstack/react-query', '@flanksource/clicky-ui'],
     alias: [
+      ...clicky.aliases,
       { find: '@flanksource/gavel/testrunner/hooks', replacement: resolve(here, '../../testrunner/ui/src/hooks.ts') },
       // monaco-editor ships no `main`, only `module`, which vitest's node-side
       // resolver does not follow; setup mocks the package and needs the id to resolve.
@@ -40,6 +44,7 @@ export default defineConfig({
           /@floating-ui\/react/,
           /@tanstack\/react-virtual/,
           /@radix-ui\//,
+          /country-flag-icons/,
           /streamdown/,
         ],
       },

@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/flanksource/captain/pkg/api"
@@ -193,6 +195,69 @@ var _ = Describe("todo plan review", func() {
 		Expect(*called).To(BeFalse())
 	})
 
+	Describe("revising a plan a codex run made", func() {
+		const (
+			planSession = "019fa17d-622a-7ef3-b8ad-d8b1d7cd3840"
+			feedback    = "Bound the retry queue."
+			planContent = "1. Add the retry queue."
+		)
+		var request todoRunRequest
+
+		BeforeEach(func() {
+			configureAutomaticPlanToolPolicies(GinkgoTB(), workDir)
+			request = todoRunRequest{}
+			previous := run.Start
+			run.Start = func(got todoRunRequest) (todoRunStartResult, error) {
+				request = got
+				return todoRunStartResult{Status: "started", SessionID: got.Prepared.SessionID}, nil
+			}
+			DeferCleanup(func() { run.Start = previous })
+		})
+
+		revise := func(model api.Model) *httptest.ResponseRecorder {
+			GinkgoHelper()
+			created := specTodo(workDir, types.StatusReview)
+			provider := uiTestProviderFor(workDir)
+			planPath := filepath.Join(workDir, "plan.md")
+			Expect(os.WriteFile(planPath, []byte(planContent), 0o600)).To(Succeed())
+			session, planStatus := planSession, types.PlanNew
+			Expect(provider.UpdateState(GinkgoT().Context(), created, todos.StateUpdate{
+				SessionID: &session, PlanPath: &planPath, PlanStatus: &planStatus,
+			})).To(Succeed())
+			provider.activeRun = &captaindb.PromptRun{
+				State: captaindb.PromptRunStateSucceeded,
+				Runtime: captaindb.PromptRunRuntime{Mode: string(types.ModePlan), Resolved: captaindb.PromptRunRuntimeSelection{
+					Provider: "openai", Mode: "agent", Model: "gpt-5.6-sol", Effort: "high",
+				}},
+			}
+			return postJSON(server.handleTodoPlanRevise, "/api/todos/plan/revise", todoRevisePayload{
+				Ref: todos.TODOReference(created), Feedback: feedback,
+				Options: &todoRunPayload{Spec: api.Spec{Model: model}},
+			})
+		}
+
+		It("plans afresh with the feedback and the existing plan when claude is requested", func() {
+			rec := revise(api.Model{Name: "claude-sonnet-5", Mode: api.ModeCmux})
+
+			Expect(rec.Code).To(Equal(http.StatusOK), rec.Body.String())
+			Expect(request.Options.Resume).To(BeFalse(), "claude cannot resume a codex conversation")
+			Expect(request.Options.Message).To(BeEmpty())
+			Expect(request.Prepared).NotTo(BeNil())
+			Expect(request.Prepared.Resolution.Spec.SessionID).NotTo(Equal(planSession))
+			Expect(request.Prepared.Resolution.Prompt).To(And(
+				ContainSubstring(feedback), ContainSubstring("## Existing Plan"), ContainSubstring(planContent)))
+		})
+
+		It("resumes the plan session when the same family is requested", func() {
+			rec := revise(api.Model{Name: "codex", Mode: api.ModeAgent})
+
+			Expect(rec.Code).To(Equal(http.StatusOK), rec.Body.String())
+			Expect(request.Options.Resume).To(BeTrue())
+			Expect(request.Options.Message).To(Equal(feedback))
+			Expect(request.Prepared.Resolution.Spec.SessionID).To(Equal(planSession))
+		})
+	})
+
 	DescribeTable("rejects malformed approval input before changing the plan", func(body string) {
 		created := specTodo(workDir, types.StatusReview)
 		called := stubSpecRunStart(nil)
@@ -315,6 +380,22 @@ var _ = Describe("todo answer", func() {
 		Expect(*called).To(BeFalse())
 		Expect(uiTestProviderFor(workDir).comments).To(BeEmpty())
 		Expect(summarizeTodo(created, true).AnsweredFromCaptain).To(BeTrue(), "the detail tells the session view not to offer the answer the endpoint refuses")
+	})
+
+	It("refuses an answer that would resume the codex conversation on claude", func() {
+		created := specAskTodo(workDir, "sess-other-family", types.RunPhase)
+		called := stubSpecRunStart(nil)
+
+		rec := postJSON(server.handleTodoAnswer, "/api/todos/answer", todoAnswerPayload{
+			Ref: todos.TODOReference(created), SessionID: "sess-other-family", Answer: "use postgres",
+			Options: &todoRunPayload{Spec: api.Spec{Model: api.Model{Name: "claude-sonnet-5", Mode: api.ModeCmux}}},
+		})
+
+		Expect(rec.Code).To(Equal(http.StatusBadRequest), rec.Body.String())
+		Expect(rec.Body.String()).To(And(ContainSubstring("openai/gpt-5.6-sol"), ContainSubstring("same agent")))
+		Expect(*called).To(BeFalse())
+		Expect(created.Status).To(Equal(types.StatusAsk), "a refused answer must change nothing")
+		Expect(uiTestProviderFor(workDir).comments).To(BeEmpty())
 	})
 
 	It("answers again once the Captain answer's turn asked anew", func() {

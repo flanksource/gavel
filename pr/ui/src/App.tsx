@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import type { PRItem, PRDetail, PRInfo, SearchConfig, Project } from './types';
+import type { PRItem, PRInfo, SearchConfig, Project } from './types';
 import { PRList } from './components/PRList';
 import { PRDetailPanel } from './components/PRDetail';
 import { FilterBar, emptyFilters, type Filters } from './components/FilterBar';
@@ -50,6 +50,7 @@ import { useIsMobile } from './useIsMobile';
 import { UiActivity, UiCheck, UiCog, UiCopy, UiFolderGit, UiGitPr, UiJson, UiListChecks, UiMarkdown, UiPlay, UiRobotAi, UiTerminal } from '@flanksource/clicky-ui/icons';
 import { SessionsDetailPane, SessionsSidebar } from './components/sessions/SessionsView';
 import { MenubarView } from './components/mobile/MenubarView';
+import { MobileProjectsView } from './components/mobile/MobileProjectsView';
 import { ProcessesPage } from './components/ProcessesPage';
 import { mobileTabFromRoute, routeTabFromMobile, type MobileTab } from './mobileTabs';
 import { useAgentSessions } from './components/sessions/sessionQueries';
@@ -155,11 +156,10 @@ export function App() {
   const isTodoNewPage = hostControls && pathname === '/todos/new';
   // On mobile the desktop AppShell (split panes, sidebar, toolbars) has no room,
   // so the dashboard falls back to the same compact, single-column menubar
-  // dropdown layout the native menubar webview uses. The standalone /processes
-  // and /todos/new pages already lay out fine on narrow screens, so they keep
-  // their own views.
+  // layout the native menubar webview uses. The focused todo creation and
+  // lifecycle editors keep their own views on narrow screens.
   const isLifecyclePage = activeTab === 'prompts' && (selectedPath === 'lifecycles' || selectedPath.startsWith('lifecycles/'));
-  const useMenubarLayout = isMenubar || (isMobile && !isProcessesPage && !isTodoNewPage && !isLifecyclePage);
+  const useMenubarLayout = isMenubar || (isMobile && !isTodoNewPage && !isLifecyclePage);
 
   // The native menu-bar webview stays resident when the popover is dismissed and
   // reports its page hidden even while it is on screen (see useDocumentVisible),
@@ -583,6 +583,7 @@ export function App() {
   // A hosted org's projects tab lists its repositories instead, so neither the
   // catalog nor the git summary loads there.
   const projectCatalog = useProjectCatalog({ configured: scopedProjects, hiddenDirs, selectedName: selectedPath, enabled: hostControls && activeTab === 'projects' && projectHistory });
+  const projectReviewing = projectDiffPath !== '' && !projectRunId && !!projectCatalog.selected;
   // The git work summary shown on every project row refreshes slowly and only
   // matters while the Projects tab is on screen.
   const projectGitSummary = useProjectGitSummary({ enabled: hostControls && activeTab === 'projects' && visible });
@@ -604,6 +605,35 @@ export function App() {
   const agentSessions = useAgentSessions({
     enabled: (useMenubarLayout ? mobileTab === 'sessions' : activeTab === 'sessions') && streamsActive,
   });
+  const projectSidebar = <ProjectsSidebar
+    catalog={projectCatalog}
+    gitSummary={projectGitSummary}
+    selectedName={selectedPath}
+    selectedRunId={projectRunId}
+    historyEnabled={projectHistory}
+    onHistoryChange={setProjectHistoryEnabled}
+    onSelect={navigateProject}
+    onSelectRun={navigateProjectRun}
+    onChanged={onProcChanged}
+    onAdd={openAdd}
+    onSettings={openProjectSettings}
+    onHide={project => hideProject(project.name, true)}
+  />;
+  const projectDetail = <ProjectDetailPane
+    catalog={projectCatalog}
+    selectedName={selectedPath}
+    selectedRunId={projectRunId}
+    diffPath={projectDiffPath}
+    projectRef={projectRef}
+    resultsEnabled={projectResults}
+    onRefChange={navigateProjectRef}
+    onDiffPathChange={navigateProjectDiff}
+    onChanged={onProcChanged}
+  />;
+  const projectDialogs = <>
+    <AddProjectDialog open={addOpen} onClose={() => setAddOpen(false)} onSaved={onProcChanged} repoOptions={reposList} />
+    {settingsScope && <SettingsPage scope={settingsScope} repoOptions={reposList} onClose={() => setSettingsScope(null)} onSaved={onProcChanged} />}
+  </>;
   function selectPRFromPalette(pr: PRItem) {
     commitRoute({ tab: 'prs', selectedPath: pr.route_path || `${pr.repo}/${pr.number}`, scopeProject, projectDiffPath: '', projectRunId: '', projectHistory: false, projectResults: false, projectRef: '', todoView: {}, filters });
     loadPR(pr);
@@ -627,6 +657,7 @@ export function App() {
 
   if (useMenubarLayout) {
     return (
+      <>
       <MenubarView
         prs={filtered}
         selected={selected}
@@ -654,7 +685,11 @@ export function App() {
         sessionId={mobileSessionId}
         onSessionChange={openMobileSession}
         chatEnabled={!isMenubar}
+        projectsView={!isMenubar && <MobileProjectsView selected={selectedPath} reviewing={projectReviewing} onBack={() => navigateProject('')} sidebar={projectSidebar}>{projectDetail}</MobileProjectsView>}
+        focusProjects={projectReviewing}
       />
+      {projectDialogs}
+      </>
     );
   }
 
@@ -748,20 +783,7 @@ export function App() {
           ) : activeTab === 'projects' && !hostControls ? (
             <HostedProjectsSidebar projects={visibleProjects} selectedName={selectedPath} onSelect={navigateProject} />
           ) : activeTab === 'projects' ? (
-            <ProjectsSidebar
-              catalog={projectCatalog}
-              gitSummary={projectGitSummary}
-              selectedName={selectedPath}
-              selectedRunId={projectRunId}
-              historyEnabled={projectHistory}
-              onHistoryChange={setProjectHistoryEnabled}
-              onSelect={navigateProject}
-              onSelectRun={navigateProjectRun}
-              onChanged={onProcChanged}
-              onAdd={openAdd}
-              onSettings={openProjectSettings}
-              onHide={project => hideProject(project.name, true)}
-            />
+            projectSidebar
           ) : activeTab === 'todos' && !todosFullWidth ? (
             <TodoWorkspaceList todos={todos} projectsLoaded={projectsLoaded} projectError={projectError} />
           ) : activeTab === 'sessions' ? (
@@ -790,17 +812,7 @@ export function App() {
         ) : activeTab === 'projects' && !hostControls ? (
           <HostedProjectPane project={visibleProjects.find(project => project.name === selectedPath)} onSelectRun={navigateRun} />
         ) : activeTab === 'projects' ? (
-          <ProjectDetailPane
-            catalog={projectCatalog}
-            selectedName={selectedPath}
-            selectedRunId={projectRunId}
-            diffPath={projectDiffPath}
-            projectRef={projectRef}
-            resultsEnabled={projectResults}
-            onRefChange={navigateProjectRef}
-            onDiffPathChange={navigateProjectDiff}
-            onChanged={onProcChanged}
-          />
+          projectDetail
         ) : activeTab === 'todos' ? (
           <div className="flex h-full min-h-0 flex-col">
             {projectError && (
@@ -849,15 +861,7 @@ export function App() {
       />
 
       <CreateTodoDialog open={todos.showCreate} onClose={() => todos.setShowCreate(false)} workspaces={visibleProjects.filter(project => !!project.dir)} onCreated={todos.created} defaultDir={todos.selected?.dir ?? scopedProjects[0]?.dir} />
-      <AddProjectDialog open={addOpen} onClose={() => setAddOpen(false)} onSaved={onProcChanged} repoOptions={reposList} />
-      {settingsScope && (
-        <SettingsPage
-          scope={settingsScope}
-          repoOptions={reposList}
-          onClose={() => setSettingsScope(null)}
-          onSaved={onProcChanged}
-        />
-      )}
+      {projectDialogs}
     </>
   );
 }
