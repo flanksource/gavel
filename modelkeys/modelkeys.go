@@ -71,7 +71,7 @@ type Summary struct {
 	UpdatedBy *uuid.UUID `json:"updatedBy"`
 }
 
-// KeeperConnection is the secret keeper used when GAVEL_SECRET_KEEPER is unset: a local key
+// KeeperConnection is the secret keeper model keys are encrypted with: a local key
 // derived from GAVEL_SECRET_KEY, so it can't be mistaken for another value derived from it.
 func KeeperConnection(gavelSecret []byte) string {
 	mac := hmac.New(sha256.New, gavelSecret)
@@ -172,7 +172,7 @@ func (s Store) Value(ctx context.Context, org uuid.UUID, provider string) (strin
 	}
 	decrypted, err := secret.Decrypt(dbcontext.NewContext(ctx), secret.Ciphertext(rows[0].Ciphertext))
 	if err != nil {
-		return "", fmt.Errorf("can't decrypt organization %s's %s key; the secret keeper (GAVEL_SECRET_KEEPER, or GAVEL_SECRET_KEY by default) changed since it was set, so an organization admin must set it again: %w", org, provider, err)
+		return "", fmt.Errorf("can't decrypt organization %s's %s key; GAVEL_SECRET_KEY changed since it was set, so an organization admin must set it again: %w", org, provider, err)
 	}
 	value, ok := strings.CutPrefix(decrypted.PlainText(), owner(org, provider))
 	decrypted.Clear()

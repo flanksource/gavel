@@ -128,7 +128,7 @@ func TestValueAfterTheKeeperChangedSaysSo(t *testing.T) {
 	useKeeper(t, modelkeys.KeeperConnection([]byte("another secret of at least thirty-two bytes")))
 	_, err := f.store.Value(t.Context(), f.acme, "anthropic")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "can't decrypt organization "+f.acme.String()+"'s anthropic key; the secret keeper (GAVEL_SECRET_KEEPER, or GAVEL_SECRET_KEY by default) changed since it was set, so an organization admin must set it again: ")
+	assert.Contains(t, err.Error(), "can't decrypt organization "+f.acme.String()+"'s anthropic key; GAVEL_SECRET_KEY changed since it was set, so an organization admin must set it again: ")
 }
 
 func TestSetRejectsKeysTheGatewayCantInject(t *testing.T) {
