@@ -37,7 +37,7 @@ func (s *Server) handleModelKeyList(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, map[string]any{"kinds": modelkeys.Kinds, "keys": keys})
+	writeJSON(w, map[string]any{"kinds": modelkeys.Kinds, "keys": keys, "canEdit": scope.IsAdmin()})
 }
 
 func (s *Server) handleModelKeySet(w http.ResponseWriter, r *http.Request) {

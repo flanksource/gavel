@@ -55,7 +55,10 @@ func TestModelKeyRoutes(t *testing.T) {
 	assert.JSONEq(t, `{"kinds":[
 		{"name":"anthropic-api-key","provider":"anthropic","label":"Anthropic API key"},
 		{"name":"claude-code-oauth-token","provider":"anthropic","label":"Claude Code OAuth token"}],
-		"keys":[]}`, body)
+		"keys":[],"canEdit":false}`, body)
+	status, body = call(admin, "org:admin", http.MethodGet, "/api/model-keys", "")
+	require.Equal(t, http.StatusOK, status, body)
+	assert.Contains(t, body, `"canEdit":true`)
 
 	status, body = call(member, "org:member", http.MethodPut, "/api/model-keys/anthropic", `{"kind":"anthropic-api-key","key":"`+modelKeysTestAPIKey+`"}`)
 	assert.Equal(t, http.StatusForbidden, status)
