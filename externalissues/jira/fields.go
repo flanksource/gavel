@@ -42,7 +42,10 @@ func normalizeFieldValue(raw json.RawMessage, path string) (json.RawMessage, str
 		}
 		var nodeType string
 		if json.Unmarshal(object["type"], &nodeType) == nil && nodeType == "doc" {
-			node := renderADF(raw, path)
+			node, err := renderADF(raw, adfRenderOptions{Path: path})
+			if err != nil {
+				return nil, "", err
+			}
 			value, err := json.Marshal(strings.TrimSpace(node.Markdown()))
 			return value, "markdown", err
 		}

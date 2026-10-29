@@ -109,7 +109,7 @@ var _ = Describe("Jira filesystem sync", func() {
 		data, err = os.ReadFile(result[0].Path)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(string(data)).To(ContainSubstring(title))
-		Expect(downloads).To(Equal(2))
+		Expect(downloads).To(Equal(1))
 	})
 
 	It("writes the issue when a comment contains unsupported ADF", func() {
@@ -122,7 +122,7 @@ var _ = Describe("Jira filesystem sync", func() {
 		Expect(string(data)).To(SatisfyAll(ContainSubstring("Complete description"), ContainSubstring("Complete comment"), ContainSubstring("file-1")))
 	})
 
-	It("reuses a remotely validated download and preserves enrichments", func() {
+	It("reuses a locally verified download and preserves enrichments", func() {
 		etag = `"version-1"`
 		options := SyncOptions{Keys: []string{"EXAMPLE-1"}, Dir: root, Attachments: true, Store: CatalogStore{Dir: root}}
 		results, err := client.Sync(context.Background(), options)

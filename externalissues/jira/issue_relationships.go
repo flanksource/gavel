@@ -28,6 +28,21 @@ type issueRelationship struct {
 	Outward *issueReference `json:"outwardIssue"`
 }
 
+// target is the linked issue and the relationship read from this issue's side, e.g. "relates to".
+func (r issueRelationship) target() (*issueReference, string, error) {
+	if (r.Inward == nil) == (r.Outward == nil) {
+		return nil, "", fmt.Errorf("issue link requires exactly one inwardIssue or outwardIssue")
+	}
+	reference, label := r.Inward, r.Type.Inward
+	if r.Outward != nil {
+		reference, label = r.Outward, r.Type.Outward
+	}
+	if label == "" {
+		return nil, "", fmt.Errorf("issue link requires a relationship label")
+	}
+	return reference, label, nil
+}
+
 func (i Issue) semanticField(field externalissues.Field, id string, options RenderOptions) (fieldView, error) {
 	if string(field.Value) == "null" {
 		return fieldView{}, nil
@@ -113,15 +128,9 @@ func (i Issue) relationshipsField(raw json.RawMessage, options RenderOptions) (f
 	}
 	var items api.TextList
 	for _, relationship := range relationships {
-		if (relationship.Inward == nil) == (relationship.Outward == nil) {
-			return fieldView{}, fmt.Errorf("issue link requires exactly one inwardIssue or outwardIssue")
-		}
-		reference, label := relationship.Inward, relationship.Type.Inward
-		if relationship.Outward != nil {
-			reference, label = relationship.Outward, relationship.Type.Outward
-		}
-		if label == "" {
-			return fieldView{}, fmt.Errorf("issue link requires a relationship label")
+		reference, label, err := relationship.target()
+		if err != nil {
+			return fieldView{}, err
 		}
 		text, err := i.referenceText(*reference, options)
 		if err != nil {

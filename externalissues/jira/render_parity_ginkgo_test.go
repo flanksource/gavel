@@ -79,16 +79,16 @@ var _ = Describe("external issue semantic rendering", func() {
 		))
 	})
 
-	It("renders linked people, rich fields, attachment tables and comment metadata in full", func() {
+	It("renders linked people, rich fields, attachment tables and comment author/date lines in full", func() {
 		output, err := issue.Render(RenderOptions{Full: true})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(output.HTML()).To(SatisfyAll(
 			ContainSubstring(`<a href="https://example.test/people/alex">Alex</a>`),
 			ContainSubstring("team-internal-id"), ContainSubstring("<code>run()</code>"),
 			ContainSubstring("<table"), ContainSubstring("private comment body"),
-			ContainSubstring("Updated"), Not(ContainSubstring("\x1b")),
+			ContainSubstring("Alex commented 2026-01-01 10:00 +00:00"), Not(ContainSubstring("\x1b")),
 		))
-		Expect(output.Markdown()).To(SatisfyAll(ContainSubstring("| ID | FILE |"), ContainSubstring("[report.pdf](https://example.test/report.pdf)"), ContainSubstring("**Updated**:")))
+		Expect(output.Markdown()).To(SatisfyAll(ContainSubstring("| ID | FILE |"), ContainSubstring("[report.pdf](https://example.test/report.pdf)"), ContainSubstring("**Alex commented 2026-01-01 10:00 +00:00**")))
 		Expect(output.String()).To(SatisfyAll(ContainSubstring("report.pdf"), ContainSubstring("private comment body")))
 	})
 

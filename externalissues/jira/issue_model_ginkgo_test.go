@@ -115,7 +115,7 @@ var _ = Describe("normalized issues", func() {
 		Expect(output).To(ContainSubstring("user-1"))
 		output, err = clicky.Format(comments, clicky.FormatOptions{Format: "markdown"})
 		Expect(err).NotTo(HaveOccurred())
-		Expect(output).To(SatisfyAll(ContainSubstring("comment-1"), ContainSubstring(`"type":"unknown"`)))
+		Expect(output).To(SatisfyAll(ContainSubstring("Alex commented"), ContainSubstring(`"type":"unknown"`)))
 	})
 
 	It("distinguishes unloaded collections from known counts", func() {

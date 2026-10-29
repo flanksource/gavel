@@ -49,13 +49,15 @@ var _ = Describe("ADF warnings", func() {
 	})
 
 	It("keeps unsupported inline leaves inside their surrounding paragraph", func() {
-		output := renderADF(json.RawMessage(`{"type":"paragraph","content":[{"type":"text","text":"Before "},{"type":"futureLeaf","attrs":{"label":"Retained"}},{"type":"text","text":" after"}]}`), "$")
+		output, err := renderADF(json.RawMessage(`{"type":"paragraph","content":[{"type":"text","text":"Before "},{"type":"futureLeaf","attrs":{"label":"Retained"}},{"type":"text","text":" after"}]}`), adfRenderOptions{Path: "$"})
+		Expect(err).NotTo(HaveOccurred())
 		Expect(output.Markdown()).To(Equal("Before `{\"type\":\"futureLeaf\",\"attrs\":{\"label\":\"Retained\"}}` after"))
 		Expect(output.HTML()).To(ContainSubstring("<code>"))
 	})
 
 	DescribeTable("preserves text after structural ADF errors", func(content string) {
-		output := renderADF(json.RawMessage(content), "example $")
+		output, err := renderADF(json.RawMessage(content), adfRenderOptions{Path: "example $"})
+		Expect(err).NotTo(HaveOccurred())
 		Expect(output.Markdown()).To(ContainSubstring("Retained"))
 		Expect(warnings.String()).To(SatisfyAll(ContainSubstring("WRN"), ContainSubstring("example $")))
 	},

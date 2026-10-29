@@ -91,6 +91,7 @@ var _ = Describe("real uvx document extraction", func() {
 	It("makes extract imply attachment downloads and inlines extracted documents in the issue", func() {
 		document := extractionDOCX()
 		originalDocument := bytes.Clone(document)
+		contentRequests := 0
 		client := testClient(func(w http.ResponseWriter, r *http.Request) {
 			switch r.URL.Path {
 			case "/rest/api/3/issue/EXAMPLE-1":
@@ -102,6 +103,7 @@ var _ = Describe("real uvx document extraction", func() {
 			case "/rest/api/3/issue/EXAMPLE-1/comment":
 				fmt.Fprint(w, `{"total":0,"comments":[]}`)
 			case "/rest/api/3/attachment/content/20001":
+				contentRequests++
 				_, err := w.Write(document)
 				Expect(err).NotTo(HaveOccurred())
 			default:
@@ -119,8 +121,30 @@ var _ = Describe("real uvx document extraction", func() {
 		Expect(string(data)).To(SatisfyAll(ContainSubstring("## Extracted attachments"), ContainSubstring("[report.docx](EXAMPLE-1.attachments/20001/report.docx)"), ContainSubstring("Extracted DOCX body"), ContainSubstring("](attachments/cas/"), Not(ContainSubstring("data:image"))))
 		Expect(result[0].Images).To(HaveLen(1))
 		Expect(result[0].Images[0]).To(BeAnExistingFile())
+		_, err = client.Sync(context.Background(), options)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(contentRequests).To(Equal(1))
+		for _, damaged := range []string{"markdown", "image", "pipeline"} {
+			doc, root := readCachedIssue(result[0].Path)
+			extraction := doc.Metadata.Attachments["20001"].Extraction
+			switch damaged {
+			case "markdown":
+				Expect(root.Remove(extraction.Markdown.Path)).To(Succeed())
+			case "image":
+				Expect(root.Remove(extraction.Images[0].Path)).To(Succeed())
+			case "pipeline":
+				extraction.PipelineFingerprint = "outdated converter"
+				writeCachedIssue(result[0].Path, doc)
+			}
+			_, err = client.Sync(context.Background(), options)
+			Expect(err).NotTo(HaveOccurred(), damaged)
+			Expect(contentRequests).To(Equal(1), damaged)
+		}
+		data, err = os.ReadFile(result[0].Path)
+		Expect(err).NotTo(HaveOccurred())
 		before := data
 		document = []byte("corrupted document")
+		options.Force = true
 		_, err = client.Sync(context.Background(), options)
 		Expect(err).To(MatchError(ContainSubstring("20001")))
 		data, err = os.ReadFile(result[0].Path)

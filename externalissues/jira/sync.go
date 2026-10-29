@@ -255,7 +255,7 @@ func (c *Client) syncAttachments(ctx context.Context, options syncAttachmentOpti
 		progress.SetProgress(0, len(options.Issue.Attachments))
 		for index := range options.Issue.Attachments {
 			attachment := &options.Issue.Attachments[index]
-			progress.SetDescription(fmt.Sprintf("[%d/%d] Downloading %s", index+1, len(options.Issue.Attachments), attachment.Name))
+			progress.SetDescription(fmt.Sprintf("[%d/%d] Processing %s", index+1, len(options.Issue.Attachments), attachment.Name))
 			relative := filepath.Join(options.Issue.Key+".attachments", attachment.ID, attachment.Name)
 			path := filepath.Join(options.Stage, relative)
 			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {

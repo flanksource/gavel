@@ -133,12 +133,11 @@ func (c *Client) resolveOAuthSite(ctx context.Context, site string) error {
 }
 
 type requestOptions struct {
-	AllowNotModified bool
-	Method           string
-	Path             string
-	Query            url.Values
-	Body             any
-	Headers          map[string]string
+	Method  string
+	Path    string
+	Query   url.Values
+	Body    any
+	Headers map[string]string
 }
 
 func (c *Client) request(ctx context.Context, options requestOptions) (*httpclient.Response, error) {
@@ -176,8 +175,7 @@ func (c *Client) request(ctx context.Context, options requestOptions) (*httpclie
 	if err != nil {
 		return nil, fmt.Errorf("Jira %s %s: %w", method, options.Path, err)
 	}
-	accepted := (response.StatusCode >= 200 && response.StatusCode < 300) || (options.AllowNotModified && response.StatusCode == 304)
-	if !accepted {
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		defer response.Body.Close()
 		body, readErr := io.ReadAll(io.LimitReader(response.Body, 4096))
 		if readErr != nil {
